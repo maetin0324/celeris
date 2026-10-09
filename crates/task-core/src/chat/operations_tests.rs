@@ -43,6 +43,98 @@ fn counts(s: &SqliteStore) -> (i64, i64, i64, i64) {
 }
 
 #[test]
+fn cos_external_pending_replay_returns_receipt_and_finish_applies_once() {
+    let (s, ctx) = setup();
+    let now = time::OffsetDateTime::from_unix_timestamp(1_800_000_000).unwrap();
+    let (first, should_execute) = s
+        .cos_operation_begin_external(
+            &ctx,
+            "external-key",
+            "hash",
+            "task",
+            "target",
+            None,
+            "external.test",
+            &json!({"x":1}),
+            now,
+        )
+        .expect("begin");
+    assert!(should_execute);
+    assert_eq!(first.state, "pending");
+    let (replay, should_execute) = s
+        .cos_operation_begin_external(
+            &ctx,
+            "external-key",
+            "hash",
+            "task",
+            "target",
+            None,
+            "external.test",
+            &json!({"x":1}),
+            now + time::Duration::seconds(2),
+        )
+        .expect("retry");
+    assert!(!should_execute);
+    assert_eq!(
+        replay, first,
+        "retry is a receipt lookup, never a side-effect retry"
+    );
+    let applied = s
+        .cos_operation_finish_external(
+            &ctx,
+            &json!({"external_id":"fake-1"}),
+            now + time::Duration::seconds(3),
+        )
+        .expect("finish");
+    assert_eq!(applied.state, "applied");
+    assert_eq!(applied.result, Some(json!({"external_id":"fake-1"})));
+    assert_eq!(
+        s.cos_operation_finish_external(
+            &ctx,
+            &json!({"external_id":"wrong"}),
+            now + time::Duration::seconds(4)
+        )
+        .expect("duplicate finish"),
+        applied
+    );
+    let conn = s.lock().expect("lock");
+    let states: Vec<String> = conn
+        .prepare("SELECT json_extract(json,'$.state') FROM events ORDER BY seq")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert_eq!(states, ["pending", "applied"]);
+}
+
+#[test]
+fn cos_external_stale_pending_moves_to_needs_remediation_without_guessing() {
+    let (s, ctx) = setup();
+    let start = time::OffsetDateTime::from_unix_timestamp(1_800_000_000).unwrap();
+    s.cos_operation_begin_external(
+        &ctx,
+        "stale-key",
+        "hash",
+        "task",
+        "target",
+        None,
+        "external.test",
+        &json!({}),
+        start,
+    )
+    .expect("begin");
+    assert_eq!(
+        s.cos_operation_remediate_stale(start + time::Duration::minutes(31))
+            .unwrap(),
+        1
+    );
+    let row = s.cos_operation_get(&ctx.operation_id).unwrap().unwrap();
+    assert_eq!(row.state, "needs_remediation");
+    assert_eq!(row.result, Some(json!(null)));
+}
+
+#[test]
 fn cos_chat_ops_store_idempotent_same_hash_and_conflict_on_different_hash() {
     let (s, ctx) = setup();
     let first = s

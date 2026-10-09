@@ -27,6 +27,7 @@ use task_core::{
 use task_ops::changes::{self as ops_changes, MergeOutcome};
 use time::OffsetDateTime;
 
+use crate::cos::operations::{Applied, OperationAudit};
 use crate::handlers::{ApiResult, Params, json_response, no_query, parse_project_id, read_json};
 use crate::middleware::require_admin;
 use crate::problem::{ApiProblem, store_problem};
@@ -36,6 +37,7 @@ use crate::types::{
     ChangeDiffView, ChangesView, IntegrateBody, IntegrateResult, ProjectIntegrationItem,
     ProjectIntegrations, RepoChangesView, ValidationError,
 };
+use task_core::SqliteStore;
 
 /// ADR-0043 D5: 案件画面の一覧で 1 回に同期する PR の上限（画面を開くたびに `gh` を起こすので抑える）。
 pub const MAX_REFRESH_PER_CALL: usize = 20;
@@ -338,6 +340,284 @@ fn pr_unavailable(detail: impl Into<String>) -> ApiProblem {
     ApiProblem::new(StatusCode::CONFLICT, "pr_unavailable", detail)
 }
 
+/// What the integrate / PR merge operations need from the API state.
+#[derive(Clone)]
+pub(crate) struct ChangesEnv {
+    pub(crate) workspace_root: std::path::PathBuf,
+    pub(crate) github: crate::GithubSettings,
+    pub(crate) gui_base_url: Option<String>,
+}
+
+impl ChangesEnv {
+    pub(crate) fn of(state: &ApiState) -> Self {
+        Self {
+            workspace_root: state.inner.view.workspace_root.clone(),
+            github: state.inner.github.clone(),
+            gui_base_url: state.inner.notify_gui_base_url.clone(),
+        }
+    }
+}
+
+/// The checks of `POST /tasks/{id}/changes/{repo}/integrate` that touch nothing: the discard
+/// confirmation, the tree child refusal, the repo, and the PR prerequisites (`origin`, `gh`).
+fn prepare_integrate(
+    store: &SqliteStore,
+    env: &ChangesEnv,
+    task_id: TaskId,
+    repo: &str,
+    request: &IntegrateBody,
+) -> Result<(Task, RepoTarget), ApiProblem> {
+    if request.method == IntegrationMethod::Discard && !request.confirm {
+        return Err(ApiProblem::validation(vec![ValidationError {
+            field: Some("confirm".into()),
+            message: "discard removes the worktree and the branch; send {\"confirm\": true}".into(),
+        }]));
+    }
+    let task = load_task(store, task_id)?;
+    if let Some(parent) = task_core::tree::tree_parent(&task) {
+        return Err(tree_child_integration(parent));
+    }
+    let targets = targets_for(store, &task, &env.workspace_root)?;
+    let target = pick_target(&targets, repo)?;
+    if request.method == IntegrationMethod::Pr {
+        if !ops_changes::has_origin(&target.source) {
+            return Err(pr_unavailable(format!(
+                "{} には origin リモートがありません（PR は作れません）",
+                target.name
+            )));
+        }
+        if !ops_changes::gh_authenticated(&env.github.gh, &target.source) {
+            return Err(pr_unavailable(
+                "gh が使えません（PATH に無いか、認証されていません）".to_string(),
+            ));
+        }
+    }
+    Ok((task, target))
+}
+
+/// The git / GitHub effect of integrate and its integration record. `default_branch_busy` means
+/// git refused before touching anything; every other outcome (done, failed, conflict, open PR)
+/// is recorded as an integration row and returned.
+fn run_integrate(
+    store: &SqliteStore,
+    env: &ChangesEnv,
+    task: &Task,
+    target: &RepoTarget,
+    request: &IntegrateBody,
+) -> Result<IntegrateResult, ApiProblem> {
+    let task_id = task.id;
+    let now = OffsetDateTime::now_utc();
+    let note = request
+        .note
+        .as_deref()
+        .map(str::trim)
+        .filter(|n| !n.is_empty());
+    let record = |state: IntegrationState, detail: String| {
+        let mut integration = TaskIntegration::new(
+            task_id,
+            target.repo_id,
+            target.name.clone(),
+            request.method,
+            state,
+            now,
+        );
+        integration.detail = match (note, detail.trim().is_empty()) {
+            (Some(note), true) => Some(note.to_string()),
+            (Some(note), false) => Some(format!("{note} / {detail}")),
+            (None, true) => None,
+            (None, false) => Some(detail),
+        };
+        integration
+    };
+    let (mut integration, child) = match request.method {
+        IntegrationMethod::Discard => {
+            match ops_changes::discard(&target.source, Some(&target.worktree), &target.branch) {
+                Ok(()) => (
+                    record(
+                        IntegrationState::Done,
+                        format!("{} を捨てました", target.branch),
+                    ),
+                    None,
+                ),
+                Err(detail) => (record(IntegrationState::Failed, detail), None),
+            }
+        }
+        IntegrationMethod::Merge => {
+            let temp = env
+                .workspace_root
+                .join(".integrate")
+                .join(ulid::Ulid::new().to_string());
+            match ops_changes::merge_into_default_branch(
+                &target.source,
+                &target.branch,
+                &target.default_branch,
+                &temp,
+            ) {
+                // ADR-0043 D5: 人が片付けてから押す。何も触っていないので記録も残さない。
+                MergeOutcome::Busy { detail } => return Err(default_branch_busy(detail)),
+                MergeOutcome::Failed { detail } => (record(IntegrationState::Failed, detail), None),
+                MergeOutcome::Conflict { files } => {
+                    let child = task_ops::changes::conflict_child_task(
+                        task,
+                        &target.name,
+                        &target.worktree,
+                        &target.default_branch,
+                        &files,
+                        now,
+                    );
+                    store
+                        .create_task(
+                            &child,
+                            vec![task_core::Event::Created {
+                                task: Box::new(child.clone()),
+                                origin: None,
+                            }],
+                        )
+                        .map_err(store_problem)?;
+                    let listed = if files.is_empty() {
+                        String::new()
+                    } else {
+                        format!("（{}）", files.join(", "))
+                    };
+                    (
+                        record(
+                            IntegrationState::Conflict,
+                            format!(
+                                "{} への rebase が衝突しました{listed}。解消タスク {} を作りました",
+                                target.default_branch, child.id
+                            ),
+                        ),
+                        Some(child.id),
+                    )
+                }
+                MergeOutcome::Merged {
+                    sha,
+                    fast_forwarded,
+                } => {
+                    let mut detail = format!(
+                        "{} を {} まで進めました（{}）",
+                        target.default_branch,
+                        sha.chars().take(12).collect::<String>(),
+                        if fast_forwarded {
+                            "fast-forward"
+                        } else {
+                            "ref のみ"
+                        }
+                    );
+                    if let Err(e) = ops_changes::remove_worktree_and_branch(
+                        &target.source,
+                        Some(&target.worktree),
+                        &target.branch,
+                    ) {
+                        detail = format!("{detail}。後片付けに失敗: {e}");
+                    }
+                    let mut integration = record(IntegrationState::Done, detail);
+                    integration.merged_at = Some(now);
+                    (integration, None)
+                }
+            }
+        }
+        IntegrationMethod::Pr => match ops_changes::push_branch(&target.source, &target.branch) {
+            Err(detail) => (record(IntegrationState::Failed, detail), None),
+            Ok(()) => {
+                let report = latest_report_for(store, task);
+                let body = pr_body(task, report.as_ref(), env.gui_base_url.as_deref());
+                match ops_changes::gh_pr_create(
+                    &env.github.gh,
+                    &target.source,
+                    &target.default_branch,
+                    &target.branch,
+                    &task.title,
+                    &body,
+                ) {
+                    Err(detail) => (record(IntegrationState::Failed, detail), None),
+                    Ok(pr) => {
+                        let mut integration = record(
+                            IntegrationState::Open,
+                            format!("PR #{} を作りました", pr.number),
+                        );
+                        integration.pr_number = Some(pr.number);
+                        integration.pr_url = Some(pr.url);
+                        (integration, None)
+                    }
+                }
+            }
+        },
+    };
+    integration.updated_at = now;
+    store.integration_put(&integration).map_err(store_problem)?;
+    tracing::info!(
+        op = "integrate",
+        task_id = %task_id,
+        repo = %target.name,
+        method = %request.method.as_str(),
+        state = %integration.state.as_str(),
+        "task changes integrated"
+    );
+    Ok(IntegrateResult {
+        integration,
+        child_task_id: child.map(|id| id.to_string()),
+    })
+}
+
+/// Run a git / GitHub effect directly, or as a C-class CoS operation (ADR
+/// 2026-10-09-cos-operations-external-effects): a pending record first, the effect once, and a
+/// resent request returns the record without running it again. `refused` names the problem codes
+/// that mean the external system refused before any change (settled `rejected`); any other error
+/// leaves the record pending for remediation.
+fn changes_effect(
+    store: &SqliteStore,
+    audit: Option<&OperationAudit>,
+    task_id: TaskId,
+    action: &str,
+    refused: &[&str],
+    effect: impl FnOnce() -> Result<IntegrateResult, ApiProblem>,
+) -> Result<Applied<IntegrateResult>, ApiProblem> {
+    let Some(audit) = audit else {
+        return effect().map(Applied::Direct);
+    };
+    let operation = audit.external(
+        store,
+        "task",
+        &task_id.to_string(),
+        action,
+        OffsetDateTime::now_utc(),
+        || match effect() {
+            Ok(result) => serde_json::to_value(&result)
+                .map(Ok)
+                .map_err(|e| ApiProblem::internal(format!("integration result: {e}"))),
+            Err(problem) if refused.contains(&problem.code()) => Ok(Err(problem)),
+            Err(problem) => Err(problem),
+        },
+    )?;
+    Ok(Applied::Audited(Box::new(operation)))
+}
+
+/// `POST /tasks/{id}/changes/{repo}/integrate` shared by the handler and `/cos/operations`
+/// (`task.integrate`, C).
+pub(crate) fn integrate_op(
+    store: &SqliteStore,
+    env: &ChangesEnv,
+    task_id: TaskId,
+    repo: &str,
+    request: IntegrateBody,
+    audit: Option<&OperationAudit>,
+) -> Result<Applied<IntegrateResult>, ApiProblem> {
+    let (task, target) =
+        prepare_integrate(store, env, task_id, repo, &request).map_err(|problem| match audit {
+            Some(audit) => audit.reject(store, "task", &task_id.to_string(), problem),
+            None => problem,
+        })?;
+    changes_effect(
+        store,
+        audit,
+        task_id,
+        "task.integrate",
+        &["default_branch_busy"],
+        || run_integrate(store, env, &task, &target, &request),
+    )
+}
+
 async fn integrate(
     axum::extract::State(state): axum::extract::State<ApiState>,
     headers: HeaderMap,
@@ -349,182 +629,84 @@ async fn integrate(
     require_admin(&state, &headers)?;
     let task_id = parse_task_id(&id)?;
     let request: IntegrateBody = read_json(body, false).await?;
-    if request.method == IntegrationMethod::Discard && !request.confirm {
-        return Err(ApiProblem::validation(vec![ValidationError {
-            field: Some("confirm".into()),
-            message: "discard removes the worktree and the branch; send {\"confirm\": true}".into(),
-        }]));
-    }
-    let workspace_root = state.inner.view.workspace_root.clone();
-    let github = state.inner.github.clone();
-    let gui_base_url = state.inner.notify_gui_base_url.clone();
+    let env = ChangesEnv::of(&state);
     let result = state
-        .blocking(move |store| {
-            let task = load_task(store, task_id)?;
-            if let Some(parent) = task_core::tree::tree_parent(&task) {
-                return Err(tree_child_integration(parent));
-            }
-            let targets = targets_for(store, &task, &workspace_root)?;
-            let target = pick_target(&targets, &repo)?;
-            let now = OffsetDateTime::now_utc();
-            let note = request.note.as_deref().map(str::trim).filter(|n| !n.is_empty());
-            let record = |state: IntegrationState, detail: String| {
-                let mut integration = TaskIntegration::new(
-                    task_id,
-                    target.repo_id,
-                    target.name.clone(),
-                    request.method,
-                    state,
-                    now,
-                );
-                integration.detail = match (note, detail.trim().is_empty()) {
-                    (Some(note), true) => Some(note.to_string()),
-                    (Some(note), false) => Some(format!("{note} / {detail}")),
-                    (None, true) => None,
-                    (None, false) => Some(detail),
-                };
-                integration
-            };
-            let (mut integration, child) = match request.method {
-                IntegrationMethod::Discard => match ops_changes::discard(
-                    &target.source,
-                    Some(&target.worktree),
-                    &target.branch,
-                ) {
-                    Ok(()) => (
-                        record(IntegrationState::Done, format!("{} を捨てました", target.branch)),
-                        None,
-                    ),
-                    Err(detail) => (record(IntegrationState::Failed, detail), None),
-                },
-                IntegrationMethod::Merge => {
-                    let temp = workspace_root
-                        .join(".integrate")
-                        .join(ulid::Ulid::new().to_string());
-                    match ops_changes::merge_into_default_branch(
-                        &target.source,
-                        &target.branch,
-                        &target.default_branch,
-                        &temp,
-                    ) {
-                        // ADR-0043 D5: 人が片付けてから押す。何も触っていないので記録も残さない。
-                        MergeOutcome::Busy { detail } => return Err(default_branch_busy(detail)),
-                        MergeOutcome::Failed { detail } => (record(IntegrationState::Failed, detail), None),
-                        MergeOutcome::Conflict { files } => {
-                            let child = task_ops::changes::conflict_child_task(
-                                &task,
-                                &target.name,
-                                &target.worktree,
-                                &target.default_branch,
-                                &files,
-                                now,
-                            );
-                            store
-                                .create_task(
-                                    &child,
-                                    vec![task_core::Event::Created {
-                                        task: Box::new(child.clone()),
-                                        origin: None,
-                                    }],
-                                )
-                                .map_err(store_problem)?;
-                            let listed = if files.is_empty() {
-                                String::new()
-                            } else {
-                                format!("（{}）", files.join(", "))
-                            };
-                            (
-                                record(
-                                    IntegrationState::Conflict,
-                                    format!(
-                                        "{} への rebase が衝突しました{listed}。解消タスク {} を作りました",
-                                        target.default_branch, child.id
-                                    ),
-                                ),
-                                Some(child.id),
-                            )
-                        }
-                        MergeOutcome::Merged { sha, fast_forwarded } => {
-                            let mut detail = format!(
-                                "{} を {} まで進めました（{}）",
-                                target.default_branch,
-                                sha.chars().take(12).collect::<String>(),
-                                if fast_forwarded { "fast-forward" } else { "ref のみ" }
-                            );
-                            if let Err(e) = ops_changes::remove_worktree_and_branch(
-                                &target.source,
-                                Some(&target.worktree),
-                                &target.branch,
-                            ) {
-                                detail = format!("{detail}。後片付けに失敗: {e}");
-                            }
-                            let mut integration = record(IntegrationState::Done, detail);
-                            integration.merged_at = Some(now);
-                            (integration, None)
-                        }
-                    }
-                }
-                IntegrationMethod::Pr => {
-                    if !ops_changes::has_origin(&target.source) {
-                        return Err(pr_unavailable(format!(
-                            "{} には origin リモートがありません（PR は作れません）",
-                            target.name
-                        )));
-                    }
-                    if !ops_changes::gh_authenticated(&github.gh, &target.source) {
-                        return Err(pr_unavailable(
-                            "gh が使えません（PATH に無いか、認証されていません）".to_string(),
-                        ));
-                    }
-                    match ops_changes::push_branch(&target.source, &target.branch) {
-                        Err(detail) => (record(IntegrationState::Failed, detail), None),
-                        Ok(()) => {
-                            let report = latest_report_for(store, &task);
-                            let body = pr_body(&task, report.as_ref(), gui_base_url.as_deref());
-                            match ops_changes::gh_pr_create(
-                                &github.gh,
-                                &target.source,
-                                &target.default_branch,
-                                &target.branch,
-                                &task.title,
-                                &body,
-                            ) {
-                                Err(detail) => (record(IntegrationState::Failed, detail), None),
-                                Ok(pr) => {
-                                    let mut integration =
-                                        record(IntegrationState::Open, format!("PR #{} を作りました", pr.number));
-                                    integration.pr_number = Some(pr.number);
-                                    integration.pr_url = Some(pr.url);
-                                    (integration, None)
-                                }
-                            }
-                        }
-                    }
-                }
-            };
-            integration.updated_at = now;
-            store.integration_put(&integration).map_err(store_problem)?;
-            tracing::info!(
-                who = "admin",
-                op = "integrate",
-                task_id = %task_id,
-                repo = %target.name,
-                method = %request.method.as_str(),
-                state = %integration.state.as_str(),
-                "admin: task changes integrated"
-            );
-            Ok(IntegrateResult {
-                integration,
-                child_task_id: child.map(|id| id.to_string()),
-            })
-        })
+        .blocking(move |store| integrate_op(store, &env, task_id, &repo, request, None)?.direct())
         .await?;
     Ok(json_response(StatusCode::OK, &result))
 }
 
 // ---------------------------------------------------------------------------
-// POST /tasks/{id}/changes/{repo}/pr/merge（管理系。人だけ）
+// POST /tasks/{id}/changes/{repo}/pr/merge（管理系）
 // ---------------------------------------------------------------------------
+
+/// `POST /tasks/{id}/changes/{repo}/pr/merge` shared by the handler and `/cos/operations`
+/// (`task.pr_merge`, C). A PR that is not open is refused before `gh` runs; a `gh pr merge`
+/// failure is recorded on the integration row (a known outcome).
+pub(crate) fn pr_merge_op(
+    store: &SqliteStore,
+    env: &ChangesEnv,
+    task_id: TaskId,
+    repo: &str,
+    audit: Option<&OperationAudit>,
+) -> Result<Applied<IntegrateResult>, ApiProblem> {
+    let prepare = || -> Result<(RepoTarget, TaskIntegration, i64), ApiProblem> {
+        let task = load_task(store, task_id)?;
+        let targets = targets_for(store, &task, &env.workspace_root)?;
+        let target = pick_target(&targets, repo)?;
+        let integration = store
+            .integration_latest(task_id, &target.name)
+            .map_err(store_problem)?
+            .ok_or_else(|| pr_unavailable(format!("{} にはまだ PR がありません", target.name)))?;
+        let Some(number) = integration
+            .pr_number
+            .filter(|_| integration.state == IntegrationState::Open)
+        else {
+            return Err(pr_unavailable(format!(
+                "{} の PR は開いていません（いまは {}）",
+                target.name,
+                integration.state.as_str()
+            )));
+        };
+        Ok((target, integration, number))
+    };
+    let (target, integration, number) = prepare().map_err(|problem| match audit {
+        Some(audit) => audit.reject(store, "task", &task_id.to_string(), problem),
+        None => problem,
+    })?;
+    changes_effect(store, audit, task_id, "task.pr_merge", &[], || {
+        let now = OffsetDateTime::now_utc();
+        let mut integration = integration;
+        if let Err(detail) = ops_changes::gh_pr_merge(
+            &env.github.gh,
+            &target.source,
+            number,
+            &env.github.merge_method,
+        ) {
+            integration.state = IntegrationState::Failed;
+            integration.detail = Some(detail);
+            integration.updated_at = now;
+            store.integration_put(&integration).map_err(store_problem)?;
+            return Ok(IntegrateResult {
+                integration,
+                child_task_id: None,
+            });
+        }
+        tracing::info!(
+            op = "pr_merge",
+            task_id = %task_id,
+            repo = %target.name,
+            pr = number,
+            "pull request merged through Celeris"
+        );
+        // merge した直後に同期して、merge されていれば worktree とブランチを片付ける。
+        let integration = refresh_pr(store, &env.github.gh, Some(&target), integration, now);
+        Ok(IntegrateResult {
+            integration,
+            child_task_id: None,
+        })
+    })
+}
 
 async fn pr_merge(
     axum::extract::State(state): axum::extract::State<ApiState>,
@@ -535,58 +717,9 @@ async fn pr_merge(
     no_query(&raw)?;
     require_admin(&state, &headers)?;
     let task_id = parse_task_id(&id)?;
-    let workspace_root = state.inner.view.workspace_root.clone();
-    let github = state.inner.github.clone();
+    let env = ChangesEnv::of(&state);
     let result = state
-        .blocking(move |store| {
-            let task = load_task(store, task_id)?;
-            let targets = targets_for(store, &task, &workspace_root)?;
-            let target = pick_target(&targets, &repo)?;
-            let now = OffsetDateTime::now_utc();
-            let integration = store
-                .integration_latest(task_id, &target.name)
-                .map_err(store_problem)?
-                .ok_or_else(|| {
-                    pr_unavailable(format!("{} にはまだ PR がありません", target.name))
-                })?;
-            let Some(number) = integration
-                .pr_number
-                .filter(|_| integration.state == IntegrationState::Open)
-            else {
-                return Err(pr_unavailable(format!(
-                    "{} の PR は開いていません（いまは {}）",
-                    target.name,
-                    integration.state.as_str()
-                )));
-            };
-            let mut integration = integration;
-            if let Err(detail) =
-                ops_changes::gh_pr_merge(&github.gh, &target.source, number, &github.merge_method)
-            {
-                integration.state = IntegrationState::Failed;
-                integration.detail = Some(detail);
-                integration.updated_at = now;
-                store.integration_put(&integration).map_err(store_problem)?;
-                return Ok(IntegrateResult {
-                    integration,
-                    child_task_id: None,
-                });
-            }
-            tracing::info!(
-                who = "admin",
-                op = "pr_merge",
-                task_id = %task_id,
-                repo = %target.name,
-                pr = number,
-                "admin: pull request merged through Celeris"
-            );
-            // merge した直後に同期して、merge されていれば worktree とブランチを片付ける。
-            let integration = refresh_pr(store, &github.gh, Some(&target), integration, now);
-            Ok(IntegrateResult {
-                integration,
-                child_task_id: None,
-            })
-        })
+        .blocking(move |store| pr_merge_op(store, &env, task_id, &repo, None)?.direct())
         .await?;
     Ok(json_response(StatusCode::OK, &result))
 }

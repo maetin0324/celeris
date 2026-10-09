@@ -555,11 +555,7 @@ impl ApprovalStore for SqliteStore {
 
     fn standing_rule_delete(&self, id: StandingRuleId) -> Result<bool, StoreError> {
         let conn = self.lock()?;
-        let changed = conn.execute(
-            "DELETE FROM standing_rules WHERE id = ?1",
-            params![id.to_string()],
-        )?;
-        Ok(changed > 0)
+        SqliteStore::standing_rule_delete_tx(&conn, id)
     }
 }
 
@@ -598,6 +594,18 @@ impl SqliteStore {
     }
 
     /// `standing_rule_append` の本体。呼び出し側の transaction 内で使う。
+    /// `standing_rule_delete` on a caller-owned transaction (ADR 2026-10-09-cos-operations-all-mutations D3).
+    pub fn standing_rule_delete_tx(
+        conn: &rusqlite::Connection,
+        id: StandingRuleId,
+    ) -> Result<bool, StoreError> {
+        let changed = conn.execute(
+            "DELETE FROM standing_rules WHERE id = ?1",
+            params![id.to_string()],
+        )?;
+        Ok(changed > 0)
+    }
+
     pub fn standing_rule_append_tx(
         conn: &rusqlite::Connection,
         rule: &StandingRule,

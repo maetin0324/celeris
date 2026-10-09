@@ -136,42 +136,72 @@ pub(super) async fn put_cluster_settings(
     require_admin(&state, &headers)?;
     require_known_cluster(&state, &id)?;
     let put: ClusterSettingsPutBody = read_json(body, false).await?;
-    if let Some(work_dir) = &put.work_dir {
-        let trimmed = work_dir.trim();
-        let ok = !trimmed.is_empty()
-            && (trimmed.starts_with('/') || trimmed == "~" || trimmed.starts_with("~/"));
-        if !ok {
-            return Err(ApiProblem::validation(vec![ValidationError {
-                field: Some("work_dir".into()),
-                message: "work_dir must be an absolute path or ~ / ~/…".into(),
-            }]));
-        }
-    }
-    let cluster_id = id.clone();
-    let work_dir = put.work_dir.clone();
-    let updated_at = OffsetDateTime::now_utc();
-    state
-        .blocking(move |store| {
-            store
-                .cluster_settings_set(&cluster_id, work_dir.as_deref(), updated_at)
-                .map_err(store_problem)
-        })
+    let clusters = crate::handlers::cluster_ids(&state);
+    let view = state
+        .blocking(move |store| put_cluster_settings_op(store, &clusters, &id, put, None)?.direct())
         .await?;
-    tracing::info!(
-        who = "admin",
-        op = "cluster_settings_put",
-        cluster_id = %id,
-        has_work_dir = put.work_dir.is_some(),
-        "admin: cluster work_dir updated"
-    );
-    Ok(json_response(
-        StatusCode::OK,
-        &ClusterSettingsView {
-            cluster_id: id,
-            work_dir: put.work_dir,
-            updated_at: rfc3339(updated_at),
-        },
-    ))
+    Ok(json_response(StatusCode::OK, &view))
+}
+
+/// `PUT /clusters/{id}/settings`, shared by the handler and CoS (`cluster.settings_put`).
+/// `clusters` are the configured `[[clusters]]` ids (unknown is 404).
+pub(crate) fn put_cluster_settings_op(
+    store: &task_core::store::SqliteStore,
+    clusters: &[String],
+    id: &str,
+    put: ClusterSettingsPutBody,
+    audit: Option<&crate::cos::operations::OperationAudit>,
+) -> Result<crate::cos::operations::Applied<ClusterSettingsView>, ApiProblem> {
+    use crate::cos::operations::Applied;
+    let checked = (|| {
+        if !clusters.iter().any(|c| c == id) {
+            return Err(ApiProblem::cluster_not_found(id));
+        }
+        if let Some(work_dir) = &put.work_dir {
+            let trimmed = work_dir.trim();
+            let ok = !trimmed.is_empty()
+                && (trimmed.starts_with('/') || trimmed == "~" || trimmed.starts_with("~/"));
+            if !ok {
+                return Err(ApiProblem::validation(vec![ValidationError {
+                    field: Some("work_dir".into()),
+                    message: "work_dir must be an absolute path or ~ / ~/…".into(),
+                }]));
+            }
+        }
+        Ok(())
+    })();
+    let updated_at = OffsetDateTime::now_utc();
+    let view = ClusterSettingsView {
+        cluster_id: id.to_string(),
+        work_dir: put.work_dir.clone(),
+        updated_at: rfc3339(updated_at),
+    };
+    let Some(audit) = audit else {
+        checked?;
+        store
+            .cluster_settings_set(id, put.work_dir.as_deref(), updated_at)
+            .map_err(store_problem)?;
+        tracing::info!(
+            who = "admin",
+            op = "cluster_settings_put",
+            cluster_id = %id,
+            has_work_dir = put.work_dir.is_some(),
+            "admin: cluster work_dir updated"
+        );
+        return Ok(Applied::Direct(view));
+    };
+    checked.map_err(|p| audit.reject(store, "cluster", id, p))?;
+    let operation = audit.apply_checked(store, "cluster", id, "cluster.settings_put", |tx| {
+        task_core::store::SqliteStore::cluster_settings_set_tx(
+            tx,
+            id,
+            put.work_dir.as_deref(),
+            updated_at,
+        )
+        .map_err(store_problem)?;
+        serde_json::to_value(&view).map_err(|e| ApiProblem::internal(e.to_string()))
+    })?;
+    Ok(Applied::Audited(Box::new(operation)))
 }
 
 // ---- ADR-0032 D5: クラスタへの接続を GUI から張る（すべて管理系: `token_file` 未設定でも 401） ----

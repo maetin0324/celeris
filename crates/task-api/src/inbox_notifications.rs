@@ -561,18 +561,117 @@ pub struct ReadAllBody {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct EmptyBody {}
+pub(crate) struct EmptyBody {}
 
-fn parse_notice(id: &str) -> Result<NoticeId, ApiProblem> {
+pub(crate) fn parse_notice(id: &str) -> Result<NoticeId, ApiProblem> {
     id.parse()
         .map_err(|_| ApiProblem::bad_request("invalid notice id"))
 }
-fn parse_time(raw: &str) -> Result<OffsetDateTime, ApiProblem> {
+pub(crate) fn parse_time(raw: &str) -> Result<OffsetDateTime, ApiProblem> {
     OffsetDateTime::parse(raw, &Rfc3339)
         .map_err(|_| ApiProblem::bad_request("before must be RFC 3339"))
 }
 fn str_time(t: OffsetDateTime) -> String {
     t.format(&Rfc3339).unwrap_or_default()
+}
+
+pub(crate) fn notice_read_op(
+    store: &task_core::store::SqliteStore,
+    id: NoticeId,
+    audit: Option<&crate::cos::operations::OperationAudit>,
+) -> Result<crate::cos::operations::Applied<NoticeReadResult>, ApiProblem> {
+    let now = OffsetDateTime::now_utc();
+    let old = store
+        .notice_get(id)
+        .map_err(store_problem)?
+        .ok_or_else(|| {
+            ApiProblem::new(
+                StatusCode::NOT_FOUND,
+                "notice_not_found",
+                "notice not found",
+            )
+        })?;
+    let read_at = old.read_at.unwrap_or(now);
+    let result = NoticeReadResult {
+        id: id.to_string(),
+        read_at: str_time(read_at),
+    };
+    let Some(audit) = audit else {
+        if old.read_at.is_none() {
+            store.notice_mark_read(id, now).map_err(store_problem)?;
+        }
+        return Ok(crate::cos::operations::Applied::Direct(result));
+    };
+    let target = id.to_string();
+    let operation = audit.apply(store, "notification", &target, "notification.read", |tx| {
+        task_core::store::SqliteStore::notice_mark_ids_read_tx(tx, &[id], now)?;
+        Ok(serde_json::json!({"id": target, "read_at": result.read_at}))
+    })?;
+    Ok(crate::cos::operations::Applied::Audited(Box::new(
+        operation,
+    )))
+}
+
+pub(crate) fn notice_read_all_op(
+    store: &task_core::store::SqliteStore,
+    filter: ReadAllBody,
+    before: Option<OffsetDateTime>,
+    audit: Option<&crate::cos::operations::OperationAudit>,
+) -> Result<crate::cos::operations::Applied<NoticeReadAllResult>, ApiProblem> {
+    let mut offset = 0;
+    let mut ids = Vec::new();
+    loop {
+        let page = store
+            .notice_list(&NoticeQuery {
+                unread_only: true,
+                kinds: filter.kind.into_iter().collect(),
+                limit: 500,
+                offset,
+            })
+            .map_err(store_problem)?;
+        let count = page.items.len();
+        ids.extend(
+            page.items
+                .into_iter()
+                .filter(|notice| {
+                    before.is_none_or(|at| notice.last_at <= at)
+                        && filter
+                            .project
+                            .as_deref()
+                            .is_none_or(|project| notice.project_id.as_deref() == Some(project))
+                })
+                .map(|notice| notice.id),
+        );
+        if count < 500 {
+            break;
+        }
+        offset += count;
+    }
+    let now = OffsetDateTime::now_utc();
+    let Some(audit) = audit else {
+        let mut marked = 0;
+        for id in ids {
+            if store.notice_mark_read(id, now).map_err(store_problem)? {
+                marked += 1;
+            }
+        }
+        return Ok(crate::cos::operations::Applied::Direct(
+            NoticeReadAllResult { marked },
+        ));
+    };
+    let operation = audit.apply(
+        store,
+        "notification",
+        "all",
+        "notification.read_all",
+        |tx| {
+            let marked = task_core::store::SqliteStore::notice_mark_ids_read_tx(tx, &ids, now)?;
+            Ok(serde_json::json!({"marked": marked}))
+        },
+    )?;
+    Ok(crate::cos::operations::Applied::Audited(Box::new(
+        operation,
+    )))
 }
 
 async fn notifications(State(state): State<ApiState>, RawQuery(raw): RawQuery) -> ApiResult {
@@ -680,37 +779,7 @@ async fn read_one(
     let _: EmptyBody = read_json(body, true).await?;
     let notice_id = parse_notice(&id)?;
     let result = state
-        .blocking(move |store| {
-            let old = store
-                .notice_get(notice_id)
-                .map_err(store_problem)?
-                .ok_or_else(|| {
-                    ApiProblem::new(
-                        StatusCode::NOT_FOUND,
-                        "notice_not_found",
-                        "notice not found",
-                    )
-                })?;
-            if old.read_at.is_none() {
-                store
-                    .notice_mark_read(notice_id, OffsetDateTime::now_utc())
-                    .map_err(store_problem)?;
-            }
-            let current = store
-                .notice_get(notice_id)
-                .map_err(store_problem)?
-                .ok_or_else(|| {
-                    ApiProblem::new(
-                        StatusCode::NOT_FOUND,
-                        "notice_not_found",
-                        "notice not found",
-                    )
-                })?;
-            Ok(NoticeReadResult {
-                id,
-                read_at: str_time(current.read_at.unwrap_or_else(OffsetDateTime::now_utc)),
-            })
-        })
+        .blocking(move |store| notice_read_op(store, notice_id, None)?.direct())
         .await?;
     Ok(json_response(StatusCode::OK, &result))
 }
@@ -726,47 +795,7 @@ async fn read_all(
     let filter: ReadAllBody = read_json(body, true).await?;
     let before = filter.before.as_deref().map(parse_time).transpose()?;
     let result = state
-        .blocking(move |store| {
-            let mut offset = 0;
-            let mut ids = Vec::new();
-            loop {
-                let p = store
-                    .notice_list(&NoticeQuery {
-                        unread_only: true,
-                        kinds: filter.kind.into_iter().collect(),
-                        limit: 500,
-                        offset,
-                    })
-                    .map_err(store_problem)?;
-                let n = p.items.len();
-                ids.extend(
-                    p.items
-                        .into_iter()
-                        .filter(|x| {
-                            before.is_none_or(|t| x.last_at <= t)
-                                && filter
-                                    .project
-                                    .as_deref()
-                                    .is_none_or(|p| x.project_id.as_deref() == Some(p))
-                        })
-                        .map(|x| x.id),
-                );
-                if n < 500 {
-                    break;
-                }
-                offset += n;
-            }
-            let mut marked = 0;
-            for id in ids {
-                if store
-                    .notice_mark_read(id, OffsetDateTime::now_utc())
-                    .map_err(store_problem)?
-                {
-                    marked += 1;
-                }
-            }
-            Ok(NoticeReadAllResult { marked })
-        })
+        .blocking(move |store| notice_read_all_op(store, filter, before, None)?.direct())
         .await?;
     Ok(json_response(StatusCode::OK, &result))
 }

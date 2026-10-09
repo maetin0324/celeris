@@ -13,7 +13,7 @@ use crate::outln;
 
 const DEFAULT_CONFIG: &str = "~/.config/celeris/config.toml";
 
-#[derive(Subcommand, Debug)]
+#[derive(Subcommand, Debug, Clone)]
 pub enum CronCommand {
     List,
     Show(KeyArgs),
@@ -25,19 +25,19 @@ pub enum CronCommand {
     History(HistoryArgs),
 }
 
-#[derive(Args, Debug)]
+#[derive(Args, Debug, Clone)]
 pub struct KeyArgs {
     pub id: String,
 }
 
-#[derive(Args, Debug)]
+#[derive(Args, Debug, Clone)]
 pub struct HistoryArgs {
     pub id: String,
     #[arg(long, default_value_t = 50)]
     pub limit: usize,
 }
 
-#[derive(Args, Debug)]
+#[derive(Args, Debug, Clone)]
 pub struct CreateArgs {
     #[arg(long)]
     pub name: String,
@@ -56,7 +56,7 @@ pub struct CreateArgs {
     pub template: String,
 }
 
-#[derive(Args, Debug)]
+#[derive(Args, Debug, Clone)]
 pub struct UpdateArgs {
     pub id: String,
     #[arg(long)]
@@ -95,7 +95,21 @@ pub fn run(config_path: Option<PathBuf>, command: CronCommand) -> Result<ExitCod
             .read_token()
             .map_err(|e| CliError::msg(e.to_string()))?,
     };
-    let (method, path, body) = match command {
+    let (method, path, body) = request_of(command)?;
+    let result = request(&api, method, &path, body)?;
+    outln!(
+        "{}",
+        serde_json::to_string_pretty(&result).map_err(|e| CliError::msg(e.to_string()))?
+    );
+    Ok(ExitCode::SUCCESS)
+}
+
+/// The daemon request (method, path under `/api/v1`, body) of a cron subcommand. Shared with the
+/// CoS mapping in `main.rs` (ADR 2026-10-09-cos-operations-all-mutations D3).
+pub(crate) fn request_of(
+    command: CronCommand,
+) -> Result<(&'static str, String, Option<Value>), CliError> {
+    Ok(match command {
         CronCommand::List => ("GET", "/cron-jobs".to_string(), None),
         CronCommand::Show(a) => ("GET", format!("/cron-jobs/{}", a.id), None),
         CronCommand::Create(a) => (
@@ -143,13 +157,7 @@ pub fn run(config_path: Option<PathBuf>, command: CronCommand) -> Result<ExitCod
             format!("/cron-jobs/{}/runs?limit={}", a.id, a.limit),
             None,
         ),
-    };
-    let result = request(&api, method, &path, body)?;
-    outln!(
-        "{}",
-        serde_json::to_string_pretty(&result).map_err(|e| CliError::msg(e.to_string()))?
-    );
-    Ok(ExitCode::SUCCESS)
+    })
 }
 
 fn parse_object(raw: &str) -> Result<Value, CliError> {

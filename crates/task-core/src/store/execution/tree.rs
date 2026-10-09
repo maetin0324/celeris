@@ -142,19 +142,44 @@ impl SqliteStore {
     ) -> Result<bool, StoreError> {
         let mut conn = self.lock()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let result = Self::execution_plan_adopt_tree_tx(
+            &tx,
+            task_id,
+            plan,
+            work_units,
+            extra_events,
+            event,
+            after_events,
+            adoptions,
+        )?;
+        tx.commit()?;
+        Ok(result)
+    }
+
+    /// Apply plan adoption within a caller-owned transaction (including CoS audit writes).
+    #[allow(clippy::too_many_arguments)]
+    pub fn execution_plan_adopt_tree_tx(
+        tx: &Connection,
+        task_id: TaskId,
+        plan: ExecutionPlanRow,
+        work_units: Vec<WorkUnitRow>,
+        extra_events: Vec<Event>,
+        event: Event,
+        after_events: Vec<Event>,
+        adoptions: Vec<TreeAdoption>,
+    ) -> Result<bool, StoreError> {
         for a in &adoptions {
-            if !Self::tree_adoption_ok_tx(&tx, a)? {
+            if !Self::tree_adoption_ok_tx(tx, a)? {
                 return Ok(false);
             }
         }
-        Self::adopt_plan_tx(&tx, task_id, plan, work_units, extra_events, event)?;
+        Self::adopt_plan_tx(tx, task_id, plan, work_units, extra_events, event)?;
         for ev in &after_events {
-            Self::append_event_tx(&tx, task_id, ev)?;
+            Self::append_event_tx(tx, task_id, ev)?;
         }
         for a in &adoptions {
-            Self::apply_tree_adoption_tx(&tx, a)?;
+            Self::apply_tree_adoption_tx(tx, a)?;
         }
-        tx.commit()?;
         Ok(true)
     }
 
@@ -169,7 +194,30 @@ impl SqliteStore {
     ) -> Result<bool, StoreError> {
         let mut conn = self.lock()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let Some(owner) = Self::get_locked(&tx, owner_id)? else {
+        let result = Self::tree_adopt_apply_tx(
+            &tx,
+            owner_id,
+            unit_id,
+            expect_unit_status,
+            updated,
+            events,
+            adoption,
+        )?;
+        tx.commit()?;
+        Ok(result)
+    }
+
+    /// Apply a late tree adoption within a caller-owned transaction.
+    pub fn tree_adopt_apply_tx(
+        tx: &Connection,
+        owner_id: TaskId,
+        unit_id: &str,
+        expect_unit_status: WorkUnitStatus,
+        updated: Vec<WorkUnitRow>,
+        events: Vec<Event>,
+        adoption: TreeAdoption,
+    ) -> Result<bool, StoreError> {
+        let Some(owner) = Self::get_locked(tx, owner_id)? else {
             return Ok(false);
         };
         if owner.status.is_terminal() {
@@ -196,17 +244,16 @@ impl SqliteStore {
         {
             return Ok(false);
         }
-        if !Self::tree_adoption_ok_tx(&tx, &adoption)? {
+        if !Self::tree_adoption_ok_tx(tx, &adoption)? {
             return Ok(false);
         }
         for wu in &updated {
-            Self::update_work_unit_tx(&tx, wu)?;
+            Self::update_work_unit_tx(tx, wu)?;
         }
         for ev in &events {
-            Self::append_event_tx(&tx, owner_id, ev)?;
+            Self::append_event_tx(tx, owner_id, ev)?;
         }
-        Self::apply_tree_adoption_tx(&tx, &adoption)?;
-        tx.commit()?;
+        Self::apply_tree_adoption_tx(tx, &adoption)?;
         Ok(true)
     }
 }

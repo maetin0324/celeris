@@ -286,28 +286,70 @@ fn set_paused(
     paused_at: Option<OffsetDateTime>,
     now: OffsetDateTime,
 ) -> Result<TaskPauseResult, OpsError> {
+    let (next, event) = paused_edit(task, paused_at, now, "human");
+    // `status` / `attempts` / `lease` はストアがトランザクションの中で読み直した値で上書きする（編集と同じ。
+    // 走っている run のリースを壊さない）。
+    let updated = store.update_task(&next, event)?;
+    pause_result(store, &updated)
+}
+
+fn paused_edit(
+    task: &task_core::Task,
+    paused_at: Option<OffsetDateTime>,
+    now: OffsetDateTime,
+    by: &str,
+) -> (task_core::Task, task_core::Event) {
     let mut next = task.clone();
     next.paused_at = paused_at;
     next.updated_at = now;
-    // `status` / `attempts` / `lease` はストアがトランザクションの中で読み直した値で上書きする（編集と同じ。
-    // 走っている run のリースを壊さない）。
-    let updated = store.update_task(
-        &next,
-        task_core::Event::Edited {
-            fields: vec!["paused_at".to_string()],
-            by: "human".to_string(),
-        },
-    )?;
-    let subtree = descendants(store, &updated)?
+    let event = task_core::Event::Edited {
+        fields: vec!["paused_at".to_string()],
+        by: by.to_string(),
+    };
+    (next, event)
+}
+
+/// 一時停止・再開の結果（書いた後の task から組み立てる。読むだけ）。
+pub fn pause_result(
+    store: &dyn TaskStore,
+    updated: &task_core::Task,
+) -> Result<TaskPauseResult, OpsError> {
+    let subtree = descendants(store, updated)?
         .iter()
         .filter(|t| !t.status.is_terminal())
         .map(task_ref)
         .collect();
     Ok(TaskPauseResult {
-        task: task_ref(&updated),
+        task: task_ref(updated),
         paused_at: updated.paused_at.map(crate::view::to_rfc3339),
         subtree,
     })
+}
+
+/// [`pause_task`]（`paused = true`）・[`resume_task`]（`false`）の書き込み計画（読むだけ）。返った task と
+/// event を `update_task`（CoS の監査経路では `SqliteStore::edit_task_tx`）で書く。`by` は `Edited.by`。
+pub fn plan_set_paused(
+    store: &dyn TaskStore,
+    id: task_core::TaskId,
+    paused: bool,
+    by: &str,
+    now: OffsetDateTime,
+) -> Result<(task_core::Task, task_core::Event), OpsError> {
+    let task = store.get(id)?.ok_or(OpsError::NotFound(id))?;
+    if paused {
+        if task.status.is_terminal()
+            || task.paused_at.is_some()
+            || task_core::is_conversation(&task)
+        {
+            return Err(task_conflict(&task, "paused"));
+        }
+        Ok(paused_edit(&task, Some(now), now, by))
+    } else {
+        if task.paused_at.is_none() {
+            return Err(task_conflict(&task, "resumed"));
+        }
+        Ok(paused_edit(&task, None, now, by))
+    }
 }
 
 /// `POST /tasks/{id}/pause`（ADR-0079 D13、Phase R5a）: task の **subtree を一時停止**する。
@@ -347,3 +389,148 @@ pub fn resume_task(
 
 #[cfg(test)]
 mod tests;
+
+/// A project lifecycle action named by its URL tail (`POST /projects/{id}/<action>`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProjectAction {
+    Cancel,
+    Pause,
+    Resume,
+    Archive,
+    Unarchive,
+}
+
+/// The checked write of one project action (ADR 2026-10-09-cos-operations-all-mutations D3):
+/// computed from the store with the same 404/409 rules as the direct functions above, then applied
+/// on a caller-owned transaction by [`apply_project_change_tx`].
+#[derive(Debug, Clone, PartialEq)]
+pub enum ProjectChange {
+    Cancel {
+        tasks: Vec<task_core::TaskId>,
+        milestones: Vec<MilestoneId>,
+    },
+    Lifecycle {
+        status: ProjectStatus,
+        paused_from: Option<Option<ProjectStatus>>,
+    },
+    Archived(Option<OffsetDateTime>),
+    /// Already in the requested state (archive/unarchive repeated): nothing to write.
+    Unchanged,
+}
+
+/// Check `action` against the project's state and return the write it needs (no write).
+pub fn plan_project_action(
+    store: &dyn TaskStore,
+    id: ProjectId,
+    action: ProjectAction,
+    now: OffsetDateTime,
+) -> Result<ProjectChange, OpsError> {
+    let project = project_or_404(store, id)?;
+    Ok(match action {
+        ProjectAction::Cancel => {
+            if project.status == ProjectStatus::Cancelled {
+                return Err(project_conflict(&project, "cancelled"));
+            }
+            ProjectChange::Cancel {
+                tasks: project_tasks(store, id)?
+                    .into_iter()
+                    .map(|task| task.id)
+                    .collect(),
+                milestones: store
+                    .milestone_list(id)?
+                    .into_iter()
+                    .filter(|m| milestone_is_cancellable(m.status))
+                    .map(|m| m.id)
+                    .collect(),
+            }
+        }
+        ProjectAction::Pause => {
+            if project.status == ProjectStatus::Paused || project.status.is_terminal() {
+                return Err(project_conflict(&project, "paused"));
+            }
+            ProjectChange::Lifecycle {
+                status: ProjectStatus::Paused,
+                paused_from: Some(Some(project.status)),
+            }
+        }
+        ProjectAction::Resume => {
+            if project.status != ProjectStatus::Paused {
+                return Err(project_conflict(&project, "resumed"));
+            }
+            ProjectChange::Lifecycle {
+                status: project.paused_from.unwrap_or(ProjectStatus::Active),
+                paused_from: Some(None),
+            }
+        }
+        ProjectAction::Archive => {
+            if !project.status.is_terminal() {
+                return Err(project_conflict(&project, "archived"));
+            }
+            if project.archived_at.is_none() {
+                ProjectChange::Archived(Some(now))
+            } else {
+                ProjectChange::Unchanged
+            }
+        }
+        ProjectAction::Unarchive => {
+            if project.archived_at.is_some() {
+                ProjectChange::Archived(None)
+            } else {
+                ProjectChange::Unchanged
+            }
+        }
+    })
+}
+
+/// Apply a [`ProjectChange`] on `tx`. Returns the tasks the cancel cascade moved to `cancelled`
+/// (each re-checked inside the transaction, so a task cancelled by an earlier cascade is skipped).
+pub fn apply_project_change_tx(
+    tx: &rusqlite::Connection,
+    id: ProjectId,
+    change: &ProjectChange,
+) -> Result<Vec<task_core::TaskId>, task_core::StoreError> {
+    use task_core::store::SqliteStore;
+    let missing = || task_core::StoreError::Invalid(format!("project not found: {id}"));
+    let mut cancelled = Vec::new();
+    match change {
+        ProjectChange::Cancel { tasks, milestones } => {
+            for task in tasks {
+                match SqliteStore::task_status_tx(tx, *task)? {
+                    Some(status) if !status.is_terminal() => {}
+                    _ => continue,
+                }
+                SqliteStore::apply_transition_tx(tx, *task, Trigger::ProjectCancelled, vec![])?;
+                if SqliteStore::task_status_tx(tx, *task)? == Some(Status::Cancelled) {
+                    cancelled.push(*task);
+                }
+            }
+            for milestone in milestones {
+                SqliteStore::milestone_set_lifecycle_tx(
+                    tx,
+                    *milestone,
+                    MilestoneStatus::Cancelled,
+                    Some(None),
+                )?;
+            }
+            if !SqliteStore::project_set_lifecycle_tx(tx, id, ProjectStatus::Cancelled, Some(None))?
+            {
+                return Err(missing());
+            }
+        }
+        ProjectChange::Lifecycle {
+            status,
+            paused_from,
+        } => {
+            if !SqliteStore::project_set_lifecycle_tx(tx, id, *status, *paused_from)? {
+                return Err(missing());
+            }
+        }
+        ProjectChange::Archived(at) => {
+            if !SqliteStore::project_set_archived_at_tx(tx, id, *at)? {
+                return Err(missing());
+            }
+        }
+        ProjectChange::Unchanged => {}
+    }
+    Ok(cancelled)
+}

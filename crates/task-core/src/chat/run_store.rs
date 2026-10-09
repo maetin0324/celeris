@@ -750,42 +750,11 @@ impl SqliteStore {
         run_id: &str,
         now: OffsetDateTime,
     ) -> Result<ChatStopOutcome, ChatError> {
-        let at = chat_ts(now);
         let mut conn = writer(self)?;
         let tx = immediate(&mut conn)?;
-        let thread = thread_require(&tx, thread_id)?;
-        let run = run_get_conn(&tx, thread_id, run_id)?
-            .ok_or_else(|| ChatError::not_found("run", run_id))?;
-        let accepted = match run.state {
-            s if chat_run_state_is_terminal(s) => false,
-            ChatRunState::Stopping => {
-                if !thread.queue_paused {
-                    super::store::set_paused(&tx, thread_id, true, &at)?;
-                    emit_queue(&tx, thread_id, &at)?;
-                }
-                true
-            }
-            ChatRunState::Running => {
-                request_stop(&tx, thread_id, run_id, "stopped by human", &at)?;
-                if !thread.queue_paused {
-                    super::store::set_paused(&tx, thread_id, true, &at)?;
-                }
-                emit_queue(&tx, thread_id, &at)?;
-                true
-            }
-            _ => {
-                return Err(ChatError::Conflict(format!(
-                    "run {run_id} is not the current run of thread {thread_id}"
-                )));
-            }
-        };
-        let run = run_by_id(&tx, run_id)?;
-        let queue_paused = thread_require(&tx, thread_id)?.queue_paused;
+        let outcome = chat_run_stop_tx(&tx, thread_id, run_id, now)?;
         tx.commit()?;
-        Ok(ChatStopOutcome {
-            response: ChatStopResponse { run, queue_paused },
-            accepted,
-        })
+        Ok(outcome)
     }
 
     /// Validates an SSE/event cursor for `thread_id` (404 thread, 400 malformed/future, 410
@@ -945,4 +914,46 @@ fn finish_conn(
     emit_run(tx, &run, at)?;
     emit_queue(tx, &run.thread_id, at)?;
     Ok(run)
+}
+
+/// [`SqliteStore::chat_run_stop`] inside the caller's transaction (the CoS operation transaction).
+pub fn chat_run_stop_tx(
+    tx: &Connection,
+    thread_id: &str,
+    run_id: &str,
+    now: OffsetDateTime,
+) -> Result<ChatStopOutcome, ChatError> {
+    let at = chat_ts(now);
+    let thread = thread_require(tx, thread_id)?;
+    let run =
+        run_get_conn(tx, thread_id, run_id)?.ok_or_else(|| ChatError::not_found("run", run_id))?;
+    let accepted = match run.state {
+        s if chat_run_state_is_terminal(s) => false,
+        ChatRunState::Stopping => {
+            if !thread.queue_paused {
+                super::store::set_paused(tx, thread_id, true, &at)?;
+                emit_queue(tx, thread_id, &at)?;
+            }
+            true
+        }
+        ChatRunState::Running => {
+            request_stop(tx, thread_id, run_id, "stopped by human", &at)?;
+            if !thread.queue_paused {
+                super::store::set_paused(tx, thread_id, true, &at)?;
+            }
+            emit_queue(tx, thread_id, &at)?;
+            true
+        }
+        _ => {
+            return Err(ChatError::Conflict(format!(
+                "run {run_id} is not the current run of thread {thread_id}"
+            )));
+        }
+    };
+    let run = run_by_id(tx, run_id)?;
+    let queue_paused = thread_require(tx, thread_id)?.queue_paused;
+    Ok(ChatStopOutcome {
+        response: ChatStopResponse { run, queue_paused },
+        accepted,
+    })
 }

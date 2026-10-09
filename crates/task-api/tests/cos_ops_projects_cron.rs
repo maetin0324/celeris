@@ -1,0 +1,477 @@
+//! ADR 2026-10-09-cos-operations-all-mutations D3 (WU ops-projects-cron): the cron-job and
+//! project routes run through `/cos/operations`. Each is refused when called directly with the CoS
+//! credential (422 + rejected audit row) and applied through the envelope with its row, audit event
+//! and chat card. `cron_job.run` is an external-effect operation (C): pending then applied, and a
+//! resent request returns the recorded operation without firing the job again.
+mod common;
+
+use common::cos_ops::{OPS, audit_events, cos_bearer, db, op_body, run_domain};
+use common::*;
+use serde_json::{Value, json};
+use task_core::{CronJobStore, TaskStore};
+
+fn job_body(name: &str) -> Value {
+    json!({
+        "name": name,
+        "schedule": "0 4 * * *",
+        "timezone": "Asia/Tokyo",
+        "template": {
+            "title": "知識整理: {date}",
+            "objective": "KB と受信箱を整理する",
+            "acceptance": [{"type": "reviewer", "text": "整理の記録がある"}],
+            "lane": "cheap"
+        }
+    })
+}
+
+fn job(env: &TestEnv, name: &str) -> Option<task_core::CronJob> {
+    env.store.cron_job_get_by_name(name).expect("get")
+}
+
+#[tokio::test]
+async fn cos_ops_projects_cron_job_lifecycle_is_audited() {
+    let env = admin_env();
+
+    let op = run_domain(
+        &env,
+        "cron-create",
+        "POST",
+        "/api/v1/cron-jobs",
+        job_body("daily"),
+        "cron_job.create",
+    )
+    .await;
+    let created = job(&env, "daily").expect("created by cos");
+    assert_eq!(op["target_kind"], "cron_job");
+    assert_eq!(op["target_id"], created.id.to_string());
+    assert_eq!(op["result"]["job"]["name"], "daily");
+
+    run_domain(
+        &env,
+        "cron-update",
+        "PATCH",
+        "/api/v1/cron-jobs/daily",
+        json!({"schedule": "30 5 * * *"}),
+        "cron_job.update",
+    )
+    .await;
+    assert_eq!(job(&env, "daily").expect("job").schedule, "30 5 * * *");
+
+    run_domain(
+        &env,
+        "cron-pause",
+        "POST",
+        "/api/v1/cron-jobs/daily/pause",
+        json!({}),
+        "cron_job.pause",
+    )
+    .await;
+    let paused = job(&env, "daily").expect("job");
+    assert!(!paused.enabled && paused.next_fire_at.is_none());
+
+    run_domain(
+        &env,
+        "cron-resume",
+        "POST",
+        "/api/v1/cron-jobs/daily/resume",
+        json!(null),
+        "cron_job.resume",
+    )
+    .await;
+    let resumed = job(&env, "daily").expect("job");
+    assert!(resumed.enabled && resumed.next_fire_at.is_some());
+
+    run_domain(
+        &env,
+        "cron-delete",
+        "DELETE",
+        &format!("/api/v1/cron-jobs/{}", created.id),
+        json!(null),
+        "cron_job.delete",
+    )
+    .await;
+    assert!(job(&env, "daily").is_none());
+}
+
+#[tokio::test]
+async fn cos_ops_projects_cron_domain_errors_are_recorded_as_rejected() {
+    let env = admin_env();
+    let app = env.router();
+    let created = send(&app, post_admin("/api/v1/cron-jobs", &job_body("dup"))).await;
+    assert_eq!(created.status.as_u16(), 201, "{}", created.text());
+
+    let (thread, _, bearer) = cos_bearer(&env, "cron-dup");
+    let headers = [("authorization", bearer.as_str())];
+    for (key, method, path, body, status) in [
+        ("dup", "POST", "/api/v1/cron-jobs", job_body("dup"), 409_u16),
+        (
+            "missing",
+            "POST",
+            "/api/v1/cron-jobs/nope/pause",
+            json!({}),
+            404,
+        ),
+        (
+            "body",
+            "POST",
+            "/api/v1/cron-jobs/dup/run",
+            json!({"x": 1}),
+            422,
+        ),
+    ] {
+        let resp = send(
+            &app,
+            post_json_with(OPS, &op_body(key, method, path, body), &headers),
+        )
+        .await;
+        assert_eq!(resp.status.as_u16(), status, "{key}: {}", resp.text());
+    }
+    let rejected: i64 = db(&env)
+        .query_row(
+            "SELECT COUNT(*) FROM cos_operations WHERE thread_id=?1 AND state='rejected'",
+            [&thread],
+            |row| row.get(0),
+        )
+        .expect("count");
+    assert_eq!(rejected, 3);
+    let runs = env
+        .store
+        .cron_job_runs(job(&env, "dup").expect("job").id, None)
+        .expect("runs");
+    assert!(runs.is_empty(), "a rejected run must not fire: {runs:?}");
+}
+
+#[tokio::test]
+async fn cos_ops_projects_cron_run_is_external_once() {
+    let env = admin_env();
+    let app = env.router();
+    let created = send(&app, post_admin("/api/v1/cron-jobs", &job_body("manual"))).await;
+    assert_eq!(created.status.as_u16(), 201, "{}", created.text());
+    let job_id = job(&env, "manual").expect("job").id;
+
+    let (thread, run, bearer) = cos_bearer(&env, "cron-run");
+    let headers = [("authorization", bearer.as_str())];
+    let direct = send(
+        &app,
+        post_json_with("/api/v1/cron-jobs/manual/run", &json!({}), &headers),
+    )
+    .await;
+    assert_problem(&direct, 422, "cos_audit_context_required");
+    assert!(
+        env.store
+            .cron_job_runs(job_id, None)
+            .expect("runs")
+            .is_empty()
+    );
+
+    let envelope = op_body(
+        "run-once",
+        "POST",
+        "/api/v1/cron-jobs/manual/run",
+        json!({}),
+    );
+    let first = send(&app, post_json_with(OPS, &envelope, &headers)).await;
+    assert_eq!(first.status.as_u16(), 200, "{}", first.text());
+    let op = first.json()["operation"].clone();
+    assert_eq!(op["state"], "applied", "{op}");
+    assert_eq!(op["action"], "cron_job.run");
+    assert_eq!(op["run_id"], run.as_str());
+    assert_eq!(op["thread_id"], thread.as_str());
+    assert!(op["result"]["task_id"].is_string(), "{op}");
+    let op_id = op["id"].as_str().expect("id").to_string();
+    let states: Vec<Value> = audit_events(&env, &op_id)
+        .into_iter()
+        .map(|event| event["state"].clone())
+        .collect();
+    assert_eq!(states, vec![json!("pending"), json!("applied")]);
+    assert_eq!(
+        env.store.cron_job_runs(job_id, None).expect("runs").len(),
+        1
+    );
+
+    // Resending the same request returns the recorded operation and does not fire again.
+    let again = send(&app, post_json_with(OPS, &envelope, &headers)).await;
+    assert_eq!(again.status.as_u16(), 200, "{}", again.text());
+    assert_eq!(again.json()["operation"]["id"], op_id.as_str());
+    assert_eq!(
+        env.store.cron_job_runs(job_id, None).expect("runs").len(),
+        1
+    );
+    assert_eq!(audit_events(&env, &op_id).len(), 2);
+}
+
+fn seed_project(env: &TestEnv, status: task_core::ProjectStatus) -> task_core::ProjectId {
+    let now = time::OffsetDateTime::now_utc();
+    let project = task_core::Project {
+        auto_advance: false,
+        slug: None,
+        id: task_core::ProjectId::new(),
+        title: "lifecycle".into(),
+        request: "request".into(),
+        status,
+        secretary_summary: None,
+        workspace: None,
+        archived_at: None,
+        paused_from: None,
+        created_at: now,
+        updated_at: now,
+    };
+    env.store.project_create(&project).expect("project");
+    project.id
+}
+
+fn project(env: &TestEnv, id: task_core::ProjectId) -> task_core::Project {
+    env.store.project_get(id).expect("get").expect("project")
+}
+
+#[tokio::test]
+async fn cos_ops_projects_cron_project_lifecycle_is_audited() {
+    use task_core::{ProjectStatus, Status, TaskKind};
+    let env = admin_env();
+    let id = seed_project(&env, ProjectStatus::Active);
+    let mut open = new_task(TaskKind::Execute, Status::Ready);
+    open.project_id = Some(id);
+    env.seed(&open);
+
+    run_domain(
+        &env,
+        "project-pause",
+        "POST",
+        &format!("/api/v1/projects/{id}/pause"),
+        json!({}),
+        "project.pause",
+    )
+    .await;
+    let paused = project(&env, id);
+    assert_eq!(paused.status, ProjectStatus::Paused);
+    assert_eq!(paused.paused_from, Some(ProjectStatus::Active));
+
+    run_domain(
+        &env,
+        "project-resume",
+        "POST",
+        &format!("/api/v1/projects/{id}/resume"),
+        json!(null),
+        "project.resume",
+    )
+    .await;
+    assert_eq!(project(&env, id).status, ProjectStatus::Active);
+
+    let op = run_domain(
+        &env,
+        "project-cancel",
+        "POST",
+        &format!("/api/v1/projects/{id}/cancel"),
+        json!({}),
+        "project.cancel",
+    )
+    .await;
+    assert_eq!(project(&env, id).status, ProjectStatus::Cancelled);
+    assert_eq!(
+        op["result"]["cancelled_tasks"],
+        json!([open.id.to_string()])
+    );
+    let task = env.store.get(open.id).expect("get").expect("task");
+    assert_eq!(task.status, Status::Cancelled);
+
+    run_domain(
+        &env,
+        "project-archive",
+        "POST",
+        &format!("/api/v1/projects/{id}/archive"),
+        json!({}),
+        "project.archive",
+    )
+    .await;
+    assert!(project(&env, id).archived_at.is_some());
+    run_domain(
+        &env,
+        "project-unarchive",
+        "POST",
+        &format!("/api/v1/projects/{id}/unarchive"),
+        json!({}),
+        "project.unarchive",
+    )
+    .await;
+    assert!(project(&env, id).archived_at.is_none());
+
+    // A state conflict is a 409 recorded as rejected, with no write.
+    let (thread, _, bearer) = cos_bearer(&env, "project-conflict");
+    let resp = send(
+        &env.router(),
+        post_json_with(
+            OPS,
+            &op_body(
+                "cancel-again",
+                "POST",
+                &format!("/api/v1/projects/{id}/cancel"),
+                json!({}),
+            ),
+            &[("authorization", bearer.as_str())],
+        ),
+    )
+    .await;
+    assert_eq!(resp.status.as_u16(), 409, "{}", resp.text());
+    let rejected: i64 = db(&env)
+        .query_row(
+            "SELECT COUNT(*) FROM cos_operations WHERE thread_id=?1 AND state='rejected'",
+            [&thread],
+            |row| row.get(0),
+        )
+        .expect("count");
+    assert_eq!(rejected, 1);
+}
+
+#[tokio::test]
+async fn cos_ops_projects_cron_standing_rules_are_audited() {
+    use task_core::ApprovalStore;
+    let env = admin_env();
+    let op = run_domain(
+        &env,
+        "rule-create",
+        "POST",
+        "/api/v1/standing-rules",
+        json!({"rule": "cluster への読み取りは許可", "node_id": "software-engineering"}),
+        "standing_rule.create",
+    )
+    .await;
+    let rules = env.store.standing_rule_list(None).expect("list");
+    assert_eq!(rules.len(), 1);
+    let id = rules[0].id.to_string();
+    assert_eq!(op["target_id"], id.as_str());
+    assert_eq!(rules[0].node_id.as_deref(), Some("software-engineering"));
+
+    run_domain(
+        &env,
+        "rule-delete",
+        "DELETE",
+        &format!("/api/v1/standing-rules/{id}"),
+        json!(null),
+        "standing_rule.delete",
+    )
+    .await;
+    assert!(env.store.standing_rule_list(None).expect("list").is_empty());
+
+    let (_, _, bearer) = cos_bearer(&env, "rule-missing");
+    let resp = send(
+        &env.router(),
+        post_json_with(
+            OPS,
+            &op_body(
+                "missing",
+                "DELETE",
+                &format!("/api/v1/standing-rules/{id}"),
+                json!(null),
+            ),
+            &[("authorization", bearer.as_str())],
+        ),
+    )
+    .await;
+    assert_eq!(resp.status.as_u16(), 404, "{}", resp.text());
+}
+
+#[tokio::test]
+async fn cos_ops_projects_cron_reports_read_and_notified_are_audited() {
+    use task_core::report::{Report, ReportId, ReportKind, ReportStore};
+    let env = admin_env();
+    let report = Report {
+        id: ReportId::new(),
+        project_id: None,
+        node_id: "software-engineering".into(),
+        task_id: None,
+        kind: ReportKind::Progress,
+        level: 1,
+        headline: "進捗".into(),
+        body: "本文".into(),
+        sources: vec![],
+        read_at: None,
+        created_at: time::OffsetDateTime::now_utc(),
+    };
+    env.store.report_append(&report).expect("append");
+
+    let op = run_domain(
+        &env,
+        "reports-read",
+        "POST",
+        "/api/v1/reports/read",
+        json!({"ids": [report.id.to_string()]}),
+        "report.read",
+    )
+    .await;
+    assert_eq!(op["result"]["updated"], 1);
+    let read = env
+        .store
+        .report_get(report.id)
+        .expect("get")
+        .expect("report");
+    assert!(read.read_at.is_some());
+
+    let op = run_domain(
+        &env,
+        "reports-notified",
+        "POST",
+        "/api/v1/reports/notified",
+        json!({}),
+        "report.notified",
+    )
+    .await;
+    assert!(op["result"]["last_notified_at"].is_string(), "{op}");
+}
+
+#[tokio::test]
+async fn cos_ops_projects_cron_project_create_is_audited() {
+    let env = admin_env();
+    let op = run_domain(
+        &env,
+        "project-create",
+        "POST",
+        "/api/v1/projects",
+        json!({"title": "新しい案件", "request": "依頼の本文"}),
+        "project.create",
+    )
+    .await;
+    let id: task_core::ProjectId = op["target_id"]
+        .as_str()
+        .expect("target")
+        .parse()
+        .expect("project id");
+    let created = project(&env, id);
+    assert_eq!(created.title, "新しい案件");
+    assert_eq!(created.status, task_core::ProjectStatus::Proposed);
+    let before = env.store.project_list().expect("list").len();
+
+    // Resending the same request returns the recorded operation without a second project.
+    let (_, _, bearer) = cos_bearer(&env, "project-create-again");
+    let headers = [("authorization", bearer.as_str())];
+    let envelope = op_body(
+        "same",
+        "POST",
+        "/api/v1/projects",
+        json!({"title": "二つ目", "request": "本文"}),
+    );
+    let first = send(&env.router(), post_json_with(OPS, &envelope, &headers)).await;
+    assert_eq!(first.status.as_u16(), 200, "{}", first.text());
+    let again = send(&env.router(), post_json_with(OPS, &envelope, &headers)).await;
+    assert_eq!(
+        again.json()["operation"]["id"],
+        first.json()["operation"]["id"]
+    );
+    assert_eq!(env.store.project_list().expect("list").len(), before + 1);
+
+    // A blank title is a 422 recorded as rejected.
+    let blank = send(
+        &env.router(),
+        post_json_with(
+            OPS,
+            &op_body(
+                "blank",
+                "POST",
+                "/api/v1/projects",
+                json!({"title": " ", "request": "本文"}),
+            ),
+            &headers,
+        ),
+    )
+    .await;
+    assert_eq!(blank.status.as_u16(), 422, "{}", blank.text());
+}

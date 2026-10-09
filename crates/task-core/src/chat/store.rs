@@ -611,63 +611,11 @@ impl SqliteStore {
         req: &ChatCreateThreadRequest,
         now: OffsetDateTime,
     ) -> Result<ChatThreadCreated, ChatError> {
-        check_key("client_thread_id", &req.client_thread_id)?;
-        check_title(&req.title)?;
-        let hash = hash_json(&json!({"title": req.title, "project_id": req.project_id}));
-        let at = chat_ts(now);
         let mut conn = writer(self)?;
         let tx = immediate(&mut conn)?;
-        let existing: Option<(String, String)> = tx
-            .query_row(
-                "SELECT request_hash,result_id FROM chat_client_requests \
-                 WHERE kind='thread' AND scope_id=?1 AND key=?2",
-                params![scope_id, req.client_thread_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .optional()?;
-        if let Some((prev_hash, thread_id)) = existing {
-            if prev_hash != hash {
-                return Err(ChatError::Conflict(format!(
-                    "client_thread_id {} was used with different content",
-                    req.client_thread_id
-                )));
-            }
-            let thread = thread_require(&tx, &thread_id)?;
-            return Ok(ChatThreadCreated {
-                thread,
-                created: false,
-            });
-        }
-        if let Some(project_id) = &req.project_id {
-            let found: bool = tx.query_row(
-                "SELECT EXISTS(SELECT 1 FROM projects WHERE id=?1)",
-                params![project_id],
-                |row| row.get(0),
-            )?;
-            if !found {
-                return Err(ChatError::Invalid(format!(
-                    "project {project_id} not found"
-                )));
-            }
-        }
-        let id = Ulid::new().to_string();
-        tx.execute(
-            "INSERT INTO chat_threads(id,kind,title,project_id,status,created_at,updated_at) \
-             VALUES(?1,'human',?2,?3,'open',?4,?4)",
-            params![id, req.title, req.project_id, at],
-        )?;
-        tx.execute(
-            "INSERT INTO chat_client_requests(kind,scope_id,key,request_hash,result_id,created_at) \
-             VALUES('thread',?1,?2,?3,?4,?5)",
-            params![scope_id, req.client_thread_id, hash, id, at],
-        )?;
-        emit_thread(&tx, &id, &at)?;
-        let thread = thread_require(&tx, &id)?;
+        let created = chat_thread_create_tx(&tx, scope_id, req, now)?;
         tx.commit()?;
-        Ok(ChatThreadCreated {
-            thread,
-            created: true,
-        })
+        Ok(created)
     }
 
     pub fn chat_thread_get(&self, id: &str) -> Result<Option<ChatThread>, ChatError> {
@@ -786,59 +734,9 @@ impl SqliteStore {
         req: &ChatPatchThreadRequest,
         now: OffsetDateTime,
     ) -> Result<ChatThread, ChatError> {
-        if req.title.is_none() && req.status.is_none() {
-            return Err(ChatError::Invalid("title or status is required".into()));
-        }
-        if let Some(title) = &req.title {
-            check_title(title)?;
-        }
-        let at = chat_ts(now);
         let mut conn = writer(self)?;
         let tx = immediate(&mut conn)?;
-        let thread = thread_require(&tx, id)?;
-        if thread.revision != req.expected_revision {
-            return Err(ChatError::Conflict(format!(
-                "thread {id} revision is {}, expected {}",
-                thread.revision, req.expected_revision
-            )));
-        }
-        if let Some(title) = &req.title {
-            tx.execute(
-                "UPDATE chat_threads SET title=?2 WHERE id=?1",
-                params![id, title],
-            )?;
-        }
-        match req.status {
-            Some(ChatThreadStatus::Archived) if thread.status != ChatThreadStatus::Archived => {
-                if thread.kind == ChatThreadKind::Inbox {
-                    return Err(ChatError::Conflict(
-                        "the inbox thread cannot be archived".into(),
-                    ));
-                }
-                if thread.active_run_id.is_some() || thread.queued_count > 0 {
-                    return Err(ChatError::Conflict(format!(
-                        "thread {id} still has a run or queued messages"
-                    )));
-                }
-                tx.execute(
-                    "UPDATE chat_threads SET status='archived',archived_at=?2 WHERE id=?1",
-                    params![id, at],
-                )?;
-            }
-            Some(ChatThreadStatus::Open) if thread.status != ChatThreadStatus::Open => {
-                tx.execute(
-                    "UPDATE chat_threads SET status='open',archived_at=NULL WHERE id=?1",
-                    params![id],
-                )?;
-            }
-            _ => {}
-        }
-        tx.execute(
-            "UPDATE chat_threads SET revision=revision+1,updated_at=?2 WHERE id=?1",
-            params![id, at],
-        )?;
-        emit_thread(&tx, id, &at)?;
-        let thread = thread_require(&tx, id)?;
+        let thread = chat_thread_patch_tx(&tx, id, req, now)?;
         tx.commit()?;
         Ok(thread)
     }
@@ -850,20 +748,9 @@ impl SqliteStore {
         expected_revision: u64,
         now: OffsetDateTime,
     ) -> Result<ChatThread, ChatError> {
-        let at = chat_ts(now);
         let mut conn = writer(self)?;
         let tx = immediate(&mut conn)?;
-        let thread = thread_require(&tx, id)?;
-        if thread.revision != expected_revision {
-            return Err(ChatError::Conflict(format!(
-                "thread {id} revision is {}, expected {expected_revision}",
-                thread.revision
-            )));
-        }
-        if thread.queue_paused {
-            set_paused(&tx, id, false, &at)?;
-        }
-        let thread = thread_require(&tx, id)?;
+        let thread = chat_thread_resume_queue_tx(&tx, id, expected_revision, now)?;
         tx.commit()?;
         Ok(thread)
     }
@@ -969,27 +856,9 @@ impl SqliteStore {
         message_id: &str,
         now: OffsetDateTime,
     ) -> Result<ChatMessage, ChatError> {
-        let at = chat_ts(now);
         let mut conn = writer(self)?;
         let tx = immediate(&mut conn)?;
-        thread_require(&tx, thread_id)?;
-        let message = message_require(&tx, thread_id, message_id)?;
-        if message.state == ChatMessageState::Cancelled {
-            return Ok(message);
-        }
-        if message.role != ChatMessageRole::User || message.state != ChatMessageState::Queued {
-            return Err(ChatError::Conflict(format!(
-                "message {message_id} is not a queued user input"
-            )));
-        }
-        tx.execute(
-            "UPDATE chat_messages SET state='cancelled',updated_at=?2 WHERE id=?1",
-            params![message_id, at],
-        )?;
-        touch_thread(&tx, thread_id, &at)?;
-        let message = message_require(&tx, thread_id, message_id)?;
-        emit_message(&tx, &message, &at)?;
-        emit_queue(&tx, thread_id, &at)?;
+        let message = chat_message_cancel_tx(&tx, thread_id, message_id, now)?;
         tx.commit()?;
         Ok(message)
     }
@@ -1358,4 +1227,294 @@ pub(crate) fn read_tx<T>(
             "read tx did not run".into(),
         )))
     })
+}
+
+/// [`SqliteStore::chat_thread_create`] inside the caller's transaction (the CoS operation
+/// transaction of ADR 2026-10-09-cos-operations-all-mutations).
+pub fn chat_thread_create_tx(
+    tx: &Connection,
+    scope_id: &str,
+    req: &ChatCreateThreadRequest,
+    now: OffsetDateTime,
+) -> Result<ChatThreadCreated, ChatError> {
+    check_key("client_thread_id", &req.client_thread_id)?;
+    check_title(&req.title)?;
+    let hash = hash_json(&json!({"title": req.title, "project_id": req.project_id}));
+    let at = chat_ts(now);
+    let existing: Option<(String, String)> = tx
+        .query_row(
+            "SELECT request_hash,result_id FROM chat_client_requests \
+             WHERE kind='thread' AND scope_id=?1 AND key=?2",
+            params![scope_id, req.client_thread_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    if let Some((prev_hash, thread_id)) = existing {
+        if prev_hash != hash {
+            return Err(ChatError::Conflict(format!(
+                "client_thread_id {} was used with different content",
+                req.client_thread_id
+            )));
+        }
+        let thread = thread_require(tx, &thread_id)?;
+        return Ok(ChatThreadCreated {
+            thread,
+            created: false,
+        });
+    }
+    if let Some(project_id) = &req.project_id {
+        let found: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM projects WHERE id=?1)",
+            params![project_id],
+            |row| row.get(0),
+        )?;
+        if !found {
+            return Err(ChatError::Invalid(format!(
+                "project {project_id} not found"
+            )));
+        }
+    }
+    let id = Ulid::new().to_string();
+    tx.execute(
+        "INSERT INTO chat_threads(id,kind,title,project_id,status,created_at,updated_at) \
+         VALUES(?1,'human',?2,?3,'open',?4,?4)",
+        params![id, req.title, req.project_id, at],
+    )?;
+    tx.execute(
+        "INSERT INTO chat_client_requests(kind,scope_id,key,request_hash,result_id,created_at) \
+         VALUES('thread',?1,?2,?3,?4,?5)",
+        params![scope_id, req.client_thread_id, hash, id, at],
+    )?;
+    emit_thread(tx, &id, &at)?;
+    let thread = thread_require(tx, &id)?;
+    Ok(ChatThreadCreated {
+        thread,
+        created: true,
+    })
+}
+
+/// [`SqliteStore::chat_thread_patch`] inside the caller's transaction.
+pub fn chat_thread_patch_tx(
+    tx: &Connection,
+    id: &str,
+    req: &ChatPatchThreadRequest,
+    now: OffsetDateTime,
+) -> Result<ChatThread, ChatError> {
+    if req.title.is_none() && req.status.is_none() {
+        return Err(ChatError::Invalid("title or status is required".into()));
+    }
+    if let Some(title) = &req.title {
+        check_title(title)?;
+    }
+    let at = chat_ts(now);
+    let thread = thread_require(tx, id)?;
+    if thread.revision != req.expected_revision {
+        return Err(ChatError::Conflict(format!(
+            "thread {id} revision is {}, expected {}",
+            thread.revision, req.expected_revision
+        )));
+    }
+    if let Some(title) = &req.title {
+        tx.execute(
+            "UPDATE chat_threads SET title=?2 WHERE id=?1",
+            params![id, title],
+        )?;
+    }
+    match req.status {
+        Some(ChatThreadStatus::Archived) if thread.status != ChatThreadStatus::Archived => {
+            if thread.kind == ChatThreadKind::Inbox {
+                return Err(ChatError::Conflict(
+                    "the inbox thread cannot be archived".into(),
+                ));
+            }
+            if thread.active_run_id.is_some() || thread.queued_count > 0 {
+                return Err(ChatError::Conflict(format!(
+                    "thread {id} still has a run or queued messages"
+                )));
+            }
+            tx.execute(
+                "UPDATE chat_threads SET status='archived',archived_at=?2 WHERE id=?1",
+                params![id, at],
+            )?;
+        }
+        Some(ChatThreadStatus::Open) if thread.status != ChatThreadStatus::Open => {
+            tx.execute(
+                "UPDATE chat_threads SET status='open',archived_at=NULL WHERE id=?1",
+                params![id],
+            )?;
+        }
+        _ => {}
+    }
+    tx.execute(
+        "UPDATE chat_threads SET revision=revision+1,updated_at=?2 WHERE id=?1",
+        params![id, at],
+    )?;
+    emit_thread(tx, id, &at)?;
+    thread_require(tx, id)
+}
+
+/// [`SqliteStore::chat_thread_resume_queue`] inside the caller's transaction.
+pub fn chat_thread_resume_queue_tx(
+    tx: &Connection,
+    id: &str,
+    expected_revision: u64,
+    now: OffsetDateTime,
+) -> Result<ChatThread, ChatError> {
+    let at = chat_ts(now);
+    let thread = thread_require(tx, id)?;
+    if thread.revision != expected_revision {
+        return Err(ChatError::Conflict(format!(
+            "thread {id} revision is {}, expected {expected_revision}",
+            thread.revision
+        )));
+    }
+    if thread.queue_paused {
+        set_paused(tx, id, false, &at)?;
+    }
+    thread_require(tx, id)
+}
+
+/// [`SqliteStore::chat_message_cancel`] inside the caller's transaction.
+pub fn chat_message_cancel_tx(
+    tx: &Connection,
+    thread_id: &str,
+    message_id: &str,
+    now: OffsetDateTime,
+) -> Result<ChatMessage, ChatError> {
+    let at = chat_ts(now);
+    thread_require(tx, thread_id)?;
+    let message = message_require(tx, thread_id, message_id)?;
+    if message.state == ChatMessageState::Cancelled {
+        return Ok(message);
+    }
+    if message.role != ChatMessageRole::User || message.state != ChatMessageState::Queued {
+        return Err(ChatError::Conflict(format!(
+            "message {message_id} is not a queued user input"
+        )));
+    }
+    tx.execute(
+        "UPDATE chat_messages SET state='cancelled',updated_at=?2 WHERE id=?1",
+        params![message_id, at],
+    )?;
+    touch_thread(tx, thread_id, &at)?;
+    let message = message_require(tx, thread_id, message_id)?;
+    emit_message(tx, &message, &at)?;
+    emit_queue(tx, thread_id, &at)?;
+    Ok(message)
+}
+
+/// `POST /chat/threads/{t}/messages` sent by a CoS run through `/cos/operations` (ADR
+/// 2026-10-09-cos-operations-all-mutations, WU ops-surface). The message is a completed
+/// `assistant` notice, never a queued `user` input, so it cannot start a CoS run: CoS posting a
+/// message does not chain into another CoS run. `mode=interrupt` and `resume_queue` (which act on
+/// the run queue) are refused. Same `client_message_id` with the same content returns the message.
+pub fn chat_message_post_cos_tx(
+    tx: &Connection,
+    thread_id: &str,
+    req: &ChatPostMessageRequest,
+    operation_id: &str,
+    now: OffsetDateTime,
+) -> Result<ChatMessage, ChatError> {
+    check_key("client_message_id", &req.client_message_id)?;
+    if req.mode != ChatSendMode::Queue || req.resume_queue {
+        return Err(ChatError::Invalid(
+            "a CoS message is a notice: mode must be queue and resume_queue false".into(),
+        ));
+    }
+    if req.text.len() > CHAT_MESSAGE_TEXT_MAX_BYTES {
+        return Err(ChatError::TooLarge(format!(
+            "text is {} bytes (max {CHAT_MESSAGE_TEXT_MAX_BYTES})",
+            req.text.len()
+        )));
+    }
+    if req.attachment_ids.len() > CHAT_MESSAGE_ATTACHMENTS_MAX {
+        return Err(ChatError::TooLarge(format!(
+            "{} attachments (max {CHAT_MESSAGE_ATTACHMENTS_MAX})",
+            req.attachment_ids.len()
+        )));
+    }
+    if req.text.trim().is_empty() && req.attachment_ids.is_empty() {
+        return Err(ChatError::Invalid("blank text needs an attachment".into()));
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    if !req.attachment_ids.iter().all(|a| seen.insert(a.as_str())) {
+        return Err(ChatError::Invalid("duplicate attachment id".into()));
+    }
+    let at = chat_ts(now);
+    let thread = thread_require(tx, thread_id)?;
+    let existing = tx
+        .query_row(
+            &format!("{MESSAGE_SELECT} WHERE thread_id=?1 AND client_message_id=?2"),
+            params![thread_id, req.client_message_id],
+            message_raw,
+        )
+        .optional()?;
+    if let Some(raw) = existing {
+        let message = message_from_raw(tx, raw)?;
+        if message.role != ChatMessageRole::Assistant
+            || message.text != req.text
+            || message.attachment_ids != req.attachment_ids
+            || message.reply_to_id != req.reply_to_id
+        {
+            return Err(ChatError::Conflict(format!(
+                "client_message_id {} was used with different content",
+                req.client_message_id
+            )));
+        }
+        return Ok(message);
+    }
+    if thread.status == ChatThreadStatus::Archived {
+        return Err(ChatError::Conflict(format!(
+            "thread {thread_id} is archived"
+        )));
+    }
+    if let Some(reply) = &req.reply_to_id
+        && message_get_conn(tx, thread_id, reply)?.is_none()
+    {
+        return Err(ChatError::Invalid(format!(
+            "reply_to_id {reply} is not a message of this thread"
+        )));
+    }
+    for a in &req.attachment_ids {
+        let ok: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM chat_attachments WHERE id=?1 AND thread_id=?2 \
+             AND state='ready')",
+            params![a, thread_id],
+            |row| row.get(0),
+        )?;
+        if !ok {
+            return Err(ChatError::Invalid(format!(
+                "attachment {a} is not a ready attachment of this thread"
+            )));
+        }
+    }
+    let meta = json!({
+        "attachment_ids": req.attachment_ids,
+        "posted_by": "cos",
+        "operation_id": operation_id,
+    });
+    let id = insert_message(
+        tx,
+        NewMessage {
+            thread_id,
+            role: ChatMessageRole::Assistant,
+            text: &req.text,
+            state: ChatMessageState::Completed,
+            client_message_id: Some(&req.client_message_id),
+            reply_to_id: req.reply_to_id.as_deref(),
+            run_id: None,
+            metadata: &meta,
+        },
+        &at,
+    )?;
+    for a in &req.attachment_ids {
+        tx.execute(
+            "INSERT INTO chat_attachment_refs(attachment_id,owner_kind,owner_id,created_at) \
+             VALUES(?1,'message',?2,?3)",
+            params![a, id, at],
+        )?;
+    }
+    let message = message_require(tx, thread_id, &id)?;
+    emit_message(tx, &message, &at)?;
+    Ok(message)
 }

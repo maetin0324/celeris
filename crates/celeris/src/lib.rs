@@ -62,6 +62,8 @@ pub enum DaemonError {
     /// ADR-0095 D5: worker の run から DB を読み取り専用にできない（起動しない）。
     #[error("worker db guard: {0}")]
     DbGuard(String),
+    #[error("CoS external operation recovery: {0}")]
+    CosOperationRecovery(String),
 }
 
 /// Register this daemon instance, then recover only runtimes owned by dead or stale instances.

@@ -12,7 +12,7 @@ use axum::body::Body;
 use axum::http::{HeaderMap, StatusCode};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use task_core::{Message, ProjectId, TaskId, TaskStore};
+use task_core::{Message, ProjectId, SqliteStore, TaskId, TaskStore};
 use time::OffsetDateTime;
 
 use crate::handlers::{ApiResult, Params, json_response, no_query, read_json};
@@ -67,35 +67,8 @@ pub(crate) async fn post_message(
     let conversation_genre = state.inner.conversation_genre.clone();
     let started = state
         .blocking(move |store| {
-            // 知らないノードは 404（検証の 422 ではなく、URL が指すものが無い）。
-            if store.org_get(&id).map_err(store_problem)?.is_none() {
-                return Err(ApiProblem::org_node_not_found(&id));
-            }
-            let now = OffsetDateTime::now_utc();
-            if id == task_core::COS_ID {
-                task_ops::conversation::start_legacy_cos(
-                    store,
-                    post.project_id,
-                    None,
-                    &post.text,
-                    &roles,
-                    &genres,
-                    &conversation_genre,
-                    now,
-                )
-            } else {
-                task_ops::conversation::start(
-                    store,
-                    &id,
-                    post.project_id,
-                    &post.text,
-                    &roles,
-                    &genres,
-                    &conversation_genre,
-                    now,
-                )
-            }
-            .map_err(|e| ops_problem(store, e, None))
+            check_node(store, &id)?;
+            start_conversation(store, &id, &post, &roles, &genres, &conversation_genre)
         })
         .await?;
     if started.message.node_id == task_core::COS_ID {
@@ -115,6 +88,51 @@ pub(crate) async fn post_message(
             task_id: started.task.id,
         },
     ))
+}
+
+/// 知らないノードは 404（検証の 422 ではなく、URL が指すものが無い）。
+pub(crate) fn check_node(store: &SqliteStore, id: &str) -> Result<(), ApiProblem> {
+    if store.org_get(id).map_err(store_problem)?.is_none() {
+        return Err(ApiProblem::org_node_not_found(id));
+    }
+    Ok(())
+}
+
+/// ノードへの話しかけ（対話用タスクを作り、そのノードの run を起こす）。route と CoS の
+/// `org.message`（ADR 2026-10-09-cos-operations-all-mutations、C: run の起動）が共有する。
+pub(crate) fn start_conversation(
+    store: &SqliteStore,
+    id: &str,
+    post: &MessagePostBody,
+    roles: &[task_core::RoleSpec],
+    genres: &[task_core::GenreSpec],
+    conversation_genre: &str,
+) -> Result<task_ops::conversation::StartedConversation, ApiProblem> {
+    let now = OffsetDateTime::now_utc();
+    if id == task_core::COS_ID {
+        task_ops::conversation::start_legacy_cos(
+            store,
+            post.project_id,
+            None,
+            &post.text,
+            roles,
+            genres,
+            conversation_genre,
+            now,
+        )
+    } else {
+        task_ops::conversation::start(
+            store,
+            id,
+            post.project_id,
+            &post.text,
+            roles,
+            genres,
+            conversation_genre,
+            now,
+        )
+    }
+    .map_err(|e| ops_problem(store, e, None))
 }
 
 /// そのノードとのやり取りを古い順に返す（ADR-0033 D4）。

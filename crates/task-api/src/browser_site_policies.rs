@@ -105,42 +105,28 @@ async fn put(
         )
         .with_extra("reason", "body")
     })?;
-    let trusted = TrustedSitePolicy {
-        policy_id,
-        exact_origin: body.exact_origin,
-        login_url: body.login_url,
-        password_selector: body.password_selector,
-        submit_selector: body.submit_selector,
-    };
-    // ADR-0110 D2: broker と同じ形式検証（固定 code を `reason` に返す）。
-    trusted.validate().map_err(|code| {
-        ApiProblem::new(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "site_policy_invalid",
-            format!("site policy rejected: {code}"),
-        )
-        .with_extra("reason", code)
-    })?;
-    let policy: BrowserSitePolicy = trusted.into();
-    let (record, created) = state
-        .blocking(move |store| {
-            store
-                .browser_site_policy_upsert(&policy, "admin", OffsetDateTime::now_utc())
-                .map_err(store_problem)
-        })
+    let policy = validated_policy(policy_id, body)?;
+    let result = state
+        .blocking(move |store| upsert_policy(store, &policy, "admin"))
         .await?;
-    let status = if created {
+    let status = if result.created {
         StatusCode::CREATED
     } else {
         StatusCode::OK
     };
-    Ok((
-        status,
-        Json(SitePolicyPutResult {
-            created,
-            policy: record,
-        }),
-    ))
+    Ok((status, Json(result)))
+}
+
+/// Create or replace a validated site policy (route and CoS `browser.site_policy_put`).
+pub(crate) fn upsert_policy(
+    store: &task_core::SqliteStore,
+    policy: &BrowserSitePolicy,
+    actor: &str,
+) -> Result<SitePolicyPutResult, ApiProblem> {
+    let (policy, created) = store
+        .browser_site_policy_upsert(policy, actor, OffsetDateTime::now_utc())
+        .map_err(store_problem)?;
+    Ok(SitePolicyPutResult { created, policy })
 }
 
 async fn delete(
@@ -152,15 +138,54 @@ async fn delete(
     if !valid_site_policy_id(&policy_id) {
         return Err(not_found());
     }
-    let outcome = state
-        .blocking(move |store| {
-            store
-                .browser_site_policy_delete(&policy_id, "admin", OffsetDateTime::now_utc())
-                .map_err(store_problem)
-        })
+    state
+        .blocking(move |store| delete_policy(store, &policy_id, "admin"))
         .await?;
-    match outcome {
-        BrowserSitePolicyDelete::Deleted => Ok(StatusCode::NO_CONTENT),
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// ADR-0110 D2: the broker's own format check of a site policy (fixed `reason` code). Shared by
+/// the route and the CoS operation `browser.site_policy_put`.
+pub(crate) fn validated_policy(
+    policy_id: String,
+    body: SitePolicyPutBody,
+) -> Result<BrowserSitePolicy, ApiProblem> {
+    if !valid_site_policy_id(&policy_id) {
+        return Err(invalid_id());
+    }
+    let trusted = TrustedSitePolicy {
+        policy_id,
+        exact_origin: body.exact_origin,
+        login_url: body.login_url,
+        password_selector: body.password_selector,
+        submit_selector: body.submit_selector,
+    };
+    trusted.validate().map_err(|code| {
+        ApiProblem::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "site_policy_invalid",
+            format!("site policy rejected: {code}"),
+        )
+        .with_extra("reason", code)
+    })?;
+    Ok(trusted.into())
+}
+
+/// Delete a site policy (404 missing, 409 still referenced). Shared by the route and the CoS
+/// operation `browser.site_policy_delete`; `actor` is recorded by the store.
+pub(crate) fn delete_policy(
+    store: &task_core::SqliteStore,
+    policy_id: &str,
+    actor: &str,
+) -> Result<(), ApiProblem> {
+    if !valid_site_policy_id(policy_id) {
+        return Err(not_found());
+    }
+    match store
+        .browser_site_policy_delete(policy_id, actor, OffsetDateTime::now_utc())
+        .map_err(store_problem)?
+    {
+        BrowserSitePolicyDelete::Deleted => Ok(()),
         BrowserSitePolicyDelete::NotFound => Err(not_found()),
         BrowserSitePolicyDelete::InUse(refs) => Err(ApiProblem::new(
             StatusCode::CONFLICT,

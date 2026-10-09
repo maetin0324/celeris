@@ -38,6 +38,7 @@ pub struct AnswerArgs {
 }
 
 pub fn run_approve(store: &dyn TaskStore, args: ApproveArgs) -> Result<ExitCode, CliError> {
+    // Under a CoS credential `main` wraps approve into `/cos/operations` (`cos_mapped`) first.
     let id = crate::error::parse_task_id(&args.id)?;
     let result = ops_approve(store, id, args.note, None)?;
     outln!("{:?}", result.to);

@@ -26,10 +26,12 @@ use task_core::{
 use task_ops::cron_jobs::{CronFireContext, CronJobPatch, NewCronJob};
 use time::OffsetDateTime;
 
+use crate::cos::operations::{Applied, OperationAudit};
 use crate::handlers::{ApiResult, Params, json_response, no_query, read_json};
 use crate::problem::{ApiProblem, ops_problem};
 use crate::query::QueryParams;
 use crate::state::ApiState;
+use task_core::chat::ChatError;
 
 /// `GET /cron-jobs/{id}/runs` の既定件数と上限。
 pub const RUNS_DEFAULT_LIMIT: usize = 50;
@@ -190,6 +192,278 @@ async fn list_jobs(State(state): State<ApiState>, RawQuery(raw): RawQuery) -> Ap
     Ok(json_response(StatusCode::OK, &list))
 }
 
+/// The audited form of a cron job write (ADR 2026-10-09-cos-operations-all-mutations D3).
+type Audit<'a> = Option<&'a OperationAudit>;
+
+fn reject_with(
+    store: &SqliteStore,
+    audit: Audit<'_>,
+    target: &str,
+    problem: ApiProblem,
+) -> ApiProblem {
+    match audit {
+        Some(audit) => audit.reject(store, "cron_job", target, problem),
+        None => problem,
+    }
+}
+
+/// A store failure inside the audit transaction. A duplicate name stays a 409.
+fn tx_error(error: StoreError) -> ChatError {
+    match error {
+        StoreError::InUse { kind, id, detail } => {
+            ChatError::Conflict(format!("{kind} {id}: {detail}"))
+        }
+        other => ChatError::Store(other),
+    }
+}
+
+fn gone(id: &str) -> ChatError {
+    ChatError::NotFound {
+        kind: "cron_job",
+        id: id.to_string(),
+    }
+}
+
+fn job_value(job: &CronJob) -> Result<serde_json::Value, ChatError> {
+    Ok(serde_json::json!({"job": serde_json::to_value(job)?}))
+}
+
+fn resolve_for(store: &SqliteStore, audit: Audit<'_>, key: &str) -> Result<CronJob, ApiProblem> {
+    resolve(store, key).map_err(|problem| reject_with(store, audit, key, problem))
+}
+
+/// `POST /cron-jobs` shared by the handler and `/cos/operations` (`cron_job.create`).
+pub(crate) fn create_job_op(
+    store: &SqliteStore,
+    roles: &[task_core::RoleSpec],
+    genres: &[task_core::GenreSpec],
+    payload: CronJobCreateBody,
+    audit: Audit<'_>,
+) -> Result<Applied<CronJobView>, ApiProblem> {
+    let ctx = CronFireContext {
+        roles,
+        genres,
+        ..CronFireContext::default()
+    };
+    let target = payload.name.clone();
+    let new = NewCronJob {
+        name: payload.name,
+        schedule: payload.schedule,
+        timezone: payload.timezone,
+        overlap: payload.overlap,
+        catch_up: payload.catch_up,
+        enabled: payload.enabled,
+        template: payload.template,
+    };
+    let now = OffsetDateTime::now_utc();
+    let Some(audit) = audit else {
+        let job = task_ops::cron_jobs::create_job(store, &ctx, new, now)
+            .map_err(|e| cron_problem(store, e, "cron_job_create"))?;
+        return Ok(Applied::Direct(view(store, job)?));
+    };
+    let job = task_ops::cron_jobs::prepare_create(store, &ctx, new, now).map_err(|e| {
+        audit.reject(
+            store,
+            "cron_job",
+            &target,
+            cron_problem(store, e, "cron_job_create"),
+        )
+    })?;
+    let operation = audit.apply(
+        store,
+        "cron_job",
+        &job.id.to_string(),
+        "cron_job.create",
+        |tx| {
+            task_core::cron::cron_job_insert_tx(tx, &job).map_err(tx_error)?;
+            job_value(&job)
+        },
+    )?;
+    Ok(Applied::Audited(Box::new(operation)))
+}
+
+/// `PATCH /cron-jobs/{id}` (`cron_job.update`).
+pub(crate) fn update_job_op(
+    store: &SqliteStore,
+    roles: &[task_core::RoleSpec],
+    genres: &[task_core::GenreSpec],
+    key: &str,
+    payload: CronJobPatchBody,
+    audit: Audit<'_>,
+) -> Result<Applied<CronJobView>, ApiProblem> {
+    let job = resolve_for(store, audit, key)?;
+    let ctx = CronFireContext {
+        roles,
+        genres,
+        ..CronFireContext::default()
+    };
+    let patch = CronJobPatch {
+        name: payload.name,
+        schedule: payload.schedule,
+        timezone: payload.timezone,
+        overlap: payload.overlap,
+        catch_up: payload.catch_up,
+        template: payload.template,
+    };
+    let now = OffsetDateTime::now_utc();
+    let Some(audit) = audit else {
+        let job = task_ops::cron_jobs::update_job(store, &ctx, job.id, patch, now)
+            .map_err(|e| cron_problem(store, e, "cron_job_update"))?;
+        return Ok(Applied::Direct(view(store, job)?));
+    };
+    let target = job.id.to_string();
+    let job =
+        task_ops::cron_jobs::prepare_update(store, &ctx, job.id, patch, now).map_err(|e| {
+            audit.reject(
+                store,
+                "cron_job",
+                &target,
+                cron_problem(store, e, "cron_job_update"),
+            )
+        })?;
+    let operation = audit.apply(store, "cron_job", &target, "cron_job.update", |tx| {
+        if !task_core::cron::cron_job_update_tx(tx, &job).map_err(tx_error)? {
+            return Err(gone(&target));
+        }
+        job_value(&job)
+    })?;
+    Ok(Applied::Audited(Box::new(operation)))
+}
+
+/// `DELETE /cron-jobs/{id}` (`cron_job.delete`).
+pub(crate) fn delete_job_op(
+    store: &SqliteStore,
+    key: &str,
+    audit: Audit<'_>,
+) -> Result<Applied<CronJobId>, ApiProblem> {
+    let job = resolve_for(store, audit, key)?;
+    let Some(audit) = audit else {
+        return match task_ops::cron_jobs::delete_job(store, job.id) {
+            Ok(true) => Ok(Applied::Direct(job.id)),
+            Ok(false) => Err(cron_job_not_found(key)),
+            Err(e) => Err(cron_problem(store, e, "cron_job_delete")),
+        };
+    };
+    let target = job.id.to_string();
+    let operation = audit.apply(store, "cron_job", &target, "cron_job.delete", |tx| {
+        if !task_core::cron::cron_job_delete_tx(tx, job.id)? {
+            return Err(gone(&target));
+        }
+        Ok(serde_json::json!({"job_id": target, "name": job.name}))
+    })?;
+    Ok(Applied::Audited(Box::new(operation)))
+}
+
+/// `POST /cron-jobs/{id}/pause` (`cron_job.pause`).
+pub(crate) fn pause_job_op(
+    store: &SqliteStore,
+    key: &str,
+    audit: Audit<'_>,
+) -> Result<Applied<CronJobView>, ApiProblem> {
+    let job = resolve_for(store, audit, key)?;
+    let now = OffsetDateTime::now_utc();
+    let Some(audit) = audit else {
+        let job = task_ops::cron_jobs::pause_job(store, job.id, now)
+            .map_err(|e| cron_problem(store, e, "cron_job_pause"))?;
+        return Ok(Applied::Direct(view(store, job)?));
+    };
+    let target = job.id.to_string();
+    let (job, queued) = task_ops::cron_jobs::prepare_pause(store, job.id, now).map_err(|e| {
+        audit.reject(
+            store,
+            "cron_job",
+            &target,
+            cron_problem(store, e, "cron_job_pause"),
+        )
+    })?;
+    let operation = audit.apply(store, "cron_job", &target, "cron_job.pause", |tx| {
+        if let Some((run_id, update)) = &queued {
+            task_core::cron::cron_job_run_update_tx(tx, *run_id, update)?;
+        }
+        if !task_core::cron::cron_job_update_tx(tx, &job).map_err(tx_error)? {
+            return Err(gone(&target));
+        }
+        job_value(&job)
+    })?;
+    Ok(Applied::Audited(Box::new(operation)))
+}
+
+/// `POST /cron-jobs/{id}/resume` (`cron_job.resume`). An enabled job is recorded unchanged.
+pub(crate) fn resume_job_op(
+    store: &SqliteStore,
+    key: &str,
+    audit: Audit<'_>,
+) -> Result<Applied<CronJobView>, ApiProblem> {
+    let job = resolve_for(store, audit, key)?;
+    let now = OffsetDateTime::now_utc();
+    let Some(audit) = audit else {
+        let job = task_ops::cron_jobs::resume_job(store, job.id, now)
+            .map_err(|e| cron_problem(store, e, "cron_job_resume"))?;
+        return Ok(Applied::Direct(view(store, job)?));
+    };
+    let target = job.id.to_string();
+    let (job, changed) = task_ops::cron_jobs::prepare_resume(store, job.id, now).map_err(|e| {
+        audit.reject(
+            store,
+            "cron_job",
+            &target,
+            cron_problem(store, e, "cron_job_resume"),
+        )
+    })?;
+    let operation = audit.apply(store, "cron_job", &target, "cron_job.resume", |tx| {
+        if changed && !task_core::cron::cron_job_update_tx(tx, &job).map_err(tx_error)? {
+            return Err(gone(&target));
+        }
+        job_value(&job)
+    })?;
+    Ok(Applied::Audited(Box::new(operation)))
+}
+
+/// `POST /cron-jobs/{id}/run` (`cron_job.run`). A manual run creates a task through several
+/// independent commits, so the CoS form is the external-effect protocol (C): the pending record
+/// is persisted first, the run happens once, and a resent request returns the recorded
+/// operation without firing again. A run that fails after `begin_external` stays pending and is
+/// moved to needs_remediation by the stale-pending sweep (its partial effect is unknown).
+pub(crate) fn run_job_op(
+    store: &SqliteStore,
+    roles: &[task_core::RoleSpec],
+    genres: &[task_core::GenreSpec],
+    key: &str,
+    audit: Audit<'_>,
+    now: OffsetDateTime,
+) -> Result<Applied<CronRunResult>, ApiProblem> {
+    let job = resolve_for(store, audit, key)?;
+    let ctx = CronFireContext {
+        roles,
+        genres,
+        ..CronFireContext::default()
+    };
+    let run = || -> Result<CronRunResult, ApiProblem> {
+        let out = task_ops::cron_jobs::run_now_with(store, &ctx, job.id, now)
+            .map_err(|e| cron_problem(store, e, "cron_job_run"))?;
+        Ok(CronRunResult {
+            job_id: out.job_id,
+            job_name: out.job_name,
+            runs: out.runs,
+            task_id: out.task_id,
+        })
+    };
+    let Some(audit) = audit else {
+        return Ok(Applied::Direct(run()?));
+    };
+    let target = job.id.to_string();
+    let (operation, fresh) =
+        audit.begin_external(store, "cron_job", &target, "cron_job.run", now)?;
+    if !fresh {
+        return Ok(Applied::Audited(Box::new(operation)));
+    }
+    let result = run()?;
+    let value = serde_json::to_value(&result)
+        .map_err(|e| ApiProblem::internal(format!("cron run result: {e}")))?;
+    let operation = audit.finish_external(store, &value, OffsetDateTime::now_utc())?;
+    Ok(Applied::Audited(Box::new(operation)))
+}
+
 async fn create_job(
     State(state): State<ApiState>,
     RawQuery(raw): RawQuery,
@@ -199,25 +473,7 @@ async fn create_job(
     let payload: CronJobCreateBody = read_json(body, false).await?;
     let (roles, genres) = fire_context(&state);
     let created = state
-        .blocking(move |store| {
-            let ctx = CronFireContext {
-                roles: &roles,
-                genres: &genres,
-                ..CronFireContext::default()
-            };
-            let new = NewCronJob {
-                name: payload.name,
-                schedule: payload.schedule,
-                timezone: payload.timezone,
-                overlap: payload.overlap,
-                catch_up: payload.catch_up,
-                enabled: payload.enabled,
-                template: payload.template,
-            };
-            let job = task_ops::cron_jobs::create_job(store, &ctx, new, OffsetDateTime::now_utc())
-                .map_err(|e| cron_problem(store, e, "cron_job_create"))?;
-            view(store, job)
-        })
+        .blocking(move |store| create_job_op(store, &roles, &genres, payload, None)?.direct())
         .await?;
     tracing::info!(op = "cron_job_create", cron_job_id = %created.job.id, name = %created.job.name, "cron job created");
     Ok(json_response(StatusCode::CREATED, &created))
@@ -248,31 +504,7 @@ async fn patch_job(
     let payload: CronJobPatchBody = read_json(body, true).await?;
     let (roles, genres) = fire_context(&state);
     let updated = state
-        .blocking(move |store| {
-            let job = resolve(store, &id)?;
-            let ctx = CronFireContext {
-                roles: &roles,
-                genres: &genres,
-                ..CronFireContext::default()
-            };
-            let patch = CronJobPatch {
-                name: payload.name,
-                schedule: payload.schedule,
-                timezone: payload.timezone,
-                overlap: payload.overlap,
-                catch_up: payload.catch_up,
-                template: payload.template,
-            };
-            let job = task_ops::cron_jobs::update_job(
-                store,
-                &ctx,
-                job.id,
-                patch,
-                OffsetDateTime::now_utc(),
-            )
-            .map_err(|e| cron_problem(store, e, "cron_job_update"))?;
-            view(store, job)
-        })
+        .blocking(move |store| update_job_op(store, &roles, &genres, &id, payload, None)?.direct())
         .await?;
     tracing::info!(op = "cron_job_update", cron_job_id = %updated.job.id, "cron job updated");
     Ok(json_response(StatusCode::OK, &updated))
@@ -285,14 +517,7 @@ async fn delete_job(
 ) -> ApiResult {
     no_query(&raw)?;
     let deleted = state
-        .blocking(move |store| {
-            let job = resolve(store, &id)?;
-            match task_ops::cron_jobs::delete_job(store, job.id) {
-                Ok(true) => Ok(job.id),
-                Ok(false) => Err(cron_job_not_found(&id)),
-                Err(e) => Err(cron_problem(store, e, "cron_job_delete")),
-            }
-        })
+        .blocking(move |store| delete_job_op(store, &id, None)?.direct())
         .await?;
     tracing::info!(op = "cron_job_delete", cron_job_id = %deleted, "cron job deleted");
     Ok(StatusCode::NO_CONTENT.into_response())
@@ -305,12 +530,7 @@ async fn pause_job(
 ) -> ApiResult {
     no_query(&raw)?;
     let paused = state
-        .blocking(move |store| {
-            let job = resolve(store, &id)?;
-            let job = task_ops::cron_jobs::pause_job(store, job.id, OffsetDateTime::now_utc())
-                .map_err(|e| cron_problem(store, e, "cron_job_pause"))?;
-            view(store, job)
-        })
+        .blocking(move |store| pause_job_op(store, &id, None)?.direct())
         .await?;
     tracing::info!(op = "cron_job_pause", cron_job_id = %paused.job.id, "cron job paused");
     Ok(json_response(StatusCode::OK, &paused))
@@ -323,12 +543,7 @@ async fn resume_job(
 ) -> ApiResult {
     no_query(&raw)?;
     let resumed = state
-        .blocking(move |store| {
-            let job = resolve(store, &id)?;
-            let job = task_ops::cron_jobs::resume_job(store, job.id, OffsetDateTime::now_utc())
-                .map_err(|e| cron_problem(store, e, "cron_job_resume"))?;
-            view(store, job)
-        })
+        .blocking(move |store| resume_job_op(store, &id, None)?.direct())
         .await?;
     tracing::info!(op = "cron_job_resume", cron_job_id = %resumed.job.id, "cron job resumed");
     Ok(json_response(StatusCode::OK, &resumed))
@@ -343,21 +558,7 @@ async fn run_job(
     let (roles, genres) = fire_context(&state);
     let result = state
         .blocking(move |store| {
-            let job = resolve(store, &id)?;
-            let ctx = CronFireContext {
-                roles: &roles,
-                genres: &genres,
-                ..CronFireContext::default()
-            };
-            let out =
-                task_ops::cron_jobs::run_now_with(store, &ctx, job.id, OffsetDateTime::now_utc())
-                    .map_err(|e| cron_problem(store, e, "cron_job_run"))?;
-            Ok(CronRunResult {
-                job_id: out.job_id,
-                job_name: out.job_name,
-                runs: out.runs,
-                task_id: out.task_id,
-            })
+            run_job_op(store, &roles, &genres, &id, None, OffsetDateTime::now_utc())?.direct()
         })
         .await?;
     tracing::info!(op = "cron_job_run", cron_job_id = %result.job_id, task_id = ?result.task_id, "cron job run manually");

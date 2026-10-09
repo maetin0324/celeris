@@ -43,6 +43,8 @@ metadata:
 - 表の上の行ほど強い。1 つでも escalate の行に当たれば escalate。
 - 対象に人が設定した `human_required` と API の既存認可は、この skill でも config でも解除できない。
 - CoS が新しい standing permission（永続の認可）を自分で作ることは「秘密・権限・セキュリティ」の行として escalate。
+  `/cos/operations` の standing_rule.create・release.promote は人の決定で CoS にも登録されているが（cos-operator の operations.md）、
+  人の依頼がある chat の run で使うもので、人の指示の無い一次対応では使わず escalate する。
 - 人が本番操作を人だけに限定しているもの（`promote.sh`・`rollback.sh`・`systemctl` 等。cos-operator の production.md）は、
   代わりに実行せず escalate する。技術手順は「運用者の作業」に分け、packet では web での判断・承認だけを依頼する
   （cos-operator の explaining.md）。運用者向け task を起票しても人だけの実行認可は解除されない。

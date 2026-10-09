@@ -29,11 +29,12 @@ ulid = "1"
 # ADR-0080 D5: GUI の human attestation（Ed25519）の検証と、手動登録の秘密の zeroize。
 ring = "0.17"
 zeroize = "1"
+base64 = "0.22"
 
 [dev-dependencies]
 task-worker = { path = "../task-worker", features = ["h3-e2e-insecure-cert", "same-uid-harness", "attack-test-hooks"] }
 celeris-credentiald = { path = "../celeris-credentiald", features = ["same-uid-harness"] }
 async-trait = "0.1"
 tempfile = "3"
-base64 = "0.22"
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "io-util", "net", "time", "test-util"] }
+syn = { version = "2", features = ["full", "visit"] }

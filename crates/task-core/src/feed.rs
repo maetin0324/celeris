@@ -37,6 +37,26 @@ impl NoticeId {
     }
 }
 
+impl crate::store::SqliteStore {
+    /// Mark notification bundles read inside a caller-owned transaction. This is used by audited
+    /// API operations so the feed mutation and CoS operation row commit together.
+    pub fn notice_mark_ids_read_tx(
+        tx: &rusqlite::Connection,
+        ids: &[NoticeId],
+        at: OffsetDateTime,
+    ) -> Result<u64, crate::store::StoreError> {
+        let timestamp = crate::store::format_rfc3339(at)?;
+        let mut marked = 0;
+        for id in ids {
+            marked += tx.execute(
+                "UPDATE feed_notices SET read_at = ?2 WHERE id = ?1 AND read_at IS NULL",
+                rusqlite::params![id.to_string(), timestamp],
+            )? as u64;
+        }
+        Ok(marked)
+    }
+}
+
 impl Default for NoticeId {
     fn default() -> Self {
         Self::new()

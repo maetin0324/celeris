@@ -1,7 +1,7 @@
 //! `POST /api/v1/cos/operations` and `GET /api/v1/cos/operations/{o}` (ADR 2026-10-05 D2/D3).
 //!
 //! A CoS run names an existing domain request (`method` + `/api/v1/...` path + JSON body). Only the
-//! registered operations in [`ALLOWED`] run; anything else (external URL, scheme/host, `..`, the
+//! registered operations in [`allowed`] run; anything else (external URL, scheme/host, `..`, the
 //! `/api/v1/cos` subtree itself, unregistered paths) is rejected with 422 and recorded as a rejected
 //! `cos_operations` row with a reasoned audit event. An allowed request runs the same operation
 //! function as the domain handler, with an [`OperationAudit`], so the domain write, the
@@ -24,44 +24,16 @@ use ulid::Ulid;
 use super::{CosCaller, cos_only, cos_problem, reject_identity_claims};
 use crate::handlers::{ApiResult, Params, json_response, no_query};
 use crate::problem::ApiProblem;
-use crate::query::parse_task_id;
 use crate::state::ApiState;
 
-/// Registered CoS operations: `(method, path pattern, action)`. `{id}` matches one id segment.
-/// One representative mutation per D3 domain (task・comment・decision・approval・execution・project・
-/// knowledge); each runs the handler's shared operation function with the audit context.
-pub(crate) const ALLOWED: &[(&str, &str, &str)] = &[
-    ("POST", "/api/v1/tasks", "task.create"),
-    ("POST", "/api/v1/tasks/{id}/comments", "comment.create"),
-    ("POST", "/api/v1/decisions/{id}/answer", "decision.answer"),
-    ("POST", "/api/v1/approvals/{id}/decide", "approval.decide"),
-    (
-        "POST",
-        "/api/v1/tasks/{id}/execution/phase-gate",
-        "execution.phase_gate",
-    ),
-    ("POST", "/api/v1/tasks/{id}/answer", "question.answer"),
-    (
-        "POST",
-        "/api/v1/tasks/{id}/execution/plan-gate",
-        "execution.plan_gate",
-    ),
-    ("PATCH", "/api/v1/projects/{id}", "project.update"),
-    ("POST", "/api/v1/knowledge/inbox", "knowledge.record"),
-    (
-        "POST",
-        "/api/v1/knowledge/inbox/{id}/reject",
-        "knowledge.reject",
-    ),
-    (
-        "POST",
-        "/api/v1/chat/attachments/{id}/references",
-        "attachment.reference",
-    ),
-    // ADR 2026-10-07-cos-inbox-thread-conversation D3: a human instruction relayed to the wait
-    // the person answers in the inbox; delegated to the domain path like a human answer.
-    ("POST", "/api/v1/inbox/items/{id}/answer", "inbox.answer"),
-];
+/// Concatenate the domain-owned allowlists without a second list to maintain.
+pub(crate) fn allowed()
+-> impl Iterator<Item = (usize, &'static (&'static str, &'static str, &'static str))> {
+    super::ops::REGISTRIES
+        .iter()
+        .enumerate()
+        .flat_map(|(index, registry)| registry.allowed.iter().map(move |row| (index, row)))
+}
 
 /// Problem code of an `instructed_by` that is not the human message the caller's run answers
 /// in the inbox thread (D3: triage runs, earlier or foreign messages and other threads are refused).
@@ -94,6 +66,67 @@ impl<T> Applied<T> {
     }
 }
 
+/// Outcome of an external effect (C): `Ok(Ok(v))` done, `Ok(Err(problem))` refused before any
+/// change (settled `rejected`), `Err(problem)` outcome unknown (left pending for remediation).
+pub(crate) type Effect<T> = Result<Result<T, ApiProblem>, ApiProblem>;
+
+/// The handler's view of an [`Effect`]: either way a failure is the route's problem.
+pub(crate) fn effect_result<T>(effect: Effect<T>) -> Result<T, ApiProblem> {
+    effect.and_then(|result| result)
+}
+
+/// An [`Effect`] with its value serialized for the operation record.
+pub(crate) fn effect_value<T: Serialize>(effect: Effect<T>) -> Effect<Value> {
+    effect.and_then(|result| match result {
+        Ok(value) => serde_json::to_value(value)
+            .map(Ok)
+            .map_err(|e| ApiProblem::internal(e.to_string())),
+        Err(problem) => Ok(Err(problem)),
+    })
+}
+
+/// Run a route's file effect (`providers.d`, account directories) directly, or with `audit`
+/// inside the CoS operation transaction as its last step: a failure rolls the record back to a
+/// rejected row, so an applied record always has its file written.
+pub(crate) fn file_op<T: Serialize, F>(
+    store: &SqliteStore,
+    audit: Option<&OperationAudit>,
+    target_kind: &str,
+    target_id: &str,
+    action: &str,
+    effect: F,
+) -> Result<Applied<T>, ApiProblem>
+where
+    F: FnOnce() -> Result<T, ApiProblem>,
+{
+    let Some(audit) = audit else {
+        return effect().map(Applied::Direct);
+    };
+    let operation = audit.apply_checked(store, target_kind, target_id, action, |_| {
+        serde_json::to_value(effect()?).map_err(|e| ApiProblem::internal(e.to_string()))
+    })?;
+    Ok(Applied::Audited(Box::new(operation)))
+}
+
+/// A C operation whose effect is one store write that either commits or changes nothing (a
+/// browser control transition, a run start): any failure of `effect` settles `rejected`.
+pub(crate) fn external_store<T: Serialize>(
+    store: &SqliteStore,
+    audit: &OperationAudit,
+    target: (&str, &str),
+    action: &str,
+    effect: impl FnOnce() -> Result<T, ApiProblem>,
+) -> Result<CosOperation, ApiProblem> {
+    audit.external(
+        store,
+        target.0,
+        target.1,
+        action,
+        time::OffsetDateTime::now_utc(),
+        || effect_value(Ok(effect())),
+    )
+}
+
 /// Audit context of one `/cos/operations` request, passed to the shared operation functions.
 #[derive(Debug, Clone)]
 pub(crate) struct OperationAudit {
@@ -115,6 +148,87 @@ pub(crate) struct ItemMark {
 }
 
 impl OperationAudit {
+    /// Persist the first half of a C-class operation before its external effect. `now` is
+    /// injected so retries and stale-pending behavior can be tested without wall-clock waits.
+    pub(crate) fn begin_external(
+        &self,
+        store: &SqliteStore,
+        target_kind: &str,
+        target_id: &str,
+        action: &str,
+        now: time::OffsetDateTime,
+    ) -> Result<(CosOperation, bool), ApiProblem> {
+        store
+            .cos_operation_begin_external(
+                &self.ctx,
+                &self.idempotency_key,
+                &self.request_hash,
+                target_kind,
+                target_id,
+                self.expected_revision.as_deref(),
+                action,
+                &self.payload,
+                now,
+            )
+            .map_err(cos_problem)
+    }
+
+    /// Record the known result after an external effect has completed.
+    pub(crate) fn finish_external(
+        &self,
+        store: &SqliteStore,
+        result: &Value,
+        now: time::OffsetDateTime,
+    ) -> Result<CosOperation, ApiProblem> {
+        store
+            .cos_operation_finish_external(&self.ctx, result, now)
+            .map_err(cos_problem)
+    }
+
+    /// Settle the pending C-class operation as `rejected` with `problem` when the external
+    /// system refused the effect before changing anything; returns `problem` for the caller.
+    pub(crate) fn fail_external(
+        &self,
+        store: &SqliteStore,
+        problem: ApiProblem,
+        now: time::OffsetDateTime,
+    ) -> ApiProblem {
+        let result = serde_json::json!({"error": problem.code(), "detail": problem.detail()});
+        match store.cos_operation_fail_external(&self.ctx, &result, now) {
+            Ok(_) => problem,
+            Err(error) => cos_problem(error),
+        }
+    }
+
+    /// Run a C-class operation (ADR 2026-10-09-cos-operations-external-effects): persist the
+    /// pending record, run `effect` once, and settle it. A resent request returns the recorded
+    /// operation without running `effect`. `Ok(Err(problem))` from `effect` means the external
+    /// system refused before any change (settled `rejected`); `Err(problem)` means the outcome is
+    /// unknown, so the record stays pending for remediation.
+    pub(crate) fn external<F>(
+        &self,
+        store: &SqliteStore,
+        target_kind: &str,
+        target_id: &str,
+        action: &str,
+        now: time::OffsetDateTime,
+        effect: F,
+    ) -> Result<CosOperation, ApiProblem>
+    where
+        F: FnOnce() -> Result<Result<Value, ApiProblem>, ApiProblem>,
+    {
+        let (operation, fresh) = self.begin_external(store, target_kind, target_id, action, now)?;
+        if !fresh {
+            return Ok(operation);
+        }
+        match effect()? {
+            Ok(result) => self.finish_external(store, &result, time::OffsetDateTime::now_utc()),
+            Err(problem) => {
+                Err(self.fail_external(store, problem, time::OffsetDateTime::now_utc()))
+            }
+        }
+    }
+
     /// Run `write` inside the `cos_operation_apply` transaction. All domain writes go through `tx`.
     pub(crate) fn apply<F>(
         &self,
@@ -153,6 +267,50 @@ impl OperationAudit {
                 },
             )
             .map_err(cos_problem)
+    }
+
+    /// [`Self::apply`] for domain writes that fail with an [`ApiProblem`]: a failure of `write`
+    /// rolls the transaction back, `cos_operation_apply` records the rejected row with its detail,
+    /// and the caller gets the same problem (status and code) the direct route would return.
+    pub(crate) fn apply_checked<F>(
+        &self,
+        store: &SqliteStore,
+        target_kind: &str,
+        target_id: &str,
+        action: &str,
+        write: F,
+    ) -> Result<CosOperation, ApiProblem>
+    where
+        F: FnOnce(&Transaction<'_>) -> Result<Value, ApiProblem>,
+    {
+        let mut refused: Option<ApiProblem> = None;
+        let outcome = self.apply(store, target_kind, target_id, action, |tx| {
+            write(tx).map_err(|problem| {
+                let detail = problem.detail().to_string();
+                refused = Some(problem);
+                ChatError::Invalid(detail)
+            })
+        });
+        match (outcome, refused) {
+            (Ok(operation), _) => Ok(operation),
+            (Err(_), Some(problem)) | (Err(problem), None) => Err(problem),
+        }
+    }
+
+    /// Record a value-only operation (a preview that writes nothing) or the validation problem
+    /// that refused it.
+    pub(crate) fn record(
+        &self,
+        store: &SqliteStore,
+        target_kind: &str,
+        target_id: &str,
+        action: &str,
+        outcome: Result<Value, ApiProblem>,
+    ) -> Result<CosOperation, ApiProblem> {
+        match outcome {
+            Ok(value) => self.apply(store, target_kind, target_id, action, |_| Ok(value)),
+            Err(problem) => Err(self.reject(store, target_kind, target_id, problem)),
+        }
     }
 
     /// Record `problem` as a rejected operation (row + reasoned audit event) and give it back.
@@ -269,7 +427,7 @@ impl From<CosOperation> for OperationView {
     }
 }
 
-fn audited<T>(applied: Applied<T>) -> Result<CosOperation, ApiProblem> {
+pub(crate) fn audited<T>(applied: Applied<T>) -> Result<CosOperation, ApiProblem> {
     match applied {
         Applied::Audited(op) => Ok(*op),
         Applied::Direct(_) => Err(ApiProblem::internal(
@@ -285,7 +443,7 @@ fn operation_response(op: CosOperation) -> axum::response::Response {
     )
 }
 
-fn unprocessable(code: &'static str, detail: impl Into<String>) -> ApiProblem {
+pub(crate) fn unprocessable(code: &'static str, detail: impl Into<String>) -> ApiProblem {
     ApiProblem::new(StatusCode::UNPROCESSABLE_ENTITY, code, detail)
 }
 
@@ -321,9 +479,10 @@ pub(crate) fn request_hash(method: &str, path: &str, body: &Value) -> String {
 pub(crate) struct Matched {
     pub(crate) action: &'static str,
     pub(crate) id: Option<String>,
+    pub(crate) registry: usize,
 }
 
-/// Match `(method, path)` against [`ALLOWED`]. `Err` carries the rejection reason.
+/// Match `(method, path)` against [`allowed`]. `Err` carries the rejection reason.
 pub(crate) fn match_operation(method: &str, path: &str) -> Result<Matched, String> {
     if path.contains("://") || !path.starts_with('/') || path.starts_with("//") {
         return Err("request.path must be a local /api/v1/ path, not a URL or host".into());
@@ -344,38 +503,46 @@ pub(crate) fn match_operation(method: &str, path: &str) -> Result<Matched, Strin
     if !path.starts_with("/api/v1/") {
         return Err("request.path must be under /api/v1/".into());
     }
-    if path == "/api/v1/cos" || path.starts_with("/api/v1/cos/") {
-        return Err("request.path must not call the CoS API recursively".into());
-    }
-    for (allowed_method, pattern, action) in ALLOWED {
-        let pattern_segments: Vec<&str> = pattern.split('/').skip(1).collect();
-        if pattern_segments.len() != segments.len() {
-            continue;
-        }
-        let mut id = None;
-        let matched = pattern_segments
-            .iter()
-            .zip(&segments)
-            .all(|(p, s)| match *p {
-                "{id}" => {
-                    let ok = s
-                        .chars()
-                        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
-                    id = Some((*s).to_string());
-                    ok
-                }
-                literal => literal == *s,
-            });
-        if matched {
-            if !method.eq_ignore_ascii_case(allowed_method) {
-                return Err(format!(
-                    "{method} {pattern} is not a registered CoS operation"
-                ));
+    for registry in super::ops::REGISTRIES {
+        for (excluded_method, pattern, reason) in registry.excluded {
+            if method.eq_ignore_ascii_case(excluded_method) && path_matches(pattern, path) {
+                return Err((*reason).into());
             }
-            return Ok(Matched { action, id });
+        }
+    }
+    if path == "/api/v1/cos" || path.starts_with("/api/v1/cos/") {
+        return Err("recursive_cos: request.path must not call the CoS API recursively".into());
+    }
+    for (index, (allowed_method, pattern, action)) in allowed() {
+        if method.eq_ignore_ascii_case(allowed_method) && path_matches(pattern, path) {
+            let id = pattern
+                .split('/')
+                .zip(path.split('/'))
+                .find_map(|(p, s)| (p == "{id}").then(|| s.to_string()));
+            return Ok(Matched {
+                action,
+                id,
+                registry: index,
+            });
         }
     }
     Err(format!("{method} {path} is not a registered CoS operation"))
+}
+
+/// All named placeholders match exactly one safe path segment, regardless of parameter name.
+pub(crate) fn path_matches(pattern: &str, path: &str) -> bool {
+    let pattern_segments: Vec<_> = pattern.split('/').collect();
+    let segments: Vec<_> = path.split('/').collect();
+    pattern_segments.len() == segments.len()
+        && pattern_segments.iter().zip(&segments).all(|(p, s)| {
+            if p.starts_with('{') && p.ends_with('}') {
+                !s.is_empty()
+                    && s.chars()
+                        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | ':'))
+            } else {
+                p == s
+            }
+        })
 }
 
 fn body_problem(error: serde_json::Error) -> ApiProblem {
@@ -444,6 +611,9 @@ async fn create_operation(
         }),
         item: None,
     };
+    if match_operation(&method, &path).is_err() {
+        audit.payload["body"] = serde_json::json!({"redacted": true});
+    }
     let mut env = DispatchEnv::of(&state);
     let matched = match_operation(&method, &path).ok();
     let mut human_required = match &matched {
@@ -483,6 +653,11 @@ async fn create_operation(
                     ));
                 }
                 return Ok(existing);
+            }
+            // Refuse excluded/unknown routes before interpreting a relayed instruction or body.
+            // The registry reason is authoritative and no secret body reaches domain validation.
+            if matched.is_none() {
+                return dispatch(store, &env, &audit, &method, &path, req.request.body);
             }
             if let Some(message_id) = instructed_by.as_deref() {
                 // D3: the instruction must be the human message that started this very run, in
@@ -569,11 +744,17 @@ fn instructed_message(
 /// What the operation functions need from [`ApiState`], captured before the blocking section.
 #[derive(Clone)]
 pub(crate) struct DispatchEnv {
-    roles: Vec<task_core::RoleSpec>,
-    genres: Vec<task_core::GenreSpec>,
-    kb_root: Result<std::path::PathBuf, ApiProblem>,
+    pub(crate) roles: Vec<task_core::RoleSpec>,
+    pub(crate) genres: Vec<task_core::GenreSpec>,
+    pub(crate) kb_root: Result<std::path::PathBuf, ApiProblem>,
+    /// Configured cluster ids (workspace validation of task edit/retry).
+    pub(crate) clusters: Vec<String>,
+    /// Effective `[execution.tree]` limits (execution-plan replan validation).
+    pub(crate) tree_limits: task_core::TreeLimits,
     /// The derived human inbox, when the operation is `inbox.answer` (built before blocking).
-    inbox_feed: Option<std::sync::Arc<Vec<task_ops::human_inbox::InboxItem>>>,
+    pub(crate) inbox_feed: Option<std::sync::Arc<Vec<task_ops::human_inbox::InboxItem>>>,
+    /// The API state, for operations whose effect is API-process state (`report.notified`).
+    pub(crate) api: ApiState,
 }
 
 impl DispatchEnv {
@@ -582,12 +763,15 @@ impl DispatchEnv {
             roles: state.inner.roles.clone(),
             genres: state.inner.genres.clone(),
             kb_root: crate::knowledge::root_of(state),
+            clusters: crate::handlers::cluster_ids(state),
+            tree_limits: state.inner.tree_limits,
             inbox_feed: None,
+            api: state.clone(),
         }
     }
 }
 
-/// Match `(method, path)` against [`ALLOWED`] and run the handler's shared operation function with
+/// Match `(method, path)` against [`allowed`] and run the handler's shared operation function with
 /// `audit`. `/cos/operations` and the `answer` outcome of `/cos/inbox/{i}/resolve` both come here, so
 /// the domain validation is the same on both routes.
 pub(crate) fn dispatch(
@@ -599,7 +783,9 @@ pub(crate) fn dispatch(
     body: Value,
 ) -> Result<CosOperation, ApiProblem> {
     let matched = match_operation(method, path).map_err(|why| {
-        audit.reject(
+        let mut rejected_audit = audit.clone();
+        rejected_audit.payload["body"] = serde_json::json!({"redacted": true});
+        rejected_audit.reject(
             store,
             "api",
             path,
@@ -607,174 +793,41 @@ pub(crate) fn dispatch(
         )
     })?;
     reject_identity_claims(&body).map_err(|problem| audit.reject(store, "api", path, problem))?;
-    let decode = |error: serde_json::Error| {
-        audit.reject(
-            store,
-            "api",
-            path,
-            unprocessable("validation", format!("request.body: {error}")),
-        )
-    };
-    match matched.action {
-        "task.create" => {
-            let input = serde_json::from_value(body).map_err(decode)?;
-            audited(crate::handlers::tasks::create_task_op(
-                store,
-                &env.roles,
-                &env.genres,
-                input,
-                Some(audit),
-            )?)
-        }
-        "comment.create" => {
-            let raw_id = matched.id.unwrap_or_default();
-            let id = parse_task_id(&raw_id)
-                .map_err(|problem| audit.reject(store, "task", &raw_id, problem))?;
-            let input = serde_json::from_value(body).map_err(decode)?;
-            audited(crate::handlers::task_actions::create_comment_op(
-                store,
-                id,
-                input,
-                Some(audit),
-            )?)
-        }
-        "decision.answer" => {
-            let decision_id = matched.id.unwrap_or_default();
-            let input = serde_json::from_value(body).map_err(decode)?;
-            audited(crate::decisions::answer_op(
-                store,
-                &decision_id,
-                input,
-                Some(audit),
-            )?)
-        }
-        "approval.decide" => {
-            let raw_id = matched.id.unwrap_or_default();
-            let id = raw_id.parse().map_err(|_| {
-                audit.reject(
-                    store,
-                    "approval",
-                    &raw_id,
-                    ApiProblem::new(
-                        StatusCode::NOT_FOUND,
-                        "approval_not_found",
-                        format!("no approval {raw_id}"),
-                    ),
-                )
-            })?;
-            let input = serde_json::from_value(body).map_err(decode)?;
-            audited(crate::approvals::decide_op(store, id, input, Some(audit))?)
-        }
-        "execution.phase_gate" => {
-            let raw_id = matched.id.unwrap_or_default();
-            let id = parse_task_id(&raw_id)
-                .map_err(|problem| audit.reject(store, "task", &raw_id, problem))?;
-            let input = serde_json::from_value(body).map_err(decode)?;
-            audited(crate::execution::phase_gate_op(
-                store,
-                id,
-                input,
-                Some(audit),
-            )?)
-        }
-        "question.answer" | "execution.plan_gate" => {
-            let raw_id = matched.id.unwrap_or_default();
-            let id = parse_task_id(&raw_id)
-                .map_err(|problem| audit.reject(store, "task", &raw_id, problem))?;
-            if matched.action == "question.answer" {
-                let input = serde_json::from_value(body).map_err(decode)?;
-                audited(crate::handlers::task_actions::answer_op(
-                    store, id, input, audit,
-                )?)
-            } else {
-                let input = serde_json::from_value(body).map_err(decode)?;
-                audited(crate::execution::plan_gate_op(store, id, input, audit)?)
-            }
-        }
-        "project.update" => {
-            let raw_id = matched.id.unwrap_or_default();
-            let id = crate::handlers::parse_project_id(&raw_id)
-                .map_err(|problem| audit.reject(store, "project", &raw_id, problem))?;
-            let input = serde_json::from_value(body).map_err(decode)?;
-            audited(crate::handlers::projects::cos_patch_project(
-                store, id, input, audit,
-            )?)
-        }
-        "knowledge.reject" => {
-            let raw_id = matched.id.unwrap_or_default();
-            let root = env
-                .kb_root
-                .clone()
-                .map_err(|problem| audit.reject(store, "knowledge", &raw_id, problem))?;
-            if !body.is_null() && body != serde_json::json!({}) {
-                return Err(audit.reject(
-                    store,
-                    "knowledge",
-                    &raw_id,
-                    unprocessable("validation", "request.body must be empty"),
-                ));
-            }
-            audited(crate::knowledge::reject_op(
-                store,
-                &root,
-                raw_id,
-                Some(audit),
-            )?)
-        }
-        "knowledge.record" => {
-            let root = env
-                .kb_root
-                .clone()
-                .map_err(|problem| audit.reject(store, "knowledge", "new", problem))?;
-            let input = serde_json::from_value(body).map_err(decode)?;
-            audited(crate::knowledge::record_op(
-                store,
-                &root,
-                None,
-                input,
-                Some(audit),
-            )?)
-        }
-        "attachment.reference" => {
-            let raw_id = matched.id.unwrap_or_default();
-            let input = serde_json::from_value(body).map_err(decode)?;
-            crate::chat::attachments::add_reference_op(
-                store,
-                env.kb_root.clone(),
-                raw_id,
-                input,
-                audit,
-            )
-        }
-        "inbox.answer" => {
-            let raw_id = matched.id.unwrap_or_default();
-            let input: crate::inbox_notifications::InboxAnswerBody =
-                serde_json::from_value(body).map_err(decode)?;
-            let found = env
-                .inbox_feed
-                .as_ref()
-                .and_then(|items| items.iter().find(|item| item.id == raw_id))
-                .ok_or_else(|| {
-                    audit.reject(
-                        store,
-                        "inbox_item",
-                        &raw_id,
-                        ApiProblem::new(
-                            StatusCode::CONFLICT,
-                            "cos_revision_conflict",
-                            format!("inbox item {raw_id} is not open (answered or changed)"),
-                        ),
-                    )
-                })?;
-            let (dm, dp, domain_body) =
-                crate::inbox_notifications::delegated_request(found, &input)
-                    .map_err(|problem| audit.reject(store, "inbox_item", &raw_id, problem))?;
-            dispatch(store, env, audit, dm.as_str(), &dp, domain_body)
-        }
-        other => Err(ApiProblem::internal(format!(
-            "registered CoS operation {other} has no implementation"
-        ))),
+    (super::ops::REGISTRIES[matched.registry].dispatch)(store, env, audit, matched, path, body)
+}
+
+/// The value of placeholder `name` of the matched `pattern` in `path` (e.g. `{source}`).
+pub(crate) fn path_param(pattern: &str, path: &str, name: &str) -> String {
+    pattern
+        .split('/')
+        .zip(path.split('/'))
+        .find_map(|(p, s)| (p == name).then(|| s.to_string()))
+        .unwrap_or_default()
+}
+
+/// Decode a body the domain route accepts empty (`read_json(body, true)`): `null` reads as `{}`.
+pub(crate) fn decode_optional<T: serde::de::DeserializeOwned>(
+    body: Value,
+) -> Result<T, serde_json::Error> {
+    if body.is_null() {
+        serde_json::from_value(serde_json::json!({}))
+    } else {
+        serde_json::from_value(body)
     }
+}
+
+pub(crate) fn decode_problem(
+    store: &SqliteStore,
+    audit: &OperationAudit,
+    path: &str,
+    error: serde_json::Error,
+) -> ApiProblem {
+    audit.reject(
+        store,
+        "api",
+        path,
+        unprocessable("validation", format!("request.body: {error}")),
+    )
 }
 
 async fn get_operation(
@@ -808,7 +861,7 @@ mod skill_table_tests {
     use std::collections::BTreeSet;
 
     /// ADR 2026-10-08-cos-chat-prompt-cache D1.7/T5: the cos-operator skill's table of registered
-    /// operations (`config/skills/cos-operator/operations.md`) lists exactly [`super::ALLOWED`].
+    /// operations (`config/skills/cos-operator/operations.md`) lists exactly [`super::allowed`].
     #[test]
     fn cos_operator_skill_table_matches_allowed() {
         let path = concat!(
@@ -820,7 +873,6 @@ mod skill_table_tests {
             .split("## 登録済みの操作")
             .nth(1)
             .and_then(|rest| rest.split("\n## ").next())
-            .and_then(|rest| rest.split("### ").next())
             .expect("registered operations section");
         let mut listed = BTreeSet::new();
         for line in section.lines().filter(|l| l.starts_with("| ")) {
@@ -836,14 +888,18 @@ mod skill_table_tests {
             };
             let path = path
                 .split('/')
-                .map(|seg| if seg == "<id>" { "{id}" } else { seg })
+                .map(
+                    |seg| match seg.strip_prefix('<').and_then(|s| s.strip_suffix('>')) {
+                        Some(name) => format!("{{{name}}}"),
+                        None => seg.to_string(),
+                    },
+                )
                 .collect::<Vec<_>>()
                 .join("/");
             listed.insert((method.to_string(), path, action.trim().to_string()));
         }
-        let allowed: BTreeSet<_> = super::ALLOWED
-            .iter()
-            .map(|(m, p, a)| (m.to_string(), p.to_string(), a.to_string()))
+        let allowed: BTreeSet<_> = super::allowed()
+            .map(|(_, (m, p, a))| (m.to_string(), p.to_string(), a.to_string()))
             .collect();
         assert_eq!(listed, allowed);
     }

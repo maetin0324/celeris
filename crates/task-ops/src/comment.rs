@@ -237,6 +237,18 @@ pub fn reopen(
     id: TaskId,
     expected: Option<Status>,
 ) -> Result<TransitionResult, OpsError> {
+    let from = plan_reopen(store, id, expected)?;
+    let outcome = store.apply_transition(id, Trigger::Reopen, None)?;
+    finish_reopen(store, id, from, outcome)
+}
+
+/// [`reopen`] の検証（読むだけ）。遷移前の状態を返す。書き込みは `Trigger::Reopen` の遷移
+/// （CoS の監査経路では `SqliteStore::apply_transition_tx`）。
+pub fn plan_reopen(
+    store: &dyn TaskStore,
+    id: TaskId,
+    expected: Option<Status>,
+) -> Result<Status, OpsError> {
     let task = store.get(id)?.ok_or(OpsError::NotFound(id))?;
     if let Some(exp) = expected
         && exp != task.status
@@ -253,8 +265,16 @@ pub fn reopen(
             action: "reopened; only done or failed tasks can be reopened".to_string(),
         });
     }
-    let from = task.status;
-    let outcome = store.apply_transition(id, Trigger::Reopen, None)?;
+    Ok(task.status)
+}
+
+/// 遷移を書いた後の後始末（冪等）と結果。
+pub fn finish_reopen(
+    store: &dyn TaskStore,
+    id: TaskId,
+    from: Status,
+    outcome: task_core::transition::Outcome,
+) -> Result<TransitionResult, OpsError> {
     // ADR 2026-10-04 Phase 3: 再開は run の履歴を区切る。ここで届いている結果を追記する（冪等）。
     crate::routing_outcome::record_routing_outcomes(store, id)?;
     Ok(TransitionResult {

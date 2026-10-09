@@ -168,6 +168,204 @@ fn insert_record(
 }
 
 impl SqliteStore {
+    /// Persist a C-class operation before invoking an external side effect. Duplicate requests
+    /// return the existing receipt and must never be interpreted as permission to replay it.
+    #[allow(clippy::too_many_arguments)]
+    pub fn cos_operation_begin_external(
+        &self,
+        ctx: &AuditContext,
+        key: &str,
+        hash: &str,
+        target_kind: &str,
+        target_id: &str,
+        revision: Option<&str>,
+        action: &str,
+        payload: &Value,
+        now: OffsetDateTime,
+    ) -> Result<(CosOperation, bool), ChatError> {
+        if ctx.actor != ChatActor::Cos
+            || ctx.thread_id.trim().is_empty()
+            || ctx.run_id.trim().is_empty()
+            || ctx.operation_id.parse::<Ulid>().is_err()
+            || ctx.reason.trim().is_empty()
+            || ctx.policy_version.trim().is_empty()
+            || key.trim().is_empty()
+            || hash.trim().is_empty()
+            || target_kind.trim().is_empty()
+            || target_id.trim().is_empty()
+            || action.trim().is_empty()
+        {
+            return Err(ChatError::Invalid(
+                "invalid external operation audit context".into(),
+            ));
+        }
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if let Some((id, prior_hash)) = tx.query_row(
+            "SELECT id,request_hash FROM cos_operations WHERE thread_id=?1 AND idempotency_key=?2",
+            params![ctx.thread_id, key], |r| Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?)),
+        ).optional()? {
+            if prior_hash != hash { return Err(ChatError::Conflict("idempotency key has a different request hash".into())); }
+            let op = get_conn(&tx, &id)?.ok_or_else(|| ChatError::not_found("operation", &id))?;
+            tx.commit()?;
+            return Ok((op, false));
+        }
+        let stamp = chat_ts(now);
+        insert_record(
+            &tx,
+            ctx,
+            key,
+            hash,
+            target_kind,
+            target_id,
+            revision,
+            action,
+            payload,
+            "pending",
+            &Value::Null,
+            &stamp,
+        )?;
+        audit_event(&tx, ctx, target_kind, target_id, "pending")?;
+        let card = ChatCard {
+            kind: ChatCardKind::Operation,
+            id: ctx.operation_id.clone(),
+            title: action.into(),
+            state: "pending".into(),
+            href: format!("/cos/operations/{}", ctx.operation_id),
+            actor: ChatActor::Cos,
+            reason: Some(ctx.reason.clone()),
+            operation_id: Some(ctx.operation_id.clone()),
+        };
+        let event_id = append_event(
+            &tx,
+            &ctx.thread_id,
+            Some(&ctx.run_id),
+            None,
+            ChatEventType::Card,
+            &ChatEventData::Card(ChatCardData { card }),
+            &stamp,
+        )?;
+        tx.execute(
+            "UPDATE cos_operations SET event_id=?2 WHERE id=?1",
+            params![ctx.operation_id, event_id],
+        )?;
+        let op = get_conn(&tx, &ctx.operation_id)?
+            .ok_or_else(|| ChatError::not_found("operation", &ctx.operation_id))?;
+        tx.commit()?;
+        Ok((op, true))
+    }
+
+    /// Finish only a pending external operation. A repeated finish returns the settled receipt.
+    pub fn cos_operation_finish_external(
+        &self,
+        ctx: &AuditContext,
+        result: &Value,
+        now: OffsetDateTime,
+    ) -> Result<CosOperation, ChatError> {
+        self.settle_external(ctx, "applied", result, now)
+    }
+
+    /// Settle a pending external operation as `rejected` when the effect is known not to have
+    /// happened (the external system refused it before changing anything: an etag mismatch, a
+    /// busy branch, a missing page). An unknown outcome must stay pending for remediation instead.
+    pub fn cos_operation_fail_external(
+        &self,
+        ctx: &AuditContext,
+        result: &Value,
+        now: OffsetDateTime,
+    ) -> Result<CosOperation, ChatError> {
+        self.settle_external(ctx, "rejected", result, now)
+    }
+
+    fn settle_external(
+        &self,
+        ctx: &AuditContext,
+        state: &str,
+        result: &Value,
+        now: OffsetDateTime,
+    ) -> Result<CosOperation, ChatError> {
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let mut op = get_conn(&tx, &ctx.operation_id)?
+            .ok_or_else(|| ChatError::not_found("operation", &ctx.operation_id))?;
+        if op.state != "pending" {
+            tx.commit()?;
+            return Ok(op);
+        }
+        let stamp = chat_ts(now);
+        tx.execute("UPDATE cos_operations SET state=?4,result_json=?2,updated_at=?3 WHERE id=?1 AND state='pending'",
+            params![ctx.operation_id,result.to_string(),stamp,state])?;
+        audit_event(&tx, ctx, &op.target_kind, &op.target_id, state)?;
+        let card = ChatCard {
+            kind: ChatCardKind::Operation,
+            id: ctx.operation_id.clone(),
+            title: op.action.clone(),
+            state: state.into(),
+            href: format!("/cos/operations/{}", ctx.operation_id),
+            actor: ChatActor::Cos,
+            reason: Some(ctx.reason.clone()),
+            operation_id: Some(ctx.operation_id.clone()),
+        };
+        let event_id = append_event(
+            &tx,
+            &ctx.thread_id,
+            Some(&ctx.run_id),
+            None,
+            ChatEventType::Card,
+            &ChatEventData::Card(ChatCardData { card }),
+            &stamp,
+        )?;
+        tx.execute(
+            "UPDATE cos_operations SET event_id=?2 WHERE id=?1",
+            params![ctx.operation_id, event_id],
+        )?;
+        op = get_conn(&tx, &ctx.operation_id)?
+            .ok_or_else(|| ChatError::not_found("operation", &ctx.operation_id))?;
+        tx.commit()?;
+        Ok(op)
+    }
+
+    /// Mark pending external operations older than the supplied cutoff for human remediation.
+    /// Caller injects the clock and invokes this once during daemon startup.
+    pub fn cos_operation_remediate_stale(
+        &self,
+        cutoff: OffsetDateTime,
+    ) -> Result<usize, ChatError> {
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let cutoff = chat_ts(cutoff);
+        let mut stmt = tx.prepare("SELECT id,thread_id,run_id,target_kind,target_id,reason,policy_version FROM cos_operations WHERE state='pending' AND updated_at < ?1")?;
+        let rows = stmt
+            .query_map([&cutoff], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, String>(4)?,
+                    r.get::<_, String>(5)?,
+                    r.get::<_, String>(6)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        drop(stmt);
+        for (id, thread, run, kind, target, reason, policy) in &rows {
+            tx.execute("UPDATE cos_operations SET state='needs_remediation',updated_at=?2 WHERE id=?1 AND state='pending'", params![id,cutoff])?;
+            let ctx = AuditContext {
+                actor: ChatActor::Cos,
+                thread_id: thread.clone(),
+                run_id: run.clone(),
+                operation_id: id.clone(),
+                reason: reason.clone(),
+                policy_version: policy.clone(),
+            };
+            audit_event(&tx, &ctx, kind, target, "needs_remediation")?;
+        }
+        let n = rows.len();
+        tx.commit()?;
+        Ok(n)
+    }
+
     /// A pending operation may have reached an external system before the daemon disappeared.
     /// Recovery must wait for a human to establish its outcome instead of replaying it.
     pub fn cos_operation_pending_for_run(&self, run_id: &str) -> Result<bool, ChatError> {

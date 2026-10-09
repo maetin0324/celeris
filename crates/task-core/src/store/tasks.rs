@@ -531,7 +531,18 @@ impl SqliteStore {
     ) -> Result<Vec<TaskId>, StoreError> {
         let mut conn = self.lock()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let Some(orig) = Self::get_locked(&tx, original)? else {
+        let rewired = Self::retry_task_tx(&tx, original, new_task)?;
+        tx.commit()?;
+        Ok(rewired)
+    }
+
+    /// `retry_task` の本体（呼び出し側の transaction の中で書く。ADR 2026-10-09 D5 の CoS 監査経路）。
+    pub fn retry_task_tx(
+        tx: &Connection,
+        original: TaskId,
+        new_task: &Task,
+    ) -> Result<Vec<TaskId>, StoreError> {
+        let Some(orig) = Self::get_locked(tx, original)? else {
             return Err(StoreError::Invalid(format!("task not found: {original}")));
         };
         if !matches!(orig.status, Status::Failed | Status::Cancelled) {
@@ -542,28 +553,28 @@ impl SqliteStore {
             }));
         }
 
-        Self::insert_tx(&tx, new_task)?;
+        Self::insert_tx(tx, new_task)?;
         Self::append_event_tx(
-            &tx,
+            tx,
             new_task.id,
             &Event::Created {
                 task: Box::new(new_task.clone()),
                 origin: None,
             },
         )?;
-        Self::append_event_tx(&tx, new_task.id, &Event::Retried { from: original })?;
+        Self::append_event_tx(tx, new_task.id, &Event::Retried { from: original })?;
         // ADR 2026-10-08-browser-prod-enablement D4: 元の task の保存 policy を引き継ぐ（無ければ自動付与のまま）。
-        Self::inherit_browser_policy_tx(&tx, original, new_task.id)?;
+        Self::inherit_browser_policy_tx(tx, original, new_task.id)?;
 
         let mut rewired = Vec::new();
-        for dep_id in Self::dependents_of_tx(&tx, original)? {
-            let Some(dep) = Self::get_locked(&tx, dep_id)? else {
+        for dep_id in Self::dependents_of_tx(tx, original)? {
+            let Some(dep) = Self::get_locked(tx, dep_id)? else {
                 continue;
             };
             let eligible = match dep.status {
                 Status::Draft | Status::Ready | Status::Blocked => true,
                 Status::Cancelled => {
-                    Self::last_transitioned_reason_tx(&tx, dep_id)?.as_deref()
+                    Self::last_transitioned_reason_tx(tx, dep_id)?.as_deref()
                         == Some(Trigger::DependencyFailed.name())
                 }
                 _ => false,
@@ -582,10 +593,10 @@ impl SqliteStore {
                 updated.status = Status::Draft;
             }
             updated.updated_at = OffsetDateTime::now_utc();
-            Self::rewrite_task_tx(&tx, &updated)?;
+            Self::rewrite_task_tx(tx, &updated)?;
             if was_cancelled {
                 Self::append_event_tx(
-                    &tx,
+                    tx,
                     dep_id,
                     &Event::Transitioned {
                         from: Status::Cancelled,
@@ -597,7 +608,6 @@ impl SqliteStore {
             rewired.push(dep_id);
         }
 
-        tx.commit()?;
         Ok(rewired)
     }
 
@@ -763,7 +773,14 @@ impl SqliteStore {
     pub(super) fn update_task_impl(&self, task: &Task, event: Event) -> Result<Task, StoreError> {
         let mut conn = self.lock()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let Some(current) = Self::get_locked(&tx, task.id)? else {
+        let merged = Self::edit_task_tx(&tx, task, &event)?;
+        tx.commit()?;
+        Ok(merged)
+    }
+
+    /// `update_task` の本体（呼び出し側の transaction の中で書く。ADR 2026-10-09 D5 の CoS 監査経路）。
+    pub fn edit_task_tx(tx: &Connection, task: &Task, event: &Event) -> Result<Task, StoreError> {
+        let Some(current) = Self::get_locked(tx, task.id)? else {
             return Err(StoreError::Invalid(format!("task not found: {}", task.id)));
         };
         // ADR 2026-10-09 D3: 案件の後付けを組み立ててから lease を取られた場合も拒む。
@@ -785,7 +802,7 @@ impl SqliteStore {
                 return Err(StoreError::Invalid("project attachment requires an unstarted draft/ready or lease-free blocked task without a project".into()));
             }
             if let Some(parent_id) = current.parent_id
-                && let Some(parent) = Self::get_locked(&tx, parent_id)?
+                && let Some(parent) = Self::get_locked(tx, parent_id)?
                 && parent.project_id.is_some()
                 && parent.project_id != task.project_id
             {
@@ -804,9 +821,8 @@ impl SqliteStore {
             lease: current.lease.clone(),
             ..task.clone()
         };
-        Self::update_task_tx(&tx, &merged)?;
-        Self::append_event_tx(&tx, task.id, &event)?;
-        tx.commit()?;
+        Self::update_task_tx(tx, &merged)?;
+        Self::append_event_tx(tx, task.id, event)?;
         Ok(merged)
     }
 

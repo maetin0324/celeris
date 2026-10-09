@@ -278,14 +278,21 @@ impl SqliteStore {
     pub(super) fn project_create_impl(&self, project: &Project) -> Result<(), StoreError> {
         let mut conn = self.lock()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        Self::project_create_tx(&tx, project)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// `project_create` on a caller-owned transaction (ADR 2026-10-09-cos-operations-all-mutations D3).
+    pub fn project_create_tx(tx: &Connection, project: &Project) -> Result<(), StoreError> {
         // Phase K-1: slug は案件を作るときに決める（渡されたものは検査だけ）。
         let slug = match project.slug.as_deref().map(str::trim) {
             Some(s) if !s.is_empty() => {
-                Self::check_project_slug(&tx, &project.id.to_string(), s)?;
+                Self::check_project_slug(tx, &project.id.to_string(), s)?;
                 s.to_string()
             }
             _ => Self::unique_project_slug(
-                &tx,
+                tx,
                 &project.title,
                 &project.id.to_string(),
                 project
@@ -331,9 +338,8 @@ impl SqliteStore {
                 created_at: project.created_at,
             };
             crate::repos::validate_upsert(&[], &repo)?;
-            Self::repo_write_tx(&tx, &repo)?;
+            Self::repo_write_tx(tx, &repo)?;
         }
-        tx.commit()?;
         Ok(())
     }
 
@@ -400,6 +406,16 @@ impl SqliteStore {
         paused_from: Option<Option<ProjectStatus>>,
     ) -> Result<bool, StoreError> {
         let conn = self.lock()?;
+        Self::project_set_lifecycle_tx(&conn, id, status, paused_from)
+    }
+
+    /// `project_set_lifecycle` on a caller-owned transaction (ADR 2026-10-09-cos-operations-all-mutations D3).
+    pub fn project_set_lifecycle_tx(
+        conn: &Connection,
+        id: ProjectId,
+        status: ProjectStatus,
+        paused_from: Option<Option<ProjectStatus>>,
+    ) -> Result<bool, StoreError> {
         let now = format_rfc3339(OffsetDateTime::now_utc())?;
         let affected = match paused_from {
             Some(from) => conn.execute(
@@ -425,6 +441,15 @@ impl SqliteStore {
         at: Option<OffsetDateTime>,
     ) -> Result<bool, StoreError> {
         let conn = self.lock()?;
+        Self::project_set_archived_at_tx(&conn, id, at)
+    }
+
+    /// `project_set_archived_at` on a caller-owned transaction.
+    pub fn project_set_archived_at_tx(
+        conn: &Connection,
+        id: ProjectId,
+        at: Option<OffsetDateTime>,
+    ) -> Result<bool, StoreError> {
         let affected = conn.execute(
             "UPDATE projects SET archived_at = ?1, updated_at = ?2 WHERE id = ?3",
             params![
@@ -721,6 +746,16 @@ impl SqliteStore {
         paused_from: Option<Option<MilestoneStatus>>,
     ) -> Result<bool, StoreError> {
         let conn = self.lock()?;
+        Self::milestone_set_lifecycle_tx(&conn, id, status, paused_from)
+    }
+
+    /// `milestone_set_lifecycle` on a caller-owned transaction.
+    pub fn milestone_set_lifecycle_tx(
+        conn: &Connection,
+        id: MilestoneId,
+        status: MilestoneStatus,
+        paused_from: Option<Option<MilestoneStatus>>,
+    ) -> Result<bool, StoreError> {
         let now = format_rfc3339(OffsetDateTime::now_utc())?;
         let affected = match paused_from {
             Some(from) => conn.execute(

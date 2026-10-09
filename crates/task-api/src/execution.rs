@@ -143,17 +143,7 @@ async fn post_execution_plan(
     };
     let view = state
         .blocking(move |store| {
-            let adopted = task_ops::execution::adopt_human_plan(
-                store,
-                task_id,
-                spec,
-                limits,
-                "human",
-                OffsetDateTime::now_utc(),
-            )
-            .map_err(|e| ops_problem(store, e, Some("execution_plan_adopt")))?;
-            // ADR-0079「R5b-fix3」: 人が計画を書いた = 分けて進めると決めた。gate の記録を人の compound にする
-            // （前の `atomic/small` を残さない）。書けなくても採用は済んでいるので失敗にしない。
+            let adopted = execution_plan_adopt_op(store, task_id, spec, limits, None)?.direct()?;
             if let Err(e) = task_ops::regate::record_human_plan_gate(
                 store,
                 task_id,
@@ -175,6 +165,90 @@ async fn post_execution_plan(
         .await?;
     tracing::info!(who = "admin", op = "execution_plan_adopt", task_id = %task_id, plan_id = %view.id, work_units = view.work_units.len(), adoptions = view.adoptions.len(), decisions = view.decisions_raised, "admin: execution plan adopted");
     Ok(json_response(StatusCode::CREATED, &view))
+}
+
+pub(crate) fn execution_plan_adopt_op(
+    store: &task_core::store::SqliteStore,
+    task_id: task_core::TaskId,
+    spec: task_core::ExecutionPlanSpec,
+    limits: task_core::ExecutionLimits,
+    audit: Option<&crate::cos::operations::OperationAudit>,
+) -> Result<crate::cos::operations::Applied<task_ops::execution::HumanPlanAdopted>, ApiProblem> {
+    let target = task_id.to_string();
+    let prepared = task_ops::execution::prepare_human_plan_adoption(
+        store,
+        task_id,
+        spec,
+        limits,
+        "human",
+        OffsetDateTime::now_utc(),
+    )
+    .map_err(|e| {
+        let problem = ops_problem(store, e, Some("execution_plan_adopt"));
+        if let Some(audit) = audit {
+            audit.reject(store, "task", &target, problem)
+        } else {
+            problem
+        }
+    })?;
+    if let Some(audit) = audit {
+        let result = serde_json::json!({
+            "plan_id": prepared.result.plan.id,
+            "adoptions": prepared.result.adoptions,
+            "decisions_raised": prepared.result.decisions_raised,
+        });
+        let op = audit.apply(store, "task", &target, "execution.plan_adopt", |tx| {
+            let ok = task_core::store::SqliteStore::execution_plan_adopt_tree_tx(
+                tx,
+                task_id,
+                prepared.result.plan.clone(),
+                prepared.work_units,
+                prepared.extra_events,
+                prepared.event,
+                prepared.after_events,
+                prepared.adoptions,
+            )?;
+            if !ok {
+                return Err(task_core::chat::ChatError::Conflict(
+                    "plan adoption changed concurrently".into(),
+                ));
+            }
+            Ok(result)
+        })?;
+        task_ops::execution::record_human_plan_notice(
+            store,
+            &prepared.result,
+            "human",
+            OffsetDateTime::now_utc(),
+        );
+        Ok(crate::cos::operations::Applied::Audited(Box::new(op)))
+    } else {
+        if !store
+            .execution_plan_adopt_tree(
+                task_id,
+                prepared.result.plan.clone(),
+                prepared.work_units,
+                prepared.extra_events,
+                prepared.event,
+                prepared.after_events,
+                prepared.adoptions,
+            )
+            .map_err(crate::problem::store_problem)?
+        {
+            return Err(ApiProblem::new(
+                StatusCode::CONFLICT,
+                "adopt_conflict",
+                "plan adoption changed concurrently",
+            ));
+        }
+        task_ops::execution::record_human_plan_notice(
+            store,
+            &prepared.result,
+            "human",
+            OffsetDateTime::now_utc(),
+        );
+        Ok(crate::cos::operations::Applied::Direct(prepared.result))
+    }
 }
 
 /// ADR-0079 R5b-fix1: `PUT /tasks/{id}/execution-plan`（管理系）。有効な計画が無ければ `POST` と同じ（新規の採用、201）。
@@ -257,6 +331,79 @@ async fn put_execution_plan(
     Ok(json_response(status, &view))
 }
 
+/// CoS の `PUT /tasks/{id}/execution-plan`（ADR 2026-10-09 D3/D5、`execution.put_plan`）。人の `PUT` と同じ
+/// 検証（`task_ops::execution::plan_replan`）で組み立てた版の置き換えを、監査と同じ transaction で書く。
+/// active な計画が無い task への初回の採用（`adopt_human_plan`）は `execution.adopt_plan` と同じく未登録で、
+/// 理由付きの 422 で記録する。
+pub(crate) fn put_plan_audited(
+    store: &task_core::store::SqliteStore,
+    task_id: task_core::TaskId,
+    spec: task_core::ExecutionPlanSpec,
+    tree: task_core::TreeLimits,
+    audit: &crate::cos::operations::OperationAudit,
+) -> Result<task_core::chat::CosOperation, ApiProblem> {
+    let target_id = task_id.to_string();
+    let limits = ExecutionLimits {
+        tree,
+        ..ExecutionLimits::default()
+    };
+    let has_active = store
+        .execution_plan_active(task_id)
+        .map_err(|e| audit.reject(store, "task", &target_id, store_problem(e)))?
+        .is_some();
+    if !has_active {
+        return Err(audit.reject(
+            store,
+            "task",
+            &target_id,
+            crate::cos::operations::unprocessable(
+                "cos_operation_not_allowed",
+                "PUT /api/v1/tasks/{id}/execution-plan without an active plan adopts a first plan, \
+                 which is not a registered CoS operation yet (pending with execution.adopt_plan); \
+                 only a replan of an active plan is",
+            ),
+        ));
+    }
+    let now = OffsetDateTime::now_utc();
+    let (write, diff) = task_ops::execution::plan_replan(
+        store,
+        task_id,
+        spec,
+        "replan (cos PUT)".to_string(),
+        task_core::PlanOrigin::Human,
+        None,
+        limits,
+        now,
+    )
+    .map_err(|e| {
+        audit.reject(
+            store,
+            "task",
+            &target_id,
+            ops_problem(store, e, Some("execution_plan_replan")),
+        )
+    })?;
+    audit.apply(store, "task", &target_id, "execution.put_plan", |tx| {
+        let result = serde_json::json!({
+            "task_id": target_id,
+            "plan_id": write.new_plan.id,
+            "version": write.new_plan.version,
+            "replan": diff,
+        });
+        task_core::store::SqliteStore::execution_plan_replan_tx(
+            tx,
+            write.task_id,
+            write.old_plan_id,
+            write.new_plan,
+            write.updated_work_units,
+            write.new_work_units,
+            write.extra_events,
+            write.plan_event,
+        )?;
+        Ok(result)
+    })
+}
+
 /// ADR-0079 D15（Phase R5b-prep）: `POST /tasks/{id}/tree/adopt {task_id, stage, unit_key}`（管理系 = 人だけ）。
 /// 採用済みの /3 の計画の kind task の unit（`adopt: <task_id>` を持つ）に既存の task を結ぶ（`task_ops::tree_adopt::adopt`）。
 /// 200 は `AdoptionOutcome`。404: task が無い。422: 木が無効・計画が /3 でない・unit が無い / kind task でない /
@@ -275,20 +422,77 @@ async fn post_tree_adopt(
     let req: task_ops::tree_adopt::AdoptRequest = read_json(body, false).await?;
     let limits = state.inner.tree_limits;
     let outcome = state
-        .blocking(move |store| {
-            task_ops::tree_adopt::adopt(
-                store,
-                task_id,
-                &req,
-                &limits,
-                "human",
-                OffsetDateTime::now_utc(),
-            )
-            .map_err(|e| ops_problem(store, e, Some("tree_adopt")))
-        })
+        .blocking(move |store| tree_adopt_op(store, task_id, req, limits, None)?.direct())
         .await?;
     tracing::info!(who = "admin", op = "tree_adopt", task_id = %task_id, unit = %outcome.unit_key, adopted = %outcome.task_id, "admin: task adopted into the tree");
     Ok(json_response(StatusCode::OK, &outcome))
+}
+
+pub(crate) fn tree_adopt_op(
+    store: &task_core::store::SqliteStore,
+    task_id: task_core::TaskId,
+    req: task_ops::tree_adopt::AdoptRequest,
+    limits: task_core::TreeLimits,
+    audit: Option<&crate::cos::operations::OperationAudit>,
+) -> Result<crate::cos::operations::Applied<task_ops::tree_adopt::AdoptionOutcome>, ApiProblem> {
+    let target_id = task_id.to_string();
+    let prepared = task_ops::tree_adopt::prepare_adopt(
+        store,
+        task_id,
+        &req,
+        &limits,
+        "human",
+        OffsetDateTime::now_utc(),
+    )
+    .map_err(|e| {
+        let problem = ops_problem(store, e, Some("tree_adopt"));
+        if let Some(audit) = audit {
+            audit.reject(store, "task", &target_id, problem)
+        } else {
+            problem
+        }
+    })?;
+    if let Some(audit) = audit {
+        let result = serde_json::to_value(&prepared.outcome)
+            .map_err(|e| ApiProblem::internal(e.to_string()))?;
+        let op = audit.apply(store, "task", &target_id, "tree.adopt", |tx| {
+            let ok = task_core::store::SqliteStore::tree_adopt_apply_tx(
+                tx,
+                prepared.owner_id,
+                &prepared.unit_id,
+                prepared.expect_unit_status,
+                prepared.updated,
+                prepared.events,
+                prepared.adoption,
+            )?;
+            if !ok {
+                return Err(task_core::chat::ChatError::Conflict(
+                    "tree adoption changed concurrently".into(),
+                ));
+            }
+            Ok(result)
+        })?;
+        Ok(crate::cos::operations::Applied::Audited(Box::new(op)))
+    } else {
+        if !store
+            .tree_adopt_apply(
+                prepared.owner_id,
+                &prepared.unit_id,
+                prepared.expect_unit_status,
+                prepared.updated,
+                prepared.events,
+                prepared.adoption,
+            )
+            .map_err(crate::problem::store_problem)?
+        {
+            return Err(ApiProblem::new(
+                StatusCode::CONFLICT,
+                "adopt_conflict",
+                "tree adoption changed concurrently",
+            ));
+        }
+        Ok(crate::cos::operations::Applied::Direct(prepared.outcome))
+    }
 }
 
 /// ADR-0072 D19（Phase E5）: `GET /tasks/{id}/execution`。`TaskDetail.execution`（D20 の要約）と
@@ -521,20 +725,59 @@ async fn post_decompose(
     let task_id = parse_task_id(&id)?;
     let req: task_ops::regate::DecomposeRequest = read_json(body, false).await?;
     let result = state
-        .blocking(move |store| {
-            task_ops::regate::set_execution_mode(
-                store,
-                task_id,
-                req.mode,
-                "human",
-                req.note,
-                OffsetDateTime::now_utc(),
-            )
-            .map_err(|e| ops_problem(store, e, Some("execution_decompose")))
-        })
+        .blocking(move |store| decompose_op(store, task_id, req, None)?.direct())
         .await?;
     tracing::info!(who = "admin", op = "execution_decompose", task_id = %task_id, mode = result.mode.as_str(), replan = result.replan, "admin: execution mode set by a human");
     Ok(json_response(StatusCode::OK, &result))
+}
+
+pub(crate) fn decompose_op(
+    store: &task_core::store::SqliteStore,
+    task_id: task_core::TaskId,
+    req: task_ops::regate::DecomposeRequest,
+    audit: Option<&crate::cos::operations::OperationAudit>,
+) -> Result<crate::cos::operations::Applied<task_ops::regate::DecomposeResult>, ApiProblem> {
+    use crate::cos::operations::Applied;
+    let Some(audit) = audit else {
+        return task_ops::regate::set_execution_mode(
+            store,
+            task_id,
+            req.mode,
+            "human",
+            req.note,
+            OffsetDateTime::now_utc(),
+        )
+        .map(Applied::Direct)
+        .map_err(|error| ops_problem(store, error, Some("execution_decompose")));
+    };
+    let target_id = task_id.to_string();
+    let (result, event) = task_ops::regate::plan_execution_mode(
+        store,
+        task_id,
+        req.mode,
+        "cos",
+        req.note,
+        OffsetDateTime::now_utc(),
+    )
+    .map_err(|error| {
+        audit.reject(
+            store,
+            "task",
+            &target_id,
+            ops_problem(store, error, Some("execution_decompose")),
+        )
+    })?;
+    let operation = audit.apply(store, "task", &target_id, "execution.decompose", |tx| {
+        let updated = task_core::store::SqliteStore::edit_task_tx(tx, &result.task, &event)?;
+        Ok(serde_json::json!({
+            "task_id": target_id,
+            "mode": result.mode,
+            "replan": result.replan,
+            "previous_decision": result.previous_decision,
+            "task": updated,
+        }))
+    })?;
+    Ok(Applied::Audited(Box::new(operation)))
 }
 
 fn bad_group_by(group_by: &str) -> ApiProblem {

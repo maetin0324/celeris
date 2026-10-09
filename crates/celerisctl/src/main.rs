@@ -21,7 +21,9 @@ use commands::cos_ops::{self, ApiRequestArgs};
 use commands::cron::{self as cron_cmd, CronCommand};
 use commands::curation::{self as curation_cmd, CurationCommand};
 use commands::db::{self as db_cmd, DbCommand};
-use commands::execution::{self as execution_cmd, ExecutionCommand, TreeCommand};
+use commands::execution::{
+    self as execution_cmd, ExecutionCommand, ExecutionPlanCommand, PhaseGateActionArg, TreeCommand,
+};
 use commands::gate::{self, AnswerArgs, ApproveArgs, RejectArgs};
 use commands::knowledge::{self, KnowledgeCommand};
 use commands::mcp::{self, McpCommand};
@@ -313,6 +315,114 @@ fn dispatch(store: &SqliteStore, db_path: &Path, command: Command) -> Result<Exi
     }
 }
 
+/// The registered CoS operation (method, domain path, body) of a mutating subcommand, if any
+/// (ADR 2026-10-09-cos-operations-all-mutations D3; `config/skills/cos-operator/operations.md`).
+fn cos_mapped(
+    command: &Command,
+) -> Result<Option<(&'static str, String, serde_json::Value)>, CliError> {
+    use serde_json::json;
+    let task_path = |id: &str, tail: &str| -> Result<String, CliError> {
+        let id = error::parse_task_id(id)?;
+        Ok(format!("/api/v1/tasks/{id}{tail}"))
+    };
+    Ok(match command {
+        Command::Retry(args) => Some((
+            "POST",
+            task_path(&args.id, "/retry")?,
+            json!({"accept": !args.draft}),
+        )),
+        Command::Approve(args) => Some((
+            "POST",
+            task_path(&args.id, "/approve")?,
+            json!({"note": args.note}),
+        )),
+        Command::Reject(args) => Some((
+            "POST",
+            task_path(&args.id, "/reject")?,
+            json!({"note": args.note}),
+        )),
+        Command::Accept(args) => Some(("POST", task_path(&args.id, "/accept")?, json!({}))),
+        Command::Cancel(args) => Some(("POST", task_path(&args.id, "/cancel")?, json!({}))),
+        Command::Rereview(args) => Some(("POST", task_path(&args.id, "/rereview")?, json!({}))),
+        Command::Answer(args) => Some((
+            "POST",
+            task_path(&args.id, "/answer")?,
+            json!({"answer": args.answer}),
+        )),
+        Command::Execution {
+            command: ExecutionCommand::PhaseGate(args),
+        } => {
+            let action = match args.action {
+                PhaseGateActionArg::Continue => "continue",
+                PhaseGateActionArg::Replan => "replan",
+                PhaseGateActionArg::Withdraw => "withdraw",
+            };
+            Some((
+                "POST",
+                task_path(&args.task_id, "/execution/phase-gate")?,
+                json!({"action": action, "note": args.note}),
+            ))
+        }
+        Command::Execution {
+            command:
+                ExecutionCommand::Plan {
+                    command: ExecutionPlanCommand::Replan(args),
+                },
+        } => {
+            let raw = execution_cmd::read_plan_file(&args.file)?;
+            let body: serde_json::Value = serde_json::from_str(&raw)
+                .map_err(|e| CliError::msg(format!("plan file is not JSON: {e}")))?;
+            Some(("PUT", task_path(&args.task_id, "/execution-plan")?, body))
+        }
+        Command::Execution {
+            command:
+                ExecutionCommand::Plan {
+                    command: ExecutionPlanCommand::Set(args),
+                },
+        } => {
+            let raw = execution_cmd::read_plan_file(&args.file)?;
+            let body: serde_json::Value = serde_json::from_str(&raw)
+                .map_err(|e| CliError::msg(format!("plan file is not JSON: {e}")))?;
+            Some(("POST", task_path(&args.task_id, "/execution-plan")?, body))
+        }
+        Command::Tree {
+            command: execution_cmd::TreeCommand::Adopt(args),
+        } => Some((
+            "POST",
+            task_path(&args.root, "/tree/adopt")?,
+            json!({"task_id": args.task, "stage": args.stage, "unit_key": args.unit}),
+        )),
+        Command::Cron { command, .. }
+            if !matches!(
+                command,
+                CronCommand::List | CronCommand::Show(_) | CronCommand::History(_)
+            ) =>
+        {
+            let (method, path, body) = cron_cmd::request_of(command.clone())?;
+            Some((
+                method,
+                format!("/api/v1{path}"),
+                body.unwrap_or_else(|| json!({})),
+            ))
+        }
+        Command::Models { command, .. } => {
+            models_cmd::request_of(command)?.map(|(method, path, body)| {
+                (
+                    method,
+                    format!("/api/v1{path}"),
+                    body.unwrap_or(serde_json::Value::Null),
+                )
+            })
+        }
+        // The API replay is the plain check; `--check`/`--apply` rebuild indexes in the local DB
+        // and have no API operation.
+        Command::Replay(args) if !args.check && !args.apply => {
+            Some(("POST", "/api/v1/replay".to_string(), json!({})))
+        }
+        _ => None,
+    })
+}
+
 fn main() -> ExitCode {
     let mut cli = Cli::parse();
     let cos_options = cos_ops::Options {
@@ -369,6 +479,30 @@ fn main() -> ExitCode {
                 }
             };
         }
+        // ADR 2026-10-09-cos-operations-all-mutations D3: subcommands whose domain request is a
+        // registered CoS operation go through `/cos/operations` with the run credential.
+        match cos_mapped(&cli.command) {
+            Ok(Some((method, path, body))) => {
+                let result = cos_ops::api_config(cos_options.api_url.as_deref()).and_then(|api| {
+                    cos_ops::send(&api, method, &path, body, &cos_options, Some(&credential))
+                });
+                return match result {
+                    Ok(value) => {
+                        println!("{value}");
+                        ExitCode::SUCCESS
+                    }
+                    Err(e) => {
+                        eprintln!("error: {e}");
+                        ExitCode::FAILURE
+                    }
+                };
+            }
+            Ok(None) => {}
+            Err(e) => {
+                eprintln!("error: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
         let read_only = matches!(
             &cli.command,
             Command::Ls(_)
@@ -378,6 +512,10 @@ fn main() -> ExitCode {
                 | Command::Projects { .. }
                 | Command::Routing { .. }
                 | Command::Config { .. }
+                | Command::Models {
+                    command: ModelsCommand::List(_),
+                    ..
+                }
                 | Command::Knowledge {
                     command: KnowledgeCommand::Search(_) | KnowledgeCommand::Get(_)
                 }
@@ -616,6 +754,331 @@ fn main() -> ExitCode {
         Err(e) => {
             eprintln!("error: {}", error::render(&e));
             ExitCode::FAILURE
+        }
+    }
+}
+
+#[cfg(test)]
+mod cos_mapping_tests {
+    use super::*;
+
+    fn parse(args: &[&str]) -> Command {
+        Cli::try_parse_from(std::iter::once("celerisctl").chain(args.iter().copied()))
+            .expect("parse")
+            .command
+    }
+
+    /// ADR 2026-10-09-cos-operations-all-mutations D3: subcommands of registered operations map to
+    /// the same domain request the API registry allows; others stay unmapped (refused under CoS).
+    #[test]
+    fn cos_mapped_subcommands_match_registered_operations() {
+        let id = task_core::TaskId::new();
+        let (method, path, body) = cos_mapped(&parse(&["retry", &id.to_string(), "--draft"]))
+            .expect("map")
+            .expect("mapped");
+        assert_eq!(method, "POST");
+        assert_eq!(path, format!("/api/v1/tasks/{id}/retry"));
+        assert_eq!(body, serde_json::json!({"accept": false}));
+        let (_, path, body) = cos_mapped(&parse(&["answer", &id.to_string(), "はい"]))
+            .expect("map")
+            .expect("mapped");
+        assert_eq!(path, format!("/api/v1/tasks/{id}/answer"));
+        assert_eq!(body["answer"], "はい");
+        let (_, path, body) = cos_mapped(&parse(&[
+            "execution",
+            "phase-gate",
+            &id.to_string(),
+            "replan",
+            "--note",
+            "直す",
+        ]))
+        .expect("map")
+        .expect("mapped");
+        assert_eq!(path, format!("/api/v1/tasks/{id}/execution/phase-gate"));
+        assert_eq!(
+            body,
+            serde_json::json!({"action": "replan", "note": "直す"})
+        );
+        let (method, path, body) = cos_mapped(&parse(&[
+            "execution",
+            "plan",
+            "set",
+            &id.to_string(),
+            "--file",
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../task-api/tests/fixtures/browser-plan.json"
+            ),
+        ]))
+        .expect("map")
+        .expect("mapped");
+        assert_eq!(method, "POST");
+        assert_eq!(path, format!("/api/v1/tasks/{id}/execution-plan"));
+        assert_eq!(body["schema"], "celeris.execution-plan/3");
+        let (method, path, body) = cos_mapped(&parse(&[
+            "tree",
+            "adopt",
+            &id.to_string(),
+            "--task",
+            &task_core::TaskId::new().to_string(),
+            "--stage",
+            "s1",
+            "--unit",
+            "u1",
+        ]))
+        .expect("map")
+        .expect("mapped");
+        assert_eq!(method, "POST");
+        assert_eq!(path, format!("/api/v1/tasks/{id}/tree/adopt"));
+        assert_eq!(body["stage"], "s1");
+        assert_eq!(body["unit_key"], "u1");
+        let (method, path, body) = cos_mapped(&parse(&["cron", "pause", "daily"]))
+            .expect("map")
+            .expect("mapped");
+        assert_eq!(
+            (method, path.as_str(), body),
+            (
+                "POST",
+                "/api/v1/cron-jobs/daily/pause",
+                serde_json::json!({})
+            )
+        );
+        let (method, path, body) = cos_mapped(&parse(&[
+            "cron",
+            "update",
+            "daily",
+            "--schedule",
+            "0 5 * * *",
+        ]))
+        .expect("map")
+        .expect("mapped");
+        assert_eq!(
+            (method, path.as_str()),
+            ("PATCH", "/api/v1/cron-jobs/daily")
+        );
+        assert_eq!(body, serde_json::json!({"schedule": "0 5 * * *"}));
+        assert!(
+            cos_mapped(&parse(&["cron", "list"]))
+                .expect("map")
+                .is_none()
+        );
+        assert!(
+            cos_mapped(&parse(&["knowledge", "reindex"]))
+                .expect("map")
+                .is_none()
+        );
+        // The task gates go through task.approve/reject/accept/cancel.
+        for (verb, tail) in [
+            ("approve", "/approve"),
+            ("reject", "/reject"),
+            ("accept", "/accept"),
+            ("cancel", "/cancel"),
+            ("rereview", "/rereview"),
+        ] {
+            let (method, path, _) = cos_mapped(&parse(&[verb, &id.to_string()]))
+                .expect("map")
+                .expect("mapped");
+            assert_eq!(method, "POST");
+            assert_eq!(path, format!("/api/v1/tasks/{id}{tail}"));
+        }
+        // ops-admin-config: model catalog and the API replay go through their operations.
+        let (method, path, body) =
+            cos_mapped(&parse(&["models", "discover", "--source", "opencode-go"]))
+                .expect("map")
+                .expect("mapped");
+        assert_eq!(
+            (method, path.as_str()),
+            ("POST", "/api/v1/llm/models/discover")
+        );
+        assert_eq!(body, serde_json::json!({"source": "opencode-go"}));
+        let (method, path, body) = cos_mapped(&parse(&[
+            "models",
+            "assign",
+            "opencode-go",
+            "cheap",
+            "glm-5",
+        ]))
+        .expect("map")
+        .expect("mapped");
+        assert_eq!(
+            (method, path.as_str()),
+            ("PUT", "/api/v1/llm/models/assignments/opencode-go/cheap")
+        );
+        assert_eq!(body["model_id"], "glm-5");
+        let (method, path, _) = cos_mapped(&parse(&["models", "unassign", "opencode-go", "cheap"]))
+            .expect("map")
+            .expect("mapped");
+        assert_eq!(
+            (method, path.as_str()),
+            ("DELETE", "/api/v1/llm/models/assignments/opencode-go/cheap")
+        );
+        assert!(
+            cos_mapped(&parse(&["models", "list"]))
+                .expect("map")
+                .is_none()
+        );
+        let (method, path, _) = cos_mapped(&parse(&["replay"]))
+            .expect("map")
+            .expect("mapped");
+        assert_eq!((method, path.as_str()), ("POST", "/api/v1/replay"));
+        assert!(
+            cos_mapped(&parse(&["replay", "--apply"]))
+                .expect("map")
+                .is_none()
+        );
+    }
+
+    /// Rows of `config/skills/cos-operator/operations.md` (pinned to the API `ALLOWED` by the task-api
+    /// test `cos_operator_skill_table_matches_allowed`), as (method, path pattern).
+    fn skill_allowed_rows() -> Vec<(String, String)> {
+        let text = include_str!("../../../config/skills/cos-operator/operations.md");
+        let table = text
+            .split("## 除外する操作")
+            .next()
+            .expect("operations table");
+        table
+            .lines()
+            .filter_map(|line| {
+                let cell = line.split('|').nth(2)?.trim().trim_matches('`');
+                let (method, path) = cell.split_once(' ')?;
+                (matches!(method, "POST" | "PUT" | "PATCH" | "DELETE")
+                    && path.starts_with("/api/v1/"))
+                .then(|| (method.to_string(), path.to_string()))
+            })
+            .collect()
+    }
+
+    fn matches_row(pattern: &str, path: &str) -> bool {
+        let p: Vec<_> = pattern.split('/').collect();
+        let s: Vec<_> = path.split('/').collect();
+        p.len() == s.len()
+            && p.iter()
+                .zip(&s)
+                .all(|(p, s)| (p.starts_with('<') && p.ends_with('>') && !s.is_empty()) || p == s)
+    }
+
+    /// ops-closeout (ADR 2026-10-09-cos-operations-all-mutations D3): every mutating subcommand whose
+    /// API route is ALLOWED is wrapped into `/cos/operations` under a CoS credential, and the
+    /// wrapped request is a registered row. Local-only commands stay unmapped (refused under CoS).
+    #[test]
+    fn cos_mapped_table_wraps_every_allowed_subcommand() {
+        let id = task_core::TaskId::new().to_string();
+        let child = task_core::TaskId::new().to_string();
+        let plan = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../task-api/tests/fixtures/browser-plan.json"
+        );
+        let t = |tail: &str| format!("/api/v1/tasks/{id}{tail}");
+        let table: Vec<(Vec<&str>, &str, String)> = vec![
+            (vec!["approve", &id], "POST", t("/approve")),
+            (vec!["reject", &id], "POST", t("/reject")),
+            (vec!["accept", &id], "POST", t("/accept")),
+            (vec!["cancel", &id], "POST", t("/cancel")),
+            (vec!["rereview", &id], "POST", t("/rereview")),
+            (vec!["retry", &id], "POST", t("/retry")),
+            (vec!["answer", &id, "はい"], "POST", t("/answer")),
+            (
+                vec!["execution", "phase-gate", &id, "continue"],
+                "POST",
+                t("/execution/phase-gate"),
+            ),
+            (
+                vec!["execution", "plan", "set", &id, "--file", plan],
+                "POST",
+                t("/execution-plan"),
+            ),
+            (
+                vec!["execution", "plan", "replan", &id, "--file", plan],
+                "PUT",
+                t("/execution-plan"),
+            ),
+            (
+                vec![
+                    "tree", "adopt", &id, "--task", &child, "--stage", "s1", "--unit", "u1",
+                ],
+                "POST",
+                t("/tree/adopt"),
+            ),
+            (
+                vec!["cron", "pause", "daily"],
+                "POST",
+                "/api/v1/cron-jobs/daily/pause".into(),
+            ),
+            (
+                vec!["cron", "resume", "daily"],
+                "POST",
+                "/api/v1/cron-jobs/daily/resume".into(),
+            ),
+            (
+                vec!["cron", "run", "daily"],
+                "POST",
+                "/api/v1/cron-jobs/daily/run".into(),
+            ),
+            (
+                vec!["cron", "update", "daily", "--schedule", "0 5 * * *"],
+                "PATCH",
+                "/api/v1/cron-jobs/daily".into(),
+            ),
+            (
+                vec![
+                    "cron",
+                    "create",
+                    "--name",
+                    "daily",
+                    "--schedule",
+                    "0 5 * * *",
+                    "--timezone",
+                    "Asia/Tokyo",
+                    "--template",
+                    "{}",
+                ],
+                "POST",
+                "/api/v1/cron-jobs".into(),
+            ),
+            (
+                vec!["models", "discover", "--source", "opencode-go"],
+                "POST",
+                "/api/v1/llm/models/discover".into(),
+            ),
+            (
+                vec!["models", "assign", "opencode-go", "cheap", "glm-5"],
+                "PUT",
+                "/api/v1/llm/models/assignments/opencode-go/cheap".into(),
+            ),
+            (
+                vec!["models", "unassign", "opencode-go", "cheap"],
+                "DELETE",
+                "/api/v1/llm/models/assignments/opencode-go/cheap".into(),
+            ),
+            (vec!["replay"], "POST", "/api/v1/replay".into()),
+        ];
+        let rows = skill_allowed_rows();
+        assert!(rows.len() > 50, "operations.md table not parsed: {rows:?}");
+        for (argv, method, path) in &table {
+            let (got_method, got_path, _) = cos_mapped(&parse(argv))
+                .unwrap_or_else(|e| panic!("{argv:?}: {e}"))
+                .unwrap_or_else(|| panic!("{argv:?} is not wrapped into /cos/operations"));
+            assert_eq!(
+                (got_method, got_path.as_str()),
+                (*method, path.as_str()),
+                "{argv:?}"
+            );
+            assert!(
+                rows.iter()
+                    .any(|(m, p)| m == method && matches_row(p, path)),
+                "{argv:?}: {method} {path} is not an ALLOWED row"
+            );
+        }
+        for argv in [
+            vec!["cron", "list"],
+            vec!["models", "list"],
+            vec!["replay", "--apply"],
+            vec!["knowledge", "reindex"],
+        ] {
+            assert!(
+                cos_mapped(&parse(&argv)).expect("map").is_none(),
+                "{argv:?}"
+            );
         }
     }
 }

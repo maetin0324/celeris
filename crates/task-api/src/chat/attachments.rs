@@ -350,7 +350,7 @@ async fn delete(
 ) -> ApiResult {
     no_query(&raw)?;
     authorize(&state, &headers)?;
-    open(&state)?.delete_unreferenced(&id).map_err(error)?;
+    crate::cos::operations::effect_result(delete_effect(&state, &id))?;
     let mut response = axum::http::Response::new(Body::empty());
     *response.status_mut() = StatusCode::NO_CONTENT;
     Ok(response)
@@ -492,4 +492,93 @@ pub(crate) fn add_reference_op(
         }
     });
     outcome.map_err(|problem| failure.unwrap_or(problem))
+}
+
+/// Whether an attachment store failure happened before any file or row changed (a refusal),
+/// as opposed to an I/O or database failure whose outcome is unknown.
+fn refused(err: &AttachmentError) -> bool {
+    matches!(
+        err,
+        AttachmentError::Limit
+            | AttachmentError::Conflict
+            | AttachmentError::NotFound
+            | AttachmentError::InvalidPath
+    )
+}
+
+/// The C effect result of an attachment store call (ADR 2026-10-09-cos-operations-external-effects).
+fn attachment_effect<T>(result: Result<T, AttachmentError>) -> crate::cos::operations::Effect<T> {
+    match result {
+        Ok(value) => Ok(Ok(value)),
+        Err(err) if refused(&err) => Ok(Err(error(err))),
+        Err(err) => Err(error(err)),
+    }
+}
+
+/// CoS form of `POST /chat/threads/{t}/attachments` (multipart has no JSON envelope): the file is
+/// `content_base64`, decoded and size-checked before anything is written.
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CosUploadBody {
+    pub(crate) client_upload_id: String,
+    pub(crate) name: String,
+    pub(crate) content_base64: String,
+}
+
+/// Decode and check a CoS upload before its operation record is opened.
+pub(crate) fn decode_upload(state: &ApiState, body: &CosUploadBody) -> Result<Vec<u8>, ApiProblem> {
+    if body.client_upload_id.is_empty() || body.client_upload_id.len() > 256 {
+        return Err(ApiProblem::bad_request("invalid client_upload_id"));
+    }
+    if body.name.is_empty() {
+        return Err(ApiProblem::bad_request("file name is required"));
+    }
+    use base64::Engine as _;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(body.content_base64.as_bytes())
+        .map_err(|e| ApiProblem::bad_request(format!("content_base64: {e}")))?;
+    if bytes.len() as u64 > state.chat.attachment_limits.max_file_bytes {
+        return Err(error(AttachmentError::Limit));
+    }
+    Ok(bytes)
+}
+
+/// `chat.attachment_upload` effect: the same attachment store write as the multipart route.
+pub(crate) fn upload_effect(
+    state: &ApiState,
+    db: &task_core::store::SqliteStore,
+    thread: &str,
+    body: &CosUploadBody,
+    bytes: Vec<u8>,
+) -> crate::cos::operations::Effect<ChatAttachmentResponse> {
+    if let Err(problem) = db.chat_thread_detail(thread).map_err(chat_problem) {
+        return Ok(Err(problem));
+    }
+    let store = match open(state) {
+        Ok(store) => store,
+        Err(problem) => return Ok(Err(problem)),
+    };
+    let size = bytes.len() as u64;
+    let created = match attachment_effect(store.upload(
+        thread,
+        &body.client_upload_id,
+        &body.name,
+        Some(size),
+        std::io::Cursor::new(bytes),
+        OffsetDateTime::now_utc(),
+    ))? {
+        Ok(row) => row,
+        Err(problem) => return Ok(Err(problem)),
+    };
+    representation(state, &store, created)
+        .map(|attachment| Ok(ChatAttachmentResponse { attachment }))
+}
+
+/// `DELETE /chat/attachments/{a}` effect, shared by the route and `chat.attachment_delete`.
+pub(crate) fn delete_effect(state: &ApiState, id: &str) -> crate::cos::operations::Effect<()> {
+    let store = match open(state) {
+        Ok(store) => store,
+        Err(problem) => return Ok(Err(problem)),
+    };
+    attachment_effect(store.delete_unreferenced(id))
 }

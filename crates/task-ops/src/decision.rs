@@ -535,28 +535,33 @@ pub fn answer(
     now: OffsetDateTime,
 ) -> Result<DecisionOutcome, OpsError> {
     let plan = plan_answer(store, id, option, note, by, now)?;
-    if !store.decision_resolve_apply(
-        plan.node_id,
-        &plan.decision_id,
-        DecisionStatus::Open,
-        plan.plan.rows.clone(),
-        plan.plan.events.clone(),
-    )? {
-        let current = get_row(store, id)?;
-        return Err(not_open(&current, "answered"));
-    }
+    apply_plan(store, &plan)?;
     finish_answer(store, plan, now)
 }
 
-/// 回答の書き込み計画（読むだけ）。`decision_resolve_apply(node_id, decision_id, Open, rows, events)`
-/// で書き、結果を [`finish_answer`] に渡す。CoS の操作（ADR 2026-10-05 D3）は同じ計画を監査と同じ
-/// トランザクションで `SqliteStore::decision_resolve_apply_tx` に渡す。
+/// 決定への書き込み計画（読むだけ）。回答・取り下げ・訂正が同じ形を使う。
+/// `decision_resolve_apply(node_id, decision_id, expect, rows, events)` で書き、結果を [`finish_answer`] に渡す。
+/// CoS の操作（ADR 2026-10-05 D3・ADR 2026-10-09 D5）は同じ計画を監査と同じトランザクションで
+/// `SqliteStore::decision_resolve_apply_tx` に渡す。
 #[derive(Debug, Clone)]
 pub struct AnswerPlan {
     pub node_id: TaskId,
     pub decision_id: String,
+    /// 書き込み時に期待する決定の状態（回答・取り下げは `Open`、訂正は `Answered`）。
+    pub expect: DecisionStatus,
+    /// 競合（期待した状態でない）のときの 409 に載せる動詞。
+    pub verb: &'static str,
     effect: DecisionEffect,
     plan: Plan,
+    /// 訂正だけ: 既に作られた子へ新しい答えをコメントで届ける（commit 後の後始末）。
+    revise: Option<RevisePlan>,
+}
+
+#[derive(Debug, Clone)]
+struct RevisePlan {
+    row: DecisionRow,
+    line: String,
+    by: String,
 }
 
 impl AnswerPlan {
@@ -567,6 +572,21 @@ impl AnswerPlan {
     pub fn events(&self) -> Vec<Event> {
         self.plan.events.clone()
     }
+}
+
+/// 計画を書く（監査なしの経路）。期待した状態でなくなっていれば 409。
+pub fn apply_plan(store: &dyn TaskStore, plan: &AnswerPlan) -> Result<(), OpsError> {
+    if !store.decision_resolve_apply(
+        plan.node_id,
+        &plan.decision_id,
+        plan.expect,
+        plan.rows(),
+        plan.events(),
+    )? {
+        let current = get_row(store, &plan.decision_id)?;
+        return Err(not_open(&current, plan.verb));
+    }
+    Ok(())
 }
 
 pub fn plan_answer(
@@ -603,12 +623,15 @@ pub fn plan_answer(
     Ok(AnswerPlan {
         node_id: node.id,
         decision_id: row.id,
+        expect: DecisionStatus::Open,
+        verb: "answered",
         effect,
         plan,
+        revise: None,
     })
 }
 
-/// 書いた後の後始末（`self` の取り下げなら節点を中止）と結果。
+/// 書いた後の後始末（`self` の取り下げなら節点を中止、訂正なら既にある子へのコメント）と結果。
 pub fn finish_answer(
     store: &dyn TaskStore,
     plan: AnswerPlan,
@@ -619,6 +642,40 @@ pub fn finish_answer(
         cancel_node(store, plan.node_id, now)?;
         cancelled_task = Some(plan.node_id);
     }
+    let mut notified = Vec::new();
+    if let Some(revise) = &plan.revise {
+        // 既に作られた子（この決定を待っていた kind task の unit の子）にコメントで届ける。
+        let row = &revise.row;
+        for u in store.work_units_for(plan.node_id)? {
+            let waits = u.needs_decisions.contains(&row.key) || names_unit(&row.request, &u);
+            let Some(child) = u
+                .child_task_id
+                .as_deref()
+                .and_then(|s| s.parse::<TaskId>().ok())
+            else {
+                continue;
+            };
+            if !waits {
+                continue;
+            }
+            if store.get(child)?.is_none_or(|t| t.status.is_terminal()) {
+                continue;
+            }
+            crate::comment::post_node_comment(
+                store,
+                child,
+                Some(revise.by.clone()),
+                None,
+                format!(
+                    "{}（回答を変更しました。作り直しはしません）\n{}",
+                    task_ops_decisions_heading(),
+                    revise.line
+                ),
+                now,
+            )?;
+            notified.push(child);
+        }
+    }
     Ok(DecisionOutcome {
         decision: DecisionView::from_row(&get_row(store, &plan.decision_id)?),
         effect: plan.effect,
@@ -626,7 +683,7 @@ pub fn finish_answer(
         cancelled: plan.plan.cancelled,
         replan_requested: plan.plan.replan_requested,
         cancelled_task,
-        notified_children: Vec::new(),
+        notified_children: notified,
     })
 }
 
@@ -639,6 +696,19 @@ pub fn withdraw(
     by: &str,
     now: OffsetDateTime,
 ) -> Result<DecisionOutcome, OpsError> {
+    let plan = plan_withdraw(store, id, reason, by, now)?;
+    apply_plan(store, &plan)?;
+    finish_answer(store, plan, now)
+}
+
+/// [`withdraw`] の書き込み計画（読むだけ）。
+pub fn plan_withdraw(
+    store: &dyn TaskStore,
+    id: &str,
+    reason: Option<&str>,
+    by: &str,
+    now: OffsetDateTime,
+) -> Result<AnswerPlan, OpsError> {
     let row = get_row(store, id)?;
     if row.status != DecisionStatus::Open {
         return Err(not_open(
@@ -653,7 +723,7 @@ pub fn withdraw(
     };
     let mut after_row = row.clone();
     after_row.apply_withdrawal(&reason);
-    let plan = plan_effect(
+    let mut plan = plan_effect(
         store,
         &node,
         &row,
@@ -667,24 +737,18 @@ pub fn withdraw(
         id: row.id.clone(),
         reason,
     }];
-    events.extend(plan.events);
-    if !store.decision_resolve_apply(node.id, &row.id, DecisionStatus::Open, plan.rows, events)? {
-        let current = get_row(store, id)?;
-        return Err(not_open(&current, "withdrawn"));
-    }
-    let mut cancelled_task = None;
-    if plan.cancel_node {
-        cancel_node(store, node.id, now)?;
-        cancelled_task = Some(node.id);
-    }
-    Ok(DecisionOutcome {
-        decision: DecisionView::from_row(&get_row(store, id)?),
+    events.append(&mut plan.events);
+    plan.events = events;
+    plan.resumed = Vec::new();
+    plan.replan_requested = false;
+    Ok(AnswerPlan {
+        node_id: node.id,
+        decision_id: row.id,
+        expect: DecisionStatus::Open,
+        verb: "withdrawn",
         effect: DecisionEffect::Withdraw,
-        resumed: Vec::new(),
-        cancelled: plan.cancelled,
-        replan_requested: false,
-        cancelled_task,
-        notified_children: Vec::new(),
+        plan,
+        revise: None,
     })
 }
 
@@ -700,6 +764,20 @@ pub fn revise(
     by: &str,
     now: OffsetDateTime,
 ) -> Result<DecisionOutcome, OpsError> {
+    let plan = plan_revise(store, id, option, note, by, now)?;
+    apply_plan(store, &plan)?;
+    finish_answer(store, plan, now)
+}
+
+/// [`revise`] の書き込み計画（読むだけ）。
+pub fn plan_revise(
+    store: &dyn TaskStore,
+    id: &str,
+    option: Option<&str>,
+    note: Option<&str>,
+    by: &str,
+    now: OffsetDateTime,
+) -> Result<AnswerPlan, OpsError> {
     let row = get_row(store, id)?;
     if row.status != DecisionStatus::Answered {
         return Err(not_open(
@@ -725,56 +803,26 @@ pub fn revise(
         note: note.map(str::to_string),
         by: by.to_string(),
     }];
-    if !store.decision_resolve_apply(
-        node.id,
-        &row.id,
-        DecisionStatus::Answered,
-        Vec::new(),
-        events,
-    )? {
-        let current = get_row(store, id)?;
-        return Err(not_open(&current, "revised"));
-    }
-    // 既に作られた子（この決定を待っていた kind task の unit の子）にコメントで届ける。
-    let mut notified = Vec::new();
-    if let Some(line) = decision::answer_line(&after_row.request) {
-        for u in store.work_units_for(node.id)? {
-            let waits = u.needs_decisions.contains(&row.key) || names_unit(&row.request, &u);
-            let Some(child) = u
-                .child_task_id
-                .as_deref()
-                .and_then(|s| s.parse::<TaskId>().ok())
-            else {
-                continue;
-            };
-            if !waits {
-                continue;
-            }
-            if store.get(child)?.is_none_or(|t| t.status.is_terminal()) {
-                continue;
-            }
-            crate::comment::post_node_comment(
-                store,
-                child,
-                Some(by.to_string()),
-                None,
-                format!(
-                    "{}（回答を変更しました。作り直しはしません）\n{line}",
-                    task_ops_decisions_heading()
-                ),
-                now,
-            )?;
-            notified.push(child);
-        }
-    }
-    Ok(DecisionOutcome {
-        decision: DecisionView::from_row(&get_row(store, id)?),
+    let revise = decision::answer_line(&after_row.request).map(|line| RevisePlan {
+        row: row.clone(),
+        line,
+        by: by.to_string(),
+    });
+    Ok(AnswerPlan {
+        node_id: node.id,
+        decision_id: row.id,
+        expect: DecisionStatus::Answered,
+        verb: "revised",
         effect: DecisionEffect::Resume,
-        resumed: Vec::new(),
-        cancelled: Vec::new(),
-        replan_requested: false,
-        cancelled_task: None,
-        notified_children: notified,
+        plan: Plan {
+            rows: Vec::new(),
+            events,
+            resumed: Vec::new(),
+            cancelled: Vec::new(),
+            replan_requested: false,
+            cancel_node: false,
+        },
+        revise,
     })
 }
 

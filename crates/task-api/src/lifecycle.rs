@@ -18,6 +18,7 @@ use serde::Deserialize;
 use task_ops::lifecycle;
 use time::OffsetDateTime;
 
+use crate::cos::operations::{Applied, OperationAudit};
 use crate::handlers::{ApiResult, Params, json_response, no_query, parse_project_id, read_json};
 use crate::middleware::require_admin;
 use crate::problem::{ApiProblem, ops_problem};
@@ -36,16 +37,73 @@ pub struct MilestoneLifecycle {
 /// 本文は取らない（`{}` か空）。余計なキーは 422。
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct EmptyBody {}
+pub(crate) struct EmptyBody {}
 
-/// 案件の 5 つの操作（URL の末尾）。
-#[derive(Debug, Clone, Copy)]
-enum ProjectAction {
-    Cancel,
-    Pause,
-    Resume,
-    Archive,
-    Unarchive,
+use lifecycle::ProjectAction;
+
+fn project_trigger(action: ProjectAction) -> &'static str {
+    match action {
+        ProjectAction::Cancel => "project_cancel",
+        ProjectAction::Pause => "project_pause",
+        ProjectAction::Resume => "project_resume",
+        ProjectAction::Archive => "project_archive",
+        ProjectAction::Unarchive => "project_unarchive",
+    }
+}
+
+/// The CoS action name of a project lifecycle operation.
+pub(crate) fn project_action_name(action: ProjectAction) -> &'static str {
+    match action {
+        ProjectAction::Cancel => "project.cancel",
+        ProjectAction::Pause => "project.pause",
+        ProjectAction::Resume => "project.resume",
+        ProjectAction::Archive => "project.archive",
+        ProjectAction::Unarchive => "project.unarchive",
+    }
+}
+
+/// `POST /projects/{id}/{cancel|pause|resume|archive|unarchive}` shared by the handler
+/// (`audit = None`) and `/cos/operations` (ADR 2026-10-09-cos-operations-all-mutations D3). The
+/// CoS form checks with `plan_project_action` and writes the project change, the cancel cascade
+/// and the audit record in one transaction.
+pub(crate) fn project_action_op(
+    store: &task_core::store::SqliteStore,
+    project_id: task_core::ProjectId,
+    action: ProjectAction,
+    audit: Option<&OperationAudit>,
+) -> Result<Applied<lifecycle::ProjectLifecycle>, ApiProblem> {
+    let trigger = project_trigger(action);
+    let now = OffsetDateTime::now_utc();
+    let Some(audit) = audit else {
+        let outcome = match action {
+            ProjectAction::Cancel => lifecycle::cancel_project(store, project_id),
+            ProjectAction::Pause => lifecycle::pause_project(store, project_id),
+            ProjectAction::Resume => lifecycle::resume_project(store, project_id),
+            ProjectAction::Archive => lifecycle::archive_project(store, project_id, now),
+            ProjectAction::Unarchive => lifecycle::unarchive_project(store, project_id),
+        };
+        return outcome
+            .map(Applied::Direct)
+            .map_err(|e| ops_problem(store, e, Some(trigger)));
+    };
+    let target_id = project_id.to_string();
+    let change = lifecycle::plan_project_action(store, project_id, action, now).map_err(|e| {
+        audit.reject(
+            store,
+            "project",
+            &target_id,
+            ops_problem(store, e, Some(trigger)),
+        )
+    })?;
+    let name = project_action_name(action);
+    let operation = audit.apply(store, "project", &target_id, name, |tx| {
+        let cancelled = lifecycle::apply_project_change_tx(tx, project_id, &change)?;
+        Ok(serde_json::json!({
+            "project_id": target_id,
+            "cancelled_tasks": cancelled.iter().map(ToString::to_string).collect::<Vec<_>>(),
+        }))
+    })?;
+    Ok(Applied::Audited(Box::new(operation)))
 }
 
 async fn project_action(
@@ -60,26 +118,9 @@ async fn project_action(
     require_admin(&state, &headers)?;
     let project_id = parse_project_id(&id)?;
     let EmptyBody {} = read_json(body, true).await?;
-    let trigger = match action {
-        ProjectAction::Cancel => "project_cancel",
-        ProjectAction::Pause => "project_pause",
-        ProjectAction::Resume => "project_resume",
-        ProjectAction::Archive => "project_archive",
-        ProjectAction::Unarchive => "project_unarchive",
-    };
+    let trigger = project_trigger(action);
     let result = state
-        .blocking(move |store| {
-            let outcome = match action {
-                ProjectAction::Cancel => lifecycle::cancel_project(store, project_id),
-                ProjectAction::Pause => lifecycle::pause_project(store, project_id),
-                ProjectAction::Resume => lifecycle::resume_project(store, project_id),
-                ProjectAction::Archive => {
-                    lifecycle::archive_project(store, project_id, OffsetDateTime::now_utc())
-                }
-                ProjectAction::Unarchive => lifecycle::unarchive_project(store, project_id),
-            };
-            outcome.map_err(|e| ops_problem(store, e, Some(trigger)))
-        })
+        .blocking(move |store| project_action_op(store, project_id, action, None)?.direct())
         .await?;
     tracing::info!(who = "admin", op = trigger, project_id = %project_id, status = %result.project.status.as_str(), "admin: project lifecycle");
     Ok(json_response(StatusCode::OK, &result))
@@ -110,18 +151,52 @@ async fn task_action(
     let EmptyBody {} = read_json(body, true).await?;
     let trigger = if pause { "task_pause" } else { "task_resume" };
     let result = state
-        .blocking(move |store| {
-            let now = OffsetDateTime::now_utc();
-            let outcome = if pause {
-                lifecycle::pause_task(store, task_id, now)
-            } else {
-                lifecycle::resume_task(store, task_id, now)
-            };
-            outcome.map_err(|e| ops_problem(store, e, Some(trigger)))
-        })
+        .blocking(move |store| task_pause_op(store, task_id, pause, None)?.direct())
         .await?;
     tracing::info!(who = "admin", op = trigger, task_id = %task_id, subtree = result.subtree.len(), "admin: task subtree lifecycle");
     Ok(json_response(StatusCode::OK, &result))
+}
+
+/// `POST /tasks/{id}/pause|resume` の本体。handler（`audit = None`、`by = human`）と CoS の
+/// `/cos/operations`（ADR 2026-10-09 D3/D5。`by = cos`、task の更新・`Edited` event・監査を同じ transaction）
+/// が共有する。
+pub(crate) fn task_pause_op(
+    store: &task_core::store::SqliteStore,
+    task_id: task_core::TaskId,
+    pause: bool,
+    audit: Option<&OperationAudit>,
+) -> Result<Applied<lifecycle::TaskPauseResult>, ApiProblem> {
+    let now = OffsetDateTime::now_utc();
+    let trigger = if pause { "task_pause" } else { "task_resume" };
+    let Some(audit) = audit else {
+        let outcome = if pause {
+            lifecycle::pause_task(store, task_id, now)
+        } else {
+            lifecycle::resume_task(store, task_id, now)
+        };
+        return outcome
+            .map(Applied::Direct)
+            .map_err(|e| ops_problem(store, e, Some(trigger)));
+    };
+    let target_id = task_id.to_string();
+    let (next, event) =
+        lifecycle::plan_set_paused(store, task_id, pause, "cos", now).map_err(|e| {
+            audit.reject(
+                store,
+                "task",
+                &target_id,
+                ops_problem(store, e, Some(trigger)),
+            )
+        })?;
+    let action = if pause { "task.pause" } else { "task.resume" };
+    let operation = audit.apply(store, "task", &target_id, action, |tx| {
+        let updated = task_core::store::SqliteStore::edit_task_tx(tx, &next, &event)?;
+        Ok(serde_json::json!({
+            "task_id": target_id,
+            "paused": updated.paused_at.is_some(),
+        }))
+    })?;
+    Ok(Applied::Audited(Box::new(operation)))
 }
 
 macro_rules! project_handler {

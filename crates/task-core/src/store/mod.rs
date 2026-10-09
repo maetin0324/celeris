@@ -105,6 +105,7 @@ mod execution;
 mod instances;
 mod integrations;
 mod legacy;
+pub use legacy::chat_legacy_new_conversation_tx;
 mod messages;
 mod model_catalog;
 pub use model_catalog::ModelCatalogStore;

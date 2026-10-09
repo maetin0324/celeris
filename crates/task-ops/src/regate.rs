@@ -73,6 +73,21 @@ pub fn set_execution_mode(
     note: Option<String>,
     now: OffsetDateTime,
 ) -> Result<DecomposeResult, OpsError> {
+    let (mut result, event) = plan_execution_mode(store, id, mode, source, note, now)?;
+    result.task = store.update_task(&result.task, event)?;
+    Ok(result)
+}
+
+/// Validate and construct the execution-mode update without writing. API operations use this
+/// plan so the task update, event, and CoS audit record can share one SQLite transaction.
+pub fn plan_execution_mode(
+    store: &dyn TaskStore,
+    id: TaskId,
+    mode: ExecutionMode,
+    source: &str,
+    note: Option<String>,
+    now: OffsetDateTime,
+) -> Result<(DecomposeResult, Event), OpsError> {
     let note = note.map(|n| n.trim().to_string()).filter(|n| !n.is_empty());
     if let Some(n) = &note
         && n.chars().count() > NOTE_MAX_CHARS
@@ -132,23 +147,23 @@ pub fn set_execution_mode(
     });
     task.routing = Some(routing);
     task.updated_at = now;
-    let task = store.update_task(
-        &task,
-        Event::ExecutionHintSet {
-            mode,
-            previous,
-            previous_decision: previous_decision.clone().map(Box::new),
-            source: source.to_string(),
-            note,
-            replan: has_plan,
-        },
-    )?;
-    Ok(DecomposeResult {
-        task,
+    let event = Event::ExecutionHintSet {
         mode,
+        previous,
+        previous_decision: previous_decision.clone().map(Box::new),
+        source: source.to_string(),
+        note,
         replan: has_plan,
-        previous_decision,
-    })
+    };
+    Ok((
+        DecomposeResult {
+            task,
+            mode,
+            replan: has_plan,
+            previous_decision,
+        },
+        event,
+    ))
 }
 
 /// ADR-0079「R5b-fix3」(D3 (d)): 人が計画を採用した（`PUT/POST /tasks/{id}/execution-plan`、`celerisctl

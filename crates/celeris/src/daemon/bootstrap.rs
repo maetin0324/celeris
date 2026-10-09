@@ -539,6 +539,14 @@ pub fn build_dispatcher(
             ..StoreOptions::default()
         },
     )?);
+    // External CoS mutations can outlive the process that initiated them. Never replay an
+    // uncertain side effect: surface old pending receipts for human remediation on startup.
+    const COS_EXTERNAL_PENDING_GRACE_SECS: i64 = 30 * 60;
+    sqlite
+        .cos_operation_remediate_stale(
+            OffsetDateTime::now_utc() - time::Duration::seconds(COS_EXTERNAL_PENDING_GRACE_SECS),
+        )
+        .map_err(|error| crate::DaemonError::CosOperationRecovery(error.to_string()))?;
     let store: Arc<dyn TaskStore> = sqlite.clone();
     seed_org_if_empty(store.as_ref(), config)?;
     seed_cron_if_empty(store.as_ref(), config, OffsetDateTime::now_utc())?;

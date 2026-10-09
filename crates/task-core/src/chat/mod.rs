@@ -28,6 +28,7 @@ pub use override_op::{OverrideAction, OverrideResult};
 pub use run_store::{
     CHAT_EVENT_PAGE_DEFAULT, CHAT_EVENT_PAGE_MAX, CHAT_EVENT_RETENTION_DAYS,
     CHAT_TOOL_DETAIL_MAX_BYTES, ChatEventQuery, ChatStopOutcome, chat_run_state_is_terminal,
+    chat_run_stop_tx,
 };
 pub use session::{
     COS_CHAT_SESSION_KIND, COS_CHAT_SESSION_NODE, ChatRunSessionMode, ChatRunSessionRecord,
@@ -37,7 +38,9 @@ pub use store::{
     CHAT_CLIENT_KEY_MAX_BYTES, CHAT_MESSAGE_ATTACHMENTS_MAX, CHAT_MESSAGE_PAGE_DEFAULT,
     CHAT_MESSAGE_PAGE_MAX, CHAT_MESSAGE_TEXT_MAX_BYTES, CHAT_QUEUE_MAX, CHAT_THREAD_PAGE_DEFAULT,
     CHAT_THREAD_PAGE_MAX, CHAT_TITLE_MAX_CHARS, ChatError, ChatMessagePosted, ChatMessageQuery,
-    ChatThreadCreated, ChatThreadQuery, chat_fts_literal,
+    ChatThreadCreated, ChatThreadQuery, chat_fts_literal, chat_message_cancel_tx,
+    chat_message_post_cos_tx, chat_thread_create_tx, chat_thread_patch_tx,
+    chat_thread_resume_queue_tx,
 };
 
 macro_rules! wire_enum {

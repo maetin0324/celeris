@@ -794,6 +794,29 @@ impl TaskStore for SqliteStore {
         )
     }
 
+    fn execution_plan_adopt_tree_tx(
+        &self,
+        tx: &rusqlite::Connection,
+        task_id: TaskId,
+        plan: ExecutionPlanRow,
+        work_units: Vec<WorkUnitRow>,
+        extra_events: Vec<Event>,
+        event: Event,
+        after_events: Vec<Event>,
+        adoptions: Vec<TreeAdoption>,
+    ) -> Result<bool, StoreError> {
+        SqliteStore::execution_plan_adopt_tree_tx(
+            tx,
+            task_id,
+            plan,
+            work_units,
+            extra_events,
+            event,
+            after_events,
+            adoptions,
+        )
+    }
+
     fn tree_adopt_apply(
         &self,
         owner_id: TaskId,
@@ -804,6 +827,27 @@ impl TaskStore for SqliteStore {
         adoption: TreeAdoption,
     ) -> Result<bool, StoreError> {
         self.tree_adopt_apply_impl(
+            owner_id,
+            unit_id,
+            expect_unit_status,
+            updated,
+            events,
+            adoption,
+        )
+    }
+
+    fn tree_adopt_apply_tx(
+        &self,
+        tx: &rusqlite::Connection,
+        owner_id: TaskId,
+        unit_id: &str,
+        expect_unit_status: WorkUnitStatus,
+        updated: Vec<WorkUnitRow>,
+        events: Vec<Event>,
+        adoption: TreeAdoption,
+    ) -> Result<bool, StoreError> {
+        SqliteStore::tree_adopt_apply_tx(
+            tx,
             owner_id,
             unit_id,
             expect_unit_status,

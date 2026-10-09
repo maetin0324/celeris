@@ -8,6 +8,20 @@ use crate::transition::{Outcome, StateView, Trigger, transition};
 use super::{SqliteStore, StoreError, format_rfc3339, kind_str, status_str};
 
 impl SqliteStore {
+    /// The current status of a task read on `tx` (`None` when it does not exist), for cascades
+    /// that re-check each task inside one caller-owned transaction.
+    pub fn task_status_tx(tx: &Connection, task_id: TaskId) -> Result<Option<Status>, StoreError> {
+        let json: Option<String> = tx
+            .query_row(
+                "SELECT json FROM tasks WHERE id = ?1",
+                params![task_id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()?;
+        json.map(|json| Self::row_to_task(json).map(|task| task.status))
+            .transpose()
+    }
+
     /// `apply_transition_with_events` の本体（ADR-0004 D1 / ADR-0005 D4）。`tx` 内で任意のトリガーを
     /// 検証し、tasks の更新と Event::Transitioned (+ extra_events) の追記を行う。commit は呼び出し側。
     pub fn apply_transition_tx(

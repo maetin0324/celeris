@@ -103,7 +103,7 @@ async fn cos_chat_ops_api_rejects_paths_outside_the_allowlist_with_reasoned_even
         ("dots", "POST", "/api/v1/tasks/../providers"),
         ("recursive", "POST", "/api/v1/cos/operations"),
         ("checkpoint", "POST", "/api/v1/cos/threads/t/checkpoint"),
-        ("unregistered", "POST", "/api/v1/providers"),
+        ("unregistered", "POST", "/api/v1/no-such-route"),
         ("method", "DELETE", "/api/v1/tasks"),
         ("query", "POST", "/api/v1/tasks?x=1"),
     ];
@@ -135,7 +135,7 @@ async fn cos_chat_ops_api_rejects_paths_outside_the_allowlist_with_reasoned_even
         .map(|(_, e)| e["reason"].as_str().unwrap_or_default().to_string())
         .collect();
     assert!(reasons.iter().any(|r| r.contains("not a URL or host")));
-    assert!(reasons.iter().any(|r| r.contains("recursively")));
+    assert!(reasons.iter().any(|r| r.contains("recursive_cos")));
     assert!(
         reasons
             .iter()
@@ -505,11 +505,11 @@ async fn cos_chat_ops_api_rejects_unregistered_operations_regardless_of_skill() 
     let app = env.router();
     let (_thread, _run, bearer) = cos_bearer(&env, "noskill");
     let cases = [
-        ("plan", "PUT", "/api/v1/tasks/t1/execution-plan"),
-        ("pause", "POST", "/api/v1/tasks/t1/pause"),
-        ("resume", "POST", "/api/v1/tasks/t1/resume"),
-        ("project-pause", "POST", "/api/v1/projects/p1/pause"),
-        ("standing", "POST", "/api/v1/standing-rules"),
+        // Excluded by the human decision, and paths no registry knows (cron, project lifecycle and
+        // standing rules are registered since ADR 2026-10-09-cos-operations-all-mutations D3).
+        ("console", "POST", "/api/v1/console/instruct"),
+        ("secret", "PUT", "/api/v1/secrets/s1"),
+        ("unknown", "POST", "/api/v1/no-such-route"),
     ];
     for (key, method, path) in cases {
         let resp = post_op(&app, &bearer, &op_body(key, method, path, json!({}))).await;

@@ -23,6 +23,31 @@ metadata:
 | 人に作業を頼む。長い手順・表を返す | [explaining.md](explaining.md) |
 | 受信箱の件を answer / observe / escalate する | skill `cos-inbox-triage`（受信箱の run にだけ mount される） |
 
+## 領域ごとの操作表
+
+登録済みの method/path・action・本文は次の節を参照する。表にない変更操作は除外（人の決定）であり、送れない。
+
+### tasks
+
+起票・コメント・質問への回答・accept/approve/reject/cancel・execution gate/decompose・task の編集／再開／再レビュー／やり直し／一時停止・execution plan の採用／差し替え・tree adoption: [tasks の操作表](operations.md#tasks)。
+
+### decisions
+
+decision の回答／訂正／取り下げ・approval・通知既読化・inbox・knowledge の候補作成／却下／取り込み: [decisions の操作表](operations.md#decisions)。
+
+### projects
+
+案件の更新: [projects の操作表](operations.md#projects)。
+
+### admin
+
+モデルの割り当て: [admin の操作表](operations.md#admin)。
+
+### surface
+
+chat thread・添付・console・ノードへの話しかけ・成果物の昇格・browser 操作: [surface の操作表](operations.md#surface)。
+CoS の chat 書き込みは完了済みの発言として入り、CoS run を連鎖させない。
+
 ## 道具の意味
 
 - shell・ファイル編集・git・登録済み MCP・`celerisctl`・REST・KB・browser・cluster の利用能力を持つ。
@@ -38,8 +63,11 @@ metadata:
 - 領域 API（`/api/v1/tasks/...` 等）を CoS credential で直接叩いても監査 context が無ければ 422。経路を変えて監査を外さない。
 - 毎回 `idempotency_key`（thread 内で一意。再試行・再送は同じ key）・空でない `reason`・`expected_revision`・
   `policy_version` を付ける。409 は状態が変わった合図なので読み直して判断し直す。
-- 登録済みの path は [operations.md](operations.md) の表だけ。実行計画の直接差し替え・pause/resume・standing rule の
-  変更は**登録されていない**（送ると 422）。拒否を回避する別経路を探さず、人に回す。
+- API で人ができる変更操作は全て [operations.md](operations.md) の表にある。表に無いのは人の決定で**除外**した操作
+  （秘密の値・`/console/instruct`・browser の credential/attestation 系・`/cos/*` 自身・撤去済みの入口）だけで、
+  送ると理由付きの 422 になる。拒否を回避する別経路を探さず、人に回す。
+- 外部効果の操作（daemon への依頼・git・Discord・release の昇格。表に「外部効果」）は pending → applied で記録される。
+  結果が分からず pending のまま残ったら同じ key で再送しても再実行されないので、人に確認を頼む。
 - 認可と監査は API が強制する。この skill を読んだかどうかで通る操作は変わらない。
 
 ## 秘密と信頼しない入力

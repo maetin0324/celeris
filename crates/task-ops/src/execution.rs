@@ -179,6 +179,17 @@ pub struct HumanPlanAdopted {
     pub approval: Option<task_core::PlanApproval>,
 }
 
+/// Caller-transaction payload for adopting a human-authored plan.
+#[derive(Debug)]
+pub struct PreparedHumanPlanAdoption {
+    pub result: HumanPlanAdopted,
+    pub work_units: Vec<WorkUnitRow>,
+    pub extra_events: Vec<Event>,
+    pub event: Event,
+    pub after_events: Vec<Event>,
+    pub adoptions: Vec<task_core::TreeAdoption>,
+}
+
 /// ADR-0079 D2 / D8 / D15（Phase R5b-prep）: 人が書いた計画を採用する（`PUT/POST /tasks/{id}/execution-plan`、
 /// `celerisctl execution plan set`）。`limits` は **daemon の実効の上限**（`[execution.tree]` を含む）。
 ///
@@ -200,16 +211,133 @@ pub fn adopt_human_plan(
     by: &str,
     now: OffsetDateTime,
 ) -> Result<HumanPlanAdopted, OpsError> {
+    let prepared = prepare_human_plan_adoption(store, task_id, spec, limits, by, now)?;
+    if !store.execution_plan_adopt_tree(
+        task_id,
+        prepared.result.plan.clone(),
+        prepared.work_units,
+        prepared.extra_events,
+        prepared.event,
+        prepared.after_events,
+        prepared.adoptions,
+    )? {
+        return Err(OpsError::TreeAdopt {
+            conflict: true,
+            code: "adopt_conflict",
+            detail: "an adopted task changed concurrently; read it again and retry".to_string(),
+        });
+    }
+    record_human_plan_notice(store, &prepared.result, by, now);
+    Ok(prepared.result)
+}
+
+/// Preserve the human-plan informational notice as a best-effort post-commit write.
+pub fn record_human_plan_notice(
+    store: &dyn TaskStore,
+    adopted: &HumanPlanAdopted,
+    by: &str,
+    now: OffsetDateTime,
+) {
+    let Some(approval) = adopted.approval.as_ref() else {
+        return;
+    };
+    let Ok(task_id) = adopted.plan.task_id.parse::<TaskId>() else {
+        return;
+    };
+    let Ok(Some(task)) = store.get(task_id) else {
+        return;
+    };
+    let reasons = if approval.required {
+        approval.reasons.clone()
+    } else {
+        Vec::new()
+    };
+    let (headline, body) = crate::plan_gate::human_plan_notice(&adopted.plan.spec, by, &reasons);
+    let _ = crate::plan_gate::record_plan_notice(store, &task, &headline, &body, now);
+}
+
+/// Build the complete write set for a human plan adoption without mutating the store.
+pub fn prepare_human_plan_adoption(
+    store: &dyn TaskStore,
+    task_id: TaskId,
+    spec: ExecutionPlanSpec,
+    limits: ExecutionLimits,
+    by: &str,
+    now: OffsetDateTime,
+) -> Result<PreparedHumanPlanAdoption, OpsError> {
     let Some(task) = store.get(task_id)? else {
         return Err(OpsError::NotFound(task_id));
     };
     if spec.schema != task_core::EXECUTION_PLAN_SCHEMA_V3 || !limits.tree.enabled {
-        let plan = adopt_plan(store, task_id, spec, PlanOrigin::Human, None, limits, now)?;
-        return Ok(HumanPlanAdopted {
-            plan,
+        // The legacy plan path also needs a prepared write set; use the common validation and
+        // materialization path below, with tree behavior disabled.
+        let plan = validate_with(
+            &spec,
+            limits,
+            &[],
+            PlanContext {
+                origin: PlanOrigin::Human,
+                depth: task_core::tree::depth_of(&task),
+            },
+        )
+        .map_err(|errors| OpsError::Validation(describe_validation_errors(&errors)))?;
+        let plan_id = new_id();
+        let created_at = format_rfc3339(now)?;
+        let rows = task_core::materialize_work_units(
+            &task_id.to_string(),
+            &plan_id,
+            &plan.spec,
+            &plan.topological_order,
+            &created_at,
+            &mut |_| new_id(),
+        );
+        let row = ExecutionPlanRow {
+            id: plan_id.clone(),
+            task_id: task_id.to_string(),
+            version: 1,
+            origin: PlanOrigin::Human,
+            planner_run_id: None,
+            status: PlanStatus::Active,
+            spec: plan.spec.clone(),
+            created_at,
+            superseded_at: None,
+        };
+        let planned = Event::ExecutionPlanned {
+            plan_id,
+            version: 1,
+            origin: PlanOrigin::Human,
+            supersedes: None,
+            reason: None,
+            plan: Box::new(plan.spec),
+        };
+        let pause = Event::PausePointsResolved {
+            plan_id: row.id.clone(),
+            phases: task_core::resolve_plan_pause_points(
+                &task
+                    .routing
+                    .as_ref()
+                    .map(|r| r.pause_after.clone())
+                    .unwrap_or_default(),
+                &row.spec,
+            ),
+            source: task
+                .routing
+                .as_ref()
+                .map(|r| r.pause_after_source)
+                .unwrap_or_default(),
+        };
+        return Ok(PreparedHumanPlanAdoption {
+            result: HumanPlanAdopted {
+                plan: row,
+                adoptions: Vec::new(),
+                decisions_raised: 0,
+                approval: None,
+            },
+            work_units: rows,
+            extra_events: vec![pause],
+            event: planned,
+            after_events: Vec::new(),
             adoptions: Vec::new(),
-            decisions_raised: 0,
-            approval: None,
         });
     }
     let ctx = PlanContext {
@@ -298,21 +426,6 @@ pub fn adopt_human_plan(
         after.extend(holds.events);
         decisions_raised = holds.raised;
     }
-    if !store.execution_plan_adopt_tree(
-        task_id,
-        plan.clone(),
-        rows,
-        vec![pause_points_event],
-        planned,
-        after,
-        adoptions.adoptions,
-    )? {
-        return Err(OpsError::TreeAdopt {
-            conflict: true,
-            code: "adopt_conflict",
-            detail: "an adopted task changed concurrently; read it again and retry".to_string(),
-        });
-    }
     let approval = if task_core::tree::is_tree_child(&task) {
         None
     } else {
@@ -322,21 +435,18 @@ pub fn adopt_human_plan(
         let tree = task_core::tree::limits_with_allowances(&limits.tree, &allowances);
         Some(task_core::tree::plan_approval(&facts, &tree))
     };
-    if let Some(a) = &approval {
-        let reasons = if a.required {
-            a.reasons.clone()
-        } else {
-            Vec::new()
-        };
-        let (headline, body) = crate::plan_gate::human_plan_notice(&plan.spec, by, &reasons);
-        // 報告は記録のためだけ（採用は済んでいる）。書けなくても採用を失敗にしない。
-        let _ = crate::plan_gate::record_plan_notice(store, &task, &headline, &body, now);
-    }
-    Ok(HumanPlanAdopted {
-        plan,
-        adoptions: adoptions.outcomes,
-        decisions_raised,
-        approval,
+    Ok(PreparedHumanPlanAdoption {
+        result: HumanPlanAdopted {
+            plan,
+            adoptions: adoptions.outcomes,
+            decisions_raised,
+            approval,
+        },
+        work_units: rows,
+        extra_events: vec![pause_points_event],
+        event: planned,
+        after_events: after,
+        adoptions: adoptions.adoptions,
     })
 }
 
@@ -391,6 +501,41 @@ pub fn replan(
     limits: ExecutionLimits,
     now: OffsetDateTime,
 ) -> Result<(ExecutionPlanRow, ReplanDiff), OpsError> {
+    let (write, diff) = plan_replan(
+        store,
+        task_id,
+        spec,
+        reason,
+        origin,
+        planner_run_id,
+        limits,
+        now,
+    )?;
+    let new_plan = write.new_plan.clone();
+    store.execution_plan_replan(
+        write.task_id,
+        write.old_plan_id,
+        write.new_plan,
+        write.updated_work_units,
+        write.new_work_units,
+        write.extra_events,
+        write.plan_event,
+    )?;
+    Ok((new_plan, diff))
+}
+
+/// [`replan`] の検証と書き込みの組み立て（読むだけ）。
+#[allow(clippy::too_many_arguments)]
+pub fn plan_replan(
+    store: &dyn TaskStore,
+    task_id: TaskId,
+    spec: ExecutionPlanSpec,
+    reason: String,
+    origin: PlanOrigin,
+    planner_run_id: Option<String>,
+    limits: ExecutionLimits,
+    now: OffsetDateTime,
+) -> Result<(ReplanWrite, ReplanDiff), OpsError> {
     let Some(task) = store.get(task_id)? else {
         return Err(OpsError::NotFound(task_id));
     };
@@ -881,16 +1026,31 @@ pub fn replan(
         reason: Some(reason_with_diff),
         plan: Box::new(validated.spec),
     };
-    store.execution_plan_replan(
-        task_id,
-        active.id,
-        new_plan.clone(),
-        updated_work_units,
-        new_work_units,
-        extra_events,
-        plan_event,
-    )?;
-    Ok((new_plan, diff))
+    Ok((
+        ReplanWrite {
+            task_id,
+            old_plan_id: active.id,
+            new_plan,
+            updated_work_units,
+            new_work_units,
+            extra_events,
+            plan_event,
+        },
+        diff,
+    ))
+}
+
+/// [`plan_replan`] が組み立てた書き込み（`execution_plan_replan` の引数そのもの）。CoS の監査経路
+/// （ADR 2026-10-09 D5）は同じ値を `SqliteStore::execution_plan_replan_tx` に渡す。
+#[derive(Debug, Clone)]
+pub struct ReplanWrite {
+    pub task_id: TaskId,
+    pub old_plan_id: String,
+    pub new_plan: ExecutionPlanRow,
+    pub updated_work_units: Vec<WorkUnitRow>,
+    pub new_work_units: Vec<WorkUnitRow>,
+    pub extra_events: Vec<Event>,
+    pub plan_event: Event,
 }
 
 /// タスクの `active` な計画と WorkUnit（`GET`/`celerisctl execution plan show` が使う）。

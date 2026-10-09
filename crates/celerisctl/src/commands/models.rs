@@ -87,30 +87,53 @@ pub fn run(config_path: Option<PathBuf>, command: ModelsCommand) -> Result<ExitC
                 }
             }
         }
-        ModelsCommand::Discover(args) => {
-            let body = match args.source {
-                Some(source) => json!({ "source": source }),
-                None => json!({}),
-            };
-            let result = request(&api, "POST", "/llm/models/discover", Some(body))?;
-            print_json(&result)?;
-        }
-        ModelsCommand::Assign(args) => {
-            let path = assignment_path(&args.source, &args.tier)?;
-            let mut body = json!({ "model_id": args.model_id });
-            if let Some(note) = args.note {
-                body["note"] = json!(note);
+        ModelsCommand::Discover(_) | ModelsCommand::Assign(_) => {
+            if let Some((method, path, body)) = request_of(&command)? {
+                let result = request(&api, method, &path, body)?;
+                print_json(&result)?;
             }
-            let result = request(&api, "PUT", &path, Some(body))?;
-            print_json(&result)?;
         }
-        ModelsCommand::Unassign(args) => {
-            let path = assignment_path(&args.source, &args.tier)?;
-            request(&api, "DELETE", &path, None)?;
+        ModelsCommand::Unassign(ref args) => {
+            if let Some((method, path, body)) = request_of(&command)? {
+                request(&api, method, &path, body)?;
+            }
             outln!("unassigned {} {}", args.source, args.tier);
         }
     }
     Ok(ExitCode::SUCCESS)
+}
+
+/// `(method, path under /api/v1, body)`.
+pub type Request = (&'static str, String, Option<Value>);
+
+/// The domain request of a mutating `models` subcommand (`None` for `list`). The direct run and
+/// the CoS operation (`cos_mapped`) send the same request.
+pub fn request_of(command: &ModelsCommand) -> Result<Option<Request>, CliError> {
+    Ok(match command {
+        ModelsCommand::List(_) => None,
+        ModelsCommand::Discover(args) => Some((
+            "POST",
+            "/llm/models/discover".to_string(),
+            Some(match &args.source {
+                Some(source) => json!({ "source": source }),
+                None => json!({}),
+            }),
+        )),
+        ModelsCommand::Assign(args) => {
+            let mut body = json!({ "model_id": args.model_id });
+            if let Some(note) = &args.note {
+                body["note"] = json!(note);
+            }
+            Some((
+                "PUT",
+                assignment_path(&args.source, &args.tier)?,
+                Some(body),
+            ))
+        }
+        ModelsCommand::Unassign(args) => {
+            Some(("DELETE", assignment_path(&args.source, &args.tier)?, None))
+        }
+    })
 }
 
 /// `/llm/models/assignments/{source}/{tier}`。tier はここで確かめる（API も 400 で返す）。`source` は

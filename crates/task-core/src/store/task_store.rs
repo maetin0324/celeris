@@ -1,3 +1,4 @@
+use rusqlite::Connection;
 use std::time::Duration as StdDuration;
 
 use time::OffsetDateTime;
@@ -751,6 +752,20 @@ pub trait TaskStore:
         adoptions: Vec<TreeAdoption>,
     ) -> Result<bool, StoreError>;
 
+    /// Caller-owned transaction variant used when adoption must commit with an audit envelope.
+    #[allow(clippy::too_many_arguments)]
+    fn execution_plan_adopt_tree_tx(
+        &self,
+        tx: &Connection,
+        task_id: TaskId,
+        plan: ExecutionPlanRow,
+        work_units: Vec<WorkUnitRow>,
+        extra_events: Vec<Event>,
+        event: Event,
+        after_events: Vec<Event>,
+        adoptions: Vec<TreeAdoption>,
+    ) -> Result<bool, StoreError>;
+
     /// ADR-0079 D15（Phase R5b-prep）: 採用済みの計画の kind task の unit（`unit_id`）に既存の task を後から採用する
     /// 1 トランザクション（`POST /tasks/{id}/tree/adopt`）。計画を持つ task が終端でなく、unit の行が今も
     /// `expect_unit_status` の kind task で `child_task_id` を持たず、採用する task が `expect_status` で `tree` を
@@ -759,6 +774,19 @@ pub trait TaskStore:
     #[allow(clippy::too_many_arguments)]
     fn tree_adopt_apply(
         &self,
+        owner_id: TaskId,
+        unit_id: &str,
+        expect_unit_status: WorkUnitStatus,
+        updated: Vec<WorkUnitRow>,
+        events: Vec<Event>,
+        adoption: TreeAdoption,
+    ) -> Result<bool, StoreError>;
+
+    /// Caller-owned transaction variant used when late adoption must commit with an audit envelope.
+    #[allow(clippy::too_many_arguments)]
+    fn tree_adopt_apply_tx(
+        &self,
+        tx: &Connection,
         owner_id: TaskId,
         unit_id: &str,
         expect_unit_status: WorkUnitStatus,

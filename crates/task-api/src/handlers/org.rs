@@ -69,71 +69,144 @@ pub(super) async fn patch_browser_settings(
     no_query(&raw)?;
     require_admin(&state, &headers)?;
     let raw: Value = read_json(body, true).await?;
-    let patch: BrowserSettingsPatch =
-        parse_browser_settings_json(raw.clone(), raw.get("allowed_domains"))?;
-    let known = task_core::known_harness_ids(&state.inner.genres);
+    let genres = state.inner.genres.clone();
     let node = state
         .blocking(move |store| {
-            let mut node = load_org_node(store, &id)?;
-            let browser = node.profile.browser.as_mut().ok_or_else(|| {
-                ApiProblem::validation(vec![ValidationError {
-                    field: Some("browser".into()),
-                    message: "node has no browser grant".into(),
-                }])
-            })?;
-            if let Some(domains) = patch.allowed_domains {
-                browser.allowed_domains = domains;
-            }
-            if let Some(actions) = patch.approval_actions {
-                browser.approval_actions = actions;
-            }
-            if let Some(ids) = patch.credential_policy_ids {
-                // ADR 2026-10-08 D3: 実在する site policy だけを grant に入れる。
-                let mut missing = Vec::new();
-                for id in &ids {
-                    if store
-                        .browser_site_policy_get(id)
-                        .map_err(store_problem)?
-                        .is_none()
-                    {
-                        missing.push(id.clone());
-                    }
-                }
-                if !missing.is_empty() {
-                    return Err(ApiProblem::new(
-                        StatusCode::UNPROCESSABLE_ENTITY,
-                        "unknown_site_policy",
-                        format!("unknown site policy: {}", missing.join(", ")),
-                    )
-                    .with_extra("policy_ids", missing));
-                }
-                browser.credential_policy_ids = ids;
-            }
-            if let Some(ids) = patch.credential_identity_ids {
-                browser.credential_identity_ids = ids;
-            }
-            if let Some(enabled) = patch.credential_use {
-                set_credential_use(browser, enabled);
-            }
-            if let Some(harnesses) = patch.harnesses {
-                node.profile.harnesses = harnesses;
-            }
-            if let Some(budget) = patch.budget {
-                node.profile.budget = budget;
-            }
-            task_core::validate_profile(&node.profile, &known).map_err(|e| {
-                ApiProblem::validation(vec![ValidationError {
-                    field: Some("profile".into()),
-                    message: e.to_string(),
-                }])
-            })?;
-            node.updated_at = OffsetDateTime::now_utc();
-            store
-                .org_upsert_browser_settings(&node, "admin")
-                .map_err(store_problem)
+            let write = plan_browser_settings(store, &genres, &id, raw)?;
+            org_commit(store, write, "org.browser_settings", None)?.direct()
         })
         .await?;
     Ok(json_response(StatusCode::OK, &node))
+}
+
+/// One org write planned by a route (validation and reads done), committed by [`org_commit`].
+pub(crate) enum OrgWrite {
+    /// Upsert the node; `browser` also records the browser settings audit row.
+    Upsert {
+        node: Box<OrgNode>,
+        browser: bool,
+    },
+    Delete(String),
+}
+
+/// Commit a planned org write: directly (the human route, actor `admin`) or, with `audit`, in the
+/// CoS operation transaction (actor `cos`). The direct route returns the stored node (`None` for
+/// a delete).
+pub(crate) fn org_commit(
+    store: &task_core::store::SqliteStore,
+    write: OrgWrite,
+    action: &str,
+    audit: Option<&crate::cos::operations::OperationAudit>,
+) -> Result<crate::cos::operations::Applied<Option<OrgNode>>, ApiProblem> {
+    use crate::cos::operations::Applied;
+    use task_core::store::SqliteStore;
+    let Some(audit) = audit else {
+        return match write {
+            OrgWrite::Upsert {
+                node,
+                browser: true,
+            } => store
+                .org_upsert_browser_settings(&node, "admin")
+                .map(|n| Applied::Direct(Some(n)))
+                .map_err(store_problem),
+            OrgWrite::Upsert { node, .. } => store
+                .org_upsert(&node)
+                .map(|n| Applied::Direct(Some(n)))
+                .map_err(store_problem),
+            OrgWrite::Delete(id) => {
+                store.org_delete(&id).map_err(store_problem)?;
+                Ok(Applied::Direct(None))
+            }
+        };
+    };
+    let target = match &write {
+        OrgWrite::Upsert { node, .. } => node.id.clone(),
+        OrgWrite::Delete(id) => id.clone(),
+    };
+    let operation = audit.apply_checked(store, "org", &target, action, |tx| match &write {
+        OrgWrite::Upsert { node, browser } => {
+            let stored = SqliteStore::org_upsert_tx(tx, node, browser.then_some("cos"))
+                .map_err(store_problem)?;
+            serde_json::to_value(&stored).map_err(|e| ApiProblem::internal(e.to_string()))
+        }
+        OrgWrite::Delete(id) => {
+            if !SqliteStore::org_delete_tx(tx, id).map_err(store_problem)? {
+                return Err(ApiProblem::org_node_not_found(id));
+            }
+            Ok(serde_json::json!({"id": id, "deleted": true}))
+        }
+    })?;
+    Ok(Applied::Audited(Box::new(operation)))
+}
+
+/// `PATCH /org/{id}/browser-settings`: the node with only the browser-related profile changed.
+pub(crate) fn plan_browser_settings(
+    store: &task_core::store::SqliteStore,
+    genres: &[task_core::GenreSpec],
+    id: &str,
+    raw: Value,
+) -> Result<OrgWrite, ApiProblem> {
+    let patch: BrowserSettingsPatch =
+        parse_browser_settings_json(raw.clone(), raw.get("allowed_domains"))?;
+    let known = task_core::known_harness_ids(genres);
+    let mut node = load_org_node(store, id)?;
+    let browser = node.profile.browser.as_mut().ok_or_else(|| {
+        ApiProblem::validation(vec![ValidationError {
+            field: Some("browser".into()),
+            message: "node has no browser grant".into(),
+        }])
+    })?;
+    if let Some(domains) = patch.allowed_domains {
+        browser.allowed_domains = domains;
+    }
+    if let Some(actions) = patch.approval_actions {
+        browser.approval_actions = actions;
+    }
+    if let Some(ids) = patch.credential_policy_ids {
+        // ADR 2026-10-08 D3: 実在する site policy だけを grant に入れる。
+        let mut missing = Vec::new();
+        for id in &ids {
+            if store
+                .browser_site_policy_get(id)
+                .map_err(store_problem)?
+                .is_none()
+            {
+                missing.push(id.clone());
+            }
+        }
+        if !missing.is_empty() {
+            return Err(ApiProblem::new(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "unknown_site_policy",
+                format!("unknown site policy: {}", missing.join(", ")),
+            )
+            .with_extra("policy_ids", missing));
+        }
+        browser.credential_policy_ids = ids;
+    }
+    if let Some(ids) = patch.credential_identity_ids {
+        browser.credential_identity_ids = ids;
+    }
+    if let Some(enabled) = patch.credential_use {
+        set_credential_use(browser, enabled);
+    }
+    if let Some(harnesses) = patch.harnesses {
+        node.profile.harnesses = harnesses;
+    }
+    if let Some(budget) = patch.budget {
+        node.profile.budget = budget;
+    }
+    task_core::validate_profile(&node.profile, &known).map_err(|e| {
+        ApiProblem::validation(vec![ValidationError {
+            field: Some("profile".into()),
+            message: e.to_string(),
+        }])
+    })?;
+    node.updated_at = OffsetDateTime::now_utc();
+    Ok(OrgWrite::Upsert {
+        node: Box::new(node),
+        browser: true,
+    })
 }
 
 /// grant の `allowed_actions` に `credential_use` を入れる・外す（他の action は変えない）。
@@ -154,9 +227,9 @@ fn set_credential_use(browser: &mut task_core::BrowserCapability, enabled: bool)
 
 /// 監査 L-1: 組織のノードの `genre` は設定の `[[genres]]` にあるものだけ（分野を 1 つも設定していない
 /// 構成では検証しない。`POST /tasks` の `genre` と同じ規律。ADR-0027 D1）。
-fn validate_genre(state: &ApiState, genre: Option<&str>) -> Result<(), ApiProblem> {
+fn validate_genre(genres: &[task_core::GenreSpec], genre: Option<&str>) -> Result<(), ApiProblem> {
     let Some(genre) = genre else { return Ok(()) };
-    if state.inner.genres.is_empty() || state.inner.genres.iter().any(|g| g.id == genre) {
+    if genres.is_empty() || genres.iter().any(|g| g.id == genre) {
         return Ok(());
     }
     Err(ApiProblem::validation(vec![ValidationError {
@@ -169,13 +242,13 @@ fn validate_genre(state: &ApiState, genre: Option<&str>) -> Result<(), ApiProble
 /// ハーネスの集合は設定の `[[genres]]`（= `[[harnesses]]` の射影）＋ 組み込み。分野を 1 つも設定して
 /// いない構成では検証しない（`validate_genre` と同じ規律）。
 fn validate_profile_body(
-    state: &ApiState,
+    genres: &[task_core::GenreSpec],
     profile: Option<&task_core::Profile>,
 ) -> Result<(), ApiProblem> {
     let Some(profile) = profile else {
         return Ok(());
     };
-    let known = task_core::known_harness_ids(&state.inner.genres);
+    let known = task_core::known_harness_ids(genres);
     task_core::validate_profile(profile, &known).map_err(|e| {
         ApiProblem::validation(vec![ValidationError {
             field: Some("profile".into()),
@@ -236,37 +309,51 @@ pub(super) async fn create_org_node(
     no_query(&raw)?;
     require_admin(&state, &headers)?;
     let create: OrgCreateBody = read_json(body, false).await?;
-    // 監査 L-1: `genre` は `[[genres]]` にあるものだけ受ける（`genres` が空の設定では検証しない）。
-    validate_genre(&state, create.genre.as_deref())?;
-    validate_profile_body(&state, create.profile.as_ref())?;
+    let genres = state.inner.genres.clone();
     let node = state
         .blocking(move |store| {
-            if store.org_get(&create.id).map_err(store_problem)?.is_some() {
-                return Err(ApiProblem::org_node_exists(&create.id));
-            }
-            let now = OffsetDateTime::now_utc();
-            let node = OrgNode {
-                id: create.id,
-                parent_id: create.parent_id,
-                name: create.name,
-                kind: create.kind,
-                genre: create.genre,
-                brief: create.brief.unwrap_or_default(),
-                // ADR-0046 D1（Phase 59）: 省略時は空の profile。
-                profile: create.profile.unwrap_or_default(),
-                position: create.position.unwrap_or(0),
-                created_at: now,
-                updated_at: now,
-            };
-            store.org_upsert(&node).map_err(store_problem)
+            let write = plan_create(store, &genres, create)?;
+            org_commit(store, write, "org.create", None)?.direct()
         })
-        .await?;
+        .await?
+        .ok_or_else(|| ApiProblem::internal("org create returned no node"))?;
     tracing::info!(who = "admin", op = "org_create", org_id = %node.id, "admin: org node created");
     let mut response = json_response(StatusCode::CREATED, &node);
     if let Ok(location) = HeaderValue::from_str(&format!("/api/v1/org/{}", node.id)) {
         response.headers_mut().insert(header::LOCATION, location);
     }
     Ok(response)
+}
+
+/// `POST /org`: validate the body and build the new node (409 when the id exists).
+pub(crate) fn plan_create(
+    store: &task_core::store::SqliteStore,
+    genres: &[task_core::GenreSpec],
+    create: OrgCreateBody,
+) -> Result<OrgWrite, ApiProblem> {
+    // 監査 L-1: `genre` は `[[genres]]` にあるものだけ受ける（`genres` が空の設定では検証しない）。
+    validate_genre(genres, create.genre.as_deref())?;
+    validate_profile_body(genres, create.profile.as_ref())?;
+    if store.org_get(&create.id).map_err(store_problem)?.is_some() {
+        return Err(ApiProblem::org_node_exists(&create.id));
+    }
+    let now = OffsetDateTime::now_utc();
+    Ok(OrgWrite::Upsert {
+        node: Box::new(OrgNode {
+            id: create.id,
+            parent_id: create.parent_id,
+            name: create.name,
+            kind: create.kind,
+            genre: create.genre,
+            brief: create.brief.unwrap_or_default(),
+            // ADR-0046 D1（Phase 59）: 省略時は空の profile。
+            profile: create.profile.unwrap_or_default(),
+            position: create.position.unwrap_or(0),
+            created_at: now,
+            updated_at: now,
+        }),
+        browser: false,
+    })
 }
 
 pub(super) async fn patch_org_node(
@@ -279,53 +366,63 @@ pub(super) async fn patch_org_node(
     no_query(&raw)?;
     require_admin(&state, &headers)?;
     let raw: Value = read_json(body, true).await?;
+    let genres = state.inner.genres.clone();
+    let node = state
+        .blocking(move |store| {
+            let write = plan_patch(store, &genres, &id, raw)?;
+            org_commit(store, write, "org.update", None)?.direct()
+        })
+        .await?
+        .ok_or_else(|| ApiProblem::internal("org patch returned no node"))?;
+    tracing::info!(who = "admin", op = "org_patch", org_id = %node.id, "admin: org node updated");
+    Ok(json_response(StatusCode::OK, &node))
+}
+
+/// `PATCH /org/{id}`: the node with the patch applied (profile is replaced whole).
+pub(crate) fn plan_patch(
+    store: &task_core::store::SqliteStore,
+    genres: &[task_core::GenreSpec],
+    id: &str,
+    raw: Value,
+) -> Result<OrgWrite, ApiProblem> {
     let domains = raw.pointer("/profile/browser/allowed_domains").cloned();
     let patch: OrgPatchBody = parse_browser_settings_json(raw, domains.as_ref())?;
     if let Some(genre) = &patch.genre {
-        validate_genre(&state, genre.as_deref())?;
+        validate_genre(genres, genre.as_deref())?;
     }
-    validate_profile_body(&state, patch.profile.as_ref())?;
-    let node = state
-        .blocking(move |store| {
-            let mut node = load_org_node(store, &id)?;
-            if let Some(name) = patch.name {
-                node.name = name;
-            }
-            if let Some(kind) = patch.kind {
-                node.kind = kind;
-            }
-            if let Some(parent_id) = patch.parent_id {
-                node.parent_id = Some(parent_id);
-            }
-            if let Some(genre) = patch.genre {
-                node.genre = genre;
-            }
-            if let Some(brief) = patch.brief {
-                node.brief = brief;
-            }
-            if let Some(position) = patch.position {
-                node.position = position;
-            }
-            // ADR-0046 D1（Phase 59）: profile は**丸ごと差し替え**（書かなければ今のまま）。
-            let browser_changed = patch
-                .profile
-                .as_ref()
-                .is_some_and(|profile| profile.browser != node.profile.browser);
-            if let Some(profile) = patch.profile {
-                node.profile = profile;
-            }
-            node.updated_at = OffsetDateTime::now_utc();
-            if browser_changed {
-                store
-                    .org_upsert_browser_settings(&node, "admin")
-                    .map_err(store_problem)
-            } else {
-                store.org_upsert(&node).map_err(store_problem)
-            }
-        })
-        .await?;
-    tracing::info!(who = "admin", op = "org_patch", org_id = %node.id, "admin: org node updated");
-    Ok(json_response(StatusCode::OK, &node))
+    validate_profile_body(genres, patch.profile.as_ref())?;
+    let mut node = load_org_node(store, id)?;
+    if let Some(name) = patch.name {
+        node.name = name;
+    }
+    if let Some(kind) = patch.kind {
+        node.kind = kind;
+    }
+    if let Some(parent_id) = patch.parent_id {
+        node.parent_id = Some(parent_id);
+    }
+    if let Some(genre) = patch.genre {
+        node.genre = genre;
+    }
+    if let Some(brief) = patch.brief {
+        node.brief = brief;
+    }
+    if let Some(position) = patch.position {
+        node.position = position;
+    }
+    // ADR-0046 D1（Phase 59）: profile は**丸ごと差し替え**（書かなければ今のまま）。
+    let browser = patch
+        .profile
+        .as_ref()
+        .is_some_and(|profile| profile.browser != node.profile.browser);
+    if let Some(profile) = patch.profile {
+        node.profile = profile;
+    }
+    node.updated_at = OffsetDateTime::now_utc();
+    Ok(OrgWrite::Upsert {
+        node: Box::new(node),
+        browser,
+    })
 }
 
 pub(super) async fn delete_org_node(
@@ -339,7 +436,7 @@ pub(super) async fn delete_org_node(
     state
         .blocking(move |store| {
             load_org_node(store, &id)?;
-            store.org_delete(&id).map_err(store_problem)?;
+            org_commit(store, OrgWrite::Delete(id.clone()), "org.delete", None)?.direct()?;
             tracing::info!(who = "admin", op = "org_delete", org_id = %id, "admin: org node deleted");
             Ok(())
         })

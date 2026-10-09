@@ -154,25 +154,56 @@ async fn target(
     state: &ApiState,
     path: &(String, String, String),
 ) -> Result<LiveTarget, ApiProblem> {
+    let path = path.clone();
+    state.blocking(move |store| target_in(store, &path)).await
+}
+
+fn target_in(
+    store: &task_core::SqliteStore,
+    path: &(String, String, String),
+) -> Result<LiveTarget, ApiProblem> {
     let (task, run, session) = path.clone();
-    state.blocking(move |store| {
-        let id: TaskId = task.parse().map_err(|_| denied(LiveDenied::OtherTask))?;
-        let row = store.run_index_get(&run).map_err(|_| internal())?;
-        let task_row = store.get(id).map_err(|_| internal())?;
-        let run_active = row.as_ref().is_some_and(|r| r.task_id == task && r.status == task_core::execution_plan::RunIndexStatus::Running)
-            && task_row.as_ref().is_some_and(|t| t.status == task_core::Status::Running);
-        if row.as_ref().is_some_and(|r| r.task_id != task) { return Err(denied(LiveDenied::OtherTask)); }
-        let waits = store.browser_waits_for_task(id).map_err(|_| internal())?;
-        let stopped_by_credential = waits.iter().any(|w| w.run_id == run && w.session_id == session
-            && w.state == BrowserWaitState::Resumed && w.credential.is_some());
-        let key = BrowserSessionKey { task_id: &task, run_id: &run, session_id: &session };
-        let page = store.browser_live_after(key, 0, 1).map_err(|_| internal())?;
-        let stopped_by_event = if let Some(latest) = page.latest_seq {
-            let last = store.browser_live_after(key, latest.saturating_sub(1), 1).map_err(|_| internal())?;
-            last.events.iter().any(|e| matches!(&e.body, task_core::browser_live::PersistedLiveEvent::Status { state } if state == "observation_stopped"))
-        } else { false };
-        Ok(LiveTarget { task_id: task, run_id: run, run_active, credential_interval: stopped_by_credential || stopped_by_event })
-    }).await
+
+    let id: TaskId = task.parse().map_err(|_| denied(LiveDenied::OtherTask))?;
+    let row = store.run_index_get(&run).map_err(|_| internal())?;
+    let task_row = store.get(id).map_err(|_| internal())?;
+    let run_active = row.as_ref().is_some_and(|r| {
+        r.task_id == task && r.status == task_core::execution_plan::RunIndexStatus::Running
+    }) && task_row
+        .as_ref()
+        .is_some_and(|t| t.status == task_core::Status::Running);
+    if row.as_ref().is_some_and(|r| r.task_id != task) {
+        return Err(denied(LiveDenied::OtherTask));
+    }
+    let waits = store.browser_waits_for_task(id).map_err(|_| internal())?;
+    let stopped_by_credential = waits.iter().any(|w| {
+        w.run_id == run
+            && w.session_id == session
+            && w.state == BrowserWaitState::Resumed
+            && w.credential.is_some()
+    });
+    let key = BrowserSessionKey {
+        task_id: &task,
+        run_id: &run,
+        session_id: &session,
+    };
+    let page = store
+        .browser_live_after(key, 0, 1)
+        .map_err(|_| internal())?;
+    let stopped_by_event = if let Some(latest) = page.latest_seq {
+        let last = store
+            .browser_live_after(key, latest.saturating_sub(1), 1)
+            .map_err(|_| internal())?;
+        last.events.iter().any(|e| matches!(&e.body, task_core::browser_live::PersistedLiveEvent::Status { state } if state == "observation_stopped"))
+    } else {
+        false
+    };
+    Ok(LiveTarget {
+        task_id: task,
+        run_id: run,
+        run_active,
+        credential_interval: stopped_by_credential || stopped_by_event,
+    })
 }
 
 async fn checked(
@@ -286,6 +317,23 @@ async fn event(
         return Err(denied(LiveDenied::LiveViewDisabled));
     }
     let target = target(&state, &path).await?;
+    let scrubbed = event_checked(&state, &target, body)?;
+    let response = state
+        .blocking(move |store| append_in(store, &path, &scrubbed))
+        .await?;
+    Ok(Json(response))
+}
+
+/// The checks of a worker live event: daemon auth, the run still active, and no event but
+/// `observation_stopped` inside a credential interval.
+fn event_checked(
+    state: &ApiState,
+    target: &LiveTarget,
+    body: EventBody,
+) -> Result<ScrubbedLiveEvent, ApiProblem> {
+    if state.inner.token_digest.is_none() {
+        return Err(denied(LiveDenied::LiveViewDisabled));
+    }
     if !target.run_active {
         return Err(denied(LiveDenied::RunEnded));
     }
@@ -299,20 +347,55 @@ async fn event(
         EventBody::Url { url } => LiveEvent::Url { url },
         EventBody::Console { level, text } => LiveEvent::Console { level, text },
     };
-    let scrubbed = ScrubbedLiveEvent::from_event(&event).ok_or_else(invalid)?;
-    let seq = state
-        .blocking(move |store| {
-            let key = BrowserSessionKey {
-                task_id: &path.0,
-                run_id: &path.1,
-                session_id: &path.2,
-            };
-            store
-                .browser_live_append(key, &scrubbed)
-                .map_err(|_| internal())
-        })
-        .await?;
-    Ok(Json(EventResponse { seq }))
+    ScrubbedLiveEvent::from_event(&event).ok_or_else(invalid)
+}
+
+fn append_in(
+    store: &task_core::SqliteStore,
+    path: &(String, String, String),
+    scrubbed: &ScrubbedLiveEvent,
+) -> Result<EventResponse, ApiProblem> {
+    let key = BrowserSessionKey {
+        task_id: &path.0,
+        run_id: &path.1,
+        session_id: &path.2,
+    };
+    store
+        .browser_live_append(key, scrubbed)
+        .map(|seq| EventResponse { seq })
+        .map_err(|_| internal())
+}
+
+/// CoS `browser.live_event` (C): the worker route's checks, then the same scrubbed append.
+pub(crate) fn event_op(
+    store: &task_core::SqliteStore,
+    state: &ApiState,
+    path: (String, String, String),
+    body: serde_json::Value,
+    audit: &crate::cos::operations::OperationAudit,
+) -> Result<task_core::chat::CosOperation, ApiProblem> {
+    let target_id = format!("{}/{}/{}", path.0, path.1, path.2);
+    let reject = |problem: ApiProblem| audit.reject(store, "browser_session", &target_id, problem);
+    let body: EventBody = serde_json::from_value(body).map_err(|_| {
+        reject(ApiProblem::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "browser_body_invalid",
+            "invalid live request",
+        ))
+    })?;
+    if state.inner.token_digest.is_none() {
+        return Err(reject(denied(LiveDenied::LiveViewDisabled)));
+    }
+    let scrubbed = target_in(store, &path)
+        .and_then(|target| event_checked(state, &target, body))
+        .map_err(reject)?;
+    crate::cos::operations::external_store(
+        store,
+        audit,
+        ("browser_session", &target_id),
+        "browser.live_event",
+        || append_in(store, &path, &scrubbed),
+    )
 }
 
 pub(crate) fn routes() -> axum::Router<ApiState> {

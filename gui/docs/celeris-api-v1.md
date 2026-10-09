@@ -3441,7 +3441,130 @@ REST の旧 Console エンドポイントは既定 legacy スレッドを使う�
 `POST /api/v1/knowledge/inbox/{id}/reject`（`knowledge.reject`）。`celerisctl knowledge record` は CoS credential のとき
 KB を直接書かず `knowledge.record` を送る（ADR 2026-10-07 cos-live-fixes D2）。
 
-操作要求は登録済みの task/decision/approval/execution/project/knowledge/comment の変更 path のみ実行する。外部 URL、任意 proxy、`/cos` 以下の再帰操作、未登録 path は 422 で拒否理由付き監査 event に残す。`reason`・`policy_version`・`idempotency_key` は必須（reason は空白不可）。`expected_revision` は対象が revision を持つ操作で必須。idempotency key は thread 内一意で、同じ key の異なる request hash は 409。適用結果・`cos_operations` 行・監査 envelope event・chat card は同じ transaction に記録する。checkpoint は credential の run/thread に限り、run に配送済みの `through_seq` 以下、本文 32 KiB 以下。現在の checkpoint revision と `expected_summary_through_seq` が異なる場合は 409。
+操作の範囲は ADR 2026-10-09-cos-operations-all-mutations（人の決定「API で人ができる変更操作の全て」）で決まり、
+registry は `crates/task-api/src/cos/ops/{tasks,decisions,projects,admin,surface}.rs` の `ALLOWED`（登録済み）・
+`EXCLUDED`（人の決定による除外。理由コード付き）の 2 つに分かれる。変更 route（router と本書 §2 の表の和集合、142 行）は
+必ずどちらか一方だけに入る（ALLOWED 106・EXCLUDED 36。試験 `cos_ops_registry_classifies_every_mutation_as_allowed_or_excluded`）。
+登録済みの操作（action）:
+
+| 領域 | method と path | action |
+|---|---|---|
+| tasks | `POST /tasks` | `task.create` |
+| tasks | `POST /tasks/{id}/changes/{repo}/integrate` | `task.integrate`（外部効果: git・GitHub。pending → applied。`default_branch_busy` は変更前の拒否で `rejected`） |
+| tasks | `POST /tasks/{id}/changes/{repo}/pr/merge` | `task.pr_merge`（外部効果。`gh pr merge` の失敗は取り込み記録の `failed` として applied） |
+| tasks | `POST /tasks/{id}/approve` | `task.approve` |
+| tasks | `POST /tasks/{id}/reject` | `task.reject` |
+| tasks | `POST /tasks/{id}/accept` | `task.accept` |
+| tasks | `POST /tasks/{id}/cancel` | `task.cancel` |
+| tasks | `POST /tasks/{id}/rereview` | `task.rereview` |
+| tasks | `POST /tasks/{id}/execution-plan` | `execution.plan_adopt` |
+| tasks | `POST /tasks/{id}/tree/adopt` | `tree.adopt` |
+| tasks | `POST /tasks/{id}/execution/decompose` | `execution.decompose` |
+| decisions | `POST /notifications/{id}/read` | `notification.read` |
+| decisions | `POST /notifications/read-all` | `notification.read_all` |
+| tasks | `POST /tasks/{id}/comments` | `comment.create` |
+| tasks | `POST /tasks/{id}/answer` | `question.answer` |
+| tasks | `POST /tasks/{id}/execution/phase-gate` | `execution.phase_gate` |
+| tasks | `POST /tasks/{id}/execution/plan-gate` | `execution.plan_gate` |
+| tasks | `PATCH /tasks/{id}` | `task.update`（`Edited.by = cos`） |
+| tasks | `POST /tasks/{id}/reopen` | `task.reopen` |
+| tasks | `POST /tasks/{id}/retry` | `task.retry`（`result.new_task_id`） |
+| tasks | `POST /tasks/{id}/pause` | `task.pause` |
+| tasks | `POST /tasks/{id}/resume` | `task.resume` |
+| tasks | `PUT /tasks/{id}/execution-plan` | `execution.put_plan`（active な計画の replan だけ。計画が無い task への初回採用は `POST …/execution-plan`（`execution.plan_adopt`）） |
+| decisions | `POST /decisions/{id}/answer` | `decision.answer` |
+| decisions | `POST /decisions/{id}/revise` | `decision.revise` |
+| decisions | `POST /decisions/{id}/withdraw` | `decision.withdraw` |
+| decisions | `POST /approvals/{id}/decide` | `approval.decide` |
+| decisions | `POST /knowledge/inbox` | `knowledge.record` |
+| decisions | `POST /knowledge/inbox/{id}/reject` | `knowledge.reject` |
+| decisions | `POST /knowledge/inbox/{id}/accept` | `knowledge.accept` |
+| decisions | `PUT /knowledge/page` | `knowledge.page_put`（外部効果: KB の git。etag 不一致・page 無しは `rejected`） |
+| decisions | `POST /inbox/items/{id}/answer` | `inbox.answer` |
+| projects | `POST /projects` | `project.create`（作成後の秘書の返事は commit 後に best-effort） |
+| projects | `PATCH /projects/{id}` | `project.update` |
+| projects | `POST /projects/{id}/cancel` | `project.cancel`（`result.cancelled_tasks`） |
+| projects | `POST /projects/{id}/pause` | `project.pause` |
+| projects | `POST /projects/{id}/resume` | `project.resume` |
+| projects | `POST /projects/{id}/archive` | `project.archive` |
+| projects | `POST /projects/{id}/unarchive` | `project.unarchive` |
+| projects | `POST /standing-rules` | `standing_rule.create`（人の決定で CoS にも許可） |
+| projects | `DELETE /standing-rules/{id}` | `standing_rule.delete` |
+| projects | `POST /reports/read` | `report.read`（対応する通知も同じ transaction で既読） |
+| projects | `POST /reports/notified` | `report.notified`（API のメモリの通知時刻。再送では進めない） |
+| projects | `POST /projects/{id}/docs/init` | `docs.init`（外部効果: pending → applied） |
+| projects | `PUT /projects/{id}/docs/page` | `docs.page_put`（外部効果。etag 不一致・main 編集中・path の誤りは変更前の拒否で `rejected`） |
+| projects | `DELETE /projects/{id}/docs/page` | `docs.page_delete`（`path`・`etag`・`message` は body。外部効果） |
+| projects | `POST /projects/{id}/docs/maintenance` | `docs.maintenance`（記録の action は `docs.maintenance_<op>`。apply 後の失敗 `docs_maintenance_partial` は pending のまま人の確認へ） |
+| admin | `PUT /llm/models/assignments/{source}/{tier}` | `model_assignment.put`（actor `cos`） |
+| admin | `DELETE /llm/models/assignments/{source}/{tier}` | `model_assignment.delete`（無ければ 404） |
+| admin | `POST /llm/models/assignments/preview` | `model_assignment.preview`（書き込まない。影響を `result` に記録） |
+| admin | `PUT /llm/models/assignments/roles/{tier}` | `model_role.replace`（構成員の丸ごと置き換え。`updated_by = cos`） |
+| admin | `POST /llm/models/assignments/roles/{tier}/preview` | `model_role.preview`（書き込まない） |
+| admin | `PUT /llm/models/{source}/{model_id}/override` | `model_override.put` |
+| admin | `DELETE /llm/models/{source}/{model_id}/override` | `model_override.delete`（無ければ 404） |
+| admin | `POST /llm/models/discover` | `model_catalog.discover`（外部効果: daemon の発見 hook を 1 回） |
+| admin | `POST /org` | `org.create` |
+| admin | `PATCH /org/{id}` | `org.update`（browser grant が変われば `org_browser_events` に actor `cos`） |
+| admin | `DELETE /org/{id}` | `org.delete`（未終了 task・子ノードがあれば 409） |
+| admin | `PATCH /org/{id}/browser-settings` | `org.browser_settings`（actor `cos` の browser 設定監査行も同じ transaction） |
+| admin | `POST /org/{id}/skills` | `org.skill_mount` |
+| admin | `DELETE /org/{id}/skills/{skill}` | `org.skill_unmount` |
+| admin | `PUT /skills/{name}` | `skill.put`（外部効果: KB の git。入力の誤りは `rejected`、I/O 失敗は pending） |
+| admin | `DELETE /skills/{name}` | `skill.delete`（外部効果。mount 中は 409） |
+| admin | `POST /projects/{id}/repos` | `repo.create` |
+| admin | `PATCH /repos/{id}` | `repo.update` |
+| admin | `DELETE /repos/{id}` | `repo.delete`（未終了 task が使っていれば 409） |
+| admin | `PUT /clusters/{id}/settings` | `cluster.settings_put` |
+| admin | `POST /providers` | `provider.create`（`providers.d` の file 書き込みを監査 transaction の最後に行う。`env` に秘密の値があれば 422 `secret_operations`、本文は記録しない） |
+| admin | `PATCH /providers/{id}` | `provider.update`（同上） |
+| admin | `DELETE /providers/{id}` | `provider.delete` |
+| admin | `POST /providers/{id}/check` | `provider.check`（外部効果: daemon channel） |
+| admin | `POST /accounts` | `account.create`（ディレクトリ作成を監査 transaction の最後に行う） |
+| admin | `DELETE /accounts/{id}` | `account.delete`（外部効果: daemon が退避する。`?adapter=` の代わりに body `{"adapter"}`） |
+| admin | `POST /accounts/{id}/check` | `account.check`（外部効果。body `{"adapter"}` 任意） |
+| admin | `POST /notify/test` | `notify.test`（外部効果: Discord に 1 通） |
+| admin | `POST /reload` | `daemon.reload`（外部効果。設定の誤りは 400 で `rejected`） |
+| admin | `POST /replay` | `daemon.replay`（同時に 1 つ。実行中は 409） |
+| admin | `POST /releases/{sha12}/promote` | `release.promote`（人の決定で許可。外部効果: `promote.sh` の起動。昇格できない release は 409 で `rejected`） |
+| admin | `POST /cron-jobs` | `cron_job.create`（名前の重複は 409） |
+| admin | `PATCH /cron-jobs/{id}` | `cron_job.update` |
+| admin | `DELETE /cron-jobs/{id}` | `cron_job.delete` |
+| admin | `POST /cron-jobs/{id}/pause` | `cron_job.pause` |
+| admin | `POST /cron-jobs/{id}/resume` | `cron_job.resume` |
+| admin | `POST /cron-jobs/{id}/run` | `cron_job.run`（外部効果の手順。`pending` を先に記録して 1 回だけ実行し `applied`。同じ key の再送は記録を返し再実行しない） |
+| surface | `POST /chat/attachments/{id}/references` | `attachment.reference` |
+| surface | `POST /chat/threads` | `chat.thread_create` |
+| surface | `PATCH /chat/threads/{t}` | `chat.thread_update` |
+| surface | `POST /chat/threads/{t}/messages` | `chat.message_post`（CoS の書き込みは完了済みの `assistant` 発言として入り待ち行列に入らないので CoS run を起こさない。`mode=interrupt`・`resume_queue=true` は 422 `validation`） |
+| surface | `DELETE /chat/threads/{t}/messages/{m}` | `chat.message_cancel` |
+| surface | `POST /chat/threads/{t}/stop` | `chat.run_stop` |
+| surface | `POST /chat/threads/{t}/resume-queue` | `chat.queue_resume` |
+| surface | `POST /chat/threads/{t}/attachments` | `chat.attachment_upload`（外部効果: file。本文は `{"client_upload_id","name","content_base64"}`、記録に中身は残さない） |
+| surface | `DELETE /chat/attachments/{a}` | `chat.attachment_delete`（外部効果: file） |
+| surface | `POST /console/new-conversation` | `console.new_conversation`（本文 `{"scope"}`。route の `?scope=` と同じ値） |
+| surface | `POST /org/{id}/messages` | `org.message`（外部効果: run の起動。`{id}`=cos は 422 `cos_self_chain`） |
+| surface | `POST /tasks/{id}/artifacts/promote` | `artifact.promote`（外部効果: docs git） |
+| surface | `PUT /browser/site-policies/{policy_id}` | `browser.site_policy_put`（外部効果） |
+| surface | `DELETE /browser/site-policies/{policy_id}` | `browser.site_policy_delete`（外部効果） |
+| surface | `PUT /tasks/{id}/browser/policy` | `browser.task_policy_put`（外部効果） |
+| surface | `POST /tasks/{id}/browser/requests` | `browser.request_open`（外部効果。credential・credential_policy_id・trusted_login を含む待ちは 422 `browser_credential_attestation`） |
+| surface | `POST /tasks/{id}/browser/control/{run}/{session}` | `browser.control`（外部効果。owner session の署名付き assertion・origin・lease の検査は route と同じ。記録では assertion を伏せる） |
+| surface | `POST /tasks/{id}/browser/control/{run}/{session}/disconnect` | `browser.control_disconnect`（外部効果。assertion 必須） |
+| surface | `POST /tasks/{id}/browser/control/{run}/{session}/agent/begin` | `browser.agent_begin`（外部効果。daemon 認証の構成だけ） |
+| surface | `POST /tasks/{id}/browser/control/{run}/{session}/agent/end` | `browser.agent_end`（外部効果） |
+| surface | `POST /tasks/{id}/browser/control/{run}/{session}/auth-section` | `browser.auth_section`（外部効果） |
+| surface | `POST /tasks/{id}/browser/live/{run}/{session}/events` | `browser.live_event`（外部効果。run が動いている間だけ） |
+
+tasks の実行計画初回採用 `POST /api/v1/tasks/{id}/execution-plan`（`execution.plan_adopt`）と既存計画への late tree adoption `POST /api/v1/tasks/{id}/tree/adopt`（`tree.adopt`）も登録済み。両方とも domain write と operation audit を同一 transaction で commit する。CoS credential での `celerisctl execution plan set` と `celerisctl tree adopt` はこれらの operation 経由で送る。CoS credential の `celerisctl cron create|update|pause|resume|run` は `cron_job.*` を送る。`celerisctl models discover|assign|unassign` は `model_catalog.discover`・`model_assignment.*`、`celerisctl replay`（`--check`/`--apply` なし）は `daemon.replay`、`celerisctl approve|reject|accept|cancel|rereview|retry|answer`・`execution phase-gate`・`execution plan replan` は `task.*`・`question.answer`・`execution.*` を送る（CoS credential の変更系 subcommand の包みは試験 `cos_mapped_table_wraps_every_allowed_subcommand` で固定。API に対応 route の無い手元の操作は CoS credential では拒否）。daemon channel（reload・check・account 退避・notify test）・発見・release 昇格・skill の KB 書き込みも外部効果の手順で記録する。task の取り込み（integrate）と PR merge、案件の文書、KB ページの編集、定期実行の手動実行は外部効果の手順（ADR 2026-10-09-cos-operations-external-effects: pending を先に記録し 1 回だけ実行、再送は再実行しない、変更前の拒否は `rejected`、結果不明は pending のまま起動時に `needs_remediation`）で記録する。
+
+除外（422 `cos_operation_not_allowed`、detail に理由コード）: 秘密の値を扱う操作（`secret_operations`。`/secrets/*`・
+`/accounts/{id}/login*`・`/clusters/{id}/connect*`）、browser の credential/attestation 系
+（`browser_credential_attestation`）、`/console/instruct`（`console_instruction_chain`）、`/cos/*`（`recursive_cos`）、
+ADR-0079 で撤去済みの入口（`removed_by_adr_0079`）。
+path の placeholder は 1 segment（英数字・`-`・`_`・`.`・`:`）に一致する。
+
+外部 URL、任意 proxy、`/cos` 以下の再帰操作、未登録 path は 422 で拒否理由付き監査 event に残す。`reason`・`policy_version`・`idempotency_key` は必須（reason は空白不可）。`expected_revision` は対象が revision を持つ操作で必須。idempotency key は thread 内一意で、同じ key の異なる request hash は 409。適用結果・`cos_operations` 行・監査 envelope event・chat card は同じ transaction に記録する。checkpoint は credential の run/thread に限り、run に配送済みの `through_seq` 以下、本文 32 KiB 以下。現在の checkpoint revision と `expected_summary_through_seq` が異なる場合は 409。
 
 スレッドの種類 `kind`（`human` / `inbox` / `legacy`）は人からは指定できない。`inbox` の thread は archive できない。`legacy` は旧 Console の履歴を移したもの（ADR D6）。
 

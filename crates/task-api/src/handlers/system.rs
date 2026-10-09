@@ -117,17 +117,27 @@ pub(super) async fn replay(
     no_query(&raw)?;
     require_admin(&state, &headers)?;
     let ReplayBody {} = read_json(body, true).await?;
-    let guard = state
-        .try_begin_replay()
-        .ok_or_else(ApiProblem::replay_in_progress)?;
+    let worker = state.clone();
     let report = state
-        .blocking(move |store| {
-            // 要求が切断されても replay が終わるまで枠を持つ。
-            let _guard = guard;
-            task_ops::replay::replay(store).map_err(|e| ops_problem(store, e, None))
-        })
+        .blocking(move |store| crate::cos::operations::effect_result(replay_effect(&worker, store)))
         .await?;
     Ok(json_response(StatusCode::OK, &report))
+}
+
+/// `POST /replay` (shared with CoS `daemon.replay`). One replay at a time: a second is refused
+/// before it runs.
+pub(crate) fn replay_effect(
+    state: &ApiState,
+    store: &task_core::store::SqliteStore,
+) -> crate::cos::operations::Effect<task_ops::replay::ReplayReport> {
+    let Some(guard) = state.try_begin_replay() else {
+        return Ok(Err(ApiProblem::replay_in_progress()));
+    };
+    // 要求が切断されても replay が終わるまで枠を持つ。
+    let _guard = guard;
+    task_ops::replay::replay(store)
+        .map(Ok)
+        .map_err(|e| ops_problem(store, e, None))
 }
 
 // ---- 19. GET /graph ----

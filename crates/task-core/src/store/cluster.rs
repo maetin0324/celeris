@@ -1,4 +1,4 @@
-use rusqlite::{OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use time::OffsetDateTime;
 
 use super::{
@@ -67,6 +67,16 @@ impl SqliteStore {
         now: OffsetDateTime,
     ) -> Result<(), StoreError> {
         let conn = self.lock()?;
+        Self::cluster_settings_set_tx(&conn, cluster_id, work_dir, now)
+    }
+
+    /// `cluster_settings_set` in the caller's transaction (CoS `cluster.settings_put`).
+    pub fn cluster_settings_set_tx(
+        conn: &Connection,
+        cluster_id: &str,
+        work_dir: Option<&str>,
+        now: OffsetDateTime,
+    ) -> Result<(), StoreError> {
         match work_dir {
             Some(work_dir) => {
                 conn.execute(

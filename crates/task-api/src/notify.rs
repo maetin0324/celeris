@@ -160,17 +160,28 @@ pub(crate) async fn test(
 ) -> ApiResult {
     crate::handlers::no_query(&raw)?;
     require_admin(&state, &headers)?;
-    crate::middleware::require_active(&state)?;
-    if webhook_fingerprint(&state).is_none() {
-        return Err(ApiProblem::notify_unavailable(format!(
+    let result = crate::cos::operations::effect_result(test_effect(&state).await)?;
+    Ok(json_response(StatusCode::OK, &result))
+}
+
+/// The daemon side of `POST /notify/test` (shared with CoS `notify.test`, an external effect: a
+/// Discord message is sent).
+pub(crate) async fn test_effect(
+    state: &ApiState,
+) -> crate::cos::operations::Effect<NotifyTestResult> {
+    if let Err(problem) = crate::middleware::require_active(state) {
+        return Ok(Err(problem));
+    }
+    if webhook_fingerprint(state).is_none() {
+        return Ok(Err(ApiProblem::notify_unavailable(format!(
             "no Discord webhook is registered; add it as the secret `{}`",
             state.inner.notify_secret_id
-        )));
+        ))));
     }
     let Some(admin_tx) = state.inner.admin_tx.clone() else {
-        return Err(ApiProblem::notify_unavailable(
+        return Ok(Err(ApiProblem::notify_unavailable(
             "celeris is not accepting admin requests, so the test cannot be sent",
-        ));
+        )));
     };
     let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
     if admin_tx
@@ -178,9 +189,9 @@ pub(crate) async fn test(
         .await
         .is_err()
     {
-        return Err(ApiProblem::internal(
+        return Ok(Err(ApiProblem::internal(
             "celeris is not accepting admin requests",
-        ));
+        )));
     }
     let outcome = match tokio::time::timeout(std::time::Duration::from_secs(30), reply_rx).await {
         Ok(Ok(result)) => result,
@@ -200,15 +211,14 @@ pub(crate) async fn test(
                 detail = outcome.detail.as_deref().unwrap_or(""),
                 "admin: notify test sent"
             );
-            Ok(json_response(
-                StatusCode::OK,
-                &NotifyTestResult {
-                    ok: outcome.ok,
-                    detail: outcome.detail,
-                },
-            ))
+            Ok(Ok(NotifyTestResult {
+                ok: outcome.ok,
+                detail: outcome.detail,
+            }))
         }
-        Err(NotifyAdminError::Unavailable(detail)) => Err(ApiProblem::notify_unavailable(detail)),
+        Err(NotifyAdminError::Unavailable(detail)) => {
+            Ok(Err(ApiProblem::notify_unavailable(detail)))
+        }
     }
 }
 

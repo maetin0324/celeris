@@ -658,12 +658,83 @@ pub(super) async fn rereview(
     let id = parse_task_id(&id)?;
     let ReopenBody { expected_status } = read_json(body, true).await?;
     let result = state
-        .blocking(move |store| {
-            task_ops::comment::rereview(store, id, expected_status)
-                .map_err(|e| ops_problem(store, e, Some("rereview")))
-        })
+        .blocking(move |store| rereview_op(store, id, expected_status, None)?.direct())
         .await?;
     Ok(json_response(StatusCode::OK, &result))
+}
+
+pub(crate) fn rereview_op(
+    store: &task_core::store::SqliteStore,
+    id: task_core::TaskId,
+    expected: Option<task_core::Status>,
+    audit: Option<&OperationAudit>,
+) -> Result<Applied<task_ops::gate::TransitionResult>, ApiProblem> {
+    let Some(audit) = audit else {
+        return task_ops::comment::rereview(store, id, expected)
+            .map(Applied::Direct)
+            .map_err(|error| ops_problem(store, error, Some("rereview")));
+    };
+    let target_id = id.to_string();
+    let task = store
+        .get(id)
+        .map_err(crate::problem::store_problem)?
+        .ok_or_else(|| {
+            audit.reject(
+                store,
+                "task",
+                &target_id,
+                ops_problem(store, task_ops::OpsError::NotFound(id), Some("rereview")),
+            )
+        })?;
+    if let Some(expected) = expected
+        && expected != task.status
+    {
+        return Err(audit.reject(
+            store,
+            "task",
+            &target_id,
+            ops_problem(
+                store,
+                task_ops::OpsError::Conflict {
+                    expected,
+                    actual: task.status,
+                },
+                Some("rereview"),
+            ),
+        ));
+    }
+    let events = store
+        .events_for(id)
+        .map_err(crate::problem::store_problem)?;
+    if !task_ops::comment::can_rereview(&task, &events) {
+        return Err(audit.reject(
+            store,
+            "task",
+            &target_id,
+            ops_problem(
+                store,
+                task_ops::OpsError::Validation("task is not eligible for rereview".into()),
+                Some("rereview"),
+            ),
+        ));
+    }
+    let from = task.status;
+    let operation = audit.apply(store, "task", &target_id, "task.rereview", |tx| {
+        let outcome = task_core::store::SqliteStore::apply_transition_tx(
+            tx,
+            id,
+            task_core::Trigger::Rereview,
+            Vec::new(),
+        )?;
+        Ok(serde_json::json!({
+            "task_id": target_id,
+            "from": from,
+            "to": outcome.next,
+            "reason": outcome.reason.to_string(),
+            "cascaded": [],
+        }))
+    })?;
+    Ok(Applied::Audited(Box::new(operation)))
 }
 
 /// ADR 2026-10-05 D3（D6 一次対応 A）: CoS が `POST /tasks/{id}/answer` を代わりに答える監査つきの

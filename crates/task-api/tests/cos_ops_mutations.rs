@@ -11,7 +11,9 @@ use task_core::decision::{
     DecisionRaisedBy, DecisionRequest, DecisionStatus,
 };
 use task_core::model_catalog::{CatalogSource, DiscoveredModel};
-use task_core::{Event, ModelCatalogStore, Status, TaskId, TaskKind, TaskStore, Tier};
+use task_core::{
+    Check, Criterion, Event, ModelCatalogStore, Status, TaskId, TaskKind, TaskStore, Tier,
+};
 
 fn raise_decision(env: &TestEnv, task: TaskId, id: &str) {
     let opt = |key: &str| DecisionOption {
@@ -196,6 +198,32 @@ async fn cos_ops_mutations_task_gate_actions() {
             expected
         );
     }
+}
+
+#[tokio::test]
+async fn cos_ops_mutations_task_rereview() {
+    let env = admin_env();
+    let mut task = new_task(TaskKind::Execute, Status::Done);
+    task.acceptance = vec![Criterion {
+        text: "review result".into(),
+        check: Check::Reviewer,
+    }];
+    env.seed(&task);
+    let path = format!("/api/v1/tasks/{}/rereview", task.id);
+    let operation = run_domain(
+        &env,
+        "task-rereview",
+        "POST",
+        &path,
+        json!({"expected_status":"done"}),
+        "task.rereview",
+    )
+    .await;
+    assert_eq!(operation["state"], "applied");
+    assert_eq!(
+        env.store.get(task.id).expect("task").expect("row").status,
+        Status::Reviewing
+    );
 }
 
 #[tokio::test]

@@ -30,6 +30,7 @@ pub(crate) const ALLOWED: &[(&str, &str, &str)] = &[
     ("POST", "/api/v1/tasks/{id}/approve", "task.approve"),
     ("POST", "/api/v1/tasks/{id}/reject", "task.reject"),
     ("POST", "/api/v1/tasks/{id}/cancel", "task.cancel"),
+    ("POST", "/api/v1/tasks/{id}/rereview", "task.rereview"),
     ("POST", "/api/v1/tasks/{id}/pause", "task.pause"),
     ("POST", "/api/v1/tasks/{id}/resume", "task.resume"),
     (
@@ -52,7 +53,6 @@ pub(crate) const PENDING: &[(&str, &str)] = &[
     ("POST", "/api/v1/tasks/{id}/changes/{repo}/pr/merge"),
     ("POST", "/api/v1/tasks/{id}/execution-plan"),
     ("POST", "/api/v1/tasks/{id}/execution/decompose"),
-    ("POST", "/api/v1/tasks/{id}/rereview"),
     ("POST", "/api/v1/tasks/{id}/tree/adopt"),
 ];
 
@@ -104,6 +104,18 @@ pub(crate) fn dispatch(
                 note,
                 expected_status,
                 audit,
+            )?)
+        }
+        "task.rereview" => {
+            let raw_id = matched.id.unwrap_or_default();
+            let id = parse_task_id(&raw_id)
+                .map_err(|problem| audit.reject(store, "task", &raw_id, problem))?;
+            let input: crate::types::ReopenBody = serde_json::from_value(body).map_err(decode)?;
+            audited(crate::handlers::task_actions::rereview_op(
+                store,
+                id,
+                input.expected_status,
+                Some(audit),
             )?)
         }
         "comment.create" => {

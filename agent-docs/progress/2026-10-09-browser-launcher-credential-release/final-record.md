@@ -1,10 +1,8 @@
----
-title: "最終 HEAD での検査記録（final-record）"
+# 最終 HEAD での検査記録（final-record）
+
 tasks: [01M4FRFZ2MVCC9BZBR86VS71K5]
 status: done
 updated: 2026-10-09
----
-# 最終 HEAD での検査記録（final-record）
 
 - 記録時 HEAD: `87f8b8a5257cdb3b2d9959499616d7261b81ccc6`
 - 記録日時: 2026-10-09 14:41 UTC。コードは変更せず、検査結果の記録だけを行った。

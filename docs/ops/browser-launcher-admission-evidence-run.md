@@ -61,7 +61,7 @@ echo "exit=$?"
 systemctl show celeris-browser-launcher.service -p MainPID   # 下の responder の pid と比べる
 ```
 
-必須モードは `CELERIS_LAUNCHER_TESTS=require` の実証を 3 回実行し、各試験 process group が生きている間 SIGSTOP/SIGCONT を繰り返す。`LAUNCHER_EVIDENCE_TEST_CMD` は台本の試験専用 hook であり、本番の証跡取得では使わない。通常の 1 回だけの再取得には引数を付けずに実行する。credential 経路の回帰試験は `--credential <log>` で別に実行できる。
+必須モードは `CELERIS_LAUNCHER_TESTS=require` の実証を 3 回実行し、各試験 process group が生きている間 SIGSTOP/SIGCONT を繰り返す。`LAUNCHER_EVIDENCE_TEST_CMD` は台本の試験専用 hook であり、本番の証跡取得では使わない。通常の 1 回だけの再取得には引数を付けずに実行する。試験 group の終了と競合した signal の失敗（ESRCH）は失敗にしない。その回は停止が終わっただけで、合否は `stops` と試験の終了コードで決まる。pgid を取れないうちに試験が終わった回は `stops=0` となり失敗する（停止が届いていない回は証跡にならない）。credential 経路の回帰試験は `--credential <log>` で別に実行できる。
 
 期待（`/tmp/launcher-admission-evidence.log`）:
 

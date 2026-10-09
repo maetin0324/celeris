@@ -34,7 +34,7 @@ sh crates/task-worker/scripts/launcher-admission-evidence.sh --stutter 3 /tmp/la
 sh crates/task-worker/scripts/launcher-admission-evidence.sh --credential /tmp/launcher-credential-tests.log
 ```
 
-両台本が exit 0 であることを確認する。stutter log は各回に `RUN[stutter-N] required launcher admission + SIGSTOP stutter`、`STUTTER[stutter-N]: stops=<n>`（`n` は 0 より大きい整数）、`EXIT[stutter-N]: 0` があり、3 回分の後の最終行が `EXIT: 0` であることを確認する。ログの行形式は次のとおり（停止数は実行ごとに変わる）。
+両台本が exit 0 であることを確認する。stutter log は各回に `RUN[stutter-N] required launcher admission + SIGSTOP stutter`、`STUTTER[stutter-N]: stops=<n>`（`n` は 0 より大きい整数）、`EXIT[stutter-N]: 0` があり、3 回分の後の最終行が `EXIT: 0` であることを確認する。試験 group の終了と競合した signal の失敗（ESRCH）は失敗にしない（その回の停止は終わっており、合否は `stops` と試験の終了コードで決まる）。pgid を取れないうちに試験が終わった回は `stops=0` となり失敗する。ログの行形式は次のとおり（停止数は実行ごとに変わる）。
 
 ```text
 RUN[stutter-1] required launcher admission + SIGSTOP stutter

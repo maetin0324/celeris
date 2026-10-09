@@ -103,11 +103,12 @@ pub fn run(config_path: Option<PathBuf>, command: ModelsCommand) -> Result<ExitC
     Ok(ExitCode::SUCCESS)
 }
 
-/// The domain request of a mutating `models` subcommand (`None` for `list`): `(method, path under
-/// /api/v1, body)`. The direct run and the CoS operation (`cos_mapped`) send the same request.
-pub fn request_of(
-    command: &ModelsCommand,
-) -> Result<Option<(&'static str, String, Option<Value>)>, CliError> {
+/// `(method, path under /api/v1, body)`.
+pub type Request = (&'static str, String, Option<Value>);
+
+/// The domain request of a mutating `models` subcommand (`None` for `list`). The direct run and
+/// the CoS operation (`cos_mapped`) send the same request.
+pub fn request_of(command: &ModelsCommand) -> Result<Option<Request>, CliError> {
     Ok(match command {
         ModelsCommand::List(_) => None,
         ModelsCommand::Discover(args) => Some((

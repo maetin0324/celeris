@@ -1,13 +1,13 @@
-# ADR 2026-10-08: CoS chat の prompt cache 最適化 — 現状の事実・仮説表・計測設計（草案）
+# ADR 2026-10-08: CoS chat の prompt cache 最適化 — 決定と計測結果
 
 ---
 tasks: [01M4D3XKDS8DK9QEK081QKA8VE, 01M4EVARH4NPTQ73Y1NXK5WJY4]
 ---
 
 - 日付: 2026-10-08
-- 状態: **草案（提案）**。この ADR はコードを変えない。D1 は最新 main（`9d2a73141f0e`。skill 配送の v3 content hash 照合を含む）の読解と、LLM を呼ばない決定的な計測で確かめた事実。D2〜D5 は後続 task の提案で、人の採否を待つ
+- 状態: **確定・実装済み（T8 full after と release/verify 検証済み）**。設計時の事実・仮説は下の1〜5に保存し、最新結果と未知値は付記D9を正とする。
 - 関連: [ADR 2026-10-05 cos-chat-home](2026-10-05-cos-chat-home.md)（D2 の session・要約・差分配送）、[ADR 2026-10-06 cos-chat-harness-adapters](2026-10-06-cos-chat-harness-adapters.md)、[ADR 2026-10-07 cos-live-fixes](2026-10-07-cos-live-fixes.md)（`scripts/dev/cos-chat-live.sh`）、[ADR-0054](0054-stateful-sessions-and-streaming-chat.md)、[ADR-0140](0140-claude-session-resume.md)、ADR-0056 D3・[ADR-0127](0127-skills-native-delivery.md)（skill の配送）、ADR-0072（実行 metrics・単価表）
-- 範囲: CoS chat run だけ。worker 一般（task run・planner・reviewer）の既存挙動は変えない。計測は隔離環境だけで行い、本番の config・DB・KB・release・systemd に触れない。LLM 呼び出しは subscription の lab account（`claude_oauth`）だけ。API 課金 source の利用・promote・権限変更は人の決定
+- 範囲: CoS chat run だけ。worker 一般（task run・planner・reviewer）の既存挙動は変えない。計測は隔離環境だけで行い、本番の config・DB・KB・release・systemd に触れない。LLM 呼び出しは subscription（`claude_oauth`）。account限定は人の決定で撤回済み（D7）。API 課金 source の利用・promote・権限変更は人の決定
 
 ## 1. 文脈
 
@@ -300,7 +300,7 @@ task artifactsの `answer-comparison.json`・`answer-bench-{before,after}/domain
 Core以降のpromptのenrichはrunディレクトリを直接探すようにし、既存出力に対してofflineで再集計した。
 今回Rust/skill本文の変更・main統合・本番反映は行っていない。
 
-## 9. 付記 D8（2026-10-08、task 01M4EVARH4NPTQ73Y1NXK5WJY4）: 保存証拠の再検算と最終検証の前提
+## 9. 付記 D8（2026-10-08、task 01M4EVARH4NPTQ73Y1NXK5WJY4）: 再開前の記録（最新結果はD9）
 
 **T8 は未完了。統合後 after の結果として確定しない。** 検査対象 main は
 `f81b98540b2c`。T6 の merge commit `1168e6c7` はその祖先でなく、
@@ -377,3 +377,34 @@ gate 条件は緩めていない。release は生成されず、`verify.sh` は 
 `status.sh` は exit 0、隔離 state の候補 release 一覧は空。
 status の本番 GUI health にある `ok=true` は既存本番の値で、候補の検証を表さない。
 本番 health は読み取りのみ。promote は未実行。
+
+
+## 10. 付記 D9（2026-10-09）: 統合afterの結果と確定判断
+
+T8はT2〜T7を含む`1168e6c7`の製品treeをtask branchへ取り込み、`6de17ea3`で計測バイナリを構築した。`c8c47158`との差はbench driverと文書だけで、crates/config/Cargo.toml/Cargo.lock/docs/protocolのtree SHA256は一致する。実DBにdelivered_through_seq列があることも確認した。main refと本番を変更していない。
+人の「cos-chat-bench.shなど検査に必要な場合は全て許可します」を適用して隔離daemonで実行した。account限定撤回も適用。labの週枠98%による14件の配送拒否を保存し、personalの隔離コピーでfull26runを再実行した。API課金source、promote、権限変更はなし。
+
+beforeはT3の保存summary（申告SHA`c7e60aa7`）、afterは製品SHA`6de17ea3`。元full台本の全入力は一致し、claude-code 2.1.287 / claude-opus-5-5 / claude_oauthも一致する。S6 standalone keyの追加はfull実行入力に影響しない。beforeの申告SHAはこのgitに存在せずバイナリhashもないため、独立した出所確認は不明。cache状態・account・共有host負荷は制御できず、一回の差をcommitの因果効果とは扱わない。
+
+| 指標（run別中央値） | S1 before→after | S2 before→after |
+|---|---|---|
+| 非cache input | 8→11 | 6→6 |
+| cache write | 21,864.5→17,821（−18.49%） | 6,617→1,930（−70.83%） |
+| output | 835→1,388（+66.23%） | 1,132.5→963（−14.97%） |
+| 初回output ms | 13,980→16,118.5（+15.30%） | 18,867.5→10,082（−46.56%） |
+| 総latency ms | 15,802.5→19,643（+24.30%） | 19,672→11,066（−43.75%） |
+| skill read | 1→0 | 0→0 |
+| completed | 10/10→10/10 | 10/10→10/10 |
+| session_mode | new 10→new 10 | new 1/resumed 9→同じ |
+
+S5 warm/coldも各3/3 completed/resumed。after記録Coreは6,931 B（Global Core body）。可変部はstdin body、prompt bytesは記録markerを含む。CLI内蔵環境とHEADLESS_RUN_NOTEを含む全native prefixのbytesは不明。baselineのprompt bytes・固定部/可変部bytesは不明。cache read比率・cache read/write・output・名目cost・skill読込・bytes・session分布・全turnの前後と差はtask artifactsの比較JSON/Markdownに保存した。subscription実枠消費は不明で、CLI costを実際の請求額とは扱わない。
+
+指示採点: after内容26/26はfixtureと一致するが、指定行数を含む厳密達成は17/26（65.38%）：S1 2/10、S2 9/10、S5各3/3。S1は結論文を足して3行指定を超える失敗が8件、S2初回にも1件あった。beforeの生回答が無いため厳密達成率の差は不明。起票1・コメント4はafter5/5 applied、before5/5はD7.5の二次報告。旧補助回答の3/3→3/3は保存domain eventを再検算したが、統合afterのweb_path確認には置き換えない。S3 pin・S4 triage・web_pathはfull台本にないのでlive前後は不明。追加S6の62分待機はrun予算を圧迫するためafter未計測。S5の370秒は1h TTL内である。
+
+判断: Core分離・skill再構成・差分配送はcache write/skill読込/S2 latencyの観測上の利益があるため維持する。S1 latency/outputは改善しない。S1速度優先で戻す場合は`b3e7c93b`→`8ce73e81`→`ddc6a895`の逆依存順でCoS変更を一組としてrevertする案とする。単独寄与は不明で、反復計測による遅延増確認を条件とし、今回は適用しない。`d514aa37`のrollover会計は正確性の修正なので戻さない。T7追加配送変更はD4のとおり既に削除済み。worker一般の既存挙動への追加変更はない。
+
+回帰: 実usernsを有効にしたcargo test --workspaceはexit0、4,880成功/0失敗/14ignore（doc込み）。release gate nextestは4,878成功/0失敗/13skip。cos_chat/attachments/triage/continuation/credential/restart-control/acp/claude_code/codexの各群を含み、cos_audit_context_required・actor偽装拒否・実DB read-only・必須skillなし拒否を確認した。workspace clippy、web lint/typecheck/Vitest625件/Node78件、GUI mobile/mock E2Eも成功。長いsocket pathによる既存失敗は短い実fixtureディレクトリで解消し、検査をskipする変更はしていない。
+
+検証済みSHAは`c8c47158e8444240aa6cc7cb60ba989a137487c5`（schema63）。隔離release.sh/verify.sh/status.shはいずれもexit0、gate.okとverifyのtop-level ok、statusの同候補gate.ok/verify.okはtrue。N−1は隔離stateにcurrentが無いため未検証でlive_ok=false。本番互換を証明したとは扱わず、promoteは人が行う。本taskではpromoteせず、本番config/DB/KB/release/systemdは変更していない。後続HEADは文書更新だけで検証済み製品treeと一致する。
+
+証拠はtask `01M4EVARH4NPTQ73Y1NXK5WJY4` のartifacts/cos-chat-bench-after.json、cos-chat-bench-comparison.md、regression-integrated.json、release-verification-integrated.json。KB候補projects/agent-platform/cos-chat-bench-after.mdも同artifacts内に作成し、本番KBには書き込んでいない。

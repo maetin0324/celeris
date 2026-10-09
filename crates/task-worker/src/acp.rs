@@ -139,6 +139,13 @@ impl WorkerAdapter for AcpAdapter {
         config.env.extend(extra.iter().cloned());
         Some(Arc::new(AcpAdapter::new(config)))
     }
+    /// tier から解決した model を `session/set_config_option` で渡す複製。無いと TieredAdapter が
+    /// 『adapter cannot apply tier model』で毎回 infra 失敗にしていた（opencode-qwen、2026-10-08 本番）。
+    fn with_model(&self, model: &str) -> Option<Arc<dyn WorkerAdapter>> {
+        let mut config = self.config.clone();
+        config.model = Some(model.to_owned());
+        Some(Arc::new(AcpAdapter::new(config)))
+    }
     /// ADR-0043 D3（Phase 56）: コンテナの中で ACP エージェントを起こす複製。
     fn with_container(&self, plan: crate::container::SharedPlan) -> Option<Arc<dyn WorkerAdapter>> {
         let mut config = self.config.clone();

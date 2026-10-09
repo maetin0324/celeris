@@ -26,3 +26,11 @@ updated: 2026-10-09
 - 登録 IPC の `LauncherProofRegistration` は session/instance/peer UID/proof のみを持ち、credential 値を含めない。credential 値は従来どおり注入 sink に限定され、試験で daemon worker 等へ返らないことを確認する。
 - `crates/celeris-credentiald/tests/prod_admission.rs` に `launcher_credential_` の許可・証明なし・偽造 instance・stale process（starttime 不一致）・peer UID 不一致の 5 ケースを追加した。proof 型に壁時計の期限フィールドは無いため、失効した process 証明は PID/starttime の照合で検査する。
 - 検査: `TMPDIR=/tmp/cd-lc cargo test -p celeris-credentiald` は全 suite 成功。既定の長い run TMPDIR では既存 broker fixture 3 件が `SUN_LEN`/readiness timeout で失敗したため、短い物理 TMPDIR で再実行した。`TMPDIR=/tmp/cd-lc cargo clippy -p celeris-credentiald -- -D warnings` 成功。
+
+## launcher-inject WorkUnit（2026-10-09）
+
+- protocol に secret-free `AuthenticateArgs`（session/auth section/lease/origin/target）と status-only `AuthenticateResult` を定義し、未知 field を拒否する。
+- server は接続 owner・lease・isolation を検査して backend authenticate を dispatch する。失敗時も固定 `rejected` status のみを返す。daemon client に authenticate 関数を追加。
+- 現時点で `RuntimeSession.authenticate` は未接続のため拒否する。credentiald socket の設定と launcher-owned `CdpController` からの broker injection、auth section open/close・値 cleanup は未実装であり、成功経路はまだ解放していない。
+- `launcher_credential_` の試験 3 件で固定引数/未知 secret field 拒否・必須引数検査・fake backend の拒否 status を確認する。`TMPDIR=/tmp/lci cargo test -p task-worker --lib browser_launcher` は 37 件成功、`TMPDIR=/tmp/lci cargo clippy -p task-worker --lib -- -D warnings` 成功。長い run TMPDIR では Unix socket path が SUN_LEN を超えるため、短い物理 TMPDIR を使った。
+- 残作業: `RuntimeSession.authenticate` は fail-closed の拒否実装のまま。credentiald injection socket と launcher-owned `CdpController` をつなぐ実行経路、auth section open/close、注入値 cleanup は未実装で、この WorkUnit の launcher runtime では実際の認証注入はまだできない。

@@ -9,7 +9,9 @@ use nix::libc;
 use serde::Deserialize;
 use serde_json::json;
 
-use super::protocol::{ActionArgs, ErrorCode, Observation, SessionFacts, SessionState, Verb};
+use super::protocol::{
+    ActionArgs, AuthenticateArgs, ErrorCode, Observation, SessionFacts, SessionState, Verb,
+};
 use super::server::{BackendSession, Launched, SessionBackend, StartRequest};
 use super::userns;
 use crate::browser_cdp_sink::CdpController;
@@ -608,6 +610,12 @@ impl RuntimeSession {
 }
 
 impl BackendSession for RuntimeSession {
+    fn authenticate(&mut self, _args: &AuthenticateArgs) -> Result<(), ErrorCode> {
+        // Credentials are not yet attached to this runtime backend. Fail closed until the
+        // launcher-owned broker/controller transport is configured for this session.
+        Err(ErrorCode::Unauthorized)
+    }
+
     fn action(&mut self, verb: Verb, args: &ActionArgs) -> Result<Observation, ErrorCode> {
         if !self.isolation_ok() {
             return Err(ErrorCode::IsolationFailed);

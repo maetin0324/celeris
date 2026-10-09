@@ -138,7 +138,10 @@ async fn cos_ops_projects_cron_docs_page_put_delete_are_external_once() {
     let first = send(&app, post_json_with(OPS, &envelope, &headers)).await;
     assert_eq!(first.status.as_u16(), 200, "{}", first.text());
     let again = send(&app, post_json_with(OPS, &envelope, &headers)).await;
-    assert_eq!(again.json()["operation"]["id"], first.json()["operation"]["id"]);
+    assert_eq!(
+        again.json()["operation"]["id"],
+        first.json()["operation"]["id"]
+    );
     assert_eq!(commits(&repo), before + 2);
 
     // A stale etag is refused by git before any change: settled rejected, no commit.
@@ -224,4 +227,79 @@ async fn cos_ops_projects_cron_docs_init_and_maintenance_are_audited() {
     )
     .await;
     assert!(op["result"]["proposal"].is_object(), "{op}");
+}
+
+#[tokio::test]
+async fn cos_ops_projects_cron_knowledge_page_put_is_external_once() {
+    let env = admin_env();
+    task_ops::knowledge::init(&env.knowledge_root).expect("knowledge init");
+    let kb_commits = |root: &Path| -> usize {
+        git(root, &["rev-list", "--count", "HEAD"])
+            .trim()
+            .parse()
+            .expect("count")
+    };
+    let before = kb_commits(&env.knowledge_root);
+    let op = run_external(
+        &env,
+        "kb-put",
+        "PUT",
+        "/api/v1/knowledge/page",
+        json!({"path": "environment/notes.md", "body": "# メモ\n\n本文\n"}),
+        "knowledge.page_put",
+    )
+    .await;
+    assert_eq!(op["target_kind"], "knowledge_page");
+    assert!(
+        std::fs::read_to_string(env.knowledge_root.join("environment/notes.md"))
+            .expect("page")
+            .contains("本文")
+    );
+    assert_eq!(kb_commits(&env.knowledge_root), before + 1);
+
+    // Resent: same record, no second commit. Stale etag: rejected, no commit. `_inbox/`: 403.
+    let app = env.router();
+    let (_, _, bearer) = cos_bearer(&env, "kb-more");
+    let headers = [("authorization", bearer.as_str())];
+    let envelope = op_body(
+        "kb-put",
+        "PUT",
+        "/api/v1/knowledge/page",
+        json!({"path": "environment/other.md", "body": "# 別\n"}),
+    );
+    let first = send(&app, post_json_with(OPS, &envelope, &headers)).await;
+    let again = send(&app, post_json_with(OPS, &envelope, &headers)).await;
+    assert_eq!(again.json()["operation"]["id"], first.json()["operation"]["id"]);
+    assert_eq!(kb_commits(&env.knowledge_root), before + 2);
+    let stale = send(
+        &app,
+        post_json_with(
+            OPS,
+            &op_body(
+                "kb-stale",
+                "PUT",
+                "/api/v1/knowledge/page",
+                json!({"path": "environment/notes.md", "body": "# 上書き\n", "etag": "0000"}),
+            ),
+            &headers,
+        ),
+    )
+    .await;
+    assert_problem(&stale, 409, "etag_mismatch");
+    assert_eq!(kb_commits(&env.knowledge_root), before + 2);
+    let inbox = send(
+        &app,
+        post_json_with(
+            OPS,
+            &op_body(
+                "kb-inbox",
+                "PUT",
+                "/api/v1/knowledge/page",
+                json!({"path": "_inbox/x.md", "body": "# x\n"}),
+            ),
+            &headers,
+        ),
+    )
+    .await;
+    assert_eq!(inbox.status.as_u16(), 403, "{}", inbox.text());
 }

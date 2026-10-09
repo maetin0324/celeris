@@ -525,6 +525,94 @@ async fn page(
 // PUT /knowledge/page（管理系）
 // ---------------------------------------------------------------------------
 
+/// `PUT /knowledge/page` shared by the handler and `/cos/operations` (`knowledge.page_put`, C:
+/// the KB is a git repository). Path checks happen before the effect; an etag mismatch or a
+/// missing page is git refusing before any change (`rejected`); other failures stay pending.
+pub(crate) fn put_page_op(
+    store: &task_core::SqliteStore,
+    root: &std::path::Path,
+    request: KnowledgePagePutBody,
+    audit: Option<&crate::cos::operations::OperationAudit>,
+) -> Result<crate::cos::operations::Applied<KnowledgePageResult>, ApiProblem> {
+    use crate::cos::operations::Applied;
+    let reject = |problem: ApiProblem| match audit {
+        Some(audit) => audit.reject(store, "knowledge_page", &request.path, problem),
+        None => problem,
+    };
+    require_kb(root).map_err(reject)?;
+    let path = page_path(&request.path).map_err(reject)?;
+    if kb::is_inbox(&path) {
+        return Err(reject(ApiProblem::path_forbidden(
+            "`_inbox/` の候補は編集できません（accept か reject を使う）",
+        )));
+    }
+    let message = request
+        .message
+        .as_deref()
+        .map(str::trim)
+        .filter(|m| !m.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("knowledge: {path}"));
+    // ADR-0047 付記 H1: 人の編集は『人が書いた』印を付けて保存する（整理が保護する）。CoS の編集も
+    // 人の依頼の中継なので同じ印を付ける（誰が中継したかは監査の記録に残る）。
+    let body = kb::mark_human_authored(&path, &request.body);
+    let edit = PageEdit {
+        path: path.clone(),
+        body: Some(body),
+        etag: request.etag.clone().filter(|e| !e.trim().is_empty()),
+        message,
+        author: (
+            kb::HUMAN_AUTHOR_NAME.to_string(),
+            kb::HUMAN_AUTHOR_EMAIL.to_string(),
+        ),
+    };
+    let commit = || -> Result<Result<KnowledgePageResult, ApiProblem>, ApiProblem> {
+        match ops_kb::commit_page(root, &edit) {
+            WriteOutcome::Written {
+                sha,
+                etag,
+                unchanged,
+            } => {
+                // ADR-0047 D3: 書いたら必ず索引を作り直す。
+                let _ = ops_kb::reindex(root);
+                tracing::info!(
+                    op = "knowledge_put",
+                    path = %edit.path,
+                    unchanged,
+                    cos = audit.is_some(),
+                    "knowledge page committed"
+                );
+                Ok(Ok(KnowledgePageResult {
+                    path: edit.path.clone(),
+                    etag,
+                    sha,
+                    unchanged,
+                }))
+            }
+            WriteOutcome::EtagMismatch { etag } => Ok(Err(etag_mismatch(etag))),
+            WriteOutcome::Missing => Ok(Err(page_not_found(&edit.path))),
+            WriteOutcome::Failed { detail } => Err(knowledge_unavailable(detail)),
+        }
+    };
+    let Some(audit) = audit else {
+        return commit()?.map(Applied::Direct);
+    };
+    let operation = audit.external(
+        store,
+        "knowledge_page",
+        &path,
+        "knowledge.page_put",
+        time::OffsetDateTime::now_utc(),
+        || match commit()? {
+            Ok(result) => serde_json::to_value(&result)
+                .map(Ok)
+                .map_err(|e| ApiProblem::internal(format!("knowledge result: {e}"))),
+            Err(refused) => Ok(Err(refused)),
+        },
+    )?;
+    Ok(Applied::Audited(Box::new(operation)))
+}
+
 async fn put_page(
     axum::extract::State(state): axum::extract::State<ApiState>,
     headers: HeaderMap,
@@ -536,60 +624,7 @@ async fn put_page(
     let request: KnowledgePagePutBody = read_json(body, false).await?;
     let root = root_of(&state)?;
     let result = state
-        .blocking(move |_| {
-            require_kb(&root)?;
-            let path = page_path(&request.path)?;
-            if kb::is_inbox(&path) {
-                return Err(ApiProblem::path_forbidden(
-                    "`_inbox/` の候補は編集できません（accept か reject を使う）",
-                ));
-            }
-            let message = request
-                .message
-                .as_deref()
-                .map(str::trim)
-                .filter(|m| !m.is_empty())
-                .map(str::to_string)
-                .unwrap_or_else(|| format!("knowledge: {path}"));
-            // ADR-0047 付記 H1: 人の編集は『人が書いた』印を付けて保存する（整理が保護する）。
-            let body = kb::mark_human_authored(&path, &request.body);
-            let edit = PageEdit {
-                path,
-                body: Some(body),
-                etag: request.etag.clone().filter(|e| !e.trim().is_empty()),
-                message,
-                author: (
-                    kb::HUMAN_AUTHOR_NAME.to_string(),
-                    kb::HUMAN_AUTHOR_EMAIL.to_string(),
-                ),
-            };
-            match ops_kb::commit_page(&root, &edit) {
-                WriteOutcome::Written {
-                    sha,
-                    etag,
-                    unchanged,
-                } => {
-                    // ADR-0047 D3: 書いたら必ず索引を作り直す。
-                    let _ = ops_kb::reindex(&root);
-                    tracing::info!(
-                        who = "admin",
-                        op = "knowledge_put",
-                        path = %edit.path,
-                        unchanged,
-                        "admin: knowledge page committed"
-                    );
-                    Ok(KnowledgePageResult {
-                        path: edit.path,
-                        etag,
-                        sha,
-                        unchanged,
-                    })
-                }
-                WriteOutcome::EtagMismatch { etag } => Err(etag_mismatch(etag)),
-                WriteOutcome::Missing => Err(page_not_found(&edit.path)),
-                WriteOutcome::Failed { detail } => Err(knowledge_unavailable(detail)),
-            }
-        })
+        .blocking(move |store| put_page_op(store, &root, request, None)?.direct())
         .await?;
     Ok(json_response(StatusCode::OK, &result))
 }

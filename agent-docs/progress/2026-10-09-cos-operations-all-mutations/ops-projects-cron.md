@@ -83,7 +83,15 @@ best-effort。同じ key の再送は新しい id を書かないので、返事
 検証: `cos_ops_projects_cron_docs` 2 passed（local の一時 git repo。commit 回数で再送の非再実行と rejected の無変更を確認）、
 `--test docs --test cos_ops_registry --test cos_ops_projects_cron --test cos_operations` 28 passed、task-api lib cos 4 passed、clippy 成功。
 
+## PUT /knowledge/page（完了、C）
+
+`knowledge.page_put`: KB は git なので外部効果の手順。`put_page_op` を handler と共有し、KB 未用意・path の誤り・`_inbox/` は
+効果の前に拒否（rejected 行）、etag 不一致と page 無しは git の変更前拒否として `rejected`、その他の失敗は pending。
+CoS の編集も人の依頼の中継として人の印（`mark_human_authored`）で保存し、誰が中継したかは監査の記録に残す。
+
+検証: `cos_ops_projects_cron_docs`（KB 試験を含む 3 件）・knowledge・cos_ops_registry・task-api lib → 102 passed、clippy 成功。
+
 ## 残り
 
 - projects PENDING: 無し
-- tasks の C: `POST /tasks/{id}/changes/{repo}/integrate`、`/pr/merge`。decisions の C: `PUT /knowledge/page`
+- tasks の C: `POST /tasks/{id}/changes/{repo}/integrate`、`/pr/merge`。decisions の PENDING は空

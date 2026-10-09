@@ -3466,6 +3466,7 @@ registry は `crates/task-api/src/cos/ops/{tasks,decisions,projects,admin,surfac
 | decisions | `POST /knowledge/inbox` | `knowledge.record` |
 | decisions | `POST /knowledge/inbox/{id}/reject` | `knowledge.reject` |
 | decisions | `POST /knowledge/inbox/{id}/accept` | `knowledge.accept` |
+| decisions | `PUT /knowledge/page` | `knowledge.page_put`（外部効果: KB の git。etag 不一致・page 無しは `rejected`） |
 | decisions | `POST /inbox/items/{id}/answer` | `inbox.answer` |
 | projects | `POST /projects` | `project.create`（作成後の秘書の返事は commit 後に best-effort） |
 | projects | `PATCH /projects/{id}` | `project.update` |

@@ -62,6 +62,7 @@ curl -sS -X POST "$API/api/v1/cos/operations" -H "Authorization: Bearer $CELERIS
 | 通知を既読化 | `POST /api/v1/notifications/<id>/read` | notification.read | body は `{}` |
 | 通知を全て既読化 | `POST /api/v1/notifications/read-all` | notification.read_all | body は `{}` |
 | KB 候補の取り込み（正本へ） | `POST /api/v1/knowledge/inbox/<id>/accept` | knowledge.accept | `{}` か `{"path":"…","overwrite":false}` |
+| KB ページの編集（正本） | `PUT /api/v1/knowledge/page` | knowledge.page_put | `{"path":"…","body":"…","etag":"…","message":"…"}`。外部効果（KB の git）: pending → applied。etag 不一致は 409・rejected。`_inbox/` は 403 |
 
 ### projects
 
@@ -110,7 +111,7 @@ curl -sS -X POST "$API/api/v1/cos/operations" -H "Authorization: Bearer $CELERIS
   `/clusters/<id>/connect*`・browser の credential/attestation 系）、`/console/instruct`、`/cos/*` 自身、撤去済みの入口。
   人に web の画面で行うよう頼む。
 - **登録待ち（許可範囲は ADR 2026-10-09 で決定済み。領域別に実装中）**: 上の表に無い変更操作
-  （例: task の integrate・PR merge、`PUT /knowledge/page`、org・provider・release promote・
+  （例: task の integrate・PR merge、org・provider・release promote・
   `/reload`・browser 操作など）。必要なら人に web の画面で行うよう頼むか、運用者向けの task を起票する。
   一覧はエラー本文の `pending in <領域>` と `crates/task-api/src/cos/ops/*.rs` の `PENDING` にある。
 

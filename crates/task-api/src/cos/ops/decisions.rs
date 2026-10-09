@@ -14,6 +14,7 @@ pub(crate) const ALLOWED: &[(&str, &str, &str)] = &[
     ("POST", "/api/v1/decisions/{id}/answer", "decision.answer"),
     ("POST", "/api/v1/approvals/{id}/decide", "approval.decide"),
     ("POST", "/api/v1/knowledge/inbox", "knowledge.record"),
+    ("PUT", "/api/v1/knowledge/page", "knowledge.page_put"),
     (
         "POST",
         "/api/v1/knowledge/inbox/{id}/reject",
@@ -47,7 +48,7 @@ pub(crate) const ALLOWED: &[(&str, &str, &str)] = &[
 pub(crate) const EXCLUDED: &[(&str, &str, &str)] = &[];
 
 /// Assigned mutations awaiting audited implementation. Move a row to ALLOWED when implemented.
-pub(crate) const PENDING: &[(&str, &str)] = &[("PUT", "/api/v1/knowledge/page")];
+pub(crate) const PENDING: &[(&str, &str)] = &[];
 
 pub(crate) fn dispatch(
     store: &SqliteStore,
@@ -85,6 +86,19 @@ pub(crate) fn dispatch(
             audited(crate::decisions::withdraw_op(
                 store,
                 &decision_id,
+                input,
+                Some(audit),
+            )?)
+        }
+        "knowledge.page_put" => {
+            let root = env
+                .kb_root
+                .clone()
+                .map_err(|problem| audit.reject(store, "knowledge_page", path, problem))?;
+            let input = serde_json::from_value(body).map_err(decode)?;
+            audited(crate::knowledge::put_page_op(
+                store,
+                &root,
                 input,
                 Some(audit),
             )?)

@@ -53,6 +53,17 @@ final review 指摘 (1)（launcher runtime が `credential-request.json` を wai
 - 共有段の試験は `shim_request_wait` を直接呼ぶ（launcher 経路の run 後段そのもの）。`run` 全体を端到端で回す試験は credentiald への登録（実 socket）と偽 launcher の process 起動が要り、既定 TMPDIR では `SUN_LEN` で落ちる既存試験と同じ環境依存を持つため追加していない。
 - `integrate-impl`（統合）で main 追従後の同一検査を再度流す。
 
+## retry run の再確認（2026-10-09）
+
+前回 commit `f6e8f2bb` の実装と差分を確認し、launcher runtime の run 後段・daemon 経路の双方が `shim_request_wait` を呼ぶこと、秘密値試験が wait / browser update / sink event / outcome の serialize を検査することを確認した。コード変更は不要だった。
+
+- `cargo test -p task-worker --lib launcher_credential_request_` → exit 0、5 passed
+- `cargo test -p task-worker --lib -- approval credential_request operation_wait` → exit 0、10 passed
+- `cargo clippy -p task-worker --all-targets -- -D warnings` → exit 0
+- `bash scripts/dev/check-doc-links.sh` / `bash scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv` / `bash scripts/dev/check-adr-numbers.sh` / `bash scripts/dev/progress-index.sh --check` → 全て exit 0
+- `sh "$CELERIS_WU_SCOPE_PATHS"` → exit 0、許可された 5 path のみ
+- `python3 scripts/dev/check-architecture-map.py` → exit 1。既存 map の `<workspace>/runs/<run_id>/tmp/`、`check-test-tmp-leftovers.sh`、`test-parallel.sh` が見つからないという 3 件の不整合（本差分外）。
+
 ## 提案
 
 - `shim_request_wait` は request file の検査・wait 組み立て・sink 呼び出しだけを持つ純粋な段になったので、request の種類が増える（例: 別の人間待ち）場合はこの 1 関数に case を足す形を維持したい（daemon / launcher の両経路に同じ順が自動的に効く）。

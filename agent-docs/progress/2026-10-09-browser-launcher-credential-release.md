@@ -11,7 +11,7 @@ updated: 2026-10-09
 - 完了日（人の決定の記録）: 2026-10-09（ADR の「人の決定（2026-10-09）」節、未解決事項 5）
 - 対象 HEAD: `8d0d52b1`（integrate wu/ledger-fixture）。`ops/ledger-fix2`（3d2ea2f5・679cab36）は祖先に入っている。
 - 決定の根拠: ADR [2026-10-09-browser-launcher-credential-release](../adr/2026-10-09-browser-launcher-credential-release.md)（人の決定 2026-10-09）。付記は ADR-0116・ADR-0138・ADR-0080 にある。
-- 段ごとの記録: [`2026-10-09-browser-launcher-credential-release/`](2026-10-09-browser-launcher-credential-release/)（adr、merge-ledger-fix2、launcher-credential、ledger-gen、ledger-fix、ledger-wiring、ledger-fixture、ops-runbook）
+- 段ごとの記録: [`2026-10-09-browser-launcher-credential-release/`](2026-10-09-browser-launcher-credential-release/)（adr、merge-ledger-fix2、launcher-credential、ledger-gen、ledger-fix、ledger-wiring、ledger-fixture、ops-runbook、launcher-cred-wait、stutter-script、stutter-race、[reverify](2026-10-09-browser-launcher-credential-release/reverify.md)）
 
 ## 結論
 
@@ -52,6 +52,21 @@ front matter の `status` を `verified-open-host` から `done` に直した（
 3. `TMPDIR=/var/tmp` にすると、socket の path が上限内に収まり、全件が合格した。
 
 「全体試験の TMPDIR が長いと browser の socket 試験が落ちる」問題は、この run でも再現した。実装の不具合ではなく、検査の入れ物の問題である。
+
+## stutter 競合修正後 HEAD の再検証（2026-10-09、reverify）
+
+final review の差し戻し 2 件（launcher credential-request wait、stutter 台本）の修正（`launcher-cred-wait`、`stutter-script`、`stutter-race`）が統合された HEAD `ac737717`（reclose 葉の取り消し後）で、検査と記録のみの再検証をした（詳細は [reverify](2026-10-09-browser-launcher-credential-release/reverify.md)）。`crates/`・`docs/ops/` に差分は入れず、実装も直していない。
+
+| 検査 | コマンド | 結果 |
+|---|---|---|
+| stutter 台本試験（3 回連続） | `sh crates/task-worker/scripts/tests/launcher-admission-evidence-stutter.sh` ×3 | 全回 exit 0、偽の失敗なし |
+| launcher credential-request wait の試験 | `cargo test -p task-worker --lib launcher_credential_request` | 5 passed / 0 failed |
+| clippy | `cargo clippy --workspace -- -D warnings` | exit 0 |
+| 試験 target の compile | `cargo check --workspace --tests --keep-going` | exit 0 |
+| 文書のリンク / 配置 / ADR 番号 / 進捗 index | `check-doc-links.sh` / `check-doc-layout.sh` / `check-adr-numbers.sh` / `progress-index.sh --check` | すべて ok、exit 0 |
+| アーキテクチャ索引 | `python3 -I scripts/dev/check-architecture-map.py` | exit 1（3 件、`main` 0ba92ea5 と同一の既存問題、本差分起因ではない） |
+
+ADR 付記の確認: final review 差し戻し 2 件に対応する日付付きの付記（『付記 2026-10-09: launcher runtime の credential-request → WaitingForAuth wait（共有段）』と『付記 2026-10-09: stutter 台本の signal 競合（ESRCH）』）は既に ADR に入っており、実装と食い違わなかった（`shim_request_wait` は `browser.rs:725` の 1 箇所で、daemon 経路 `browser.rs:1985` と launcher 経路 `browser_launcher_run.rs:932` が呼ぶ、台本は dash 対応の `kill -STOP -"$pgid" || break` 形式で mode 100755）。付記の追記は不要とした。
 
 ## 文書検査の未解決事項
 

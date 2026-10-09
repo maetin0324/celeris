@@ -1,14 +1,10 @@
----
-title: "launcher credential 解放: 最終 HEAD の検査記録（final-record）"
-tasks: [01M4FRFZ2MVCC9BZBR86VS71K5]
-status: done
-updated: 2026-10-09
----
-
 # 最終 HEAD での検査記録（final-record）
 
-- 記録時 HEAD: `1516513292de10e1ca43f9733f4684d68900fd28`
-- 記録日時: 2026-10-09 14:30 UTC（コードは変えず、検査の実行と記録だけを行った）
+tasks: [01M4FRFZ2MVCC9BZBR86VS71K5]
+
+- 記録時 HEAD: `fbbfb2d7e1e9b501ef13b03b65ce96be7282ed68`（`final-record: 最終 HEAD の test-parallel・clippy・fmt の結果を記録`）
+- 記録日時: 2026-10-09 14:37 UTC（コードは変えず、検査の実行と記録だけを行った）
+- 製品 tree の確認: `git diff --quiet 1516513292de HEAD -- crates/ scripts/ docs/` が exit 0。前回の記録 sha `1516513292de` から記録 commit までの差は文書だけで、製品 tree は同じ。
 - 検査の環境: worker sandbox の作業ツリー。`CARGO_TARGET_DIR` は Celeris が渡した scratch を使った。`test-parallel.sh` は `TMPDIR=/tmp` で実行した（Unix socket の SUN_LEN で偽の失敗を避けるため）。
 
 ## 結果

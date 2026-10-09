@@ -92,7 +92,7 @@ ADR 付記の確認: final review 差し戻し 2 件に対応する日付付き�
 
 ## 最終検証（final-record）
 
-最終 HEAD `1516513292de10e1ca43f9733f4684d68900fd28` での検査結果（詳細は [final-record.md](2026-10-09-browser-launcher-credential-release/final-record.md)）。
+最終 HEAD `fbbfb2d7e1e9b501ef13b03b65ce96be7282ed68` での検査結果（詳細は [final-record.md](2026-10-09-browser-launcher-credential-release/final-record.md)）。
 
 - `bash scripts/dev/test-parallel.sh`: exit 0, passed 4986, failed 0
 - `cargo clippy --workspace -- -D warnings`: exit 0

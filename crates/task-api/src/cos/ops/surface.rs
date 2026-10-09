@@ -432,7 +432,6 @@ pub(crate) fn dispatch(
             let input: crate::conversation::MessagePostBody =
                 serde_json::from_value(body).map_err(decode)?;
             let reject = |p| audit.reject(store, "org", &id, p);
-            crate::conversation::check_node(store, &id).map_err(reject)?;
             if id == task_core::COS_ID {
                 // A CoS message to CoS would queue another CoS run: no self-chain.
                 return Err(reject(unprocessable(
@@ -440,6 +439,7 @@ pub(crate) fn dispatch(
                     "a CoS run cannot message the CoS node (it would start another CoS run); reply in the thread",
                 )));
             }
+            crate::conversation::check_node(store, &id).map_err(reject)?;
             if input.text.trim().is_empty() {
                 return Err(reject(unprocessable(
                     "validation",

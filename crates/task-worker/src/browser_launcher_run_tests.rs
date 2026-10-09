@@ -1319,3 +1319,411 @@ fn launcher_credential_preconnect_demand_follows_policy() {
     let policy = prepared("example.com");
     assert_eq!(credential_demand(&policy, &[]), CredentialDemand::default());
 }
+
+// ADR 2026-10-09 付記「launcher runtime の credential wait」: launcher 経路
+// （`browser_launcher_run.rs::run`）が run 後に呼ぶ共有段 `browser.rs::shim_request_wait` の試験。
+// 偽 sink と tempdir の request file だけを使う（userns・実 launcher・実 process・ネットワーク不要）。
+
+use task_core::browser_wait::{BrowserWaitReason, NewBrowserWait};
+
+/// 開かれた wait・browser 更新・progress を記録するだけの偽 sink。`open_ok = false` で
+/// 「wait を開けない」場合の fail closed を見る。
+struct RecordingWaitSink {
+    waits: Mutex<Vec<NewBrowserWait>>,
+    browsers: Mutex<Vec<BrowserRun>>,
+    events: Mutex<Vec<String>>,
+    open_ok: bool,
+}
+
+impl RecordingWaitSink {
+    fn new(open_ok: bool) -> Self {
+        Self {
+            waits: Mutex::new(Vec::new()),
+            browsers: Mutex::new(Vec::new()),
+            events: Mutex::new(Vec::new()),
+            open_ok,
+        }
+    }
+    fn opened(&self) -> Vec<NewBrowserWait> {
+        self.waits.lock().expect("lock").clone()
+    }
+    /// sink に渡った全部（wait・browser 更新・progress）の serialize。秘密が混ざらないことの検査に使う。
+    fn recorded(&self) -> String {
+        let mut text = serde_json::to_string(&self.opened()).expect("waits");
+        text.push_str(
+            &serde_json::to_string(&self.browsers.lock().expect("lock").clone()).expect("browsers"),
+        );
+        text.push_str(&self.events.lock().expect("lock").join("\n"));
+        text
+    }
+}
+
+impl EventSink for RecordingWaitSink {
+    fn browser_wait_open(&self, request: &NewBrowserWait) -> Result<(), String> {
+        if !self.open_ok {
+            return Err("browser wait store unavailable".into());
+        }
+        self.waits.lock().expect("lock").push(request.clone());
+        Ok(())
+    }
+    fn browser_updated(&self, browser: &BrowserRun) {
+        self.browsers.lock().expect("lock").push(browser.clone());
+    }
+    fn progress(&self, msg: &str) {
+        self.events.lock().expect("lock").push(msg.to_owned());
+    }
+    fn artifact(&self, artifact: &task_core::ArtifactRef) {
+        self.events
+            .lock()
+            .expect("lock")
+            .push(format!("{artifact:?}"));
+    }
+}
+
+/// shim の policy: `origin` だけを許可し、`actions` と approval 対象を呼び手が決める。
+/// credential policy は `pol-example` 一つ（`CredentialUse` を入れたときだけ意味を持つ）。
+fn shim_policy(
+    origin: &str,
+    actions: &[task_core::BrowserAction],
+    approval: &[task_core::BrowserAction],
+) -> crate::browser_policy::PreparedBrowserPolicy {
+    let grant = task_core::BrowserCapability {
+        allowed_domains: vec![origin.into()],
+        allowed_actions: Some(actions.to_vec()),
+        approval_actions: approval.to_vec(),
+        credential_policy_ids: vec!["pol-example".into()],
+        ..Default::default()
+    };
+    let task = task_core::BrowserTaskPolicy {
+        policy_id: "launcher-shim".into(),
+        revision: 1,
+        domain_mode: task_core::BrowserDomainMode::CommonHosts,
+        navigation_origins: vec![],
+        network_domains: vec![origin.into()],
+        allowed_actions: actions.to_vec(),
+        approval_actions: approval.to_vec(),
+        credential_policy_ids: vec!["pol-example".into()],
+        artifact_policy_id: None,
+    };
+    crate::browser_policy::prepare(&grant, Some(&task), super::super::SUPPORTED_VERSION)
+        .expect("policy")
+}
+
+/// CredentialUse を許可した policy（launcher 経路の credential run）。
+fn credential_policy() -> crate::browser_policy::PreparedBrowserPolicy {
+    shim_policy(
+        "example.com",
+        &[
+            task_core::BrowserAction::Navigate,
+            task_core::BrowserAction::Snapshot,
+            task_core::BrowserAction::CredentialUse,
+        ],
+        &[],
+    )
+}
+
+fn write_request(runtime: &Path, name: &str, request: &serde_json::Value) {
+    std::fs::create_dir_all(runtime).expect("mkdir");
+    std::fs::write(
+        runtime.join(name),
+        serde_json::to_vec(request).expect("json"),
+    )
+    .expect("write");
+}
+
+fn credential_request_json(policy_id: &str, origin: &str, purpose: &str) -> serde_json::Value {
+    serde_json::json!({
+        "policy_id": policy_id,
+        "origin": origin,
+        "purpose": purpose,
+    })
+}
+
+/// harness が Done を返した run（request file だけが wait の理由になる）。
+fn done_outcome() -> Result<RunOutcome, AdapterError> {
+    Ok(RunOutcome {
+        terminal: crate::Terminal::Done {
+            summary: "harness finished".into(),
+            evidence: vec![],
+            usage: None,
+        },
+        exit_code: Some(0),
+    })
+}
+
+/// (a) `credential-request.json` があると `WaitingForAuth` wait が 1 件開き、outcome は
+/// `Terminal::Question`、browser state は `WaitingForAuth`。resume key は `auth:<task>:<run>` で、
+/// wait に入るのは origin / purpose / policy_id だけ（credential 値も operation intent も無し）。
+#[test]
+fn launcher_credential_request_opens_a_waiting_for_auth_wait_and_questions() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let runtime = dir.path().join("browser");
+    write_request(
+        &runtime,
+        "credential-request.json",
+        &credential_request_json(
+            "pol-example",
+            "https://example.com",
+            "Register the operator login",
+        ),
+    );
+    let policy = credential_policy();
+    let sink = RecordingWaitSink::new(true);
+    let task_id = task_core::TaskId::new();
+    let (outcome, state) = super::super::shim_request_wait(
+        &runtime,
+        task_id,
+        "run-1",
+        "celeris-s1",
+        &policy,
+        &sink,
+        done_outcome(),
+    );
+    assert_eq!(state, Some(BrowserRunState::WaitingForAuth));
+    match outcome {
+        Ok(RunOutcome {
+            terminal: crate::Terminal::Question { text },
+            exit_code: None,
+        }) => assert_eq!(text, super::super::CREDENTIAL_REQUEST_QUESTION),
+        other => panic!("expected a question, got {other:?}"),
+    }
+    let waits = sink.opened();
+    assert_eq!(waits.len(), 1, "exactly one wait");
+    let wait = &waits[0];
+    assert_eq!(wait.reason, BrowserWaitReason::WaitingForAuth);
+    assert_eq!(wait.resume_key, format!("auth:{task_id}:run-1"));
+    assert_eq!(wait.run_id, "run-1");
+    assert_eq!(wait.session_id, "celeris-s1");
+    assert_eq!(wait.origin, "https://example.com");
+    assert_eq!(wait.purpose, "Register the operator login");
+    assert_eq!(wait.credential_policy_id.as_deref(), Some("pol-example"));
+    assert!(wait.credential.is_none(), "no secret in the wait");
+    assert!(
+        wait.operation.is_none(),
+        "a credential wait carries no operation"
+    );
+    assert_eq!(wait.policy_hash, policy.binding.hash);
+    assert_eq!(wait.policy_revision, policy.binding.revision);
+}
+
+/// (b) policy に合わない request（許可外 origin・知らない policy id・http origin・CredentialUse を
+/// 許可しない policy）は wait を開かず `Err`（fail closed）。
+#[test]
+fn launcher_credential_request_outside_policy_is_refused_without_a_wait() {
+    let cases: Vec<(
+        &str,
+        serde_json::Value,
+        crate::browser_policy::PreparedBrowserPolicy,
+    )> = vec![
+        (
+            "origin outside the allowed domains",
+            credential_request_json("pol-example", "https://evil.test", "Steal the login"),
+            credential_policy(),
+        ),
+        (
+            "unknown credential policy id",
+            credential_request_json("pol-other", "https://example.com", "Register"),
+            credential_policy(),
+        ),
+        (
+            "non-https origin",
+            credential_request_json("pol-example", "http://example.com", "Register"),
+            credential_policy(),
+        ),
+        (
+            "policy without CredentialUse",
+            credential_request_json("pol-example", "https://example.com", "Register"),
+            prepared("example.com"),
+        ),
+    ];
+    for (name, request, policy) in cases {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let runtime = dir.path().join("browser");
+        write_request(&runtime, "credential-request.json", &request);
+        let sink = RecordingWaitSink::new(true);
+        let (outcome, state) = super::super::shim_request_wait(
+            &runtime,
+            task_core::TaskId::new(),
+            "run-1",
+            "celeris-s1",
+            &policy,
+            &sink,
+            done_outcome(),
+        );
+        assert_eq!(state, None, "{name}: no browser state");
+        assert_eq!(
+            denied_text(outcome.expect_err("refused")),
+            "browser credential request denied",
+            "{name}"
+        );
+        assert!(sink.opened().is_empty(), "{name}: no wait opened");
+    }
+}
+
+/// 両方の request file があるときは daemon 経路と同じ順で credential が先（`approval-request.json`
+/// は読まれない）。credential が無ければ従来どおり approval の wait になる。
+#[test]
+fn launcher_credential_request_takes_priority_over_approval_request() {
+    let policy = shim_policy(
+        "example.com",
+        &[
+            task_core::BrowserAction::Navigate,
+            task_core::BrowserAction::Click,
+            task_core::BrowserAction::CredentialUse,
+        ],
+        &[task_core::BrowserAction::Click],
+    );
+    let approval = serde_json::json!({
+        "action": "click",
+        "target": "@e12",
+        "origin": "https://example.com",
+        "purpose": "Press export",
+    });
+    let dir = tempfile::tempdir().expect("tempdir");
+    let runtime = dir.path().join("browser");
+    write_request(
+        &runtime,
+        "credential-request.json",
+        &credential_request_json("pol-example", "https://example.com", "Register"),
+    );
+    write_request(&runtime, "approval-request.json", &approval);
+    let sink = RecordingWaitSink::new(true);
+    let (outcome, state) = super::super::shim_request_wait(
+        &runtime,
+        task_core::TaskId::new(),
+        "run-1",
+        "celeris-s1",
+        &policy,
+        &sink,
+        done_outcome(),
+    );
+    assert_eq!(state, Some(BrowserRunState::WaitingForAuth));
+    assert!(matches!(
+        outcome,
+        Ok(RunOutcome {
+            terminal: crate::Terminal::Question { .. },
+            ..
+        })
+    ));
+    let waits = sink.opened();
+    assert_eq!(waits.len(), 1, "the credential request wins");
+    assert_eq!(waits[0].reason, BrowserWaitReason::WaitingForAuth);
+
+    // credential-request.json が無いときだけ approval-request.json を見る。
+    std::fs::remove_file(runtime.join("credential-request.json")).expect("remove");
+    let sink = RecordingWaitSink::new(true);
+    let (_, state) = super::super::shim_request_wait(
+        &runtime,
+        task_core::TaskId::new(),
+        "run-1",
+        "celeris-s1",
+        &policy,
+        &sink,
+        done_outcome(),
+    );
+    assert_eq!(state, Some(BrowserRunState::WaitingForApproval));
+    let waits = sink.opened();
+    assert_eq!(waits.len(), 1);
+    assert_eq!(waits[0].reason, BrowserWaitReason::WaitingForApproval);
+}
+
+/// wait を開けなければ `Err`（fail closed）。Question を返して人に届かない wait を作らない。
+#[test]
+fn launcher_credential_request_without_a_wait_store_is_an_error() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let runtime = dir.path().join("browser");
+    write_request(
+        &runtime,
+        "credential-request.json",
+        &credential_request_json("pol-example", "https://example.com", "Register"),
+    );
+    let sink = RecordingWaitSink::new(false);
+    let (outcome, state) = super::super::shim_request_wait(
+        &runtime,
+        task_core::TaskId::new(),
+        "run-1",
+        "celeris-s1",
+        &credential_policy(),
+        &sink,
+        done_outcome(),
+    );
+    assert_eq!(state, None);
+    assert_eq!(
+        denied_text(outcome.expect_err("fail closed")),
+        "browser wait could not be opened"
+    );
+}
+
+/// (c) request に試験用の秘密文字列を混ぜても、wait の中身・sink の event・browser 更新の
+/// serialize に出ない。未知の欄を持つ request（秘密を混ぜる唯一の口）は `deny_unknown_fields` で
+/// 拒否され、拒否の文言にも request の中身は写らない。
+#[test]
+fn launcher_credential_request_keeps_the_secret_out_of_wait_events_and_state() {
+    const SECRET: &str = "s3cr3t-token-value";
+    let policy = credential_policy();
+    let task_id = task_core::TaskId::new();
+
+    // 秘密を未知の欄に混ぜた request: 拒否され、wait は開かず、文言にも出ない。
+    let dir = tempfile::tempdir().expect("tempdir");
+    let runtime = dir.path().join("browser");
+    let mut smuggled = credential_request_json("pol-example", "https://example.com", "Register");
+    smuggled["credential"] = serde_json::json!(SECRET);
+    write_request(&runtime, "credential-request.json", &smuggled);
+    let sink = RecordingWaitSink::new(true);
+    let (outcome, state) = super::super::shim_request_wait(
+        &runtime,
+        task_id,
+        "run-1",
+        "celeris-s1",
+        &policy,
+        &sink,
+        done_outcome(),
+    );
+    assert_eq!(state, None);
+    let text = denied_text(outcome.expect_err("refused"));
+    assert!(
+        !text.contains(SECRET),
+        "the refusal does not echo the request"
+    );
+    assert!(sink.opened().is_empty());
+    assert!(!sink.recorded().contains(SECRET));
+
+    // 正しい request: shim が同じ runtime dir に秘密を書き残していても、wait・browser 更新・
+    // outcome のどこにも秘密は出ない（wait の `credential` は常に `None`）。
+    let dir = tempfile::tempdir().expect("tempdir");
+    let runtime = dir.path().join("browser");
+    write_request(
+        &runtime,
+        "credential-request.json",
+        &credential_request_json("pol-example", "https://example.com", "Register"),
+    );
+    std::fs::write(runtime.join("credential.json"), SECRET).expect("write");
+    let sink = RecordingWaitSink::new(true);
+    let (outcome, state) = super::super::shim_request_wait(
+        &runtime,
+        task_id,
+        "run-1",
+        "celeris-s1",
+        &policy,
+        &sink,
+        done_outcome(),
+    );
+    let wait_state = state.expect("a wait is open");
+    // run が sink に渡す browser 更新（`browser.state` は wait の state から来る）。
+    sink.browser_updated(&BrowserRun {
+        task_id,
+        run_id: "run-1".into(),
+        session_id: "celeris-s1".into(),
+        state: wait_state,
+        live_view_url: None,
+        policy: Some(policy.binding.clone()),
+    });
+    let recorded = sink.recorded();
+    let outcome_text = format!("{:?}", outcome.expect("question"));
+    assert!(
+        !recorded.contains(SECRET),
+        "no secret in waits/events/state"
+    );
+    assert!(!outcome_text.contains(SECRET), "no secret in the outcome");
+    assert_eq!(sink.opened()[0].credential, None);
+}

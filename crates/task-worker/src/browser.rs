@@ -542,10 +542,10 @@ struct ActionEvent {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct CredentialRequest {
-    policy_id: String,
-    origin: String,
-    purpose: String,
+pub(super) struct CredentialRequest {
+    pub(super) policy_id: String,
+    pub(super) origin: String,
+    pub(super) purpose: String,
 }
 
 /// A concrete request origin must be covered by an effective allowed origin (scheme, host, port).
@@ -672,6 +672,112 @@ pub(crate) fn operation_wait(
         ttl_secs: None,
         resume_key: format!("operation:{task_id}:{run_id}"),
     }
+}
+
+/// The question text both paths report for a credential-registration wait (intent only: no
+/// credential value, no origin).
+pub(super) const CREDENTIAL_REQUEST_QUESTION: &str = "Browser credential registration requested";
+
+/// The durable wait for the shim's `credential-request.json`: a `WaitingForAuth` wait that carries
+/// only the intent (`origin` / `purpose` / `credential_policy_id`) and resumes the same logical
+/// session through `auth:<task>:<run>`. Both the daemon path and the launcher runtime build it
+/// here so the resume key and the frozen intent stay identical. `credential` is always `None`:
+/// the secret is registered by the human, never carried by the wait.
+pub(super) fn credential_wait(
+    task_id: task_core::TaskId,
+    run_id: &str,
+    session_id: &str,
+    policy: &crate::browser_policy::PreparedBrowserPolicy,
+    request: &CredentialRequest,
+) -> NewBrowserWait {
+    NewBrowserWait {
+        work_unit_id: None,
+        run_id: run_id.into(),
+        session_id: session_id.into(),
+        reason: BrowserWaitReason::WaitingForAuth,
+        origin: request.origin.clone(),
+        purpose: request.purpose.clone(),
+        credential_policy_id: Some(request.policy_id.clone()),
+        credential: None,
+        operation: None,
+        trusted_login: None,
+        policy_revision: policy.binding.revision,
+        policy_hash: policy.binding.hash.clone(),
+        owner_id: None,
+        ttl_secs: None,
+        resume_key: format!("auth:{task_id}:{run_id}"),
+    }
+}
+
+/// shim が run 後に runtime dir に残した request を durable wait に変える共有段。daemon 経路
+/// （[`run_with_executable_attempt`]）と launcher 経路（`browser_launcher_run.rs::run`）が同じ
+/// 呼び出しをする。
+///
+/// 見る順（両経路で同じ。ADR 2026-10-09 付記「launcher runtime の credential wait」）:
+/// 1. `credential-request.json` があれば**それを先に**処理する。policy に合う request だけが
+///    [`credential_wait`] の `WaitingForAuth` wait になり、run は `Terminal::Question` で止まる。
+/// 2. `credential-request.json` が無いときだけ `approval-request.json` を見る
+///    （`WaitingForApproval`、ADR 2026-10-08 D2）。
+///
+/// どちらの request も policy に合わなければ wait を開かず `Err`、wait が開けなければ `Err`
+/// （fail closed）。返り値は (run の outcome, wait が開いたときの browser state)。
+#[allow(clippy::too_many_arguments)]
+pub(super) fn shim_request_wait(
+    runtime: &Path,
+    task_id: task_core::TaskId,
+    run_id: &str,
+    session_id: &str,
+    policy: &crate::browser_policy::PreparedBrowserPolicy,
+    sink: &dyn EventSink,
+    outcome: Result<RunOutcome, AdapterError>,
+) -> (Result<RunOutcome, AdapterError>, Option<BrowserRunState>) {
+    let question = |text: String| {
+        Ok(RunOutcome {
+            terminal: Terminal::Question { text },
+            exit_code: None,
+        })
+    };
+    if runtime.join("credential-request.json").exists() {
+        return match read_credential_request(&runtime.join("credential-request.json"), policy) {
+            Ok(intent) => {
+                let wait = credential_wait(task_id, run_id, session_id, policy, &intent);
+                match sink.browser_wait_open(&wait) {
+                    Ok(()) => (
+                        question(CREDENTIAL_REQUEST_QUESTION.into()),
+                        Some(BrowserRunState::WaitingForAuth),
+                    ),
+                    Err(_) => (wait_unopenable(), None),
+                }
+            }
+            Err(e) => (Err(e), None),
+        };
+    }
+    if runtime.join("approval-request.json").exists() {
+        // ADR 2026-10-08 D2: freeze the requested operation in a durable wait; the run resumes
+        // in this logical session after the human approves once.
+        return match read_approval_request(&runtime.join("approval-request.json"), policy) {
+            Ok((action, intent)) => {
+                let wait = operation_wait(task_id, run_id, session_id, policy, action, &intent);
+                match sink.browser_wait_open(&wait) {
+                    Ok(()) => (
+                        question(format!("Browser {} approval requested", action.as_str())),
+                        Some(BrowserRunState::WaitingForApproval),
+                    ),
+                    Err(_) => (wait_unopenable(), None),
+                }
+            }
+            Err(e) => (Err(e), None),
+        };
+    }
+    (outcome, None)
+}
+
+/// A wait the store refused to open: fail closed, the run does not report a question it cannot
+/// resume from.
+fn wait_unopenable() -> Result<RunOutcome, AdapterError> {
+    Err(AdapterError::Other(
+        "browser wait could not be opened".into(),
+    ))
 }
 
 /// The approved business action a resumed run may perform once, or `None` when the approved
@@ -1873,73 +1979,21 @@ async fn run_with_executable_attempt(
             }
         }
     };
-    if runtime.join("credential-request.json").exists() {
-        match read_credential_request(&runtime.join("credential-request.json"), &policy) {
-            Ok(intent) => {
-                let wait = NewBrowserWait {
-                    work_unit_id: None,
-                    run_id: run_id.into(),
-                    session_id: browser.session_id.clone(),
-                    reason: BrowserWaitReason::WaitingForAuth,
-                    origin: intent.origin,
-                    purpose: intent.purpose,
-                    credential_policy_id: Some(intent.policy_id),
-                    credential: None,
-                    operation: None,
-                    trusted_login: None,
-                    policy_revision: policy.binding.revision,
-                    policy_hash: policy.binding.hash.clone(),
-                    owner_id: None,
-                    ttl_secs: None,
-                    resume_key: format!("auth:{}:{run_id}", monitor_req.task.id),
-                };
-                outcome = match sink.browser_wait_open(&wait) {
-                    Ok(()) => {
-                        browser.state = BrowserRunState::WaitingForAuth;
-                        Ok(RunOutcome {
-                            terminal: Terminal::Question {
-                                text: "Browser credential registration requested".into(),
-                            },
-                            exit_code: None,
-                        })
-                    }
-                    Err(_) => Err(AdapterError::Other(
-                        "browser wait could not be opened".into(),
-                    )),
-                };
-            }
-            Err(e) => outcome = Err(e),
-        }
-    } else if runtime.join("approval-request.json").exists() {
-        // ADR 2026-10-08 D2: freeze the requested operation in a durable wait; the run resumes
-        // in this logical session after the human approves once.
-        match read_approval_request(&runtime.join("approval-request.json"), &policy) {
-            Ok((action, intent)) => {
-                let wait = operation_wait(
-                    monitor_req.task.id,
-                    run_id,
-                    &browser.session_id,
-                    &policy,
-                    action,
-                    &intent,
-                );
-                outcome = match sink.browser_wait_open(&wait) {
-                    Ok(()) => {
-                        browser.state = BrowserRunState::WaitingForApproval;
-                        Ok(RunOutcome {
-                            terminal: Terminal::Question {
-                                text: format!("Browser {} approval requested", action.as_str()),
-                            },
-                            exit_code: None,
-                        })
-                    }
-                    Err(_) => Err(AdapterError::Other(
-                        "browser wait could not be opened".into(),
-                    )),
-                };
-            }
-            Err(e) => outcome = Err(e),
-        }
+    // ADR 2026-10-09 付記: the shim's request files become durable waits through the shared step
+    // (`credential-request.json` first, `approval-request.json` only when there is no credential
+    // request); the launcher runtime calls the same function.
+    let (next_outcome, wait_state) = shim_request_wait(
+        &runtime,
+        monitor_req.task.id,
+        run_id,
+        &browser.session_id,
+        &policy,
+        sink,
+        outcome,
+    );
+    outcome = next_outcome;
+    if let Some(state) = wait_state {
+        browser.state = state;
     }
     // After credential use the harness policy may be close-less; the supervisor's segment
     // policy always carries `close`.

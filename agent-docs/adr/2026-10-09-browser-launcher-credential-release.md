@@ -43,3 +43,25 @@ host 実証（`CELERIS_LAUNCHER_TESTS=require` の必須モード stutter 3 回�
 - [ADR-0116](0116-browser-launcher-implementation.md) の末尾付記を参照。
 - [ADR-0138](0138-browser-prod-admission-confidential-release.md) の末尾付記を参照。
 - [ADR-0080](0080-browser-phase2-policy-broker-approval.md) の末尾付記を参照。
+
+## 実装付記（launcher-credential）
+
+実装は `CredentialUse` だけを解放し、`IdentityRestore` は引き続き拒否する。認証情報を CDP 操作の主体へ返さないため、credentiald の `LiveSessionRegistration.controller_pid` / `controller_start` は daemon worker の process facts とし、`runtime_pid` / `runtime_start` は launcher が隔離検査した browser runtime の process facts とする。注入要求を受ける injection IPC peer はこの controller である。launcher 自身は CDP の `SharedCdp` / `CdpController` を所有するため、daemon controller が秘密を受け取らず CDP command を launcher に依頼する中継を追加する。credentiald broker は `with_launcher_uid` で設定された launcher UID を launcher peer として認証し、daemon UID の controller に secret frame を返さない。Attested admission ではこの launcher peer に加え、`LauncherProofRegistration` と実 process facts の照合を必須にする。
+
+daemon→launcher の protocol には固定 `Verb::Authenticate` と対応する固定引数型を追加する。引数は `session_id`、`auth_section_id`、`lease_id`、`origin`、`target` のみで、selector や credential 値を含めない。`Response` は固定 `status`（成功/拒否）だけを返し、自由文、receipt、CDP payload を返さない。launcher は自身の `SharedCdp` / `CdpController` を使い、既存の `browser.rs::inject_h3` および `browser_cdp_sink.rs` の認証 sink に接続する。credential 値は credentiald から launcher が所有する注入 sink へ一方向に渡し、一般 action 経路や daemon worker へ戻さない。
+
+`LauncherRuntime::start_guarded` は既存の Started 応答を `launcher_session_proof` で検証し、同じ接続の responder UID を保持する。隔離検査を通過した後、daemon worker が broker client の `register_live_session` で `LiveSessionRegistration` を登録し、得られた `LauncherSessionProof`、`session_id`、`instance_id`、応答の `SCM_CREDENTIALS` 由来 `peer_uid` を `LauncherProofRegistration` として `attach_launcher_proof` する。proof が無い、UID を採れない、登録に失敗した場合は launcher session を使った credential 操作を開始しない。credentiald の `LiveRegistry::attach_launcher_proof` は稼働 session に一度だけ結び付け、`injection_ipc.rs::admit_attested` が実 process facts に対して `verify_launcher_session` を再実行する。
+
+`browser_launcher_run.rs::refuse_confidential` は、proof の検証成功、namespace owner が daemon UID と異なること、`isolation_ok` が真であることの全条件を満たす場合だけ `CredentialUse` を許す。どれかが不成立・取得不能・IPC 失敗なら、接続前に従来どおり `browser credential use is not available through the launcher runtime` で拒否する。承認待ちを含めて fail closed とし、daemon runtime への fallback はしない。shim の `config.json` は解放条件成立時に限り `credential_use: true` と有効な `credential_policy_ids` を設定し、それ以外は従来どおり `false` と空配列にする。`browser.rs::inject_h3` の承認・短期 lease・origin/policy binding と `CdpController` の認証区間観測遮断は維持する。
+
+実装試験は以下を追加し、secret が log/event/artifact/stdout に出ないことも各関連経路で固定する。launcher の protocol・実 process session は userns opt-in 試験に分離し、外部ネットワークや CPU 負荷試験は使わない。
+
+| ケース | 主な crate / 箇所 |
+| --- | --- |
+| proof ありで登録・注入を許可、proof なし・偽造・期限切れ・UID 不一致を拒否 | `celeris-credentiald` `injection_ipc.rs`（`admit_attested` / `verify_launcher_session`）、`task-worker` `browser_launcher_run.rs` |
+| namespace owner が daemon UID の session を拒否 | `task-worker` `browser_launcher_run.rs`（`launcher_session_proof` / `refuse_confidential`） |
+| `isolation_ok` 不成立・証明採取失敗・登録 IPC 失敗で接続前に拒否 | `task-worker` `browser_launcher_run.rs`、`browser_launcher/` |
+| 固定 `Authenticate` verb は許可された引数だけを受け、応答は status のみ | `task-worker` `browser_launcher/protocol.rs`・`backend.rs` |
+| secret 非露出（log/event/artifact/stdout）と 인증 sink の遮断 | `task-worker` `browser.rs`（`inject_h3`）、`browser_cdp_sink.rs`、`browser_launcher/`、`celeris-credentiald` `injection_ipc.rs` |
+
+各試験名は `launcher_credential_` を接頭辞とする。userns を要する実 process 試験は `CELERIS_USERNS_TESTS=1` の opt-in とし、通常試験では決定的な証明・登録・policy 分岐を検査する。

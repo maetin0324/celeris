@@ -1502,7 +1502,7 @@ fn phase3_live_grant_is_task_scoped_scrubbed_and_reconnects_from_last_seen() {
 /// ADR-0080 H3 / ADR-0081: while the worker's auth section is active the task-api refuses
 /// takeover and renew (not only the GUI), revokes a held lease, and reopens after it ends.
 #[test]
-fn phase3_auth_section_refuses_takeover_and_renew_until_left() {
+fn phase3_auth_section_refuses_takeover_and_renew_for_the_credential_session() {
     let f = BrowserFixture::new();
     let path = f.path(f.task_a, &f.run_a, "control");
     let pause = f.control("owner-a", json!({"kind":"pause"}), 0, "as-pause");
@@ -1532,9 +1532,13 @@ fn phase3_auth_section_refuses_takeover_and_renew_until_left() {
     assert_eq!(off.status, 200, "{}", off.body);
     assert_eq!(off.json()["auth_section"], false);
     let v3 = off.json()["version"].as_u64().unwrap();
-    let again = f.control("owner-a", json!({"kind":"takeover"}), v3, "as-take-3");
-    assert_eq!(again.status, 200, "{}", again.body);
-    assert_eq!(again.json()["phase"], "human_control");
+    // ADR 2026-10-09 credential username / post-login D2-3: leaving the auth section (the post-login
+    // read) lets the agent act again (gate_wire_auth_section_blocks_agent_until_left), but a session
+    // that used a credential keeps takeover refused until it ends.
+    f.control("owner-a", json!({"kind":"takeover"}), v3, "as-take-3")
+        .assert_problem(409, "auth_section_active");
+    let status = f.env.get(&path);
+    assert_eq!(status.json()["auth_section"], false, "{}", status.body);
 }
 
 #[test]

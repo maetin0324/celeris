@@ -681,6 +681,8 @@ impl CdpController {
         }
         self.clear_injected_values()?;
         self.private_sessions.insert(own.to_owned());
+        // The login tab's session was attached during the auth section (its events were never
+        // queued); keep it private for the rest of the session.
         self.pump_events()?;
         self.events.clear();
         self.post_login = Some(read_origins);
@@ -704,6 +706,10 @@ impl CdpController {
             .ok_or(InjectionError::ObservationOriginDenied)?
             .to_owned();
         self.private_sessions.insert(session.clone());
+        // The attach announced the new session (`Target.attachedToTarget`) before the reply named it;
+        // agent connections never learn about controller-only sessions.
+        self.events
+            .retain(|e| e["params"]["sessionId"].as_str() != Some(session.as_str()));
         self.check_sessions
             .insert(target.to_owned(), session.clone());
         Ok(session)
@@ -1253,9 +1259,12 @@ impl CdpController {
             self.download_breach = true;
             self.events.clear();
         }
-        if value["sessionId"]
-            .as_str()
-            .is_some_and(|s| self.private_sessions.contains(s))
+        if [&value["sessionId"], &value["params"]["sessionId"]]
+            .iter()
+            .any(|s| {
+                s.as_str()
+                    .is_some_and(|s| self.private_sessions.contains(s))
+            })
         {
             return;
         }

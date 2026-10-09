@@ -510,6 +510,17 @@ async fn daemon_post_login_pair_login_reads_lms_and_refuses_idp_other_and_passwo
     );
 
     let seen = agent.seen.join("\n");
+    // The controller's own sessions (login tab, check sessions) were never announced to the agent.
+    assert!(!seen.contains(&tab.own), "login tab session leaked");
+    for event in &agent.seen {
+        let v: Value = serde_json::from_str(event).expect("json");
+        if v["method"] == "Target.attachedToTarget" {
+            assert_eq!(
+                v["params"]["sessionId"], agent.session,
+                "a controller-only attach reached the agent"
+            );
+        }
+    }
     assert!(!seen.contains(SECRET), "password reached the agent");
     assert!(
         !seen.contains(COOKIE_VALUE),

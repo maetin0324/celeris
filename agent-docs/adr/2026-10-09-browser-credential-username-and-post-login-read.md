@@ -5,8 +5,8 @@ tasks: [01M4GYJ3XGJNWZQDF35F1MDE0H]
 ---
 
 - 日付: 2026-10-09
-- 状態: **提案（草案。人の承認待ち。承認まで実装しない）**
-- 決定者: 人（方針「credential 注入の login で manaba の課題監視を自動化できる設計に変える」は 2026-10-09 に決定済み。本書の個々の案は未承認）
+- 状態: **承認 2026-10-09**（人の確認事項 Q1〜Q9 の回答を下に記録。D2 の action 集合は Q3/Q4 の回答で screenshot・download・click を足した）
+- 決定者: 人（方針「credential 注入の login で manaba の課題監視を自動化できる設計に変える」は 2026-10-09 に決定済み。本書の案は 2026-10-09 に Q1〜Q9 の回答付きで承認）
 - 関連: [ADR-0080](0080-browser-phase2-policy-broker-approval.md) D2/D3（H3）、[ADR-0109](0109-browser-p4b-injection-ipc-cdp-sink.md) D4、
   [ADR-0110](0110-browser-p4b-h3-shared-cdp-trusted-selector.md) D1〜D3・未解決、[ADR-0111](0111-browser-p4b-redisplay-guard-wiring.md)、
   [ADR-0116](0116-browser-launcher-implementation.md)、[ADR-0138](0138-browser-prod-admission-confidential-release.md)、
@@ -89,7 +89,7 @@ T1・T2・T5 は区間後の観測を再開しても既存の仕組み（遮断�
    ```text
    post_login: {
      read_origins: [exact HTTPS origin],   // 例 ["https://manaba.tsukuba.ac.jp"]。credential の exact_origin（IdP）は入れられない
-     actions: [snapshot, extract]           // v1 で選べるのはこの 2 つだけ（screenshot・download は Q3/Q4）
+     actions: [snapshot, extract, screenshot, download, click]   // 承認時の Q3/Q4/Q6 回答で 5 つ（下の D2-6）
    } | null
    ```
    管理者経路（API・web の site policy 編集）だけが書け、モデル・worker・task policy からは広げられない。revision・policy hash・
@@ -122,6 +122,16 @@ T1・T2・T5 は区間後の観測を再開しても既存の仕組み（遮断�
 5. **harness の policy。** 区間が条件どおり閉じた session だけ、`credential_harness_policy` が外している observation action のうち
    `post_login.actions` の実効集合を戻す。prompt の固定文も「ログイン後、read_origins の頁は snapshot / extract できる。
    IdP と password 欄のある頁は読めない」に変える（今は「無効」と書いている）。
+
+6. **承認時の追加（Q3/Q4/Q6 の回答）。** `post_login.actions` に選べるのは `snapshot`・`extract`・`screenshot`・`download`・`click`。
+   - screenshot: 区間が閉じた後、top document の origin が `read_origins` 内で、頁（top と同 origin の frame）に `input[type=password]`
+     が 1 個も無いときだけ撮る。区間中・password 欄のある頁では `password_field_present` で拒否。画素は `RedisplayGuard` で検査できない
+     ことを受け入れる（人の判断）。
+   - download: 区間後、`read_origins` の頁から始まり、取得 URL の origin も `read_origins` に入るものだけ。大きさ・型の制限は通常の
+     download と同じ。
+   - click: 区間後、top document の origin が `read_origins` 内の頁だけ。login / IdP の頁での click（注入そのものの submit を除く）は拒否。
+     課題の提出をさせないことは task の指示で扱い、ここでは強制しない（残るリスクに記録）。
+   - いずれも実効集合は `post_login.actions ∩ task allowed_actions ∩ grant`。
 
 ## 代替案
 
@@ -173,7 +183,9 @@ T1・T2・T5 は区間後の観測を再開しても既存の仕組み（遮断�
   artifact（extract は artifact に自動登録される）・会話に渡る。どの model（外部 provider か local Qwen か）に渡すかは Q5。
 - **prompt injection**: manaba 上の他者が書いた文面（掲示・課題本文）が agent を誘導しうる。click が承認不要（2026-10-08 決定）なので、
   認証済み session で提出・削除などの操作を押せる。読み取り専用の task には click を task policy で外すことを推奨（Q6）。
-- **guard の限界**: `RedisplayGuard` は変換（大小・逆順・部分・圧縮）や画素を検出しない（ADR-0111 5）。screenshot を許さない理由。
+- **guard の限界**: `RedisplayGuard` は変換（大小・逆順・部分・圧縮）や画素を検出しない（ADR-0111 5）。screenshot は A3 で許したので、
+  画素に password が出る頁は「password 入力欄がある頁では撮らない」以外の防御が無い（人が受け入れた）。
+- **提出操作**: click を read_origins 内で許すので、prompt injection や誤操作で課題を提出・削除しうる。task の指示で禁じ、ここでは強制しない（A6）。
 - **non-httpOnly cookie・頁内 token**: snapshot の本文に token が書かれていれば読める。cookie は grammar と relay の拒否で直接は読めないが、
   頁が表示した値までは除けない。
 - **username の露出**: guard を掛けないので、頁に表示された username は agent・LLM・artifact に入る。
@@ -197,6 +209,21 @@ T1・T2・T5 は区間後の観測を再開しても既存の仕組み（遮断�
 - **Q9** manaba の site policy 値: `login_url`（IdP の login 頁へ入る URL。IdP の root には form が無い）、`username_selector`
   （`#username` / `input[name="j_username"]` 等）、`read_origins = ["https://manaba.tsukuba.ac.jp"]` を人が実頁で確認して入れるか、
   それとも host 実証の段で運用セッションが調べて提案するか。
+
+### 回答（人、2026-10-09）
+
+- **A1** 推奨どおり。username は「機密だが秘密ではない」。保存・log は password と同じ（vault の envelope、DB・event・log・API 応答・audit
+  に書かない）。ログイン後の頁に表示された username は agent が読めてよい（`RedisplayGuard` は password だけ）。
+- **A2** site policy の opt-in（`post_login.read_origins`）と、毎回の credential_use 承認画面への表示。task ごとの別承認は追加しない。
+- **A3/A4** screenshot と download の両方を v1 で許す（「両方許す」）。ただし `read_origins` 内だけ、認証区間が閉じた後だけ。
+  screenshot は頁に password 入力欄がある間（と区間中）は拒否。download は `read_origins` 内だけで、通常の大きさ・型の制限を掛ける（D2-6）。
+- **A5** 外部 provider 可（通常の routing）。LLM の限定はしない。
+- **A6** click は区間後の `read_origins` 内だけ許す（login / IdP の頁では注入そのもの以外の click をしない）。agent に課題を提出させない
+  ことは task の指示の事項とし、ここでは強制しない。
+- **A7** run ごとの credential_use 承認を受け入れる。
+- **A8** 通知メールの取り込み（B'）は今はしない。
+- **A9** 運用セッションが host 実証の段で manaba / IdP の実頁を調べ、site policy の値（login_url、username_selector、read_origins）を
+  提案する。manaba の値はコードに書かない。
 
 ## 実装の作業単位（承認後、概算）
 

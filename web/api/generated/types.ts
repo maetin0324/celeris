@@ -487,9 +487,11 @@ export type BrowserSitePolicyRecord = {
   "login_url": string;
   "password_selector": string;
   "policy_id": string;
+  "post_login"?: PostLogin | null;
   "source": BrowserSitePolicySource;
   "submit_selector"?: string | null;
   "updated_at": string;
+  "username_selector"?: string | null;
 };
 
 export type BrowserSitePolicySource = "api" | "config";
@@ -4004,6 +4006,13 @@ export type PlanUnitSpec = {
   "title": string;
 };
 
+export type PostLogin = {
+  "actions": Array<PostLoginAction>;
+  "read_origins": Array<string>;
+};
+
+export type PostLoginAction = "snapshot" | "extract" | "screenshot" | "download" | "click";
+
 export type PriorityInput = PriorityLabel | number;
 
 export type PriorityLabel = "P0" | "P1" | "P2" | "P3";
@@ -5291,7 +5300,9 @@ export type SitePolicyPutBody = {
   "exact_origin": string;
   "login_url": string;
   "password_selector": string;
+  "post_login"?: PostLogin | null;
   "submit_selector"?: string | null;
+  "username_selector"?: string | null;
 };
 
 export type SitePolicyPutResult = {
@@ -5895,8 +5906,10 @@ export type TrustedLogin = {
   "login_url": string;
   "password_selector": string;
   "policy_id": string;
+  "post_login"?: PostLogin | null;
   "revision": number;
   "submit_selector"?: string | null;
+  "username_selector"?: string | null;
 };
 
 export type TunnelForwardLive = {

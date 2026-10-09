@@ -117,18 +117,56 @@ function WaitSummary({ wait }: { wait: BrowserWait }) {
   );
 }
 
+/**
+ * credential 使用の承認で固定したログインの中身（ADR-0110 D2、ADR 2026-10-09 credential username /
+ * post-login）。ログイン後の読み取りがあれば、承認がそれへの承認でもあることを毎回明記する。
+ */
+export function TrustedLoginSummary({ wait }: { wait: BrowserWait }) {
+  const login = wait.trusted_login;
+  if (!login) return null;
+  const post = login.post_login;
+  return (
+    <div className="space-y-1 text-label" data-testid="browser-wait-trusted-login">
+      <dl className="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1">
+        <dt className="text-muted-foreground">ログイン URL</dt>
+        <dd className="break-all font-mono">{login.login_url}</dd>
+        <dt className="text-muted-foreground">入力する欄</dt>
+        <dd className="break-all font-mono">
+          {login.username_selector ? `${login.username_selector}（username）・` : ""}
+          {login.password_selector}（password）
+        </dd>
+        <dt className="text-muted-foreground">ログイン後の読み取り</dt>
+        <dd className="break-all">
+          {post
+            ? `${post.read_origins.join(", ")}（${post.actions.join(", ")}）`
+            : "しない（session の終わりまで頁を読まない）"}
+        </dd>
+      </dl>
+      {post ? (
+        <p className="text-warning-foreground">
+          承認すると、ログインした後に上の origin の頁を agent が読み取ります。頁の内容（個人情報を含みうる）は LLM
+          に渡ります。ログイン画面と password 欄のある頁は読み取りません。
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 function OperationSummary({ wait }: { wait: BrowserWait }) {
   return (
-    <dl className="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 text-label" data-testid="browser-wait-operation">
-      <dt className="text-muted-foreground">対象操作</dt>
-      <dd className="break-all font-mono">{wait.operation?.action ?? "credential_use"}</dd>
-      <dt className="text-muted-foreground">引数 digest</dt>
-      <dd className="break-all font-mono">{wait.operation?.args_digest ?? "—"}</dd>
-      <dt className="text-muted-foreground">policy revision</dt>
-      <dd className="break-all font-mono">
-        {wait.policy_revision}（{wait.policy_hash.slice(0, 12)}）
-      </dd>
-    </dl>
+    <div className="space-y-2">
+      <dl className="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 text-label" data-testid="browser-wait-operation">
+        <dt className="text-muted-foreground">対象操作</dt>
+        <dd className="break-all font-mono">{wait.operation?.action ?? "credential_use"}</dd>
+        <dt className="text-muted-foreground">引数 digest</dt>
+        <dd className="break-all font-mono">{wait.operation?.args_digest ?? "—"}</dd>
+        <dt className="text-muted-foreground">policy revision</dt>
+        <dd className="break-all font-mono">
+          {wait.policy_revision}（{wait.policy_hash.slice(0, 12)}）
+        </dd>
+      </dl>
+      <TrustedLoginSummary wait={wait} />
+    </div>
   );
 }
 

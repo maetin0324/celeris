@@ -204,6 +204,12 @@ test("site policy を追加・編集・削除し、credential grant を選択し
     await expect(editing.getByLabel("policy ID", { exact: true })).toHaveAttribute("readonly", "");
     await editing.getByLabel("ログイン URL（login_url）").fill("https://courses.example.com/new-login");
     await editing.getByLabel("submit selector（任意）").fill("#submit");
+    // ADR 2026-10-09 credential username / post-login: username 欄とログイン後の読み取りの opt-in。
+    await editing.getByLabel("username selector（任意。password 欄と同じ頁）").fill("#user");
+    await editing.getByLabel("ログインした後、下の origin の頁を agent に読み取らせる").check();
+    await editing
+      .getByLabel("読み取り先 origin（1 行に 1 つ。ログイン先の origin は入れられません）")
+      .fill("https://lms.example.com");
     for (const width of [360, 390, 412, 1440]) {
       await page.setViewportSize({ width, height: 800 });
       expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
@@ -218,11 +224,18 @@ test("site policy を追加・編集・削除し、credential grant を選択し
       }
     }
     await captureWidths(page, "site-policy-edit");
+    // 頁の内容が LLM に渡ることを確認するまで送らない。
+    await editing.getByRole("button", { name: "ログイン先を保存" }).click();
+    await expect(editing.getByRole("alert")).toContainText("LLM");
+    expect(writes).toHaveLength(1);
+    await editing.getByLabel(/LLM\s*とその提供元に渡ることを確認しました/).check();
     await editing.getByRole("button", { name: "ログイン先を保存" }).click();
     await expect(page.getByRole("list", { name: "ログイン先の一覧" })).toContainText("new-login");
     expect(writes[1]?.body).toMatchObject({
       login_url: "https://courses.example.com/new-login",
       submit_selector: "#submit",
+      username_selector: "#user",
+      post_login: { read_origins: ["https://lms.example.com"], actions: ["snapshot", "extract"] },
     });
     await page.getByLabel("credential の使用を許可（credential_use）").check();
     await page.getByLabel("courses.login", { exact: true }).check();

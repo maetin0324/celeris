@@ -1,12 +1,59 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { type FormEvent, useId, useState } from "react";
-import type { BrowserSitePolicyRecord, SitePolicyPutBody } from "../../api/generated/types";
+import type { BrowserSitePolicyRecord, PostLoginAction, SitePolicyPutBody } from "../../api/generated/types";
 import { FetchFrame } from "../../components/fetch-state/fetch-frame";
 import { Button } from "../../components/ui/button";
 import { ConfirmDialog } from "../../components/ui/confirm-dialog";
 import { Input } from "../../components/ui/input";
 import { Section } from "../../components/ui/panel";
 import { deleteSitePolicy, saveSitePolicy, sitePoliciesQuery, sitePolicyError } from "./site-policy-query";
+
+/** ログイン後の読み取りで選べる action（ADR 2026-10-09 credential username / post-login D2-6）。 */
+export const POST_LOGIN_ACTIONS: ReadonlyArray<{ action: PostLoginAction; label: string }> = [
+  { action: "snapshot", label: "snapshot（頁の構造）" },
+  { action: "extract", label: "extract（本文の抜き出し）" },
+  { action: "screenshot", label: "screenshot（password 欄のある頁では撮らない）" },
+  { action: "download", label: "download（読み取り先 origin のファイルだけ）" },
+  { action: "click", label: "click（読み取り先 origin の頁だけ）" },
+];
+
+export type SitePolicyFields = {
+  origin: string;
+  login: string;
+  password: string;
+  submit: string;
+  username: string;
+  postLogin: boolean;
+  readOrigins: string;
+  actions: PostLoginAction[];
+  acknowledged: boolean;
+};
+
+/**
+ * 入力から PUT の本文を作る。ログイン後の読み取りを有効にするなら、読み取り先 origin・action と、
+ * 頁の内容が LLM に渡ることの確認がそろっていなければ送らない（文言だけを返す）。
+ */
+export function sitePolicyBody(f: SitePolicyFields): { body: SitePolicyPutBody } | { error: string } {
+  const body: SitePolicyPutBody = {
+    exact_origin: f.origin.trim(),
+    login_url: f.login.trim(),
+    password_selector: f.password.trim(),
+    submit_selector: f.submit.trim() || null,
+    username_selector: f.username.trim() || null,
+    post_login: null,
+  };
+  if (!f.postLogin) return { body };
+  const readOrigins = f.readOrigins
+    .split(/\s+/)
+    .map((o) => o.trim())
+    .filter((o) => o.length > 0);
+  if (readOrigins.length === 0) return { error: "ログイン後に読み取る origin を 1 つ以上入れてください。" };
+  if (f.actions.length === 0) return { error: "ログイン後に許す操作を 1 つ以上選んでください。" };
+  if (!f.acknowledged)
+    return { error: "ログイン後の頁の内容（個人情報を含みうる）が LLM に渡ることを確認してください。" };
+  const actions = POST_LOGIN_ACTIONS.map((a) => a.action).filter((a) => f.actions.includes(a));
+  return { body: { ...body, post_login: { read_origins: readOrigins, actions } } };
+}
 
 export function SitePolicyForm({
   policy,
@@ -23,20 +70,36 @@ export function SitePolicyForm({
   const [login, setLogin] = useState(policy?.login_url ?? "");
   const [password, setPassword] = useState(policy?.password_selector ?? "");
   const [submit, setSubmit] = useState(policy?.submit_selector ?? "");
+  const [username, setUsername] = useState(policy?.username_selector ?? "");
+  const [postLogin, setPostLogin] = useState(!!policy?.post_login);
+  const [readOrigins, setReadOrigins] = useState((policy?.post_login?.read_origins ?? []).join("\n"));
+  const [actions, setActions] = useState<PostLoginAction[]>(policy?.post_login?.actions ?? ["snapshot", "extract"]);
+  // 既存の opt-in を開き直しても、保存のたびに改めて確認を求める。
+  const [acknowledged, setAcknowledged] = useState(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   async function save(event: FormEvent) {
     event.preventDefault();
     if (pending) return;
+    const built = sitePolicyBody({
+      origin,
+      login,
+      password,
+      submit,
+      username,
+      postLogin,
+      readOrigins,
+      actions,
+      acknowledged,
+    });
+    if ("error" in built) {
+      setError(built.error);
+      return;
+    }
     setPending(true);
     setError(null);
     try {
-      await onSave(policyId.trim(), {
-        exact_origin: origin.trim(),
-        login_url: login.trim(),
-        password_selector: password.trim(),
-        submit_selector: submit.trim() || null,
-      });
+      await onSave(policyId.trim(), built.body);
     } catch (reason) {
       setError(sitePolicyError(reason));
     } finally {
@@ -91,6 +154,71 @@ export function SitePolicyForm({
           submit selector（任意）
           <Input id={`${id}-submit`} value={submit} onChange={(e) => setSubmit(e.target.value)} />
         </label>
+        <label htmlFor={`${id}-username`} className="min-w-0 space-y-1 text-label font-medium">
+          username selector（任意。password 欄と同じ頁）
+          <Input
+            id={`${id}-username`}
+            value={username}
+            placeholder='input[name="j_username"]'
+            onChange={(e) => setUsername(e.target.value)}
+          />
+        </label>
+      </fieldset>
+      <fieldset disabled={pending} className="min-w-0 space-y-3 rounded-md border border-border p-3">
+        <legend className="px-1 text-label font-medium">ログイン後の読み取り（post_login・任意）</legend>
+        <label className="flex min-h-11 min-w-11 items-start gap-2 text-label">
+          <input
+            type="checkbox"
+            checked={postLogin}
+            onChange={(e) => setPostLogin(e.target.checked)}
+            aria-describedby={`${id}-post-note`}
+          />
+          <span>ログインした後、下の origin の頁を agent に読み取らせる</span>
+        </label>
+        <p id={`${id}-post-note`} className="text-label text-muted-foreground">
+          有効にしなければ、ログインした session では終わりまで頁を読み取りません（今の動作）。ログイン画面（IdP）と
+          password 欄のある頁は有効にしても読み取りません。
+        </p>
+        {postLogin ? (
+          <div className="space-y-3">
+            <label htmlFor={`${id}-read`} className="block min-w-0 space-y-1 text-label font-medium">
+              読み取り先 origin（1 行に 1 つ。ログイン先の origin は入れられません）
+              <textarea
+                id={`${id}-read`}
+                className="min-h-16 w-full rounded-md border border-border bg-background p-2 font-mono text-label"
+                value={readOrigins}
+                placeholder="https://lms.example.ac.jp"
+                onChange={(e) => setReadOrigins(e.target.value)}
+              />
+            </label>
+            <fieldset className="space-y-1">
+              <legend className="text-label font-medium">ログイン後に許す操作</legend>
+              {POST_LOGIN_ACTIONS.map(({ action, label }) => (
+                <label key={action} className="flex min-h-11 min-w-11 items-center gap-2 text-label">
+                  <input
+                    type="checkbox"
+                    checked={actions.includes(action)}
+                    onChange={(e) =>
+                      setActions((now) =>
+                        e.target.checked
+                          ? [...now.filter((a) => a !== action), action]
+                          : now.filter((a) => a !== action),
+                      )
+                    }
+                  />
+                  <span>{label}</span>
+                </label>
+              ))}
+            </fieldset>
+            <label className="flex min-h-11 min-w-11 items-start gap-2 text-label">
+              <input type="checkbox" checked={acknowledged} onChange={(e) => setAcknowledged(e.target.checked)} />
+              <span>
+                ログイン後の頁の内容（氏名・学籍番号・成績・課題など個人情報を含みうる）が LLM
+                とその提供元に渡ることを確認しました。credential の使用は毎回人の承認が要ります。
+              </span>
+            </label>
+          </div>
+        ) : null}
       </fieldset>
       <p className="text-label text-muted-foreground">
         origin は wildcard を含めず、ログイン URL は同じ origin を指定します。パスワードの値は入力しません。
@@ -163,9 +291,18 @@ export function SitePoliciesPanel({ csrf }: { csrf: string }) {
                     <dd>{policy.login_url}</dd>
                   </div>
                   <div>
-                    <dt>password / submit selector</dt>
+                    <dt>username / password / submit selector</dt>
                     <dd>
-                      {policy.password_selector} / {policy.submit_selector || "なし"}
+                      {policy.username_selector || "なし"} / {policy.password_selector} /{" "}
+                      {policy.submit_selector || "なし"}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>ログイン後の読み取り</dt>
+                    <dd>
+                      {policy.post_login
+                        ? `${policy.post_login.read_origins.join(", ")}（${policy.post_login.actions.join(", ")}）`
+                        : "なし（ログイン後は読み取らない）"}
                     </dd>
                   </div>
                   <div>

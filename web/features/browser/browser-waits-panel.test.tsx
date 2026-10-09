@@ -2,7 +2,13 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BrowserWait } from "../../api/generated/types";
 import { BrowserGatewayError } from "./browser-query";
-import { BrowserWaitsList, submitCredential, submitDecision, waitActionMessage } from "./browser-waits-panel";
+import {
+  BrowserWaitsList,
+  submitCredential,
+  submitDecision,
+  TrustedLoginSummary,
+  waitActionMessage,
+} from "./browser-waits-panel";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -138,5 +144,44 @@ describe("BrowserWaitsList", () => {
     const out = renderToStaticMarkup(<BrowserWaitsList waits={[decisionWait({ state: "approved" })]} owner={owner} />);
     expect(out).not.toContain('data-testid="browser-decision-form"');
     expect(out).not.toContain('data-testid="browser-credential-form"');
+  });
+});
+
+describe("TrustedLoginSummary", () => {
+  const login = {
+    policy_id: "manaba",
+    revision: 1,
+    login_url: "https://idp.example.ac.jp/idp/profile/SAML2/Unsolicited/SSO?providerId=lms",
+    password_selector: 'input[name="j_password"]',
+    submit_selector: 'button[name="_eventId_proceed"]',
+  };
+  it("names both input fields and states the post-login read on every credential_use approval", () => {
+    const html = renderToStaticMarkup(
+      <TrustedLoginSummary
+        wait={decisionWait({
+          operation: { action: "credential_use", intent_id: "I9" },
+          trusted_login: {
+            ...login,
+            username_selector: 'input[name="j_username"]',
+            post_login: { read_origins: ["https://lms.example.ac.jp"], actions: ["snapshot", "extract", "click"] },
+          },
+        })}
+      />,
+    );
+    expect(html).toContain("j_username");
+    expect(html).toContain("（username）");
+    expect(html).toContain("https://lms.example.ac.jp（snapshot, extract, click）");
+    expect(html).toContain("LLM");
+    expect(html).toContain("password 欄のある頁は読み取りません");
+  });
+  it("says nothing is read after login without an opt-in, and renders nothing without a pinned login", () => {
+    const html = renderToStaticMarkup(
+      <TrustedLoginSummary
+        wait={decisionWait({ operation: { action: "credential_use", intent_id: "I9" }, trusted_login: login })}
+      />,
+    );
+    expect(html).toContain("しない（session の終わりまで頁を読まない）");
+    expect(html).not.toContain("LLM");
+    expect(renderToStaticMarkup(<TrustedLoginSummary wait={decisionWait()} />)).toBe("");
   });
 });

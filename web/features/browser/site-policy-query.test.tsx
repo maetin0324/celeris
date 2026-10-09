@@ -6,7 +6,7 @@ import { orgKeys } from "../../api/queries/keys";
 import { BrowserGatewayError } from "./browser-query";
 import { BrowserReadinessPanel, browserReadinessQuery, readinessView } from "./browser-readiness-panel";
 import { SettingsForm } from "./browser-settings-screen";
-import { SitePolicyForm } from "./site-policies-panel";
+import { SitePolicyForm, sitePolicyBody } from "./site-policies-panel";
 import {
   deleteSitePolicy,
   saveBrowserSettings,
@@ -113,6 +113,66 @@ describe("site policy requests", () => {
     expect(invalidate).not.toHaveBeenCalled();
     expect(sitePolicyError(new BrowserGatewayError(409, "site_policy_in_use"))).toContain("選択を外して保存");
     client.clear();
+  });
+});
+
+describe("site policy body (username selector and post-login read)", () => {
+  const fields = {
+    origin: " https://idp.example.ac.jp ",
+    login: "https://idp.example.ac.jp/idp/login",
+    password: 'input[name="j_password"]',
+    submit: "",
+    username: ' input[name="j_username"] ',
+    postLogin: false,
+    readOrigins: "",
+    actions: [] as Array<"snapshot" | "extract" | "screenshot" | "download" | "click">,
+    acknowledged: false,
+  };
+  it("sends the username selector and no post-login read unless opted in", () => {
+    expect(sitePolicyBody(fields)).toEqual({
+      body: {
+        exact_origin: "https://idp.example.ac.jp",
+        login_url: "https://idp.example.ac.jp/idp/login",
+        password_selector: 'input[name="j_password"]',
+        submit_selector: null,
+        username_selector: 'input[name="j_username"]',
+        post_login: null,
+      },
+    });
+    expect(sitePolicyBody({ ...fields, username: " " })).toMatchObject({ body: { username_selector: null } });
+  });
+  it("requires origins, actions and the LLM acknowledgement before sending a post-login read", () => {
+    const on = { ...fields, postLogin: true };
+    expect(sitePolicyBody(on)).toEqual({ error: "ログイン後に読み取る origin を 1 つ以上入れてください。" });
+    const origins = { ...on, readOrigins: " https://lms.example.ac.jp\n\nhttps://lms2.example.ac.jp " };
+    expect(sitePolicyBody(origins)).toEqual({ error: "ログイン後に許す操作を 1 つ以上選んでください。" });
+    const picked = { ...origins, actions: ["click", "snapshot"] as typeof fields.actions };
+    expect(sitePolicyBody(picked)).toMatchObject({ error: expect.stringContaining("LLM") });
+    expect(sitePolicyBody({ ...picked, acknowledged: true })).toMatchObject({
+      body: {
+        post_login: {
+          read_origins: ["https://lms.example.ac.jp", "https://lms2.example.ac.jp"],
+          actions: ["snapshot", "click"],
+        },
+      },
+    });
+  });
+  it("shows the username selector and the post-login opt-in when editing", () => {
+    const html = renderToStaticMarkup(
+      <SitePolicyForm
+        policy={{
+          ...policy,
+          username_selector: "#user",
+          post_login: { read_origins: ["https://lms.example.ac.jp"], actions: ["snapshot"] },
+        }}
+        onSave={async () => {}}
+        onCancel={() => {}}
+      />,
+    );
+    expect(html).toContain("username selector（任意。password 欄と同じ頁）");
+    expect(html).toContain("#user");
+    expect(html).toContain("https://lms.example.ac.jp");
+    expect(html).toContain("個人情報を含みうる");
   });
 });
 

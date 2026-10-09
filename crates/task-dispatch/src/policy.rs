@@ -25,9 +25,9 @@ pub struct ProviderSpec {
     pub id: ProviderId,
     pub adapter: AdapterId,
     pub tiers: Vec<Tier>,
-    /// Deprecated `[[providers]].concurrency` when written. Never compared directly;
-    /// non-pool rows use it as their implicit account's default `max_runs`
-    /// (ADR 2026-10-08 account-concurrency-limits §(e)).
+    /// Deprecated `[[providers]].concurrency` when written (kept for the snapshot's display).
+    /// Dispatch never reads it: a non-pool row's limit is its implicit account's
+    /// (ADR 2026-10-08 account-concurrency-limits §(c)(e)).
     pub concurrency: Option<usize>,
     pub model: String,
 }
@@ -65,8 +65,6 @@ pub enum Selection {
 pub trait ProviderPolicy: Send {
     fn pick(&self, hint: &WorkerHint, now: Instant) -> Option<(AdapterId, ProviderId)>;
     fn report(&mut self, provider: ProviderId, outcome: &ProviderOutcome);
-    /// Deprecated row concurrency, if written (the implicit account's legacy default).
-    fn legacy_concurrency(&self, provider: ProviderId) -> Option<usize>;
 
     /// ADR-0012 D2: `excluded`（並列度の上限に達したプロバイダ等）を除いて選ぶ。既定実装は `pick` から導くので
     /// 「候補なし」と「一時的に不可」を区別できず、選べなければ `Busy`（従来どおり待つ）を返す。
@@ -236,13 +234,6 @@ impl ProviderPolicy for StaticPolicy {
             .collect();
         out.sort_by(|a, b| a.provider.cmp(&b.provider));
         out
-    }
-
-    fn legacy_concurrency(&self, provider: ProviderId) -> Option<usize> {
-        self.providers
-            .iter()
-            .find(|p| p.id == provider)
-            .and_then(|p| p.concurrency)
     }
 
     fn provider_ids(&self) -> Vec<ProviderId> {

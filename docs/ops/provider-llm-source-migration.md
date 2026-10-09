@@ -216,17 +216,19 @@ Qwen を非 cheap tier に戻すことはない。戻した後も providers API�
 | --- | --- | --- |
 | `[[providers]].concurrency` | 行の同時実行数の上限 | deprecated。読めるが dispatch では使わない。読み込むたびに行ごとに警告が出る |
 | プール行（`account_pool = true`） | 行の `concurrency` と各アカウントの `max_runs_per_account` の両方で止まる | 各アカウントの実効上限（`effective_max_runs`）だけで止まる |
-| 非プール行（本番の `opencode-qwen`・`pi-qwen`・`ldr-qwen`・`paperqa-qwen`・`langmem-main`） | 行の `concurrency` | 行の**暗黙アカウント** `implicit/<行の id>` の実効上限。保存値が無ければ旧 `concurrency` を引き継ぐ |
+| 非プール行（本番の `opencode-qwen`・`pi-qwen`・`ldr-qwen`・`paperqa-qwen`・`langmem-main`） | 行の `concurrency` | 行の**暗黙アカウント** `implicit/<行の id>` の実効上限。保存値が無ければ `max_runs_per_account`（既定 2）。旧 `concurrency` は使わない |
 | `[accounts] max_runs_per_account` | 全アカウント共通の上限 | 保存値の無いアカウントの既定値（変更には再起動が要る。従来どおり） |
 | アカウントごとの上限 | 無い | アカウント画面か `PATCH /api/v1/accounts/{adapter}/{id}` で即時に設定（DB に保存） |
 
-**リリースを入れ替えた時点で、config を変えなくても非プール行の挙動は変わらない**（暗黙アカウントが旧 `concurrency` を引き継ぐ）。
+**リリースを入れ替えた時点で、非プール行の上限は旧 `concurrency` から既定 2 に変わる**（旧 `concurrency` は上限に効かない）。
+Qwen 行（GPU 1 枚）を 1 本に保つには、新リリースの daemon が動いた直後に手順 3 で `max_runs = 1` を保存する。
+PATCH は新リリースにしか無いので、保存までの数分は Qwen 行が 2 本まで走りうる。これは人が移行の時刻に合わせて確かめる。
 プール行は行の上限が無くなるので、同時数が「選べるアカウントの実効上限の和」まで増えうる
 （例: アカウント 3 件・既定 2 なら最大 6 本。旧 `claude-pool` の `concurrency = 4` では 4 本だった）。
 全体の上限 `[execution] max_concurrency` と `max_cos_runs` は変わらない。
 
-注意: config から `concurrency` を消すと、保存値の無い暗黙アカウントの上限は既定（`max_runs_per_account`）に変わる。旧値が 1・既定が 2 なら 2 に上がる。
-**消す前に、暗黙アカウントの上限をアカウント画面で保存しておく**（手順 3）。
+注意: 手順 4 で config から `concurrency` を消しても、上限は変わらない（旧値は既に効いていない）。Qwen 行の上限は手順 3 の保存値で決まる。
+**手順 4 の前に、暗黙アカウントの上限（Qwen は 1）を保存しておく**（手順 3）。消し忘れても害は無いが、警告ログを消すために行う。
 
 ### 前提
 
@@ -270,9 +272,9 @@ curl -fsS -H "Authorization: Bearer $TOKEN" "$API/accounts" \
 
 期待:
 
-- 非プール行ごとに `implicit	<行の id>	<行の id>	null	<旧 concurrency>	legacy_concurrency` の行がある。
-  本番の Qwen 行（`opencode-qwen`・`pi-qwen`）は `effective_max_runs = 1`・`max_runs_source = legacy_concurrency`。
-  **これが「暗黙アカウントの既定が旧 concurrency を引き継いでいる」ことの確認**。
+- 非プール行ごとに `implicit	<行の id>	<行の id>	null	2	default` の行がある（既定 2。`[accounts]` が無ければ 2）。
+  本番の Qwen 行（`opencode-qwen`・`pi-qwen`）は、新リリースに入れ替えた直後なら `effective_max_runs = 2`・`max_runs_source = default` になる
+  （config の `concurrency = 1` は効かない）。手順 3 で保存すると `1`・`account` に変わる。
   既に `max_runs` が保存されている行は `max_runs_source = account` になり、保存値が優先される。
   確認のために保存値を解除せず、控えと現在の `effective_max_runs` を照合する。
 - 保存値の無い実アカウント（`claude-code`・`codex`・`opencode-go`）は `max_runs_source = default`、`effective_max_runs` が `max_runs_per_account`。
@@ -339,7 +341,7 @@ reload で反映できない事情があれば、人が対象の user service �
 #### 6. 確かめる（読み取りだけ）
 
 ```sh
-# 実効上限: 暗黙アカウントは保存値（account）か既定（default）。legacy_concurrency はもう出ない
+# 実効上限: 暗黙アカウントは保存値（account）か既定（default）。旧 concurrency は使わない
 curl -fsS -H "Authorization: Bearer $TOKEN" "$API/accounts" \
   | jq -r '.items[] | [.adapter, .id, (.max_runs|tostring), .effective_max_runs, .max_runs_source, .in_use, (.excluded_reason // "-")] | @tsv'
 # 警告ログが消えたこと（reload / 再起動の時刻より後に 1 行も出ない）
@@ -367,7 +369,7 @@ curl -fsS -H "Authorization: Bearer $TOKEN" "$API/providers" | jq -r '.items[] |
     -d '{"max_runs": null}' "$API/accounts/implicit/opencode-qwen" | jq '{id, max_runs, effective_max_runs, max_runs_source}'
   ```
 
-  即時に効く。解除後は GET の実効上限を再確認する。暗黙アカウントは、config に `concurrency` が書かれていれば `legacy_concurrency`、無ければ `default` に戻る。
+  即時に効く。解除後は GET の実効上限を再確認する。暗黙アカウントは保存値が無ければ `default`（`max_runs_per_account`）に戻る。旧 `concurrency` は上限に効かない。
 - **config を戻す**: 手順 1 の控えを元の場所に戻し（`cp -a ~/.config/celeris/config.toml.bak-account-limits-20261008 ~/.config/celeris/config.toml`、
   `providers.d` は `cp -a ~/.config/celeris/providers.d.bak-account-limits-20261008/. ~/.config/celeris/providers.d/` で中身を戻す）、手順 4 の検査と手順 5 の reload を行う。警告ログが再び出て、保存値の無い暗黙アカウントは旧 `concurrency` を引き継ぐ。
   config を外す前の挙動に戻す場合は、先に config を復元・reload してから保存値を控えの値へ戻す

@@ -61,7 +61,7 @@ tasks: [01M4D7RVKXY9A967ZXDADWVHQJ]
   `concurrency` を外す（deprecated・dispatch では見ない）。他の欄は維持。
 - **ADR-0132 付記 L2(c)・L6 の上書き**: ローカルの行（L1）の空きは、その行の**暗黙アカウント**（§(e)）の空きで判定する。
   L6 の「ローカルの行の同時実行数は既存の `[[providers]].concurrency`（既定 1）で決める。新しい欄は足さない」は、
-  「ローカルの行の同時実行数はその行の暗黙アカウントの上限で決める（既定は旧 `concurrency` を引き継ぐ。§(e)）。アカウント画面で変える」に置き換える。
+  「ローカルの行の同時実行数はその行の暗黙アカウントの上限で決める（既定は `max_runs_per_account`。§(e)）。アカウント画面で変える」に置き換える。
   L3 の `local_full` の意味（前段で見送ったローカルの行が満杯）はそのまま。
 - ADR-0012・ADR-0017・ADR-0024・ADR-0089 の `concurrency` に関する記述も、末尾の付記のとおりこの ADR が優先する。
 
@@ -70,9 +70,9 @@ tasks: [01M4D7RVKXY9A967ZXDADWVHQJ]
 - **欄名は `max_runs`**（1 アカウントで同時に走らせる非 CoS の run の上限）。アカウントごとの保存値で、無ければ既定に従う。
 - **実効上限**（`effective_max_runs`）の決め方:
   1. そのアカウントに保存された `max_runs` があればそれ。
-  2. 無ければ、暗黙アカウント（§(e)）なら行の旧 `concurrency`（config か `providers.d` に**書かれていれば**）。
-  3. それも無ければ `[accounts] max_runs_per_account`（`[accounts]` が無い構成では組み込みの既定 2）。
-  どれを使ったかを `max_runs_source`（`"account"` / `"legacy_concurrency"` / `"default"`）として返す。
+  2. 無ければ `[accounts] max_runs_per_account`（`[accounts]` が無い構成では組み込みの既定 2）。
+  旧 `[[providers]].concurrency` は、暗黙アカウントでも実効上限の入力にしない（人の決定 `nonpool-limit` (ii)。LLM source の config 側に上限を持たせない）。
+  どれを使ったかを `max_runs_source`（`"account"` / `"default"`）として返す。
 - `[accounts] max_runs_per_account` は**全アカウントの既定値**として残す（意味が「全アカウントの共通上限」から「保存値の無いアカウントの既定」に変わる）。
   これの変更は従来どおり再起動が要る（ADR-0024 M7）。アカウントごとの `max_runs` は再起動も reload も要らない（§(d)）。
 - **CoS +1（ADR-0089 規則 2）は実アカウントで維持する**: CoS run の上限は `effective_max_runs + 1`。`capacity::account_run_limit(effective, cos)` の形は
@@ -91,7 +91,7 @@ tasks: [01M4D7RVKXY9A967ZXDADWVHQJ]
   - `dispatch_run.rs`（`celerisctl worker run` を含む直接起動の経路）
   - `GET /providers` の `in_use` / `in_use_cos`（§(a) の観測値。数え方は不変）
   - `GET /accounts` の `in_use`・`excluded_reason = "at_capacity"`（実効上限で判定）
-- `capacity.rs` の純粋関数として、実効上限の解決（`effective_account_limit(stored, legacy, default) -> (usize, Source)`）と
+- `capacity.rs` の純粋関数として、実効上限の解決（`effective_account_limit(stored, default) -> (usize, Source)`）と
   暗黙アカウントの満杯判定を足し、`provider_full` を消す。
 
 ### (d) 保存先と API
@@ -158,17 +158,17 @@ tasks: [01M4D7RVKXY9A967ZXDADWVHQJ]
   web のアカウント画面は「暗黙（プロバイダ <id>）」の印を付けた別の節に出し、上限の編集 UI は実アカウントと同じ部品を使う。ログイン・確認・削除のボタンは出さない。
 - **削除・作成**: 暗黙アカウントは `POST /accounts`・`DELETE /accounts/{id}`・ログイン・確認の対象外（`?adapter=implicit` は 400 `bad_request`）。
   行の追加とともに現れ、行の削除に追従して消える（保存値の削除は §(d)）。
-- **既定上限**: §(c) の順。保存値が無ければ**行の旧 `concurrency`（書かれていれば）を引き継ぐ**。本番の Qwen 行（`opencode-qwen`・`pi-qwen`）は
-  `concurrency = 1` を明示しているので、**config を変えなくても各行 1 本で止まる**。旧 `concurrency` も無ければ `max_runs_per_account`。
-  人が本番 config から `concurrency` を消す前には、アカウント画面で暗黙アカウントの `max_runs` を保存しておく（手順は後続 `docs` が
-  docs/ops に書く。保存しないまま消すと既定の 2 に上がる）。
+- **既定上限**: §(c) の順。保存値が無ければ `max_runs_per_account`（既定 2）。旧 `concurrency` は引き継がない。本番の Qwen 行
+  （`opencode-qwen`・`pi-qwen`）は `concurrency = 1` を明示しているが、**この変更の後は既定の 2 本まで載る**。1 本のままにするには、
+  移行前にアカウント画面（または `PATCH /api/v1/accounts/implicit/<id>`）で暗黙アカウントの `max_runs = 1` を保存しておく。
+  手順は docs/ops/provider-llm-source-migration.md に書く。
 - **CoS +1 は無し**: 暗黙アカウントの上限は CoS run を含めた全数で比べる（`in_use + in_use_cos < effective_max_runs`）。
   これは ADR-0089 規則 2 の「プールでないプロバイダには例外を作らない（CoS も含めた合計で比べる）」をそのまま暗黙アカウントへ移したもので、
   GPU 1 枚の Qwen に CoS が 2 本目を載せない。
 - **数え方**: 暗黙アカウントの `in_use` はその行で走っている全 run（非 CoS・CoS・プロバイダを使うレビュー run）。旧 `provider_full` の非プールの式
-  （`in_use + in_use_cos >= limit`）と同じ値になるので、移行の前後で挙動が変わらない。
-- **既知の限界（変えない）**: 上限は行ごと。同じ Qwen を指す 2 行（本番の `opencode-qwen` と `pi-qwen`）は別々に 1 本ずつ、合わせて 2 本走りうる。
-  これは今の `concurrency` と同じ。source 単位で束ねるのは別の決定にする。
+  （`in_use + in_use_cos >= limit`）と同じ数え方だが、上限の値は保存値か既定になる。
+- **既知の限界（変えない）**: 上限は行ごと。同じ Qwen を指す 2 行（本番の `opencode-qwen` と `pi-qwen`）は別々の暗黙アカウントになり、
+  それぞれの上限まで合わせて走りうる。LLM source 単位で束ねるのは別の決定にする。
 
 ### (f) 別勘定で今回は触らないもの
 
@@ -186,7 +186,7 @@ tasks: [01M4D7RVKXY9A967ZXDADWVHQJ]
 - プール行（本番 `claude-pool` の 4、`codex-pool` の 2、`pi-opencode-go` の 1）の行全体の上限は無くなる。行の同時数は
   「そのプールの選べるアカウントの実効上限の和」と `max_concurrency` で決まる。今と同じ並びを保ちたい場合は、移行手順（docs/ops）に従い
   アカウント画面で各アカウントの `max_runs` を合わせる（例: opencode-go のアカウントが 1 件なら `max_runs = 1`）。
-- 非プール行は暗黙アカウントの既定が旧 `concurrency` なので、config を変えなくても挙動は変わらない。
+- 非プール行（本番の Qwen 行）は暗黙アカウントの既定が 2 になる。移行前に `max_runs = 1` を保存しないと、その行は 2 本まで走る（移行手順を参照）。
 - `max_runs_per_account` は再起動、アカウントごとの `max_runs` は即時（次の tick）。
 - 旧 config・旧 `providers.d`・旧 API クライアントは壊れない（読めて、警告が出て、効かない）。
 
@@ -194,7 +194,7 @@ tasks: [01M4D7RVKXY9A967ZXDADWVHQJ]
 
 - 旧 config の `[[providers]].concurrency` が読めて警告が出ること、プール行では dispatch に使われないこと（`concurrency = 1` のプール行で
   `max_runs_per_account = 2` のアカウント 2 件に 4 本載る等）。
-- 実アカウントの上限で非 CoS が止まり、CoS は +1 まで載ること。暗黙アカウントは旧 `concurrency = 1` を引き継いで 1 本で止まり、CoS も +1 されないこと。
+- 実アカウントの上限で非 CoS が止まり、CoS は +1 まで載ること。暗黙アカウントは旧 `concurrency = 1` を無視し、保存値 1 なら 1 本で止まり、CoS も +1 されないこと。保存値が無ければ既定 2。
 - `PATCH /api/v1/accounts/{adapter}/{id}` の設定・`null` での解除・400・404・409・`check` / `login` という id の編集、変更が次の tick から効くこと、
   daemon の再起動と `POST /reload` を跨いで残ること、アカウント・行の削除で消えること。
 - `GET /accounts` に `effective_max_runs`・`max_runs_source`・暗黙アカウントが出ること。gui-api.md・schema・生成型の更新。

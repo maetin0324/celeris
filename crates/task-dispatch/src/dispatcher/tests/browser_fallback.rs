@@ -263,25 +263,27 @@ fn browser_fallback_dispatcher(dir: &Path, secondary_concurrency: usize) -> Brow
     });
     let mut d = dispatcher(store.clone(), primary.clone(), 1);
     d.adapters = HashMap::from([("p1".into(), primary), ("p2".into(), secondary)]);
-    d.policy = Box::new(StaticPolicy::new(
-        vec![
-            ProviderSpec {
-                id: "p1".into(),
-                adapter: "acp".into(),
-                tiers: vec![Tier::Standard],
-                concurrency: Some(1),
-                model: "m".into(),
-            },
-            ProviderSpec {
-                id: "p2".into(),
-                adapter: "claude-code".into(),
-                tiers: vec![Tier::Standard],
-                concurrency: Some(secondary_concurrency),
-                model: "m".into(),
-            },
-        ],
-        Duration::from_secs(60),
-    ));
+    if secondary_concurrency == 0 {
+        d.adapters.remove("p2");
+    }
+    // 旧 concurrency = 0 は「使えない行」だった。上限に 0 は置けないので、行ごと外す。
+    let mut specs = vec![ProviderSpec {
+        id: "p1".into(),
+        adapter: "acp".into(),
+        tiers: vec![Tier::Standard],
+        concurrency: Some(1),
+        model: "m".into(),
+    }];
+    if secondary_concurrency > 0 {
+        specs.push(ProviderSpec {
+            id: "p2".into(),
+            adapter: "claude-code".into(),
+            tiers: vec![Tier::Standard],
+            concurrency: Some(secondary_concurrency),
+            model: "m".into(),
+        });
+    }
+    d.policy = Box::new(StaticPolicy::new(specs, Duration::from_secs(60)));
     (d, store, task, sessions)
 }
 

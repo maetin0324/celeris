@@ -148,7 +148,7 @@ async fn patch_account_limits_validate_persist_and_survive_reload_and_restart() 
             }
         };
 
-        // GET: 実アカウントの既定、暗黙アカウント（旧 concurrency を引き継ぐ）。プール行には暗黙アカウントが無い。
+        // GET: 実アカウントの既定、暗黙アカウント（既定。旧 concurrency は使わない）。プール行には暗黙アカウントが無い。
         let list = get().await;
         assert_eq!(list["max_runs_per_account"], json!(2));
         let a = item(&list, "claude-code", "a");
@@ -160,8 +160,8 @@ async fn patch_account_limits_validate_persist_and_survive_reload_and_restart() 
         assert_eq!(qwen["implicit"], json!(true));
         assert_eq!(qwen["provider"], json!("qwen"));
         assert_eq!(qwen["dir"], json!(null));
-        assert_eq!(qwen["effective_max_runs"], json!(1));
-        assert_eq!(qwen["max_runs_source"], json!("legacy_concurrency"));
+        assert_eq!(qwen["effective_max_runs"], json!(2));
+        assert_eq!(qwen["max_runs_source"], json!("default"));
         assert!(
             !list["items"]
                 .as_array()
@@ -283,7 +283,7 @@ async fn patch_account_limits_validate_persist_and_survive_reload_and_restart() 
         assert_eq!(body["max_runs_source"], json!("default"));
         let (status, body) = patch("implicit/qwen".into(), json!({"max_runs": null})).await;
         assert_eq!(status, 200, "{body}");
-        assert_eq!(body["max_runs_source"], json!("legacy_concurrency"));
+        assert_eq!(body["max_runs_source"], json!("default"));
         let (status, _) = patch("implicit/qwen".into(), json!({"max_runs": 3})).await;
         assert_eq!(status, 200);
     };

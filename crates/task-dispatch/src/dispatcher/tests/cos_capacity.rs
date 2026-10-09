@@ -385,6 +385,10 @@ async fn cos_account_usage_does_not_consume_leaf_capacity() {
 /// deprecated `concurrency` written as `legacy` (`None` = not written).
 fn non_pool_dispatcher(store: Arc<dyn TaskStore>, legacy: Option<usize>) -> Dispatcher {
     let mut d = dispatcher(store, slow_pool_adapter(), 8);
+    // 旧 `concurrency` の値を暗黙アカウントの保存値として置く（None なら保存値に触らない）。
+    if let Some(n) = legacy {
+        d.set_account_limit("implicit", "p1", Some(n)).unwrap();
+    }
     d.policy = Box::new(StaticPolicy::new(
         vec![ProviderSpec {
             id: "p1".into(),
@@ -398,48 +402,47 @@ fn non_pool_dispatcher(store: Arc<dyn TaskStore>, legacy: Option<usize>) -> Disp
     d
 }
 
-/// ADR 2026-10-08 §(e): an old config's `concurrency = 1` on a non-pool row becomes
-/// the default of `implicit/p1`, so the row still runs one at a time. A stored
-/// override of 2 admits a second run on the next tick; `null` restores the legacy 1.
+/// ADR 2026-10-08 §(e): a non-pool row's implicit account is limited by its own stored
+/// value (default `max_runs_per_account`). A row's written `concurrency = 1` does not limit
+/// it: with the default 2 the row admits two runs. A stored override of 1 holds it to one.
 #[tokio::test]
 async fn non_pool_row_is_limited_by_its_implicit_account() {
     let ws = tempfile::tempdir().unwrap();
     let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     seed_org(&store);
-    let mut d = non_pool_dispatcher(store.clone(), Some(1));
+    let mut d = non_pool_dispatcher(store.clone(), None);
     assert_eq!(d.implicit_account_ids(), vec!["p1".to_string()]);
     assert_eq!(
         d.implicit_account_limit("p1"),
-        Some((1, crate::capacity::MaxRunsSource::LegacyConcurrency))
+        Some((2, crate::capacity::MaxRunsSource::Default))
     );
     let leaves: Vec<_> = (0..4).map(|_| leaf(ws.path())).collect();
     for task in &leaves {
         store.insert(task).unwrap();
     }
-    assert_eq!(d.tick().unwrap().dispatched, 1);
+    assert_eq!(d.tick().unwrap().dispatched, 2);
     assert_eq!(d.tick().unwrap().dispatched, 0);
-    assert_eq!(d.implicit_account_in_use("p1"), 1);
-    // provider_select・routing の候補にも同じ上限が渡る（旧 concurrency を直接見ない）。
+    assert_eq!(d.implicit_account_in_use("p1"), 2);
+    // provider_select・routing の候補には暗黙アカウントの上限が渡る（旧 concurrency は渡らない）。
     assert!(
         d.legacy_provider_profiles(&leaf(ws.path()).worker_hint)
             .iter()
-            .all(|p| p.deployment.concurrency_limit == Some(1))
+            .all(|p| p.deployment.concurrency_limit == Some(2))
     );
 
-    d.set_account_limit("implicit", "p1", Some(2)).unwrap();
+    d.set_account_limit("implicit", "p1", Some(1)).unwrap();
     assert_eq!(
         d.implicit_account_limit("p1"),
-        Some((2, crate::capacity::MaxRunsSource::Account))
+        Some((1, crate::capacity::MaxRunsSource::Account))
     );
-    assert_eq!(d.tick().unwrap().dispatched, 1);
     assert_eq!(d.tick().unwrap().dispatched, 0);
     assert_eq!(d.implicit_account_in_use("p1"), 2);
 
-    // 解除すると既定（旧 concurrency = 1）に戻る。走っている 2 本は止めず、新しい run が待つ。
+    // 解除すると既定（2）に戻る。走っている 2 本は止めず、残りの run が待つ。
     d.set_account_limit("implicit", "p1", None).unwrap();
     assert_eq!(
         d.implicit_account_limit("p1"),
-        Some((1, crate::capacity::MaxRunsSource::LegacyConcurrency))
+        Some((2, crate::capacity::MaxRunsSource::Default))
     );
     assert_eq!(d.tick().unwrap().dispatched, 0);
     assert_eq!(d.implicit_account_in_use("p1"), 2);
@@ -448,7 +451,7 @@ async fn non_pool_row_is_limited_by_its_implicit_account() {
 /// Without a written `concurrency`, the implicit account falls back to
 /// `max_runs_per_account` (built-in 2 without `[accounts]`).
 #[tokio::test]
-async fn implicit_account_without_legacy_concurrency_uses_the_default() {
+async fn implicit_account_uses_the_default_without_accounts_section() {
     let ws = tempfile::tempdir().unwrap();
     let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     seed_org(&store);
@@ -469,13 +472,14 @@ async fn implicit_account_without_legacy_concurrency_uses_the_default() {
 }
 
 /// ADR 2026-10-08 §(e): CoS gets no +1 on an implicit account — a CoS run and a
-/// leaf share the single slot of `concurrency = 1` (GPU 1 枚の Qwen に 2 本目を載せない).
+/// leaf share the single slot of a stored limit of 1 (GPU 1 枚の Qwen に 2 本目を載せない).
 #[tokio::test]
 async fn implicit_account_counts_cos_runs_without_an_extra_slot() {
     let ws = tempfile::tempdir().unwrap();
     let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     seed_org(&store);
-    let mut d = non_pool_dispatcher(store.clone(), Some(1));
+    let mut d = non_pool_dispatcher(store.clone(), None);
+    d.set_account_limit("implicit", "p1", Some(1)).unwrap();
     let chat = cos_chat(ws.path());
     store.insert(&chat).unwrap();
     assert_eq!(d.tick().unwrap().dispatched, 1);
@@ -536,7 +540,7 @@ fn implicit_account_overrides_survive_reload_and_are_pruned_with_their_row() {
     assert_eq!(d.implicit_account_limit("p1").unwrap().0, 2);
     drop(d);
     let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open(&db).unwrap());
-    let mut d = non_pool_dispatcher(store.clone(), Some(1));
+    let mut d = non_pool_dispatcher(store.clone(), None);
     assert_eq!(
         d.implicit_account_limit("p1"),
         Some((2, crate::capacity::MaxRunsSource::Account))

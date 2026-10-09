@@ -843,6 +843,7 @@ async fn cos_chat_run_launch_non_pool_provider_keeps_its_limit() {
         }],
         Duration::from_secs(1),
     ));
+    d.set_account_limit("implicit", "p1", Some(1)).unwrap();
     let a = thread(&store, "non-pool-a");
     let b = thread(&store, "non-pool-b");
     post(&store, &a, "one");

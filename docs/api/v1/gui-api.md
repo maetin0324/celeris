@@ -966,7 +966,7 @@ ADR-0017 M4: `POST /reload` に成功すると、次の tick のスナップシ�
 - `reports`（秘書レベルの未読の報告と通知の判定）・`approvals_pending`（未決定の認可の件数）・`decisions_open`（未回答の決定の要求の件数）は
   ディスパッチャではなく **API が応答を組むときに埋める**（ADR-0033 D3/D5、ADR-0079 D7）。
 - `clusters[]`（ADR-0018）、`accounts_root` / `max_runs_per_account` / `accounts_roots` / `accounts[]`（ADR-0024 / ADR-0025）、
-  `implicit_accounts[]`（`{provider, in_use, legacy_concurrency?}`。暗黙アカウント。ADR 2026-10-08-account-concurrency-limits）、
+  `implicit_accounts[]`（`{provider, in_use}`。暗黙アカウント。ADR 2026-10-08-account-concurrency-limits）、
   `scratch`（scratch pool の観測値。無ければ省略。`GET /metrics/scratch` と同じ。ADR-0075 D6）も載る。
 - `awaiting_human[]` は承認待ちで延期中のタスク、`awaiting_children[]` は**委譲した子が終わるのを待っている親**
   （どちらも `reviewing` のままだが理由が違う。ADR-0023 D3）。GUI はこれを見て「判定中」と「部下待ち」を区別する
@@ -1199,11 +1199,11 @@ HTTP から差し替えられないようにするため。`providers.d/<id>.tom
      "last_check": null, "login_pending": false,
      "stats": {"runs": 0, "done": 0, "error": 0, "input_tokens": 0, "output_tokens": 0},
      "max_runs": 3, "effective_max_runs": 3, "max_runs_source": "account", "implicit": false, "provider": null},
-   {"adapter": "implicit", "id": "opencode-qwen", "dir": null, "logged_in": true, "in_use": 1,
+   {"adapter": "implicit", "id": "opencode-qwen", "dir": null, "logged_in": true, "in_use": 2,
      "usage": null, "score": null, "excluded_reason": "at_capacity", "cooldown": null,
      "last_check": null, "login_pending": false,
      "stats": {"runs": 40, "done": 38, "error": 1, "input_tokens": 0, "output_tokens": 0},
-     "max_runs": null, "effective_max_runs": 1, "max_runs_source": "legacy_concurrency", "implicit": true, "provider": "opencode-qwen"}]}
+     "max_runs": null, "effective_max_runs": 2, "max_runs_source": "default", "implicit": true, "provider": "opencode-qwen"}]}
 ```
 
 （1 件目の `claude-code/a` も同じ 5 欄を持つ。例では省略した。）
@@ -1219,8 +1219,8 @@ HTTP から差し替えられないようにするため。`providers.d/<id>.tom
 - `stats` は `WorkerStarted.account` と対応する `WorkerFinished` から、同じ `WorkerStarted.adapter` のものだけ集計する（§5.8 のプロバイダ集計と同じ規則。同じ id でもアダプタが違えば別集計）。
 - 時刻はすべて RFC 3339。
 - **上限**（ADR 2026-10-08-account-concurrency-limits §(c)）: `max_runs` はそのアカウントに保存された上限（3.29a で設定。無ければ `null`）。
-  `effective_max_runs` は実効上限で、`max_runs` → （暗黙アカウントだけ）行に書かれた旧 `[[providers]].concurrency` →
-  `max_runs_per_account` の順に決まる。どれを使ったかが `max_runs_source`（`"account"` / `"legacy_concurrency"` / `"default"`）。
+  `effective_max_runs` は実効上限で、`max_runs` → `max_runs_per_account` の順に決まる（旧 `[[providers]].concurrency` は使わない）。
+  どれを使ったかが `max_runs_source`（`"account"` / `"default"`）。
   実アカウントは非 CoS の run を `effective_max_runs` 本まで、CoS run はその +1 まで載せる（ADR-0089 規則 2）。
   `max_runs` / `effective_max_runs` / `max_runs_source` は DB（`account_limits`）から読むので、3.29a の直後から反映される
   （`in_use` / `excluded_reason` はスナップショットなので次の tick から）。

@@ -240,7 +240,7 @@ const implicitAccount = account({
   in_use: 1,
   max_runs: null,
   effective_max_runs: 1,
-  max_runs_source: "legacy_concurrency",
+  max_runs_source: "default",
 });
 
 describe("アカウントごとの上限（PATCH /accounts/{adapter}/{id}）", () => {
@@ -343,7 +343,7 @@ describe("アカウントごとの上限（PATCH /accounts/{adapter}/{id}）", (
     expect(out).toContain('data-implicit="true"');
     expect(out).toContain(">暗黙アカウント</span>");
     expect(out).toContain("アカウントを持たない実行枠 opencode-qwen");
-    expect(out).toContain("1 / 実効上限 1（旧設定 [[providers]].concurrency の値（保存すると置き換わります））");
+    expect(out).toContain("1 / 実効上限 1（既定（max_runs_per_account = 2））");
     expect(out).toContain("上限を保存");
     expect(out).not.toContain("ログイン開始");
     expect(out).not.toContain(">確認</button>");

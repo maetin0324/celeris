@@ -187,7 +187,6 @@ impl Dispatcher {
             .into_iter()
             .map(|provider| task_ops::daemon::ImplicitAccountLive {
                 in_use: self.implicit_account_in_use(&provider) as u32,
-                legacy_concurrency: self.policy.legacy_concurrency(provider.clone()),
                 provider,
             })
             .collect()

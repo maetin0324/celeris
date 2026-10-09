@@ -321,16 +321,13 @@ pub struct ContainerProbeView {
 }
 
 /// ADR 2026-10-08 account-concurrency-limits §(e): 暗黙アカウント 1 件の観測値。上限の保存値は DB
-/// （`account_limits`）が正本なので、ここには既定を作るための旧 `concurrency` だけを持つ。
+/// （`account_limits`）が正本で、旧 `[[providers]].concurrency` は上限に使わない。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ImplicitAccountLive {
     /// 行の id（= 暗黙アカウントの id）。
     pub provider: String,
     /// この行で走っている全 run（非 CoS・CoS・プロバイダを使うレビュー run）の数。
     pub in_use: u32,
-    /// 行に書かれた旧 `[[providers]].concurrency`（保存値が無いときの既定。書かれていなければ `None`）。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub legacy_concurrency: Option<usize>,
 }
 
 /// ADR-0024/0025: プールの 1 アカウントの稼働状況（観測値。DB には書かない）。

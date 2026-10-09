@@ -2963,7 +2963,6 @@ export type ImpactView = {
 
 export type ImplicitAccountLive = {
   "in_use": number;
-  "legacy_concurrency"?: number | null;
   "provider": string;
 };
 

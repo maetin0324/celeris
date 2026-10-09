@@ -206,6 +206,14 @@ env = { ACCOUNT = "b" }
 #[test]
 fn second_account_runs_the_overflow_when_the_first_is_at_capacity() {
     let env = Env::new();
+    // 非プールの行の上限は暗黙アカウントが持つ（旧 `concurrency = 1` は上限に効かない）。
+    // 両方を 1 本で止めるため、保存値の無い暗黙アカウントの既定を `max_runs_per_account = 1` にする。
+    let accounts_dir = env.root.join("claude-accounts");
+    std::fs::create_dir_all(&accounts_dir).unwrap();
+    let two_accounts = format!(
+        "[accounts]\nclaude_dir = {:?}\nmax_runs_per_account = 1\n\n{TWO_ACCOUNTS}",
+        accounts_dir.to_str().unwrap()
+    );
     let config = env.write_config(
         r#"cat >/dev/null
 printf '%s' "$ACCOUNT" > account.txt
@@ -224,7 +232,7 @@ while [ ! -f "$barrier/started-a" ] || [ ! -f "$barrier/started-b" ]; do
   sleep 0.05
 done
 echo '{"type":"done","summary":"ok","evidence":[]}'"#,
-        TWO_ACCOUNTS,
+        &two_accounts,
         "",
     );
     let ws1 = env.workspace("ws-1");

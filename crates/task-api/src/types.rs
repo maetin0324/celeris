@@ -731,7 +731,7 @@ pub struct AccountView {
     pub max_runs: Option<usize>,
     /// 実効上限（非 CoS の run の同時数。実アカウントの CoS run はこれ +1 まで、暗黙アカウントは CoS を含めた全数で比べる）。
     pub effective_max_runs: usize,
-    /// 実効上限の出どころ: `"account"`（保存値）| `"legacy_concurrency"`（暗黙アカウントの行の旧 `concurrency`）| `"default"`（`max_runs_per_account`）。
+    /// 実効上限の出どころ: `"account"`（保存値）| `"default"`（`max_runs_per_account`）。
     pub max_runs_source: String,
     /// §(e): 暗黙アカウント（`adapter = "implicit"`、アカウントを持たない行ごとに 1 件）か。
     pub implicit: bool,

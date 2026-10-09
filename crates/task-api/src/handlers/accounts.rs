@@ -26,16 +26,11 @@ const IMPLICIT_ADAPTER: &str = "implicit";
 /// §(d): `max_runs` の範囲（`account_limits` 表の CHECK と同じ）。
 const MAX_RUNS_RANGE: std::ops::RangeInclusive<usize> = 1..=32;
 
-/// §(c): 保存値 → 暗黙アカウントの行の旧 `concurrency` → 既定、の順に実効上限を決める。
-fn effective_max_runs(
-    stored: Option<usize>,
-    legacy: Option<usize>,
-    default: usize,
-) -> (usize, &'static str) {
-    match (stored, legacy) {
-        (Some(n), _) => (n, "account"),
-        (None, Some(n)) => (n, "legacy_concurrency"),
-        (None, None) => (default, "default"),
+/// §(c): 保存値 → 既定、の順に実効上限を決める（旧 provider `concurrency` は使わない）。
+fn effective_max_runs(stored: Option<usize>, default: usize) -> (usize, &'static str) {
+    match stored {
+        Some(n) => (n, "account"),
+        None => (default, "default"),
     }
 }
 
@@ -120,7 +115,7 @@ async fn account_items(state: &ApiState) -> Result<Vec<AccountView>, ApiProblem>
         let stored = limits
             .get(&(adapter.as_str().to_string(), d.id.clone()))
             .copied();
-        let (effective, source) = effective_max_runs(stored, None, default);
+        let (effective, source) = effective_max_runs(stored, default);
         items.push(AccountView {
             adapter: adapter.as_str().to_string(),
             id: d.id.clone(),
@@ -161,7 +156,7 @@ fn implicit_view(
     default: usize,
     stats: AccountStats,
 ) -> AccountView {
-    let (effective, source) = effective_max_runs(stored, live.legacy_concurrency, default);
+    let (effective, source) = effective_max_runs(stored, default);
     AccountView {
         adapter: IMPLICIT_ADAPTER.to_string(),
         id: live.provider.clone(),
@@ -350,7 +345,6 @@ async fn patch_account_limit_inner(
             &task_ops::daemon::ImplicitAccountLive {
                 provider: id.clone(),
                 in_use: 0,
-                legacy_concurrency: None,
             },
             max_runs,
             state.inner.max_runs_per_account,

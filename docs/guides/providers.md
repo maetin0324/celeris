@@ -63,8 +63,9 @@ CoS の指示文や他のハーネスを消す必要はありません。
   保存先は daemon の DB（`account_limits` 表）で、再起動と `POST /reload` を跨いで残ります。
 - **実効上限**は、次の順に決まります。`GET /api/v1/accounts` の各 item の `effective_max_runs` と、どれを使ったかを示す `max_runs_source` で確認できます。
   1. そのアカウントに保存した `max_runs`（`"account"`）
-  2. 暗黙アカウントだけ: 行に書かれた旧 `concurrency`（`"legacy_concurrency"`）
-  3. `[accounts] max_runs_per_account`（`"default"`。`[accounts]` が無い構成では 2）
+  2. `[accounts] max_runs_per_account`（`"default"`。`[accounts]` が無い構成では 2）
+
+  行に書かれた旧 `[[providers]].concurrency` は、プールの行でも暗黙アカウントでも上限に使いません（読めて警告が出るだけです）。
 - `[accounts] max_runs_per_account` は、保存値の無いアカウントの**既定値**です。これを変えたときは、従来どおり再起動が必要です。
 - **暗黙アカウント**: アカウントを持たない行（`account_pool` が無い、または false。ローカルの Qwen、PaperQA、LDR、LangMem など）には、
   行ごとに暗黙のアカウントが 1 件あります（`adapter = "implicit"`、id は行の id）。アカウント画面に「暗黙アカウント」の印が付き、他のアカウントと同じ上限の欄で出ます。

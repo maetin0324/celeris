@@ -942,12 +942,12 @@ fn reload_providers_rejects_changes_to_the_accounts_section() {
     assert!(err.contains("restart"), "{err}");
 }
 
-/// ADR 2026-10-08 account-concurrency-limits §(d)(e): a non-pool row of an old config
-/// (`concurrency = 1`, no `[accounts]`) gets `implicit/<id>` with limit 1. A stored override
-/// survives `POST /reload` and a restart (new `build_dispatcher` on the same DB); removing the
-/// row from config and reloading forgets it.
+/// ADR 2026-10-08 account-concurrency-limits §(d)(e): a non-pool row gets `implicit/<id>` with the
+/// default limit, and a row's old `concurrency = 1` does not limit it. A stored override survives
+/// `POST /reload` and a restart (new `build_dispatcher` on the same DB); removing the row from
+/// config and reloading forgets it.
 #[test]
-fn implicit_account_limit_follows_legacy_concurrency_and_survives_reload() {
+fn implicit_account_limit_ignores_legacy_concurrency_and_survives_reload() {
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
     let config_path = dir.path().join("config.toml");
     let db = dir.path().join("celeris.db");
@@ -970,7 +970,7 @@ fn implicit_account_limit_follows_legacy_concurrency_and_survives_reload() {
     assert_eq!(dispatcher.implicit_account_ids(), vec!["x", "qwen"]);
     assert_eq!(
         dispatcher.implicit_account_limit("qwen"),
-        Some((1, task_dispatch::capacity::MaxRunsSource::LegacyConcurrency))
+        Some((2, task_dispatch::capacity::MaxRunsSource::Default))
     );
     assert_eq!(
         dispatcher.implicit_account_limit("x"),
@@ -997,12 +997,12 @@ fn implicit_account_limit_follows_legacy_concurrency_and_survives_reload() {
     assert_eq!(dispatcher.account_max_runs("implicit", "qwen"), None);
     let store = SqliteStore::open(&db).unwrap();
     assert!(store.account_limits().unwrap().is_empty());
-    // 同じ id の行を戻しても古い上書きは引き継がない（既定 = 旧 concurrency に戻る）。
+    // 同じ id の行を戻しても古い上書きは引き継がない（既定に戻る）。
     write_config(qwen);
     assert!(reload_providers(&mut dispatcher, &mut config).is_ok());
     assert_eq!(
         dispatcher.implicit_account_limit("qwen"),
-        Some((1, task_dispatch::capacity::MaxRunsSource::LegacyConcurrency))
+        Some((2, task_dispatch::capacity::MaxRunsSource::Default))
     );
 }
 

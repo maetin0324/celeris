@@ -1,9 +1,8 @@
 ---
 title: 同時実行数をアカウントごとに一本化し、プロバイダの concurrency を deprecate する（暗黙アカウントを含む）
 tasks: [01M4D7RVKXY9A967ZXDADWVHQJ]
-status: done
-updated: 2026-10-08
-completed: 2026-10-08
+status: blocked
+updated: 2026-10-09
 ---
 # 同時実行数をアカウントごとに一本化（close-out）
 
@@ -100,3 +99,66 @@ web test: vitest 85 files / 642 tests 通過、node --test 78 通過。gui test:
 - `[[clusters]].concurrency`（ADR-0018）・`[execution] max_concurrency`・`max_cos_runs` は今回のまま維持する。
 - 同じ LLM source を指す複数行（本番の `opencode-qwen` と `pi-qwen`）は行ごとに上限を持つ（旧 `concurrency` と同じ）。
   source 単位で束ねる場合は別の決定にする（ADR §(e)「既知の限界」）。
+
+## finish 検査（統合後の task ブランチ、2026-10-09、run 01M4FGWY5G1J15539BX4QM5XVK）
+
+前 run の finish 検査（`blocked`）の後、次の 2 点を直してから全検査を流し直した。commit はしていない（作業木の変更）。
+
+1. **旧 `[[providers]].concurrency` を上限から外した（受け入れ条件 2 の未達を解消）。**
+   - `crates/task-dispatch/src/capacity.rs:92`: `effective_account_limit(stored, default)`。保存値 → `max_runs_per_account` の 2 段だけ。
+     `MaxRunsSource` は `Account` / `Default` のみ。
+   - `crates/task-dispatch/src/dispatcher.rs:1894`・`:1927`: 実効上限の入力に旧値を渡さない。
+   - `crates/task-dispatch/src/policy.rs:28`: `ProviderSpec.concurrency` は snapshot の表示用だけ（dispatch は読まない）。`ProviderPolicy` から `legacy_concurrency` を削除。
+   - `crates/task-api/src/handlers/accounts.rs:30`: `effective_max_runs(stored, default)`。
+   - 旧値は `crates/celeris/src/config/providers.rs:500` の警告にだけ使う（読めて警告が出るが効かない）。
+   - ADR `2026-10-08-account-concurrency-limits.md` §(c)・§(e)・検証条件、`docs/api/v1/gui-api.md`、`docs/guides/providers.md`、`docs/ops/provider-llm-source-migration.md` を同じ方針に直した。
+     **本番の影響**: 新リリースに入れ替えると、config の `concurrency = 1` の Qwen 行は既定 2 本まで走る。1 本に保つには、移行手順 3 で `PATCH /api/v1/accounts/implicit/<id>` に `{"max_runs": 1}` を保存する（手順は docs/ops に書いた。人が実行する）。
+   - 試験の書き換え: 旧 `concurrency` に依存していた dispatcher・API・e2e の試験は、暗黙アカウントの保存値（`set_account_limit` / PATCH）か既定で書き直した。
+     `crates/task-dispatch/src/dispatcher/tests/mod.rs`（`parallel_dispatcher`・`dispatcher_with_adapter_id`）、
+     `cos_capacity.rs`、`cheap_local_first.rs`、`browser_fallback.rs`、`write_set_gate.rs`、
+     `crates/task-api/tests/accounts_admin.rs`、`crates/celeris/src/lib/tests.rs`、`crates/celeris/src/daemon/api_account_limits_tests.rs`、
+     `tests/e2e/tests/multi_account_scenarios.rs`（`[accounts] claude_dir` と `max_runs_per_account = 1`）、
+     `tests/e2e/tests/provider_admin_scenarios.rs`（PATCH で `implicit/acct-a` を 1）。
+   - schema・生成型（`docs/api/v1/api-v1.schema.json`、`web/api/generated/*`、`gui/app/celeris/types.ts`）と web の fixture（`web/e2e/support/fake-daemon.mjs`）も更新した。
+
+2. **未達のまま: 暗黙アカウントの単位は「LLM source」ではなく「プロバイダ行（provider id）」。**
+   - 鍵は `implicit/<provider id>`: `crates/task-dispatch/src/dispatcher.rs:1902`（`implicit_account_ids`）、`:1912`（`implicit_account_limit`）、`:1934`（`implicit_account_in_use`）。
+   - 人の訂正（2026-10-08 のコメント）は「source ごとに暗黙のアカウント 1 件」。同じ LLM source を指す `opencode-qwen` と `pi-qwen` は今は別々の上限で、合わせて 2 本まで走りうる（ADR §(e)「既知の限界」）。
+   - 今回は直していない。source 単位にするには、鍵・in_use の集計・API の id・web の表示・移行手順を一緒に変える必要がある。人が「行のまま」か「source 単位」かを決める。
+
+### 人の決定 nonpool-limit の記録
+
+運用セッションの回答（前 run）では、記録を `POST /decisions/01M4D90CSGX3NX3EGVCQXFAP67/revise` で (ii) implicit-account に直したとされている。
+この run からは決定ストアを読めないため、記録そのものは確認していない（運用の回答どおりとして扱う）。ADR 冒頭と §(e) は (ii) に揃っている。
+
+### 検査（この run の最後の実行）
+
+| コマンド | exit | 要点 |
+| --- | --- | --- |
+| `cargo clippy --workspace -- -D warnings` | 0 | `artifacts/finish2-clippy.log` ほか |
+| `TMPDIR=/var/tmp/celeris-finish bash scripts/dev/test-parallel.sh` | 100 | nextest 4824 passed / 8 failed / 14 ignored。doc-test 0。失敗は下の 8 本（前回の finish と同じ集合） |
+| `cargo test -p task-dispatch --lib` | 0 | 878 passed / 0 failed |
+| `cargo test -p task-api --test accounts_admin` | 0 | 20 passed（`artifacts/finish3-dispatch-tests.log`） |
+| `cargo test -p e2e --test multi_account_scenarios` | 0 | 3 passed |
+| `cargo test -p e2e --test provider_admin_scenarios` | 0 | 3 passed |
+| `corepack pnpm@12.6.0 -C web typecheck` | 0 | |
+| `corepack pnpm@12.6.0 -C web test` | 0 | |
+| `corepack pnpm@11.27.0 -C gui typecheck` | 0 | |
+| `corepack pnpm@11.27.0 -C gui test` | 0 | |
+| `sh scripts/dev/check-doc-links.sh` と `--self-test` | 0 | |
+| `sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv` | 0 | |
+| `sh scripts/dev/check-adr-numbers.sh` | 0 | |
+| `sh scripts/dev/progress-index.sh --check` | 0 | |
+| `! grep -n legacy_concurrency crates/task-dispatch/src/dispatcher.rs crates/task-dispatch/src/capacity.rs crates/task-dispatch/src/policy.rs crates/task-api/src/handlers/accounts.rs` | 0 | 識別子が無い |
+
+test-parallel の 8 本（前回の finish と同じ。すべて host の負荷下の fixture 待ちか socket 関連の環境要因。dispatch とは無関係）:
+- `celeris-credentiald::broker` の `daemon_rejects_worker_secret_retrieval_even_with_valid_lease`・`invalid_control_process_id_is_rejected`（60 秒の `timed out waiting for fixture readiness`）
+- `task-api::browser_e2e` の 4 本と `browser_waits` の 1 本（同上）
+- `task-worker` の `action_socket_dir_must_be_private_to_this_user`（単独では通る。`crates/task-worker/src/browser_launcher_run_tests.rs:786`）
+
+ホストの load average は 35 前後（24 core）。`unshare`・bind mount の形態はこの run では使っていない。
+
+### 未達・残り
+
+- 暗黙アカウントの単位（上の 2）。受け入れ条件（source 単位）は未達。
+- 本番の移行（config から `concurrency` を外す、Qwen 行の `max_runs = 1` の保存）は人の手順。この run では本番に触れていない。

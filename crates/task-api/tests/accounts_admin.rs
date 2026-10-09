@@ -1019,13 +1019,11 @@ async fn implicit_accounts_are_listed_and_patchable_without_the_accounts_section
     snap.implicit_accounts = vec![
         task_ops::daemon::ImplicitAccountLive {
             provider: "qwen".into(),
-            in_use: 1,
-            legacy_concurrency: Some(1),
+            in_use: 2,
         },
         task_ops::daemon::ImplicitAccountLive {
             provider: "x".into(),
             in_use: 0,
-            legacy_concurrency: None,
         },
     ];
     env.daemon_tx.send(Some(snap)).unwrap();
@@ -1046,10 +1044,10 @@ async fn implicit_accounts_are_listed_and_patchable_without_the_accounts_section
     assert_eq!(items[0]["implicit"], json!(true));
     assert_eq!(items[0]["dir"], json!(null));
     assert_eq!(items[0]["logged_in"], json!(true));
-    assert_eq!(items[0]["in_use"], json!(1));
+    assert_eq!(items[0]["in_use"], json!(2));
     assert_eq!(items[0]["max_runs"], json!(null));
-    assert_eq!(items[0]["effective_max_runs"], json!(1));
-    assert_eq!(items[0]["max_runs_source"], json!("legacy_concurrency"));
+    assert_eq!(items[0]["effective_max_runs"], json!(2));
+    assert_eq!(items[0]["max_runs_source"], json!("default"));
     assert_eq!(items[0]["excluded_reason"], json!("at_capacity"));
     assert_eq!(items[1]["effective_max_runs"], json!(2));
     assert_eq!(items[1]["max_runs_source"], json!("default"));
@@ -1068,7 +1066,8 @@ async fn implicit_accounts_are_listed_and_patchable_without_the_accounts_section
     assert_eq!(body["max_runs"], json!(2));
     assert_eq!(body["effective_max_runs"], json!(2));
     assert_eq!(body["max_runs_source"], json!("account"));
-    assert_eq!(body["excluded_reason"], json!(null));
+    // 走っている 2 本で上限 2 に達している。
+    assert_eq!(body["excluded_reason"], json!("at_capacity"));
     // GET にもすぐ出る（DB が正本。スナップショットの更新を待たない）。
     let resp = send(&app, get_with("/api/v1/accounts", &headers)).await;
     assert_eq!(resp.json()["items"][0]["max_runs"], json!(2));
@@ -1114,7 +1113,7 @@ async fn implicit_accounts_are_listed_and_patchable_without_the_accounts_section
     )
     .await;
     assert_eq!(resp.status, 200, "{}", resp.text());
-    assert_eq!(resp.json()["max_runs_source"], json!("legacy_concurrency"));
+    assert_eq!(resp.json()["max_runs_source"], json!("default"));
 }
 
 /// ADR 2026-10-08 account-concurrency-limits §(a): `POST`/`PATCH /providers` の `concurrency` は受け付ける

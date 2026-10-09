@@ -1893,7 +1893,6 @@ impl Dispatcher {
         }
         let (effective, _) = crate::capacity::effective_account_limit(
             self.account_max_runs(adapter.as_str(), id),
-            None,
             self.default_max_runs(),
         );
         crate::capacity::account_run_limit(effective, cos)
@@ -1927,7 +1926,6 @@ impl Dispatcher {
             .copied();
         Some(crate::capacity::effective_account_limit(
             stored,
-            self.policy.legacy_concurrency(provider.to_owned()),
             self.default_max_runs(),
         ))
     }

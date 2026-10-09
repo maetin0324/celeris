@@ -72,10 +72,8 @@ pub const IMPLICIT_ACCOUNT_ADAPTER: &str = "implicit";
 /// Which value [`effective_account_limit`] used (`GET /accounts` の `max_runs_source`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MaxRunsSource {
-    /// The account's stored `max_runs`.
+    /// The account's stored `max_runs` (set by `PATCH /accounts/{adapter}/{id}`).
     Account,
-    /// The non-pool row's deprecated `concurrency` (implicit accounts only).
-    LegacyConcurrency,
     /// `[accounts] max_runs_per_account` (or the built-in default).
     Default,
 }
@@ -84,25 +82,17 @@ impl MaxRunsSource {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Account => "account",
-            Self::LegacyConcurrency => "legacy_concurrency",
             Self::Default => "default",
         }
     }
 }
 
-/// ADR 2026-10-08 §(c): stored value, else the row's legacy `concurrency` (implicit
-/// accounts; a written 0 keeps meaning "no runs"), else the default.
-pub fn effective_account_limit(
-    stored: Option<usize>,
-    legacy: Option<usize>,
-    default: usize,
-) -> (usize, MaxRunsSource) {
-    if let Some(n) = stored {
-        (n, MaxRunsSource::Account)
-    } else if let Some(n) = legacy {
-        (n, MaxRunsSource::LegacyConcurrency)
-    } else {
-        (default, MaxRunsSource::Default)
+/// ADR 2026-10-08 §(c): the stored value, else the default. The deprecated provider
+/// `concurrency` is not an input: it never limits a run.
+pub fn effective_account_limit(stored: Option<usize>, default: usize) -> (usize, MaxRunsSource) {
+    match stored {
+        Some(n) => (n, MaxRunsSource::Account),
+        None => (default, MaxRunsSource::Default),
     }
 }
 
@@ -196,18 +186,11 @@ mod tests {
     }
 
     #[test]
-    fn effective_limit_prefers_stored_then_legacy_then_default() {
+    fn effective_limit_prefers_stored_then_default() {
         use MaxRunsSource::*;
-        assert_eq!(effective_account_limit(Some(3), Some(1), 2), (3, Account));
-        assert_eq!(
-            effective_account_limit(None, Some(1), 2),
-            (1, LegacyConcurrency)
-        );
-        assert_eq!(
-            effective_account_limit(None, Some(0), 2),
-            (0, LegacyConcurrency)
-        );
-        assert_eq!(effective_account_limit(None, None, 2), (2, Default));
+        assert_eq!(effective_account_limit(Some(3), 2), (3, Account));
+        assert_eq!(effective_account_limit(Some(0), 2), (0, Account));
+        assert_eq!(effective_account_limit(None, 2), (2, Default));
     }
 
     #[test]

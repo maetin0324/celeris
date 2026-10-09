@@ -3266,7 +3266,7 @@ export function createFakeDaemon({
             },
           ],
           // アカウントを持たない実行枠の暗黙アカウント（ADR 2026-10-08-account-concurrency-limits §(e)）。
-          implicit: [{ id: "qwen-local", legacy_concurrency: 1 }],
+          implicit: [{ id: "qwen-local" }],
           limits: {},
           models: structuredClone(modelCatalogFixture),
           assignments: structuredClone(modelAssignmentsFixture),
@@ -3300,13 +3300,12 @@ export function createFakeDaemon({
         }
         const parts = pathname.replace("/api/v1/", "").split("/");
         const defaultMax = 1;
-        const limitView = (adapter, id, legacy) => {
+        const limitView = (adapter, id) => {
           const saved = ac.limits[`${adapter}/${id}`] ?? null;
-          const source = saved != null ? "account" : legacy != null ? "legacy_concurrency" : "default";
           return {
             max_runs: saved,
-            effective_max_runs: saved ?? legacy ?? defaultMax,
-            max_runs_source: source,
+            effective_max_runs: saved ?? defaultMax,
+            max_runs_source: saved != null ? "account" : "default",
           };
         };
         const implicitView = (a) => ({
@@ -3319,13 +3318,13 @@ export function createFakeDaemon({
           implicit: true,
           provider: a.id,
           stats: { done: 0, error: 0, input_tokens: 0, output_tokens: 0, runs: 0 },
-          ...limitView("implicit", a.id, a.legacy_concurrency),
+          ...limitView("implicit", a.id),
         });
         const view = (a) => ({
           dir: `/accounts/${a.id}`,
           in_use: 0,
           implicit: false,
-          ...limitView(a.adapter ?? "claude-code", a.id, null),
+          ...limitView(a.adapter ?? "claude-code", a.id),
           stats: {
             done: 0,
             error: 0,

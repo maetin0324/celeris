@@ -184,7 +184,7 @@ test.describe("ops-config", () => {
       true,
     );
     await implicit.getByRole("button", { name: "既定に戻す" }).click();
-    await expect(implicit.getByText(/実効上限 1（旧設定/)).toBeVisible();
+    await expect(implicit.getByText("0 / 実効上限 1（既定（max_runs_per_account = 1））")).toBeVisible();
   });
 
   test("accounts: 上限の保存の API エラーを項目に出す", async ({ page }) => {

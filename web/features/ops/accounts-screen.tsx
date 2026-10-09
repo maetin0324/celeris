@@ -247,8 +247,6 @@ export function limitSourceLabel(item: Pick<AccountView, "max_runs_source">, def
   switch (item.max_runs_source) {
     case "account":
       return "このアカウントに保存した上限";
-    case "legacy_concurrency":
-      return "旧設定 [[providers]].concurrency の値（保存すると置き換わります）";
     case "default":
       return `既定（max_runs_per_account = ${defaultMax}）`;
     default:

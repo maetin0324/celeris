@@ -2242,7 +2242,7 @@ export interface AccountView {
    */
   max_runs?: number | null;
   /**
-   * 実効上限の出どころ: `"account"`（保存値）| `"legacy_concurrency"`（暗黙アカウントの行の旧 `concurrency`）| `"default"`（`max_runs_per_account`）。
+   * 実効上限の出どころ: `"account"`（保存値）| `"default"`（`max_runs_per_account`）。
    */
   max_runs_source: string;
   /**
@@ -4601,17 +4601,13 @@ export interface CooldownView {
 }
 /**
  * ADR 2026-10-08 account-concurrency-limits §(e): 暗黙アカウント 1 件の観測値。上限の保存値は DB
- * （`account_limits`）が正本なので、ここには既定を作るための旧 `concurrency` だけを持つ。
+ * （`account_limits`）が正本で、旧 `[[providers]].concurrency` は上限に使わない。
  */
 export interface ImplicitAccountLive {
   /**
    * この行で走っている全 run（非 CoS・CoS・プロバイダを使うレビュー run）の数。
    */
   in_use: number;
-  /**
-   * 行に書かれた旧 `[[providers]].concurrency`（保存値が無いときの既定。書かれていなければ `None`）。
-   */
-  legacy_concurrency?: number | null;
   /**
    * 行の id（= 暗黙アカウントの id）。
    */

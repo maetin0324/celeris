@@ -183,6 +183,7 @@ fn dispatcher_with_adapter_id(
             dispatcher.test_policy_clock = Some(policy_clock);
         }
     }
+
     dispatcher
 }
 
@@ -2579,6 +2580,8 @@ fn parallel_dispatcher(
         }],
         Duration::from_secs(1),
     ));
+    d.set_account_limit("implicit", "p1", Some(provider_concurrency))
+        .unwrap();
     d
 }
 

@@ -209,16 +209,14 @@ fn report_unknown_provider_does_not_panic() {
 }
 
 #[test]
-fn legacy_concurrency_returns_the_written_value_only() {
-    let mut unset = spec("p2", "codex", &[Tier::Frontier], 1);
-    unset.concurrency = None;
+fn provider_ids_follow_the_config_order() {
     let policy = StaticPolicy::new(
-        vec![spec("p1", "claude-code", &[Tier::Frontier], 3), unset],
+        vec![
+            spec("p1", "claude-code", &[Tier::Frontier], 3),
+            spec("p2", "codex", &[Tier::Frontier], 1),
+        ],
         Duration::from_secs(5),
     );
-    assert_eq!(policy.legacy_concurrency("p1".to_string()), Some(3));
-    assert_eq!(policy.legacy_concurrency("p2".to_string()), None);
-    assert_eq!(policy.legacy_concurrency("unknown".to_string()), None);
     assert_eq!(
         policy.provider_ids(),
         vec!["p1".to_string(), "p2".to_string()]
@@ -337,9 +335,6 @@ fn default_select_is_derived_from_pick() {
             Some(("fake".into(), "only".into()))
         }
         fn report(&mut self, _provider: ProviderId, _outcome: &ProviderOutcome) {}
-        fn legacy_concurrency(&self, _provider: ProviderId) -> Option<usize> {
-            Some(1)
-        }
     }
     let now = Instant::now();
     let h = hint(Tier::Standard, None);

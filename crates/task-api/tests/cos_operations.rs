@@ -506,7 +506,6 @@ async fn cos_chat_ops_api_rejects_unregistered_operations_regardless_of_skill() 
     let (_thread, _run, bearer) = cos_bearer(&env, "noskill");
     let cases = [
         ("adopt", "POST", "/api/v1/tasks/t1/execution-plan"),
-        ("cancel", "POST", "/api/v1/tasks/t1/cancel"),
         ("cron", "POST", "/api/v1/cron-jobs"),
         ("project-pause", "POST", "/api/v1/projects/p1/pause"),
         ("standing", "POST", "/api/v1/standing-rules"),

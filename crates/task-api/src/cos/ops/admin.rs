@@ -9,8 +9,14 @@ use serde_json::Value;
 use task_core::chat::CosOperation;
 use task_core::store::SqliteStore;
 
-/// Registered `(method, path, action)` operations.
+/// Registered `(method, path, action)` operations. The first match wins, so a literal segment
+/// (`assignments/roles/{tier}`) is listed before the placeholder row it would also match.
 pub(crate) const ALLOWED: &[(&str, &str, &str)] = &[
+    (
+        "PUT",
+        "/api/v1/llm/models/assignments/roles/{tier}",
+        "model_role.replace",
+    ),
     (
         "PUT",
         "/api/v1/llm/models/assignments/{source}/{tier}",
@@ -20,6 +26,26 @@ pub(crate) const ALLOWED: &[(&str, &str, &str)] = &[
         "DELETE",
         "/api/v1/llm/models/assignments/{source}/{tier}",
         "model_assignment.delete",
+    ),
+    (
+        "POST",
+        "/api/v1/llm/models/assignments/preview",
+        "model_assignment.preview",
+    ),
+    (
+        "POST",
+        "/api/v1/llm/models/assignments/roles/{tier}/preview",
+        "model_role.preview",
+    ),
+    (
+        "PUT",
+        "/api/v1/llm/models/{source}/{model_id}/override",
+        "model_override.put",
+    ),
+    (
+        "DELETE",
+        "/api/v1/llm/models/{source}/{model_id}/override",
+        "model_override.delete",
     ),
     ("POST", "/api/v1/cron-jobs", "cron_job.create"),
     ("PATCH", "/api/v1/cron-jobs/{id}", "cron_job.update"),
@@ -79,15 +105,7 @@ pub(crate) const PENDING: &[(&str, &str)] = &[
     ("DELETE", "/api/v1/accounts/{id}"),
     ("POST", "/api/v1/accounts/{id}/check"),
     ("PUT", "/api/v1/clusters/{id}/settings"),
-    ("POST", "/api/v1/llm/models/assignments/preview"),
-    ("PUT", "/api/v1/llm/models/assignments/roles/{tier}"),
-    (
-        "POST",
-        "/api/v1/llm/models/assignments/roles/{tier}/preview",
-    ),
     ("POST", "/api/v1/llm/models/discover"),
-    ("DELETE", "/api/v1/llm/models/{source}/{model_id}/override"),
-    ("PUT", "/api/v1/llm/models/{source}/{model_id}/override"),
     ("POST", "/api/v1/notify/test"),
     ("POST", "/api/v1/org"),
     ("DELETE", "/api/v1/org/{id}"),
@@ -110,6 +128,12 @@ pub(crate) const PENDING: &[(&str, &str)] = &[
 ];
 
 const ASSIGNMENT: &str = "/api/v1/llm/models/assignments/{source}/{tier}";
+const ROLE: &str = "/api/v1/llm/models/assignments/roles/{tier}";
+const OVERRIDE: &str = "/api/v1/llm/models/{source}/{model_id}/override";
+
+fn to_value<T: serde::Serialize>(value: &T) -> Result<Value, ApiProblem> {
+    serde_json::to_value(value).map_err(|e| ApiProblem::internal(e.to_string()))
+}
 
 /// The CoS form of a route whose domain request has no body: `null` or `{}` only.
 fn require_empty_body(
@@ -158,6 +182,46 @@ pub(crate) fn dispatch(
                 &path_param(ASSIGNMENT, path, "{tier}"),
                 audit,
             )
+        }
+        "model_assignment.preview" => {
+            let input = serde_json::from_value(body).map_err(decode)?;
+            let impact = crate::model_assignments::ImpactEnv::of(&env.api);
+            let outcome = crate::model_assignments::preview_impact(store, &impact, &input)
+                .and_then(|response| to_value(&response));
+            audit.record(store, "model_assignment", path, matched.action, outcome)
+        }
+        "model_role.replace" | "model_role.preview" => {
+            let input = serde_json::from_value(body).map_err(decode)?;
+            let impact = crate::model_assignments::ImpactEnv::of(&env.api);
+            crate::model_assignments::edit_role_audited(
+                store,
+                &impact,
+                &path_param(ROLE, path, "{tier}"),
+                input,
+                matched.action == "model_role.preview",
+                audit,
+            )
+        }
+        "model_override.put" => {
+            let input = decode_optional(body).map_err(decode)?;
+            let routing = env.api.inner.routing_catalog.as_ref().map(|r| r.view());
+            audited(crate::model_catalog::put_override_op(
+                store,
+                routing.as_ref(),
+                &path_param(OVERRIDE, path, "{source}"),
+                &path_param(OVERRIDE, path, "{model_id}"),
+                input,
+                Some(audit),
+            )?)
+        }
+        "model_override.delete" => {
+            require_empty_body(store, audit, "model_override", path, &body)?;
+            audited(crate::model_catalog::delete_override_op(
+                store,
+                &path_param(OVERRIDE, path, "{source}"),
+                &path_param(OVERRIDE, path, "{model_id}"),
+                Some(audit),
+            )?)
         }
         "cron_job.create" => {
             let input = serde_json::from_value(body).map_err(decode)?;

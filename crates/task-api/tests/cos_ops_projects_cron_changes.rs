@@ -84,7 +84,14 @@ fn seed_git_task(env: &TestEnv) -> (TaskId, PathBuf) {
     let branch = format!("celeris/{}", task.id);
     git(
         &repo,
-        &["worktree", "add", "-b", &branch, &tree.to_string_lossy(), "main"],
+        &[
+            "worktree",
+            "add",
+            "-b",
+            &branch,
+            &tree.to_string_lossy(),
+            "main",
+        ],
     );
     git(&tree, &["config", "user.email", "t@example.com"]);
     git(&tree, &["config", "user.name", "t"]);
@@ -192,7 +199,10 @@ async fn cos_ops_projects_cron_changes_pr_create_and_merge_call_gh_once() {
         .output()
         .expect("git init --bare");
     assert!(out.status.success());
-    git(&repo, &["remote", "add", "origin", &origin.to_string_lossy()]);
+    git(
+        &repo,
+        &["remote", "add", "origin", &origin.to_string_lossy()],
+    );
     let (_, _, bearer) = cos_bearer(&env, "pr");
 
     let op = send_op(

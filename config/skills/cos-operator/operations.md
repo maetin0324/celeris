@@ -92,6 +92,11 @@ curl -sS -X POST "$API/api/v1/cos/operations" -H "Authorization: Bearer $CELERIS
 |---|---|---|---|
 | モデルの割り当て（source × tier） | `PUT /api/v1/llm/models/assignments/<source>/<tier>` | model_assignment.put | `{"model_id":"…","note":"…"}`。model は catalog にあるもの |
 | 割り当ての解除 | `DELETE /api/v1/llm/models/assignments/<source>/<tier>` | model_assignment.delete | body なし（無ければ 404） |
+| 割り当て変更の影響の下見 | `POST /api/v1/llm/models/assignments/preview` | model_assignment.preview | `{"source","tier","model_id"?}`。書き込まない（影響だけ記録） |
+| 役割の構成員の置き換え | `PUT /api/v1/llm/models/assignments/roles/<tier>` | model_role.replace | `{"members":[{"source","model_id","priority"}]}`。全 source の構成員を丸ごと置き換える。空で役割を止める |
+| 役割の置き換えの下見 | `POST /api/v1/llm/models/assignments/roles/<tier>/preview` | model_role.preview | 本文は置き換えと同じ。書き込まない |
+| モデルの上書き | `PUT /api/v1/llm/models/<source>/<model_id>/override` | model_override.put | `{"disabled","tier","alias","note"}`（全て任意） |
+| モデルの上書きの削除 | `DELETE /api/v1/llm/models/<source>/<model_id>/override` | model_override.delete | body なし（無ければ 404） |
 | 定期実行の作成 | `POST /api/v1/cron-jobs` | cron_job.create | `{"name","schedule","timezone","template",…}`（`docs/api/cron-jobs.md`）。名前の重複は 409 |
 | 定期実行の更新 | `PATCH /api/v1/cron-jobs/<id>` | cron_job.update | `<id>` は ULID か name。変える欄だけ。有効/無効は pause・resume で変える |
 | 定期実行の削除 | `DELETE /api/v1/cron-jobs/<id>` | cron_job.delete | body なし。履歴も消え、作った task は残る |

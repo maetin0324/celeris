@@ -208,6 +208,50 @@ impl OperationAudit {
             .map_err(cos_problem)
     }
 
+    /// [`Self::apply`] for domain writes that fail with an [`ApiProblem`]: a failure of `write`
+    /// rolls the transaction back, `cos_operation_apply` records the rejected row with its detail,
+    /// and the caller gets the same problem (status and code) the direct route would return.
+    pub(crate) fn apply_checked<F>(
+        &self,
+        store: &SqliteStore,
+        target_kind: &str,
+        target_id: &str,
+        action: &str,
+        write: F,
+    ) -> Result<CosOperation, ApiProblem>
+    where
+        F: FnOnce(&Transaction<'_>) -> Result<Value, ApiProblem>,
+    {
+        let mut refused: Option<ApiProblem> = None;
+        let outcome = self.apply(store, target_kind, target_id, action, |tx| {
+            write(tx).map_err(|problem| {
+                let detail = problem.detail().to_string();
+                refused = Some(problem);
+                ChatError::Invalid(detail)
+            })
+        });
+        match (outcome, refused) {
+            (Ok(operation), _) => Ok(operation),
+            (Err(_), Some(problem)) | (Err(problem), None) => Err(problem),
+        }
+    }
+
+    /// Record a value-only operation (a preview that writes nothing) or the validation problem
+    /// that refused it.
+    pub(crate) fn record(
+        &self,
+        store: &SqliteStore,
+        target_kind: &str,
+        target_id: &str,
+        action: &str,
+        outcome: Result<Value, ApiProblem>,
+    ) -> Result<CosOperation, ApiProblem> {
+        match outcome {
+            Ok(value) => self.apply(store, target_kind, target_id, action, |_| Ok(value)),
+            Err(problem) => Err(self.reject(store, target_kind, target_id, problem)),
+        }
+    }
+
     /// Record `problem` as a rejected operation (row + reasoned audit event) and give it back.
     /// When recording itself fails, that failure is returned instead.
     pub(crate) fn reject(

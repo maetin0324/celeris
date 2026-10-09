@@ -27,6 +27,7 @@ use task_core::{ModelCatalogStore, Tier};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
+use crate::cos::operations::{Applied, OperationAudit};
 use crate::handlers::{ApiResult, Params, json_response, no_query, read_json};
 use crate::problem::{ApiProblem, store_problem};
 use crate::state::ApiState;
@@ -277,31 +278,40 @@ async fn list_models(State(state): State<ApiState>, RawQuery(raw): RawQuery) -> 
     Ok(json_response(StatusCode::OK, &view))
 }
 
-async fn put_override(
-    State(state): State<ApiState>,
-    Params((source, model_id)): Params<(String, String)>,
-    RawQuery(raw): RawQuery,
-    body: Body,
-) -> ApiResult {
-    no_query(&raw)?;
-    let source = parse_source(&source)?;
-    if model_id.trim().is_empty() {
-        return Err(ApiProblem::bad_request("model_id is empty"));
-    }
-    let payload: ModelCatalogOverrideView = read_json(body, true).await?;
-    let routing = state.inner.routing_catalog.as_ref().map(|r| r.view());
+/// `PUT /llm/models/{source}/{model_id}/override`, shared by the handler and CoS
+/// (`model_override.put`, written with its audit record in one transaction).
+pub(crate) fn put_override_op(
+    store: &task_core::store::SqliteStore,
+    routing: Option<&crate::routing_catalog::RoutingCatalogView>,
+    raw_source: &str,
+    model_id: &str,
+    payload: ModelCatalogOverrideView,
+    audit: Option<&OperationAudit>,
+) -> Result<Applied<ModelCatalogItem>, ApiProblem> {
+    let target = format!("{raw_source}/{model_id}");
+    let checked = parse_source(raw_source).and_then(|source| {
+        if model_id.trim().is_empty() {
+            Err(ApiProblem::bad_request("model_id is empty"))
+        } else {
+            Ok(source)
+        }
+    });
+    let source = match (checked, audit) {
+        (Ok(source), _) => source,
+        (Err(problem), Some(audit)) => {
+            return Err(audit.reject(store, "model_override", &target, problem));
+        }
+        (Err(problem), None) => return Err(problem),
+    };
     let now = OffsetDateTime::now_utc().unix_timestamp();
-    let result = state
-        .blocking(move |store| {
-            let value = CatalogOverride {
-                disabled: payload.disabled,
-                tier: payload.tier,
-                alias: payload.alias,
-                note: payload.note,
-            };
-            store
-                .model_catalog_set_override(&source, &model_id, &value, now)
-                .map_err(store_problem)?;
+    let value = CatalogOverride {
+        disabled: payload.disabled,
+        tier: payload.tier,
+        alias: payload.alias,
+        note: payload.note,
+    };
+    let read_item =
+        |store: &task_core::store::SqliteStore| -> Result<ModelCatalogItem, ApiProblem> {
             let overrides = store.model_catalog_overrides().map_err(store_problem)?;
             let assignments = store.model_role_assignments().map_err(store_problem)?;
             let entry = store
@@ -312,14 +322,84 @@ async fn put_override(
                 // catalog に無いモデルにも上書きは置ける（発見前に決める）。その場合は未発見の行として返す。
                 .unwrap_or_else(|| CatalogEntry {
                     source: source.clone(),
-                    model_id: model_id.clone(),
+                    model_id: model_id.to_string(),
                     display_name: None,
                     first_seen: now,
                     last_seen: now,
                     available: false,
                     capabilities: serde_json::json!({}),
                 });
-            Ok(item(&entry, &overrides, &assignments, routing.as_ref()))
+            Ok(item(&entry, &overrides, &assignments, routing))
+        };
+    let Some(audit) = audit else {
+        store
+            .model_catalog_set_override(&source, model_id, &value, now)
+            .map_err(store_problem)?;
+        return Ok(Applied::Direct(read_item(store)?));
+    };
+    let operation = audit.apply_checked(store, "model_override", &target, "model_override.put", |tx| {
+        task_core::store::SqliteStore::model_catalog_set_override_tx(tx, &source, model_id, &value, now)
+            .map_err(store_problem)?;
+        Ok(serde_json::json!({"source": source.as_str(), "model_id": model_id, "override": value}))
+    })?;
+    Ok(Applied::Audited(Box::new(operation)))
+}
+
+/// `DELETE /llm/models/{source}/{model_id}/override` (`model_override.delete`). No override is 404.
+pub(crate) fn delete_override_op(
+    store: &task_core::store::SqliteStore,
+    raw_source: &str,
+    model_id: &str,
+    audit: Option<&OperationAudit>,
+) -> Result<Applied<()>, ApiProblem> {
+    let target = format!("{raw_source}/{model_id}");
+    let missing = || {
+        ApiProblem::new(
+            StatusCode::NOT_FOUND,
+            "model_override_not_found",
+            "no override for that model",
+        )
+    };
+    let Some(audit) = audit else {
+        let source = parse_source(raw_source)?;
+        return if store
+            .model_catalog_delete_override(&source, model_id)
+            .map_err(store_problem)?
+        {
+            Ok(Applied::Direct(()))
+        } else {
+            Err(missing())
+        };
+    };
+    let source =
+        parse_source(raw_source).map_err(|p| audit.reject(store, "model_override", &target, p))?;
+    let operation = audit.apply_checked(store, "model_override", &target, "model_override.delete", |tx| {
+        if !task_core::store::SqliteStore::model_catalog_delete_override_tx(tx, &source, model_id)
+            .map_err(store_problem)?
+        {
+            return Err(missing());
+        }
+        Ok(serde_json::json!({"source": source.as_str(), "model_id": model_id, "deleted": true}))
+    })?;
+    Ok(Applied::Audited(Box::new(operation)))
+}
+
+async fn put_override(
+    State(state): State<ApiState>,
+    Params((source, model_id)): Params<(String, String)>,
+    RawQuery(raw): RawQuery,
+    body: Body,
+) -> ApiResult {
+    no_query(&raw)?;
+    parse_source(&source)?;
+    if model_id.trim().is_empty() {
+        return Err(ApiProblem::bad_request("model_id is empty"));
+    }
+    let payload: ModelCatalogOverrideView = read_json(body, true).await?;
+    let routing = state.inner.routing_catalog.as_ref().map(|r| r.view());
+    let result = state
+        .blocking(move |store| {
+            put_override_op(store, routing.as_ref(), &source, &model_id, payload, None)?.direct()
         })
         .await?;
     tracing::info!(op = "model_catalog_override_set", source = %result.source, model_id = %result.model_id, "model catalog override set");
@@ -332,21 +412,10 @@ async fn delete_override(
     RawQuery(raw): RawQuery,
 ) -> ApiResult {
     no_query(&raw)?;
-    let source = parse_source(&source)?;
-    let deleted = state
-        .blocking(move |store| {
-            store
-                .model_catalog_delete_override(&source, &model_id)
-                .map_err(store_problem)
-        })
+    parse_source(&source)?;
+    state
+        .blocking(move |store| delete_override_op(store, &source, &model_id, None)?.direct())
         .await?;
-    if !deleted {
-        return Err(ApiProblem::new(
-            StatusCode::NOT_FOUND,
-            "model_override_not_found",
-            "no override for that model",
-        ));
-    }
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 

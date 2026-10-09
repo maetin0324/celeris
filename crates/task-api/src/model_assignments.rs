@@ -664,38 +664,59 @@ async fn delete_assignment(
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
+/// What the impact computations read from the API process (providers and the routing catalog).
+pub(crate) struct ImpactEnv {
+    providers: Vec<ProviderConfigView>,
+    routing: Option<RoutingCatalogView>,
+}
+
+impl ImpactEnv {
+    pub(crate) fn of(state: &ApiState) -> Self {
+        Self {
+            providers: current_providers(state),
+            routing: state.inner.routing_catalog.as_ref().map(|r| r.view()),
+        }
+    }
+}
+
+/// `POST …/assignments/preview`: the impact of an assignment change, without writing.
+pub(crate) fn preview_impact(
+    store: &task_core::store::SqliteStore,
+    env: &ImpactEnv,
+    payload: &AssignmentPreviewBody,
+) -> Result<AssignmentPreviewResponse, ApiProblem> {
+    let source = parse_source(&payload.source)?;
+    let tier = payload.tier;
+    let entries = store.model_catalog_list().map_err(store_problem)?;
+    if let Some(m) = &payload.model_id
+        && !entries
+            .iter()
+            .any(|e| e.source == source && &e.model_id == m)
+    {
+        return Err(model_not_in_catalog(&source, m));
+    }
+    let overrides = store.model_catalog_overrides().map_err(store_problem)?;
+    let view = store.model_role_assignment_view().map_err(store_problem)?;
+    Ok(AssignmentPreviewResponse {
+        impact: compute_impact(
+            &source,
+            tier,
+            payload.model_id.as_deref(),
+            view.get(source.as_str(), tier),
+            &entries,
+            &overrides,
+            &env.providers,
+            env.routing.as_ref(),
+        ),
+    })
+}
+
 async fn preview(State(state): State<ApiState>, RawQuery(raw): RawQuery, body: Body) -> ApiResult {
     no_query(&raw)?;
     let payload: AssignmentPreviewBody = read_json(body, false).await?;
-    let source = parse_source(&payload.source)?;
-    let tier = payload.tier;
-    let routing = state.inner.routing_catalog.as_ref().map(|r| r.view());
-    let providers = current_providers(&state);
+    let env = ImpactEnv::of(&state);
     let response = state
-        .blocking(move |store| {
-            let entries = store.model_catalog_list().map_err(store_problem)?;
-            if let Some(m) = &payload.model_id
-                && !entries
-                    .iter()
-                    .any(|e| e.source == source && &e.model_id == m)
-            {
-                return Err(model_not_in_catalog(&source, m));
-            }
-            let overrides = store.model_catalog_overrides().map_err(store_problem)?;
-            let view = store.model_role_assignment_view().map_err(store_problem)?;
-            Ok(AssignmentPreviewResponse {
-                impact: compute_impact(
-                    &source,
-                    tier,
-                    payload.model_id.as_deref(),
-                    view.get(source.as_str(), tier),
-                    &entries,
-                    &overrides,
-                    &providers,
-                    routing.as_ref(),
-                ),
-            })
-        })
+        .blocking(move |store| preview_impact(store, &env, &payload))
         .await?;
     Ok(json_response(StatusCode::OK, &response))
 }
@@ -738,93 +759,146 @@ async fn edit_role(
     payload: RoleMembersBody,
     preview: bool,
 ) -> ApiResult {
-    let routing = state.inner.routing_catalog.as_ref().map(|r| r.view());
-    let providers = current_providers(&state);
+    let env = ImpactEnv::of(&state);
     let response = state
         .blocking(move |store| {
-            let entries = store.model_catalog_list().map_err(store_problem)?;
-            let view = store.model_role_assignment_view().map_err(store_problem)?;
-            let slots = effective_slots(&view, &entries, &providers, routing.as_ref());
-            let before: Vec<RoleMember> = slots
-                .iter()
-                .filter(|s| s.tier == tier)
-                .filter_map(|s| {
-                    s.model_id.as_ref().map(|model| RoleMember {
-                        source: CatalogSource::new(&s.source),
-                        model_id: model.clone(),
-                        priority: s.priority,
-                    })
-                })
-                .collect();
-            let mut unique = std::collections::HashSet::new();
-            for m in &payload.members {
-                parse_source(m.source.as_str())?;
-                if !unique.insert((m.source.as_str(), m.model_id.as_str())) {
-                    return Err(ApiProblem::bad_request("duplicate role membership"));
-                }
-                // Already configured models remain editable before their first discovery.
-                if !entries
-                    .iter()
-                    .any(|e| e.source == m.source && e.model_id == m.model_id)
-                    && !before
-                        .iter()
-                        .any(|b| b.source == m.source && b.model_id == m.model_id)
-                {
-                    return Err(model_not_in_catalog(&m.source, &m.model_id));
-                }
-            }
-            let sources: std::collections::BTreeSet<String> = slots
-                .iter()
-                .map(|s| s.source.clone())
-                .chain(payload.members.iter().map(|m| m.source.0.clone()))
-                .collect();
-            let mut impact = ImpactView::default();
-            for source in &sources {
-                let list = |members: &[RoleMember]| -> Option<String> {
-                    let mut items: Vec<_> = members
-                        .iter()
-                        .filter(|m| m.source.as_str() == source)
-                        .collect();
-                    items.sort_by_key(|m| (m.priority, &m.model_id));
-                    (!items.is_empty()).then(|| {
-                        items
-                            .iter()
-                            .map(|m| m.model_id.as_str())
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    })
-                };
-                for part in participants(source, tier, &providers, routing.as_ref()) {
-                    impact.changes.push(ImpactChangeView {
-                        kind: part.kind,
-                        id: part.id,
-                        tier: tier_str(tier).into(),
-                        before: list(&before),
-                        after: list(&payload.members),
-                        excluded_reason: None,
-                    });
-                }
-            }
+            let (response, sources) = plan_role(store, &env, tier, payload)?;
             if !preview {
                 store
                     .model_role_members_replace(
                         tier,
-                        &payload.members,
-                        &sources
-                            .into_iter()
-                            .map(CatalogSource::new)
-                            .collect::<Vec<_>>(),
+                        &response.after,
+                        &sources,
                         ACTOR,
                         time::OffsetDateTime::now_utc().unix_timestamp(),
                     )
                     .map_err(store_problem)?;
             }
-            Ok(RoleMembersResponse {
-                before,
-                after: payload.members,
-                impact,
-            })
+            Ok(response)
         })
         .await?;
     Ok(json_response(StatusCode::OK, &response))
+}
+
+/// CoS `PUT|POST …/assignments/roles/{tier}[/preview]` (`model_role.replace` / `model_role.preview`):
+/// the same validation and impact as the human route; the replace writes the membership with the
+/// audit record in one transaction.
+pub(crate) fn edit_role_audited(
+    store: &task_core::store::SqliteStore,
+    env: &ImpactEnv,
+    raw_tier: &str,
+    payload: RoleMembersBody,
+    preview: bool,
+    audit: &crate::cos::operations::OperationAudit,
+) -> Result<task_core::chat::CosOperation, ApiProblem> {
+    let action = if preview {
+        "model_role.preview"
+    } else {
+        "model_role.replace"
+    };
+    let planned = parse_tier(raw_tier).and_then(|tier| {
+        plan_role(store, env, tier, payload).map(|(response, sources)| (tier, response, sources))
+    });
+    let (tier, response, sources) = match planned {
+        Ok(planned) => planned,
+        Err(problem) => return Err(audit.reject(store, "model_role", raw_tier, problem)),
+    };
+    let value = serde_json::to_value(&response).map_err(|e| ApiProblem::internal(e.to_string()))?;
+    if preview {
+        return audit.record(store, "model_role", raw_tier, action, Ok(value));
+    }
+    audit.apply_checked(store, "model_role", raw_tier, action, |tx| {
+        task_core::store::SqliteStore::model_role_members_replace_tx(
+            tx,
+            tier,
+            &response.after,
+            &sources,
+            "cos",
+            time::OffsetDateTime::now_utc().unix_timestamp(),
+        )
+        .map_err(store_problem)?;
+        Ok(value)
+    })
+}
+
+/// Validate a role membership and compute its impact; also the sources whose scope it manages.
+fn plan_role(
+    store: &task_core::store::SqliteStore,
+    env: &ImpactEnv,
+    tier: Tier,
+    payload: RoleMembersBody,
+) -> Result<(RoleMembersResponse, Vec<CatalogSource>), ApiProblem> {
+    let providers = &env.providers;
+    let routing = env.routing.as_ref();
+    let entries = store.model_catalog_list().map_err(store_problem)?;
+    let view = store.model_role_assignment_view().map_err(store_problem)?;
+    let slots = effective_slots(&view, &entries, providers, routing);
+    let before: Vec<RoleMember> = slots
+        .iter()
+        .filter(|s| s.tier == tier)
+        .filter_map(|s| {
+            s.model_id.as_ref().map(|model| RoleMember {
+                source: CatalogSource::new(&s.source),
+                model_id: model.clone(),
+                priority: s.priority,
+            })
+        })
+        .collect();
+    let mut unique = std::collections::HashSet::new();
+    for m in &payload.members {
+        parse_source(m.source.as_str())?;
+        if !unique.insert((m.source.as_str(), m.model_id.as_str())) {
+            return Err(ApiProblem::bad_request("duplicate role membership"));
+        }
+        // Already configured models remain editable before their first discovery.
+        if !entries
+            .iter()
+            .any(|e| e.source == m.source && e.model_id == m.model_id)
+            && !before
+                .iter()
+                .any(|b| b.source == m.source && b.model_id == m.model_id)
+        {
+            return Err(model_not_in_catalog(&m.source, &m.model_id));
+        }
+    }
+    let sources: std::collections::BTreeSet<String> = slots
+        .iter()
+        .map(|s| s.source.clone())
+        .chain(payload.members.iter().map(|m| m.source.0.clone()))
+        .collect();
+    let mut impact = ImpactView::default();
+    for source in &sources {
+        let list = |members: &[RoleMember]| -> Option<String> {
+            let mut items: Vec<_> = members
+                .iter()
+                .filter(|m| m.source.as_str() == source)
+                .collect();
+            items.sort_by_key(|m| (m.priority, &m.model_id));
+            (!items.is_empty()).then(|| {
+                items
+                    .iter()
+                    .map(|m| m.model_id.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+        };
+        for part in participants(source, tier, providers, routing) {
+            impact.changes.push(ImpactChangeView {
+                kind: part.kind,
+                id: part.id,
+                tier: tier_str(tier).into(),
+                before: list(&before),
+                after: list(&payload.members),
+                excluded_reason: None,
+            });
+        }
+    }
+    Ok((
+        RoleMembersResponse {
+            before,
+            after: payload.members,
+            impact,
+        },
+        sources.into_iter().map(CatalogSource::new).collect(),
+    ))
 }

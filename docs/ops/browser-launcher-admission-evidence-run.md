@@ -61,14 +61,29 @@ echo "exit=$?"
 systemctl show celeris-browser-launcher.service -p MainPID   # 下の responder の pid と比べる
 ```
 
-必須モードは `CELERIS_LAUNCHER_TESTS=require` の実証を 3 回実行する。各回が SIGSTOP stutter を含む launcher admission 試験を通ること。通常の 1 回だけの再取得には引数を付けずに実行する。credential 経路の回帰試験は `--credential <log>` で別に実行できる。
+必須モードは `CELERIS_LAUNCHER_TESTS=require` の実証を 3 回実行し、各試験 process group が生きている間 SIGSTOP/SIGCONT を繰り返す。`LAUNCHER_EVIDENCE_TEST_CMD` は台本の試験専用 hook であり、本番の証跡取得では使わない。通常の 1 回だけの再取得には引数を付けずに実行する。credential 経路の回帰試験は `--credential <log>` で別に実行できる。
 
 期待（`/tmp/launcher-admission-evidence.log`）:
 
 - `started: ... responder=Some(SenderCred { pid: <MainPID>, uid: <celeris-browser の UID>, gid: ... })`。pid は `MainPID` と一致し、uid は `id -u celeris-browser`。
 - `ADMISSION[real-session]` の行があり、launcher-proof の行が allow、他が deny。
 - `PTRACE_ATTACH ... errno=Some(1)`、`strace ... Operation not permitted`。
-- `test result: ok. 6 passed`、最終行 `EXIT: 0`。
+- 各回について `RUN[stutter-N] required launcher admission + SIGSTOP stutter`、`STUTTER[stutter-N]: stops=<n>`（`n` は 0 より大きい整数）、`EXIT[stutter-N]: 0` が出る。最後の行は `EXIT: 0` で、台本自体も exit 0 であること。例:
+
+  ```text
+  RUN[stutter-1] required launcher admission + SIGSTOP stutter
+  STUTTER[stutter-1]: stops=81
+  EXIT[stutter-1]: 0
+  RUN[stutter-2] required launcher admission + SIGSTOP stutter
+  STUTTER[stutter-2]: stops=81
+  EXIT[stutter-2]: 0
+  RUN[stutter-3] required launcher admission + SIGSTOP stutter
+  STUTTER[stutter-3]: stops=82
+  EXIT[stutter-3]: 0
+  EXIT: 0
+  ```
+
+  停止回数は実行ごとに変わる。上は `sh crates/task-worker/scripts/tests/launcher-admission-evidence-stutter.sh` を実行した際に得た行形式の例で、実際の証跡では3回すべての `stops` が正数であることを確認する。
 
 `responder=None` や uid が違うときは表を作らずに失敗する（fail closed）。手順 5 で戻してから原因を調べる。
 

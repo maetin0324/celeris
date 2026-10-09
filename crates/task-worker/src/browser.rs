@@ -906,8 +906,36 @@ fn segment_close_argv(executable: &Path, runtime: &Path, session: &str) -> Vec<s
     argv
 }
 
+/// Extra close attempts after a close that failed promptly (not on timeout).
+const CLOSE_RETRIES: u32 = 2;
+const CLOSE_RETRY_DELAY: Duration = Duration::from_millis(500);
+
 /// `[cli]` runs the shim's `close`; a longer argv runs the substrate directly.
+///
+/// The harness usually closes the session itself just before it exits. agent-browser's
+/// per-session daemon then takes a moment to go away, and a second `close` in that window
+/// fails with "Failed to connect" although the session is already closed. A prompt failure
+/// is therefore retried after a short delay; a timeout is not (the session is stuck).
 async fn close_with(argv: &[std::ffi::OsString]) -> bool {
+    close_with_retry(argv, CLOSE_RETRIES, CLOSE_RETRY_DELAY).await
+}
+
+async fn close_with_retry(argv: &[std::ffi::OsString], retries: u32, delay: Duration) -> bool {
+    for attempt in 0..=retries {
+        if attempt > 0 {
+            tokio::time::sleep(delay).await;
+        }
+        match close_once(argv).await {
+            Some(true) => return true,
+            Some(false) => continue,
+            None => return false,
+        }
+    }
+    false
+}
+
+/// `Some(success)` when the close process finished, `None` on timeout or spawn failure.
+async fn close_once(argv: &[std::ffi::OsString]) -> Option<bool> {
     let mut cmd = if argv.len() == 1 {
         let mut c = tokio::process::Command::new("python3");
         c.arg(&argv[0]).arg("close");
@@ -926,7 +954,10 @@ async fn close_with(argv: &[std::ffi::OsString]) -> bool {
         .stderr(Stdio::null())
         .kill_on_drop(true)
         .status();
-    matches!(tokio::time::timeout(Duration::from_secs(50), status).await, Ok(Ok(status)) if status.success())
+    match tokio::time::timeout(Duration::from_secs(50), status).await {
+        Ok(Ok(status)) => Some(status.success()),
+        _ => None,
+    }
 }
 
 pub async fn run(

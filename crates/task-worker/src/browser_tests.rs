@@ -2643,3 +2643,30 @@ async fn click_approval_opens_a_wait_and_resumes_the_same_session_once() {
     );
     assert!(sink.contexts.lock().unwrap().is_empty());
 }
+
+/// The harness closes its session just before exiting; the worker's cleanup close can then
+/// race agent-browser's daemon teardown and fail once ("Failed to connect"). A prompt failure
+/// is retried, so an already-closed session is not reported as a cleanup failure.
+#[tokio::test]
+async fn cleanup_close_retries_a_prompt_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    let cli = dir.path().join("fake-cli.py");
+    crate::test_support::write_executable(
+        &cli,
+        r#"#!/usr/bin/env python3
+import pathlib, sys
+marker = pathlib.Path(__file__).with_name("attempts")
+n = int(marker.read_text()) if marker.exists() else 0
+marker.write_text(str(n + 1))
+sys.exit(1 if n == 0 else 0)
+"#,
+    );
+    let argv = [cli.clone().into_os_string()];
+    assert!(super::close_with_retry(&argv, 2, Duration::ZERO).await);
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("attempts")).unwrap(),
+        "2"
+    );
+    std::fs::remove_file(dir.path().join("attempts")).unwrap();
+    assert!(!super::close_with_retry(&argv, 0, Duration::ZERO).await);
+}

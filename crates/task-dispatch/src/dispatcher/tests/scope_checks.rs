@@ -313,10 +313,12 @@ fn repair_scope_checks_include_scope_flag_and_git_diff_heuristic() {
     assert!(!is_repair_scope_check(&check("cargo test", false)));
 }
 
+type ScopeCheckEnvHistory = Arc<StdMutex<Vec<Vec<(String, String)>>>>;
+
 #[derive(Clone)]
 struct WuBaseAdapter {
     env: Vec<(String, String)>,
-    seen: Arc<StdMutex<Vec<Vec<(String, String)>>>>,
+    seen: ScopeCheckEnvHistory,
     bad: bool,
     retry: bool,
 }

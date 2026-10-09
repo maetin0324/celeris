@@ -89,3 +89,13 @@ ADR 付記の確認: final review 差し戻し 2 件に対応する日付付き�
 
 - `test-parallel.sh` は、run の TMPDIR を子の一時 dir に差し替える前に、短い専用 dir を使うか、差し替え後の path 長を検査して明確な理由で止まるようにする。今回のような 71 件の失敗（実際の原因は path 長）を見分けやすくできる。
 - `docs/architecture-map.md` の試験の後片付けの行を、実在のパスで書き直す。`check-architecture-map.py` の `<workspace>` 扱いも決める。
+
+## 最終検証（final-record）
+
+最終 HEAD `87f8b8a5257cdb3b2d9959499616d7261b81ccc6` の検査記録は [final-record.md](2026-10-09-browser-launcher-credential-release/final-record.md) にある。
+
+- `bash scripts/dev/test-parallel.sh`: exit 0, passed 4986, failed 0
+- `cargo clippy --workspace -- -D warnings`: exit 0
+- `cargo fmt --all -- --check`: exit 0
+
+未解決事項: host の必須モード実証（stutter 3 回）と `ADMISSION[real-session]` の再取得、本番での解放は運用セッションの作業として未実施。

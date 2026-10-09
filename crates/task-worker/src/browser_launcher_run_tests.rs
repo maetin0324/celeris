@@ -1792,6 +1792,7 @@ async fn launcher_run_creates_shim_files_once_and_reaches_the_harness() {
             launcher_uid: None,
         },
         &policy,
+        None,
     )
     .await
     .expect("launcher run reaches the harness");
@@ -1866,4 +1867,326 @@ fn launcher_admitted_shim_config_replaces_only_the_config() {
         policy_before
     );
     assert!(!runtime_dir.join("config.next").exists());
+}
+
+// ---- 2026-10-09 本番不具合: launcher 経路で登録済み credential が承認待ちにならない ----
+
+use task_core::browser_wait::{BrowserWait, CredentialRef, TrustedLogin};
+
+/// 本番 task 01M4GYJ3XGJNWZQDF35F1MDE0H の形の登録済み wait（`WaitingForAuth` → `Registered`、
+/// credential 参照あり、operation 無し）。
+fn registered_wait(policy: &crate::browser_policy::PreparedBrowserPolicy) -> BrowserWait {
+    let now = time::OffsetDateTime::now_utc();
+    BrowserWait {
+        wait_id: "wait-reg-1".into(),
+        task_id: task_core::TaskId::new(),
+        work_unit_id: None,
+        run_id: "run-asked".into(),
+        session_id: "celeris-asked".into(),
+        reason: BrowserWaitReason::WaitingForAuth,
+        origin: "https://example.com".into(),
+        purpose: "Log in".into(),
+        credential_policy_id: Some("pol-example".into()),
+        credential: Some(CredentialRef {
+            credential_id: "cred-1".into(),
+            provider: "local".into(),
+            policy_id: "pol-example".into(),
+        }),
+        operation: None,
+        trusted_login: None,
+        approval_id: None,
+        policy_revision: policy.binding.revision,
+        policy_hash: policy.binding.hash.clone(),
+        owner_id: Some("owner-1".into()),
+        deadline: now,
+        resume_key: "auth:t:run-asked".into(),
+        version: 2,
+        state: BrowserWaitState::Registered,
+        resolution_code: None,
+        created_at: now,
+        resolved_at: None,
+    }
+}
+
+fn trusted_login() -> TrustedLogin {
+    TrustedLogin {
+        policy_id: "pol-example".into(),
+        revision: 1,
+        login_url: "https://example.com/login".into(),
+        password_selector: "#password".into(),
+        submit_selector: Some("#submit".into()),
+    }
+}
+
+/// `describe_policy` に一度だけ答える偽 credentiald の control socket（`<runtime>/celeris-credentiald/
+/// control.sock`）。秘密は返さない。答えた回数を返す thread を返す。
+fn fake_credentiald(runtime: &Path) -> std::thread::JoinHandle<usize> {
+    let sock = runtime.join("celeris-credentiald/control.sock");
+    std::fs::create_dir_all(sock.parent().expect("parent")).expect("mkdir");
+    let listener = std::os::unix::net::UnixListener::bind(&sock).expect("bind");
+    let reply = serde_json::to_vec(&serde_json::json!({
+        "success": true,
+        "trusted_login": trusted_login(),
+    }))
+    .expect("json");
+    std::thread::spawn(move || {
+        let Ok((mut stream, _)) = listener.accept() else {
+            return 0;
+        };
+        let mut request = Vec::new();
+        stream.read_to_end(&mut request).expect("read");
+        let request: serde_json::Value = serde_json::from_slice(&request).expect("request");
+        assert_eq!(request["op"], "describe_policy");
+        stream.write_all(&reply).expect("write");
+        1
+    })
+}
+
+fn supervisor(runtime: &Path) -> crate::browser_credential::CredentialSupervisor {
+    crate::browser_credential::CredentialSupervisor {
+        broker: Arc::new(crate::browser_credential::UnixLeaseBroker {
+            control_socket: runtime.join("unused.sock"),
+        }),
+        bridge: PathBuf::from("/nonexistent/celeris-credentiald"),
+        runtime_dir: Some(runtime.to_path_buf()),
+    }
+}
+
+/// wait の一覧を返し、開いた wait を記録して一覧の末尾に `Open` として足す偽 sink。
+struct RegisteredSink {
+    waits: Mutex<Vec<BrowserWait>>,
+    opened: Mutex<Vec<NewBrowserWait>>,
+    browsers: Mutex<Vec<BrowserRun>>,
+}
+
+impl RegisteredSink {
+    fn new(waits: Vec<BrowserWait>) -> Self {
+        Self {
+            waits: Mutex::new(waits),
+            opened: Mutex::new(Vec::new()),
+            browsers: Mutex::new(Vec::new()),
+        }
+    }
+    fn opened(&self) -> Vec<NewBrowserWait> {
+        self.opened.lock().expect("lock").clone()
+    }
+}
+
+impl EventSink for RegisteredSink {
+    fn browser_waits(&self) -> Result<Vec<BrowserWait>, String> {
+        Ok(self.waits.lock().expect("lock").clone())
+    }
+    fn browser_wait_open(&self, request: &NewBrowserWait) -> Result<(), String> {
+        self.opened.lock().expect("lock").push(request.clone());
+        let mut waits = self.waits.lock().expect("lock");
+        let mut open = waits.last().cloned().expect("a wait");
+        open.wait_id = format!("wait-open-{}", waits.len());
+        open.run_id = request.run_id.clone();
+        open.session_id = request.session_id.clone();
+        open.reason = request.reason;
+        open.credential = request.credential.clone();
+        open.operation = request.operation.clone();
+        open.trusted_login = request.trusted_login.clone();
+        open.resume_key = request.resume_key.clone();
+        open.state = BrowserWaitState::Pending;
+        waits.push(open);
+        Ok(())
+    }
+    fn browser_control_gate(
+        &self,
+        _run_id: &str,
+        _session_id: &str,
+    ) -> Option<Arc<dyn crate::browser_live::ControlGate>> {
+        Some(Arc::new(InMemoryGate::new()))
+    }
+    fn browser_updated(&self, browser: &BrowserRun) {
+        self.browsers.lock().expect("lock").push(browser.clone());
+    }
+    fn progress(&self, _msg: &str) {}
+    fn artifact(&self, _artifact: &task_core::ArtifactRef) {}
+}
+
+fn limits() -> RunLimits {
+    RunLimits {
+        wall_clock: Duration::from_secs(60),
+        idle_timeout: Duration::from_secs(60),
+        kill_grace: Duration::from_secs(1),
+    }
+}
+
+/// 本番 2026-10-09: launcher runtime では最後の wait が `Registered` でも承認 wait が開かず、harness が
+/// 再びログイン画面で credential を要求し続けた。修正後は daemon 経路と同じ共有段で
+/// `WaitingForApproval`（operation `credential_use`、resume key `approval:<wait_id>`、固定した trusted
+/// login）を開き、launcher に接続せず harness も走らせずに `Terminal::Question` で止まる。次の run は
+/// 最後の wait が承認待ちなので、承認 wait を二度開かない（再要求の繰り返しにならない）。
+#[tokio::test]
+async fn launcher_registered_credential_opens_an_approval_wait_without_a_session() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sock = dir.path().join("launcher.sock");
+    let listener = counting_listener(&sock);
+    let credd = dir.path().join("credd");
+    let answered = fake_credentiald(&credd);
+    let sup = supervisor(&credd);
+    let policy = credential_policy();
+    let registered = registered_wait(&policy);
+    let sink = RegisteredSink::new(vec![registered.clone()]);
+    let req = launcher_run_request(dir.path());
+    let task_id = req.task.id;
+    let outcome = run(
+        Arc::new(crate::fake::FakeAdapter::default()),
+        req.clone(),
+        "run-resumed",
+        limits(),
+        &sink,
+        LauncherTarget {
+            socket: &sock,
+            refuse_test_loopback: false,
+            launcher_uid: Some(LAUNCHER_UID),
+        },
+        &policy,
+        Some(&sup),
+    )
+    .await
+    .expect("approval requested");
+    assert_eq!(answered.join().expect("join"), 1, "trusted login described");
+    assert!(
+        matches!(
+            &outcome.terminal,
+            crate::Terminal::Question { text } if text == "Browser credential use approval requested"
+        ),
+        "{:?}",
+        outcome.terminal
+    );
+    let opened = sink.opened();
+    assert_eq!(opened.len(), 1);
+    let wait = &opened[0];
+    assert_eq!(wait.reason, BrowserWaitReason::WaitingForApproval);
+    assert_eq!(
+        wait.operation.as_ref().map(|o| o.action.as_str()),
+        Some("credential_use")
+    );
+    assert_eq!(wait.resume_key, "approval:wait-reg-1");
+    assert_eq!(wait.credential, registered.credential);
+    assert_eq!(wait.trusted_login, Some(trusted_login()));
+    assert_eq!(wait.origin, "https://example.com");
+    assert_eq!(wait.run_id, "run-resumed");
+    assert_eq!(
+        wait.session_id,
+        super::super::session_id(task_id, "run-resumed")
+    );
+    assert_eq!(wait.policy_hash, policy.binding.hash);
+    let states: Vec<_> = sink
+        .browsers
+        .lock()
+        .expect("lock")
+        .iter()
+        .map(|b| b.state)
+        .collect();
+    assert_eq!(states, vec![BrowserRunState::WaitingForApproval]);
+    assert_eq!(connections(&listener), 0, "no launcher session");
+    assert!(
+        !dir.path().join("runs").join("run-resumed").exists(),
+        "no shim files, no harness"
+    );
+
+    // 次の run（承認前に再 dispatch されても）: 最後の wait は承認待ちなので二度目の承認 wait は開かない。
+    let again = run(
+        Arc::new(crate::fake::FakeAdapter::default()),
+        req,
+        "run-again",
+        limits(),
+        &sink,
+        LauncherTarget {
+            socket: &sock,
+            refuse_test_loopback: false,
+            launcher_uid: None,
+        },
+        &policy,
+        Some(&sup),
+    )
+    .await;
+    assert!(again.is_err(), "the credential run still needs admission");
+    assert_eq!(sink.opened().len(), 1, "no second approval wait");
+    assert_eq!(connections(&listener), 0);
+}
+
+/// fail closed: policy に合わない登録（policy hash 違い）や credentiald に届かない場合（supervisor
+/// 無し）は承認 wait を開かず、launcher にも接続しない。
+#[tokio::test]
+async fn launcher_registered_credential_outside_policy_fails_closed() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sock = dir.path().join("launcher.sock");
+    let listener = counting_listener(&sock);
+    let policy = credential_policy();
+    let mut stale = registered_wait(&policy);
+    stale.policy_hash = "sha256:stale".into();
+    let no_sup = registered_wait(&policy);
+    for (wait, expected) in [
+        (stale, "browser credential approval request denied"),
+        (no_sup, "policy_changed"),
+    ] {
+        let sink = RegisteredSink::new(vec![wait]);
+        let err = run(
+            Arc::new(crate::fake::FakeAdapter::default()),
+            launcher_run_request(dir.path()),
+            "run-x",
+            limits(),
+            &sink,
+            LauncherTarget {
+                socket: &sock,
+                refuse_test_loopback: false,
+                launcher_uid: Some(LAUNCHER_UID),
+            },
+            &policy,
+            None,
+        )
+        .await
+        .expect_err("refused");
+        assert_eq!(denied_text(err), expected);
+        assert!(sink.opened().is_empty());
+        assert!(sink.browsers.lock().expect("lock").is_empty());
+    }
+    assert_eq!(connections(&listener), 0);
+}
+
+/// 承認済みの credential_use wait も daemon 経路と同じ照合を通る。policy が変わった承認は launcher に
+/// 接続する前に拒否し、承認を消費しない。
+#[tokio::test]
+async fn launcher_stale_credential_approval_is_refused_before_connecting() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sock = dir.path().join("launcher.sock");
+    let listener = counting_listener(&sock);
+    let credd = dir.path().join("credd");
+    let sup = supervisor(&credd);
+    let policy = credential_policy();
+    let mut approved = registered_wait(&policy);
+    approved.reason = BrowserWaitReason::WaitingForApproval;
+    approved.state = BrowserWaitState::Approved;
+    approved.operation = Some(task_core::browser_wait::OperationIntent {
+        intent_id: "intent-wait-reg-1".into(),
+        action: "credential_use".into(),
+        args_digest: None,
+    });
+    approved.trusted_login = Some(trusted_login());
+    approved.policy_revision += 1;
+    let sink = RegisteredSink::new(vec![approved]);
+    let err = run(
+        Arc::new(crate::fake::FakeAdapter::default()),
+        launcher_run_request(dir.path()),
+        "run-y",
+        limits(),
+        &sink,
+        LauncherTarget {
+            socket: &sock,
+            refuse_test_loopback: false,
+            launcher_uid: Some(LAUNCHER_UID),
+        },
+        &policy,
+        Some(&sup),
+    )
+    .await
+    .expect_err("refused");
+    assert_eq!(denied_text(err), "approved browser credential use denied");
+    assert!(sink.opened().is_empty());
+    assert_eq!(connections(&listener), 0);
 }

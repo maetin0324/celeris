@@ -771,6 +771,7 @@ pub(super) async fn run(
     sink: &dyn EventSink,
     target: LauncherTarget<'_>,
     policy: &crate::browser_policy::PreparedBrowserPolicy,
+    credentials: Option<&crate::browser_credential::CredentialSupervisor>,
 ) -> Result<RunOutcome, AdapterError> {
     let unavailable = || AdapterError::Other(UNAVAILABLE.into());
     // The wait store must be readable before anything else; a CredentialUse run that cannot
@@ -789,6 +790,20 @@ pub(super) async fn run(
             return Err(AdapterError::Other("browser wait store unavailable".into()));
         }
     };
+    // 登録済み credential（`Registered`）は daemon 経路と同じ共有段で credential 使用の承認 wait
+    // （`WaitingForApproval`、operation `credential_use`）にし、launcher に接続せず `Terminal::Question`
+    // で止まる。承認後の run が下の `approved_credential` → Authenticate に進む（ADR-0116 / ADR-0138、
+    // ADR 2026-10-09 付記）。これが無いと harness が再びログイン画面で credential を要求し続けた。
+    if let Some(outcome) = super::registered_credential_approval(
+        req.task.id,
+        run_id,
+        &waits,
+        policy,
+        credentials,
+        sink,
+    )? {
+        return Ok(outcome);
+    }
     let demand = credential_demand(policy, &waits);
     // ADR 2026-10-08 D2: an approved operation resumes the logical session that asked for it,
     // with that one action allowed once.
@@ -802,10 +817,17 @@ pub(super) async fn run(
                     .is_some_and(|o| o.action == "credential_use")
         })
         .cloned();
+    // The approval must still match the task policy (same check as the daemon path); a stale
+    // approval is refused before connecting and is not consumed.
+    if let Some(wait) = approved_credential.as_ref() {
+        super::check_approved_credential(wait, policy, credentials)?;
+    }
     let approved_action = approved.as_ref().map(|(_, a)| *a);
-    let session = match &approved {
-        Some((wait, _)) => wait.session_id.clone(),
-        None => super::session_id(req.task.id, run_id),
+    // A resumed run continues the logical session that asked for the approval (operation or
+    // credential use), as on the daemon path.
+    let session = match (&approved, &approved_credential) {
+        (Some((wait, _)), _) | (None, Some(wait)) => wait.session_id.clone(),
+        (None, None) => super::session_id(req.task.id, run_id),
     };
     let action_policy = match approved_action {
         Some(action) => super::resumed_policy_bytes(policy, action)?,
@@ -890,9 +912,16 @@ pub(super) async fn run(
             let _ = tokio::task::spawn_blocking(move || stop_runtime.stop()).await;
             return Err(credential_denied());
         }
-        let consumed = sink
-            .browser_operation_approval_consume(wait)
-            .map_err(|_| credential_denied())?;
+        // A credential-use approval is spent through the credential consume (the operation
+        // consume refuses `credential_use` by design).
+        let consumed = match sink.browser_approval_consume(wait) {
+            Ok(consumed) => consumed,
+            Err(_) => {
+                let stop_runtime = runtime;
+                let _ = tokio::task::spawn_blocking(move || stop_runtime.stop()).await;
+                return Err(credential_denied());
+            }
+        };
         let credential = consumed
             .wait
             .credential

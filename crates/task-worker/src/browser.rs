@@ -772,6 +772,121 @@ pub(super) fn shim_request_wait(
     (outcome, None)
 }
 
+/// 承認済みの credential_use wait が今の task policy にまだ合うかの照合（daemon 経路と launcher 経路で
+/// 共有）。合わなければ承認を消費せずに拒否する（fail closed）。
+pub(super) fn check_approved_credential(
+    wait: &task_core::browser_wait::BrowserWait,
+    policy: &crate::browser_policy::PreparedBrowserPolicy,
+    credentials: Option<&crate::browser_credential::CredentialSupervisor>,
+) -> Result<(), AdapterError> {
+    if wait.policy_hash != policy.binding.hash
+        || wait.policy_revision != policy.binding.revision
+        || !policy
+            .effective
+            .actions
+            .contains(&task_core::BrowserAction::CredentialUse)
+        || wait
+            .credential_policy_id
+            .as_ref()
+            .is_none_or(|id| !policy.effective.credential_policy_ids.contains(id))
+        || !origin_in_domains(&wait.origin, policy.allowed_domains())
+        || credentials.is_none()
+    {
+        return Err(AdapterError::Other(
+            "approved browser credential use denied".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// 最後の wait が登録済み（`Registered`）なら、credential 使用の承認 wait（`WaitingForApproval`、
+/// operation `credential_use`、resume key `approval:<wait_id>`）を開いて `Terminal::Question` を返す
+/// （ADR-0110 D2 / ADR-0116）。daemon 経路と launcher 経路が runtime を起動する**前に**同じ呼び出しを
+/// する。policy に合わない登録・credential 参照の欠落・trusted login を引けない場合・wait を開けない
+/// 場合は wait を開かず `Err`（fail closed）。最後の wait が `Registered` でなければ `Ok(None)`。
+pub(super) fn registered_credential_approval(
+    task_id: task_core::TaskId,
+    run_id: &str,
+    waits: &[task_core::browser_wait::BrowserWait],
+    policy: &crate::browser_policy::PreparedBrowserPolicy,
+    credentials: Option<&crate::browser_credential::CredentialSupervisor>,
+    sink: &dyn EventSink,
+) -> Result<Option<RunOutcome>, AdapterError> {
+    let Some(registered) = waits
+        .last()
+        .filter(|w| w.state == BrowserWaitState::Registered)
+    else {
+        return Ok(None);
+    };
+    if registered.policy_hash != policy.binding.hash
+        || registered.policy_revision != policy.binding.revision
+        || !policy
+            .effective
+            .actions
+            .contains(&task_core::BrowserAction::CredentialUse)
+        || registered
+            .credential_policy_id
+            .as_ref()
+            .is_none_or(|id| !policy.effective.credential_policy_ids.contains(id))
+        || !origin_in_domains(&registered.origin, policy.allowed_domains())
+    {
+        return Err(AdapterError::Other(
+            "browser credential approval request denied".into(),
+        ));
+    }
+    let Some(credential) = registered.credential.clone() else {
+        return Err(AdapterError::Other(
+            "registered browser credential reference missing".into(),
+        ));
+    };
+    let trusted_login = credentials
+        .ok_or_else(|| AdapterError::Other("policy_changed".into()))
+        .and_then(|sup| {
+            crate::browser_credential::describe_policy(sup, &credential, &registered.origin)
+                .map_err(|_| AdapterError::Other("policy_changed".into()))
+        })?;
+    if trusted_login.policy_id != credential.policy_id {
+        return Err(AdapterError::Other("policy_changed".into()));
+    }
+    let wait = NewBrowserWait {
+        work_unit_id: registered.work_unit_id.clone(),
+        run_id: run_id.into(),
+        session_id: session_id(task_id, run_id),
+        reason: BrowserWaitReason::WaitingForApproval,
+        origin: registered.origin.clone(),
+        purpose: registered.purpose.clone(),
+        credential_policy_id: registered.credential_policy_id.clone(),
+        credential: Some(credential),
+        operation: Some(OperationIntent {
+            intent_id: format!("intent-{}", registered.wait_id),
+            action: "credential_use".into(),
+            args_digest: None,
+        }),
+        trusted_login: Some(trusted_login),
+        policy_revision: policy.binding.revision,
+        policy_hash: policy.binding.hash.clone(),
+        owner_id: registered.owner_id.clone(),
+        ttl_secs: None,
+        resume_key: format!("approval:{}", registered.wait_id),
+    };
+    sink.browser_wait_open(&wait)
+        .map_err(|_| AdapterError::Other("browser approval wait could not be opened".into()))?;
+    sink.browser_updated(&BrowserRun {
+        task_id,
+        run_id: run_id.into(),
+        session_id: wait.session_id,
+        state: BrowserRunState::WaitingForApproval,
+        live_view_url: None,
+        policy: Some(policy.binding.clone()),
+    });
+    Ok(Some(RunOutcome {
+        terminal: Terminal::Question {
+            text: "Browser credential use approval requested".into(),
+        },
+        exit_code: None,
+    }))
+}
+
 /// A wait the store refused to open: fail closed, the run does not report a question it cannot
 /// resume from.
 fn wait_unopenable() -> Result<RunOutcome, AdapterError> {
@@ -1494,6 +1609,7 @@ async fn run_with_executable_attempt(
                 launcher_uid: *launcher_uid,
             },
             &policy,
+            credentials,
         )
         .await;
     }
@@ -1511,95 +1627,13 @@ async fn run_with_executable_attempt(
         None => None,
     };
     let credential_approved = approved.clone().filter(|_| approved_operation.is_none());
-    if let Some(wait) = &credential_approved
-        && (wait.policy_hash != policy.binding.hash
-            || wait.policy_revision != policy.binding.revision
-            || !policy
-                .effective
-                .actions
-                .contains(&task_core::BrowserAction::CredentialUse)
-            || wait
-                .credential_policy_id
-                .as_ref()
-                .is_none_or(|id| !policy.effective.credential_policy_ids.contains(id))
-            || !origin_in_domains(&wait.origin, policy.allowed_domains())
-            || credentials.is_none())
-    {
-        return Err(AdapterError::Other(
-            "approved browser credential use denied".into(),
-        ));
+    if let Some(wait) = &credential_approved {
+        check_approved_credential(wait, &policy, credentials)?;
     }
-    if let Some(registered) = waits
-        .last()
-        .filter(|w| w.state == BrowserWaitState::Registered)
+    if let Some(outcome) =
+        registered_credential_approval(req.task.id, run_id, &waits, &policy, credentials, sink)?
     {
-        if registered.policy_hash != policy.binding.hash
-            || registered.policy_revision != policy.binding.revision
-            || !policy
-                .effective
-                .actions
-                .contains(&task_core::BrowserAction::CredentialUse)
-            || registered
-                .credential_policy_id
-                .as_ref()
-                .is_none_or(|id| !policy.effective.credential_policy_ids.contains(id))
-            || !origin_in_domains(&registered.origin, policy.allowed_domains())
-        {
-            return Err(AdapterError::Other(
-                "browser credential approval request denied".into(),
-            ));
-        }
-        let Some(credential) = registered.credential.clone() else {
-            return Err(AdapterError::Other(
-                "registered browser credential reference missing".into(),
-            ));
-        };
-        let trusted_login = credentials
-            .ok_or_else(|| AdapterError::Other("policy_changed".into()))
-            .and_then(|sup| {
-                crate::browser_credential::describe_policy(sup, &credential, &registered.origin)
-                    .map_err(|_| AdapterError::Other("policy_changed".into()))
-            })?;
-        if trusted_login.policy_id != credential.policy_id {
-            return Err(AdapterError::Other("policy_changed".into()));
-        }
-        let wait = NewBrowserWait {
-            work_unit_id: registered.work_unit_id.clone(),
-            run_id: run_id.into(),
-            session_id: session_id(req.task.id, run_id),
-            reason: BrowserWaitReason::WaitingForApproval,
-            origin: registered.origin.clone(),
-            purpose: registered.purpose.clone(),
-            credential_policy_id: registered.credential_policy_id.clone(),
-            credential: Some(credential),
-            operation: Some(OperationIntent {
-                intent_id: format!("intent-{}", registered.wait_id),
-                action: "credential_use".into(),
-                args_digest: None,
-            }),
-            trusted_login: Some(trusted_login),
-            policy_revision: policy.binding.revision,
-            policy_hash: policy.binding.hash.clone(),
-            owner_id: registered.owner_id.clone(),
-            ttl_secs: None,
-            resume_key: format!("approval:{}", registered.wait_id),
-        };
-        sink.browser_wait_open(&wait)
-            .map_err(|_| AdapterError::Other("browser approval wait could not be opened".into()))?;
-        sink.browser_updated(&BrowserRun {
-            task_id: req.task.id,
-            run_id: run_id.into(),
-            session_id: wait.session_id,
-            state: BrowserRunState::WaitingForApproval,
-            live_view_url: None,
-            policy: Some(policy.binding),
-        });
-        return Ok(RunOutcome {
-            terminal: Terminal::Question {
-                text: "Browser credential use approval requested".into(),
-            },
-            exit_code: None,
-        });
+        return Ok(outcome);
     }
     let attempt_session = if attempt == 0 {
         run_id.to_string()

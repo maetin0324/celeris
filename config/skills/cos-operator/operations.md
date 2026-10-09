@@ -97,6 +97,14 @@ curl -sS -X POST "$API/api/v1/cos/operations" -H "Authorization: Bearer $CELERIS
 | 役割の置き換えの下見 | `POST /api/v1/llm/models/assignments/roles/<tier>/preview` | model_role.preview | 本文は置き換えと同じ。書き込まない |
 | モデルの上書き | `PUT /api/v1/llm/models/<source>/<model_id>/override` | model_override.put | `{"disabled","tier","alias","note"}`（全て任意） |
 | モデルの上書きの削除 | `DELETE /api/v1/llm/models/<source>/<model_id>/override` | model_override.delete | body なし（無ければ 404） |
+| 組織のノードの作成 | `POST /api/v1/org` | org.create | `{"id","name","kind","parent_id"?,"genre"?,"brief"?,"profile"?,"position"?}`。id の重複は 409 |
+| 組織のノードの更新 | `PATCH /api/v1/org/<id>` | org.update | 変える欄だけ。`profile` は丸ごと差し替え |
+| 組織のノードの削除 | `DELETE /api/v1/org/<id>` | org.delete | body なし。未終了の task か子ノードがあれば 409 |
+| browser 設定の変更 | `PATCH /api/v1/org/<id>/browser-settings` | org.browser_settings | `{"allowed_domains","approval_actions","credential_policy_ids",…}`。grant の無いノードは 422 |
+| skill の mount | `POST /api/v1/org/<id>/skills` | org.skill_mount | `{"skill":"<name>"}` |
+| skill の unmount | `DELETE /api/v1/org/<id>/skills/<skill>` | org.skill_unmount | body なし |
+| skill の作成・更新 | `PUT /api/v1/skills/<name>` | skill.put | `{"skill_md":"…","files":[{"path","content"}]}`。KB の git 書き込みなので外部効果扱い（pending → applied） |
+| skill の削除 | `DELETE /api/v1/skills/<name>` | skill.delete | body なし。mount されていれば 409。外部効果扱い |
 | 定期実行の作成 | `POST /api/v1/cron-jobs` | cron_job.create | `{"name","schedule","timezone","template",…}`（`docs/api/cron-jobs.md`）。名前の重複は 409 |
 | 定期実行の更新 | `PATCH /api/v1/cron-jobs/<id>` | cron_job.update | `<id>` は ULID か name。変える欄だけ。有効/無効は pause・resume で変える |
 | 定期実行の削除 | `DELETE /api/v1/cron-jobs/<id>` | cron_job.delete | body なし。履歴も消え、作った task は残る |

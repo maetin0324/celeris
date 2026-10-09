@@ -5,7 +5,7 @@
 //! source and the discovery hook are test doubles, so nothing outside the test process is touched.
 mod common;
 
-use common::cos_ops::{OPS, cos_bearer, db, op_body, run_domain};
+use common::cos_ops::{OPS, cos_bearer, db, op_body, run_domain, run_external};
 use common::*;
 use serde_json::{Value, json};
 use task_core::model_catalog::{CatalogSource, DiscoveredModel};
@@ -160,4 +160,164 @@ async fn cos_ops_admin_config_llm_models_are_audited() {
         ],
     )
     .await;
+}
+
+const SKILL_MD: &str =
+    "---\nname: rust-review\ndescription: Rust の差分を読む\n---\n\n# rust-review\n";
+
+#[tokio::test]
+async fn cos_ops_admin_config_org_and_skills_are_audited() {
+    let env = admin_env();
+    task_ops::knowledge::init(&env.knowledge_root).expect("knowledge init");
+    use task_core::TaskStore;
+
+    let op = run_domain(
+        &env,
+        "org-create-root",
+        "POST",
+        "/api/v1/org",
+        json!({"id": "secretary", "name": "秘書", "kind": "secretary"}),
+        "org.create",
+    )
+    .await;
+    assert_eq!(op["target_id"], "secretary");
+    run_domain(
+        &env,
+        "org-create",
+        "POST",
+        "/api/v1/org",
+        json!({"id": "coding", "name": "コーディング部", "kind": "department", "parent_id": "secretary"}),
+        "org.create",
+    )
+    .await;
+    run_domain(
+        &env,
+        "org-patch",
+        "PATCH",
+        "/api/v1/org/coding",
+        json!({"brief": "コードを書く"}),
+        "org.update",
+    )
+    .await;
+    assert_eq!(
+        env.store
+            .org_get("coding")
+            .expect("get")
+            .expect("node")
+            .brief,
+        "コードを書く"
+    );
+
+    let op = run_external(
+        &env,
+        "skill-put",
+        "PUT",
+        "/api/v1/skills/rust-review",
+        json!({"skill_md": SKILL_MD}),
+        "skill.put",
+    )
+    .await;
+    assert_eq!(op["result"]["path"], "skills/rust-review/SKILL.md");
+    assert!(
+        env.knowledge_root
+            .join("skills/rust-review/SKILL.md")
+            .exists()
+    );
+
+    run_domain(
+        &env,
+        "skill-mount",
+        "POST",
+        "/api/v1/org/coding/skills",
+        json!({"skill": "rust-review"}),
+        "org.skill_mount",
+    )
+    .await;
+    let node = env.store.org_get("coding").expect("get").expect("node");
+    assert_eq!(node.profile.skills_mounts, vec!["rust-review".to_string()]);
+
+    // A mounted skill cannot be deleted (409), an unknown node is 404, a bad browser grant is 422.
+    expect_rejected(
+        &env,
+        "org-rejected",
+        vec![
+            (
+                "mounted",
+                "DELETE",
+                "/api/v1/skills/rust-review",
+                json!(null),
+                409,
+            ),
+            (
+                "dup",
+                "POST",
+                "/api/v1/org",
+                json!({"id": "coding", "name": "x", "kind": "section"}),
+                409,
+            ),
+            (
+                "missing",
+                "PATCH",
+                "/api/v1/org/nope",
+                json!({"brief": "x"}),
+                404,
+            ),
+            (
+                "no-grant",
+                "PATCH",
+                "/api/v1/org/coding/browser-settings",
+                json!({"allowed_domains": []}),
+                422,
+            ),
+            (
+                "has-children",
+                "DELETE",
+                "/api/v1/org/secretary",
+                json!(null),
+                409,
+            ),
+        ],
+    )
+    .await;
+    assert!(
+        env.knowledge_root
+            .join("skills/rust-review/SKILL.md")
+            .exists()
+    );
+
+    run_domain(
+        &env,
+        "skill-unmount",
+        "DELETE",
+        "/api/v1/org/coding/skills/rust-review",
+        json!(null),
+        "org.skill_unmount",
+    )
+    .await;
+    let op = run_external(
+        &env,
+        "skill-delete",
+        "DELETE",
+        "/api/v1/skills/rust-review",
+        json!(null),
+        "skill.delete",
+    )
+    .await;
+    assert_eq!(op["result"]["deleted"], true);
+    assert!(
+        !env.knowledge_root
+            .join("skills/rust-review/SKILL.md")
+            .exists()
+    );
+
+    run_domain(
+        &env,
+        "org-delete",
+        "DELETE",
+        "/api/v1/org/coding",
+        json!(null),
+        "org.delete",
+    )
+    .await;
+    assert!(env.store.org_get("coding").expect("get").is_none());
 }

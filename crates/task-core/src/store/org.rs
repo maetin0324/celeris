@@ -201,7 +201,19 @@ impl SqliteStore {
     ) -> Result<OrgNode, StoreError> {
         let mut conn = self.lock()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let existing = Self::org_list_tx(&tx)?;
+        let stored = Self::org_upsert_tx(&tx, node, actor)?;
+        tx.commit()?;
+        Ok(stored)
+    }
+
+    /// Upsert `node` in the caller's transaction (CoS `org.*`). `actor` also records the browser
+    /// settings audit row (`org_browser_events`), as `org_upsert_browser_settings` does.
+    pub fn org_upsert_tx(
+        tx: &Connection,
+        node: &OrgNode,
+        actor: Option<&str>,
+    ) -> Result<OrgNode, StoreError> {
+        let existing = Self::org_list_tx(tx)?;
         crate::org::validate_upsert(&existing, node)?;
         let previous = existing.iter().find(|n| n.id == node.id);
         let mut stored = node.clone();
@@ -243,7 +255,6 @@ impl SqliteStore {
                 ],
             )?;
         }
-        tx.commit()?;
         Ok(stored)
     }
 
@@ -283,6 +294,16 @@ impl SqliteStore {
     pub(super) fn org_delete_impl(&self, id: &str) -> Result<bool, StoreError> {
         let mut conn = self.lock()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let deleted = Self::org_delete_tx(&tx, id)?;
+        if deleted {
+            tx.commit()?;
+        }
+        Ok(deleted)
+    }
+
+    /// Delete org node `id` in the caller's transaction (CoS `org.delete`). Same refusals as
+    /// `org_delete`: `Ok(false)` when absent, `InUse` with open tasks or child nodes.
+    pub fn org_delete_tx(tx: &Connection, id: &str) -> Result<bool, StoreError> {
         let exists: bool = tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM org_nodes WHERE id = ?1)",
             params![id],
@@ -320,7 +341,6 @@ impl SqliteStore {
             });
         }
         tx.execute("DELETE FROM org_nodes WHERE id = ?1", params![id])?;
-        tx.commit()?;
         Ok(true)
     }
 }

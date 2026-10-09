@@ -25,6 +25,7 @@ use task_core::{OrgNode, TaskStore};
 use task_ops::knowledge::{self as ops_kb, SkillError};
 use time::OffsetDateTime;
 
+use crate::cos::operations::{Applied, OperationAudit};
 use crate::handlers::{ApiResult, Params, json_response, load_org_node, no_query, read_json};
 use crate::knowledge::{require_kb, root_of};
 use crate::middleware::require_admin;
@@ -260,26 +261,67 @@ async fn put_skill(
     let request: SkillPutBody = read_json(body, false).await?;
     let root = root_of(&state)?;
     let result = state
-        .blocking(move |_| {
-            require_kb(&root)?;
-            let files: Vec<(String, String)> = request
-                .files
-                .into_iter()
-                .map(|f| (f.path, f.content))
-                .collect();
-            // GUI からの書き込みは人の操作だが、`source` は「どこから来たか」を frontmatter に残す
-            // ADR-0056 D3 の趣旨（MCP は `mcp:<client_id>`）に合わせ、GUI は `gui` を残す（冪等: 既に
-            // `source:` があれば `skills_put` が触らない）。
-            match ops_kb::skills_put(&root, &name, &request.skill_md, &files, Some("gui")) {
-                Ok(path) => {
-                    tracing::info!(who = "admin", op = "skill_put", name = %name, "admin: skill written");
-                    Ok(SkillPutResult { path })
-                }
-                Err(e) => Err(skill_error_to_problem(e)),
-            }
-        })
+        .blocking(move |store| put_skill_op(store, &root, &name, request, None)?.direct())
         .await?;
     Ok(json_response(StatusCode::OK, &result))
+}
+
+/// The KB write of a skill is a git commit, so CoS runs it as an external-effect operation (C, as
+/// `knowledge.page_put`): a failure the KB reports as invalid input is `rejected`; an I/O failure
+/// leaves the record pending for remediation.
+fn skill_effect<T: Serialize>(
+    result: Result<T, SkillError>,
+) -> Result<Result<serde_json::Value, ApiProblem>, ApiProblem> {
+    match result {
+        Ok(value) => serde_json::to_value(value)
+            .map(Ok)
+            .map_err(|e| ApiProblem::internal(e.to_string())),
+        Err(SkillError::Failed(detail)) => Err(ApiProblem::internal(detail)),
+        Err(other) => Ok(Err(skill_error_to_problem(other))),
+    }
+}
+
+/// `PUT /skills/{name}`, shared by the handler and CoS (`skill.put`).
+pub(crate) fn put_skill_op(
+    store: &task_core::store::SqliteStore,
+    root: &std::path::Path,
+    name: &str,
+    request: SkillPutBody,
+    audit: Option<&OperationAudit>,
+) -> Result<Applied<SkillPutResult>, ApiProblem> {
+    let files: Vec<(String, String)> = request
+        .files
+        .into_iter()
+        .map(|f| (f.path, f.content))
+        .collect();
+    let Some(audit) = audit else {
+        require_kb(root)?;
+        // GUI からの書き込みは人の操作だが、`source` は「どこから来たか」を frontmatter に残す
+        // ADR-0056 D3 の趣旨（MCP は `mcp:<client_id>`）に合わせ、GUI は `gui` を残す（冪等: 既に
+        // `source:` があれば `skills_put` が触らない）。
+        return match ops_kb::skills_put(root, name, &request.skill_md, &files, Some("gui")) {
+            Ok(path) => {
+                tracing::info!(who = "admin", op = "skill_put", name = %name, "admin: skill written");
+                Ok(Applied::Direct(SkillPutResult { path }))
+            }
+            Err(e) => Err(skill_error_to_problem(e)),
+        };
+    };
+    require_kb(root).map_err(|p| audit.reject(store, "skill", name, p))?;
+    let operation = audit.external(
+        store,
+        "skill",
+        name,
+        "skill.put",
+        OffsetDateTime::now_utc(),
+        || {
+            skill_effect(
+                ops_kb::skills_put(root, name, &request.skill_md, &files, Some("cos"))
+                    .map(|path| SkillPutResult { path }),
+            )
+        },
+    )?;
+    Ok(Applied::Audited(Box::new(operation)))
 }
 
 // ---------------------------------------------------------------------------
@@ -296,26 +338,56 @@ async fn delete_skill(
     require_admin(&state, &headers)?;
     let root = root_of(&state)?;
     state
-        .blocking(move |store| {
-            require_kb(&root)?;
-            if ops_kb::skills_get(&root, &name).is_none() {
-                return Err(skill_not_found(&name));
-            }
-            let nodes = store.org_list().map_err(store_problem)?;
-            let mounted_by = mounted_by_map(&nodes).remove(&name).unwrap_or_default();
-            if !mounted_by.is_empty() {
-                return Err(skill_mounted(&name, &mounted_by));
-            }
-            match ops_kb::skills_delete(&root, &name) {
-                Ok(_) => {
-                    tracing::info!(who = "admin", op = "skill_delete", name = %name, "admin: skill deleted");
-                    Ok(())
-                }
-                Err(e) => Err(skill_error_to_problem(e)),
-            }
-        })
+        .blocking(move |store| delete_skill_op(store, &root, &name, None)?.direct())
         .await?;
     Ok(StatusCode::NO_CONTENT.into_response())
+}
+
+/// `DELETE /skills/{name}`, shared by the handler and CoS (`skill.delete`). A missing skill is 404
+/// and a mounted one 409, refused before the KB is touched.
+pub(crate) fn delete_skill_op(
+    store: &task_core::store::SqliteStore,
+    root: &std::path::Path,
+    name: &str,
+    audit: Option<&OperationAudit>,
+) -> Result<Applied<()>, ApiProblem> {
+    let checked = (|| {
+        require_kb(root)?;
+        if ops_kb::skills_get(root, name).is_none() {
+            return Err(skill_not_found(name));
+        }
+        let nodes = store.org_list().map_err(store_problem)?;
+        let mounted_by = mounted_by_map(&nodes).remove(name).unwrap_or_default();
+        if !mounted_by.is_empty() {
+            return Err(skill_mounted(name, &mounted_by));
+        }
+        Ok(())
+    })();
+    let Some(audit) = audit else {
+        checked?;
+        return match ops_kb::skills_delete(root, name) {
+            Ok(_) => {
+                tracing::info!(who = "admin", op = "skill_delete", name = %name, "admin: skill deleted");
+                Ok(Applied::Direct(()))
+            }
+            Err(e) => Err(skill_error_to_problem(e)),
+        };
+    };
+    checked.map_err(|p| audit.reject(store, "skill", name, p))?;
+    let operation = audit.external(
+        store,
+        "skill",
+        name,
+        "skill.delete",
+        OffsetDateTime::now_utc(),
+        || {
+            skill_effect(
+                ops_kb::skills_delete(root, name)
+                    .map(|_| serde_json::json!({"name": name, "deleted": true})),
+            )
+        },
+    )?;
+    Ok(Applied::Audited(Box::new(operation)))
 }
 
 // ---------------------------------------------------------------------------
@@ -335,14 +407,12 @@ async fn mount_skill(
     let skill = request.skill;
     let skill_for_log = skill.clone();
     let node = state
-        .blocking(move |store| -> Result<OrgNode, ApiProblem> {
-            let mut node = load_org_node(store, &id)?;
-            ops_kb::set_skill_mount(&mut node.profile.skills_mounts, &skill, true)
-                .map_err(skill_error_to_problem)?;
-            node.updated_at = OffsetDateTime::now_utc();
-            store.org_upsert(&node).map_err(store_problem)
+        .blocking(move |store| {
+            let write = plan_skill_mount(store, &id, &skill, true)?;
+            crate::handlers::org::org_commit(store, write, "org.skill_mount", None)?.direct()
         })
-        .await?;
+        .await?
+        .ok_or_else(|| ApiProblem::internal("skill mount returned no node"))?;
     tracing::info!(who = "admin", op = "org_skill_mount", org_id = %node.id, skill = %skill_for_log, "admin: skill mounted");
     Ok(json_response(StatusCode::OK, &node))
 }
@@ -356,14 +426,30 @@ async fn unmount_skill(
     no_query(&raw)?;
     require_admin(&state, &headers)?;
     let node = state
-        .blocking(move |store| -> Result<OrgNode, ApiProblem> {
-            let mut node = load_org_node(store, &id)?;
-            ops_kb::set_skill_mount(&mut node.profile.skills_mounts, &skill, false)
-                .map_err(skill_error_to_problem)?;
-            node.updated_at = OffsetDateTime::now_utc();
-            store.org_upsert(&node).map_err(store_problem)
+        .blocking(move |store| {
+            let write = plan_skill_mount(store, &id, &skill, false)?;
+            crate::handlers::org::org_commit(store, write, "org.skill_unmount", None)?.direct()
         })
-        .await?;
+        .await?
+        .ok_or_else(|| ApiProblem::internal("skill unmount returned no node"))?;
     tracing::info!(who = "admin", op = "org_skill_unmount", org_id = %node.id, "admin: skill unmounted");
     Ok(json_response(StatusCode::OK, &node))
+}
+
+/// `POST /org/{id}/skills` / `DELETE /org/{id}/skills/{skill}`: the node with `skill` mounted or
+/// unmounted (`task_ops::knowledge::set_skill_mount`, as celeris-mcp).
+pub(crate) fn plan_skill_mount(
+    store: &task_core::store::SqliteStore,
+    id: &str,
+    skill: &str,
+    mount: bool,
+) -> Result<crate::handlers::org::OrgWrite, ApiProblem> {
+    let mut node = load_org_node(store, id)?;
+    ops_kb::set_skill_mount(&mut node.profile.skills_mounts, skill, mount)
+        .map_err(skill_error_to_problem)?;
+    node.updated_at = OffsetDateTime::now_utc();
+    Ok(crate::handlers::org::OrgWrite::Upsert {
+        node,
+        browser: false,
+    })
 }

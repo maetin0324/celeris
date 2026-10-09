@@ -47,6 +47,22 @@ pub(crate) const ALLOWED: &[(&str, &str, &str)] = &[
         "/api/v1/llm/models/{source}/{model_id}/override",
         "model_override.delete",
     ),
+    ("POST", "/api/v1/org", "org.create"),
+    ("PATCH", "/api/v1/org/{id}", "org.update"),
+    ("DELETE", "/api/v1/org/{id}", "org.delete"),
+    (
+        "PATCH",
+        "/api/v1/org/{id}/browser-settings",
+        "org.browser_settings",
+    ),
+    ("POST", "/api/v1/org/{id}/skills", "org.skill_mount"),
+    (
+        "DELETE",
+        "/api/v1/org/{id}/skills/{skill}",
+        "org.skill_unmount",
+    ),
+    ("PUT", "/api/v1/skills/{name}", "skill.put"),
+    ("DELETE", "/api/v1/skills/{name}", "skill.delete"),
     ("POST", "/api/v1/cron-jobs", "cron_job.create"),
     ("PATCH", "/api/v1/cron-jobs/{id}", "cron_job.update"),
     ("DELETE", "/api/v1/cron-jobs/{id}", "cron_job.delete"),
@@ -107,12 +123,6 @@ pub(crate) const PENDING: &[(&str, &str)] = &[
     ("PUT", "/api/v1/clusters/{id}/settings"),
     ("POST", "/api/v1/llm/models/discover"),
     ("POST", "/api/v1/notify/test"),
-    ("POST", "/api/v1/org"),
-    ("DELETE", "/api/v1/org/{id}"),
-    ("PATCH", "/api/v1/org/{id}"),
-    ("PATCH", "/api/v1/org/{id}/browser-settings"),
-    ("POST", "/api/v1/org/{id}/skills"),
-    ("DELETE", "/api/v1/org/{id}/skills/{skill}"),
     ("POST", "/api/v1/projects/{id}/repos"),
     ("POST", "/api/v1/providers"),
     ("DELETE", "/api/v1/providers/{id}"),
@@ -123,12 +133,12 @@ pub(crate) const PENDING: &[(&str, &str)] = &[
     ("POST", "/api/v1/replay"),
     ("DELETE", "/api/v1/repos/{id}"),
     ("PATCH", "/api/v1/repos/{id}"),
-    ("DELETE", "/api/v1/skills/{name}"),
-    ("PUT", "/api/v1/skills/{name}"),
 ];
 
 const ASSIGNMENT: &str = "/api/v1/llm/models/assignments/{source}/{tier}";
 const ROLE: &str = "/api/v1/llm/models/assignments/roles/{tier}";
+const SKILL: &str = "/api/v1/skills/{name}";
+const UNMOUNT: &str = "/api/v1/org/{id}/skills/{skill}";
 const OVERRIDE: &str = "/api/v1/llm/models/{source}/{model_id}/override";
 
 fn to_value<T: serde::Serialize>(value: &T) -> Result<Value, ApiProblem> {
@@ -152,6 +162,23 @@ fn require_empty_body(
         path,
         unprocessable("validation", "request.body must be empty"),
     ))
+}
+
+/// A body the route reads as optional JSON: `null` is `{}`.
+fn decode_null(body: Value) -> Value {
+    if body.is_null() {
+        serde_json::json!({})
+    } else {
+        body
+    }
+}
+
+fn empty_body(body: &Value) -> Result<(), ApiProblem> {
+    if body.is_null() || *body == serde_json::json!({}) {
+        Ok(())
+    } else {
+        Err(unprocessable("validation", "request.body must be empty"))
+    }
 }
 
 pub(crate) fn dispatch(
@@ -222,6 +249,70 @@ pub(crate) fn dispatch(
                 &path_param(OVERRIDE, path, "{model_id}"),
                 Some(audit),
             )?)
+        }
+        "org.create"
+        | "org.update"
+        | "org.delete"
+        | "org.browser_settings"
+        | "org.skill_mount"
+        | "org.skill_unmount" => {
+            use crate::handlers::org;
+            let id = matched.id.clone().unwrap_or_default();
+            let planned = match matched.action {
+                "org.create" => serde_json::from_value(body)
+                    .map_err(|e| unprocessable("validation", format!("request.body: {e}")))
+                    .and_then(|input| org::plan_create(store, &env.genres, input)),
+                "org.update" => org::plan_patch(store, &env.genres, &id, decode_null(body)),
+                "org.browser_settings" => {
+                    org::plan_browser_settings(store, &env.genres, &id, decode_null(body))
+                }
+                "org.skill_mount" => {
+                    serde_json::from_value::<crate::skills::OrgSkillMountBody>(body)
+                        .map_err(|e| unprocessable("validation", format!("request.body: {e}")))
+                        .and_then(|input| {
+                            crate::skills::plan_skill_mount(store, &id, &input.skill, true)
+                        })
+                }
+                "org.skill_unmount" => empty_body(&body).and_then(|()| {
+                    crate::skills::plan_skill_mount(
+                        store,
+                        &id,
+                        &path_param(UNMOUNT, path, "{skill}"),
+                        false,
+                    )
+                }),
+                _ => empty_body(&body).and_then(|()| {
+                    crate::handlers::load_org_node(store, &id)?;
+                    Ok(org::OrgWrite::Delete(id.clone()))
+                }),
+            };
+            let write = planned.map_err(|p| audit.reject(store, "org", &id, p))?;
+            audited(org::org_commit(store, write, matched.action, Some(audit))?)
+        }
+        "skill.put" | "skill.delete" => {
+            let name = path_param(SKILL, path, "{name}");
+            let root = env
+                .kb_root
+                .clone()
+                .map_err(|p| audit.reject(store, "skill", &name, p))?;
+            if matched.action == "skill.put" {
+                let input = serde_json::from_value(body).map_err(decode)?;
+                audited(crate::skills::put_skill_op(
+                    store,
+                    &root,
+                    &name,
+                    input,
+                    Some(audit),
+                )?)
+            } else {
+                require_empty_body(store, audit, "skill", path, &body)?;
+                audited(crate::skills::delete_skill_op(
+                    store,
+                    &root,
+                    &name,
+                    Some(audit),
+                )?)
+            }
         }
         "cron_job.create" => {
             let input = serde_json::from_value(body).map_err(decode)?;

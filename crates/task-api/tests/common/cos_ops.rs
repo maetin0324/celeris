@@ -183,3 +183,43 @@ pub fn audit_events(env: &TestEnv, operation_id: &str) -> Vec<Value> {
         .filter(|event| event["type"] == "cos_operation" && event["operation_id"] == operation_id)
         .collect()
 }
+
+/// One external-effect (C) operation: the direct call is 422, the envelope settles `applied` with
+/// a `pending` then `applied` audit event, and the same request resent returns the recorded
+/// operation (the caller checks its effect ran once).
+pub async fn run_external(
+    env: &TestEnv,
+    key: &str,
+    method: &str,
+    path: &str,
+    body: Value,
+    action: &str,
+) -> Value {
+    let app = env.router();
+    let (_, run, bearer) = cos_bearer(env, key);
+    let headers = [("authorization", bearer.as_str())];
+    let direct = match method {
+        "POST" => send(&app, post_json_with(path, &body, &headers)).await,
+        "PATCH" => send(&app, patch_json_with(path, &body, &headers)).await,
+        "PUT" => send(&app, put_json_with(path, &body, &headers)).await,
+        "DELETE" => send(&app, delete_with(path, &headers)).await,
+        other => panic!("unsupported {other}"),
+    };
+    assert_problem(&direct, 422, "cos_audit_context_required");
+    let envelope = op_body(key, method, path, body);
+    let resp = send(&app, post_json_with(OPS, &envelope, &headers)).await;
+    assert_eq!(resp.status.as_u16(), 200, "{key}: {}", resp.text());
+    let op = resp.json()["operation"].clone();
+    assert_eq!(op["state"], "applied", "{key}: {op}");
+    assert_eq!(op["action"], action, "{key}");
+    assert_eq!(op["run_id"], run.as_str());
+    let states: Vec<Value> = audit_events(env, op["id"].as_str().expect("id"))
+        .into_iter()
+        .map(|e| e["state"].clone())
+        .collect();
+    assert_eq!(states, vec![json!("pending"), json!("applied")], "{key}");
+    let again = send(&app, post_json_with(OPS, &envelope, &headers)).await;
+    assert_eq!(again.status.as_u16(), 200, "{key} resend: {}", again.text());
+    assert_eq!(again.json()["operation"]["id"], op["id"], "{key} resend");
+    op
+}

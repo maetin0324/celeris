@@ -69,3 +69,7 @@ ADR-0112 の実測 conformance と ADR-0102 D6 の起動前拒否も維持する
 - ADR-0115 の launcher、controller、lifecycle の実 process 攻撃試験結果を記録してから有効化を判断する。A13 の broker `peer_uid_mismatch` と ptrace 拒否は別の判定として記録する。
 - 証跡: 試験コマンド・exit code・ptrace 拒否の実出力・許可/拒否の対応表・host log は親 task 01M3VFQZ2TX3W0KTDQHKCAVJR6 の成果物 `prod-admission-release-evidence.md`・`launcher-host-run.log` に記録済み（リポジトリ外）。実 session の表 `ADMISSION[real-session]` は上記「D-L 既知の未実証」のとおり後続 task に残す。
 - 本番への昇格と設定変更は、統合済み commit と試験証拠に対する人の承認を経て**人が行う**。エージェントは昇格しない。この ADR、owner 検査、launcher session 証明の実装、ptrace 拒否の実証だけでは本番を有効化しない。
+
+## 付記（2026-10-09、launcher CredentialUse の範囲決定）
+
+人は D-L の `LauncherSessionProof` 検証成功、daemon と異なる namespace owner、`isolation_ok` をすべて満たす launcher session に限って `CredentialUse`（`CredentialInjection`）を許可すると決定した。証明の欠落・不一致・採取失敗は接続前に拒否し、credentiald は `admit_attested` で実 process を再検査する。`IdentityRestore` はこの決定では解放しない。host の必須モード stutter 3 回と統合後 HEAD の `ADMISSION[real-session]` 再取得は未完了の運用実証として扱う。詳細は [2026-10-09 の決定](2026-10-09-browser-launcher-credential-release.md)。

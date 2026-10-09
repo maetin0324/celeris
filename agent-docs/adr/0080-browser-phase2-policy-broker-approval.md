@@ -224,3 +224,7 @@ waits が task policy の保存欄と API wiring を担当し、policy はその
 - 認証後の区間: 同じ session の harness policy から snapshot・gettext・screenshot・download を外し、Live View の URL も出さない（D3）。cleanup は supervisor の credential 区間 policy に含まれる `close` で行う。
 - 実機未検証の境界: `auth login` の lease 参照 flag、plugin 設定の形、daemon 経由の FD 3 継承は fake substrate でしか確かめていない。実 agent-browser で確認するまで、fake の成功を実機の成功として扱わない。
 - 端から端の試験は `tests/e2e` ではなく `crates/task-api/tests/browser_e2e.rs` に置いた。API の test harness と broker の実 IPC を同じ process で使うためである。
+
+## 付記（2026-10-09、launcher CredentialUse 解放決定）
+
+launcher runtime における `CredentialUse` は ADR-0138 D-L の launcher session 証明検証成功・owner が daemon でない・`isolation_ok` の全条件を満たす場合だけ許可する。承認、短い lease、origin/policy binding、認証中の観測停止、secret 非露出の既存規則は維持し、条件不成立時は fail closed とする。`IdentityRestore` は今回解放しない。詳細は [2026-10-09 の決定](2026-10-09-browser-launcher-credential-release.md)。

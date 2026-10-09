@@ -3533,13 +3533,34 @@ registry は `crates/task-api/src/cos/ops/{tasks,decisions,projects,admin,surfac
 | admin | `POST /cron-jobs/{id}/resume` | `cron_job.resume` |
 | admin | `POST /cron-jobs/{id}/run` | `cron_job.run`（外部効果の手順。`pending` を先に記録して 1 回だけ実行し `applied`。同じ key の再送は記録を返し再実行しない） |
 | surface | `POST /chat/attachments/{id}/references` | `attachment.reference` |
+| surface | `POST /chat/threads` | `chat.thread_create` |
+| surface | `PATCH /chat/threads/{t}` | `chat.thread_update` |
+| surface | `POST /chat/threads/{t}/messages` | `chat.message_post`（CoS の書き込みは完了済みの `assistant` 発言として入り待ち行列に入らないので CoS run を起こさない。`mode=interrupt`・`resume_queue=true` は 422 `validation`） |
+| surface | `DELETE /chat/threads/{t}/messages/{m}` | `chat.message_cancel` |
+| surface | `POST /chat/threads/{t}/stop` | `chat.run_stop` |
+| surface | `POST /chat/threads/{t}/resume-queue` | `chat.queue_resume` |
+| surface | `POST /chat/threads/{t}/attachments` | `chat.attachment_upload`（外部効果: file。本文は `{"client_upload_id","name","content_base64"}`、記録に中身は残さない） |
+| surface | `DELETE /chat/attachments/{a}` | `chat.attachment_delete`（外部効果: file） |
+| surface | `POST /console/new-conversation` | `console.new_conversation`（本文 `{"scope"}`。route の `?scope=` と同じ値） |
+| surface | `POST /org/{id}/messages` | `org.message`（外部効果: run の起動。`{id}`=cos は 422 `cos_self_chain`） |
+| surface | `POST /tasks/{id}/artifacts/promote` | `artifact.promote`（外部効果: docs git） |
+| surface | `PUT /browser/site-policies/{policy_id}` | `browser.site_policy_put`（外部効果） |
+| surface | `DELETE /browser/site-policies/{policy_id}` | `browser.site_policy_delete`（外部効果） |
+| surface | `PUT /tasks/{id}/browser/policy` | `browser.task_policy_put`（外部効果） |
+| surface | `POST /tasks/{id}/browser/requests` | `browser.request_open`（外部効果。credential・credential_policy_id・trusted_login を含む待ちは 422 `browser_credential_attestation`） |
+| surface | `POST /tasks/{id}/browser/control/{run}/{session}` | `browser.control`（外部効果。owner session の署名付き assertion・origin・lease の検査は route と同じ。記録では assertion を伏せる） |
+| surface | `POST /tasks/{id}/browser/control/{run}/{session}/disconnect` | `browser.control_disconnect`（外部効果。assertion 必須） |
+| surface | `POST /tasks/{id}/browser/control/{run}/{session}/agent/begin` | `browser.agent_begin`（外部効果。daemon 認証の構成だけ） |
+| surface | `POST /tasks/{id}/browser/control/{run}/{session}/agent/end` | `browser.agent_end`（外部効果） |
+| surface | `POST /tasks/{id}/browser/control/{run}/{session}/auth-section` | `browser.auth_section`（外部効果） |
+| surface | `POST /tasks/{id}/browser/live/{run}/{session}/events` | `browser.live_event`（外部効果。run が動いている間だけ） |
 
 tasks の実行計画初回採用 `POST /api/v1/tasks/{id}/execution-plan`（`execution.plan_adopt`）と既存計画への late tree adoption `POST /api/v1/tasks/{id}/tree/adopt`（`tree.adopt`）も登録済み。両方とも domain write と operation audit を同一 transaction で commit する。CoS credential での `celerisctl execution plan set` と `celerisctl tree adopt` はこれらの operation 経由で送る。CoS credential の `celerisctl cron create|update|pause|resume|run` は `cron_job.*` を送る。`celerisctl models discover|assign|unassign` は `model_catalog.discover`・`model_assignment.*`、`celerisctl replay`（`--check`/`--apply` なし）は `daemon.replay`、`celerisctl approve|reject|accept|cancel|rereview` は `task.*` を送る。daemon channel（reload・check・account 退避・notify test）・発見・release 昇格・skill の KB 書き込みも外部効果の手順で記録する。task の取り込み（integrate）と PR merge、案件の文書、KB ページの編集、定期実行の手動実行は外部効果の手順（ADR 2026-10-09-cos-operations-external-effects: pending を先に記録し 1 回だけ実行、再送は再実行しない、変更前の拒否は `rejected`、結果不明は pending のまま起動時に `needs_remediation`）で記録する。
 
 除外（422 `cos_operation_not_allowed`、detail に理由コード）: 秘密の値を扱う操作（`secret_operations`。`/secrets/*`・
 `/accounts/{id}/login*`・`/clusters/{id}/connect*`）、browser の credential/attestation 系
 （`browser_credential_attestation`）、`/console/instruct`（`console_instruction_chain`）、`/cos/*`（`recursive_cos`）、
-ADR-0079 で撤去済みの入口（`removed_by_adr_0079`）。登録待ちは detail が `pending in <領域>` の 422。
+ADR-0079 で撤去済みの入口（`removed_by_adr_0079`）。surface の登録で `PENDING` は全領域で空になった。
 path の placeholder は 1 segment（英数字・`-`・`_`・`.`・`:`）に一致する。
 
 外部 URL、任意 proxy、`/cos` 以下の再帰操作、未登録 path は 422 で拒否理由付き監査 event に残す。`reason`・`policy_version`・`idempotency_key` は必須（reason は空白不可）。`expected_revision` は対象が revision を持つ操作で必須。idempotency key は thread 内一意で、同じ key の異なる request hash は 409。適用結果・`cos_operations` 行・監査 envelope event・chat card は同じ transaction に記録する。checkpoint は credential の run/thread に限り、run に配送済みの `through_seq` 以下、本文 32 KiB 以下。現在の checkpoint revision と `expected_summary_through_seq` が異なる場合は 409。

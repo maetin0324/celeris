@@ -252,10 +252,13 @@ pub enum BrowserRuntimeKind {
     /// 専用 host user の launcher（ADR-0115）に Unix socket で頼む。daemon は CDP pipe も
     /// 機密 state も持たず、receipt と非機密の観測だけを受ける。不達は fail closed。
     /// `refuse_test_loopback` が真（本番の config・DB を使う daemon、または判定不能）なら、試験専用
-    /// loopback 許可を申告した launcher を使わない（付記 E2）。
+    /// loopback 許可を申告した launcher を使わない（付記 E2）。`launcher_uid` は設定上の launcher の
+    /// host UID。CredentialUse を要求する run は、これが無いか daemon の UID と同じなら launcher に
+    /// 接続せず拒否する（ADR 2026-10-09 付記「接続前 gate」）。
     Launcher {
         socket: PathBuf,
         refuse_test_loopback: bool,
+        launcher_uid: Option<u32>,
     },
 }
 
@@ -1370,6 +1373,7 @@ async fn run_with_executable_attempt(
     if let BrowserRuntimeKind::Launcher {
         socket,
         refuse_test_loopback,
+        launcher_uid,
     } = &isolation.runtime
     {
         return launcher_run::run(
@@ -1378,8 +1382,11 @@ async fn run_with_executable_attempt(
             run_id,
             limits,
             sink,
-            socket,
-            *refuse_test_loopback,
+            launcher_run::LauncherTarget {
+                socket,
+                refuse_test_loopback: *refuse_test_loopback,
+                launcher_uid: *launcher_uid,
+            },
             &policy,
         )
         .await;

@@ -103,3 +103,18 @@ updated: 2026-10-09
 - `CELERIS_USERNS_TESTS=1` の opt-in 試験（実 launcher 経由の launcher_credential_ 試験）を後続 WU で追加する。現状の 23 件は全て決定的な模擬であり、実 process の証明は未検査。
 - ADR 2026-10-09 の実装付記に韓国語の混入（「인증」）があるので直す（本 WU は ADR を変更していない）。
 - `check-architecture-map.py` の 3 path を直す別 WU を起票する（既存不具合）。
+
+## preconnect-gate（接続前 gate、2026-10-09）
+
+final review（criterion 5: 拒否が launcher 接続の後）への対応。人の決定 preconnect-meaning = a（二段 gate）に従った。ADR の「付記 2026-10-09: 接続前 gate」に境界を記した。
+
+- `browser_launcher_run.rs`: `open_launcher_session` に、接続前 gate（`preconnect_credential_gate`: launcher socket・`launcher_uid` が設定され 0/daemon UID でない・credentiald 制御経路・wait store）→ `start_guarded` → 証明依存 gate（不成立は `runtime.stop()` 後に拒否）→ credentiald 登録（失敗も stop 後に拒否）を順に置いた。shim の `credential_use` 有効化・Authenticate・harness 起動はこの後。`refuse_confidential` は `credential_demand` + `open_launcher_session` に置換。CredentialUse を求めない run は素通し。
+- 設定: `[browser] launcher_uid`（celeris config）→ `BrowserRuntimeKind::Launcher.launcher_uid`。証明の launcher UID はこの値との一致も要求する。運用手順 `docs/ops/browser-prod-enablement.md` に追記。
+- 試験（短い TMPDIR で実行。既定の長い run TMPDIR では偽 launcher の socket path が SUN_LEN を超え、既存の fake_launcher 試験も同様に落ちる）:
+  - `TMPDIR=/tmp/lcp.* cargo test -p task-worker --lib launcher_credential_` → 24 passed / 0 failed（新規 `launcher_credential_preconnect_` 6 件: 接続前不成立 5 通りで launcher 接続数 0・従来文言、admission 不能 wait で接続数 0、証明依存の不成立で session stop・credentiald control socket 接続数 0、条件成立で接続、非 CredentialUse run は従来どおり、demand 判定）
+  - `cargo test -p task-worker --lib browser_launcher` → 41 passed
+  - `cargo test -p celeris browser_runtime` → 5 passed（`launcher_uid` 配線試験 1 件追加）
+  - `cargo test -p celeris-credentiald launcher_credential_` → 5 passed
+  - `cargo clippy --workspace -- -D warnings` → exit 0
+
+未解決: 同一 process の偽 launcher では responder UID = daemon UID になり、admission 成立 → credentiald 登録の経路は合成試験では通せない（host 実証で確認する）。本番 config に `[browser] launcher_uid` を入れるのは運用セッション（人）の手順。

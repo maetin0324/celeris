@@ -1727,3 +1727,143 @@ fn launcher_credential_request_keeps_the_secret_out_of_wait_events_and_state() {
     assert!(!outcome_text.contains(SECRET), "no secret in the outcome");
     assert_eq!(sink.opened()[0].credential, None);
 }
+
+// ---- 2026-10-09 本番不具合: launcher 経路の shim file 二重作成（EEXIST） ----
+
+/// control gate を返し、browser 更新を記録するだけの偽 sink（launcher 経路の `run` 用）。
+#[derive(Default)]
+struct LauncherRunSink {
+    browsers: Mutex<Vec<BrowserRun>>,
+}
+
+impl EventSink for LauncherRunSink {
+    fn browser_control_gate(
+        &self,
+        _run_id: &str,
+        _session_id: &str,
+    ) -> Option<Arc<dyn crate::browser_live::ControlGate>> {
+        Some(Arc::new(InMemoryGate::new()))
+    }
+    fn browser_updated(&self, browser: &BrowserRun) {
+        self.browsers.lock().expect("lock").push(browser.clone());
+    }
+    fn progress(&self, _msg: &str) {}
+    fn artifact(&self, _artifact: &task_core::ArtifactRef) {}
+}
+
+fn launcher_run_request(workspace: &Path) -> RunRequest {
+    let mut task = crate::protocol::tests::sample_task();
+    task.skills = vec![task_core::browser::BROWSER_SKILL.into()];
+    RunRequest {
+        protocol: crate::protocol::PROTOCOL_VERSION,
+        task,
+        workspace: workspace.into(),
+        work_dir: None,
+        artifacts_dir: workspace.join("artifacts"),
+        context: Default::default(),
+        cargo_target_dir: None,
+    }
+}
+
+/// 本番 2026-10-09（task 01M4GYJ3XGJNWZQDF35F1MDE0H）: launcher session が起動した直後、`run` が
+/// shim file を fail-closed で先に書いたあと admission の結果で**もう一度 `create_new` で**書き、
+/// `celeris-browser.py` の作成が `File exists (os error 17)` で失敗して harness に届かなかった。
+/// `run` を偽 launcher と fake harness で最後まで通し、harness が走り、session が stop され、
+/// config は fail closed のまま（admission 無し）で、置換用の一時 file も残らないことを見る。
+#[tokio::test]
+async fn launcher_run_creates_shim_files_once_and_reaches_the_harness() {
+    let launcher = fake_launcher(good_facts());
+    let dir = tempfile::tempdir().expect("tempdir");
+    let policy = prepared("example.com");
+    let sink = LauncherRunSink::default();
+    let outcome = run(
+        Arc::new(crate::fake::FakeAdapter::default()),
+        launcher_run_request(dir.path()),
+        "run-eexist",
+        RunLimits {
+            wall_clock: Duration::from_secs(60),
+            idle_timeout: Duration::from_secs(60),
+            kill_grace: Duration::from_secs(1),
+        },
+        &sink,
+        LauncherTarget {
+            socket: &launcher.sock,
+            refuse_test_loopback: false,
+            launcher_uid: None,
+        },
+        &policy,
+    )
+    .await
+    .expect("launcher run reaches the harness");
+    assert!(
+        matches!(outcome.terminal, crate::Terminal::Done { .. }),
+        "{:?}",
+        outcome.terminal
+    );
+    assert_eq!(launcher.log.lock().expect("lock").started, 1);
+    assert_eq!(wait_stopped(&launcher.log), 1);
+    let runtime_dir = dir.path().join("runs").join("run-eexist").join("browser");
+    let config: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(runtime_dir.join("config.json")).expect("config"))
+            .expect("json");
+    assert_eq!(config["credential_use"], false);
+    assert!(!runtime_dir.join("config.next").exists());
+    let states: Vec<_> = sink
+        .browsers
+        .lock()
+        .expect("lock")
+        .iter()
+        .map(|b| b.state)
+        .collect();
+    assert_eq!(
+        states,
+        vec![BrowserRunState::Running, BrowserRunState::Completed]
+    );
+}
+
+/// admission が通った run の config 置換: 先に書いた fail-closed の config を `config.json` だけ
+/// 置き換え（shim・policy は書き直さない）、credential の flag が立つ。shim file の新規作成は
+/// run ごとに一度だけで、二度目は `create_new` で失敗する（だから置換は別の段にする）。
+#[test]
+fn launcher_admitted_shim_config_replaces_only_the_config() {
+    let policy = shim_policy(
+        "example.com",
+        &[
+            task_core::BrowserAction::Navigate,
+            task_core::BrowserAction::CredentialUse,
+        ],
+        &[],
+    );
+    let dir = tempfile::tempdir().expect("tempdir");
+    let runtime_dir = dir.path().join("browser");
+    write_shim_files(
+        &runtime_dir,
+        "s",
+        &policy,
+        &policy.action_policy,
+        &[],
+        false,
+    )
+    .expect("shim files");
+    let policy_before = std::fs::read(runtime_dir.join("policy.json")).expect("policy");
+    let again = write_shim_files(&runtime_dir, "s", &policy, &policy.action_policy, &[], true);
+    assert!(
+        matches!(&again, Err(AdapterError::Io(e)) if e.kind() == std::io::ErrorKind::AlreadyExists),
+        "{again:?}"
+    );
+    admit_shim_config(&runtime_dir, "s", &policy, &policy.action_policy, &[], true)
+        .expect("admitted config");
+    let config: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(runtime_dir.join("config.json")).expect("config"))
+            .expect("json");
+    assert_eq!(config["credential_use"], true);
+    assert_eq!(
+        config["credential_policy_ids"],
+        serde_json::json!(["pol-example"])
+    );
+    assert_eq!(
+        std::fs::read(runtime_dir.join("policy.json")).expect("policy"),
+        policy_before
+    );
+    assert!(!runtime_dir.join("config.next").exists());
+}

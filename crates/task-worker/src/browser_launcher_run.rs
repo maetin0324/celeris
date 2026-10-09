@@ -684,9 +684,33 @@ fn approved_operation_wait(
     Ok(super::approved_operation(&wait, policy)?.map(|action| (wait, action)))
 }
 
-/// shim（`celeris-browser.py`）が読む `policy.json`・`config.json` を書く。形は daemon 経路と同じ
+/// shim（`celeris-browser.py`）が読む `config.json` の中身。形は daemon 経路と同じ
 /// （`policy_sha256` は `policy.json` の byte の sha256、`action_socket` は共通の短い path）。
-/// shim の `load_policy` はこれが揃わないと全 action を拒否する。返すのは shim と action socket の path。
+fn shim_config(
+    runtime_dir: &Path,
+    session: &str,
+    policy: &crate::browser_policy::PreparedBrowserPolicy,
+    action_policy: &[u8],
+    approval_actions: &[String],
+    credential_admitted: bool,
+) -> Result<Vec<u8>, AdapterError> {
+    use sha2::Digest;
+    let action_socket = crate::browser_action::action_socket_path(runtime_dir)?;
+    Ok(serde_json::to_vec(&serde_json::json!({
+        "session_id": session,
+        "allowed_domains": policy.allowed_domains(),
+        "output": runtime_dir.join("output"),
+        "action_socket": action_socket,
+        "policy_sha256": format!("{:x}", sha2::Sha256::digest(action_policy)),
+        "credential_policy_ids": if credential_admitted { policy.effective.credential_policy_ids.clone() } else { BTreeSet::<String>::new() },
+        "credential_use": credential_admitted,
+        "approval_actions": approval_actions,
+    }))?)
+}
+
+/// shim（`celeris-browser.py`）が読む `policy.json`・`config.json` を新規に書く（run ごとに一度だけ。
+/// 既にあれば `create_new` で失敗する）。shim の `load_policy` はこれが揃わないと全 action を拒否する。
+/// 返すのは shim と action socket の path。
 fn write_shim_files(
     runtime_dir: &Path,
     session: &str,
@@ -695,27 +719,45 @@ fn write_shim_files(
     approval_actions: &[String],
     credential_admitted: bool,
 ) -> Result<(std::path::PathBuf, std::path::PathBuf), AdapterError> {
-    use sha2::Digest;
-    let output = runtime_dir.join("output");
-    std::fs::create_dir_all(&output)?;
+    std::fs::create_dir_all(runtime_dir.join("output"))?;
     let cli = runtime_dir.join("celeris-browser.py");
     let action_socket = crate::browser_action::action_socket_path(runtime_dir)?;
     write_private(&cli, CLI)?;
     write_private(&runtime_dir.join("policy.json"), action_policy)?;
     write_private(
         &runtime_dir.join("config.json"),
-        serde_json::to_vec(&serde_json::json!({
-            "session_id": session,
-            "allowed_domains": policy.allowed_domains(),
-            "output": output,
-            "action_socket": action_socket,
-            "policy_sha256": format!("{:x}", sha2::Sha256::digest(action_policy)),
-            "credential_policy_ids": if credential_admitted { policy.effective.credential_policy_ids.clone() } else { BTreeSet::<String>::new() },
-            "credential_use": credential_admitted,
-            "approval_actions": approval_actions,
-        }))?,
+        shim_config(
+            runtime_dir,
+            session,
+            policy,
+            action_policy,
+            approval_actions,
+            credential_admitted,
+        )?,
     )?;
     Ok((cli, action_socket))
+}
+
+/// [`write_shim_files`] が先に書いた fail-closed の `config.json` を、credential admission の結果で
+/// 置き換える（`config.next` に書いて rename）。shim と `policy.json` は書き直さない。
+fn admit_shim_config(
+    runtime_dir: &Path,
+    session: &str,
+    policy: &crate::browser_policy::PreparedBrowserPolicy,
+    action_policy: &[u8],
+    approval_actions: &[String],
+    credential_admitted: bool,
+) -> Result<(), AdapterError> {
+    let config = shim_config(
+        runtime_dir,
+        session,
+        policy,
+        action_policy,
+        approval_actions,
+        credential_admitted,
+    )?;
+    super::replace_private(&runtime_dir.join("config.json"), &config)?;
+    Ok(())
 }
 
 /// launcher 経由の browser run。harness は従来と同じ shim（`celeris-browser.py`）を使い、
@@ -772,7 +814,8 @@ pub(super) async fn run(
     let approval_actions = super::shim_approval_actions(policy, approved_action);
     let runtime_dir = req.workspace.join("runs").join(run_id).join("browser");
     let output = runtime_dir.join("output");
-    let _ = write_shim_files(
+    // The shim files are created once per run, fail closed (no credential capability).
+    let (cli, action_socket) = write_shim_files(
         &runtime_dir,
         &session,
         policy,
@@ -797,16 +840,22 @@ pub(super) async fn run(
         credentiald_runtime.as_deref(),
     )
     .await?;
-    // Rewrite the shim config only after both gates and the credentiald binding have passed.
-    // An unproven session leaves the pre-created fail-closed config in place.
-    let (cli, action_socket) = write_shim_files(
-        &runtime_dir,
-        &session,
-        policy,
-        &action_policy,
-        &approval_actions,
-        credential_admitted,
-    )?;
+    // Replace the shim config only after both gates and the credentiald binding have passed.
+    // An unproven session leaves the pre-created fail-closed config in place. The files written
+    // above already exist (`create_new`), so only `config.json` is replaced, atomically.
+    if credential_admitted
+        && let Err(error) = admit_shim_config(
+            &runtime_dir,
+            &session,
+            policy,
+            &action_policy,
+            &approval_actions,
+            true,
+        )
+    {
+        stop_in_background(runtime).await;
+        return Err(error);
+    }
     tracing::info!(
         session = %runtime.session_id,
         launcher_proof = runtime.session_proof().is_some(),

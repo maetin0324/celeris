@@ -50,6 +50,83 @@ pub(super) async fn project_list(
 
 /// 案件を作る。**管理系**（`token_file` 未設定でも 401）: 直後に秘書の run を起こす経路なので、
 /// `POST /org/{id}/messages` と同じ規律にする（監査 M-4）。
+/// `POST /projects` shared by the handler and `/cos/operations` (`project.create`, ADR
+/// 2026-10-09-cos-operations-all-mutations D3). The project row (and its primary repo) commit with
+/// the audit record; the secretary's first reply starts after the commit and stays best-effort,
+/// as on the handler path.
+pub(crate) fn create_project_op(
+    store: &SqliteStore,
+    state: &ApiState,
+    create: ProjectCreateBody,
+    audit: Option<&OperationAudit>,
+) -> Result<Applied<Project>, ApiProblem> {
+    let reject = |problem: ApiProblem| match audit {
+        Some(audit) => audit.reject(store, "project", "-", problem),
+        None => problem,
+    };
+    if create.title.trim().is_empty() {
+        return Err(reject(ApiProblem::validation(vec![ValidationError {
+            field: Some("title".into()),
+            message: "title must not be blank".into(),
+        }])));
+    }
+    if create.request.trim().is_empty() {
+        return Err(reject(ApiProblem::validation(vec![ValidationError {
+            field: Some("request".into()),
+            message: "request must not be blank".into(),
+        }])));
+    }
+    // ADR-0039 D1 / D5: 作業場所は `[[clusters]]` に無いクラスタを弾き、`Local` の `~` を展開して保存する。
+    let workspace = match create.workspace {
+        Some(spec) => Some(validated_workspace(state, spec).map_err(reject)?),
+        None => None,
+    };
+    let now = OffsetDateTime::now_utc();
+    let project = Project {
+        auto_advance: false,
+        slug: None,
+        archived_at: None,
+        paused_from: None,
+        id: ProjectId::new(),
+        title: create.title,
+        request: create.request,
+        // ADR-0033 D2: 作った直後は `proposed`（秘書が理解確認と方針を返すまで人の返事待ち）。
+        status: ProjectStatus::Proposed,
+        secretary_summary: None,
+        workspace,
+        created_at: now,
+        updated_at: now,
+    };
+    let applied = match audit {
+        None => {
+            store.project_create(&project).map_err(store_problem)?;
+            Applied::Direct(project.clone())
+        }
+        Some(audit) => {
+            let target_id = project.id.to_string();
+            let operation = audit.apply(store, "project", &target_id, "project.create", |tx| {
+                SqliteStore::project_create_tx(tx, &project)?;
+                Ok(serde_json::json!({"project_id": target_id, "title": project.title}))
+            })?;
+            Applied::Audited(Box::new(operation))
+        }
+    };
+    // SPEC §7 / ADR-0033 D4: 案件を受けたら、秘書が最初に「理解の確認・大まかな方針・最初の
+    // 途中目標の提案」を返す。ここは対話を 1 回起こすだけ（中身はプロンプトの仕事）。
+    // A resent CoS request returns the recorded operation without inserting this new id, so only a
+    // project that now exists gets the greeting.
+    if store.project_get(project.id).ok().flatten().is_some() {
+        crate::conversation::greet_the_secretary(
+            store,
+            &project,
+            &state.inner.roles,
+            &state.inner.genres,
+            &state.inner.conversation_genre,
+        );
+    }
+    Ok(applied)
+}
+
 pub(super) async fn create_project(
     State(state): State<ApiState>,
     headers: HeaderMap,
@@ -59,56 +136,9 @@ pub(super) async fn create_project(
     no_query(&raw)?;
     require_admin(&state, &headers)?;
     let create: ProjectCreateBody = read_json(body, false).await?;
-    if create.title.trim().is_empty() {
-        return Err(ApiProblem::validation(vec![ValidationError {
-            field: Some("title".into()),
-            message: "title must not be blank".into(),
-        }]));
-    }
-    if create.request.trim().is_empty() {
-        return Err(ApiProblem::validation(vec![ValidationError {
-            field: Some("request".into()),
-            message: "request must not be blank".into(),
-        }]));
-    }
-    // ADR-0039 D1 / D5: 作業場所は `[[clusters]]` に無いクラスタを弾き、`Local` の `~` を展開して保存する。
-    let workspace = match create.workspace {
-        Some(spec) => Some(validated_workspace(&state, spec)?),
-        None => None,
-    };
-    let roles = state.inner.roles.clone();
-    let genres = state.inner.genres.clone();
-    let conversation_genre = state.inner.conversation_genre.clone();
+    let api = state.clone();
     let project = state
-        .blocking(move |store| {
-            let now = OffsetDateTime::now_utc();
-            let project = Project {
-                auto_advance: false,
-                slug: None,
-                archived_at: None,
-                paused_from: None,
-                id: ProjectId::new(),
-                title: create.title,
-                request: create.request,
-                // ADR-0033 D2: 作った直後は `proposed`（秘書が理解確認と方針を返すまで人の返事待ち）。
-                status: ProjectStatus::Proposed,
-                secretary_summary: None,
-                workspace,
-                created_at: now,
-                updated_at: now,
-            };
-            store.project_create(&project).map_err(store_problem)?;
-            // SPEC §7 / ADR-0033 D4: 案件を受けたら、秘書が最初に「理解の確認・大まかな方針・最初の
-            // 途中目標の提案」を返す。ここは対話を 1 回起こすだけ（中身はプロンプトの仕事）。
-            crate::conversation::greet_the_secretary(
-                store,
-                &project,
-                &roles,
-                &genres,
-                &conversation_genre,
-            );
-            Ok(project)
-        })
+        .blocking(move |store| create_project_op(store, &api, create, None)?.direct())
         .await?;
     let mut response = json_response(StatusCode::CREATED, &project);
     if let Ok(location) = HeaderValue::from_str(&format!("/api/v1/projects/{}", project.id)) {

@@ -9,6 +9,7 @@ use task_core::store::SqliteStore;
 
 /// Registered `(method, path, action)` operations.
 pub(crate) const ALLOWED: &[(&str, &str, &str)] = &[
+    ("POST", "/api/v1/projects", "project.create"),
     ("PATCH", "/api/v1/projects/{id}", "project.update"),
     ("POST", "/api/v1/projects/{id}/cancel", "project.cancel"),
     ("POST", "/api/v1/projects/{id}/pause", "project.pause"),
@@ -75,7 +76,6 @@ pub(crate) const EXCLUDED: &[(&str, &str, &str)] = &[
 
 /// Assigned mutations awaiting audited implementation. Move a row to ALLOWED when implemented.
 pub(crate) const PENDING: &[(&str, &str)] = &[
-    ("POST", "/api/v1/projects"),
     ("POST", "/api/v1/projects/{id}/docs/init"),
     ("POST", "/api/v1/projects/{id}/docs/maintenance"),
     ("DELETE", "/api/v1/projects/{id}/docs/page"),
@@ -92,6 +92,15 @@ pub(crate) fn dispatch(
 ) -> Result<CosOperation, ApiProblem> {
     let decode = |error| decode_problem(store, audit, path, error);
     match matched.action {
+        "project.create" => {
+            let input = serde_json::from_value(body).map_err(decode)?;
+            audited(crate::handlers::projects::create_project_op(
+                store,
+                &env.api,
+                input,
+                Some(audit),
+            )?)
+        }
         "project.update" => {
             let raw_id = matched.id.unwrap_or_default();
             let id = crate::handlers::parse_project_id(&raw_id)

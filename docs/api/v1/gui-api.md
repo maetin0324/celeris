@@ -3467,6 +3467,7 @@ registry は `crates/task-api/src/cos/ops/{tasks,decisions,projects,admin,surfac
 | decisions | `POST /knowledge/inbox/{id}/reject` | `knowledge.reject` |
 | decisions | `POST /knowledge/inbox/{id}/accept` | `knowledge.accept` |
 | decisions | `POST /inbox/items/{id}/answer` | `inbox.answer` |
+| projects | `POST /projects` | `project.create`（作成後の秘書の返事は commit 後に best-effort） |
 | projects | `PATCH /projects/{id}` | `project.update` |
 | projects | `POST /projects/{id}/cancel` | `project.cancel`（`result.cancelled_tasks`） |
 | projects | `POST /projects/{id}/pause` | `project.pause` |

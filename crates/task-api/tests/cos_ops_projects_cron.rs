@@ -417,3 +417,61 @@ async fn cos_ops_projects_cron_reports_read_and_notified_are_audited() {
     .await;
     assert!(op["result"]["last_notified_at"].is_string(), "{op}");
 }
+
+#[tokio::test]
+async fn cos_ops_projects_cron_project_create_is_audited() {
+    let env = admin_env();
+    let op = run_domain(
+        &env,
+        "project-create",
+        "POST",
+        "/api/v1/projects",
+        json!({"title": "新しい案件", "request": "依頼の本文"}),
+        "project.create",
+    )
+    .await;
+    let id: task_core::ProjectId = op["target_id"]
+        .as_str()
+        .expect("target")
+        .parse()
+        .expect("project id");
+    let created = project(&env, id);
+    assert_eq!(created.title, "新しい案件");
+    assert_eq!(created.status, task_core::ProjectStatus::Proposed);
+    let before = env.store.project_list().expect("list").len();
+
+    // Resending the same request returns the recorded operation without a second project.
+    let (_, _, bearer) = cos_bearer(&env, "project-create-again");
+    let headers = [("authorization", bearer.as_str())];
+    let envelope = op_body(
+        "same",
+        "POST",
+        "/api/v1/projects",
+        json!({"title": "二つ目", "request": "本文"}),
+    );
+    let first = send(&env.router(), post_json_with(OPS, &envelope, &headers)).await;
+    assert_eq!(first.status.as_u16(), 200, "{}", first.text());
+    let again = send(&env.router(), post_json_with(OPS, &envelope, &headers)).await;
+    assert_eq!(
+        again.json()["operation"]["id"],
+        first.json()["operation"]["id"]
+    );
+    assert_eq!(env.store.project_list().expect("list").len(), before + 1);
+
+    // A blank title is a 422 recorded as rejected.
+    let blank = send(
+        &env.router(),
+        post_json_with(
+            OPS,
+            &op_body(
+                "blank",
+                "POST",
+                "/api/v1/projects",
+                json!({"title": " ", "request": "本文"}),
+            ),
+            &headers,
+        ),
+    )
+    .await;
+    assert_eq!(blank.status.as_u16(), 422, "{}", blank.text());
+}

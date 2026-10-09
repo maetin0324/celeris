@@ -67,6 +67,7 @@ curl -sS -X POST "$API/api/v1/cos/operations" -H "Authorization: Bearer $CELERIS
 
 | 操作 | `request` の method と path | action | celerisctl・本文の要点 |
 |---|---|---|---|
+| 案件の作成 | `POST /api/v1/projects` | project.create | `{"title":"…","request":"…","workspace":{…}}`（workspace は任意）。作成後に秘書の最初の返事が起きる |
 | 案件の更新 | `PATCH /api/v1/projects/<id>` | project.update | 変える欄だけを送る |
 | 案件の中止 | `POST /api/v1/projects/<id>/cancel` | project.cancel | body は `{}`。非終端の task を全て cancelled にする（`result.cancelled_tasks`） |
 | 案件の一時停止 | `POST /api/v1/projects/<id>/pause` | project.pause | body は `{}`。終端・停止中は 409 |

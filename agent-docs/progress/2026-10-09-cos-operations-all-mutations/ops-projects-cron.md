@@ -61,8 +61,16 @@ API に `create_standing_rule_op`・`delete_standing_rule_op`（handler と共�
 検証: `cargo nextest run -p task-api --test reports --test inbox_notifications --test cos_ops_registry --test cos_operations`
 → 23 passed、`cos_ops_projects_cron` 6 passed、clippy 成功。
 
+## POST /projects（完了）
+
+`project.create`（B）: task-core の `project_create_impl` を `project_create_tx`（slug 決定と primary repo 行を含む）に分け、
+案件の作成を監査と同じ transaction で書く。秘書の最初の返事（`greet_the_secretary`）は直接経路と同じく commit 後の
+best-effort。同じ key の再送は新しい id を書かないので、返事も起きない。handler と `create_project_op` を共有。
+
+検証: 短い TMPDIR で `cargo nextest run -p task-api` → 633 passed、clippy 成功。
+
 ## 残り
 
-- projects PENDING 5: `POST /projects`、`/projects/{id}/docs/{init,maintenance}`、
+- projects PENDING 4: `/projects/{id}/docs/{init,maintenance}`、
   `PUT|DELETE /projects/{id}/docs/page`（KB/git は C）
 - tasks の C: `POST /tasks/{id}/changes/{repo}/integrate`、`/pr/merge`。decisions の C: `PUT /knowledge/page`

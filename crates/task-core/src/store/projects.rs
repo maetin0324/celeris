@@ -278,14 +278,21 @@ impl SqliteStore {
     pub(super) fn project_create_impl(&self, project: &Project) -> Result<(), StoreError> {
         let mut conn = self.lock()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        Self::project_create_tx(&tx, project)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// `project_create` on a caller-owned transaction (ADR 2026-10-09-cos-operations-all-mutations D3).
+    pub fn project_create_tx(tx: &Connection, project: &Project) -> Result<(), StoreError> {
         // Phase K-1: slug は案件を作るときに決める（渡されたものは検査だけ）。
         let slug = match project.slug.as_deref().map(str::trim) {
             Some(s) if !s.is_empty() => {
-                Self::check_project_slug(&tx, &project.id.to_string(), s)?;
+                Self::check_project_slug(tx, &project.id.to_string(), s)?;
                 s.to_string()
             }
             _ => Self::unique_project_slug(
-                &tx,
+                tx,
                 &project.title,
                 &project.id.to_string(),
                 project
@@ -331,9 +338,8 @@ impl SqliteStore {
                 created_at: project.created_at,
             };
             crate::repos::validate_upsert(&[], &repo)?;
-            Self::repo_write_tx(&tx, &repo)?;
+            Self::repo_write_tx(tx, &repo)?;
         }
-        tx.commit()?;
         Ok(())
     }
 

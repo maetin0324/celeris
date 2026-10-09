@@ -118,3 +118,37 @@ final review（criterion 5: 拒否が launcher 接続の後）への対応。人
   - `cargo clippy --workspace -- -D warnings` → exit 0
 
 未解決: 同一 process の偽 launcher では responder UID = daemon UID になり、admission 成立 → credentiald 登録の経路は合成試験では通せない（host 実証で確認する）。本番 config に `[browser] launcher_uid` を入れるのは運用セッション（人）の手順。
+
+## 接続前 gate の検証（統合後 HEAD f7816503、2026-10-09）
+
+対象: preconnect-gate（303c9460）を統合した HEAD f7816503。この WU（reclose）ではコードを変えず、作業ツリーは clean のまま検査だけを行った。短い物理 TMPDIR（`/local/celeris/data/scratch/tmp-reclose`）で実行（既定の長い TMPDIR では Unix socket fixture が `SUN_LEN` を超える）。
+
+### 受け入れ基準 5 の対応箇所
+
+- 接続前 gate の関数: `crates/task-worker/src/browser_launcher_run.rs` の `preconnect_credential_gate`（`open_launcher_session` の最初。`LauncherRuntime::start_guarded` より前）。
+- 証明依存 gate: 同じ `open_launcher_session` 内。`start_guarded` の後、不成立なら `runtime.stop()` の後に拒否。credentiald 登録（失敗も stop 後）もここに含む。
+- 旧 `refuse_confidential` は `credential_demand` と `open_launcher_session` に置換された。
+- 試験: `crates/task-worker` の `launcher_credential_preconnect_` 6 件（接続前不成立 5 通り・admission 不能 wait・証明依存不成立・条件成立・非 CredentialUse run・demand 判定）。
+- 設定: `[browser] launcher_uid`（`BrowserRuntimeKind::Launcher.launcher_uid`、`crates/celeris` の config の試験 1 件を含む）。
+- ADR: `agent-docs/adr/2026-10-09-browser-launcher-credential-release.md` の「付記 2026-10-09: 接続前 gate」節。
+
+### 実行したコマンドと結果
+
+- `cargo test -p celeris-credentiald -p task-worker launcher_credential_`（exit 0）
+  - `celeris-credentiald` の `tests/prod_admission.rs`: 5 passed / 0 failed。
+  - `task-worker` の lib: 24 passed / 0 failed（966 filtered out）。
+- `cargo test -p celeris-credentiald --test prod_admission`（exit 0）: 14 passed / 0 failed。
+- `cargo test -p celeris --lib config::`（exit 0）: 165 passed / 0 failed（250 filtered out）。
+- `cargo clippy --workspace -- -D warnings`（exit 0）: `Finished dev profile`、警告なし（57.02 秒）。
+- `sh scripts/dev/check-doc-links.sh`（exit 0）: `check-doc-links: ok`。
+- `sh scripts/dev/progress-index.sh --check`（exit 0）: `progress-index --check: ok`。
+- `sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv`（exit 0）: `check-doc-layout: ok`。
+
+ログ: `artifacts/reclose-logs/`（t1・t2・t3・clippy・d1〜d3）。
+
+### 未解決事項
+
+- 同一 process の偽 launcher では responder UID が daemon UID と同じになるため、admission 成立から credentiald 登録までの経路は合成試験では通せない（host 実証で確認する）。前段の付記と同じ。
+- 本番 config への `[browser] launcher_uid` の設定と、host 実証（`docs/ops/browser-launcher-admission-evidence-run.md`）は人が行う。
+- `CELERIS_USERNS_TESTS=1` の opt-in 実 process 試験は未実装（前段の未解決事項 2 と同じ）。
+- `check-architecture-map.py` の既存 NG（3 path）は本 WU の範囲外のため未対応。

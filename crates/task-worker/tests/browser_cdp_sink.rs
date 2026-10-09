@@ -188,9 +188,10 @@ impl BrokerClient for FakeBroker {
         );
         let value = self.value.clone();
         Ok(Box::new(Pending(thread::spawn(move || {
-            // Fixed broker function: origin, all ancestor frames and input type
-            // are checked atomically with the setter in an isolated world.
-            let function = r#"function(expected,depth,field,value){try{if(!this.isConnected||!this.ownerDocument.defaultView)return 'target_changed';let w=this.ownerDocument.defaultView,n=0;while(true){if(w.location.origin!==expected)return 'target_changed';if(w===w.parent)break;w=w.parent;n++;}if(n!==depth)return 'target_changed';if(!(this instanceof HTMLInputElement))return 'target_changed';if(field==='password'&&this.type!=='password')return 'target_changed';if(field==='username'&&this.type!=='text'&&this.type!=='email')return 'target_changed';Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(this,value);this.dispatchEvent(new Event('input',{bubbles:true}));this.dispatchEvent(new Event('change',{bubbles:true}));return 'ok';}catch(_){return 'target_changed';}}"#;
+            // credentiald's fixed injection function (the controller forwards nothing else to
+            // Chrome): origin, all ancestor frames and input type are checked atomically with the
+            // setter in an isolated world.
+            let function = celeris_credentiald::injection_ipc::INJECT_FUNCTION;
             let mut frame = serde_json::to_vec(&json!({"id":request["cdp_command_id"],"sessionId":request["cdp_session_id"],"method":"Runtime.callFunctionOn","params":{"objectId":request["object_id"],"functionDeclaration":function,"arguments":[{"value":ORIGIN},{"value":0},{"value":request["field"]},{"value":value}],"returnByValue":true,"silent":true}})).map_err(|_| InjectionError::SinkFailed)?;
             frame.push(0);
             packet(&sink, &frame)?;

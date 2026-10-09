@@ -109,10 +109,14 @@ impl BrokerClient for FakeBroker {
                 "id":request["cdp_command_id"], "sessionId":request["cdp_session_id"],
                 "method":"Runtime.callFunctionOn", "params":{
                     "objectId":request["object_id"],
-                    "functionDeclaration":"function(value){if(!this.isConnected||this.type!=='password')return 'target_changed';Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(this,value);return 'ok';}",
-                    "arguments":[{"value":SECRET}], "returnByValue":true, "silent":true
+                    // The controller forwards only credentiald's fixed injection call.
+                    "functionDeclaration":celeris_credentiald::injection_ipc::INJECT_FUNCTION,
+                    "arguments":[{"value":request["frame_chain"][0]},{"value":0},
+                        {"value":request["field"]},{"value":SECRET}],
+                    "returnByValue":true, "silent":true
                 }
-            })).map_err(|_| InjectionError::SinkFailed)?;
+            }))
+            .map_err(|_| InjectionError::SinkFailed)?;
             command.push(0);
             // SAFETY: the connected seqpacket fd is valid and command is readable.
             let sent = unsafe {

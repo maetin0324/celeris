@@ -105,6 +105,10 @@ root = {kb:?}
 max_cos_runs = 8
 [api]
 listen = "127.0.0.1:7700"
+# The default watch reads the host's `/`, `/local` and `/tmp`; a full host disk would raise a
+# `disk_full` inbox item and start an extra triage run in the inbox thread.
+[maintenance]
+disk_watch = []
 [cos]
 {cos}
 [[providers]]
@@ -165,10 +169,20 @@ async fn launch(
         )
         .unwrap();
     d.tick().unwrap();
-    tokio::time::timeout(Duration::from_secs(10), seen.recv())
-        .await
-        .expect("fake started")
-        .unwrap()
+    // Only this thread's run: another run (e.g. inbox triage) started by the same tick is skipped.
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let started = seen.recv().await.unwrap();
+            if store
+                .chat_run_get(&thread, &started.0)
+                .is_ok_and(|run| run.thread_id == thread)
+            {
+                return started;
+            }
+        }
+    })
+    .await
+    .expect("fake started")
 }
 
 fn resolved(config: &Config, run: &str) -> serde_json::Value {

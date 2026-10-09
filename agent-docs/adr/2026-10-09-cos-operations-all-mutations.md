@@ -5,7 +5,7 @@ tasks: [01M4F24B0GAEVZQPP35830PA0F, 01M4F5KS8E1MXZDNJTRAVFJESW]
 ---
 
 - 日付: 2026-10-09
-- 状態: 決定済み（設計。registry・各領域・ctl・skill の実装と検証は後続 WorkUnit）
+- 状態: 実装済み（2026-10-09。全 142 行を ALLOWED 106・EXCLUDED 36 に分類し PENDING を撤去。末尾の「付記: close-out」）
 - 関連: [CoS チャットホーム ADR](2026-10-05-cos-chat-home.md) D3、[ADR-0079](0079-recursive-task-decomposition.md) D7/D13、[API v1](../../docs/api/v1/gui-api.md)
 
 ## D1 人の決定と原因
@@ -316,8 +316,8 @@ action は path から ad hoc に生成せず、領域 registry に明示する�
 ## D5 実装の形と維持する検証
 
 `operations.rs` は envelope の認証・path/body 検証・冪等検査・領域 dispatch を受け持つ。
-`cos/ops/{tasks,decisions,projects,admin,surface}.rs` に各領域の ALLOWED/EXCLUDED/PENDING と dispatch を置く。
-PENDING は移行中だけ存在し、未登録を黙って成功させない。除外の理由は D2 と一致させる。
+`cos/ops/{tasks,decisions,projects,admin,surface}.rs` に各領域の ALLOWED/EXCLUDED と dispatch を置く。
+移行中だけ置いた PENDING は close-out で撤去した（未登録を黙って成功させない）。除外の理由は D2 と一致させる。
 
 領域 handler と CoS dispatch は同じ共有の操作関数を呼ぶ。通常 handler は監査 context 無しの `Applied::Direct`、
 CoS 経路は credential から作った `OperationAudit` を渡し `Applied::Audited` を返す。
@@ -381,8 +381,8 @@ D6 の必須例を先に登録した。各操作は handler と CoS dispatch が
 - 領域 event の書き手は `cos`（`Edited.by`・`DecisionAnswered.by`・`DecisionWithdrawn.reason` の接頭辞・割り当ての
   `updated_by`）。人の経路は従来どおり `human` / `admin`。
 - `execution.put_plan` は active な計画がある task の replan だけ。計画の無い task への PUT は初回の採用
-  （`adopt_human_plan`。子 task の作成・決定の要求を伴う）なので `execution.adopt_plan`（POST）と同じく登録待ちで、
-  理由付きの 422 と rejected 行で記録する。
+  （`adopt_human_plan`。子 task の作成・決定の要求を伴う）なので PUT では受けず、理由付きの 422 と rejected 行で記録する。
+  初回の採用は後に `execution.plan_adopt`（POST `/tasks/{id}/execution-plan`、B）として登録した（付記: close-out）。
 - path の placeholder は英数字・`-`・`_` に加えて `.`・`:` も 1 segment として受ける（model id・
   `openai-compatible:<id>` の source）。`.`・`..` だけの segment は従来どおり拒否する。
 - celerisctl: CoS credential のとき `retry`・`answer`・`execution phase-gate`・`execution plan replan` を
@@ -390,5 +390,34 @@ D6 の必須例を先に登録した。各操作は handler と CoS dispatch が
   他の変更サブコマンドは従来どおり拒否し、`api-request` で登録済みの path を送る。
 - 試験: ta `tests/cos_ops_mutations.rs`（直接呼び出しの 422・rejected 行、`/cos/operations` 経由の applied・監査 event・
   カード、領域 write の書き手、競合・catalog 外・初回採用の理由付き拒否）。除外は既存の `tests/cos_ops_registry.rs`。
-- 残り: 各領域の `PENDING`（tasks 10・decisions 3・projects 14・admin 35・surface 21 本）は同じ形で登録する
-  後続の子 task に分けた（進捗 `agent-docs/progress/2026-10-09-cos-operations-all-mutations.md`）。
+- 当時の残り（各領域の `PENDING`: tasks 10・decisions 3・projects 14・admin 35・surface 21 本）は後続の WorkUnit で
+  全て登録した（付記: close-out、進捗 `agent-docs/progress/2026-10-09-cos-operations-all-mutations.md`）。
+
+## 付記: close-out（2026-10-09、task 01M4F5KS8E1MXZDNJTRAVFJESW）
+
+- 分類: 全 142 行が ALLOWED か EXCLUDED のどちらか一方だけに入る（D3 の表の件数どおり）。
+
+  | 領域 | ALLOWED | EXCLUDED |
+  |---|---|---|
+  | tasks | 21 | 1 |
+  | decisions | 11 | 0 |
+  | projects | 15 | 8 |
+  | admin | 37 | 8 |
+  | surface | 22 | 19 |
+  | 計 | 106 | 36 |
+
+- `Registry.pending`・各領域の `PENDING` 定数・`match_operation` の pending 分岐を撤去した。`Registry.name` は試験だけが読む
+  （`cfg(test)`）。試験: ta `cos::ops::tests::cos_ops_registry_classifies_every_mutation_as_allowed_or_excluded`
+  （router と API 表の和集合 = ALLOWED ∪ EXCLUDED、重複なし）・`cos_ops_every_allowed_row_is_reachable_through_match_operation`
+  （ALLOWED の全行が EXCLUDED や先行行に隠れない）・`cos_ops_registry_matches_adr_domain_assignment_and_exclusions`（本 ADR の表と一致）。
+- 領域ごとの登録と分類（A 1 transaction / B caller-owned transaction / C 2 段の外部効果。
+  [外部副作用 ADR](2026-10-09-cos-operations-external-effects.md)）は進捗の WU 文書（ops-tasks-decisions・ops-projects-cron・
+  ops-admin-config・ops-surface）に記録した。試験は ta `tests/cos_ops_{mutations,projects_cron,projects_cron_changes,projects_cron_docs,admin_config,ops_surface,registry}.rs`。
+- celerisctl: CoS credential の変更系 subcommand（approve・reject・accept・cancel・rereview・retry・answer・
+  execution phase-gate・execution plan set/replan・tree adopt・cron create/update/pause/resume/run・
+  models discover/assign/unassign・replay）は `cos_mapped` で `/cos/operations` に包む。add・knowledge record は専用の経路。
+  表駆動の試験 `cos_mapped_table_wraps_every_allowed_subcommand` が、包んだ request が skill の操作表（= ALLOWED）の行に当たることも確かめる。
+  API に route の無い手元の操作（org migrate・scratch 等）は CoS credential では拒否のまま。`gate.rs` の到達しない CoS 分岐は消した。
+- skill: cos-operator の operations.md から「登録されていない操作」を消し、EXCLUDED の系列と理由の表に替えた。
+  cos-inbox-triage は standing_rule.create・release.promote を人の指示の無い一次対応では使わない。
+- 本番反映（release・verify・promote と KB への skill 取り込み）は人が行う。

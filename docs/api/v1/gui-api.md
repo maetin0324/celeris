@@ -3443,7 +3443,8 @@ KB を直接書かず `knowledge.record` を送る（ADR 2026-10-07 cos-live-fix
 
 操作の範囲は ADR 2026-10-09-cos-operations-all-mutations（人の決定「API で人ができる変更操作の全て」）で決まり、
 registry は `crates/task-api/src/cos/ops/{tasks,decisions,projects,admin,surface}.rs` の `ALLOWED`（登録済み）・
-`EXCLUDED`（人の決定による除外。理由コード付き）・`PENDING`（範囲内だが監査経路の実装待ち）の 3 つに分かれる。
+`EXCLUDED`（人の決定による除外。理由コード付き）の 2 つに分かれる。変更 route（router と本書 §2 の表の和集合、142 行）は
+必ずどちらか一方だけに入る（ALLOWED 106・EXCLUDED 36。試験 `cos_ops_registry_classifies_every_mutation_as_allowed_or_excluded`）。
 登録済みの操作（action）:
 
 | 領域 | method と path | action |
@@ -3555,12 +3556,12 @@ registry は `crates/task-api/src/cos/ops/{tasks,decisions,projects,admin,surfac
 | surface | `POST /tasks/{id}/browser/control/{run}/{session}/auth-section` | `browser.auth_section`（外部効果） |
 | surface | `POST /tasks/{id}/browser/live/{run}/{session}/events` | `browser.live_event`（外部効果。run が動いている間だけ） |
 
-tasks の実行計画初回採用 `POST /api/v1/tasks/{id}/execution-plan`（`execution.plan_adopt`）と既存計画への late tree adoption `POST /api/v1/tasks/{id}/tree/adopt`（`tree.adopt`）も登録済み。両方とも domain write と operation audit を同一 transaction で commit する。CoS credential での `celerisctl execution plan set` と `celerisctl tree adopt` はこれらの operation 経由で送る。CoS credential の `celerisctl cron create|update|pause|resume|run` は `cron_job.*` を送る。`celerisctl models discover|assign|unassign` は `model_catalog.discover`・`model_assignment.*`、`celerisctl replay`（`--check`/`--apply` なし）は `daemon.replay`、`celerisctl approve|reject|accept|cancel|rereview` は `task.*` を送る。daemon channel（reload・check・account 退避・notify test）・発見・release 昇格・skill の KB 書き込みも外部効果の手順で記録する。task の取り込み（integrate）と PR merge、案件の文書、KB ページの編集、定期実行の手動実行は外部効果の手順（ADR 2026-10-09-cos-operations-external-effects: pending を先に記録し 1 回だけ実行、再送は再実行しない、変更前の拒否は `rejected`、結果不明は pending のまま起動時に `needs_remediation`）で記録する。
+tasks の実行計画初回採用 `POST /api/v1/tasks/{id}/execution-plan`（`execution.plan_adopt`）と既存計画への late tree adoption `POST /api/v1/tasks/{id}/tree/adopt`（`tree.adopt`）も登録済み。両方とも domain write と operation audit を同一 transaction で commit する。CoS credential での `celerisctl execution plan set` と `celerisctl tree adopt` はこれらの operation 経由で送る。CoS credential の `celerisctl cron create|update|pause|resume|run` は `cron_job.*` を送る。`celerisctl models discover|assign|unassign` は `model_catalog.discover`・`model_assignment.*`、`celerisctl replay`（`--check`/`--apply` なし）は `daemon.replay`、`celerisctl approve|reject|accept|cancel|rereview|retry|answer`・`execution phase-gate`・`execution plan replan` は `task.*`・`question.answer`・`execution.*` を送る（CoS credential の変更系 subcommand の包みは試験 `cos_mapped_table_wraps_every_allowed_subcommand` で固定。API に対応 route の無い手元の操作は CoS credential では拒否）。daemon channel（reload・check・account 退避・notify test）・発見・release 昇格・skill の KB 書き込みも外部効果の手順で記録する。task の取り込み（integrate）と PR merge、案件の文書、KB ページの編集、定期実行の手動実行は外部効果の手順（ADR 2026-10-09-cos-operations-external-effects: pending を先に記録し 1 回だけ実行、再送は再実行しない、変更前の拒否は `rejected`、結果不明は pending のまま起動時に `needs_remediation`）で記録する。
 
 除外（422 `cos_operation_not_allowed`、detail に理由コード）: 秘密の値を扱う操作（`secret_operations`。`/secrets/*`・
 `/accounts/{id}/login*`・`/clusters/{id}/connect*`）、browser の credential/attestation 系
 （`browser_credential_attestation`）、`/console/instruct`（`console_instruction_chain`）、`/cos/*`（`recursive_cos`）、
-ADR-0079 で撤去済みの入口（`removed_by_adr_0079`）。surface の登録で `PENDING` は全領域で空になった。
+ADR-0079 で撤去済みの入口（`removed_by_adr_0079`）。
 path の placeholder は 1 segment（英数字・`-`・`_`・`.`・`:`）に一致する。
 
 外部 URL、任意 proxy、`/cos` 以下の再帰操作、未登録 path は 422 で拒否理由付き監査 event に残す。`reason`・`policy_version`・`idempotency_key` は必須（reason は空白不可）。`expected_revision` は対象が revision を持つ操作で必須。idempotency key は thread 内一意で、同じ key の異なる request hash は 409。適用結果・`cos_operations` 行・監査 envelope event・chat card は同じ transaction に記録する。checkpoint は credential の run/thread に限り、run に配送済みの `through_seq` 以下、本文 32 KiB 以下。現在の checkpoint revision と `expected_summary_through_seq` が異なる場合は 409。

@@ -19,8 +19,9 @@ use std::time::{Duration, Instant};
 use nix::libc;
 
 use super::protocol::{
-    ActionArgs, ErrorCode, Observation, Outcome, Receipt, Request, Response, SessionBinding,
-    SessionFacts, SessionPolicy, SessionState, Verb, decode_request, write_message,
+    ActionArgs, AuthenticateArgs, AuthenticationStatus, ErrorCode, Observation, Outcome, Receipt,
+    Request, Response, SessionBinding, SessionFacts, SessionPolicy, SessionState, Verb,
+    decode_request, write_message,
 };
 use super::registry::{Registry, SessionRecord, stop_group};
 use super::{now_unix_ms, random_id};
@@ -99,6 +100,11 @@ pub trait SessionBackend: Send + Sync + 'static {
 /// 起動済みの 1 session。
 pub trait BackendSession: Send + 'static {
     fn action(&mut self, verb: Verb, args: &ActionArgs) -> Result<Observation, ErrorCode>;
+    /// Runs the fixed credential operation inside the launcher-owned controller. Implementations
+    /// must never return credential material or CDP data.
+    fn authenticate(&mut self, _args: &AuthenticateArgs) -> Result<(), ErrorCode> {
+        Err(ErrorCode::Unauthorized)
+    }
     fn observe(&mut self) -> (SessionState, SessionFacts);
     /// `verify_isolation`（ADR-0115 の owner / map 検査を含む）が Ok か。
     fn isolation_ok(&mut self) -> bool;
@@ -538,6 +544,36 @@ fn handle(inner: &Arc<Inner>, req: Request, peer: &Peer) -> Response {
             remove_and_teardown(inner, &entry.record.session_id);
             Response::Stopped {
                 receipt: receipt(&entry.record, None, Outcome::Stopped, true),
+            }
+        }
+        Request::Authenticate { args } => {
+            let entry = match authorize(inner, peer, &args.session_id, &args.lease_id) {
+                Ok(e) => e,
+                Err(code) => return err(code),
+            };
+            if args.auth_section_id.is_empty() || args.origin.is_empty() || args.target.is_empty() {
+                return err(ErrorCode::BadRequest);
+            }
+            let e2 = entry.clone();
+            let out = run_with_deadline(
+                move || {
+                    let mut g = lock(&e2.backend);
+                    let session = g.as_mut().ok_or(ErrorCode::LeaseMismatch)?;
+                    if !session.isolation_ok() {
+                        return Err(ErrorCode::IsolationFailed);
+                    }
+                    session.authenticate(&args)
+                },
+                inner.cfg.limits.action,
+                |_| {},
+            );
+            match out {
+                Some(Ok(())) => Response::AuthenticateResult {
+                    status: AuthenticationStatus::Success,
+                },
+                Some(Err(_)) | None => Response::AuthenticateResult {
+                    status: AuthenticationStatus::Rejected,
+                },
             }
         }
     }

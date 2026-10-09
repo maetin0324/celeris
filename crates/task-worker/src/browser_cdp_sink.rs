@@ -137,6 +137,19 @@ impl UnixInjectionClient {
             "runtime_pid":registration.runtime_pid,"runtime_start":registration.runtime_start}))
     }
 
+    /// Bind the launcher proof to the live broker session using the credentiald control wire shape.
+    /// The proof contains process identity only; no credential material crosses this call.
+    pub fn attach_launcher_proof(
+        &self,
+        registration: celeris_credentiald::injection_ipc::LauncherProofRegistration,
+    ) -> Result<(), InjectionError> {
+        self.control(
+            json!({"op":"attach_launcher_proof","session_id":registration.session_id,
+            "instance_id":registration.instance_id,"peer_uid":registration.peer_uid,
+            "proof":registration.proof}),
+        )
+    }
+
     pub fn open_auth_section(
         &self,
         section: AuthSectionRegistration,

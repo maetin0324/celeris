@@ -36,6 +36,25 @@ pub enum Verb {
     Close,
 }
 
+/// Fixed, secret-free authorization request. Credential selectors and values are resolved by the
+/// broker; the daemon may identify only the already approved section and destination.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AuthenticateArgs {
+    pub session_id: String,
+    pub auth_section_id: String,
+    pub lease_id: String,
+    pub origin: String,
+    pub target: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AuthenticationStatus {
+    Success,
+    Rejected,
+}
+
 /// browser policy の非機密部分（許可 domain・許可 action・lease の長さ）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -87,6 +106,9 @@ pub enum Request {
     Stop {
         session_id: String,
         lease_id: String,
+    },
+    Authenticate {
+        args: AuthenticateArgs,
     },
 }
 
@@ -222,6 +244,9 @@ pub enum Response {
     Stopped {
         receipt: Receipt,
     },
+    AuthenticateResult {
+        status: AuthenticationStatus,
+    },
     Error {
         code: ErrorCode,
     },
@@ -341,6 +366,7 @@ impl Request {
             Request::Action { session_id, .. }
             | Request::Observe { session_id, .. }
             | Request::Stop { session_id, .. } => Some(session_id),
+            Request::Authenticate { args } => Some(&args.session_id),
         }
     }
 
@@ -378,6 +404,13 @@ impl Request {
             } => {
                 check_id(session_id)?;
                 check_id(lease_id)
+            }
+            Request::Authenticate { args } => {
+                check_id(&args.session_id)?;
+                check_id(&args.auth_section_id)?;
+                check_id(&args.lease_id)?;
+                check_str(&args.origin)?;
+                check_str(&args.target)
             }
         }
     }

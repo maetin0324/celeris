@@ -136,14 +136,70 @@ pub const P4B_H3_TESTS: [&str; 2] = [
     "browser_h3_injection::injected_leak_is_caught_by_the_same_scanner",
 ];
 
+/// ADR 2026-10-09: P4-A isolation proof required before sensitive capabilities are certified.
+pub const P4A_ISOLATION_TESTS: [&str; 19] = [
+    "task-worker:browser_runtime_isolated::probe_inside_runtime_cannot_reach_host_sockets_or_network",
+    "task-worker:browser_runtime_isolated::real_browser_in_runtime_facts_and_restore_refused_on_same_uid",
+    "task-worker:browser_runtime_isolated::controller_kill_leaves_no_runtime_processes",
+    "task-worker:browser_runtime_isolated::restart_reaps_recorded_runtime_and_ignores_stale_records",
+    "task-worker:browser_runtime_supervisor::runtime_processes_do_not_survive_controller_kill_restart_or_stop",
+    "task-worker:browser_launcher_ptrace::launcher_chrome_denies_daemon_uid_ptrace",
+    "task-core:lib::browser_isolation::tests::verified_runtime_is_isolated",
+    "task-core:lib::browser_isolation::tests::daemon_owned_userns_is_rejected",
+    "task-core:lib::browser_isolation::tests::unknown_userns_owner_is_rejected",
+    "task-core:lib::browser_isolation::tests::same_uid_and_root_are_rejected",
+    "task-core:lib::browser_isolation::tests::every_namespace_is_required",
+    "task-core:lib::browser_isolation::tests::root_must_be_readonly_and_writes_stay_in_session",
+    "task-core:lib::browser_isolation::tests::broker_and_host_ipc_are_not_visible",
+    "task-core:lib::browser_isolation::tests::cdp_must_not_be_on_tcp_or_outside_controller_dir",
+    "task-core:lib::browser_isolation::tests::privileges_and_pgid_are_checked",
+    "task-core:lib::browser_isolation::tests::bwrap_argv_unshares_everything_and_remounts_ro",
+    "task-core:lib::browser_isolation::tests::owner_check_alone_without_proof_is_rejected",
+    "task-core:lib::browser_isolation::tests::proof_does_not_override_isolation_violations",
+    "task-core:lib::browser_isolation::tests::launched_facts_reject_namespace_shared_with_daemon",
+];
+
+/// ADR 2026-10-09: P4-A negative egress proof required before sensitive capabilities are certified.
+pub const P4A_EGRESS_NEGATIVE_TESTS: [&str; 21] = [
+    "task-worker:browser_egress_relay::fixture_reachable_only_through_per_connection_egress_proxy",
+    "task-worker:browser_egress_process::independent_proxy_refuses_worker_selected_private_or_proxy_destinations",
+    "task-worker:browser_egress_process::malformed_or_oversized_policy_never_appears_in_process_output",
+    "task-worker:browser_egress_process::missing_inherited_socket_is_refused",
+    "task-worker:lib::browser_egress::tests::real_unix_transport_rejects_proxy_dns_and_http_bypasses_before_resolution",
+    "task-worker:lib::browser_egress::tests::actual_dns_transport_refuses_private_ipv6_and_rebinding",
+    "task-worker:lib::browser_egress::tests::denied_origin_never_reaches_even_the_configured_dns_socket",
+    "task-worker:lib::browser_egress::tests::oversized_header_is_bounded_and_denied",
+    "task-worker:lib::browser_egress::tests::malformed_dns_cannot_inject_an_address",
+    "task-worker:lib::browser_egress::tests::dns_cname_requires_terminal_owner_and_refuses_cycles",
+    "task-worker:lib::browser_egress::tests::malformed_dns_length_or_transaction_is_rejected_over_tcp",
+    "task-worker:lib::browser_egress::tests::browser_allowed_domains_egress_denies_outside_task_and_grant",
+    "task-worker:lib::browser_egress::tests::egress_get_switching_origin_on_the_same_connection_never_connects",
+    "task-worker:lib::browser_egress::tests::egress_get_denials_are_recorded_like_connect",
+    "task-worker:lib::browser_egress::tests::egress_test_loopback_connect_allowed_only_when_listed",
+    "task-core:lib::browser_isolation::tests::egress_rejects_private_ranges_and_rebinding",
+    "task-core:lib::browser_isolation::tests::egress_rejects_ipv6_private_and_disabled",
+    "task-core:lib::browser_isolation::tests::egress_rejects_ip_literals_and_unlisted_hosts",
+    "task-core:lib::browser_isolation::tests::egress_rejects_dns_bypass_and_proxy_chain",
+    "task-core:lib::browser_isolation::tests::egress_test_loopback_default_off_keeps_ip_literal",
+    "task-core:lib::browser_isolation::tests::egress_test_loopback_other_private_and_variants_stay_denied",
+];
+
 /// 実測証拠の試験名。攻撃行列は 1 本の試験の印ごとに 1 件。
 pub fn attack_evidence_name(mark: &str) -> String {
     format!("browser_injection_attacks::real_browser_injection_attack_matrix#{mark}")
 }
 
-/// 件を通ったと数えるのに要る実測証拠の試験名（P4-B の件だけ。他は空）。
+/// 件を通ったと数えるのに要る実測証拠の試験名。
 pub fn required_evidence(case: FixtureCase) -> Vec<String> {
     match case {
+        FixtureCase::IsolationSuite => P4A_ISOLATION_TESTS
+            .iter()
+            .map(|t| (*t).to_string())
+            .collect(),
+        FixtureCase::EgressNegativeSuite => P4A_EGRESS_NEGATIVE_TESTS
+            .iter()
+            .map(|t| (*t).to_string())
+            .collect(),
         FixtureCase::InjectionAttackSuite => P4B_ATTACK_MARKS
             .iter()
             .map(|m| attack_evidence_name(m))
@@ -378,6 +434,8 @@ mod tests {
 
     fn full_evidence() -> Vec<ConformanceEvidence> {
         [
+            FixtureCase::IsolationSuite,
+            FixtureCase::EgressNegativeSuite,
             FixtureCase::InjectionAttackSuite,
             FixtureCase::AuthSectionObservationStop,
         ]

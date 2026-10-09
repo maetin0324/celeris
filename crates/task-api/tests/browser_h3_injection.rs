@@ -428,6 +428,8 @@ impl World {
         let record = self.env.dir.path().join("empty-browser-conformance.json");
         // ADR-0112: the P4-B cases count only with per-test evidence in the ledger.
         let evidence: Vec<_> = [
+            task_core::browser_backend::FixtureCase::IsolationSuite,
+            task_core::browser_backend::FixtureCase::EgressNegativeSuite,
             task_core::browser_backend::FixtureCase::InjectionAttackSuite,
             task_core::browser_backend::FixtureCase::AuthSectionObservationStop,
         ]

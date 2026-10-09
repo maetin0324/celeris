@@ -357,6 +357,8 @@ fn p4b_record(dir: &Path, backends: &[&str], evidence: bool) -> PathBuf {
     passed.sort_by_key(|v| v.to_string());
     let proof: Vec<ConformanceEvidence> = if evidence {
         [
+            FixtureCase::IsolationSuite,
+            FixtureCase::EgressNegativeSuite,
             FixtureCase::InjectionAttackSuite,
             FixtureCase::AuthSectionObservationStop,
         ]

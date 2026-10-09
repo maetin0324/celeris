@@ -179,6 +179,33 @@ fn browser_ledger_release_no_conformant_backend() {
 }
 
 #[test]
+fn browser_ledger_release_json_keeps_public_backend_without_credential_proof() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut value = ledger();
+    value["results"][0]["passed"] = json!([
+        "open_allowed_origin",
+        "refuse_denied_origin",
+        "resume_after_crash",
+        "snapshot_has_refs",
+        "click_by_ref",
+        "screenshot_artifact",
+        "download_to_artifacts",
+        "isolation_suite",
+        "egress_negative_suite",
+        "injection_attack_suite",
+        "auth_section_observation_stop"
+    ]);
+    // Suite names without per-test evidence must not unlock credentials.
+    let file = write_ledger(dir.path(), &value);
+    let status = assert_status(
+        check(&file, &["--release", RELEASE, "--no-host-probe", "--json"]),
+        "ok",
+    );
+    assert_eq!(status["backends"], json!(["claude-code"]));
+    assert_eq!(status["credential_backends"], json!([]));
+}
+
+#[test]
 fn browser_ledger_release_host_probe_uses_explicit_executable() {
     use std::os::unix::fs::PermissionsExt;
     let dir = tempfile::tempdir().unwrap();

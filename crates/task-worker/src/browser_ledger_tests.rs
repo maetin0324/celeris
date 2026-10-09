@@ -28,6 +28,72 @@ fn write_ledger(dir: &Path, generated_for: Option<serde_json::Value>, version: &
     path
 }
 
+fn write_credential_ledger(dir: &Path, mode: &str) -> PathBuf {
+    let path = dir.join("credential-conformance.json");
+    let mut evidence = Vec::new();
+    for (case, names) in [
+        (
+            browser_backend::FixtureCase::IsolationSuite,
+            browser_backend::P4A_ISOLATION_TESTS.as_slice(),
+        ),
+        (
+            browser_backend::FixtureCase::EgressNegativeSuite,
+            browser_backend::P4A_EGRESS_NEGATIVE_TESTS.as_slice(),
+        ),
+        (browser_backend::FixtureCase::InjectionAttackSuite, &[][..]),
+        (
+            browser_backend::FixtureCase::AuthSectionObservationStop,
+            &[][..],
+        ),
+    ] {
+        for test in names {
+            evidence.push(serde_json::json!({"case": case, "test": test, "outcome": if mode == "failed" && *test == names[0] { "failed" } else if mode == "not_run" && *test == names[0] { "not_run" } else { "passed" }}));
+        }
+    }
+    // Preserve the existing P4-B proof fixture while focusing on the new P4-A gate.
+    for (case, names) in [
+        (
+            browser_backend::FixtureCase::InjectionAttackSuite,
+            browser_backend::P4B_ATTACK_MARKS
+                .iter()
+                .map(|m| browser_backend::attack_evidence_name(m))
+                .collect::<Vec<_>>(),
+        ),
+        (
+            browser_backend::FixtureCase::AuthSectionObservationStop,
+            browser_backend::P4B_H3_TESTS
+                .iter()
+                .map(|t| (*t).to_string())
+                .collect(),
+        ),
+    ] {
+        for test in names {
+            evidence.push(serde_json::json!({"case": case, "test": test, "outcome": "passed"}));
+        }
+    }
+    if mode == "missing" {
+        evidence.retain(|item| {
+            item["case"] != "isolation_suite"
+                || item["test"] != browser_backend::P4A_ISOLATION_TESTS[0]
+        });
+    }
+    let mut passed = PUBLIC_CASES
+        .iter()
+        .map(|case| (*case).to_string())
+        .collect::<Vec<_>>();
+    passed.extend([
+        "isolation_suite".to_string(),
+        "egress_negative_suite".to_string(),
+        "injection_attack_suite".to_string(),
+        "auth_section_observation_stop".to_string(),
+    ]);
+    let ledger = serde_json::json!({"schema": 1, "source": "celeris-browser-conformance", "results": [
+        {"backend_id":"claude-code", "version":SUPPORTED_VERSION, "passed":passed, "evidence":evidence}
+    ]});
+    std::fs::write(&path, serde_json::to_vec(&ledger).unwrap()).unwrap();
+    path
+}
+
 fn generated_for(release: &str) -> serde_json::Value {
     serde_json::json!({
         "celeris_release": release,
@@ -168,6 +234,33 @@ fn browser_ledger_gate_status_ok_without_credential_evidence() {
         status.task_code(true),
         BrowserPrerequisiteCode::LedgerLacksCredential
     );
+}
+
+#[test]
+fn browser_ledger_credential_requires_complete_passed_isolation_and_egress_evidence() {
+    for mode in ["complete", "missing", "failed", "not_run"] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_credential_ledger(dir.path(), mode);
+        let status = ledger_status(Some(&path), None, &HostAgentBrowser::NotChecked);
+        assert_eq!(status.code, BrowserPrerequisiteCode::Ok, "mode={mode}");
+        assert_eq!(
+            status.public_backends,
+            ["claude-code".to_string()].into_iter().collect()
+        );
+        if mode == "complete" {
+            assert_eq!(
+                status.credential_backends,
+                ["claude-code".to_string()].into_iter().collect()
+            );
+            assert_eq!(status.task_code(true), BrowserPrerequisiteCode::Ok);
+        } else {
+            assert!(status.credential_backends.is_empty(), "mode={mode}");
+            assert_eq!(
+                status.task_code(true),
+                BrowserPrerequisiteCode::LedgerLacksCredential
+            );
+        }
+    }
 }
 
 #[test]

@@ -37,6 +37,8 @@ fn status<'a>(report: &'a BrowserReadiness, check: &str) -> &'a str {
 fn install_ledger(doctor: &DoctorConfig) {
     use task_core::browser_backend::{FixtureCase, required_evidence};
     let evidence: Vec<_> = [
+        FixtureCase::IsolationSuite,
+        FixtureCase::EgressNegativeSuite,
         FixtureCase::InjectionAttackSuite,
         FixtureCase::AuthSectionObservationStop,
     ]

@@ -76,3 +76,11 @@ final review は「条件を満たさない session も launcher に接続・ses
 境界: 接続前に決まる条件（設定・UID 分離・credentiald 経路・wait store）は launcher に接続する前、証明に依存する条件は launcher session 作成後・credentiald / CDP / harness への接続と秘密の注入より前。秘密が launcher・Chrome に渡るのは両方の gate と credentiald の Attested admission を通った後だけである。CredentialUse を求めない run は接続前 gate を素通しし、`launcher_uid` 未設定でも従来どおり動く。
 
 試験（`task-worker` の `launcher_credential_preconnect_`、偽 launcher は試験内の `UnixListener` / `LauncherServer`、userns・外部ネットワーク・CPU 負荷なし）: 接続前条件の不成立 5 通りと admission 不能な wait で launcher socket の接続数 0・従来文言、証明依存の不成立で session stop・credentiald の control socket 接続数 0、条件成立で launcher に接続、CredentialUse を求めない run は従来どおり。同一 process の偽 launcher では responder UID が daemon UID と同じになるため、admission 成立から credentiald 登録までの経路は host 実証（運用セッション）で確かめる。
+
+## 人の決定（2026-10-09）: 接続前の意味（preconnect-meaning）と二段 gate の承認
+
+- 論点 `preconnect-meaning`（「接続前」を何と解するか）は子 task `01M4FS9M260F7VBBPANZCF8M23` の計画で人に示された。
+- 回答: 2026-10-09、運用セッション（人から受信箱の対応を任されている）が **a（二段 gate）** を選んだ。
+- 回答の要旨: 接続前に決まる条件（設定・uid 分離・credentiald 経路・wait store）は launcher 接続前に拒否する。証明に依存する条件（証明の検証・owner≠daemon・isolation_ok）は session 作成後かつ credentiald 登録・shim 有効化・`Authenticate`・harness 起動より前に検査し、不成立なら session を止めて拒否する。上の「付記 2026-10-09: 接続前 gate」の二段がこれに当たる。
+- この task の段の決定 `confirm-two-stage-gate`（二段 gate を『接続前』の意味として認めるか）に対し、2026-10-09 に **承認する**（推奨どおり、選択肢: 承認する / 不承認）と回答された。回答者は上記の運用セッションである。
+- 不承認だった場合は、この付記を有効な決定としない。本節の記録と実装の扱いは、その時点で replan により決める。

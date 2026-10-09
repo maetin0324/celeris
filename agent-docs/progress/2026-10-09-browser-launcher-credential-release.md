@@ -8,6 +8,7 @@ updated: 2026-10-09
 # launcher credential 解放: 統合後の検証（close-out）
 
 - 完了日（コードと試験の検証）: 2026-10-09
+- 完了日（人の決定の記録）: 2026-10-09（ADR の「人の決定（2026-10-09）」節、未解決事項 5）
 - 対象 HEAD: `8d0d52b1`（integrate wu/ledger-fixture）。`ops/ledger-fix2`（3d2ea2f5・679cab36）は祖先に入っている。
 - 決定の根拠: ADR [2026-10-09-browser-launcher-credential-release](../adr/2026-10-09-browser-launcher-credential-release.md)（人の決定 2026-10-09）。付記は ADR-0116・ADR-0138・ADR-0080 にある。
 - 段ごとの記録: [`2026-10-09-browser-launcher-credential-release/`](2026-10-09-browser-launcher-credential-release/)（adr、merge-ledger-fix2、launcher-credential、ledger-gen、ledger-fix、ledger-wiring、ledger-fixture、ops-runbook）
@@ -67,7 +68,7 @@ front matter の `status` を `verified-open-host` から `done` に直した（
 2. merge 後 HEAD での `ADMISSION[real-session]` の再取得。同じ手順書による。
 3. 台帳の credential 証拠（launcher runtime 分）の生成。`release.sh` / `browser-ledger.sh` の段は `ledger-wiring` で配線済みだが、host 上の実データでは未確認。
 4. 本番での解放（`[browser]` の設定変更と daemon の差し替え）。手順は [docs/ops/browser-launcher-credential-release.md](../../docs/ops/browser-launcher-credential-release.md)。本番操作は人が行う。
-5. 人の決定 `preconnect-meaning = a`（二段 gate）は、launcher-credential の段で実装済みである。
+5. 人の決定の記録は [ADR 2026-10-09-browser-launcher-credential-release の「人の決定（2026-10-09）」節](../adr/2026-10-09-browser-launcher-credential-release.md) に移した。`preconnect-meaning` は子 task `01M4FS9M260F7VBBPANZCF8M23` の計画で出され、2026-10-09 に運用セッションが a（二段 gate）と回答した。この task の `confirm-two-stage-gate` は 2026-10-09 に「承認する（推奨どおり）」と回答された。二段 gate は launcher-credential の段で実装済みである。
 
 ## 提案
 

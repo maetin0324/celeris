@@ -17,3 +17,7 @@ Results are recorded below after checks complete.
 - `cargo fmt --all -- --check`: exit 0.
 - `cargo clippy --workspace -- -D warnings`: exit 0.
 - `cargo check --workspace --tests`: exit 0.
+- `bash scripts/dev/test-parallel.sh`（統合 check `integrate-fmt`、HEAD `e284ceea`、2026-10-09T14:22Z）: exit 0。nextest 4986 passed・0 failed・14 ignored（165 binaries）、doctest exit 0、tmp_leftovers 0。
+- `cargo clippy --workspace -- -D warnings`（同じ統合 check、HEAD `e284ceea`）: exit 0。
+
+最終 HEAD の全体試験と clippy の結果は上の 2 行が正本（運用セッションが final review の記録要件に合わせて追記。daemon の統合 check の結果をそのまま写した）。

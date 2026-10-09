@@ -422,10 +422,22 @@ async fn delete_override(
 async fn discover(State(state): State<ApiState>, RawQuery(raw): RawQuery, body: Body) -> ApiResult {
     no_query(&raw)?;
     let payload: DiscoverBody = read_json(body, true).await?;
-    if let Some(source) = &payload.source {
-        parse_source(source)?;
+    let response = crate::cos::operations::effect_result(discover_effect(&state, payload).await)?;
+    Ok(json_response(StatusCode::ACCEPTED, &response))
+}
+
+/// Run discovery now (shared with CoS `model_catalog.discover`, an external effect: the daemon's
+/// hook runs commands and HTTP requests). An unknown source is refused before the hook runs.
+pub(crate) async fn discover_effect(
+    state: &ApiState,
+    payload: DiscoverBody,
+) -> crate::cos::operations::Effect<DiscoverResponse> {
+    if let Some(source) = &payload.source
+        && let Err(problem) = parse_source(source)
+    {
+        return Ok(Err(problem));
     }
-    let response = match &state.inner.model_discovery {
+    Ok(Ok(match &state.inner.model_discovery {
         Some(hook) => DiscoverResponse {
             results: hook.discover(payload.source).await,
             unavailable: false,
@@ -434,6 +446,5 @@ async fn discover(State(state): State<ApiState>, RawQuery(raw): RawQuery, body: 
             results: Vec::new(),
             unavailable: true,
         },
-    };
-    Ok(json_response(StatusCode::ACCEPTED, &response))
+    }))
 }

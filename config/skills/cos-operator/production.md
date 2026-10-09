@@ -17,9 +17,11 @@
   [rollback.sh](../../../scripts/selfdeploy/rollback.sh)）。
 - 順序は必ず **検査 → promote**: `release.sh` でリリースを作り、`verify.sh` で検査し、`status.sh` で
   `verify.json.ok` と `live_ok` を確かめてから昇格する。検査を飛ばす・`ok` が偽のまま進めることはしない。
-- selfdeploy.md §4「昇格する（人だけ）」・§5 rollback・§5b relocate-db・§7「禁止」は、人が人だけに限定した本番操作である。
-  `promote.sh`・`rollback.sh`・`install-units.sh` の実行、`POST /releases/{sha12}/promote`、`systemctl`、
-  本番 config の編集は **CoS もしない**。必要なら運用者向け task を起票し、コマンドと確認方法を「運用者の作業」に分ける。
+- 昇格は人の決定（ADR 2026-10-09-cos-operations-all-mutations）で CoS にも許された: 人が昇格を依頼し、`status.sh` の
+  `verify.json.ok` と `live_ok` を確かめた後だけ、`/cos/operations` で `POST /api/v1/releases/<sha12>/promote`
+  （`release.promote`、監査付きの外部効果）を送る。
+- selfdeploy.md §5 rollback・§5b relocate-db・§7「禁止」は、人が人だけに限定した本番操作である。
+  `promote.sh`・`rollback.sh`・`install-units.sh` の直接実行、`systemctl`、本番 config の編集は **CoS もしない**。必要なら運用者向け task を起票し、コマンドと確認方法を「運用者の作業」に分ける。
   人には web でできる判断・承認だけを依頼する（[explaining.md](explaining.md)）。人だけの実行認可は task 起票で解除されない。
 - その他の運用手順は [docs/ops/](../../../docs/ops/) の各文書（例: 受信箱・通知の設定は
   [inbox-notifications.md](../../../docs/ops/inbox-notifications.md)）に従う。手順書に「人が実行」とあるものも

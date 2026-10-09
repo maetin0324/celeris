@@ -449,7 +449,7 @@ pub(crate) fn plan_skill_mount(
         .map_err(skill_error_to_problem)?;
     node.updated_at = OffsetDateTime::now_utc();
     Ok(crate::handlers::org::OrgWrite::Upsert {
-        node,
+        node: Box::new(node),
         browser: false,
     })
 }

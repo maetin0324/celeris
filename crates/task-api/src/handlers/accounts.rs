@@ -7,6 +7,7 @@ use axum::extract::{RawQuery, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 
 use crate::admin::{AccountAdminError, AdminRequest};
+use crate::cos::operations::{Effect, effect_result};
 use crate::middleware::{require_active, require_admin};
 use crate::problem::{ApiProblem, store_problem};
 use crate::query::QueryParams;
@@ -123,6 +124,19 @@ pub(super) async fn create_account(
     no_query(&raw)?;
     require_admin(&state, &headers)?;
     let create: AccountCreateBody = read_json(body, false).await?;
+    let view = create_account_op(&state, &create)?;
+    let mut response = json_response(StatusCode::CREATED, &view);
+    if let Ok(location) = HeaderValue::from_str(&format!("/api/v1/accounts/{}", create.id)) {
+        response.headers_mut().insert(header::LOCATION, location);
+    }
+    Ok(response)
+}
+
+/// `POST /accounts`: create the account directory (shared with CoS `account.create`).
+pub(crate) fn create_account_op(
+    state: &ApiState,
+    create: &AccountCreateBody,
+) -> Result<AccountView, ApiProblem> {
     if !crate::accounts::valid_account_id(&create.id) {
         return Err(ApiProblem::bad_request(
             "id must be 1-64 ASCII alphanumeric/-/_ characters",
@@ -154,7 +168,7 @@ pub(super) async fn create_account(
         Err(e) => return Err(ApiProblem::internal(e.to_string())),
     }
     tracing::info!(who = "admin", op = "account_create", account_id = %create.id, adapter = %account_adapter, "admin: account created");
-    let view = AccountView {
+    Ok(AccountView {
         adapter: account_adapter.as_str().to_string(),
         id: create.id.clone(),
         dir: dir.display().to_string(),
@@ -167,12 +181,7 @@ pub(super) async fn create_account(
         last_check: None,
         login_pending: false,
         stats: AccountStats::default(),
-    };
-    let mut response = json_response(StatusCode::CREATED, &view);
-    if let Ok(location) = HeaderValue::from_str(&format!("/api/v1/accounts/{}", create.id)) {
-        response.headers_mut().insert(header::LOCATION, location);
-    }
-    Ok(response)
+    })
 }
 
 /// 3.31 `DELETE /accounts/{id}`: celeris 側へ委譲する（S2+S8）。`<root>/.removed/<id>-<unix秒>/` へ移す
@@ -187,33 +196,46 @@ pub(super) async fn delete_account(
 ) -> ApiResult {
     let adapter = QueryParams::parse(raw.as_deref(), &["adapter"])?.account_adapter()?;
     require_admin(&state, &headers)?;
-    require_active(&state)?;
+    effect_result(delete_account_effect(&state, adapter, &id).await)?;
+    Ok(json_response(StatusCode::OK, &serde_json::json!({})))
+}
+
+/// The daemon side of `DELETE /accounts/{id}` (shared with CoS `account.delete`, an external
+/// effect: the daemon moves the directory).
+pub(crate) async fn delete_account_effect(
+    state: &ApiState,
+    adapter: task_core::AccountAdapter,
+    id: &str,
+) -> Effect<()> {
+    if let Err(problem) = require_active(state) {
+        return Ok(Err(problem));
+    }
     if state.inner.accounts_roots.is_empty() {
-        return Err(ApiProblem::accounts_unavailable());
+        return Ok(Err(ApiProblem::accounts_unavailable()));
     }
     let Some(admin_tx) = state.inner.admin_tx.clone() else {
-        return Err(ApiProblem::accounts_unavailable());
+        return Ok(Err(ApiProblem::accounts_unavailable()));
     };
     let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
     if admin_tx
         .send(AdminRequest::AccountRemove {
             adapter,
-            id: id.clone(),
+            id: id.to_string(),
             reply: reply_tx,
         })
         .await
         .is_err()
     {
-        return Err(ApiProblem::internal(
+        return Ok(Err(ApiProblem::internal(
             "celeris is not accepting admin requests",
-        ));
+        )));
     }
     match tokio::time::timeout(std::time::Duration::from_secs(10), reply_rx).await {
         Ok(Ok(Ok(()))) => {
             tracing::info!(who = "admin", op = "account_delete", account_id = %id, %adapter, "admin: account removed");
-            Ok(json_response(StatusCode::OK, &serde_json::json!({})))
+            Ok(Ok(()))
         }
-        Ok(Ok(Err(e))) => Err(account_admin_error(&id, e)),
+        Ok(Ok(Err(e))) => Ok(Err(account_admin_error(id, e))),
         Ok(Err(_)) => Err(ApiProblem::internal(
             "celeris dropped the account remove request",
         )),
@@ -244,26 +266,38 @@ pub(super) async fn check_account(
 ) -> ApiResult {
     let adapter = QueryParams::parse(raw.as_deref(), &["adapter"])?.account_adapter()?;
     require_admin(&state, &headers)?;
-    require_active(&state)?;
+    let response = effect_result(check_account_effect(&state, adapter, &id).await)?;
+    Ok(json_response(StatusCode::OK, &response))
+}
+
+/// The daemon side of `POST /accounts/{id}/check` (shared with CoS `account.check`).
+pub(crate) async fn check_account_effect(
+    state: &ApiState,
+    adapter: task_core::AccountAdapter,
+    id: &str,
+) -> Effect<AccountCheckResponse> {
+    if let Err(problem) = require_active(state) {
+        return Ok(Err(problem));
+    }
     if state.inner.accounts_roots.is_empty() {
-        return Err(ApiProblem::accounts_unavailable());
+        return Ok(Err(ApiProblem::accounts_unavailable()));
     }
     let Some(admin_tx) = state.inner.admin_tx.clone() else {
-        return Err(ApiProblem::accounts_unavailable());
+        return Ok(Err(ApiProblem::accounts_unavailable()));
     };
     let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
     if admin_tx
         .send(AdminRequest::AccountCheck {
             adapter,
-            id: id.clone(),
+            id: id.to_string(),
             reply: reply_tx,
         })
         .await
         .is_err()
     {
-        return Err(ApiProblem::internal(
+        return Ok(Err(ApiProblem::internal(
             "celeris is not accepting admin requests",
-        ));
+        )));
     }
     let outcome = match tokio::time::timeout(std::time::Duration::from_secs(70), reply_rx).await {
         Ok(Ok(result)) => result,
@@ -273,20 +307,17 @@ pub(super) async fn check_account(
     match outcome {
         Ok(outcome) => {
             tracing::info!(who = "admin", op = "account_check", account_id = %id, %adapter, result = ?outcome.result, "admin: account checked");
-            Ok(json_response(
-                StatusCode::OK,
-                &AccountCheckResponse {
-                    result: outcome.result,
-                    checked_at: now_rfc3339(),
-                    detail: outcome.detail,
-                    usage: outcome
-                        .observation
-                        .as_ref()
-                        .map(|obs| crate::accounts::usage_view_from_observation(obs, "check")),
-                },
-            ))
+            Ok(Ok(AccountCheckResponse {
+                result: outcome.result,
+                checked_at: now_rfc3339(),
+                detail: outcome.detail,
+                usage: outcome
+                    .observation
+                    .as_ref()
+                    .map(|obs| crate::accounts::usage_view_from_observation(obs, "check")),
+            }))
         }
-        Err(e) => Err(account_admin_error(&id, e)),
+        Err(e) => Ok(Err(account_admin_error(id, e))),
     }
 }
 

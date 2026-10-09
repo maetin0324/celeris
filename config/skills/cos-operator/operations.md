@@ -109,6 +109,18 @@ curl -sS -X POST "$API/api/v1/cos/operations" -H "Authorization: Bearer $CELERIS
 | リポジトリの更新 | `PATCH /api/v1/repos/<id>` | repo.update | 変える欄だけ（1 つ以上） |
 | リポジトリの削除 | `DELETE /api/v1/repos/<id>` | repo.delete | body なし。未終了の task が使っていれば 409 |
 | クラスタの作業ディレクトリ | `PUT /api/v1/clusters/<id>/settings` | cluster.settings_put | `{"work_dir":"/abs/path"}`。`null` で設定ファイルの値に戻す |
+| provider の作成 | `POST /api/v1/providers` | provider.create | `{"id","adapter","kind"?,"llm_source"?,"model"?,…}`。`env` に API key などの秘密の値を入れない（422 `secret_operations`、本文は記録されない） |
+| provider の更新 | `PATCH /api/v1/providers/<id>` | provider.update | 変える欄だけ。秘密の値は同じく不可 |
+| provider の削除 | `DELETE /api/v1/providers/<id>` | provider.delete | body なし（無ければ 404） |
+| provider の疎通確認 | `POST /api/v1/providers/<id>/check` | provider.check | body は `{}`。daemon 経由の外部効果（pending → applied） |
+| アカウントの作成 | `POST /api/v1/accounts` | account.create | `{"id","adapter"?}`（adapter 既定 claude-code）。ログインは人（除外） |
+| アカウントの退避 | `DELETE /api/v1/accounts/<id>` | account.delete | `{"adapter"?}`（query の代わりに body）。daemon が移す外部効果。使用中は 409 |
+| アカウントの確認 | `POST /api/v1/accounts/<id>/check` | account.check | `{"adapter"?}`。外部効果 |
+| モデルの発見 | `POST /api/v1/llm/models/discover` | model_catalog.discover | `{"source"?}`。外部効果（daemon の発見を 1 回走らせる） |
+| 通知のテスト送信 | `POST /api/v1/notify/test` | notify.test | body なし。Discord に 1 通送る外部効果 |
+| 設定の再読み込み | `POST /api/v1/reload` | daemon.reload | body は `{}`。外部効果。設定の誤りは 400 で rejected |
+| replay の検査 | `POST /api/v1/replay` | daemon.replay | body は `{}`。同時に 1 つだけ（実行中は 409） |
+| release の昇格 | `POST /api/v1/releases/<sha12>/promote` | release.promote | body なし。人の依頼があり、`verify.json.ok` と `live_ok` を確かめた後だけ（[production.md](production.md)）。外部効果 |
 | 定期実行の作成 | `POST /api/v1/cron-jobs` | cron_job.create | `{"name","schedule","timezone","template",…}`（`docs/api/cron-jobs.md`）。名前の重複は 409 |
 | 定期実行の更新 | `PATCH /api/v1/cron-jobs/<id>` | cron_job.update | `<id>` は ULID か name。変える欄だけ。有効/無効は pause・resume で変える |
 | 定期実行の削除 | `DELETE /api/v1/cron-jobs/<id>` | cron_job.delete | body なし。履歴も消え、作った task は残る |
@@ -129,9 +141,8 @@ curl -sS -X POST "$API/api/v1/cos/operations" -H "Authorization: Bearer $CELERIS
 - **除外（人の決定。今後も登録しない）**: 秘密の値を扱う操作（`/secrets/*`・`/accounts/<id>/login*`・
   `/clusters/<id>/connect*`・browser の credential/attestation 系）、`/console/instruct`、`/cos/*` 自身、撤去済みの入口。
   人に web の画面で行うよう頼む。
-- **登録待ち（許可範囲は ADR 2026-10-09 で決定済み。領域別に実装中）**: 上の表に無い変更操作
-  （例: org・provider・release promote・
-  `/reload`・browser 操作など）。必要なら人に web の画面で行うよう頼むか、運用者向けの task を起票する。
+- **登録待ち（許可範囲は ADR 2026-10-09 で決定済み）**: surface 領域（chat・console・org messages・
+  artifacts promote・browser 操作）の残りだけ。必要なら人に web の画面で行うよう頼む。
   一覧はエラー本文の `pending in <領域>` と `crates/task-api/src/cos/ops/*.rs` の `PENDING` にある。
 
 ## 監視（読み取り）

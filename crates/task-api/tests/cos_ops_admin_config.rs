@@ -432,3 +432,391 @@ async fn cos_ops_admin_config_repos_and_cluster_settings_are_audited() {
     .await;
     assert!(env.store.repo_get(repo.id).expect("get").is_none());
 }
+
+#[tokio::test]
+async fn cos_ops_admin_config_providers_and_account_create_are_audited() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let providers = tmp.path().join("providers.d");
+    std::fs::create_dir_all(&providers).expect("mkdir");
+    let accounts = tmp.path().join("accounts");
+    let env = TestEnv::with(EnvOptions {
+        token: Some(TOKEN.into()),
+        providers_dir: Some(providers.clone()),
+        accounts_root: Some(accounts.clone()),
+        ..Default::default()
+    });
+
+    let op = run_domain(
+        &env,
+        "provider-create",
+        "POST",
+        "/api/v1/providers",
+        json!({"id": "fake-a", "adapter": "fake", "kind": "adapter", "llm_source": "none"}),
+        "provider.create",
+    )
+    .await;
+    assert_eq!(op["target_id"], "fake-a");
+    assert!(providers.join("fake-a.toml").exists());
+
+    run_domain(
+        &env,
+        "provider-patch",
+        "PATCH",
+        "/api/v1/providers/fake-a",
+        json!({"concurrency": 2}),
+        "provider.update",
+    )
+    .await;
+    let text = std::fs::read_to_string(providers.join("fake-a.toml")).expect("read");
+    assert!(text.contains("concurrency = 2"), "{text}");
+
+    run_domain(
+        &env,
+        "account-create",
+        "POST",
+        "/api/v1/accounts",
+        json!({"id": "acct1"}),
+        "account.create",
+    )
+    .await;
+    assert!(accounts.join("acct1").is_dir());
+
+    // Inline credential values are secret operations: refused, and the value is not recorded.
+    let app = env.router();
+    let (thread, _, bearer) = cos_bearer(&env, "provider-secret");
+    let resp = send(
+        &app,
+        post_json_with(
+            OPS,
+            &op_body(
+                "secret",
+                "POST",
+                "/api/v1/providers",
+                json!({"id": "leaky", "adapter": "fake", "env": {"OPENAI_API_KEY": "sk-should-not-be-recorded"}}),
+            ),
+            &[("authorization", bearer.as_str())],
+        ),
+    )
+    .await;
+    assert_problem(&resp, 422, "secret_operations");
+    let payload: String = db(&env)
+        .query_row(
+            "SELECT payload_json FROM cos_operations WHERE thread_id=?1",
+            [&thread],
+            |row| row.get(0),
+        )
+        .expect("row");
+    assert!(!payload.contains("sk-should-not-be-recorded"), "{payload}");
+    assert!(!providers.join("leaky.toml").exists());
+
+    expect_rejected(
+        &env,
+        "providers-rejected",
+        vec![
+            (
+                "dup",
+                "POST",
+                "/api/v1/providers",
+                json!({"id": "fake-a", "adapter": "fake"}),
+                409,
+            ),
+            (
+                "missing",
+                "DELETE",
+                "/api/v1/providers/nope",
+                json!(null),
+                404,
+            ),
+            (
+                "account-dup",
+                "POST",
+                "/api/v1/accounts",
+                json!({"id": "acct1"}),
+                409,
+            ),
+        ],
+    )
+    .await;
+
+    run_domain(
+        &env,
+        "provider-delete",
+        "DELETE",
+        "/api/v1/providers/fake-a",
+        json!(null),
+        "provider.delete",
+    )
+    .await;
+    assert!(!providers.join("fake-a.toml").exists());
+}
+
+/// A stand-in for the daemon's admin channel: answers every request and counts them by kind.
+fn fake_daemon() -> (
+    tokio::sync::mpsc::Sender<task_api::AdminRequest>,
+    std::sync::Arc<std::sync::Mutex<Vec<&'static str>>>,
+) {
+    use task_api::{
+        AccountCheckOutcome, AdminRequest, NotifyTestOutcome, ProviderCheckOutcome,
+        ProviderCheckResult,
+    };
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<AdminRequest>(8);
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let log = seen.clone();
+    tokio::spawn(async move {
+        while let Some(request) = rx.recv().await {
+            let kind = match request {
+                AdminRequest::Reload { reply } => {
+                    let _ = reply.send(Ok(()));
+                    "reload"
+                }
+                AdminRequest::Check { provider_id, reply } => {
+                    let _ = reply.send(if provider_id == "nope" {
+                        Err(task_api::CheckError::NotFound)
+                    } else {
+                        Ok(ProviderCheckOutcome {
+                            result: ProviderCheckResult::Ok,
+                            detail: None,
+                        })
+                    });
+                    "provider_check"
+                }
+                AdminRequest::AccountCheck { reply, .. } => {
+                    let _ = reply.send(Ok(AccountCheckOutcome {
+                        result: ProviderCheckResult::Ok,
+                        detail: None,
+                        observation: None,
+                    }));
+                    "account_check"
+                }
+                AdminRequest::AccountRemove { reply, .. } => {
+                    let _ = reply.send(Ok(()));
+                    "account_remove"
+                }
+                AdminRequest::NotifyTest { reply } => {
+                    let _ = reply.send(Ok(NotifyTestOutcome {
+                        ok: true,
+                        detail: None,
+                    }));
+                    "notify_test"
+                }
+                _ => "other",
+            };
+            log.lock().expect("log").push(kind);
+        }
+    });
+    (tx, seen)
+}
+
+struct FakeReleases {
+    promoted: std::sync::Mutex<Vec<String>>,
+}
+
+impl task_api::ReleaseSource for FakeReleases {
+    fn list(&self) -> task_api::ReleasesFs {
+        task_api::ReleasesFs {
+            current: Some("aaaaaaaaaaaa".into()),
+            previous: None,
+            items: vec![],
+        }
+    }
+    fn promote(
+        &self,
+        sha12: &str,
+    ) -> Result<task_api::types::ReleasePromoteAccepted, task_api::ReleasePromoteError> {
+        if sha12 == "aaaaaaaaaaaa" {
+            return Err(task_api::ReleasePromoteError::AlreadyCurrent);
+        }
+        self.promoted.lock().expect("lock").push(sha12.to_string());
+        Ok(task_api::types::ReleasePromoteAccepted {
+            sha12: sha12.to_string(),
+            log: "/dev/null".into(),
+            started_at: "2026-10-09T00:00:00Z".into(),
+            script_from: "current".into(),
+        })
+    }
+}
+
+struct Hook(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+impl task_api::ModelDiscoveryHook for Hook {
+    fn discover<'a>(
+        &'a self,
+        source: Option<String>,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Vec<task_api::DiscoverySummaryView>> + Send + 'a>,
+    > {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Box::pin(async move {
+            vec![task_api::DiscoverySummaryView {
+                source: source.unwrap_or_else(|| "all".into()),
+                ok: true,
+                count: 1,
+                error: None,
+                delta: Default::default(),
+            }]
+        })
+    }
+}
+
+#[tokio::test]
+async fn cos_ops_admin_config_daemon_and_external_effects_run_once() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let secrets = tmp.path().join("secrets");
+    std::fs::create_dir_all(&secrets).expect("mkdir");
+    std::fs::write(
+        secrets.join("discord-webhook"),
+        "https://discord.example/api/webhooks/1/x\n",
+    )
+    .expect("webhook");
+    let (admin_tx, seen) = fake_daemon();
+    let releases = std::sync::Arc::new(FakeReleases {
+        promoted: std::sync::Mutex::new(Vec::new()),
+    });
+    let discovered = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let env = TestEnv::with(EnvOptions {
+        token: Some(TOKEN.into()),
+        admin_tx: Some(admin_tx),
+        secrets_dir: Some(secrets),
+        accounts_root: Some(tmp.path().join("accounts")),
+        releases: Some(releases.clone()),
+        model_discovery: Some(std::sync::Arc::new(Hook(discovered.clone()))),
+        ..Default::default()
+    });
+
+    // Each run_external also resends the same envelope and expects the recorded operation back.
+    let op = run_external(
+        &env,
+        "reload",
+        "POST",
+        "/api/v1/reload",
+        json!({}),
+        "daemon.reload",
+    )
+    .await;
+    assert_eq!(op["result"]["reloaded"], true);
+    run_external(
+        &env,
+        "notify",
+        "POST",
+        "/api/v1/notify/test",
+        json!(null),
+        "notify.test",
+    )
+    .await;
+    run_external(
+        &env,
+        "pcheck",
+        "POST",
+        "/api/v1/providers/fake-a/check",
+        json!({}),
+        "provider.check",
+    )
+    .await;
+    run_external(
+        &env,
+        "acheck",
+        "POST",
+        "/api/v1/accounts/acct1/check",
+        json!({"adapter": "claude-code"}),
+        "account.check",
+    )
+    .await;
+    let op = run_external(
+        &env,
+        "aremove",
+        "DELETE",
+        "/api/v1/accounts/acct1",
+        json!(null),
+        "account.delete",
+    )
+    .await;
+    assert_eq!(op["result"]["removed"], true);
+    let mut kinds = seen.lock().expect("seen").clone();
+    kinds.sort_unstable();
+    assert_eq!(
+        kinds,
+        vec![
+            "account_check",
+            "account_remove",
+            "notify_test",
+            "provider_check",
+            "reload"
+        ],
+        "each effect ran exactly once despite the resend"
+    );
+
+    let op = run_external(
+        &env,
+        "discover",
+        "POST",
+        "/api/v1/llm/models/discover",
+        json!({"source": "opencode-go"}),
+        "model_catalog.discover",
+    )
+    .await;
+    assert_eq!(op["result"]["results"][0]["source"], "opencode-go");
+    assert_eq!(discovered.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+    run_external(
+        &env,
+        "promote",
+        "POST",
+        "/api/v1/releases/bbbbbbbbbbbb/promote",
+        json!(null),
+        "release.promote",
+    )
+    .await;
+    assert_eq!(
+        *releases.promoted.lock().expect("lock"),
+        vec!["bbbbbbbbbbbb".to_string()]
+    );
+
+    let op = run_external(
+        &env,
+        "replay",
+        "POST",
+        "/api/v1/replay",
+        json!({}),
+        "daemon.replay",
+    )
+    .await;
+    assert!(op["result"].is_object(), "{op}");
+
+    // Refusals of the external system settle `rejected` without a second attempt.
+    expect_rejected(
+        &env,
+        "external-rejected",
+        vec![
+            (
+                "current",
+                "POST",
+                "/api/v1/releases/aaaaaaaaaaaa/promote",
+                json!(null),
+                409,
+            ),
+            (
+                "no-provider",
+                "POST",
+                "/api/v1/providers/nope/check",
+                json!({}),
+                404,
+            ),
+            (
+                "bad-adapter",
+                "POST",
+                "/api/v1/accounts/acct1/check",
+                json!({"adapter": "x"}),
+                400,
+            ),
+            (
+                "bad-source",
+                "POST",
+                "/api/v1/llm/models/discover",
+                json!({"source": "??"}),
+                400,
+            ),
+        ],
+    )
+    .await;
+    assert_eq!(releases.promoted.lock().expect("lock").len(), 1);
+}

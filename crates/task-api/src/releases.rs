@@ -138,28 +138,39 @@ pub(crate) async fn promote(
         ));
     };
     let requested = sha12.clone();
-    let outcome = tokio::task::spawn_blocking(move || source.promote(&requested))
-        .await
-        .map_err(|e| ApiProblem::internal(format!("starting promote.sh failed: {e}")))?;
-    match outcome {
+    let accepted = tokio::task::spawn_blocking(move || {
+        crate::cos::operations::effect_result(promote_effect(source.as_ref(), &requested))
+    })
+    .await
+    .map_err(|e| ApiProblem::internal(format!("starting promote.sh failed: {e}")))??;
+    Ok(json_response(StatusCode::ACCEPTED, &accepted))
+}
+
+/// Start `promote.sh` for `sha12` (shared with CoS `release.promote`, an external effect allowed
+/// by the human decision of ADR 2026-10-09). Every refusal of the source is before any change.
+pub(crate) fn promote_effect(
+    source: &dyn ReleaseSource,
+    sha12: &str,
+) -> crate::cos::operations::Effect<ReleasePromoteAccepted> {
+    match source.promote(sha12) {
         Ok(accepted) => {
             // ADR-0040 D5: 昇格は人が押す。誰が押したかは記録に残す（値は sha12 だけ）。
             tracing::warn!(who = "admin", op = "release_promote", sha12 = %accepted.sha12, log = %accepted.log,
                 "admin: promote.sh started");
-            Ok(json_response(StatusCode::ACCEPTED, &accepted))
+            Ok(Ok(accepted))
         }
-        Err(ReleasePromoteError::NotFound) => Err(ApiProblem::release_not_found(&sha12)),
+        Err(ReleasePromoteError::NotFound) => Ok(Err(ApiProblem::release_not_found(sha12))),
         Err(ReleasePromoteError::NotVerified(detail)) => {
-            Err(ApiProblem::release_not_promotable(detail))
+            Ok(Err(ApiProblem::release_not_promotable(detail)))
         }
-        Err(ReleasePromoteError::AlreadyCurrent) => Err(ApiProblem::release_not_promotable(
+        Err(ReleasePromoteError::AlreadyCurrent) => Ok(Err(ApiProblem::release_not_promotable(
             format!("{sha12} is already the current release"),
-        )),
-        Err(ReleasePromoteError::AlreadyPromoting) => Err(ApiProblem::release_not_promotable(
+        ))),
+        Err(ReleasePromoteError::AlreadyPromoting) => Ok(Err(ApiProblem::release_not_promotable(
             format!("a promotion of {sha12} is already running"),
-        )),
+        ))),
         Err(ReleasePromoteError::Unavailable(detail)) => {
-            Err(ApiProblem::release_not_promotable(detail))
+            Ok(Err(ApiProblem::release_not_promotable(detail)))
         }
     }
 }

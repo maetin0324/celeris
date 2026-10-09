@@ -66,6 +66,48 @@ impl<T> Applied<T> {
     }
 }
 
+/// Outcome of an external effect (C): `Ok(Ok(v))` done, `Ok(Err(problem))` refused before any
+/// change (settled `rejected`), `Err(problem)` outcome unknown (left pending for remediation).
+pub(crate) type Effect<T> = Result<Result<T, ApiProblem>, ApiProblem>;
+
+/// The handler's view of an [`Effect`]: either way a failure is the route's problem.
+pub(crate) fn effect_result<T>(effect: Effect<T>) -> Result<T, ApiProblem> {
+    effect.and_then(|result| result)
+}
+
+/// An [`Effect`] with its value serialized for the operation record.
+pub(crate) fn effect_value<T: Serialize>(effect: Effect<T>) -> Effect<Value> {
+    effect.and_then(|result| match result {
+        Ok(value) => serde_json::to_value(value)
+            .map(Ok)
+            .map_err(|e| ApiProblem::internal(e.to_string())),
+        Err(problem) => Ok(Err(problem)),
+    })
+}
+
+/// Run a route's file effect (`providers.d`, account directories) directly, or with `audit`
+/// inside the CoS operation transaction as its last step: a failure rolls the record back to a
+/// rejected row, so an applied record always has its file written.
+pub(crate) fn file_op<T: Serialize, F>(
+    store: &SqliteStore,
+    audit: Option<&OperationAudit>,
+    target_kind: &str,
+    target_id: &str,
+    action: &str,
+    effect: F,
+) -> Result<Applied<T>, ApiProblem>
+where
+    F: FnOnce() -> Result<T, ApiProblem>,
+{
+    let Some(audit) = audit else {
+        return effect().map(Applied::Direct);
+    };
+    let operation = audit.apply_checked(store, target_kind, target_id, action, |_| {
+        serde_json::to_value(effect()?).map_err(|e| ApiProblem::internal(e.to_string()))
+    })?;
+    Ok(Applied::Audited(Box::new(operation)))
+}
+
 /// Audit context of one `/cos/operations` request, passed to the shared operation functions.
 #[derive(Debug, Clone)]
 pub(crate) struct OperationAudit {

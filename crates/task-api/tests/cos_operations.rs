@@ -103,7 +103,7 @@ async fn cos_chat_ops_api_rejects_paths_outside_the_allowlist_with_reasoned_even
         ("dots", "POST", "/api/v1/tasks/../providers"),
         ("recursive", "POST", "/api/v1/cos/operations"),
         ("checkpoint", "POST", "/api/v1/cos/threads/t/checkpoint"),
-        ("unregistered", "POST", "/api/v1/providers"),
+        ("unregistered", "POST", "/api/v1/no-such-route"),
         ("method", "DELETE", "/api/v1/tasks"),
         ("query", "POST", "/api/v1/tasks?x=1"),
     ];

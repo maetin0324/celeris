@@ -83,7 +83,7 @@ pub(super) async fn patch_browser_settings(
 pub(crate) enum OrgWrite {
     /// Upsert the node; `browser` also records the browser settings audit row.
     Upsert {
-        node: OrgNode,
+        node: Box<OrgNode>,
         browser: bool,
     },
     Delete(String),
@@ -204,7 +204,7 @@ pub(crate) fn plan_browser_settings(
     })?;
     node.updated_at = OffsetDateTime::now_utc();
     Ok(OrgWrite::Upsert {
-        node,
+        node: Box::new(node),
         browser: true,
     })
 }
@@ -339,7 +339,7 @@ pub(crate) fn plan_create(
     }
     let now = OffsetDateTime::now_utc();
     Ok(OrgWrite::Upsert {
-        node: OrgNode {
+        node: Box::new(OrgNode {
             id: create.id,
             parent_id: create.parent_id,
             name: create.name,
@@ -351,7 +351,7 @@ pub(crate) fn plan_create(
             position: create.position.unwrap_or(0),
             created_at: now,
             updated_at: now,
-        },
+        }),
         browser: false,
     })
 }
@@ -419,7 +419,10 @@ pub(crate) fn plan_patch(
         node.profile = profile;
     }
     node.updated_at = OffsetDateTime::now_utc();
-    Ok(OrgWrite::Upsert { node, browser })
+    Ok(OrgWrite::Upsert {
+        node: Box::new(node),
+        browser,
+    })
 }
 
 pub(super) async fn delete_org_node(

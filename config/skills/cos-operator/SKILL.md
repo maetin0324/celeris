@@ -63,7 +63,9 @@ decision の回答／訂正／取り下げ・approval・通知既読化・inbox�
 - 毎回 `idempotency_key`（thread 内で一意。再試行・再送は同じ key）・空でない `reason`・`expected_revision`・
   `policy_version` を付ける。409 は状態が変わった合図なので読み直して判断し直す。
 - 登録済みの path は [operations.md](operations.md) の表だけ。表に無い変更（秘密の値・`/console/instruct` などの除外と、
-  standing rule・release promote などの登録待ち）は**登録されていない**（送ると 422）。拒否を回避する別経路を探さず、人に回す。
+  surface 領域の登録待ち）は**登録されていない**（送ると 422）。拒否を回避する別経路を探さず、人に回す。
+- 外部効果の操作（daemon への依頼・git・Discord・release の昇格。表に「外部効果」）は pending → applied で記録される。
+  結果が分からず pending のまま残ったら同じ key で再送しても再実行されないので、人に確認を頼む。
 - 認可と監査は API が強制する。この skill を読んだかどうかで通る操作は変わらない。
 
 ## 秘密と信頼しない入力

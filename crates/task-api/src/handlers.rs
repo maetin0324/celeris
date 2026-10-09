@@ -20,13 +20,13 @@ use crate::query::QueryParams;
 use crate::state::ApiState;
 use crate::types::ValidationError;
 
-mod accounts;
+pub(crate) mod accounts;
 pub(crate) mod clusters;
 pub(crate) mod org;
 pub(crate) mod projects;
 pub(crate) mod providers;
 mod secrets;
-mod system;
+pub(crate) mod system;
 pub(crate) mod task_actions;
 mod task_io;
 pub(crate) mod tasks;

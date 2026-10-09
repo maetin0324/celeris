@@ -12,6 +12,7 @@ use crate::admin::{
     AdminRequest, ProviderCreateBody, ProviderPatchBody, read_provider_file, valid_adapter,
     valid_provider_id, write_provider_file,
 };
+use crate::cos::operations::{Effect, effect_result};
 use crate::middleware::{require_active, require_admin};
 use crate::problem::{ApiProblem, store_problem};
 use crate::state::ApiState;
@@ -69,10 +70,18 @@ async fn read_provider_json<T: DeserializeOwned>(
     empty_is_object: bool,
 ) -> Result<T, ApiProblem> {
     let bytes = read_body(body).await?;
+    provider_json(&bytes, empty_is_object)
+}
+
+/// Decode a provider body with the route's checks (no `command`/`args`, provider-field errors).
+pub(crate) fn provider_json<T: DeserializeOwned>(
+    bytes: &[u8],
+    empty_is_object: bool,
+) -> Result<T, ApiProblem> {
     let text: &[u8] = if empty_is_object && bytes.iter().all(u8::is_ascii_whitespace) {
         b"{}"
     } else {
-        &bytes
+        bytes
     };
     let provider_fields = if let Ok(serde_json::Value::Object(map)) =
         serde_json::from_slice::<serde_json::Value>(text)
@@ -191,10 +200,31 @@ pub(super) async fn create_provider(
 ) -> ApiResult {
     no_query(&raw)?;
     require_admin(&state, &headers)?;
-    let Some(dir) = state.inner.providers_dir.clone() else {
-        return Err(ApiProblem::providers_admin_unavailable());
-    };
+    providers_dir(&state)?;
     let create: ProviderCreateBody = read_provider_json(body, false).await?;
+    let view = create_provider_op(&state, create)?;
+    let mut response = json_response(StatusCode::CREATED, &view);
+    if let Ok(location) = HeaderValue::from_str(&format!("/api/v1/providers/{}", view.id)) {
+        response.headers_mut().insert(header::LOCATION, location);
+    }
+    Ok(response)
+}
+
+fn providers_dir(state: &ApiState) -> Result<std::path::PathBuf, ApiProblem> {
+    state
+        .inner
+        .providers_dir
+        .clone()
+        .ok_or_else(ApiProblem::providers_admin_unavailable)
+}
+
+/// `POST /providers`: validate and write `providers.d/<id>.toml` (shared by the handler and CoS
+/// `provider.create`, which runs it inside its audit transaction).
+pub(crate) fn create_provider_op(
+    state: &ApiState,
+    create: ProviderCreateBody,
+) -> Result<ProviderConfigView, ApiProblem> {
+    let dir = providers_dir(state)?;
     if !valid_provider_id(&create.id) {
         return Err(ApiProblem::bad_request(
             "id must be 1-64 ASCII alphanumeric/-/_ characters",
@@ -211,7 +241,7 @@ pub(super) async fn create_provider(
     // ADR-0024 D2 / ADR-0025 D1 / S1: `account_pool = true` は claude-code/codex だけ、かつ `[accounts]` に
     // そのアダプタの根ディレクトリが設定済みのときだけ有効。
     if create.account_pool.is_on() {
-        check_account_pool_adapter(&state, create.account_pool, &create.adapter)?;
+        check_account_pool_adapter(state, create.account_pool, &create.adapter)?;
     }
     let path = crate::admin::provider_file_path(&dir, &create.id);
     if path.exists() {
@@ -221,16 +251,12 @@ pub(super) async fn create_provider(
     let create_tiers_explicit = create.tiers.is_some();
     let mut file = create.into_file();
     check_model_routing(&file)?;
-    check_provider_kind(&state, &file)?;
+    check_provider_kind(state, &file)?;
     restrict_qwen_acp_tiers(&mut file, create_tiers_explicit)?;
-    migrate_credentials(&state, &mut file)?;
+    migrate_credentials(state, &mut file)?;
     write_provider_file(&dir, &file).map_err(|e| ApiProblem::internal(e.to_string()))?;
     tracing::info!(who = "admin", op = "provider_create", provider_id = %file.id, adapter = %file.adapter, "admin: provider created");
-    let mut response = json_response(StatusCode::CREATED, &file.to_view());
-    if let Ok(location) = HeaderValue::from_str(&format!("/api/v1/providers/{}", file.id)) {
-        response.headers_mut().insert(header::LOCATION, location);
-    }
-    Ok(response)
+    Ok(file.to_view())
 }
 
 pub(super) async fn patch_provider(
@@ -242,19 +268,31 @@ pub(super) async fn patch_provider(
 ) -> ApiResult {
     no_query(&raw)?;
     require_admin(&state, &headers)?;
-    let Some(dir) = state.inner.providers_dir.clone() else {
-        return Err(ApiProblem::providers_admin_unavailable());
-    };
+    let dir = providers_dir(&state)?;
     // id はファイル名に使う（`provider_file_path`）。`create_provider` と同じ検証をここでも通さないと、
     // `..%2F` のような id でディレクトリの外のファイルを読み書きできてしまう（監査で発見）。
-    if !valid_provider_id(&id) {
-        return Err(ApiProblem::provider_not_found(&id));
-    }
-    let path = crate::admin::provider_file_path(&dir, &id);
-    if !path.exists() {
+    if !valid_provider_id(&id) || !crate::admin::provider_file_path(&dir, &id).exists() {
         return Err(ApiProblem::provider_not_found(&id));
     }
     let patch: ProviderPatchBody = read_provider_json(body, true).await?;
+    let view = patch_provider_op(&state, &id, patch)?;
+    Ok(json_response(StatusCode::OK, &view))
+}
+
+/// `PATCH /providers/{id}` (shared with CoS `provider.update`).
+pub(crate) fn patch_provider_op(
+    state: &ApiState,
+    id: &str,
+    patch: ProviderPatchBody,
+) -> Result<ProviderConfigView, ApiProblem> {
+    let dir = providers_dir(state)?;
+    if !valid_provider_id(id) {
+        return Err(ApiProblem::provider_not_found(id));
+    }
+    let path = crate::admin::provider_file_path(&dir, id);
+    if !path.exists() {
+        return Err(ApiProblem::provider_not_found(id));
+    }
     if patch.concurrency.is_some_and(|c| c == 0) {
         return Err(ApiProblem::bad_request("concurrency must be >= 1"));
     }
@@ -263,19 +301,19 @@ pub(super) async fn patch_provider(
     }
     let mut current = read_provider_file(&path).map_err(|e| ApiProblem::internal(e.to_string()))?;
     check_model_routing(&patch.apply(current.clone()))?;
-    migrate_credentials(&state, &mut current)?;
+    migrate_credentials(state, &mut current)?;
     let mut updated = patch.apply(current);
     check_model_routing(&updated)?;
-    check_provider_kind(&state, &updated)?;
+    check_provider_kind(state, &updated)?;
     restrict_qwen_acp_tiers(&mut updated, patch.tiers.is_some())?;
     // ADR-0024 D2 / ADR-0025 D1 / S1: patch 後の組み合わせも検証する（`id`/`adapter` は patch で変わらない）。
     if updated.account_pool.is_on() {
-        check_account_pool_adapter(&state, updated.account_pool, &updated.adapter)?;
+        check_account_pool_adapter(state, updated.account_pool, &updated.adapter)?;
     }
-    migrate_credentials(&state, &mut updated)?;
+    migrate_credentials(state, &mut updated)?;
     write_provider_file(&dir, &updated).map_err(|e| ApiProblem::internal(e.to_string()))?;
     tracing::info!(who = "admin", op = "provider_patch", provider_id = %id, "admin: provider patched");
-    Ok(json_response(StatusCode::OK, &updated.to_view()))
+    Ok(updated.to_view())
 }
 
 pub(super) async fn delete_provider(
@@ -286,21 +324,25 @@ pub(super) async fn delete_provider(
 ) -> ApiResult {
     no_query(&raw)?;
     require_admin(&state, &headers)?;
-    let Some(dir) = state.inner.providers_dir.clone() else {
-        return Err(ApiProblem::providers_admin_unavailable());
-    };
+    delete_provider_op(&state, &id)?;
+    Ok(json_response(StatusCode::OK, &serde_json::json!({})))
+}
+
+/// `DELETE /providers/{id}` (shared with CoS `provider.delete`).
+pub(crate) fn delete_provider_op(state: &ApiState, id: &str) -> Result<(), ApiProblem> {
+    let dir = providers_dir(state)?;
     // id はファイル名に使う（`provider_file_path`）。`create_provider` と同じ検証をここでも通さないと、
     // `..%2F` のような id でディレクトリの外のファイルを削除できてしまう（監査で発見）。
-    if !valid_provider_id(&id) {
-        return Err(ApiProblem::provider_not_found(&id));
+    if !valid_provider_id(id) {
+        return Err(ApiProblem::provider_not_found(id));
     }
-    let path = crate::admin::provider_file_path(&dir, &id);
+    let path = crate::admin::provider_file_path(&dir, id);
     if !path.exists() {
-        return Err(ApiProblem::provider_not_found(&id));
+        return Err(ApiProblem::provider_not_found(id));
     }
     std::fs::remove_file(&path).map_err(|e| ApiProblem::internal(e.to_string()))?;
     tracing::info!(who = "admin", op = "provider_delete", provider_id = %id, "admin: provider deleted");
-    Ok(json_response(StatusCode::OK, &serde_json::json!({})))
+    Ok(())
 }
 
 pub(super) async fn reload(
@@ -310,9 +352,17 @@ pub(super) async fn reload(
 ) -> ApiResult {
     no_query(&raw)?;
     require_admin(&state, &headers)?;
-    require_active(&state)?;
+    let result = effect_result(reload_effect(&state).await)?;
+    Ok(json_response(StatusCode::OK, &result))
+}
+
+/// The daemon side of `POST /reload` (shared with CoS `daemon.reload`, an external effect).
+pub(crate) async fn reload_effect(state: &ApiState) -> Effect<ReloadResult> {
+    if let Err(problem) = require_active(state) {
+        return Ok(Err(problem));
+    }
     let Some(admin_tx) = state.inner.admin_tx.clone() else {
-        return Err(ApiProblem::providers_admin_unavailable());
+        return Ok(Err(ApiProblem::providers_admin_unavailable()));
     };
     let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
     if admin_tx
@@ -320,21 +370,18 @@ pub(super) async fn reload(
         .await
         .is_err()
     {
-        return Err(ApiProblem::internal(
+        return Ok(Err(ApiProblem::internal(
             "celeris is not accepting admin requests",
-        ));
+        )));
     }
     match tokio::time::timeout(std::time::Duration::from_secs(10), reply_rx).await {
         Ok(Ok(Ok(()))) => {
             tracing::info!(who = "admin", op = "reload", "admin: providers reloaded");
-            Ok(json_response(
-                StatusCode::OK,
-                &ReloadResult { reloaded: true },
-            ))
+            Ok(Ok(ReloadResult { reloaded: true }))
         }
-        Ok(Ok(Err(message))) => Err(ApiProblem::bad_request(format!(
+        Ok(Ok(Err(message))) => Ok(Err(ApiProblem::bad_request(format!(
             "invalid config: {message}"
-        ))),
+        )))),
         Ok(Err(_)) => Err(ApiProblem::internal("celeris dropped the reload request")),
         Err(_) => Err(ApiProblem::internal("reload timed out")),
     }
@@ -348,22 +395,33 @@ pub(super) async fn check_provider(
 ) -> ApiResult {
     no_query(&raw)?;
     require_admin(&state, &headers)?;
-    require_active(&state)?;
+    let response = effect_result(check_provider_effect(&state, &id).await)?;
+    Ok(json_response(StatusCode::OK, &response))
+}
+
+/// The daemon side of `POST /providers/{id}/check` (shared with CoS `provider.check`).
+pub(crate) async fn check_provider_effect(
+    state: &ApiState,
+    id: &str,
+) -> Effect<ProviderCheckResponse> {
+    if let Err(problem) = require_active(state) {
+        return Ok(Err(problem));
+    }
     let Some(admin_tx) = state.inner.admin_tx.clone() else {
-        return Err(ApiProblem::providers_admin_unavailable());
+        return Ok(Err(ApiProblem::providers_admin_unavailable()));
     };
     let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
     if admin_tx
         .send(AdminRequest::Check {
-            provider_id: id.clone(),
+            provider_id: id.to_string(),
             reply: reply_tx,
         })
         .await
         .is_err()
     {
-        return Err(ApiProblem::internal(
+        return Ok(Err(ApiProblem::internal(
             "celeris is not accepting admin requests",
-        ));
+        )));
     }
     let outcome = match tokio::time::timeout(std::time::Duration::from_secs(40), reply_rx).await {
         Ok(Ok(result)) => result,
@@ -376,20 +434,19 @@ pub(super) async fn check_provider(
                 who = "admin", op = "provider_check", provider_id = %id, result = ?outcome.result,
                 detail = outcome.detail.as_deref().unwrap_or(""), "admin: provider checked"
             );
-            Ok(json_response(
-                StatusCode::OK,
-                &ProviderCheckResponse {
-                    result: outcome.result,
-                    checked_at: now_rfc3339(),
-                    detail: outcome.detail,
-                },
-            ))
+            Ok(Ok(ProviderCheckResponse {
+                result: outcome.result,
+                checked_at: now_rfc3339(),
+                detail: outcome.detail,
+            }))
         }
-        Err(crate::admin::CheckError::NotFound) => Err(ApiProblem::provider_not_found(&id)),
-        Err(crate::admin::CheckError::ConfigInvalid(message)) => Err(ApiProblem::bad_request(
+        Err(crate::admin::CheckError::NotFound) => Ok(Err(ApiProblem::provider_not_found(id))),
+        Err(crate::admin::CheckError::ConfigInvalid(message)) => Ok(Err(ApiProblem::bad_request(
             format!("invalid config: {message}"),
-        )),
-        Err(crate::admin::CheckError::Unavailable(message)) => Err(ApiProblem::internal(message)),
+        ))),
+        Err(crate::admin::CheckError::Unavailable(message)) => {
+            Ok(Err(ApiProblem::internal(message)))
+        }
     }
 }
 

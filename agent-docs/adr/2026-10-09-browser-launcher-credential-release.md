@@ -32,7 +32,7 @@ credentiald が secret を扱い、launcher 側の trusted controller / CDP sink
 
 ## 台帳と host 条件
 
-`credential_backends` の credential 対応は、backend ID だけでなく証拠を生成した runtime（daemon / launcher）で区別する。launcher 対応を認めるのは launcher runtime で取得した `isolation_suite`・`egress_negative_suite` 等の実証証拠がその backend に紐付く場合だけとする。daemon の証拠を launcher の適合として流用しない。launcher が無い host は launcher credential evidence を生成せず、理由を記録して credential を空にする（非機密 capability の台帳結果は独立に扱う）。
+`credential_backends` の credential 対応は、backend ID だけでなく証拠を生成した runtime（daemon / launcher）で区別する。`isolation_suite`・`egress_negative_suite` は launcher runtime の実証証拠、`injection_attack_suite`・`auth_section_observation_stop` は daemon runtime の P4-B 実証証拠を各 case ごとに要求する。いずれも指定 runtime と一致しない証拠を代用しない。launcher が無い host は launcher credential evidence を生成せず、理由を記録して credential を空にする（非機密 capability の台帳結果は独立に扱う）。
 
 機密経路の試験名は `launcher_credential_`、台帳試験名は `browser_ledger_launcher_` を接頭辞とする。
 

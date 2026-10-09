@@ -370,7 +370,11 @@ fn p4b_record(dir: &Path, backends: &[&str], evidence: bool) -> PathBuf {
                     case,
                     test,
                     outcome: EvidenceOutcome::Passed,
-                    runtime: task_core::browser_backend::EvidenceRuntime::Launcher,
+                    runtime: if matches!(case, FixtureCase::IsolationSuite | FixtureCase::EgressNegativeSuite) {
+                        task_core::browser_backend::EvidenceRuntime::Launcher
+                    } else {
+                        task_core::browser_backend::EvidenceRuntime::Daemon
+                    },
                 })
         })
         .collect()

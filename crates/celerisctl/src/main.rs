@@ -331,6 +331,18 @@ fn cos_mapped(
             task_path(&args.id, "/retry")?,
             json!({"accept": !args.draft}),
         )),
+        Command::Approve(args) => Some((
+            "POST",
+            task_path(&args.id, "/approve")?,
+            json!({"note": args.note}),
+        )),
+        Command::Reject(args) => Some((
+            "POST",
+            task_path(&args.id, "/reject")?,
+            json!({"note": args.note}),
+        )),
+        Command::Accept(args) => Some(("POST", task_path(&args.id, "/accept")?, json!({}))),
+        Command::Cancel(args) => Some(("POST", task_path(&args.id, "/cancel")?, json!({}))),
         Command::Answer(args) => Some((
             "POST",
             task_path(&args.id, "/answer")?,
@@ -391,6 +403,20 @@ fn cos_mapped(
                 format!("/api/v1{path}"),
                 body.unwrap_or_else(|| json!({})),
             ))
+        }
+        Command::Models { command, .. } => {
+            models_cmd::request_of(command)?.map(|(method, path, body)| {
+                (
+                    method,
+                    format!("/api/v1{path}"),
+                    body.unwrap_or(serde_json::Value::Null),
+                )
+            })
+        }
+        // The API replay is the plain check; `--check`/`--apply` rebuild indexes in the local DB
+        // and have no API operation.
+        Command::Replay(args) if !args.check && !args.apply => {
+            Some(("POST", "/api/v1/replay".to_string(), json!({})))
         }
         _ => None,
     })
@@ -485,6 +511,10 @@ fn main() -> ExitCode {
                 | Command::Projects { .. }
                 | Command::Routing { .. }
                 | Command::Config { .. }
+                | Command::Models {
+                    command: ModelsCommand::List(_),
+                    ..
+                }
                 | Command::Knowledge {
                     command: KnowledgeCommand::Search(_) | KnowledgeCommand::Get(_)
                 }
@@ -832,7 +862,65 @@ mod cos_mapping_tests {
                 .is_none()
         );
         assert!(
-            cos_mapped(&parse(&["cancel", &id.to_string()]))
+            cos_mapped(&parse(&["rereview", &id.to_string()]))
+                .expect("map")
+                .is_none()
+        );
+        // The task gates go through task.approve/reject/accept/cancel.
+        for (verb, tail) in [
+            ("approve", "/approve"),
+            ("reject", "/reject"),
+            ("accept", "/accept"),
+            ("cancel", "/cancel"),
+        ] {
+            let (method, path, _) = cos_mapped(&parse(&[verb, &id.to_string()]))
+                .expect("map")
+                .expect("mapped");
+            assert_eq!(method, "POST");
+            assert_eq!(path, format!("/api/v1/tasks/{id}{tail}"));
+        }
+        // ops-admin-config: model catalog and the API replay go through their operations.
+        let (method, path, body) =
+            cos_mapped(&parse(&["models", "discover", "--source", "opencode-go"]))
+                .expect("map")
+                .expect("mapped");
+        assert_eq!(
+            (method, path.as_str()),
+            ("POST", "/api/v1/llm/models/discover")
+        );
+        assert_eq!(body, serde_json::json!({"source": "opencode-go"}));
+        let (method, path, body) = cos_mapped(&parse(&[
+            "models",
+            "assign",
+            "opencode-go",
+            "cheap",
+            "glm-5",
+        ]))
+        .expect("map")
+        .expect("mapped");
+        assert_eq!(
+            (method, path.as_str()),
+            ("PUT", "/api/v1/llm/models/assignments/opencode-go/cheap")
+        );
+        assert_eq!(body["model_id"], "glm-5");
+        let (method, path, _) = cos_mapped(&parse(&["models", "unassign", "opencode-go", "cheap"]))
+            .expect("map")
+            .expect("mapped");
+        assert_eq!(
+            (method, path.as_str()),
+            ("DELETE", "/api/v1/llm/models/assignments/opencode-go/cheap")
+        );
+        assert!(
+            cos_mapped(&parse(&["models", "list"]))
+                .expect("map")
+                .is_none()
+        );
+        let (method, path, _) = cos_mapped(&parse(&["replay"]))
+            .expect("map")
+            .expect("mapped");
+        assert_eq!((method, path.as_str()), ("POST", "/api/v1/replay"));
+        assert!(
+            cos_mapped(&parse(&["replay", "--apply"]))
                 .expect("map")
                 .is_none()
         );

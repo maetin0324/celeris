@@ -28195,7 +28195,7 @@
               "type": "null"
             }
           ],
-          "description": "ADR-0098 D7（Phase R7-10）: 案件を持たない task に案件を付ける。受け付けるのは、案件が無く・親が無く・\n`draft`/`ready` で・まだ一度も run していない（lease 無し、`attempts == 0`、`WorkerStarted` 無し）task だけ。\n既に案件を持つ task の変更は 422。同じ PATCH に `repos` が無ければ案件の primary を付ける（リモートなら 422）。"
+          "description": "ADR-0098 D7（Phase R7-10）: 案件を持たない task に案件を付ける。受け付けるのは、案件が無く・\n`draft`/`ready` で・まだ一度も run していない（lease 無し、`attempts == 0`、`WorkerStarted` 無し）task か、\n`blocked` の task（ADR 2026-10-09-cos-task-repository-required D3）。子 task は親が案件を持たないか\n同じ案件のときだけ（違えば 422）。既に案件を持つ task の変更は 422。同じ PATCH に `repos` が無ければ\n同じ案件の親の repos、無ければ案件の primary を付ける（リモートなら 422）。次の run の作業場所に並ぶ。"
         },
         "repos": {
           "description": "ADR-0043 D2（Phase 52 / A1）: このタスクが使う案件のリポジトリを**名前で**差し替える\n（`project_repos.name`。空配列で「リポジトリを使わない」）。名前は `POST /tasks` と同じ規則で\n**そのタスクの案件の中**から解決する（知らない名前・リモートと他の混在は 422、案件に属さない\nタスクで空でない `repos` を書くのも 422）。走っている run には効かず、次の run の worktree から。",

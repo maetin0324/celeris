@@ -96,9 +96,11 @@ pub struct TaskEdit {
     /// その場で `ready` に戻す（下記 `edit_task` を見よ）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace: Option<WorkspaceSpec>,
-    /// ADR-0098 D7（Phase R7-10）: 案件を持たない task に案件を付ける。受け付けるのは、案件が無く・親が無く・
-    /// `draft`/`ready` で・まだ一度も run していない（lease 無し、`attempts == 0`、`WorkerStarted` 無し）task だけ。
-    /// 既に案件を持つ task の変更は 422。同じ PATCH に `repos` が無ければ案件の primary を付ける（リモートなら 422）。
+    /// ADR-0098 D7（Phase R7-10）: 案件を持たない task に案件を付ける。受け付けるのは、案件が無く・
+    /// `draft`/`ready` で・まだ一度も run していない（lease 無し、`attempts == 0`、`WorkerStarted` 無し）task か、
+    /// `blocked` の task（ADR 2026-10-09-cos-task-repository-required D3）。子 task は親が案件を持たないか
+    /// 同じ案件のときだけ（違えば 422）。既に案件を持つ task の変更は 422。同じ PATCH に `repos` が無ければ
+    /// 同じ案件の親の repos、無ければ案件の primary を付ける（リモートなら 422）。次の run の作業場所に並ぶ。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_id: Option<task_core::ProjectId>,
     /// ADR-0074 D2.1（Phase F3 途中確認）: 工程の後で止まるか（`none`/`each_phase`/`after`）。
@@ -517,6 +519,10 @@ pub fn edit_task(
 
 /// ADR-0098 D7: 案件を持たない・まだ一度も run していない task に案件 `project_id` を付ける。
 /// `repos_given` が偽なら案件の primary を付ける（ADR-0043 D2。リモートの primary は作業場所の種類が変わるので 422）。
+///
+/// ADR 2026-10-09-cos-task-repository-required D3 で広げた: `blocked` の task（run した後でもよい）と、
+/// 親が案件を持たないか同じ案件を持つ子 task も受け付ける。子で `repos` を書かなければ、同じ案件の親の
+/// repos（無ければ primary）を付ける（作成時の「親 → primary」と同じ順）。
 fn attach_project(
     store: &dyn TaskStore,
     task: &mut Task,
@@ -528,11 +534,17 @@ fn attach_project(
             "task already belongs to project {current}; a task's project cannot be changed or removed (ADR-0098 D7)"
         )));
     }
-    if task.parent_id.is_some() {
-        return Err(OpsError::Validation(
-            "a child task follows its parent's project; attach the project to the root task (ADR-0098 D7)"
-                .to_string(),
-        ));
+    let parent = match task.parent_id {
+        Some(parent_id) => store.get(parent_id)?,
+        None => None,
+    };
+    if let Some(parent) = &parent
+        && let Some(parent_project) = parent.project_id
+        && parent_project != project_id
+    {
+        return Err(OpsError::Validation(format!(
+            "a child task follows its parent's project {parent_project}; attach that project or none (ADR-0098 D7)"
+        )));
     }
     let started = task.lease.is_some()
         || task.attempts > 0
@@ -540,11 +552,17 @@ fn attach_project(
             .events_for(task.id)?
             .iter()
             .any(|(_, e)| matches!(e, Event::WorkerStarted { .. }));
-    if !matches!(task.status, Status::Draft | Status::Ready) || started {
+    let accepts = match task.status {
+        Status::Draft | Status::Ready => !started,
+        Status::Blocked => task.lease.is_none(),
+        _ => false,
+    };
+    if !accepts {
         return Err(OpsError::InvalidState {
             id: task.id,
             context: format!("status={:?}, started={started}", task.status),
-            action: "given a project; only a draft/ready task that has never run accepts one (ADR-0098 D7)"
+            action: "given a project; only a draft/ready task that has never run or a blocked task accepts one \
+                     (ADR-0098 D7, ADR 2026-10-09-cos-task-repository-required D3)"
                 .to_string(),
         });
     }
@@ -552,7 +570,13 @@ fn attach_project(
         return Err(OpsError::ProjectNotFound(project_id));
     }
     task.project_id = Some(project_id);
-    if !repos_given {
+    if !repos_given
+        && let Some(parent) = &parent
+        && parent.project_id == Some(project_id)
+        && !parent.repos.is_empty()
+    {
+        task.repos = parent.repos.clone();
+    } else if !repos_given {
         let primary = store
             .repo_list(project_id)?
             .into_iter()

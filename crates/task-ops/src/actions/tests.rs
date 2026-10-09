@@ -114,7 +114,8 @@ fn create_task_makes_a_ready_task_and_records_a_summary() {
     let store = SqliteStore::open_in_memory().unwrap();
     seed_engineering(&store);
     let task = cos_task();
-    let parsed = parse(
+    let parsed = parse_with_repo(
+        &store,
         r#"{"actions":[{"type":"create_task","title":"直す","objective":"直して",
            "acceptance":["直った"],"harness":"coding","tier":"frontier"}]}"#,
     );
@@ -195,7 +196,8 @@ fn create_task_carries_pause_after_from_cos_with_agent_source() {
     let store = SqliteStore::open_in_memory().unwrap();
     seed_engineering(&store);
     let task = cos_task();
-    let parsed = parse(
+    let parsed = parse_with_repo(
+        &store,
         r#"{"actions":[{"type":"create_task","title":"直す","objective":"直して",
            "acceptance":["直った"],"harness":"coding",
            "pause_after":{"mode":"each_phase"}}]}"#,
@@ -229,7 +231,8 @@ fn create_task_with_a_known_cluster_workspace_makes_a_remote_task() {
     let store = SqliteStore::open_in_memory().unwrap();
     seed_engineering(&store);
     let task = cos_task();
-    let parsed = parse(
+    let parsed = parse_with_repo(
+        &store,
         r#"{"actions":[{"type":"create_task","title":"pegasusinfo を実行","objective":"実行して",
            "acceptance":["結果が分かる"],"harness":"coding",
            "workspace":{"kind":"remote","cluster":"pegasus","path":"~"}}]}"#,
@@ -269,7 +272,8 @@ fn create_task_with_workspace_mode_shared_makes_a_shared_remote_task() {
     let store = SqliteStore::open_in_memory().unwrap();
     seed_engineering(&store);
     let task = cos_task();
-    let parsed = parse(
+    let parsed = parse_with_repo(
+        &store,
         r#"{"actions":[{"type":"create_task","title":"pegasusinfo を実行","objective":"実行して",
            "acceptance":["結果が分かる"],"harness":"coding",
            "workspace":{"kind":"remote","cluster":"pegasus","path":"~","mode":"shared"}}]}"#,
@@ -859,5 +863,84 @@ fn delegated_work_keeps_the_original_request_and_a_scope_review_condition() {
             .acceptance
             .iter()
             .any(|c| c.text.contains("調査報告や提案だけでは合格にせず"))
+    );
+}
+
+// Coding success fixtures explicitly register their repository; admission is tested separately.
+fn parse_with_repo(store: &SqliteStore, text: &str) -> (Vec<ConsoleAction>, Vec<String>) {
+    use task_core::{
+        Project, ProjectId, ProjectRepo, ProjectStatus, RepoId, RepoKind, RepoRun, WorkspaceSpec,
+    };
+    let mut value: serde_json::Value = serde_json::from_str(text).unwrap();
+    let project = Project {
+        id: ProjectId::new(),
+        title: "p".into(),
+        request: "r".into(),
+        status: ProjectStatus::Active,
+        auto_advance: false,
+        slug: None,
+        archived_at: None,
+        paused_from: None,
+        secretary_summary: None,
+        workspace: None,
+        created_at: now(),
+        updated_at: now(),
+    };
+    store.project_create(&project).unwrap();
+    let action = &mut value["actions"][0];
+    let mut location = action
+        .get("workspace")
+        .map(|v| serde_json::from_value(v.clone()).unwrap())
+        .unwrap_or_else(|| WorkspaceSpec::local("/srv/code"));
+    if let WorkspaceSpec::Remote { path, .. } = &mut location {
+        *path = "/srv/code".into();
+    }
+    store
+        .repo_create(&ProjectRepo {
+            id: RepoId::new(),
+            project_id: project.id,
+            name: "code".into(),
+            kind: RepoKind::Git,
+            location,
+            default_branch: None,
+            sync: None,
+            run: RepoRun::Auto,
+            is_primary: true,
+            created_at: now(),
+        })
+        .unwrap();
+    action["project"] = serde_json::json!(project.id);
+    action["repos"] = serde_json::json!(["code"]);
+    parse(&value.to_string())
+}
+
+#[test]
+fn repository_required_legacy_cos_action_rejects_before_insertion() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let task = cos_task();
+    let parsed = parse(
+        r#"{"actions":[{"type":"create_task","title":"直す","objective":"直して",
+        "acceptance":["直った"],"harness":"coding"}]}"#,
+    );
+    let outcome = execute(
+        &store,
+        &[],
+        &[],
+        &[],
+        &[],
+        &task,
+        "missing-repository",
+        &parsed.0,
+        &parsed.1,
+        now(),
+    )
+    .unwrap()
+    .unwrap();
+    assert!(outcome.executed.is_empty());
+    assert_eq!(outcome.failed.len(), 1);
+    assert!(
+        outcome.failed[0]
+            .reason
+            .contains(crate::repo_requirement::REPOSITORY_REQUIRED)
     );
 }

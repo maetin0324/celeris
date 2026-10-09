@@ -221,8 +221,22 @@ pub(super) async fn create_task(
     let task = state
         .blocking(move |store| create_task_op(store, &roles, &genres, body, None)?.direct())
         .await?;
-    Ok(created_task(&task))
+    let mut response = created_task(&task);
+    // ADR 2026-10-09-cos-task-repository-required D2: 人の起票は拒否せず、header で警告する
+    // （後から `PATCH /tasks/{id}` の `project_id`・`repos` で付けられる）。
+    if task_ops::repo_requirement::missing_repository_reason(&task).is_some() {
+        response.headers_mut().insert(
+            REPOSITORY_WARNING_HEADER,
+            HeaderValue::from_static(REPOSITORY_WARNING),
+        );
+    }
+    Ok(response)
 }
+
+/// ADR 2026-10-09-cos-task-repository-required D2: 人の `POST /tasks` への警告の header。
+pub const REPOSITORY_WARNING_HEADER: &str = "celeris-warning";
+const REPOSITORY_WARNING: &str = "repository_required: the task uses a repository but has no project_id/repos; \
+     attach them with PATCH /tasks/{id} (project_id, repos) before it runs";
 
 /// `POST /tasks` の本体。handler（`audit = None`）と CoS の `/cos/operations`（ADR 2026-10-05 D3。
 /// `audit` の transaction で task・`cos_operations`・監査 event を一緒に書く）が共有する。
@@ -242,6 +256,14 @@ pub(crate) fn create_task_op(
         Some(audit) => audit.reject(store, "task", "new", problem),
         None => problem,
     };
+    // repo 名だけがあり案件が無い要求にも、CoS へは同じ修正可能な理由を返す。
+    if audit.is_some() && task.project_id.is_none() && !task.repos.is_empty() {
+        return Err(reject(ApiProblem::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            task_ops::repo_requirement::REPOSITORY_REQUIRED_CODE,
+            task_ops::repo_requirement::REPOSITORY_REQUIRED,
+        )));
+    }
     let paths = expected_write_paths
         .map(|paths| task_core::write_set::normalize_write_paths(&paths))
         .transpose()
@@ -259,6 +281,17 @@ pub(crate) fn create_task_op(
     let built =
         task_ops::add::build_task_with_roles(store, task, roles, genres, OffsetDateTime::now_utc())
             .map_err(|e| reject(ops_problem(store, e, None)))?;
+    // ADR 2026-10-09-cos-task-repository-required D1: CoS の起票は、リポジトリを使う task に案件・
+    // リポジトリが無ければ 422（worker の workspace が空のまま走らせない）。
+    if audit.is_some()
+        && let Some(reason) = task_ops::repo_requirement::missing_repository_reason(&built)
+    {
+        return Err(reject(ApiProblem::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            task_ops::repo_requirement::REPOSITORY_REQUIRED_CODE,
+            reason,
+        )));
+    }
     let paths = paths.filter(|paths| !paths.is_empty());
     let thread = audit.map(|audit| audit.ctx.thread_id.clone());
     // ADR 2026-10-07 cos-live-fixes D1: the task row, its `ready` status and the attachment pins are

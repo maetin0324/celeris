@@ -18,3 +18,5 @@ license: このリポジトリと同じ（外部の license は無い）
   （task-api）で固定した。未登録の PUT execution-plan・pause/resume・standing-rules は「登録されていない操作」に移した。
   KB へは `celerisctl skills import config/skills --name cos-operator --name cos-inbox-triage --root <kb_root>` で
   参照 file ごと取り込む（本番 KB への取り込みは人が行う）。
+- 2026-10-09（version 4）: [案件・repo 必須検査の ADR](../../../docs/adr/2026-10-09-cos-task-repository-required.md)
+  に従い、operations.md の起票節へ project_id・repos の規則、登録一覧の確認、例、既存 task の修復手順を追加した。

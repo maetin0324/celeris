@@ -14,7 +14,7 @@ curl -sS -X POST "$API/api/v1/cos/operations" -H "Authorization: Bearer $CELERIS
 
 ```json
 {"idempotency_key":"<thread 内で一意>","expected_revision":null,
- "reason":"<空でない理由>","policy_version":"3",
+ "reason":"<空でない理由>","policy_version":"4",
  "request":{"method":"POST","path":"<下の表の path>","body":{}}}
 ```
 
@@ -59,11 +59,22 @@ curl -sS -X POST "$API/api/v1/cos/operations" -H "Authorization: Bearer $CELERIS
 各要素は `type` つき。`human` だけの条件は 422 なので `reviewer` か `command`・`artifact_exists` を入れる。
 担当・model は書かない（割り当ては Celeris が決める）。
 
+**リポジトリを使う task は `project_id` と `repos` を付けて起票する。** `genre: "coding"` の task、
+または objective・acceptance が repo 内の path や `cargo`・`pnpm`・`git` 等を前提にする task が対象。
+`GET /api/v1/projects` と `GET /api/v1/projects/<id>/repos` で案件 ID と登録 repo 名を確認し、
+`repos` は名前の配列（例: `["agent-platform"]`）で送る。thread の案件から自動で付くと考えない。
+案件や repo を特定できなければ起票前に確認する。workspace の path だけを書いて代用しない。
+不足は 422 `repository_required` で、task は作られない。本文を補って新しい idempotency_key で送る。
+既存の未実行・blocked の task（子も含む）は、人が `PATCH /api/v1/tasks/<id>` に
+`{"project_id":"<案件 ID>","repos":["agent-platform"]}` を送れば修復できる。blocked の解除は別操作。
+PATCH は現在 CoS の操作表に無いので、CoS が直接実行する別経路を探さない。
+
 ```json
 {"idempotency_key":"create-screen-fix-1","expected_revision":null,
- "reason":"人がチャットで画面の修正を依頼した（seq 12）","policy_version":"3",
+ "reason":"人がチャットで画面の修正を依頼した（seq 12）","policy_version":"4",
  "request":{"method":"POST","path":"/api/v1/tasks","body":{
    "title":"画面修正","objective":"依頼の全文",
+   "genre":"coding","project_id":"<確認した案件 ID>","repos":["agent-platform"],
    "acceptance":[{"type":"reviewer","text":"添付の screenshot の崩れが直っている"}]}}}
 ```
 
@@ -74,7 +85,7 @@ curl -sS -X POST "$API/api/v1/cos/operations" -H "Authorization: Bearer $CELERIS
 
 ```json
 {"idempotency_key":"kb-fern03-manual-1","expected_revision":null,
- "reason":"人がチャットで手順を KB に残すよう依頼した（seq 14）","policy_version":"3",
+ "reason":"人がチャットで手順を KB に残すよう依頼した（seq 14）","policy_version":"4",
  "request":{"method":"POST","path":"/api/v1/knowledge/inbox","body":{
    "title":"fern03 の使い方","scope":"project:agent-platform",
    "body":"要点（Markdown）","sources":["message:<message id>"],

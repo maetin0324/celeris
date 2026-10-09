@@ -611,6 +611,11 @@ DB 全体の status 別件数 `by_status`）。`attention[]` は `type` で区�
 
 ### 3.4 `POST /tasks` → 201 `Task`（`Location: /api/v1/tasks/{id}`。**管理系**）
 
+CoS の `/cos/operations` 経由では、coding または objective・acceptance に repo の path/コマンドを含む task に
+案件と非空 repos が無ければ 422 `repository_required`（task は作成されない）。人の直接 POST は同じ検査で
+`celeris-warning: repository_required: ...` 応答ヘッダを返し、作成は許す。後付けまで実行を待つには `status: "draft"` を指定する。
+
+
 `token_file` 未設定でも 401（`require_admin`。認可は本文の検証より先）。クエリは受けない。
 要求本文は `task_ops::add::NewTaskSpec`（`celerisctl add` の引数と 1:1。`deny_unknown_fields`。§6.2）:
 
@@ -2194,8 +2199,13 @@ commit を task に結ぶのに使う。クエリは受け付けない。`items[
 
 要求本文は `task_ops::edit::TaskEdit`。**書いた項目だけ**が変わる。`null` を書ける項目
 （`assignee` / `role` / `adapter` / `milestone_id` / `harness`）は `null` で消す、省略で据え置き。
-`workspace` は `WorkspaceSpec`、`project_id` は案件を持たない未実行の root task への案件付与、
+`workspace` は `WorkspaceSpec`、`project_id` は案件を持たない未実行の draft/ready または lease の無い blocked task への案件付与（子も含む）、
 `pause_after` は次の計画採用時に解決する停止点の指定。これらも省略時は据え置く。
+
+案件の後付けは `{"project_id":"<案件 ID>","repos":["code"]}`。既存案件の変更・削除は 422。
+子は親が案件を持たないか同じ案件の場合だけ受け付ける。repos 省略時は同じ案件の親の repos、次に案件 primary。
+blocked は解除せず、回答・再開後の run でリポジトリが配置される。既存の子への一括伝播はしない。
+
 
 ```json
 {"title":"…","objective":"…","acceptance":[{"type":"human","text":"…"}],
@@ -3379,7 +3389,7 @@ catalog の自動発見は表を消さない。`GET /llm/models` の各 item に
 §2 の 178〜195。パスは `/api/v1` から。閲覧は既存の認証（Bearer / Host）、書込みは管理権限。型は `ChatThread`・`ChatMessage`・`ChatRun`・`ChatAttachment`・`ChatCard`・`ChatEvent` と各 request/response（§6、`api-v1.schema.json` の `$defs`）。設計の正本は [ADR 2026-10-05](../../../agent-docs/adr/2026-10-05-cos-chat-home.md) D2。
 
 MCP の console_instruct は 2026-10-08 の人の決定で legacy facade から独立した。
-通常の human スレッドに queue し、thread_id を返す（引数・返信は [MCP ガイド §5](../../guides/mcp.md)）。
+通常の human スレッドに queue し、thread_id を返す（引数・返信は [MCP ガイド §5](../../../docs/guides/mcp.md)）。
 REST の旧 Console エンドポイントは既定 legacy スレッドを使う従来の契約を維持する。
 
 | 事項 | 決め |

@@ -491,7 +491,7 @@ pub fn build_task_with_roles(
 /// ADR-0079 D13（Phase R5a）: 案件直下の task（`task_core::is_root_task`）に途中目標の行を自動で作る
 /// 1:1 の規則（ADR-0074 D3.8）は廃止。root task はそのまま案件に並ぶ（`milestone_id` は人が明示した・
 /// 親から継いだときだけ持つ。既存の途中目標の行は凍結）。
-fn insert_task(
+pub(crate) fn insert_task(
     store: &dyn TaskStore,
     task: Task,
     extra_events: Vec<task_core::Event>,

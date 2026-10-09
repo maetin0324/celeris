@@ -11570,9 +11570,11 @@ export interface TaskPatchBody {
    */
   priority?: PriorityInput | null;
   /**
-   * ADR-0098 D7（Phase R7-10）: 案件を持たない task に案件を付ける。受け付けるのは、案件が無く・親が無く・
-   * `draft`/`ready` で・まだ一度も run していない（lease 無し、`attempts == 0`、`WorkerStarted` 無し）task だけ。
-   * 既に案件を持つ task の変更は 422。同じ PATCH に `repos` が無ければ案件の primary を付ける（リモートなら 422）。
+   * ADR-0098 D7（Phase R7-10）: 案件を持たない task に案件を付ける。受け付けるのは、案件が無く・
+   * `draft`/`ready` で・まだ一度も run していない（lease 無し、`attempts == 0`、`WorkerStarted` 無し）task か、
+   * `blocked` の task（ADR 2026-10-09-cos-task-repository-required D3）。子 task は親が案件を持たないか
+   * 同じ案件のときだけ（違えば 422）。既に案件を持つ task の変更は 422。同じ PATCH に `repos` が無ければ
+   * 同じ案件の親の repos、無ければ案件の primary を付ける（リモートなら 422）。次の run の作業場所に並ぶ。
    */
   project_id?: ProjectId | null;
   /**

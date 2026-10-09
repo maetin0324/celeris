@@ -396,8 +396,14 @@ fn create_task_action(
             dropped_assignee: dropped_assignee.clone(),
         },
     };
-    let task = crate::add::create_task_with_roles(store, spec, roles, genres, now)
+    let task = crate::add::build_task_with_roles(store, spec, roles, genres, now)
         .map_err(|e| e.to_string())?;
+    // ADR 2026-10-09-cos-task-repository-required D1: CoS が起票するリポジトリを使う task は案件・
+    // リポジトリを持つこと（`/cos/operations` の `task.create` と同じ検査）。
+    if let Some(reason) = crate::repo_requirement::missing_repository_reason(&task) {
+        return Err(reason);
+    }
+    let task = crate::add::insert_task(store, task, vec![]).map_err(|e| e.to_string())?;
     let note = match &dropped_assignee {
         Some(a) => format!(
             "（担当の指定 {a} は人の明示ではないので使わず、celeris が skills と harness から決定的に選びます）"

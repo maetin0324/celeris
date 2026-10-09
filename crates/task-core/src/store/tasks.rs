@@ -766,6 +766,34 @@ impl SqliteStore {
         let Some(current) = Self::get_locked(&tx, task.id)? else {
             return Err(StoreError::Invalid(format!("task not found: {}", task.id)));
         };
+        // ADR 2026-10-09 D3: 案件の後付けを組み立ててから lease を取られた場合も拒む。
+        // ops の事前検査だけでは、空 workspace の run と案件付与が競合してしまう。
+        if current.project_id != task.project_id
+            && matches!(&event, Event::Edited { fields, .. } if fields.iter().any(|f| f == "project_id"))
+        {
+            let started: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM events WHERE task_id = ?1 AND json_extract(json, '$.type') = 'worker_started')",
+                params![task.id.to_string()], |row| row.get(0),
+            )?;
+            let accepts = current.lease.is_none()
+                && match current.status {
+                    Status::Draft | Status::Ready => current.attempts == 0 && !started,
+                    Status::Blocked => true,
+                    _ => false,
+                };
+            if current.project_id.is_some() || task.project_id.is_none() || !accepts {
+                return Err(StoreError::Invalid("project attachment requires an unstarted draft/ready or lease-free blocked task without a project".into()));
+            }
+            if let Some(parent_id) = current.parent_id
+                && let Some(parent) = Self::get_locked(&tx, parent_id)?
+                && parent.project_id.is_some()
+                && parent.project_id != task.project_id
+            {
+                return Err(StoreError::Invalid(
+                    "a child task must use its parent's project".into(),
+                ));
+            }
+        }
         // 状態機械が持つ 3 つ（`status` / `attempts` / `lease`）だけは**この tx の中で読んだ行**の値を使う。
         // 編集を組み立てている間にディスパッチャが `acquire_lease` を通していたら、渡された `task` は
         // 古い `ready` / `lease: None` を持っている。そのまま書くと `json` と `status` 列が食い違い、

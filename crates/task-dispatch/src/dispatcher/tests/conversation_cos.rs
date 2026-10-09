@@ -1249,11 +1249,11 @@ fn absorb_console_actions_executes_the_declared_actions_for_the_cos_only() {
     // 有効な action ＋ 検証に落ちる action の混在。
     std::fs::write(
         ws.join("artifacts/result.json"),
-        r#"{"summary":"やります","actions":[
+        coding_result(&store, dir.path(), r#"{"summary":"やります","actions":[
             {"type":"create_task","title":"直す","objective":"直して","acceptance":["直った"],"harness":"coding",
              "stages_hint":[{"title":"Phase 1","scope":"MVP"}]},
             {"type":"add_milestone","project":"01ZZZZZZZZZZZZZZZZZZZZZZZZ","title":"廃止された action"}
-        ]}"#,
+        ]}"#),
     )
     .unwrap();
     let outcome = d
@@ -1357,9 +1357,9 @@ fn absorb_console_actions_executes_actions_recovered_from_the_final_message() {
     // で判定してそのまま書き込んだものと同じ形）。
     std::fs::write(
         ws.join("artifacts/result.json"),
-        r#"{"summary":"直すタスクを作りました","actions":[
+        coding_result(&store, dir.path(), r#"{"summary":"直すタスクを作りました","actions":[
             {"type":"create_task","title":"直す","objective":"直して","acceptance":["直った"],"harness":"coding"}
-        ]}"#,
+        ]}"#),
     )
     .unwrap();
     let outcome = d
@@ -1411,7 +1411,7 @@ fn record_conversation_reply_runs_actions_and_attaches_the_result() {
 
     std::fs::write(
         ws.join("artifacts/result.json"),
-        r#"{"summary":"やります","actions":[{"type":"create_task","title":"直す","objective":"直して","acceptance":["直った"],"harness":"coding"}]}"#,
+        coding_result(&store, dir.path(), r#"{"summary":"やります","actions":[{"type":"create_task","title":"直す","objective":"直して","acceptance":["直った"],"harness":"coding"}]}"#),
     )
     .unwrap();
 
@@ -1667,4 +1667,16 @@ fn run_extras_recent_work_carries_project_title_and_artifacts() {
         Some("Pluvio と比較可能な非同期ランタイムを 3 件確認した")
     );
     assert_eq!(w.artifacts, vec!["survey.md".to_string()]);
+}
+
+fn coding_result(store: &Arc<dyn TaskStore>, dir: &std::path::Path, result: &str) -> String {
+    let (project_id, _) = project_with_repos(store, &[("code", dir, task_core::RepoKind::Dir)]);
+    let mut result: serde_json::Value = serde_json::from_str(result).unwrap();
+    for action in result["actions"].as_array_mut().unwrap() {
+        if action["type"] == "create_task" {
+            action["project"] = serde_json::json!(project_id);
+            action["repos"] = serde_json::json!(["code"]);
+        }
+    }
+    result.to_string()
 }

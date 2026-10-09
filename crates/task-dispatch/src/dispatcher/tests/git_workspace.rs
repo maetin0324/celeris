@@ -1311,3 +1311,88 @@ async fn a_v1_plan_stays_serial_without_work_unit_worktrees() {
     );
     assert!(!root.path().join(task.id.to_string()).join("wu").exists());
 }
+
+/// Repair an already-run blocked child, then use the ordinary dispatcher and worker path.
+#[tokio::test]
+async fn repository_required_attached_blocked_child_runs_in_registered_worktree() {
+    let root = tempfile::tempdir().unwrap();
+    let code = root.path().join("source");
+    init_test_repo(&code);
+    let ws_root = root.path().join("workspaces");
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let (project_id, _) = project_with_repos(
+        &store,
+        &[("code", code.as_path(), task_core::RepoKind::Git)],
+    );
+    let mut parent = new_task(
+        root.path(),
+        Check::Command {
+            cmd: "true".into(),
+            expect_exit: 0,
+        },
+        0,
+    );
+    parent.status = Status::Draft;
+    store.insert(&parent).unwrap();
+    let mut task = new_task(
+        root.path(),
+        Check::Command {
+            cmd: "test -f README.md".into(),
+            expect_exit: 0,
+        },
+        0,
+    );
+    task.parent_id = Some(parent.id);
+    task.workspace = WorkspaceSpec::local(task.id.to_string());
+    task.status = Status::Blocked;
+    task.attempts = 1;
+    store.insert(&task).unwrap();
+    let task_dir = ws_root.join(task.id.to_string());
+    std::fs::create_dir_all(task_dir.join("artifacts")).unwrap();
+    std::fs::write(task_dir.join("artifacts/old-run.txt"), "keep").unwrap();
+    let seen = Arc::new(StdMutex::new(Vec::new()));
+    let adapter = Arc::new(RecordingAdapter {
+        seen: seen.clone(),
+        files: vec![],
+    });
+    let mut d = worktree_dispatcher(store.clone(), adapter, &ws_root, None);
+    assert!(d.task_workspaces_for(&task).is_none());
+    let edited = task_ops::edit::edit_task(
+        store.as_ref(),
+        task.id,
+        task_ops::edit::TaskEdit {
+            project_id: Some(project_id),
+            repos: Some(vec!["code".into()]),
+            ..Default::default()
+        },
+        &[],
+        OffsetDateTime::now_utc(),
+    )
+    .unwrap();
+    assert_eq!(edited.task.status, Status::Blocked);
+    store
+        .apply_transition(
+            task.id,
+            Trigger::Answer,
+            Some(Event::Answered {
+                question: "リポジトリが無い".into(),
+                answer: "リポジトリを付けた".into(),
+            }),
+        )
+        .unwrap();
+    assert_eq!(d.tick().unwrap().dispatched, 1);
+    finish_worker_and_review(&mut d, task.id).await;
+    assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Done);
+    assert_eq!(
+        seen.lock().unwrap()[0].0,
+        task_dir.join("repos/code").canonicalize().unwrap()
+    );
+    assert!(task_dir.join("repos/code/.git").is_file());
+    assert!(task_dir.join("repos/code/README.md").is_file());
+    assert_eq!(
+        std::fs::read_to_string(task_dir.join("artifacts/old-run.txt")).unwrap(),
+        "keep"
+    );
+    let marker = task_ops::workspace::read_marker(&task_dir).unwrap();
+    assert_eq!(marker.repos[0].name, "code");
+}

@@ -384,3 +384,57 @@ fn unit_mirror_follows_the_child_status() {
         assert_eq!(unit_mirror(s), None, "{s:?} keeps the unit running");
     }
 }
+
+/// ADR 2026-10-09-cos-task-repository-required D4: 計画の task unit から作る子は親の案件を継ぎ、repos は
+/// 親のもの（親が持たなければ案件の primary）を継ぐ。
+#[test]
+fn repository_required_child_task_inherits_the_parent_project_and_repos() {
+    use task_core::{Project, ProjectId, ProjectRepo, ProjectStatus, RepoId, RepoKind, RepoRun};
+    let store = SqliteStore::open_in_memory().unwrap();
+    let now = OffsetDateTime::now_utc();
+    let project = Project {
+        auto_advance: false,
+        slug: None,
+        archived_at: None,
+        paused_from: None,
+        id: ProjectId::new(),
+        title: "p".into(),
+        request: "r".into(),
+        status: ProjectStatus::Active,
+        secretary_summary: None,
+        workspace: None,
+        created_at: now,
+        updated_at: now,
+    };
+    store.project_create(&project).unwrap();
+    let primary = ProjectRepo {
+        id: RepoId::new(),
+        project_id: project.id,
+        name: "agent-platform".into(),
+        kind: RepoKind::Git,
+        location: WorkspaceSpec::local("/srv/agent-platform"),
+        default_branch: None,
+        sync: None,
+        run: RepoRun::Auto,
+        is_primary: true,
+        created_at: now,
+    };
+    store.repo_create(&primary).unwrap();
+    let build = |p: &Task| {
+        let spec = v3(serde_json::json!([task_unit(&[])]));
+        build_child_task(&store, p, "plan-1", &spec.units[0], &[], &[], &[], now)
+            .unwrap()
+            .0
+    };
+    // 親が repos を持たない（案件だけ）→ 子は案件と primary。
+    let mut p = parent(&[]);
+    p.project_id = Some(project.id);
+    let child = build(&p);
+    assert_eq!(child.project_id, Some(project.id));
+    assert_eq!(child.repos, vec![task_core::RepoRef::of(&primary)]);
+    // 親が repos を持つ → 子は同じ repos。
+    p.repos = vec![task_core::RepoRef::of(&primary)];
+    let child = build(&p);
+    assert_eq!(child.project_id, Some(project.id));
+    assert_eq!(child.repos, p.repos);
+}

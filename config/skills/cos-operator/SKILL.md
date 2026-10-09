@@ -3,7 +3,7 @@ name: cos-operator
 description: Celeris の CoS（Chief of Staff）チャット run の操作手順の入口。毎 run 要る規則（操作経路・idempotency・秘密・actions 禁止・checkpoint・添付 pin の要点）は prompt の Core にある。起票・回答・決定・承認・gate・コメント・KB・添付 pin の本文の形、本番運用（release → verify → promote）、人への説明の書き方が要る場面でだけ読み、そこから参照 file を開く。
 metadata:
   author: celeris
-  version: "3"
+  version: "4"
 ---
 
 # CoS operator

@@ -791,7 +791,7 @@ fn changing_the_assignee_to_a_node_with_the_cluster_tool_is_accepted() {
 }
 
 /// ADR-0098 D7（Phase R7-10）: 案件を持たない・まだ run していない task に案件を付けると、案件の primary の
-/// リポジトリも付く。既に案件を持つ task・run したことのある task・子 task・知らない案件は拒否する。
+/// リポジトリも付く。既存案件の変更・実行済み ready・親と違う案件・知らない案件は拒否する。
 #[test]
 fn project_id_can_be_attached_once_to_a_project_less_task_that_never_ran() {
     use task_core::{Project, ProjectId, ProjectRepo, ProjectStatus, RepoId, RepoKind, RepoRun};
@@ -872,19 +872,27 @@ fn project_id_can_be_attached_once_to_a_project_less_task_that_never_ran() {
         attach(ran.id, project),
         Err(OpsError::InvalidState { .. })
     ));
-    // blocked（何かが起きた後）も拒否。
-    let blocked = task_with(Status::Blocked);
+    // ADR 2026-10-09-cos-task-repository-required D3: blocked は run した後でも付けられる。
+    let mut blocked = task_with(Status::Blocked);
+    blocked.attempts = 1;
     store.insert(&blocked).expect("insert");
+    assert_eq!(
+        attach(blocked.id, project).expect("blocked").fields,
+        vec!["project_id".to_string(), "repos".to_string()]
+    );
+    // running は拒否。
+    let running = task_with(Status::Running);
+    store.insert(&running).expect("insert");
     assert!(matches!(
-        attach(blocked.id, project),
+        attach(running.id, project),
         Err(OpsError::InvalidState { .. })
     ));
-    // 子 task は親に従う。
+    // 子 task は親と違う案件を付けられない。
     let mut child = task_with(Status::Draft);
     child.parent_id = Some(task.id);
     store.insert(&child).expect("insert");
     assert!(matches!(
-        attach(child.id, project),
+        attach(child.id, other),
         Err(OpsError::Validation(m)) if m.contains("parent")
     ));
     // 知らない案件。
@@ -909,4 +917,104 @@ fn project_id_can_be_attached_once_to_a_project_less_task_that_never_ran() {
     .expect("attach with explicit repos");
     assert_eq!(explicit.fields, vec!["project_id".to_string()]);
     assert!(explicit.task.repos.is_empty());
+}
+
+/// ADR 2026-10-09-cos-task-repository-required D3: 子 task（blocked、run 済み）に親と同じ案件を後から付けると、
+/// repos を書かなければ親の repos を継ぐ。親が案件を持たない子にも付けられる。
+#[test]
+fn repository_required_attach_project_to_blocked_child_inherits_parent_repos() {
+    use task_core::{Project, ProjectId, ProjectRepo, ProjectStatus, RepoId, RepoKind, RepoRun};
+    let store = SqliteStore::open_in_memory().expect("store");
+    let now = OffsetDateTime::now_utc();
+    let project = Project {
+        auto_advance: false,
+        slug: None,
+        archived_at: None,
+        paused_from: None,
+        id: ProjectId::new(),
+        title: "p".into(),
+        request: "r".into(),
+        status: ProjectStatus::Active,
+        secretary_summary: None,
+        workspace: None,
+        created_at: now,
+        updated_at: now,
+    };
+    store.project_create(&project).expect("project");
+    let repo = |name: &str, is_primary: bool| ProjectRepo {
+        id: RepoId::new(),
+        project_id: project.id,
+        name: name.into(),
+        kind: RepoKind::Git,
+        location: WorkspaceSpec::local(format!("/srv/{name}")),
+        default_branch: None,
+        sync: None,
+        run: RepoRun::Auto,
+        is_primary,
+        created_at: now,
+    };
+    let primary = repo("agent-platform", true);
+    let docs = repo("docs", false);
+    store.repo_create(&primary).expect("repo");
+    store.repo_create(&docs).expect("repo");
+
+    let mut parent = task_with(Status::Running);
+    parent.project_id = Some(project.id);
+    parent.repos = vec![task_core::RepoRef::of(&docs)];
+    store.insert(&parent).expect("insert");
+    let mut child = task_with(Status::Blocked);
+    child.parent_id = Some(parent.id);
+    child.attempts = 1;
+    store.insert(&child).expect("insert");
+    let result = edit_task(
+        &store,
+        child.id,
+        TaskEdit {
+            project_id: Some(project.id),
+            ..TaskEdit::default()
+        },
+        &[],
+        now,
+    )
+    .expect("attach to the child");
+    assert_eq!(
+        result.fields,
+        vec!["project_id".to_string(), "repos".to_string()]
+    );
+    let stored = store.get(child.id).expect("get").expect("task");
+    assert_eq!(stored.project_id, Some(project.id));
+    assert_eq!(stored.repos, parent.repos);
+    assert_eq!(stored.status, Status::Blocked);
+
+    // 親が案件を持たない子: 明示の repos を同じ PATCH で解決する。
+    let orphan_parent = task_with(Status::Running);
+    store.insert(&orphan_parent).expect("insert");
+    let mut orphan = task_with(Status::Blocked);
+    orphan.parent_id = Some(orphan_parent.id);
+    store.insert(&orphan).expect("insert");
+    let result = edit_task(
+        &store,
+        orphan.id,
+        TaskEdit {
+            project_id: Some(project.id),
+            repos: Some(vec!["agent-platform".into(), "docs".into()]),
+            ..TaskEdit::default()
+        },
+        &[],
+        now,
+    )
+    .expect("attach with repos");
+    assert_eq!(
+        result.fields,
+        vec!["project_id".to_string(), "repos".to_string()]
+    );
+    assert_eq!(
+        result
+            .task
+            .repos
+            .iter()
+            .map(|r| r.repo_id)
+            .collect::<Vec<_>>(),
+        vec![primary.id, docs.id]
+    );
 }

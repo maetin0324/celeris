@@ -6116,3 +6116,35 @@ fn non_terminal_transition_keeps_integration_requests_open() {
     );
     assert_eq!(store.open_integration_requests().unwrap().len(), 1);
 }
+
+/// A deterministic stale-edit interleaving: dispatch wins before the project attachment commits.
+#[test]
+fn repository_required_project_attachment_rechecks_status_inside_transaction() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let task = sample_task(Status::Ready);
+    store.insert(&task).unwrap();
+    let mut stale = task.clone();
+    stale.project_id = Some(ProjectId::new());
+    stale.title = "must not be saved".into();
+    assert!(
+        store
+            .acquire_lease(task.id, "worker", StdDuration::from_secs(60))
+            .unwrap()
+    );
+    let before = store.events_for(task.id).unwrap().len();
+    let error = store
+        .update_task(
+            &stale,
+            Event::Edited {
+                fields: vec!["project_id".into(), "title".into()],
+                by: "human".into(),
+            },
+        )
+        .unwrap_err();
+    assert!(error.to_string().contains("project attachment"));
+    let saved = store.get(task.id).unwrap().unwrap();
+    assert_eq!(saved.status, Status::Running);
+    assert!(saved.project_id.is_none());
+    assert_eq!(saved.title, task.title);
+    assert_eq!(store.events_for(task.id).unwrap().len(), before);
+}

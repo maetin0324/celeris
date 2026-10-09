@@ -321,3 +321,114 @@ async fn cos_ops_admin_config_org_and_skills_are_audited() {
     .await;
     assert!(env.store.org_get("coding").expect("get").is_none());
 }
+
+#[tokio::test]
+async fn cos_ops_admin_config_repos_and_cluster_settings_are_audited() {
+    use task_core::TaskStore;
+    let env = admin_env();
+    let app = env.router();
+    let created = send(
+        &app,
+        post_admin(
+            "/api/v1/projects",
+            &json!({"title": "案件", "request": "作る"}),
+        ),
+    )
+    .await;
+    assert_eq!(created.status.as_u16(), 201, "{}", created.text());
+    let project = created.json()["id"].as_str().expect("id").to_string();
+    let dir = tempfile::tempdir().expect("tempdir");
+
+    let op = run_domain(
+        &env,
+        "repo-create",
+        "POST",
+        &format!("/api/v1/projects/{project}/repos"),
+        json!({"name": "app", "kind": "dir", "location": {"kind": "local", "path": dir.path().to_string_lossy()}}),
+        "repo.create",
+    )
+    .await;
+    let repo_id = op["result"]["id"].as_str().expect("repo id").to_string();
+    assert_eq!(op["target_id"], repo_id.as_str());
+    let repo = env
+        .store
+        .repo_get(repo_id.parse().expect("repo id"))
+        .expect("get")
+        .expect("repo");
+    assert_eq!(repo.name, "app");
+
+    run_domain(
+        &env,
+        "repo-patch",
+        "PATCH",
+        &format!("/api/v1/repos/{repo_id}"),
+        json!({"name": "app2"}),
+        "repo.update",
+    )
+    .await;
+    let repo = env.store.repo_get(repo.id).expect("get").expect("repo");
+    assert_eq!(repo.name, "app2");
+
+    run_domain(
+        &env,
+        "cluster-settings",
+        "PUT",
+        "/api/v1/clusters/pegasus/settings",
+        json!({"work_dir": "/work/NBB/rmaeda"}),
+        "cluster.settings_put",
+    )
+    .await;
+    let settings = env
+        .store
+        .cluster_settings_get("pegasus")
+        .expect("get")
+        .expect("settings");
+    assert_eq!(settings.work_dir.as_deref(), Some("/work/NBB/rmaeda"));
+
+    expect_rejected(
+        &env,
+        "repos-rejected",
+        vec![
+            (
+                "bad-name",
+                "PATCH",
+                &format!("/api/v1/repos/{repo_id}"),
+                json!({"name": "Bad Name"}),
+                422,
+            ),
+            (
+                "no-repo",
+                "DELETE",
+                "/api/v1/repos/01M4G00000000000000000000A",
+                json!(null),
+                404,
+            ),
+            (
+                "no-cluster",
+                "PUT",
+                "/api/v1/clusters/nope/settings",
+                json!({"work_dir": "/x"}),
+                404,
+            ),
+            (
+                "relative",
+                "PUT",
+                "/api/v1/clusters/pegasus/settings",
+                json!({"work_dir": "rel"}),
+                422,
+            ),
+        ],
+    )
+    .await;
+
+    run_domain(
+        &env,
+        "repo-delete",
+        "DELETE",
+        &format!("/api/v1/repos/{repo_id}"),
+        json!(null),
+        "repo.delete",
+    )
+    .await;
+    assert!(env.store.repo_get(repo.id).expect("get").is_none());
+}

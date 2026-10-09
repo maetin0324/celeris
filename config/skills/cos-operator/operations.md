@@ -105,6 +105,10 @@ curl -sS -X POST "$API/api/v1/cos/operations" -H "Authorization: Bearer $CELERIS
 | skill の unmount | `DELETE /api/v1/org/<id>/skills/<skill>` | org.skill_unmount | body なし |
 | skill の作成・更新 | `PUT /api/v1/skills/<name>` | skill.put | `{"skill_md":"…","files":[{"path","content"}]}`。KB の git 書き込みなので外部効果扱い（pending → applied） |
 | skill の削除 | `DELETE /api/v1/skills/<name>` | skill.delete | body なし。mount されていれば 409。外部効果扱い |
+| 案件へのリポジトリの追加 | `POST /api/v1/projects/<id>/repos` | repo.create | `{"location":{"kind":"local","path":"…"},"name"?,"kind"?,"default_branch"?,"is_primary"?}`。最初の 1 件は primary |
+| リポジトリの更新 | `PATCH /api/v1/repos/<id>` | repo.update | 変える欄だけ（1 つ以上） |
+| リポジトリの削除 | `DELETE /api/v1/repos/<id>` | repo.delete | body なし。未終了の task が使っていれば 409 |
+| クラスタの作業ディレクトリ | `PUT /api/v1/clusters/<id>/settings` | cluster.settings_put | `{"work_dir":"/abs/path"}`。`null` で設定ファイルの値に戻す |
 | 定期実行の作成 | `POST /api/v1/cron-jobs` | cron_job.create | `{"name","schedule","timezone","template",…}`（`docs/api/cron-jobs.md`）。名前の重複は 409 |
 | 定期実行の更新 | `PATCH /api/v1/cron-jobs/<id>` | cron_job.update | `<id>` は ULID か name。変える欄だけ。有効/無効は pause・resume で変える |
 | 定期実行の削除 | `DELETE /api/v1/cron-jobs/<id>` | cron_job.delete | body なし。履歴も消え、作った task は残る |

@@ -63,6 +63,14 @@ pub(crate) const ALLOWED: &[(&str, &str, &str)] = &[
     ),
     ("PUT", "/api/v1/skills/{name}", "skill.put"),
     ("DELETE", "/api/v1/skills/{name}", "skill.delete"),
+    ("POST", "/api/v1/projects/{id}/repos", "repo.create"),
+    ("PATCH", "/api/v1/repos/{id}", "repo.update"),
+    ("DELETE", "/api/v1/repos/{id}", "repo.delete"),
+    (
+        "PUT",
+        "/api/v1/clusters/{id}/settings",
+        "cluster.settings_put",
+    ),
     ("POST", "/api/v1/cron-jobs", "cron_job.create"),
     ("PATCH", "/api/v1/cron-jobs/{id}", "cron_job.update"),
     ("DELETE", "/api/v1/cron-jobs/{id}", "cron_job.delete"),
@@ -120,10 +128,8 @@ pub(crate) const PENDING: &[(&str, &str)] = &[
     ("POST", "/api/v1/accounts"),
     ("DELETE", "/api/v1/accounts/{id}"),
     ("POST", "/api/v1/accounts/{id}/check"),
-    ("PUT", "/api/v1/clusters/{id}/settings"),
     ("POST", "/api/v1/llm/models/discover"),
     ("POST", "/api/v1/notify/test"),
-    ("POST", "/api/v1/projects/{id}/repos"),
     ("POST", "/api/v1/providers"),
     ("DELETE", "/api/v1/providers/{id}"),
     ("PATCH", "/api/v1/providers/{id}"),
@@ -131,8 +137,6 @@ pub(crate) const PENDING: &[(&str, &str)] = &[
     ("POST", "/api/v1/releases/{sha12}/promote"),
     ("POST", "/api/v1/reload"),
     ("POST", "/api/v1/replay"),
-    ("DELETE", "/api/v1/repos/{id}"),
-    ("PATCH", "/api/v1/repos/{id}"),
 ];
 
 const ASSIGNMENT: &str = "/api/v1/llm/models/assignments/{source}/{tier}";
@@ -313,6 +317,44 @@ pub(crate) fn dispatch(
                     Some(audit),
                 )?)
             }
+        }
+        "repo.create" => {
+            let id = matched.id.unwrap_or_default();
+            let repo = serde_json::from_value(body)
+                .map_err(|e| unprocessable("validation", format!("request.body: {e}")))
+                .and_then(|input| crate::repos::plan_create(&env.api, &id, input))
+                .map_err(|p| audit.reject(store, "repo", &id, p))?;
+            audited(crate::repos::create_repo_op(store, repo, Some(audit))?)
+        }
+        "repo.update" => {
+            let id = matched.id.unwrap_or_default();
+            let next = serde_json::from_value::<crate::types::RepoPatchBody>(body)
+                .map_err(|e| unprocessable("validation", format!("request.body: {e}")))
+                .and_then(|input| {
+                    let repo_id = crate::repos::repo_id_of(&id)?;
+                    let location = crate::repos::check_patch(&env.api, &input)?;
+                    crate::repos::plan_patch(store, repo_id, input, location)
+                })
+                .map_err(|p| audit.reject(store, "repo", &id, p))?;
+            audited(crate::repos::patch_repo_op(store, next, Some(audit))?)
+        }
+        "repo.delete" => {
+            let id = matched.id.unwrap_or_default();
+            let repo_id = empty_body(&body)
+                .and_then(|()| crate::repos::repo_id_of(&id))
+                .map_err(|p| audit.reject(store, "repo", &id, p))?;
+            audited(crate::repos::delete_repo_op(store, repo_id, Some(audit))?)
+        }
+        "cluster.settings_put" => {
+            let id = matched.id.unwrap_or_default();
+            let input = serde_json::from_value(body).map_err(decode)?;
+            audited(crate::handlers::clusters::put_cluster_settings_op(
+                store,
+                &env.clusters,
+                &id,
+                input,
+                Some(audit),
+            )?)
         }
         "cron_job.create" => {
             let input = serde_json::from_value(body).map_err(decode)?;

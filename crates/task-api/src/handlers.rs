@@ -21,7 +21,7 @@ use crate::state::ApiState;
 use crate::types::ValidationError;
 
 mod accounts;
-mod clusters;
+pub(crate) mod clusters;
 pub(crate) mod org;
 pub(crate) mod projects;
 pub(crate) mod providers;

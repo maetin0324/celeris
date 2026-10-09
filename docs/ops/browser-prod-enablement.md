@@ -62,7 +62,7 @@ doctor は能力や認可を変更しない。DNS は固定名 `example.com` に
 | `ledger` | `missing/invalid/stale_release/stale_agent_browser/no_conformant_backend` を確認し、対象 release の台帳を上の手順で生成する。`generated_for` の release と agent-browser の版が一致すること。 |
 | `ledger-backends` | `credential` が空ならログの P4-B 段を確認する。userns・実 Chromium と launcher の host 前提を整え、`--force` で再生成する。証拠の無い credential 注入は許可しない。 |
 | `agent-browser` | daemon の PATH で `agent-browser --version` が `0.38.1` を返すよう配置する。版を変えたら台帳も再生成する。 |
-| `runtime` / `launcher` | `[browser] runtime = "launcher"` と `launcher_socket` を設定し、[launcher host 手順](browser-launcher-host-setup.md)の専用 UID・固定 binary・socket/service・daemon UID の許可を確認する。同じ release の Hello protocol に対応する launcher を配置する。本番で試験用 loopback 許可は使わない。 |
+| `runtime` / `launcher` | `[browser] runtime = "launcher"` と `launcher_socket` を設定し、CredentialUse を使うなら `launcher_uid`（credentiald の `--launcher-uid` と同じ launcher の host UID。未設定・daemon UID と同じなら CredentialUse は launcher 接続前に拒否）も設定し、[launcher host 手順](browser-launcher-host-setup.md)の専用 UID・固定 binary・socket/service・daemon UID の許可を確認する。同じ release の Hello protocol に対応する launcher を配置する。本番で試験用 loopback 許可は使わない。 |
 | `bwrap` / `sandboxd` / `egress` | `runtime=daemon` の場合、`/usr/bin/bwrap` と release の `bin/celeris-browser-sandboxd`、`bin/celeris-browser-egress` を配置する。launcher 構成ではこれらは launcher 側の準備。 |
 | `egress-resolver` | `[browser.egress] resolver = "<DNS server IP>"` と UDP/53 の到達性を確認する。launcher 側の固定 resolver 設定も確認する。doctor は DNS 応答を検査し、接続先許可を広げない。 |
 | `credentiald` | `[api] browser_credentiald_control_socket` を実 socket に合わせる。credentiald は daemon と同じ UID で、control の許可 PID/starttime が**現在の daemon**を指す構成にする。daemon 切替後の古い PID 許可は更新する。同じ release の Ping 対応 credentiald を使用する。[credentiald 手順](../guides/browser-credentiald.md)を参照。 |

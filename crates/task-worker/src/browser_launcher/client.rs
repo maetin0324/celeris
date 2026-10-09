@@ -17,8 +17,9 @@ use std::path::Path;
 use std::time::Duration;
 
 use super::protocol::{
-    ActionArgs, DEFAULT_MAX_FRAME, ErrorCode, FrameError, Observation, Receipt, Request, Response,
-    SessionFacts, SessionPolicy, SessionState, Verb, read_frame, write_message,
+    ActionArgs, AuthenticateArgs, AuthenticationStatus, DEFAULT_MAX_FRAME, ErrorCode, FrameError,
+    Observation, Receipt, Request, Response, SessionFacts, SessionPolicy, SessionState, Verb,
+    read_frame, write_message,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -221,6 +222,17 @@ impl LauncherClient {
             other => Err(unexpected("stopped", &other)),
         }
     }
+
+    /// Ask the launcher to perform a credential operation. The only result is a fixed status.
+    pub fn authenticate(
+        &mut self,
+        args: AuthenticateArgs,
+    ) -> Result<AuthenticationStatus, ClientError> {
+        match self.request(&Request::Authenticate { args })? {
+            Response::AuthenticateResult { status } => Ok(status),
+            other => Err(unexpected("authenticate_result", &other)),
+        }
+    }
 }
 
 /// 生の応答の先頭（診断用）。秘密は応答に載らない（session id・receipt・観測値のみ）。
@@ -241,6 +253,7 @@ fn unexpected(want: &str, got: &Response) -> ClientError {
         Response::ActionResult { .. } => "action_result",
         Response::Observed { .. } => "observed",
         Response::Stopped { .. } => "stopped",
+        Response::AuthenticateResult { .. } => "authenticate_result",
         Response::Error { .. } => "error",
     };
     ClientError::Protocol(format!("expected a {want} response, got {got}"))

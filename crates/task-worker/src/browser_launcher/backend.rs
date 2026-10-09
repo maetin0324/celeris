@@ -9,10 +9,13 @@ use nix::libc;
 use serde::Deserialize;
 use serde_json::json;
 
-use super::protocol::{ActionArgs, ErrorCode, Observation, SessionFacts, SessionState, Verb};
+use super::protocol::{
+    ActionArgs, AuthenticateArgs, ErrorCode, Observation, SessionFacts, SessionState, Verb,
+};
 use super::server::{BackendSession, Launched, SessionBackend, StartRequest};
 use super::userns;
 use crate::browser_cdp_sink::CdpController;
+use crate::browser_cdp_sink::{InjectionRequest, UnixInjectionClient};
 use crate::browser_runtime::{EgressRelay, RuntimeSpec, UsernsMode, listening_tcp};
 use crate::browser_shared_cdp::SharedCdp;
 use crate::browser_supervisor::{Supervisor, SupervisorOptions};
@@ -30,6 +33,9 @@ pub struct BackendConfig {
     pub chrome: PathBuf,
     pub agent_browser: PathBuf,
     pub resolver: IpAddr,
+    /// credentiald の injection.sock。未設定なら認証 verb は fail closed。
+    #[serde(default)]
+    pub injection_socket: Option<PathBuf>,
     /// 試験専用 loopback 許可（`127.0.0.1:<port>` だけ。省略時は空 = off）。本番の path では有効に
     /// できない（[`refuse_test_loopback_in_production`]、ADR 2026-10-05-browser-department-web-live-view
     /// 付記 E1/E2）。
@@ -546,7 +552,8 @@ impl SessionBackend for RuntimeBackend {
                 ns_inodes,
                 session: Box::new(RuntimeSession {
                     sup,
-                    _shared: shared,
+                    shared,
+                    injection_socket: cfg.injection_socket.clone(),
                     sequence: 0,
                     dir: cleanup,
                     uid,
@@ -575,7 +582,8 @@ fn action_name(v: Verb) -> &'static str {
 
 struct RuntimeSession {
     sup: Supervisor,
-    _shared: SharedCdp,
+    shared: SharedCdp,
+    injection_socket: Option<PathBuf>,
     sequence: u64,
     dir: SessionDir,
     uid: u32,
@@ -607,7 +615,123 @@ impl RuntimeSession {
     }
 }
 
+fn validate_auth_transport(
+    socket: Option<&Path>,
+    isolated: bool,
+    session_matches: bool,
+) -> Result<(), ErrorCode> {
+    if !session_matches {
+        return Err(ErrorCode::Unauthorized);
+    }
+    if !isolated {
+        return Err(ErrorCode::IsolationFailed);
+    }
+    let path = socket.ok_or(ErrorCode::Unauthorized)?;
+    if path.file_name().is_none_or(|name| name != "injection.sock") {
+        return Err(ErrorCode::Unauthorized);
+    }
+    std::os::unix::net::UnixStream::connect(path).map_err(|_| ErrorCode::Unauthorized)?;
+    Ok(())
+}
+
 impl BackendSession for RuntimeSession {
+    fn authenticate(&mut self, args: &AuthenticateArgs) -> Result<(), ErrorCode> {
+        let isolated = self.isolation_ok();
+        validate_auth_transport(
+            self.injection_socket.as_deref(),
+            isolated,
+            args.session_id == self.sup.session_id(),
+        )?;
+        let socket = self
+            .injection_socket
+            .as_ref()
+            .ok_or(ErrorCode::Unauthorized)?;
+        let mut broker = UnixInjectionClient::new(socket.clone());
+        let controller = self.shared.controller();
+        let result = (|| -> Result<(), ErrorCode> {
+            let mut c = controller.lock().map_err(|_| ErrorCode::LaunchFailed)?;
+            let target = c
+                .controller_command("Target.createTarget", json!({"url":"about:blank"}), None)
+                .map_err(|_| ErrorCode::LaunchFailed)?["result"]["targetId"]
+                .as_str()
+                .map(str::to_owned)
+                .ok_or(ErrorCode::LaunchFailed)?;
+            broker
+                .open_auth_section(
+                    celeris_credentiald::injection_ipc::AuthSectionRegistration {
+                        session_id: args.session_id.clone(),
+                        auth_section_id: args.auth_section_id.clone(),
+                        lease_id: args.lease_id.clone(),
+                        exact_origin: args.origin.clone(),
+                        cdp_target_id: target.clone(),
+                    },
+                )
+                .map_err(|_| ErrorCode::Unauthorized)?;
+            c.open_auth_section(args.auth_section_id.clone());
+            let own = c
+                .controller_command(
+                    "Target.attachToTarget",
+                    json!({"targetId":target,"flatten":true}),
+                    None,
+                )
+                .map_err(|_| ErrorCode::LaunchFailed)?["result"]["sessionId"]
+                .as_str()
+                .map(str::to_owned)
+                .ok_or(ErrorCode::LaunchFailed)?;
+            c.controller_command("Network.enable", json!({}), Some(&own))
+                .map_err(|_| ErrorCode::LaunchFailed)?;
+            c.begin_login_navigation(&own, std::time::Duration::from_secs(15))
+                .map_err(|_| ErrorCode::LaunchFailed)?;
+            let nav = c
+                .controller_command("Page.navigate", json!({"url":args.origin}), Some(&own))
+                .map_err(|_| ErrorCode::LaunchFailed)?;
+            if !nav["error"].is_null() || nav["result"]["errorText"].is_string() {
+                return Err(ErrorCode::LaunchFailed);
+            }
+            let deadline = c.login_deadline().ok_or(ErrorCode::LaunchFailed)?;
+            let (frame_id, loader_id, redirects) = loop {
+                match c
+                    .login_password_document(&own, &args.origin, &args.target)
+                    .map_err(|_| ErrorCode::LaunchFailed)?
+                {
+                    Some((frame, loader)) => {
+                        break (
+                            frame,
+                            loader,
+                            c.login_redirect_chain(&args.origin)
+                                .map_err(|_| ErrorCode::Unauthorized)?,
+                        );
+                    }
+                    None if std::time::Instant::now() < deadline => {
+                        std::thread::sleep(std::time::Duration::from_millis(50))
+                    }
+                    None => return Err(ErrorCode::Timeout),
+                }
+            };
+            let request = InjectionRequest {
+                request_id: format!("launcher-{}", args.auth_section_id),
+                session_id: args.session_id.clone(),
+                cdp_target_id: target,
+                frame_id,
+                loader_id,
+                exact_origin: args.origin.clone(),
+                redirect_chain: redirects,
+                selector: args.target.clone(),
+                field: "password".into(),
+                auth_section_id: args.auth_section_id.clone(),
+                lease_id: args.lease_id.clone(),
+            };
+            c.inject(&request, &own, &mut broker)
+                .map_err(|_| ErrorCode::Unauthorized)?;
+            Ok(())
+        })();
+        if let Ok(mut c) = controller.lock() {
+            let _ = c.close_auth_section();
+        }
+        let _ = broker.close_auth_section(&args.session_id, &args.auth_section_id);
+        result
+    }
+
     fn action(&mut self, verb: Verb, args: &ActionArgs) -> Result<Observation, ErrorCode> {
         if !self.isolation_ok() {
             return Err(ErrorCode::IsolationFailed);
@@ -723,9 +847,9 @@ impl BackendSession for RuntimeSession {
     }
     fn stop(self: Box<Self>) {
         let RuntimeSession {
-            sup, _shared, dir, ..
+            sup, shared, dir, ..
         } = *self;
-        drop(_shared);
+        drop(shared);
         sup.stop();
         drop(dir);
     }
@@ -775,5 +899,51 @@ mod chain_tests {
         assert!(!chain_ok(&[296608, 296608], 995, 296608, &[1001]));
         assert!(!chain_ok(&[995], 995, 296608, &[1001]));
         assert!(!chain_ok(&[296608, 4242, 995], 995, 296608, &[1001]));
+    }
+}
+
+#[cfg(test)]
+mod launcher_credential_backend_tests {
+    use super::{ErrorCode, validate_auth_transport};
+    use std::os::unix::net::UnixListener;
+
+    #[test]
+    fn launcher_credential_backend_rejects_unconfigured_socket() {
+        assert_eq!(
+            validate_auth_transport(None, true, true),
+            Err(ErrorCode::Unauthorized)
+        );
+    }
+
+    #[test]
+    fn launcher_credential_backend_rejects_failed_isolation() {
+        assert_eq!(
+            validate_auth_transport(
+                Some(std::path::Path::new("/tmp/injection.sock")),
+                false,
+                true
+            ),
+            Err(ErrorCode::IsolationFailed)
+        );
+    }
+
+    #[test]
+    fn launcher_credential_backend_rejects_unregistered_session() {
+        assert_eq!(
+            validate_auth_transport(
+                Some(std::path::Path::new("/tmp/injection.sock")),
+                true,
+                false
+            ),
+            Err(ErrorCode::Unauthorized)
+        );
+    }
+
+    #[test]
+    fn launcher_credential_backend_connects_to_fake_injection_socket() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("injection.sock");
+        let _listener = UnixListener::bind(&path).expect("bind fake credentiald");
+        assert_eq!(validate_auth_transport(Some(&path), true, true), Ok(()));
     }
 }

@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use super::*;
+use crate::browser_launcher::protocol::AuthenticateArgs;
 use crate::browser_launcher::{
     BackendSession, ErrorCode, Launched, LauncherLimits, LauncherServer, Registry, ServerConfig,
     ServerHandle, SessionBackend, StartRequest,
@@ -89,6 +90,17 @@ impl BackendSession for FakeSession {
     }
     fn isolation_ok(&mut self) -> bool {
         true
+    }
+    fn authenticate(&mut self, args: &AuthenticateArgs) -> Result<(), ErrorCode> {
+        if args.session_id.is_empty()
+            || args.auth_section_id.is_empty()
+            || args.lease_id.is_empty()
+            || args.origin.is_empty()
+            || args.target.is_empty()
+        {
+            return Err(ErrorCode::BadRequest);
+        }
+        Ok(())
     }
     fn stop(mut self: Box<Self>) {
         let _ = self.child.kill();
@@ -199,6 +211,24 @@ fn launcher_runtime_starts_acts_observes_and_stops_through_the_client() {
         log.actions[0].1.url.as_deref(),
         Some("https://example.com/")
     );
+}
+
+#[test]
+fn launcher_credential_authenticate_fake_backend_returns_status_only() {
+    let launcher = fake_launcher(good_facts());
+    let (runtime, _) =
+        LauncherRuntime::start(&launcher.sock, "task-1", "run-auth", policy()).expect("start");
+    let status = runtime
+        .authenticate(AuthenticateArgs {
+            session_id: runtime.session_id.clone(),
+            auth_section_id: "credential-ref".into(),
+            lease_id: runtime.lease_id.clone(),
+            origin: "https://example.com".into(),
+            target: "input[type=password]".into(),
+        })
+        .expect("fake broker accepted authentication");
+    assert_eq!(status, AuthenticationStatus::Success);
+    runtime.stop().expect("stop");
 }
 
 #[test]
@@ -488,6 +518,7 @@ fn default_runtime_is_the_daemon_path_and_launcher_skips_local_binaries() {
     let launcher = cfg(super::super::BrowserRuntimeKind::Launcher {
         socket: dir.path().join("launcher.sock"),
         refuse_test_loopback: true,
+        launcher_uid: None,
     });
     assert!(super::super::isolated_runtime_ready(Some(&launcher)).is_ok());
 }
@@ -559,6 +590,117 @@ fn launcher_proof_is_built_only_when_pid_starttime_and_owner_match() {
         }
     );
     reap(child);
+}
+
+fn test_credential_proof() -> LauncherSessionProof {
+    LauncherSessionProof {
+        session_id: "credential-session".into(),
+        instance_id: "credential-instance".into(),
+        pid: 42,
+        starttime: 99,
+        ns_owner_uid: Some(LAUNCHER_UID),
+        launcher_uid: LAUNCHER_UID,
+        isolation_ok: true,
+        ns_inodes: REQUIRED_NAMESPACES.iter().map(|ns| (*ns, 1)).collect(),
+    }
+}
+
+#[test]
+fn launcher_credential_admits_proven_isolated_session() {
+    assert!(credential_admitted(
+        true,
+        Some(&test_credential_proof()),
+        true,
+        1000
+    ));
+}
+
+#[test]
+fn launcher_credential_rejects_missing_proof() {
+    assert!(!credential_admitted(true, None, true, 1000));
+}
+
+#[test]
+fn launcher_credential_rejects_forged_isolation_claim() {
+    let mut proof = test_credential_proof();
+    proof.isolation_ok = false;
+    assert!(!credential_admitted(true, Some(&proof), true, 1000));
+}
+
+#[test]
+fn launcher_credential_rejects_expired_process_proof() {
+    let (child, pid, st) = leader();
+    let mut proof = test_credential_proof();
+    proof.pid = pid;
+    proof.starttime = st + 1;
+    // The same live-process/starttime verifier used when creating proofs rejects stale bindings.
+    assert!(live_starttime(pid).is_some_and(|actual| actual != proof.starttime));
+    assert!(!credential_admitted(true, None, true, 1000));
+    reap(child);
+}
+
+#[test]
+fn launcher_credential_rejects_daemon_namespace_owner() {
+    let mut proof = test_credential_proof();
+    proof.ns_owner_uid = Some(1000);
+    assert!(!credential_admitted(true, Some(&proof), true, 1000));
+}
+
+#[test]
+fn launcher_credential_rejects_failed_isolation_attestation() {
+    assert!(!credential_admitted(
+        true,
+        Some(&test_credential_proof()),
+        false,
+        1000
+    ));
+}
+
+#[test]
+fn launcher_credential_rejects_missing_namespace_binding() {
+    let mut proof = test_credential_proof();
+    proof.ns_inodes.clear();
+    assert!(!credential_admitted(true, Some(&proof), true, 1000));
+}
+
+#[test]
+fn launcher_credential_requires_a_credential_request() {
+    assert!(!credential_admitted(
+        false,
+        Some(&test_credential_proof()),
+        true,
+        1000
+    ));
+}
+
+#[test]
+fn launcher_credential_rejects_uid_mismatch() {
+    let mut proof = test_credential_proof();
+    proof.ns_owner_uid = Some(1001);
+    assert!(credential_admitted(true, Some(&proof), true, 1000));
+    assert!(!credential_admitted(true, Some(&proof), true, 1001));
+}
+
+#[test]
+fn launcher_credential_shim_flags_follow_admission() {
+    let policy = prepared("example.com");
+    for admitted in [false, true] {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let runtime = dir.path().join("browser");
+        write_shim_files(&runtime, "s", &policy, &policy.action_policy, &[], admitted)
+            .expect("shim");
+        let config: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(runtime.join("config.json")).expect("config"))
+                .expect("json");
+        assert_eq!(config["credential_use"], admitted);
+        assert_eq!(
+            config["credential_policy_ids"]
+                .as_array()
+                .unwrap()
+                .is_empty(),
+            !admitted || policy.effective.credential_policy_ids.is_empty()
+        );
+    }
 }
 
 #[test]
@@ -847,6 +989,7 @@ fn launcher_shim_files_pass_load_policy_and_gate_navigation_by_origin() {
             &policy,
             &policy.action_policy,
             &[],
+            false,
         )
         .expect("shim files");
         assert!(action_socket.as_os_str().len() <= crate::browser_action::SUN_PATH_MAX);
@@ -989,4 +1132,190 @@ fn egress_test_loopback_production_daemon_refuses_launcher_without_hello() {
         .expect_err("unanswered hello must refuse");
     assert_eq!(err, UNAVAILABLE);
     assert_eq!(server.join().expect("join").as_deref(), Some("hello"));
+}
+
+// ---- ADR 2026-10-09 付記「接続前 gate」: 二段 gate ----
+
+const CREDENTIAL_DENIED_TEXT: &str =
+    "browser credential use is not available through the launcher runtime";
+
+fn credential_run() -> CredentialDemand {
+    CredentialDemand {
+        requested: true,
+        refused_without_admission: true,
+    }
+}
+
+/// 接続を数えるだけの Unix socket（応答しない）。nonblocking の accept が WouldBlock なら接続 0。
+fn counting_listener(path: &std::path::Path) -> std::os::unix::net::UnixListener {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).expect("mkdir");
+    }
+    let listener = std::os::unix::net::UnixListener::bind(path).expect("bind");
+    listener.set_nonblocking(true).expect("nonblocking");
+    listener
+}
+
+fn connections(listener: &std::os::unix::net::UnixListener) -> usize {
+    let mut n = 0;
+    while listener.accept().is_ok() {
+        n += 1;
+    }
+    n
+}
+
+fn denied_text(err: AdapterError) -> String {
+    match err {
+        AdapterError::Other(text) => text,
+        other => format!("{other:?}"),
+    }
+}
+
+/// 接続前に決まる条件（launcher UID 未設定・daemon UID と同一・0・credentiald 経路なし・launcher
+/// socket 未設定）がどれか欠ければ、launcher socket に 1 度も接続せず従来の文言で拒否する。
+#[tokio::test]
+async fn launcher_credential_preconnect_unmet_conditions_refuse_without_connecting() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sock = dir.path().join("launcher.sock");
+    let listener = counting_listener(&sock);
+    let credd = dir.path().join("credd-runtime");
+    let daemon_uid = DaemonIds::current().uid;
+    let empty = PathBuf::new();
+    let cases: [(&std::path::Path, Option<u32>, Option<&std::path::Path>); 5] = [
+        (&sock, None, Some(&credd)),
+        (&sock, Some(daemon_uid), Some(&credd)),
+        (&sock, Some(0), Some(&credd)),
+        (&sock, Some(LAUNCHER_UID), None),
+        (&empty, Some(LAUNCHER_UID), Some(&credd)),
+    ];
+    for (socket, launcher_uid, credd_runtime) in cases {
+        let err = open_launcher_session(
+            LauncherTarget {
+                socket,
+                refuse_test_loopback: false,
+                launcher_uid,
+            },
+            "task",
+            "run",
+            policy(),
+            credential_run(),
+            credd_runtime,
+        )
+        .await
+        .expect_err("refused before connecting");
+        assert_eq!(denied_text(err), CREDENTIAL_DENIED_TEXT);
+    }
+    assert_eq!(connections(&listener), 0, "no launcher connection");
+}
+
+/// admission の対象でないが admission 無しでは拒否される run（credential 以外の登録済み wait 等）も、
+/// 接続後に必ず拒否されるので接続前に拒否する。
+#[tokio::test]
+async fn launcher_credential_preconnect_unadmittable_wait_refuses_without_connecting() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sock = dir.path().join("launcher.sock");
+    let listener = counting_listener(&sock);
+    let credd = dir.path().join("credd-runtime");
+    let err = open_launcher_session(
+        LauncherTarget {
+            socket: &sock,
+            refuse_test_loopback: false,
+            launcher_uid: Some(LAUNCHER_UID),
+        },
+        "task",
+        "run",
+        policy(),
+        CredentialDemand {
+            requested: false,
+            refused_without_admission: true,
+        },
+        Some(&credd),
+    )
+    .await
+    .expect_err("refused");
+    assert_eq!(denied_text(err), CREDENTIAL_DENIED_TEXT);
+    assert_eq!(connections(&listener), 0);
+}
+
+/// 接続前条件が揃えば従来どおり launcher に接続して session を作る。その後の証明依存の不成立
+/// （ここでは証明の launcher UID が設定値と違う）は session を stop してから従来の文言で拒否し、
+/// credentiald の制御 socket には 1 度も接続しない（登録が起きない）。
+#[tokio::test]
+async fn launcher_credential_preconnect_proof_failure_stops_session_before_credentiald() {
+    let launcher = fake_launcher(good_facts());
+    let dir = tempfile::tempdir().expect("tempdir");
+    let control = celeris_credentiald::injection_ipc::injection_socket(dir.path())
+        .with_file_name("control.sock");
+    let credd = counting_listener(&control);
+    let err = open_launcher_session(
+        LauncherTarget {
+            socket: &launcher.sock,
+            refuse_test_loopback: false,
+            launcher_uid: Some(LAUNCHER_UID),
+        },
+        "task",
+        "run",
+        policy(),
+        credential_run(),
+        Some(dir.path()),
+    )
+    .await
+    .expect_err("proof-dependent refusal");
+    assert_eq!(denied_text(err), CREDENTIAL_DENIED_TEXT);
+    assert_eq!(launcher.log.lock().expect("lock").started, 1, "connected");
+    assert_eq!(wait_stopped(&launcher.log), 1, "session stopped");
+    assert!(launcher.log.lock().expect("lock").actions.is_empty());
+    assert_eq!(connections(&credd), 0, "no credentiald registration");
+}
+
+/// 接続前条件が揃った CredentialUse run は launcher に接続する（session が作られる）。
+#[tokio::test]
+async fn launcher_credential_preconnect_met_conditions_connect_to_the_launcher() {
+    let launcher = fake_launcher(good_facts());
+    let dir = tempfile::tempdir().expect("tempdir");
+    let _ = open_launcher_session(
+        LauncherTarget {
+            socket: &launcher.sock,
+            refuse_test_loopback: false,
+            launcher_uid: Some(LAUNCHER_UID),
+        },
+        "task",
+        "run",
+        policy(),
+        credential_run(),
+        Some(dir.path()),
+    )
+    .await;
+    assert_eq!(launcher.log.lock().expect("lock").started, 1);
+}
+
+/// CredentialUse を求めない run は接続前 gate を素通しし、launcher UID・credentiald 経路の設定が
+/// 無くても従来どおり session を開く（admission は偽）。
+#[tokio::test]
+async fn launcher_credential_preconnect_non_credential_run_is_unchanged() {
+    let launcher = fake_launcher(good_facts());
+    let (runtime, admitted) = open_launcher_session(
+        LauncherTarget {
+            socket: &launcher.sock,
+            refuse_test_loopback: false,
+            launcher_uid: None,
+        },
+        "task",
+        "run",
+        policy(),
+        CredentialDemand::default(),
+        None,
+    )
+    .await
+    .expect("session");
+    assert!(!admitted);
+    assert_eq!(launcher.log.lock().expect("lock").started, 1);
+    drop(runtime);
+    assert_eq!(wait_stopped(&launcher.log), 1);
+}
+
+#[test]
+fn launcher_credential_preconnect_demand_follows_policy() {
+    let policy = prepared("example.com");
+    assert_eq!(credential_demand(&policy, &[]), CredentialDemand::default());
 }

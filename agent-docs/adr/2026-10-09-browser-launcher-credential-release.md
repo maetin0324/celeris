@@ -43,3 +43,36 @@ host 実証（`CELERIS_LAUNCHER_TESTS=require` の必須モード stutter 3 回�
 - [ADR-0116](0116-browser-launcher-implementation.md) の末尾付記を参照。
 - [ADR-0138](0138-browser-prod-admission-confidential-release.md) の末尾付記を参照。
 - [ADR-0080](0080-browser-phase2-policy-broker-approval.md) の末尾付記を参照。
+
+## 実装付記（launcher-credential）
+
+実装は `CredentialUse` だけを解放し、`IdentityRestore` は引き続き拒否する。認証情報を CDP 操作の主体へ返さないため、credentiald の `LiveSessionRegistration.controller_pid` / `controller_start` は daemon worker の process facts とし、`runtime_pid` / `runtime_start` は launcher が隔離検査した browser runtime の process facts とする。注入要求を受ける injection IPC peer はこの controller である。launcher 自身は CDP の `SharedCdp` / `CdpController` を所有するため、daemon controller が秘密を受け取らず CDP command を launcher に依頼する中継を追加する。credentiald broker は `with_launcher_uid` で設定された launcher UID を launcher peer として認証し、daemon UID の controller に secret frame を返さない。Attested admission ではこの launcher peer に加え、`LauncherProofRegistration` と実 process facts の照合を必須にする。
+
+daemon→launcher の protocol には固定 `Verb::Authenticate` と対応する固定引数型を追加する。引数は `session_id`、`auth_section_id`、`lease_id`、`origin`、`target` のみで、selector や credential 値を含めない。`Response` は固定 `status`（成功/拒否）だけを返し、自由文、receipt、CDP payload を返さない。launcher は自身の `SharedCdp` / `CdpController` を使い、既存の `browser.rs::inject_h3` および `browser_cdp_sink.rs` の認証 sink に接続する。credential 値は credentiald から launcher が所有する注入 sink へ一方向に渡し、一般 action 経路や daemon worker へ戻さない。
+
+`LauncherRuntime::start_guarded` は既存の Started 応答を `launcher_session_proof` で検証し、同じ接続の responder UID を保持する。隔離検査を通過した後、daemon worker が broker client の `register_live_session` で `LiveSessionRegistration` を登録し、得られた `LauncherSessionProof`、`session_id`、`instance_id`、応答の `SCM_CREDENTIALS` 由来 `peer_uid` を `LauncherProofRegistration` として `attach_launcher_proof` する。proof が無い、UID を採れない、登録に失敗した場合は launcher session を使った credential 操作を開始しない。credentiald の `LiveRegistry::attach_launcher_proof` は稼働 session に一度だけ結び付け、`injection_ipc.rs::admit_attested` が実 process facts に対して `verify_launcher_session` を再実行する。
+
+`browser_launcher_run.rs::refuse_confidential` は、proof の検証成功、namespace owner が daemon UID と異なること、`isolation_ok` が真であることの全条件を満たす場合だけ `CredentialUse` を許す。どれかが不成立・取得不能・IPC 失敗なら、接続前に従来どおり `browser credential use is not available through the launcher runtime` で拒否する。承認待ちを含めて fail closed とし、daemon runtime への fallback はしない。shim の `config.json` は解放条件成立時に限り `credential_use: true` と有効な `credential_policy_ids` を設定し、それ以外は従来どおり `false` と空配列にする。`browser.rs::inject_h3` の承認・短期 lease・origin/policy binding と `CdpController` の認証区間観測遮断は維持する。
+
+実装試験は以下を追加し、secret が log/event/artifact/stdout に出ないことも各関連経路で固定する。launcher の protocol・実 process session は userns opt-in 試験に分離し、外部ネットワークや CPU 負荷試験は使わない。
+
+| ケース | 主な crate / 箇所 |
+| --- | --- |
+| proof ありで登録・注入を許可、proof なし・偽造・期限切れ・UID 不一致を拒否 | `celeris-credentiald` `injection_ipc.rs`（`admit_attested` / `verify_launcher_session`）、`task-worker` `browser_launcher_run.rs` |
+| namespace owner が daemon UID の session を拒否 | `task-worker` `browser_launcher_run.rs`（`launcher_session_proof` / `refuse_confidential`） |
+| `isolation_ok` 不成立・証明採取失敗・登録 IPC 失敗で接続前に拒否 | `task-worker` `browser_launcher_run.rs`、`browser_launcher/` |
+| 固定 `Authenticate` verb は許可された引数だけを受け、応答は status のみ | `task-worker` `browser_launcher/protocol.rs`・`backend.rs` |
+| secret 非露出（log/event/artifact/stdout）と 인증 sink の遮断 | `task-worker` `browser.rs`（`inject_h3`）、`browser_cdp_sink.rs`、`browser_launcher/`、`celeris-credentiald` `injection_ipc.rs` |
+
+各試験名は `launcher_credential_` を接頭辞とする。userns を要する実 process 試験は `CELERIS_USERNS_TESTS=1` の opt-in とし、通常試験では決定的な証明・登録・policy 分岐を検査する。
+
+## 付記 2026-10-09: 接続前 gate
+
+final review は「条件を満たさない session も launcher に接続・session 起動した後に拒否している」として差し戻した。launcher session 証明（ns owner・ns inode・responder UID）は launcher が session を作らないと採れないため、人の決定（preconnect-meaning = a）に従い、「接続前に拒否」を次の二段 gate として実装する。
+
+1. **接続前 gate**（`browser_launcher_run.rs::preconnect_credential_gate`、`open_launcher_session` の最初）。CredentialUse を求める run（policy の `CredentialUse`、または最後の wait が credential_use の Registered / Approved）について、launcher socket の設定がある・`[browser] launcher_uid`（credentiald の `--launcher-uid` と同じ値）が設定され 0 でも daemon UID でもない・credentiald の制御経路（credentiald 設定の `runtime_dir`、無ければ `XDG_RUNTIME_DIR`）が取れる・wait store が読める、の全部を `LauncherRuntime::start_guarded` の `spawn_blocking` より前に検査する。不成立なら launcher socket に接続せず `browser credential use is not available through the launcher runtime` で拒否する。admission の対象にならないが admission 無しでは必ず拒否される run（credential 以外の登録済み wait、操作の無い承認）もここで拒否する。
+2. **証明依存 gate**（session 起動・隔離検査の後、credentiald 登録より前）。`launcher_session_proof` の検証成功・ns owner が daemon UID でない・`isolation_ok`・証明の launcher UID が `[browser] launcher_uid` と一致、のどれかが欠ければ `runtime.stop()` で session を止めてから同じ文言で拒否する。credentiald への `register_live_session` / `attach_launcher_proof`、shim の `credential_use: true`、`Authenticate`、harness 起動はどれも起きない。credentiald 登録の失敗も stop してから同じ文言で拒否する。上の実装付記の `refuse_confidential` はこの二段（`credential_demand` で拒否対象を決め、`open_launcher_session` で判定）に置き換えた。
+
+境界: 接続前に決まる条件（設定・UID 分離・credentiald 経路・wait store）は launcher に接続する前、証明に依存する条件は launcher session 作成後・credentiald / CDP / harness への接続と秘密の注入より前。秘密が launcher・Chrome に渡るのは両方の gate と credentiald の Attested admission を通った後だけである。CredentialUse を求めない run は接続前 gate を素通しし、`launcher_uid` 未設定でも従来どおり動く。
+
+試験（`task-worker` の `launcher_credential_preconnect_`、偽 launcher は試験内の `UnixListener` / `LauncherServer`、userns・外部ネットワーク・CPU 負荷なし）: 接続前条件の不成立 5 通りと admission 不能な wait で launcher socket の接続数 0・従来文言、証明依存の不成立で session stop・credentiald の control socket 接続数 0、条件成立で launcher に接続、CredentialUse を求めない run は従来どおり。同一 process の偽 launcher では responder UID が daemon UID と同じになるため、admission 成立から credentiald 登録までの経路は host 実証（運用セッション）で確かめる。

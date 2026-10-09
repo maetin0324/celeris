@@ -54,6 +54,51 @@ fn seen() -> LauncherObservation {
 }
 
 #[test]
+fn launcher_credential_verified_proof_is_admitted() {
+    let facts = isolated_facts();
+    assert!(admit_attested(&facts, Some(&proof()), &seen()).is_ok());
+}
+
+#[test]
+fn launcher_credential_missing_proof_is_rejected() {
+    assert_eq!(
+        admit_attested(&isolated_facts(), None, &seen()),
+        Err(InjectCode::IsolationRequired)
+    );
+}
+
+#[test]
+fn launcher_credential_forged_proof_is_rejected() {
+    let mut forged = proof();
+    forged.instance_id = "forged-launcher".into();
+    assert_eq!(
+        admit_attested(&isolated_facts(), Some(&forged), &seen()),
+        Err(InjectCode::IsolationRequired)
+    );
+}
+
+#[test]
+fn launcher_credential_expired_process_proof_is_rejected() {
+    let mut observation = seen();
+    // PID は再利用され得るため、現在の process starttime が証明と違えば古い証明として拒否する。
+    observation.runtime_starttime = Some(778);
+    assert_eq!(
+        admit_attested(&isolated_facts(), Some(&proof()), &observation),
+        Err(InjectCode::IsolationRequired)
+    );
+}
+
+#[test]
+fn launcher_credential_uid_mismatch_is_rejected() {
+    let mut observation = seen();
+    observation.peer_uid = Some(LAUNCHER_UID + 1);
+    assert_eq!(
+        admit_attested(&isolated_facts(), Some(&proof()), &observation),
+        Err(InjectCode::IsolationRequired)
+    );
+}
+
+#[test]
 fn separate_uid_with_verified_launcher_proof_is_admitted() {
     let facts = isolated_facts();
     let attestation = admit_attested(&facts, Some(&proof()), &seen()).expect("launcher session");

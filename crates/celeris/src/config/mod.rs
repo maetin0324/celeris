@@ -284,6 +284,11 @@ pub struct BrowserRuntimeConfig {
     pub runtime: String,
     #[serde(default)]
     pub launcher_socket: Option<PathBuf>,
+    /// launcher の host UID（credentiald の `--launcher-uid` と同じ値）。launcher 経路の
+    /// CredentialUse は、この値があり daemon の UID と別のときだけ launcher に接続する
+    /// （ADR 2026-10-09 付記「接続前 gate」）。無ければ CredentialUse は接続前に拒否される。
+    #[serde(default)]
+    pub launcher_uid: Option<u32>,
 }
 
 impl Default for BrowserRuntimeConfig {
@@ -292,6 +297,7 @@ impl Default for BrowserRuntimeConfig {
             egress: BrowserEgressConfig::default(),
             runtime: default_browser_runtime(),
             launcher_socket: None,
+            launcher_uid: None,
         }
     }
 }
@@ -331,6 +337,7 @@ impl BrowserRuntimeConfig {
             "launcher" => task_worker::browser::BrowserRuntimeKind::Launcher {
                 socket: self.launcher_socket.clone().unwrap_or_default(),
                 refuse_test_loopback,
+                launcher_uid: self.launcher_uid,
             },
             _ => task_worker::browser::BrowserRuntimeKind::Daemon,
         }

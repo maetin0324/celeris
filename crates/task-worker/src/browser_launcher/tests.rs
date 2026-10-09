@@ -274,6 +274,70 @@ fn protocol_roundtrip_and_unknown_fields_rejected() {
 }
 
 #[test]
+fn launcher_credential_authenticate_is_fixed_and_status_only() {
+    let args = AuthenticateArgs {
+        session_id: "s".into(),
+        auth_section_id: "a".into(),
+        lease_id: "l".into(),
+        origin: "https://example.test".into(),
+        target: "target-1".into(),
+    };
+    let req = Request::Authenticate { args };
+    let body = serde_json::to_vec(&req).expect("serialize fixed request");
+    assert_eq!(decode_request(&body), Ok(req));
+    let bad = br#"{"type":"authenticate","args":{"session_id":"s","auth_section_id":"a","lease_id":"l","origin":"https://example.test","target":"t","password":"do-not-leak"}}"#;
+    assert_eq!(decode_request(bad), Err(ErrorCode::BadRequest));
+    let response = serde_json::to_string(&Response::AuthenticateResult {
+        status: AuthenticationStatus::Success,
+    })
+    .expect("serialize status");
+    assert_eq!(
+        response,
+        r#"{"type":"authenticate_result","status":"success"}"#
+    );
+    assert!(!response.contains("secret"));
+}
+
+#[test]
+fn launcher_credential_authenticate_requires_bounded_nonempty_arguments() {
+    let mut args = AuthenticateArgs {
+        session_id: "s".into(),
+        auth_section_id: "a".into(),
+        lease_id: "l".into(),
+        origin: "https://example.test".into(),
+        target: "target-1".into(),
+    };
+    assert_eq!(
+        Request::Authenticate { args: args.clone() }.validate(),
+        Ok(())
+    );
+    args.auth_section_id.clear();
+    assert_eq!(
+        Request::Authenticate { args }.validate(),
+        Err(ErrorCode::BadRequest)
+    );
+}
+
+#[test]
+fn launcher_credential_authenticate_backend_rejection_has_status_only_response() {
+    let f = fixture();
+    let mut c = connect(&f.sock);
+    let session = c
+        .start_session("t1", "r1", "lease1", policy(60))
+        .expect("start");
+    let status = c
+        .authenticate(AuthenticateArgs {
+            session_id: session.session_id,
+            auth_section_id: "auth1".into(),
+            lease_id: "lease1".into(),
+            origin: "https://example.com".into(),
+            target: "target1".into(),
+        })
+        .expect("fixed authentication response");
+    assert_eq!(status, AuthenticationStatus::Rejected);
+}
+
+#[test]
 fn protocol_oversized_values_and_frames_rejected() {
     let mut p = policy(5);
     p.allowed_domains = (0..MAX_DOMAINS + 1)

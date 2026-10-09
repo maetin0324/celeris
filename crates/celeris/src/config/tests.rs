@@ -211,8 +211,25 @@ fn browser_runtime_launcher_with_socket_validates() {
         task_worker::browser::BrowserRuntimeKind::Launcher {
             socket: std::path::PathBuf::from("/run/celeris/browser-launcher.sock"),
             refuse_test_loopback: true,
+            launcher_uid: None,
         }
     );
+}
+
+#[test]
+fn browser_runtime_launcher_uid_reaches_the_runtime_kind() {
+    let cfg: Config = toml::from_str(
+        "[browser]\nruntime = \"launcher\"\nlauncher_socket = \"/run/celeris/browser-launcher.sock\"\nlauncher_uid = 4000001\n",
+    )
+    .unwrap();
+    assert!(cfg.browser.validate().is_ok());
+    assert!(matches!(
+        cfg.browser.runtime_kind(true),
+        task_worker::browser::BrowserRuntimeKind::Launcher {
+            launcher_uid: Some(4_000_001),
+            ..
+        }
+    ));
 }
 
 #[test]

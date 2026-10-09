@@ -6,8 +6,8 @@
 //! [`RuntimeFacts`] を組んで `verify_isolation` に通し、通らなければ session を止めて
 //! `isolated_runtime_unavailable` にする。どの失敗も daemon 所有経路へ fallback しない。
 //!
-//! 機密能力（CredentialInjection / IdentityRestore）はこの経路では解放しない: credential を使う
-//! policy・承認待ちは接続前に拒否し、identity 復元の state は daemon にも launcher にも渡さない。
+//! CredentialUse は launcher session proof と isolation attestation が成立した場合だけ許可する。
+//! IdentityRestore は引き続き拒否し、秘密は harness に渡さない。
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -23,6 +23,7 @@ use task_core::{BrowserRun, BrowserRunState};
 
 use super::{BrowserContext, BrowserSink, CLI, EventSinkLive, forward_events, write_private};
 use crate::browser_action::{ActionExecutor, ActionRequest, ActionServer};
+use crate::browser_launcher::protocol::{AuthenticateArgs, AuthenticationStatus};
 use crate::browser_launcher::{
     ActionArgs, LauncherClient, Observation, Outcome, Receipt, SessionFacts, SessionPolicy,
     SessionState, StartedSession, Verb,
@@ -142,6 +143,14 @@ impl LauncherRuntime {
         let mut client = self.client.lock().map_err(|_| UNAVAILABLE)?;
         client
             .observe(&self.session_id, &self.lease_id)
+            .map_err(|_| UNAVAILABLE)
+    }
+
+    fn authenticate(&self, args: AuthenticateArgs) -> Result<AuthenticationStatus, &'static str> {
+        self.client
+            .lock()
+            .map_err(|_| UNAVAILABLE)?
+            .authenticate(args)
             .map_err(|_| UNAVAILABLE)
     }
 
@@ -439,48 +448,232 @@ impl ActionExecutor for LauncherExecutor {
     }
 }
 
-/// 機密能力はこの経路で解放しない（ADR-0116「機密能力」）。接続より前に拒否する。
-fn refuse_confidential(
+const CREDENTIAL_DENIED: &str =
+    "browser credential use is not available through the launcher runtime";
+
+fn credential_denied() -> AdapterError {
+    AdapterError::Other(CREDENTIAL_DENIED.into())
+}
+
+/// launcher 経路の接続先（`[browser] runtime = "launcher"` の設定）。
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct LauncherTarget<'a> {
+    pub(crate) socket: &'a Path,
+    pub(crate) refuse_test_loopback: bool,
+    /// 設定上の launcher の host UID。CredentialUse の接続前 gate と証明の照合に使う。
+    pub(crate) launcher_uid: Option<u32>,
+}
+
+/// run が CredentialUse を求めるか。`requested` は admission の対象（policy の CredentialUse、
+/// または最後の wait が credential_use の Registered / Approved）、`refused_without_admission` は
+/// admission が無ければ拒否される run（ADR 2026-10-08 D2: 登録済み・承認済みの credential 待ち、
+/// 操作の無い承認も含む）。`requested` なら必ず `refused_without_admission`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct CredentialDemand {
+    pub(crate) requested: bool,
+    pub(crate) refused_without_admission: bool,
+}
+
+pub(crate) fn credential_demand(
     policy: &crate::browser_policy::PreparedBrowserPolicy,
-    sink: &dyn EventSink,
-) -> Result<(), AdapterError> {
-    let denied = || {
-        AdapterError::Other(
-            "browser credential use is not available through the launcher runtime".into(),
-        )
-    };
-    if policy
+    waits: &[BrowserWait],
+) -> CredentialDemand {
+    let by_policy = policy
         .effective
         .actions
-        .contains(&task_core::BrowserAction::CredentialUse)
-    {
-        return Err(denied());
-    }
-    let waits = sink
-        .browser_waits()
-        .map_err(|_| AdapterError::Other("browser wait store unavailable".into()))?;
-    // ADR 2026-10-08 D2: an approved click/download (no credential) may resume here; a
-    // registered credential or an approved credential use may not.
-    if waits.last().is_some_and(|w| {
+        .contains(&task_core::BrowserAction::CredentialUse);
+    let last = waits.last();
+    let credential_wait = last.is_some_and(|w| {
+        matches!(
+            w.state,
+            BrowserWaitState::Registered | BrowserWaitState::Approved
+        ) && w
+            .operation
+            .as_ref()
+            .is_some_and(|o| o.action == "credential_use")
+    });
+    let refused_wait = last.is_some_and(|w| {
         w.state == BrowserWaitState::Registered
             || (w.state == BrowserWaitState::Approved
                 && w.operation
                     .as_ref()
                     .is_none_or(|o| o.action == "credential_use"))
-    }) {
-        return Err(denied());
+    });
+    CredentialDemand {
+        requested: by_policy || credential_wait,
+        refused_without_admission: by_policy || refused_wait,
     }
-    Ok(())
+}
+
+/// launcher に接続する前に決まる条件（ADR 2026-10-09 付記「接続前 gate」）。
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PreconnectFacts<'a> {
+    pub(crate) launcher_socket: &'a Path,
+    pub(crate) launcher_uid: Option<u32>,
+    pub(crate) daemon_uid: u32,
+    /// credentiald の制御経路（injection / control socket の置き場所）。
+    pub(crate) credentiald_runtime: Option<&'a Path>,
+}
+
+/// 接続前 gate。CredentialUse を求めない run は素通し（従来どおり）。求める run は、launcher runtime
+/// の設定・launcher UID の設定（0 でも daemon UID でもない）・credentiald の制御経路が揃わなければ
+/// launcher に接続せず従来の文言で拒否する。admission の対象でない拒否対象の run（credential 以外の
+/// 登録済み wait 等）は接続後に必ず拒否されるので、ここで拒否する。
+pub(crate) fn preconnect_credential_gate(
+    demand: CredentialDemand,
+    facts: &PreconnectFacts<'_>,
+) -> Result<(), AdapterError> {
+    if !demand.refused_without_admission {
+        return Ok(());
+    }
+    let ready = demand.requested
+        && !facts.launcher_socket.as_os_str().is_empty()
+        && facts
+            .launcher_uid
+            .is_some_and(|uid| uid != 0 && uid != facts.daemon_uid)
+        && facts.credentiald_runtime.is_some();
+    if ready {
+        Ok(())
+    } else {
+        Err(credential_denied())
+    }
+}
+
+/// credentiald の制御経路の置き場所（daemon の credentiald 設定、無ければ `XDG_RUNTIME_DIR`）。
+fn credentiald_runtime_dir() -> Option<std::path::PathBuf> {
+    crate::browser_credential::configured()
+        .and_then(|sup| sup.runtime_dir.clone())
+        .or_else(|| std::env::var_os("XDG_RUNTIME_DIR").map(std::path::PathBuf::from))
+}
+
+/// 証明依存の gate（session 起動後・credentiald 登録より前）。証明の検証・owner が daemon でない・
+/// `isolation_ok` を満たすときだけ真。
+fn credential_admitted(
+    requested: bool,
+    proof: Option<&LauncherSessionProof>,
+    isolation_ok: bool,
+    daemon_uid: u32,
+) -> bool {
+    requested
+        && isolation_ok
+        && proof.is_some_and(|proof| {
+            proof.isolation_ok
+                && proof.ns_owner_uid.is_some_and(|owner| owner != daemon_uid)
+                && REQUIRED_NAMESPACES
+                    .iter()
+                    .all(|ns| proof.ns_inodes.contains_key(ns))
+        })
+}
+
+async fn stop_in_background(runtime: LauncherRuntime) {
+    let _ = tokio::task::spawn_blocking(move || runtime.stop()).await;
+}
+
+/// 二段 gate で launcher session を開く。
+/// 1. 接続前 gate（[`preconnect_credential_gate`]）。不成立なら launcher socket に接続しない。
+/// 2. launcher に session を作らせ、隔離検査を通す（失敗は `UNAVAILABLE`）。
+/// 3. 証明依存の gate（証明・owner≠daemon・`isolation_ok`・証明の launcher UID が設定値と一致）。
+///    不成立で拒否対象の run なら session を stop してから従来の文言で拒否する。
+/// 4. 通った run だけ credentiald に session と証明を登録する。失敗なら stop して拒否。
+///
+/// どの拒否も shim の credential_use 有効化・Authenticate・harness 起動より前に返る。
+/// 戻り値の bool は credential admission の成否。
+pub(crate) async fn open_launcher_session(
+    target: LauncherTarget<'_>,
+    task_id: &str,
+    run_id: &str,
+    session_policy: SessionPolicy,
+    demand: CredentialDemand,
+    credentiald_runtime: Option<&Path>,
+) -> Result<(LauncherRuntime, bool), AdapterError> {
+    let daemon_uid = DaemonIds::current().uid;
+    preconnect_credential_gate(
+        demand,
+        &PreconnectFacts {
+            launcher_socket: target.socket,
+            launcher_uid: target.launcher_uid,
+            daemon_uid,
+            credentiald_runtime,
+        },
+    )?;
+    let (socket, refuse, task_id, run_id) = (
+        target.socket.to_path_buf(),
+        target.refuse_test_loopback,
+        task_id.to_owned(),
+        run_id.to_owned(),
+    );
+    let (runtime, attestation) = tokio::task::spawn_blocking(move || {
+        LauncherRuntime::start_guarded(&socket, refuse, &task_id, &run_id, session_policy)
+    })
+    .await
+    .map_err(|_| AdapterError::Other(UNAVAILABLE.into()))?
+    .map_err(|_| AdapterError::Other(UNAVAILABLE.into()))?;
+    let admitted = credential_admitted(
+        demand.requested,
+        runtime.session_proof(),
+        attestation.session_id() == runtime.session_id,
+        daemon_uid,
+    ) && runtime
+        .session_proof()
+        .is_some_and(|p| Some(p.launcher_uid) == target.launcher_uid);
+    if demand.refused_without_admission && !admitted {
+        stop_in_background(runtime).await;
+        return Err(credential_denied());
+    }
+    if admitted {
+        // Bind the proof to credentiald before the shim's credential capability is enabled.
+        let registered = match (runtime.session_proof(), credentiald_runtime) {
+            (Some(proof), Some(dir)) => register_launcher_proof(&runtime.session_id, proof, dir),
+            _ => Err(()),
+        };
+        if registered.is_err() {
+            stop_in_background(runtime).await;
+            return Err(credential_denied());
+        }
+    }
+    Ok((runtime, admitted))
+}
+
+/// credentiald に稼働 session（controller = この daemon worker、runtime = launcher の browser）と
+/// launcher 証明を登録する。秘密は含めない。
+fn register_launcher_proof(
+    session_id: &str,
+    proof: &LauncherSessionProof,
+    credentiald_runtime: &Path,
+) -> Result<(), ()> {
+    let client = crate::browser_cdp_sink::UnixInjectionClient::new(
+        celeris_credentiald::injection_ipc::injection_socket(credentiald_runtime),
+    );
+    let controller_start =
+        crate::browser_runtime::process_starttime(std::process::id() as i32).ok_or(())?;
+    client
+        .register_live_session(
+            celeris_credentiald::injection_ipc::LiveSessionRegistration {
+                session_id: session_id.to_owned(),
+                controller_pid: std::process::id(),
+                controller_start,
+                runtime_pid: u32::try_from(proof.pid).map_err(|_| ())?,
+                runtime_start: proof.starttime,
+            },
+        )
+        .map_err(|_| ())?;
+    client
+        .attach_launcher_proof(
+            celeris_credentiald::injection_ipc::LauncherProofRegistration {
+                session_id: session_id.to_owned(),
+                instance_id: proof.instance_id.clone(),
+                peer_uid: Some(proof.launcher_uid),
+                proof: proof.clone(),
+            },
+        )
+        .map_err(|_| ())
 }
 
 /// The approved click/download this run resumes (ADR 2026-10-08 D2), if the last wait is one.
 fn approved_operation_wait(
     policy: &crate::browser_policy::PreparedBrowserPolicy,
-    sink: &dyn EventSink,
+    waits: &[BrowserWait],
 ) -> Result<Option<(BrowserWait, task_core::BrowserAction)>, AdapterError> {
-    let waits = sink
-        .browser_waits()
-        .map_err(|_| AdapterError::Other("browser wait store unavailable".into()))?;
     let Some(wait) = waits
         .last()
         .filter(|w| w.state == BrowserWaitState::Approved)
@@ -500,6 +693,7 @@ fn write_shim_files(
     policy: &crate::browser_policy::PreparedBrowserPolicy,
     action_policy: &[u8],
     approval_actions: &[String],
+    credential_admitted: bool,
 ) -> Result<(std::path::PathBuf, std::path::PathBuf), AdapterError> {
     use sha2::Digest;
     let output = runtime_dir.join("output");
@@ -516,8 +710,8 @@ fn write_shim_files(
             "output": output,
             "action_socket": action_socket,
             "policy_sha256": format!("{:x}", sha2::Sha256::digest(action_policy)),
-            "credential_policy_ids": [],
-            "credential_use": false,
+            "credential_policy_ids": if credential_admitted { policy.effective.credential_policy_ids.clone() } else { BTreeSet::<String>::new() },
+            "credential_use": credential_admitted,
             "approval_actions": approval_actions,
         }))?,
     )?;
@@ -533,15 +727,39 @@ pub(super) async fn run(
     run_id: &str,
     limits: RunLimits,
     sink: &dyn EventSink,
-    socket: &Path,
-    refuse_test_loopback: bool,
+    target: LauncherTarget<'_>,
     policy: &crate::browser_policy::PreparedBrowserPolicy,
 ) -> Result<RunOutcome, AdapterError> {
-    refuse_confidential(policy, sink)?;
     let unavailable = || AdapterError::Other(UNAVAILABLE.into());
+    // The wait store must be readable before anything else; a CredentialUse run that cannot
+    // read it is refused with the credential wording (fail closed before connecting).
+    let waits = match sink.browser_waits() {
+        Ok(waits) => waits,
+        Err(_)
+            if policy
+                .effective
+                .actions
+                .contains(&task_core::BrowserAction::CredentialUse) =>
+        {
+            return Err(credential_denied());
+        }
+        Err(_) => {
+            return Err(AdapterError::Other("browser wait store unavailable".into()));
+        }
+    };
+    let demand = credential_demand(policy, &waits);
     // ADR 2026-10-08 D2: an approved operation resumes the logical session that asked for it,
     // with that one action allowed once.
-    let approved = approved_operation_wait(policy, sink)?;
+    let approved = approved_operation_wait(policy, &waits)?;
+    let approved_credential = waits
+        .last()
+        .filter(|w| {
+            w.state == BrowserWaitState::Approved
+                && w.operation
+                    .as_ref()
+                    .is_some_and(|o| o.action == "credential_use")
+        })
+        .cloned();
     let approved_action = approved.as_ref().map(|(_, a)| *a);
     let session = match &approved {
         Some((wait, _)) => wait.session_id.clone(),
@@ -554,12 +772,13 @@ pub(super) async fn run(
     let approval_actions = super::shim_approval_actions(policy, approved_action);
     let runtime_dir = req.workspace.join("runs").join(run_id).join("browser");
     let output = runtime_dir.join("output");
-    let (cli, action_socket) = write_shim_files(
+    let _ = write_shim_files(
         &runtime_dir,
         &session,
         policy,
         &action_policy,
         &approval_actions,
+        false,
     )?;
     let allowed: task_core::AgentBrowserActionPolicy = serde_json::from_slice(&action_policy)
         .map_err(|_| AdapterError::Other("browser policy rejected".into()))?;
@@ -568,24 +787,26 @@ pub(super) async fn run(
         .ok_or_else(|| AdapterError::Other("browser control store unavailable".into()))?;
     let session_policy =
         session_policy(&allowed.allow, policy.allowed_domains(), limits.wall_clock);
-    let (socket, task_id, owned_run) = (
-        socket.to_path_buf(),
-        req.task.id.to_string(),
-        run_id.to_owned(),
-    );
-    let (runtime, _attestation) = tokio::task::spawn_blocking(move || {
-        LauncherRuntime::start_guarded(
-            &socket,
-            refuse_test_loopback,
-            &task_id,
-            &owned_run,
-            session_policy,
-        )
-    })
-    .await
-    .map_err(|_| unavailable())?
-    .map_err(|_| unavailable())?;
-    // 機密能力はこの経路では解放しないので、証明の有無は記録だけする。
+    let credentiald_runtime = credentiald_runtime_dir();
+    let (runtime, credential_admitted) = open_launcher_session(
+        target,
+        &req.task.id.to_string(),
+        run_id,
+        session_policy,
+        demand,
+        credentiald_runtime.as_deref(),
+    )
+    .await?;
+    // Rewrite the shim config only after both gates and the credentiald binding have passed.
+    // An unproven session leaves the pre-created fail-closed config in place.
+    let (cli, action_socket) = write_shim_files(
+        &runtime_dir,
+        &session,
+        policy,
+        &action_policy,
+        &approval_actions,
+        credential_admitted,
+    )?;
     tracing::info!(
         session = %runtime.session_id,
         launcher_proof = runtime.session_proof().is_some(),
@@ -613,6 +834,43 @@ pub(super) async fn run(
         }
         None => None,
     };
+    let mut credential_used = false;
+    if let Some(wait) = approved_credential.as_ref() {
+        if !credential_admitted {
+            let stop_runtime = runtime;
+            let _ = tokio::task::spawn_blocking(move || stop_runtime.stop()).await;
+            return Err(credential_denied());
+        }
+        let consumed = sink
+            .browser_operation_approval_consume(wait)
+            .map_err(|_| credential_denied())?;
+        let credential = consumed
+            .wait
+            .credential
+            .as_ref()
+            .ok_or_else(credential_denied)?;
+        let trusted = consumed
+            .wait
+            .trusted_login
+            .as_ref()
+            .ok_or_else(credential_denied)?;
+        let args = AuthenticateArgs {
+            session_id: runtime.session_id.clone(),
+            auth_section_id: credential.credential_id.clone(),
+            lease_id: runtime.lease_id.clone(),
+            origin: consumed.wait.origin.clone(),
+            target: trusted.password_selector.clone(),
+        };
+        let status = runtime
+            .authenticate(args)
+            .map_err(|_| credential_denied())?;
+        if status != AuthenticationStatus::Success {
+            let stop_runtime = runtime;
+            let _ = tokio::task::spawn_blocking(move || stop_runtime.stop()).await;
+            return Err(credential_denied());
+        }
+        credential_used = true;
+    }
     let action_server = ActionServer::start_with(
         &action_socket,
         Arc::new(LauncherExecutor {
@@ -645,7 +903,7 @@ pub(super) async fn run(
     req.context.browser = Some(BrowserContext {
         run: browser.clone(),
         cli,
-        credential_used: false,
+        credential_used,
         approval_actions,
         approved_operation,
     });

@@ -26,7 +26,25 @@ ADR `agent-docs/adr/2026-10-09-browser-ledger-credential-evidence.md`（状態: 
 | certify-credential | done | `browser_ledger_credential_` 1 passed、`browser_backend::tests::` 8 passed、celerisctl `browser_ledger_release_` 8 passed |
 | integrate-impl（統合 HEAD `fde3f018`） | done | integration-checks の test-parallel: nextest 4882 passed / 0 failed、doctest 0 失敗 |
 
-## close-out での検証（HEAD `fde3f018`、コードは変更していない）
+## 同期後の最終コードの検証（HEAD `07445f598209133f1cbd953f025dae462022e3bf`）
+
+後続変更と main 同期を含む上記 SHA に対し、reviewer run `01M4FDTN6ZSJQC3V5MTEVYP8NY` の
+authoritative check で次を確認した。この節の追記は進捗文書だけの修正で、検証対象のコードは変更していない。
+
+- `bash scripts/dev/test-parallel.sh` → exit 0。`CELERIS_TEST_SUMMARY`: passed 4892、failed 0、ignored 14、
+  binaries 168（nextest 158 + doctest 10）、nextest exit 0、doctest exit 0、`summary_parsed: true`、`tmp_leftovers: 1`（終了時に削除）。
+- `cargo clippy --workspace -- -D warnings` → exit 0（`Finished dev profile`、43.58 秒）。
+
+修復 run `01M4FEE47GG971NWRY6KGQV8BW` でも、同じ SHA のコードと本節の文書差分に対して再実行した。
+
+- `bash scripts/dev/test-parallel.sh` → exit 0。4892 passed / 0 failed / 14 ignored、binaries 168、nextest exit 0、doctest exit 0、`summary_parsed: true`、`tmp_leftovers: 0`（nextest 313.0 秒、doctest 10.3 秒）。
+  既存の Unix socket パス長制限を避け、`unshare --user --map-current-user --keep-caps --mount` 内で run の `$TMPDIR` を `/tmp` に bind し、`TMPDIR=/tmp` とした。実行前に `setpriv --bounding-set=-all --inh-caps=-all --ambient-caps=-all` で capability を除去した。ビルド出力は渡された `CARGO_TARGET_DIR` を維持した。
+- `cargo clippy --workspace -- -D warnings` → exit 0（0.46 秒）。
+- ログ: task 成果物ディレクトリの `repair-2-recheck-test-parallel.log`・`repair-2-recheck-clippy.log`。
+
+以下の `fde3f018` の結果は同期前の履歴であり、最終コードの検証結果は本節を参照する。
+
+## close-out 時点の検証履歴（HEAD `fde3f018`、コードは変更していない）
 
 - `cargo clippy --workspace -- -D warnings` → exit 0（`Finished dev profile`）。
 - `TMPDIR=/tmp/cet bash scripts/dev/test-parallel.sh` → exit 0。`CELERIS_TEST_SUMMARY`: nextest passed 4882、failed 0、ignored 14、doctest exit 0、`summary_parsed: true`、`tmp_leftovers: 0`。

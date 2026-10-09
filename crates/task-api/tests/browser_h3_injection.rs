@@ -427,6 +427,10 @@ impl World {
         };
         let record = self.env.dir.path().join("empty-browser-conformance.json");
         // ADR-0112: the P4-B cases count only with per-test evidence in the ledger.
+        // ADR 2026-10-09-browser-launcher-credential-release D(台帳): credential certification
+        // takes isolation/egress evidence only from the launcher runtime and the P4-B
+        // injection/H3 evidence only from the daemon runtime; other runtimes never substitute.
+        use task_core::browser_backend::{EvidenceRuntime, FixtureCase};
         let evidence: Vec<_> = [
             task_core::browser_backend::FixtureCase::IsolationSuite,
             task_core::browser_backend::FixtureCase::EgressNegativeSuite,
@@ -442,7 +446,12 @@ impl World {
                         case,
                         test,
                         outcome: task_core::browser_backend::EvidenceOutcome::Passed,
-                        runtime: task_core::browser_backend::EvidenceRuntime::Daemon,
+                        runtime: match case {
+                            FixtureCase::IsolationSuite | FixtureCase::EgressNegativeSuite => {
+                                EvidenceRuntime::Launcher
+                            }
+                            _ => EvidenceRuntime::Daemon,
+                        },
                     },
                 )
         })

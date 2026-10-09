@@ -927,4 +927,158 @@ mod cos_mapping_tests {
                 .is_none()
         );
     }
+
+    /// Rows of `config/skills/cos-operator/operations.md` (pinned to the API `ALLOWED` by the task-api
+    /// test `cos_operator_skill_table_matches_allowed`), as (method, path pattern).
+    fn skill_allowed_rows() -> Vec<(String, String)> {
+        let text = include_str!("../../../config/skills/cos-operator/operations.md");
+        let table = text
+            .split("## 除外する操作")
+            .next()
+            .expect("operations table");
+        table
+            .lines()
+            .filter_map(|line| {
+                let cell = line.split('|').nth(2)?.trim().trim_matches('`');
+                let (method, path) = cell.split_once(' ')?;
+                (matches!(method, "POST" | "PUT" | "PATCH" | "DELETE")
+                    && path.starts_with("/api/v1/"))
+                .then(|| (method.to_string(), path.to_string()))
+            })
+            .collect()
+    }
+
+    fn matches_row(pattern: &str, path: &str) -> bool {
+        let p: Vec<_> = pattern.split('/').collect();
+        let s: Vec<_> = path.split('/').collect();
+        p.len() == s.len()
+            && p.iter()
+                .zip(&s)
+                .all(|(p, s)| (p.starts_with('<') && p.ends_with('>') && !s.is_empty()) || p == s)
+    }
+
+    /// ops-closeout (ADR 2026-10-09-cos-operations-all-mutations D3): every mutating subcommand whose
+    /// API route is ALLOWED is wrapped into `/cos/operations` under a CoS credential, and the
+    /// wrapped request is a registered row. Local-only commands stay unmapped (refused under CoS).
+    #[test]
+    fn cos_mapped_table_wraps_every_allowed_subcommand() {
+        let id = task_core::TaskId::new().to_string();
+        let child = task_core::TaskId::new().to_string();
+        let plan = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../task-api/tests/fixtures/browser-plan.json"
+        );
+        let t = |tail: &str| format!("/api/v1/tasks/{id}{tail}");
+        let table: Vec<(Vec<&str>, &str, String)> = vec![
+            (vec!["approve", &id], "POST", t("/approve")),
+            (vec!["reject", &id], "POST", t("/reject")),
+            (vec!["accept", &id], "POST", t("/accept")),
+            (vec!["cancel", &id], "POST", t("/cancel")),
+            (vec!["rereview", &id], "POST", t("/rereview")),
+            (vec!["retry", &id], "POST", t("/retry")),
+            (vec!["answer", &id, "はい"], "POST", t("/answer")),
+            (
+                vec!["execution", "phase-gate", &id, "continue"],
+                "POST",
+                t("/execution/phase-gate"),
+            ),
+            (
+                vec!["execution", "plan", "set", &id, "--file", plan],
+                "POST",
+                t("/execution-plan"),
+            ),
+            (
+                vec!["execution", "plan", "replan", &id, "--file", plan],
+                "PUT",
+                t("/execution-plan"),
+            ),
+            (
+                vec![
+                    "tree", "adopt", &id, "--task", &child, "--stage", "s1", "--unit", "u1",
+                ],
+                "POST",
+                t("/tree/adopt"),
+            ),
+            (
+                vec!["cron", "pause", "daily"],
+                "POST",
+                "/api/v1/cron-jobs/daily/pause".into(),
+            ),
+            (
+                vec!["cron", "resume", "daily"],
+                "POST",
+                "/api/v1/cron-jobs/daily/resume".into(),
+            ),
+            (
+                vec!["cron", "run", "daily"],
+                "POST",
+                "/api/v1/cron-jobs/daily/run".into(),
+            ),
+            (
+                vec!["cron", "update", "daily", "--schedule", "0 5 * * *"],
+                "PATCH",
+                "/api/v1/cron-jobs/daily".into(),
+            ),
+            (
+                vec![
+                    "cron",
+                    "create",
+                    "--name",
+                    "daily",
+                    "--schedule",
+                    "0 5 * * *",
+                    "--timezone",
+                    "Asia/Tokyo",
+                    "--template",
+                    "{}",
+                ],
+                "POST",
+                "/api/v1/cron-jobs".into(),
+            ),
+            (
+                vec!["models", "discover", "--source", "opencode-go"],
+                "POST",
+                "/api/v1/llm/models/discover".into(),
+            ),
+            (
+                vec!["models", "assign", "opencode-go", "cheap", "glm-5"],
+                "PUT",
+                "/api/v1/llm/models/assignments/opencode-go/cheap".into(),
+            ),
+            (
+                vec!["models", "unassign", "opencode-go", "cheap"],
+                "DELETE",
+                "/api/v1/llm/models/assignments/opencode-go/cheap".into(),
+            ),
+            (vec!["replay"], "POST", "/api/v1/replay".into()),
+        ];
+        let rows = skill_allowed_rows();
+        assert!(rows.len() > 50, "operations.md table not parsed: {rows:?}");
+        for (argv, method, path) in &table {
+            let (got_method, got_path, _) = cos_mapped(&parse(argv))
+                .unwrap_or_else(|e| panic!("{argv:?}: {e}"))
+                .unwrap_or_else(|| panic!("{argv:?} is not wrapped into /cos/operations"));
+            assert_eq!(
+                (got_method, got_path.as_str()),
+                (*method, path.as_str()),
+                "{argv:?}"
+            );
+            assert!(
+                rows.iter()
+                    .any(|(m, p)| m == method && matches_row(p, path)),
+                "{argv:?}: {method} {path} is not an ALLOWED row"
+            );
+        }
+        for argv in [
+            vec!["cron", "list"],
+            vec!["models", "list"],
+            vec!["replay", "--apply"],
+            vec!["knowledge", "reindex"],
+        ] {
+            assert!(
+                cos_mapped(&parse(&argv)).expect("map").is_none(),
+                "{argv:?}"
+            );
+        }
+    }
 }

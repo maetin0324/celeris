@@ -21,6 +21,8 @@ type Dispatcher = fn(
 ) -> Result<CosOperation, ApiProblem>;
 
 pub(crate) struct Registry {
+    /// Domain label matched against the ADR headings by the registry tests.
+    #[cfg(test)]
     pub(crate) name: &'static str,
     pub(crate) allowed: &'static [(&'static str, &'static str, &'static str)],
     pub(crate) excluded: &'static [(&'static str, &'static str, &'static str)],
@@ -29,30 +31,35 @@ pub(crate) struct Registry {
 
 pub(crate) const REGISTRIES: &[Registry] = &[
     Registry {
+        #[cfg(test)]
         name: "tasks",
         allowed: tasks::ALLOWED,
         excluded: tasks::EXCLUDED,
         dispatch: tasks::dispatch,
     },
     Registry {
+        #[cfg(test)]
         name: "decisions",
         allowed: decisions::ALLOWED,
         excluded: decisions::EXCLUDED,
         dispatch: decisions::dispatch,
     },
     Registry {
+        #[cfg(test)]
         name: "projects",
         allowed: projects::ALLOWED,
         excluded: projects::EXCLUDED,
         dispatch: projects::dispatch,
     },
     Registry {
+        #[cfg(test)]
         name: "admin",
         allowed: admin::ALLOWED,
         excluded: admin::EXCLUDED,
         dispatch: admin::dispatch,
     },
     Registry {
+        #[cfg(test)]
         name: "surface",
         allowed: surface::ALLOWED,
         excluded: surface::EXCLUDED,

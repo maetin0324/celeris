@@ -34,7 +34,22 @@ sh crates/task-worker/scripts/launcher-admission-evidence.sh --stutter 3 /tmp/la
 sh crates/task-worker/scripts/launcher-admission-evidence.sh --credential /tmp/launcher-credential-tests.log
 ```
 
-すべて exit 0 であること、各 stutter run に `ADMISSION[real-session]` と ptrace 拒否があること、launcher responder の PID/UID が service と `celeris-browser` に一致することを確認する。PID と UID は実行時に確認し、ログから人が読める保管先へ必要最小限の結果を写す。
+両台本が exit 0 であることを確認する。stutter log は各回に `RUN[stutter-N] required launcher admission + SIGSTOP stutter`、`STUTTER[stutter-N]: stops=<n>`（`n` は 0 より大きい整数）、`EXIT[stutter-N]: 0` があり、3 回分の後の最終行が `EXIT: 0` であることを確認する。ログの行形式は次のとおり（停止数は実行ごとに変わる）。
+
+```text
+RUN[stutter-1] required launcher admission + SIGSTOP stutter
+STUTTER[stutter-1]: stops=81
+EXIT[stutter-1]: 0
+RUN[stutter-2] required launcher admission + SIGSTOP stutter
+STUTTER[stutter-2]: stops=81
+EXIT[stutter-2]: 0
+RUN[stutter-3] required launcher admission + SIGSTOP stutter
+STUTTER[stutter-3]: stops=82
+EXIT[stutter-3]: 0
+EXIT: 0
+```
+
+これは `sh crates/task-worker/scripts/tests/launcher-admission-evidence-stutter.sh` の実行で得た行形式の例である。各 stutter run に `ADMISSION[real-session]` と ptrace 拒否があること、launcher responder の PID/UID が service と `celeris-browser` に一致することも確認する。PID と UID は実行時に確認し、ログから人が読める保管先へ必要最小限の結果を写す。`LAUNCHER_EVIDENCE_TEST_CMD` は台本の試験専用 hook であり、本番手順では設定・使用しない。
 
 ## 2. 台帳を再取得
 

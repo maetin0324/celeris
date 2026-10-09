@@ -300,6 +300,127 @@ P4B_H3_TESTS = (
     "injected_leak_is_caught_by_the_same_scanner",
 )
 
+# ADR 2026-10-09 D1. Keep these names aligned with task_core::browser_backend.
+P4A_ISOLATION_TESTS = tuple(
+    ("task-worker", target, name) for target, name in (
+        ("browser_runtime_isolated", "probe_inside_runtime_cannot_reach_host_sockets_or_network"),
+        ("browser_runtime_isolated", "real_browser_in_runtime_facts_and_restore_refused_on_same_uid"),
+        ("browser_runtime_isolated", "controller_kill_leaves_no_runtime_processes"),
+        ("browser_runtime_isolated", "restart_reaps_recorded_runtime_and_ignores_stale_records"),
+        ("browser_runtime_supervisor", "runtime_processes_do_not_survive_controller_kill_restart_or_stop"),
+        ("browser_launcher_ptrace", "launcher_chrome_denies_daemon_uid_ptrace"),
+    )) + tuple(("task-core", "lib", f"browser_isolation::tests::{name}") for name in (
+        "verified_runtime_is_isolated", "daemon_owned_userns_is_rejected", "unknown_userns_owner_is_rejected",
+        "same_uid_and_root_are_rejected", "every_namespace_is_required",
+        "root_must_be_readonly_and_writes_stay_in_session", "broker_and_host_ipc_are_not_visible",
+        "cdp_must_not_be_on_tcp_or_outside_controller_dir", "privileges_and_pgid_are_checked",
+        "bwrap_argv_unshares_everything_and_remounts_ro", "owner_check_alone_without_proof_is_rejected",
+        "proof_does_not_override_isolation_violations", "launched_facts_reject_namespace_shared_with_daemon",
+    ))
+P4A_EGRESS_NEGATIVE_TESTS = tuple(
+    ("task-worker", target, name) for target, name in (
+        ("browser_egress_relay", "fixture_reachable_only_through_per_connection_egress_proxy"),
+        ("browser_egress_process", "independent_proxy_refuses_worker_selected_private_or_proxy_destinations"),
+        ("browser_egress_process", "malformed_or_oversized_policy_never_appears_in_process_output"),
+        ("browser_egress_process", "missing_inherited_socket_is_refused"),
+    )) + tuple(("task-worker", "lib", f"browser_egress::tests::{name}") for name in (
+        "real_unix_transport_rejects_proxy_dns_and_http_bypasses_before_resolution",
+        "actual_dns_transport_refuses_private_ipv6_and_rebinding",
+        "denied_origin_never_reaches_even_the_configured_dns_socket", "oversized_header_is_bounded_and_denied",
+        "malformed_dns_cannot_inject_an_address", "dns_cname_requires_terminal_owner_and_refuses_cycles",
+        "malformed_dns_length_or_transaction_is_rejected_over_tcp",
+        "browser_allowed_domains_egress_denies_outside_task_and_grant",
+        "egress_get_switching_origin_on_the_same_connection_never_connects",
+        "egress_get_denials_are_recorded_like_connect", "egress_test_loopback_connect_allowed_only_when_listed",
+    )) + tuple(("task-core", "lib", f"browser_isolation::tests::{name}") for name in (
+        "egress_rejects_private_ranges_and_rebinding", "egress_rejects_ipv6_private_and_disabled",
+        "egress_rejects_ip_literals_and_unlisted_hosts", "egress_rejects_dns_bypass_and_proxy_chain",
+        "egress_test_loopback_default_off_keeps_ip_literal",
+        "egress_test_loopback_other_private_and_variants_stay_denied",
+    ))
+
+
+def credential_evidence(ledger_path, backends, output):
+    output = Path(output)
+    output.mkdir(parents=True, exist_ok=True)
+    ledger = json.loads(Path(ledger_path).read_text())
+    if ledger.get("schema") != 1 or ledger.get("source") != "celeris-browser-conformance":
+        print("ledger is not a measured celeris-browser-conformance record", file=sys.stderr)
+        return 1
+    cargo = os.environ.get("CELERIS_CONFORMANCE_CARGO", "cargo")
+    manifest = Path(__file__).resolve().parents[1] / "Cargo.toml"
+    logs = output / "credential-logs"
+    logs.mkdir(parents=True, exist_ok=True)
+    all_evidence = []
+    try:
+        build = subprocess.run([cargo, "build", "--manifest-path", str(manifest), "-p", "task-worker",
+                                "--bin", "celeris-browser-sandboxd", "--bin", "celeris-browser-egress"],
+                               text=True, capture_output=True, timeout=600, check=False)
+        (logs / "build.log").write_text(build.stdout + "\n" + build.stderr)
+        build_ok = build.returncode == 0
+    except (OSError, subprocess.TimeoutExpired) as error:
+        build_ok = False
+        (logs / "build.log").write_text(str(error))
+    outcomes = {}
+    for case, tests in (("isolation_suite", P4A_ISOLATION_TESTS),
+                        ("egress_negative_suite", P4A_EGRESS_NEGATIVE_TESTS)):
+        for package, target, test in tests:
+            full_name = f"{package}:{target}::{test}"
+            outcome = "not_run"
+            if build_ok:
+                target_args = ["--lib"] if target == "lib" else ["--test", target]
+                env = os.environ.copy()
+                env["CELERIS_USERNS_TESTS"] = "1"
+                env["CELERIS_LAUNCHER_TESTS"] = "require"
+                env.pop("CELERIS_ISOLATION_TESTS", None)
+                tmpdir = None
+                if len(env.get("TMPDIR", "")) > 40:
+                    tmpdir = tempfile.mkdtemp(prefix="cel-ce-")
+                    env["TMPDIR"] = tmpdir
+                try:
+                    done = subprocess.run([cargo, "test", "--manifest-path", str(manifest), "-p", package,
+                                           *target_args, "--", "--exact", test, "--nocapture", "--test-threads=1"],
+                                          text=True, capture_output=True, timeout=600, check=False, env=env)
+                    combined = done.stdout + "\n" + done.stderr
+                    if done.returncode and re.search(rf"^test {re.escape(test)} \.\.\. FAILED$", done.stdout, re.M):
+                        outcome = "failed"
+                    elif (done.returncode == 0 and re.search(r"^running 1 test$", done.stdout, re.M)
+                          and re.search(rf"^test {re.escape(test)} \.\.\. ok$", done.stdout, re.M)
+                          and re.search(r"^test result: ok\. 1 passed; 0 failed; 0 ignored", done.stdout, re.M)
+                          and not re.search(r"SKIPPED|^SKIP:|\(not passed\)", combined, re.M)):
+                        outcome = "passed"
+                    (logs / f"{package}.{target}.{test.replace(':', '_')}.log").write_text(combined)
+                except subprocess.TimeoutExpired as error:
+                    (logs / f"{package}.{target}.{test.replace(':', '_')}.log").write_text(
+                        (error.stdout or "") + "\n" + (error.stderr or "") + "\\nTIMEOUT")
+                except OSError as error:
+                    (logs / f"{package}.{target}.{test.replace(':', '_')}.log").write_text(str(error))
+                finally:
+                    if tmpdir:
+                        shutil.rmtree(tmpdir, ignore_errors=True)
+            outcomes[full_name] = outcome
+            all_evidence.append({"case": case, "test": full_name, "outcome": outcome})
+    complete = build_ok and all(row["outcome"] == "passed" for row in all_evidence)
+    for result in ledger["results"]:
+        if result["backend_id"] not in backends:
+            continue
+        retained = [row for row in result.get("evidence", [])
+                    if row.get("case") not in ("isolation_suite", "egress_negative_suite")]
+        result["evidence"] = retained + all_evidence
+        passed = set(result.get("passed", [])) - {"isolation_suite", "egress_negative_suite"}
+        if complete:
+            passed.update(("isolation_suite", "egress_negative_suite"))
+        result["passed"] = sorted(passed)
+    write_ledger(output, ledger["results"], source=ledger["source"], generated_for=ledger.get("generated_for"))
+    failed = any(row["outcome"] == "failed" for row in all_evidence)
+    code = "build_failed" if not build_ok else ("tests_failed" if failed else ("ok" if complete else "tests_not_run"))
+    report = {"complete": complete, "code": code,
+              "reason": next((row["test"] for row in all_evidence if row["outcome"] != "passed"), ""),
+              "evidence": all_evidence, "record": str(output / "conformance.json")}
+    (output / "credential-evidence.json").write_text(json.dumps(report, indent=2) + "\n")
+    print(json.dumps(report))
+    return 0 if complete else 1
+
 AGENT_BROWSER_VERSION = "0.38.1"
 CONFORMANCE_FIXTURE = "p4c-local-v1"
 
@@ -387,6 +508,10 @@ def p4b_evidence(ledger_path, backends, output):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--credential-evidence", metavar="LEDGER",
+                        help="add measured P4-A isolation and egress evidence")
+    parser.add_argument("--credential-backend", action="append", default=[],
+                        help="backend id that receives credential evidence (repeatable)")
     parser.add_argument("--p4b-evidence", metavar="LEDGER",
                         help="add P4-B attack/H3 test evidence to this measured ledger (ADR-0112)")
     parser.add_argument("--p4b-backend", action="append", default=[],
@@ -413,6 +538,8 @@ def main():
         parser.error("--celeris-sha requires --celeris-release")
     if args.p4b_evidence and (args.celeris_release or args.celeris_sha):
         parser.error("--celeris-release/--celeris-sha apply only when generating a conformance ledger")
+    if args.credential_evidence and (args.celeris_release or args.celeris_sha or args.p4b_evidence):
+        parser.error("credential evidence cannot be combined with release provenance options or --p4b-evidence")
     if args.drive:
         return drive()
     if args.p4b_evidence:
@@ -421,6 +548,12 @@ def main():
         output = Path(args.output_dir)
         output.mkdir(parents=True, exist_ok=True)
         return p4b_evidence(args.p4b_evidence, set(args.p4b_backend), output)
+    if args.credential_evidence:
+        if not args.credential_backend or not set(args.credential_backend) <= set(BACKENDS):
+            parser.error("--credential-evidence needs one or more known --credential-backend ids")
+        return credential_evidence(args.credential_evidence, set(args.credential_backend), args.output_dir)
+    if args.credential_backend:
+        parser.error("--credential-backend requires --credential-evidence")
     command = {}
     for item in args.backend_command:
         backend, sep, argv = item.partition("=")

@@ -8,7 +8,7 @@ use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use nix::libc;
@@ -440,6 +440,9 @@ fn controller_kill_leaves_no_runtime_processes() {
     let dir = tempfile::tempdir().unwrap();
     let reaper = Command::new(std::env::current_exe().unwrap())
         .args(["--exact", "helper_reaper", "--ignored", "--nocapture"])
+        // The helper's libtest output would split this test's own `test … ok` line in the
+        // captured stdout, which the conformance runner parses as evidence. Markers are files.
+        .stdout(Stdio::null())
         .env("CELERIS_RT_HELPER_DIR", dir.path())
         .env(test_hook::LAUNCH_HOOK_DIR_ENV, dir.path())
         .spawn()
@@ -588,6 +591,7 @@ fn helper_reaper() {
     let ctl = Command::new(std::env::current_exe().unwrap())
         .args(["--exact", "helper_controller", "--ignored", "--nocapture"])
         .env("CELERIS_RT_HELPER_DIR", &dir)
+        .stdout(Stdio::null())
         .spawn()
         .unwrap();
     let dir = PathBuf::from(dir);

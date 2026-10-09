@@ -142,6 +142,63 @@ async fn cos_ops_mutations_decision_revise_and_withdraw() {
 }
 
 #[tokio::test]
+async fn cos_ops_mutations_task_gate_actions() {
+    let env = admin_env();
+    for (key, kind, status, suffix, body, action, expected) in [
+        (
+            "task-accept",
+            TaskKind::Execute,
+            Status::Draft,
+            "accept",
+            json!({}),
+            "task.accept",
+            Status::Ready,
+        ),
+        (
+            "task-approve",
+            TaskKind::Execute,
+            Status::Draft,
+            "approve",
+            json!({}),
+            "task.approve",
+            Status::Ready,
+        ),
+        (
+            "task-reject",
+            TaskKind::Approval,
+            Status::Ready,
+            "reject",
+            json!({"note":"no"}),
+            "task.reject",
+            Status::Failed,
+        ),
+        (
+            "task-cancel",
+            TaskKind::Execute,
+            Status::Ready,
+            "cancel",
+            json!({}),
+            "task.cancel",
+            Status::Cancelled,
+        ),
+    ] {
+        let task = new_task(kind, status);
+        env.seed(&task);
+        let path = format!("/api/v1/tasks/{}/{suffix}", task.id);
+        let operation = run_domain(&env, key, "POST", &path, body, action).await;
+        assert_eq!(operation["state"], "applied", "{key}: {operation}");
+        assert_eq!(
+            env.store
+                .get(task.id)
+                .expect("task lookup")
+                .expect("task")
+                .status,
+            expected
+        );
+    }
+}
+
+#[tokio::test]
 async fn cos_ops_mutations_task_edit_pause_resume_reopen_retry() {
     let env = admin_env();
     let ready = new_task(TaskKind::Execute, Status::Ready);

@@ -130,7 +130,10 @@ mod tests {
         assert!(headers.starts_with("POST /api/v1/cos/operations HTTP/1.1"));
         assert!(headers.contains("Authorization: Bearer cos-run-token"));
         assert_eq!(body["request"]["method"], "POST");
-        assert_eq!(body["request"]["path"], format!("/api/v1/tasks/{id}/approve"));
+        assert_eq!(
+            body["request"]["path"],
+            format!("/api/v1/tasks/{id}/approve")
+        );
         assert_eq!(body["request"]["body"]["note"], "looks good");
     }
 

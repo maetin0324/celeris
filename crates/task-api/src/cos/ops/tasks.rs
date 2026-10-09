@@ -26,6 +26,10 @@ pub(crate) const ALLOWED: &[(&str, &str, &str)] = &[
     ("PATCH", "/api/v1/tasks/{id}", "task.update"),
     ("POST", "/api/v1/tasks/{id}/reopen", "task.reopen"),
     ("POST", "/api/v1/tasks/{id}/retry", "task.retry"),
+    ("POST", "/api/v1/tasks/{id}/accept", "task.accept"),
+    ("POST", "/api/v1/tasks/{id}/approve", "task.approve"),
+    ("POST", "/api/v1/tasks/{id}/reject", "task.reject"),
+    ("POST", "/api/v1/tasks/{id}/cancel", "task.cancel"),
     ("POST", "/api/v1/tasks/{id}/pause", "task.pause"),
     ("POST", "/api/v1/tasks/{id}/resume", "task.resume"),
     (
@@ -44,14 +48,10 @@ pub(crate) const EXCLUDED: &[(&str, &str, &str)] = &[(
 
 /// Assigned mutations awaiting audited implementation. Move a row to ALLOWED when implemented.
 pub(crate) const PENDING: &[(&str, &str)] = &[
-    ("POST", "/api/v1/tasks/{id}/accept"),
-    ("POST", "/api/v1/tasks/{id}/approve"),
-    ("POST", "/api/v1/tasks/{id}/cancel"),
     ("POST", "/api/v1/tasks/{id}/changes/{repo}/integrate"),
     ("POST", "/api/v1/tasks/{id}/changes/{repo}/pr/merge"),
     ("POST", "/api/v1/tasks/{id}/execution-plan"),
     ("POST", "/api/v1/tasks/{id}/execution/decompose"),
-    ("POST", "/api/v1/tasks/{id}/reject"),
     ("POST", "/api/v1/tasks/{id}/rereview"),
     ("POST", "/api/v1/tasks/{id}/tree/adopt"),
 ];
@@ -74,6 +74,36 @@ pub(crate) fn dispatch(
                 &env.genres,
                 input,
                 Some(audit),
+            )?)
+        }
+        "task.accept" | "task.approve" | "task.reject" | "task.cancel" => {
+            let raw_id = matched.id.unwrap_or_default();
+            let id = parse_task_id(&raw_id)
+                .map_err(|problem| audit.reject(store, "task", &raw_id, problem))?;
+            let (note, expected_status) = match matched.action {
+                "task.approve" | "task.reject" => {
+                    let input: crate::types::DecisionBody =
+                        serde_json::from_value(body).map_err(decode)?;
+                    (input.note, input.expected_status)
+                }
+                "task.cancel" => {
+                    let input: crate::types::CancelBody =
+                        serde_json::from_value(body).map_err(decode)?;
+                    (None, input.expected_status)
+                }
+                _ => {
+                    let input: crate::types::ReopenBody =
+                        serde_json::from_value(body).map_err(decode)?;
+                    (None, input.expected_status)
+                }
+            };
+            audited(crate::handlers::task_actions::gate_action_op(
+                store,
+                id,
+                matched.action,
+                note,
+                expected_status,
+                audit,
             )?)
         }
         "comment.create" => {

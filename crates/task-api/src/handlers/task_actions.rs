@@ -112,6 +112,109 @@ pub(super) async fn reject(
     Ok(json_response(StatusCode::OK, &result))
 }
 
+/// Audited counterpart of the gate actions. The state and expected-revision checks are repeated
+/// inside the audited write transaction by `apply_transition_tx`; the read below selects whether
+/// `approve` means accepting a draft or deciding an Approval task.
+pub(crate) fn gate_action_op(
+    store: &task_core::store::SqliteStore,
+    id: task_core::TaskId,
+    action: &str,
+    note: Option<String>,
+    expected: Option<task_core::Status>,
+    audit: &OperationAudit,
+) -> Result<Applied<()>, ApiProblem> {
+    let target_id = id.to_string();
+    let reject = |problem| audit.reject(store, "task", &target_id, problem);
+    let task = store
+        .get(id)
+        .map_err(|error| reject(crate::problem::store_problem(error)))?
+        .ok_or_else(|| {
+            reject(ops_problem(
+                store,
+                task_ops::OpsError::NotFound(id),
+                Some(action),
+            ))
+        })?;
+    if let Some(expected) = expected
+        && task.status != expected
+    {
+        return Err(reject(ops_problem(
+            store,
+            task_ops::OpsError::Conflict {
+                expected,
+                actual: task.status,
+            },
+            Some(action),
+        )));
+    }
+    let (trigger, extra) = match action {
+        "task.accept" if task.status == task_core::Status::Draft => {
+            (task_core::Trigger::Accept, Vec::new())
+        }
+        "task.approve" if task.status == task_core::Status::Draft => {
+            (task_core::Trigger::Accept, Vec::new())
+        }
+        "task.approve"
+            if task.kind == task_core::TaskKind::Approval
+                && task.status == task_core::Status::Ready =>
+        {
+            (
+                task_core::Trigger::Approve,
+                vec![task_core::Event::ApprovalDecided {
+                    by: "cos".to_string(),
+                    approved: true,
+                    note,
+                }],
+            )
+        }
+        "task.reject"
+            if task.kind == task_core::TaskKind::Approval
+                && task.status == task_core::Status::Ready =>
+        {
+            (
+                task_core::Trigger::Reject,
+                vec![task_core::Event::ApprovalDecided {
+                    by: "cos".to_string(),
+                    approved: false,
+                    note,
+                }],
+            )
+        }
+        "task.cancel"
+            if !matches!(
+                task.status,
+                task_core::Status::Done | task_core::Status::Cancelled
+            ) =>
+        {
+            (task_core::Trigger::Cancel, Vec::new())
+        }
+        _ => {
+            return Err(reject(ops_problem(
+                store,
+                task_ops::OpsError::InvalidState {
+                    id,
+                    context: format!("kind={:?}, status={:?}", task.kind, task.status),
+                    action: action.to_string(),
+                },
+                Some(action),
+            )));
+        }
+    };
+    let operation = audit.apply(store, "task", &target_id, action, |tx| {
+        let outcome = task_core::store::SqliteStore::apply_transition_tx(tx, id, trigger, extra)?;
+        Ok(serde_json::json!({
+            "task_id": target_id,
+            "from": task.status,
+            "to": outcome.next,
+            "reason": outcome.reason.to_string(),
+        }))
+    })?;
+    if action == "task.cancel" && operation.id == audit.ctx.operation_id {
+        crate::browser_control::stop_task(store, &target_id)?;
+    }
+    Ok(Applied::Audited(Box::new(operation)))
+}
+
 pub(super) async fn answer(
     State(state): State<ApiState>,
     Params(id): Params<String>,

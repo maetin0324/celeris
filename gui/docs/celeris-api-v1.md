@@ -3478,6 +3478,10 @@ registry は `crates/task-api/src/cos/ops/{tasks,decisions,projects,admin,surfac
 | projects | `DELETE /standing-rules/{id}` | `standing_rule.delete` |
 | projects | `POST /reports/read` | `report.read`（対応する通知も同じ transaction で既読） |
 | projects | `POST /reports/notified` | `report.notified`（API のメモリの通知時刻。再送では進めない） |
+| projects | `POST /projects/{id}/docs/init` | `docs.init`（外部効果: pending → applied） |
+| projects | `PUT /projects/{id}/docs/page` | `docs.page_put`（外部効果。etag 不一致・main 編集中・path の誤りは変更前の拒否で `rejected`） |
+| projects | `DELETE /projects/{id}/docs/page` | `docs.page_delete`（`path`・`etag`・`message` は body。外部効果） |
+| projects | `POST /projects/{id}/docs/maintenance` | `docs.maintenance`（記録の action は `docs.maintenance_<op>`。apply 後の失敗 `docs_maintenance_partial` は pending のまま人の確認へ） |
 | admin | `PUT /llm/models/assignments/{source}/{tier}` | `model_assignment.put`（actor `cos`） |
 | admin | `DELETE /llm/models/assignments/{source}/{tier}` | `model_assignment.delete`（無ければ 404） |
 | admin | `POST /cron-jobs` | `cron_job.create`（名前の重複は 409） |

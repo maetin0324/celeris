@@ -32,6 +32,7 @@ use task_ops::changes as ops_changes;
 use task_ops::docs::{self as ops_docs, DocCommit, PageEdit, PathError, WriteOutcome};
 use time::OffsetDateTime;
 
+use crate::cos::operations::{Applied, OperationAudit};
 use crate::handlers::{ApiResult, Params, json_response, no_query, parse_project_id, read_json};
 use crate::middleware::require_admin;
 use crate::problem::{ApiProblem, store_problem};
@@ -485,6 +486,177 @@ fn page_view(project_id: ProjectId, target: &DocsTarget, path: &str, raw: String
 // POST /projects/{id}/docs/init（管理系）
 // ---------------------------------------------------------------------------
 
+/// Where the docs operations read and write: the configured docs repo root and the scratch area
+/// for temporary worktrees.
+#[derive(Clone)]
+pub(crate) struct DocsEnv {
+    pub(crate) docs_repo_root: Option<PathBuf>,
+    pub(crate) workspace_root: PathBuf,
+}
+
+impl DocsEnv {
+    pub(crate) fn of(state: &ApiState) -> Self {
+        Self {
+            docs_repo_root: state.inner.docs_repo_root.clone(),
+            workspace_root: state.inner.view.workspace_root.clone(),
+        }
+    }
+}
+
+/// `DELETE /projects/{id}/docs/page`: the handler reads it from the query, CoS from the body
+/// (`/cos/operations` paths carry no query).
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DocPageDeleteBody {
+    pub path: String,
+    #[serde(default)]
+    pub etag: Option<String>,
+    #[serde(default)]
+    pub message: Option<String>,
+}
+
+/// A refusal before any page write (a path check, or git refusing the edit): nothing changed
+/// beyond preparing the docs repo, so the edit can be retried as a new request.
+fn refused_before_change(problem: &ApiProblem) -> bool {
+    matches!(
+        problem.code(),
+        "etag_mismatch"
+            | "default_branch_busy"
+            | "page_not_found"
+            | "path_forbidden"
+            | "validation"
+            | "bad_request"
+    )
+}
+
+/// Run a docs git effect: directly, or as a C-class CoS operation (ADR
+/// 2026-10-09-cos-operations-external-effects). Known refusals settle `rejected`; other failures
+/// leave the record pending for remediation (the git outcome is not known).
+fn docs_effect<T: Serialize>(
+    store: &SqliteStore,
+    audit: Option<&OperationAudit>,
+    target_id: &str,
+    action: &str,
+    effect: impl FnOnce() -> Result<T, ApiProblem>,
+) -> Result<Applied<T>, ApiProblem> {
+    let Some(audit) = audit else {
+        return effect().map(Applied::Direct);
+    };
+    let operation = audit.external(
+        store,
+        "docs",
+        target_id,
+        action,
+        OffsetDateTime::now_utc(),
+        || match effect() {
+            Ok(value) => serde_json::to_value(&value)
+                .map(Ok)
+                .map_err(|e| ApiProblem::internal(format!("docs result: {e}"))),
+            Err(problem) if refused_before_change(&problem) => Ok(Err(problem)),
+            Err(problem) => Err(problem),
+        },
+    )?;
+    Ok(Applied::Audited(Box::new(operation)))
+}
+
+fn reject_for(
+    store: &SqliteStore,
+    audit: Option<&OperationAudit>,
+    target: &str,
+) -> impl Fn(ApiProblem) -> ApiProblem {
+    move |problem| match audit {
+        Some(audit) => audit.reject(store, "docs", target, problem),
+        None => problem,
+    }
+}
+
+/// `POST /projects/{id}/docs/init` (`docs.init`).
+pub(crate) fn docs_init_op(
+    store: &SqliteStore,
+    env: &DocsEnv,
+    project_id: ProjectId,
+    audit: Option<&OperationAudit>,
+) -> Result<Applied<DocsInitResult>, ApiProblem> {
+    let target_id = project_id.to_string();
+    let project = load_project(store, project_id).map_err(reject_for(store, audit, &target_id))?;
+    docs_effect(store, audit, &target_id, "docs.init", || {
+        let target = docs_target(store, &project, env.docs_repo_root.as_deref(), true)?;
+        Ok(DocsInitResult {
+            project_id,
+            repo: target.repo,
+            root: target.root,
+            default_branch: target.default_branch,
+            created: target.created,
+            path: target.path.to_string_lossy().into_owned(),
+        })
+    })
+}
+
+/// `PUT /projects/{id}/docs/page` (`docs.page_put`).
+pub(crate) fn put_page_op(
+    store: &SqliteStore,
+    env: &DocsEnv,
+    project_id: ProjectId,
+    request: DocPagePutBody,
+    audit: Option<&OperationAudit>,
+) -> Result<Applied<DocPageResult>, ApiProblem> {
+    let target_id = format!("{project_id}:{}", request.path);
+    let project = load_project(store, project_id).map_err(reject_for(store, audit, &target_id))?;
+    docs_effect(store, audit, &target_id, "docs.page_put", || {
+        let target = docs_target(store, &project, env.docs_repo_root.as_deref(), true)?;
+        let path = page_path(&target.root, &request.path)?;
+        let message = request
+            .message
+            .as_deref()
+            .map(str::trim)
+            .filter(|m| !m.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("docs: {path}"));
+        let edit = PageEdit {
+            path,
+            body: Some(request.body.clone()),
+            etag: request.etag.clone().filter(|e| !e.trim().is_empty()),
+            message,
+            overwrite: false,
+        };
+        write_page(&target, &env.workspace_root, project_id, edit)
+    })
+}
+
+/// `DELETE /projects/{id}/docs/page` (`docs.page_delete`).
+pub(crate) fn delete_page_op(
+    store: &SqliteStore,
+    env: &DocsEnv,
+    project_id: ProjectId,
+    request: DocPageDeleteBody,
+    audit: Option<&OperationAudit>,
+) -> Result<Applied<DocPageResult>, ApiProblem> {
+    let target_id = format!("{project_id}:{}", request.path);
+    let reject = reject_for(store, audit, &target_id);
+    let project = load_project(store, project_id).map_err(&reject)?;
+    // No repo is created on delete, so locating the page is a check before the effect.
+    let target =
+        docs_target(store, &project, env.docs_repo_root.as_deref(), false).map_err(&reject)?;
+    let path = page_path(&target.root, &request.path).map_err(&reject)?;
+    docs_effect(store, audit, &target_id, "docs.page_delete", || {
+        let message = request
+            .message
+            .as_deref()
+            .map(str::trim)
+            .filter(|m| !m.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("docs: remove {path}"));
+        let edit = PageEdit {
+            path: path.clone(),
+            body: None,
+            etag: request.etag.clone().filter(|e| !e.trim().is_empty()),
+            message,
+            overwrite: false,
+        };
+        write_page(&target, &env.workspace_root, project_id, edit)
+    })
+}
+
 async fn docs_init(
     axum::extract::State(state): axum::extract::State<ApiState>,
     headers: HeaderMap,
@@ -494,20 +666,9 @@ async fn docs_init(
     no_query(&raw)?;
     require_admin(&state, &headers)?;
     let project_id = parse_project_id(&id)?;
-    let docs_repo_root = state.inner.docs_repo_root.clone();
+    let env = DocsEnv::of(&state);
     let result = state
-        .blocking(move |store| {
-            let project = load_project(store, project_id)?;
-            let target = docs_target(store, &project, docs_repo_root.as_deref(), true)?;
-            Ok(DocsInitResult {
-                project_id,
-                repo: target.repo,
-                root: target.root,
-                default_branch: target.default_branch,
-                created: target.created,
-                path: target.path.to_string_lossy().into_owned(),
-            })
-        })
+        .blocking(move |store| docs_init_op(store, &env, project_id, None)?.direct())
         .await?;
     Ok(json_response(StatusCode::OK, &result))
 }
@@ -527,29 +688,9 @@ async fn put_page(
     require_admin(&state, &headers)?;
     let project_id = parse_project_id(&id)?;
     let request: DocPagePutBody = read_json(body, false).await?;
-    let docs_repo_root = state.inner.docs_repo_root.clone();
-    let workspace_root = state.inner.view.workspace_root.clone();
+    let env = DocsEnv::of(&state);
     let result = state
-        .blocking(move |store| {
-            let project = load_project(store, project_id)?;
-            let target = docs_target(store, &project, docs_repo_root.as_deref(), true)?;
-            let path = page_path(&target.root, &request.path)?;
-            let message = request
-                .message
-                .as_deref()
-                .map(str::trim)
-                .filter(|m| !m.is_empty())
-                .map(str::to_string)
-                .unwrap_or_else(|| format!("docs: {path}"));
-            let edit = PageEdit {
-                path,
-                body: Some(request.body.clone()),
-                etag: request.etag.clone().filter(|e| !e.trim().is_empty()),
-                message,
-                overwrite: false,
-            };
-            write_page(&target, &workspace_root, project_id, edit)
-        })
+        .blocking(move |store| put_page_op(store, &env, project_id, request, None)?.direct())
         .await?;
     Ok(json_response(StatusCode::OK, &result))
 }
@@ -563,35 +704,14 @@ async fn delete_page(
     require_admin(&state, &headers)?;
     let project_id = parse_project_id(&id)?;
     let query = QueryParams::parse(raw.as_deref(), &["path", "etag", "message"])?;
-    let requested = query.single("path")?.unwrap_or_default().to_string();
-    let etag = query
-        .single("etag")?
-        .map(str::to_string)
-        .filter(|e| !e.trim().is_empty());
-    let message = query
-        .single("message")?
-        .map(str::trim)
-        .filter(|m| !m.is_empty())
-        .map(str::to_string);
-    let docs_repo_root = state.inner.docs_repo_root.clone();
-    let workspace_root = state.inner.view.workspace_root.clone();
+    let request = DocPageDeleteBody {
+        path: query.single("path")?.unwrap_or_default().to_string(),
+        etag: query.single("etag")?.map(str::to_string),
+        message: query.single("message")?.map(str::to_string),
+    };
+    let env = DocsEnv::of(&state);
     let result = state
-        .blocking(move |store| {
-            let project = load_project(store, project_id)?;
-            let target = docs_target(store, &project, docs_repo_root.as_deref(), false)?;
-            let path = page_path(&target.root, &requested)?;
-            let message = message
-                .clone()
-                .unwrap_or_else(|| format!("docs: remove {path}"));
-            let edit = PageEdit {
-                path,
-                body: None,
-                etag,
-                message,
-                overwrite: false,
-            };
-            write_page(&target, &workspace_root, project_id, edit)
-        })
+        .blocking(move |store| delete_page_op(store, &env, project_id, request, None)?.direct())
         .await?;
     Ok(json_response(StatusCode::OK, &result))
 }
@@ -935,9 +1055,15 @@ fn maintenance_problem(detail: impl Into<String>) -> ApiProblem {
     ApiProblem::new(StatusCode::CONFLICT, "docs_maintenance", detail)
 }
 
+/// A failure after `apply_plan` committed the reconciliation worktree: the verification task or
+/// its attachment may be half made, so a CoS operation stays pending for remediation.
+fn maintenance_partial(detail: impl Into<String>) -> ApiProblem {
+    ApiProblem::new(StatusCode::CONFLICT, "docs_maintenance_partial", detail)
+}
+
 #[derive(Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
-enum MaintenanceAction {
+pub(crate) enum MaintenanceAction {
     Audit,
     Adopt {
         policy: task_ops::docs_maintenance::Policy,
@@ -948,6 +1074,189 @@ enum MaintenanceAction {
     Apply {
         plan: task_ops::docs_maintenance::ReconcilePlan,
     },
+}
+
+/// What `POST /projects/{id}/docs/maintenance` needs from the API state.
+#[derive(Clone)]
+pub(crate) struct MaintenanceEnv {
+    pub(crate) docs: DocsEnv,
+    pub(crate) documentation_state_dir: PathBuf,
+    pub(crate) roles: Vec<task_core::RoleSpec>,
+    pub(crate) genres: Vec<task_core::GenreSpec>,
+}
+
+impl MaintenanceEnv {
+    pub(crate) fn of(state: &ApiState) -> Self {
+        Self {
+            docs: DocsEnv::of(state),
+            documentation_state_dir: state.inner.documentation_state_dir.clone(),
+            roles: state.inner.roles.clone(),
+            genres: state.inner.genres.clone(),
+        }
+    }
+}
+
+fn maintenance_action_name(action: &MaintenanceAction) -> &'static str {
+    match action {
+        MaintenanceAction::Audit => "docs.maintenance_audit",
+        MaintenanceAction::Adopt { .. } => "docs.maintenance_adopt",
+        MaintenanceAction::Approve { .. } => "docs.maintenance_approve",
+        MaintenanceAction::Apply { .. } => "docs.maintenance_apply",
+    }
+}
+
+fn run_maintenance(
+    store: &SqliteStore,
+    env: &MaintenanceEnv,
+    project_id: ProjectId,
+    target: DocsTarget,
+    action: MaintenanceAction,
+) -> Result<serde_json::Value, ApiProblem> {
+    use task_ops::docs_maintenance as maint;
+    let state_dir = env.documentation_state_dir.clone();
+    let (roles, genres, workspace_root) = (&env.roles, &env.genres, &env.docs.workspace_root);
+    let key = format!("{project_id}:{}", target.repo);
+    match action {
+        MaintenanceAction::Audit => {
+            let policy = maint::load_policy(&state_dir, &key).map_err(maintenance_problem)?;
+            let audit = maint::audit_with_policy(&target.path, &target.default_branch, &policy)
+                .map_err(maintenance_problem)?;
+            let result = serde_json::json!({"audit": audit, "proposal": maint::proposal(&audit)});
+            let directory = state_dir.join("repository-docs/reports");
+            std::fs::create_dir_all(&directory).map_err(|e| maintenance_problem(e.to_string()))?;
+            std::fs::write(
+                directory.join(format!("{project_id}.json")),
+                serde_json::to_vec_pretty(&result)
+                    .map_err(|e| maintenance_problem(e.to_string()))?,
+            )
+            .map_err(|e| maintenance_problem(e.to_string()))?;
+            Ok(result)
+        }
+        MaintenanceAction::Adopt { policy } => {
+            maint::save_policy(&state_dir, &key, &policy).map_err(maintenance_problem)?;
+            Ok(serde_json::json!({"policy":policy}))
+        }
+        MaintenanceAction::Approve { plan } => {
+            maint::approve_plan(&state_dir, &key, &plan).map_err(maintenance_problem)?;
+            Ok(serde_json::json!({"approved":true,"plan":plan}))
+        }
+        MaintenanceAction::Apply { plan } => {
+            let worktree = state_dir
+                .join("repository-docs/worktrees")
+                .join(ulid::Ulid::new().to_string());
+            let sha = maint::apply_plan(
+                &target.path,
+                &target.default_branch,
+                &worktree,
+                &plan,
+                &state_dir,
+                &key,
+            )
+            .map_err(maintenance_problem)?;
+            // A draft task makes the isolated result visible to the existing changes/review UI.
+            // It cannot race dispatch before the marker and evidence have been written.
+            let spec: task_ops::add::NewTaskSpec = serde_json::from_value(serde_json::json!({
+            "title": format!("文書整理の検証: {}", target.repo),
+            "objective": "承認済み文書整理の差分を検証し、既存のレビュー・マージ経路へ引き渡す。対象を広げず、本番/default branchへ直接反映しない。成果物 reconciliation-plan.json と作業ツリーのコミットを確認する。",
+            "acceptance": [{"type":"reviewer","text":"差分が承認済み reconciliation-plan.json と一致し文書のリンク・内容が妥当"}],
+            "project_id": project_id, "repos": [target.repo], "status":"draft",
+            "skills":["software"], "workspace":target.path
+        })).map_err(|e| maintenance_partial(e.to_string()))?;
+            let task = task_ops::add::create_task_with_roles(
+                store,
+                spec,
+                roles,
+                genres,
+                OffsetDateTime::now_utc(),
+            )
+            .map_err(|e| maintenance_partial(e.to_string()))?;
+            let task_dir = workspace_root.join(task.id.to_string());
+            let attached = task_dir.join("repos").join(&target.repo);
+            std::fs::create_dir_all(task_dir.join("repos"))
+                .map_err(|e| maintenance_partial(e.to_string()))?;
+            let moved = ops_changes::git(
+                &target.path,
+                &[
+                    "worktree",
+                    "move",
+                    &worktree.to_string_lossy(),
+                    &attached.to_string_lossy(),
+                ],
+                std::time::Duration::from_secs(30),
+            )
+            .is_some_and(|output| output.ok);
+            if !moved {
+                return Err(maintenance_partial(
+                    "could not attach reconciliation worktree to verification task",
+                ));
+            }
+            let worktree = attached;
+            let branch = ops_changes::current_branch(&worktree)
+                .ok_or_else(|| maintenance_partial("worktree branch missing"))?;
+            task_ops::workspace::write_marker(
+                &task_dir,
+                &task_ops::workspace::WorktreeMarker {
+                    repo: target.path.display().to_string(),
+                    dir: worktree.display().to_string(),
+                    branch: branch.clone(),
+                    base: plan.revision.clone(),
+                    base_kind: target.default_branch.clone(),
+                    repos: vec![task_ops::workspace::WorktreeMarkerRepo {
+                        name: target.repo,
+                        kind: "git".into(),
+                        source: target.path.display().to_string(),
+                        dir: worktree.display().to_string(),
+                        branch: Some(branch),
+                        base: Some(plan.revision.clone()),
+                        base_kind: Some(target.default_branch),
+                    }],
+                },
+            )
+            .map_err(|e| maintenance_partial(e.to_string()))?;
+            let artifacts = task_dir.join("artifacts");
+            std::fs::create_dir_all(&artifacts).map_err(|e| maintenance_partial(e.to_string()))?;
+            std::fs::write(
+                artifacts.join("reconciliation-plan.json"),
+                serde_json::to_vec_pretty(&plan).map_err(|e| maintenance_partial(e.to_string()))?,
+            )
+            .map_err(|e| maintenance_partial(e.to_string()))?;
+            Ok(serde_json::json!({"sha":sha,"worktree":worktree,"merged":false,"task_id":task.id}))
+        }
+    }
+}
+
+/// `POST /projects/{id}/docs/maintenance` shared by the handler and `/cos/operations` (C). A
+/// refusal (audit/adopt/approve failures, an unapproved or stale plan) changed nothing and settles
+/// `rejected`; a failure after the plan was applied (`docs_maintenance_partial`) stays pending.
+pub(crate) fn maintenance_op(
+    store: &SqliteStore,
+    env: &MaintenanceEnv,
+    project_id: ProjectId,
+    action: MaintenanceAction,
+    audit: Option<&OperationAudit>,
+) -> Result<Applied<serde_json::Value>, ApiProblem> {
+    let target_id = project_id.to_string();
+    let reject = reject_for(store, audit, &target_id);
+    let project = load_project(store, project_id).map_err(&reject)?;
+    let target =
+        docs_target(store, &project, env.docs.docs_repo_root.as_deref(), false).map_err(&reject)?;
+    let Some(audit) = audit else {
+        return run_maintenance(store, env, project_id, target, action).map(Applied::Direct);
+    };
+    let name = maintenance_action_name(&action);
+    let operation = audit.external(
+        store,
+        "docs",
+        &target_id,
+        name,
+        OffsetDateTime::now_utc(),
+        || match run_maintenance(store, env, project_id, target, action) {
+            Ok(value) => Ok(Ok(value)),
+            Err(problem) if problem.code() != "docs_maintenance_partial" => Ok(Err(problem)),
+            Err(problem) => Err(problem),
+        },
+    )?;
+    Ok(Applied::Audited(Box::new(operation)))
 }
 
 async fn maintenance_action(
@@ -961,92 +1270,9 @@ async fn maintenance_action(
     require_admin(&state, &headers)?;
     let project_id = parse_project_id(&id)?;
     let action: MaintenanceAction = read_json(body, false).await?;
-    let docs_repo_root = state.inner.docs_repo_root.clone();
-    let documentation_state_dir = state.inner.documentation_state_dir.clone();
-    let workspace_root = state.inner.view.workspace_root.clone();
-    let roles = state.inner.roles.clone();
-    let genres = state.inner.genres.clone();
+    let env = MaintenanceEnv::of(&state);
     let result = state
-        .blocking(move |store| {
-            use task_ops::docs_maintenance as maint;
-            let project = load_project(store, project_id)?;
-            let target = docs_target(store, &project, docs_repo_root.as_deref(), false)?;
-            let state_dir = documentation_state_dir;
-            let key = format!("{project_id}:{}", target.repo);
-            match action {
-                MaintenanceAction::Audit => {
-                    let policy = maint::load_policy(&state_dir, &key).map_err(maintenance_problem)?;
-                    let audit = maint::audit_with_policy(&target.path, &target.default_branch, &policy)
-                        .map_err(maintenance_problem)?;
-                    let result =
-                        serde_json::json!({"audit": audit, "proposal": maint::proposal(&audit)});
-                    let directory = state_dir.join("repository-docs/reports");
-                    std::fs::create_dir_all(&directory)
-                        .map_err(|e| maintenance_problem(e.to_string()))?;
-                    std::fs::write(
-                        directory.join(format!("{project_id}.json")),
-                        serde_json::to_vec_pretty(&result).map_err(|e| maintenance_problem(e.to_string()))?,
-                    )
-                    .map_err(|e| maintenance_problem(e.to_string()))?;
-                    Ok(result)
-                }
-                MaintenanceAction::Adopt { policy } => {
-                    maint::save_policy(&state_dir, &key, &policy).map_err(maintenance_problem)?;
-                    Ok(serde_json::json!({"policy":policy}))
-                }
-                MaintenanceAction::Approve { plan } => {
-                    maint::approve_plan(&state_dir, &key, &plan).map_err(maintenance_problem)?;
-                    Ok(serde_json::json!({"approved":true,"plan":plan}))
-                }
-                MaintenanceAction::Apply { plan } => {
-                    let worktree = state_dir
-                        .join("repository-docs/worktrees")
-                        .join(ulid::Ulid::new().to_string());
-                    let sha = maint::apply_plan(
-                        &target.path,
-                        &target.default_branch,
-                        &worktree,
-                        &plan,
-                        &state_dir,
-                        &key,
-                    )
-                    .map_err(maintenance_problem)?;
-                    // A draft task makes the isolated result visible to the existing changes/review UI.
-                // It cannot race dispatch before the marker and evidence have been written.
-                let spec: task_ops::add::NewTaskSpec = serde_json::from_value(serde_json::json!({
-                    "title": format!("文書整理の検証: {}", target.repo),
-                    "objective": "承認済み文書整理の差分を検証し、既存のレビュー・マージ経路へ引き渡す。対象を広げず、本番/default branchへ直接反映しない。成果物 reconciliation-plan.json と作業ツリーのコミットを確認する。",
-                    "acceptance": [{"type":"reviewer","text":"差分が承認済み reconciliation-plan.json と一致し文書のリンク・内容が妥当"}],
-                    "project_id": project_id, "repos": [target.repo], "status":"draft",
-                    "skills":["software"], "workspace":target.path
-                })).map_err(|e| maintenance_problem(e.to_string()))?;
-                let task = task_ops::add::create_task_with_roles(store, spec, &roles, &genres, OffsetDateTime::now_utc())
-                    .map_err(|e| maintenance_problem(e.to_string()))?;
-                let task_dir = workspace_root.join(task.id.to_string());
-                let attached = task_dir.join("repos").join(&target.repo);
-                std::fs::create_dir_all(task_dir.join("repos")).map_err(|e| maintenance_problem(e.to_string()))?;
-                let moved = ops_changes::git(&target.path, &["worktree", "move", &worktree.to_string_lossy(), &attached.to_string_lossy()], std::time::Duration::from_secs(30))
-                    .is_some_and(|output| output.ok);
-                if !moved { return Err(maintenance_problem("could not attach reconciliation worktree to verification task")); }
-                let worktree = attached;
-                let branch = ops_changes::current_branch(&worktree).ok_or_else(|| maintenance_problem("worktree branch missing"))?;
-                task_ops::workspace::write_marker(&task_dir, &task_ops::workspace::WorktreeMarker {
-                    repo: target.path.display().to_string(), dir: worktree.display().to_string(),
-                    branch: branch.clone(), base: plan.revision.clone(), base_kind: target.default_branch.clone(),
-                    repos: vec![task_ops::workspace::WorktreeMarkerRepo {
-                        name:target.repo, kind:"git".into(), source:target.path.display().to_string(),
-                        dir:worktree.display().to_string(), branch:Some(branch), base:Some(plan.revision.clone()),
-                        base_kind:Some(target.default_branch),
-                    }],
-                }).map_err(|e| maintenance_problem(e.to_string()))?;
-                let artifacts = task_dir.join("artifacts");
-                std::fs::create_dir_all(&artifacts).map_err(|e| maintenance_problem(e.to_string()))?;
-                std::fs::write(artifacts.join("reconciliation-plan.json"),serde_json::to_vec_pretty(&plan).map_err(|e| maintenance_problem(e.to_string()))?)
-                    .map_err(|e| maintenance_problem(e.to_string()))?;
-                Ok(serde_json::json!({"sha":sha,"worktree":worktree,"merged":false,"task_id":task.id}))
-                }
-            }
-        })
+        .blocking(move |store| maintenance_op(store, &env, project_id, action, None)?.direct())
         .await?;
     Ok(json_response(StatusCode::OK, &result))
 }

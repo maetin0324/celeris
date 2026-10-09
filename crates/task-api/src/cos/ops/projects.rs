@@ -28,6 +28,18 @@ pub(crate) const ALLOWED: &[(&str, &str, &str)] = &[
     ),
     ("POST", "/api/v1/reports/read", "report.read"),
     ("POST", "/api/v1/reports/notified", "report.notified"),
+    ("POST", "/api/v1/projects/{id}/docs/init", "docs.init"),
+    ("PUT", "/api/v1/projects/{id}/docs/page", "docs.page_put"),
+    (
+        "DELETE",
+        "/api/v1/projects/{id}/docs/page",
+        "docs.page_delete",
+    ),
+    (
+        "POST",
+        "/api/v1/projects/{id}/docs/maintenance",
+        "docs.maintenance",
+    ),
 ];
 
 /// ADR D2 exclusions: `(method, path, reason code and detail)`.
@@ -75,12 +87,7 @@ pub(crate) const EXCLUDED: &[(&str, &str, &str)] = &[
 ];
 
 /// Assigned mutations awaiting audited implementation. Move a row to ALLOWED when implemented.
-pub(crate) const PENDING: &[(&str, &str)] = &[
-    ("POST", "/api/v1/projects/{id}/docs/init"),
-    ("POST", "/api/v1/projects/{id}/docs/maintenance"),
-    ("DELETE", "/api/v1/projects/{id}/docs/page"),
-    ("PUT", "/api/v1/projects/{id}/docs/page"),
-];
+pub(crate) const PENDING: &[(&str, &str)] = &[];
 
 pub(crate) fn dispatch(
     store: &SqliteStore,
@@ -154,6 +161,52 @@ pub(crate) fn dispatch(
         "report.notified" => {
             let crate::lifecycle::EmptyBody {} = decode_optional(body).map_err(decode)?;
             crate::reports::notified_op(store, &env.api, audit)
+        }
+        "docs.init" | "docs.page_put" | "docs.page_delete" | "docs.maintenance" => {
+            let raw_id = matched.id.unwrap_or_default();
+            let id = crate::handlers::parse_project_id(&raw_id)
+                .map_err(|problem| audit.reject(store, "docs", &raw_id, problem))?;
+            match matched.action {
+                "docs.init" => {
+                    let crate::lifecycle::EmptyBody {} = decode_optional(body).map_err(decode)?;
+                    audited(crate::docs::docs_init_op(
+                        store,
+                        &crate::docs::DocsEnv::of(&env.api),
+                        id,
+                        Some(audit),
+                    )?)
+                }
+                "docs.page_put" => {
+                    let input = serde_json::from_value(body).map_err(decode)?;
+                    audited(crate::docs::put_page_op(
+                        store,
+                        &crate::docs::DocsEnv::of(&env.api),
+                        id,
+                        input,
+                        Some(audit),
+                    )?)
+                }
+                "docs.page_delete" => {
+                    let input = serde_json::from_value(body).map_err(decode)?;
+                    audited(crate::docs::delete_page_op(
+                        store,
+                        &crate::docs::DocsEnv::of(&env.api),
+                        id,
+                        input,
+                        Some(audit),
+                    )?)
+                }
+                _ => {
+                    let input = serde_json::from_value(body).map_err(decode)?;
+                    audited(crate::docs::maintenance_op(
+                        store,
+                        &crate::docs::MaintenanceEnv::of(&env.api),
+                        id,
+                        input,
+                        Some(audit),
+                    )?)
+                }
+            }
         }
         other => Err(ApiProblem::internal(format!(
             "registered CoS operation {other} has no implementation in projects"

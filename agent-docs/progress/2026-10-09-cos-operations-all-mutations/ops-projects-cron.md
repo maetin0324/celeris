@@ -69,8 +69,21 @@ best-effort。同じ key の再送は新しい id を書かないので、返事
 
 検証: 短い TMPDIR で `cargo nextest run -p task-api` → 633 passed、clippy 成功。
 
+## projects docs 4 route（完了、C）
+
+`POST /projects/{id}/docs/init`（`docs.init`）、`PUT|DELETE /projects/{id}/docs/page`（`docs.page_put`・`docs.page_delete`）、
+`POST /projects/{id}/docs/maintenance`（`docs.maintenance`。記録の action は `docs.maintenance_<op>`）を外部効果の手順で登録。
+- task-core に `cos_operation_fail_external`（pending → rejected。`finish_external` と共通の settle）を追加。外部の系が変更前に
+  拒否したと分かる失敗だけに使う。
+- API に `OperationAudit::external`（begin → effect を 1 回 → finish / fail。再送は effect を走らせない）と `fail_external`。
+- docs は `docs_init_op`・`put_page_op`・`delete_page_op`・`maintenance_op` を handler と共有。etag 不一致・main 編集中・
+  page 無し・path の誤りは `rejected`。maintenance は apply 後の失敗だけ `docs_maintenance_partial` にして pending のまま残す。
+- CoS の DELETE は path/etag/message を body で送る（operation の path に query を付けられないため）。
+
+検証: `cos_ops_projects_cron_docs` 2 passed（local の一時 git repo。commit 回数で再送の非再実行と rejected の無変更を確認）、
+`--test docs --test cos_ops_registry --test cos_ops_projects_cron --test cos_operations` 28 passed、task-api lib cos 4 passed、clippy 成功。
+
 ## 残り
 
-- projects PENDING 4: `/projects/{id}/docs/{init,maintenance}`、
-  `PUT|DELETE /projects/{id}/docs/page`（KB/git は C）
+- projects PENDING: 無し
 - tasks の C: `POST /tasks/{id}/changes/{repo}/integrate`、`/pr/merge`。decisions の C: `PUT /knowledge/page`

@@ -124,6 +124,50 @@ impl OperationAudit {
             .map_err(cos_problem)
     }
 
+    /// Settle the pending C-class operation as `rejected` with `problem` when the external
+    /// system refused the effect before changing anything; returns `problem` for the caller.
+    pub(crate) fn fail_external(
+        &self,
+        store: &SqliteStore,
+        problem: ApiProblem,
+        now: time::OffsetDateTime,
+    ) -> ApiProblem {
+        let result = serde_json::json!({"error": problem.code(), "detail": problem.detail()});
+        match store.cos_operation_fail_external(&self.ctx, &result, now) {
+            Ok(_) => problem,
+            Err(error) => cos_problem(error),
+        }
+    }
+
+    /// Run a C-class operation (ADR 2026-10-09-cos-operations-external-effects): persist the
+    /// pending record, run `effect` once, and settle it. A resent request returns the recorded
+    /// operation without running `effect`. `Ok(Err(problem))` from `effect` means the external
+    /// system refused before any change (settled `rejected`); `Err(problem)` means the outcome is
+    /// unknown, so the record stays pending for remediation.
+    pub(crate) fn external<F>(
+        &self,
+        store: &SqliteStore,
+        target_kind: &str,
+        target_id: &str,
+        action: &str,
+        now: time::OffsetDateTime,
+        effect: F,
+    ) -> Result<CosOperation, ApiProblem>
+    where
+        F: FnOnce() -> Result<Result<Value, ApiProblem>, ApiProblem>,
+    {
+        let (operation, fresh) = self.begin_external(store, target_kind, target_id, action, now)?;
+        if !fresh {
+            return Ok(operation);
+        }
+        match effect()? {
+            Ok(result) => self.finish_external(store, &result, time::OffsetDateTime::now_utc()),
+            Err(problem) => {
+                Err(self.fail_external(store, problem, time::OffsetDateTime::now_utc()))
+            }
+        }
+    }
+
     /// Run `write` inside the `cos_operation_apply` transaction. All domain writes go through `tx`.
     pub(crate) fn apply<F>(
         &self,

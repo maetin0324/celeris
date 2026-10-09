@@ -78,6 +78,10 @@ curl -sS -X POST "$API/api/v1/cos/operations" -H "Authorization: Bearer $CELERIS
 | 永続の認可の削除 | `DELETE /api/v1/standing-rules/<id>` | standing_rule.delete | body なし。無ければ 404 |
 | 報告を既読化（旧入口） | `POST /api/v1/reports/read` | report.read | `{"ids":["…"]}`。対応する通知も既読。新しくは notification.read を使う |
 | 通知時刻を進める（旧入口） | `POST /api/v1/reports/notified` | report.notified | body は `{}`。API のメモリの値で、再起動で戻る |
+| 文書リポジトリの用意 | `POST /api/v1/projects/<id>/docs/init` | docs.init | body は `{}`。外部効果（git）扱い: pending → applied、再送は再実行しない |
+| 文書ページの作成・更新 | `PUT /api/v1/projects/<id>/docs/page` | docs.page_put | `{"path":"docs/x.md","body":"…","etag":"…","message":"…"}`。既存ページは etag 必須（違えば 409、rejected で記録） |
+| 文書ページの削除 | `DELETE /api/v1/projects/<id>/docs/page` | docs.page_delete | `{"path":"…","etag":"…"}` を body で送る（operation の path に query は付けられない） |
+| 文書整理（audit・adopt・approve・apply） | `POST /api/v1/projects/<id>/docs/maintenance` | docs.maintenance | `{"op":"audit"}` など。記録の action は `docs.maintenance_<op>`。apply は人の approve 済みの plan だけ |
 
 ### admin
 
@@ -106,7 +110,7 @@ curl -sS -X POST "$API/api/v1/cos/operations" -H "Authorization: Bearer $CELERIS
   `/clusters/<id>/connect*`・browser の credential/attestation 系）、`/console/instruct`、`/cos/*` 自身、撤去済みの入口。
   人に web の画面で行うよう頼む。
 - **登録待ち（許可範囲は ADR 2026-10-09 で決定済み。領域別に実装中）**: 上の表に無い変更操作
-  （例: task の integrate・PR merge、案件の作成・docs・org・provider・release promote・
+  （例: task の integrate・PR merge、`PUT /knowledge/page`、org・provider・release promote・
   `/reload`・browser 操作など）。必要なら人に web の画面で行うよう頼むか、運用者向けの task を起票する。
   一覧はエラー本文の `pending in <領域>` と `crates/task-api/src/cos/ops/*.rs` の `PENDING` にある。
 

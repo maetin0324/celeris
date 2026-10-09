@@ -262,6 +262,28 @@ impl SqliteStore {
         result: &Value,
         now: OffsetDateTime,
     ) -> Result<CosOperation, ChatError> {
+        self.settle_external(ctx, "applied", result, now)
+    }
+
+    /// Settle a pending external operation as `rejected` when the effect is known not to have
+    /// happened (the external system refused it before changing anything: an etag mismatch, a
+    /// busy branch, a missing page). An unknown outcome must stay pending for remediation instead.
+    pub fn cos_operation_fail_external(
+        &self,
+        ctx: &AuditContext,
+        result: &Value,
+        now: OffsetDateTime,
+    ) -> Result<CosOperation, ChatError> {
+        self.settle_external(ctx, "rejected", result, now)
+    }
+
+    fn settle_external(
+        &self,
+        ctx: &AuditContext,
+        state: &str,
+        result: &Value,
+        now: OffsetDateTime,
+    ) -> Result<CosOperation, ChatError> {
         let mut conn = self.lock()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let mut op = get_conn(&tx, &ctx.operation_id)?
@@ -271,14 +293,14 @@ impl SqliteStore {
             return Ok(op);
         }
         let stamp = chat_ts(now);
-        tx.execute("UPDATE cos_operations SET state='applied',result_json=?2,updated_at=?3 WHERE id=?1 AND state='pending'",
-            params![ctx.operation_id,result.to_string(),stamp])?;
-        audit_event(&tx, ctx, &op.target_kind, &op.target_id, "applied")?;
+        tx.execute("UPDATE cos_operations SET state=?4,result_json=?2,updated_at=?3 WHERE id=?1 AND state='pending'",
+            params![ctx.operation_id,result.to_string(),stamp,state])?;
+        audit_event(&tx, ctx, &op.target_kind, &op.target_id, state)?;
         let card = ChatCard {
             kind: ChatCardKind::Operation,
             id: ctx.operation_id.clone(),
             title: op.action.clone(),
-            state: "applied".into(),
+            state: state.into(),
             href: format!("/cos/operations/{}", ctx.operation_id),
             actor: ChatActor::Cos,
             reason: Some(ctx.reason.clone()),

@@ -10,7 +10,7 @@ Usage: sh $0 <out-file>
        sh $0 --help
 
 --stutter 3   Run the required launcher admission test three times with its
-              SIGSTOP stutter scenario enabled by the test harness.
+              process group repeatedly stopped and resumed by this script.
 --credential Run the launcher_credential_ unit and integration tests.
 EOF
 }
@@ -46,33 +46,47 @@ case "$mode" in
     admission) CELERIS_LAUNCHER_TESTS=require cargo test -p task-worker --test browser_launcher_ptrace -- --nocapture >>"$out" 2>&1; code=$? ;;
     stutter)
         code=0
+        # Test-only hook for deterministic script checks; never use in the
+        # production evidence procedure. The value is passed to sh -c.
+        test_command=${LAUNCHER_EVIDENCE_TEST_CMD:-'CELERIS_LAUNCHER_TESTS=require cargo test -p task-worker --test browser_launcher_ptrace -- --nocapture'}
         n=1
         while [ "$n" -le 3 ]; do
             label="stutter-$n"
             echo "RUN[$label] required launcher admission + SIGSTOP stutter" >>"$out"
-            setsid env CELERIS_LAUNCHER_TESTS=require cargo test -p task-worker --test browser_launcher_ptrace -- --nocapture >>"$out" 2>&1 &
+            setsid sh -c "$test_command" >>"$out" 2>&1 &
             test_pid=$!
-            # Pause the test harness twice while it owns a live real launcher session.
-            # The test itself still performs cleanup after each resume.
-            stutter=1
-            while [ "$stutter" -le 2 ]; do
-                alive=0
-                tries=0
-                while [ "$tries" -lt 200 ]; do
-                    kill -0 "$test_pid" 2>/dev/null || break
-                    kill -STOP -- "-$test_pid" 2>/dev/null && { alive=1; break; }
-                    tries=$((tries + 1))
-                    sleep 0.05
-                done
-                if [ "$alive" -eq 1 ]; then
-                    sleep 0.1
-                    kill -CONT -- "-$test_pid" 2>/dev/null || true
-                    sleep 0.1
-                fi
-                stutter=$((stutter + 1))
+            pgid=
+            tries=0
+            while [ "$tries" -lt 200 ]; do
+                pgid=$(ps -o pgid= -p "$test_pid" 2>/dev/null | tr -d ' ')
+                [ -n "$pgid" ] && break
+                kill -0 "$test_pid" 2>/dev/null || break
+                tries=$((tries + 1))
+                sleep 0.005
             done
+            stops=0
+            if [ -n "$pgid" ]; then
+                while kill -0 "$test_pid" 2>/dev/null; do
+                    if kill -STOP -"$pgid" 2>/dev/null; then
+                        stops=$((stops + 1))
+                    else
+                        code=1
+                        break
+                    fi
+                    sleep 0.002
+                    if ! kill -CONT -"$pgid" 2>/dev/null; then code=1; break; fi
+                    sleep 0.001
+                done
+                # Do not leave the group stopped if it raced with completion.
+                kill -CONT -"$pgid" 2>/dev/null || true
+            else
+                code=1
+            fi
             wait "$test_pid"
-            code=$?
+            test_code=$?
+            echo "STUTTER[$label]: stops=$stops" >>"$out"
+            [ "$stops" -gt 0 ] || code=1
+            [ "$test_code" -eq 0 ] || code=$test_code
             echo "EXIT[$label]: $code" >>"$out"
             grep -E '^(ADMISSION|SKIP:|PTRACE_ATTACH|strace -p|test result:|EXIT\[)' "$out" | tail -12 >&2 || true
             [ "$code" -eq 0 ] || break
@@ -85,5 +99,5 @@ case "$mode" in
         code=${code:-0}
         ;;
 esac
-if [ "$mode" = admission ]; then echo "EXIT: $code" >>"$out"; fi
+echo "EXIT: $code" >>"$out"
 exit "$code"

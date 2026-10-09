@@ -269,7 +269,10 @@ async fn cos_ops_projects_cron_knowledge_page_put_is_external_once() {
     );
     let first = send(&app, post_json_with(OPS, &envelope, &headers)).await;
     let again = send(&app, post_json_with(OPS, &envelope, &headers)).await;
-    assert_eq!(again.json()["operation"]["id"], first.json()["operation"]["id"]);
+    assert_eq!(
+        again.json()["operation"]["id"],
+        first.json()["operation"]["id"]
+    );
     assert_eq!(kb_commits(&env.knowledge_root), before + 2);
     let stale = send(
         &app,

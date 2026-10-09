@@ -1,7 +1,7 @@
 //! tasks registry and shared-operation dispatch (ADR 2026-10-09 D3).
 
 use super::super::operations::{DispatchEnv, Matched, OperationAudit};
-use super::super::operations::{audited, decode_optional, decode_problem};
+use super::super::operations::{audited, decode_optional, decode_problem, path_param};
 use crate::problem::ApiProblem;
 use crate::query::parse_task_id;
 use serde_json::Value;
@@ -11,6 +11,16 @@ use task_core::store::SqliteStore;
 /// Registered `(method, path, action)` operations.
 pub(crate) const ALLOWED: &[(&str, &str, &str)] = &[
     ("POST", "/api/v1/tasks", "task.create"),
+    (
+        "POST",
+        "/api/v1/tasks/{id}/changes/{repo}/integrate",
+        "task.integrate",
+    ),
+    (
+        "POST",
+        "/api/v1/tasks/{id}/changes/{repo}/pr/merge",
+        "task.pr_merge",
+    ),
     ("POST", "/api/v1/tasks/{id}/comments", "comment.create"),
     (
         "POST",
@@ -59,10 +69,7 @@ pub(crate) const EXCLUDED: &[(&str, &str, &str)] = &[(
 )];
 
 /// Assigned mutations awaiting audited implementation. Move a row to ALLOWED when implemented.
-pub(crate) const PENDING: &[(&str, &str)] = &[
-    ("POST", "/api/v1/tasks/{id}/changes/{repo}/integrate"),
-    ("POST", "/api/v1/tasks/{id}/changes/{repo}/pr/merge"),
-];
+pub(crate) const PENDING: &[(&str, &str)] = &[];
 
 pub(crate) fn dispatch(
     store: &SqliteStore,
@@ -253,6 +260,38 @@ pub(crate) fn dispatch(
                         Some(audit),
                     )?)
                 }
+            }
+        }
+        "task.integrate" | "task.pr_merge" => {
+            let raw_id = matched.id.unwrap_or_default();
+            let task_id = parse_task_id(&raw_id)
+                .map_err(|problem| audit.reject(store, "task", &raw_id, problem))?;
+            let pattern = if matched.action == "task.integrate" {
+                "/api/v1/tasks/{id}/changes/{repo}/integrate"
+            } else {
+                "/api/v1/tasks/{id}/changes/{repo}/pr/merge"
+            };
+            let repo = path_param(pattern, path, "{repo}");
+            let changes = crate::changes::ChangesEnv::of(&env.api);
+            if matched.action == "task.integrate" {
+                let input = serde_json::from_value(body).map_err(decode)?;
+                audited(crate::changes::integrate_op(
+                    store,
+                    &changes,
+                    task_id,
+                    &repo,
+                    input,
+                    Some(audit),
+                )?)
+            } else {
+                let crate::lifecycle::EmptyBody {} = decode_optional(body).map_err(decode)?;
+                audited(crate::changes::pr_merge_op(
+                    store,
+                    &changes,
+                    task_id,
+                    &repo,
+                    Some(audit),
+                )?)
             }
         }
         other => Err(ApiProblem::internal(format!(

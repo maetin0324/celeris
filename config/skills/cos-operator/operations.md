@@ -30,6 +30,8 @@ curl -sS -X POST "$API/api/v1/cos/operations" -H "Authorization: Bearer $CELERIS
 |---|---|---|---|
 | 起票 | `POST /api/v1/tasks` | task.create | `celerisctl add --title … --objective … --check-cmd …`。本文は下の「起票」。添付は `attachment_ids`（[attachments.md](attachments.md)） |
 | コメント | `POST /api/v1/tasks/<id>/comments` | comment.create | `{"body":"…"}` |
+| 成果の取り込み（merge・PR・破棄） | `POST /api/v1/tasks/<id>/changes/<repo>/integrate` | task.integrate | `{"method":"merge"\|"pr"\|"discard","confirm":true,"note":"…"}`（discard は confirm 必須）。外部効果（git・GitHub）: pending → applied、再送は再実行しない |
+| PR を Celeris で merge | `POST /api/v1/tasks/<id>/changes/<repo>/pr/merge` | task.pr_merge | body は `{}`。開いた PR だけ（他は 409）。外部効果 |
 | 段の確認（phase gate） | `POST /api/v1/tasks/<id>/execution/phase-gate` | execution.phase_gate | `{"action":"continue"\|"replan"\|"withdraw","note":"…"}` |
 | task の質問への回答 | `POST /api/v1/tasks/<id>/answer` | question.answer | `celerisctl answer <task-id> <答え>` |
 | task の accept | `POST /api/v1/tasks/<id>/accept` | task.accept | body は `{}` |
@@ -111,7 +113,7 @@ curl -sS -X POST "$API/api/v1/cos/operations" -H "Authorization: Bearer $CELERIS
   `/clusters/<id>/connect*`・browser の credential/attestation 系）、`/console/instruct`、`/cos/*` 自身、撤去済みの入口。
   人に web の画面で行うよう頼む。
 - **登録待ち（許可範囲は ADR 2026-10-09 で決定済み。領域別に実装中）**: 上の表に無い変更操作
-  （例: task の integrate・PR merge、org・provider・release promote・
+  （例: org・provider・release promote・
   `/reload`・browser 操作など）。必要なら人に web の画面で行うよう頼むか、運用者向けの task を起票する。
   一覧はエラー本文の `pending in <領域>` と `crates/task-api/src/cos/ops/*.rs` の `PENDING` にある。
 

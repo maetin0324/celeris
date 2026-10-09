@@ -1,7 +1,7 @@
 ---
 tasks: [01M4F5KS8E1MXZDNJTRAVFJESW]
 wu: ops-projects-cron
-status: running
+status: done
 ---
 # ops-projects-cron: tasks の C 3 route・projects 14・cron-jobs 6 の監査付き登録
 
@@ -91,7 +91,19 @@ CoS の編集も人の依頼の中継として人の印（`mark_human_authored`�
 
 検証: `cos_ops_projects_cron_docs`（KB 試験を含む 3 件）・knowledge・cos_ops_registry・task-api lib → 102 passed、clippy 成功。
 
+## tasks の取り込み 2 route（完了、C）
+
+`POST /tasks/{id}/changes/{repo}/integrate`（`task.integrate`）と `…/pr/merge`（`task.pr_merge`）を外部効果の手順で登録。
+`changes.rs` を「効果の前の検査」（discard の confirm、木の子、repo、PR の origin/gh、開いた PR）と「効果」（git・`gh`・取り込み
+記録）に分け、`integrate_op`・`pr_merge_op` を handler と共有。検査の失敗は rejected 行、`default_branch_busy` は git の変更前
+拒否として `rejected`、merge 失敗・衝突・`gh pr merge` 失敗は取り込み記録（failed/conflict）として applied、それ以外は pending。
+CoS の記録の target は task（task の event 列に監査が積まれる）。celerisctl には取り込みの subcommand が無いので包みは不要。
+
+検証: `cos_ops_projects_cron_changes` 2 passed（偽の `gh` の呼び出し記録と local bare origin。merge の再送で main が動かない、
+`gh pr merge` は再送しても 1 回、閉じた PR は 409）、`--test changes` 合格、短い TMPDIR で `cargo nextest run -p task-api`
+→ 638 passed、clippy（task-core・task-api all-targets）成功。
+
 ## 残り
 
 - projects PENDING: 無し
-- tasks の C: `POST /tasks/{id}/changes/{repo}/integrate`、`/pr/merge`。decisions の PENDING は空
+- tasks・decisions・projects の PENDING は空。admin の PENDING に cron-jobs は無い（受け入れ条件 0）。残りは全体検査

@@ -3449,6 +3449,8 @@ registry は `crates/task-api/src/cos/ops/{tasks,decisions,projects,admin,surfac
 | 領域 | method と path | action |
 |---|---|---|
 | tasks | `POST /tasks` | `task.create` |
+| tasks | `POST /tasks/{id}/changes/{repo}/integrate` | `task.integrate`（外部効果: git・GitHub。pending → applied。`default_branch_busy` は変更前の拒否で `rejected`） |
+| tasks | `POST /tasks/{id}/changes/{repo}/pr/merge` | `task.pr_merge`（外部効果。`gh pr merge` の失敗は取り込み記録の `failed` として applied） |
 | tasks | `POST /tasks/{id}/comments` | `comment.create` |
 | tasks | `POST /tasks/{id}/answer` | `question.answer` |
 | tasks | `POST /tasks/{id}/execution/phase-gate` | `execution.phase_gate` |
@@ -3493,7 +3495,7 @@ registry は `crates/task-api/src/cos/ops/{tasks,decisions,projects,admin,surfac
 | admin | `POST /cron-jobs/{id}/run` | `cron_job.run`（外部効果の手順。`pending` を先に記録して 1 回だけ実行し `applied`。同じ key の再送は記録を返し再実行しない） |
 | surface | `POST /chat/attachments/{id}/references` | `attachment.reference` |
 
-tasks の実行計画初回採用 `POST /api/v1/tasks/{id}/execution-plan`（`execution.plan_adopt`）と既存計画への late tree adoption `POST /api/v1/tasks/{id}/tree/adopt`（`tree.adopt`）も登録済み。両方とも domain write と operation audit を同一 transaction で commit する。CoS credential での `celerisctl execution plan set` と `celerisctl tree adopt` はこれらの operation 経由で送る。CoS credential の `celerisctl cron create|update|pause|resume|run` は `cron_job.*` を送る。task の GitHub integration/PR merge は外部副作用の監査経路を実装中で、登録待ち。
+tasks の実行計画初回採用 `POST /api/v1/tasks/{id}/execution-plan`（`execution.plan_adopt`）と既存計画への late tree adoption `POST /api/v1/tasks/{id}/tree/adopt`（`tree.adopt`）も登録済み。両方とも domain write と operation audit を同一 transaction で commit する。CoS credential での `celerisctl execution plan set` と `celerisctl tree adopt` はこれらの operation 経由で送る。CoS credential の `celerisctl cron create|update|pause|resume|run` は `cron_job.*` を送る。task の取り込み（integrate）と PR merge、案件の文書、KB ページの編集、定期実行の手動実行は外部効果の手順（ADR 2026-10-09-cos-operations-external-effects: pending を先に記録し 1 回だけ実行、再送は再実行しない、変更前の拒否は `rejected`、結果不明は pending のまま起動時に `needs_remediation`）で記録する。
 
 除外（422 `cos_operation_not_allowed`、detail に理由コード）: 秘密の値を扱う操作（`secret_operations`。`/secrets/*`・
 `/accounts/{id}/login*`・`/clusters/{id}/connect*`）、browser の credential/attestation 系

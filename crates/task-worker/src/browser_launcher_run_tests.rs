@@ -2344,6 +2344,25 @@ mod launcher_login {
     /// A real credentiald (manual provider, control + injection sockets) whose only control peer is
     /// this test process — the daemon's role.
     fn credentiald(root: &Path, origin: &str, task_id: &str) {
+        let policy = CredentialPolicy {
+            policy_id: POLICY_ID.into(),
+            revision: 1,
+            exact_origin: origin.into(),
+            task_id: task_id.into(),
+            max_ttl_seconds: 60,
+            require_approval: true,
+            allow_persistence: false,
+            login_url: Some(format!("{origin}/entry")),
+            password_selector: Some("input[name=j_password]".into()),
+            submit_selector: Some("button[name=_eventId_proceed]".into()),
+            username_selector: None,
+            post_login: None,
+        };
+        credentiald_with(root, &policy, "user-1", SECRET);
+    }
+
+    /// Start a real credentiald under `root` and register `user` / `password` for `policy`.
+    fn credentiald_with(root: &Path, policy: &CredentialPolicy, user: &str, password: &str) {
         for name in ["config", "data", "run"] {
             let path = root.join(name);
             std::fs::create_dir(&path).expect("broker dir");
@@ -2368,20 +2387,6 @@ mod launcher_login {
             assert!(std::time::Instant::now() < deadline, "credentiald startup");
             std::thread::sleep(Duration::from_millis(10));
         }
-        let policy = CredentialPolicy {
-            policy_id: POLICY_ID.into(),
-            revision: 1,
-            exact_origin: origin.into(),
-            task_id: task_id.into(),
-            max_ttl_seconds: 60,
-            require_approval: true,
-            allow_persistence: false,
-            login_url: Some(format!("{origin}/entry")),
-            password_selector: Some("input[name=j_password]".into()),
-            submit_selector: Some("button[name=_eventId_proceed]".into()),
-            username_selector: None,
-            post_login: None,
-        };
         let reference = celeris_credentiald::CredentialRef {
             credential_id: "cred-1".into(),
             provider: "manual".into(),
@@ -2390,7 +2395,7 @@ mod launcher_login {
         let reply = ipc::call(
             &control,
             serde_json::json!({"op":"register","reference":reference,"policy":policy,
-                "revision":1,"secret":{"username":"user-1","password":SECRET}})
+                "revision":1,"secret":{"username":user,"password":password}})
             .to_string()
             .as_bytes(),
         )
@@ -2401,6 +2406,25 @@ mod launcher_login {
     /// The approved credential_use wait, consumed (what `browser_approval_consume` returns), for
     /// the fixture's IdP origin. The wait's session is the logical Celeris session.
     fn consumed(origin: &str, task_id: task_core::TaskId) -> ConsumedBrowserApproval {
+        let trusted = TrustedLogin {
+            policy_id: POLICY_ID.into(),
+            revision: 1,
+            // Shibboleth shape: the origin root has no form; the login URL starts the flow.
+            login_url: format!("{origin}/entry"),
+            password_selector: "input[name=j_password]".into(),
+            submit_selector: Some("button[name=_eventId_proceed]".into()),
+            username_selector: None,
+            post_login: None,
+        };
+        consumed_with(origin, task_id, trusted)
+    }
+
+    /// The consumed approval for `origin` with the pinned `trusted` login.
+    fn consumed_with(
+        origin: &str,
+        task_id: task_core::TaskId,
+        trusted: TrustedLogin,
+    ) -> ConsumedBrowserApproval {
         let policy = credential_policy();
         let mut wait = registered_wait(&policy);
         wait.task_id = task_id;
@@ -2415,16 +2439,6 @@ mod launcher_login {
             provider: "manual".into(),
             policy_id: POLICY_ID.into(),
         });
-        let trusted = TrustedLogin {
-            policy_id: POLICY_ID.into(),
-            revision: 1,
-            // Shibboleth shape: the origin root has no form; the login URL starts the flow.
-            login_url: format!("{origin}/entry"),
-            password_selector: "input[name=j_password]".into(),
-            submit_selector: Some("button[name=_eventId_proceed]".into()),
-            username_selector: None,
-            post_login: None,
-        };
         wait.trusted_login = Some(trusted.clone());
         ConsumedBrowserApproval {
             wait,
@@ -2587,6 +2601,278 @@ mod launcher_login {
         // No daemon-visible value carries the secret.
         for seen in [format!("{login:?}"), format!("{calls:?}"), journal] {
             assert!(!seen.contains(SECRET), "{seen}");
+        }
+        runtime.stop().expect("stop");
+        drop(chrome);
+    }
+
+    /// ADR 2026-10-09 credential username / post-login acceptance (launcher protocol v5, real
+    /// credentiald, real Chromium): one approval → one lease → one pair injection fills the IdP's
+    /// username and password on the same form (not at the origin root); after submit the SP lands
+    /// on the LMS and the launcher closes the auth section on the post-login conditions. The agent
+    /// (through the controller's agent path, as the relay calls it) then reads the assignment list
+    /// (snapshot / extract / screenshot), clicks into an assignment and downloads its handout on the
+    /// LMS; it is refused on the IdP, on another origin and on a page with a password field, and an
+    /// off-origin download is cancelled. The password and the session cookie reach no agent reply or
+    /// event; neither the password nor the username reaches any Celeris-written surface (journal,
+    /// store calls, results). The username shown by the LMS is readable by the agent (A1).
+    #[tokio::test]
+    async fn launcher_credential_post_login_pair_login_then_reads_only_the_lms() {
+        use crate::browser::post_login_tests::{
+            Agent, COOKIE_VALUE, FIXTURE, USER, origins, trusted as post_login_trusted,
+        };
+        use crate::browser_launcher::protocol::LoginObservation;
+        const PASSWORD: &str = "launcher-post-login-pw-a81f3c";
+        let chrome = ChromeFixture::start_with(FIXTURE);
+        let o = origins(&chrome);
+        let brokers = Arc::new(Mutex::new(0));
+        let dir = tempfile::tempdir().expect("tempdir");
+        let sock = dir.path().join("launcher.sock");
+        let server = LauncherServer::bind(
+            &sock,
+            ServerConfig {
+                allowed_uids: vec![DaemonIds::current().uid],
+                limits: LauncherLimits::default(),
+            },
+            Arc::new(ChromeBackend {
+                controller: Arc::clone(&chrome.controller),
+                chrome_pid: chrome.chrome_pid as i32,
+                brokers: Arc::clone(&brokers),
+            }),
+            Registry::open(dir.path().join("state"), "inst-post-login").expect("registry"),
+        )
+        .expect("bind");
+        let _handle = server.spawn().expect("spawn");
+        let task_id = task_core::TaskId::new();
+        let mut trusted = post_login_trusted(&o, &[o.lms.as_str()]);
+        trusted.policy_id = POLICY_ID.into();
+        let credd = tempfile::tempdir().expect("credd");
+        credentiald_with(
+            credd.path(),
+            &CredentialPolicy {
+                policy_id: POLICY_ID.into(),
+                revision: 1,
+                exact_origin: o.idp.clone(),
+                task_id: task_id.to_string(),
+                max_ttl_seconds: 60,
+                require_approval: true,
+                allow_persistence: false,
+                login_url: Some(trusted.login_url.clone()),
+                password_selector: Some(trusted.password_selector.clone()),
+                submit_selector: trusted.submit_selector.clone(),
+                username_selector: trusted.username_selector.clone(),
+                post_login: trusted.post_login.clone(),
+            },
+            USER,
+            PASSWORD,
+        );
+        let run_dir = credd.path().join("run");
+        let (runtime, _) = LauncherRuntime::start(&sock, "task-1", "run-post-login", policy())
+            .expect("launcher session");
+        assert_eq!(
+            runtime.protocol_version().expect("hello"),
+            crate::browser_launcher::protocol::POST_LOGIN_PROTOCOL
+        );
+        let runtime = Arc::new(runtime);
+        crate::browser_cdp_sink::UnixInjectionClient::new(
+            celeris_credentiald::injection_ipc::injection_socket(&run_dir),
+        )
+        .register_live_session(LiveSessionRegistration {
+            session_id: runtime.session_id().to_owned(),
+            controller_pid: std::process::id(),
+            controller_start: process_start(std::process::id()).expect("self start"),
+            runtime_pid: chrome.chrome_pid,
+            runtime_start: process_start(chrome.chrome_pid).expect("chrome start"),
+        })
+        .expect("register live session");
+        let approval = consumed_with(&o.idp, task_id, trusted);
+        let sup = crate::browser_credential::CredentialSupervisor {
+            broker: Arc::new(crate::browser_credential::UnixLeaseBroker {
+                control_socket: run_dir.join("celeris-credentiald/control.sock"),
+            }),
+            bridge: PathBuf::from("/nonexistent/celeris-credentiald"),
+            runtime_dir: Some(run_dir.clone()),
+        };
+        let read = crate::browser::PostLoginRead {
+            read_origins: vec![o.lms.clone()],
+            actions: ["snapshot", "extract", "screenshot", "download", "click"]
+                .map(String::from)
+                .to_vec(),
+        };
+        let sink = AuthSink::default();
+        let login = launcher_credential_login(
+            &runtime,
+            &approval,
+            Some(&read),
+            &sup,
+            &run_dir,
+            &task_id.to_string(),
+            "run-resumed",
+            &approval.wait.session_id,
+            &sink,
+        )
+        .await;
+        assert_eq!(
+            login,
+            CredentialLogin::Recorded(Ok(LoginObservation::Resumed))
+        );
+        assert_eq!(*brokers.lock().expect("lock"), 1);
+        // The IdP got both fields from the one injection.
+        let received = chrome.directory.path().join("received");
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while !received.exists() {
+            assert!(std::time::Instant::now() < deadline, "IdP never received");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert_eq!(
+            std::fs::read_to_string(&received).expect("received"),
+            format!("{USER}\n{PASSWORD}")
+        );
+        let journal = std::fs::read_to_string(credd.path().join("data/audit/journal.jsonl"))
+            .expect("journal");
+        assert_eq!(
+            journal
+                .lines()
+                .filter(|l| l.contains("\"consumed\""))
+                .count(),
+            1,
+            "one lease use for both fields: {journal}"
+        );
+        assert!(journal.contains("\"injected\"") && journal.contains("input[name=j_username]"));
+        {
+            let c = chrome.controller.lock().expect("lock");
+            assert!(!c.auth_section_active());
+            assert!(c.post_login_active());
+            assert_eq!(c.redisplay_guards(), 1);
+        }
+        // The agent reads the LMS tab the login left behind.
+        let targets = chrome
+            .controller
+            .lock()
+            .expect("lock")
+            .agent_command("Target.getTargets", serde_json::json!({}), None)
+            .expect("targets");
+        let lms_target = targets["result"]["targetInfos"]
+            .as_array()
+            .expect("targets")
+            .iter()
+            .find(|t| t["url"].as_str().is_some_and(|u| u.starts_with(&o.lms)))
+            .and_then(|t| t["targetId"].as_str())
+            .expect("the LMS tab")
+            .to_owned();
+        let mut agent = Agent::attach(&chrome.controller, &lms_target);
+        agent
+            .cmd("Network.enable", serde_json::json!({}))
+            .expect("network");
+        let text = agent.eval("document.body.innerText").expect("extract");
+        let text = text.as_str().unwrap_or_default().to_owned();
+        assert!(text.contains("Report 1: Fluid dynamics essay"), "{text}");
+        assert!(text.contains(&format!("Signed in as {USER}")), "{text}");
+        assert!(
+            agent
+                .cmd("Accessibility.getFullAXTree", serde_json::json!({}))
+                .is_ok()
+        );
+        assert!(
+            agent
+                .cmd(
+                    "Page.captureScreenshot",
+                    serde_json::json!({"format":"png"})
+                )
+                .expect("screenshot")["result"]["data"]
+                .as_str()
+                .is_some_and(|d| d.len() > 100)
+        );
+        agent.click("report").expect("click");
+        agent.wait_url(&format!("{}/ct/report_1", o.lms));
+        assert!(
+            agent
+                .eval("document.body.innerText")
+                .expect("detail")
+                .as_str()
+                .is_some_and(|t| t.contains("Due 2026-10-20"))
+        );
+        agent.goto(&format!("{}/ct/home", o.lms), &format!("{}/ct/home", o.lms));
+        let downloads = tempfile::tempdir().expect("downloads");
+        chrome
+            .controller
+            .lock()
+            .expect("lock")
+            .agent_command(
+                "Browser.setDownloadBehavior",
+                serde_json::json!({"behavior":"allowAndName","downloadPath":downloads.path(),
+                    "eventsEnabled":true}),
+                None,
+            )
+            .expect("download behavior");
+        let from = agent.seen.len();
+        agent.click("dl").expect("download");
+        assert!(agent.wait_download(from, "completed"));
+        let from = agent.seen.len();
+        agent.click("dl-other").expect("other download");
+        assert!(agent.wait_download(from, "canceled"));
+        assert_eq!(
+            std::fs::read_dir(downloads.path()).expect("dir").count(),
+            1,
+            "only the LMS handout"
+        );
+        let denied = |r: Result<serde_json::Value, crate::browser_cdp_sink::InjectionError>| {
+            r.err().map(|e| e.code())
+        };
+        agent.goto(&format!("{}/", o.idp), &format!("{}/", o.idp));
+        assert_eq!(
+            denied(agent.eval("document.body.innerText")),
+            Some("observation_origin_denied")
+        );
+        assert_eq!(
+            denied(agent.cmd("Page.captureScreenshot", serde_json::json!({}))),
+            Some("observation_origin_denied")
+        );
+        agent.goto(&format!("{}/page", o.other), &format!("{}/page", o.other));
+        assert_eq!(
+            denied(agent.eval("document.title")),
+            Some("observation_origin_denied")
+        );
+        agent.goto(
+            &format!("{}/ct/settings", o.lms),
+            &format!("{}/ct/settings", o.lms),
+        );
+        assert_eq!(
+            denied(agent.eval("document.title")),
+            Some("password_field_present")
+        );
+        assert_eq!(
+            denied(agent.cmd("Page.captureScreenshot", serde_json::json!({}))),
+            Some("password_field_present")
+        );
+        // The relay refuses cookie / storage reads outright (no page check needed).
+        for m in [
+            "Network.getAllCookies",
+            "Storage.getCookies",
+            "DOMStorage.getDOMStorageItems",
+        ] {
+            assert!(crate::browser_shared_cdp::denied_method(m), "{m}");
+        }
+        // A second login in this session is refused.
+        assert!(runtime.auth_begin("auth-again").is_err());
+        let seen = agent.seen.join("\n");
+        assert!(!seen.contains(PASSWORD), "password reached the agent");
+        assert!(
+            !seen.contains(COOKIE_VALUE),
+            "session cookie reached the agent"
+        );
+        let calls = sink.calls.lock().expect("lock").clone();
+        assert_eq!(
+            calls,
+            vec![format!(
+                "auth_section run-resumed {} true",
+                approval.wait.session_id
+            )]
+        );
+        // Celeris-written surfaces carry neither the password nor the username.
+        for written in [format!("{login:?}"), format!("{calls:?}"), journal] {
+            assert!(!written.contains(PASSWORD), "{written}");
+            assert!(!written.contains(USER), "{written}");
         }
         runtime.stop().expect("stop");
         drop(chrome);

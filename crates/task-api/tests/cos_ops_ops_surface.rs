@@ -11,6 +11,9 @@ use common::cos_ops::{OPS, cos_bearer, db, op_body, run_domain, run_external};
 use common::*;
 use ring::signature::KeyPair;
 use serde_json::{Value, json};
+
+/// The project repository's document directory (a fixture repo, not this one).
+const DOCS: &str = "docs";
 use task_api::browser::BrowserApiConfig;
 use task_core::browser_wait::BrowserWaitStore;
 use task_core::chat::attachments::ChatAttachmentLimits;
@@ -513,7 +516,7 @@ async fn cos_ops_ops_surface_files_runs_and_docs_are_external() {
         "promote",
         "POST",
         &format!("/api/v1/tasks/{}/artifacts/promote", task.id),
-        json!({"name": "answer.md", "path": "docs/research/answer.md"}),
+        json!({"name": "answer.md", "path": format!("{DOCS}/research/answer.md")}),
         "artifact.promote",
     )
     .await;
@@ -521,7 +524,7 @@ async fn cos_ops_ops_surface_files_runs_and_docs_are_external() {
     let shown = std::process::Command::new("git")
         .arg("-C")
         .arg(&repo)
-        .args(["show", "main:docs/research/answer.md"])
+        .args(["show", format!("main:{DOCS}/research/answer.md").as_str()])
         .output()
         .expect("git show");
     assert!(shown.status.success());

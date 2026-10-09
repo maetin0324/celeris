@@ -8,6 +8,9 @@ mod common;
 use common::cos_ops::{OPS, audit_events, cos_bearer, op_body};
 use common::*;
 use serde_json::{Value, json};
+
+/// The project repository's document directory (a fixture repo, not this one).
+const DOCS: &str = "docs";
 use std::path::Path;
 
 fn git(dir: &Path, args: &[&str]) -> String {
@@ -118,11 +121,14 @@ async fn cos_ops_projects_cron_docs_page_put_delete_are_external_once() {
         "page-put",
         "PUT",
         &page,
-        json!({"path": "docs/a.md", "body": "# A\n"}),
+        json!({"path": format!("{DOCS}/a.md"), "body": "# A\n"}),
         "docs.page_put",
     )
     .await;
-    assert_eq!(git(&repo, &["show", "main:docs/a.md"]), "# A\n");
+    assert_eq!(
+        git(&repo, &["show", format!("main:{DOCS}/a.md").as_str()]),
+        "# A\n"
+    );
     assert_eq!(commits(&repo), before + 1);
     let etag = op["result"]["etag"].as_str().expect("etag").to_string();
 
@@ -133,7 +139,7 @@ async fn cos_ops_projects_cron_docs_page_put_delete_are_external_once() {
         "same",
         "PUT",
         &page,
-        json!({"path": "docs/b.md", "body": "# B\n"}),
+        json!({"path": format!("{DOCS}/b.md"), "body": "# B\n"}),
     );
     let first = send(&app, post_json_with(OPS, &envelope, &headers)).await;
     assert_eq!(first.status.as_u16(), 200, "{}", first.text());
@@ -153,7 +159,7 @@ async fn cos_ops_projects_cron_docs_page_put_delete_are_external_once() {
                 "stale",
                 "PUT",
                 &page,
-                json!({"path": "docs/a.md", "body": "# A2\n"}),
+                json!({"path": format!("{DOCS}/a.md"), "body": "# A2\n"}),
             ),
             &headers,
         ),
@@ -180,7 +186,7 @@ async fn cos_ops_projects_cron_docs_page_put_delete_are_external_once() {
         "page-delete",
         "DELETE",
         &page,
-        json!({"path": "docs/a.md", "etag": etag}),
+        json!({"path": format!("{DOCS}/a.md"), "etag": etag}),
         "docs.page_delete",
     )
     .await;
@@ -188,11 +194,11 @@ async fn cos_ops_projects_cron_docs_page_put_delete_are_external_once() {
         std::process::Command::new("git")
             .arg("-C")
             .arg(&repo)
-            .args(["cat-file", "-e", "main:docs/a.md"])
+            .args(["cat-file", "-e", format!("main:{DOCS}/a.md").as_str()])
             .status()
             .map(|s| !s.success())
             .unwrap_or(false),
-        "docs/a.md is removed on main"
+        "page a is removed on main"
     );
 }
 

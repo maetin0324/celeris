@@ -81,8 +81,9 @@ completed: 2026-10-09
 - `cargo clippy --workspace -- -D warnings` → exit 0。
 - `TMPDIR=/tmp bash scripts/dev/test-parallel.sh` → exit 0、`passed 4946, failed 0, ignored 14`、nextest 176.8 s。
   run の既定 TMPDIR（長い path）では browser の Unix socket 試験が SUN_LEN で落ちる既知の事情のため `/tmp` で流した。
-- `scripts/dev/check-doc-links.sh` → ok（試験 fixture の文書 repo の `docs/…` を指す `cos_ops_projects_cron_docs.rs`
-  （ops-projects-cron の時点から 7 件落ちていた）と `cos_ops_ops_surface.rs` を FOREIGN_DOCS に足した）。
+- `scripts/dev/check-doc-links.sh` → ok。試験 fixture の文書 repo の `docs/…` を書く `cos_ops_projects_cron_docs.rs`
+  （ops-projects-cron の時点から 7 件落ちていた）と `cos_ops_ops_surface.rs` は、path を `const DOCS` からの `format!` で組む
+  形に直した（検査台本 `scripts/dev/check-doc-links.sh` は WU の範囲外なので触らない）。
   `check-doc-layout.sh scripts/dev/docs-layout.tsv` → ok、`check-adr-numbers.sh` → ok。
 
 ## 未解決

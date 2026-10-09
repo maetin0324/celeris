@@ -370,6 +370,7 @@ fn p4b_record(dir: &Path, backends: &[&str], evidence: bool) -> PathBuf {
                     case,
                     test,
                     outcome: EvidenceOutcome::Passed,
+                    runtime: task_core::browser_backend::EvidenceRuntime::Launcher,
                 })
         })
         .collect()

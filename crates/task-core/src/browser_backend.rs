@@ -103,6 +103,15 @@ pub enum EvidenceOutcome {
     NotRun,
 }
 
+/// Runtime that produced measured evidence. Missing runtime in legacy ledgers is daemon evidence.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EvidenceRuntime {
+    #[default]
+    Daemon,
+    Launcher,
+}
+
 /// 適合記録に入る実測証拠: どの fixture 件を、どの試験が、どう示したか。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -110,6 +119,8 @@ pub struct ConformanceEvidence {
     pub case: FixtureCase,
     pub test: String,
     pub outcome: EvidenceOutcome,
+    #[serde(default)]
+    pub runtime: EvidenceRuntime,
 }
 
 /// backend を fixture で走らせた結果。`version` が変われば取り直す。
@@ -214,10 +225,15 @@ pub fn required_evidence(case: FixtureCase) -> Vec<String> {
 impl ConformanceResult {
     /// `passed` に載り、要る実測証拠が全て `passed` で、同じ件に失敗・未実施の証拠が無い。
     pub fn case_passed(&self, case: FixtureCase) -> bool {
+        self.case_passed_for_runtime(case, EvidenceRuntime::Daemon)
+    }
+
+    /// Credential proof is runtime-specific; evidence from another runtime cannot satisfy it.
+    pub fn case_passed_for_runtime(&self, case: FixtureCase, runtime: EvidenceRuntime) -> bool {
         if !self.passed.contains(&case) {
             return false;
         }
-        let of_case = || self.evidence.iter().filter(move |e| e.case == case);
+        let of_case = || self.evidence.iter().filter(move |e| e.case == case && e.runtime == runtime);
         if of_case().any(|e| e.outcome != EvidenceOutcome::Passed) {
             return false;
         }
@@ -271,7 +287,19 @@ pub fn certify(
         let missing: Vec<FixtureCase> = required_cases(*cap)
             .iter()
             .copied()
-            .filter(|c| !r.case_passed(*c))
+            .filter(|c| {
+                if cap.is_sensitive() {
+                    ![FixtureCase::IsolationSuite, FixtureCase::EgressNegativeSuite]
+                        .iter()
+                        .all(|required| r.case_passed_for_runtime(*required, EvidenceRuntime::Launcher))
+                        || !required_cases(*cap)
+                            .iter()
+                            .filter(|required| !matches!(required, FixtureCase::IsolationSuite | FixtureCase::EgressNegativeSuite))
+                            .all(|required| r.case_passed(*required))
+                } else {
+                    !r.case_passed(*c)
+                }
+            })
             .collect();
         if missing.is_empty() {
             ok.insert(*cap);
@@ -447,6 +475,11 @@ mod tests {
                     case,
                     test,
                     outcome: EvidenceOutcome::Passed,
+                    runtime: if matches!(case, FixtureCase::IsolationSuite | FixtureCase::EgressNegativeSuite) {
+                        EvidenceRuntime::Launcher
+                    } else {
+                        EvidenceRuntime::Daemon
+                    },
                 })
         })
         .collect()
@@ -491,6 +524,7 @@ mod tests {
                 case: FixtureCase::AuthSectionObservationStop,
                 test: P4B_H3_TESTS[0].into(),
                 outcome,
+                runtime: EvidenceRuntime::Daemon,
             });
             assert!(gap(&bad));
         }

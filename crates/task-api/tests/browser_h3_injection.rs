@@ -442,6 +442,7 @@ impl World {
                         case,
                         test,
                         outcome: task_core::browser_backend::EvidenceOutcome::Passed,
+                        runtime: task_core::browser_backend::EvidenceRuntime::Daemon,
                     },
                 )
         })

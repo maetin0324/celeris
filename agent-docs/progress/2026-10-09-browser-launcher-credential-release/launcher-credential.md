@@ -1,7 +1,7 @@
 ---
 title: "launcher 経路 CredentialUse 実装付記"
 tasks: [01M4FSDZPA8H9Q70AMAEYVXDPN]
-status: done
+status: running
 updated: 2026-10-09
 ---
 
@@ -52,3 +52,54 @@ updated: 2026-10-09
 - 認証 section 中は controller の観測遮断を有効にし、成功/失敗を固定 `ErrorCode` に写す。全経路で `clear_injected_values` / `close_auth_section` と broker の section close を試み、daemon 応答には status のみを返す。秘密値を launcher 側で復号・保持する経路は追加していない。
 - 検査: `TMPDIR=/tmp/lcba cargo test -p task-worker --lib browser_launcher` は 41 件成功。`TMPDIR=/tmp/lcba cargo clippy -p task-worker --lib -- -D warnings` 成功。標準 run TMPDIR では Unix socket fixture が `SUN_LEN` 超過するため短い物理 TMPDIR を使用した。
 - 人が行う起動設定: credentiald の `injection.sock` を launcher の起動環境へ `CELERIS_CREDENTIALD_INJECTION_SOCKET=/run/celeris-credentiald/injection.sock` として渡す（または launcher TOML に `injection_socket = "/run/celeris-credentiald/injection.sock"` を設定）。credentiald は launcher の実 UID を許可するよう運用設定し、socket の owner/mode も launcher から接続可能にする。未設定・不達は fail closed。実 host での設定変更・再起動・実注入確認は人が行う。
+
+## close（統合後 HEAD 00c7a180、2026-10-09）
+
+前段の記述のうち「文書のみ」「authenticate は常に Unauthorized」「credentiald socket 未実装」は、後段の run-gate・launcher-auth の実装で置き換わっている。現状は以下。
+
+### 実装の要点（統合後）
+
+- 条件判定: `refuse_confidential` は proof 検証成功・namespace owner が daemon UID と異なる・isolation_ok の全条件で CredentialUse だけを通す。それ以外は接続前に従来文言で拒否し、fallback しない。IdentityRestore は対象外のまま。
+- 注入: launcher の `RuntimeSession::authenticate` が launcher-owned `SharedCdp` で固定 verb を実行し、credentiald の injection socket（`CELERIS_CREDENTIALD_INJECTION_SOCKET` または launcher TOML の `injection_socket`）から秘密を受けて既存 inject sink へ渡す。daemon への応答は status のみ。
+- credentiald: `LauncherProofRegistration` を `attach_launcher_proof` で結び付け、`admit_attested` が `verify_launcher_session` で実 process facts を再照合する。
+
+### 検査（統合後 HEAD 00c7a180、作業ツリーは clean のまま）
+
+- `TMPDIR=/local/celeris/data/scratch/tmp-close cargo test -p celeris-credentiald -- launcher_credential_`
+  - exit 0。5 件成功（verified_proof_is_admitted、missing_proof、forged_proof、expired_process_proof、uid_mismatch）。
+- `TMPDIR=/local/celeris/data/scratch/tmp-close cargo test -p task-worker --lib -- launcher_credential_`
+  - exit 0。18 件成功（browser::launcher_run 13 件、browser_launcher::backend 3 件、browser_launcher 2 件）。
+- 非 userns の退行確認（`launcher_credential_` 以外）:
+  - `cargo test -p celeris-credentiald`（全 suite）exit 0、65 passed / 0 failed。
+  - `cargo test -p task-worker --lib -- browser_launcher` exit 0、41 passed / 0 failed。
+- `cargo clippy --workspace -- -D warnings` exit 0（57.62 秒で完了、警告なし）。
+- 文書検査:
+  - `sh scripts/dev/check-doc-links.sh` exit 0（`check-doc-links: ok`）。
+  - `sh scripts/dev/progress-index.sh --check` exit 0（`progress-index --check: ok`）。
+  - `sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv` exit 0（`check-doc-layout: ok`）。
+  - `python3 -I scripts/dev/check-architecture-map.py` exit 1: `docs/architecture-map.md` の 3 path（`<workspace>/runs/<run_id>/tmp/`、`check-test-tmp-leftovers.sh`、`test-parallel.sh`）が存在しないと報告。この WU は docs/architecture-map.md と scripts/dev を変更していない（`git diff a351a4b8 HEAD -- docs/architecture-map.md scripts/dev/` は空）。base f8033f14 で既に NG と記録済みの既存不具合。直していない。
+- 差分: `git diff a351a4b8 HEAD -- crates` の出力は空（この WU は crates に差分を作っていない）。
+
+注: 長い既定 TMPDIR では Unix socket fixture が `SUN_LEN` を超えるため、短い物理 TMPDIR（`/local/celeris/data/scratch/tmp-close`）で実行した。
+
+### 未解決事項（task 完了の前に人が行う）
+
+1. host の必須モード stutter 3 回（`CELERIS_LAUNCHER_TESTS=require`）: 未実施。本 WU では実行していない。
+2. `CELERIS_USERNS_TESTS=1` の opt-in の launcher_credential_ 実 process 試験: 現時点で存在しない。ADR 2026-10-09 は userns 実 process 試験を opt-in にすると定めているが、実装されていない（`crates/` で `CELERIS_USERNS_TESTS` を読む試験は無い）。後続 WU で追加が必要。
+3. 統合後 HEAD（00c7a180）での `ADMISSION[real-session]` の再取得: 未実施。手順は `docs/ops/browser-launcher-admission-evidence-run.md`（人が root で実行）。
+4. 本番 launcher unit への injection socket の設定: 未実施（人が行う。下記）。
+5. 本番 host の launcher・daemon・DB には触っていない。本番昇格は人が判断する。
+6. `check-architecture-map.py` の既存 NG（3 path）。
+
+### host 実証手順（運用が root で行う。コマンドと確認方法）
+
+1. 必須モード stutter: `CELERIS_LAUNCHER_TESTS=require cargo test -p task-worker --test browser_launcher_ptrace -- --nocapture` を 3 回実行し、いずれも exit 0（1 passed）を確認する。stutter（SIGSTOP/SIGCONT）の具体的な試験手順は `docs/ops/browser-launcher-admission-evidence-run.md` に従う。CPU 負荷は掛けない。
+2. launcher の injection socket 設定（root）: launcher の起動環境に `CELERIS_CREDENTIALD_INJECTION_SOCKET=/run/celeris-credentiald/injection.sock` を入れるか、launcher TOML に `injection_socket = "/run/celeris-credentiald/injection.sock"` を書く。credentiald は launcher の実 UID を `with_launcher_uid` で許可する運用設定を入れ、socket の owner/mode で launcher から接続できるようにする。確認: launcher 起動後に `ls -l /run/celeris-credentiald/injection.sock` で権限を見る。未設定・不達は fail closed（認証 verb は拒否）になるので、拒否のログで設定漏れを判別する。
+3. 統合後 HEAD で `ADMISSION[real-session]` を再取得: `docs/ops/browser-launcher-admission-evidence-run.md` の手順 1〜6 を実行し、手順 5 で launcher を main の版に戻す。確認: 証跡の admission 表が 6 件 passed、EXIT 0、HEAD が 00c7a180 であること。
+4. 本番昇格の判断: 上の 1〜3 の結果と HEAD を人が記録した後に行う。
+
+### 提案
+
+- `CELERIS_USERNS_TESTS=1` の opt-in 試験（実 launcher 経由の launcher_credential_ 試験）を後続 WU で追加する。現状の 23 件は全て決定的な模擬であり、実 process の証明は未検査。
+- ADR 2026-10-09 の実装付記に韓国語の混入（「인증」）があるので直す（本 WU は ADR を変更していない）。
+- `check-architecture-map.py` の 3 path を直す別 WU を起票する（既存不具合）。

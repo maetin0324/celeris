@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { ControlStatus } from "./browser-query";
 import { ControlBarView, type ControlBarViewProps, controlAnnouncement, controlButtons } from "./control-bar";
 import { liveEventItems, mergeLiveEvents } from "./live-events";
-import { liveViewState } from "./live-view-frame";
+import { LiveViewFrame, liveViewState } from "./live-view-frame";
 
 const NOW = 1_790_000_000;
 const status = (over: Partial<ControlStatus> = {}): ControlStatus => ({
@@ -173,6 +173,32 @@ describe("liveViewState", () => {
     expect(liveViewState({ taskId: "T1", runId: "R1", run, owner, authInterval: true })).toMatchObject({
       reason: "auth_interval",
     });
+  });
+
+  it("does not render an iframe for disabled live or a stopped run, and explains event monitoring", () => {
+    const disabled = liveViewState({
+      taskId: "T1",
+      runId: "R1",
+      run: { state: "RUNNING", live: { state: "disabled", reason: "relay_unavailable" } },
+      owner,
+      authInterval: false,
+    });
+    const disabledHtml = renderToStaticMarkup(<LiveViewFrame state={disabled} taskLabel="T1" />);
+    expect(disabledHtml).not.toContain('data-testid="browser-live-iframe"');
+    expect(disabledHtml).toContain("Live View の中継を利用できません。");
+    expect(disabledHtml).toContain("映像なし — イベントで監視中");
+    expect(disabledHtml).toContain('href="#browser-live-events"');
+
+    const waiting = liveViewState({
+      taskId: "T1",
+      runId: "R1",
+      run: { state: "WAITING_FOR_HUMAN", live_path: "/browser/live/T1/R1" },
+      owner,
+      authInterval: false,
+    });
+    const waitingHtml = renderToStaticMarkup(<LiveViewFrame state={waiting} taskLabel="T1" />);
+    expect(waiting).toEqual({ kind: "unavailable", reason: "not_running" });
+    expect(waitingHtml).not.toContain('data-testid="browser-live-iframe"');
   });
 });
 

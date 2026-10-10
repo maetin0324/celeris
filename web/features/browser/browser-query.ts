@@ -167,13 +167,17 @@ export function trustedDevicesQuery() {
   };
 }
 
-export function browserControlQuery(taskId: string, runId: string, sessionId: string) {
+export function browserControlQuery(taskId: string, runId: string, sessionId: string, runState?: string) {
   const path = `/browser/control/${id(taskId)}/${id(runId)}/${id(sessionId)}`;
   return {
     queryKey: browserKeys.control(taskId, runId, sessionId),
     queryFn: ({ signal }: { signal: AbortSignal }) =>
       gateway<{ ok: true; status: ControlStatus }>(path, "GET", undefined, signal),
-    refetchInterval: 2000,
+    refetchInterval: (query: { state: { error: unknown } }) => {
+      if (runState === "COMPLETED" || runState === "FAILED") return false;
+      if (query.state.error instanceof BrowserGatewayError && query.state.error.status === 404) return false;
+      return 2000;
+    },
   };
 }
 

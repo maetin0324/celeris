@@ -83,8 +83,7 @@ function OwnerContent({ owner }: { owner: OwnerSession }) {
   const active = items.filter(isActiveRun);
   const controls = useQueries({
     queries: active.map((run) => ({
-      ...browserControlQuery(run.task_id, run.run_id, run.session_id),
-      refetchInterval: 10000,
+      ...browserControlQuery(run.task_id, run.run_id, run.session_id, run.state),
       retry: false,
     })),
   });

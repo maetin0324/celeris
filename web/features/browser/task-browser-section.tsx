@@ -31,7 +31,7 @@ export function TaskBrowserSection({ detail }: { detail: TaskDetail }) {
   const active = (runs.data?.items ?? []).filter(isActiveRun);
   const controls = useQueries({
     queries: active.map((run) => ({
-      ...browserControlQuery(taskId, run.run_id, run.session_id),
+      ...browserControlQuery(taskId, run.run_id, run.session_id, run.state),
       retry: false,
     })),
   });

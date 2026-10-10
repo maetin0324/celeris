@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { BrowserActionGate, browserRunsQuery, sendControl } from "./browser-query";
+import {
+  BrowserActionGate,
+  BrowserGatewayError,
+  browserControlQuery,
+  browserRunsQuery,
+  sendControl,
+} from "./browser-query";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -32,5 +38,20 @@ describe("browser gateway requests", () => {
 
   it("never builds a browser run URL from a path-like task id", () => {
     expect(() => browserRunsQuery("../other")).toThrow(TypeError);
+  });
+
+  it("stops control polling for terminal runs and 404 responses", () => {
+    const terminal = browserControlQuery("T1", "R1", "S1", "COMPLETED").refetchInterval;
+    const active = browserControlQuery("T1", "R1", "S1", "RUNNING").refetchInterval;
+    expect(typeof terminal).toBe("function");
+    expect((terminal as (query: { state: { error: unknown } }) => number | false)({ state: { error: null } })).toBe(
+      false,
+    );
+    expect((active as (query: { state: { error: unknown } }) => number | false)({ state: { error: null } })).toBe(2000);
+    expect(
+      (active as (query: { state: { error: unknown } }) => number | false)({
+        state: { error: new BrowserGatewayError(404, "not_found") },
+      }),
+    ).toBe(false);
   });
 });

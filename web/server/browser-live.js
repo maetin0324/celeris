@@ -99,7 +99,22 @@ function isAuthWait(wait) {
   return wait.reason === "waiting_for_auth" || wait.credential != null || wait.operation?.action === "credential_use";
 }
 function safeRun(run) {
-  return run && typeof run === "object" && ID.test(run.run_id) && ID.test(run.session_id) && ID.test(run.task_id);
+  return (
+    run &&
+    typeof run === "object" &&
+    ID.test(run.run_id) &&
+    (run.session_id == null || ID.test(run.session_id)) &&
+    ID.test(run.task_id)
+  );
+}
+export function liveAvailability(run, upstream) {
+  if (["COMPLETED", "FAILED"].includes(run.state)) return { state: "disabled", reason: "not_running" };
+  if (run.state === "WAITING_FOR_AUTH") return { state: "disabled", reason: "auth_interval" };
+  if (!upstream) return { state: "disabled", reason: "relay_unavailable" };
+  if (!run.session_id || ["WAITING_FOR_HUMAN", "WAITING_FOR_APPROVAL"].includes(run.state))
+    return { state: "disabled", reason: "not_configured" };
+  if (run.state !== "RUNNING") return { state: "disabled", reason: "not_running" };
+  return { state: "link", href: `/browser/live/${run.task_id}/${run.run_id}` };
 }
 function pathFor(task, run, session, suffix) {
   return `/api/v1/tasks/${task}/browser/${suffix}/${run}/${session}`;
@@ -722,8 +737,14 @@ export function createBrowserLive({
         }
         const items = [];
         for (const id of tasks)
-          for (const run of await runs(id))
-            items.push({ ...safeJson(run), live_path: `/browser/live/${id}/${run.run_id}` });
+          for (const run of await runs(id)) {
+            const live = liveAvailability(run, upstream);
+            items.push({
+              ...safeJson(run),
+              live,
+              ...(live.state === "link" ? { live_path: live.href } : {}),
+            });
+          }
         res.json({ items });
       } catch {
         problem(res, 503, "celeris_unavailable");

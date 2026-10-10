@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { after, before, test } from "node:test";
 import { createApp } from "./app.js";
-import { parseLiveUpstream } from "./browser-live.js";
+import { liveAvailability, parseLiveUpstream } from "./browser-live.js";
 
 const dir = mkdtempSync(path.join(tmpdir(), "celeris-browser-live-"));
 const socketDir = mkdtempSync(
@@ -297,10 +297,37 @@ test("entry and safe dashboard API relay with no upstream headers or raw URL", a
   assert.equal(listing.includes("https://secret.example"), false);
   const all = await (await get("/browser/runs")).json();
   assert.equal(all.items[0].run_id, "R1");
+  assert.deepEqual(all.items[0].live, { state: "link", href: "/browser/live/T1/R1" });
+  assert.equal(all.items[0].live_path, all.items[0].live.href);
   assert.equal(JSON.stringify(all).includes("https://secret.example"), false);
   const relay = await (await get("/api/tasks/T1/events?types=browser_updated")).text();
   assert.equal(relay.includes("https://secret.example"), false);
   assert.match(relay, /"live_view_url":null/);
+});
+test("runs reports disabled live reasons for terminal, auth and stopped runs", async () => {
+  runState = "COMPLETED";
+  let item = (await (await get("/browser/runs?task_id=T1")).json()).items[0];
+  assert.deepEqual(item.live, { state: "disabled", reason: "not_running" });
+  assert.equal("live_path" in item, false);
+
+  runState = "WAITING_FOR_AUTH";
+  item = (await (await get("/browser/runs?task_id=T1")).json()).items[0];
+  assert.deepEqual(item.live, { state: "disabled", reason: "auth_interval" });
+  assert.equal("live_path" in item, false);
+
+  runState = "WAITING_FOR_HUMAN";
+  item = (await (await get("/browser/runs?task_id=T1")).json()).items[0];
+  assert.deepEqual(item.live, { state: "disabled", reason: "not_configured" });
+  assert.equal("live_path" in item, false);
+  runState = "RUNNING";
+});
+test("live availability disables runs when the relay is unavailable", () => {
+  for (const run of [
+    { task_id: "T1", run_id: "R1", session_id: "S1", state: "RUNNING" },
+    { task_id: "T1", run_id: "R2", session_id: null, state: "RUNNING" },
+  ]) {
+    assert.deepEqual(liveAvailability(run, null), { state: "disabled", reason: "relay_unavailable" });
+  }
 });
 test("ended run is rejected", async () => {
   runState = "COMPLETED";

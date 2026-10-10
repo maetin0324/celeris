@@ -85,6 +85,27 @@ fn relay(tcp: TcpStream, unix: UnixStream) {
     let _ = up.join();
 }
 
+/// The profile's initial preferences. Chrome (Chrome for Testing in the launcher) opens a PDF
+/// served inline in its built-in viewer instead of downloading it, so a `download` of a PDF link
+/// waited for a download that never began, and the tab was left on the viewer. With
+/// `always_open_pdf_externally` every PDF becomes an ordinary download (chrome-headless-shell has
+/// no viewer and already does this). An existing profile is left as it is.
+const PROFILE_PREFERENCES: &[u8] = br#"{"plugins":{"always_open_pdf_externally":true}}"#;
+
+fn prepare_profile(profile: &std::path::Path) -> std::io::Result<()> {
+    let default = profile.join("Default");
+    std::fs::create_dir_all(&default)?;
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(default.join("Preferences"))
+    {
+        Ok(mut file) => file.write_all(PROFILE_PREFERENCES),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
 fn main() -> ExitCode {
     // channel を検査し、子に継承させない。
     // SAFETY: fd 6 に対する fcntl だけ。
@@ -142,6 +163,10 @@ fn main() -> ExitCode {
                 });
             }
         });
+        if let Err(e) = prepare_profile(std::path::Path::new("/session/profile")) {
+            // Only the error kind crosses (no path or content).
+            eprintln!("sandboxd: profile preferences: {:?}", e.kind());
+        }
         let mut command = Command::new(chrome);
         command.args([
             "--headless",

@@ -639,6 +639,11 @@ fn handle(inner: &Arc<Inner>, req: Request, peer: &Peer) -> Response {
                 Err(code) => return err(code),
             };
             if !action_allowed(&entry.policy, verb, &args) {
+                // Fixed tokens only (付記 2026-10-10f).
+                eprintln!(
+                    "celeris-browser-launcher: action {verb:?} refused: session={} code=unauthorized launcher_reason=session_policy",
+                    entry.record.session_id
+                );
                 return err(ErrorCode::Unauthorized);
             }
             let e2 = entry.clone();
@@ -659,6 +664,10 @@ fn handle(inner: &Arc<Inner>, req: Request, peer: &Peer) -> Response {
                 },
                 Some(Err(code)) => err(code),
                 None => {
+                    eprintln!(
+                        "celeris-browser-launcher: action {verb:?} failed: session={} code=timeout launcher_reason=action_deadline",
+                        entry.record.session_id
+                    );
                     // 期限切れの session は止める（fail closed）。
                     remove_and_teardown(inner, &entry.record.session_id);
                     err(ErrorCode::Timeout)

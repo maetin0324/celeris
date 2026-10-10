@@ -29,8 +29,8 @@ use crate::browser_launcher::protocol::{
     POST_LOGIN_PROTOCOL, artifact_name_verb,
 };
 use crate::browser_launcher::{
-    ActionArgs, LauncherClient, Observation, Outcome, Receipt, SessionFacts, SessionPolicy,
-    SessionState, StartedSession, Verb,
+    ActionArgs, ClientError, ErrorCode, LauncherClient, Observation, Outcome, Receipt,
+    SessionFacts, SessionPolicy, SessionState, StartedSession, Verb,
 };
 use crate::{AdapterError, EventSink, RunLimits, RunOutcome, RunRequest, WorkerAdapter};
 
@@ -43,6 +43,34 @@ pub(crate) const ARTIFACT_LIMIT: &str = "browser_artifact_count_limit";
 pub(crate) const ARTIFACT_FAILED: &str = "browser_artifact_transfer_failed";
 /// screenshot / download の操作そのものが失敗した（他 origin の download の取消を含む）。
 pub(crate) const ARTIFACT_ACTION_FAILED: &str = "browser_artifact_action_failed";
+/// 付記 2026-10-10f: the launcher refused the verb (session policy, or the post-login read does
+/// not include it / observation is held after the login).
+pub(crate) const ARTIFACT_ACTION_REFUSED: &str = "browser_artifact_action_refused";
+/// The launcher's runner or action deadline expired.
+pub(crate) const ARTIFACT_ACTION_TIMEOUT: &str = "browser_artifact_action_timeout";
+/// The launcher's isolation check failed before the action ran.
+pub(crate) const ARTIFACT_ISOLATION_FAILED: &str = "browser_artifact_isolation_failed";
+/// The launcher could not be reached or answered outside the protocol.
+pub(crate) const ARTIFACT_LAUNCHER_UNAVAILABLE: &str = "browser_artifact_launcher_unavailable";
+
+/// The fixed reason for a failed launcher `action` of a screenshot / download (付記 2026-10-10f).
+/// `BadRequest` is the runner's failure (agent-browser or the relay's gate); the launcher journal
+/// has its fixed `runner_reason` / `error_class` / `gate` tokens.
+pub(crate) fn artifact_action_reason(code: Option<ErrorCode>) -> &'static str {
+    match code {
+        Some(ErrorCode::Unauthorized) => ARTIFACT_ACTION_REFUSED,
+        Some(ErrorCode::Timeout) => ARTIFACT_ACTION_TIMEOUT,
+        Some(ErrorCode::Limit) => ARTIFACT_LIMIT,
+        Some(ErrorCode::IsolationFailed) => ARTIFACT_ISOLATION_FAILED,
+        Some(
+            ErrorCode::BadRequest
+            | ErrorCode::LaunchFailed
+            | ErrorCode::LeaseMismatch
+            | ErrorCode::ArtifactRejected,
+        ) => ARTIFACT_ACTION_FAILED,
+        None => ARTIFACT_LAUNCHER_UNAVAILABLE,
+    }
+}
 
 /// 1 要求の読み書きの期限。launcher 側の最長（`action` 120 秒）より長く取る。
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(150);
@@ -145,12 +173,25 @@ impl LauncherRuntime {
         verb: Verb,
         args: ActionArgs,
     ) -> Result<(Receipt, Observation), &'static str> {
-        let mut client = self.client.lock().map_err(|_| UNAVAILABLE)?;
+        self.action_coded(verb, args).map_err(|_| UNAVAILABLE)
+    }
+
+    /// Like [`Self::action`], but a refusal keeps the launcher's fixed error code (`None`: no
+    /// protocol answer, or a receipt that does not hold).
+    pub(crate) fn action_coded(
+        &self,
+        verb: Verb,
+        args: ActionArgs,
+    ) -> Result<(Receipt, Observation), Option<ErrorCode>> {
+        let mut client = self.client.lock().map_err(|_| None)?;
         let (receipt, observation) = client
             .action(&self.session_id, &self.lease_id, verb, args)
-            .map_err(|_| UNAVAILABLE)?;
+            .map_err(|e| match e {
+                ClientError::Remote(code) => Some(code),
+                _ => None,
+            })?;
         if !receipt.isolation_ok || receipt.session_id != self.session_id {
-            return Err(UNAVAILABLE);
+            return Err(None);
         }
         Ok((receipt, observation))
     }
@@ -635,8 +676,8 @@ impl LauncherExecutor {
         }
         let (_receipt, observation) = self
             .runtime
-            .action(verb, args)
-            .map_err(|_| ARTIFACT_ACTION_FAILED)?;
+            .action_coded(verb, args)
+            .map_err(artifact_action_reason)?;
         let name = observation.artifact.as_deref().ok_or(ARTIFACT_FAILED)?;
         let (kind, bytes) = self.runtime.fetch_artifact(name, verb)?;
         write_artifact(&self.output.join(shim_name), &bytes).map_err(|_| ARTIFACT_FAILED)?;

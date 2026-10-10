@@ -68,6 +68,23 @@ if(tag==='iframe'||tag==='frame'){let d=null;try{d=e.contentDocument;}catch(_){}
 walk(document,0);return n;})()";
 /// Bound on events no agent connection has taken yet (oldest dropped first).
 const MAX_QUEUED_EVENTS: usize = 4096;
+/// Recent relay refusals kept for the launcher's failure log (付記 2026-10-10f).
+pub const MAX_AGENT_DENIALS: usize = 8;
+
+/// A CDP method name as it may appear in a log: `Domain.method` of ASCII letters, else `other`.
+pub fn loggable_method(method: &str) -> String {
+    let shaped = method.split_once('.').is_some_and(|(d, m)| {
+        (1..=32).contains(&d.len())
+            && (1..=64).contains(&m.len())
+            && d.bytes().all(|b| b.is_ascii_alphabetic())
+            && m.bytes().all(|b| b.is_ascii_alphabetic())
+    });
+    if shaped {
+        method.to_owned()
+    } else {
+        "other".to_owned()
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InjectionError {
@@ -576,6 +593,10 @@ pub struct CdpController {
     /// A denied download completed before its cancel took effect: observation stops for the rest
     /// of the session (fail closed; the file may already exist).
     download_breach: bool,
+    /// The most recent agent commands the relay refused, as (CDP method, fixed code), at most
+    /// [`MAX_AGENT_DENIALS`]. The launcher logs them when an action fails so a production failure
+    /// says which gate refused what (付記 2026-10-10f). Methods are reduced to a fixed shape.
+    agent_denials: std::collections::VecDeque<(String, &'static str)>,
     /// Test-only: every agent command method, in order.
     #[cfg(test)]
     pub(crate) agent_log: Vec<String>,
@@ -618,6 +639,7 @@ impl CdpController {
             private_sessions: std::collections::HashSet::new(),
             denied_downloads: std::collections::HashSet::new(),
             download_breach: false,
+            agent_denials: std::collections::VecDeque::new(),
             #[cfg(test)]
             agent_log: Vec::new(),
             #[cfg(feature = "attack-test-hooks")]
@@ -885,6 +907,21 @@ impl CdpController {
             self.post_login_gate(s)?;
         }
         Ok(reply)
+    }
+
+    /// Record a relay refusal of an agent command (fixed code; the method is reduced by
+    /// [`loggable_method`]). Only the last [`MAX_AGENT_DENIALS`] are kept.
+    pub fn record_agent_denial(&mut self, method: &str, code: &'static str) {
+        if self.agent_denials.len() >= MAX_AGENT_DENIALS {
+            self.agent_denials.pop_front();
+        }
+        self.agent_denials
+            .push_back((loggable_method(method), code));
+    }
+
+    /// The refusals recorded since the last call, oldest first.
+    pub fn take_agent_denials(&mut self) -> Vec<(String, &'static str)> {
+        self.agent_denials.drain(..).collect()
     }
 
     /// Whether the session's auth section closed on the post-login conditions.
@@ -1657,6 +1694,7 @@ return out;}})()"
             let guid = guid.to_owned();
             self.send_untracked("Browser.cancelDownload", json!({"guid":guid}));
             self.denied_downloads.insert(guid);
+            self.record_agent_denial("Browser.downloadWillBegin", "download_origin_denied");
         }
         if matches!(
             value["method"].as_str(),
@@ -1668,6 +1706,7 @@ return out;}})()"
         {
             self.download_breach = true;
             self.events.clear();
+            self.record_agent_denial("Browser.downloadProgress", "download_breach");
         }
         if [&value["sessionId"], &value["params"]["sessionId"]]
             .iter()
@@ -2258,6 +2297,40 @@ mod idle_pump_tests {
         assert_eq!(
             events.last().expect("last event")["params"]["index"],
             MAX_QUEUED_EVENTS
+        );
+    }
+
+    /// 付記 2026-10-10f: the relay's refusals are kept for the launcher's failure line, bounded and
+    /// with methods reduced to `Domain.method`; an other-origin download is recorded when cancelled.
+    #[test]
+    fn agent_denials_are_bounded_fixed_and_include_cancelled_downloads() {
+        let (mut controller, _browser) = controller();
+        controller.record_agent_denial("Page.captureScreenshot", "observation_origin_denied");
+        controller.record_agent_denial("Runtime.evaluate\nhttps://x/?sid=1", "cdp_command_denied");
+        assert_eq!(
+            controller.take_agent_denials(),
+            vec![
+                (
+                    "Page.captureScreenshot".to_owned(),
+                    "observation_origin_denied"
+                ),
+                ("other".to_owned(), "cdp_command_denied"),
+            ]
+        );
+        assert!(controller.take_agent_denials().is_empty());
+        for _ in 0..(MAX_AGENT_DENIALS + 3) {
+            controller.record_agent_denial("DOM.getDocument", "password_field_present");
+        }
+        assert_eq!(controller.take_agent_denials().len(), MAX_AGENT_DENIALS);
+        controller.post_login = Some(vec!["https://lms.test".into()]);
+        controller.queue_event(json!({"method":"Browser.downloadWillBegin","params":{
+            "guid":"g1","url":"https://files.other.test/a.pdf","frameId":"F"}}));
+        assert_eq!(
+            controller.take_agent_denials(),
+            vec![(
+                "Browser.downloadWillBegin".to_owned(),
+                "download_origin_denied"
+            )]
         );
     }
 

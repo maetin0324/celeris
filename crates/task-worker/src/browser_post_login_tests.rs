@@ -373,7 +373,7 @@ async fn daemon_post_login_pair_login_reads_lms_and_refuses_idp_other_and_passwo
         "auth_section_required"
     );
     let owned: Vec<String> = read.iter().map(|s| s.to_string()).collect();
-    await_post_login(&w.fx.controller, &tab, &owned, POST_LOGIN_TIMEOUT)
+    await_post_login(&w.fx.controller, &tab, &w.o.idp, &owned, POST_LOGIN_TIMEOUT)
         .await
         .expect("post-login conditions");
     w.controller()
@@ -502,7 +502,7 @@ async fn daemon_post_login_pair_login_reads_lms_and_refuses_idp_other_and_passwo
     // Session expiry sends the tab back to the IdP form: nothing is readable there.
     agent.goto(
         &format!("{}/ct/logout", w.o.lms),
-        &format!("{}/idp/form", w.o.idp),
+        &format!("{}/idp/profile/SAML2/Unsolicited/SSO", w.o.idp),
     );
     assert_eq!(
         code(agent.eval("document.body.innerText")),
@@ -529,12 +529,35 @@ async fn daemon_post_login_pair_login_reads_lms_and_refuses_idp_other_and_passwo
     assert!(seen.contains("Report 1"));
 }
 
-/// D2-2: the auth section stays closed to observation (`post_login_unconfirmed`) when the login does
-/// not land on a read origin without a password field: the IdP refuses the login, the SP lands on a
-/// page with a password field, or the landing origin is not a read origin.
+/// D2-2 / 付記 2026-10-10: the auth section stays closed to observation when the login does not
+/// land on a read origin without a password field, and the held reason names the condition: an
+/// IdP consent page (ends early), the IdP's login form again (ends early), a password field on the
+/// landing page, a landing origin that is not a read origin.
 #[tokio::test]
-async fn daemon_post_login_unconfirmed_keeps_observation_stopped() {
-    for case in ["reject", "landing_pw", "other_origin"] {
+async fn daemon_post_login_unconfirmed_keeps_observation_stopped_and_names_the_reason() {
+    use crate::browser_cdp_sink::PostLoginHeld;
+    for (case, timeout, want) in [
+        (
+            "consent",
+            Duration::from_secs(30),
+            PostLoginHeld::ConsentRequired,
+        ),
+        (
+            "reject",
+            Duration::from_secs(30),
+            PostLoginHeld::IdpLoginForm,
+        ),
+        (
+            "landing_pw",
+            Duration::from_secs(4),
+            PostLoginHeld::PasswordField,
+        ),
+        (
+            "other_origin",
+            Duration::from_secs(4),
+            PostLoginHeld::OtherOrigin,
+        ),
+    ] {
         let w = world();
         if case != "other_origin" {
             std::fs::write(w.fx.directory.path().join(case), "1").expect("flag");
@@ -552,11 +575,21 @@ async fn daemon_post_login_unconfirmed_keeps_observation_stopped() {
             .await
             .expect("login submitted");
         assert_eq!(w.received(), format!("{USER}\n{SECRET}"), "{case}");
+        let started = Instant::now();
         assert_eq!(
-            await_post_login(&w.fx.controller, &tab, &read, Duration::from_millis(1500)).await,
-            Err("post_login_unconfirmed"),
+            await_post_login(&w.fx.controller, &tab, &w.o.idp, &read, timeout).await,
+            Err(want),
             "{case}"
         );
+        if matches!(
+            want,
+            PostLoginHeld::ConsentRequired | PostLoginHeld::IdpLoginForm
+        ) {
+            assert!(
+                started.elapsed() < Duration::from_secs(15),
+                "{case} ends early"
+            );
+        }
         let mut c = w.controller();
         assert!(c.auth_section_active(), "{case}");
         assert!(!c.post_login_active(), "{case}");
@@ -567,4 +600,35 @@ async fn daemon_post_login_unconfirmed_keeps_observation_stopped() {
         );
         assert!(c.take_agent_events().is_empty(), "{case}");
     }
+}
+
+/// 付記 2026-10-10 (production 2026-10-10): a Shibboleth-shaped flow — localStorage interstitial
+/// auto-POST before the form, then a localStorage write interstitial and a SAML auto-POST after
+/// it, each post-login hop taking 9 s — still closes the section once the LMS is reached (the old
+/// 15 s limit would have held it).
+#[tokio::test]
+async fn daemon_post_login_waits_through_slow_shibboleth_hops() {
+    let w = world();
+    std::fs::write(w.fx.directory.path().join("slow_ms"), "9000").expect("slow");
+    let read = vec![w.o.lms.clone()];
+    let trusted = trusted(&w.o, &[w.o.lms.as_str()]);
+    let mut broker = PairBroker::default();
+    let tab = w.login(&trusted, &mut broker).await.expect("login");
+    assert_eq!(w.received(), format!("{USER}\n{SECRET}"));
+    let started = Instant::now();
+    await_post_login(&w.fx.controller, &tab, &w.o.idp, &read, POST_LOGIN_TIMEOUT)
+        .await
+        .expect("reaches the LMS through the IdP hops");
+    assert!(
+        started.elapsed() > Duration::from_secs(15),
+        "the hops took longer than 15 s"
+    );
+    // Observation was stopped the whole time: nothing was queued for agents.
+    assert!(w.controller().take_agent_events().is_empty());
+    w.controller()
+        .resume_after_login(&tab.own, read)
+        .expect("resume");
+    let mut agent = Agent::attach(&w.fx.controller, &w.target);
+    let text = agent.eval("document.body.innerText").expect("extract");
+    assert!(text.as_str().is_some_and(|t| t.contains("Report 1")));
 }

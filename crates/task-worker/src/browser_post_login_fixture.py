@@ -1,9 +1,12 @@
 """Loopback-only IdP + LMS fixture (ADR 2026-10-09 credential username / post-login).
 
-Three HTTPS origins: the IdP (username and password on one form, not at the origin root), the LMS
-("manaba"-like assignment list behind a session cookie) and an unrelated origin. Files in the
-working directory steer the flow: `reject` makes the IdP refuse the login, `landing_pw` lands the
-SP on a page with a password field. `received` records what the IdP got (for the test only).
+Three HTTPS origins: the IdP (Shibboleth-shaped: the login URL redirects to a localStorage
+interstitial that auto-POSTs before the username + password form; after the form another
+localStorage interstitial and a SAML auto-POST page lead to the SP), the LMS ("manaba"-like
+assignment list behind a session cookie) and an unrelated origin. Files in the working directory
+steer the flow: `reject` makes the IdP show the login form again, `consent` stops on an
+attribute-release consent page, `landing_pw` lands the SP on a page with a password field,
+`slow_ms` delays each post-login auto-POST hop. `received` records what the IdP got (test only).
 """
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -13,6 +16,28 @@ import threading
 from urllib.parse import parse_qs
 
 COOKIE = 'sid=lms-session-cookie-7f3a'
+SSO = '/idp/profile/SAML2/Unsolicited/SSO'
+LOGIN_FORM = '''<body><h1>Unified login</h1>
+<form method=post action="/idp/profile/SAML2/Unsolicited/SSO?execution=e1s2">
+<input name=j_username type=text autocomplete=username>
+<input name=j_password type=password autocomplete=current-password>
+<input type=checkbox name=donotcache value=1>
+<button name=_eventId_proceed>Login</button></form>'''
+
+
+def slow_ms():
+    try:
+        return int(Path('slow_ms').read_text())
+    except (OSError, ValueError):
+        return 0
+
+
+def interstitial(action, delay):
+    return f'''<body>Loading Session Information<form name=form1 method=post action="{action}">
+<input type=hidden name="shib_idp_ls_exception.shib_idp_session_ss" value="">
+<input type=hidden name="shib_idp_ls_success.shib_idp_session_ss" value="true">
+<input type=hidden name="_eventId_proceed" value=""></form>
+<script>setTimeout(function(){{document.form1.submit()}},{delay})</script>'''
 
 
 def received():
@@ -50,12 +75,10 @@ class Handler(BaseHTTPRequestHandler):
         me = self.origin()
         if me == idp_origin:
             if self.path == '/idp/login':
-                self.send('', 302, '/idp/form?execution=e1s1')
-            elif self.path.startswith('/idp/form'):
-                self.send('''<body><h1>Unified login</h1><form method=post action="/idp/submit">
-<input name=j_username type=text autocomplete=username>
-<input name=j_password type=password autocomplete=current-password>
-<button name=_eventId_proceed>Login</button></form>''')
+                self.send('', 302, SSO + '?execution=e1s1')
+            elif self.path.startswith(SSO + '?execution=e1s1'):
+                # localStorage interstitial (no password field), auto-POST to the same step.
+                self.send(interstitial(SSO + '?execution=e1s1', 0))
             else:
                 self.send('<body>IdP home (no form here)')
         elif me == lms_origin:
@@ -105,20 +128,33 @@ class Handler(BaseHTTPRequestHandler):
         data = self.rfile.read(int(self.headers.get('Content-Length', '0'))).decode()
         form = parse_qs(data)
         me = self.origin()
-        if me == idp_origin and self.path == '/idp/submit':
+        if me == idp_origin and self.path == SSO + '?execution=e1s1':
+            self.send(LOGIN_FORM)
+        elif me == idp_origin and self.path == SSO + '?execution=e1s2':
             user = form.get('j_username', [''])[0]
             password = form.get('j_password', [''])[0]
             Path('received.tmp').write_text(user + '\n' + password)
             Path('received.tmp').replace('received')
             if Path('reject').exists() or not user or not password:
-                self.send('''<body><p>Login failed</p><form method=post action="/idp/submit">
-<input name=j_username type=text><input name=j_password type=password>
-<button name=_eventId_proceed>Login</button></form>''')
+                self.send(LOGIN_FORM.replace('<h1>', '<p>Login failed</p><h1>'))
                 return
-            self.send(f'''<body><form name=saml method=post action="{lms_origin}/sp">
-<input type=hidden name=SAMLResponse value="assertion-ok"></form>
-<script>document.saml.submit()</script>''')
-        elif me == lms_origin and self.path == '/sp':
+            # localStorage write interstitial after the login, then consent or the SAML POST.
+            self.send(interstitial(SSO + '?execution=e1s3', slow_ms()))
+        elif me == idp_origin and self.path == SSO + '?execution=e1s3':
+            if Path('consent').exists():
+                self.send('''<body><h1>Information to be provided to the service</h1>
+<form method=post action="/idp/profile/SAML2/Unsolicited/SSO?execution=e1s4">
+<input type=checkbox name=_shib_idp_consentIds value=uid checked>
+<input type=radio name=_shib_idp_consentOptions value=_shib_idp_doNotRememberConsent>
+<input type=radio name=_shib_idp_consentOptions value=_shib_idp_rememberConsent checked>
+<input type=submit name=_eventId_AttributeReleaseRejected value=Reject>
+<input type=submit name=_eventId_proceed value=Accept></form>''')
+                return
+            self.send(f'''<body onload="setTimeout(function(){{document.forms[0].submit()}},{slow_ms()})">
+<form method=post action="{lms_origin}/Shibboleth.sso/SAML2/POST">
+<input type=hidden name=RelayState value="cookie">
+<input type=hidden name=SAMLResponse value="assertion-ok"></form>''')
+        elif me == lms_origin and self.path == '/Shibboleth.sso/SAML2/POST':
             landing = '/ct/settings' if Path('landing_pw').exists() else '/ct/home'
             self.send('', 302, landing, [('Set-Cookie', COOKIE + '; Path=/; Secure; HttpOnly')])
         else:

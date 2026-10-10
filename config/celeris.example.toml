@@ -510,6 +510,10 @@ interval_secs = 30                                # 判定と送信の間隔（�
 # 従来の既定のまま）。/local へ移した本番の値:
 #   workspace_root = "/local/celeris/data/workspaces"
 #   [db] path = "/local/celeris/data/db/celeris.sqlite3"   backup_dir = "/local/celeris/state/backups"
+#   backup_keep = 48                 # 直近世代（既定）
+#   backup_daily_keep = 7            # UTC 日次の最新世代
+#   backup_weekly_keep = 4           # ISO 週次の最新世代
+#   backup_max_total_bytes = 68719476736 # 既知の DB backup 合計上限（64 GiB）
 #   [workspace] build_cache_dir = "/local/celeris/data/build-cache"   [scratch] dir = "/local/celeris/data/scratch"
 #   [containers] build_dir = "/local/celeris/data/containers"   [memory] dir = "/local/celeris/data/memory"
 #   [selfdeploy] releases_dir = "/local/celeris/state/releases"

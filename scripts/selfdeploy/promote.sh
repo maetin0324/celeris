@@ -601,4 +601,11 @@ rm -f "$PREVIEW_JSON" 2>/dev/null || true
 sd_log "promoted.json: $REL/promoted.json (mode=$MODE from=${OLD:-<none>})"
 
 sd_log "promoted $SHA12 (mode=$MODE). backup: $BACKUP"
+# 昇格前・rollback 前 backup の保持（ADR 2026-10-10-local-disk-growth-paths D4）。失敗しても昇格は失敗にしない。
+PRUNE_BACKUPS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/prune-backups.sh"
+if sh "$PRUNE_BACKUPS" "$SD_BACKUPS" >>"$SD_LOG_FILE" 2>&1; then
+  sd_log "prune-backups: ok (see $SD_LOG_FILE)"
+else
+  sd_log "warning: prune-backups.sh $SD_BACKUPS failed (exit $?); no backup was pruned or only some were — see $SD_LOG_FILE"
+fi
 sd_log "the working checkout was NOT touched. If main is behind this release, a human runs: git -C $SD_REPO merge --ff-only $SHA12"

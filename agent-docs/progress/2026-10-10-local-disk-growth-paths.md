@@ -33,3 +33,10 @@ updated: 2026-10-10
 ## 提案
 
 後続の `worker-target-env`、`repo-target-gc`、`release-prune`、`backup-retention` を ADR の表に記した担当範囲と試験 prefix で実装する。適用前に dry-run と復元点の integrity check を確認し、release-build lease の再作成時間を運用枠に含める。
+
+## 実装の記録（backup-retention）
+
+- promote 側: [promote-prune.md](2026-10-10-local-disk-growth-paths/promote-prune.md)
+- 定期側: [periodic-retention.md](2026-10-10-local-disk-growth-paths/periodic-retention.md)
+- 試験の既存 `backup_once` の 48 時間規則への合わせ: [fix-backup-once-test.md](2026-10-10-local-disk-growth-paths/fix-backup-once-test.md)
+- ADR の実装付記（D4 節）: [ADR](../adr/2026-10-10-local-disk-growth-paths.md)

@@ -54,6 +54,14 @@ task `01M4D7RVKX` は 2026-10-09 08:01 に終端したものとして調査し�
 
 promote 前 backup は直近10本を既定保持し、rollback 用 backup は直近3本を別枠で保持する。定期 backup は直近48時間分に加え、日次7本・週次4本（UTC日/ISO週ごとの最新）を残す。全 `.sqlite3` backup の使用量上限は64 GiBを既定とし、超過時は保持集合の古い periodic から先に削除し、次に promote の古いものを削除する。rollback 用直近3本と各種の最新1本は保護する。削除を始める前に最新 backup 1個を read-only で `PRAGMA integrity_check` し、結果が `ok` 以外または検査失敗なら削除を一切行わない。既存 `backup_keep=48` は互換のため直近 hourly 本数として扱う。
 
+#### 実装付記（backup-retention、2026-10-10）
+
+実装の記録は `agent-docs/progress/2026-10-10-local-disk-growth-paths/promote-prune.md`（promote 側）と `periodic-retention.md`（定期側）。本節の名前は両葉の実装と試験から取った。
+
+- promote 側: `scripts/selfdeploy/prune-backups.sh <backups_dir>` が `<YYYYMMDD-HHMMSS>-pre-<12 桁 hex>.sqlite3` を既定 10 本、`<TS>-pre-rollback.sqlite3` を既定 3 本（別枠）残す。上書きは環境変数 `CELERIS_PROMOTE_BACKUP_KEEP` / `CELERIS_ROLLBACK_BACKUP_KEEP`（正の整数のみ。不正値は何も消さず exit 1）。`scripts/selfdeploy/promote.sh` は成功末尾で `sh prune-backups.sh "$SD_BACKUPS"` を呼ぶ（失敗は warning のみで昇格は失敗にしない）。削除候補のある型ごとに残す最新 1 個へ `sqlite3 'file:<path>?mode=ro' 'PRAGMA integrity_check;'` をかけ、どれか 1 つでも `ok` でなければ両型とも 1 本も消さない。試験は `scripts/selfdeploy/tests/promote_backup_retention.sh`（引数なし、一時 dir と sqlite3 だけ）の `promote_backup_retention_default_keeps_10`・`_env_override`・`_rollback_separate_3`・`_other_files_untouched`・`_integrity_failure_deletes_nothing`・`_promote_calls_prune`。
+- 定期側: `crates/celeris/src/db_maintenance.rs` の `plan_backup_retention`（時刻と一覧を引数で受ける純関数。直近 `keep` 本・48 時間以内の全世代・UTC 日次・ISO 週次を残す）、`prune_backups` → `prune_backups_with_check`（`integrity_check` を注入できる形）、`integrity_check`（read-only の `PRAGMA integrity_check`）。最新の認識済み backup 1 個が `ok` でなければ警告を出して刈り込みを行わない。合計上限は同じ経路で、定期 backup を先に、次に promote 型の古いものから削る。各型の最新 1 本と rollback 直近 3 本は保護する。設定は `config/celeris.example.toml` の `[db]` にある `backup_daily_keep`（既定 7）・`backup_weekly_keep`（既定 4）・`backup_max_total_bytes`（既定 64 GiB）。`backup_keep`（既定 48）は直近 hourly 本数。既定値は `crates/celeris/src/config/db.rs` の `default_db_backup_*`、読み込みの試験は `crates/celeris/src/config/tests.rs` の `db_accepts_both_the_bare_path_string_and_the_table_form`。試験は接頭辞 `backup_retention_` で `crates/celeris/src/db_maintenance/tests.rs` の `backup_retention_daily_and_weekly_generations_are_kept`・`_keeps_every_backup_inside_48_hours`・`_total_limit_prunes_periodic_before_promote`・`_protects_latest_per_kind_and_three_rollbacks`・`_integrity_failure_skips_all_deletions`・`_ignores_other_file_names`（時計は注入）。
+- 差分（本付記で確定した事実）: 合計 byte 上限は定期側の刈り込みだけが見る。`prune-backups.sh` は本数だけを見るので、promote 側だけで上限を超えても上限による削除は起きない。`rollback.sh` は `pre-rollback` backup を作るが prune を呼ばない（次の promote で刈られる）。
+
 ### D5. disk 使用量の見積り
 
 filesystem の圧迫は同一 mount の `statvfs` 空き容量差分で評価する。lease/target 単位は保存済み `size_bytes` または block 数を使い、再帰 `du` を各観測で起動しない。共有 filesystem の statvfs 差分は他利用者の書込みも含むので、個別 lease の帰属量と混同しない。

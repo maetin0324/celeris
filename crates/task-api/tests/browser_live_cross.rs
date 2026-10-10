@@ -487,8 +487,20 @@ fn sign(
     owner: &str,
     is_owner: bool,
 ) -> Value {
+    sign_with_origin(key, task, run, browser, owner, is_owner, true)
+}
+
+fn sign_with_origin(
+    key: &ring::signature::Ed25519KeyPair,
+    task: &str,
+    run: &str,
+    browser: &str,
+    owner: &str,
+    is_owner: bool,
+    origin_ok: bool,
+) -> Value {
     let payload = json!({"task_id":task,"run_id":run,"browser_session_id":browser,
-        "owner_session_id":owner,"owner_session":is_owner,"origin_ok":true,
+        "owner_session_id":owner,"owner_session":is_owner,"origin_ok":origin_ok,
         "expires_at":OffsetDateTime::now_utc().unix_timestamp()+30})
     .to_string();
     let signature: String = key
@@ -959,5 +971,71 @@ async fn browser_live_frame_auth_section_owner_only_api_stream() {
     );
 
     drop(stream);
+    h.stop().await;
+}
+
+/// ADR-0080 D6 / ADR-0100 D2: Live View grant は本人の task/run/session に限り、
+/// frame relay は読み取り専用。launcher run への input/takeover 要求は API で拒否され、
+/// CDP の input command へ到達しない。
+#[tokio::test]
+async fn browser_live_view_existing_takeover_policy() {
+    let mut h = Harness::new().await;
+    let proof = sign(&h.key, &h.id, RUN, BROWSER, OWNER, true);
+    let grant = send(
+        &h.app,
+        post_admin(
+            &path(&h.id, RUN, BROWSER, "grant"),
+            &json!({"assertion":proof}),
+        ),
+    )
+    .await;
+    assert_eq!(grant.status, 200, "{}", grant.text());
+    assert_eq!(grant.json()["frames_available"], true);
+
+    // D6/D2 の既存 owner・Origin 判定は grant の入口で fail closed。
+    for (name, assertion, problem) in [
+        (
+            "not owner session",
+            sign(&h.key, &h.id, RUN, BROWSER, OWNER, false),
+            "not_owner_session",
+        ),
+        (
+            "origin mismatch",
+            sign_with_origin(&h.key, &h.id, RUN, BROWSER, OWNER, true, false),
+            "origin_mismatch",
+        ),
+    ] {
+        let denied = send(
+            &h.app,
+            post_admin(
+                &path(&h.id, RUN, BROWSER, "grant"),
+                &json!({"assertion":assertion}),
+            ),
+        )
+        .await;
+        assert_problem(&denied, 403, problem);
+        assert!(
+            !contains(&denied.body, b"grant_id"),
+            "{name} received a grant"
+        );
+    }
+
+    // task-api は read/check/events/frames のみを公開し、input/takeover route はない。
+    // 既存の grant を添えた要求も 404 で拒否し、launcher/CDP へ転送しない。
+    let proof = sign(&h.key, &h.id, RUN, BROWSER, OWNER, true);
+    let relay = json!({"assertion":proof,"grant_id":grant.json()["grant_id"]});
+    for operation in ["input", "takeover"] {
+        let denied = send(
+            &h.app,
+            post_admin(&path(&h.id, RUN, BROWSER, operation), &relay),
+        )
+        .await;
+        assert_eq!(denied.status, 404, "{operation}: {}", denied.text());
+    }
+    let methods = h.launcher.session(0).cdp.methods();
+    assert!(
+        !methods.iter().any(|method| method.starts_with("Input.")),
+        "input reached CDP: {methods:?}"
+    );
     h.stop().await;
 }

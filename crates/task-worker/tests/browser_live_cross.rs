@@ -23,6 +23,7 @@ use std::time::Duration;
 use base64::Engine as _;
 use serde_json::{Value, json};
 use task_core::browser_isolation::LiveSessionEntry as _;
+use task_core::browser_live::LiveEvent;
 use task_core::browser_live_frame::LatestFrameSlot;
 use task_worker::browser::launcher_cross_test_support::{DaemonLauncherSession, open_frame_relay};
 use task_worker::browser_cdp_sink::CdpController;
@@ -37,7 +38,9 @@ use task_worker::browser_launcher::{
     Registry, Request, Response, ServerConfig, ServerHandle, SessionBackend, SessionFacts,
     SessionPolicy, SessionState, StartRequest, Verb,
 };
-use task_worker::browser_live::{LIVE_NO_FRAMES_REASON, LiveFrameRegistration};
+use task_worker::browser_live::{
+    CollectingSink, LIVE_NO_FRAMES_REASON, LiveEmitter, LiveFrameRegistration,
+};
 
 /// 長い保険（出来事待ちが来なかったときだけ効く）。
 const INSURANCE: Duration = Duration::from_secs(30);
@@ -617,6 +620,144 @@ pub async fn daemon_credential_login(
 
 fn has_input_command(methods: &[String]) -> bool {
     methods.iter().any(|m| m.starts_with("Input."))
+}
+
+#[tokio::test]
+async fn browser_live_frame_auth_section_owner_only_credential_login() {
+    let launcher = FakeLauncher::new();
+    let sock = launcher.sock.clone();
+    let (daemon, attestation) =
+        blocking(move || DaemonLauncherSession::start(&sock, "t-auth", "r-auth", policy()))
+            .await
+            .expect("session");
+    let daemon = Arc::new(daemon);
+    let probe = launcher.session(0);
+    let sock = launcher.sock.clone();
+    let d = Arc::clone(&daemon);
+    let relay = blocking(move || d.open_live_frames(&sock)).await;
+    let reg = LiveFrameRegistration::register(
+        None,
+        "auth-owner",
+        ("t-auth".into(), "r-auth".into()),
+        attestation,
+        relay,
+    );
+    let slot = reg.entry().live_frames().expect("owner frame slot");
+
+    let sink = CollectingSink::default();
+    let emitter = LiveEmitter::new(sink);
+    let _auth = emitter.auth_section();
+    assert!(!emitter.emit(&LiveEvent::Frame {
+        bytes: b"AUTH-SECRET-FRAME".to_vec()
+    }));
+    assert!(!emitter.emit(&LiveEvent::Status {
+        state: "login".into()
+    }));
+
+    let (status, login) = daemon_credential_login(&daemon, "auth-owner-section").await;
+    assert_eq!(status, AuthenticationStatus::Success);
+    assert_eq!(login.observation, LoginObservation::Resumed);
+    assert_eq!(probe.auth_begun.load(Ordering::SeqCst), 1);
+    assert_eq!(probe.logins.load(Ordering::SeqCst), 1);
+    probe.cdp.push_frame(b"AUTH-SECRET-FRAME");
+    assert_eq!(
+        next_body(&slot).await.as_deref(),
+        Some(&b"AUTH-SECRET-FRAME"[..])
+    );
+    assert!(
+        emitter.sink().events().is_empty(),
+        "auth section events must not persist"
+    );
+    let d = Arc::clone(&daemon);
+    let (_, tool_result) = blocking(move || d.action(Verb::Snapshot, ActionArgs::default()))
+        .await
+        .expect("action");
+    assert!(
+        !tool_result
+            .text
+            .unwrap_or_default()
+            .contains("AUTH-SECRET-FRAME")
+    );
+
+    drop(reg);
+    let d = Arc::clone(&daemon);
+    blocking(move || d.stop()).await.expect("stop");
+}
+
+#[tokio::test]
+async fn browser_live_frame_no_persist_secret_marker_or_frame_bytes() {
+    fn collect_files(dir: &Path, out: &mut Vec<PathBuf>) {
+        for entry in std::fs::read_dir(dir).expect("read dir") {
+            let path = entry.expect("entry").path();
+            if path.is_dir() {
+                collect_files(&path, out);
+            } else {
+                out.push(path);
+            }
+        }
+    }
+    let launcher = FakeLauncher::new();
+    let artifacts = launcher.dir.path().join("artifacts");
+    std::fs::create_dir(&artifacts).expect("artifacts dir");
+    let sock = launcher.sock.clone();
+    let (daemon, attestation) =
+        blocking(move || DaemonLauncherSession::start(&sock, "t-private", "r-private", policy()))
+            .await
+            .expect("session");
+    let daemon = Arc::new(daemon);
+    let probe = launcher.session(0);
+    let sock = launcher.sock.clone();
+    let d = Arc::clone(&daemon);
+    let relay = blocking(move || d.open_live_frames(&sock)).await;
+    let reg = LiveFrameRegistration::register(
+        None,
+        "private-frame",
+        ("t-private".into(), "r-private".into()),
+        attestation,
+        relay,
+    );
+    let slot = reg.entry().live_frames().expect("frame slot");
+    let marker = b"PRIVATE_FRAME_MARKER_7e91";
+    probe.cdp.push_frame(marker);
+    let received = next_body(&slot).await.expect("frame");
+    assert_eq!(received, marker);
+
+    let emitter = LiveEmitter::new(CollectingSink::default());
+    assert!(!emitter.emit(&LiveEvent::Frame {
+        bytes: received.clone()
+    }));
+    assert!(emitter.sink().events().is_empty());
+    let d = Arc::clone(&daemon);
+    let (_, outcome) = blocking(move || d.action(Verb::Snapshot, ActionArgs::default()))
+        .await
+        .expect("action");
+    assert!(
+        !outcome
+            .text
+            .unwrap_or_default()
+            .contains("PRIVATE_FRAME_MARKER_7e91")
+    );
+    assert!(outcome.artifact.is_none());
+
+    let mut files = Vec::new();
+    collect_files(launcher.dir.path(), &mut files);
+    for path in files {
+        if !std::fs::metadata(&path).expect("metadata").is_file() {
+            continue;
+        }
+        let bytes = std::fs::read(&path).expect("file");
+        assert!(
+            !bytes.windows(marker.len()).any(|w| w == marker),
+            "marker persisted in {path:?}"
+        );
+        assert!(
+            !bytes.windows(received.len()).any(|w| w == received),
+            "frame bytes persisted in {path:?}"
+        );
+    }
+    drop(reg);
+    let d = Arc::clone(&daemon);
+    blocking(move || d.stop()).await.expect("stop");
 }
 
 // ---- 互換表: v8 daemon × v7 launcher ----

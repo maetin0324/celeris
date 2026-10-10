@@ -218,6 +218,41 @@ impl LauncherClient {
         }
     }
 
+    /// v8: one chunk of an artifact (`kind`, whole `size`, decoded bytes from `offset`). The answer
+    /// must echo the name and offset; anything else is a protocol error (no body text is kept).
+    pub fn fetch_artifact(
+        &mut self,
+        session_id: &str,
+        lease_id: &str,
+        name: &str,
+        offset: u64,
+    ) -> Result<super::server::ArtifactChunk, ClientError> {
+        use base64::Engine as _;
+        match self.request(&Request::FetchArtifact {
+            session_id: session_id.into(),
+            lease_id: lease_id.into(),
+            name: name.into(),
+            offset,
+        })? {
+            Response::Artifact {
+                name: got,
+                kind,
+                size,
+                offset: at,
+                data,
+            } if got == name && at == offset => {
+                let data = base64::engine::general_purpose::STANDARD
+                    .decode(data.as_bytes())
+                    .map_err(|_| ClientError::Protocol("artifact chunk is not base64".into()))?;
+                Ok(super::server::ArtifactChunk { kind, size, data })
+            }
+            Response::Artifact { .. } => Err(ClientError::Protocol(
+                "artifact chunk does not match the request".into(),
+            )),
+            other => Err(unexpected("artifact", &other)),
+        }
+    }
+
     pub fn observe(
         &mut self,
         session_id: &str,
@@ -295,6 +330,10 @@ impl LauncherClient {
 const RAW_EXCERPT_MAX: usize = 512;
 
 fn raw_excerpt(body: &[u8]) -> String {
+    // v8: an artifact chunk carries file bytes; never copy them into a diagnostic.
+    if body.windows(17).any(|w| w == br#""type":"artifact""#) {
+        return "(artifact chunk withheld)".into();
+    }
     let text = String::from_utf8_lossy(body);
     match text.char_indices().nth(RAW_EXCERPT_MAX) {
         Some((cut, _)) => format!("{}…", &text[..cut]),
@@ -310,6 +349,7 @@ fn unexpected(want: &str, got: &Response) -> ClientError {
         Response::Observed { .. } => "observed",
         Response::Stopped { .. } => "stopped",
         Response::AuthBegun { .. } => "auth_begun",
+        Response::Artifact { .. } => "artifact",
         Response::AuthenticateResult { .. } => "authenticate_result",
         Response::Error { .. } => "error",
     };
@@ -441,4 +481,16 @@ fn peek_sender(stream: &UnixStream) -> std::io::Result<Peeked> {
         }
     }
     Ok(Peeked::Data(cred))
+}
+
+#[cfg(test)]
+mod excerpt_tests {
+    #[test]
+    fn artifact_chunks_are_withheld_from_diagnostics() {
+        let body =
+            br#"{"type":"artifact","name":"download-x","data":"U0VDUkVULUJZVEVT","bogus":1}"#;
+        let text = super::raw_excerpt(body);
+        assert!(!text.contains("U0VDUkVU"), "{text}");
+        assert!(super::raw_excerpt(br#"{"type":"hello"}"#).contains("hello"));
+    }
 }

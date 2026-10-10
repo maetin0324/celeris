@@ -120,6 +120,14 @@ while True:
         try:
             request = json.loads(path.read_text())
             response = execute(request)
+            # The launcher (another host UID) reads screenshot / download files to hand them to
+            # Celeris (protocol v8); the generated name was validated by command().
+            artifact = request.get('artifact')
+            if (response.get('status') == 0 and request.get('verb') in ('screenshot', 'download')
+                    and isinstance(artifact, str) and NAME.fullmatch(artifact)):
+                produced = Path('/session/output') / artifact
+                if produced.is_file() and not produced.is_symlink():
+                    produced.chmod(0o644)
         except (OSError, ValueError, KeyError, TypeError):
             response = {'status': 2, 'stdout': ''}
         result = path.with_suffix('.result')

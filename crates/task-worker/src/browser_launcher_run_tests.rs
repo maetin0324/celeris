@@ -10,8 +10,8 @@ use std::time::Duration;
 use super::*;
 use crate::browser_launcher::protocol::AuthenticateArgs;
 use crate::browser_launcher::{
-    BackendSession, ErrorCode, Launched, LauncherLimits, LauncherServer, Registry, ServerConfig,
-    ServerHandle, SessionBackend, StartRequest,
+    BackendSession, ErrorCode, Launched, LauncherLimits, LauncherServer, Registry, Response,
+    ServerConfig, ServerHandle, SessionBackend, StartRequest,
 };
 use crate::browser_live::InMemoryGate;
 
@@ -24,6 +24,9 @@ struct Log {
     actions: Vec<(Verb, ActionArgs)>,
     started: usize,
     stopped: usize,
+    /// v8: the bytes a screenshot / download produces (`None`: no file; `Some(Err)`: the verb
+    /// fails in the launcher, as a canceled other-origin download does).
+    artifact_body: Option<Result<Vec<u8>, ()>>,
 }
 
 struct FakeBackend {
@@ -36,6 +39,9 @@ struct FakeSession {
     facts: SessionFacts,
     log: Arc<Mutex<Log>>,
     child: std::process::Child,
+    /// the launcher session dir's `output` (files the fake "browser" wrote).
+    output: tempfile::TempDir,
+    produced: Vec<(String, Verb)>,
 }
 
 impl SessionBackend for FakeBackend {
@@ -56,6 +62,8 @@ impl SessionBackend for FakeBackend {
                 facts: self.facts.clone(),
                 log: Arc::clone(&self.log),
                 child,
+                output: tempfile::tempdir().map_err(|_| ErrorCode::LaunchFailed)?,
+                produced: Vec::new(),
             }),
             pid,
             pgid: pid,
@@ -78,12 +86,58 @@ impl BackendSession for FakeSession {
             .expect("lock")
             .actions
             .push((verb, args.clone()));
+        let mut artifact = None;
+        if matches!(verb, Verb::Screenshot | Verb::Download) {
+            let body = self.log.lock().expect("lock").artifact_body.clone();
+            match body {
+                Some(Ok(bytes)) => {
+                    let name = format!(
+                        "{}-{}.{}",
+                        if verb == Verb::Screenshot {
+                            "screenshot"
+                        } else {
+                            "download"
+                        },
+                        crate::browser_launcher::random_id().expect("id"),
+                        if verb == Verb::Screenshot {
+                            "png"
+                        } else {
+                            "bin"
+                        }
+                    );
+                    std::fs::write(self.output.path().join(&name), bytes).expect("write");
+                    self.produced.push((name.clone(), verb));
+                    artifact = Some(name);
+                }
+                Some(Err(())) => return Err(ErrorCode::BadRequest),
+                None => {}
+            }
+        }
         Ok(Observation {
             text: Some(format!(
                 r#"{{"success":true,"data":{{"verb":"{verb:?}"}}}}"#
             )),
-            artifact: None,
+            artifact,
         })
+    }
+    fn fetch_artifact(
+        &mut self,
+        name: &str,
+        offset: u64,
+    ) -> Result<crate::browser_launcher::ArtifactChunk, ErrorCode> {
+        // The launcher backend's own reader (name, type, size checks).
+        let verb = self
+            .produced
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, v)| *v)
+            .ok_or(ErrorCode::Unauthorized)?;
+        crate::browser_launcher::backend::read_artifact_chunk(
+            self.output.path(),
+            name,
+            verb,
+            offset,
+        )
     }
     fn observe(&mut self) -> (SessionState, SessionFacts) {
         (SessionState::Running, self.facts.clone())
@@ -422,9 +476,11 @@ fn harness_actions_reach_the_launcher_through_the_gated_action_server() {
     let sock = dir.path().join("browser.action.sock");
     let server = ActionServer::start_with(
         &sock,
-        Arc::new(LauncherExecutor {
-            runtime: Arc::clone(&runtime),
-        }),
+        Arc::new(LauncherExecutor::new(
+            Arc::clone(&runtime),
+            std::path::PathBuf::from("/nonexistent"),
+            crate::browser_launcher::PROTOCOL_VERSION,
+        )),
         vec!["example.com".into()],
         vec!["navigate".into(), "snapshot".into(), "scroll".into()],
         Vec::new(),
@@ -484,9 +540,11 @@ fn single_use_action_reaches_the_launcher_once() {
     let sock = dir.path().join("browser.action.sock");
     let server = ActionServer::start_with(
         &sock,
-        Arc::new(LauncherExecutor {
-            runtime: Arc::clone(&runtime),
-        }),
+        Arc::new(LauncherExecutor::new(
+            Arc::clone(&runtime),
+            std::path::PathBuf::from("/nonexistent"),
+            crate::browser_launcher::PROTOCOL_VERSION,
+        )),
         vec!["example.com".into()],
         vec!["navigate".into(), "snapshot".into(), "click".into()],
         vec!["click".into()],
@@ -510,22 +568,49 @@ fn single_use_action_reaches_the_launcher_once() {
 }
 
 #[test]
-fn launcher_executor_refuses_artifact_verbs() {
+fn launcher_executor_refuses_unknown_and_malformed_artifact_requests() {
     let launcher = fake_launcher(good_facts());
     let (runtime, _) =
         LauncherRuntime::start(&launcher.sock, "task-1", "run-4", policy()).expect("start");
-    let exec = LauncherExecutor {
-        runtime: Arc::new(runtime),
+    let out = tempfile::tempdir().expect("out");
+    let exec = LauncherExecutor::new(
+        Arc::new(runtime),
+        out.path().to_path_buf(),
+        crate::browser_launcher::PROTOCOL_VERSION,
+    );
+    // The supervisor's version probe has no launcher verb.
+    let probe = ActionRequest {
+        verb: "__version__".into(),
+        args: vec![],
+        artifact: None,
     };
-    for verb in ["screenshot", "download", "__version__"] {
+    assert!(exec.run(1, &probe).is_err());
+    // screenshot / download without the shim's generated name (or a path) never reach the launcher.
+    for (verb, args, artifact) in [
+        ("screenshot", vec![], None),
+        ("download", vec!["@e1".to_string()], None),
+        (
+            "download",
+            vec!["@e1".to_string()],
+            Some("../download-x.bin"),
+        ),
+        (
+            "screenshot",
+            vec![],
+            Some(format!("download-{}.bin", "a".repeat(32)).as_str()),
+        ),
+    ] {
         let req = ActionRequest {
             verb: verb.into(),
-            args: vec![],
-            artifact: None,
+            args,
+            artifact: artifact.map(str::to_owned),
         };
-        assert!(exec.run(1, &req).is_err(), "{verb}");
+        let out = exec.run(1, &req).expect("answered");
+        assert_eq!(out["status"], 1, "{verb}");
+        assert_eq!(out["reason"], ARTIFACT_FAILED, "{verb}");
     }
     assert!(launcher.log.lock().expect("lock").actions.is_empty());
+    assert_eq!(std::fs::read_dir(out.path()).expect("dir").count(), 0);
 }
 
 #[test]
@@ -961,6 +1046,19 @@ fn action_socket_dir_must_be_private_to_this_user() {
 }
 
 fn prepared(origin: &str) -> crate::browser_policy::PreparedBrowserPolicy {
+    prepared_with(
+        origin,
+        vec![
+            task_core::BrowserAction::Navigate,
+            task_core::BrowserAction::Snapshot,
+        ],
+    )
+}
+
+fn prepared_with(
+    origin: &str,
+    allowed_actions: Vec<task_core::BrowserAction>,
+) -> crate::browser_policy::PreparedBrowserPolicy {
     let grant = task_core::BrowserCapability {
         approval_actions: vec![],
         allowed_domains: vec![origin.into()],
@@ -972,10 +1070,7 @@ fn prepared(origin: &str) -> crate::browser_policy::PreparedBrowserPolicy {
         domain_mode: task_core::BrowserDomainMode::CommonHosts,
         navigation_origins: vec![],
         network_domains: vec![origin.into()],
-        allowed_actions: vec![
-            task_core::BrowserAction::Navigate,
-            task_core::BrowserAction::Snapshot,
-        ],
+        allowed_actions,
         approval_actions: vec![],
         credential_policy_ids: vec![],
         artifact_policy_id: None,
@@ -1077,9 +1172,11 @@ fn launcher_shim_files_pass_load_policy_and_gate_navigation_by_origin() {
         let runtime = Arc::new(runtime);
         let server = ActionServer::start_with(
             &action_socket,
-            Arc::new(LauncherExecutor {
-                runtime: Arc::clone(&runtime),
-            }),
+            Arc::new(LauncherExecutor::new(
+                Arc::clone(&runtime),
+                std::path::PathBuf::from("/nonexistent"),
+                crate::browser_launcher::PROTOCOL_VERSION,
+            )),
             policy.allowed_domains().to_vec(),
             allowed_actions.allow.clone(),
             Vec::new(),
@@ -3498,4 +3595,394 @@ fn post_login_read_with_the_production_task_policy_shape_enables_reading() {
     .expect("held policy")
     .allow;
     assert!(!held.iter().any(|x| x == "snapshot" || x == "gettext"));
+}
+
+// ---- 付記 2026-10-10e: protocol v8 の screenshot / download artifact transfer ----
+
+fn artifact_policy() -> SessionPolicy {
+    session_policy(
+        &[
+            "navigate".into(),
+            "snapshot".into(),
+            "screenshot".into(),
+            "download".into(),
+        ],
+        &["example.com".into()],
+        Duration::from_secs(600),
+    )
+}
+
+fn shim_name(prefix: &str) -> String {
+    format!(
+        "{prefix}-{}.{}",
+        crate::browser_launcher::random_id().expect("id"),
+        if prefix == "screenshot" { "png" } else { "bin" }
+    )
+}
+
+/// A PDF larger than several transfer chunks, with a marker that must not leak anywhere but the file.
+fn big_pdf() -> Vec<u8> {
+    let mut body = b"%PDF-1.4\n".to_vec();
+    while body.len() < 3 * crate::browser_launcher::protocol::ARTIFACT_CHUNK + 777 {
+        body.extend_from_slice(b"SLIDE-BODY-MARKER ");
+    }
+    body
+}
+
+/// shim と同じ形の要求（artifact 名付き）を action socket に送る。
+fn shim_artifact_request(
+    sock: &std::path::Path,
+    verb: &str,
+    args: &[&str],
+    artifact: &str,
+) -> serde_json::Value {
+    let mut stream = UnixStream::connect(sock).expect("connect");
+    let req = serde_json::json!({"verb": verb, "args": args, "artifact": artifact});
+    stream.write_all(req.to_string().as_bytes()).expect("write");
+    stream
+        .shutdown(std::net::Shutdown::Write)
+        .expect("shutdown");
+    let mut out = String::new();
+    stream.read_to_string(&mut out).expect("read");
+    serde_json::from_str(&out).expect("json")
+}
+
+#[test]
+fn launcher_artifacts_reach_the_run_output_through_the_v8_transfer() {
+    let launcher = fake_launcher(good_facts());
+    let pdf = big_pdf();
+    launcher.log.lock().expect("lock").artifact_body = Some(Ok(pdf.clone()));
+    let (runtime, _) =
+        LauncherRuntime::start(&launcher.sock, "task-1", "run-a1", artifact_policy())
+            .expect("start");
+    let runtime = Arc::new(runtime);
+    let dir = tempfile::tempdir().expect("tempdir");
+    let output = dir.path().join("output");
+    std::fs::create_dir(&output).expect("output");
+    let executor = Arc::new(LauncherExecutor::new(
+        Arc::clone(&runtime),
+        output.clone(),
+        crate::browser_launcher::PROTOCOL_VERSION,
+    ));
+    let sock = dir.path().join("browser.action.sock");
+    let server = ActionServer::start_with(
+        &sock,
+        Arc::clone(&executor) as Arc<dyn crate::browser_action::ActionExecutor>,
+        vec!["example.com".into()],
+        vec!["snapshot".into(), "screenshot".into(), "download".into()],
+        Vec::new(),
+        Arc::new(InMemoryGate::new()),
+    )
+    .expect("action server");
+    // download: the shim's generated name receives the launcher's file, byte for byte.
+    let name = shim_name("download");
+    let reply = shim_artifact_request(&sock, "download", &["@e3"], &name);
+    assert_eq!(reply["status"], 0, "{reply}");
+    let stdout: serde_json::Value =
+        serde_json::from_str(reply["stdout"].as_str().expect("stdout")).expect("json");
+    assert_eq!(stdout["success"], true);
+    assert_eq!(stdout["data"]["media_type"], "application/pdf");
+    assert_eq!(stdout["data"]["bytes"], pdf.len());
+    assert!(!reply.to_string().contains("SLIDE-BODY-MARKER"));
+    let written = output.join(&name);
+    assert_eq!(std::fs::read(&written).expect("delivered"), pdf);
+    use std::os::unix::fs::PermissionsExt;
+    assert_eq!(
+        std::fs::metadata(&written)
+            .expect("meta")
+            .permissions()
+            .mode()
+            & 0o777,
+        0o600
+    );
+    // screenshot: PNG only.
+    let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+    png.extend_from_slice(&[7u8; 1000]);
+    launcher.log.lock().expect("lock").artifact_body = Some(Ok(png.clone()));
+    let shot = shim_name("screenshot");
+    let reply = shim_artifact_request(&sock, "screenshot", &[], &shot);
+    assert_eq!(reply["status"], 0, "{reply}");
+    assert_eq!(std::fs::read(output.join(&shot)).expect("shot"), png);
+    drop(server);
+    assert!(executor.take_refusals().is_empty());
+    assert_eq!(
+        executor.delivered.load(std::sync::atomic::Ordering::SeqCst),
+        2
+    );
+}
+
+#[test]
+fn launcher_artifacts_refuse_types_sizes_counts_and_canceled_downloads() {
+    let launcher = fake_launcher(good_facts());
+    let (runtime, _) =
+        LauncherRuntime::start(&launcher.sock, "task-1", "run-a2", artifact_policy())
+            .expect("start");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let exec = LauncherExecutor::new(
+        Arc::new(runtime),
+        dir.path().to_path_buf(),
+        crate::browser_launcher::PROTOCOL_VERSION,
+    );
+    let download = |exec: &LauncherExecutor| {
+        let req = ActionRequest {
+            verb: "download".into(),
+            args: vec!["@e1".into()],
+            artifact: Some(shim_name("download")),
+        };
+        exec.run(1, &req).expect("answered")
+    };
+    let screenshot = |exec: &LauncherExecutor| {
+        let req = ActionRequest {
+            verb: "screenshot".into(),
+            args: vec![],
+            artifact: Some(shim_name("screenshot")),
+        };
+        exec.run(1, &req).expect("answered")
+    };
+    let set = |body: Option<Result<Vec<u8>, ()>>| {
+        launcher.log.lock().expect("lock").artifact_body = body;
+    };
+    // HTML (a login page saved as a "download"), an executable and an unknown blob: not handed over.
+    for body in [
+        b"<html><form><input type=password></form>".to_vec(),
+        b"\x7fELF\x02\x01\x01".to_vec(),
+        vec![0u8; 64],
+    ] {
+        set(Some(Ok(body)));
+        let out = download(&exec);
+        assert_eq!(out["reason"], ARTIFACT_REJECTED, "{out}");
+    }
+    // A screenshot must be PNG even when the type is otherwise allowed.
+    set(Some(Ok(b"%PDF-1.4 x".to_vec())));
+    assert_eq!(screenshot(&exec)["reason"], ARTIFACT_REJECTED);
+    // Over 10 MiB: refused by the launcher before any chunk.
+    let mut huge = b"%PDF-1.7\n".to_vec();
+    huge.resize(
+        crate::browser_launcher::protocol::MAX_ARTIFACT_BYTES as usize + 1,
+        b' ',
+    );
+    set(Some(Ok(huge)));
+    assert_eq!(download(&exec)["reason"], ARTIFACT_TOO_LARGE);
+    // The launcher's verb failed (an other-origin download it canceled): no file, fixed reason.
+    set(Some(Err(())));
+    assert_eq!(download(&exec)["reason"], ARTIFACT_ACTION_FAILED);
+    // The launcher produced no file name.
+    set(None);
+    assert_eq!(download(&exec)["reason"], ARTIFACT_FAILED);
+    assert_eq!(
+        std::fs::read_dir(dir.path()).expect("dir").count(),
+        0,
+        "nothing refused is left in the output"
+    );
+    // Count limit: the run's quota is spent before the launcher is asked again.
+    set(Some(Ok(b"%PDF-1.4 ok".to_vec())));
+    exec.delivered.store(
+        crate::browser_launcher::protocol::MAX_ARTIFACTS,
+        std::sync::atomic::Ordering::SeqCst,
+    );
+    let before = launcher.log.lock().expect("lock").actions.len();
+    assert_eq!(download(&exec)["reason"], ARTIFACT_LIMIT);
+    assert_eq!(launcher.log.lock().expect("lock").actions.len(), before);
+    let refusals = exec.take_refusals();
+    assert!(refusals.contains(&ARTIFACT_REJECTED) && refusals.contains(&ARTIFACT_LIMIT));
+}
+
+#[test]
+fn launcher_artifacts_fail_closed_with_a_reason_below_protocol_8() {
+    let launcher = fake_launcher(good_facts());
+    launcher.log.lock().expect("lock").artifact_body = Some(Ok(b"%PDF-1.4 x".to_vec()));
+    let (runtime, _) =
+        LauncherRuntime::start(&launcher.sock, "task-1", "run-a3", artifact_policy())
+            .expect("start");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let exec = LauncherExecutor::new(Arc::new(runtime), dir.path().to_path_buf(), 7);
+    for (verb, args) in [
+        ("download", vec!["@e1".to_string()]),
+        ("screenshot", vec![]),
+    ] {
+        let req = ActionRequest {
+            verb: verb.into(),
+            args,
+            artifact: Some(shim_name(verb)),
+        };
+        let out = exec.run(1, &req).expect("answered");
+        assert_eq!(out["status"], 1);
+        assert_eq!(out["reason"], ARTIFACTS_REQUIRE_V8);
+    }
+    // Nothing reached the old launcher and nothing was written.
+    assert!(launcher.log.lock().expect("lock").actions.is_empty());
+    assert_eq!(std::fs::read_dir(dir.path()).expect("dir").count(), 0);
+    assert_eq!(
+        exec.take_refusals(),
+        vec![ARTIFACTS_REQUIRE_V8, ARTIFACTS_REQUIRE_V8]
+    );
+    assert_eq!(ARTIFACT_PROTOCOL, 8);
+    const { assert!(crate::browser_launcher::PROTOCOL_VERSION >= ARTIFACT_PROTOCOL) };
+}
+
+#[test]
+fn launcher_serves_only_names_its_session_produced() {
+    let launcher = fake_launcher(good_facts());
+    launcher.log.lock().expect("lock").artifact_body = Some(Ok(b"%PDF-1.4 x".to_vec()));
+    let (runtime, _) =
+        LauncherRuntime::start(&launcher.sock, "task-1", "run-a4", artifact_policy())
+            .expect("start");
+    // A well-formed name this session never produced.
+    let name = format!("download-{}.bin", "b".repeat(32));
+    assert_eq!(
+        runtime.fetch_artifact(&name, Verb::Download),
+        Err(ARTIFACT_FAILED)
+    );
+    // A session whose policy has no screenshot / download cannot fetch at all.
+    let (plain, _) =
+        LauncherRuntime::start(&launcher.sock, "task-1", "run-a5", policy()).expect("start");
+    let (_, obs) = runtime
+        .action(
+            Verb::Download,
+            ActionArgs {
+                selector: Some("@e1".into()),
+                ..ActionArgs::default()
+            },
+        )
+        .expect("download");
+    let produced = obs.artifact.expect("name");
+    assert!(plain.fetch_artifact(&produced, Verb::Download).is_err());
+    // The producing session gets it.
+    assert_eq!(
+        runtime.fetch_artifact(&produced, Verb::Download),
+        Ok((
+            crate::browser_launcher::protocol::ArtifactKind::Pdf,
+            b"%PDF-1.4 x".to_vec()
+        ))
+    );
+}
+
+#[test]
+fn artifact_responses_carry_no_secrets_and_diagnostics_withhold_bytes() {
+    use crate::browser_launcher::protocol::{ArtifactKind, decode_request};
+    let resp = Response::Artifact {
+        name: format!("download-{}.bin", "c".repeat(32)),
+        kind: ArtifactKind::Pdf,
+        size: 3,
+        offset: 0,
+        data: "JVBE".into(),
+    };
+    let json = serde_json::to_value(&resp).expect("json");
+    let mut keys: Vec<_> = json.as_object().expect("object").keys().cloned().collect();
+    keys.sort();
+    // Only the fixed framing: no URL, header, cookie or path field exists in the type.
+    assert_eq!(keys, ["data", "kind", "name", "offset", "size", "type"]);
+    // Unknown fields (e.g. a cookie) are refused by decode.
+    let sneaky = br#"{"type":"fetch_artifact","session_id":"s","lease_id":"l","name":"download-cccccccccccccccccccccccccccccccc.bin","offset":0,"cookie":"x"}"#;
+    assert!(decode_request(sneaky).is_err());
+    // Paths and foreign names are refused before any backend sees them.
+    for name in [
+        "../download-cccccccccccccccccccccccccccccccc.bin",
+        "download-cccccccccccccccccccccccccccccccc.pdf",
+        "extract-cccccccccccccccccccccccccccccccc.json",
+        "/etc/passwd",
+    ] {
+        let body = serde_json::json!({"type":"fetch_artifact","session_id":"s","lease_id":"l","name":name,"offset":0});
+        assert!(
+            decode_request(body.to_string().as_bytes()).is_err(),
+            "{name}"
+        );
+    }
+}
+
+/// The real shim (`browser_cli.py`) → daemon action server → v8 launcher → `browser/output`: the
+/// agent gets the PDF under a `.pdf` name it can read, the event names only the generated file,
+/// and an old launcher answers with the fixed reason (付記 2026-10-10e).
+#[test]
+fn launcher_shim_download_lands_in_the_run_output_as_a_readable_pdf() {
+    let policy = prepared_with(
+        "example.com",
+        vec![
+            task_core::BrowserAction::Navigate,
+            task_core::BrowserAction::Snapshot,
+            task_core::BrowserAction::Screenshot,
+            task_core::BrowserAction::Download,
+        ],
+    );
+    let launcher = fake_launcher(good_facts());
+    let pdf = big_pdf();
+    launcher.log.lock().expect("lock").artifact_body = Some(Ok(pdf.clone()));
+    let dir = tempfile::tempdir().expect("tempdir");
+    let runtime_dir = dir.path().join("runs").join("run-pdf").join("browser");
+    let (cli, action_socket) = write_shim_files(
+        &runtime_dir,
+        "celeris-test-session",
+        &policy,
+        &policy.action_policy,
+        &[],
+        false,
+    )
+    .expect("shim files");
+    let output = runtime_dir.join("output");
+    let allowed: task_core::AgentBrowserActionPolicy =
+        serde_json::from_slice(&policy.action_policy).expect("allow");
+    assert!(
+        allowed.allow.iter().any(|a| a == "download"),
+        "{:?}",
+        allowed.allow
+    );
+    let (runtime, _) = LauncherRuntime::start(
+        &launcher.sock,
+        "task-1",
+        "run-pdf",
+        session_policy(
+            &allowed.allow,
+            policy.allowed_domains(),
+            Duration::from_secs(600),
+        ),
+    )
+    .expect("start");
+    let runtime = Arc::new(runtime);
+    for (protocol, expect_file) in [
+        (crate::browser_launcher::PROTOCOL_VERSION, true),
+        (7, false),
+    ] {
+        let server = ActionServer::start_with(
+            &action_socket,
+            Arc::new(LauncherExecutor::new(
+                Arc::clone(&runtime),
+                output.clone(),
+                protocol,
+            )),
+            policy.allowed_domains().to_vec(),
+            allowed.allow.clone(),
+            Vec::new(),
+            Arc::new(InMemoryGate::new()),
+        )
+        .expect("action server");
+        let out = run_shim(&cli, &["download", "@e5"]);
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        assert!(!stdout.contains("SLIDE-BODY-MARKER"), "{stdout}");
+        drop(server);
+        if expect_file {
+            assert!(out.status.success(), "{stdout}");
+            let reply: serde_json::Value = serde_json::from_str(stdout.trim()).expect("json");
+            let file = std::path::PathBuf::from(reply["file"].as_str().expect("file"));
+            assert_eq!(file.parent(), Some(output.as_path()));
+            assert_eq!(file.extension().and_then(|e| e.to_str()), Some("pdf"));
+            assert_eq!(std::fs::read(&file).expect("pdf"), pdf);
+            let artifact = reply["artifact"].as_str().expect("artifact");
+            assert_eq!(std::fs::read(output.join(artifact)).expect("bin"), pdf);
+        } else {
+            assert_eq!(out.status.code(), Some(1), "{stdout}");
+            assert!(stdout.contains(ARTIFACTS_REQUIRE_V8), "{stdout}");
+        }
+    }
+    // The event log the daemon forwards carries the operation, status and generated name only.
+    let events = std::fs::read_to_string(runtime_dir.join("events.jsonl")).expect("events");
+    assert!(
+        !events.contains("SLIDE-BODY-MARKER") && !events.contains("@e5"),
+        "{events}"
+    );
+    assert!(
+        events.contains("\"download\"") && events.contains("download-"),
+        "{events}"
+    );
+    // Only the delivered pair (.bin and its .pdf link) is in the output.
+    assert_eq!(std::fs::read_dir(&output).expect("dir").count(), 2);
 }

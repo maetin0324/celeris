@@ -6,7 +6,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::model::Task;
+use crate::model::{Task, TaskId};
 
 /// 共有 workspace の成果物ディレクトリの接頭辞（ADR-0018 D1: `.taskd/` は celeris の管理用で、
 /// クラスタ同期の両方向から除外されている）。
@@ -17,17 +17,18 @@ pub const ARTIFACTS_DIR_NAME: &str = "artifacts";
 
 /// そのタスクが `workspace_dir` を**自分で所有**しているか（ADR-0036 D1）。
 ///
-/// 1. `parent_id` が無い → 所有（単独タスク。既存の挙動を変えない）
-/// 2. ディレクトリの末尾の要素がそのタスクの id（既定の `workspace_root/<task_id>`、Remote の写し）→ 所有
-/// 3. それ以外（親から継いだ path）→ 共有
+/// 1. 末尾の要素が task id（既定の `workspace_root/<task_id>`、Remote の写し）なら、その id の task だけが所有
+/// 2. それ以外の任意名の workspace は `parent_id` が無いとき所有（単独タスクの既存の挙動）
+/// 3. それ以外は共有。親なしの retry も、元 task id の workspace を所有しない。
 pub fn owns_workspace(task: &Task, workspace_dir: &Path) -> bool {
-    if task.parent_id.is_none() {
-        return true;
-    }
-    workspace_dir
+    match workspace_dir
         .file_name()
-        .map(|name| name.to_string_lossy() == task.id.to_string())
-        .unwrap_or(false)
+        .and_then(|name| name.to_str())
+        .and_then(|name| name.parse::<TaskId>().ok())
+    {
+        Some(owner) => owner == task.id,
+        None => task.parent_id.is_none(),
+    }
 }
 
 /// そのタスクの成果物ディレクトリ（`workspace_dir` 基準の絶対／相対はそのまま引き継ぐ。ADR-0036 D1）。
@@ -124,7 +125,7 @@ mod tests {
         }
     }
 
-    /// 単独タスク（親なし）は、どんなディレクトリでも従来どおり `<workspace>/artifacts`。
+    /// 任意名の単独タスク用 workspace は従来どおり `<workspace>/artifacts`。
     #[test]
     fn a_task_without_a_parent_owns_its_workspace() {
         let t = task(None);
@@ -132,6 +133,25 @@ mod tests {
         assert!(owns_workspace(&t, dir));
         assert_eq!(artifacts_dir_for(&t, dir), dir.join("artifacts"));
         assert_eq!(artifacts_rel_for(&t, dir), "artifacts");
+    }
+
+    /// 親を持たない retry も、元 task の workspace では成果物を分離する。
+    #[test]
+    fn a_retry_without_a_parent_does_not_own_the_original_tasks_workspace() {
+        let original = task(None);
+        let retry = task(None);
+        let dir = Path::new("/srv/workspaces").join(original.id.to_string());
+        assert!(owns_workspace(&original, &dir));
+        assert!(!owns_workspace(&retry, &dir));
+        assert_eq!(artifacts_dir_for(&original, &dir), dir.join("artifacts"));
+        let retry_rel = format!(".taskd/artifacts/{}", retry.id);
+        assert_eq!(artifacts_dir_for(&retry, &dir), dir.join(&retry_rel));
+        assert_eq!(artifacts_rel_for(&retry, &dir), retry_rel);
+        let other_retry = task(None);
+        assert_ne!(
+            artifacts_dir_for(&retry, &dir),
+            artifacts_dir_for(&other_retry, &dir)
+        );
     }
 
     /// 親から継いだ path の子は共有 → `.taskd/artifacts/<task_id>`（実機の事故の再発防止）。

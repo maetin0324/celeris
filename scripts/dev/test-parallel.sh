@@ -17,6 +17,9 @@
 #   CELERIS_TEST_JOBS   同時に走らせるテストの数。既定 min(8, max(2, nproc/3))（このホストには daemon の run が同居する）
 #   CELERIS_NEXTEST_ANY_VERSION  1 なら tools/nextest/VERSION と版が違っても続ける（既定は止める）
 #   CELERIS_TEST_SKIP_DOC        1 なら doc-test を回さない（開発時の短縮用。release.sh は使わない）
+#   CELERIS_USERNS_TESTS / CELERIS_ISOLATION_TESTS  試験側が読む（ADR-0126 B2/B4）。1 / require のとき userns が作れない
+#                                host（worker の sandbox など）では隔離の試験が設計どおり**失敗**するので、先頭と末尾に
+#                                その旨の診断行を出す（gate の結果は変えない。summary の `userns` に残す）
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -46,6 +49,24 @@ jobs_default=$((ncpu / 3))
 [ "$jobs_default" -lt 2 ] && jobs_default=2
 [ "$jobs_default" -gt 8 ] && jobs_default=8
 jobs="${CELERIS_TEST_JOBS:-$jobs_default}"
+
+# userns の preflight（ADR-0126 B2/B4）: release gate と同じ env（CELERIS_USERNS_TESTS=1 か CELERIS_ISOLATION_TESTS=require）
+# なのに unprivileged user namespace が作れない host では、実 bwrap / unshare / launcher の試験が「Operation not permitted」で
+# 設計どおり落ちる。原因が branch でなく環境だと読めるよう、先頭と失敗時の末尾に 1 行出す。gate の結果は変えない。
+userns_wanted=false
+if [ "${CELERIS_USERNS_TESTS:-0}" = 1 ] || [ "${CELERIS_ISOLATION_TESTS:-}" = require ]; then userns_wanted=true; fi
+userns_ok=null
+if [ "$userns_wanted" = true ]; then
+  if unshare -Ur true >/dev/null 2>&1; then userns_ok=true; else userns_ok=false; fi
+fi
+userns_note() {
+  cat >&2 <<EOF
+test-parallel: warning: CELERIS_USERNS_TESTS=${CELERIS_USERNS_TESTS:-} CELERIS_ISOLATION_TESTS=${CELERIS_ISOLATION_TESTS:-} but this host cannot create an unprivileged user namespace (\`unshare -Ur true\` failed)
+test-parallel:   the isolation tests (bwrap / unshare / launcher / db guard) will fail here by design (ADR-0126 B4); this is the environment, not the branch.
+test-parallel:   run this gate on a host with user namespaces (the release host), or outside the gate use CELERIS_USERNS_TESTS=0 CELERIS_ISOLATION_TESTS=skip.
+EOF
+}
+[ "$userns_ok" = false ] && userns_note
 
 logdir="$(mktemp -d "${TMPDIR:-/tmp}/celeris-test-parallel.XXXXXX")"
 # 読み取り専用にした試験の残骸でも消せるよう権限を戻してから消す。後片付けの失敗は警告だけで exit code を変えない。
@@ -81,9 +102,9 @@ if [ "$tmp_leftovers" -ne 0 ]; then
   echo "test-parallel: warning: tests left $tmp_leftovers entries in TMPDIR (removed on exit)" >&2
 fi
 
-python3 - "$logdir/nextest.log" "$logdir/doc.log" "$have_ver" "$jobs" "$nrc" "$drc" "$t0" "$t1" "$t2" "$tmp_leftovers" <<'PY'
+python3 - "$logdir/nextest.log" "$logdir/doc.log" "$have_ver" "$jobs" "$nrc" "$drc" "$t0" "$t1" "$t2" "$tmp_leftovers" "$userns_ok" <<'PY'
 import json, re, sys
-nlog, dlog, ver, jobs, nrc, drc, t0, t1, t2, tmp_left = sys.argv[1:]
+nlog, dlog, ver, jobs, nrc, drc, t0, t1, t2, tmp_left, userns_ok = sys.argv[1:]
 nbin = total = None
 npass = nfail = nskip = 0
 summary_seen = False
@@ -131,6 +152,8 @@ out = {
     "doctest_secs": round(float(t2) - float(t1), 1),
     "tmp_leftovers": int(tmp_left),
     "summary_parsed": ok,
+    # userns の preflight（CELERIS_USERNS_TESTS=1 / CELERIS_ISOLATION_TESTS=require のときだけ測る。それ以外は null）
+    "userns": {"true": True, "false": False}.get(userns_ok),
 }
 print("CELERIS_TEST_SUMMARY " + json.dumps(out, ensure_ascii=False))
 open(nlog + ".ok", "w").write("true" if ok else "false")
@@ -141,6 +164,7 @@ if [ "$nrc" -ne 0 ]; then
   grep -E '^[[:space:]]*(FAIL|TIMEOUT|SIG[A-Z]+)[[:space:]]+\[' "$logdir/nextest.log" 2>/dev/null \
     | sed -E 's/^[[:space:]]*[A-Z]+[[:space:]]+\[[^]]*\][[:space:]]*//; s/^\([0-9]+\/[0-9]+\)[[:space:]]*//' \
     | awk '!seen[$0]++' | head -n 30 | sed 's/^/test-parallel: failed: /' >&2 || true
+  [ "$userns_ok" = false ] && userns_note
   echo "test-parallel: cargo nextest run failed (exit $nrc)" >&2; exit "$nrc"
 fi
 if [ "$drc" != skipped ] && [ "$drc" -ne 0 ]; then echo "test-parallel: cargo test --doc failed (exit $drc)" >&2; exit "$drc"; fi

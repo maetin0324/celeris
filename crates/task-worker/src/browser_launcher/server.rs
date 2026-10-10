@@ -89,6 +89,15 @@ pub struct Launched {
 }
 
 /// session の起動の中身（userns・bwrap・Chrome）。単体試験では偽の実装を使う。
+/// v8: one chunk of an artifact read by the backend (bytes from `offset`, at most
+/// [`super::protocol::ARTIFACT_CHUNK`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArtifactChunk {
+    pub kind: super::protocol::ArtifactKind,
+    pub size: u64,
+    pub data: Vec<u8>,
+}
+
 pub trait SessionBackend: Send + Sync + 'static {
     fn start(&self, req: &StartRequest) -> Result<Launched, ErrorCode>;
     /// 試験専用 loopback 許可（`127.0.0.1:<port>`）。`hello` で daemon に申告する。既定は空（off）。
@@ -114,6 +123,12 @@ pub trait BackendSession: Send + 'static {
         _args: &AuthenticateArgs,
         _broker: UnixStream,
     ) -> Result<LoginResult, ErrorCode> {
+        Err(ErrorCode::Unauthorized)
+    }
+    /// v8 `fetch_artifact`: one chunk of a screenshot / download this session produced
+    /// (付記 2026-10-10e). Implementations serve only names they generated in this session, check
+    /// the type, size and count, and never return a path or anything but the file's bytes.
+    fn fetch_artifact(&mut self, _name: &str, _offset: u64) -> Result<ArtifactChunk, ErrorCode> {
         Err(ErrorCode::Unauthorized)
     }
     fn observe(&mut self) -> (SessionState, SessionFacts);
@@ -695,6 +710,57 @@ fn handle(inner: &Arc<Inner>, req: Request, peer: &Peer) -> Response {
             );
             match out {
                 Some(Ok(cdp_target_id)) => Response::AuthBegun { cdp_target_id },
+                Some(Err(code)) => err(code),
+                None => {
+                    remove_and_teardown(inner, &entry.record.session_id);
+                    err(ErrorCode::Timeout)
+                }
+            }
+        }
+        Request::FetchArtifact {
+            session_id,
+            lease_id,
+            name,
+            offset,
+        } => {
+            let entry = match authorize(inner, peer, &session_id, &lease_id) {
+                Ok(e) => e,
+                Err(code) => return err(code),
+            };
+            // Only a session whose policy allows the producing verb can hand its files out.
+            match super::protocol::artifact_name_verb(&name) {
+                Some(verb) if entry.policy.allowed_actions.contains(&verb) => {}
+                _ => return err(ErrorCode::Unauthorized),
+            }
+            let e2 = entry.clone();
+            let name2 = name.clone();
+            let out = run_with_deadline(
+                move || {
+                    let mut g = lock(&e2.backend);
+                    let session = g.as_mut().ok_or(ErrorCode::LeaseMismatch)?;
+                    if !session.isolation_ok() {
+                        return Err(ErrorCode::IsolationFailed);
+                    }
+                    session.fetch_artifact(&name2, offset)
+                },
+                inner.cfg.limits.action,
+                |_| {},
+            );
+            match out {
+                Some(Ok(chunk))
+                    if chunk.data.len() <= super::protocol::ARTIFACT_CHUNK
+                        && chunk.size <= super::protocol::MAX_ARTIFACT_BYTES =>
+                {
+                    use base64::Engine as _;
+                    Response::Artifact {
+                        name,
+                        kind: chunk.kind,
+                        size: chunk.size,
+                        offset,
+                        data: base64::engine::general_purpose::STANDARD.encode(&chunk.data),
+                    }
+                }
+                Some(Ok(_)) => err(ErrorCode::Limit),
                 Some(Err(code)) => err(code),
                 None => {
                     remove_and_teardown(inner, &entry.record.session_id);

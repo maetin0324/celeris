@@ -239,3 +239,46 @@ rm /etc/systemd/system/celeris-browser-launcher.{socket,service} && systemctl da
 ```
 
 daemon の設定が `runtime = "daemon"`（既定）なら他に影響しない。`runtime = "launcher"` のまま launcher を止めると browser run は fail closed で失敗する（ADR-0116 D5）。
+
+## launcher protocol 8 への更新（screenshot・download の受け渡し）
+
+launcher protocol 8（ADR [credential username / post-login read](../../agent-docs/adr/2026-10-09-browser-credential-username-and-post-login-read.md)
+付記 2026-10-10e）で、launcher runtime の screenshot・download の file が run の `browser/output/` に届き、agent が読める（PDF は
+`download-<hex>.pdf` の名前でも置かれる）。**daemon の release と launcher の再 build・差し替えの両方**が要る。action runner
+（`browser_action.py`）も launcher に埋め込まれているので、daemon だけの更新では足りない。
+
+- daemon だけが新しい（launcher が protocol 7 以下）: browser session は動くが、screenshot・download は固定理由
+  `browser_launcher_protocol_artifacts_required` で失敗する（run の progress `browser.artifact: …` と shim の応答に出る）。
+- launcher だけが新しい: 旧 daemon は新しい要求を送らないので従来どおり（screenshot・download は旧来の失敗のまま）。
+
+手順は [browser-credential-login-v5.md](browser-credential-login-v5.md) の「2. launcher の再 build と差し替え」と同じ（root、
+稼働 session が無いことを確かめ、既存 binary を退避して hash を記録する）。退避名だけ変える。
+
+```sh
+W=<配送された agent-platform worktree（昇格した sha の checkout）>
+SHA12=<昇格した sha12>
+L=/usr/local/libexec/celeris/celeris-browser-launcher
+cd "$W"
+git rev-parse HEAD
+CARGO_TARGET_DIR=/local/celeris/data/scratch/launcher-$SHA12-target cargo build --release -p task-worker --bin celeris-browser-launcher
+sha256sum /local/celeris/data/scratch/launcher-$SHA12-target/release/celeris-browser-launcher "$L"
+install -o root -g root -m 0755 "$L" "$L.pre-artifacts-v8"
+pgrep -u celeris-browser -a
+systemctl stop celeris-browser-launcher.socket celeris-browser-launcher.service
+install -o root -g root -m 0755 /local/celeris/data/scratch/launcher-$SHA12-target/release/celeris-browser-launcher "$L"
+sha256sum "$L"
+systemctl start celeris-browser-launcher.socket
+systemctl status celeris-browser-launcher.socket --no-pager
+rm -rf /local/celeris/data/scratch/launcher-$SHA12-target
+```
+
+確認（daemon の実行 user）:
+
+1. `celerisctl browser doctor` の `launcher` が OK で、`protocol 8` と出る。
+2. read_origins 内の PDF を download する browser task を 1 件流し、run の `browser/output/` に `download-<hex>.bin` と同じ中身の
+   `download-<hex>.pdf` があること、task の artifacts に `download-<hex>.bin` が載ることを確かめる。
+3. run の events・progress に file の中身や URL の query・cookie が出ていないことを確かめる（出るのは `browser.download: success` と
+   生成名だけ）。
+
+戻し方: `install -o root -g root -m 0755 "$L.pre-artifacts-v8" "$L"` の後に socket を再起動する。daemon は protocol 7 を見て
+screenshot・download を理由付きで失敗させる（他の操作・credential login は動く）。Live View の frame は protocol 9 の予定。

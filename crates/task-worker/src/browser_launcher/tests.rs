@@ -327,7 +327,11 @@ fn launcher_credential_authenticate_is_fixed_and_status_only() {
     })
     .expect("serialize begun");
     assert_eq!(begun, r#"{"type":"auth_begun","cdp_target_id":"T1"}"#);
-    assert_eq!(PROTOCOL_VERSION, CONSENT_PROTOCOL);
+    const { assert!(PROTOCOL_VERSION >= CONSENT_PROTOCOL) };
+    assert_eq!(
+        PROTOCOL_VERSION,
+        crate::browser_launcher::protocol::ARTIFACT_PROTOCOL
+    );
     const { assert!(CREDENTIAL_LOGIN_PROTOCOL < POST_LOGIN_PROTOCOL) };
 }
 

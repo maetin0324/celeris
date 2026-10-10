@@ -227,3 +227,75 @@ fn egress_test_loopback_refuses_production_config_socket_or_state_dir() {
     refuse_test_loopback_in_production(&own_config, &relative_state, None)
         .expect_err("relative state_dir");
 }
+
+/// 付記 2026-10-10e: the launcher reads `output/<generated name>` in bounded chunks, never follows a
+/// symlink, and refuses oversize files and types the producing verb does not allow.
+#[test]
+fn launcher_artifact_reader_is_bounded_typed_and_refuses_symlinks() {
+    use super::read_artifact_chunk;
+    use crate::browser_launcher::protocol::{ARTIFACT_CHUNK, ArtifactKind, ErrorCode};
+    let dir = tempfile::tempdir().expect("tempdir");
+    let name = |p: &str, c: char| {
+        format!(
+            "{p}-{}.{}",
+            c.to_string().repeat(32),
+            if p == "screenshot" { "png" } else { "bin" }
+        )
+    };
+    let mut pdf = b"%PDF-1.5\n".to_vec();
+    pdf.resize(ARTIFACT_CHUNK + 10, b'x');
+    let pdf_name = name("download", 'a');
+    std::fs::write(dir.path().join(&pdf_name), &pdf).expect("write");
+    let first = read_artifact_chunk(dir.path(), &pdf_name, Verb::Download, 0).expect("chunk 0");
+    assert_eq!(first.kind, ArtifactKind::Pdf);
+    assert_eq!(first.size, pdf.len() as u64);
+    assert_eq!(first.data.len(), ARTIFACT_CHUNK);
+    let rest = read_artifact_chunk(dir.path(), &pdf_name, Verb::Download, ARTIFACT_CHUNK as u64)
+        .expect("chunk 1");
+    assert_eq!(rest.data, pdf[ARTIFACT_CHUNK..]);
+    // The verb must match the generated name (a download is not served as a screenshot).
+    assert_eq!(
+        read_artifact_chunk(dir.path(), &pdf_name, Verb::Screenshot, 0),
+        Err(ErrorCode::BadRequest)
+    );
+    // A screenshot that is not PNG is refused by type.
+    let shot = name("screenshot", 'b');
+    std::fs::write(dir.path().join(&shot), b"%PDF-1.5").expect("write");
+    assert_eq!(
+        read_artifact_chunk(dir.path(), &shot, Verb::Screenshot, 0),
+        Err(ErrorCode::ArtifactRejected)
+    );
+    // A symlink planted under a generated name is not followed.
+    let link = name("download", 'c');
+    std::os::unix::fs::symlink(dir.path().join(&pdf_name), dir.path().join(&link)).expect("link");
+    assert_eq!(
+        read_artifact_chunk(dir.path(), &link, Verb::Download, 0),
+        Err(ErrorCode::BadRequest)
+    );
+    // Over the size limit: refused without reading.
+    let big = name("download", 'd');
+    let file = std::fs::File::create(dir.path().join(&big)).expect("create");
+    file.set_len(crate::browser_launcher::protocol::MAX_ARTIFACT_BYTES + 1)
+        .expect("len");
+    assert_eq!(
+        read_artifact_chunk(dir.path(), &big, Verb::Download, 0),
+        Err(ErrorCode::Limit)
+    );
+    // Office (OOXML / OLE2) and images are handed over; HTML is not.
+    for (body, kind) in [
+        (b"PK\x03\x04rest".to_vec(), Some(ArtifactKind::OfficeZip)),
+        (
+            b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1rest".to_vec(),
+            Some(ArtifactKind::OfficeLegacy),
+        ),
+        (b"\xff\xd8\xff\xe0rest".to_vec(), Some(ArtifactKind::Jpeg)),
+        (b"<!doctype html>".to_vec(), None),
+    ] {
+        let n = name("download", 'e');
+        std::fs::write(dir.path().join(&n), &body).expect("write");
+        assert_eq!(
+            read_artifact_chunk(dir.path(), &n, Verb::Download, 0).map(|c| c.kind),
+            kind.ok_or(ErrorCode::ArtifactRejected)
+        );
+    }
+}

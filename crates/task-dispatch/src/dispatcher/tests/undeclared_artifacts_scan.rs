@@ -381,3 +381,101 @@ async fn a_git_worktree_run_that_ends_with_a_question_registers_its_artifacts() 
     assert!(got.iter().all(|(_, a)| !a.declared));
     assert_eq!(got[1].1.kind, "svg");
 }
+
+/// Shared workspaces only scan task-specific artifacts, including parentless retries.
+#[tokio::test]
+async fn a_local_shared_workspace_registers_its_artifacts_without_sibling_files() {
+    local_workspace_artifacts_are_isolated(true).await;
+}
+
+#[tokio::test]
+async fn a_local_retry_registers_its_artifacts_without_original_or_sibling_files() {
+    local_workspace_artifacts_are_isolated(false).await;
+}
+
+async fn local_workspace_artifacts_are_isolated(has_parent: bool) {
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let root = tempfile::tempdir().unwrap();
+    let parent_id = TaskId::new();
+    let workspace = root.path().join(parent_id.to_string());
+    std::fs::create_dir_all(&workspace).unwrap();
+    let mut task = new_task(
+        &workspace,
+        Check::Command {
+            cmd: "true".into(),
+            expect_exit: 0,
+        },
+        0,
+    );
+    task.parent_id = has_parent.then_some(parent_id);
+    let id = task.id;
+    store.insert(&task).unwrap();
+    std::fs::create_dir_all(workspace.join("artifacts")).unwrap();
+    std::fs::write(workspace.join("artifacts/original.md"), "# original\n").unwrap();
+    std::fs::write(workspace.join("legacy.md"), "# original legacy\n").unwrap();
+    let sibling_dir = workspace.join(".taskd/artifacts/sibling");
+    std::fs::create_dir_all(&sibling_dir).unwrap();
+    std::fs::write(sibling_dir.join("sibling.md"), "# sibling\n").unwrap();
+    let adapter = WritesArtifactsAdapter::new(
+        vec![
+            ("summary.md", "# this task\n"),
+            ("report.json", "{\"ok\":true}"),
+        ],
+        vec![],
+    );
+    let out = run_worker(
+        store.clone(),
+        adapter,
+        Vec::new(),
+        id,
+        Tier::Standard,
+        workspace.clone(),
+        "run-local",
+        RunLimits {
+            wall_clock: Duration::from_secs(30),
+            idle_timeout: Duration::from_secs(5),
+            kill_grace: Duration::from_millis(100),
+        },
+        LeaseRenewal {
+            ttl: Duration::from_secs(60),
+            every: Duration::from_secs(30),
+        },
+        None,
+        None,
+        RunExtras::default(),
+        Vec::new(),
+        Vec::new(),
+        DelegationLimits::default(),
+        None,
+        None,
+        ContainerDecision::Host,
+        CargoTargetPlan::None,
+    )
+    .await;
+    assert!(
+        matches!(
+            out,
+            Ok(RunOutcome {
+                terminal: Terminal::Done { .. },
+                ..
+            })
+        ),
+        "{out:?}"
+    );
+    let got = produced(store.as_ref(), id);
+    let paths: Vec<&str> = got.iter().map(|(_, a)| a.path.as_str()).collect();
+    let summary = format!(".taskd/artifacts/{id}/summary.md");
+    let report = format!(".taskd/artifacts/{id}/report.json");
+    assert!(paths.contains(&summary.as_str()));
+    assert!(paths.contains(&report.as_str()));
+    assert_eq!(paths.len(), 2, "{paths:?}");
+    assert!(got.iter().all(|(_, artifact)| !artifact.declared));
+    assert_eq!(
+        std::fs::read_to_string(workspace.join("artifacts/original.md")).unwrap(),
+        "# original\n"
+    );
+    assert!(
+        !paths.iter().any(|path| path.contains("sibling")),
+        "{paths:?}"
+    );
+}

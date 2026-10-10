@@ -102,3 +102,17 @@ GUI の `GET /tasks/{id}/artifacts/{idx}` は記録済みの `ArtifactRef.path` 
 - `Workspace::prepare` は `artifacts_dir` を作る。`Workspace::collect` は `artifacts_dir` 配下を列挙する
   （`path` は workspace 相対のまま）。
 - 単独タスク（`parent_id` なし）の挙動・パス・プロンプトは不変。
+
+
+## 付記 2026-10-10: 親なし retry が元 task の workspace を使う場合
+
+`parent_id` が無い retry でも `workspace.path` は元 task ID のディレクトリを継ぐことがある。
+D1 の所有判定は、末尾の要素を TaskId として解釈できる場合にはその ID と task.id の一致を先に調べる。
+別 ID なら共有として `.taskd/artifacts/<task-id>/` を使う。TaskId でない任意名の workspace は、
+親なしの単独 task が従来どおり所有する。判定は純粋関数のままで、worker と backfill が共用する。
+
+local の未申告成果物走査は全 task で run の `artifacts_dir` 内を D3-c の上限で調べる。
+共有 workspace では元 task のファイルを拾わないよう、workspace 全体の Markdown 走査を行わない。
+所有する local の非 worktree に限り、従来の Markdown 走査も続ける。
+旧配置からの自動移行や時刻による帰属推測は行わず、運用者が作成 task を確認したファイルだけを
+専用ディレクトリへコピーして backfill する。手順は [未申告成果物の補完](../../docs/ops/undeclared-local-artifacts.md)。

@@ -308,3 +308,22 @@ sandbox で落とす。
 受け入れる理由: selfdeploy の本番 unit（`celeris@<sha12>`）と verify モードは既定の config を使い P に当たるので従来どおり
 probe される。既定以外に本番 config を置く運用はしない（置くなら、その path を既定の config から参照させて P に入れる）。
 worker run の中では、印の path が P に入る（A3-3）ので、印の配下を指す daemon は上の 1 で拒否される。
+
+## 付記3（2026-10-10、B4 の gate が環境で落ちたと読めるようにする）
+
+launcher artifact transfer の task（01M4JB01XH0GQBTG7PMCK2QTTY）の review で、reviewer の run（worker の sandbox、userns 不可）が
+`CELERIS_USERNS_TESTS=1 CELERIS_ISOLATION_TESTS=require bash scripts/dev/test-parallel.sh` を流し、33 件が
+`unshare` / `bwrap` の「Operation not permitted」で落ちて criterion を不合格にした。B4 のとおり userns が無い host では
+**fail**（skip にしない）が設計だが、出力からは branch の退行と環境の制約が区別できなかった。
+
+- `scripts/dev/test-parallel.sh` は `CELERIS_USERNS_TESTS=1` か `CELERIS_ISOLATION_TESTS=require` のとき先頭で
+  `unshare -Ur true` を試し、作れなければ「この host は unprivileged user namespace を作れない。隔離の試験は設計どおり落ちる
+  （ADR-0126 B4）。環境であって branch ではない。release host で流すか、gate の外では `CELERIS_USERNS_TESTS=0
+  CELERIS_ISOLATION_TESTS=skip`」の診断行を先頭と、nextest 失敗時は最終行の直前にもう一度出す。exit code は変えない。
+- `CELERIS_TEST_SUMMARY` に `userns`（gate の env のときだけ true / false、それ以外は null）を足す。release.sh は summary を
+  そのまま gate.json の `cargo_test` に写すので、release の記録に「userns が使える host で流した」証拠が残る。
+- 固定: `sh scripts/dev/tests/test-parallel-userns-preflight.sh`（cargo と unshare を偽物にし、診断行の位置・exit code 不変・
+  `userns` の値・env なしでは probe しないことを確かめる）。
+- reviewer への含意: この gate は userns が使える host（release host・daemon の worker run）で流す。sandbox の run で
+  `userns: false` の失敗は環境由来として、branch の判定には `TMPDIR=/tmp` の通常の test-parallel と、userns のある run の記録
+  （進捗ファイルと artifacts の log）を使う。

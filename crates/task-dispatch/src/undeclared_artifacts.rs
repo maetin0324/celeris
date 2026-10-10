@@ -6,10 +6,11 @@
 //! `GET /tasks/{id}/artifacts` には現れない（本番事故、BenchFS 案件のタスク 01M35X86XTK84F97QW0CN5PGMR）。
 //!
 //! ここでは run の終端が `Done` / `Question` / `Waiting` のとき（ADR-0067 付記 2026-10-07 D3-a）、
-//! - git worktree ではない `local` の作業場所（ADR-0036 の「所有」タスク・共有 workspace どちらも含む）は
+//! - git worktree ではない `local` の作業場所を所有する task は
 //!   `artifacts_dir` の外にある `*.md` を走査し（D3）、
-//! - git worktree の Task と remote（cluster）の Task は run の `artifacts_dir` の中だけを走査して
+//! - すべての task は run の `artifacts_dir` の中を走査して
 //!   （ADR-0074 D6.3 / 付記 D3-c）、
+//! 共有 workspace（親なしの retry を含む）では元 task や兄弟の成果物を混ぜないため全体走査をしない。
 //! まだ登録されていないもの（`(path, sha256)` の組で見る。付記 D3-b）を「未申告の成果物」（`declared: false`）
 //! として返す。呼び出し側（`run_worker`、`celerisctl workspace backfill-artifacts`）が
 //! `Event::ArtifactProduced` として記録する。LLM 呼び出しは無い（DESIGN 原則 1）。

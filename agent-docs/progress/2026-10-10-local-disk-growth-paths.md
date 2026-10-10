@@ -132,3 +132,15 @@ final review の差し戻し（release prune が integration test の binary を
 - **全体検査（HEAD 706151b3）**: `TMPDIR=/tmp bash scripts/dev/test-parallel.sh` exit 0・5060 passed / 0 failed / 14 ignored。`cargo clippy --workspace -- -D warnings` exit 0。`cargo fmt --all -- --check` exit 0。文書検査 3 本（check-doc-links・check-adr-numbers・check-doc-layout）exit 0。証拠は [reclose-2](2026-10-10-local-disk-growth-paths/reclose-2.md)。
 
 未解決: 本番 108 GiB 相当の削減量の試験（08:40Z の inventory か、人が host で採取した読み取り専用 inventory が要る）と、8 release 蓄積の非増加の試験。
+
+## v6: 8 release 積み上げの試験と本番換算（reclose-3、2026-10-10）
+
+final review（v5 後）の基準 2 の差し戻しへの対応。prune-accum（縮尺 1/1024 の 8 release 積み上げ）の結果と、全体検査（HEAD 5e0dafd9）。記録は [reclose-3](2026-10-10-local-disk-growth-paths/reclose-3.md)。
+
+- **8 release 積み上げ（prune-accum、RESULT 行）**: `RESULT no_prune_bins=597 no_prune_gib=162.945 catchup_reclaimed_gib=149.367 prune_max_gib=67.902 prune_final_gib=27.156 prune_bound_gib=67.902 nonincreasing=1 limit_recreate_without_prune=1 limit_recreate_with_prune=0 deps_kept=1`
+  - 刈らない系列（A）は 8 release で 597 binary・162.945 GiB まで増える。毎回刈る系列（B）の最大は 67.902 GiB（理論上限以下）、最終は 27.156 GiB で、release 2〜8 はほぼ一定（27.15〜27.17 GiB）。**非増加**（`nonincreasing=1`）。
+  - 上限超過で target を作り直したのは刈らない系列だけ（`limit_recreate_without_prune=1`、刈る系列は `limit_recreate_with_prune=0`）。依存 crate の rlib/.d は保持（`deps_kept=1`）。
+- **本番換算の扱い**: 上の数字は縮尺 1/1024 の fixture での比。本番の 108 GiB 相当（08:40Z 時点）は、repo の inventory（199 行、marker 以前の workspace binary 11 個・0.095 GiB）に無いため、再現していない。「刈らない累積が 8 release で約 163 GiB、刈ると約 27 GiB に収まる」は縮尺の比であり、本番の実数ではない。
+- **全体検査（HEAD 5e0dafd9）**: `TMPDIR=/tmp bash scripts/dev/test-parallel.sh` exit 0・nextest 5060 passed / 0 failed / 14 ignored・`test-parallel: ok`（失敗名 0 件）。`cargo clippy --workspace -- -D warnings` exit 0。`cargo fmt --all -- --check` exit 0。`release_prune_production_scale.sh` exit 0。
+
+未解決（本 WU では解けない）: 本番 108 GiB 相当の再現（本番 `release-build/target/debug/deps` の読み取り専用採取が要る。人が host で行う）と、本番の候補が少ない理由（既に消えたか、判定が漏らしているか）の確認。

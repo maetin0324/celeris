@@ -11,7 +11,7 @@ history・ログ・台帳・成果物・chat に書かない。
 ## 0. 何が変わるか
 
 **2026-10-10c 追記**: ログイン後は (1) 隠れていて空の password 欄（manaba の home の折り畳まれた login 部品など）は観測を
-止めない、(2) snapshot が link の URL を出す（`snapshot -i --urls`）、(3) agent の `open` は read_origins だけ。shim の
+止めない、(2) snapshot が link の URL を出す（`snapshot --urls`（2026-10-10d: 当初の `-i` は本文を落としたので外した））、(3) agent の `open` は read_origins だけ。shim の
 action runner（`browser_action.py`）は launcher にも埋め込まれているので、**daemon の release と launcher の再 build・差し替えの
 両方**が要る（protocol の版は 7 のまま）。
 

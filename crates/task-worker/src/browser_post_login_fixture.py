@@ -119,6 +119,12 @@ class Handler(BaseHTTPRequestHandler):
 <ul><li><a id=report href="/ct/report_1">Report 1: Fluid dynamics essay</a></li></ul>
 <a id=dl href="/ct/files/handout.pdf">Handout</a>
 <a id=dl-other href="{other_origin}/files/other.bin">Other file</a>''')
+            elif self.path == '/ct/page_1':
+                # A course material page: body text the agent must be able to read.
+                self.send('''<body><h1>Week 3 material</h1>
+<p>Read chapter 4 on boundary layers before the lab.</p>
+<p>The report must be submitted as a PDF of at most ten pages.</p>
+<a href="/ct/report_1">Go to Report 1</a>''')
             elif self.path == '/ct/report_1':
                 self.send('<body><h1>Report 1 detail</h1><p>Due 2026-10-20 23:59</p>')
             elif self.path == '/ct/files/handout.pdf':

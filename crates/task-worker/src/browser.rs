@@ -615,8 +615,9 @@ pub fn prompt(browser: &BrowserContext) -> String {
             (Some(read), true) => format!(
                 "Celeris already signed in to this session with the approved credential (result: success).\n\
                  After sign-in you may use {actions} only on pages of {origins}.\n\
-                 After sign-in `open` works only for those origins. snapshot lists link URLs; `open` such a\n\
-                 URL (no query/fragment) instead of clicking when you can.\n\
+                 After sign-in `open` works only for those origins. snapshot shows the page text and link\n\
+                 URLs; `open` such a URL (no query/fragment) instead of clicking when you can. snapshot output\n\
+                 is capped, so use extract @eN for long text.\n\
                  The sign-in (identity provider) pages and any page with a password field cannot be\n\
                  read or clicked; such commands fail. Signing in again needs a new approval.\n",
                 actions = read.actions.join(", "),

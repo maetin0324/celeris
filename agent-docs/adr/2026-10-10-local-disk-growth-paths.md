@@ -89,6 +89,41 @@ promote 前 backup は直近10本を既定保持し、rollback 用 backup は直
 
 filesystem の圧迫は同一 mount の `statvfs` 空き容量差分で評価する。lease/target 単位は保存済み `size_bytes` または block 数を使い、再帰 `du` を各観測で起動しない。共有 filesystem の statvfs 差分は他利用者の書込みも含むので、個別 lease の帰属量と混同しない。
 
+#### 付記 2026-10-10: scratch の上限と測り方
+
+人のコメント（2026-10-10）の (2)(3) への決定。実装は後続葉 `sizing-impl`（試験接頭辞 `scratch_shared_`）。
+
+**事実（2026-10-10 に確認）**
+
+- `[scratch] seed_reflink` は既定 `false`（`crates/celeris/src/config/scratch.rs`）で、本番 config にも書かれていない。`seed_housekeeping`（`crates/task-dispatch/src/dispatcher/housekeeping.rs`）は `seed_reflink = false` で即 return し、`allocate_with_seed` の `SeedPolicy.enabled` も false になる。このため seed は 1 度も作られず、全 owner の target は空から build している。
+- `/local` は btrfs 1 つ（`/dev/mapper/pve-celeris--local`、`compress=zstd:1`、`subvol=/`）。scratch pool（`/local/celeris/data/scratch`）、作業場所、run の `$TMPDIR` は同じ filesystem（`stat -f` の id `72c118bd24a3e9a4`）。
+- worker の `$TMPDIR` で自分の一時 file だけを使って試した（4 MiB）: `cp --reflink=always` は `failed to clone: Operation not permitted` になる。python から直接呼んだ ioctl `FICLONE` も `EPERM` だった（worker は seccomp filter の中で動いている。`/proc/self/status` の `Seccomp: 2`）。一方、`cp --reflink=auto` と `copy_file_range(2)` は成功した。写した file の FIEMAP は全 extent に `FIEMAP_EXTENT_SHARED`（0x2000）があり、物理位置が元 file と一致した。`cp --reflink=never` の写しには SHARED が無かった。圧縮 extent（`FIEMAP_EXTENT_ENCODED` 0x8）も共有される。
+- つまり `probe_pool_share`（`cp --reflink=auto` のあと FIEMAP の SHARED を見る。`--reflink=always` の成否は判定に使わない）は、この filesystem で成功する。btrfs の `copy_file_range` は clone なので、FICLONE が拒まれる環境でも共有になる。probe と seed の写しは daemon の process で動くので、worker の seccomp は関係しない。
+- 測り方: `measure_tree`（`crates/task-worker/src/scratch/gc.rs`）は path ごとに `st_blocks * 512` を足す。reflink で共有された extent は owner の数だけ重ねて数え、hardlink（cargo が `target/debug/<bin>` を `deps/` から張る）も path の数だけ数える。2026-10-10 の実測では、生きている target は 4 個で lease の `size_bytes` の合計は 106.4 GiB（release-build 68.0、task 23.3、wu 15.2、ほか 0）。release-build の hardlink の重複は 2.4 GiB だった。seed が無いので、reflink による重複は今は 0。
+
+**決定 S1: `seed_reflink` は有効にできる**
+
+有効にする条件は 3 つ。(a) `[scratch] dir` が reflink を共有できる filesystem（btrfs・XFS reflink=1）の上にあること。daemon が起動後最初の seed 確認で `probe_pool_share` を実行し、失敗したら warn `scratch: seed refresh disabled; pool cannot share extents` を出して seed を作らない（fail-closed）。(b) 測り方 S3 が入った release であること。旧来の測り方では seed（約 15〜20 GiB）を owner とは別に数えるうえ、seed から写した owner も全量で数える。このため、有効にしただけでは watermark への距離が縮む。(c) 空きが `seed_refresh_hold` を満たすこと（pressure 中は seed を作り直さない）。seed の build（`cargo build --workspace --all-targets`）は main が進むたびに daemon の thread で 1 本走る。人の手順・確認・戻し方は `docs/ops/local-disk-growth.md` §7 に書く。既定値は `false` のままにする（filesystem に依存するため。host ごとに人が有効にする）。
+
+**決定 S2: `targets_max_gb` の既定は 160**
+
+- 内訳: release-build の lease は pin（GC の対象外）で、`SD_RELEASE_TARGET_MAX_BYTES` の既定 64 GiB を超えると作り直す（D3）。task の target は実測で 12〜25 GiB（2026-10-10 の lease 237 件の中央値は約 15 GiB、最近の木で 20〜24 GiB）。同時に動く coding owner を 4 本と見ると、64 + 4 × 20 = 144 GiB が high watermark（0.90）の位置になる。160 × 0.90 = 144、160 × 0.70 = 112（GC 後に release-build と 2 本が残る）。
+- `/local` 300 GiB との収支: pool の外の使用量は 2026-10-10 に約 91 GiB（作業場所・DB backup ≤ 64 GiB（D4）・release・その他）。160 + 91 = 251 GiB で、`min_free_disk_mb`（5 GiB）の 2〜3 倍の余白も残る。足りなくなったときは、既存の `effective_max`（ADR-0075 D1）と disk_watch が statvfs の空きで縮める。
+- 既定 100 は release-build の pin が 64 GiB まで育つ前提と両立しない（pin だけで low watermark 70 GiB に近く、task 1〜2 本で high 90 GiB に達して GC が pin を消せない）。本番の暫定値 150 は、この決定の値に置き換える。
+- `total_max_gb` の既定は `targets_max_gb + l1_max_gb` = 200 にそろえる（現在の 150 は targets 160 より小さく、実効上限の警告が常に出るため）。
+- 既定値の置き場所は `crates/celeris/src/config/scratch.rs` の `default_scratch_targets_max_gb`・`default_scratch_total_max_gb` と `crates/task-worker/src/scratch.rs` の `ScratchSettings` 既定。`config/celeris.example.toml` の注記も合わせる。
+
+**決定 S3: 共有 extent は pool 全体で 1 回だけ数える（FIEMAP の物理 extent で重複除去）**
+
+候補は 3 つあった。(i) FIEMAP の物理 extent で pool 全体の重複を除く、(ii) SHARED の extent を別勘定にして owner には数えない、(iii) statvfs の差分。この中から (i) を選ぶ。(ii) だけでは、seed を消したあとに残る共有分が誰にも数えられない。(iii) は owner ごとに帰属できず、pool の外の書き込みも混ざる（D5）。statvfs は (i) の上限の検算にだけ使う。
+
+- 置き場所: FIEMAP の走査は `crates/task-worker/src/scratch/reflink.rs` に汎用の `fiemap_extents(path, &mut dyn FnMut(FiemapExtentInfo))` を足す（既存の `fiemap_all_shared` と同じ ioctl。測定では `FIEMAP_FLAG_SYNC` を付けない）。owner 1 個を測る `measure_tree_shared(path, &mut SharedExtentIndex, owner_id, budget) -> io::Result<OwnerMeasure>` は `crates/task-worker/src/scratch/gc.rs` に置く。`SharedExtentIndex` は pool 全体で共有する in-memory の表で、`fe_physical` から (長さの最大値, その extent を参照する owner の集合) を引く。`crates/task-dispatch/src/scratch_gc.rs` の `measure_one` は、`SizeCache` と同じ `Arc<Mutex<…>>` で持つこの表を測定スレッドに渡す。測定は従来どおり 1 回に 1 owner。
+- 数え方: SHARED の付かない extent と `FIEMAP_EXTENT_DELALLOC`/`UNKNOWN`（物理位置が未確定）の extent は、その owner の `exclusive_bytes` に足す。SHARED の extent は表に登録する（その owner の前回分は先に外す）。inode は owner の中で (dev, ino) を 1 回だけ数える（hardlink の重複を除く）。pool の使用量 = Σ `exclusive_bytes` + 表の長さの合計。GC の `GcEntry.estimated_bytes`（消して空く量）は `exclusive_bytes` + その owner だけが参照する共有 extent の量にする。lease には従来の `size_bytes`（＝ `exclusive + shared` の上限値。互換）に加えて `exclusive_bytes`・`shared_bytes`・`method`（`fiemap` | `blocks`）を書く。
+- 検算: GC の `used_bytes` は min(上の合計, statvfs の used) にする（pool が filesystem 全体の使用量を超えることはないため）。
+- 計算量の上限: FIEMAP の ioctl は 64 extent ずつ。1 owner あたり extent は 400 万個まで、壁時計は 300 秒まで（`MeasureBudget`）。表の entry は pool 全体で 800 万個まで（1 entry 約 32 byte で約 256 MiB）。どれかを超えたら、その owner は fallback にする。参考: release-build 68 GiB は zstd の 128 KiB extent で約 55 万個、task target 20 GiB は約 16 万個。
+- 失敗時の fallback: FIEMAP が `ENOTTY`/`EOPNOTSUPP`（tmpfs・NFS など）を返したとき、上限を超えたとき、ioctl が失敗したときは、その owner を従来の `st_blocks * 512` の合計（hardlink の重複は除く）で測る。その owner の SHARED 分は表に登録せず、全量を `exclusive_bytes` として数える（上限側に倒れるので、GC が消さなすぎることはない）。lease の `method` は `blocks` にし、debug log に理由を残す。daemon の再起動直後で表がまだ空のときは、未測定の owner に lease の `size_bytes`（上限値）を使う。全 owner を 1 巡測ったあとは表の値を使う。
+- release-build の `sd_release_prune_size`（shell。btrfs-progs があれば `btrfs filesystem du`）は 2026-10-10 付記のまま変えない。
+
 ## 実装の分担
 
 | 決定 | 後続葉 | 主な担当 file | 試験名の接頭辞 |

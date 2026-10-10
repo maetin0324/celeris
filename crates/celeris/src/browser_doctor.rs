@@ -194,7 +194,7 @@ impl DoctorConfig {
                         "OK",
                         "site-policy-login",
                         format!(
-                            "{}: username_selector={} post_login={}; 修正: 変えるなら web /browser/settings（変更後の credential は登録し直す）",
+                            "{}: username_selector={} post_login={} consent={}; 修正: 変えるなら web /browser/settings（変更後の credential は登録し直す）",
                             trusted.policy_id,
                             if trusted.username_selector.is_some() { "あり" } else { "なし" },
                             trusted.post_login.as_ref().map_or("なし".to_string(), |p| format!(
@@ -202,6 +202,10 @@ impl DoctorConfig {
                                 p.read_origins.join(","),
                                 p.actions.iter().map(|a| a.as_str()).collect::<Vec<_>>().join(",")
                             )),
+                            trusted.consent.as_ref().map_or("なし".to_string(), |c| match &c.choice_selector {
+                                Some(choice) => format!("{}（選択 {}）", c.selector, choice),
+                                None => c.selector.clone(),
+                            }),
                         ),
                     );
                     if self.config.api.browser_site_policies.iter().any(|seed| {

@@ -17,6 +17,7 @@ fn policy() -> CredentialPolicy {
         submit_selector: Some("button[type=submit]".into()),
         username_selector: None,
         post_login: None,
+        consent: None,
     }
 }
 

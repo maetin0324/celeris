@@ -53,6 +53,9 @@ pub struct BrowserSitePolicy {
     /// 同 D2: ログイン後の読み取りの opt-in（任意。無ければ観測停止のまま）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub post_login: Option<crate::browser_wait::PostLogin>,
+    /// 同 付記 2026-10-10b: IdP の同意頁で controller が押す固定ボタン（任意）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub consent: Option<crate::browser_wait::ConsentPolicy>,
 }
 
 /// 保存された site policy（中身＋出自と時刻）。
@@ -92,7 +95,7 @@ pub enum BrowserSitePolicyDelete {
 }
 
 const COLUMNS: &str = "policy_id, exact_origin, login_url, password_selector, submit_selector, \
-                       source, created_at, updated_at, username_selector, post_login_json";
+                       source, created_at, updated_at, username_selector, post_login_json, consent_json";
 
 fn read_row(r: &Row<'_>) -> rusqlite::Result<BrowserSitePolicyRecord> {
     let source: String = r.get(5)?;
@@ -103,6 +106,13 @@ fn read_row(r: &Row<'_>) -> rusqlite::Result<BrowserSitePolicyRecord> {
         .map_err(|e| {
             rusqlite::Error::FromSqlConversionFailure(9, rusqlite::types::Type::Text, Box::new(e))
         })?;
+    let consent = r
+        .get::<_, Option<String>>(10)?
+        .map(|json| serde_json::from_str(&json))
+        .transpose()
+        .map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(10, rusqlite::types::Type::Text, Box::new(e))
+        })?;
     Ok(BrowserSitePolicyRecord {
         policy: BrowserSitePolicy {
             policy_id: r.get(0)?,
@@ -112,6 +122,7 @@ fn read_row(r: &Row<'_>) -> rusqlite::Result<BrowserSitePolicyRecord> {
             submit_selector: r.get(4)?,
             username_selector: r.get(8)?,
             post_login,
+            consent,
         },
         source: BrowserSitePolicySource::parse(&source),
         created_at: r.get(6)?,
@@ -156,15 +167,20 @@ fn insert_or_replace(
         .as_ref()
         .map(serde_json::to_string)
         .transpose()?;
+    let consent = policy
+        .consent
+        .as_ref()
+        .map(serde_json::to_string)
+        .transpose()?;
     tx.execute(
         "INSERT INTO browser_site_policies (policy_id, exact_origin, login_url, password_selector, \
-         submit_selector, source, created_at, updated_at, username_selector, post_login_json) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, ?8, ?9) \
+         submit_selector, source, created_at, updated_at, username_selector, post_login_json, \
+         consent_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, ?8, ?9, ?10) \
          ON CONFLICT(policy_id) DO UPDATE SET exact_origin = excluded.exact_origin, \
          login_url = excluded.login_url, password_selector = excluded.password_selector, \
          submit_selector = excluded.submit_selector, source = excluded.source, \
          updated_at = excluded.updated_at, username_selector = excluded.username_selector, \
-         post_login_json = excluded.post_login_json",
+         post_login_json = excluded.post_login_json, consent_json = excluded.consent_json",
         params![
             policy.policy_id,
             policy.exact_origin,
@@ -175,6 +191,7 @@ fn insert_or_replace(
             now,
             policy.username_selector,
             post_login,
+            consent,
         ],
     )?;
     Ok(())
@@ -343,6 +360,7 @@ mod tests {
             submit_selector: None,
             username_selector: None,
             post_login: None,
+            consent: None,
         }
     }
 
@@ -382,6 +400,10 @@ mod tests {
                 crate::browser_wait::PostLoginAction::Snapshot,
                 crate::browser_wait::PostLoginAction::Download,
             ],
+        });
+        p.consent = Some(crate::browser_wait::ConsentPolicy {
+            selector: "input[name=_eventId_proceed]".into(),
+            choice_selector: Some("#_shib_idp_doNotRememberConsent".into()),
         });
         let (stored, created) = store
             .browser_site_policy_upsert(&p, "admin", now)

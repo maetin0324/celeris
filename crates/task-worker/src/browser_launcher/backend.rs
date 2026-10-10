@@ -723,6 +723,7 @@ pub(crate) fn run_login(
         args.submit_selector.as_deref(),
         args.username_selector.as_deref(),
         args.post_login.as_ref(),
+        args.consent.as_ref(),
     )
     .map_err(|_| ErrorCode::BadRequest)?;
     let lock = || controller.lock().map_err(|_| ErrorCode::LaunchFailed);
@@ -837,19 +838,25 @@ pub(crate) fn run_login(
     };
     // ADR 2026-10-09 credential username / post-login 付記 2026-10-10: wait through the IdP's
     // interstitial / consent / SAML auto-POST hops (observation stays stopped), at most 60 s.
+    let wait = crate::browser_cdp_sink::PostLoginWait::new(
+        &own,
+        &loader,
+        &args.origin,
+        &post.read_origins,
+        args.consent.as_ref(),
+        crate::browser_cdp_sink::POST_LOGIN_WAIT,
+    );
     Ok(
-        match crate::browser_cdp_sink::resume_after_login_blocking(
-            controller,
-            &own,
-            &loader,
-            &args.origin,
-            &post.read_origins,
-            crate::browser_cdp_sink::POST_LOGIN_WAIT,
-        ) {
-            Ok(()) => LoginResult::RESUMED,
+        match crate::browser_cdp_sink::resume_after_login_blocking(controller, wait) {
+            Ok(consent_pressed) => LoginResult {
+                consent_pressed,
+                ..LoginResult::RESUMED
+            },
             Err(held) => LoginResult {
                 observation: LoginObservation::Held,
-                held_reason: Some(held),
+                held_reason: Some(held.reason),
+                consent_pressed: held.consent_pressed,
+                consent_controls: held.consent_controls,
             },
         },
     )
@@ -1052,6 +1059,8 @@ mod after_login_tests {
             username_selector: Some("#u".into()),
             post_login: post,
             report_held_reason: false,
+            consent: None,
+            report_consent_controls: false,
         }
     }
 

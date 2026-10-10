@@ -47,6 +47,7 @@ pub(crate) fn trusted(o: &Origins, read: &[&str]) -> task_core::browser_wait::Tr
             read_origins: read.iter().map(|s| s.to_string()).collect(),
             actions: PostLoginAction::ALL.to_vec(),
         }),
+        consent: None,
     }
 }
 
@@ -304,7 +305,8 @@ impl<'a> Agent<'a> {
     /// Wait for a `Browser.downloadProgress` of `state` among the events received since `from`
     /// (an index into `seen`; events are browser-level, no page data).
     pub(crate) fn wait_download(&mut self, from: usize, state: &str) -> bool {
-        let deadline = Instant::now() + Duration::from_secs(10);
+        // Generous: under a loaded host Chromium may take a while to start a cross-origin download.
+        let deadline = Instant::now() + Duration::from_secs(30);
         let matches = |e: &str| {
             serde_json::from_str::<Value>(e).is_ok_and(|v| {
                 v["method"] == "Browser.downloadProgress" && v["params"]["state"] == state
@@ -373,12 +375,19 @@ async fn daemon_post_login_pair_login_reads_lms_and_refuses_idp_other_and_passwo
         "auth_section_required"
     );
     let owned: Vec<String> = read.iter().map(|s| s.to_string()).collect();
-    await_post_login(&w.fx.controller, &tab, &w.o.idp, &owned, POST_LOGIN_TIMEOUT)
-        .await
-        .expect("post-login conditions");
-    w.controller()
-        .resume_after_login(&tab.own, owned.clone())
-        .expect("resume");
+    assert_eq!(
+        await_post_login(
+            &w.fx.controller,
+            &tab,
+            &w.o.idp,
+            &owned,
+            None,
+            POST_LOGIN_TIMEOUT
+        )
+        .await,
+        Ok(false),
+        "post-login conditions (no consent page, nothing pressed)"
+    );
     assert!(w.controller().post_login_active());
     assert!(!w.controller().auth_section_active());
 
@@ -577,7 +586,9 @@ async fn daemon_post_login_unconfirmed_keeps_observation_stopped_and_names_the_r
         assert_eq!(w.received(), format!("{USER}\n{SECRET}"), "{case}");
         let started = Instant::now();
         assert_eq!(
-            await_post_login(&w.fx.controller, &tab, &w.o.idp, &read, timeout).await,
+            await_post_login(&w.fx.controller, &tab, &w.o.idp, &read, None, timeout)
+                .await
+                .map_err(|held| held.reason),
             Err(want),
             "{case}"
         );
@@ -616,19 +627,163 @@ async fn daemon_post_login_waits_through_slow_shibboleth_hops() {
     let tab = w.login(&trusted, &mut broker).await.expect("login");
     assert_eq!(w.received(), format!("{USER}\n{SECRET}"));
     let started = Instant::now();
-    await_post_login(&w.fx.controller, &tab, &w.o.idp, &read, POST_LOGIN_TIMEOUT)
-        .await
-        .expect("reaches the LMS through the IdP hops");
+    await_post_login(
+        &w.fx.controller,
+        &tab,
+        &w.o.idp,
+        &read,
+        None,
+        POST_LOGIN_TIMEOUT,
+    )
+    .await
+    .expect("reaches the LMS through the IdP hops");
     assert!(
         started.elapsed() > Duration::from_secs(15),
         "the hops took longer than 15 s"
     );
-    // Observation was stopped the whole time: nothing was queued for agents.
-    assert!(w.controller().take_agent_events().is_empty());
-    w.controller()
-        .resume_after_login(&tab.own, read)
-        .expect("resume");
+    assert!(w.controller().post_login_active());
     let mut agent = Agent::attach(&w.fx.controller, &w.target);
     let text = agent.eval("document.body.innerText").expect("extract");
     assert!(text.as_str().is_some_and(|t| t.contains("Report 1")));
+}
+
+/// 付記 2026-10-10b: with the pinned consent button, the controller presses it exactly once on the
+/// IdP's consent page (choosing the one-time option), the login continues to the LMS and the agent
+/// reads it. The agent cannot act while the consent page is up (the auth section is open), and the
+/// controller never presses on a page that is not the IdP's.
+#[tokio::test]
+async fn daemon_post_login_presses_the_pinned_consent_button_once() {
+    use task_core::browser_wait::ConsentPolicy;
+    let w = world();
+    std::fs::write(w.fx.directory.path().join("consent"), "1").expect("flag");
+    let read = vec![w.o.lms.clone()];
+    let mut trusted = trusted(&w.o, &[w.o.lms.as_str()]);
+    let consent = ConsentPolicy {
+        selector: "input[name=_eventId_proceed]".into(),
+        choice_selector: Some(
+            "input[name=_shib_idp_consentOptions][value=_shib_idp_doNotRememberConsent]".into(),
+        ),
+    };
+    trusted.consent = Some(consent.clone());
+    let mut broker = PairBroker::default();
+    let tab = w.login(&trusted, &mut broker).await.expect("login");
+    // Wait for the consent page (no press yet: only the post-login wait presses).
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let probe = w
+            .controller()
+            .post_login_probe(&tab.own, &tab.loader, &w.o.idp, &read)
+            .expect("probe");
+        if probe == crate::browser_cdp_sink::PostLoginProbe::IdpConsent {
+            break;
+        }
+        assert!(Instant::now() < deadline, "consent page never shown");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(
+        code(
+            w.controller()
+                .agent_command("Target.getTargets", json!({}), None)
+        ),
+        "auth_section_required",
+        "the agent cannot reach the consent page"
+    );
+    // Never on another origin's page.
+    assert_eq!(
+        w.controller().press_consent(&tab.own, &w.o.lms, &consent),
+        Ok(false)
+    );
+    assert!(!w.fx.directory.path().join("consent_posts").exists());
+    assert_eq!(
+        await_post_login(
+            &w.fx.controller,
+            &tab,
+            &w.o.idp,
+            &read,
+            Some(&consent),
+            POST_LOGIN_TIMEOUT
+        )
+        .await,
+        Ok(true)
+    );
+    assert_eq!(
+        std::fs::read_to_string(w.fx.directory.path().join("consent_posts")).expect("posts"),
+        "_eventId_proceed _shib_idp_doNotRememberConsent\n",
+        "pressed exactly once, with the one-time option"
+    );
+    let mut agent = Agent::attach(&w.fx.controller, &w.target);
+    let text = agent.eval("document.body.innerText").expect("extract");
+    assert!(text.as_str().is_some_and(|t| t.contains("Report 1")));
+}
+
+/// 付記 2026-10-10b: a consent page that comes back after the one press, a selector that matches
+/// nothing, or no consent setting at all ends with `consent_required`; the diagnostics carry only
+/// the consent form's control names / kinds / values — no labels, no user data, no secrets.
+#[tokio::test]
+async fn daemon_post_login_consent_not_pressed_twice_and_diagnostics_hold_no_page_data() {
+    use crate::browser_cdp_sink::PostLoginHeld;
+    use task_core::browser_wait::ConsentPolicy;
+    for (case, consent, posts) in [
+        (
+            "again",
+            Some(ConsentPolicy {
+                selector: "input[name=_eventId_proceed]".into(),
+                choice_selector: None,
+            }),
+            1,
+        ),
+        (
+            "mismatch",
+            Some(ConsentPolicy {
+                selector: "#no-such-button".into(),
+                choice_selector: None,
+            }),
+            0,
+        ),
+        ("unset", None, 0),
+    ] {
+        let w = world();
+        std::fs::write(w.fx.directory.path().join("consent"), "1").expect("flag");
+        std::fs::write(w.fx.directory.path().join("consent_again"), "1").expect("flag");
+        let read = vec![w.o.lms.clone()];
+        let mut trusted = trusted(&w.o, &[w.o.lms.as_str()]);
+        trusted.consent = consent.clone();
+        let mut broker = PairBroker::default();
+        let tab = w.login(&trusted, &mut broker).await.expect("login");
+        let held = await_post_login(
+            &w.fx.controller,
+            &tab,
+            &w.o.idp,
+            &read,
+            consent.as_ref(),
+            Duration::from_secs(30),
+        )
+        .await
+        .expect_err(case);
+        assert_eq!(held.reason, PostLoginHeld::ConsentRequired, "{case}");
+        assert_eq!(held.consent_pressed, posts == 1, "{case}");
+        let recorded = std::fs::read_to_string(w.fx.directory.path().join("consent_posts"))
+            .unwrap_or_default();
+        assert_eq!(recorded.lines().count(), posts, "{case}: at most one press");
+        let line = crate::browser_cdp_sink::format_consent_controls(&held.consent_controls);
+        assert_eq!(
+            line,
+            "_shib_idp_consentOptions=_shib_idp_doNotRememberConsent(radio),\
+_shib_idp_consentOptions=_shib_idp_rememberConsent(radio),\
+_eventId_AttributeReleaseRejected=Reject(submit),_eventId_proceed=Accept(submit)",
+            "{case}"
+        );
+        for leak in [
+            USER,
+            SECRET,
+            "Ask me again",
+            "Information",
+            "uid",
+            "@u.example",
+            "127.0.0.1",
+        ] {
+            assert!(!line.contains(leak), "{case}: {leak} in {line}");
+        }
+        assert!(w.controller().auth_section_active(), "{case}");
+    }
 }

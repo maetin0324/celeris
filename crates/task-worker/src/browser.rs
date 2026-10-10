@@ -271,40 +271,62 @@ pub(crate) async fn await_post_login(
     tab: &LoginTab,
     idp_origin: &str,
     read_origins: &[String],
+    consent: Option<&task_core::browser_wait::ConsentPolicy>,
     timeout: Duration,
-) -> Result<(), crate::browser_cdp_sink::PostLoginHeld> {
-    use crate::browser_cdp_sink::{POST_LOGIN_STABLE, PostLoginHeld, PostLoginWaiter};
-    let mut waiter = PostLoginWaiter::new(std::time::Instant::now(), timeout, POST_LOGIN_STABLE);
+) -> Result<bool, crate::browser_cdp_sink::PostLoginHeldInfo> {
+    let mut wait = crate::browser_cdp_sink::PostLoginWait::new(
+        &tab.own,
+        &tab.loader,
+        idp_origin,
+        read_origins,
+        consent,
+        timeout,
+    );
     loop {
-        let probe = controller
-            .lock()
-            .map_err(|_| PostLoginHeld::CheckFailed)?
-            .post_login_probe(&tab.own, &tab.loader, idp_origin, read_origins)
-            .map_err(|_| PostLoginHeld::CheckFailed)?;
-        match waiter.observe(probe, std::time::Instant::now()) {
-            Some(outcome) => return outcome,
-            None => tokio::time::sleep(Duration::from_millis(100)).await,
+        if let Some(outcome) = wait.step(controller) {
+            return outcome;
         }
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
 
-/// ADR 2026-10-09 credential username / post-login 付記 2026-10-10: the post-login outcome as
-/// progress — `resumed`, or `post_login_unconfirmed` with the fixed reason and the top origin's
-/// category (never a URL). Both runtimes report through this.
+/// ADR 2026-10-09 credential username / post-login 付記 2026-10-10 / 2026-10-10b: the post-login
+/// outcome as progress — `resumed` (and whether the consent button was pressed), or
+/// `post_login_unconfirmed` with the fixed reason, the top origin's category and, on a consent
+/// page, the consent form's control names (never a URL, label or page text). Both runtimes report
+/// through this.
 pub(crate) fn post_login_progress(
     sink: &dyn EventSink,
-    outcome: Result<(), crate::browser_cdp_sink::PostLoginHeld>,
+    outcome: &Result<bool, crate::browser_cdp_sink::PostLoginHeldInfo>,
 ) {
     let (msg, summary) = match outcome {
-        Ok(()) => ("browser.post_login: resumed".to_string(), "resumed"),
-        Err(held) => (
+        Ok(pressed) => (
             format!(
-                "browser.post_login: post_login_unconfirmed (reason={}, top={})",
-                held.code(),
-                held.top_origin()
+                "browser.post_login: resumed{}",
+                if *pressed { " (consent_pressed)" } else { "" }
             ),
-            held.code(),
+            "resumed",
         ),
+        Err(held) => {
+            let mut detail = format!(
+                "reason={}, top={}",
+                held.reason.code(),
+                held.reason.top_origin()
+            );
+            if held.consent_pressed {
+                detail.push_str(", consent_pressed");
+            }
+            if !held.consent_controls.is_empty() {
+                detail.push_str(", consent_controls=");
+                detail.push_str(&crate::browser_cdp_sink::format_consent_controls(
+                    &held.consent_controls,
+                ));
+            }
+            (
+                format!("browser.post_login: post_login_unconfirmed ({detail})"),
+                held.reason.code(),
+            )
+        }
     };
     sink.progress_with(
         &msg,
@@ -2103,35 +2125,31 @@ async fn run_with_executable_attempt(
             let mut resumed = None;
             if let (Ok(tab), Some((read, bytes))) = (&result, &post_login_plan) {
                 let controller = shared_cdp.controller();
-                let confirmed = await_post_login(
+                // The controller closes its section on the post-login conditions (pressing the
+                // pinned consent button at most once); then the store follows.
+                let outcome = await_post_login(
                     &controller,
                     tab,
                     &approval.wait.origin,
                     &read.read_origins,
+                    trusted.consent.as_ref(),
                     POST_LOGIN_TIMEOUT,
                 )
-                .await;
-                let outcome = confirmed.and_then(|()| {
-                    let reopened = sink
+                .await
+                .and_then(|pressed| {
+                    if sink
                         .browser_auth_section(run_id, &browser.session_id, false)
                         .is_ok()
-                        && controller
-                            .lock()
-                            .map_err(|_| crate::browser_cdp_sink::InjectionError::SinkFailed)
-                            .and_then(|mut c| {
-                                c.resume_after_login(&tab.own, read.read_origins.clone())
-                            })
-                            .is_ok();
-                    if reopened {
-                        Ok(())
+                    {
+                        Ok(pressed)
                     } else {
-                        Err(crate::browser_cdp_sink::PostLoginHeld::ResumeFailed)
+                        Err(crate::browser_cdp_sink::PostLoginHeld::ResumeFailed.into())
                     }
                 });
                 if outcome.is_ok() {
                     resumed = Some((read.clone(), bytes.clone()));
                 }
-                post_login_progress(sink, outcome);
+                post_login_progress(sink, &outcome);
             }
             // 0.38.1 reuses the daemon only while config and policy paths stay
             // fixed. Rewrite the policy in place before the harness can run.

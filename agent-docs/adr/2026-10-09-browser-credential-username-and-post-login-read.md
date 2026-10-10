@@ -297,3 +297,33 @@ session では同意頁が毎回出ると見込む。
 5. **task policy。** 本番の task policy（`https://*.tsukuba.ac.jp`、全 action）で post_login の実効集合は空でなく、区間が閉じれば
    snapshot / extract などは戻る。その run の「not permitted by the task browser policy」は観測停止のままの状態の表示で、
    policy の欠けではない（試験 `post_login_read_with_the_production_task_policy_shape_enables_reading`）。
+
+## 付記 2026-10-10b: IdP の属性送信の同意頁を controller が固定ボタンで押す（人の決定）
+
+人の決定（2026-10-10）: IdP の属性送信の同意頁では、controller が**固定の**同意ボタンを自動で押してよい。
+
+設計:
+
+1. **site policy に `consent`（任意）を足す。** `consent: {selector, choice_selector?}`。`selector` は同意を送るボタン
+   （`button` か `input[type=submit]`）、`choice_selector` は任意の選択肢（radio）。どちらも他の selector と同じ文法・長さ
+   制限で、管理者だけが設定する（API・web の site policy 編集。モデル・worker・task policy からは入らない）。押す回数は
+   1 login につき 1 回に固定（設定値ではない）。`consent` は `post_login` と組でだけ置ける（区間後の待ちの中でだけ使うため）。
+   選択肢の既定: `choice_selector` を置かなければ選択肢には触らず頁の既定のまま送る。置くなら最も狭い同意
+   （Shibboleth の「次回も確認する」= `_shib_idp_doNotRememberConsent`、その login だけの同意）を推奨し、運用手順にも
+   そう書く（同意の記録は browser 側で session の終わりに消えるので、どちらでも次回また出るが、IdP 側に長期の同意を
+   残さない方を選ぶ）。
+2. **押してよい条件（全部）。** 人がこの回の credential_use を承認した run の中で、login の submit の後の区間後の待ちの間、
+   controller 自身が（agent・LLM は決して押さない。区間中は agent の CDP は全面遮断のまま）、login tab の top document が
+   site policy の `exact_origin`（IdP）にあり、その頁が同意頁と分類され（既存の分類器: Shibboleth の固定の欄名）、
+   `selector` がその document でちょうど 1 要素（ボタン、form の中）に一致し、`choice_selector` があればそれも同じ form の
+   radio ちょうど 1 要素に一致するとき。押すのは 1 login につき最大 1 回。押した後は既存の待ちを続け、同意頁が残る・
+   別の同意頁が出るなら今どおり `post_login_consent_required` で止める。
+3. **承認画面と固定。** `consent` は承認で固定する `TrustedLogin` に入り（承認画面に表示し、承認後の変更は
+   `policy_changed`、broker の grant も登録時の写しと照合）、broker の vault の写しにも入る（site policy を変えたら
+   credential を登録し直す点は同じ）。
+4. **同意頁の欄名の診断。** 同意頁で止まったとき（`consent` 未設定・selector 不一致・押しても残った）は、progress に同意 form の
+   `button` と `input[type=submit|radio]` の `name`・`type`・`value` だけを出す（ASCII の印字可能文字だけ、各 64 文字まで、
+   最大 12 個、全体 512 文字まで。label・本文・利用者の値・URL は出さない）。運用者が実頁の selector を決めるために使う。
+5. **launcher protocol 7。** `authenticate` に `consent` と `report_consent_controls`、応答に `consent_controls` を足す。
+   consent を使う login は v7 を要求する（v6 の launcher は daemon が承認消費前に「protocol 7 required」で拒否）。
+   応答の新しい欄は要求が求めたときだけ返す（v6 の daemon と v7 の launcher も併存できる）。

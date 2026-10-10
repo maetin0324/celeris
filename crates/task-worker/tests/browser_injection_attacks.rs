@@ -270,6 +270,7 @@ fn grant(root: &tempfile::TempDir, n: u32) -> String {
         submit_selector: None,
         username_selector: None,
         post_login: None,
+        consent: None,
     };
     let reference = CredentialRef {
         credential_id: format!("login-{n}"),

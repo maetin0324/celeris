@@ -365,6 +365,7 @@ async fn browser_site_policy_db_config_seed_only_fills_missing() {
             submit_selector: None,
             username_selector: None,
             post_login: None,
+            consent: None,
         },
         BrowserSitePolicy {
             policy_id: "portal".into(),
@@ -374,6 +375,7 @@ async fn browser_site_policy_db_config_seed_only_fills_missing() {
             submit_selector: None,
             username_selector: None,
             post_login: None,
+            consent: None,
         },
     ];
     let inserted = env

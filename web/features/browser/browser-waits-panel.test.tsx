@@ -164,6 +164,7 @@ describe("TrustedLoginSummary", () => {
             ...login,
             username_selector: 'input[name="j_username"]',
             post_login: { read_origins: ["https://lms.example.ac.jp"], actions: ["snapshot", "extract", "click"] },
+            consent: { selector: 'input[name="_eventId_proceed"]', choice_selector: "#once" },
           },
         })}
       />,
@@ -173,6 +174,8 @@ describe("TrustedLoginSummary", () => {
     expect(html).toContain("https://lms.example.ac.jp（snapshot, extract, click）");
     expect(html).toContain("LLM");
     expect(html).toContain("password 欄のある頁は読み取りません");
+    expect(html).toContain("_eventId_proceed");
+    expect(html).toContain("（選択 #once）（Celeris が 1 回だけ押す）");
   });
   it("says nothing is read after login without an opt-in, and renders nothing without a pinned login", () => {
     const html = renderToStaticMarkup(
@@ -181,6 +184,7 @@ describe("TrustedLoginSummary", () => {
       />,
     );
     expect(html).toContain("しない（session の終わりまで頁を読まない）");
+    expect(html).toContain("押さない（同意頁で止まる）");
     expect(html).not.toContain("LLM");
     expect(renderToStaticMarkup(<TrustedLoginSummary wait={decisionWait()} />)).toBe("");
   });

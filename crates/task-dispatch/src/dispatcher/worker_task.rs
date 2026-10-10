@@ -6,6 +6,10 @@ use super::*;
 /// `cargo fetch` / `pnpm install` が入る想定で、run の予算とは別に取る）。
 const SETUP_TIMEOUT: Duration = Duration::from_secs(1800);
 
+/// ADR 2026-10-10-local-disk-growth-paths D1: `CARGO_TARGET_DIR` を与えられなかった run の `WorkerProgress`
+/// （`kind = status`）の接頭辞。repo 直下 target に落ちうる run を event で決定的に見分ける。
+pub(super) const CARGO_TARGET_NOTE_PREFIX: &str = "cargo-target:";
+
 /// `run_worker` が run ごとに adapter へ施す包み（ADR-0107 D1）。主 adapter と browser fallback
 /// 候補の両方に同じ値を使う。
 #[derive(Clone, Default)]
@@ -416,6 +420,7 @@ pub(super) async fn run_worker(
     // ADR-0044 D2: 対話 run（人への返事だけをする run。Phase 28）にはコメントの書き方を出さない。
     let writes_comments = extras.conversation_addressee.is_none();
     let cargo_target_work_unit = extras.cargo_target_work_unit.clone();
+    let cargo_target_fallback = extras.cargo_target_fallback.clone();
     let work_unit_env = extras.work_unit_env.clone();
     let mut req = RunRequest {
         cargo_target_dir: None,
@@ -494,11 +499,36 @@ pub(super) async fn run_worker(
     };
     // ADR-0066 D1（Phase 110b）: ローカルの git worktree のホスト実行にだけ、共有ビルドキャッシュの
     // `CARGO_TARGET_DIR` を与える（コンテナ実行〈`container_plan.is_some()`〉と Remote は対象外）。
+    // ADR 2026-10-10-local-disk-growth-paths D1: 先頭が git でなければ dispatcher が決めた代わりの checkout
+    // （`repos=[]` の子 task なら祖先の checkout）。どちらも無く `Missing` なら理由を event に残す。
+    let local_host = container_plan.is_none() && remote.is_none();
     let repo_for_target = worktree
         .as_ref()
         .and_then(|wt| wt.repos.first())
-        .filter(|r| r.is_git() && container_plan.is_none() && remote.is_none())
-        .cloned();
+        .filter(|r| r.is_git() && local_host)
+        .cloned()
+        .or_else(|| {
+            cargo_target_fallback
+                .as_ref()
+                .and_then(|f| f.repo())
+                .filter(|_| local_host)
+                .cloned()
+        });
+    let mut cargo_target_notes: Vec<String> = Vec::new();
+    if local_host && !matches!(cargo_target, CargoTargetPlan::None) {
+        match &cargo_target_fallback {
+            Some(super::workspaces::CargoTargetFallback::Missing { reason }) => {
+                tracing::warn!(task_id = %task_id, %reason, "cargo target: CARGO_TARGET_DIR not set (ADR 2026-10-10-local-disk-growth-paths D1)");
+                cargo_target_notes.push(format!(
+                    "{CARGO_TARGET_NOTE_PREFIX} CARGO_TARGET_DIR not set: {reason}"
+                ));
+            }
+            Some(super::workspaces::CargoTargetFallback::Ancestor { ancestor, repo }) => {
+                tracing::info!(task_id = %task_id, %ancestor, checkout = %repo.dir.display(), "cargo target: using the ancestor's checkout (ADR 2026-10-10-local-disk-growth-paths D1)");
+            }
+            _ => {}
+        }
+    }
     // ADR-0075 D4 / ADR-0129 (1): scratch なら env は `CARGO_TARGET_DIR` と `[scratch.cargo]`（checks と同じ組み方）。
     // legacy は `CARGO_TARGET_DIR` だけ。sccache 系は Celeris が足しも外しもしない（host の cargo 設定に任せる）。
     let target: Option<(PathBuf, task_worker::scratch::CargoEnv)> = match (
@@ -596,12 +626,19 @@ pub(super) async fn run_worker(
     // cargo は作業場所に `target/` を作る。黙らせず警告する。
     if !env_applied
         && prep.env.is_some()
-        && worktree
+        && (worktree
             .as_ref()
             .and_then(|wt| wt.repos.first())
             .is_some_and(|r| r.dir.join("Cargo.toml").is_file())
+            || cargo_target_fallback
+                .as_ref()
+                .is_some_and(|f| f.repo().is_some()))
     {
         tracing::warn!(task_id = %task_id, adapter = %adapter.id(), "adapter does not support with_env; CARGO_TARGET_DIR was not applied to a Rust repository (ADR 2026-10-07-build-tmp-hygiene A1)");
+        cargo_target_notes.push(format!(
+            "{CARGO_TARGET_NOTE_PREFIX} CARGO_TARGET_DIR not set: adapter {} does not support with_env",
+            adapter.id()
+        ));
     }
     if env_applied {
         req.cargo_target_dir = target.map(|(dir, _)| dir);
@@ -647,6 +684,13 @@ pub(super) async fn run_worker(
     // できるので、準備の直後ではなく run の前に書く）。
     if let Some(ws) = &remote_ws {
         drain_remote_progress_notes(ws.take_progress_notes(), &sink);
+    }
+    // ADR 2026-10-10-local-disk-growth-paths D1: `CARGO_TARGET_DIR` を与えられなかった理由を run の event に残す。
+    for note in &cargo_target_notes {
+        sink.progress_with(
+            note,
+            &task_core::ProgressFields::of(task_core::ProgressKind::Status),
+        );
     }
     let outcome = if task_core::browser::requests_browser(&req.task.skills)
         && (remote.is_some() || container_plan.is_some())

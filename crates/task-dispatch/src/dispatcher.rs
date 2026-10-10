@@ -1063,6 +1063,10 @@ struct RunExtras {
     /// `run_worker` が `CARGO_TARGET_DIR` を WU ごとにする（scratch なら owner `task-<id>/wu-<id>`、無効なら
     /// `<repo-key>/wu-<id>`。兄弟 WU と target を共有しない）。
     cargo_target_work_unit: Option<(String, String)>,
+    /// ADR 2026-10-10-local-disk-growth-paths D1: 作業場所の先頭に git の repo が無い run だけ `Some`
+    /// （`repos=[]` の子 task が祖先の checkout を使う形など）。`run_worker` がこの checkout に scratch の
+    /// `CARGO_TARGET_DIR` を結び付ける（`Missing` は理由を run の event に残す）。
+    cargo_target_fallback: Option<workspaces::CargoTargetFallback>,
     /// ADR-0074 付記 2026-10-05 D3: WU の run だけ `Some`（`CELERIS_WU_BASE` / `CELERIS_WU_TARGET`）。
     /// `run_worker` が adapter の env に重ねる（checks の env と同じ値）。
     work_unit_env: Option<Vec<(String, String)>>,

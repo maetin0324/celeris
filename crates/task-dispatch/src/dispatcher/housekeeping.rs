@@ -360,12 +360,12 @@ impl Dispatcher {
         if !self.config.shared_build_cache {
             return CargoEnv::default();
         }
-        let Some(ws) = self.task_workspaces_for(task) else {
+        // ADR 2026-10-10-local-disk-growth-paths D1: 自分の git の作業場所が無い（`repos=[]` の子 task が親の
+        // checkout を使う・shared の Rust checkout）ときも、run と同じ代わりの checkout に結び付ける。
+        let Some(repo) = self.cargo_target_repo(task) else {
             return CargoEnv::default();
         };
-        let Some(repo) = ws.repos.first().filter(|r| r.is_git()) else {
-            return CargoEnv::default();
-        };
+        let repo = &repo;
         // ADR-0075 D3（Phase G1）: scratch が有効なら run と同じ owner の target（lease を touch する。adopt はしない）。
         if self.scratch_active() {
             let owner = match work_unit_id {
@@ -421,9 +421,8 @@ impl Dispatcher {
             }
             None => {
                 let rust = self
-                    .task_workspaces_for(task)
-                    .and_then(|ws| ws.repos.first().map(|r| r.dir.join("Cargo.toml").is_file()))
-                    .unwrap_or(false);
+                    .cargo_target_repo(task)
+                    .is_some_and(|r| r.dir.join("Cargo.toml").is_file());
                 if rust {
                     tracing::warn!(task_id = %task.id, adapter = %adapter.id(), "reviewer adapter does not support with_env; CARGO_TARGET_DIR was not applied (ADR 2026-10-07-build-tmp-hygiene A1)");
                 }

@@ -643,4 +643,82 @@ impl Dispatcher {
             tracing::warn!(task_id = %task_id, error = %e, "workspace prune: could not spawn the prune thread");
         }
     }
+
+    /// ADR 2026-10-10-local-disk-growth-paths D2: checkout を持つ task とその子孫が全て終端になり、最後の終端から
+    /// `[maintenance.target_sweep] workspace_target_after_hours`（既定 6 時間）経った木の repo 直下 target を消す。
+    /// cron の `target_sweep` が無効でも走る（[`REPO_TARGET_GC_INTERVAL_SECS`] ごと、注入時計）。tick の中は
+    /// lock を持った rename まで、削除と `statvfs` の前後は別スレッド。`--mode verify` の煙試験では何もしない。
+    pub(super) fn sweep_repo_targets(&mut self) {
+        use std::sync::atomic::Ordering;
+        let after_secs = self.target_sweep_scope.workspace_target_after_secs;
+        if self.eligible.is_some()
+            || after_secs == 0
+            || self.removing_repo_targets.load(Ordering::SeqCst)
+        {
+            return;
+        }
+        let now = self.now_utc();
+        if self
+            .repo_target_gc_at
+            .is_some_and(|at| (now - at).whole_seconds() < REPO_TARGET_GC_INTERVAL_SECS)
+        {
+            return;
+        }
+        self.repo_target_gc_at = Some(now);
+        let root = self.config.workspace_root.clone();
+        let gc = crate::target_sweep::repo_target_gc_move_aside(
+            self.store.as_ref(),
+            &root,
+            after_secs,
+            now,
+            true,
+        );
+        for e in &gc.errors {
+            tracing::warn!(error = %e, "repo target gc");
+        }
+        for held in &gc.held {
+            tracing::debug!(path = %held.path.display(), reason = %held.reason, "repo target gc: kept");
+        }
+        for m in &gc.moved {
+            tracing::info!(task_id = %m.task_id, path = %m.target.display(), bytes = m.bytes, "repo target gc: removing the target of a finished task tree");
+            let task_dir = root.join(m.task_id.to_string());
+            let removed = task_worker::workspace_prune::relative_removed(
+                &task_dir,
+                std::slice::from_ref(&m.target),
+            );
+            if let Err(e) = self
+                .store
+                .append_event(m.task_id, &Event::WorkspacePruned { removed })
+            {
+                tracing::warn!(task_id = %m.task_id, error = %e, "repo target gc: could not record the event");
+            }
+        }
+        if gc.to_remove.is_empty() {
+            return;
+        }
+        let busy = self.removing_repo_targets.clone();
+        busy.store(true, Ordering::SeqCst);
+        let bytes: u64 = gc.moved.iter().map(|m| m.bytes).sum();
+        let spawned = std::thread::Builder::new()
+            .name("celeris-repo-target-rm".to_string())
+            .spawn({
+                let busy = busy.clone();
+                let paths = gc.to_remove;
+                move || {
+                    let out = crate::target_sweep::remove_moved_targets(&paths, &root);
+                    for e in &out.errors {
+                        tracing::warn!(error = %e, "repo target gc");
+                    }
+                    tracing::info!(removed = out.removed, blocks_bytes = bytes, statvfs_freed = ?out.freed_statvfs, "repo target gc: removed");
+                    busy.store(false, Ordering::SeqCst);
+                }
+            });
+        if let Err(e) = spawned {
+            busy.store(false, Ordering::SeqCst);
+            tracing::warn!(error = %e, "repo target gc: could not spawn the removal thread");
+        }
+    }
 }
+
+/// ADR 2026-10-10-local-disk-growth-paths D2: 常設の repo target 掃除の間隔（秒）。
+pub(crate) const REPO_TARGET_GC_INTERVAL_SECS: i64 = 600;

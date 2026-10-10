@@ -46,6 +46,18 @@ task `01M4D7RVKX` は 2026-10-09 08:01 に終端したものとして調査し�
 
 既定猶予は6時間を維持する。掃除候補は終端 task の所有 checkout とその WU に限り、running run・生存 task・build lock があれば保護する。子 task の終端で親 checkout を削除せず、checkout owner と参照する木の task を追跡し、最後の利用者が終端して猶予を経た時点で候補化する。配送前は候補を記録して安全性を検査し、配送後は merge/checkout が完了した owner checkout を再走査する。cron は有効化状態、apply 実行結果、削除/保護理由を記録し、dry-run のまま成功扱いにしない。
 
+#### D2 実装の付記（2026-10-10、repo-target-gc）
+
+- 木の判定は `task_worker::workspace_targets::tree_hold`（`running_run` / `active_descendant` / `grace`）。猶予は木の最後の終端から数える。
+  `scan_finished_task_targets`・`finished_task_targets`・`workspace_prune::find_prune_candidates` が使う。
+- cron に依らない常設の掃除: `Dispatcher::sweep_repo_targets`（tick、600 秒ごと、`workspace_target_after_hours` 既定 6）。
+  I/O は `task_dispatch::target_sweep::{repo_target_gc_move_aside, remove_moved_targets}`（lock を持った rename → 別スレッドで削除、
+  量は `st_blocks` と `statvfs` 差分）。cron の `sweep_workspace_targets` も同じ関数を使い、残した理由を `skipped` に出す。
+- 試験: task-worker `repo_target_gc_finished_task_target_is_removed`・`repo_target_gc_running_descendant_keeps_the_parent_target`・
+  `repo_target_gc_cargo_lock_keeps_the_target`、task-dispatch `repo_target_gc_removes_the_target_of_a_finished_task`・
+  `repo_target_gc_keeps_the_target_while_a_descendant_runs`・`repo_target_gc_keeps_the_target_while_cargo_holds_the_lock`・
+  `repo_target_gc_tick_removes_a_finished_task_target_without_cron`。
+
 ### D3. release-build lease の prune と symlink 回復
 
 各 release の開始時刻を target marker に原子的に記録する。梱包後、直前 build 開始時刻より古い workspace crate の test binary と対応 `.d`、および live 参照のない hash 世代を削除する。依存 crate の rlib は保持する。lease size が設定上限を超えたら target を空にして seed から再作成し、seed が無い場合も空 target から作り直して gate をやり直す（長時間 gate を許容し、timeout 内で終わらなければ失敗として報告）。`browser-ledger.sh` は `release.sh` と同じ `sd_scratch_lease` 解決を使う。GC/prune/recreate 時に `.cargo-target` が dangling または古い lease を指していたら安全な fallback/現 lease へ symlink を修復する。

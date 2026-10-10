@@ -1,7 +1,9 @@
 //! Task-scoped live relay API. A GUI-signed assertion is checked on every relay call.
 use axum::Json;
+use axum::body::Body;
 use axum::extract::{Path, Query, State, rejection::JsonRejection};
-use axum::http::StatusCode;
+use axum::http::{HeaderValue, StatusCode, header};
+use axum::response::Response;
 use serde::{Deserialize, Serialize};
 use task_core::browser_live::{
     self, LiveDenied, LiveEvent, LiveGrant, LiveResume, LiveTab, LiveTarget, LiveViewer,
@@ -44,10 +46,18 @@ struct GrantRequest {
 struct GrantResponse {
     grant_id: String,
     expires_at: u64,
+    frames_available: bool,
+    live_reason: Option<&'static str>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RelayRequest {
+    assertion: HumanAttestation,
+    grant_id: String,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FrameRequest {
     assertion: HumanAttestation,
     grant_id: String,
 }
@@ -260,9 +270,17 @@ async fn grant(
             browser_session_id: path.2.clone(),
         },
     );
+    let frames_available = state.live_sessions.as_ref().is_some_and(|sessions| {
+        sessions.get(&path.2).is_some_and(|entry| {
+            entry.live_key().as_ref() == Some(&(path.0.clone(), path.1.clone()))
+                && entry.live_frames().is_some()
+        })
+    });
     Ok(Json(GrantResponse {
         grant_id,
         expires_at,
+        frames_available,
+        live_reason: (!frames_available).then_some("launcher_protocol_no_live_frames"),
     }))
 }
 async fn check(
@@ -305,6 +323,64 @@ async fn read(
         Vec::new()
     };
     Ok(Json(ReadResponse { plan, events }))
+}
+
+/// Owner-only, volatile frame stream. Each item is a 4-byte big-endian length followed by
+/// the opaque image bytes. The grant and signed owner assertion are rechecked while streaming.
+async fn frames(
+    State(state): State<ApiState>,
+    Path(path): Path<(String, String, String)>,
+    body: Result<Json<FrameRequest>, JsonRejection>,
+) -> Result<Response, ApiProblem> {
+    let body = parse_body(body)?;
+    let relay = RelayRequest {
+        assertion: body.assertion,
+        grant_id: body.grant_id,
+    };
+    checked(&state, &path, &relay).await?;
+    let registry = state
+        .live_sessions
+        .as_ref()
+        .ok_or_else(|| denied(LiveDenied::LiveViewDisabled))?;
+    let entry = registry
+        .get(&path.2)
+        .ok_or_else(|| denied(LiveDenied::LiveViewDisabled))?;
+    if entry.live_key().as_ref() != Some(&(path.0.clone(), path.1.clone())) {
+        return Err(denied(LiveDenied::OtherTask));
+    }
+    let slot = entry
+        .live_frames()
+        .ok_or_else(|| denied(LiveDenied::LiveViewDisabled))?;
+    let stream = futures_util::stream::unfold(
+        (state, path, relay, slot),
+        |(state, path, relay, slot)| async move {
+            loop {
+                tokio::select! {
+                    frame = slot.next() => {
+                        let frame = frame?;
+                        if checked(&state, &path, &relay).await.is_err() { return None; }
+                        let len = u32::try_from(frame.body().len()).ok()?;
+                        let mut bytes = Vec::with_capacity(4 + frame.body().len());
+                        bytes.extend_from_slice(&len.to_be_bytes());
+                        bytes.extend_from_slice(frame.body());
+                        return Some((Ok::<_, std::convert::Infallible>(axum::body::Bytes::from(bytes)), (state, path, relay, slot)));
+                    }
+                    _ = tokio::time::sleep(std::time::Duration::from_millis(250)) => {
+                        if checked(&state, &path, &relay).await.is_err() { return None; }
+                    }
+                }
+            }
+        },
+    );
+    let mut response = Response::new(Body::from_stream(stream));
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/octet-stream"),
+    );
+    Ok(response)
 }
 async fn event(
     State(state): State<ApiState>,
@@ -416,5 +492,9 @@ pub(crate) fn routes() -> axum::Router<ApiState> {
         .route(
             "/api/v1/tasks/{id}/browser/live/{run}/{session}/read",
             post(read),
+        )
+        .route(
+            "/api/v1/tasks/{id}/browser/live/{run}/{session}/frames",
+            post(frames),
         )
 }

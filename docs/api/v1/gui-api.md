@@ -461,6 +461,7 @@ listen = "127.0.0.1:7710"      # これを書いたときだけ API が動く（
 | 166 | POST | `/tasks/{id}/browser/live/{run}/{session}/check` | 閲覧許可を確かめる | `CheckResponse` | `crate::browser_live` |
 | 167 | POST | `/tasks/{id}/browser/live/{run}/{session}/read` | Live View の event を読む | `ReadResponse` | store `browser_live_after` |
 | 168 | POST | `/tasks/{id}/browser/live/{run}/{session}/events` | Live View の event を追記する（daemon bearer） | `EventResponse` | store `browser_live_append` |
+| 169 | POST | `/tasks/{id}/browser/live/{run}/{session}/frames` | owner 専用の揮発 frame stream（4-byte length + binary body、no-store） | binary stream | `crate::browser_live` |
 | 175 | GET | `/releases/{sha12}/promotion-preview` | `current` から対象リリースまでに入る全リリースの要約（同じ task は 1 回。§3.67a。ADR 2026-10-04-release-notes） | `ReleasePromotionPreview` | `crate::releases` |
 | 176 | GET | `/deliveries` | 配送記録の task と commit の対応（`release.sh` が notes の task 判別に使う。§3.67b） | `DeliveryList` | store `delivery_list` |
 | 177 | GET | `/tasks/{id}/work-units/{wu_id}/check-log` | 統合 WU の検査・葉の WU の受け入れ検査（実行中・済み）のログの末尾（§3.126.19。ADR 2026-10-04-integration-check-progress、ADR-0040 付記 2026-10-04） | `WorkUnitCheckLog` | events + ファイル |
@@ -3252,8 +3253,10 @@ attestation が一致した場合だけ、開封した state を controller に�
 
 #### 3.126.14 `POST /tasks/{id}/browser/live/{run}/{session}/grant` → 200 `GrantResponse`
 
-本文は GUI 署名の `{assertion}`。閲覧を許可すると `{grant_id,expires_at}` を返す。
+本文は GUI 署名の `{assertion}`。閲覧を許可すると `{grant_id,expires_at,frames_available,live_reason}` を返す。
 通常の bearer に加えて署名と owner session を検証する。
+`frames_available` は同じ task/run に結び付いた session に揮発 frame slot がある場合 `true`。
+無い場合 `live_reason` は `launcher_protocol_no_live_frames`。frame 本体はこの応答に含めない。
 
 #### 3.126.15 `POST /tasks/{id}/browser/live/{run}/{session}/check` → 200 `CheckResponse`
 

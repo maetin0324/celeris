@@ -78,6 +78,7 @@ Live View の grant/check/read は owner attestation を入力するため除外
 | POST | `/tasks/{id}/browser/live/{run}/{session}/check` | `browser_credential_attestation` | 人の決定 secrets=exclude。credential・封緘 state・receipt・owner attestation／信頼端末を扱う系列。値を含まない失効・削除も除外。 |
 | POST | `/tasks/{id}/browser/live/{run}/{session}/grant` | `browser_credential_attestation` | 人の決定 secrets=exclude。credential・封緘 state・receipt・owner attestation／信頼端末を扱う系列。値を含まない失効・削除も除外。 |
 | POST | `/tasks/{id}/browser/live/{run}/{session}/read` | `browser_credential_attestation` | 人の決定 secrets=exclude。credential・封緘 state・receipt・owner attestation／信頼端末を扱う系列。値を含まない失効・削除も除外。 |
+| POST | `/tasks/{id}/browser/live/{run}/{session}/frames` | `browser_credential_attestation` | 人の決定 secrets=exclude。credential・封緘 state・receipt・owner attestation／信頼端末を扱う系列。値を含まない失効・削除も除外。 |
 | POST | `/tasks/{id}/browser/waits/{wait_id}/credential` | `browser_credential_attestation` | 人の決定 secrets=exclude。credential・封緘 state・receipt・owner attestation／信頼端末を扱う系列。値を含まない失効・削除も除外。 |
 | POST | `/tasks/{id}/browser/waits/{wait_id}/decision` | `browser_credential_attestation` | 人の決定 secrets=exclude。credential・封緘 state・receipt・owner attestation／信頼端末を扱う系列。値を含まない失効・削除も除外。 |
 | POST | `/tasks/{id}/browser/waits/{wait_id}/registered` | `browser_credential_attestation` | 人の決定 secrets=exclude。credential・封緘 state・receipt・owner attestation／信頼端末を扱う系列。値を含まない失効・削除も除外。 |
@@ -279,6 +280,7 @@ R の操作では領域 write は不要だが operation・event・card は同一
 | POST | `/tasks/{id}/browser/live/{run}/{session}/events` | A | `browser_live.rs` | 共通 |
 | POST | `/tasks/{id}/browser/live/{run}/{session}/grant` | X: `browser_credential_attestation` | `browser_live.rs` | 共通 |
 | POST | `/tasks/{id}/browser/live/{run}/{session}/read` | X: `browser_credential_attestation` | `browser_live.rs` | 共通 |
+| POST | `/tasks/{id}/browser/live/{run}/{session}/frames` | X: `browser_credential_attestation` | `browser_live.rs` | 共通 |
 | PUT | `/tasks/{id}/browser/policy` | A | `browser.rs` | 共通 |
 | POST | `/tasks/{id}/browser/requests` | A | `browser.rs` | 共通 |
 | POST | `/tasks/{id}/browser/waits/{wait_id}/credential` | X: `browser_credential_attestation` | `browser.rs` | 共通 |

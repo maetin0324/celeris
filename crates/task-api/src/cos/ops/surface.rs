@@ -193,6 +193,11 @@ pub(crate) const EXCLUDED: &[(&str, &str, &str)] = &[
     ),
     (
         "POST",
+        "/api/v1/tasks/{id}/browser/live/{run}/{session}/frames",
+        "browser_credential_attestation: 人の決定 secrets=exclude。credential・封緘 state・receipt・owner attestation／信頼端末を扱う系列。値を含まない失効・削除も除外。",
+    ),
+    (
+        "POST",
         "/api/v1/tasks/{id}/browser/waits/{wait_id}/credential",
         "browser_credential_attestation: 人の決定 secrets=exclude。credential・封緘 state・receipt・owner attestation／信頼端末を扱う系列。値を含まない失効・削除も除外。",
     ),

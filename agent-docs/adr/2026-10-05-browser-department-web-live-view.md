@@ -758,3 +758,25 @@ sha256 で確認）で `scripts/dev/browser-web-live-check.sh` を 5 回目を�
 - 各回（attempts 1〜8 → rerun 2〜5）の経緯と各段の結果は
   [real-check.md](../progress/2026-10-05-browser-web-live-view/real-check.md) と
   [record6.md](../progress/2026-10-05-browser-web-live-view/record6.md) に記録する。
+
+## 付記: gateway の live 可否と SPA の表示（2026-10-10）
+
+D3.2 の「live の可否と理由は gateway が返す」を次の形で実装した（`web/server/browser-live.js` の
+`liveAvailability`、`web/features/browser/live-view-frame.tsx` の `liveViewState`）。
+
+- `GET /browser/runs` の各 run に `live` を入れる。`live` は `{state:"link", href}` か `{state:"disabled", reason}` のどちらか。
+  `live_path` は `live.state` が `link` のときだけ付く（disabled の run には付かない）。
+- 判定順（gateway）: `COMPLETED`・`FAILED` → `not_running`、`WAITING_FOR_AUTH` → `auth_interval`、
+  upstream 未設定 → `relay_unavailable`、session_id 無し・`WAITING_FOR_HUMAN`・`WAITING_FOR_APPROVAL` → `not_configured`、
+  その他で `RUNNING` 以外 → `not_running`、残りは `link`（`/browser/live/{task}/{run}`）。
+  gateway が返す reason はこの 4 種。`owner_unavailable`・`not_owner` は owner session の判定（画面側）、
+  `grant_expired` は live 接続時の応答で返る。
+- credential session であることは理由にしない（人の決定 2026-10-10: 本人には Live View を見せる。映像経路が
+  できるまでは relay_unavailable・not_running の理由だけを出す）。
+- SPA の判定順は本人 → 認証区間 → 実行状態 → gateway の disabled 理由 → href の検査。disabled のときは iframe を
+  出さず、理由の文言と「映像なし — イベントで監視中」（`#browser-live-events` へのリンク）を出す。
+- 終わった run（COMPLETED・FAILED）と gateway の 404 では `/browser/control` の polling を止める。
+
+upstream（`CELERIS_WEB_LIVE_VIEW_UPSTREAM`）が未設定の本番では、終わった run・認証区間の run を除き、
+`RUNNING` で session_id を持つ run が `live:{state:"disabled",reason:"relay_unavailable"}` になり、iframe は出ない。
+進捗: [2026-10-10-browser-live-view-disabled-reason.md](../progress/2026-10-10-browser-live-view-disabled-reason.md)。

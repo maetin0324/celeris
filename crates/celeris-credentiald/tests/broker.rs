@@ -704,3 +704,48 @@ fn registered_username_selector_and_post_login_pin_the_grant() {
     assert_eq!(described.consent, f.policy.consent);
     assert!(f.broker.grant(f.request("k-ok", 60)).is_ok());
 }
+
+#[test]
+fn owner_bound_saved_credential_is_reusable_only_for_matching_owner_and_trusted_login() {
+    let mut f = Fixture::new();
+    f.policy.login_url = Some("https://example.test/login".into());
+    f.policy.password_selector = Some("input[name=password]".into());
+    f.manual
+        .register_owned(
+            &f.reference,
+            &f.policy,
+            1,
+            &SecretEnvelope {
+                username: "user".into(),
+                password: SENTINEL.into(),
+            },
+            Some("owner"),
+        )
+        .expect("register owner-bound credential");
+    let trusted = f
+        .manual
+        .describe_registered(&f.reference, "https://example.test", Some(1))
+        .unwrap();
+    assert_eq!(
+        f.manual
+            .find_reusable("owner", "site-1", "https://example.test", &trusted)
+            .unwrap(),
+        Some(f.reference.clone())
+    );
+    assert_eq!(
+        f.manual
+            .find_reusable("another-owner", "site-1", "https://example.test", &trusted)
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        f.manual
+            .find_reusable("owner", "other-policy", "https://example.test", &trusted)
+            .unwrap(),
+        None
+    );
+    let listed = f.manual.list_owned("owner").unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].0, f.reference);
+    assert!(!format!("{listed:?}").contains(SENTINEL));
+}

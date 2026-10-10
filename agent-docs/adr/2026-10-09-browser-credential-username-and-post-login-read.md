@@ -589,3 +589,14 @@ manaba の link のどの dialog かは本番の頁を見ていないので確�
 
 運用: **launcher の再 build**（controller・runner・診断は launcher の process の中）と daemon の更新（shim・daemon の detail）。
 sandboxd は不要。
+## 付記 2026-10-10k: 保存済み credential の次 run 再利用
+
+人の決定（2026-10-10）: 一度入力した credential は次 run 以降で再入力を求めず、使用の承認だけで使う。
+
+1. 保存済み credential は同一 owner・同一 `policy_id` に限り候補にできる。候補の登録時に写した完全な `TrustedLogin`（login URL、username/password selector、submit selector、post-login、consent を含む）が現在の site policy と一致するときだけ有効とする。比較不能・credentiald の describe 失敗・期限切れは候補から除外し、既存の `WaitingForAuth` を開く。
+2. 有効候補がある credential request は `WaitingForAuth` を作らず、credential reference と現在の `TrustedLogin` を固定した `WaitingForApproval`（operation `credential_use`）を直接作る。承認 UI は従来どおり毎回 login URL・2 欄・read_origins・consent を表示し、承認後は既存 Authenticate 経路だけを使う。保存済みであることは承認を省略する理由にならない（Q7）。
+3. task をまたぐ再利用も owner と site policy の両方が一致する場合に限る。秘密は credentiald vault 内だけに置き、API は reference/metadata のみを返す。credentiald の登録・検索・削除は daemon control peer の admission を維持する。
+4. policy 不一致、credentiald が describe できない場合、または post-login の `post_login_idp_login_form` 等の認証失敗では当該登録を再利用候補から無効化し、次回は手動登録を求める。失敗した認証を同じ run で自動再試行しない。
+5. credentiald は保存期限を設定可能とし、既定 90 日を上限に登録時刻から期限を計算する。期限切れは検索・使用から除外する。一覧は秘密を含めず、所有者本人が削除できる。
+
+検証では同 owner/policy の次 run が承認待ちだけを開くこと、承認が毎回必要なこと、policy 変更・describe/login failure・期限・削除・別 owner/policy で候補にならないこと、秘密が daemon/agent/event/log に出ないことを固定する。

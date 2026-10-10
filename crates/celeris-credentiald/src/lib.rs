@@ -346,6 +346,15 @@ struct Stored {
     post_login: Option<task_core::browser_wait::PostLogin>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     consent: Option<task_core::browser_wait::ConsentPolicy>,
+    /// Human actor that registered the credential. Old vault entries deliberately have no owner.
+    #[serde(default)]
+    owner_id: Option<String>,
+    #[serde(default)]
+    created_at: u64,
+    #[serde(default)]
+    expires_at: u64,
+    #[serde(default)]
+    reusable: bool,
     nonce: String,
     ciphertext: String,
     tag: String,
@@ -418,6 +427,16 @@ impl ManualProvider {
         revision: u64,
         secret: &SecretEnvelope,
     ) -> Result<(), Error> {
+        self.register_owned(reference, policy, revision, secret, None)
+    }
+    pub fn register_owned(
+        &self,
+        reference: &CredentialRef,
+        policy: &CredentialPolicy,
+        revision: u64,
+        secret: &SecretEnvelope,
+        owner_id: Option<&str>,
+    ) -> Result<(), Error> {
         policy.validate()?;
         if reference.provider != "manual"
             || !valid_id(&reference.credential_id)
@@ -429,6 +448,13 @@ impl ManualProvider {
         let path = self
             .vault_dir
             .join(format!("{}.json", reference.credential_id));
+        let created_at = now()?;
+        // Retention can be shortened by the operator; 90 days is a hard maximum.
+        let retention_days = std::env::var("CELERIS_CREDENTIAL_MAX_AGE_DAYS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .filter(|days| (1..=90).contains(days))
+            .unwrap_or(90);
         let mut s = Stored {
             format_version: 1,
             key_id: "master-v1".into(),
@@ -444,6 +470,10 @@ impl ManualProvider {
             username_selector: policy.username_selector.clone(),
             post_login: policy.post_login.clone(),
             consent: policy.consent.clone(),
+            owner_id: owner_id.map(str::to_owned),
+            created_at,
+            expires_at: created_at.saturating_add(retention_days.saturating_mul(86_400)),
+            reusable: owner_id.is_some(),
             nonce: String::new(),
             ciphertext: String::new(),
             tag: String::new(),
@@ -485,6 +515,83 @@ impl ManualProvider {
         let bytes = serde_json::to_vec(&s).map_err(|_| Error::Io)?;
         write_atomic(&self.vault_dir, &path, &bytes)
     }
+    /// Find an owner-bound credential only when the complete trusted login snapshot matches.
+    pub fn find_reusable(
+        &self,
+        owner_id: &str,
+        policy_id: &str,
+        origin: &str,
+        current: &task_core::browser_wait::TrustedLogin,
+    ) -> Result<Option<CredentialRef>, Error> {
+        check_dir(&self.vault_dir)?;
+        for entry in fs::read_dir(&self.vault_dir).map_err(|_| Error::Io)? {
+            let entry = entry.map_err(|_| Error::Io)?;
+            if !entry.file_type().map_err(|_| Error::Io)?.is_file() {
+                continue;
+            }
+            let bytes = match read_private(&entry.path()) {
+                Ok(bytes) => bytes,
+                Err(_) => continue,
+            };
+            let stored: Stored = match serde_json::from_slice(&bytes) {
+                Ok(stored) => stored,
+                Err(_) => continue,
+            };
+            if stored.owner_id.as_deref() != Some(owner_id)
+                || !stored.reusable
+                || stored.expires_at <= now()?
+                || stored.policy_id != policy_id
+                || stored.exact_origin != origin
+                || stored.provider != "manual"
+            {
+                continue;
+            }
+            let reference = CredentialRef {
+                credential_id: stored.credential_id.clone(),
+                provider: stored.provider.clone(),
+                policy_id: stored.policy_id.clone(),
+            };
+            let described = match self.describe_registered(&reference, origin, None) {
+                Ok(value) => value,
+                Err(_) => continue,
+            };
+            if &described == current {
+                return Ok(Some(reference));
+            }
+        }
+        Ok(None)
+    }
+    pub fn list_owned(&self, owner_id: &str) -> Result<Vec<(CredentialRef, u64, u64)>, Error> {
+        check_dir(&self.vault_dir)?;
+        let mut result = Vec::new();
+        for entry in fs::read_dir(&self.vault_dir).map_err(|_| Error::Io)? {
+            let entry = entry.map_err(|_| Error::Io)?;
+            if !entry.file_type().map_err(|_| Error::Io)?.is_file() {
+                continue;
+            }
+            let bytes = match read_private(&entry.path()) {
+                Ok(bytes) => bytes,
+                Err(_) => continue,
+            };
+            let stored: Stored = match serde_json::from_slice(&bytes) {
+                Ok(stored) => stored,
+                Err(_) => continue,
+            };
+            if stored.owner_id.as_deref() == Some(owner_id) && stored.expires_at > now()? {
+                result.push((
+                    CredentialRef {
+                        credential_id: stored.credential_id,
+                        provider: stored.provider,
+                        policy_id: stored.policy_id,
+                    },
+                    stored.created_at,
+                    stored.expires_at,
+                ));
+            }
+        }
+        result.sort_by(|left, right| left.1.cmp(&right.1));
+        Ok(result)
+    }
     /// Return only the administrator's non-secret login metadata for approval pinning.
     pub fn describe_registered(
         &self,
@@ -511,6 +618,7 @@ impl ManualProvider {
             || s.policy_id != reference.policy_id
             || s.exact_origin != origin
             || credential_revision.is_some_and(|revision| s.revision != revision)
+            || (s.expires_at != 0 && s.expires_at <= now()?)
         {
             return Err(Error::Denied);
         }
@@ -563,6 +671,7 @@ impl ManualProvider {
             || s.policy_id != reference.policy_id
             || s.exact_origin != origin
             || s.revision != revision
+            || (s.expires_at != 0 && s.expires_at <= now()?)
         {
             return Err(Error::Denied);
         }

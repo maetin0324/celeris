@@ -30,6 +30,8 @@ pub enum ControlRequest {
         policy: CredentialPolicy,
         revision: u64,
         secret: SecretEnvelope,
+        #[serde(default)]
+        owner_id: Option<String>,
     },
     Inspect {
         reference: CredentialRef,
@@ -39,6 +41,12 @@ pub enum ControlRequest {
     DescribePolicy {
         reference: CredentialRef,
         origin: String,
+    },
+    FindReusable {
+        owner_id: String,
+        policy_id: String,
+        origin: String,
+        trusted_login: task_core::browser_wait::TrustedLogin,
     },
     Revoke {
         lease_id: String,
@@ -78,6 +86,8 @@ pub struct IpcReply {
     pub credential: Option<IpcCredential>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub trusted_login: Option<task_core::browser_wait::TrustedLogin>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub credential_ref: Option<CredentialRef>,
 }
 #[derive(Serialize, Deserialize)]
 pub struct IpcCredential {
@@ -100,6 +110,7 @@ impl IpcReply {
             expires_at: None,
             credential: None,
             trusted_login: None,
+            credential_ref: None,
         }
     }
     fn code(code: InjectCode) -> Self {
@@ -111,6 +122,7 @@ impl IpcReply {
             expires_at: None,
             credential: None,
             trusted_login: None,
+            credential_ref: None,
         }
     }
     fn err(e: Error) -> Self {
@@ -122,6 +134,7 @@ impl IpcReply {
             expires_at: None,
             credential: None,
             trusted_login: None,
+            credential_ref: None,
         }
     }
 }
@@ -206,10 +219,15 @@ fn serve_one(
                     policy,
                     revision,
                     secret,
+                    owner_id,
                 } => {
-                    broker
-                        .provider()
-                        .register(&reference, &policy, revision, &secret)?;
+                    broker.provider().register_owned(
+                        &reference,
+                        &policy,
+                        revision,
+                        &secret,
+                        owner_id.as_deref(),
+                    )?;
                     Ok(IpcReply::ok())
                 }
                 ControlRequest::Inspect {
@@ -229,6 +247,21 @@ fn serve_one(
                         .describe_registered(&reference, &origin, None)?;
                     let mut out = IpcReply::ok();
                     out.trusted_login = Some(trusted);
+                    Ok(out)
+                }
+                ControlRequest::FindReusable {
+                    owner_id,
+                    policy_id,
+                    origin,
+                    trusted_login,
+                } => {
+                    let mut out = IpcReply::ok();
+                    out.credential_ref = broker.provider().find_reusable(
+                        &owner_id,
+                        &policy_id,
+                        &origin,
+                        &trusted_login,
+                    )?;
                     Ok(out)
                 }
                 ControlRequest::Revoke { lease_id, actor_id } => {

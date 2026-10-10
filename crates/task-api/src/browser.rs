@@ -72,6 +72,8 @@ pub struct ManualRegistration {
     pub wait_id: String,
     pub origin: String,
     pub policy_id: String,
+    /// Verified owner actor from the signed registration attestation.
+    pub owner_id: String,
     pub username: SecretText,
     pub password: SecretText,
 }
@@ -281,6 +283,7 @@ impl CredentialBrokerControl for UnixCredentialBrokerControl {
             policy: &'a CredentialPolicy,
             revision: u64,
             secret: Secret<'a>,
+            owner_id: &'a str,
         }
         let policy = self.credential_policy(
             &registration.task_id.to_string(),
@@ -302,6 +305,7 @@ impl CredentialBrokerControl for UnixCredentialBrokerControl {
                 username: registration.username.expose(),
                 password: registration.password.expose(),
             },
+            owner_id: &registration.owner_id,
         };
         let bytes =
             Zeroizing::new(serde_json::to_vec(&request).map_err(|_| BrokerFailure::Unavailable)?);
@@ -879,6 +883,7 @@ pub(crate) async fn register_credential(
                     wait_id: wait.wait_id.clone(),
                     origin: wait.origin.clone(),
                     policy_id,
+                    owner_id: claims.actor_id.clone(),
                     username: username.0,
                     password: password.0,
                 })

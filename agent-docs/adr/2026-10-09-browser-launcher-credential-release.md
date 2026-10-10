@@ -139,4 +139,8 @@ final review は「条件を満たさない session も launcher に接続・ses
 - **username の注入**: daemon 経路も username を入れない（ADR-0110「未解決」: 1 auth section = 1 lease = 1 欄）。site policy に `username_selector` は無い。manaba（`idp.account.tsukuba.ac.jp`）の form は `j_username` と `j_password` が同じ頁にあるので、この付記だけでは manaba のログインは完了しない（password だけ入って送信される）。username の出所・lease の 2 欄消費は別 ADR で決める。
 - ADR-0080 H3 により、注入した session ではログイン後も snapshot / extract / screenshot / download が使えない。ログイン後の頁を読む用途（manaba の課題監視）はこの付記の範囲では成立しない。
 
+## 付記 2026-10-10: 保存済み credential の run 間再利用
+
+詳細な決定と受け入れ条件は [credential username / post-login ADR の付記 2026-10-10j](2026-10-09-browser-credential-username-and-post-login-read.md) に従う。launcher 経路でも、credentiald が同一 owner・同一 site policy と完全一致する現行 `TrustedLogin` を確認した場合に限り、登録待ちを開かず `credential_use` の承認待ちを作る。承認は毎 run 必須で、承認後はこの ADR の Authenticate 経路を用いる。期限切れ・policy 不一致・describe/login failure は再入力へ戻す。launcher protocol の Authenticate、H3、launcher session proof、秘密非露出条件は変えない。
+
 運用: launcher protocol が変わるので、本番に入れるには launcher（`/usr/local/libexec/celeris/celeris-browser-launcher`）を新しい build で差し替えて service を再起動する（root）。daemon（credentiald を含む同じ release）も新しい release が要る。egress / sandboxd は変えない。版ずれの組み合わせはどちらも credential 操作の前で拒否される。host 実証（実 launcher で `auth_begin` → `authenticate` → credentiald の Attested admission → lease 消費）は運用セッションが root で行う。

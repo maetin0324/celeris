@@ -698,6 +698,35 @@ sd_scratch_lease() {
   return 0
 }
 
+# browser-ledger shares release.sh's release-build lease. If scratch is unavailable,
+# only use the local fallback when it is a real directory: a symlink may point at
+# a reclaimed lease. A dangling fallback link is safe to unlink, but never follow.
+sd_release_build_target() {
+  local sha="$1" tree="$2" link_tmp
+  if sd_scratch_lease "$SD_RELEASE_SCRATCH_OWNER" "$sha" "$tree"; then
+    if [ -L "$SD_RELEASES/.cargo-target" ]; then
+      link_tmp="$SD_RELEASES/.cargo-target.tmp.$$"
+      if ln -s "$SD_CARGO_TARGET" "$link_tmp" && mv -Tf -- "$link_tmp" "$SD_RELEASES/.cargo-target"; then
+        sd_log "updated cargo target link to current lease: $SD_CARGO_TARGET"
+      else
+        rm -f -- "$link_tmp"
+        sd_log "could not update cargo target link; using leased target directly"
+      fi
+    fi
+    return 0
+  fi
+  if [ -L "$SD_CARGO_TARGET" ]; then
+    if [ ! -e "$SD_CARGO_TARGET" ]; then
+      rm -f -- "$SD_CARGO_TARGET" || return 1
+      sd_log "removed dangling cargo target link: $SD_CARGO_TARGET"
+    else
+      sd_log "scratch unavailable and cargo target is a symlink; refusing stale target: $SD_CARGO_TARGET"
+      return 1
+    fi
+  fi
+  return 0
+}
+
 # 長い step の前（と release.sh の終了時）に lease の mtime を今にする（TTL 切れで GC に回収されないように）。
 # 失敗しても続ける。
 sd_scratch_touch() {

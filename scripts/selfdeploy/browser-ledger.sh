@@ -68,6 +68,16 @@ else
 fi
 [ "$(git -C "$BUILD" rev-parse HEAD)" = "$SHA_FULL" ] || sd_die "build worktree $BUILD is not at $SHA_FULL"
 
+# Keep the explicit caller override. Otherwise share release.sh's release-build
+# lease; a stale .cargo-target symlink is never followed as a fallback.
+if [ -n "${CARGO_TARGET_DIR:-}" ]; then
+  SD_CARGO_TARGET="$CARGO_TARGET_DIR"
+  sd_log "using caller CARGO_TARGET_DIR: $SD_CARGO_TARGET"
+else
+  sd_release_build_target "$SHA_FULL" "$BUILD" || sd_die "no safe cargo target is available"
+fi
+mkdir -p "$SD_CARGO_TARGET"
+
 mkdir -p "$SD_STAGING"
 WORK="$(mktemp -d "$SD_STAGING/browser-ledger-$SHA12.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
@@ -75,7 +85,7 @@ mkdir -p "$SD_LOGS"
 LOG="$SD_LOGS/browser-ledger-$SHA12-$(sd_stamp).log"
 sd_log "rebuilding the browser ledger of $SHA12 (log: $LOG)"
 OK=true
-CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$SD_CARGO_TARGET}" CELERIS_USERNS_TESTS=1 \
+CARGO_TARGET_DIR="$SD_CARGO_TARGET" CELERIS_USERNS_TESTS=1 \
   sd_browser_ledger "$BUILD" "$WORK" "$SHA12" 2>&1 | tee "$LOG" >&2 || true
 [ -f "$WORK/browser/conformance.json" ] || OK=false
 

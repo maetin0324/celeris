@@ -216,7 +216,12 @@ pub async fn run(config: Config, opts: RunOptions) -> Result<Exit, DaemonError> 
                 config.db.path.clone(),
                 backup_dir,
                 config.db.backup_interval(),
-                config.db.backup_keep,
+                db_maintenance::BackupRetentionPolicy {
+                    keep: config.db.backup_keep,
+                    daily_keep: config.db.backup_daily_keep,
+                    weekly_keep: config.db.backup_weekly_keep,
+                    max_total_bytes: config.db.backup_max_total_bytes,
+                },
                 config.db.busy_timeout(),
             )
         })

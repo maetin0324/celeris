@@ -141,7 +141,7 @@ describe("liveViewState", () => {
       }),
     ).toEqual({ kind: "unavailable", reason: "not_configured" });
   });
-  it("gives the reason in order: owner, running, auth interval", () => {
+  it("gives the reason in order: owner, gateway availability, running state", () => {
     const run = { state: "RUNNING" as const, live_path: "/browser/live/T1/R1" };
     expect(
       liveViewState({
@@ -171,7 +171,7 @@ describe("liveViewState", () => {
       reason: "not_running",
     });
     expect(liveViewState({ taskId: "T1", runId: "R1", run, owner, authInterval: true })).toMatchObject({
-      reason: "auth_interval",
+      kind: "frame",
     });
   });
 

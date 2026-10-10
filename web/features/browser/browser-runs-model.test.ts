@@ -67,18 +67,18 @@ describe("browser runs list model", () => {
   });
 
   it("explains why the live view is unavailable", () => {
-    expect(liveCell(run("T1", "R1", "RUNNING"), false)).toEqual({ available: true, label: "Live View を開けます" });
-    expect(liveCell(run("T1", "R0", "COMPLETED"), false)).toMatchObject({ available: false, reason: "not_running" });
-    expect(liveCell(run("T1", "R1", "RUNNING"), true)).toMatchObject({ available: false, reason: "auth_interval" });
-    expect(liveCell(run("T1", "R1", "RUNNING", { live_path: "https://upstream.invalid/x" }), false)).toMatchObject({
+    expect(liveCell(run("T1", "R1", "RUNNING"))).toEqual({ available: true, label: "Live View を開けます" });
+    expect(liveCell(run("T1", "R0", "COMPLETED"))).toMatchObject({ available: false, reason: "not_running" });
+    expect(liveCell(run("T1", "R1", "RUNNING"))).toMatchObject({ available: true });
+    expect(liveCell(run("T1", "R1", "RUNNING", { live_path: "https://upstream.invalid/x" }))).toMatchObject({
       available: false,
       reason: "not_configured",
     });
     expect(
-      liveCell(run("T1", "R1", "RUNNING", { live: { state: "disabled", reason: "relay_unavailable" } }), false),
+      liveCell(run("T1", "R1", "RUNNING", { live: { state: "disabled", reason: "relay_unavailable" } })),
     ).toMatchObject({ available: false, reason: "relay_unavailable", label: expect.stringContaining("中継") });
     // 知らない理由は中継不可として扱う（任意の文字列を画面に出さない）。
-    expect(liveCell(run("T1", "R1", "RUNNING", { live: { state: "disabled", reason: "<x>" } }), false)).toMatchObject({
+    expect(liveCell(run("T1", "R1", "RUNNING", { live: { state: "disabled", reason: "<x>" } }))).toMatchObject({
       reason: "relay_unavailable",
     });
   });

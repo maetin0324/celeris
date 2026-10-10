@@ -174,7 +174,7 @@ export function browserControlQuery(taskId: string, runId: string, sessionId: st
     queryFn: ({ signal }: { signal: AbortSignal }) =>
       gateway<{ ok: true; status: ControlStatus }>(path, "GET", undefined, signal),
     refetchInterval: (query: { state: { error: unknown } }) => {
-      if (runState === "COMPLETED" || runState === "FAILED") return false;
+      if (runState !== "RUNNING") return false;
       if (query.state.error instanceof BrowserGatewayError && query.state.error.status === 404) return false;
       return 2000;
     },

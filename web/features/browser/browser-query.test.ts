@@ -40,13 +40,19 @@ describe("browser gateway requests", () => {
     expect(() => browserRunsQuery("../other")).toThrow(TypeError);
   });
 
-  it("stops control polling for terminal runs and 404 responses", () => {
+  it("stops control polling for every non-running run and 404 responses", () => {
     const terminal = browserControlQuery("T1", "R1", "S1", "COMPLETED").refetchInterval;
     const active = browserControlQuery("T1", "R1", "S1", "RUNNING").refetchInterval;
     expect(typeof terminal).toBe("function");
     expect((terminal as (query: { state: { error: unknown } }) => number | false)({ state: { error: null } })).toBe(
       false,
     );
+    for (const state of ["WAITING_FOR_AUTH", "WAITING_FOR_HUMAN", "WAITING_FOR_APPROVAL", "FAILED", "other"]) {
+      const interval = browserControlQuery("T1", "R1", "S1", state).refetchInterval;
+      expect((interval as (query: { state: { error: unknown } }) => number | false)({ state: { error: null } })).toBe(
+        false,
+      );
+    }
     expect((active as (query: { state: { error: unknown } }) => number | false)({ state: { error: null } })).toBe(2000);
     expect(
       (active as (query: { state: { error: unknown } }) => number | false)({

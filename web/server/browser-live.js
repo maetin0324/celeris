@@ -108,12 +108,9 @@ function safeRun(run) {
   );
 }
 export function liveAvailability(run, upstream) {
-  if (["COMPLETED", "FAILED"].includes(run.state)) return { state: "disabled", reason: "not_running" };
-  if (run.state === "WAITING_FOR_AUTH") return { state: "disabled", reason: "auth_interval" };
   if (!upstream) return { state: "disabled", reason: "relay_unavailable" };
-  if (!run.session_id || ["WAITING_FOR_HUMAN", "WAITING_FOR_APPROVAL"].includes(run.state))
-    return { state: "disabled", reason: "not_configured" };
   if (run.state !== "RUNNING") return { state: "disabled", reason: "not_running" };
+  if (!run.session_id) return { state: "disabled", reason: "not_configured" };
   return { state: "link", href: `/browser/live/${run.task_id}/${run.run_id}` };
 }
 function pathFor(task, run, session, suffix) {

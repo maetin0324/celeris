@@ -457,3 +457,33 @@ download と screenshot が全部 `browser_artifact_action_failed` になった�
 残る制限: `target="_blank"` の link からの download（popup で始まる download）は agent-browser が拾えず 30 秒で timeout する
 （headless-shell でも同じ）。PDF の URL の `open` も navigation の download になり file は渡らない。本番の速い失敗の原因は、差し替え後の
 journal の `gate=` と `error_class=` で確定させる。
+
+## 付記 2026-10-10g: credential 登録 wait を site policy のログイン origin に結び付ける・`policy_changed` の固定 sub-reason
+
+release b865201c の後、task 01M4GYJ3XGJNWZQDF35F1MDE0H の run が 3 回続けて 2 秒以内に
+`infra_requeue: … policy_changed` で終わった。原因は release ではない。agent が
+`request-credential manaba-tsukuba https://manaba.tsukuba.ac.jp …` と **LMS の origin** を名指しした（12:13 の成功例では IdP
+`https://idp.account.tsukuba.ac.jp`）。wait 01M4K0SATAY54M4NM96E6R5WS8 はその origin のまま開き、人はそこに登録した。登録時の
+site policy の照合（`policy_id` と `exact_origin` の一致）に当たらず、vault には login URL・selector の無い credential が
+入った（vault の非秘密の欄で確認: `exact_origin=https://manaba.tsukuba.ac.jp`、`login_url` なし）。以後の run は毎回
+`describe_policy` が credentiald の `denied` で落ち、`policy_changed` になっていた。登録済みの wait は期限で閉じないため、task は
+そこから進めなかった。
+
+決定:
+
+1. **登録 wait の origin は site policy のログイン origin。** store が `waiting_for_auth` の wait を開くとき、`credential_policy_id`
+   に site policy があれば、agent の名指した origin が `exact_origin` か `post_login.read_origins` のどれかなら `exact_origin` に
+   結び付ける。それ以外の origin は `browser_wait_invalid:credential_origin` で開かない。site policy の無い policy は従来どおり。
+2. **使えない登録は run を止めない。** credentiald が `denied` / `invalid_request` / `not_found` で答える（登録そのものが
+   ログインに使えない）とき、承認 wait を開かずに run を続ける（credential は使わない。progress
+   `browser.credential: registered credential unusable (<sub-reason>)`）。agent は credential を頼み直せる。credentiald に
+   届かない・vault が鍵掛かり等の一時的な失敗は従来どおり run を失敗にする。
+3. **`policy_changed (<sub-reason>)`。** 固定語彙: `supervisor_missing`・`runtime_dir_missing`・`request_encode`・
+   `credentiald_unreachable`・`describe_<credentiald の code>`（`describe_denied` 等）・`trusted_login_missing`・
+   `policy_id_mismatch`・`pinned_login_missing`・`pinned_login_invalid`・`credential_reference_missing`・
+   `pinned_differs_<欄>`（login_url・selector・post_login・consent など、どの欄が変わったかだけ）。lease の付与は
+   `policy_changed_revision` / `policy_changed_policy_id`。値は入れない。daemon log にも同じ sub-reason を warn で出す。
+   wait を開けないときも store の固定 code を `browser wait could not be opened (<code>)` に載せる。
+
+運用: daemon を更新した後に task を再開すれば、使えない登録は飛ばされ、agent が頼み直した wait（IdP の origin）に人が登録
+し直す。launcher・sandboxd・credentiald の再 build は要らない。

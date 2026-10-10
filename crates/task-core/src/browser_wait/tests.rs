@@ -1078,3 +1078,70 @@ fn operation_approval_opens_without_credential_consumes_once_and_expires_at_thir
             .is_empty()
     );
 }
+
+/// 付記 2026-10-10g (production 2026-10-10 13:42): the agent asked for the `manaba-tsukuba`
+/// credential naming the LMS (`https://manaba.tsukuba.ac.jp`) instead of the IdP the policy logs
+/// in at. The wait kept that origin, the human registered under it, the vault got no login URL and
+/// every run then ended as `policy_changed`. A registration wait is bound to the site policy's
+/// login origin when the agent names it or one of its post-login read origins; any other origin
+/// for a policy with a site policy is refused. A policy without a site policy is unchanged.
+#[test]
+fn credential_wait_is_bound_to_the_site_policy_login_origin() {
+    use crate::store::BrowserSitePolicy;
+    let site = BrowserSitePolicy {
+        policy_id: "pol-example".into(),
+        exact_origin: "https://idp.example.com".into(),
+        login_url: "https://idp.example.com/login".into(),
+        password_selector: "#password".into(),
+        submit_selector: None,
+        username_selector: None,
+        post_login: Some(PostLogin {
+            read_origins: vec!["https://lms.example.com".into()],
+            actions: vec![PostLoginAction::Snapshot],
+        }),
+        consent: None,
+    };
+    let now = OffsetDateTime::now_utc();
+    let open = |origin: &str, with_site: bool| {
+        let store = SqliteStore::open_in_memory().expect("open");
+        if with_site {
+            store
+                .browser_site_policy_upsert(&site, "admin", now)
+                .expect("site policy");
+        }
+        let id = running(&store);
+        let mut request = auth_request("rk-origin");
+        request.origin = origin.into();
+        store
+            .browser_wait_open(id, &request, now)
+            .map(|o| o.wait.origin)
+    };
+    assert_eq!(
+        open("https://lms.example.com", true).expect("read origin"),
+        "https://idp.example.com"
+    );
+    assert_eq!(
+        open("https://idp.example.com", true).expect("login origin"),
+        "https://idp.example.com"
+    );
+    assert!(matches!(
+        open("https://other.example.com", true),
+        Err(BrowserWaitError::Invalid {
+            field: "credential_origin"
+        })
+    ));
+    assert_eq!(
+        open("https://lms.example.com", false).expect("no site policy"),
+        "https://lms.example.com"
+    );
+    // Approval waits keep their origin (they are opened from a registered wait).
+    let store = SqliteStore::open_in_memory().expect("open");
+    store
+        .browser_site_policy_upsert(&site, "admin", now)
+        .expect("site policy");
+    let id = running(&store);
+    let approval = store
+        .browser_wait_open(id, &operation_request("rk-op"), now)
+        .expect("operation wait");
+    assert_eq!(approval.wait.origin, operation_request("rk-op").origin);
+}

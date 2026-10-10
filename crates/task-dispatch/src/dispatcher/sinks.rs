@@ -179,7 +179,13 @@ impl EventSink for StoreSink {
         self.store
             .browser_wait_open(self.task_id, request, OffsetDateTime::now_utc())
             .map(|_| ())
-            .map_err(|e| e.code().into())
+            .map_err(|e| match e {
+                // The field name only (a fixed identifier), never the value.
+                task_core::browser_wait::BrowserWaitError::Invalid { field } => {
+                    format!("{}:{field}", e.code())
+                }
+                e => e.code().into(),
+            })
     }
     fn browser_waits(&self) -> Result<Vec<task_core::browser_wait::BrowserWait>, String> {
         self.store

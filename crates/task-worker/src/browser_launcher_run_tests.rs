@@ -1779,7 +1779,8 @@ fn launcher_credential_request_without_a_wait_store_is_an_error() {
     assert_eq!(state, None);
     assert_eq!(
         denied_text(outcome.expect_err("fail closed")),
-        "browser wait could not be opened"
+        // A store message that is not a fixed code is not echoed.
+        "browser wait could not be opened (other)"
     );
 }
 
@@ -2255,7 +2256,7 @@ async fn launcher_registered_credential_outside_policy_fails_closed() {
     let no_sup = registered_wait(&policy);
     for (wait, expected) in [
         (stale, "browser credential approval request denied"),
-        (no_sup, "policy_changed"),
+        (no_sup, "policy_changed (supervisor_missing)"),
     ] {
         let sink = RegisteredSink::new(vec![wait]);
         let err = run(
@@ -4013,4 +4014,101 @@ fn launcher_artifact_action_failures_keep_the_launcher_code_as_a_fixed_reason() 
         assert_eq!(artifact_action_reason(code), reason, "{code:?}");
         assert!(shim_reason(reason), "{reason}");
     }
+}
+
+/// A fake credentiald control socket answering one `describe_policy` with `reply`.
+fn fake_credentiald_reply(runtime: &Path, reply: serde_json::Value) -> std::thread::JoinHandle<()> {
+    let sock = runtime.join("celeris-credentiald/control.sock");
+    std::fs::create_dir_all(sock.parent().expect("parent")).expect("mkdir");
+    let listener = std::os::unix::net::UnixListener::bind(&sock).expect("bind");
+    let reply = serde_json::to_vec(&reply).expect("json");
+    std::thread::spawn(move || {
+        if let Ok((mut stream, _)) = listener.accept() {
+            let mut request = Vec::new();
+            stream.read_to_end(&mut request).expect("read");
+            stream.write_all(&reply).expect("write");
+        }
+    })
+}
+
+/// 付記 2026-10-10g: `policy_changed` carries a fixed sub-reason, and a registered credential that
+/// credentiald says can never yield a trusted login (production 2026-10-10: registered under the LMS
+/// origin, so the vault had no login URL) no longer ends every run: the run goes on without it so
+/// the agent can request the credential again. A transient failure still fails the run.
+#[test]
+fn registered_credential_describe_failures_carry_sub_reasons_and_unusable_one_is_skipped() {
+    let policy = credential_policy();
+    let wait = registered_wait(&policy);
+    let task_id = wait.task_id;
+    // credentiald refuses: the registration is unusable; no approval wait, the run continues.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let answered = fake_credentiald_reply(
+        dir.path(),
+        serde_json::json!({"success": false, "code": "denied"}),
+    );
+    let sink = RegisteredSink::new(vec![wait.clone()]);
+    let out = crate::browser::registered_credential_approval(
+        task_id,
+        "run-next",
+        std::slice::from_ref(&wait),
+        &policy,
+        Some(&supervisor(dir.path())),
+        &sink,
+    )
+    .expect("an unusable registration does not fail the run");
+    assert!(out.is_none());
+    assert!(sink.opened().is_empty(), "no approval wait for it");
+    answered.join().expect("answered");
+    // credentiald unreachable: transient, the run fails with the sub-reason.
+    let empty = tempfile::tempdir().expect("tempdir");
+    let sink = RegisteredSink::new(vec![wait.clone()]);
+    let err = crate::browser::registered_credential_approval(
+        task_id,
+        "run-next",
+        std::slice::from_ref(&wait),
+        &policy,
+        Some(&supervisor(empty.path())),
+        &sink,
+    )
+    .expect_err("unreachable");
+    assert_eq!(denied_text(err), "policy_changed (credentiald_unreachable)");
+    // vault locked: transient as well.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let answered = fake_credentiald_reply(
+        dir.path(),
+        serde_json::json!({"success": false, "code": "vault_locked"}),
+    );
+    let err = crate::browser::registered_credential_approval(
+        task_id,
+        "run-next",
+        std::slice::from_ref(&wait),
+        &policy,
+        Some(&supervisor(dir.path())),
+        &RegisteredSink::new(vec![wait.clone()]),
+    )
+    .expect_err("locked");
+    assert_eq!(denied_text(err), "policy_changed (describe_vault_locked)");
+    answered.join().expect("answered");
+}
+
+#[test]
+fn trusted_login_difference_names_the_changed_field_only() {
+    use crate::browser::trusted_login_difference;
+    let pinned = trusted_login();
+    assert_eq!(trusted_login_difference(&pinned, &pinned), None);
+    let mut current = pinned.clone();
+    current.consent = Some(task_core::browser_wait::ConsentPolicy {
+        selector: "#ok".into(),
+        choice_selector: None,
+    });
+    assert_eq!(
+        trusted_login_difference(&current, &pinned),
+        Some("pinned_differs_consent")
+    );
+    let mut current = pinned.clone();
+    current.login_url = "https://example.com/other".into();
+    assert_eq!(
+        trusted_login_difference(&current, &pinned),
+        Some("pinned_differs_login_url")
+    );
 }

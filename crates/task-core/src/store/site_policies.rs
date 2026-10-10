@@ -130,6 +130,29 @@ fn read_row(r: &Row<'_>) -> rusqlite::Result<BrowserSitePolicyRecord> {
     })
 }
 
+impl BrowserSitePolicy {
+    /// The origin a credential-registration wait for this policy is bound to, given the origin the
+    /// agent named (ADR 2026-10-09 付記 2026-10-10g). The password goes to `exact_origin` (the IdP
+    /// for an SSO site), so a request naming the site the login is for (one of
+    /// `post_login.read_origins`) is bound to `exact_origin`; any other origin is not this policy's
+    /// login (`None`).
+    pub fn credential_wait_origin(&self, requested: &str) -> Option<&str> {
+        let read = self
+            .post_login
+            .as_ref()
+            .is_some_and(|p| p.read_origins.iter().any(|o| o == requested));
+        (requested == self.exact_origin || read).then_some(self.exact_origin.as_str())
+    }
+}
+
+/// The site policy `policy_id` inside an open transaction (`None` if there is none).
+pub(crate) fn site_policy_tx(
+    conn: &Connection,
+    policy_id: &str,
+) -> Result<Option<BrowserSitePolicy>, StoreError> {
+    Ok(load(conn, policy_id)?.map(|r| r.policy))
+}
+
 fn load(conn: &Connection, policy_id: &str) -> Result<Option<BrowserSitePolicyRecord>, StoreError> {
     Ok(conn
         .query_row(

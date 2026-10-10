@@ -10,6 +10,10 @@ import { createApp } from "./app.js";
 import { parseLiveUpstream } from "./browser-live.js";
 
 const dir = mkdtempSync(path.join(tmpdir(), "celeris-browser-live-"));
+const socketDir = mkdtempSync(
+  path.join(Buffer.byteLength(path.join(tmpdir(), "cbl-XXXXXX", "owner.sock")) <= 107 ? tmpdir() : "/tmp", "cbl-"),
+);
+chmodSync(socketDir, 0o700);
 const keyFile = path.join(dir, "key");
 const passwordFile = path.join(dir, "password");
 const tokenFile = path.join(dir, "token");
@@ -151,7 +155,10 @@ let cookie;
 let csrf;
 async function listen(server) {
   server.listen(0, "127.0.0.1");
-  await new Promise((resolve) => server.once("listening", resolve));
+  await new Promise((resolve, reject) => {
+    server.once("listening", resolve);
+    server.once("error", reject);
+  });
   return `http://127.0.0.1:${server.address().port}`;
 }
 function get(route, options = {}) {
@@ -170,7 +177,7 @@ before(async () => {
     daemonTokenFile: tokenFile,
     liveUpstream: liveUrl.slice("http://".length),
     attestationKeyFile: keyFile,
-    ownerSocket: path.join(dir, "owner.sock"),
+    ownerSocket: path.join(socketDir, "owner.sock"),
     log: () => {},
   });
   const server = app.listen(0, "127.0.0.1");
@@ -182,7 +189,10 @@ before(async () => {
   );
   const ownerServer = app.locals.browserLive.startSocket();
   servers.push(ownerServer);
-  await new Promise((resolve) => ownerServer.once("listening", resolve));
+  await new Promise((resolve, reject) => {
+    ownerServer.once("listening", resolve);
+    ownerServer.once("error", reject);
+  });
   const login = await get("/login", {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -191,7 +201,7 @@ before(async () => {
   cookie = login.headers.get("set-cookie").split(";")[0];
   const challenge = await (await get("/browser/owner-session", { method: "POST", headers: { Origin: base } })).json();
   const approved = await new Promise((resolve, reject) => {
-    const socket = connect(path.join(dir, "owner.sock"));
+    const socket = connect(path.join(socketDir, "owner.sock"));
     let response = "";
     socket.once("connect", () =>
       socket.write(`${JSON.stringify({ op: "approve", challenge: challenge.challenge })}\n`),
@@ -240,6 +250,7 @@ after(async () => {
     await new Promise((resolve) => server.close(resolve));
   }
   rmSync(dir, { recursive: true, force: true });
+  rmSync(socketDir, { recursive: true, force: true });
 });
 
 test("loopback upstream parser rejects non-loopback and URL syntax", () => {
@@ -585,7 +596,7 @@ const webLogs = [];
 
 async function startWeb({ probe = false } = {}) {
   deviceDaemonUrl ??= await listen(deviceDaemon);
-  const ownerSocket = path.join(dir, `device-owner-${++socketSeq}.sock`);
+  const ownerSocket = path.join(socketDir, `device-owner-${++socketSeq}.sock`);
   const webApp = createApp({
     distDir: dir,
     passwordFile,
@@ -603,6 +614,12 @@ async function startWeb({ probe = false } = {}) {
     server.once("listening", () => resolve(`http://127.0.0.1:${server.address().port}`)),
   );
   const ownerServer = webApp.locals.browserLive.startSocket();
+  if (ownerServer) {
+    await new Promise((resolve, reject) => {
+      ownerServer.once("listening", resolve);
+      ownerServer.once("error", reject);
+    });
+  }
   return {
     url,
     app: webApp,

@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { type ReactNode, type UIEvent, useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { RunSummary } from "../../api/generated/types";
+import { apiGet } from "../../api/client";
+import type { EventRow, EventsPage, RunSummary } from "../../api/generated/types";
 import { ConnectionStaleNotice } from "../../components/fetch-state/connection-stale-notice";
 import { ErrorNotice, LoadingState, useDelayPhase } from "../../components/fetch-state/fetch-frame";
 import { ScreenFrame } from "../../components/shell/screen-frame";
@@ -26,7 +27,28 @@ export function RunLogScreen({ taskId, runId }: { taskId: string; runId: string 
   const detail = useQuery(taskDetailQuery(taskId));
   const run = detail.data?.runs.find((item) => item.run_id === runId);
   const running = detail.isError ? false : detail.data ? Boolean(run && !run.finished_at) : undefined;
-  const log = useRunLog(taskId, runId, running);
+  const rawLogAvailable = run?.files?.stdout !== false;
+  const showRawLog = detail.isError || (Boolean(detail.data) && rawLogAvailable);
+  const log = useRunLog(taskId, runId, running, showRawLog);
+  const progressQuery = useQuery({
+    queryKey: ["tasks", "run-events-view", taskId, runId],
+    queryFn: ({ signal }) =>
+      apiGet<EventsPage>(
+        `/api/tasks/${encodeURIComponent(taskId)}/runs/${encodeURIComponent(runId)}/events?after_seq=0&limit=200`,
+        signal,
+      ),
+    enabled: !rawLogAvailable,
+    refetchInterval: running === false ? false : 5000,
+  });
+  const result = useQuery({
+    queryKey: ["tasks", "run-result-view", taskId, runId],
+    queryFn: ({ signal }) =>
+      apiGet<{ summary?: string | null; question?: string | null }>(
+        `/api/tasks/${encodeURIComponent(taskId)}/runs/${encodeURIComponent(runId)}/result`,
+        signal,
+      ),
+    enabled: !rawLogAvailable && run?.files?.result === true,
+  });
   const following = log.following;
   const loadingPhase = useDelayPhase(log.status === "loading");
   const events = useMemo(() => parseRunLog(log.buffer.lines), [log.buffer.lines]);
@@ -41,66 +63,109 @@ export function RunLogScreen({ taskId, runId }: { taskId: string; runId: string 
         { label: `run ${runId}` },
       ]}
       actions={
-        <>
-          <Button size="sm" aria-pressed={wrap} onClick={() => setWrap((v) => !v)}>
-            長い行を折り返す
-          </Button>
-          <Button size="sm" aria-pressed={raw} onClick={() => setRaw((v) => !v)}>
-            原文で見る
-          </Button>
-        </>
+        showRawLog ? (
+          <>
+            <Button size="sm" aria-pressed={wrap} onClick={() => setWrap((v) => !v)}>
+              長い行を折り返す
+            </Button>
+            <Button size="sm" aria-pressed={raw} onClick={() => setRaw((v) => !v)}>
+              原文で見る
+            </Button>
+          </>
+        ) : undefined
       }
     >
       <RunHeader run={run} pending={detail.isPending} failed={detail.isError} onRetry={() => void detail.refetch()} />
       <ConnectionStaleNotice />
-      {log.status === "loading" ? (
-        <LoadingState
-          phase={loadingPhase}
-          onRetry={log.retry}
-          skeleton={<div aria-hidden="true" className="h-16 animate-pulse rounded-sm bg-muted" />}
-        />
-      ) : log.status === "error" ? (
-        <ErrorNotice subject="run ログ" onRetry={log.retry} />
-      ) : (
-        <section aria-label="run ログ" className="flex min-w-0 flex-col gap-2" data-testid="run-log">
-          <p className="text-label text-muted-foreground">
-            <span data-testid="run-log-line-count" data-count={log.buffer.lines.length}>
-              {log.buffer.lines.length} 行
-            </span>
-            {log.buffer.dropped > 0 ? `（古い ${log.buffer.dropped} 行は省略）` : null}
-            {following ? "・実行中（追記を追っています）" : null}
-          </p>
-          {log.capped && running !== false ? (
-            <Notice
-              title="追記の自動取得を止めました"
-              data-testid="run-log-capped"
-              action={
-                <Button size="sm" onClick={log.retry}>
-                  読み直す
-                </Button>
-              }
-            >
-              長く続いている run のため、一定回数で追うのを止めました。続きは読み直すと表示します。
-            </Notice>
+      {!rawLogAvailable ? (
+        <section aria-label="run の進捗と結果" className="flex flex-col gap-3">
+          <Notice title="生ログは保存されていません" data-testid="run-no-raw-log">
+            この run は機密保護のため生ログ（harness の stdout/stderr）を保存しません。
+          </Notice>
+          {result.data?.summary || result.data?.question ? (
+            <section aria-label="run の結果" className="rounded-lg border border-border bg-surface p-3">
+              <h2 className="text-section font-semibold">結果</h2>
+              {result.data.summary ? <p className="mt-2 whitespace-pre-wrap">{result.data.summary}</p> : null}
+              {result.data.question ? <p className="mt-2 whitespace-pre-wrap">質問: {result.data.question}</p> : null}
+            </section>
           ) : null}
-          <FollowScroller version={`${raw}:${log.buffer.lines.length}:${log.buffer.dropped}`} following={following}>
-            {log.buffer.lines.length === 0 ? (
-              <p
-                data-fetch-state="empty"
-                className="rounded-lg border border-border p-3 text-body text-muted-foreground"
-              >
-                まだ出力がありません。{following ? "出力され次第ここに追記します。" : null}
-              </p>
-            ) : raw ? (
-              <LogSurface label="run ログ本文（原文）" wrap={wrap} size="lg" data-follow-target>
-                {log.buffer.lines.join("\n")}
-              </LogSurface>
-            ) : (
-              <EventList events={events} wrap={wrap} />
-            )}
-          </FollowScroller>
+          <section
+            aria-label="進捗イベント"
+            data-testid="run-progress-events"
+            className="rounded-lg border border-border bg-surface"
+          >
+            <ol className="divide-y divide-border">
+              {(progressQuery.data?.items ?? [])
+                .filter((row) => row.event.type === "worker_progress")
+                .map((row: EventRow) => {
+                  const e = row.event;
+                  if (e.type !== "worker_progress") return null;
+                  return (
+                    <li key={row.seq} className="p-3">
+                      <span className="font-medium">{e.kind ?? "status"}</span>
+                      {e.tool ? ` · ${e.tool}` : null}
+                      {e.summary || e.msg ? <p className="mt-1 whitespace-pre-wrap">{e.summary ?? e.msg}</p> : null}
+                      {e.error ? <span className="text-danger">エラー</span> : null}
+                    </li>
+                  );
+                })}
+            </ol>
+            {(progressQuery.data?.items ?? []).every((row) => row.event.type !== "worker_progress") ? (
+              <p className="p-3 text-muted-foreground">進捗イベントはまだありません。</p>
+            ) : null}
+          </section>
         </section>
-      )}
+      ) : null}
+      {showRawLog ? (
+        log.status === "loading" ? (
+          <LoadingState
+            phase={loadingPhase}
+            onRetry={log.retry}
+            skeleton={<div aria-hidden="true" className="h-16 animate-pulse rounded-sm bg-muted" />}
+          />
+        ) : log.status === "error" ? (
+          <ErrorNotice subject="run ログ" onRetry={log.retry} />
+        ) : (
+          <section aria-label="run ログ" className="flex min-w-0 flex-col gap-2" data-testid="run-log">
+            <p className="text-label text-muted-foreground">
+              <span data-testid="run-log-line-count" data-count={log.buffer.lines.length}>
+                {log.buffer.lines.length} 行
+              </span>
+              {log.buffer.dropped > 0 ? `（古い ${log.buffer.dropped} 行は省略）` : null}
+              {following ? "・実行中（追記を追っています）" : null}
+            </p>
+            {log.capped && running !== false ? (
+              <Notice
+                title="追記の自動取得を止めました"
+                data-testid="run-log-capped"
+                action={
+                  <Button size="sm" onClick={log.retry}>
+                    読み直す
+                  </Button>
+                }
+              >
+                長く続いている run のため、一定回数で追うのを止めました。続きは読み直すと表示します。
+              </Notice>
+            ) : null}
+            <FollowScroller version={`${raw}:${log.buffer.lines.length}:${log.buffer.dropped}`} following={following}>
+              {log.buffer.lines.length === 0 ? (
+                <p
+                  data-fetch-state="empty"
+                  className="rounded-lg border border-border p-3 text-body text-muted-foreground"
+                >
+                  まだ出力がありません。{following ? "出力され次第ここに追記します。" : null}
+                </p>
+              ) : raw ? (
+                <LogSurface label="run ログ本文（原文）" wrap={wrap} size="lg" data-follow-target>
+                  {log.buffer.lines.join("\n")}
+                </LogSurface>
+              ) : (
+                <EventList events={events} wrap={wrap} />
+              )}
+            </FollowScroller>
+          </section>
+        )
+      ) : null}
     </ScreenFrame>
   );
 }

@@ -1762,7 +1762,7 @@ async fn run_with_executable_attempt(
         launcher_uid,
     } = &isolation.runtime
     {
-        return launcher_run::run(
+        return launcher_run::run_registered(
             adapter,
             req,
             run_id,
@@ -1775,6 +1775,7 @@ async fn run_with_executable_attempt(
             },
             &policy,
             credentials,
+            isolation.live_sessions.clone(),
         )
         .await;
     }

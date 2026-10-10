@@ -39,7 +39,7 @@ completed: 2026-10-10
 - `TMPDIR=/tmp cargo nextest run -p task-worker --lib live_frame_tests` → 6 passed（3 回連続）。
 - `TMPDIR=/tmp cargo nextest run -p task-worker -E 'test(browser_launcher) | test(browser_live) | test(launcher_)'` → 137 passed（3 回連続）。
 - `cargo clippy --workspace -- -D warnings` exit 0、`cargo clippy -p task-worker --all-targets -- -D warnings` exit 0、`cargo fmt --all -- --check` exit 0。
-- 全体試験は下の「全体試験」に記録。
+- `TMPDIR=/tmp bash scripts/dev/test-parallel.sh` → exit 0、5046 passed / 13 skipped（launcher unit 時点の 5036 から +10: 本 unit の 6 件ほか）。
 
 ## 未解決事項
 

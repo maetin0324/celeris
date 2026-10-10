@@ -136,6 +136,17 @@ class H(BaseHTTPRequestHandler):
                     b'<a href="/ct/redirect_Slides4.pdf">Redirect PDF</a> '
                     b'<a href="/ct/elsewhere_Slides5.pdf">Elsewhere PDF</a></body></html>')
             self.send_response(200); self.send_header('Content-Type', 'text/html')
+        elif self.path == '/slow.html':
+            # A course page whose PDF answers after 7 s (付記 2026-10-10i), linked directly and through
+            # a mousedown handler that starts the navigation before the click ends.
+            body = (b'<html><body><h1>Slow</h1>'
+                    b'<a href="/ct/slow_Slides6.pdf">Slow PDF</a> '
+                    b'<a href="/ct/slow_Slides6.pdf" onmousedown="location.href=this.href">MouseDown PDF</a>'
+                    b'</body></html>')
+            self.send_response(200); self.send_header('Content-Type', 'text/html')
+        elif self.path == '/ct/slow_Slides6.pdf':
+            import time; time.sleep(7)
+            body = PDF; self.send_response(200); self.send_header('Content-Type', 'application/pdf')
         elif self.path == '/dialogs.html':
             # Course-page links whose click opens a JavaScript dialog (付記 2026-10-10h).
             body = (b'<html><body><h1>Dialogs</h1>'
@@ -300,11 +311,11 @@ fn inner() {
         }),
     };
     let mut rt = IsolatedRuntime::launch(&spec).expect("isolated browser launches");
-    let mut controller = CdpController::new(
-        rt.cdp_write.take().expect("CDP write"),
+    let (cdp_read, live_tap) = task_worker::browser_launcher::live::LiveTap::interpose(
         rt.cdp_read.take().expect("CDP read"),
-    );
-    controller.response_timeout_for_test(Duration::from_secs(60));
+    )
+    .expect("live tap");
+    let mut controller = CdpController::new(rt.cdp_write.take().expect("CDP write"), cdp_read);
     // As after a credential login whose auth section closed on the post-login conditions: every
     // agent command passes the post-login gate (read origin, no live password field, guard).
     if std::env::var_os("CELERIS_TEST_POST_LOGIN").is_some() {
@@ -329,6 +340,22 @@ fn inner() {
         vec![ORIGIN.to_string()],
     )
     .expect("relay");
+    // As in the launcher during the 2026-10-10 15:48 run: the owner's Live View is streaming
+    // (screencast through the controller, frames taken and acked at the viewer's pace).
+    let live_stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let live_frames = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let live = {
+        use task_worker::browser_launcher::live::{LiveFeed, LiveNext, ScreencastFeed};
+        let mut feed = ScreencastFeed::new(live_tap, relay.controller());
+        let (stop, frames) = (live_stop.clone(), live_frames.clone());
+        thread::spawn(move || {
+            while !stop.load(std::sync::atomic::Ordering::SeqCst) {
+                if let LiveNext::Frame(_) = feed.next_frame(Duration::from_millis(200)) {
+                    frames.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }
+            }
+        })
+    };
     let mut seq = 0;
     let version = action(s, &mut seq, "__version__", &[], None);
     assert_eq!(version["status"], 0, "{version}");
@@ -450,6 +477,23 @@ fn inner() {
             .expect("controller")
             .take_agent_denials()
     };
+    // 付記 2026-10-10i (production 2026-10-10 15:48, `gate=Input.dispatchMouseEvent!sink_failed`, Live
+    // View streaming): while a page waits for a navigation's response, Chrome answers commands on
+    // that page only after the response arrives. A PDF that answers after 7 s failed the click (or
+    // its post-login check) at the controller's 5 s; agent commands now wait up to 25 s.
+    for (link, letter) in [("Slow PDF", "4"), ("MouseDown PDF", "5")] {
+        let r = ref_on(&mut seq, "slow.html", link);
+        denials();
+        let name = format!("download-{}.bin", letter.repeat(32));
+        let got = action(s, &mut seq, "download", &[&r], Some(&name));
+        assert_eq!(
+            got["status"],
+            0,
+            "download {link}: {got}; gate {:?}",
+            denials()
+        );
+        assert_eq!(std::fs::read(out.join(&name)).expect("file"), PDF, "{link}");
+    }
     for (page, link, code, letter) in [
         ("dialogs.html", "Alert PDF", "dialog_accepted_alert", "1"),
         (
@@ -510,6 +554,12 @@ fn inner() {
     }
     eprintln!("SANDBOX-ARTIFACTS-EVIDENCE screenshot and two PDF downloads in /session/output");
     let _ = action(s, &mut seq, "close", &[], None);
+    live_stop.store(true, std::sync::atomic::Ordering::SeqCst);
+    let _ = live.join();
+    assert!(
+        live_frames.load(std::sync::atomic::Ordering::SeqCst) > 0,
+        "the Live View screencast streamed frames during the run"
+    );
     rt.kill();
     let _ = server.kill();
     let _ = server.wait();

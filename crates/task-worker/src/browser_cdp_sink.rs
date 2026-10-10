@@ -43,6 +43,11 @@ const MAX_FRAME: usize = 65536;
 /// single messages well above the sink bound (ADR 2026-10-09 credential username / post-login D2-6).
 const MAX_CDP_MESSAGE: usize = 64 << 20;
 const TIMEOUT: Duration = Duration::from_secs(5);
+/// 付記 2026-10-10i: how long an agent command (and its post-login checks) may wait for Chrome.
+/// While a page waits for a navigation's response (a slow PDF), Chrome answers commands on that
+/// page only after the response arrives; 5 s failed a download click on a slow server.
+/// agent-browser's own command timeout is longer, so the relay answers first.
+const AGENT_TIMEOUT: Duration = Duration::from_secs(25);
 /// Shibboleth IdP attribute-release consent form markers (fixed names; the page text is not read).
 const CONSENT_MARKER_JS: &str = "!!document.querySelector('[name=\"_shib_idp_consentIds\"],[name=\"_shib_idp_consentOptions\"],[name=\"_eventId_AttributeReleaseRejected\"]')";
 /// The same markers as a JS string literal (for the press and the diagnostics).
@@ -597,6 +602,12 @@ pub struct CdpController {
     /// [`MAX_AGENT_DENIALS`]. The launcher logs them when an action fails so a production failure
     /// says which gate refused what (付記 2026-10-10f). Methods are reduced to a fixed shape.
     agent_denials: std::collections::VecDeque<(String, &'static str)>,
+    /// True while an agent command (and its post-login checks) runs: replies may take
+    /// [`AGENT_TIMEOUT`], and a timeout records what Chrome announced meanwhile.
+    agent_call: bool,
+    /// Document requests of agent pages still waiting for their response (request ids, at most
+    /// 64): a reply timeout says whether a navigation was pending (付記 2026-10-10i).
+    pending_documents: std::collections::HashSet<String>,
     /// Test-only: every agent command method, in order.
     #[cfg(test)]
     pub(crate) agent_log: Vec<String>,
@@ -640,6 +651,8 @@ impl CdpController {
             denied_downloads: std::collections::HashSet::new(),
             download_breach: false,
             agent_denials: std::collections::VecDeque::new(),
+            agent_call: false,
+            pending_documents: std::collections::HashSet::new(),
             #[cfg(test)]
             agent_log: Vec::new(),
             #[cfg(feature = "attack-test-hooks")]
@@ -848,7 +861,9 @@ impl CdpController {
         params: Value,
         session: Option<&str>,
     ) -> Result<Value, InjectionError> {
+        self.agent_call = true;
         let result = self.agent_command_inner(method, params, session);
+        self.agent_call = false;
         #[cfg(test)]
         self.agent_log.push(match &result {
             Ok(_) => method.to_owned(),
@@ -1684,6 +1699,7 @@ return out;}})()"
         if value["method"] == "Page.javascriptDialogOpening" && self.resolve_agent_dialog(&value) {
             return;
         }
+        self.track_document_request(&value);
         if self.auth_section.is_some()
             && value["method"] == "Network.requestWillBeSent"
             && let Some(nav) = self.login_navigation.as_mut()
@@ -1813,6 +1829,14 @@ return out;}})()"
         let timeout = self.response_timeout;
         #[cfg(not(feature = "attack-test-hooks"))]
         let timeout = TIMEOUT;
+        let timeout = if self.agent_call {
+            timeout.max(AGENT_TIMEOUT)
+        } else {
+            timeout
+        };
+        // 付記 2026-10-10i: what Chrome announced while this reply was awaited (fixed tokens,
+        // recorded only if the wait times out).
+        let mut seen: Vec<&'static str> = Vec::new();
         let deadline = std::time::Instant::now() + timeout;
         let deadline = self
             .login_navigation
@@ -1821,6 +1845,7 @@ return out;}})()"
             .map_or(deadline, |nav| deadline.min(nav.deadline));
         loop {
             if std::time::Instant::now() >= deadline {
+                self.record_reply_timeout(&seen);
                 return Err(InjectionError::SinkFailed);
             }
             if let Some(end) = self.buffered.iter().position(|b| *b == 0) {
@@ -1831,6 +1856,12 @@ return out;}})()"
                 let value = parsed?;
                 if value["id"] == id {
                     return Ok(value);
+                }
+                if self.agent_call
+                    && let Some(token) = wait_event_token(&value)
+                    && !seen.contains(&token)
+                {
+                    seen.push(token);
                 }
                 self.queue_event(value);
                 continue;
@@ -1854,6 +1885,7 @@ return out;}})()"
                 )
             } <= 0
             {
+                self.record_reply_timeout(&seen);
                 return Err(InjectionError::SinkFailed);
             }
             let mut chunk = [0u8; 4096];
@@ -1867,6 +1899,67 @@ return out;}})()"
             self.buffered.extend_from_slice(&chunk[..n]);
             chunk.zeroize();
         }
+    }
+
+    /// Follow agent pages' document requests until their response (or failure) arrives.
+    fn track_document_request(&mut self, event: &Value) {
+        let Some(request) = event["params"]["requestId"].as_str() else {
+            return;
+        };
+        match event["method"].as_str() {
+            Some("Network.requestWillBeSent")
+                if event["params"]["type"] == "Document"
+                    && event["sessionId"]
+                        .as_str()
+                        .is_some_and(|s| !self.private_sessions.contains(s)) =>
+            {
+                if self.pending_documents.len() >= 64 {
+                    self.pending_documents.clear();
+                }
+                self.pending_documents.insert(request.to_owned());
+            }
+            Some(
+                "Network.responseReceived" | "Network.loadingFailed" | "Network.loadingFinished",
+            ) => {
+                self.pending_documents.remove(request);
+            }
+            _ => {}
+        }
+    }
+
+    /// 付記 2026-10-10i: an agent command's reply (or one of its post-login checks) did not come in
+    /// time. Record that, whether a document response was still pending, and what Chrome announced
+    /// meanwhile, as fixed tokens.
+    fn record_reply_timeout(&mut self, seen: &[&'static str]) {
+        if !self.agent_call {
+            return;
+        }
+        self.record_agent_denial("Controller.reply", "cdp_reply_timeout");
+        if !self.pending_documents.is_empty() {
+            self.record_agent_denial("Controller.seenWhileWaiting", "document_response_pending");
+        }
+        for token in seen {
+            self.record_agent_denial("Controller.seenWhileWaiting", token);
+        }
+    }
+}
+
+/// The fixed token for an event worth reporting when a reply times out (付記 2026-10-10i).
+fn wait_event_token(event: &Value) -> Option<&'static str> {
+    let document = event["params"]["type"] == "Document";
+    match event["method"].as_str()? {
+        "Page.frameRequestedNavigation" | "Page.frameStartedNavigating" => {
+            Some("navigation_requested")
+        }
+        "Page.frameStartedLoading" => Some("frame_started_loading"),
+        "Network.requestWillBeSent" if document => Some("document_request"),
+        "Network.responseReceived" if document => Some("document_response"),
+        "Browser.downloadWillBegin" | "Page.downloadWillBegin" => Some("download_will_begin"),
+        "Browser.downloadProgress" | "Page.downloadProgress" => Some("download_progress"),
+        "Target.targetCreated" | "Target.attachedToTarget" => Some("target_created"),
+        "Page.javascriptDialogOpening" => Some("dialog_opening"),
+        "Page.frameNavigated" => Some("frame_navigated"),
+        _ => None,
     }
 }
 
@@ -2428,6 +2521,65 @@ mod idle_pump_tests {
         assert!(
             browser.read_exact(&mut byte).is_err(),
             "nothing sent for a private session"
+        );
+    }
+
+    /// 付記 2026-10-10i: a timed-out agent reply records fixed tokens: the timeout, whether an agent
+    /// page's document response was pending (a private session's is not counted), and what Chrome
+    /// announced meanwhile. Outside an agent command nothing is recorded.
+    #[test]
+    fn agent_reply_timeout_records_pending_navigation_as_fixed_tokens() {
+        let (mut c, _browser) = controller();
+        c.private_sessions.insert("OWN".into());
+        c.queue_event(
+            json!({"method":"Network.requestWillBeSent","sessionId":"OWN",
+            "params":{"requestId":"r0","type":"Document","request":{"url":"https://idp.test/"}}}),
+        );
+        c.record_reply_timeout(&["navigation_requested"]);
+        assert!(
+            c.take_agent_denials().is_empty(),
+            "not during an agent command"
+        );
+        c.agent_call = true;
+        c.record_reply_timeout(&[]);
+        assert_eq!(
+            c.take_agent_denials(),
+            vec![("Controller.reply".to_owned(), "cdp_reply_timeout")],
+            "a private session's request is not an agent navigation"
+        );
+        c.queue_event(json!({"method":"Network.requestWillBeSent","sessionId":"S",
+            "params":{"requestId":"r1","type":"Document","request":{"url":"https://lms.test/a.pdf?sid=1"}}}));
+        assert_eq!(
+            wait_event_token(
+                &json!({"method":"Network.requestWillBeSent","params":{"type":"Document"}})
+            ),
+            Some("document_request")
+        );
+        c.record_reply_timeout(&["navigation_requested", "document_request"]);
+        let denials = c.take_agent_denials();
+        assert_eq!(
+            denials,
+            vec![
+                ("Controller.reply".to_owned(), "cdp_reply_timeout"),
+                (
+                    "Controller.seenWhileWaiting".to_owned(),
+                    "document_response_pending"
+                ),
+                (
+                    "Controller.seenWhileWaiting".to_owned(),
+                    "navigation_requested"
+                ),
+                ("Controller.seenWhileWaiting".to_owned(), "document_request"),
+            ]
+        );
+        assert!(!format!("{denials:?}").contains("sid="));
+        c.queue_event(json!({"method":"Network.responseReceived","sessionId":"S",
+            "params":{"requestId":"r1","type":"Document"}}));
+        c.record_reply_timeout(&[]);
+        assert_eq!(
+            c.take_agent_denials(),
+            vec![("Controller.reply".to_owned(), "cdp_reply_timeout")],
+            "the response arrived"
         );
     }
 

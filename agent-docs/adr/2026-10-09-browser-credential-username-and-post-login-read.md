@@ -515,3 +515,33 @@ manaba の link のどの dialog かは本番の頁を見ていないので確�
 
 残る制限: confirm で守られた download は通らない（agent は click 後に何も起きず、download は 30 秒で timeout）。通すかは人の
 決定（提案）。
+
+## 付記 2026-10-10i: agent の command は応答の遅い navigation の間も待つ（controller の 5 秒をやめる）
+
+付記 2026-10-10h の後も（release f42a181b、15:48:02Z）同じ link の download が
+`gate=Input.dispatchMouseEvent!sink_failed` で失敗した。dialog の記録は無く、dialog ではなかった。Live View は流れていた。
+
+調べたこと（fixture・Chrome for Testing・実 agent-browser・Live View の screencast を launcher と同じく controller 経由で流す）:
+
+- click で始まった navigation の応答（PDF）が遅いと、Chrome はその頁への command（`Page.getFrameTree`・`Runtime.evaluate`・
+  入力）に、応答が届くまで答えない（7 秒遅れの応答で、別の CDP session からの `Page.getFrameTree` も 5 秒を超えて待った）。
+- controller は CDP の返事を 5 秒しか待たない（`TIMEOUT`）。click 本体か、ログイン後の gate の検査（click の直前・直後の
+  `Page.getFrameTree`）がこの間に当たると失敗する。fixture では検査側で `observation_origin_denied`、本番では click 本体で
+  `sink_failed` になった（どちらに当たるかは応答の時機による）。ログイン後の gate の無い daemon の素の経路では起きない。
+- Live View の screencast（ack は controller の lock を取る）は、この失敗の原因ではなかった（Live View を流しても止めても同じ。
+  修正後は Live View を流したまま通る）。
+- manaba の応答が実際に何秒かかったかは本番では測っていない。
+
+決定:
+
+1. agent の command（とその gate の検査）は Chrome の返事を最大 25 秒待つ（`AGENT_TIMEOUT`。agent-browser 自身の command
+   timeout より短い）。controller 自身の操作は従来の 5 秒のまま。待つ間は controller の lock を持つので、Live View の frame は
+   その間止まる。
+2. 待ちが期限を越えたら固定 token を記録する: `Controller.reply!cdp_reply_timeout`、agent の頁の document の応答が来ていなければ
+   `Controller.seenWhileWaiting!document_response_pending`、待つ間に Chrome が告げたもの（`navigation_requested`・
+   `frame_started_loading`・`document_request`・`document_response`・`download_will_begin`・`download_progress`・
+   `target_created`・`dialog_opening`・`frame_navigated`）。URL・request id は記録しない。
+3. protocol は 9 のまま。controller は launcher の process にあるので **launcher の再 build** が要る（daemon も同じ commit）。
+
+残る制限: 応答が 25 秒を越える download は失敗する（journal の token で分かる）。controller が href を自分で取りに行く経路
+（coordinator の案）は作っていない（提案）。

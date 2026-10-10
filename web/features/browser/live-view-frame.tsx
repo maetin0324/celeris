@@ -1,14 +1,10 @@
+import { useEffect, useState } from "react";
 import { type LiveUnavailableReason, liveUnavailableText, safeLivePath } from "./browser-model";
 import type { BrowserRunItem, OwnerSession } from "./browser-query";
 
-// D3.2: Live View は gateway が発行した同一 origin の /browser/live/{task}/{run} だけを iframe に入れる。
-// raw の live_view_url は使わない。不可のときは理由を出し、イベントでの監視に切り替えたことを明示する。
-
 const KNOWN: readonly string[] = Object.keys(liveUnavailableText);
-
 export type LiveViewState = { kind: "frame"; href: string } | { kind: "unavailable"; reason: LiveUnavailableReason };
 
-/** 理由の判定順: 本人 → gateway の理由 → 実行状態 → href の検査。 */
 export function liveViewState(input: {
   taskId: string;
   runId: string;
@@ -31,37 +27,77 @@ export function liveViewState(input: {
     : { kind: "unavailable", reason: "not_configured" };
 }
 
-export function LiveViewFrame({ state, taskLabel }: { state: LiveViewState; taskLabel: string }) {
+export function LiveViewFrame({
+  state,
+  taskLabel,
+  credentialSession = false,
+}: {
+  state: LiveViewState;
+  taskLabel: string;
+  credentialSession?: boolean;
+}) {
+  const [imageUrl, setImageUrl] = useState<string | null>(null);
+  const href = state.kind === "frame" ? state.href : null;
+  useEffect(() => {
+    if (!href) {
+      setImageUrl(null);
+      return;
+    }
+    let current: string | null = null;
+    let disposed = false;
+    const scheme = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const socket = new WebSocket(`${scheme}//${window.location.host}${href}/frames`);
+    socket.binaryType = "blob";
+    socket.onmessage = (event: MessageEvent<Blob>) => {
+      if (!(event.data instanceof Blob) || disposed) return;
+      const type = event.data.type === "image/png" ? "image/png" : "image/jpeg";
+      const next = URL.createObjectURL(new Blob([event.data], { type }));
+      setImageUrl(next);
+      if (current) URL.revokeObjectURL(current);
+      current = next;
+    };
+    return () => {
+      disposed = true;
+      socket.close();
+      if (current) URL.revokeObjectURL(current);
+      setImageUrl(null);
+    };
+  }, [href]);
+
   return (
     <section aria-labelledby="browser-live-heading" className="flex flex-col gap-2" data-testid="browser-live-view">
       <h2 id="browser-live-heading" tabIndex={-1} className="text-section font-semibold">
         Live View
       </h2>
+      {credentialSession ? (
+        <p className="text-label font-medium" data-testid="live-owner-only">
+          credential session の映像は本人だけに表示されます。
+        </p>
+      ) : null}
       {state.kind === "frame" ? (
         <>
-          {/* iframe の前後に focus できる link を置き、キーボードで iframe を飛ばし・抜けられるようにする（D3.6）。 */}
           <a
             href="#browser-live-events"
             className="inline-flex min-h-11 items-center self-start text-label text-primary underline"
           >
             Live View を飛ばしてイベントへ
           </a>
-          <iframe
-            src={state.href}
-            title={`ブラウザの Live View: ${taskLabel}`}
-            sandbox="allow-scripts allow-same-origin"
-            referrerPolicy="no-referrer"
-            className="aspect-live w-full rounded-md border border-border bg-muted"
-            data-testid="browser-live-iframe"
-          />
-          <a
-            href={state.href}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex min-h-11 items-center self-start text-label text-primary underline"
+          <div
+            className="flex aspect-live w-full items-center justify-center overflow-hidden rounded-md border border-border bg-muted"
+            data-testid="browser-live-frame"
           >
-            Live View を別タブで開く
-          </a>
+            {imageUrl ? (
+              <img
+                src={imageUrl}
+                alt={`ブラウザの Live View: ${taskLabel}`}
+                className="max-h-full max-w-full object-contain"
+                data-testid="browser-live-image"
+              />
+            ) : (
+              <p className="text-label text-muted-foreground">映像を待っています…</p>
+            )}
+          </div>
+          <p className="text-label text-muted-foreground">読み取り専用の映像です。入力や操作はできません。</p>
         </>
       ) : (
         <div

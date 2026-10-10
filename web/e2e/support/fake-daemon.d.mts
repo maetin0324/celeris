@@ -58,6 +58,7 @@ export const BROWSER_RAW_LIVE_VIEW_URL: string;
 export type BrowserBackendOptions = {
   /** T2 の credential 待ち（W2）を置く。既定 true。置くと namespace の認証区間で Live View は 409 auth_interval。 */
   credentialWait?: boolean;
+  framesAvailable?: boolean;
   /** Override the newest T1/R1 browser event state for Live View e2e coverage. */
   runStateOverride?: string;
   /** gateway の attestation 鍵の公開鍵。渡すと assertion の署名を確かめる。 */

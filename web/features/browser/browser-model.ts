@@ -7,7 +7,8 @@ export type LiveUnavailableReason =
   | "not_running"
   | "not_configured"
   | "relay_unavailable"
-  | "grant_expired";
+  | "grant_expired"
+  | "launcher_protocol_no_live_frames";
 
 export const liveUnavailableText: Record<LiveUnavailableReason, string> = {
   owner_unavailable: "本人確認を利用できないため、Live View を開けません。",
@@ -16,6 +17,7 @@ export const liveUnavailableText: Record<LiveUnavailableReason, string> = {
   not_configured: "Live View が設定されていません。",
   relay_unavailable: "Live View の中継を利用できません。イベントで監視してください。",
   grant_expired: "Live View の許可が期限切れです。画面を更新してください。",
+  launcher_protocol_no_live_frames: "launcher が Live View の映像を提供していません。launcher を更新してください。",
 };
 
 /** gateway が発行した同一 origin の live path だけを通す。 */

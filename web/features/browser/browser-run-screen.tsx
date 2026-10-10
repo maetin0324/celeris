@@ -47,6 +47,7 @@ export function BrowserRunScreen({ taskId, runId }: { taskId: string; runId: str
     owner,
     authInterval,
   });
+  const credentialSession = runWaits.some((wait) => wait.reason === "waiting_for_auth");
 
   return (
     <div className="flex flex-col gap-4" data-testid="browser-run-screen">
@@ -63,12 +64,23 @@ export function BrowserRunScreen({ taskId, runId }: { taskId: string; runId: str
         </Notice>
       ) : null}
       {run ? (
-        <ControlBar
-          ids={{ taskId, runId, sessionId: run.session_id, runState: run.state }}
-          csrf={owner?.csrfToken ?? null}
-          canOperate={isOwner && !authInterval}
-          disabledReason={disabledReason}
-        />
+        live.kind === "frame" ? (
+          <section
+            aria-label="操作状態"
+            className="rounded-lg border-2 border-border bg-surface p-4"
+            data-testid="browser-control-bar"
+          >
+            <p className="text-section font-semibold">読み取り専用</p>
+            <p className="text-label">launcher run では入力・引き継ぎ操作を利用できません。</p>
+          </section>
+        ) : (
+          <ControlBar
+            ids={{ taskId, runId, sessionId: run.session_id, runState: run.state }}
+            csrf={owner?.csrfToken ?? null}
+            canOperate={isOwner && !authInterval}
+            disabledReason={disabledReason}
+          />
+        )
       ) : (
         <section
           aria-label="操作状態"
@@ -81,7 +93,7 @@ export function BrowserRunScreen({ taskId, runId }: { taskId: string; runId: str
       )}
       {/* 広い幅では Live View と 待ち・イベント を 2 列に分ける。DOM の順（読み上げ・狭幅の順）は変えない。 */}
       <div className="flex flex-col gap-4 lg:grid lg:grid-cols-2 lg:items-start">
-        <LiveViewFrame state={live} taskLabel={taskId} />
+        <LiveViewFrame state={live} taskLabel={taskId} credentialSession={credentialSession} />
         <div className="flex flex-col gap-4">
           <div id="browser-waits" data-testid="browser-run-waits">
             {runWaits.length === 0 ? (

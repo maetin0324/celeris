@@ -2287,6 +2287,7 @@ const BROWSER_ID = /^[A-Za-z0-9_-]{1,64}$/;
 
 export function createBrowserBackend({
   credentialWait = true,
+  framesAvailable = false,
   publicKey = null,
   now = Date.now,
   runStateOverride,
@@ -2600,7 +2601,11 @@ export function createBrowserBackend({
         return json(403, { code: "attestation_invalid" });
       if (sub === "grant") {
         records.grants.push({ key, owner: who.owner_session_id });
-        const grant = { grant_id: `G${++grantSeq}`, expires_at: secs() + 60 };
+        const grant = {
+          grant_id: `G${++grantSeq}`,
+          expires_at: secs() + 60,
+          ...(framesAvailable ? { frames_available: true } : {}),
+        };
         grants.set(grant.grant_id, { key, expires_at: grant.expires_at });
         return json(200, grant);
       }

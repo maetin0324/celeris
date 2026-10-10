@@ -25,6 +25,7 @@ describe("browser display model", () => {
   it("has a message for all seven live unavailability reasons", () => {
     expect(Object.keys(liveUnavailableText).sort()).toEqual([
       "grant_expired",
+      "launcher_protocol_no_live_frames",
       "not_configured",
       "not_owner",
       "not_running",

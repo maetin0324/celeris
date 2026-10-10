@@ -16,6 +16,11 @@ VERBS = {'open': 'navigate', 'click': 'click', 'snapshot': 'snapshot',
          'extract': 'gettext', 'screenshot': 'screenshot', 'download': 'download',
          'scroll': 'scroll', 'close': 'close'}
 REF = re.compile(r'@e[0-9]+\Z')
+# Fixed diagnostics (付記 2026-10-10f): `runner_reason` says which step failed and `error_class`
+# what agent-browser's error was about. Neither carries page text, URLs or arguments; the launcher
+# logs them so a failed screenshot / download is diagnosable without secrets.
+RELAY_CODES = ('observation_origin_denied', 'password_field_present', 'redisplay_detected',
+               'auth_section_active', 'cdp_command_denied', 'cdp_command_failed')
 NAME = re.compile(r'(extract|screenshot|download)-[a-f0-9]{32}\.(json|png|bin)\Z')
 
 
@@ -86,6 +91,29 @@ def command(request):
     return action
 
 
+def error_class(stdout):
+    try:
+        data = json.loads(stdout or 'null')
+    except ValueError:
+        return 'unparsed'
+    if not isinstance(data, dict):
+        return 'unparsed'
+    error = data.get('error')
+    if not isinstance(error, str):
+        return 'none' if data.get('success') is True else 'no_error_text'
+    text = error.lower()
+    for code in RELAY_CODES:
+        if code in text:
+            return code
+    for marker, code in (('denied by policy', 'policy_denied'), ('unknown ref', 'unknown_ref'),
+                         ('timed out', 'timeout'), ('timeout', 'timeout'),
+                         ('download', 'download_error'), ('screenshot', 'screenshot_error'),
+                         ('target closed', 'target_closed'), ('no page', 'no_page')):
+        if marker in text:
+            return code
+    return 'other'
+
+
 def execute(request):
     if request.get('verb') == '__version__' and request.get('args') == []:
         argv = [CONFIG['executable'], '--version']
@@ -94,7 +122,7 @@ def execute(request):
         endpoint = CONFIG.get('cdp_endpoint')
         if (not isinstance(endpoint, str) or
                 not re.fullmatch(r'ws://127\.0\.0\.1:9223/[a-f0-9]{64}', endpoint)):
-            return {'status': 1, 'stdout': ''}
+            return {'status': 1, 'stdout': '', 'runner_reason': 'config_invalid'}
         argv = [CONFIG['executable'], '--config', '/session/upstream.json',
                 '--session', CONFIG['session_id'], '--action-policy', '/session/policy.json',
                 '--cdp', endpoint,
@@ -109,9 +137,35 @@ def execute(request):
     try:
         result = subprocess.run(argv, cwd=ROOT, env=env, stdout=subprocess.PIPE,
                                 stderr=subprocess.DEVNULL, timeout=45, check=False)
-        return {'status': result.returncode, 'stdout': result.stdout[:1048576].decode('utf-8', errors='replace')}
-    except (OSError, subprocess.TimeoutExpired):
-        return {'status': 1, 'stdout': ''}
+    except subprocess.TimeoutExpired:
+        return {'status': 1, 'stdout': '', 'runner_reason': 'exec_timeout'}
+    except OSError:
+        return {'status': 1, 'stdout': '', 'runner_reason': 'exec_failed'}
+    stdout = result.stdout[:1048576].decode('utf-8', errors='replace')
+    response = {'status': result.returncode, 'stdout': stdout}
+    if result.returncode != 0:
+        response['runner_reason'] = 'agent_browser_exit'
+        response['error_class'] = error_class(stdout)
+    return response
+
+
+def finish_artifact(request, response):
+    """The launcher (another host UID) reads screenshot / download files to hand them to Celeris
+    (protocol v8); the generated name was validated by command()."""
+    artifact = request.get('artifact')
+    if (response.get('status') != 0 or request.get('verb') not in ('screenshot', 'download')
+            or not isinstance(artifact, str) or not NAME.fullmatch(artifact)):
+        return response
+    produced = Path('/session/output') / artifact
+    if produced.is_symlink() or not produced.is_file():
+        # agent-browser reported success but left no file under the generated name.
+        return {'status': 3, 'stdout': '', 'runner_reason': 'output_missing',
+                'error_class': error_class(response.get('stdout'))}
+    try:
+        produced.chmod(0o644)
+    except OSError:
+        return {'status': 3, 'stdout': '', 'runner_reason': 'output_chmod_failed'}
+    return response
 
 
 REQUESTS.mkdir(exist_ok=True)
@@ -119,17 +173,16 @@ while True:
     for path in sorted(REQUESTS.glob('*.request')):
         try:
             request = json.loads(path.read_text())
-            response = execute(request)
-            # The launcher (another host UID) reads screenshot / download files to hand them to
-            # Celeris (protocol v8); the generated name was validated by command().
-            artifact = request.get('artifact')
-            if (response.get('status') == 0 and request.get('verb') in ('screenshot', 'download')
-                    and isinstance(artifact, str) and NAME.fullmatch(artifact)):
-                produced = Path('/session/output') / artifact
-                if produced.is_file() and not produced.is_symlink():
-                    produced.chmod(0o644)
-        except (OSError, ValueError, KeyError, TypeError):
-            response = {'status': 2, 'stdout': ''}
+        except (OSError, ValueError):
+            request = None
+        try:
+            if not isinstance(request, dict):
+                raise ValueError()
+            response = finish_artifact(request, execute(request))
+        except ValueError:
+            response = {'status': 2, 'stdout': '', 'runner_reason': 'request_invalid'}
+        except (OSError, KeyError, TypeError):
+            response = {'status': 2, 'stdout': '', 'runner_reason': 'runner_error'}
         result = path.with_suffix('.result')
         temporary = path.with_suffix('.next')
         temporary.write_text(json.dumps(response))

@@ -3986,3 +3986,31 @@ fn launcher_shim_download_lands_in_the_run_output_as_a_readable_pdf() {
     // Only the delivered pair (.bin and its .pdf link) is in the output.
     assert_eq!(std::fs::read_dir(&output).expect("dir").count(), 2);
 }
+
+/// 付記 2026-10-10f: a failed launcher screenshot / download says which side refused it, with fixed
+/// reasons only (the shim's `browser_[a-z0-9_]` vocabulary).
+#[test]
+fn launcher_artifact_action_failures_keep_the_launcher_code_as_a_fixed_reason() {
+    use crate::browser_launcher::ErrorCode as E;
+    let cases = [
+        (Some(E::Unauthorized), ARTIFACT_ACTION_REFUSED),
+        (Some(E::Timeout), ARTIFACT_ACTION_TIMEOUT),
+        (Some(E::Limit), ARTIFACT_LIMIT),
+        (Some(E::IsolationFailed), ARTIFACT_ISOLATION_FAILED),
+        (Some(E::BadRequest), ARTIFACT_ACTION_FAILED),
+        (Some(E::LaunchFailed), ARTIFACT_ACTION_FAILED),
+        (None, ARTIFACT_LAUNCHER_UNAVAILABLE),
+    ];
+    let shim_reason = |r: &str| {
+        r.strip_prefix("browser_").is_some_and(|rest| {
+            (1..=64).contains(&rest.len())
+                && rest
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+        })
+    };
+    for (code, reason) in cases {
+        assert_eq!(artifact_action_reason(code), reason, "{code:?}");
+        assert!(shim_reason(reason), "{reason}");
+    }
+}

@@ -248,22 +248,26 @@ fn serve(
                         e @ (InjectionError::RedisplayDetected
                         | InjectionError::ObservationOriginDenied
                         | InjectionError::PasswordFieldPresent),
-                    ) => error(id, e.code()),
-                    Err(_) => error(id, "cdp_command_failed"),
+                    ) => {
+                        c.record_agent_denial(method, e.code());
+                        error(id, e.code())
+                    }
+                    Err(e) => {
+                        c.record_agent_denial(method, e.code());
+                        error(id, "cdp_command_failed")
+                    }
                 };
                 (reply, events)
             }
-            Ok(c) => (
-                error(
-                    id,
-                    if c.auth_section_active() {
-                        AUTH_ERROR
-                    } else {
-                        "cdp_command_denied"
-                    },
-                ),
-                Vec::new(),
-            ),
+            Ok(mut c) => {
+                let code = if c.auth_section_active() {
+                    AUTH_ERROR
+                } else {
+                    "cdp_command_denied"
+                };
+                c.record_agent_denial(method, code);
+                (error(id, code), Vec::new())
+            }
             Err(_) => (error(id, AUTH_ERROR), Vec::new()),
         };
         if send_ws(&mut stream, &response).is_err() {

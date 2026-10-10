@@ -299,3 +299,40 @@ fn launcher_artifact_reader_is_bounded_typed_and_refuses_symlinks() {
         );
     }
 }
+
+/// 付記 2026-10-10f: the launcher's failure line carries only fixed tokens from the runner reply
+/// (never stdout) and the relay's recent refusals.
+#[test]
+fn launcher_action_failure_detail_is_fixed_tokens_only() {
+    use super::{format_denials, runner_failure};
+    let reply = serde_json::json!({
+        "status": 1,
+        "stdout": "{\"error\":\"secret page text https://lms.test/?sid=1\"}",
+        "runner_reason": "agent_browser_exit",
+        "error_class": "observation_origin_denied",
+    });
+    let line = runner_failure(&reply);
+    assert_eq!(
+        line,
+        "status=1 runner_reason=agent_browser_exit error_class=observation_origin_denied"
+    );
+    // Anything outside `[a-z_]{1,40}` is replaced, so a runner cannot smuggle text into the journal.
+    let forged =
+        serde_json::json!({"status": 99999, "runner_reason": "x y https://a", "error_class": "A"});
+    assert_eq!(
+        runner_failure(&forged),
+        "status=255 runner_reason=invalid error_class=invalid"
+    );
+    assert_eq!(
+        runner_failure(&serde_json::json!({})),
+        "status=none runner_reason=none error_class=none"
+    );
+    assert_eq!(format_denials(&[]), "none");
+    assert_eq!(
+        format_denials(&[
+            ("Page.captureScreenshot".into(), "observation_origin_denied"),
+            ("Browser.downloadWillBegin".into(), "download_origin_denied"),
+        ]),
+        "Page.captureScreenshot!observation_origin_denied,Browser.downloadWillBegin!download_origin_denied"
+    );
+}

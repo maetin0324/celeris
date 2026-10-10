@@ -23,6 +23,7 @@ use task_core::{BrowserRun, BrowserRunState};
 
 use super::{BrowserContext, BrowserSink, CLI, EventSinkLive, forward_events, write_private};
 use crate::browser_action::{ActionExecutor, ActionRequest, ActionServer};
+use crate::browser_launcher::backend::ARTIFACT_FAILURE_PREFIX;
 use crate::browser_launcher::protocol::{
     ARTIFACT_PROTOCOL, ArtifactKind, AuthenticateArgs, AuthenticationStatus,
     CREDENTIAL_LOGIN_PROTOCOL, LoginObservation, LoginResult, MAX_ARTIFACT_BYTES, MAX_ARTIFACTS,
@@ -648,13 +649,23 @@ impl LauncherExecutor {
     }
 
     /// 失敗を shim への固定理由付きの応答にする（file・path・page の data は入れない）。
-    fn refused(&self, reason: &'static str) -> serde_json::Value {
-        tracing::warn!(reason, "browser launcher artifact refused");
+    fn refused(&self, refusal: ArtifactRefusal) -> serde_json::Value {
+        let ArtifactRefusal { reason, detail } = refusal;
+        match &detail {
+            Some(detail) => {
+                tracing::warn!(reason, detail = %detail, "browser launcher artifact refused")
+            }
+            None => tracing::warn!(reason, "browser launcher artifact refused"),
+        }
         self.refusals
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .push(reason);
-        serde_json::json!({"status": 1, "stdout": "", "reason": reason})
+        let mut out = serde_json::json!({"status": 1, "stdout": "", "reason": reason});
+        if let Some(detail) = detail {
+            out["detail"] = detail.into();
+        }
+        out
     }
 
     /// screenshot / download: the launcher runs the verb, then the daemon pulls the produced file
@@ -664,20 +675,33 @@ impl LauncherExecutor {
         verb: Verb,
         args: ActionArgs,
         shim_name: Option<&str>,
-    ) -> Result<serde_json::Value, &'static str> {
+    ) -> Result<serde_json::Value, ArtifactRefusal> {
         if self.protocol < ARTIFACT_PROTOCOL {
-            return Err(ARTIFACTS_REQUIRE_V8);
+            return Err(ARTIFACTS_REQUIRE_V8.into());
         }
         let shim_name = shim_name
             .filter(|n| artifact_name_verb(n) == Some(verb))
             .ok_or(ARTIFACT_FAILED)?;
         if self.delivered.load(std::sync::atomic::Ordering::SeqCst) >= MAX_ARTIFACTS {
-            return Err(ARTIFACT_LIMIT);
+            return Err(ARTIFACT_LIMIT.into());
         }
         let (_receipt, observation) = self
             .runtime
             .action_coded(verb, args)
             .map_err(artifact_action_reason)?;
+        // 付記 2026-10-10j: the launcher's runner could not produce the file; its fixed tokens go
+        // to the agent with the reason.
+        if observation.artifact.is_none()
+            && let Some(text) = observation
+                .text
+                .as_deref()
+                .and_then(|t| t.strip_prefix(ARTIFACT_FAILURE_PREFIX))
+        {
+            return Err(ArtifactRefusal {
+                reason: ARTIFACT_ACTION_FAILED,
+                detail: artifact_failure_detail(text),
+            });
+        }
         let name = observation.artifact.as_deref().ok_or(ARTIFACT_FAILED)?;
         let (kind, bytes) = self.runtime.fetch_artifact(name, verb)?;
         write_artifact(&self.output.join(shim_name), &bytes).map_err(|_| ARTIFACT_FAILED)?;
@@ -692,6 +716,33 @@ impl LauncherExecutor {
             .to_string(),
         }))
     }
+}
+
+/// A refused screenshot / download: the fixed reason and, when the launcher gave them, its fixed
+/// diagnostic tokens (付記 2026-10-10j).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ArtifactRefusal {
+    pub(crate) reason: &'static str,
+    pub(crate) detail: Option<String>,
+}
+
+impl From<&'static str> for ArtifactRefusal {
+    fn from(reason: &'static str) -> Self {
+        Self {
+            reason,
+            detail: None,
+        }
+    }
+}
+
+/// The launcher's failure tokens, if they keep to the fixed shape: `key=value` words of ASCII
+/// letters, digits, `_ , . ! -`, at most 600 bytes. Anything else is dropped (no free text).
+pub(crate) fn artifact_failure_detail(text: &str) -> Option<String> {
+    let ok = (1..=600).contains(&text.len())
+        && text.bytes().all(|b| {
+            b.is_ascii_alphanumeric() || matches!(b, b'_' | b'=' | b',' | b'.' | b'!' | b' ' | b'-')
+        });
+    ok.then(|| text.to_owned())
 }
 
 /// `path` を新規に（symlink を辿らず、既存を上書きせず）0600 で書く。途中で失敗したら消す。

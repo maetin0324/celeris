@@ -314,18 +314,18 @@ fn launcher_action_failure_detail_is_fixed_tokens_only() {
     let line = runner_failure(&reply);
     assert_eq!(
         line,
-        "status=1 runner_reason=agent_browser_exit error_class=observation_origin_denied"
+        "status=1 runner_reason=agent_browser_exit error_class=observation_origin_denied link=none"
     );
     // Anything outside `[a-z_]{1,40}` is replaced, so a runner cannot smuggle text into the journal.
     let forged =
         serde_json::json!({"status": 99999, "runner_reason": "x y https://a", "error_class": "A"});
     assert_eq!(
         runner_failure(&forged),
-        "status=255 runner_reason=invalid error_class=invalid"
+        "status=255 runner_reason=invalid error_class=invalid link=none"
     );
     assert_eq!(
         runner_failure(&serde_json::json!({})),
-        "status=none runner_reason=none error_class=none"
+        "status=none runner_reason=none error_class=none link=none"
     );
     assert_eq!(format_denials(&[]), "none");
     assert_eq!(
@@ -334,5 +334,49 @@ fn launcher_action_failure_detail_is_fixed_tokens_only() {
             ("Browser.downloadWillBegin".into(), "download_origin_denied"),
         ]),
         "Page.captureScreenshot!observation_origin_denied,Browser.downloadWillBegin!download_origin_denied"
+    );
+}
+
+/// 付記 2026-10-10j: the runner's link tokens and an adopted guid keep to their fixed shapes, and
+/// the runner may read link attributes only when downloads are allowed.
+#[test]
+fn launcher_download_diagnostics_keep_fixed_shapes() {
+    use super::{download_guid, runner_failure};
+    let reply = serde_json::json!({
+        "status": 1, "runner_reason": "exec_timeout", "error_class": "none",
+        "link": ["target_blank", "href_same_origin", "path_pdf"],
+    });
+    assert_eq!(
+        runner_failure(&reply),
+        "status=1 runner_reason=exec_timeout error_class=none link=target_blank,href_same_origin,path_pdf"
+    );
+    let forged = serde_json::json!({"status": 1, "link": ["https://lms.test/?sid=1"]});
+    assert!(runner_failure(&forged).ends_with("link=invalid"));
+    assert!(download_guid("26b63d07-0625-4e7d-a23f-ffb7c0ee0d18"));
+    assert!(!download_guid("../26b63d07-0625-4e7d-a23f-ffb7c0ee0d1"));
+    assert!(!download_guid("26B63D07-0625-4E7D-A23F-FFB7C0EE0D18"));
+    let with = agent_browser_policy(&SessionPolicy {
+        allowed_domains: vec![],
+        allowed_actions: vec![Verb::Snapshot, Verb::Download],
+        lease_seconds: 60,
+    });
+    assert!(
+        with["allow"]
+            .as_array()
+            .expect("allow")
+            .iter()
+            .any(|a| a == "getattribute")
+    );
+    let without = agent_browser_policy(&SessionPolicy {
+        allowed_domains: vec![],
+        allowed_actions: vec![Verb::Snapshot],
+        lease_seconds: 60,
+    });
+    assert!(
+        !without["allow"]
+            .as_array()
+            .expect("allow")
+            .iter()
+            .any(|a| a == "getattribute" || a == "url")
     );
 }

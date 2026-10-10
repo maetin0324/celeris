@@ -608,6 +608,18 @@ pub struct CdpController {
     /// Document requests of agent pages still waiting for their response (request ids, at most
     /// 64): a reply timeout says whether a navigation was pending (付記 2026-10-10i).
     pending_documents: std::collections::HashSet<String>,
+    /// 付記 2026-10-10j: downloads Chrome completed that the post-login rules let through (guids,
+    /// at most 64). The launcher adopts a file Chrome saved on its own only if its guid is here.
+    completed_downloads: std::collections::HashSet<String>,
+    /// What Chrome did during one launcher action (fixed tokens), while the launcher watches.
+    action_watch: Option<Vec<&'static str>>,
+    /// Page targets created during the watched action (to close the extra tab of an adopted
+    /// download).
+    watch_targets: Vec<String>,
+    /// The watched action is a `download`: a new tab its click opens is followed in the opener.
+    download_watch: bool,
+    /// The page (target, or session if unknown), session and time of the last dialog answered.
+    last_dialog: Option<(String, String, std::time::Instant)>,
     /// Test-only: every agent command method, in order.
     #[cfg(test)]
     pub(crate) agent_log: Vec<String>,
@@ -653,6 +665,11 @@ impl CdpController {
             agent_denials: std::collections::VecDeque::new(),
             agent_call: false,
             pending_documents: std::collections::HashSet::new(),
+            completed_downloads: std::collections::HashSet::new(),
+            action_watch: None,
+            watch_targets: Vec::new(),
+            download_watch: false,
+            last_dialog: None,
             #[cfg(test)]
             agent_log: Vec::new(),
             #[cfg(feature = "attack-test-hooks")]
@@ -940,6 +957,22 @@ impl CdpController {
         if self.private_sessions.contains(&session) {
             return false;
         }
+        // The same dialog is announced on every agent session attached to its page (agent-browser
+        // can hold more than one): answer and record it once (付記 2026-10-10j).
+        let page = self
+            .agent_targets
+            .get(&session)
+            .cloned()
+            .unwrap_or_else(|| session.clone());
+        let now = std::time::Instant::now();
+        // Another session of the same page announcing the dialog just answered (a second dialog
+        // on one session is a new dialog).
+        if self.last_dialog.as_ref().is_some_and(|(p, s, at)| {
+            *p == page && *s != session && now.duration_since(*at) < Duration::from_secs(1)
+        }) {
+            return true;
+        }
+        self.last_dialog = Some((page, session.clone(), now));
         let (accept, code) = match event["params"]["type"].as_str() {
             Some("alert") => (true, "dialog_accepted_alert"),
             Some("beforeunload") => (true, "dialog_accepted_beforeunload"),
@@ -1696,6 +1729,7 @@ return out;}})()"
         if value.get("method").is_none() {
             return;
         }
+        self.watch_event(&value);
         if value["method"] == "Page.javascriptDialogOpening" && self.resolve_agent_dialog(&value) {
             return;
         }
@@ -1767,6 +1801,16 @@ return out;}})()"
             self.download_breach = true;
             self.events.clear();
             self.record_agent_denial("Browser.downloadProgress", "download_breach");
+        } else if matches!(
+            value["method"].as_str(),
+            Some("Browser.downloadProgress" | "Page.downloadProgress")
+        ) && value["params"]["state"] == "completed"
+            && let Some(guid) = value["params"]["guid"].as_str()
+        {
+            if self.completed_downloads.len() >= 64 {
+                self.completed_downloads.clear();
+            }
+            self.completed_downloads.insert(guid.to_owned());
         }
         if [&value["sessionId"], &value["params"]["sessionId"]]
             .iter()
@@ -1899,6 +1943,136 @@ return out;}})()"
             self.buffered.extend_from_slice(&chunk[..n]);
             chunk.zeroize();
         }
+    }
+
+    /// 付記 2026-10-10j: start recording what Chrome does during one launcher action.
+    pub fn begin_action_watch(&mut self, download: bool) {
+        self.action_watch = Some(Vec::new());
+        self.watch_targets.clear();
+        self.download_watch = download;
+    }
+
+    /// The fixed tokens recorded since [`Self::begin_action_watch`] (`none` if Chrome announced
+    /// nothing worth reporting); the watch ends.
+    pub fn take_action_watch(&mut self) -> Vec<&'static str> {
+        self.download_watch = false;
+        let seen = self.action_watch.take().unwrap_or_default();
+        if seen.is_empty() { vec!["none"] } else { seen }
+    }
+
+    /// Whether Chrome completed the download `guid` and the post-login rules let it through (no
+    /// breach in this session).
+    pub fn download_completed_allowed(&self, guid: &str) -> bool {
+        !self.download_breach
+            && self.completed_downloads.contains(guid)
+            && !self.denied_downloads.contains(guid)
+    }
+
+    /// Close the page targets the watched action opened (the extra tab of a download that a link
+    /// started in a new tab). Agent targets the agent attached to stay untouched otherwise.
+    pub fn close_watch_targets(&mut self) {
+        for target in std::mem::take(&mut self.watch_targets) {
+            let _ = self.call("Target.closeTarget", json!({"targetId": target}), None);
+        }
+    }
+
+    fn watch_event(&mut self, event: &Value) {
+        if self.action_watch.is_none() {
+            return;
+        }
+        let params = &event["params"];
+        let token = match event["method"].as_str() {
+            Some("Page.frameRequestedNavigation" | "Page.frameStartedNavigating") => {
+                "navigation_requested"
+            }
+            Some("Page.navigatedWithinDocument") => "same_document_navigation",
+            Some("Page.frameNavigated") if params["frame"]["parentId"].is_null() => {
+                let url = params["frame"]["url"].as_str().unwrap_or_default();
+                if url.starts_with("chrome-extension:")
+                    || params["frame"]["mimeType"] == "application/pdf"
+                {
+                    "viewer_page"
+                } else {
+                    "frame_navigated"
+                }
+            }
+            Some("Network.requestWillBeSent") if params["type"] == "Document" => "document_request",
+            Some("Network.responseReceived") if params["type"] == "Document" => "document_response",
+            Some("Browser.downloadWillBegin" | "Page.downloadWillBegin") => "download_will_begin",
+            Some("Browser.downloadProgress" | "Page.downloadProgress") => {
+                match params["state"].as_str() {
+                    Some("completed") => "download_completed",
+                    Some("canceled") => "download_canceled",
+                    _ => return,
+                }
+            }
+            Some("Page.windowOpen") => self.download_in_opener(event),
+            Some("Target.targetCreated") if params["targetInfo"]["type"] == "page" => {
+                let opened_by_page = params["targetInfo"]["openerId"].is_string();
+                if let Some(id) = params["targetInfo"]["targetId"].as_str() {
+                    if self.download_watch && opened_by_page {
+                        // The link's download is started in the opener (download_in_opener); the
+                        // new tab would download it a second time, out of the controller's sight.
+                        self.send_untracked("Target.closeTarget", json!({"targetId": id}));
+                    } else if self.watch_targets.len() < 8 {
+                        self.watch_targets.push(id.to_owned());
+                    }
+                }
+                if opened_by_page {
+                    "new_tab_from_page"
+                } else {
+                    "new_tab"
+                }
+            }
+            Some("Target.targetDestroyed") => "target_destroyed",
+            Some("Page.javascriptDialogOpening") => "dialog_opening",
+            _ => return,
+        };
+        if let Some(seen) = self.action_watch.as_mut()
+            && !seen.contains(&token)
+            && seen.len() < 16
+        {
+            seen.push(token);
+        }
+    }
+
+    /// 付記 2026-10-10j: during a `download`, a link that opens a new tab (`target=_blank`,
+    /// `window.open`) would download in a tab neither agent-browser nor the controller observes:
+    /// agent-browser waits on its own page until its timeout, and the controller cannot apply the
+    /// read_origins rule to the download. The controller closes the new tab (above) and moves the
+    /// opener page itself to the link's URL by script (a renderer-initiated navigation: the download
+    /// raises its events on the agent's page, agent-browser saves it, and a download from outside
+    /// `read_origins` is cancelled as before). Only an http(s) URL on a read origin (after login) is
+    /// followed; nothing of the URL is recorded.
+    fn download_in_opener(&mut self, event: &Value) -> &'static str {
+        if !self.download_watch {
+            return "window_open";
+        }
+        let Some(session) = event["sessionId"].as_str() else {
+            return "window_open_unattributed";
+        };
+        if self.private_sessions.contains(session) {
+            return "window_open_unattributed";
+        }
+        let url = event["params"]["url"].as_str().unwrap_or_default();
+        let allowed = match (origin(Some(url)), &self.post_login) {
+            (None, _) => false,
+            (Some(o), Some(read_origins)) => read_origins.contains(&o),
+            (Some(_), None) => true,
+        };
+        if !allowed {
+            return "window_open_origin_denied";
+        }
+        let Ok(literal) = serde_json::to_string(url) else {
+            return "window_open_origin_denied";
+        };
+        let session = session.to_owned();
+        self.send_untracked_on(
+            "Runtime.evaluate",
+            json!({"expression": format!("window.location.assign({literal})"), "silent": true}),
+            Some(&session),
+        );
+        "window_open_followed_in_opener"
     }
 
     /// Follow agent pages' document requests until their response (or failure) arrives.
@@ -2580,6 +2754,96 @@ mod idle_pump_tests {
             c.take_agent_denials(),
             vec![("Controller.reply".to_owned(), "cdp_reply_timeout")],
             "the response arrived"
+        );
+    }
+
+    fn read_frame(browser: &mut UnixStream) -> Option<Value> {
+        use std::io::Read as _;
+        let mut frame = Vec::new();
+        let mut byte = [0u8; 1];
+        loop {
+            browser.read_exact(&mut byte).ok()?;
+            if byte[0] == 0 {
+                return serde_json::from_slice(&frame).ok();
+            }
+            frame.push(byte[0]);
+        }
+    }
+
+    /// 付記 2026-10-10j: during a watched `download`, a new tab opened by the agent's page is
+    /// closed and its URL followed in the opener by script, only on a read origin after login;
+    /// what happened is recorded as fixed tokens. Outside a download watch nothing is sent.
+    #[test]
+    fn download_watch_follows_a_new_tab_in_the_opener_on_read_origins_only() {
+        let (mut c, mut browser) = controller();
+        browser
+            .set_read_timeout(Some(Duration::from_millis(300)))
+            .expect("timeout");
+        c.post_login = Some(vec!["https://lms.test".into()]);
+        let open = |url: &str| {
+            json!({"method":"Page.windowOpen","sessionId":"S",
+                "params":{"url":url,"windowName":"_blank","windowFeatures":[],"userGesture":true}})
+        };
+        let created = json!({"method":"Target.targetCreated","params":{"targetInfo":{
+            "targetId":"NEW","type":"page","url":"","openerId":"T"}}});
+        // Not watched: the events pass, nothing is sent.
+        c.queue_event(open("https://lms.test/ct/a.pdf"));
+        assert!(read_frame(&mut browser).is_none());
+        c.begin_action_watch(true);
+        c.queue_event(open("https://lms.test/ct/page_1/Slides1.pdf?view=full"));
+        let sent = read_frame(&mut browser).expect("follow in the opener");
+        assert_eq!(sent["method"], "Runtime.evaluate");
+        assert_eq!(sent["sessionId"], "S");
+        assert_eq!(
+            sent["params"]["expression"],
+            r#"window.location.assign("https://lms.test/ct/page_1/Slides1.pdf?view=full")"#
+        );
+        c.queue_event(created.clone());
+        let closed = read_frame(&mut browser).expect("close the new tab");
+        assert_eq!(closed["method"], "Target.closeTarget");
+        assert_eq!(closed["params"]["targetId"], "NEW");
+        // Another origin is not followed (the new tab is still closed).
+        c.queue_event(open("https://files.other.test/x.pdf"));
+        c.queue_event(open("javascript:alert(1)"));
+        c.queue_event(created);
+        let closed = read_frame(&mut browser).expect("close");
+        assert_eq!(closed["method"], "Target.closeTarget");
+        assert!(read_frame(&mut browser).is_none(), "nothing else sent");
+        assert_eq!(
+            c.take_action_watch(),
+            vec![
+                "window_open_followed_in_opener",
+                "new_tab_from_page",
+                "window_open_origin_denied"
+            ]
+        );
+        // A click watch records the new tab and sends nothing.
+        c.begin_action_watch(false);
+        c.queue_event(open("https://lms.test/ct/a.pdf"));
+        assert!(read_frame(&mut browser).is_none());
+        assert_eq!(c.take_action_watch(), vec!["window_open"]);
+        c.begin_action_watch(true);
+        assert_eq!(c.take_action_watch(), vec!["none"]);
+    }
+
+    /// 付記 2026-10-10j: an adopted download counts only if Chrome completed it, it was not
+    /// cancelled for its origin, and no breach stopped the session.
+    #[test]
+    fn adopted_downloads_must_have_completed_through_the_post_login_rules() {
+        let (mut c, _browser) = controller();
+        c.post_login = Some(vec!["https://lms.test".into()]);
+        let progress = |guid: &str| json!({"method":"Browser.downloadProgress","params":{"guid":guid,"state":"completed"}});
+        c.queue_event(progress("g-ok"));
+        assert!(c.download_completed_allowed("g-ok"));
+        assert!(!c.download_completed_allowed("g-unknown"));
+        c.queue_event(json!({"method":"Browser.downloadWillBegin","params":{
+            "guid":"g-other","url":"https://files.other.test/x.pdf","frameId":"F"}}));
+        assert!(!c.download_completed_allowed("g-other"));
+        c.queue_event(progress("g-other"));
+        assert!(!c.download_completed_allowed("g-other"));
+        assert!(
+            !c.download_completed_allowed("g-ok"),
+            "a breach stops every adoption"
         );
     }
 

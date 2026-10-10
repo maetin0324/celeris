@@ -27,6 +27,8 @@ struct Log {
     /// v8: the bytes a screenshot / download produces (`None`: no file; `Some(Err)`: the verb
     /// fails in the launcher, as a canceled other-origin download does).
     artifact_body: Option<Result<Vec<u8>, ()>>,
+    /// 付記 2026-10-10j: the launcher's runner failed the verb and returns these tokens.
+    failure_text: Option<String>,
 }
 
 struct FakeBackend {
@@ -87,6 +89,17 @@ impl BackendSession for FakeSession {
             .actions
             .push((verb, args.clone()));
         let mut artifact = None;
+        if matches!(verb, Verb::Screenshot | Verb::Download)
+            && let Some(text) = self.log.lock().expect("lock").failure_text.clone()
+        {
+            return Ok(Observation {
+                text: Some(format!(
+                    "{}{text}",
+                    crate::browser_launcher::backend::ARTIFACT_FAILURE_PREFIX
+                )),
+                artifact: None,
+            });
+        }
         if matches!(verb, Verb::Screenshot | Verb::Download) {
             let body = self.log.lock().expect("lock").artifact_body.clone();
             match body {
@@ -4111,4 +4124,82 @@ fn trusted_login_difference_names_the_changed_field_only() {
         trusted_login_difference(&current, &pinned),
         Some("pinned_differs_login_url")
     );
+}
+
+/// 付記 2026-10-10j: a download the launcher's runner could not produce reaches the agent with its
+/// fixed diagnostic tokens (the agent asked for them); text outside the token shape is dropped.
+#[test]
+fn launcher_shim_download_failure_carries_the_fixed_tokens_only() {
+    let policy = prepared_with(
+        "example.com",
+        vec![
+            task_core::BrowserAction::Navigate,
+            task_core::BrowserAction::Download,
+        ],
+    );
+    let launcher = fake_launcher(good_facts());
+    let dir = tempfile::tempdir().expect("tempdir");
+    let runtime_dir = dir.path().join("runs").join("run-fail").join("browser");
+    let (cli, action_socket) = write_shim_files(
+        &runtime_dir,
+        "celeris-test-session",
+        &policy,
+        &policy.action_policy,
+        &[],
+        false,
+    )
+    .expect("shim files");
+    let output = runtime_dir.join("output");
+    let allowed: task_core::AgentBrowserActionPolicy =
+        serde_json::from_slice(&policy.action_policy).expect("allow");
+    let (runtime, _) = LauncherRuntime::start(
+        &launcher.sock,
+        "task-1",
+        "run-fail",
+        session_policy(
+            &allowed.allow,
+            policy.allowed_domains(),
+            Duration::from_secs(600),
+        ),
+    )
+    .expect("start");
+    let runtime = Arc::new(runtime);
+    let server = ActionServer::start_with(
+        &action_socket,
+        Arc::new(LauncherExecutor::new(
+            Arc::clone(&runtime),
+            output.clone(),
+            crate::browser_launcher::PROTOCOL_VERSION,
+        )),
+        policy.allowed_domains().to_vec(),
+        allowed.allow.clone(),
+        Vec::new(),
+        Arc::new(InMemoryGate::new()),
+    )
+    .expect("action server");
+    let tokens = "code=bad_request status=1 runner_reason=exec_timeout error_class=none \
+                  link=target_blank,no_download_attr,href_same_origin,path_pdf \
+                  after=window_open_origin_denied,new_tab_from_page gate=none";
+    for (text, expect_detail) in [
+        (tokens.to_owned(), true),
+        (format!("{tokens} url=https://lms.test/a.pdf?sid=1"), false),
+    ] {
+        launcher.log.lock().expect("lock").failure_text = Some(text);
+        let out = run_shim(&cli, &["download", "@e5"]);
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        assert_eq!(out.status.code(), Some(1), "{stdout}");
+        let reply: serde_json::Value = serde_json::from_str(stdout.trim()).expect("json");
+        assert_eq!(reply["error"], ARTIFACT_ACTION_FAILED, "{stdout}");
+        if expect_detail {
+            assert_eq!(reply["detail"], tokens, "{stdout}");
+        } else {
+            assert!(reply.get("detail").is_none(), "{stdout}");
+            assert!(
+                !stdout.contains("sid=") && !stdout.contains("lms.test"),
+                "{stdout}"
+            );
+        }
+    }
+    drop(server);
+    assert_eq!(std::fs::read_dir(&output).expect("dir").count(), 0);
 }

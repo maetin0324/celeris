@@ -24,8 +24,14 @@ ROOT = Path(__file__).resolve().parent
 class Refused(ValueError):
     """A fixed reason Celeris gave for a refused action (no page data)."""
 
+    def __init__(self, reason, detail=None):
+        super().__init__(reason)
+        self.detail = detail
+
 
 REASON = re.compile(r"browser_[a-z0-9_]{1,64}")
+# The launcher's fixed diagnostic tokens for a failed screenshot / download (no URL, no text).
+DETAIL = re.compile(r"[A-Za-z0-9_=,.! -]{1,600}")
 # First bytes -> the extension an agent's document reader expects (same set as the launcher's
 # artifact transfer; anything else keeps the generated .bin name only).
 TYPED = ((b"%PDF-", "pdf"), (b"\x89PNG\r\n\x1a\n", "png"), (b"\xff\xd8\xff", "jpg"),
@@ -249,7 +255,8 @@ def main(args):
                 raise PolicyBlocked()
         reason = result.get("reason")
         if result["status"] and isinstance(reason, str) and REASON.fullmatch(reason):
-            raise Refused(reason)
+            detail = result.get("detail")
+            raise Refused(reason, detail if isinstance(detail, str) and DETAIL.fullmatch(detail) else None)
         if result["status"] or not isinstance(data, dict) or data.get("success") is not True:
             # Error text can contain URL credentials or reflected page content.
             raise ValueError()
@@ -283,7 +290,10 @@ def main(args):
             audit(operation, "failure")
         if isinstance(error, Refused):
             # Celeris's fixed reason (e.g. launcher too old, type or size refused).
-            print(json.dumps({"success": False, "error": str(error)}))
+            reply = {"success": False, "error": str(error)}
+            if error.detail:
+                reply["detail"] = error.detail
+            print(json.dumps(reply))
             return 1
         print('{"success":false,"error":"browser action failed or was blocked"}')
         return 1

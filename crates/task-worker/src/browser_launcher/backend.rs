@@ -188,6 +188,12 @@ fn agent_browser_policy(policy: &super::protocol::SessionPolicy) -> serde_json::
             allow.push(name);
         }
     }
+    // 付記 2026-10-10j: the action runner reads the download link's attributes and the page URL to
+    // classify the link into fixed tokens for a failure report. Only the runner calls agent-browser;
+    // the agent's verbs stay the fixed set.
+    if policy.allowed_actions.contains(&Verb::Download) {
+        allow.extend(["getattribute", "url"]);
+    }
     json!({ "allow": allow })
 }
 
@@ -595,10 +601,36 @@ pub(crate) fn runner_failure(reply: &serde_json::Value) -> String {
         .as_i64()
         .map_or_else(|| "none".to_owned(), |n| n.clamp(-255, 255).to_string());
     format!(
-        "status={status} runner_reason={} error_class={}",
+        "status={status} runner_reason={} error_class={} link={}",
         runner_token(&reply["runner_reason"]),
-        runner_token(&reply["error_class"])
+        runner_token(&reply["error_class"]),
+        runner_tokens(&reply["link"])
     )
+}
+
+/// A runner token list (付記 2026-10-10j: the download link's static shape) as `a,b,c`: at most 12
+/// tokens of `[a-z_]{1,40}`, anything else `invalid`; `none` when absent.
+fn runner_tokens(value: &serde_json::Value) -> String {
+    match value.as_array() {
+        None => "none".into(),
+        Some(list) if list.is_empty() || list.len() > 12 => "invalid".into(),
+        Some(list) => list.iter().map(runner_token).collect::<Vec<_>>().join(","),
+    }
+}
+
+/// The prefix of the observation text a failed screenshot / download returns to the daemon with
+/// its fixed diagnostic tokens (付記 2026-10-10j; protocol 9 unchanged: an older daemon sees an
+/// action without an artifact and fails it as before).
+pub const ARTIFACT_FAILURE_PREFIX: &str = "celeris_artifact_failure ";
+
+/// Whether `guid` has the shape of a Chrome download guid.
+fn download_guid(guid: &str) -> bool {
+    let parts: Vec<&str> = guid.split('-').collect();
+    parts.iter().map(|p| p.len()).eq([8, 4, 4, 4, 12])
+        && parts.iter().all(|p| {
+            p.bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        })
 }
 
 /// The relay refusals of one action as `method!code` (comma separated, `none` if empty).
@@ -796,6 +828,38 @@ impl RuntimeSession {
             .map_err(|_| at(ErrorCode::LaunchFailed, "runner_reply_invalid"))?;
         if reply["status"].as_i64() != Some(0) {
             return Err((ErrorCode::BadRequest, runner_failure(&reply)));
+        }
+        // 付記 2026-10-10j: the runner adopted a download Chrome completed on its own (a link that
+        // opened a new tab). It counts only if the controller saw that download complete and let
+        // it through; the extra tab is closed.
+        if let Some(guid) = reply.get("adopted_guid") {
+            let controller = self.shared.controller();
+            let allowed = guid.as_str().is_some_and(|g| {
+                download_guid(g)
+                    && controller
+                        .lock()
+                        .is_ok_and(|c| c.download_completed_allowed(g))
+            });
+            if !allowed || verb != Verb::Download {
+                if let Some(name) = &artifact {
+                    let _ = std::fs::remove_file(self.dir.join("output").join(name));
+                }
+                return Err((
+                    ErrorCode::BadRequest,
+                    format!(
+                        "launcher_reason=adopted_download_unverified {}",
+                        runner_failure(&reply)
+                    ),
+                ));
+            }
+            if let Ok(mut c) = controller.lock() {
+                c.close_watch_targets();
+            }
+            eprintln!(
+                "celeris-browser-launcher: action download adopted: session={} link={}",
+                self.sup.session_id(),
+                runner_tokens(&reply["link"])
+            );
         }
         let text = reply["stdout"]
             .as_str()
@@ -1133,24 +1197,37 @@ impl BackendSession for RuntimeSession {
         let controller = self.shared.controller();
         if let Ok(mut c) = controller.lock() {
             c.take_agent_denials();
+            c.begin_action_watch(verb == Verb::Download);
         }
         let result = self.run_action(verb, args);
-        if let Err((code, detail)) = &result {
-            let gate = controller
-                .lock()
-                .map(|mut c| format_denials(&c.take_agent_denials()))
-                .unwrap_or_else(|_| "unavailable".into());
-            // Fixed tokens only (付記 2026-10-10f): no URL, selector, page text or argument.
-            eprintln!(
-                "celeris-browser-launcher: action {} failed: session={} code={} {} gate={}",
-                action_name(verb),
-                self.sup.session_id(),
-                code,
-                detail,
-                gate
-            );
+        let after = controller
+            .lock()
+            .map(|mut c| c.take_action_watch().join(","))
+            .unwrap_or_else(|_| "unavailable".into());
+        let Err((code, detail)) = result else {
+            return result.map_err(|(code, _)| code);
+        };
+        let gate = controller
+            .lock()
+            .map(|mut c| format_denials(&c.take_agent_denials()))
+            .unwrap_or_else(|_| "unavailable".into());
+        // Fixed tokens only (付記 2026-10-10f/j): no URL, selector, page text or argument. `after` is
+        // what Chrome did while the action ran (a navigation, a download, a new tab, nothing).
+        let line = format!("code={code} {detail} after={after} gate={gate}");
+        eprintln!(
+            "celeris-browser-launcher: action {} failed: session={} {line}",
+            action_name(verb),
+            self.sup.session_id(),
+        );
+        // A screenshot / download the runner could not produce: the daemon gets the same tokens
+        // (the agent asked for them) in an observation without an artifact.
+        if code == ErrorCode::BadRequest && matches!(verb, Verb::Screenshot | Verb::Download) {
+            return Ok(Observation {
+                text: Some(format!("{ARTIFACT_FAILURE_PREFIX}{line}")),
+                artifact: None,
+            });
         }
-        result.map_err(|(code, _)| code)
+        Err(code)
     }
 
     fn fetch_artifact(&mut self, name: &str, offset: u64) -> Result<ArtifactChunk, ErrorCode> {

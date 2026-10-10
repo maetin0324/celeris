@@ -6,7 +6,7 @@ from pathlib import Path
 import re
 import subprocess
 import time
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
 
 ROOT = Path('/session')
 REQUESTS = ROOT / 'actions'
@@ -22,6 +22,10 @@ REF = re.compile(r'@e[0-9]+\Z')
 RELAY_CODES = ('observation_origin_denied', 'password_field_present', 'redisplay_detected',
                'auth_section_active', 'cdp_command_denied', 'cdp_command_failed')
 NAME = re.compile(r'(extract|screenshot|download)-[a-f0-9]{32}\.(json|png|bin)\Z')
+# Chrome names a download it saves on its own (Browser.setDownloadBehavior allowAndName) by its guid.
+GUID = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\Z')
+OUTPUT = ROOT / 'output'
+EXEC_TIMEOUT = 45
 
 
 def allowed_origin(url):
@@ -114,19 +118,18 @@ def error_class(stdout):
     return 'other'
 
 
-def execute(request):
-    if request.get('verb') == '__version__' and request.get('args') == []:
-        argv = [CONFIG['executable'], '--version']
-    else:
-        action = command(request)
-        endpoint = CONFIG.get('cdp_endpoint')
-        if (not isinstance(endpoint, str) or
-                not re.fullmatch(r'ws://127\.0\.0\.1:9223/[a-f0-9]{64}', endpoint)):
-            return {'status': 1, 'stdout': '', 'runner_reason': 'config_invalid'}
-        argv = [CONFIG['executable'], '--config', '/session/upstream.json',
-                '--session', CONFIG['session_id'], '--action-policy', '/session/policy.json',
-                '--cdp', endpoint,
-                '--content-boundaries', '--max-output', '16000', '--json'] + action
+def browser_argv(action):
+    endpoint = CONFIG.get('cdp_endpoint')
+    if (not isinstance(endpoint, str) or
+            not re.fullmatch(r'ws://127\.0\.0\.1:9223/[a-f0-9]{64}', endpoint)):
+        return None
+    return [CONFIG['executable'], '--config', '/session/upstream.json',
+            '--session', CONFIG['session_id'], '--action-policy', '/session/policy.json',
+            '--cdp', endpoint,
+            '--content-boundaries', '--max-output', '16000', '--json'] + action
+
+
+def browser_env():
     env = {'PATH': '/usr/bin:/bin', 'HOME': '/session/home', 'TMPDIR': '/session/tmp',
            'XDG_RUNTIME_DIR': '/session/run',
            'AGENT_BROWSER_NAMESPACE': 'celeris', 'HTTP_PROXY': 'http://127.0.0.1:3128',
@@ -134,9 +137,149 @@ def execute(request):
            'NO_PROXY': ''}
     if CONFIG.get('browser_cache'):
         env['PLAYWRIGHT_BROWSERS_PATH'] = CONFIG['browser_cache']
+    return env
+
+
+def query(action):
+    """One short agent-browser read; its `data` (or None). Nothing of it leaves this process."""
+    argv = browser_argv(action)
+    if argv is None:
+        return None
+    try:
+        result = subprocess.run(argv, cwd=ROOT, env=browser_env(), stdout=subprocess.PIPE,
+                                stderr=subprocess.DEVNULL, timeout=10, check=False)
+        data = json.loads(result.stdout[:1048576].decode('utf-8', errors='replace') or 'null')
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return None
+    if not isinstance(data, dict) or data.get('success') is not True:
+        return None
+    return data.get('data')
+
+
+def text_value(data, *keys):
+    if isinstance(data, str):
+        return data
+    if isinstance(data, dict):
+        for key in keys:
+            if isinstance(data.get(key), str):
+                return data[key]
+            if key in data and data[key] is None:
+                return None
+    return None
+
+
+def link_tokens(ref):
+    """付記 2026-10-10j: the download link's static shape as fixed tokens (no URL, no text)."""
+    attrs = {}
+    for name in ('href', 'target', 'download', 'onclick'):
+        data = query(['get', 'attr', ref, name])
+        attrs[name] = text_value(data, 'value', 'attribute', name, 'result')
+    page = text_value(query(['get', 'url']), 'url', 'value', 'result')
+    if all(v is None for v in attrs.values()) and page is None:
+        return ['link_unreadable']
+    tokens = []
+    target = attrs['target']
+    tokens.append('target_blank' if target == '_blank' else 'target_named' if target else 'target_none')
+    tokens.append('download_attr' if attrs['download'] is not None else 'no_download_attr')
+    tokens.append('onclick' if attrs['onclick'] else 'no_onclick')
+    href = attrs['href']
+    if not href:
+        tokens.append('href_none')
+        return tokens
+    if href.strip().lower().startswith('javascript:'):
+        tokens.append('href_javascript')
+        return tokens
+    try:
+        resolved = urlsplit(urljoin(page or '', href))
+        here = urlsplit(page or '')
+    except ValueError:
+        tokens.append('href_unparsed')
+        return tokens
+    same = (resolved.scheme, resolved.netloc) == (here.scheme, here.netloc) and bool(here.netloc)
+    tokens.append('href_same_origin' if same else 'href_other_origin')
+    path = resolved.path.lower()
+    if path.endswith('.pdf'):
+        tokens.append('path_pdf')
+    if '/ct/' in path and 'page_' in path:
+        tokens.append('path_ct_page')
+    if 'file' in path:
+        tokens.append('path_file')
+    if resolved.query:
+        tokens.append('has_query')
+    if resolved.fragment:
+        tokens.append('has_fragment')
+    return tokens
+
+
+def completed_guids():
+    try:
+        names = set(os.listdir(OUTPUT))
+    except OSError:
+        return set()
+    return {n for n in names if GUID.fullmatch(n) and n + '.crdownload' not in names
+            and (OUTPUT / n).is_file() and not (OUTPUT / n).is_symlink()}
+
+
+def download(request, argv):
+    """付記 2026-10-10j: run agent-browser's download, and adopt a download Chrome completed on its
+    own meanwhile (a link opening a new tab) when agent-browser does not see it. The launcher
+    checks the adopted guid against the downloads its controller let through."""
+    tokens = link_tokens(request['args'][0])
+    before = completed_guids()
+    try:
+        proc = subprocess.Popen(argv, cwd=ROOT, env=browser_env(), stdout=subprocess.PIPE,
+                                stderr=subprocess.DEVNULL)
+    except OSError:
+        return {'status': 1, 'stdout': '', 'runner_reason': 'exec_failed', 'link': tokens}
+    # agent-browser is never cut short for a file it may still be saving itself; a download it did
+    # not see is adopted only after it gave up.
+    reason = None
+    try:
+        proc.wait(timeout=EXEC_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        reason = 'exec_timeout'
+        proc.kill()
+    try:
+        out, _ = proc.communicate(timeout=5)
+    except subprocess.TimeoutExpired:
+        out = b''
+    stdout = out[:1048576].decode('utf-8', errors='replace')
+    if reason is None and proc.returncode == 0:
+        return {'status': 0, 'stdout': stdout}
+    fresh = sorted(completed_guids() - before)
+    artifact = OUTPUT / request['artifact']
+    # Only when agent-browser waited in vain for a download (not when it failed for its own reason,
+    # e.g. an unknown ref) is a file Chrome completed meanwhile this action's download.
+    waited = reason == 'exec_timeout' or error_class(stdout) == 'timeout'
+    if waited and len(fresh) == 1 and not artifact.exists():
+        try:
+            os.replace(OUTPUT / fresh[0], artifact)
+        except OSError:
+            return {'status': 1, 'stdout': '', 'runner_reason': 'adopt_failed', 'link': tokens}
+        return {'status': 0, 'stdout': json.dumps({'success': True, 'data': {'adopted': True}}),
+                'adopted_guid': fresh[0], 'runner_reason': 'adopted_download', 'link': tokens}
+    response = {'status': 1, 'stdout': stdout if reason is None else '',
+                'runner_reason': reason or 'agent_browser_exit',
+                'error_class': error_class(stdout) if reason is None else 'none', 'link': tokens}
+    if len(fresh) > 1:
+        response['runner_reason'] = 'downloads_ambiguous'
+    return response
+
+
+def execute(request):
+    if request.get('verb') == '__version__' and request.get('args') == []:
+        argv = [CONFIG['executable'], '--version']
+    else:
+        action = command(request)
+        argv = browser_argv(action)
+        if argv is None:
+            return {'status': 1, 'stdout': '', 'runner_reason': 'config_invalid'}
+        if request.get('verb') == 'download':
+            return download(request, argv)
+    env = browser_env()
     try:
         result = subprocess.run(argv, cwd=ROOT, env=env, stdout=subprocess.PIPE,
-                                stderr=subprocess.DEVNULL, timeout=45, check=False)
+                                stderr=subprocess.DEVNULL, timeout=EXEC_TIMEOUT, check=False)
     except subprocess.TimeoutExpired:
         return {'status': 1, 'stdout': '', 'runner_reason': 'exec_timeout'}
     except OSError:
@@ -156,7 +299,7 @@ def finish_artifact(request, response):
     if (response.get('status') != 0 or request.get('verb') not in ('screenshot', 'download')
             or not isinstance(artifact, str) or not NAME.fullmatch(artifact)):
         return response
-    produced = Path('/session/output') / artifact
+    produced = OUTPUT / artifact
     if produced.is_symlink() or not produced.is_file():
         # agent-browser reported success but left no file under the generated name.
         return {'status': 3, 'stdout': '', 'runner_reason': 'output_missing',

@@ -144,6 +144,23 @@ class H(BaseHTTPRequestHandler):
                     b'<a href="/ct/slow_Slides6.pdf" onmousedown="location.href=this.href">MouseDown PDF</a>'
                     b'</body></html>')
             self.send_response(200); self.send_header('Content-Type', 'text/html')
+        elif self.path == '/blank.html':
+            # manaba-like file links (付記 2026-10-10j): a new tab (target=_blank) to the file, fast and
+            # slow, and an intermediate page that moves on to the file by script.
+            body = (b'<html><body><h1>Materials</h1>'
+                    b'<a href="/ct/page_9_file/Slides1.pdf?view=full" target="_blank">Blank PDF</a> '
+                    b'<a href="/ct/slow_Slides6.pdf" target="_blank">Blank Slow PDF</a> '
+                    b'<a href="/ct/viewer_page.html">Viewer PDF</a> '
+                    b'<a href="https://files.example.com/ct/inline_Slides2.pdf" target="_blank" onclick="void 0">Elsewhere Blank PDF</a>'
+                    b'</body></html>')
+            self.send_response(200); self.send_header('Content-Type', 'text/html')
+        elif self.path.startswith('/ct/page_9_file/Slides1.pdf'):
+            body = PDF; self.send_response(200); self.send_header('Content-Type', 'application/pdf')
+        elif self.path == '/ct/viewer_page.html':
+            body = (b'<html><body><p>Opening the file</p><script>'
+                    b'setTimeout(function(){location.href="/ct/page_9_file/Slides1.pdf?view=full"},300)'
+                    b'</script></body></html>')
+            self.send_response(200); self.send_header('Content-Type', 'text/html')
         elif self.path == '/ct/slow_Slides6.pdf':
             import time; time.sleep(7)
             body = PDF; self.send_response(200); self.send_header('Content-Type', 'application/pdf')
@@ -260,7 +277,8 @@ fn inner() {
     std::fs::write(
         s.join("policy.json"),
         serde_json::to_vec(&json!({"default":"deny","allow":[
-            "launch","close","navigate","snapshot","gettext","click","screenshot","download","scroll"]}))
+            "launch","close","navigate","snapshot","gettext","click","screenshot","download","scroll",
+            "getattribute","url"]}))
         .expect("policy"),
     )
     .expect("policy");
@@ -432,8 +450,25 @@ fn inner() {
             Some(&elsewhere),
         );
         eprintln!("ELSEWHERE {:?} {got}", start.elapsed());
-        assert_ne!(got["status"], 0, "{got}");
-        assert_eq!(got["runner_reason"], "agent_browser_exit", "{got}");
+        // agent-browser fails; if Chrome still wrote the file before the cancel, the runner may
+        // adopt it, and the launcher's check refuses it (the controller never let it through).
+        match got["adopted_guid"].as_str() {
+            None => {
+                assert_ne!(got["status"], 0, "{got}");
+                assert_eq!(got["runner_reason"], "agent_browser_exit", "{got}");
+            }
+            Some(guid) => {
+                assert!(
+                    !relay
+                        .controller()
+                        .lock()
+                        .expect("controller")
+                        .download_completed_allowed(guid),
+                    "an adopted file from another origin must not pass the launcher's check: {got}"
+                );
+                std::fs::remove_file(out.join(&elsewhere)).expect("remove refused file");
+            }
+        }
         let denials = relay
             .controller()
             .lock()
@@ -481,6 +516,80 @@ fn inner() {
     // View streaming): while a page waits for a navigation's response, Chrome answers commands on
     // that page only after the response arrives. A PDF that answers after 7 s failed the click (or
     // its post-login check) at the controller's 5 s; agent commands now wait up to 25 s.
+    // 付記 2026-10-10j (production 2026-10-10 18:05, `runner_reason=exec_timeout`): a file link that
+    // opens a new tab started its download where agent-browser does not look. During a download the
+    // controller (as the launcher sets it up) closes the new tab and follows the link in the opener.
+    let watch = |download: bool| {
+        relay
+            .controller()
+            .lock()
+            .expect("controller")
+            .begin_action_watch(download)
+    };
+    let watched = || {
+        relay
+            .controller()
+            .lock()
+            .expect("controller")
+            .take_action_watch()
+    };
+    for (link, letter) in [
+        ("Blank PDF", "6"),
+        ("Blank Slow PDF", "7"),
+        ("Viewer PDF", "8"),
+    ] {
+        let r = ref_on(&mut seq, "blank.html", link);
+        watch(true);
+        let name = format!("download-{}.bin", letter.repeat(32));
+        let got = action(s, &mut seq, "download", &[&r], Some(&name));
+        let after = watched();
+        assert_eq!(got["status"], 0, "download {link}: {got}; after {after:?}");
+        assert!(
+            got.get("adopted_guid").is_none(),
+            "agent-browser saw it: {got}"
+        );
+        assert_eq!(std::fs::read(out.join(&name)).expect("file"), PDF, "{link}");
+        if link != "Viewer PDF" {
+            assert!(
+                after.contains(&"window_open_followed_in_opener"),
+                "{link}: {after:?}"
+            );
+        }
+        let snap = action(s, &mut seq, "snapshot", &[], None);
+        assert_eq!(
+            snap["status"], 0,
+            "the agent's tab still works after {link}: {snap}"
+        );
+    }
+    if std::env::var_os("CELERIS_TEST_POST_LOGIN").is_some() {
+        // A new tab to another origin is not followed. If Chrome still wrote the file, the runner
+        // adopts it and the launcher's check (the controller never let it through) refuses it.
+        let r = ref_on(&mut seq, "blank.html", "Elsewhere Blank PDF");
+        watch(true);
+        let name = format!("download-{}.bin", "a".repeat(32));
+        let got = action(s, &mut seq, "download", &[&r], Some(&name));
+        let after = watched();
+        assert!(after.contains(&"window_open_origin_denied"), "{after:?}");
+        let link = got["link"].as_array().expect("link tokens").clone();
+        for token in ["target_blank", "href_other_origin", "path_pdf", "onclick"] {
+            assert!(link.iter().any(|t| t == token), "{token} in {link:?}");
+        }
+        match got["adopted_guid"].as_str() {
+            Some(guid) => {
+                assert!(
+                    !relay
+                        .controller()
+                        .lock()
+                        .expect("controller")
+                        .download_completed_allowed(guid),
+                    "{got}"
+                );
+                // As the launcher does with a refused adoption.
+                std::fs::remove_file(out.join(&name)).expect("remove refused file");
+            }
+            None => assert_ne!(got["status"], 0, "{got}"),
+        }
+    }
     for (link, letter) in [("Slow PDF", "4"), ("MouseDown PDF", "5")] {
         let r = ref_on(&mut seq, "slow.html", link);
         denials();

@@ -545,3 +545,47 @@ manaba の link のどの dialog かは本番の頁を見ていないので確�
 
 残る制限: 応答が 25 秒を越える download は失敗する（journal の token で分かる）。controller が href を自分で取りに行く経路
 （coordinator の案）は作っていない（提案）。
+
+## 付記 2026-10-10j: 新しい tab で開く file link の download・download 失敗の固定診断（agent にも返す）
+
+付記 2026-10-10i の後（release edccce6b、18:05:31Z）、同じ link の download は relay・gate の失敗なしに
+`runner_reason=exec_timeout error_class=none gate=none` で終わった。agent-browser は download の始まりを見ないまま待ち続けた。
+人の決定: click で download する方式のまま原因を探す（controller が href を取りに行く代替は作らない）。
+
+調べたこと（fixture・Chrome for Testing・実 agent-browser・ログイン後 mode・Live View）:
+
+- `target="_blank"` の link を click すると、Chrome は新しい tab を開き、その tab の navigation が download になる。agent-browser
+  0.38.1 は自分の tab の download しか待たず、30〜45 秒待って失敗する。Chrome は file を `/session/output/<guid>` に保存するが、
+  その tab には誰も attach していないので `Browser.downloadWillBegin` / `downloadProgress` は controller にも届かない（read_origins
+  の取消も効かない）。controller に届くのは opener の `Page.windowOpen`（URL つき）と `Target.targetCreated` だけ。
+- 遅い応答（7 秒）でも、中継頁（script で file へ移る頁）でも、同じ tab の download は通る。
+- manaba の link が実際に `target="_blank"` かは本番の頁を見ていない（下の `link=` token で次の失敗から分かる）。
+
+決定:
+
+1. **新しい tab の download は opener で行う。** launcher が `download` の間だけ controller に「download の見張り」を付ける。
+   その間に agent の頁が新しい tab を開いたら、controller は新しい tab を閉じ（`Target.closeTarget`）、`Page.windowOpen` の URL が
+   http(s) でログイン後なら read_origins の origin のときだけ、opener の頁をその URL へ script で移す（`window.location.assign`。
+   頁が始める navigation なので download の event が agent の頁に出て、agent-browser が保存し、read_origins 外の download は従来
+   どおり取り消される）。read_origins 外の URL は追わない（`window_open_origin_denied`）。`click` の間は何もしない。
+2. **取りこぼしの採用は検証つきの予備。** agent-browser が download を待って諦めた（timeout）ときだけ、その action の間に Chrome
+   が完了させた `<guid>` の file が 1 つなら runner がそれを生成名に移す（`adopted_guid`）。launcher は controller がその guid の
+   完了を見ていて、取消・breach が無いときだけ受け取り、違えば file を消して失敗にする。新しい tab の download は controller に
+   見えないので、この経路では通らない（1 が主経路）。
+3. **固定診断。** runner は download の前に link の静的な形を agent-browser で読み、固定 token にする（`target_blank` /
+   `target_named` / `target_none`、`download_attr`、`onclick`、`href_same_origin` / `href_other_origin` / `href_javascript` /
+   `href_none`、`path_pdf`・`path_ct_page`・`path_file`・`has_query`・`has_fragment`、読めなければ `link_unreadable`）。URL・文言は
+   出さない。そのため launcher の agent-browser policy に `download` があるときだけ `getattribute`・`url` を足す（agent の verb は
+   固定のまま。agent-browser を呼ぶのは runner だけ）。controller は action の間に Chrome がしたことを token で記録する
+   （`navigation_requested`・`same_document_navigation`・`frame_navigated`・`viewer_page`・`document_request`・
+   `document_response`・`download_will_begin`・`download_completed`・`download_canceled`・`new_tab_from_page`・`new_tab`・
+   `target_destroyed`・`dialog_opening`・`window_open_followed_in_opener`・`window_open_origin_denied`、何も無ければ `none`）。
+   launcher の失敗行は `code= status= runner_reason= error_class= link= after= gate=`。
+4. **agent への返し方（protocol 9 のまま）。** launcher は失敗した screenshot / download を、artifact の無い observation の text に
+   `celeris_artifact_failure <同じ token 列>` として返す。daemon はこの形（英数字と `_ = , . ! -` と空白、600 byte 以内）だけを
+   `detail` として shim に渡し、shim は `{"success":false,"error":"browser_artifact_action_failed","detail":"…"}` を出す。形が
+   崩れていれば `detail` は出さない。古い daemon は artifact の無い応答を従来どおり失敗（`browser_artifact_transfer_failed`）にする。
+5. 同じ dialog が 1 つの頁の複数の agent session に告げられたら、controller は一度だけ答える（付記 2026-10-10h の補足）。
+
+運用: **launcher の再 build**（controller・runner・診断は launcher の process の中）と daemon の更新（shim・daemon の detail）。
+sandboxd は不要。

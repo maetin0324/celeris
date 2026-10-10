@@ -146,6 +146,9 @@ pub struct CredentialPolicy {
     /// 同 D2: ログイン後の読み取りの opt-in（承認画面・TrustedLogin に写すだけで、broker は使わない）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub post_login: Option<task_core::browser_wait::PostLogin>,
+    /// 同 付記 2026-10-10b: 同意頁の固定ボタン（承認画面・TrustedLogin に写すだけで、broker は使わない）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub consent: Option<task_core::browser_wait::ConsentPolicy>,
 }
 impl CredentialPolicy {
     /// 注入に使える管理者の password selector（`login_url` と揃っているときだけ）。
@@ -163,7 +166,8 @@ impl CredentialPolicy {
             (None, None)
                 if self.submit_selector.is_none()
                     && self.username_selector.is_none()
-                    && self.post_login.is_none() => {}
+                    && self.post_login.is_none()
+                    && self.consent.is_none() => {}
             (Some(url), Some(password)) => task_core::browser_wait::validate_trusted_login_full(
                 url,
                 &self.exact_origin,
@@ -171,6 +175,7 @@ impl CredentialPolicy {
                 self.submit_selector.as_deref(),
                 self.username_selector.as_deref(),
                 self.post_login.as_ref(),
+                self.consent.as_ref(),
             )
             .map_err(|_| Error::Invalid)?,
             _ => return Err(Error::Invalid),
@@ -339,6 +344,8 @@ struct Stored {
     username_selector: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     post_login: Option<task_core::browser_wait::PostLogin>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    consent: Option<task_core::browser_wait::ConsentPolicy>,
     nonce: String,
     ciphertext: String,
     tag: String,
@@ -436,6 +443,7 @@ impl ManualProvider {
             submit_selector: policy.submit_selector.clone(),
             username_selector: policy.username_selector.clone(),
             post_login: policy.post_login.clone(),
+            consent: policy.consent.clone(),
             nonce: String::new(),
             ciphertext: String::new(),
             tag: String::new(),
@@ -515,6 +523,7 @@ impl ManualProvider {
             s.submit_selector.as_deref(),
             s.username_selector.as_deref(),
             s.post_login.as_ref(),
+            s.consent.as_ref(),
         )
         .map_err(|_| Error::Invalid)?;
         Ok(task_core::browser_wait::TrustedLogin {
@@ -525,6 +534,7 @@ impl ManualProvider {
             submit_selector: s.submit_selector,
             username_selector: s.username_selector,
             post_login: s.post_login,
+            consent: s.consent,
         })
     }
     pub fn resolve_registered(
@@ -810,6 +820,7 @@ impl Broker {
                 || stored.submit_selector != req.policy.submit_selector
                 || stored.username_selector != req.policy.username_selector
                 || stored.post_login != req.policy.post_login
+                || stored.consent != req.policy.consent
             {
                 return Err(Error::Denied);
             }

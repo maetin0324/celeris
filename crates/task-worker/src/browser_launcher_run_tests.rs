@@ -226,7 +226,7 @@ fn launcher_credential_authenticate_fake_backend_returns_status_only() {
         LauncherRuntime::start(&launcher.sock, "task-1", "run-auth", policy()).expect("start");
     assert_eq!(
         runtime.protocol_version().expect("hello"),
-        crate::browser_launcher::protocol::POST_LOGIN_PROTOCOL
+        crate::browser_launcher::protocol::PROTOCOL_VERSION
     );
     assert_eq!(
         runtime.auth_begin("auth-1").expect("auth_begin"),
@@ -247,6 +247,8 @@ fn launcher_credential_authenticate_fake_backend_returns_status_only() {
                 username_selector: None,
                 post_login: None,
                 report_held_reason: false,
+                consent: None,
+                report_consent_controls: false,
             },
             std::os::fd::OwnedFd::from(broker),
         )
@@ -1947,6 +1949,7 @@ fn trusted_login() -> TrustedLogin {
         submit_selector: Some("#submit".into()),
         username_selector: None,
         post_login: None,
+        consent: None,
     }
 }
 
@@ -2358,6 +2361,7 @@ mod launcher_login {
             submit_selector: Some("button[name=_eventId_proceed]".into()),
             username_selector: None,
             post_login: None,
+            consent: None,
         };
         credentiald_with(root, &policy, "user-1", SECRET);
     }
@@ -2416,6 +2420,7 @@ mod launcher_login {
             submit_selector: Some("button[name=_eventId_proceed]".into()),
             username_selector: None,
             post_login: None,
+            consent: None,
         };
         consumed_with(origin, task_id, trusted)
     }
@@ -2605,6 +2610,131 @@ mod launcher_login {
         drop(chrome);
     }
 
+    /// 付記 2026-10-10b (launcher protocol 7, real credentiald): the pinned consent button is pressed
+    /// once by the launcher's controller and the login resumes on the LMS.
+    #[tokio::test]
+    async fn launcher_credential_post_login_presses_the_pinned_consent_once_and_resumes() {
+        use crate::browser::post_login_tests::{
+            FIXTURE, USER, origins, trusted as post_login_trusted,
+        };
+        const PASSWORD: &str = "launcher-post-login-pw-a81f3c";
+        let chrome = ChromeFixture::start_with(FIXTURE);
+        std::fs::write(chrome.directory.path().join("consent"), "1").expect("consent flag");
+        let o = origins(&chrome);
+        let brokers = Arc::new(Mutex::new(0));
+        let dir = tempfile::tempdir().expect("tempdir");
+        let sock = dir.path().join("launcher.sock");
+        let server = LauncherServer::bind(
+            &sock,
+            ServerConfig {
+                allowed_uids: vec![DaemonIds::current().uid],
+                limits: LauncherLimits::default(),
+            },
+            Arc::new(ChromeBackend {
+                controller: Arc::clone(&chrome.controller),
+                chrome_pid: chrome.chrome_pid as i32,
+                brokers: Arc::clone(&brokers),
+            }),
+            Registry::open(dir.path().join("state"), "inst-post-login-consent-press")
+                .expect("registry"),
+        )
+        .expect("bind");
+        let _handle = server.spawn().expect("spawn");
+        let task_id = task_core::TaskId::new();
+        let mut trusted = post_login_trusted(&o, &[o.lms.as_str()]);
+        trusted.policy_id = POLICY_ID.into();
+        trusted.consent = Some(task_core::browser_wait::ConsentPolicy {
+            selector: "input[name=_eventId_proceed]".into(),
+            choice_selector: Some(
+                "input[name=_shib_idp_consentOptions][value=_shib_idp_doNotRememberConsent]".into(),
+            ),
+        });
+        let credd = tempfile::tempdir().expect("credd");
+        credentiald_with(
+            credd.path(),
+            &CredentialPolicy {
+                policy_id: POLICY_ID.into(),
+                revision: 1,
+                exact_origin: o.idp.clone(),
+                task_id: task_id.to_string(),
+                max_ttl_seconds: 60,
+                require_approval: true,
+                allow_persistence: false,
+                login_url: Some(trusted.login_url.clone()),
+                password_selector: Some(trusted.password_selector.clone()),
+                submit_selector: trusted.submit_selector.clone(),
+                username_selector: trusted.username_selector.clone(),
+                post_login: trusted.post_login.clone(),
+                consent: trusted.consent.clone(),
+            },
+            USER,
+            PASSWORD,
+        );
+        let run_dir = credd.path().join("run");
+        let (runtime, _) =
+            LauncherRuntime::start(&sock, "task-1", "run-post-login-consent-press", policy())
+                .expect("launcher session");
+        assert_eq!(
+            runtime.protocol_version().expect("hello"),
+            crate::browser_launcher::protocol::PROTOCOL_VERSION
+        );
+        let runtime = Arc::new(runtime);
+        crate::browser_cdp_sink::UnixInjectionClient::new(
+            celeris_credentiald::injection_ipc::injection_socket(&run_dir),
+        )
+        .register_live_session(LiveSessionRegistration {
+            session_id: runtime.session_id().to_owned(),
+            controller_pid: std::process::id(),
+            controller_start: process_start(std::process::id()).expect("self start"),
+            runtime_pid: chrome.chrome_pid,
+            runtime_start: process_start(chrome.chrome_pid).expect("chrome start"),
+        })
+        .expect("register live session");
+        let approval = consumed_with(&o.idp, task_id, trusted);
+        let sup = crate::browser_credential::CredentialSupervisor {
+            broker: Arc::new(crate::browser_credential::UnixLeaseBroker {
+                control_socket: run_dir.join("celeris-credentiald/control.sock"),
+            }),
+            bridge: PathBuf::from("/nonexistent/celeris-credentiald"),
+            runtime_dir: Some(run_dir.clone()),
+        };
+        let read = crate::browser::PostLoginRead {
+            read_origins: vec![o.lms.clone()],
+            actions: ["snapshot", "extract", "screenshot", "download", "click"]
+                .map(String::from)
+                .to_vec(),
+        };
+        let sink = AuthSink::default();
+        let login = launcher_credential_login(
+            &runtime,
+            &approval,
+            Some(&read),
+            &sup,
+            &run_dir,
+            &task_id.to_string(),
+            "run-resumed",
+            &approval.wait.session_id,
+            &sink,
+        )
+        .await;
+        let CredentialLogin::Recorded(Ok(result)) = &login else {
+            panic!("login not recorded: {login:?}");
+        };
+        assert_eq!(
+            result.observation,
+            crate::browser_launcher::protocol::LoginObservation::Resumed
+        );
+        assert!(result.consent_pressed);
+        assert_eq!(
+            std::fs::read_to_string(chrome.directory.path().join("consent_posts")).expect("posts"),
+            "_eventId_proceed _shib_idp_doNotRememberConsent\n",
+            "the launcher's controller pressed exactly once"
+        );
+        assert!(chrome.controller.lock().expect("lock").post_login_active());
+        runtime.stop().expect("stop");
+        drop(chrome);
+    }
+
     /// 付記 2026-10-10: an IdP attribute-release consent page after the login holds observation and
     /// the launcher (protocol 6) reports `consent_required` through the real protocol.
     #[tokio::test]
@@ -2612,7 +2742,6 @@ mod launcher_login {
         use crate::browser::post_login_tests::{
             FIXTURE, USER, origins, trusted as post_login_trusted,
         };
-        use crate::browser_launcher::protocol::LoginResult;
         const PASSWORD: &str = "launcher-post-login-pw-a81f3c";
         let chrome = ChromeFixture::start_with(FIXTURE);
         std::fs::write(chrome.directory.path().join("consent"), "1").expect("consent flag");
@@ -2654,6 +2783,7 @@ mod launcher_login {
                 submit_selector: trusted.submit_selector.clone(),
                 username_selector: trusted.username_selector.clone(),
                 post_login: trusted.post_login.clone(),
+                consent: None,
             },
             USER,
             PASSWORD,
@@ -2664,7 +2794,7 @@ mod launcher_login {
                 .expect("launcher session");
         assert_eq!(
             runtime.protocol_version().expect("hello"),
-            crate::browser_launcher::protocol::POST_LOGIN_PROTOCOL
+            crate::browser_launcher::protocol::PROTOCOL_VERSION
         );
         let runtime = Arc::new(runtime);
         crate::browser_cdp_sink::UnixInjectionClient::new(
@@ -2705,14 +2835,23 @@ mod launcher_login {
             &sink,
         )
         .await;
-        // The answer names the condition (fixed code); observation stays stopped.
+        // The answer names the condition (fixed code) and the consent form's control names only;
+        // observation stays stopped.
+        let CredentialLogin::Recorded(Ok(result)) = &login else {
+            panic!("login not recorded: {login:?}");
+        };
         assert_eq!(
-            login,
-            CredentialLogin::Recorded(Ok(LoginResult {
-                observation: crate::browser_launcher::protocol::LoginObservation::Held,
-                held_reason: Some(crate::browser_cdp_sink::PostLoginHeld::ConsentRequired),
-            }))
+            result.observation,
+            crate::browser_launcher::protocol::LoginObservation::Held
         );
+        assert_eq!(
+            result.held_reason,
+            Some(crate::browser_cdp_sink::PostLoginHeld::ConsentRequired)
+        );
+        assert!(!result.consent_pressed);
+        let line = crate::browser_cdp_sink::format_consent_controls(&result.consent_controls);
+        assert!(line.contains("_eventId_proceed=Accept(submit)"), "{line}");
+        assert!(!line.contains(USER) && !line.contains(PASSWORD), "{line}");
         {
             let c = chrome.controller.lock().expect("lock");
             assert!(c.auth_section_active());
@@ -2738,7 +2877,6 @@ mod launcher_login {
         use crate::browser::post_login_tests::{
             Agent, COOKIE_VALUE, FIXTURE, USER, origins, trusted as post_login_trusted,
         };
-        use crate::browser_launcher::protocol::LoginResult;
         const PASSWORD: &str = "launcher-post-login-pw-a81f3c";
         let chrome = ChromeFixture::start_with(FIXTURE);
         let o = origins(&chrome);
@@ -2779,6 +2917,7 @@ mod launcher_login {
                 submit_selector: trusted.submit_selector.clone(),
                 username_selector: trusted.username_selector.clone(),
                 post_login: trusted.post_login.clone(),
+                consent: None,
             },
             USER,
             PASSWORD,
@@ -2788,7 +2927,7 @@ mod launcher_login {
             .expect("launcher session");
         assert_eq!(
             runtime.protocol_version().expect("hello"),
-            crate::browser_launcher::protocol::POST_LOGIN_PROTOCOL
+            crate::browser_launcher::protocol::PROTOCOL_VERSION
         );
         let runtime = Arc::new(runtime);
         crate::browser_cdp_sink::UnixInjectionClient::new(
@@ -2924,7 +3063,15 @@ mod launcher_login {
         assert!(agent.wait_download(from, "completed"));
         let from = agent.seen.len();
         agent.click("dl-other").expect("other download");
-        assert!(agent.wait_download(from, "canceled"));
+        assert!(
+            agent.wait_download(from, "canceled"),
+            "other-origin download cancelled: {:?}",
+            agent.seen[from..]
+                .iter()
+                .filter(|e| e.contains("ownload"))
+                .map(|e| e.chars().take(240).collect::<String>())
+                .collect::<Vec<_>>()
+        );
         assert_eq!(
             std::fs::read_dir(downloads.path()).expect("dir").count(),
             1,
@@ -3053,6 +3200,8 @@ mod launcher_login {
             username_selector: None,
             post_login: None,
             report_held_reason: false,
+            consent: None,
+            report_consent_controls: false,
         };
         let result = run_login(
             &chrome.controller,
@@ -3210,6 +3359,18 @@ fn launcher_credential_v5_required_for_username_or_post_login_with_explicit_mess
     });
     wait.trusted_login = Some(t);
     assert_eq!(required_launcher_protocol(&wait), 6);
+    // 付記 2026-10-10b: a pinned consent button needs protocol 7.
+    if let Some(t) = wait.trusted_login.as_mut() {
+        t.consent = Some(task_core::browser_wait::ConsentPolicy {
+            selector: "input[name=_eventId_proceed]".into(),
+            choice_selector: None,
+        });
+    }
+    assert_eq!(required_launcher_protocol(&wait), 7);
+    assert!(
+        denied_text(launcher_too_old(6, 7))
+            .contains("rebuild and replace celeris-browser-launcher (protocol 7 required)")
+    );
     let text = denied_text(launcher_too_old(5, 6));
     assert!(text.contains("protocol 5"), "{text}");
     assert!(

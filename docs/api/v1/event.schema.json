@@ -1102,6 +1102,25 @@
       ],
       "type": "string"
     },
+    "ConsentPolicy": {
+      "additionalProperties": false,
+      "description": "ADR 2026-10-09 credential username / post-login 付記 2026-10-10b: 同意頁で controller が押す固定の\nボタン（`selector`）と任意の選択肢（`choice_selector`、radio）。押す回数は 1 login につき 1 回に固定。",
+      "properties": {
+        "choice_selector": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "selector": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "selector"
+      ],
+      "type": "object"
+    },
     "CostOfReversal": {
       "description": "D7: 後戻りの大きさ。",
       "enum": [
@@ -7994,6 +8013,17 @@
       "additionalProperties": false,
       "description": "ADR-0110 D2: 管理者の site policy（broker の `CredentialPolicy`）が持つログイン URL と top-level selector を\n承認要求の時点で固定した値。モデル・worker の要求からは入らない（trusted supervisor が broker に問うた値だけ）。",
       "properties": {
+        "consent": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ConsentPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "同 付記 2026-10-10b: IdP の属性送信の同意頁で controller が 1 回だけ押す固定ボタン。"
+        },
         "login_url": {
           "type": "string"
         },

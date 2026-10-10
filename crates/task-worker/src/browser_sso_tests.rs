@@ -219,6 +219,7 @@ impl Fixture {
             submit_selector: Some("button[name=_eventId_proceed]".into()),
             username_selector: None,
             post_login: None,
+            consent: None,
         };
         {
             let mut c = self.controller.lock().unwrap();

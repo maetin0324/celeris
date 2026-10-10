@@ -3643,16 +3643,18 @@ config の `[[api.browser_site_policies]]` は空の DB に入れる種: daemon 
 #### 3.132.1 `GET /browser/site-policies` → 200 `SitePolicyList`
 
 `{items}`。`items[]` は `policy_id` 昇順の `BrowserSitePolicyRecord`（`policy_id`・`exact_origin`・`login_url`・`password_selector`・
-`submit_selector?`・`username_selector?`・`post_login?`〈`{read_origins, actions}`〉・`source`〈`api` / `config`〉・`created_at`・`updated_at`）。
+`submit_selector?`・`username_selector?`・`post_login?`〈`{read_origins, actions}`〉・`consent?`〈`{selector, choice_selector?}`〉・`source`〈`api` / `config`〉・`created_at`・`updated_at`）。
 
 #### 3.132.2 `PUT /browser/site-policies/{policy_id}` → 201（作成）/ 200（置換） `SitePolicyPutResult`
 
-本文 `SitePolicyPutBody` `{exact_origin, login_url, password_selector, submit_selector?, username_selector?, post_login?}`
+本文 `SitePolicyPutBody` `{exact_origin, login_url, password_selector, submit_selector?, username_selector?, post_login?, consent?}`
 （`deny_unknown_fields`）。`policy_id` は `[A-Za-z0-9._-]` の 1〜64 文字。ADR-0110 D2 の形式検証（`TrustedSitePolicy::validate`）に
 落ちれば 422 `site_policy_invalid`（`reason` に固定 code。id の形・本文の形は `policy_id` / `body`）。`username_selector` は
 password 欄と同じ文法で password と別の selector、`post_login` は `{read_origins: [exact HTTPS origin 1〜8 個、exact_origin 以外],
 actions: [snapshot|extract|screenshot|download|click 1 個以上]}`（ADR 2026-10-09 credential username / post-login。`reason` は
-`username_selector`・`post_login_origins`・`post_login_idp_origin`・`post_login_actions`）。応答 `{created, policy}`。置換は
+`username_selector`・`post_login_origins`・`post_login_idp_origin`・`post_login_actions`）。`consent` は `{selector, choice_selector?}`
+（IdP の同意頁で controller が 1 回だけ押す固定ボタンと任意の radio。`post_login` と組でだけ置ける。`reason` は `consent_selector`・
+`consent_without_post_login`。付記 2026-10-10b）。応答 `{created, policy}`。置換は
 `source = api` にする。site policy を変えた後の credential は登録し直す（broker の vault は登録時の値を写して持つ）。
 
 #### 3.132.3 `DELETE /browser/site-policies/{policy_id}` → 204

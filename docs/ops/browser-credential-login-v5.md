@@ -16,9 +16,22 @@ history・ログ・台帳・成果物・chat に書かない。
 login は launcher protocol 6 が要る（username 欄だけなら 5）。手順は下と同じで、**daemon の release と launcher の再 build・
 差し替えの両方**が要る（どちらが先でもよいが、daemon が先なら launcher を差し替えるまで「protocol 6 required」で拒否される）。
 
+**2026-10-10b 追記（protocol 7、同意頁の固定ボタン）**: site policy の `consent`（`selector` と任意の `choice_selector`）を
+置くと、IdP の同意頁で Celeris の controller が 1 login につき 1 回だけそのボタンを押す（agent は押せない）。値は実頁で決める:
+同意頁で止まった run の progress に `consent_controls=…` として同意 form の欄名（`button` / `input[type=submit|radio]` の
+name・type・value だけ）が出るので、そこから選ぶ。例（Shibboleth の既定の形）:
+
+- `selector`: `input[name="_eventId_proceed"]`（progress に `_eventId_proceed=…(submit)` が出ていること）
+- `choice_selector`（推奨・任意）: `input[name="_shib_idp_consentOptions"][value="_shib_idp_doNotRememberConsent"]`
+  （その login だけの同意。progress に `_shib_idp_consentOptions=_shib_idp_doNotRememberConsent(radio)` が出ていること）
+
+consent を使う login は launcher protocol 7 が要る（daemon の release と launcher の再 build・差し替えの両方。§1〜3 と同じ手順）。
+site policy を変えたら credential を登録し直す（§4）。押した後も同意頁が残る・別の同意頁が出るなら
+`post_login_consent_required (…, consent_pressed, consent_controls=…)` で止まる（2 回目は押さない）。
+
 | 理由（reason） | 意味 | 運用の判断 |
 |---|---|---|
-| `post_login_consent_required` | IdP の属性送信の同意頁で止まった | 人が判断する（同意は自動で押さない）。browser 側に同意を記録する IdP では毎回出うる |
+| `post_login_consent_required` | IdP の属性送信の同意頁で止まった | `consent` 未設定なら progress の `consent_controls` から selector を決めて設定する。設定済みで止まったなら selector の不一致か、押しても同意頁が残った |
 | `post_login_idp_login_form` | IdP が login form を再表示した | 登録した username / password を確かめて登録し直す |
 | `post_login_idp_timeout` | 60 秒たっても IdP の頁に居た | IdP の中継の失敗・遅延。再実行して変わらなければ報告 |
 | `post_login_password_field` | read_origins の頁に password 欄があった | 着地頁（例: manaba の login 頁）。login_url に戻り先の指定が要るかを確かめる |

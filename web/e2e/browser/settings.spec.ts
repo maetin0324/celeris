@@ -210,6 +210,9 @@ test("site policy を追加・編集・削除し、credential grant を選択し
     await editing
       .getByLabel("読み取り先 origin（1 行に 1 つ。ログイン先の origin は入れられません）")
       .fill("https://lms.example.com");
+    await editing
+      .getByLabel("IdP の同意頁で押すボタンの selector（任意。1 回だけ押す）")
+      .fill("input[name=_eventId_proceed]");
     for (const width of [360, 390, 412, 1440]) {
       await page.setViewportSize({ width, height: 800 });
       expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
@@ -236,6 +239,7 @@ test("site policy を追加・編集・削除し、credential grant を選択し
       submit_selector: "#submit",
       username_selector: "#user",
       post_login: { read_origins: ["https://lms.example.com"], actions: ["snapshot", "extract"] },
+      consent: { selector: "input[name=_eventId_proceed]", choice_selector: null },
     });
     await page.getByLabel("credential の使用を許可（credential_use）").check();
     await page.getByLabel("courses.login", { exact: true }).check();

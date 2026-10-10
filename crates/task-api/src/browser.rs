@@ -113,6 +113,9 @@ pub struct TrustedSitePolicy {
     /// 同 D2-1: ログイン後の読み取りの opt-in（任意）。
     #[serde(default)]
     pub post_login: Option<task_core::browser_wait::PostLogin>,
+    /// 同 付記 2026-10-10b: IdP の同意頁の固定ボタン（任意、post_login と組で）。
+    #[serde(default)]
+    pub consent: Option<task_core::browser_wait::ConsentPolicy>,
 }
 
 impl TrustedSitePolicy {
@@ -125,6 +128,7 @@ impl TrustedSitePolicy {
             self.submit_selector.as_deref(),
             self.username_selector.as_deref(),
             self.post_login.as_ref(),
+            self.consent.as_ref(),
         )
     }
 }
@@ -139,6 +143,7 @@ impl From<task_core::BrowserSitePolicy> for TrustedSitePolicy {
             submit_selector: p.submit_selector,
             username_selector: p.username_selector,
             post_login: p.post_login,
+            consent: p.consent,
         }
     }
 }
@@ -153,6 +158,7 @@ impl From<TrustedSitePolicy> for task_core::BrowserSitePolicy {
             submit_selector: p.submit_selector,
             username_selector: p.username_selector,
             post_login: p.post_login,
+            consent: p.consent,
         }
     }
 }
@@ -254,7 +260,8 @@ impl UnixCredentialBrokerControl {
             password_selector: site.as_ref().map(|p| p.password_selector.clone()),
             submit_selector: site.as_ref().and_then(|p| p.submit_selector.clone()),
             username_selector: site.as_ref().and_then(|p| p.username_selector.clone()),
-            post_login: site.and_then(|p| p.post_login),
+            post_login: site.as_ref().and_then(|p| p.post_login.clone()),
+            consent: site.and_then(|p| p.consent),
         })
     }
 }

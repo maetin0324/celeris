@@ -719,6 +719,8 @@ fn handle_authenticate(
         status: AuthenticationStatus::Rejected,
         observation: None,
         held_reason: None,
+        consent_pressed: false,
+        consent_controls: Vec::new(),
     };
     let entry = match authorize(inner, peer, &args.session_id, &args.lease_id) {
         Ok(e) => e,
@@ -733,6 +735,7 @@ fn handle_authenticate(
     // replaced first (ADR 2026-10-09 credential username / post-login D1-5).
     let v5 = args.username_selector.is_some() || args.post_login.is_some();
     let report_held_reason = args.report_held_reason;
+    let report_consent = args.report_consent_controls;
     let e2 = entry.clone();
     let out = run_with_deadline(
         move || {
@@ -751,6 +754,12 @@ fn handle_authenticate(
             status: AuthenticationStatus::Success,
             observation: v5.then_some(result.observation),
             held_reason: result.held_reason.filter(|_| report_held_reason),
+            consent_pressed: report_consent && result.consent_pressed,
+            consent_controls: if report_consent {
+                result.consent_controls
+            } else {
+                Vec::new()
+            },
         },
         Some(Err(_)) => rejected,
         None => {

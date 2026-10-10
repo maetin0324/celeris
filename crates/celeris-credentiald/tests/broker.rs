@@ -56,6 +56,7 @@ impl Fixture {
             submit_selector: None,
             username_selector: None,
             post_login: None,
+            consent: None,
         };
         Self {
             root,
@@ -666,6 +667,10 @@ fn registered_username_selector_and_post_login_pin_the_grant() {
         read_origins: vec!["https://lms.example.test".into()],
         actions: vec![PostLoginAction::Snapshot, PostLoginAction::Click],
     });
+    f.policy.consent = Some(task_core::browser_wait::ConsentPolicy {
+        selector: "input[name=_eventId_proceed]".into(),
+        choice_selector: None,
+    });
     f.register();
     let described = f
         .manual
@@ -690,5 +695,12 @@ fn registered_username_selector_and_post_login_pin_the_grant() {
         actions: vec![PostLoginAction::Snapshot],
     });
     assert!(f.broker.grant(widened).is_err());
+    let mut other_button = f.request("k-consent", 60);
+    other_button.policy.consent = Some(task_core::browser_wait::ConsentPolicy {
+        selector: "input[name=_eventId_AttributeReleaseRejected]".into(),
+        choice_selector: None,
+    });
+    assert!(f.broker.grant(other_button).is_err());
+    assert_eq!(described.consent, f.policy.consent);
     assert!(f.broker.grant(f.request("k-ok", 60)).is_ok());
 }

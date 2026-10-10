@@ -136,6 +136,7 @@ fn world() -> World {
                     submit_selector: Some("#submit".into()),
                     username_selector: None,
                     post_login: None,
+                    consent: None,
                 }]
                 .into(),
             })),

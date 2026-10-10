@@ -50,6 +50,9 @@ pub struct SitePolicyPutBody {
     /// 同 D2-1: ログイン後に読み取ってよい origin と action（任意。無ければ観測停止のまま）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub post_login: Option<task_core::browser_wait::PostLogin>,
+    /// 同 付記 2026-10-10b: IdP の属性送信の同意頁で controller が 1 回だけ押す固定ボタン（任意）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub consent: Option<task_core::browser_wait::ConsentPolicy>,
 }
 
 /// `GET /browser/site-policies` の応答。
@@ -167,6 +170,7 @@ pub(crate) fn validated_policy(
         submit_selector: body.submit_selector,
         username_selector: body.username_selector,
         post_login: body.post_login,
+        consent: body.consent,
     };
     trusted.validate().map_err(|code| {
         ApiProblem::new(

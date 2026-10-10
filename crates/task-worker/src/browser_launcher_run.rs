@@ -1052,7 +1052,7 @@ pub(super) async fn run(
             }
             CredentialLogin::Failed(code) => Err(code),
             CredentialLogin::Recorded(result) => {
-                login_observation = result;
+                login_observation = result.clone();
                 auth_recorded = true;
                 // Nothing has been forwarded since the launcher stopped observation; from here
                 // on every worker event of this session is dropped (ADR-0080 H3).
@@ -1121,15 +1121,17 @@ pub(super) async fn run(
                         )
                         .is_ok();
                     if reopened {
-                        Ok(())
+                        Ok(login.consent_pressed)
                     } else {
-                        Err(crate::browser_cdp_sink::PostLoginHeld::ResumeFailed)
+                        Err(crate::browser_cdp_sink::PostLoginHeld::ResumeFailed.into())
                     }
                 }
                 // A launcher that held without a reason (or before v6) gives no detail.
-                (LoginObservation::Held, held) => {
-                    Err(held.unwrap_or(crate::browser_cdp_sink::PostLoginHeld::CheckFailed))
-                }
+                (LoginObservation::Held, held) => Err(crate::browser_cdp_sink::PostLoginHeldInfo {
+                    reason: held.unwrap_or(crate::browser_cdp_sink::PostLoginHeld::CheckFailed),
+                    consent_pressed: login.consent_pressed,
+                    consent_controls: login.consent_controls.clone(),
+                }),
             };
             if outcome.is_ok() {
                 allowed = serde_json::from_slice(bytes)
@@ -1137,7 +1139,7 @@ pub(super) async fn run(
                 post_login_context = Some(read.clone());
                 drop(auth_guard.take());
             }
-            super::post_login_progress(sink, outcome);
+            super::post_login_progress(sink, &outcome);
         }
     }
     let action_server = ActionServer::start_with(
@@ -1263,6 +1265,7 @@ fn launcher_too_old(version: u32, required: u32) -> AdapterError {
 /// D1-5, 付記 2026-10-10): 6 with a post-login read, 5 with a username field only, else 4.
 pub(crate) fn required_launcher_protocol(wait: &BrowserWait) -> u32 {
     match &wait.trusted_login {
+        Some(t) if t.consent.is_some() => crate::browser_launcher::protocol::CONSENT_PROTOCOL,
         Some(t) if t.post_login.is_some() => POST_LOGIN_PROTOCOL,
         Some(t) if t.username_selector.is_some() => {
             crate::browser_launcher::protocol::USERNAME_PROTOCOL
@@ -1371,6 +1374,8 @@ pub(crate) async fn launcher_credential_login(
             submit_selector: trusted.submit_selector.clone(),
             username_selector: trusted.username_selector.clone(),
             report_held_reason: post_login.is_some(),
+            consent: post_login.and(trusted.consent.clone()),
+            report_consent_controls: post_login.is_some(),
             // Only the effective read (site policy ∩ task policy) crosses to the launcher.
             post_login: post_login.map(|read| task_core::browser_wait::PostLogin {
                 read_origins: read.read_origins.clone(),

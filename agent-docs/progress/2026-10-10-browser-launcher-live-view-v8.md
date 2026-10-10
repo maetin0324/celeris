@@ -18,6 +18,14 @@ completed: 2026-10-10
 - gateway は既存 owner session / Origin / grant guard 付き WebSocket で本人だけへ配送する。frame 経路がある場合 `liveAvailability` は enabled/link。credential session の本人表示を維持し、input は拒否する。
 - D6 の path 範囲と試験 prefix は v8 unit 名に更新済み。frame-core、launcher、api-stream、daemon、gateway、spa、cross-tests、ops-doc の境界を ADR 付記に記録した。
 
+## 版の訂正（docs-v9、2026-10-10）
+
+- 版の正は `crates/task-worker/src/browser_launcher/protocol.rs`: `ARTIFACT_PROTOCOL = 8`（fetch_artifact / artifact）、`PROTOCOL_VERSION = LIVE_FRAME_PROTOCOL = 9`（live_start / live_stop / live_frame）。完了節の「protocol v8」は Live View の版として誤りで、Live View は v9 と読む。
+- ADR 付記 2026-10-10c（版の訂正・互換表（正）・merge 崩れの修正）を追加。付記 2026-10-10b の「v8」「v7」の読み替え規則を明記し、試験名は実装の名前（`browser_launcher_protocol_v9_frames`、`browser_launcher_v8_continues_without_live_view`）に揃えた。
+- `docs/ops/browser-launcher-live-view.md` を protocol 9 に直した。v7 と v8（artifact のみ）の launcher からの更新手順、doctor の `protocol 9` 確認、退避版の名前（`$L.pre-live-view`、版は v7 または v8）、戻し方の互換を書いた。
+- 変更は ADR・docs/ops・本進捗だけ。`crates/` は触っていない。
+- 版の訂正の検査は本節の後段（regate）で文書検査と合わせて取り直す。
+
 ## 完了
 
 全 unit を統合した HEAD `127e53e3d0a02576d160465fc566b64ed55323ea` で全体検査を完了した。全体検査はすべて exit 0。

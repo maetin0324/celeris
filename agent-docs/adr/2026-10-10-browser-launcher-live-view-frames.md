@@ -143,3 +143,36 @@ frame は daemon が `live_start` を送った Live View 専用の別接続で�
 ### 実装記録
 
 protocol v8 の実装は完了し、全体検査を通過した。主要な実装 commit は launcher `07aceb77`、task-core/daemon `516ea993`、task-api `13bc444d`、gateway `702c40ad`、SPA `d17ff1bf`、cross-tests `047a3e40`、運用手順 `82af5b94`。close-out HEAD は `127e53e3d0a02576d160465fc566b64ed55323ea`。全体検査と残る実 browser/本番確認は [進捗](../progress/2026-10-10-browser-launcher-live-view-v8.md) を参照。
+
+## 付記 2026-10-10c（版の訂正: Live View は protocol 9、artifact は protocol 8）
+
+付記 2026-10-10b の「protocol v8」は、main 取り込みで artifact transfer に 8 が割り当てられた後の版として誤りだった。本文 D5 の `PROTOCOL_VERSION = 9` が正しい。以後の版の割り当ては次のとおり（実装の正本は `crates/task-worker/src/browser_launcher/protocol.rs`）。
+
+| 定数 | 値 | 内容 |
+|---|---|---|
+| `CONSENT_PROTOCOL` | 7 | consent |
+| `ARTIFACT_PROTOCOL` | 8 | fetch_artifact / artifact（[付記 2026-10-10e](2026-10-09-browser-credential-username-and-post-login-read.md)） |
+| `LIVE_FRAME_PROTOCOL` = `PROTOCOL_VERSION` | 9 | `live_start` / `live_stop` / `live_frame`（本付記の Live View） |
+
+読み替えの規則:
+
+- 付記 2026-10-10b の wire contract と試験の版は、Live View に関する限り **v9** と読む。「v8 notification」「v8 launcher の frame」は「v9」と読む。
+- 付記 2026-10-10b の互換表の「v7」は「Live View 無し（v8 未満、または v8 のみ）」と読む。artifact のみの v8 launcher は Live View を無効化する側に入る。
+- 本文 D5 の「v8 は artifact transfer に割り当てた」は正しい。
+
+### 互換表（正）
+
+| daemon | launcher | Live View | その他 |
+|---|---|---|---|
+| Live View 入り（daemon が 9 を要求） | v7 以下 | `disabled`、理由 `launcher_protocol_no_live_frames`。`live_start` を送らない | session・credential login・consent は従来どおり。screenshot / download は v8 を要し、固定理由 `browser_launcher_protocol_artifacts_required` で失敗 |
+| Live View 入り | v8（artifact のみ） | `disabled`、理由 `launcher_protocol_no_live_frames`。`live_start` を送らない | session・credential login・consent・screenshot / download は従来どおり |
+| Live View 入り | v9 | 本人に映像 | 従来どおり |
+| Live View 導入前の release | v9 | frame 接続を開かないので frame なし | 従来どおり |
+
+試験の固定名（実装と一致する名前）: `browser_launcher_protocol_v9_frames`（v9 の encode/decode と上限）、`browser_launcher_v8_continues_without_live_view`（artifact のみの v8 launcher で Live View を無効化し session を継続）、`browser_launcher_daemon_checks_live_protocol_before_enable`（hello の版確認が start/subscribe より先）。付記 2026-10-10b の表の `browser_launcher_protocol_v8_frames` と `browser_launcher_v7_continues_without_live_view` は、それぞれ上の名前に読み替える。
+
+### merge 崩れの修正（merge-fix）
+
+main の artifact transfer（`ARTIFACT_PROTOCOL = 8`）を取り込んだ際、Live View が `LIVE_FRAME_PROTOCOL = 9` へ振り直された統合で次の崩れが起きた。`browser_launcher_run.rs` の `artifact_refusal_progress` は閉じ括弧が欠けて以降の関数を飲み込み、`browser_launcher/protocol.rs` の `LiveStart` / `LiveStop` は `Request` enum の外に出ていた。どちらも `Request` 内へ戻し、閉じ括弧を補った。版の値は変えていない（artifact 8、Live View 9）。進捗は [merge-fix](../progress/2026-10-10-browser-launcher-live-view-v8/merge-fix.md)。
+
+本付記は版の記載だけを正す。wire 形式・権限の境界（本人限定、非永続、input 拒否、容量 1）は付記 2026-10-10b のとおりで、変更しない。

@@ -64,7 +64,7 @@ export function BrowserRunScreen({ taskId, runId }: { taskId: string; runId: str
       ) : null}
       {run ? (
         <ControlBar
-          ids={{ taskId, runId, sessionId: run.session_id }}
+          ids={{ taskId, runId, sessionId: run.session_id, runState: run.state }}
           csrf={owner?.csrfToken ?? null}
           canOperate={isOwner && !authInterval}
           disabledReason={disabledReason}

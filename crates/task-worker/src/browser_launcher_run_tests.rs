@@ -2618,7 +2618,7 @@ mod launcher_login {
             FIXTURE, USER, origins, trusted as post_login_trusted,
         };
         const PASSWORD: &str = "launcher-post-login-pw-a81f3c";
-        let chrome = ChromeFixture::start_with(FIXTURE);
+        let chrome = ChromeFixture::start_with(&FIXTURE);
         std::fs::write(chrome.directory.path().join("consent"), "1").expect("consent flag");
         let o = origins(&chrome);
         let brokers = Arc::new(Mutex::new(0));
@@ -2743,7 +2743,7 @@ mod launcher_login {
             FIXTURE, USER, origins, trusted as post_login_trusted,
         };
         const PASSWORD: &str = "launcher-post-login-pw-a81f3c";
-        let chrome = ChromeFixture::start_with(FIXTURE);
+        let chrome = ChromeFixture::start_with(&FIXTURE);
         std::fs::write(chrome.directory.path().join("consent"), "1").expect("consent flag");
         let o = origins(&chrome);
         let brokers = Arc::new(Mutex::new(0));
@@ -2878,7 +2878,7 @@ mod launcher_login {
             Agent, COOKIE_VALUE, FIXTURE, USER, origins, trusted as post_login_trusted,
         };
         const PASSWORD: &str = "launcher-post-login-pw-a81f3c";
-        let chrome = ChromeFixture::start_with(FIXTURE);
+        let chrome = ChromeFixture::start_with(&FIXTURE);
         let o = origins(&chrome);
         let brokers = Arc::new(Mutex::new(0));
         let dir = tempfile::tempdir().expect("tempdir");
@@ -3060,7 +3060,14 @@ mod launcher_login {
             .expect("download behavior");
         let from = agent.seen.len();
         agent.click("dl").expect("download");
-        assert!(agent.wait_download(from, "completed"));
+        let lms = agent
+            .wait_download_begin(from, &[])
+            .unwrap_or_else(|| panic!("LMS download began: {:?}", agent.tail(6)));
+        assert!(
+            agent.wait_download(from, &lms, "completed"),
+            "LMS download completed: {:?}",
+            agent.tail(6)
+        );
         let mut tab2 = crate::browser::post_login_tests::Agent::new_tab(&chrome.controller);
         assert_eq!(
             tab2.cmd(

@@ -15,6 +15,14 @@ updated: 2026-10-10
   （navigation の download は event が出ず取消できないことを試験で確認したため）、他 origin の download の試験を新しい tab の
   頁起点の download と event 待ちにした（Chromium の tab ごとの download 制限が時間依存の原因）。
 
+## main（51989f4e）との統合
+
+download の試験は 1 つの仕組みにまとめた: main 側（34f51498・1a6f55e7）の guid 付きの出来事待ち（`wait_event`・
+`wait_download_begin`・`wait_download(guid)`）と sniff されない型・本文 60 秒遅れの fixture（Chromium が octet-stream を
+sniff して本文まで download を始めず取消と競合する点を除く）に、こちらの「download 未経験の新しい tab で頁起点の click」
+（tab ごとの download 制限を避ける）と「区間後の navigate は read_origins だけ」の拒否確認を合わせた。こちらの時間上限だけの
+待ち（`wait_download_for`・再試行）は削除。
+
 ## 証拠
 
 - `CELERIS_USERNS_TESTS=1 CELERIS_ISOLATION_TESTS=require bash scripts/dev/test-parallel.sh` → exit 0、5027 passed / 0 failed（1 回目は無関係の `celeris-mcp unreachable_server_is_a_transport_error`（他の server が port に答えた）と、新しい実 agent-browser 試験の socket path 長で 2 件失敗 → 試験側を短い socket dir にして解消）

@@ -8,7 +8,7 @@ const KNOWN: readonly string[] = Object.keys(liveUnavailableText);
 
 export type LiveViewState = { kind: "frame"; href: string } | { kind: "unavailable"; reason: LiveUnavailableReason };
 
-/** 理由の判定順: 本人 → 実行中 → 認証区間 → gateway の理由 → href の検査。 */
+/** 理由の判定順: 本人 → gateway の理由 → 実行状態 → href の検査。 */
 export function liveViewState(input: {
   taskId: string;
   runId: string;
@@ -16,16 +16,15 @@ export function liveViewState(input: {
   owner: Pick<OwnerSession, "available" | "isOwner"> | undefined;
   authInterval: boolean;
 }): LiveViewState {
-  const { run, owner, authInterval } = input;
+  const { run, owner } = input;
   if (owner && !owner.available) return { kind: "unavailable", reason: "owner_unavailable" };
   if (!owner?.isOwner) return { kind: "unavailable", reason: "not_owner" };
-  if (run.state === "COMPLETED" || run.state === "FAILED") return { kind: "unavailable", reason: "not_running" };
-  if (authInterval) return { kind: "unavailable", reason: "auth_interval" };
   if (run.live?.state === "disabled")
     return {
       kind: "unavailable",
       reason: KNOWN.includes(run.live.reason) ? (run.live.reason as LiveUnavailableReason) : "relay_unavailable",
     };
+  if (run.state !== "RUNNING") return { kind: "unavailable", reason: "not_running" };
   const href = safeLivePath(run.live?.state === "link" ? run.live.href : run.live_path);
   return href === `/browser/live/${input.taskId}/${input.runId}`
     ? { kind: "frame", href }
@@ -70,7 +69,7 @@ export function LiveViewFrame({ state, taskLabel }: { state: LiveViewState; task
           data-testid="browser-live-unavailable"
           data-reason={state.reason}
         >
-          <p className="font-semibold">映像なし・イベントで監視中</p>
+          <p className="font-semibold">映像なし — イベントで監視中</p>
           <p className="text-label text-muted-foreground">{liveUnavailableText[state.reason]}</p>
           <a
             href="#browser-live-events"

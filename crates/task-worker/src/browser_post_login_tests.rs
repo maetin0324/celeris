@@ -12,10 +12,35 @@ use std::os::fd::{AsRawFd, OwnedFd};
 use std::sync::Mutex;
 use std::time::Instant;
 
-pub(crate) const FIXTURE: &str = include_str!("browser_post_login_fixture.py");
+const FIXTURE_SOURCE: &str = include_str!("browser_post_login_fixture.py");
+/// The fixture with the other origin's file made unsniffable. The source sends it as
+/// `application/octet-stream` with the body 8 seconds after the headers; Chromium sniffs that type
+/// and only begins the download once the body arrives, so the controller's cancel races the
+/// completion (a lost race is the D2-6 breach, failing the test). An unsniffable type begins the
+/// download at the headers, and a 60-second body delay (the event safety net) keeps the cancel first.
+pub(crate) static FIXTURE: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    let mut script = FIXTURE_SOURCE.to_string();
+    for (from, to) in [
+        (
+            "self.send_header('Content-Type', 'application/octet-stream')",
+            "self.send_header('Content-Type', 'application/x-celeris-other')",
+        ),
+        ("threading.Event().wait(8)", "threading.Event().wait(60)"),
+    ] {
+        assert_eq!(
+            script.matches(from).count(),
+            1,
+            "fixture line {from:?} moved"
+        );
+        script = script.replace(from, to);
+    }
+    script
+});
 pub(crate) const USER: &str = "s2026001";
 const SECRET: &str = "post-login-password-5d1c92";
 pub(crate) const COOKIE_VALUE: &str = "lms-session-cookie-7f3a";
+/// Safety net for download events; the waits end on the event itself (ADR-0125).
+const DOWNLOAD_EVENT_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// The fixture's three origins: IdP, LMS, other.
 pub(crate) struct Origins {
@@ -114,7 +139,7 @@ struct World {
 }
 
 fn world() -> World {
-    let fx = ChromeFixture::start_with(FIXTURE);
+    let fx = ChromeFixture::start_with(&FIXTURE);
     let o = origins(&fx);
     let (target, own) = {
         let mut c = fx.controller.lock().expect("lock");
@@ -316,94 +341,104 @@ impl<'a> Agent<'a> {
         Self::attach(controller, &target)
     }
 
-    /// Start the download behind `#id` with a page-initiated click (in this tab's page) and wait —
-    /// on events, bounded — first for the browser to announce it (`downloadWillBegin`) and then for
-    /// `state`. Use a tab that has not downloaded yet: Chromium's per-tab download limiter silently
-    /// holds a second download without fresh user activation (which made the earlier mouse-driven
-    /// version of this check depend on timing). Errors name what was seen.
+    /// Start the download behind `#id` with a page-initiated click (in this tab's page) and wait on
+    /// the browser's own events for it to begin and then reach `state`. Use a tab that has not
+    /// downloaded yet: Chromium's per-tab download limiter silently holds a second download without
+    /// fresh user activation (which made the earlier mouse-driven check depend on timing).
     pub(crate) fn download_by_script(&mut self, id: &str, state: &str) -> Result<(), String> {
         let from = self.seen.len();
         self.eval(&format!("document.getElementById('{id}').click()"))
             .map_err(|e| format!("click refused: {}", e.code()))?;
-        let began = |seen: &[String]| {
-            seen.iter().any(|e| {
-                e.contains("\"Browser.downloadWillBegin\"")
-                    || e.contains("\"Page.downloadWillBegin\"")
-            })
-        };
-        let deadline = Instant::now() + Duration::from_secs(60);
-        while !began(&self.seen[from..]) {
-            if Instant::now() >= deadline {
-                return Err(format!(
-                    "the browser never announced the download: {:?}",
-                    self.seen[from..]
-                        .iter()
-                        .map(|e| e.chars().take(220).collect::<String>())
-                        .collect::<Vec<_>>()
-                ));
-            }
-            self.pump();
-            std::thread::sleep(Duration::from_millis(20));
-        }
-        if self.wait_download_for(from, state, Duration::from_secs(60)) {
+        let guid = self
+            .wait_download_begin(from, &[])
+            .ok_or_else(|| format!("the download never began: {:?}", self.tail(6)))?;
+        if self.wait_download(from, &guid, state) {
             Ok(())
         } else {
-            Err(format!("no {state} after the download began"))
+            Err(format!(
+                "no {state} after the download began: {:?}",
+                self.tail(6)
+            ))
         }
     }
 
-    /// Take the events queued for this agent (browser-level and its own session).
-    fn pump(&mut self) {
-        let mut c = self.controller.lock().expect("lock");
-        let _ = c.pump_events();
-        let sessions: HashSet<String> = [self.session.clone()].into_iter().collect();
-        let events = c.take_agent_events_for(&sessions);
-        drop(c);
-        for mut event in events {
-            crate::browser_shared_cdp::sanitize_agent_event(&mut event);
-            self.seen.push(event.to_string());
-        }
-    }
-
-    /// Wait for a `Browser.downloadProgress` of `state` among the events received since `from`
-    /// (an index into `seen`; events are browser-level, no page data).
-    pub(crate) fn wait_download(&mut self, from: usize, state: &str) -> bool {
-        // Generous: under a loaded host Chromium may take a while to start a download.
-        self.wait_download_for(from, state, Duration::from_secs(30))
-    }
-
-    fn wait_download_for(&mut self, from: usize, state: &str, wait: Duration) -> bool {
-        let deadline = Instant::now() + wait;
-        let matches = |e: &str| {
-            serde_json::from_str::<Value>(e).is_ok_and(|v| {
-                v["method"] == "Browser.downloadProgress" && v["params"]["state"] == state
-            })
-        };
-        if self.seen[from.min(self.seen.len())..]
-            .iter()
-            .any(|e| matches(e))
-        {
-            return true;
-        }
-        while Instant::now() < deadline {
+    /// Wait for the first event since `from` (an index into `seen`) that `pick` maps to a value.
+    /// Events are browser-level (no page data) and carry no session, so they reach the agent's
+    /// queue; the controller has no other consumer here. Waits on events (ADR-0125): the bound is
+    /// only a long safety net, and a stopped observation (D2-6 breach) ends the wait at once.
+    fn wait_event<T>(&mut self, from: usize, pick: impl Fn(&Value) -> Option<T>) -> Option<T> {
+        let deadline = Instant::now() + DOWNLOAD_EVENT_TIMEOUT;
+        let mut next = from.min(self.seen.len());
+        loop {
+            while next < self.seen.len() {
+                let found = serde_json::from_str::<Value>(&self.seen[next])
+                    .ok()
+                    .and_then(|v| pick(&v));
+                next += 1;
+                if found.is_some() {
+                    return found;
+                }
+            }
+            if Instant::now() >= deadline {
+                return None;
+            }
             let mut c = self.controller.lock().expect("lock");
             let _ = c.pump_events();
             let sessions: HashSet<String> = [self.session.clone()].into_iter().collect();
             let events = c.take_agent_events_for(&sessions);
+            let stopped = c.observation_stopped();
             drop(c);
-            let mut hit = false;
+            let idle = events.is_empty();
             for mut event in events {
-                hit |= event["method"] == "Browser.downloadProgress"
-                    && event["params"]["state"] == state;
                 crate::browser_shared_cdp::sanitize_agent_event(&mut event);
                 self.seen.push(event.to_string());
             }
-            if hit {
-                return true;
+            if stopped && idle {
+                return None;
             }
-            std::thread::sleep(Duration::from_millis(20));
+            if idle {
+                std::thread::sleep(Duration::from_millis(20));
+            }
         }
-        false
+    }
+
+    /// Wait for a download to begin among the events received since `from` and return its guid
+    /// (`Browser.downloadWillBegin`, or the first progress of a guid not in `known`).
+    pub(crate) fn wait_download_begin(&mut self, from: usize, known: &[&str]) -> Option<String> {
+        self.wait_event(from, |v| {
+            let guid = v["params"]["guid"].as_str()?;
+            match v["method"].as_str()? {
+                "Browser.downloadWillBegin" | "Page.downloadWillBegin" => Some(guid.to_owned()),
+                "Browser.downloadProgress" | "Page.downloadProgress" if !known.contains(&guid) => {
+                    Some(guid.to_owned())
+                }
+                _ => None,
+            }
+        })
+    }
+
+    /// Wait for a progress event of the download `guid` reaching `state` (searched from `from`, so
+    /// an event that arrived with the begin is not missed).
+    pub(crate) fn wait_download(&mut self, from: usize, guid: &str, state: &str) -> bool {
+        self.wait_event(from, |v| {
+            (matches!(
+                v["method"].as_str(),
+                Some("Browser.downloadProgress" | "Page.downloadProgress")
+            ) && v["params"]["guid"] == guid
+                && v["params"]["state"] == state)
+                .then_some(())
+        })
+        .is_some()
+    }
+
+    /// The last `n` events the agent received (for failure messages).
+    pub(crate) fn tail(&self, n: usize) -> Vec<String> {
+        self.seen
+            .iter()
+            .rev()
+            .take(n)
+            .map(|e| e.chars().take(300).collect())
+            .collect()
     }
 }
 
@@ -504,9 +539,13 @@ async fn daemon_post_login_pair_login_reads_lms_and_refuses_idp_other_and_passwo
         .expect("download behavior");
     let from = agent.seen.len();
     agent.click("dl").expect("download click");
+    let lms = agent
+        .wait_download_begin(from, &[])
+        .unwrap_or_else(|| panic!("LMS download began: {:?}", agent.tail(6)));
     assert!(
-        agent.wait_download(from, "completed"),
-        "LMS download completed"
+        agent.wait_download(from, &lms, "completed"),
+        "LMS download completed: {:?}",
+        agent.tail(6)
     );
     let files: Vec<_> = std::fs::read_dir(download_dir.path())
         .expect("dir")

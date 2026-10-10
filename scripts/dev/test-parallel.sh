@@ -136,7 +136,13 @@ print("CELERIS_TEST_SUMMARY " + json.dumps(out, ensure_ascii=False))
 open(nlog + ".ok", "w").write("true" if ok else "false")
 PY
 
-if [ "$nrc" -ne 0 ]; then echo "test-parallel: cargo nextest run failed (exit $nrc)" >&2; exit "$nrc"; fi
+if [ "$nrc" -ne 0 ]; then
+  # 落ちた test 名を最終行より前に出す（nextest の結果行 FAIL / TIMEOUT / SIG* [時間] 名前。重複を除き最大 30 行）
+  grep -E '^[[:space:]]*(FAIL|TIMEOUT|SIG[A-Z]+)[[:space:]]+\[' "$logdir/nextest.log" 2>/dev/null \
+    | sed -E 's/^[[:space:]]*[A-Z]+[[:space:]]+\[[^]]*\][[:space:]]*//; s/^\([0-9]+\/[0-9]+\)[[:space:]]*//' \
+    | awk '!seen[$0]++' | head -n 30 | sed 's/^/test-parallel: failed: /' >&2 || true
+  echo "test-parallel: cargo nextest run failed (exit $nrc)" >&2; exit "$nrc"
+fi
 if [ "$drc" != skipped ] && [ "$drc" -ne 0 ]; then echo "test-parallel: cargo test --doc failed (exit $drc)" >&2; exit "$drc"; fi
 if [ "$(cat "$logdir/nextest.log.ok" 2>/dev/null)" != true ]; then
   echo "test-parallel: nextest exited 0 but its Starting/Summary lines were not found; cannot prove every binary ran" >&2

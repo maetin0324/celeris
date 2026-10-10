@@ -48,6 +48,22 @@ pub enum ControlRequest {
         origin: String,
         trusted_login: task_core::browser_wait::TrustedLogin,
     },
+    CheckReusable {
+        owner_id: String,
+        reference: CredentialRef,
+        origin: String,
+        trusted_login: task_core::browser_wait::TrustedLogin,
+    },
+    ListOwned {
+        owner_id: String,
+    },
+    RemoveOwned {
+        owner_id: String,
+        reference: CredentialRef,
+    },
+    Invalidate {
+        reference: CredentialRef,
+    },
     Revoke {
         lease_id: String,
         actor_id: String,
@@ -88,6 +104,8 @@ pub struct IpcReply {
     pub trusted_login: Option<task_core::browser_wait::TrustedLogin>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub credential_ref: Option<CredentialRef>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub saved_credentials: Option<Vec<(CredentialRef, u64, u64)>>,
 }
 #[derive(Serialize, Deserialize)]
 pub struct IpcCredential {
@@ -111,6 +129,7 @@ impl IpcReply {
             credential: None,
             trusted_login: None,
             credential_ref: None,
+            saved_credentials: None,
         }
     }
     fn code(code: InjectCode) -> Self {
@@ -123,6 +142,7 @@ impl IpcReply {
             credential: None,
             trusted_login: None,
             credential_ref: None,
+            saved_credentials: None,
         }
     }
     fn err(e: Error) -> Self {
@@ -135,6 +155,7 @@ impl IpcReply {
             credential: None,
             trusted_login: None,
             credential_ref: None,
+            saved_credentials: None,
         }
     }
 }
@@ -263,6 +284,39 @@ fn serve_one(
                         &trusted_login,
                     )?;
                     Ok(out)
+                }
+                ControlRequest::CheckReusable {
+                    owner_id,
+                    reference,
+                    origin,
+                    trusted_login,
+                } => {
+                    let mut out = IpcReply::ok();
+                    if broker.provider().reusable_reference(
+                        &owner_id,
+                        &reference,
+                        &origin,
+                        &trusted_login,
+                    )? {
+                        out.credential_ref = Some(reference);
+                    }
+                    Ok(out)
+                }
+                ControlRequest::ListOwned { owner_id } => {
+                    let mut out = IpcReply::ok();
+                    out.saved_credentials = Some(broker.provider().list_owned(&owner_id)?);
+                    Ok(out)
+                }
+                ControlRequest::RemoveOwned {
+                    owner_id,
+                    reference,
+                } => {
+                    broker.provider().remove_owned(&reference, &owner_id)?;
+                    Ok(IpcReply::ok())
+                }
+                ControlRequest::Invalidate { reference } => {
+                    broker.provider().remove(&reference)?;
+                    Ok(IpcReply::ok())
                 }
                 ControlRequest::Revoke { lease_id, actor_id } => {
                     broker.revoke(&lease_id, &actor_id)?;

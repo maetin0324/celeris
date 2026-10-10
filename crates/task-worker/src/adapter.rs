@@ -145,6 +145,18 @@ pub trait EventSink: Send + Sync {
     fn browser_waits(&self) -> Result<Vec<task_core::browser_wait::BrowserWait>, String> {
         Ok(Vec::new())
     }
+    /// Daemon-owned identity and current site policy; never read from harness input.
+    fn browser_saved_credential(
+        &self,
+        _policy_id: &str,
+        _origin: &str,
+    ) -> Option<crate::browser_credential::SavedCredential> {
+        None
+    }
+    /// Revalidate saved approvals against the current daemon-owned policy and vault.
+    fn browser_saved_credential_valid(&self, _wait: &task_core::browser_wait::BrowserWait) -> bool {
+        true
+    }
     /// Trusted browser supervisor only: consume an approved credential use exactly once.
     fn browser_approval_consume(
         &self,

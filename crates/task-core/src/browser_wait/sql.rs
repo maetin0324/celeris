@@ -404,6 +404,12 @@ impl BrowserWaitStore for SqliteStore {
     ) -> Result<u64, StoreError> {
         self.browser_live_append(key, event)
     }
+    fn browser_site_policy_get(
+        &self,
+        policy_id: &str,
+    ) -> Result<Option<crate::BrowserSitePolicyRecord>, StoreError> {
+        SqliteStore::browser_site_policy_get(self, policy_id)
+    }
     fn browser_task_policy_get(
         &self,
         task_id: TaskId,
@@ -673,6 +679,9 @@ impl BrowserWaitStore for SqliteStore {
                 });
             }
             check_version_and_deadline(tx, &wait, expected_version, now)?;
+            if wait.owner_id.as_deref().is_some_and(|owner| owner != actor_id) {
+                return Err(BrowserWaitError::Invalid { field:"owner_id" });
+            }
             // 登録先の origin/policy は保存済みの wait が正（フォームからの差し替えを拒否する）。
             if credential.origin != wait.origin {
                 return Err(BrowserWaitError::Invalid { field: "origin" });
@@ -701,8 +710,8 @@ impl BrowserWaitStore for SqliteStore {
                 ],
             )?;
             tx.execute(
-                "UPDATE browser_waits SET credential_id = ?1, credential_provider = ?2 WHERE wait_id = ?3",
-                params![credential.credential_id, credential.provider, wait.wait_id],
+                "UPDATE browser_waits SET credential_id = ?1, credential_provider = ?2, owner_id = ?4 WHERE wait_id = ?3",
+                params![credential.credential_id, credential.provider, wait.wait_id, actor_id],
             )?;
             if !set_state_tx(
                 tx,
@@ -714,6 +723,7 @@ impl BrowserWaitStore for SqliteStore {
                 return Err(BrowserWaitError::VersionConflict);
             }
             let mut after = wait.clone();
+            after.owner_id = Some(actor_id.into());
             after.credential = Some(CredentialRef {
                 credential_id: credential.credential_id.clone(),
                 provider: credential.provider.clone(),
@@ -749,6 +759,13 @@ impl BrowserWaitStore for SqliteStore {
         check_token(&decision.idempotency_key, "idempotency_key")?;
         self.browser_tx(|tx| {
             let wait = load_for_task(tx, task_id, wait_id)?;
+            if wait
+                .owner_id
+                .as_deref()
+                .is_some_and(|owner| owner != decision.actor_id)
+            {
+                return Err(BrowserWaitError::Invalid { field: "owner_id" });
+            }
             // 冪等な再送: 同じ idempotency_key・同じ wait・同じ決定なら現在の状態を返す。
             let prior = approval_rows(
                 tx,

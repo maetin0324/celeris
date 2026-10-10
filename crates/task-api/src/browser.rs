@@ -92,6 +92,16 @@ pub enum BrokerFailure {
 
 /// celeris-credentiald の control socket（本人の登録・receipt の照合だけ）。resolve は含まない。
 pub trait CredentialBrokerControl: Send + Sync {
+    fn list_saved(
+        &self,
+        _owner: &str,
+    ) -> Result<Vec<crate::browser_credentials::SavedCredentialItem>, BrokerFailure> {
+        Err(BrokerFailure::Unavailable)
+    }
+    fn delete_saved(&self, _owner: &str, _id: &str) -> Result<(), BrokerFailure> {
+        Err(BrokerFailure::Unavailable)
+    }
+
     fn register(&self, registration: ManualRegistration) -> Result<BrokerReceipt, BrokerFailure>;
     /// receipt が broker の登録と一致するか（存在・origin・policy・revision）。
     fn verify_receipt(&self, wait_id: &str, receipt: &BrokerReceipt)
@@ -269,6 +279,49 @@ impl UnixCredentialBrokerControl {
 }
 
 impl CredentialBrokerControl for UnixCredentialBrokerControl {
+    fn list_saved(
+        &self,
+        owner: &str,
+    ) -> Result<Vec<crate::browser_credentials::SavedCredentialItem>, BrokerFailure> {
+        let bytes = serde_json::to_vec(&serde_json::json!({"op":"list_owned", "owner_id":owner}))
+            .map_err(|_| BrokerFailure::Unavailable)?;
+        let reply = celeris_credentiald::ipc::call(&self.socket, &bytes)
+            .map_err(|_| BrokerFailure::Unavailable)?;
+        if !reply.success {
+            return Err(BrokerFailure::Unavailable);
+        }
+        Ok(reply
+            .saved_credentials
+            .ok_or(BrokerFailure::Unavailable)?
+            .into_iter()
+            .map(
+                |(r, created_at, expires_at)| crate::browser_credentials::SavedCredentialItem {
+                    credential_id: r.credential_id,
+                    policy_id: r.policy_id,
+                    created_at,
+                    expires_at,
+                },
+            )
+            .collect())
+    }
+    fn delete_saved(&self, owner: &str, id: &str) -> Result<(), BrokerFailure> {
+        let saved = self
+            .list_saved(owner)?
+            .into_iter()
+            .find(|s| s.credential_id == id)
+            .ok_or(BrokerFailure::Rejected("not_found"))?;
+        let bytes = serde_json::to_vec(&serde_json::json!({"op":"remove_owned", "owner_id":owner,
+            "reference":{"credential_id":id, "provider":"manual", "policy_id":saved.policy_id}}))
+        .map_err(|_| BrokerFailure::Unavailable)?;
+        let reply = celeris_credentiald::ipc::call(&self.socket, &bytes)
+            .map_err(|_| BrokerFailure::Unavailable)?;
+        if reply.success {
+            Ok(())
+        } else {
+            Err(BrokerFailure::Rejected("broker_rejected"))
+        }
+    }
+
     fn register(&self, registration: ManualRegistration) -> Result<BrokerReceipt, BrokerFailure> {
         use celeris_credentiald::{CredentialPolicy, CredentialRef};
         #[derive(Serialize)]

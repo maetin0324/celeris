@@ -880,7 +880,7 @@ pub(super) fn credential_wait(
 ///
 /// 見る順（両経路で同じ。ADR 2026-10-09 付記「launcher runtime の credential wait」）:
 /// 1. `credential-request.json` があれば**それを先に**処理する。policy に合う request だけが
-///    [`credential_wait`] の `WaitingForAuth` wait になり、run は `Terminal::Question` で止まる。
+///    保存済み候補があれば使用承認、なければ `WaitingForAuth` wait を開いて `Terminal::Question` で止まる。
 /// 2. `credential-request.json` が無いときだけ `approval-request.json` を見る
 ///    （`WaitingForApproval`、ADR 2026-10-08 D2）。
 ///
@@ -905,11 +905,39 @@ pub(super) fn shim_request_wait(
     if runtime.join("credential-request.json").exists() {
         return match read_credential_request(&runtime.join("credential-request.json"), policy) {
             Ok(intent) => {
-                let wait = credential_wait(task_id, run_id, session_id, policy, &intent);
+                let mut wait = credential_wait(task_id, run_id, session_id, policy, &intent);
+                if let Some(saved) = sink
+                    .browser_saved_credential(&intent.policy_id, &intent.origin)
+                    .filter(|s| origin_in_domains(&s.origin, policy.allowed_domains()))
+                {
+                    wait.origin = saved.origin;
+                    wait.reason = BrowserWaitReason::WaitingForApproval;
+                    wait.credential = Some(saved.reference);
+                    wait.trusted_login = Some(saved.trusted_login);
+                    wait.owner_id = Some(saved.owner_id);
+                    wait.operation = Some(OperationIntent {
+                        intent_id: format!("reuse:{task_id}:{run_id}"),
+                        action: "credential_use".into(),
+                        args_digest: None,
+                    });
+                    wait.resume_key = format!("reuse:{task_id}:{run_id}");
+                }
+                let reused = wait.reason == BrowserWaitReason::WaitingForApproval;
                 match sink.browser_wait_open(&wait) {
                     Ok(()) => (
-                        question(CREDENTIAL_REQUEST_QUESTION.into()),
-                        Some(BrowserRunState::WaitingForAuth),
+                        question(
+                            if reused {
+                                "Browser credential use approval requested"
+                            } else {
+                                CREDENTIAL_REQUEST_QUESTION
+                            }
+                            .into(),
+                        ),
+                        Some(if reused {
+                            BrowserRunState::WaitingForApproval
+                        } else {
+                            BrowserRunState::WaitingForAuth
+                        }),
                     ),
                     Err(e) => (wait_unopenable(&e), None),
                 }
@@ -935,6 +963,70 @@ pub(super) fn shim_request_wait(
         };
     }
     (outcome, None)
+}
+
+/// Open a fresh manual-registration wait after an unusable saved approval or failed login.
+pub(super) fn credential_reentry(
+    task_id: task_core::TaskId,
+    run_id: &str,
+    previous: &task_core::browser_wait::BrowserWait,
+    policy: &crate::browser_policy::PreparedBrowserPolicy,
+    sink: &dyn EventSink,
+) -> Result<RunOutcome, AdapterError> {
+    let intent = CredentialRequest {
+        policy_id: previous
+            .credential_policy_id
+            .clone()
+            .ok_or_else(|| policy_changed("policy_id_missing"))?,
+        origin: previous.origin.clone(),
+        purpose: previous.purpose.clone(),
+    };
+    let mut wait = credential_wait(
+        task_id,
+        run_id,
+        &session_id(task_id, run_id),
+        policy,
+        &intent,
+    );
+    wait.owner_id = previous.owner_id.clone();
+    wait.resume_key = format!("reentry:{}:{run_id}", previous.wait_id);
+    sink.browser_wait_open(&wait)
+        .map_err(|_| AdapterError::Other("browser credential wait could not be opened".into()))?;
+    sink.browser_updated(&BrowserRun {
+        task_id,
+        run_id: run_id.into(),
+        session_id: wait.session_id,
+        state: BrowserRunState::WaitingForAuth,
+        live_view_url: None,
+        policy: Some(policy.binding.clone()),
+    });
+    Ok(RunOutcome {
+        terminal: Terminal::Question {
+            text: CREDENTIAL_REQUEST_QUESTION.into(),
+        },
+        exit_code: None,
+    })
+}
+
+/// Failed Authenticate or held post-login: retire the exact credential before asking for input.
+pub(super) fn credential_failure_reentry(
+    task_id: task_core::TaskId,
+    run_id: &str,
+    previous: &task_core::browser_wait::BrowserWait,
+    policy: &crate::browser_policy::PreparedBrowserPolicy,
+    sink: &dyn EventSink,
+    sup: &crate::browser_credential::CredentialSupervisor,
+    stopped: bool,
+) -> Result<RunOutcome, AdapterError> {
+    let reference = previous
+        .credential
+        .as_ref()
+        .ok_or_else(|| policy_changed("credential_reference_missing"))?;
+    crate::browser_credential::invalidate(sup, reference)?;
+    if !stopped {
+        return Err(AdapterError::Other("browser session cleanup failed".into()));
+    }
+    credential_reentry(task_id, run_id, previous, policy, sink)
 }
 
 /// 承認済みの credential_use wait が今の task policy にまだ合うかの照合（daemon 経路と launcher 経路で
@@ -968,7 +1060,8 @@ pub(super) fn check_approved_credential(
 /// operation `credential_use`、resume key `approval:<wait_id>`）を開いて `Terminal::Question` を返す
 /// （ADR-0110 D2 / ADR-0116）。daemon 経路と launcher 経路が runtime を起動する**前に**同じ呼び出しを
 /// する。policy に合わない登録・credential 参照の欠落・trusted login を引けない場合・wait を開けない
-/// 場合は wait を開かず `Err`（fail closed）。最後の wait が `Registered` でなければ `Ok(None)`。
+/// 場合は `Err`（fail closed）。describe 失敗・現行 site policy 不一致は再入力 wait に戻す。
+/// 最後の wait が `Registered` でなければ `Ok(None)`。
 pub(super) fn registered_credential_approval(
     task_id: task_core::TaskId,
     run_id: &str,
@@ -1008,27 +1101,17 @@ pub(super) fn registered_credential_approval(
     let trusted_login =
         match crate::browser_credential::describe_policy(sup, &credential, &registered.origin) {
             Ok(trusted) => trusted,
-            // 付記 2026-10-10g: the registered credential can never yield a trusted login (e.g. it
-            // was registered under an origin that is not its site policy's login origin, so the
-            // vault has no login URL). Retrying cannot help, so the run goes on without it and
-            // the agent can request the credential again (a new wait), instead of every run
-            // ending as `policy_changed` with the task stuck on this registration.
-            Err(sub_reason)
-                if crate::browser_credential::describe_failure_is_permanent(sub_reason) =>
-            {
-                tracing::warn!(
-                    sub_reason,
-                    wait_id = %registered.wait_id,
-                    "registered browser credential unusable; run continues without it"
-                );
-                sink.progress(&format!(
-                    "browser.credential: registered credential unusable ({sub_reason}); \
-                     request the credential again"
-                ));
-                return Ok(None);
+            Err(_) => {
+                return credential_reentry(task_id, run_id, registered, policy, sink).map(Some);
             }
-            Err(sub_reason) => return Err(policy_changed(sub_reason)),
         };
+    {
+        let mut check = registered.clone();
+        check.trusted_login = Some(trusted_login.clone());
+        if !sink.browser_saved_credential_valid(&check) {
+            return credential_reentry(task_id, run_id, registered, policy, sink).map(Some);
+        }
+    }
     if trusted_login.policy_id != credential.policy_id {
         return Err(policy_changed("policy_id_mismatch"));
     }
@@ -1185,6 +1268,17 @@ pub(crate) fn resumed_policy_bytes(
 /// are browser audit sources. Do not let page-driven comments/delegation publish data.
 struct BrowserSink<'a>(&'a dyn EventSink);
 impl EventSink for BrowserSink<'_> {
+    fn browser_saved_credential(
+        &self,
+        policy_id: &str,
+        origin: &str,
+    ) -> Option<crate::browser_credential::SavedCredential> {
+        self.0.browser_saved_credential(policy_id, origin)
+    }
+    fn browser_saved_credential_valid(&self, wait: &task_core::browser_wait::BrowserWait) -> bool {
+        self.0.browser_saved_credential_valid(wait)
+    }
+
     fn context_compacted(&self) {
         self.0.context_compacted();
     }
@@ -1857,6 +1951,9 @@ async fn run_with_executable_attempt(
     };
     let credential_approved = approved.clone().filter(|_| approved_operation.is_none());
     if let Some(wait) = &credential_approved {
+        if !sink.browser_saved_credential_valid(wait) {
+            return credential_reentry(req.task.id, run_id, wait, &policy, sink);
+        }
         check_approved_credential(wait, &policy, credentials)?;
     }
     if let Some(outcome) =
@@ -2215,6 +2312,9 @@ async fn run_with_executable_attempt(
                     resumed = Some((read.clone(), bytes.clone()));
                 }
                 post_login_progress(sink, &outcome);
+                if let Err(held) = outcome {
+                    result = Err(held.reason.code());
+                }
             }
             // 0.38.1 reuses the daemon only while config and policy paths stay
             // fixed. Rewrite the policy in place before the harness can run.
@@ -2259,29 +2359,25 @@ async fn run_with_executable_attempt(
         }
         _ => None,
     };
-    if let Some((close, Err(code))) = &credential_segment {
+    if let Some((close, Err(_))) = &credential_segment {
         let closed = close_with(close).await;
         if closed && injected_session_guard.is_some() {
             // Injection failed, but the session has ended; only now may the
             // externally visible auth interval be released.
             let _ = sink.browser_auth_section(run_id, &browser.session_id, false);
         }
-        browser.state = BrowserRunState::Failed;
-        sink.browser_updated(&browser);
-        return Ok(RunOutcome {
-            terminal: Terminal::Error {
-                message: format!(
-                    "browser credential use failed ({code}){}",
-                    if closed {
-                        ""
-                    } else {
-                        "; session cleanup failed"
-                    }
-                ),
-                retryable: false,
-            },
-            exit_code: None,
-        });
+        if let (Some(sup), Some(approval)) = (credentials, approval.as_ref()) {
+            return credential_failure_reentry(
+                req.task.id,
+                run_id,
+                &approval.wait,
+                &policy,
+                sink,
+                sup,
+                closed,
+            );
+        }
+        return Err(AdapterError::Other("browser credential use failed".into()));
     }
     req.context.browser = Some(BrowserContext {
         run: browser.clone(),

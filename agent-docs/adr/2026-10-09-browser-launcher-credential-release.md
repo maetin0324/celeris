@@ -144,3 +144,7 @@ final review は「条件を満たさない session も launcher に接続・ses
 詳細な決定と受け入れ条件は [credential username / post-login ADR の付記 2026-10-10j](2026-10-09-browser-credential-username-and-post-login-read.md) に従う。launcher 経路でも、credentiald が同一 owner・同一 site policy と完全一致する現行 `TrustedLogin` を確認した場合に限り、登録待ちを開かず `credential_use` の承認待ちを作る。承認は毎 run 必須で、承認後はこの ADR の Authenticate 経路を用いる。期限切れ・policy 不一致・describe/login failure は再入力へ戻す。launcher protocol の Authenticate、H3、launcher session proof、秘密非露出条件は変えない。
 
 運用: launcher protocol が変わるので、本番に入れるには launcher（`/usr/local/libexec/celeris/celeris-browser-launcher`）を新しい build で差し替えて service を再起動する（root）。daemon（credentiald を含む同じ release）も新しい release が要る。egress / sandboxd は変えない。版ずれの組み合わせはどちらも credential 操作の前で拒否される。host 実証（実 launcher で `auth_begin` → `authenticate` → credentiald の Attested admission → lease 消費）は運用セッションが root で行う。
+
+## 付記 2026-10-10: 保存済み credential の使用
+
+credential request は daemon が owner と DB の現在の site policy で vault を検索する。一致する登録があれば入力待ちを経ず、TrustedLogin を固定した credential_use の承認待ちを作る。毎回の承認後の Authenticate と秘密非露出の境界は維持する。認証失敗・post-login 保留は登録を削除し、session を閉じて再入力へ戻す。承認後の policy 変更・describe 失敗も再入力へ戻す。詳細は username-and-post-login-read ADR の付記 2026-10-10j。

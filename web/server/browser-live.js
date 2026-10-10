@@ -580,6 +580,34 @@ export function createBrowserLive({
     return server;
   }
   function register(app) {
+    app.use("/browser/credentials", express.json({ limit: "2kb" }), async (req, res) => {
+      res.setHeader("Cache-Control", "no-store");
+      try {
+        const who = ownerKey(req);
+        if (!who.session) return problem(res, who.status, who.code);
+        const id = /^\/([A-Za-z0-9._-]{1,128})$/.exec(req.path)?.[1];
+        const listing = req.method === "GET" && req.path === "/";
+        if (!listing && !(req.method === "DELETE" && id)) return problem(res, 405, "method_not_allowed");
+        if (!listing && !mutation(req, who.session, req.body?.csrf)) return problem(res, 403, "csrf_failed");
+        const signed = deviceAssertion(
+          listing ? "credential_list" : "credential_delete",
+          who.session,
+          listing ? {} : { credential_id: id },
+        );
+        if (!signed) return problem(res, 503, "attestation_unavailable");
+        const reply = await api(
+          req.method,
+          `/api/v1/browser/credentials${listing ? "" : `/${id}`}`,
+          undefined,
+          assertionHeaders(signed),
+        );
+        if (reply.error) return problem(res, reply.status, reply.code);
+        return res.json(reply);
+      } catch {
+        return problem(res, 503, "credential_unavailable");
+      }
+    });
+
     // D3: site policy / grant edits require the same owner and CSRF proof as approvals.
     for (const [route, upstream, methods] of [
       ["/browser/site-policies", "/api/v1/browser/site-policies", ["PUT", "DELETE"]],

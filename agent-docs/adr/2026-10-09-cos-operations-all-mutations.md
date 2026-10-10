@@ -65,6 +65,7 @@ Live View の grant/check/read は owner attestation を入力するため除外
 | POST | `/projects/{id}/project-plan/{version}/decide` | `removed_by_adr_0079` | ADR-0079 D13/R5a で撤去済み。人にも変更できない 410 の互換入口を復活させない。 |
 | POST | `/browser/identities` | `browser_credential_attestation` | 人の決定 secrets=exclude。credential・封緘 state・receipt・owner attestation／信頼端末を扱う系列。値を含まない失効・削除も除外。 |
 | DELETE | `/browser/identities/{id}` | `browser_credential_attestation` | 人の決定 secrets=exclude。credential・封緘 state・receipt・owner attestation／信頼端末を扱う系列。値を含まない失効・削除も除外。 |
+| DELETE | `/browser/credentials/{id}` | `browser_credential_attestation` | 人の決定 secrets=exclude。credential・封緘 state・receipt・owner attestation／信頼端末を扱う系列。値を含まない失効・削除も除外。 |
 | POST | `/browser/identities/{id}/restore` | `browser_credential_attestation` | 人の決定 secrets=exclude。credential・封緘 state・receipt・owner attestation／信頼端末を扱う系列。値を含まない失効・削除も除外。 |
 | POST | `/browser/identities/{id}/revoke` | `browser_credential_attestation` | 人の決定 secrets=exclude。credential・封緘 state・receipt・owner attestation／信頼端末を扱う系列。値を含まない失効・削除も除外。 |
 | POST | `/browser/trusted-devices` | `browser_credential_attestation` | 人の決定 secrets=exclude。credential・封緘 state・receipt・owner attestation／信頼端末を扱う系列。値を含まない失効・削除も除外。 |
@@ -247,6 +248,7 @@ R の操作では領域 write は不要だが operation・event・card は同一
 |---|---|---|---|---|
 | POST | `/browser/identities` | X: `browser_credential_attestation` | `browser_identity.rs` | 共通 |
 | DELETE | `/browser/identities/{id}` | X: `browser_credential_attestation` | `browser_identity.rs` | 共通 |
+| DELETE | `/browser/credentials/{id}` | X: `browser_credential_attestation` | `browser_credentials.rs` | 共通 |
 | POST | `/browser/identities/{id}/restore` | X: `browser_credential_attestation` | `browser_identity.rs` | 共通 |
 | POST | `/browser/identities/{id}/revoke` | X: `browser_credential_attestation` | `browser_identity.rs` | 共通 |
 | DELETE | `/browser/site-policies/{policy_id}` | A | `browser_site_policies.rs` | router のみ |

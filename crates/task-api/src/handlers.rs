@@ -191,6 +191,7 @@ pub(crate) fn router(state: ApiState) -> Router {
         .merge(crate::browser_trusted_devices::routes())
         // ADR 2026-10-08-browser-prod-enablement D3: site policy の DB 正本の一覧・作成・置換・削除。
         .merge(crate::browser_site_policies::routes())
+        .merge(crate::browser_credentials::routes())
         .merge(crate::browser_control::routes())
         // ADR-0048 D1（Phase 60a）: Console の読み取り側。実装は `crate::console`。
         .merge(crate::console::routes())

@@ -25671,6 +25671,47 @@
       ],
       "type": "object"
     },
+    "SavedCredentialItem": {
+      "properties": {
+        "created_at": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "credential_id": {
+          "type": "string"
+        },
+        "expires_at": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "policy_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "credential_id",
+        "policy_id",
+        "created_at",
+        "expires_at"
+      ],
+      "type": "object"
+    },
+    "SavedCredentialList": {
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/SavedCredentialItem"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "type": "object"
+    },
     "ScoreTrace": {
       "description": "score の内訳（ADR §4: score = wq·Q − wc·C − wl·L − wp·P）。C/L/P の未知は 1 で `unknown` に残す。",
       "properties": {
@@ -31530,6 +31571,9 @@
     "run_list": {
       "$ref": "#/$defs/RunList"
     },
+    "saved_credential_list": {
+      "$ref": "#/$defs/SavedCredentialList"
+    },
     "secret_put": {
       "$ref": "#/$defs/SecretPutResult"
     },
@@ -31831,6 +31875,7 @@
     "trusted_device_claims",
     "site_policy_put",
     "site_policy_put_result",
+    "saved_credential_list",
     "site_policy_list",
     "decision_list",
     "decision_answer",

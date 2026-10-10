@@ -746,9 +746,12 @@ fn trusted_login_is_pinned_only_on_valid_credential_use_approvals() {
         ..trusted()
     }));
     assert!(invalid(TrustedLogin {
-        revision: 4,
+        revision: 0,
         ..trusted()
     }));
+    // The task policy and site policy have independent revisions; both remain pinned.
+    req.trusted_login.as_mut().unwrap().revision = 4;
+    assert!(req.validate().is_ok());
     // 登録依頼には固定しない。
     let mut auth = auth_request("rk-u");
     auth.trusted_login = Some(trusted());
@@ -798,7 +801,7 @@ fn approved_credential_use(
                 origin: LOGIN_ORIGIN.into(),
                 receipt_id: "rcpt-1".into(),
             },
-            "human-1",
+            "owner",
             now,
         )
         .expect("register");
@@ -1144,4 +1147,67 @@ fn credential_wait_is_bound_to_the_site_policy_login_origin() {
         .browser_wait_open(id, &operation_request("rk-op"), now)
         .expect("operation wait");
     assert_eq!(approval.wait.origin, operation_request("rk-op").origin);
+}
+
+#[test]
+fn saved_credential_cross_task_use_requires_its_own_owner_approval_each_run() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let now = OffsetDateTime::now_utc();
+    let first = running(&store);
+    let registration = store
+        .browser_wait_open(first, &auth_request("save"), now)
+        .unwrap()
+        .wait;
+    store
+        .browser_wait_register(
+            first,
+            &registration.wait_id,
+            registration.version,
+            &record(),
+            "owner",
+            now,
+        )
+        .unwrap();
+    for run in ["next-run", "another-run"] {
+        let id = if run == "next-run" {
+            assert!(
+                store
+                    .acquire_lease(first, run, std::time::Duration::from_secs(60))
+                    .unwrap()
+            );
+            first
+        } else {
+            running(&store)
+        };
+        let mut request = approval_request(run);
+        request.run_id = run.into();
+        let wait = store.browser_wait_open(id, &request, now).unwrap().wait;
+        assert_eq!(wait.reason, BrowserWaitReason::WaitingForApproval);
+        assert!(consume_credential_approval(&store, id, &wait, now).is_err());
+        let mut wrong = decision(BrowserDecision::ApproveOnce, wait.version, run);
+        wrong.actor_id = "another-owner".into();
+        assert!(
+            store
+                .browser_wait_decide(id, &wait.wait_id, &wrong, now)
+                .is_err()
+        );
+        let approved = store
+            .browser_wait_decide(
+                id,
+                &wait.wait_id,
+                &decision(BrowserDecision::ApproveOnce, wait.version, run),
+                now,
+            )
+            .unwrap()
+            .wait;
+        let consumed = consume_credential_approval(&store, id, &approved, now).unwrap();
+        assert_eq!(consumed.credential, record());
+        assert_eq!(consumed.approved_by, "owner");
+        assert!(consume_credential_approval(&store, id, &approved, now).is_err());
+        assert_eq!(
+            store.browser_waits_for_task(id).unwrap().len(),
+            if id == first { 2 } else { 1 },
+            "only the initial task/run contains a registration wait"
+        );
+    }
 }

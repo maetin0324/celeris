@@ -5102,6 +5102,17 @@ export type RunSummary = {
   "work_unit"?: string | null;
 };
 
+export type SavedCredentialItem = {
+  "created_at": number;
+  "credential_id": string;
+  "expires_at": number;
+  "policy_id": string;
+};
+
+export type SavedCredentialList = {
+  "items": Array<SavedCredentialItem>;
+};
+
 export type ScoreTrace = {
   "c": number;
   "l": number;

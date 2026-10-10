@@ -1238,6 +1238,9 @@ pub(super) async fn run_registered(
     // The approval must still match the task policy (same check as the daemon path); a stale
     // approval is refused before connecting and is not consumed.
     if let Some(wait) = approved_credential.as_ref() {
+        if !sink.browser_saved_credential_valid(wait) {
+            return super::credential_reentry(req.task.id, run_id, wait, policy, sink);
+        }
         super::check_approved_credential(wait, policy, credentials)?;
     }
     let approved_action = approved.as_ref().map(|(_, a)| *a);
@@ -1470,7 +1473,7 @@ pub(super) async fn run_registered(
                 ..Default::default()
             },
         );
-        if let Err(code) = result {
+        if result.is_err() {
             let stop_runtime = runtime;
             let stopped = tokio::task::spawn_blocking(move || stop_runtime.stop())
                 .await
@@ -1481,22 +1484,15 @@ pub(super) async fn run_registered(
                 let _ = sink.browser_auth_section(run_id, &browser.session_id, false);
             }
             drop(auth_guard);
-            browser.state = BrowserRunState::Failed;
-            sink.browser_updated(&browser);
-            return Ok(RunOutcome {
-                terminal: crate::Terminal::Error {
-                    message: format!(
-                        "browser credential use failed ({code}){}",
-                        if stopped {
-                            ""
-                        } else {
-                            "; session cleanup failed"
-                        }
-                    ),
-                    retryable: false,
-                },
-                exit_code: None,
-            });
+            return super::credential_failure_reentry(
+                req.task.id,
+                run_id,
+                wait,
+                policy,
+                sink,
+                sup,
+                stopped,
+            );
         }
         credential_used = true;
         // ADR 2026-10-09 credential username / post-login D2-2: the launcher closed the auth section
@@ -1539,6 +1535,26 @@ pub(super) async fn run_registered(
                 drop(auth_guard.take());
             }
             super::post_login_progress(sink, &outcome);
+            if outcome.is_err() {
+                let stop_runtime = runtime;
+                let stopped = tokio::task::spawn_blocking(move || stop_runtime.stop())
+                    .await
+                    .is_ok_and(|r| r.is_ok());
+                unregister_live_session(credentiald_dir, &live_session, stopped);
+                if stopped {
+                    let _ = sink.browser_auth_section(run_id, &browser.session_id, false);
+                }
+                drop(auth_guard);
+                return super::credential_failure_reentry(
+                    req.task.id,
+                    run_id,
+                    wait,
+                    policy,
+                    sink,
+                    sup,
+                    stopped,
+                );
+            }
         }
     }
     // 付記 2026-10-10e: screenshot / download need protocol v8 (artifact transfer). An older

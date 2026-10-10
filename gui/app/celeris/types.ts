@@ -45,6 +45,10 @@ export type BrowserWaitReason = "waiting_for_auth" | "waiting_for_approval";
 export type BrowserWaitState =
   ("pending" | "denied" | "expired" | "cancelled" | "revoked" | "invalidated") | "registered" | "approved" | "resumed";
 /**
+ * ADR 2026-10-09 credential username / post-login D2-6: ログイン後に戻せる agent の action。
+ */
+export type PostLoginAction = "snapshot" | "extract" | "screenshot" | "download" | "click";
+/**
  * Task-level browser operation vocabulary (ADR-0080 D1). Unknown names are schema errors:
  * no aliases, categories or pass-through of upstream names.
  */
@@ -2157,6 +2161,7 @@ export interface ApiV1Schema {
   retry_result: RetryResult;
   routing_catalog: RoutingCatalogView;
   run_list: RunList;
+  saved_credential_list: SavedCredentialList;
   secret_put: SecretPutResult;
   secrets: SecretList;
   site_policy_list: SitePolicyList;
@@ -2657,11 +2662,41 @@ export interface OperationIntent {
  * 承認要求の時点で固定した値。モデル・worker の要求からは入らない（trusted supervisor が broker に問うた値だけ）。
  */
 export interface TrustedLogin {
+  /**
+   * 同 付記 2026-10-10b: IdP の属性送信の同意頁で controller が 1 回だけ押す固定ボタン。
+   */
+  consent?: ConsentPolicy | null;
   login_url: string;
   password_selector: string;
   policy_id: string;
+  /**
+   * 同 D2: ログイン後の読み取りの opt-in。無ければ ADR-0080 H3 のまま（session の終わりまで観測停止）。
+   */
+  post_login?: PostLogin | null;
   revision: number;
   submit_selector?: string | null;
+  /**
+   * ADR 2026-10-09 credential username / post-login D1: 管理者が設定する username 欄の selector
+   * （password 欄と同じ頁・同じ文法）。あれば 1 回の注入で username と password の 2 欄を入れる。
+   */
+  username_selector?: string | null;
+}
+/**
+ * ADR 2026-10-09 credential username / post-login 付記 2026-10-10b: 同意頁で controller が押す固定の
+ * ボタン（`selector`）と任意の選択肢（`choice_selector`、radio）。押す回数は 1 login につき 1 回に固定。
+ */
+export interface ConsentPolicy {
+  choice_selector?: string | null;
+  selector: string;
+}
+/**
+ * ADR 2026-10-09 credential username / post-login D2-1: site policy の opt-in。管理者だけが書く。
+ * `read_origins` は exact HTTPS origin（credential の origin = IdP は入れられない）、`actions` は
+ * 戻してよい action（task の allowed actions・grant と積を取る）。
+ */
+export interface PostLogin {
+  actions: PostLoginAction[];
+  read_origins: string[];
 }
 /**
  * `POST .../registered` の本文。
@@ -10711,6 +10746,15 @@ export interface Weights {
 export interface RunList {
   runs: RunSummary[];
 }
+export interface SavedCredentialList {
+  items: SavedCredentialItem[];
+}
+export interface SavedCredentialItem {
+  created_at: number;
+  credential_id: string;
+  expires_at: number;
+  policy_id: string;
+}
 /**
  * `PUT /secrets/{id}` の応答。値は含まない。
  */
@@ -10778,6 +10822,10 @@ export interface SitePolicyList {
  */
 export interface BrowserSitePolicyRecord {
   /**
+   * 同 付記 2026-10-10b: IdP の同意頁で controller が押す固定ボタン（任意）。
+   */
+  consent?: ConsentPolicy | null;
+  /**
    * RFC3339。
    */
   created_at: string;
@@ -10785,17 +10833,29 @@ export interface BrowserSitePolicyRecord {
   login_url: string;
   password_selector: string;
   policy_id: string;
+  /**
+   * 同 D2: ログイン後の読み取りの opt-in（任意。無ければ観測停止のまま）。
+   */
+  post_login?: PostLogin | null;
   source: BrowserSitePolicySource;
   submit_selector?: string | null;
   /**
    * RFC3339。
    */
   updated_at: string;
+  /**
+   * ADR 2026-10-09 credential username / post-login D1: username 欄の selector（任意）。
+   */
+  username_selector?: string | null;
 }
 /**
  * ADR 2026-10-08-browser-prod-enablement D3: `/browser/site-policies` の本文・応答。
  */
 export interface SitePolicyPutBody {
+  /**
+   * 同 付記 2026-10-10b: IdP の属性送信の同意頁で controller が 1 回だけ押す固定ボタン（任意）。
+   */
+  consent?: ConsentPolicy | null;
   /**
    * 正規形の origin（`https://host[:port]`）。
    */
@@ -10805,7 +10865,15 @@ export interface SitePolicyPutBody {
    */
   login_url: string;
   password_selector: string;
+  /**
+   * 同 D2-1: ログイン後に読み取ってよい origin と action（任意。無ければ観測停止のまま）。
+   */
+  post_login?: PostLogin | null;
   submit_selector?: string | null;
+  /**
+   * ADR 2026-10-09 credential username / post-login D1-1: password 欄と同じ頁の username 欄（任意）。
+   */
+  username_selector?: string | null;
 }
 /**
  * `PUT` の応答（新規作成は 201、置換は 200）。

@@ -4044,64 +4044,46 @@ fn fake_credentiald_reply(runtime: &Path, reply: serde_json::Value) -> std::thre
     })
 }
 
-/// 付記 2026-10-10g: `policy_changed` carries a fixed sub-reason, and a registered credential that
-/// credentiald says can never yield a trusted login (production 2026-10-10: registered under the LMS
-/// origin, so the vault had no login URL) no longer ends every run: the run goes on without it so
-/// the agent can request the credential again. A transient failure still fails the run.
+/// Every describe refusal (including temporary unavailability) returns to manual registration.
 #[test]
-fn registered_credential_describe_failures_carry_sub_reasons_and_unusable_one_is_skipped() {
+fn registered_credential_describe_failures_reopen_manual_registration() {
     let policy = credential_policy();
     let wait = registered_wait(&policy);
-    let task_id = wait.task_id;
-    // credentiald refuses: the registration is unusable; no approval wait, the run continues.
-    let dir = tempfile::tempdir().expect("tempdir");
-    let answered = fake_credentiald_reply(
-        dir.path(),
-        serde_json::json!({"success": false, "code": "denied"}),
-    );
+    for code in ["denied", "vault_locked", "not_found", "invalid_request"] {
+        let dir = tempfile::tempdir().unwrap();
+        let answered =
+            fake_credentiald_reply(dir.path(), serde_json::json!({"success":false,"code":code}));
+        let sink = RegisteredSink::new(vec![wait.clone()]);
+        let out = crate::browser::registered_credential_approval(
+            wait.task_id,
+            "run-next",
+            std::slice::from_ref(&wait),
+            &policy,
+            Some(&supervisor(dir.path())),
+            &sink,
+        )
+        .unwrap()
+        .unwrap();
+        assert!(matches!(out.terminal, crate::Terminal::Question { .. }));
+        assert_eq!(sink.opened()[0].reason, BrowserWaitReason::WaitingForAuth);
+        assert!(sink.opened()[0].credential.is_none());
+        answered.join().unwrap();
+    }
+    let dir = tempfile::tempdir().unwrap();
     let sink = RegisteredSink::new(vec![wait.clone()]);
-    let out = crate::browser::registered_credential_approval(
-        task_id,
-        "run-next",
-        std::slice::from_ref(&wait),
-        &policy,
-        Some(&supervisor(dir.path())),
-        &sink,
-    )
-    .expect("an unusable registration does not fail the run");
-    assert!(out.is_none());
-    assert!(sink.opened().is_empty(), "no approval wait for it");
-    answered.join().expect("answered");
-    // credentiald unreachable: transient, the run fails with the sub-reason.
-    let empty = tempfile::tempdir().expect("tempdir");
-    let sink = RegisteredSink::new(vec![wait.clone()]);
-    let err = crate::browser::registered_credential_approval(
-        task_id,
-        "run-next",
-        std::slice::from_ref(&wait),
-        &policy,
-        Some(&supervisor(empty.path())),
-        &sink,
-    )
-    .expect_err("unreachable");
-    assert_eq!(denied_text(err), "policy_changed (credentiald_unreachable)");
-    // vault locked: transient as well.
-    let dir = tempfile::tempdir().expect("tempdir");
-    let answered = fake_credentiald_reply(
-        dir.path(),
-        serde_json::json!({"success": false, "code": "vault_locked"}),
+    assert!(
+        crate::browser::registered_credential_approval(
+            wait.task_id,
+            "run-next",
+            std::slice::from_ref(&wait),
+            &policy,
+            Some(&supervisor(dir.path())),
+            &sink
+        )
+        .unwrap()
+        .is_some()
     );
-    let err = crate::browser::registered_credential_approval(
-        task_id,
-        "run-next",
-        std::slice::from_ref(&wait),
-        &policy,
-        Some(&supervisor(dir.path())),
-        &RegisteredSink::new(vec![wait.clone()]),
-    )
-    .expect_err("locked");
-    assert_eq!(denied_text(err), "policy_changed (describe_vault_locked)");
-    answered.join().expect("answered");
+    assert_eq!(sink.opened()[0].reason, BrowserWaitReason::WaitingForAuth);
 }
 
 #[test]
@@ -4202,4 +4184,222 @@ fn launcher_shim_download_failure_carries_the_fixed_tokens_only() {
     }
     drop(server);
     assert_eq!(std::fs::read_dir(&output).expect("dir").count(), 0);
+}
+
+/// Full metadata path: encrypted vault -> admitted control IPC -> shim request -> approval wait.
+/// A subsequent task/run needs a distinct approval; changed policies, other owners, and deletion
+/// take the identical request back to manual registration without disclosing either secret.
+#[test]
+fn saved_credential_reuse_waits_every_run_and_falls_back_without_secrets() {
+    use celeris_credentiald::{Broker, ManualProvider, SecretEnvelope, ipc};
+    use std::os::unix::fs::PermissionsExt;
+    struct SavedSink<'a> {
+        recorded: RecordingWaitSink,
+        sup: &'a crate::browser_credential::CredentialSupervisor,
+        owner: &'a str,
+        login: TrustedLogin,
+    }
+    impl EventSink for SavedSink<'_> {
+        fn browser_saved_credential(
+            &self,
+            policy: &str,
+            origin: &str,
+        ) -> Option<crate::browser_credential::SavedCredential> {
+            if policy != self.login.policy_id {
+                return None;
+            }
+            crate::browser_credential::find_saved_with(
+                self.sup,
+                self.owner,
+                self.login.clone(),
+                origin,
+            )
+        }
+        fn browser_wait_open(&self, wait: &NewBrowserWait) -> Result<(), String> {
+            self.recorded.browser_wait_open(wait)
+        }
+        fn progress(&self, _: &str) {}
+        fn artifact(&self, _: &task_core::ArtifactRef) {}
+    }
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(
+        dir.path(),
+        <std::fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o700),
+    )
+    .unwrap();
+    let manual = ManualProvider::open(dir.path().join("keys"), dir.path().join("vault")).unwrap();
+    manual.initialize_key().unwrap();
+    let login = trusted_login();
+    let reference = celeris_credentiald::CredentialRef {
+        credential_id: "saved-login".into(),
+        provider: "manual".into(),
+        policy_id: login.policy_id.clone(),
+    };
+    let vault_policy = celeris_credentiald::CredentialPolicy {
+        policy_id: login.policy_id.clone(),
+        revision: 1,
+        exact_origin: "https://example.com".into(),
+        task_id: "old-task".into(),
+        max_ttl_seconds: 60,
+        require_approval: true,
+        allow_persistence: false,
+        login_url: Some(login.login_url.clone()),
+        password_selector: Some(login.password_selector.clone()),
+        submit_selector: login.submit_selector.clone(),
+        username_selector: None,
+        post_login: None,
+        consent: None,
+    };
+    manual
+        .register_owned(
+            &reference,
+            &vault_policy,
+            1,
+            &SecretEnvelope {
+                username: "SECRET-USER".into(),
+                password: "SECRET-PASSWORD".into(),
+            },
+            Some("owner"),
+        )
+        .unwrap();
+    let broker = Arc::new(Broker::new(manual.clone(), dir.path().join("audit")).unwrap());
+    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let path = dir.path().to_path_buf();
+    let worker = std::thread::spawn(move || {
+        let _ = ipc::serve(broker, &path, vec![std::process::id()]);
+    });
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while !dir.path().join("celeris-credentiald/control.sock").exists() {
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let sup = supervisor(dir.path());
+    let runtime = dir.path().join("browser");
+    write_request(
+        &runtime,
+        "credential-request.json",
+        &credential_request_json("pol-example", "https://example.com", "Read course"),
+    );
+    let policy = credential_policy();
+    let mut keys = Vec::new();
+    let original_task = task_core::TaskId::new();
+    for (index, (owner, changed, expected)) in [
+        ("owner", false, BrowserWaitReason::WaitingForApproval),
+        ("owner", false, BrowserWaitReason::WaitingForApproval),
+        ("other", false, BrowserWaitReason::WaitingForAuth),
+        ("owner", true, BrowserWaitReason::WaitingForAuth),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut current = login.clone();
+        if changed {
+            current.password_selector = "#changed".into();
+        }
+        let sink = SavedSink {
+            recorded: RecordingWaitSink::new(true),
+            sup: &sup,
+            owner,
+            login: current,
+        };
+        let (outcome, _) = super::super::shim_request_wait(
+            &runtime,
+            if index < 2 {
+                original_task
+            } else {
+                task_core::TaskId::new()
+            },
+            &format!("next-run-{index}"),
+            "session",
+            &policy,
+            &sink,
+            done_outcome(),
+        );
+        assert!(matches!(
+            outcome.unwrap().terminal,
+            crate::Terminal::Question { .. }
+        ));
+        let wait = sink.recorded.opened().remove(0);
+        wait.validate().unwrap();
+        assert_eq!(wait.reason, expected);
+        if expected == BrowserWaitReason::WaitingForApproval {
+            assert_eq!(wait.operation.unwrap().action, "credential_use");
+            assert_eq!(wait.trusted_login, Some(login.clone()));
+            assert_eq!(wait.owner_id.as_deref(), Some("owner"));
+            keys.push(wait.resume_key);
+        }
+        for secret in ["SECRET-USER", "SECRET-PASSWORD"] {
+            assert!(!sink.recorded.recorded().contains(secret));
+        }
+    }
+    assert_ne!(keys[0], keys[1], "each task/run asks again");
+    let sink = SavedSink {
+        recorded: RecordingWaitSink::new(true),
+        sup: &sup,
+        owner: "owner",
+        login: login.clone(),
+    };
+    let saved = sink
+        .browser_saved_credential("pol-example", "https://example.com")
+        .unwrap();
+    assert!(crate::browser_credential::saved_is_valid_with(
+        &sup,
+        "owner",
+        &saved.reference,
+        &login,
+        "https://example.com"
+    ));
+    assert!(!crate::browser_credential::saved_is_valid_with(
+        &sup,
+        "other",
+        &saved.reference,
+        &login,
+        "https://example.com"
+    ));
+    let mut changed = login.clone();
+    changed.login_url = "https://example.com/changed".into();
+    assert!(!crate::browser_credential::saved_is_valid_with(
+        &sup,
+        "owner",
+        &saved.reference,
+        &changed,
+        "https://example.com"
+    ));
+    let mut previous = registered_wait(&policy);
+    previous.credential = Some(saved.reference.clone());
+    let outcome = super::super::credential_failure_reentry(
+        previous.task_id,
+        "failed-login",
+        &previous,
+        &policy,
+        &sink,
+        &sup,
+        true,
+    )
+    .unwrap();
+    assert!(matches!(outcome.terminal, crate::Terminal::Question { .. }));
+    assert_eq!(
+        sink.recorded.opened()[0].reason,
+        BrowserWaitReason::WaitingForAuth
+    );
+    assert!(sink.recorded.opened()[0].credential.is_none());
+    assert!(!crate::browser_credential::saved_is_valid_with(
+        &sup,
+        "owner",
+        &saved.reference,
+        &login,
+        "https://example.com"
+    ));
+    let (_, state) = super::super::shim_request_wait(
+        &runtime,
+        task_core::TaskId::new(),
+        "after-failure",
+        "session",
+        &policy,
+        &sink,
+        done_outcome(),
+    );
+    assert_eq!(state, Some(BrowserRunState::WaitingForAuth));
+    assert!(manual.list_owned("owner").unwrap().is_empty());
+    drop(worker); // Test broker lives until process exit; tempdir removal removes its sockets.
 }

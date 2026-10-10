@@ -600,3 +600,11 @@ sandboxd は不要。
 5. credentiald は保存期限を設定可能とし、既定 90 日を上限に登録時刻から期限を計算する。期限切れは検索・使用から除外する。一覧は秘密を含めず、所有者本人が削除できる。
 
 検証では同 owner/policy の次 run が承認待ちだけを開くこと、承認が毎回必要なこと、policy 変更・describe/login failure・期限・削除・別 owner/policy で候補にならないこと、秘密が daemon/agent/event/log に出ないことを固定する。
+
+### 付記 2026-10-10j 実装の確定
+
+- owner は人の回答どおり、この instance の人 `owner`。daemon の StoreSink が固定する。worker request や agent の JSON からは受け取らない。他の actor の登録は自動再利用しない。複数 owner を導入するときは task と人の信頼できる対応を追加するまで、この制限を維持する。
+- 現在の site policy は StoreSink が DB から毎回読む。登録時と同じ revision 1 の TrustedLogin に直して完全一致を照合する。承認後も DB と vault を照合し直す。
+- 認証失敗・post-login の保留は登録を vault から削除して無効化し、認証 session の終了後に再入力 wait を開く。削除に失敗した場合は再利用へ進めずエラーとする。
+- 一覧・削除は owner session の署名を必要とする専用 API。保存期限は credentiald の `CELERIS_CREDENTIAL_MAX_AGE_DAYS`（1〜90 日、既定90日）で設定する。
+- task policy の revision と site policy（TrustedLogin）の revision は別の版。wait は両方を固定し、同じ番号であることは要求しない。使用直前に task policy binding と DB/vault の TrustedLogin をそれぞれ照合する。

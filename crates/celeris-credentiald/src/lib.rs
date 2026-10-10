@@ -374,6 +374,28 @@ pub struct ManualProvider {
     key_dir: PathBuf,
     vault_dir: PathBuf,
 }
+fn retention_days(value: Option<&str>) -> u64 {
+    value
+        .and_then(|v| v.parse().ok())
+        .filter(|days| (1..=90).contains(days))
+        .unwrap_or(90)
+}
+
+#[test]
+fn saved_credential_retention_is_configurable_with_a_ninety_day_ceiling() {
+    for (value, expected) in [
+        (None, 90),
+        (Some("1"), 1),
+        (Some("30"), 30),
+        (Some("90"), 90),
+        (Some("0"), 90),
+        (Some("91"), 90),
+        (Some("bad"), 90),
+    ] {
+        assert_eq!(retention_days(value), expected);
+    }
+}
+
 impl ManualProvider {
     pub fn open(key_dir: PathBuf, vault_dir: PathBuf) -> Result<Self, Error> {
         check_dir(key_dir.parent().ok_or(Error::Invalid)?)?;
@@ -450,11 +472,11 @@ impl ManualProvider {
             .join(format!("{}.json", reference.credential_id));
         let created_at = now()?;
         // Retention can be shortened by the operator; 90 days is a hard maximum.
-        let retention_days = std::env::var("CELERIS_CREDENTIAL_MAX_AGE_DAYS")
-            .ok()
-            .and_then(|value| value.parse::<u64>().ok())
-            .filter(|days| (1..=90).contains(days))
-            .unwrap_or(90);
+        let retention_days = retention_days(
+            std::env::var("CELERIS_CREDENTIAL_MAX_AGE_DAYS")
+                .ok()
+                .as_deref(),
+        );
         let mut s = Stored {
             format_version: 1,
             key_id: "master-v1".into(),
@@ -514,6 +536,31 @@ impl ManualProvider {
         output.zeroize();
         let bytes = serde_json::to_vec(&s).map_err(|_| Error::Io)?;
         write_atomic(&self.vault_dir, &path, &bytes)
+    }
+    /// Validate this exact reference again after approval (another matching registration may exist).
+    pub fn reusable_reference(
+        &self,
+        owner_id: &str,
+        reference: &CredentialRef,
+        origin: &str,
+        current: &task_core::browser_wait::TrustedLogin,
+    ) -> Result<bool, Error> {
+        if !valid_id(&reference.credential_id) {
+            return Err(Error::Invalid);
+        }
+        let bytes = read_private(
+            &self
+                .vault_dir
+                .join(format!("{}.json", reference.credential_id)),
+        )?;
+        let stored: Stored = serde_json::from_slice(&bytes).map_err(|_| Error::VaultLocked)?;
+        if stored.owner_id.as_deref() != Some(owner_id)
+            || !stored.reusable
+            || stored.expires_at <= now()?
+        {
+            return Ok(false);
+        }
+        Ok(self.describe_registered(reference, origin, None)? == *current)
     }
     /// Find an owner-bound credential only when the complete trusted login snapshot matches.
     pub fn find_reusable(
@@ -577,7 +624,7 @@ impl ManualProvider {
                 Ok(stored) => stored,
                 Err(_) => continue,
             };
-            if stored.owner_id.as_deref() == Some(owner_id) && stored.expires_at > now()? {
+            if stored.owner_id.as_deref() == Some(owner_id) {
                 result.push((
                     CredentialRef {
                         credential_id: stored.credential_id,
@@ -591,6 +638,45 @@ impl ManualProvider {
         }
         result.sort_by_key(|entry| entry.1);
         Ok(result)
+    }
+    /// An owned credential can only be leased after approval by that same human.
+    fn check_approval_owner(&self, reference: &CredentialRef, actor: &str) -> Result<(), Error> {
+        if !valid_id(&reference.credential_id) {
+            return Err(Error::Invalid);
+        }
+        let bytes = read_private(
+            &self
+                .vault_dir
+                .join(format!("{}.json", reference.credential_id)),
+        )?;
+        let stored: Stored = serde_json::from_slice(&bytes).map_err(|_| Error::VaultLocked)?;
+        if stored
+            .owner_id
+            .as_deref()
+            .is_some_and(|owner| owner != actor)
+        {
+            return Err(Error::Denied);
+        }
+        Ok(())
+    }
+    /// Owner-scoped removal, including expired entries. The control peer is trusted.
+    pub fn remove_owned(&self, reference: &CredentialRef, owner_id: &str) -> Result<(), Error> {
+        if !valid_id(&reference.credential_id) {
+            return Err(Error::Invalid);
+        }
+        let bytes = read_private(
+            &self
+                .vault_dir
+                .join(format!("{}.json", reference.credential_id)),
+        )?;
+        let stored: Stored = serde_json::from_slice(&bytes).map_err(|_| Error::VaultLocked)?;
+        if stored.owner_id.as_deref() != Some(owner_id)
+            || stored.policy_id != reference.policy_id
+            || stored.provider != reference.provider
+        {
+            return Err(Error::Denied);
+        }
+        self.remove(reference)
     }
     /// Return only the administrator's non-secret login metadata for approval pinning.
     pub fn describe_registered(
@@ -914,6 +1000,10 @@ impl Broker {
     }
     pub fn grant(&self, req: LeaseRequest) -> Result<LeaseGrant, Error> {
         req.policy.validate()?;
+        if req.reference.provider == "manual" {
+            self.manual
+                .check_approval_owner(&req.reference, &req.approved_by)?;
+        }
         // A caller cannot replace the administrator's registered site selector
         // in a freshly issued lease. Legacy leases without H3 metadata retain
         // their existing validation path.

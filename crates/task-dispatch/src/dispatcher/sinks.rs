@@ -34,6 +34,27 @@ pub(super) struct StoreSink {
 }
 
 impl StoreSink {
+    fn credential_site(
+        &self,
+        policy_id: &str,
+        origin: &str,
+    ) -> Option<(String, task_core::browser_wait::TrustedLogin)> {
+        let policy = self.store.browser_site_policy_get(policy_id).ok()??.policy;
+        let origin = policy.credential_wait_origin(origin)?.to_owned();
+        Some((
+            origin,
+            task_core::browser_wait::TrustedLogin {
+                policy_id: policy.policy_id,
+                revision: 1,
+                login_url: policy.login_url,
+                password_selector: policy.password_selector,
+                submit_selector: policy.submit_selector,
+                username_selector: policy.username_selector,
+                post_login: policy.post_login,
+                consent: policy.consent,
+            },
+        ))
+    }
     fn note(&self, msg: String) {
         let ev = Event::worker_progress(self.run_id.clone(), msg);
         if let Err(e) = self.store.append_event(self.task_id, &ev) {
@@ -172,6 +193,33 @@ impl StoreSink {
 }
 
 impl EventSink for StoreSink {
+    fn browser_saved_credential(
+        &self,
+        policy_id: &str,
+        origin: &str,
+    ) -> Option<task_worker::browser_credential::SavedCredential> {
+        // The single-instance human principal. Never use an agent-supplied actor or org assignee.
+        let (origin, login) = self.credential_site(policy_id, origin)?;
+        task_worker::browser_credential::find_saved("owner", login, &origin)
+    }
+    fn browser_saved_credential_valid(&self, wait: &task_core::browser_wait::BrowserWait) -> bool {
+        let (Some(policy_id), Some(reference), Some(pinned)) = (
+            &wait.credential_policy_id,
+            &wait.credential,
+            &wait.trusted_login,
+        ) else {
+            return false;
+        };
+        let Some((origin, current)) = self.credential_site(policy_id, &wait.origin) else {
+            return false;
+        };
+        wait.owner_id.as_deref() == Some("owner")
+            && origin == wait.origin
+            && current == *pinned
+            && task_worker::browser_credential::saved_is_valid(
+                "owner", reference, &current, &origin,
+            )
+    }
     fn browser_wait_open(
         &self,
         request: &task_core::browser_wait::NewBrowserWait,

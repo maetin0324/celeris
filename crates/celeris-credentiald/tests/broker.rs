@@ -749,3 +749,162 @@ fn owner_bound_saved_credential_is_reusable_only_for_matching_owner_and_trusted_
     assert_eq!(listed[0].0, f.reference);
     assert!(!format!("{listed:?}").contains(SENTINEL));
 }
+
+#[test]
+fn saved_credentials_policy_change_expiry_legacy_and_owner_scoped_deletion() {
+    let mut f = Fixture::new();
+    f.policy.login_url = Some("https://example.test/login".into());
+    f.policy.password_selector = Some("#password".into());
+    f.register();
+    let login = f
+        .manual
+        .describe_registered(&f.reference, "https://example.test", None)
+        .unwrap();
+    assert!(
+        f.manual
+            .find_reusable("owner", "site-1", "https://example.test", &login)
+            .unwrap()
+            .is_none(),
+        "legacy has no owner"
+    );
+    f.manual
+        .register_owned(
+            &f.reference,
+            &f.policy,
+            1,
+            &SecretEnvelope {
+                username: "user".into(),
+                password: SENTINEL.into(),
+            },
+            Some("owner"),
+        )
+        .unwrap();
+    let mut changed = login.clone();
+    changed.username_selector = Some("#username".into());
+    assert!(
+        f.manual
+            .find_reusable("owner", "site-1", "https://example.test", &changed)
+            .unwrap()
+            .is_none()
+    );
+    assert!(f.manual.list_owned("other").unwrap().is_empty());
+    assert!(f.manual.remove_owned(&f.reference, "other").is_err());
+    assert!(
+        f.manual
+            .find_reusable("owner", "site-1", "https://example.test", &login)
+            .unwrap()
+            .is_some()
+    );
+    let path = f.root.path().join("data/vault/login-1.json");
+    let bytes = fs::read(&path).unwrap();
+    assert!(!String::from_utf8_lossy(&bytes).contains(SENTINEL));
+    let mut entry: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let created = entry["created_at"].as_u64().unwrap();
+    assert!((1..=90 * 86400).contains(&(entry["expires_at"].as_u64().unwrap() - created)));
+    entry["expires_at"] = serde_json::json!(1);
+    fs::write(&path, serde_json::to_vec(&entry).unwrap()).unwrap();
+    assert!(
+        f.manual
+            .find_reusable("owner", "site-1", "https://example.test", &login)
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        f.manual
+            .describe_registered(&f.reference, "https://example.test", None)
+            .is_err()
+    );
+    assert_eq!(
+        f.manual.list_owned("owner").unwrap().len(),
+        1,
+        "expired entries remain deletable"
+    );
+    f.manual.remove_owned(&f.reference, "owner").unwrap();
+    assert!(!path.exists());
+    assert!(
+        f.manual
+            .find_reusable("owner", "site-1", "https://example.test", &login)
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        f.manual
+            .resolve_registered(&f.reference, 1, "https://example.test")
+            .is_err()
+    );
+}
+
+#[test]
+fn owned_credential_cannot_be_leased_by_another_approver() {
+    let f = Fixture::new();
+    f.manual
+        .register_owned(
+            &f.reference,
+            &f.policy,
+            1,
+            &SecretEnvelope {
+                username: "owner-user".into(),
+                password: SENTINEL.into(),
+            },
+            Some("owner"),
+        )
+        .unwrap();
+    let mut request = f.request("wrong-owner", 60);
+    request.approved_by = "another-owner".into();
+    assert!(f.broker.grant(request).is_err());
+    let mut request = f.request("right-owner", 60);
+    request.approved_by = "owner".into();
+    assert!(f.broker.grant(request).is_ok());
+}
+
+#[test]
+fn multiple_saved_credentials_revalidate_the_selected_reference() {
+    let mut f = Fixture::new();
+    f.policy.login_url = Some("https://example.test/login".into());
+    f.policy.password_selector = Some("#password".into());
+    let second = CredentialRef {
+        credential_id: "login-2".into(),
+        ..f.reference.clone()
+    };
+    for reference in [&f.reference, &second] {
+        f.manual
+            .register_owned(
+                reference,
+                &f.policy,
+                1,
+                &SecretEnvelope {
+                    username: "user".into(),
+                    password: SENTINEL.into(),
+                },
+                Some("owner"),
+            )
+            .unwrap();
+    }
+    let login = f
+        .manual
+        .describe_registered(&f.reference, "https://example.test", None)
+        .unwrap();
+    for reference in [&f.reference, &second] {
+        assert!(
+            f.manual
+                .reusable_reference("owner", reference, "https://example.test", &login)
+                .unwrap()
+        );
+        assert!(
+            !f.manual
+                .reusable_reference("other", reference, "https://example.test", &login)
+                .unwrap()
+        );
+    }
+    f.manual.remove(&f.reference).unwrap();
+    assert!(
+        f.manual
+            .reusable_reference("owner", &f.reference, "https://example.test", &login)
+            .is_err()
+    );
+    assert!(
+        f.manual
+            .reusable_reference("owner", &second, "https://example.test", &login)
+            .unwrap()
+    );
+}

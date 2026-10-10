@@ -13,6 +13,7 @@ import { Section } from "../../components/ui/panel";
 import { ownerSessionQuery } from "./browser-query";
 import { BrowserReadinessPanel } from "./browser-readiness-panel";
 import { OwnerSessionNotice, ownerNoticeReason } from "./owner-session-notice";
+import { SavedCredentialsPanel } from "./saved-credentials-panel";
 import { SitePoliciesPanel } from "./site-policies-panel";
 import { saveBrowserSettings, sitePoliciesQuery, sitePolicyError } from "./site-policy-query";
 
@@ -408,6 +409,7 @@ export function BrowserSettingsScreen() {
             ) : node?.profile?.browser ? (
               <>
                 <SitePoliciesPanel csrf={owner.data?.csrfToken ?? ""} />
+                <SavedCredentialsPanel csrf={owner.data?.csrfToken ?? ""} />
                 <SettingsForm
                   key={node.updated_at}
                   node={node}

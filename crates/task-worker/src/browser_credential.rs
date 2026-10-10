@@ -109,16 +109,6 @@ fn describe_refusal(code: Option<&str>) -> &'static str {
     }
 }
 
-/// Whether a `describe_policy` failure says the registered credential itself can never yield a
-/// trusted login (its vault entry does not match a usable site policy), as opposed to credentiald
-/// being unreachable or temporarily unable to answer.
-pub(crate) fn describe_failure_is_permanent(sub_reason: &str) -> bool {
-    matches!(
-        sub_reason,
-        "describe_denied" | "describe_invalid_request" | "describe_not_found"
-    )
-}
-
 /// Read the non-secret login intent from the broker's registered site policy. Errors are fixed
 /// `policy_changed` sub-reasons.
 pub(crate) fn describe_policy(
@@ -142,6 +132,120 @@ pub(crate) fn describe_policy(
         return Err(describe_refusal(reply.code.as_deref()));
     }
     reply.trusted_login.ok_or("trusted_login_missing")
+}
+
+/// Non-secret candidate chosen using daemon-owned context, never harness input.
+#[derive(Clone)]
+pub struct SavedCredential {
+    pub origin: String,
+    pub owner_id: String,
+    pub reference: task_core::browser_wait::CredentialRef,
+    pub trusted_login: task_core::browser_wait::TrustedLogin,
+}
+
+pub fn find_saved(
+    owner: &str,
+    login: task_core::browser_wait::TrustedLogin,
+    origin: &str,
+) -> Option<SavedCredential> {
+    find_saved_with(configured()?, owner, login, origin)
+}
+
+pub(crate) fn find_saved_with(
+    sup: &CredentialSupervisor,
+    owner: &str,
+    login: task_core::browser_wait::TrustedLogin,
+    origin: &str,
+) -> Option<SavedCredential> {
+    let runtime = sup
+        .runtime_dir
+        .clone()
+        .or_else(|| std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from))?;
+    let bytes = serde_json::to_vec(&json!({"op":"find_reusable", "owner_id":owner,
+        "policy_id":login.policy_id, "origin":origin, "trusted_login":login}))
+    .ok()?;
+    let reply = ipc::call(&runtime.join("celeris-credentiald/control.sock"), &bytes).ok()?;
+    if !reply.success {
+        return None;
+    }
+    let reference = reply.credential_ref?;
+    let reference = task_core::browser_wait::CredentialRef {
+        credential_id: reference.credential_id,
+        provider: reference.provider,
+        policy_id: reference.policy_id,
+    };
+    if describe_policy(sup, &reference, origin).ok()? != login {
+        return None;
+    }
+    Some(SavedCredential {
+        origin: origin.into(),
+        owner_id: owner.into(),
+        reference,
+        trusted_login: login,
+    })
+}
+
+pub fn saved_is_valid(
+    owner: &str,
+    reference: &task_core::browser_wait::CredentialRef,
+    login: &task_core::browser_wait::TrustedLogin,
+    origin: &str,
+) -> bool {
+    let Some(sup) = configured() else {
+        return false;
+    };
+    saved_is_valid_with(sup, owner, reference, login, origin)
+}
+
+pub(crate) fn saved_is_valid_with(
+    sup: &CredentialSupervisor,
+    owner: &str,
+    reference: &task_core::browser_wait::CredentialRef,
+    login: &task_core::browser_wait::TrustedLogin,
+    origin: &str,
+) -> bool {
+    let Some(runtime) = sup
+        .runtime_dir
+        .clone()
+        .or_else(|| std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from))
+    else {
+        return false;
+    };
+    let Ok(bytes) = serde_json::to_vec(
+        &json!({"op":"check_reusable", "owner_id":owner, "reference":reference,
+        "origin":origin,"trusted_login":login}),
+    ) else {
+        return false;
+    };
+    ipc::call(&runtime.join("celeris-credentiald/control.sock"), &bytes).is_ok_and(|reply| {
+        reply.success
+            && reply.credential_ref.is_some_and(|r| {
+                r.credential_id == reference.credential_id
+                    && r.provider == reference.provider
+                    && r.policy_id == reference.policy_id
+            })
+    })
+}
+
+pub(crate) fn invalidate(
+    sup: &CredentialSupervisor,
+    reference: &task_core::browser_wait::CredentialRef,
+) -> Result<(), crate::AdapterError> {
+    let runtime = sup
+        .runtime_dir
+        .clone()
+        .or_else(|| std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from))
+        .ok_or_else(|| policy_changed("runtime_dir_missing"))?;
+    let bytes = serde_json::to_vec(&json!({"op":"invalidate", "reference": {
+        "credential_id":reference.credential_id, "provider":reference.provider, "policy_id":reference.policy_id
+    }})).map_err(|_| policy_changed("request_encode"))?;
+    let reply = ipc::call(&runtime.join("celeris-credentiald/control.sock"), &bytes)
+        .map_err(|_| policy_changed("credentiald_unreachable"))?;
+    if reply.success || reply.code.as_deref() == Some("not_found") {
+        Ok(())
+    } else {
+        Err(policy_changed("credential_invalidation_failed"))
+    }
 }
 
 fn unix_now() -> u64 {

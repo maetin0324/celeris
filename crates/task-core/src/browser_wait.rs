@@ -666,6 +666,14 @@ impl BrowserWaitError {
 
 /// `BrowserWait` の読み書き。`TaskStore` の supertrait。
 pub trait BrowserWaitStore: Send + Sync {
+    /// Current administrator-owned login policy, for supervisor credential reuse.
+    fn browser_site_policy_get(
+        &self,
+        _policy_id: &str,
+    ) -> Result<Option<crate::BrowserSitePolicyRecord>, StoreError> {
+        Ok(None)
+    }
+
     /// A missing policy is a deny. Only a trusted administrator may write this record.
     fn browser_task_policy_get(
         &self,
@@ -1019,7 +1027,6 @@ impl NewBrowserWait {
                     .is_some_and(|o| o.action == "credential_use");
             if !credential_use
                 || t.validate(&self.origin).is_err()
-                || t.revision != self.policy_revision
                 || self
                     .credential
                     .as_ref()

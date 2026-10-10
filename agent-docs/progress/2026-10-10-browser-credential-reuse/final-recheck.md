@@ -32,5 +32,5 @@ updated: 2026-10-10
 
 ## 未解決事項
 
-- userns 付きの最終 SHA 試験は release gate 待ち（上記）。
+- userns 付きの最終 SHA 試験は release gate 待ち（上記）。ただし userns-gate（[userns-gate.md](userns-gate.md)、tested_sha `0cbfdc2d`）で、この sandbox でも隔離設定の全体試験（exit 0、failed 0、userns true）を実行済み。
 - 前回 attempt 3 の記録で、隔離設定の初回実行に `real_sandbox_launcher_chrome_downloads_inline_pdf_after_login` の 1 件失敗（`Target.setDiscoverTargets: cdp_command_failed`）があった。単独再試験と全体再試験は成功しているが、最初の失敗原因は未確定。release gate で同じ試験が再び落ちるかを見る。

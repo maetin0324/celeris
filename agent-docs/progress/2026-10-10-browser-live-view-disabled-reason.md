@@ -51,11 +51,31 @@ credential session を理由に disabled にしない。
   upstream があっても `relay_unavailable` になる。映像経路の実装は別の task。
 - **本番 upstream 未設定**。`CELERIS_WEB_LIVE_VIEW_UPSTREAM` が未設定のままだと、RUNNING で session を持つ run は
   `relay_unavailable` になる。終わった run は `not_running`。
-- **Playwright の e2e は本 WU では未実行**。WU の受け入れ条件（web の test・typecheck・lint）の外。
-  最終レビューの「Playwright が通る」は、統合後に人かレビュアーが流す必要がある。
+- **Playwright の e2e は reclose WU で実行済み**（functional 全体 `322 passed`、`8 skipped`、exit 0）。
+  結果と受け入れ条件との対応は [reclose.md](2026-10-10-browser-live-view-disabled-reason/reclose.md)。
+- この branch に入っている `crates/task-worker` の試験（post-login・download の待ち方）と `scripts/dev/test-parallel.sh`
+  （nextest 失敗時の test 名の出力）の変更は、統合段の flaky 対処（post-login-flake・fail-names・reverify-2）で入ったもの。
+  Live View の挙動とは無関係。
 - **`grant_expired` は `/browser/runs` の理由として返していない**（live 接続時の応答で返る）。ADR D3.2 の理由表と
   gateway の返す集合は一致しない。ADR 付記に記した。
 - lint の warning 4 件（`web/styles.css` の `!important`）は既存。本 task では触っていない。
+
+## 再提出（live-fix 後・reclose で記録）
+
+final review の差し戻し（upstream 未設定の判定順、RUNNING 以外の not_running、WAITING_FOR_AUTH の除外、Playwright 未実行）を
+`3da75b4b`（live-fix）で直した後、HEAD `55539dc1` で web の検査を流した（詳細と条件ごとの対応は
+[reclose.md](2026-10-10-browser-live-view-disabled-reason/reclose.md)）。
+
+- `corepack pnpm@12.6.0 -C web install --offline --frozen-lockfile` — exit 0。
+- `pnpm run lint`（`biome check .`） — exit 0（warning 4 件は既存の `web/styles.css`）。
+- `pnpm run typecheck`（`tsc -b`） — exit 0。
+- `pnpm run test`（vitest + node --test） — exit 0。vitest `90 files / 655 tests passed`、node --test `82 pass / 0 fail`。
+- `pnpm run build`（vite build） — exit 0。
+- `pnpm run e2e`（Playwright functional 全体） — exit 0。`322 passed`、`8 skipped`（`WEB_SHOTS_OUT`・`WEB_E2E_REAL_BASE_URL` 未指定の環境 skip）。
+  run の `TMPDIR`（93 文字）では Unix socket が `EINVAL` で 28 件落ちたため、`TMPDIR=/tmp/wl.*` で流し直した。
+- 文書検査: `check-doc-layout.sh`・`check-adr-numbers.sh`（178 files）・`check-doc-links.sh` — いずれも ok、exit 0。
+- ADR 2026-10-05 の付記（2026-10-10）を実装に合わせて直した（判定順: upstream → RUNNING → session_id。`auth_interval` は使わない。
+  polling は RUNNING 以外の全状態で止まる）。
 
 ## 本番反映（人の手順）
 

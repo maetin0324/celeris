@@ -258,6 +258,7 @@ fn free_disk_mb(path: &Path) -> Result<u64, String> {
 struct ScratchState {
     /// 測定スレッドの結果（パス → サイズ）。
     sizes: crate::scratch_gc::SizeCache,
+    extents: crate::scratch_gc::SharedExtentCache,
     /// 削除スレッド・測定スレッドが動いている間は `true`（重ねて起こさない）。
     removing: Arc<std::sync::atomic::AtomicBool>,
     measuring: Arc<std::sync::atomic::AtomicBool>,
@@ -1063,6 +1064,10 @@ struct RunExtras {
     /// `run_worker` が `CARGO_TARGET_DIR` を WU ごとにする（scratch なら owner `task-<id>/wu-<id>`、無効なら
     /// `<repo-key>/wu-<id>`。兄弟 WU と target を共有しない）。
     cargo_target_work_unit: Option<(String, String)>,
+    /// ADR 2026-10-10-local-disk-growth-paths D1: 作業場所の先頭に git の repo が無い run だけ `Some`
+    /// （`repos=[]` の子 task が祖先の checkout を使う形など）。`run_worker` がこの checkout に scratch の
+    /// `CARGO_TARGET_DIR` を結び付ける（`Missing` は理由を run の event に残す）。
+    cargo_target_fallback: Option<workspaces::CargoTargetFallback>,
     /// ADR-0074 付記 2026-10-05 D3: WU の run だけ `Some`（`CELERIS_WU_BASE` / `CELERIS_WU_TARGET`）。
     /// `run_worker` が adapter の env に重ねる（checks の env と同じ値）。
     work_unit_env: Option<Vec<(String, String)>>,
@@ -1177,6 +1182,10 @@ pub struct Dispatcher {
     disk_low: bool,
     /// ADR-0074 F5-fix: 終端の WU の target を消す別スレッドが動いている間は `true`（重ねて起こさない）。
     removing_build_caches: Arc<std::sync::atomic::AtomicBool>,
+    /// ADR 2026-10-10-local-disk-growth-paths D2: 終端 task の repo 直下 target の常設の掃除（cron に依らない）。
+    /// 前回走った時刻（注入時計）と、削除スレッドが動いている間の印。
+    repo_target_gc_at: Option<OffsetDateTime>,
+    removing_repo_targets: Arc<std::sync::atomic::AtomicBool>,
     /// ADR-0075（Phase G1）: scratch pool の GC の状態（測定の cache・削除 / 測定スレッドの印・adopt の候補・観測値）。
     scratch: ScratchState,
     disk_ready: bool,
@@ -1509,6 +1518,8 @@ impl Dispatcher {
             lost_review_watch: std::collections::HashSet::new(),
             disk_low: false,
             removing_build_caches: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            repo_target_gc_at: None,
+            removing_repo_targets: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             scratch: ScratchState::default(),
             disk_ready: true,
             warned_unroutable: std::collections::HashSet::new(),
@@ -2097,6 +2108,8 @@ impl Dispatcher {
         // ADR-0066 D2（Phase 110b）: 終端になってから `prune_after_secs` 経った作業場所から、ビルド
         // 生成物だけを刈る（1 tick に最大 1 か所。探すところまでは軽いので同期、削除は別スレッド）。
         self.prune_one_workspace();
+        // ADR 2026-10-10-local-disk-growth-paths D2: 終端の木の repo 直下 target（cron に依らず定期。rename まで）。
+        self.sweep_repo_targets();
         let prune_ms = lap(&mut at);
         // ADR-0040 D4: draining のインスタンスは新しい仕事を始めない（拾い上げも dispatch もしない）。
         // 手元の run とレビューの完了・リース更新・後処理は上の `drain_completions` 以下でそのまま動く。

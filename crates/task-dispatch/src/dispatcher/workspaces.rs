@@ -86,6 +86,126 @@ pub(super) fn downgraded_remote_workspace(workspace: &WorkspaceSpec) -> Option<W
     }
 }
 
+/// ADR 2026-10-10-local-disk-growth-paths D1: 祖先をたどる上限（木の深さ `max_depth` 3 に余裕を持たせる。
+/// 親の連鎖が壊れていても止まる）。
+const CARGO_TARGET_ANCESTOR_LIMIT: usize = 8;
+
+/// ADR 2026-10-10-local-disk-growth-paths D1: 自分の作業場所の先頭に git の repo が無い run・検査が、
+/// `CARGO_TARGET_DIR`（scratch の lease）を結び付ける Rust の checkout。cargo は `CARGO_TARGET_DIR` が無いと
+/// cwd の repo 直下に `target/` を作り、scratch の lease・seed・GC の外になる。
+#[derive(Debug, Clone)]
+pub(super) enum CargoTargetFallback {
+    /// task の作業場所そのもの（`mode = shared`・worktree を切らない Local path、`kind = dir` の repo）が
+    /// Rust の checkout。
+    SharedPath(task_worker::TaskRepo),
+    /// `repos=[]` の子 task: 祖先 task の checkout（objective が指す親の作業場所）。
+    Ancestor {
+        ancestor: TaskId,
+        repo: task_worker::TaskRepo,
+    },
+    /// 祖先に Rust の checkout の設定はあるが作業ツリーがまだ無い。理由を残す（黙って repo 直下に落とさない）。
+    Missing { reason: String },
+    /// Rust の checkout が見当たらない（Rust でない task・Remote）。何も与えない。
+    NotRust,
+}
+
+impl CargoTargetFallback {
+    /// target を結び付ける checkout（`SharedPath` / `Ancestor` だけ）。
+    pub(super) fn repo(&self) -> Option<&task_worker::TaskRepo> {
+        match self {
+            Self::SharedPath(repo) | Self::Ancestor { repo, .. } => Some(repo),
+            Self::Missing { .. } | Self::NotRust => None,
+        }
+    }
+}
+
+/// `dir` が Rust の checkout か（`Cargo.toml` がある）。
+fn is_rust_checkout(dir: &Path) -> bool {
+    dir.join("Cargo.toml").is_file()
+}
+
+impl Dispatcher {
+    /// ADR 2026-10-10-local-disk-growth-paths D1: run・検査に与える `CARGO_TARGET_DIR` を結び付ける checkout。
+    /// 自分の作業場所の先頭が git の repo ならそれ、無ければ [`Self::cargo_target_fallback`]。
+    pub(super) fn cargo_target_repo(&self, task: &Task) -> Option<task_worker::TaskRepo> {
+        let own = self
+            .task_workspaces_for(task)
+            .and_then(|ws| ws.repos.into_iter().next())
+            .filter(|r| r.is_git());
+        if own.is_some() {
+            return own;
+        }
+        let fallback = self.cargo_target_fallback(task);
+        if let CargoTargetFallback::Missing { reason } = &fallback {
+            tracing::warn!(task_id = %task.id, %reason, "cargo target: CARGO_TARGET_DIR not set (ADR 2026-10-10-local-disk-growth-paths D1)");
+        }
+        fallback.repo().cloned()
+    }
+
+    /// ADR 2026-10-10-local-disk-growth-paths D1: 自分の作業場所に git の repo が無い task の、決定的な
+    /// 代わりの checkout。順に (1) task の Local path・先頭の `kind = dir` repo が Rust の checkout なら
+    /// それ（cargo はそこに書く）、(2) 親から祖先へたどり、最初に作業ツリーがある Rust の git checkout
+    /// （`repos=[]` の子 task が親の checkout を使う形）。Remote は対象外（`NotRust`）。
+    pub(super) fn cargo_target_fallback(&self, task: &Task) -> CargoTargetFallback {
+        let WorkspaceSpec::Local { path, .. } = &task.workspace else {
+            return CargoTargetFallback::NotRust;
+        };
+        let dir = if path.is_absolute() {
+            path.clone()
+        } else {
+            self.config.workspace_root.join(path)
+        };
+        if let Some(repo) = self
+            .task_workspaces_for(task)
+            .and_then(|ws| ws.repos.into_iter().next())
+            .filter(|r| is_rust_checkout(&r.dir))
+        {
+            return CargoTargetFallback::SharedPath(repo);
+        }
+        if is_rust_checkout(&dir) {
+            let name = task_worker::task_repos::repo_display_name(&dir);
+            return CargoTargetFallback::SharedPath(task_worker::TaskRepo::link(
+                name,
+                dir.clone(),
+                dir,
+            ));
+        }
+        let mut missing: Option<String> = None;
+        let mut cursor = task.parent_id;
+        for _ in 0..CARGO_TARGET_ANCESTOR_LIMIT {
+            let Some(id) = cursor else { break };
+            let ancestor = match self.store.get(id) {
+                Ok(Some(t)) => t,
+                Ok(None) => break,
+                Err(e) => {
+                    tracing::warn!(task_id = %task.id, ancestor = %id, error = %e, "cargo target: cannot read the ancestor task");
+                    break;
+                }
+            };
+            if let Some(repo) = self
+                .task_workspaces_for(&ancestor)
+                .and_then(|ws| ws.repos.into_iter().next())
+                .filter(|r| r.is_git())
+            {
+                if is_rust_checkout(&repo.dir) {
+                    return CargoTargetFallback::Ancestor { ancestor: id, repo };
+                }
+                if missing.is_none() && !repo.dir.is_dir() && is_rust_checkout(&repo.source) {
+                    missing = Some(format!(
+                        "the checkout {} of ancestor task {id} does not exist yet",
+                        repo.dir.display()
+                    ));
+                }
+            }
+            cursor = ancestor.parent_id;
+        }
+        match missing {
+            Some(reason) => CargoTargetFallback::Missing { reason },
+            None => CargoTargetFallback::NotRust,
+        }
+    }
+}
+
 impl Dispatcher {
     /// ADR-0005 D3: `Local{path}` がそのタスクの作業ディレクトリ。相対なら `workspace_root` 基準。
     ///

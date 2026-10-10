@@ -124,7 +124,11 @@ pub fn find_prune_candidates(
         }
         let task_dir = workspace_root.join(task.id.to_string());
         let paths = prunable_paths(&task_dir);
-        if !paths.is_empty() {
+        // ADR 2026-10-10-local-disk-growth-paths D2: 子孫が親の checkout を使っている間は刈らない。
+        if !paths.is_empty()
+            && crate::workspace_targets::tree_hold(store, &task, &running, now, after_secs)?
+                .is_none()
+        {
             out.push(PruneCandidate {
                 task_id: task.id,
                 task_dir,

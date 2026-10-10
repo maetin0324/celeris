@@ -122,7 +122,18 @@ fn incomplete_backups_are_cleaned_and_cancel_does_not_publish() {
     }
     let cancelled = Arc::new(AtomicBool::new(true));
     assert!(matches!(
-        backup_once(&src, &backups, 48, Duration::from_secs(2), cancelled),
+        backup_once(
+            &src,
+            &backups,
+            BackupRetentionPolicy {
+                keep: 48,
+                daily_keep: 7,
+                weekly_keep: 4,
+                max_total_bytes: u64::MAX
+            },
+            Duration::from_secs(2),
+            cancelled
+        ),
         Err(BackupError::Cancelled)
     ));
     assert!(!old.exists());
@@ -160,7 +171,7 @@ fn checkpoint_once_runs_on_a_fresh_wal_db_without_error() {
 }
 
 #[test]
-fn backup_once_writes_a_restorable_copy_and_prune_keeps_only_the_newest() {
+fn backup_once_writes_a_restorable_copy_and_keeps_recent_generations() {
     let dir = tempfile::tempdir().unwrap();
     let db_path = dir.path().join("celeris.sqlite3");
     let store = task_core::SqliteStore::open(&db_path).unwrap();
@@ -171,33 +182,39 @@ fn backup_once_writes_a_restorable_copy_and_prune_keeps_only_the_newest() {
     let backup_dir = dir.path().join("backups");
     std::fs::create_dir_all(&backup_dir).unwrap();
 
-    // 3 回バックアップし、keep=2 なら最新 2 つだけ残る。
+    // 3 回バックアップする。keep=2 でも 48 時間以内の世代は刈られない（ADR 2026-10-10 D5）ので、3 本とも残る。
+    // 古い世代が刈られることは注入時計の backup_retention_ 試験が固定している。
     let mut written = Vec::new();
     for i in 0..3 {
+        if i > 0 {
+            // ファイル名が unix 秒なので、同じ秒に 2 回書くと衝突する（テストのみの配慮）。
+            std::thread::sleep(Duration::from_millis(1100));
+        }
         let dest = backup_once(
             &db_path,
             &backup_dir,
-            2,
+            BackupRetentionPolicy {
+                keep: 2,
+                daily_keep: 7,
+                weekly_keep: 4,
+                max_total_bytes: u64::MAX,
+            },
             Duration::from_millis(2000),
             Arc::new(AtomicBool::new(false)),
         )
         .unwrap_or_else(|e| panic!("backup {i}: {e}"));
         written.push(dest);
-        // ファイル名が unix 秒なので、同じ秒に 2 回書くと衝突する（テストのみの配慮）。
-        std::thread::sleep(Duration::from_millis(1100));
     }
 
-    let remaining: Vec<PathBuf> = std::fs::read_dir(&backup_dir)
+    let mut remaining: Vec<PathBuf> = std::fs::read_dir(&backup_dir)
         .unwrap()
         .filter_map(|e| e.ok())
         .map(|e| e.path())
         .filter(|p| is_backup_file_name(p))
         .collect();
-    assert_eq!(remaining.len(), 2, "{remaining:?}");
-    assert!(
-        !remaining.contains(&written[0]),
-        "the oldest generation should have been pruned"
-    );
+    remaining.sort();
+    written.sort();
+    assert_eq!(remaining, written, "all recent generations should be kept");
 
     // 残った最新のバックアップは復元して読める。
     let latest = written.last().unwrap();
@@ -215,7 +232,12 @@ fn backup_once_fails_clearly_when_the_backup_dir_is_missing() {
     let err = backup_once(
         &db_path,
         &missing,
-        48,
+        BackupRetentionPolicy {
+            keep: 48,
+            daily_keep: 7,
+            weekly_keep: 4,
+            max_total_bytes: u64::MAX,
+        },
         Duration::from_millis(2000),
         Arc::new(AtomicBool::new(false)),
     )
@@ -242,7 +264,12 @@ async fn spawned_tasks_run_on_their_interval_and_stop_cleanly() {
         db_path.clone(),
         backup_dir.clone(),
         Duration::from_millis(20),
-        48,
+        BackupRetentionPolicy {
+            keep: 48,
+            daily_keep: 7,
+            weekly_keep: 4,
+            max_total_bytes: u64::MAX,
+        },
         Duration::from_millis(2000),
     );
 
@@ -275,6 +302,156 @@ async fn spawned_tasks_run_on_their_interval_and_stop_cleanly() {
         !backups.is_empty(),
         "expected at least one backup file to be written"
     );
+}
+
+fn retention_test_entry(name: &str, ts: i64, size: u64, kind: BackupKind) -> RetentionEntry {
+    RetentionEntry {
+        name: name.to_owned(),
+        timestamp: ts,
+        size,
+        kind,
+    }
+}
+
+#[test]
+fn backup_retention_daily_and_weekly_generations_are_kept() {
+    let now = 1_800_000_000;
+    let entries: Vec<_> = (0..70)
+        .map(|days| {
+            retention_test_entry(
+                &format!("celeris-{}.sqlite3", now - days * 86400),
+                now - days * 86400,
+                1,
+                BackupKind::Periodic,
+            )
+        })
+        .collect();
+    let deleted = plan_backup_retention(now, &entries, 0, 7, 4, u64::MAX);
+    assert!(!deleted.iter().any(|n| n == &entries[0].name));
+    assert!(!deleted.iter().any(|n| n == &entries[1].name));
+    assert!(deleted.len() < entries.len());
+}
+
+#[test]
+fn backup_retention_keeps_every_backup_inside_48_hours() {
+    let now = 1_800_000_000;
+    let entries: Vec<_> = (0..60)
+        .map(|hours| {
+            retention_test_entry(
+                &format!("celeris-{}.sqlite3", now - hours * 3600),
+                now - hours * 3600,
+                1,
+                BackupKind::Periodic,
+            )
+        })
+        .collect();
+    let deleted = plan_backup_retention(now, &entries, 0, 0, 0, u64::MAX);
+    assert!(entries[..48].iter().all(|e| !deleted.contains(&e.name)));
+    assert!(deleted.contains(&entries[50].name));
+}
+
+#[test]
+fn backup_retention_total_limit_prunes_periodic_before_promote() {
+    let now = 1_800_000_000;
+    let entries = vec![
+        retention_test_entry(
+            "celeris-1799990000.sqlite3",
+            now - 10000,
+            80,
+            BackupKind::Periodic,
+        ),
+        retention_test_entry(
+            "celeris-1799999900.sqlite3",
+            now - 100,
+            80,
+            BackupKind::Periodic,
+        ),
+        retention_test_entry(
+            "20261009-010203-pre-abcdef012345.sqlite3",
+            now - 200,
+            80,
+            BackupKind::Promote,
+        ),
+        retention_test_entry(
+            "20261010-010203-pre-abcdef012346.sqlite3",
+            now,
+            80,
+            BackupKind::Promote,
+        ),
+    ];
+    let deleted = plan_backup_retention(now, &entries, 4, 7, 4, 250);
+    assert!(deleted.contains(&entries[0].name));
+    assert!(!deleted.contains(&entries[2].name));
+    assert!(!deleted.contains(&entries[3].name));
+}
+
+#[test]
+fn backup_retention_protects_latest_per_kind_and_three_rollbacks() {
+    let now = 1_800_000_000;
+    let mut entries = vec![retention_test_entry(
+        "celeris-1.sqlite3",
+        1,
+        1,
+        BackupKind::Periodic,
+    )];
+    for i in 1..=2 {
+        entries.push(retention_test_entry(
+            &format!("2026100{i}-010203-pre-abcdef01234{i}.sqlite3"),
+            i,
+            1,
+            BackupKind::Promote,
+        ));
+    }
+    for i in 1..=4 {
+        entries.push(retention_test_entry(
+            &format!("2026100{i}-010203-pre-rollback.sqlite3"),
+            i,
+            1,
+            BackupKind::Rollback,
+        ));
+    }
+    let deleted = plan_backup_retention(now, &entries, 0, 0, 0, 0);
+    assert!(!deleted.iter().any(|n| n == "celeris-1.sqlite3"));
+    assert!(
+        !deleted
+            .iter()
+            .any(|n| n == "20261002-010203-pre-abcdef012342.sqlite3")
+    );
+    assert!(
+        !deleted
+            .iter()
+            .any(|n| n == "20261002-010203-pre-rollback.sqlite3")
+    );
+    assert!(
+        deleted
+            .iter()
+            .any(|n| n == "20261001-010203-pre-rollback.sqlite3")
+    );
+}
+
+#[test]
+fn backup_retention_integrity_failure_skips_all_deletions() {
+    let dir = tempfile::tempdir().unwrap();
+    let old = dir.path().join("celeris-1700000000.sqlite3");
+    let latest = dir.path().join("celeris-1800000000.sqlite3");
+    std::fs::write(&old, b"db").unwrap();
+    std::fs::write(&latest, b"corrupt").unwrap();
+    prune_backups_with_check(dir.path(), 0, 0, 0, 0, integrity_check).unwrap();
+    assert!(old.exists());
+    assert!(latest.exists());
+}
+
+#[test]
+fn backup_retention_ignores_other_file_names() {
+    assert!(backup_entry("celeris-1800000000.sqlite3", 1).is_some());
+    for name in [
+        "health.json",
+        "backup.log",
+        "pre-celeris.sqlite3",
+        "celeris-1.sqlite3.partial",
+    ] {
+        assert!(backup_entry(name, 1).is_none(), "{name}");
+    }
 }
 
 fn sample_task() -> task_core::Task {

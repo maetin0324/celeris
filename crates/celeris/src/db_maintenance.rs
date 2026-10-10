@@ -30,6 +30,14 @@ pub struct RunningDbMaintenance {
     cancel: Option<Arc<AtomicBool>>,
 }
 
+#[derive(Clone, Copy)]
+pub struct BackupRetentionPolicy {
+    pub keep: usize,
+    pub daily_keep: usize,
+    pub weekly_keep: usize,
+    pub max_total_bytes: u64,
+}
+
 impl RunningDbMaintenance {
     /// 同じ流儀の背景タスク（`chat_gc` 等）が止め方を共有する。
     pub(crate) fn from_task(
@@ -138,7 +146,7 @@ pub fn spawn_backup_task(
     db_path: PathBuf,
     backup_dir: PathBuf,
     backup_interval: Duration,
-    keep: usize,
+    retention: BackupRetentionPolicy,
     busy_timeout: Duration,
 ) -> RunningDbMaintenance {
     let (stop_tx, mut stop_rx) = tokio::sync::oneshot::channel::<()>();
@@ -154,7 +162,7 @@ pub fn spawn_backup_task(
                     let src = db_path.clone();
                     let dir = backup_dir.clone();
                     let cancelled = Arc::clone(&worker_cancel);
-                    let result = tokio::task::spawn_blocking(move || backup_once(&src, &dir, keep, busy_timeout, cancelled)).await;
+                    let result = tokio::task::spawn_blocking(move || backup_once(&src, &dir, retention, busy_timeout, cancelled)).await;
                     match result {
                         Ok(Ok(dest)) => tracing::info!(backup = %dest.display(), "wrote a periodic db backup"),
                         Ok(Err(_)) if worker_cancel.load(Ordering::Relaxed) => {}
@@ -177,7 +185,7 @@ pub fn spawn_backup_task(
 fn backup_once(
     db_path: &Path,
     backup_dir: &Path,
-    keep: usize,
+    retention: BackupRetentionPolicy,
     busy_timeout: Duration,
     cancel: Arc<AtomicBool>,
 ) -> Result<PathBuf, BackupError> {
@@ -220,7 +228,13 @@ fn backup_once(
         remove_backup_files(&partial);
     }
     result?;
-    prune_backups(backup_dir, keep)?;
+    prune_backups(
+        backup_dir,
+        retention.keep,
+        retention.daily_keep,
+        retention.weekly_keep,
+        retention.max_total_bytes,
+    )?;
     Ok(dest)
 }
 
@@ -269,25 +283,271 @@ fn cleanup_incomplete_backups(dir: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// `backup_dir` の `celeris-*.sqlite3` を新しい順に見て、`keep` を超えた古い世代を消す。
-fn prune_backups(backup_dir: &Path, keep: usize) -> std::io::Result<()> {
-    let mut files: Vec<PathBuf> = std::fs::read_dir(backup_dir)?
-        .filter_map(|entry| entry.ok())
-        .map(|entry| entry.path())
-        .filter(|p| is_backup_file_name(p))
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BackupKind {
+    Periodic,
+    Promote,
+    Rollback,
+}
+
+#[derive(Clone, Debug)]
+struct RetentionEntry {
+    name: String,
+    timestamp: i64,
+    size: u64,
+    kind: BackupKind,
+}
+
+fn backup_entry(name: &str, size: u64) -> Option<RetentionEntry> {
+    if let Some(ts) = name
+        .strip_prefix("celeris-")
+        .and_then(|s| s.strip_suffix(".sqlite3"))
+    {
+        let timestamp = ts.parse().ok()?;
+        return Some(RetentionEntry {
+            name: name.to_owned(),
+            timestamp,
+            size,
+            kind: BackupKind::Periodic,
+        });
+    }
+    let (stamp, suffix) = name.split_once("-pre-")?;
+    if stamp.len() != 15 || !stamp.as_bytes().get(8).is_some_and(|b| *b == b'-') {
+        return None;
+    }
+    let suffix = suffix.strip_suffix(".sqlite3")?;
+    let kind = if suffix == "rollback" {
+        BackupKind::Rollback
+    } else if suffix.len() == 12 && suffix.bytes().all(|b| b.is_ascii_hexdigit()) {
+        BackupKind::Promote
+    } else {
+        return None;
+    };
+    let formatted = format!(
+        "{}-{}-{} {}:{}:{}",
+        &stamp[0..4],
+        &stamp[4..6],
+        &stamp[6..8],
+        &stamp[9..11],
+        &stamp[11..13],
+        &stamp[13..15]
+    );
+    #[allow(deprecated)]
+    let format =
+        time::format_description::parse("[year]-[month]-[day] [hour]:[minute]:[second]").ok()?;
+    let parsed = time::PrimitiveDateTime::parse(&formatted, &format).ok()?;
+    Some(RetentionEntry {
+        name: name.to_owned(),
+        timestamp: parsed.assume_utc().unix_timestamp(),
+        size,
+        kind,
+    })
+}
+
+fn plan_backup_retention(
+    now: i64,
+    entries: &[RetentionEntry],
+    keep: usize,
+    daily_keep: usize,
+    weekly_keep: usize,
+    max_bytes: u64,
+) -> Vec<String> {
+    use std::collections::BTreeSet;
+    let mut periodic: Vec<_> = entries
+        .iter()
+        .filter(|e| e.kind == BackupKind::Periodic)
         .collect();
-    // ファイル名が `celeris-<unix_ts>.sqlite3`（固定書式の 10 進数）なので、文字列の昇順が時系列の昇順になる。
-    files.sort();
-    let excess = files.len().saturating_sub(keep);
-    for old in files.into_iter().take(excess) {
-        // 消せなくても他の世代の削除は続ける（NFS の一時的な失敗等で全体を止めない）。
-        if let Err(e) = std::fs::remove_file(&old) {
-            tracing::warn!(path = %old.display(), error = %e, "could not remove an old db backup");
+    periodic.sort_by_key(|e| e.timestamp);
+    let mut retained = BTreeSet::new();
+    for e in periodic.iter().rev().take(keep) {
+        retained.insert(e.name.as_str());
+    }
+    for e in periodic
+        .iter()
+        .filter(|e| now.saturating_sub(e.timestamp) < 48 * 3600 && e.timestamp <= now)
+    {
+        retained.insert(e.name.as_str());
+    }
+    let mut days = BTreeSet::new();
+    for e in periodic.iter().rev() {
+        if let Ok(dt) = OffsetDateTime::from_unix_timestamp(e.timestamp) {
+            let day = dt.date();
+            if now.saturating_sub(e.timestamp) < 7 * 86400
+                && days.insert((day.year(), day.ordinal()))
+                && days.len() <= daily_keep
+            {
+                retained.insert(e.name.as_str());
+            }
+        }
+    }
+    let mut weeks = BTreeSet::new();
+    for e in periodic.iter().rev() {
+        if let Ok(dt) = OffsetDateTime::from_unix_timestamp(e.timestamp) {
+            let date = dt.date();
+            let week_number = date.iso_week();
+            let week_year = if date.month() == time::Month::January && week_number >= 52 {
+                date.year() - 1
+            } else if date.month() == time::Month::December && week_number == 1 {
+                date.year() + 1
+            } else {
+                date.year()
+            };
+            let week = (week_year, week_number);
+            if now.saturating_sub(e.timestamp) < 28 * 86400
+                && weeks.insert(week)
+                && weeks.len() <= weekly_keep
+            {
+                retained.insert(e.name.as_str());
+            }
+        }
+    }
+    let mut promotes: Vec<_> = entries
+        .iter()
+        .filter(|e| e.kind == BackupKind::Promote)
+        .collect();
+    promotes.sort_by_key(|e| e.timestamp);
+    if let Some(e) = promotes.last() {
+        retained.insert(e.name.as_str());
+    }
+    let mut rollbacks: Vec<_> = entries
+        .iter()
+        .filter(|e| e.kind == BackupKind::Rollback)
+        .collect();
+    rollbacks.sort_by_key(|e| e.timestamp);
+    for e in rollbacks.iter().rev().take(3) {
+        retained.insert(e.name.as_str());
+    }
+    let protected_periodic = periodic.last().map(|e| e.name.as_str());
+    let protected_promote = promotes.last().map(|e| e.name.as_str());
+    let protected_rollbacks: BTreeSet<&str> = rollbacks
+        .iter()
+        .rev()
+        .take(3)
+        .map(|e| e.name.as_str())
+        .collect();
+    let protected: BTreeSet<&str> = protected_periodic
+        .into_iter()
+        .chain(protected_promote)
+        .chain(protected_rollbacks)
+        .collect();
+    let mut deleted: Vec<String> = entries
+        .iter()
+        .filter(|e| {
+            e.kind == BackupKind::Periodic
+                && !retained.contains(e.name.as_str())
+                && !protected.contains(e.name.as_str())
+        })
+        .map(|e| e.name.clone())
+        .collect();
+    let mut total: u64 = entries.iter().map(|e| e.size).sum();
+    for name in &deleted {
+        if let Some(e) = entries.iter().find(|e| &e.name == name) {
+            total = total.saturating_sub(e.size);
+        }
+    }
+    let mut candidates: Vec<_> = entries
+        .iter()
+        .filter(|e| !protected.contains(e.name.as_str()) && !deleted.contains(&e.name))
+        .collect();
+    candidates.sort_by_key(|e| {
+        (
+            if e.kind == BackupKind::Periodic { 0 } else { 1 },
+            e.timestamp,
+        )
+    });
+    for e in candidates {
+        if total <= max_bytes {
+            break;
+        }
+        retained.remove(e.name.as_str());
+        total = total.saturating_sub(e.size);
+        deleted.push(e.name.clone());
+    }
+    deleted
+}
+
+fn integrity_check(path: &Path) -> Result<bool, rusqlite::Error> {
+    let conn =
+        rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let result: String = conn.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
+    Ok(result == "ok")
+}
+
+fn prune_backups(
+    backup_dir: &Path,
+    keep: usize,
+    daily_keep: usize,
+    weekly_keep: usize,
+    max_bytes: u64,
+) -> std::io::Result<()> {
+    prune_backups_with_check(
+        backup_dir,
+        keep,
+        daily_keep,
+        weekly_keep,
+        max_bytes,
+        integrity_check,
+    )
+}
+
+fn prune_backups_with_check(
+    backup_dir: &Path,
+    keep: usize,
+    daily_keep: usize,
+    weekly_keep: usize,
+    max_bytes: u64,
+    check: impl Fn(&Path) -> Result<bool, rusqlite::Error>,
+) -> std::io::Result<()> {
+    let mut entries = Vec::new();
+    for item in std::fs::read_dir(backup_dir)? {
+        let item = item?;
+        let name = item.file_name().to_string_lossy().into_owned();
+        if let Ok(meta) = item.metadata()
+            && let Some(entry) = backup_entry(&name, meta.len())
+        {
+            entries.push(entry);
+        }
+    }
+    if entries.len() < 2 {
+        return Ok(());
+    }
+    let Some(latest) = entries
+        .iter()
+        .max_by_key(|e| e.timestamp)
+        .map(|e| e.name.as_str())
+    else {
+        return Ok(());
+    };
+    match check(&backup_dir.join(latest)) {
+        Ok(true) => {}
+        Ok(false) => {
+            tracing::warn!(
+                backup = latest,
+                "backup integrity_check failed; retention skipped"
+            );
+            return Ok(());
+        }
+        Err(error) => {
+            tracing::warn!(backup = latest, %error, "backup integrity_check failed; retention skipped");
+            return Ok(());
+        }
+    }
+    for name in plan_backup_retention(
+        OffsetDateTime::now_utc().unix_timestamp(),
+        &entries,
+        keep,
+        daily_keep,
+        weekly_keep,
+        max_bytes,
+    ) {
+        if let Err(error) = std::fs::remove_file(backup_dir.join(&name)) {
+            tracing::warn!(path = %name, %error, "could not remove an old db backup");
         }
     }
     Ok(())
 }
 
+#[cfg(test)]
 fn is_backup_file_name(path: &Path) -> bool {
     path.file_name()
         .and_then(|n| n.to_str())

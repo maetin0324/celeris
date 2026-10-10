@@ -121,13 +121,13 @@ fn default_scratch_enabled() -> bool {
     true
 }
 fn default_scratch_targets_max_gb() -> u64 {
-    100
+    160
 }
 fn default_scratch_l1_max_gb() -> u64 {
     40
 }
 fn default_scratch_total_max_gb() -> u64 {
-    150
+    200
 }
 fn default_scratch_high_watermark() -> f64 {
     0.90

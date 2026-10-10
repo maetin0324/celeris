@@ -451,3 +451,203 @@ fn target_sweep_scratch_cap_preserves_live_owners_and_cargo_locks() {
     );
     drop(held);
 }
+
+// ---- ADR 2026-10-10-local-disk-growth-paths D2: 終端の木の repo 直下 target ----
+
+use task_core::{TaskStore, Trigger};
+
+fn gc_task(
+    store: &task_core::SqliteStore,
+    status: task_core::Status,
+    ago_hours: i64,
+    parent: Option<task_core::TaskId>,
+    now: time::OffsetDateTime,
+) -> task_core::TaskId {
+    use task_core::{
+        Budget, Check, Criterion, Status, Task, TaskId, TaskKind, Tier, WorkerHint, WorkspaceSpec,
+    };
+    let task = Task {
+        requirements: Default::default(),
+        tree: None,
+        paused_at: None,
+        routing: None,
+        mode: Default::default(),
+        skills: Vec::new(),
+        repos: Vec::new(),
+        id: TaskId::new(),
+        parent_id: None,
+        kind: TaskKind::Execute,
+        title: "t".into(),
+        objective: "o".into(),
+        acceptance: vec![Criterion {
+            text: "c".into(),
+            check: Check::Command {
+                cmd: "true".into(),
+                expect_exit: 0,
+            },
+        }],
+        inputs: vec![],
+        depends_on: vec![],
+        status: Status::Ready,
+        priority: 0,
+        worker_hint: WorkerHint {
+            tier: Tier::Standard,
+            adapter: None,
+        },
+        workspace: WorkspaceSpec::Local {
+            path: PathBuf::from("/nonexistent"),
+            mode: None,
+        },
+        budget: Budget {
+            max_turns: 1,
+            max_wall_secs: 30,
+            max_retries: 0,
+        },
+        attempts: 0,
+        lease: None,
+        created_at: now,
+        updated_at: now,
+        role: None,
+        genre: None,
+        aggregate: false,
+        project_id: None,
+        milestone_id: None,
+        assignee: None,
+        conversation: None,
+        labels: Vec::new(),
+        category: Default::default(),
+    };
+    let id = task.id;
+    store.insert(&task).unwrap();
+    let triggers: &[Trigger] = match status {
+        Status::Done => &[Trigger::Dispatch, Trigger::WorkerDone, Trigger::ReviewPass],
+        Status::Running => &[Trigger::Dispatch],
+        Status::Cancelled => &[Trigger::Cancel],
+        _ => panic!("unsupported {status:?}"),
+    };
+    for t in triggers {
+        store
+            .apply_transition_with_events(id, t.clone(), vec![])
+            .unwrap();
+    }
+    let mut cur = store.get(id).unwrap().unwrap();
+    cur.updated_at = now - time::Duration::hours(ago_hours);
+    cur.parent_id = parent;
+    store
+        .update_task(&cur, Event::worker_progress("t", "backdated"))
+        .unwrap();
+    id
+}
+
+/// `<root>/<task>/repos/<repo>/target`（`CACHEDIR.TAG` と `debug/.cargo-lock`、8 KiB の deps）を作る。
+fn repo_target(root: &Path, task: task_core::TaskId) -> PathBuf {
+    let repo = root
+        .join(task.to_string())
+        .join("repos")
+        .join("agent-platform");
+    std::fs::create_dir_all(repo.join("src")).unwrap();
+    let target = repo.join("target");
+    std::fs::create_dir_all(target.join("debug").join("deps")).unwrap();
+    std::fs::write(
+        target.join("CACHEDIR.TAG"),
+        "Signature: 8a477f597d28d172789f06886806bc55",
+    )
+    .unwrap();
+    std::fs::write(target.join("debug").join(CARGO_LOCK), "").unwrap();
+    std::fs::write(
+        target.join("debug/deps/x-0123456789abcdef"),
+        vec![1u8; 8192],
+    )
+    .unwrap();
+    target
+}
+
+#[test]
+fn repo_target_gc_removes_the_target_of_a_finished_task() {
+    let root = tempfile::tempdir().unwrap();
+    let store = task_core::SqliteStore::open_in_memory().unwrap();
+    let now = time::OffsetDateTime::now_utc();
+    let done = gc_task(&store, task_core::Status::Done, 7, None, now);
+    let cancelled = gc_task(&store, task_core::Status::Cancelled, 9, None, now);
+    let targets = [
+        repo_target(root.path(), done),
+        repo_target(root.path(), cancelled),
+    ];
+    // dry run は木を変えない。
+    let dry = repo_target_gc_move_aside(&store, root.path(), 6 * 3600, now, false);
+    assert_eq!(dry.moved.len(), 2);
+    assert!(dry.to_remove.is_empty());
+    assert!(targets.iter().all(|t| t.is_dir()));
+    let gc = repo_target_gc_move_aside(&store, root.path(), 6 * 3600, now, true);
+    assert!(gc.held.is_empty(), "{:?}", gc.held);
+    assert_eq!(gc.moved.len(), 2);
+    assert!(gc.moved.iter().all(|m| m.bytes >= 8192), "{:?}", gc.moved);
+    assert!(targets.iter().all(|t| !t.exists()));
+    let out = remove_moved_targets(&gc.to_remove, root.path());
+    assert_eq!(out.removed, 2, "{:?}", out.errors);
+    assert!(out.freed_statvfs.is_some());
+    assert!(gc.to_remove.iter().all(|p| !p.exists()));
+    // ソースは残る。
+    assert!(
+        targets
+            .iter()
+            .all(|t| t.parent().unwrap().join("src").is_dir())
+    );
+}
+
+#[test]
+fn repo_target_gc_keeps_the_target_while_a_descendant_runs() {
+    let root = tempfile::tempdir().unwrap();
+    let store = task_core::SqliteStore::open_in_memory().unwrap();
+    let now = time::OffsetDateTime::now_utc();
+    // 親の checkout（repos=[] の子が使う）。親は中止済みでも、子が走っていれば消さない。
+    let parent = gc_task(&store, task_core::Status::Cancelled, 10, None, now);
+    let child = gc_task(&store, task_core::Status::Running, 10, Some(parent), now);
+    let target = repo_target(root.path(), parent);
+    let gc = repo_target_gc_move_aside(&store, root.path(), 6 * 3600, now, true);
+    assert!(gc.moved.is_empty(), "{:?}", gc.moved);
+    assert_eq!(
+        gc.held,
+        vec![SkippedItem {
+            path: target.clone(),
+            reason: "active_descendant".into()
+        }]
+    );
+    assert!(target.is_dir());
+    // 子が終端になっても、最後の終端から猶予が経つまでは残す（時計は注入）。
+    store
+        .apply_transition_with_events(child, Trigger::WorkerDone, vec![])
+        .unwrap();
+    store
+        .apply_transition_with_events(child, Trigger::ReviewPass, vec![])
+        .unwrap();
+    let gc = repo_target_gc_move_aside(&store, root.path(), 6 * 3600, now, true);
+    assert_eq!(gc.held.len(), 1);
+    assert_eq!(gc.held[0].reason, "grace");
+    let later = now + time::Duration::hours(7);
+    let gc = repo_target_gc_move_aside(&store, root.path(), 6 * 3600, later, true);
+    assert_eq!(gc.moved.len(), 1, "{:?}", gc.held);
+    assert!(!target.exists());
+}
+
+#[test]
+fn repo_target_gc_keeps_the_target_while_cargo_holds_the_lock() {
+    let root = tempfile::tempdir().unwrap();
+    let store = task_core::SqliteStore::open_in_memory().unwrap();
+    let now = time::OffsetDateTime::now_utc();
+    let done = gc_task(&store, task_core::Status::Done, 8, None, now);
+    let target = repo_target(root.path(), done);
+    let held = Flock::lock(
+        File::open(target.join("debug").join(CARGO_LOCK)).unwrap(),
+        FlockArg::LockExclusiveNonblock,
+    )
+    .unwrap();
+    let gc = repo_target_gc_move_aside(&store, root.path(), 6 * 3600, now, true);
+    assert!(gc.moved.is_empty());
+    assert_eq!(gc.held[0].reason, "build_in_progress");
+    assert!(target.is_dir());
+    drop(held);
+    let gc = repo_target_gc_move_aside(&store, root.path(), 6 * 3600, now, true);
+    assert_eq!(gc.moved.len(), 1);
+    assert!(!target.exists());
+}

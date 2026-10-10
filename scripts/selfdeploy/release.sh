@@ -173,6 +173,14 @@ fi
 sd_log "CARGO_TARGET_DIR: $SD_CARGO_TARGET (owner ${SD_SCRATCH_OWNER:-<none: fallback>})"
 mkdir -p "$SD_CARGO_TARGET"
 
+# D3: preserve the previous build boundary, prune obsolete workspace test outputs,
+# then atomically publish this build's start time in the leased target.
+PREVIOUS_BUILD_START="$(cat "$SD_CARGO_TARGET/.celeris-release-build-start" 2>/dev/null || printf '0')"
+case "$PREVIOUS_BUILD_START" in *[!0-9.]*|'') PREVIOUS_BUILD_START=0 ;; esac
+sd_release_prune_stale_test_binaries "$SD_CARGO_TARGET" "$BUILD" "$PREVIOUS_BUILD_START"
+sd_release_prune_enforce_limit "$SD_CARGO_TARGET"
+sd_release_prune_record_start "$SD_CARGO_TARGET"
+
 # 共有 target が**この作業ツリーから**作られたものか（Phase SD-1）。違えば（新しい target・他の owner から
 # adopt した target・Phase SD-1 より前の `.cargo-target`）workspace のメンバーを先に掃除する（従来の
 # `cargo-workspace-clean` 段。外部依存は残す）。同じなら掃除しない（掃除すると全メンバーを作り直すことになり、

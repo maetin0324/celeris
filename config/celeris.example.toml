@@ -79,6 +79,8 @@ dir = "../memory"
 # ADR-0129: seed は既定で無効。/local の btrfs へ移行し、共有 probe を確認してから有効にする。
 # [scratch]
 # seed_reflink = false
+# targets_max_gb = 160             # high 144 GiB / low 112 GiB
+# total_max_gb = 200
 
 # ADR-0066 D2（Phase 110b）: 終端（done/failed/cancelled）になってからこの秒数経った作業場所から、
 # ビルド生成物（`target/`、`node_modules/` 等）だけを刈る（ソースツリーと `artifacts/` は残す）。
@@ -510,6 +512,10 @@ interval_secs = 30                                # 判定と送信の間隔（�
 # 従来の既定のまま）。/local へ移した本番の値:
 #   workspace_root = "/local/celeris/data/workspaces"
 #   [db] path = "/local/celeris/data/db/celeris.sqlite3"   backup_dir = "/local/celeris/state/backups"
+#   backup_keep = 48                 # 直近世代（既定）
+#   backup_daily_keep = 7            # UTC 日次の最新世代
+#   backup_weekly_keep = 4           # ISO 週次の最新世代
+#   backup_max_total_bytes = 68719476736 # 既知の DB backup 合計上限（64 GiB）
 #   [workspace] build_cache_dir = "/local/celeris/data/build-cache"   [scratch] dir = "/local/celeris/data/scratch"
 #   [containers] build_dir = "/local/celeris/data/containers"   [memory] dir = "/local/celeris/data/memory"
 #   [selfdeploy] releases_dir = "/local/celeris/state/releases"

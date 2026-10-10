@@ -1,5 +1,6 @@
 use super::*;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
+use std::os::unix::fs::MetadataExt;
 
 const T0: u64 = 1_700_000_000;
 
@@ -667,6 +668,59 @@ fn measure_tree_counts_blocks_and_latest_mtime() {
     assert!(size >= 10_000, "{size}");
     assert!(latest > at(T0 - 1_000_000_000));
     assert_eq!(measure_tree(&tmp.path().join("missing")).unwrap().0, 0);
+}
+
+#[test]
+fn scratch_shared_extent_is_counted_once_and_fiemap_failure_falls_back() {
+    let mut seen = BTreeMap::new();
+    let first = super::gc::account_shared_extents(Ok(vec![(4096, 8192)]), 8192, &mut seen);
+    let second = super::gc::account_shared_extents(Ok(vec![(4096, 8192)]), 8192, &mut seen);
+    assert_eq!(first, (8192, true));
+    assert_eq!(second, (0, true));
+
+    let fallback = super::gc::account_shared_extents(
+        Err(std::io::Error::from(std::io::ErrorKind::Unsupported)),
+        4096,
+        &mut seen,
+    );
+    assert_eq!(fallback, (4096, false));
+
+    let mut index = super::gc::SharedExtentIndex::default();
+    index.replace_measurement("owner-a".into(), vec![(100, 40)], 0);
+    index.replace_measurement("owner-b".into(), vec![(100, 40)], 0);
+    assert_eq!(
+        index.owner_bytes("owner-a") + index.owner_bytes("owner-b"),
+        40
+    );
+    index.replace_measurement("owner-b".into(), vec![], 24);
+    assert_eq!(
+        index.owner_bytes("owner-a") + index.owner_bytes("owner-b"),
+        64
+    );
+}
+
+#[test]
+fn scratch_shared_settings_use_adr_watermark_capacity_defaults() {
+    let settings = ScratchSettings::with_dir("/tmp/scratch");
+    assert_eq!(settings.targets_max_bytes, 160 * GIB);
+    assert_eq!(settings.total_max_bytes, 200 * GIB);
+}
+
+#[test]
+fn scratch_shared_measurement_falls_back_when_fiemap_is_unsupported() {
+    let tmp = tempfile::tempdir().unwrap();
+    let file = tmp.path().join("extent-data");
+    std::fs::write(&file, vec![7u8; 128 * 1024]).unwrap();
+    let allocated = std::fs::metadata(&file).unwrap().blocks() * 512;
+    let mut index = super::gc::SharedExtentIndex::default();
+    index.replace_measurement("owner".into(), vec![(10, 20)], 0);
+    let result = super::gc::measure_tree_shared_with(tmp.path(), "owner", &mut index, &|_| {
+        Err(std::io::Error::from(std::io::ErrorKind::Unsupported))
+    })
+    .unwrap();
+    assert_eq!(result.0, allocated);
+    assert!(!result.2);
+    assert_eq!(index.owner_bytes("owner"), allocated);
 }
 
 /// ADR-0129 (1): env は `CARGO_TARGET_DIR` と `[scratch.cargo]` だけを固定の順で持ち、`RUSTC_WRAPPER` / `SCCACHE_*`

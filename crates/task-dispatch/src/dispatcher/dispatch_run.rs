@@ -963,6 +963,16 @@ impl Dispatcher {
                 extras.cargo_target_work_unit = Some((wu.id.clone(), wu.key.clone()));
             }
         }
+        // ADR 2026-10-10-local-disk-growth-paths D1: 作業場所の先頭に git の repo が無い（`repos=[]` の子 task・
+        // shared の Rust checkout）なら、代わりの checkout を決めて `run_worker` に渡す（repo 直下 target を防ぐ）。
+        if remote.is_none()
+            && !worktree
+                .as_ref()
+                .and_then(|ws| ws.repos.first())
+                .is_some_and(|r| r.is_git())
+        {
+            extras.cargo_target_fallback = Some(self.cargo_target_fallback(&task));
+        }
         if current_wu.is_some() {
             // ADR-0072 D22（Phase E3）: 計画のある Task の WU の run からは delegate.json を
             // 使えない（部をまたぐ委譲は Task 単位。D21）。

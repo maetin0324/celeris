@@ -148,7 +148,12 @@ fn measurement_is_cached_and_written_to_the_lease_without_touching_it() {
     let (path, lease) = next_to_measure(&scan1, &HashMap::new()).unwrap();
     assert_eq!(path, a.target_dir);
     let before = scratch::mtime(&pool.lease_path(&owner));
-    measure_one(&path, lease.as_deref(), &sizes);
+    measure_one(
+        &path,
+        lease.as_deref(),
+        &sizes,
+        &Arc::new(Mutex::new(scratch::SharedExtentIndex::default())),
+    );
     assert!(sizes.lock().unwrap()[&path].bytes >= 8192);
     let l = scratch::read_lease(&pool.lease_path(&owner))
         .unwrap()

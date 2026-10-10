@@ -543,6 +543,9 @@ fn db_accepts_both_the_bare_path_string_and_the_table_form() {
     assert_eq!(raw.db.backup_dir, None);
     assert_eq!(raw.db.backup_interval_secs, 3600);
     assert_eq!(raw.db.backup_keep, 48);
+    assert_eq!(raw.db.backup_daily_keep, 7);
+    assert_eq!(raw.db.backup_weekly_keep, 4);
+    assert_eq!(raw.db.backup_max_total_bytes, 64 * 1024 * 1024 * 1024);
 
     // 文字列（従来どおり）。
     let raw: Config =
@@ -555,7 +558,7 @@ fn db_accepts_both_the_bare_path_string_and_the_table_form() {
     let raw: Config = toml::from_str(
         "[db]\npath = \"/var/lib/celeris/celeris.sqlite3\"\nbusy_timeout_ms = 15000\n\
              checkpoint_interval_secs = 10\nbackup_dir = \"/var/backups/celeris\"\n\
-             backup_interval_secs = 900\nbackup_keep = 12\n\
+             backup_interval_secs = 900\nbackup_keep = 12\nbackup_daily_keep = 5\nbackup_weekly_keep = 3\nbackup_max_total_bytes = 123456\n\
              [[providers]]\nid = \"x\"\nadapter = \"fake\"\n",
     )
     .unwrap();
@@ -571,6 +574,9 @@ fn db_accepts_both_the_bare_path_string_and_the_table_form() {
     );
     assert_eq!(raw.db.backup_interval(), Duration::from_secs(900));
     assert_eq!(raw.db.backup_keep, 12);
+    assert_eq!(raw.db.backup_daily_keep, 5);
+    assert_eq!(raw.db.backup_weekly_keep, 3);
+    assert_eq!(raw.db.backup_max_total_bytes, 123456);
     assert!(raw.db.worker_read_only, "ADR-0095 D5: on unless opted out");
 
     // ADR-0095 D5: 既定（文字列の形も）は worker から読み取り専用。`false` は明示の opt-out。
@@ -1897,8 +1903,8 @@ fn scratch_defaults_follow_the_build_cache_parent() {
     let s = cfg.scratch_settings_unchecked();
     assert!(s.enabled);
     assert_eq!(s.dir, PathBuf::from("/var/lib/celeris/scratch"));
-    assert_eq!(s.targets_max_bytes, 100 * task_worker::scratch::GIB);
-    assert_eq!(s.total_max_bytes, 150 * task_worker::scratch::GIB);
+    assert_eq!(s.targets_max_bytes, 160 * task_worker::scratch::GIB);
+    assert_eq!(s.total_max_bytes, 200 * task_worker::scratch::GIB);
     assert_eq!((s.high_watermark, s.low_watermark), (0.90, 0.70));
     assert_eq!(s.external_lease_ttl_secs, 21_600);
     assert_eq!(s.gc_max_per_tick, 8);

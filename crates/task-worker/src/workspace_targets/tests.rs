@@ -174,3 +174,102 @@ fn workspace_targets_redirected_lock_is_not_safe_to_delete() {
     );
     assert!(target.exists());
 }
+
+// ---- ADR 2026-10-10-local-disk-growth-paths D2: checkout を持つ task とその子孫 ----
+
+/// `id` の親を `parent` にする（`repos=[]` の子が親の checkout を使う木）。
+fn set_parent(store: &SqliteStore, id: TaskId, parent: TaskId) {
+    let mut task = store.get(id).unwrap().unwrap();
+    task.parent_id = Some(parent);
+    store
+        .update_task(&task, task_core::Event::worker_progress("test", "parent"))
+        .unwrap();
+}
+
+#[test]
+fn repo_target_gc_finished_task_target_is_removed() {
+    let tmp = tempfile::tempdir().unwrap();
+    let store = SqliteStore::open_in_memory().unwrap();
+    let now = OffsetDateTime::now_utc();
+    let parent = insert_task(&store, Status::Done, now - Duration::hours(8));
+    let child = insert_task(&store, Status::Done, now - Duration::hours(7));
+    set_parent(&store, child, parent);
+    let target = make_target(&tmp.path().join(parent.to_string()), "agent-platform", true);
+    let scan = scan_finished_task_targets(&store, tmp.path(), now, 6 * 3600).unwrap();
+    assert!(scan.held.is_empty(), "{:?}", scan.held);
+    assert_eq!(scan.found.len(), 1);
+    assert_eq!(scan.found[0].task_id, parent);
+    assert_eq!(scan.found[0].targets, vec![target.clone()]);
+    let RemoveTarget::Moved { moved, bytes } = remove_target(&target, "gc", true).unwrap() else {
+        panic!("expected moved");
+    };
+    assert!(bytes >= 8192, "st_blocks bytes: {bytes}");
+    std::fs::remove_dir_all(moved).unwrap();
+    assert!(!target.exists());
+    assert!(
+        tmp.path()
+            .join(parent.to_string())
+            .join("repos/agent-platform/src")
+            .is_dir()
+    );
+}
+
+#[test]
+fn repo_target_gc_running_descendant_keeps_the_parent_target() {
+    let tmp = tempfile::tempdir().unwrap();
+    let store = SqliteStore::open_in_memory().unwrap();
+    let now = OffsetDateTime::now_utc();
+    let old = now - Duration::hours(8);
+    // 親は終端（失敗）でも、孫が親の checkout で走っていれば残す。
+    let parent = insert_task(&store, Status::Failed, old);
+    let child = insert_task(&store, Status::Done, old);
+    let grandchild = insert_task(&store, Status::Running, old);
+    set_parent(&store, child, parent);
+    set_parent(&store, grandchild, child);
+    let target = make_target(&tmp.path().join(parent.to_string()), "agent-platform", true);
+    let scan = scan_finished_task_targets(&store, tmp.path(), now, 6 * 3600).unwrap();
+    assert!(scan.found.is_empty(), "{:?}", scan.found);
+    assert_eq!(scan.held.len(), 1);
+    assert_eq!(scan.held[0].reason, "active_descendant");
+    assert_eq!(scan.held[0].targets, vec![target.clone()]);
+    // workspace prune（target/ 等を刈る別経路）も同じ木の判定で残す。
+    assert!(
+        crate::workspace_prune::find_prune_candidates(&store, tmp.path(), now, 3600)
+            .unwrap()
+            .is_empty()
+    );
+    // 子孫が最近終端になったばかりなら、猶予（最後の終端から）の間は残す。
+    let recent = insert_task(&store, Status::Done, now - Duration::hours(1));
+    set_parent(&store, recent, parent);
+    let mut gc = store.get(grandchild).unwrap().unwrap();
+    gc.parent_id = None;
+    store
+        .update_task(&gc, task_core::Event::worker_progress("test", "detach"))
+        .unwrap();
+    let scan = scan_finished_task_targets(&store, tmp.path(), now, 6 * 3600).unwrap();
+    assert_eq!(scan.held.len(), 1);
+    assert_eq!(scan.held[0].reason, "grace");
+    assert!(target.is_dir());
+}
+
+#[test]
+fn repo_target_gc_cargo_lock_keeps_the_target() {
+    let tmp = tempfile::tempdir().unwrap();
+    let store = SqliteStore::open_in_memory().unwrap();
+    let now = OffsetDateTime::now_utc();
+    let done = insert_task(&store, Status::Done, now - Duration::hours(8));
+    let target = make_target(&tmp.path().join(done.to_string()), "r", false);
+    let held = Flock::lock(
+        File::open(target.join("debug").join(CARGO_LOCK)).unwrap(),
+        FlockArg::LockExclusiveNonblock,
+    )
+    .unwrap();
+    let scan = scan_finished_task_targets(&store, tmp.path(), now, 6 * 3600).unwrap();
+    assert_eq!(scan.found.len(), 1);
+    assert_eq!(
+        remove_target(&target, "gc", true).unwrap(),
+        RemoveTarget::Locked
+    );
+    assert!(target.is_dir());
+    drop(held);
+}

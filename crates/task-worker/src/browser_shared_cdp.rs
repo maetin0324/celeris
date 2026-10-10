@@ -47,10 +47,29 @@ impl SharedCdp {
         if token.len() != 64 || !token.bytes().all(|b| b.is_ascii_hexdigit()) {
             return Err(std::io::Error::other("invalid relay token"));
         }
+        Self::start_shared(
+            Arc::new(Mutex::new(controller)),
+            socket,
+            token,
+            allowed_domains,
+            mode,
+        )
+    }
+
+    /// Like [`Self::start_with_mode`] around a controller that is already shared.
+    pub fn start_shared(
+        controller: Arc<Mutex<CdpController>>,
+        socket: &Path,
+        token: String,
+        allowed_domains: Vec<String>,
+        mode: u32,
+    ) -> std::io::Result<Self> {
+        if token.len() != 64 || !token.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err(std::io::Error::other("invalid relay token"));
+        }
         let listener = bind_unix_listener(socket)?;
         std::fs::set_permissions(socket, std::fs::Permissions::from_mode(mode))?;
         listener.set_nonblocking(true)?;
-        let controller = Arc::new(Mutex::new(controller));
         let shared = controller.clone();
         let path = socket.to_path_buf();
         let (stop, rx) = mpsc::channel();

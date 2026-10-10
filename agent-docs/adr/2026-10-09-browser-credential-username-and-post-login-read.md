@@ -327,3 +327,29 @@ session では同意頁が毎回出ると見込む。
 5. **launcher protocol 7。** `authenticate` に `consent` と `report_consent_controls`、応答に `consent_controls` を足す。
    consent を使う login は v7 を要求する（v6 の launcher は daemon が承認消費前に「protocol 7 required」で拒否）。
    応答の新しい欄は要求が求めたときだけ返す（v6 の daemon と v7 の launcher も併存できる）。
+
+## 付記 2026-10-10c: 本番の click / snapshot の失敗、隠れた password 欄、ログイン後の navigate
+
+本番 run 01M4J3S5706DNVEZA5EASGV10C（ログインと区間の終わりは成功）で、manaba の `/ct/home`・`/ct/home_course` だけ
+snapshot・screenshot・click が全部失敗し、要約頁では成功した。実 agent-browser 0.38.1 を shim と同じ argv で relay 越しに
+動かす試験（`real_agent_browser_reads_clicks_and_is_refused_after_login`）で、agent-browser の click の CDP
+（`DOM.scrollIntoViewIfNeeded`・`DOM.getBoxModel`・`DOM.resolveNode`・`Runtime.callFunctionOn`・`Input.dispatchMouseEvent`）は
+区間後の検査を通り、click 自体は成功することを確かめた。失敗は頁ごとの検査で、manaba の home 系の頁が持つ（と見られる）
+折り畳まれた login 用の部品の空の password 欄を「password 欄あり」と数えて、その頁の観測を全部拒否していたことによる
+（click が全部失敗したのは、課題への click をそれらの頁で試みたため）。
+
+決定:
+
+1. **password 欄は「生きている」ものだけ数える。** 描画されている（layout の箱があり `visibility: hidden` でない）か、値を
+   持っている `input[type=password]` だけを数える（区間の終わりの条件と区間後の観測ごとの検査の両方）。隠れていて空の
+   password 欄は画面に何も出さず値も持たないので、T1・T2（入力中・再表示の秘密）に関わらない。頁の script が値を入れれば
+   次の検査で数え、注入値の再表示は `RedisplayGuard` が捨てる（変えない）。
+2. **snapshot に link の URL を出す。** shim の snapshot は `snapshot -i --urls`。agent は課題の URL を snapshot から読み、
+   click の代わりに `open` できる（prompt にも書く）。read_origins の頁の URL は T3 で受け入れた範囲。
+3. **ログイン後の navigate は read_origins だけ。** 試験で、agent の `Page.navigate`（agent-browser の `open`）が他 origin の
+   添付ファイルに向くと、Chromium は download の event（`downloadWillBegin`）を出さずに保存することが分かった。download の
+   即時取消（付記 2026-10-09 3）はこの形を止められないので、区間後の agent の `Page.navigate`・`Target.createTarget` の URL は
+   read_origins（と about:blank）に限る。他の許可 domain の頁は元から読めない（観測の検査で拒否）ので、読める範囲は
+   変わらない。read_origins の頁から server の redirect で他 origin に移ることは今どおり起こりうるが、その頁は読めない。
+   残る隙: read_origins の URL が他 origin の添付へ redirect するときの `open` は、download の event が出ず取消できない
+   （egress の許可 domain の範囲に限られる）。

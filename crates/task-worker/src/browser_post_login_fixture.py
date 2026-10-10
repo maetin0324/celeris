@@ -102,13 +102,19 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self.send('<body>IdP home (no form here)')
         elif me == lms_origin:
-            if self.path == '/ct/logout':
+            if self.path == '/ct/go_idp':
+                self.send('', 302, idp_origin + '/')
+            elif self.path == '/ct/go_other':
+                self.send('', 302, other_origin + '/page')
+            elif self.path == '/ct/logout':
                 self.send('', 302, '/ct/home', [('Set-Cookie', 'sid=; Max-Age=0; Path=/; Secure')])
             elif not self.signed_in():
                 self.send('', 302, idp_origin + '/idp/login')
             elif self.path == '/ct/home':
                 user, _ = received()
-                self.send(f'''<body><h1>Assignments</h1>
+                # manaba-like: a collapsed login widget with an empty password input on the home page.
+                self.send(f'''<body><div id=relogin style="display:none"><input type=password name=userpass></div>
+<h1>Assignments</h1>
 <p id=who>Signed in as {html.escape(user)}</p>
 <ul><li><a id=report href="/ct/report_1">Report 1: Fluid dynamics essay</a></li></ul>
 <a id=dl href="/ct/files/handout.pdf">Handout</a>
@@ -119,6 +125,9 @@ class Handler(BaseHTTPRequestHandler):
                 self.send('%PDF-1.4 handout for report 1', headers=[
                     ('Content-Type', 'application/pdf'),
                     ('Content-Disposition', 'attachment; filename="handout.pdf"')])
+            elif self.path == '/ct/autofilled':
+                # A hidden password input that holds a value is still live.
+                self.send('<body><h1>Course</h1><div style="display:none"><input type=password value="filled-by-page"></div>')
             elif self.path == '/ct/settings':
                 self.send('<body><h1>Settings</h1><form><input type=password name=new_password></form>')
             elif self.path == '/ct/leak':

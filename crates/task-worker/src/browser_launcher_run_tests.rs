@@ -3061,10 +3061,18 @@ mod launcher_login {
         let from = agent.seen.len();
         agent.click("dl").expect("download");
         assert!(agent.wait_download(from, "completed"));
-        // A fresh document first (Chromium's multiple-download limiter, see the daemon test).
-        agent.goto(&format!("{}/ct/home", o.lms), &format!("{}/ct/home", o.lms));
-        agent
-            .download_with_retry("dl-other", "canceled")
+        let mut tab2 = crate::browser::post_login_tests::Agent::new_tab(&chrome.controller);
+        assert_eq!(
+            tab2.cmd(
+                "Page.navigate",
+                serde_json::json!({"url":format!("{}/files/other.bin", o.other)})
+            )
+            .err()
+            .map(|e| e.code()),
+            Some("observation_origin_denied")
+        );
+        tab2.goto(&format!("{}/ct/home", o.lms), &format!("{}/ct/home", o.lms));
+        tab2.download_by_script("dl-other", "canceled")
             .expect("other-origin download cancelled");
         assert_eq!(
             std::fs::read_dir(downloads.path()).expect("dir").count(),
@@ -3074,7 +3082,7 @@ mod launcher_login {
         let denied = |r: Result<serde_json::Value, crate::browser_cdp_sink::InjectionError>| {
             r.err().map(|e| e.code())
         };
-        agent.goto(&format!("{}/", o.idp), &format!("{}/", o.idp));
+        agent.goto(&format!("{}/ct/go_idp", o.lms), &format!("{}/", o.idp));
         assert_eq!(
             denied(agent.eval("document.body.innerText")),
             Some("observation_origin_denied")
@@ -3083,7 +3091,10 @@ mod launcher_login {
             denied(agent.cmd("Page.captureScreenshot", serde_json::json!({}))),
             Some("observation_origin_denied")
         );
-        agent.goto(&format!("{}/page", o.other), &format!("{}/page", o.other));
+        agent.goto(
+            &format!("{}/ct/go_other", o.lms),
+            &format!("{}/page", o.other),
+        );
         assert_eq!(
             denied(agent.eval("document.title")),
             Some("observation_origin_denied")

@@ -64,7 +64,8 @@ def command(request):
     elif verb == 'snapshot':
         if args:
             raise ValueError()
-        action = ['snapshot', '-i']
+        # Link URLs let the agent `open` a page instead of clicking its link.
+        action = ['snapshot', '-i', '--urls']
     elif verb == 'screenshot':
         if args:
             raise ValueError()

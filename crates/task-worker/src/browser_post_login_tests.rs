@@ -302,28 +302,67 @@ impl<'a> Agent<'a> {
         Ok(())
     }
 
-    /// Start the download behind `#id` with a programmatic click and wait for `state`, retrying
-    /// the click (up to 3 times, 10 s each) when a heavily loaded host never starts the navigation.
-    /// Only the outcome of a download that began is under test.
-    pub(crate) fn download_with_retry(&mut self, id: &str, state: &str) -> Result<(), String> {
-        for attempt in 0..3 {
-            let from = self.seen.len();
-            if let Err(e) = self.eval(&format!("document.getElementById('{id}').click()")) {
+    /// Open a fresh tab for this agent (a new target, attached the way the agent attaches).
+    pub(crate) fn new_tab(controller: &'a Arc<Mutex<CdpController>>) -> Self {
+        let created = controller
+            .lock()
+            .expect("lock")
+            .agent_command("Target.createTarget", json!({"url":"about:blank"}), None)
+            .expect("new tab");
+        let target = created["result"]["targetId"]
+            .as_str()
+            .expect("target")
+            .to_owned();
+        Self::attach(controller, &target)
+    }
+
+    /// Start the download behind `#id` with a page-initiated click (in this tab's page) and wait —
+    /// on events, bounded — first for the browser to announce it (`downloadWillBegin`) and then for
+    /// `state`. Use a tab that has not downloaded yet: Chromium's per-tab download limiter silently
+    /// holds a second download without fresh user activation (which made the earlier mouse-driven
+    /// version of this check depend on timing). Errors name what was seen.
+    pub(crate) fn download_by_script(&mut self, id: &str, state: &str) -> Result<(), String> {
+        let from = self.seen.len();
+        self.eval(&format!("document.getElementById('{id}').click()"))
+            .map_err(|e| format!("click refused: {}", e.code()))?;
+        let began = |seen: &[String]| {
+            seen.iter().any(|e| {
+                e.contains("\"Browser.downloadWillBegin\"")
+                    || e.contains("\"Page.downloadWillBegin\"")
+            })
+        };
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while !began(&self.seen[from..]) {
+            if Instant::now() >= deadline {
                 return Err(format!(
-                    "attempt {attempt}: click refused ({}); events: {:?}",
-                    e.code(),
-                    self.seen
+                    "the browser never announced the download: {:?}",
+                    self.seen[from..]
                         .iter()
-                        .filter(|e| e.contains("ownload"))
-                        .map(|e| e.chars().take(200).collect::<String>())
+                        .map(|e| e.chars().take(220).collect::<String>())
                         .collect::<Vec<_>>()
                 ));
             }
-            if self.wait_download_for(from, state, Duration::from_secs(10)) {
-                return Ok(());
-            }
+            self.pump();
+            std::thread::sleep(Duration::from_millis(20));
         }
-        Err("no download began".into())
+        if self.wait_download_for(from, state, Duration::from_secs(60)) {
+            Ok(())
+        } else {
+            Err(format!("no {state} after the download began"))
+        }
+    }
+
+    /// Take the events queued for this agent (browser-level and its own session).
+    fn pump(&mut self) {
+        let mut c = self.controller.lock().expect("lock");
+        let _ = c.pump_events();
+        let sessions: HashSet<String> = [self.session.clone()].into_iter().collect();
+        let events = c.take_agent_events_for(&sessions);
+        drop(c);
+        for mut event in events {
+            crate::browser_shared_cdp::sanitize_agent_event(&mut event);
+            self.seen.push(event.to_string());
+        }
     }
 
     /// Wait for a `Browser.downloadProgress` of `state` among the events received since `from`
@@ -475,16 +514,26 @@ async fn daemon_post_login_pair_login_reads_lms_and_refuses_idp_other_and_passwo
         .map(|e| std::fs::read_to_string(e.path()).unwrap_or_default())
         .collect();
     assert_eq!(files, vec!["%PDF-1.4 handout for report 1".to_string()]);
-    // A fresh document first: Chromium's multiple-download limiter may hold a second download from
-    // the same document without asking, which would hide the cancellation under test.
-    agent.goto(
+    // Deterministic trigger: navigate the tab to the other origin's attachment and wait on the
+    // browser's own download events (no timing guess, no click hit-testing).
+    // An agent navigation straight to another origin's file is refused (a navigation download
+    // raises no download event, so it could not be cancelled) …
+    let mut tab2 = Agent::new_tab(&w.fx.controller);
+    assert_eq!(
+        code(tab2.cmd(
+            "Page.navigate",
+            json!({"url":format!("{}/files/other.bin", w.o.other)})
+        )),
+        "observation_origin_denied"
+    );
+    // … and a page-initiated one from a read-origin page is cancelled. A fresh tab's first download
+    // is not held by Chromium's per-tab download limiter, and the waits are on the browser's own
+    // download events.
+    tab2.goto(
         &format!("{}/ct/home", w.o.lms),
         &format!("{}/ct/home", w.o.lms),
     );
-    // A programmatic click (the agent's own click path is covered above): on a heavily loaded host
-    // the navigation sometimes never started, which is not under test here.
-    agent
-        .download_with_retry("dl-other", "canceled")
+    tab2.download_by_script("dl-other", "canceled")
         .expect("other-origin download cancelled");
     assert_eq!(
         std::fs::read_dir(download_dir.path()).expect("dir").count(),
@@ -492,7 +541,15 @@ async fn daemon_post_login_pair_login_reads_lms_and_refuses_idp_other_and_passwo
     );
 
     // Refused: the IdP, another allowed origin, a page with a password field.
-    agent.goto(&format!("{}/", w.o.idp), &format!("{}/", w.o.idp));
+    // After login the agent navigates only to read origins …
+    for url in [format!("{}/", w.o.idp), format!("{}/page", w.o.other)] {
+        assert_eq!(
+            code(agent.cmd("Page.navigate", json!({"url":url}))),
+            "observation_origin_denied"
+        );
+    }
+    // … but a read-origin page may redirect anywhere; nothing there is readable.
+    agent.goto(&format!("{}/ct/go_idp", w.o.lms), &format!("{}/", w.o.idp));
     assert_eq!(
         code(agent.eval("document.body.innerText")),
         "observation_origin_denied"
@@ -509,7 +566,7 @@ async fn daemon_post_login_pair_login_reads_lms_and_refuses_idp_other_and_passwo
         "observation_origin_denied"
     );
     agent.goto(
-        &format!("{}/page", w.o.other),
+        &format!("{}/ct/go_other", w.o.lms),
         &format!("{}/page", w.o.other),
     );
     assert_eq!(
@@ -811,5 +868,273 @@ _eventId_AttributeReleaseRejected=Reject(submit),_eventId_proceed=Accept(submit)
             assert!(!line.contains(leak), "{case}: {leak} in {line}");
         }
         assert!(w.controller().auth_section_active(), "{case}");
+    }
+}
+
+// ---- 2026-10-10: the real agent-browser 0.38.1 through the relay after login ----
+
+/// The agent-browser 0.38.1 the sandbox runs (skip when this host does not have it).
+fn agent_browser_binary() -> Option<std::path::PathBuf> {
+    let candidates = [
+        std::env::var_os("CELERIS_TEST_AGENT_BROWSER").map(std::path::PathBuf::from),
+        std::env::var_os("HOME").map(|h| {
+            std::path::PathBuf::from(h)
+                .join(".local/celeris/npm/agent-browser-0.38.1/node_modules/.bin/agent-browser")
+        }),
+    ];
+    candidates.into_iter().flatten().find(|p| {
+        std::process::Command::new(p)
+            .arg("--version")
+            .output()
+            .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).trim() == "agent-browser 0.38.1")
+    })
+}
+
+/// agent-browser driving the shared Chromium through the controller's relay (as in the sandbox:
+/// `--cdp ws://127.0.0.1:<port>/<token>`, the shim's fixed argv shape).
+struct RealAgentBrowser {
+    exe: std::path::PathBuf,
+    dir: tempfile::TempDir,
+    /// A short socket dir: agent-browser's session socket path must fit in sun_path.
+    sockets: tempfile::TempDir,
+    endpoint: String,
+    _relay: crate::browser_shared_cdp::SharedCdp,
+}
+
+impl RealAgentBrowser {
+    fn start(
+        exe: std::path::PathBuf,
+        controller: &Arc<Mutex<CdpController>>,
+        domains: Vec<String>,
+        allow: &[&str],
+    ) -> Self {
+        let dir = tempfile::tempdir().expect("agent dir");
+        let sockets = tempfile::Builder::new()
+            .prefix("ab")
+            .tempdir_in("/tmp")
+            .expect("socket dir");
+        let token = "ab".repeat(32);
+        let socket = sockets.path().join("relay.sock");
+        let relay = crate::browser_shared_cdp::SharedCdp::start_shared(
+            Arc::clone(controller),
+            &socket,
+            token.clone(),
+            domains,
+            0o600,
+        )
+        .expect("relay");
+        // TCP → unix bridge (the sandbox's 127.0.0.1:9223).
+        let tcp = std::net::TcpListener::bind("127.0.0.1:0").expect("bridge");
+        let port = tcp.local_addr().expect("addr").port();
+        std::thread::spawn(move || {
+            for conn in tcp.incoming().flatten() {
+                let Ok(unix) = std::os::unix::net::UnixStream::connect(&socket) else {
+                    continue;
+                };
+                let (mut a, mut b) = (conn, unix);
+                let (mut a2, mut b2) =
+                    (a.try_clone().expect("clone"), b.try_clone().expect("clone"));
+                std::thread::spawn(move || {
+                    let _ = std::io::copy(&mut a, &mut b);
+                    let _ = b.shutdown(std::net::Shutdown::Write);
+                });
+                std::thread::spawn(move || {
+                    let _ = std::io::copy(&mut b2, &mut a2);
+                    let _ = a2.shutdown(std::net::Shutdown::Write);
+                });
+            }
+        });
+        std::fs::create_dir_all(dir.path().join("home")).expect("home");
+        std::fs::write(
+            dir.path().join("upstream.json"),
+            br#"{"idleTimeout":"5m","noWebmcp":true}"#,
+        )
+        .expect("upstream");
+        let mut allow: Vec<&str> = allow.to_vec();
+        allow.extend(["launch", "close"]);
+        std::fs::write(
+            dir.path().join("policy.json"),
+            serde_json::to_vec(&json!({"default":"deny","allow":allow})).expect("policy"),
+        )
+        .expect("policy");
+        Self {
+            exe,
+            endpoint: format!("ws://127.0.0.1:{port}/{token}"),
+            dir,
+            sockets,
+            _relay: relay,
+        }
+    }
+
+    /// One shim-shaped command; returns (exit status, stdout).
+    fn run(&self, action: &[&str]) -> (i32, String) {
+        let d = self.dir.path();
+        let out = std::process::Command::new(&self.exe)
+            .current_dir(d)
+            .env_clear()
+            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+            .env("HOME", d.join("home"))
+            .env("AGENT_BROWSER_NAMESPACE", "celeris-test")
+            .env("AGENT_BROWSER_SOCKET_DIR", self.sockets.path())
+            // No traffic leaves the host: any proxy use fails closed.
+            .env("HTTP_PROXY", "http://127.0.0.1:9")
+            .env("HTTPS_PROXY", "http://127.0.0.1:9")
+            .env("ALL_PROXY", "http://127.0.0.1:9")
+            .args(["--config"])
+            .arg(d.join("upstream.json"))
+            .args(["--session", "celeris-test"])
+            .arg("--action-policy")
+            .arg(d.join("policy.json"))
+            .args(["--cdp", &self.endpoint])
+            .args(["--content-boundaries", "--max-output", "16000", "--json"])
+            .args(action)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .expect("agent-browser runs");
+        (
+            out.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+        )
+    }
+}
+
+impl Drop for RealAgentBrowser {
+    fn drop(&mut self) {
+        let _ = self.run(&["close"]);
+        // agent-browser keeps a per-session daemon until its idle timeout; stop this test's daemon
+        // (found by its private socket dir in its environment, so nothing else is touched).
+        let marker = format!("AGENT_BROWSER_SOCKET_DIR={}", self.sockets.path().display());
+        for entry in std::fs::read_dir("/proc").into_iter().flatten().flatten() {
+            let Some(pid) = entry
+                .file_name()
+                .to_str()
+                .and_then(|n| n.parse::<i32>().ok())
+            else {
+                continue;
+            };
+            let ours = std::fs::read(entry.path().join("environ"))
+                .is_ok_and(|env| env.split(|b| *b == 0).any(|kv| kv == marker.as_bytes()));
+            if ours {
+                let _ = nix::sys::signal::kill(
+                    nix::unistd::Pid::from_raw(pid),
+                    nix::sys::signal::Signal::SIGTERM,
+                );
+            }
+        }
+    }
+}
+
+/// 付記 2026-10-10c (production run 01M4J3S5706DNVEZA5EASGV10C): the sandbox's real agent-browser
+/// 0.38.1, with the shim's argv shape, through the controller's relay after the login. On the LMS
+/// home page with a collapsed (hidden, empty) login widget, snapshot lists the links with their URLs,
+/// click follows a link, extract and screenshot work; a page with a visible password field, a hidden
+/// password field that holds a value, the IdP and another origin are refused. Skips when this host has
+/// no agent-browser 0.38.1.
+#[tokio::test]
+async fn real_agent_browser_reads_clicks_and_is_refused_after_login() {
+    let Some(exe) = agent_browser_binary() else {
+        eprintln!("SKIP: agent-browser 0.38.1 not installed");
+        return;
+    };
+    let w = world();
+    let read = vec![w.o.lms.clone()];
+    let trusted = trusted(&w.o, &[w.o.lms.as_str()]);
+    let mut broker = PairBroker::default();
+    let tab = w.login(&trusted, &mut broker).await.expect("login");
+    await_post_login(
+        &w.fx.controller,
+        &tab,
+        &w.o.idp,
+        &read,
+        None,
+        POST_LOGIN_TIMEOUT,
+    )
+    .await
+    .expect("resumed");
+    let ab = RealAgentBrowser::start(
+        exe,
+        &w.fx.controller,
+        vec![w.o.idp.clone(), w.o.lms.clone(), w.o.other.clone()],
+        &[
+            "navigate",
+            "snapshot",
+            "gettext",
+            "click",
+            "screenshot",
+            "scroll",
+        ],
+    );
+    let lms = |p: &str| format!("{}{p}", w.o.lms);
+    let ok = |(code, out): (i32, String)| {
+        assert_eq!(code, 0, "{out}");
+        let v: Value = serde_json::from_str(out.trim()).expect("json");
+        assert_eq!(v["success"], true, "{out}");
+        v
+    };
+    let refused = |(code, out): (i32, String)| {
+        assert_ne!(code, 0, "{out}");
+        out
+    };
+    ok(ab.run(&["open", &lms("/ct/home")]));
+    // The shim's snapshot argv: interactive refs with link URLs.
+    let snap = ok(ab.run(&["snapshot", "-i", "--urls"]));
+    let tree = snap["data"]["snapshot"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+    assert!(tree.contains("Report 1: Fluid dynamics essay"), "{tree}");
+    assert!(
+        tree.contains(&lms("/ct/report_1")),
+        "link URL in the snapshot: {tree}"
+    );
+    let report_ref = snap["data"]["refs"]
+        .as_object()
+        .expect("refs")
+        .iter()
+        .find(|(_, r)| r["name"] == "Report 1: Fluid dynamics essay")
+        .map(|(k, _)| format!("@{k}"))
+        .expect("report ref");
+    let before = w.controller().agent_log.len();
+    ok(ab.run(&["click", &report_ref]));
+    let clicked: Vec<String> = w.controller().agent_log[before..].to_vec();
+    assert!(
+        clicked.iter().any(|m| m == "Input.dispatchMouseEvent"),
+        "agent-browser's click path passed the post-login gate: {clicked:?}"
+    );
+    assert!(!clicked.iter().any(|m| m.contains('!')), "{clicked:?}");
+    let detail = ok(ab.run(&["snapshot", "-i", "--urls"]));
+    assert_eq!(detail["data"]["origin"], lms("/ct/report_1"));
+    let heading = detail["data"]["refs"]
+        .as_object()
+        .expect("refs")
+        .keys()
+        .next()
+        .map(|k| format!("@{k}"))
+        .expect("a ref");
+    let text = ok(ab.run(&["get", "text", &heading]));
+    assert!(text.to_string().contains("Report 1 detail"), "{text}");
+    let shot = ab.dir.path().join("shot.png");
+    ok(ab.run(&["screenshot", &shot.to_string_lossy()]));
+    assert!(std::fs::metadata(&shot).is_ok_and(|m| m.len() > 100));
+    // Refused pages.
+    // `open` of another origin is refused outright after login.
+    refused(ab.run(&["open", &format!("{}/page", w.o.other)]));
+    for (page, why) in [
+        (lms("/ct/settings"), "password_field_present"),
+        (lms("/ct/autofilled"), "password_field_present"),
+        (lms("/ct/go_idp"), "observation_origin_denied"),
+        (lms("/ct/go_other"), "observation_origin_denied"),
+    ] {
+        ok(ab.run(&["open", &page]));
+        let before = w.controller().agent_log.len();
+        let out = refused(ab.run(&["snapshot", "-i", "--urls"]));
+        assert!(!out.contains("filled-by-page"), "{out}");
+        let log: Vec<String> = w.controller().agent_log[before..].to_vec();
+        assert!(
+            log.iter().any(|m| m.ends_with(&format!("!{why}"))),
+            "{page}: {why} expected in {log:?}"
+        );
+        let shot = ab.dir.path().join("refused.png");
+        refused(ab.run(&["screenshot", &shot.to_string_lossy()]));
     }
 }

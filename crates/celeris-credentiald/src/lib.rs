@@ -589,7 +589,7 @@ impl ManualProvider {
                 ));
             }
         }
-        result.sort_by(|left, right| left.1.cmp(&right.1));
+        result.sort_by_key(|entry| entry.1);
         Ok(result)
     }
     /// Return only the administrator's non-secret login metadata for approval pinning.

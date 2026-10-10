@@ -22,15 +22,25 @@ describe("browser display model", () => {
     expect(browserRunBadge({ state: "RUNNING" }, "paused")).toBe("一時停止中（人の返却待ち）");
   });
 
-  it("has a message for all seven live unavailability reasons", () => {
+  it("has a message for every live unavailability reason, including the gateway's frame grant/guard codes", () => {
     expect(Object.keys(liveUnavailableText).sort()).toEqual([
+      "attestation_unavailable",
+      "auth_interval",
+      "grant_denied",
       "grant_expired",
       "launcher_protocol_no_live_frames",
+      "live_view_disabled",
+      "live_view_guard_unavailable",
       "not_configured",
       "not_owner",
+      "not_owner_session",
       "not_running",
+      "observation_stopped",
+      "origin_mismatch",
+      "other_task",
       "owner_unavailable",
       "relay_unavailable",
+      "run_ended",
     ]);
     for (const message of Object.values(liveUnavailableText)) expect(message.length).toBeGreaterThan(0);
   });

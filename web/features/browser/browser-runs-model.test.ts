@@ -81,6 +81,12 @@ describe("browser runs list model", () => {
     expect(liveCell(run("T1", "R1", "RUNNING", { live: { state: "disabled", reason: "<x>" } }))).toMatchObject({
       reason: "relay_unavailable",
     });
+    // gateway が frame 経路の grant・guard の拒否理由を返したら、中継不可に丸めずその理由を出す。
+    for (const reason of ["auth_interval", "run_ended", "grant_denied", "attestation_unavailable"])
+      expect(liveCell(run("T1", "R1", "RUNNING", { live: { state: "disabled", reason } }))).toMatchObject({
+        available: false,
+        reason,
+      });
   });
 
   it("never carries a raw live_view_url into the rows", () => {

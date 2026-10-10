@@ -188,3 +188,29 @@ main の artifact transfer（`ARTIFACT_PROTOCOL = 8`）を取り込んだ際、L
   - `browser_launcher_v8_continues_without_live_view`（`crates/task-worker/src/browser_launcher/live_tests.rs`、`crates/task-worker/src/browser_launcher_run.rs`）
   - `browser_launcher_daemon_checks_live_protocol_before_enable`（`crates/task-worker/src/browser_launcher_run.rs`）
 - 本番 launcher の v9 への差し替えは運用者が行う。手順は [docs/ops/browser-launcher-live-view.md](../../docs/ops/browser-launcher-live-view.md) §3（launcher の再 build と差し替え）と §5（Live View の確認）。エージェントは本番に触れない。
+
+## 付記 2026-10-10e（本番で映像が出ない: gateway の guard が解決済みの credential 待ちを認証区間と取り違える）
+
+- 事象: release 342ec107（launcher protocol 9）で task 01M4GYJ3XGJNWZQDF35F1MDE0H の run 01M4K442Q4D3ABPFC59N12ZB4R
+  （RUNNING 14:40:24–14:41:20Z）の Live View に映像が出なかった。daemon の grant（署名検証・run_active・registry 登録）は
+  成立していた。frame の WebSocket は gateway の `guard` が **履歴の**（`registered`・`resumed` の）credential 待ちを
+  `isAuthWait` で拾い、毎回 409 `auth_interval` で拒否していた。task-api の `/browser/waits` は解決済みの待ちも返す。
+  一度でも credential を使った task（とその task が終端でない間の全 task）で、frame 経路と dashboard 経路の guard が閉じたままになる。
+  upgrade の拒否は express の access log を通らず、journal に何も残らなかった。
+- 決定:
+  1. gateway の認証区間は **未決の待ち**（`state` が `pending`・`approved`）だけで判定する（`isOpenAuthWait`）。解決済みの待ちは履歴。
+  2. `/browser/runs` は RUNNING の run について grant に加えて upgrade と同じ `guard` を先に通し、通らなければ link を出さない。
+     frame 経路が拒まれたら理由を `relay_unavailable` に落とさず固定語彙で返す: 署名鍵なし `attestation_unavailable`、
+     guard の `auth_interval`・`not_running`・`live_view_guard_unavailable`、daemon の LiveDenied の code
+     （`live_view_disabled`・`not_owner_session`・`origin_mismatch`・`other_task`・`run_ended`・`observation_stopped`・`grant_expired`）、
+     それ以外は `grant_denied`。SPA は各理由の文を持つ。
+  3. frame の HTTP 要求の期限（10 秒）は daemon の応答までに限る。応答後は socket の無通信 timeout を外す（screencast は画面が
+     変わらなければ frame を出さず、残すと 10 秒で stream が切れて SPA は再接続しない）。
+  4. gateway は frame の upgrade の結果（101 / 拒否の status と code）と `/browser/runs` の不可理由を log に 1 行残す（id と code だけ。frame・署名・cookie は出さない）。
+- 変えないこと: daemon の grant・check・frames の判定、owner session・Origin・grant の再確認、input 拒否。
+- 未決（提案）: D3 は auth section 中も本人に frame を出すとするが、gateway の guard は未決の auth 待ちがある間（他 task のものも）
+  frame を止める。frame 経路だけ guard の auth 判定を外すかは人の判断に残す（進捗 2026-10-10-live-view-fix の提案）。
+- 試験: `web/server/browser-live-frames-prod.test.mjs`（本番の構成: upstream なし・解決済み credential 待ちあり）
+  `browser_live_frame_resolved_credential_waits_do_not_block_frames`、
+  `browser_live_view_open_auth_wait_reports_auth_interval_not_relay_unavailable`、`browser_live_view_grant_refusal_code_is_exposed`、
+  `browser_live_frame_stream_survives_idle_longer_than_connect_timeout`。

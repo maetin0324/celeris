@@ -303,6 +303,84 @@ fn backfill_artifacts_registers_remote_mirror_artifacts_once() {
     assert_eq!(produced_paths(&store, local_id).len(), 2);
 }
 
+/// Parentless retries share the original workspace but must never backfill its files.
+#[test]
+fn backfill_artifacts_isolates_local_retry_and_original_tasks() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = SqliteStore::open_in_memory().unwrap();
+    let original_id = insert_done_task(&store, OffsetDateTime::now_utc());
+    let retry_id = insert_done_task(&store, OffsetDateTime::now_utc());
+    let sibling_id = insert_done_task(&store, OffsetDateTime::now_utc());
+    let workspace = dir.path().join(original_id.to_string());
+    for id in [original_id, retry_id, sibling_id] {
+        let mut task = store.get(id).unwrap().unwrap();
+        assert!(task.parent_id.is_none());
+        task.workspace = WorkspaceSpec::Local {
+            path: workspace.clone(),
+            mode: None,
+        };
+        store
+            .update_task(&task, Event::worker_progress("x", "shared local"))
+            .unwrap();
+    }
+    let retry_rel = format!(".taskd/artifacts/{retry_id}");
+    let retry_dir = workspace.join(&retry_rel);
+    std::fs::create_dir_all(retry_dir.join("reports")).unwrap();
+    std::fs::create_dir_all(workspace.join("artifacts")).unwrap();
+    std::fs::write(workspace.join("artifacts/original.md"), "# original\n").unwrap();
+    let sibling_dir = workspace.join(format!(".taskd/artifacts/{sibling_id}"));
+    std::fs::create_dir_all(&sibling_dir).unwrap();
+    std::fs::write(sibling_dir.join("sibling.md"), "# sibling\n").unwrap();
+    // The legacy manaba inventory: 28 reports plus assignments and summary.
+    let mut expected = vec![
+        format!("{retry_rel}/assignments.md"),
+        format!("{retry_rel}/summary.md"),
+    ];
+    for name in ["assignments.md", "summary.md"] {
+        std::fs::write(retry_dir.join(name), "# retry\n").unwrap();
+    }
+    for i in 0..28 {
+        let name = format!("reports/{i:02}.md");
+        std::fs::write(retry_dir.join(&name), "# retry report\n").unwrap();
+        expected.push(format!("{retry_rel}/{name}"));
+    }
+    std::fs::write(retry_dir.join("result.json"), "{}").unwrap();
+    let config = write_config(dir.path(), dir.path());
+    for dry_run in [true, false, false] {
+        assert_eq!(
+            run_backfill_artifacts(
+                &store,
+                BackfillArtifactsArgs {
+                    config: config.clone(),
+                    task: Some(retry_id.to_string()),
+                    dry_run,
+                }
+            )
+            .unwrap(),
+            ExitCode::SUCCESS
+        );
+        assert_eq!(
+            produced_paths(&store, retry_id),
+            if dry_run { vec![] } else { expected.clone() }
+        );
+        assert!(produced_paths(&store, original_id).is_empty());
+        assert!(produced_paths(&store, sibling_id).is_empty());
+    }
+    run_backfill_artifacts(
+        &store,
+        BackfillArtifactsArgs {
+            config,
+            task: Some(original_id.to_string()),
+            dry_run: false,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        produced_paths(&store, original_id),
+        vec!["artifacts/original.md"]
+    );
+}
+
 #[test]
 fn backfill_artifacts_with_an_unknown_task_is_an_error() {
     let dir = tempfile::tempdir().unwrap();

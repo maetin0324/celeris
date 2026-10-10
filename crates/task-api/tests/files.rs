@@ -680,3 +680,65 @@ async fn work_unit_check_log_reads_a_leaf_acceptance_check() {
     assert!(text.contains("work_unit_check_started"), "{text}");
     assert!(text.contains("work_unit_check_finished"), "{text}");
 }
+
+/// The web's listing and download endpoints serve a retry's task-scoped undeclared artifact.
+#[tokio::test]
+async fn local_retry_undeclared_artifacts_are_listed_and_downloadable_separately() {
+    let env = TestEnv::new();
+    let mut original = new_task(TaskKind::Execute, Status::Done);
+    let workspace = env.workspace_root.join(original.id.to_string());
+    original.workspace = WorkspaceSpec::Local {
+        path: workspace.clone(),
+        mode: None,
+    };
+    let mut retry = new_task(TaskKind::Execute, Status::Done);
+    retry.workspace = original.workspace.clone();
+    assert!(retry.parent_id.is_none());
+    env.seed(&original);
+    env.seed(&retry);
+    for (task, content) in [(&original, "# original"), (&retry, "# retry")] {
+        let rel = format!(
+            "{}/summary.md",
+            task_core::artifacts_rel_for(task, &workspace)
+        );
+        write(&workspace.join(&rel), content.as_bytes());
+        env.store
+            .append_event(
+                task.id,
+                &Event::ArtifactProduced {
+                    run_id: format!("run-{}", task.id),
+                    artifact: ArtifactRef {
+                        name: "summary.md".into(),
+                        path: rel,
+                        sha256: sha256(content.as_bytes()),
+                        kind: "md".into(),
+                        declared: false,
+                    },
+                },
+            )
+            .unwrap();
+    }
+    let app = env.router();
+    for (task, content, path) in [
+        (&original, "# original", "artifacts/summary.md".to_string()),
+        (
+            &retry,
+            "# retry",
+            format!(".taskd/artifacts/{}/summary.md", retry.id),
+        ),
+    ] {
+        let list = send(&app, get(&format!("/api/v1/tasks/{}/artifacts", task.id))).await;
+        assert_eq!(list.status, 200, "{}", list.text());
+        let json = list.json();
+        let items = json["items"].as_array().unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["artifact"]["path"], path);
+        assert_eq!(items[0]["artifact"]["declared"], false);
+        assert_eq!(items[0]["exists"], true);
+        assert_eq!(items[0]["forbidden"], false);
+        assert_eq!(items[0]["sha256_matches"], true);
+        let file = send(&app, get(&format!("/api/v1/tasks/{}/artifacts/0", task.id))).await;
+        assert_eq!(file.status, 200, "{}", file.text());
+        assert_eq!(file.body, content.as_bytes());
+    }
+}

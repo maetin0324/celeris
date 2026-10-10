@@ -734,10 +734,10 @@ pub(super) async fn run_worker(
     // ADR-0067 D3 / ADR-0074 D6.3（Phase F1 (j)）/ ADR-0067 付記 2026-10-07: run の終端が
     // `Done` / `Question` / `Waiting` なら未申告の成果物を登録する（判断待ち・cluster job 待ちでも
     // 人がその時点の成果物を使う）。
-    // - git worktree ではない local の作業場所（`remote`/`worktree` どちらも無い）はリポジトリ全体
+    // - git worktree ではない local の所有する作業場所はリポジトリ全体
     //   （`artifacts_dir` の外を含む）から `*.md` を拾う（従来どおり。取りこぼし防止）。
     // - すべての Task で、その run の `artifacts_dir` の中を、人が読む拡張子で走査する。
-    //   local の非 worktree は従来の workspace 全体の markdown 走査も続ける。
+    //   共有 workspace（親なしの retry を含む）では元 task の markdown を混ぜないため全体を走査しない。
     // 重複は `(path, sha256)` で見る（同じ中身は増えない。中身が変われば新しい版）。
     if outcome
         .as_ref()
@@ -750,7 +750,10 @@ pub(super) async fn run_worker(
             .unwrap_or_else(|_| events.clone());
         let existing =
             crate::undeclared_artifacts::registered_keys(after_run.iter().map(|(_, ev)| ev));
-        let mut found = if worktree.is_none() && remote.is_none() {
+        let mut found = if worktree.is_none()
+            && remote.is_none()
+            && task_core::artifacts::owns_workspace(&task, &workspace_for_undeclared_scan)
+        {
             crate::undeclared_artifacts::scan_undeclared_markdown_artifacts(
                 &workspace_for_undeclared_scan,
                 &artifacts_dir_for_undeclared_scan,

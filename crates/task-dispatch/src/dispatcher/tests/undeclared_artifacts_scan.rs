@@ -382,39 +382,46 @@ async fn a_git_worktree_run_that_ends_with_a_question_registers_its_artifacts() 
     assert_eq!(got[1].1.kind, "svg");
 }
 
-/// Local shared workspaces scan the run-specific artifacts directory as well as legacy workspace markdown.
-/// Sibling task artifacts remain isolated by ADR-0036's per-task directory.
+/// Shared workspaces only scan task-specific artifacts, including parentless retries.
 #[tokio::test]
 async fn a_local_shared_workspace_registers_its_artifacts_without_sibling_files() {
+    local_workspace_artifacts_are_isolated(true).await;
+}
+
+#[tokio::test]
+async fn a_local_retry_registers_its_artifacts_without_original_or_sibling_files() {
+    local_workspace_artifacts_are_isolated(false).await;
+}
+
+async fn local_workspace_artifacts_are_isolated(has_parent: bool) {
     let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let root = tempfile::tempdir().unwrap();
     let parent_id = TaskId::new();
+    let workspace = root.path().join(parent_id.to_string());
+    std::fs::create_dir_all(&workspace).unwrap();
     let mut task = new_task(
-        root.path(),
+        &workspace,
         Check::Command {
             cmd: "true".into(),
             expect_exit: 0,
         },
         0,
     );
-    task.parent_id = Some(parent_id);
+    task.parent_id = has_parent.then_some(parent_id);
     let id = task.id;
     store.insert(&task).unwrap();
-    let artifacts_dir = task_core::artifacts::artifacts_dir_for(&task, root.path());
-    std::fs::create_dir_all(&artifacts_dir).unwrap();
-    std::fs::write(artifacts_dir.join("summary.md"), "# this task\n").unwrap();
-    std::fs::write(artifacts_dir.join("report.json"), "{\"ok\":true}").unwrap();
-    std::fs::write(root.path().join("legacy.md"), "# legacy\n").unwrap();
-    let sibling_dir = root.path().join(".taskd/artifacts/sibling");
+    std::fs::create_dir_all(workspace.join("artifacts")).unwrap();
+    std::fs::write(workspace.join("artifacts/original.md"), "# original\n").unwrap();
+    std::fs::write(workspace.join("legacy.md"), "# original legacy\n").unwrap();
+    let sibling_dir = workspace.join(".taskd/artifacts/sibling");
     std::fs::create_dir_all(&sibling_dir).unwrap();
     std::fs::write(sibling_dir.join("sibling.md"), "# sibling\n").unwrap();
     let adapter = WritesArtifactsAdapter::new(
+        vec![
+            ("summary.md", "# this task\n"),
+            ("report.json", "{\"ok\":true}"),
+        ],
         vec![],
-        vec![Terminal::Done {
-            summary: "ok".into(),
-            evidence: vec![],
-            usage: None,
-        }],
     );
     let out = run_worker(
         store.clone(),
@@ -422,7 +429,7 @@ async fn a_local_shared_workspace_registers_its_artifacts_without_sibling_files(
         Vec::new(),
         id,
         Tier::Standard,
-        root.path().to_path_buf(),
+        workspace.clone(),
         "run-local",
         RunLimits {
             wall_clock: Duration::from_secs(30),
@@ -461,7 +468,12 @@ async fn a_local_shared_workspace_registers_its_artifacts_without_sibling_files(
     let report = format!(".taskd/artifacts/{id}/report.json");
     assert!(paths.contains(&summary.as_str()));
     assert!(paths.contains(&report.as_str()));
-    assert!(paths.contains(&"legacy.md"));
+    assert_eq!(paths.len(), 2, "{paths:?}");
+    assert!(got.iter().all(|(_, artifact)| !artifact.declared));
+    assert_eq!(
+        std::fs::read_to_string(workspace.join("artifacts/original.md")).unwrap(),
+        "# original\n"
+    );
     assert!(
         !paths.iter().any(|path| path.contains("sibling")),
         "{paths:?}"

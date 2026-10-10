@@ -170,16 +170,66 @@ pub struct FinishedTaskTargets {
     pub leftovers: Vec<PathBuf>,
 }
 
-/// 終端（done・cancelled・failed）になってから `after_secs` 以上経った task の作業場所に残る cargo の target
-/// （task id の順）。終端でない task は見ない。
-pub fn finished_task_targets(
+/// 終端でも消さずに残した target（[`scan_finished_task_targets`]）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HeldTaskTargets {
+    pub task_id: TaskId,
+    pub targets: Vec<PathBuf>,
+    /// `running_run`（木のどれかに running の run）・`active_descendant`（終端でない子孫）・`grace`（木の最後の
+    /// 終端から猶予内）。
+    pub reason: &'static str,
+}
+
+/// [`scan_finished_task_targets`] の結果。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FinishedScan {
+    pub found: Vec<FinishedTaskTargets>,
+    pub held: Vec<HeldTaskTargets>,
+}
+
+/// ADR 2026-10-10-local-disk-growth-paths D2: checkout を持つ task とその子孫（`parent_id` の鎖）を見て、
+/// 消してはいけない理由を返す（`None` = 全員が終端・running の run なし・最後の終端から `after_secs` 経過）。
+/// `repos=[]` の子 task は親の checkout で cargo を走らせるので、子が 1 つでも動いていれば親の target は残す。
+pub fn tree_hold(
+    store: &dyn TaskStore,
+    root: &task_core::Task,
+    running: &std::collections::HashSet<String>,
+    now: OffsetDateTime,
+    after_secs: u64,
+) -> Result<Option<&'static str>, StoreError> {
+    let grace = i64::try_from(after_secs).unwrap_or(i64::MAX);
+    let mut seen = std::collections::HashSet::new();
+    let mut stack = vec![root.clone()];
+    let mut grace_hold = false;
+    while let Some(task) = stack.pop() {
+        if !seen.insert(task.id) {
+            continue;
+        }
+        if running.contains(&task.id.to_string()) {
+            return Ok(Some("running_run"));
+        }
+        if !task.status.is_terminal() {
+            return Ok(Some("active_descendant"));
+        }
+        if (now - task.updated_at).whole_seconds() < grace {
+            grace_hold = true;
+        }
+        stack.extend(store.children(task.id)?);
+    }
+    Ok(grace_hold.then_some("grace"))
+}
+
+/// 終端（done・cancelled・failed）の task の作業場所に残る cargo の target を、消してよいもの（`found`）と
+/// 残すもの（`held`。[`tree_hold`] の理由付き）に分ける（task id の順）。終端でない task は見ない。
+pub fn scan_finished_task_targets(
     store: &dyn TaskStore,
     workspace_root: &Path,
     now: OffsetDateTime,
     after_secs: u64,
-) -> Result<Vec<FinishedTaskTargets>, StoreError> {
+) -> Result<FinishedScan, StoreError> {
+    let mut out = FinishedScan::default();
     if after_secs == 0 {
-        return Ok(Vec::new());
+        return Ok(out);
     }
     let running: std::collections::HashSet<_> = store
         .runs_running()?
@@ -191,24 +241,39 @@ pub fn finished_task_targets(
         terminal.extend(store.list(Some(status))?);
     }
     terminal.sort_by_key(|t| t.id.to_string());
-    let mut out = Vec::new();
     for task in terminal {
-        if running.contains(&task.id.to_string())
-            || (now - task.updated_at).whole_seconds()
-                < i64::try_from(after_secs).unwrap_or(i64::MAX)
-        {
+        let (targets, leftovers) = task_targets(&workspace_root.join(task.id.to_string()));
+        if targets.is_empty() && leftovers.is_empty() {
             continue;
         }
-        let (targets, leftovers) = task_targets(&workspace_root.join(task.id.to_string()));
-        if !targets.is_empty() || !leftovers.is_empty() {
-            out.push(FinishedTaskTargets {
-                task_id: task.id,
-                targets,
-                leftovers,
-            });
+        if let Some(reason) = tree_hold(store, &task, &running, now, after_secs)? {
+            if !targets.is_empty() {
+                out.held.push(HeldTaskTargets {
+                    task_id: task.id,
+                    targets,
+                    reason,
+                });
+            }
+            continue;
         }
+        out.found.push(FinishedTaskTargets {
+            task_id: task.id,
+            targets,
+            leftovers,
+        });
     }
     Ok(out)
+}
+
+/// 終端（done・cancelled・failed）の task とその子孫が全て終端になり、最後の終端から `after_secs` 以上経った
+/// task の作業場所に残る cargo の target（task id の順）。終端でない task は見ない。
+pub fn finished_task_targets(
+    store: &dyn TaskStore,
+    workspace_root: &Path,
+    now: OffsetDateTime,
+    after_secs: u64,
+) -> Result<Vec<FinishedTaskTargets>, StoreError> {
+    Ok(scan_finished_task_targets(store, workspace_root, now, after_secs)?.found)
 }
 
 /// [`remove_target`] の結果。

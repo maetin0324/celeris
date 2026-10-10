@@ -334,3 +334,52 @@ async fn disk_watch_tick_phase_holds_coding_until_pressure_recovers() {
     assert_eq!(d.tick().unwrap().dispatched, 1);
     assert!(!d.disk_watch_critical());
 }
+
+/// ADR 2026-10-10-local-disk-growth-paths D2: cron の `target_sweep` が無くても、tick が終端の木の repo 直下
+/// cargo target を消して `workspace_pruned` を積む（workspace prune は無効にして経路を分ける）。
+#[tokio::test]
+async fn repo_target_gc_tick_removes_a_finished_task_target_without_cron() {
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let root = tempfile::tempdir().unwrap();
+    let mut d = dispatcher(store.clone(), done_adapter(), 1);
+    d.config.workspace_root = root.path().to_path_buf();
+    d.config.workspace_prune_after_secs = 0;
+
+    let task = new_task(
+        root.path(),
+        Check::Command {
+            cmd: "true".into(),
+            expect_exit: 0,
+        },
+        0,
+    );
+    store.insert(&task).unwrap();
+    for t in [Trigger::Dispatch, Trigger::WorkerDone, Trigger::ReviewPass] {
+        store
+            .apply_transition_with_events(task.id, t, vec![])
+            .unwrap();
+    }
+    let mut current = store.get(task.id).unwrap().unwrap();
+    current.updated_at = OffsetDateTime::now_utc() - time::Duration::hours(7);
+    store
+        .update_task(&current, Event::worker_progress("x", "backdated"))
+        .unwrap();
+    let repo = root
+        .path()
+        .join(task.id.to_string())
+        .join("repos")
+        .join("agent-platform");
+    let target_dir = repo.join("target");
+    std::fs::create_dir_all(target_dir.join("debug")).unwrap();
+    std::fs::write(
+        target_dir.join("CACHEDIR.TAG"),
+        "Signature: 8a477f597d28d172789f06886806bc55",
+    )
+    .unwrap();
+    std::fs::write(target_dir.join("debug").join(".cargo-lock"), "").unwrap();
+
+    d.tick().unwrap();
+    let expected_removed = vec!["repos/agent-platform/target".to_string()];
+    wait_for_prune(&store, task.id, &target_dir, &expected_removed).await;
+    assert!(repo.is_dir(), "the checkout itself is kept");
+}

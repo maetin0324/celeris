@@ -650,63 +650,80 @@ impl Default for SweepScope {
 /// 付記 A3: 終わった task の作業場所の target の掃除（[`sweep_workspace_targets`]）の既定の猶予（6 時間）。
 pub const DEFAULT_WORKSPACE_TARGET_AFTER_SECS: u64 = 6 * 3600;
 
-/// 付記 A3: 終端（done・cancelled・failed）になってから `after_secs` 経った task の作業場所に残る cargo の target を
-/// 消し、`report` に root = `workspace_root` の 1 行（`by_reason.stale_target` に件数）として足す。
-/// 終端でない task は見ない。build 中（どれかの profile の lock が取れない）は `build_in_progress` で残す。
-/// `dry_run` は木を変えない。
-pub fn sweep_workspace_targets(
-    report: &mut SweepReport,
+/// ADR 2026-10-10-local-disk-growth-paths D2: 終端 task の repo 直下 target を 1 つ脇へ寄せた記録。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MovedRepoTarget {
+    pub task_id: task_core::TaskId,
+    pub target: PathBuf,
+    /// rename 先（`<repo>/.deleting-cargo-target-<ulid>`。dry run では予定の path）。
+    pub moved: PathBuf,
+    /// rename 前に測った量（`st_blocks × 512`。du は使わない）。
+    pub bytes: u64,
+}
+
+/// [`repo_target_gc_move_aside`] の結果。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RepoTargetGc {
+    pub moved: Vec<MovedRepoTarget>,
+    /// 残した target と理由（`running_run`・`active_descendant`・`grace`・`build_in_progress`・`rename_failed`）。
+    pub held: Vec<SkippedItem>,
+    /// lock を放した後に `remove_dir_all` するもの（rename 済みの target と前回の残り）。dry run では空。
+    pub to_remove: Vec<PathBuf>,
+    /// 見つけた前回の残り（`.deleting-cargo-target-*`）。
+    pub leftovers: Vec<PathBuf>,
+    pub errors: Vec<String>,
+}
+
+/// ADR 2026-10-10-local-disk-growth-paths D2: checkout を持つ task とその子孫が全て終端になり、最後の終端から
+/// `after_secs` 経った task の repo 直下 target を、cargo の lock を全 profile で持ったまま
+/// `.deleting-cargo-target-*` へ rename する（`apply = false` は測るだけ）。削除そのものは呼び出し側
+/// （[`remove_moved_targets`]。dispatcher の tick では別スレッド）。
+pub fn repo_target_gc_move_aside(
     store: &dyn task_core::TaskStore,
     workspace_root: &Path,
     after_secs: u64,
     now: time::OffsetDateTime,
-) {
-    use task_worker::workspace_targets::{RemoveTarget, finished_task_targets, remove_target};
-    let started = Instant::now();
-    let apply = report.mode == TargetSweepMode::Apply;
-    let found = match finished_task_targets(store, workspace_root, now, after_secs) {
-        Ok(found) => found,
+    apply: bool,
+) -> RepoTargetGc {
+    use task_worker::workspace_targets::{RemoveTarget, remove_target, scan_finished_task_targets};
+    let mut gc = RepoTargetGc::default();
+    let scan = match scan_finished_task_targets(store, workspace_root, now, after_secs) {
+        Ok(scan) => scan,
         Err(e) => {
-            report
-                .errors
+            gc.errors
                 .push(format!("workspace targets: list finished tasks: {e}"));
-            return;
+            return gc;
         }
     };
-    let mut root = RootReport {
-        root: workspace_root.to_path_buf(),
-        ..RootReport::default()
-    };
-    let mut to_remove: Vec<PathBuf> = Vec::new();
-    for task in found {
+    for held in scan.held {
+        for path in held.targets {
+            gc.held.push(SkippedItem {
+                path,
+                reason: held.reason.to_string(),
+            });
+        }
+    }
+    for task in scan.found {
         for target in task.targets {
-            root.before_bytes = root
-                .before_bytes
-                .saturating_add(task_worker::workspace_targets::tree_bytes(&target));
             match remove_target(&target, &deleting_name()[DELETING_PREFIX.len()..], apply) {
-                Ok(RemoveTarget::Locked) => report.skipped.push(SkippedItem {
+                Ok(RemoveTarget::Locked) => gc.held.push(SkippedItem {
                     path: target,
                     reason: "build_in_progress".to_string(),
                 }),
                 Ok(RemoveTarget::Moved { moved, bytes }) => {
-                    root.deleted_bytes = root.deleted_bytes.saturating_add(bytes);
-                    root.deleted_items += 1;
-                    root.by_reason.stale_target += 1;
-                    report.deleted.push(DeletedItem {
-                        root: workspace_root.to_path_buf(),
-                        path: target,
-                        bytes,
-                        reason: "stale_target".to_string(),
-                    });
                     if apply {
-                        to_remove.push(moved);
+                        gc.to_remove.push(moved.clone());
                     }
+                    gc.moved.push(MovedRepoTarget {
+                        task_id: task.task_id,
+                        target,
+                        moved,
+                        bytes,
+                    });
                 }
                 Err(e) => {
-                    report
-                        .errors
-                        .push(format!("rename {}: {e}", target.display()));
-                    report.skipped.push(SkippedItem {
+                    gc.errors.push(format!("rename {}: {e}", target.display()));
+                    gc.held.push(SkippedItem {
                         path: target,
                         reason: "rename_failed".to_string(),
                     });
@@ -715,20 +732,78 @@ pub fn sweep_workspace_targets(
         }
         for path in task.leftovers {
             if let Some(_lock) = task_worker::workspace_targets::try_lock_target(&path) {
-                report.leftovers.push(path.clone());
+                gc.leftovers.push(path.clone());
                 if apply {
-                    to_remove.push(path);
+                    gc.to_remove.push(path);
                 }
             }
         }
     }
-    for path in to_remove {
-        if let Err(e) = remove_any(&path) {
-            report
-                .errors
-                .push(format!("remove {}: {e}", path.display()));
+    gc
+}
+
+/// [`remove_moved_targets`] の結果。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RemovedRepoTargets {
+    pub removed: usize,
+    /// `probe` の filesystem の `statvfs` 空きの増分（他の書込みも含む。測れなければ `None`）。D5。
+    pub freed_statvfs: Option<u64>,
+    pub errors: Vec<String>,
+}
+
+/// rename 済みの target を消し、前後の `statvfs` 空きの差を返す（`probe` は workspace root）。
+pub fn remove_moved_targets(paths: &[PathBuf], probe: &Path) -> RemovedRepoTargets {
+    let before = crate::scratch_gc::fs_stats(probe).map(|(_, avail)| avail);
+    let mut out = RemovedRepoTargets::default();
+    for path in paths {
+        match remove_any(path) {
+            Ok(()) => out.removed += 1,
+            Err(e) => out.errors.push(format!("remove {}: {e}", path.display())),
         }
     }
+    let after = crate::scratch_gc::fs_stats(probe).map(|(_, avail)| avail);
+    out.freed_statvfs = before
+        .zip(after)
+        .map(|(before, after)| after.saturating_sub(before));
+    out
+}
+
+/// 付記 A3: 終端（done・cancelled・failed）になってから `after_secs` 経った task の作業場所に残る cargo の target を
+/// 消し、`report` に root = `workspace_root` の 1 行（`by_reason.stale_target` に件数）として足す。
+/// ADR 2026-10-10-local-disk-growth-paths D2: 子孫が動いている・猶予内の木は理由付きで `skipped` に残す。
+/// build 中（どれかの profile の lock が取れない）は `build_in_progress` で残す。`dry_run` は木を変えない。
+pub fn sweep_workspace_targets(
+    report: &mut SweepReport,
+    store: &dyn task_core::TaskStore,
+    workspace_root: &Path,
+    after_secs: u64,
+    now: time::OffsetDateTime,
+) {
+    let started = Instant::now();
+    let apply = report.mode == TargetSweepMode::Apply;
+    let gc = repo_target_gc_move_aside(store, workspace_root, after_secs, now, apply);
+    let mut root = RootReport {
+        root: workspace_root.to_path_buf(),
+        ..RootReport::default()
+    };
+    for m in gc.moved {
+        root.before_bytes = root.before_bytes.saturating_add(m.bytes);
+        root.deleted_bytes = root.deleted_bytes.saturating_add(m.bytes);
+        root.deleted_items += 1;
+        root.by_reason.stale_target += 1;
+        report.deleted.push(DeletedItem {
+            root: workspace_root.to_path_buf(),
+            path: m.target,
+            bytes: m.bytes,
+            reason: "stale_target".to_string(),
+        });
+    }
+    report.skipped.extend(gc.held);
+    report.leftovers.extend(gc.leftovers);
+    report.errors.extend(gc.errors);
+    report
+        .errors
+        .extend(remove_moved_targets(&gc.to_remove, workspace_root).errors);
     root.after_bytes = root.before_bytes.saturating_sub(root.deleted_bytes);
     if root.before_bytes > 0 || root.deleted_items > 0 {
         report.roots.push(root);

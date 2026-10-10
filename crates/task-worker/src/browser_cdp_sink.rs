@@ -909,6 +909,38 @@ impl CdpController {
         Ok(reply)
     }
 
+    /// 付記 2026-10-10h: a JavaScript dialog on an agent page blocks the page — and the agent's
+    /// `Input.dispatchMouseEvent` that opened it does not answer until the dialog closes. The relay
+    /// runs one agent command at a time, so agent-browser could never send its own
+    /// `Page.handleJavaScriptDialog`: the click timed out (`sink_failed`) and the tab stayed blocked.
+    /// The controller answers the dialog itself, with agent-browser's default: `alert` and
+    /// `beforeunload` are accepted, `confirm` and `prompt` are dismissed (a site's confirmation is
+    /// never given on the agent's behalf). Only the dialog type is recorded, never its text; the
+    /// opening event is not passed on (the dialog is already answered). The controller's own
+    /// (private) sessions are left alone. Returns whether the dialog was answered here.
+    fn resolve_agent_dialog(&mut self, event: &Value) -> bool {
+        let Some(session) = event["sessionId"].as_str().map(str::to_owned) else {
+            return false;
+        };
+        if self.private_sessions.contains(&session) {
+            return false;
+        }
+        let (accept, code) = match event["params"]["type"].as_str() {
+            Some("alert") => (true, "dialog_accepted_alert"),
+            Some("beforeunload") => (true, "dialog_accepted_beforeunload"),
+            Some("confirm") => (false, "dialog_dismissed_confirm"),
+            Some("prompt") => (false, "dialog_dismissed_prompt"),
+            _ => (false, "dialog_dismissed_other"),
+        };
+        self.send_untracked_on(
+            "Page.handleJavaScriptDialog",
+            json!({"accept": accept}),
+            Some(&session),
+        );
+        self.record_agent_denial("Page.javascriptDialogOpening", code);
+        true
+    }
+
     /// Record a relay refusal of an agent command (fixed code; the method is reduced by
     /// [`loggable_method`]). Only the last [`MAX_AGENT_DENIALS`] are kept.
     pub fn record_agent_denial(&mut self, method: &str, code: &'static str) {
@@ -1224,9 +1256,18 @@ return out;}})()"
     /// Write a CDP command without waiting for its reply (the reply is dropped as unsolicited).
     /// Used from the event path, where no call can be made. A failed write stops observation.
     fn send_untracked(&mut self, method: &str, params: Value) {
+        self.send_untracked_on(method, params, None);
+    }
+
+    /// [`Self::send_untracked`] on a page session.
+    fn send_untracked_on(&mut self, method: &str, params: Value, session: Option<&str>) {
         let id = self.next_id;
         self.next_id = self.next_id.saturating_add(1);
-        let sent = serde_json::to_vec(&json!({"id":id,"method":method,"params":params}))
+        let mut message = json!({"id":id,"method":method,"params":params});
+        if let Some(session) = session {
+            message["sessionId"] = session.into();
+        }
+        let sent = serde_json::to_vec(&message)
             .map(|mut bytes| {
                 bytes.push(0);
                 bytes
@@ -1638,6 +1679,9 @@ return out;}})()"
 
     fn queue_event(&mut self, value: Value) {
         if value.get("method").is_none() {
+            return;
+        }
+        if value["method"] == "Page.javascriptDialogOpening" && self.resolve_agent_dialog(&value) {
             return;
         }
         if self.auth_section.is_some()
@@ -2331,6 +2375,59 @@ mod idle_pump_tests {
                 "Browser.downloadWillBegin".to_owned(),
                 "download_origin_denied"
             )]
+        );
+    }
+
+    /// 付記 2026-10-10h: a dialog on an agent page is answered by the controller (alert and
+    /// beforeunload accepted, confirm and prompt dismissed), recorded by type only and not passed
+    /// on; a dialog on the controller's own (private) session is left alone.
+    #[test]
+    fn agent_page_dialogs_are_answered_with_fixed_defaults_and_private_ones_left_alone() {
+        use std::io::Read as _;
+        let (mut c, mut browser) = controller();
+        browser
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .expect("timeout");
+        let mut answers = Vec::new();
+        for (kind, accept, code) in [
+            ("alert", true, "dialog_accepted_alert"),
+            ("beforeunload", true, "dialog_accepted_beforeunload"),
+            ("confirm", false, "dialog_dismissed_confirm"),
+            ("prompt", false, "dialog_dismissed_prompt"),
+        ] {
+            c.queue_event(
+                json!({"method":"Page.javascriptDialogOpening","sessionId":"S",
+                "params":{"type":kind,"message":"secret-ish page text","url":"https://lms.test/"}}),
+            );
+            let mut frame = Vec::new();
+            let mut byte = [0u8; 1];
+            while browser.read_exact(&mut byte).is_ok() && byte[0] != 0 {
+                frame.push(byte[0]);
+            }
+            let sent: Value = serde_json::from_slice(&frame).expect("answer");
+            assert_eq!(sent["method"], "Page.handleJavaScriptDialog");
+            assert_eq!(sent["sessionId"], "S");
+            assert_eq!(sent["params"], json!({"accept": accept}));
+            answers.push(("Page.javascriptDialogOpening".to_owned(), code));
+        }
+        assert_eq!(c.take_agent_denials(), answers);
+        assert!(
+            c.take_agent_events().is_empty(),
+            "opening events are not passed on"
+        );
+        c.private_sessions.insert("OWN".into());
+        c.queue_event(
+            json!({"method":"Page.javascriptDialogOpening","sessionId":"OWN",
+            "params":{"type":"alert"}}),
+        );
+        assert!(c.take_agent_denials().is_empty());
+        browser
+            .set_read_timeout(Some(Duration::from_millis(200)))
+            .expect("timeout");
+        let mut byte = [0u8; 1];
+        assert!(
+            browser.read_exact(&mut byte).is_err(),
+            "nothing sent for a private session"
         );
     }
 

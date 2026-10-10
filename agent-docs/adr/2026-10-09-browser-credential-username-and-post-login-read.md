@@ -487,3 +487,31 @@ site policy の照合（`policy_id` と `exact_origin` の一致）に当たら�
 
 運用: daemon を更新した後に task を再開すれば、使えない登録は飛ばされ、agent が頼み直した wait（IdP の origin）に人が登録
 し直す。launcher・sandboxd・credentiald の再 build は要らない。
+
+## 付記 2026-10-10h: agent の頁の JavaScript dialog は controller が固定の既定で答える
+
+release 342ec107 の本番（task 01M4GYJ3XGJNWZQDF35F1MDE0H、14:40:47Z）で、manaba の資料頁の `download @e28`（link
+「Slides1 Slides1.pdf」、URL は `.../Slides1.pdf?view=full`）が付記 2026-10-10f の診断で
+`code=bad_request status=1 runner_reason=agent_browser_exit error_class=cdp_command_failed gate=Input.dispatchMouseEvent!sink_failed`
+になった。`sink_failed` は controller が CDP の返事を 5 秒待って諦めたもの（`read_response` の期限）。
+
+原因（fixture で再現）: click で JavaScript dialog（alert・confirm・beforeunload）が開くと、Chrome は dialog が閉じるまで
+その `Input.dispatchMouseEvent` に答えない。relay は agent の command を 1 つずつ通す（controller の lock を返事まで持つ）ので、
+agent-browser は dialog を閉じる `Page.handleJavaScriptDialog` を送れず（agent-browser は alert と beforeunload を既定で自動で
+受け入れる）、click は 5 秒で `sink_failed`、tab は dialog で止まったままになる。直接接続の agent-browser では起きない。
+manaba の link のどの dialog かは本番の頁を見ていないので確定していない（alert / beforeunload なら今回の修正で通る。confirm
+なら下の 1 のとおり通らず、`gate=Page.javascriptDialogOpening!dialog_dismissed_confirm` が出る）。
+
+決定:
+
+1. controller は agent の頁（controller 自身の private session 以外）で `Page.javascriptDialogOpening` を受けたら、その場で
+   `Page.handleJavaScriptDialog` を送る。`alert`・`beforeunload` は受け入れ（agent-browser の既定と同じ）、`confirm`・`prompt`
+   は退ける（site の確認を agent の代わりに与えない。提出・削除の確認を通さない）。
+2. 記録は dialog の種類だけ（`Page.javascriptDialogOpening!dialog_accepted_alert` / `_beforeunload` /
+   `dialog_dismissed_confirm` / `_prompt` / `_other`）。dialog の文言・URL は記録しない。開いた event は agent に渡さない
+   （答え済み）。閉じた event はそのまま渡る。
+3. protocol は 9 のまま。controller は launcher の process と daemon の両方にあるので、**launcher の再 build** と daemon の
+   更新が要る。sandboxd は変わらない。
+
+残る制限: confirm で守られた download は通らない（agent は click 後に何も起きず、download は 30 秒で timeout）。通すかは人の
+決定（提案）。

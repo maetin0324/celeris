@@ -123,7 +123,7 @@ fn fixture(dir: &Path) -> Child {
     std::fs::write(
         dir.join("server.py"),
         r#"
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer as HTTPServer
 from pathlib import Path
 PDF = Path('slides.pdf').read_bytes()
 class H(BaseHTTPRequestHandler):
@@ -136,6 +136,20 @@ class H(BaseHTTPRequestHandler):
                     b'<a href="/ct/redirect_Slides4.pdf">Redirect PDF</a> '
                     b'<a href="/ct/elsewhere_Slides5.pdf">Elsewhere PDF</a></body></html>')
             self.send_response(200); self.send_header('Content-Type', 'text/html')
+        elif self.path == '/dialogs.html':
+            # Course-page links whose click opens a JavaScript dialog (付記 2026-10-10h).
+            body = (b'<html><body><h1>Dialogs</h1>'
+                    b'<a href="/ct/page_x/Slides1.pdf?view=full" onclick="alert(\'Starting\')">Alert PDF</a> '
+                    b'<a href="/ct/page_x/Slides1.pdf?view=full" onclick="return confirm(\'Download?\')">Confirm PDF</a>'
+                    b'</body></html>')
+            self.send_response(200); self.send_header('Content-Type', 'text/html')
+        elif self.path == '/unload.html':
+            body = (b'<html><body><script>window.addEventListener("beforeunload", function(e){'
+                    b'e.preventDefault(); e.returnValue="";});</script>'
+                    b'<a href="/ct/page_x/Slides1.pdf?view=full">Unload PDF</a></body></html>')
+            self.send_response(200); self.send_header('Content-Type', 'text/html')
+        elif self.path.startswith('/ct/page_x/Slides1.pdf'):
+            body = PDF; self.send_response(200); self.send_header('Content-Type', 'application/pdf')
         elif self.path == '/ct/attach_Slides1.pdf':
             body = PDF; self.send_response(200); self.send_header('Content-Type', 'application/pdf')
             self.send_header('Content-Disposition', 'attachment; filename="Slides1.pdf"')
@@ -411,6 +425,66 @@ fn inner() {
             "screenshot after a refused download: {after}"
         );
     }
+    // 付記 2026-10-10h (production 2026-10-10 14:40, `gate=Input.dispatchMouseEvent!sink_failed`): a
+    // click that opens a JavaScript dialog does not answer until the dialog closes, and the relay
+    // runs one agent command at a time. The controller answers the dialog: alert / beforeunload
+    // accepted (the download goes on), confirm dismissed (the tab is not left blocked).
+    let ref_on = |seq: &mut u64, page: &str, link: &str| {
+        let opened = action(s, seq, "open", &[&format!("{ORIGIN}/{page}")], None);
+        assert_eq!(opened["status"], 0, "open {page}: {opened}");
+        let snap = action(s, seq, "snapshot", &[], None);
+        let tree: Value = serde_json::from_str(snap["stdout"].as_str().unwrap_or_default().trim())
+            .expect("snapshot");
+        tree["data"]["refs"]
+            .as_object()
+            .expect("refs")
+            .iter()
+            .find(|(_, r)| r["name"] == link)
+            .map(|(k, _)| format!("@{k}"))
+            .unwrap_or_else(|| panic!("{link} ref"))
+    };
+    let denials = || {
+        relay
+            .controller()
+            .lock()
+            .expect("controller")
+            .take_agent_denials()
+    };
+    for (page, link, code, letter) in [
+        ("dialogs.html", "Alert PDF", "dialog_accepted_alert", "1"),
+        (
+            "unload.html",
+            "Unload PDF",
+            "dialog_accepted_beforeunload",
+            "2",
+        ),
+    ] {
+        let r = ref_on(&mut seq, page, link);
+        denials();
+        let name = format!("download-{}.bin", letter.repeat(32));
+        let got = action(s, &mut seq, "download", &[&r], Some(&name));
+        assert_eq!(got["status"], 0, "download {link}: {got}");
+        assert_eq!(std::fs::read(out.join(&name)).expect("file"), PDF, "{link}");
+        assert_eq!(
+            denials(),
+            vec![("Page.javascriptDialogOpening".to_owned(), code)],
+            "{link}"
+        );
+    }
+    let r = ref_on(&mut seq, "dialogs.html", "Confirm PDF");
+    denials();
+    let clicked = action(s, &mut seq, "click", &[&r], None);
+    assert_eq!(clicked["status"], 0, "click Confirm PDF: {clicked}");
+    assert_eq!(
+        denials(),
+        vec![(
+            "Page.javascriptDialogOpening".to_owned(),
+            "dialog_dismissed_confirm"
+        )]
+    );
+    let shot4 = format!("screenshot-{}.png", "3".repeat(32));
+    let after = action(s, &mut seq, "screenshot", &[], Some(&shot4));
+    assert_eq!(after["status"], 0, "the tab is not blocked: {after}");
     // 付記 2026-10-10f: a failure carries fixed diagnostics and nothing of agent-browser's text.
     let stale = format!("download-{}.bin", "9".repeat(32));
     let unknown = action(s, &mut seq, "download", &["@e999"], Some(&stale));

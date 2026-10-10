@@ -37,7 +37,7 @@ completed: 2026-10-10
 - live 系 10 件を 3 回 → 毎回 10 passed。
 - `TMPDIR=/tmp cargo nextest run -p celeris browser_doctor` → 6 passed。
 - `cargo fmt --all -- --check` exit 0、`cargo clippy --workspace -- -D warnings` exit 0。
-- 全体試験の結果は下の「全体試験」に書く。
+- `TMPDIR=/tmp bash scripts/dev/test-parallel.sh` → exit 0、5036 passed / 13 skipped（run の TMPDIR のままだと Unix socket の SUN_LEN で既存試験が落ちるため /tmp）。
 
 ## 未解決事項
 

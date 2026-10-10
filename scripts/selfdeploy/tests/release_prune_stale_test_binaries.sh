@@ -46,6 +46,31 @@ if run_release; then echo 'fake cargo unexpectedly succeeded' >&2; exit 1; fi
 [ -e "$target/debug/deps/libserde-cccccccc.rlib" ]
 [ -e "$target/debug/build/placeholder" ]
 grep -q 'removed [1-9][0-9]* bytes' "$root/release.out"
+# Apparent size alone must not trigger a rebuild. First exercise btrfs output.
+truncate -s 16M "$target/debug/sparse-fixture"
+cat >"$root/bin/btrfs" <<'EOF'
+#!/usr/bin/env bash
+printf 'Total Exclusive Set shared Filename\n99999999 0 0 %s\n' "$4"
+EOF
+chmod +x "$root/bin/btrfs"
+if SD_RELEASE_TARGET_MAX_BYTES=1048576 run_release; then echo 'fake cargo unexpectedly succeeded with btrfs size fixture' >&2; exit 1; fi
+if grep -q 'exceeds 1048576; recreating target' "$root/release.out"; then
+  echo 'btrfs unique size was not used' >&2
+  exit 1
+fi
+[ -e "$target/debug/sparse-fixture" ]
+# Force btrfs unavailable to exercise portable inode/block accounting too.
+cat >"$root/bin/btrfs" <<'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+chmod +x "$root/bin/btrfs"
+if SD_RELEASE_TARGET_MAX_BYTES=1048576 run_release; then echo 'fake cargo unexpectedly succeeded with sparse target' >&2; exit 1; fi
+if grep -q 'exceeds 1048576; recreating target' "$root/release.out"; then
+  echo 'sparse target was incorrectly counted by apparent size' >&2
+  exit 1
+fi
+[ -e "$target/debug/sparse-fixture" ]
 if SD_RELEASE_TARGET_MAX_BYTES=1 run_release; then echo 'fake cargo unexpectedly succeeded after recreation' >&2; exit 1; fi
 grep -q 'exceeds 1; recreating target' "$root/release.out"
 [ -f "$target/.celeris-release-build-start" ]

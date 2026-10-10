@@ -748,13 +748,35 @@ sd_release_prune_record_start() {
 
 sd_release_prune_size() {
   python3 - "$1" <<'PY'
-import os, sys
-total = 0
-for root, dirs, files in os.walk(sys.argv[1]):
-    for name in files:
-        try: total += os.stat(os.path.join(root, name), follow_symlinks=False).st_size
-        except OSError: pass
-print(total)
+import os, subprocess, sys
+target = sys.argv[1]
+try:
+    result = subprocess.run(
+        ['btrfs', 'filesystem', 'du', '-s', '--raw', target],
+        check=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+    )
+    # Raw output columns are Total, Exclusive, Set shared. The latter two
+    # represent the target's unique footprint without charging shared extents twice.
+    for line in reversed(result.stdout.splitlines()):
+        fields = line.split(None, 3)
+        if len(fields) == 4 and fields[3] == target:
+            print(int(fields[1]) + int(fields[2]))
+            break
+    else:
+        raise ValueError('unrecognized btrfs du output')
+except (OSError, subprocess.SubprocessError, ValueError):
+    total = 0
+    seen = set()
+    for root, dirs, files in os.walk(target):
+        for name in files:
+            try:
+                st = os.stat(os.path.join(root, name), follow_symlinks=False)
+                inode = (st.st_dev, st.st_ino)
+                if inode in seen: continue
+                seen.add(inode)
+                total += st.st_blocks * 512
+            except OSError: pass
+    print(total)
 PY
 }
 

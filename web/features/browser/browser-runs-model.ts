@@ -61,7 +61,7 @@ function stateTone(state: BrowserRunItem["state"], phase: ControlStatus["phase"]
 const LIVE_REASONS = new Set<string>(Object.keys(liveUnavailableText));
 
 /** live の可否と理由。gateway が理由を返せばそれを使い、無ければ run の状態・待ち・href から導く。 */
-export function liveCell(run: BrowserRunItem, authWaitOpen: boolean): LiveCell {
+export function liveCell(run: BrowserRunItem): LiveCell {
   const unavailable = (reason: LiveUnavailableReason): LiveCell => ({
     available: false,
     reason,
@@ -72,7 +72,6 @@ export function liveCell(run: BrowserRunItem, authWaitOpen: boolean): LiveCell {
       LIVE_REASONS.has(run.live.reason) ? (run.live.reason as LiveUnavailableReason) : "relay_unavailable",
     );
   if (!isActiveRun(run)) return unavailable("not_running");
-  if (authWaitOpen) return unavailable("auth_interval");
   const href = run.live?.state === "link" ? run.live.href : run.live_path;
   if (safeLivePath(href) === null) return unavailable("not_configured");
   return { available: true, label: "Live View を開けます" };
@@ -115,10 +114,7 @@ export function buildRunRows(
       openWaits: open.length,
       lease: active ? leaseBadge(phase) : null,
       leasePending: !active || leaseBadge(phase) ? null : options.controlFailed?.has(key) ? "unavailable" : "loading",
-      live: liveCell(
-        run,
-        open.some((w) => w.reason === "waiting_for_auth"),
-      ),
+      live: liveCell(run),
     };
   });
   return rows.sort(

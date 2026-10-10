@@ -49,11 +49,20 @@ const CONSENT_MARKER_JS: &str = "!!document.querySelector('[name=\"_shib_idp_con
 const CONSENT_SELECTOR_JS: &str = "'[name=\"_shib_idp_consentIds\"],[name=\"_shib_idp_consentOptions\"],[name=\"_eventId_AttributeReleaseRejected\"]'";
 /// Isolated world for the controller's own post-login checks (never visible to the agent).
 const CHECK_WORLD: &str = "celeris-post-login";
-/// Counts `input[type=password]` in the document, its open shadow roots and same-origin frames.
-/// Runs in the controller's isolated world, so page script cannot replace the DOM accessors.
-const PASSWORD_COUNT_JS: &str = "(()=>{let n=0;const walk=(root,depth)=>{if(depth>8)return;\
+/// Counts the *live* `input[type=password]` in the document, its open shadow roots and same-origin
+/// frames: rendered (a layout box, not `visibility: hidden`) or holding a value. A hidden, empty
+/// password input (a collapsed login widget on an otherwise ordinary page) can neither show a
+/// password on screen nor hold one (ADR 2026-10-09 credential username / post-login 付記
+/// 2026-10-10c). Runs in the controller's isolated world, so page script cannot replace the DOM
+/// accessors.
+const PASSWORD_COUNT_JS: &str = "(()=>{let n=0;const live=(e)=>{if(String(e.value||'')!=='')return true;\
+const r=e.getClientRects();if(!r||r.length===0)return false;\
+const v=e.ownerDocument&&e.ownerDocument.defaultView;const s=v?v.getComputedStyle(e):null;\
+if(s&&(s.visibility==='hidden'||s.visibility==='collapse'||s.display==='none'))return false;\
+for(const q of r){if(q.width>0||q.height>0)return true;}return false;};\
+const walk=(root,depth)=>{if(depth>8)return;\
 for(const e of root.querySelectorAll('*')){const tag=String(e.localName||'').toLowerCase();\
-if(tag==='input'&&String(e.type||'').toLowerCase()==='password')n++;\
+if(tag==='input'&&String(e.type||'').toLowerCase()==='password'&&live(e))n++;\
 if(e.shadowRoot)walk(e.shadowRoot,depth+1);\
 if(tag==='iframe'||tag==='frame'){let d=null;try{d=e.contentDocument;}catch(_){}if(d)walk(d,depth+1);}}};\
 walk(document,0);return n;})()";
@@ -567,6 +576,9 @@ pub struct CdpController {
     /// A denied download completed before its cancel took effect: observation stops for the rest
     /// of the session (fail closed; the file may already exist).
     download_breach: bool,
+    /// Test-only: every agent command method, in order.
+    #[cfg(test)]
+    pub(crate) agent_log: Vec<String>,
     /// Test-only (ADR-0109 A1): navigate the page after all checks and before the
     /// broker's `Runtime.callFunctionOn` frame is written. Absent from production builds.
     #[cfg(feature = "attack-test-hooks")]
@@ -606,6 +618,8 @@ impl CdpController {
             private_sessions: std::collections::HashSet::new(),
             denied_downloads: std::collections::HashSet::new(),
             download_breach: false,
+            #[cfg(test)]
+            agent_log: Vec::new(),
             #[cfg(feature = "attack-test-hooks")]
             retarget_before_sink: None,
             #[cfg(feature = "attack-test-hooks")]
@@ -812,12 +826,39 @@ impl CdpController {
         params: Value,
         session: Option<&str>,
     ) -> Result<Value, InjectionError> {
+        let result = self.agent_command_inner(method, params, session);
+        #[cfg(test)]
+        self.agent_log.push(match &result {
+            Ok(_) => method.to_owned(),
+            Err(e) => format!("{method}!{}", e.code()),
+        });
+        result
+    }
+
+    fn agent_command_inner(
+        &mut self,
+        method: &str,
+        params: Value,
+        session: Option<&str>,
+    ) -> Result<Value, InjectionError> {
         if self.observation_stopped() {
             return Err(InjectionError::AuthSectionRequired);
         }
         // ADR 2026-10-09 credential username / post-login D2-3: after login every agent command on a
         // page session that can read or act on the page is checked before it runs and its result is
         // checked again before it crosses (the page may have navigated meanwhile).
+        // 付記 2026-10-10c: after login the agent may navigate only to `read_origins` (or a blank
+        // tab). A browser-initiated navigation that turns into a download raises no download event,
+        // so the cancellation below could not hold it; pages elsewhere were unreadable anyway.
+        if let Some(read_origins) = &self.post_login
+            && matches!(method, "Page.navigate" | "Target.createTarget")
+        {
+            let url = params["url"].as_str();
+            let blank = url.is_none_or(|u| u == "about:blank");
+            if !blank && origin(url).is_none_or(|o| !read_origins.contains(&o)) {
+                return Err(InjectionError::ObservationOriginDenied);
+            }
+        }
         let gated = self.post_login.is_some()
             && session.is_some_and(|_| !post_login_control_method(method));
         if gated && let Some(s) = session {

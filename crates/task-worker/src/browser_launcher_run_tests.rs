@@ -2618,7 +2618,7 @@ mod launcher_login {
             FIXTURE, USER, origins, trusted as post_login_trusted,
         };
         const PASSWORD: &str = "launcher-post-login-pw-a81f3c";
-        let chrome = ChromeFixture::start_with(FIXTURE);
+        let chrome = ChromeFixture::start_with(&FIXTURE);
         std::fs::write(chrome.directory.path().join("consent"), "1").expect("consent flag");
         let o = origins(&chrome);
         let brokers = Arc::new(Mutex::new(0));
@@ -2743,7 +2743,7 @@ mod launcher_login {
             FIXTURE, USER, origins, trusted as post_login_trusted,
         };
         const PASSWORD: &str = "launcher-post-login-pw-a81f3c";
-        let chrome = ChromeFixture::start_with(FIXTURE);
+        let chrome = ChromeFixture::start_with(&FIXTURE);
         std::fs::write(chrome.directory.path().join("consent"), "1").expect("consent flag");
         let o = origins(&chrome);
         let brokers = Arc::new(Mutex::new(0));
@@ -2878,7 +2878,7 @@ mod launcher_login {
             Agent, COOKIE_VALUE, FIXTURE, USER, origins, trusted as post_login_trusted,
         };
         const PASSWORD: &str = "launcher-post-login-pw-a81f3c";
-        let chrome = ChromeFixture::start_with(FIXTURE);
+        let chrome = ChromeFixture::start_with(&FIXTURE);
         let o = origins(&chrome);
         let brokers = Arc::new(Mutex::new(0));
         let dir = tempfile::tempdir().expect("tempdir");
@@ -3060,11 +3060,26 @@ mod launcher_login {
             .expect("download behavior");
         let from = agent.seen.len();
         agent.click("dl").expect("download");
-        assert!(agent.wait_download(from, "completed"));
-        // A fresh document first (Chromium's multiple-download limiter, see the daemon test).
-        agent.goto(&format!("{}/ct/home", o.lms), &format!("{}/ct/home", o.lms));
-        agent
-            .download_with_retry("dl-other", "canceled")
+        let lms = agent
+            .wait_download_begin(from, &[])
+            .unwrap_or_else(|| panic!("LMS download began: {:?}", agent.tail(6)));
+        assert!(
+            agent.wait_download(from, &lms, "completed"),
+            "LMS download completed: {:?}",
+            agent.tail(6)
+        );
+        let mut tab2 = crate::browser::post_login_tests::Agent::new_tab(&chrome.controller);
+        assert_eq!(
+            tab2.cmd(
+                "Page.navigate",
+                serde_json::json!({"url":format!("{}/files/other.bin", o.other)})
+            )
+            .err()
+            .map(|e| e.code()),
+            Some("observation_origin_denied")
+        );
+        tab2.goto(&format!("{}/ct/home", o.lms), &format!("{}/ct/home", o.lms));
+        tab2.download_by_script("dl-other", "canceled")
             .expect("other-origin download cancelled");
         assert_eq!(
             std::fs::read_dir(downloads.path()).expect("dir").count(),
@@ -3074,7 +3089,7 @@ mod launcher_login {
         let denied = |r: Result<serde_json::Value, crate::browser_cdp_sink::InjectionError>| {
             r.err().map(|e| e.code())
         };
-        agent.goto(&format!("{}/", o.idp), &format!("{}/", o.idp));
+        agent.goto(&format!("{}/ct/go_idp", o.lms), &format!("{}/", o.idp));
         assert_eq!(
             denied(agent.eval("document.body.innerText")),
             Some("observation_origin_denied")
@@ -3083,7 +3098,10 @@ mod launcher_login {
             denied(agent.cmd("Page.captureScreenshot", serde_json::json!({}))),
             Some("observation_origin_denied")
         );
-        agent.goto(&format!("{}/page", o.other), &format!("{}/page", o.other));
+        agent.goto(
+            &format!("{}/ct/go_other", o.lms),
+            &format!("{}/page", o.other),
+        );
         assert_eq!(
             denied(agent.eval("document.title")),
             Some("observation_origin_denied")

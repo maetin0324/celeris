@@ -17,7 +17,7 @@ import {
 // D3.3 の control bar。状態を先頭に大きく出し、lease の取得・延長・返却を 1 度に 1 つだけ送る。
 // 返却の 3 層: 明示の resume、画面離脱（route 遷移・pagehide）の release beacon、期限切れで paused。
 
-export type ControlIds = { taskId: string; runId: string; sessionId: string };
+export type ControlIds = { taskId: string; runId: string; sessionId: string; runState?: string };
 export type ControlAction = "pause" | "takeover" | "renew" | "resume" | "stop";
 
 export type ControlButtonState = Record<ControlAction, boolean>;
@@ -266,7 +266,10 @@ export function ControlBar({
   canOperate: boolean;
   disabledReason: string | null;
 }) {
-  const control = useQuery({ ...browserControlQuery(ids.taskId, ids.runId, ids.sessionId), enabled: canOperate });
+  const control = useQuery({
+    ...browserControlQuery(ids.taskId, ids.runId, ids.sessionId, ids.runState),
+    enabled: canOperate,
+  });
   const status = control.data?.status;
   const nowSeconds = useNowSeconds();
   const [holder, setHolder] = useState<string | null>(() => readHolder(ids));

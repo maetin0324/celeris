@@ -228,3 +228,7 @@ waits が task policy の保存欄と API wiring を担当し、policy はその
 ## 付記（2026-10-09、launcher CredentialUse 解放決定）
 
 launcher runtime における `CredentialUse` は ADR-0138 D-L の launcher session 証明検証成功・owner が daemon でない・`isolation_ok` の全条件を満たす場合だけ許可する。承認、短い lease、origin/policy binding、認証中の観測停止、secret 非露出の既存規則は維持し、条件不成立時は fail closed とする。`IdentityRestore` は今回解放しない。詳細は [2026-10-09 の決定](2026-10-09-browser-launcher-credential-release.md)。
+
+## 付記（2026-10-10、credential session の本人への Live View）
+
+D3 の「認証後は Live View を出さない」という範囲を、credential session の本人の owner session に対する揮発 frame 表示に限って緩和する。配送経路・owner session の認可・背圧・永続層に残さない契約は [ADR 2026-10-10: browser launcher の本人向け Live View frame 経路](2026-10-10-browser-launcher-live-view-frames.md) に従う。agent/LLM、別 viewer、他 session へ frame を渡さず、frame を DB/WAL/events/logs/artifacts/core dump/一時 file に永続化しない。input 転送・takeover は緩和せず、D6 の読み取り専用・拒否を維持する。credential session の既定公開範囲は `live-credential-default` の人の決定待ちである。

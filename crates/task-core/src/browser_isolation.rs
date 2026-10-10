@@ -753,6 +753,11 @@ pub trait LiveSessionEntry: LiveIsolation + Send + Sync {
     fn live_key(&self) -> Option<(String, String)> {
         None
     }
+    /// Live View の最新 frame の購読口（付記 2026-10-10b）。v8 の frame 接続を持つ session だけが
+    /// 返す。frame は揮発で、本人向けの stream 以外に渡さない。
+    fn live_frames(&self) -> Option<std::sync::Arc<crate::browser_live_frame::LatestFrameSlot>> {
+        None
+    }
 }
 
 /// 稼働中 session の索引（ADR-0108 D5）。登録・削除は runtime の supervisor だけが行う。

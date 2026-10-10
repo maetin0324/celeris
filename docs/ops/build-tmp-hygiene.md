@@ -1,5 +1,5 @@
 ---
-tasks: [01M4B4J92KBR73EQA5S7FWB21G]
+tasks: [01M4B4J92KBR73EQA5S7FWB21G, 01M4HWZMWSTH3HYPCRRPE6PXB0]
 ---
 # ビルド成果物と /tmp の衛生 — 運用手順（人が実行する）
 
@@ -44,7 +44,10 @@ config で値や roots を変えた場合、dry-run は同じ root を `--root` 
 ```toml
 [maintenance.target_sweep]
 # roots を省略すると <[workspace].build_cache_dir>/cargo と /var/tmp/agent-platform-build の 2 つ。
-# scratch pool の lease（release-build）の target は入れない（release.sh が自分で掃除する）。
+# scratch pool の lease（release-build）の target は入れない。release.sh が前回 build の marker
+# (.celeris-release-build-start) より古い test binary を刈り、共有を数えない大きさ（btrfs du の
+# Exclusive + Set shared、非 btrfs は inode ごと st_blocks）が SD_RELEASE_TARGET_MAX_BYTES
+# （既定 64 GiB）を越えたら target を作り直す。詳細は [local-disk-growth.md](local-disk-growth.md#3-release-build-target-の初回刈り込み)。
 # roots = ["/home/<user>/.local/celeris/build-cache/cargo", "/var/tmp/agent-platform-build"]
 max_age_days = 7                     # 最後に使ってからこの日数を過ぎた項目を消す
 max_bytes_per_root = 128849018880    # 120 GiB。超えたら古い順に target_ratio まで下げる
@@ -157,6 +160,31 @@ df -h /tmp
 - 掃除を止める: `cron pause target-sweep`。config の `[maintenance.target_sweep]` を消せば既定値に戻る。
 - 監視を止める: `[maintenance]` に `disk_watch = []` を書いて再起動。
 - 掃除で消えたものは cargo が次の build で作り直す（データの損失は無い）。
+
+## 8. `/local` 容量の 3 経路（repo target・release-build・DB backup）
+
+ADR [2026-10-10-local-disk-growth-paths](../../agent-docs/adr/2026-10-10-local-disk-growth-paths.md) で
+塞いだ 3 経路の自動対策と、既存残骸の人による掃除は [local-disk-growth.md](local-disk-growth.md) が
+手順書（本番 host で人が実行）。
+
+- **repo 直下 target の GC**: daemon の常設 tick（600 秒間隔）が、木全体が終端（done/failed/cancelled）で
+  最後の終端から `workspace_target_after_hours`（既定 6 時間）経過した repo 直下 `target/` を削除する。
+  `running_run`・`active_descendant`・`grace` の保護理由がなく `.cargo-lock` を取得できるものだけが
+  候補。log の `repo target gc: kept` / `repo target gc: removing the target of a finished task tree` /
+  `repo target gc: removed` と task の `WorkspacePruned` event で確認。既存の残骸の削除は
+  [local-disk-growth.md §2](local-disk-growth.md#2-既存-repo-直下-target例-01mf3v643)。
+- **release-build target の刈り込み**: `release.sh` は build 前に marker `.celeris-release-build-start`
+  より古い workspace crate の test binary と `.d` を削除し（依存の `.rlib`・build 出力は残す）、
+  共有を数えない大きさ（`btrfs filesystem du` の Exclusive + Set shared、非 btrfs host は inode ごとに
+  `st_blocks`）が `SD_RELEASE_TARGET_MAX_BYTES`（既定 64 GiB）を越えたら target を作り直す
+  （`SD_RELEASE_TARGET_SEED` があればコピー）。初回・既存の target は
+  [local-disk-growth.md §3](local-disk-growth.md#3-release-build-target-の初回刈り込み)。
+- **DB backup の保持**: promote 前 backup は 10 本（`CELERIS_PROMOTE_BACKUP_KEEP`）、rollback 前は 3 本
+  （`CELERIS_ROLLBACK_BACKUP_KEEP`）までで、`promote.sh` の成功末尾が `prune-backups.sh` で刈る。
+  定期 backup は daemon の `backup_daily_keep`（7）・`backup_weekly_keep`（4）・
+  `backup_max_total_bytes`（64 GiB）で刈る。どちらの削除も、消す候補がある型の最新 backup を
+  read-only で `PRAGMA integrity_check` し `ok` でなければ 1 本も消さない。既存の残骸の削除は
+  [local-disk-growth.md §4](local-disk-growth.md#4-既存-promoterollback-backup-の刈り込み)。
 
 ## 2026-10-09: workspace target 対策の運用
 

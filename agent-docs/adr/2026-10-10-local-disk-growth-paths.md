@@ -69,6 +69,10 @@ task `01M4D7RVKX` は 2026-10-09 08:01 に終端したものとして調査し�
 
 `scripts/selfdeploy/lib.sh` の `sd_release_prune_record_start` は `.celeris-release-build-start` を一時ファイルから rename して更新する。`sd_release_prune_stale_test_binaries` は workspace crate 名と `debug/deps` の `.d`/対応 hash binary を照合し、前回 marker より古い組だけを削除する。依存 `.rlib`/`.rmeta` と build script 出力は対象外。`sd_release_prune_enforce_limit` は `SD_RELEASE_TARGET_MAX_BYTES`（既定 68719476736 bytes）を超えた target を作り直し、任意の `SD_RELEASE_TARGET_SEED` の内容をコピーする。`release.sh` は lease 決定後、workspace clean と gate より前にこれらを呼ぶ。回帰試験は `scripts/selfdeploy/tests/release_prune_stale_test_binaries.sh`。
 
+#### 付記 2026-10-10: release prune の大きさ判定
+
+`sd_release_prune_size` は `btrfs filesystem du -s --raw <target>` が成功し、出力を認識できる場合、Exclusive と Set shared の合計を上限判定に使う。共有 extent は Set shared に一度だけ加算されるため、reflink seed の共有を各 target の全量として重複計上しない。btrfs が無い・失敗する・出力を認識できない場合は、走査した通常 file の inode を一度ずつ数え、`st_blocks * 512` を合計する。後者は sparse file の未割当領域と hardlink の重複を除け、非 btrfs host でも見かけのサイズによる誤った作り直しを避けられる。一方、非 btrfs で reflink の共有 extent を判別できないため、その場合は共有分を重複計上し得る。
+
 ### D4. DB backup の保持と削除前検査
 
 promote 前 backup は直近10本を既定保持し、rollback 用 backup は直近3本を別枠で保持する。定期 backup は直近48時間分に加え、日次7本・週次4本（UTC日/ISO週ごとの最新）を残す。全 `.sqlite3` backup の使用量上限は64 GiBを既定とし、超過時は保持集合の古い periodic から先に削除し、次に promote の古いものを削除する。rollback 用直近3本と各種の最新1本は保護する。削除を始める前に最新 backup 1個を read-only で `PRAGMA integrity_check` し、結果が `ok` 以外または検査失敗なら削除を一切行わない。既存 `backup_keep=48` は互換のため直近 hourly 本数として扱う。

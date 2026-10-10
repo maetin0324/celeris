@@ -1741,7 +1741,7 @@ return out;}})()"
             return;
         }
         // The closing of a dialog the controller answered is not passed on either: agent-browser
-        // never saw it open (付記 2026-10-10k).
+        // never saw it open (付記 2026-10-10l).
         if value["method"] == "Page.javascriptDialogClosed"
             && let Some(session) = value["sessionId"].as_str()
             && self.answered_dialogs.remove(session)

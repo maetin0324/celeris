@@ -146,7 +146,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         data = self.rfile.read(int(self.headers.get('Content-Length', '0'))).decode()
-        form = parse_qs(data)
+        form = parse_qs(data, keep_blank_values=True)
         me = self.origin()
         if me == idp_origin and self.path == SSO + '?execution=e1s1':
             self.send(LOGIN_FORM)
@@ -155,7 +155,10 @@ class Handler(BaseHTTPRequestHandler):
             password = form.get('j_password', [''])[0]
             Path('received.tmp').write_text(user + '\n' + password)
             Path('received.tmp').replace('received')
-            if Path('reject').exists() or not user or not password:
+            # Like Shibboleth / Spring Web Flow: the submitter's event (`_eventId_proceed`) must be in
+            # the POST, otherwise the IdP shows the login form again.
+            if (Path('reject').exists() or not user or not password
+                    or '_eventId_proceed' not in form):
                 self.send(LOGIN_FORM.replace('<h1>', '<p>Login failed</p><h1>'))
                 return
             # localStorage write interstitial after the login, then consent or the SAML POST.

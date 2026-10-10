@@ -3061,17 +3061,11 @@ mod launcher_login {
         let from = agent.seen.len();
         agent.click("dl").expect("download");
         assert!(agent.wait_download(from, "completed"));
-        let from = agent.seen.len();
-        agent.click("dl-other").expect("other download");
-        assert!(
-            agent.wait_download(from, "canceled"),
-            "other-origin download cancelled: {:?}",
-            agent.seen[from..]
-                .iter()
-                .filter(|e| e.contains("ownload"))
-                .map(|e| e.chars().take(240).collect::<String>())
-                .collect::<Vec<_>>()
-        );
+        // A fresh document first (Chromium's multiple-download limiter, see the daemon test).
+        agent.goto(&format!("{}/ct/home", o.lms), &format!("{}/ct/home", o.lms));
+        agent
+            .download_with_retry("dl-other", "canceled")
+            .expect("other-origin download cancelled");
         assert_eq!(
             std::fs::read_dir(downloads.path()).expect("dir").count(),
             1,

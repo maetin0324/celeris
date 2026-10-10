@@ -225,10 +225,8 @@ async fn complete_trusted_login(
         c.inject(&request, own, broker).map_err(|e| e.code())?;
     }
     if let Some(selector) = &trusted.submit_selector {
-        let expr = format!(
-            "(()=>{{let e=document.querySelector({});if(!e)return 'missing';if(e.form)e.form.requestSubmit();else e.click();return 'ok'}})()",
-            serde_json::to_string(selector).map_err(|_| "submit_failed")?
-        );
+        let expr = crate::browser_cdp_sink::login_submit_expression(selector)
+            .map_err(|_| "submit_failed")?;
         let submitted = controller
             .lock()
             .map_err(|_| "cdp_unavailable")?

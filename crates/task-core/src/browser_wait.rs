@@ -159,6 +159,32 @@ pub struct TrustedLogin {
     /// 同 D2: ログイン後の読み取りの opt-in。無ければ ADR-0080 H3 のまま（session の終わりまで観測停止）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub post_login: Option<PostLogin>,
+    /// 同 付記 2026-10-10b: IdP の属性送信の同意頁で controller が 1 回だけ押す固定ボタン。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub consent: Option<ConsentPolicy>,
+}
+
+/// ADR 2026-10-09 credential username / post-login 付記 2026-10-10b: 同意頁で controller が押す固定の
+/// ボタン（`selector`）と任意の選択肢（`choice_selector`、radio）。押す回数は 1 login につき 1 回に固定。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ConsentPolicy {
+    pub selector: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub choice_selector: Option<String>,
+}
+
+impl ConsentPolicy {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        validate_trusted_selector(&self.selector).map_err(|_| "consent_selector")?;
+        if let Some(c) = &self.choice_selector {
+            validate_trusted_selector(c).map_err(|_| "consent_selector")?;
+            if *c == self.selector {
+                return Err("consent_selector");
+            }
+        }
+        Ok(())
+    }
 }
 
 /// ADR 2026-10-09 credential username / post-login D2-6: ログイン後に戻せる agent の action。
@@ -251,6 +277,7 @@ pub fn validate_trusted_login_full(
     submit_selector: Option<&str>,
     username_selector: Option<&str>,
     post_login: Option<&PostLogin>,
+    consent: Option<&ConsentPolicy>,
 ) -> Result<(), &'static str> {
     validate_trusted_login(login_url, exact_origin, password_selector, submit_selector)?;
     if let Some(u) = username_selector {
@@ -261,6 +288,12 @@ pub fn validate_trusted_login_full(
     }
     if let Some(p) = post_login {
         p.validate(exact_origin)?;
+    }
+    if let Some(c) = consent {
+        if post_login.is_none() {
+            return Err("consent_without_post_login");
+        }
+        c.validate()?;
     }
     Ok(())
 }
@@ -417,6 +450,7 @@ impl TrustedLogin {
             self.submit_selector.as_deref(),
             self.username_selector.as_deref(),
             self.post_login.as_ref(),
+            self.consent.as_ref(),
         )
     }
 }

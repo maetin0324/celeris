@@ -27,6 +27,7 @@ fn store_with_grant() -> SqliteStore {
                     submit_selector: None,
                     username_selector: None,
                     post_login: None,
+                    consent: None,
                 },
                 "admin",
                 now,

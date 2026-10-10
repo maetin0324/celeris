@@ -286,6 +286,8 @@ fn login_args(session_id: &str, lease_id: &str) -> AuthenticateArgs {
         username_selector: None,
         post_login: None,
         report_held_reason: false,
+        consent: None,
+        report_consent_controls: false,
     }
 }
 
@@ -312,6 +314,8 @@ fn launcher_credential_authenticate_is_fixed_and_status_only() {
         status: AuthenticationStatus::Success,
         observation: None,
         held_reason: None,
+        consent_pressed: false,
+        consent_controls: Vec::new(),
     })
     .expect("serialize status");
     assert_eq!(
@@ -323,7 +327,7 @@ fn launcher_credential_authenticate_is_fixed_and_status_only() {
     })
     .expect("serialize begun");
     assert_eq!(begun, r#"{"type":"auth_begun","cdp_target_id":"T1"}"#);
-    assert_eq!(PROTOCOL_VERSION, POST_LOGIN_PROTOCOL);
+    assert_eq!(PROTOCOL_VERSION, CONSENT_PROTOCOL);
     const { assert!(CREDENTIAL_LOGIN_PROTOCOL < POST_LOGIN_PROTOCOL) };
 }
 
@@ -381,6 +385,8 @@ fn launcher_credential_v5_authenticate_carries_username_and_post_login_only_in_f
         status: AuthenticationStatus::Success,
         observation: Some(LoginObservation::Resumed),
         held_reason: None,
+        consent_pressed: false,
+        consent_controls: Vec::new(),
     })
     .expect("json");
     assert_eq!(
@@ -394,7 +400,9 @@ fn launcher_credential_v5_authenticate_carries_username_and_post_login_only_in_f
         Response::AuthenticateResult {
             status: AuthenticationStatus::Success,
             observation: None,
-            held_reason: None
+            held_reason: None,
+            consent_pressed: false,
+            consent_controls: Vec::new(),
         }
     );
 }

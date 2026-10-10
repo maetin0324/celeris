@@ -315,6 +315,7 @@ pub(crate) fn grant_h3_lease(
             submit_selector: trusted.submit_selector.clone(),
             username_selector: trusted.username_selector.clone(),
             post_login: trusted.post_login.clone(),
+            consent: trusted.consent.clone(),
         },
         credential_revision: approval.credential.credential_revision,
         task_id: task_id.into(),

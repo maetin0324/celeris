@@ -580,6 +580,7 @@ fn trusted() -> TrustedLogin {
         submit_selector: Some("button[type=submit]".into()),
         username_selector: None,
         post_login: None,
+        consent: None,
     }
 }
 
@@ -611,6 +612,32 @@ fn trusted_login_with_username_and_post_login_validates_and_round_trips() {
         actions: vec![PostLoginAction::Snapshot],
     });
     assert_eq!(bad.validate(LOGIN_ORIGIN), Err("post_login_idp_origin"));
+    // 付記 2026-10-10b: the consent button is part of the pinned login (a change is policy_changed)
+    // and needs a post-login read; its selectors use the same grammar.
+    let mut with_consent = t.clone();
+    with_consent.consent = Some(ConsentPolicy {
+        selector: "input[name=_eventId_proceed]".into(),
+        choice_selector: Some("input[value=_shib_idp_doNotRememberConsent]".into()),
+    });
+    assert_eq!(with_consent.validate(LOGIN_ORIGIN), Ok(()));
+    assert_ne!(with_consent, t);
+    let json = serde_json::to_string(&with_consent).expect("json");
+    assert_eq!(
+        serde_json::from_str::<TrustedLogin>(&json).expect("back"),
+        with_consent
+    );
+    let mut bad = with_consent.clone();
+    bad.post_login = None;
+    assert_eq!(
+        bad.validate(LOGIN_ORIGIN),
+        Err("consent_without_post_login")
+    );
+    let mut bad = with_consent.clone();
+    bad.consent = Some(ConsentPolicy {
+        selector: "button:first-child".into(),
+        choice_selector: None,
+    });
+    assert_eq!(bad.validate(LOGIN_ORIGIN), Err("consent_selector"));
     assert_eq!(PostLoginAction::Extract.upstream_action(), "gettext");
     assert_eq!(PostLoginAction::Click.upstream_action(), "click");
 }

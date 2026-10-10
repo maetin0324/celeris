@@ -32,6 +32,8 @@ const MAX_CDP_MESSAGE: usize = 64 << 20;
 const TIMEOUT: Duration = Duration::from_secs(5);
 /// Shibboleth IdP attribute-release consent form markers (fixed names; the page text is not read).
 const CONSENT_MARKER_JS: &str = "!!document.querySelector('[name=\"_shib_idp_consentIds\"],[name=\"_shib_idp_consentOptions\"],[name=\"_eventId_AttributeReleaseRejected\"]')";
+/// The same markers as a JS string literal (for the press and the diagnostics).
+const CONSENT_SELECTOR_JS: &str = "'[name=\"_shib_idp_consentIds\"],[name=\"_shib_idp_consentOptions\"],[name=\"_eventId_AttributeReleaseRejected\"]'";
 /// Isolated world for the controller's own post-login checks (never visible to the agent).
 const CHECK_WORLD: &str = "celeris-post-login";
 /// Counts `input[type=password]` in the document, its open shadow roots and same-origin frames.
@@ -189,6 +191,79 @@ impl PostLoginHeld {
     }
 }
 
+/// One control of an IdP consent form, for the operator to choose the fixed consent selector
+/// (ADR 2026-10-09 credential username / post-login 付記 2026-10-10b-4). Only the `name`, the kind
+/// (`submit` / `button` / `radio`) and the `value` attribute — never labels, text or user data.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConsentControl {
+    pub name: String,
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+}
+
+/// Bounds of the consent diagnostics.
+pub const CONSENT_CONTROLS_MAX: usize = 12;
+const CONSENT_ATTR_MAX: usize = 64;
+const CONSENT_LINE_MAX: usize = 512;
+
+/// Keep only well-formed controls: kind `submit` / `button` / `radio`, name 1..=64 printable ASCII
+/// without spaces, value printable ASCII up to 64 (otherwise dropped), at most 12. Applied where the
+/// controls are read and again where the daemon receives them from the launcher.
+pub fn sanitize_consent_controls(raw: Vec<ConsentControl>) -> Vec<ConsentControl> {
+    let name_ok = |n: &str| {
+        !n.is_empty() && n.len() <= CONSENT_ATTR_MAX && n.bytes().all(|b| (0x21..0x7f).contains(&b))
+    };
+    let value_ok =
+        |v: &str| v.len() <= CONSENT_ATTR_MAX && v.bytes().all(|b| (0x20..0x7f).contains(&b));
+    raw.into_iter()
+        .filter(|c| matches!(c.kind.as_str(), "submit" | "button" | "radio") && name_ok(&c.name))
+        .map(|c| ConsentControl {
+            value: c.value.filter(|v| !v.is_empty() && value_ok(v)),
+            ..c
+        })
+        .take(CONSENT_CONTROLS_MAX)
+        .collect()
+}
+
+/// `name=value(kind)` / `name(kind)` joined by `,`, at most 512 characters.
+pub fn format_consent_controls(controls: &[ConsentControl]) -> String {
+    let mut line = controls
+        .iter()
+        .map(|c| match &c.value {
+            Some(v) => format!("{}={}({})", c.name, v, c.kind),
+            None => format!("{}({})", c.name, c.kind),
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    // Everything is ASCII after sanitizing; truncate on a char boundary anyway.
+    while line.len() > CONSENT_LINE_MAX {
+        line.pop();
+    }
+    line
+}
+
+/// Why observation stayed stopped, with the consent diagnostics when the wait ended on a consent
+/// page (付記 2026-10-10b).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PostLoginHeldInfo {
+    pub reason: PostLoginHeld,
+    /// The controller pressed the configured consent button once in this login.
+    pub consent_pressed: bool,
+    pub consent_controls: Vec<ConsentControl>,
+}
+
+impl From<PostLoginHeld> for PostLoginHeldInfo {
+    fn from(reason: PostLoginHeld) -> Self {
+        Self {
+            reason,
+            consent_pressed: false,
+            consent_controls: Vec::new(),
+        }
+    }
+}
+
 /// How long the post-login wait may last in all (several IdP / SAML auto-POST hops).
 pub const POST_LOGIN_WAIT: Duration = Duration::from_secs(60);
 /// A page that needs a human (consent) or shows the login form again ends the wait once it has
@@ -207,6 +282,11 @@ pub struct PostLoginWaiter {
 }
 
 impl PostLoginWaiter {
+    /// Forget how long the current state has lasted (after the controller pressed consent).
+    pub fn restart_stability(&mut self) {
+        self.last = None;
+    }
+
     pub fn new(now: std::time::Instant, timeout: Duration, stable: Duration) -> Self {
         Self {
             deadline: now + timeout,
@@ -840,6 +920,107 @@ impl CdpController {
             passwords,
             consent["result"]["result"]["value"] == Value::Bool(true),
         ))
+    }
+
+    /// 付記 2026-10-10b: press the administrator's fixed consent button once — only on the IdP
+    /// (`idp_origin`) top document of the login tab, only on a consent page, only when `selector`
+    /// matches exactly one submit button inside the consent form (and `choice_selector`, if any,
+    /// exactly one radio of the same form, which is checked first). Runs in the controller's
+    /// isolated world; returns whether it submitted.
+    pub fn press_consent(
+        &mut self,
+        own: &str,
+        idp_origin: &str,
+        consent: &task_core::browser_wait::ConsentPolicy,
+    ) -> Result<bool, InjectionError> {
+        if self.auth_section.is_none() || self.restored {
+            return Err(InjectionError::AuthSectionRequired);
+        }
+        let tree = self.call("Page.getFrameTree", json!({}), Some(own))?;
+        let frame = &tree["result"]["frameTree"]["frame"];
+        if origin(frame["url"].as_str()).as_deref() != Some(idp_origin) {
+            return Ok(false);
+        }
+        let frame_id = frame["id"]
+            .as_str()
+            .ok_or(InjectionError::TargetChanged)?
+            .to_owned();
+        let selector =
+            serde_json::to_string(&consent.selector).map_err(|_| InjectionError::TargetMismatch)?;
+        let choice = match &consent.choice_selector {
+            Some(c) => format!(
+                "const cs=document.querySelectorAll({});if(cs.length!==1)return 'no_match';const c=cs[0];\
+if(String(c.localName)!=='input'||String(c.type).toLowerCase()!=='radio'||c.form!==e.form)return 'no_match';\
+c.checked=true;",
+                serde_json::to_string(c).map_err(|_| InjectionError::TargetMismatch)?
+            ),
+            None => String::new(),
+        };
+        let expr = format!(
+            "(()=>{{const marker={CONSENT_SELECTOR_JS};if(!document.querySelector(marker))return 'no_consent';\
+const es=document.querySelectorAll({selector});if(es.length!==1)return 'no_match';const e=es[0];\
+const t=String(e.type||'').toLowerCase();\
+const button=(String(e.localName)==='button'&&(t===''||t==='submit'))||(String(e.localName)==='input'&&t==='submit');\
+if(!button||!e.form||!e.form.querySelector(marker))return 'no_match';\
+{choice}e.form.requestSubmit(e);return 'ok';}})()"
+        );
+        let world = self.call(
+            "Page.createIsolatedWorld",
+            json!({"frameId":frame_id,"worldName":CHECK_WORLD}),
+            Some(own),
+        )?;
+        let context = world["result"]["executionContextId"]
+            .as_i64()
+            .ok_or(InjectionError::TargetChanged)?;
+        let pressed = self.call(
+            "Runtime.evaluate",
+            json!({"expression":expr,"contextId":context,"returnByValue":true,"silent":true}),
+            Some(own),
+        )?;
+        Ok(pressed["result"]["result"]["value"] == "ok")
+    }
+
+    /// 付記 2026-10-10b-4: the consent form's `button` / `input[type=submit|radio]` names, kinds and
+    /// `value` attributes (sanitized) on the login tab's IdP top document; empty otherwise.
+    pub fn consent_controls(&mut self, own: &str, idp_origin: &str) -> Vec<ConsentControl> {
+        let read = (|| -> Result<Vec<ConsentControl>, InjectionError> {
+            let tree = self.call("Page.getFrameTree", json!({}), Some(own))?;
+            let frame = &tree["result"]["frameTree"]["frame"];
+            if origin(frame["url"].as_str()).as_deref() != Some(idp_origin) {
+                return Ok(Vec::new());
+            }
+            let frame_id = frame["id"]
+                .as_str()
+                .ok_or(InjectionError::TargetChanged)?
+                .to_owned();
+            let world = self.call(
+                "Page.createIsolatedWorld",
+                json!({"frameId":frame_id,"worldName":CHECK_WORLD}),
+                Some(own),
+            )?;
+            let context = world["result"]["executionContextId"]
+                .as_i64()
+                .ok_or(InjectionError::TargetChanged)?;
+            let expr = format!(
+                "(()=>{{const m=document.querySelector({CONSENT_SELECTOR_JS});if(!m)return [];\
+const root=m.form||document;const out=[];\
+for(const e of root.querySelectorAll('button,input[type=submit],input[type=radio]')){{\
+if(out.length>={CONSENT_CONTROLS_MAX})break;const t=String(e.type||'').toLowerCase();\
+const kind=t==='radio'?'radio':(t==='submit'||(String(e.localName)==='button'&&t==='')?'submit':'button');\
+out.push({{name:String(e.getAttribute('name')||''),kind:kind,value:String(e.getAttribute('value')||'')}});}}\
+return out;}})()"
+            );
+            let reply = self.call(
+                "Runtime.evaluate",
+                json!({"expression":expr,"contextId":context,"returnByValue":true,"silent":true}),
+                Some(own),
+            )?;
+            Ok(serde_json::from_value::<Vec<ConsentControl>>(
+                reply["result"]["result"]["value"].clone(),
+            )
+            .unwrap_or_default())
+        })();
+        sanitize_consent_controls(read.unwrap_or_default())
     }
 
     /// Close the auth section after [`Self::post_login_probe`] returned `Ready`: clear injected values
@@ -1552,36 +1733,111 @@ impl CdpController {
     }
 }
 
-/// ADR 2026-10-09 credential username / post-login D2-2 for a blocking caller (the launcher): probe
-/// every 100 ms under a [`PostLoginWaiter`] (at most `timeout`), then close the auth section with
-/// [`CdpController::resume_after_login`]. `Err` keeps observation stopped and says why.
+/// One post-login wait in progress (both runtimes drive it; the launcher blocks, the daemon awaits).
+/// 付記 2026-10-10b: on a consent page with a configured `consent`, the controller presses it once
+/// and the wait restarts its stability timer; a consent page that stays ends the wait with
+/// `consent_required` and the form's control names for the operator.
+pub struct PostLoginWait<'a> {
+    pub own: &'a str,
+    pub login_loader: &'a str,
+    pub idp_origin: &'a str,
+    pub read_origins: &'a [String],
+    pub consent: Option<&'a task_core::browser_wait::ConsentPolicy>,
+    waiter: PostLoginWaiter,
+    /// The one press per login was attempted (whatever the outcome).
+    attempted: bool,
+    /// The press submitted the consent form.
+    pressed: bool,
+}
+
+impl<'a> PostLoginWait<'a> {
+    pub fn new(
+        own: &'a str,
+        login_loader: &'a str,
+        idp_origin: &'a str,
+        read_origins: &'a [String],
+        consent: Option<&'a task_core::browser_wait::ConsentPolicy>,
+        timeout: Duration,
+    ) -> Self {
+        Self {
+            own,
+            login_loader,
+            idp_origin,
+            read_origins,
+            consent,
+            waiter: PostLoginWaiter::new(std::time::Instant::now(), timeout, POST_LOGIN_STABLE),
+            attempted: false,
+            pressed: false,
+        }
+    }
+
+    /// One probe. `None` = poll again after a short sleep. `Ok(pressed)` = the section closed;
+    /// `pressed` says whether the consent button was pressed on the way.
+    pub fn step(
+        &mut self,
+        controller: &std::sync::Mutex<CdpController>,
+    ) -> Option<Result<bool, PostLoginHeldInfo>> {
+        let mut c = match controller.lock() {
+            Ok(c) => c,
+            Err(_) => return Some(Err(PostLoginHeld::CheckFailed.into())),
+        };
+        let probe = match c.post_login_probe(
+            self.own,
+            self.login_loader,
+            self.idp_origin,
+            self.read_origins,
+        ) {
+            Ok(p) => p,
+            Err(_) => return Some(Err(PostLoginHeld::CheckFailed.into())),
+        };
+        if probe == PostLoginProbe::IdpConsent
+            && !self.attempted
+            && let Some(consent) = self.consent
+        {
+            // At most once per login, whatever the outcome.
+            self.attempted = true;
+            if c.press_consent(self.own, self.idp_origin, consent)
+                .unwrap_or(false)
+            {
+                self.pressed = true;
+                self.waiter.restart_stability();
+                return None;
+            }
+        }
+        match self.waiter.observe(probe, std::time::Instant::now())? {
+            Ok(()) => Some(
+                c.resume_after_login(self.own, self.read_origins.to_vec())
+                    .map(|()| self.pressed)
+                    .map_err(|_| PostLoginHeld::CheckFailed.into()),
+            ),
+            Err(reason) => {
+                let consent_controls = if reason == PostLoginHeld::ConsentRequired {
+                    c.consent_controls(self.own, self.idp_origin)
+                } else {
+                    Vec::new()
+                };
+                Some(Err(PostLoginHeldInfo {
+                    reason,
+                    consent_pressed: self.pressed,
+                    consent_controls,
+                }))
+            }
+        }
+    }
+}
+
+/// ADR 2026-10-09 credential username / post-login D2-2 for a blocking caller (the launcher): run
+/// a [`PostLoginWait`] probing every 100 ms. `Ok` = the auth section closed (observation resumed);
+/// `Err` keeps observation stopped and says why.
 pub fn resume_after_login_blocking(
     controller: &std::sync::Arc<std::sync::Mutex<CdpController>>,
-    own: &str,
-    login_loader: &str,
-    idp_origin: &str,
-    read_origins: &[String],
-    timeout: Duration,
-) -> Result<(), PostLoginHeld> {
-    let mut waiter = PostLoginWaiter::new(std::time::Instant::now(), timeout, POST_LOGIN_STABLE);
+    mut wait: PostLoginWait<'_>,
+) -> Result<bool, PostLoginHeldInfo> {
     loop {
-        let probe = match controller.lock() {
-            Ok(mut c) => c
-                .post_login_probe(own, login_loader, idp_origin, read_origins)
-                .map_err(|_| PostLoginHeld::CheckFailed)?,
-            Err(_) => return Err(PostLoginHeld::CheckFailed),
-        };
-        match waiter.observe(probe, std::time::Instant::now()) {
-            Some(Ok(())) => {
-                return controller
-                    .lock()
-                    .map_err(|_| PostLoginHeld::CheckFailed)?
-                    .resume_after_login(own, read_origins.to_vec())
-                    .map_err(|_| PostLoginHeld::CheckFailed);
-            }
-            Some(Err(held)) => return Err(held),
-            None => std::thread::sleep(Duration::from_millis(100)),
+        if let Some(outcome) = wait.step(controller) {
+            return outcome;
         }
+        std::thread::sleep(Duration::from_millis(100));
     }
 }
 
@@ -2229,6 +2485,50 @@ mod idle_pump_tests {
             serde_json::to_value(PostLoginHeld::IdpTimeout).unwrap(),
             json!("idp_timeout")
         );
+    }
+
+    /// 付記 2026-10-10b-4: the consent diagnostics keep only names / kinds / short ASCII values.
+    #[test]
+    fn consent_controls_are_sanitized_and_bounded() {
+        let c = |name: &str, kind: &str, value: Option<&str>| ConsentControl {
+            name: name.into(),
+            kind: kind.into(),
+            value: value.map(String::from),
+        };
+        let raw = vec![
+            c("_eventId_proceed", "submit", Some("Accept")),
+            c(
+                "_shib_idp_consentOptions",
+                "radio",
+                Some("_shib_idp_doNotRememberConsent"),
+            ),
+            c("label", "text", Some("s2026001")),
+            c("", "submit", Some("x")),
+            c("bad name", "submit", None),
+            c(
+                "_eventId_AttributeReleaseRejected",
+                "submit",
+                Some("同意しない"),
+            ),
+            c("long", "button", Some(&"v".repeat(65))),
+        ];
+        let kept = sanitize_consent_controls(raw);
+        assert_eq!(
+            format_consent_controls(&kept),
+            "_eventId_proceed=Accept(submit),_shib_idp_consentOptions=_shib_idp_doNotRememberConsent(radio),_eventId_AttributeReleaseRejected(submit),long(button)"
+        );
+        let many: Vec<_> = (0..40)
+            .map(|i| {
+                c(
+                    &format!("n{i:03}{}", "x".repeat(60)),
+                    "radio",
+                    Some(&"v".repeat(64)),
+                )
+            })
+            .collect();
+        let kept = sanitize_consent_controls(many);
+        assert_eq!(kept.len(), CONSENT_CONTROLS_MAX);
+        assert!(format_consent_controls(&kept).len() <= 512);
     }
 
     #[test]

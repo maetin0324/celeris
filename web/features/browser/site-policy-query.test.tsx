@@ -137,6 +137,7 @@ describe("site policy body (username selector and post-login read)", () => {
         submit_selector: null,
         username_selector: 'input[name="j_username"]',
         post_login: null,
+        consent: null,
       },
     });
     expect(sitePolicyBody({ ...fields, username: " " })).toMatchObject({ body: { username_selector: null } });
@@ -156,6 +157,36 @@ describe("site policy body (username selector and post-login read)", () => {
         },
       },
     });
+  });
+  it("sends the pinned consent button only with a post-login read", () => {
+    const base = {
+      ...fields,
+      postLogin: true,
+      readOrigins: "https://lms.example.ac.jp",
+      actions: ["snapshot"] as typeof fields.actions,
+      acknowledged: true,
+    };
+    expect(
+      sitePolicyBody({
+        ...base,
+        consentSelector: ' input[name="_eventId_proceed"] ',
+        consentChoice: 'input[value="_shib_idp_doNotRememberConsent"]',
+      }),
+    ).toMatchObject({
+      body: {
+        consent: {
+          selector: 'input[name="_eventId_proceed"]',
+          choice_selector: 'input[value="_shib_idp_doNotRememberConsent"]',
+        },
+      },
+    });
+    expect(sitePolicyBody({ ...base, consentChoice: "#x" })).toMatchObject({
+      error: expect.stringContaining("ボタン"),
+    });
+    expect(sitePolicyBody({ ...fields, consentSelector: "#accept" })).toMatchObject({
+      error: expect.stringContaining("ログイン後の読み取りと組"),
+    });
+    expect(sitePolicyBody(base)).toMatchObject({ body: { consent: null } });
   });
   it("shows the username selector and the post-login opt-in when editing", () => {
     const html = renderToStaticMarkup(

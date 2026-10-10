@@ -27,6 +27,9 @@ export type SitePolicyFields = {
   readOrigins: string;
   actions: PostLoginAction[];
   acknowledged: boolean;
+  /** IdP の同意頁で controller が 1 回だけ押す固定ボタン（任意、post_login と組）。 */
+  consentSelector?: string;
+  consentChoice?: string;
 };
 
 /**
@@ -41,7 +44,10 @@ export function sitePolicyBody(f: SitePolicyFields): { body: SitePolicyPutBody }
     submit_selector: f.submit.trim() || null,
     username_selector: f.username.trim() || null,
     post_login: null,
+    consent: null,
   };
+  if (!f.postLogin && ((f.consentSelector ?? "").trim() || (f.consentChoice ?? "").trim()))
+    return { error: "同意頁のボタンはログイン後の読み取りと組で設定します。" };
   if (!f.postLogin) return { body };
   const readOrigins = f.readOrigins
     .split(/\s+/)
@@ -52,7 +58,12 @@ export function sitePolicyBody(f: SitePolicyFields): { body: SitePolicyPutBody }
   if (!f.acknowledged)
     return { error: "ログイン後の頁の内容（個人情報を含みうる）が LLM に渡ることを確認してください。" };
   const actions = POST_LOGIN_ACTIONS.map((a) => a.action).filter((a) => f.actions.includes(a));
-  return { body: { ...body, post_login: { read_origins: readOrigins, actions } } };
+  const consentSelector = (f.consentSelector ?? "").trim();
+  const consentChoice = (f.consentChoice ?? "").trim();
+  if (!consentSelector && consentChoice)
+    return { error: "同意の選択肢だけでは押せません。同意ボタンの selector も入れてください。" };
+  const consent = consentSelector ? { selector: consentSelector, choice_selector: consentChoice || null } : null;
+  return { body: { ...body, post_login: { read_origins: readOrigins, actions }, consent } };
 }
 
 export function SitePolicyForm({
@@ -74,6 +85,8 @@ export function SitePolicyForm({
   const [postLogin, setPostLogin] = useState(!!policy?.post_login);
   const [readOrigins, setReadOrigins] = useState((policy?.post_login?.read_origins ?? []).join("\n"));
   const [actions, setActions] = useState<PostLoginAction[]>(policy?.post_login?.actions ?? ["snapshot", "extract"]);
+  const [consentSelector, setConsentSelector] = useState(policy?.consent?.selector ?? "");
+  const [consentChoice, setConsentChoice] = useState(policy?.consent?.choice_selector ?? "");
   // 既存の opt-in を開き直しても、保存のたびに改めて確認を求める。
   const [acknowledged, setAcknowledged] = useState(false);
   const [pending, setPending] = useState(false);
@@ -91,6 +104,8 @@ export function SitePolicyForm({
       readOrigins,
       actions,
       acknowledged,
+      consentSelector,
+      consentChoice,
     });
     if ("error" in built) {
       setError(built.error);
@@ -210,6 +225,28 @@ export function SitePolicyForm({
                 </label>
               ))}
             </fieldset>
+            <label htmlFor={`${id}-consent`} className="block min-w-0 space-y-1 text-label font-medium">
+              IdP の同意頁で押すボタンの selector（任意。1 回だけ押す）
+              <Input
+                id={`${id}-consent`}
+                value={consentSelector}
+                placeholder='input[name="_eventId_proceed"]'
+                onChange={(e) => setConsentSelector(e.target.value)}
+              />
+            </label>
+            <label htmlFor={`${id}-consent-choice`} className="block min-w-0 space-y-1 text-label font-medium">
+              同意の選択肢の selector（任意。推奨: 次回も確認する）
+              <Input
+                id={`${id}-consent-choice`}
+                value={consentChoice}
+                placeholder='input[value="_shib_idp_doNotRememberConsent"]'
+                onChange={(e) => setConsentChoice(e.target.value)}
+              />
+            </label>
+            <p className="text-label text-muted-foreground">
+              同意頁（属性送信の確認）が出たとき、Celeris の controller だけがこのボタンを 1 回押します（agent
+              は押せません）。 空なら同意頁で止まり、進捗に同意 form の欄名が出ます。
+            </p>
             <label className="flex min-h-11 min-w-11 items-start gap-2 text-label">
               <input type="checkbox" checked={acknowledged} onChange={(e) => setAcknowledged(e.target.checked)} />
               <span>
@@ -303,6 +340,14 @@ export function SitePoliciesPanel({ csrf }: { csrf: string }) {
                       {policy.post_login
                         ? `${policy.post_login.read_origins.join(", ")}（${policy.post_login.actions.join(", ")}）`
                         : "なし（ログイン後は読み取らない）"}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>同意頁で押すボタン</dt>
+                    <dd>
+                      {policy.consent
+                        ? `${policy.consent.selector}${policy.consent.choice_selector ? `（選択 ${policy.consent.choice_selector}）` : ""}`
+                        : "なし（同意頁で止まる）"}
                     </dd>
                   </div>
                   <div>

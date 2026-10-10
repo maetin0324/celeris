@@ -272,11 +272,18 @@ impl LauncherClient {
                 status,
                 observation,
                 held_reason,
+                consent_pressed,
+                consent_controls,
             } => Ok((
                 status,
                 LoginResult {
                     observation: observation.unwrap_or(LoginObservation::Held),
                     held_reason,
+                    consent_pressed,
+                    // The launcher already sanitized them; the daemon does it again.
+                    consent_controls: crate::browser_cdp_sink::sanitize_consent_controls(
+                        consent_controls,
+                    ),
                 },
             )),
             other => Err(unexpected("authenticate_result", &other)),

@@ -204,6 +204,7 @@ impl Fx {
             submit_selector: None,
             username_selector: username_selector.map(str::to_owned),
             post_login: None,
+            consent: None,
         };
         self.broker
             .grant(LeaseRequest {

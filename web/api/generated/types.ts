@@ -482,6 +482,7 @@ export type BrowserSettingsPatch = {
 };
 
 export type BrowserSitePolicyRecord = {
+  "consent"?: ConsentPolicy | null;
   "created_at": string;
   "exact_origin": string;
   "login_url": string;
@@ -1195,6 +1196,11 @@ export type ConfigView = {
 };
 
 export type ConflictKind = "Record" | "Migration" | "Adr" | "Generated" | "Code";
+
+export type ConsentPolicy = {
+  "choice_selector"?: string | null;
+  "selector": string;
+};
 
 export type ConsoleBlock = {
   "at": string;
@@ -5297,6 +5303,7 @@ export type SitePolicyList = {
 };
 
 export type SitePolicyPutBody = {
+  "consent"?: ConsentPolicy | null;
   "exact_origin": string;
   "login_url": string;
   "password_selector": string;
@@ -5903,6 +5910,7 @@ export type TrustedDeviceVerifyBody = {
 };
 
 export type TrustedLogin = {
+  "consent"?: ConsentPolicy | null;
   "login_url": string;
   "password_selector": string;
   "policy_id": string;

@@ -68,6 +68,12 @@ pub struct AuthenticateArgs {
     /// so a v5 daemon (which does not know the field) can talk to a v6 launcher.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub report_held_reason: bool,
+    /// v7 (付記 2026-10-10b): the fixed consent button the controller may press once.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub consent: Option<task_core::browser_wait::ConsentPolicy>,
+    /// v7: the daemon reads `consent_pressed` / `consent_controls` in the answer.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub report_consent_controls: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -90,20 +96,28 @@ pub enum LoginObservation {
 
 /// v6: what a successful login left (the fixed observation state and, when held after an opt-in,
 /// the fixed reason — no URL, no page data).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoginResult {
     pub observation: LoginObservation,
     pub held_reason: Option<crate::browser_cdp_sink::PostLoginHeld>,
+    /// v7: the controller pressed the configured consent button.
+    pub consent_pressed: bool,
+    /// v7: the consent form's controls when the wait ended on a consent page (sanitized).
+    pub consent_controls: Vec<crate::browser_cdp_sink::ConsentControl>,
 }
 
 impl LoginResult {
     pub const HELD: Self = Self {
         observation: LoginObservation::Held,
         held_reason: None,
+        consent_pressed: false,
+        consent_controls: Vec::new(),
     };
     pub const RESUMED: Self = Self {
         observation: LoginObservation::Resumed,
         held_reason: None,
+        consent_pressed: false,
+        consent_controls: Vec::new(),
     };
 }
 
@@ -225,7 +239,13 @@ pub enum Outcome {
 /// v6 で `authenticate_result` に固定の `held_reason`（観測を再開しなかった理由）を足し、ログイン後の
 /// 待ちを IdP の中継頁を通して最長 60 秒にした（ADR 2026-10-09 credential username / post-login 付記
 /// 2026-10-10）。post_login を使う login は v6 を要求する。
-pub const PROTOCOL_VERSION: u32 = 6;
+///
+/// v7 で `authenticate` に `consent`（同意頁の固定ボタン）と `report_consent_controls`、応答に
+/// `consent_pressed`・`consent_controls` を足した（付記 2026-10-10b）。consent を使う login は v7 を要求する。
+pub const PROTOCOL_VERSION: u32 = 7;
+
+/// 同意頁の固定ボタンを受ける最小の protocol 版。
+pub const CONSENT_PROTOCOL: u32 = 7;
 
 /// credential login（`auth_begin` / `authenticate`）を受ける最小の protocol 版。
 pub const CREDENTIAL_LOGIN_PROTOCOL: u32 = 4;
@@ -332,6 +352,11 @@ pub enum Response {
         /// v6: why observation stayed stopped after a post-login opt-in (fixed code).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         held_reason: Option<crate::browser_cdp_sink::PostLoginHeld>,
+        /// v7: only when the request asked (`report_consent_controls`).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        consent_pressed: bool,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        consent_controls: Vec<crate::browser_cdp_sink::ConsentControl>,
     },
     Error {
         code: ErrorCode,
@@ -530,6 +555,7 @@ impl Request {
                     args.submit_selector.as_deref(),
                     args.username_selector.as_deref(),
                     args.post_login.as_ref(),
+                    args.consent.as_ref(),
                 )
                 .map_err(|_| ErrorCode::BadRequest)
             }

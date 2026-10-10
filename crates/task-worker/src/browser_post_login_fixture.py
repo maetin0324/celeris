@@ -5,7 +5,8 @@ interstitial that auto-POSTs before the username + password form; after the form
 localStorage interstitial and a SAML auto-POST page lead to the SP), the LMS ("manaba"-like
 assignment list behind a session cookie) and an unrelated origin. Files in the working directory
 steer the flow: `reject` makes the IdP show the login form again, `consent` stops on an
-attribute-release consent page, `landing_pw` lands the SP on a page with a password field,
+attribute-release consent page (`consent_again`: shown again after it is submitted; each
+submission is recorded in `consent_posts`), `landing_pw` lands the SP on a page with a password field,
 `slow_ms` delays each post-login auto-POST hop. `received` records what the IdP got (test only).
 """
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -23,6 +24,25 @@ LOGIN_FORM = '''<body><h1>Unified login</h1>
 <input name=j_password type=password autocomplete=current-password>
 <input type=checkbox name=donotcache value=1>
 <button name=_eventId_proceed>Login</button></form>'''
+
+
+def consent_page():
+    user, _ = received()
+    return f'''<body><h1>Information to be provided to the service</h1>
+<table><tr><td>uid</td><td>{html.escape(user)}</td></tr><tr><td>mail</td><td>{html.escape(user)}@u.example</td></tr></table>
+<form method=post action="/idp/profile/SAML2/Unsolicited/SSO?execution=e1s4">
+<input type=hidden name=_shib_idp_consentIds value=uid>
+<label><input type=radio name=_shib_idp_consentOptions value=_shib_idp_doNotRememberConsent> Ask me again at next login</label>
+<label><input type=radio name=_shib_idp_consentOptions value=_shib_idp_rememberConsent checked> Ask me again if information changes</label>
+<input type=submit name=_eventId_AttributeReleaseRejected value=Reject>
+<input type=submit name=_eventId_proceed value=Accept></form>'''
+
+
+def saml_post():
+    return f'''<body onload="setTimeout(function(){{document.forms[0].submit()}},{slow_ms()})">
+<form method=post action="{lms_origin}/Shibboleth.sso/SAML2/POST">
+<input type=hidden name=RelayState value="cookie">
+<input type=hidden name=SAMLResponse value="assertion-ok"></form>'''
 
 
 def slow_ms():
@@ -116,7 +136,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_header('Content-Length', str(len(body)))
                 self.end_headers()
                 self.wfile.flush()
-                threading.Event().wait(2)
+                threading.Event().wait(8)
                 try:
                     self.wfile.write(body)
                 except OSError:
@@ -142,18 +162,19 @@ class Handler(BaseHTTPRequestHandler):
             self.send(interstitial(SSO + '?execution=e1s3', slow_ms()))
         elif me == idp_origin and self.path == SSO + '?execution=e1s3':
             if Path('consent').exists():
-                self.send('''<body><h1>Information to be provided to the service</h1>
-<form method=post action="/idp/profile/SAML2/Unsolicited/SSO?execution=e1s4">
-<input type=checkbox name=_shib_idp_consentIds value=uid checked>
-<input type=radio name=_shib_idp_consentOptions value=_shib_idp_doNotRememberConsent>
-<input type=radio name=_shib_idp_consentOptions value=_shib_idp_rememberConsent checked>
-<input type=submit name=_eventId_AttributeReleaseRejected value=Reject>
-<input type=submit name=_eventId_proceed value=Accept></form>''')
+                self.send(consent_page())
                 return
-            self.send(f'''<body onload="setTimeout(function(){{document.forms[0].submit()}},{slow_ms()})">
-<form method=post action="{lms_origin}/Shibboleth.sso/SAML2/POST">
-<input type=hidden name=RelayState value="cookie">
-<input type=hidden name=SAMLResponse value="assertion-ok"></form>''')
+            self.send(saml_post())
+        elif me == idp_origin and self.path == SSO + '?execution=e1s4':
+            # The consent form's submission (test record: which button and option were sent).
+            sent = [k for k in form if k.startswith('_eventId_')]
+            option = form.get('_shib_idp_consentOptions', [''])[0]
+            with open('consent_posts', 'a') as f:
+                f.write(','.join(sent) + ' ' + option + '\n')
+            if Path('consent_again').exists() or sent != ['_eventId_proceed']:
+                self.send(consent_page())
+                return
+            self.send(saml_post())
         elif me == lms_origin and self.path == '/Shibboleth.sso/SAML2/POST':
             landing = '/ct/settings' if Path('landing_pw').exists() else '/ct/home'
             self.send('', 302, landing, [('Set-Cookie', COOKIE + '; Path=/; Secure; HttpOnly')])

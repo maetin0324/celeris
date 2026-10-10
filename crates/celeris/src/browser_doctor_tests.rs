@@ -147,6 +147,7 @@ fn add_policy_grant(store: &SqliteStore) {
         submit_selector: None,
         username_selector: None,
         post_login: None,
+        consent: None,
     };
     let now = time::OffsetDateTime::now_utc();
     store
@@ -217,6 +218,7 @@ fn browser_doctor_reports_username_selector_and_post_login_per_site_policy() {
         "{}",
         row.detail
     );
+    assert!(row.detail.contains("consent=なし"), "{}", row.detail);
     assert_eq!(status(&report, "site-policy"), "OK");
 }
 

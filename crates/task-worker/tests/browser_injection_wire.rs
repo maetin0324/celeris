@@ -257,6 +257,7 @@ fn grant(root: &tempfile::TempDir) -> String {
         submit_selector: None,
         username_selector: None,
         post_login: None,
+        consent: None,
     };
     let reference = CredentialRef {
         credential_id: "login-1".into(),

@@ -135,6 +135,12 @@ export function TrustedLoginSummary({ wait }: { wait: BrowserWait }) {
           {login.username_selector ? `${login.username_selector}（username）・` : ""}
           {login.password_selector}（password）
         </dd>
+        <dt className="text-muted-foreground">同意頁で押すボタン</dt>
+        <dd className="break-all font-mono">
+          {login.consent
+            ? `${login.consent.selector}${login.consent.choice_selector ? `（選択 ${login.consent.choice_selector}）` : ""}（Celeris が 1 回だけ押す）`
+            : "押さない（同意頁で止まる）"}
+        </dd>
         <dt className="text-muted-foreground">ログイン後の読み取り</dt>
         <dd className="break-all">
           {post

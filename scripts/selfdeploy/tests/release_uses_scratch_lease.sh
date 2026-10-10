@@ -9,6 +9,7 @@ set -euo pipefail
 here="$(cd "$(dirname "$0")/.." && pwd)"
 root="$(mktemp -d)"
 trap 'rm -rf "$root"' EXIT
+mkdir -p "$root/home"
 mkdir -p "$root/bin" "$root/config" "$root/state"
 
 # 元のリポジトリ（commit 1 つ）。
@@ -48,7 +49,7 @@ run_release() {
   CELERIS_STATE_DIR="$root/state" CELERIS_CONFIG_DIR="$root/config" CELERIS_CONFIG="$root/config/config.toml" \
     SD_REPO="$root/repo" SD_CELERISCTL="$root/bin/celerisctl" SD_PNPM_SHIM_DIR="$root/bin" \
     CTL_LOG="$root/ctl.log" CARGO_ENV_LOG="$root/cargo-env.log" FAKE_SCRATCH="$root/scratch" \
-    PATH="$root/bin:$PATH" bash "$here/release.sh" "$sha" >"$root/release.out" 2>&1
+    HOME="$root/home" SD_PRUNE_ALLOWED_ROOT="$root" PATH="$root/bin:$PATH" bash "$here/release.sh" "$sha" >"$root/release.out" 2>&1
 }
 
 # ---- 1. lease が取れる: scratch の target で gate が走り、終了時に release ----

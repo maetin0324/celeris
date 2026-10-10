@@ -4,6 +4,7 @@ set -euo pipefail
 here="$(cd "$(dirname "$0")/.." && pwd)"
 root="$(mktemp -d)"
 trap 'rm -rf "$root"' EXIT
+mkdir -p "$root/home"
 mkdir -p "$root/bin" "$root/config" "$root/scratch/targets/release-build/target/debug/deps" "$root/scratch/targets/release-build/target/debug/build"
 git init -q "$root/repo"
 mkdir -p "$root/repo/crates/example/src" "$root/repo/crates/example/tests" "$root/repo/tests/e2e/src" "$root/repo/tests/e2e/tests"
@@ -78,7 +79,7 @@ touch -d @300 "$deps/example_crate-bbbbbbbb" "$deps/example_crate-bbbbbbbb.d" "$
   "$target/debug/build/placeholder" "$deps/notify-33333333" "$deps/notify-33333333.d"
 printf '150\n' >"$target/.celeris-release-build-start"
 run_release() {
-  CELERIS_STATE_DIR="$root/state" CELERIS_CONFIG_DIR="$root/config" CELERIS_CONFIG="$root/config/config.toml" \
+  HOME="$root/home" SD_PRUNE_ALLOWED_ROOT="$root" CELERIS_STATE_DIR="$root/state" CELERIS_CONFIG_DIR="$root/config" CELERIS_CONFIG="$root/config/config.toml" \
     SD_REPO="$root/repo" SD_CELERISCTL="$root/bin/celerisctl" SD_PNPM_SHIM_DIR="$root/bin" \
     FAKE_SCRATCH="$root/scratch" SD_RELEASE_NOW=200 SD_GATE_TEST_RUNNER=cargo-test \
     PATH="$root/bin:$PATH" bash "$here/release.sh" "$sha" >"$root/release.out" 2>&1

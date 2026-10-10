@@ -31,6 +31,7 @@ def setup(label):
     cargo.write_text('#!/usr/bin/env python3\nimport json\nnames='+repr(names)+'\nprint(json.dumps({"packages":[{"name":n,"targets":[{"name":n,"kind":["bin"]}]} for n in names]}))\n')
     cargo.chmod(0o755)
     env = os.environ.copy(); env['PATH'] = str(bindir) + os.pathsep + env['PATH']; env['SD_RELEASE_TARGET_MAX_BYTES'] = str(10**15)
+    env['SD_PRUNE_ALLOWED_ROOT'] = str(base); env['HOME'] = str(base/'home'); (base/'home').mkdir()
     env['SD_RELEASE_TARGET_SEED'] = str(base/'seed'); (base/'seed').mkdir()
     # Inventory's 199 stale binaries form one baseline generation.
     for i, row in enumerate(bins): create(deps, row, f'{i:016x}', 100)

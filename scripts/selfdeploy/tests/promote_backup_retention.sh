@@ -17,6 +17,8 @@ assert_eq() { if [ "$2" = "$3" ]; then ok "$1"; else ng "$1 (want=[$2] got=[$3])
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/promote-backup-retention.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
+mkdir -p "$WORK/home"
+export HOME="$WORK/home" SD_PRUNE_ALLOWED_ROOT="$WORK"
 
 # 本物の小さな SQLite DB を 1 つ作り、backup はその写しにする。
 SEED="$WORK/seed.sqlite3"

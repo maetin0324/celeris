@@ -19,6 +19,17 @@ die() { say "error: $*"; exit 1; }
 [ "$#" -eq 1 ] || { echo "usage: prune-backups.sh <backups_dir>" >&2; exit 2; }
 DIR="$1"
 [ -d "$DIR" ] || die "not a directory: $DIR"
+if [ -n "${SD_PRUNE_ALLOWED_ROOT:-}" ]; then
+  python3 - "$SD_PRUNE_ALLOWED_ROOT" "$DIR" <<'PYGUARD' || die "backup directory is outside SD_PRUNE_ALLOWED_ROOT"
+import os, sys
+root, target = map(os.path.realpath, sys.argv[1:])
+try: allowed = os.path.commonpath((root, target)) == root
+except ValueError: allowed = False
+if not allowed:
+    print(f"refusing prune outside SD_PRUNE_ALLOWED_ROOT: {target}", file=sys.stderr)
+    sys.exit(1)
+PYGUARD
+fi
 
 check_keep() { # <name> <value>
   case "$2" in

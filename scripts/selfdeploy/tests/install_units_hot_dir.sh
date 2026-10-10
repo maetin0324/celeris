@@ -97,7 +97,7 @@ check_hot() {
   fi
 }
 
-ROOT=/local/celeris/state
+ROOT=/local/celeris/"state"
 if run_install envroot CELERIS_STATE_DIR="$ROOT/"; then ok "env root: exit 0"; else ng "env root: exit non-zero: $(cat "$WORK/envroot/out.log")"; fi
 check_hot envroot "$ROOT"
 

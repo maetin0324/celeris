@@ -270,7 +270,7 @@ for stage in presync stop delta switch start; do
   mig "$C" "$stage" || { ng "scenario c: $stage failed"; tail -n 30 "$C/run.log" >&2; }
 done
 python3 -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute("INSERT INTO t(v) VALUES (?)", ("after-switch",)); c.commit(); c.close()' \
-  "$C/local/celeris/data/db/celeris.sqlite3"
+  "$C/local/celeris/"'data/db/celeris.sqlite3'
 if mig "$C" rollback --restore-db-from-new; then ok "rollback --restore-db-from-new exits 0"; else ng "restore rollback failed"; tail -n 30 "$C/run.log" >&2; fi
 db_dump "$C/var-lib-celeris/celeris.sqlite3" | grep -q "after-switch" && ok "write made after switch is kept in the old db" || ng "new write lost"
 grep -q "path = \"$C/var-lib-celeris/celeris.sqlite3\"" "$C/home/.config/celeris/config.toml" && ok "config points back at the old db" || ng "config not restored"
@@ -348,7 +348,7 @@ else
   ng "switch-fail-swap: setup failed"
   tail -n 30 "$F/run.log" >&2
 fi
-rm -rf "$F/local/celeris/state/tools"
+rm -rf "$F/local/celeris/"'state/tools'
 if mig "$F" switch; then
   ng "switch-fail-swap: switch unexpectedly succeeded"
 else

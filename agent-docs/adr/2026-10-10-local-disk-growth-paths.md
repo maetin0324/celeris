@@ -93,6 +93,12 @@ final review（2026-10-10 08:28Z）の指摘: D3 実装付記の刈り込みは 
 
 ### D4. DB backup の保持と削除前検査
 
+#### 付記 2026-10-10: 試験の本番 path 隔離
+
+`SD_PRUNE_ALLOWED_ROOT` が設定されている場合、release target の stale binary 刈り込み・容量超過時の target 再作成、および `prune-backups.sh` は対象を realpath 化し、許可 root 配下でなければ削除前に非 0 で拒否する。変数未設定の本番実行は従来どおり。削除を行う selfdeploy 試験は mktemp root と一時 HOME を使用する。`prune_tests_stay_in_tmp.sh` は試験 script の本番 data/state path 文字列の混入を検査し、別 mktemp root に置いた囮 target/backup が拒否後も残ることを確認する。
+
+`release_prune_production_scale.sh` の8世代縮尺試験でも許可 root は各試験用 mktemp 配下に限定する。実際の本番 target は試験から参照しない。
+
 promote 前 backup は直近10本を既定保持し、rollback 用 backup は直近3本を別枠で保持する。定期 backup は直近48時間分に加え、日次7本・週次4本（UTC日/ISO週ごとの最新）を残す。全 `.sqlite3` backup の使用量上限は64 GiBを既定とし、超過時は保持集合の古い periodic から先に削除し、次に promote の古いものを削除する。rollback 用直近3本と各種の最新1本は保護する。削除を始める前に最新 backup 1個を read-only で `PRAGMA integrity_check` し、結果が `ok` 以外または検査失敗なら削除を一切行わない。既存 `backup_keep=48` は互換のため直近 hourly 本数として扱う。
 
 #### 実装付記（backup-retention、2026-10-10）

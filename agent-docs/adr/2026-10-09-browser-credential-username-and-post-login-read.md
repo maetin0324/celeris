@@ -409,3 +409,51 @@ screenshot / download の file が launcher の session dir（uid 995 の sandbo
 
 残る制限: 実 launcher（uid 995・subuid の sandbox）での往復は host で人が確かめる（運用手順の確認）。launcher 側の 32 件の上限は
 `RuntimeSession` の中で数え、偽 backend の試験では daemon 側の上限だけを確かめている。
+
+## 付記 2026-10-10f: launcher の Chrome が PDF を viewer で開く問題と、artifact 失敗の固定診断（protocol 8 のまま）
+
+release fe20a5a7（protocol 8）の後、task 01M4GYJ3XGJNWZQDF35F1MDE0H の run 01M4JWEYZAG6B7H0WTD451042T で manaba の PDF の
+download と screenshot が全部 `browser_artifact_action_failed` になった。daemon は launcher の失敗を全部この 1 つの理由に
+畳み、launcher は action の失敗を何も記録しないため、本番の log からは原因が分からなかった。
+
+調べたこと:
+
+- 実 launcher（本番の socket・uid 995・subuid）で screenshot と `fetch_artifact` は通る（about:blank、ログイン前）。session dir の
+  権限・UMask=0077・output の 0644 化は原因ではない。
+- daemon 経路の試験は chrome-headless-shell を使う。本番の launcher は `launcher.toml` の `chrome` = Chrome for Testing 153
+  （`/opt/celeris-browser/chrome/chrome`）で、**PDF viewer を持つ**。Content-Disposition の無い PDF（inline 配信）の link を
+  click すると、tab が viewer に移り download が始まらない。agent-browser の `download` は 30 秒待って timeout する。
+  実 sandbox（bwrap + sandboxd + action runner + 実 agent-browser 0.38.1）・ログイン後 mode で再現した
+  （`browser_sandbox_artifacts.rs`。修正を外すと `download Inline PDF: … error_class=timeout` で落ちる）。
+- 本番の 5 件のうち 1 件目（12:27:09）は 30 秒待ちに合う。残り（0.16 秒差の連続失敗、screenshot）は速い失敗で、fixture の同一
+  origin の viewer では再現しなかった。tab が viewer、または read_origins 外（PDF の配信が別 host へ redirect する場合）に
+  残り、ログイン後の gate が拒否した可能性が高いが、本番の記録が無いので断定しない。
+
+決定:
+
+1. **PDF は常に download にする。** sandboxd が Chrome 起動前に、新しい profile に限り `Default/Preferences` を
+   `{"plugins":{"always_open_pdf_externally":true}}` で作る（既存の profile は触らない）。viewer を持たない
+   chrome-headless-shell では何も変わらない。read_origins 外への redirect で始まる download は従来どおり relay が取り消す。
+2. **失敗の固定診断（秘密を出さない）。**
+   - action runner（`browser_action.py`）は応答に `runner_reason`（`request_invalid` / `config_invalid` / `exec_failed` /
+     `exec_timeout` / `agent_browser_exit` / `output_missing` / `output_chmod_failed` / `runner_error`）と、agent-browser の
+     error 文を固定語彙に写した `error_class`（relay の code 6 種・`policy_denied`・`unknown_ref`・`timeout`・
+     `download_error`・`screenshot_error`・`target_closed`・`no_page`・`other`・`unparsed`・`no_error_text`）を足す。
+     error 文そのものは返さない。成功と言いながら生成名の file が無ければ `output_missing` で失敗にする。
+   - controller は relay が拒否した agent の command を（CDP method を `Domain.method` の形に縮めて、固定 code と）最後の 8 件
+     まで持つ。read_origins 外の download の取消（`download_origin_denied`）と取消後の完了（`download_breach`）も記録する。
+   - launcher は action が失敗すると 1 行だけ journal に書く:
+     `action <verb> failed: session=<id> code=<ErrorCode> launcher_reason=… | status=… runner_reason=… error_class=… gate=<method!code,…>`。
+     runner の値は `[a-z_]{1,40}` 以外を `invalid` にする（sandbox 内から任意の文を journal に入れさせない）。session の policy に
+     よる拒否と action の期限切れも同じ形で書く。URL・selector・page の文・引数は書かない。
+   - daemon は launcher の error code ごとに理由を分ける: `unauthorized` → `browser_artifact_action_refused`、`timeout` →
+     `browser_artifact_action_timeout`、`limit` → `browser_artifact_count_limit`、`isolation_failed` →
+     `browser_artifact_isolation_failed`、応答なし → `browser_artifact_launcher_unavailable`、それ以外（runner・gate の失敗）は
+     従来の `browser_artifact_action_failed`。どれも shim の `browser_[a-z0-9_]` の語彙。
+3. **版は 8 のまま。** wire の型は変えない（runner の欄は sandbox 内の file、daemon の理由は既存の action 応答の失敗の写し方）。
+   protocol 9 は Live View（task 01M4JAK3MY）に予約。
+4. **運用。** launcher と **sandboxd の両方**を再 build して差し替える（Preferences は sandboxd、runner と診断は launcher に入る）。
+
+残る制限: `target="_blank"` の link からの download（popup で始まる download）は agent-browser が拾えず 30 秒で timeout する
+（headless-shell でも同じ）。PDF の URL の `open` も navigation の download になり file は渡らない。本番の速い失敗の原因は、差し替え後の
+journal の `gate=` と `error_class=` で確定させる。

@@ -282,3 +282,35 @@ rm -rf /local/celeris/data/scratch/launcher-$SHA12-target
 
 戻し方: `install -o root -g root -m 0755 "$L.pre-artifacts-v8" "$L"` の後に socket を再起動する。daemon は protocol 7 を見て
 screenshot・download を理由付きで失敗させる（他の操作・credential login は動く）。Live View の frame は protocol 9 の予定。
+
+### protocol 8 の修正: PDF を viewer で開かない・失敗の固定診断（付記 2026-10-10f）
+
+版は 8 のまま（doctor の表示は変わらない）。**launcher と sandboxd の両方**を同じ commit から再 build して差し替える。
+`celeris-browser-sandboxd` が Chrome の profile に `always_open_pdf_externally` を書く（launcher の Chrome for Testing は PDF
+viewer を持ち、inline 配信の PDF の download が始まらなかった）。launcher は action の失敗を 1 行の固定 token で journal に書く。
+
+```sh
+SHA12=<昇格した sha12>
+L=/usr/local/libexec/celeris/celeris-browser-launcher
+S=/usr/local/libexec/celeris/celeris-browser-sandboxd
+T=/local/celeris/data/scratch/launcher-$SHA12-target
+CARGO_TARGET_DIR=$T cargo build --release -p task-worker --bin celeris-browser-launcher --bin celeris-browser-sandboxd
+install -o root -g root -m 0755 "$L" "$L.pre-p8-artifact-fix"
+install -o root -g root -m 0755 "$S" "$S.pre-p8-artifact-fix"
+systemctl stop celeris-browser-launcher.socket celeris-browser-launcher.service
+install -o root -g root -m 0755 $T/release/celeris-browser-launcher "$L"
+install -o root -g root -m 0755 $T/release/celeris-browser-sandboxd "$S"
+sha256sum "$L" "$S"
+systemctl start celeris-browser-launcher.socket
+rm -rf $T
+```
+
+稼働 session が無いこと（`pgrep -u celeris-browser -a`）を先に確かめる。戻し方は退避した 2 つを戻して socket を再起動する。
+
+daemon も同じ commit にする（失敗の理由が `browser_artifact_action_refused` / `_timeout` / `_isolation_failed` /
+`_launcher_unavailable` に分かれる。古い daemon でも launcher の修正は効く）。
+
+失敗の調べ方（root）: `journalctl -u celeris-browser-launcher | grep 'action .* failed\|action .* refused'`。1 行に
+`code=`（launcher の ErrorCode）、`launcher_reason=`（launcher が自分で拒否した理由）または `status= runner_reason= error_class=`
+（sandbox の action runner と agent-browser の失敗の分類）、`gate=`（relay がその action 中に拒否した CDP method と code。
+`Browser.downloadWillBegin!download_origin_denied` は read_origins 外からの download の取消）が出る。URL・page の文は出ない。

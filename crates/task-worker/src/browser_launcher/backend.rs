@@ -567,6 +567,45 @@ impl SessionBackend for RuntimeBackend {
     }
 }
 
+/// A runner diagnostic token as it may appear in the launcher log: `[a-z_]{1,40}`, else `invalid`.
+fn runner_token(value: &serde_json::Value) -> &str {
+    match value.as_str() {
+        None => "none",
+        Some(t)
+            if (1..=40).contains(&t.len())
+                && t.bytes().all(|b| b.is_ascii_lowercase() || b == b'_') =>
+        {
+            t
+        }
+        Some(_) => "invalid",
+    }
+}
+
+/// The failed runner reply as fixed tokens (付記 2026-10-10f): the exit status and the runner's
+/// `runner_reason` / `error_class`. Nothing of `stdout` crosses.
+pub(crate) fn runner_failure(reply: &serde_json::Value) -> String {
+    let status = reply["status"]
+        .as_i64()
+        .map_or_else(|| "none".to_owned(), |n| n.clamp(-255, 255).to_string());
+    format!(
+        "status={status} runner_reason={} error_class={}",
+        runner_token(&reply["runner_reason"]),
+        runner_token(&reply["error_class"])
+    )
+}
+
+/// The relay refusals of one action as `method!code` (comma separated, `none` if empty).
+pub(crate) fn format_denials(denials: &[(String, &'static str)]) -> String {
+    if denials.is_empty() {
+        return "none".into();
+    }
+    denials
+        .iter()
+        .map(|(method, code)| format!("{method}!{code}"))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
 fn action_name(v: Verb) -> &'static str {
     match v {
         Verb::Open => "navigate",
@@ -645,6 +684,119 @@ struct RuntimeSession {
 }
 
 impl RuntimeSession {
+    fn run_action(
+        &mut self,
+        verb: Verb,
+        args: &ActionArgs,
+    ) -> Result<Observation, (ErrorCode, String)> {
+        let at = |code: ErrorCode, reason: &str| (code, format!("launcher_reason={reason}"));
+        if !self.isolation_ok() {
+            return Err(at(ErrorCode::IsolationFailed, "isolation"));
+        }
+        if let Some(a) = self.after_login.as_ref().filter(|a| !a.permits(verb)) {
+            let reason = match a {
+                AfterLogin::Held => "after_login_held",
+                AfterLogin::Resumed(_) => "post_login_action_not_allowed",
+            };
+            return Err(at(ErrorCode::Unauthorized, reason));
+        }
+        let name = match verb {
+            Verb::Open => "open",
+            Verb::Click => "click",
+            Verb::Snapshot => "snapshot",
+            Verb::Extract => "extract",
+            Verb::Screenshot => "screenshot",
+            Verb::Download => "download",
+            Verb::Scroll => "scroll",
+            Verb::Close => "close",
+        };
+        let mut argv = Vec::new();
+        match verb {
+            Verb::Open => argv.push(
+                args.url
+                    .clone()
+                    .ok_or_else(|| at(ErrorCode::BadRequest, "argument_missing"))?,
+            ),
+            Verb::Click | Verb::Extract | Verb::Download => argv.push(
+                args.selector
+                    .clone()
+                    .ok_or_else(|| at(ErrorCode::BadRequest, "argument_missing"))?,
+            ),
+            Verb::Scroll => {
+                argv.push(
+                    if args.y.unwrap_or(0) < 0 {
+                        "up"
+                    } else {
+                        "down"
+                    }
+                    .into(),
+                );
+                argv.push(args.y.unwrap_or(0).unsigned_abs().to_string());
+            }
+            _ => {}
+        }
+        if matches!(verb, Verb::Screenshot | Verb::Download)
+            && self.artifacts.len() >= MAX_ARTIFACTS
+        {
+            return Err(at(ErrorCode::Limit, "artifact_limit"));
+        }
+        let artifact = if matches!(verb, Verb::Screenshot | Verb::Download) {
+            Some(format!(
+                "{}-{}.{}",
+                name,
+                super::random_id().map_err(|_| at(ErrorCode::LaunchFailed, "random_id"))?,
+                if verb == Verb::Screenshot {
+                    "png"
+                } else {
+                    "bin"
+                }
+            ))
+        } else {
+            None
+        };
+        self.sequence += 1;
+        let request = self
+            .dir
+            .join("actions")
+            .join(format!("{:016x}.request", self.sequence));
+        let result = request.with_extension("result");
+        write_shared(
+            &request,
+            &serde_json::to_vec(&json!({"verb":name,"args":argv,"artifact":artifact}))
+                .map_err(|_| at(ErrorCode::BadRequest, "request_encode"))?,
+        )
+        .map_err(|code| at(code, "request_write"))?;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(50);
+        let body = loop {
+            match std::fs::read(&result) {
+                Ok(body) => break body,
+                Err(e)
+                    if e.kind() == std::io::ErrorKind::NotFound
+                        && std::time::Instant::now() < deadline =>
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(10))
+                }
+                Err(_) => {
+                    let _ = std::fs::remove_file(&request);
+                    return Err(at(ErrorCode::Timeout, "runner_timeout"));
+                }
+            }
+        };
+        let _ = std::fs::remove_file(result);
+        let reply: serde_json::Value = serde_json::from_slice(&body)
+            .map_err(|_| at(ErrorCode::LaunchFailed, "runner_reply_invalid"))?;
+        if reply["status"].as_i64() != Some(0) {
+            return Err((ErrorCode::BadRequest, runner_failure(&reply)));
+        }
+        let text = reply["stdout"]
+            .as_str()
+            .map(|s| s.chars().take(16000).collect());
+        if let Some(name) = &artifact {
+            self.artifacts.push((name.clone(), verb));
+        }
+        Ok(Observation { text, artifact })
+    }
+
     fn facts(&self) -> Option<SessionFacts> {
         let pid = self.sup.runtime_pid();
         let status = std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
@@ -958,101 +1110,30 @@ impl BackendSession for RuntimeSession {
     }
 
     fn action(&mut self, verb: Verb, args: &ActionArgs) -> Result<Observation, ErrorCode> {
-        if !self.isolation_ok() {
-            return Err(ErrorCode::IsolationFailed);
+        // Only this action's relay refusals go with its failure line.
+        let controller = self.shared.controller();
+        if let Ok(mut c) = controller.lock() {
+            c.take_agent_denials();
         }
-        if self.after_login.as_ref().is_some_and(|a| !a.permits(verb)) {
-            return Err(ErrorCode::Unauthorized);
+        let result = self.run_action(verb, args);
+        if let Err((code, detail)) = &result {
+            let gate = controller
+                .lock()
+                .map(|mut c| format_denials(&c.take_agent_denials()))
+                .unwrap_or_else(|_| "unavailable".into());
+            // Fixed tokens only (付記 2026-10-10f): no URL, selector, page text or argument.
+            eprintln!(
+                "celeris-browser-launcher: action {} failed: session={} code={} {} gate={}",
+                action_name(verb),
+                self.sup.session_id(),
+                code,
+                detail,
+                gate
+            );
         }
-        let name = match verb {
-            Verb::Open => "open",
-            Verb::Click => "click",
-            Verb::Snapshot => "snapshot",
-            Verb::Extract => "extract",
-            Verb::Screenshot => "screenshot",
-            Verb::Download => "download",
-            Verb::Scroll => "scroll",
-            Verb::Close => "close",
-        };
-        let mut argv = Vec::new();
-        match verb {
-            Verb::Open => argv.push(args.url.clone().ok_or(ErrorCode::BadRequest)?),
-            Verb::Click | Verb::Extract | Verb::Download => {
-                argv.push(args.selector.clone().ok_or(ErrorCode::BadRequest)?)
-            }
-            Verb::Scroll => {
-                argv.push(
-                    if args.y.unwrap_or(0) < 0 {
-                        "up"
-                    } else {
-                        "down"
-                    }
-                    .into(),
-                );
-                argv.push(args.y.unwrap_or(0).unsigned_abs().to_string());
-            }
-            _ => {}
-        }
-        if matches!(verb, Verb::Screenshot | Verb::Download)
-            && self.artifacts.len() >= MAX_ARTIFACTS
-        {
-            return Err(ErrorCode::Limit);
-        }
-        let artifact = if matches!(verb, Verb::Screenshot | Verb::Download) {
-            Some(format!(
-                "{}-{}.{}",
-                name,
-                super::random_id().map_err(|_| ErrorCode::LaunchFailed)?,
-                if verb == Verb::Screenshot {
-                    "png"
-                } else {
-                    "bin"
-                }
-            ))
-        } else {
-            None
-        };
-        self.sequence += 1;
-        let request = self
-            .dir
-            .join("actions")
-            .join(format!("{:016x}.request", self.sequence));
-        let result = request.with_extension("result");
-        write_shared(
-            &request,
-            &serde_json::to_vec(&json!({"verb":name,"args":argv,"artifact":artifact}))
-                .map_err(|_| ErrorCode::BadRequest)?,
-        )?;
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(50);
-        let body = loop {
-            match std::fs::read(&result) {
-                Ok(body) => break body,
-                Err(e)
-                    if e.kind() == std::io::ErrorKind::NotFound
-                        && std::time::Instant::now() < deadline =>
-                {
-                    std::thread::sleep(std::time::Duration::from_millis(10))
-                }
-                Err(_) => {
-                    let _ = std::fs::remove_file(&request);
-                    return Err(ErrorCode::Timeout);
-                }
-            }
-        };
-        let _ = std::fs::remove_file(result);
-        let reply: serde_json::Value =
-            serde_json::from_slice(&body).map_err(|_| ErrorCode::LaunchFailed)?;
-        if reply["status"].as_i64() != Some(0) {
-            return Err(ErrorCode::BadRequest);
-        }
-        let text = reply["stdout"]
-            .as_str()
-            .map(|s| s.chars().take(16000).collect());
-        if let Some(name) = &artifact {
-            self.artifacts.push((name.clone(), verb));
-        }
-        Ok(Observation { text, artifact })
+        result.map_err(|(code, _)| code)
     }
+
     fn fetch_artifact(&mut self, name: &str, offset: u64) -> Result<ArtifactChunk, ErrorCode> {
         let verb = self
             .artifacts

@@ -800,10 +800,8 @@ pub(crate) fn run_login(
             .inject(&request, &own, broker)
             .map_err(|_| ErrorCode::Unauthorized)?;
         if let Some(selector) = &args.submit_selector {
-            let expr = format!(
-                "(()=>{{let e=document.querySelector({});if(!e)return 'missing';if(e.form)e.form.requestSubmit();else e.click();return 'ok'}})()",
-                serde_json::to_string(selector).map_err(|_| ErrorCode::BadRequest)?
-            );
+            let expr = crate::browser_cdp_sink::login_submit_expression(selector)
+                .map_err(|_| ErrorCode::BadRequest)?;
             let submitted = lock()?
                 .controller_command(
                     "Runtime.evaluate",

@@ -302,11 +302,39 @@ impl<'a> Agent<'a> {
         Ok(())
     }
 
+    /// Start the download behind `#id` with a programmatic click and wait for `state`, retrying
+    /// the click (up to 3 times, 10 s each) when a heavily loaded host never starts the navigation.
+    /// Only the outcome of a download that began is under test.
+    pub(crate) fn download_with_retry(&mut self, id: &str, state: &str) -> Result<(), String> {
+        for attempt in 0..3 {
+            let from = self.seen.len();
+            if let Err(e) = self.eval(&format!("document.getElementById('{id}').click()")) {
+                return Err(format!(
+                    "attempt {attempt}: click refused ({}); events: {:?}",
+                    e.code(),
+                    self.seen
+                        .iter()
+                        .filter(|e| e.contains("ownload"))
+                        .map(|e| e.chars().take(200).collect::<String>())
+                        .collect::<Vec<_>>()
+                ));
+            }
+            if self.wait_download_for(from, state, Duration::from_secs(10)) {
+                return Ok(());
+            }
+        }
+        Err("no download began".into())
+    }
+
     /// Wait for a `Browser.downloadProgress` of `state` among the events received since `from`
     /// (an index into `seen`; events are browser-level, no page data).
     pub(crate) fn wait_download(&mut self, from: usize, state: &str) -> bool {
-        // Generous: under a loaded host Chromium may take a while to start a cross-origin download.
-        let deadline = Instant::now() + Duration::from_secs(30);
+        // Generous: under a loaded host Chromium may take a while to start a download.
+        self.wait_download_for(from, state, Duration::from_secs(30))
+    }
+
+    fn wait_download_for(&mut self, from: usize, state: &str, wait: Duration) -> bool {
+        let deadline = Instant::now() + wait;
         let matches = |e: &str| {
             serde_json::from_str::<Value>(e).is_ok_and(|v| {
                 v["method"] == "Browser.downloadProgress" && v["params"]["state"] == state
@@ -447,19 +475,17 @@ async fn daemon_post_login_pair_login_reads_lms_and_refuses_idp_other_and_passwo
         .map(|e| std::fs::read_to_string(e.path()).unwrap_or_default())
         .collect();
     assert_eq!(files, vec!["%PDF-1.4 handout for report 1".to_string()]);
-    let from = agent.seen.len();
-    agent.click("dl-other").expect("click other download");
-    assert!(
-        agent.wait_download(from, "canceled"),
-        "other-origin download cancelled: {:?}",
-        agent
-            .seen
-            .iter()
-            .rev()
-            .take(6)
-            .map(|e| e.chars().take(300).collect::<String>())
-            .collect::<Vec<_>>()
+    // A fresh document first: Chromium's multiple-download limiter may hold a second download from
+    // the same document without asking, which would hide the cancellation under test.
+    agent.goto(
+        &format!("{}/ct/home", w.o.lms),
+        &format!("{}/ct/home", w.o.lms),
     );
+    // A programmatic click (the agent's own click path is covered above): on a heavily loaded host
+    // the navigation sometimes never started, which is not under test here.
+    agent
+        .download_with_retry("dl-other", "canceled")
+        .expect("other-origin download cancelled");
     assert_eq!(
         std::fs::read_dir(download_dir.path()).expect("dir").count(),
         1

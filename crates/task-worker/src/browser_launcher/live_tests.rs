@@ -451,7 +451,7 @@ struct Fixture {
 fn fixture() -> Fixture {
     let dir = tempfile::tempdir().expect("tempdir");
     let sock = dir.path().join("l.sock");
-    let registry = Registry::open(&dir.path().join("state"), "inst-live").expect("registry");
+    let registry = Registry::open(dir.path().join("state"), "inst-live").expect("registry");
     let backend = Arc::new(LiveBackend::default());
     let server = LauncherServer::bind(
         &sock,

@@ -39,6 +39,8 @@ completed: 2026-10-10
 - `cargo fmt --all -- --check` exit 0、`cargo clippy --workspace -- -D warnings` exit 0。
 - `TMPDIR=/tmp bash scripts/dev/test-parallel.sh` → exit 0、5036 passed / 13 skipped（run の TMPDIR のままだと Unix socket の SUN_LEN で既存試験が落ちるため /tmp）。
 
+- 再 run（attempt 2 相当）: 計画 check `cargo clippy -p task-worker --all-targets -- -D warnings` が live_tests.rs の `needless_borrows_for_generic_args` で落ちたので直した（`--workspace` の clippy は lib だけで試験を見ていなかった）。修正後 `cargo clippy -p task-worker --all-targets -- -D warnings && cargo fmt --all -- --check` exit 0、`TMPDIR=/tmp cargo nextest run -p task-worker -E 'test(browser_launcher)'` 49 passed、`test(browser_launcher_live_frame_)` 6 passed。
+
 ## 未解決事項
 
 - 実 Chrome での screencast は確かめていない（実 browser の試験は opt-in、後続の cross-tests / 運用確認）。

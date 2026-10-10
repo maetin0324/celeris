@@ -161,3 +161,21 @@ filesystem の圧迫は同一 mount の `statvfs` 空き容量差分で評価す
 本番 `release-build/target/debug/deps` を読み取り専用で採取した inventory と、その縮尺 fixture を `scripts/selfdeploy/tests/fixtures/release-build-deps-inventory.tsv` / `scripts/selfdeploy/tests/release_prune_production_scale.sh` に記録する。試験は fallocate した実 block と `.d` を作り、同じ prune 関数を呼ぶ。registry/git 由来の依存と marker より新しい binary が残ることも確認する。
 
 採取は 2026-10-10 09:36Z、marker は直前 build の 08:40:45Z。採取時点では marker より古い workspace 実行 binary は 11 個・102,502,400 allocated bytes（約 0.095 GiB）だった。08:40Z の以前の dry-run 記録（381 個・108 GiB の test binary 全体、うち古い候補の記録 75 個・18.5 GiB）は同一時点の inventory ではないため、本試験結果と混同しない。試験 fixture は縮尺後の block rounding があり、実測換算との差分を出力する。
+
+8 release の積み上げを縮尺 1/1024 で再現した。各 executable は fallocate で 4 KiB block 単位に確保し、`.d` と registry 由来 `rlib/.d` も置いた。A は刈らずに累積、B は各 release 開始時に前回 marker で刈り込んだ。追いつきは A の最終状態を同じ順序で一度刈った結果。`prune_bound_gib` は inventory の 1 世代と最大 release 群に加え、生成 `.d` と registry file の block を含む。
+
+```text
+RESULT no_prune_bins=597 no_prune_gib=162.945 catchup_reclaimed_gib=149.367 prune_max_gib=67.902 prune_final_gib=27.156 prune_bound_gib=67.902 nonincreasing=1 limit_recreate_without_prune=1 limit_recreate_with_prune=0 deps_kept=1
+```
+
+| release | A: 刈らない累積 (GiB) | B: 毎回刈る (GiB) |
+| 1 | 67.902 | 67.902 |
+| 2 | 81.484 | 27.172 |
+| 3 | 95.062 | 27.168 |
+| 4 | 108.633 | 27.156 |
+| 5 | 122.215 | 27.160 |
+| 6 | 135.797 | 27.172 |
+| 7 | 149.375 | 27.168 |
+| 8 | 162.945 | 27.156 |
+
+全条件を満たした。A の 597 binary は約 162.945 GiB まで累積し、追いつきで 149.367 GiB を回収した。B は最大 67.902 GiB（1 世代 + 1 release 分の上限）で、2 release 目以降は非増加。64 GiB 上限は刈り込み前なら target を作り直し、刈り込み後は作り直さなかった。registry の `rlib` と `.d` は保持された。

@@ -41,6 +41,9 @@ struct EditAdapter {
     runs_by_title: StdMutex<HashMap<String, u64>>,
     /// 走っている run の終わる時刻（試験時計の秒）。
     ends: StdMutex<HashMap<String, u64>>,
+    /// 試験専用の遅延 hook: この title の run は `README.md` を読む前に実時間でこれだけ待つ
+    /// （dispatcher の `running` 登録と adapter の開始登録の間の窓を決定的に広げる）。
+    start_delay: Option<(&'static str, Duration)>,
 }
 
 impl EditAdapter {
@@ -53,6 +56,7 @@ impl EditAdapter {
             repairs: AtomicU64::new(0),
             runs_by_title: StdMutex::new(HashMap::new()),
             ends: StdMutex::new(HashMap::new()),
+            start_delay: None,
         }
     }
 
@@ -63,6 +67,10 @@ impl EditAdapter {
     /// 走っている run のうち最も早い終わりの時刻。
     fn next_end(&self) -> Option<u64> {
         self.ends.lock().unwrap().values().copied().min()
+    }
+
+    fn registered_runs(&self) -> usize {
+        self.ends.lock().unwrap().len()
     }
 
     fn ends_by(&self, run_id: &str, at: u64) -> bool {
@@ -86,6 +94,11 @@ impl WorkerAdapter for EditAdapter {
         _limits: RunLimits,
         _sink: &dyn EventSink,
     ) -> Result<RunOutcome, AdapterError> {
+        if let Some((title, delay)) = self.start_delay
+            && req.task.title == title
+        {
+            tokio::time::sleep(delay).await;
+        }
         let readme = self.dir.join("README.md");
         let read = std::fs::read_to_string(&readme).unwrap();
         let secs = if req.task.title == "task A" {
@@ -152,12 +165,21 @@ fn edit_task(
 }
 
 async fn run_variant(variant: Variant) -> (AbMetric, u64, u64) {
+    run_variant_with(variant, None).await
+}
+
+async fn run_variant_with(
+    variant: Variant,
+    start_delay: Option<(&'static str, Duration)>,
+) -> (AbMetric, u64, u64) {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("README.md"), BASE).unwrap();
     let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let a = edit_task(&store, dir.path(), "task A", 1);
     let b = edit_task(&store, dir.path(), "task B", 0);
-    let adapter = Arc::new(EditAdapter::new(dir.path().to_path_buf()));
+    let mut adapter = EditAdapter::new(dir.path().to_path_buf());
+    adapter.start_delay = start_delay;
+    let adapter = Arc::new(adapter);
     let mut d = dispatcher(store.clone(), adapter.clone(), 2);
     d.test_disable_write_set_gate = variant == Variant::Off;
 
@@ -179,7 +201,13 @@ async fn run_variant(variant: Variant) -> (AbMetric, u64, u64) {
             break;
         }
         // 検査など run 以外の後処理が残っていれば、試験時計を止めたまま次の tick を待つ。
-        if !d.reviewing.is_empty() || adapter.next_end().is_none() {
+        // `d.running` には adapter の run が最初に poll される前に入る。走っている全 run が README を
+        // 読んで終わりの時刻を登録し終えるまで試験時計を進めない（遅れて始まる run が先行 run の書いた版を
+        // 読むと off の衝突が消える）。
+        if !d.reviewing.is_empty()
+            || adapter.next_end().is_none()
+            || adapter.registered_runs() != d.running.len()
+        {
             tokio::time::sleep(Duration::from_millis(5)).await;
             continue;
         }
@@ -233,4 +261,14 @@ async fn phase_effect_ab_write_set_gate_avoids_conflict_and_repair() {
     assert_eq!(off.wall_secs, RUN_SECS_B + RUN_SECS_B, "{off:?}");
     assert_eq!(on.wall_secs, RUN_SECS_A + RUN_SECS_B, "{on:?}");
     assert!(on.wall_secs < off.wall_secs, "off={off:?} on={on:?}");
+}
+
+/// 回帰: off で B の run の開始（README を読んで終わりを登録する）が遅れても、試験時計は B の登録を待ってから
+/// 進むので、B は A と同じ版を読んで衝突する。待たずに進めると A が書いた後で B が読み、(0, 0, 2) になる。
+#[tokio::test]
+async fn phase_effect_ab_write_set_waits_for_late_run_start() {
+    let (off, conflicts, repairs) =
+        run_variant_with(Variant::Off, Some(("task B", Duration::from_millis(50)))).await;
+    assert_eq!((conflicts, repairs, off.runs), (1, 1, 3), "{off:?}");
+    assert_eq!(off.wall_secs, RUN_SECS_B + RUN_SECS_B, "{off:?}");
 }

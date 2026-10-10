@@ -620,6 +620,8 @@ pub struct CdpController {
     download_watch: bool,
     /// The page (target, or session if unknown), session and time of the last dialog answered.
     last_dialog: Option<(String, String, std::time::Instant)>,
+    /// Agent sessions whose dialog the controller answered and whose closing is still to come.
+    answered_dialogs: std::collections::HashSet<String>,
     /// Test-only: every agent command method, in order.
     #[cfg(test)]
     pub(crate) agent_log: Vec<String>,
@@ -670,6 +672,7 @@ impl CdpController {
             watch_targets: Vec::new(),
             download_watch: false,
             last_dialog: None,
+            answered_dialogs: std::collections::HashSet::new(),
             #[cfg(test)]
             agent_log: Vec::new(),
             #[cfg(feature = "attack-test-hooks")]
@@ -967,6 +970,10 @@ impl CdpController {
         let now = std::time::Instant::now();
         // Another session of the same page announcing the dialog just answered (a second dialog
         // on one session is a new dialog).
+        if self.answered_dialogs.len() >= 64 {
+            self.answered_dialogs.clear();
+        }
+        self.answered_dialogs.insert(session.clone());
         if self.last_dialog.as_ref().is_some_and(|(p, s, at)| {
             *p == page && *s != session && now.duration_since(*at) < Duration::from_secs(1)
         }) {
@@ -1731,6 +1738,14 @@ return out;}})()"
         }
         self.watch_event(&value);
         if value["method"] == "Page.javascriptDialogOpening" && self.resolve_agent_dialog(&value) {
+            return;
+        }
+        // The closing of a dialog the controller answered is not passed on either: agent-browser
+        // never saw it open (付記 2026-10-10k).
+        if value["method"] == "Page.javascriptDialogClosed"
+            && let Some(session) = value["sessionId"].as_str()
+            && self.answered_dialogs.remove(session)
+        {
             return;
         }
         self.track_document_request(&value);
@@ -2681,6 +2696,23 @@ mod idle_pump_tests {
         assert!(
             c.take_agent_events().is_empty(),
             "opening events are not passed on"
+        );
+        c.queue_event(
+            json!({"method":"Page.javascriptDialogClosed","sessionId":"S",
+            "params":{"result":true,"userInput":""}}),
+        );
+        assert!(
+            c.take_agent_events().is_empty(),
+            "nor the closing of an answered dialog"
+        );
+        c.queue_event(
+            json!({"method":"Page.javascriptDialogClosed","sessionId":"S",
+            "params":{"result":true,"userInput":""}}),
+        );
+        assert_eq!(
+            c.take_agent_events().len(),
+            1,
+            "a closing the controller did not cause passes"
         );
         c.private_sessions.insert("OWN".into());
         c.queue_event(

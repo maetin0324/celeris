@@ -589,3 +589,18 @@ manaba の link のどの dialog かは本番の頁を見ていないので確�
 
 運用: **launcher の再 build**（controller・runner・診断は launcher の process の中）と daemon の更新（shim・daemon の detail）。
 sandboxd は不要。
+
+## 付記 2026-10-10k: release gate の 2 件の不定（898929d9）
+
+main 898929d9 の release gate（他の task の負荷が高い時）で `browser_sandbox_artifacts` の 2 試験が落ちた。
+
+1. **他 origin の download の取消と完了の競争。** 試験の他 origin の PDF は小さく即座に返るので、負荷が高いと relay の取消より先に
+   Chrome が書き終え、設計どおり breach で観測が止まり、次の screenshot が `cdp_command_failed`（agent-browser の
+   `Target.setDiscoverTargets`）になった。製品の振る舞いは正しい（fail closed）。fixture の他 origin の file を「header を先に返し、
+   本文は 10 秒後」にして、取消が必ず先に効くようにした。
+2. **`Unknown ref`。** 中継頁ではない beforeunload の頁で、snapshot の直後の download が `unknown_ref` になった（runner の link の
+   読み取りは成功していた）。agent-browser は自分で snapshot を取り直すと ref を振り直す。fixture の負荷（SIGSTOP stutter を含む）では
+   再現しなかった。controller が答えた dialog の `Page.javascriptDialogClosed` は agent に渡していたので（開いた event は渡さない）、
+   これも渡さないことにした（agent-browser から見て dialog は一切起きていない）。試験は `unknown_ref` のときだけ、その段を頁を開く
+   ところからもう一度だけ行う（agent が snapshot を取り直すのと同じ。2 回目の結果をそのまま確かめる）。製品の agent には
+   `detail` の `error_class=unknown_ref` が届く。

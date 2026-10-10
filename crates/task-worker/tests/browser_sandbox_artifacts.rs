@@ -183,7 +183,19 @@ class H(BaseHTTPRequestHandler):
             self.send_header('Content-Disposition', 'attachment; filename="Slides1.pdf"')
         elif self.path == '/ct/elsewhere_Slides5.pdf':
             body = b''; self.send_response(302)
-            self.send_header('Location', 'https://files.example.com/ct/inline_Slides2.pdf')
+            self.send_header('Location', 'https://files.example.com/ct/slowbody_Slides5.pdf')
+        elif self.path == '/ct/slowbody_Slides5.pdf':
+            # The other origin's file: headers now, the body only after the relay cancelled the
+            # download at its first event, so the cancel always wins (no breach, deterministic).
+            import threading
+            self.send_response(200); self.send_header('Content-Type', 'application/pdf')
+            self.send_header('Content-Length', str(len(PDF))); self.end_headers(); self.wfile.flush()
+            threading.Event().wait(10)
+            try:
+                self.wfile.write(PDF)
+            except OSError:
+                pass
+            return
         elif self.path == '/ct/redirect_Slides4.pdf':
             body = b''; self.send_response(302); self.send_header('Location', '/ct/inline_Slides2.pdf')
         elif self.path == '/ct/inline_Slides2.pdf':
@@ -512,6 +524,24 @@ fn inner() {
             .expect("controller")
             .take_agent_denials()
     };
+    // Open the page, snapshot, and download the link by its fresh ref. agent-browser renumbers
+    // refs when it re-snapshots on its own; a ref it no longer knows (`unknown_ref`, the gate's
+    // 2026-10-10 19:04 failure under load) is the agent's cue to snapshot again, so the step is
+    // repeated once from the page and its outcome is what the test checks. `before` runs before each
+    // attempt (watch / denial reset).
+    let download_on = |seq: &mut u64, page: &str, link: &str, name: &str, before: &dyn Fn()| {
+        for attempt in 0..2 {
+            let r = ref_on(seq, page, link);
+            before();
+            let got = action(s, seq, "download", &[&r], Some(name));
+            if got["error_class"] == "unknown_ref" && attempt == 0 {
+                eprintln!("{link}: stale ref, snapshot again: {}", got["link"]);
+                continue;
+            }
+            return got;
+        }
+        unreachable!("two attempts")
+    };
     // 付記 2026-10-10i (production 2026-10-10 15:48, `gate=Input.dispatchMouseEvent!sink_failed`, Live
     // View streaming): while a page waits for a navigation's response, Chrome answers commands on
     // that page only after the response arrives. A PDF that answers after 7 s failed the click (or
@@ -538,10 +568,8 @@ fn inner() {
         ("Blank Slow PDF", "7"),
         ("Viewer PDF", "8"),
     ] {
-        let r = ref_on(&mut seq, "blank.html", link);
-        watch(true);
         let name = format!("download-{}.bin", letter.repeat(32));
-        let got = action(s, &mut seq, "download", &[&r], Some(&name));
+        let got = download_on(&mut seq, "blank.html", link, &name, &|| watch(true));
         let after = watched();
         assert_eq!(got["status"], 0, "download {link}: {got}; after {after:?}");
         assert!(
@@ -564,10 +592,14 @@ fn inner() {
     if std::env::var_os("CELERIS_TEST_POST_LOGIN").is_some() {
         // A new tab to another origin is not followed. If Chrome still wrote the file, the runner
         // adopts it and the launcher's check (the controller never let it through) refuses it.
-        let r = ref_on(&mut seq, "blank.html", "Elsewhere Blank PDF");
-        watch(true);
         let name = format!("download-{}.bin", "a".repeat(32));
-        let got = action(s, &mut seq, "download", &[&r], Some(&name));
+        let got = download_on(
+            &mut seq,
+            "blank.html",
+            "Elsewhere Blank PDF",
+            &name,
+            &|| watch(true),
+        );
         let after = watched();
         assert!(after.contains(&"window_open_origin_denied"), "{after:?}");
         let link = got["link"].as_array().expect("link tokens").clone();
@@ -591,10 +623,10 @@ fn inner() {
         }
     }
     for (link, letter) in [("Slow PDF", "4"), ("MouseDown PDF", "5")] {
-        let r = ref_on(&mut seq, "slow.html", link);
-        denials();
         let name = format!("download-{}.bin", letter.repeat(32));
-        let got = action(s, &mut seq, "download", &[&r], Some(&name));
+        let got = download_on(&mut seq, "slow.html", link, &name, &|| {
+            denials();
+        });
         assert_eq!(
             got["status"],
             0,
@@ -612,10 +644,10 @@ fn inner() {
             "2",
         ),
     ] {
-        let r = ref_on(&mut seq, page, link);
-        denials();
         let name = format!("download-{}.bin", letter.repeat(32));
-        let got = action(s, &mut seq, "download", &[&r], Some(&name));
+        let got = download_on(&mut seq, page, link, &name, &|| {
+            denials();
+        });
         assert_eq!(got["status"], 0, "download {link}: {got}");
         assert_eq!(std::fs::read(out.join(&name)).expect("file"), PDF, "{link}");
         assert_eq!(

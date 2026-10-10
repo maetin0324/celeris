@@ -2327,6 +2327,10 @@ async fn run_with_executable_attempt(
 #[path = "browser_launcher_run.rs"]
 mod launcher_run;
 
+/// 層横断の Live View 試験（`tests/browser_live_cross.rs`）専用の daemon 側入口。
+#[cfg(feature = "live-cross-test-support")]
+pub use launcher_run::cross_test_support as launcher_cross_test_support;
+
 /// launcher の観測（`SessionFacts`）を daemon 側と同じ判定で `verify_isolation` に掛ける（ADR-0115 の実証用）。
 /// 観測が fail closed で弾かれた（daemon の ID が map に現れる・owner が daemon・owner 不明）なら `None`。
 pub fn verify_launcher_observation(

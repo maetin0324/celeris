@@ -1808,6 +1808,88 @@ pub(crate) async fn launcher_credential_login(
 #[path = "browser_launcher_run_tests.rs"]
 mod tests;
 
+/// 層横断の Live View 試験（`tests/browser_live_cross.rs`）専用: daemon が launcher session を持つ
+/// 入口（[`LauncherRuntime`]）と frame 中継（[`open_frame_relay`]）を integration test から呼べる
+/// ようにする薄い包み。dev-dependency の feature `live-cross-test-support` でだけ build される。
+#[cfg(feature = "live-cross-test-support")]
+pub mod cross_test_support {
+    use std::path::Path;
+
+    use task_core::browser_isolation::IsolationAttestation;
+
+    use crate::browser_launcher::protocol::{AuthenticateArgs, AuthenticationStatus, LoginResult};
+    use crate::browser_launcher::{
+        ActionArgs, Observation, Receipt, SessionFacts, SessionPolicy, SessionState, Verb,
+    };
+    use crate::browser_live::FrameRelay;
+
+    /// daemon 側の launcher session（[`super::LauncherRuntime`]）。試験専用 loopback の拒否はしない。
+    pub struct DaemonLauncherSession(super::LauncherRuntime);
+
+    impl DaemonLauncherSession {
+        pub fn start(
+            socket: &Path,
+            task_id: &str,
+            run_id: &str,
+            policy: SessionPolicy,
+        ) -> Result<(Self, IsolationAttestation), &'static str> {
+            super::LauncherRuntime::start_guarded(socket, false, task_id, run_id, policy)
+                .map(|(runtime, attestation)| (Self(runtime), attestation))
+        }
+        pub fn session_id(&self) -> &str {
+            self.0.session_id()
+        }
+        /// daemon が採番した lease（frame 接続を生で開く試験が使う）。
+        pub fn lease_id(&self) -> &str {
+            &self.0.lease_id
+        }
+        pub fn protocol_version(&self) -> Result<u32, &'static str> {
+            self.0.protocol_version()
+        }
+        /// daemon の Live View 開始（版確認 → v8 なら frame 接続）。
+        pub fn open_live_frames(&self, socket: &Path) -> Result<FrameRelay, &'static str> {
+            self.0.open_live_frames(socket)
+        }
+        pub fn action(
+            &self,
+            verb: Verb,
+            args: ActionArgs,
+        ) -> Result<(Receipt, Observation), &'static str> {
+            self.0.action(verb, args)
+        }
+        pub fn observe(&self) -> Result<(SessionState, SessionFacts), &'static str> {
+            self.0.observe()
+        }
+        pub fn auth_begin(&self, auth_section_id: &str) -> Result<String, &'static str> {
+            self.0.auth_begin(auth_section_id)
+        }
+        /// credential login。`args` の session・lease は本 session のものに置き換える（本番の
+        /// `credential_login` と同じ組み方）。
+        pub fn authenticate(
+            &self,
+            mut args: AuthenticateArgs,
+            broker: std::os::fd::OwnedFd,
+        ) -> Result<(AuthenticationStatus, LoginResult), &'static str> {
+            args.session_id = self.0.session_id.clone();
+            args.lease_id = self.0.lease_id.clone();
+            self.0.authenticate(args, broker)
+        }
+        pub fn stop(&self) -> Result<Option<Receipt>, &'static str> {
+            self.0.stop()
+        }
+    }
+
+    /// [`super::open_frame_relay`]（hello の版を引数で受ける frame 中継）。
+    pub fn open_frame_relay(
+        socket: &Path,
+        launcher_protocol: u32,
+        session_id: &str,
+        lease_id: &str,
+    ) -> Result<FrameRelay, &'static str> {
+        super::open_frame_relay(socket, launcher_protocol, session_id, lease_id)
+    }
+}
+
 /// 付記 2026-10-10b daemon 側の試験。偽 launcher は実の `LauncherServer` に frame を channel で
 /// 渡す偽 backend を差したもの、v7 の launcher はその前に置いた `hello` の版を書き換える proxy。
 /// userns・実 browser は使わない。待ちは出来事待ち（slot の `next`）と長い保険の期限だけ。

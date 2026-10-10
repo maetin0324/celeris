@@ -12,6 +12,10 @@ attack-test-hooks = []
 # ADR-0114 D2: test-only restore admission (runtime facts whose only violation
 # is SameUid). Never enabled by default or in release builds.
 same-uid-harness = []
+# Test fixture only: the daemon-side launcher session and frame relay entry points for the
+# cross-layer Live View tests (tests/browser_live_cross.rs). Enabled by this crate's own
+# dev-dependency; never in the default or release build.
+live-cross-test-support = []
 
 [dependencies]
 task-core = { path = "../task-core" }
@@ -38,5 +42,5 @@ reqwest = { version = "0.13.5", default-features = false, features = ["rustls", 
 
 [dev-dependencies]
 celeris-credentiald = { path = "../celeris-credentiald", features = ["same-uid-harness"] }
-task-worker = { path = ".", features = ["attack-test-hooks", "same-uid-harness"] }
+task-worker = { path = ".", features = ["attack-test-hooks", "same-uid-harness", "live-cross-test-support"] }
 task-api = { path = "../task-api" }

@@ -11,7 +11,7 @@ updated: 2026-10-10
 - 原因: 実 agent-browser 0.38.1 を relay 越しに動かす試験で、click の CDP は区間後の検査を通ることを確認。本番の失敗は
   manaba の home 系の頁の隠れた空の password 欄を数えて、その頁の観測（snapshot・screenshot・click）を全部拒否していたため
   （見立て。本番の頁の中身は見ていない）。
-- 直したこと: 生きている password 欄だけ数える、`snapshot -i --urls`、ログイン後の agent の navigate は read_origins だけ
+- 直したこと: 生きている password 欄だけ数える、`snapshot --urls`（2026-10-10d: 当初の `-i` は本文を落としたので外した）、ログイン後の agent の navigate は read_origins だけ
   （navigation の download は event が出ず取消できないことを試験で確認したため）、他 origin の download の試験を新しい tab の
   頁起点の download と event 待ちにした（Chromium の tab ごとの download 制限が時間依存の原因）。
 

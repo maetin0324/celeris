@@ -344,7 +344,7 @@ snapshot・screenshot・click が全部失敗し、要約頁では成功した�
    持っている `input[type=password]` だけを数える（区間の終わりの条件と区間後の観測ごとの検査の両方）。隠れていて空の
    password 欄は画面に何も出さず値も持たないので、T1・T2（入力中・再表示の秘密）に関わらない。頁の script が値を入れれば
    次の検査で数え、注入値の再表示は `RedisplayGuard` が捨てる（変えない）。
-2. **snapshot に link の URL を出す。** shim の snapshot は `snapshot -i --urls`。agent は課題の URL を snapshot から読み、
+2. **snapshot に link の URL を出す。** shim の snapshot は `snapshot --urls`（2026-10-10d: 当初の `-i` は本文を落としたので外した）。agent は課題の URL を snapshot から読み、
    click の代わりに `open` できる（prompt にも書く）。read_origins の頁の URL は T3 で受け入れた範囲。
 3. **ログイン後の navigate は read_origins だけ。** 試験で、agent の `Page.navigate`（agent-browser の `open`）が他 origin の
    添付ファイルに向くと、Chromium は download の event（`downloadWillBegin`）を出さずに保存することが分かった。download の
@@ -353,3 +353,11 @@ snapshot・screenshot・click が全部失敗し、要約頁では成功した�
    変わらない。read_origins の頁から server の redirect で他 origin に移ることは今どおり起こりうるが、その頁は読めない。
    残る隙: read_origins の URL が他 origin の添付へ redirect するときの `open` は、download の event が出ず取消できない
    （egress の許可 domain の範囲に限られる）。
+
+## 付記 2026-10-10d: snapshot は本文と link URL の両方
+
+付記 2026-10-10c の `snapshot -i --urls` は対話要素（見出し・link）だけを返し、manaba の課題説明・教材頁（`/ct/page_*`）の
+本文が agent に届かなかった（本番 1904b3c2 の報告）。shim の snapshot を `snapshot --urls`（agent-browser 0.38.1 で全体の
+accessibility tree と link の URL を返す。`-c` は本文の段落を落とすので使わない）にし、出力の上限（16000 文字）を超える長い
+本文は extract で読むよう prompt に書く。区間後の観測の検査（read_origins・生きている password 欄・RedisplayGuard）は
+command 単位なので変わらない。

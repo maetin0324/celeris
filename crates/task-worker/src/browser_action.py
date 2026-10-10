@@ -64,8 +64,9 @@ def command(request):
     elif verb == 'snapshot':
         if args:
             raise ValueError()
-        # Link URLs let the agent `open` a page instead of clicking its link.
-        action = ['snapshot', '-i', '--urls']
+        # The full accessibility tree (body text included) with link URLs, so the agent can read
+        # the page and `open` a link instead of clicking it. `-i` (interactive only) dropped the text.
+        action = ['snapshot', '--urls']
     elif verb == 'screenshot':
         if args:
             raise ValueError()

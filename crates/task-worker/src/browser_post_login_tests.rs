@@ -1114,9 +1114,28 @@ async fn real_agent_browser_reads_clicks_and_is_refused_after_login() {
         assert_ne!(code, 0, "{out}");
         out
     };
+    // 2026-10-10 (production feedback on 1904b3c2): the shim's snapshot carries the body text of a
+    // read-origin page together with its link URLs (`-i` dropped the text).
+    ok(ab.run(&["open", &lms("/ct/page_1")]));
+    let page = ok(ab.run(&["snapshot", "--urls"]));
+    let tree = page["data"]["snapshot"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+    for want in [
+        "Week 3 material",
+        "Read chapter 4 on boundary layers before the lab.",
+        "The report must be submitted as a PDF of at most ten pages.",
+    ] {
+        assert!(tree.contains(want), "{want} in {tree}");
+    }
+    assert!(
+        tree.contains(&format!("url={}", lms("/ct/report_1"))),
+        "{tree}"
+    );
     ok(ab.run(&["open", &lms("/ct/home")]));
-    // The shim's snapshot argv: interactive refs with link URLs.
-    let snap = ok(ab.run(&["snapshot", "-i", "--urls"]));
+    // The shim's snapshot argv: the full tree with link URLs.
+    let snap = ok(ab.run(&["snapshot", "--urls"]));
     let tree = snap["data"]["snapshot"]
         .as_str()
         .unwrap_or_default()
@@ -1141,7 +1160,7 @@ async fn real_agent_browser_reads_clicks_and_is_refused_after_login() {
         "agent-browser's click path passed the post-login gate: {clicked:?}"
     );
     assert!(!clicked.iter().any(|m| m.contains('!')), "{clicked:?}");
-    let detail = ok(ab.run(&["snapshot", "-i", "--urls"]));
+    let detail = ok(ab.run(&["snapshot", "--urls"]));
     assert_eq!(detail["data"]["origin"], lms("/ct/report_1"));
     let heading = detail["data"]["refs"]
         .as_object()
@@ -1166,7 +1185,7 @@ async fn real_agent_browser_reads_clicks_and_is_refused_after_login() {
     ] {
         ok(ab.run(&["open", &page]));
         let before = w.controller().agent_log.len();
-        let out = refused(ab.run(&["snapshot", "-i", "--urls"]));
+        let out = refused(ab.run(&["snapshot", "--urls"]));
         assert!(!out.contains("filled-by-page"), "{out}");
         let log: Vec<String> = w.controller().agent_log[before..].to_vec();
         assert!(

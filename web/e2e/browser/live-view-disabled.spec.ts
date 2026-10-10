@@ -37,3 +37,25 @@ test("a human-waiting run also shows event monitoring without an iframe", async 
     await gateway.close();
   }
 });
+
+test("a launcher without live frames shows its own reason and event monitoring", async ({ page }) => {
+  const gateway = await startBrowserGateway({
+    backend: { credentialWait: false, liveReason: "launcher_protocol_no_live_frames" },
+  });
+  try {
+    await gateway.loginAsOwner(page);
+    await page.goto(`${gateway.base}/browser/runs/T1/R1`);
+    await expect(page.getByTestId("browser-live-image")).toHaveCount(0);
+    await expect(page.getByTestId("browser-live-unavailable")).toHaveAttribute(
+      "data-reason",
+      "launcher_protocol_no_live_frames",
+    );
+    await expect(page.getByText("映像なし — イベントで監視中")).toBeVisible();
+    await expect(
+      page.getByText("launcher が Live View の映像を提供していません。launcher を更新してください。"),
+    ).toBeVisible();
+    await expect(page.getByText("Live View の中継を利用できません。")).toHaveCount(0);
+  } finally {
+    await gateway.close();
+  }
+});

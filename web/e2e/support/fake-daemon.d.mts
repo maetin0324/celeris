@@ -59,6 +59,8 @@ export type BrowserBackendOptions = {
   /** T2 の credential 待ち（W2）を置く。既定 true。置くと namespace の認証区間で Live View は 409 auth_interval。 */
   credentialWait?: boolean;
   framesAvailable?: boolean;
+  /** frame 経路が無いときに grant で返す launcher 由来の理由（例: launcher_protocol_no_live_frames）。 */
+  liveReason?: string | null;
   /** Override the newest T1/R1 browser event state for Live View e2e coverage. */
   runStateOverride?: string;
   /** gateway の attestation 鍵の公開鍵。渡すと assertion の署名を確かめる。 */

@@ -2288,6 +2288,7 @@ const BROWSER_ID = /^[A-Za-z0-9_-]{1,64}$/;
 export function createBrowserBackend({
   credentialWait = true,
   framesAvailable = false,
+  liveReason = null,
   publicKey = null,
   now = Date.now,
   runStateOverride,
@@ -2605,6 +2606,7 @@ export function createBrowserBackend({
           grant_id: `G${++grantSeq}`,
           expires_at: secs() + 60,
           ...(framesAvailable ? { frames_available: true } : {}),
+          ...(!framesAvailable && liveReason ? { live_reason: liveReason } : {}),
         };
         grants.set(grant.grant_id, { key, expires_at: grant.expires_at });
         return json(200, grant);

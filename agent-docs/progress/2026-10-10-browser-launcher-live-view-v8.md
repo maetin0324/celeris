@@ -47,6 +47,17 @@ completed: 2026-10-10
 - 実 Chrome と本番 launcher を使った映像確認および本番反映は未実施。launcher の再 build・差し替えと本人向け確認手順は [運用手順](../../docs/ops/browser-launcher-live-view.md) に記録済み。
 - web lint の既存 `!important` 警告 4 件と build の大きな chunk 警告が残る。いずれもこの Live View の gate を妨げない。
 
+## 再検査（regate、2026-10-10）
+
+統合後 HEAD `651a36cb` で全体 gate を取り直した。詳細は [reclose.md](2026-10-10-browser-launcher-live-view-v8/reclose.md)。
+
+- `TMPDIR=/tmp bash scripts/dev/test-parallel.sh`: exit 0、passed 5070 / failed 0 / ignored 14。
+- `CELERIS_USERNS_TESTS=1 CELERIS_ISOLATION_TESTS=require` 付き: exit 0、passed 5070 / failed 0、`userns: true`。
+- `cargo clippy --workspace -- -D warnings` exit 0、`cargo fmt --all -- --check` exit 0。
+- `pnpm -C web test`: exit 0（Vitest 657 tests、Node 86 tests）。`pnpm -C web exec biome check .` は exit 0 で warning 4 件（既存の `styles.css` の `!important`）。
+- 文書検査 3 本（check-doc-links / check-doc-layout / check-adr-numbers）exit 0。
+- 未解決事項は上の節のとおり（映像確認と本番反映は運用側）。
+
 ## 提案
 
 - 運用セッションで手順に沿って launcher を更新し、本人の credential session を含む実 browser で Live View を確認する。

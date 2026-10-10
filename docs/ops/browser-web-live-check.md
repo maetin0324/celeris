@@ -6,6 +6,8 @@ tasks: [01M46W97H391DSFW1XJ745W0G9, 01M47QXZR0QMCYZM9KAZC81BCD]
 
 `scripts/dev/browser-web-live-check.sh` は、別 UID の launcher、使い捨て DB の daemon、loopback の許可・不許可の試験ページ、Live View の upstream 代役（fixture）、web gateway を起動する host 専用の opt-in 台本である。worker sandbox は user namespace を作れないため、配送後に Fable が隔離できる host で実行し、`checks.json` とログをこの進捗に転記する。未 opt-in では副作用なしで exit 2。
 
+本番の launcher を protocol 8（launcher 経路の Live View 映像）へ差し替える手順と、本番での本人表示・非 owner 拒否・input 不可の確認は [launcher Live View の本番反映](browser-launcher-live-view.md)。
+
 ## 前提と隔離
 
 - 台本は**試験 daemon の UID**で実行する。launcher は別の `celeris-browser` UID で、`sudo -n -u` だけを許可する。既存 systemd launcher や本番 DB は使わない。

@@ -4,6 +4,7 @@ tasks: [01M4G0GPW9XHJ0MC236F1R8FG9]
 # browser launcher 経路の credential 解放手順（人が行う）
 
 username 欄の注入とログイン後の読み取り（launcher protocol 5）の手順は [credential login v5](browser-credential-login-v5.md)。
+launcher protocol 8（Live View の映像）への差し替えと確認の手順は [launcher Live View の本番反映](browser-launcher-live-view.md)。
 この手順は運用セッションで人が実行する。worker は root 操作、本番設定変更、資格情報の入力をしない。秘密値を shell history、ログ、台帳、成果物へ書かない。解放条件と fail-closed の境界は[決定記録](../../agent-docs/adr/2026-10-09-browser-launcher-credential-release.md)および[ADR-0138](../../agent-docs/adr/0138-browser-prod-admission-confidential-release.md)に従う。
 
 ## 1. 配送後の確認と launcher 入れ替え（root）

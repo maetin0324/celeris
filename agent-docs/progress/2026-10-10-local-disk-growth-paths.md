@@ -88,3 +88,12 @@ sandbox 既知失敗（browser・launcher・credentiald・CDP 系）は今回 0 
 ## 全体試験の再確認（2026-10-10）
 
 final review の `5041 passed / 2 failed` は再実行で再現せず、元報告でも試験名が不明なため失敗名は「再現せず」とした。原因は特定できず、branch 起因を示す証拠はなく、コード修正はしていない。`/local` は 68% 使用で disk_watch の 95% 条件未満。`TMPDIR=/tmp bash scripts/dev/test-parallel.sh` は1回目・最終2回目とも exit 0、nextest 5043 passed / 0 failed / 14 ignored、doctest exit 0。詳細とログの場所は[再確認記録](2026-10-10-local-disk-growth-paths/reverify-full.md)を参照。fmt と clippy も exit 0。
+
+## 運用文書の修正（docs-fix、2026-10-10）
+
+final review の差し戻し（build-tmp-hygiene.md の未更新と local-disk-growth.md §2 の段落重複）を修正した。
+
+- `docs/ops/build-tmp-hygiene.md` に §8「`/local` 容量の 3 経路」を追加し、repo 直下 target の GC（600 秒 tick、保護理由 `running_run`・`active_descendant`・`grace`）、release-build の刈り込み（test binary prune と `SD_RELEASE_TARGET_MAX_BYTES` 超過時の作り直し、大きさ判定は共有を数えない方式）、DB backup の保持（promote 10・rollback 3、定期の 48 時間・日次・週次・総量、削除前の `integrity_check`）を短く書いた。詳細は `docs/ops/local-disk-growth.md` §2〜§4 への相対リンクで指す。§2 の「release-build の target は入れない」注記も新しい刈り込みに合わせた。
+- `docs/ops/local-disk-growth.md` §2 の重複していた「repo target の自動回収は daemon の常設 tick…」段落（約10分間隔版と 600 秒間隔版）を 1 段落に統合した（600 秒間隔・保護理由・cargo lock・木の最後の終端基準を残す）。
+
+証拠コマンドと結果は[docs-fix の記録](2026-10-10-local-disk-growth-paths/docs-fix.md)を参照（文書検査 3 本は全て exit 0、`crates/` と `scripts/` は未変更）。

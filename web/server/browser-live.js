@@ -1,6 +1,7 @@
 import { createHash, createHmac, createPrivateKey, randomBytes, sign, timingSafeEqual } from "node:crypto";
 import { readFileSync, statSync } from "node:fs";
 import { request as httpRequest } from "node:http";
+import { request as httpsRequest } from "node:https";
 import { createServer as createSocketServer } from "node:net";
 import path from "node:path";
 import express from "express";
@@ -108,6 +109,10 @@ function safeRun(run) {
   );
 }
 export function liveAvailability(run, upstream) {
+  if (run.frames_available === true && run.state === "RUNNING" && run.session_id)
+    return { state: "link", href: `/browser/live/${run.task_id}/${run.run_id}` };
+  if (run.live_reason === "launcher_protocol_no_live_frames")
+    return { state: "disabled", reason: "launcher_protocol_no_live_frames" };
   if (!upstream) return { state: "disabled", reason: "relay_unavailable" };
   if (run.state !== "RUNNING") return { state: "disabled", reason: "not_running" };
   if (!run.session_id) return { state: "disabled", reason: "not_configured" };
@@ -735,10 +740,32 @@ export function createBrowserLive({
         const items = [];
         for (const id of tasks)
           for (const run of await runs(id)) {
-            const live = liveAvailability(run, upstream);
+            let enrichedRun = run;
+            if (run.state === "RUNNING" && run.session_id) {
+              const signed = assertion(run.task_id, run.run_id, run.session_id, who.session);
+              if (signed) {
+                const grant = await api("POST", `${pathFor(run.task_id, run.run_id, run.session_id, "live")}/grant`, {
+                  assertion: signed,
+                });
+                if (!grant.error && grant.grant_id && grant.frames_available === true) {
+                  bindings.set(who.session, {
+                    task: run.task_id,
+                    run: run.run_id,
+                    browserSession: run.session_id,
+                    grant: grant.grant_id,
+                    expires: grant.expires_at,
+                  });
+                  enrichedRun = { ...run, frames_available: true };
+                } else if (!grant.error && grant.live_reason) enrichedRun = { ...run, live_reason: grant.live_reason };
+              }
+            }
+            const live = enrichedRun.live_reason
+              ? { state: "disabled", reason: enrichedRun.live_reason }
+              : liveAvailability(enrichedRun, upstream);
             items.push({
-              ...safeJson(run),
+              ...safeJson(enrichedRun),
               live,
+              ...(enrichedRun.live_reason ? { live_reason: enrichedRun.live_reason } : {}),
               ...(live.state === "link" ? { live_path: live.href } : {}),
             });
           }
@@ -968,6 +995,8 @@ export function createBrowserLive({
     const who = ownerKey(req);
     if (!who.session) return reject(who.status, who.code);
     const rawPath = req.url?.split("?")[0] ?? "";
+    const frameTarget = /^\/browser\/live\/([A-Za-z0-9_-]{1,64})\/([A-Za-z0-9_-]{1,64})\/frames$/.exec(rawPath);
+    if (frameTarget) return upgradeFrames(req, client, head, who, frameTarget[1], frameTarget[2]);
     const target = classify(rawPath);
     const binding = bindings.get(who.session);
     if (!binding) return reject(404, "live_view_not_bound");
@@ -1162,6 +1191,133 @@ export function createBrowserLive({
       clientBuffer = Buffer.alloc(0);
       work = work.then(() => clientData(head)).catch(() => close(1008));
     }
+  }
+  async function upgradeFrames(req, client, head, who, task, run) {
+    const reject = (status, code) =>
+      rejectUpgrade(
+        client,
+        `HTTP/1.1 ${status} Rejected\r\nContent-Type: application/json\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n${JSON.stringify({ code })}`,
+      );
+    if (head.length) return reject(400, "invalid_websocket");
+    if (!daemon || !token) return reject(503, "live_frame_stream_unavailable");
+    const origin = `${req.socket.encrypted ? "https" : "http"}://${req.headers.host}`;
+    if (req.headers.origin !== origin) return reject(403, "origin_mismatch");
+    let binding = bindings.get(who.session);
+    if (!binding) {
+      const state = await guard(task, run);
+      if (!state.run?.session_id) return reject(state.status ?? 404, state.code ?? "not_found");
+      const signed = assertion(task, run, state.run.session_id, who.session);
+      if (!signed) return reject(503, "attestation_unavailable");
+      const grant = await api("POST", `${pathFor(task, run, state.run.session_id, "live")}/grant`, {
+        assertion: signed,
+      });
+      if (grant.error || !grant.grant_id) return reject(grant.status ?? 503, grant.code ?? "grant_denied");
+      binding = { task, run, browserSession: state.run.session_id, grant: grant.grant_id, expires: grant.expires_at };
+      bindings.set(who.session, binding);
+    }
+    if (binding.task !== task || binding.run !== run) return reject(404, "live_view_not_bound");
+    const key = req.headers["sec-websocket-key"];
+    if (
+      req.headers.upgrade?.toLowerCase() !== "websocket" ||
+      typeof key !== "string" ||
+      !/^[A-Za-z0-9+/]{22}==$/.test(key) ||
+      Buffer.from(key, "base64").length !== 16
+    )
+      return reject(400, "invalid_websocket");
+    const check = await checked(binding, who.session);
+    if (!check.run) return reject(check.status, check.code);
+    const signed = assertion(task, run, binding.browserSession, who.session);
+    if (!signed) return reject(503, "attestation_unavailable");
+    const payload = JSON.stringify({ assertion: signed, grant_id: binding.grant });
+    const daemonAddress = new URL(daemon);
+    const frameReq = (daemonAddress.protocol === "https:" ? httpsRequest : httpRequest)({
+      host: daemonAddress.hostname,
+      port: daemonAddress.port || (daemonAddress.protocol === "https:" ? 443 : 80),
+      path: `/api/v1/tasks/${task}/browser/live/${run}/${binding.browserSession}/frames`,
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+        "Content-Length": Buffer.byteLength(payload),
+        Accept: "application/octet-stream",
+      },
+    });
+    frameReq.on("socket", guardUpgradeSocket);
+    const response = await new Promise((resolve) => {
+      frameReq.setTimeout(10000, () => {
+        frameReq.destroy();
+        resolve(null);
+      });
+      frameReq.once("response", resolve);
+      frameReq.once("error", () => resolve(null));
+      frameReq.end(payload);
+    });
+    if (response?.statusCode !== 200 || response.headers["cache-control"] !== "no-store") {
+      response?.resume();
+      return reject(response ? 502 : 503, "live_frame_stream_unavailable");
+    }
+    const accept = createHash("sha1")
+      .update(key + WS_MAGIC)
+      .digest("base64");
+    client.write(
+      `HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Accept: ${accept}\r\nCache-Control: no-store\r\n\r\n`,
+    );
+    sockets.add(client);
+    let buf = Buffer.alloc(0),
+      closed = false,
+      frameQueue = null,
+      sending = false;
+    const close = (code = 1008) => {
+      if (closed) return;
+      closed = true;
+      clearInterval(interval);
+      sockets.delete(client);
+      response.destroy();
+      wsClose(client, code);
+    };
+    const interval = setInterval(() => {
+      const current = ownerKey(req);
+      if (!current.session) return close(1001);
+      checked(binding, who.session)
+        .then((result) => {
+          if (!result.run) close(1008);
+        })
+        .catch(() => close(1008));
+    }, 1000);
+    interval.unref();
+    // No viewer messages are accepted, including control, input, and application pings.
+    client.on("data", () => close(1008));
+    client.on("close", () => close(1001));
+    client.on("error", () => close(1001));
+    response.on("close", () => close(1001));
+    response.on("error", () => close(1008));
+    function sendLatest() {
+      if (sending || !frameQueue || closed) return;
+      sending = true;
+      const frame = frameQueue;
+      frameQueue = null;
+      if (!client.write(wsFrame(2, frame)))
+        client.once("drain", () => {
+          sending = false;
+          sendLatest();
+        });
+      else {
+        sending = false;
+        sendLatest();
+      }
+    }
+    response.on("data", (chunk) => {
+      buf = Buffer.concat([buf, chunk]);
+      if (buf.length > 4 * 1024 * 1024 + 8) return close(1009);
+      while (buf.length >= 4) {
+        const size = buf.readUInt32BE(0);
+        if (!size || size > 2 * 1024 * 1024) return close(1009);
+        if (buf.length < size + 4) break;
+        frameQueue = Buffer.from(buf.subarray(4, size + 4)); // capacity one: replace any unsent frame
+        buf = buf.subarray(size + 4);
+        sendLatest();
+      }
+    });
   }
   return { register, startSocket, approve, upgrade, ownerKey, checked, classify, allowed, upstream, sockets };
 }

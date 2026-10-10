@@ -31,6 +31,7 @@ let pendingWaits = false;
 let leaseActive = false;
 let leaseHolder = null;
 let upstreamInput = null;
+let liveFramesAvailable = false;
 const daemon = http.createServer((req, res) => {
   let body = "";
   req.on("data", (chunk) => {
@@ -100,7 +101,24 @@ const daemon = http.createServer((req, res) => {
     if (req.url?.startsWith("/api/v1/tasks?")) return res.end('{"items":[],"next_cursor":null}');
     if (req.url === "/api/v1/tasks/T1/browser/live/R1/S1/grant") {
       leaseHolder = JSON.parse(JSON.parse(body).assertion.payload).owner_session_id;
-      return res.end('{"grant_id":"G1","expires_at":9999999999}');
+      return res.end(
+        JSON.stringify({
+          grant_id: "G1",
+          expires_at: 9999999999,
+          frames_available: liveFramesAvailable,
+          ...(liveFramesAvailable ? {} : { live_reason: "launcher_protocol_no_live_frames" }),
+        }),
+      );
+    }
+    if (req.url === "/api/v1/tasks/T1/browser/live/R1/S1/frames" && req.method === "POST") {
+      res.statusCode = 200;
+      res.setHeader("cache-control", "no-store");
+      res.setHeader("content-type", "application/octet-stream");
+      const image = Buffer.from("opaque-frame");
+      const prefix = Buffer.alloc(4);
+      prefix.writeUInt32BE(image.length);
+      res.write(Buffer.concat([prefix, image]));
+      return;
     }
     if (req.url === "/api/v1/tasks/T1/browser/live/R1/S1/check") return res.end('{"connected":true}');
     if (req.url === "/api/v1/tasks/T1/browser/control/R1/S1" && req.method === "GET")
@@ -297,8 +315,8 @@ test("entry and safe dashboard API relay with no upstream headers or raw URL", a
   assert.equal(listing.includes("https://secret.example"), false);
   const all = await (await get("/browser/runs")).json();
   assert.equal(all.items[0].run_id, "R1");
-  assert.deepEqual(all.items[0].live, { state: "link", href: "/browser/live/T1/R1" });
-  assert.equal(all.items[0].live_path, all.items[0].live.href);
+  assert.deepEqual(all.items[0].live, { state: "disabled", reason: "launcher_protocol_no_live_frames" });
+  assert.equal("live_path" in all.items[0], false);
   assert.equal(JSON.stringify(all).includes("https://secret.example"), false);
   const relay = await (await get("/api/tasks/T1/events?types=browser_updated")).text();
   assert.equal(relay.includes("https://secret.example"), false);
@@ -340,6 +358,68 @@ test("running run with upstream is linked", () => {
     state: "link",
     href: "/browser/live/T1/R1",
   });
+});
+test("browser_live_view_frames_available_links_without_dashboard_upstream", () => {
+  assert.deepEqual(
+    liveAvailability({ task_id: "T1", run_id: "R1", session_id: "S1", state: "RUNNING", frames_available: true }, null),
+    { state: "link", href: "/browser/live/T1/R1" },
+  );
+});
+test("browser_live_view_old_launcher_reports_no_live_frames", () => {
+  assert.deepEqual(
+    liveAvailability(
+      {
+        task_id: "T1",
+        run_id: "R1",
+        session_id: "S1",
+        state: "RUNNING",
+        live_reason: "launcher_protocol_no_live_frames",
+      },
+      {},
+    ),
+    { state: "disabled", reason: "launcher_protocol_no_live_frames" },
+  );
+});
+test("browser_live_credential_default_owner_only", async () => {
+  assert.equal((await get("/browser/live/T1/R1")).status, 200);
+  const otherLogin = await fetch(`${base}/login`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ password: "pw" }),
+  });
+  const otherCookie = otherLogin.headers.get("set-cookie").split(";")[0];
+  const response = await fetch(`${base}/browser/live/T1/R1`, { headers: { Cookie: otherCookie } });
+  assert.equal(response.status, 403);
+});
+test("browser_live_frame_stream_sends_binary_and_closes_on_viewer_input", async () => {
+  liveFramesAvailable = true;
+  const listed = await (await get("/browser/runs?task_id=T1")).json(); // owner grant/binding
+  assert.deepEqual(listed.items[0].live, { state: "link", href: "/browser/live/T1/R1" });
+  const socket = connect(gateway.address().port, "127.0.0.1");
+  const key = randomBytes(16).toString("base64");
+  const chunks = [];
+  const result = await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("frame websocket timed out")), 3000);
+    socket.on("error", reject);
+    socket.on("data", (chunk) => {
+      chunks.push(chunk);
+      const all = Buffer.concat(chunks);
+      if (all.includes(Buffer.from("opaque-frame"))) {
+        clearTimeout(timer);
+        resolve(all);
+      }
+    });
+    socket.on("connect", () =>
+      socket.write(
+        `GET /browser/live/T1/R1/frames HTTP/1.1\r\nHost: 127.0.0.1:${gateway.address().port}\r\nOrigin: ${base}\r\nCookie: ${cookie}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: ${key}\r\n\r\n`,
+      ),
+    );
+  });
+  assert.match(result.toString("latin1"), /101 Switching Protocols/);
+  assert.ok(result.includes(Buffer.from("opaque-frame")));
+  socket.write(Buffer.from([0x82, 0x80, 1, 2, 3, 4])); // even empty binary input is forbidden
+  await new Promise((resolve) => socket.once("close", resolve));
+  liveFramesAvailable = false;
 });
 test("live availability disables runs when the relay is unavailable", () => {
   for (const run of [

@@ -110,7 +110,6 @@ function isOpenAuthWait(wait) {
 // gateway の guard の code はそのまま、それ以外は grant_denied にまとめる。
 const LIVE_DISABLED_REASONS = new Set([
   "attestation_unavailable",
-  "auth_interval",
   "live_view_guard_unavailable",
   "live_view_disabled",
   "not_owner_session",
@@ -338,23 +337,26 @@ export function createBrowserLive({
     }
     throw new Error("browser history limit");
   }
-  function guard(task, run) {
-    const id = `${task}\0${run}`;
+  // `frames`: 本人だけに読み取り専用の映像を送る frame 経路（付記 2026-10-10e・人の決定 live-credential-default=a）。
+  // credential session と auth section の間も本人には映像を出すので、認証待ち（auth_interval）を見ない。他 task の待ちも見ない。
+  // 入力を中継しうる経路（takeover・dashboard relay）は従来どおり認証待ちで止める。
+  function guard(task, run, { frames = false } = {}) {
+    const id = `${task}\0${run}\0${frames ? "frames" : "relay"}`;
     const pending = guardInflight.get(id);
     if (pending) return pending;
-    const result = guardFresh(task, run).finally(() => {
+    const result = guardFresh(task, run, frames).finally(() => {
       if (guardInflight.get(id) === result) guardInflight.delete(id);
     });
     guardInflight.set(id, result);
     return result;
   }
-  async function guardFresh(task, run) {
+  async function guardFresh(task, run, frames) {
     let detail, found, waits;
     try {
       [detail, found, waits] = await Promise.all([
         api("GET", `/api/v1/tasks/${task}`),
         runs(task),
-        api("GET", `/api/v1/tasks/${task}/browser/waits`),
+        frames ? { items: [] } : api("GET", `/api/v1/tasks/${task}/browser/waits`),
       ]);
     } catch {
       return { status: 404, code: "not_found" };
@@ -368,6 +370,7 @@ export function createBrowserLive({
       !detail.runs?.some((r) => r.run_id === run && !r.finished_at && !r.end && !r.outcome)
     )
       return { status: 409, code: "not_running" };
+    if (frames) return { run: item };
     if ((waits.items ?? []).some((w) => w.run_id === run && isOpenAuthWait(w)))
       return { status: 409, code: "auth_interval" };
     // Dashboard shares a namespace. Missing task/wait history must close observation.
@@ -394,8 +397,8 @@ export function createBrowserLive({
     }
     return { status: 503, code: "live_view_guard_unavailable" };
   }
-  async function checked(binding, session) {
-    const check = await guard(binding.task, binding.run);
+  async function checked(binding, session, options) {
+    const check = await guard(binding.task, binding.run, options);
     if (!check.run) return check;
     const signed = assertion(binding.task, binding.run, binding.browserSession, session);
     if (!signed) return { status: 503, code: "attestation_unavailable" };
@@ -781,7 +784,7 @@ export function createBrowserLive({
                 else if (grant.frames_available === true) {
                   // WebSocket の upgrade が使う guard を先に通す。通らない link は出さない（upgrade の拒否は
                   // 画面から読めず、映像の無い枠だけが残る）。
-                  const check = await guard(run.task_id, run.run_id);
+                  const check = await guard(run.task_id, run.run_id, { frames: true });
                   if (!check.run) frameDenied = liveDisabledReason(check.code);
                   else {
                     bindings.set(who.session, {
@@ -1254,7 +1257,7 @@ export function createBrowserLive({
     if (req.headers.origin !== origin) return reject(403, "origin_mismatch");
     let binding = bindings.get(who.session);
     if (!binding) {
-      const state = await guard(task, run);
+      const state = await guard(task, run, { frames: true });
       if (!state.run?.session_id) return reject(state.status ?? 404, state.code ?? "not_found");
       const signed = assertion(task, run, state.run.session_id, who.session);
       if (!signed) return reject(503, "attestation_unavailable");
@@ -1274,7 +1277,7 @@ export function createBrowserLive({
       Buffer.from(key, "base64").length !== 16
     )
       return reject(400, "invalid_websocket");
-    const check = await checked(binding, who.session);
+    const check = await checked(binding, who.session, { frames: true });
     if (!check.run) return reject(check.status, check.code);
     const signed = assertion(task, run, binding.browserSession, who.session);
     if (!signed) return reject(503, "attestation_unavailable");
@@ -1332,7 +1335,7 @@ export function createBrowserLive({
     const interval = setInterval(() => {
       const current = ownerKey(req);
       if (!current.session) return close(1001);
-      checked(binding, who.session)
+      checked(binding, who.session, { frames: true })
         .then((result) => {
           if (!result.run) close(1008);
         })

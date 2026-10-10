@@ -25,7 +25,6 @@ describe("browser display model", () => {
   it("has a message for every live unavailability reason, including the gateway's frame grant/guard codes", () => {
     expect(Object.keys(liveUnavailableText).sort()).toEqual([
       "attestation_unavailable",
-      "auth_interval",
       "grant_denied",
       "grant_expired",
       "launcher_protocol_no_live_frames",

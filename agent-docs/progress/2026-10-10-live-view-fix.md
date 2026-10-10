@@ -41,6 +41,9 @@ a0c6f68f…）。events: `browser_updated` RUNNING 14:40:24.927Z → WAITING_FOR
   10 秒変わらないと stream が切れていた（SPA は再接続しない）。応答後に `setTimeout(0)` で外す。
 - `web/server/app.js`: `log` と（試験用の）`liveFrameConnectTimeoutMs` を browser live に渡す。
 - `web/features/browser/browser-model.ts`: 新しい理由の文。
+- 追補（coordinator 経由の人の決定 live-credential-default=a）: frame 経路の guard は認証待ちを見ない（同じ run・他 task とも）。
+  `/browser/runs` の link 判定と frame の upgrade・継続検査に `guard(…, { frames: true })`。takeover（`/browser/control`）と
+  dashboard relay は未決の認証待ちで閉じたまま。SPA と gateway の理由から `auth_interval` を外した。
 - 試験: `web/server/browser-live-frames-prod.test.mjs`（本番の構成を再現。修正前は 4 件とも失敗: 409 `auth_interval`、
   link のまま、`relay_unavailable`、無通信 200ms で stream 切断）、`browser-model.test.ts`・`browser-runs-model.test.ts` の理由。
 - ADR 付記 2026-10-10e、`docs/ops/browser-launcher-live-view.md` §5 に log の見方。
@@ -49,10 +52,12 @@ a0c6f68f…）。events: `browser_updated` RUNNING 14:40:24.927Z → WAITING_FOR
 
 - 修正前の gateway で新試験: 3 件 fail（`409 Rejected {"code":"auth_interval"}`、`{state:'link'}` ≠ `auth_interval`、`relay_unavailable` ≠ `run_ended`）。
   `setTimeout(0)` だけを外すと `browser_live_frame_stream_survives_idle_longer_than_connect_timeout` が fail（210ms で切断）。
-- 修正後: `node --test server/*.test.mjs` 90 pass / 0 fail、`vitest run` 91 files / 657 tests pass、`biome check .` exit 0（既存 warning 5）、`tsc -b` exit 0。
+- 修正後: `node --test server/*.test.mjs` 92 pass / 0 fail（追補後）、`vitest run` 91 files / 657 tests pass、`biome check .` exit 0（既存 warning 5）、`tsc -b` exit 0。
 - Rust は変更なし。`cargo fmt --all -- --check` exit 0。`bash scripts/dev/test-parallel.sh` exit 0（nextest 5099 passed / 0 failed / 14 ignored、
   doctest ok）。`CELERIS_USERNS_TESTS=1 CELERIS_ISOLATION_TESTS=require bash scripts/dev/test-parallel.sh` exit 0（5099 / 0 / 14、userns=true）。
   `cargo clippy --workspace -- -D warnings` exit 0。
+- 追補後の再実行: 上記すべて exit 0。userns 付きの 1 回目は `real_sandbox_launcher_chrome_downloads_inline_pdf_after_login`
+  （実 Chrome・31 秒で失敗、Rust は無変更）が落ち、単体再実行 3/3 pass、全体再実行 5099 passed / 0 failed。
 
 ## 本番での確認（運用者）
 
@@ -65,6 +70,6 @@ release 後、credential を使う browser task を 1 件走らせ、owner の w
 
 ## 提案
 
-- ADR D3 は auth section 中も本人に frame を出すとするが、gateway の guard は未決の auth 待ちがある間（他 task のものでも）frame を止める。
-  frame 経路は session 単位なので、frame の upgrade だけは dashboard 共有名前空間の auth 判定を外してよいか、人の判断を求める。
+- daemon の grant・check・frames は run の resumed credential 待ち・永続 `observation_stopped` で `observation_stopped` を返す。
+  launcher 経路では今のところ当たらないが、D3/D7 に合わせて frame route だけ外すかを検討する。
 - SPA の LiveViewFrame は WebSocket が閉じても再接続しない（grant 失効・一時的な切断の後は画面の再読み込みが要る）。再接続を検討する。

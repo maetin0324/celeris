@@ -144,9 +144,10 @@ owner session（本人が login した web）と、別の確認用の手段を�
    data を送ると gateway は接続を閉じる（試験 `browser_launcher_live_view_rejects_input`・gateway の viewer input close）。
    人が操作するときは従来の takeover（pause → takeover の lease）を使う。
    映像が出ないときは web の log（`journalctl --user -u celeris-web@$SHA12`）を見る。frame の upgrade は
-   `{"path":"/browser/live/frames",...,"status":101}`（開いた）か `"status":409,"code":"auth_interval"` 等（拒否）を 1 行残し、
+   `{"path":"/browser/live/frames",...,"status":101}`（開いた）か `"status":409,"code":"not_running"` 等（拒否）を 1 行残し、
    `/browser/runs` が link を出さなかった run は `{"event":"browser_live_unavailable",...,"reason":...}` を残す。
-   画面の Live View 枠にも同じ理由の文が出る（ADR 付記 2026-10-10e）。
+   画面の Live View 枠にも同じ理由の文が出る（ADR 付記 2026-10-10e）。認証待ち・auth section の間も本人の映像は止まらない
+   （takeover の操作は止まる）。
 5. **後始末**: run の終了・lease 失効・owner の logout で Live View が閉じ、`/browser/runs` が `disabled`（`not_running` 等）に
    戻ること。`journalctl --user -u celeris@$SHA12` と web の log に frame の中身（base64 等）が出ていないこと。
 

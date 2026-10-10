@@ -54,7 +54,10 @@ const resolvedCredentialWaits = [
     policy_hash: "sha256:abc",
   },
 ];
-let otherTaskOpenAuth = false;
+// 本人が credential を入れている最中（同じ run の未決の auth 待ち）と、他 task の未決の auth 待ち。
+let openAuthWaits = false;
+let runState = "RUNNING";
+const daemonRequests = [];
 let grantProblem = null;
 const logs = [];
 const daemon = http.createServer((req, res) => {
@@ -63,6 +66,7 @@ const daemon = http.createServer((req, res) => {
     body += chunk;
   });
   req.on("end", () => {
+    daemonRequests.push({ method: req.method, url: req.url, body });
     res.setHeader("content-type", "application/json");
     if (req.url === "/api/v1/tasks/T1")
       return res.end(
@@ -77,7 +81,7 @@ const daemon = http.createServer((req, res) => {
               seq: 1,
               event: {
                 type: "browser_updated",
-                browser: { task_id: "T1", run_id: "R1", session_id: "S1", state: "RUNNING", live_view_url: null },
+                browser: { task_id: "T1", run_id: "R1", session_id: "S1", state: runState, live_view_url: null },
               },
             },
           ],
@@ -85,11 +89,22 @@ const daemon = http.createServer((req, res) => {
         }),
       );
     if (req.url === "/api/v1/tasks/T1/browser/waits")
-      return res.end(JSON.stringify({ items: resolvedCredentialWaits }));
+      return res.end(
+        JSON.stringify({
+          items: [
+            ...resolvedCredentialWaits,
+            ...(openAuthWaits
+              ? [{ task_id: "T1", wait_id: "W_OPEN", run_id: "R1", reason: "waiting_for_auth", state: "pending" }]
+              : []),
+          ],
+        }),
+      );
+    if (req.url === "/api/v1/tasks/T1/browser/control/R1/S1" && req.method === "GET")
+      return res.end(JSON.stringify({ phase: "agent_running", version: 1, auth_section: false }));
     if (req.url === "/api/v1/tasks/T2/browser/waits")
       return res.end(
         JSON.stringify({
-          items: otherTaskOpenAuth
+          items: openAuthWaits
             ? [{ task_id: "T2", wait_id: "W2", run_id: "R9", reason: "waiting_for_auth", state: "pending" }]
             : [],
         }),
@@ -201,7 +216,7 @@ after(async () => {
 });
 
 /** frame の WebSocket を開き、101 と `until` を含む frame、または拒否・切断までの応答を返す。 */
-function openFrames(until = "opaque-frame") {
+function openFrames(until = "opaque-frame", viewerCookie = cookie) {
   return new Promise((resolve, reject) => {
     const socket = connect(gateway.address().port, "127.0.0.1");
     const chunks = [];
@@ -220,7 +235,7 @@ function openFrames(until = "opaque-frame") {
     socket.on("end", () => done(Buffer.concat(chunks).toString("latin1")));
     socket.on("connect", () =>
       socket.write(
-        `GET /browser/live/T1/R1/frames HTTP/1.1\r\nHost: 127.0.0.1:${gateway.address().port}\r\nOrigin: ${base}\r\nCookie: ${cookie}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: ${randomBytes(16).toString("base64")}\r\n\r\n`,
+        `GET /browser/live/T1/R1/frames HTTP/1.1\r\nHost: 127.0.0.1:${gateway.address().port}\r\nOrigin: ${base}\r\nCookie: ${viewerCookie}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: ${randomBytes(16).toString("base64")}\r\n\r\n`,
       ),
     );
   });
@@ -235,21 +250,57 @@ test("browser_live_frame_resolved_credential_waits_do_not_block_frames", async (
   assert.ok(logs.some((e) => e.path === "/browser/live/frames" && e.status === 101));
 });
 
-test("browser_live_view_open_auth_wait_reports_auth_interval_not_relay_unavailable", async () => {
-  otherTaskOpenAuth = true;
+test("browser_live_frame_open_auth_wait_still_streams_to_the_owner", async () => {
+  // 人の決定 live-credential-default=a: credential session・auth section の間も本人には映像を出す。
+  // 同じ run と他 task に未決の auth 待ちがあっても、frame 経路は止めない。
+  openAuthWaits = true;
   try {
     const item = (await (await get("/browser/runs?task_id=T1")).json()).items[0];
-    assert.deepEqual(item.live, { state: "disabled", reason: "auth_interval" });
-    assert.equal("live_path" in item, false);
+    assert.deepEqual(item.live, { state: "link", href: "/browser/live/T1/R1" });
+    const reply = await openFrames();
+    assert.match(reply, /101 Switching Protocols/);
+    assert.ok(reply.includes("opaque-frame"));
+    // 入力を中継しうる takeover の経路は、従来どおり認証待ちの間は閉じる。
+    assert.equal((await get("/browser/control/T1/R1/S1")).status, 404);
+  } finally {
+    openAuthWaits = false;
+  }
+  assert.equal((await get("/browser/control/T1/R1/S1")).status, 200);
+});
+
+test("browser_live_frame_open_auth_wait_is_owner_only_and_not_persisted", async () => {
+  openAuthWaits = true;
+  try {
+    const otherLogin = await fetch(`${base}/login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ password: "pw" }),
+    });
+    const otherCookie = otherLogin.headers.get("set-cookie").split(";")[0];
+    const refused = await openFrames("opaque-frame", otherCookie);
+    assert.match(refused, /403 Rejected/);
+    assert.equal(refused.includes("opaque-frame"), false);
+    assert.match(await openFrames(), /101 Switching Protocols/);
+  } finally {
+    openAuthWaits = false;
+  }
+  // frame は daemon の events・read に書かれず、gateway の log にも出ない。
+  for (const r of daemonRequests) {
+    assert.equal(/\/(events|read)$/.test(r.url ?? "") && r.method === "POST", false, r.url);
+    assert.equal(r.body.includes("opaque-frame"), false, r.url);
+  }
+  assert.equal(JSON.stringify(logs).includes("opaque-frame"), false);
+});
+
+test("browser_live_frame_refused_upgrade_is_logged_with_its_code", async () => {
+  runState = "COMPLETED";
+  try {
     const reply = await openFrames();
     assert.match(reply, /409 Rejected/);
-    assert.match(reply, /"code":"auth_interval"/);
-    assert.ok(
-      logs.some((e) => e.path === "/browser/live/frames" && e.status === 409 && e.code === "auth_interval"),
-      "a refused frame upgrade leaves its code in the log",
-    );
+    assert.match(reply, /"code":"not_running"/);
+    assert.ok(logs.some((e) => e.path === "/browser/live/frames" && e.status === 409 && e.code === "not_running"));
   } finally {
-    otherTaskOpenAuth = false;
+    runState = "RUNNING";
   }
 });
 

@@ -201,16 +201,22 @@ main の artifact transfer（`ARTIFACT_PROTOCOL = 8`）を取り込んだ際、L
   1. gateway の認証区間は **未決の待ち**（`state` が `pending`・`approved`）だけで判定する（`isOpenAuthWait`）。解決済みの待ちは履歴。
   2. `/browser/runs` は RUNNING の run について grant に加えて upgrade と同じ `guard` を先に通し、通らなければ link を出さない。
      frame 経路が拒まれたら理由を `relay_unavailable` に落とさず固定語彙で返す: 署名鍵なし `attestation_unavailable`、
-     guard の `auth_interval`・`not_running`・`live_view_guard_unavailable`、daemon の LiveDenied の code
+     guard の `not_running`・`live_view_guard_unavailable`、daemon の LiveDenied の code
      （`live_view_disabled`・`not_owner_session`・`origin_mismatch`・`other_task`・`run_ended`・`observation_stopped`・`grant_expired`）、
      それ以外は `grant_denied`。SPA は各理由の文を持つ。
   3. frame の HTTP 要求の期限（10 秒）は daemon の応答までに限る。応答後は socket の無通信 timeout を外す（screencast は画面が
      変わらなければ frame を出さず、残すと 10 秒で stream が切れて SPA は再接続しない）。
   4. gateway は frame の upgrade の結果（101 / 拒否の status と code）と `/browser/runs` の不可理由を log に 1 行残す（id と code だけ。frame・署名・cookie は出さない）。
 - 変えないこと: daemon の grant・check・frames の判定、owner session・Origin・grant の再確認、input 拒否。
-- 未決（提案）: D3 は auth section 中も本人に frame を出すとするが、gateway の guard は未決の auth 待ちがある間（他 task のものも）
-  frame を止める。frame 経路だけ guard の auth 判定を外すかは人の判断に残す（進捗 2026-10-10-live-view-fix の提案）。
+- frame 経路の auth 判定（人の決定 live-credential-default=a、D3/D7 の適用）: frame 経路（`/browser/live/{task}/{run}/frames`
+  の WebSocket と、`/browser/runs` が frame の使える run に link を出す判定）の guard は認証待ちを見ない（同じ run のものも、
+  他 task のものも）。credential session と auth section の間も、credential を入れた本人にだけ読み取り専用の映像を出す。
+  run・task が running であること、owner session・Origin・grant・署名 assertion の再確認は変えない。
+  入力を中継しうる経路（takeover の `/browser/control`、dashboard upstream の relay と WebSocket）は従来どおり未決の認証待ちで閉じる。
+  dashboard upstream は全 session を 1 つの名前空間で見せるので、そちらの他 task の待ちの判定は残す。
+  daemon 側の grant・frames の `observation_stopped`（run の resumed credential 待ち・永続 live event）判定は今回変えない。
 - 試験: `web/server/browser-live-frames-prod.test.mjs`（本番の構成: upstream なし・解決済み credential 待ちあり）
   `browser_live_frame_resolved_credential_waits_do_not_block_frames`、
-  `browser_live_view_open_auth_wait_reports_auth_interval_not_relay_unavailable`、`browser_live_view_grant_refusal_code_is_exposed`、
+  `browser_live_frame_open_auth_wait_still_streams_to_the_owner`、`browser_live_frame_open_auth_wait_is_owner_only_and_not_persisted`、
+  `browser_live_frame_refused_upgrade_is_logged_with_its_code`、`browser_live_view_grant_refusal_code_is_exposed`、
   `browser_live_frame_stream_survives_idle_longer_than_connect_timeout`。

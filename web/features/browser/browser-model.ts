@@ -10,7 +10,6 @@ export type LiveUnavailableReason =
   | "grant_expired"
   | "launcher_protocol_no_live_frames"
   | "attestation_unavailable"
-  | "auth_interval"
   | "live_view_guard_unavailable"
   | "live_view_disabled"
   | "not_owner_session"
@@ -30,7 +29,6 @@ export const liveUnavailableText: Record<LiveUnavailableReason, string> = {
   launcher_protocol_no_live_frames: "launcher が Live View の映像を提供していません。launcher を更新してください。",
   // gateway が frame 経路の grant・guard で拒まれた理由（code は data-reason にも出る）。
   attestation_unavailable: "web の本人署名鍵を利用できないため、Live View を開けません。",
-  auth_interval: "認証の待ちが開いている間は Live View を止めています。",
   live_view_guard_unavailable: "Live View の確認に Celeris から応答がありません。画面を更新してください。",
   live_view_disabled: "Celeris で Live View が無効です（本人署名の公開鍵が未設定）。",
   not_owner_session: "本人の署名を Celeris が確かめられませんでした。",

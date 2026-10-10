@@ -28,7 +28,7 @@ export type RunLogHandle = RunLogState & { retry: () => void };
 
 const initialState: RunLogState = { buffer: emptyBuffer, status: "loading", following: false, capped: false };
 
-export function useRunLog(taskId: string, runId: string, running: boolean | undefined): RunLogHandle {
+export function useRunLog(taskId: string, runId: string, running: boolean | undefined, enabled = true): RunLogHandle {
   const [state, setState] = useState<RunLogState>(initialState);
   const [attempt, setAttempt] = useState(0);
   const retry = useCallback(() => {
@@ -40,12 +40,20 @@ export function useRunLog(taskId: string, runId: string, running: boolean | unde
   // 終わったと分かったら次の polling を待たずに最後の 1 回を読む（header の状態と「実行中」の表示を食い違わせない）。
   const finishRef = useRef<() => void>(() => {});
   useEffect(() => {
+    if (!enabled) {
+      setState({ buffer: emptyBuffer, status: "ready", following: false, capped: false });
+      return;
+    }
     if (running === false) finishRef.current();
-  }, [running]);
+  }, [running, enabled]);
 
   // attempt は retry の合図（最初から読み直す）。
   // biome-ignore lint/correctness/useExhaustiveDependencies: attempt は読み直しの合図として使う。
   useEffect(() => {
+    if (!enabled) {
+      setState({ buffer: emptyBuffer, status: "ready", following: false, capped: false });
+      return;
+    }
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const controller = new AbortController();
@@ -98,7 +106,7 @@ export function useRunLog(taskId: string, runId: string, running: boolean | unde
       if (timer) clearTimeout(timer);
       controller.abort();
     };
-  }, [taskId, runId, attempt]);
+  }, [taskId, runId, attempt, enabled]);
 
   return { ...state, retry };
 }

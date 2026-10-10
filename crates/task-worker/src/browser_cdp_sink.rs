@@ -24,6 +24,19 @@ use zeroize::Zeroize;
 
 use crate::browser_relay;
 
+/// The trusted login's submit (ADR-0110 D2 `submit_selector`): a submit button / input is the
+/// form's submitter, so its `name` / `value` go into the POST (Shibboleth / Spring Web Flow needs
+/// `_eventId_proceed`, without it the IdP shows the login form again). Anything that is not a
+/// submitter (requestSubmit throws) is clicked instead; an element outside a form is clicked.
+/// Returns the fixed `'ok'` / `'missing'` only.
+pub fn login_submit_expression(selector: &str) -> Result<String, serde_json::Error> {
+    Ok(format!(
+        "(()=>{{let e=document.querySelector({});if(!e)return 'missing';\
+if(e.form){{try{{e.form.requestSubmit(e);}}catch(_){{e.click();}}}}else e.click();return 'ok'}})()",
+        serde_json::to_string(selector)?
+    ))
+}
+
 /// Bound on one broker sink frame (ADR-0109 D4).
 const MAX_FRAME: usize = 65536;
 /// Bound on one CDP message read from the browser pipe. Screenshots and large DOM/AX trees are
@@ -2529,6 +2542,20 @@ mod idle_pump_tests {
         let kept = sanitize_consent_controls(many);
         assert_eq!(kept.len(), CONSENT_CONTROLS_MAX);
         assert!(format_consent_controls(&kept).len() <= 512);
+    }
+
+    /// The login submit names the submitter (its `name` / `value` reach the IdP) and falls back to a
+    /// click only for a non-submitter.
+    #[test]
+    fn login_submit_expression_submits_with_the_submitter() {
+        let expr = login_submit_expression("button[name=\"_eventId_proceed\"]").expect("expr");
+        assert!(expr.contains("e.form.requestSubmit(e)"), "{expr}");
+        assert!(expr.contains("catch(_){e.click();}"), "{expr}");
+        assert!(!expr.contains("requestSubmit()"), "{expr}");
+        assert!(
+            expr.contains("document.querySelector(\"button[name=\\\"_eventId_proceed\\\"]\")"),
+            "{expr}"
+        );
     }
 
     #[test]

@@ -37,7 +37,12 @@ class Handler(BaseHTTPRequestHandler):
         if self.path.startswith('/password'):
             self.send('''<body><form method=post action=/submit><input name=j_password type=password><button name=_eventId_proceed>Login</button></form>''')
         elif self.path == '/submit':
-            password = parse_qs(data.decode()).get('j_password', [''])[0]
+            form = parse_qs(data.decode(), keep_blank_values=True)
+            # Like Shibboleth / Spring Web Flow: without the submitter's event the form comes back.
+            if '_eventId_proceed' not in form:
+                self.send('''<body><form method=post action=/submit><input name=j_password type=password><button name=_eventId_proceed>Login</button></form>''')
+                return
+            password = form.get('j_password', [''])[0]
             # Fixture tests observe receipt at the SP, not the input's value.
             self.send(f'''<body><form name=saml method=post action="{other_origin}/sp"><input type=hidden name=SAMLResponse value="{password}"></form><script>document.saml.submit()</script>''')
         elif self.path == '/sp':

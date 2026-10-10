@@ -104,10 +104,12 @@ export function TaskDetailHeader({ taskId }: { taskId: string }) {
                 <Link
                   to="/tasks/$id/runs/$runId"
                   params={{ id: task.id, runId: run.run_id }}
-                  aria-label={`run ${run.run_id} を開く`}
+                  aria-label={
+                    run.files?.stdout === false ? `run ${run.run_id} の進捗を開く` : `run ${run.run_id} を開く`
+                  }
                   className={`inline-flex min-h-11 min-w-11 max-w-full items-center justify-center ${textLink}`}
                 >
-                  <ShortId id={run.run_id} />
+                  {run.files?.stdout === false ? "進捗を開く" : <ShortId id={run.run_id} />}
                 </Link>
                 <StatusBadge status={runStatus(run)} />
               </>
@@ -267,7 +269,7 @@ export function OverviewView({
                     params={{ id: task.id, runId: run.run_id }}
                     className={`inline-flex min-h-11 min-w-11 max-w-full items-center justify-center ${textLink}`}
                   >
-                    <ShortId id={run.run_id} />
+                    {run.files?.stdout === false ? "進捗を開く" : <ShortId id={run.run_id} />}
                   </Link>
                   <StatusBadge status={runStatus(run)} />
                   <span className="min-w-0 break-words text-muted-foreground">

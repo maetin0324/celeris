@@ -29,6 +29,7 @@ pub struct Measured {
 }
 
 pub type SizeCache = Arc<Mutex<HashMap<PathBuf, Measured>>>;
+pub type SharedExtentCache = Arc<Mutex<scratch::SharedExtentIndex>>;
 
 /// 走査した owner 1 つ。
 #[derive(Debug, Clone)]
@@ -471,9 +472,23 @@ pub fn next_to_measure(
 }
 
 /// 1 つを測る（木を辿る。重い）。結果を cache と lease に書く（lease の mtime は変えない）。
-pub fn measure_one(path: &Path, lease: Option<&Path>, sizes: &SizeCache) {
-    match scratch::measure_tree(path) {
-        Ok((bytes, last_write)) => {
+pub fn measure_one(
+    path: &Path,
+    lease: Option<&Path>,
+    sizes: &SizeCache,
+    extents: &SharedExtentCache,
+) {
+    let owner = path
+        .parent()
+        .and_then(Path::file_name)
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string());
+    let measured = extents
+        .lock()
+        .map_err(|_| std::io::Error::other("extent index poisoned"))
+        .and_then(|mut index| scratch::measure_tree_shared(path, &owner, &mut index));
+    match measured {
+        Ok((bytes, last_write, fiemap)) => {
             let now = SystemTime::now();
             if let Ok(mut map) = sizes.lock() {
                 map.insert(
@@ -484,6 +499,9 @@ pub fn measure_one(path: &Path, lease: Option<&Path>, sizes: &SizeCache) {
                         measured_at: now,
                     },
                 );
+            }
+            if !fiemap {
+                tracing::debug!(path = %path.display(), "scratch: FIEMAP failed; using allocated blocks");
             }
             if let Some(lease) = lease
                 && let Err(e) = scratch::write_lease_measurement(lease, bytes, now)
@@ -502,6 +520,7 @@ pub fn spawn_measure(
     path: PathBuf,
     lease: Option<PathBuf>,
     sizes: SizeCache,
+    extents: SharedExtentCache,
     busy: Arc<AtomicBool>,
 ) {
     if busy.swap(true, Ordering::SeqCst) {
@@ -511,7 +530,7 @@ pub fn spawn_measure(
     let spawned = std::thread::Builder::new()
         .name("celeris-scratch-du".to_string())
         .spawn(move || {
-            measure_one(&path, lease.as_deref(), &sizes);
+            measure_one(&path, lease.as_deref(), &sizes, &extents);
             flag.store(false, Ordering::SeqCst);
         });
     if let Err(e) = spawned {

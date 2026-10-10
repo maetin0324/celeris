@@ -272,8 +272,8 @@ impl ScratchSettings {
             enabled: true,
             disabled_reason: None,
             dir: dir.into(),
-            targets_max_bytes: 100 * GIB,
-            total_max_bytes: 150 * GIB,
+            targets_max_bytes: 160 * GIB,
+            total_max_bytes: 200 * GIB,
             high_watermark: 0.90,
             low_watermark: 0.70,
             external_lease_ttl_secs: 21_600,
@@ -876,7 +876,7 @@ mod gc;
 pub use gc::*;
 
 // ADR-0129 (4): seed からの reflink。
-mod reflink;
+pub(crate) mod reflink;
 pub use reflink::*;
 
 // ADR-0129 (4)(5): seed の更新と GC。

@@ -519,3 +519,210 @@ pub fn measure_tree(path: &Path) -> io::Result<(u64, SystemTime)> {
     }
     Ok((total, latest))
 }
+
+/// A tiny injectable extent accounting primitive. The caller shares `seen` across owners in a
+/// pool, so reflinked physical ranges are charged once. FIEMAP failure is deliberately
+/// conservative: charge the owner's allocated blocks and do not add guessed ranges.
+pub fn account_shared_extents(
+    extents: io::Result<Vec<(u64, u64)>>,
+    allocated_blocks: u64,
+    seen: &mut BTreeMap<u64, u64>,
+) -> (u64, bool) {
+    let Ok(extents) = extents else {
+        return (allocated_blocks, false);
+    };
+    let mut added = 0u64;
+    for (physical, length) in extents {
+        let end = physical.saturating_add(length);
+        let overlaps: u64 = seen
+            .iter()
+            .filter_map(|(start, old_len)| {
+                let old_end = start.saturating_add(*old_len);
+                let lo = physical.max(*start);
+                let hi = end.min(old_end);
+                (hi > lo).then_some(hi - lo)
+            })
+            .sum();
+        let unique = length.saturating_sub(overlaps);
+        added = added.saturating_add(unique);
+        seen.entry(physical)
+            .and_modify(|old| *old = (*old).max(length))
+            .or_insert(length);
+    }
+    (added, true)
+}
+
+/// Pool-wide physical extent index. Each owner replaces its previous contribution on refresh.
+#[derive(Debug, Default, Clone)]
+pub struct SharedExtentIndex {
+    owners: std::collections::HashMap<String, Vec<(u64, u64)>>,
+    fallback: std::collections::HashMap<String, u64>,
+}
+
+type FiemapReader = dyn Fn(&Path) -> io::Result<Vec<(u64, u64, u32)>>;
+
+impl SharedExtentIndex {
+    pub fn replace_owner(&mut self, owner: String, ranges: Vec<(u64, u64)>) {
+        self.owners.insert(owner, ranges);
+    }
+
+    pub fn replace_measurement(&mut self, owner: String, ranges: Vec<(u64, u64)>, fallback: u64) {
+        self.owners.insert(owner.clone(), ranges);
+        self.fallback.insert(owner, fallback);
+    }
+
+    pub fn owner_bytes(&self, owner: &str) -> u64 {
+        let mut seen = Vec::<(u64, u64)>::new();
+        let mut total = 0u64;
+        let mut names: Vec<_> = self.owners.keys().collect();
+        names.sort();
+        for name in names {
+            for &(start, len) in &self.owners[name] {
+                let end = start.saturating_add(len);
+                let mut clipped: Vec<_> = seen
+                    .iter()
+                    .filter_map(|(lo, hi)| {
+                        let range = (start.max(*lo), end.min(*hi));
+                        (range.1 > range.0).then_some(range)
+                    })
+                    .collect();
+                clipped.sort_unstable();
+                let mut covered = 0u64;
+                let mut cover: Option<(u64, u64)> = None;
+                for (lo, hi) in clipped {
+                    match cover {
+                        Some((a, b)) if lo <= b => cover = Some((a, b.max(hi))),
+                        Some((a, b)) => {
+                            covered = covered.saturating_add(b - a);
+                            cover = Some((lo, hi));
+                        }
+                        None => cover = Some((lo, hi)),
+                    }
+                }
+                if let Some((lo, hi)) = cover {
+                    covered = covered.saturating_add(hi - lo);
+                }
+                if name == owner {
+                    total = total.saturating_add(len.saturating_sub(covered));
+                }
+                seen.push((start, end));
+            }
+        }
+        total.saturating_add(self.fallback.get(owner).copied().unwrap_or(0))
+    }
+
+    fn extent_count_except(&self, owner: &str) -> usize {
+        self.owners
+            .iter()
+            .filter(|(name, _)| name.as_str() != owner)
+            .map(|(_, ranges)| ranges.len())
+            .sum()
+    }
+
+    pub fn unique_bytes(&self) -> u64 {
+        let mut ranges: Vec<_> = self.owners.values().flatten().copied().collect();
+        ranges.sort_unstable();
+        let mut total = 0u64;
+        let mut current: Option<(u64, u64)> = None;
+        for (start, len) in ranges {
+            let end = start.saturating_add(len);
+            match current {
+                Some((lo, hi)) if start <= hi => current = Some((lo, hi.max(end))),
+                Some((lo, hi)) => {
+                    total = total.saturating_add(hi - lo);
+                    current = Some((start, end));
+                }
+                None => current = Some((start, end)),
+            }
+        }
+        if let Some((lo, hi)) = current {
+            total = total.saturating_add(hi - lo);
+        }
+        total
+    }
+}
+
+/// Measure one tree and replace its shared extents in the pool index. FIEMAP failure falls back
+/// conservatively to st_blocks for the complete tree and does not publish guessed extents.
+pub fn measure_tree_shared(
+    path: &Path,
+    owner: &str,
+    index: &mut SharedExtentIndex,
+) -> io::Result<(u64, SystemTime, bool)> {
+    measure_tree_shared_with(path, owner, index, &super::reflink::fiemap_extents)
+}
+
+pub fn measure_tree_shared_with(
+    path: &Path,
+    owner: &str,
+    index: &mut SharedExtentIndex,
+    fiemap: &FiemapReader,
+) -> io::Result<(u64, SystemTime, bool)> {
+    const OWNER_EXTENT_LIMIT: usize = 4_000_000;
+    const POOL_EXTENT_LIMIT: usize = 8_000_000;
+    const TIME_LIMIT: std::time::Duration = std::time::Duration::from_secs(300);
+    let started = std::time::Instant::now();
+    use std::os::unix::fs::MetadataExt;
+    let mut latest = UNIX_EPOCH;
+    let mut pending = vec![path.to_path_buf()];
+    let mut inodes = std::collections::BTreeSet::new();
+    let mut ranges = Vec::new();
+    let mut fallback = 0u64;
+    let mut failed = false;
+    while let Some(p) = pending.pop() {
+        let meta = match std::fs::symlink_metadata(&p) {
+            Ok(m) => m,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(e),
+        };
+        if let Ok(t) = meta.modified() {
+            latest = latest.max(t);
+        }
+        if meta.file_type().is_dir() {
+            if let Ok(rd) = std::fs::read_dir(&p) {
+                pending.extend(rd.flatten().map(|e| e.path()));
+            }
+            continue;
+        }
+        if !inodes.insert((meta.dev(), meta.ino())) {
+            continue;
+        }
+        fallback = fallback.saturating_add(meta.blocks().saturating_mul(512));
+        if failed {
+            continue;
+        }
+        match fiemap(&p) {
+            Ok(extents) => {
+                for (physical, len, flags) in extents {
+                    if started.elapsed() > TIME_LIMIT || ranges.len() >= OWNER_EXTENT_LIMIT {
+                        failed = true;
+                        break;
+                    }
+                    if flags & 0x2000 != 0 && len > 0 {
+                        ranges.push((physical, len));
+                    } else if flags & (0x1 | 0x2) != 0 || physical == 0 {
+                        failed = true;
+                        break;
+                    } else {
+                        ranges.push((physical, len));
+                    }
+                }
+            }
+            Err(_) => failed = true,
+        }
+    }
+    if index
+        .extent_count_except(owner)
+        .saturating_add(ranges.len())
+        > POOL_EXTENT_LIMIT
+    {
+        failed = true;
+    }
+    if failed {
+        index.replace_measurement(owner.to_string(), Vec::new(), fallback);
+        Ok((fallback, latest, false))
+    } else {
+        index.replace_measurement(owner.to_string(), ranges, 0);
+        Ok((index.owner_bytes(owner), latest, true))
+    }
+}

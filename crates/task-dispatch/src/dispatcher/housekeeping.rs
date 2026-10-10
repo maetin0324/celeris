@@ -133,6 +133,7 @@ impl Dispatcher {
                 path,
                 lease,
                 self.scratch.sizes.clone(),
+                self.scratch.extents.clone(),
                 self.scratch.measuring.clone(),
             );
         }

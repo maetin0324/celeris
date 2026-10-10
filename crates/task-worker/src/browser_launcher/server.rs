@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 use nix::libc;
 
 use super::protocol::{
-    ActionArgs, AuthenticateArgs, AuthenticationStatus, ErrorCode, LoginObservation, Observation,
+    ActionArgs, AuthenticateArgs, AuthenticationStatus, ErrorCode, LoginResult, Observation,
     Outcome, Receipt, Request, Response, SessionBinding, SessionFacts, SessionPolicy, SessionState,
     Verb, decode_request, write_message,
 };
@@ -113,7 +113,7 @@ pub trait BackendSession: Send + 'static {
         &mut self,
         _args: &AuthenticateArgs,
         _broker: UnixStream,
-    ) -> Result<LoginObservation, ErrorCode> {
+    ) -> Result<LoginResult, ErrorCode> {
         Err(ErrorCode::Unauthorized)
     }
     fn observe(&mut self) -> (SessionState, SessionFacts);
@@ -718,6 +718,7 @@ fn handle_authenticate(
     let rejected = Response::AuthenticateResult {
         status: AuthenticationStatus::Rejected,
         observation: None,
+        held_reason: None,
     };
     let entry = match authorize(inner, peer, &args.session_id, &args.lease_id) {
         Ok(e) => e,
@@ -731,6 +732,7 @@ fn handle_authenticate(
     // `observation`, so a daemon that predates protocol 5 still decodes it while the launcher is
     // replaced first (ADR 2026-10-09 credential username / post-login D1-5).
     let v5 = args.username_selector.is_some() || args.post_login.is_some();
+    let report_held_reason = args.report_held_reason;
     let e2 = entry.clone();
     let out = run_with_deadline(
         move || {
@@ -745,9 +747,10 @@ fn handle_authenticate(
         |_| {},
     );
     match out {
-        Some(Ok(observation)) => Response::AuthenticateResult {
+        Some(Ok(result)) => Response::AuthenticateResult {
             status: AuthenticationStatus::Success,
-            observation: v5.then_some(observation),
+            observation: v5.then_some(result.observation),
+            held_reason: result.held_reason.filter(|_| report_held_reason),
         },
         Some(Err(_)) => rejected,
         None => {

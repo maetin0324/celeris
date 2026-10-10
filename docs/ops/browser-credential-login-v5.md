@@ -10,14 +10,30 @@ history・ログ・台帳・成果物・chat に書かない。
 
 ## 0. 何が変わるか
 
+**2026-10-10 追記（protocol 6）**: ログイン後の待ちは最長 60 秒になり、IdP の中継頁（localStorage の interstitial・SAML の
+自動 POST）を通して待つ。観測を再開しなかったときは progress が理由を出す
+（例 `browser.post_login: post_login_unconfirmed (reason=post_login_consent_required, top=idp)`）。post_login を使う
+login は launcher protocol 6 が要る（username 欄だけなら 5）。手順は下と同じで、**daemon の release と launcher の再 build・
+差し替えの両方**が要る（どちらが先でもよいが、daemon が先なら launcher を差し替えるまで「protocol 6 required」で拒否される）。
+
+| 理由（reason） | 意味 | 運用の判断 |
+|---|---|---|
+| `post_login_consent_required` | IdP の属性送信の同意頁で止まった | 人が判断する（同意は自動で押さない）。browser 側に同意を記録する IdP では毎回出うる |
+| `post_login_idp_login_form` | IdP が login form を再表示した | 登録した username / password を確かめて登録し直す |
+| `post_login_idp_timeout` | 60 秒たっても IdP の頁に居た | IdP の中継の失敗・遅延。再実行して変わらなければ報告 |
+| `post_login_password_field` | read_origins の頁に password 欄があった | 着地頁（例: manaba の login 頁）。login_url に戻り先の指定が要るかを確かめる |
+| `post_login_other_origin` | read_origins 以外の origin に着いた | read_origins の値を確かめる |
+| `post_login_login_document` / `no_document` / `check_failed` / `resume_failed` | 注入した頁から動かない・頁が無い・読めない・遷移の失敗 | 再実行。続けば報告 |
+
+
 - site policy に `username_selector`（任意）と `post_login {read_origins, actions}`（任意）が増えた（DB migration 0064、schema 64）。
 - credentiald は username 欄を伴う注入要求（IPC v2）と固定 `INJECT_PAIR_FUNCTION` を持つ。1 承認 = 1 lease = 1 回の注入で 2 欄を入れる。
-- launcher protocol は 5。daemon は、承認で固定したログインが username 欄か post_login を使うとき、承認を消費する**前**に
-  launcher の版を確かめ、5 未満なら次の文言で拒否する（承認は残る）:
+- launcher protocol は 5（2026-10-10 から post_login を使う login は 6）。daemon は、承認で固定したログインが username 欄か
+  post_login を使うとき、承認を消費する**前**に launcher の版を確かめ、足りなければ次の文言で拒否する（承認は残る）:
   `browser launcher protocol 4 lacks the credential login verbs; rebuild and replace celeris-browser-launcher (protocol 5 required)`。
 - post_login を持つ site では、ログイン後に条件（ログイン頁を離れた・`read_origins` の頁・password 欄なし）が 15 秒以内に揃えば
-  agent は `read_origins` の頁だけを読める。揃わなければ今までどおり session の終わりまで観測停止（progress `browser.post_login:
-  post_login_unconfirmed`）。
+  agent は `read_origins` の頁だけを読める（2026-10-10 から最長 60 秒）。揃わなければ今までどおり session の終わりまで観測停止
+  （progress `browser.post_login: post_login_unconfirmed (reason=…, top=…)`）。
 - 版のずれ: 旧 daemon + 新 launcher、新 daemon + 旧 launcher（username / post_login を使わない policy）は従来どおり動く。
   `celerisctl browser doctor` の `launcher` は版が 5 と一致するまで NG を出す。
 

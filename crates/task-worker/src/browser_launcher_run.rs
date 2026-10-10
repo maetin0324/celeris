@@ -25,7 +25,7 @@ use super::{BrowserContext, BrowserSink, CLI, EventSinkLive, forward_events, wri
 use crate::browser_action::{ActionExecutor, ActionRequest, ActionServer};
 use crate::browser_launcher::protocol::{
     AuthenticateArgs, AuthenticationStatus, CREDENTIAL_LOGIN_PROTOCOL, LoginObservation,
-    POST_LOGIN_PROTOCOL,
+    LoginResult, POST_LOGIN_PROTOCOL,
 };
 use crate::browser_launcher::{
     ActionArgs, LauncherClient, Observation, Outcome, Receipt, SessionFacts, SessionPolicy,
@@ -174,7 +174,7 @@ impl LauncherRuntime {
         &self,
         args: AuthenticateArgs,
         broker: std::os::fd::OwnedFd,
-    ) -> Result<(AuthenticationStatus, LoginObservation), &'static str> {
+    ) -> Result<(AuthenticationStatus, LoginResult), &'static str> {
         let mut client = self.client.lock().map_err(|_| UNAVAILABLE)?;
         client.authenticate(args, broker).map_err(|_| UNAVAILABLE)
     }
@@ -1032,7 +1032,7 @@ pub(super) async fn run(
         )
         .await;
         let live_session = runtime.session_id().to_owned();
-        let mut login_observation: Result<LoginObservation, &'static str> = Err("not_logged_in");
+        let mut login_observation: Result<LoginResult, &'static str> = Err("not_logged_in");
         let result = match login {
             CredentialLogin::NotRecorded => {
                 let stop_runtime = runtime;
@@ -1104,63 +1104,40 @@ pub(super) async fn run(
         // on the post-login conditions. Store (auth section closed; the credential-session mark keeps
         // takeover refused), worker events (Live View stays off: no live view URL) and the shim
         // policy follow, before the harness starts.
-        if let (Ok(LoginObservation::Resumed), Some((read, bytes))) =
-            (&login_observation, &post_login_plan)
-        {
-            let reopened = sink
-                .browser_auth_section(run_id, &browser.session_id, false)
-                .is_ok()
-                && super::replace_private(&runtime_dir.join("policy.json"), bytes).is_ok()
-                && admit_shim_config(
-                    &runtime_dir,
-                    &browser.session_id,
-                    policy,
-                    bytes,
-                    &approval_actions,
-                    true,
-                )
-                .is_ok();
-            if reopened {
+        if let (Ok(login), Some((read, bytes))) = (&login_observation, &post_login_plan) {
+            let outcome = match (login.observation, login.held_reason) {
+                (LoginObservation::Resumed, _) => {
+                    let reopened = sink
+                        .browser_auth_section(run_id, &browser.session_id, false)
+                        .is_ok()
+                        && super::replace_private(&runtime_dir.join("policy.json"), bytes).is_ok()
+                        && admit_shim_config(
+                            &runtime_dir,
+                            &browser.session_id,
+                            policy,
+                            bytes,
+                            &approval_actions,
+                            true,
+                        )
+                        .is_ok();
+                    if reopened {
+                        Ok(())
+                    } else {
+                        Err(crate::browser_cdp_sink::PostLoginHeld::ResumeFailed)
+                    }
+                }
+                // A launcher that held without a reason (or before v6) gives no detail.
+                (LoginObservation::Held, held) => {
+                    Err(held.unwrap_or(crate::browser_cdp_sink::PostLoginHeld::CheckFailed))
+                }
+            };
+            if outcome.is_ok() {
                 allowed = serde_json::from_slice(bytes)
                     .map_err(|_| AdapterError::Other("browser policy rejected".into()))?;
                 post_login_context = Some(read.clone());
                 drop(auth_guard.take());
             }
-            sink.progress_with(
-                &format!(
-                    "browser.post_login: {}",
-                    if reopened {
-                        "resumed"
-                    } else {
-                        "post_login_unconfirmed"
-                    }
-                ),
-                &task_core::ProgressFields {
-                    kind: Some(task_core::ProgressKind::ToolResult),
-                    tool: Some("browser.post_login".into()),
-                    summary: Some(
-                        if reopened {
-                            "resumed"
-                        } else {
-                            "post_login_unconfirmed"
-                        }
-                        .into(),
-                    ),
-                    error: !reopened,
-                    ..Default::default()
-                },
-            );
-        } else if post_login_plan.is_some() {
-            sink.progress_with(
-                "browser.post_login: post_login_unconfirmed",
-                &task_core::ProgressFields {
-                    kind: Some(task_core::ProgressKind::ToolResult),
-                    tool: Some("browser.post_login".into()),
-                    summary: Some("post_login_unconfirmed".into()),
-                    error: true,
-                    ..Default::default()
-                },
-            );
+            super::post_login_progress(sink, outcome);
         }
     }
     let action_server = ActionServer::start_with(
@@ -1283,10 +1260,13 @@ fn launcher_too_old(version: u32, required: u32) -> AdapterError {
 }
 
 /// The launcher protocol the pinned login needs (ADR 2026-10-09 credential username / post-login
-/// D1-5): 5 when it fills a username field or opts into the post-login read, else 4.
+/// D1-5, 付記 2026-10-10): 6 with a post-login read, 5 with a username field only, else 4.
 pub(crate) fn required_launcher_protocol(wait: &BrowserWait) -> u32 {
     match &wait.trusted_login {
-        Some(t) if t.username_selector.is_some() || t.post_login.is_some() => POST_LOGIN_PROTOCOL,
+        Some(t) if t.post_login.is_some() => POST_LOGIN_PROTOCOL,
+        Some(t) if t.username_selector.is_some() => {
+            crate::browser_launcher::protocol::USERNAME_PROTOCOL
+        }
         _ => CREDENTIAL_LOGIN_PROTOCOL,
     }
 }
@@ -1311,7 +1291,7 @@ pub(crate) enum CredentialLogin {
     Failed(&'static str),
     /// store に auth section を記録した（解除は session の stop 後、または v5 で launcher が観測を
     /// 再開した後）。中身は login の成否と観測の再開の有無で、失敗なら lease は revoke 済み。
-    Recorded(Result<LoginObservation, &'static str>),
+    Recorded(Result<LoginResult, &'static str>),
 }
 
 /// ADR 2026-10-09 付記「launcher の Authenticate 経路」: 承認を消費した後の launcher の login。
@@ -1390,6 +1370,7 @@ pub(crate) async fn launcher_credential_login(
             password_selector: trusted.password_selector.clone(),
             submit_selector: trusted.submit_selector.clone(),
             username_selector: trusted.username_selector.clone(),
+            report_held_reason: post_login.is_some(),
             // Only the effective read (site policy ∩ task policy) crosses to the launcher.
             post_login: post_login.map(|read| task_core::browser_wait::PostLogin {
                 read_origins: read.read_origins.clone(),

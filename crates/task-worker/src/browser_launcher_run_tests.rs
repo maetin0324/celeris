@@ -3060,12 +3060,39 @@ mod launcher_login {
             .expect("download behavior");
         let from = agent.seen.len();
         agent.click("dl").expect("download");
-        assert!(agent.wait_download(from, "completed"));
-        // A fresh document first (Chromium's multiple-download limiter, see the daemon test).
+        let lms = agent
+            .wait_download_begin(from, &[])
+            .unwrap_or_else(|| panic!("LMS download began: {:?}", agent.tail(6)));
+        assert!(
+            agent.wait_download(from, &lms, "completed"),
+            "LMS download completed: {:?}",
+            agent.tail(6)
+        );
+        // A fresh document avoids Chromium's multiple-download limiter hiding the cancellation.
         agent.goto(&format!("{}/ct/home", o.lms), &format!("{}/ct/home", o.lms));
-        agent
-            .download_with_retry("dl-other", "canceled")
-            .expect("other-origin download cancelled");
+        let from = agent.seen.len();
+        agent.click("dl-other").expect("other download");
+        let other = agent.wait_download_begin(from, &[&lms]).unwrap_or_else(|| {
+            panic!(
+                "other-origin download began (observation stopped: {}): {:?}",
+                chrome
+                    .controller
+                    .lock()
+                    .expect("lock")
+                    .observation_stopped(),
+                agent.tail(6)
+            )
+        });
+        assert!(
+            agent.wait_download(from, &other, "canceled"),
+            "other-origin download cancelled (observation stopped: {}): {:?}",
+            chrome
+                .controller
+                .lock()
+                .expect("lock")
+                .observation_stopped(),
+            agent.tail(6)
+        );
         assert_eq!(
             std::fs::read_dir(downloads.path()).expect("dir").count(),
             1,

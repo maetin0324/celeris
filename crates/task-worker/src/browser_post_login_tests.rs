@@ -16,6 +16,8 @@ pub(crate) const FIXTURE: &str = include_str!("browser_post_login_fixture.py");
 pub(crate) const USER: &str = "s2026001";
 const SECRET: &str = "post-login-password-5d1c92";
 pub(crate) const COOKIE_VALUE: &str = "lms-session-cookie-7f3a";
+/// Safety net for download events; the waits end on the event itself (ADR-0125).
+const DOWNLOAD_EVENT_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// The fixture's three origins: IdP, LMS, other.
 pub(crate) struct Origins {
@@ -302,69 +304,83 @@ impl<'a> Agent<'a> {
         Ok(())
     }
 
-    /// Start the download behind `#id` with a programmatic click and wait for `state`, retrying
-    /// the click (up to 3 times, 10 s each) when a heavily loaded host never starts the navigation.
-    /// Only the outcome of a download that began is under test.
-    pub(crate) fn download_with_retry(&mut self, id: &str, state: &str) -> Result<(), String> {
-        for attempt in 0..3 {
-            let from = self.seen.len();
-            if let Err(e) = self.eval(&format!("document.getElementById('{id}').click()")) {
-                return Err(format!(
-                    "attempt {attempt}: click refused ({}); events: {:?}",
-                    e.code(),
-                    self.seen
-                        .iter()
-                        .filter(|e| e.contains("ownload"))
-                        .map(|e| e.chars().take(200).collect::<String>())
-                        .collect::<Vec<_>>()
-                ));
+    /// Wait for the first event since `from` (an index into `seen`) that `pick` maps to a value.
+    /// Events are browser-level (no page data) and carry no session, so they reach the agent's
+    /// queue; the controller has no other consumer here. Waits on events (ADR-0125): the bound is
+    /// only a long safety net, and a stopped observation (D2-6 breach) ends the wait at once.
+    fn wait_event<T>(&mut self, from: usize, pick: impl Fn(&Value) -> Option<T>) -> Option<T> {
+        let deadline = Instant::now() + DOWNLOAD_EVENT_TIMEOUT;
+        let mut next = from.min(self.seen.len());
+        loop {
+            while next < self.seen.len() {
+                let found = serde_json::from_str::<Value>(&self.seen[next])
+                    .ok()
+                    .and_then(|v| pick(&v));
+                next += 1;
+                if found.is_some() {
+                    return found;
+                }
             }
-            if self.wait_download_for(from, state, Duration::from_secs(10)) {
-                return Ok(());
+            if Instant::now() >= deadline {
+                return None;
             }
-        }
-        Err("no download began".into())
-    }
-
-    /// Wait for a `Browser.downloadProgress` of `state` among the events received since `from`
-    /// (an index into `seen`; events are browser-level, no page data).
-    pub(crate) fn wait_download(&mut self, from: usize, state: &str) -> bool {
-        // Generous: under a loaded host Chromium may take a while to start a download.
-        self.wait_download_for(from, state, Duration::from_secs(30))
-    }
-
-    fn wait_download_for(&mut self, from: usize, state: &str, wait: Duration) -> bool {
-        let deadline = Instant::now() + wait;
-        let matches = |e: &str| {
-            serde_json::from_str::<Value>(e).is_ok_and(|v| {
-                v["method"] == "Browser.downloadProgress" && v["params"]["state"] == state
-            })
-        };
-        if self.seen[from.min(self.seen.len())..]
-            .iter()
-            .any(|e| matches(e))
-        {
-            return true;
-        }
-        while Instant::now() < deadline {
             let mut c = self.controller.lock().expect("lock");
             let _ = c.pump_events();
             let sessions: HashSet<String> = [self.session.clone()].into_iter().collect();
             let events = c.take_agent_events_for(&sessions);
+            let stopped = c.observation_stopped();
             drop(c);
-            let mut hit = false;
+            let idle = events.is_empty();
             for mut event in events {
-                hit |= event["method"] == "Browser.downloadProgress"
-                    && event["params"]["state"] == state;
                 crate::browser_shared_cdp::sanitize_agent_event(&mut event);
                 self.seen.push(event.to_string());
             }
-            if hit {
-                return true;
+            if stopped && idle {
+                return None;
             }
-            std::thread::sleep(Duration::from_millis(20));
+            if idle {
+                std::thread::sleep(Duration::from_millis(20));
+            }
         }
-        false
+    }
+
+    /// Wait for a download to begin among the events received since `from` and return its guid
+    /// (`Browser.downloadWillBegin`, or the first progress of a guid not in `known`).
+    pub(crate) fn wait_download_begin(&mut self, from: usize, known: &[&str]) -> Option<String> {
+        self.wait_event(from, |v| {
+            let guid = v["params"]["guid"].as_str()?;
+            match v["method"].as_str()? {
+                "Browser.downloadWillBegin" | "Page.downloadWillBegin" => Some(guid.to_owned()),
+                "Browser.downloadProgress" | "Page.downloadProgress" if !known.contains(&guid) => {
+                    Some(guid.to_owned())
+                }
+                _ => None,
+            }
+        })
+    }
+
+    /// Wait for a progress event of the download `guid` reaching `state` (searched from `from`, so
+    /// an event that arrived with the begin is not missed).
+    pub(crate) fn wait_download(&mut self, from: usize, guid: &str, state: &str) -> bool {
+        self.wait_event(from, |v| {
+            (matches!(
+                v["method"].as_str(),
+                Some("Browser.downloadProgress" | "Page.downloadProgress")
+            ) && v["params"]["guid"] == guid
+                && v["params"]["state"] == state)
+                .then_some(())
+        })
+        .is_some()
+    }
+
+    /// The last `n` events the agent received (for failure messages).
+    pub(crate) fn tail(&self, n: usize) -> Vec<String> {
+        self.seen
+            .iter()
+            .rev()
+            .take(n)
+            .map(|e| e.chars().take(300).collect())
+            .collect()
     }
 }
 
@@ -465,9 +481,13 @@ async fn daemon_post_login_pair_login_reads_lms_and_refuses_idp_other_and_passwo
         .expect("download behavior");
     let from = agent.seen.len();
     agent.click("dl").expect("download click");
+    let lms = agent
+        .wait_download_begin(from, &[])
+        .unwrap_or_else(|| panic!("LMS download began: {:?}", agent.tail(6)));
     assert!(
-        agent.wait_download(from, "completed"),
-        "LMS download completed"
+        agent.wait_download(from, &lms, "completed"),
+        "LMS download completed: {:?}",
+        agent.tail(6)
     );
     let files: Vec<_> = std::fs::read_dir(download_dir.path())
         .expect("dir")
@@ -475,17 +495,26 @@ async fn daemon_post_login_pair_login_reads_lms_and_refuses_idp_other_and_passwo
         .map(|e| std::fs::read_to_string(e.path()).unwrap_or_default())
         .collect();
     assert_eq!(files, vec!["%PDF-1.4 handout for report 1".to_string()]);
-    // A fresh document first: Chromium's multiple-download limiter may hold a second download from
-    // the same document without asking, which would hide the cancellation under test.
+    // A fresh document avoids Chromium's multiple-download limiter hiding the cancellation.
     agent.goto(
         &format!("{}/ct/home", w.o.lms),
         &format!("{}/ct/home", w.o.lms),
     );
-    // A programmatic click (the agent's own click path is covered above): on a heavily loaded host
-    // the navigation sometimes never started, which is not under test here.
-    agent
-        .download_with_retry("dl-other", "canceled")
-        .expect("other-origin download cancelled");
+    let from = agent.seen.len();
+    agent.click("dl-other").expect("click other download");
+    let other = agent.wait_download_begin(from, &[&lms]).unwrap_or_else(|| {
+        panic!(
+            "other-origin download began (observation stopped: {}): {:?}",
+            w.controller().observation_stopped(),
+            agent.tail(6)
+        )
+    });
+    assert!(
+        agent.wait_download(from, &other, "canceled"),
+        "other-origin download cancelled (observation stopped: {}): {:?}",
+        w.controller().observation_stopped(),
+        agent.tail(6)
+    );
     assert_eq!(
         std::fs::read_dir(download_dir.path()).expect("dir").count(),
         1

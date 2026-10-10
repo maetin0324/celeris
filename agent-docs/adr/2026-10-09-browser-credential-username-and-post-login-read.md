@@ -608,3 +608,18 @@ sandboxd は不要。
 - 認証失敗・post-login の保留は登録を vault から削除して無効化し、認証 session の終了後に再入力 wait を開く。削除に失敗した場合は再利用へ進めずエラーとする。
 - 一覧・削除は owner session の署名を必要とする専用 API。保存期限は credentiald の `CELERIS_CREDENTIAL_MAX_AGE_DAYS`（1〜90 日、既定90日）で設定する。
 - task policy の revision と site policy（TrustedLogin）の revision は別の版。wait は両方を固定し、同じ番号であることは要求しない。使用直前に task policy binding と DB/vault の TrustedLogin をそれぞれ照合する。
+
+## 付記 2026-10-10l: release gate の 2 件の不定（898929d9）
+
+main 898929d9 の release gate（他の task の負荷が高い時）で `browser_sandbox_artifacts` の 2 試験が落ちた。
+
+1. **他 origin の download の取消と完了の競争。** 試験の他 origin の PDF は小さく即座に返るので、負荷が高いと relay の取消より先に
+   Chrome が書き終え、設計どおり breach で観測が止まり、次の screenshot が `cdp_command_failed`（agent-browser の
+   `Target.setDiscoverTargets`）になった。製品の振る舞いは正しい（fail closed）。fixture の他 origin の file を「header を先に返し、
+   本文は 10 秒後」にして、取消が必ず先に効くようにした。
+2. **`Unknown ref`。** 中継頁ではない beforeunload の頁で、snapshot の直後の download が `unknown_ref` になった（runner の link の
+   読み取りは成功していた）。agent-browser は自分で snapshot を取り直すと ref を振り直す。fixture の負荷（SIGSTOP stutter を含む）では
+   再現しなかった。controller が答えた dialog の `Page.javascriptDialogClosed` は agent に渡していたので（開いた event は渡さない）、
+   これも渡さないことにした（agent-browser から見て dialog は一切起きていない）。試験は `unknown_ref` のときだけ、その段を頁を開く
+   ところからもう一度だけ行う（agent が snapshot を取り直すのと同じ。2 回目の結果をそのまま確かめる）。製品の agent には
+   `detail` の `error_class=unknown_ref` が届く。

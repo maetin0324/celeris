@@ -512,7 +512,7 @@ impl SessionBackend for RuntimeBackend {
                 eprintln!("celeris-browser-launcher: start {sid}: CDP pipe missing");
                 return Err(ErrorCode::LaunchFailed);
             };
-            // v8: the Live View tap sits between Chrome's output and the controller (live.rs).
+            // v9: the Live View tap sits between Chrome's output and the controller (live.rs).
             let (read, live_tap) = super::live::LiveTap::interpose(read).map_err(fail(
                 sid,
                 "live view tap",
@@ -634,7 +634,7 @@ pub(crate) fn read_artifact_chunk(
 struct RuntimeSession {
     sup: Supervisor,
     shared: SharedCdp,
-    /// v8: the owner's Live View frames (never an agent's).
+    /// v9: the owner's Live View frames (never an agent's).
     live_tap: std::sync::Arc<super::live::LiveTap>,
     /// v4 の login 区間（`auth_begin` で作り、`authenticate` で一度だけ使う）。
     login: Option<LoginSection>,

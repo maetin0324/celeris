@@ -191,6 +191,17 @@ pub enum Request {
         name: String,
         offset: u64,
     },
+    /// v9: start the owner's Live View on this dedicated connection. After the
+    /// acknowledgement, only bounded frame notifications are sent (ADR D4: no input).
+    LiveStart {
+        session_id: String,
+        lease_id: String,
+    },
+    /// v9: stop Live View on its dedicated frame connection.
+    LiveStop {
+        session_id: String,
+        lease_id: String,
+    },
 }
 
 /// browser artifact transfer を受ける最小の protocol 版（v8、付記 2026-10-10e）。
@@ -287,20 +298,6 @@ pub fn artifact_name_verb(name: &str) -> Option<Verb> {
         .then_some(verb)
 }
 
-    /// v8: start the owner's Live View of `session_id` on this (dedicated) connection. After
-    /// `live_started` the launcher writes only `live_frame` notifications (each followed by its
-    /// bounded binary body) and finally `live_stopped`. There is no input verb (ADR D4).
-    LiveStart {
-        session_id: String,
-        lease_id: String,
-    },
-    /// v8: stop the Live View on the frame connection.
-    LiveStop {
-        session_id: String,
-        lease_id: String,
-    },
-}
-
 /// session の状態（固定）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -363,10 +360,10 @@ pub enum Outcome {
 /// v7 で `authenticate` に `consent`（同意頁の固定ボタン）と `report_consent_controls`、応答に
 /// `consent_pressed`・`consent_controls` を足した（付記 2026-10-10b）。consent を使う login は v7 を要求する。
 ///
-/// v8 で本人向け Live View の `live_start` / `live_stop` と `live_frame` notification を足した
+/// v9 で本人向け Live View の `live_start` / `live_stop` と `live_frame` notification を足した
 /// （ADR 2026-10-10-browser-launcher-live-view-frames 付記 2026-10-10b）。frame は daemon が開いた
-/// Live View 専用の接続でだけ流れる。daemon は v8 未満の launcher に `live_start` を送らない。
-/// v8 で `fetch_artifact` / `artifact` を追加した後に frame 機能を追加したため、統合 protocol は v9。
+/// Live View 専用の接続でだけ流れる。daemon は v9 未満の launcher に `live_start` を送らない。
+/// `fetch_artifact` / `artifact` は v8 で追加済みであり、protocol の版は v9。
 pub const PROTOCOL_VERSION: u32 = 9;
 
 /// Live View の frame（`live_start` / `live_frame`）を受ける最小の protocol 版。

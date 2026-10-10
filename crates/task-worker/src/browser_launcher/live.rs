@@ -1,4 +1,4 @@
-//! Protocol v8: the owner's Live View inside the launcher (ADR 2026-10-10-browser-launcher-live-view-frames
+//! Protocol v9: the owner's Live View inside the launcher (ADR 2026-10-10-browser-launcher-live-view-frames
 //! D1/D2/D4、付記 2026-10-10b).
 //!
 //! Chrome's CDP pipe is owned by the launcher's [`CdpController`]. [`LiveTap::interpose`] puts a

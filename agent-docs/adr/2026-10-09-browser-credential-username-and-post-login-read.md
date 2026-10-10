@@ -268,3 +268,32 @@ T1・T2・T5 は区間後の観測を再開しても既存の仕組み（遮断�
    その写しなので、site policy を変えた後は credential を登録し直す（運用手順 §4）。
 8. **残る制限。** launcher runtime の screenshot / download の artifact は daemon に渡らない（`LauncherExecutor` の既存の制限）。
    A3/A4 で許したが、launcher runtime では成果物にならない。artifact の受け渡し（protocol の拡張）は別 task。
+
+## 付記 2026-10-10: 本番の `post_login_unconfirmed` と、待ち方・理由の固定 code（launcher protocol 6）
+
+本番 run 01M4HR6PY6NJXSPWTW9X5AZ81Y（release 93cb3a36、筑波大 IdP → manaba）は `browser.credential_use: success` の直後に
+`post_login_unconfirmed` になり、どの条件が外れたかの記録が無かった。session 開始（01:52:53.8Z）から login 完了の記録
+（01:53:09.75Z）まで 16 秒で、IdP の中継（localStorage の interstitial の自動 POST、ログイン後の localStorage 書き込みの
+interstitial、属性送信の同意頁、SAML の自動 POST）を含む login と 15 秒の待ちの両方には足りないので、待ちが期限前に終わった
+（Page.getFrameTree などの一時的な CDP 失敗を `Err` として即座に打ち切っていた）か、IdP の中継・同意頁で期限を迎えたかの
+どちらかと見る。Shibboleth IdP の既定は同意の記録を browser 側（localStorage）に持つので、毎回新しい profile の
+session では同意頁が毎回出ると見込む。
+
+決定（D2-2 の補い。安全側の条件は変えない）:
+
+1. **待ち方。** 区間は従来どおり「ログイン頁を離れ・top が read_origins・password 欄 0」のときだけ閉じる。待ちは最長 60 秒
+   （15 秒から延長）で、IdP の頁・SAML の自動 POST・about:blank 等の中間状態と一時的な CDP 失敗は打ち切らずに待ち続ける。
+   観測はその間ずっと止まったまま。
+2. **早く終える状態。** IdP の属性送信の同意頁（Shibboleth の固定の欄名 `_shib_idp_consentIds` 等で判定）と、IdP の
+   login form の再表示（ログイン失敗）は、3 秒続いたら待ちを終える。同意は人の判断なので、agent にも controller にも
+   押させない（承認画面の後に人がどうするかを決める）。
+3. **理由の固定 code。** 観測を再開しなかった理由を progress に出す: `post_login_consent_required`・`post_login_idp_login_form`・
+   `post_login_idp_timeout`・`post_login_password_field`・`post_login_other_origin`・`post_login_login_document`・
+   `post_login_no_document`・`post_login_check_failed`・`post_login_resume_failed` と、top の origin の分類
+   （`idp` / `read_origin` / `other` / `none`）。URL・頁の内容は出さない。
+4. **launcher protocol 6。** `authenticate_result` に `held_reason`（固定 code）を足した。daemon は post_login を使う login に
+   v6 を要求する（username 欄だけなら v5 のまま）。launcher は要求の `report_held_reason` が真のときだけ `held_reason` を返すので、
+   v5 の daemon と v6 の launcher も併存できる。
+5. **task policy。** 本番の task policy（`https://*.tsukuba.ac.jp`、全 action）で post_login の実効集合は空でなく、区間が閉じれば
+   snapshot / extract などは戻る。その run の「not permitted by the task browser policy」は観測停止のままの状態の表示で、
+   policy の欠けではない（試験 `post_login_read_with_the_production_task_policy_shape_enables_reading`）。

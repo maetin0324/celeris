@@ -64,6 +64,10 @@ pub struct AuthenticateArgs {
     /// `actions`; otherwise observation stays stopped until the session ends.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub post_login: Option<task_core::browser_wait::PostLogin>,
+    /// v6: the daemon reads `held_reason` in the answer. A launcher answers with it only when asked,
+    /// so a v5 daemon (which does not know the field) can talk to a v6 launcher.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub report_held_reason: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -82,6 +86,25 @@ pub enum LoginObservation {
     Held,
     /// The auth section closed on the post-login conditions.
     Resumed,
+}
+
+/// v6: what a successful login left (the fixed observation state and, when held after an opt-in,
+/// the fixed reason — no URL, no page data).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LoginResult {
+    pub observation: LoginObservation,
+    pub held_reason: Option<crate::browser_cdp_sink::PostLoginHeld>,
+}
+
+impl LoginResult {
+    pub const HELD: Self = Self {
+        observation: LoginObservation::Held,
+        held_reason: None,
+    };
+    pub const RESUMED: Self = Self {
+        observation: LoginObservation::Resumed,
+        held_reason: None,
+    };
 }
 
 /// browser policy の非機密部分（許可 domain・許可 action・lease の長さ）。
@@ -198,13 +221,20 @@ pub enum Outcome {
 /// v4 未満の launcher に credential login を頼まない。v5 で `authenticate` に username selector と
 /// post_login、応答に `observation` を足した（ADR 2026-10-09 credential username / post-login D1-5）。
 /// daemon は policy がそのどちらかを使うなら v5 未満の launcher に頼まない（承認は消費しない）。
-pub const PROTOCOL_VERSION: u32 = 5;
+///
+/// v6 で `authenticate_result` に固定の `held_reason`（観測を再開しなかった理由）を足し、ログイン後の
+/// 待ちを IdP の中継頁を通して最長 60 秒にした（ADR 2026-10-09 credential username / post-login 付記
+/// 2026-10-10）。post_login を使う login は v6 を要求する。
+pub const PROTOCOL_VERSION: u32 = 6;
 
 /// credential login（`auth_begin` / `authenticate`）を受ける最小の protocol 版。
 pub const CREDENTIAL_LOGIN_PROTOCOL: u32 = 4;
 
 /// username 欄の注入・ログイン後の読み取りを受ける最小の protocol 版。
-pub const POST_LOGIN_PROTOCOL: u32 = 5;
+pub const POST_LOGIN_PROTOCOL: u32 = 6;
+
+/// username 欄の一括注入だけを受ける最小の protocol 版（v5）。
+pub const USERNAME_PROTOCOL: u32 = 5;
 
 /// launcher が `start_session` で返す session の束縛（launcher が `verify_isolation` を掛けた
 /// runtime process の pid・starttime、launcher が採った userns の owner UID と 6 つの namespace の
@@ -299,6 +329,9 @@ pub enum Response {
         /// v5. v4 の launcher は出さない（= 観測停止のまま）。
         #[serde(default, skip_serializing_if = "Option::is_none")]
         observation: Option<LoginObservation>,
+        /// v6: why observation stayed stopped after a post-login opt-in (fixed code).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        held_reason: Option<crate::browser_cdp_sink::PostLoginHeld>,
     },
     Error {
         code: ErrorCode,

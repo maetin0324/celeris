@@ -285,6 +285,7 @@ fn login_args(session_id: &str, lease_id: &str) -> AuthenticateArgs {
         submit_selector: Some("button[name=\"_eventId_proceed\"]".into()),
         username_selector: None,
         post_login: None,
+        report_held_reason: false,
     }
 }
 
@@ -310,6 +311,7 @@ fn launcher_credential_authenticate_is_fixed_and_status_only() {
     let response = serde_json::to_string(&Response::AuthenticateResult {
         status: AuthenticationStatus::Success,
         observation: None,
+        held_reason: None,
     })
     .expect("serialize status");
     assert_eq!(
@@ -378,6 +380,7 @@ fn launcher_credential_v5_authenticate_carries_username_and_post_login_only_in_f
     let resumed = serde_json::to_string(&Response::AuthenticateResult {
         status: AuthenticationStatus::Success,
         observation: Some(LoginObservation::Resumed),
+        held_reason: None,
     })
     .expect("json");
     assert_eq!(
@@ -390,7 +393,8 @@ fn launcher_credential_v5_authenticate_carries_username_and_post_login_only_in_f
         v4,
         Response::AuthenticateResult {
             status: AuthenticationStatus::Success,
-            observation: None
+            observation: None,
+            held_reason: None
         }
     );
 }
@@ -454,10 +458,7 @@ fn launcher_credential_authenticate_backend_rejection_has_status_only_response()
             std::os::fd::OwnedFd::from(broker),
         )
         .expect("fixed authentication response");
-    assert_eq!(
-        status,
-        (AuthenticationStatus::Rejected, LoginObservation::Held)
-    );
+    assert_eq!(status, (AuthenticationStatus::Rejected, LoginResult::HELD));
 }
 
 /// FD は `authenticate` にちょうど 1 本だけ。FD 無しの `authenticate`・FD 付きの他の要求は
@@ -515,10 +516,7 @@ fn launcher_credential_authenticate_fd_rules_fail_closed() {
             std::os::fd::OwnedFd::from(file),
         )
         .expect("status");
-    assert_eq!(
-        status,
-        (AuthenticationStatus::Rejected, LoginObservation::Held)
-    );
+    assert_eq!(status, (AuthenticationStatus::Rejected, LoginResult::HELD));
     // The session and the connection are still usable.
     assert!(c.observe(&session.session_id, "lease1").is_ok());
 }

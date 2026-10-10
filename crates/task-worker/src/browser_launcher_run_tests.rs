@@ -98,7 +98,7 @@ impl BackendSession for FakeSession {
         &mut self,
         args: &AuthenticateArgs,
         _broker: UnixStream,
-    ) -> Result<crate::browser_launcher::protocol::LoginObservation, ErrorCode> {
+    ) -> Result<crate::browser_launcher::protocol::LoginResult, ErrorCode> {
         if args.session_id.is_empty()
             || args.auth_section_id.is_empty()
             || args.credential_lease_id.is_empty()
@@ -106,7 +106,7 @@ impl BackendSession for FakeSession {
         {
             return Err(ErrorCode::BadRequest);
         }
-        Ok(crate::browser_launcher::protocol::LoginObservation::Held)
+        Ok(crate::browser_launcher::protocol::LoginResult::HELD)
     }
     fn stop(mut self: Box<Self>) {
         let _ = self.child.kill();
@@ -246,6 +246,7 @@ fn launcher_credential_authenticate_fake_backend_returns_status_only() {
                 submit_selector: None,
                 username_selector: None,
                 post_login: None,
+                report_held_reason: false,
             },
             std::os::fd::OwnedFd::from(broker),
         )
@@ -254,7 +255,7 @@ fn launcher_credential_authenticate_fake_backend_returns_status_only() {
         status,
         (
             AuthenticationStatus::Success,
-            crate::browser_launcher::protocol::LoginObservation::Held
+            crate::browser_launcher::protocol::LoginResult::HELD
         )
     );
     runtime.stop().expect("stop");
@@ -2266,7 +2267,7 @@ mod launcher_login {
             &mut self,
             args: &AuthenticateArgs,
             broker: UnixStream,
-        ) -> Result<crate::browser_launcher::protocol::LoginObservation, ErrorCode> {
+        ) -> Result<crate::browser_launcher::protocol::LoginResult, ErrorCode> {
             *self.brokers.lock().expect("lock") += 1;
             let section = self.login.as_mut().ok_or(ErrorCode::Unauthorized)?;
             run_login(
@@ -2551,9 +2552,7 @@ mod launcher_login {
         .await;
         assert_eq!(
             login,
-            CredentialLogin::Recorded(Ok(
-                crate::browser_launcher::protocol::LoginObservation::Held
-            ))
+            CredentialLogin::Recorded(Ok(crate::browser_launcher::protocol::LoginResult::HELD))
         );
         assert_eq!(
             *brokers.lock().expect("lock"),
@@ -2606,6 +2605,124 @@ mod launcher_login {
         drop(chrome);
     }
 
+    /// 付記 2026-10-10: an IdP attribute-release consent page after the login holds observation and
+    /// the launcher (protocol 6) reports `consent_required` through the real protocol.
+    #[tokio::test]
+    async fn launcher_credential_post_login_consent_page_is_held_with_its_reason() {
+        use crate::browser::post_login_tests::{
+            FIXTURE, USER, origins, trusted as post_login_trusted,
+        };
+        use crate::browser_launcher::protocol::LoginResult;
+        const PASSWORD: &str = "launcher-post-login-pw-a81f3c";
+        let chrome = ChromeFixture::start_with(FIXTURE);
+        std::fs::write(chrome.directory.path().join("consent"), "1").expect("consent flag");
+        let o = origins(&chrome);
+        let brokers = Arc::new(Mutex::new(0));
+        let dir = tempfile::tempdir().expect("tempdir");
+        let sock = dir.path().join("launcher.sock");
+        let server = LauncherServer::bind(
+            &sock,
+            ServerConfig {
+                allowed_uids: vec![DaemonIds::current().uid],
+                limits: LauncherLimits::default(),
+            },
+            Arc::new(ChromeBackend {
+                controller: Arc::clone(&chrome.controller),
+                chrome_pid: chrome.chrome_pid as i32,
+                brokers: Arc::clone(&brokers),
+            }),
+            Registry::open(dir.path().join("state"), "inst-post-login-consent").expect("registry"),
+        )
+        .expect("bind");
+        let _handle = server.spawn().expect("spawn");
+        let task_id = task_core::TaskId::new();
+        let mut trusted = post_login_trusted(&o, &[o.lms.as_str()]);
+        trusted.policy_id = POLICY_ID.into();
+        let credd = tempfile::tempdir().expect("credd");
+        credentiald_with(
+            credd.path(),
+            &CredentialPolicy {
+                policy_id: POLICY_ID.into(),
+                revision: 1,
+                exact_origin: o.idp.clone(),
+                task_id: task_id.to_string(),
+                max_ttl_seconds: 60,
+                require_approval: true,
+                allow_persistence: false,
+                login_url: Some(trusted.login_url.clone()),
+                password_selector: Some(trusted.password_selector.clone()),
+                submit_selector: trusted.submit_selector.clone(),
+                username_selector: trusted.username_selector.clone(),
+                post_login: trusted.post_login.clone(),
+            },
+            USER,
+            PASSWORD,
+        );
+        let run_dir = credd.path().join("run");
+        let (runtime, _) =
+            LauncherRuntime::start(&sock, "task-1", "run-post-login-consent", policy())
+                .expect("launcher session");
+        assert_eq!(
+            runtime.protocol_version().expect("hello"),
+            crate::browser_launcher::protocol::POST_LOGIN_PROTOCOL
+        );
+        let runtime = Arc::new(runtime);
+        crate::browser_cdp_sink::UnixInjectionClient::new(
+            celeris_credentiald::injection_ipc::injection_socket(&run_dir),
+        )
+        .register_live_session(LiveSessionRegistration {
+            session_id: runtime.session_id().to_owned(),
+            controller_pid: std::process::id(),
+            controller_start: process_start(std::process::id()).expect("self start"),
+            runtime_pid: chrome.chrome_pid,
+            runtime_start: process_start(chrome.chrome_pid).expect("chrome start"),
+        })
+        .expect("register live session");
+        let approval = consumed_with(&o.idp, task_id, trusted);
+        let sup = crate::browser_credential::CredentialSupervisor {
+            broker: Arc::new(crate::browser_credential::UnixLeaseBroker {
+                control_socket: run_dir.join("celeris-credentiald/control.sock"),
+            }),
+            bridge: PathBuf::from("/nonexistent/celeris-credentiald"),
+            runtime_dir: Some(run_dir.clone()),
+        };
+        let read = crate::browser::PostLoginRead {
+            read_origins: vec![o.lms.clone()],
+            actions: ["snapshot", "extract", "screenshot", "download", "click"]
+                .map(String::from)
+                .to_vec(),
+        };
+        let sink = AuthSink::default();
+        let login = launcher_credential_login(
+            &runtime,
+            &approval,
+            Some(&read),
+            &sup,
+            &run_dir,
+            &task_id.to_string(),
+            "run-resumed",
+            &approval.wait.session_id,
+            &sink,
+        )
+        .await;
+        // The answer names the condition (fixed code); observation stays stopped.
+        assert_eq!(
+            login,
+            CredentialLogin::Recorded(Ok(LoginResult {
+                observation: crate::browser_launcher::protocol::LoginObservation::Held,
+                held_reason: Some(crate::browser_cdp_sink::PostLoginHeld::ConsentRequired),
+            }))
+        );
+        {
+            let c = chrome.controller.lock().expect("lock");
+            assert!(c.auth_section_active());
+            assert!(!c.post_login_active());
+        }
+        assert!(!format!("{login:?}").contains(PASSWORD));
+        runtime.stop().expect("stop");
+        drop(chrome);
+    }
+
     /// ADR 2026-10-09 credential username / post-login acceptance (launcher protocol v5, real
     /// credentiald, real Chromium): one approval → one lease → one pair injection fills the IdP's
     /// username and password on the same form (not at the origin root); after submit the SP lands
@@ -2621,7 +2738,7 @@ mod launcher_login {
         use crate::browser::post_login_tests::{
             Agent, COOKIE_VALUE, FIXTURE, USER, origins, trusted as post_login_trusted,
         };
-        use crate::browser_launcher::protocol::LoginObservation;
+        use crate::browser_launcher::protocol::LoginResult;
         const PASSWORD: &str = "launcher-post-login-pw-a81f3c";
         let chrome = ChromeFixture::start_with(FIXTURE);
         let o = origins(&chrome);
@@ -2712,10 +2829,7 @@ mod launcher_login {
             &sink,
         )
         .await;
-        assert_eq!(
-            login,
-            CredentialLogin::Recorded(Ok(LoginObservation::Resumed))
-        );
+        assert_eq!(login, CredentialLogin::Recorded(Ok(LoginResult::RESUMED)));
         assert_eq!(*brokers.lock().expect("lock"), 1);
         // The IdP got both fields from the one injection.
         let received = chrome.directory.path().join("received");
@@ -2938,6 +3052,7 @@ mod launcher_login {
             submit_selector: Some("button[name=_eventId_proceed]".into()),
             username_selector: None,
             post_login: None,
+            report_held_reason: false,
         };
         let result = run_login(
             &chrome.controller,
@@ -3088,16 +3203,17 @@ fn launcher_credential_v5_required_for_username_or_post_login_with_explicit_mess
     wait.trusted_login = Some(t);
     assert_eq!(required_launcher_protocol(&wait), 5);
     let mut t = trusted_login();
+    t.username_selector = Some("#user".into());
     t.post_login = Some(task_core::browser_wait::PostLogin {
         read_origins: vec!["https://lms.example.com".into()],
         actions: vec![task_core::browser_wait::PostLoginAction::Snapshot],
     });
     wait.trusted_login = Some(t);
-    assert_eq!(required_launcher_protocol(&wait), 5);
-    let text = denied_text(launcher_too_old(4, 5));
-    assert!(text.contains("protocol 4"), "{text}");
+    assert_eq!(required_launcher_protocol(&wait), 6);
+    let text = denied_text(launcher_too_old(5, 6));
+    assert!(text.contains("protocol 5"), "{text}");
     assert!(
-        text.contains("rebuild and replace celeris-browser-launcher (protocol 5 required)"),
+        text.contains("rebuild and replace celeris-browser-launcher (protocol 6 required)"),
         "{text}"
     );
 }
@@ -3136,4 +3252,77 @@ fn post_login_prompt_names_origins_and_actions_only_when_resumed() {
     );
     assert!(resumed.contains("password field cannot be"), "{resumed}");
     assert!(!resumed.contains("disabled for the rest of this session"));
+}
+
+/// 付記 2026-10-10: the production task policy shape (task 01M4GYJ3XGJNWZQDF35F1MDE0H: wildcard
+/// network domain `https://*.tsukuba.ac.jp`, all business actions) with the manaba site policy's
+/// opt-in re-enables snapshot / extract / click / screenshot / download once the section closes.
+/// While held, the credential harness policy keeps them off ("not permitted by the task browser
+/// policy" in that run was the held state, not a policy gap).
+#[test]
+fn post_login_read_with_the_production_task_policy_shape_enables_reading() {
+    use task_core::BrowserAction as B;
+    use task_core::browser_wait::{PostLogin, PostLoginAction as P};
+    let actions = [
+        B::Navigate,
+        B::Click,
+        B::Snapshot,
+        B::Extract,
+        B::Screenshot,
+        B::Download,
+        B::Scroll,
+        B::CredentialUse,
+    ];
+    let domains = vec!["https://*.tsukuba.ac.jp".to_string()];
+    let grant = task_core::BrowserCapability {
+        allowed_domains: domains.clone(),
+        allowed_actions: Some(actions.to_vec()),
+        approval_actions: vec![],
+        credential_policy_ids: vec!["manaba-tsukuba".into()],
+        ..Default::default()
+    };
+    let task = task_core::BrowserTaskPolicy {
+        policy_id: "auto".into(),
+        revision: 1,
+        domain_mode: task_core::BrowserDomainMode::CommonHosts,
+        navigation_origins: vec![],
+        network_domains: domains,
+        allowed_actions: actions.to_vec(),
+        approval_actions: vec![],
+        credential_policy_ids: vec!["manaba-tsukuba".into()],
+        artifact_policy_id: None,
+    };
+    let policy =
+        crate::browser_policy::prepare(&grant, Some(&task), super::super::SUPPORTED_VERSION)
+            .expect("policy");
+    let mut trusted = trusted_login();
+    trusted.post_login = Some(PostLogin {
+        read_origins: vec!["https://manaba.tsukuba.ac.jp".into()],
+        actions: vec![
+            P::Snapshot,
+            P::Extract,
+            P::Click,
+            P::Screenshot,
+            P::Download,
+        ],
+    });
+    let (read, bytes) = super::super::post_login_read(&policy, &trusted)
+        .expect("ok")
+        .expect("opt-in is effective");
+    assert_eq!(
+        read.read_origins,
+        vec!["https://manaba.tsukuba.ac.jp".to_string()]
+    );
+    let allow = serde_json::from_slice::<task_core::AgentBrowserActionPolicy>(&bytes)
+        .expect("policy")
+        .allow;
+    for a in ["snapshot", "gettext", "click", "screenshot", "download"] {
+        assert!(allow.iter().any(|x| x == a), "{a} in {allow:?}");
+    }
+    let held = serde_json::from_slice::<task_core::AgentBrowserActionPolicy>(
+        &super::super::credential_harness_policy(&policy.action_policy).expect("held"),
+    )
+    .expect("held policy")
+    .allow;
+    assert!(!held.iter().any(|x| x == "snapshot" || x == "gettext"));
 }

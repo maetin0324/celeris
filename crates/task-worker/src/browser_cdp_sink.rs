@@ -30,6 +30,8 @@ const MAX_FRAME: usize = 65536;
 /// single messages well above the sink bound (ADR 2026-10-09 credential username / post-login D2-6).
 const MAX_CDP_MESSAGE: usize = 64 << 20;
 const TIMEOUT: Duration = Duration::from_secs(5);
+/// Shibboleth IdP attribute-release consent form markers (fixed names; the page text is not read).
+const CONSENT_MARKER_JS: &str = "!!document.querySelector('[name=\"_shib_idp_consentIds\"],[name=\"_shib_idp_consentOptions\"],[name=\"_eventId_AttributeReleaseRejected\"]')";
 /// Isolated world for the controller's own post-login checks (never visible to the agent).
 const CHECK_WORLD: &str = "celeris-post-login";
 /// Counts `input[type=password]` in the document, its open shadow roots and same-origin frames.
@@ -103,12 +105,140 @@ pub struct InjectionRequest {
     pub username_selector: Option<String>,
 }
 
-/// Whether the post-login close conditions hold now (ADR 2026-10-09 credential username /
-/// post-login D2-2). `Pending` keeps observation stopped; the caller retries until its deadline.
+/// What the login tab shows now (ADR 2026-10-09 credential username / post-login D2-2, 付記
+/// 2026-10-10). Only `Ready` closes the auth section; every other state keeps observation stopped.
+/// Nothing about the page crosses besides this fixed state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PostLoginCheck {
+pub enum PostLoginProbe {
+    /// Left the injected document, top on a `read_origins` origin, no password input.
     Ready,
-    Pending,
+    /// Still the injected login document.
+    LoginDocument,
+    /// No http(s) top document (blank or in between).
+    NoDocument,
+    /// An IdP page without a password field (interstitial, SAML auto-POST, error).
+    IdpPage,
+    /// An IdP attribute-release consent page (needs a human decision).
+    IdpConsent,
+    /// The IdP shows a login form again (the login was refused).
+    IdpLoginForm,
+    /// A `read_origins` page that has a password input.
+    ReadOriginPasswordField,
+    /// Any other origin.
+    OtherOrigin,
+    /// The controller could not read the tab (a transient CDP failure).
+    CheckFailed,
+}
+
+/// Why the auth section did not close (fixed codes; progress and the launcher answer carry only
+/// these).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PostLoginHeld {
+    ConsentRequired,
+    IdpLoginForm,
+    IdpTimeout,
+    PasswordField,
+    OtherOrigin,
+    LoginDocument,
+    NoDocument,
+    CheckFailed,
+    /// The conditions held but the store / policy transition failed (daemon side).
+    ResumeFailed,
+}
+
+impl PostLoginHeld {
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::ConsentRequired => "post_login_consent_required",
+            Self::IdpLoginForm => "post_login_idp_login_form",
+            Self::IdpTimeout => "post_login_idp_timeout",
+            Self::PasswordField => "post_login_password_field",
+            Self::OtherOrigin => "post_login_other_origin",
+            Self::LoginDocument => "post_login_login_document",
+            Self::NoDocument => "post_login_no_document",
+            Self::CheckFailed => "post_login_check_failed",
+            Self::ResumeFailed => "post_login_resume_failed",
+        }
+    }
+
+    /// The top document's origin category when the wait ended (`idp` / `read_origin` / `other` /
+    /// `none`); never the URL.
+    pub fn top_origin(self) -> &'static str {
+        match self {
+            Self::ConsentRequired | Self::IdpLoginForm | Self::IdpTimeout | Self::LoginDocument => {
+                "idp"
+            }
+            Self::PasswordField => "read_origin",
+            Self::OtherOrigin => "other",
+            Self::NoDocument | Self::CheckFailed | Self::ResumeFailed => "none",
+        }
+    }
+
+    fn from_probe(probe: PostLoginProbe) -> Self {
+        match probe {
+            PostLoginProbe::IdpConsent => Self::ConsentRequired,
+            PostLoginProbe::IdpLoginForm => Self::IdpLoginForm,
+            PostLoginProbe::IdpPage => Self::IdpTimeout,
+            PostLoginProbe::ReadOriginPasswordField => Self::PasswordField,
+            PostLoginProbe::OtherOrigin => Self::OtherOrigin,
+            PostLoginProbe::LoginDocument => Self::LoginDocument,
+            PostLoginProbe::NoDocument => Self::NoDocument,
+            PostLoginProbe::CheckFailed | PostLoginProbe::Ready => Self::CheckFailed,
+        }
+    }
+}
+
+/// How long the post-login wait may last in all (several IdP / SAML auto-POST hops).
+pub const POST_LOGIN_WAIT: Duration = Duration::from_secs(60);
+/// A page that needs a human (consent) or shows the login form again ends the wait once it has
+/// stayed for this long.
+pub const POST_LOGIN_STABLE: Duration = Duration::from_secs(3);
+
+/// The bounded wait over [`PostLoginProbe`]s: `Ready` ends it at once; a consent page or a
+/// repeated login form that stays for [`POST_LOGIN_STABLE`] ends it early with its reason; every
+/// other state (interstitials, SAML auto-POST hops, redirects) is waited through until `deadline`,
+/// when the last state gives the reason.
+#[derive(Debug)]
+pub struct PostLoginWaiter {
+    deadline: std::time::Instant,
+    stable: Duration,
+    last: Option<(PostLoginProbe, std::time::Instant)>,
+}
+
+impl PostLoginWaiter {
+    pub fn new(now: std::time::Instant, timeout: Duration, stable: Duration) -> Self {
+        Self {
+            deadline: now + timeout,
+            stable,
+            last: None,
+        }
+    }
+
+    /// `None` = keep waiting; `Some(Ok)` = close the section; `Some(Err)` = stay stopped.
+    pub fn observe(
+        &mut self,
+        probe: PostLoginProbe,
+        now: std::time::Instant,
+    ) -> Option<Result<(), PostLoginHeld>> {
+        if probe == PostLoginProbe::Ready {
+            return Some(Ok(()));
+        }
+        let since = match self.last {
+            Some((p, since)) if p == probe => since,
+            _ => now,
+        };
+        self.last = Some((probe, since));
+        let terminal = matches!(
+            probe,
+            PostLoginProbe::IdpConsent | PostLoginProbe::IdpLoginForm
+        );
+        if (terminal && now.saturating_duration_since(since) >= self.stable) || now >= self.deadline
+        {
+            return Some(Err(PostLoginHeld::from_probe(probe)));
+        }
+        None
+    }
 }
 
 /// A completed broker call returns only a receipt. The FD carries the CDP
@@ -628,46 +758,91 @@ impl CdpController {
         self.post_login.is_some()
     }
 
-    /// ADR 2026-10-09 credential username / post-login D2-2: the auth section may close only when
-    /// the login tab (`own`) left the injected document (`login_loader`), its top document is on a
-    /// `read_origins` origin, and no password input remains. Nothing about the page crosses: the
-    /// result is a fixed state.
-    pub fn post_login_ready(
+    /// ADR 2026-10-09 credential username / post-login D2-2: what the login tab (`own`) shows now. The
+    /// section may close only on `Ready`: the tab left the injected document (`login_loader`), its
+    /// top document is on a `read_origins` origin and no password input remains. IdP pages are
+    /// classified (consent, login form again, other) for the held reason; the controller reads only
+    /// fixed markers in its isolated world. A failed read is `CheckFailed` (the caller keeps waiting).
+    pub fn post_login_probe(
         &mut self,
         own: &str,
         login_loader: &str,
+        idp_origin: &str,
         read_origins: &[String],
-    ) -> Result<PostLoginCheck, InjectionError> {
+    ) -> Result<PostLoginProbe, InjectionError> {
         if self.auth_section.is_none() || self.restored {
             return Err(InjectionError::AuthSectionRequired);
         }
-        let tree = self.call("Page.getFrameTree", json!({}), Some(own))?;
+        let Ok(tree) = self.call("Page.getFrameTree", json!({}), Some(own)) else {
+            return Ok(PostLoginProbe::CheckFailed);
+        };
         let frame = &tree["result"]["frameTree"]["frame"];
-        if frame["loaderId"].as_str().is_none_or(|l| l == login_loader) {
-            return Ok(PostLoginCheck::Pending);
+        let (Some(loader), Some(frame_id)) = (frame["loaderId"].as_str(), frame["id"].as_str())
+        else {
+            return Ok(PostLoginProbe::CheckFailed);
+        };
+        if loader == login_loader {
+            return Ok(PostLoginProbe::LoginDocument);
         }
         let Some(top) = origin(frame["url"].as_str()) else {
-            return Ok(PostLoginCheck::Pending);
+            return Ok(PostLoginProbe::NoDocument);
         };
-        if !read_origins.contains(&top) {
-            return Ok(PostLoginCheck::Pending);
+        let frame_id = frame_id.to_owned();
+        let loader = loader.to_owned();
+        if top == idp_origin {
+            return Ok(match self.idp_markers(own, &frame_id) {
+                Ok((_, true)) => PostLoginProbe::IdpConsent,
+                Ok((n, false)) if n > 0 => PostLoginProbe::IdpLoginForm,
+                Ok(_) => PostLoginProbe::IdpPage,
+                Err(_) => PostLoginProbe::CheckFailed,
+            });
         }
-        let Some(frame_id) = frame["id"].as_str().map(str::to_owned) else {
-            return Ok(PostLoginCheck::Pending);
-        };
+        if !read_origins.contains(&top) {
+            return Ok(PostLoginProbe::OtherOrigin);
+        }
         match self.password_inputs(own, &frame_id) {
             Ok(0) => {}
-            Ok(_) | Err(_) => return Ok(PostLoginCheck::Pending),
+            Ok(_) => return Ok(PostLoginProbe::ReadOriginPasswordField),
+            Err(_) => return Ok(PostLoginProbe::CheckFailed),
         }
         // The same document must still be the top document after the count.
-        let after = self.call("Page.getFrameTree", json!({}), Some(own))?;
-        if after["result"]["frameTree"]["frame"]["loaderId"] != frame["loaderId"] {
-            return Ok(PostLoginCheck::Pending);
+        let Ok(after) = self.call("Page.getFrameTree", json!({}), Some(own)) else {
+            return Ok(PostLoginProbe::CheckFailed);
+        };
+        if after["result"]["frameTree"]["frame"]["loaderId"].as_str() != Some(loader.as_str()) {
+            return Ok(PostLoginProbe::CheckFailed);
         }
-        Ok(PostLoginCheck::Ready)
+        Ok(PostLoginProbe::Ready)
     }
 
-    /// Close the auth section after [`Self::post_login_ready`] returned `Ready`: clear injected values
+    /// Password inputs and whether a Shibboleth attribute-release consent form is present on an
+    /// IdP page (counted in the controller's isolated world; nothing else is read).
+    fn idp_markers(
+        &mut self,
+        session: &str,
+        frame_id: &str,
+    ) -> Result<(u64, bool), InjectionError> {
+        let passwords = self.password_inputs(session, frame_id)?;
+        let world = self.call(
+            "Page.createIsolatedWorld",
+            json!({"frameId":frame_id,"worldName":CHECK_WORLD}),
+            Some(session),
+        )?;
+        let context = world["result"]["executionContextId"]
+            .as_i64()
+            .ok_or(InjectionError::TargetChanged)?;
+        let consent = self.call(
+            "Runtime.evaluate",
+            json!({"expression":CONSENT_MARKER_JS,"contextId":context,"returnByValue":true,"silent":true}),
+            Some(session),
+        )?;
+        Ok((
+            passwords,
+            consent["result"]["result"]["value"] == Value::Bool(true),
+        ))
+    }
+
+    /// Close the auth section after [`Self::post_login_probe`] returned `Ready`: clear injected values
     /// (skipped when their document is gone), discard everything produced while stopped, and resume
     /// agent observation under the post-login checks for the rest of the session. `own` (the login
     /// tab's controller session) stays private: its events are never queued for the agent.
@@ -1377,33 +1552,35 @@ impl CdpController {
     }
 }
 
-/// ADR 2026-10-09 credential username / post-login D2-2 for a blocking caller (the launcher):
-/// poll [`CdpController::post_login_ready`] every 50 ms until `Ready` or `timeout`, then close the
-/// auth section with [`CdpController::resume_after_login`]. `false` keeps observation stopped
-/// (`post_login_unconfirmed`).
+/// ADR 2026-10-09 credential username / post-login D2-2 for a blocking caller (the launcher): probe
+/// every 100 ms under a [`PostLoginWaiter`] (at most `timeout`), then close the auth section with
+/// [`CdpController::resume_after_login`]. `Err` keeps observation stopped and says why.
 pub fn resume_after_login_blocking(
     controller: &std::sync::Arc<std::sync::Mutex<CdpController>>,
     own: &str,
     login_loader: &str,
+    idp_origin: &str,
     read_origins: &[String],
     timeout: Duration,
-) -> bool {
-    let deadline = std::time::Instant::now() + timeout;
+) -> Result<(), PostLoginHeld> {
+    let mut waiter = PostLoginWaiter::new(std::time::Instant::now(), timeout, POST_LOGIN_STABLE);
     loop {
-        let ready = match controller.lock() {
-            Ok(mut c) => c.post_login_ready(own, login_loader, read_origins),
-            Err(_) => return false,
+        let probe = match controller.lock() {
+            Ok(mut c) => c
+                .post_login_probe(own, login_loader, idp_origin, read_origins)
+                .map_err(|_| PostLoginHeld::CheckFailed)?,
+            Err(_) => return Err(PostLoginHeld::CheckFailed),
         };
-        match ready {
-            Ok(PostLoginCheck::Ready) => {
+        match waiter.observe(probe, std::time::Instant::now()) {
+            Some(Ok(())) => {
                 return controller
                     .lock()
-                    .is_ok_and(|mut c| c.resume_after_login(own, read_origins.to_vec()).is_ok());
+                    .map_err(|_| PostLoginHeld::CheckFailed)?
+                    .resume_after_login(own, read_origins.to_vec())
+                    .map_err(|_| PostLoginHeld::CheckFailed);
             }
-            Ok(PostLoginCheck::Pending) if std::time::Instant::now() < deadline => {
-                std::thread::sleep(Duration::from_millis(50));
-            }
-            _ => return false,
+            Some(Err(held)) => return Err(held),
+            None => std::thread::sleep(Duration::from_millis(100)),
         }
     }
 }
@@ -1993,6 +2170,65 @@ mod idle_pump_tests {
         );
         assert!(c.observation_stopped());
         assert!(c.take_agent_events().is_empty());
+    }
+
+    /// 付記 2026-10-10: the wait goes through interstitial / SAML hops, ends early only on a stable
+    /// consent page or repeated login form, and reports the last state at the deadline.
+    #[test]
+    fn post_login_waiter_waits_through_hops_and_names_the_failed_condition() {
+        use PostLoginProbe as P;
+        let t0 = std::time::Instant::now();
+        let at = |ms: u64| t0 + Duration::from_millis(ms);
+        let mut w = PostLoginWaiter::new(t0, Duration::from_secs(60), Duration::from_secs(3));
+        for (ms, p) in [
+            (0, P::LoginDocument),
+            (500, P::IdpPage),
+            (20_000, P::IdpPage),
+            (30_000, P::NoDocument),
+            (30_100, P::OtherOrigin),
+            (31_000, P::CheckFailed),
+        ] {
+            assert_eq!(w.observe(p, at(ms)), None, "{p:?}");
+        }
+        assert_eq!(w.observe(P::Ready, at(40_000)), Some(Ok(())));
+        let mut w = PostLoginWaiter::new(t0, Duration::from_secs(60), Duration::from_secs(3));
+        assert_eq!(w.observe(P::IdpConsent, at(1_000)), None);
+        assert_eq!(w.observe(P::IdpConsent, at(3_000)), None);
+        assert_eq!(
+            w.observe(P::IdpConsent, at(4_000)),
+            Some(Err(PostLoginHeld::ConsentRequired))
+        );
+        let mut w = PostLoginWaiter::new(t0, Duration::from_secs(60), Duration::from_secs(3));
+        assert_eq!(w.observe(P::IdpLoginForm, at(0)), None);
+        assert_eq!(w.observe(P::IdpPage, at(2_000)), None);
+        assert_eq!(
+            w.observe(P::IdpLoginForm, at(3_500)),
+            None,
+            "stability restarts"
+        );
+        assert_eq!(
+            w.observe(P::IdpLoginForm, at(6_600)),
+            Some(Err(PostLoginHeld::IdpLoginForm))
+        );
+        for (p, held) in [
+            (P::IdpPage, PostLoginHeld::IdpTimeout),
+            (P::ReadOriginPasswordField, PostLoginHeld::PasswordField),
+            (P::OtherOrigin, PostLoginHeld::OtherOrigin),
+            (P::LoginDocument, PostLoginHeld::LoginDocument),
+        ] {
+            let mut w = PostLoginWaiter::new(t0, Duration::from_secs(60), Duration::from_secs(3));
+            assert_eq!(w.observe(p, at(59_000)), None);
+            assert_eq!(w.observe(p, at(60_000)), Some(Err(held)));
+        }
+        assert_eq!(
+            PostLoginHeld::ConsentRequired.code(),
+            "post_login_consent_required"
+        );
+        assert_eq!(PostLoginHeld::PasswordField.top_origin(), "read_origin");
+        assert_eq!(
+            serde_json::to_value(PostLoginHeld::IdpTimeout).unwrap(),
+            json!("idp_timeout")
+        );
     }
 
     #[test]

@@ -88,7 +88,7 @@ pub(crate) struct LoginTab {
 }
 
 /// ADR 2026-10-09 credential username / post-login D2-2: how long the close conditions may take.
-pub(crate) const POST_LOGIN_TIMEOUT: Duration = Duration::from_secs(15);
+pub(crate) const POST_LOGIN_TIMEOUT: Duration = crate::browser_cdp_sink::POST_LOGIN_WAIT;
 
 async fn inject_h3(
     relay: &crate::browser_shared_cdp::SharedCdp,
@@ -269,24 +269,53 @@ async fn complete_trusted_login(
 pub(crate) async fn await_post_login(
     controller: &Arc<std::sync::Mutex<crate::browser_cdp_sink::CdpController>>,
     tab: &LoginTab,
+    idp_origin: &str,
     read_origins: &[String],
     timeout: Duration,
-) -> Result<(), &'static str> {
-    let deadline = std::time::Instant::now() + timeout;
+) -> Result<(), crate::browser_cdp_sink::PostLoginHeld> {
+    use crate::browser_cdp_sink::{POST_LOGIN_STABLE, PostLoginHeld, PostLoginWaiter};
+    let mut waiter = PostLoginWaiter::new(std::time::Instant::now(), timeout, POST_LOGIN_STABLE);
     loop {
-        let ready = controller
+        let probe = controller
             .lock()
-            .map_err(|_| "post_login_unconfirmed")?
-            .post_login_ready(&tab.own, &tab.loader, read_origins)
-            .map_err(|_| "post_login_unconfirmed")?;
-        if ready == crate::browser_cdp_sink::PostLoginCheck::Ready {
-            return Ok(());
+            .map_err(|_| PostLoginHeld::CheckFailed)?
+            .post_login_probe(&tab.own, &tab.loader, idp_origin, read_origins)
+            .map_err(|_| PostLoginHeld::CheckFailed)?;
+        match waiter.observe(probe, std::time::Instant::now()) {
+            Some(outcome) => return outcome,
+            None => tokio::time::sleep(Duration::from_millis(100)).await,
         }
-        if std::time::Instant::now() >= deadline {
-            return Err("post_login_unconfirmed");
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
     }
+}
+
+/// ADR 2026-10-09 credential username / post-login 付記 2026-10-10: the post-login outcome as
+/// progress — `resumed`, or `post_login_unconfirmed` with the fixed reason and the top origin's
+/// category (never a URL). Both runtimes report through this.
+pub(crate) fn post_login_progress(
+    sink: &dyn EventSink,
+    outcome: Result<(), crate::browser_cdp_sink::PostLoginHeld>,
+) {
+    let (msg, summary) = match outcome {
+        Ok(()) => ("browser.post_login: resumed".to_string(), "resumed"),
+        Err(held) => (
+            format!(
+                "browser.post_login: post_login_unconfirmed (reason={}, top={})",
+                held.code(),
+                held.top_origin()
+            ),
+            held.code(),
+        ),
+    };
+    sink.progress_with(
+        &msg,
+        &ProgressFields {
+            kind: Some(ProgressKind::ToolResult),
+            tool: Some("browser.post_login".into()),
+            summary: Some(summary.into()),
+            error: outcome.is_err(),
+            ..Default::default()
+        },
+    );
 }
 
 /// ADR 2026-10-09 credential username / post-login D2-1・D2-5: what the agent may read after the
@@ -2074,45 +2103,35 @@ async fn run_with_executable_attempt(
             let mut resumed = None;
             if let (Ok(tab), Some((read, bytes))) = (&result, &post_login_plan) {
                 let controller = shared_cdp.controller();
-                let confirmed =
-                    await_post_login(&controller, tab, &read.read_origins, POST_LOGIN_TIMEOUT)
-                        .await;
-                let reopened = confirmed.is_ok()
-                    && sink
+                let confirmed = await_post_login(
+                    &controller,
+                    tab,
+                    &approval.wait.origin,
+                    &read.read_origins,
+                    POST_LOGIN_TIMEOUT,
+                )
+                .await;
+                let outcome = confirmed.and_then(|()| {
+                    let reopened = sink
                         .browser_auth_section(run_id, &browser.session_id, false)
                         .is_ok()
-                    && controller
-                        .lock()
-                        .map_err(|_| crate::browser_cdp_sink::InjectionError::SinkFailed)
-                        .and_then(|mut c| c.resume_after_login(&tab.own, read.read_origins.clone()))
-                        .is_ok();
-                if reopened {
+                        && controller
+                            .lock()
+                            .map_err(|_| crate::browser_cdp_sink::InjectionError::SinkFailed)
+                            .and_then(|mut c| {
+                                c.resume_after_login(&tab.own, read.read_origins.clone())
+                            })
+                            .is_ok();
+                    if reopened {
+                        Ok(())
+                    } else {
+                        Err(crate::browser_cdp_sink::PostLoginHeld::ResumeFailed)
+                    }
+                });
+                if outcome.is_ok() {
                     resumed = Some((read.clone(), bytes.clone()));
                 }
-                sink.progress_with(
-                    &format!(
-                        "browser.post_login: {}",
-                        if reopened {
-                            "resumed"
-                        } else {
-                            "post_login_unconfirmed"
-                        }
-                    ),
-                    &ProgressFields {
-                        kind: Some(ProgressKind::ToolResult),
-                        tool: Some("browser.post_login".into()),
-                        summary: Some(
-                            if reopened {
-                                "resumed"
-                            } else {
-                                "post_login_unconfirmed"
-                            }
-                            .into(),
-                        ),
-                        error: !reopened,
-                        ..Default::default()
-                    },
-                );
+                post_login_progress(sink, outcome);
             }
             // 0.38.1 reuses the daemon only while config and policy paths stay
             // fixed. Rewrite the policy in place before the harness can run.

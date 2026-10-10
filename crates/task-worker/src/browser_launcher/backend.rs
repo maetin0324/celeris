@@ -10,8 +10,8 @@ use serde::Deserialize;
 use serde_json::json;
 
 use super::protocol::{
-    ActionArgs, AuthenticateArgs, ErrorCode, LoginObservation, Observation, SessionFacts,
-    SessionState, Verb,
+    ActionArgs, AuthenticateArgs, ErrorCode, LoginObservation, LoginResult, Observation,
+    SessionFacts, SessionState, Verb,
 };
 use super::server::{BackendSession, Launched, SessionBackend, StartRequest};
 use super::userns;
@@ -629,7 +629,7 @@ pub(crate) enum AfterLogin {
 }
 
 impl AfterLogin {
-    fn from_login(observation: LoginObservation, args: &AuthenticateArgs) -> Self {
+    pub(crate) fn from_login(observation: LoginObservation, args: &AuthenticateArgs) -> Self {
         use task_core::browser_wait::PostLoginAction as A;
         match (observation, &args.post_login) {
             (LoginObservation::Resumed, Some(post)) => Self::Resumed(
@@ -711,7 +711,7 @@ pub(crate) fn run_login(
     section: &mut LoginSection,
     args: &AuthenticateArgs,
     broker: &mut dyn BrokerClient,
-) -> Result<LoginObservation, ErrorCode> {
+) -> Result<LoginResult, ErrorCode> {
     if section.used || section.auth_section_id != args.auth_section_id {
         return Err(ErrorCode::Unauthorized);
     }
@@ -833,19 +833,24 @@ pub(crate) fn run_login(
     let (own, loader) = result?;
     cleared?;
     let Some(post) = &args.post_login else {
-        return Ok(LoginObservation::Held);
+        return Ok(LoginResult::HELD);
     };
+    // ADR 2026-10-09 credential username / post-login 付記 2026-10-10: wait through the IdP's
+    // interstitial / consent / SAML auto-POST hops (observation stays stopped), at most 60 s.
     Ok(
-        if crate::browser_cdp_sink::resume_after_login_blocking(
+        match crate::browser_cdp_sink::resume_after_login_blocking(
             controller,
             &own,
             &loader,
+            &args.origin,
             &post.read_origins,
-            std::time::Duration::from_secs(15),
+            crate::browser_cdp_sink::POST_LOGIN_WAIT,
         ) {
-            LoginObservation::Resumed
-        } else {
-            LoginObservation::Held
+            Ok(()) => LoginResult::RESUMED,
+            Err(held) => LoginResult {
+                observation: LoginObservation::Held,
+                held_reason: Some(held),
+            },
         },
     )
 }
@@ -878,7 +883,7 @@ impl BackendSession for RuntimeSession {
         &mut self,
         args: &AuthenticateArgs,
         broker: std::os::unix::net::UnixStream,
-    ) -> Result<LoginObservation, ErrorCode> {
+    ) -> Result<LoginResult, ErrorCode> {
         if args.session_id != self.sup.session_id() {
             return Err(ErrorCode::Unauthorized);
         }
@@ -889,14 +894,14 @@ impl BackendSession for RuntimeSession {
         let section = self.login.as_mut().ok_or(ErrorCode::Unauthorized)?;
         // A login attempt (successful or not) fixes what the agent may still do in this session.
         self.after_login = Some(AfterLogin::Held);
-        let observation = run_login(
+        let result = run_login(
             &controller,
             section,
             args,
             &mut PassedInjectionStream::new(broker),
         )?;
-        self.after_login = Some(AfterLogin::from_login(observation, args));
-        Ok(observation)
+        self.after_login = Some(AfterLogin::from_login(result.observation, args));
+        Ok(result)
     }
 
     fn action(&mut self, verb: Verb, args: &ActionArgs) -> Result<Observation, ErrorCode> {
@@ -1046,6 +1051,7 @@ mod after_login_tests {
             submit_selector: None,
             username_selector: Some("#u".into()),
             post_login: post,
+            report_held_reason: false,
         }
     }
 

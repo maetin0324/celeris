@@ -99,3 +99,43 @@ v9 未満 launcher は既存 session を継続できるが、Live View frame は
 理由: 資格情報を入力する本人だけが見るため、本人への表示を既定にしても露出は増えない。既定表示なら本人が login の状態を確認でき、opt-in の設定漏れによる表示不能を避けられる。
 
 試験: `browser_live_credential_default_owner_only` は未設定時（既定）に credential session の本人 owner viewer へ frame が届き、非 owner・agent・LLM・別 viewer へは届かないことを確認する。site policy の試験は置かない。
+
+## 付記 2026-10-10b（実装: protocol v8）
+
+この付記は D1〜D6 の実装契約を確定する。本文中の protocol v6/v5、v6 notification、v5/v6 組合せおよびそれらを名指す試験は、Live View frame に関する記述ではそれぞれ v8/v7、v8 notification、v7/v8 組合せおよび v8/v7 を名指す試験として読み替える。本番 launcher は既に protocol v7（post_login が v6、consent が v7）である。既存の session、credential login、consent の意味と動作は、Live View の版不一致によって変えない。
+
+### v8 wire contract
+
+v8 は launcher から daemon への専用 frame 接続で `live_start` / `live_stop` verb と `live_frame` notification を追加する。各 JSON metadata は session binding、連番、寸法、encoding、body byte length など framing に必要な非機密値だけを持つ。`live_frame` の画像本体は metadata に埋め込まず、宣言長を前置した bounded binary body とする。1 frame の body 上限は 2 MiB（2,097,152 bytes）。上限超過、宣言長と実長の不一致、未知 verb/field、誤った session binding は拒否する。credential value、CDP response、URL は frame metadata/body の外側の制御情報に混ぜない。
+
+frame は daemon が `live_start` を送った Live View 専用の別接続でのみ流す。通常の launcher control 接続には frame を流さない。v7 daemon は frame 接続および `live_start` を実装しないため、v8 launcher に対しても frame を要求・受信しない。
+
+### protocol 互換
+
+| daemon | launcher | Live View | その他 |
+|---|---|---|---|
+| v8 | v7 | hello の protocol version で frame capability を無効化し、reason `launcher_protocol_no_live_frames` を返す。`live_start` を送らない | session・credential login・consent は従来どおり |
+| v7 | v8 | frame を要求しないため従来どおり Live View frame なし | session・credential login・consent は従来どおり |
+
+版確認は Live View の開始前に行う。Live View 非対応を理由に session を失敗させたり、別 runtime へ fallback したりしない。
+
+### daemon、API、gateway の契約
+
+- `task-core` に揮発専用 `LiveFrame` を置く。この型は `Serialize` / `Debug` を実装せず、persistable event へ変換できない。`LatestFrameSlot` は容量 1 で最新 frame のみを保持する。`LiveSessionEntry` は frame 購読口を持ち、既定値は `None`。
+- `task-api` は grant を再確認する専用 frame stream route を設ける。既存 relay assertion と grant を接続ごとおよび frame ごとに再確認し、`Cache-Control: no-store` を付け、長さ前置 binary frame を流す。grant 失効または owner 切断で stream を閉じる。run 一覧には frame 経路の可否を返す。
+- web gateway は既存 owner session / Origin / grant guard を通した WebSocket で、認可済み本人だけに frame を送る。frame 経路が利用可能なら `liveAvailability` は link を返し `enabled` とする。credential session と auth section にも D3/D7 の本人向け既定表示を適用する。input 転送は引き続き拒否する。
+
+### 実装 unit の範囲と試験契約（D6 更新）
+
+| unit | path 範囲 | 試験 prefix / 固定名 |
+|---|---|---|
+| frame-core | `crates/task-core/src/` の LiveFrame・LatestFrameSlot・LiveSessionEntry 関連実装と試験 | `browser_live_frame_`、`browser_live_frame_not_serializable`、`browser_live_frame_backpressure_keeps_latest_only` |
+| launcher | `crates/task-worker/src/browser_launcher/`, `crates/task-worker/src/browser_runtime.rs` | `browser_launcher_live_frame_`、`browser_launcher_protocol_v8_frames`、`browser_launcher_v7_continues_without_live_view` |
+| api-stream | `crates/task-api/src/` の frame stream route・run view 実装と関連試験 | `browser_live_frame_`、`browser_live_frame_no_persist_` |
+| daemon | `crates/task-worker/src/browser_launcher_run.rs`, `crates/task-worker/src/browser_live.rs`, `crates/task-worker/src/browser.rs` | `browser_live_frame_`、`browser_launcher_daemon_checks_live_protocol_before_enable`、`launcher_credential_input_not_in_events_cdp_response_or_logs` |
+| gateway | `web/server/browser-live.js`, `web/server/relay.js`, browser live 関連 gateway 試験 | `browser_live_frame_`、`browser_live_view_` |
+| spa | browser run viewer の関連 `web/` UI と UI 試験 | `browser_live_view_`、`browser_live_credential_default_owner_only` |
+| cross-tests | `crates/task-worker/`, `crates/task-api/`, `crates/task-core/`, `web/server/` の該当試験 | `browser_live_frame_no_persist_`、`browser_live_frame_auth_section_owner_only`、`browser_live_view_`、`launcher_credential_` |
+| ops-doc | `docs/ops/` の launcher v8 再 build・差し替え・Live View 確認手順 | 文書 check。コード試験 prefix は追加しない |
+
+各 unit は表の範囲だけを変更する。層をまたぐ追加試験は cross-tests に置き、各段の容量 1、非永続性、v7/v8 互換、本人限定、input 拒否を固定する。D6 の従来の v6/v5 試験名・組合せはこの表の v8/v7 契約に置き換える。

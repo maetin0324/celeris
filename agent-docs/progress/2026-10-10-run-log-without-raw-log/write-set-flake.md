@@ -26,4 +26,5 @@ completed: 2026-10-10
 
 ## 未解決事項
 
+- 再確認（attempt 2、2026-10-10）: `cargo test -p task-dispatch --lib phase_effect_ab` → 9 passed; 0 failed。`cargo clippy -p task-dispatch --tests -- -D warnings` → exit 0。
 - なし。全体試験は後続の integrate-reclose / reverify-flake で流す。

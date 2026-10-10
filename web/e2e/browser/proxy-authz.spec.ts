@@ -79,10 +79,12 @@ test("generic API relay rejects browser mutations and removes raw live URLs from
     expect(json).not.toContain(BROWSER_RAW_LIVE_VIEW_URL);
 
     await page.goto(`${gateway.base}/browser`);
-    const priorStreams = gateway.daemon.requests.filter((r) => r.path === "/api/v1/stream").length;
     const stream = page.evaluate(async () => {
       const controller = new AbortController();
       const response = await fetch("/events", { signal: controller.signal });
+      // /events は daemon の upstream stream が張られてから header を返す。
+      // この fetch 自身の購読が成立した後に event を送る。
+      (window as Window & { __proxyAuthzStreamReady?: boolean }).__proxyAuthzStreamReady = true;
       const reader = response.body?.getReader();
       if (!reader) throw new Error("SSE body missing");
       try {
@@ -98,8 +100,12 @@ test("generic API relay rejects browser mutations and removes raw live URLs from
       }
     });
     await expect
-      .poll(() => gateway.daemon.requests.filter((r) => r.path === "/api/v1/stream").length)
-      .toBeGreaterThan(priorStreams);
+      .poll(() =>
+        page.evaluate(
+          () => (window as Window & { __proxyAuthzStreamReady?: boolean }).__proxyAuthzStreamReady === true,
+        ),
+      )
+      .toBe(true);
     gateway.daemon.sendEvent("task.event", {
       task_id: "T1",
       event: { type: "browser_updated", browser: { live_view_url: BROWSER_RAW_LIVE_VIEW_URL } },

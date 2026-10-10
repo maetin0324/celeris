@@ -1903,8 +1903,8 @@ fn scratch_defaults_follow_the_build_cache_parent() {
     let s = cfg.scratch_settings_unchecked();
     assert!(s.enabled);
     assert_eq!(s.dir, PathBuf::from("/var/lib/celeris/scratch"));
-    assert_eq!(s.targets_max_bytes, 100 * task_worker::scratch::GIB);
-    assert_eq!(s.total_max_bytes, 150 * task_worker::scratch::GIB);
+    assert_eq!(s.targets_max_bytes, 160 * task_worker::scratch::GIB);
+    assert_eq!(s.total_max_bytes, 200 * task_worker::scratch::GIB);
     assert_eq!((s.high_watermark, s.low_watermark), (0.90, 0.70));
     assert_eq!(s.external_lease_ttl_secs, 21_600);
     assert_eq!(s.gc_max_per_tick, 8);

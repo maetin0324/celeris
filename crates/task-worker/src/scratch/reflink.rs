@@ -488,3 +488,44 @@ pub fn fiemap_all_shared(path: &Path) -> io::Result<bool> {
         }
     }
 }
+
+/// Return physical FIEMAP extents. Callers use this for pool-wide accounting; errors mean the
+/// filesystem cannot provide a trustworthy physical mapping and must use the blocks fallback.
+pub fn fiemap_extents(path: &Path) -> io::Result<Vec<(u64, u64, u32)>> {
+    use std::os::fd::AsRawFd;
+    let file = std::fs::File::open(path)?;
+    let mut start = 0u64;
+    let mut result = Vec::new();
+    let mut flags = 0;
+    loop {
+        let mut fm = Fiemap {
+            fm_start: start,
+            fm_length: u64::MAX - start,
+            fm_flags: flags,
+            fm_mapped_extents: 0,
+            fm_extent_count: FIEMAP_BATCH as u32,
+            fm_reserved: 0,
+            fm_extents: [FiemapExtent::default(); FIEMAP_BATCH],
+        };
+        // SAFETY: fm follows linux/fiemap.h layout and fd is open.
+        let rc = unsafe {
+            nix::libc::ioctl(file.as_raw_fd(), FS_IOC_FIEMAP as _, &mut fm as *mut Fiemap)
+        };
+        if rc != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        flags = 0;
+        let n = (fm.fm_mapped_extents as usize).min(FIEMAP_BATCH);
+        if n == 0 {
+            break;
+        }
+        for ext in &fm.fm_extents[..n] {
+            result.push((ext.fe_physical, ext.fe_length, ext.fe_flags));
+            if ext.fe_flags & FIEMAP_EXTENT_LAST != 0 {
+                return Ok(result);
+            }
+            start = ext.fe_logical.saturating_add(ext.fe_length);
+        }
+    }
+    Ok(result)
+}

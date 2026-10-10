@@ -258,6 +258,7 @@ fn free_disk_mb(path: &Path) -> Result<u64, String> {
 struct ScratchState {
     /// 測定スレッドの結果（パス → サイズ）。
     sizes: crate::scratch_gc::SizeCache,
+    extents: crate::scratch_gc::SharedExtentCache,
     /// 削除スレッド・測定スレッドが動いている間は `true`（重ねて起こさない）。
     removing: Arc<std::sync::atomic::AtomicBool>,
     measuring: Arc<std::sync::atomic::AtomicBool>,

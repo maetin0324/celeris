@@ -91,3 +91,33 @@ stat -f -c 'path=%n blocks=%b free=%f available=%a block_size=%S' /local
 ```
 
 削除直後と次の定期観測で値を比較し、mount 全体の変化と対象 lease の帰属量を分けて記録する。**`du` は使わない**。reflink や圧縮を使う filesystem では共有・圧縮分を重複して数え、実際に解放された容量を表さない。
+
+## 7. `[scratch] seed_reflink` を有効にする
+
+決定は ADR の「付記 2026-10-10: scratch の上限と測り方」S1。2026-10-10 時点の本番は `seed_reflink` を書いておらず（既定 `false`）、seed は作られていない。全 owner の target は依存から build している。`/local` は btrfs で、`cp --reflink=auto` と FIEMAP による共有は成り立つことを確認済み（worker の seccomp の中では `FICLONE` が `EPERM` になるが、`copy_file_range` で共有になる。probe と seed の写しは daemon が行う）。
+
+前提: ADR の測り方 S3（`sizing-impl`）を含む release に昇格済みであること。旧来の測り方のまま有効にすると、seed（約 15〜20 GiB）の分だけ high watermark に近づく。
+
+1. 有効にする前の値を記録する: `df -B1 /local`、`celerisctl scratch status --config ~/.config/celeris/config.toml --json`。
+2. `~/.config/celeris/config.toml` の `[scratch]` に `seed_reflink = true` を書く（`dir = "/local/celeris/data/scratch"` は既存のまま）。
+3. 進行中の run と release build が無いことを確かめ、`systemctl --user restart celeris@<sha12>` で反映する（config は起動時にしか読まない）。
+4. probe の結果を起動 log で確かめる。最初の seed 確認は起動直後に行われる（以後 300 秒ごと）。
+
+   ```sh
+   journalctl --user -u celeris@<sha12>.service --since '-15 min' --no-pager \
+     | grep -E 'seed refresh disabled|refreshing the seed|seed switched|seed refresh (held|failed)'
+   ```
+
+   - `scratch: seed refresh disabled; pool cannot share extents` が出たら probe は失敗している（`reason=` に理由）。seed は作られず、従来の空 target のまま動く。手順 6 で戻す。
+   - `scratch: refreshing the seed (ADR-0129 (4))` のあと `scratch: seed switched` が出れば成功。`/local/celeris/data/scratch/seeds/<repo-key>/current/manifest.json` ができる。seed の build は main が進むたびに 1 本走る。
+   - `seed refresh held` は空き不足か pressure 中。旧 seed を残して保留しているだけで、異常ではない。
+5. 新しい owner が seed を使ったかは `/local/celeris/data/scratch/targets/<owner>/target-origin.json` で確かめる（`"origin": "seed"`。`empty` なら `reason` を読む）。この host には `filefrag` と `btrfs` が無いので、extent の共有は `target-origin.json` で判断する。
+6. 戻し方: `seed_reflink = false` にして daemon を再起動する。既存の owner の target はそのまま使える。無効の間は seed の GC が走らないので、`/local/celeris/data/scratch/seeds/` は人が消す（進行中の seed build が無いことを log で確かめてから `rm -rf -- /local/celeris/data/scratch/seeds`）。
+
+## 8. `[scratch] targets_max_gb` の既定と暫定値
+
+決定は同じ付記の S2。既定値は `targets_max_gb = 160`（high watermark 144 GiB、low 112 GiB）、`total_max_gb = 200`。根拠は release-build の pin が上限 64 GiB、task の target が 1 本あたり約 20 GiB で 4 本、`/local` 300 GiB のうち pool の外が約 91 GiB。
+
+- 2026-10-10 に本番 config へ書いた暫定の `targets_max_gb = 150` は、この既定を含む release（`sizing-impl`）に昇格したあと消す（既定の 160 になる）。消す前後で `celerisctl scratch status --json` の pressure を記録する。
+- 測り方は S3 で共有 extent と hardlink を 1 回だけ数える。lease の `method` が `blocks` の owner は従来どおり重複込みの上限値なので、`scratch status` に `blocks` が多いときは debug log の理由（FIEMAP 非対応・上限超え）を見る。
+- 160 でも常に `scratch: watermark reached` が出る場合は、`pinned_bytes`（release-build）と owner の数を記録してから値を上げる。`/local` の空きは disk_watch と `effective_max` が別に守るので、上げるのは `targets_max_gb + 91 GiB` が 300 GiB から `min_free_disk_mb` の 3 倍を引いた値を超えない範囲（約 190 まで）にする。

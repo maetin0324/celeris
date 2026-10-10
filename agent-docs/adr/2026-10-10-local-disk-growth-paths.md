@@ -50,6 +50,10 @@ task `01M4D7RVKX` は 2026-10-09 08:01 に終端したものとして調査し�
 
 各 release の開始時刻を target marker に原子的に記録する。梱包後、直前 build 開始時刻より古い workspace crate の test binary と対応 `.d`、および live 参照のない hash 世代を削除する。依存 crate の rlib は保持する。lease size が設定上限を超えたら target を空にして seed から再作成し、seed が無い場合も空 target から作り直して gate をやり直す（長時間 gate を許容し、timeout 内で終わらなければ失敗として報告）。`browser-ledger.sh` は `release.sh` と同じ `sd_scratch_lease` 解決を使う。GC/prune/recreate 時に `.cargo-target` が dangling または古い lease を指していたら安全な fallback/現 lease へ symlink を修復する。
 
+#### D3 実装付記（release-prune）
+
+`scripts/selfdeploy/lib.sh` の `sd_release_prune_record_start` は `.celeris-release-build-start` を一時ファイルから rename して更新する。`sd_release_prune_stale_test_binaries` は workspace crate 名と `debug/deps` の `.d`/対応 hash binary を照合し、前回 marker より古い組だけを削除する。依存 `.rlib`/`.rmeta` と build script 出力は対象外。`sd_release_prune_enforce_limit` は `SD_RELEASE_TARGET_MAX_BYTES`（既定 68719476736 bytes）を超えた target を作り直し、任意の `SD_RELEASE_TARGET_SEED` の内容をコピーする。`release.sh` は lease 決定後、workspace clean と gate より前にこれらを呼ぶ。回帰試験は `scripts/selfdeploy/tests/release_prune_stale_test_binaries.sh`。
+
 ### D4. DB backup の保持と削除前検査
 
 promote 前 backup は直近10本を既定保持し、rollback 用 backup は直近3本を別枠で保持する。定期 backup は直近48時間分に加え、日次7本・週次4本（UTC日/ISO週ごとの最新）を残す。全 `.sqlite3` backup の使用量上限は64 GiBを既定とし、超過時は保持集合の古い periodic から先に削除し、次に promote の古いものを削除する。rollback 用直近3本と各種の最新1本は保護する。削除を始める前に最新 backup 1個を read-only で `PRAGMA integrity_check` し、結果が `ok` 以外または検査失敗なら削除を一切行わない。既存 `backup_keep=48` は互換のため直近 hourly 本数として扱う。

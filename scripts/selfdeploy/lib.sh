@@ -698,6 +698,35 @@ sd_scratch_lease() {
   return 0
 }
 
+# browser-ledger shares release.sh's release-build lease. If scratch is unavailable,
+# only use the local fallback when it is a real directory: a symlink may point at
+# a reclaimed lease. A dangling fallback link is safe to unlink, but never follow.
+sd_release_build_target() {
+  local sha="$1" tree="$2" link_tmp
+  if sd_scratch_lease "$SD_RELEASE_SCRATCH_OWNER" "$sha" "$tree"; then
+    if [ -L "$SD_RELEASES/.cargo-target" ]; then
+      link_tmp="$SD_RELEASES/.cargo-target.tmp.$$"
+      if ln -s "$SD_CARGO_TARGET" "$link_tmp" && mv -Tf -- "$link_tmp" "$SD_RELEASES/.cargo-target"; then
+        sd_log "updated cargo target link to current lease: $SD_CARGO_TARGET"
+      else
+        rm -f -- "$link_tmp"
+        sd_log "could not update cargo target link; using leased target directly"
+      fi
+    fi
+    return 0
+  fi
+  if [ -L "$SD_CARGO_TARGET" ]; then
+    if [ ! -e "$SD_CARGO_TARGET" ]; then
+      rm -f -- "$SD_CARGO_TARGET" || return 1
+      sd_log "removed dangling cargo target link: $SD_CARGO_TARGET"
+    else
+      sd_log "scratch unavailable and cargo target is a symlink; refusing stale target: $SD_CARGO_TARGET"
+      return 1
+    fi
+  fi
+  return 0
+}
+
 # 長い step の前（と release.sh の終了時）に lease の mtime を今にする（TTL 切れで GC に回収されないように）。
 # 失敗しても続ける。
 sd_scratch_touch() {
@@ -705,6 +734,80 @@ sd_scratch_touch() {
   local ctl
   ctl="$(sd_celerisctl_bin)" || return 0
   "$ctl" scratch touch --config "$SD_CONFIG" --owner "$SD_SCRATCH_OWNER" >/dev/null 2>&1 8>&- 9>&- || true
+}
+
+# Release-build target pruning. Only test executables named for workspace packages are
+# candidates; dependency libraries and build-script outputs are deliberately untouched.
+sd_release_prune_record_start() {
+  local marker="$1/.celeris-release-build-start" tmp now
+  now="${SD_RELEASE_NOW:-$(date +%s)}"
+  tmp="$marker.tmp.$$"
+  printf '%s\n' "$now" >"$tmp"
+  mv -f "$tmp" "$marker"
+}
+
+sd_release_prune_size() {
+  python3 - "$1" <<'PY'
+import os, sys
+total = 0
+for root, dirs, files in os.walk(sys.argv[1]):
+    for name in files:
+        try: total += os.stat(os.path.join(root, name), follow_symlinks=False).st_size
+        except OSError: pass
+print(total)
+PY
+}
+
+sd_release_prune_stale_test_binaries() {
+  local target="$1" tree="$2" start="$3" removed=0
+  [ -d "$target" ] || return 0
+  removed="$(python3 - "$target" "$tree" "$start" <<'PY'
+import os, re, sys
+target, tree, start = sys.argv[1], os.path.realpath(sys.argv[2]), float(sys.argv[3])
+names = set()
+for root, dirs, files in os.walk(os.path.join(tree, 'crates')):
+    if 'Cargo.toml' not in files: continue
+    try: text = open(os.path.join(root, 'Cargo.toml'), encoding='utf-8').read()
+    except OSError: continue
+    m = re.search(r'^name\s*=\s*["\']([^"\']+)', text, re.M)
+    if m: names.add(m.group(1).replace('-', '_'))
+removed = 0
+deps = os.path.join(target, 'debug', 'deps')
+if os.path.isdir(deps):
+    for name in os.listdir(deps):
+        if not name.endswith('.d'): continue
+        dep = os.path.join(deps, name)
+        stem = name[:-2]
+        package = stem.rsplit('-', 1)[0] if '-' in stem else ''
+        if package not in names or not re.search(r'-[0-9a-f]{8,}$', stem): continue
+        path = os.path.join(deps, stem)
+        try: old = os.path.isfile(path) and os.stat(path).st_mtime < start and os.stat(dep).st_mtime < start
+        except OSError: old = False
+        if old:
+            for candidate in (path, dep):
+                try: removed += os.path.getsize(candidate); os.unlink(candidate)
+                except OSError: pass
+print(removed)
+PY
+)"
+  sd_log "release prune: removed ${removed} bytes of stale workspace test binaries and .d files"
+}
+
+sd_release_prune_enforce_limit() {
+  local target="$1" limit size seed tmp
+  limit="${SD_RELEASE_TARGET_MAX_BYTES:-68719476736}"
+  case "$limit" in *[!0-9]*|'') sd_die "SD_RELEASE_TARGET_MAX_BYTES must be an integer" ;; esac
+  size="$(sd_release_prune_size "$target")"
+  [ "$size" -le "$limit" ] && return 0
+  sd_log "release prune: lease size ${size} bytes exceeds ${limit}; recreating target"
+  seed="${SD_RELEASE_TARGET_SEED:-}"
+  tmp="${target}.recreate.$$"
+  rm -rf "$tmp"
+  mkdir -p "$tmp"
+  if [ -n "$seed" ] && [ -d "$seed" ]; then cp -a "$seed/." "$tmp/"; fi
+  rm -rf "$target"
+  mv "$tmp" "$target"
+  sd_release_prune_record_start "$target"
 }
 
 # lease を返す（P3 に落ち、GC が即回収する）。Phase SD-1 から release.sh の終了時には呼ばない（上の説明）。

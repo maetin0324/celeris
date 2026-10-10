@@ -5,7 +5,8 @@ tasks: [01M4HX54MZ1P6ZYZEB6ABHD6BV]
 ---
 
 - 日付: 2026-10-10
-- 状態: 決定（実装待ち）
+- 状態: 実装済み（2026-10-10）
+- 本番手順: [docs/ops/local-disk-growth.md](../../docs/ops/local-disk-growth.md)（配送後に人が実行する差し替え・刈り込み・確認）
 - 関連: [ADR-0074](0074-parallel-work-units-checkpoints-milestones-quota.md)、[ADR-0075](0129-host-sccache-reflink-targets.md)、[ADR-0129](0136-local-hot-data-layout.md)、[ADR-0136](0136-local-hot-data-layout.md)
 
 ## 背景

@@ -144,3 +144,55 @@ final review（v5 後）の基準 2 の差し戻しへの対応。prune-accum（
 - **全体検査（HEAD 5e0dafd9）**: `TMPDIR=/tmp bash scripts/dev/test-parallel.sh` exit 0・nextest 5060 passed / 0 failed / 14 ignored・`test-parallel: ok`（失敗名 0 件）。`cargo clippy --workspace -- -D warnings` exit 0。`cargo fmt --all -- --check` exit 0。`release_prune_production_scale.sh` exit 0。
 
 未解決（本 WU では解けない）: 本番 108 GiB 相当の再現（本番 `release-build/target/debug/deps` の読み取り専用採取が要る。人が host で行う）と、本番の候補が少ない理由（既に消えたか、判定が漏らしているか）の確認。
+
+## v7: 本番 release-build の監査・試験の本番 path 隔離・close-out（reclose-4、2026-10-10）
+
+v6 final review の基準 2 の差し戻し（本番の刈り込み候補が 67 個・15.4 GiB（08:40Z）から 11 個・0.095 GiB（09:36Z）に減った理由）への対応。仕様は `artifacts/reclose4-spec.md`（工程の外）。監査の記録は [prod-touch-audit](2026-10-10-local-disk-growth-paths/prod-touch-audit.md)、試験隔離は [prune-path-guard](2026-10-10-local-disk-growth-paths/prune-path-guard.md)、ADR は [付記 2026-10-10: 試験の本番 path 隔離](../adr/2026-10-10-local-disk-growth-paths.md)。
+
+### 基準 0: 試験結果（HEAD は本 close-out の作業ツリー、製品コードは変更なし）
+
+| 検査 | command | 結果 |
+|---|---|---|
+| 全体試験 | `TMPDIR=/tmp bash scripts/dev/test-parallel.sh` | exit 0。`CELERIS_TEST_SUMMARY {"passed": 5060, "failed": 0, "ignored": 14, "nextest_exit": 0, "doctest_exit": 0, "tmp_leftovers": 5}`、`test-parallel: ok`。失敗名は `test-parallel: failed:` 行 0 件。nextest 226.7 秒。ログ: `artifacts/test-parallel.log` |
+| clippy | `cargo clippy --workspace -- -D warnings` | exit 0（`Finished dev profile`）。ログ: `artifacts/clippy.log` |
+| fmt | `cargo fmt --all -- --check` | exit 0。ログ: `artifacts/fmt.log` |
+| prune 試験の本番 path 隔離 | `bash scripts/selfdeploy/tests/prune_tests_stay_in_tmp.sh` | exit 0、`prune_tests_stay_in_tmp: ok`。ログ: `artifacts/prune_tests_stay_in_tmp.log` |
+
+試験の一時領域の警告は `tests left 5 entries in TMPDIR (removed on exit)`（exit に影響なし。前回の 3 件から増えた。どの試験が残すかは未調査）。
+
+### 基準 1: 監査の結果（本番 release-build を刈ったか）
+
+prod-touch-audit.md の行頭の 2 行をそのまま写す:
+
+AUDIT runs_scanned=56 prod_path_commands=27 nondry_prune_on_prod=0 removed_files=0 removed_gib=0
+
+CAUSE rebuilt_in_place 08:40Z の target/.rustc_info.json 更新・deps 件数増加と 08:59Z built_at の release 5b60d8b7bd80 が同じ期間にあり、09:36Z inventory は 67→11 の残存候補を示す。56 個の run 記録に本番非 dry prune/release.sh 実行はないため、再 build による mtime 更新が最も整合する。ただし全 56 個の再 build 前後 inode を結び付ける記録がなく、56 個が再生成された個別証明はない。
+
+- **67→11 の理由**: この task 群の記録に本番の削除は無く、削除で消えた候補は 0 件・0 GiB。08:40Z 以降の release-build の再 build（cargo が同名 hash の file を作り直すと mtime が新しくなり候補から外れる）で候補が減ったと判定した。56 個それぞれの再生成は個別には立証していない（原票の inode/mtime 保存が無い）。
+- **本番 path への prune の有無**: 監査の範囲で本番 path に対する非 dry の prune・rm・find -delete・release.sh は 0 件（件数 0・合計 0 GiB）。本番 target に prune 関数を走らせたのは 08:42:42Z の `SD_RELEASE_PRUNE_DRY_RUN=1` の 1 回だけで、unlink は実行されていない。
+- **08:40Z の build の出所**: 起動した run・人は特定できていない（指定 8 workspace の記録に `release.sh` 起動者が無い）。現存 release `5b60d8b7bd80`（built_at 08:59:22Z）と時間的に整合する。
+- **本 close-out の run**: 本番 path に書き込む command は無い（試験は一時 dir、prune 試験は `SD_PRUNE_ALLOWED_ROOT` で隔離）。ただし `test-parallel` 全体が本番 path に触れなかったことは、個別の試験の guard 試験で固定しているものの、全体の前後 inode 比較では直接観測していない。
+
+### 基準 1 続き: 8 release 積み上げの RESULT（prune-accum）
+
+prune-accum.md の行を写す:
+
+RESULT no_prune_bins=597 no_prune_gib=162.945 catchup_reclaimed_gib=149.367 prune_max_gib=67.902 prune_final_gib=27.156 prune_bound_gib=67.902 nonincreasing=1 limit_recreate_without_prune=1 limit_recreate_with_prune=0 deps_kept=1
+
+（縮尺 1/1024 の fixture。本番の実数ではない。前回 reclose-3 の記録のとおり。）
+
+### 基準 2: 試験の本番 path 隔離（guard）
+
+- `scripts/selfdeploy/lib.sh` の prune・backup 削除に `SD_PRUNE_ALLOWED_ROOT` の guard（line 787 付近）を入れ、未設定の本番の挙動は変えていない。
+- `prune_tests_stay_in_tmp.sh` は静的に tests/*.sh の本番 path literal を、動的に一時 dir の外の囮に対する拒否と残存を確かめ、exit 0。
+
+### 未解決事項
+
+- 本番 108 GiB 相当の再現（08:40Z 時点の本番 `release-build/target/debug/deps` の読み取り専用採取が要る。人が host で行う）。
+- 67 個の候補がどの file で再生成されたかの個別証明（inode/mtime の原票）。
+- 08:40Z の build の起動者の特定（人が host の shell 履歴・ログで確かめる）。
+- test-parallel の TMPDIR 残骸（5 件）の出所。
+
+### 提案
+
+- 本番の候補が減った理由を確定するなら、人が host で `ls -l --time-style=full-iso` の読み取り採取を 1 回行い、inventory と突き合わせる（書き込みなし）。

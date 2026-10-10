@@ -84,3 +84,7 @@ sandbox 既知失敗（browser・launcher・credentiald・CDP 系）は今回 0 
 - 配送後、docs/ops/local-disk-growth.md の 1〜6 を順に行い、効果を `df` と scratch lease の size で記録する。
 - test-parallel が残す TMPDIR の 3 件を特定し、試験側で後始末する（別 WU）。
 
+
+## 全体試験の再確認（2026-10-10）
+
+final review の `5041 passed / 2 failed` は再実行で再現せず、元報告でも試験名が不明なため失敗名は「再現せず」とした。原因は特定できず、branch 起因を示す証拠はなく、コード修正はしていない。`/local` は 68% 使用で disk_watch の 95% 条件未満。`TMPDIR=/tmp bash scripts/dev/test-parallel.sh` は1回目・最終2回目とも exit 0、nextest 5043 passed / 0 failed / 14 ignored、doctest exit 0。詳細とログの場所は[再確認記録](2026-10-10-local-disk-growth-paths/reverify-full.md)を参照。fmt と clippy も exit 0。

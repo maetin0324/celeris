@@ -736,8 +736,8 @@ pub(super) async fn run_worker(
     // 人がその時点の成果物を使う）。
     // - git worktree ではない local の作業場所（`remote`/`worktree` どちらも無い）はリポジトリ全体
     //   （`artifacts_dir` の外を含む）から `*.md` を拾う（従来どおり。取りこぼし防止）。
-    // - git worktree の Task（`worktree` が `Some`）と remote の Task（`remote` が `Some`。写しはクラスタの
-    //   project の内容を含む）は、その run の `artifacts_dir` の**中だけ**を、人が読む拡張子で走査する。
+    // - すべての Task で、その run の `artifacts_dir` の中を、人が読む拡張子で走査する。
+    //   local の非 worktree は従来の workspace 全体の markdown 走査も続ける。
     // 重複は `(path, sha256)` で見る（同じ中身は増えない。中身が変われば新しい版）。
     if outcome
         .as_ref()
@@ -750,19 +750,28 @@ pub(super) async fn run_worker(
             .unwrap_or_else(|_| events.clone());
         let existing =
             crate::undeclared_artifacts::registered_keys(after_run.iter().map(|(_, ev)| ev));
-        let found = if worktree.is_none() && remote.is_none() {
+        let mut found = if worktree.is_none() && remote.is_none() {
             crate::undeclared_artifacts::scan_undeclared_markdown_artifacts(
                 &workspace_for_undeclared_scan,
                 &artifacts_dir_for_undeclared_scan,
                 &existing,
             )
         } else {
-            crate::undeclared_artifacts::scan_undeclared_artifacts_in_dir(
-                &workspace_for_undeclared_scan,
-                &artifacts_dir_for_undeclared_scan,
-                &existing,
-            )
+            Vec::new()
         };
+        let in_artifacts_dir = crate::undeclared_artifacts::scan_undeclared_artifacts_in_dir(
+            &workspace_for_undeclared_scan,
+            &artifacts_dir_for_undeclared_scan,
+            &existing,
+        );
+        for artifact in in_artifacts_dir {
+            if !found
+                .iter()
+                .any(|old| old.path == artifact.path && old.sha256 == artifact.sha256)
+            {
+                found.push(artifact);
+            }
+        }
         for artifact in found {
             let ev = Event::ArtifactProduced {
                 run_id: run_id.to_string(),

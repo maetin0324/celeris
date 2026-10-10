@@ -171,7 +171,7 @@ fn checkpoint_once_runs_on_a_fresh_wal_db_without_error() {
 }
 
 #[test]
-fn backup_once_writes_a_restorable_copy_and_prune_keeps_only_the_newest() {
+fn backup_once_writes_a_restorable_copy_and_keeps_recent_generations() {
     let dir = tempfile::tempdir().unwrap();
     let db_path = dir.path().join("celeris.sqlite3");
     let store = task_core::SqliteStore::open(&db_path).unwrap();
@@ -182,9 +182,14 @@ fn backup_once_writes_a_restorable_copy_and_prune_keeps_only_the_newest() {
     let backup_dir = dir.path().join("backups");
     std::fs::create_dir_all(&backup_dir).unwrap();
 
-    // 3 回バックアップし、keep=2 なら最新 2 つだけ残る。
+    // 3 回バックアップする。keep=2 でも 48 時間以内の世代は刈られない（ADR 2026-10-10 D5）ので、3 本とも残る。
+    // 古い世代が刈られることは注入時計の backup_retention_ 試験が固定している。
     let mut written = Vec::new();
     for i in 0..3 {
+        if i > 0 {
+            // ファイル名が unix 秒なので、同じ秒に 2 回書くと衝突する（テストのみの配慮）。
+            std::thread::sleep(Duration::from_millis(1100));
+        }
         let dest = backup_once(
             &db_path,
             &backup_dir,
@@ -199,21 +204,17 @@ fn backup_once_writes_a_restorable_copy_and_prune_keeps_only_the_newest() {
         )
         .unwrap_or_else(|e| panic!("backup {i}: {e}"));
         written.push(dest);
-        // ファイル名が unix 秒なので、同じ秒に 2 回書くと衝突する（テストのみの配慮）。
-        std::thread::sleep(Duration::from_millis(1100));
     }
 
-    let remaining: Vec<PathBuf> = std::fs::read_dir(&backup_dir)
+    let mut remaining: Vec<PathBuf> = std::fs::read_dir(&backup_dir)
         .unwrap()
         .filter_map(|e| e.ok())
         .map(|e| e.path())
         .filter(|p| is_backup_file_name(p))
         .collect();
-    assert_eq!(remaining.len(), 2, "{remaining:?}");
-    assert!(
-        !remaining.contains(&written[0]),
-        "the oldest generation should have been pruned"
-    );
+    remaining.sort();
+    written.sort();
+    assert_eq!(remaining, written, "all recent generations should be kept");
 
     // 残った最新のバックアップは復元して読める。
     let latest = written.last().unwrap();

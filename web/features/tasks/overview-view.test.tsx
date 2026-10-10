@@ -6,7 +6,9 @@ import { OverviewView } from "./overview-view";
 
 vi.mock("@tanstack/react-router", () => ({
   Link: ({ to, children, ...props }: { to: string; children: React.ReactNode }) => (
-    <a href={to} {...props}>{children}</a>
+    <a href={to} {...props}>
+      {children}
+    </a>
   ),
 }));
 
@@ -14,17 +16,39 @@ function render(stdout: boolean) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const detail = {
     task: {
-      id: "T1", title: "Test task", status: "done", kind: "task", attempts: 1,
-      budget: { max_retries: 3 }, created_at: "2026-10-10", updated_at: "2026-10-10",
+      id: "T1",
+      title: "Test task",
+      status: "done",
+      kind: "task",
+      attempts: 1,
+      budget: { max_retries: 3 },
+      created_at: "2026-10-10",
+      updated_at: "2026-10-10",
     },
-    runs: [{
-      run_id: "RUN-123456789", adapter: "codex", model: "test-model", started_at: "2026-10-10T00:00:00Z",
-      progress: 1, artifacts: 0, reviewer_deferrals: 0, verdicts: 0, role: "worker", files: { stdout },
-    }],
-    actions: [], dependencies: [], dependents: [], criteria: [], children: [],
+    runs: [
+      {
+        run_id: "RUN-123456789",
+        adapter: "codex",
+        model: "test-model",
+        started_at: "2026-10-10T00:00:00Z",
+        progress: 1,
+        artifacts: 0,
+        reviewer_deferrals: 0,
+        verdicts: 0,
+        role: "worker",
+        files: { stdout },
+      },
+    ],
+    actions: [],
+    dependencies: [],
+    dependents: [],
+    criteria: [],
+    children: [],
   } as unknown as TaskDetail;
   const html = renderToStaticMarkup(
-    <QueryClientProvider client={client}><OverviewView detail={detail} /></QueryClientProvider>,
+    <QueryClientProvider client={client}>
+      <OverviewView detail={detail} />
+    </QueryClientProvider>,
   );
   client.clear();
   return html;

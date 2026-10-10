@@ -12,7 +12,30 @@ use std::os::fd::{AsRawFd, OwnedFd};
 use std::sync::Mutex;
 use std::time::Instant;
 
-pub(crate) const FIXTURE: &str = include_str!("browser_post_login_fixture.py");
+const FIXTURE_SOURCE: &str = include_str!("browser_post_login_fixture.py");
+/// The fixture with the other origin's file made unsniffable. The source sends it as
+/// `application/octet-stream` with the body 8 seconds after the headers; Chromium sniffs that type
+/// and only begins the download once the body arrives, so the controller's cancel races the
+/// completion (a lost race is the D2-6 breach, failing the test). An unsniffable type begins the
+/// download at the headers, and a 60-second body delay (the event safety net) keeps the cancel first.
+pub(crate) static FIXTURE: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    let mut script = FIXTURE_SOURCE.to_string();
+    for (from, to) in [
+        (
+            "self.send_header('Content-Type', 'application/octet-stream')",
+            "self.send_header('Content-Type', 'application/x-celeris-other')",
+        ),
+        ("threading.Event().wait(8)", "threading.Event().wait(60)"),
+    ] {
+        assert_eq!(
+            script.matches(from).count(),
+            1,
+            "fixture line {from:?} moved"
+        );
+        script = script.replace(from, to);
+    }
+    script
+});
 pub(crate) const USER: &str = "s2026001";
 const SECRET: &str = "post-login-password-5d1c92";
 pub(crate) const COOKIE_VALUE: &str = "lms-session-cookie-7f3a";
@@ -116,7 +139,7 @@ struct World {
 }
 
 fn world() -> World {
-    let fx = ChromeFixture::start_with(FIXTURE);
+    let fx = ChromeFixture::start_with(&FIXTURE);
     let o = origins(&fx);
     let (target, own) = {
         let mut c = fx.controller.lock().expect("lock");

@@ -22,19 +22,22 @@ Chromium は octet-stream を MIME sniff するので、download の開始（`Br
 本番の設計どおりの fail-closed）になって試験が落ちる。試験は「取消が間に合う」前提なので、fixture が前提を崩していた。
 証拠: 修正前は試験 1 本が 12〜13 秒（8 秒の body 待ちが経路上にあった）、修正後は 2 本で 5.3 秒。
 
-## 直し方（試験 fixture のみ。本番 code は不変）
-- `crates/task-worker/src/browser_post_login_fixture.py`: 他 origin の file の Content-Type を sniff されない `application/x-celeris-other` にし、
-  body の遅延を 8 秒 → 60 秒（試験の出来事待ちの保険 `DOWNLOAD_EVENT_TIMEOUT` と同じ）にした。開始は header 時点で決まり、取消は body の前に必ず届く。
-  launcher 試験（`launcher_credential_post_login_pair_login_then_reads_only_the_lms`）も同じ fixture を使うので同時に直る。
+## 直し方（試験 file のみ。本番 code・fixture の .py は不変）
+- attempt 3 の 1 回目は fixture の `.py` を直したが、範囲 check（試験 file は `*tests.rs` / `tests/` だけ）で `browser_post_login_fixture.py` が範囲外になった。
+  そこで `.py` を base に戻し、同じ変更を `crates/task-worker/src/browser_post_login_tests.rs` 側で掛ける形にした:
+  `FIXTURE` を `LazyLock<String>` にし、include した原本の 2 行（`Content-Type: application/octet-stream` → sniff されない `application/x-celeris-other`、
+  body の遅延 `wait(8)` → `wait(60)`。60 秒は試験の出来事待ちの保険 `DOWNLOAD_EVENT_TIMEOUT` と同じ）を置き換える。置き換え元が 1 回ずつ現れることを assert し、
+  原本が変わったら黙って効かなくなるのではなく試験が落ちる。開始は header 時点で決まり、取消は body より必ず先に届く。
+- 呼び出し側は `ChromeFixture::start_with(&FIXTURE)`（post_login 1 箇所、`browser_launcher_run_tests.rs` の launcher 試験 3 箇所）。
 
-## 証拠
-- 単独 3 回（post_login と launcher の 2 本）: `TMPDIR=/tmp cargo nextest run -p task-worker -E 'test(daemon_post_login_pair_login_reads_lms_and_refuses_idp_other_and_password_pages) | test(launcher_credential_post_login_pair_login_then_reads_only_the_lms)'`
-  → 3 回とも exit 0、2 passed（5.4 / 5.3 / 8.1 秒）
-- 全体 1 回目 `TMPDIR=/tmp bash scripts/dev/test-parallel.sh` → exit 0。CELERIS_TEST_SUMMARY: passed 5024, failed 0, ignored 14, nextest_exit 0, doctest_exit 0, nextest_secs 172.1, tmp_leftovers 5。`failed:` 行なし
-- 全体 2 回目 → exit 0。passed 5024, failed 0, ignored 14, nextest_exit 0, doctest_exit 0, nextest_secs 176.1, tmp_leftovers 4。`failed:` 行なし
-- `df -h /local`: 69% → 66% → 67%（disk watch の 95% 未満）
-- `cargo fmt --all -- --check` → exit 0
-- 範囲: `git diff --name-only $CELERIS_WU_BASE` は fixture と本進捗のみ
+## 証拠（attempt 3 再実施、試験側の置き換えで）
+- 単独 3 回: `TMPDIR=/tmp cargo nextest run -p task-worker -E 'test(daemon_post_login_pair_login_reads_lms_and_refuses_idp_other_and_password_pages) | test(launcher_credential_post_login_pair_login_then_reads_only_the_lms)'`
+  → 3 回とも 2 passed（5.3 / 5.4 / 5.7 秒）
+- 全体 1 回目 `TMPDIR=/tmp bash scripts/dev/test-parallel.sh` → exit 0。CELERIS_TEST_SUMMARY: passed 5024, failed 0, ignored 14, nextest_exit 0, doctest_exit 0, nextest_secs 148.8, tmp_leftovers 3。`test-parallel: failed:` 行なし
+- 全体 2 回目 → exit 0。passed 5024, failed 0, ignored 14, nextest_exit 0, doctest_exit 0, nextest_secs 126.9, tmp_leftovers 5。`failed:` 行なし
+- `df -h /local`: 69% → 68% → 69%（disk watch の 95% 未満）
+- `cargo fmt --all` 済み、`cargo clippy --workspace --all-targets -- -D warnings` → exit 0
+- 範囲: `sh "$CELERIS_WU_SCOPE_PATHS"` は本進捗・`browser_post_login_tests.rs`・`browser_launcher_run_tests.rs` のみ（範囲 check exit 0）
 
 ## 未解決・提案
 - 本番の D2-6: 他 origin の download が sniff 対象の型で body が小さいと、取消より完了が先になり観測停止（fail-closed）になりやすい。安全側だが利用者には

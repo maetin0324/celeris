@@ -176,3 +176,15 @@ protocol v8 の実装は完了し、全体検査を通過した。主要な実�
 main の artifact transfer（`ARTIFACT_PROTOCOL = 8`）を取り込んだ際、Live View が `LIVE_FRAME_PROTOCOL = 9` へ振り直された統合で次の崩れが起きた。`browser_launcher_run.rs` の `artifact_refusal_progress` は閉じ括弧が欠けて以降の関数を飲み込み、`browser_launcher/protocol.rs` の `LiveStart` / `LiveStop` は `Request` enum の外に出ていた。どちらも `Request` 内へ戻し、閉じ括弧を補った。版の値は変えていない（artifact 8、Live View 9）。進捗は [merge-fix](../progress/2026-10-10-browser-launcher-live-view-v8/merge-fix.md)。
 
 本付記は版の記載だけを正す。wire 形式・権限の境界（本人限定、非永続、input 拒否、容量 1）は付記 2026-10-10b のとおりで、変更しない。
+
+## 付記 2026-10-10d（人の決定: Live View は protocol 9）
+
+- 決定 `live-protocol` の回答: 「承認: Live View = protocol 9、artifact = protocol 8 のまま」。日付 2026-10-10。
+- 回答者の注記: この回答は CoS の代答であり、人の決定そのものではない。理由は番号衝突の回避のみ（protocol 8 は main の artifact transfer が先に使用しているため、Live View frame は 9 とする）。人の承認の範囲は版の割り当てであり、Live View の権限境界・非永続性・入力拒否の方針は付記 2026-10-10b・D1〜D4 のとおり変えない。
+- 要件・親 task 題名の「v8」の読み替え: 「v8」は Live View 無し・artifact あり、の意味で読む（付記 2026-10-10c の互換表と同じ）。Live View の版は 9 である。
+- 互換の読み替え: v7/v8 の launcher・daemon と v9 の組では Live View だけが無効になり（理由 `launcher_protocol_no_live_frames`）、session・credential login・consent は動く。v8 launcher なら screenshot / download も動く。
+- 既存試験名（grep で実在を確認）:
+  - `browser_launcher_protocol_v9_frames`（`crates/task-worker/src/browser_launcher/live_tests.rs`）
+  - `browser_launcher_v8_continues_without_live_view`（`crates/task-worker/src/browser_launcher/live_tests.rs`、`crates/task-worker/src/browser_launcher_run.rs`）
+  - `browser_launcher_daemon_checks_live_protocol_before_enable`（`crates/task-worker/src/browser_launcher_run.rs`）
+- 本番 launcher の v9 への差し替えは運用者が行う。手順は [docs/ops/browser-launcher-live-view.md](../../docs/ops/browser-launcher-live-view.md) §3（launcher の再 build と差し替え）と §5（Live View の確認）。エージェントは本番に触れない。

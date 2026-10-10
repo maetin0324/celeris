@@ -2209,7 +2209,10 @@ mod live_frame_tests {
                     1 << 20,
                 )
                 .expect("meta");
-                write_frame(s, body, MAX_LIVE_BODY).expect("body");
+                // The daemon closes the relay as soon as it rejects the foreign-session
+                // metadata. That can race this body write, so BrokenPipe is the expected
+                // outcome for the deliberately invalid second frame.
+                let _ = write_frame(s, body, MAX_LIVE_BODY);
             };
             write_message(
                 &mut s,

@@ -304,22 +304,42 @@ test("entry and safe dashboard API relay with no upstream headers or raw URL", a
   assert.equal(relay.includes("https://secret.example"), false);
   assert.match(relay, /"live_view_url":null/);
 });
-test("runs reports disabled live reasons for terminal, auth and stopped runs", async () => {
-  runState = "COMPLETED";
-  let item = (await (await get("/browser/runs?task_id=T1")).json()).items[0];
-  assert.deepEqual(item.live, { state: "disabled", reason: "not_running" });
-  assert.equal("live_path" in item, false);
-
-  runState = "WAITING_FOR_AUTH";
-  item = (await (await get("/browser/runs?task_id=T1")).json()).items[0];
-  assert.deepEqual(item.live, { state: "disabled", reason: "auth_interval" });
-  assert.equal("live_path" in item, false);
-
-  runState = "WAITING_FOR_HUMAN";
-  item = (await (await get("/browser/runs?task_id=T1")).json()).items[0];
-  assert.deepEqual(item.live, { state: "disabled", reason: "not_configured" });
-  assert.equal("live_path" in item, false);
+test("runs reports disabled live reasons for every non-running run", async () => {
+  for (const state of [
+    "WAITING_FOR_AUTH",
+    "WAITING_FOR_HUMAN",
+    "WAITING_FOR_APPROVAL",
+    "COMPLETED",
+    "FAILED",
+    "OTHER",
+  ]) {
+    runState = state;
+    const item = (await (await get("/browser/runs?task_id=T1")).json()).items[0];
+    assert.deepEqual(item.live, { state: "disabled", reason: "not_running" });
+    assert.equal("live_path" in item, false);
+  }
   runState = "RUNNING";
+});
+test("live availability prefers relay unavailable for every state when upstream is absent", () => {
+  for (const state of [
+    "RUNNING",
+    "WAITING_FOR_AUTH",
+    "WAITING_FOR_HUMAN",
+    "WAITING_FOR_APPROVAL",
+    "COMPLETED",
+    "FAILED",
+  ]) {
+    assert.deepEqual(liveAvailability({ task_id: "T1", run_id: "R1", session_id: "S1", state }, null), {
+      state: "disabled",
+      reason: "relay_unavailable",
+    });
+  }
+});
+test("running run with upstream is linked", () => {
+  assert.deepEqual(liveAvailability({ task_id: "T1", run_id: "R1", session_id: "S1", state: "RUNNING" }, {}), {
+    state: "link",
+    href: "/browser/live/T1/R1",
+  });
 });
 test("live availability disables runs when the relay is unavailable", () => {
   for (const run of [

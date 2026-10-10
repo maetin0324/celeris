@@ -2285,7 +2285,12 @@ export const BROWSER_RAW_LIVE_VIEW_URL = "http://127.0.0.1:9/raw-live-view-secre
 const browserTaskIds = ["T1", "T2"];
 const BROWSER_ID = /^[A-Za-z0-9_-]{1,64}$/;
 
-export function createBrowserBackend({ credentialWait = true, publicKey = null, now = Date.now } = {}) {
+export function createBrowserBackend({
+  credentialWait = true,
+  publicKey = null,
+  now = Date.now,
+  runStateOverride,
+} = {}) {
   const clock = { now };
   const secs = () => Math.floor(clock.now() / 1000);
   const run = (task_id, run_id, session_id, state) => ({
@@ -2313,7 +2318,7 @@ export function createBrowserBackend({ credentialWait = true, publicKey = null, 
       row("T1", 2, run("T1", "R1", "S1", "WAITING_FOR_APPROVAL")),
       // 別 task の値を混ぜた行。gateway は event の task_id が経路の task と違う行を捨てる。
       row("T1", 3, run("T2", "R9", "S9", "RUNNING")),
-      row("T1", 4, run("T1", "R1", "S1", "RUNNING")),
+      row("T1", 4, run("T1", "R1", "S1", runStateOverride ?? "RUNNING")),
     ],
     T2: [row("T2", 1, run("T2", "R2", "S2", "RUNNING"))],
   };

@@ -6,7 +6,6 @@ export type LiveUnavailableReason =
   | "not_owner"
   | "not_running"
   | "not_configured"
-  | "auth_interval"
   | "relay_unavailable"
   | "grant_expired";
 
@@ -15,7 +14,6 @@ export const liveUnavailableText: Record<LiveUnavailableReason, string> = {
   not_owner: "本人として登録したセッションで開いてください。",
   not_running: "ブラウザ実行中のみ Live View を利用できます。",
   not_configured: "Live View が設定されていません。",
-  auth_interval: "認証を扱う間は Live View を停止しています。",
   relay_unavailable: "Live View の中継を利用できません。イベントで監視してください。",
   grant_expired: "Live View の許可が期限切れです。画面を更新してください。",
 };

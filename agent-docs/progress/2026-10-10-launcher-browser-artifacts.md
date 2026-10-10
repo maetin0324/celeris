@@ -35,6 +35,32 @@ updated: 2026-10-10
 | clippy | `cargo clippy --workspace -- -D warnings` | exit 0 |
 | fmt | `cargo fmt --all -- --check` | exit 0 |
 
+### attempt 3（2026-10-10、criterion 2 の取り直し）
+
+attempt 2 の review は criterion 2 だけ不合格: reviewer の run（worker の sandbox）で
+`CELERIS_USERNS_TESTS=1 CELERIS_ISOLATION_TESTS=require bash scripts/dev/test-parallel.sh` が exit 100（5002 passed / 33 failed）、
+失敗は `unshare` / `bwrap` の「Operation not permitted」（user namespace が作れない）と e2e `worker_db_read_only`・ptrace。
+これは ADR-0126 B4 の設計どおり（userns が無い host では require の gate は fail）で、branch の退行ではない。対応:
+
+- `scripts/dev/test-parallel.sh` に userns の preflight を足した（ADR-0126 付記3、`docs/ops/nextest.md`）。gate の env で
+  `unshare -Ur true` が失敗したら先頭と失敗時の末尾に「環境であって branch ではない」診断行を出し、summary に `userns` を残す。
+  exit code は変えない。固定試験 `scripts/dev/tests/test-parallel-userns-preflight.sh`。
+- この run（userns が作れる環境。`artifacts/userns-probe.txt`: `unshare -Ur true` ok、`bwrap --ro-bind / / true` ok、
+  uid 1001、host home-dev、kernel 6.8.12-9-pve）で gate を取り直した。log は artifacts の `test-parallel.log`・
+  `test-parallel-userns.log`・`clippy.log`。
+
+| 条件 | コマンド | 結果 |
+|---|---|---|
+| preflight の固定試験 | `sh scripts/dev/tests/test-parallel-userns-preflight.sh` / `sh scripts/dev/tests/test-parallel-fail-names.sh` | all checks passed |
+| release.sh の gate 試験 | `bash scripts/selfdeploy/tests/release_parallel_test_gate.sh` | exit 0 |
+| 全体 | `TMPDIR=/tmp bash scripts/dev/test-parallel.sh` | exit 0、5035 passed / 0 failed / 14 ignored、`userns: null` |
+| release gate と同じ | `CELERIS_USERNS_TESTS=1 CELERIS_ISOLATION_TESTS=require TMPDIR=/tmp bash scripts/dev/test-parallel.sh` | exit 0、5035 passed / 0 failed / 14 ignored、`userns: true`、`SKIPPED (not passed)` 0 件 |
+| clippy | `cargo clippy --workspace -- -D warnings` | exit 0 |
+| fmt | `cargo fmt --all -- --check` | exit 0 |
+
+reviewer への注記: この gate は userns が使える host でだけ pass し得る。sandbox の run で流すと summary が `userns: false`
+になり、同じ 33 件が落ちる。branch の判定は `TMPDIR=/tmp` の通常の test-parallel（sandbox でも pass）と上の記録で行う。
+
 試験（`crates/task-worker/src/browser_launcher_run_tests.rs` ほか）:
 
 - `launcher_artifacts_reach_the_run_output_through_the_v8_transfer`: 複数 chunk の PDF と PNG が byte 一致で output に届く（0600）。

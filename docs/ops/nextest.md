@@ -50,3 +50,12 @@ worker）が同居するので、nproc いっぱいにはしない。時間に�
 `.config/nextest.toml` の `[test-groups]` と `[[profile.default.overrides]]` で縛る（テストを消さない）。
 何をなぜ縛ったかは [ADR-0041](../../agent-docs/adr/0041-self-improvement-loop-hardening.md) §8。nextest はテストごとに別プロセスで回すので、同じバイナリの中の `static Mutex` による直列化は
 nextest の下では効かない（その代わりプロセスが別なので、プロセス全体の状態〈env・waitpid(-1)・シグナル〉は互いに干渉しない）。
+
+## userns の preflight（release gate と同じ env のとき）
+
+`CELERIS_USERNS_TESTS=1` か `CELERIS_ISOLATION_TESTS=require`（release.sh が既定で立てる）で流すと、`test-parallel.sh` は先頭で
+`unshare -Ur true` を試す。作れない host（worker の sandbox など）では隔離の試験（bwrap / unshare / launcher / db guard）が
+「Operation not permitted」で**設計どおり落ちる**（ADR-0126 B4）ので、先頭と nextest 失敗時の末尾に「環境であって branch では
+ない」という警告行を出す。exit code は変えない。`CELERIS_TEST_SUMMARY` の `userns` が `true` なら userns のある host で流した
+記録、`false` なら環境由来の失敗、`null` なら gate の env ではない。branch の判定には userns のある host（release host・daemon
+の worker run）で流し直す。

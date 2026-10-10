@@ -118,7 +118,7 @@ scripts/selfdeploy/release.sh celeris/01M2XXX # 自己改善の案件の実装�
   `cargo test --doc --workspace`（nextest は doc-test を回さない）。範囲は `cargo test --workspace` と同じ。直列が要るテストは
   **ビルドする sha の** `.config/nextest.toml` の test-group で縛る。gate.json の `cargo_test` は
   `{runner: "nextest", nextest_version, jobs, binaries（nextest のバイナリ数 + doc-test の crate 数）, nextest_binaries, doc_binaries,
-  passed, failed, ignored, nextest_exit, doctest_exit, nextest_secs, doctest_secs, summary_parsed}`。どちらかが落ちる・nextest の
+  passed, failed, ignored, nextest_exit, doctest_exit, nextest_secs, doctest_secs, summary_parsed, userns}`。どちらかが落ちる・nextest の
   `Starting … across N binaries` / `Summary …` の行が読めない（全部走った証拠が無い）ときは段が落ちる。
   - `cargo-nextest` が要る（版は `tools/nextest/VERSION` で固定。入れ方は `docs/ops/nextest.md`）。無ければ作業ツリーを作る前に
     入れ方を示して落ちる。非常用に `SD_GATE_TEST_RUNNER=cargo-test` で従来の直列の `cargo test --workspace`（`runner: "cargo-test"`）。

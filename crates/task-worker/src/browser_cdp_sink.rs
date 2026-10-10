@@ -54,6 +54,30 @@ const CONSENT_MARKER_JS: &str = "!!document.querySelector('[name=\"_shib_idp_con
 const CONSENT_SELECTOR_JS: &str = "'[name=\"_shib_idp_consentIds\"],[name=\"_shib_idp_consentOptions\"],[name=\"_eventId_AttributeReleaseRejected\"]'";
 /// Isolated world for the controller's own post-login checks (never visible to the agent).
 const CHECK_WORLD: &str = "celeris-post-login";
+/// 付記 2026-10-10m: the controller's own world for a download it fetches (page JS cannot reach it).
+const FETCH_WORLD: &str = "celeris-download";
+/// How long the controller's fetch of a link may take (the launcher's action deadline is longer).
+const FETCH_TIMEOUT: Duration = Duration::from_secs(40);
+/// Bytes per read of a fetched file out of the page (base64 in one CDP reply).
+const FETCH_CHUNK: u64 = 1 << 20;
+/// The element (or its closest `<a href>` ancestor): its absolute href, or null.
+const LINK_HREF_FN: &str = "function(){const a=this.closest&&this.closest('a[href]');\
+return a&&typeof a.href==='string'?a.href:null}";
+/// Fetch `href` with the page's same-origin credentials, counting the body against `max`; the
+/// bytes stay in this world until read out in chunks. Only fixed fields return. `same-origin` mode
+/// makes a redirect to another origin a failure before any request there; a first `manual` request
+/// tells such a failure (`redirect`) from a network error.
+const FETCH_FN: &str = "async function(href,max,origins){const opt={credentials:'same-origin',mode:'same-origin'};\
+let r;try{r=await fetch(href,Object.assign({redirect:'manual'},opt));}catch(e){return {e:'network'};}\
+if(r.type==='opaqueredirect'){try{r=await fetch(href,Object.assign({redirect:'follow'},opt));}\
+catch(e){return {e:'redirect'};}}const m={url:r.url,status:r.status};\
+let o0='';try{o0=new URL(r.url).origin;}catch(e){}if(!origins.includes(o0)){try{r.body&&r.body.cancel();}\
+catch(e){}return Object.assign(m,{e:'redirect'});}\
+if(!r.ok)return Object.assign(m,{e:'status'});const reader=r.body.getReader();const parts=[];let n=0;\
+for(;;){const x=await reader.read();if(x.done)break;n+=x.value.length;if(n>max){try{reader.cancel();}\
+catch(e){}return Object.assign(m,{e:'size'});}parts.push(x.value);}const out=new Uint8Array(n);let o=0;\
+for(const p of parts){out.set(p,o);o+=p.length;}globalThis.__celerisDownload=out;\
+return Object.assign(m,{size:n});}";
 /// Counts the *live* `input[type=password]` in the document, its open shadow roots and same-origin
 /// frames: rendered (a layout box, not `visibility: hidden`) or holding a value. A hidden, empty
 /// password input (a collapsed login widget on an otherwise ordinary page) can neither show a
@@ -605,6 +629,11 @@ pub struct CdpController {
     /// True while an agent command (and its post-login checks) runs: replies may take
     /// [`AGENT_TIMEOUT`], and a timeout records what Chrome announced meanwhile.
     agent_call: bool,
+    /// 付記 2026-10-10m: a longer reply bound for the controller's own fetch.
+    call_timeout: Option<Duration>,
+    /// Armed by the launcher before the runner reads a download's ref: the agent session and
+    /// `backendNodeId` of the first element agent-browser resolves.
+    ref_capture: Option<Option<(String, i64)>>,
     /// Document requests of agent pages still waiting for their response (request ids, at most
     /// 64): a reply timeout says whether a navigation was pending (付記 2026-10-10i).
     pending_documents: std::collections::HashSet<String>,
@@ -666,6 +695,8 @@ impl CdpController {
             download_breach: false,
             agent_denials: std::collections::VecDeque::new(),
             agent_call: false,
+            call_timeout: None,
+            ref_capture: None,
             pending_documents: std::collections::HashSet::new(),
             completed_downloads: std::collections::HashSet::new(),
             action_watch: None,
@@ -881,6 +912,13 @@ impl CdpController {
         params: Value,
         session: Option<&str>,
     ) -> Result<Value, InjectionError> {
+        // 付記 2026-10-10m: the element the runner's ref read resolved (the download's link).
+        if method == "DOM.resolveNode"
+            && let Some(None) = self.ref_capture
+            && let (Some(node), Some(s)) = (params["backendNodeId"].as_i64(), session)
+        {
+            self.ref_capture = Some(Some((s.to_owned(), node)));
+        }
         self.agent_call = true;
         let result = self.agent_command_inner(method, params, session);
         self.agent_call = false;
@@ -1888,7 +1926,9 @@ return out;}})()"
         let timeout = self.response_timeout;
         #[cfg(not(feature = "attack-test-hooks"))]
         let timeout = TIMEOUT;
-        let timeout = if self.agent_call {
+        let timeout = if let Some(long) = self.call_timeout {
+            long
+        } else if self.agent_call {
             timeout.max(AGENT_TIMEOUT)
         } else {
             timeout
@@ -1958,6 +1998,152 @@ return out;}})()"
             self.buffered.extend_from_slice(&chunk[..n]);
             chunk.zeroize();
         }
+    }
+
+    /// 付記 2026-10-10m: remember the next element agent-browser resolves (the runner reads the
+    /// download's ref right after this).
+    pub fn arm_ref_capture(&mut self) {
+        self.ref_capture = Some(None);
+    }
+
+    /// 付記 2026-10-10m: fetch the captured link's href in the page's context. `Err` is a fixed
+    /// token; `href_missing` / `ref_unresolved` mean the caller may click instead.
+    pub fn fetch_captured_download(&mut self, max: u64) -> Result<Vec<u8>, &'static str> {
+        let captured = self.ref_capture.take().flatten();
+        let read_origins = self.post_login.clone().ok_or("not_after_login")?;
+        let (session, node) = captured.ok_or("ref_unresolved")?;
+        let target = self
+            .agent_targets
+            .get(&session)
+            .cloned()
+            .ok_or("ref_unresolved")?;
+        if self.post_login_gate(&session).is_err() {
+            return Err("page_denied");
+        }
+        let check = self.check_session(&target).map_err(|_| "page_denied")?;
+        let tree = self
+            .call("Page.getFrameTree", json!({}), Some(&check))
+            .map_err(|_| "page_denied")?;
+        let frame = tree["result"]["frameTree"]["frame"]["id"]
+            .as_str()
+            .ok_or("page_denied")?
+            .to_owned();
+        let world = self
+            .call(
+                "Page.createIsolatedWorld",
+                json!({"frameId": frame, "worldName": FETCH_WORLD}),
+                Some(&check),
+            )
+            .map_err(|_| "page_denied")?;
+        let context = world["result"]["executionContextId"]
+            .as_i64()
+            .ok_or("page_denied")?;
+        let resolved = self
+            .call(
+                "DOM.resolveNode",
+                json!({"backendNodeId": node, "executionContextId": context}),
+                Some(&check),
+            )
+            .map_err(|_| "ref_unresolved")?;
+        let object = resolved["result"]["object"]["objectId"]
+            .as_str()
+            .ok_or("ref_unresolved")?
+            .to_owned();
+        let href = self
+            .call(
+                "Runtime.callFunctionOn",
+                json!({"objectId": object, "functionDeclaration": LINK_HREF_FN,
+                       "returnByValue": true, "silent": true}),
+                Some(&check),
+            )
+            .map_err(|_| "ref_unresolved")?;
+        let Some(href) = href["result"]["result"]["value"]
+            .as_str()
+            .map(str::to_owned)
+        else {
+            return Err("href_missing");
+        };
+        if origin(Some(&href)).is_none_or(|o| !read_origins.contains(&o)) {
+            return Err("origin_denied");
+        }
+        self.call_timeout = Some(FETCH_TIMEOUT);
+        let fetched = self.call(
+            "Runtime.callFunctionOn",
+            json!({"executionContextId": context, "functionDeclaration": FETCH_FN,
+                   "arguments": [{"value": href}, {"value": max}, {"value": read_origins}],
+                   "awaitPromise": true, "returnByValue": true, "silent": true}),
+            Some(&check),
+        );
+        self.call_timeout = None;
+        let fetched = fetched.map_err(|_| "fetch_failed_timeout")?;
+        if !fetched["result"]["exceptionDetails"].is_null() {
+            return Err("fetch_failed_script");
+        }
+        let meta = &fetched["result"]["result"]["value"];
+        let result = (|| {
+            match meta["e"].as_str() {
+                Some("network") => return Err("fetch_failed_network"),
+                Some("size") => return Err("size_exceeded"),
+                Some("redirect") => return Err("redirect_denied"),
+                Some("status") => {
+                    return Err(match meta["status"].as_u64().unwrap_or(0) / 100 {
+                        1 => "fetch_failed_1xx",
+                        3 => "fetch_failed_3xx",
+                        4 => "fetch_failed_4xx",
+                        5 => "fetch_failed_5xx",
+                        _ => "fetch_failed_other",
+                    });
+                }
+                Some(_) => return Err("fetch_failed_other"),
+                None => {}
+            }
+            if origin(meta["url"].as_str()).is_none_or(|o| !read_origins.contains(&o)) {
+                return Err("redirect_denied");
+            }
+            let size = meta["size"].as_u64().ok_or("fetch_failed_other")?;
+            if size > max {
+                return Err("size_exceeded");
+            }
+            let mut bytes = Vec::with_capacity(usize::try_from(size).unwrap_or(0));
+            let mut offset = 0u64;
+            while offset < size {
+                let chunk = self
+                    .call(
+                        "Runtime.evaluate",
+                        json!({"expression": format!(
+                            "(()=>{{const b=globalThis.__celerisDownload.subarray({offset},{end});\
+                             let s='';for(let i=0;i<b.length;i+=32768)\
+                             s+=String.fromCharCode.apply(null,b.subarray(i,i+32768));return btoa(s);}})()",
+                            end = offset + FETCH_CHUNK
+                        ), "contextId": context, "returnByValue": true, "silent": true}),
+                        Some(&check),
+                    )
+                    .map_err(|_| "fetch_failed_read")?;
+                let data = chunk["result"]["result"]["value"]
+                    .as_str()
+                    .ok_or("fetch_failed_read")?;
+                use base64::Engine as _;
+                let decoded = base64::engine::general_purpose::STANDARD
+                    .decode(data)
+                    .map_err(|_| "fetch_failed_read")?;
+                if decoded.is_empty() {
+                    return Err("fetch_failed_read");
+                }
+                offset += decoded.len() as u64;
+                bytes.extend_from_slice(&decoded);
+            }
+            if bytes.len() as u64 != size {
+                return Err("fetch_failed_read");
+            }
+            Ok(bytes)
+        })();
+        let _ = self.call(
+            "Runtime.evaluate",
+            json!({"expression": "delete globalThis.__celerisDownload", "contextId": context,
+                   "silent": true}),
+            Some(&check),
+        );
+        result
     }
 
     /// 付記 2026-10-10j: start recording what Chrome does during one launcher action.
@@ -2876,6 +3062,33 @@ mod idle_pump_tests {
         assert!(
             !c.download_completed_allowed("g-ok"),
             "a breach stops every adoption"
+        );
+    }
+
+    /// 付記 2026-10-10m: the href fetch runs only after login and only for an element the runner's
+    /// ref read resolved; otherwise the caller falls back (no request is sent).
+    #[test]
+    fn fetch_href_needs_login_and_a_captured_element() {
+        let (mut c, _browser) = controller();
+        c.arm_ref_capture();
+        assert_eq!(c.fetch_captured_download(1 << 20), Err("not_after_login"));
+        c.post_login = Some(vec!["https://lms.test".into()]);
+        assert_eq!(
+            c.fetch_captured_download(1 << 20),
+            Err("ref_unresolved"),
+            "not armed"
+        );
+        c.arm_ref_capture();
+        assert_eq!(
+            c.fetch_captured_download(1 << 20),
+            Err("ref_unresolved"),
+            "nothing resolved"
+        );
+        c.ref_capture = Some(Some(("UNKNOWN".into(), 7)));
+        assert_eq!(
+            c.fetch_captured_download(1 << 20),
+            Err("ref_unresolved"),
+            "no agent target"
         );
     }
 

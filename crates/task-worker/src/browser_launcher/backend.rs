@@ -623,6 +623,83 @@ fn runner_tokens(value: &serde_json::Value) -> String {
 /// action without an artifact and fails it as before).
 pub const ARTIFACT_FAILURE_PREFIX: &str = "celeris_artifact_failure ";
 
+/// 付記 2026-10-10m: the outcome of a download's href path.
+pub enum HrefFetch {
+    /// The controller fetched the link; the bytes are an allowed download type.
+    Fetched { bytes: Vec<u8>, link: String },
+    /// No usable href (or the element could not be resolved): click instead. `link` is the
+    /// runner's link read (tokens) for the failure report.
+    Click {
+        note: &'static str,
+        link: serde_json::Value,
+    },
+    /// Refused with a fixed token (no click).
+    Refused { token: &'static str, link: String },
+}
+
+/// 付記 2026-10-10m: arm the controller, let `read_link` have agent-browser read the download's
+/// ref (the controller learns the element), then fetch its href in the page's context and check
+/// the bytes' type. `read_link` returns the runner's link tokens (`None`: the read failed).
+pub fn fetch_href(
+    controller: &std::sync::Arc<std::sync::Mutex<crate::browser_cdp_sink::CdpController>>,
+    read_link: impl FnOnce() -> Option<serde_json::Value>,
+) -> HrefFetch {
+    if let Ok(mut c) = controller.lock() {
+        c.arm_ref_capture();
+    }
+    let Some(link) = read_link() else {
+        return HrefFetch::Click {
+            note: "link_read_failed",
+            link: serde_json::Value::Null,
+        };
+    };
+    let fetched = match controller.lock() {
+        Ok(mut c) => c.fetch_captured_download(MAX_ARTIFACT_BYTES),
+        Err(_) => Err("controller_unavailable"),
+    };
+    match fetched {
+        Ok(bytes) => {
+            let tokens = runner_tokens(&link);
+            if ArtifactKind::sniff(&bytes[..bytes.len().min(16)])
+                .is_some_and(|k| k.allowed_for(Verb::Download))
+            {
+                HrefFetch::Fetched {
+                    bytes,
+                    link: tokens,
+                }
+            } else {
+                HrefFetch::Refused {
+                    token: "type_denied",
+                    link: tokens,
+                }
+            }
+        }
+        Err(note @ ("href_missing" | "ref_unresolved")) => HrefFetch::Click { note, link },
+        Err(token) => HrefFetch::Refused {
+            token,
+            link: runner_tokens(&link),
+        },
+    }
+}
+
+/// `path` new (no symlink followed, nothing replaced), 0600; removed again if the write fails.
+fn write_new_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write as _;
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .custom_flags(nix::libc::O_NOFOLLOW)
+        .open(path)?;
+    let written = file.write_all(bytes).and_then(|()| file.sync_all());
+    if written.is_err() {
+        drop(file);
+        let _ = std::fs::remove_file(path);
+    }
+    written
+}
+
 /// Whether `guid` has the shape of a Chrome download guid.
 fn download_guid(guid: &str) -> bool {
     let parts: Vec<&str> = guid.split('-').collect();
@@ -725,6 +802,44 @@ struct RuntimeSession {
 }
 
 impl RuntimeSession {
+    /// One request to the sandbox's action runner and its reply (the runner's file protocol).
+    fn runner_call(
+        &mut self,
+        body: serde_json::Value,
+    ) -> Result<serde_json::Value, (ErrorCode, String)> {
+        let at = |code: ErrorCode, reason: &str| (code, format!("launcher_reason={reason}"));
+        self.sequence += 1;
+        let request = self
+            .dir
+            .join("actions")
+            .join(format!("{:016x}.request", self.sequence));
+        let result = request.with_extension("result");
+        write_shared(
+            &request,
+            &serde_json::to_vec(&body).map_err(|_| at(ErrorCode::BadRequest, "request_encode"))?,
+        )
+        .map_err(|code| at(code, "request_write"))?;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(50);
+        let body = loop {
+            match std::fs::read(&result) {
+                Ok(body) => break body,
+                Err(e)
+                    if e.kind() == std::io::ErrorKind::NotFound
+                        && std::time::Instant::now() < deadline =>
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(10))
+                }
+                Err(_) => {
+                    let _ = std::fs::remove_file(&request);
+                    return Err(at(ErrorCode::Timeout, "runner_timeout"));
+                }
+            }
+        };
+        let _ = std::fs::remove_file(result);
+        serde_json::from_slice(&body)
+            .map_err(|_| at(ErrorCode::LaunchFailed, "runner_reply_invalid"))
+    }
+
     fn run_action(
         &mut self,
         verb: Verb,
@@ -795,39 +910,92 @@ impl RuntimeSession {
         } else {
             None
         };
-        self.sequence += 1;
-        let request = self
-            .dir
-            .join("actions")
-            .join(format!("{:016x}.request", self.sequence));
-        let result = request.with_extension("result");
-        write_shared(
-            &request,
-            &serde_json::to_vec(&json!({"verb":name,"args":argv,"artifact":artifact}))
-                .map_err(|_| at(ErrorCode::BadRequest, "request_encode"))?,
-        )
-        .map_err(|code| at(code, "request_write"))?;
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(50);
-        let body = loop {
-            match std::fs::read(&result) {
-                Ok(body) => break body,
-                Err(e)
-                    if e.kind() == std::io::ErrorKind::NotFound
-                        && std::time::Instant::now() < deadline =>
-                {
-                    std::thread::sleep(std::time::Duration::from_millis(10))
+        // 付記 2026-10-10m: after login a download first tries the link's href in the page's context
+        // (the controller fetches it); a link without an href falls back to the click.
+        let mut fetch_note = None;
+        let mut read_link = serde_json::Value::Null;
+        let controller = self.shared.controller();
+        let after_login = controller.lock().is_ok_and(|c| c.post_login_active());
+        if verb == Verb::Download && after_login {
+            let mut read_error = None;
+            let outcome = fetch_href(&controller, || {
+                match self.runner_call(
+                    json!({"verb":name,"args":argv,"artifact":artifact,"phase":"resolve"}),
+                ) {
+                    Ok(reply) => Some(reply["link"].clone()),
+                    Err(e) => {
+                        read_error = Some(e);
+                        None
+                    }
                 }
-                Err(_) => {
-                    let _ = std::fs::remove_file(&request);
-                    return Err(at(ErrorCode::Timeout, "runner_timeout"));
+            });
+            if let Some((code, detail)) = read_error {
+                return Err((
+                    code,
+                    format!("{detail} path=fetch_href fetch=link_read_failed"),
+                ));
+            }
+            match outcome {
+                HrefFetch::Fetched { bytes, link } => {
+                    let name = artifact
+                        .clone()
+                        .ok_or_else(|| at(ErrorCode::LaunchFailed, "artifact_name"))?;
+                    write_new_private(&self.dir.join("output").join(&name), &bytes).map_err(
+                        |_| {
+                            (
+                                ErrorCode::BadRequest,
+                                format!("path=fetch_href fetch=write_failed link={link}"),
+                            )
+                        },
+                    )?;
+                    self.artifacts.push((name.clone(), verb));
+                    eprintln!(
+                        "celeris-browser-launcher: action download done: session={} path=fetch_href link={link}",
+                        self.sup.session_id(),
+                    );
+                    return Ok(Observation {
+                        text: Some(
+                            json!({"success": true, "data": {"path": "fetch_href", "bytes": bytes.len()}})
+                                .to_string(),
+                        ),
+                        artifact: Some(name),
+                    });
+                }
+                HrefFetch::Click { note, link } => {
+                    fetch_note = Some(note);
+                    read_link = link;
+                }
+                HrefFetch::Refused { token, link } => {
+                    return Err((
+                        ErrorCode::BadRequest,
+                        format!("path=fetch_href fetch={token} link={link}"),
+                    ));
                 }
             }
+        }
+        let request = if verb == Verb::Download && after_login {
+            json!({"verb":name,"args":argv,"artifact":artifact,"phase":"click"})
+        } else {
+            json!({"verb":name,"args":argv,"artifact":artifact})
         };
-        let _ = std::fs::remove_file(result);
-        let reply: serde_json::Value = serde_json::from_slice(&body)
-            .map_err(|_| at(ErrorCode::LaunchFailed, "runner_reply_invalid"))?;
+        let click_detail = |detail: String| {
+            if verb != Verb::Download {
+                return detail;
+            }
+            let mut out = format!("{detail} path=click");
+            if let Some(note) = fetch_note {
+                out.push_str(&format!(" fetch={note}"));
+            }
+            if !read_link.is_null() {
+                out.push_str(&format!(" link_read={}", runner_tokens(&read_link)));
+            }
+            out
+        };
+        let reply = self
+            .runner_call(request)
+            .map_err(|(code, detail)| (code, click_detail(detail)))?;
         if reply["status"].as_i64() != Some(0) {
-            return Err((ErrorCode::BadRequest, runner_failure(&reply)));
+            return Err((ErrorCode::BadRequest, click_detail(runner_failure(&reply))));
         }
         // 付記 2026-10-10j: the runner adopted a download Chrome completed on its own (a link that
         // opened a new tab). It counts only if the controller saw that download complete and let
@@ -1221,7 +1389,9 @@ impl BackendSession for RuntimeSession {
         );
         // A screenshot / download the runner could not produce: the daemon gets the same tokens
         // (the agent asked for them) in an observation without an artifact.
-        if code == ErrorCode::BadRequest && matches!(verb, Verb::Screenshot | Verb::Download) {
+        if matches!(code, ErrorCode::BadRequest | ErrorCode::Timeout)
+            && matches!(verb, Verb::Screenshot | Verb::Download)
+        {
             return Ok(Observation {
                 text: Some(format!("{ARTIFACT_FAILURE_PREFIX}{line}")),
                 artifact: None,

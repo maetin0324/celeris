@@ -26,6 +26,10 @@ NAME = re.compile(r'(extract|screenshot|download)-[a-f0-9]{32}\.(json|png|bin)\Z
 GUID = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\Z')
 OUTPUT = ROOT / 'output'
 EXEC_TIMEOUT = 45
+# 付記 2026-10-10m: a click download and the link read each end well within the launcher's 50 s wait.
+DOWNLOAD_TIMEOUT = 38
+READ_BUDGET = 30
+PHASES = (None, 'resolve', 'click')
 
 
 def allowed_origin(url):
@@ -53,6 +57,8 @@ def command(request):
     verb = request.get('verb')
     args = request.get('args')
     artifact = request.get('artifact')
+    if request.get('phase') not in PHASES or (request.get('phase') and verb != 'download'):
+        raise ValueError()
     if verb not in VERBS or not isinstance(args, list) or any(not isinstance(a, str) for a in args):
         raise ValueError()
     if VERBS[verb] not in ALLOWED or len(args) > 2 or any(len(a) > 4096 for a in args):
@@ -147,7 +153,7 @@ def query(action):
         return None
     try:
         result = subprocess.run(argv, cwd=ROOT, env=browser_env(), stdout=subprocess.PIPE,
-                                stderr=subprocess.DEVNULL, timeout=10, check=False)
+                                stderr=subprocess.DEVNULL, timeout=8, check=False)
         data = json.loads(result.stdout[:1048576].decode('utf-8', errors='replace') or 'null')
     except (OSError, ValueError, subprocess.TimeoutExpired):
         return None
@@ -170,11 +176,17 @@ def text_value(data, *keys):
 
 def link_tokens(ref):
     """付記 2026-10-10j: the download link's static shape as fixed tokens (no URL, no text)."""
-    attrs = {}
+    attrs = {'href': None, 'target': None, 'download': None, 'onclick': None}
+    start = time.monotonic()
+    # `href` first: it is also the read through which the controller learns the ref's element.
     for name in ('href', 'target', 'download', 'onclick'):
+        if time.monotonic() - start > READ_BUDGET:
+            break
         data = query(['get', 'attr', ref, name])
         attrs[name] = text_value(data, 'value', 'attribute', name, 'result')
-    page = text_value(query(['get', 'url']), 'url', 'value', 'result')
+    page = None
+    if time.monotonic() - start <= READ_BUDGET:
+        page = text_value(query(['get', 'url']), 'url', 'value', 'result')
     if all(v is None for v in attrs.values()) and page is None:
         return ['link_unreadable']
     tokens = []
@@ -220,11 +232,45 @@ def completed_guids():
             and (OUTPUT / n).is_file() and not (OUTPUT / n).is_symlink()}
 
 
+def with_link(response, tokens):
+    if tokens is not None:
+        response['link'] = tokens
+    return response
+
+
+def recover_browser_daemon():
+    """付記 2026-10-10m: after a download agent-browser gave up on, its daemon may still be waiting
+    on it, and every next command (a snapshot of the same tab) queues behind it. Stop the daemon;
+    the next command starts a fresh one on the same browser."""
+    try:
+        binary = os.path.realpath(CONFIG['executable'])
+    except (OSError, KeyError, TypeError):
+        return False
+    names = {os.path.basename(binary)}
+    stopped = False
+    for entry in os.listdir('/proc'):
+        if not entry.isdigit() or int(entry) == os.getpid():
+            continue
+        try:
+            exe = os.path.basename(os.readlink('/proc/%s/exe' % entry))
+        except OSError:
+            continue
+        if exe in names or exe.startswith('agent-browser'):
+            try:
+                os.kill(int(entry), 9)
+                stopped = True
+            except OSError:
+                pass
+    return stopped
+
+
 def download(request, argv):
     """付記 2026-10-10j: run agent-browser's download, and adopt a download Chrome completed on its
     own meanwhile (a link opening a new tab) when agent-browser does not see it. The launcher
     checks the adopted guid against the downloads its controller let through."""
-    tokens = link_tokens(request['args'][0])
+    phase = request.get('phase')
+    tokens = link_tokens(request['args'][0]) if phase is None else None
+    timeout = EXEC_TIMEOUT if phase is None else DOWNLOAD_TIMEOUT
     before = completed_guids()
     try:
         proc = subprocess.Popen(argv, cwd=ROOT, env=browser_env(), stdout=subprocess.PIPE,
@@ -235,7 +281,7 @@ def download(request, argv):
     # not see is adopted only after it gave up.
     reason = None
     try:
-        proc.wait(timeout=EXEC_TIMEOUT)
+        proc.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
         reason = 'exec_timeout'
         proc.kill()
@@ -255,14 +301,18 @@ def download(request, argv):
         try:
             os.replace(OUTPUT / fresh[0], artifact)
         except OSError:
-            return {'status': 1, 'stdout': '', 'runner_reason': 'adopt_failed', 'link': tokens}
-        return {'status': 0, 'stdout': json.dumps({'success': True, 'data': {'adopted': True}}),
-                'adopted_guid': fresh[0], 'runner_reason': 'adopted_download', 'link': tokens}
+            return with_link({'status': 1, 'stdout': '', 'runner_reason': 'adopt_failed'}, tokens)
+        return with_link({'status': 0, 'stdout': json.dumps({'success': True, 'data': {'adopted': True}}),
+                          'adopted_guid': fresh[0], 'runner_reason': 'adopted_download'}, tokens)
     response = {'status': 1, 'stdout': stdout if reason is None else '',
                 'runner_reason': reason or 'agent_browser_exit',
-                'error_class': error_class(stdout) if reason is None else 'none', 'link': tokens}
+                'error_class': error_class(stdout) if reason is None else 'none'}
+    if tokens is not None:
+        response['link'] = tokens
     if len(fresh) > 1:
         response['runner_reason'] = 'downloads_ambiguous'
+    if waited and recover_browser_daemon():
+        response['recovery'] = 'daemon_restarted'
     return response
 
 
@@ -275,6 +325,9 @@ def execute(request):
         if argv is None:
             return {'status': 1, 'stdout': '', 'runner_reason': 'config_invalid'}
         if request.get('verb') == 'download':
+            if request.get('phase') == 'resolve':
+                # 付記 2026-10-10m: read the link (the controller learns its element meanwhile).
+                return {'status': 0, 'stdout': '', 'link': link_tokens(request['args'][0])}
             return download(request, argv)
     env = browser_env()
     try:
@@ -296,6 +349,8 @@ def finish_artifact(request, response):
     """The launcher (another host UID) reads screenshot / download files to hand them to Celeris
     (protocol v8); the generated name was validated by command()."""
     artifact = request.get('artifact')
+    if request.get('phase') == 'resolve':
+        return response
     if (response.get('status') != 0 or request.get('verb') not in ('screenshot', 'download')
             or not isinstance(artifact, str) or not NAME.fullmatch(artifact)):
         return response

@@ -623,3 +623,45 @@ main 898929d9 の release gate（他の task の負荷が高い時）で `browse
    これも渡さないことにした（agent-browser から見て dialog は一切起きていない）。試験は `unknown_ref` のときだけ、その段を頁を開く
    ところからもう一度だけ行う（agent が snapshot を取り直すのと同じ。2 回目の結果をそのまま確かめる）。製品の agent には
    `detail` の `error_class=unknown_ref` が届く。
+
+## 付記 2026-10-10m: ログイン後の `download @ref` は controller が href を頁の文脈で取りに行く（人の決定）
+
+人の決定（2026-10-10 22:00Z 頃）: click による download が manaba で通らないため、controller が link の href を取りに行く経路を作る
+（付記 2026-10-10j で見送った代替）。
+
+本番（release e65571fe、task 01M4GYJ3XGJNWZQDF35F1MDE0H、21:48–21:52Z）: manaba の資料頁の `download @ref` 3 回が全部
+`code=timeout launcher_reason=runner_timeout`（約 50 秒）。`after=target_destroyed` が 1 回、`after=none` が 2 回。timeout には
+`link=`・`after=` が agent に届かず、timeout の後は同じ tab の snapshot も頁を開き直すまで timeout した。古い ref の `unknown_ref` では
+`link=target_none,no_download_attr,no_onclick,href_none`（その要素に href が無い）。
+
+決定:
+
+1. **経路の選択。** ログイン後（post-login の read が開いている session）の `download @ref` では、launcher はまず runner に ref の要素を
+   読ませる（`get attr @ref href` ほか。値は runner から出ない）。controller はこの読み取りで agent-browser が解いた要素
+   （`DOM.resolveNode` の `backendNodeId`）を控える。controller はその要素か、いちばん近い祖先の `<a href>` の絶対 URL を自分の
+   isolated world で読む。
+   - href が無い（JS や form で動く要素）・要素を控えられない → 従来の click による download（`path=click`）。
+   - href の origin が read_origins に無い → 失敗（`origin_denied`。click もしない）。
+2. **取りに行き方（`path=fetch_href`）。** 頁の上端の文書が read_origins の origin で password 欄が無いこと（付記 D2-3 の検査）を
+   確かめたうえで、controller の isolated world で `fetch(href, {credentials: 'same-origin', redirect: 'follow'})` を行う。cookie・
+   header は controller から出ない（agent にも launcher の journal にも渡らない）。
+   - 最終 URL（redirect の後）の origin が read_origins に無ければ捨てる（`redirect_denied`）。他 origin への redirect には
+     `credentials: 'same-origin'` なので cookie は送られない。
+   - HTTP status が 2xx でなければ `fetch_failed_<status の百の位>xx`、通信の失敗は `fetch_failed_network`。
+   - 本文は読みながら数え、artifact の上限（10 MiB）を越えたら打ち切る（`size_exceeded`）。
+   - 型は既存の artifact の判定（先頭 byte、PDF・画像・OOXML・OLE2・zip）。合わなければ `type_denied`（HTML のログイン頁など）。
+     Content-Type の申告は信じない。text は既存の artifact の型に無いので通さない。
+   - 1 回の呼び出しで 1 file。file 名は従来どおり launcher の生成名（`download-<hex>.bin`）で、shim が先頭 byte で
+     `.pdf` などの名前を足す。Content-Disposition・URL の名前は protocol に欄が無いので渡さない。
+   - 取った file は launcher が session の output に書き、既存の protocol 8 の artifact の受け渡しで run の `browser/output` に届く。
+     agent には通常の download と同じ成功が返る。
+3. **timeout の詳細と tab の回復。** launcher の runner 待ちの期限切れ（`runner_timeout`）も、screenshot / download なら
+   `link=`・`after=`・`path=` の token を agent に返す（付記 2026-10-10j 4 と同じ形）。runner は click の download が期限切れになったら
+   agent-browser の daemon を止める（次の command で daemon は作り直され、同じ tab の snapshot が通る）。runner の各段の期限は
+   launcher の待ち（50 秒）より短くする。
+4. **固定 token。** 成功・失敗の行に `path=fetch_href` / `path=click`、失敗の理由 `href_missing`・`origin_denied`・`redirect_denied`・
+   `type_denied`・`size_exceeded`・`fetch_failed_<n>xx`・`fetch_failed_network`・`page_denied`（頁の検査に落ちた）。URL・file 名は
+   記録しない。
+5. **版。** protocol は 9 のまま（launcher と controller の中の変更。daemon・shim は変わらない）。
+
+ログイン前（read の開いていない session）の download は従来どおり click。

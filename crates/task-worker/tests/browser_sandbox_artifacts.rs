@@ -144,6 +144,27 @@ class H(BaseHTTPRequestHandler):
                     b'<a href="/ct/slow_Slides6.pdf" onmousedown="location.href=this.href">MouseDown PDF</a>'
                     b'</body></html>')
             self.send_response(200); self.send_header('Content-Type', 'text/html')
+        elif self.path == '/files.html':
+            # 付記 2026-10-10m: course-material links for the controller's href fetch.
+            body = (b'<html><body><h1>Files</h1>'
+                    b'<a href="/ct/page_9_file/Slides1.pdf?view=full">Plain File</a> '
+                    b'<a href="/ct/slow_Slides6.pdf">Slow File</a> '
+                    b'<a href="/ct/attach_Slides1.pdf">Attach File</a> '
+                    b'<a href="/ct/redirect_Slides4.pdf">Redirect File</a> '
+                    b'<a href="/ct/elsewhere_Slides5.pdf">Elsewhere File</a> '
+                    b'<a href="/ct/page_x.html">Html File</a> '
+                    b'<a href="/ct/big_file.pdf">Big File</a> '
+                    b'<a href="/ct/page_9_file/Slides1.pdf"><button>Child File</button></a> '
+                    b'<span role="link" tabindex="0" '
+                    b'onclick="location.href=\'/ct/page_9_file/Slides1.pdf?view=full\'">Js File</span>'
+                    b'</body></html>')
+            self.send_response(200); self.send_header('Content-Type', 'text/html')
+        elif self.path == '/ct/page_x.html':
+            body = b'<html><body>Please sign in</body></html>'
+            self.send_response(200); self.send_header('Content-Type', 'text/html')
+        elif self.path == '/ct/big_file.pdf':
+            body = PDF + b'%' * (10 * 1024 * 1024 + 1)
+            self.send_response(200); self.send_header('Content-Type', 'application/pdf')
         elif self.path == '/blank.html':
             # manaba-like file links (付記 2026-10-10j): a new tab (target=_blank) to the file, fast and
             # slow, and an intermediate page that moves on to the file by script.
@@ -256,6 +277,25 @@ fn action(
             return serde_json::from_slice(&body).expect("result json");
         }
         assert!(Instant::now() < deadline, "{verb}: no result");
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// A runner request with any body (the launcher's two-phase download).
+fn action_raw(session: &Path, seq: &mut u64, body: Value) -> Value {
+    *seq += 1;
+    let request = session
+        .join("actions")
+        .join(format!("{:016x}.request", *seq));
+    std::fs::write(&request, serde_json::to_vec(&body).expect("json")).expect("request");
+    let result = request.with_extension("result");
+    let deadline = Instant::now() + Duration::from_secs(90);
+    loop {
+        if let Ok(body) = std::fs::read(&result) {
+            let _ = std::fs::remove_file(&result);
+            return serde_json::from_slice(&body).expect("result json");
+        }
+        assert!(Instant::now() < deadline, "no result");
         thread::sleep(Duration::from_millis(20));
     }
 }
@@ -619,8 +659,84 @@ fn inner() {
                 // As the launcher does with a refused adoption.
                 std::fs::remove_file(out.join(&name)).expect("remove refused file");
             }
-            None => assert_ne!(got["status"], 0, "{got}"),
+            None => {
+                assert_ne!(got["status"], 0, "{got}");
+                // 付記 2026-10-10m: the runner stopped agent-browser's daemon after the timeout.
+                assert_eq!(got["recovery"], "daemon_restarted", "{got}");
+            }
         }
+        // The same tab answers again without reopening it.
+        let snap = action(s, &mut seq, "snapshot", &[], None);
+        assert_eq!(
+            snap["status"], 0,
+            "snapshot after a download timeout: {snap}"
+        );
+
+        // 付記 2026-10-10m: the controller fetches the link's href in the page's context, as the
+        // launcher does for `download @ref` after login.
+        use task_worker::browser_launcher::backend::{HrefFetch, fetch_href};
+        let fetch = |seq: &mut u64, link: &str| {
+            let r = ref_on(seq, "files.html", link);
+            let name = format!("download-{}.bin", "f".repeat(32));
+            let outcome = fetch_href(&relay.controller(), || {
+                let read = action_raw(
+                    s,
+                    seq,
+                    json!({"verb":"download","args":[r],"artifact":name,"phase":"resolve"}),
+                );
+                assert_eq!(read["status"], 0, "link read {link}: {read}");
+                Some(read["link"].clone())
+            });
+            (r, outcome)
+        };
+        for link in [
+            "Plain File",
+            "Slow File",
+            "Attach File",
+            "Redirect File",
+            "Child File",
+        ] {
+            match fetch(&mut seq, link).1 {
+                HrefFetch::Fetched { bytes, .. } => assert_eq!(bytes, PDF, "{link}"),
+                HrefFetch::Click { note, .. } => panic!("{link}: click ({note})"),
+                HrefFetch::Refused { token, .. } => panic!("{link}: refused {token}"),
+            }
+        }
+        for (link, expected) in [
+            ("Elsewhere File", "redirect_denied"),
+            ("Html File", "type_denied"),
+            ("Big File", "size_exceeded"),
+        ] {
+            match fetch(&mut seq, link).1 {
+                HrefFetch::Refused { token, .. } => assert_eq!(token, expected, "{link}"),
+                HrefFetch::Fetched { .. } => panic!("{link}: fetched"),
+                HrefFetch::Click { note, .. } => panic!("{link}: click ({note})"),
+            }
+        }
+        // No href (a script-driven link): the click download takes over and succeeds.
+        let (r, outcome) = fetch(&mut seq, "Js File");
+        match outcome {
+            HrefFetch::Click { note, link } => {
+                assert_eq!(note, "href_missing");
+                assert!(
+                    link.as_array()
+                        .is_some_and(|l| l.iter().any(|t| t == "href_none")),
+                    "{link}"
+                );
+            }
+            _ => panic!("Js File: expected the click fallback"),
+        }
+        let name = format!("download-{}.bin", "0".repeat(32));
+        let clicked = action_raw(
+            s,
+            &mut seq,
+            json!({"verb":"download","args":[r],"artifact":name,"phase":"click"}),
+        );
+        assert_eq!(clicked["status"], 0, "click fallback: {clicked}");
+        assert_eq!(std::fs::read(out.join(&name)).expect("file"), PDF);
+        // No breach: the session still reads.
+        let snap = action(s, &mut seq, "snapshot", &[], None);
+        assert_eq!(snap["status"], 0, "{snap}");
     }
     for (link, letter) in [("Slow PDF", "4"), ("MouseDown PDF", "5")] {
         let name = format!("download-{}.bin", letter.repeat(32));

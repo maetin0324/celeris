@@ -35,7 +35,7 @@ pub enum ClientError {
     Protocol(String),
     #[error("launcher refused: {0}")]
     Remote(ErrorCode),
-    /// v8: the launcher's `hello` version has no Live View frames. Nothing was sent.
+    /// v9: the launcher's `hello` version has no Live View frames. Nothing was sent.
     #[error("launcher_protocol_no_live_frames (launcher protocol {0})")]
     NoLiveFrames(u32),
 }
@@ -335,7 +335,7 @@ impl LauncherClient {
     }
 }
 
-/// v8: a Live View frame connection bound to one launcher session (opened with
+/// v9: a Live View frame connection bound to one launcher session (opened with
 /// [`LauncherClient::open_live`]). Frames are read one at a time; nothing is buffered here.
 #[derive(Debug)]
 pub struct LiveStream {
@@ -355,7 +355,7 @@ pub enum LiveRead {
 }
 
 impl LauncherClient {
-    /// v8: opens the owner's Live View of `session_id` on a new, dedicated connection (frames never
+    /// v9: opens the owner's Live View of `session_id` on a new, dedicated connection (frames never
     /// flow on the session's control connection). `launcher_protocol` is the version the session's
     /// control connection read with [`LauncherClient::hello`]; below [`LIVE_FRAME_PROTOCOL`] this
     /// returns [`ClientError::NoLiveFrames`] without connecting, so a v7 launcher never sees

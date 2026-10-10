@@ -1602,6 +1602,8 @@ fn artifact_refusal_progress(sink: &dyn EventSink, reason: &'static str) {
             ..Default::default()
         },
     );
+}
+
 /// 付記 2026-10-10b: session の registry 登録と frame 中継を始める。attestation が無い（起動時の
 /// 隔離検査を経ていない）session は登録しない。
 async fn live_registration(
@@ -1846,7 +1848,7 @@ pub mod cross_test_support {
         pub fn protocol_version(&self) -> Result<u32, &'static str> {
             self.0.protocol_version()
         }
-        /// daemon の Live View 開始（版確認 → v8 なら frame 接続）。
+        /// daemon の Live View 開始（版確認 → v9 なら frame 接続）。
         pub fn open_live_frames(&self, socket: &Path) -> Result<FrameRelay, &'static str> {
             self.0.open_live_frames(socket)
         }
@@ -2232,7 +2234,7 @@ mod live_frame_tests {
         });
         let relay = tokio::task::spawn_blocking({
             let sock = sock.clone();
-            move || open_frame_relay(&sock, 8, "sess-A", "lease-A")
+            move || open_frame_relay(&sock, 9, "sess-A", "lease-A")
         })
         .await
         .expect("join")
@@ -2275,7 +2277,7 @@ mod live_frame_tests {
             !entry.accepts_state(),
             "launcher path takes no identity state"
         );
-        let slot = entry.live_frames().expect("v8 frames");
+        let slot = entry.live_frames().expect("v9 frames");
         push(&f, 0, b"FRAME-1");
         assert_eq!(next_body(&slot).await.as_deref(), Some(&b"FRAME-1"[..]));
         drop(reg);
@@ -2313,7 +2315,7 @@ mod live_frame_tests {
         .expect("registered");
         let slot = registry_entry(&registry, "logical-2")
             .live_frames()
-            .expect("v8 frames");
+            .expect("v9 frames");
         push(&f, 1, b"FRAME-2");
         assert_eq!(next_body(&slot).await.as_deref(), Some(&b"FRAME-2"[..]));
         let stop = Arc::clone(&runtime);
@@ -2596,26 +2598,26 @@ mod live_frame_tests {
             .collect()
     }
 
-    /// 互換表 v8 daemon × v7 launcher: `hello` が 7 なら `live_start` を送らず（frame 接続を開かず）、
+    /// 互換表 v9 daemon × v8 launcher: `hello` が 8 なら `live_start` を送らず（frame 接続を開かず）、
     /// entry は frame 購読口なしで理由 `launcher_protocol_no_live_frames` を持つ。session・action・
     /// harness・stop は従来どおり。
     #[tokio::test]
-    async fn browser_launcher_v7_continues_without_live_view() {
+    async fn browser_launcher_v8_continues_without_live_view() {
         let f = fixture();
-        let r = run_through(&f, Some(7)).await;
+        let r = run_through(&f, Some(8)).await;
         assert!(
             matches!(r.outcome.terminal, crate::Terminal::Done { .. }),
             "{:?}",
             r.outcome.terminal
         );
         let (has_frames, key, got) = r.seen;
-        assert!(!has_frames, "a v7 launcher gives no frame slot");
+        assert!(!has_frames, "a v8 launcher gives no frame slot");
         assert!(key.is_some(), "the session is still registered for the run");
         assert_eq!(got, None);
         assert!(r.requests.iter().any(|t| t == "hello"));
         assert!(
             !r.requests.iter().any(|t| t == "live_start"),
-            "no live_start reaches a v7 launcher: {:?}",
+            "no live_start reaches a v8 launcher: {:?}",
             r.requests
         );
         assert_eq!(f.backend.live_opened.load(Ordering::SeqCst), 0);
@@ -2630,10 +2632,10 @@ mod live_frame_tests {
         );
         assert!(r.registry.is_empty(), "entry removed at the end of the run");
 
-        // 理由と他の機能（同じ v7 launcher の session で action が通る）。
+        // 理由と他の機能（同じ v8 launcher の session で action が通る）。
         let again = f.dir.path().join("again");
         std::fs::create_dir(&again).expect("dir");
-        let p = proxy(&f.sock, &again, Some(7));
+        let p = proxy(&f.sock, &again, Some(8));
         let (runtime, attestation) =
             LauncherRuntime::start(&p.sock, "t9", "r9", policy()).expect("start");
         let relay = runtime.open_live_frames(&p.sock);
@@ -2651,7 +2653,7 @@ mod live_frame_tests {
         );
         let (_, obs) = runtime
             .action(Verb::Snapshot, ActionArgs::default())
-            .expect("action on a v7 launcher");
+            .expect("action on a v8 launcher");
         assert!(obs.text.is_some());
         assert!(
             !p.seen
@@ -2663,10 +2665,10 @@ mod live_frame_tests {
     }
 
     /// daemon は Live View を有効にする前に同じ session の control 接続で `hello` の版を確かめる:
-    /// v8 では `hello` の後に `live_start` が 1 回だけ行き、v7 では `hello` だけで `live_start` は無い。
+    /// v9 では `hello` の後に `live_start` が 1 回だけ行き、v8 では `hello` だけで `live_start` は無い。
     #[tokio::test]
     async fn browser_launcher_daemon_checks_live_protocol_before_enable() {
-        for (rewrite, expect_live) in [(None, true), (Some(7), false)] {
+        for (rewrite, expect_live) in [(None, true), (Some(7), false), (Some(8), false)] {
             let f = fixture();
             let r = run_through(&f, rewrite).await;
             let hello = r.requests.iter().position(|t| t == "hello");

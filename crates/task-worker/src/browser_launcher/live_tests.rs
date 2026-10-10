@@ -1,4 +1,4 @@
-//! Protocol v8 Live View (ADR 2026-10-10-browser-launcher-live-view-frames 付記 2026-10-10b) の試験。
+//! Protocol v9 Live View (ADR 2026-10-10-browser-launcher-live-view-frames 付記 2026-10-10b) の試験。
 //! 実 browser・userns は使わない: CDP は pipe の上の偽 Chrome、session は偽 backend で決定的に組む。
 
 use std::fs::File;
@@ -273,11 +273,11 @@ fn browser_launcher_live_frame_follows_preferred_target() {
     assert_eq!(attach, 1);
 }
 
-// ---- protocol v8 wire ----
+// ---- protocol v9 wire ----
 
 #[test]
-fn browser_launcher_protocol_v8_frames() {
-    assert_eq!(PROTOCOL_VERSION, 8);
+fn browser_launcher_protocol_v9_frames() {
+    assert_eq!(PROTOCOL_VERSION, 9);
     assert_eq!(PROTOCOL_VERSION, LIVE_FRAME_PROTOCOL);
     assert_eq!(MAX_LIVE_BODY, 2_097_152);
     const { assert!(CONSENT_PROTOCOL < LIVE_FRAME_PROTOCOL) };
@@ -504,7 +504,7 @@ fn read_image(stream: &mut super::client::LiveStream) -> (u64, LiveImage) {
     }
 }
 
-/// The v8 frame connection: `live_start` on a dedicated connection of the session's daemon,
+/// The v9 frame connection: `live_start` on a dedicated connection of the session's daemon,
 /// bounded frames bound to the session, `live_stop`; the control connection keeps working.
 #[test]
 fn browser_launcher_live_frame_stream_roundtrip() {
@@ -544,21 +544,21 @@ fn browser_launcher_live_frame_stream_roundtrip() {
     .expect("action");
 }
 
-/// 互換表: below v8 the client refuses before connecting (no `live_start` reaches a v7
+/// 互換表: below v9 the client refuses before connecting (no `live_start` reaches a v8
 /// launcher) with the fixed reason, and the session continues.
 #[test]
-fn browser_launcher_v7_continues_without_live_view() {
+fn browser_launcher_v8_continues_without_live_view() {
     let f = fixture();
     let mut c = connect(&f.sock);
     let s = c
         .start_session("t1", "r1", "lease1", policy())
         .expect("start");
     let missing = f._dir.path().join("no-such.sock");
-    for v in [4, 7] {
+    for v in [4, 7, 8] {
         // Even a socket that does not exist is not touched: the refusal precedes any connect.
         let e =
             LauncherClient::open_live(&missing, Duration::from_secs(1), v, &s.session_id, "lease1")
-                .expect_err("v7 has no live frames");
+                .expect_err("v8 has no live frames");
         assert!(matches!(e, ClientError::NoLiveFrames(n) if n == v), "{e}");
         assert!(e.to_string().contains(ClientError::NO_LIVE_FRAMES));
     }
@@ -571,7 +571,7 @@ fn browser_launcher_v7_continues_without_live_view() {
     )
     .expect("action");
     assert!(f.backend.feeds.lock().expect("lock")[0].is_none());
-    // A v8 stream can still start later.
+    // A v9 stream can still start later.
     LauncherClient::open_live(
         &f.sock,
         Duration::from_secs(10),
@@ -579,7 +579,7 @@ fn browser_launcher_v7_continues_without_live_view() {
         &s.session_id,
         "lease1",
     )
-    .expect("v8 live");
+    .expect("v9 live");
 }
 
 /// A frame connection is bound to exactly one session: another session's frames never appear on
@@ -592,7 +592,13 @@ fn browser_launcher_live_frame_other_session_rejected() {
     let mut b = connect(&f.sock);
     let sb = b.start_session("t2", "r2", "leaseB", policy()).expect("b");
     let open = |sid: &str, lease: &str| {
-        LauncherClient::open_live(&f.sock, Duration::from_secs(10), 8, sid, lease)
+        LauncherClient::open_live(
+            &f.sock,
+            Duration::from_secs(10),
+            LIVE_FRAME_PROTOCOL,
+            sid,
+            lease,
+        )
     };
     assert!(matches!(
         open(&sb.session_id, "leaseA"),
@@ -787,8 +793,14 @@ fn framed(body: &[u8]) -> Vec<u8> {
 
 fn client_error(script: Vec<Vec<u8>>) -> String {
     let (_dir, sock) = fake_launcher(script);
-    let mut live =
-        LauncherClient::open_live(&sock, Duration::from_secs(10), 8, "s1", "l1").expect("open");
+    let mut live = LauncherClient::open_live(
+        &sock,
+        Duration::from_secs(10),
+        LIVE_FRAME_PROTOCOL,
+        "s1",
+        "l1",
+    )
+    .expect("open");
     loop {
         match live.next_frame() {
             Ok(LiveRead::Frame(..)) => {}

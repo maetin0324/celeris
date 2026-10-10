@@ -132,7 +132,7 @@ pub trait BackendSession: Send + 'static {
     fn fetch_artifact(&mut self, _name: &str, _offset: u64) -> Result<ArtifactChunk, ErrorCode> {
         Err(ErrorCode::Unauthorized)
     }
-    /// v8 `live_start`: the session's screencast for the owner's Live View (D1). The feed must not
+    /// v9 `live_start`: the session's screencast for the owner's Live View (D1). The feed must not
     /// hold the session lock: the connection thread streams from it while actions run. Dropping
     /// the feed stops the screencast. Backends without a launcher-owned CDP controller refuse.
     fn live(&mut self) -> Result<Box<dyn LiveFeed>, ErrorCode> {
@@ -986,7 +986,7 @@ fn authorize(
     Ok(e.clone())
 }
 
-/// v8 `live_start`: the session, its lease and its expiry, opened by the same daemon process
+/// v9 `live_start`: the session, its lease and its expiry, opened by the same daemon process
 /// (`SO_PEERCRED` pid + starttime of the session's owner) on a connection other than the session's
 /// control connection (frames never flow on the control connection).
 fn authorize_live(
@@ -1035,7 +1035,7 @@ fn peer_readable(stream: &UnixStream) -> bool {
     unsafe { libc::poll(&mut fd, 1, 0) > 0 }
 }
 
-/// v8: streams `live_frame` notifications of one session on its dedicated frame connection until
+/// v9: streams `live_frame` notifications of one session on its dedicated frame connection until
 /// `live_stop`, disconnect, session end, lease expiry or shutdown. Each notification carries only
 /// the session id, a sequence number, the dimensions, the encoding and the body length; the body
 /// follows as one bounded binary frame. Any other request on this connection (there is no input

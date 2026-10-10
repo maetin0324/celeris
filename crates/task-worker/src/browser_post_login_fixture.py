@@ -128,15 +128,17 @@ class Handler(BaseHTTPRequestHandler):
                 self.send('missing', 404)
         else:
             if self.path == '/files/other.bin':
-                # Headers first, the body a little later (a download in progress when it begins).
+                # Headers first, the body much later (a download in progress when it begins). The
+                # type must not be sniffable: Chromium sniffs application/octet-stream and only
+                # begins the download once the body arrives, so the cancel would race completion.
                 body = b'other origin file'
                 self.send_response(200)
-                self.send_header('Content-Type', 'application/octet-stream')
+                self.send_header('Content-Type', 'application/x-celeris-other')
                 self.send_header('Content-Disposition', 'attachment; filename="other.bin"')
                 self.send_header('Content-Length', str(len(body)))
                 self.end_headers()
                 self.wfile.flush()
-                threading.Event().wait(8)
+                threading.Event().wait(60)
                 try:
                     self.wfile.write(body)
                 except OSError:

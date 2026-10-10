@@ -16,10 +16,11 @@ use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::time::Duration;
 
+use super::live::LiveImage;
 use super::protocol::{
     ActionArgs, AuthenticateArgs, AuthenticationStatus, DEFAULT_MAX_FRAME, ErrorCode, FrameError,
-    LoginObservation, LoginResult, Observation, Receipt, Request, Response, SessionFacts,
-    SessionPolicy, SessionState, Verb, read_frame, write_message,
+    LIVE_FRAME_PROTOCOL, LoginObservation, LoginResult, MAX_LIVE_BODY, Observation, Receipt,
+    Request, Response, SessionFacts, SessionPolicy, SessionState, Verb, read_frame, write_message,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -34,6 +35,14 @@ pub enum ClientError {
     Protocol(String),
     #[error("launcher refused: {0}")]
     Remote(ErrorCode),
+    /// v8: the launcher's `hello` version has no Live View frames. Nothing was sent.
+    #[error("launcher_protocol_no_live_frames (launcher protocol {0})")]
+    NoLiveFrames(u32),
+}
+
+impl ClientError {
+    /// The fixed reason the daemon reports when Live View cannot start (付記 2026-10-10b 互換表).
+    pub const NO_LIVE_FRAMES: &'static str = "launcher_protocol_no_live_frames";
 }
 
 impl From<FrameError> for ClientError {
@@ -326,6 +335,150 @@ impl LauncherClient {
     }
 }
 
+/// v8: a Live View frame connection bound to one launcher session (opened with
+/// [`LauncherClient::open_live`]). Frames are read one at a time; nothing is buffered here.
+#[derive(Debug)]
+pub struct LiveStream {
+    client: LauncherClient,
+    session_id: String,
+    lease_id: String,
+    last_seq: u64,
+    ended: bool,
+}
+
+/// What [`LiveStream::next_frame`] read.
+pub enum LiveRead {
+    /// One frame (sequence number and the volatile image).
+    Frame(u64, LiveImage),
+    /// The launcher ended the stream (`live_stopped`).
+    Stopped,
+}
+
+impl LauncherClient {
+    /// v8: opens the owner's Live View of `session_id` on a new, dedicated connection (frames never
+    /// flow on the session's control connection). `launcher_protocol` is the version the session's
+    /// control connection read with [`LauncherClient::hello`]; below [`LIVE_FRAME_PROTOCOL`] this
+    /// returns [`ClientError::NoLiveFrames`] without connecting, so a v7 launcher never sees
+    /// `live_start`.
+    pub fn open_live(
+        path: &Path,
+        timeout: Duration,
+        launcher_protocol: u32,
+        session_id: &str,
+        lease_id: &str,
+    ) -> Result<LiveStream, ClientError> {
+        if launcher_protocol < LIVE_FRAME_PROTOCOL {
+            return Err(ClientError::NoLiveFrames(launcher_protocol));
+        }
+        let mut client = Self::connect(path, timeout)?;
+        match client.request(&Request::LiveStart {
+            session_id: session_id.into(),
+            lease_id: lease_id.into(),
+        })? {
+            Response::LiveStarted {
+                session_id: bound,
+                max_body,
+            } if bound == session_id && max_body as usize <= MAX_LIVE_BODY => Ok(LiveStream {
+                client,
+                session_id: session_id.into(),
+                lease_id: lease_id.into(),
+                last_seq: 0,
+                ended: false,
+            }),
+            Response::LiveStarted { .. } => Err(ClientError::Protocol(
+                "live_started for another session or with an oversized body bound".into(),
+            )),
+            other => Err(unexpected("live_started", &other)),
+        }
+    }
+}
+
+impl LiveStream {
+    pub fn session_id(&self) -> &str {
+        &self.session_id
+    }
+
+    /// The launcher process that answered (all messages from the same sender).
+    pub fn responder(&self) -> Option<SenderCred> {
+        self.client.responder()
+    }
+
+    /// Reads the next notification. A frame of another session, a non-increasing sequence, a body
+    /// over [`MAX_LIVE_BODY`] or a body whose length differs from the metadata is a protocol error
+    /// (the stream is unusable afterwards).
+    pub fn next_frame(&mut self) -> Result<LiveRead, ClientError> {
+        if self.ended {
+            return Ok(LiveRead::Stopped);
+        }
+        match self.client.read_response()? {
+            Response::LiveFrame {
+                session_id,
+                seq,
+                width,
+                height,
+                encoding,
+                body_len,
+            } => {
+                if session_id != self.session_id {
+                    return Err(ClientError::Protocol(
+                        "live_frame for another session".into(),
+                    ));
+                }
+                if seq <= self.last_seq {
+                    return Err(ClientError::Protocol("live_frame out of sequence".into()));
+                }
+                if body_len as usize > MAX_LIVE_BODY {
+                    return Err(ClientError::Protocol(format!(
+                        "live_frame body too large: {body_len} bytes"
+                    )));
+                }
+                let body = read_frame(&mut self.client.stream, MAX_LIVE_BODY)?;
+                if body.len() as u64 != body_len {
+                    let mut body = body;
+                    zeroize::Zeroize::zeroize(&mut body);
+                    return Err(ClientError::Protocol(
+                        "live_frame body length differs from its metadata".into(),
+                    ));
+                }
+                self.last_seq = seq;
+                Ok(LiveRead::Frame(
+                    seq,
+                    LiveImage::new(width, height, encoding, body),
+                ))
+            }
+            Response::LiveStopped { session_id } if session_id == self.session_id => {
+                self.ended = true;
+                Ok(LiveRead::Stopped)
+            }
+            other => Err(unexpected("live_frame", &other)),
+        }
+    }
+
+    /// Sends `live_stop` and reads until `live_stopped` (frames already in flight are dropped).
+    pub fn stop(mut self) -> Result<(), ClientError> {
+        if self.ended {
+            return Ok(());
+        }
+        write_message(
+            &mut self.client.stream,
+            &Request::LiveStop {
+                session_id: self.session_id.clone(),
+                lease_id: self.lease_id.clone(),
+            },
+            self.client.max_frame,
+        )?;
+        // At most a few frames were written before the launcher saw the stop.
+        for _ in 0..64 {
+            if let LiveRead::Stopped = self.next_frame()? {
+                return Ok(());
+            }
+        }
+        Err(ClientError::Protocol(
+            "live_stop was not acknowledged".into(),
+        ))
+    }
+}
+
 /// 生の応答の先頭（診断用）。秘密は応答に載らない（session id・receipt・観測値のみ）。
 const RAW_EXCERPT_MAX: usize = 512;
 
@@ -351,6 +504,9 @@ fn unexpected(want: &str, got: &Response) -> ClientError {
         Response::AuthBegun { .. } => "auth_begun",
         Response::Artifact { .. } => "artifact",
         Response::AuthenticateResult { .. } => "authenticate_result",
+        Response::LiveStarted { .. } => "live_started",
+        Response::LiveFrame { .. } => "live_frame",
+        Response::LiveStopped { .. } => "live_stopped",
         Response::Error { .. } => "error",
     };
     ClientError::Protocol(format!("expected a {want} response, got {got}"))

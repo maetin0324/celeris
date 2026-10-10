@@ -11,15 +11,18 @@
 
 pub mod backend;
 pub mod client;
+pub mod live;
 pub mod protocol;
 pub mod registry;
 pub mod server;
 pub mod userns;
 
-pub use client::{ClientError, LauncherClient, SenderCred, StartedSession};
+pub use client::{ClientError, LauncherClient, LiveStream, SenderCred, StartedSession};
+pub use live::{LiveFeed, LiveImage, LiveNext};
 pub use protocol::{
-    ActionArgs, ErrorCode, Observation, Outcome, PROTOCOL_VERSION, Receipt, Request, Response,
-    SessionBinding, SessionFacts, SessionPolicy, SessionState, Verb,
+    ActionArgs, ErrorCode, LIVE_FRAME_PROTOCOL, LiveEncoding, MAX_LIVE_BODY, Observation, Outcome,
+    PROTOCOL_VERSION, Receipt, Request, Response, SessionBinding, SessionFacts, SessionPolicy,
+    SessionState, Verb,
 };
 pub use registry::{Registry, SessionRecord};
 pub use server::{
@@ -43,5 +46,7 @@ pub(crate) fn now_unix_ms() -> u64 {
         .unwrap_or(0)
 }
 
+#[cfg(test)]
+mod live_tests;
 #[cfg(test)]
 mod tests;

@@ -332,6 +332,9 @@ fn launcher_credential_authenticate_is_fixed_and_status_only() {
         PROTOCOL_VERSION,
         crate::browser_launcher::protocol::ARTIFACT_PROTOCOL
     );
+    // v8 added Live View frames after consent (v7); consent still needs v7 only.
+    const { assert!(CONSENT_PROTOCOL < PROTOCOL_VERSION) };
+    assert_eq!(CONSENT_PROTOCOL, 7);
     const { assert!(CREDENTIAL_LOGIN_PROTOCOL < POST_LOGIN_PROTOCOL) };
 }
 

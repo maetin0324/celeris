@@ -512,6 +512,12 @@ impl SessionBackend for RuntimeBackend {
                 eprintln!("celeris-browser-launcher: start {sid}: CDP pipe missing");
                 return Err(ErrorCode::LaunchFailed);
             };
+            // v8: the Live View tap sits between Chrome's output and the controller (live.rs).
+            let (read, live_tap) = super::live::LiveTap::interpose(read).map_err(fail(
+                sid,
+                "live view tap",
+                ErrorCode::LaunchFailed,
+            ))?;
             let shared = SharedCdp::start_with_mode(
                 CdpController::new(write, read),
                 &dir.join("cdp-relay.sock"),
@@ -551,6 +557,7 @@ impl SessionBackend for RuntimeBackend {
                 session: Box::new(RuntimeSession {
                     sup,
                     shared,
+                    live_tap,
                     login: None,
                     after_login: None,
                     sequence: 0,
@@ -627,6 +634,8 @@ pub(crate) fn read_artifact_chunk(
 struct RuntimeSession {
     sup: Supervisor,
     shared: SharedCdp,
+    /// v8: the owner's Live View frames (never an agent's).
+    live_tap: std::sync::Arc<super::live::LiveTap>,
     /// v4 の login 区間（`auth_begin` で作り、`authenticate` で一度だけ使う）。
     login: Option<LoginSection>,
     /// v5: the login's outcome for the agent's verbs (ADR 2026-10-09 credential username /
@@ -929,7 +938,17 @@ impl BackendSession for RuntimeSession {
         if !self.isolation_ok() {
             return Err(ErrorCode::IsolationFailed);
         }
-        begin_login_once(&self.shared.controller(), &mut self.login, auth_section_id)
+        let target = begin_login_once(&self.shared.controller(), &mut self.login, auth_section_id)?;
+        // D3: the owner's Live View follows the login page.
+        self.live_tap.set_preferred_target(Some(target.clone()));
+        Ok(target)
+    }
+
+    fn live(&mut self) -> Result<Box<dyn super::live::LiveFeed>, ErrorCode> {
+        Ok(Box::new(super::live::ScreencastFeed::new(
+            self.live_tap.clone(),
+            self.shared.controller(),
+        )))
     }
 
     fn authenticate(

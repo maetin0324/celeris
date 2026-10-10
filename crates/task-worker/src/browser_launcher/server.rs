@@ -18,10 +18,11 @@ use std::time::{Duration, Instant};
 
 use nix::libc;
 
+use super::live::{LiveFeed, LiveNext};
 use super::protocol::{
-    ActionArgs, AuthenticateArgs, AuthenticationStatus, ErrorCode, LoginResult, Observation,
-    Outcome, Receipt, Request, Response, SessionBinding, SessionFacts, SessionPolicy, SessionState,
-    Verb, decode_request, write_message,
+    ActionArgs, AuthenticateArgs, AuthenticationStatus, ErrorCode, LoginResult, MAX_LIVE_BODY,
+    Observation, Outcome, Receipt, Request, Response, SessionBinding, SessionFacts, SessionPolicy,
+    SessionState, Verb, decode_request, write_frame, write_message,
 };
 use super::registry::{Registry, SessionRecord, stop_group};
 use super::{now_unix_ms, random_id};
@@ -131,6 +132,12 @@ pub trait BackendSession: Send + 'static {
     fn fetch_artifact(&mut self, _name: &str, _offset: u64) -> Result<ArtifactChunk, ErrorCode> {
         Err(ErrorCode::Unauthorized)
     }
+    /// v8 `live_start`: the session's screencast for the owner's Live View (D1). The feed must not
+    /// hold the session lock: the connection thread streams from it while actions run. Dropping
+    /// the feed stops the screencast. Backends without a launcher-owned CDP controller refuse.
+    fn live(&mut self) -> Result<Box<dyn LiveFeed>, ErrorCode> {
+        Err(ErrorCode::Unauthorized)
+    }
     fn observe(&mut self) -> (SessionState, SessionFacts);
     /// `verify_isolation`（ADR-0115 の owner / map 検査を含む）が Ok か。
     fn isolation_ok(&mut self) -> bool;
@@ -144,6 +151,8 @@ struct Entry {
     lease_deadline: Instant,
     policy: SessionPolicy,
     backend: Mutex<Option<Box<dyn BackendSession>>>,
+    /// v8: a frame connection streams this session (at most one).
+    live_active: AtomicBool,
 }
 
 #[derive(Default)]
@@ -558,6 +567,17 @@ fn serve_conn(inner: &Arc<Inner>, mut stream: UnixStream, peer: &Peer) {
                     true,
                 ),
             },
+            Ok(Request::LiveStart {
+                session_id,
+                lease_id,
+            }) if fds.is_empty() => {
+                // A started stream makes this the session's frame connection; it closes with the
+                // stream. A refusal (wrong lease, the control connection, …) keeps serving.
+                match serve_live(inner, &mut stream, peer, &session_id, &lease_id) {
+                    Ok(()) => return,
+                    Err(code) => (err(code), false),
+                }
+            }
             Ok(_) if !fds.is_empty() => (
                 Response::Error {
                     code: ErrorCode::BadRequest,
@@ -769,7 +789,11 @@ fn handle(inner: &Arc<Inner>, req: Request, peer: &Peer) -> Response {
             }
         }
         // `serve_conn` routes `authenticate` (with its FD) to `handle_authenticate`.
-        Request::Authenticate { .. } => err(ErrorCode::BadRequest),
+        // `serve_conn` routes `authenticate` (with its FD) to `handle_authenticate` and
+        // `live_start` to `serve_live`; `live_stop` belongs on a frame connection only.
+        Request::Authenticate { .. } | Request::LiveStart { .. } | Request::LiveStop { .. } => {
+            err(ErrorCode::BadRequest)
+        }
     }
 }
 
@@ -922,6 +946,7 @@ fn start_reserved(
         lease_deadline: Instant::now() + lease,
         policy,
         backend: Mutex::new(Some(launched.session)),
+        live_active: AtomicBool::new(false),
     });
     if inner.registry.write(&entry.record).is_err() {
         teardown(inner, &entry);
@@ -959,6 +984,160 @@ fn authorize(
         return Err(ErrorCode::LeaseMismatch);
     }
     Ok(e.clone())
+}
+
+/// v8 `live_start`: the session, its lease and its expiry, opened by the same daemon process
+/// (`SO_PEERCRED` pid + starttime of the session's owner) on a connection other than the session's
+/// control connection (frames never flow on the control connection).
+fn authorize_live(
+    inner: &Arc<Inner>,
+    peer: &Peer,
+    session_id: &str,
+    lease_id: &str,
+) -> Result<Arc<Entry>, ErrorCode> {
+    let st = lock(&inner.state);
+    let e = st
+        .sessions
+        .get(session_id)
+        .ok_or(ErrorCode::LeaseMismatch)?;
+    if e.record.lease_id != lease_id || Instant::now() >= e.lease_deadline {
+        return Err(ErrorCode::LeaseMismatch);
+    }
+    if e.owner_conn == peer.conn_id
+        || e.record.peer_pid != peer.pid
+        || e.record.peer_starttime != peer.starttime
+    {
+        return Err(ErrorCode::Unauthorized);
+    }
+    Ok(e.clone())
+}
+
+/// How long one wait for a frame lasts before the connection is checked for `live_stop`.
+const LIVE_POLL: Duration = Duration::from_millis(200);
+
+/// Whether `entry` is still the registered, unexpired session.
+fn live_session_current(inner: &Arc<Inner>, entry: &Arc<Entry>) -> bool {
+    Instant::now() < entry.lease_deadline
+        && lock(&inner.state)
+            .sessions
+            .get(&entry.record.session_id)
+            .is_some_and(|e| Arc::ptr_eq(e, entry))
+}
+
+/// Whether the peer wrote something (or closed) on the frame connection.
+fn peer_readable(stream: &UnixStream) -> bool {
+    let mut fd = libc::pollfd {
+        fd: stream.as_raw_fd(),
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    // SAFETY: one valid pollfd.
+    unsafe { libc::poll(&mut fd, 1, 0) > 0 }
+}
+
+/// v8: streams `live_frame` notifications of one session on its dedicated frame connection until
+/// `live_stop`, disconnect, session end, lease expiry or shutdown. Each notification carries only
+/// the session id, a sequence number, the dimensions, the encoding and the body length; the body
+/// follows as one bounded binary frame. Any other request on this connection (there is no input
+/// verb) ends the stream with `bad_request`. `Err` = refused before the stream started (nothing
+/// was written; the caller answers with the code).
+fn serve_live(
+    inner: &Arc<Inner>,
+    stream: &mut UnixStream,
+    peer: &Peer,
+    session_id: &str,
+    lease_id: &str,
+) -> Result<(), ErrorCode> {
+    let max = inner.cfg.limits.max_frame;
+    let entry = authorize_live(inner, peer, session_id, lease_id)?;
+    if entry.live_active.swap(true, Ordering::SeqCst) {
+        return Err(ErrorCode::Limit);
+    }
+    struct Active<'a>(&'a AtomicBool);
+    impl Drop for Active<'_> {
+        fn drop(&mut self) {
+            self.0.store(false, Ordering::SeqCst);
+        }
+    }
+    let _active = Active(&entry.live_active);
+    let feed = {
+        let mut g = lock(&entry.backend);
+        match g.as_mut() {
+            Some(s) => {
+                if s.isolation_ok() {
+                    s.live()
+                } else {
+                    Err(ErrorCode::IsolationFailed)
+                }
+            }
+            None => Err(ErrorCode::LeaseMismatch),
+        }
+    };
+    let mut feed = feed?;
+    let sid = entry.record.session_id.clone();
+    if write_message(
+        stream,
+        &Response::LiveStarted {
+            session_id: sid.clone(),
+            max_body: MAX_LIVE_BODY as u64,
+        },
+        max,
+    )
+    .is_err()
+    {
+        return Ok(());
+    }
+    let mut seq = 0u64;
+    let stopped = Response::LiveStopped {
+        session_id: sid.clone(),
+    };
+    while !inner.shutdown.load(Ordering::SeqCst) && live_session_current(inner, &entry) {
+        match feed.next_frame(LIVE_POLL) {
+            LiveNext::Frame(image) => {
+                if image.body().len() > MAX_LIVE_BODY {
+                    continue;
+                }
+                seq += 1;
+                let meta = Response::LiveFrame {
+                    session_id: sid.clone(),
+                    seq,
+                    width: image.width(),
+                    height: image.height(),
+                    encoding: image.encoding(),
+                    body_len: image.body().len() as u64,
+                };
+                if write_message(stream, &meta, max).is_err()
+                    || write_frame(stream, image.body(), MAX_LIVE_BODY).is_err()
+                {
+                    return Ok(());
+                }
+            }
+            LiveNext::Idle => {}
+            LiveNext::Ended => break,
+        }
+        if peer_readable(stream) {
+            let Some((body, fds)) = read_request(stream, &inner.cfg.limits) else {
+                return Ok(());
+            };
+            let resp = match decode_request(&body) {
+                Ok(Request::LiveStop {
+                    session_id,
+                    lease_id,
+                }) if fds.is_empty() && session_id == sid && lease_id == entry.record.lease_id => {
+                    stopped.clone()
+                }
+                Ok(Request::LiveStop { .. }) => err(ErrorCode::LeaseMismatch),
+                Ok(_) => err(ErrorCode::BadRequest),
+                Err(code) => err(code),
+            };
+            drop(fds);
+            let _ = write_message(stream, &resp, max);
+            return Ok(());
+        }
+    }
+    drop(feed);
+    let _ = write_message(stream, &stopped, max);
+    Ok(())
 }
 
 /// launcher 側での policy の再検査（verb と URL の origin）。

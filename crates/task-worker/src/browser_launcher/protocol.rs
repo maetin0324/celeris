@@ -287,6 +287,20 @@ pub fn artifact_name_verb(name: &str) -> Option<Verb> {
         .then_some(verb)
 }
 
+    /// v8: start the owner's Live View of `session_id` on this (dedicated) connection. After
+    /// `live_started` the launcher writes only `live_frame` notifications (each followed by its
+    /// bounded binary body) and finally `live_stopped`. There is no input verb (ADR D4).
+    LiveStart {
+        session_id: String,
+        lease_id: String,
+    },
+    /// v8: stop the Live View on the frame connection.
+    LiveStop {
+        session_id: String,
+        lease_id: String,
+    },
+}
+
 /// session の状態（固定）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -349,10 +363,25 @@ pub enum Outcome {
 /// v7 で `authenticate` に `consent`（同意頁の固定ボタン）と `report_consent_controls`、応答に
 /// `consent_pressed`・`consent_controls` を足した（付記 2026-10-10b）。consent を使う login は v7 を要求する。
 ///
-/// v8 で `fetch_artifact` / `artifact`（screenshot・download の file を bounded chunk で daemon が
-/// 読む）を足した（ADR 2026-10-09 credential username / post-login 付記 2026-10-10e）。daemon は v8 未満
-/// の launcher に screenshot / download を頼まず、固定理由で失敗させる。Live View の frame は v9。
-pub const PROTOCOL_VERSION: u32 = 8;
+/// v8 で本人向け Live View の `live_start` / `live_stop` と `live_frame` notification を足した
+/// （ADR 2026-10-10-browser-launcher-live-view-frames 付記 2026-10-10b）。frame は daemon が開いた
+/// Live View 専用の接続でだけ流れる。daemon は v8 未満の launcher に `live_start` を送らない。
+/// v8 で `fetch_artifact` / `artifact` を追加した後に frame 機能を追加したため、統合 protocol は v9。
+pub const PROTOCOL_VERSION: u32 = 9;
+
+/// Live View の frame（`live_start` / `live_frame`）を受ける最小の protocol 版。
+pub const LIVE_FRAME_PROTOCOL: u32 = 9;
+
+/// 1 frame の画像本体の上限（2 MiB、付記 2026-10-10b）。
+pub const MAX_LIVE_BODY: usize = 2 * 1024 * 1024;
+
+/// Live View の画像の encoding（固定）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LiveEncoding {
+    Jpeg,
+    Png,
+}
 
 /// 同意頁の固定ボタンを受ける最小の protocol 版。
 pub const CONSENT_PROTOCOL: u32 = 7;
@@ -478,6 +507,26 @@ pub enum Response {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         consent_controls: Vec<crate::browser_cdp_sink::ConsentControl>,
     },
+    /// v8: the frame connection is bound to `session_id`; `live_frame` notifications follow.
+    LiveStarted {
+        session_id: String,
+        max_body: u64,
+    },
+    /// v8 notification: metadata of one frame. The image itself follows as one length-prefixed
+    /// binary frame of exactly `body_len` bytes (at most [`MAX_LIVE_BODY`]). No URL, CDP data or
+    /// credential material is carried.
+    LiveFrame {
+        session_id: String,
+        seq: u64,
+        width: u32,
+        height: u32,
+        encoding: LiveEncoding,
+        body_len: u64,
+    },
+    /// v8: the frame stream ended (`live_stop`, or the session ended).
+    LiveStopped {
+        session_id: String,
+    },
     Error {
         code: ErrorCode,
     },
@@ -600,6 +649,9 @@ impl Request {
             Request::AuthBegin { session_id, .. } => Some(session_id),
             Request::FetchArtifact { session_id, .. } => Some(session_id),
             Request::Authenticate { args } => Some(&args.session_id),
+            Request::LiveStart { session_id, .. } | Request::LiveStop { session_id, .. } => {
+                Some(session_id)
+            }
         }
     }
 
@@ -632,6 +684,14 @@ impl Request {
                 lease_id,
             }
             | Request::Stop {
+                session_id,
+                lease_id,
+            }
+            | Request::LiveStart {
+                session_id,
+                lease_id,
+            }
+            | Request::LiveStop {
                 session_id,
                 lease_id,
             } => {

@@ -2,6 +2,8 @@
 
 tasks: [01M4KGQG4H9CAR36C0K0D8A1H9]
 
+前回 run の記録。今回の実装と最終検証は [attempt 3](retry-3.md) を参照。
+
 ## 状態
 
 - ADR 2026-10-09-browser-credential-username-and-post-login-read.md の付記 2026-10-10j に、owner・site policy・TrustedLogin の完全一致、毎 run の credential_use 承認、失敗 credential の無効化、期限と一覧/削除の要件を記録済み。

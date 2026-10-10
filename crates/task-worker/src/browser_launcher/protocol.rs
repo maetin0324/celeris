@@ -182,6 +182,109 @@ pub enum Request {
     Authenticate {
         args: AuthenticateArgs,
     },
+    /// v8 (付記 2026-10-10e): read one chunk of a screenshot / download this session produced.
+    /// `name` is the launcher-generated basename from the action's observation; the launcher
+    /// serves only names it generated for this session, never a path.
+    FetchArtifact {
+        session_id: String,
+        lease_id: String,
+        name: String,
+        offset: u64,
+    },
+}
+
+/// browser artifact transfer を受ける最小の protocol 版（v8、付記 2026-10-10e）。
+pub const ARTIFACT_PROTOCOL: u32 = 8;
+/// 1 file の上限（shim の上限と同じ 10 MiB）。
+pub const MAX_ARTIFACT_BYTES: u64 = 10 * 1024 * 1024;
+/// 1 session で作れる screenshot / download の数の上限。
+pub const MAX_ARTIFACTS: usize = 32;
+/// `fetch_artifact` の 1 応答の本体の上限（base64 で 64 KiB の frame に収まる）。
+pub const ARTIFACT_CHUNK: usize = 32 * 1024;
+
+/// 渡してよい file の型（先頭の byte で判定する。拡張子・申告の MIME は信じない）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArtifactKind {
+    Png,
+    Jpeg,
+    Gif,
+    Webp,
+    Pdf,
+    /// OOXML（docx / xlsx / pptx。zip の容器）。
+    OfficeZip,
+    /// 旧 Office（doc / xls / ppt。OLE2 の容器）。
+    OfficeLegacy,
+}
+
+impl ArtifactKind {
+    /// 先頭の byte から型を決める。どれにも当たらなければ `None`（渡さない）。
+    pub fn sniff(head: &[u8]) -> Option<Self> {
+        Some(if head.starts_with(b"\x89PNG\r\n\x1a\n") {
+            Self::Png
+        } else if head.starts_with(&[0xff, 0xd8, 0xff]) {
+            Self::Jpeg
+        } else if head.starts_with(b"GIF87a") || head.starts_with(b"GIF89a") {
+            Self::Gif
+        } else if head.len() >= 12 && head.starts_with(b"RIFF") && &head[8..12] == b"WEBP" {
+            Self::Webp
+        } else if head.starts_with(b"%PDF-") {
+            Self::Pdf
+        } else if head.starts_with(b"PK\x03\x04") {
+            Self::OfficeZip
+        } else if head.starts_with(&[0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]) {
+            Self::OfficeLegacy
+        } else {
+            return None;
+        })
+    }
+
+    pub fn media_type(self) -> &'static str {
+        match self {
+            Self::Png => "image/png",
+            Self::Jpeg => "image/jpeg",
+            Self::Gif => "image/gif",
+            Self::Webp => "image/webp",
+            Self::Pdf => "application/pdf",
+            Self::OfficeZip => "application/vnd.openxmlformats-officedocument",
+            Self::OfficeLegacy => "application/x-ole-storage",
+        }
+    }
+
+    /// agent が読むときの拡張子。
+    pub fn extension(self) -> &'static str {
+        match self {
+            Self::Png => "png",
+            Self::Jpeg => "jpg",
+            Self::Gif => "gif",
+            Self::Webp => "webp",
+            Self::Pdf => "pdf",
+            Self::OfficeZip => "zip",
+            Self::OfficeLegacy => "ole",
+        }
+    }
+
+    /// verb ごとに許す型（screenshot は PNG だけ）。
+    pub fn allowed_for(self, verb: Verb) -> bool {
+        match verb {
+            Verb::Screenshot => self == Self::Png,
+            Verb::Download => true,
+            _ => false,
+        }
+    }
+}
+
+/// launcher が screenshot / download に付ける名前（`screenshot-<32 hex>.png` / `download-<32 hex>.bin`）。
+/// どちらの verb の名前かを返す。それ以外の形は `None`。
+pub fn artifact_name_verb(name: &str) -> Option<Verb> {
+    let (verb, rest) = if let Some(rest) = name.strip_prefix("screenshot-") {
+        (Verb::Screenshot, rest.strip_suffix(".png")?)
+    } else {
+        let rest = name.strip_prefix("download-")?;
+        (Verb::Download, rest.strip_suffix(".bin")?)
+    };
+    (rest.len() == 32 && rest.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')))
+        .then_some(verb)
 }
 
 /// session の状態（固定）。
@@ -213,6 +316,9 @@ pub enum ErrorCode {
     LaunchFailed,
     #[error("isolation_failed")]
     IsolationFailed,
+    /// v8: the artifact's type is not one the transfer allows (fixed; no file data).
+    #[error("artifact_rejected")]
+    ArtifactRejected,
 }
 
 /// receipt の結果種別。
@@ -242,7 +348,11 @@ pub enum Outcome {
 ///
 /// v7 で `authenticate` に `consent`（同意頁の固定ボタン）と `report_consent_controls`、応答に
 /// `consent_pressed`・`consent_controls` を足した（付記 2026-10-10b）。consent を使う login は v7 を要求する。
-pub const PROTOCOL_VERSION: u32 = 7;
+///
+/// v8 で `fetch_artifact` / `artifact`（screenshot・download の file を bounded chunk で daemon が
+/// 読む）を足した（ADR 2026-10-09 credential username / post-login 付記 2026-10-10e）。daemon は v8 未満
+/// の launcher に screenshot / download を頼まず、固定理由で失敗させる。Live View の frame は v9。
+pub const PROTOCOL_VERSION: u32 = 8;
 
 /// 同意頁の固定ボタンを受ける最小の protocol 版。
 pub const CONSENT_PROTOCOL: u32 = 7;
@@ -343,6 +453,16 @@ pub enum Response {
     /// v4: the login target the launcher created (an opaque CDP target id, no page data).
     AuthBegun {
         cdp_target_id: String,
+    },
+    /// v8: one chunk of an artifact. `data` is base64 of at most [`ARTIFACT_CHUNK`] bytes from
+    /// `offset`; `size` is the whole file's length. Only the fixed type and lengths travel with it
+    /// (no path, URL, header or cookie).
+    Artifact {
+        name: String,
+        kind: ArtifactKind,
+        size: u64,
+        offset: u64,
+        data: String,
     },
     AuthenticateResult {
         status: AuthenticationStatus,
@@ -478,6 +598,7 @@ impl Request {
             | Request::Observe { session_id, .. }
             | Request::Stop { session_id, .. } => Some(session_id),
             Request::AuthBegin { session_id, .. } => Some(session_id),
+            Request::FetchArtifact { session_id, .. } => Some(session_id),
             Request::Authenticate { args } => Some(&args.session_id),
         }
     }
@@ -525,6 +646,22 @@ impl Request {
                 check_id(session_id)?;
                 check_id(lease_id)?;
                 check_id(auth_section_id)
+            }
+            Request::FetchArtifact {
+                session_id,
+                lease_id,
+                name,
+                offset,
+            } => {
+                check_id(session_id)?;
+                check_id(lease_id)?;
+                if artifact_name_verb(name).is_none() {
+                    return Err(ErrorCode::BadRequest);
+                }
+                if *offset > MAX_ARTIFACT_BYTES {
+                    return Err(ErrorCode::Limit);
+                }
+                Ok(())
             }
             Request::Authenticate { args } => {
                 check_id(&args.session_id)?;

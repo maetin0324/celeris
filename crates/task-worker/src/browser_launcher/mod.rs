@@ -23,8 +23,8 @@ pub use protocol::{
 };
 pub use registry::{Registry, SessionRecord};
 pub use server::{
-    BackendSession, Launched, LauncherLimits, LauncherServer, ServerConfig, ServerHandle,
-    SessionBackend, StartRequest,
+    ArtifactChunk, BackendSession, Launched, LauncherLimits, LauncherServer, ServerConfig,
+    ServerHandle, SessionBackend, StartRequest,
 };
 
 /// `/dev/urandom` から 16 byte を読んで 32 桁の hex にする（session id・instance id）。

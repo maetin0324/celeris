@@ -266,8 +266,8 @@ T1・T2・T5 は区間後の観測を再開しても既存の仕組み（遮断�
    だけ、`read_origins` は task の許可 domain に入る origin だけが効く。どちらかが空なら opt-in 無しと同じ。
 7. **登録し直し。** broker の vault は登録時の site policy（login URL・selector・post_login）を写して持ち、承認で固定するログインは
    その写しなので、site policy を変えた後は credential を登録し直す（運用手順 §4）。
-8. **残る制限。** launcher runtime の screenshot / download の artifact は daemon に渡らない（`LauncherExecutor` の既存の制限）。
-   A3/A4 で許したが、launcher runtime では成果物にならない。artifact の受け渡し（protocol の拡張）は別 task。
+8. **残る制限（付記 2026-10-10e で解消）。** launcher runtime の screenshot / download の artifact は daemon に渡らない（`LauncherExecutor` の既存の制限）。protocol v8 の artifact transfer で run の `browser/output` に届くようにした。
+   A3/A4 で許したが、launcher runtime では成果物にならなかった。artifact の受け渡し（protocol の拡張）は付記 2026-10-10e。
 
 ## 付記 2026-10-10: 本番の `post_login_unconfirmed` と、待ち方・理由の固定 code（launcher protocol 6）
 
@@ -361,3 +361,51 @@ snapshot・screenshot・click が全部失敗し、要約頁では成功した�
 accessibility tree と link の URL を返す。`-c` は本文の段落を落とすので使わない）にし、出力の上限（16000 文字）を超える長い
 本文は extract で読むよう prompt に書く。区間後の観測の検査（read_origins・生きている password 欄・RedisplayGuard）は
 command 単位なので変わらない。
+
+## 付記 2026-10-10e: launcher runtime の screenshot・download を run の browser/output に渡す（launcher protocol 8）
+
+manaba の課題（task 01M4GYJ3XGJNWZQDF35F1MDE0H）で授業資料が PDF だけのとき、agent は資料を読めなかった。launcher runtime では
+screenshot / download の file が launcher の session dir（uid 995 の sandbox）に残り、`LauncherExecutor` が両 verb を失敗として
+返していたため（付記 2026-10-09 8 の残る制限）。Q3/Q4 で許したログイン後の read_origins 内の screenshot・download を、agent が
+読める file として run に届ける。
+
+決定:
+
+1. **daemon が同じ session の接続で pull する（protocol v8）。** 新しい要求 `fetch_artifact {session_id, lease_id, name, offset}` と
+   応答 `artifact {name, kind, size, offset, data}` を足す。`data` は最大 32 KiB の base64（64 KiB の frame に収まる）、`kind` は
+   固定の型。launcher から daemon へ何かを自発的に送る notification は使わない（同期の request/response を壊さない）。
+   - launcher は**その session が作った名前だけ**を返す（`screenshot-<32 hex>.png` / `download-<32 hex>.bin`。session ごとの一覧に
+     無い名前は `unauthorized`）。path は受け取らない・返さない。`O_NOFOLLOW` で開き、通常 file でなければ拒否。
+   - session の policy に生んだ verb（screenshot / download）が無ければ `fetch_artifact` 自体を拒否する。lease・接続の持ち主・
+     `isolation_ok` の検査は他の要求と同じ。
+2. **上限。** 1 file 10 MiB（shim の既存上限と同じ）、1 session（daemon 側は 1 run）32 件。超えたら launcher は `limit`、daemon は
+   固定理由 `browser_artifact_too_large` / `browser_artifact_count_limit`。
+3. **型。** 先頭の byte で判定する（拡張子・page の申告 MIME は信じない）。許すのは PNG・JPEG・GIF・WebP・PDF・OOXML（zip 容器の
+   docx/xlsx/pptx）・OLE2（doc/xls/ppt）。screenshot は PNG だけ。それ以外（HTML・実行形式・不明）は launcher が
+   `artifact_rejected`、daemon も受け取った byte を再判定し `browser_artifact_type_rejected`。
+4. **置き場所と agent の読み方。** daemon は shim が名付けた `runs/<run>/browser/output/<name>` に新規（`create_new`・
+   `O_NOFOLLOW`・0600）で書き、失敗した途中の file は消す。既存の events → `ArtifactRef` 登録（`forward_events`）がそのまま
+   task の artifact にする。shim は download の先頭 byte が PDF 等なら同じ dir に `download-<hex>.pdf` の hard link を作り、応答の
+   `file` に返す（agent の既存の文書読み取りは拡張子で PDF を本文化する）。daemon 経路の download にも同じく働く。
+5. **秘密。** 応答の型は name・kind・長さ・offset・data だけで、URL・header・cookie・path の欄は無い（`deny_unknown_fields`）。
+   file の byte は event・progress・log・protocol error に入れない（client の診断用の生応答の抜粋も artifact 応答では伏せる）。
+   download は read_origins 外の取消（付記 2026-10-09 3）を変えない。取消された download は launcher の action 失敗になり、
+   daemon は file を作らず `browser_artifact_action_failed` を返す。
+6. **版と fail closed。** `PROTOCOL_VERSION` を 7 → 8 にする（`ARTIFACT_PROTOCOL = 8`）。daemon は session 開始後に `hello` で版を
+   確かめ、8 未満なら screenshot / download を launcher に頼まず、固定理由 `browser_launcher_protocol_artifacts_required` で失敗に
+   する（shim は理由をそのまま agent に返し、run には progress `browser.artifact: <理由>` を残す）。他の verb・credential login は
+   従来どおり動く。v7 daemon と v8 launcher の組合せは、v7 daemon が `fetch_artifact` を送らないので従来どおり。
+7. **Live View の版。** Live View の frame（ADR 2026-10-10-browser-launcher-live-view-frames、task 01M4JAK3MY が v8 を予定）は
+   v9 に送る。
+8. **launcher 側の権限。** sandbox 内の action child（subuid）は成功した screenshot / download の file を 0644 にし、launcher
+   （別 UID）が読めるようにする（session dir は launcher だけが辿れる 0700 の root の下）。
+9. **運用。** launcher を daemon と同じ commit から再 build して差し替える（`docs/ops/browser-launcher-host-setup.md` の
+   「launcher protocol v8」）。
+
+試験: `browser_launcher_run_tests.rs` の `launcher_artifacts_*`・`launcher_serves_only_names_its_session_produced`・
+`launcher_shim_download_lands_in_the_run_output_as_a_readable_pdf`・`artifact_responses_carry_no_secrets_*`、
+`backend_tests.rs` の `launcher_artifact_reader_is_bounded_typed_and_refuses_symlinks`、`client.rs` の
+`artifact_chunks_are_withheld_from_diagnostics`。
+
+残る制限: 実 launcher（uid 995・subuid の sandbox）での往復は host で人が確かめる（運用手順の確認）。launcher 側の 32 件の上限は
+`RuntimeSession` の中で数え、偽 backend の試験では daemon 側の上限だけを確かめている。

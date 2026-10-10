@@ -24,8 +24,9 @@ use task_core::{BrowserRun, BrowserRunState};
 use super::{BrowserContext, BrowserSink, CLI, EventSinkLive, forward_events, write_private};
 use crate::browser_action::{ActionExecutor, ActionRequest, ActionServer};
 use crate::browser_launcher::protocol::{
-    AuthenticateArgs, AuthenticationStatus, CREDENTIAL_LOGIN_PROTOCOL, LoginObservation,
-    LoginResult, POST_LOGIN_PROTOCOL,
+    ARTIFACT_PROTOCOL, ArtifactKind, AuthenticateArgs, AuthenticationStatus,
+    CREDENTIAL_LOGIN_PROTOCOL, LoginObservation, LoginResult, MAX_ARTIFACT_BYTES, MAX_ARTIFACTS,
+    POST_LOGIN_PROTOCOL, artifact_name_verb,
 };
 use crate::browser_launcher::{
     ActionArgs, LauncherClient, Observation, Outcome, Receipt, SessionFacts, SessionPolicy,
@@ -34,6 +35,14 @@ use crate::browser_launcher::{
 use crate::{AdapterError, EventSink, RunLimits, RunOutcome, RunRequest, WorkerAdapter};
 
 pub(crate) const UNAVAILABLE: &str = "isolated_runtime_unavailable";
+/// v8 artifact transfer の固定理由（付記 2026-10-10e）。file の中身・path は入れない。
+pub(crate) const ARTIFACTS_REQUIRE_V8: &str = "browser_launcher_protocol_artifacts_required";
+pub(crate) const ARTIFACT_REJECTED: &str = "browser_artifact_type_rejected";
+pub(crate) const ARTIFACT_TOO_LARGE: &str = "browser_artifact_too_large";
+pub(crate) const ARTIFACT_LIMIT: &str = "browser_artifact_count_limit";
+pub(crate) const ARTIFACT_FAILED: &str = "browser_artifact_transfer_failed";
+/// screenshot / download の操作そのものが失敗した（他 origin の download の取消を含む）。
+pub(crate) const ARTIFACT_ACTION_FAILED: &str = "browser_artifact_action_failed";
 
 /// 1 要求の読み書きの期限。launcher 側の最長（`action` 120 秒）より長く取る。
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(150);
@@ -140,6 +149,61 @@ impl LauncherRuntime {
             return Err(UNAVAILABLE);
         }
         Ok((receipt, observation))
+    }
+
+    /// v8: the whole artifact `name` (launcher-generated) in bounded chunks over the session's own
+    /// connection. The launcher's type, the total size and each chunk must stay consistent, the
+    /// total must not exceed [`MAX_ARTIFACT_BYTES`], and the bytes are sniffed again here. Errors are
+    /// fixed reasons; no byte of the file is put into them.
+    pub(crate) fn fetch_artifact(
+        &self,
+        name: &str,
+        verb: Verb,
+    ) -> Result<(ArtifactKind, Vec<u8>), &'static str> {
+        if artifact_name_verb(name) != Some(verb) {
+            return Err(ARTIFACT_FAILED);
+        }
+        let mut client = self.client.lock().map_err(|_| UNAVAILABLE)?;
+        let mut data: Vec<u8> = Vec::new();
+        let mut expect: Option<(ArtifactKind, u64)> = None;
+        loop {
+            let chunk = client
+                .fetch_artifact(&self.session_id, &self.lease_id, name, data.len() as u64)
+                .map_err(|e| match e {
+                    crate::browser_launcher::ClientError::Remote(
+                        crate::browser_launcher::ErrorCode::ArtifactRejected,
+                    ) => ARTIFACT_REJECTED,
+                    crate::browser_launcher::ClientError::Remote(
+                        crate::browser_launcher::ErrorCode::Limit,
+                    ) => ARTIFACT_TOO_LARGE,
+                    _ => ARTIFACT_FAILED,
+                })?;
+            if chunk.size > MAX_ARTIFACT_BYTES {
+                return Err(ARTIFACT_TOO_LARGE);
+            }
+            match expect {
+                None => expect = Some((chunk.kind, chunk.size)),
+                Some(first) if first == (chunk.kind, chunk.size) => {}
+                Some(_) => return Err(ARTIFACT_FAILED),
+            }
+            if chunk.data.len() > crate::browser_launcher::protocol::ARTIFACT_CHUNK
+                || data.len() as u64 + chunk.data.len() as u64 > chunk.size
+            {
+                return Err(ARTIFACT_FAILED);
+            }
+            if chunk.data.is_empty() && (data.len() as u64) < chunk.size {
+                return Err(ARTIFACT_FAILED);
+            }
+            data.extend_from_slice(&chunk.data);
+            if data.len() as u64 == chunk.size {
+                break;
+            }
+        }
+        let (kind, _) = expect.ok_or(ARTIFACT_FAILED)?;
+        match ArtifactKind::sniff(&data) {
+            Some(sniffed) if sniffed == kind && kind.allowed_for(verb) => Ok((kind, data)),
+            _ => Err(ARTIFACT_REJECTED),
+        }
     }
 
     pub(crate) fn observe(&self) -> Result<(SessionState, SessionFacts), &'static str> {
@@ -418,10 +482,104 @@ pub(crate) fn session_policy(
 }
 
 /// shim の検査済み action を launcher に頼む（[`ActionServer`] の検査と control gate の後）。
-/// screenshot / download の artifact は launcher の dir にあり daemon へは渡らないので、この経路
-/// では失敗として返す（agent には opaque な失敗）。
+/// screenshot / download は v8 launcher から file を chunk で受け取り、shim が名付けた
+/// `output/<name>` に新規に書く（付記 2026-10-10e）。v8 未満の launcher・型/長さ/件数の超過・転送の
+/// 失敗は固定理由で失敗にし、file を残さない（agent には opaque な失敗）。
 pub(crate) struct LauncherExecutor {
     pub(crate) runtime: Arc<LauncherRuntime>,
+    /// run の `browser/output`（shim の `config.output`）。
+    pub(crate) output: std::path::PathBuf,
+    /// session 開始時に `hello` で得た launcher の protocol 版。
+    pub(crate) protocol: u32,
+    /// この run で渡した file の数。
+    pub(crate) delivered: std::sync::atomic::AtomicUsize,
+    /// 失敗させた screenshot / download の固定理由（run が progress に記録する）。
+    pub(crate) refusals: Mutex<Vec<&'static str>>,
+}
+
+impl LauncherExecutor {
+    pub(crate) fn new(
+        runtime: Arc<LauncherRuntime>,
+        output: std::path::PathBuf,
+        protocol: u32,
+    ) -> Self {
+        Self {
+            runtime,
+            output,
+            protocol,
+            delivered: std::sync::atomic::AtomicUsize::new(0),
+            refusals: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// 記録された固定理由を取り出す。
+    pub(crate) fn take_refusals(&self) -> Vec<&'static str> {
+        std::mem::take(&mut *self.refusals.lock().unwrap_or_else(|e| e.into_inner()))
+    }
+
+    /// 失敗を shim への固定理由付きの応答にする（file・path・page の data は入れない）。
+    fn refused(&self, reason: &'static str) -> serde_json::Value {
+        tracing::warn!(reason, "browser launcher artifact refused");
+        self.refusals
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(reason);
+        serde_json::json!({"status": 1, "stdout": "", "reason": reason})
+    }
+
+    /// screenshot / download: the launcher runs the verb, then the daemon pulls the produced file
+    /// and writes it under the shim's name. Returns the fixed reason on failure.
+    fn artifact_action(
+        &self,
+        verb: Verb,
+        args: ActionArgs,
+        shim_name: Option<&str>,
+    ) -> Result<serde_json::Value, &'static str> {
+        if self.protocol < ARTIFACT_PROTOCOL {
+            return Err(ARTIFACTS_REQUIRE_V8);
+        }
+        let shim_name = shim_name
+            .filter(|n| artifact_name_verb(n) == Some(verb))
+            .ok_or(ARTIFACT_FAILED)?;
+        if self.delivered.load(std::sync::atomic::Ordering::SeqCst) >= MAX_ARTIFACTS {
+            return Err(ARTIFACT_LIMIT);
+        }
+        let (_receipt, observation) = self
+            .runtime
+            .action(verb, args)
+            .map_err(|_| ARTIFACT_ACTION_FAILED)?;
+        let name = observation.artifact.as_deref().ok_or(ARTIFACT_FAILED)?;
+        let (kind, bytes) = self.runtime.fetch_artifact(name, verb)?;
+        write_artifact(&self.output.join(shim_name), &bytes).map_err(|_| ARTIFACT_FAILED)?;
+        self.delivered
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(serde_json::json!({
+            "status": 0,
+            "stdout": serde_json::json!({
+                "success": true,
+                "data": {"media_type": kind.media_type(), "bytes": bytes.len()},
+            })
+            .to_string(),
+        }))
+    }
+}
+
+/// `path` を新規に（symlink を辿らず、既存を上書きせず）0600 で書く。途中で失敗したら消す。
+fn write_artifact(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write as _;
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .custom_flags(nix::libc::O_NOFOLLOW)
+        .open(path)?;
+    let written = file.write_all(bytes).and_then(|()| file.sync_all());
+    if written.is_err() {
+        drop(file);
+        let _ = std::fs::remove_file(path);
+    }
+    written
 }
 
 impl ActionExecutor for LauncherExecutor {
@@ -447,6 +605,24 @@ impl ActionExecutor for LauncherExecutor {
                     ..ActionArgs::default()
                 },
             ),
+            "screenshot" if req.args.is_empty() => {
+                return Ok(self
+                    .artifact_action(
+                        Verb::Screenshot,
+                        ActionArgs::default(),
+                        req.artifact.as_deref(),
+                    )
+                    .unwrap_or_else(|reason| self.refused(reason)));
+            }
+            "download" if req.args.len() == 1 => {
+                let args = ActionArgs {
+                    selector: first(),
+                    ..ActionArgs::default()
+                };
+                return Ok(self
+                    .artifact_action(Verb::Download, args, req.artifact.as_deref())
+                    .unwrap_or_else(|reason| self.refused(reason)));
+            }
             "snapshot" => (Verb::Snapshot, ActionArgs::default()),
             "scroll" => {
                 let amount: i32 = req
@@ -1142,11 +1318,35 @@ pub(super) async fn run(
             super::post_login_progress(sink, &outcome);
         }
     }
+    // 付記 2026-10-10e: screenshot / download need protocol v8 (artifact transfer). An older
+    // launcher keeps the session but those verbs fail closed with a fixed reason.
+    let probe = Arc::clone(&runtime);
+    let launcher_protocol = tokio::task::spawn_blocking(move || probe.protocol_version())
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .unwrap_or(0);
+    if launcher_protocol < ARTIFACT_PROTOCOL
+        && allowed
+            .allow
+            .iter()
+            .any(|a| a == "screenshot" || a == "download")
+    {
+        tracing::warn!(
+            launcher_protocol,
+            required = ARTIFACT_PROTOCOL,
+            "browser launcher cannot hand over screenshot/download files"
+        );
+        artifact_refusal_progress(sink, ARTIFACTS_REQUIRE_V8);
+    }
+    let executor = Arc::new(LauncherExecutor::new(
+        Arc::clone(&runtime),
+        output.clone(),
+        launcher_protocol,
+    ));
     let action_server = ActionServer::start_with(
         &action_socket,
-        Arc::new(LauncherExecutor {
-            runtime: Arc::clone(&runtime),
-        }),
+        Arc::clone(&executor) as Arc<dyn crate::browser_action::ActionExecutor>,
         policy.allowed_domains().to_vec(),
         allowed.allow,
         approved_action
@@ -1180,6 +1380,11 @@ pub(super) async fn run(
     };
     forward_events(&events, &mut offset, &monitor_req, &output, sink, &live);
     drop(action_server);
+    let mut refusals = executor.take_refusals();
+    refusals.dedup();
+    for reason in refusals {
+        artifact_refusal_progress(sink, reason);
+    }
     // ADR 2026-10-09 付記: shim が run 後に残した request は daemon 経路と同じ共有段で durable wait
     // になる。順も daemon 経路と同じ — `credential-request.json` があれば**それを先に**処理して
     // `WaitingForAuth` wait（resume key `auth:<task>:<run>`、outcome は `Terminal::Question`）を開き、
@@ -1250,6 +1455,20 @@ pub(super) async fn run(
     };
     sink.browser_updated(&browser);
     outcome
+}
+
+/// screenshot / download を固定理由で失敗させたことの progress（理由だけ。file・URL は入れない）。
+fn artifact_refusal_progress(sink: &dyn EventSink, reason: &'static str) {
+    sink.progress_with(
+        &format!("browser.artifact: {reason}"),
+        &task_core::ProgressFields {
+            kind: Some(task_core::ProgressKind::ToolResult),
+            tool: Some("browser.artifact".into()),
+            summary: Some(reason.into()),
+            error: true,
+            ..Default::default()
+        },
+    );
 }
 
 /// launcher の protocol が credential login（v4、username 欄・ログイン後の読み取りは v5）に足りない。

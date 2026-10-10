@@ -10,10 +10,10 @@ use serde::Deserialize;
 use serde_json::json;
 
 use super::protocol::{
-    ActionArgs, AuthenticateArgs, ErrorCode, LoginObservation, LoginResult, Observation,
-    SessionFacts, SessionState, Verb,
+    ARTIFACT_CHUNK, ActionArgs, ArtifactKind, AuthenticateArgs, ErrorCode, LoginObservation,
+    LoginResult, MAX_ARTIFACT_BYTES, MAX_ARTIFACTS, Observation, SessionFacts, SessionState, Verb,
 };
-use super::server::{BackendSession, Launched, SessionBackend, StartRequest};
+use super::server::{ArtifactChunk, BackendSession, Launched, SessionBackend, StartRequest};
 use super::userns;
 use crate::browser_cdp_sink::CdpController;
 use crate::browser_cdp_sink::{BrokerClient, InjectionRequest, PassedInjectionStream};
@@ -554,6 +554,7 @@ impl SessionBackend for RuntimeBackend {
                     login: None,
                     after_login: None,
                     sequence: 0,
+                    artifacts: Vec::new(),
                     dir: cleanup,
                     uid,
                     gid,
@@ -579,6 +580,50 @@ fn action_name(v: Verb) -> &'static str {
     }
 }
 
+/// v8 (付記 2026-10-10e): one chunk of `output/<name>`. The file must be a regular file (no
+/// symlink is followed), at most [`MAX_ARTIFACT_BYTES`], and of a type the producing verb allows
+/// (sniffed from its first bytes). Errors are fixed codes; no path or byte is reported.
+pub(crate) fn read_artifact_chunk(
+    output: &Path,
+    name: &str,
+    verb: Verb,
+    offset: u64,
+) -> Result<ArtifactChunk, ErrorCode> {
+    use std::io::{Read, Seek, SeekFrom};
+    use std::os::unix::fs::OpenOptionsExt;
+    if super::protocol::artifact_name_verb(name) != Some(verb) {
+        return Err(ErrorCode::BadRequest);
+    }
+    let mut file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK)
+        .open(output.join(name))
+        .map_err(|_| ErrorCode::BadRequest)?;
+    let meta = file.metadata().map_err(|_| ErrorCode::BadRequest)?;
+    if !meta.is_file() {
+        return Err(ErrorCode::BadRequest);
+    }
+    let size = meta.len();
+    if size > MAX_ARTIFACT_BYTES {
+        return Err(ErrorCode::Limit);
+    }
+    if offset > size {
+        return Err(ErrorCode::BadRequest);
+    }
+    let mut head = [0u8; 16];
+    let n = file.read(&mut head).map_err(|_| ErrorCode::BadRequest)?;
+    let kind = ArtifactKind::sniff(&head[..n])
+        .filter(|k| k.allowed_for(verb))
+        .ok_or(ErrorCode::ArtifactRejected)?;
+    file.seek(SeekFrom::Start(offset))
+        .map_err(|_| ErrorCode::BadRequest)?;
+    let mut data = Vec::with_capacity(ARTIFACT_CHUNK.min((size - offset) as usize));
+    file.take(ARTIFACT_CHUNK as u64)
+        .read_to_end(&mut data)
+        .map_err(|_| ErrorCode::BadRequest)?;
+    Ok(ArtifactChunk { kind, size, data })
+}
+
 struct RuntimeSession {
     sup: Supervisor,
     shared: SharedCdp,
@@ -588,6 +633,9 @@ struct RuntimeSession {
     /// post-login D2-6). `None` until a login ran in this session.
     after_login: Option<AfterLogin>,
     sequence: u64,
+    /// v8: the screenshot / download names this session produced (the only names
+    /// `fetch_artifact` serves; at most [`MAX_ARTIFACTS`]).
+    artifacts: Vec<(String, Verb)>,
     dir: SessionDir,
     uid: u32,
     gid: u32,
@@ -945,6 +993,11 @@ impl BackendSession for RuntimeSession {
             }
             _ => {}
         }
+        if matches!(verb, Verb::Screenshot | Verb::Download)
+            && self.artifacts.len() >= MAX_ARTIFACTS
+        {
+            return Err(ErrorCode::Limit);
+        }
         let artifact = if matches!(verb, Verb::Screenshot | Verb::Download) {
             Some(format!(
                 "{}-{}.{}",
@@ -995,7 +1048,19 @@ impl BackendSession for RuntimeSession {
         let text = reply["stdout"]
             .as_str()
             .map(|s| s.chars().take(16000).collect());
+        if let Some(name) = &artifact {
+            self.artifacts.push((name.clone(), verb));
+        }
         Ok(Observation { text, artifact })
+    }
+    fn fetch_artifact(&mut self, name: &str, offset: u64) -> Result<ArtifactChunk, ErrorCode> {
+        let verb = self
+            .artifacts
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, v)| *v)
+            .ok_or(ErrorCode::Unauthorized)?;
+        read_artifact_chunk(&self.dir.join("output"), name, verb, offset)
     }
     fn observe(&mut self) -> (SessionState, SessionFacts) {
         match self.facts() {

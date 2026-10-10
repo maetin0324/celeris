@@ -18,7 +18,7 @@ launcher runtime の Chrome は uid 995 の sandbox 内で `--remote-debugging-p
 
 ### D1. frame 経路、認可、背圧
 
-`Page.startScreencast` / `Page.screencastFrame` を扱うのは launcher が所有する CDP controller だけとする。launcher protocol v6 は session binding に結び付いた `live_frame` notification を追加する。daemon controller は notification を opaque frame として専用 live-frame channel に送り、gateway が既存 owner session grant を再確認した WebSocket へ中継する。ブラウザから得た CDP pipe を daemon に渡さず、frame を event、task API、harness/tool result、LLM input、agent-visible message に変換しない。認証失敗・owner disconnect・run/session 不一致・期限切れ・Origin 不一致では即時破棄し、fail closed とする。
+`Page.startScreencast` / `Page.screencastFrame` を扱うのは launcher が所有する CDP controller だけとする。launcher protocol v9 は session binding に結び付いた `live_frame` notification を追加する。daemon controller は notification を opaque frame として専用 live-frame channel に送り、gateway が既存 owner session grant を再確認した WebSocket へ中継する。ブラウザから得た CDP pipe を daemon に渡さず、frame を event、task API、harness/tool result、LLM input、agent-visible message に変換しない。認証失敗・owner disconnect・run/session 不一致・期限切れ・Origin 不一致では即時破棄し、fail closed とする。
 
 各段は容量 1 の最新 frame slot とし、下流が詰まっていれば未送信 frame を置換して古いものを捨てる。非同期 queue、再送、disk spill は設けない。viewer 接続の開始・終了、frame の開始・停止は既存 Live View grant の lifecycle に従う。D2 の owner session 以外、別 viewer、agent、LLM には同じ frame 型・stream handle・購読経路を与えない。通常の browser event 型と frame 型を分け、汎用 event relay から frame channel へ到達できない境界を設ける。
 
@@ -64,9 +64,9 @@ site policy の欄は設けない（D7）。credential session の本人向け�
 
 ### D5. launcher protocol の更新
 
-`PROTOCOL_VERSION` を 5 から 6 にする。v6 は D1 の `live_frame` notification と、session-bound live stream の start/stop 制御を追加する。frame payload は有界長の binary body とし、JSON metadata は session id、sequence、dimensions、encoding など非機密 framing 情報だけを持つ。unknown verb/field、過大 frame、session binding 不一致、認可されない開始要求は拒否する。hello の版確認は session 起動・Live View 有効化前に行う。
+`PROTOCOL_VERSION` は 9 とする。v9 は D1 の `live_frame` notification と、session-bound live stream の start/stop 制御を追加する。frame payload は有界長の binary body とし、JSON metadata は session id、sequence、dimensions、encoding など非機密 framing 情報だけを持つ。unknown verb/field、過大 frame、session binding 不一致、認可されない開始要求は拒否する。hello の版確認は session 起動・Live View 有効化前に行う。v8 は browser artifact transfer（[credential username / post-login read](2026-10-09-browser-credential-username-and-post-login-read.md) 付記 2026-10-10e、実装済み）に割り当てた。
 
-v5 launcher は既存の browser session と credential 動作を従来どおり継続できるが、Live View frame は提供しない。daemon は v5 を見た場合 Live View を `launcher_protocol_no_live_frames` として無効化し、v6 専用 verb を送らない。credential login に必要な v5 契約の確認は別途維持し、Live View 不在を理由に daemon runtime へ fallback しない。
+v9 未満 launcher は既存 session を継続できるが、Live View frame は提供しない。daemon は protocol v9 専用の frame 操作を送らず、Live View を `launcher_protocol_no_live_frames` として無効化する。screenshot / download は v8 を要し、v8 未満では固定理由 `browser_launcher_protocol_artifacts_required` で action を失敗させる。credential login に必要な契約の確認は別途維持し、Live View 不在を理由に daemon runtime へ fallback しない。
 
 理由: optional capability として版で識別すれば、既存 launcher の起動・認証契約を壊さず、daemon が未対応 launcher に誤って frame 要求を送るのを防げる。
 

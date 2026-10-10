@@ -21,6 +21,31 @@ os.umask(0o077)
 ROOT = Path(__file__).resolve().parent
 
 
+class Refused(ValueError):
+    """A fixed reason Celeris gave for a refused action (no page data)."""
+
+
+REASON = re.compile(r"browser_[a-z0-9_]{1,64}")
+# First bytes -> the extension an agent's document reader expects (same set as the launcher's
+# artifact transfer; anything else keeps the generated .bin name only).
+TYPED = ((b"%PDF-", "pdf"), (b"\x89PNG\r\n\x1a\n", "png"), (b"\xff\xd8\xff", "jpg"),
+         (b"GIF87a", "gif"), (b"GIF89a", "gif"), (b"PK\x03\x04", "zip"),
+         (b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1", "ole"))
+
+
+def typed_copy(artifact):
+    """Hard-link a download under the extension its bytes say (download-<hex>.pdf), if known."""
+    with artifact.open("rb") as handle:
+        head = handle.read(16)
+    for magic, extension in TYPED:
+        if head.startswith(magic):
+            typed = artifact.with_suffix("." + extension)
+            with contextlib.suppress(FileExistsError):
+                os.link(artifact, typed)
+            return typed
+    return None
+
+
 class PolicyBlocked(ValueError):
     pass
 
@@ -216,12 +241,15 @@ def main(args):
             result = json.loads(response)
         if len(result.get("stdout", "")) > 1024 * 1024:
             raise ValueError()
-        data = json.loads(result["stdout"])
+        data = json.loads(result["stdout"] or "null")
         if isinstance(data, dict) and data.get("success") is False:
             error = data.get("error")
             if isinstance(error, str) and any(marker in error.lower() for marker in
                     ("denied by policy", "allowed domains", "not allowed by domain filter")):
                 raise PolicyBlocked()
+        reason = result.get("reason")
+        if result["status"] and isinstance(reason, str) and REASON.fullmatch(reason):
+            raise Refused(reason)
         if result["status"] or not isinstance(data, dict) or data.get("success") is not True:
             # Error text can contain URL credentials or reflected page content.
             raise ValueError()
@@ -230,6 +258,7 @@ def main(args):
         if artifact:
             if artifact.is_symlink() or not artifact.is_file() or artifact.stat().st_size > 10 * 1024 * 1024:
                 raise ValueError()
+        typed = typed_copy(artifact) if artifact and operation == "download" else None
         audit(operation, "success", artifact.name if artifact else None)
         if operation == "extract":
             print("<untrusted_browser_content>")
@@ -237,7 +266,11 @@ def main(args):
             print(json.dumps({"_boundary": data.get("_boundary"), "data": data.get("data")}))
             print("</untrusted_browser_content>")
         else:
-            print(json.dumps({"success": True, "artifact": artifact.name if artifact else None}))
+            reply = {"success": True, "artifact": artifact.name if artifact else None}
+            if artifact:
+                # The file the agent reads (a PDF keeps its .pdf name for the document reader).
+                reply["file"] = str(typed or artifact)
+            print(json.dumps(reply))
         return 0
     except (OSError, KeyError, ValueError, TypeError) as error:
         if artifact:
@@ -248,6 +281,10 @@ def main(args):
             audit("policy_block", "blocked")
         else:
             audit(operation, "failure")
+        if isinstance(error, Refused):
+            # Celeris's fixed reason (e.g. launcher too old, type or size refused).
+            print(json.dumps({"success": False, "error": str(error)}))
+            return 1
         print('{"success":false,"error":"browser action failed or was blocked"}')
         return 1
 

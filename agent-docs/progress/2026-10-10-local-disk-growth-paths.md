@@ -121,3 +121,14 @@ final review の差し戻し（release prune が integration test の binary を
 - `[scratch] seed_reflink` の有効化（起動 log での probe 確認と戻し方）: 同 §7。
 - `[scratch] targets_max_gb` の暫定 150 を消して既定 160 に戻す手順と確認（pressure の記録）: 同 §8。
 - 既存の repo 直下 target・backup 刈り込み: 同 §2・§4。
+
+## v5: 本番相当の削減量の試験と全体検査（reclose-2、2026-10-10）
+
+人のコメント（v5）への対応。final review の基準 2 の差し戻し（削減量を本番相当で示す）に対する記録。
+
+- **prune-scale（本番相当の削減量）**: fixture は 2026-10-10 09:36Z 採取の inventory（199 行）で、marker より古い workspace executable は 11 個・0.095 GiB。縮尺試験の reclaimed は 0.113 GiB（production-equivalent）。registry 依存と新しい binary は残る。**08:40Z の 381 個・108 GiB 相当は、この inventory に無いため再現していない。** integration test 由来の割合は inventory の列からは出せない（前回の dry-run では 67 個・15.4 GiB が新規則で初めて刈れる分）。8 release 蓄積の非増加は未実装。記録は [prune-scale](2026-10-10-local-disk-growth-paths/prune-scale.md)・[reclose-2](2026-10-10-local-disk-growth-paths/reclose-2.md)。
+- **(2) `seed_reflink`**: 既定 `false` のまま。有効化の条件（btrfs で `probe_pool_share` が成功、測り方 S3 の release、`seed_refresh_hold`）と手順・戻し方は ADR 2026-10-10-local-disk-growth-paths.md の付記「scratch の上限と測り方」S1 と [docs/ops/local-disk-growth.md](../../docs/ops/local-disk-growth.md) §7。
+- **(3) `targets_max_gb`**: 恒久の既定は 160（`total_max_gb` 200）。測り方は FIEMAP の physical extent を pool 全体で 1 回だけ数える（S3）。根拠と暫定 150 を戻す手順は同付記 S2 と docs/ops §8。既定値はコードで確認済み（`crates/celeris/src/config/scratch.rs`）。
+- **全体検査（HEAD 706151b3）**: `TMPDIR=/tmp bash scripts/dev/test-parallel.sh` exit 0・5060 passed / 0 failed / 14 ignored。`cargo clippy --workspace -- -D warnings` exit 0。`cargo fmt --all -- --check` exit 0。文書検査 3 本（check-doc-links・check-adr-numbers・check-doc-layout）exit 0。証拠は [reclose-2](2026-10-10-local-disk-growth-paths/reclose-2.md)。
+
+未解決: 本番 108 GiB 相当の削減量の試験（08:40Z の inventory か、人が host で採取した読み取り専用 inventory が要る）と、8 release 蓄積の非増加の試験。

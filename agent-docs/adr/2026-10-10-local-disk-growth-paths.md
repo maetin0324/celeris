@@ -155,3 +155,9 @@ filesystem の圧迫は同一 mount の `statvfs` 空き容量差分で評価す
 ## 運用上の反映
 
 本番 host の lease、backup、symlink、cron、config の変更や daemon 再起動はこの ADR では行わない。実装・review・release 後、人が変更内容と対象を確認して実施する。人の手順は対象 backup の integrity check、現 lease と symlink の解決先、`statvfs` の前後値、service health を確認し、異常時に削除・promote を止めるものとする。
+
+#### 付記 2026-10-10: 本番相当の削減量の試験
+
+本番 `release-build/target/debug/deps` を読み取り専用で採取した inventory と、その縮尺 fixture を `scripts/selfdeploy/tests/fixtures/release-build-deps-inventory.tsv` / `scripts/selfdeploy/tests/release_prune_production_scale.sh` に記録する。試験は fallocate した実 block と `.d` を作り、同じ prune 関数を呼ぶ。registry/git 由来の依存と marker より新しい binary が残ることも確認する。
+
+採取は 2026-10-10 09:36Z、marker は直前 build の 08:40:45Z。採取時点では marker より古い workspace 実行 binary は 11 個・102,502,400 allocated bytes（約 0.095 GiB）だった。08:40Z の以前の dry-run 記録（381 個・108 GiB の test binary 全体、うち古い候補の記録 75 個・18.5 GiB）は同一時点の inventory ではないため、本試験結果と混同しない。試験 fixture は縮尺後の block rounding があり、実測換算との差分を出力する。

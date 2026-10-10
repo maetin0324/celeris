@@ -783,9 +783,23 @@ PY
 # '-' -> '_') plus package names, so integration tests (tests/<file>.rs -> <file>-<hash>) and
 # members outside crates/ (tests/e2e) are included. A candidate whose .d references a registry
 # or git checkout source is a dependency crate and is kept. SD_RELEASE_PRUNE_DRY_RUN=1 only reports.
+sd_prune_path_guard() {
+  [ -z "${SD_PRUNE_ALLOWED_ROOT:-}" ] && return 0
+  python3 - "$SD_PRUNE_ALLOWED_ROOT" "$1" <<'PYGUARD'
+import os, sys
+root, target = map(os.path.realpath, sys.argv[1:])
+try: allowed = os.path.commonpath((root, target)) == root
+except ValueError: allowed = False
+if not allowed:
+    print(f"refusing prune outside SD_PRUNE_ALLOWED_ROOT: {target}", file=sys.stderr)
+    sys.exit(1)
+PYGUARD
+}
+
 sd_release_prune_stale_test_binaries() {
   local target="$1" tree="$2" start="$3" report verb=removed
   [ -d "$target" ] || return 0
+  sd_prune_path_guard "$target" || return 1
   report="$(python3 - "$target" "$tree" "$start" <<'PY'
 import glob, json, os, re, subprocess, sys
 target, tree, start = sys.argv[1], os.path.realpath(sys.argv[2]), float(sys.argv[3])
@@ -854,6 +868,7 @@ PY
 
 sd_release_prune_enforce_limit() {
   local target="$1" limit size seed tmp
+  sd_prune_path_guard "$target" || return 1
   limit="${SD_RELEASE_TARGET_MAX_BYTES:-68719476736}"
   case "$limit" in *[!0-9]*|'') sd_die "SD_RELEASE_TARGET_MAX_BYTES must be an integer" ;; esac
   size="$(sd_release_prune_size "$target")"

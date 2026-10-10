@@ -118,6 +118,7 @@ mod routing_log;
 mod routing_shadow;
 mod site_policies;
 pub use routing_shadow::ShadowReservationAudit;
+pub(crate) use site_policies::site_policy_tx;
 pub use site_policies::{
     BrowserSitePolicy, BrowserSitePolicyDelete, BrowserSitePolicyRecord,
     BrowserSitePolicyReferences, BrowserSitePolicySource,

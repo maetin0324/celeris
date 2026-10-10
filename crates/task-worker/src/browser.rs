@@ -911,7 +911,7 @@ pub(super) fn shim_request_wait(
                         question(CREDENTIAL_REQUEST_QUESTION.into()),
                         Some(BrowserRunState::WaitingForAuth),
                     ),
-                    Err(_) => (wait_unopenable(), None),
+                    Err(e) => (wait_unopenable(&e), None),
                 }
             }
             Err(e) => (Err(e), None),
@@ -928,7 +928,7 @@ pub(super) fn shim_request_wait(
                         question(format!("Browser {} approval requested", action.as_str())),
                         Some(BrowserRunState::WaitingForApproval),
                     ),
-                    Err(_) => (wait_unopenable(), None),
+                    Err(e) => (wait_unopenable(&e), None),
                 }
             }
             Err(e) => (Err(e), None),
@@ -1004,14 +1004,33 @@ pub(super) fn registered_credential_approval(
             "registered browser credential reference missing".into(),
         ));
     };
-    let trusted_login = credentials
-        .ok_or_else(|| AdapterError::Other("policy_changed".into()))
-        .and_then(|sup| {
-            crate::browser_credential::describe_policy(sup, &credential, &registered.origin)
-                .map_err(|_| AdapterError::Other("policy_changed".into()))
-        })?;
+    let sup = credentials.ok_or_else(|| policy_changed("supervisor_missing"))?;
+    let trusted_login =
+        match crate::browser_credential::describe_policy(sup, &credential, &registered.origin) {
+            Ok(trusted) => trusted,
+            // 付記 2026-10-10g: the registered credential can never yield a trusted login (e.g. it
+            // was registered under an origin that is not its site policy's login origin, so the
+            // vault has no login URL). Retrying cannot help, so the run goes on without it and
+            // the agent can request the credential again (a new wait), instead of every run
+            // ending as `policy_changed` with the task stuck on this registration.
+            Err(sub_reason)
+                if crate::browser_credential::describe_failure_is_permanent(sub_reason) =>
+            {
+                tracing::warn!(
+                    sub_reason,
+                    wait_id = %registered.wait_id,
+                    "registered browser credential unusable; run continues without it"
+                );
+                sink.progress(&format!(
+                    "browser.credential: registered credential unusable ({sub_reason}); \
+                     request the credential again"
+                ));
+                return Ok(None);
+            }
+            Err(sub_reason) => return Err(policy_changed(sub_reason)),
+        };
     if trusted_login.policy_id != credential.policy_id {
-        return Err(AdapterError::Other("policy_changed".into()));
+        return Err(policy_changed("policy_id_mismatch"));
     }
     let wait = NewBrowserWait {
         work_unit_id: registered.work_unit_id.clone(),
@@ -1054,10 +1073,54 @@ pub(super) fn registered_credential_approval(
 
 /// A wait the store refused to open: fail closed, the run does not report a question it cannot
 /// resume from.
-fn wait_unopenable() -> Result<RunOutcome, AdapterError> {
-    Err(AdapterError::Other(
-        "browser wait could not be opened".into(),
-    ))
+use crate::browser_credential::policy_changed;
+
+/// Which part of the site policy's login changed since it was pinned to the approval (a fixed
+/// sub-reason, never a value), or `None` if they are the same.
+pub(crate) fn trusted_login_difference(
+    current: &task_core::browser_wait::TrustedLogin,
+    pinned: &task_core::browser_wait::TrustedLogin,
+) -> Option<&'static str> {
+    if current == pinned {
+        return None;
+    }
+    let (c, p) = (
+        serde_json::to_value(current).unwrap_or_default(),
+        serde_json::to_value(pinned).unwrap_or_default(),
+    );
+    let fields = [
+        ("policy_id", "pinned_differs_policy_id"),
+        ("revision", "pinned_differs_revision"),
+        ("login_url", "pinned_differs_login_url"),
+        ("password_selector", "pinned_differs_password_selector"),
+        ("submit_selector", "pinned_differs_submit_selector"),
+        ("username_selector", "pinned_differs_username_selector"),
+        ("post_login", "pinned_differs_post_login"),
+        ("consent", "pinned_differs_consent"),
+    ];
+    Some(
+        fields
+            .iter()
+            .find(|(key, _)| c.get(key) != p.get(key))
+            .map_or("pinned_differs_other", |(_, sub)| sub),
+    )
+}
+
+fn wait_unopenable(code: &str) -> Result<RunOutcome, AdapterError> {
+    // The store's fixed code (e.g. `browser_wait_invalid:credential_origin`), never a value.
+    let code = if code.len() <= 64
+        && code
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b':')
+    {
+        code
+    } else {
+        "other"
+    };
+    tracing::warn!(code, "browser wait could not be opened");
+    Err(AdapterError::Other(format!(
+        "browser wait could not be opened ({code})"
+    )))
 }
 
 /// The approved business action a resumed run may perform once, or `None` when the approved
@@ -2003,20 +2066,20 @@ async fn run_with_executable_attempt(
             let pinned = wait
                 .trusted_login
                 .as_ref()
-                .ok_or_else(|| AdapterError::Other("policy_changed".into()))?;
+                .ok_or_else(|| policy_changed("pinned_login_missing"))?;
             pinned
                 .validate(&wait.origin)
-                .map_err(|_| AdapterError::Other("policy_changed".into()))?;
+                .map_err(|_| policy_changed("pinned_login_invalid"))?;
             let current = crate::browser_credential::describe_policy(
-                credentials.ok_or_else(|| AdapterError::Other("policy_changed".into()))?,
+                credentials.ok_or_else(|| policy_changed("supervisor_missing"))?,
                 wait.credential
                     .as_ref()
-                    .ok_or_else(|| AdapterError::Other("policy_changed".into()))?,
+                    .ok_or_else(|| policy_changed("credential_reference_missing"))?,
                 &wait.origin,
             )
-            .map_err(|_| AdapterError::Other("policy_changed".into()))?;
-            if &current != pinned {
-                return Err(AdapterError::Other("policy_changed".into()));
+            .map_err(policy_changed)?;
+            if let Some(field) = trusted_login_difference(&current, pinned) {
+                return Err(policy_changed(field));
             }
             Some(sink.browser_approval_consume(wait).map_err(|_| {
                 AdapterError::Other("browser approval could not be consumed".into())

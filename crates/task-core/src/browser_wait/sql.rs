@@ -495,6 +495,23 @@ impl BrowserWaitStore for SqliteStore {
                 Some(Status::Running) => {}
                 Some(_) => return Err(BrowserWaitError::TaskNotRunning),
             }
+            // 付記 2026-10-10g: a registration wait for a policy with a site policy is bound to the
+            // policy's login origin. Registering under another origin stored a credential without
+            // the login URL / selectors, which then failed every run as `policy_changed`.
+            let origin = match (&new.reason, &new.credential_policy_id) {
+                (BrowserWaitReason::WaitingForAuth, Some(policy_id)) => {
+                    match crate::store::site_policy_tx(tx, policy_id)? {
+                        Some(site) => site
+                            .credential_wait_origin(&new.origin)
+                            .ok_or(BrowserWaitError::Invalid {
+                                field: "credential_origin",
+                            })?
+                            .to_owned(),
+                        None => new.origin.clone(),
+                    }
+                }
+                _ => new.origin.clone(),
+            };
             let wait = BrowserWait {
                 wait_id: ulid::Ulid::new().to_string(),
                 task_id,
@@ -502,7 +519,7 @@ impl BrowserWaitStore for SqliteStore {
                 run_id: new.run_id.clone(),
                 session_id: new.session_id.clone(),
                 reason: new.reason,
-                origin: new.origin.clone(),
+                origin,
                 purpose: new.purpose.clone(),
                 credential_policy_id: new
                     .credential_policy_id

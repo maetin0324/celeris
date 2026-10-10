@@ -88,7 +88,39 @@ pub fn configured() -> Option<&'static CredentialSupervisor> {
     CONFIGURED.get()
 }
 
-/// Read the non-secret login intent from the broker's registered site policy.
+/// `policy_changed` with a fixed sub-reason (付記 2026-10-10g). The sub-reason names which check
+/// failed (never a value) and goes into the run's error text and the daemon log.
+pub(crate) fn policy_changed(sub_reason: &'static str) -> crate::AdapterError {
+    tracing::warn!(sub_reason, "browser credential policy_changed");
+    crate::AdapterError::Other(format!("policy_changed ({sub_reason})"))
+}
+
+/// credentiald's refusal code as a fixed sub-reason.
+fn describe_refusal(code: Option<&str>) -> &'static str {
+    match code {
+        Some("denied") => "describe_denied",
+        Some("invalid_request") => "describe_invalid_request",
+        Some("not_found") => "describe_not_found",
+        Some("vault_locked") => "describe_vault_locked",
+        Some("permission_denied") => "describe_permission_denied",
+        Some("audit_unavailable") => "describe_audit_unavailable",
+        Some("io_error") => "describe_io_error",
+        _ => "describe_refused",
+    }
+}
+
+/// Whether a `describe_policy` failure says the registered credential itself can never yield a
+/// trusted login (its vault entry does not match a usable site policy), as opposed to credentiald
+/// being unreachable or temporarily unable to answer.
+pub(crate) fn describe_failure_is_permanent(sub_reason: &str) -> bool {
+    matches!(
+        sub_reason,
+        "describe_denied" | "describe_invalid_request" | "describe_not_found"
+    )
+}
+
+/// Read the non-secret login intent from the broker's registered site policy. Errors are fixed
+/// `policy_changed` sub-reasons.
 pub(crate) fn describe_policy(
     sup: &CredentialSupervisor,
     reference: &task_core::browser_wait::CredentialRef,
@@ -98,18 +130,18 @@ pub(crate) fn describe_policy(
         .runtime_dir
         .clone()
         .or_else(|| std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from))
-        .ok_or("policy_changed")?;
+        .ok_or("runtime_dir_missing")?;
     let request = serde_json::to_vec(&json!({
         "op":"describe_policy", "reference":reference,
         "origin":origin,
     }))
-    .map_err(|_| "policy_changed")?;
+    .map_err(|_| "request_encode")?;
     let reply = ipc::call(&runtime.join("celeris-credentiald/control.sock"), &request)
-        .map_err(|_| "policy_changed")?;
+        .map_err(|_| "credentiald_unreachable")?;
     if !reply.success {
-        return Err("policy_changed");
+        return Err(describe_refusal(reply.code.as_deref()));
     }
-    reply.trusted_login.ok_or("policy_changed")
+    reply.trusted_login.ok_or("trusted_login_missing")
 }
 
 fn unix_now() -> u64 {
@@ -274,10 +306,11 @@ pub(crate) fn grant_h3_lease(
         .as_ref()
         .ok_or("trusted_selector_missing")?;
     approval.injection_selector(None)?;
-    if trusted.revision != approval.credential.credential_revision
-        || trusted.policy_id != approval.credential.policy_id
-    {
-        return Err("policy_changed");
+    if trusted.revision != approval.credential.credential_revision {
+        return Err("policy_changed_revision");
+    }
+    if trusted.policy_id != approval.credential.policy_id {
+        return Err("policy_changed_policy_id");
     }
     let now = unix_now();
     let approval_expires = u64::try_from(wait.deadline.unix_timestamp()).unwrap_or(0);

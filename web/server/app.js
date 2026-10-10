@@ -80,6 +80,7 @@ export function createApp({
   liveUpstream = process.env.CELERIS_WEB_LIVE_VIEW_UPSTREAM,
   attestationKeyFile = process.env.CELERIS_WEB_ATTESTATION_KEY_FILE,
   ownerSocket = process.env.CELERIS_WEB_OWNER_SOCKET,
+  liveFrameConnectTimeoutMs,
   // promote の probe（scripts/selfdeploy の sd_web_app_probe）が付ける。owner socket と信頼端末の書き込みを止める。
   probe = process.env.CELERIS_WEB_PROBE === "1",
   now = Date.now,
@@ -96,6 +97,8 @@ export function createApp({
     ownerSocket,
     probe,
     now,
+    log,
+    frameConnectTimeoutMs: liveFrameConnectTimeoutMs,
   });
   // daemonUrl が無ければ中継しない（/api/* は 404）。起動時の既定は index.js が与える。
   // `/files/*` と `/events` も同じ daemon へ中継する（P1-08・P1-09）。チャットの添付・stream・ダウンロードは

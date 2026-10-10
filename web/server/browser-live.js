@@ -99,6 +99,30 @@ function safeJson(value) {
 function isAuthWait(wait) {
   return wait.reason === "waiting_for_auth" || wait.credential != null || wait.operation?.action === "credential_use";
 }
+// 未決（pending・approved）の待ちだけが認証区間を開いている。登録済み・再開済み・期限切れなどの
+// 解決済みの待ちは履歴で、一度でも credential を使った task の Live View を永久に止めてはならない
+// （2026-10-10 本番: 解決済みの credential 待ち 19 件で frame の WebSocket が毎回 auth_interval で拒否された）。
+const OPEN_WAIT_STATES = new Set(["pending", "approved"]);
+function isOpenAuthWait(wait) {
+  return OPEN_WAIT_STATES.has(wait.state) && isAuthWait(wait);
+}
+// /browser/runs が live.reason として返す不可の理由（固定語彙）。daemon の grant 拒否（LiveDenied の code）と
+// gateway の guard の code はそのまま、それ以外は grant_denied にまとめる。
+const LIVE_DISABLED_REASONS = new Set([
+  "attestation_unavailable",
+  "live_view_guard_unavailable",
+  "live_view_disabled",
+  "not_owner_session",
+  "origin_mismatch",
+  "other_task",
+  "run_ended",
+  "observation_stopped",
+  "grant_expired",
+  "not_running",
+]);
+export function liveDisabledReason(code) {
+  return LIVE_DISABLED_REASONS.has(code) ? code : "grant_denied";
+}
 function safeRun(run) {
   return (
     run &&
@@ -133,6 +157,8 @@ export function createBrowserLive({
   ownerId = process.env.CELERIS_WEB_OWNER_ID?.trim() || "owner",
   fetchImpl = fetch,
   now = Date.now,
+  log = () => {},
+  frameConnectTimeoutMs = 10000,
 }) {
   const daemon = daemonUrl ? parseUpstream(daemonUrl) : null;
   const token = daemon ? readTokenFile(daemonTokenFile) : null;
@@ -311,23 +337,26 @@ export function createBrowserLive({
     }
     throw new Error("browser history limit");
   }
-  function guard(task, run) {
-    const id = `${task}\0${run}`;
+  // `frames`: 本人だけに読み取り専用の映像を送る frame 経路（付記 2026-10-10e・人の決定 live-credential-default=a）。
+  // credential session と auth section の間も本人には映像を出すので、認証待ち（auth_interval）を見ない。他 task の待ちも見ない。
+  // 入力を中継しうる経路（takeover・dashboard relay）は従来どおり認証待ちで止める。
+  function guard(task, run, { frames = false } = {}) {
+    const id = `${task}\0${run}\0${frames ? "frames" : "relay"}`;
     const pending = guardInflight.get(id);
     if (pending) return pending;
-    const result = guardFresh(task, run).finally(() => {
+    const result = guardFresh(task, run, frames).finally(() => {
       if (guardInflight.get(id) === result) guardInflight.delete(id);
     });
     guardInflight.set(id, result);
     return result;
   }
-  async function guardFresh(task, run) {
+  async function guardFresh(task, run, frames) {
     let detail, found, waits;
     try {
       [detail, found, waits] = await Promise.all([
         api("GET", `/api/v1/tasks/${task}`),
         runs(task),
-        api("GET", `/api/v1/tasks/${task}/browser/waits`),
+        frames ? { items: [] } : api("GET", `/api/v1/tasks/${task}/browser/waits`),
       ]);
     } catch {
       return { status: 404, code: "not_found" };
@@ -341,7 +370,8 @@ export function createBrowserLive({
       !detail.runs?.some((r) => r.run_id === run && !r.finished_at && !r.end && !r.outcome)
     )
       return { status: 409, code: "not_running" };
-    if ((waits.items ?? []).some((w) => w.run_id === run && isAuthWait(w)))
+    if (frames) return { run: item };
+    if ((waits.items ?? []).some((w) => w.run_id === run && isOpenAuthWait(w)))
       return { status: 409, code: "auth_interval" };
     // Dashboard shares a namespace. Missing task/wait history must close observation.
     let cursor;
@@ -359,7 +389,7 @@ export function createBrowserLive({
         if (["done", "failed", "cancelled"].includes(t.status)) continue;
         const check = await api("GET", `/api/v1/tasks/${t.id}/browser/waits`);
         if (check.error || !Array.isArray(check.items)) return { status: 503, code: "live_view_guard_unavailable" };
-        if ((check.items ?? []).some(isAuthWait)) return { status: 409, code: "auth_interval" };
+        if ((check.items ?? []).some(isOpenAuthWait)) return { status: 409, code: "auth_interval" };
       }
       if (!tasks.next_cursor) return { run: item };
       if (tasks.next_cursor === cursor) break;
@@ -367,8 +397,8 @@ export function createBrowserLive({
     }
     return { status: 503, code: "live_view_guard_unavailable" };
   }
-  async function checked(binding, session) {
-    const check = await guard(binding.task, binding.run);
+  async function checked(binding, session, options) {
+    const check = await guard(binding.task, binding.run, options);
     if (!check.run) return check;
     const signed = assertion(binding.task, binding.run, binding.browserSession, session);
     if (!signed) return { status: 503, code: "attestation_unavailable" };
@@ -741,27 +771,46 @@ export function createBrowserLive({
         for (const id of tasks)
           for (const run of await runs(id)) {
             let enrichedRun = run;
+            // frame 経路の不可は理由を落とさずに返す（dashboard upstream の relay_unavailable に落とさない）。
+            let frameDenied = null;
             if (run.state === "RUNNING" && run.session_id) {
               const signed = assertion(run.task_id, run.run_id, run.session_id, who.session);
-              if (signed) {
+              if (!signed) frameDenied = "attestation_unavailable";
+              else {
                 const grant = await api("POST", `${pathFor(run.task_id, run.run_id, run.session_id, "live")}/grant`, {
                   assertion: signed,
                 });
-                if (!grant.error && grant.grant_id && grant.frames_available === true) {
-                  bindings.set(who.session, {
-                    task: run.task_id,
-                    run: run.run_id,
-                    browserSession: run.session_id,
-                    grant: grant.grant_id,
-                    expires: grant.expires_at,
-                  });
-                  enrichedRun = { ...run, frames_available: true };
-                } else if (!grant.error && grant.live_reason) enrichedRun = { ...run, live_reason: grant.live_reason };
+                if (grant.error || !grant.grant_id) frameDenied = liveDisabledReason(grant.code);
+                else if (grant.frames_available === true) {
+                  // WebSocket の upgrade が使う guard を先に通す。通らない link は出さない（upgrade の拒否は
+                  // 画面から読めず、映像の無い枠だけが残る）。
+                  const check = await guard(run.task_id, run.run_id, { frames: true });
+                  if (!check.run) frameDenied = liveDisabledReason(check.code);
+                  else {
+                    bindings.set(who.session, {
+                      task: run.task_id,
+                      run: run.run_id,
+                      browserSession: run.session_id,
+                      grant: grant.grant_id,
+                      expires: grant.expires_at,
+                    });
+                    enrichedRun = { ...run, frames_available: true };
+                  }
+                } else if (grant.live_reason) enrichedRun = { ...run, live_reason: grant.live_reason };
               }
+              if (frameDenied)
+                log({
+                  event: "browser_live_unavailable",
+                  task_id: run.task_id,
+                  run_id: run.run_id,
+                  reason: frameDenied,
+                });
             }
-            const live = enrichedRun.live_reason
-              ? { state: "disabled", reason: enrichedRun.live_reason }
-              : liveAvailability(enrichedRun, upstream);
+            const live = frameDenied
+              ? { state: "disabled", reason: frameDenied }
+              : enrichedRun.live_reason
+                ? { state: "disabled", reason: enrichedRun.live_reason }
+                : liveAvailability(enrichedRun, upstream);
             items.push({
               ...safeJson(enrichedRun),
               live,
@@ -1193,18 +1242,22 @@ export function createBrowserLive({
     }
   }
   async function upgradeFrames(req, client, head, who, task, run) {
-    const reject = (status, code) =>
+    // upgrade は express の access log を通らない。拒否は code だけを log に残す（2026-10-10 本番で
+    // frame の WebSocket の拒否が journal に何も残らず、原因を追えなかった）。
+    const reject = (status, code) => {
+      log({ path: "/browser/live/frames", task_id: task, run_id: run, status, code });
       rejectUpgrade(
         client,
         `HTTP/1.1 ${status} Rejected\r\nContent-Type: application/json\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n${JSON.stringify({ code })}`,
       );
+    };
     if (head.length) return reject(400, "invalid_websocket");
     if (!daemon || !token) return reject(503, "live_frame_stream_unavailable");
     const origin = `${req.socket.encrypted ? "https" : "http"}://${req.headers.host}`;
     if (req.headers.origin !== origin) return reject(403, "origin_mismatch");
     let binding = bindings.get(who.session);
     if (!binding) {
-      const state = await guard(task, run);
+      const state = await guard(task, run, { frames: true });
       if (!state.run?.session_id) return reject(state.status ?? 404, state.code ?? "not_found");
       const signed = assertion(task, run, state.run.session_id, who.session);
       if (!signed) return reject(503, "attestation_unavailable");
@@ -1224,7 +1277,7 @@ export function createBrowserLive({
       Buffer.from(key, "base64").length !== 16
     )
       return reject(400, "invalid_websocket");
-    const check = await checked(binding, who.session);
+    const check = await checked(binding, who.session, { frames: true });
     if (!check.run) return reject(check.status, check.code);
     const signed = assertion(task, run, binding.browserSession, who.session);
     if (!signed) return reject(503, "attestation_unavailable");
@@ -1244,7 +1297,7 @@ export function createBrowserLive({
     });
     frameReq.on("socket", guardUpgradeSocket);
     const response = await new Promise((resolve) => {
-      frameReq.setTimeout(10000, () => {
+      frameReq.setTimeout(frameConnectTimeoutMs, () => {
         frameReq.destroy();
         resolve(null);
       });
@@ -1256,9 +1309,13 @@ export function createBrowserLive({
       response?.resume();
       return reject(response ? 502 : 503, "live_frame_stream_unavailable");
     }
+    // 接続の期限は応答まで。stream の間は無通信でも切らない（screencast は画面が変わらなければ frame を出さない。
+    // socket の idle timeout が残ると 10 秒で stream が切れ、SPA は再接続しないので映像が止まる）。
+    frameReq.setTimeout(0);
     const accept = createHash("sha1")
       .update(key + WS_MAGIC)
       .digest("base64");
+    log({ path: "/browser/live/frames", task_id: task, run_id: run, status: 101 });
     client.write(
       `HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Accept: ${accept}\r\nCache-Control: no-store\r\n\r\n`,
     );
@@ -1278,7 +1335,7 @@ export function createBrowserLive({
     const interval = setInterval(() => {
       const current = ownerKey(req);
       if (!current.session) return close(1001);
-      checked(binding, who.session)
+      checked(binding, who.session, { frames: true })
         .then((result) => {
           if (!result.run) close(1008);
         })

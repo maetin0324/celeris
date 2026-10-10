@@ -8,7 +8,16 @@ export type LiveUnavailableReason =
   | "not_configured"
   | "relay_unavailable"
   | "grant_expired"
-  | "launcher_protocol_no_live_frames";
+  | "launcher_protocol_no_live_frames"
+  | "attestation_unavailable"
+  | "live_view_guard_unavailable"
+  | "live_view_disabled"
+  | "not_owner_session"
+  | "origin_mismatch"
+  | "other_task"
+  | "run_ended"
+  | "observation_stopped"
+  | "grant_denied";
 
 export const liveUnavailableText: Record<LiveUnavailableReason, string> = {
   owner_unavailable: "本人確認を利用できないため、Live View を開けません。",
@@ -18,6 +27,16 @@ export const liveUnavailableText: Record<LiveUnavailableReason, string> = {
   relay_unavailable: "Live View の中継を利用できません。イベントで監視してください。",
   grant_expired: "Live View の許可が期限切れです。画面を更新してください。",
   launcher_protocol_no_live_frames: "launcher が Live View の映像を提供していません。launcher を更新してください。",
+  // gateway が frame 経路の grant・guard で拒まれた理由（code は data-reason にも出る）。
+  attestation_unavailable: "web の本人署名鍵を利用できないため、Live View を開けません。",
+  live_view_guard_unavailable: "Live View の確認に Celeris から応答がありません。画面を更新してください。",
+  live_view_disabled: "Celeris で Live View が無効です（本人署名の公開鍵が未設定）。",
+  not_owner_session: "本人の署名を Celeris が確かめられませんでした。",
+  origin_mismatch: "接続元が一致しないため、Live View を開けません。",
+  other_task: "この run の Live View ではありません。",
+  run_ended: "この run は終了しています。",
+  observation_stopped: "認証区間のため観測を止めています。",
+  grant_denied: "Celeris が Live View の許可を出しませんでした。",
 };
 
 /** gateway が発行した同一 origin の live path だけを通す。 */

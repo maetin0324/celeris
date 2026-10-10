@@ -5,7 +5,7 @@ tasks: [01M4HS8VQDB3JQHJRJ0ZDBY57H]
 ---
 
 - 日付: 2026-10-10
-- 状態: 採用（frame の揮発配送・分離契約）。既定公開範囲は `live-credential-default` の人の決定待ち
+- 状態: 採用（frame の揮発配送・分離契約）。credential session の既定公開範囲は人の決定 `live-credential-default`（D7、2026-10-10）で確定済み
 - 関連: [ADR-0080](0080-browser-phase2-policy-broker-approval.md) D3・D6、[ADR-0100](0100-browser-phase3-live-proxy-acl.md) D2、[ADR-0115](0115-browser-ptrace-owner-ns-launcher.md)、[ADR-0116](0116-browser-launcher-implementation.md)、[2026-10-05 browser department / web Live View](2026-10-05-browser-department-web-live-view.md)、[2026-10-09 credential username / post-login read](2026-10-09-browser-credential-username-and-post-login-read.md)、[2026-10-09 launcher CredentialUse release](2026-10-09-browser-launcher-credential-release.md)
 
 ## 文脈
@@ -56,6 +56,8 @@ auth section 中も本人の frame は表示できる。既存 H3 の agent even
 
 理由: frame の購読権限は browser 操作権限ではない。別 UID launcher / credential session に対する操作は独立した認可・監査・confused-deputy 検討を要する。
 
+site policy の欄は設けない（D7）。credential session の本人向け表示も含め、input 転送は本節の拒否を維持する。
+
 試験: `browser_launcher_live_view_rejects_input` は launcher live channel 上の mouse/keyboard/control input を拒否し、CDP command と runtime state が変化しないことを確認する。`browser_live_view_existing_takeover_policy` は ADR-0080 D6 / ADR-0100 D2 の既存拒否・grant 条件を回帰固定する。
 
 ## protocol v6 と互換
@@ -76,19 +78,24 @@ v5 launcher は既存の browser session と credential 動作を従来どおり
 
 1. **launcher** — 範囲 `crates/task-worker/src/browser_launcher/`, `crates/task-worker/src/browser_runtime.rs`。CDP screencast start/frame/ack/stop、v6 bounded framing、protocol tests `browser_launcher_live_frame_`。credential value と CDP response は frame notification に含めない。
 2. **controller・daemon** — 範囲 `crates/task-worker/src/browser_launcher_run.rs`, `crates/task-worker/src/browser_live.rs`, `crates/task-worker/src/browser.rs`。version negotiation、session-bound opaque forwarding、容量 1 の latest-only handoff、run/session cleanup、persistable event との型分離。tests `browser_live_frame_` と `launcher_credential_input_not_in_events_cdp_response_or_logs`。
-3. **gateway・web** — 範囲 `web/server/browser-live.js`, `web/server/relay.js`, `web/server/` の browser live 関連試験、および browser run viewer UI の関連ファイル。既存 owner session/Origin/grant guard の再利用、専用 no-store WebSocket、認証 section の本人向け表示、input 不許可。tests `browser_live_frame_` / `browser_live_view_`。
+3. **gateway・web** — 範囲 `web/server/browser-live.js`, `web/server/relay.js`, `web/server/` の browser live 関連試験、および browser run viewer UI の関連ファイル。既存 owner session/Origin/grant guard の再利用、専用 no-store WebSocket、credential session（認証 section を含む）の本人向け既定表示、非 owner 拒否、input 不許可。site policy の欄は作らない。tests `browser_live_frame_` / `browser_live_view_`（既定表示は `browser_live_credential_default_owner_only`）。
 4. **試験・統合** — 範囲 `crates/task-worker/` と `web/server/` の該当試験、必要な browser runtime 統合試験。各層の永続 sink 走査、v5/v6 組合せ、auth section owner-only、backpressure、input refusal を追加し、prefix `browser_launcher_live_frame_`, `browser_live_frame_`, `browser_live_view_`, `launcher_credential_` を用いる。実 browser が必要な検証は opt-in とし、CPU 負荷試験を使わない。
 
 理由: launcher は CDP を唯一保持し、controller は型と背圧、gateway は人の認証、試験は層間の非永続性をそれぞれ所有する。範囲を切れば各境界を独立に review できる。
 
 試験: `browser_live_frame_task_scope_checks` は各 task の変更 path が上記範囲内であることを確認し、各層の指定 prefix の試験を実行する。
 
-## 未決（人の決定待ち）
+## 決定（人の決定、2026-10-10）
 
-### D7. `live-credential-default`
+### D7. `live-credential-default`（決定済み）
 
-credential session の Live View を既定で出すか、site policy の明示的 opt-in にするかは未決である。推奨は **site policy opt-in**。auth section 中は入力値が画面に表示され得て、本人限定でも肩越し閲覧・共有画面などの露出は起きる。既定を opt-in にすれば、site ごとに本人表示の必要性を選び、既存の最小公開を維持できる。opt-in の site でも D1 の owner session 以外には配信しない。
+- 決定: credential session（ログイン後を含む）の Live View は、既定で本人の owner session に表示する。site policy ごとの opt-in は設けない。
+- 回答者: 人（運用セッション経由、2026-10-10 の発言「資格情報を使った場合でも live view が見れるほうがいい、どちらにせよ資格情報を入力した人間しか見ないので」）
+- 日付: 2026-10-10
+- task: 01M4HS8VQDB3JQHJRJ0ZDBY57H（決定 record-decision、進捗 [2026-10-10 launcher Live View frame](../progress/2026-10-10-browser-launcher-live-view-frames.md)）
+- 注記: 選択肢は「既定で出す」を選ばれた。本 ADR の初稿の推奨は site policy opt-in で、人の選択はそれと異なる。決定の選択肢の表記に「推奨どおり」と付いていたが、初稿の推奨とは一致しない。この食い違いは進捗に残す。
+- 維持する境界: frame を DB/WAL/events/logs/artifacts に残さない（D2）。本人以外（agent・LLM・他の viewer）へ渡さない（D1・D3）。認証区間中の入力欄の値（password は Chrome が伏字にする）を frame 以外の経路で出さない（D3）。input 転送（takeover）は緩めない（D4）。
 
-理由: auth section の frame は入力値を含む可能性があり、site ごとに本人表示を許す必要性を選べる方が露出を抑えられる。
+理由: 資格情報を入力する本人だけが見るため、本人への表示を既定にしても露出は増えない。既定表示なら本人が login の状態を確認でき、opt-in の設定漏れによる表示不能を避けられる。
 
-試験: `browser_live_credential_default_policy` は未設定時の選択結果と opt-in site の本人限定動作を確認する（決定後に規則を確定する）。
+試験: `browser_live_credential_default_owner_only` は未設定時（既定）に credential session の本人 owner viewer へ frame が届き、非 owner・agent・LLM・別 viewer へは届かないことを確認する。site policy の試験は置かない。

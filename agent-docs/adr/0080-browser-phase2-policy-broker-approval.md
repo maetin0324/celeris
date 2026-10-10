@@ -231,4 +231,4 @@ launcher runtime における `CredentialUse` は ADR-0138 D-L の launcher sess
 
 ## 付記（2026-10-10、credential session の本人への Live View）
 
-D3 の「認証後は Live View を出さない」という範囲を、credential session の本人の owner session に対する揮発 frame 表示に限って緩和する。配送経路・owner session の認可・背圧・永続層に残さない契約は [ADR 2026-10-10: browser launcher の本人向け Live View frame 経路](2026-10-10-browser-launcher-live-view-frames.md) に従う。agent/LLM、別 viewer、他 session へ frame を渡さず、frame を DB/WAL/events/logs/artifacts/core dump/一時 file に永続化しない。input 転送・takeover は緩和せず、D6 の読み取り専用・拒否を維持する。credential session の既定公開範囲は `live-credential-default` の人の決定待ちである。
+D3 の「認証後は Live View を出さない」という範囲を、credential session の本人の owner session に対する揮発 frame 表示に限って緩和する。配送経路・owner session の認可・背圧・永続層に残さない契約は [ADR 2026-10-10: browser launcher の本人向け Live View frame 経路](2026-10-10-browser-launcher-live-view-frames.md) に従う。agent/LLM、別 viewer、他 session へ frame を渡さず、frame を DB/WAL/events/logs/artifacts/core dump/一時 file に永続化しない。input 転送・takeover は緩和せず、D6 の読み取り専用・拒否を維持する。credential session の既定公開範囲は人の決定 `live-credential-default`（2026-10-10）で既定表示に確定し、site policy の opt-in は設けない（[ADR 2026-10-10 D7](2026-10-10-browser-launcher-live-view-frames.md)）。

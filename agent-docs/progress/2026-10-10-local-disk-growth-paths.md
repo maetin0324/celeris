@@ -97,3 +97,27 @@ final review の差し戻し（build-tmp-hygiene.md の未更新と local-disk-g
 - `docs/ops/local-disk-growth.md` §2 の重複していた「repo target の自動回収は daemon の常設 tick…」段落（約10分間隔版と 600 秒間隔版）を 1 段落に統合した（600 秒間隔・保護理由・cargo lock・木の最後の終端基準を残す）。
 
 証拠コマンドと結果は[docs-fix の記録](2026-10-10-local-disk-growth-paths/docs-fix.md)を参照（文書検査 3 本は全て exit 0、`crates/` と `scripts/` は未変更）。
+
+## v4: 全 workspace target の刈り込みと scratch の測り方（reprune、2026-10-10）
+
+final review の差し戻し（release prune が integration test の binary を刈らない）を直した。
+
+- **prune-workspace**: `sd_release_prune_stale_test_binaries` の候補を `cargo metadata` の全 target 名（test・bin・lib・example・bench）と package 名の和にした。`.d` が registry・git checkout を参照する依存 crate は残す。試験 `release_prune_stale_test_binaries.sh` で integration test・crates 外 member・依存との同名・marker より新しい binary を確かめた（exit 0）。記録は[prune-workspace](2026-10-10-local-disk-growth-paths/prune-workspace.md)。
+- **本番 target の dry run（読み取りだけ、削除 0）**: 2026-10-10 08:40:45Z 開始の release-build target で、候補 307 file・25.2 GiB（allocated）。内訳は今回の build 済み 124 個・34.5 GiB（残す、build 途中の値）、古い package 名 8 個・3.1 GiB（旧規則でも刈れた）、古い integration test 等 67 個・15.4 GiB（新規則で初めて刈れる）。依存との名前衝突は 0。
+- **sizing-adr**: ADR 2026-10-10-local-disk-growth-paths.md の付記「scratch の上限と測り方」で、seed_reflink の有効化条件（`/local` は btrfs、scratch・作業場所・`$TMPDIR` が同じ fs、`cp --reflink=auto` と FIEMAP で共有 extent を確認。`--reflink=always` は worker の seccomp 下で EPERM）、`targets_max_gb` の既定 160・`total_max_gb` 200、共有を重ねない測り方（FIEMAP の physical extent を pool 全体で重複除去）を決めた。記録は[sizing-adr](2026-10-10-local-disk-growth-paths/sizing-adr.md)。
+- **sizing-impl**: 既定値を 160 / 200 GiB にし、`scratch::gc::measure_tree_shared` で共有 extent を 1 回だけ数えて GC と watermark の `SizeCache` に入れた。FIEMAP 失敗時は `st_blocks` に戻す。試験 `scratch_shared_` 3 件と scratch の試験が通った。記録は[sizing-impl](2026-10-10-local-disk-growth-paths/sizing-impl.md)。
+
+### 全体検査（reclose、HEAD 033b776f）
+
+- `TMPDIR=/tmp bash scripts/dev/test-parallel.sh`: exit 0、nextest 5047 passed / 0 failed / 14 ignored、失敗名 0 件。
+- `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
+- 文書検査 3 本（check-doc-links・check-adr-numbers・check-doc-layout）: 全て exit 0。
+
+証拠の詳細は[reclose](2026-10-10-local-disk-growth-paths/reclose.md)。
+
+### 人の本番手順（配送後）
+
+- 配送後の daemon 差し替えと release の刈り込み確認: [docs/ops/local-disk-growth.md](../../docs/ops/local-disk-growth.md) §1・§3。
+- `[scratch] seed_reflink` の有効化（起動 log での probe 確認と戻し方）: 同 §7。
+- `[scratch] targets_max_gb` の暫定 150 を消して既定 160 に戻す手順と確認（pressure の記録）: 同 §8。
+- 既存の repo 直下 target・backup 刈り込み: 同 §2・§4。

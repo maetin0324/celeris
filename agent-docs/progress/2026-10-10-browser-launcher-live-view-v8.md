@@ -1,8 +1,9 @@
 ---
 title: "launcher Live View frame 経路: protocol v8 実装契約"
 tasks: [01M4JAK3MY5G1K8T66Q4RTWSS5]
-status: running
+status: done
 updated: 2026-10-10
+completed: 2026-10-10
 ---
 
 # launcher Live View frame 経路: protocol v8 実装契約
@@ -17,6 +18,27 @@ updated: 2026-10-10
 - gateway は既存 owner session / Origin / grant guard 付き WebSocket で本人だけへ配送する。frame 経路がある場合 `liveAvailability` は enabled/link。credential session の本人表示を維持し、input は拒否する。
 - D6 の path 範囲と試験 prefix は v8 unit 名に更新済み。frame-core、launcher、api-stream、daemon、gateway、spa、cross-tests、ops-doc の境界を ADR 付記に記録した。
 
-## 状態
+## 完了
 
-この WorkUnit は ADR と親進捗索引のみを更新した。コード実装・後続 unit の検証・本番反映手順の作成は後続 WorkUnit の範囲。
+全 unit を統合した HEAD `127e53e3d0a02576d160465fc566b64ed55323ea` で全体検査を完了した。全体検査はすべて exit 0。
+
+| 検査 | 結果 |
+|---|---|
+| `TMPDIR=/tmp bash scripts/dev/test-parallel.sh` | exit 0。nextest 5,054 passed / 0 failed / 13 skipped、doc tests 3 passed（別途 ignored 1）。`CELERIS_TEST_SUMMARY`: 5,057 passed / 0 failed / 14 ignored。 |
+| `cargo clippy --workspace -- -D warnings` | exit 0 |
+| `cargo fmt --all -- --check` | exit 0 |
+| `pnpm -C web lint` | exit 0。既存 `styles.css` の `!important` 4 件は warning。 |
+| `pnpm -C web typecheck` | exit 0 |
+| `pnpm -C web test` | exit 0。Vitest 91 files / 657 tests passed、Node 86 passed / 0 failed。 |
+| `pnpm -C web build` | exit 0。chunk size warning あり。 |
+
+失敗した試験名はない。本体・試験の修正は不要だった。
+
+## 未解決事項
+
+- 実 Chrome と本番 launcher を使った映像確認および本番反映は未実施。launcher の再 build・差し替えと本人向け確認手順は [運用手順](../../docs/ops/browser-launcher-live-view.md) に記録済み。
+- web lint の既存 `!important` 警告 4 件と build の大きな chunk 警告が残る。いずれもこの Live View の gate を妨げない。
+
+## 提案
+
+- 運用セッションで手順に沿って launcher を更新し、本人の credential session を含む実 browser で Live View を確認する。

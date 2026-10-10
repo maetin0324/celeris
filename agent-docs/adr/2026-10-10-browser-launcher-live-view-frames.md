@@ -139,3 +139,7 @@ frame は daemon が `live_start` を送った Live View 専用の別接続で�
 | ops-doc | `docs/ops/` の launcher v8 再 build・差し替え・Live View 確認手順 | 文書 check。コード試験 prefix は追加しない |
 
 各 unit は表の範囲だけを変更する。層をまたぐ追加試験は cross-tests に置き、各段の容量 1、非永続性、v7/v8 互換、本人限定、input 拒否を固定する。D6 の従来の v6/v5 試験名・組合せはこの表の v8/v7 契約に置き換える。
+
+### 実装記録
+
+protocol v8 の実装は完了し、全体検査を通過した。主要な実装 commit は launcher `07aceb77`、task-core/daemon `516ea993`、task-api `13bc444d`、gateway `702c40ad`、SPA `d17ff1bf`、cross-tests `047a3e40`、運用手順 `82af5b94`。close-out HEAD は `127e53e3d0a02576d160465fc566b64ed55323ea`。全体検査と残る実 browser/本番確認は [進捗](../progress/2026-10-10-browser-launcher-live-view-v8.md) を参照。

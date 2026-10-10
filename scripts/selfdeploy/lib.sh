@@ -736,8 +736,7 @@ sd_scratch_touch() {
   "$ctl" scratch touch --config "$SD_CONFIG" --owner "$SD_SCRATCH_OWNER" >/dev/null 2>&1 8>&- 9>&- || true
 }
 
-# Release-build target pruning. Only test executables named for workspace packages are
-# candidates; dependency libraries and build-script outputs are deliberately untouched.
+# Release-build target pruning. Dependency libraries and build-script outputs are deliberately untouched.
 sd_release_prune_record_start() {
   local marker="$1/.celeris-release-build-start" tmp now
   now="${SD_RELEASE_NOW:-$(date +%s)}"
@@ -780,39 +779,77 @@ except (OSError, subprocess.SubprocessError, ValueError):
 PY
 }
 
+# Candidates are every workspace target name (cargo metadata: all packages, all target kinds,
+# '-' -> '_') plus package names, so integration tests (tests/<file>.rs -> <file>-<hash>) and
+# members outside crates/ (tests/e2e) are included. A candidate whose .d references a registry
+# or git checkout source is a dependency crate and is kept. SD_RELEASE_PRUNE_DRY_RUN=1 only reports.
 sd_release_prune_stale_test_binaries() {
-  local target="$1" tree="$2" start="$3" removed=0
+  local target="$1" tree="$2" start="$3" report verb=removed
   [ -d "$target" ] || return 0
-  removed="$(python3 - "$target" "$tree" "$start" <<'PY'
-import os, re, sys
+  report="$(python3 - "$target" "$tree" "$start" <<'PY'
+import glob, json, os, re, subprocess, sys
 target, tree, start = sys.argv[1], os.path.realpath(sys.argv[2]), float(sys.argv[3])
-names = set()
-for root, dirs, files in os.walk(os.path.join(tree, 'crates')):
-    if 'Cargo.toml' not in files: continue
-    try: text = open(os.path.join(root, 'Cargo.toml'), encoding='utf-8').read()
-    except OSError: continue
-    m = re.search(r'^name\s*=\s*["\']([^"\']+)', text, re.M)
-    if m: names.add(m.group(1).replace('-', '_'))
-removed = 0
+dry = os.environ.get('SD_RELEASE_PRUNE_DRY_RUN') == '1'
+names, source = set(), 'metadata'
+try:
+    out = subprocess.run(
+        ['cargo', 'metadata', '--no-deps', '--format-version', '1', '--offline',
+         '--manifest-path', os.path.join(tree, 'Cargo.toml')],
+        check=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        stdin=subprocess.DEVNULL, timeout=120,
+    ).stdout
+    for package in json.loads(out)['packages']:
+        names.add(package['name'].replace('-', '_'))
+        for t in package.get('targets', []):
+            names.add(t['name'].replace('-', '_'))
+except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError):
+    # Fallback: package names and conventional target files of every member manifest.
+    source = 'fallback'
+    for root, dirs, files in os.walk(tree):
+        dirs[:] = [d for d in dirs if d not in ('target', '.git', 'node_modules')]
+        if 'Cargo.toml' not in files: continue
+        try: text = open(os.path.join(root, 'Cargo.toml'), encoding='utf-8').read()
+        except OSError: continue
+        m = re.search(r'^\[package\][^\[]*?^name\s*=\s*["\']([^"\']+)', text, re.M | re.S)
+        if not m: continue
+        names.add(m.group(1).replace('-', '_'))
+        for pattern in ('tests/*.rs', 'src/bin/*.rs', 'benches/*.rs', 'examples/*.rs'):
+            for path in glob.glob(os.path.join(root, pattern)):
+                names.add(os.path.basename(path)[:-3].replace('-', '_'))
+        for pattern in ('tests/*/main.rs', 'src/bin/*/main.rs', 'benches/*/main.rs', 'examples/*/main.rs'):
+            for path in glob.glob(os.path.join(root, pattern)):
+                names.add(os.path.basename(os.path.dirname(path)).replace('-', '_'))
+count = size = kept_dependency = 0
 deps = os.path.join(target, 'debug', 'deps')
 if os.path.isdir(deps):
-    for name in os.listdir(deps):
+    for name in sorted(os.listdir(deps)):
         if not name.endswith('.d'): continue
         dep = os.path.join(deps, name)
         stem = name[:-2]
-        package = stem.rsplit('-', 1)[0] if '-' in stem else ''
-        if package not in names or not re.search(r'-[0-9a-f]{8,}$', stem): continue
-        path = os.path.join(deps, stem)
-        try: old = os.path.isfile(path) and os.stat(path).st_mtime < start and os.stat(dep).st_mtime < start
-        except OSError: old = False
-        if old:
-            for candidate in (path, dep):
-                try: removed += os.path.getsize(candidate); os.unlink(candidate)
-                except OSError: pass
-print(removed)
+        m = re.match(r'^(.+)-([0-9a-f]{8,})$', stem)
+        if not m or m.group(1) not in names: continue
+        files = [p for p in (os.path.join(deps, stem), os.path.join(deps, 'lib' + stem + '.rlib'),
+                             os.path.join(deps, 'lib' + stem + '.rmeta')) if os.path.isfile(p)]
+        try:
+            if os.stat(dep).st_mtime >= start or not files: continue
+            if any(os.stat(p).st_mtime >= start for p in files): continue
+            text = open(dep, encoding='utf-8', errors='replace').read()
+        except OSError: continue
+        if '/registry/src/' in text or '/git/checkouts/' in text:
+            kept_dependency += 1
+            continue
+        for p in files + [dep]:
+            try:
+                blocks = os.stat(p, follow_symlinks=False).st_blocks * 512
+                if not dry: os.unlink(p)
+                count += 1; size += blocks
+            except OSError: pass
+print(f'{count} {size} {kept_dependency} {source}')
 PY
-)"
-  sd_log "release prune: removed ${removed} bytes of stale workspace test binaries and .d files"
+)" || report="0 0 0 error"
+  set -- $report
+  [ "${SD_RELEASE_PRUNE_DRY_RUN:-0}" = 1 ] && verb="dry run: would remove"
+  sd_log "release prune: ${verb} $1 files ($2 bytes allocated) of stale workspace targets and .d files (names from $4; kept $3 dependency-crate matches)"
 }
 
 sd_release_prune_enforce_limit() {

@@ -73,6 +73,24 @@ task `01M4D7RVKX` は 2026-10-09 08:01 に終端したものとして調査し�
 
 `sd_release_prune_size` は `btrfs filesystem du -s --raw <target>` が成功し、出力を認識できる場合、Exclusive と Set shared の合計を上限判定に使う。共有 extent は Set shared に一度だけ加算されるため、reflink seed の共有を各 target の全量として重複計上しない。btrfs が無い・失敗する・出力を認識できない場合は、走査した通常 file の inode を一度ずつ数え、`st_blocks * 512` を合計する。後者は sparse file の未割当領域と hardlink の重複を除け、非 btrfs host でも見かけのサイズによる誤った作り直しを避けられる。一方、非 btrfs で reflink の共有 extent を判別できないため、その場合は共有分を重複計上し得る。
 
+#### 付記 2026-10-10: release prune の対象
+
+final review（2026-10-10 08:28Z）の指摘: D3 実装付記の刈り込みは `crates/*/Cargo.toml` の package 名に一致する binary だけを候補にしていたので、integration test の binary（test file 名で作られる `notify-<hash>`・`api_scenarios-<hash>` など、workspace に 149 本）と crates/ の外の member（`tests/e2e`）を刈らず、量の約 9 割が残っていた。採った判定（`scripts/selfdeploy/lib.sh` の `sd_release_prune_stale_test_binaries`）:
+
+- **候補名**: `cargo metadata --no-deps --format-version 1 --offline --manifest-path <build tree>/Cargo.toml` の全 package の全 target（kind を問わない。test・bin・lib・bench・example・custom-build）の名前と package 名の和（`-` は `_`）。cargo metadata が失敗したら、tree 内の全 `Cargo.toml`（`target`・`.git`・`node_modules` を除く）の `[package] name` と、その member の `tests/*.rs`・`src/bin/*.rs`・`benches/*.rs`・`examples/*.rs`（と `*/main.rs` の dir 名）から作る。log に `names from metadata|fallback` を出す。
+- **対象 file**: `debug/deps/<name>-<hex 8 桁以上>.d` ごとに、同じ stem の実行ファイル・`lib<stem>.rlib`・`lib<stem>.rmeta` と `.d` 自身。`.d` と全ての出力が marker（直前 release の build 開始時刻）より古い組だけを消す。
+- **依存 crate の除外**: 名前が一致しても `.d` の本文に `/registry/src/` か `/git/checkouts/` が出るものは依存 crate とみなして残す（例: workspace の test `notify` と依存 crate `notify`）。`debug/build/` の build script 出力・`.fingerprint` は触らない。
+- **dry run**: `SD_RELEASE_PRUNE_DRY_RUN=1` なら消さずに `would remove <n> files (<bytes> bytes allocated)` を log に出す。大きさは `st_blocks * 512`（見かけの size でない）。
+- 試験: `scripts/selfdeploy/tests/release_prune_stale_test_binaries.sh` に integration test（`crates/example/tests/notify.rs` → `notify-<hash>`）、crates 外 member（`tests/e2e/tests/api_scenarios.rs`）、registry と git checkout を参照する同名の依存 crate（残る）、marker より新しい binary（残る）、metadata にだけ出る `[[test]] name`、dry run を足した。
+
+残る誤差:
+
+- 依存の判定は `.d` の path 文字列に頼る。`CARGO_HOME` を変えた registry でも path は `registry/src` / `git/checkouts` を含むので当たるが、`[patch]`・path 依存で tree の外の源を指す crate は名前が workspace target と一致したときに刈られる（次の build で作り直されるだけで、壊れはしない）。
+- 候補名は**今回の** tree から作る。消えた test file・改名した target の古い binary は名前が一致せず残る（D3 の上限で作り直すまで）。
+- marker が無い target（本変更を初めて配備した直後）は start=0 として何も刈らず、その release で marker を書く。刈り込みは配備後 2 回目の release から効く。
+- `.d` の mtime が marker より古くても、cargo が fingerprint 一致で再利用した binary は mtime が更新されないので、今回の build で使った古い binary を刈ることがある。その場合 cargo は次の build で作り直す（依存の再 build は起きない。workspace crate だけ）。
+- 実測（2026-10-10 08:4xZ、本番 `/local/celeris/data/scratch/targets/release-build/target` を読み取りだけで dry run。start = 進行中の release の開始 08:40:45Z）: 候補 307 file・25.2 GiB。workspace の実行ファイルのうち古いものは 75 個・18.5 GiB で、旧規則（package 名だけ）が拾えたのは 8 個・3.1 GiB。記録は進捗 `agent-docs/progress/2026-10-10-local-disk-growth-paths/prune-workspace.md`。
+
 ### D4. DB backup の保持と削除前検査
 
 promote 前 backup は直近10本を既定保持し、rollback 用 backup は直近3本を別枠で保持する。定期 backup は直近48時間分に加え、日次7本・週次4本（UTC日/ISO週ごとの最新）を残す。全 `.sqlite3` backup の使用量上限は64 GiBを既定とし、超過時は保持集合の古い periodic から先に削除し、次に promote の古いものを削除する。rollback 用直近3本と各種の最新1本は保護する。削除を始める前に最新 backup 1個を read-only で `PRAGMA integrity_check` し、結果が `ok` 以外または検査失敗なら削除を一切行わない。既存 `backup_keep=48` は互換のため直近 hourly 本数として扱う。

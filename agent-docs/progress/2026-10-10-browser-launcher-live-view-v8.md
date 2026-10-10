@@ -26,6 +26,12 @@ completed: 2026-10-10
 - 変更は ADR・docs/ops・本進捗だけ。`crates/` は触っていない。
 - 版の訂正の検査は本節の後段（regate）で文書検査と合わせて取り直す。
 
+## 人の決定の記録（live-protocol、2026-10-10）
+
+- 決定の要約: Live View = protocol 9、artifact = protocol 8 のまま。回答は CoS の代答で、人の決定ではない。理由は番号衝突の回避（protocol 8 は main の artifact transfer が使用済み）。
+- 要件・親 task 題名の「v8」は「Live View 無し・artifact あり」と読む。v7/v8 の launcher・daemon と v9 の組では Live View だけが無効（`launcher_protocol_no_live_frames`）で、session・credential login・consent は動く。
+- 詳細・既存試験名・本番差し替え手順の所在は [ADR 付記 2026-10-10d](../adr/2026-10-10-browser-launcher-live-view-frames.md#付記-2026-10-10d人の決定-live-view-は-protocol-9)。
+
 ## 完了
 
 全 unit を統合した HEAD `127e53e3d0a02576d160465fc566b64ed55323ea` で全体検査を完了した。全体検査はすべて exit 0。

@@ -337,12 +337,16 @@ fn daemon_rejects_worker_secret_retrieval_even_with_valid_lease() {
     ] {
         fs::create_dir(&p).expect("parent")
     }
+    let config = home.join(".config/celeris/config.toml");
+    fs::write(&config, "").expect("config");
     let binary = std::env::var("CARGO_BIN_EXE_celeris-credentiald").expect("binary path");
     // The child must only see this test's temporary HOME/XDG paths. A worker
     // sandbox exports CELERIS_CREDENTIALD_DATA_DIR (the production data dir) and
     // other CELERIS_*/XDG_* values; inheriting them sends vault/audit elsewhere.
     let child = Command::new(binary)
         .arg("serve")
+        .arg("--config")
+        .arg(&config)
         .arg(std::process::id().to_string())
         .env_clear()
         .env("HOME", &home)
@@ -599,9 +603,13 @@ fn invalid_control_process_id_is_rejected() {
     ] {
         fs::create_dir(&p).expect("parent")
     }
+    let config = home.join(".config/celeris/config.toml");
+    fs::write(&config, "").expect("config");
     let binary = std::env::var("CARGO_BIN_EXE_celeris-credentiald").expect("binary");
     let mut child = Command::new(binary)
         .arg("serve")
+        .arg("--config")
+        .arg(&config)
         .arg("1")
         .env("HOME", &home)
         .env("XDG_RUNTIME_DIR", &runtime)

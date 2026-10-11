@@ -69,15 +69,18 @@ release.sh <ref>  →  verify.sh <sha12>  →  promote.sh <sha12>        （戻�
 | celeris API | `127.0.0.1:7710` | `127.0.0.1:7711`（N-1 は `:7712`） |
 | web | `127.0.0.1:7720` | probe `127.0.0.1:7728`（一時起動） |
 
-## 1. 最初に一度だけ: systemd の unit を入れる
+## 1. systemd の unit を入れる・更新する
 
-テンプレート unit はリポジトリの `deploy/systemd/` にある。**人が一度だけ**入れる:
+テンプレート unit はリポジトリの `deploy/systemd/` にある。**人が初回および雛形変更時に**入れる:
 
 ```bash
 bash ~/workspace/agent-platform/scripts/selfdeploy/install-units.sh
 # = deploy/systemd/ の celeris@ / celeris-web@ / celeris-credentiald@ / celeris-web-lan の
 #   .service を ~/.config/systemd/user/ に置いて daemon-reload（置くだけ。enable しない。
-#   内容が違う既存の unit は <unit>.bak-<ts> に残す）
+#   既存との差分があれば、何も書き換えず diff を表示して停止する）
+# 差分を確認し、運用に必要な設定が config または drop-in にあることを確かめてから:
+# bash ~/workspace/agent-platform/scripts/selfdeploy/install-units.sh --replace-existing
+# 置換時は <unit>.bak-<ts> に旧ファイルを残す。
 systemctl --user cat celeris@.service        # 入ったことの確認
 loginctl show-user "$USER" | grep Linger   # Linger=yes であること（ログアウトしても動き続ける）
 ```
@@ -85,6 +88,20 @@ loginctl show-user "$USER" | grep Linger   # Linger=yes であること（ログ
 `%i` はリリースの `sha12`。`celeris@<sha12>` は `~/.local/celeris/releases/<sha12>/bin/celeris --config ~/.config/celeris/config.toml
 --release <sha12>`、`celeris-web@<sha12>` は release の `web/app/` で `node server/index.js` を動かす。
 web の環境変数・認証・LAN 中継は [web 運用手順](web-operation.md) を参照する。
+
+`celeris-credentiald@<sha12>` も home/hot root のどちらでも設置される。daemon と同じ
+`~/.config/celeris/config.toml` を `serve --config` で読み、`[browser].launcher_uid` を使う。
+UID を unit に直接書かない。config の path を drop-in で変更する場合は daemon と broker の
+両方を同じファイルへ向ける。設定変更後は両方の再起動が必要。config を読めない・TOML/UID が不正なら
+broker は起動失敗し、UID 未設定なら credential 注入は拒否される。
+
+`--replace-existing` は表示済み差分を運用者が確認した後に使う。削除される設定を見落とさず、
+新しい config または必要な drop-in に反映してから実行する。mask や symlink は
+`--replace-existing` でも拒否するので、運用者が目的を確認して個別に整理する。drop-in 自体は置換対象外なので
+`systemctl --user cat` で最終的な ExecStart も確認する。UID 引数付き旧 unit からの初回移行は
+[本番への移行](../../agent-docs/progress/2026-10-11-credentiald-launcher-config.md#本番への移行)の順序に従う。
+旧 release は `serve --config` に対応しないので、新 unit の設置直後に旧 broker を再起動しない。
+
 
 ## 2. リリースを作る（`release.sh`）
 

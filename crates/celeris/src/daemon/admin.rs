@@ -9,7 +9,7 @@ use task_worker::Workspace;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
-use super::adapters::{build_adapters, effective_models, provider_lives};
+use super::adapters::{build_adapters, build_harness_adapters, effective_models, provider_lives};
 use super::clusters::ClusterMasters;
 use crate::{Config, accounts_admin, cluster_admin, config, notify};
 
@@ -226,6 +226,7 @@ pub(crate) fn reload_providers(
         Duration::from_secs(new_config.error_cooldown_secs),
     );
     let llm_route_registry = new_config.llm_route_registry().map_err(|e| e.to_string())?;
+    let harness_adapters = build_harness_adapters(&new_config).map_err(|e| e.to_string())?;
     let adapters = build_adapters(&new_config);
     let models = effective_models(&new_config);
     dispatcher
@@ -240,6 +241,7 @@ pub(crate) fn reload_providers(
     dispatcher.reload_cos_chat_launch(cos_launch);
     // ADR 2026-10-11 llm-source-harness-selection: harness and source×model are chosen from these.
     dispatcher.set_llm_route_registry(llm_route_registry);
+    dispatcher.set_harness_adapters(harness_adapters);
     // ADR 2026-10-08 account-concurrency-limits §(e): implicit accounts are per LLM source, so the
     // new config's resolved sources must be in place before pruning or limiting.
     dispatcher.set_provider_llm_sources(new_config.provider_llm_sources());

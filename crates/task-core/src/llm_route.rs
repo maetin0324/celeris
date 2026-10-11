@@ -60,6 +60,12 @@ pub struct SourceSpec {
     pub max_runs: Option<u32>,
     pub account_max_runs: BTreeMap<AccountId, u32>,
     pub quota: Option<f64>,
+    /// Base URL of the source's API, when it has one (OAuth CLI sources do not).
+    #[serde(default)]
+    pub endpoint: Option<String>,
+    /// Secret reference id for the source's credential; never the secret value.
+    #[serde(default)]
+    pub credential_ref: Option<String>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HarnessSpec {
@@ -458,6 +464,8 @@ mod tests {
                 max_runs: Some(2),
                 account_max_runs: BTreeMap::from([("a".into(), 1)]),
                 quota: None,
+                endpoint: None,
+                credential_ref: None,
             },
         );
         r

@@ -11,7 +11,7 @@ use task_worker::db_guard::{
 };
 use time::OffsetDateTime;
 
-use super::adapters::{build_adapters, effective_models};
+use super::adapters::{build_adapters, build_harness_adapters, effective_models};
 use super::clusters::{
     ClusterMasters, TunnelForwardChildren, TunnelForwardRegistry, cluster_connector,
     cluster_control_persist, cluster_keepalive_secs, master_launchers, tunnel_forward_ensurer,
@@ -571,6 +571,7 @@ pub fn build_dispatcher(
     );
     // ADR 2026-10-11 llm-source-harness-selection: harness and source×model are chosen from these.
     dispatcher.set_llm_route_registry(config.llm_route_registry()?);
+    dispatcher.set_harness_adapters(build_harness_adapters(config)?);
     // ADR 2026-10-08 account-concurrency-limits §(e): implicit accounts are per LLM source, so the
     // dispatcher needs the resolved source of every row before it can prune or limit them.
     dispatcher.set_provider_llm_sources(config.provider_llm_sources());

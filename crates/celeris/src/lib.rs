@@ -38,7 +38,9 @@ use task_dispatch::DispatchError;
 use time::OffsetDateTime;
 
 pub use config::{Config, ConfigError, Overrides};
-pub use daemon::adapters::{build_adapters, effective_models, provider_lives, secret_usage};
+pub use daemon::adapters::{
+    build_adapters, build_harness_adapters, effective_models, provider_lives, secret_usage,
+};
 pub use daemon::api::{api_settings, bind_reuseport, config_view};
 pub use daemon::bootstrap::{build_dispatcher, seed_cron_if_empty, seed_org_if_empty};
 pub use daemon::clusters::{ClusterMasters, wire_cluster_liveness_hooks};

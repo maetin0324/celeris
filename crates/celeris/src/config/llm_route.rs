@@ -81,6 +81,8 @@ impl super::Config {
                     max_runs: s.max_runs,
                     account_max_runs: BTreeMap::new(),
                     quota: s.quota,
+                    endpoint: s.endpoint.clone(),
+                    credential_ref: s.credential_ref.clone(),
                 },
             );
         }

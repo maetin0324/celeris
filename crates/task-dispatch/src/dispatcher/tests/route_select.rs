@@ -18,6 +18,8 @@ fn source(kind: &str, api: &str, accounts: &[&str], models: &[&str]) -> SourceSp
         max_runs: None,
         account_max_runs: BTreeMap::new(),
         quota: None,
+        endpoint: None,
+        credential_ref: None,
     }
 }
 

@@ -125,6 +125,7 @@ mod review_verdict;
 mod routing_context;
 mod routing_enforce;
 mod routing_members;
+mod route_launch;
 mod route_select;
 mod routing_shadow;
 mod run_context;
@@ -165,6 +166,7 @@ pub use routing_shadow::{
     DECISION_SHADOW_COMPARISON_VERSION, DECISION_SHADOW_POLICY_VERSION, DecisionShadowCandidate,
     DecisionShadowComparison, RoutingShadowListener,
 };
+pub use route_launch::{RouteLaunchError, selected_llm_route};
 pub use route_select::{
     RouteFailure, RouteInput, RoutePick, RouteState, RouteTrace, harness_request_for, route_select,
 };
@@ -1285,6 +1287,9 @@ pub struct Dispatcher {
     account_books: HashMap<AccountAdapter, Arc<StdMutex<AccountBook>>>,
     /// ADR 2026-10-11 llm-source-harness-selection: declared sources, harnesses and routes.
     llm_route_registry: Arc<task_core::llm_route::Registry>,
+    /// ADR 2026-10-11 llm-source-harness-selection: one base adapter per declared harness
+    /// (`[harnesses.<id>]` over `[adapters.<kind>]`); the route's model and account go on at launch.
+    harness_adapters: HashMap<task_core::llm_route::HarnessId, Arc<dyn WorkerAdapter>>,
     account_limits: Option<
         HashMap<
             (
@@ -1613,6 +1618,7 @@ impl Dispatcher {
             coding_default: CodingHarnessDefault::default(),
             account_books,
             llm_route_registry: Arc::default(),
+            harness_adapters: HashMap::new(),
             account_limits,
             accounts_scan_cache: HashMap::new(),
             login_pending_accounts: std::collections::HashSet::new(),

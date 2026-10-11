@@ -1905,6 +1905,7 @@ fn launcher_run_request(workspace: &Path) -> RunRequest {
         artifacts_dir: workspace.join("artifacts"),
         context: Default::default(),
         cargo_target_dir: None,
+        llm_route: None,
     }
 }
 

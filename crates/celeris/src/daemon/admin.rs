@@ -225,9 +225,7 @@ pub(crate) fn reload_providers(
         new_config.provider_specs(),
         Duration::from_secs(new_config.error_cooldown_secs),
     );
-    let llm_route_registry = new_config
-        .llm_route_registry()
-        .map_err(|e| e.to_string())?;
+    let llm_route_registry = new_config.llm_route_registry().map_err(|e| e.to_string())?;
     let adapters = build_adapters(&new_config);
     let models = effective_models(&new_config);
     dispatcher
@@ -427,6 +425,7 @@ pub(crate) async fn check_provider(
     // ADR-0036 D1: 疎通確認用の単独タスク（親なし）なので従来どおり `<workspace>/artifacts`。
     let artifacts_dir = task_core::artifacts::artifacts_dir_for(&task, &prepared);
     let req = task_worker::RunRequest {
+        llm_route: None,
         cargo_target_dir: None,
         protocol: task_worker::PROTOCOL_VERSION,
         task,

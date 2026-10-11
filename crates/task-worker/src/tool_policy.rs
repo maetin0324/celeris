@@ -478,6 +478,7 @@ mod tests {
             workspace: dir,
             work_dir: None,
             context: crate::protocol::RunContext::default(),
+            llm_route: None,
         };
         assert!(!SubagentPolicy::Deny.allows(&req));
         assert!(SubagentPolicy::Allow.allows(&req));

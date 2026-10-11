@@ -84,6 +84,7 @@ fn stub_codex(dir: &std::path::Path, script: &str) -> CodexConfig {
 
 fn sample_req(workspace: std::path::PathBuf) -> RunRequest {
     RunRequest {
+        llm_route: None,
         cargo_target_dir: None,
         protocol: PROTOCOL_VERSION,
         task: crate::protocol::tests::sample_task(),

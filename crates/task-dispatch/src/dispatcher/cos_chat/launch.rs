@@ -672,6 +672,8 @@ impl CosChatLaunch {
             artifacts_dir: artifacts_dir.clone(),
             context,
             cargo_target_dir: None,
+
+            llm_route: None,
         };
         let adapter = if let Some(account_id) = account.as_deref() {
             if let Some(account_adapter) = dispatcher.pool_adapter_of(provider, adapter.id()) {

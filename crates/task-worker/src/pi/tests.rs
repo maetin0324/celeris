@@ -39,6 +39,7 @@ fn request(dir: &Path) -> RunRequest {
         work_dir: None,
         context: RunContext::default(),
         cargo_target_dir: None,
+        llm_route: None,
     }
 }
 

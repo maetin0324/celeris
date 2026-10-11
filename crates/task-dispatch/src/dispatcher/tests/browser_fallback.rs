@@ -133,6 +133,7 @@ async fn prep_run_both(prep: &RunAdapterPrep, tier: Tier) -> (bool, bool, Vec<Pr
     );
     task.worker_hint.tier = tier;
     let req = RunRequest {
+        llm_route: None,
         cargo_target_dir: None,
         protocol: PROTOCOL_VERSION,
         task,
@@ -298,6 +299,7 @@ fn browser_fallback_request(task: Task, dir: &Path) -> RunRequest {
         work_dir: None,
         artifacts_dir: dir.join("artifacts"),
         cargo_target_dir: None,
+        llm_route: None,
         context: RunContext {
             profile: Some(EffectiveProfile {
                 browser: Some(BrowserCapability {

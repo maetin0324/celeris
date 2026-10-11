@@ -128,6 +128,7 @@ fn chat() -> CosChatContext {
 
 fn cos_req(workspace: &Path, chat: CosChatContext, session: Option<SessionHandle>) -> RunRequest {
     RunRequest {
+        llm_route: None,
         cargo_target_dir: None,
         protocol: PROTOCOL_VERSION,
         task: chat.transient_task(

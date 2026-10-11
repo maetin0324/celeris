@@ -496,6 +496,8 @@ pub(super) async fn run_worker(
             // ADR 2026-10-05 cos-chat-home D4: task に pin された添付の入力 manifest。
             input_attachments,
         },
+
+        llm_route: None,
     };
     // ADR-0066 D1（Phase 110b）: ローカルの git worktree のホスト実行にだけ、共有ビルドキャッシュの
     // `CARGO_TARGET_DIR` を与える（コンテナ実行〈`container_plan.is_some()`〉と Remote は対象外）。

@@ -1001,6 +1001,7 @@ async fn run_reviewer_inner(
         review_task.assignee = Some(node.id.clone());
     }
     let req = RunRequest {
+        llm_route: None,
         cargo_target_dir: run.cargo_target_dir.clone(),
         protocol: PROTOCOL_VERSION,
         task: review_task,

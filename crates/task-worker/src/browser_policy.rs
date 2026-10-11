@@ -380,6 +380,8 @@ mod tests {
             workspace: "/nonexistent".into(),
             work_dir: None,
             context: crate::protocol::RunContext::default(),
+
+            llm_route: None,
         };
         req.context.browser_policy = Some(wide_policy());
         req.context.profile = Some(task_core::EffectiveProfile {

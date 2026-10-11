@@ -127,6 +127,7 @@ fn delegate_message_parses_and_is_not_terminal() {
 #[test]
 fn run_request_serializes_with_type_tag() {
     let req = RunRequest {
+        llm_route: None,
         cargo_target_dir: None,
         protocol: PROTOCOL_VERSION,
         task: sample_task(),

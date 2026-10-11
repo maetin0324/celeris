@@ -1135,6 +1135,42 @@
       ],
       "type": "object"
     },
+    "CredentialReference": {
+      "oneOf": [
+        {
+          "properties": {
+            "kind": {
+              "const": "environment",
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "name"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "account_directory",
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "path"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "Criterion": {
       "description": "DESIGN §4.1 の `Criterion`。",
       "properties": {
@@ -2023,6 +2059,23 @@
         "high"
       ],
       "type": "string"
+    },
+    "LlmEndpointReference": {
+      "properties": {
+        "api_format": {
+          "type": "string"
+        },
+        "base_url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "api_format"
+      ],
+      "type": "object"
     },
     "MemoryContext": {
       "description": "`context.memory`（ADR-0033 D6 / Phase 24）: 案件をまたぐ記憶と、この案件の引き出し。\nどちらも `<memory_dir>/<node_id>/…` のファイルの中身（字数で切ったもの）。",
@@ -3205,6 +3258,50 @@
           ]
         }
       },
+      "type": "object"
+    },
+    "SelectedLlmRoute": {
+      "description": "Concrete route selected for a worker run.",
+      "properties": {
+        "account_id": {
+          "type": "string"
+        },
+        "credential": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CredentialReference"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "endpoint": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LlmEndpointReference"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "harness_id": {
+          "type": "string"
+        },
+        "model_id": {
+          "type": "string"
+        },
+        "source_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "harness_id",
+        "source_id",
+        "model_id",
+        "account_id"
+      ],
       "type": "object"
     },
     "SessionHandle": {
@@ -4548,6 +4645,17 @@
         },
         "context": {
           "$ref": "#/$defs/RunContext"
+        },
+        "llm_route": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SelectedLlmRoute"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Dispatcher-selected execution route. Credentials are references only; secrets never travel\nin the protocol payload."
         },
         "protocol": {
           "format": "uint32",

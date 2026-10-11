@@ -469,6 +469,7 @@ async fn execute(
     // ADR-0036 D1: 成果物ディレクトリはタスクごと（共有 workspace の子は `.taskd/artifacts/<task_id>/`）。
     let artifacts_dir = task_core::artifacts::artifacts_dir_for(task, &prepared);
     let req = RunRequest {
+        llm_route: None,
         cargo_target_dir: None,
         protocol: PROTOCOL_VERSION,
         task: task.clone(),
@@ -573,6 +574,7 @@ async fn execute_on_cluster(
     // ADR-0036 D1: Remote の写しは `workspace_root/<task_id>` でタスクごとなので `<写し>/artifacts`。
     let artifacts_dir = task_core::artifacts::artifacts_dir_for(&run_task, &prepared);
     let req = RunRequest {
+        llm_route: None,
         cargo_target_dir: None,
         protocol: PROTOCOL_VERSION,
         task: run_task,

@@ -210,6 +210,7 @@ fn run_request(w: &World) -> RunRequest {
             ..Default::default()
         },
         cargo_target_dir: None,
+        llm_route: None,
     }
 }
 

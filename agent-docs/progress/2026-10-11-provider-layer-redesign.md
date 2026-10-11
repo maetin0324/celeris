@@ -61,7 +61,7 @@ status: running
 
 ## 設計の要約
 
-[決定 ADR](../adr/2026-10-11-llm-source-harness-selection.md) は provider を廃止し、LLM source と harness をそれぞれ宣言する。provider ID・`[[providers]]`・`providers.d` は読み込みエラーにして新しい宣言を案内し、警告や切替 flag の互換は置かない。harness は task の構造化欄（明示 ID、`worker_hint.adapter` の解決値、genre/role、execution class の既定）から決定的に選び、LLM は呼ばない。source と model は選ばれた harness が受け付ける source kind・API format に合う `source × model` の候補から選ぶ。根拠の観測が無い間は source ID・model ID の辞書順の先頭を暫定既定とする。結合は直接接続するか、`llm-proxy` に明示登録された変換経路だけを使い、未登録の組は dispatch 前に拒否する。削除する欄と仕組み（tiers/tier_models・provider concurrency・`in_use_cos`・`account_pool`・derived/unknown source など）は ADR の一覧に従う。`account_limits` は `(source_id, account_id)` へ key を更新して維持する。
+[決定 ADR](../adr/2026-10-11-llm-source-harness-selection.md) は provider と固定の source/harness 組を廃止する。task 内容から harness を決定的に選び、その harness 制約下で source×model を別の routing policy が選ぶ。候補列挙・harness 適格性・quota/cooldown/同時実行 admission と policy の境界を定め、評価根拠がない間は source ID/model ID の辞書順を既定にする。CoS は本番で `claude_code` harness と `claude_oauth` source を使う。`llm-proxy` は source でなく上流 source/account の認証・容量を保持する変換器であり、sources/models の alias 写像は proxy 接続設定、canonical source/model は source registry に置く。provider API と web・旧 GUI 画面を削除し、source/account/harness API と画面を責務別にする。run に選択 harness/source/model と理由を migration で追加し、events は追記専用とする。8 行の本番用途は source と harness を独立させて移行し、credential・account login・既存 events は保持する。`paperqa-qwen` の実 source/model は本番設定を確認してから明示し、推測で埋めない。本番操作は人が行う手順として記録する。
 
 ## harness と source の対応
 

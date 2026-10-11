@@ -17,6 +17,8 @@ pub mod db;
 /// ADR-0072 D14（Phase E2）: `celerisctl execution plan set|show`。
 pub mod execution;
 pub mod gate;
+/// 2026-10-11 stranded-done-branches: `celerisctl integration list|merge|discard|hold|reopen`（daemon の HTTP API。人の操作）。
+pub mod integration;
 /// ADR-0047 D3（Phase 61）: 知識ベース（DB を開かない。`~/.local/share/celeris/knowledge` を直接読み書きする）。
 pub mod knowledge;
 /// ADR-0056 D1（Phase 78）: MCP クライアントの発行・一覧・失効、stdio 橋。

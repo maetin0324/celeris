@@ -196,9 +196,16 @@ pub struct MergeRequest<'a> {
     pub now: OffsetDateTime,
 }
 
-/// Confirm merge completion using git ancestry. If it is already on the default branch this is
-/// idempotent; otherwise create the standard integration request for the existing merge flow.
-pub fn merge(store: &dyn TaskStore, input: &MergeRequest<'_>) -> Result<bool, StoreError> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MergeOutcome {
+    Integrated,
+    AlreadyIntegrated,
+    NotMerged { reason: String },
+    Busy { reason: String },
+}
+
+/// Merge the recorded task head into the configured default branch without rebasing.
+pub fn merge(store: &dyn TaskStore, input: &MergeRequest<'_>) -> Result<MergeOutcome, StoreError> {
     use task_core::integration_request::{FileIntent, IntegrationRequest, SideIntent};
     let MergeRequest {
         task_id,
@@ -237,7 +244,7 @@ pub fn merge(store: &dyn TaskStore, input: &MergeRequest<'_>) -> Result<bool, St
         state.checked_at = *now;
         state.updated_at = *now;
         store.task_integration_upsert(&state)?;
-        return Ok(true);
+        return Ok(MergeOutcome::AlreadyIntegrated);
     }
     let target = Command::new("git")
         .args(["-C"])
@@ -276,12 +283,130 @@ pub fn merge(store: &dyn TaskStore, input: &MergeRequest<'_>) -> Result<bool, St
             },
         }],
         reason: format!("Explicit merge requested by {actor}"),
-        recommendation: "Use the existing integration review and merge flow".into(),
+        recommendation: "Resolve the reported merge issue and retry the explicit merge".into(),
         actions: vec![],
         candidate_sha: None,
     };
-    store.integration_request_record(*task_id, &request, "delivery")?;
-    Ok(false)
+    let record_failure = |reason: String| -> Result<MergeOutcome, StoreError> {
+        let mut failed = state.clone();
+        failed.state = TaskRepoIntegrationStatus::Unintegrated;
+        failed.reason = Some(reason.clone());
+        failed.actor = (*actor).to_owned();
+        failed.checked_at = *now;
+        failed.updated_at = *now;
+        store.task_integration_upsert(&failed)?;
+        store.integration_request_record(*task_id, &request, "delivery")?;
+        Ok(MergeOutcome::NotMerged { reason })
+    };
+
+    let branch_ref = format!("refs/heads/{default_branch}");
+    let worktree_root = std::env::var_os("TMPDIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir);
+    let worktree = worktree_root.join(format!("stranded-merge-{}", TaskId::new()));
+    let checked_out = git_output(repo, &["symbolic-ref", "--quiet", "--short", "HEAD"])
+        .is_some_and(|branch| branch == *default_branch);
+    if checked_out && !git_output(repo, &["status", "--porcelain"]).is_some_and(|s| s.is_empty()) {
+        let reason = "default branch checkout has uncommitted changes".to_owned();
+        let _ = record_failure(reason.clone())?;
+        return Ok(MergeOutcome::Busy { reason });
+    }
+    let new_sha = if ancestor(repo, head, default_branch) {
+        return Ok(MergeOutcome::AlreadyIntegrated);
+    } else if git_status(repo, &["merge-base", "--is-ancestor", &target_sha, head]).is_some() {
+        (*head).to_owned()
+    } else {
+        let add = Command::new("git")
+            .args(["-C"])
+            .arg(repo)
+            .args(["worktree", "add", "--detach"])
+            .arg(&worktree)
+            .arg(&branch_ref)
+            .output();
+        if !add.is_ok_and(|o| o.status.success()) {
+            let _ = Command::new("git")
+                .args(["-C"])
+                .arg(repo)
+                .args(["worktree", "remove", "--force"])
+                .arg(&worktree)
+                .status();
+            let _ = Command::new("git")
+                .args(["-C"])
+                .arg(repo)
+                .args(["worktree", "prune"])
+                .status();
+            return record_failure("could not create temporary merge worktree".into());
+        }
+        let merge_out = Command::new("git")
+            .args(["-C"])
+            .arg(&worktree)
+            .args(["merge", "--no-ff", "--no-edit"])
+            .arg(head)
+            .output();
+        let result = if merge_out.as_ref().is_ok_and(|o| o.status.success()) {
+            git_output(&worktree, &["rev-parse", "HEAD"])
+        } else {
+            if git_status(&worktree, &["merge", "--abort"]).is_none() { /* retain original merge error */
+            }
+            None
+        };
+        let _ = Command::new("git")
+            .args(["-C"])
+            .arg(repo)
+            .args(["worktree", "remove", "--force"])
+            .arg(&worktree)
+            .status();
+        let _ = Command::new("git")
+            .args(["-C"])
+            .arg(repo)
+            .args(["worktree", "prune"])
+            .status();
+        match result {
+            Some(sha) => sha,
+            None => {
+                return record_failure("git merge --no-ff failed (conflict or merge error)".into());
+            }
+        }
+    };
+    let update = if checked_out {
+        git_status(repo, &["merge", "--ff-only", &new_sha])
+    } else {
+        git_status(repo, &["update-ref", &branch_ref, &new_sha, &target_sha])
+    };
+    if update.is_none() {
+        return record_failure("default branch could not be advanced".into());
+    }
+    if !ancestor(repo, head, default_branch) {
+        return record_failure("post-merge ancestry verification failed".into());
+    }
+    state.state = TaskRepoIntegrationStatus::Integrated;
+    state.reason = None;
+    state.actor = (*actor).to_owned();
+    state.checked_at = *now;
+    state.updated_at = *now;
+    store.task_integration_upsert(&state)?;
+    Ok(MergeOutcome::Integrated)
+}
+
+fn git_output(repo: &Path, args: &[&str]) -> Option<String> {
+    let out = Command::new("git")
+        .args(["-C"])
+        .arg(repo)
+        .args(args)
+        .output()
+        .ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).trim().to_owned())
+}
+fn git_status(repo: &Path, args: &[&str]) -> Option<()> {
+    let out = Command::new("git")
+        .args(["-C"])
+        .arg(repo)
+        .args(args)
+        .output()
+        .ok()?;
+    out.status.success().then_some(())
 }
 
 /// Repository and recorded task branch information resolved by the daemon from its worktree DB.
@@ -592,9 +717,15 @@ mod tests {
             actor: "alice",
             now,
         };
-        assert!(merge(&store, &request).expect("merge"));
+        assert_eq!(
+            merge(&store, &request).expect("merge"),
+            MergeOutcome::AlreadyIntegrated
+        );
         let event_count = store.events_for(task_id).expect("events").len();
-        assert!(merge(&store, &request).expect("repeat"));
+        assert_eq!(
+            merge(&store, &request).expect("repeat"),
+            MergeOutcome::AlreadyIntegrated
+        );
         assert_eq!(
             store.events_for(task_id).expect("events").len(),
             event_count
@@ -610,31 +741,44 @@ mod tests {
         let _ = fs::remove_dir_all(dir);
     }
 
-    #[test]
-    fn stranded_merge_routes_unmerged_head_to_existing_integration_request() {
-        let dir = std::env::temp_dir().join(format!("stranded-request-{}", TaskId::new()));
-        fs::create_dir_all(&dir).expect("fixture");
-        git(&dir, &["init", "-b", "main"]);
-        git(&dir, &["config", "user.email", "test@example.invalid"]);
-        git(&dir, &["config", "user.name", "test"]);
-        fs::write(dir.join("base"), "base").expect("write");
-        git(&dir, &["add", "base"]);
-        git(&dir, &["commit", "-m", "base"]);
-        git(&dir, &["switch", "-c", "topic"]);
-        fs::write(dir.join("change"), "change").expect("write");
-        git(&dir, &["add", "change"]);
-        git(&dir, &["commit", "-m", "change"]);
-        let head = git(&dir, &["rev-parse", "HEAD"]);
+    fn merge_fixture() -> (
+        tempfile::TempDir,
+        SqliteStore,
+        TaskId,
+        RepoId,
+        OffsetDateTime,
+        String,
+    ) {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let repo = tmp.path();
+        git(repo, &["init", "-b", "main"]);
+        git(repo, &["config", "user.email", "test@example.invalid"]);
+        git(repo, &["config", "user.name", "test"]);
+        fs::write(repo.join("base"), "base\n").expect("base");
+        git(repo, &["add", "."]);
+        git(repo, &["commit", "-m", "base"]);
+        let base = git(repo, &["rev-parse", "HEAD"]);
         let store = SqliteStore::open_in_memory().expect("store");
-        let task_id = TaskId::new();
+        let task = TaskId::new();
         let repo_id = RepoId::new();
         let now = OffsetDateTime::from_unix_timestamp(1_800_000_000).expect("clock");
+        (tmp, store, task, repo_id, now, base)
+    }
+
+    fn seed_merge(
+        store: &SqliteStore,
+        task: TaskId,
+        repo: RepoId,
+        branch: &str,
+        head: &str,
+        now: OffsetDateTime,
+    ) {
         store
             .task_integration_upsert(&TaskRepoIntegrationState {
-                task_id,
-                repo_id,
-                branch: "topic".into(),
-                head_sha: head.clone(),
+                task_id: task,
+                repo_id: repo,
+                branch: branch.into(),
+                head_sha: head.into(),
                 state: TaskRepoIntegrationStatus::Unintegrated,
                 reason: None,
                 actor: "sweep".into(),
@@ -642,25 +786,208 @@ mod tests {
                 updated_at: now,
             })
             .expect("seed");
-        let request = MergeRequest {
-            task_id,
-            repo_id,
-            repo: &dir,
-            branch: "topic",
-            head: &head,
-            default_branch: "main",
-            actor: "alice",
-            now,
-        };
-        assert!(!merge(&store, &request).expect("request existing flow"));
+    }
+    fn worktrees(repo: &Path) {
         assert_eq!(
-            store.open_integration_requests().expect("requests").len(),
+            git(repo, &["worktree", "list", "--porcelain"])
+                .lines()
+                .filter(|l| l.starts_with("worktree "))
+                .count(),
             1
         );
+    }
+
+    #[test]
+    fn stranded_merge_fast_forward() {
+        let (tmp, store, task, repo_id, now, _) = merge_fixture();
+        let repo = tmp.path();
+        git(repo, &["switch", "-c", "topic"]);
+        fs::write(repo.join("topic"), "topic").unwrap();
+        git(repo, &["add", "."]);
+        git(repo, &["commit", "-m", "topic"]);
+        let head = git(repo, &["rev-parse", "HEAD"]);
+        git(repo, &["switch", "main"]);
+        seed_merge(&store, task, repo_id, "topic", &head, now);
         assert_eq!(
-            git(&dir, &["rev-parse", "refs/heads/main"]),
-            git(&dir, &["rev-parse", "HEAD~1"])
+            merge(
+                &store,
+                &MergeRequest {
+                    task_id: task,
+                    repo_id,
+                    repo,
+                    branch: "topic",
+                    head: &head,
+                    default_branch: "main",
+                    actor: "alice",
+                    now
+                }
+            )
+            .unwrap(),
+            MergeOutcome::Integrated
         );
-        let _ = fs::remove_dir_all(dir);
+        assert_eq!(git(repo, &["rev-parse", "main"]), head);
+        assert_eq!(
+            store
+                .events_for(task)
+                .unwrap()
+                .iter()
+                .filter(|(_, event)| matches!(event, task_core::Event::IntegrationMerged { .. }))
+                .count(),
+            1
+        );
+        worktrees(repo);
+    }
+
+    #[test]
+    fn stranded_merge_no_ff() {
+        let (tmp, store, task, repo_id, now, _) = merge_fixture();
+        let repo = tmp.path();
+        git(repo, &["switch", "-c", "topic"]);
+        fs::write(repo.join("topic"), "topic").unwrap();
+        git(repo, &["add", "."]);
+        git(repo, &["commit", "-m", "topic"]);
+        let head = git(repo, &["rev-parse", "HEAD"]);
+        git(repo, &["switch", "main"]);
+        fs::write(repo.join("main-change"), "main").unwrap();
+        git(repo, &["add", "."]);
+        git(repo, &["commit", "-m", "main"]);
+        seed_merge(&store, task, repo_id, "topic", &head, now);
+        assert_eq!(
+            merge(
+                &store,
+                &MergeRequest {
+                    task_id: task,
+                    repo_id,
+                    repo,
+                    branch: "topic",
+                    head: &head,
+                    default_branch: "main",
+                    actor: "alice",
+                    now
+                }
+            )
+            .unwrap(),
+            MergeOutcome::Integrated
+        );
+        assert_eq!(
+            git(repo, &["rev-list", "--parents", "-n", "1", "main"])
+                .split_whitespace()
+                .count(),
+            3
+        );
+        worktrees(repo);
+    }
+
+    #[test]
+    fn stranded_merge_conflict_keeps_default_branch() {
+        let (tmp, store, task, repo_id, now, base) = merge_fixture();
+        let repo = tmp.path();
+        git(repo, &["switch", "-c", "topic"]);
+        fs::write(repo.join("base"), "topic\n").unwrap();
+        git(repo, &["commit", "-am", "topic"]);
+        let head = git(repo, &["rev-parse", "HEAD"]);
+        git(repo, &["switch", "main"]);
+        fs::write(repo.join("base"), "main\n").unwrap();
+        git(repo, &["commit", "-am", "main"]);
+        let main = git(repo, &["rev-parse", "HEAD"]);
+        seed_merge(&store, task, repo_id, "topic", &head, now);
+        assert!(matches!(
+            merge(
+                &store,
+                &MergeRequest {
+                    task_id: task,
+                    repo_id,
+                    repo,
+                    branch: "topic",
+                    head: &head,
+                    default_branch: "main",
+                    actor: "alice",
+                    now
+                }
+            )
+            .unwrap(),
+            MergeOutcome::NotMerged { .. }
+        ));
+        assert_eq!(git(repo, &["rev-parse", "main"]), main);
+        assert_eq!(
+            store
+                .task_integration_get(task, repo_id)
+                .unwrap()
+                .unwrap()
+                .state,
+            TaskRepoIntegrationStatus::Unintegrated
+        );
+        assert_eq!(git(repo, &["rev-parse", "HEAD~1"]), base);
+        assert_eq!(store.open_integration_requests().unwrap().len(), 1);
+        worktrees(repo);
+    }
+
+    #[test]
+    fn stranded_merge_dirty_checkout_is_busy() {
+        let (tmp, store, task, repo_id, now, _) = merge_fixture();
+        let repo = tmp.path();
+        git(repo, &["switch", "-c", "topic"]);
+        fs::write(repo.join("topic"), "topic").unwrap();
+        git(repo, &["add", "."]);
+        git(repo, &["commit", "-m", "topic"]);
+        let head = git(repo, &["rev-parse", "HEAD"]);
+        git(repo, &["switch", "main"]);
+        fs::write(repo.join("dirty"), "dirty").unwrap();
+        seed_merge(&store, task, repo_id, "topic", &head, now);
+        assert!(matches!(
+            merge(
+                &store,
+                &MergeRequest {
+                    task_id: task,
+                    repo_id,
+                    repo,
+                    branch: "topic",
+                    head: &head,
+                    default_branch: "main",
+                    actor: "alice",
+                    now
+                }
+            )
+            .unwrap(),
+            MergeOutcome::Busy { .. }
+        ));
+        assert_eq!(
+            git(repo, &["rev-parse", "main"]),
+            git(repo, &["rev-parse", "HEAD"])
+        );
+        worktrees(repo);
+    }
+
+    #[test]
+    fn stranded_merge_other_branch_checked_out_uses_update_ref() {
+        let (tmp, store, task, repo_id, now, _) = merge_fixture();
+        let repo = tmp.path();
+        git(repo, &["switch", "-c", "topic"]);
+        fs::write(repo.join("topic"), "topic").unwrap();
+        git(repo, &["add", "."]);
+        git(repo, &["commit", "-m", "topic"]);
+        let head = git(repo, &["rev-parse", "HEAD"]);
+        git(repo, &["switch", "-c", "other"]);
+        seed_merge(&store, task, repo_id, "topic", &head, now);
+        assert_eq!(
+            merge(
+                &store,
+                &MergeRequest {
+                    task_id: task,
+                    repo_id,
+                    repo,
+                    branch: "topic",
+                    head: &head,
+                    default_branch: "main",
+                    actor: "alice",
+                    now
+                }
+            )
+            .unwrap(),
+            MergeOutcome::Integrated
+        );
+        assert_eq!(git(repo, &["symbolic-ref", "--short", "HEAD"]), "other");
+        assert_eq!(git(repo, &["rev-parse", "main"]), head);
+        worktrees(repo);
     }
 }

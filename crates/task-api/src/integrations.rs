@@ -44,8 +44,9 @@ pub struct ReasonBody {
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct IntegrationActionResult {
     pub state: TaskRepoIntegrationState,
-    /// `true` means branch is already an ancestor of the configured default branch.
+    /// `true` means the task head is an ancestor of the configured default branch.
     pub integrated: bool,
+    pub reason: Option<String>,
 }
 
 async fn list(State(state): State<ApiState>, RawQuery(raw): RawQuery) -> ApiResult {
@@ -157,6 +158,7 @@ async fn disposition(
         &IntegrationActionResult {
             state: result,
             integrated: false,
+            reason: None,
         },
     ))
 }
@@ -182,11 +184,11 @@ async fn mutate_simple(state: ApiState, raw_id: String, repo: String, action: Ac
     let result = state
         .blocking(move |store| {
             let repo_id = resolve_repo(store, id, &repo)?;
-            let integrated = match action {
+            let (integrated, reason) = match action {
                 Action::Reopen => {
                     task_ops::stranded::reopen(store, id, repo_id, "human", now)
                         .map_err(invalid_problem)?;
-                    false
+                    (false, None)
                 }
                 Action::Merge => {
                     let task = store
@@ -213,7 +215,7 @@ async fn mutate_simple(state: ApiState, raw_id: String, repo: String, action: Ac
                         &path,
                         row.as_ref().and_then(|r| r.default_branch.as_deref()),
                     );
-                    task_ops::stranded::merge(
+                    let outcome = task_ops::stranded::merge(
                         store,
                         &task_ops::stranded::MergeRequest {
                             task_id: id,
@@ -226,10 +228,24 @@ async fn mutate_simple(state: ApiState, raw_id: String, repo: String, action: Ac
                             now,
                         },
                     )
-                    .map_err(invalid_problem)?
+                    .map_err(invalid_problem)?;
+                    match outcome {
+                        task_ops::stranded::MergeOutcome::Integrated
+                        | task_ops::stranded::MergeOutcome::AlreadyIntegrated => (true, None),
+                        task_ops::stranded::MergeOutcome::NotMerged { reason } => {
+                            (false, Some(reason))
+                        }
+                        task_ops::stranded::MergeOutcome::Busy { reason } => {
+                            return Err(ApiProblem::new(
+                                StatusCode::CONFLICT,
+                                "checkout_busy",
+                                reason,
+                            ));
+                        }
+                    }
                 }
             };
-            Ok((state_row(store, id, repo_id)?, integrated))
+            Ok((state_row(store, id, repo_id)?, integrated, reason))
         })
         .await?;
     Ok(json_response(
@@ -237,6 +253,7 @@ async fn mutate_simple(state: ApiState, raw_id: String, repo: String, action: Ac
         &IntegrationActionResult {
             state: result.0,
             integrated: result.1,
+            reason: result.2,
         },
     ))
 }
@@ -273,6 +290,9 @@ fn invalid_problem(error: task_core::StoreError) -> ApiProblem {
     match error {
         task_core::StoreError::Invalid(message) if message.contains("not found") => {
             ApiProblem::file_not_found(message)
+        }
+        task_core::StoreError::Invalid(message) if message.starts_with("checkout_busy:") => {
+            ApiProblem::new(StatusCode::CONFLICT, "checkout_busy", message)
         }
         task_core::StoreError::Invalid(message) => {
             ApiProblem::new(StatusCode::CONFLICT, "invalid_transition", message)

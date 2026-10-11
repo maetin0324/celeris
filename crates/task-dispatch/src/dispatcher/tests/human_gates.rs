@@ -281,6 +281,62 @@ async fn review_human_stage_holds_the_next_stage_child() {
     assert_replay_is_clean(&store);
 }
 
+/// ADR 2026-10-11-task-wait-reasons D12（葉 stage-gate）: 段階 s1 の `review: human` で止まった root では、dispatcher の
+/// `human_gate_hold` が止め、API の `task_waits` も同じ `task_ops::wait::human_gate_waits` から `StageReview{s1}` を出す。
+/// 「続ける」の後は両方とも解ける。
+#[tokio::test]
+async fn task_wait_stage_gate_review_human_hold_matches_the_api_waits() {
+    let dir = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let root = root_task(dir.path());
+    let root_id = root.id;
+    store.create_task(&root, vec![]).unwrap();
+    let plan = v3_plan(
+        vec![stage("s1", true), stage("s2", false)],
+        vec![leaf("a", "s1", &[]), task_unit("c", "s2", &["a"], "true")],
+    );
+    let adapter = Arc::new(GateAdapter::new(vec![plan]));
+    let mut d = tree_dispatcher(&store, adapter);
+    run_until_quiet(&mut d, &store, 400).await;
+    approve_root_plan(&store, root_id);
+    run_until_quiet(&mut d, &store, 800).await;
+
+    let stored = store.get(root_id).unwrap().unwrap();
+    let events = store.events_for(root_id).unwrap();
+    let active = store.execution_plan_active(root_id).unwrap().unwrap();
+    let waits = task_ops::wait::human_gate_waits(&stored, Some(&active), &events);
+    assert_eq!(
+        waits,
+        vec![task_core::TaskWait::HumanGate {
+            gate: task_core::HumanGateKind::StageReview,
+            stage: Some("s1".to_string()),
+        }]
+    );
+    assert_eq!(
+        d.human_gate_hold(&stored, &active, &events),
+        Some("stage_review")
+    );
+    let api = task_ops::wait::task_waits_one(
+        store.as_ref(),
+        &stored,
+        &task_ops::wait::MemoryWaits::default(),
+    )
+    .unwrap();
+    assert!(api.contains(&waits[0]), "{api:?}");
+
+    task_ops::phase_gate::phase_gate(
+        store.as_ref(),
+        root_id,
+        task_ops::phase_gate::PhaseGateAction::Continue,
+        None,
+    )
+    .unwrap();
+    let stored = store.get(root_id).unwrap().unwrap();
+    let events = store.events_for(root_id).unwrap();
+    assert!(task_ops::wait::human_gate_waits(&stored, Some(&active), &events).is_empty());
+    assert_eq!(d.human_gate_hold(&stored, &active, &events), None);
+}
+
 /// D3（木の節点）: 節点の `max_replans` を使い切った後に leaf が失敗しても root を `failed` にせず、
 /// `limit:max_replans` の決定（`needed_before: self`）で人に聞く（質問は作らない）。`raise-once` の回答で replan
 /// が 1 回起き、直した版で done まで進む。

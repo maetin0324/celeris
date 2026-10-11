@@ -1834,11 +1834,11 @@ fn work_unit_check_progress_shows_the_running_acceptance_check() {
     assert_eq!(p.finished[0].duration_ms, 900);
 }
 
-/// ADR 2026-10-11-task-wait-reasons D5/D12: 人の gate は blocked の task だけ、`runnable` は ready かつ待ち無し。
+/// ADR 2026-10-11-task-wait-reasons D5/D12: gate の事実が無ければ人の gate は空、`runnable` は ready かつ待ち無し。
 #[test]
-fn task_wait_api_gate_waits_and_runnable() {
+fn task_wait_api_human_gate_waits_and_runnable() {
     let ready = sample_task(TaskKind::Execute, Status::Ready);
-    assert!(crate::wait::gate_waits(&ready, &[]).is_empty());
+    assert!(crate::wait::human_gate_waits(&ready, None, &[]).is_empty());
     assert!(crate::wait::is_runnable(&ready, &[]));
     assert!(!crate::wait::is_runnable(
         &ready,
@@ -1847,7 +1847,140 @@ fn task_wait_api_gate_waits_and_runnable() {
     let blocked = sample_task(TaskKind::Execute, Status::Blocked);
     assert!(!crate::wait::is_runnable(&blocked, &[]));
     assert!(
-        crate::wait::gate_waits(&blocked, &[]).is_empty(),
+        crate::wait::human_gate_waits(&blocked, None, &[]).is_empty(),
         "no gate events"
+    );
+}
+
+fn stage_gate_plan(schema: &str, review_human: bool) -> task_core::ExecutionPlanRow {
+    let stage = |key: &str, review| task_core::StageSpec {
+        key: key.to_string(),
+        kind: task_core::WorkUnitKind::Implement,
+        title: format!("stage {key}"),
+        review,
+    };
+    let review = if review_human {
+        task_core::StageReview::Human
+    } else {
+        task_core::StageReview::None
+    };
+    task_core::ExecutionPlanRow {
+        id: "plan-1".to_string(),
+        task_id: TaskId::new().to_string(),
+        version: 1,
+        origin: task_core::PlanOrigin::Planner,
+        planner_run_id: None,
+        status: task_core::PlanStatus::Active,
+        spec: task_core::ExecutionPlanSpec {
+            stages: vec![
+                stage("design", review),
+                stage("build", task_core::StageReview::None),
+            ],
+            units: Vec::new(),
+            decisions: Vec::new(),
+            schema: schema.to_string(),
+            rationale: String::new(),
+            work_units: Vec::new(),
+            phases: Vec::new(),
+            children: Vec::new(),
+        },
+        created_at: "2026-10-11T00:00:00Z".to_string(),
+        superseded_at: None,
+    }
+}
+
+fn seq_events(events: Vec<Event>) -> Vec<(u64, Event)> {
+    events
+        .into_iter()
+        .enumerate()
+        .map(|(i, e)| (i as u64 + 1, e))
+        .collect()
+}
+
+/// 段の後で止まった events（`PhaseReported{design}` → `awaiting_human`）。
+fn stopped_after_design() -> Vec<(u64, Event)> {
+    seq_events(vec![
+        Event::PhaseReported {
+            phase: "design".into(),
+            report: Box::new(task_core::PhaseReport {
+                phase: "design".into(),
+                phase_title: "設計".into(),
+                next_phase: Some("build".into()),
+                ..Default::default()
+            }),
+        },
+        Event::Transitioned {
+            from: Status::Running,
+            to: Status::Blocked,
+            reason: crate::phase_gate::AWAITING_HUMAN.to_string(),
+        },
+    ])
+}
+
+/// D12（葉 stage-gate）: /3 の計画の `review: human` の段で止まった task は `StageReview` と段 key を出す。
+#[test]
+fn task_wait_api_stage_review_reports_the_stage_key() {
+    let task = sample_task(TaskKind::Execute, Status::Blocked);
+    let plan = stage_gate_plan(task_core::EXECUTION_PLAN_SCHEMA_V3, true);
+    assert_eq!(
+        crate::wait::human_gate_waits(&task, Some(&plan), &stopped_after_design()),
+        vec![task_core::TaskWait::HumanGate {
+            gate: task_core::HumanGateKind::StageReview,
+            stage: Some("design".to_string()),
+        }]
+    );
+}
+
+/// D12（葉 stage-gate）: 計画の承認待ちは `PlanApproval`（段 key なし）で、段の review と区別される。
+#[test]
+fn task_wait_api_stage_review_is_distinct_from_plan_approval() {
+    let task = sample_task(TaskKind::Execute, Status::Blocked);
+    let plan = stage_gate_plan(task_core::EXECUTION_PLAN_SCHEMA_V3, true);
+    let plan_approval = vec![task_core::TaskWait::HumanGate {
+        gate: task_core::HumanGateKind::PlanApproval,
+        stage: None,
+    }];
+    // 承認待ちで止まった（遷移の reason）。
+    let awaiting = seq_events(vec![Event::Transitioned {
+        from: Status::Running,
+        to: Status::Blocked,
+        reason: crate::plan_gate::AWAITING_PLAN_APPROVAL.to_string(),
+    }]);
+    assert_eq!(
+        crate::wait::human_gate_waits(&task, Some(&plan), &awaiting),
+        plan_approval
+    );
+    // 有効な版が PlanGate を通っていない（ready でも dispatcher は止める。同じ判定）。
+    let ready = sample_task(TaskKind::Execute, Status::Ready);
+    let requested = seq_events(vec![Event::PlanApprovalRequested {
+        plan_id: plan.id.clone(),
+        reasons: vec!["review_human:design".to_string()],
+    }]);
+    assert_eq!(
+        crate::wait::human_gate_waits(&ready, Some(&plan), &requested),
+        plan_approval
+    );
+}
+
+/// D12（葉 stage-gate）: `review: human` でない段（/2 の `pause_after` など）の途中確認は `PhaseCheckpoint`。
+#[test]
+fn task_wait_api_stage_review_falls_back_to_phase_checkpoint() {
+    let task = sample_task(TaskKind::Execute, Status::Blocked);
+    let checkpoint = vec![task_core::TaskWait::HumanGate {
+        gate: task_core::HumanGateKind::PhaseCheckpoint,
+        stage: Some("design".to_string()),
+    }];
+    for plan in [
+        stage_gate_plan(task_core::EXECUTION_PLAN_SCHEMA_V3, false),
+        stage_gate_plan(task_core::EXECUTION_PLAN_SCHEMA_V2, true),
+    ] {
+        assert_eq!(
+            crate::wait::human_gate_waits(&task, Some(&plan), &stopped_after_design()),
+            checkpoint
+        );
+    }
+    assert_eq!(
+        crate::wait::human_gate_waits(&task, None, &stopped_after_design()),
+        checkpoint
     );
 }

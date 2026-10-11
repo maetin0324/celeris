@@ -480,6 +480,9 @@ job の最終状態を渡す。`yielded` と違い、continuation の回数・�
 `CELERIS_WU_BASE_UNTRACKED`（開始時の未追跡 path 一覧）、`CELERIS_WU_SCOPE_PATHS`（全 file の差分補助）を渡す。
 retry と daemon の検査引き継ぎでは初回の snapshot を再利用する。
 
+WU の受け入れ検査ログは `<workspace_root>/<task_id>/work-unit-checks/<wu_key>/` に保存し、repo の作業ツリー外に置く。
+scope check の説明はこのログ置き場を差分 path として数える想定ではない。
+
 ```sh
 paths=$(if [ -n "${CELERIS_WU_SCOPE_PATHS:-}" ]; then sh "$CELERIS_WU_SCOPE_PATHS"; else git diff --name-only "${CELERIS_WU_BASE:-HEAD}" && git ls-files --others --exclude-standard; fi) || exit 1
 out=$(printf '%s\n' "$paths" | sort -u | grep -vE '^(<許可 path の正規表現>)'); [ -z "$out" ] || { echo "out of scope:"; echo "$out"; exit 1; }

@@ -340,6 +340,14 @@ fn stranded_integration_status_serializes_for_api_clients() {
     let value = serde_json::to_value(task_core::TaskRepoIntegrationStatus::Unintegrated)
         .expect("serialize stranded integration status");
     assert_eq!(value, "unintegrated");
+    assert_eq!(
+        serde_json::to_value(task_core::TaskRepoIntegrationStatus::NotApplicable).unwrap(),
+        "not_applicable"
+    );
+    assert_eq!(
+        task_core::TaskRepoIntegrationStatus::parse("not_applicable"),
+        Some(task_core::TaskRepoIntegrationStatus::NotApplicable)
+    );
 }
 
 /// 2026-10-04 多目的 routing ADR §6（Phase 3）: feature・request・outcome の Event の `type` 名が serde の名前・

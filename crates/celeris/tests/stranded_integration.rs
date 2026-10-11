@@ -142,6 +142,7 @@ fn stranded_detects_inbox_merge_discard_hold_and_promotion_independently() {
             done: true,
             root: true,
             changed_repo: true,
+            not_applicable: false,
         },
         BranchRecord {
             task_id: discard_task,
@@ -153,6 +154,7 @@ fn stranded_detects_inbox_merge_discard_hold_and_promotion_independently() {
             done: true,
             root: true,
             changed_repo: true,
+            not_applicable: false,
         },
     ];
 

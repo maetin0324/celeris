@@ -116,6 +116,38 @@ fn integration_api_unintegrated_state_creates_actionable_inbox_item() {
 }
 
 #[test]
+fn stranded_remote_not_applicable_state_is_hidden_from_inbox() {
+    let store = SqliteStore::open_in_memory().expect("open store");
+    let task = sample_task(TaskKind::Execute, Status::Done);
+    store.insert(&task).expect("insert task");
+    store
+        .task_integration_upsert(&task_core::TaskRepoIntegrationState {
+            task_id: task.id,
+            repo_id: task_core::RepoId::new(),
+            branch: "celeris/remote".into(),
+            head_sha: String::new(),
+            state: task_core::TaskRepoIntegrationStatus::NotApplicable,
+            reason: Some("remote repository: not checked by the sweep".into()),
+            actor: "sweep".into(),
+            checked_at: OffsetDateTime::now_utc(),
+            updated_at: OffsetDateTime::now_utc(),
+        })
+        .expect("record not applicable state");
+
+    let result = inbox(
+        &store,
+        None,
+        &view_ctx(),
+        OffsetDateTime::now_utc(),
+        &no_evidence,
+    )
+    .expect("inbox");
+    assert!(!result.attention.iter().any(
+        |item| matches!(item, AttentionItem::Unintegrated { task: t, .. } if t.id == task.id)
+    ));
+}
+
+#[test]
 fn inbox_approvals_section_links_parent_run_and_calls_evidence_for_done_run() {
     let store = SqliteStore::open_in_memory().expect("open store");
     let mut parent = sample_task(TaskKind::Execute, Status::Reviewing);

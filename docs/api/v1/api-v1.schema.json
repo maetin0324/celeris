@@ -28948,7 +28948,8 @@
         "unintegrated",
         "integrated",
         "discarded",
-        "held"
+        "held",
+        "not_applicable"
       ],
       "type": "string"
     },

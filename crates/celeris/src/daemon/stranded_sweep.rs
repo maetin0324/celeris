@@ -35,14 +35,20 @@ pub(crate) fn run(store: &dyn TaskStore, now: OffsetDateTime) -> Result<usize, S
             let repo = store
                 .repo_get(reference.repo_id)
                 .map_err(|e| e.to_string())?;
-            let (path, configured) = match repo {
+            let (path, configured, not_applicable) = match repo {
                 Some(repo) => match repo.location {
-                    WorkspaceSpec::Local { path, .. } => (Some(path), repo.default_branch),
-                    WorkspaceSpec::Remote { .. } => (None, repo.default_branch),
+                    WorkspaceSpec::Local { path, .. } => (Some(path), repo.default_branch, false),
+                    WorkspaceSpec::Remote { .. } => (None, repo.default_branch, true),
                 },
-                None => (None, None),
+                None => (None, None, false),
             };
-            let default_branch = default_branch_for(path.as_ref(), configured.as_deref());
+            let default_branch = if not_applicable {
+                Err(task_ops::changes::DefaultBranchError(
+                    "remote repository: not checked by the sweep".into(),
+                ))
+            } else {
+                default_branch_for(path.as_ref(), configured.as_deref())
+            };
             let branch = format!("celeris/{}", task.id);
             // Resolve HEAD before entering task_ops::stranded::sweep. No store lock is held here.
             let head = path.as_ref().and_then(|path| {
@@ -61,6 +67,7 @@ pub(crate) fn run(store: &dyn TaskStore, now: OffsetDateTime) -> Result<usize, S
                 done: true,
                 root: true,
                 changed_repo: true,
+                not_applicable,
             });
         }
     }
@@ -114,6 +121,7 @@ fn repoless_records(
                 done: true,
                 root: true,
                 changed_repo: true,
+                not_applicable: false,
             });
         }
     }

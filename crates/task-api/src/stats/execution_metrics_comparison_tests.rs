@@ -203,6 +203,7 @@ fn fixture() -> SqliteStore {
                 Event::RoutingDecided {
                     run_id: "continued-run".into(),
                     record: Box::new(task_core::RoutingRecord {
+                        features: None,
                         org_node: Some("engineering".into()),
                         harness: Some("coding".into()),
                         decision,

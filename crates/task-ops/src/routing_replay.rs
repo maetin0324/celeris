@@ -1023,6 +1023,7 @@ mod tests {
         Event::RoutingDecided {
             run_id: run.into(),
             record: Box::new(RoutingRecord {
+                features: None,
                 org_node: None,
                 harness: None,
                 decision,

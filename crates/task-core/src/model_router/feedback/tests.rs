@@ -13,6 +13,7 @@ fn routing_decided(run_id: &str) -> Event {
     Event::RoutingDecided {
         run_id: run_id.into(),
         record: Box::new(RoutingRecord {
+            features: None,
             org_node: Some("software-engineering".into()),
             harness: Some("coding".into()),
             decision,

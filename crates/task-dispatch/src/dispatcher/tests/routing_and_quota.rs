@@ -1345,6 +1345,7 @@ async fn repeated_review_failures_escalate_the_retry_lane_one_step() {
     assert_eq!(decision.lane, Tier::Cheap);
     for run in ["r1", "r2"] {
         let record = task_core::RoutingRecord {
+            features: None,
             org_node: None,
             harness: Some("coding".into()),
             decision: decision.clone(),
@@ -1406,6 +1407,7 @@ fn push_trajectory_run(store: &dyn TaskStore, task: &Task, run: &str, lane: Tier
     let mut decision = task_core::model_policy::decide_for_task(task, &Default::default()).unwrap();
     decision.lane = lane;
     let record = task_core::RoutingRecord {
+        features: None,
         org_node: task.assignee.clone(),
         harness: Some("coding".into()),
         decision,

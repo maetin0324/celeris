@@ -525,6 +525,9 @@ pub struct LaneDecision {
 /// ADR-0069 D5: `Event::RoutingDecided` の中身。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct RoutingRecord {
+    /// ADR 2026-10-11 D6: immutable task feature snapshot reference (older events omit it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub features: Option<RouteFeaturesRef>,
     /// Ownership 層: 担当（`org_nodes.id`）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub org_node: Option<String>,
@@ -548,6 +551,14 @@ pub struct RoutingRecord {
     /// Phase 3 run 間 escalation の構造化監査。旧 event では欠落する。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub escalation: Option<crate::retry_policy::EscalationAudit>,
+}
+
+/// Content-addressed reference to a stored task feature snapshot.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct RouteFeaturesRef {
+    pub schema: String,
+    pub template: String,
+    pub hash: String,
 }
 
 /// 規則 1 件。`when` が真なら `lane`。

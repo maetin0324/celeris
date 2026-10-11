@@ -447,6 +447,7 @@ fn decided(task: &Task, run: &str, decision_id: &str, models: &[String]) -> Even
     Event::RoutingDecided {
         run_id: run.into(),
         record: Box::new(RoutingRecord {
+            features: None,
             org_node: None,
             harness: None,
             decision,

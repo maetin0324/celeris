@@ -132,9 +132,8 @@ fn resolve_department(
         .and_then(|id| department(id)))
 }
 
-/// ADR-0121 D2: `begin` が delivery を作らない理由。`Silent` は従来どおり何も残さない対象外。
+/// ADR-0121 D2: `begin` が delivery を作らない理由。
 enum Skip {
-    Silent,
     Report {
         reason: DeliverySkipReason,
         detail: String,
@@ -306,7 +305,10 @@ fn prepare(
         matches!(d.state, DeliveryState::Merging | DeliveryState::Preparing)
             || (d.state == DeliveryState::Ready && d.head == head)
     }) {
-        return Ok(Err(Skip::Silent));
+        return Ok(Err(report(
+            DeliverySkipReason::RefsUnresolvable,
+            "同一 head の delivery が既に進行中または完了しています".into(),
+        )));
     }
     let org = store.org_list()?;
     let Some(department) = resolve_department(store, task, policy, &org)? else {
@@ -377,7 +379,6 @@ pub fn begin(
         old,
     } = match prepare(store, task, workspace_root, policy)? {
         Ok(p) => p,
-        Err(Skip::Silent) => return Ok(None),
         Err(Skip::Report {
             reason,
             detail,

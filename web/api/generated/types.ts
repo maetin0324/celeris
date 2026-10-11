@@ -1829,7 +1829,7 @@ export type DeliveryList = {
   "items": Array<DeliveryHead>;
 };
 
-export type DeliverySkipReason = "no_project" | "project_not_enabled" | "support_task" | "tree_child" | "multiple_repos" | "no_marker" | "marker_repo_mismatch" | "repo_row_missing" | "repo_not_local" | "repo_path_mismatch" | "not_git" | "no_branch" | "branch_name_mismatch" | "refs_unresolvable" | "department_unresolved";
+export type DeliverySkipReason = "no_project" | "project_not_enabled" | "support_task" | "tree_child" | "multiple_repos" | "no_marker" | "marker_repo_mismatch" | "repo_row_missing" | "repo_not_local" | "repo_path_mismatch" | "not_git" | "no_branch" | "branch_name_mismatch" | "refs_unresolvable" | "department_unresolved" | "no_commits";
 
 export type DeliveryState = "reviewing" | "merge_queued" | "merging" | "preparing" | "ready" | "blocked";
 

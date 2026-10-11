@@ -1126,6 +1126,49 @@ fn inbox_cleanup_terminal_delivery_skip_is_suppressed() {
     assert!(!store.events_for(task.id).expect("events").is_empty());
 }
 
+/// 2026-10-11 付記: 取り込む commit が無い root の見送り（no_commits）は正常な no-op で注意事項に出さない。
+#[test]
+fn delivery_skip_no_commits_is_not_attention() {
+    let store = SqliteStore::open_in_memory().expect("store");
+    let attention_for = |reason: task_core::DeliverySkipReason| {
+        let mut task = sample_task(TaskKind::Execute, Status::Done);
+        task.project_id = Some(task_core::ProjectId::new());
+        store.insert(&task).expect("insert");
+        store
+            .append_event(
+                task.id,
+                &Event::DeliverySkipped {
+                    reason,
+                    detail: "skipped".into(),
+                    head: Some("abc123".into()),
+                },
+            )
+            .expect("event");
+        let all = store.list(None).expect("list");
+        let by_id: HashMap<TaskId, Task> = all.iter().map(|t| (t.id, t.clone())).collect();
+        build_attention(
+            &store,
+            &all,
+            &by_id,
+            None,
+            &view_ctx(),
+            OffsetDateTime::now_utc(),
+        )
+        .expect("attention")
+        .into_iter()
+        .filter(|item| {
+            matches!(item, AttentionItem::DeliverySkipped { task: t, .. } if t.id == task.id)
+        })
+        .count()
+    };
+    assert_eq!(attention_for(task_core::DeliverySkipReason::NoCommits), 0);
+    // 他の理由は従来どおり注意事項になる（対照）。
+    assert_eq!(
+        attention_for(task_core::DeliverySkipReason::DepartmentUnresolved),
+        1
+    );
+}
+
 #[test]
 fn integration_request_is_one_attention_until_answered_even_for_done_task() {
     let store = SqliteStore::open_in_memory().expect("store");

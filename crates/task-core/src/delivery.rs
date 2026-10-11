@@ -37,6 +37,9 @@ pub enum DeliverySkipReason {
     NoBranch,
     BranchNameMismatch,
     RefsUnresolvable,
+    /// 作業ブランチの head が既定ブランチの祖先（同一を含む）で、取り込む commit が無い。正常な no-op で
+    /// 受信箱には出さない（2026-10-11 付記）。
+    NoCommits,
     DepartmentUnresolved,
 }
 
@@ -58,6 +61,7 @@ impl DeliverySkipReason {
             Self::NoBranch => "no_branch",
             Self::BranchNameMismatch => "branch_name_mismatch",
             Self::RefsUnresolvable => "refs_unresolvable",
+            Self::NoCommits => "no_commits",
             Self::DepartmentUnresolved => "department_unresolved",
         }
     }
@@ -79,6 +83,7 @@ impl DeliverySkipReason {
             Self::NoBranch => "作業ブランチがありません",
             Self::BranchNameMismatch => "ブランチ名が task ID で終わりません",
             Self::RefsUnresolvable => "既定ブランチか作業ブランチを解決できません",
+            Self::NoCommits => "取り込む commit がありません",
             Self::DepartmentUnresolved => "取り込みを判定する部署が決まりません",
         }
     }

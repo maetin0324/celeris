@@ -1494,24 +1494,33 @@
     },
     "DeliverySkipReason": {
       "description": "ADR-0121 D2: 対象案件の root で delivery を作れなかった理由（`Event::DeliverySkipped.reason`）。\n並びは判定の順（同時に複数あれば先のものを記録する）。",
-      "enum": [
-        "no_project",
-        "project_not_enabled",
-        "support_task",
-        "tree_child",
-        "multiple_repos",
-        "no_marker",
-        "marker_repo_mismatch",
-        "repo_row_missing",
-        "repo_not_local",
-        "repo_path_mismatch",
-        "not_git",
-        "no_branch",
-        "branch_name_mismatch",
-        "refs_unresolvable",
-        "department_unresolved"
-      ],
-      "type": "string"
+      "oneOf": [
+        {
+          "enum": [
+            "no_project",
+            "project_not_enabled",
+            "support_task",
+            "tree_child",
+            "multiple_repos",
+            "no_marker",
+            "marker_repo_mismatch",
+            "repo_row_missing",
+            "repo_not_local",
+            "repo_path_mismatch",
+            "not_git",
+            "no_branch",
+            "branch_name_mismatch",
+            "refs_unresolvable",
+            "department_unresolved"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "no_commits",
+          "description": "作業ブランチの head が既定ブランチの祖先（同一を含む）で、取り込む commit が無い。正常な no-op で\n受信箱には出さない（2026-10-11 付記）。",
+          "type": "string"
+        }
+      ]
     },
     "EscalationAudit": {
       "description": "Run 間の lane 決定。selected_lane を次の optimizer の floor として使う。",

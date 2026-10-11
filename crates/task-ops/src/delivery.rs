@@ -310,6 +310,24 @@ fn prepare(
             head,
         }));
     };
+    // ADR-0121 付記（2026-10-11）: head が base の祖先（同一を含む）なら取り込む commit が無い。
+    // 取り込み判定の criterion を足すと reviewer が base 側の既存 commit を審査してしまうので作らない。
+    let no_commits = crate::changes::git(
+        path,
+        &["merge-base", "--is-ancestor", &head, &base],
+        Duration::from_secs(10),
+    )
+    .is_some_and(|o| o.ok);
+    if no_commits {
+        return Ok(Err(Skip::Report {
+            reason: DeliverySkipReason::NoCommits,
+            detail: format!(
+                "{}: {branch} の head {head} は {default_branch} ({base}) の祖先です",
+                path.display()
+            ),
+            head: Some(head),
+        }));
+    }
     let old = store.delivery_get(task.id)?;
     if old.as_ref().is_some_and(|d| {
         matches!(d.state, DeliveryState::Merging | DeliveryState::Preparing)
@@ -399,7 +417,7 @@ pub fn begin(
         }
     };
     let criterion_idx = task.acceptance.len();
-    task.acceptance.push(Criterion {check:Check::Reviewer,text:format!("【部署内のマージ可否判定】リポジトリ {} の {} ({}) に、コミット {} (ブランチ {}) を取り込めること。指定SHAの実際の差分、依頼範囲、テスト、移行・設定の互換性、秘密の混入を確認し、対象の実装worktreeに未コミット変更や未解決の欠陥があれば不合格にする。登録元リポジトリにはユーザーの未コミット変更があり得る。対象差分と重ならずfast-forwardで保持できる既存変更は拒否理由にせず、復元・コミット・stashしない。対象差分と衝突する変更は停止理由にする。レビューは部署をまとめる担当 {} がこの独立runで行い、上司やCoSで重複レビューしない。合格すると制御プレーンがマージ・release・verifyまで実行し、最終デプロイだけ人が押す。要件や権限などユーザーに確認しないと判断できない場合は、理由の先頭に [needs-human] と具体的な質問を含める。技術的な不備だけなら部署内で差し戻す。自分でmergeやdeploy、実装変更はしない。",path.display(),default_branch,base,head,branch,department) });
+    task.acceptance.push(Criterion {check:Check::Reviewer,text:format!("【部署内のマージ可否判定】リポジトリ {} の {} ({}) に、コミット {} (ブランチ {}) を取り込めること。審査対象は `git log {base}..{head}` の commit と `git diff {base}...{head}`（merge-base 起点）の差分だけで、コミット {head} 単体の親との差分や base 側の commit は審査対象ではない。その差分の依頼範囲、テスト、移行・設定の互換性、秘密の混入を確認し、対象の実装worktreeに未コミット変更や未解決の欠陥があれば不合格にする。登録元リポジトリにはユーザーの未コミット変更があり得る。対象差分と重ならずfast-forwardで保持できる既存変更は拒否理由にせず、復元・コミット・stashしない。対象差分と衝突する変更は停止理由にする。レビューは部署をまとめる担当 {} がこの独立runで行い、上司やCoSで重複レビューしない。合格すると制御プレーンがマージ・release・verifyまで実行し、最終デプロイだけ人が押す。要件や権限などユーザーに確認しないと判断できない場合は、理由の先頭に [needs-human] と具体的な質問を含める。技術的な不備だけなら部署内で差し戻す。自分でmergeやdeploy、実装変更はしない。",path.display(),default_branch,base,head,branch,department,base=base,head=head) });
     let d = Delivery {
         task_id: task.id,
         project_id,

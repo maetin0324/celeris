@@ -9,9 +9,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
+    execution_plan::WorkUnitCheck,
+    model::Criterion,
     route_record::{
-        CheckInput, FeaturesInput, ROUTE_OUTCOME_SCHEMA, RouteOutcome, TaskFeatures,
-        build_task_features,
+        AcceptanceInput, CheckInput, FeaturesInput, ROUTE_OUTCOME_SCHEMA, RouteOutcome,
+        TaskFeatures, build_task_features,
     },
     store::{SqliteStore, StoreError},
 };
@@ -57,8 +59,8 @@ pub fn features_for_subject(
         let plan_id: Option<String> = if subject.kind=="work_unit" { c.query_row("SELECT plan_id FROM work_units WHERE id=?1",[&subject.id],|r|r.get(0)).optional()? } else {None};
         let plan: Option<String> = plan_id.as_ref().and_then(|id| c.query_row("SELECT json FROM execution_plans WHERE id=?1",[id],|r|r.get::<_,String>(0)).optional().ok().flatten());
         let title=str(&task,"title"); let objective=if subject.kind=="work_unit" {str(&wu,"objective")} else {str(&task,"objective")};
-        let acceptance=arr_strings(&task["acceptance"]);
-        let checks=if subject.kind=="work_unit" { arr_values(&wu["checks"]).map(|v|v.into_iter().map(|x|CheckInput{kind: x["kind"].as_str().unwrap_or("unknown").to_owned(),description: x["cmd"].as_str().or(x["command"].as_str()).unwrap_or("").split_whitespace().take(2).collect::<Vec<_>>().join(" ")}).collect()) } else {None};
+        let acceptance=arr_values(&task["acceptance"]).map(|v|v.into_iter().filter_map(|x|serde_json::from_value::<Criterion>(x).ok()).map(|c|AcceptanceInput::from(&c)).collect());
+        let checks=if subject.kind=="work_unit" { arr_values(&wu["checks"]).map(|v|v.into_iter().filter_map(|x|serde_json::from_value::<WorkUnitCheck>(x).ok()).map(|c|CheckInput::from(&c)).collect()) } else {None};
         let mut depth=0u64; let mut ancestor=parent_id.clone(); let mut seen=std::collections::HashSet::new();
         while let Some(id)=ancestor { if !seen.insert(id.clone()) {break;} depth+=1; ancestor=c.query_row("SELECT parent_id FROM tasks WHERE id=?1",[id],|r|r.get(0)).optional()?.flatten(); }
         let mut runs_stmt=c.prepare("SELECT run_id,status,started_at,finished_at,usage_json,metrics_json FROM runs WHERE (?1 IS NULL OR work_unit_id=?1) AND (?2 IS NULL OR task_id=?2) AND (?3 IS NULL OR started_at<=?3) AND (?4 IS NULL OR EXISTS (SELECT 1 FROM events e WHERE e.task_id=runs.task_id AND e.seq<=?4 AND json_extract(e.json,'$.run_id')=runs.run_id)) ORDER BY started_at,run_id")?;
@@ -70,7 +72,7 @@ pub fn features_for_subject(
         if matches!(as_of,Some(AsOf::EventSeq(_))) {event_sql.push_str(" AND seq<=?2");}
         if matches!(as_of,Some(AsOf::Timestamp(_))) {event_sql.push_str(" AND ts<=?2");}
         let mut ev_stmt=c.prepare(&event_sql)?; let mut ev_rows=match as_of {Some(AsOf::EventSeq(n))=>ev_stmt.query(rusqlite::params![if subject.kind=="work_unit" {c.query_row("SELECT task_id FROM work_units WHERE id=?1",[&subject.id],|r|r.get::<_,String>(0))?}else{subject.id.clone()},n])?,Some(AsOf::Timestamp(ref s))=>ev_stmt.query(rusqlite::params![if subject.kind=="work_unit" {c.query_row("SELECT task_id FROM work_units WHERE id=?1",[&subject.id],|r|r.get::<_,String>(0))?}else{subject.id.clone()},s])?,None=>ev_stmt.query([if subject.kind=="work_unit" {c.query_row("SELECT task_id FROM work_units WHERE id=?1",[&subject.id],|r|r.get::<_,String>(0))?}else{subject.id.clone()}])?};
-        let mut v69=None; while let Some(r)=ev_rows.next()? {let raw:String=r.get(0)?;let e:Value=serde_json::from_str(&raw)?; if e["type"]=="routing_decided" {let f=e.pointer("/record/decision/features").or(e.pointer("/decision/features")).cloned();if f.is_some(){v69=f;}} }
+        let mut v69=None; while let Some(r)=ev_rows.next()? {let raw:String=r.get(0)?;let e:Value=serde_json::from_str(&raw)?; if e["type"]=="routing_decided" {let f=e.pointer("/record/decision/features").or(e.pointer("/decision/features")).cloned();if let Some(f)=f.and_then(|f|serde_json::from_value(f).ok()){v69=Some(f);}} }
         let paths=arr_strings(&wu["context"]["paths"]); let repos=arr_strings(&task["repos"]);
         let mut input=FeaturesInput {title,objective,acceptance,checks,done_when:arr_strings(&wu["done_when"]),outputs:arr_strings(&wu["outputs"]),paths:paths.clone(),repos:repos.clone(),genre:str(&task,"genre"),kind:if subject.kind=="work_unit"{str(&wu,"kind")}else{Some("task".into())},depth:Some(depth),deps_n:depends_json.as_deref().and_then(|s|serde_json::from_str::<Vec<Value>>(s).ok()).map(|v|v.len() as u64),prior_runs_n:Some(prior),prior_failed_n:Some(failed),retries_n:wu["retries"].as_u64(),task_features_v69:v69,..Default::default()};
         input.context_paths_n=paths.as_ref().map(|v|v.len()); input.repos_n=repos.as_ref().map(|v|v.len());

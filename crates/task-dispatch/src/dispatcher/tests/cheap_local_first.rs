@@ -586,7 +586,7 @@ async fn route_dispatch_records_feature_reference_and_snapshot() {
     let (record, _, store) = routing_decided_with_probe(Reachability::Ok).await;
     let reference = record.features.expect("routing_decided feature reference");
     assert_eq!(reference.schema, "celeris.task-features/1");
-    assert_eq!(reference.template, "task-brief/1");
+    assert_eq!(reference.template, "task-brief/2");
     let stored = store
         .route_features_get(&reference.hash)
         .unwrap()

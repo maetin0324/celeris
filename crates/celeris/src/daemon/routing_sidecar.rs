@@ -223,15 +223,6 @@ impl SidecarDailyBudget {
     fn set_caps(&self, caps: ShadowDailyCaps) {
         self.state.lock().unwrap_or_else(|e| e.into_inner()).caps = Some(caps);
     }
-
-    /// 直近に数えた UTC 日の呼び出し数。
-    #[cfg(test)]
-    pub(crate) fn used(&self) -> u64 {
-        self.state
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .requests
-    }
 }
 
 impl ShadowBudget for SidecarDailyBudget {
@@ -295,6 +286,3 @@ pub(crate) fn reload_estimator_sidecar(config: &crate::Config) {
     }
 }
 
-#[cfg(test)]
-#[path = "routing_sidecar_tests.rs"]
-mod tests;

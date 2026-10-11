@@ -191,33 +191,18 @@ impl Config {
 
     /// ADR-0132 付記 L1/L4/L7: cheap lane で順位付けより先に試すローカルの行と probe 先（設定順）。
     /// `account_pool = false` で `tiers` に cheap を含み、実効 `llm_source` が `openai_compatible:<id>`
-    /// （probe 先はその有効な source。無ければ空 = 確かめられない）か、`celeris` で proxy に有効な
-    /// `openai_compatible` source と `[llm_proxy.models.qwen].cheap` があるもの（probe 先は有効な source
-    /// 全部）。専用契約のアダプタ（`paperqa` / `local-deep-research` / `langmem`）の行は含めない。
+    /// （probe 先はその source。無ければ空 = 確かめられない）のもの。proxy の行は具体的な source/model を
+    /// 要求するのでローカルの行にしない。専用契約のアダプタ（`paperqa` / `local-deep-research` / `langmem`）の行は含めない。
     /// `[execution] cheap_local_first = false` なら空。
     pub fn local_cheap_providers(&self) -> Vec<task_dispatch::LocalProviderSpec> {
         if !self.execution.cheap_local_first {
             return Vec::new();
         }
-        let enabled: Vec<&llm_proxy::config::OpenAiCompatibleConfig> = self
-            .llm_proxy
-            .sources
-            .openai_compatible
-            .iter()
-            .filter(|s| s.enabled)
-            .collect();
         let target =
             |s: &llm_proxy::config::OpenAiCompatibleConfig| task_dispatch::LocalHealthTarget {
                 base_url: s.base_url.clone(),
                 bearer_token: s.api_key.clone(),
             };
-        let proxy_cheap_is_local = !enabled.is_empty()
-            && self
-                .llm_proxy
-                .models
-                .qwen
-                .get(&Tier::Cheap)
-                .is_some_and(|m| !m.trim().is_empty());
         self.providers
             .iter()
             .filter(|p| !p.account_pool.is_on() && p.tiers.contains(&Tier::Cheap))
@@ -241,9 +226,6 @@ impl Config {
                         .filter(|s| s.id == id)
                         .map(target)
                         .collect(),
-                    LlmSourceRef::Celeris if proxy_cheap_is_local => {
-                        enabled.iter().map(|s| target(s)).collect()
-                    }
                     _ => return None,
                 };
                 Some(task_dispatch::LocalProviderSpec {

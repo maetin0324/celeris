@@ -22,11 +22,6 @@ enabled = false
 accounts_dir = "/fixture/codex-accounts"
 enabled = false
 
-[llm_proxy.models.qwen]
-frontier = "qwen3.8-27b"
-standard = "qwen3.8-27b"
-cheap = "qwen3.8-27b"
-
 [[llm_proxy.sources.openai_compatible]]
 id = "qwen"
 base_url = "http://127.0.0.1:9/v1"

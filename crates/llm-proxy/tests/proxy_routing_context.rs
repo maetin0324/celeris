@@ -188,7 +188,7 @@ fn registered_context() -> RoutingContext {
 /// 本文で組織・優先度・privacy を自己申告し、制約を緩めようとする要求。
 fn spoofing_body() -> Value {
     json!({
-        "model": "qwen/cheap",
+        "model": "qwen/qwen3.8-27b",
         "messages": [{"role": "user", "content": "hello"}],
         "stream": false,
         "org": "cos",

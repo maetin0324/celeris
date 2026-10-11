@@ -2,11 +2,9 @@
 //!
 //! ここは値の入れ物だけで、判断は持たない（DESIGN 原則 1 と同じ規律をこのクレートにも適用する）。
 
-use std::collections::HashMap;
 use std::net::SocketAddr;
 
 use serde::Deserialize;
-use task_core::Tier;
 
 /// `[llm_proxy]`。
 #[derive(Debug, Clone, Deserialize, PartialEq)]
@@ -18,7 +16,7 @@ pub struct LlmProxyConfig {
     /// loopback のみで bind する（ADR-0053 D1）。既定 `127.0.0.1:18100`。
     #[serde(default = "default_listen")]
     pub listen: SocketAddr,
-    /// `celeris/<tier>` の選択で無料の到達可能な source を最優先するか。
+    /// routing shadow の policy で無料の到達可能な source を最優先するか。
     #[serde(default = "default_prefer_free")]
     pub prefer_free: bool,
     /// 到達性 probe（`GET <base_url>/models`）のキャッシュ寿命（秒）。
@@ -35,8 +33,9 @@ pub struct LlmProxyConfig {
     pub cooldown_fallback_secs: u64,
     #[serde(default)]
     pub sources: SourcesConfig,
-    #[serde(default)]
-    pub models: ModelsConfig,
+    /// 削除済みの `[llm_proxy.models]`（tier alias）。書かれていれば読み込みエラーにする。
+    #[serde(default, rename = "models")]
+    pub removed_models: Option<RemovedModels>,
 }
 
 impl Default for LlmProxyConfig {
@@ -49,7 +48,7 @@ impl Default for LlmProxyConfig {
             max_concurrent_per_account: default_max_concurrent_per_account(),
             cooldown_fallback_secs: default_cooldown_fallback_secs(),
             sources: SourcesConfig::default(),
-            models: ModelsConfig::default(),
+            removed_models: None,
         }
     }
 }
@@ -88,13 +87,13 @@ fn default_cooldown_fallback_secs() -> u64 {
 #[serde(deny_unknown_fields)]
 pub struct SourcesConfig {
     /// `[llm_proxy.sources.claude_oauth]`。無ければ `claude-oauth` は無効
-    /// （`claude/<tier>` は 422、`celeris/<tier>` の候補にも入らない）。
+    /// （`claude_oauth/<model>` は 422）。
     #[serde(default)]
     pub claude_oauth: Option<ClaudeOauthConfig>,
     /// `[llm_proxy.sources.codex_oauth]`。無ければ `codex-oauth` は無効。
     #[serde(default)]
     pub codex_oauth: Option<CodexOauthConfig>,
-    /// `[[llm_proxy.sources.openai_compatible]]`。0 件でもよい（`qwen/<tier>` は 422 になる）。
+    /// `[[llm_proxy.sources.openai_compatible]]`。0 件でもよい（`<id>/<model>` は 422 になる）。
     #[serde(default)]
     pub openai_compatible: Vec<OpenAiCompatibleConfig>,
 }
@@ -178,7 +177,8 @@ fn default_codex_user_agent() -> String {
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct OpenAiCompatibleConfig {
-    /// `qwen:<model>` の接頭辞や `x-celeris-source` に出る id（設定順が「同点は設定順」の基準）。
+    /// 要求の `<id>/<model>` の source ID（`claude_oauth`・`codex_oauth` は予約）。`x-celeris-source` には
+    /// `openai-compatible:<id>` で出る。
     pub id: String,
     pub base_url: String,
     /// `[secrets]` の解決は celeris 側で行い、平文の値をここに渡す（無ければ `Authorization` を付けない）。
@@ -192,73 +192,23 @@ fn default_true() -> bool {
     true
 }
 
-/// `[llm_proxy.models]`: tier → 供給元ごとの実モデル ID（ADR-0053 D1）。
-#[derive(Debug, Clone, Deserialize, PartialEq)]
-#[serde(deny_unknown_fields)]
-pub struct ModelsConfig {
-    #[serde(default = "default_claude_models")]
-    pub claude: HashMap<Tier, String>,
-    #[serde(default = "default_gpt_models")]
-    pub gpt: HashMap<Tier, String>,
-    #[serde(
-        default = "default_qwen_models",
-        deserialize_with = "deserialize_cheap_qwen_models"
-    )]
-    pub qwen: HashMap<Tier, String>,
-}
+/// ADR 2026-10-11 llm-source-harness-selection: `[llm_proxy.models]` の tier alias は削除した。
+/// 欄が残っている設定は、新しい書き方を示して読み込みエラーにする（読み替えも警告だけの無視もしない）。
+pub const MODELS_REMOVED_MESSAGE: &str = "[llm_proxy.models] (tier alias such as celeris/cheap, claude/<tier>, qwen/cheap) was removed: \
+request a concrete <source_id>/<model_id> instead (e.g. model = \"qwen/qwen3.8-27b\", \"claude_oauth/claude-sonnet-5\", \
+\"codex_oauth/gpt-6-luna\"); source IDs are claude_oauth, codex_oauth and the id of each [[llm_proxy.sources.openai_compatible]]";
 
-impl Default for ModelsConfig {
-    fn default() -> Self {
-        Self {
-            claude: default_claude_models(),
-            gpt: default_gpt_models(),
-            qwen: default_qwen_models(),
-        }
+/// `[llm_proxy.models]` が書かれていたことを表す（値は持たない。deserialize は必ず失敗する）。
+#[derive(Debug, Clone, PartialEq)]
+pub enum RemovedModels {}
+
+impl<'de> Deserialize<'de> for RemovedModels {
+    fn deserialize<D>(_deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        Err(serde::de::Error::custom(MODELS_REMOVED_MESSAGE))
     }
-}
-
-/// ADR-0069 Phase 118 D2: 2026-09-24 に実機（`claude --model <id>`）で実行して確認した ID
-/// （`agent-docs/adr/0069-routing-four-layers.md` Phase 118 追記）。運用側の実際のプラン・契約で
-/// 使えるモデルが変わったら `[llm_proxy.models]` で上書きすること。
-fn default_claude_models() -> HashMap<Tier, String> {
-    HashMap::from([
-        (Tier::Frontier, "claude-fable-5-1".to_string()),
-        (Tier::Standard, "claude-opus-5-5".to_string()),
-        (Tier::Cheap, "claude-sonnet-5".to_string()),
-    ])
-}
-
-/// ADR-0069 Phase 118 D2: 2026-09-24 に実機（`codex exec -m <id>`、ChatGPT アカウント）で実行して
-/// 確認した ID。`gpt-5-codex` / `gpt-5` / `gpt-5-mini` はこのアカウント種別では
-/// 「model is not supported when using Codex with a ChatGPT account」で拒否されることを確認済み
-/// （旧既定値だった）。
-fn default_gpt_models() -> HashMap<Tier, String> {
-    HashMap::from([
-        (Tier::Frontier, "gpt-6-astra".to_string()),
-        (Tier::Standard, "gpt-6-sol".to_string()),
-        (Tier::Cheap, "gpt-6-luna".to_string()),
-    ])
-}
-
-/// ADR-0132 D3: Qwen の抽象 tier は cheap だけ。
-fn default_qwen_models() -> HashMap<Tier, String> {
-    HashMap::from([(Tier::Cheap, "qwen3.8-27b".to_string())])
-}
-
-fn deserialize_cheap_qwen_models<'de, D>(deserializer: D) -> Result<HashMap<Tier, String>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let mut models = HashMap::<Tier, String>::deserialize(deserializer)?;
-    for tier in [Tier::Frontier, Tier::Standard] {
-        if models.remove(&tier).is_some() {
-            tracing::warn!(
-                ?tier,
-                "llm-proxy: ignoring legacy Qwen model outside cheap tier"
-            );
-        }
-    }
-    Ok(models)
 }
 
 #[cfg(test)]

@@ -1,5 +1,5 @@
-//! Legacy `[llm_proxy.models]` and `[llm_proxy.sources]` catalog normalization.
-//! The old keys remain the authority in legacy mode. Missing capability and price
+//! Routing catalog normalization from `[llm_proxy.sources]` and the DB role assignments.
+//! The lane deployments come only from role assignments (no tier alias in the proxy config). Missing capability and price
 //! observations stay unknown; no source URL or credential is copied to the catalog.
 
 use schemars::JsonSchema;
@@ -76,10 +76,9 @@ pub fn normalize_legacy_config(config: &LlmProxyConfig) -> LegacyCatalog {
     normalize_legacy_config_with(config, &AssignmentView::empty())
 }
 
-/// `normalize_legacy_config` に DB の割り当て（ADR 2026-10-06 model-role-assignments D2）を重ねる。
-/// `claude-oauth` → `models.claude`、`codex-oauth` → `models.gpt`、`openai-compatible:<id>` → その relay の
-/// cheap lane の wire model を割り当ての `model_id`（`WireRule::proxy`: config の wire に `<prefix>/` が無い限り
-/// 接頭辞なし）に置き換える。割り当ての無い lane は config のまま。
+/// DB の割り当て（ADR 2026-10-06 model-role-assignments D2）から有効な source の lane deployment を作る。
+/// `openai-compatible:<id>` は cheap lane だけ。wire は割り当ての `model_id`（`WireRule::proxy`: 接頭辞なし）。
+/// 割り当ての無い lane は deployment を作らない（proxy の設定に tier の写像は無い）。
 /// `Excluded` の lane は deployment を作らず `warnings` に書く。
 pub fn normalize_legacy_config_with(
     config: &LlmProxyConfig,
@@ -98,21 +97,18 @@ pub fn normalize_legacy_config_with(
             .collect(),
         warnings: Vec::new(),
     };
-    // 割り当てがあればその wire model を、`Excluded` なら deployment を作らず警告を、無ければ config の値を返す。
+    // 割り当てがあればその wire model を、`Excluded` なら deployment を作らず警告を返す。割り当ての無い lane は空。
     let mut warnings: Vec<String> = Vec::new();
-    let mut resolve = |source_ref: &str,
-                       tier: Tier,
-                       configured: Option<&String>|
-     -> Vec<(String, usize)> {
+    let mut resolve = |source_ref: &str, tier: Tier| -> Vec<(String, usize)> {
         if !view.manages(source_ref, tier) {
-            return configured.map(|s| vec![(s.clone(), 0)]).unwrap_or_default();
+            return Vec::new();
         }
         // 付記 2026-10-07 wire-prefix: dispatcher・routing catalog と同じ規則。proxy の config の wire は接頭辞を
         // 持たないので、割り当ての model_id がそのまま上流へ渡る。
         let rule = WireRule::proxy(source_ref);
         view.members(source_ref, tier).into_iter().filter_map(|a| match a.state {
             AssignmentState::Assigned => Some((
-                rule.model(configured.map(String::as_str), &a.model_id),
+                rule.model(None, &a.model_id),
                 a.priority as usize,
             )),
             AssignmentState::Excluded { reason } => {
@@ -184,7 +180,7 @@ pub fn normalize_legacy_config_with(
             .as_ref()
             .is_some_and(|s| s.enabled)
         {
-            for (wire, priority) in resolve("claude-oauth", tier, config.models.claude.get(&tier)) {
+            for (wire, priority) in resolve("claude-oauth", tier) {
                 add(
                     "claude-oauth",
                     "claude",
@@ -201,7 +197,7 @@ pub fn normalize_legacy_config_with(
             .as_ref()
             .is_some_and(|s| s.enabled)
         {
-            for (wire, priority) in resolve("codex-oauth", tier, config.models.gpt.get(&tier)) {
+            for (wire, priority) in resolve("codex-oauth", tier) {
                 add(
                     "codex-oauth",
                     "gpt",
@@ -222,7 +218,7 @@ pub fn normalize_legacy_config_with(
             {
                 let source_ref = format!("openai-compatible:{}", source.id);
                 for (wire, priority) in
-                    resolve(&source_ref, tier, config.models.qwen.get(&Tier::Cheap))
+                    resolve(&source_ref, tier)
                 {
                     add(
                         &source_ref,
@@ -255,11 +251,6 @@ mod tests {
                     { "id": "relay-a", "base_url": "http://localhost/a" },
                     { "id": "relay-b", "base_url": "http://localhost/b" }
                 ]
-            },
-            "models": {
-                "claude": { "frontier": "claude-f", "standard": "claude-s", "cheap": "claude-c" },
-                "gpt": { "frontier": "gpt-f", "standard": "gpt-s", "cheap": "gpt-c" },
-                "qwen": { "cheap": "qwen-c" }
             }
         }))
         .unwrap()
@@ -297,6 +288,8 @@ mod tests {
             normalize_legacy_config(&c)
         );
         assert!(normalize_legacy_config(&c).warnings.is_empty());
+        // proxy の設定に tier の写像は無い: 割り当てが無ければ lane deployment も無い。
+        assert!(normalize_legacy_config(&c).deployments.is_empty());
     }
 
     #[test]
@@ -329,15 +322,12 @@ mod tests {
             Some("claude-assigned")
         );
         assert_eq!(wire(&got, "codex-oauth", Tier::Cheap), Some("gpt-assigned"));
-        // relay ごとの cheap lane。割り当ての無い relay は config のまま。
+        // relay ごとの cheap lane。割り当ての無い relay は deployment を作らない。
         assert_eq!(
             wire(&got, "openai-compatible:relay-b", Tier::Cheap),
             Some("qwen-assigned")
         );
-        assert_eq!(
-            wire(&got, "openai-compatible:relay-a", Tier::Cheap),
-            Some("qwen-c")
-        );
+        assert_eq!(wire(&got, "openai-compatible:relay-a", Tier::Cheap), None);
         // 割り当てに合わせて model profile も増える（source 修飾の identity）。
         assert!(
             got.models
@@ -357,7 +347,7 @@ mod tests {
                 "{source} {tier:?}"
             );
         }
-        assert_eq!(got.deployments.len(), base.deployments.len());
+        assert_eq!(got.deployments.len(), base.deployments.len() + 3);
         assert!(got.warnings.is_empty());
     }
 
@@ -388,11 +378,8 @@ mod tests {
             got.deployment("openai-compatible:relay-a", Tier::Cheap)
                 .is_none()
         );
-        assert_eq!(
-            wire(&got, "openai-compatible:relay-b", Tier::Cheap),
-            Some("qwen-c")
-        );
-        assert_eq!(wire(&got, "codex-oauth", Tier::Standard), Some("gpt-s"));
+        assert_eq!(wire(&got, "openai-compatible:relay-b", Tier::Cheap), None);
+        assert_eq!(wire(&got, "codex-oauth", Tier::Standard), None);
         assert_eq!(
             got.warnings,
             [
@@ -405,7 +392,15 @@ mod tests {
     #[test]
     fn extended_with_adds_missing_members_and_inherits_family_limits() {
         let c = config();
-        let mut startup = normalize_legacy_config(&c);
+        let mut startup = normalize_legacy_config_with(
+            &c,
+            &view(&[(
+                "openai-compatible:relay-a",
+                Tier::Cheap,
+                "m0",
+                AssignmentState::Assigned,
+            )]),
+        );
         for m in &mut startup.models {
             if m.family == "qwen" {
                 m.context_limits = ContextLimits {

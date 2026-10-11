@@ -22,7 +22,6 @@ use futures_util::{Stream, StreamExt};
 use serde_json::{Value, json};
 use task_core::AccountAdapter;
 use task_core::SharedRole;
-use task_core::model_catalog::assignments::{AssignmentView, RoleAssignmentReader};
 use task_core::model_router::context_registry::RoutingContextRegistry;
 use task_core::model_router::feedback::RequestSourceAttempt;
 use task_core::store::RoutingCorrelation;
@@ -37,7 +36,7 @@ use crate::fallback::{
     AfterFailure, Breakers, FailureClass, FallbackBudget, FallbackSettings, RequestConstraints,
 };
 use crate::log::{self, RequestLogRow};
-use crate::naming::{self, ModelRequest, SourceKind, SourceScope};
+use crate::naming::{self, ModelRequest, SourceKind, SourceRef};
 use crate::openai::ChatCompletionRequest;
 use crate::reservation::{Clock, SystemClock};
 use crate::routing_context::{
@@ -91,9 +90,6 @@ pub struct ProxyState {
     /// ADR 2026-10-04 §10 Phase 5: sidecar estimator の shadow。空（既定）なら何もしない。daemon が
     /// reload で差し替える。
     estimator_shadow: Arc<EstimatorShadowSlot>,
-    /// ADR 2026-10-06 model-role-assignments D2: DB の割り当てを読む口。`None`（既定）なら
-    /// `[llm_proxy.models]` だけで lane を解決する。`ModelRequest::Tiered` の解決ごとに読む。
-    role_assignments: Option<Arc<dyn RoleAssignmentReader>>,
 }
 
 impl ProxyState {
@@ -127,31 +123,6 @@ impl ProxyState {
             in_flight: Arc::new(InFlightContexts::default()),
             shadow: None,
             estimator_shadow: Arc::new(EstimatorShadowSlot::default()),
-            role_assignments: None,
-        })
-    }
-
-    /// 割り当ての reader を差し込む（作った直後、まだ共有していない `Arc` にだけ効く。
-    /// [`Self::with_routing_context`] と同じ流儀）。
-    pub fn with_role_assignments(
-        mut self: Arc<Self>,
-        reader: Option<Arc<dyn RoleAssignmentReader>>,
-    ) -> Arc<Self> {
-        match Arc::get_mut(&mut self) {
-            Some(state) => state.role_assignments = reader,
-            None => tracing::warn!("llm-proxy: role assignments ignored (state already shared)"),
-        }
-        self
-    }
-
-    /// 割り当ての実効 view。reader が無ければ空、読めなければ警告して空（config のまま続ける）。
-    fn assignment_view(&self) -> AssignmentView {
-        let Some(reader) = &self.role_assignments else {
-            return AssignmentView::empty();
-        };
-        reader.assignment_view().unwrap_or_else(|error| {
-            tracing::warn!(%error, "llm-proxy: cannot read model role assignments; using [llm_proxy.models]");
-            AssignmentView::empty()
         })
     }
 
@@ -319,13 +290,7 @@ impl ProxyState {
                 .map(|c| c.as_text())
                 .unwrap_or_default()
         });
-        // 付記「モデルごとの複数役割」: 要求時点の割り当てを写した catalog を重ねる（reader が無ければ起動時のまま）。
-        let catalog = self.role_assignments.as_ref().map(|_| {
-            Arc::new(crate::legacy_catalog::normalize_legacy_config_with(
-                &self.config,
-                &self.assignment_view(),
-            ))
-        });
+        let catalog = None;
         let outcome = estimator.submit(EstimatorShadowInput {
             primary_decision_id: routing.decision_id.clone(),
             task_id: routing.task_id().map(str::to_owned),
@@ -493,37 +458,6 @@ impl ProxyState {
         selection::rank_pool(SourceKind::Gpt, &input, now)
     }
 
-    fn rank_cross(
-        &self,
-        claude_dirs: &[AccountDir],
-        codex_dirs: &[AccountDir],
-        now: i64,
-    ) -> Vec<SelectedAccount> {
-        let claude_guard = self
-            .claude_book
-            .as_ref()
-            .map(|b| b.lock().unwrap_or_else(|e| e.into_inner()));
-        let codex_guard = self
-            .codex_book
-            .as_ref()
-            .map(|b| b.lock().unwrap_or_else(|e| e.into_inner()));
-        let claude_in_use = |id: &str| self.in_use_count(&format!("claude-oauth:{id}"));
-        let codex_in_use = |id: &str| self.in_use_count(&format!("codex-oauth:{id}"));
-        let claude_input = claude_guard.as_ref().map(|g| PoolInput {
-            dirs: claude_dirs,
-            book: g,
-            in_use: &claude_in_use,
-            max_concurrent_per_account: self.config.max_concurrent_per_account,
-        });
-        let codex_input = codex_guard.as_ref().map(|g| PoolInput {
-            dirs: codex_dirs,
-            book: g,
-            in_use: &codex_in_use,
-            max_concurrent_per_account: self.config.max_concurrent_per_account,
-        });
-        selection::rank_across_pools(claude_input.as_ref(), codex_input.as_ref(), now)
-    }
-
     async fn rank_relays(&self, sources: &[OpenAiCompatibleConfig]) -> Vec<OpenAiCompatibleConfig> {
         let mut reachability = HashMap::new();
         for s in sources {
@@ -597,138 +531,50 @@ impl Attempt {
 }
 
 impl ProxyState {
+    /// 要求の source の候補（OAuth は残量順のアカウント、openai-compatible はその id の relay）と、
+    /// 要求どおりの model。別の source へは倒さない（ADR 2026-10-11 llm-source-harness-selection）。
     async fn attempts_for(&self, parsed: &ModelRequest, now: i64) -> Vec<(Attempt, String)> {
-        match parsed {
-            ModelRequest::Explicit { source, model } => match source {
-                SourceKind::Claude => self
-                    .rank_claude(&self.claude_dirs(), now)
-                    .into_iter()
-                    .map(|a| (Attempt::Claude(a), model.clone()))
-                    .collect(),
-                SourceKind::Gpt => self
-                    .rank_codex(&self.codex_dirs(), now)
-                    .into_iter()
-                    .map(|a| (Attempt::Codex(a), model.clone()))
-                    .collect(),
-                SourceKind::Qwen => self
-                    .rank_relays(&self.config.sources.openai_compatible)
+        let model = &parsed.model;
+        match &parsed.source {
+            SourceRef::ClaudeOauth => self
+                .rank_claude(&self.claude_dirs(), now)
+                .into_iter()
+                .map(|a| (Attempt::Claude(a), model.clone()))
+                .collect(),
+            SourceRef::CodexOauth => self
+                .rank_codex(&self.codex_dirs(), now)
+                .into_iter()
+                .map(|a| (Attempt::Codex(a), model.clone()))
+                .collect(),
+            SourceRef::OpenAiCompatible(id) => {
+                let relays: Vec<OpenAiCompatibleConfig> = self
+                    .config
+                    .sources
+                    .openai_compatible
+                    .iter()
+                    .filter(|c| &c.id == id)
+                    .cloned()
+                    .collect();
+                self.rank_relays(&relays)
                     .await
                     .into_iter()
                     .map(|cfg| (Attempt::Relay(cfg), model.clone()))
-                    .collect(),
-            },
-            ModelRequest::Tiered { scope, tier } => {
-                let catalog = crate::legacy_catalog::normalize_legacy_config_with(
-                    &self.config,
-                    &self.assignment_view(),
-                );
-                for warning in &catalog.warnings {
-                    tracing::debug!(%warning, "llm-proxy: lane deployment excluded");
-                }
-                let deployments =
-                    selection::legacy_deployments(&catalog, *scope, *tier, self.config.prefer_free);
-                let model_for = |source: &str| -> Option<String> {
-                    deployments
-                        .iter()
-                        .find(|d| d.source_ref == source)
-                        .map(|d| d.upstream_model.clone())
-                };
-                let attempts: Vec<(Attempt, String)> = match scope {
-                    SourceScope::Only(SourceKind::Claude) => {
-                        let Some(model) = model_for("claude-oauth") else {
-                            return vec![];
-                        };
-                        self.rank_claude(&self.claude_dirs(), now)
-                            .into_iter()
-                            .map(|a| (Attempt::Claude(a), model.clone()))
-                            .collect()
-                    }
-                    SourceScope::Only(SourceKind::Gpt) => {
-                        let Some(model) = model_for("codex-oauth") else {
-                            return vec![];
-                        };
-                        self.rank_codex(&self.codex_dirs(), now)
-                            .into_iter()
-                            .map(|a| (Attempt::Codex(a), model.clone()))
-                            .collect()
-                    }
-                    SourceScope::Only(SourceKind::Qwen) => {
-                        if deployments.is_empty() {
-                            return vec![];
-                        }
-                        self.rank_relays(&self.config.sources.openai_compatible)
-                            .await
-                            .into_iter()
-                            .filter_map(|cfg| {
-                                model_for(&format!("openai-compatible:{}", cfg.id))
-                                    .map(|model| (Attempt::Relay(cfg), model))
-                            })
-                            .collect()
-                    }
-                    SourceScope::Any => {
-                        let mut attempts = Vec::new();
-                        if deployments
-                            .iter()
-                            .any(|d| d.source_ref.starts_with("openai-compatible:"))
-                        {
-                            let relays = self
-                                .rank_relays(&self.config.sources.openai_compatible)
-                                .await;
-                            attempts.extend(relays.into_iter().filter_map(|cfg| {
-                                model_for(&format!("openai-compatible:{}", cfg.id))
-                                    .map(|model| (Attempt::Relay(cfg), model))
-                            }));
-                        }
-                        let claude_dirs = self.claude_dirs();
-                        let codex_dirs = self.codex_dirs();
-                        attempts.extend(
-                            self.rank_cross(&claude_dirs, &codex_dirs, now)
-                                .into_iter()
-                                .filter_map(|a| match a.source {
-                                    SourceKind::Claude => {
-                                        model_for("claude-oauth").map(|m| (Attempt::Claude(a), m))
-                                    }
-                                    SourceKind::Gpt => {
-                                        model_for("codex-oauth").map(|m| (Attempt::Codex(a), m))
-                                    }
-                                    SourceKind::Qwen => None,
-                                }),
-                        );
-                        attempts
-                    }
-                };
-                let mut expanded = Vec::new();
-                for (attempt, _) in attempts {
-                    for d in deployments
-                        .iter()
-                        .filter(|d| d.source_ref == attempt.source_label())
-                    {
-                        expanded.push((d.config_order, attempt.clone(), d.upstream_model.clone()));
-                    }
-                }
-                expanded.sort_by_key(|(priority, _, _)| *priority);
-                expanded
-                    .into_iter()
-                    .map(|(_, attempt, model)| (attempt, model))
                     .collect()
             }
         }
     }
 
-    /// ADR-0053 D4（Phase 66）: `celeris/<tier>` が今どこに解決するか（表示専用。実際の要求は送らない。
-    /// `attempts_for` と同じ決定的な選択をなぞるだけ）。候補が無ければ `None`。
-    pub(crate) async fn resolves_tier(&self, tier: task_core::Tier, now: i64) -> Option<String> {
-        self.attempts_for(
-            &ModelRequest::Tiered {
-                scope: SourceScope::Any,
-                tier,
-            },
-            now,
-        )
-        .await
-        .into_iter()
-        .next()
-        .map(|(attempt, _)| attempt.source_label())
+    /// 要求の source が設定に在り有効か（無ければ 422 `unknown_source`）。
+    fn source_configured(&self, source: &SourceRef) -> bool {
+        let sources = &self.config.sources;
+        match source {
+            SourceRef::ClaudeOauth => sources.claude_oauth.as_ref().is_some_and(|c| c.enabled),
+            SourceRef::CodexOauth => sources.codex_oauth.as_ref().is_some_and(|c| c.enabled),
+            SourceRef::OpenAiCompatible(id) => sources
+                .openai_compatible
+                .iter()
+                .any(|c| c.enabled && &c.id == id),
+        }
     }
 }
 
@@ -1104,69 +950,14 @@ async fn embeddings_not_implemented() -> Response {
     )
 }
 
-async fn list_models(State(state): State<Arc<ProxyState>>) -> Response {
-    let created = time::OffsetDateTime::now_utc().unix_timestamp();
-    let mut data = Vec::new();
-    for tier in ["frontier", "standard", "cheap"] {
-        data.push(crate::openai::ModelInfo {
-            id: format!("celeris/{tier}"),
-            object: "model".to_string(),
-            created,
-            owned_by: "celeris".to_string(),
-        });
-    }
-    if state
-        .config
-        .sources
-        .claude_oauth
-        .as_ref()
-        .is_some_and(|c| c.enabled)
-    {
-        for tier in ["frontier", "standard", "cheap"] {
-            data.push(crate::openai::ModelInfo {
-                id: format!("claude/{tier}"),
-                object: "model".to_string(),
-                created,
-                owned_by: "claude-oauth".to_string(),
-            });
-        }
-    }
-    if state
-        .config
-        .sources
-        .codex_oauth
-        .as_ref()
-        .is_some_and(|c| c.enabled)
-    {
-        for tier in ["frontier", "standard", "cheap"] {
-            data.push(crate::openai::ModelInfo {
-                id: format!("gpt/{tier}"),
-                object: "model".to_string(),
-                created,
-                owned_by: "codex-oauth".to_string(),
-            });
-        }
-    }
-    if state
-        .config
-        .sources
-        .openai_compatible
-        .iter()
-        .any(|c| c.enabled)
-        && selection::qwen_tier_model(&state.config.models.qwen, task_core::Tier::Cheap).is_some()
-    {
-        data.push(crate::openai::ModelInfo {
-            id: "qwen/cheap".to_string(),
-            object: "model".to_string(),
-            created,
-            owned_by: "openai-compatible".to_string(),
-        });
-    }
+/// 要求は具体的な `<source_id>/<model_id>` で、proxy は model の一覧を持たない（正本は celeris の
+/// `[llm_sources.*].models`）。OpenAI 互換の client のために空の一覧を返す。
+async fn list_models() -> Response {
     (
         StatusCode::OK,
         Json(crate::openai::ModelsResponse {
             object: "list".to_string(),
-            data,
+            data: Vec::new(),
         }),
     )
         .into_response()
@@ -1313,6 +1104,22 @@ async fn chat_completions(
         }
     };
 
+    if !state.source_configured(&parsed.source) {
+        scope.log(None, None, None).write(
+            "error",
+            (None, None),
+            Some("unknown_source".to_string()),
+        );
+        return problem(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "unknown_source",
+            &format!(
+                "llm source {:?} is not configured in [llm_proxy.sources]",
+                parsed.source.id()
+            ),
+        );
+    }
+
     let mut attempts = state.attempts_for(&parsed, now).await;
     // ADR-0063 Phase 109b C1: 起動直後・アカウントのローテーションの一瞬など、候補が一時的に全部
     // 無くなる瞬間がある（実機の観測、2026-09-23: claude-oauth が 429/cooldown で codex に倒れる
@@ -1349,13 +1156,8 @@ async fn chat_completions(
     // byte を受け取る前だけ次の候補へ送る。分類別・総数の上限と deadline は budget が、deployment
     // の closed/open/half_open は breaker が決める（時刻は注入した時計）。
     let constraints = RequestConstraints::from_request(&parsed);
-    let shadow_lane = match &parsed {
-        ModelRequest::Tiered { tier, .. } => serde_json::to_value(tier)
-            .ok()
-            .and_then(|v| v.as_str().map(str::to_owned))
-            .unwrap_or_default(),
-        ModelRequest::Explicit { .. } => "explicit".to_string(),
-    };
+    // routing shadow の lane: 具体的な source/model の要求は lane を持たない。
+    let shadow_lane = "explicit".to_string();
     let shadow_candidates: Vec<ShadowCandidate> = if state.any_shadow() {
         attempts
             .iter()

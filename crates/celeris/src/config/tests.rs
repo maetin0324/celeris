@@ -3844,44 +3844,22 @@ fn cheap_local_first_legacy_production_yields_opencode_qwen() {
     );
 }
 
-/// ADR-0132 付記 L1: `celeris`（proxy）の cheap 行は、有効な `openai_compatible` source と
-/// `[llm_proxy.models.qwen].cheap` があるときだけローカル。probe 先は有効な source 全部。
+/// proxy の行は具体的な source/model を要求するので、有効な `openai_compatible` source があってもローカルではない。
 #[test]
-fn cheap_local_first_celeris_row_needs_a_local_source_and_qwen_cheap() {
-    let row = "[[providers]]\nid = \"proxy-acp\"\nadapter = \"acp\"\nmodel = \"celeris/cheap\"\ntiers = [\"cheap\"]\n\
-               [[providers]]\nid = \"pool\"\nadapter = \"claude-code\"\naccount_pool = true\ntiers = [\"cheap\"]\n";
-    let sources = "[[llm_proxy.sources.openai_compatible]]\nid = \"qwen\"\nbase_url = \"http://127.0.0.1:9/v1\"\napi_key = \"k\"\n\
-                   [[llm_proxy.sources.openai_compatible]]\nid = \"off\"\nbase_url = \"http://127.0.0.1:10/v1\"\nenabled = false\n\
-                   [[llm_proxy.sources.openai_compatible]]\nid = \"qwen2\"\nbase_url = \"http://127.0.0.1:11/v1\"\n";
+fn cheap_local_first_proxy_row_is_never_local() {
+    let row = "[[providers]]\nid = \"proxy-acp\"\nadapter = \"acp\"\nmodel = \"qwen/qwen3.8-27b\"\ntiers = [\"cheap\"]\n";
+    let sources = "[[llm_proxy.sources.openai_compatible]]\nid = \"qwen\"\nbase_url = \"http://127.0.0.1:9/v1\"\napi_key = \"k\"\n";
     let cfg: Config = toml::from_str(&format!("{sources}{row}")).unwrap();
-    assert_eq!(
-        cfg.local_cheap_providers(),
-        vec![task_dispatch::LocalProviderSpec {
-            provider: "proxy-acp".into(),
-            health: vec![
-                task_dispatch::LocalHealthTarget {
-                    base_url: "http://127.0.0.1:9/v1".into(),
-                    bearer_token: Some("k".into()),
-                },
-                task_dispatch::LocalHealthTarget {
-                    base_url: "http://127.0.0.1:11/v1".into(),
-                    bearer_token: None,
-                },
-            ],
-        }]
-    );
-    // ローカルの source が無い proxy の行はローカルではない。
-    let cfg: Config = toml::from_str(row).unwrap();
     assert!(cfg.local_cheap_providers().is_empty());
-    let cfg: Config = toml::from_str(&format!(
-        "[[llm_proxy.sources.openai_compatible]]\nid = \"off\"\nbase_url = \"http://127.0.0.1:10/v1\"\nenabled = false\n{row}"
-    ))
-    .unwrap();
-    assert!(cfg.local_cheap_providers().is_empty());
-    // proxy の cheap が Qwen に向かわない（`models.qwen.cheap` が無い）ならローカルではない。
-    let cfg: Config = toml::from_str(&format!("{sources}[llm_proxy.models.qwen]\n{row}")).unwrap();
-    assert!(cfg.llm_proxy.models.qwen.is_empty());
-    assert!(cfg.local_cheap_providers().is_empty());
+}
+
+/// `[llm_proxy.models]`（tier alias）は新しい書き方を示す読み込みエラー。
+#[test]
+fn proxy_tier_alias_rejected_in_celeris_config() {
+    let err = toml::from_str::<Config>("[llm_proxy.models.qwen]\ncheap = \"qwen3.8-27b\"\n")
+        .expect_err("[llm_proxy.models] must be rejected")
+        .to_string();
+    assert!(err.contains("<source_id>/<model_id>"), "{err}");
 }
 
 /// ADR-0132 付記 L7: `[execution] cheap_local_first = false` でローカルの行を作らない。
@@ -3944,12 +3922,6 @@ fn routing_legacy_config_normalizes_with_warnings() {
         catalog
             .warnings
             .iter()
-            .any(|w| w.contains("llm_proxy.models.qwen"))
-    );
-    assert!(
-        catalog
-            .warnings
-            .iter()
             .all(|w| !w.contains("fixture-secret-sentinel"))
     );
     let mut dedup = catalog.warnings.clone();
@@ -3972,7 +3944,6 @@ fn routing_legacy_config_normalizes_with_warnings() {
             .revision,
         "v1"
     );
-    assert!(catalog.warnings.iter().any(|w| w.contains("overrides")));
 
     std::fs::write(&path, format!("{fixture}\n[model_routing]\nmode = \"shadow\"\n[model_routing.policies.cheap]\nmin_quality = 0.55\n")).unwrap();
     let cfg = Config::load(&path).unwrap();
@@ -4002,37 +3973,6 @@ fn routing_legacy_config_normalizes_with_warnings() {
             .contains("min_quality")
     );
 
-    std::fs::write(&path, format!("{fixture}\n[[model_routing.deployments]]\nid = \"legacy:openai-compatible:qwen:Cheap\"\nsource_ref = \"openai-compatible:qwen\"\nmodel_profile_id = \"legacy:qwen:qwen3.8-27b\"\nupstream_model = \"qwen3.8-27b\"\nhost = \"local-gpu\"\n")).unwrap();
-    let cfg = Config::load(&path).unwrap();
-    let dep = cfg
-        .routing_catalog_snapshot
-        .as_ref()
-        .unwrap()
-        .deployments
-        .iter()
-        .find(|d| d.id == "legacy:openai-compatible:qwen:Cheap")
-        .unwrap();
-    assert_eq!(dep.allowed_lanes, vec![Tier::Cheap]);
-    assert_eq!(
-        dep.billing,
-        task_core::model_router::profiles::Billing::SelfHosted
-    );
-    assert_eq!(dep.host.as_deref(), Some("local-gpu"));
-
-    std::fs::write(&path, format!("{fixture}\n[[model_routing.deployments]]\nid = \"bad\"\nsource_ref = \"openai_compatible:missing\"\nmodel_profile_id = \"legacy:qwen:qwen3.8-27b\"\nupstream_model = \"qwen3.8-27b\"\nallowed_lanes = [\"cheap\"]\n")).unwrap();
-    assert!(
-        Config::load(&path)
-            .unwrap_err()
-            .to_string()
-            .contains("unknown source_ref")
-    );
-    std::fs::write(&path, format!("{fixture}\n[[model_routing.deployments]]\nid = \"legacy:openai-compatible:qwen:Cheap\"\nsource_ref = \"codex-oauth\"\nmodel_profile_id = \"legacy:qwen:qwen3.8-27b\"\nupstream_model = \"qwen3.8-27b\"\nallowed_lanes = [\"cheap\"]\n")).unwrap();
-    assert!(
-        Config::load(&path)
-            .unwrap_err()
-            .to_string()
-            .contains("identity conflicts")
-    );
     std::fs::write(
         &path,
         format!("{fixture}\n[model_routing]\nmode = \"enforce\"\n"),

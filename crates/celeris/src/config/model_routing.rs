@@ -521,22 +521,6 @@ impl Config {
         let mut deployments = BTreeMap::<String, DeploymentProfile>::new();
         let mut warnings = BTreeSet::<String>::new();
         let mut order = 0;
-        // Reuse the proxy adapter's identity and lane contract. In particular it keeps
-        // source-qualified model IDs so equal wire aliases do not imply shared identity.
-        let proxy_catalog = llm_proxy::legacy_catalog::normalize_legacy_config(&self.llm_proxy);
-        for model in proxy_catalog.models {
-            models.insert(model.id.clone(), model);
-        }
-        for dep in proxy_catalog.deployments {
-            let family = dep.model_profile_id.split(':').nth(1).unwrap_or("unknown");
-            let lane = dep.allowed_lanes[0];
-            warnings.insert(format!(
-                "llm_proxy.models.{family}.{} -> model_routing.models/deployments (legacy)",
-                lane_name(lane)
-            ));
-            order = order.max(dep.config_order + 1);
-            deployments.insert(dep.id.clone(), dep);
-        }
         for provider in &self.providers {
             let Some(resolved) = self.provider_llm_source(&provider.id) else {
                 continue;

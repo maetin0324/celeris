@@ -9,7 +9,7 @@
 //!    合格した候補だけを score で並べる。
 //! 3. 落ちた候補は全部 trace（`CandidateTrace.excluded_reasons` / `excluded_reason`）に残す。
 //!
-//! mode=legacy の既存経路（`select_across_pools` 等）はここを通らない。同じ snapshot・時刻・予約表から
+//! mode=legacy の既存経路（`rank_pool` 等）はここを通らない。同じ snapshot・時刻・予約表から
 //! 同じ結果になる（I/O も時計の読み出しもしない）。
 //!
 //! OAuth pool の account は deployment を account ごとに分けた候補にする（trace の deployment id は

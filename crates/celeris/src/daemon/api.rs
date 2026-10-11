@@ -244,14 +244,8 @@ impl task_api::LlmSourcesReader for LlmSourcesAdapter {
                     deployments: vec![],
                 })
                 .collect(),
-            celeris_tiers: view
-                .celeris_tiers
-                .into_iter()
-                .map(|t| task_api::LlmCelerisTierView {
-                    tier: t.tier,
-                    resolves_to: t.resolves_to,
-                })
-                .collect(),
+            // 要求は具体的な source/model だけを受け、tier の解決先は無い（欄は api-remove で消す）。
+            celeris_tiers: Vec::new(),
         }
     }
 }

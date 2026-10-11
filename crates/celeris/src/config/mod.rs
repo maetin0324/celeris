@@ -32,6 +32,7 @@ mod execution;
 mod github;
 mod harness;
 mod knowledge;
+mod llm_route;
 mod maintenance;
 mod model_catalog;
 mod model_routing;
@@ -57,6 +58,7 @@ pub use execution::*;
 pub use github::*;
 pub use harness::*;
 pub use knowledge::*;
+pub use llm_route::*;
 pub use maintenance::*;
 pub use model_catalog::*;
 pub use model_routing::*;
@@ -84,6 +86,19 @@ pub enum ConfigError {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
+    /// ADR 2026-10-11: canonical source/harness declarations and route policy inputs.
+    #[serde(default)]
+    pub llm_sources: std::collections::BTreeMap<String, LlmSourceConfig>,
+    #[serde(default)]
+    pub harness_selection: task_core::llm_route::HarnessSelection,
+    #[serde(default)]
+    pub harness_declarations: std::collections::BTreeMap<String, HarnessDeclarationConfig>,
+    #[serde(default)]
+    pub llm_routes: Vec<LlmRouteConfig>,
+    #[serde(default)]
+    pub route_defaults: std::collections::BTreeMap<String, RouteDefaultConfig>,
+    #[serde(default)]
+    pub cos_route_candidates: Vec<RouteCandidateConfig>,
     /// Isolated browser runtime is disabled unless its API and provider are configured.
     #[serde(default)]
     pub browser: BrowserRuntimeConfig,
@@ -403,6 +418,17 @@ impl Config {
     /// existing sub-struct so adding them does not change `Config` struct literals.
     fn parse_with_delivery(text: &str) -> Result<Self, ConfigError> {
         let mut table: toml::Table = toml::from_str(text)?;
+        let harnesses_value = table.remove("harnesses");
+        let harness_declarations = harnesses_value
+            .as_ref()
+            .and_then(|v| v.as_table())
+            .filter(|t| !t.contains_key("id"))
+            .cloned();
+        if harness_declarations.is_none()
+            && let Some(value) = harnesses_value
+        {
+            table.insert("harnesses".into(), value);
+        }
         let delivery = table
             .remove("delivery")
             .map(|value| value.try_into::<DeliveryConfig>())
@@ -410,6 +436,12 @@ impl Config {
             .unwrap_or_default();
         let mut cfg: Config = toml::Value::Table(table).try_into()?;
         cfg.selfdeploy.delivery = delivery;
+        if let Some(declarations) = harness_declarations {
+            cfg.harness_declarations = declarations
+                .into_iter()
+                .map(|(k, v)| Ok((k, v.try_into()?)))
+                .collect::<Result<_, toml::de::Error>>()?;
+        }
         Ok(cfg)
     }
 
@@ -501,6 +533,7 @@ impl Config {
     }
 
     pub fn validate(&self) -> Result<(), ConfigError> {
+        self.llm_route_registry()?;
         self.selfdeploy.validate()?;
         self.selfdeploy.delivery.validate()?;
         self.browser.validate()?;

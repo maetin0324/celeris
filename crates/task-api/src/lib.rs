@@ -238,6 +238,8 @@ pub struct ApiSettings {
     /// ADR-0040 D6（Phase 48）: `[selfdeploy] releases_dir` を読む係（celeris が渡す。task-api は
     /// リリースのファイル規約を知らない）。`None` なら `GET /releases` は空、昇格は 409。
     pub releases: Option<SharedReleaseSource>,
+    /// `[selfdeploy] releases_dir` used by task integration promotion views.
+    pub integration_releases_dir: Option<PathBuf>,
     /// ADR-0040 D4（Phase 47）: このプロセスのリリース（`--release <sha12>` / `CELERIS_RELEASE` / `"dev"`）。
     /// `GET /health` の `release`。
     pub release: String,

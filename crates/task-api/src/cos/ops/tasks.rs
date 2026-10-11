@@ -62,11 +62,33 @@ pub(crate) const ALLOWED: &[(&str, &str, &str)] = &[
 ];
 
 /// ADR D2 exclusions: `(method, path, reason code and detail)`.
-pub(crate) const EXCLUDED: &[(&str, &str, &str)] = &[(
-    "POST",
-    "/api/v1/plans",
-    "removed_by_adr_0079: ADR-0079 D13/R5a で撤去済み。人にも変更できない 410 の互換入口を復活させない。",
-)];
+pub(crate) const EXCLUDED: &[(&str, &str, &str)] = &[
+    (
+        "POST",
+        "/api/v1/plans",
+        "removed_by_adr_0079: ADR-0079 D13/R5a で撤去済み。人にも変更できない 410 の互換入口を復活させない。",
+    ),
+    (
+        "POST",
+        "/api/v1/tasks/{id}/integrations/{repo}/merge",
+        "integration_human_decision: merge is a human-only filesystem git operation and cannot run as an agent CoS operation",
+    ),
+    (
+        "POST",
+        "/api/v1/tasks/{id}/integrations/{repo}/discard",
+        "integration_human_decision: discard is an explicit human disposition and requires the admin credential",
+    ),
+    (
+        "POST",
+        "/api/v1/tasks/{id}/integrations/{repo}/hold",
+        "integration_human_decision: hold is an explicit human disposition and requires the admin credential",
+    ),
+    (
+        "POST",
+        "/api/v1/tasks/{id}/integrations/{repo}/reopen",
+        "integration_human_decision: reopen is an explicit human disposition and requires the admin credential",
+    ),
+];
 
 pub(crate) fn dispatch(
     store: &SqliteStore,

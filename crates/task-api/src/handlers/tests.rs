@@ -86,6 +86,7 @@ fn state_rx(
         notify_digest_interval_secs: 3_600,
         notify_digest_max_lines: 10,
         releases: None,
+        integration_releases_dir: None,
         release: "dev".to_string(),
         mode: task_core::DaemonMode::Normal,
         role: task_core::SharedRole::new(task_core::InstanceRole::Active),

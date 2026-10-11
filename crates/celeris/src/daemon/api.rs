@@ -333,6 +333,7 @@ pub fn api_settings(
             config.selfdeploy.repo.clone(),
             config.selfdeploy.detach.clone(),
         ))),
+        integration_releases_dir: Some(config.selfdeploy.releases_dir.clone()),
         release,
         mode,
         role,

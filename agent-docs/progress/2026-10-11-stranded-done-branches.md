@@ -13,15 +13,25 @@ tasks: [01M4M8D4ANYGCWVZ0A0WSW53X7]
 
 ## 原因
 
-第一の根因は、delivery の開始が task の done 遷移や「review 合格」全体に結び付いていないこと。`crates/task-dispatch/src/dispatcher/review_spawn.rs:620-630` は `reviewer_run` が `Some` の場合にだけ `task_ops::delivery::begin` を呼ぶ。`reviewer_run` は `needs_reviewer_run(&task)` が真、つまり既存の acceptance に `Check::Reviewer` があり、さらに reviewer を選べた場合にだけ作られる（`crates/task-dispatch/src/review.rs:169-174`、`review_spawn.rs:345-354`）。Reviewer 条件のない task の review は他の check で合格して done になれても `begin` を通らない。delivery 自身が追加する部署内 reviewer criterion は `begin` の後（`crates/task-ops/src/delivery.rs:375-376`）なので、これを開始条件にできない。
+根因は、project_id の無い task に対して delivery の判定が何も記録せず終わっていたこと。取り残しの直接の原因はこれ。
 
-計画付き task の最終レビューにも独立した抜け道がある。全 WU が終わった計画は `dispatch_run.rs:83-86` から `start_final_review_from_ready` に入り、`review_spawn.rs:129-171` は `Trigger::PlanComplete` で reviewing に遷移させて `spawn_review` する。この経路も reviewer run が既存の `Check::Reviewer` に基づいて選ばれなければ `begin` を呼ばない。WU の統合段（`StartIntegration`）は親 task の branch に成果をまとめる段で、root task の main delivery 開始ではない（`dispatch_run.rs:78-82`）。
+DB 事実（本番 DB の reviewer の read-only 確認（sqlite3 -readonly）による。この run からは本番 DB を参照していない）:
 
-二つ目の silent skip は delivery policy の対象外。`prepare` は project_id がない場合、`policy.projects` に project が無い場合、support task、木の子である場合に `Skip::Silent` を返し、`begin` は何も記録せず `None` を返す（`crates/task-ops/src/delivery.rs:172-181,363-365`）。設定は `config/dispatch.rs:163-169` で `[selfdeploy].delivery_projects` から渡され、既定値は空（`crates/celeris/src/config/selfdeploy.rs:56-58,84-95`）。config は delivery 対象 project を agent-platform の project ID（`01M2WTS3DKNZBSZ2JMVB4CZMBW`）だけに限定していることを read-only で確認した（`~/.config/celeris/config.toml:370-372`）。従って同 ID の project root なら config 不一致は今回の根因ではない。別 project ID なら silent skip する。
+- 01M4D7RVKXY9A967ZXDADWVHQJ と 01M4F3V643Q4A3DXTXPT04J14Y は、いずれも `project_id=NULL`、`repos_json=NULL`、`workspace={kind:local,path:<task id>}`。
+- 01M4D7RVKX には reviewer run 01M4FTV1VHMECRH01W4K65WM28 の起動（events seq 9883-9885）と `review_pass`（seq 9903）がある。旧コードは reviewer run があるとき `delivery::begin` を呼んでいた（`git show 6a715ef6^:crates/task-dispatch/src/dispatcher/review_spawn.rs` の `if let Some(run) = &reviewer_run`）。
+- done の root task 763 件のうち 548 件は project_id が無く repos も空。
 
-与えられた事実では 01M4D7RVKX と 01M4F3V643 の task row、acceptance、task の全 event payload をこの run から取得できず、個別の `Check::Reviewer` 有無や project_id は直接確認できていない。events に `phase_integrated {merged:[], head:""}` 以外の delivery event が無いという依頼文の事実と上記の制御フローからは、delivery begin が一度も呼ばれなかった、または silent skip したと推論できる。project config が該当 ID を含むため、最も整合する原因は reviewer run を伴わない review 経路。これはコード上、done 遷移の順序による後段の取り逃しではなく、begin の呼び出し条件が reviewer run に狭く結合している問題。
+制御の流れ（修正前 = `6a715ef6^`）:
 
-`crates/celeris/src/delivery.rs:158-176` の `tick` は既存 deliveries 行だけを走査する。行が無い task の branch を検索せず、未記録 task を検出できない。木の子を skip する安全策もある。よって begin 未到達や silent skip 後に補完する daemon 経路は現状ない。
+1. `crates/task-ops/src/delivery.rs` の `prepare` は、`task.project_id` が None のとき `Err(Skip::Silent)` を返す（旧コード 173 行付近）。
+2. `begin` は `Skip::Silent` を `Ok(None)` にする。`Silent` は何も記録しない（`DeliverySkipped` の event も delivery 行も作らない）。
+3. よって 01M4D7RVKX は reviewer run があり `begin` まで到達したが、project_id が無いため event も delivery 行も残らずに終わった。これが根因。
+
+現行コード: `6a715ef6` で `review_spawn.rs` は `begin` を常に呼ぶようになった。project 不在の task は `prepare` が `NoProject` を返し、`record_skip`（`delivery.rs` 338-360 行付近）が `DeliverySkipped` を記録する。delivery は main へ入れないが、理由は残る。つまり「黙って消える」は修正済みで、既存の取り残しは delivery では拾えない。その検出は `crates/celeris/src/daemon/stranded_sweep.rs` の `repoless_records` が担う。登録 Local repo の `refs/heads/celeris/<task id>` の有無で repo を解決する（ADR 2026-10-11 D3）。
+
+副次の穴（1 行）: 修正前の `review_spawn.rs` は reviewer run が無い review で `begin` を呼ばなかった。`6a715ef6` 以前に done になった task は再度 `begin` されない。sweep-repoless がこの穴を補う。
+
+01M4F3V643 について: DB 事実（project_id 無し・repos 空）は上と同じ。review run と events は本 run では未確認。project_id 欠落だけで「何も残らない」は説明できる。
 
 ## delivery-fix 実装
 
@@ -39,7 +49,8 @@ review 完了時に `delivery::begin` を必ず呼ぶ。delivery policy 対象�
 
 1. **migration を含む release を作成・検証する。** main にこの変更を取り込んだ後、本番運用セッションで `scripts/selfdeploy/release.sh <main の SHA または ref>` を実行する。integration state 用 migration は `0067_task_repo_integration_states.sql`。release directory の SHA を用いて `scripts/selfdeploy/verify.sh <sha12>` を実行し、`scripts/selfdeploy/status.sh` と release 内 `verify.json` で `ok: true`、staging health の schema version が新バイナリと一致、migration 前後の staging snapshot で既存行数・task digest が一致、主要 GET が成功したことを確かめる。詳細は [selfdeploy 運用手順](../../docs/ops/selfdeploy.md) §2–3。
 2. **人が昇格する。** `scripts/selfdeploy/status.sh` で対象 release の verify 結果を確認し、`verify.json.ok` が true の場合に限って `scripts/selfdeploy/promote.sh <sha12>` を実行する。完了後、status/API の release 表示で promoted を確認し、`promote_failed.json` が無いこと、`/health` の release SHA と schema version が対象値であることを確認する。main 取り込みと本番昇格は別操作。
-3. **初回 sweep の取り残しを確認する。** daemon 起動後の定期 sweep を待ち、`celerisctl integration list --state unintegrated --json`（`GET /api/v1/integrations?state=unintegrated`）で task/repo/branch/head を確認する。admin 認証付き `GET /api/v1/inbox/items?kind=unintegrated` でも受信箱 item を取得し、各 item の task・repo・branch/head を照合する。Unintegrated は task×repo ごとの item なので、同一 task の複数 repo を別々に数えて確認する。
+3. **初回 sweep の取り残しを確認する。** daemon 起動後の定期 sweep を待つ。前提: `agent-platform` が project に紐付いた Local の登録 repo であること。repos が空の done root は、登録 repo の `refs/heads/celeris/<task id>` の有無で解決される（`stranded_sweep.rs` の `repoless_records`）。branch の head が既定 branch の祖先なら integrated、そうでなければ unintegrated になる。`celerisctl integration list --state unintegrated --json`（`GET /api/v1/integrations?state=unintegrated`）で、01M4F3V643Q4A3DXTXPT04J14Y が repo `agent-platform`・branch `celeris/01M4F3V643Q4A3DXTXPT04J14Y`・head 付きの 1 件として出ることを確認する。admin 認証付き `GET /api/v1/inbox/items?kind=unintegrated` でも同じ item を照合する。Unintegrated は task×repo ごとの item。
+
 4. **人の決定に従い 01M4F3V643 を discard する。** `celerisctl integration list --state unintegrated --task 01M4F3V643Q4A3DXTXPT04J14Y --json` で branch `celeris/01M4F3V643Q4A3DXTXPT04J14Y` と head を確認する。`celerisctl show 01M4F3V643Q4A3DXTXPT04J14Y --json` の `integrations[]` を見て該当 repo の**名前**を特定し、その repo・branch・head が一致した場合に実行する。
 
    ```sh
@@ -48,7 +59,7 @@ review 完了時に `delivery::begin` を必ず呼ぶ。delivery policy 対象�
    ```
 
    discard は git branch を削除せず durable な disposition を記録する。結果の `state.status` が `discarded`、reason・repo・branch が対象と一致することを確認する。等価 API は `POST /api/v1/tasks/01M4F3V643Q4A3DXTXPT04J14Y/integrations/<URL-encoded-repo-name>/discard`、body `{"reason":"人の決定: この stranded branch の変更を破棄"}`。`repo` は repo ID でなく repo 名。admin 認証が必要で、body は `reason` のみを受け付ける。
-5. **01M4D7RVKX の統合を確認する。** `celerisctl show 01M4D7RVKX --json`（`GET /api/v1/tasks/01M4D7RVKX` と同じ TaskDetail）を取得し、`integrations[]` の対象 repo で `state: integrated` を確認する。公開欄名は任意欄 `integrations` で `integration_status` ではない。これは main 到達の確認で、本番 release の promote 状態とは独立している。
+5. **01M4D7RVKX は記録が作られない。main 到達は git で確認する。** `celeris/01M4D7RVKXY9A967ZXDADWVHQJ` の branch は merge 後に削除され、`refs/heads/` に無い。sweep は branch ref を走査するため、この task の integrations 記録は作られない（`celerisctl integration list --task 01M4D7RVKXY9A967ZXDADWVHQJ --json` は空で正常）。取り込み済みは次で確認する: `git merge-base --is-ancestor 073a56c4f090a22fd8751ac26a1a9e2c6823fe main`（exit 0 で取り込み済み）。`073a56c4` は merge `da0b6fd6` の第 2 親で、9 commit。これは main 到達の確認で、本番 release の promote 状態とは独立している。
 
 merge 操作（`celerisctl integration merge` と `POST /api/v1/tasks/{id}/integrations/{repo}/merge`）は、project repo の既定 branch を実際に進める（git merge。fast-forward、または detached 一時 worktree の `--no-ff`）。push はしない。衝突時は既定 branch を変えず integrated にしない。
 
@@ -86,6 +97,15 @@ merge 操作（`celerisctl integration merge` と `POST /api/v1/tasks/{id}/integ
 
 判定: merge-exec の試験は全件 pass。残る 4 件は `browser_e2e.rs:87-110` の fixture（serve の戻り値を捨てる）の readiness 待ちで、根因は未確定。次の対処は未解決事項の 1 件目を参照。
 
+### 2026-10-11 根因修正（rootcause-verify WU、コード変更なし）
+
+- `bash scripts/dev/test-parallel.sh`（TMPDIR=run の既定の長い path）— exit 100。`CELERIS_TEST_SUMMARY`: passed 5055 / failed 108 / ignored 14。失敗 108 件は `bind: path must be shorter than SUN_LEN`（socket path が長い）。前回と同じ環境起因。
+- `TMPDIR=$(mktemp -d /tmp/wu-sock.XXXX) bash scripts/dev/test-parallel.sh`（socket 用に短い TMPDIR、実行後に削除）— exit 100。`CELERIS_TEST_SUMMARY`: passed 5159 / failed 4 / ignored 14、nextest_exit 100、doctest_exit 0、nextest 142.7s。失敗は 4 件のみ: `task-api::browser_e2e` の `approved_credential_requires_conformance_and_does_not_consume_approval`、`auth_section_store_denies_takeover_until_closed`、`denied_approval_fails_the_task_without_a_lease`、`registered_credential_does_not_open_approval_for_uncertified_backend`（60 秒の fixture readiness timeout。前回記録と同じ 4 件）。exit 0 にはなっていない。
+- `cargo clippy --workspace -- -D warnings` — exit 0（`Finished dev profile`、警告なし）。
+- `cargo fmt --all -- --check` — exit 0（差分なし）。
+
+受け入れ条件 2（test-parallel が exit 0）は未達。残る 4 件は本 WU の変更と無関係で、前回記録の未解決事項の 1 件目。
+
 ## 提案
 
 - 本番昇格の運用記録に release SHA、verify の schema/row-count 結果、promote 結果、初回 sweep の task×repo 件数、01M4F3V643 の discard 理由、01M4D7RVKX の integrated 表示をまとめ、監査可能にする。
@@ -94,7 +114,7 @@ merge 操作（`celerisctl integration merge` と `POST /api/v1/tasks/{id}/integ
 
 | task 経路 | review / done 経路 | begin 到達条件 | 判定 |
 | --- | --- | --- | --- |
-| Atomic root | implementation 後 `spawn_review`。reviewer run の選択は acceptance の `Check::Reviewer` がある場合のみ | reviewer run を作成できた場合だけ `review_spawn.rs:345-354,620-630` | reviewer 条件なしで pass/done になると未到達。今回の2件はこの経路が最有力（個別 row 未確認） |
+| Atomic root | implementation 後 `spawn_review`。reviewer run の選択は acceptance の `Check::Reviewer` がある場合のみ | reviewer run を作成できた場合だけ `review_spawn.rs:345-354,620-630` | reviewer 条件なしで pass/done になると修正前は未到達（副次の穴）。01M4D7RVKX は reviewer run があり到達していた（根因は下の project_id 欠落） |
 | Compound root | WU done → `StartIntegration` → 全計画終了後 `FinalReview` → `PlanComplete` → `spawn_review` (`dispatch_run.rs:78-86`; `review_spawn.rs:129-171`) | final review で reviewer run が選ばれた場合だけ | `Check::Reviewer` なしなら未到達。integration は main delivery の代替でない |
 | 木の子 | child review 前に child branch を commit (`review_spawn.rs:368-373`)、親工程の統合で親 branch に取り込む | reviewer run があれば `begin` 呼び出し自体には到達し得る | `prepare` が `is_tree_child` を silent skip (`delivery.rs:175-181`)。main delivery 対象外は意図された設計 |
 | project / kind による除外 | 上記各 review 経路の後 | `begin` まで到達しても `prepare` 判定 | project_id 無し、config 対象外、support は silent skip (`delivery.rs:172-181`) |

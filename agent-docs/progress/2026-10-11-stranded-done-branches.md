@@ -1,7 +1,7 @@
 ---
 title: done task の取り残し調査
 updated: 2026-10-11
-status: running
+status: done
 tasks: [01M4M8D4ANYGCWVZ0A0WSW53X7]
 ---
 
@@ -33,7 +33,36 @@ review 完了時に `delivery::begin` を必ず呼ぶ。delivery policy 対象�
 
 ## 本番への移行
 
-設定形式の変更はない。リリース後の本番反映は通常の release/promote 手順で行う。host、daemon、DB、設定ファイルの直接変更はしていない。
+このタスク木で追加した本番設定欄はない。各段の記録と `crates/celeris/src/config/` を確認したが config schema の変更はなく、既存の `[selfdeploy].delivery_projects` を維持する。host・daemon・本番 DB・`~/.config/celeris` はこの作業では変更していない。以下は運用セッションで人が実施する手順。
+
+1. **migration を含む release を作成・検証する。** main にこの変更を取り込んだ後、本番運用セッションで `scripts/selfdeploy/release.sh <main の SHA または ref>` を実行する。integration state 用 migration は `0067_task_repo_integration_states.sql`。release directory の SHA を用いて `scripts/selfdeploy/verify.sh <sha12>` を実行し、`scripts/selfdeploy/status.sh` と release 内 `verify.json` で `ok: true`、staging health の schema version が新バイナリと一致、migration 前後の staging snapshot で既存行数・task digest が一致、主要 GET が成功したことを確かめる。詳細は [selfdeploy 運用手順](../../docs/ops/selfdeploy.md) §2–3。
+2. **人が昇格する。** `scripts/selfdeploy/status.sh` で対象 release の verify 結果を確認し、`verify.json.ok` が true の場合に限って `scripts/selfdeploy/promote.sh <sha12>` を実行する。完了後、status/API の release 表示で promoted を確認し、`promote_failed.json` が無いこと、`/health` の release SHA と schema version が対象値であることを確認する。main 取り込みと本番昇格は別操作。
+3. **初回 sweep の取り残しを確認する。** daemon 起動後の定期 sweep を待ち、`celerisctl integration list --state unintegrated --json`（`GET /api/v1/integrations?state=unintegrated`）で task/repo/branch/head を確認する。admin 認証付き `GET /api/v1/inbox/items?kind=unintegrated` でも受信箱 item を取得し、各 item の task・repo・branch/head を照合する。Unintegrated は task×repo ごとの item なので、同一 task の複数 repo を別々に数えて確認する。
+4. **人の決定に従い 01M4F3V643 を discard する。** `celerisctl integration list --state unintegrated --task 01M4F3V643Q4A3DXTXPT04J14Y --json` で branch `celeris/01M4F3V643Q4A3DXTXPT04J14Y` と head を確認する。`celerisctl show 01M4F3V643Q4A3DXTXPT04J14Y --json` の `integrations[]` を見て該当 repo の**名前**を特定し、その repo・branch・head が一致した場合に実行する。
+
+   ```sh
+   celerisctl integration discard 01M4F3V643Q4A3DXTXPT04J14Y '<repo-name>' --reason '人の決定: この stranded branch の変更を破棄'
+   celerisctl integration list --state discarded --task 01M4F3V643Q4A3DXTXPT04J14Y --json
+   ```
+
+   discard は git branch を削除せず durable な disposition を記録する。結果の `state.status` が `discarded`、reason・repo・branch が対象と一致することを確認する。等価 API は `POST /api/v1/tasks/01M4F3V643Q4A3DXTXPT04J14Y/integrations/<URL-encoded-repo-name>/discard`、body `{"reason":"人の決定: この stranded branch の変更を破棄"}`。`repo` は repo ID でなく repo 名。admin 認証が必要で、body は `reason` のみを受け付ける。
+5. **01M4D7RVKX の統合を確認する。** `celerisctl show 01M4D7RVKX --json`（`GET /api/v1/tasks/01M4D7RVKX` と同じ TaskDetail）を取得し、`integrations[]` の対象 repo で `state: integrated` を確認する。公開欄名は任意欄 `integrations` で `integration_status` ではない。これは main 到達の確認で、本番 release の promote 状態とは独立している。
+
+## 未解決事項
+
+- 初回 production sweep 後の task×repo 件数と 01M4F3V643 の repo 名・branch head は運用セッションで確認する。本番 DB はこの run から参照していない。
+- discard 後に人の判断を覆して再統合する場合は、`celerisctl integration reopen` の後に merge を別途判断する。
+
+## 証拠
+
+- `TMPDIR=/tmp bash scripts/dev/test-parallel.sh` — exit 0。`CELERIS_TEST_SUMMARY`: 5155 passed / 0 failed / 14 ignored（182 binaries、nextest 5152 run: 5152 passed / 13 skipped、doctest exit 0）。通常の TMPDIR での初回実行は socket path 長（`SUN_LEN`）と fixture readiness timeout を報告したため停止し、短い `/tmp` で完走を確認した。
+- `cargo clippy --workspace -- -D warnings` — exit 0。
+- `cargo fmt --all -- --check` — exit 0。
+- `sh scripts/dev/check-doc-links.sh && sh scripts/dev/check-adr-numbers.sh && sh scripts/dev/progress-index.sh --check && git diff --quiet "${CELERIS_WU_BASE:-HEAD}" -- crates/ web/ gui/` — exit 0。文書検査 3 本 pass、crates/web/gui に差分なし。
+
+## 提案
+
+- 本番昇格の運用記録に release SHA、verify の schema/row-count 結果、promote 結果、初回 sweep の task×repo 件数、01M4F3V643 の discard 理由、01M4D7RVKX の integrated 表示をまとめ、監査可能にする。
 
 ## 経路表
 

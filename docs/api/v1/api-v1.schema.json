@@ -15552,8 +15552,14 @@
     "IntegrationActionResult": {
       "properties": {
         "integrated": {
-          "description": "`true` means branch is already an ancestor of the configured default branch.",
+          "description": "`true` means the task head is an ancestor of the configured default branch.",
           "type": "boolean"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "state": {
           "$ref": "#/$defs/TaskRepoIntegrationState"

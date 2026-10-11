@@ -3140,6 +3140,7 @@ export type IntegrateResult = {
 
 export type IntegrationActionResult = {
   "integrated": boolean;
+  "reason"?: string | null;
   "state": TaskRepoIntegrationState;
 };
 

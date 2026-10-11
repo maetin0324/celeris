@@ -34,24 +34,26 @@ tasks: [01M4NM5720BYCYHXT02297GFKK]
 
 ## 証拠
 
-統合後 HEAD（`00e3dcb0`、verify 段）での結果。詳細は [verify.md](2026-10-11-stranded-sweep-fixes/verify.md)。
+最終検証（na-event 統合後 HEAD `75ed7cb3`、final-verify 段）の結果。詳細は [final-verify.md](2026-10-11-stranded-sweep-fixes/final-verify.md)（前段の verify.md は `00e3dcb0` 時点）。
 
 | コマンド | exit | 要点 |
 |---|---|---|
-| `TMPDIR=/tmp bash scripts/dev/test-parallel.sh` | 0 | nextest 5170 run / 5170 passed / 13 skipped、doctest 3 passed（JSON 集計 5173 passed・0 failed） |
+| `TMPDIR=/tmp bash scripts/dev/test-parallel.sh` | 0 | JSON 集計 passed 5181・failed 0・ignored 14（doctest 含む）。1 件の試験が一度だけ落ちた記録は final-verify.md の「不安定だった試験」 |
 | `cargo clippy --workspace -- -D warnings` | 0 | 警告無し |
 | `cargo fmt --all -- --check` | 0 | 差分無し |
-| `sh scripts/dev/check-doc-links.sh` / `check-adr-numbers.sh` / `progress-index.sh --check` | 0 | いずれも ok |
-| `cargo nextest run --workspace -E 'test(stranded_)'` | 0 | 23 passed |
+| `sh scripts/dev/check-doc-links.sh` / `check-adr-numbers.sh` / `progress-index.sh --check` / `check-doc-layout.sh scripts/dev/docs-layout.tsv` | 0 | いずれも ok |
+| `cargo nextest run --workspace -E 'test(stranded_)'` | 0 | 24 passed |
+| `git diff --quiet "$CELERIS_WU_BASE" -- crates/ web/` | 0 | 差分ゼロ |
 
-- 葉の記録: [adr.md](2026-10-11-stranded-sweep-fixes/adr.md)・[resolve.md](2026-10-11-stranded-sweep-fixes/resolve.md)・[remote.md](2026-10-11-stranded-sweep-fixes/remote.md)・[identity.md](2026-10-11-stranded-sweep-fixes/identity.md)・[web-state.md](2026-10-11-stranded-sweep-fixes/web-state.md)・[verify.md](2026-10-11-stranded-sweep-fixes/verify.md)
-- ADR 付記の「実装との突き合わせ（F1〜F3、2026-10-11 close 段）」に関数名・migration 0070・試験名（`stranded_default_branch_*` 6 件・`stranded_remote_*` 3 件・`stranded_identity_*` 1 件）と決定からのずれを書いた。
+- 葉の記録: [adr.md](2026-10-11-stranded-sweep-fixes/adr.md)・[resolve.md](2026-10-11-stranded-sweep-fixes/resolve.md)・[remote.md](2026-10-11-stranded-sweep-fixes/remote.md)・[identity.md](2026-10-11-stranded-sweep-fixes/identity.md)・[web-state.md](2026-10-11-stranded-sweep-fixes/web-state.md)・[na-event.md](2026-10-11-stranded-sweep-fixes/na-event.md)・[verify.md](2026-10-11-stranded-sweep-fixes/verify.md)・[final-verify.md](2026-10-11-stranded-sweep-fixes/final-verify.md)
+- ADR 付記の「実装との突き合わせ（F1〜F3、2026-10-11 close 段）」に関数名・migration 0070・試験名（`stranded_default_branch_*` 6 件・`stranded_remote_*` 3 件・`stranded_identity_*` 1 件・`stranded_audit_*` 1 件）と決定からのずれを書いた。F2 の event のずれは na-event 葉で実装して解消した（commit `eb7968ef`、試験 `stranded_audit_remote_not_applicable_appends_one_event_and_no_repeat`）。
 - close 段の record は agent-docs/ だけを変えた（`git diff --quiet "$CELERIS_WU_BASE" -- crates/ web/` は exit 0）。
 
 ## 未解決事項
 
-- `unintegrated` → `not_applicable` の遷移は event を追記しない（store の upsert が `NotApplicable` で event を作らない）。ADR F2 の「状態の変化は event の追記で残す」とずれる。行の `reason`・`actor=sweep`・`updated_at` には残る。
-- remote の reason 文字列が ADR 本文と違う（実装 `remote repository: not checked by the sweep`）。
+- （解消）`unintegrated` → `not_applicable` の遷移の event 欠落は na-event 葉で解消（`integration_not_applicable` を追記、commit `eb7968ef`、試験 `stranded_audit_remote_not_applicable_appends_one_event_and_no_repeat`）。
+- （解消）ADR F2 の文言のずれ（表の名前・remote の reason 文字列）は決定本文を実装に合わせて改訂した（final-verify 段、agent-docs/adr/2026-10-11-stranded-done-branches.md の F2）。実装は変えていない。
+- 一度だけ落ちた試験: `task-dispatch` の `an_interrupted_integration_is_redone_idempotently_after_restart` は、同じ run の全体試験で 1 回 exit 100、その後の全体試験と単独実行では通った。原因は未調査（final-verify.md）。
 - task-api docs と task-dispatch behind_target の解決失敗時の振る舞いが ADR F1 の表と少し違う（ADR 付記に記載）。
 - `default_branch_unresolvable`（409）が `docs/api/v1/api.md` のエラーコード表に無い。
 - repos 空の task で Remote の repository に branch がある場合は記録しない（`not_applicable` 行もできない）。
@@ -76,11 +78,16 @@ tasks: [01M4NM5720BYCYHXT02297GFKK]
    curl -s -H "Authorization: Bearer $CELERIS_ADMIN_TOKEN" http://<api>/api/v1/inbox \
      | python3 -c 'import json,sys; a=json.load(sys.stdin)["attention"]; print(sum(1 for i in a if i["type"]=="unintegrated"))'
    ```
-   受信箱の `unintegrated` 件数が `--state unintegrated` の件数と一致し、遠隔 repo の task が含まれないこと。この移行は event を残さない（未解決事項）ので、確認は行の状態で行う。
+   受信箱の `unintegrated` 件数が `--state unintegrated` の件数と一致し、遠隔 repo の task が含まれないこと。
+   sweep の遷移は event も追記する（`integration_not_applicable`、行 1 件につき 1 件）。読み取り専用で数える（events の `json` 列の `type` で絞る。`json` は serde の tag 付き JSON）:
+   ```sh
+   sqlite3 -readonly <本番 DB> "SELECT count(*) FROM events WHERE json_extract(json,'$.type')='integration_not_applicable';"   # 初回 sweep 後に 38 件増える（deploy 前は 0）
+   ```
+   38 件が追記されていること（既に同じ行の再 sweep で増えないこと: 2 回目以降の sweep の後も件数が 38 のまま）を確かめる。events は追記専用なので、この確認で書き換え・削除はしない。
 4. **再 sweep で新着にならない**: 2 回目以降の sweep の後、同じ `unintegrated` item の id と `at` が変わらないこと（上の `/api/v1/inbox` を 5 分以上あけて 2 回取り、`unintegrated` item の `at` を比べる）。
 5. **rollback**: release の戻し（selfdeploy の rollback）で行う。ただし migration 0070 の適用後は DB の版数が 70 になり、0070 を知らない前の版の binary は `SchemaTooNew`（ADR-0013 D5）で DB を開かない。前の版へ戻すときは、手順 1 で取った deploy 前の backup の DB と組で戻す（backup 以降の events・状態は失われるので、人が判断する）。DB を手で書き換えない。0070 を含む版どうしの戻しなら DB はそのまま使える。
 
 ## 提案
 
 - `docs/api/v1/api.md` のエラーコード表に `default_branch_unresolvable`（409）を足す葉を後続で置く（文面は [resolve.md](2026-10-11-stranded-sweep-fixes/resolve.md) の提案）。
-- `unintegrated` → `not_applicable` の遷移に event を追記するかを決める（ADR F2 に合わせるなら store の upsert に event を足す。合わせないなら ADR 本文を直す）。
+- ADR F2 の表の名前・reason 文字列を実装に合わせて ADR 本文を直すか、実装を決定に合わせるかを人が決める（event の追記は na-event で実装済み）。

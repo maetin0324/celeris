@@ -249,3 +249,22 @@ RouteInput {
 - secret 置換の規則をどの既存実装から取るか（task-worker の redact 系は worker 側にある。`task-core` へ移すか写すか）。
 - brief の各節の字数上限の具体値（要求 4,000 字は仮。評価集合の問題で文の長さの分布を見て決める）。
 - `changed_lines` を数える git 操作の置き場所（daemon の終了処理か、export 時の遅延計算か）。
+
+## 実装の付記（2026-10-11、task-features 段）
+
+実装の進捗・特徴量一覧・export の使い方と出力例・試験の証拠は [進捗](../progress/2026-10-11-llm-source-model-routing/task-features.md)。
+
+- 版定数は `crates/task-core/src/route_record.rs`（`TASK_FEATURES_SCHEMA`＝`celeris.task-features/1`・`ROUTE_OPTIONS_SCHEMA`・`ROUTE_DECISION_SCHEMA`・`ROUTE_OUTCOME_SCHEMA`・`TASK_BRIEF_TEMPLATE`＝`task-brief/1`・`CANDIDATES_ONE_SHOT_BUILDER`＝`candidates-one-shot/1`）。export の行は `celeris.route-training/1`（`task-ops::routing_export`）。`route_record_schema_pinned` は定数と固定入力の brief・aux・hash（`sha256:93bb770a…`）を byte 固定する（版を変えると落ちる）。
+- brief の節は D2 の表の順（`要求` → `期待する成果物` → `触る範囲` → `置かれた位置` → `過去の試行` → `性質（既存の判定）`）。自由文は `redact_secrets`（secret 置換）の後、objective 4,000 字（`OBJECTIVE_MAX_CHARS`）・title・check・各 list 項目 1,000 字の上限。超過は先頭・末尾と `…（N 文字省略、sha256=…）` を残り、`aux.truncated`（`field`・`original_chars`）に記録。
+- aux は D3(a) の欄に `truncated`（切断記録）を足す。欠測は値を `null` のまま `aux.missing` に欄名を入れる。
+- DB 読み出しは `task_core::route_extract::features_for_subject(store, Subject{kind:"work_unit"|"task", id}, as_of)`（`AsOf::Timestamp` は runs の `started_at` と events の `ts` を境界、`AsOf::EventSeq` は events の `seq` を境界。判断時点より後の情報を入れない）。outcome label は `task_core::route_extract::outcome_labels_for_run(store, run_id)`（git 操作をしない。`quota_used`・`changed_lines`・`changed_files_n`・`changed_crates_n`・`retries_after`・`repaired` は未計測のため `null` ＋ `missing`）。
+- 記録の時点: dispatch が worker run の source・model を決める 1 回ごとに `SqliteStore::record_route_features`（`TaskStore` trait。抽出 `features_for_subject` → `insert_route_features` で内容アドレス化・追記専用）が `route_features` に書き、`RoutingRecord.features: RouteFeaturesRef{schema, template, hash}`（`routing_decided` event）に参照だけ入れる（本文は event に入れない）。旧 event は `features` 無しでも復元可能（`Option`）。抽出・保存の失敗は警告ログで dispatch を続行。
+- export は `task_ops::routing_export::export(db_path, &ExportOptions{since, until, stage, text}, out)`（明示 path を `mode=ro` URI で開く、行の順は `decision_id` 順で決定的）。CLI は `celerisctl routing export --db <path> --out <file.jsonl> [--since <RFC3339>] [--until <RFC3339>] [--stage shadow|enforce|eval] [--text brief|none]`。`--text none` は `features.brief` を落として hash と aux だけを出す。
+- D10: 旧 `celerisctl routing export`（dataset v1）・`celerisctl routing evaluate`（estimator・旧 shadow 比較）と `task-ops::routing_replay` を消して新 JSONL に置き換えた。`routing show`（config 表示）だけ残す。ADR-0069 の 9 軸 `TaskFeatures` は残す（brief の「性質」節と aux の `task_features_v69` に写す）。
+
+### 未解決 3 点の決着
+
+- **secret 置換の規則**: task-worker に自由文向けの汎用 token/key redactor が無いため、`task-core::route_record::redact_secrets` に Bearer、`sk-`/`sk_live_`/`ghp_`/`gho_`/`github_pat_`/`xox*` 等の token 形（トークン部 8 字以上）、`api_key=`/`token=`/`secret=`/`password=` の key=value 形を写した（`task-worker` への依存を作らない）。自由文は record 化前に通す。`route_record_secret_replacement_covers_token_and_key_shapes` で固定。
+- **字数上限の具体値**: objective 4,000 字（D2 の仮値を維持）、title・check・各 list 項目 1,000 字。評価集合の問題で文の長さの分布を見て調整する場合は `task-brief/1` の版を上げて固定試験を更新する。
+- **`changed_lines` の git 操作の置き場所**: 未決・未実装。現状 `outcome_labels_for_run` は git 操作をせず `null` ＋ `missing` を返す。置き場所（daemon の終了処理か、export 時の遅延計算か）と実装は selector／rollout 段で決める。
+- **selector へ残す未実装**: `route_decisions`・`route_outcomes` の書き手（dispatch は features snapshot の記録まで。判断 1 回の `celeris.route-decision/1` 行と run 終わりの `celeris.route-outcome/1` 行を書くのは selector 段）、`POST /api/v1/routing/judgments` の API と判定器本体・sidecar・`JudgePolicy`（D9。この task では `route_judgments` 表と store API（`insert_route_judgment` / `route_judgment_get` / `route_judgments_for_hashes`）のみ）。

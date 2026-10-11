@@ -92,6 +92,8 @@ pub fn promotion_view(
         },
         release_sha: Some(release_sha),
     }
+}
+
 /// Explicit human disposition. Reasons are retained in the current row and append-only event log.
 pub fn discard(
     store: &dyn TaskStore,

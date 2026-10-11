@@ -431,7 +431,8 @@ async fn unroutable_tasks_do_not_starve_or_hide_routable_tasks_outside_the_windo
             0,
         );
         t.priority = 10;
-        t.worker_hint.adapter = Some("nonexistent".into());
+        // An undeclared harness has no route: the task stays ready and starts nothing.
+        t.harness_id = Some("nonexistent".into());
         store.insert(&t).unwrap();
         unroutable.push(t.id);
     }

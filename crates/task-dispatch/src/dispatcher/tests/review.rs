@@ -174,6 +174,13 @@ async fn done_then_command_review_passes_and_events_are_recorded() {
             // `QuotaEstimated`（このテストの provider `p1` はアカウントプールを使わないので
             // `free`）。中身は quota 専用のテストで確かめるので、ここでは種別だけを見る。
             Event::QuotaEstimated { .. } => "quota_estimated".into(),
+            // ADR 2026-10-11 llm-source-harness-selection: the route chosen for the run.
+            Event::HarnessSelected { harness_id } => format!("harness:{harness_id}"),
+            Event::LlmRouteSelected {
+                source_id,
+                model_id,
+                ..
+            } => format!("route:{source_id}/{model_id}"),
             other => format!("{other:?}"),
         })
         .collect();
@@ -182,6 +189,8 @@ async fn done_then_command_review_passes_and_events_are_recorded() {
         vec![
             "Ready->Running:dispatch",
             "started",
+            "harness:test",
+            "route:p1/m",
             "progress",
             "Running->Reviewing:worker_done",
             "finished:done: ok",
@@ -529,7 +538,8 @@ async fn department_reviewer_runs_share_and_continue_one_lead_session() {
         delay: Duration::from_millis(5),
     });
     let mut adapters: HashMap<ProviderId, Arc<dyn WorkerAdapter>> = HashMap::new();
-    adapters.insert("p1".into(), file_adapter.clone());
+    let file_adapter_route: Arc<dyn WorkerAdapter> = file_adapter.clone();
+    adapters.insert("p1".into(), file_adapter);
     let mut d = Dispatcher::new(
         store.clone(),
         Box::new(policy),
@@ -572,11 +582,7 @@ async fn department_reviewer_runs_share_and_continue_one_lead_session() {
             execution: ExecutionConfig::default(),
         },
     );
-    review_route::install_test_route(
-        &mut d,
-        review_route::IdAs::wrap("claude-code", file_adapter.clone()),
-        "claude-code",
-    );
+    install_test_routes(&mut d, file_adapter_route, &[("p1", "test")], 1);
 
     // 1 本目: `coding-poc`（セクション）の Reviewer run。部署は `department_of` で `coding` に解決する。
     let mut first = new_task(dir.path(), Check::Reviewer, 0);
@@ -656,7 +662,8 @@ async fn a_rejected_lead_session_resume_retires_it_and_the_next_review_starts_fr
         review_json: r#"{"verdicts":[{"criterion":0,"pass":true,"reason":"ok"}]}"#.into(),
     });
     let mut adapters: HashMap<ProviderId, Arc<dyn WorkerAdapter>> = HashMap::new();
-    adapters.insert("p1".into(), adapter.clone());
+    let adapter_route: Arc<dyn WorkerAdapter> = adapter.clone();
+    adapters.insert("p1".into(), adapter);
     let mut d = Dispatcher::new(
         store.clone(),
         Box::new(policy),
@@ -699,11 +706,7 @@ async fn a_rejected_lead_session_resume_retires_it_and_the_next_review_starts_fr
             execution: ExecutionConfig::default(),
         },
     );
-    review_route::install_test_route(
-        &mut d,
-        review_route::IdAs::wrap("claude-code", adapter.clone()),
-        "claude-code",
-    );
+    install_test_routes(&mut d, adapter_route, &[("p1", "test")], 1);
 
     // 1 本目: `coding-poc` の Reviewer run。新規セッション（resume していないので拒否は起きない）。
     let mut first = new_task(dir.path(), Check::Reviewer, 0);
@@ -786,7 +789,8 @@ async fn a_resume_rejection_that_still_produced_a_result_self_heals_and_the_retr
     });
     let adapter_handle = adapter.clone();
     let mut adapters: HashMap<ProviderId, Arc<dyn WorkerAdapter>> = HashMap::new();
-    adapters.insert("p1".into(), adapter.clone());
+    let adapter_route: Arc<dyn WorkerAdapter> = adapter.clone();
+    adapters.insert("p1".into(), adapter);
     let mut d = Dispatcher::new(
         store.clone(),
         Box::new(policy),
@@ -829,11 +833,7 @@ async fn a_resume_rejection_that_still_produced_a_result_self_heals_and_the_retr
             execution: ExecutionConfig::default(),
         },
     );
-    review_route::install_test_route(
-        &mut d,
-        review_route::IdAs::wrap("claude-code", adapter.clone()),
-        "claude-code",
-    );
+    install_test_routes(&mut d, adapter_route, &[("p1", "test")], 1);
 
     // 1 本目: `coding-poc` の Reviewer run。新規セッション（resume していないので拒否は起きない）。
     let mut first = new_task(dir.path(), Check::Reviewer, 0);

@@ -1304,8 +1304,6 @@ pub struct Dispatcher {
     >,
     /// ADR-0024 D1: 選択のたびにディレクトリを読み直さないよう、tick につき高々 1 回だけスキャンする（アダプタごと）。
     accounts_scan_cache: HashMap<AccountAdapter, Vec<AccountDir>>,
-    /// Tasks whose last dispatch found no launchable llm route (the refusal is recorded once).
-    route_refused: std::collections::HashSet<TaskId>,
     /// ADR-0024 D5/D7 / ADR-0025 D5: celeris（GUI の管理 API）が進行中のログイン中継を持っているアカウント
     /// （キーは `"<adapter>:<id>"`。同じ id でもアダプタが違えば別のログインとして扱う）。
     login_pending_accounts: std::collections::HashSet<String>,
@@ -1626,7 +1624,6 @@ impl Dispatcher {
             harness_adapters: HashMap::new(),
             account_limits,
             accounts_scan_cache: HashMap::new(),
-            route_refused: std::collections::HashSet::new(),
             login_pending_accounts: std::collections::HashSet::new(),
             container_probe: task_worker::RuntimeProbe::default(),
             cluster_connector: None,

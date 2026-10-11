@@ -19,6 +19,7 @@ use task_core::{
     Budget, Check, Criterion, DelegationLimits, SqliteStore, Status, Task, TaskId, TaskKind,
     TaskStore, Tier, Trigger, WorkerHint, WorkspaceSpec,
 };
+use task_core::llm_route::{CandidateKey, HarnessRule, HarnessSpec, Registry, SourceSpec};
 use task_dispatch::dispatcher::{DispatchConfig, Dispatcher};
 use task_dispatch::policy::{ProviderSpec, StaticPolicy};
 use task_worker::{FakeAdapter, WorkerAdapter};
@@ -108,8 +109,8 @@ fn dispatcher(
         Duration::from_secs(1),
     );
     let mut adapters: HashMap<String, Arc<dyn WorkerAdapter>> = HashMap::new();
-    adapters.insert("p1".into(), adapter);
-    Dispatcher::new(
+    adapters.insert("p1".into(), adapter.clone());
+    let mut d = Dispatcher::new(
         store,
         Box::new(policy),
         HashMap::from([("p1".to_string(), "m".to_string())]),
@@ -155,7 +156,49 @@ fn dispatcher(
             workspace_prune_after_secs: 0,
             execution: task_dispatch::ExecutionConfig::default(),
         },
-    )
+    );
+    // ADR 2026-10-11 llm-source-harness-selection: one declared harness running `adapter` on
+    // source `p1` (model `m`, account `default`).
+    let mut registry = Registry::default();
+    registry.sources.insert(
+        "p1".into(),
+        SourceSpec {
+            kind: "test".into(),
+            api_format: "test".into(),
+            accounts: vec!["default".into()],
+            models: vec!["m".into()],
+            max_runs: None,
+            account_max_runs: Default::default(),
+            quota: None,
+            endpoint: None,
+            credential_ref: None,
+        },
+    );
+    registry.harnesses.insert(
+        "test".into(),
+        HarnessSpec {
+            kind: "cli".into(),
+            api_formats: ["test".into()].into(),
+            source_kinds: ["test".into()].into(),
+            capabilities: Default::default(),
+            command: None,
+            args: vec![],
+        },
+    );
+    registry.route_defaults.insert(
+        "test".into(),
+        vec![CandidateKey {
+            source: "p1".into(),
+            model: "m".into(),
+        }],
+    );
+    registry.harness_selection.rules = vec![HarnessRule {
+        harness: "test".into(),
+        ..Default::default()
+    }];
+    d.set_llm_route_registry(registry);
+    d.set_harness_adapters(HashMap::from([("test".into(), adapter)]));
+    d
 }
 
 fn pid_alive(pid: i32) -> bool {

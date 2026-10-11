@@ -524,7 +524,7 @@ impl Dispatcher {
         };
         let (pick, adapter, llm_route) = match launch {
             Ok(launch) => {
-                self.route_refused.remove(&task.id);
+                self.warned_unroutable.remove(&task.id);
                 launch
             }
             Err(launch_error) => {
@@ -546,7 +546,8 @@ impl Dispatcher {
             .sources
             .get(&pick.candidate.source)
             .and_then(|s| route_select::account_adapter_for_source_kind(s.kind.as_ref()));
-        let account = (!pick.account.as_ref().is_empty()).then(|| pick.account.to_string());
+        // The pool account of an OAuth source (other sources book `(source, account)` on the route only).
+        let account = account_adapter.map(|_| pick.account.to_string());
 
         let run_id = ulid::Ulid::new().to_string();
         let wall = Duration::from_secs(task.budget.max_wall_secs);
@@ -1446,7 +1447,10 @@ impl Dispatcher {
 
     /// A refused route (no harness, no eligible declared candidate, or a pick that cannot be
     /// launched) leaves the task ready and starts nothing. The refusal is recorded once per task
-    /// until a route is admitted again, so a deferred task does not append an event every tick.
+    /// until a route is admitted again (`warned_unroutable`, which also widens the ready window),
+    /// so a deferred task does not append an event every tick. A refusal that only a config
+    /// change can lift (anything but "every declared candidate is busy or ineligible now") counts
+    /// the task as unroutable.
     fn note_route_refusal(
         &mut self,
         task_id: TaskId,
@@ -1455,7 +1459,10 @@ impl Dispatcher {
         trace: &route_select::RouteTrace,
         launch_error: Option<&RouteLaunchError>,
     ) -> Result<(), DispatchError> {
-        if !self.route_refused.insert(task_id) {
+        if !matches!(outcome, Err(route_select::RouteFailure::NoEligible(_))) {
+            self.unroutable.insert(task_id);
+        }
+        if !self.warned_unroutable.insert(task_id) {
             return Ok(());
         }
         match (outcome, launch_error) {

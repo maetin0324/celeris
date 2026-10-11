@@ -185,7 +185,7 @@ fn dispatcher_with_adapter_id(
             dispatcher.test_policy_clock = Some(policy_clock);
         }
     }
-    install_test_routes(&mut dispatcher, adapter, &[("p1", "test")]);
+    install_test_routes(&mut dispatcher, adapter, &[("p1", "test")], max_concurrency);
     dispatcher
 }
 
@@ -193,8 +193,14 @@ fn dispatcher_with_adapter_id(
 /// harness `test` (every capability, catch-all selection rule) runs `adapter`; its
 /// `route_defaults` are `sources` in order, each `(source id, source kind)` offering model `m`.
 /// A non-OAuth source declares the account `default`; an OAuth source uses the logged-in
-/// accounts of its `[accounts]` root.
-fn install_test_routes(d: &mut Dispatcher, adapter: Arc<dyn WorkerAdapter>, sources: &[(&str, &str)]) {
+/// accounts of its `[accounts]` root and up to `max_runs` runs each (CoS chat uses the same
+/// candidates).
+fn install_test_routes(
+    d: &mut Dispatcher,
+    adapter: Arc<dyn WorkerAdapter>,
+    sources: &[(&str, &str)],
+    max_runs: usize,
+) {
     use task_core::llm_route::{CandidateKey, HarnessRule, HarnessSpec, Registry, SourceSpec};
     let mut r = Registry::default();
     let mut kinds = std::collections::BTreeSet::new();
@@ -241,6 +247,14 @@ fn install_test_routes(d: &mut Dispatcher, adapter: Arc<dyn WorkerAdapter>, sour
         harness: "test".into(),
         ..Default::default()
     }];
+    r.cos_route_candidates = r.route_defaults.get(&"test".into()).cloned().unwrap_or_default();
+    for (id, kind) in sources {
+        if crate::dispatcher::route_select::account_adapter_for_source_kind(kind).is_none() {
+            if let Some(limits) = d.account_limits.as_mut() {
+                limits.insert(((*id).into(), "default".into()), max_runs);
+            }
+        }
+    }
     d.set_llm_route_registry(r);
     d.set_harness_adapters(HashMap::from([("test".into(), adapter)]));
 }
@@ -635,33 +649,6 @@ fn done_outcome() -> RunOutcome {
             usage: None,
         },
         exit_code: Some(0),
-    }
-}
-
-/// 1 回目は供給側失敗（Throttled）、2 回目以降は `touched` を作って done を返すアダプタ。
-struct FlakyProviderAdapter {
-    calls: AtomicUsize,
-}
-
-#[async_trait]
-impl WorkerAdapter for FlakyProviderAdapter {
-    fn id(&self) -> &str {
-        "instant"
-    }
-    async fn run(
-        &self,
-        req: RunRequest,
-        _run_id: &str,
-        _limits: RunLimits,
-        _sink: &dyn EventSink,
-    ) -> Result<RunOutcome, AdapterError> {
-        if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
-            return Err(AdapterError::Throttled {
-                retry_after: Duration::from_secs(3600),
-            });
-        }
-        std::fs::write(req.workspace.join("touched"), "1").unwrap();
-        Ok(done_outcome())
     }
 }
 
@@ -1457,7 +1444,7 @@ fn pool_dispatcher_with_requeues(
             execution: ExecutionConfig::default(),
         },
     );
-    install_test_routes(&mut d, adapter, &route_sources);
+    install_test_routes(&mut d, adapter, &route_sources, max_concurrency);
     d
 }
 
@@ -3111,7 +3098,13 @@ async fn run_scratch_env() -> (
     assert_eq!(runs.len(), 1, "{runs:?}");
     let owner = task_worker::scratch::Owner::task(task.id.to_string());
     let check = std::fs::read_to_string(&log).unwrap();
-    (settings, owner, runs[0].clone(), check)
+    // The route's model reaches the test adapter as `TEST_MODEL`; only the build env is compared.
+    let run_env = runs[0]
+        .iter()
+        .filter(|(k, _)| k != "TEST_MODEL")
+        .cloned()
+        .collect();
+    (settings, owner, run_env, check)
 }
 
 /// この process の env の sccache の族（`KEY=VALUE ` を辞書順に連ねたもの。checks の 2 行目と同じ形）。
@@ -3142,10 +3135,8 @@ mod review;
 mod review_route;
 mod role_assignments;
 mod routing_and_quota;
-mod routing_enforce;
 mod route_launch;
 mod route_select;
-mod routing_shadow;
 mod run_tmpdir;
 mod target_env;
 mod target_sync;

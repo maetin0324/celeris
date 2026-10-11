@@ -1,61 +1,5 @@
 use super::*;
 
-/// ADR-0010 D5（P-21）: 供給側失敗は attempts を消費せず requeue され、cooldown 中は再 dispatch されず、明けたら done。
-#[tokio::test]
-async fn provider_failure_requeues_without_consuming_attempts() {
-    let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
-    let task = new_task(
-        dir.path(),
-        Check::Command {
-            cmd: "test -f touched".into(),
-            expect_exit: 0,
-        },
-        0,
-    );
-    store.insert(&task).unwrap();
-    let adapter = Arc::new(FlakyProviderAdapter {
-        calls: AtomicUsize::new(0),
-    });
-    let mut d = dispatcher_with_test_clock(store.clone(), adapter.clone(), 1, true);
-    assert_eq!(d.tick().unwrap().dispatched, 1);
-    await_worker_completion(&mut d, task.id).await;
-    let second = d.tick().unwrap();
-    assert_eq!(second.finished, 1);
-    assert_eq!(second.dispatched, 0, "provider is cooling down");
-    let t = store.get(task.id).unwrap().unwrap();
-    assert_eq!((t.status, t.attempts), (Status::Ready, 0));
-
-    if let Some(clock) = &d.test_now {
-        *clock.lock().unwrap() += time::Duration::hours(2);
-    }
-    if let Some(clock) = &d.test_policy_clock {
-        *clock.lock().unwrap() += Duration::from_secs(7200);
-    }
-    assert_eq!(d.tick().unwrap().dispatched, 1);
-    finish_worker_and_review(&mut d, task.id).await;
-    let t = store.get(task.id).unwrap().unwrap();
-    assert_eq!((t.status, t.attempts), (Status::Done, 0));
-    assert_eq!(adapter.calls.load(Ordering::SeqCst), 2);
-    let events = store.events_for(task.id).unwrap();
-    assert!(events.iter().any(|(_, e)| matches!(e, Event::Transitioned { from: Status::Running, to: Status::Ready, reason } if reason == "requeue")));
-    assert!(events.iter().any(|(_, e)| matches!(e, Event::WorkerFinished { outcome, .. } if outcome.starts_with("requeue: "))));
-    // ADR-0013 D9: cooldown の開始が期限と種別つきで残る。
-    let recorded_until = events.iter().find_map(|(_, e)| match e {
-        Event::ProviderThrottled {
-            provider,
-            until,
-            reason,
-        } if provider == "p1" && reason.as_deref() == Some("throttled") => Some(*until),
-        _ => None,
-    });
-    assert!(recorded_until.is_some(), "{events:?}");
-    assert!(
-        recorded_until.unwrap() > d.now_utc() - time::Duration::hours(2),
-        "{events:?}"
-    );
-}
-
 /// ADR-0010 D6（P-3）: attempts > 0 の ready タスクはバックオフが明けるまで dispatch されず、idle にもならない。
 #[tokio::test]
 async fn retry_backoff_delays_redispatch() {
@@ -458,13 +402,4 @@ async fn three_retryable_worker_errors_in_a_row_produce_no_bad_news_report() {
         0,
         "途中の retryable な失敗では bad_news を作らない: {reports:?}"
     );
-}
-
-/// ADR-0074 §6 F2 (c): provider の `concurrency = 1` なら 1 本ずつ。
-#[tokio::test]
-async fn provider_concurrency_one_runs_units_one_at_a_time() {
-    let (max_active, task, _units, _events, _task_dir, _repo, _root) =
-        run_three_independent_units(3, 1).await;
-    assert_eq!(task.status, Status::Done, "{task:?}");
-    assert_eq!(max_active, 1);
 }

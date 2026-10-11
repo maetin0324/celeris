@@ -15,6 +15,7 @@ import { IntegrationRepairPanel } from "./integration-repair-panel";
 import { taskDetailQuery } from "./task-detail-query";
 import { type MobileSection, mobileSectionClass } from "./task-detail-tabs";
 import { TaskIntegrationActions } from "./task-integration";
+import { TaskWaitReason } from "./wait-reason";
 
 // /tasks/:id の概要（P3-08）と観測性の header・木（2026-10-04 screens-ops）。
 // 長時間の task で「いまどうなっているか・次に何をするか」を header で一目に、親子 task・段・WU・
@@ -365,10 +366,12 @@ export function TaskTree({ detail }: { detail: TaskDetail }) {
         <StatusBadge status={task.status} />
       </div>
       <ul className={branch} aria-label="この task の中">
-        {groups.map((group) => (
+        {groups.map((group, stageIndex) => (
           <li key={group.key || "loose"} className="min-w-0" data-testid="tree-stage" data-stage={group.key}>
             <div className={nodeRow}>
-              <span className={kindLabel}>段</span>
+              <span className={kindLabel}>
+                段 {stageIndex + 1}/{groups.length}
+              </span>
               <span className="min-w-0 break-words font-medium text-foreground">{group.title}</span>
               {group.key ? <ShortId id={group.key} /> : null}
             </div>
@@ -378,6 +381,7 @@ export function TaskTree({ detail }: { detail: TaskDetail }) {
                   key={unit.id}
                   taskId={task.id}
                   unit={unit}
+                  waits={detail.waits}
                   repairNode={unit.id === repairUnit ? repairNode : null}
                 />
               ))}
@@ -386,18 +390,7 @@ export function TaskTree({ detail }: { detail: TaskDetail }) {
         ))}
         {repairInTree ? null : repairNode}
         {detail.children.map((child) => (
-          <li key={child.id} className={nodeRow} data-testid="tree-child">
-            <span className={kindLabel}>子 task</span>
-            <Link
-              to="/tasks/$id"
-              params={{ id: child.id }}
-              className={`inline-flex min-h-11 min-w-0 items-center ${textLink}`}
-            >
-              {child.title}
-            </Link>
-            <StatusBadge status={child.status} />
-            <ShortId id={child.id} />
-          </li>
+          <TreeChildNode key={child.id} child={child} />
         ))}
       </ul>
     </li>
@@ -437,7 +430,42 @@ export function TaskTree({ detail }: { detail: TaskDetail }) {
   );
 }
 
-function WorkUnitNode({ taskId, unit, repairNode }: { taskId: string; unit: WorkUnitView; repairNode: ReactNode }) {
+function TreeChildNode({ child }: { child: TaskDetail["children"][number] }) {
+  const childDetail = useQuery(taskDetailQuery(child.id));
+  return (
+    <li className="min-w-0" data-testid="tree-child">
+      <div className={nodeRow}>
+        <span className={kindLabel}>子 task</span>
+        <Link
+          to="/tasks/$id"
+          params={{ id: child.id }}
+          className={`inline-flex min-h-11 min-w-0 items-center ${textLink}`}
+        >
+          {child.title}
+        </Link>
+        <StatusBadge status={child.status} />
+        <ShortId id={child.id} />
+        {childDetail.data ? (
+          <TaskWaitReason
+            task={{ id: childDetail.data.task.id, waits: childDetail.data.waits, runnable: childDetail.data.runnable }}
+          />
+        ) : null}
+      </div>
+    </li>
+  );
+}
+
+function WorkUnitNode({
+  taskId,
+  unit,
+  waits,
+  repairNode,
+}: {
+  taskId: string;
+  unit: WorkUnitView;
+  waits: TaskDetail["waits"];
+  repairNode: ReactNode;
+}) {
   const runId = unit.running_run_id ?? unit.last_run_id ?? null;
   const title = unit.spec.title || unit.key;
   const childLink = unit.child_task_id ? (
@@ -460,12 +488,17 @@ function WorkUnitNode({ taskId, unit, repairNode }: { taskId: string; unit: Work
       <ShortId id={runId} />
     </Link>
   ) : null;
+  const unitWaits = taskWaitsFor(waits ?? [], unit);
   return (
     <li className="min-w-0" data-testid="tree-work-unit" data-key={unit.key}>
       <div className={nodeRow}>
         <span className={kindLabel}>WU</span>
         <span className="min-w-0 break-words font-medium text-foreground">{title}</span>
         <StatusBadge status={unit.status} />
+        <span className="text-muted-foreground">{unit.kind}</span>
+        {unitWaits.length ? (
+          <span className="min-w-0 break-words text-warning-foreground">待ち: {unitWaits.join("、")}</span>
+        ) : null}
         {/* スマホ幅では key・子 task・run を Drawer に移し、行は題と状態だけにする。 */}
         <span className="hidden min-w-0 max-w-full flex-wrap items-center gap-x-2 md:inline-flex">
           <ShortId id={unit.key} />
@@ -489,7 +522,16 @@ function WorkUnitNode({ taskId, unit, repairNode }: { taskId: string; unit: Work
             items={[
               { label: "状態", value: <StatusBadge status={unit.status} /> },
               { label: "key", value: <span className="break-all font-mono">{unit.key}</span> },
+              { label: "kind", value: unit.kind },
               { label: "段", value: <span className="break-all">{unit.phase ?? unit.spec.phase ?? "なし"}</span> },
+              {
+                label: "待っている key",
+                value: unitWaits.length ? (
+                  <span className="break-all">{unitWaits.join("、")}</span>
+                ) : (
+                  <span className="text-muted-foreground">なし</span>
+                ),
+              },
               { label: "ID", value: <span className="break-all font-mono">{unit.id}</span> },
               { label: "子 task", value: childLink ?? <span className="text-muted-foreground">なし</span> },
               { label: "run", value: runLink ?? <span className="text-muted-foreground">まだありません</span> },
@@ -500,6 +542,13 @@ function WorkUnitNode({ taskId, unit, repairNode }: { taskId: string; unit: Work
       {repairNode ? <ul className={branch}>{repairNode}</ul> : null}
     </li>
   );
+}
+
+export function taskWaitsFor(waits: TaskDetail["waits"], unit: WorkUnitView): string[] {
+  // TaskDetail.waits は task-core の unit_waits が算出した未完依存と先行段。
+  // 表示側では状態から待ちを推測しない。
+  const found = waits.find((wait) => wait.kind === "work_units")?.units.find((item) => item.key === unit.key);
+  return found ? [...found.waiting_on, ...(found.waiting_stage ? [`段 ${found.waiting_stage}`] : [])] : [];
 }
 
 function RelatedTasks({ title, items }: { title: string; items: TaskDetail["dependencies"] }) {

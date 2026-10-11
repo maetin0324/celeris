@@ -69,8 +69,8 @@ export function primaryWait(task: TaskSummary): TaskWait | undefined {
   return task.waits[0];
 }
 
-export function TaskWaitReason({ task }: { task: TaskSummary }) {
-  const wait = primaryWait(task);
+export function TaskWaitReason({ task }: { task: Pick<TaskSummary, "id" | "waits" | "runnable"> }) {
+  const wait = task.waits[0];
   if (!wait && !task.runnable) return null;
   if (!wait)
     return (

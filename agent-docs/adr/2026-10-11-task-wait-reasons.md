@@ -1,7 +1,7 @@
 # ADR: task の「なぜ今走らないか」（待ちの理由）を dispatcher と同じ根拠から出す
 
 - Date: 2026-10-11
-- Status: 実装済み（D4 の DaemonSnapshot 旧 3 欄の削除を除く。付記「検証葉 verify」を参照）。実装は task 01M4NAKDCCS5XYAAJ518MVZ134 の葉 core・api・web-list・web-tree
+- Status: 実装済み
 - 決定者: 人の依頼（2026-10-11 運用セッション）を受けた計画。方式の細部はこの ADR が決める
 - 関連: ADR-0044 D6（案件・途中目標の停止）、ADR-0079 D5/D13（子待ち・subtree の一時停止）、ADR-0074 D1.3（工程の scheduler）、
   ADR-0130（write-set）、ADR 2026-10-08-account-concurrency-limits（枠）、[破壊的変更を既定とする](2026-10-11-breaking-changes-by-default.md)
@@ -256,3 +256,9 @@ pub struct UnitWait {
      そうでなければ（/2 の `pause_after`、該当する段が無い）`PhaseCheckpoint{stage: phase}`。`PhaseReported` が無ければ `stage: None`。
 - 以前の `gate_waits` との違い: Blocked 限定の条件は関数側の判定（`is_awaiting_*` が Blocked を見る）に寄せた。その結果、PlanGate を通っていない版
   （承認待ちのまま人が replan を求め `ready` に戻った task など）は、dispatcher が止めているとおり `waits` にも `PlanApproval` が出る。
+
+### final-verify（2026-10-11、差し戻し修正後の全体検証）
+- 検証の記録: `agent-docs/progress/2026-10-11-task-wait-reasons/final-verify.md`（コードは `2cc3cb46` で検査、以後の HEAD は記録の追加のみでコードの差分ゼロ）。
+- 検査（すべて exit 0）: `TMPDIR=/tmp bash scripts/dev/test-parallel.sh`（passed 5188・failed 0・ignored 14）、`cargo clippy --workspace -- -D warnings`、`cargo fmt --all -- --check`、web の typecheck・test（95 files・691 tests）、e2e `work/wait-reasons.spec.ts`・`work/task-tree-waits.spec.ts`（2 passed）。
+- D4 の `DaemonSnapshot` 旧 3 欄（`unroutable`・`awaiting_children`・`awaiting_human`）は削除済み（`crates/task-ops/src/daemon.rs` に無い。API schema と web の生成型からも無い）。前の検証葉 verify で未了とした点は、葉 snapshot-old で解消した。
+- D12 の StageReview の gate は `task_ops::wait::human_gate_waits` を dispatcher（`tree_units.rs`）と API が共有する（葉 stage-gate）。

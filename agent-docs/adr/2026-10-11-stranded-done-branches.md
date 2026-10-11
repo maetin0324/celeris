@@ -1,7 +1,7 @@
 # ADR: done task の変更を取り残さない
 
 - Date: 2026-10-11
-- Status: Proposed
+- Status: Implemented（実装済み）
 - tasks: [01M4M8D4ANYGCWVZ0A0WSW53X7]
 - Related: [ADR 2026-10-11-breaking-changes-by-default](2026-10-11-breaking-changes-by-default.md)
 

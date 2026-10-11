@@ -244,3 +244,15 @@ pub struct UnitWait {
   `snapshot_task_waits` が `Unroutable`（`dispatch_waits` 経由）・`DelegatedChildren`・`ReviewAwaitingHuman` に写す。
 - 読み手の移し先: 受信箱の `attention[].unroutable`（`task_ops::inbox`）は `task_waits` の `Unroutable` から組む。web の daemon 画面の
   「人の待ち」「担当なし」は `task_waits` を kind（`review_awaiting_human`・`unroutable`）で数える。`docs/api/v1/api.md` §3.20 を書き換えた。
+
+### 葉 stage-gate（2026-10-11、final review の差し戻し修正）
+- D12 の人の gate を 1 つの関数にまとめた: `task_ops::wait::human_gate_waits(task, plan: Option<&ExecutionPlanRow>, events) -> Vec<TaskWait>`。
+  旧 `gate_waits` は消した（互換の別名なし）。dispatcher の `human_gate_hold`（`crates/task-dispatch/src/dispatcher/tree_units.rs`）はこの結果が
+  空でないかで止め、理由の文字列も結果の gate から作る（`PlanApproval` → `plan_gate_pending`、`StageReview` → `stage_review`、
+  `PhaseCheckpoint` → `human_gate`）。API の `task_waits` は `store.execution_plan_active(task.id)` を渡して同じ関数を呼ぶ。
+- 判定（どれも既存の事実だけ。推測しない）:
+  1. 有効な版が PlanGate を通っていない（`plan_gate::plan_gate_state == Pending`）か `plan_gate::is_awaiting_plan_approval` → `PlanApproval{stage: None}`。
+  2. `phase_gate::is_awaiting_human` → 直近の `PhaseReported.phase` が /3 の計画の `stages` で `review: human` の段なら `StageReview{stage: 段 key}`、
+     そうでなければ（/2 の `pause_after`、該当する段が無い）`PhaseCheckpoint{stage: phase}`。`PhaseReported` が無ければ `stage: None`。
+- 以前の `gate_waits` との違い: Blocked 限定の条件は関数側の判定（`is_awaiting_*` が Blocked を見る）に寄せた。その結果、PlanGate を通っていない版
+  （承認待ちのまま人が replan を求め `ready` に戻った task など）は、dispatcher が止めているとおり `waits` にも `PlanApproval` が出る。

@@ -184,3 +184,163 @@ async fn task_wait_parent_waiting_on_child_uses_the_shared_resolution() {
         })
     );
 }
+
+fn gate_plan(schema: &str, review: task_core::StageReview) -> task_core::ExecutionPlanRow {
+    task_core::ExecutionPlanRow {
+        id: "plan-1".to_string(),
+        task_id: TaskId::new().to_string(),
+        version: 1,
+        origin: task_core::PlanOrigin::Planner,
+        planner_run_id: None,
+        status: task_core::PlanStatus::Active,
+        spec: task_core::ExecutionPlanSpec {
+            stages: vec![task_core::StageSpec {
+                key: "design".to_string(),
+                kind: task_core::WorkUnitKind::Implement,
+                title: "design".to_string(),
+                review,
+            }],
+            units: Vec::new(),
+            decisions: Vec::new(),
+            schema: schema.to_string(),
+            rationale: String::new(),
+            work_units: Vec::new(),
+            phases: Vec::new(),
+            children: Vec::new(),
+        },
+        created_at: "2026-10-11T00:00:00Z".to_string(),
+        superseded_at: None,
+    }
+}
+
+/// (task の status, 有効な計画, events, 期待する gate, 期待する hold の理由)。
+type GateCase<'a> = (
+    Status,
+    &'a task_core::ExecutionPlanRow,
+    Vec<Event>,
+    Option<task_core::HumanGateKind>,
+    Option<&'static str>,
+);
+
+/// D12（葉 stage-gate）: 同じ入力（task・有効な計画・events）で、`human_gate_hold` が `Some` ⇔
+/// `task_ops::wait::human_gate_waits` が非空。理由の文字列は waits の gate から決まる。
+#[tokio::test]
+async fn task_wait_stage_gate_hold_iff_waits() {
+    let dir = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let d = dispatcher(store, slow_adapter(), 1);
+    let blocked = |reason: &str| Event::Transitioned {
+        from: Status::Running,
+        to: Status::Blocked,
+        reason: reason.to_string(),
+    };
+    let reported = Event::PhaseReported {
+        phase: "design".into(),
+        report: Box::new(task_core::PhaseReport {
+            phase: "design".into(),
+            phase_title: "design".into(),
+            ..Default::default()
+        }),
+    };
+    let requested = Event::PlanApprovalRequested {
+        plan_id: "plan-1".into(),
+        reasons: vec!["review_human:design".into()],
+    };
+    let approved = blocked(task_core::PhaseResumeMode::PlanApprove.name());
+    let v3h = gate_plan(
+        task_core::EXECUTION_PLAN_SCHEMA_V3,
+        task_core::StageReview::Human,
+    );
+    let v3n = gate_plan(
+        task_core::EXECUTION_PLAN_SCHEMA_V3,
+        task_core::StageReview::None,
+    );
+    let v2 = gate_plan(
+        task_core::EXECUTION_PLAN_SCHEMA_V2,
+        task_core::StageReview::Human,
+    );
+    let gate = |g| Some(g);
+    let cases: Vec<GateCase> = vec![
+        (Status::Ready, &v3h, vec![], None, None),
+        (
+            Status::Running,
+            &v3h,
+            vec![requested.clone()],
+            gate(task_core::HumanGateKind::PlanApproval),
+            Some("plan_gate_pending"),
+        ),
+        (
+            Status::Running,
+            &v3h,
+            vec![requested.clone(), approved.clone()],
+            None,
+            None,
+        ),
+        (
+            Status::Blocked,
+            &v3h,
+            vec![blocked(task_ops::plan_gate::AWAITING_PLAN_APPROVAL)],
+            gate(task_core::HumanGateKind::PlanApproval),
+            Some("plan_gate_pending"),
+        ),
+        (
+            Status::Blocked,
+            &v3h,
+            vec![
+                reported.clone(),
+                blocked(task_ops::phase_gate::AWAITING_HUMAN),
+            ],
+            gate(task_core::HumanGateKind::StageReview),
+            Some("stage_review"),
+        ),
+        (
+            Status::Blocked,
+            &v3n,
+            vec![
+                reported.clone(),
+                blocked(task_ops::phase_gate::AWAITING_HUMAN),
+            ],
+            gate(task_core::HumanGateKind::PhaseCheckpoint),
+            Some("human_gate"),
+        ),
+        (
+            Status::Blocked,
+            &v2,
+            vec![
+                reported.clone(),
+                blocked(task_ops::phase_gate::AWAITING_HUMAN),
+            ],
+            gate(task_core::HumanGateKind::PhaseCheckpoint),
+            Some("human_gate"),
+        ),
+        (
+            Status::Blocked,
+            &v3h,
+            vec![reported.clone(), blocked("question")],
+            None,
+            None,
+        ),
+    ];
+    for (i, (status, plan, events, want_gate, want_hold)) in cases.into_iter().enumerate() {
+        let mut task = true_task(dir.path());
+        task.status = status;
+        let events: Vec<(u64, Event)> = events
+            .into_iter()
+            .enumerate()
+            .map(|(n, e)| (n as u64 + 1, e))
+            .collect();
+        let waits = task_ops::wait::human_gate_waits(&task, Some(plan), &events);
+        let hold = d.human_gate_hold(&task, plan, &events);
+        assert_eq!(
+            hold.is_some(),
+            !waits.is_empty(),
+            "case {i}: {waits:?} {hold:?}"
+        );
+        assert_eq!(hold, want_hold, "case {i}");
+        let got_gate = waits.first().and_then(|w| match w {
+            task_core::TaskWait::HumanGate { gate, .. } => Some(*gate),
+            _ => None,
+        });
+        assert_eq!(got_gate, want_gate, "case {i}");
+    }
+}

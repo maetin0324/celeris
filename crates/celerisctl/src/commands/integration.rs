@@ -23,7 +23,7 @@ const DEFAULT_CONFIG: &str = "~/.config/celeris/config.toml";
 pub enum IntegrationCommand {
     /// Unintegrated / integrated / discarded / held branches of done tasks.
     List(ListArgs),
-    /// Merge the task branch into the repository's default branch (or record it as integrated).
+    /// Merge the task branch into the repository's default branch (without pushing).
     Merge(TargetArgs),
     /// Discard the stranded branch. `--reason` is required and recorded.
     Discard(ReasonTargetArgs),

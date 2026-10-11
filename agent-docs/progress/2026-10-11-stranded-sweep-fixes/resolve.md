@@ -25,7 +25,7 @@ ADR `agent-docs/adr/2026-10-11-stranded-done-branches.md` 付記 F1 の実装。
   - task-dispatch behind_target / review_spawn: `review_target_ref` が `Ok(None)` を返し、その repo を review sync・behind の対象外にする（ADR の「DispatchError を返す」ではなく、他の repo の sync を止めないよう skip にした。behind は null のまま）
   - housekeeping: seed の `commit: None`。run_context: docs 一覧を空。checkpoint: `(None, Vec::new())`
   - celerisctl `docs-maintenance apply`: `--default-branch` の既定 `main` を消し、省略時は解決、失敗で非 0
-- `docs/api/v1/api.md` のエラーコード表に `default_branch_unresolvable` を追加。
+- 新しいエラーコード `default_branch_unresolvable`（409）を API が返す。`docs/api/v1/api.md` のエラーコード表への追記はこの葉の範囲 check（crates/・agent-docs/ のみ）の外なので入れていない（提案参照）。
 
 ## 証拠
 
@@ -37,8 +37,10 @@ ADR `agent-docs/adr/2026-10-11-stranded-done-branches.md` 付記 F1 の実装。
 
 ## 未解決事項
 
+- 範囲 check 不合格（attempt 1: docs/api/v1/api.md が範囲外）を受け、api.md の変更を戻した。
 - docs・behind_target の失敗時の振る舞いは ADR の表と少し違う（上記）。verify 葉で ADR 付記の表を実装に合わせて直す。
 
 ## 提案
 
-- なし
+- `docs/api/v1/api.md` のエラーコード表に次の行を足す（verify 葉か後続で。範囲に docs/ を許す葉が要る）:
+  `| default_branch_unresolvable | 409 | ADR 2026-10-11-stranded-done-branches F1: repository の既定の branch を決められない（project_repos.default_branch が空で、origin/HEAD・main・master のどれも無い）。変更の diff・取り込み・取り残しの merge が返す。detail は "<repo>: <理由>"。何も触っていない |`

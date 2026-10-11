@@ -365,8 +365,11 @@ export type AttentionItem = {
   "at": string;
   "branch": string;
   "head_sha": string;
+  "operation_path": string;
   "reason"?: string | null;
+  "repo": string;
   "repo_id": RepoId;
+  "state": TaskRepoIntegrationStatus;
   "task": TaskRef;
   "type": "unintegrated";
 };
@@ -3194,6 +3197,17 @@ export type IntegrationRequest = {
 
 export type IntegrationState = "done" | "open" | "merged" | "closed" | "conflict" | "failed";
 
+export type IntegrationView = {
+  "actor": string;
+  "branch": string;
+  "checked_at": string;
+  "head": string;
+  "reason"?: string | null;
+  "repo": string;
+  "repo_id": RepoId;
+  "state": TaskRepoIntegrationStatus;
+};
+
 export type KnowledgeAcceptBody = {
   "overwrite"?: boolean;
   "path"?: string | null;
@@ -4257,6 +4271,13 @@ export type ProjectTaskView = {
   "status": Status;
   "support"?: string | null;
   "title": string;
+};
+
+export type PromotionStatus = "not_applicable" | "promotion_pending" | "promoted";
+
+export type PromotionView = {
+  "release_sha"?: string | null;
+  "status": PromotionStatus;
 };
 
 export type ProposedMilestone = {
@@ -5559,11 +5580,13 @@ export type TaskDetail = {
   "failure"?: FailureSummary | null;
   "genre"?: string | null;
   "integration_repair"?: IntegrationRepairView | null;
+  "integrations"?: Array<IntegrationView> | null;
   "is_root_task"?: boolean;
   "latest_question"?: string | null;
   "paused_by"?: TaskId | null;
   "prior_review": Array<ReviewNote>;
   "priority_label": string;
+  "promotion"?: PromotionView | null;
   "role"?: string | null;
   "runs": Array<RunSummary>;
   "task": Task;
@@ -5680,6 +5703,8 @@ export type TaskRef = {
   "title": string;
 };
 
+export type TaskRepoIntegrationStatus = "unintegrated" | "integrated" | "discarded" | "held";
+
 export type TaskRequirements = {
   "browser"?: BrowserRequirements | null;
 };
@@ -5725,6 +5750,7 @@ export type TaskSummary = {
   "depends_on": Array<TaskId>;
   "genre"?: string | null;
   "id": TaskId;
+  "integrations"?: Array<IntegrationView> | null;
   "is_root_task"?: boolean;
   "kind": TaskKind;
   "labels": Array<string>;
@@ -5737,6 +5763,7 @@ export type TaskSummary = {
   "priority": number;
   "priority_label": string;
   "project_id"?: ProjectId | null;
+  "promotion"?: PromotionView | null;
   "role"?: string | null;
   "status": Status;
   "support"?: string | null;

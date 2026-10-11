@@ -75,7 +75,7 @@ fn no_evidence(_task: &Task, _run_id: &str) -> Vec<EvidenceView> {
 }
 
 #[test]
-fn stranded_unintegrated_state_creates_one_inbox_attention_item() {
+fn integration_api_unintegrated_state_creates_actionable_inbox_item() {
     let store = SqliteStore::open_in_memory().expect("open store");
     let task = sample_task(TaskKind::Execute, Status::Done);
     store.insert(&task).expect("insert task");
@@ -99,11 +99,20 @@ fn stranded_unintegrated_state_creates_one_inbox_attention_item() {
     let matching = result
         .attention
         .iter()
-        .filter(
-            |item| matches!(item, AttentionItem::Unintegrated { task: t, .. } if t.id == task.id),
-        )
-        .count();
-    assert_eq!(matching, 1);
+        .find(|item| matches!(item, AttentionItem::Unintegrated { task: t, .. } if t.id == task.id))
+        .expect("unintegrated inbox item");
+    let AttentionItem::Unintegrated {
+        state,
+        operation_path,
+        repo,
+        ..
+    } = matching
+    else {
+        unreachable!()
+    };
+    assert_eq!(*state, task_core::TaskRepoIntegrationStatus::Unintegrated);
+    assert_eq!(repo, &repo_id.to_string());
+    assert!(operation_path.contains("/integrations/"));
 }
 
 #[test]

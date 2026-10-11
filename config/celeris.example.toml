@@ -1,7 +1,7 @@
 # celeris 設定の例（ADR-0005 D7）。相対パスはこのファイルのあるディレクトリ基準。
 #
 # 本番の置き場（ADR-0045 D2。XDG 流）:
-#   ~/.config/celeris/  config.toml org.toml providers.d/ api.token web.password web.session-secret secrets/
+#   ~/.config/celeris/  config.toml org.toml api.token gui.password gui.session-secret secrets/
 #   ~/.local/celeris/   celeris.sqlite3 releases/ backups/ staging/ workspaces/ memory/ logs/
 #                       claude-accounts/ codex-accounts/ containers/ tools/
 # **省略したときの既定**（`~` は celeris の $HOME で展開する）:
@@ -184,45 +184,12 @@ dir = "../memory"
 # ログイン済みの Claude Code / Codex の資格情報（`[accounts] claude_dir` / `codex_dir`。
 # config/celeris.multi-account.example.toml を参照）を使って、opencode・PaperQA・Local Deep
 # Research・LangMem のような「adapter を選ばない」ハーネスから Claude / GPT / Qwen を
-# OpenAI 互換 API 越しに使えるようにする。ハーネス側は `celeris/<tier>`（供給元はプロキシが選ぶ）、
-# `claude/<tier>` / `gpt/<tier>` / `qwen/cheap`（供給元を固定。Qwen は cheap のみ）、または `<source>:<具体モデル名>`
-# （素通り。例 `claude:claude-sonnet-5`）のどれかをモデル名に書く。
-# ---------------------------------------------------------------------------
-[llm_proxy]
-# enabled = true                 # 省略時は「どれかの source が設定されていれば有効」
-# listen = "127.0.0.1:18100"     # 既定。loopback のみ。認証は [api] の token_file と同じ
-# prefer_free = true             # celeris/cheap は到達可能な無料の openai_compatible を最優先
-# max_concurrent_per_account = 4
-# cooldown_fallback_secs = 300
-
-# [llm_proxy.sources.claude_oauth]
-# accounts_dir は省略可（[accounts] claude_dir をそのまま使う）。明示すればそちらが勝つ
-# accounts_dir = "~/.local/celeris/claude-accounts"
-# base_url / token_url / client_id は Anthropic 側の実装が変わったときの上書き用（既定で足りるはず）
-
-# [llm_proxy.sources.codex_oauth]
-# accounts_dir = "~/.local/celeris/codex-accounts"
-
-# 既存の Qwen トンネル（ADR-0026）をそのまま中継する source。
-# [[llm_proxy.sources.openai_compatible]]
-# id = "qwen"
-# base_url = "http://127.0.0.1:18000/v1"
-
-# tier → 供給元ごとの実モデル ID。既定値は `docs/guides/llm-source.md` に注記した通り**未確認**
-# （celeris.model-tiers.example.toml と同じ注意）。運用前に必ず確認・上書きする。
-# [llm_proxy.models.claude]
-# frontier = "claude-opus-4-5"
-# standard = "claude-sonnet-5"
-# cheap = "claude-haiku-4-5"
-# GPT は **ChatGPT アカウントの Codex backend が受ける slug だけ**が使える（2026-09-21 実機: Codex CLI 0.155.1 のプリセット
-# gpt-5.6-terra / gpt-5.6-luna / gpt-5.6-sol / gpt-5.5 / gpt-5.4 は 200。gpt-5 / gpt-5-mini / gpt-5-codex / gpt-5.x-codex は
-# 「not supported when using Codex with a ChatGPT account」で 400）。CLI を上げたら `strings $(which codex) | grep '"slug"'` で確かめる。
-# [llm_proxy.models.gpt]
-# frontier = "gpt-5.6-terra"
-# standard = "gpt-5.6-terra"
-# cheap = "gpt-5.5"
-# [llm_proxy.models.qwen]
-# cheap = "qwen3.8-27b"       # Qwen は cheap だけ
+# OpenAI 互換 API 越しに使えるようにする。モデル名は `<source_id>/<model_id>`（供給元と model を具体的に書く。
+# tier alias の `celeris/<tier>` や `claude/<tier>` は廃止された。ADR 2026-10-11 llm-source-harness-selection）。
+# 例: `claude_oauth/claude-sonnet-5`、`codex_oauth/gpt-6-sol`、`qwen/qwen3.8-27b`。
+# GPT は **ChatGPT アカウントの Codex backend が受ける slug だけ**が使える（2026-09-21 実機確認）。
+# CLI を上げたら `strings $(which codex) | grep '"slug"'` で確かめる。
+# 供給元と model の宣言は `[llm_sources.<id>]`（上の `[llm_proxy.sources.*]` の接続とは別の宣言）。
 
 # ---------------------------------------------------------------------------
 # ADR-0054 D1（Phase 67）: ノードごとの継続セッション（`node_sessions`）。CoS の対話は全体で 1 本、
@@ -238,9 +205,9 @@ rollover_tokens = 400_000
 continuation_resume = true
 
 # Check::Reviewer の判定 run に使う adapter / tier（ADR-0010 D9）。adapter 省略時は tier だけで選ぶ。
+# （未解決: tier の焼き付けは harness 選択へ移す。次の段で消す）
 [reviewer]
 # adapter = "claude-code"
-tier = "standard"
 
 # Plan kind の子タスクを親 done と同時に ready にするか（DESIGN §4.2 plan.auto_accept、ADR-0007）。
 # false（既定）なら子は draft で挿入され、人間が `celerisctl approve <child-id>` で ready にする。
@@ -272,9 +239,9 @@ genre = "conversation"
 #
 # `capabilities` / `input_artifacts` / `output_artifacts`（ADR-0028 D1）は 3 つとも任意の自由記述。
 # 各要素は `名前` でも `名前: 説明` でもよい（`:` の前が名前。`artifact_exists` の照合には名前だけを使う）。
-# ここに並ぶハーネスは `adapter` を書かずに **tier だけ**にしてある（監査 M-1）: この例の
-# `[[providers]]` は `fake` なので、そのまま起動して組織・案件・対話の流れを一通り試せる。実機の
-# ハーネスに切り替えるときは providers を実際の供給元へ変更する。汎用ハーネスの adapter は省略のままでよい。
+# ここに並ぶハーネスは `adapter` を書かずにある（監査 M-1）。実行器は下の `[harnesses.<id>]`・供給元は
+# `[llm_sources.<id>]`・候補は `[route_defaults.<harness>]` で決まり、この例では `fake` だけが宣言されているので
+# そのまま起動して組織・案件・対話の流れを一通り試せる。実機の供給元に切り替えるときは宣言を書き換える。
 
 [[harnesses]]
 id = "conversation"
@@ -559,30 +526,50 @@ interval_secs = 30                                # 判定と送信の間隔（�
 # 知識整理 run を起こす python（ADR-0047 D4、Phase 62）。`scripts/knowledge/setup-langmem.sh` が
 # `$CELERIS_STATE_DIR/tools/langmem/.venv` を作る（既定は `~/.local/celeris/tools/langmem/.venv`）。
 # LLM の接続先は `[knowledge.langmem]` の方（上）。`[knowledge.langmem] enabled = true` にし、
-# 下の `[[providers]]` の行を有効にして初めて知識整理 run が走る。
+# 下の `[harnesses.langmem]` を有効にして初めて知識整理 run が走る。
 # [adapters.langmem]
 # command = "~/.local/celeris/tools/langmem/.venv/bin/python"
 # idle_timeout_secs = 300
 
-# プロバイダ表。上から順に優先（StaticPolicy）。Phase 3 では adapter = "fake" のみ使える。
-[[providers]]
-id = "fake-local"
-kind = "adapter"
-adapter = "fake"
-llm_source = "none"
-tiers = ["frontier", "standard", "cheap"]
-concurrency = 2
-model = "fake"
+# LLM source（供給元）。model と account は route の選択で決まる。組み込みの fake は検証と試験の供給元
+# （実モデルを呼ばない）。
+[llm_sources.fake]
+kind = "fake"
+api_format = "fake"
+models = ["fake"]
 
-# 知識整理 run 用のプロバイダ（ADR-0047 D4、Phase 62）。有効化するには上の `[adapters.langmem]` と
-# `[knowledge.langmem]` を有効にしたうえで、このコメントを外す。
-# [[providers]]
-# id = "langmem-main"
-# kind = "adapter"
-# adapter = "langmem"
-# llm_source = "celeris"
-# tiers = ["cheap"]
-# concurrency = 1
+# 注意: `[harnesses.<id>]`（実行器の宣言）と `[[harnesses]]`（組織に見せる実行契約。下の節）は同じ TOML の
+# キー `harnesses` を使うので、同じ設定ファイルには書けない。この例は `[[harnesses]]` を残し、
+# 実行器の宣言は分けた設定ファイル（未解決。決定待ち）に書く。下は宣言の形の見本。
+# [harnesses.fake]
+# kind = "fake"
+# api_formats = ["fake"]
+# source_kinds = ["fake"]
+# [route_defaults.fake]
+# candidates = [{ source = "fake", model = "fake" }]
+
+# 本物の供給元の例（Claude の OAuth 契約）。使うなら `[accounts] claude_dir` と account を用意する。
+# [llm_sources.claude_oauth]
+# kind = "claude_oauth"
+# api_format = "anthropic"
+# models = ["claude-opus-5-5", "claude-sonnet-5"]
+# max_runs = 4
+# [harnesses.claude_code]
+# kind = "claude_code"
+# api_formats = ["anthropic"]
+# source_kinds = ["claude_oauth"]
+# capabilities = ["tools", "repo", "skills"]
+# [route_defaults.claude_code]
+# candidates = [{ source = "claude_oauth", model = "claude-sonnet-5" }]
+
+# 知識整理 run 用の harness（ADR-0047 D4、Phase 62）。有効化するには上の `[adapters.langmem]` と
+# `[knowledge.langmem]` を有効にしたうえで、このコメントを外す。供給元は具体的な source/model で書く。
+# [harnesses.langmem]
+# kind = "langmem"
+# api_formats = ["openai_compatible"]
+# source_kinds = ["openai_compatible"]
+# [route_defaults.langmem]
+# candidates = [{ source = "qwen", model = "qwen3.8-27b" }]
 
 # タスク完了時とは独立する KB 内部整理。接続先は knowledge.langmem を共用。
 # 全候補は既存の知識 inbox で人間 accept/reject が必要。外部調査・create 禁止。
@@ -739,11 +726,10 @@ critical_pct = 95
 # CoS worker (D2)。候補が無ければ理由付き unavailable とする。
 enabled = true
 harness = "claude-code"             # claude-code / codex / opencode
-# llm_source = "claude_oauth"       # 省略時は適合 provider の source
-# provider = "claude-pool"          # 明示時はこの provider に固定
-# account_id = "claude_max_lab"     # 固定すると他 account に逃がさない
-# model = "claude-opus-5-5"         # 指定時は tier より優先
-tier = "frontier"
+# 候補は優先順。適格性・quota・cooldown・同時実行数を見て、最初に admission を通ったものを選ぶ。
+# 供給元と model は具体的に書く（tier は使わない）。候補の供給元は [llm_sources] に宣言されていること。
+# 空なら理由付き unavailable（CoS の実行器は claude_code 固定。候補は Claude の供給元を書く）。
+route_candidates = []
 max_turns = 70
 max_wall_secs = 900
 stream_retention_days = 30
@@ -751,11 +737,7 @@ stream_retention_days = 30
 # CoS は quota / login 制約を守りつつ残り枠を使える（0 < 値 <= 0.97）。
 worker_reserve_five_hour = 0.90
 # 明示設定した順で、同じ run と発言を再試行する。設定後は daemon 再起動が必要。
-# [[cos.fallbacks]]
-# harness = "codex"
-# llm_source = "codex_oauth"
-# model = "gpt-6.1-sol"
-# tier = "frontier"
+# [[cos.fallbacks]] は廃止した。代わりに route_candidates に fallback の候補を並べる。
 
 [cos.triage]
 policy_skill = "cos-inbox-triage"

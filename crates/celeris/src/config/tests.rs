@@ -492,9 +492,8 @@ fn loads_example_config_and_resolves_relative_paths() {
     assert!(cfg.db.path.is_absolute());
     assert!(cfg.workspace_root.is_absolute());
     assert_eq!(cfg.max_concurrency, 2);
-    assert_eq!(cfg.providers[0].adapter, "fake");
+    assert!(cfg.llm_sources.contains_key("fake"));
     assert_eq!(cfg.tick(), Duration::from_millis(2000));
-    assert_eq!(cfg.provider_specs()[0].concurrency, Some(2));
     assert!(!cfg.plan.auto_accept);
     assert!(!cfg.dispatch_config().plan_auto_accept);
     cfg.validate().unwrap();
@@ -1103,7 +1102,7 @@ fn loads_claude_code_dogfood_example_config() {
     ));
     let cfg = Config::load(path).unwrap();
     assert!(cfg.validate().is_ok());
-    assert_eq!(cfg.providers[0].adapter, "claude-code");
+    assert_eq!(cfg.harness_declarations["claude_code"].kind, "claude_code");
     assert_eq!(cfg.adapters.claude_code.command, "claude");
 }
 
@@ -1133,7 +1132,7 @@ fn loads_codex_dogfood_example_config() {
     ));
     let cfg = Config::load(path).unwrap();
     assert!(cfg.validate().is_ok());
-    assert_eq!(cfg.providers[0].adapter, "codex");
+    assert_eq!(cfg.harness_declarations["codex"].kind, "codex");
     assert_eq!(cfg.adapters.codex.command, "codex");
 }
 
@@ -1215,18 +1214,11 @@ fn loads_acp_opencode_example_config() {
     ));
     let cfg = Config::load(path).unwrap();
     assert!(cfg.validate().is_ok());
-    assert_eq!(cfg.providers[0].adapter, "acp");
+    assert_eq!(cfg.harness_declarations["opencode"].kind, "acp");
     assert_eq!(cfg.adapters.acp.command, "opencode");
     assert_eq!(
         cfg.adapters.acp.permission,
         task_worker::AcpPermission::Allow
-    );
-    assert_eq!(
-        cfg.providers[0]
-            .env
-            .get("OPENCODE_DISABLE_PROJECT_CONFIG")
-            .map(String::as_str),
-        Some("1")
     );
 }
 
@@ -1239,14 +1231,10 @@ fn loads_aider_example_config() {
     ));
     let cfg = Config::load(path).unwrap();
     assert!(cfg.validate().is_ok());
-    assert_eq!(cfg.providers[0].adapter, "aider");
-    assert_eq!(cfg.providers[0].model, "anthropic/claude-sonnet-5");
+    assert_eq!(cfg.harness_declarations["aider"].kind, "aider");
     assert_eq!(
-        cfg.providers[0]
-            .env
-            .get("ANTHROPIC_API_KEY")
-            .map(String::as_str),
-        Some("sk-ant-...")
+        cfg.llm_sources["anthropic_api"].models,
+        vec!["claude-sonnet-5"]
     );
 }
 
@@ -1592,12 +1580,8 @@ fn loads_research_example_config() {
             .map(String::as_str),
         Some("http://127.0.0.1:18100/v1")
     );
-    let paperqa_provider = cfg
-        .providers
-        .iter()
-        .find(|p| p.adapter == "paperqa")
-        .expect("paperqa provider");
-    assert_eq!(paperqa_provider.model, "openai/celeris/standard");
+    assert!(cfg.harness_declarations.contains_key("paperqa"));
+    assert!(cfg.llm_routes.iter().any(|r| r.harness == "paperqa"));
     let genre_ids: Vec<&str> = cfg.genres.iter().map(|g| g.id.as_str()).collect();
     assert_eq!(genre_ids, vec!["coding", "literature"]);
     let literature = cfg
@@ -1734,12 +1718,11 @@ fn loads_web_research_example_config() {
             .map(String::as_str),
         Some("single-request")
     );
-    let ldr_provider = cfg
-        .providers
-        .iter()
-        .find(|p| p.adapter == "local-deep-research")
-        .expect("ldr provider");
-    assert_eq!(ldr_provider.model, "celeris/cheap");
+    assert!(cfg.harness_declarations.contains_key("local-deep-research"));
+    assert_eq!(
+        cfg.llm_sources["claude_oauth"].models,
+        vec!["claude-haiku-4-5"]
+    );
     // ADR-0031 D2: 既定の証拠ゲート閾値を明示している。
     assert_eq!(
         cfg.adapters.local_deep_research.evidence.min_search_results,
@@ -2044,15 +2027,12 @@ fn multi_account_providers_parse_and_duplicate_ids_are_rejected() {
         "/../../config/celeris.multi-account.example.toml"
     ));
     let cfg = Config::load(path).unwrap();
-    let claude: Vec<&ProviderConfig> = cfg
-        .providers
-        .iter()
-        .filter(|p| p.adapter == "claude-code")
-        .collect();
-    assert!(claude.len() >= 2);
-    assert_ne!(
-        claude[0].env.get("CLAUDE_CONFIG_DIR"),
-        claude[1].env.get("CLAUDE_CONFIG_DIR")
+    // 同じ供給元の複数アカウントは [accounts] の下のディレクトリ（source/account の組）で持つ。
+    let claude = &cfg.llm_sources["claude_oauth"];
+    assert_eq!(claude.accounts, vec!["a", "b"]);
+    assert_eq!(
+        cfg.accounts.as_ref().map(|a| a.claude_dir.is_some()),
+        Some(true)
     );
 
     let dup = "[[providers]]\nid = \"a\"\nadapter = \"fake\"\n[[providers]]\nid = \"a\"\nadapter = \"fake\"\n";
@@ -2646,17 +2626,8 @@ fn opencode_go_example_config_loads_and_routes_as_opencode_go_subscription() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../config/celeris.opencode-go.example.toml");
     let cfg = Config::load(&path).expect("example loads");
-    let catalog = cfg.routing_catalog().expect("catalog");
-    let dep = catalog
-        .deployments
-        .iter()
-        .find(|d| d.id == "provider:opencode-go")
-        .expect("deployment");
-    assert_eq!(dep.source_ref, "opencode-go");
-    assert_eq!(
-        dep.billing,
-        task_core::model_router::profiles::Billing::Subscription
-    );
+    assert_eq!(cfg.llm_sources["opencode_go"].kind, "opencode_go");
+    assert_eq!(cfg.harness_declarations["opencode"].kind, "acp");
 }
 
 /// `[accounts]` の既定値と、相対 `claude_dir`/`codex_dir` の解決（設定ファイル基準）。
@@ -3502,8 +3473,9 @@ fn multi_account_example_mentions_account_pool_commented_out() {
         "/../../config/celeris.multi-account.example.toml"
     ));
     let text = std::fs::read_to_string(path).unwrap();
-    assert!(text.contains("# [accounts]"));
-    assert!(text.contains("# account_pool = true"));
+    assert!(text.contains("[accounts]"));
+    assert!(text.contains("claude_dir"));
+    assert!(text.contains("max_runs"));
     // 既存の受け入れ条件（Config::load が通る）はコメントアウトされているので変わらない。
     assert!(Config::load(path).is_ok());
 }
@@ -4609,4 +4581,24 @@ fn legacy_provider_concurrency_is_optional_and_warns_including_zero_and_include(
             .concurrency,
         Some(3)
     );
+}
+
+/// 例の設定（`config/*.example.toml`）は全部読めて、新しい供給元・harness・route の参照が解決する
+/// （ADR 2026-10-11 llm-source-harness-selection）。組織の例（`org.example.toml`）は `org_include` で読むので除く。
+#[test]
+fn config_examples_load() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../config");
+    let mut checked = 0;
+    for entry in std::fs::read_dir(&dir).unwrap() {
+        let path = entry.unwrap().path();
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        if !name.ends_with(".example.toml") || name == "org.example.toml" {
+            continue;
+        }
+        let cfg = Config::load(&path).unwrap_or_else(|e| panic!("{name}: {e}"));
+        cfg.llm_route_registry()
+            .unwrap_or_else(|e| panic!("{name}: llm_route_registry: {e}"));
+        checked += 1;
+    }
+    assert!(checked >= 10, "example configs found: {checked}");
 }

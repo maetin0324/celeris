@@ -1,46 +1,49 @@
 # ADR-0069 Phase 118 D2: model IDs measured by actually running the CLI (2026-09-24, this repo's
-# production hosts). Claude Code and Codex (ChatGPT account) both accepted these IDs; codex's
-# reasoning_effort is passed to the CLI as `-c model_reasoning_effort="<value>"` (ADR-0069 Phase 118
-# D1). claude-code has no known equivalent flag, so its bindings omit reasoning_effort.
-# If your account/plan differs, re-verify before deploying and set unavailable_reason on any tier
-# that fails (celeris blocks tasks routed to that tier rather than silently substituting a model).
-# Credentials live in Accounts; both providers can reuse their adapter's pool.
+# production hosts). Claude Code and Codex (ChatGPT account) both accepted these IDs.
+# If your account/plan differs, re-verify before deploying: a model that fails must be removed from
+# `models` and from `route_defaults`, so celeris never routes a task to it.
+#
+# tier（frontier / standard / cheap）は使わない。供給元と model を具体的に宣言し、harness ごとの
+# 候補列（route_defaults）の順で選ばれる（ADR 2026-10-11 llm-source-harness-selection）。
+# account は [accounts] の pool から選ばれる。
 [accounts]
 claude_dir = "claude-accounts"
 codex_dir = "codex-accounts"
 
-[[providers]]
-id = "claude"
-kind = "adapter"
-llm_source = "claude_oauth"
-adapter = "claude-code"
-account_pool = true
-# account_id = "subscription-a" # optional; omitted means automatic pool selection
-[providers.tier_models.frontier]
-name = "fable"
-model_id = "claude-fable-5-1"
-[providers.tier_models.standard]
-name = "opus"
-model_id = "claude-opus-5-5"
-[providers.tier_models.cheap]
-name = "sonnet"
-model_id = "claude-sonnet-5"
+[llm_sources.claude_oauth]
+kind = "claude_oauth"
+api_format = "anthropic"
+models = ["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5"]
 
-[[providers]]
-id = "gpt"
-kind = "adapter"
-llm_source = "codex_oauth"
-adapter = "codex"
-account_pool = true
-[providers.tier_models.frontier]
-name = "astra"
-model_id = "gpt-6-astra"
-reasoning_effort = "high"
-[providers.tier_models.standard]
-name = "sol"
-model_id = "gpt-6-sol"
-reasoning_effort = "medium"
-[providers.tier_models.cheap]
-name = "luna"
-model_id = "gpt-6-luna"
-reasoning_effort = "low"
+[llm_sources.codex_oauth]
+kind = "codex_oauth"
+api_format = "openai_responses"
+models = ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna"]
+
+[harnesses.claude_code]
+kind = "claude_code"
+api_formats = ["anthropic"]
+source_kinds = ["claude_oauth"]
+capabilities = ["tools", "repo", "skills"]
+
+[harnesses.codex]
+kind = "codex"
+api_formats = ["openai_responses"]
+source_kinds = ["codex_oauth"]
+capabilities = ["tools", "repo", "skills"]
+
+# 候補は優先順。reasoning_effort は harness 宣言に欄が無いので、ここでは持たない
+# （codex の `-c model_reasoning_effort` は今の harness 宣言では渡せない。未解決）。
+[route_defaults.claude_code]
+candidates = [
+  { source = "claude_oauth", model = "claude-fable-5-1" },
+  { source = "claude_oauth", model = "claude-opus-5-5" },
+  { source = "claude_oauth", model = "claude-sonnet-5" },
+]
+
+[route_defaults.codex]
+candidates = [
+  { source = "codex_oauth", model = "gpt-6-astra" },
+  { source = "codex_oauth", model = "gpt-6-sol" },
+  { source = "codex_oauth", model = "gpt-6-luna" },
+]

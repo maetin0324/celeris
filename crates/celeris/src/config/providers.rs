@@ -398,9 +398,13 @@ pub(super) fn validate_providers(cfg: &Config) -> Result<(), ConfigError> {
     let providers = &cfg.providers;
     let accounts: Option<&AccountsConfig> = cfg.accounts.as_ref();
     if providers.is_empty() {
-        return Err(ConfigError::Invalid(
-            "at least one [[providers]] entry is required".into(),
-        ));
+        // 新形（`[llm_sources.<id>]`）だけの設定も読めるように、供給元の宣言が 1 つも無いときだけ拒む。
+        if cfg.llm_sources.is_empty() {
+            return Err(ConfigError::Invalid(
+                "at least one [llm_sources.<id>] or [[providers]] entry is required".into(),
+            ));
+        }
+        return Ok(());
     }
     let mut seen_ids = std::collections::HashSet::new();
     for p in providers {

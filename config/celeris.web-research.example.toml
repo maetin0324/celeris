@@ -108,15 +108,15 @@ env = { RES_OPTIONS = "single-request" }
 
 [adapters.local_deep_research.settings]
 "llm.provider" = "openai_endpoint"
-# ADR-0132 D4: celeris の LLM source プロキシに向ける。celeris/cheap は利用可能な Qwen を
-# 優先し、失敗時は Claude/GPT の cheap に倒れる。`api_key` は**プロキシの Bearer**（`[api] token_file`
+# ADR-0132 D4: celeris の LLM source プロキシに向ける。モデル名は `<source_id>/<model_id>`（具体的な供給元。
+# tier alias は廃止）。下の [[llm_routes]] の供給元・model と一致させる。`api_key` は**プロキシの Bearer**（`[api] token_file`
 # と同じ値。ダミーの "unused" では通らない）。
 # ADR-0063 D4（Phase 109）: ここに書いた値は `ldr_input.json` には平文で書かれない
 # （`redact_secret_settings` が `api_key` で終わるキーを自動で検出し、`LDR_LLM_OPENAI_ENDPOINT_API_KEY`
 # という環境変数名に変換して子プロセスへ渡す。JSON にはその環境変数名へのプレースホルダだけが残る）。
 "llm.openai_endpoint.url" = "http://127.0.0.1:18100/v1"
 "llm.openai_endpoint.api_key" = "<[api] token_file と同じ値>"
-"llm.model" = "celeris/cheap"
+"llm.model" = "claude_oauth/claude-haiku-4-5"
 "search.tool" = "tavily"
 # SearXNG に切り替える場合の代替（このホストでは `engines` を絞らないとノイズが出る。上のコメント参照）:
 # "search.tool" = "searxng"
@@ -144,24 +144,43 @@ min_domains = 2
 # `true` にすると Phase 109 までどおり `Error{retryable}`。
 insufficient_is_error = false
 
-[[providers]]
-id = "ldr"
-kind = "adapter"
-adapter = "local-deep-research"
-llm_source = "celeris"
-tiers = ["cheap"]
-concurrency = 1
-# 空でなければ `settings` の `llm.model` を上書きする（ADR-0029 D1）。空なら `[adapters.local_deep_research].settings` のまま。
-# ADR-0053 D2（Phase 65）: 上の `[adapters.local_deep_research.settings]` と揃えて `celeris/cheap`。
-model = "celeris/cheap"
+# LLM source・harness・route（ADR 2026-10-11 llm-source-harness-selection）。tier alias（`celeris/cheap`）は
+# 廃止された。LDR は OpenAI 互換 API を話すので、llm-proxy を経由する変換 route を明示する。
+[llm_sources.claude_oauth]
+kind = "claude_oauth"
+api_format = "anthropic"
+models = ["claude-haiku-4-5"]
 
-[[providers]]
-id = "local-fake"
-kind = "adapter"
-llm_source = "none"
-adapter = "fake"
-tiers = ["standard", "cheap"]
-concurrency = 2
+[llm_sources.fake]
+kind = "fake"
+api_format = "fake"
+models = ["fake"]
+
+[harnesses.local-deep-research]
+kind = "local-deep-research"
+api_formats = ["openai_compatible"]
+source_kinds = ["claude_oauth"]
+capabilities = ["web", "sources", "citations"]
+
+[harnesses.fake]
+kind = "fake"
+api_formats = ["fake"]
+source_kinds = ["fake"]
+capabilities = ["tools"]
+
+[[llm_routes]]
+harness = "local-deep-research"
+source = "claude_oauth"
+model = "claude-haiku-4-5"
+via = "llm_proxy"
+from_api = "anthropic"
+to_api = "openai_compatible"
+
+[route_defaults.local-deep-research]
+candidates = [{ source = "claude_oauth", model = "claude-haiku-4-5" }]
+
+[route_defaults.fake]
+candidates = [{ source = "fake", model = "fake" }]
 
 # Web 調査の役割（ADR-0029 D2）。役割名は自由記述で、下の [[genres]] の roles に含めれば分野に属する。
 [[roles]]

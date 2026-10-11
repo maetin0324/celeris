@@ -30,15 +30,21 @@ ln -s ~/.local/share/opencode ~/celeris/opencode-accounts/main/opencode
 opencode_dir = "~/celeris/opencode-accounts"
 # opencode_go_usage_url = "https://opencode.ai/zen/go/v1/usage"   # 既定。変えるのは試験だけ
 
-[[providers]]
-id = "opencode-go"
-kind = "adapter"
-adapter = "acp"
-llm_source = "opencode_go"
-account_pool = "opencode-go"      # acp 行は pool の adapter 名を文字列で書く（true / "claude-code" / "codex" も可）
-tiers = ["standard"]
-model = "opencode-go/<model>"     # `celerisctl models list` で見える model_id
-env = { OPENCODE_DISABLE_PROJECT_CONFIG = "1" }   # OPENCODE_CONFIG は opencode 側の設定を固定したいときだけ追加
+[llm_sources.opencode_go]
+kind = "opencode_go"
+api_format = "openai_compatible"
+models = ["opencode-go/<model>"]  # `celerisctl models list` で見える model_id
+
+[harnesses.opencode]
+kind = "acp"
+api_formats = ["openai_compatible"]
+source_kinds = ["opencode_go"]
+capabilities = ["tools", "repo", "skills"]
+command = "opencode"
+args = ["acp"]
+
+[route_defaults.opencode]
+candidates = [{ source = "opencode_go", model = "opencode-go/<model>" }]
 
 [model_catalog]
 # refresh_interval_seconds = 3600
@@ -49,8 +55,8 @@ env = { OPENCODE_DISABLE_PROJECT_CONFIG = "1" }   # OPENCODE_CONFIG は opencode
 - `[accounts] opencode_dir` に既定は無い。書かなければ opencode go の pool は使われない。
 - `[model_catalog]` は省略してよい（括弧内が既定）。`refresh_interval_seconds = 0` で自動発見を止める（手動は使える）。
 - 同時実行数は opencode go のアカウントごとの上限（アカウント画面。既定は `[accounts] max_runs_per_account`）で決まる。
-  `[[providers]].concurrency` は deprecated（[provider-llm-source-migration.md](provider-llm-source-migration.md#プロバイダの-concurrency-を外し同時実行数をアカウントで管理する)）。
-- 発見で見えたモデルは routing に自動では入らない。使いたいモデルは provider 行の `model` / `tier_models` に書く。
+  供給元の同時実行数は `[llm_sources.<id>] max_runs` で書く（アカウントごとの上限は [provider-llm-source-migration.md](provider-llm-source-migration.md#プロバイダの-concurrency-を外し同時実行数をアカウントで管理する)）。
+- 発見で見えたモデルは routing に自動では入らない。使いたいモデルは `[llm_sources.opencode_go] models` と `[route_defaults.<harness>]` の候補に書く。
 
 ## 3. 配送後の確認
 

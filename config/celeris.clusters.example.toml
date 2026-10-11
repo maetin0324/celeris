@@ -43,14 +43,20 @@ listen = "127.0.0.1:7710"
 [adapters.claude_code]
 permission_mode = "bypassPermissions"
 
-[[providers]]
-id = "claude-default"
-kind = "adapter"
-llm_source = "claude_oauth"
-adapter = "claude-code"
-tiers = ["frontier", "standard", "cheap"]
-concurrency = 2
-model = "claude-sonnet-5"
+[llm_sources.claude_oauth]
+kind = "claude_oauth"
+api_format = "anthropic"
+models = ["claude-sonnet-5"]
+max_runs = 2
+
+[harnesses.claude_code]
+kind = "claude_code"
+api_formats = ["anthropic"]
+source_kinds = ["claude_oauth"]
+capabilities = ["tools", "repo", "skills"]
+
+[route_defaults.claude_code]
+candidates = [{ source = "claude_oauth", model = "claude-sonnet-5" }]
 
 [[clusters]]
 id = "pegasus"

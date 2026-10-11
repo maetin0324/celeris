@@ -1,22 +1,18 @@
-# 複数アカウント運用の設定例（ADR-0012）。相対パスはこのファイルのあるディレクトリ基準。
+# 複数アカウント運用の設定例（ADR-0012 / ADR 2026-10-11 llm-source-harness-selection）。相対パスはこのファイルの
+# あるディレクトリ基準。
 #
-# [[providers]] の 1 行 = 1 アカウント。上から順に優先し、並列度の上限に達した行・cooldown 中の行（レート制限・認証失敗・
-# 枯渇の後）は飛ばして次の行を使う（先頭のアカウントを上限まで使い、あふれた分が次のアカウントへ行く）。
+# アカウントは供給元（llm_source）の下に置く。同じ供給元の複数アカウントは [accounts] の claude_dir / codex_dir の
+# 下のディレクトリ（1 アカウント 1 ディレクトリ。GUI/API から追加・ログインできる）で管理し、celeris 自身が残量を見て
+# 空いているアカウントを選ぶ。アカウントごとの上限は `max_runs` で書く（同じ source/account の組の admission）。
 #
-# GUI/API からアカウントを追加・変更・削除したい場合（ADR-0017、Phase 11）は、下のコメントを外して
-# providers_include を設定する。POST/PATCH/DELETE /api/v1/providers... は providers.d/<id>.toml
-# （1 アカウント 1 ファイル、[[providers]] の 1 行と同じ形）を書き、POST /api/v1/reload の後の次の tick から
-# 使われる。管理系エンドポイントは token_file が無くても常に認証を要求するので、使うなら [api] token_file も設定すること。
-# providers_include = "providers.d/*.toml"
-#
-# 事前準備（アカウントごとに 1 回。env の値はシェル展開されないので絶対パスで書く）:
+# 事前準備（アカウントごとに 1 回）: 次のようにして各ディレクトリで login する（GUI の「アカウントを追加」でも作れる）。
 #   CLAUDE_CONFIG_DIR=/home/USER/.claude-accounts/a claude     # 起動して /login でアカウント A にログイン
 #   CLAUDE_CONFIG_DIR=/home/USER/.claude-accounts/b claude     # 同じくアカウント B
 #   CODEX_HOME=/home/USER/.codex-accounts/a codex login
-# 動作確認はデーモンを使わずに: celerisctl --db <db> worker run --config <この設定> --task <id> --provider claude-b --workspace <コピー>
+# 動作確認はデーモンを使わずに: celerisctl --db <db> worker run --config <この設定> --task <id> --workspace <コピー>
 #
 # 注意: ワーカーは celeris 自身の環境変数を引き継ぐ。celeris を起動する環境に ANTHROPIC_API_KEY / OPENAI_API_KEY 等があると、
-# CLAUDE_CONFIG_DIR / CODEX_HOME のログインより優先されて全アカウントが同じ認証になりうるので、外してから起動すること。
+# アカウントのログインより優先されて全アカウントが同じ認証になりうるので、外してから起動すること。
 db = "../celeris.sqlite3"
 workspace_root = "../workspaces"
 tick_ms = 2000
@@ -34,55 +30,50 @@ max_requeues = 5
 auto_accept = false
 
 [reviewer]
-tier = "standard"
+# tier（reviewer の tier は廃止。route の候補で選ぶ）
 
-# 全アカウント共通の設定。アカウント固有の env / model は [[providers]] 側に書く（同名キーは providers が優先）。
+# 全アカウント共通の設定。
 [adapters.claude_code]
 # permission_mode = "bypassPermissions"
 
 [adapters.codex]
 # extra_args = []
 
-[[providers]]
-id = "claude-a"
-kind = "adapter"
-llm_source = "claude_oauth"
-adapter = "claude-code"
-tiers = ["frontier", "standard", "cheap"]
-concurrency = 2
-model = "claude-sonnet-5"          # 空でなければ --model に使う
-env = { CLAUDE_CONFIG_DIR = "/home/USER/.claude-accounts/a" }
+[accounts]
+# 相対ならこのファイル基準。各 <id>/ が 1 アカウント。
+claude_dir = "claude-accounts"
+codex_dir = "codex-accounts"
 
-[[providers]]
-id = "claude-b"
-kind = "adapter"
-llm_source = "claude_oauth"
-adapter = "claude-code"
-tiers = ["frontier", "standard", "cheap"]
-concurrency = 2
-model = "claude-sonnet-5"
-env = { CLAUDE_CONFIG_DIR = "/home/USER/.claude-accounts/b" }
+# 供給元。accounts は上の [accounts] の下のディレクトリ名。max_runs は 1 アカウントあたりの同時 run 上限。
+[llm_sources.claude_oauth]
+kind = "claude_oauth"
+api_format = "anthropic"
+accounts = ["a", "b"]
+max_runs = 2
+models = ["claude-sonnet-5"]
 
-[[providers]]
-id = "codex-a"
-kind = "adapter"
-llm_source = "codex_oauth"
-adapter = "codex"
-tiers = ["standard", "cheap"]
-concurrency = 1
-env = { CODEX_HOME = "/home/USER/.codex-accounts/a" }
+[llm_sources.codex_oauth]
+kind = "codex_oauth"
+api_format = "openai_responses"
+accounts = ["a"]
+max_runs = 1
+models = ["gpt-5-codex"]
 
-# ADR-0024（Phase 13）: 上の [[providers]] の env による複数アカウントとは別の仕組み。CLAUDE_SECURESTORAGE_CONFIG_DIR
-# を使ったプールで、claude_dir の下のディレクトリ（GUI/API から追加・ログインできる）から celeris 自身が残量を見て
-# 自動でアカウントを選ぶ（ADR-0024 D1〜D3）。1 つの claude-code プロバイダの下に何アカウントでもぶら下げられる。
-# [accounts]
-# claude_dir = "claude-accounts"      # 相対ならこのファイル基準。各 <id>/ が 1 アカウント（GUI の「アカウントを追加」等で作る）
-# max_runs_per_account = 2            # 1 アカウントで同時に走らせる run の上限（CoS の対話 run だけは +1 まで。ADR-0089）
-# check_model = "haiku"               # 手動確認（POST /accounts/{id}/check）に使うモデル
-#
-# [[providers]]
-# id = "claude-pool"
-# adapter = "claude-code"
-# tiers = ["frontier", "standard", "cheap"]
-# concurrency = 4                     # プロバイダ全体の上限（プールのアカウント数とは別軸）
-# account_pool = true                 # [accounts] が要る。claude-code 以外では設定エラー
+[harnesses.claude_code]
+kind = "claude_code"
+api_formats = ["anthropic"]
+source_kinds = ["claude_oauth"]
+capabilities = ["tools", "repo", "skills"]
+
+[harnesses.codex]
+kind = "codex"
+api_formats = ["openai_responses"]
+source_kinds = ["codex_oauth"]
+capabilities = ["tools", "repo", "skills"]
+
+# 候補は優先順。先頭のアカウントが上限に達したら、同じ候補の次のアカウントへ行く。
+[route_defaults.claude_code]
+candidates = [{ source = "claude_oauth", model = "claude-sonnet-5" }]
+
+[route_defaults.codex]
+candidates = [{ source = "codex_oauth", model = "gpt-5-codex" }]

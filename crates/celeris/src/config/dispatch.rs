@@ -280,6 +280,11 @@ impl ReviewerConfig {
     /// その場合は「（`adapter` 制約を満たす）プロバイダが 1 つ以上の tier を提供しているか」に緩める。
     pub(super) fn validate(&self, providers: &[ProviderConfig]) -> Result<(), ConfigError> {
         let reviewer = self;
+        // 新形（`[llm_sources.<id>]` + route）では reviewer の適格性は route の候補で決まる。provider 行が無い
+        // 設定はこの旧い検査の対象外（旧い検査は provider 行と一緒に消す）。
+        if providers.is_empty() {
+            return Ok(());
+        }
         let reviewer_ok = match reviewer.tier {
             Some(explicit) => providers.iter().any(|p| {
                 p.tiers.contains(&explicit)

@@ -1,44 +1,48 @@
-# coding の既定ハーネスを model family で決める設定例（ADR 2026-10-07-coding-harness-default-pi-hashline）。
+# coding 向けに Pi + Hashline を使う設定例（ADR 2026-10-07-coding-harness-default-pi-hashline）。
 # 手順は docs/ops/coding-harness-pi-hashline.md。相対パスはこのファイルのあるディレクトリ基準。
 #
-# - Claude 系は claude-code 行、非 Claude（未知を含む）は pi 行が preferred になる。pi 行が全滅なら従来の選択に倒れる。
-# - task が adapter を明示していればそれが常に優先される。
-# - 戻すには [[harnesses]] coding の adapter_policy 行を消す。
+# harness は task の内容（genre・requirements・能力・repo の有無）で選ばれ、LLM source と model は
+# [route_defaults] の候補列の順で選ばれる。model family から harness を逆算する規則は無い。
+# task が harness 欄に登録済みの ID を書けばそれが優先される。
 
 [accounts]
 opencode_dir = "~/.local/celeris/opencode-accounts"
 
 # Claude Code（現状どおり）。
-[[providers]]
-id = "claude"
-kind = "adapter"
-adapter = "claude-code"
-llm_source = "claude_oauth"
-tiers = ["frontier", "standard", "cheap"]
-concurrency = 1
+[llm_sources.claude_oauth]
+kind = "claude_oauth"
+api_format = "anthropic"
+models = ["claude-sonnet-5"]
+
+[harnesses.claude_code]
+kind = "claude_code"
+api_formats = ["anthropic"]
+source_kinds = ["claude_oauth"]
+capabilities = ["tools", "repo", "skills"]
 
 # Pi + Hashline（opencode go の鍵を使う。codex / Claude の OAuth は Pi に渡せない）。
-[[providers]]
-id = "pi-opencode-go"
-kind = "adapter"
-adapter = "pi"
-llm_source = "opencode_go"
-account_pool = "opencode-go"
-tiers = ["standard"]
-concurrency = 1
-model = "opencode-go/kimi-k3"
-# Pi の実行ファイル。PATH 上の pi でよければ省略。openclaw 同梱版を使うなら次の 2 行。
-# command = "node"
-# args = ["/usr/lib/node_modules/openclaw/node_modules/@earendil-works/pi-coding-agent/dist/cli.js"]
-# Hashline は明示した path だけ読む（extension の自動発見は止める）。無い path は run 前に失敗する。
-extensions = ["~/.local/celeris/pi-extensions/hashline"]
-# 完全な allowlist。Hashline の read/edit の tool 名は extension の実物で確かめて書く（下は仮の名前）。
-# subagent / planner を名前に含む tool は検証で拒否される。
-tools = ["hashline_read", "hashline_edit", "bash", "grep", "find", "ls"]
+# Pi の実行ファイルは harness 宣言の command/args で指す（既定は PATH 上の pi）。
+[llm_sources.opencode_go]
+kind = "opencode_go"
+api_format = "openai_compatible"
+models = ["opencode-go/kimi-k3"]
 
-# 既定の選び方を model family にする。書かなければ今と同じ（provider の並びと残量）。
-[[harnesses]]
-id = "coding"
-description = "コードを書く・直す・テストする"
-tier = "standard"
-adapter_policy = "model_family"
+[harnesses.pi]
+kind = "pi"
+api_formats = ["openai_compatible"]
+source_kinds = ["opencode_go"]
+capabilities = ["tools", "repo", "skills"]
+
+# 候補は優先順。先頭から適格なものを選ぶ（適格性・quota・cooldown・同時実行数）。
+[route_defaults.claude_code]
+candidates = [{ source = "claude_oauth", model = "claude-sonnet-5" }]
+
+[route_defaults.pi]
+candidates = [{ source = "opencode_go", model = "opencode-go/kimi-k3" }]
+
+# harness の選択規則（genre・repo の有無から決める。一意に決まらなければ fail closed）。
+[harness_selection]
+rules = [
+  { genre = "coding", required_capabilities = [], requires_repo = true, harness = "pi" },
+]
+execution_class_defaults = {}

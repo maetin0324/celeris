@@ -2,7 +2,7 @@
 # このファイルのあるディレクトリ基準。
 #
 # 前提: PATH 上に aider（`pip install aider-chat` / `uv tool install aider-chat`）があること。
-# API キーは [[providers]] の行の env（もしくは env_from_secrets 経由でアカウント画面の秘密ストア）で渡す。
+# API キーは harness の env ではなく、source の credential（credential_ref・アカウント画面の秘密ストア）で渡す。
 
 db = "../celeris-aider-demo.sqlite3"
 workspace_root = "../workspaces"
@@ -17,20 +17,23 @@ error_cooldown_secs = 300
 [plan]
 auto_accept = false
 
-# `[adapters.aider]` は共通設定（ADR-0061）。`model`/`env` は `[[providers]]` の行ごとに上書きできる
-# （`codex` と同じ作り。行の値が優先）。
+# `[adapters.aider]` は共通設定（ADR-0061）。harness 宣言の `command`/`args` がこれを上書きする。
 [adapters.aider]
 # command = "aider"           # 既定。PATH 上の aider を使うなら省略可
 # extra_args = []              # --message の前に追加する引数（例: ["--architect"]）
 
-[[providers]]
-id = "aider-anthropic"
-kind = "adapter"
-adapter = "aider"
-tiers = ["standard", "cheap"]
-concurrency = 1
-model = "anthropic/claude-sonnet-5"
-# env はこの行にだけ渡す（優先順: celeris 自身の環境 < [adapters.aider].env < この行の env。ADR-0061）。
-# ANTHROPIC_API_KEY はこの例では直書きしているが、本番は env_from_secrets（アカウント画面の秘密ストア。
-# ADR-0030 D2）を使うこと。
-env = { ANTHROPIC_API_KEY = "sk-ant-..." }
+# LLM source と harness（ADR 2026-10-11 llm-source-harness-selection）。model は route の選択で決まる。
+[llm_sources.anthropic_api]
+kind = "anthropic_api"
+api_format = "anthropic"
+credential_ref = "anthropic-api-key"
+models = ["claude-sonnet-5"]
+
+[harnesses.aider]
+kind = "aider"
+api_formats = ["anthropic"]
+source_kinds = ["anthropic_api"]
+capabilities = ["repo"]
+
+[route_defaults.aider]
+candidates = [{ source = "anthropic_api", model = "claude-sonnet-5" }]

@@ -8,28 +8,21 @@ tasks: [01M4E0WA5ZYVT32A4W6E74GQGC, 01M46VVAD0ZAVZ9C4Q0KJM9ESV, 01M4APB5FP8T3TAA
 
 ## 設定
 
-本番の `~/.config/celeris/config.toml` に置く例。既存の節があれば重複させず統合する。`provider`・`account_id`・`model` は登録済みの実値へ置き換える。固定しなければ適合 provider を解決し、継続 session の account を優先する。`model` は `tier` より優先する。
+本番の `~/.config/celeris/config.toml` に置く例。既存の節があれば重複させず統合する。`route_candidates` の `source`・`model` は `[llm_sources]` に宣言済みの実値へ置き換える。候補は優先順に、適格性・quota・cooldown・同時実行数を見て最初に admission を通ったものを選ぶ。継続 session の account を優先する。tier の指定は廃止した。
 
 ```toml
 [cos]
 enabled = true
 harness = "claude-code" # 既定。ほかに codex / opencode（ACP）
-llm_source = "claude_oauth" # 登録済み source。省略可
-# provider = "claude-pool"
-# account_id = "claude_max_lab"
-# model = "<登録済みモデル名>"
-tier = "frontier"
+# 候補は優先順。供給元と model は具体的に書く（tier は使わない）。
+route_candidates = [
+  { source = "claude_oauth", model = "claude-opus-5-5" },
+  { source = "codex_oauth", model = "gpt-6-sol" },
+]
 max_turns = 70
 max_wall_secs = 900
 stream_retention_days = 30
 worker_reserve_five_hour = 0.90
-
-# 任意。登録済み provider に適合する経路を順に指定する。
-[[cos.fallbacks]]
-harness = "codex"
-llm_source = "codex_oauth"
-model = "gpt-6.1-sol"
-tier = "frontier"
 
 [cos.triage]
 policy_skill = "cos-inbox-triage"
@@ -47,7 +40,7 @@ orphan_ttl_hours = 24
 unreferenced_retention_days = 30
 ```
 
-`llm_source` は `claude_oauth` / `codex_oauth` / `celeris` / `openai_compatible:<id>` などの登録済み source を指定する。harness・source・provider・account・model の不整合は config 検証で拒否される。`[execution] max_cos_runs` の既定は 2。0 は専用並列枠を使わない設定であり、CoS の停止は `cos.enabled = false` で行う。CoS の経路・予約設定は daemon 起動時に解決されるため、運用者が設定変更後に再起動する。新しい設定の run で、session の照合条件が変われば旧 session を retire して DB の要約・履歴から再開する。quota 切れの固定 account を同じ経路の別 account に自動変更しない。`[[cos.fallbacks]]` を指定した順（最大8件）に試し、利用上限の応答でも同じ run・入力を次経路で再試行する。harness/source/account/model が変わると新しい session に要約・履歴・添付を渡す。全経路が使えなければ失敗本文に理由と再送の案内が出る。チャットの「CoS 実行経路」と run 詳細で実効経路を確認できる。
+`route_candidates` の `source` は `claude_oauth` / `codex_oauth` などの `[llm_sources]` に宣言済みの供給元を指定する。harness・source・account・model の不整合は config 検証で拒否される。`[execution] max_cos_runs` の既定は 2。0 は専用並列枠を使わない設定であり、CoS の停止は `cos.enabled = false` で行う。CoS の経路・予約設定は daemon 起動時に解決されるため、運用者が設定変更後に再起動する。新しい設定の run で、session の照合条件が変われば旧 session を retire して DB の要約・履歴から再開する。quota 切れの固定 account を同じ経路の別 account に自動変更しない。`route_candidates` を指定した順に試し、利用上限の応答でも同じ run・入力を次の候補で再試行する。harness/source/account/model が変わると新しい session に要約・履歴・添付を渡す。全経路が使えなければ失敗本文に理由と再送の案内が出る。チャットの「CoS 実行経路」と run 詳細で実効経路を確認できる。
 
 `worker_reserve_five_hour` は 0 より大きく 0.97 以下。CoS 有効時、Claude の観測済み5時間使用率がこの値以上なら通常 worker に新しく割り当てない。reset 後は解除し、観測不明なら通常どおり選ぶ。既に走っている worker は止めず、CoS も quota・ログイン制約は迂回しない。[代替経路と予約の ADR](../adr/2026-10-08-cos-source-fallback.md) を参照。
 
@@ -96,7 +89,7 @@ bash scripts/dev/cos-chat-live.sh "$PWD" "$CARGO_TARGET_DIR/debug" <data dir> fu
 ```
 
 - 引数が 4 つでない、または 4 つ目が `dry|full` 以外なら usage を出して exit 2。`<data dir>` は毎回新しい空の場所にする。
-- 試験用 provider は `concurrency = 4`（1 では CoS の turn が task worker と受信箱の triage の後ろで止まる）。
+- 試験用の供給元は `max_runs = 4`（1 では CoS の turn が task worker と受信箱の triage の後ろで止まる）。
 - 各 turn の `run_id` は `POST …/messages` の応答（queued では `null`）でなく、`GET /api/v1/chat/threads/{t}/messages` を
   `client_message_id` で引いて待つ。
 - 終わりに一時 daemon を process group ごと止め、`pgrep -f <data dir>` で残りが無いことを `steps.log` に書く。

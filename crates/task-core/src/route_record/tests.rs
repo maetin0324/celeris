@@ -76,10 +76,10 @@ fn route_record_schema_pinned() {
     assert_eq!(ROUTE_OPTIONS_SCHEMA, "celeris.route-options/1");
     assert_eq!(ROUTE_DECISION_SCHEMA, "celeris.route-decision/1");
     assert_eq!(ROUTE_OUTCOME_SCHEMA, "celeris.route-outcome/1");
-    assert_eq!(TASK_BRIEF_TEMPLATE, "task-brief/2");
+    assert_eq!(TASK_BRIEF_TEMPLATE, "task-brief/3");
     assert_eq!(
         f.brief,
-        "# 要求\nタイトル: T\n目的: O\n\n# 期待する成果物\n受け入れ条件:\n決定的な検査なし\nchecks:\n決定的な検査なし\ndone_when:\nなし\noutputs:\nなし\n\n# 触る範囲\n予定 path:\n範囲の記述なし\nrepo:\n範囲の記述なし\n書き込み集合:\n範囲の記述なし\n\n# 置かれた位置\n- genre: 不明\n- kind: 不明\n- harness: 不明\n- lane: 不明\n- depth: 不明\n- phase_index: 不明\n- deps_n: 不明\n\n# 過去の試行\n初回\nrepair: 不明"
+        "# 要求\nタイトル: T\n目的: O\n\n# 期待する成果物\n受け入れ条件:\n決定的な検査なし\nchecks:\n決定的な検査なし\ndone_when:\nなし\noutputs:\nなし\n\n# 触る範囲\n予定 path:\n範囲の記述なし\nrepo:\n範囲の記述なし\n書き込み集合:\n範囲の記述なし\n\n# 置かれた位置\n- project: 不明\n- genre: 不明\n- kind: 不明\n- harness: 不明\n- lane: 不明\n- depth: 不明\n- phase_index: 不明\n- deps_n: 不明\n\n# 過去の試行\n初回\nrepair: 不明"
     );
     assert_eq!(
         f.aux,
@@ -123,7 +123,7 @@ fn route_record_schema_pinned() {
     );
     assert_eq!(
         f.hash,
-        "sha256:3574d17f410b6a366f67b61ea1a871cc6ba193dc4458b41a5d3f4ef05f7ad20d"
+        "sha256:da5704c36693709b084a3652f5d04b5ee248fecf8374770029ae3f4c253a6c0b"
     );
 }
 

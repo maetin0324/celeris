@@ -730,6 +730,7 @@ impl Dispatcher {
                         .map(|wu| wu.id.clone())
                         .unwrap_or_else(|| task.id.to_string()),
                 },
+                None,
             ) {
                 Ok(f) => Some(task_core::RouteFeaturesRef {
                     schema: f.schema,

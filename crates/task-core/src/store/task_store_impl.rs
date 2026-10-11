@@ -29,8 +29,10 @@ impl TaskStore for SqliteStore {
     fn record_route_features(
         &self,
         subject: crate::route_extract::Subject,
+        context: Option<crate::route_extract::RouteFeatureContext>,
     ) -> Result<crate::route_record::TaskFeatures, StoreError> {
-        let features = crate::route_extract::features_for_subject(self, subject.clone(), None)?;
+        let features =
+            crate::route_extract::features_for_subject(self, subject.clone(), None, context)?;
         let created_at = time::OffsetDateTime::now_utc()
             .format(&time::format_description::well_known::Rfc3339)
             .map_err(|e| StoreError::Invalid(format!("format routing feature timestamp: {e}")))?;

@@ -7,6 +7,8 @@ tasks: [01M4M8D4ANYGCWVZ0A0WSW53X7]
 
 # done task の取り残し調査
 
+設計決定は [ADR: done task の変更を取り残さない](../adr/2026-10-11-stranded-done-branches.md) を参照。
+
 ## 原因
 
 第一の根因は、delivery の開始が task の done 遷移や「review 合格」全体に結び付いていないこと。`crates/task-dispatch/src/dispatcher/review_spawn.rs:620-630` は `reviewer_run` が `Some` の場合にだけ `task_ops::delivery::begin` を呼ぶ。`reviewer_run` は `needs_reviewer_run(&task)` が真、つまり既存の acceptance に `Check::Reviewer` があり、さらに reviewer を選べた場合にだけ作られる（`crates/task-dispatch/src/review.rs:169-174`、`review_spawn.rs:345-354`）。Reviewer 条件のない task の review は他の check で合格して done になれても `begin` を通らない。delivery 自身が追加する部署内 reviewer criterion は `begin` の後（`crates/task-ops/src/delivery.rs:375-376`）なので、これを開始条件にできない。

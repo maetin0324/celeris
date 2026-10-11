@@ -3,6 +3,7 @@
 実行・計画・木・決定の要求のエンドポイントは §3.125 にある。
 
 - 状態: **Accepted**（人間の決定 H1 / H5〜H7。celeris 側の ADR-0013、GUI 側の ADR-GUI-0001）。改訂日 2026-09-14
+- 改訂: 2026-10-11（ADR 2026-10-11-task-wait-reasons D4・D6）— **破壊的。v1 のまま**。`DaemonSnapshot.awaiting_human[]`・`awaiting_children[]`・`unroutable[]` を消し、`DaemonSnapshot.task_waits[]` の kind（`review_awaiting_human`・`delegated_children`・`unroutable`）へ寄せた（§3.20）。
 - 改訂: 2026-10-08（ADR 2026-10-08-account-concurrency-limits）— **追加と deprecate。v1 のまま**。エンドポイント 216:
   `PATCH /accounts/{adapter}/{id}`（アカウントごとの上限 `max_runs`。§3.29a）。`AccountView` に `max_runs` /
   `effective_max_runs` / `max_runs_source` / `implicit` / `providers` を追加し、`dir` は暗黙アカウントで `null` になる。
@@ -564,7 +565,7 @@ browser の制御（`crate::browser_control`）の 6 本は、route を定数 `B
 `{approvals, questions, drafts, attention, browser_waits, decisions, counts}`（`counts` は各配列の件数と
 DB 全体の status 別件数 `by_status`）。`attention[]` は `type` で区別する（`failed` / `requeue_limit_near` /
 `unroutable` / `cluster_unavailable` / `phase_checkpoint` / `plan_approval` / `delivery_skipped`）。
-`type: "unroutable"` はデーモンのスナップショット（3.20）から合成する。スナップショットがまだ無ければ出ない。
+`type: "unroutable"` はデーモンのスナップショット（3.20）の `task_waits[]` の `unroutable` から合成する。スナップショットがまだ無ければ出ない。
 
 - `questions[].approval_id`: その質問に対応する**未決の** `approvals` の id（§3.56）。GUI はこれで
   `POST /approvals/{id}/decide`（3.57）へ直接リンクできる。行がまだ無い、または既に決定済みなら `null`。
@@ -967,7 +968,7 @@ ADR-0017 M4: `POST /reload` に成功すると、次の tick のスナップシ�
 {"now":"…","snapshot":{"instance_id":"01J…","pid":1234,"hostname":"lab-01","started_at":"…","last_tick_at":"…","ticks":8812,"tick_ms":2000,
   "in_flight":[{"task_id":"01J…","run_id":"01J…","provider":"claude-a","kind":"worker","since":"…"}],
   "cooldowns":[{"provider":"claude-b","until":"…","reason":"throttled"}],
-  "awaiting_human":["01J…"],"awaiting_children":["01J…"],"unroutable":[],
+  "task_waits":[{"task_id":"01J…","wait":{"kind":"review_awaiting_human"}},{"task_id":"01J…","wait":{"kind":"delegated_children","task_ids":["01J…"]}}],
   "reports":null,"approvals_pending":0,"decisions_open":0,
   "providers":[{"id":"claude-a","adapter":"claude-code","tiers":["frontier","standard","cheap"],"concurrency":2,"model":"claude-sonnet-5","env_keys":[],"in_use":1,"in_use_cos":0,"account_pool":false}],
   "clusters":[],"accounts_root":null,"max_runs_per_account":null,"accounts_roots":{},"accounts":[]}}
@@ -980,9 +981,10 @@ ADR-0017 M4: `POST /reload` に成功すると、次の tick のスナップシ�
 - `clusters[]`（ADR-0018）、`accounts_root` / `max_runs_per_account` / `accounts_roots` / `accounts[]`（ADR-0024 / ADR-0025）、
   `implicit_accounts[]`（`{source, providers[], in_use}`。LLM source 単位の暗黙アカウント。ADR 2026-10-08-account-concurrency-limits）、
   `scratch`（scratch pool の観測値。無ければ省略。`GET /metrics/scratch` と同じ。ADR-0075 D6）も載る。
-- `awaiting_human[]` は承認待ちで延期中のタスク、`awaiting_children[]` は**委譲した子が終わるのを待っている親**
-  （どちらも `reviewing` のままだが理由が違う。ADR-0023 D3）。GUI はこれを見て「判定中」と「部下待ち」を区別する
-  （`reviewing` かつ子が非終端、という再計算を GUI 側でしない）。
+- `task_waits[]`（ADR 2026-10-11-task-wait-reasons D4）は、この tick に dispatcher のメモリだけで決まった見送りの理由
+  （`{task_id, wait: TaskWait}`。task_id 順・1 task に 1 件）。承認待ちで延期中の reviewing は `review_awaiting_human`、
+  委譲した子を待つ reviewing の親は `delegated_children`（未完の子の id）、設定に合う経路が無い ready は `unroutable`。
+  旧 `awaiting_human[]`・`awaiting_children[]`・`unroutable[]` は消した（同じ情報が `task_waits` の kind にある）。
 - cooldown は `ProviderPolicy::cooldowns(now) -> Vec<Cooldown{provider, until: Instant, reason: CooldownReason}>` で取り、`Instant` を壁時計に直す。`reason` の語彙は `throttled | auth_failed | exhausted`（`Spawn` は `provider_failure_outcome` が `Exhausted` に写すので cooldown の理由としては現れない。`ProviderThrottled.reason` には `spawn` も入りうる）。
 - `last_tick_at` が `now` から `3 × tick_ms` 以上古ければ GUI は「ディスパッチャが遅延」と表示する（API は判定しない）。
 - API に繋がらないこと自体が「celeris 停止」を意味する（GUI 側で表示）。
@@ -3952,7 +3954,7 @@ GUI はこれを契約として扱ってよい（ADR-0013 の実装メモ）。
 
 **デーモンのスナップショット**
 - `DaemonSnapshot.in_flight[]` の `kind: "reviewer"` の `run_id` は **Reviewer run 自身の id**（`WorkerStarted{role: reviewer}` と同じ。ADR-0014 D1）。
-- `DaemonSnapshot.unroutable[]` は「設定に合うプロバイダ／クラスタが無い」タスクだけ。クラスタの多重接続待ち（cooldown 中を含む）のタスクはここには**入らない**（受信箱の `attention[].cluster_unavailable` が代わりに知らせる。ADR-0018 実装メモ M8）。
+- `DaemonSnapshot.task_waits[]` の `unroutable` は「設定に合うプロバイダ／クラスタが無い」タスクだけ。クラスタの多重接続待ち（cooldown 中を含む）のタスクは `cluster` で、`unroutable` には**ならない**（受信箱の `attention[].cluster_unavailable` が代わりに知らせる。ADR-0018 実装メモ M8）。
 
 **SSE**
 - 送る順は `hello` →（必要なら）`reset` → `task.event` …（§4）。

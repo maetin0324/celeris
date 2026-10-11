@@ -163,7 +163,7 @@ describe("badge", () => {
   });
 
   it("approvals_pending が無いとき null（0 にしない）", () => {
-    expect(daemonBadges.select({ awaiting_human: [] } as never).approvalsPending).toBeNull();
-    expect(daemonBadges.select({ awaiting_human: [], approvals_pending: 0 } as never).approvalsPending).toBe(0);
+    expect(daemonBadges.select({ task_waits: [] } as never).approvalsPending).toBeNull();
+    expect(daemonBadges.select({ task_waits: [], approvals_pending: 0 } as never).approvalsPending).toBe(0);
   });
 });

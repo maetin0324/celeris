@@ -69,13 +69,6 @@ impl Dispatcher {
                 .to_string(),
             })
             .collect();
-        let mut awaiting_human: Vec<TaskId> = self.awaiting_human.iter().copied().collect();
-        awaiting_human.sort();
-        // ADR-0023 D3: 委譲した子を待っている親（`reviewing` のまま）。GUI が「判定中」と区別して出せるように。
-        let mut awaiting_children: Vec<TaskId> = self.awaiting_children.keys().copied().collect();
-        awaiting_children.sort();
-        let mut unroutable: Vec<TaskId> = self.unroutable.iter().copied().collect();
-        unroutable.sort();
         let task_waits = self.snapshot_task_waits();
         let providers = publisher
             .providers
@@ -141,9 +134,6 @@ impl Dispatcher {
             tick_ms: publisher.tick_ms,
             in_flight,
             cooldowns,
-            awaiting_human,
-            awaiting_children,
-            unroutable,
             task_waits,
             reports: None,
             // ADR-0033 D5（Phase 26）: 未読の件数は API が応答を組むときに埋める（`reports` と同じ理由）。

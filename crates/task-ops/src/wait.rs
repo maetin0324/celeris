@@ -1,14 +1,14 @@
 //! ADR 2026-10-11-task-wait-reasons D3〜D5: 一覧・詳細・木の応答に載せる task の待ちの理由（`waits`）を組む。
 //!
 //! DB の理由は task-core の `db_waits`（`TaskStore::db_waits_for`）と `plan_waits`、人の gate（D12）は events を
-//! 読む [`gate_waits`]、dispatcher のメモリの理由は `DaemonSnapshot.task_waits`（[`MemoryWaits`]）から合わせる。
+//! 読む [`human_gate_waits`]、dispatcher のメモリの理由は `DaemonSnapshot.task_waits`（[`MemoryWaits`]）から合わせる。
 //! どれも決定的（LLM なし）で、dispatcher と同じ関数を呼ぶ。画面用の別の推測は作らない。
 
 use std::collections::HashMap;
 
 use task_core::{
-    ChildFacts, DecisionKind, DecisionStatus, Event, HumanGateKind, Status, Task, TaskId,
-    TaskStore, TaskWait, WorkUnitRow,
+    ChildFacts, DecisionKind, DecisionStatus, Event, ExecutionPlanRow, HumanGateKind, StageReview,
+    Status, Task, TaskId, TaskStore, TaskWait, WorkUnitRow,
 };
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
@@ -52,24 +52,48 @@ pub fn is_runnable(task: &Task, waits: &[TaskWait]) -> bool {
     task.status == Status::Ready && waits.is_empty()
 }
 
-/// D12: 人の gate（計画の承認・段の後の途中確認）。`events` はその task の events。
-pub fn gate_waits(task: &Task, events: &[(u64, Event)]) -> Vec<TaskWait> {
-    if task.status != Status::Blocked {
-        return Vec::new();
-    }
-    if crate::plan_gate::latest_plan_approval(task, events).is_some() {
+/// D12: 人の gate（計画の承認・段の `review: human`・途中確認）。dispatcher の `human_gate_hold` もこの結果が
+/// 空でないかで unit を止める（判定は 1 か所）。`plan` はその task の有効な計画、`events` はその task の events。
+/// - 有効な計画の版が PlanGate を通っていない（`PlanGateState::Pending`）か、計画の承認待ちで止まっている
+///   → `PlanApproval`。
+/// - 段の後で止まっている（`phase_gate::is_awaiting_human`）→ 直近の `PhaseReported.phase` が /3 の計画の段で
+///   `review: human` なら `StageReview{stage: 段 key}`、そうでなければ（/2 の `pause_after` など）
+///   `PhaseCheckpoint{stage: phase}`。どちらも既存の事実だけで決め、推測しない。
+pub fn human_gate_waits(
+    task: &Task,
+    plan: Option<&ExecutionPlanRow>,
+    events: &[(u64, Event)],
+) -> Vec<TaskWait> {
+    let plan_pending =
+        plan.is_some_and(|p| !crate::plan_gate::plan_gate_state(p, events).allows_dispatch());
+    if plan_pending || crate::plan_gate::is_awaiting_plan_approval(task, events) {
         return vec![TaskWait::HumanGate {
             gate: HumanGateKind::PlanApproval,
             stage: None,
         }];
     }
-    if let Some(info) = crate::phase_gate::latest_phase_checkpoint(task, events) {
-        return vec![TaskWait::HumanGate {
-            gate: HumanGateKind::PhaseCheckpoint,
-            stage: Some(info.report.phase.clone()),
-        }];
+    if !crate::phase_gate::is_awaiting_human(task, events) {
+        return Vec::new();
     }
-    Vec::new()
+    let phase = events.iter().rev().find_map(|(_, e)| match e {
+        Event::PhaseReported { report, .. } => Some(report.phase.clone()),
+        _ => None,
+    });
+    let stage_review = phase.as_deref().is_some_and(|key| {
+        plan.is_some_and(|p| {
+            p.spec.schema == task_core::EXECUTION_PLAN_SCHEMA_V3
+                && p.spec
+                    .stages
+                    .iter()
+                    .any(|s| s.key == key && s.review == StageReview::Human)
+        })
+    });
+    let gate = if stage_review {
+        HumanGateKind::StageReview
+    } else {
+        HumanGateKind::PhaseCheckpoint
+    };
+    vec![TaskWait::HumanGate { gate, stage: phase }]
 }
 
 /// D11: 節点の未回答の `needed_before: self` の決定の key（dispatcher の `decision_self_hold` と同じ条件）。
@@ -187,9 +211,12 @@ pub fn task_waits(
             &children_by_parent,
             &mut decisions,
         )?);
-        if task.status == Status::Blocked {
-            waits.extend(gate_waits(task, &store.events_for(task.id)?));
-        }
+        let plan = store.execution_plan_active(task.id)?;
+        waits.extend(human_gate_waits(
+            task,
+            plan.as_ref(),
+            &store.events_for(task.id)?,
+        ));
         if let Some(w) = memory.get(task.id)
             && !waits.contains(w)
         {

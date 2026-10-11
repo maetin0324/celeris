@@ -20,14 +20,6 @@ pub struct DaemonSnapshot {
     pub tick_ms: u64,
     pub in_flight: Vec<InFlight>,
     pub cooldowns: Vec<CooldownView>,
-    /// 人間の承認待ちでレビューを延期している reviewing タスク。
-    pub awaiting_human: Vec<TaskId>,
-    /// ADR-0023 D3: 委譲した子が終わるのを待っている親（`reviewing` のまま。id 昇順）。
-    /// 「自分の判定待ち」と区別するための観測値。古いスナップショットには無いので既定は空。
-    #[serde(default)]
-    pub awaiting_children: Vec<TaskId>,
-    /// 設定に合うプロバイダが無い ready タスク（この tick の判定）。
-    pub unroutable: Vec<TaskId>,
     /// ADR 2026-10-11-task-wait-reasons D4: この tick に dispatcher のメモリだけで決まった見送りの理由（M1〜M9。
     /// 枠満杯・経路なし・クラスタ・write-set・バックオフ・disk critical・委譲した子待ち・人の承認待ち）。task_id 順、
     /// 1 task に 1 件。DB で決まる理由（`task_core::db_waits` / `plan_waits`）は入れない。

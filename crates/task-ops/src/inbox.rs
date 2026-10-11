@@ -1119,8 +1119,12 @@ fn build_attention(
     }
 
     if let Some(snap) = snapshot {
-        for tid in &snap.unroutable {
-            if let Some(t) = by_id.get(tid) {
+        // ADR 2026-10-11-task-wait-reasons D4: 経路なしは `task_waits` の `Unroutable`（task_id 順）。
+        for w in &snap.task_waits {
+            if !matches!(w.wait, task_core::TaskWait::Unroutable { .. }) {
+                continue;
+            }
+            if let Some(t) = by_id.get(&w.task_id) {
                 items.push(AttentionItem::Unroutable {
                     task: view::task_ref(t),
                     hint: t.worker_hint.clone(),

@@ -1,5 +1,7 @@
 ---
 tasks: [01M4M8D4AP4YY4F9TV09HG30SJ]
+title: provider 層の再設計: 現状棚卸し
+updated: 2026-10-11
 status: running
 ---
 # provider 層の再設計: 現状棚卸し

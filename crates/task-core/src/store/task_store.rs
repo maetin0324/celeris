@@ -49,6 +49,12 @@ pub trait TaskStore:
     + crate::cron::CronJobStore
     + crate::store::ModelCatalogStore
 {
+    /// Extract and persist a content-addressed routing feature snapshot for a dispatch subject.
+    fn record_route_features(
+        &self,
+        subject: crate::route_extract::Subject,
+        context: Option<crate::route_extract::RouteFeatureContext>,
+    ) -> Result<crate::route_record::TaskFeatures, StoreError>;
     /// Authoritative per-account concurrency overrides (not event projections).
     fn account_limits(&self) -> Result<Vec<super::AccountLimit>, StoreError>;
     /// `None` clears an override; values must be in 1..=32.

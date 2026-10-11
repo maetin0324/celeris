@@ -1180,6 +1180,7 @@ impl Dispatcher {
             .reasoning_effort_for_tier(hint.tier)
             .filter(|_| adapter.supports_reasoning_effort());
         let review_record = task_core::RoutingRecord {
+            features: None,
             org_node: department.clone(),
             harness: Some("reviewer".to_string()),
             decision: task_core::LaneDecision {

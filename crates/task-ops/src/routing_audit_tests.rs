@@ -54,6 +54,7 @@ fn decided(task: &Task, run_id: &str, optimizer: Option<RoutingTraceV1>) -> Even
     Event::RoutingDecided {
         run_id: run_id.into(),
         record: Box::new(RoutingRecord {
+            features: None,
             org_node: None,
             harness: None,
             decision,

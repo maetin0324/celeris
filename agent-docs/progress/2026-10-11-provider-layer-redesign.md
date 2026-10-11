@@ -61,7 +61,7 @@ status: running
 
 ## 設計の要約
 
-[決定 ADR](../adr/2026-10-11-provider-source-harness-layers.md) は設定を LLM source・harness・provider relation の三層に分け、provider は明示 source × harness × model の関係だけを持つと決めた。derived/unknown source、provider concurrency/kind/account_pool、旧 tiers/tier_models、provider 単位の concurrency/in_use_cos API field と互換分岐は削除し、残存する旧 config は読み込みエラーにする。候補列挙は source × harness × model の組で行い、routing の優先順位は後続 task の責務とする。API は source・account・harness・provider relation を分離し、web を正本 UI として旧 gui の重複画面は削除する。本番 config は人が deploy 手順で書き換え、provider ID の stats/cooldown は対応が明確な場合だけ migration し、SQLite は migration、events は追記専用、credential は保持する。
+[決定 ADR](../adr/2026-10-11-llm-source-harness-selection.md) は provider を廃止し、LLM source と harness をそれぞれ宣言する。provider ID・`[[providers]]`・`providers.d` は読み込みエラーにして新しい宣言を案内し、警告や切替 flag の互換は置かない。harness は task の構造化欄（明示 ID、`worker_hint.adapter` の解決値、genre/role、execution class の既定）から決定的に選び、LLM は呼ばない。source と model は選ばれた harness が受け付ける source kind・API format に合う `source × model` の候補から選ぶ。根拠の観測が無い間は source ID・model ID の辞書順の先頭を暫定既定とする。結合は直接接続するか、`llm-proxy` に明示登録された変換経路だけを使い、未登録の組は dispatch 前に拒否する。削除する欄と仕組み（tiers/tier_models・provider concurrency・`in_use_cos`・`account_pool`・derived/unknown source など）は ADR の一覧に従う。`account_limits` は `(source_id, account_id)` へ key を更新して維持する。
 
 ## harness と source の対応
 

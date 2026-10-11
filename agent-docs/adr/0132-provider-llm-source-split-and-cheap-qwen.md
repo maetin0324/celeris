@@ -105,6 +105,6 @@ task `01M44G5KKF8VJ0ARJH8J843T7D`。進捗は [2026-10-04-cheap-local-first](../
 [ADR 2026-10-08 account-concurrency-limits](2026-10-08-account-concurrency-limits.md) が D1 の「`concurrency` は道具の欄として維持する」と付記 L2(c)・L6 を上書きする。`concurrency` は deprecated（読めて警告、dispatch では見ない）。
 ローカルの行の空きはその行の LLM source の暗黙アカウント（`implicit/<llm source id>`。同じ source を使う行は 1 件を共有する）の上限で判定し、既定は `[accounts] max_runs_per_account`（旧 `concurrency` は引き継がない）。上限はアカウント画面で変える。
 
-## 付記（2026-10-11、provider/source/harness の三層化）
+## 付記（2026-10-11、provider 廃止と source/harness の宣言）
 
-[ADR 2026-10-11 provider source harness layers](2026-10-11-provider-source-harness-layers.md) が、本 ADR の derived source・旧 tiers/tier_models・provider concurrency と、source/harness/provider の責務に関する決定を置き換える。cheap の候補列挙を含む routing の優先順位は同 ADR の境界を受け、routing 作り直し task で定義する。
+[ADR 2026-10-11 LLM source と harness の選択](2026-10-11-llm-source-harness-selection.md) が、本 ADR の derived source・旧 tiers/tier_models・provider concurrency と、source/harness/provider の責務に関する決定を置き換える。provider は廃止し、LLM source・harness・source と model の選択は新 ADR の各節に従う。cheap の候補列挙を含む routing の優先順位の詳細は、routing 作り直し task で定義する。

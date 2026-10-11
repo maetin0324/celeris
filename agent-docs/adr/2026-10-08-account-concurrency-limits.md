@@ -220,6 +220,6 @@ tasks: [01M4D7RVKXY9A967ZXDADWVHQJ]
 - web のアカウント画面で上限を編集でき、プロバイダ画面から入力欄が消えていること（画面試験）。
 - `cargo clippy --workspace -- -D warnings`。本番 config・systemd・daemon・本番 DB は変更しない（本番の移行は人が docs/ops の手順で行う）。
 
-## 付記（2026-10-11、provider/source/harness の三層化）
+## 付記（2026-10-11、provider 廃止と source/harness の宣言）
 
-[ADR 2026-10-11 provider source harness layers](2026-10-11-provider-source-harness-layers.md) が、provider concurrency の廃止に加え、source/account の所有関係、provider API field、implicit account の source key に関する本 ADR の該当決定を置き換える。旧 provider 欄の警告付き受け入れは行わず、移行後は設定読み込みエラーとする。アカウント上限の意味と既存 DB/event/credential の保全は新 ADR の移行方針に従う。
+[ADR 2026-10-11 LLM source と harness の選択](2026-10-11-llm-source-harness-selection.md) が、provider concurrency の廃止に加え、account の所有関係（source 所有）、provider API field、暗黙 account の source key に関する本 ADR の該当決定を置き換える。provider 欄は削除し、残った旧 provider 欄は設定読み込みエラーとする（警告付きの受け入れはしない）。上限は source/account の admission として数え、既存の上限値は `account_limits` の `(source_id, account_id)` へ移す（新 ADR の「LLM source」「削除する欄と仕組み」）。

@@ -6,6 +6,196 @@ use task_core::{
 };
 use time::OffsetDateTime;
 
+/// Explicit human disposition. Reasons are retained in the current row and append-only event log.
+pub fn discard(
+    store: &dyn TaskStore,
+    task_id: TaskId,
+    repo_id: RepoId,
+    reason: &str,
+    actor: &str,
+    now: OffsetDateTime,
+) -> Result<(), StoreError> {
+    set_disposition(
+        store,
+        task_id,
+        repo_id,
+        TaskRepoIntegrationStatus::Discarded,
+        reason,
+        actor,
+        now,
+    )
+}
+
+pub fn hold(
+    store: &dyn TaskStore,
+    task_id: TaskId,
+    repo_id: RepoId,
+    reason: &str,
+    actor: &str,
+    now: OffsetDateTime,
+) -> Result<(), StoreError> {
+    set_disposition(
+        store,
+        task_id,
+        repo_id,
+        TaskRepoIntegrationStatus::Held,
+        reason,
+        actor,
+        now,
+    )
+}
+
+pub fn reopen(
+    store: &dyn TaskStore,
+    task_id: TaskId,
+    repo_id: RepoId,
+    actor: &str,
+    now: OffsetDateTime,
+) -> Result<(), StoreError> {
+    let mut state = store
+        .task_integration_get(task_id, repo_id)?
+        .ok_or_else(|| StoreError::Invalid("task integration not found".into()))?;
+    if !matches!(
+        state.state,
+        TaskRepoIntegrationStatus::Held | TaskRepoIntegrationStatus::Discarded
+    ) {
+        return Err(StoreError::Invalid(
+            "only held or discarded integrations can be reopened".into(),
+        ));
+    }
+    state.state = TaskRepoIntegrationStatus::Unintegrated;
+    state.reason = None;
+    state.actor = actor.to_owned();
+    state.checked_at = now;
+    state.updated_at = now;
+    store.task_integration_upsert(&state)
+}
+
+fn set_disposition(
+    store: &dyn TaskStore,
+    task_id: TaskId,
+    repo_id: RepoId,
+    disposition: TaskRepoIntegrationStatus,
+    reason: &str,
+    actor: &str,
+    now: OffsetDateTime,
+) -> Result<(), StoreError> {
+    if reason.trim().is_empty() {
+        return Err(StoreError::Invalid("a non-empty reason is required".into()));
+    }
+    if actor.trim().is_empty() {
+        return Err(StoreError::Invalid("a non-empty actor is required".into()));
+    }
+    let mut state = store
+        .task_integration_get(task_id, repo_id)?
+        .ok_or_else(|| StoreError::Invalid("task integration not found".into()))?;
+    state.state = disposition;
+    state.reason = Some(reason.trim().to_owned());
+    state.actor = actor.to_owned();
+    state.checked_at = now;
+    state.updated_at = now;
+    store.task_integration_upsert(&state)
+}
+
+pub struct MergeRequest<'a> {
+    pub task_id: TaskId,
+    pub repo_id: RepoId,
+    pub repo: &'a Path,
+    pub branch: &'a str,
+    pub head: &'a str,
+    pub default_branch: &'a str,
+    pub actor: &'a str,
+    pub now: OffsetDateTime,
+}
+
+/// Confirm merge completion using git ancestry. If it is already on the default branch this is
+/// idempotent; otherwise create the standard integration request for the existing merge flow.
+pub fn merge(store: &dyn TaskStore, input: &MergeRequest<'_>) -> Result<bool, StoreError> {
+    use task_core::integration_request::{FileIntent, IntegrationRequest, SideIntent};
+    let MergeRequest {
+        task_id,
+        repo_id,
+        repo,
+        branch,
+        head,
+        default_branch,
+        actor,
+        now,
+    } = input;
+    let mut state = store
+        .task_integration_get(*task_id, *repo_id)?
+        .ok_or_else(|| StoreError::Invalid("task integration not found".into()))?;
+    let actual_head = Command::new("git")
+        .args(["-C"])
+        .arg(repo)
+        .args(["rev-parse", &format!("refs/heads/{branch}")])
+        .output()
+        .map_err(|e| StoreError::Invalid(format!("git rev-parse failed: {e}")))?;
+    let actual_head = String::from_utf8_lossy(&actual_head.stdout)
+        .trim()
+        .to_owned();
+    if actual_head.is_empty()
+        || !actual_head.eq_ignore_ascii_case(head)
+        || !actual_head.bytes().all(|b| b.is_ascii_hexdigit())
+    {
+        return Err(StoreError::Invalid(
+            "task branch head changed; refresh the integration record".into(),
+        ));
+    }
+    if ancestor(repo, head, default_branch) {
+        state.state = TaskRepoIntegrationStatus::Integrated;
+        state.reason = None;
+        state.actor = (*actor).to_owned();
+        state.checked_at = *now;
+        state.updated_at = *now;
+        store.task_integration_upsert(&state)?;
+        return Ok(true);
+    }
+    let target = Command::new("git")
+        .args(["-C"])
+        .arg(repo)
+        .args(["rev-parse", &format!("refs/heads/{default_branch}")])
+        .output()
+        .map_err(|e| StoreError::Invalid(format!("git rev-parse default branch failed: {e}")))?;
+    let target_sha = String::from_utf8_lossy(&target.stdout).trim().to_owned();
+    if !target.status.success() {
+        return Err(StoreError::Invalid(
+            "default branch cannot be resolved".into(),
+        ));
+    }
+    let request = IntegrationRequest {
+        target_branch: (*default_branch).into(),
+        target_sha: target_sha.clone(),
+        source_branch: (*branch).into(),
+        source_sha: (*head).into(),
+        merge_base: None,
+        conflict_files: vec![],
+        intent: vec![FileIntent {
+            path: ".".into(),
+            target: SideIntent {
+                branch: (*default_branch).into(),
+                path: ".".into(),
+                commits: vec![],
+                diffstat: None,
+                unavailable: Some("review required by explicit merge request".into()),
+            },
+            source: SideIntent {
+                branch: (*branch).into(),
+                path: ".".into(),
+                commits: vec![],
+                diffstat: None,
+                unavailable: Some("review required by explicit merge request".into()),
+            },
+        }],
+        reason: format!("Explicit merge requested by {actor}"),
+        recommendation: "Use the existing integration review and merge flow".into(),
+        actions: vec![],
+        candidate_sha: None,
+    };
+    store.integration_request_record(*task_id, &request, "delivery")?;
+    Ok(false)
+}
+
 /// Repository and recorded task branch information resolved by the daemon from its worktree DB.
 #[derive(Debug, Clone)]
 pub struct BranchRecord {
@@ -172,6 +362,149 @@ mod tests {
                 .expect("row")
                 .state,
             TaskRepoIntegrationStatus::Integrated
+        );
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn stranded_discard_hold_reopen_require_reason_and_append_history() {
+        let store = SqliteStore::open_in_memory().expect("store");
+        let task_id = TaskId::new();
+        let repo_id = RepoId::new();
+        let now = OffsetDateTime::from_unix_timestamp(1_800_000_000).expect("clock");
+        store
+            .task_integration_upsert(&TaskRepoIntegrationState {
+                task_id,
+                repo_id,
+                branch: "topic".into(),
+                head_sha: "abc".into(),
+                state: TaskRepoIntegrationStatus::Unintegrated,
+                reason: None,
+                actor: "sweep".into(),
+                checked_at: now,
+                updated_at: now,
+            })
+            .expect("seed");
+        assert!(discard(&store, task_id, repo_id, "  ", "alice", now).is_err());
+        discard(&store, task_id, repo_id, "obsolete", "alice", now).expect("discard");
+        hold(&store, task_id, repo_id, "  ", "bob", now).expect_err("hold reason required");
+        hold(&store, task_id, repo_id, "waiting", "bob", now).expect("hold");
+        reopen(&store, task_id, repo_id, "carol", now).expect("reopen");
+        let current = store
+            .task_integration_get(task_id, repo_id)
+            .expect("get")
+            .expect("state");
+        assert_eq!(current.state, TaskRepoIntegrationStatus::Unintegrated);
+        assert_eq!(current.actor, "carol");
+        assert_eq!(store.events_for(task_id).expect("events").len(), 4);
+    }
+
+    #[test]
+    fn stranded_merge_is_idempotent_when_head_is_already_on_default_branch() {
+        let dir = std::env::temp_dir().join(format!("stranded-merge-{}", TaskId::new()));
+        fs::create_dir_all(&dir).expect("fixture");
+        git(&dir, &["init", "-b", "main"]);
+        git(&dir, &["config", "user.email", "test@example.invalid"]);
+        git(&dir, &["config", "user.name", "test"]);
+        fs::write(dir.join("base"), "base").expect("write");
+        git(&dir, &["add", "base"]);
+        git(&dir, &["commit", "-m", "base"]);
+        let head = git(&dir, &["rev-parse", "HEAD"]);
+        let store = SqliteStore::open_in_memory().expect("store");
+        let task_id = TaskId::new();
+        let repo_id = RepoId::new();
+        let now = OffsetDateTime::from_unix_timestamp(1_800_000_000).expect("clock");
+        store
+            .task_integration_upsert(&TaskRepoIntegrationState {
+                task_id,
+                repo_id,
+                branch: "main".into(),
+                head_sha: head.clone(),
+                state: TaskRepoIntegrationStatus::Unintegrated,
+                reason: None,
+                actor: "sweep".into(),
+                checked_at: now,
+                updated_at: now,
+            })
+            .expect("seed");
+        let request = MergeRequest {
+            task_id,
+            repo_id,
+            repo: &dir,
+            branch: "main",
+            head: &head,
+            default_branch: "main",
+            actor: "alice",
+            now,
+        };
+        assert!(merge(&store, &request).expect("merge"));
+        let event_count = store.events_for(task_id).expect("events").len();
+        assert!(merge(&store, &request).expect("repeat"));
+        assert_eq!(
+            store.events_for(task_id).expect("events").len(),
+            event_count
+        );
+        assert_eq!(
+            store
+                .task_integration_get(task_id, repo_id)
+                .expect("get")
+                .expect("state")
+                .state,
+            TaskRepoIntegrationStatus::Integrated
+        );
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn stranded_merge_routes_unmerged_head_to_existing_integration_request() {
+        let dir = std::env::temp_dir().join(format!("stranded-request-{}", TaskId::new()));
+        fs::create_dir_all(&dir).expect("fixture");
+        git(&dir, &["init", "-b", "main"]);
+        git(&dir, &["config", "user.email", "test@example.invalid"]);
+        git(&dir, &["config", "user.name", "test"]);
+        fs::write(dir.join("base"), "base").expect("write");
+        git(&dir, &["add", "base"]);
+        git(&dir, &["commit", "-m", "base"]);
+        git(&dir, &["switch", "-c", "topic"]);
+        fs::write(dir.join("change"), "change").expect("write");
+        git(&dir, &["add", "change"]);
+        git(&dir, &["commit", "-m", "change"]);
+        let head = git(&dir, &["rev-parse", "HEAD"]);
+        let store = SqliteStore::open_in_memory().expect("store");
+        let task_id = TaskId::new();
+        let repo_id = RepoId::new();
+        let now = OffsetDateTime::from_unix_timestamp(1_800_000_000).expect("clock");
+        store
+            .task_integration_upsert(&TaskRepoIntegrationState {
+                task_id,
+                repo_id,
+                branch: "topic".into(),
+                head_sha: head.clone(),
+                state: TaskRepoIntegrationStatus::Unintegrated,
+                reason: None,
+                actor: "sweep".into(),
+                checked_at: now,
+                updated_at: now,
+            })
+            .expect("seed");
+        let request = MergeRequest {
+            task_id,
+            repo_id,
+            repo: &dir,
+            branch: "topic",
+            head: &head,
+            default_branch: "main",
+            actor: "alice",
+            now,
+        };
+        assert!(!merge(&store, &request).expect("request existing flow"));
+        assert_eq!(
+            store.open_integration_requests().expect("requests").len(),
+            1
+        );
+        assert_eq!(
+            git(&dir, &["rev-parse", "refs/heads/main"]),
+            git(&dir, &["rev-parse", "HEAD~1"])
         );
         let _ = fs::remove_dir_all(dir);
     }

@@ -28,7 +28,7 @@ updated: 2026-10-11
 - celeris: coding 既定の材料を作る `Config::coding_harness_default` とその試験、daemon の起動・reload での
   `set_coding_harness_default`・`set_account_pool_adapters` 呼び出しを消した。
 - 消した識別子を参照していた comment（routing_shadow・routing_members・sessions・model_routing）を直し、
-  `docs/architecture-map.md` の行を route_select / route_failure に更新。`LaneResolution` の doc comment 変更に
+  `LaneResolution` の doc comment 変更に
   合わせ `UPDATE_SCHEMA=1` で `docs/api/v1/{api-v1,event}.schema.json` を更新した。
 
 ## 検証
@@ -41,10 +41,13 @@ updated: 2026-10-11
   `committed_schema_matches_generated`・`event_row_schema_matches_committed`）。`UPDATE_SCHEMA=1` で更新後、
   その 2 件を含む 8 件が pass。
 - `cargo fmt --all -- --check`: 変更したファイルは差分なし（llm-proxy・routing_sidecar.rs の既存の fmt 差分は範囲外で未変更）。
-- `sh "$CELERIS_WU_SCOPE_PATHS"`: 変更 path は task-dispatch・celeris config/daemon・task-core の comment・docs/api/v1・architecture-map・この進捗のみ。
+- `sh "$CELERIS_WU_SCOPE_PATHS"`: 変更 path は task-dispatch・celeris config/daemon・task-core の comment・docs/api/v1・この進捗のみ。
 
 ## 未解決・提案
 
+- `docs/architecture-map.md` の「provider/account 選択・quota 見積り」行は消えた `dispatcher/provider_select.rs` を指したまま（`check-architecture-map.py` が NG）。
+  この葉の範囲 check は `docs/architecture-map.md` を許さないので retry で差し戻した。後続（closeout など docs を許す葉）で
+  行を「route 選択・account 失敗記録・quota 見積り」・`dispatcher/{route_select.rs,route_failure.rs,quota_book.rs}` に直すこと。
 - `web/api/generated/schema.json` は base の時点で既に `docs/api/v1/api-v1.schema.json` と食い違っている（`in_use_cos` が残る）。api-remove の再生成で合わせること。
 - `routing_shadow.rs`・`routing_members.rs`・`routing_enforce.rs` は旧選択の shadow/enforce の殻（setter と型だけ）が残っている。
   config の `[model_routing]` と一緒に消す葉を提案する。task-core の `coding_harness`（model family → adapter）と harness の

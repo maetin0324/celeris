@@ -9,7 +9,7 @@ updated: 2026-10-11
 
 人の依頼（2026-10-11 運用セッション）: 既存の routing の評価方法を調べ直し、LLM 評価の知見に基づいて本番で実際に効く選択にする。
 source・model の選択と、task の内容による harness の選択は別々にする（harness の選択は先行 task 01M4M8D4AP の
-[ADR](../adr/2026-10-11-llm-source-harness-selection.md) に従い、ここでは変えない）。
+ADR `2026-10-11-llm-source-harness-selection.md`〈branch `celeris/01M4M8D4AP4YY4F9TV09HG30SJ`、main 取り込み前のためリンクにしない〉に従い、ここでは変えない）。
 
 - ADR: [2026-10-11-llm-source-model-routing-evaluation.md](../adr/2026-10-11-llm-source-model-routing-evaluation.md)
 - 調査報告: task の artifacts `routing-evaluation-survey.md`（`/local/celeris/data/workspaces/01M4M8D4AQHBC2KG3H1BPJ7Z0J/artifacts/`。repo には置かない）

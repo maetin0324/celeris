@@ -58,3 +58,7 @@ status: running
 参照した実装: `crates/celeris/src/config/{providers,harness,model_routing,dispatch,cos,model_catalog}.rs`、`crates/task-core/src/provider_source.rs` と account limit/store、`crates/task-dispatch/src/dispatcher/provider_select.rs` と accounts、`crates/task-api/src/handlers/{providers,accounts}.rs`。UIは指定されたWeb/GUI routeを確認。資料は `docs/guides/providers.md`、`docs/ops/provider-llm-source-migration.md`、ADR-0053/0069/0132、2026-10-08 concurrency ADR、config例を参照。
 
 このWorkUnitでは現状棚卸しのみを記録し、コード・API・画面・既存設計文書は変更していない。本番設定も読まず、変更していない。次工程のADRで責務境界と旧欄の削除方針を確定し、実装工程が設定・API・画面・移行文書を更新する。
+
+## 設計の要約
+
+[決定 ADR](../adr/2026-10-11-provider-source-harness-layers.md) は設定を LLM source・harness・provider relation の三層に分け、provider は明示 source × harness × model の関係だけを持つと決めた。derived/unknown source、provider concurrency/kind/account_pool、旧 tiers/tier_models、provider 単位の concurrency/in_use_cos API field と互換分岐は削除し、残存する旧 config は読み込みエラーにする。候補列挙は source × harness × model の組で行い、routing の優先順位は後続 task の責務とする。API は source・account・harness・provider relation を分離し、web を正本 UI として旧 gui の重複画面は削除する。本番 config は人が deploy 手順で書き換え、provider ID の stats/cooldown は対応が明確な場合だけ migration し、SQLite は migration、events は追記専用、credential は保持する。

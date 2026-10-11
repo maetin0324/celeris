@@ -219,3 +219,7 @@ tasks: [01M4D7RVKXY9A967ZXDADWVHQJ]
 - `GET /accounts` に `effective_max_runs`・`max_runs_source`・暗黙アカウントが出ること。gui-api.md・schema・生成型の更新。
 - web のアカウント画面で上限を編集でき、プロバイダ画面から入力欄が消えていること（画面試験）。
 - `cargo clippy --workspace -- -D warnings`。本番 config・systemd・daemon・本番 DB は変更しない（本番の移行は人が docs/ops の手順で行う）。
+
+## 付記（2026-10-11、provider/source/harness の三層化）
+
+[ADR 2026-10-11 provider source harness layers](2026-10-11-provider-source-harness-layers.md) が、provider concurrency の廃止に加え、source/account の所有関係、provider API field、implicit account の source key に関する本 ADR の該当決定を置き換える。旧 provider 欄の警告付き受け入れは行わず、移行後は設定読み込みエラーとする。アカウント上限の意味と既存 DB/event/credential の保全は新 ADR の移行方針に従う。

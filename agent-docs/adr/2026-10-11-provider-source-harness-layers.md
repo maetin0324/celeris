@@ -100,12 +100,28 @@ source が未登録、ID の誤記、互換性のない source kind のいずれ
 
 ## API と画面
 
-<!-- adr-surface WorkUnit: API・Web/旧GUI の決定を追記 -->
+API は設定の三層をそれぞれ編集・取得できる形にする。`GET/POST/PATCH/DELETE /api/v1/providers` は provider relation（`id`、`llm_source`、`harness`、`models`）を扱い、`concurrency`、`in_use`、`in_use_cos`、`kind`、`derived` など旧 provider 欄を要求・返却しない。`GET/POST/PATCH/DELETE /api/v1/llm_sources` は source の種類・接続設定・account pool・quota・利用可能 model を扱い、`GET/POST/PATCH/DELETE /api/v1/accounts` は source 所有の実 account と上限を扱う。harness 一覧（`GET /api/v1/harnesses`）は adapter、対応 source kind、capabilities、command/args/settings を返す。harness 定義の編集 API は同じ harness 単位の shape とし、provider に実行設定を戻さない。全 endpoint の入力は未知の旧欄を拒否する。
+
+画面の正本は `web/` とし、source/account、harness、provider relation を別々に表示・編集する。provider 画面は source と harness の選択および model 対応に限り、上限や認証を置かない。旧 `gui/` は新 API と画面に追随させず、provider・source・account の重複画面を削除する。破壊的変更を既定とする ADR に従い、旧画面を互換 UI として残さない。
+
+## 各部の使い方
+
+- **routing** は有効な provider relation を候補として列挙し、source の account 状態・quota と harness の能力を別々に照合する。tier 名やモデル選択規則は provider に埋め込まず、routing 自身の入力として扱う。
+- **CoS** は run の実行に選ばれた provider relation と harness を使う。session の実行条件・再開情報は harness/source/model を明示して照合し、provider ID だけを source/account の同一性として扱わない。
+- **llm-proxy** は `celeris` source の上流接続・model routing・proxy 内 HTTP 要求の account quota を管理する。dispatcher の run admission と proxy の request admission は別の上限である。
+- **dispatcher** は relation 候補を選び、実行直前に source のアカウント上限・状態を適用して harness を起動する。CoS を含む run 数の計上は account/source 側に置き、provider 行の concurrency には戻さない。
+- **accounts** は source に属する認証済み account、quota、上限、稼働状況の正本である。implicit account も source ID を所有キーとし、provider 行ごとに複製しない。
 
 ## routing の境界
 
-<!-- adr-surface WorkUnit: routing・各 subsystem の境界を追記 -->
+provider 候補の列挙は **source × harness × model の組**を単位とする。source が利用可能な model と harness が受け付ける source kind/capability の積集合から、明示登録された provider relation を候補にする。存在しない組を推定で作らず、不正な参照は config 検証で拒否する。
+
+この境界より後の優先順位（tier/lane、task hint、sticky、reviewer、health/cooldown、quota、account の空き、fallback）は routing 作り直し task が定義する。現行の provider ID を候補の同一性や順位の根拠に流用せず、source/account の admission と harness 実行可能性を候補選択から独立して評価する。
 
 ## 本番 config の移行
 
-<!-- adr-surface WorkUnit: provider ID・stats/cooldown・DB/events/credential の保全方針を追記 -->
+本番移行は人が行う deploy 手順とし、daemon が旧 config を自動変換したり、本番 config を書き換えたりしない。手順では現行 config と provider ID の対応表を控え、新しい source・harness・relation を記述して検証してから切り替える。旧欄が残った config は読み込みエラーとなるため、旧 config を部分的に混ぜた状態で起動しない。
+
+既存 provider ID を同じ relation の ID として保てるものは維持し、stats の過去集計を連続させる。ID を変える必要がある relation は移行表で旧 ID と新 ID の対応を明記し、DB migration で provider keyed stats/cooldown を新しい relation key に移す。複数 relation への分割など一意に移せない stats は旧キーを消さず履歴として保持し、新 key に誤配しない。cooldown は意味が一致する一対一の移行だけ引き継ぎ、対応が曖昧なら移行先を cooldown なしで開始する。孤立した旧キーを掃除する場合も migration の明示対象とする。
+
+SQLite の既存データは migration で必要な値を新しい形へ移してから旧列・旧表を除く。events は追記専用とし、旧 event の payload を書き換えたり削除したりせず、新 event を新しい relation/source の識別子で追記する。credential と秘密は移動・再参照して保持し、消去・ログ出力・画面への露出をしない。これらは「破壊的変更を既定とする」ADR のデータ保全規則に従う。

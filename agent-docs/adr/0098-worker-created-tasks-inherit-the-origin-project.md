@@ -12,7 +12,7 @@
 ## 文脈
 
 task 01M3SPF94RDWTPWHNDEQD68VB9（案件 01M2WTS3DKNZBSZ2JMVB4CZMBW、repo `agent-platform`）の run が
-`celerisctl add --db /var/lib/celeris/celeris.sqlite3 …` で後続 task（01M3SPN8HP…、01M3SPN8H05…、01M3SPN8HE6A…、後の run で 01M3T7FRCW…）を
+`celerisctl add --db /var/lib/celeris/celeris.sqlite3 …` で後続 task（01M3SPN8HP…、01M3SPN8H05…、01M3SPN8HE6A…〔subuid 経路のため破棄、2026-10-11〕、後の run で 01M3T7FRCW…）を
 作った。`celerisctl add` は `project_id` を書かない（ADR-0033 D2「案件は GUI から付ける」）ので、どれも案件・リポジトリ無しになり、
 planner が「子の repos が親の `[]` の部分集合でない」で落ちた。後から案件を付ける API も無い。
 

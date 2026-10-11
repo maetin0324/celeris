@@ -1,7 +1,7 @@
 ---
 title: WorkUnit の受け入れ検査ログを作業ツリーの外に置く（scope check の自己汚染を防ぐ）
 tasks: [01M4NV0KJQ2A1ZY49CTPBQN1C7]
-status: running
+status: done
 updated: 2026-10-11
 ---
 
@@ -56,9 +56,24 @@ integration-checks が再現しない理由: 統合のログは `ws.task_dir`（
   `drain_hand_off.rs` は WU 検査ログが `<root>/<task_id>/work-unit-checks/a` の下にあること、
   `integration_check_progress.rs` は統合ログが `<root>/<task_id>/integration-checks/integrate-build` の下にあることを assert。
 
-## 後続 verify
+## verify（2026-10-11、統合後 HEAD `3a7c2794` 相当）
 
-workspace 全体の `bash scripts/dev/test-parallel.sh` と `cargo clippy --workspace -- -D warnings` は verify WU で実行する。
+コードは変えていない。`TMPDIR=/tmp` は browser・credentiald の unix socket path 長超過を避けるため（既定の TMPDIR では落ちる）。
+
+- `TMPDIR=/tmp bash scripts/dev/test-parallel.sh` → exit 0。nextest `Summary [129.243s] 5170 tests run: 5170 passed, 13 skipped`（failed 0）。
+  doctest は全 crate `ok`（task_core 3 passed、task_worker 1 ignored、他は 0 件）。`CELERIS_TEST_SUMMARY` の passed 5173 / failed 0 / ignored 14。
+  test-parallel は `tmp_leftovers: 7`（試験が TMPDIR に 7 件残し、終了時に消した旨の警告。失敗ではない）。
+- `cargo clippy --workspace -- -D warnings` → exit 0（`Finished dev profile`、警告 0）。
+- `cargo fmt --all -- --check` → exit 0（差分なし）。
+- 文書検査 3 本（`agent-docs/README.md` ADR-0128 D7 の land 系 check）:
+  - `sh scripts/dev/check-doc-links.sh` → exit 0、`check-doc-links: ok`
+  - `sh scripts/dev/check-adr-numbers.sh` → exit 0、`check-adr-numbers: ok (194 files)`
+  - `sh scripts/dev/progress-index.sh --check` → exit 0、`progress-index --check: ok`
+
+## 未解決事項
+
+- test-parallel の `tmp_leftovers: 7`。試験が TMPDIR に残すエントリは本 WU の範囲外。別 task で原因を確かめる。
+- 既定 TMPDIR（`/local/...` 配下の scratch 等）で browser・credentiald の socket path が長すぎて落ちる件は既存の環境制約。本 WU では直していない。
 
 ## readers-docs の確認（2026-10-11）
 

@@ -16,6 +16,7 @@ use task_core::{
     Budget, Check, Criterion, DelegationLimits, Event, NoticeEvent, NoticeKind, NoticeStore,
     SqliteStore, Status, Task, TaskId, TaskKind, TaskStore, Tier, WorkerHint, WorkspaceSpec,
 };
+use task_core::llm_route::{CandidateKey, HarnessRule, HarnessSpec, Registry, SourceSpec};
 use task_dispatch::dispatcher::cos_chat::launch::CosChatLaunchConfig;
 use task_dispatch::dispatcher::{DispatchConfig, Dispatcher};
 use task_dispatch::policy::{ProviderSpec, StaticPolicy};
@@ -43,7 +44,7 @@ fn launch_config(dir: &Path, db_path: &Path, enabled: bool) -> CosChatLaunchConf
     CosChatLaunchConfig {
         worker_reserve_five_hour: 0.90,
         enabled,
-        harness: "fake".into(),
+        harness: "claude_code".into(),
         max_turns: 2,
         max_wall_secs: 30,
         unavailable_reason: None,
@@ -72,7 +73,7 @@ fn dispatcher(store: Arc<SqliteStore>, script: &str, dir: &Path) -> Dispatcher {
         Duration::from_secs(1),
     );
     let mut adapters: HashMap<String, Arc<dyn WorkerAdapter>> = HashMap::new();
-    adapters.insert("p1".into(), adapter);
+    adapters.insert("p1".into(), adapter.clone());
     let knowledge_root = dir.join("knowledge");
     for name in ["cos-operator", "cos-inbox-triage"] {
         let skill_dir = knowledge_root.join("skills").join(name);
@@ -88,7 +89,7 @@ fn dispatcher(store: Arc<SqliteStore>, script: &str, dir: &Path) -> Dispatcher {
         ..Default::default()
     };
     let store: Arc<dyn TaskStore> = store;
-    Dispatcher::new(
+    let mut dispatcher = Dispatcher::new(
         store,
         Box::new(policy),
         HashMap::from([("p1".to_string(), "m".to_string())]),
@@ -135,7 +136,51 @@ fn dispatcher(store: Arc<SqliteStore>, script: &str, dir: &Path) -> Dispatcher {
             workspace_prune_after_secs: 0,
             execution,
         },
-    )
+    );
+    let mut registry = Registry::default();
+    registry.sources.insert(
+        "p1".into(),
+        SourceSpec {
+            kind: "test".into(),
+            api_format: "test".into(),
+            accounts: vec!["implicit".into()],
+            models: vec!["m".into()],
+            max_runs: None,
+            account_max_runs: Default::default(),
+            quota: None,
+            endpoint: None,
+            credential_ref: None,
+        },
+    );
+    registry.harnesses.insert(
+        "claude_code".into(),
+        HarnessSpec {
+            kind: "cli".into(),
+            api_formats: ["test".into()].into(),
+            source_kinds: ["test".into()].into(),
+            capabilities: Default::default(),
+            command: None,
+            args: vec![],
+        },
+    );
+    registry.route_defaults.insert(
+        "claude_code".into(),
+        vec![CandidateKey {
+            source: "p1".into(),
+            model: "m".into(),
+        }],
+    );
+    registry.cos_route_candidates = vec![CandidateKey {
+        source: "p1".into(),
+        model: "m".into(),
+    }];
+    registry.harness_selection.rules = vec![HarnessRule {
+        harness: "claude_code".into(),
+        ..Default::default()
+    }];
+    dispatcher.set_llm_route_registry(registry);
+    dispatcher.set_harness_adapters(HashMap::from([("claude_code".into(), adapter.clone())]));
+    dispatcher
 }
 
 fn fixture(enabled: bool, script: &str) -> Fixture {

@@ -83,15 +83,25 @@ review_timeout_secs = 60
 retry_backoff_base_secs = 0
 error_cooldown_secs = 1
 
-[adapters.fake]
-command = ["sh", "{script}"]
+[llm_sources.fake_local]
+kind = "fake"
+api_format = "fake"
+accounts = ["default"]
+models = ["fake"]
 
-[[providers]]
-id = "fake-local"
-adapter = "fake"
-tiers = ["frontier", "standard", "cheap"]
-concurrency = 2
-model = "fake"
+[harnesses.fake]
+kind = "fake"
+api_formats = ["fake"]
+source_kinds = ["fake"]
+command = "sh"
+args = ["{script}"]
+
+[route_defaults.fake]
+candidates = [{{ source = "fake_local", model = "fake" }}]
+
+[harness_selection]
+rules = [{{ required_capabilities = [], harness = "fake" }}]
+execution_class_defaults = {{}}
 
 {clusters}
 "#,

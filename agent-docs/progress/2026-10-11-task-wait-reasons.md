@@ -86,6 +86,7 @@ HEAD `2878637c`（integrate wu/web-label）上で実行。コードは変えて�
 
 ## 未解決
 
+- 配送差し戻し: web bundle の `.pnpm-store/v11/files` 削除が `Directory not empty` で失敗。release script の再試行が無く、単発ログでは競合の再現性を断定できないため、別 task で retry/診断ログと再実行を検討する（詳細: `2026-10-11-task-wait-reasons/redeliver-diag.md`）。
 - 一覧の応答で非終端 task の計画を読む負荷は未計測（ADR Consequences）。
 - `tests left 4 entries in TMPDIR` の警告の中身は未調査（試験の残留物の可能性。exit には影響しない）。
 - 既定 TMPDIR（93 文字）では browser・credentiald の 108 件が socket path 長で落ちる。run の TMPDIR を短くするかは人の判断（運用の既知事項）。

@@ -79,8 +79,18 @@ pub(super) fn integration_checks_for_phase(
 
 /// 2026-10-04 統合の検査の進み具合 D2: 統合の検査のログを置く Task の作業ディレクトリ直下のディレクトリ。
 pub(crate) const INTEGRATION_CHECK_LOG_DIR: &str = "integration-checks";
-/// 2026-10-04 WU 検査の引き継ぎ D3: 葉の WU の受け入れ検査のログの置き場所（`<task_dir>/work-unit-checks/<wu_key>`）。
+/// 2026-10-04 WU 検査の引き継ぎ D3: 葉の WU の受け入れ検査のログの置き場所
+/// （`<workspace_root>/<task_id>/work-unit-checks/<wu_key>`。`check_log_root` を見よ）。
 pub(crate) const WORK_UNIT_CHECK_LOG_DIR: &str = "work-unit-checks";
+
+impl Dispatcher {
+    /// 2026-10-11 WU 検査ログの置き場所: 検査ログは repo の作業ツリーの外の `<workspace_root>/<task_id>` に置く
+    /// （shared mode では task_dir が作業ツリーそのもので、範囲 check の `git ls-files --others` がログを数えるため）。
+    /// worktree mode ではこれは task_dir と同じ場所。
+    pub(crate) fn check_log_root(&self, task_id: TaskId) -> PathBuf {
+        self.config.workspace_root.join(task_id.to_string())
+    }
+}
 
 /// 統合の検査を event とログに残すための、その統合 WU の識別とログの置き場所。
 /// 2026-10-04 WU 検査の引き継ぎ D3: 葉の WU の受け入れ検査にも使う（`run_id` が `Some` なら
@@ -90,7 +100,7 @@ pub(crate) struct ObservedIntegration {
     pub key: String,
     /// 検査を起こした worker run（葉の WU の受け入れ検査のときだけ）。
     pub run_id: Option<String>,
-    /// `<task_dir>/integration-checks/<wu_key>`。検査 1 件ごとに `<started_ms>-<index>.log` を作る。
+    /// `<check_log_root>/integration-checks/<wu_key>` か `<check_log_root>/work-unit-checks/<wu_key>`。検査 1 件ごとに `<started_ms>-<index>.log` を作る。
     pub log_dir: PathBuf,
 }
 

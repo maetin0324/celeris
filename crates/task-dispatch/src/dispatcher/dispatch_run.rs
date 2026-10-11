@@ -730,7 +730,14 @@ impl Dispatcher {
                         .map(|wu| wu.id.clone())
                         .unwrap_or_else(|| task.id.to_string()),
                 },
-                None,
+                Some(task_core::route_extract::RouteFeatureContext {
+                    lane: Some(
+                        task_core::model_catalog::assignments::tier_str(task.worker_hint.tier)
+                            .to_owned(),
+                    ),
+                    harness: Some(adapter_id.clone()),
+                    task_features_v69: Some(decision.features),
+                }),
             ) {
                 Ok(f) => Some(task_core::RouteFeaturesRef {
                     schema: f.schema,

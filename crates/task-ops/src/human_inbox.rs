@@ -1025,6 +1025,7 @@ impl Builder<'_> {
             }
             AttentionItem::Unintegrated {
                 task,
+                repo_id,
                 repo,
                 state,
                 operation_path,
@@ -1032,9 +1033,9 @@ impl Builder<'_> {
                 head_sha,
                 reason,
                 at,
-                ..
             } => self.finish(Draft {
-                id: format!("unintegrated-{}", task.id),
+                // 1 task に未取り込み repo が複数あるため、item は task×repo で一意にする。
+                id: format!("unintegrated-{}-{repo_id}", task.id),
                 kind: InboxKind::Unintegrated,
                 title: format!("未取り込み: {}", task.title),
                 detail: Some(format!(
@@ -1051,13 +1052,13 @@ impl Builder<'_> {
                     opt(
                         "discard",
                         "破棄",
-                        false,
+                        true,
                         "理由を付けて破棄する",
                     ),
                     opt(
                         "hold",
                         "保留",
-                        false,
+                        true,
                         "理由を付けて保留する",
                     ),
                 ],

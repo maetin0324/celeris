@@ -53,4 +53,12 @@ review 完了時に `delivery::begin` を必ず呼ぶ。delivery policy 対象�
 3. Reviewer 制御: 同 fixture で acceptance に `Check::Reviewer` を追加し reviewer provider を用意する。`begin` に進み delivery 行または `delivery_skipped` が記録されることを確認する。次に policy project を外した fixtureでは、begin は呼ばれるが行・skip event とも無い silent skip を確認する。
 4. 木の子: task に親を設定し reviewer 条件を付けて begin まで進め、delivery 行が無いことを確認。親工程 integration は別途親 branch に成果を入れることを確認し、child 自身を main delivery しない既定を固定する。
 
+## stranded-core 実装
+
+- 決定的な結合試験を [verify](2026-10-11-stranded-done-branches/verify.md) に追加した。一時 SQLite store・Git repository・固定時計で、done root task 2 件の sweep 検出、受信箱への各 1 件表示、再走査の冪等性、merge request 経由の main 反映と integrated 判定、理由付き discard、hold/reopen、promotion pending の独立表示を検証する。
+- `cargo test -p celeris --test stranded_integration stranded_ -- --nocapture` — passed (1 test)。
+- `bash scripts/dev/test-parallel.sh` — failed: 5,034 passed / 108 failed / 14 ignored。失敗は browser/credential IPC fixture の Unix socket path が `SUN_LEN` を超える、または fixture readiness timeout。どれも sandbox の path 制約による既知の環境失敗で、追加した stranded 試験は pass。
+- `cargo clippy --workspace -- -D warnings` — passed。
+- 文書検査: `check-doc-links.sh`、`check-doc-layout.sh`、`check-adr-numbers.sh` — 3 本とも passed。
+
 試験の決定的な主張は、本番 DB や daemon tick に依存させず、fixture の task status・acceptance・project policy・git refs を固定して `done` と deliveries 行の有無を検査すること。現在は調査 WorkUnit のため、試験追加・コード変更は行っていない。

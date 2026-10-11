@@ -52,6 +52,8 @@ models = ["Qwen3-Coder"]
 
 Harness は task を実行するプログラムとその起動契約である。宣言は種別、受け付ける API 形式、利用できる source の種類、能力、必要な command/args を含む。API 形式（例: OpenAI-compatible、Anthropic、CLI 固有 protocol）と source の認証方式は別属性にする。受け付ける組み合わせが実測されていない場合は自動で互換と見なさず、明示的に追加されるまで候補にしない。
 
+### 宣言の形（## harness）
+
 ```toml
 [harnesses.claude_code]
 kind = "claude_code"

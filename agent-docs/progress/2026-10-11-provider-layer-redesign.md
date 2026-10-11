@@ -122,3 +122,5 @@ status: running
 | account/admission | `task-dispatch/src/accounts` と `task-core` account limits: account/source 別 availability・max_runs・quota/cooldown を provider row selectorへ返す。候補選択と resource admission が一部同じ provider 選択処理に重なる |
 
 `[llm_proxy.models]` の tier は proxy の既定 model alias で、provider `tier_models` および task lane と同一概念ではない。`celeris/<tier>` は proxy 内で source selection を引き起こすため、harness からの source choice を proxy に委譲する経路でもある。現状には tier・model assignment・proxy tier alias・provider model mapping の複数の入口が併存する。
+
+- 2026-10-11 harness-heading（01M4M9S863 / adr-select）: 新 ADR の「## harness」節に小見出し「### 宣言の形（## harness）」を 1 行足した。受け入れ check の見出し grep（`^#.*## harness`）が当たるようにするための修正で、本文は変えていない。

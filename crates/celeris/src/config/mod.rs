@@ -531,7 +531,7 @@ impl Config {
     }
 
     pub fn validate(&self) -> Result<(), ConfigError> {
-        self.llm_route_registry()?;
+        let registry = self.llm_route_registry()?;
         self.selfdeploy.validate()?;
         self.selfdeploy.delivery.validate()?;
         self.browser.validate()?;
@@ -552,7 +552,7 @@ impl Config {
         if let Some(accounts) = &self.accounts {
             accounts.validate()?;
         }
-        self.reviewer.validate(&self.providers)?;
+        self.reviewer.validate(&registry)?;
         self.api.validate()?;
         cluster::validate_clusters(&self.clusters)?;
         self.workspace.validate()?;

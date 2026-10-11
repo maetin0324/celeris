@@ -63,6 +63,11 @@ pub struct RouteDefaultConfig {
 }
 
 impl super::Config {
+    /// `[llm_sources.<id>]` に `kind` がこの source の行があるか。
+    pub fn declares_source_kind(&self, kind: task_core::LlmSourceRef) -> bool {
+        self.llm_sources.values().any(|s| s.kind == kind.as_str())
+    }
+
     pub fn llm_route_registry(&self) -> Result<task_core::llm_route::Registry, ConfigError> {
         use task_core::llm_route::*;
         let mut r = Registry {

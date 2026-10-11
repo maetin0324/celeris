@@ -1,8 +1,8 @@
 //! `celerisctl routing show`（ADR-0069 Phase 118 D3）。
 //!
 //! 設定ファイルだけを読む読み取り専用コマンド（`config to-harnesses` と同じく DB を開かない）。
-//! `[[providers]] tier_models` の provider ごとの
-//! `tier → name / model_id（または unavailable の理由）/ reasoning_effort` を表にする。
+//! `[llm_sources.<id>]`・`[harnesses.<id>]`・`[[llm_routes]]`・`[route_defaults.<harness>]`・
+//! `[cos] route_candidates` の宣言を表にする。
 //! 設定ファイルに書かれた値をそのまま見せるだけで、到達性・残量は見ない
 //! （到達性・cooldown は既存の `GET /llm/sources` の仕事）。
 //!
@@ -16,7 +16,6 @@ use std::process::ExitCode;
 
 use celeris::config::Config;
 use clap::Subcommand;
-use task_core::Tier;
 use task_ops::routing_replay::{
     self, BenchmarkBaselineV1, DatasetV1, EstimatorComparisonInputV1, EstimatorComparisonV1,
     ExportOptions, ReportV1,
@@ -25,12 +24,9 @@ use task_ops::routing_replay::{
 use crate::error::CliError;
 use crate::outln;
 
-/// 表示順（頻度の高い順ではなく、上から強い lane の順。GUI の `TIER_OPTIONS` と同じ並び）。
-const TIER_ORDER: [Tier; 3] = [Tier::Frontier, Tier::Standard, Tier::Cheap];
-
 #[derive(Subcommand, Debug)]
 pub enum RoutingCommand {
-    /// provider ごとの tier → 実行モデル/effort を表にして出す。
+    /// LLM source・harness・route の宣言を表にして出す。
     Show(RoutingShowArgs),
     /// 過去の events から routing dataset（`dataset.jsonl` + `manifest.json`、schema v1）を書き出す。
     /// DB は全体の `--db` で明示したものだけを読み取り専用で開く（環境変数・既定の DB は使わない）。
@@ -435,67 +431,67 @@ pub fn render_estimator_comparison_markdown(est: &EstimatorComparisonV1) -> Stri
     out
 }
 
-fn tier_label(tier: Tier) -> &'static str {
-    match tier {
-        Tier::Frontier => "frontier",
-        Tier::Standard => "standard",
-        Tier::Cheap => "cheap",
-    }
-}
-
-/// provider の 1 tier の表示（`ModelBinding` が無ければ「未設定」、`unavailable_reason` があれば
-/// それを優先して見せる。`model_routing::resolve` と同じ優先順）。
-fn binding_cell(binding: Option<&task_core::model_routing::ModelBinding>) -> String {
-    match binding {
-        None => "(未設定)".to_string(),
-        Some(b) => {
-            let mut cell = b.name.clone();
-            if let Some(reason) = &b.unavailable_reason {
-                cell.push_str(&format!(" -> unavailable: {reason}"));
-            } else if let Some(id) = &b.model_id {
-                cell.push_str(&format!(" -> {id}"));
-            } else {
-                cell.push_str(" -> (model_id 未設定)");
-            }
-            if let Some(effort) = &b.reasoning_effort {
-                cell.push_str(&format!(" [effort={effort}]"));
-            }
-            cell
-        }
-    }
-}
-
 /// `celerisctl routing show` の本体（純粋関数。テストしやすいよう `run` から分離）。
+/// ADR 2026-10-11-llm-source-harness-selection: LLM source（kind・model・account）、harness、
+/// `[[llm_routes]]` の結合、harness ごとの既定候補、CoS の候補を宣言の順に見せる。
 pub fn render_routing_table(config: &Config) -> String {
     let mut out = String::new();
-    out.push_str("=== providers (tier_models) ===\n");
-    if config.providers.is_empty() {
-        out.push_str("(no providers configured)\n");
+    out.push_str("=== llm_sources ===\n");
+    if config.llm_sources.is_empty() {
+        out.push_str("(no llm_sources configured)\n");
     }
-    for p in &config.providers {
-        if p.tier_models.is_empty() {
-            out.push_str(&format!(
-                "{} ({}): tier_models not configured (legacy single model = {:?})\n",
-                p.id,
-                p.adapter,
-                if p.model.is_empty() {
-                    "adapter default".to_string()
-                } else {
-                    p.model.clone()
-                }
-            ));
-            continue;
-        }
-        out.push_str(&format!("{} ({}):\n", p.id, p.adapter));
-        for tier in TIER_ORDER {
-            out.push_str(&format!(
-                "  {:<8} {}\n",
-                tier_label(tier),
-                binding_cell(p.tier_models.get(&tier))
-            ));
-        }
+    for (id, s) in &config.llm_sources {
+        out.push_str(&format!(
+            "{id} ({}, api_format={}): models=[{}] accounts=[{}]\n",
+            s.kind,
+            s.api_format.as_deref().unwrap_or(&s.kind),
+            s.models.join(", "),
+            s.accounts.join(", ")
+        ));
     }
+    out.push_str("=== harnesses ===\n");
+    if config.harness_declarations.is_empty() {
+        out.push_str("(no harnesses declared)\n");
+    }
+    for (id, h) in &config.harness_declarations {
+        let formats: Vec<&str> = h.api_formats.iter().map(String::as_str).collect();
+        out.push_str(&format!(
+            "{id} ({}): api_formats=[{}]\n",
+            h.kind,
+            formats.join(", ")
+        ));
+    }
+    out.push_str("=== llm_routes ===\n");
+    if config.llm_routes.is_empty() {
+        out.push_str("(no llm_routes declared)\n");
+    }
+    for r in &config.llm_routes {
+        out.push_str(&format!("{} -> {}/{}", r.harness, r.source, r.model));
+        if let Some(via) = &r.via {
+            out.push_str(&format!(" via {via}"));
+        }
+        out.push('\n');
+    }
+    out.push_str("=== route_defaults ===\n");
+    for (harness, d) in &config.route_defaults {
+        out.push_str(&format!("{harness}: {}\n", candidates_cell(&d.candidates)));
+    }
+    out.push_str(&format!(
+        "cos: {}\n",
+        candidates_cell(&config.cos.route_candidates)
+    ));
     out
+}
+
+fn candidates_cell(candidates: &[celeris::config::RouteCandidateConfig]) -> String {
+    if candidates.is_empty() {
+        return "(none)".to_string();
+    }
+    candidates
+        .iter()
+        .map(|c| format!("{}/{}", c.source, c.model))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 #[cfg(test)]
@@ -509,58 +505,55 @@ mod tests {
     }
 
     #[test]
-    fn shows_provider_tier_models() {
+    fn shows_llm_sources_harnesses_and_routes() {
         let dir = tempfile::tempdir().unwrap();
         let path = write_config(
             dir.path(),
             r#"
-[[providers]]
-id = "claude"
-adapter = "claude-code"
-[providers.tier_models.frontier]
-name = "fable"
-model_id = "claude-fable-5-1"
-[providers.tier_models.standard]
-name = "opus"
-unavailable_reason = "not verified yet"
-[providers.tier_models.cheap]
-name = "sonnet"
-model_id = "claude-sonnet-5"
+[llm_sources.claude]
+kind = "claude_oauth"
+api_format = "anthropic_messages"
+accounts = ["a1"]
+models = ["claude-sonnet-5"]
 
-[[providers]]
-id = "legacy"
-adapter = "fake"
+[harnesses.claude_code]
+kind = "claude_code"
+api_formats = ["anthropic_messages"]
+source_kinds = ["claude_oauth"]
+
+[[llm_routes]]
+harness = "claude_code"
+source = "claude"
+model = "claude-sonnet-5"
+
+[route_defaults.claude_code]
+candidates = [{ source = "claude", model = "claude-sonnet-5" }]
 "#,
         );
         let config = Config::load(&path).unwrap();
         let table = render_routing_table(&config);
-        assert!(table.contains("claude (claude-code):"));
-        assert!(table.contains("frontier fable -> claude-fable-5-1"));
-        assert!(table.contains("standard opus -> unavailable: not verified yet"));
-        assert!(table.contains("cheap    sonnet -> claude-sonnet-5"));
-        assert!(table.contains("legacy (fake): tier_models not configured"));
-        assert!(!table.contains("llm_proxy"));
+        assert!(table.contains(
+            "claude (claude_oauth, api_format=anthropic_messages): models=[claude-sonnet-5] accounts=[a1]"
+        ));
+        assert!(table.contains("claude_code (claude_code): api_formats=[anthropic_messages]"));
+        assert!(table.contains("claude_code -> claude/claude-sonnet-5\n"));
+        assert!(table.contains("claude_code: claude/claude-sonnet-5\n"));
+        assert!(table.contains("cos: (none)"));
     }
 
     #[test]
-    fn a_provider_without_a_tier_binding_is_marked_unset() {
+    fn a_source_without_harnesses_or_routes_says_so() {
         let dir = tempfile::tempdir().unwrap();
         let path = write_config(
             dir.path(),
-            r#"
-[[providers]]
-id = "gpt"
-adapter = "codex"
-[providers.tier_models.frontier]
-name = "astra"
-model_id = "gpt-6-astra"
-reasoning_effort = "high"
-"#,
+            "[llm_sources.relay]\nkind = \"openai_compatible\"\nmodels = [\"m1\"]\n",
         );
         let config = Config::load(&path).unwrap();
         let table = render_routing_table(&config);
-        assert!(table.contains("frontier astra -> gpt-6-astra [effort=high]"));
-        assert!(table.contains("standard (未設定)"));
-        assert!(table.contains("cheap    (未設定)"));
+        assert!(table.contains(
+            "relay (openai_compatible, api_format=openai_compatible): models=[m1] accounts=[]"
+        ));
+        assert!(table.contains("(no harnesses declared)"));
+        assert!(table.contains("(no llm_routes declared)"));
     }
 }

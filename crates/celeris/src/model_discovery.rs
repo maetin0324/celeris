@@ -134,11 +134,7 @@ pub fn targets_from_config(config: &Config) -> Vec<DiscoveryTarget> {
     let mut out = Vec::new();
     let accounts = config.accounts.as_ref();
     let opencode_in_use = accounts.is_some_and(|a| a.opencode_dir.is_some())
-        || config.providers.iter().any(|p| {
-            config
-                .provider_llm_source(&p.id)
-                .is_some_and(|r| r.source == LlmSourceRef::OpencodeGo)
-        });
+        || config.declares_source_kind(LlmSourceRef::OpencodeGo);
     if opencode_in_use {
         // `[model_catalog] opencode_cli` を明示していなければ、acp adapter の command（既定 `opencode`）を使う。
         let cli = if config.model_catalog.opencode_cli == "opencode" {
@@ -615,8 +611,7 @@ pub fn refresh_routing_catalog<S: ModelCatalogStore + ?Sized>(store: &S, config:
     // 利用可能な model への割り当てでその lane が復活する）。割り当て済みで使えない model は
     // `apply_role_assignments` が外すので、続く `apply_model_catalog` と警告は重ならない。
     let view = role_assignment_view(store);
-    let applied =
-        crate::config::apply_role_assignments(&mut catalog, &view, &config.provider_lane_seeds());
+    let applied = crate::config::apply_role_assignments(&mut catalog, &view);
     if !applied.is_empty() {
         tracing::info!(
             count = applied.len(),
@@ -649,8 +644,7 @@ pub fn apply_catalog_to_snapshot<S: ModelCatalogStore + ?Sized>(store: &S, confi
     let mut applied = (**snapshot).clone();
     // 割り当てを先に（`refresh_routing_catalog` と同じ順）。
     let view = role_assignment_view(store);
-    let assigned =
-        crate::config::apply_role_assignments(&mut applied, &view, &config.provider_lane_seeds());
+    let assigned = crate::config::apply_role_assignments(&mut applied, &view);
     let dropped = crate::config::apply_model_catalog(&mut applied, &entries, &overrides);
     if dropped.is_empty() && assigned.is_empty() && view.managed.is_empty() {
         return;

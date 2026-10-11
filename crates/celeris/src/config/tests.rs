@@ -25,10 +25,7 @@ fn provider_kind_legacy_production_inference_warnings_and_cheap_tier() {
             Some(task_core::ProviderKind::Adapter)
         );
     }
-    assert_eq!(
-        cfg.provider_lanes("opencode-qwen"),
-        vec![Tier::Cheap]
-    );
+    assert_eq!(cfg.provider_lanes("opencode-qwen"), vec![Tier::Cheap]);
     assert_eq!(
         cfg.providers
             .iter()
@@ -1799,15 +1796,16 @@ max_requeues = 0
 [reviewer]
 adapter = "claude-code"
 tier = "cheap"
-[[providers]]
-id = "f"
-adapter = "fake"
-[[providers]]
-id = "c"
-adapter = "claude-code"
-tiers = ["cheap"]
+[llm_sources.claude]
+kind = "claude_oauth"
+api_format = "anthropic_messages"
+models = ["claude-sonnet-5"]
+[harnesses.claude_code]
+kind = "claude_code"
+api_formats = ["anthropic_messages"]
+source_kinds = ["claude_oauth"]
 "#;
-    let cfg: Config = toml::from_str(text).unwrap();
+    let cfg = Config::parse_with_delivery(text).unwrap();
     assert!(cfg.validate().is_ok());
     let d = cfg.dispatch_config();
     assert_eq!(d.retry_backoff_base, Duration::ZERO);
@@ -1962,28 +1960,31 @@ fn dispatch_min_free_disk_mb_can_be_configured() {
 
 /// ADR-0010 D9: Reviewer run を満たせるプロバイダが無い設定はエラー。未知キーも拒否。
 #[test]
-fn rejects_reviewer_without_matching_provider_and_unknown_reviewer_keys() {
-    let cfg: Config = toml::from_str(
-        "[reviewer]\nadapter = \"codex\"\n[[providers]]\nid = \"x\"\nadapter = \"fake\"\n",
-    )
-    .unwrap();
+fn reviewer_adapter_must_name_a_declared_harness_and_unknown_reviewer_keys_fail() {
+    const DECLS: &str = "[llm_sources.main]\nkind = \"openai_compatible\"\nmodels = [\"m1\"]\n\
+        [harnesses.cli]\nkind = \"acp\"\napi_formats = [\"openai_compatible\"]\n\
+        source_kinds = [\"openai_compatible\"]\n";
+    // ADR 2026-10-11-llm-source-harness-selection: 宣言に無い harness を指す `[reviewer] adapter` は拒否。
+    let cfg =
+        Config::parse_with_delivery(&format!("[reviewer]\nadapter = \"codex\"\n{DECLS}")).unwrap();
     let err = cfg.validate().unwrap_err().to_string();
     assert!(err.contains("[reviewer]") && err.contains("codex"), "{err}");
-    // ADR-0069 Phase 118 D4: `[reviewer] tier` が未設定なら lane は動的（worker lane に一致・
-    // 天井で丸め）なので、どれか 1 tier を提供していれば足りる（従来は既定の Standard 固定で
-    // 検査していたため、frontier だけのプロバイダはこの検査に落ちていた）。
-    let cfg: Config =
-        toml::from_str("[[providers]]\nid = \"x\"\nadapter = \"fake\"\ntiers = [\"frontier\"]\n")
-            .unwrap();
+    // 宣言の id でも kind でも通る。
+    for adapter in ["cli", "acp"] {
+        let cfg =
+            Config::parse_with_delivery(&format!("[reviewer]\nadapter = \"{adapter}\"\n{DECLS}"))
+                .unwrap();
+        assert!(cfg.validate().is_ok(), "{adapter}");
+    }
+    // `tier` は lane のラベルで、source×model の適格性には関わらない。
+    let cfg =
+        Config::parse_with_delivery(&format!("[reviewer]\ntier = \"cheap\"\n{DECLS}")).unwrap();
     assert!(cfg.validate().is_ok());
-    // `[reviewer] tier` を明示すれば、その 1 tier を提供するプロバイダが無ければ従来どおりエラー。
-    let cfg: Config = toml::from_str(
-            "[reviewer]\ntier = \"cheap\"\n[[providers]]\nid = \"x\"\nadapter = \"fake\"\ntiers = [\"frontier\"]\n",
-        )
-        .unwrap();
-    assert!(cfg.validate().unwrap_err().to_string().contains("Cheap"));
     assert!(toml::from_str::<Config>("[reviewer]\nbogus = 1\n").is_err());
-    let cfg: Config = toml::from_str("retry_backoff_base_secs = 20\nretry_backoff_max_secs = 10\n[[providers]]\nid = \"x\"\nadapter = \"fake\"\n").unwrap();
+    let cfg = Config::parse_with_delivery(&format!(
+        "retry_backoff_base_secs = 20\nretry_backoff_max_secs = 10\n{DECLS}"
+    ))
+    .unwrap();
     assert!(cfg.validate().is_err());
 }
 
@@ -3799,28 +3800,15 @@ fn proxy_tier_alias_rejected_in_celeris_config() {
 }
 
 #[test]
-fn routing_legacy_config_normalizes_with_warnings() {
+fn routing_catalog_takes_models_and_policies_only_from_model_routing() {
     use task_core::Tier;
-    let fixture = include_str!("fixtures/provider_kind_legacy_production.toml");
+    let fixture = "[llm_sources.qwen]\nkind = \"openai_compatible\"\nmodels = [\"qwen3.8-27b\"]\n";
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.toml");
     std::fs::write(&path, fixture).unwrap();
     let cfg = Config::load(&path).unwrap();
     let catalog = cfg.routing_catalog_snapshot.as_ref().unwrap();
-    assert!(
-        catalog
-            .deployments
-            .iter()
-            .any(|d| d.source_ref == "openai_compatible:qwen"
-                && d.allowed_lanes == vec![Tier::Cheap])
-    );
-    assert!(
-        catalog
-            .deployments
-            .iter()
-            .filter(|d| d.model_profile_id.to_ascii_lowercase().contains("qwen"))
-            .all(|d| d.allowed_lanes == vec![Tier::Cheap])
-    );
+    assert!(catalog.deployments.is_empty(), "{:?}", catalog.deployments);
     assert!(
         catalog
             .warnings
@@ -3887,31 +3875,6 @@ fn routing_legacy_config_normalizes_with_warnings() {
             .to_string()
             .contains("Phase 2")
     );
-}
-
-#[test]
-fn routing_legacy_equivalence_qwen_is_cheap_only() {
-    use task_core::Tier;
-    let fixture = include_str!("fixtures/provider_kind_legacy_production.toml");
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("config.toml");
-    std::fs::write(&path, fixture).unwrap();
-    let cfg = Config::load(&path).unwrap();
-    let catalog = cfg.routing_catalog_snapshot.as_ref().unwrap();
-    let legacy_lanes = cfg.provider_lanes("opencode-qwen");
-    let normalized = catalog
-        .deployments
-        .iter()
-        .find(|d| d.id == "provider:opencode-qwen")
-        .unwrap();
-    assert_eq!(legacy_lanes, vec![Tier::Cheap]);
-    assert_eq!(normalized.allowed_lanes, legacy_lanes);
-    assert_eq!(normalized.upstream_model, "qwen-local/qwen3.8-27b");
-    assert_eq!(
-        cfg.provider_llm_source("opencode-qwen").unwrap().source,
-        task_core::LlmSourceRef::OpenaiCompatible("qwen".into())
-    );
-    assert_eq!(normalized.source_ref, "openai_compatible:qwen");
 }
 
 fn routing_phase2_load(extra: &str) -> Result<Config, String> {

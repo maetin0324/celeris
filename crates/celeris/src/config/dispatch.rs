@@ -6,7 +6,7 @@ use serde::Deserialize;
 use task_core::{Tier, WorkerHint};
 use task_dispatch::{AccountsRuntimeConfig, DispatchConfig};
 
-use super::{Config, ConfigError, ProviderConfig};
+use super::{Config, ConfigError};
 
 /// `[sessions]`（ADR-0054 D1。Phase 67）: CoS の対話・部門長のレビュー run の継続セッション
 /// （`node_sessions`）の逼迫判定。`approx_tokens`（run の usage の累計）がこれを超えたら、次の run は
@@ -239,40 +239,26 @@ impl Config {
 }
 
 impl ReviewerConfig {
-    /// ADR-0010 D9: Reviewer run を満たせるプロバイダが無い設定は、Reviewer 条件のタスクが無音で待ち続ける原因になる。
-    /// ADR-0069 Phase 118 D4: `[reviewer] tier` が未設定なら lane はタスクごとに動的に決まる
-    /// （worker run の lane に一致・組織の天井で丸め）ので、特定の 1 tier だけを検査する意味が無い。
-    /// その場合は「（`adapter` 制約を満たす）プロバイダが 1 つ以上の tier を提供しているか」に緩める。
-    pub(super) fn validate(&self, providers: &[ProviderConfig]) -> Result<(), ConfigError> {
-        let reviewer = self;
-        // 新形（`[llm_sources.<id>]` + route）では reviewer の適格性は route の候補で決まる。provider 行が無い
-        // 設定はこの旧い検査の対象外（旧い検査は provider 行と一緒に消す）。
-        if providers.is_empty() {
+    /// ADR-0010 D9: Reviewer run を満たせない設定は、Reviewer 条件のタスクが無音で待ち続ける原因になる。
+    /// ADR 2026-10-11-llm-source-harness-selection: reviewer run の source×model は route の候補で決まるので、
+    /// ここで見るのは `adapter` の指定が宣言された harness（`[harnesses.<id>]` の id か kind）を指すかだけ。
+    /// `tier` は lane のラベルで、source×model の適格性には関わらない。
+    pub(super) fn validate(
+        &self,
+        registry: &task_core::llm_route::Registry,
+    ) -> Result<(), ConfigError> {
+        let Some(adapter) = self.adapter.as_deref() else {
             return Ok(());
-        }
-        let reviewer_ok = match reviewer.tier {
-            Some(explicit) => providers.iter().any(|p| {
-                p.tiers.contains(&explicit)
-                    && reviewer.adapter.as_deref().is_none_or(|a| p.adapter == a)
-            }),
-            None => providers.iter().any(|p| {
-                !p.tiers.is_empty() && reviewer.adapter.as_deref().is_none_or(|a| p.adapter == a)
-            }),
         };
-        if !reviewer_ok {
-            let adapter_suffix = reviewer
-                .adapter
-                .as_deref()
-                .map(|a| format!(" with adapter {a:?}"))
-                .unwrap_or_default();
-            return Err(ConfigError::Invalid(match reviewer.tier {
-                Some(t) => format!(
-                    "[reviewer] no provider offers tier {t:?}{adapter_suffix} for reviewer runs"
-                ),
-                None => format!(
-                    "[reviewer] no provider offers any tier{adapter_suffix} for reviewer runs"
-                ),
-            }));
+        let wanted = adapter.replace('-', "_");
+        let declared = registry
+            .harnesses
+            .iter()
+            .any(|(id, h)| id.as_ref() == wanted || h.kind.replace('-', "_") == wanted);
+        if !declared {
+            return Err(ConfigError::Invalid(format!(
+                "[reviewer] adapter {adapter:?} is not a declared harness ([harnesses.<id>] id or kind)"
+            )));
         }
         Ok(())
     }

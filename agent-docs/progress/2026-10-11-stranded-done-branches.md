@@ -106,6 +106,19 @@ merge 操作（`celerisctl integration merge` と `POST /api/v1/tasks/{id}/integ
 
 受け入れ条件 2（test-parallel が exit 0）は未達。残る 4 件は本 WU の変更と無関係で、前回記録の未解決事項の 1 件目。
 
+### 括弧修正後の全体検証
+
+- 原因: ea39749e（親 branch を main へ rebase した merge）で `crates/task-ops/src/stranded.rs` の `promotion_view` の閉じ括弧が落ち、compile できなくなった。修正 commit は 50f349d8。
+- この task の base（3ddf9c0e）は rebase 前の旧履歴で 50f349d8 を含まなかったため、`git merge --no-ff 50f349d8` で取り込んだ（merge commit 71c2b98b）。衝突は `gui/app/celeris/types.ts` の modify/delete の 1 件のみで、削除側（main の GUI 廃止）に解いた。`git merge-base --is-ancestor 50f349d8 HEAD` は exit 0。`git diff --quiet 50f349d8 HEAD -- crates/ web/ gui/ docs/` は exit 0（差分ゼロ）。
+- `bash scripts/dev/test-parallel.sh` — exit 0。`Summary 5161 tests run: 5161 passed, 13 skipped`、doctest ok（passed 5161 / failed 0）。TMPDIR は `/tmp` を試験 fixture だけに使った（socket path が `SUN_LEN` 108 を超えるため。下記）。
+- 同じ検査を run の既定の長い TMPDIR（約 98 バイト）と workspace 内の短い TMPDIR で流したところ、どちらも 108 件失敗（`bind` の path 長超過と fixture readiness timeout）。fixture の socket は `tempdir/run/celeris-credentiald/*.sock` で、tempdir に約 50 バイト以下が要るため。環境起因で、コードの失敗ではない。
+- `cargo clippy --workspace -- -D warnings` — exit 0（`Finished dev profile`、警告なし）。
+- `cargo fmt --all -- --check` — exit 0（差分なし）。
+- `sh scripts/dev/check-doc-links.sh` — exit 0（`check-doc-links: ok`）。
+- `sh scripts/dev/check-adr-numbers.sh` — exit 0（`check-adr-numbers: ok (194 files)`）。
+- `sh scripts/dev/progress-index.sh --check` — exit 0（`progress-index --check: ok`）。
+- release prepare の失敗は、同 sha の release.sh の並走 lock による一過性の失敗として扱い、本番操作はしない。この run では release を実行していない。
+
 ## 提案
 
 - 本番昇格の運用記録に release SHA、verify の schema/row-count 結果、promote 結果、初回 sweep の task×repo 件数、01M4F3V643 の discard 理由、01M4D7RVKX の integrated 表示をまとめ、監査可能にする。

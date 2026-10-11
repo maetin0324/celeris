@@ -433,6 +433,12 @@ fn migration_0034_adds_cluster_job_waits_to_a_schema_33_db() {
              ALTER TABLE llm_proxy_requests DROP COLUMN model; ALTER TABLE llm_proxy_requests DROP COLUMN source_id; \
              ALTER TABLE llm_proxy_requests DROP COLUMN task_id; ALTER TABLE llm_proxy_requests DROP COLUMN run_id; \
              ALTER TABLE llm_proxy_requests DROP COLUMN snapshot_id; ALTER TABLE llm_proxy_requests DROP COLUMN decision_id; \
+             ALTER TABLE tasks DROP COLUMN harness_id; \
+             ALTER TABLE runs DROP COLUMN selected_harness_id; \
+             ALTER TABLE runs DROP COLUMN selected_source_id; \
+             ALTER TABLE runs DROP COLUMN selected_model_id; \
+             ALTER TABLE runs DROP COLUMN selected_account_id; \
+             ALTER TABLE runs DROP COLUMN selection_metadata_json; \
              DELETE FROM schema_migrations WHERE version >= 34;",
         )
         .unwrap();

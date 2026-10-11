@@ -13090,6 +13090,68 @@
             "detail"
           ],
           "type": "object"
+        },
+        {
+          "properties": {
+            "harness_id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "harness_selected",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "harness_id"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "account_id": {
+              "type": "string"
+            },
+            "metadata": true,
+            "model_id": {
+              "type": "string"
+            },
+            "source_id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "llm_route_selected",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "source_id",
+            "model_id",
+            "account_id",
+            "metadata"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "original_value": {
+              "type": "string"
+            },
+            "task_id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "harness_migration_unresolved",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "task_id",
+            "original_value"
+          ],
+          "type": "object"
         }
       ]
     },

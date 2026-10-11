@@ -129,7 +129,7 @@ pub(crate) const MIGRATION_0056: &str = include_str!("../../migrations/0056_cos_
 /// 0039 write_sets、0040 behind_targets）。`migrate` は飛ばし、
 /// `schema_migrations` にも記録しない。統合で本物の migration が入ったら、ここから外して
 /// `migration_sql` に足す（記録が無いので後から当たる）。
-pub(crate) const RESERVED_VERSIONS: &[u32] = &[38, 39, 40, 68, 69, 71];
+pub(crate) const RESERVED_VERSIONS: &[u32] = &[38, 39, 40, 68, 69];
 
 /// このバイナリが知っている最新のスキーマ版数（ADR-0013 D5）。DB の版数がこれより大きければ
 /// `SqliteStore::open`/`open_with` は `StoreError::SchemaTooNew` で失敗する。

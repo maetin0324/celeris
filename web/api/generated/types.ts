@@ -2052,6 +2052,19 @@ export type EstimatorShadowSummary = {
 };
 
 export type Event = {
+  "harness_id": string;
+  "type": "harness_selected";
+} | {
+  "account_id": string;
+  "metadata": unknown;
+  "model_id": string;
+  "source_id": string;
+  "type": "llm_route_selected";
+} | {
+  "original_value": string;
+  "task_id": string;
+  "type": "harness_migration_unresolved";
+} | {
   "actor": string;
   "branch": string;
   "head_sha": string;
@@ -5550,6 +5563,7 @@ export type Task = {
   "created_at": string;
   "depends_on": Array<TaskId>;
   "genre"?: string | null;
+  "harness_id"?: string | null;
   "id": TaskId;
   "inputs": Array<ArtifactRef>;
   "kind": TaskKind;

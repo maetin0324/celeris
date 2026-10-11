@@ -341,7 +341,13 @@ fn cron_job_migration_applies_to_an_existing_schema_37_db() {
              ALTER TABLE node_sessions DROP COLUMN task_id; \
              ALTER TABLE node_sessions DROP COLUMN work_unit_id; \
              ALTER TABLE node_sessions DROP COLUMN provider; \
-             ALTER TABLE node_sessions DROP COLUMN cwd;",
+             ALTER TABLE node_sessions DROP COLUMN cwd; \
+             ALTER TABLE tasks DROP COLUMN harness_id; \
+             ALTER TABLE runs DROP COLUMN selected_harness_id; \
+             ALTER TABLE runs DROP COLUMN selected_source_id; \
+             ALTER TABLE runs DROP COLUMN selected_model_id; \
+             ALTER TABLE runs DROP COLUMN selected_account_id; \
+             ALTER TABLE runs DROP COLUMN selection_metadata_json;",
         )
         .unwrap();
         conn.execute(

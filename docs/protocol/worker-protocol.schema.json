@@ -3341,6 +3341,12 @@
             "null"
           ]
         },
+        "harness_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "id": {
           "$ref": "#/$defs/TaskId"
         },

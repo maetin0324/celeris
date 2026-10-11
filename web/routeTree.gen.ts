@@ -29,6 +29,8 @@ import { Route as ReportsRouteImport } from './routes/reports'
 import { Route as BrowserIndexRouteImport } from './routes/browser.index'
 import { Route as BrowserDevicesRouteImport } from './routes/browser.devices'
 import { Route as BrowserSettingsRouteImport } from './routes/browser.settings'
+import { Route as CronIndexRouteImport } from './routes/cron.index'
+import { Route as CronIdRouteImport } from './routes/cron.$id'
 import { Route as KnowledgeIndexRouteImport } from './routes/knowledge.index'
 import { Route as KnowledgeInboxRouteImport } from './routes/knowledge.inbox'
 import { Route as KnowledgeSkillsRouteImport } from './routes/knowledge.skills'
@@ -149,6 +151,16 @@ const BrowserSettingsRoute = BrowserSettingsRouteImport.update({
   path: '/browser/settings',
   getParentRoute: () => rootRouteImport,
 } as any)
+const CronIndexRoute = CronIndexRouteImport.update({
+  id: '/cron/',
+  path: '/cron/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const CronIdRoute = CronIdRouteImport.update({
+  id: '/cron/$id',
+  path: '/cron/$id',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const KnowledgeIndexRoute = KnowledgeIndexRouteImport.update({
   id: '/knowledge/',
   path: '/knowledge/',
@@ -267,6 +279,7 @@ export interface FileRoutesByFullPath {
   '/reports': typeof ReportsRoute
   '/browser/devices': typeof BrowserDevicesRoute
   '/browser/settings': typeof BrowserSettingsRoute
+  '/cron/$id': typeof CronIdRoute
   '/knowledge/inbox': typeof KnowledgeInboxRoute
   '/knowledge/skills': typeof KnowledgeSkillsRoute
   '/org/$id': typeof OrgIdRoute
@@ -274,6 +287,7 @@ export interface FileRoutesByFullPath {
   '/plans/new': typeof PlansNewRoute
   '/tasks/new': typeof TasksNewRoute
   '/browser/': typeof BrowserIndexRoute
+  '/cron/': typeof CronIndexRoute
   '/knowledge/': typeof KnowledgeIndexRoute
   '/org/': typeof OrgIndexRoute
   '/projects/': typeof ProjectsIndexRoute
@@ -308,6 +322,7 @@ export interface FileRoutesByTo {
   '/reports': typeof ReportsRoute
   '/browser/devices': typeof BrowserDevicesRoute
   '/browser/settings': typeof BrowserSettingsRoute
+  '/cron/$id': typeof CronIdRoute
   '/knowledge/inbox': typeof KnowledgeInboxRoute
   '/knowledge/skills': typeof KnowledgeSkillsRoute
   '/org/$id': typeof OrgIdRoute
@@ -315,6 +330,7 @@ export interface FileRoutesByTo {
   '/plans/new': typeof PlansNewRoute
   '/tasks/new': typeof TasksNewRoute
   '/browser': typeof BrowserIndexRoute
+  '/cron': typeof CronIndexRoute
   '/knowledge': typeof KnowledgeIndexRoute
   '/org': typeof OrgIndexRoute
   '/projects': typeof ProjectsIndexRoute
@@ -350,6 +366,7 @@ export interface FileRoutesById {
   '/reports': typeof ReportsRoute
   '/browser/devices': typeof BrowserDevicesRoute
   '/browser/settings': typeof BrowserSettingsRoute
+  '/cron/$id': typeof CronIdRoute
   '/knowledge/inbox': typeof KnowledgeInboxRoute
   '/knowledge/skills': typeof KnowledgeSkillsRoute
   '/org/$id': typeof OrgIdRoute
@@ -357,6 +374,7 @@ export interface FileRoutesById {
   '/plans/new': typeof PlansNewRoute
   '/tasks/new': typeof TasksNewRoute
   '/browser/': typeof BrowserIndexRoute
+  '/cron/': typeof CronIndexRoute
   '/knowledge/': typeof KnowledgeIndexRoute
   '/org/': typeof OrgIndexRoute
   '/projects/': typeof ProjectsIndexRoute
@@ -393,6 +411,7 @@ export interface FileRouteTypes {
     | '/reports'
     | '/browser/devices'
     | '/browser/settings'
+    | '/cron/$id'
     | '/knowledge/inbox'
     | '/knowledge/skills'
     | '/org/$id'
@@ -400,6 +419,7 @@ export interface FileRouteTypes {
     | '/plans/new'
     | '/tasks/new'
     | '/browser/'
+    | '/cron/'
     | '/knowledge/'
     | '/org/'
     | '/projects/'
@@ -434,6 +454,7 @@ export interface FileRouteTypes {
     | '/reports'
     | '/browser/devices'
     | '/browser/settings'
+    | '/cron/$id'
     | '/knowledge/inbox'
     | '/knowledge/skills'
     | '/org/$id'
@@ -441,6 +462,7 @@ export interface FileRouteTypes {
     | '/plans/new'
     | '/tasks/new'
     | '/browser'
+    | '/cron'
     | '/knowledge'
     | '/org'
     | '/projects'
@@ -475,6 +497,7 @@ export interface FileRouteTypes {
     | '/reports'
     | '/browser/devices'
     | '/browser/settings'
+    | '/cron/$id'
     | '/knowledge/inbox'
     | '/knowledge/skills'
     | '/org/$id'
@@ -482,6 +505,7 @@ export interface FileRouteTypes {
     | '/plans/new'
     | '/tasks/new'
     | '/browser/'
+    | '/cron/'
     | '/knowledge/'
     | '/org/'
     | '/projects/'
@@ -517,6 +541,7 @@ export interface RootRouteChildren {
   ReportsRoute: typeof ReportsRoute
   BrowserDevicesRoute: typeof BrowserDevicesRoute
   BrowserSettingsRoute: typeof BrowserSettingsRoute
+  CronIdRoute: typeof CronIdRoute
   KnowledgeInboxRoute: typeof KnowledgeInboxRoute
   KnowledgeSkillsRoute: typeof KnowledgeSkillsRoute
   OrgIdRoute: typeof OrgIdRoute
@@ -524,6 +549,7 @@ export interface RootRouteChildren {
   PlansNewRoute: typeof PlansNewRoute
   TasksNewRoute: typeof TasksNewRoute
   BrowserIndexRoute: typeof BrowserIndexRoute
+  CronIndexRoute: typeof CronIndexRoute
   KnowledgeIndexRoute: typeof KnowledgeIndexRoute
   OrgIndexRoute: typeof OrgIndexRoute
   ProjectsIndexRoute: typeof ProjectsIndexRoute
@@ -679,6 +705,20 @@ declare module '@tanstack/react-router' {
       path: '/browser/settings'
       fullPath: '/browser/settings'
       preLoaderRoute: typeof BrowserSettingsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/cron/': {
+      id: '/cron/'
+      path: '/cron'
+      fullPath: '/cron/'
+      preLoaderRoute: typeof CronIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/cron/$id': {
+      id: '/cron/$id'
+      path: '/cron/$id'
+      fullPath: '/cron/$id'
+      preLoaderRoute: typeof CronIdRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/knowledge/': {
@@ -837,6 +877,7 @@ const rootRouteChildren: RootRouteChildren = {
   ReportsRoute: ReportsRoute,
   BrowserDevicesRoute: BrowserDevicesRoute,
   BrowserSettingsRoute: BrowserSettingsRoute,
+  CronIdRoute: CronIdRoute,
   KnowledgeInboxRoute: KnowledgeInboxRoute,
   KnowledgeSkillsRoute: KnowledgeSkillsRoute,
   OrgIdRoute: OrgIdRoute,
@@ -844,6 +885,7 @@ const rootRouteChildren: RootRouteChildren = {
   PlansNewRoute: PlansNewRoute,
   TasksNewRoute: TasksNewRoute,
   BrowserIndexRoute: BrowserIndexRoute,
+  CronIndexRoute: CronIndexRoute,
   KnowledgeIndexRoute: KnowledgeIndexRoute,
   OrgIndexRoute: OrgIndexRoute,
   ProjectsIndexRoute: ProjectsIndexRoute,

@@ -41,6 +41,8 @@ export const screens = [
   { path: "/browser/devices", fixture: "/browser/devices", heading: "信頼できる端末" },
   { path: "/browser/runs/$taskId/$runId", fixture: "/browser/runs/T1/R1", heading: "ブラウザ実行" },
   { path: "/plans/new", fixture: "/plans/new", heading: "計画の作成", v3: true },
+  { path: "/cron", fixture: "/cron", heading: "定期実行", v3: true },
+  { path: "/cron/$id", fixture: "/cron/daily", heading: "知識ベースの日次整理", v3: true },
   { path: "/daemon", fixture: "/daemon", heading: "daemon", v3: true },
   { path: "/providers", fixture: "/providers", heading: "プロバイダ", v3: true },
   { path: "/models", fixture: "/models", heading: "モデル", v3: true },

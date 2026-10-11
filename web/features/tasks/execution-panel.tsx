@@ -15,6 +15,7 @@ import { Button } from "../../components/ui/button";
 import { DataList } from "../../components/ui/data-list";
 import { RoutingAuditView } from "./routing-audit-view";
 import { taskDetailQueryKey } from "./task-detail-query";
+import { WorkUnitCheckLogs } from "./work-unit-check-log";
 
 // /tasks/:id の実行と routing（P3-10、R23）。rereview / promote / phase_gate / execution_decompose、
 // routing パネル、execution の表示。execution は taskKeys.execution の key で取り、execution のイベント
@@ -145,6 +146,8 @@ export function ExecutionPanel({ detail }: { detail: TaskDetail }) {
           />
         ) : null}
       </FetchFrame>
+
+      <WorkUnitCheckLogs taskId={taskId} units={detail.execution?.plan?.work_units ?? []} />
 
       <section aria-labelledby="routing-panel-title" data-testid="routing-panel" className="min-w-0 space-y-1">
         <h3 id="routing-panel-title" className="text-body font-semibold text-foreground">

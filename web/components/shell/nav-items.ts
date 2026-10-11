@@ -18,6 +18,7 @@ export const navItems = [
   { to: "/reports", label: "報告", group: "admin" },
   // 未決の認可は受信箱で答える。承認は常設ルールと決めた記録だけなので管理側に置く（web ADR 2026-10-04 D4）。
   { to: "/approvals", label: "承認", group: "admin" },
+  { to: "/cron", label: "定期実行", group: "admin" },
   { to: "/daemon", label: "daemon", group: "admin" },
   { to: "/providers", label: "プロバイダ", group: "admin" },
   { to: "/accounts", label: "アカウント", group: "admin" },

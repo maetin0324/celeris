@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { cronFixtures } from "./cron-fixtures.mjs";
 
 const schema = JSON.parse(
   readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../api/generated/schema.json"), "utf8"),
@@ -2865,6 +2866,7 @@ export function createFakeDaemon({
   if (!new Set(["default", "rich"]).has(profile)) throw new Error(`unknown fixture profile: ${profile}`);
   fixtures = {
     ...knowledgeFixtures,
+    ...cronFixtures,
     ...defaultFixtures,
     "/api/v1/llm/routing/catalog": routingCatalogFixture,
     "/api/v1/tasks/T1/routing": routingAuditFixture,

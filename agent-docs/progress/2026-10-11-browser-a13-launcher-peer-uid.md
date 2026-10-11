@@ -68,6 +68,18 @@ test real_process_with_another_uid_is_rejected_by_dac_then_peer_uid_mismatch ...
 
 - 実行記録: （未実施。実行したら `実行記録: 2026-MM-DD exit=0` の形で日付・exit code・上の 4 行を貼り、追跡表 A13 を『合格』に直す。後続 task の check がこの行と追跡表を見る）
 
+## 配送の差し戻し（release verify、2026-10-11）
+
+cab85f3f の release prepare は全段 exit 0（fmt・test-parallel・clippy・build・web・browser-ledger）で、落ちたのは verify の
+check 2（counts-match）と check 5（n-1-compat）。どちらも `GET /api/v1/tasks?limit=500&archived=true: timed out`（verify.sh の urlopen timeout 30s）で
+staging の task 数が 0 と数えられたもの。
+
+- 同じ snapshot に対して本番の現行 binary（N-1、50f349d84fea）も同じ timeout で落ちた。同じ binary は 15:16 の 130f9f345c88 の verify では通っている。
+  binary に依らず、そのときの host 負荷（直後の `uptime` で load average 83.63 / 54.64 / 48.78、24 CPU）による timeout と判断する。
+- この task の差分は試験（`crates/credentiald/tests/injection_peer_uid.rs`）と文書だけで、API・DB・migration に触れない。
+- cab85f3f は既に main（87cf045d）の祖先。コードの修正は無く、検査を取り直してこの節を足した commit で release を取り直す。
+  再び落ちる場合は負荷の低い時間に verify を回すか、verify.sh の tasks 一覧の timeout を見直す（この task の範囲外）。
+
 ## 未解決事項
 
 - host での実行は未実施（上の手順）。後続 task（この run の followups.json、check: human + 進捗ファイルの『実行記録: 20…』と追跡表 A13 『合格』の grep）で人が行う。それまで追跡表 A13 は『後続』のまま。
@@ -79,6 +91,11 @@ test real_process_with_another_uid_is_rejected_by_dac_then_peer_uid_mismatch ...
   参照している ADR-0105/0109 の付記ごと整理する task を置く。
 
 ## 全体検査
+
+配送差し戻し後（2026-10-11、HEAD cab85f3f）:
+
+- `TMPDIR=/tmp bash scripts/dev/test-parallel.sh`: exit 0（passed 5175 / failed 0 / ignored 14、nextest_exit 0、doctest_exit 0）。
+- `cargo clippy --workspace -- -D warnings`: exit 0。
 
 2026-10-11、この task の tree（worker sandbox、`TMPDIR=/tmp`）:
 

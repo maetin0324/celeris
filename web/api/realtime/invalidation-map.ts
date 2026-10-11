@@ -186,6 +186,12 @@ export const EVENT_INVALIDATION: Record<EventKind, KindSpec> = {
   trusted_device_rejected: { sets: [], extra: () => [["browser", "trusted-devices"]] },
   integration_requested: { sets: ["L"] },
   integration_answered: { sets: ["L"] },
+  // ADR 2026-10-11 stranded branches: task の取り込み状態（受信箱の取り残し項目と task detail の取り込み欄）。
+  integration_detected: { sets: ["T", "L"] },
+  integration_merged: { sets: ["T", "L"] },
+  integration_discarded: { sets: ["T", "L"] },
+  integration_held: { sets: ["T", "L"] },
+  integration_reopened: { sets: ["T", "L"] },
   // 統合 WU の検査の開始・終了（TaskDetail の WU 行の check_progress）。
   integration_check_started: { sets: ["T", "E"] },
   integration_check_finished: { sets: ["T", "E"] },

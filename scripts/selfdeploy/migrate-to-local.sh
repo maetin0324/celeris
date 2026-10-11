@@ -658,9 +658,10 @@ stage_switch() {
   done
 
   if [ "$DRY_RUN" = true ]; then
-    sd_log "dry-run: would run CELERIS_STATE_DIR=$NEW_STATE $SD_DIR/install-units.sh"
+    sd_log "dry-run: would run CELERIS_STATE_DIR=$NEW_STATE $SD_DIR/install-units.sh --replace-existing"
   else
-    CELERIS_STATE_DIR="$NEW_STATE" SD_UNIT_DIR="$UNIT_DIR" bash "$SD_DIR/install-units.sh" \
+    # この root 移行は上の units-before に全 unit/drop-in を退避し、失敗時は trap で戻す。
+    CELERIS_STATE_DIR="$NEW_STATE" SD_UNIT_DIR="$UNIT_DIR" bash "$SD_DIR/install-units.sh" --replace-existing \
       || sd_die "install-units.sh failed; run 'migrate-to-local.sh rollback'"
   fi
   mark switched

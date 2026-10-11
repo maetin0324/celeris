@@ -25,10 +25,14 @@ fn browser_doctor_ping_requires_control_pid_admission() {
             std::fs::create_dir_all(&dir).unwrap();
             std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
         }
+        let config = home.join(".config/celeris/config.toml");
+        std::fs::write(&config, "").unwrap();
         let child =
             Command::new(std::env::var("CARGO_BIN_EXE_celeris-credentiald").expect("binary path"))
                 .args([
                     "serve",
+                    "--config",
+                    config.to_str().unwrap(),
                     &if admitted {
                         std::process::id().to_string()
                     } else {

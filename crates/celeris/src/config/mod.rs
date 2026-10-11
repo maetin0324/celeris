@@ -284,7 +284,7 @@ pub struct BrowserRuntimeConfig {
     pub runtime: String,
     #[serde(default)]
     pub launcher_socket: Option<PathBuf>,
-    /// launcher の host UID（credentiald の `--launcher-uid` と同じ値）。launcher 経路の
+    /// launcher の host UID（daemon と credentiald が同じ config.toml から読む）。launcher 経路の
     /// CredentialUse は、この値があり daemon の UID と別のときだけ launcher に接続する
     /// （ADR 2026-10-09 付記「接続前 gate」）。無ければ CredentialUse は接続前に拒否される。
     #[serde(default)]

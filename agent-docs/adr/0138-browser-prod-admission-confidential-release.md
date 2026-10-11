@@ -66,7 +66,7 @@ ADR-0112 の実測 conformance と ADR-0102 D6 の起動前拒否も維持する
 - 別 host UID・全隔離条件成立・owner が daemon 以外・launcher session 証明の検証成功・ptrace 拒否が実証された session で、両方の本番 `Attested` admission が成功する試験を置く。broker は実 process の事実を採り直し、worker の復元経路も同じ owner 条件を通す。
 - `SameUid`、namespace 等の非隔離、採取/検証失敗、`OwnerUnknown`、`UsernsOwnedByDaemon`、`LauncherProofMissing`（証明なし・launcher なし）、`LauncherProofInvalid`（UID・owner・PID/starttime・session の不一致）、ptrace 未拒否を個別に拒否する。owner 検査に通るが証明の無い runtime の拒否も個別に確かめる。資格情報の漏洩と復元時の H3 観測停止も回帰試験で確認する。
 - 実 process 試験（`crates/task-worker/tests/browser_launcher_ptrace.rs` 系）で、launcher で起動した別 UID runtime への daemon UID からの `ptrace` が拒否され、その session だけが両能力を許可されることを示す。host の前提（launcher socket・subuid の親 userns map）が無ければ明示的に skip し、`CELERIS_LAUNCHER_TESTS=require` では skip せず失敗させる。
-- ADR-0115 の launcher、controller、lifecycle の実 process 攻撃試験結果を記録してから有効化を判断する。A13 の broker `peer_uid_mismatch` と ptrace 拒否は別の判定として記録する。
+- ADR-0115 の launcher、controller、lifecycle の実 process 攻撃試験結果を記録してから有効化を判断する。A13 の broker `peer_uid_mismatch` と ptrace 拒否は別の判定として記録する（2026-10-11: broker 側は `crates/celeris-credentiald/tests/injection_peer_uid.rs` で launcher UID の実 process から確かめる。[ADR 2026-10-11](2026-10-11-browser-a13-broker-peer-uid-real-process.md)）。
 - 証跡: 試験コマンド・exit code・ptrace 拒否の実出力・許可/拒否の対応表・host log は親 task 01M3VFQZ2TX3W0KTDQHKCAVJR6 の成果物 `prod-admission-release-evidence.md`・`launcher-host-run.log` に記録済み（リポジトリ外）。実 session の表 `ADMISSION[real-session]` は上記「D-L 既知の未実証」のとおり後続 task に残す。
 - 本番への昇格と設定変更は、統合済み commit と試験証拠に対する人の承認を経て**人が行う**。エージェントは昇格しない。この ADR、owner 検査、launcher session 証明の実装、ptrace 拒否の実証だけでは本番を有効化しない。
 

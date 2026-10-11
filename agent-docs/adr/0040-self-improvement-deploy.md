@@ -550,7 +550,8 @@ web/ の枝（`af133256` web phase 6 P6-02）にだけある。repo に置くと
   検査の途中で新 instance が止まっても印と WU は残るので、次の active がやり直す（検査は冪等）。統合は、段の WU が全部
   済んで何も走っていない Task が照合で ready に戻り、新しい active の dispatch が始める（再起動時と同じ経路）。
 - D3: WU の受け入れ検査も統合の検査と同じく、検査 1 件ごとに `WorkUnitCheckStarted` / `WorkUnitCheckFinished`
-  （`IntegrationCheck*` と同じ欄に `run_id` を足す）を残し、出力を `<task_dir>/work-unit-checks/<wu_key>/` へ逐次書く。
+  （`IntegrationCheck*` と同じ欄に `run_id` を足す）を残し、出力を
+  `<workspace_root>/<task_id>/work-unit-checks/<wu_key>/` へ逐次書く（保存先の決定は [ADR 2026-10-08 付記](2026-10-08-work-unit-scope-snapshot.md#付記-wu-検査ログの保存先-2026-10-11)）。
   task 詳細の WU の行の `check_progress` と `GET /tasks/{id}/work-units/{wu_id}/check-log` は両方の event を読む。
   GUI は既存の WU の行の表示（統合で入れたもの）をそのまま使う。
 - `in_flight` は run（worker・reviewer）のプロセスと、draining になる前に始まっていた統合だけを数える。手元の検査は

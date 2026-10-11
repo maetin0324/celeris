@@ -56,13 +56,21 @@ integration-checks が再現しない理由: 統合のログは `ws.task_dir`（
   `drain_hand_off.rs` は WU 検査ログが `<root>/<task_id>/work-unit-checks/a` の下にあること、
   `integration_check_progress.rs` は統合ログが `<root>/<task_id>/integration-checks/integrate-build` の下にあることを assert。
 
-## 未解決事項（後続 WU readers-docs / verify）
+## 後続 verify
 
-- 文書の旧記述: `agent-docs/adr/0040-self-improvement-deploy.md:553`（`<task_dir>/work-unit-checks/<wu_key>/`）、
-  `agent-docs/progress/2026-10-04-drain-hand-off.md:30`。ADR 付記に置き場所の決定を書く。
-- `crates/task-api/tests/files.rs:616-617` は `env.workspace(&task)` の下に WU ログを置く fixture（event の path を読むだけなので合格はするが、新しい置き場所に合わせるとよい）。
-- WU preamble（crates/task-worker）の範囲 check 説明との突き合わせ。
-- workspace 全体の `bash scripts/dev/test-parallel.sh` と `cargo clippy --workspace -- -D warnings` は verify WU で。
+workspace 全体の `bash scripts/dev/test-parallel.sh` と `cargo clippy --workspace -- -D warnings` は verify WU で実行する。
+
+## readers-docs の確認（2026-10-11）
+
+- `task-api` の `check-log` handler は開始 event の絶対 `log_path` を `read_log_tail` に渡す。task directory 内への制限は
+  なく、workspace root の `<task_id>/work-unit-checks/...` を読める。`crates/task-api/tests/files.rs` の WU log fixture
+  は `env.workspace(task)`（`<workspace_root>/<task_id>`）を使っており、新しい保存先と一致する。
+- `task-ops` の WU check progress view は event の `key`・`index`・`cmd` 等を表示するだけで、ログ path を組み立てない。
+  既存試験の `/tmp/...` は view 用ダミー event であり配置依存はない。
+- `crates/task-worker/src/preamble.rs` および `claude_code/prompt.rs` scope check guidance に log path の記載はなく、
+  新しい配置との矛盾はない。
+- API 文書と WU checks guide を新しい保存先に追随させた。ADR 2026-10-08 に置き場所の理由と統合ログを変更しない理由を
+  付記した。2026-10-04 の hand-off 記録も新しい保存先に更新した。
 
 ## 提案
 

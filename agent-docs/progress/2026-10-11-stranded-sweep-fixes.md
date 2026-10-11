@@ -1,7 +1,7 @@
 ---
 title: 取り残し検出の不備を直す（default branch の一本化・遠隔 repo・受信箱 item の同一性）
 updated: 2026-10-11
-status: running
+status: done
 tasks: [01M4NM5720BYCYHXT02297GFKK]
 ---
 
@@ -9,7 +9,7 @@ tasks: [01M4NM5720BYCYHXT02297GFKK]
 
 設計決定は [ADR: done task の変更を取り残さない](../adr/2026-10-11-stranded-done-branches.md) の「付記: 取り残し検出の不備（2026-10-11 本番 deploy）」（F1〜F3）を参照。
 
-完了日: 未完了。
+完了日: 2026-10-11
 
 ## 目的
 
@@ -34,20 +34,53 @@ tasks: [01M4NM5720BYCYHXT02297GFKK]
 
 ## 証拠
 
-- adr: [adr.md](2026-10-11-stranded-sweep-fixes/adr.md)
+統合後 HEAD（`00e3dcb0`、verify 段）での結果。詳細は [verify.md](2026-10-11-stranded-sweep-fixes/verify.md)。
+
+| コマンド | exit | 要点 |
+|---|---|---|
+| `TMPDIR=/tmp bash scripts/dev/test-parallel.sh` | 0 | nextest 5170 run / 5170 passed / 13 skipped、doctest 3 passed（JSON 集計 5173 passed・0 failed） |
+| `cargo clippy --workspace -- -D warnings` | 0 | 警告無し |
+| `cargo fmt --all -- --check` | 0 | 差分無し |
+| `sh scripts/dev/check-doc-links.sh` / `check-adr-numbers.sh` / `progress-index.sh --check` | 0 | いずれも ok |
+| `cargo nextest run --workspace -E 'test(stranded_)'` | 0 | 23 passed |
+
+- 葉の記録: [adr.md](2026-10-11-stranded-sweep-fixes/adr.md)・[resolve.md](2026-10-11-stranded-sweep-fixes/resolve.md)・[remote.md](2026-10-11-stranded-sweep-fixes/remote.md)・[identity.md](2026-10-11-stranded-sweep-fixes/identity.md)・[web-state.md](2026-10-11-stranded-sweep-fixes/web-state.md)・[verify.md](2026-10-11-stranded-sweep-fixes/verify.md)
+- ADR 付記の「実装との突き合わせ（F1〜F3、2026-10-11 close 段）」に関数名・migration 0070・試験名（`stranded_default_branch_*` 6 件・`stranded_remote_*` 3 件・`stranded_identity_*` 1 件）と決定からのずれを書いた。
+- close 段の record は agent-docs/ だけを変えた（`git diff --quiet "$CELERIS_WU_BASE" -- crates/ web/` は exit 0）。
 
 ## 未解決事項
 
-- （build・close 段で埋める）
+- `unintegrated` → `not_applicable` の遷移は event を追記しない（store の upsert が `NotApplicable` で event を作らない）。ADR F2 の「状態の変化は event の追記で残す」とずれる。行の `reason`・`actor=sweep`・`updated_at` には残る。
+- remote の reason 文字列が ADR 本文と違う（実装 `remote repository: not checked by the sweep`）。
+- task-api docs と task-dispatch behind_target の解決失敗時の振る舞いが ADR F1 の表と少し違う（ADR 付記に記載）。
+- `default_branch_unresolvable`（409）が `docs/api/v1/api.md` のエラーコード表に無い。
+- repos 空の task で Remote の repository に branch がある場合は記録しない（`not_applicable` 行もできない）。
+- test-parallel の要約が nextest の `passed (N slow)` を数え落とす既知の問題（本件の範囲外、未修正）。
+- web の mobile 幅の overlay 試験は `not_applicable` の section を含まない。
 
-## 本番への移行（骨子。verify で仕上げる）
+## 本番への移行
 
-- 運用セッションが手で入れた agent-platform の `default_branch=main`（`PATCH /api/v1/repos/01M2XPE3NZ1FZE061FKDY4A9PK`）は残してよい。F1 の解決順で設定が最優先になり、結果は同じ `main`。戻す必要はない。
-- 新しい migration（`task_repo_integration_states` の CHECK に `not_applicable`）は daemon 起動時に適用される。適用前に DB の backup を取る（通常の release 手順）。
-- deploy 後の最初の sweep で、benchfs の `unintegrated` 38 行が `not_applicable` に移り、受信箱から消えることを確認する（`celerisctl integration list --state unintegrated` と `--state not_applicable`）。
-- deploy 後 2 回目以降の sweep で、受信箱の `unintegrated` item の `at` が変わらないことを確認する。
-- 本番 host の操作（release・promote・daemon の差し替え）は人が行う。
+本番 host の操作はすべて人が行う。以下は人が実行する手順。
+
+1. **release と DB**: 通常の release 手順（release → verify → promote）で deploy する。daemon 起動時に migration `0070_task_integration_not_applicable.sql` が適用され、`task_integrations` を CHECK に `not_applicable` を足した表へ作り直して全行を写す（行は失わない）。通常どおり事前に DB の backup を取る。適用の確認:
+   ```sh
+   sqlite3 -readonly <本番 DB> "SELECT max(version) FROM schema_migrations;"   # 70 以上
+   sqlite3 -readonly <本番 DB> "SELECT state, count(*) FROM task_integrations GROUP BY state;"
+   ```
+   （表名・列名は本番の schema に合わせる。読み取りだけ。deploy 前に同じ集計を取って件数の合計が変わらないことを見る）
+2. **default_branch=main は残す**: 運用セッションが `PATCH /api/v1/repos/01M2XPE3NZ1FZE061FKDY4A9PK` で入れた agent-platform の `default_branch=main` は戻さない。`resolve_default_branch` は設定を最優先で使い、結果は同じ `main`。
+3. **初回 sweep の確認**（deploy 後、sweep 周期 5 分を待つ）: benchfs など遠隔 repo の `unintegrated` 38 行が `not_applicable` に移り、受信箱から消える。
+   ```sh
+   celerisctl integration list --state unintegrated --json   # deploy 前の件数から 38 減る（遠隔 repo の行が 0）
+   celerisctl integration list --state not_applicable --json # 38 件、repo は benchfs 等、reason "remote repository: not checked by the sweep"
+   curl -s -H "Authorization: Bearer $CELERIS_ADMIN_TOKEN" http://<api>/api/v1/inbox \
+     | python3 -c 'import json,sys; a=json.load(sys.stdin)["attention"]; print(sum(1 for i in a if i["type"]=="unintegrated"))'
+   ```
+   受信箱の `unintegrated` 件数が `--state unintegrated` の件数と一致し、遠隔 repo の task が含まれないこと。この移行は event を残さない（未解決事項）ので、確認は行の状態で行う。
+4. **再 sweep で新着にならない**: 2 回目以降の sweep の後、同じ `unintegrated` item の id と `at` が変わらないこと（上の `/api/v1/inbox` を 5 分以上あけて 2 回取り、`unintegrated` item の `at` を比べる）。
+5. **rollback**: release の戻し（selfdeploy の rollback）で行う。ただし migration 0070 の適用後は DB の版数が 70 になり、0070 を知らない前の版の binary は `SchemaTooNew`（ADR-0013 D5）で DB を開かない。前の版へ戻すときは、手順 1 で取った deploy 前の backup の DB と組で戻す（backup 以降の events・状態は失われるので、人が判断する）。DB を手で書き換えない。0070 を含む版どうしの戻しなら DB はそのまま使える。
 
 ## 提案
 
-- （なし）
+- `docs/api/v1/api.md` のエラーコード表に `default_branch_unresolvable`（409）を足す葉を後続で置く（文面は [resolve.md](2026-10-11-stranded-sweep-fixes/resolve.md) の提案）。
+- `unintegrated` → `not_applicable` の遷移に event を追記するかを決める（ADR F2 に合わせるなら store の upsert に event を足す。合わせないなら ADR 本文を直す）。

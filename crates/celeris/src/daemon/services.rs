@@ -358,6 +358,7 @@ mod routing_tests {
         let store = task_core::SqliteStore::open_in_memory().unwrap();
         let now = time::OffsetDateTime::now_utc();
         let task = Task {
+            harness_id: None,
             id: TaskId::new(),
             parent_id: None,
             kind: TaskKind::Execute,

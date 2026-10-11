@@ -354,6 +354,7 @@ impl SqliteStore {
                 original
             } else {
                 Task {
+                    harness_id: None,
                     id: remediation_id,
                     requirements: Default::default(),
                     parent_id: None,

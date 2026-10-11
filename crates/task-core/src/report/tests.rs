@@ -423,6 +423,7 @@ fn plain_task(kind: TaskKind) -> Task {
     use crate::model::{Budget, Check, Criterion, Status, Tier, WorkerHint, WorkspaceSpec};
     let now = OffsetDateTime::now_utc();
     Task {
+        harness_id: None,
         requirements: Default::default(),
         tree: None,
         paused_at: None,

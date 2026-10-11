@@ -129,11 +129,11 @@ pub(crate) const MIGRATION_0056: &str = include_str!("../../migrations/0056_cos_
 /// 0039 write_sets、0040 behind_targets）。`migrate` は飛ばし、
 /// `schema_migrations` にも記録しない。統合で本物の migration が入ったら、ここから外して
 /// `migration_sql` に足す（記録が無いので後から当たる）。
-pub(crate) const RESERVED_VERSIONS: &[u32] = &[38, 39, 40, 68, 69];
+pub(crate) const RESERVED_VERSIONS: &[u32] = &[38, 39, 40, 68, 69, 71];
 
 /// このバイナリが知っている最新のスキーマ版数（ADR-0013 D5）。DB の版数がこれより大きければ
 /// `SqliteStore::open`/`open_with` は `StoreError::SchemaTooNew` で失敗する。
-pub const SCHEMA_VERSION: u32 = 70;
+pub const SCHEMA_VERSION: u32 = 71;
 
 impl SqliteStore {
     fn migration_sql(version: u32) -> Result<&'static str, StoreError> {
@@ -232,6 +232,7 @@ impl SqliteStore {
             70 => Ok(include_str!(
                 "../../migrations/0070_task_integration_not_applicable.sql"
             )),
+            71 => Ok(include_str!("../../migrations/0071_llm_route_store.sql")),
             other => Err(StoreError::Invalid(format!(
                 "unknown migration version: {other}"
             ))),

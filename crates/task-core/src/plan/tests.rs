@@ -44,6 +44,7 @@ fn genre(id: &str, default_role: Option<&str>, roles: &[&str]) -> GenreSpec {
 fn parent() -> Task {
     let now = OffsetDateTime::now_utc();
     Task {
+        harness_id: None,
         requirements: Default::default(),
         tree: None,
         paused_at: None,

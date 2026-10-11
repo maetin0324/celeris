@@ -817,6 +817,7 @@ fn build_task(
         route: None,
     };
     let task = Task {
+        harness_id: None,
         requirements: spec.requirements,
         tree: None,
         paused_at: None,

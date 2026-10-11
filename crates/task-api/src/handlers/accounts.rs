@@ -69,7 +69,7 @@ async fn account_items(state: &ApiState) -> Result<Vec<AccountView>, ApiProblem>
                 .account_limits()
                 .map_err(store_problem)?
                 .into_iter()
-                .map(|l| ((l.adapter, l.account_id), l.max_runs))
+                .map(|l| ((l.source_id, l.account_id), l.max_runs))
                 .collect();
             let real_stats = {
                 let mut guard = inner

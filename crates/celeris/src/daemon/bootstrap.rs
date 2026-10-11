@@ -539,6 +539,13 @@ pub fn build_dispatcher(
             ..StoreOptions::default()
         },
     )?);
+    let registered_harnesses = config
+        .harness_declarations
+        .keys()
+        .cloned()
+        .map(task_core::llm_route::HarnessId::from)
+        .collect();
+    sqlite.resolve_migrated_task_harnesses(&registered_harnesses)?;
     // External CoS mutations can outlive the process that initiated them. Never replay an
     // uncertain side effect: surface old pending receipts for human remediation on startup.
     const COS_EXTERNAL_PENDING_GRACE_SECS: i64 = 30 * 60;

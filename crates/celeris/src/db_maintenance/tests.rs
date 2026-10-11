@@ -457,6 +457,7 @@ fn backup_retention_ignores_other_file_names() {
 fn sample_task() -> task_core::Task {
     let now = OffsetDateTime::now_utc();
     task_core::Task {
+        harness_id: None,
         requirements: Default::default(),
         tree: None,
         paused_at: None,

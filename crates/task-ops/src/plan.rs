@@ -87,6 +87,7 @@ pub fn create_plan(
     };
 
     let task = Task {
+        harness_id: None,
         requirements: Default::default(),
         tree: None,
         paused_at: None,

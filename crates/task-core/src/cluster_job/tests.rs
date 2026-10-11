@@ -173,7 +173,8 @@ fn task(status: crate::Status) -> crate::Task {
     use crate::model::{Budget, Task, TaskKind, Tier, WorkerHint, WorkspaceSpec};
     let now = time::OffsetDateTime::now_utc();
     Task {
-        requirements: Default::default(),
+            harness_id: None,
+            requirements: Default::default(),
         routing: None,
         mode: Default::default(),
         skills: Vec::new(),

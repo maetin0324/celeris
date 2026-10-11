@@ -52,6 +52,7 @@ const LANGMEM_MODEL: &str = "celeris/cheap";
 fn knowledge_task(dir: &std::path::Path) -> Task {
     let now = OffsetDateTime::now_utc();
     Task {
+        harness_id: None,
         requirements: Default::default(),
         tree: None,
         paused_at: None,

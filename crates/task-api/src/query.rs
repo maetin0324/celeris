@@ -267,6 +267,9 @@ pub(crate) const EVENT_TYPES: [&str; 82] = [
 
 pub(crate) fn event_type_name(event: &Event) -> &'static str {
     match event {
+        Event::HarnessSelected { .. } => "harness_selected",
+        Event::LlmRouteSelected { .. } => "llm_route_selected",
+        Event::HarnessMigrationUnresolved { .. } => "harness_migration_unresolved",
         Event::CosOperation { .. } => "cos_operation",
         Event::Created { .. } => "created",
         Event::BrowserUpdated { .. } => "browser_updated",

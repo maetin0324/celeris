@@ -243,6 +243,7 @@ impl CosChatContext {
     /// stores it; its id is fresh per run and nothing reads its status.
     pub fn transient_task(&self, workspace: &Path, budget: Budget, now: OffsetDateTime) -> Task {
         Task {
+            harness_id: None,
             id: TaskId::new(),
             requirements: Default::default(),
             parent_id: None,

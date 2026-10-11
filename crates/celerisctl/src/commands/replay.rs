@@ -129,6 +129,7 @@ mod tests {
         let store = SqliteStore::open_in_memory().expect("open");
         let now = time::OffsetDateTime::now_utc();
         let task = task_core::Task {
+            harness_id: None,
             requirements: Default::default(),
             tree: None,
             paused_at: None,

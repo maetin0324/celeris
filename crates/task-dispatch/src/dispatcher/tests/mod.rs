@@ -41,6 +41,7 @@ impl WorkerAdapter for InstantAdapter {
 fn new_task(dir: &std::path::Path, check: Check, max_retries: u32) -> Task {
     let now = OffsetDateTime::now_utc();
     Task {
+        harness_id: None,
         requirements: Default::default(),
         tree: None,
         paused_at: None,

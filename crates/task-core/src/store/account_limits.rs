@@ -5,7 +5,7 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountLimit {
-    pub adapter: String,
+    pub source_id: String,
     pub account_id: String,
     pub max_runs: usize,
 }
@@ -14,11 +14,11 @@ impl SqliteStore {
     pub(super) fn account_limits_impl(&self) -> Result<Vec<AccountLimit>, StoreError> {
         let conn = self.lock()?;
         let mut stmt = conn.prepare(
-            "SELECT adapter, account_id, max_runs FROM account_limits ORDER BY adapter, account_id",
+            "SELECT source_id, account_id, max_runs FROM account_limits ORDER BY source_id, account_id",
         )?;
         let rows = stmt.query_map([], |row| {
             Ok(AccountLimit {
-                adapter: row.get(0)?,
+                source_id: row.get(0)?,
                 account_id: row.get(1)?,
                 max_runs: row.get(2)?,
             })
@@ -28,7 +28,7 @@ impl SqliteStore {
 
     pub(super) fn set_account_limit_impl(
         &self,
-        adapter: &str,
+        source_id: &str,
         id: &str,
         max_runs: Option<usize>,
     ) -> Result<(), StoreError> {
@@ -40,12 +40,12 @@ impl SqliteStore {
             let now = OffsetDateTime::now_utc()
                 .format(&Rfc3339)
                 .map_err(|e| StoreError::Invalid(e.to_string()))?;
-            conn.execute("INSERT INTO account_limits (adapter, account_id, max_runs, updated_at) VALUES (?1, ?2, ?3, ?4) ON CONFLICT(adapter, account_id) DO UPDATE SET max_runs=excluded.max_runs, updated_at=excluded.updated_at",
-                params![adapter, id, max_runs, now])?;
+            conn.execute("INSERT INTO account_limits (source_id, account_id, max_runs, updated_at) VALUES (?1, ?2, ?3, ?4) ON CONFLICT(source_id, account_id) DO UPDATE SET max_runs=excluded.max_runs, updated_at=excluded.updated_at",
+                params![source_id, id, max_runs, now])?;
         } else {
             conn.execute(
-                "DELETE FROM account_limits WHERE adapter=?1 AND account_id=?2",
-                params![adapter, id],
+                "DELETE FROM account_limits WHERE source_id=?1 AND account_id=?2",
+                params![source_id, id],
             )?;
         }
         Ok(())
@@ -57,7 +57,7 @@ mod tests {
     use super::*;
     use crate::TaskStore;
     #[test]
-    fn account_limits_persist_clear_and_keep_adapters_separate() {
+    fn account_limits_source_persist_clear_and_keep_sources_separate() {
         let dir = tempfile::tempdir().unwrap();
         let db = dir.path().join("limits.db");
         {

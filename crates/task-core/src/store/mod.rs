@@ -111,6 +111,9 @@ mod messages;
 mod model_catalog;
 pub use model_catalog::ModelCatalogStore;
 mod account_limits;
+mod migrated_harness;
+#[cfg(test)]
+mod migration_harness_tests;
 pub(crate) mod migrations;
 mod org;
 mod projects;

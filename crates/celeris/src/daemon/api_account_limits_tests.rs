@@ -426,6 +426,6 @@ async fn implicit_source_account_limit_survives_reload() {
     let store = SqliteStore::open(&db).expect("store");
     let limits = store.account_limits().expect("limits");
     assert_eq!(limits.len(), 1, "{limits:?}");
-    assert_eq!(limits[0].adapter, "implicit");
+    assert_eq!(limits[0].source_id, "implicit");
     assert_eq!(limits[0].account_id, "none");
 }

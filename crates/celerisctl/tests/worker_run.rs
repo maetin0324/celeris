@@ -15,6 +15,7 @@ use time::OffsetDateTime;
 fn sample_task(status: Status, workspace: WorkspaceSpec) -> Task {
     let now = OffsetDateTime::now_utc();
     Task {
+        harness_id: None,
         requirements: Default::default(),
         tree: None,
         paused_at: None,

@@ -535,6 +535,7 @@ pub fn materialize_delegated_logging(
             budget.max_turns = defaults.max_turns;
             budget.max_wall_secs = defaults.max_wall_secs;
             Task {
+                harness_id: None,
                 requirements: t.requirements.clone(),
                 tree: None,
                 paused_at: None,

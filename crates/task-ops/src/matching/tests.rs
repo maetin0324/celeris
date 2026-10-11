@@ -160,6 +160,7 @@ fn sample_task() -> Task {
     use task_core::{Budget, Status, TaskId, TaskKind, TaskMode, Tier, WorkerHint, WorkspaceSpec};
     let now = OffsetDateTime::now_utc();
     Task {
+        harness_id: None,
         requirements: Default::default(),
         tree: None,
         paused_at: None,

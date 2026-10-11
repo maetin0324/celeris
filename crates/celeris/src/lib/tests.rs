@@ -1182,6 +1182,7 @@ auth = "publickey"
     let store = SqliteStore::open(&config.db.path).unwrap_or_else(|e| panic!("open store: {e}"));
     let now = OffsetDateTime::now_utc();
     let task = task_core::Task {
+        harness_id: None,
         requirements: Default::default(),
         tree: None,
         paused_at: None,

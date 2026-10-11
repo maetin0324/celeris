@@ -291,6 +291,7 @@ mod backfill_tests {
     fn task(workspace: WorkspaceSpec) -> Task {
         let now = OffsetDateTime::now_utc();
         Task {
+            harness_id: None,
             requirements: Default::default(),
             tree: None,
             paused_at: None,

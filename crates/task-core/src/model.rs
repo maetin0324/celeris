@@ -447,6 +447,8 @@ pub fn priority_label(priority: i32) -> &'static str {
 /// DESIGN §4.1 の `Task`。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Task {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harness_id: Option<crate::llm_route::HarnessId>,
     /// Per-task browser permissions. Absent for tasks created before this policy.
     #[serde(default, skip_serializing_if = "TaskRequirements::is_empty")]
     pub requirements: TaskRequirements,
@@ -1077,6 +1079,20 @@ pub enum Event {
         head_sha: String,
         reason: String,
         actor: String,
+    },
+    HarnessSelected {
+        harness_id: String,
+    },
+    LlmRouteSelected {
+        source_id: String,
+        model_id: String,
+        account_id: String,
+        metadata: serde_json::Value,
+    },
+    HarnessMigrationUnresolved {
+        task_id: String,
+        original_value: String,
+    },
     },
     /// CoS operation attempt, including rejected attempts. The envelope is immutable.
     CosOperation {

@@ -235,6 +235,7 @@ fn start_full(
     };
     store.message_append(&message)?;
     let task = Task {
+        harness_id: None,
         conversation: Some(message.id),
         ..task
     };
@@ -308,6 +309,7 @@ fn conversation_task(
         .and_then(|r| RoleSpec::find(roles, r));
     let id = TaskId::new();
     Task {
+        harness_id: None,
         requirements: Default::default(),
         tree: None,
         paused_at: None,

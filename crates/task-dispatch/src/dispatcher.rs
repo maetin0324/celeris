@@ -1476,7 +1476,7 @@ impl Dispatcher {
         let account_limits = match store.account_limits() {
             Ok(rows) => Some(
                 rows.into_iter()
-                    .map(|row| ((row.adapter, row.account_id), row.max_runs))
+                    .map(|row| ((row.source_id, row.account_id), row.max_runs))
                     .collect(),
             ),
             Err(error) => {
@@ -1887,7 +1887,7 @@ impl Dispatcher {
         let rows = self.store.account_limits()?;
         self.account_limits = Some(
             rows.into_iter()
-                .map(|r| ((r.adapter, r.account_id), r.max_runs))
+                .map(|r| ((r.source_id, r.account_id), r.max_runs))
                 .collect(),
         );
         Ok(())
@@ -2021,7 +2021,7 @@ impl Dispatcher {
             .account_limits()?
             .into_iter()
             .filter(|row| {
-                row.adapter == crate::capacity::IMPLICIT_ACCOUNT_ADAPTER
+                row.source_id == crate::capacity::IMPLICIT_ACCOUNT_ADAPTER
                     && !live.contains(&row.account_id)
             })
             .map(|row| row.account_id)

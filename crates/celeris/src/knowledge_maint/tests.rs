@@ -56,6 +56,7 @@ fn terminal_task(
 ) -> task_core::Task {
     let now = OffsetDateTime::now_utc();
     task_core::Task {
+        harness_id: None,
         requirements: Default::default(),
         tree: None,
         paused_at: None,

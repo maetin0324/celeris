@@ -545,6 +545,7 @@ pub fn materialize_logging(
                 genres,
             );
             Task {
+                harness_id: None,
                 requirements: t.requirements.clone(),
                 tree: None,
                 paused_at: None,

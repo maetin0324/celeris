@@ -839,6 +839,7 @@ impl SqliteStore {
         // 古い `ready` / `lease: None` を持っている。そのまま書くと `json` と `status` 列が食い違い、
         // そのタスクは二度と dispatch されず run の結果も捨てられる（Phase 53 の監査で発見）。
         let merged = Task {
+            harness_id: None,
             status: current.status,
             attempts: current.attempts,
             lease: current.lease.clone(),

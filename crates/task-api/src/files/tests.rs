@@ -180,6 +180,7 @@ fn remote_task() -> Task {
     };
     let now = time::OffsetDateTime::now_utc();
     Task {
+        harness_id: None,
         requirements: Default::default(),
         tree: None,
         paused_at: None,

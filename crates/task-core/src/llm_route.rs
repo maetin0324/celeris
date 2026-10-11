@@ -7,7 +7,7 @@ use thiserror::Error;
 macro_rules! id_type {
     ($name:ident) => {
         #[derive(
-            Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+            Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, schemars::JsonSchema,
         )]
         #[serde(transparent)]
         pub struct $name(pub String);

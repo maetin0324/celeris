@@ -9,6 +9,7 @@ use crate::repos::{RepoId, RepoRef};
 fn task() -> Task {
     let now = time::OffsetDateTime::UNIX_EPOCH;
     Task {
+        harness_id: None,
         requirements: Default::default(),
         id: TaskId::new(),
         parent_id: None,

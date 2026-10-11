@@ -23,6 +23,7 @@ fn now() -> OffsetDateTime {
 fn sample_task(kind: TaskKind, status: Status) -> Task {
     let now = now();
     Task {
+        harness_id: None,
         requirements: Default::default(),
         tree: None,
         paused_at: None,

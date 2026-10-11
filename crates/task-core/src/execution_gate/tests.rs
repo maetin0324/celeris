@@ -7,6 +7,7 @@ use crate::model::{
 fn base_task() -> Task {
     let now = time::OffsetDateTime::UNIX_EPOCH;
     Task {
+        harness_id: None,
         requirements: Default::default(),
         tree: None,
         paused_at: None,

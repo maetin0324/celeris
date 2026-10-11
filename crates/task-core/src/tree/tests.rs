@@ -76,6 +76,7 @@ use crate::model::{
 fn parent_task(max_turns: u32) -> Task {
     let now = time::OffsetDateTime::UNIX_EPOCH;
     Task {
+        harness_id: None,
         requirements: Default::default(),
         tree: None,
         paused_at: None,

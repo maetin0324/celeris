@@ -347,6 +347,45 @@ export type DecisionEffect = "resume" | "raise_once" | "replan" | "atomic" | "wi
 export type Event =
   | {
       actor: string;
+      branch: string;
+      head_sha: string;
+      reason?: string | null;
+      repo_id: RepoId;
+      type: "integration_detected";
+    }
+  | {
+      actor: string;
+      branch: string;
+      head_sha: string;
+      repo_id: RepoId;
+      type: "integration_merged";
+    }
+  | {
+      actor: string;
+      branch: string;
+      head_sha: string;
+      reason: string;
+      repo_id: RepoId;
+      type: "integration_discarded";
+    }
+  | {
+      actor: string;
+      branch: string;
+      head_sha: string;
+      reason: string;
+      repo_id: RepoId;
+      type: "integration_held";
+    }
+  | {
+      actor: string;
+      branch: string;
+      head_sha: string;
+      reason?: string | null;
+      repo_id: RepoId;
+      type: "integration_reopened";
+    }
+  | {
+      actor: string;
       operation_id: string;
       policy_version: string;
       reason: string;
@@ -1519,6 +1558,10 @@ export type UnitDeclared = "leaf" | "task";
  * 並びは判定の順（同時に複数あれば先のものを記録する）。
  */
 export type DeliverySkipReason =
+  | "no_project"
+  | "project_not_enabled"
+  | "support_task"
+  | "tree_child"
   | "multiple_repos"
   | "no_marker"
   | "marker_repo_mismatch"
@@ -1659,6 +1702,15 @@ export type AttentionItem =
       request_id: string;
       task: TaskRef;
       type: "integration_request";
+    }
+  | {
+      at: string;
+      branch: string;
+      head_sha: string;
+      reason?: string | null;
+      repo_id: RepoId;
+      task: TaskRef;
+      type: "unintegrated";
     };
 /**
  * ADR-0120 D5: 最後の integration repair の結末。
@@ -1682,7 +1734,8 @@ export type InboxKind =
   | "cluster_login"
   | "disk_full"
   | "delivery_skipped"
-  | "integration_request";
+  | "integration_request"
+  | "unintegrated";
 /**
  * ADR-0047 D1 / D4。
  */

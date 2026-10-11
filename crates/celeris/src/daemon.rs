@@ -29,6 +29,7 @@ pub(crate) mod routing_sidecar;
 pub(crate) mod run;
 pub(crate) mod secrets;
 pub(crate) mod services;
+pub(crate) mod stranded_sweep;
 pub(crate) mod tick_loop;
 
 #[cfg(test)]

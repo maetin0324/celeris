@@ -392,6 +392,21 @@ pub trait TaskStore:
         limit: usize,
     ) -> Result<Vec<TaskIntegration>, StoreError>;
 
+    /// Idempotently upsert current done-task integration state; append an event only on state change.
+    fn task_integration_upsert(
+        &self,
+        state: &crate::TaskRepoIntegrationState,
+    ) -> Result<(), StoreError>;
+    fn task_integration_get(
+        &self,
+        task_id: TaskId,
+        repo_id: RepoId,
+    ) -> Result<Option<crate::TaskRepoIntegrationState>, StoreError>;
+    fn task_integration_list(
+        &self,
+        state: Option<crate::TaskRepoIntegrationStatus>,
+    ) -> Result<Vec<crate::TaskRepoIntegrationState>, StoreError>;
+
     /// 途中目標を作る。`seq` はその案件の最大 + 1 をストアが採番し、確定した行を返す。
     /// 案件が無ければ `StoreError::Invalid`。
     fn milestone_create(

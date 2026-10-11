@@ -1035,6 +1035,41 @@ pub struct TargetSweepSkip {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Event {
+    /// ADR 2026-10-11 stranded branches: durable integration state changed.
+    IntegrationDetected {
+        repo_id: crate::RepoId,
+        branch: String,
+        head_sha: String,
+        reason: Option<String>,
+        actor: String,
+    },
+    IntegrationMerged {
+        repo_id: crate::RepoId,
+        branch: String,
+        head_sha: String,
+        actor: String,
+    },
+    IntegrationDiscarded {
+        repo_id: crate::RepoId,
+        branch: String,
+        head_sha: String,
+        reason: String,
+        actor: String,
+    },
+    IntegrationHeld {
+        repo_id: crate::RepoId,
+        branch: String,
+        head_sha: String,
+        reason: String,
+        actor: String,
+    },
+    IntegrationReopened {
+        repo_id: crate::RepoId,
+        branch: String,
+        head_sha: String,
+        reason: Option<String>,
+        actor: String,
+    },
     /// CoS operation attempt, including rejected attempts. The envelope is immutable.
     CosOperation {
         actor: String,

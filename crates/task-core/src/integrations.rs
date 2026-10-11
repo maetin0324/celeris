@@ -15,6 +15,53 @@ use ulid::Ulid;
 use crate::model::TaskId;
 use crate::repos::RepoId;
 
+/// Current per-task, per-repository disposition of a completed branch.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct TaskRepoIntegrationState {
+    pub task_id: TaskId,
+    pub repo_id: RepoId,
+    pub branch: String,
+    pub head_sha: String,
+    pub state: TaskRepoIntegrationStatus,
+    pub reason: Option<String>,
+    pub actor: String,
+    #[serde(with = "time::serde::rfc3339")]
+    #[schemars(with = "String")]
+    pub checked_at: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339")]
+    #[schemars(with = "String")]
+    pub updated_at: OffsetDateTime,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskRepoIntegrationStatus {
+    Unintegrated,
+    Integrated,
+    Discarded,
+    Held,
+}
+
+impl TaskRepoIntegrationStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Unintegrated => "unintegrated",
+            Self::Integrated => "integrated",
+            Self::Discarded => "discarded",
+            Self::Held => "held",
+        }
+    }
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "unintegrated" => Some(Self::Unintegrated),
+            "integrated" => Some(Self::Integrated),
+            "discarded" => Some(Self::Discarded),
+            "held" => Some(Self::Held),
+            _ => None,
+        }
+    }
+}
+
 /// 取り込みの記録の一意識別子（ULID）。
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,

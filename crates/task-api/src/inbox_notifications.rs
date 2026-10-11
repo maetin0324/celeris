@@ -306,6 +306,7 @@ pub(crate) fn delegated_request(
             }
         }
         InboxKind::IntegrationRequest
+        | InboxKind::Unintegrated
         | InboxKind::DeliverySkipped
         | InboxKind::ClusterLogin
         | InboxKind::DiskFull => {

@@ -1778,6 +1778,45 @@
             "at"
           ],
           "type": "object"
+        },
+        {
+          "description": "Completed task changes not yet reachable from the repository default branch.",
+          "properties": {
+            "at": {
+              "type": "string"
+            },
+            "branch": {
+              "type": "string"
+            },
+            "head_sha": {
+              "type": "string"
+            },
+            "reason": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "repo_id": {
+              "$ref": "#/$defs/RepoId"
+            },
+            "task": {
+              "$ref": "#/$defs/TaskRef"
+            },
+            "type": {
+              "const": "unintegrated",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "task",
+            "repo_id",
+            "branch",
+            "head_sha",
+            "at"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -8739,6 +8778,10 @@
     "DeliverySkipReason": {
       "description": "ADR-0121 D2: 対象案件の root で delivery を作れなかった理由（`Event::DeliverySkipped.reason`）。\n並びは判定の順（同時に複数あれば先のものを記録する）。",
       "enum": [
+        "no_project",
+        "project_not_enabled",
+        "support_task",
+        "tree_child",
         "multiple_repos",
         "no_marker",
         "marker_repo_mismatch",
@@ -9837,6 +9880,167 @@
     "Event": {
       "description": "DESIGN §4.3 の `Event`（追記専用）。ADR-0002 D2: `Transitioned` は遷移の\n*結果* を記録するものであり、`transition()` の入力（`Trigger`）とは別物。\n`JsonSchema` は ADR-0013 D8: `docs/api/v1/event.schema.json`（`EventRow` 経由）の契約に使う。",
       "oneOf": [
+        {
+          "description": "ADR 2026-10-11 stranded branches: durable integration state changed.",
+          "properties": {
+            "actor": {
+              "type": "string"
+            },
+            "branch": {
+              "type": "string"
+            },
+            "head_sha": {
+              "type": "string"
+            },
+            "reason": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "repo_id": {
+              "$ref": "#/$defs/RepoId"
+            },
+            "type": {
+              "const": "integration_detected",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "repo_id",
+            "branch",
+            "head_sha",
+            "actor"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "actor": {
+              "type": "string"
+            },
+            "branch": {
+              "type": "string"
+            },
+            "head_sha": {
+              "type": "string"
+            },
+            "repo_id": {
+              "$ref": "#/$defs/RepoId"
+            },
+            "type": {
+              "const": "integration_merged",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "repo_id",
+            "branch",
+            "head_sha",
+            "actor"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "actor": {
+              "type": "string"
+            },
+            "branch": {
+              "type": "string"
+            },
+            "head_sha": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "repo_id": {
+              "$ref": "#/$defs/RepoId"
+            },
+            "type": {
+              "const": "integration_discarded",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "repo_id",
+            "branch",
+            "head_sha",
+            "reason",
+            "actor"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "actor": {
+              "type": "string"
+            },
+            "branch": {
+              "type": "string"
+            },
+            "head_sha": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "repo_id": {
+              "$ref": "#/$defs/RepoId"
+            },
+            "type": {
+              "const": "integration_held",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "repo_id",
+            "branch",
+            "head_sha",
+            "reason",
+            "actor"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "actor": {
+              "type": "string"
+            },
+            "branch": {
+              "type": "string"
+            },
+            "head_sha": {
+              "type": "string"
+            },
+            "reason": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "repo_id": {
+              "$ref": "#/$defs/RepoId"
+            },
+            "type": {
+              "const": "integration_reopened",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "repo_id",
+            "branch",
+            "head_sha",
+            "actor"
+          ],
+          "type": "object"
+        },
         {
           "description": "CoS operation attempt, including rejected attempts. The envelope is immutable.",
           "properties": {
@@ -15179,7 +15383,8 @@
         "cluster_login",
         "disk_full",
         "delivery_skipped",
-        "integration_request"
+        "integration_request",
+        "unintegrated"
       ],
       "type": "string"
     },

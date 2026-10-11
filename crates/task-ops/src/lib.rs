@@ -63,6 +63,8 @@ pub mod routing_audit;
 pub mod routing_outcome;
 /// Read-only, task-grouped routing dataset export and deterministic offline evaluation.
 pub mod routing_replay;
+/// Deterministic scan of completed task branches against their repository default branch.
+pub mod stranded;
 pub mod tree;
 pub mod tree_adopt;
 pub mod tree_plan;

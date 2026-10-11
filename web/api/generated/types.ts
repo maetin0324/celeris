@@ -361,6 +361,14 @@ export type AttentionItem = {
   "request_id": string;
   "task": TaskRef;
   "type": "integration_request";
+} | {
+  "at": string;
+  "branch": string;
+  "head_sha": string;
+  "reason"?: string | null;
+  "repo_id": RepoId;
+  "task": TaskRef;
+  "type": "unintegrated";
 };
 
 export type AttestationClaims = {
@@ -1823,7 +1831,7 @@ export type DeliveryList = {
   "items": Array<DeliveryHead>;
 };
 
-export type DeliverySkipReason = "multiple_repos" | "no_marker" | "marker_repo_mismatch" | "repo_row_missing" | "repo_not_local" | "repo_path_mismatch" | "not_git" | "no_branch" | "branch_name_mismatch" | "refs_unresolvable" | "department_unresolved";
+export type DeliverySkipReason = "no_project" | "project_not_enabled" | "support_task" | "tree_child" | "multiple_repos" | "no_marker" | "marker_repo_mismatch" | "repo_row_missing" | "repo_not_local" | "repo_path_mismatch" | "not_git" | "no_branch" | "branch_name_mismatch" | "refs_unresolvable" | "department_unresolved";
 
 export type DeliveryState = "reviewing" | "merge_queued" | "merging" | "preparing" | "ready" | "blocked";
 
@@ -2046,6 +2054,40 @@ export type EstimatorShadowSummary = {
 };
 
 export type Event = {
+  "actor": string;
+  "branch": string;
+  "head_sha": string;
+  "reason"?: string | null;
+  "repo_id": RepoId;
+  "type": "integration_detected";
+} | {
+  "actor": string;
+  "branch": string;
+  "head_sha": string;
+  "repo_id": RepoId;
+  "type": "integration_merged";
+} | {
+  "actor": string;
+  "branch": string;
+  "head_sha": string;
+  "reason": string;
+  "repo_id": RepoId;
+  "type": "integration_discarded";
+} | {
+  "actor": string;
+  "branch": string;
+  "head_sha": string;
+  "reason": string;
+  "repo_id": RepoId;
+  "type": "integration_held";
+} | {
+  "actor": string;
+  "branch": string;
+  "head_sha": string;
+  "reason"?: string | null;
+  "repo_id": RepoId;
+  "type": "integration_reopened";
+} | {
   "actor": string;
   "operation_id": string;
   "policy_version": string;
@@ -3056,7 +3098,7 @@ export type InboxItem = {
   "title": string;
 };
 
-export type InboxKind = "decision" | "plan_gate" | "phase_gate" | "authorization" | "browser_wait" | "question" | "acceptance_check" | "draft_accept" | "project_plan" | "failed" | "unroutable" | "cluster_login" | "disk_full" | "delivery_skipped" | "integration_request";
+export type InboxKind = "decision" | "plan_gate" | "phase_gate" | "authorization" | "browser_wait" | "question" | "acceptance_check" | "draft_accept" | "project_plan" | "failed" | "unroutable" | "cluster_login" | "disk_full" | "delivery_skipped" | "integration_request" | "unintegrated";
 
 export type InboxLink = {
   "href": string;

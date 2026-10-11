@@ -63,8 +63,6 @@ pub mod routing_audit;
 /// Deterministic read-only JSONL export for versioned routing training records (ADR D8).
 pub mod routing_export;
 pub mod routing_outcome;
-/// Read-only, task-grouped routing dataset export and deterministic offline evaluation.
-pub mod routing_replay;
 pub mod tree;
 pub mod tree_adopt;
 pub mod tree_plan;

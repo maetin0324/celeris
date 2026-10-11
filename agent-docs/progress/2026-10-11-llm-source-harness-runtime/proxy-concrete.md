@@ -19,7 +19,8 @@ updated: 2026-10-11
 ## 実行したコマンドと結果
 - `cargo test -p llm-proxy`: lib 56 passed、proxy_integration 24 passed、estimator_sidecar 2、proxy_routing_context 2 — 全部 ok。
 - `cargo nextest run -p celeris -p llm-proxy --no-fail-fast`: 599 run, 597 passed, 2 failed。失敗 2 件は `browser_doctor::tests::*`（`path must be shorter than SUN_LEN`。run の TMPDIR が長いことによる環境要因で、この変更と無関係）。
-- workspace の test-parallel・clippy は統合（integrate-edges）で見る。
+- `cargo clippy -p llm-proxy -p celeris --all-targets -- -D warnings`: exit 0（警告なし）。
+- workspace 全体の test-parallel は統合（integrate-edges）で見る。
 
 ## 未解決
 - `task-api` の `LlmCelerisTierView`・`celeris_tiers` 欄と web/gui の表示は残っている（daemon は空配列を返す）。schema と web/gui の providers 画面を触るので api-remove で消すこと。

@@ -494,7 +494,7 @@ fn loads_example_config_and_resolves_relative_paths() {
     assert_eq!(cfg.max_concurrency, 2);
     assert_eq!(cfg.providers[0].adapter, "fake");
     assert_eq!(cfg.tick(), Duration::from_millis(2000));
-    assert_eq!(cfg.provider_specs()[0].concurrency, 2);
+    assert_eq!(cfg.provider_specs()[0].concurrency, Some(2));
     assert!(!cfg.plan.auto_accept);
     assert!(!cfg.dispatch_config().plan_auto_accept);
     cfg.validate().unwrap();
@@ -2500,7 +2500,7 @@ fn providers_include_merges_files_in_filename_order_and_still_rejects_duplicate_
         "providers.d files load in filename order after inline ones"
     );
     let b = cfg.providers.iter().find(|p| p.id == "b-acct").unwrap();
-    assert_eq!(b.concurrency, 2);
+    assert_eq!(b.concurrency, Some(2));
     assert_eq!(
         b.env.get("CLAUDE_CONFIG_DIR").map(String::as_str),
         Some("/x/b")
@@ -3901,10 +3901,10 @@ fn cheap_local_first_can_be_disabled() {
 
 /// ADR-0132 付記 L6: ローカルの行の同時実行数は既存の `concurrency`（既定 1）。
 #[test]
-fn cheap_local_first_concurrency_comes_from_the_provider_row() {
+fn cheap_local_first_legacy_concurrency_comes_from_the_provider_row() {
     let head = "[[llm_proxy.sources.openai_compatible]]\nid = \"qwen\"\nbase_url = \"http://127.0.0.1:9/v1\"\n";
     let row = "[[providers]]\nid = \"direct\"\nadapter = \"acp\"\ntiers = [\"cheap\"]\nllm_source = \"openai_compatible:qwen\"\n";
-    for (extra, expected) in [("", 1), ("concurrency = 3\n", 3)] {
+    for (extra, expected) in [("", None), ("concurrency = 3\n", Some(3))] {
         let cfg: Config = toml::from_str(&format!("{head}{row}{extra}")).unwrap();
         assert_eq!(cfg.local_cheap_providers()[0].provider, "direct");
         let spec = cfg
@@ -4575,4 +4575,86 @@ fn adapter_subagents_setting_resolves_deterministically_and_defaults_to_deny() {
         SubagentPolicy::AllowCos
     );
     assert_eq!(cfg.adapters.acp.resolved_subagents(), SubagentPolicy::Deny);
+}
+
+#[test]
+fn legacy_provider_concurrency_is_optional_and_warns_including_zero_and_include() {
+    use std::io::Write;
+    use std::sync::{Arc, Mutex};
+    #[derive(Clone)]
+    struct Capture(Arc<Mutex<Vec<u8>>>);
+    impl Write for Capture {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let include = dir.path().join("providers.d");
+    std::fs::create_dir(&include).unwrap();
+    std::fs::write(
+        include.join("legacy.toml"),
+        "id = \"included\"\nadapter = \"fake\"\nconcurrency = 0\n",
+    )
+    .unwrap();
+    let config = dir.path().join("config.toml");
+    std::fs::write(&config, format!(
+        "providers_include = \"providers.d/*.toml\"\n[accounts]\nclaude_dir = {:?}\n[[providers]]\nid = \"pool\"\nadapter = \"claude-code\"\naccount_pool = true\nconcurrency = 0\n[[providers]]\nid = \"omitted\"\nadapter = \"fake\"\n[[providers]]\nid = \"legacy\"\nadapter = \"fake\"\nconcurrency = 3\n",
+        dir.path().join("accounts"))).unwrap();
+    let bytes = Arc::new(Mutex::new(Vec::new()));
+    let writer = Capture(bytes.clone());
+    let subscriber = tracing_subscriber::fmt()
+        .without_time()
+        .with_ansi(false)
+        .with_max_level(tracing::Level::WARN)
+        .with_writer(move || writer.clone())
+        .finish();
+    let cfg = tracing::subscriber::with_default(subscriber, || Config::load(&config).unwrap());
+    let log = String::from_utf8(bytes.lock().unwrap().clone()).unwrap();
+    for id in ["pool", "included", "legacy"] {
+        assert!(
+            log.contains(&format!("provider {id}: concurrency is deprecated")),
+            "{log}"
+        );
+    }
+    assert!(!log.contains("provider omitted:"), "{log}");
+    assert!(log.contains("ignored for account pools"), "{log}");
+    // 非プール行の警告は上限の持ち主（その行の LLM source の暗黙アカウント）を指す。fake 行の source は `none`。
+    assert!(log.contains("ignored; the limit is the max_runs"), "{log}");
+    assert!(log.contains("(implicit/none)"), "{log}");
+    assert_eq!(
+        cfg.providers
+            .iter()
+            .find(|p| p.id == "omitted")
+            .unwrap()
+            .concurrency,
+        None
+    );
+    assert_eq!(
+        cfg.providers
+            .iter()
+            .find(|p| p.id == "pool")
+            .unwrap()
+            .concurrency,
+        Some(0)
+    );
+    assert_eq!(
+        cfg.providers
+            .iter()
+            .find(|p| p.id == "included")
+            .unwrap()
+            .concurrency,
+        Some(0)
+    );
+    assert_eq!(
+        cfg.providers
+            .iter()
+            .find(|p| p.id == "legacy")
+            .unwrap()
+            .concurrency,
+        Some(3)
+    );
 }

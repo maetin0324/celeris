@@ -59,6 +59,11 @@ pub struct DaemonSnapshot {
     /// ADR-0024/0025: プールのアカウント（`adapter` → `id` の順、id 昇順）。`[accounts]` が無ければ空。
     #[serde(default)]
     pub accounts: Vec<AccountLive>,
+    /// ADR 2026-10-08 account-concurrency-limits §(e)（人の決定 implicit-account）: アカウントを持たない行
+    /// （`account_pool` が off）の**LLM source ごとの暗黙アカウント**（`implicit/<llm source id>`）。
+    /// 最初の行の設定順。`[accounts]` が無くても出る。古いスナップショットには無いので既定は空。
+    #[serde(default)]
+    pub implicit_accounts: Vec<ImplicitAccountLive>,
     /// ADR-0043 D3（Phase 56）: `[containers]` の設定と、起動時に調べたコンテナ runtime。
     /// 古いスナップショットには無いので既定は `None`。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -316,6 +321,20 @@ pub struct ContainerProbeView {
     pub detail: String,
 }
 
+/// ADR 2026-10-08 account-concurrency-limits §(e): 暗黙アカウント 1 件の観測値。単位は LLM source で、
+/// 同じ source を使う非プール行は 1 件を共有する。上限の保存値は DB（`account_limits`）が正本で、
+/// 旧 `[[providers]].concurrency` は上限に使わない。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ImplicitAccountLive {
+    /// 解決済み LLM source の id（= 暗黙アカウントの id。`celeris` / `openai_compatible:<id>` 等）。
+    pub source: String,
+    /// この source を使う非プール行の id（設定順）。
+    #[serde(default)]
+    pub providers: Vec<String>,
+    /// これらの行で走っている全 run（非 CoS・CoS・プロバイダを使うレビュー run）の数。
+    pub in_use: u32,
+}
+
 /// ADR-0024/0025: プールの 1 アカウントの稼働状況（観測値。DB には書かない）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct AccountLive {
@@ -415,6 +434,9 @@ pub struct ProviderLive {
     pub id: String,
     pub adapter: String,
     pub tiers: Vec<Tier>,
+    /// Deprecated（ADR 2026-10-08 account-concurrency-limits §(a)）: config に書かれた旧値（無ければ 1）。
+    /// dispatch では使わず、何とも比べない。同時実行数はアカウント（暗黙アカウントを含む）の上限で決まる。
+    #[schemars(extend("deprecated" = true))]
     pub concurrency: usize,
     /// 実効モデル（空なら `None`）。
     pub model: Option<String>,

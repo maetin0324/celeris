@@ -337,7 +337,9 @@ impl Dispatcher {
                 retains_data: None,
                 allowed_lanes: spec.tiers.clone(),
                 resource_group_id: None,
-                concurrency_limit: Some(spec.concurrency as u32),
+                concurrency_limit: self
+                    .implicit_account_limit(&self.implicit_source_of(&spec.id))
+                    .map(|(limit, _)| limit as u32),
                 rpm_limit: None,
                 tpm_limit: None,
                 price_override: None,
@@ -513,7 +515,7 @@ impl Dispatcher {
     }
 
     /// `select_provider` に ADR-0089（Phase R6-5）の `cos` を足したもの。`cos = true`（CoS の対話 run）
-    /// なら、プールのプロバイダの `concurrency` を見ず（`crate::capacity::provider_full`）、アカウントは
+    /// なら、アカウントは
     /// 上限 +1 で走っている run の最も少ないものを選ぶ。この tick の満杯集合 `full` は非 CoS の判定
     /// なので、CoS は共有せず自分だけの集合で選ぶ（CoS の選択も `full` を汚さない）。
     ///
@@ -645,7 +647,7 @@ impl Dispatcher {
                     candidates.push(candidate(ProviderCandidateOutcome::Cooldown, None));
                     continue;
                 }
-                if full.contains(id) || self.provider_full(id, cos) {
+                if full.contains(id) || self.implicit_account_full(id, 0) {
                     local_full = true;
                     full.insert(id.clone());
                     visited.insert(id.clone());
@@ -704,7 +706,7 @@ impl Dispatcher {
                         });
                         candidates.len() - 1
                     };
-                    if self.provider_full(&provider, cos) {
+                    if self.implicit_account_full(&provider, 0) {
                         record(ProviderCandidateOutcome::Full);
                         full.insert(provider);
                         continue;
@@ -732,7 +734,7 @@ impl Dispatcher {
                         let score = if ranked_role {
                             -(priority(&provider) as f64)
                         } else {
-                            self.account_score(account_adapter, &account_id)
+                            self.account_score(account_adapter, &account_id, cos)
                         };
                         if score > best_score {
                             best_score = score;
@@ -825,8 +827,7 @@ impl Dispatcher {
             Some(account_id) => AccountAdapter::parse(&active.adapter)
                 .is_some_and(|adapter| self.account_usable(adapter, account_id, cos)),
         };
-        let provider =
-            self.matching_provider_for_adapter(&active.adapter, hint.tier, now, full, cos);
+        let provider = self.matching_provider_for_adapter(&active.adapter, hint.tier, now, full);
         // 設定行が見つかっても、プールの有無がセッション作成時と食い違っていたら（config を書き換えた
         // 等）留まらない。`decide` の `AccountChanged`（プールを使う ⇔ 使わないの切り替えも該当）と
         // 矛盾しないように。
@@ -860,7 +861,6 @@ impl Dispatcher {
         requested_tier: Tier,
         now: Instant,
         excluded: &std::collections::HashSet<ProviderId>,
-        cos: bool,
     ) -> Option<ProviderId> {
         let mut tiers: Vec<Tier> = [Tier::Cheap, Tier::Standard, Tier::Frontier]
             .into_iter()
@@ -875,7 +875,7 @@ impl Dispatcher {
                 adapter: Some(adapter_id.to_string()),
             };
             if let Selection::Picked { provider, .. } = self.policy.select(&pinned, now, excluded)
-                && !self.provider_full(&provider, cos)
+                && !self.implicit_account_full(&provider, 0)
             {
                 return Some(provider);
             }
@@ -939,19 +939,19 @@ impl Dispatcher {
         let candidate = AccountCandidate {
             id: account_id,
             logged_in: dir.logged_in,
-            in_use: self.account_in_use(adapter, account_id),
+            in_use: self.account_admission_in_use(adapter, account_id, cos),
         };
         evaluate(
             &candidate,
             book.state(account_id),
-            crate::capacity::account_run_limit(cfg.max_runs_per_account, cos),
+            self.account_run_limit(adapter, account_id, cos),
             now,
         )
         .excluded
         .is_none()
     }
 
-    pub(super) fn account_score(&self, adapter: AccountAdapter, id: &str) -> f64 {
+    pub(super) fn account_score(&self, adapter: AccountAdapter, id: &str, cos: bool) -> f64 {
         let Some(book) = self.account_book(adapter) else {
             return f64::NEG_INFINITY;
         };
@@ -959,15 +959,12 @@ impl Dispatcher {
         let candidate = AccountCandidate {
             id,
             logged_in: true,
-            in_use: self.account_in_use(adapter, id),
+            in_use: self.account_admission_in_use(adapter, id, cos),
         };
         crate::accounts::evaluate(
             &candidate,
             book.state(id),
-            self.config
-                .accounts
-                .as_ref()
-                .map_or(1, |c| c.max_runs_per_account),
+            self.account_run_limit(adapter, id, cos),
             (self.now_unix_fn)(),
         )
         .score
@@ -1000,14 +997,19 @@ impl Dispatcher {
             .map(|d| AccountCandidate {
                 id: d.id.as_str(),
                 logged_in: d.logged_in,
-                in_use: self.account_in_use(adapter, &d.id),
+                in_use: self.account_admission_in_use(adapter, &d.id, cos),
             })
             .collect();
+        let limit = |id: &str| self.account_run_limit(adapter, id, cos);
         if cos {
-            let limit = crate::capacity::account_run_limit(cfg.max_runs_per_account, true);
-            return crate::accounts::select_account_least_loaded(&candidates, &book, limit, now);
+            return crate::accounts::select_account_least_loaded_with_limits(
+                &candidates,
+                &book,
+                limit,
+                now,
+            );
         }
-        select_account(&candidates, &book, cfg.max_runs_per_account, now)
+        crate::accounts::select_account_with_limits(&candidates, &book, limit, now)
     }
 
     /// ADR-0024 D4: プール run の供給側失敗をアカウントの cooldown として記録する（プロバイダは cooldown にしない）。

@@ -70,13 +70,14 @@
       "description": "`GET /accounts`。",
       "properties": {
         "items": {
-          "description": "`adapter` → `id` の順。",
+          "description": "実アカウントを `adapter` → `id` の順に並べ、その後ろに暗黙アカウント（`implicit = true`）を行の設定順に並べる。",
           "items": {
             "$ref": "#/$defs/AccountView"
           },
           "type": "array"
         },
         "max_runs_per_account": {
+          "description": "ADR 2026-10-08 account-concurrency-limits §(c): 保存値（`max_runs`）の無いアカウントの既定の上限\n（`[accounts] max_runs_per_account`。`[accounts]` が無い構成では組み込みの既定 2）。",
           "format": "uint",
           "minimum": 0,
           "type": "integer"
@@ -437,8 +438,17 @@
           ]
         },
         "dir": {
-          "description": "アカウントディレクトリの絶対パス（ログイン手順に要る。秘密の中身は含まない）。",
-          "type": "string"
+          "description": "アカウントディレクトリの絶対パス（ログイン手順に要る。秘密の中身は含まない）。暗黙アカウントは `null`。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "effective_max_runs": {
+          "description": "実効上限（非 CoS の run の同時数。実アカウントの CoS run はこれ +1 まで、暗黙アカウントは CoS を含めた全数で比べる）。",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
         },
         "excluded_reason": {
           "description": "`\"not_logged_in\" | \"at_capacity\" | \"cooldown\" | \"five_hour_exhausted\" | \"seven_day_exhausted\" | \"one_month_exhausted\" | \"rejected\"`。",
@@ -449,6 +459,10 @@
         },
         "id": {
           "type": "string"
+        },
+        "implicit": {
+          "description": "§(e): 暗黙アカウント（`adapter = \"implicit\"`、非プール行の LLM source ごとに 1 件）か。",
+          "type": "boolean"
         },
         "in_use": {
           "description": "実行中の run の数。最初の tick 前は `0`。",
@@ -474,6 +488,27 @@
           "description": "ADR-0024 D7: 進行中のログイン中継があるか。",
           "type": "boolean"
         },
+        "max_runs": {
+          "description": "ADR 2026-10-08 account-concurrency-limits §(c): このアカウントに保存された上限（`PATCH` で設定）。無ければ `null`（既定に従う）。",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "max_runs_source": {
+          "description": "実効上限の出どころ: `\"account\"`（保存値）| `\"default\"`（`max_runs_per_account`）。",
+          "type": "string"
+        },
+        "providers": {
+          "default": [],
+          "description": "暗黙アカウントの LLM source（= `id`）を使う非プール行の id（設定順）。実アカウントは空。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "score": {
           "description": "ADR-0024 D3 のスコア。除外なら `null`。",
           "format": "double",
@@ -498,11 +533,13 @@
       },
       "required": [
         "id",
-        "dir",
         "logged_in",
         "in_use",
         "login_pending",
-        "stats"
+        "stats",
+        "effective_max_runs",
+        "max_runs_source",
+        "implicit"
       ],
       "type": "object"
     },
@@ -7597,6 +7634,14 @@
         },
         "hostname": {
           "type": "string"
+        },
+        "implicit_accounts": {
+          "default": [],
+          "description": "ADR 2026-10-08 account-concurrency-limits §(e)（人の決定 implicit-account）: アカウントを持たない行\n（`account_pool` が off）の**LLM source ごとの暗黙アカウント**（`implicit/<llm source id>`）。\n最初の行の設定順。`[accounts]` が無くても出る。古いスナップショットには無いので既定は空。",
+          "items": {
+            "$ref": "#/$defs/ImplicitAccountLive"
+          },
+          "type": "array"
         },
         "in_flight": {
           "items": {
@@ -14731,6 +14776,34 @@
       ],
       "type": "object"
     },
+    "ImplicitAccountLive": {
+      "description": "ADR 2026-10-08 account-concurrency-limits §(e): 暗黙アカウント 1 件の観測値。単位は LLM source で、\n同じ source を使う非プール行は 1 件を共有する。上限の保存値は DB（`account_limits`）が正本で、\n旧 `[[providers]].concurrency` は上限に使わない。",
+      "properties": {
+        "in_use": {
+          "description": "これらの行で走っている全 run（非 CoS・CoS・プロバイダを使うレビュー run）の数。",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "providers": {
+          "default": [],
+          "description": "この source を使う非プール行の id（設定順）。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "source": {
+          "description": "解決済み LLM source の id（= 暗黙アカウントの id。`celeris` / `openai_compatible:<id>` 等）。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "in_use"
+      ],
+      "type": "object"
+    },
     "InFlight": {
       "description": "実行中の run（ワーカー run、またはプロバイダを使う Reviewer run）。",
       "properties": {
@@ -21255,6 +21328,8 @@
           "type": "string"
         },
         "concurrency": {
+          "deprecated": true,
+          "description": "Deprecated（ADR 2026-10-08 account-concurrency-limits §(a)）: 書かれた旧値（無ければ 1）。意味を持たない。",
           "format": "uint",
           "minimum": 0,
           "type": "integer"
@@ -21354,6 +21429,8 @@
           "type": "string"
         },
         "concurrency": {
+          "deprecated": true,
+          "description": "Deprecated（ADR 2026-10-08 account-concurrency-limits §(a)）: config に書かれた旧値（無ければ 1）。\ndispatch では使わず、何とも比べない。同時実行数はアカウント（暗黙アカウントを含む）の上限で決まる。",
           "format": "uint",
           "minimum": 0,
           "type": "integer"
@@ -21589,6 +21666,8 @@
           "type": "string"
         },
         "concurrency": {
+          "deprecated": true,
+          "description": "Deprecated（ADR 2026-10-08 account-concurrency-limits §(a)）: config / `providers.d` に書かれた旧値（無ければ 1）。\ndispatch では使わず、何とも比べない。同時実行数はアカウント（暗黙アカウントを含む）の `max_runs` で決まる。",
           "format": "uint",
           "minimum": 0,
           "type": "integer"
@@ -21622,7 +21701,7 @@
           "type": "string"
         },
         "in_use": {
-          "description": "スナップショットが無ければ `null`。ADR-0089（Phase R6-5）: CoS の対話 run は含めない（`in_use_cos`）。",
+          "description": "この行で走っている CoS 以外の run（プロバイダを使うレビュー run を含む）の数。観測値で、上限とは比べない。\nスナップショットが無ければ `null`。ADR-0089（Phase R6-5）: CoS の対話 run は含めない（`in_use_cos`）。",
           "format": "uint32",
           "minimum": 0,
           "type": [
@@ -21631,7 +21710,7 @@
           ]
         },
         "in_use_cos": {
-          "description": "ADR-0089（Phase R6-5）: このプロバイダで走っている CoS の対話 run の数（`concurrency` の外で\n走る。`in_use` とは別に数える）。スナップショットが無ければ `null`。",
+          "description": "ADR-0089（Phase R6-5）: このプロバイダで走っている CoS の対話 run の数（`in_use` とは別に数える観測値）。\nスナップショットが無ければ `null`。",
           "format": "uint32",
           "minimum": 0,
           "type": [

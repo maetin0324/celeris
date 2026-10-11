@@ -3277,6 +3277,9 @@ export function createFakeDaemon({
               },
             },
           ],
+          // アカウントを持たない行の暗黙アカウント（LLM source 単位。ADR 2026-10-08-account-concurrency-limits §(e)）。
+          implicit: [{ id: "openai_compatible:qwen", providers: ["qwen-local"] }],
+          limits: {},
           models: structuredClone(modelCatalogFixture),
           assignments: structuredClone(modelAssignmentsFixture),
           secrets: [],
@@ -3308,9 +3311,32 @@ export function createFakeDaemon({
           return json(400, { error: "bad json" });
         }
         const parts = pathname.replace("/api/v1/", "").split("/");
+        const defaultMax = 1;
+        const limitView = (adapter, id) => {
+          const saved = ac.limits[`${adapter}/${id}`] ?? null;
+          return {
+            max_runs: saved,
+            effective_max_runs: saved ?? defaultMax,
+            max_runs_source: saved != null ? "account" : "default",
+          };
+        };
+        const implicitView = (a) => ({
+          adapter: "implicit",
+          id: a.id,
+          dir: null,
+          logged_in: true,
+          login_pending: false,
+          in_use: 0,
+          implicit: true,
+          providers: a.providers ?? [],
+          stats: { done: 0, error: 0, input_tokens: 0, output_tokens: 0, runs: 0 },
+          ...limitView("implicit", a.id),
+        });
         const view = (a) => ({
           dir: `/accounts/${a.id}`,
           in_use: 0,
+          implicit: false,
+          ...limitView(a.adapter ?? "claude-code", a.id),
           stats: {
             done: 0,
             error: 0,
@@ -3325,9 +3351,25 @@ export function createFakeDaemon({
           ...a,
         });
         if (parts[0] === "accounts") {
+          // PATCH /accounts/{adapter}/{id}: {max_runs: 1..=32 | null}（gui-api.md §3.29a）。
+          if (parts.length === 3 && req.method === "PATCH") {
+            const [, adapter, id] = parts;
+            const real = ac.accounts.find((a) => (a.adapter ?? "claude-code") === adapter && a.id === id);
+            const implicit = adapter === "implicit" ? ac.implicit.find((a) => a.id === id) : undefined;
+            if (!real && !implicit) return json(404, { error: "account_not_found", message: "account not found" });
+            const m = input.max_runs;
+            if (!("max_runs" in input) || (m !== null && !(Number.isInteger(m) && m >= 1 && m <= 32)))
+              return json(400, { error: "bad_request", message: "max_runs は 1..=32 の整数か null" });
+            if (m === null) delete ac.limits[`${adapter}/${id}`];
+            else ac.limits[`${adapter}/${id}`] = m;
+            return json(200, real ? view(real) : implicitView(implicit));
+          }
           const acc = ac.accounts.find((a) => a.id === parts[1]);
           if (parts.length === 1 && req.method === "GET")
-            return json(200, { items: ac.accounts.map(view), max_runs_per_account: 1 });
+            return json(200, {
+              items: [...ac.accounts.map(view), ...ac.implicit.map(implicitView)],
+              max_runs_per_account: defaultMax,
+            });
           if (parts.length === 1 && req.method === "POST") {
             if (!input.id || ac.accounts.some((a) => a.id === input.id))
               return json(422, { detail: "id が不正か重複しています" });

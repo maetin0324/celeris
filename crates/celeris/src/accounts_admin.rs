@@ -241,8 +241,39 @@ pub async fn remove_account(
     let dest = removed_dir.join(format!("{id}-{}", unix_now()));
     std::fs::rename(&dir, &dest)
         .map_err(|e| AccountAdminError::Unavailable(format!("failed to move account dir: {e}")))?;
+    if let Err(error) = dispatcher.set_account_limit(adapter.as_str(), id, None) {
+        // Preserve the account if its settings cannot be removed.
+        let _ = std::fs::rename(&dest, &dir);
+        return Err(AccountAdminError::Unavailable(format!(
+            "failed to clear account limit: {error}"
+        )));
+    }
     dispatcher.remove_account_book_entry(adapter, id);
     Ok(())
+}
+
+/// ADR 2026-10-08 account-concurrency-limits §(d): `PATCH /accounts/{adapter}/{id}`。存在を確かめ（実アカウントは
+/// 根の下のディレクトリ、暗黙アカウントは今の設定の非プール行）、DB に書いてからディスパッチャの表を更新する
+/// （次の tick から効く。走っている run は止めない）。`max_runs` の範囲は task-api が検査済み（DB の CHECK でも弾く）。
+pub fn set_account_limit(
+    config: &Config,
+    dispatcher: &mut task_dispatch::Dispatcher,
+    adapter: &str,
+    id: &str,
+    max_runs: Option<usize>,
+) -> Result<(), AccountAdminError> {
+    if adapter == task_dispatch::capacity::IMPLICIT_ACCOUNT_ADAPTER {
+        // 暗黙アカウントは `[accounts]` が無くても編集できる。
+        if !dispatcher.implicit_account_ids().iter().any(|p| p == id) {
+            return Err(AccountAdminError::NotFound);
+        }
+    } else {
+        let real = AccountAdapter::parse(adapter).ok_or(AccountAdminError::NotFound)?;
+        account_dir(config, real, id)?;
+    }
+    dispatcher
+        .set_account_limit(adapter, id, max_runs)
+        .map_err(|e| AccountAdminError::Unavailable(format!("failed to save account limit: {e}")))
 }
 
 /// Codex の確認は推論を消費しないので、active の tick から定期的に更新する。

@@ -63,14 +63,12 @@ function TextField({
   onChange,
   error,
   inputRef,
-  type = "text",
 }: {
   label: string;
   value: string;
   onChange: (next: string) => void;
   error?: string;
   inputRef?: RefObject<HTMLInputElement | null>;
-  type?: "text" | "number";
 }) {
   const errorId = useId();
   return (
@@ -80,8 +78,7 @@ function TextField({
         <input
           ref={inputRef}
           className={inputClass}
-          type={type}
-          min={type === "number" ? 0 : undefined}
+          type="text"
           value={value}
           aria-invalid={error ? true : undefined}
           aria-describedby={error ? errorId : undefined}
@@ -116,13 +113,20 @@ function TierChecks({ value, onChange }: { value: Tier[]; onChange: (next: Tier[
   );
 }
 
-/** 最初の error の入力欄へ focus を移す（入力順: id → concurrency）。 */
-function focusFirst(
-  errors: ProviderFieldErrors,
-  refs: { id?: RefObject<HTMLInputElement | null>; concurrency: RefObject<HTMLInputElement | null> },
-) {
-  if (errors.id) refs.id?.current?.focus();
-  else if (errors.concurrency) refs.concurrency.current?.focus();
+/**
+ * 同時実行数の案内（ADR 2026-10-08-account-concurrency-limits）。上限はプロバイダでなくアカウント
+ * （アカウントを持たない行は暗黙アカウント）ごとに持つので、ここでは編集させずアカウント画面へ導く。
+ */
+export function ConcurrencyNotice() {
+  return (
+    <p className="break-words text-label text-muted-foreground" data-testid="concurrency-notice">
+      同時実行数は
+      <Link to="/accounts" className="underline">
+        アカウントで管理
+      </Link>
+      します。アカウントを持たない実行枠も、アカウント画面の暗黙アカウントで上限を変えられます。
+    </p>
+  );
 }
 
 /** 403 の理由文。変更の操作はこの id へ aria-describedby で結ぶ。 */
@@ -145,7 +149,7 @@ export function ProviderSummary({ item }: { item: ProviderView }) {
   return (
     <div className="min-w-0 space-y-1 text-label text-foreground">
       <p className="break-words">
-        設定: {item.adapter}・concurrency {item.concurrency}・段 {item.tiers.join(", ") || "なし"}
+        設定: {item.adapter}・段 {item.tiers.join(", ") || "なし"}
         {item.model ? `・モデル ${item.model}` : ""}
       </p>
       <p className="break-words">道具の種類: {adapterLabel(item.adapter)}</p>
@@ -175,8 +179,9 @@ function StackLabel({ children }: { children: string }) {
 
 /**
  * 実行枠の現在値と状態を 1 行ずつ並べる表。状態は文字の badge で示す。
- * sm 未満では 6 列が枠に収まらず右の列（同時実行・前回の確認）が見えなかったので、行を積んで
- * 「見出し: 値」の形で全部の値を枠の中に出す（fix-r6 narrow）。sm 以上は従来の 6 列の表。
+ * sm 未満では列が枠に収まらず右の列（前回の確認）が見えなかったので、行を積んで
+ * 「見出し: 値」の形で全部の値を枠の中に出す（fix-r6 narrow）。sm 以上は 5 列の表。
+ * 同時実行数の列は持たない（ADR 2026-10-08-account-concurrency-limits: 上限はアカウント画面で管理する）。
  */
 export function ProviderStatusTable({ items }: { items: readonly ProviderView[] }) {
   const cell =
@@ -189,7 +194,6 @@ export function ProviderStatusTable({ items }: { items: readonly ProviderView[] 
           <TableHead>状態</TableHead>
           <TableHead>道具</TableHead>
           <TableHead>受ける段</TableHead>
-          <TableHead>同時実行</TableHead>
           <TableHead>前回の確認</TableHead>
         </TableRow>
       </TableHeader>
@@ -221,10 +225,6 @@ export function ProviderStatusTable({ items }: { items: readonly ProviderView[] 
                 <StackLabel>受ける段</StackLabel>
                 {item.tiers.join(", ") || "なし"}
               </TableCell>
-              <TableCell className={cell} data-field="concurrency">
-                <StackLabel>同時実行</StackLabel>
-                {item.in_use != null ? `${item.in_use} / ${item.concurrency}` : `上限 ${item.concurrency}`}
-              </TableCell>
               <TableCell className={`${cell} max-sm:break-words`} data-field="last-check">
                 <StackLabel>前回の確認</StackLabel>
                 {lastCheckText(item.last_check)}
@@ -237,7 +237,7 @@ export function ProviderStatusTable({ items }: { items: readonly ProviderView[] 
   );
 }
 
-function ProviderCard({
+export function ProviderCard({
   item,
   sender,
   blocked,
@@ -248,11 +248,10 @@ function ProviderCard({
   blocked: boolean;
   deniedId: string | undefined;
 }) {
-  const [concurrency, setConcurrency] = useState(String(item.concurrency));
   const [model, setModel] = useState(item.model ?? "");
   const [tiers, setTiers] = useState<Tier[]>(item.tiers);
-  const [errors, setErrors] = useState<ProviderFieldErrors>({});
-  const concurrencyRef = useRef<HTMLInputElement>(null);
+  const [saveError, setSaveError] = useState<string | undefined>();
+  const modelRef = useRef<HTMLInputElement>(null);
   const base = `/api/providers/${encodeURIComponent(item.id)}`;
   const check = sender.results[`check:${item.id}`];
   const checked = check?.ok ? (check.response as ProviderCheckResponse | undefined) : undefined;
@@ -300,47 +299,35 @@ function ProviderCard({
         ]}
       />
       <ProviderSummary item={item} />
+      <ConcurrencyNotice />
       <form
         noValidate
         className="min-w-0 space-y-3"
         aria-label={`実行枠 ${item.id} の設定`}
         onSubmit={(event) => {
           event.preventDefault();
-          const found = validateProviderForm({ concurrency }, "patch");
-          setErrors(found);
-          if (Object.keys(found).length > 0) {
-            focusFirst(found, { concurrency: concurrencyRef });
-            return;
-          }
+          setSaveError(undefined);
           void sender
             .run([
               {
                 id: `patch:${item.id}`,
                 path: base,
                 method: "PATCH",
-                body: buildProviderBody({ concurrency, model, tiers }, "patch"),
+                body: buildProviderBody({ model, tiers }, "patch"),
               },
               { id: "reload", path: "/api/reload", body: {} },
             ])
             .then((out) => {
               const r = out[0];
               if (r && !r.ok && r.status !== 403 && r.status !== 401) {
-                setErrors({ concurrency: `保存できませんでした: ${r.message}` });
-                concurrencyRef.current?.focus();
+                setSaveError(`保存できませんでした: ${r.message}`);
+                modelRef.current?.focus();
               }
             });
         }}
       >
         <div className="grid gap-3 sm:grid-cols-2">
-          <TextField
-            label="同時実行数（concurrency）"
-            type="number"
-            value={concurrency}
-            onChange={setConcurrency}
-            error={errors.concurrency}
-            inputRef={concurrencyRef}
-          />
-          <TextField label="モデル（model）" value={model} onChange={setModel} />
+          <TextField label="モデル（model）" value={model} onChange={setModel} error={saveError} inputRef={modelRef} />
         </div>
         <TierChecks value={tiers} onChange={setTiers} />
         <div className="flex flex-wrap gap-2">
@@ -390,15 +377,21 @@ function ProviderCard({
   );
 }
 
-function CreateForm({ sender, blocked, deniedId }: { sender: Sender; blocked: boolean; deniedId: string | undefined }) {
+export function ProviderCreateForm({
+  sender,
+  blocked,
+  deniedId,
+}: {
+  sender: Sender;
+  blocked: boolean;
+  deniedId: string | undefined;
+}) {
   const [id, setId] = useState("");
   const [adapter, setAdapter] = useState<string>("codex");
-  const [concurrency, setConcurrency] = useState("");
   const [model, setModel] = useState("");
   const [tiers, setTiers] = useState<Tier[]>([]);
   const [errors, setErrors] = useState<ProviderFieldErrors>({});
   const idRef = useRef<HTMLInputElement>(null);
-  const concurrencyRef = useRef<HTMLInputElement>(null);
   const created = sender.results.create;
   return (
     <form
@@ -407,10 +400,10 @@ function CreateForm({ sender, blocked, deniedId }: { sender: Sender; blocked: bo
       aria-label="プロバイダを追加"
       onSubmit={(event) => {
         event.preventDefault();
-        const found = validateProviderForm({ id, concurrency }, "create");
+        const found = validateProviderForm({ id }, "create");
         setErrors(found);
-        if (Object.keys(found).length > 0) {
-          focusFirst(found, { id: idRef, concurrency: concurrencyRef });
+        if (found.id) {
+          idRef.current?.focus();
           return;
         }
         void sender
@@ -418,7 +411,7 @@ function CreateForm({ sender, blocked, deniedId }: { sender: Sender; blocked: bo
             {
               id: "create",
               path: "/api/providers",
-              body: buildProviderBody({ id, adapter, concurrency, model, tiers }, "create"),
+              body: buildProviderBody({ id, adapter, model, tiers }, "create"),
             },
             { id: "reload", path: "/api/reload", body: {} },
           ])
@@ -445,17 +438,10 @@ function CreateForm({ sender, blocked, deniedId }: { sender: Sender; blocked: bo
             ))}
           </select>
         </label>
-        <TextField
-          label="新規の同時実行数（concurrency）"
-          type="number"
-          value={concurrency}
-          onChange={setConcurrency}
-          error={errors.concurrency}
-          inputRef={concurrencyRef}
-        />
         <TextField label="新規のモデル（model）" value={model} onChange={setModel} />
       </div>
       <TierChecks value={tiers} onChange={setTiers} />
+      <ConcurrencyNotice />
       <Button type="submit" variant="primary" disabled={sender.pending || blocked} aria-describedby={deniedId}>
         追加
       </Button>
@@ -621,7 +607,7 @@ export function ProvidersScreen() {
               </p>
               <FetchFrame query={catalog}>{catalog.data && <RoutingCatalogList data={catalog.data} />}</FetchFrame>
             </section>
-            <CreateForm sender={sender} blocked={denied} deniedId={deniedId} />
+            <ProviderCreateForm sender={sender} blocked={denied} deniedId={deniedId} />
             {reload && !reload.ok && reload.status !== 403 && reload.status !== 401 && (
               <p role="alert" className="text-body text-danger-foreground">
                 設定の reload に失敗しました。変更は保存済みでも、反映には daemon の再読込が要ります。

@@ -49,6 +49,15 @@ pub trait TaskStore:
     + crate::cron::CronJobStore
     + crate::store::ModelCatalogStore
 {
+    /// Authoritative per-account concurrency overrides (not event projections).
+    fn account_limits(&self) -> Result<Vec<super::AccountLimit>, StoreError>;
+    /// `None` clears an override; values must be in 1..=32.
+    fn set_account_limit(
+        &self,
+        adapter: &str,
+        id: &str,
+        max_runs: Option<usize>,
+    ) -> Result<(), StoreError>;
     /// ADR-0130 D2: store an immutable per-run Git diff snapshot.
     fn record_run_write_set(&self, record: &WriteSetRecord) -> Result<(), StoreError>;
     fn run_write_sets(&self, run_id: &str) -> Result<Vec<WriteSetRecord>, StoreError>;

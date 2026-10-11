@@ -562,6 +562,13 @@ pub fn build_dispatcher(
         config.account_pool_providers(),
         config.dispatch_config(),
     );
+    // ADR 2026-10-08 account-concurrency-limits §(e): implicit accounts are per LLM source, so the
+    // dispatcher needs the resolved source of every row before it can prune or limit them.
+    dispatcher.set_provider_llm_sources(config.provider_llm_sources());
+    // §(d): forget limits of implicit accounts whose LLM source no non-pool row uses any more.
+    if let Err(error) = dispatcher.prune_implicit_account_limits() {
+        tracing::warn!(%error, "cannot prune implicit account limits");
+    }
     // ADR 2026-10-07-build-tmp-hygiene D1.4: cron の保守 executor（`target_sweep`）の roots と上限。
     dispatcher.set_target_sweep(config.target_sweep_params());
     // 付記 A2・A3（2026-10-09）: scratch の target と終わった task の作業場所の target も掃除する。

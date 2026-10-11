@@ -37,7 +37,6 @@ adapter = "acp"
 llm_source = "opencode_go"
 account_pool = "opencode-go"      # acp 行は pool の adapter 名を文字列で書く（true / "claude-code" / "codex" も可）
 tiers = ["standard"]
-concurrency = 1
 model = "opencode-go/<model>"     # `celerisctl models list` で見える model_id
 env = { OPENCODE_DISABLE_PROJECT_CONFIG = "1" }   # OPENCODE_CONFIG は opencode 側の設定を固定したいときだけ追加
 
@@ -49,6 +48,8 @@ env = { OPENCODE_DISABLE_PROJECT_CONFIG = "1" }   # OPENCODE_CONFIG は opencode
 
 - `[accounts] opencode_dir` に既定は無い。書かなければ opencode go の pool は使われない。
 - `[model_catalog]` は省略してよい（括弧内が既定）。`refresh_interval_seconds = 0` で自動発見を止める（手動は使える）。
+- 同時実行数は opencode go のアカウントごとの上限（アカウント画面。既定は `[accounts] max_runs_per_account`）で決まる。
+  `[[providers]].concurrency` は deprecated（[provider-llm-source-migration.md](provider-llm-source-migration.md#プロバイダの-concurrency-を外し同時実行数をアカウントで管理する)）。
 - 発見で見えたモデルは routing に自動では入らない。使いたいモデルは provider 行の `model` / `tier_models` に書く。
 
 ## 3. 配送後の確認

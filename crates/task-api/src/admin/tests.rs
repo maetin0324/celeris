@@ -28,7 +28,9 @@ fn create_body_fills_defaults_like_provider_config() {
     };
     let file = body.into_file();
     assert_eq!(file.tiers, default_tiers());
-    assert_eq!(file.concurrency, 1);
+    // ADR 2026-10-08 §(a): 作成で concurrency は保存しない（表示は旧既定の 1）。
+    assert_eq!(file.concurrency, None);
+    assert_eq!(file.to_view().concurrency, 1);
     assert_eq!(file.model, "");
     assert!(!file.account_pool.is_on());
 }
@@ -43,7 +45,7 @@ fn patch_only_overwrites_provided_fields() {
         id: "acct-b".into(),
         adapter: "fake".into(),
         tiers: vec![Tier::Standard],
-        concurrency: 2,
+        concurrency: Some(2),
         model: "m1".into(),
         env: HashMap::from([("K".to_string(), "v".to_string())]),
         env_from_secrets: HashMap::new(),
@@ -60,7 +62,8 @@ fn patch_only_overwrites_provided_fields() {
         ..Default::default()
     };
     let patched = patch.apply(file.clone());
-    assert_eq!(patched.concurrency, 5);
+    // ADR 2026-10-08 §(a): PATCH の concurrency は効かない（既存の値を保つ）。
+    assert_eq!(patched.concurrency, Some(2));
     assert_eq!(patched.tiers, vec![Tier::Standard]);
     assert_eq!(patched.model, "m1");
     assert_eq!(patched.env.get("K"), Some(&"v".to_string()));
@@ -84,7 +87,7 @@ fn write_then_read_round_trips() {
         id: "acct-b".into(),
         adapter: "claude-code".into(),
         tiers: vec![Tier::Frontier],
-        concurrency: 3,
+        concurrency: Some(3),
         model: "".into(),
         env: HashMap::from([("CLAUDE_CONFIG_DIR".to_string(), "/x".to_string())]),
         env_from_secrets: HashMap::from([("K".to_string(), "secret-id".to_string())]),
@@ -97,7 +100,7 @@ fn write_then_read_round_trips() {
     let read = read_provider_file(&provider_file_path(dir.path(), "acct-b"))
         .unwrap_or_else(|e| panic!("read: {e}"));
     assert_eq!(read.id, "acct-b");
-    assert_eq!(read.concurrency, 3);
+    assert_eq!(read.concurrency, Some(3));
     assert_eq!(read.env.get("CLAUDE_CONFIG_DIR"), Some(&"/x".to_string()));
     assert_eq!(
         read.env_from_secrets.get("K"),
@@ -120,7 +123,7 @@ fn patch_round_trip_preserves_hand_edited_command_and_args() {
         id: "opencode-qwen".into(),
         adapter: "acp".into(),
         tiers: vec![Tier::Standard],
-        concurrency: 1,
+        concurrency: Some(1),
         model: "qwen-local/qwen3.8-27b".into(),
         env: HashMap::new(),
         env_from_secrets: HashMap::from([("SOME_KEY".to_string(), "some-secret".to_string())]),
@@ -151,7 +154,8 @@ fn patch_round_trip_preserves_hand_edited_command_and_args() {
     write_provider_file(dir.path(), &updated).unwrap_or_else(|e| panic!("write: {e}"));
 
     let after = read_provider_file(&path).unwrap_or_else(|e| panic!("read: {e}"));
-    assert_eq!(after.concurrency, 2);
+    // 手で書かれた旧 concurrency は往復で保ち、PATCH の値（2）は保存しない。
+    assert_eq!(after.concurrency, Some(1));
     assert_eq!(
         after.command.as_deref(),
         Some("opencode"),

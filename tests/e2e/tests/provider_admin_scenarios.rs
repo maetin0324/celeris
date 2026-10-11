@@ -148,7 +148,9 @@ env = {{ ADAPTER_SECRET = "adapter-s3cr3t-value" }}
 [[providers]]
 id = "acct-a"
 adapter = "fake"
-tiers = ["frontier", "standard", "cheap"]
+# frontier は後から足す行（acct-b）専用の tier。行ごとの同時実行数は無いので（ADR 2026-10-08 §(e)）、
+# どの行に載るかは tier で固定する。
+tiers = ["standard", "cheap"]
 concurrency = 1
 model = "fake"
 "#,
@@ -384,6 +386,7 @@ fi"#,
         json!({
             "id": "acct-c-authfail",
             "adapter": "fake",
+            "tiers": ["cheap"],
             "env": {"AUTH_FAIL": "1", "CLAUDE_CONFIG_DIR": "/home/x/.config/claude-super-secret-path"},
         }),
     );
@@ -426,13 +429,16 @@ fi"#,
     assert_eq!(checked.json()["result"], "auth_failed", "{}", checked.body);
     assert!(checked.json()["checked_at"].is_string());
 
-    // --- 変更: concurrency を PATCH ---
+    // --- 変更: concurrency を PATCH（ADR 2026-10-08 account-concurrency-limits §(a): deprecated。受け付けるが保存しない） ---
     let patched = env.patch("/providers/acct-c-authfail", json!({"concurrency": 5}));
     assert_eq!(patched.status, 200, "{}", patched.body);
-    assert_eq!(patched.json()["concurrency"], 5, "{}", patched.body);
+    assert_eq!(patched.json()["concurrency"], 1, "{}", patched.body);
 
-    // --- 作成: acct-b（正常。dispatch の overflow 先として使う） ---
-    let good = env.post("/providers", json!({"id": "acct-b", "adapter": "fake"}));
+    // --- 作成: acct-b（正常。frontier 専用の行 = reload で回転に入る新しいアカウント） ---
+    let good = env.post(
+        "/providers",
+        json!({"id": "acct-b", "adapter": "fake", "tiers": ["frontier"]}),
+    );
     assert_eq!(good.status, 201, "{}", good.body);
 
     // --- 受け入れ 4: check は `ok` も返す ---
@@ -451,6 +457,18 @@ fi"#,
         "acct-b must not be in rotation before reload: {before}"
     );
 
+    // 非プールの行の上限は暗黙アカウントが持つ（旧 `concurrency = 1` は上限に効かない）。暗黙アカウントは
+    // **LLM source 単位**（`implicit/<llm source id>`）で、fake 行はどれも source `none` なので acct-a と
+    // あとで足す acct-b・acct-c-authfail は 1 件を共有する（行ごとの枠は無い）。まず 1 にして、acct-a の run 1 本で
+    // source `none` の枠が埋まる（= 別の行 acct-b にも载らない）ことを確かめる。
+    let limit = env.patch("/accounts/implicit/none", json!({"max_runs": 1}));
+    assert_eq!(limit.status, 200, "{}", limit.body);
+    assert_eq!(
+        limit.json()["providers"],
+        json!(["acct-a"]),
+        "{}",
+        limit.body
+    );
     // --- 受け入れ 1: acct-a をゲート付きタスクで埋めてから acct-b を追加・reload し、次の tick から使われることを確かめる。
     // 実行中の run（acct-a 側）は影響を受けない。
     let ws_slow = env.workspace("ws-slow");
@@ -497,6 +515,8 @@ fi"#,
         env.get("/providers").body
     );
 
+    // frontier は acct-b だけが持つ tier なので、quick は acct-b に載るはず。ただし source `none` の暗黙アカウントは
+    // acct-a の run 1 本で満杯（`max_runs = 1`）なので、上限を上げるまでは acct-b にも載らない（行ごとの枠は無い）。
     let ws_quick = env.workspace("ws-quick");
     let quick = env.add(&[
         "--title",
@@ -505,8 +525,34 @@ fi"#,
         "true",
         "--workspace",
         &ws_quick,
+        "--tier",
+        "frontier",
     ]);
     env.celerisctl(&["approve", &quick]);
+    let started = |id: &str| {
+        let store = task_core::SqliteStore::open(&env.root.join("celeris.sqlite3")).unwrap();
+        task_core::TaskStore::events_for(&store, id.parse().unwrap())
+            .unwrap()
+            .iter()
+            .any(|(_, e)| matches!(e, task_core::Event::WorkerStarted { .. }))
+    };
+    std::thread::sleep(Duration::from_secs(10));
+    assert!(
+        !started(&quick),
+        "quick must wait while the shared implicit account (source none, max_runs = 1) is full: {}",
+        env.get("/daemon").body
+    );
+
+    // 上限を 2 に上げる（reload 不要。次の tick から効く）。同じ source を使う行は 1 件を共有するので、
+    // これで acct-a の run と acct-b の run の 2 本が載る。
+    let raised = env.patch("/accounts/implicit/none", json!({"max_runs": 2}));
+    assert_eq!(raised.status, 200, "{}", raised.body);
+    assert_eq!(
+        raised.json()["providers"],
+        json!(["acct-a", "acct-b", "acct-c-authfail"]),
+        "{}",
+        raised.body
+    );
     let quick_dispatched_to_b = wait_until(Duration::from_secs(120), || {
         let store = task_core::SqliteStore::open(&env.root.join("celeris.sqlite3")).unwrap();
         task_core::TaskStore::events_for(&store, quick.parse().unwrap())
@@ -521,7 +567,7 @@ fi"#,
             .unwrap();
         let events = task_core::TaskStore::events_for(&store, quick.parse().unwrap()).unwrap();
         panic!(
-            "quick task never dispatched to acct-b (busy acct-a should overflow to it); status={:?} events={:#?}\ndaemon={}",
+            "quick task never dispatched to acct-b after raising the shared implicit limit; status={:?} events={:#?}\ndaemon={}",
             task.status,
             events,
             env.get("/daemon").body

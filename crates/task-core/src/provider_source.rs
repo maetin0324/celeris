@@ -34,6 +34,16 @@ impl LlmSourceRef {
             Self::Unknown => "unknown",
         }
     }
+
+    /// Identifier form used as a key (ADR 2026-10-08 account-concurrency-limits §(e): implicit
+    /// accounts are per LLM source). Same as the serialized string: `openai_compatible:<id>`
+    /// keeps its source id, the others are the bare kind.
+    pub fn to_key(&self) -> String {
+        match self {
+            Self::OpenaiCompatible(id) => format!("openai_compatible:{id}"),
+            other => other.as_str().to_owned(),
+        }
+    }
 }
 
 impl Serialize for LlmSourceRef {

@@ -16,75 +16,185 @@ use crate::types::{
     AccountCheckResponse, AccountCreateBody, AccountList, AccountLoginCodeBody, AccountLoginResult,
     AccountLoginStart, AccountStats, AccountView, ValidationError,
 };
+use task_core::TaskStore;
 
 use super::{ApiResult, Params, json_response, no_query, now_rfc3339, read_json};
 
 // ---- Phase 13/14（ADR-0024, ADR-0025）: アカウントのプール（claude-code / codex） ----
 
-/// D3.29 `GET /accounts`: フィルタシステムのスキャン（`logged_in`・`dir`）+ スナップショットの観測値 + 集計を merge する。
-/// 読み取りなので認証は不要（管理系は 3.30 以降）。両方のアダプタを `adapter` → `id` の順で返す（ADR-0025 D6）。
-pub(super) async fn accounts(State(state): State<ApiState>, RawQuery(raw): RawQuery) -> ApiResult {
-    no_query(&raw)?;
-    if state.inner.accounts_roots.is_empty() {
-        return Ok(json_response(
-            StatusCode::OK,
-            &AccountList {
-                root: None,
-                roots: std::collections::HashMap::new(),
-                max_runs_per_account: 0,
-                items: Vec::new(),
-            },
-        ));
+/// ADR 2026-10-08 account-concurrency-limits §(e): 暗黙アカウントの adapter（予約語。`AccountAdapter` には無い）。
+const IMPLICIT_ADAPTER: &str = "implicit";
+/// §(d): `max_runs` の範囲（`account_limits` 表の CHECK と同じ）。
+const MAX_RUNS_RANGE: std::ops::RangeInclusive<usize> = 1..=32;
+
+/// §(c): 保存値 → 既定、の順に実効上限を決める（旧 provider `concurrency` は使わない）。
+fn effective_max_runs(stored: Option<usize>, default: usize) -> (usize, &'static str) {
+    match stored {
+        Some(n) => (n, "account"),
+        None => (default, "default"),
     }
+}
+
+/// D3.29 `GET /accounts` の items: フィルタシステムのスキャン（`logged_in`・`dir`）+ スナップショットの観測値 + 集計 +
+/// DB の上限の保存値（`account_limits`。PATCH の直後から反映される）を merge する。実アカウントを `adapter` → `id` の順
+/// （ADR-0025 D6）に並べ、その後ろに暗黙アカウントを行の設定順に並べる（`[accounts]` が無くても出る）。
+async fn account_items(state: &ApiState) -> Result<Vec<AccountView>, ApiProblem> {
     let snapshot = state.snapshot();
-    let mut items = Vec::new();
+    let default = state.inner.max_runs_per_account;
+    let mut real: Vec<(task_core::AccountAdapter, crate::accounts::AccountDirEntry)> = Vec::new();
     for adapter in task_core::AccountAdapter::ALL {
-        let Some(root) = state.inner.accounts_roots.get(&adapter) else {
-            continue;
-        };
-        let dirs = crate::accounts::scan_accounts(root, adapter);
-        let ids: Vec<String> = dirs.iter().map(|d| d.id.clone()).collect();
-        let inner = Arc::clone(&state.inner);
-        let adapter_str = adapter.as_str().to_string();
-        let stats = state
-            .blocking(move |store| {
+        if let Some(root) = state.inner.accounts_roots.get(&adapter) {
+            real.extend(
+                crate::accounts::scan_accounts(root, adapter)
+                    .into_iter()
+                    .map(|d| (adapter, d)),
+            );
+        }
+    }
+    let implicit: Vec<task_ops::daemon::ImplicitAccountLive> = snapshot
+        .as_ref()
+        .map(|s| s.implicit_accounts.clone())
+        .unwrap_or_default();
+    let keys: Vec<(String, String)> = real
+        .iter()
+        .map(|(a, d)| (a.as_str().to_string(), d.id.clone()))
+        .collect();
+    // §(e): 暗黙アカウントは LLM source 単位。同じ source を使う行の集計を足し合わせる。
+    let implicit_rows: Vec<Vec<String>> = implicit.iter().map(|i| i.providers.clone()).collect();
+    let inner = Arc::clone(&state.inner);
+    let today = time::OffsetDateTime::now_utc().date();
+    let (limits, real_stats, implicit_stats) = state
+        .blocking(move |store| {
+            let limits: std::collections::HashMap<(String, String), usize> = store
+                .account_limits()
+                .map_err(store_problem)?
+                .into_iter()
+                .map(|l| ((l.adapter, l.account_id), l.max_runs))
+                .collect();
+            let real_stats = {
                 let mut guard = inner
                     .account_stats
                     .lock()
                     .unwrap_or_else(|poisoned| poisoned.into_inner());
                 guard.catch_up(store).map_err(store_problem)?;
-                Ok(ids
+                keys.iter()
+                    .map(|(adapter, id)| guard.view(adapter, id))
+                    .collect::<Vec<_>>()
+            };
+            // §(e): 暗黙アカウントの集計はその source を使う行の run（`WorkerStarted.provider`）の合計。
+            let implicit_stats = if implicit_rows.is_empty() {
+                Vec::new()
+            } else {
+                let mut guard = inner
+                    .stats
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                guard.catch_up(store).map_err(store_problem)?;
+                implicit_rows
                     .iter()
-                    .map(|id| guard.view(&adapter_str, id))
-                    .collect::<Vec<_>>())
-            })
-            .await?;
-        for (d, stats) in dirs.iter().zip(stats) {
-            let live = snapshot.as_ref().and_then(|s| {
-                s.accounts
-                    .iter()
-                    .find(|a| a.adapter == adapter.as_str() && a.id == d.id)
-            });
-            items.push(AccountView {
-                adapter: adapter.as_str().to_string(),
-                id: d.id.clone(),
-                dir: d.dir.display().to_string(),
-                logged_in: d.logged_in,
-                in_use: live.map(|l| l.in_use).unwrap_or(0),
-                usage: live
-                    .and_then(|l| l.usage.as_ref())
-                    .map(crate::accounts::usage_view_from_live),
-                score: live.and_then(|l| l.score),
-                excluded_reason: live.and_then(|l| l.excluded_reason.clone()),
-                cooldown: live
-                    .and_then(|l| l.cooldown.as_ref())
-                    .map(crate::accounts::cooldown_view_from_live),
-                last_check: live.and_then(|l| l.last_check.clone()),
-                login_pending: live.map(|l| l.login_pending).unwrap_or(false),
-                stats,
-            });
-        }
+                    .map(|rows| {
+                        rows.iter()
+                            .map(|p| {
+                                let v = guard.view(p, today);
+                                AccountStats {
+                                    runs: v.runs,
+                                    done: v.done,
+                                    error: v.error,
+                                    input_tokens: v.input_tokens,
+                                    output_tokens: v.output_tokens,
+                                }
+                            })
+                            .fold(AccountStats::default(), |mut acc, s| {
+                                acc.runs += s.runs;
+                                acc.done += s.done;
+                                acc.error += s.error;
+                                acc.input_tokens += s.input_tokens;
+                                acc.output_tokens += s.output_tokens;
+                                acc
+                            })
+                    })
+                    .collect()
+            };
+            Ok((limits, real_stats, implicit_stats))
+        })
+        .await?;
+    let mut items = Vec::with_capacity(real.len() + implicit.len());
+    for ((adapter, d), stats) in real.iter().zip(real_stats) {
+        let live = snapshot.as_ref().and_then(|s| {
+            s.accounts
+                .iter()
+                .find(|a| a.adapter == adapter.as_str() && a.id == d.id)
+        });
+        let stored = limits
+            .get(&(adapter.as_str().to_string(), d.id.clone()))
+            .copied();
+        let (effective, source) = effective_max_runs(stored, default);
+        items.push(AccountView {
+            adapter: adapter.as_str().to_string(),
+            id: d.id.clone(),
+            dir: Some(d.dir.display().to_string()),
+            logged_in: d.logged_in,
+            in_use: live.map(|l| l.in_use).unwrap_or(0),
+            usage: live
+                .and_then(|l| l.usage.as_ref())
+                .map(crate::accounts::usage_view_from_live),
+            score: live.and_then(|l| l.score),
+            excluded_reason: live.and_then(|l| l.excluded_reason.clone()),
+            cooldown: live
+                .and_then(|l| l.cooldown.as_ref())
+                .map(crate::accounts::cooldown_view_from_live),
+            last_check: live.and_then(|l| l.last_check.clone()),
+            login_pending: live.map(|l| l.login_pending).unwrap_or(false),
+            stats,
+            max_runs: stored,
+            effective_max_runs: effective,
+            max_runs_source: source.to_string(),
+            implicit: false,
+            providers: Vec::new(),
+        });
     }
+    for (live, stats) in implicit.iter().zip(implicit_stats) {
+        let stored = limits
+            .get(&(IMPLICIT_ADAPTER.to_string(), live.source.clone()))
+            .copied();
+        items.push(implicit_view(live, stored, default, stats));
+    }
+    Ok(items)
+}
+
+/// §(e): 暗黙アカウントの 1 件（LLM source 単位。ログイン・使用量・スコアの概念は無い）。
+fn implicit_view(
+    live: &task_ops::daemon::ImplicitAccountLive,
+    stored: Option<usize>,
+    default: usize,
+    stats: AccountStats,
+) -> AccountView {
+    let (effective, source) = effective_max_runs(stored, default);
+    AccountView {
+        adapter: IMPLICIT_ADAPTER.to_string(),
+        id: live.source.clone(),
+        dir: None,
+        logged_in: true,
+        in_use: live.in_use,
+        usage: None,
+        score: None,
+        excluded_reason: (live.in_use as usize >= effective).then(|| "at_capacity".to_string()),
+        cooldown: None,
+        last_check: None,
+        login_pending: false,
+        stats,
+        max_runs: stored,
+        effective_max_runs: effective,
+        max_runs_source: source.to_string(),
+        implicit: true,
+        providers: live.providers.clone(),
+    }
+}
+
+/// D3.29 `GET /accounts`。読み取りなので認証は不要（管理系は 3.30 以降）。
+pub(super) async fn accounts(State(state): State<ApiState>, RawQuery(raw): RawQuery) -> ApiResult {
+    no_query(&raw)?;
+    let items = account_items(&state).await?;
     let roots: std::collections::HashMap<String, Option<String>> = task_core::AccountAdapter::ALL
         .into_iter()
         .map(|a| {
@@ -105,11 +215,184 @@ pub(super) async fn accounts(State(state): State<ApiState>, RawQuery(raw): RawQu
                 .get(task_core::AccountAdapter::ClaudeCode.as_str())
                 .cloned()
                 .flatten(),
-            roots,
+            roots: if state.inner.accounts_roots.is_empty() {
+                std::collections::HashMap::new()
+            } else {
+                roots
+            },
             max_runs_per_account: state.inner.max_runs_per_account,
             items,
         },
     ))
+}
+
+/// §(d) `PATCH /accounts/{adapter}/{id}` の本文: `{"max_runs": <1..=32 の整数> | null}`。欄の欠落・未知の欄・
+/// 範囲外・整数でない値は 400。
+fn parse_limit_patch(value: serde_json::Value) -> Result<Option<usize>, ApiProblem> {
+    let range_message = format!(
+        "max_runs must be an integer in {}..={} or null",
+        MAX_RUNS_RANGE.start(),
+        MAX_RUNS_RANGE.end()
+    );
+    let serde_json::Value::Object(map) = value else {
+        return Err(ApiProblem::bad_request("body must be a JSON object"));
+    };
+    if let Some(unknown) = map.keys().find(|k| k.as_str() != "max_runs") {
+        return Err(ApiProblem::bad_request(format!(
+            "unknown field `{unknown}`; only max_runs can be patched"
+        )));
+    }
+    match map.get("max_runs") {
+        None => Err(ApiProblem::bad_request(format!(
+            "missing field `max_runs`; {range_message}"
+        ))),
+        Some(serde_json::Value::Null) => Ok(None),
+        Some(v) => match v.as_u64().and_then(|n| usize::try_from(n).ok()) {
+            Some(n) if MAX_RUNS_RANGE.contains(&n) => Ok(Some(n)),
+            _ => Err(ApiProblem::bad_request(range_message)),
+        },
+    }
+}
+
+/// §(d) `PATCH /accounts/{adapter}/{id}`（管理系）: アカウントごとの上限を設定・解除する。暗黙アカウント
+/// （`adapter = implicit`）も同じ路で編集でき、`[accounts]` が無くてもよい。使用中でも変更でき、走っている run は
+/// 止めない（ディスパッチャの表を更新するので次の tick から効く）。応答は更新後の `AccountView`。
+pub(super) async fn patch_account_limit(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    Params((adapter, id)): Params<(String, String)>,
+    RawQuery(raw): RawQuery,
+    body: Body,
+) -> ApiResult {
+    patch_account_limit_inner(state, headers, adapter, id, raw, body).await
+}
+
+/// 路の衝突（§(d)）: `/accounts/{adapter}/check` と `/accounts/{adapter}/login` は静的な段が優先されるので、
+/// id が `check` / `login` のアカウントの PATCH はこの 2 つで受けて同じ処理へ渡す。
+pub(super) async fn patch_account_limit_check(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    Params(adapter): Params<String>,
+    RawQuery(raw): RawQuery,
+    body: Body,
+) -> ApiResult {
+    patch_account_limit_inner(state, headers, adapter, "check".to_string(), raw, body).await
+}
+
+pub(super) async fn patch_account_limit_login(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    Params(adapter): Params<String>,
+    RawQuery(raw): RawQuery,
+    body: Body,
+) -> ApiResult {
+    patch_account_limit_inner(state, headers, adapter, "login".to_string(), raw, body).await
+}
+
+async fn patch_account_limit_inner(
+    state: ApiState,
+    headers: HeaderMap,
+    adapter: String,
+    id: String,
+    raw: Option<String>,
+    body: Body,
+) -> ApiResult {
+    no_query(&raw)?;
+    require_admin(&state, &headers)?;
+    let value = read_json(body, false).await?;
+    let view = set_account_limit_effect(&state, &adapter, &id, value).await??;
+    Ok(json_response(StatusCode::OK, &view))
+}
+
+/// §(d) の本体（`PATCH /accounts/{adapter}/{id}` と CoS の `account.limit_set` が共有する）。外側の `Err` は
+/// celeris に届いたか分からない失敗、内側の `Err` は検査で弾いた・celeris が断った失敗（`Effect` の約束）。
+pub(crate) async fn set_account_limit_effect(
+    state: &ApiState,
+    adapter: &str,
+    id: &str,
+    body: serde_json::Value,
+) -> crate::cos::operations::Effect<AccountView> {
+    let checked = (|| {
+        require_active(state)?;
+        let implicit = adapter == IMPLICIT_ADAPTER;
+        let real_adapter = task_core::AccountAdapter::parse(adapter);
+        if !implicit && real_adapter.is_none() {
+            return Err(ApiProblem::bad_request(
+                "adapter must be claude-code, codex, opencode-go or implicit",
+            ));
+        }
+        // §(e): 暗黙アカウントの id は LLM source（`openai_compatible:<id>` は `:` を含む）。
+        let id_ok = if implicit {
+            crate::accounts::valid_implicit_account_id(id)
+        } else {
+            crate::accounts::valid_account_id(id)
+        };
+        if !id_ok {
+            return Err(ApiProblem::bad_request(
+                "id must be 1-64 ASCII alphanumeric/-/_ characters (implicit: an LLM source id, which may contain ':')",
+            ));
+        }
+        let max_runs = parse_limit_patch(body)?;
+        if let Some(a) = real_adapter
+            && !state.inner.accounts_roots.contains_key(&a)
+        {
+            return Err(ApiProblem::accounts_unavailable());
+        }
+        let Some(admin_tx) = state.inner.admin_tx.clone() else {
+            return Err(ApiProblem::accounts_unavailable());
+        };
+        Ok((implicit, max_runs, admin_tx))
+    })();
+    let (implicit, max_runs, admin_tx) = match checked {
+        Ok(v) => v,
+        Err(problem) => return Ok(Err(problem)),
+    };
+    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+    if admin_tx
+        .send(AdminRequest::AccountLimitSet {
+            adapter: adapter.to_string(),
+            id: id.to_string(),
+            max_runs,
+            reply: reply_tx,
+        })
+        .await
+        .is_err()
+    {
+        return Ok(Err(ApiProblem::internal(
+            "celeris is not accepting admin requests",
+        )));
+    }
+    match tokio::time::timeout(std::time::Duration::from_secs(10), reply_rx).await {
+        Ok(Ok(Ok(()))) => {}
+        Ok(Ok(Err(e))) => return Ok(Err(account_admin_error(id, e))),
+        Ok(Err(_)) => {
+            return Err(ApiProblem::internal(
+                "celeris dropped the account limit request",
+            ));
+        }
+        Err(_) => return Err(ApiProblem::internal("account limit update timed out")),
+    }
+    tracing::info!(who = "admin", op = "account_limit_set", account_id = %id, %adapter, ?max_runs, "admin: account limit updated");
+    let items = account_items(state).await?;
+    let view = match items
+        .into_iter()
+        .find(|v| v.adapter == adapter && v.id == id)
+    {
+        Some(view) => view,
+        // スナップショットにまだ現れていない暗黙アカウント（最初の tick 前・reload 直後）。
+        None if implicit => implicit_view(
+            &task_ops::daemon::ImplicitAccountLive {
+                source: id.to_string(),
+                providers: Vec::new(),
+                in_use: 0,
+            },
+            max_runs,
+            state.inner.max_runs_per_account,
+            AccountStats::default(),
+        ),
+        None => return Ok(Err(ApiProblem::account_not_found(id))),
+    };
+    Ok(Ok(view))
 }
 
 /// 3.30 `POST /accounts`: ディレクトリを 0700 で作る。task-api 自身は `Dispatcher`/`AccountBook` に触れない
@@ -125,6 +408,9 @@ pub(super) async fn create_account(
     require_admin(&state, &headers)?;
     let create: AccountCreateBody = read_json(body, false).await?;
     let view = create_account_op(&state, &create)?;
+    // ADR 2026-10-08 account-concurrency-limits §(d): 同じ `(adapter, id)` の古い上限の保存値が残っていれば消す
+    // （作り直しで古い上限を引き継がない）。celeris に届けばディスパッチャの表も同時に更新される。
+    clear_stale_limit(&state, &view.adapter, &view.id).await;
     let mut response = json_response(StatusCode::CREATED, &view);
     if let Ok(location) = HeaderValue::from_str(&format!("/api/v1/accounts/{}", create.id)) {
         response.headers_mut().insert(header::LOCATION, location);
@@ -168,10 +454,12 @@ pub(crate) fn create_account_op(
         Err(e) => return Err(ApiProblem::internal(e.to_string())),
     }
     tracing::info!(who = "admin", op = "account_create", account_id = %create.id, adapter = %account_adapter, "admin: account created");
+    // ADR 2026-10-08 account-concurrency-limits §(d): 古い上限の保存値の掃除は呼び出し側
+    // （`create_account` と CoS の `account.create`）が `clear_stale_limit` で行う（この関数は同期）。
     Ok(AccountView {
         adapter: account_adapter.as_str().to_string(),
         id: create.id.clone(),
-        dir: dir.display().to_string(),
+        dir: Some(dir.display().to_string()),
         logged_in: false,
         in_use: 0,
         usage: None,
@@ -181,7 +469,50 @@ pub(crate) fn create_account_op(
         last_check: None,
         login_pending: false,
         stats: AccountStats::default(),
+        max_runs: None,
+        effective_max_runs: state.inner.max_runs_per_account,
+        max_runs_source: "default".to_string(),
+        implicit: false,
+        providers: Vec::new(),
     })
+}
+
+pub(crate) async fn clear_stale_limit(state: &ApiState, adapter: &str, id: &str) {
+    let result = match state.inner.admin_tx.clone() {
+        Some(admin_tx) => {
+            let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+            let sent = admin_tx
+                .send(AdminRequest::AccountLimitSet {
+                    adapter: adapter.to_string(),
+                    id: id.to_string(),
+                    max_runs: None,
+                    reply: reply_tx,
+                })
+                .await;
+            match (
+                sent,
+                tokio::time::timeout(std::time::Duration::from_secs(10), reply_rx).await,
+            ) {
+                (Ok(()), Ok(Ok(Ok(())))) => Ok(()),
+                (_, Ok(Ok(Err(e)))) => Err(format!("{e:?}")),
+                _ => Err("celeris did not answer".to_string()),
+            }
+        }
+        None => {
+            let (adapter, id) = (adapter.to_string(), id.to_string());
+            state
+                .blocking(move |store| {
+                    store
+                        .set_account_limit(&adapter, &id, None)
+                        .map_err(store_problem)
+                })
+                .await
+                .map_err(|e| format!("{e:?}"))
+        }
+    };
+    if let Err(error) = result {
+        tracing::warn!(account_id = %id, %adapter, %error, "cannot clear a stale account limit");
+    }
 }
 
 /// 3.31 `DELETE /accounts/{id}`: celeris 側へ委譲する（S2+S8）。`<root>/.removed/<id>-<unix秒>/` へ移す

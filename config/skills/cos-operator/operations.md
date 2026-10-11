@@ -117,6 +117,9 @@ curl -sS -X POST "$API/api/v1/cos/operations" -H "Authorization: Bearer $CELERIS
 | アカウントの作成 | `POST /api/v1/accounts` | account.create | `{"id","adapter"?}`（adapter 既定 claude-code）。ログインは人（除外） |
 | アカウントの退避 | `DELETE /api/v1/accounts/<id>` | account.delete | `{"adapter"?}`（query の代わりに body）。daemon が移す外部効果。使用中は 409 |
 | アカウントの確認 | `POST /api/v1/accounts/<id>/check` | account.check | `{"adapter"?}`。外部効果 |
+| アカウントの同時実行数の上限 | `PATCH /api/v1/accounts/<id>/<account>` | account.limit_set | 路の `<id>` は adapter（`claude-code`・`codex`・`opencode-go`、暗黙アカウントは `implicit` で `<account>` は LLM source id）。`{"max_runs": 1..32}`、`null` で既定に戻す。外部効果 |
+| 同上（id が `check` のアカウント） | `PATCH /api/v1/accounts/<id>/check` | account.limit_set | 同上 |
+| 同上（id が `login` のアカウント） | `PATCH /api/v1/accounts/<id>/login` | account.limit_set | 同上 |
 | モデルの発見 | `POST /api/v1/llm/models/discover` | model_catalog.discover | `{"source"?}`。外部効果（daemon の発見を 1 回走らせる） |
 | 通知のテスト送信 | `POST /api/v1/notify/test` | notify.test | body なし。Discord に 1 通送る外部効果 |
 | 設定の再読み込み | `POST /api/v1/reload` | daemon.reload | body は `{}`。外部効果。設定の誤りは 400 で rejected |

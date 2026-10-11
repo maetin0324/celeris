@@ -97,7 +97,7 @@ fn setup(d: &mut Dispatcher, store: &Arc<SqliteStore>, failure: Option<&'static 
                 id: id.into(),
                 adapter: adapter.into(),
                 tiers: vec![Tier::Frontier],
-                concurrency: 2,
+                concurrency: None,
                 model: "m".into(),
             })
             .collect(),
@@ -583,6 +583,9 @@ async fn cos_source_fallback_accounts_are_counted_by_actual_adapter() {
         .unwrap()
         .config
         .unavailable_reason = Some("primary unavailable".into());
+    // ADR 2026-10-08 account-concurrency-limits §(e): the non-pool `acp` row is limited by its
+    // implicit account, whose default (`max_runs_per_account = 0` here) would leave no slot.
+    d.set_account_limit("implicit", "p3", Some(1)).unwrap();
     let a = thread(&store, "first-account");
     let b = thread(&store, "second-account");
     post(&store, &a, "one");

@@ -121,7 +121,7 @@ fn dispatcher_with_adapter_id(
             id: "p1".into(),
             adapter: adapter_id.into(),
             tiers: vec![Tier::Frontier, Tier::Standard, Tier::Cheap],
-            concurrency: max_concurrency,
+            concurrency: Some(max_concurrency),
             model: "m".into(),
         }],
         Duration::from_secs(1),
@@ -183,6 +183,7 @@ fn dispatcher_with_adapter_id(
             dispatcher.test_policy_clock = Some(policy_clock);
         }
     }
+
     dispatcher
 }
 
@@ -1327,7 +1328,7 @@ fn pool_dispatcher_with_requeues(
         id: "p1".into(),
         adapter: "claude-code".into(),
         tiers: vec![Tier::Frontier, Tier::Standard, Tier::Cheap],
-        concurrency: max_concurrency,
+        concurrency: Some(max_concurrency),
         model: "m".into(),
     }];
     let mut adapters: HashMap<ProviderId, Arc<dyn WorkerAdapter>> = HashMap::new();
@@ -1337,7 +1338,7 @@ fn pool_dispatcher_with_requeues(
             id: id.into(),
             adapter: "instant".into(),
             tiers: vec![Tier::Frontier, Tier::Standard, Tier::Cheap],
-            concurrency: max_concurrency,
+            concurrency: Some(max_concurrency),
             model: "m".into(),
         });
         adapters.insert(id.into(), a);
@@ -2575,11 +2576,13 @@ fn parallel_dispatcher(
             id: "p1".into(),
             adapter: "instant".into(),
             tiers: vec![Tier::Frontier, Tier::Standard, Tier::Cheap],
-            concurrency: provider_concurrency,
+            concurrency: Some(provider_concurrency),
             model: "m".into(),
         }],
         Duration::from_secs(1),
     ));
+    d.set_account_limit("implicit", "p1", Some(provider_concurrency))
+        .unwrap();
     d
 }
 

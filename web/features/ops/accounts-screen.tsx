@@ -9,7 +9,12 @@ import type {
   ProviderCheckResult,
 } from "../../api/generated/types";
 import { accountKeys } from "../../api/queries/keys";
-import { type ActionResult, ActionResultView, useActionResult } from "../../components/actions/use-action-result";
+import {
+  type ActionResult,
+  ActionResultView,
+  type ActionTarget,
+  useActionResult,
+} from "../../components/actions/use-action-result";
 import { FetchFrame } from "../../components/fetch-state/fetch-frame";
 import { ScreenFrame } from "../../components/shell/screen-frame";
 import { Badge, type BadgeTone } from "../../components/ui/badge";
@@ -187,9 +192,165 @@ function isDenied(results: Record<string, ActionResult>) {
   return Object.values(results).some((r) => r.status === 403 || r.status === 401);
 }
 
+/** アカウントごとの上限 max_runs の範囲（PATCH /accounts/{adapter}/{id} が受ける 1..=32。gui-api.md §3.29a）。 */
+export const MAX_RUNS_MIN = 1;
+export const MAX_RUNS_MAX = 32;
+
+/** 上限の入力欄の値を検査する。1..32 の整数だけを通す。 */
+export function parseMaxRunsInput(raw: string): { value: number } | { error: string } {
+  const text = raw.trim();
+  const value = Number(text);
+  if (text === "" || !/^\d+$/.test(text) || !Number.isInteger(value) || value < MAX_RUNS_MIN || value > MAX_RUNS_MAX)
+    return { error: `上限は ${MAX_RUNS_MIN}〜${MAX_RUNS_MAX} の整数で入力してください。` };
+  return { value };
+}
+
+/**
+ * URL の path 断片。`encodeURIComponent` は `:` も符号化するが、暗黙アカウントの id は
+ * `openai_compatible:<source id>` で `:` を含む（ADR 2026-10-08 §(e)・gui-api.md §3.29a）。
+ * `:` は RFC 3986 の pchar なので path 断片にそのまま書ける。文書と e2e の fake daemon も生の `:` を期待する。
+ */
+function pathSegment(value: string): string {
+  return encodeURIComponent(value).replaceAll("%3A", ":");
+}
+
+/** 上限を設定（数値）・解除（null）する要求。暗黙アカウントも adapter = "implicit" で同じ形。 */
+export function accountLimitTarget(item: AccountView, maxRuns: number | null): ActionTarget {
+  const adapter = item.adapter ?? "claude-code";
+  return {
+    id: `limit:${accountKey(item)}`,
+    path: `/api/accounts/${pathSegment(adapter)}/${pathSegment(item.id)}`,
+    method: "PATCH",
+    body: { max_runs: maxRuns } satisfies Pick<AccountView, "max_runs">,
+  };
+}
+
+/**
+ * 上限の保存・既定に戻すを送る。raw が null なら既定に戻す。検査に落ちたら送らずに文言を返す。
+ * 403・401 は画面の権限の案内に任せ、項目の error にはしない。
+ */
+export async function submitAccountLimit(
+  run: Sender["run"],
+  item: AccountView,
+  raw: string | null,
+): Promise<{ ok: boolean; error?: string }> {
+  let maxRuns: number | null = null;
+  if (raw !== null) {
+    const parsed = parseMaxRunsInput(raw);
+    if ("error" in parsed) return { ok: false, error: parsed.error };
+    maxRuns = parsed.value;
+  }
+  const [result] = await run([accountLimitTarget(item, maxRuns)]);
+  if (!result) return { ok: false };
+  if (result.ok) return { ok: true };
+  if (result.status === 403 || result.status === 401) return { ok: false };
+  return { ok: false, error: limitErrorText(result) };
+}
+
+function limitErrorText(result: ActionResult) {
+  return `保存できませんでした: ${result.message}`;
+}
+
+/** 実効上限がどこから来たか（GET /accounts の max_runs_source）。 */
+export function limitSourceLabel(item: Pick<AccountView, "max_runs_source">, defaultMax: number): string {
+  switch (item.max_runs_source) {
+    case "account":
+      return "このアカウントに保存した上限";
+    case "default":
+      return `既定（max_runs_per_account = ${defaultMax}）`;
+    default:
+      return item.max_runs_source;
+  }
+}
+
+/**
+ * 上限の編集欄: 数値入力・保存・既定に戻す。走っている run は止めず、次の割り当てから効く。
+ * 呼ぶ側は保存値・実効値を key に入れ、取り直しで値が変わったら入力欄を作り直す。
+ */
+function LimitEditor({
+  item,
+  sender,
+  disabled,
+  deniedId,
+}: {
+  item: AccountView;
+  sender: Sender;
+  disabled: boolean;
+  deniedId: string | undefined;
+}) {
+  const [value, setValue] = useState(String(item.max_runs ?? item.effective_max_runs));
+  const [localError, setLocalError] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const errorId = useId();
+  const hintId = useId();
+  const result = sender.results[`limit:${accountKey(item)}`];
+  const apiError =
+    result && !result.ok && result.status !== 403 && result.status !== 401 ? limitErrorText(result) : null;
+  const error = localError ?? apiError;
+  const send = (raw: string | null) => {
+    setLocalError(null);
+    void submitAccountLimit(sender.run, item, raw).then((out) => {
+      if (out.error) {
+        setLocalError(out.error);
+        inputRef.current?.focus();
+      }
+    });
+  };
+  return (
+    <form
+      noValidate
+      className="min-w-0 space-y-2 rounded-md border border-border bg-background p-3"
+      aria-label={`上限 ${item.id}`}
+      onSubmit={(event) => {
+        event.preventDefault();
+        send(value);
+      }}
+    >
+      <label className="block text-label text-foreground">
+        同時実行数の上限（{MAX_RUNS_MIN}〜{MAX_RUNS_MAX}）
+        <input
+          ref={inputRef}
+          className={inputClass}
+          type="number"
+          inputMode="numeric"
+          min={MAX_RUNS_MIN}
+          max={MAX_RUNS_MAX}
+          step={1}
+          value={value}
+          placeholder={String(item.effective_max_runs)}
+          aria-invalid={error ? true : undefined}
+          aria-describedby={error ? errorId : hintId}
+          onChange={(e) => {
+            setValue(e.target.value);
+            setLocalError(null);
+          }}
+        />
+      </label>
+      {error && (
+        <p id={errorId} className={fieldErrorClass}>
+          {error}
+        </p>
+      )}
+      <p id={hintId} className="text-label text-muted-foreground">
+        保存すると次の割り当てから効きます。下げても実行中の run は止めません。
+        {item.max_runs != null ? "「既定に戻す」で保存値を消します。" : "今は上書きしていません。"}
+      </p>
+      <div className="flex flex-wrap gap-2">
+        <Button type="submit" variant="primary" disabled={disabled} aria-describedby={deniedId}>
+          上限を保存
+        </Button>
+        <Button disabled={disabled || item.max_runs == null} aria-describedby={deniedId} onClick={() => send(null)}>
+          既定に戻す
+        </Button>
+      </div>
+      {result?.ok && <ActionResultView result={result} />}
+    </form>
+  );
+}
+
 export function AccountCard({
   item,
-  max,
+  defaultMax,
   fetchedAtMs,
   sender,
   blocked,
@@ -198,7 +359,8 @@ export function AccountCard({
   setLogin,
 }: {
   item: AccountView;
-  max: number;
+  /** 保存値の無いアカウントの既定（GET /accounts の max_runs_per_account）。 */
+  defaultMax: number;
   /** 一覧を取得した時刻（server 時計に補正済み）。残り時間と観測の相対時刻の基準。 */
   fetchedAtMs: number;
   sender: Sender;
@@ -224,6 +386,67 @@ export function AccountCard({
   const lastCheck = checked
     ? { result: checked.result, at: checked.checked_at, detail: checked.detail }
     : item.last_check;
+  const limitRow = {
+    key: "in_use",
+    label: "実行中の run",
+    value: `${item.in_use} / 実効上限 ${item.effective_max_runs}（${limitSourceLabel(item, defaultMax)}）`,
+  };
+  const statsRow = {
+    key: "stats",
+    label: "これまでの run",
+    value: `${item.stats.runs} 件（完了 ${item.stats.done}・エラー ${item.stats.error}）`,
+  };
+  const limitEditor = (
+    <LimitEditor
+      key={`${item.max_runs ?? "-"}:${item.effective_max_runs}`}
+      item={item}
+      sender={sender}
+      disabled={disabled}
+      deniedId={deniedId}
+    />
+  );
+  if (item.implicit) {
+    // 暗黙アカウント（LLM source ごとに 1 件。同じ source を使う行が共有する）: ログイン・確認・削除は無く、上限だけを編集する。
+    const rows = item.providers ?? [];
+    return (
+      <li
+        className="min-w-0 space-y-3 rounded-lg border border-border bg-surface p-4"
+        aria-label={`アカウント ${item.id}`}
+        data-implicit="true"
+      >
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <h3 className="min-w-0 break-words text-body font-semibold text-foreground">{item.id}</h3>
+          <Badge tone="info">暗黙アカウント</Badge>
+          {item.excluded_reason && (
+            <Badge tone="danger" data-state="除外中">
+              除外中
+            </Badge>
+          )}
+        </div>
+        <p className="break-words text-label text-muted-foreground">
+          アカウントを持たない行の LLM source「{item.id}」{" "}
+          の同時実行数をここで管理します。ログイン・確認・削除はありません。
+        </p>
+        <DataList
+          items={[
+            {
+              key: "provider",
+              label: "実行枠（この source を使う行）",
+              value: rows.length > 0 ? rows.join(", ") : item.id,
+            },
+            {
+              key: "state",
+              label: "状態",
+              value: item.excluded_reason ? excludedReasonLabel(item.excluded_reason) : "使える状態です",
+            },
+            limitRow,
+            statsRow,
+          ]}
+        />
+        {limitEditor}
+      </li>
+    );
+  }
   return (
     <li
       className="min-w-0 space-y-3 rounded-lg border border-border bg-surface p-4"
@@ -277,14 +500,11 @@ export function AccountCard({
               ? `${checkResultLabel(lastCheck.result)}・${formatAbsolute(lastCheck.at)}${lastCheck.detail ? `（${lastCheck.detail}）` : ""}`
               : "まだ確認していません",
           },
-          { key: "in_use", label: "実行中の run", value: `${item.in_use} / 上限 ${max}` },
-          {
-            key: "stats",
-            label: "これまでの run",
-            value: `${item.stats.runs} 件（完了 ${item.stats.done}・エラー ${item.stats.error}）`,
-          },
+          limitRow,
+          statsRow,
         ]}
       />
+      {limitEditor}
       <div className="flex flex-wrap gap-2">
         <Button
           disabled={disabled}
@@ -519,12 +739,12 @@ export function AccountsScreen() {
                   role="alert"
                   className="border-l-2 border-danger-foreground bg-danger px-3 py-2 text-body text-danger-foreground"
                 >
-                  この操作を行う権限がありません。アカウントの追加・確認・ログイン・削除は止めています。管理者に権限を確認してください。
+                  この操作を行う権限がありません。アカウントの追加・確認・ログイン・削除・上限の変更は止めています。管理者に権限を確認してください。
                 </p>
               )}
               <Section
                 title={`アカウント一覧（${query.data.items.length}）`}
-                description="状態の欄で、使えるか・ログインが要るか・失敗しているかを確かめます。認証情報の値は表示しません。"
+                description="状態の欄で、使えるか・ログインが要るか・失敗しているかを確かめます。同時実行数の上限はアカウントごとに変えられます（アカウントを持たない実行枠は暗黙アカウントとして並びます）。認証情報の値は表示しません。"
               >
                 {query.data.items.length === 0 ? (
                   <p className="text-body text-muted-foreground">
@@ -536,7 +756,7 @@ export function AccountsScreen() {
                       <AccountCard
                         key={accountKey(item)}
                         item={item}
-                        max={query.data.max_runs_per_account}
+                        defaultMax={query.data.max_runs_per_account}
                         fetchedAtMs={query.dataUpdatedAt + getServerClockOffset()}
                         sender={sender}
                         blocked={denied}

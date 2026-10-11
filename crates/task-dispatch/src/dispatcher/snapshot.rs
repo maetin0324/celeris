@@ -27,6 +27,7 @@ impl Dispatcher {
         // `&mut self` が要る（アカウントのスキャンキャッシュを埋める）ので、`self.publisher` を借りる前に計算する。
         let (accounts_root, accounts_roots, max_runs_per_account, accounts) =
             self.accounts_snapshot();
+        let implicit_accounts = self.implicit_accounts_snapshot();
         let Some(publisher) = &self.publisher else {
             return;
         };
@@ -152,6 +153,7 @@ impl Dispatcher {
             max_runs_per_account,
             accounts_roots,
             accounts,
+            implicit_accounts,
             // ADR-0075 D6（Phase G1）: scratch pool の観測値（`scratch_gc` が tick ごとに組む）。
             scratch: self.scratch.view.clone(),
             // ADR-0043 D3（Phase 56）: コンテナ実行の設定と起動時の検出。
@@ -178,6 +180,20 @@ impl Dispatcher {
     /// ADR-0024 D5 / ADR-0025 D6: スナップショットに載せる `accounts_root`（claude-code の別名）/ `accounts_roots`
     /// （アダプタ → 根ディレクトリ）/ `max_runs_per_account` / `accounts[]`（`adapter` → `id` の順）。
     /// `[accounts]` が無ければ全て空。
+    /// ADR 2026-10-08 account-concurrency-limits §(e): 非プール行の LLM source ごとの暗黙アカウント
+    /// （最初の行の設定順）。
+    /// 上限の保存値は DB が正本なので、API が `account_limits` を読んで実効上限を組む。
+    pub(super) fn implicit_accounts_snapshot(&self) -> Vec<task_ops::daemon::ImplicitAccountLive> {
+        self.implicit_account_ids()
+            .into_iter()
+            .map(|source| task_ops::daemon::ImplicitAccountLive {
+                in_use: self.implicit_account_in_use(&source) as u32,
+                providers: self.implicit_account_providers(&source),
+                source,
+            })
+            .collect()
+    }
+
     #[allow(clippy::type_complexity)]
     pub(super) fn accounts_snapshot(
         &mut self,
@@ -214,10 +230,10 @@ impl Dispatcher {
                     &AccountCandidate {
                         id: &d.id,
                         logged_in: d.logged_in,
-                        in_use,
+                        in_use: self.account_admission_in_use(adapter, &d.id, false),
                     },
                     state,
-                    cfg.max_runs_per_account,
+                    self.account_run_limit(adapter, &d.id, false),
                     now,
                 );
                 items.push(AccountLive {

@@ -21,6 +21,17 @@ pub fn valid_account_id(id: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
+/// ADR 2026-10-08 account-concurrency-limits §(e): the id of an implicit account is a resolved
+/// LLM source, so `openai_compatible:<source id>` brings a `:`. Same length and no path
+/// separators, dots or traversal as [`valid_account_id`].
+pub fn valid_implicit_account_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 64
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == ':')
+}
+
 /// `claude_dir` 直下の 1 ディレクトリ。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountDirEntry {

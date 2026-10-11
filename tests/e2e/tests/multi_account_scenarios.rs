@@ -202,10 +202,40 @@ model = "model-b"
 env = { ACCOUNT = "b" }
 "#;
 
-/// 1: 先頭アカウント（並列度 1）が埋まると、同じ tick で 2 つ目のアカウントがもう 1 件を実行する。
+/// 同じ LLM source を使う 2 行（非プール。fake 行の派生 source はどちらも `none`）。
+/// 暗黙アカウントは source 単位なので 1 件を共有する（ADR 2026-10-08 account-concurrency-limits §(e)）。
+/// 行ごとに仕事を固定できるよう tier を分けてある（レビュー run は `standard` でどちらの行にも載れる）。
+const TWO_ROWS_ONE_SOURCE: &str = r#"[[providers]]
+id = "acct-a"
+adapter = "fake"
+concurrency = 1
+model = "model-a"
+tiers = ["cheap", "standard"]
+env = { ACCOUNT = "a" }
+
+[[providers]]
+id = "acct-b"
+adapter = "fake"
+concurrency = 1
+model = "model-b"
+tiers = ["frontier", "standard"]
+env = { ACCOUNT = "b" }
+"#;
+
+/// 1: 同じ LLM source を使う 2 行は 1 件の暗黙アカウント（`implicit/none`）を共有し、その実効上限
+/// （`max_runs_per_account = 2`）まで同時に走る。旧 `concurrency = 1`（行ごと）は上限に効かない。
 #[test]
 fn second_account_runs_the_overflow_when_the_first_is_at_capacity() {
     let env = Env::new();
+    // 非プールの行の上限は暗黙アカウントが持つ（旧 `concurrency = 1` は上限に効かない）。暗黙アカウントは
+    // LLM source 単位（`implicit/<llm source id>`）で、fake 行はどれも source `none` なので acct-a と acct-b は
+    // 1 件を共有する。両方を同時に走らせるため、保存値の無い暗黙アカウントの既定を 2 にする。
+    let accounts_dir = env.root.join("claude-accounts");
+    std::fs::create_dir_all(&accounts_dir).unwrap();
+    let two_accounts = format!(
+        "[accounts]\nclaude_dir = {:?}\nmax_runs_per_account = 2\n\n{TWO_ROWS_ONE_SOURCE}",
+        accounts_dir.to_str().unwrap()
+    );
     let config = env.write_config(
         r#"cat >/dev/null
 printf '%s' "$ACCOUNT" > account.txt
@@ -224,7 +254,7 @@ while [ ! -f "$barrier/started-a" ] || [ ! -f "$barrier/started-b" ]; do
   sleep 0.05
 done
 echo '{"type":"done","summary":"ok","evidence":[]}'"#,
-        TWO_ACCOUNTS,
+        &two_accounts,
         "",
     );
     let ws1 = env.workspace("ws-1");
@@ -232,6 +262,9 @@ echo '{"type":"done","summary":"ok","evidence":[]}'"#,
     let t1 = env.add_approved(&[
         "--title",
         "one",
+        // tier で行を固定する（acct-a だけ cheap を持つ）。
+        "--tier",
+        "cheap",
         "--check-cmd",
         "test -f account.txt",
         "--workspace",
@@ -240,6 +273,9 @@ echo '{"type":"done","summary":"ok","evidence":[]}'"#,
     let t2 = env.add_approved(&[
         "--title",
         "two",
+        // acct-b だけ frontier を持つ。
+        "--tier",
+        "frontier",
         "--check-cmd",
         "test -f account.txt",
         "--workspace",

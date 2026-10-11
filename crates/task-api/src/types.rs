@@ -358,14 +358,18 @@ pub struct ProviderView {
     pub id: String,
     pub adapter: String,
     pub tiers: Vec<Tier>,
+    /// Deprecated（ADR 2026-10-08 account-concurrency-limits §(a)）: config / `providers.d` に書かれた旧値（無ければ 1）。
+    /// dispatch では使わず、何とも比べない。同時実行数はアカウント（暗黙アカウントを含む）の `max_runs` で決まる。
+    #[schemars(extend("deprecated" = true))]
     pub concurrency: usize,
     pub model: Option<String>,
     /// `env` のキー名だけ（値は出さない）。
     pub env_keys: Vec<String>,
+    /// この行で走っている CoS 以外の run（プロバイダを使うレビュー run を含む）の数。観測値で、上限とは比べない。
     /// スナップショットが無ければ `null`。ADR-0089（Phase R6-5）: CoS の対話 run は含めない（`in_use_cos`）。
     pub in_use: Option<u32>,
-    /// ADR-0089（Phase R6-5）: このプロバイダで走っている CoS の対話 run の数（`concurrency` の外で
-    /// 走る。`in_use` とは別に数える）。スナップショットが無ければ `null`。
+    /// ADR-0089（Phase R6-5）: このプロバイダで走っている CoS の対話 run の数（`in_use` とは別に数える観測値）。
+    /// スナップショットが無ければ `null`。
     pub in_use_cos: Option<u32>,
     /// スナップショットが無い、または cooldown 中でなければ `null`。
     pub cooldown: Option<CooldownView>,
@@ -502,6 +506,8 @@ pub struct ProviderConfigView {
     pub id: String,
     pub adapter: String,
     pub tiers: Vec<Tier>,
+    /// Deprecated（ADR 2026-10-08 account-concurrency-limits §(a)）: 書かれた旧値（無ければ 1）。意味を持たない。
+    #[schemars(extend("deprecated" = true))]
     pub concurrency: usize,
     /// 実効モデル（空なら `null`）。
     pub model: Option<String>,
@@ -690,8 +696,10 @@ pub struct AccountList {
     /// ADR-0025 D6: `"claude-code"` / `"codex"` → 設定されていればその絶対パス、無ければ `null`。
     #[serde(default)]
     pub roots: std::collections::HashMap<String, Option<String>>,
+    /// ADR 2026-10-08 account-concurrency-limits §(c): 保存値（`max_runs`）の無いアカウントの既定の上限
+    /// （`[accounts] max_runs_per_account`。`[accounts]` が無い構成では組み込みの既定 2）。
     pub max_runs_per_account: usize,
-    /// `adapter` → `id` の順。
+    /// 実アカウントを `adapter` → `id` の順に並べ、その後ろに暗黙アカウント（`implicit = true`）を行の設定順に並べる。
     pub items: Vec<AccountView>,
 }
 
@@ -702,8 +710,8 @@ pub struct AccountView {
     #[serde(default = "default_account_adapter")]
     pub adapter: String,
     pub id: String,
-    /// アカウントディレクトリの絶対パス（ログイン手順に要る。秘密の中身は含まない）。
-    pub dir: String,
+    /// アカウントディレクトリの絶対パス（ログイン手順に要る。秘密の中身は含まない）。暗黙アカウントは `null`。
+    pub dir: Option<String>,
     /// ログイン済みを示すファイル（claude-code は `.credentials.json`、codex は `auth.json`）の有無
     /// （中身は読まない）。
     pub logged_in: bool,
@@ -719,6 +727,24 @@ pub struct AccountView {
     /// ADR-0024 D7: 進行中のログイン中継があるか。
     pub login_pending: bool,
     pub stats: AccountStats,
+    /// ADR 2026-10-08 account-concurrency-limits §(c): このアカウントに保存された上限（`PATCH` で設定）。無ければ `null`（既定に従う）。
+    pub max_runs: Option<usize>,
+    /// 実効上限（非 CoS の run の同時数。実アカウントの CoS run はこれ +1 まで、暗黙アカウントは CoS を含めた全数で比べる）。
+    pub effective_max_runs: usize,
+    /// 実効上限の出どころ: `"account"`（保存値）| `"default"`（`max_runs_per_account`）。
+    pub max_runs_source: String,
+    /// §(e): 暗黙アカウント（`adapter = "implicit"`、非プール行の LLM source ごとに 1 件）か。
+    pub implicit: bool,
+    /// 暗黙アカウントの LLM source（= `id`）を使う非プール行の id（設定順）。実アカウントは空。
+    #[serde(default)]
+    pub providers: Vec<String>,
+}
+
+/// `PATCH /accounts/{adapter}/{id}` の要求本文（ADR 2026-10-08 account-concurrency-limits §(d)）。
+/// `max_runs` は必須（`null` で保存値を消して既定に戻す）。値は 1..=32 の整数。未知の欄は 400。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct AccountLimitPatchBody {
+    pub max_runs: Option<usize>,
 }
 
 /// `RateLimitObservation` を RFC 3339 に直したもの。

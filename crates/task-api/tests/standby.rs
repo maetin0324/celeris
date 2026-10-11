@@ -118,6 +118,19 @@ async fn draining_refuses_the_same_endpoints_and_plain_endpoints_keep_working() 
         assert_eq!(resp.header("retry-after"), Some("2"), "{path}");
     }
 
+    // ADR 2026-10-08 account-concurrency-limits §(d): アカウントの上限の PATCH もディスパッチャを要する。
+    let resp = send(
+        &app,
+        patch_json_with(
+            "/api/v1/accounts/implicit/qwen",
+            &json!({"max_runs": 2}),
+            &[("authorization", &auth)],
+        ),
+    )
+    .await;
+    let problem = assert_problem(&resp, 503, "standby");
+    assert_eq!(problem["detail"], json!("standby"));
+
     // 読み取りは動く（standby / draining も同じ DB を見ている）。
     let resp = send(&app, get_with("/api/v1/tasks", &[("authorization", &auth)])).await;
     assert_eq!(resp.status, 200, "{}", resp.text());

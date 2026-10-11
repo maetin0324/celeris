@@ -5,11 +5,12 @@ import type { BadgeTone } from "../../components/ui/badge";
 export const TIERS: readonly Tier[] = ["frontier", "standard", "cheap"];
 export const ADAPTERS = ["fake", "claude-code", "codex", "acp", "paperqa", "local-deep-research"] as const;
 
-export type ProviderInput = { id?: string; adapter?: string; tiers?: Tier[]; concurrency?: number; model?: string };
+/** 送る body。同時実行数（旧 concurrency）は送らない: 上限はアカウント画面で管理する（ADR 2026-10-08-account-concurrency-limits）。 */
+export type ProviderInput = { id?: string; adapter?: string; tiers?: Tier[]; model?: string };
 
 /** フォームの値から送る body を作る。空欄は送らない。 */
 export function buildProviderBody(
-  form: { id?: string; adapter?: string; concurrency: string; model: string; tiers: readonly Tier[] },
+  form: { id?: string; adapter?: string; model: string; tiers: readonly Tier[] },
   mode: "create" | "patch",
 ): ProviderInput {
   const body: ProviderInput = { tiers: [...form.tiers] };
@@ -17,24 +18,16 @@ export function buildProviderBody(
     body.id = form.id?.trim() ?? "";
     body.adapter = form.adapter ?? "";
   }
-  const c = form.concurrency.trim();
-  if (c !== "" && Number.isInteger(Number(c)) && Number(c) >= 0) body.concurrency = Number(c);
   if (form.model.trim() !== "") body.model = form.model.trim();
   return body;
 }
 
-export type ProviderFieldErrors = { id?: string; concurrency?: string };
+export type ProviderFieldErrors = { id?: string };
 
 /** 送る前の検査。項目ごとの文言を返す（空なら送ってよい）。並びは画面の入力順。 */
-export function validateProviderForm(
-  form: { id?: string; concurrency: string },
-  mode: "create" | "patch",
-): ProviderFieldErrors {
+export function validateProviderForm(form: { id?: string }, mode: "create" | "patch"): ProviderFieldErrors {
   const errors: ProviderFieldErrors = {};
   if (mode === "create" && (form.id ?? "").trim() === "") errors.id = "id を入力してください。";
-  const c = form.concurrency.trim();
-  if (c !== "" && !(Number.isInteger(Number(c)) && Number(c) >= 0))
-    errors.concurrency = "同時実行数は 0 以上の整数で入力してください（空欄なら変えません）。";
   return errors;
 }
 

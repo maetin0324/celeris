@@ -1,12 +1,17 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { AccountView } from "../../api/generated/types";
+import type { ActionResult, ActionTarget } from "../../components/actions/use-action-result";
 import {
   AccountCard,
   ADAPTER_CHOICES,
+  accountLimitTarget,
   accountState,
   excludedReasonLabel,
   formatRemaining,
+  limitSourceLabel,
+  parseMaxRunsInput,
+  submitAccountLimit,
   usageTone,
 } from "./accounts-screen";
 
@@ -19,6 +24,9 @@ const account = (over: Partial<AccountView>): AccountView => ({
   logged_in: true,
   login_pending: false,
   stats,
+  effective_max_runs: 2,
+  max_runs_source: "default",
+  implicit: false,
   ...over,
 });
 
@@ -44,8 +52,8 @@ describe("AccountCard", () => {
     renderToStaticMarkup(
       <ul>
         <AccountCard
-          item={account({})}
-          max={2}
+          item={account({ max_runs: 3, effective_max_runs: 3, max_runs_source: "account" })}
+          defaultMax={2}
           fetchedAtMs={0}
           sender={sender}
           blocked={blocked}
@@ -64,10 +72,10 @@ describe("AccountCard", () => {
     expect(out).not.toContain('disabled=""');
   });
 
-  it("権限が無いときは操作を止め、理由へ結び付ける", () => {
+  it("権限が無いときは操作を止め、理由へ結び付ける（確認・ログイン・削除・上限の保存・既定に戻す）", () => {
     const out = render(true);
-    expect(out.match(/disabled=""/g)?.length).toBe(3);
-    expect(out.match(/aria-describedby="denied"/g)?.length).toBe(3);
+    expect(out.match(/disabled=""/g)?.length).toBe(5);
+    expect(out.match(/aria-describedby="denied"/g)?.length).toBe(5);
   });
 });
 
@@ -88,7 +96,7 @@ describe("使用量（5 時間枠・7 日枠）", () => {
       <ul>
         <AccountCard
           item={item}
-          max={2}
+          defaultMax={2}
           fetchedAtMs={fetchedAt}
           sender={sender}
           blocked={false}
@@ -208,5 +216,167 @@ describe("使用量（5 時間枠・7 日枠）", () => {
     expect(formatRemaining(-1)).toBe("リセット時刻を過ぎました");
     expect(excludedReasonLabel("seven_day_exhausted")).toBe("長期枠を使い切りました（seven_day_exhausted）");
     expect(excludedReasonLabel("手動で除外")).toBe("手動で除外");
+  });
+});
+
+type Run = (targets: readonly ActionTarget[]) => Promise<ActionResult[]>;
+
+/** 送った要求を記録し、決めた結果を返す run。 */
+function fakeRun(result: Omit<ActionResult, "id"> | null) {
+  const sent: ActionTarget[] = [];
+  const run: Run = async (targets) => {
+    sent.push(...targets);
+    return result ? targets.map((t) => ({ id: t.id, ...result })) : [];
+  };
+  return { run, sent };
+}
+
+const implicitAccount = account({
+  adapter: "implicit",
+  // 暗黙アカウントの id は LLM source。同じ source を使う行が 1 件を共有する。
+  id: "openai_compatible:qwen",
+  dir: null,
+  implicit: true,
+  providers: ["opencode-qwen", "pi-qwen"],
+  in_use: 1,
+  max_runs: null,
+  effective_max_runs: 1,
+  max_runs_source: "default",
+});
+
+describe("アカウントごとの上限（PATCH /accounts/{adapter}/{id}）", () => {
+  const renderCard = (item: AccountView, results: Record<string, ActionResult> = {}) =>
+    renderToStaticMarkup(
+      <ul>
+        <AccountCard
+          item={item}
+          defaultMax={2}
+          fetchedAtMs={0}
+          sender={{ run: async () => [], pending: false, results }}
+          blocked={false}
+          deniedId={undefined}
+          login={undefined}
+          setLogin={() => {}}
+        />
+      </ul>,
+    );
+
+  it("入力の検査: 1〜32 の整数だけを通す", () => {
+    expect(parseMaxRunsInput("1")).toEqual({ value: 1 });
+    expect(parseMaxRunsInput(" 32 ")).toEqual({ value: 32 });
+    for (const bad of ["", "0", "33", "-1", "1.5", "abc", "1e1"]) {
+      expect(parseMaxRunsInput(bad)).toEqual({ error: "上限は 1〜32 の整数で入力してください。" });
+    }
+  });
+
+  it("保存: 数値を PATCH /api/accounts/{adapter}/{id} に送る", async () => {
+    const { run, sent } = fakeRun({ ok: true, message: "操作が完了しました" });
+    expect(await submitAccountLimit(run, account({}), "3")).toEqual({ ok: true });
+    expect(sent).toEqual([
+      { id: "limit:claude-code:main", path: "/api/accounts/claude-code/main", method: "PATCH", body: { max_runs: 3 } },
+    ]);
+  });
+
+  it("adapter と id はパスの各部分としてエンコードする", () => {
+    expect(accountLimitTarget(account({ adapter: "custom/adapter", id: "local source?#" }), 2)).toMatchObject({
+      path: "/api/accounts/custom%2Fadapter/local%20source%3F%23",
+      method: "PATCH",
+      body: { max_runs: 2 },
+    });
+  });
+
+  it("既定に戻す: max_runs に null を送る", async () => {
+    const { run, sent } = fakeRun({ ok: true, message: "操作が完了しました" });
+    const item = account({ adapter: "codex", id: "b", max_runs: 4, effective_max_runs: 4, max_runs_source: "account" });
+    expect(await submitAccountLimit(run, item, null)).toEqual({ ok: true });
+    expect(sent[0]).toMatchObject({ path: "/api/accounts/codex/b", method: "PATCH", body: { max_runs: null } });
+  });
+
+  it("検査に落ちた値は送らずに文言を返す", async () => {
+    const { run, sent } = fakeRun({ ok: true, message: "" });
+    expect(await submitAccountLimit(run, account({}), "0")).toEqual({
+      ok: false,
+      error: "上限は 1〜32 の整数で入力してください。",
+    });
+    expect(await submitAccountLimit(run, account({}), "33")).toMatchObject({ ok: false });
+    expect(sent).toHaveLength(0);
+  });
+
+  it("API のエラーは項目の文言にし、403 は権限の案内に任せる", async () => {
+    const failed = fakeRun({ ok: false, status: 404, message: "account not found" });
+    expect(await submitAccountLimit(failed.run, account({}), "3")).toEqual({
+      ok: false,
+      error: "保存できませんでした: account not found",
+    });
+    const denied = fakeRun({ ok: false, status: 403, message: "forbidden" });
+    expect(await submitAccountLimit(denied.run, account({}), "3")).toEqual({ ok: false });
+  });
+
+  it("画面: 実行中 / 実効上限・上書きの有無・入力欄・保存と既定に戻す", () => {
+    const out = renderCard(account({ in_use: 1, max_runs: 3, effective_max_runs: 3, max_runs_source: "account" }));
+    expect(out).toContain("1 / 実効上限 3（このアカウントに保存した上限）");
+    expect(out).toContain('aria-label="上限 main"');
+    expect(out).toContain("同時実行数の上限（1〜32）");
+    expect(out).toMatch(/<input[^>]*type="number"[^>]*min="1"[^>]*max="32"[^>]*value="3"/);
+    expect(out).toContain("上限を保存");
+    expect(out).toContain("「既定に戻す」で保存値を消します。");
+    expect(out).toMatch(/<button[^>]*>既定に戻す<\/button>/);
+    expect(out).not.toMatch(/<button[^>]*disabled=""[^>]*>既定に戻す/);
+  });
+
+  it("画面: 上書きが無いときは既定を示し、既定に戻すは押せない", () => {
+    const out = renderCard(account({}));
+    expect(out).toContain("0 / 実効上限 2（既定（max_runs_per_account = 2））");
+    expect(out).toContain("今は上書きしていません。");
+    expect(out).toMatch(/<button[^>]*disabled=""[^>]*>既定に戻す<\/button>/);
+  });
+
+  it("画面: 保存の失敗（API エラー）を入力欄に結び付けて出す", () => {
+    const out = renderCard(account({}), {
+      "limit:claude-code:main": { id: "limit:claude-code:main", ok: false, status: 400, message: "bad max_runs" },
+    });
+    expect(out).toContain("保存できませんでした: bad max_runs");
+    expect(out).toMatch(/<input[^>]*aria-invalid="true"/);
+  });
+
+  it("暗黙アカウント: 印を出し、ログイン・確認・削除を出さず、同じ欄で上限を編集する", async () => {
+    const out = renderCard(implicitAccount);
+    expect(out).toContain('data-implicit="true"');
+    expect(out).toContain(">暗黙アカウント</span>");
+    expect(out).toContain("アカウントを持たない行の LLM source「openai_compatible:qwen」");
+    expect(out).toContain("opencode-qwen, pi-qwen");
+    expect(out).toContain("1 / 実効上限 1（既定（max_runs_per_account = 2））");
+    expect(out).toContain("上限を保存");
+    expect(out).not.toContain("ログイン開始");
+    expect(out).not.toContain(">確認</button>");
+    expect(out).not.toContain(">削除</button>");
+    expect(out).not.toContain("使用量");
+    expect(accountLimitTarget(implicitAccount, 2)).toEqual({
+      id: "limit:implicit:openai_compatible:qwen",
+      path: "/api/accounts/implicit/openai_compatible:qwen",
+      method: "PATCH",
+      body: { max_runs: 2 },
+    });
+    const { run, sent } = fakeRun({ ok: true, message: "操作が完了しました" });
+    expect(await submitAccountLimit(run, implicitAccount, "2")).toEqual({ ok: true });
+    expect(await submitAccountLimit(run, implicitAccount, null)).toEqual({ ok: true });
+    expect(sent.map((t) => [t.path, t.body])).toEqual([
+      ["/api/accounts/implicit/openai_compatible:qwen", { max_runs: 2 }],
+      ["/api/accounts/implicit/openai_compatible:qwen", { max_runs: null }],
+    ]);
+  });
+
+  it("暗黙アカウント: 保存値があるときは既定に戻せる", () => {
+    const out = renderCard({ ...implicitAccount, max_runs: 4, effective_max_runs: 4, max_runs_source: "account" });
+    expect(out).toContain("1 / 実効上限 4（このアカウントに保存した上限）");
+    expect(out).toMatch(/<input[^>]*type="number"[^>]*value="4"/);
+    expect(out).toContain("「既定に戻す」で保存値を消します。");
+    expect(out).not.toMatch(/<button[^>]*disabled=""[^>]*>既定に戻す/);
+  });
+
+  it("実効上限の出どころの文言", () => {
+    expect(limitSourceLabel({ max_runs_source: "account" }, 2)).toBe("このアカウントに保存した上限");
+    expect(limitSourceLabel({ max_runs_source: "default" }, 5)).toBe("既定（max_runs_per_account = 5）");
+    expect(limitSourceLabel({ max_runs_source: "other" }, 2)).toBe("other");
   });
 });

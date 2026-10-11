@@ -922,14 +922,89 @@ fn reload_providers_rejects_changes_to_the_accounts_section() {
     let mut dispatcher =
         build_dispatcher(&config, Default::default()).unwrap_or_else(|e| panic!("{e}"));
 
-    // [accounts] が変わっていなければ通る。
+    // Individual settings survive reload, and reload reads authoritative DB values.
+    dispatcher
+        .set_account_limit("claude-code", "a", Some(3))
+        .unwrap();
     assert!(reload_providers(&mut dispatcher, &mut config).is_ok());
+    assert_eq!(dispatcher.account_max_runs("claude-code", "a"), Some(3));
+    let store = SqliteStore::open(&db).unwrap();
+    store
+        .set_account_limit("claude-code", "a", Some(4))
+        .unwrap();
+    assert!(reload_providers(&mut dispatcher, &mut config).is_ok());
+    assert_eq!(dispatcher.account_max_runs("claude-code", "a"), Some(4));
 
     // max_runs_per_account を変えると、次の reload はエラーになる。
     write_config(3);
     let err = reload_providers(&mut dispatcher, &mut config).unwrap_err();
     assert!(err.contains("[accounts]"), "{err}");
     assert!(err.contains("restart"), "{err}");
+}
+
+/// ADR 2026-10-08 account-concurrency-limits §(d)(e)（人の決定 implicit-account）: non-pool rows get
+/// one implicit account per **LLM source** (`implicit/<llm source id>`), not per row — two `fake`
+/// rows both resolve to the source `none` and share one account. A row's old `concurrency = 1`
+/// does not limit anything. A stored override survives `POST /reload` and a restart (new
+/// `build_dispatcher` on the same DB), and stays while any non-pool row still uses the source.
+#[test]
+fn implicit_account_limit_ignores_legacy_concurrency_and_survives_reload() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let config_path = dir.path().join("config.toml");
+    let db = dir.path().join("celeris.db");
+    let ws = dir.path().join("ws");
+    let write_config = |rows: &str| {
+        std::fs::write(
+            &config_path,
+            format!(
+                "db = {db:?}\nworkspace_root = {ws:?}\n\
+                 [[providers]]\nid = \"x\"\nadapter = \"fake\"\n{rows}"
+            ),
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+    };
+    let qwen = "[[providers]]\nid = \"qwen\"\nadapter = \"fake\"\nconcurrency = 1\n";
+    write_config(qwen);
+    let mut config = Config::load(&config_path).unwrap_or_else(|e| panic!("{e}"));
+    let mut dispatcher =
+        build_dispatcher(&config, Default::default()).unwrap_or_else(|e| panic!("{e}"));
+    // 2 行（`x` と `qwen`）はどちらも source `none` なので暗黙アカウントは 1 件。
+    assert_eq!(dispatcher.implicit_account_ids(), vec!["none".to_string()]);
+    assert_eq!(
+        dispatcher.implicit_account_providers("none"),
+        vec!["x".to_string(), "qwen".to_string()]
+    );
+    assert_eq!(
+        dispatcher.implicit_account_limit("none"),
+        Some((2, task_dispatch::capacity::MaxRunsSource::Default))
+    );
+    // 行の id では引けない（旧 `concurrency = 1` も上限にならない）。
+    assert_eq!(dispatcher.implicit_account_limit("qwen"), None);
+
+    dispatcher
+        .set_account_limit("implicit", "none", Some(1))
+        .unwrap();
+    assert!(reload_providers(&mut dispatcher, &mut config).is_ok());
+    assert_eq!(
+        dispatcher.implicit_account_limit("none"),
+        Some((1, task_dispatch::capacity::MaxRunsSource::Account))
+    );
+    drop(dispatcher);
+    let mut dispatcher =
+        build_dispatcher(&config, Default::default()).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(dispatcher.account_max_runs("implicit", "none"), Some(1));
+
+    // 1 行を消しても同じ source を使う行が残るので、保存値は prune されない。
+    write_config("");
+    assert!(reload_providers(&mut dispatcher, &mut config).is_ok());
+    assert_eq!(dispatcher.implicit_account_ids(), vec!["none".to_string()]);
+    assert_eq!(
+        dispatcher.implicit_account_providers("none"),
+        vec!["x".to_string()]
+    );
+    assert_eq!(dispatcher.account_max_runs("implicit", "none"), Some(1));
+    let store = SqliteStore::open(&db).unwrap();
+    assert_eq!(store.account_limits().unwrap().len(), 1);
 }
 
 /// Phase 44（実機 2026-09-18）: `[[roles]]` の `max_turns` を変えて `reload` すると、次に作られる子の

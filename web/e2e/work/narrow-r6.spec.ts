@@ -46,7 +46,7 @@ for (const width of [360, 390, 412]) {
         const right = await cell.evaluate((el) => el.getBoundingClientRect().right);
         expect(right, `${label} の右端`).toBeLessThanOrEqual(width);
       }
-      await expect(row.locator("[data-field='concurrency']")).toContainText("上限 2");
+      await expect(row.locator("[data-field='concurrency']")).toContainText("アカウントで管理");
       await expect(row.locator("[data-field='last-check']")).toContainText("まだ確認していません");
     } finally {
       await gateway.close();

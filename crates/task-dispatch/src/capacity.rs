@@ -1,14 +1,9 @@
-//! ADR-0089（Phase R6-5）: CoS の対話 run（Console の一言）を全体の並列度 `max_concurrency` と
-//! アカウントプールのプロバイダの `concurrency` から外す規則（純粋関数。LLM は呼ばない）。
+//! Run capacity accounting (ADR-0089 and ADR 2026-10-08 account-concurrency-limits).
 //!
-//! - 規則 1: CoS run の判定は [`is_cos_run`] の 1 か所だけ。
-//! - 規則 2: CoS run は `max_concurrency` に数えず、`in_flight ≥ max_concurrency` でも起こす。プールの
-//!   プロバイダの `concurrency` も超えてよい。アカウントは消費する（走っている run の最も少ない
-//!   アカウント。`max_runs_per_account` は CoS に限り +1 まで緩める）。
-//! - 規則 3: 非 CoS の run は CoS run を数えずに `max_concurrency` を埋める（例外が葉を飢えさせない）。
-//!   `GET /providers` は CoS run を `in_use_cos` として別に出す。
-//! - 規則 4: 絶対の上限 `[execution] max_cos_runs`（既定 2）。`0` なら例外そのものを無効にする
-//!   （CoS run も通常の run と同じ規則で待つ）。
+//! CoS runs have a separate global `max_cos_runs` cap and one extra slot per real
+//! account. Ordinary runs count only ordinary account usage. Provider concurrency is
+//! deprecated and never compared: pool rows are limited by their accounts, non-pool
+//! rows by their LLM source's implicit account (`implicit/<llm source id>`, no CoS +1).
 
 use task_core::{OrgKind, OrgNode, Task};
 
@@ -70,33 +65,51 @@ impl RunLoad {
     }
 }
 
-/// ADR-0089 規則 2 / 3: プロバイダの `concurrency` に照らして満杯か。
-///
-/// - `in_use` は CoS 以外の run 数、`in_use_cos` は CoS run 数（`GET /providers` と同じ分け方）。
-/// - アカウントプールのプロバイダ: CoS run は `concurrency` を見ない（超えてよい）。非 CoS は CoS を
-///   数えない `in_use` で比べる（CoS が葉の枠を食わない）。
-/// - プールでないプロバイダ（API キーの行など）: 例外は無く、これまでどおり合計で比べる。
-pub fn provider_full(
-    cos: bool,
-    account_pool: bool,
-    in_use: usize,
-    in_use_cos: usize,
-    limit: usize,
-) -> bool {
-    match (cos, account_pool) {
-        (true, true) => false,
-        (false, true) => in_use >= limit,
-        (_, false) => in_use + in_use_cos >= limit,
+/// Adapter name of implicit accounts (ADR 2026-10-08 §(e)). Reserved: no
+/// `AccountAdapter` uses it, so implicit ids never collide with real accounts.
+pub const IMPLICIT_ACCOUNT_ADAPTER: &str = "implicit";
+
+/// Which value [`effective_account_limit`] used (`GET /accounts` の `max_runs_source`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MaxRunsSource {
+    /// The account's stored `max_runs` (set by `PATCH /accounts/{adapter}/{id}`).
+    Account,
+    /// `[accounts] max_runs_per_account` (or the built-in default).
+    Default,
+}
+
+impl MaxRunsSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Account => "account",
+            Self::Default => "default",
+        }
     }
 }
 
-/// ADR-0089 規則 2: 1 アカウントあたりの run の上限。CoS run に限り `max_runs_per_account + 1`
-/// （葉がアカウントを埋めていても Console の一言は (max+1) 本目として載せられる）。
-pub fn account_run_limit(max_runs_per_account: usize, cos: bool) -> usize {
+/// ADR 2026-10-08 §(c): the stored value, else the default. The deprecated provider
+/// `concurrency` is not an input: it never limits a run.
+pub fn effective_account_limit(stored: Option<usize>, default: usize) -> (usize, MaxRunsSource) {
+    match stored {
+        Some(n) => (n, MaxRunsSource::Account),
+        None => (default, MaxRunsSource::Default),
+    }
+}
+
+/// ADR 2026-10-08 §(e): an implicit account counts every run on every non-pool row that uses
+/// its LLM source (ordinary, CoS and provider-backed reviews) against `effective_max_runs`;
+/// CoS gets no +1.
+pub fn implicit_account_full(in_use_total: usize, effective_max_runs: usize) -> bool {
+    in_use_total >= effective_max_runs
+}
+
+/// Real-account admission limit: resolved account override (or global default),
+/// with one extra CoS slot under ADR-0089.
+pub fn account_run_limit(effective_max_runs: usize, cos: bool) -> usize {
     if cos {
-        max_runs_per_account.saturating_add(1)
+        effective_max_runs.saturating_add(1)
     } else {
-        max_runs_per_account
+        effective_max_runs
     }
 }
 
@@ -174,13 +187,18 @@ mod tests {
     }
 
     #[test]
-    fn provider_full_exempts_cos_only_on_pool_providers() {
-        assert!(!provider_full(true, true, 4, 3, 4));
-        assert!(provider_full(false, true, 4, 0, 4));
-        assert!(!provider_full(false, true, 3, 2, 4));
-        assert!(provider_full(true, false, 1, 1, 2));
-        assert!(provider_full(false, false, 1, 1, 2));
-        assert!(!provider_full(true, false, 0, 1, 2));
+    fn effective_limit_prefers_stored_then_default() {
+        use MaxRunsSource::*;
+        assert_eq!(effective_account_limit(Some(3), 2), (3, Account));
+        assert_eq!(effective_account_limit(Some(0), 2), (0, Account));
+        assert_eq!(effective_account_limit(None, 2), (2, Default));
+    }
+
+    #[test]
+    fn implicit_account_counts_all_runs_without_cos_slack() {
+        assert!(implicit_account_full(1, 1));
+        assert!(!implicit_account_full(1, 2));
+        assert!(implicit_account_full(2, 2));
     }
 
     #[test]

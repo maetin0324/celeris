@@ -28,8 +28,9 @@ pub struct ProviderConfig {
     pub adapter: String,
     #[serde(default = "default_tiers")]
     pub tiers: Vec<Tier>,
-    #[serde(default = "default_provider_concurrency")]
-    pub concurrency: usize,
+    /// Deprecated compatibility value, retained for the implicit-account migration.
+    #[serde(default)]
+    pub concurrency: Option<usize>,
     /// 空でなければ、このプロバイダの run の `--model` に使う（空なら `[adapters.<種別>].model`。ADR-0012 D1）。
     #[serde(default)]
     pub model: String,
@@ -70,9 +71,6 @@ pub struct ProviderConfig {
 
 fn default_tiers() -> Vec<Tier> {
     vec![Tier::Frontier, Tier::Standard, Tier::Cheap]
-}
-fn default_provider_concurrency() -> usize {
-    1
 }
 
 /// `providers_include` の glob（`<dir>/*.toml` の形だけを受け付ける）からディレクトリを取り出し、
@@ -138,6 +136,22 @@ impl Config {
             .filter_map(|p| match p.account_pool {
                 task_core::AccountPoolSetting::Adapter(a) => Some((p.id.clone(), a)),
                 _ => None,
+            })
+            .collect()
+    }
+
+    /// ADR 2026-10-08 account-concurrency-limits §(e)（人の決定 implicit-account）: provider id →
+    /// 解決済み LLM source の文字列（`llm_source` を書かなければ `derive_llm_source` の値）。
+    /// dispatcher はこの表で非プール行の暗黙アカウント（`implicit/<llm source id>`）を引くので、
+    /// 同じ source を使う行は上限と in_use を 1 件共有する。source の config 側に上限の欄は無い。
+    pub fn provider_llm_sources(&self) -> std::collections::HashMap<String, String> {
+        self.providers
+            .iter()
+            .filter_map(|p| {
+                Some((
+                    p.id.clone(),
+                    self.provider_llm_source(&p.id)?.source.to_key(),
+                ))
             })
             .collect()
     }
@@ -493,11 +507,18 @@ pub(super) fn validate_providers(cfg: &Config) -> Result<(), ConfigError> {
                 p.id, p.adapter
             )));
         }
-        if p.concurrency == 0 {
-            return Err(ConfigError::Invalid(format!(
-                "provider {}: concurrency must be >= 1",
-                p.id
-            )));
+        if let Some(concurrency) = p.concurrency {
+            // ADR 2026-10-08 account-concurrency-limits §(a): 読むだけ（0 も読めて警告）。dispatch・実効上限・
+            // `GET /accounts` のどこでも使わない。非プール行の上限はその行の LLM source の暗黙アカウントが持つ。
+            let handling = if p.account_pool.is_on() {
+                "ignored for account pools; use per-account max_runs"
+            } else {
+                "ignored; the limit is the max_runs of its LLM source's implicit account; edit it on the accounts screen"
+            };
+            let source = cfg
+                .provider_llm_source(&p.id)
+                .map_or_else(|| p.id.clone(), |resolved| resolved.source.to_key());
+            tracing::warn!(provider = %p.id, concurrency, llm_source = %source, "provider {}: concurrency is deprecated (ADR 2026-10-08 account-concurrency-limits); {} (implicit/{})", p.id, handling, source);
         }
         // ADR-0026 / ADR-0106 / ADR 2026-10-07: `command`/`args` は ACP / browser-specialist / Pi の行で意味を持つ。
         // 静かに無視せず設定エラーにする（書いた本人の勘違いを早く見つけるため）。

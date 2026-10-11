@@ -78,6 +78,15 @@ pub(crate) const ALLOWED: &[(&str, &str, &str)] = &[
     ("POST", "/api/v1/accounts", "account.create"),
     ("DELETE", "/api/v1/accounts/{id}", "account.delete"),
     ("POST", "/api/v1/accounts/{id}/check", "account.check"),
+    // ADR 2026-10-08 account-concurrency-limits §(d): the per-account limit. `check` / `login` as an
+    // account id reach the same operation through their static routes (as in the router).
+    (
+        "PATCH",
+        "/api/v1/accounts/{id}/{account}",
+        "account.limit_set",
+    ),
+    ("PATCH", "/api/v1/accounts/{id}/check", "account.limit_set"),
+    ("PATCH", "/api/v1/accounts/{id}/login", "account.limit_set"),
     (
         "POST",
         "/api/v1/llm/models/discover",
@@ -489,14 +498,39 @@ pub(crate) fn dispatch(
             let input: crate::types::AccountCreateBody =
                 serde_json::from_value(body).map_err(decode)?;
             let id = input.id.clone();
-            audited(crate::cos::operations::file_op(
+            // ADR 2026-10-08 account-concurrency-limits §(d): a re-created account must not inherit
+            // an old stored limit. The clear goes through the daemon (or the store), so it runs after
+            // the audit transaction, and only when this request created the directory.
+            let created = std::cell::Cell::new(None::<String>);
+            let op = audited(crate::cos::operations::file_op(
                 store,
                 Some(audit),
                 "account",
                 &id,
                 matched.action,
-                || crate::handlers::accounts::create_account_op(&env.api, &input),
-            )?)
+                || {
+                    let view = crate::handlers::accounts::create_account_op(&env.api, &input)?;
+                    created.set(Some(view.adapter.clone()));
+                    Ok(view)
+                },
+            )?)?;
+            if let Some(adapter) = created.take().filter(|_| op.state == "applied") {
+                block_on(crate::handlers::accounts::clear_stale_limit(
+                    &env.api, &adapter, &id,
+                ));
+            }
+            Ok(op)
+        }
+        "account.limit_set" => {
+            // `/api/v1/accounts/{adapter}/{account}`: the first segment is the adapter (`{id}`).
+            let adapter = matched.id.unwrap_or_default();
+            let account = path.rsplit('/').next().unwrap_or_default().to_string();
+            let api = &env.api;
+            external(store, audit, ("account", &account), matched.action, || {
+                block_on(crate::handlers::accounts::set_account_limit_effect(
+                    api, &adapter, &account, body,
+                ))
+            })
         }
         "account.delete" | "account.check" => {
             let id = matched.id.unwrap_or_default();

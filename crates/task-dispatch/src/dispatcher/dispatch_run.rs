@@ -1184,7 +1184,7 @@ impl Dispatcher {
     }
 
     /// ADR-0107 D2: browser fallback candidates for one run. Only providers that are enabled
-    /// (configured in the policy table with a non-zero concurrency, not an account pool), healthy
+    /// (configured in the policy table, not an account pool), healthy
     /// (not in cooldown) and whose adapter id is conformant in the runner-recorded ledger are
     /// offered, ordered specialist first and one per adapter id. A `CredentialUse` policy never
     /// falls back (credential waits and auth sections must not be replayed). When a browser task
@@ -1245,7 +1245,9 @@ impl Dispatcher {
                 continue;
             }
             let reason = if self.account_pool_providers.contains(provider)
-                || self.policy.concurrency_limit(provider.clone()) == 0
+                || self
+                    .implicit_account_limit(&self.implicit_source_of(provider))
+                    .is_none_or(|(limit, _)| limit == 0)
             {
                 Some("disabled")
             } else if cooling.contains(provider) {

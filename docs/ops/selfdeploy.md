@@ -313,7 +313,7 @@ pnpm e2e:mock       # 偽の celeris + pnpm build 済みの GUI に対して読�
 
 | | 中身 |
 |---|---|
-| `[[providers]] id = "smoke"` | `adapter = "fake"`、`tiers = ["standard"]`、`concurrency = 1` |
+| `[[providers]] id = "smoke"` | `adapter = "fake"`、`tiers = ["standard"]`（同時実行数は暗黙アカウント `implicit/none`（fake 行の派生 source）の既定） |
 | `[[roles]] id = "smoke"` | `adapter = "fake"`、`tier = "standard"`、`max_turns = 1`、`max_wall_secs = 60` |
 | `[[genres]] id = "smoke"` | `description = "検証の煙試験"`、`default_role = "smoke"`、`roles = ["smoke"]` |
 | `[adapters.fake].command` | `FakeAdapter::default_command()` に固定 |

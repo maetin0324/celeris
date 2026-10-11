@@ -126,7 +126,7 @@ fn knowledge_dispatcher_with(
         id: "langmem".into(),
         adapter: "langmem".into(),
         tiers: vec![Tier::Cheap],
-        concurrency: 1,
+        concurrency: Some(1),
         model: LANGMEM_MODEL.into(),
     }];
     let mut adapters: HashMap<ProviderId, Arc<dyn WorkerAdapter>> = HashMap::new();
@@ -136,7 +136,7 @@ fn knowledge_dispatcher_with(
             id: "cheap-generic".into(),
             adapter: "fake".into(),
             tiers: vec![Tier::Cheap],
-            concurrency: 1,
+            concurrency: Some(1),
             model: "fake".into(),
         });
         adapters.insert(

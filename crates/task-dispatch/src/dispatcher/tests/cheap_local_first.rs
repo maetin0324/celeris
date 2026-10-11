@@ -55,19 +55,21 @@ fn local_first_dispatcher(
                 id: "p1".into(),
                 adapter: "claude-code".into(),
                 tiers: vec![Tier::Cheap, Tier::Standard],
-                concurrency: 2,
+                concurrency: Some(2),
                 model: String::new(),
             },
             ProviderSpec {
                 id: "qwen".into(),
                 adapter: "acp".into(),
                 tiers: qwen_tiers,
-                concurrency: 1,
+                concurrency: Some(1),
                 model: String::new(),
             },
         ],
         Duration::from_secs(5),
     ));
+    // 旧 `concurrency = 1` の qwen 行は暗黙アカウントの上限 1 で止まる（ADR 2026-10-08 §(e)）。
+    d.set_account_limit("implicit", "qwen", Some(1)).unwrap();
     for id in ["a", "b"] {
         d.record_account_check(
             AccountAdapter::ClaudeCode,
@@ -161,7 +163,7 @@ fn cheap_local_first_falls_to_pool_when_local_full() {
         "a full local is not probed"
     );
 
-    // concurrency 0（走っている run で埋まったのと同じ判定）でも満杯として扱う。
+    // 旧 concurrency = 0 は上限に効かない（暗黙アカウントは既定 2。ADR 2026-10-08 §(c)）。
     let (probe, calls) = counting_probe(Reachability::Ok);
     let mut d = local_first_dispatcher(&claude, vec![Tier::Cheap], probe);
     d.policy = Box::new(StaticPolicy::new(
@@ -170,14 +172,14 @@ fn cheap_local_first_falls_to_pool_when_local_full() {
                 id: "p1".into(),
                 adapter: "claude-code".into(),
                 tiers: vec![Tier::Cheap],
-                concurrency: 2,
+                concurrency: Some(2),
                 model: String::new(),
             },
             ProviderSpec {
                 id: "qwen".into(),
                 adapter: "acp".into(),
                 tiers: vec![Tier::Cheap],
-                concurrency: 0,
+                concurrency: Some(0),
                 model: String::new(),
             },
         ],
@@ -193,10 +195,9 @@ fn cheap_local_first_falls_to_pool_when_local_full() {
         false,
         true,
     );
-    assert_eq!(picked.unwrap().1, "p1");
-    assert_eq!(selection.reason, ProviderSelectionReason::LocalFull);
-    assert!(full.contains("qwen"));
-    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert_eq!(picked.unwrap().1, "qwen", "{selection:?}");
+    assert_ne!(selection.reason, ProviderSelectionReason::LocalFull);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
 }
 
 #[test]
@@ -339,8 +340,8 @@ impl crate::policy::ProviderPolicy for LegacyControlPolicy {
     fn report(&mut self, provider: ProviderId, outcome: &crate::policy::ProviderOutcome) {
         self.0.report(provider, outcome)
     }
-    fn concurrency_limit(&self, provider: ProviderId) -> usize {
-        self.0.concurrency_limit(provider)
+    fn provider_ids(&self) -> Vec<ProviderId> {
+        self.0.provider_ids()
     }
     fn select(
         &self,
@@ -395,14 +396,14 @@ fn routing_dispatch_legacy_equivalence_matrix() {
                                         id: "p1".into(),
                                         adapter: "claude-code".into(),
                                         tiers: vec![Tier::Cheap, Tier::Standard],
-                                        concurrency: 2,
+                                        concurrency: Some(2),
                                         model: String::new(),
                                     },
                                     ProviderSpec {
                                         id: "qwen".into(),
                                         adapter: "acp".into(),
                                         tiers: vec![Tier::Cheap, Tier::Standard],
-                                        concurrency: 1,
+                                        concurrency: Some(1),
                                         model: String::new(),
                                     },
                                 ],
@@ -526,14 +527,14 @@ async fn routing_decided_with_probe(
                 id: "p1".into(),
                 adapter: "instant".into(),
                 tiers: vec![Tier::Cheap, Tier::Standard],
-                concurrency: 2,
+                concurrency: Some(2),
                 model: "m".into(),
             },
             ProviderSpec {
                 id: "qwen".into(),
                 adapter: "acp".into(),
                 tiers: vec![Tier::Cheap],
-                concurrency: 1,
+                concurrency: Some(1),
                 model: "qwen3.8-27b".into(),
             },
         ],

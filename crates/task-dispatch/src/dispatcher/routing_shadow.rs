@@ -113,7 +113,12 @@ impl Dispatcher {
     }
 
     /// pool のアカウントを読むだけで選ぶ（`pick_account` と同じ規則。scan cache には書かない）。
-    fn peek_account(&self, adapter: AccountAdapter, provider: &str, cos: bool) -> Option<String> {
+    pub(super) fn peek_account(
+        &self,
+        adapter: AccountAdapter,
+        provider: &str,
+        cos: bool,
+    ) -> Option<String> {
         let cfg = self.config.accounts.as_ref()?;
         let dirs = match self.accounts_scan_cache.get(&adapter) {
             Some(dirs) => dirs.clone(),
@@ -134,14 +139,19 @@ impl Dispatcher {
             .map(|d| AccountCandidate {
                 id: d.id.as_str(),
                 logged_in: d.logged_in,
-                in_use: self.account_in_use(adapter, &d.id),
+                in_use: self.account_admission_in_use(adapter, &d.id, cos),
             })
             .collect();
+        let limit = |id: &str| self.account_run_limit(adapter, id, cos);
         if cos {
-            let limit = crate::capacity::account_run_limit(cfg.max_runs_per_account, true);
-            return crate::accounts::select_account_least_loaded(&candidates, &book, limit, now);
+            return crate::accounts::select_account_least_loaded_with_limits(
+                &candidates,
+                &book,
+                limit,
+                now,
+            );
         }
-        select_account(&candidates, &book, cfg.max_runs_per_account, now)
+        crate::accounts::select_account_with_limits(&candidates, &book, limit, now)
     }
 
     /// 候補 policy（enforce の kernel）の判断を純粋に計算する。順序は enforce の経路と同じ:
@@ -195,7 +205,7 @@ impl Dispatcher {
                 states.push(None);
                 continue;
             }
-            if self.provider_full(&id, cos) {
+            if self.implicit_account_full(&id, 0) {
                 c.excluded_reasons.push("at_capacity".into());
                 states.push(None);
                 continue;
@@ -272,7 +282,7 @@ impl Dispatcher {
                                 .and_then(|row| {
                                     self.pool_adapter_of(&candidates[i].provider_id, row)
                                 })?;
-                            Some(self.account_score(adapter, acct.as_deref()?))
+                            Some(self.account_score(adapter, acct.as_deref()?, cos))
                         })
                         .unwrap_or(f64::NEG_INFINITY);
                     (i, score)

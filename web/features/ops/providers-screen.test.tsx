@@ -1,17 +1,39 @@
-import type { ReactElement } from "react";
+import type { ReactElement, ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { LlmSourcesView, ProviderView } from "../../api/generated/types";
 import { mcpClientState } from "./mcp-clients";
-import { checkResultLabel, deniedMessage, providerState, validateProviderForm } from "./providers-form";
+import {
+  buildProviderBody,
+  checkResultLabel,
+  deniedMessage,
+  providerState,
+  validateProviderForm,
+} from "./providers-form";
 import {
   celerisModelsFor,
   providerLlmSourceDisplay,
   sourceTierScopeNote,
   tiersResolvingTo,
 } from "./providers-llm-source";
-import { LlmSourceList, ProviderStatusTable, ProviderSummary, ProvidersSections } from "./providers-screen";
+import {
+  ConcurrencyNotice,
+  LlmSourceList,
+  ProviderCard,
+  ProviderCreateForm,
+  ProviderStatusTable,
+  ProviderSummary,
+  ProvidersSections,
+} from "./providers-screen";
 import { secretRows, secretUsageText } from "./secrets-section";
+
+vi.mock("@tanstack/react-router", () => ({
+  Link: ({ to, children, ...props }: { to: string; children: ReactNode }) => (
+    <a href={to} {...props}>
+      {children}
+    </a>
+  ),
+}));
 
 const html = (el: ReactElement) => renderToStaticMarkup(el);
 const stats = {
@@ -158,9 +180,8 @@ describe("providers 画面: 状態を文字で読ませる・form の検査・se
   });
 
   it("form の検査は項目ごとの文言を返す", () => {
-    expect(validateProviderForm({ id: " ", concurrency: "" }, "create")).toEqual({ id: "id を入力してください。" });
-    expect(validateProviderForm({ concurrency: "-1" }, "patch").concurrency).toContain("0 以上の整数");
-    expect(validateProviderForm({ concurrency: "3" }, "patch")).toEqual({});
+    expect(validateProviderForm({ id: " " }, "create")).toEqual({ id: "id を入力してください。" });
+    expect(validateProviderForm({}, "patch")).toEqual({});
     expect(deniedMessage("削除")).toContain("この操作を行う権限がありません");
   });
 
@@ -181,5 +202,59 @@ describe("providers 画面: 状態を文字で読ませる・form の検査・se
   it("MCP client の状態は失効を先に見る", () => {
     expect(mcpClientState({ revoked_at: "2026-09-30T00:00:00Z" }).label).toBe("失効");
     expect(mcpClientState({ revoked_at: null }).label).toBe("有効");
+  });
+});
+
+describe("providers 画面: 同時実行数はアカウントで管理する（ADR 2026-10-08-account-concurrency-limits）", () => {
+  it("送る body に concurrency を入れない", () => {
+    const create = buildProviderBody({ id: " q ", adapter: "codex", model: " m ", tiers: ["cheap"] }, "create");
+    expect(create).toEqual({ id: "q", adapter: "codex", model: "m", tiers: ["cheap"] });
+    const patch = buildProviderBody({ model: "", tiers: [] }, "patch");
+    expect(patch).toEqual({ tiers: [] });
+    expect(Object.keys(create)).not.toContain("concurrency");
+  });
+
+  it("状態の表は同時実行数の列を持たない", () => {
+    const out = html(<ProviderStatusTable items={[provider({ id: "a", concurrency: 7, in_use: 3 })]} />);
+    expect(out).not.toContain("3 / 7");
+    expect(out).not.toContain("上限 7");
+    expect(out).not.toContain("同時実行");
+    expect(out).not.toContain('data-field="concurrency"');
+  });
+
+  it("要約に concurrency を出さない", () => {
+    const out = html(<ProviderSummary item={provider({ concurrency: 9 })} />);
+    expect(out).not.toContain("concurrency");
+    expect(out).toContain("設定: codex・段 standard");
+  });
+
+  it("実行枠の設定と追加の form に同時実行数の入力欄が無い", () => {
+    const sender = { run: async () => [], pending: false, results: {} };
+    const card = html(
+      <ul>
+        <ProviderCard
+          item={provider({ id: "a", concurrency: 4 })}
+          sender={sender}
+          blocked={false}
+          deniedId={undefined}
+        />
+      </ul>,
+    );
+    const create = html(<ProviderCreateForm sender={sender} blocked={false} deniedId={undefined} />);
+    for (const out of [card, create]) {
+      expect(out).not.toContain("同時実行数（concurrency）");
+      expect(out).not.toMatch(/type="number"/);
+      expect(out).not.toContain("concurrency 4");
+      expect(out).toContain('href="/accounts"');
+    }
+    expect(card).toContain("モデル（model）");
+    expect(create).toContain("新規 id");
+  });
+
+  it("案内はアカウント画面への導線を持つ", () => {
+    const out = html(<ConcurrencyNotice />);
+    expect(out).toContain('data-testid="concurrency-notice"');
+    expect(out).toContain('href="/accounts"');
+    expect(out).toContain("暗黙アカウント");
   });
 });

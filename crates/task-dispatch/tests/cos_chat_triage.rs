@@ -72,7 +72,7 @@ fn dispatcher(store: Arc<SqliteStore>, script: &str, dir: &Path) -> Dispatcher {
             id: "p1".into(),
             adapter: "fake".into(),
             tiers: vec![Tier::Frontier, Tier::Standard, Tier::Cheap],
-            concurrency: 2,
+            concurrency: Some(2),
             model: "m".into(),
         }],
         Duration::from_secs(1),

@@ -361,12 +361,9 @@ impl CosChatLaunch {
                         .values()
                         .filter(|(adapter, account)| *adapter == account_adapter && account == id)
                         .count();
-                    let limit = crate::capacity::account_run_limit(
-                        dispatcher
-                            .config
-                            .accounts
-                            .as_ref()
-                            .map_or(1, |accounts| accounts.max_runs_per_account),
+                    let limit = dispatcher.account_run_limit(
+                        account_adapter,
+                        id,
                         dispatcher.config.execution.max_cos_runs > 0,
                     );
                     dispatcher.account_in_use(account_adapter, id) + chat_count < limit
@@ -407,17 +404,16 @@ impl CosChatLaunch {
                                     .count(),
                         })
                         .collect();
-                    let limit = crate::capacity::account_run_limit(
-                        dispatcher
-                            .config
-                            .accounts
-                            .as_ref()
-                            .map_or(1, |accounts| accounts.max_runs_per_account),
-                        dispatcher.config.execution.max_cos_runs > 0,
-                    );
+                    let limit = |id: &str| {
+                        dispatcher.account_run_limit(
+                            account_adapter,
+                            id,
+                            dispatcher.config.execution.max_cos_runs > 0,
+                        )
+                    };
                     dispatcher.account_book(account_adapter).and_then(|book| {
                         let book = book.lock().ok()?;
-                        crate::accounts::select_account_least_loaded(
+                        crate::accounts::select_account_least_loaded_with_limits(
                             &candidates,
                             &book,
                             limit,
@@ -499,16 +495,8 @@ impl CosChatLaunch {
             .values()
             .filter(|active| *active == provider)
             .count();
-        let provider_limit = dispatcher.policy.concurrency_limit(provider.clone());
-        let exempt_pool = dispatcher.config.execution.max_cos_runs > 0
-            && dispatcher.account_pool_providers.contains(provider);
-        if dispatcher.provider_full(provider, dispatcher.config.execution.max_cos_runs > 0)
-            || (!exempt_pool
-                && dispatcher.provider_in_use(provider)
-                    + dispatcher.provider_in_use_cos(provider)
-                    + chat_provider_count
-                    >= provider_limit)
-        {
+        // ADR 2026-10-08 §(e): a non-pool row is limited by its implicit account, CoS included (no +1).
+        if dispatcher.implicit_account_full(provider, chat_provider_count) {
             return Err(format!(
                 "CoS unavailable: provider {provider} is at capacity or cooling down"
             ));

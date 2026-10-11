@@ -199,6 +199,9 @@ R の操作では領域 write は不要だが operation・event・card は同一
 | POST | `/accounts` | A | `handlers.rs` | 共通 |
 | DELETE | `/accounts/{id}` | A | `handlers.rs` | 共通 |
 | POST | `/accounts/{id}/check` | A | `handlers.rs` | 共通 |
+| PATCH | `/accounts/{id}/{account}` | A | `handlers.rs` | 共通（ADR 2026-10-08-account-concurrency-limits §(d) の統合で追加。`{id}` は adapter） |
+| PATCH | `/accounts/{id}/check` | A | `handlers.rs` | 共通（同上。id が `check` のアカウント） |
+| PATCH | `/accounts/{id}/login` | A | `handlers.rs` | 共通（同上。id が `login` のアカウント） |
 | DELETE | `/accounts/{id}/login` | X: `secret_operations` | `handlers.rs` | 共通 |
 | POST | `/accounts/{id}/login` | X: `secret_operations` | `handlers.rs` | 共通 |
 | POST | `/accounts/{id}/login/code` | X: `secret_operations` | `handlers.rs` | 共通 |
@@ -425,3 +428,9 @@ D6 の必須例を先に登録した。各操作は handler と CoS dispatch が
 - skill: cos-operator の operations.md から「登録されていない操作」を消し、EXCLUDED の系列と理由の表に替えた。
   cos-inbox-triage は standing_rule.create・release.promote を人の指示の無い一次対応では使わない。
 - 本番反映（release・verify・promote と KB への skill 取り込み）は人が行う。
+
+## 付記: アカウントの上限の操作（2026-10-11、account-concurrency-limits の統合）
+
+ADR 2026-10-08-account-concurrency-limits の `PATCH /accounts/{adapter}/{id}`（`max_runs` の設定・解除）を main に統合したとき、
+D1 の「全変更を CoS の操作にする」に従い `account.limit_set`（外部効果 C: daemon の channel で表と DB を更新）として ALLOWED に加えた。
+`check` / `login` を id に持つアカウントは静的な路で受けるので、その 2 行も同じ action に割り当てる。除外の理由（D2）には当たらない（秘密値を扱わない）。

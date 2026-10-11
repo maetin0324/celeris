@@ -87,3 +87,9 @@ task_core::is_conversation(task)            // Task.conversation がある（人
 全体 1 本の直列化はスレッドごとの直列化となる。規則 2〜4 の会計、max_cos_runs、pool 例外と account 上限 +1 は維持する。
 max_cos_runs=0 は従来どおり通常枠に戻すだけで、cos.enabled=false とは異なる。quota は迂回せず、一次対応できない待ちは新 ADR の退避通知へ進む。
 通常 task や非 CoS worker をこの例外に含めない。切替は新 ADR の後続実装で行う。
+
+## 付記: アカウントごとの上限への一本化（2026-10-08）
+
+[ADR 2026-10-08 account-concurrency-limits](2026-10-08-account-concurrency-limits.md) により、規則 2・3 のプロバイダ `concurrency` との比較（`capacity::provider_full`）は無くなる。CoS +1 は実アカウントの実効上限
+（保存値 `max_runs` か既定 `max_runs_per_account`）に対して維持し、非プール行の暗黙アカウントには例外を作らない（規則 2 の「プールでないプロバイダには例外を作らない」を移したもの）。
+規則 3 の `in_use` / `in_use_cos` は観測値として残す。`max_cos_runs` と `max_concurrency` は維持。

@@ -59,7 +59,8 @@ async fn provider_kind_create_patch_roundtrip_and_reject_invalid_source() {
     .await;
     assert_eq!(patch.status, 200, "{}", patch.text());
     assert_eq!(patch.json()["llm_source"]["origin"], "explicit");
-    assert_eq!(patch.json()["concurrency"], 2);
+    // ADR 2026-10-08 account-concurrency-limits §(a): concurrency は受け付けるが保存しない（旧既定 1 を返す）。
+    assert_eq!(patch.json()["concurrency"], 1);
     for value in ["unknown", "openai_compatible:missing", "invalid"] {
         let rejected = send(
             &app,
@@ -316,16 +317,21 @@ async fn patch_updates_only_given_fields_and_unknown_id_is_404() {
         &app,
         patch_json_with(
             "/api/v1/providers/acct-b",
-            &json!({"concurrency": 5}),
+            &json!({"concurrency": 5, "tiers": ["cheap"]}),
             &[("authorization", &auth)],
         ),
     )
     .await;
     assert_eq!(resp.status, 200, "{}", resp.text());
     let v = resp.json();
+    // ADR 2026-10-08 account-concurrency-limits §(a): concurrency は deprecated で保存しない（file の旧値 1 を保つ）。
     assert_eq!(
-        (v["concurrency"].clone(), v["model"].clone()),
-        (json!(5), json!("m1")),
+        (
+            v["concurrency"].clone(),
+            v["model"].clone(),
+            v["tiers"].clone()
+        ),
+        (json!(1), json!("m1"), json!(["cheap"])),
         "unspecified fields are kept"
     );
 

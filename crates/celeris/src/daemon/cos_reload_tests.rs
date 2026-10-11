@@ -239,6 +239,13 @@ async fn cos_reload_http_updates_next_run_and_rejects_restart_only_settings() {
     let store = SqliteStore::open(&config.db.path).unwrap();
     let (seen_tx, mut seen) = tokio::sync::mpsc::unbounded_channel();
     install_fakes(&mut dispatcher, &config, &seen_tx);
+    // ADR 2026-10-08 account-concurrency-limits §(e): the held runs of each row count against its
+    // LLM source's implicit account (the legacy `concurrency = 8` is ignored), so raise those limits.
+    for source in dispatcher.implicit_account_ids() {
+        dispatcher
+            .set_account_limit("implicit", &source, Some(8))
+            .unwrap();
+    }
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let (admin_tx, mut admin_rx) = tokio::sync::mpsc::channel(4);

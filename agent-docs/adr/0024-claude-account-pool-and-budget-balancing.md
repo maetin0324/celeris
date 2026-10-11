@@ -184,3 +184,9 @@ GUI は平文 HTTP で LAN に出しうる（パスワード認証付き）。�
   観測値の記録も消す（スナップショットの 1 tick 遅れによる競合と、同じ id を作り直したときの古い記録の引き継ぎを避ける）。
 - **M7（`[accounts]` と reload）**: `[accounts]` の変更は reload では反映しない（`POST /reload` が 400 で「再起動が必要」を返す）。
   プールのプロバイダの追加・変更は reload で反映される。
+
+## 付記（2026-10-08、プール全体の上限の廃止とアカウントごとの上限）
+
+[ADR 2026-10-08 account-concurrency-limits](2026-10-08-account-concurrency-limits.md) により、プール行の `concurrency`（「プロバイダ全体の上限」）は deprecated で dispatch では見ない。`[accounts] max_runs_per_account` は
+全アカウント共通の上限から「保存値の無いアカウントの既定」に変わり、各アカウントの `max_runs` をアカウント画面から変えられる。
+`DELETE /accounts/{id}`（M6）はそのアカウントの保存値も消す。

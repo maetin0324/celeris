@@ -161,6 +161,7 @@ async fn write_set_gate_without_hints_keeps_the_previous_parallelism() {
     let c = hinted_task(&store, dir.path(), Some(&["src/"]), 0);
     let adapter = HoldAdapter::new();
     let mut d = dispatcher(store.clone(), adapter.clone(), 3);
+    d.set_account_limit("implicit", "p1", Some(3)).unwrap();
 
     let report = d.tick().unwrap();
     assert_eq!(report.dispatched, 3);

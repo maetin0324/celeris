@@ -463,12 +463,14 @@ async fn cos_ops_admin_config_providers_and_account_create_are_audited() {
         "provider-patch",
         "PATCH",
         "/api/v1/providers/fake-a",
-        json!({"concurrency": 2}),
+        json!({"concurrency": 2, "model": "m2"}),
         "provider.update",
     )
     .await;
     let text = std::fs::read_to_string(providers.join("fake-a.toml")).expect("read");
-    assert!(text.contains("concurrency = 2"), "{text}");
+    assert!(text.contains("model = \"m2\""), "{text}");
+    // ADR 2026-10-08 account-concurrency-limits §(a): deprecated `concurrency` is accepted but not saved.
+    assert!(!text.contains("concurrency"), "{text}");
 
     run_domain(
         &env,

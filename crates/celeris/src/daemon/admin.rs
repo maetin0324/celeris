@@ -134,6 +134,22 @@ pub(crate) async fn handle_admin_request(
             }
             let _ = reply.send(result);
         }
+        // ADR 2026-10-08 account-concurrency-limits §(d): DB と表の更新だけなので spawn せずここで行う。
+        task_api::AdminRequest::AccountLimitSet {
+            adapter,
+            id,
+            max_runs,
+            reply,
+        } => {
+            let result =
+                accounts_admin::set_account_limit(config, dispatcher, &adapter, &id, max_runs);
+            if let Err(error) = &result {
+                tracing::warn!(who = "admin", op = "account_limit_set", account_id = %id, %adapter, ?error, "account limit update rejected");
+            } else {
+                tracing::info!(who = "admin", op = "account_limit_set", account_id = %id, %adapter, ?max_runs, "admin: account limit updated");
+            }
+            let _ = reply.send(result);
+        }
         // ADR-0037 D4: テスト送信。秘密を読むのも POST するのも celeris 側（task-api は URL を知らない）。
         // `spawn` するので tick は止まらない（B1）。
         task_api::AdminRequest::NotifyTest { reply } => {
@@ -211,6 +227,9 @@ pub(crate) fn reload_providers(
     );
     let adapters = build_adapters(&new_config);
     let models = effective_models(&new_config);
+    dispatcher
+        .reload_account_limits()
+        .map_err(|e| e.to_string())?;
     dispatcher.reload_providers(
         Box::new(policy),
         models,
@@ -218,6 +237,14 @@ pub(crate) fn reload_providers(
         new_config.account_pool_providers(),
     );
     dispatcher.reload_cos_chat_launch(cos_launch);
+    // ADR 2026-10-08 account-concurrency-limits §(e): implicit accounts are per LLM source, so the
+    // new config's resolved sources must be in place before pruning or limiting.
+    dispatcher.set_provider_llm_sources(new_config.provider_llm_sources());
+    // §(d): a stored implicit limit goes away when no non-pool row uses its LLM source any more
+    // (row removed, turned into a pool, or moved to another source). Other stored limits survive.
+    if let Err(error) = dispatcher.prune_implicit_account_limits() {
+        tracing::warn!(%error, "cannot prune implicit account limits");
+    }
     dispatcher.set_account_pool_adapters(new_config.account_pool_adapters());
     // ADR-0132 付記 L1/L7: ローカルの行と probe 先も新しい設定から作り直す（health のキャッシュも捨てる）。
     dispatcher.set_local_providers(new_config.local_cheap_providers());

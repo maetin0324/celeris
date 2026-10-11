@@ -57,18 +57,13 @@ test.describe("ops-config", () => {
     await page.goto(`${gateway.base}/providers`);
     const form = page.getByRole("form", { name: "プロバイダを追加" });
     const id = form.getByLabel("新規 id");
-    const concurrency = form.getByLabel("新規の同時実行数");
-    // 空の id と不正な concurrency: 先に並ぶ id へ focus。
-    await concurrency.fill("-2");
+    // 同時実行数はアカウントで管理する（入力欄は無く、アカウント画面へ導く）。
+    await expect(form.getByLabel(/同時実行数/)).toHaveCount(0);
+    await expect(form.getByRole("link", { name: "アカウントで管理" })).toHaveAttribute("href", "/accounts");
+    // 空の id: id へ focus。
     await form.getByRole("button", { name: "追加" }).click();
     await expectFieldError(page, id, "id を入力してください");
-    await expect(concurrency).toHaveAttribute("aria-invalid", "true");
-    // id を直すと concurrency の error へ focus が移る。
-    await id.fill("codex-x");
-    await form.getByRole("button", { name: "追加" }).click();
-    await expectFieldError(page, concurrency, "0 以上の整数");
     // サーバの 422（重複）は id 欄に結び付けて focus を戻す。
-    await concurrency.fill("");
     await id.fill("claude-main");
     await form.getByRole("button", { name: "追加" }).click();
     await expectFieldError(page, id, "id が不正か重複しています");
@@ -156,6 +151,62 @@ test.describe("ops-config", () => {
     const button = form.getByRole("button", { name: "secret を保存" });
     await expect(button).toBeDisabled();
     await expect(button).toHaveAttribute("aria-describedby", (await notice.getAttribute("id")) ?? "");
+  });
+
+  test("accounts: 上限の保存・検査・既定に戻す（暗黙アカウントを含む）", async ({ page }) => {
+    await page.goto(`${gateway.base}/accounts`);
+    const main = page.getByRole("listitem", { name: "アカウント main" });
+    await expect(main.getByText("0 / 実効上限 1（既定（max_runs_per_account = 1））")).toBeVisible();
+    const input = main.getByLabel("同時実行数の上限（1〜32）");
+    await expect(main.getByRole("button", { name: "既定に戻す" })).toBeDisabled();
+    // 範囲外は送らずに項目の error。
+    await input.fill("33");
+    await main.getByRole("button", { name: "上限を保存" }).click();
+    await expectFieldError(page, input, "1〜32 の整数");
+    expect(daemon.requests.some((r) => r.method === "PATCH" && r.path.startsWith("/api/v1/accounts/"))).toBe(false);
+    await input.fill("3");
+    await main.getByRole("button", { name: "上限を保存" }).click();
+    await expect(main.getByText("0 / 実効上限 3（このアカウントに保存した上限）")).toBeVisible();
+    expect(daemon.requests.some((r) => r.method === "PATCH" && r.path === "/api/v1/accounts/claude-code/main")).toBe(
+      true,
+    );
+    await main.getByRole("button", { name: "既定に戻す" }).click();
+    await expect(main.getByText("0 / 実効上限 1（既定（max_runs_per_account = 1））")).toBeVisible();
+    // 暗黙アカウント（LLM source 単位。同じ source を使う行を `providers` で出す）: 印があり、
+    // ログイン・削除は無く、同じ欄で上限を変える。
+    const implicit = page.getByRole("listitem", { name: "アカウント openai_compatible:qwen" });
+    await expect(implicit.getByText("暗黙アカウント", { exact: true })).toBeVisible();
+    await expect(implicit.getByText("qwen-local")).toBeVisible();
+    await expect(implicit.getByRole("button", { name: "ログイン開始" })).toHaveCount(0);
+    await expect(implicit.getByRole("button", { name: "削除" })).toHaveCount(0);
+    await implicit.getByLabel("同時実行数の上限（1〜32）").fill("2");
+    await implicit.getByRole("button", { name: "上限を保存" }).click();
+    await expect(implicit.getByText("0 / 実効上限 2（このアカウントに保存した上限）")).toBeVisible();
+    expect(
+      daemon.requests.some(
+        (r) => r.method === "PATCH" && r.path === "/api/v1/accounts/implicit/openai_compatible:qwen",
+      ),
+    ).toBe(true);
+    await implicit.getByRole("button", { name: "既定に戻す" }).click();
+    await expect(implicit.getByText("0 / 実効上限 1（既定（max_runs_per_account = 1））")).toBeVisible();
+  });
+
+  test("accounts: 上限の保存の API エラーを項目に出す", async ({ page }) => {
+    await page.route("**/api/accounts/claude-code/main", (route) =>
+      route.request().method() === "PATCH"
+        ? route.fulfill({
+            status: 400,
+            contentType: "application/json",
+            body: JSON.stringify({ error: "bad_request", message: "max_runs が不正です" }),
+          })
+        : route.continue(),
+    );
+    await page.goto(`${gateway.base}/accounts`);
+    const main = page.getByRole("listitem", { name: "アカウント main" });
+    const input = main.getByLabel("同時実行数の上限（1〜32）");
+    await input.fill("4");
+    await main.getByRole("button", { name: "上限を保存" }).click();
+    await expectFieldError(page, input, "保存できませんでした: max_runs が不正です");
   });
 
   test("MCP: client の状態を文字の badge で示す", async ({ page }) => {

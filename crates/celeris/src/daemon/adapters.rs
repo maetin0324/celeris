@@ -401,7 +401,7 @@ pub fn provider_lives(config: &Config) -> Vec<ProviderLive> {
                 id: p.id.clone(),
                 adapter: p.adapter.clone(),
                 tiers: p.tiers.clone(),
-                concurrency: p.concurrency,
+                concurrency: p.concurrency.unwrap_or(1),
                 model: models.get(&p.id).filter(|m| !m.is_empty()).cloned(),
                 env_keys,
                 in_use: 0,

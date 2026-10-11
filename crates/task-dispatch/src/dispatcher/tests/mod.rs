@@ -132,7 +132,7 @@ fn dispatcher_with_adapter_id(
         policy.set_test_clock(policy_clock.clone());
     }
     let mut adapters: HashMap<ProviderId, Arc<dyn WorkerAdapter>> = HashMap::new();
-    adapters.insert("p1".into(), adapter);
+    adapters.insert("p1".into(), adapter.clone());
     let mut dispatcher = Dispatcher::new(
         store,
         Box::new(policy),
@@ -177,6 +177,7 @@ fn dispatcher_with_adapter_id(
             execution: ExecutionConfig::default(),
         },
     );
+    review_route::install_test_route(&mut dispatcher, adapter, adapter_id);
     #[cfg(test)]
     {
         if use_test_clock {
@@ -424,16 +425,19 @@ impl WorkerAdapter for ReviewerUsageAdapter {
     }
 }
 
-fn reviewer_routing_record(store: &dyn TaskStore, task_id: TaskId) -> task_core::RoutingRecord {
+/// The lane label the reviewer run's route selection carried (`llm_route_selected.metadata.lane`).
+fn reviewer_route_lane(store: &dyn TaskStore, task_id: TaskId) -> String {
     store
         .events_for(task_id)
         .unwrap()
         .into_iter()
         .find_map(|(_, e)| match e {
-            Event::RoutingDecided { record, .. } => Some(*record),
+            Event::LlmRouteSelected { metadata, .. } => {
+                metadata["lane"].as_str().map(str::to_string)
+            }
             _ => None,
         })
-        .expect("routing_decided for the reviewer run")
+        .expect("llm_route_selected for the reviewer run")
 }
 
 /// ADR-0054 D1 / Phase 67b 追記: `resume` を頼まれた Reviewer run では `session_resume_failed` を
@@ -3074,6 +3078,7 @@ mod integration_ready_race;
 mod planning_and_gate;
 mod provider_and_retry;
 mod review;
+mod review_route;
 mod role_assignments;
 mod routing_and_quota;
 mod routing_enforce;

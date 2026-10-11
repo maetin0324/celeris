@@ -502,6 +502,7 @@ impl Dispatcher {
     /// `crate::sessions::decide_sticky` でそのセッションの `(adapter, account_id)` に留まれるかを試す
     /// （`sticky_provider`）。留まれれば ADR-0049 のランキングを走らせない（毎 run アカウントを
     /// 付け替えてセッションを退役させ続ける事故の修正）。留まれなければ、これまでどおり下のランキングへ。
+    #[cfg(test)]
     pub(super) fn select_provider(
         &mut self,
         hint: &task_core::WorkerHint,
@@ -523,6 +524,7 @@ impl Dispatcher {
     /// CoS でなく、ローカルの行（`set_local_providers`）があれば、順位付けの前にローカルの行を設定順に
     /// 見る（hint に合い・cooldown でなく・空きがあり・health が落ちていなければ選ぶ）。見送ったローカルの
     /// 行は順位付けの fallback からも外す。付記 L8: 戻り値の第 2 要素が選択の理由と見た候補の記録。
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     pub(super) fn select_provider_for(
         &mut self,

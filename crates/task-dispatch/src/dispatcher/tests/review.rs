@@ -529,7 +529,7 @@ async fn department_reviewer_runs_share_and_continue_one_lead_session() {
         delay: Duration::from_millis(5),
     });
     let mut adapters: HashMap<ProviderId, Arc<dyn WorkerAdapter>> = HashMap::new();
-    adapters.insert("p1".into(), file_adapter);
+    adapters.insert("p1".into(), file_adapter.clone());
     let mut d = Dispatcher::new(
         store.clone(),
         Box::new(policy),
@@ -571,6 +571,11 @@ async fn department_reviewer_runs_share_and_continue_one_lead_session() {
             workspace_prune_after_secs: 0,
             execution: ExecutionConfig::default(),
         },
+    );
+    review_route::install_test_route(
+        &mut d,
+        review_route::IdAs::wrap("claude-code", file_adapter.clone()),
+        "claude-code",
     );
 
     // 1 本目: `coding-poc`（セクション）の Reviewer run。部署は `department_of` で `coding` に解決する。
@@ -651,7 +656,7 @@ async fn a_rejected_lead_session_resume_retires_it_and_the_next_review_starts_fr
         review_json: r#"{"verdicts":[{"criterion":0,"pass":true,"reason":"ok"}]}"#.into(),
     });
     let mut adapters: HashMap<ProviderId, Arc<dyn WorkerAdapter>> = HashMap::new();
-    adapters.insert("p1".into(), adapter);
+    adapters.insert("p1".into(), adapter.clone());
     let mut d = Dispatcher::new(
         store.clone(),
         Box::new(policy),
@@ -693,6 +698,11 @@ async fn a_rejected_lead_session_resume_retires_it_and_the_next_review_starts_fr
             workspace_prune_after_secs: 0,
             execution: ExecutionConfig::default(),
         },
+    );
+    review_route::install_test_route(
+        &mut d,
+        review_route::IdAs::wrap("claude-code", adapter.clone()),
+        "claude-code",
     );
 
     // 1 本目: `coding-poc` の Reviewer run。新規セッション（resume していないので拒否は起きない）。
@@ -776,7 +786,7 @@ async fn a_resume_rejection_that_still_produced_a_result_self_heals_and_the_retr
     });
     let adapter_handle = adapter.clone();
     let mut adapters: HashMap<ProviderId, Arc<dyn WorkerAdapter>> = HashMap::new();
-    adapters.insert("p1".into(), adapter);
+    adapters.insert("p1".into(), adapter.clone());
     let mut d = Dispatcher::new(
         store.clone(),
         Box::new(policy),
@@ -818,6 +828,11 @@ async fn a_resume_rejection_that_still_produced_a_result_self_heals_and_the_retr
             workspace_prune_after_secs: 0,
             execution: ExecutionConfig::default(),
         },
+    );
+    review_route::install_test_route(
+        &mut d,
+        review_route::IdAs::wrap("claude-code", adapter.clone()),
+        "claude-code",
     );
 
     // 1 本目: `coding-poc` の Reviewer run。新規セッション（resume していないので拒否は起きない）。
@@ -1325,7 +1340,7 @@ async fn reviewer_run_provider_failure_defers_review_without_consuming_attempts(
     assert!(events.iter().any(|(_, e)| matches!(e, Event::WorkerProgress { msg, .. } if msg.starts_with("reviewer run requeued"))));
     assert!(events.iter().any(|(_, e)| matches!(
         e,
-        Event::ProviderThrottled { provider, reason, .. } if provider == "p1" && reason.as_deref() == Some("throttled")
+        Event::ProviderThrottled { provider, reason, .. } if provider == "s1" && reason.as_deref() == Some("throttled")
     )), "{events:?}");
     let verdicts: Vec<bool> = events
         .iter()
@@ -1393,7 +1408,7 @@ async fn reviewer_run_records_worker_started_and_finished_with_reviewer_role() {
         (started[0].1, started[1].1),
         (None, Some(RunRole::Reviewer))
     );
-    assert_eq!(started[1].2.as_deref(), Some("p1"));
+    assert_eq!(started[1].2.as_deref(), Some("s1"));
     let reviewer_finished: Vec<&str> = events
         .iter()
         .filter_map(|(_, e)| match e {

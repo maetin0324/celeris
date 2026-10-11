@@ -45,10 +45,10 @@ impl Dispatcher {
             })
             .collect();
         in_flight.extend(self.reviewing.iter().filter_map(|(task_id, e)| {
-            e.provider.as_ref().map(|provider| InFlight {
+            e.route.as_ref().map(|(source, _)| InFlight {
                 task_id: *task_id,
                 run_id: e.review_run_id.clone().unwrap_or_else(|| e.run_id.clone()),
-                provider: provider.clone(),
+                provider: source.to_string(),
                 kind: InFlightKind::Reviewer,
                 since: rfc3339(e.since),
             })

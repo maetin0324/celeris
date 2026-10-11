@@ -702,6 +702,17 @@ impl EventSink for RecordingSink {
     fn artifact(&self, _artifact: &ArtifactRef) {}
 }
 
+fn test_llm_route() -> task_worker::protocol::SelectedLlmRoute {
+    task_worker::protocol::SelectedLlmRoute {
+        harness_id: "h1".into(),
+        source_id: "s1".into(),
+        model_id: "m".into(),
+        account_id: "a1".into(),
+        endpoint: None,
+        credential: None,
+    }
+}
+
 fn reviewer_run(adapter: Arc<StubReviewer>) -> ReviewerRun {
     ReviewerRun {
         cargo_target_dir: None,
@@ -709,6 +720,7 @@ fn reviewer_run(adapter: Arc<StubReviewer>) -> ReviewerRun {
         profile: None,
         skills: Vec::new(),
         adapter,
+        llm_route: test_llm_route(),
         run_id: "rev-1".into(),
         limits: RunLimits {
             wall_clock: Duration::from_secs(5),
@@ -822,6 +834,7 @@ async fn reviewer_provider_failure_is_reported_instead_of_failing_criteria() {
         profile: None,
         skills: Vec::new(),
         adapter: Arc::new(ThrottledReviewer),
+        llm_route: test_llm_route(),
         run_id: "rev-x".into(),
         limits: RunLimits {
             wall_clock: Duration::from_secs(5),

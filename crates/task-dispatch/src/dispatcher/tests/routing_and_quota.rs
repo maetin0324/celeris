@@ -27,13 +27,7 @@ async fn reviewer_lane_defaults_to_the_worker_lane_capped_by_the_org_ceiling() {
     let report = run_until_idle(&mut d, 300).await;
     assert!(report.idle);
     assert_eq!(store.get(r.id).unwrap().unwrap().status, Status::Done);
-    let record = reviewer_routing_record(store.as_ref(), r.id);
-    assert_eq!(record.harness.as_deref(), Some("reviewer"));
-    assert_eq!(record.decision.lane, Tier::Standard, "{record:?}");
-    assert_eq!(record.decision.proposed, Tier::Frontier);
-    assert_eq!(record.decision.rule_id, "reviewer/matches-worker-lane");
-    assert!(record.decision.clamped_by.is_some(), "{record:?}");
-    assert_eq!(record.resolution.lane, Some(Tier::Standard));
+    assert_eq!(reviewer_route_lane(store.as_ref(), r.id), "standard");
 }
 
 /// ADR-0069 Phase 118 D4: `[reviewer] tier` の明示は既定（worker lane 一致）に勝つ。
@@ -60,10 +54,7 @@ async fn explicit_reviewer_tier_config_wins_over_the_worker_lane_default() {
     d.config.reviewer_tier_override = Some(Tier::Cheap);
     let report = run_until_idle(&mut d, 300).await;
     assert!(report.idle);
-    let record = reviewer_routing_record(store.as_ref(), r.id);
-    assert_eq!(record.decision.lane, Tier::Cheap, "{record:?}");
-    assert_eq!(record.decision.rule_id, "reviewer/explicit-config");
-    assert_eq!(record.decision.clamped_by, None);
+    assert_eq!(reviewer_route_lane(store.as_ref(), r.id), "cheap");
 }
 
 /// ADR-0069 Phase 118 D4: 部署の `[profile] review.tier`（ADR-0069 D2）は `[reviewer] tier` の
@@ -93,9 +84,7 @@ async fn department_review_tier_wins_over_the_explicit_reviewer_config() {
     d.config.reviewer_tier_override = Some(Tier::Cheap);
     let report = run_until_idle(&mut d, 300).await;
     assert!(report.idle);
-    let record = reviewer_routing_record(store.as_ref(), r.id);
-    assert_eq!(record.decision.lane, Tier::Frontier, "{record:?}");
-    assert_eq!(record.decision.rule_id, "reviewer/department-review-tier");
+    assert_eq!(reviewer_route_lane(store.as_ref(), r.id), "frontier");
 }
 
 /// ADR-0054 D1（Phase 67）: `resolve_node_session` の店じまい（store の読み書き側）。純粋な判断は
@@ -1866,6 +1855,7 @@ async fn planner_and_reviewer_runs_emit_quota_estimates() {
         2,
         2,
     );
+    review_route::install_oauth_test_route(&mut d, Arc::new(RolesAdapter));
     d.set_now_unix_fn(Arc::new(|| 10_000));
     d.config.execution.gate = task_core::GateMode::On;
     d.config.execution.planner.adapter = "claude-code".to_string();

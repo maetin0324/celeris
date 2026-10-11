@@ -1111,8 +1111,9 @@ struct ReviewEntry {
     /// Keep ownership until the verdict transaction has completed, across daemon handoff.
     _review_lock: Arc<std::fs::File>,
     handle: JoinHandle<()>,
-    /// `Reviewer` run を起動する場合に選んだプロバイダ（並列度の枠を消費する）。
-    provider: Option<ProviderId>,
+    /// `Reviewer` run を起動する場合に選んだ `(source, account)`（並列度と admission の枠を消費する。
+    /// ADR 2026-10-11 llm-source-harness-selection）。
+    route: Option<(task_core::llm_route::SourceId, task_core::llm_route::AccountId)>,
     /// レビューを延期（Reviewer run の供給側失敗）するときに次 tick へ持ち越す `done` の内容。
     subject: ReviewSubject,
     /// レビュー対象の run（デーモンのスナップショット用）。
@@ -2541,7 +2542,7 @@ impl Dispatcher {
             + self
                 .reviewing
                 .values()
-                .filter(|e| e.provider.is_some())
+                .filter(|e| e.route.is_some())
                 .count()
     }
 
@@ -2609,11 +2610,6 @@ impl Dispatcher {
             .values()
             .filter(|e| !e.cos && &e.provider == provider)
             .count()
-            + self
-                .reviewing
-                .values()
-                .filter(|e| e.provider.as_ref() == Some(provider))
-                .count()
     }
 
     /// ADR-0052 D1: このタスクが「知識整理 run（`langmem` 固定）」で、かつ接続先に届かないなら、

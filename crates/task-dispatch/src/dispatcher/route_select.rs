@@ -307,6 +307,19 @@ impl Dispatcher {
                     .or_default() += 1;
             }
         }
+        // Reviewer runs hold their `(source, account)` the same way.
+        for (source, account) in self.reviewing.values().filter_map(|e| e.route.as_ref()) {
+            *state
+                .reservations
+                .source_in_use
+                .entry(source.clone())
+                .or_default() += 1;
+            *state
+                .reservations
+                .account_in_use
+                .entry((source.clone(), account.clone()))
+                .or_default() += 1;
+        }
         for (source_id, spec) in &registry.sources {
             let mut accounts: Vec<AccountId> = spec.accounts.clone();
             if let Some(adapter) = account_adapter_for_source_kind(spec.kind.as_ref()) {

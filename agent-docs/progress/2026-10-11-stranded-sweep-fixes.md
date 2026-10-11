@@ -34,18 +34,17 @@ tasks: [01M4NM5720BYCYHXT02297GFKK]
 
 ## 証拠
 
-最終検証（na-event 統合後 HEAD `75ed7cb3`、final-verify 段）の結果。詳細は [final-verify.md](2026-10-11-stranded-sweep-fixes/final-verify.md)（前段の verify.md は `00e3dcb0` 時点）。
+最終検証（api-errors 統合後 HEAD `1e498748`、final-verify2 段）の結果。詳細は [final-verify2.md](2026-10-11-stranded-sweep-fixes/final-verify2.md)（前の final-verify.md は na-event 統合後 `75ed7cb3` 時点、verify.md は `00e3dcb0` 時点）。
 
 | コマンド | exit | 要点 |
 |---|---|---|
-| `TMPDIR=/tmp bash scripts/dev/test-parallel.sh` | 0 | JSON 集計 passed 5181・failed 0・ignored 14（doctest 含む）。1 件の試験が一度だけ落ちた記録は final-verify.md の「不安定だった試験」 |
+| `TMPDIR=/tmp bash scripts/dev/test-parallel.sh` | 0 | JSON 集計 passed 5209・failed 0・ignored 14（doctest 含む）。1 件の試験が一度だけ落ちた記録は final-verify.md の「不安定だった試験」 |
 | `cargo clippy --workspace -- -D warnings` | 0 | 警告無し |
 | `cargo fmt --all -- --check` | 0 | 差分無し |
 | `sh scripts/dev/check-doc-links.sh` / `check-adr-numbers.sh` / `progress-index.sh --check` / `check-doc-layout.sh scripts/dev/docs-layout.tsv` | 0 | いずれも ok |
-| `cargo nextest run --workspace -E 'test(stranded_)'` | 0 | 24 passed |
 | `git diff --quiet "$CELERIS_WU_BASE" -- crates/ web/` | 0 | 差分ゼロ |
 
-- 葉の記録: [adr.md](2026-10-11-stranded-sweep-fixes/adr.md)・[resolve.md](2026-10-11-stranded-sweep-fixes/resolve.md)・[remote.md](2026-10-11-stranded-sweep-fixes/remote.md)・[identity.md](2026-10-11-stranded-sweep-fixes/identity.md)・[web-state.md](2026-10-11-stranded-sweep-fixes/web-state.md)・[na-event.md](2026-10-11-stranded-sweep-fixes/na-event.md)・[verify.md](2026-10-11-stranded-sweep-fixes/verify.md)・[final-verify.md](2026-10-11-stranded-sweep-fixes/final-verify.md)
+- 葉の記録: [adr.md](2026-10-11-stranded-sweep-fixes/adr.md)・[resolve.md](2026-10-11-stranded-sweep-fixes/resolve.md)・[remote.md](2026-10-11-stranded-sweep-fixes/remote.md)・[identity.md](2026-10-11-stranded-sweep-fixes/identity.md)・[web-state.md](2026-10-11-stranded-sweep-fixes/web-state.md)・[na-event.md](2026-10-11-stranded-sweep-fixes/na-event.md)・[verify.md](2026-10-11-stranded-sweep-fixes/verify.md)・[final-verify.md](2026-10-11-stranded-sweep-fixes/final-verify.md)・[api-errors.md](2026-10-11-stranded-sweep-fixes/api-errors.md)・[final-verify2.md](2026-10-11-stranded-sweep-fixes/final-verify2.md)
 - ADR 付記の「実装との突き合わせ（F1〜F3、2026-10-11 close 段）」に関数名・migration 0070・試験名（`stranded_default_branch_*` 6 件・`stranded_remote_*` 3 件・`stranded_identity_*` 1 件・`stranded_audit_*` 1 件）と決定からのずれを書いた。F2 の event のずれは na-event 葉で実装して解消した（commit `eb7968ef`、試験 `stranded_audit_remote_not_applicable_appends_one_event_and_no_repeat`）。
 - close 段の record は agent-docs/ だけを変えた（`git diff --quiet "$CELERIS_WU_BASE" -- crates/ web/` は exit 0）。
 
@@ -55,7 +54,7 @@ tasks: [01M4NM5720BYCYHXT02297GFKK]
 - （解消）ADR F2 の文言のずれ（表の名前・remote の reason 文字列）は決定本文を実装に合わせて改訂した（final-verify 段、agent-docs/adr/2026-10-11-stranded-done-branches.md の F2）。実装は変えていない。
 - 一度だけ落ちた試験: `task-dispatch` の `an_interrupted_integration_is_redone_idempotently_after_restart` は、同じ run の全体試験で 1 回 exit 100、その後の全体試験と単独実行では通った。原因は未調査（final-verify.md）。
 - task-api docs と task-dispatch behind_target の解決失敗時の振る舞いが ADR F1 の表と少し違う（ADR 付記に記載）。
-- `default_branch_unresolvable`（409）が `docs/api/v1/api.md` のエラーコード表に無い。
+- （解消）`default_branch_unresolvable`（409）・`checkout_busy`（409）の api.md 未記載は api-errors 葉で解消（commit `c8309aed`、統合 `1e498748`）。記載箇所: `docs/api/v1/api.md` §1.5 エラーコード表（行 253・254）と §2 表 行 75〜78・§3.80・§3.81。final-verify2 段で突き合わせ済み（[final-verify2.md](2026-10-11-stranded-sweep-fixes/final-verify2.md)）。
 - repos 空の task で Remote の repository に branch がある場合は記録しない（`not_applicable` 行もできない）。
 - test-parallel の要約が nextest の `passed (N slow)` を数え落とす既知の問題（本件の範囲外、未修正）。
 - web の mobile 幅の overlay 試験は `not_applicable` の section を含まない。
@@ -89,5 +88,9 @@ tasks: [01M4NM5720BYCYHXT02297GFKK]
 
 ## 提案
 
-- `docs/api/v1/api.md` のエラーコード表に `default_branch_unresolvable`（409）を足す葉を後続で置く（文面は [resolve.md](2026-10-11-stranded-sweep-fixes/resolve.md) の提案）。
+- （実施済み）`docs/api/v1/api.md` のエラーコード表に `default_branch_unresolvable`（409）・`checkout_busy`（409）を足す api-errors 葉（commit `c8309aed`）。
 - ADR F2 の表の名前・reason 文字列を実装に合わせて ADR 本文を直すか、実装を決定に合わせるかを人が決める（event の追記は na-event で実装済み）。
+
+## 未解決事項の整合性（マージを止める欠陥でないこと）
+
+未解決事項の残り（一度だけ落ちた試験の再発条件未調査・ADR F1 の表と少し違う振る舞い・repos 空の Remote 記録なし・test-parallel 要約の slow 数え落とし・mobile overlay 試験の section 不足）は、いずれも本 task の acceptance を阻まない後続候補であり、マージを止める欠陥ではない。本番への移行は人の release 手順のみで、コード側のブロック要因は残らない（final-verify2 段の確認、[final-verify2.md](2026-10-11-stranded-sweep-fixes/final-verify2.md)）。

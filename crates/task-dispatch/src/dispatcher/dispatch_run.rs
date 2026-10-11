@@ -1204,6 +1204,7 @@ impl Dispatcher {
                 account_adapter,
                 container: container_stop,
                 cos,
+                route: None,
             },
         );
         Ok(true)

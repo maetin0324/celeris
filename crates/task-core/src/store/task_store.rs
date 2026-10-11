@@ -838,6 +838,13 @@ pub trait TaskStore:
     /// トランザクションでは**ない**（既存コードの慣習に合わせ、`append_event` の直後に呼ぶ。監査上の
     /// 実害は無い: 再起動時の照合は `work_units.status` を正とする）。
     fn run_index_start(&self, row: RunRow) -> Result<(), StoreError>;
+    /// ADR 2026-10-11 llm-source-harness-selection: dispatcher が選んだ harness・source・model・account と
+    /// 選択の versioned metadata を run の行に書く。行が無ければ `Ok(false)`。
+    fn run_record_selection(
+        &self,
+        run_id: &str,
+        selection: &crate::llm_route::RunSelection,
+    ) -> Result<bool, StoreError>;
     /// D5: run 終了時に `runs` の行を更新する。無ければ `Ok(false)`。
     #[allow(clippy::too_many_arguments)]
     fn run_index_finish(

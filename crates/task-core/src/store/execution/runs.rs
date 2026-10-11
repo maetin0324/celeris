@@ -106,6 +106,28 @@ impl SqliteStore {
         Self::insert_run_row_tx(&conn, &row)
     }
 
+    pub(in crate::store) fn run_record_selection_impl(
+        &self,
+        run_id: &str,
+        selection: &crate::llm_route::RunSelection,
+    ) -> Result<bool, StoreError> {
+        let conn = self.lock()?;
+        let n = conn.execute(
+            "UPDATE runs SET selected_harness_id = ?1, selected_source_id = ?2, \
+             selected_model_id = ?3, selected_account_id = ?4, selection_metadata_json = ?5 \
+             WHERE run_id = ?6",
+            params![
+                selection.harness.as_ref(),
+                selection.source.as_ref(),
+                selection.model.as_ref(),
+                selection.account.as_ref(),
+                serde_json::to_string(&selection.metadata)?,
+                run_id,
+            ],
+        )?;
+        Ok(n > 0)
+    }
+
     pub(in crate::store) fn run_index_finish_impl(
         &self,
         run_id: &str,

@@ -47,7 +47,8 @@ pub use dispatcher::{
     ContainersRuntimeConfig, DEFAULT_MAX_RUNS_PER_ACCOUNT, DispatchConfig, DispatchError,
     DispatchRoutingSettings, Dispatcher, ExecutionConfig, KnowledgeRuntimeConfig,
     LocalHealthTarget, LocalProviderProbe, LocalProviderSpec, MEMBER_RANKING_ESTIMATOR,
-    MEMBER_RANKING_PRIORITY, MemberRanking, RoutingModelProfiles, RoutingShadowListener,
+    MEMBER_RANKING_PRIORITY, MemberRanking, RouteFailure, RouteInput, RoutePick, RouteState,
+    RouteTrace, RoutingModelProfiles, RoutingShadowListener, harness_request_for, route_select,
     SelfHostLoad, SnapshotPublisher, StaticModelProfiles, TaskFilter, TickReport,
 };
 pub use policy::{

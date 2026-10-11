@@ -3077,6 +3077,7 @@ mod review;
 mod role_assignments;
 mod routing_and_quota;
 mod routing_enforce;
+mod route_select;
 mod routing_shadow;
 mod run_tmpdir;
 mod target_env;

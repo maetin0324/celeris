@@ -569,6 +569,8 @@ pub fn build_dispatcher(
         config.account_pool_providers(),
         config.dispatch_config(),
     );
+    // ADR 2026-10-11 llm-source-harness-selection: harness and source×model are chosen from these.
+    dispatcher.set_llm_route_registry(config.llm_route_registry()?);
     // ADR 2026-10-08 account-concurrency-limits §(e): implicit accounts are per LLM source, so the
     // dispatcher needs the resolved source of every row before it can prune or limit them.
     dispatcher.set_provider_llm_sources(config.provider_llm_sources());

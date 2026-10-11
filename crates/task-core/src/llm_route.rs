@@ -408,6 +408,17 @@ pub fn route_priority<'a>(
     }
 }
 
+/// What the dispatcher persists on the run row once a route is admitted.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RunSelection {
+    pub harness: HarnessId,
+    pub source: SourceId,
+    pub model: ModelId,
+    pub account: AccountId,
+    /// Versioned selection evidence (`{"version": 1, ...}`).
+    pub metadata: serde_json::Value,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

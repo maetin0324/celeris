@@ -909,6 +909,14 @@ impl TaskStore for SqliteStore {
         self.run_index_start_impl(row)
     }
 
+    fn run_record_selection(
+        &self,
+        run_id: &str,
+        selection: &crate::llm_route::RunSelection,
+    ) -> Result<bool, StoreError> {
+        self.run_record_selection_impl(run_id, selection)
+    }
+
     fn run_index_finish(
         &self,
         run_id: &str,

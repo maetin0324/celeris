@@ -20,7 +20,7 @@ release.sh <ref>  →  verify.sh <sha12>  →  promote.sh <sha12>        （戻�
   config.toml            本番の設定（**誰も書き換えない**。例外は人が実行する `relocate-db.sh` の `db =` の書き換えだけ。§5b）
   org.toml  providers.d/ 組織の種とプロバイダ（GUI が書く）
   api.token              本番 API のトークン
-  gui.password  gui.session-secret  GUI の認証
+  web.password  web.session-secret  web の認証
   secrets/               ADR-0030 の秘密（1 秘密 = 1 ファイル）
 
 ~/.local/celeris/        （状態）
@@ -29,7 +29,7 @@ release.sh <ref>  →  verify.sh <sha12>  →  promote.sh <sha12>        （戻�
                           `sqlite3 .backup` と `mode=ro` で読むだけ。状態ディレクトリ本体はここのまま。
   current -> releases/<sha12>     いま動いている版
   previous -> releases/<sha12>    直前の版（rollback 先）
-  releases/<sha12>/     bin/{celeris,celerisctl}  gui/  manifest.json  gate.json  verify.json
+  releases/<sha12>/     bin/{celeris,celerisctl}  web/app/  manifest.json  gate.json  verify.json
                         changes.json      この版で何が変わるか（ADR-0041 D4。§2）
                         notes.json / notes.md  この版に何が入ったか（task 単位。ADR 2026-10-04-release-notes。§4d）
                         promoted.json     昇格の記録 {promoted_at, mode, from}（ADR-0041 D3。§4。成功したときだけ）
@@ -44,9 +44,6 @@ release.sh <ref>  →  verify.sh <sha12>  →  promote.sh <sha12>        （戻�
   releases/.build/.lock-<sha12>  同じ sha の二重ビルドを止める flock（ADR-0041 D2）
   releases/.lock-release  異なる sha も含め、検査から成果物のコピーまでを直列化する flock（共有 target と
                         作業ツリーを 2 本が同時に触らないのもこれ）
-  releases/.pnpm-prod-cache/<key>/  gui の本番依存（`pnpm install --prod --frozen-lockfile`）。<key> は gui の
-                        package.json / pnpm-lock.yaml / pnpm-workspace.yaml と node / pnpm の版の sha256。
-                        各リリースの `gui/node_modules` はここへの相対 symlink（Phase SD-1）
   releases/.cargo-target/  CARGO_TARGET_DIR の退路（scratch が無効・celerisctl が無いとき。普段は scratch の
                         `release-build` の target。ADR-0075 追記「Phase SD-1 実装時の逸脱」）
   staging/              verify.sh の作業場所（毎回作り直す。`.lock` だけは残る）
@@ -70,7 +67,7 @@ release.sh <ref>  →  verify.sh <sha12>  →  promote.sh <sha12>        （戻�
 | | 本番 | staging（verify.sh） |
 |---|---|---|
 | celeris API | `127.0.0.1:7710` | `127.0.0.1:7711`（N-1 は `:7712`） |
-| GUI | `0.0.0.0:7700` | `127.0.0.1:7701` |
+| web | `127.0.0.1:7720` | probe `127.0.0.1:7728`（一時起動） |
 
 ## 1. 最初に一度だけ: systemd の unit を入れる
 
@@ -78,7 +75,7 @@ release.sh <ref>  →  verify.sh <sha12>  →  promote.sh <sha12>        （戻�
 
 ```bash
 bash ~/workspace/agent-platform/scripts/selfdeploy/install-units.sh
-# = deploy/systemd/ の celeris@ / celeris-gui@ / celeris-web@ / celeris-sccache / celeris-scratch-cache の
+# = deploy/systemd/ の celeris@ / celeris-web@ / celeris-credentiald@ / celeris-web-lan の
 #   .service を ~/.config/systemd/user/ に置いて daemon-reload（置くだけ。enable しない。
 #   内容が違う既存の unit は <unit>.bak-<ts> に残す）
 systemctl --user cat celeris@.service        # 入ったことの確認
@@ -86,12 +83,8 @@ loginctl show-user "$USER" | grep Linger   # Linger=yes であること（ログ
 ```
 
 `%i` はリリースの `sha12`。`celeris@<sha12>` は `~/.local/celeris/releases/<sha12>/bin/celeris --config ~/.config/celeris/config.toml
---release <sha12>`、`celeris-gui@<sha12>` は `~/.local/celeris/releases/<sha12>/gui/` で `node server.js` を動かす。
-GUI の環境変数はすべて `CELERIS_*`（Phase 58 / ADR-0045 D1 で改名。読み替えの互換は無い）。値は今の本番と同じ
-（`0.0.0.0:7700` で bind、API は `127.0.0.1:7710`、トークン・パスワード・セッション鍵は `~/.config/celeris/` の下）。
-
-`celeris-web@` は web/ の gateway（[web-parallel-operation.md](web-parallel-operation.md)）、`celeris-sccache` /
-`celeris-scratch-cache` はビルドの cache server（[sccache-l1.md](sccache-l1.md)）。どれも有効化は人が行う。
+--release <sha12>`、`celeris-web@<sha12>` は release の `web/app/` で `node server/index.js` を動かす。
+web の環境変数・認証・LAN 中継は [web 運用手順](web-operation.md) を参照する。
 
 ## 2. リリースを作る（`release.sh`）
 
@@ -107,12 +100,12 @@ scripts/selfdeploy/release.sh celeris/01M2XXX # 自己改善の案件の実装�
   作業ツリーの場所と target が変わらないので、cargo は変わった crate とその下流だけを作り直す（テストは毎回全部走る。gate.json の
   `cargo_test` にバイナリ数・合格数）。終了時は lease を release せず touch する（release すると GC が即回収するため）。
   `CARGO_INCREMENTAL=0` 固定。詳細は ADR-0075 追記「Phase SD-1 実装時の逸脱」。
-- gate（この順。1 つでも非 0 ならリリースを作らない。全 11 段）:
+- gate（この順。1 つでも非 0 ならリリースを作らない。Rust と web の必須段）:
   `cargo-workspace-clean`（自前の workspace パッケージの `cargo clean -p …`。外部依存は保持。**共有 target がこの作業ツリーから
   作られていれば飛ばす**）→ `cargo fmt --check` → `cargo-test`※※（`scripts/dev/test-parallel.sh`）→ `cargo clippy --workspace -- -D warnings`
   → `cargo build --release -p celeris -p celerisctl`
-  → GUI `pnpm install --frozen-lockfile` → `pnpm typecheck` → `pnpm test`※ → `pnpm build`
-  → `pnpm mobile-audit`（`pnpm-mobile-audit`）※ → `pnpm e2e:mock`（`pnpm-e2e-mock`）※
+  → web `install --frozen-lockfile` → `typecheck` → `test` → `release`（build を含む）。
+  pnpm は web/package.json の packageManager に固定する。web の段を飛ばす切替は無い。
 - **※※ `cargo-test` はテストバイナリを並列に回す（Phase SD-2、ADR-0041 §8、人の判断 2026-09-28）**: `scripts/dev/test-parallel.sh`
   = `cargo nextest run --workspace --no-fail-fast --test-threads $CELERIS_TEST_JOBS`（既定 `min(8, max(2, nproc/3))`）の後に
   `cargo test --doc --workspace`（nextest は doc-test を回さない）。範囲は `cargo test --workspace` と同じ。直列が要るテストは
@@ -124,43 +117,9 @@ scripts/selfdeploy/release.sh celeris/01M2XXX # 自己改善の案件の実装�
     入れ方を示して落ちる。非常用に `SD_GATE_TEST_RUNNER=cargo-test` で従来の直列の `cargo test --workspace`（`runner: "cargo-test"`）。
   - 開発者は従来どおり `cargo test --workspace` でよい（CLAUDE.md。両方が通ることを保つ）。並列で速く回すなら
     `scripts/dev/test-parallel.sh [-p <crate> …]`。
-- **※ GUI の検査だけの段を飛ばす規則（Phase SD-1、ADR-0041 §7）**: `current` の sha からこの sha までに **gui/ の下が 1 ファイルも
-  変わっていない**ときだけ、`pnpm-test`・`pnpm-mobile-audit`・`pnpm-e2e-mock` を回さず、gate.json の `steps[]` に
-  `{"skipped": true, "reason": "no change under gui/", "exit": 0, "secs": 0}` を書く（`gui_skip_base` に判断した base）。
-  `current` が無い・その sha をリポジトリが知らない・`git diff` が失敗した・`SD_GATE_FORCE_GUI=1` のときは飛ばさない。
-  Rust の段と `pnpm-install` / `pnpm-typecheck` / `pnpm-build`（梱包に要る）は常に回す。
-- **Phase 89（`pnpm-mobile-audit` / `pnpm-e2e-mock`。ADR-0041 追記、ADR-0055 D3）**: `pnpm-build` の直後に
-  足した 2 段。どちらも `$BUILD/gui` で走り、直前の `pnpm-build` が作った `$BUILD/gui/build` を
-  そのまま使い回す（`MOBILE_AUDIT_SKIP_BUILD=1` / `E2E_SKIP_BUILD=1`。ビルドをやり直さない）。
-  - `pnpm-mobile-audit`: `gui/scripts/mobile-audit.mjs`（ADR-0055 D1）。偽の celeris + ビルド済み GUI を
-    自分のポートに起こし、全画面 × light/dark を Playwright Chromium で監査する。1 件でも違反があれば
-    非 0。
-  - `pnpm-e2e-mock`: `gui/scripts/e2e-check.mjs` の `pnpm e2e:mock`（Phase 83 / G36 が足した読み取り専用
-    e2e の、オフライン・偽 celeris に対するモード。`verify.sh` の検査 4b が使う `pnpm e2e:staging` とは
-    別物で、こちらは何も外の staging に繋がない）。
-  - どちらも `timeout "${SD_AUDIT_TIMEOUT:-600}"`（既定 600 秒）で壁時計の上限を掛ける。他の段と同じ
-    `run_step` を通るので、lock の fd（8, 9）は継がない（Phase 66c の lock-leak 対策がそのまま効く）。
-  - **Playwright の Chromium 実行ファイル**: `pnpm install --frozen-lockfile`（`pnpm-install` 段）は
-    `@playwright/test` という npm パッケージを入れるだけで、Chromium の実行ファイル自体
-    （`pnpm exec playwright install chromium` で落とすもの）は入れない。実行ファイルはホストの
-    `~/.cache/ms-playwright/` に**バージョンごとに 1 つ**入っていて、`pnpm-lock.yaml` が固定されている
-    限りどの worktree からも同じキャッシュを共有できる。**リリースを作るホストでは事前に一度
-    `pnpm exec playwright install chromium` を実行しておくこと**（このリポジトリの devDependencies は
-    固定版なので、以後 `pnpm install` のたびに入れ直す必要は無い）。無いままこの 2 段を回すと、
-    ブラウザ起動の呼び出し**前**に軽い存在チェックが入り、ハングせずに `false — playwright browser not
-    installed`（`.gate-pnpm-mobile-audit.log` / `.gate-pnpm-e2e-mock.log`）で即座に失敗する。
-- 異なるSHAのビルドも共有出力を上書きしないよう直列化する。待ち時間の上限は
-  `SD_RELEASE_LOCK_WAIT`（既定1800秒）。Cargo自身のロックだけでは、doctestや成果物コピーまで保護できない。
-  別worktreeの相対dep-info・mtimeによる古いメタデータの再利用も防ぐため、共有 target が別の作業ツリー（や新しい・adopt した
-  target）から来たときは自前パッケージを先に掃除する（target の `.celeris-release-tree` に作業ツリーのパスを書いて見分ける）。
-- 成功したら `~/.local/celeris/releases/<sha12>/` に `bin/`（celeris, celerisctl）、`gui/`（build/ server.js package.json
-  pnpm-lock.yaml pnpm-workspace.yaml と node_modules）、`manifest.json`、`gate.json`、`gate-logs/`、`scripts/` を置く。
-  ビルド用の worktree は消さない（次のリリースが使い回す）。
-- **gui の本番依存（Phase SD-1）**: `gui/node_modules` は `../../.pnpm-prod-cache/<key>/node_modules` への相対 symlink。
-  同じ入力の `pnpm install --prod --frozen-lockfile` は `.pnpm-prod-cache/.tmp-*` で 1 度だけ行い、作り終えてから rename で
-  公開する（`provenance.json` に作ったリリース・node / pnpm の版）。manifest.json の `gui_prod_deps`（`cache_key` / `reused` /
-  `created_by_sha12`）に出所が残る。どのリリースからも指されなくなった entry は掃除のときに消える。以前の「毎回 install」は NFS 上に
-  4,000 余のファイルを書いて約 90 秒、hardlink の複製も NFS では 1 ファイル数百 ms で速くならなかった（phase-G.md SD-1）。
+- 成功時は `bin/` と `web/app/`、web tarball、manifest.json、gate.json を梱包する。
+  `web/app` では `pnpm install --prod --offline --frozen-lockfile` を実行し、node_modules の実在と
+  server/app.js の import 解決を確認する。梱包が失敗しても release は公開せず、失敗の gate とログを残す。
 - `scripts/` は **その sha の `scripts/selfdeploy/*.sh` をそのまま写したもの**（実行ビットごと。ADR-0040 D6、
   Phase 48）。`POST /releases/{sha12}/promote` はこの `<release>/scripts/promote.sh` を起こすので、
   **作業チェックアウトが別のブランチにいても、無くても昇格できる**。`lib.sh` は
@@ -169,16 +128,15 @@ scripts/selfdeploy/release.sh celeris/01M2XXX # 自己改善の案件の実装�
 - 失敗したら**リリースディレクトリは作らず**、`~/.local/celeris/releases/.build/<sha12>/gate.json` と
   `.gate-<step>.log` を残す（作業ツリーから写したもの。次に同じ sha で `release.sh` を回すと消える）。
 - 掃除: `current` / `previous` / いま作った版 / 検証済み（`verify.json.ok`）の新しい 3 件だけを残す。
-  どのリリースからも指されない `.pnpm-prod-cache/<key>` も消す。
 - gate.json の追加の欄（Phase SD-1。読む側は無視してよい）: `build`（`tree` / `tree_reused` / `cargo_target` / `scratch_owner` /
-  `workspace_clean`）、`gui_skip_base`、`cargo_test`（`binaries` / `passed` / `failed` / `ignored`）、`bundle`（`secs` /
-  `gui_prod_deps_secs` / `gui_prod_deps_reused` / `release_total_secs`）、`steps[].skipped` / `steps[].reason`。
+  `workspace_clean`）、`cargo_test`（`binaries` / `passed` / `failed` / `ignored`）、`bundle`（`secs` /
+  `web_bundle_secs` / `release_total_secs`）、`steps[].skipped` / `steps[].reason`。
 
 `manifest.json`:
 
 ```json
 {"sha": "...", "sha12": "...", "ref": "HEAD", "built_at": "...", "profile": "release",
- "schema_version": 10, "celeris_version": "0.1.0", "gui_version": "0.1.0", "gate_ok": true}
+ "schema_version": 10, "celeris_version": "0.1.0", "gate_ok": true}
 ```
 
 `schema_version` は その sha の `crates/task-core/src/store.rs` の `pub const SCHEMA_VERSION` を読んだもの。
@@ -202,7 +160,7 @@ scripts/selfdeploy/release.sh celeris/01M2XXX # 自己改善の案件の実装�
   **前方一致**したもの。一覧はそこ 1 か所にしかない（API も GUI もこの結果を運ぶだけ）:
 
   `scripts/selfdeploy/` / `deploy/` / `crates/celeris/src/instance.rs` / `crates/celeris/src/releases.rs` /
-  `crates/task-api/src/releases.rs` / `crates/task-core/migrations/` / `CLAUDE.md` / `gui/CLAUDE.md` /
+  `crates/task-api/src/releases.rs` / `crates/task-core/migrations/` / `CLAUDE.md` /
   `.claude/` / `config/` / `agent-docs/adr/0040-` / `agent-docs/adr/0041-`
 
   これらを変えたリリースは「昇格の仕組みそのもの」「本番の設定」「エージェントへの指示文」を変える。
@@ -218,7 +176,6 @@ scripts/selfdeploy/release.sh celeris/01M2XXX # 自己改善の案件の実装�
 scripts/selfdeploy/verify.sh <sha12>
 scripts/selfdeploy/verify.sh --dry-run <sha12>   # 前提だけ確かめる（何も起こさない）
 SD_VERIFY_LOCK_WAIT=60 scripts/selfdeploy/verify.sh <sha12>   # 他の検証を 60 秒だけ待つ
-SD_E2E_TIMEOUT=120 scripts/selfdeploy/verify.sh <sha12>       # 検査 4b（gui-e2e）の時間切れを短く（既定 240 秒）
 ```
 
 やること（ADR-0040 D3 / ADR-0041 D2。本番には触れない）:
@@ -243,64 +200,23 @@ SD_E2E_TIMEOUT=120 scripts/selfdeploy/verify.sh <sha12>       # 検査 4b（gui-
       **本番 API はもう一切叩かない**（本番は検証の間も動いているので、本番と比べると当たり前にずれて
       偽陰性になっていた。ADR-0041 §1-2）
    3. 主要 GET が 200 かつ JSON（`inbox` / `org/<最初のノード>/memory` / `notify` / `clusters` / `providers` / `config`）
-   4. 新リリースの GUI を `127.0.0.1:7701` に起こして `/healthz`（`release` が新しい sha12）と
-      `/`, `/org`, `/projects`, `/projects/<最新>`, `/approvals`, `/reports`, `/clusters` が 200
-   4b. **GUI の e2e（read-only。Phase 83 / G36）**: 検査 4 の GUI/celeris に対して `pnpm e2e:staging`
-      （`gui/scripts/e2e-check.mjs`）を走らせる。詳しくは下の節
-   4c. **web/ の読み取り parity**（`SD_VERIFY_WEB_HOOK` を指定したときだけ）: 検査 1 と 4 が通っていれば
-      hook（例 `web/scripts/staging-readonly-parity.sh`）を `<sha12> <release> <api> <gui> <token>` で呼ぶ。
-      指定しなければ検査は記録されず `ok` の条件にも入らない（[web-parallel-operation.md](web-parallel-operation.md) §2）
+   4c. web の読み取り e2e（任意）: `SD_VERIFY_WEB_HOOK` があれば `<sha12> <release> <api> <token>` で呼ぶ。
+       指定した場合は成功が必須。例は [web 運用手順](web-operation.md)。
    5. **N-1 互換**: `~/.local/celeris/current/bin/celeris`（旧）を、**新バイナリがマイグレーションした後の**同じ
       スナップショットに対して `:7712` で起こし、1〜3 と同じ検査（件数は**スナップショット**と比べる。
       ここでも本番 API は読まない）。落ちたら `live_ok = false`（`current` が無い初回も `live_ok = false`）。
       **煙試験（6）はここではやらない**（旧バイナリは `smoke` を知らない）
    6. **煙試験（ADR-0041 D5）**: staging に 1 件だけタスクを流し、**dispatch → ワーカー起動 →
       結果の取り込み → レビュー → 終端 → 報告の生成**までを通す。詳しくは下の節
-   **4b と 5 は並行に回す（Phase SD-1、ADR-0041 §7）**: どちらも読むだけ（4b は 7711 / 7701、5 は 7712）で、同じ
-   スナップショットを新旧の celeris が同時に開くのは以前から。書き込むのは 6 だけで、4b と 5 の両方が終わってから回す。
-4. `~/.local/celeris/releases/<sha12>/verify.json` を書く。`ok` は **1〜4・4b・（指定したときの）4c・6 が全部真**のとき。`live_ok` は 5。
+   4d. web/app を一時起動し `/healthz` と release の一致を確認する。失敗は verify 全体を落とす。
+   任意 hook と N-1 は読み取りだけで並行する。煙試験は両方が終わってから行う。
+4. `~/.local/celeris/releases/<sha12>/verify.json` を書く。`ok` は **1〜3・4d・（指定したときの）4c・6 が全部真**のとき。`live_ok` は 5。
    Phase SD-1 から、検査ごとの壁時計の秒数が `checks[].secs`、全体が `durations`
-   （`lock_wait_s` / `prepare_s`〈staging の作り直し・スナップショット・数え〉/ `parallel_4b_5_s` / `total_s`）に入る。
+   （`lock_wait_s` / `prepare_s`〈staging の作り直し・スナップショット・数え〉/ `n1_s` / `total_s`）に入る。
    `checks[].elapsed_s` は従来どおり煙試験のタスクが `done` になるまでの秒数（検査 6 だけ）。
 5. 起こしたプロセスは `trap` で必ず止める（自分が起こした pid だけ）。
-6. staging のポートは env（`SD_STAGING_API_PORT` / `SD_STAGING_GUI_PORT` / `SD_STAGING_OLD_API_PORT`）で変えられる
-   （`scripts/selfdeploy/tests/` 用。7710 / 7700 は拒む）。
-
-### 検査 4b: GUI の e2e（read-only。Phase 83 / G36、ADR-0041 追記）
-
-`gui/e2e/*.spec.ts`（`pnpm e2e`）はタスクを作って承認する結合テストで、`scripts/celeris.sh` が起こす
-使い捨ての celeris に対して行う前提（ADR-0055 D3 が挙げていたギャップ）。staging はそのまま使えない
-（検査 2 / 5 の件数一致は「検査 6 の煙試験だけが書き込む」という前提で組んである。ADR-0041 D2/D5）。
-
-検査 4b は別物で、**読み取りだけ**（ナビゲーションと `?tab=` の切り替え。`POST` は一切しない）を
-`gui/scripts/e2e-check.mjs`（`pnpm e2e:staging`）で行う。**検査 6（煙試験）より前**に置く（検査 6 が
-足す 1 件がここに写り込まないように）:
-
-1. mobile-audit（ADR-0055 D1）と同じ画面一覧を 393×851 と 1280×800 の両方で開き、200 で応答し、
-   コンソールエラー・失敗した要求（401 は許容）が無いこと。`taskId` / `projectId` / `orgId` / `skillName`
-   は Node 側（ブラウザではない）が `GET /api/v1/{tasks,projects,org,skills}` を staging のトークンで
-   読んで見つけたものを使う（gui/CLAUDE.md の境界どおり、ブラウザは celeris を直接叩かない）。
-   見つからなければその id が要る画面（`/projects/<id>` 等）はスキップする
-2. `/`（Console）が `[data-testid="console-screen"]` を描画すること
-3. `/accounts` が「LLM source」「MCP クライアント」節（`llm-sources-section` / `mcp-clients-section`）を
-   描画すること
-4. `/knowledge/skills` が描画すること
-5. 見つかった実在のタスクで `/tasks/<id>` のタブ（概要・タイムライン・変更・ファイル・成果物）を
-   `<Link>` のクリックで切り替え、対応する節（`info-section` 等）が出ること
-
-**release の `gui/`（`release.sh` が `pnpm install --prod` した方）には Playwright が入っていない**
-（devDependency なので剥がされる）。検査 4b は `$SD_REPO/gui`（既定 `~/workspace/agent-platform/gui`。
-人・自己改善の作業ツリーが `pnpm install` 済みの方）から走らせ、release の `gui/` にしか無ければそちらを
-使う。**どちらにも `@playwright/test` が無ければ、検査 4b は `false — not installed`**（クラッシュしない。
-`verify.json` の他の検査には影響しない）。`SD_E2E_TIMEOUT`（既定 240 秒）を超えたら `false — timed out`。
-ログは `~/.local/celeris/staging/logs/e2e-staging.log`。
-
-手で確かめる（本物の celeris/GUI は起こさない。外部ネットワークに出ない）:
-
-```bash
-cd gui
-pnpm e2e:mock       # 偽の celeris + pnpm build 済みの GUI に対して読み取り専用の e2e。exit 0 なら OK
-```
+6. staging のポートは env（`SD_STAGING_API_PORT` / `SD_STAGING_OLD_API_PORT`）で変えられる
+   （`scripts/selfdeploy/tests/` 用。7710 / 7720 / 7721 は拒む）。
 
 ### 検査 6: 煙試験（ADR-0041 D5）
 
@@ -372,7 +288,6 @@ pnpm e2e:mock       # 偽の celeris + pnpm build 済みの GUI に対して読�
   workspaces/            verify モードの作業場所（煙試験の 1 件だけがここに出る。ADR-0041 D5）
   logs/celeris-new.log     新リリースの celeris の出力 ← 起動に失敗したらまずここ
   logs/celeris-old.log     N-1（旧バイナリ）の出力 ← `SchemaTooNew` はここに出る
-  logs/gui.log           staging GUI の出力
   logs/counts-*.json     件数の生データ（snapshot = マイグレーション前 / staging / n1）
   logs/health-*.json     health の生データ
   logs/smoke.json        煙試験の生データ（`{ok, task_id, elapsed_s, detail, report}`。ADR-0041 D5）
@@ -417,8 +332,7 @@ scripts/selfdeploy/promote.sh <sha12>
 3. `systemctl --user start celeris@<sha12>` → `/health` が 200 かつ `schema_version` が期待どおりになるまで 60 秒待つ
 4. 駄目なら新を止め、旧 unit があれば起こし直し、**DB は戻さずに**失敗を報告する
    （スキーマが進んでいるかもしれないので、戻すかどうかは人が `rollback.sh --restore-db` で選ぶ）
-5. `:7700` で LISTEN している旧 GUI（`node server.js`）を `ss -ltnp` で見つけて `SIGTERM` →
-   `systemctl --user start celeris-gui@<sha12>` → `/healthz` が 200 になるまで待つ
+5. `web-follow.sh` で web を切り替え、health と release を確認する（§4e）
 6. `enable` 新 / `disable` 旧、`current` / `previous` の symlink を更新
 
 **この間だけ API と GUI が止まる**（数十秒）。走っていたワーカーの run はリースが切れて新しい daemon が拾う。
@@ -433,7 +347,7 @@ scripts/selfdeploy/promote.sh <sha12>
    （新旧が同じポートを共有するので 1 回の応答では判らない。5 回とも新なら旧はもう listener を閉じている）
    - ならなければ `systemctl --user stop celeris@<新>` して**失敗**。旧はそのまま動き続ける
 4. `enable` 新 / `disable` 旧
-5. `systemctl --user start celeris-gui@<新>` → `:7700/healthz` の `release` が新になるまで待つ → `stop celeris-gui@<旧>`
+5. `web-follow.sh` で web を切り替え、health と release を確認する（§4e）
 6. `current` / `previous` を更新
 
 **旧 celeris の drain 完了は待たない**。旧は `draining` になって自分が起こした run だけ面倒を見続け、
@@ -441,9 +355,9 @@ scripts/selfdeploy/promote.sh <sha12>
 `daemon_instances` で見える。API が一瞬 `503 {"detail":"standby"}` を返す管理系（`reload` / `check` /
 クラスタ接続 / アカウントのログイン / `notify/test`）があるが、窓は 1〜2 tick。
 
-### 4c. GUI から昇格する（Phase 48 / G14。ADR-0040 D6）
+### 4c. web から昇格する（ADR-0040 D6）
 
-GUI「リリース」画面（`/releases`）の「昇格」ボタンは `POST /releases/{sha12}/promote`（管理系）を叩き、
+web「リリース」画面（`/releases`）の「昇格」ボタンは `POST /releases/{sha12}/promote`（管理系）を叩き、
 celeris が **`~/.local/celeris/current/scripts/promote.sh <sha12>`** を detached（`setsid`、stdin は
 `/dev/null`、stdout/err は `<release>/promote.log`）で起こす。やることは shell から `promote.sh` を
 叩くのと**同じ**で、押すのは人（ADR-0040 D5。celeris の中に自動で呼ぶ経路は無い）。
@@ -503,42 +417,15 @@ git merge --ff-only <sha12>     # 実装者のブランチ（celeris/<task-id>�
 
 ### 4e. web/ の追従（`web-follow.sh`。ADR-0081 / web ADR-W3 付記 2026-10-02）
 
-`promote.sh` は celeris と gui の切替が済んだ**後**に `scripts/selfdeploy/web-follow.sh <new_sha12> <old_sha12>` を呼ぶ。
+`promote.sh` は daemon の切り替え後、current の更新前に `web-follow.sh <new_sha12> <old_sha12>` を呼ぶ。
+新しい web gate と配布物・依存を確かめ、一時起動に成功してから旧 unit を止めて新 unit を起動する。
+旧 web が無い初回も新 web を起動する。health の release が一致したら current を更新する。
+失敗時は旧 web が active だった場合だけ復旧し、promote は非0で終了する。daemon は新しい版の場合がある。
+ログを確認し、修復後に同じ promote を再実行する。current が更新されていなければ旧 web の情報を再利用できる。
 
-- 旧 release の `celeris-web@<old>` が **active のときだけ**動く。新 release の `gate.json` の `web.ok` が `true` で
-  `releases/<new>/web/app/server/index.js` があれば、`celeris-web@<new>` を start → enable、`celeris-web@<old>` を stop → disable。
-- 新の start に失敗したら新を stop して旧を start し直す。条件を満たさない（旧 web が動いていない・`web.ok` が偽・配布物が無い）
-  ときは何もせず、理由を promote のログに出す。どの場合も exit 0 で、**web の追従の失敗で昇格は失敗にならない**。
-- `celeris@` の unit には触れない。`celeris-web@.service` は `Wants=celeris@%i.service` を持たない（`After=` だけ）ので、
-  web の起動が daemon を起こして handoff を引き起こすことは無い（2026-10-01 の事故）。
-- web を手で追従させたいときも同じ台本を使う: `scripts/selfdeploy/web-follow.sh <new_sha12> <old_sha12>`。
-- web は必ず**昇格した release**（`~/.local/celeris/releases/<sha12>/web/app`）から動かす。task の作業場所や staging 成果物への
-  symlink の release から動かさない（作業場所の片付けで中身が消え、全画面 404 になる。2026-10-01）。
-
-#### 本番に一度だけ人が行う手順（2026-10-02 の一時回避を撤去する）
-
-worker の run はこの操作をしない。人が順に実行する。
-
-```bash
-# 1. 一時回避（WorkingDirectory をコピー先に向けた drop-in）を撤去する
-rm -f ~/.config/systemd/user/celeris-web@ea86af6307f8.service.d/override.conf
-rmdir ~/.config/systemd/user/celeris-web@ea86af6307f8.service.d 2>/dev/null || true
-# 2. unit を repo 版（Wants=celeris@ 無し）に置き直す
-cp deploy/systemd/celeris-web@.service ~/.config/systemd/user/celeris-web@.service
-grep -n '^Wants=' ~/.config/systemd/user/celeris-web@.service    # 何も出ないこと
-systemctl --user daemon-reload
-# 3. web を再起動する（<sha12> はいま動いている web の release。gateway の dotfiles 修正を含む release に昇格後なら新しい sha）
-systemctl --user restart celeris-web@<sha12>.service
-systemctl --user show -p WorkingDirectory celeris-web@<sha12>.service   # ~/.local/celeris/releases/<sha12>/web/app
-# 4. 確かめる（bind は ~/.config/celeris/web.env の値。既定 127.0.0.1:7720）
-curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:7720/          # 200
-curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:7720/inbox     # 200
-curl -s http://127.0.0.1:7720/healthz
-systemctl --user is-active celeris@<current の sha12>.service             # web の再起動で daemon が増えていないこと
-```
-
-`/` が 404 のままなら、その release の gateway が dotfiles の修正（`sendFile` に `root` を渡す。付記 (B)）を含んでいない。
-修正を含む release を作って昇格させるまでは、一時回避の override.conf を戻して使う。
+`celeris-web@` は daemon の `Wants=` を持たない。web の再起動だけで daemon の handoff は発生しない。
+web は昇格した release の `web/app` から動かし、一時的な作業場所や staging を参照させない。
+設定と確認方法は [web 運用手順](web-operation.md)。
 
 ## 4d. リリースの説明と昇格の要約（ADR 2026-10-04-release-notes）
 
@@ -548,7 +435,7 @@ systemctl --user is-active celeris@<current の sha12>.service             # web
 `config/celeris.example.toml` の変更（本番 config に足すものがないか人が見る）・gate で飛ばした段を載せる。
 決定的で、LLM は使わない。**生成が失敗してもリリースは作られる**（警告だけ。`notes.json` が無いリリースは説明なし）。
 
-昇格の前には「`current` から対象までに入る全リリース」の要約を見る: GUI「リリース」画面の各行、
+昇格の前には「`current` から対象までに入る全リリース」の要約を見る: web「リリース」画面の各行、
 `GET /api/v1/releases/{sha12}/promotion-preview`、`celerisctl release preview <sha12>`（`promote.sh` がログにも出す）。
 同じ task は 1 回、schema は `current` と対象の値、方式（`live` / `stop-start`）は対象の `verify.json` から出る。
 `complete: false` のときは `current` まで notes で辿れていない（理由が `problem` に出る）。
@@ -568,9 +455,9 @@ scripts/selfdeploy/rollback.sh --restore-db # DB も昇格前に書き戻す（�
 - 旧の方が低い（`SchemaTooNew` で起動できない）ときは**拒否する**。`--restore-db` を付けたときだけ:
   1. `~/.local/celeris/backups/` の直近の `*-pre-*.sqlite3` を選ぶ（`*-pre-rollback.sqlite3` は選ばない）
   2. いまの DB を `<ts>-pre-rollback.sqlite3` に退避
-  3. celeris（unit か、完全一致で見つけた pid）と GUI を止める
+  3. celeris（unit か、完全一致で見つけた pid）を止める
   4. 選んだコピーを `celeris.sqlite3` に上書きし、`-wal` / `-shm` を消す
-  5. `celeris@<previous>` / `celeris-gui@<previous>` を起こす → symlink を更新
+  5. `celeris@<previous>` / `celeris-web@<previous>` を起こす → symlink を更新
 
 **書き戻すと、昇格してから今までに進んだ仕事は消える。** どちらが損かを人が決める。
 
@@ -589,7 +476,7 @@ scripts/selfdeploy/relocate-db.sh <新パス>             # 実行
 
 1. `GET /api/v1/tasks` の `counts_by_status`（`running` + `reviewing`）が 0 であることを確認する。
    0 でなければ何もせず止まる（待つか、`--dry-run` で様子を見てから改めて実行する）。
-2. `current` の sha の `celeris@<sha>` / `celeris-gui@<sha>` を止める。
+2. `current` の sha の `celeris@<sha>` / `celeris-web@<sha>` を止める。
 3. `sqlite3` があれば `VACUUM INTO`、無ければ現在のリリースの `celerisctl db backup`（rusqlite の
    backup API。ADR-0064 D2/D3 の新規サブコマンド）で新しい場所へコピーする。
 4. 新しいファイルに `PRAGMA integrity_check`。`ok` でなければコピーを消して止まる
@@ -619,7 +506,7 @@ scripts/selfdeploy/status.sh
 JSON 1 つ。`current` / `previous`、`releases[]`（`gate`（各段の exit と秒数）、`verify`（`ok` / `live_ok` /
 落ちた検査の名前）、`promoted_at` / `promoted`（`promoted.json`）、`promote_failed`（`promote_failed.json`。
 直近の失敗が残っていれば `{failed_at, error}`、無ければ `null`）、`on_main`、`changes`（`base` / `stale` /
-`commit_count` / `file_count` / `sensitive`））、本番 `:7710` の `/health`、`:7700` の `/healthz`、
+`commit_count` / `file_count` / `sensitive`））、本番 `:7710` の `/health`、`:7720` の `/healthz`、
 `daemon_instances`、`backups` の新しい 10 件。**読むだけ**なので誰が実行してもよい
 （`on_main` の git も `merge-base --is-ancestor` だけ。`$SD_REPO` に `main` が無ければ `null`）。
 
@@ -635,7 +522,7 @@ celeris の上の「人」（ワーカー）が自己改善の案件でやって
 - `~/.config/celeris/config.toml` を編集する
 - `~/.local/celeris/*.sqlite3` に書き込む（読むのは `sqlite3 "file:…?mode=ro"` と `.backup` だけ）
 - 本番のプロセスに `kill` などのシグナルを送る
-- `127.0.0.1:7710` / `0.0.0.0:7700` に bind する
+- `127.0.0.1:7710` / `127.0.0.1:7720` に bind する
 - `main` に直接コミットする（実装者は **celeris が用意した worktree とブランチ `celeris/<task-id>`** にコミットする。ADR-0041 D1）
 - `git checkout` で作業ツリーのブランチを変える・自分でブランチを切る（作業ツリーは celeris がタスクごとに用意する）
 

@@ -47,7 +47,6 @@ DEFAULT_PRODUCTION_THRESHOLD = 2000
 DEFAULT_INLINE_TEST_THRESHOLD = 300
 
 GENERATED_EXACT = {
-    "gui/app/celeris/types.ts",
 }
 GENERATED_PATTERNS = [
     re.compile(r"(^|/)generated/"),
@@ -57,7 +56,7 @@ SCHEMA_PATTERNS = [
     re.compile(r"\.schema\.json$"),
 ]
 MIGRATIONS_PATTERN = re.compile(r"(^|/)migrations/")
-TOOLING_DIR = re.compile(r"^(gui/scripts/|web/scripts/|scripts/|deploy/|tools/)")
+TOOLING_DIR = re.compile(r"^(web/scripts/|scripts/|deploy/|tools/)")
 LOCKFILES = re.compile(r"(Cargo\.lock|pnpm-lock\.yaml|package-lock\.json|yarn\.lock)$")
 FIXTURE = re.compile(r"(^|/)(fixtures?|testdata|mock-celeris)/")
 DOCS = re.compile(r"^docs/|(^|/)docs/|\.md$")
@@ -104,7 +103,7 @@ def is_external_rust_test(path: str) -> bool:
 
 def is_ts_test(path: str) -> bool:
     return (
-        path.startswith(("gui/test/", "gui/e2e/", "web/test/", "web/e2e/", "tests/e2e/"))
+        path.startswith(("web/test/", "web/e2e/", "tests/e2e/"))
         or re.search(r"\.(test|spec)\.(ts|tsx|mjs|js)$", path) is not None
     )
 

@@ -49,7 +49,7 @@ completed: 2026-10-09
 - celerisctl: surface の route を書く専用 subcommand は無い。`celerisctl api-request` は登録済みの任意の変更を
   `/cos/operations` で送るので、そのまま使える。`cos_mapped` の追加は無し。
 - 文書: skill `operations.md` の surface 表（lib 試験 `cos_operator_skill_table_matches_allowed` で ALLOWED と一致）、
-  登録待ちの節を削除、`SKILL.md` の「登録待ち」の案内を除外だけに直した。`docs/api/v1/gui-api.md` §3.129 の表に
+  登録待ちの節を削除、`SKILL.md` の「登録待ち」の案内を除外だけに直した。`docs/api/v1/api.md` §3.129 の表に
   surface 21 行と「PENDING は全領域で空」を追記し、`scripts/sync-gui-docs.sh` で gui 写しを同期。
 - 依存: `base64` を task-api の dev-dependencies から dependencies へ移した（lock は既存の 0.22）。
 

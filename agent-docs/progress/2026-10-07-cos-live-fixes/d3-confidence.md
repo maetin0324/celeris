@@ -11,7 +11,7 @@ completed: 2026-10-07
 - `crates/task-api/src/cos/inbox.rs`: `ResolveBody.confidence: Option<f64>`（`serde(default)`、`deny_unknown_fields` は維持）。
   範囲外・非有限は 422 `validation`（監査行を書く前に弾く）。本文そのものが `cos_operations.payload` に入るので confidence はそこに残り、
   observe / escalate の `result` にも `confidence` を入れた。`reason` には混ぜない。
-- schema（`docs/api/v1/api-v1.schema.json`）・gui `types.ts`・web `generated/{schema.json,types.ts}` を再生成、`docs/api/v1/gui-api.md` §3.130 を更新。
+- schema（`docs/api/v1/api-v1.schema.json`）・gui `types.ts`・web `generated/{schema.json,types.ts}` を再生成、`docs/api/v1/api.md` §3.130 を更新。
 
 ## 証拠
 - `cargo test -p task-api --test cos_triage cos_live_fix_d3_` → 3 passed（記録される・省略で従来どおり・範囲外 422）

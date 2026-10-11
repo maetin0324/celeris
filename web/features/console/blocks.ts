@@ -1,6 +1,6 @@
 import type { ConsoleBlock } from "../../api/generated/types";
 
-// Console の block の並びと重複排除（P3-01）。gui/app/lib/console.ts の appendConsoleBlock と同じ規則。
+// Console の block の並びと重複排除（P3-01）。
 // - progress は run_id ごと、reply は (task_id, run_id) ごとに 1 つ。同じ cursor は 1 度だけ。
 // - 育つ返事（streaming）の増分は積み上げ、確定（done）は置き換える。
 

@@ -10,7 +10,7 @@ completed: 2026-10-07
 - `task-core` の `Event::TargetSweepRan`（mode, roots, skipped, skipped_total, over_cap_unresolved, duration_ms）と
   型 `TargetSweepMode`・`TargetSweepRootReport`・`TargetSweepByReason`・`TargetSweepSkip` を `model.rs` に追加（task-worker に依存しない）
 - 追従: `task-api/src/query.rs` の種類名 `target_sweep_ran`、`docs/api/v1/{api-v1,event}.schema.json`（UPDATE_SCHEMA=1）、
-  `web/api/generated/*`・`web/api/realtime/event-kinds.ts`、`gui/app/celeris/types.ts`、gui-api.md の種類一覧
+  `web/api/generated/*`・`web/api/realtime/event-kinds.ts`、`gui/app/celeris/types.ts`、api.md の種類一覧
 - `web/api/realtime/invalidation-map.ts` に `target_sweep_ran: { sets: ["T"] }`（schema 照合試験が要求。`ADR_TABLE` の 35 件には足さない）
 - 証拠:
   - `cargo test -p task-core target_sweep` → target_sweep_event_round_trips 1 passed

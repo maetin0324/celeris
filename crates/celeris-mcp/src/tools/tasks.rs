@@ -24,7 +24,7 @@ use crate::auth::AuthedClient;
 use crate::state::McpState;
 
 /// `OpsError` → `ToolError`（Phase 101。`NotFound`/`*NotFound` は not_found、状態や検証の不整合は
-/// invalid_params、それ以外（`Store`）は internal。`docs/api/v1/gui-api.md` の `ops_problem` と同じ分類を
+/// invalid_params、それ以外（`Store`）は internal。`docs/api/v1/api.md` の `ops_problem` と同じ分類を
 /// JSON-RPC のエラーコードに写しただけ）。
 pub(crate) fn map_ops_err(e: OpsError) -> ToolError {
     match e {

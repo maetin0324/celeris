@@ -10,7 +10,7 @@ updated: 2026-10-02
 
 | 処理(削除/統合/移動/修正) | 旧パス | 新パス or - | 理由 | 最後の commit |
 |---|---|---|---|---|
-| 修正 | `docs/api/v1/gui-api.md` | - | §3.63〜§3 末尾の現行 handler・型との不一致を修正し、§2 に載る未説明 route を補った | `d9524c0f` |
+| 修正 | `docs/api/v1/api.md` | - | §3.63〜§3 末尾の現行 handler・型との不一致を修正し、§2 に載る未説明 route を補った | `d9524c0f` |
 
 ## 直した点
 
@@ -28,7 +28,7 @@ updated: 2026-10-02
 |---|---|
 | `rg -n 'pub(crate) fn routes|\.route\(' crates/task-api/src` と各 handler・`types.rs`・`crates/task-ops/src` の照合 | §3.63 以降の見出し内の `METHOD /path` 87 件はいずれも router のパスに一致。browser control の 6 本は定数 `BASE` と `format!` を展開して確認 |
 | §2 の（メソッド、パス）を §3 の本文と比較する Python ワンライナー | §3 に記載のない行は #8/#9/#10/#32/#33 の run ファイル 5 本だけで、§3.8 のファイル系として既にまとめて記載 |
-| `sh scripts/dev/check-doc-links.sh docs/api/v1/gui-api.md` | `check-doc-links: ok`、exit 0 |
+| `sh scripts/dev/check-doc-links.sh docs/api/v1/api.md` | `check-doc-links: ok`、exit 0 |
 | `git diff --check` | exit 0 |
 | `sh scripts/dev/check-doc-links.sh` | exit 1。43 件は README・agent-docs・docs/guides・docs/ops・gui/docs にあり、この WU の変更ファイルに起因するものは 0 件 |
 
@@ -36,10 +36,10 @@ Rust・生成 schema は変更していないため、`cargo test --workspace` �
 
 ## 未解決
 
-- リポジトリ全体のリンク検査は担当範囲外の 43 件で失敗する。gui-api.md 単体のリンク検査は通る。
+- リポジトリ全体のリンク検査は担当範囲外の 43 件で失敗する。api.md 単体のリンク検査は通る。
 - `gui/docs/celeris-api-v1.md` は削除された `docs/api/v1/overview.md` を参照する。gui/ はこの task では変更できない。
 
 ## 提案
 
 - §2 と router の一致、および §2 の各 route に §3 の説明があることを文書検査に加える。定数から組み立てる browser control の 6 本も対象にする。
-- `gui/docs/celeris-api-v1.md` を編集できる作業で、旧 overview.md への参照を gui-api.md への案内に変える。
+- `gui/docs/celeris-api-v1.md` を編集できる作業で、旧 overview.md への参照を api.md への案内に変える。

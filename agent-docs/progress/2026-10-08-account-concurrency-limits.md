@@ -19,7 +19,7 @@ ADR `agent-docs/adr/2026-10-08-account-concurrency-limits.md`（状態: Accepted
 | limits | 完了。`[[providers]].concurrency` は `Option<usize>`（書かれていれば警告、dispatch では使わない）。migration 0062 の `account_limits` 表（SQLite 正本。再起動・reload を跨ぐ）。実アカウントは保存値 → `max_runs_per_account`、CoS は実効上限 +1 |
 | implicit | 完了。`capacity::provider_full` を削除。`implicit/<行 id>` の暗黙アカウントで非プール行を止める（既定は旧 `concurrency` を引き継ぎ、CoS の +1 なし）。行の削除・pool 化で保存値は prune される |
 | api | 完了。`PATCH /api/v1/accounts/{adapter}/{id}`（`max_runs` 1..=32 / null で解除、400/404/409、`check`/`login` の id も可）。`GET /accounts` に `max_runs`・`effective_max_runs`・`max_runs_source`・`implicit`・`provider`。providers の `concurrency` は deprecated 欄（受け付けても保存しない、警告） |
-| docs | 完了。`docs/guides/providers.md`・`docs/ops/provider-llm-source-migration.md`（移行手順と戻し方）・`docs/guides/knowledge.md`・`docs/ops/opencode-go-and-model-catalog.md`・`docs/ops/selfdeploy.md`・`docs/api/v1/gui-api.md`・schema・生成型を更新 |
+| docs | 完了。`docs/guides/providers.md`・`docs/ops/provider-llm-source-migration.md`（移行手順と戻し方）・`docs/guides/knowledge.md`・`docs/ops/opencode-go-and-model-catalog.md`・`docs/ops/selfdeploy.md`・`docs/api/v1/api.md`・schema・生成型を更新 |
 | gui | 完了。旧 gui のプロバイダ画面から concurrency の入力・送信・表示を除去（最小変更。置き換え予定のため） |
 | web | 完了。アカウント画面で各アカウント（暗黙アカウントを含む）の上限を編集（保存・既定に戻す・検証・API エラー表示）。プロバイダ画面から concurrency 入力と `in_use / concurrency` 表示を外しアカウント画面への導線 |
 | verify | 完了（このファイル）。統合後の全試験と文書検査を流し、本番移行の人の手順は `artifacts/production-migration.md`（task の成果物） |
@@ -111,7 +111,7 @@ web test: vitest 85 files / 642 tests 通過、node --test 78 通過。gui test:
    - `crates/task-dispatch/src/policy.rs:28`: `ProviderSpec.concurrency` は snapshot の表示用だけ（dispatch は読まない）。`ProviderPolicy` から `legacy_concurrency` を削除。
    - `crates/task-api/src/handlers/accounts.rs:30`: `effective_max_runs(stored, default)`。
    - 旧値は `crates/celeris/src/config/providers.rs:500` の警告にだけ使う（読めて警告が出るが効かない）。
-   - ADR `2026-10-08-account-concurrency-limits.md` §(c)・§(e)・検証条件、`docs/api/v1/gui-api.md`、`docs/guides/providers.md`、`docs/ops/provider-llm-source-migration.md` を同じ方針に直した。
+   - ADR `2026-10-08-account-concurrency-limits.md` §(c)・§(e)・検証条件、`docs/api/v1/api.md`、`docs/guides/providers.md`、`docs/ops/provider-llm-source-migration.md` を同じ方針に直した。
      **本番の影響**: 新リリースに入れ替えると、config の `concurrency = 1` の Qwen 行は既定 2 本まで走る。1 本に保つには、移行手順 3 で `PATCH /api/v1/accounts/implicit/<id>` に `{"max_runs": 1}` を保存する（手順は docs/ops に書いた。人が実行する）。
    - 試験の書き換え: 旧 `concurrency` に依存していた dispatcher・API・e2e の試験は、暗黙アカウントの保存値（`set_account_limit` / PATCH）か既定で書き直した。
      `crates/task-dispatch/src/dispatcher/tests/mod.rs`（`parallel_dispatcher`・`dispatcher_with_adapter_id`）、

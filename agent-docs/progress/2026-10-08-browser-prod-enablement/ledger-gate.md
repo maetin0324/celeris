@@ -29,7 +29,7 @@ ADR [2026-10-08-browser-prod-enablement](../../adr/2026-10-08-browser-prod-enabl
   - worker が `browser conformance record unavailable|invalid` を返した atomic の run は `InfraRequeue` にせず
     `BrowserPrereqBlock`（outcome `browser_prerequisite: <code>: adapter: …`）。
 - schema 再生成（`UPDATE_SCHEMA=1`: docs/api/v1/api-v1.schema.json・event.schema.json）、web/gui の生成型、
-  `web/api/realtime/event-kinds.ts`・`invalidation-map.ts`、`docs/api/v1/gui-api.md` の event 一覧と説明。
+  `web/api/realtime/event-kinds.ts`・`invalidation-map.ts`、`docs/api/v1/api.md` の event 一覧と説明。
 
 ## 証拠
 - `cargo test -p task-worker --lib browser_ledger_gate` → 7 passed（missing・invalid・stale_release／stale_agent_browser／agent_browser_missing・ok と ledger_lacks_credential・no_conformant_backend・watch の再計算・probe）。

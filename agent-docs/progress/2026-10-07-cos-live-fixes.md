@@ -14,7 +14,7 @@ completed: 2026-10-07
 - D3 `ResolveBody.confidence` → [d3-confidence](2026-10-07-cos-live-fixes/d3-confidence.md)
 - D4 終端済み run を takeover から外す（原因は triage run の本文 Conflict を終端と誤読した sink）→ [d4-takeover](2026-10-07-cos-live-fixes/d4-takeover.md)
 - 台本 `scripts/dev/cos-chat-live.sh` と `docs/ops/cos-chat.md` → [live-script](2026-10-07-cos-live-fixes/live-script.md)
-- `docs/api/v1/gui-api.md` の節番号の重複（3.127〜3.128）を振り直し → [adr](2026-10-07-cos-live-fixes/adr.md)
+- `docs/api/v1/api.md` の節番号の重複（3.127〜3.128）を振り直し → [adr](2026-10-07-cos-live-fixes/adr.md)
 - ADR を「実装済み」にし、実装との突き合わせ付記を書いた。`docs/architecture-map.md` に route・台本の行を足した。
   親の `2026-10-05-cos-chat-home/live-check.md` の D1〜D4 に「直した」を追記した。
 

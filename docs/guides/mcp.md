@@ -201,7 +201,7 @@ token: <64+ 文字の値。この 1 回しか出ない>
   書かない。
 - クライアントごとに 1 分あたり `[mcp] rate_limit_per_min`（既定 60）。超えたら JSON-RPC エラー
   `-32000` + `data.retry_after`（秒）。
-- 管理 API（`docs/api/v1/gui-api.md` §3.110〜3.111）: `GET /mcp/clients`（トークンは出ない）、
+- 管理 API（`docs/api/v1/api.md` §3.110〜3.111）: `GET /mcp/clients`（トークンは出ない）、
   `GET /mcp/calls?client=`（直近 100 件）。
 
 ## 7. 接続手順

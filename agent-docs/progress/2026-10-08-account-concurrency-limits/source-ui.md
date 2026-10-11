@@ -7,7 +7,7 @@ updated: 2026-10-09
 # web と文書: 暗黙アカウントを LLM source 単位に合わせる
 
 2026-10-09、WorkUnit `source-ui`（run 01M4FSRYTPSAY39D8A9REB0FNG, attempt 3）。
-ADR 2026-10-08-account-concurrency-limits §(e)・gui-api.md §3.29a。crates/ は変えていない。
+ADR 2026-10-08-account-concurrency-limits §(e)・api.md §3.29a。crates/ は変えていない。
 
 ## 前提（人の決定）
 

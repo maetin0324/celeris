@@ -1,4 +1,4 @@
-//! 表示用のビュー型とその組み立て（ADR-0013 D7 / D12、`docs/api/v1/gui-api.md` §3.3 / §3.5 / §5.2〜§5.4 / §6.2）。
+//! 表示用のビュー型とその組み立て（ADR-0013 D7 / D12、`docs/api/v1/api.md` §3.3 / §3.5 / §5.2〜§5.4 / §6.2）。
 //!
 //! `celerisctl show --json`、API の `GET /tasks` / `GET /tasks/{id}` / `GET /tasks/{id}/runs` が同じ関数を使う。GUI は結果を表示するだけで
 //! 再計算しない。I/O はストアの読み取りだけで、ファイル（`runs/<run_id>/` の存在確認など）は呼び出し側（task-api）が埋める。
@@ -839,7 +839,7 @@ pub fn task_ref(task: &Task) -> TaskRef {
     }
 }
 
-/// `docs/api/v1/gui-api.md` §5.4: 今この状態で許される操作。
+/// `docs/api/v1/api.md` §5.4: 今この状態で許される操作。
 pub fn actions(task: &Task) -> Vec<Action> {
     let mut out = Vec::new();
     if task.status == Status::Draft
@@ -925,7 +925,7 @@ fn lease_expires_at_str(task: &Task) -> Option<String> {
     task.lease.as_ref().map(|l| to_rfc3339(l.expires_at))
 }
 
-/// `docs/api/v1/gui-api.md` §5.3: `ready && attempts > 0` のときの `updated_at + retry_backoff(...)`。
+/// `docs/api/v1/api.md` §5.3: `ready && attempts > 0` のときの `updated_at + retry_backoff(...)`。
 /// `base == 0`、または結果が過去なら `None`。
 fn backoff_until_str(task: &Task, ctx: &ViewContext, now: OffsetDateTime) -> Option<String> {
     if task.status != Status::Ready || task.attempts == 0 {
@@ -1002,7 +1002,7 @@ pub(crate) fn build_task_summary(
     }
 }
 
-/// `outcome` 文字列を `RunOutcomeKind` に分類する（`docs/api/v1/gui-api.md` §5.2）。`outcome_text` は
+/// `outcome` 文字列を `RunOutcomeKind` に分類する（`docs/api/v1/api.md` §5.2）。`outcome_text` は
 /// 接頭辞を除いた残りの文字列（`lease_expired` は完全一致で残りが無いので `None`。`error` は元の
 /// 文字列全体を `outcome_text` に入れる。GUI が生の理由を表示できるようにするための判断）。
 ///
@@ -1041,7 +1041,7 @@ fn classify_outcome(
     }
 }
 
-/// `docs/api/v1/gui-api.md` §5.2: そのタスクのイベント（`event_rows_for`）から run の要約を組み立てる。
+/// `docs/api/v1/api.md` §5.2: そのタスクのイベント（`event_rows_for`）から run の要約を組み立てる。
 pub fn runs(rows: &[EventRow]) -> Vec<RunSummary> {
     let mut order: Vec<String> = Vec::new();
     let mut by_run: HashMap<String, RunSummary> = HashMap::new();
@@ -1152,7 +1152,7 @@ pub fn run_work_unit_keys(
         .collect())
 }
 
-/// `docs/api/v1/gui-api.md` §5.3。
+/// `docs/api/v1/api.md` §5.3。
 pub fn timers(task: &Task, rows: &[EventRow], ctx: &ViewContext, now: OffsetDateTime) -> Timers {
     let events = seq_pairs(rows);
     Timers {
@@ -1165,7 +1165,7 @@ pub fn timers(task: &Task, rows: &[EventRow], ctx: &ViewContext, now: OffsetDate
     }
 }
 
-/// `docs/api/v1/gui-api.md` §3.3。
+/// `docs/api/v1/api.md` §3.3。
 pub fn task_summary(
     store: &dyn TaskStore,
     task: &Task,
@@ -1185,7 +1185,7 @@ pub fn task_summary(
     ))
 }
 
-/// `docs/api/v1/gui-api.md` §3.3: `list_page` の結果を `TaskSummary` に写し、`counts_by_status` を付ける。
+/// `docs/api/v1/api.md` §3.3: `list_page` の結果を `TaskSummary` に写し、`counts_by_status` を付ける。
 pub fn task_list(
     store: &dyn TaskStore,
     filter: &ListFilter,
@@ -1220,7 +1220,7 @@ pub fn task_list(
     })
 }
 
-/// `docs/api/v1/gui-api.md` §3.5。
+/// `docs/api/v1/api.md` §3.5。
 pub fn task_detail(
     store: &dyn TaskStore,
     id: TaskId,

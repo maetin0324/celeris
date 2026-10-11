@@ -27,7 +27,7 @@ completed: 2026-10-07
   result に attachment_ids・pin あり）。
 - schema 再生成（`UPDATE_SCHEMA=1 cargo test -p task-api`）→ `docs/api/v1/api-v1.schema.json`、
   `gui/app/celeris/types.ts`（pnpm@11.27.0 gen:types）、`web/api/generated/{schema.json,types.ts}`（pnpm@12.6.0 install --offline 後 gen-types.mjs）。
-- `docs/api/v1/gui-api.md` §3.4 に `attachment_ids`（と未記載だった `expected_write_paths`）を追記。
+- `docs/api/v1/api.md` §3.4 に `attachment_ids`（と未記載だった `expected_write_paths`）を追記。
 - `config/skills/cos-operator/SKILL.md`: §3 の起票行と POST /tasks の最小例（`acceptance` 必須・要素の形・human だけは 422）、
   §3a を「task へは起票の request に `attachment_ids` を入れる 1 回の operation」「KB へは候補を作ってから references で pin」に直した。
 

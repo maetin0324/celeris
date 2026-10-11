@@ -1,4 +1,4 @@
-//! DESIGN §6 Phase 9 の受け入れ 4〜8（ADR-0013、`docs/api/v1/gui-api.md`）のうち、実バイナリ `celeris`（`[api]` 有効）/ `celerisctl` と
+//! DESIGN §6 Phase 9 の受け入れ 4〜8（ADR-0013、`docs/api/v1/api.md`）のうち、実バイナリ `celeris`（`[api]` 有効）/ `celerisctl` と
 //! fake ワーカー（`sh` スクリプト）と `curl` で再現するもの。接続先は 127.0.0.1 だけで、外部ネットワークに出ない。
 //!
 //! 4. `[api]` が無ければリッスンしない。有効なら `/health` が `api_version` と `schema_version` を返す

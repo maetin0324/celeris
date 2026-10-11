@@ -208,7 +208,7 @@ Qwen を非 cheap tier に戻すことはない。戻した後も providers API�
 実行者は人。このタスクでは本番の設定・DB・daemon・systemd を変更しない。
 設計判断は [ADR 2026-10-08 account-concurrency-limits](../../agent-docs/adr/2026-10-08-account-concurrency-limits.md)、
 利用者向けの説明は [providers ガイド](../guides/providers.md#同時実行数はアカウントで決める)、API は
-[gui-api.md](../api/v1/gui-api.md) の §3.29・§3.29a にある。
+[api.md](../api/v1/api.md) の §3.29・§3.29a にある。
 
 ### 何が変わるか
 

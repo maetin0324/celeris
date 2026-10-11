@@ -62,7 +62,7 @@ out=$(printf '%s\n' "$paths" | sort -u | grep -vE '^(<許可 path の正規表�
 
 - 許可 path の正規表現には、Objective の範囲に加えて次を必ず入れる: WU 自身の記録（`agent-docs/progress/`、その WU の
   ADR `agent-docs/adr/`）、計画がその WU に書いてよいと言った path、その変更で再生成される file（`docs/protocol/` と
-  `docs/api/v1/` の schema、`gui/`・`web/` の生成された型）。
+  `docs/api/v1/` の schema、`web/` の生成された型）。
 
 ## 落ちるときは path を出す
 

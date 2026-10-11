@@ -42,7 +42,7 @@ updated: 2026-10-11
   経路が使えないと報告されるので、「3 本目はそのアカウントで走らない」を確かめる形に）。
 - CoS の操作（ADR 2026-10-09-cos-operations-all-mutations: 全変更を ALLOWED か EXCLUDED に分類する）: 新しい `PATCH /accounts/{adapter}/{id}`
   （と `check`・`login` の静的な路）を `account.limit_set`（外部効果）として ALLOWED に加えた。PATCH の本体を `set_account_limit_effect` に分けて
-  HTTP と CoS で共有。ADR の領域表・付記、`config/skills/cos-operator/operations.md`、`docs/api/v1/gui-api.md` の CoS 表に行を足した。
+  HTTP と CoS で共有。ADR の領域表・付記、`config/skills/cos-operator/operations.md`、`docs/api/v1/api.md` の CoS 表に行を足した。
 - web: `providers-screen.tsx` の状態の表から「同時実行」列を外した（branch はアカウント画面への link だけの列を残していた）。form に入力欄は無く、
   `providers-form.ts` は `concurrency` を送らない。アカウント画面は上限（1〜32）を表示・編集する（branch のまま）。旧 gui の `providers.tsx` には欄が無い（型の deprecated 欄だけ）。
 - 範囲外として触っていないもの: llm-proxy の `max_concurrent_per_account`、`ResourceGroupEntry.concurrency_limit`、`[execution] max_concurrency` / `max_cos_runs`、
@@ -87,4 +87,4 @@ PATCH /api/v1/accounts/implicit/openai_compatible:qwen
 
 - CoS の `account.limit_set` は registry・到達性の試験で覆うが、daemon 付きの往復の試験は無い（HTTP の PATCH の試験は branch の
   `api_account_limits_tests` が持つ）。
-- `gui/docs/celeris-api-v1.md` は main の時点で既に `docs/api/v1/gui-api.md` と食い違っており、今回も追随させていない。
+- `gui/docs/celeris-api-v1.md` は main の時点で既に `docs/api/v1/api.md` と食い違っており、今回も追随させていない。

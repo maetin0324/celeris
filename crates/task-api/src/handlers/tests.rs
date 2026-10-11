@@ -80,7 +80,7 @@ fn state_rx(
         secret_usage: std::collections::HashMap::new(),
         memory_dir: None,
         notify_secret_id: task_core::DEFAULT_WEBHOOK_SECRET_ID.to_string(),
-        notify_gui_base_url: None,
+        notify_web_base_url: None,
         notify_inbox_batch_secs: 60,
         notify_inbox_reminder_secs: 86_400,
         notify_digest_interval_secs: 3_600,

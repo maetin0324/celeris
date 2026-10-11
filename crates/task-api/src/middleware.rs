@@ -1,4 +1,4 @@
-//! 全要求に掛ける共通の検査と応答ヘッダ（`docs/api/v1/gui-api.md` §1.2〜§1.5）。
+//! 全要求に掛ける共通の検査と応答ヘッダ（`docs/api/v1/api.md` §1.2〜§1.5）。
 //!
 //! 順序: Host 検査 → `OPTIONS` は 405 → Bearer 認証（`/health` を除く）→ `POST` の Origin / Content-Type / 本文サイズ
 //! → CoS run credential の検証（`crate::cos::authenticate`。`celeris-cos-run.` 接頭辞の bearer だけ）。

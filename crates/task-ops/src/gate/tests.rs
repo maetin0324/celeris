@@ -433,7 +433,7 @@ fn cancel_with_mismatched_expected_returns_conflict_without_transitioning() {
     );
 }
 
-// ---- cascaded (docs/api/v1/gui-api.md §5.7) ----
+// ---- cascaded (docs/api/v1/api.md §5.7) ----
 
 #[test]
 fn reject_approval_cascades_cancel_to_its_own_children() {

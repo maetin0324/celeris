@@ -1,4 +1,4 @@
-//! リリースの一覧と昇格（ADR-0040 D6。Phase 48。`docs/api/v1/gui-api.md` §3.54/§3.55）。
+//! リリースの一覧と昇格（ADR-0040 D6。Phase 48。`docs/api/v1/api.md` §3.54/§3.55）。
 //!
 //! - `GET /releases` — 読み取り（管理系ではないが、他の API と同じく Bearer は要る。トークン無しで
 //!   読めるのは `/health` だけ — `middleware.rs`。`promote.sh` は `api.token` を付けて読む。ADR-0040 付記

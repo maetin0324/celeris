@@ -43,7 +43,7 @@ def commit_all(root: Path):
 
 class ClassificationTests(unittest.TestCase):
     def test_generated_types_ts_excluded_from_production(self):
-        self.assertEqual(ssr.classify_path("gui/app/celeris/types.ts"), "generated")
+        self.assertEqual(ssr.classify_path("web/api/generated/types.ts"), "generated")
 
     def test_generated_dir_pattern(self):
         self.assertEqual(ssr.classify_path("web/api/generated/schema.ts"), "generated")
@@ -52,7 +52,7 @@ class ClassificationTests(unittest.TestCase):
         self.assertEqual(ssr.classify_path("docs/api/v1/health.schema.json"), "schema")
 
     def test_lockfile(self):
-        self.assertEqual(ssr.classify_path("gui/pnpm-lock.yaml"), "lockfile")
+        self.assertEqual(ssr.classify_path("web/pnpm-lock.yaml"), "lockfile")
         self.assertEqual(ssr.classify_path("Cargo.lock"), "lockfile")
 
     def test_migrations(self):
@@ -79,8 +79,8 @@ class ClassificationTests(unittest.TestCase):
         self.assertTrue(ssr.is_external_rust_test("crates/foo/src/bar_tests.rs"))
         self.assertFalse(ssr.is_external_rust_test("crates/task-core/src/store.rs"))
 
-    def test_ts_test_paths_cover_web_and_gui(self):
-        self.assertTrue(ssr.is_ts_test("gui/e2e/tasks.spec.ts"))
+    def test_ts_test_paths_cover_web(self):
+        self.assertTrue(ssr.is_ts_test("web/e2e/tasks.spec.ts"))
         self.assertTrue(ssr.is_ts_test("web/e2e/tasks.spec.ts"))
         self.assertTrue(ssr.is_ts_test("web/features/tasks/list.test.tsx"))
         self.assertFalse(ssr.is_ts_test("web/features/tasks/list.tsx"))
@@ -203,7 +203,7 @@ class ReportEndToEndTests(unittest.TestCase):
     def test_generated_ts_file_not_counted_toward_production_even_when_huge(self):
         repo = make_repo()
         big = "\n".join(f"// {i}" for i in range(9000))
-        write(repo, "gui/app/celeris/types.ts", big)
+        write(repo, "web/api/generated/types.ts", big)
         commit_all(repo)
         report = ssr.run_report(str(repo), prod_threshold=2000, inline_threshold=300, exceptions=[])
         self.assertEqual(report["warning_count"], 0)

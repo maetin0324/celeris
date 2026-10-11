@@ -45,7 +45,7 @@ function rawGet(route: string, host: string, target: http.Server = server): Prom
   });
 }
 
-test("parity-x: 型の再生成差分ゼロ・gui import なし", () => {
+test("parity-x: 型の再生成差分ゼロ・server/client 境界", () => {
   execFileSync(process.execPath, ["scripts/gen-types.mjs", "--check"]);
   execFileSync(process.execPath, ["scripts/check-boundaries.mjs"]);
 });

@@ -1,24 +1,29 @@
 //! provider / account の選択と cooldown 判定（ADR-0012、ADR-0013、ADR-0024、ADR-0049）。ADR-0082 の L1。
 
 use super::*;
-use task_core::model_catalog::assignments::{
-    AssignmentState, AssignmentView, WireRule, apply_to_bindings, configured_wire,
-    source_name_for_llm_source,
-};
+use task_core::model_catalog::assignments::{AssignmentView, WireRule, apply_to_bindings, source_name_for_llm_source};
+#[cfg(test)]
+use task_core::model_catalog::assignments::{AssignmentState, configured_wire};
+#[cfg(test)]
+use task_core::model_router::profiles::DeploymentProfile;
+#[cfg(test)]
 use task_core::model_router::{
     optimizer::{Candidate, OptimizationResult, legacy_rank},
-    profiles::{Billing, Capabilities, ContextLimits, DeploymentProfile, ModelProfile, Support},
+    profiles::{Billing, Capabilities, ContextLimits, ModelProfile, Support},
 };
+#[cfg(test)]
+use task_core::model_routing::{ProviderCandidate, ProviderCandidateKind, ProviderCandidateOutcome, ProviderSelection, ProviderSelectionReason};
 use task_core::model_routing::{
-    ProviderCandidate, ProviderCandidateKind, ProviderCandidateOutcome, ProviderSelection,
-    ProviderSelectionReason, TierModels,
+    TierModels,
 };
 
 /// ADR 2026-10-06 model-role-assignments D2: 割り当てで除外された provider を候補の記録に残すときの語彙
 /// （`ProviderCandidate.detail` の先頭。outcome は `Unsupported`）。
+#[cfg(test)]
 pub(super) const ASSIGNMENT_EXCLUDED: &str = "assignment_excluded";
 
 /// 選んだ (アダプタ, 設定行, プールのアカウント)。プールを使わない行ならアカウントは `None`。
+#[cfg(test)]
 pub(super) type ProviderPick = (AdapterId, ProviderId, Option<(AccountAdapter, String)>);
 
 /// `ProviderThrottled.reason` に書く供給側失敗の種別（ADR-0013 D9）。供給側失敗でなければ `None`。
@@ -88,6 +93,7 @@ pub fn provider_failure_outcome(e: &AdapterError) -> Option<ProviderOutcome> {
 }
 
 /// 設定行を正規化した 1 候補。
+#[cfg(test)]
 pub(super) struct LegacyProfile {
     /// 容量・account・cooldown の identity（設定行の id）。候補の identity は `deployment.id`。
     pub provider_id: ProviderId,
@@ -174,6 +180,7 @@ impl Dispatcher {
     /// `hint` に合う設定行のうち、割り当てのせいで `hint.tier` に routing できない provider とその理由
     /// （`Excluded` の割り当て、または割り当てのある source で binding も割り当ても無い lane）。
     /// config 由来の「未設定」「unavailable」は従来どおり `resolve` が扱うので、ここでは外さない。
+    #[cfg(test)]
     pub(super) fn assignment_excluded_providers(
         &self,
         hint: &task_core::WorkerHint,
@@ -229,6 +236,7 @@ impl Dispatcher {
     /// Normalize the legacy provider rows into model/deployment identities. The kernel
     /// preserves their config order; the existing selector still owns live capacity,
     /// cooldown and account decisions.
+    #[cfg(test)]
     fn legacy_provider_rank(&self, hint: &task_core::WorkerHint) -> OptimizationResult {
         let profiles = self.legacy_provider_profiles(hint);
         let candidates: Vec<_> = profiles
@@ -247,6 +255,7 @@ impl Dispatcher {
     }
 
     /// 設定行（hint に合うもの・設定順）を model/deployment の profile に写す。
+    #[cfg(test)]
     pub(super) fn legacy_provider_profiles(
         &self,
         hint: &task_core::WorkerHint,
@@ -437,6 +446,7 @@ impl Dispatcher {
     /// （`sticky_provider`）。留まれれば ADR-0049 のランキングを走らせない（毎 run アカウントを
     /// 付け替えてセッションを退役させ続ける事故の修正）。留まれなければ、これまでどおり下のランキングへ。
     #[cfg(test)]
+    #[cfg(test)]
     pub(super) fn select_provider(
         &mut self,
         hint: &task_core::WorkerHint,
@@ -460,6 +470,7 @@ impl Dispatcher {
     /// 行は順位付けの fallback からも外す。付記 L8: 戻り値の第 2 要素が選択の理由と見た候補の記録。
     #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
+    #[cfg(test)]
     pub(super) fn select_provider_for(
         &mut self,
         hint: &task_core::WorkerHint,
@@ -485,6 +496,7 @@ impl Dispatcher {
     /// `select_provider_for` に enforce の除外集合（制約・quota で外した provider）を足したもの。
     /// `excluded` は満杯の集合 `full` に混ぜない（他の task の判定を汚さない）。空なら従来と同じ。
     #[allow(clippy::too_many_arguments)]
+    #[cfg(test)]
     pub(super) fn select_provider_excluding(
         &mut self,
         hint: &task_core::WorkerHint,
@@ -749,6 +761,7 @@ impl Dispatcher {
     /// あるか）はここで集める（I/O）。留まれるなら `select_provider` と同じ形の戻り値、留まれなければ
     /// `None`（呼び出し側が通常のランキングへフォールバックする）。
     #[allow(clippy::type_complexity)]
+    #[cfg(test)]
     pub(super) fn sticky_provider(
         &mut self,
         sticky_session: Option<&NodeSession>,
@@ -791,6 +804,7 @@ impl Dispatcher {
     /// 提供し（`crate::sessions::tier_rank`。要求そのものから順に試す）、cooldown 中でも並列度上限でも
     /// ないものを 1 つ返す。`hint.adapter` をこの 1 アダプタに固定して `ProviderPolicy::select` に
     /// 任せるので、cooldown・除外集合の扱いは通常のランキングと同じ規則になる。
+    #[cfg(test)]
     pub(super) fn matching_provider_for_adapter(
         &self,
         adapter_id: &str,
@@ -887,6 +901,7 @@ impl Dispatcher {
         .is_none()
     }
 
+    #[cfg(test)]
     pub(super) fn account_score(&self, adapter: AccountAdapter, id: &str, cos: bool) -> f64 {
         let Some(book) = self.account_book(adapter) else {
             return f64::NEG_INFINITY;
@@ -910,6 +925,7 @@ impl Dispatcher {
     /// ADR-0024 D3 / ADR-0025 D2: `[accounts]` の指定アダプタのプールから 1 アカウントを選ぶ（残量に基づく決定的な
     /// 選択）。そのアダプタの根ディレクトリが無い、または選べるアカウントが無ければ `None`。
     /// ディレクトリのスキャンは tick につき高々 1 回（アダプタごと）。
+    #[cfg(test)]
     pub(super) fn pick_account(
         &mut self,
         adapter: AccountAdapter,

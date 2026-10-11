@@ -91,8 +91,11 @@ use crate::accounts::{
     ExcludedReason, ObservationSource, cooldown_for_failure, evaluate, scan_accounts,
 };
 use crate::policy::{
-    AdapterId, CooldownReason, ProviderId, ProviderOutcome, ProviderPolicy, Selection,
+    CooldownReason, ProviderId, ProviderOutcome, ProviderPolicy,
 };
+
+#[cfg(test)]
+use crate::policy::{AdapterId, Selection};
 
 // ADR-0082: 責務別の子モジュール（層は L1 ← L2 ← L3 ← L4 ← tick）。
 mod browser_prereq;
@@ -1720,6 +1723,7 @@ impl Dispatcher {
     /// ADR-0132 付記 L4: ローカルの行の health。probe 先が無ければ「確かめられない」= 生きている扱い。
     /// どれか 1 つが `Ok` か `Unknown` なら生きている。全部 `Unreachable` なら最初の理由を返す。
     /// 結果は `base_url` ごとに 60 秒キャッシュ（`knowledge_reachability` と同じ型）。
+    #[cfg(test)]
     fn local_provider_health(
         &mut self,
         health: &[LocalHealthTarget],

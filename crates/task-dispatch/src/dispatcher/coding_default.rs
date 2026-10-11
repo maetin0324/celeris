@@ -31,6 +31,7 @@ impl Dispatcher {
     }
 
     /// catalog の family（無ければ空文字）。`legacy_provider_profiles` の `ModelProfile.family` に入れる。
+    #[cfg(test)]
     pub(super) fn catalog_family(&self, model_id: &str) -> String {
         self.coding_default
             .model_families

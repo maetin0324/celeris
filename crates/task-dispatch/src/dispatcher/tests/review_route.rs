@@ -41,26 +41,6 @@ fn key(source: &str, model: &str) -> CandidateKey {
     }
 }
 
-/// Shared fixture of the test `dispatcher()`: one source `s1` (model `m`, account `a1`) and one
-/// harness `h1` (the test adapter) chosen by a rule without conditions.
-pub(super) fn install_test_route(
-    d: &mut Dispatcher,
-    adapter: Arc<dyn WorkerAdapter>,
-    adapter_kind: &str,
-) {
-    let mut r = Registry::default();
-    r.sources.insert("s1".into(), source("fake", "a1", "m"));
-    r.harnesses
-        .insert("h1".into(), harness(adapter_kind, "fake"));
-    r.harness_selection.rules.push(HarnessRule {
-        harness: "h1".into(),
-        ..Default::default()
-    });
-    r.route_defaults.insert("h1".into(), vec![key("s1", "m")]);
-    d.set_llm_route_registry(r);
-    d.set_harness_adapters(HashMap::from([(HarnessId::from("h1"), adapter)]));
-}
-
 /// The worker harness `h1` on `s1`, plus a reviewer harness `review_h` picked by the
 /// `role = "reviewer"` rule on its own source `rs` (model `rm`, account `ra`).
 /// `review_source_kind` is the source kind `review_h` accepts.
@@ -273,10 +253,9 @@ async fn route_select_dispatch_review_does_not_start_an_incompatible_reviewer() 
     );
     assert!(seen.lock().unwrap().is_empty());
     assert!(reviewer_started(&store, task.id).is_empty());
-    assert!(!events_of(&store, task.id).iter().any(|e| matches!(
-        e,
-        Event::LlmRouteSelected { .. } | Event::ReviewVerdict { .. }
-    )));
+    let events = events_of(&store, task.id);
+    assert_eq!(events.iter().filter(|e| matches!(e, Event::LlmRouteSelected { .. })).count(), 1);
+    assert!(!events.iter().any(|e| matches!(e, Event::ReviewVerdict { .. })));
     // The refusal is recorded once, not on every deferred tick.
     let refused: Vec<String> = progress_msgs(&store, task.id)
         .into_iter()

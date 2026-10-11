@@ -177,7 +177,6 @@ fn dispatcher_with_adapter_id(
             execution: ExecutionConfig::default(),
         },
     );
-    review_route::install_test_route(&mut dispatcher, adapter, adapter_id);
     #[cfg(test)]
     {
         if use_test_clock {
@@ -506,21 +505,6 @@ impl WorkerAdapter for ReviewerUsageAdapter {
             exit_code: Some(0),
         })
     }
-}
-
-/// The lane label the reviewer run's route selection carried (`llm_route_selected.metadata.lane`).
-fn reviewer_route_lane(store: &dyn TaskStore, task_id: TaskId) -> String {
-    store
-        .events_for(task_id)
-        .unwrap()
-        .into_iter()
-        .find_map(|(_, e)| match e {
-            Event::LlmRouteSelected { metadata, .. } => {
-                metadata["lane"].as_str().map(str::to_string)
-            }
-            _ => None,
-        })
-        .expect("llm_route_selected for the reviewer run")
 }
 
 /// ADR-0054 D1 / Phase 67b 追記: `resume` を頼まれた Reviewer run では `session_resume_failed` を

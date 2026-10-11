@@ -12,6 +12,9 @@ ADR-0128 により、設計判断の経緯・進捗・作業記録は `docs/` �
 4. `progress/` の索引 — `sh scripts/dev/progress-index.sh` で現在地（running・blocked を先に）を生成する。
    旧 `PROGRESS.md`（凍結、以後の追記は無い）はこの索引ができる前の記録。
 
+変更の方針: 破壊的変更を是とし、置き換えた旧い仕組みは同じ変更で消す。救出は git と release rollback で行う
+（[`adr/2026-10-11-breaking-changes-by-default.md`](adr/2026-10-11-breaking-changes-by-default.md)）。
+
 その他:
 
 - `reports/` — 日付付きの調査・実装報告

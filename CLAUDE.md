@@ -20,6 +20,14 @@
 - 試験・検査・検証で CPU を焼く負荷（busy loop、stress-ng、並走 cargo の負荷台本）をかけない。WU の check にも重い負荷の台本を置かない。時間依存の不具合は時計の差し替え（tokio::time::pause・注入した時計）、出来事待ち、対象 process への SIGSTOP/SIGCONT、試験専用の遅延フックで決定的に再現する（詳細は `agent-docs/guides/testing.md`）
 - テストで外部ネットワークに出ない。LLM呼び出しを伴う実機確認は、認証が使える環境ならエージェントが実行し証跡を task の進捗ファイルに残してよい。使えなければ手順を書いて人間に依頼する（ADR-0009 P-34）
 
+## 変更の方針（破壊的変更を是とする）
+- 詳細は `agent-docs/adr/2026-10-11-breaking-changes-by-default.md`。Claude 以外の agent も同じ（`AGENTS.md` はこのファイルへの symlink）
+- 仕組みを置き換えるときは、同じ変更で旧い仕組み（コード経路・config 欄・API field・画面・文書・旧挙動の試験）を消す。deprecated・互換分岐・警告だけ出して無視・新旧切替 flag を残さない
+- 失敗した変更は git（revert・cherry-pick）と release の rollback で救出する。「念のため」旧い仕組みを残さない
+- 消した config 欄は読み込みエラーにし、本番 config の書き換えは進捗ファイルの「本番への移行」節に書く
+- データは失わない: DB は migration で移す、events は追記専用、credential は消さない
+- review では旧い仕組みの残りを不備として指摘する
+
 ## 禁止
 - ディスパッチャやストアにLLM呼び出しを入れる
 - `unwrap()`（テスト以外）

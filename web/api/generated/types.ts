@@ -5729,7 +5729,7 @@ export type TaskRepoIntegrationState = {
   "updated_at": string;
 };
 
-export type TaskRepoIntegrationStatus = "unintegrated" | "integrated" | "discarded" | "held";
+export type TaskRepoIntegrationStatus = "unintegrated" | "integrated" | "discarded" | "held" | "not_applicable";
 
 export type TaskRequirements = {
   "browser"?: BrowserRequirements | null;

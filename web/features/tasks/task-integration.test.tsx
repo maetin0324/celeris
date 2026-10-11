@@ -28,6 +28,23 @@ it.each([
   expect(html).toContain("昇格待ち");
 });
 
+it("renders not_applicable as a read-only state without operation buttons", () => {
+  const html = renderToStaticMarkup(
+    <TaskIntegrationActions
+      taskId="T 1"
+      integration={{
+        ...integration,
+        state: "not_applicable",
+        reason: "remote repository: not checked by the sweep",
+      }}
+    />,
+  );
+  expect(html).toContain("対象外（遠隔 repo）");
+  expect(html).toContain("remote repository: not checked by the sweep");
+  expect(html).toContain('data-state="not_applicable"');
+  expect(html).not.toContain("<button");
+});
+
 describe("integration buttons call the task-api contract", () => {
   let fixture: Awaited<ReturnType<typeof openOverlayFixture>>;
   const calls: Array<{ method: string; path: string; body: unknown }> = [];

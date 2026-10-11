@@ -380,7 +380,7 @@ impl SqliteStore {
 
     /// ADR 2026-10-11-task-wait-reasons D3: 一覧・木の API 用。各 task の DB の待ち（`wait::db_waits`）を
     /// `ready_tasks` と同じ読み方で返す（halted 集合は 1 回だけ読む）。終端の task は空。
-    pub fn db_waits_for(
+    pub(crate) fn db_waits_for_impl(
         &self,
         tasks: &[Task],
     ) -> Result<std::collections::HashMap<TaskId, Vec<crate::wait::TaskWait>>, StoreError> {

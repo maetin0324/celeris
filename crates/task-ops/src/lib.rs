@@ -71,6 +71,7 @@ pub mod tree_plan;
 /// ADR-0079 D11（Phase R4a）: 木の閲覧・roll-up の材料・案件の root の合計・段階の子の要約。
 pub mod tree_view;
 pub mod view;
+pub mod wait;
 pub mod workspace;
 
 pub use error::OpsError;

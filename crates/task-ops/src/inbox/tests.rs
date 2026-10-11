@@ -770,7 +770,7 @@ fn inbox_draft_count_is_tasks_not_groups_and_child_counts_are_filled() {
         .iter()
         .find(|s| s.id == parent.id)
         .expect("parent summary");
-    assert_eq!((summary.children, summary.pending_children), (2, 1));
+    assert_eq!(summary.children, 2);
 }
 
 /// Phase 9 監査: 一度も requeue していない ready タスクは、`max_requeues = 1` でも `requeue_limit_near` にならない。

@@ -386,12 +386,7 @@ export type AttestationClaims = {
   "wait_id": string;
 };
 
-export type AwaitedChildView = {
-  "status"?: Status | null;
-  "task_id"?: TaskId | null;
-  "title": string;
-  "unit_key": string;
-};
+export type BackoffCause = "retry" | "infra";
 
 export type BehindTarget = {
   "behind_target_age_seconds"?: number | null;
@@ -594,6 +589,8 @@ export type CandidateTrace = {
   "score_breakdown"?: ScoreTrace | null;
   "shadow_usd"?: number | null;
 };
+
+export type CapacityScope = "global" | "cos" | "account" | "source";
 
 export type CatalogCapabilitiesView = {
   "reasoning_efforts"?: Array<string> | null;
@@ -1626,6 +1623,7 @@ export type DaemonSnapshot = {
   "reports"?: ReportsLive | null;
   "scratch"?: ScratchStatus | null;
   "started_at": string;
+  "task_waits"?: Array<SnapshotTaskWait>;
   "tick_ms": number;
   "ticks": number;
   "unroutable": Array<TaskId>;
@@ -2789,7 +2787,7 @@ export type ExecutionMetricsSummary = {
 
 export type ExecutionMode = "atomic" | "compound";
 
-export type ExecutionPhase = "planning" | "executing" | "repairing" | "verifying" | "awaiting_human" | "awaiting_children" | "awaiting_plan_approval";
+export type ExecutionPhase = "planning" | "executing" | "repairing" | "verifying" | "awaiting_human" | "awaiting_plan_approval";
 
 export type ExecutionPlanOverview = {
   "id": string;
@@ -2852,7 +2850,6 @@ export type ExecutionPlanView = {
 };
 
 export type ExecutionView = {
-  "awaiting_children"?: Array<AwaitedChildView>;
   "gate"?: ExecutionGateDecision | null;
   "metrics": ExecutionMetrics;
   "phase"?: ExecutionPhase | null;
@@ -2959,6 +2956,8 @@ export type GraphNode = {
   "title": string;
 };
 
+export type HaltState = "paused" | "cancelled" | "archived";
+
 export type HarnessErrorClass = "supply" | "infra" | "lease_expired" | "idle_timeout";
 
 export type HarnessPrefs = {
@@ -2983,6 +2982,8 @@ export type HumanAttestation = {
   "payload": string;
   "signature": string;
 };
+
+export type HumanGateKind = "plan_approval" | "stage_review" | "phase_checkpoint";
 
 export type HumanInboxCounts = {
   "by_kind": {
@@ -5454,6 +5455,11 @@ export type SkillSummaryView = {
 
 export type SlotOrigin = "assignment" | "config";
 
+export type SnapshotTaskWait = {
+  "task_id": TaskId;
+  "wait": TaskWait;
+};
+
 export type SourceOrigin = "explicit" | "derived";
 
 export type StageHint = {
@@ -5469,6 +5475,8 @@ export type StageSpec = {
   "review"?: StageReview;
   "title": string;
 };
+
+export type StageState = "done" | "current" | "pending";
 
 export type StandingRule = {
   "created_at": string;
@@ -5602,16 +5610,17 @@ export type TaskDetail = {
   "priority_label": string;
   "promotion"?: PromotionView | null;
   "role"?: string | null;
+  "runnable": boolean;
   "runs": Array<RunSummary>;
   "task": Task;
   "timers": Timers;
+  "waits": Array<TaskWait>;
   "worker_run_hint"?: string | null;
   "workspace_dir"?: string | null;
   "worktree"?: WorktreeView | null;
 };
 
 export type TaskExecutionView = {
-  "awaiting_children"?: Array<AwaitedChildView>;
   "gate"?: ExecutionGateDecision | null;
   "metrics": ExecutionMetrics;
   "phase"?: ExecutionPhase | null;
@@ -5620,6 +5629,7 @@ export type TaskExecutionView = {
   "plan_approval"?: PlanApprovalView | null;
   "route"?: RouteDecision | null;
   "runs": Array<RunSummary>;
+  "waits"?: Array<TaskWait>;
 };
 
 export type TaskFeatureHints = {
@@ -5785,17 +5795,18 @@ export type TaskSummary = {
   "milestone_id"?: MilestoneId | null;
   "parent_id"?: TaskId | null;
   "paused"?: boolean;
-  "pending_children": number;
   "priority": number;
   "priority_label": string;
   "project_id"?: ProjectId | null;
   "promotion"?: PromotionView | null;
   "role"?: string | null;
+  "runnable": boolean;
   "status": Status;
   "support"?: string | null;
   "tier": Tier;
   "title": string;
   "updated_at": string;
+  "waits": Array<TaskWait>;
 };
 
 export type TaskTreeNode = {
@@ -5809,11 +5820,13 @@ export type TaskTreeNode = {
   "parent_unit_key"?: string | null;
   "phase"?: TreeNodePhase | null;
   "plan_version"?: number | null;
+  "stages"?: Array<TreeStageView>;
   "stall"?: TreeNodeStall | null;
   "status": Status;
   "subtree": RollupMetrics;
   "title": string;
   "units"?: Array<TreeUnitView>;
+  "waits"?: Array<TaskWait>;
 };
 
 export type TaskTreeView = {
@@ -5823,6 +5836,77 @@ export type TaskTreeView = {
   "subtree_root": TaskId;
   "totals": RollupMetrics;
   "tree_enabled": boolean;
+};
+
+export type TaskWait = {
+  "by": TaskId;
+  "kind": "paused";
+} | {
+  "kind": "ancestor_project_halted";
+  "project_id": ProjectId;
+  "task_id": TaskId;
+} | {
+  "kind": "project_halted";
+  "project_id": ProjectId;
+  "state": HaltState;
+} | {
+  "kind": "milestone_halted";
+  "milestone_id": MilestoneId;
+  "state": HaltState;
+} | {
+  "kind": "depends_on";
+  "task_ids": Array<TaskId>;
+} | {
+  "kind": "approval_parent";
+  "task_id": TaskId;
+} | {
+  "kind": "children";
+  "task_ids": Array<TaskId>;
+  "unit_keys": Array<string>;
+} | {
+  "kind": "work_units";
+  "units": Array<UnitWait>;
+} | {
+  "kind": "stage_halted";
+  "stage": string;
+  "unit_keys": Array<string>;
+} | {
+  "decision_keys": Array<string>;
+  "kind": "human_decision";
+} | {
+  "gate": HumanGateKind;
+  "kind": "human_gate";
+  "stage"?: string | null;
+} | {
+  "kind": "units_blocked";
+  "reason": WorkUnitBlockedReason;
+  "unit_keys": Array<string>;
+} | {
+  "id"?: string | null;
+  "kind": "capacity";
+  "scope": CapacityScope;
+} | {
+  "detail": string;
+  "kind": "unroutable";
+} | {
+  "cluster_id": string;
+  "detail": string;
+  "kind": "cluster";
+} | {
+  "blocking_task_ids": Array<TaskId>;
+  "kind": "write_set";
+} | {
+  "cause": BackoffCause;
+  "kind": "backoff";
+  "until": string;
+} | {
+  "kind": "disk_critical";
+  "path": string;
+} | {
+  "kind": "delegated_children";
+  "task_ids": Array<TaskId>;
+} | {
+  "kind": "review_awaiting_human";
 };
 
 export type Tier = "frontier" | "standard" | "cheap";
@@ -5946,7 +6030,7 @@ export type TreeLimitsUsage = {
   "tokens": number;
 };
 
-export type TreeNodePhase = "planning" | "executing" | "repairing" | "verifying" | "awaiting_human" | "awaiting_children" | "awaiting_plan_approval" | "held_on_decision" | "blocked_infra";
+export type TreeNodePhase = "planning" | "executing" | "repairing" | "verifying" | "awaiting_human" | "awaiting_plan_approval";
 
 export type TreeNodeStall = {
   "detail": string;
@@ -5962,14 +6046,25 @@ export type TreeRepoView = {
   "name": string;
 };
 
+export type TreeStageView = {
+  "integrate_key": string;
+  "key": string;
+  "order": number;
+  "state": StageState;
+};
+
 export type TreeUnitView = {
   "blocked_reason"?: WorkUnitBlockedReason | null;
   "child_task_id"?: TaskId | null;
+  "depends_on"?: Array<string>;
   "key": string;
   "kind": WorkUnitKind;
+  "seq": number;
   "stage"?: string | null;
   "status": WorkUnitStatus;
   "title": string;
+  "waiting_on"?: Array<string>;
+  "waiting_stage"?: string | null;
 };
 
 export type TreeView = {
@@ -6057,6 +6152,13 @@ export type UnitContext = {
 export type UnitDeclared = "leaf" | "task";
 
 export type UnitGateAction = "promoted" | "auto_leaf" | "decision" | "kept_task" | "demoted";
+
+export type UnitWait = {
+  "key": string;
+  "stage"?: string | null;
+  "waiting_on": Array<string>;
+  "waiting_stage"?: string | null;
+};
 
 export type UnreadCountView = {
   "by_kind": {

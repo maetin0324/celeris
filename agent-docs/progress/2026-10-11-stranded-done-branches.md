@@ -1,13 +1,15 @@
 ---
 title: done task の取り残し調査
 updated: 2026-10-11
-status: running
+status: done
 tasks: [01M4M8D4ANYGCWVZ0A0WSW53X7]
 ---
 
 # done task の取り残し調査
 
 設計決定は [ADR: done task の変更を取り残さない](../adr/2026-10-11-stranded-done-branches.md) を参照。
+
+完了日: 2026-10-11（ただし全体 test suite は上の証拠節のとおり 4 件失敗が残る。未解決事項を参照）。
 
 ## 原因
 
@@ -33,7 +35,43 @@ review 完了時に `delivery::begin` を必ず呼ぶ。delivery policy 対象�
 
 ## 本番への移行
 
-設定形式の変更はない。リリース後の本番反映は通常の release/promote 手順で行う。host、daemon、DB、設定ファイルの直接変更はしていない。
+このタスク木で追加した本番設定欄はない。各段の記録と `crates/celeris/src/config/` を確認したが config schema の変更はなく、既存の `[selfdeploy].delivery_projects` を維持する。host・daemon・本番 DB・`~/.config/celeris` はこの作業では変更していない。以下は運用セッションで人が実施する手順。
+
+1. **migration を含む release を作成・検証する。** main にこの変更を取り込んだ後、本番運用セッションで `scripts/selfdeploy/release.sh <main の SHA または ref>` を実行する。integration state 用 migration は `0067_task_repo_integration_states.sql`。release directory の SHA を用いて `scripts/selfdeploy/verify.sh <sha12>` を実行し、`scripts/selfdeploy/status.sh` と release 内 `verify.json` で `ok: true`、staging health の schema version が新バイナリと一致、migration 前後の staging snapshot で既存行数・task digest が一致、主要 GET が成功したことを確かめる。詳細は [selfdeploy 運用手順](../../docs/ops/selfdeploy.md) §2–3。
+2. **人が昇格する。** `scripts/selfdeploy/status.sh` で対象 release の verify 結果を確認し、`verify.json.ok` が true の場合に限って `scripts/selfdeploy/promote.sh <sha12>` を実行する。完了後、status/API の release 表示で promoted を確認し、`promote_failed.json` が無いこと、`/health` の release SHA と schema version が対象値であることを確認する。main 取り込みと本番昇格は別操作。
+3. **初回 sweep の取り残しを確認する。** daemon 起動後の定期 sweep を待ち、`celerisctl integration list --state unintegrated --json`（`GET /api/v1/integrations?state=unintegrated`）で task/repo/branch/head を確認する。admin 認証付き `GET /api/v1/inbox/items?kind=unintegrated` でも受信箱 item を取得し、各 item の task・repo・branch/head を照合する。Unintegrated は task×repo ごとの item なので、同一 task の複数 repo を別々に数えて確認する。
+4. **人の決定に従い 01M4F3V643 を discard する。** `celerisctl integration list --state unintegrated --task 01M4F3V643Q4A3DXTXPT04J14Y --json` で branch `celeris/01M4F3V643Q4A3DXTXPT04J14Y` と head を確認する。`celerisctl show 01M4F3V643Q4A3DXTXPT04J14Y --json` の `integrations[]` を見て該当 repo の**名前**を特定し、その repo・branch・head が一致した場合に実行する。
+
+   ```sh
+   celerisctl integration discard 01M4F3V643Q4A3DXTXPT04J14Y '<repo-name>' --reason '人の決定: この stranded branch の変更を破棄'
+   celerisctl integration list --state discarded --task 01M4F3V643Q4A3DXTXPT04J14Y --json
+   ```
+
+   discard は git branch を削除せず durable な disposition を記録する。結果の `state.status` が `discarded`、reason・repo・branch が対象と一致することを確認する。等価 API は `POST /api/v1/tasks/01M4F3V643Q4A3DXTXPT04J14Y/integrations/<URL-encoded-repo-name>/discard`、body `{"reason":"人の決定: この stranded branch の変更を破棄"}`。`repo` は repo ID でなく repo 名。admin 認証が必要で、body は `reason` のみを受け付ける。
+5. **01M4D7RVKX の統合を確認する。** `celerisctl show 01M4D7RVKX --json`（`GET /api/v1/tasks/01M4D7RVKX` と同じ TaskDetail）を取得し、`integrations[]` の対象 repo で `state: integrated` を確認する。公開欄名は任意欄 `integrations` で `integration_status` ではない。これは main 到達の確認で、本番 release の promote 状態とは独立している。
+
+## 未解決事項
+
+- **全体 suite は未だ green でない。** `task-api::browser_e2e` の 4 件（上の証拠節）が全体 run で 60 秒の fixture readiness 待ちに入って落ちる（単独 run は pass）。`crates/task-api/tests/browser_e2e.rs:87-110` は credentiald の `ipc::serve` を `std::thread::spawn` の中で起動し、その戻り値を捨てている。そのため bind 失敗などは readiness timeout としてしか見えない。並走時の socket・path 衝突か serve の早期失敗かは未確定。コードは変更していない。次の対処として serve の結果を観測可能にするか、readiness 待ちを出来事待ちへ直す。
+- 通常の TMPDIR（run の作業 path）では socket path が `SUN_LEN` を超え、108 件が落ちる。全体 suite は短い TMPDIR で回す必要がある。
+- 初回 production sweep 後の task×repo 件数と 01M4F3V643 の repo 名・branch head は運用セッションで確認する。本番 DB はこの run から参照していない。
+- discard 後に人の判断を覆して再統合する場合は、`celerisctl integration reopen` の後に merge を別途判断する。
+
+## 証拠
+
+この節は 2026-10-11 の検証 run（作業ツリー 11ec89e4 基点）の記録。以前の記録（5155 passed / 0 failed）は今回の run では再現していない。
+
+- `bash scripts/dev/test-parallel.sh`（TMPDIR=run の既定の長い path）— exit 100。`CELERIS_TEST_SUMMARY`: passed 5047 / failed 108 / ignored 14。失敗の大半は `bind: path must be shorter than SUN_LEN`（Unix socket path が長すぎる）と `timed out waiting for fixture readiness`。socket path の問題であり、コードの失敗ではない。
+- `TMPDIR=/tmp/wu-sock.4fij bash scripts/dev/test-parallel.sh`（socket 用に短い TMPDIR）— exit 100（2 回実行、結果は同じ）。1 回目: passed 5151 / failed 4 / ignored 14、2 回目: passed 5151 / failed 4 / ignored 14。nextest_exit 100、doctest_exit 0、182 binaries。失敗は 4 件で、いずれも `task-api::browser_e2e` の `denied_approval_fails_the_task_without_a_lease`、`auth_section_store_denies_takeover_until_closed`、`registered_credential_does_not_open_approval_for_uncertified_backend`、`approved_credential_requires_conformance_and_does_not_consume_approval`（60 秒の `timed out waiting for fixture readiness`）。
+- `TMPDIR=/tmp/wu-sock.4fij cargo nextest run -p task-api --test browser_e2e` — exit 0。4 tests run: 4 passed, 0 skipped。単独では 4 件とも通るため、全体 run の負荷・並走下での readiness 待ちの問題と判断した（根因は未確定。未解決事項を参照）。
+- `cargo clippy --workspace -- -D warnings` — exit 0（`Finished dev profile`、警告・エラーなし）。
+- `cargo fmt --all -- --check` — exit 0（差分なし）。
+- 文書検査 3 本: `sh scripts/dev/check-doc-links.sh` — exit 0（`check-doc-links: ok`）。`sh scripts/dev/check-adr-numbers.sh` — exit 0（`ok (182 files)`）。`sh scripts/dev/progress-index.sh --check` — exit 0。
+- 参考: `sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv` — exit 0（`check-doc-layout: ok`）。`git diff --quiet "${CELERIS_WU_BASE:-HEAD}" -- crates/ web/ gui/` — 差分なし（この run はコードを変更していない）。
+
+## 提案
+
+- 本番昇格の運用記録に release SHA、verify の schema/row-count 結果、promote 結果、初回 sweep の task×repo 件数、01M4F3V643 の discard 理由、01M4D7RVKX の integrated 表示をまとめ、監査可能にする。
 
 ## 経路表
 

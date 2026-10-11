@@ -221,3 +221,11 @@ pub struct UnitWait {
   クラスタの並列度の満杯は `Capacity{account}` ではなく `Cluster{detail: "concurrency full"}`。全部の枠が埋まって `dispatch_ready` が早期 return する tick も、
   窓の ready に `Capacity{global}` を付ける（ready_tasks を 1 回読む）。
 - D4 の旧 3 欄（`unroutable`・`awaiting_children`・`awaiting_human`）の削除は未了（gui の読み手が core・api 葉の範囲外）。進捗 core.md の「未解決」。
+
+### 葉 api（2026-10-11）
+- `TaskStore::db_waits_for` を trait に足した（task-ops が `&dyn TaskStore` で呼ぶため。実体は `SqliteStore::db_waits_for_impl`）。
+- 合わせる関数は `task_ops::wait::task_waits`（DB → 計画 → 人の gate → メモリの順）。`gate_waits` は plan approval と途中確認だけ
+  （`StageReview` はまだ出さない。dispatcher の `human_gate_hold` は共有していない）。
+- `run_state` の頁は SQL の cursor ではなく、絞った後の位置（`rs:<n>`）で切る。`total` は絞った後の件数。
+- `TreeStageView.order` は段の位置（0 から）。`TaskExecutionView`（`GET /tasks/{id}/execution`）にも `waits` を出し、`awaiting_children` を消した。
+- D4 の旧 3 欄（`DaemonSnapshot.unroutable` 等）の削除は api 葉でも未了（読み手が gui・web の daemon 画面）。

@@ -107,7 +107,7 @@ fn titled(title: &str, status: Status) -> Task {
     t
 }
 
-fn item<'a>(list: &'a Value, id: task_core::TaskId) -> &'a Value {
+fn item(list: &Value, id: task_core::TaskId) -> &Value {
     list["items"]
         .as_array()
         .expect("items")

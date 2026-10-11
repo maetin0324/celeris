@@ -15549,6 +15549,22 @@
       ],
       "type": "object"
     },
+    "IntegrationActionResult": {
+      "properties": {
+        "integrated": {
+          "description": "`true` means branch is already an ancestor of the configured default branch.",
+          "type": "boolean"
+        },
+        "state": {
+          "$ref": "#/$defs/TaskRepoIntegrationState"
+        }
+      },
+      "required": [
+        "state",
+        "integrated"
+      ],
+      "type": "object"
+    },
     "IntegrationCheckDone": {
       "description": "済んだ統合の検査 1 件。",
       "properties": {
@@ -15647,6 +15663,20 @@
     "IntegrationId": {
       "description": "取り込みの記録の一意識別子（ULID）。",
       "type": "string"
+    },
+    "IntegrationList": {
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/TaskRepoIntegrationState"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "type": "object"
     },
     "IntegrationMethod": {
       "description": "取り込みの方法（ADR-0043 D5）。",
@@ -22426,6 +22456,18 @@
       },
       "type": "object"
     },
+    "ReasonBody": {
+      "additionalProperties": false,
+      "properties": {
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "reason"
+      ],
+      "type": "object"
+    },
     "ReleaseChanges": {
       "description": "`changes.json` の要約（ADR-0041 D4）。`release.sh` が**ビルド時の `current`**（`base`）から\nそのリリースまでの差分を書いたもの。GUI は昇格の前にこれを人へ見せる。",
       "properties": {
@@ -28849,6 +28891,52 @@
       ],
       "type": "object"
     },
+    "TaskRepoIntegrationState": {
+      "description": "Current per-task, per-repository disposition of a completed branch.",
+      "properties": {
+        "actor": {
+          "type": "string"
+        },
+        "branch": {
+          "type": "string"
+        },
+        "checked_at": {
+          "type": "string"
+        },
+        "head_sha": {
+          "type": "string"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "repo_id": {
+          "$ref": "#/$defs/RepoId"
+        },
+        "state": {
+          "$ref": "#/$defs/TaskRepoIntegrationStatus"
+        },
+        "task_id": {
+          "$ref": "#/$defs/TaskId"
+        },
+        "updated_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "repo_id",
+        "branch",
+        "head_sha",
+        "state",
+        "actor",
+        "checked_at",
+        "updated_at"
+      ],
+      "type": "object"
+    },
     "TaskRepoIntegrationStatus": {
       "enum": [
         "unintegrated",
@@ -31712,6 +31800,15 @@
     "integrate_result": {
       "$ref": "#/$defs/IntegrateResult"
     },
+    "integration_action_result": {
+      "$ref": "#/$defs/IntegrationActionResult"
+    },
+    "integration_list": {
+      "$ref": "#/$defs/IntegrationList"
+    },
+    "integration_reason": {
+      "$ref": "#/$defs/ReasonBody"
+    },
     "knowledge_accept": {
       "$ref": "#/$defs/KnowledgeAcceptBody"
     },
@@ -32124,6 +32221,9 @@
     "inbox_item",
     "inbox_answer",
     "inbox_answer_result",
+    "integration_list",
+    "integration_reason",
+    "integration_action_result",
     "notifications",
     "notifications_unread_count",
     "notification_read",

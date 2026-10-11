@@ -3138,6 +3138,11 @@ export type IntegrateResult = {
   "integration": TaskIntegration;
 };
 
+export type IntegrationActionResult = {
+  "integrated": boolean;
+  "state": TaskRepoIntegrationState;
+};
+
 export type IntegrationCheckDone = {
   "cmd": string;
   "duration_ms": number;
@@ -3160,6 +3165,10 @@ export type IntegrationCheckRunning = {
 };
 
 export type IntegrationId = string;
+
+export type IntegrationList = {
+  "items": Array<TaskRepoIntegrationState>;
+};
 
 export type IntegrationMethod = "merge" | "pr" | "discard";
 
@@ -4479,6 +4488,10 @@ export type ReadAllBody = {
   "project"?: string | null;
 };
 
+export type ReasonBody = {
+  "reason": string;
+};
+
 export type ReleaseChanges = {
   "base"?: string | null;
   "commit_count": number;
@@ -5701,6 +5714,18 @@ export type TaskRef = {
   "kind": TaskKind;
   "status": Status;
   "title": string;
+};
+
+export type TaskRepoIntegrationState = {
+  "actor": string;
+  "branch": string;
+  "checked_at": string;
+  "head_sha": string;
+  "reason"?: string | null;
+  "repo_id": RepoId;
+  "state": TaskRepoIntegrationStatus;
+  "task_id": TaskId;
+  "updated_at": string;
 };
 
 export type TaskRepoIntegrationStatus = "unintegrated" | "integrated" | "discarded" | "held";

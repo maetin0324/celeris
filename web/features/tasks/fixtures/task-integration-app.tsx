@@ -7,7 +7,7 @@ function App() {
   return (
     <main className="grid min-w-0 gap-4 p-4">
       <h1>取り込み状態の確認</h1>
-      {(["unintegrated", "integrated", "discarded", "held"] as const).map((state) => (
+      {(["unintegrated", "integrated", "discarded", "held", "not_applicable"] as const).map((state) => (
         <section key={state} aria-label={state}>
           <TaskIntegrationActions
             taskId="T 1"

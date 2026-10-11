@@ -171,3 +171,29 @@ integration-checks が再現しない理由: 統合のログは `ws.task_dir`（
 ## 本番への移行
 
 なし（config・DB の変更は無い。旧い置き場所に残った過去のログはそのまま。消すかどうかは人の判断）。
+
+## verify（reopen 後、2026-10-11）
+
+対象 HEAD `fdf71403a489`（統合後、コードは変えていない）。作業ツリーは clean。
+
+- `TMPDIR=/tmp bash scripts/dev/test-parallel.sh` → exit 0。nextest `Summary [109.775s] 5199 tests run: 5199 passed, 13 skipped`、
+  failed 0。doctest 全 crate ok。`CELERIS_TEST_SUMMARY` は passed 5202 / failed 0 / ignored 14 / nextest_exit 0 / doctest_exit 0。
+- `cargo clippy --workspace -- -D warnings` → exit 0（`Finished dev profile`、警告 0）。
+- 文書検査 3 本:
+  - `sh scripts/dev/check-doc-links.sh` → exit 0、`check-doc-links: ok`
+  - `sh scripts/dev/check-adr-numbers.sh` → exit 0、`check-adr-numbers: ok (196 files)`
+  - `sh scripts/dev/progress-index.sh --check` → exit 0、`progress-index --check: ok`
+
+### 既定 TMPDIR で落ちた試行（環境起因。コードの失敗ではない）
+
+- `TMPDIR` を run の作業 dir（`.../runs/01M4P9YTSBP8ME2YW7P323TDV3/tmp`）にした試行: 110 failed / 5089 passed。
+  browser・credentiald の unix socket path が `path must be shorter than SUN_LEN` で bind 失敗（158 箇所）。
+- `TMPDIR=/local/celeris/data/scratch/tt` にした試行: 34 failed / 5165 passed。SUN_LEN が 2 件、残り 32 件は
+  `timed out waiting for fixture readiness`（60s）。同時刻の host load average が 40〜53（24 CPU）。
+  socket 長は `test-parallel.sh` が `mktemp -d` を TMPDIR の下に切るので、短い scratch では足りなかった。
+- 負荷を待って（load1 が 20 台まで下がった時点）`TMPDIR=/tmp` で取り直したところ全件通った。
+
+## 結論
+
+受け入れ条件 0〜2 を満たす。統合ログの置き場所（`check_log_root` 基準）の変更は既存の試験 2 本を含めて
+全体試験に通っている。試験の失敗は環境（socket path 長・shared host の負荷）によるもので、本 WU の変更は関係しない。

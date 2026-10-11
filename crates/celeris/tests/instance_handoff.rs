@@ -38,6 +38,27 @@ struct Env {
     db: PathBuf,
 }
 
+/// ADR 2026-10-11 llm-source-harness-selection: 偽の source・harness と、どのタスクもそれを選ぶ規則。
+/// `[[providers]]` は読み込みがまだ 1 行を要求するので残すが、dispatch はこの宣言で経路を決める。
+const FAKE_ROUTE: &str = r#"
+[llm_sources.local]
+kind = "fake"
+accounts = ["a1"]
+models = ["fake"]
+
+[harnesses.fake]
+kind = "fake"
+api_formats = ["fake"]
+source_kinds = ["fake"]
+
+[route_defaults.fake]
+candidates = [{ source = "local", model = "fake" }]
+
+[harness_selection]
+execution_class_defaults = {}
+rules = [{ harness = "fake", required_capabilities = [] }]
+"#;
+
 /// 既定の `lease_grace_secs`（heartbeat の新しさの窓は `3 × tick + lease_grace` = 4.3 秒）。
 const DEFAULT_LEASE_GRACE_SECS: u64 = 4;
 /// 種として手で置いた `active` 行（heartbeat を打たない）を、新しいインスタンスの起動中ずっと
@@ -70,6 +91,7 @@ command = ["sh", "-c", '{SLOW_FAKE}']
 [[providers]]
 id = "p1"
 adapter = "fake"
+{FAKE_ROUTE}
 {extra}
 "#
         )
@@ -261,6 +283,7 @@ command = ["sh", "-c", '{gated_fake}']
 [[providers]]
 id = "p1"
 adapter = "fake"
+{FAKE_ROUTE}
 "#
     ));
     let task_id = env.ready_task("handoff");
@@ -434,15 +457,23 @@ async fn verify_mode_never_dispatches_and_never_touches_daemon_instances() {
     );
 }
 
-/// ADR-0041 D5 (d): 設定ファイルに `smoke` という名前の役割・分野・プロバイダがあっても、verify モードの
+/// ADR-0041 D5 (d): 設定ファイルに `smoke` という名前の llm source・harness・役割・分野があっても、verify モードの
 /// 組み込みが**上書きする**（本物のアダプタが煙試験に紛れ込まない）。
 #[test]
 fn the_builtin_smoke_role_and_genre_override_a_config_entry_of_the_same_id() {
     let env = Env::with_extra(
         r#"
-[[providers]]
-id = "smoke"
-adapter = "claude-code"
+[llm_sources.smoke]
+kind = "claude_oauth"
+models = ["opus"]
+
+[harnesses.smoke]
+kind = "claude_code"
+api_formats = ["claude_oauth"]
+source_kinds = ["claude_oauth"]
+
+[route_defaults.smoke]
+candidates = [{ source = "smoke", model = "opus" }]
 
 [[roles]]
 id = "smoke"
@@ -497,32 +528,68 @@ roles = ["smoke"]
     assert_eq!(genres[0].default_role.as_deref(), Some("smoke"));
     assert_eq!(genres[0].roles, vec!["smoke".to_string()]);
 
-    let providers: Vec<_> = verify
-        .provider_specs()
-        .into_iter()
-        .filter(|p| p.id == "smoke")
-        .collect();
-    assert_eq!(providers.len(), 1, "`smoke` のプロバイダは 1 つだけ");
-    assert_eq!(providers[0].adapter, "fake");
-    assert_eq!(providers[0].tiers, vec![Tier::Standard]);
-
-    // レビューも偽のアダプタ（`Check::Reviewer` を書いても LLM は呼ばれない。ADR-0041 §3）。
-    assert_eq!(verify.reviewer.adapter.as_deref(), Some("fake"));
-    assert_eq!(verify.reviewer.tier, Some(Tier::Standard));
+    // 経路は偽の source・harness だけ（本物の LLM を呼ぶ宣言は上書きされる。ADR-0041 §3）。
+    assert!(
+        verify.providers.iter().all(|p| p.id != "smoke"),
+        "verify は provider を足さない"
+    );
+    assert_eq!(verify.llm_sources["smoke"].kind, "fake");
+    assert_eq!(verify.llm_sources["smoke"].models, vec!["fake".to_string()]);
+    assert_eq!(verify.harness_declarations["smoke"].kind, "fake");
+    let registry = verify
+        .llm_route_registry()
+        .unwrap_or_else(|e| panic!("registry: {e}"));
+    assert_eq!(
+        registry.route_defaults[&"smoke".into()],
+        vec![task_core::llm_route::CandidateKey {
+            source: "smoke".into(),
+            model: "fake".into(),
+        }]
+    );
+    // worker run も reviewer run も `smoke` の分野なら偽の harness を選ぶ。
+    for role in [Some("smoke"), Some("reviewer"), None] {
+        let request = task_core::llm_route::HarnessRequest {
+            genre: Some("smoke".into()),
+            role: role.map(str::to_string),
+            ..Default::default()
+        };
+        assert_eq!(
+            task_core::llm_route::select_harness(&request, &registry),
+            Ok("smoke".into()),
+            "{role:?}"
+        );
+    }
 }
 
-/// ADR-0041 D5 (e): 通常運転は `smoke` を組み込まない。偽のアダプタのプロバイダが**無い**設定では、
+/// ADR-0041 D5 (e): 通常運転は `smoke` を組み込まない。`smoke` を選ぶ harness が**無い**設定では、
 /// `genre = "smoke"` のタスクは normal モードでは行き先が無くて `ready` のまま残り、verify モードでは
-/// 組み込みのプロバイダで `done` まで行く。
+/// 組み込みの source・harness で `done` まで行く。
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn normal_mode_does_not_inject_the_smoke_builtins() {
-    // 偽のアダプタのプロバイダを 1 つも書かない設定（本番の `config.toml` と同じ形）。
+    // 偽の source・harness も `smoke` を選ぶ規則も書かない設定（本番の `config.toml` と同じ形）。
     let env = Env::with_body(
         r#"
 [[providers]]
 id = "acp-only"
 adapter = "acp"
 tiers = ["standard"]
+
+[llm_sources.main]
+kind = "openai_compatible"
+accounts = ["a1"]
+models = ["m1"]
+
+[harnesses.opencode]
+kind = "acp"
+api_formats = ["openai_compatible"]
+source_kinds = ["openai_compatible"]
+
+[route_defaults.opencode]
+candidates = [{ source = "main", model = "m1" }]
+
+[harness_selection]
+execution_class_defaults = {}
+rules = [{ genre = "coding", harness = "opencode", required_capabilities = [] }]
 "#,
     );
     let plain = env.config();
@@ -535,8 +602,9 @@ tiers = ["standard"]
         "normal は `smoke` の分野を足さない"
     );
     assert!(
-        plain.provider_specs().iter().all(|p| p.id != "smoke"),
-        "normal は `smoke` のプロバイダを足さない"
+        !plain.llm_sources.contains_key("smoke")
+            && !plain.harness_declarations.contains_key("smoke"),
+        "normal は `smoke` の source・harness を足さない"
     );
 
     let smoke_id = env.smoke_task("smoke");
@@ -560,7 +628,7 @@ tiers = ["standard"]
             .unwrap_or_else(|e| panic!("get: {e}"))
             .map(|t| t.status),
         Some(Status::Ready),
-        "normal モードには `fake` のプロバイダが無いので `smoke` は行き先が無い"
+        "normal モードには `smoke` を選ぶ harness が無いので `smoke` は行き先が無い"
     );
     assert_eq!(worker_starts(&store, smoke_id), 0);
 
@@ -583,7 +651,7 @@ tiers = ["standard"]
             .unwrap_or_else(|e| panic!("get: {e}"))
             .map(|t| t.status),
         Some(Status::Done),
-        "verify は組み込みの `smoke` プロバイダ（偽のアダプタ）で煙試験を流す"
+        "verify は組み込みの `smoke` の source・harness（偽のアダプタ）で煙試験を流す"
     );
     assert!(
         store

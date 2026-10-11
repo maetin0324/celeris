@@ -51,8 +51,8 @@ pub async fn run(config: Config, opts: RunOptions) -> Result<Exit, DaemonError> 
     // 従来どおり再起動が要る。`reload_providers` がそれ以外のフィールドには触れない）。
     let mut config = config;
     let verify = opts.mode == DaemonMode::Verify;
-    // ADR-0041 D5（Phase 51）: verify の celeris は `genre = "smoke"` を 1 件だけ流せる。その役割・分野・
-    // プロバイダ（すべて偽のアダプタ）は**組み込みで**足す（設定ファイルに同じ id があっても上書きする）。
+    // ADR-0041 D5（Phase 51）: verify の celeris は `genre = "smoke"` を 1 件だけ流せる。その llm source・harness・
+    // 役割・分野（すべて偽のアダプタ）は**組み込みで**足す（設定ファイルに同じ id があっても上書きする）。
     if verify {
         config.apply_verify_smoke();
     }

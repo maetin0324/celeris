@@ -278,7 +278,6 @@ impl Dispatcher {
     pub fn set_self_host_load(&mut self, provider: impl Into<ProviderId>, load: SelfHostLoad) {
         self.self_host_loads.insert(provider.into(), load);
     }
-
 }
 
 #[cfg(test)]

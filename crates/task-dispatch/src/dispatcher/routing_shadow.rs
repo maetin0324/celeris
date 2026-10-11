@@ -12,10 +12,7 @@
 
 use super::*;
 use serde::{Deserialize, Serialize};
-use task_core::model_router::{
-    policy::RoutingMode,
-    shadow::ShadowPolicy,
-};
+use task_core::model_router::{policy::RoutingMode, shadow::ShadowPolicy};
 
 /// `DecisionShadowComparison` の wire 版。
 pub const DECISION_SHADOW_COMPARISON_VERSION: u32 = 1;
@@ -74,7 +71,6 @@ pub trait RoutingShadowListener: Send + Sync {
 }
 
 impl Dispatcher {
-
     /// 検証済みの shadow policy を差し替え、listener へ同じ値を渡す。`set_dispatch_routing` の後に呼ぶ
     /// （listener は新しい mode と policy の組を 1 回で受け取る）。
     pub fn set_routing_shadow(&mut self, policy: ShadowPolicy) {
@@ -93,5 +89,4 @@ impl Dispatcher {
         listener.reload(self.dispatch_routing.mode, &self.routing_shadow_policy);
         self.routing_shadow_listeners.push(listener);
     }
-
 }

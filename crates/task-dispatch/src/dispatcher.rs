@@ -122,11 +122,11 @@ mod provider_select;
 mod quota_book;
 mod review_spawn;
 mod review_verdict;
+mod route_launch;
+mod route_select;
 mod routing_context;
 mod routing_enforce;
 mod routing_members;
-mod route_launch;
-mod route_select;
 mod routing_shadow;
 mod run_context;
 mod sinks;
@@ -154,6 +154,10 @@ pub use cluster::{
     TunnelListenerProbe, TunnelProbe,
 };
 pub use provider_select::provider_failure_outcome;
+pub use route_launch::{RouteLaunchError, selected_llm_route};
+pub use route_select::{
+    RouteFailure, RouteInput, RoutePick, RouteState, RouteTrace, harness_request_for, route_select,
+};
 pub use routing_enforce::{
     DispatchRoutingSettings, EnforceSource, SelfHostLoad, constraint_exclusions,
     enforce_quota_verdict, source_state_for_provider, source_state_from_account,
@@ -165,10 +169,6 @@ pub use routing_members::{
 pub use routing_shadow::{
     DECISION_SHADOW_COMPARISON_VERSION, DECISION_SHADOW_POLICY_VERSION, DecisionShadowCandidate,
     DecisionShadowComparison, RoutingShadowListener,
-};
-pub use route_launch::{RouteLaunchError, selected_llm_route};
-pub use route_select::{
-    RouteFailure, RouteInput, RoutePick, RouteState, RouteTrace, harness_request_for, route_select,
 };
 pub use snapshot::SnapshotPublisher;
 
@@ -770,7 +770,10 @@ struct RunEntry {
     /// ADR-0089（Phase R6-5）: CoS の対話 run か（`max_concurrency`・プールの `concurrency` に数えない）。
     cos: bool,
     /// ADR 2026-10-11 llm-source-harness-selection: the admitted `(source, account)` reservation owner.
-    route: Option<(task_core::llm_route::SourceId, task_core::llm_route::AccountId)>,
+    route: Option<(
+        task_core::llm_route::SourceId,
+        task_core::llm_route::AccountId,
+    )>,
 }
 
 /// Phase 33: `recent_work_of` が `list_page` から読む候補の上限（裏方タスクを除いた後に

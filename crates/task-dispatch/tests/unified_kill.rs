@@ -15,11 +15,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+use task_core::llm_route::{CandidateKey, HarnessRule, HarnessSpec, Registry, SourceSpec};
 use task_core::{
     Budget, Check, Criterion, DelegationLimits, SqliteStore, Status, Task, TaskId, TaskKind,
     TaskStore, Tier, Trigger, WorkerHint, WorkspaceSpec,
 };
-use task_core::llm_route::{CandidateKey, HarnessRule, HarnessSpec, Registry, SourceSpec};
 use task_dispatch::dispatcher::{DispatchConfig, Dispatcher};
 use task_dispatch::policy::{ProviderSpec, StaticPolicy};
 use task_worker::{FakeAdapter, WorkerAdapter};

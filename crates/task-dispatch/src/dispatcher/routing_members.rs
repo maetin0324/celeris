@@ -9,10 +9,7 @@
 //!   `quality_unknown` で priority 順に落ちる。LLM も HTTP も呼ばない。
 
 use super::*;
-use task_core::model_router::{
-    profiles::ModelProfile,
-    trace::CandidateTrace,
-};
+use task_core::model_router::{profiles::ModelProfile, trace::CandidateTrace};
 
 /// routing catalog の model profile を dispatcher へ渡す口（daemon が共有 snapshot を包んで差し込む）。
 pub trait RoutingModelProfiles: Send + Sync {
@@ -61,5 +58,4 @@ impl Dispatcher {
     pub fn set_routing_model_profiles(&mut self, reader: Arc<dyn RoutingModelProfiles>) {
         self.routing_model_profiles = Some(reader);
     }
-
 }

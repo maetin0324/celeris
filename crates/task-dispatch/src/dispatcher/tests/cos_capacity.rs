@@ -213,12 +213,19 @@ fn account_limits_source_account_and_source_limits_are_independent() {
     // Account overrides are indexed by the migrated (source_id, account_id) key.
     d.set_account_limit("claude-code", "a", Some(3)).unwrap();
     d.set_account_limit("claude-code", "b", Some(1)).unwrap();
-    assert_eq!(d.account_run_limit(AccountAdapter::ClaudeCode, "a", false), 3);
-    assert_eq!(d.account_run_limit(AccountAdapter::ClaudeCode, "b", false), 1);
+    assert_eq!(
+        d.account_run_limit(AccountAdapter::ClaudeCode, "a", false),
+        3
+    );
+    assert_eq!(
+        d.account_run_limit(AccountAdapter::ClaudeCode, "b", false),
+        1
+    );
 
     // A source-owned limit has no fabricated shared unknown account: it uses the
     // explicit source key and the source's stable implicit account identity.
-    d.set_account_limit("implicit", "shared-source", Some(4)).unwrap();
+    d.set_account_limit("implicit", "shared-source", Some(4))
+        .unwrap();
     assert_eq!(
         d.account_limits
             .as_ref()
@@ -244,13 +251,21 @@ fn account_limits_source_cooldown_excludes_only_the_cooled_account() {
         1_000,
     );
     let a = evaluate(
-        &AccountCandidate { id: "a", logged_in: true, in_use: 0 },
+        &AccountCandidate {
+            id: "a",
+            logged_in: true,
+            in_use: 0,
+        },
         book.state("a"),
         2,
         1_500,
     );
     let b = evaluate(
-        &AccountCandidate { id: "b", logged_in: true, in_use: 0 },
+        &AccountCandidate {
+            id: "b",
+            logged_in: true,
+            in_use: 0,
+        },
         book.state("b"),
         2,
         1_500,

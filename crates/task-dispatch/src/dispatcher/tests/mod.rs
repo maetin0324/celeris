@@ -205,13 +205,18 @@ fn install_test_routes(
     let mut r = Registry::default();
     let mut kinds = std::collections::BTreeSet::new();
     for (id, kind) in sources {
-        let oauth = crate::dispatcher::route_select::account_adapter_for_source_kind(kind).is_some();
+        let oauth =
+            crate::dispatcher::route_select::account_adapter_for_source_kind(kind).is_some();
         r.sources.insert(
             (*id).into(),
             SourceSpec {
                 kind: (*kind).into(),
                 api_format: "test".into(),
-                accounts: if oauth { vec![] } else { vec!["default".into()] },
+                accounts: if oauth {
+                    vec![]
+                } else {
+                    vec!["default".into()]
+                },
                 models: vec!["m".into()],
                 max_runs: None,
                 account_max_runs: Default::default(),
@@ -235,10 +240,14 @@ fn install_test_routes(
             kind: "cli".into(),
             api_formats: ["test".into()].into(),
             source_kinds: kinds,
-            capabilities: ["tools", "repo", crate::dispatcher::route_select::BROWSER_CAPABILITY]
-                .iter()
-                .map(|c| (*c).to_string())
-                .collect(),
+            capabilities: [
+                "tools",
+                "repo",
+                crate::dispatcher::route_select::BROWSER_CAPABILITY,
+            ]
+            .iter()
+            .map(|c| (*c).to_string())
+            .collect(),
             command: None,
             args: vec![],
         },
@@ -247,12 +256,16 @@ fn install_test_routes(
         harness: "test".into(),
         ..Default::default()
     }];
-    r.cos_route_candidates = r.route_defaults.get(&"test".into()).cloned().unwrap_or_default();
+    r.cos_route_candidates = r
+        .route_defaults
+        .get(&"test".into())
+        .cloned()
+        .unwrap_or_default();
     for (id, kind) in sources {
-        if crate::dispatcher::route_select::account_adapter_for_source_kind(kind).is_none() {
-            if let Some(limits) = d.account_limits.as_mut() {
-                limits.insert(((*id).into(), "default".into()), max_runs);
-            }
+        if crate::dispatcher::route_select::account_adapter_for_source_kind(kind).is_none()
+            && let Some(limits) = d.account_limits.as_mut()
+        {
+            limits.insert(((*id).into(), "default".into()), max_runs);
         }
     }
     d.set_llm_route_registry(r);
@@ -3133,10 +3146,9 @@ mod planning_and_gate;
 mod provider_and_retry;
 mod review;
 mod review_route;
-mod role_assignments;
-mod routing_and_quota;
 mod route_launch;
 mod route_select;
+mod routing_and_quota;
 mod run_tmpdir;
 mod target_env;
 mod target_sync;

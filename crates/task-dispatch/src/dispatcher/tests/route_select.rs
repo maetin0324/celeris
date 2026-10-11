@@ -399,3 +399,183 @@ fn route_select_records_events_and_run_row() {
         .iter()
         .any(|m| m.contains("route refused") && m.contains("missing")));
 }
+
+/// Records the route each run was launched with.
+#[derive(Clone, Default)]
+struct RouteCapture {
+    seen: Arc<StdMutex<Vec<Option<task_worker::protocol::SelectedLlmRoute>>>>,
+}
+
+#[async_trait]
+impl WorkerAdapter for RouteCapture {
+    fn id(&self) -> &str {
+        "instant"
+    }
+    async fn run(
+        &self,
+        req: RunRequest,
+        _run_id: &str,
+        _limits: RunLimits,
+        _sink: &dyn EventSink,
+    ) -> Result<RunOutcome, AdapterError> {
+        self.seen.lock().unwrap().push(req.llm_route.clone());
+        std::fs::write(req.workspace.join("touched"), "1").unwrap();
+        Ok(done_outcome())
+    }
+}
+
+/// The routes of [`registry`] with `opencode` (and `claude_code` unless `claude` is false) run by
+/// `capture`.
+fn route_dispatcher(store: Arc<dyn TaskStore>, capture: &RouteCapture, claude: bool) -> Dispatcher {
+    let mut d = dispatcher(store, done_adapter(), 1);
+    d.set_llm_route_registry(registry());
+    let adapter: Arc<dyn WorkerAdapter> = Arc::new(capture.clone());
+    let mut adapters = HashMap::from([("opencode".into(), Arc::clone(&adapter))]);
+    if claude {
+        adapters.insert("claude_code".into(), adapter);
+    }
+    d.set_harness_adapters(adapters);
+    d
+}
+
+#[tokio::test]
+async fn route_select_dispatch_run_launches_the_selected_harness_model_and_account() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("db.sqlite");
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open(&db).unwrap());
+    let capture = RouteCapture::default();
+    let mut d = route_dispatcher(store.clone(), &capture, true);
+    let mut task = new_task(
+        dir.path(),
+        Check::Command {
+            cmd: "test -f touched".into(),
+            expect_exit: 0,
+        },
+        0,
+    );
+    task.genre = Some("light".into());
+    store.insert(&task).unwrap();
+
+    assert_eq!(d.tick().unwrap().dispatched, 1);
+    let run_id = d
+        .running
+        .get(&RunKey {
+            task: task.id,
+            work_unit: None,
+        })
+        .map(|e| {
+            assert_eq!(e.route, Some(pair("qwen", "shared")));
+            assert_eq!(e.provider, "qwen");
+            e.run_id.clone()
+        })
+        .expect("the run was started");
+    await_worker_completion(&mut d, task.id).await;
+
+    let seen = capture.seen.lock().unwrap().clone();
+    let route = seen[0].clone().expect("RunRequest.llm_route");
+    assert_eq!(
+        (
+            route.harness_id.as_str(),
+            route.source_id.as_str(),
+            route.model_id.as_str(),
+            route.account_id.as_str()
+        ),
+        ("opencode", "qwen", "qwen3", "shared")
+    );
+    let events = events_of(&store, task.id);
+    assert!(events.iter().any(|e| matches!(e,
+        Event::WorkerStarted { model, provider, account, .. }
+            if model == "qwen3" && provider.as_deref() == Some("qwen") && account.is_none())));
+    assert!(events.iter().any(|e| matches!(e,
+        Event::HarnessSelected { harness_id } if harness_id == "opencode")));
+    assert!(events.iter().any(|e| matches!(e,
+        Event::LlmRouteSelected { source_id, model_id, account_id, .. }
+            if source_id == "qwen" && model_id == "qwen3" && account_id == "shared")));
+    let conn = rusqlite::Connection::open(&db).unwrap();
+    let row: (String, String, String, String) = conn
+        .query_row(
+            "SELECT selected_harness_id, selected_source_id, selected_model_id, \
+             selected_account_id FROM runs WHERE run_id = ?1",
+            [&run_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        (
+            row.0.as_str(),
+            row.1.as_str(),
+            row.2.as_str(),
+            row.3.as_str()
+        ),
+        ("opencode", "qwen", "qwen3", "shared")
+    );
+}
+
+#[tokio::test]
+async fn route_select_dispatch_run_without_a_route_starts_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let capture = RouteCapture::default();
+    let mut d = route_dispatcher(store.clone(), &capture, false);
+    let check = Check::Command {
+        cmd: "true".into(),
+        expect_exit: 0,
+    };
+    // An undeclared harness.
+    let mut unknown = new_task(dir.path(), check.clone(), 0);
+    unknown.harness_id = Some("missing".into());
+    // claude_code: its OAuth pools have no logged-in account (no candidate is eligible), and
+    // codex_oauth is only reachable through the registered proxy route — no other source is tried.
+    let mut coding = new_task(dir.path(), check.clone(), 0);
+    coding.genre = Some("coding".into());
+    // A selected route whose harness has no adapter cannot be launched.
+    let mut no_adapter = new_task(dir.path(), check, 0);
+    no_adapter.harness_id = Some("claude_code".into());
+    let mut r = registry();
+    r.sources
+        .get_mut(&SourceId::from("claude_oauth"))
+        .unwrap()
+        .kind = "test_api".into();
+    r.harnesses
+        .get_mut(&task_core::llm_route::HarnessId::from("claude_code"))
+        .unwrap()
+        .source_kinds
+        .insert("test_api".into());
+    for t in [&unknown, &coding] {
+        store.insert(t).unwrap();
+    }
+    assert_eq!(d.tick().unwrap().dispatched, 0);
+    for t in [&unknown, &coding] {
+        assert_eq!(store.get(t.id).unwrap().unwrap().status, Status::Ready);
+        assert!(
+            progress_msgs(&store, t.id)
+                .iter()
+                .any(|m| m.contains("route refused")),
+            "{:?}",
+            progress_msgs(&store, t.id)
+        );
+        assert!(!events_of(&store, t.id).iter().any(|e| matches!(
+            e,
+            Event::LlmRouteSelected { .. } | Event::WorkerStarted { .. }
+        )));
+    }
+    // The refusal is recorded once, not on every tick.
+    let before = progress_msgs(&store, coding.id).len();
+    assert_eq!(d.tick().unwrap().dispatched, 0);
+    assert_eq!(progress_msgs(&store, coding.id).len(), before);
+
+    // claude_oauth admits an account now, but claude_code has no adapter: fail closed.
+    d.set_llm_route_registry(r);
+    store.insert(&no_adapter).unwrap();
+    assert_eq!(d.tick().unwrap().dispatched, 0);
+    assert_eq!(
+        store.get(no_adapter.id).unwrap().unwrap().status,
+        Status::Ready
+    );
+    assert!(
+        progress_msgs(&store, no_adapter.id)
+            .iter()
+            .any(|m| m.contains("route refused: no adapter for harness claude_code"))
+    );
+    assert!(capture.seen.lock().unwrap().is_empty());
+}

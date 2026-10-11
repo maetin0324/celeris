@@ -21,7 +21,8 @@ ADR `2026-10-11-llm-source-harness-selection.md`〈branch `celeris/01M4M8D4AP4YY
 |---|---|---|
 | survey | survey-code / survey-data / survey-lit | done |
 | design | survey-report | done |
-| design | adr | done（この更新。人の確認待ち: design 段の後に人の確認がある） |
+| design | adr | done |
+| design | adr-revise | done（2026-10-11 人の確認を反映。工程の再確認待ち） |
 | build | eval-harness / selector | pending |
 | evaluate | eval-run（eval-budget の人の回答と実行直前の見積りの承認が条件） | pending |
 | land | rollout / verify | pending |
@@ -30,15 +31,15 @@ ADR `2026-10-11-llm-source-harness-selection.md`〈branch `celeris/01M4M8D4AP4YY
 
 - **評価**: harness を固定し、その harness が話せる source×model を、本番の done WU から作った問題集合（開発 〜10/04 / held-out 10/05〜）に
   paired で問題ごと 2 試行当てる。主指標は決定的 check の pass^1、cell ごとに Wilson 95% 区間、比較は paired McNemar。
-  根拠が立つ条件は「候補ごと ≥60 問 × 2 試行、1 候補以上の区間下限 ≥0.5、held-out で選択が変わらない」。費用は定価換算と quota 窓の消費率の両方。
+  根拠基準は通常 30 問×2、高価 model 12 問×1。k=1 は区間が広く、明確な優越がなくても区間重複候補を低確度の同等集合に残す。費用は定価換算と quota 窓の消費率の両方。
 - **選択**: 先行 ADR の `RoutePolicy` を根拠表 `routing_evidence`（鍵 genre・harness・harness 版・source・model）による決定的規則に差し替える。
-  区間下限が最大の候補と区間が重なる「同等集合」の中で quota 消費が最小の候補を選ぶ。quota・cooldown で落ちたら同等集合 → 根拠あり → 辞書順の順に fallback。
-  根拠の無い genre は辞書順か人の既定 `[routing.defaults.<genre>]`。enforce 中は ε=0.1 の決定的な探索（同等集合の中だけ）で propensity を記録する。
+  区間下限が最大の候補と区間が重なる「同等集合」の中で quota 消費が最小の候補を選ぶ。fallback も根拠あり候補の順位後は `route_defaults` を使う。
+  根拠の無い genre は harness×lane の人が指定した `route_defaults` 優先列。enforce 中は ε=0.1 の決定的な探索（同等集合の中だけ）で propensity を記録する。
 - **段階**: genre×harness ごとに `shadow` → `enforce`。進むのは人の承認だけ、戻すのは daemon の決定的判定だけ（直近 50 run の合格率区間・失敗率・壁時計・quota・根拠表の版）。
 - **legacy**: tier binding・`[model_routing]` 全欄・HeuristicEstimator と sidecar・旧 shadow・`routing_enforce`・手動 `model_assignments` を selector の変更で消す。
   lane は方針ラベルとして残す。events は消さない。前回 branch は取り込まない。
 - **実装**: 評価 runner は crate `routing-eval`、選択器は `task-core/src/routing/`。両者は DB の `routing_evidence` だけで結ぶ。
-- **genre**: 根拠を立てるのは coding の 3 harness（claude-code / codex / acp・pi）。reviewer は judge 較正。他は辞書順・人の既定で guardrail を記録だけする。
+- **genre**: 対象 7 model を coding の claude-code / codex で評価する。高価な2 modelは k=1 の小部分集合。acp/pi の qwen は既定候補、opencode-go は評価対象外。reviewer は judge 較正。他は harness×lane `route_defaults` で動かし guardrail を記録する。
 
 ## 証拠
 
@@ -47,8 +48,8 @@ ADR `2026-10-11-llm-source-harness-selection.md`〈branch `celeris/01M4M8D4AP4YY
 
 ## 未解決
 
-- pilot の model 集合（fable-5-1・gpt-6-astra を外すか）は eval-run の見積りで決める。
-- codex-oauth・opencode-go の 1 run の quota 消費は dry-run（10 run）で測るまで不明。
+- fable/astra は k=1・12問の層別部分集合。週 quota 15% に収まる実行可能数は eval-run 直前の見積りで確定する。
+- Codex account の quota は dry-run（10 run）で測るまで不明。opencode-go は評価対象外。
 - harness_version の major の決め方は eval-harness で確定する。
 - research・planner の問題集合と judge 較正は本 task の範囲外（次の task）。
 
@@ -59,5 +60,7 @@ ADR `2026-10-11-llm-source-harness-selection.md`〈branch `celeris/01M4M8D4AP4YY
 - `routing_decided` の payload に候補集合と propensity が入ってから（enforce 開始後）、本番ログを DR でオフライン評価の補助根拠に使う。
 
 ## 本番への移行
+
+2026-10-11 人の確認により、lane ごとの人の既定は harness×lane `route_defaults` に一本化し、opencode-go は評価せず qwen は acp/pi のローカル既定候補にする。
 
 （land 段 `rollout` で書く。`[model_routing]` の全欄を `[routing]` に書き換える手順、`routing_stage` の初期値、enforce の承認手順を含める。）

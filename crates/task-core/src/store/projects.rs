@@ -160,72 +160,61 @@ impl SqliteStore {
     /// アーカイブ済み）。`ready_tasks` が 1 tick に 1 回だけ引く。
     pub(super) fn halted_projects_locked(
         conn: &Connection,
-    ) -> Result<std::collections::HashSet<String>, StoreError> {
+    ) -> Result<crate::wait::HaltedSet, StoreError> {
         let mut stmt = conn.prepare(
-            "SELECT id FROM projects WHERE status IN ('paused', 'cancelled') OR archived_at IS NOT NULL",
+            "SELECT id, status, archived_at IS NOT NULL FROM projects \
+             WHERE status IN ('paused', 'cancelled') OR archived_at IS NOT NULL",
         )?;
-        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
-        let mut out = std::collections::HashSet::new();
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, bool>(2)?,
+            ))
+        })?;
+        let mut out = crate::wait::HaltedSet::new();
         for row in rows {
-            out.insert(row?);
+            let (id, status, archived) = row?;
+            out.insert(id, halt_state(&status, archived));
         }
         Ok(out)
     }
 
-    /// ADR-0044 D6（Phase 55）: いま dispatch を止めている途中目標の id（`paused` / `cancelled`）。
+    /// ADR-0044 D6（Phase 55）: いま dispatch を止めている途中目標の id（`paused` / `cancelled`）→ 状態。
     pub(super) fn halted_milestones_locked(
         conn: &Connection,
-    ) -> Result<std::collections::HashSet<String>, StoreError> {
-        let mut stmt =
-            conn.prepare("SELECT id FROM milestones WHERE status IN ('paused', 'cancelled')")?;
-        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
-        let mut out = std::collections::HashSet::new();
+    ) -> Result<crate::wait::HaltedSet, StoreError> {
+        let mut stmt = conn
+            .prepare("SELECT id, status FROM milestones WHERE status IN ('paused', 'cancelled')")?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        let mut out = crate::wait::HaltedSet::new();
         for row in rows {
-            out.insert(row?);
+            let (id, status) = row?;
+            out.insert(id, halt_state(&status, false));
         }
         Ok(out)
     }
 
-    /// ADR-0079 D13（Phase R5a）: `task` が subtree の一時停止で止まっているか。自分か祖先が `paused_at` を
-    /// 持つ、または祖先が `halted_projects`（paused / cancelled / archived の案件）に属するなら `true`。
+    /// ADR-0079 D13（Phase R5a）/ ADR 2026-10-11-task-wait-reasons D3: `task` の祖先の行（親から root へ）。
     /// 祖先は `parent_id`、無ければ木の親（`tree.parent_unit.task_id`。採用で `parent_id` を書き換えない子）
     /// を辿る。循環と深すぎる鎖は `MAX_ANCESTRY` で打ち切る（壊れた行で dispatch 全体を止めない）。
-    pub(super) fn halted_by_ancestry_locked(
-        conn: &Connection,
-        task: &Task,
-        halted_projects: &std::collections::HashSet<String>,
-    ) -> Result<bool, StoreError> {
-        const MAX_ANCESTRY: usize = 32;
-        if task.paused_at.is_some() {
-            return Ok(true);
-        }
-        let parent_of = |t: &Task| {
-            t.parent_id.or_else(|| {
-                t.tree
-                    .as_ref()
-                    .and_then(|tree| tree.parent_unit.as_ref())
-                    .map(|u| u.task_id)
-            })
-        };
+    pub(super) fn ancestors_locked(conn: &Connection, task: &Task) -> Result<Vec<Task>, StoreError> {
+        let mut out = Vec::new();
         let mut seen = std::collections::HashSet::new();
-        let mut next = parent_of(task);
+        let mut next = crate::wait::parent_of(task);
         while let Some(id) = next {
-            if !seen.insert(id) || seen.len() > MAX_ANCESTRY {
+            if !seen.insert(id) || seen.len() > crate::wait::MAX_ANCESTRY {
                 break;
             }
             let Some(ancestor) = Self::get_locked(conn, id)? else {
                 break;
             };
-            if ancestor.paused_at.is_some()
-                || ancestor
-                    .project_id
-                    .is_some_and(|p| halted_projects.contains(&p.to_string()))
-            {
-                return Ok(true);
-            }
-            next = parent_of(&ancestor);
+            next = crate::wait::parent_of(&ancestor);
+            out.push(ancestor);
         }
-        Ok(false)
+        Ok(out)
     }
 
     pub(super) fn milestone_row(
@@ -768,5 +757,16 @@ impl SqliteStore {
             )?,
         };
         Ok(affected == 1)
+    }
+}
+
+/// `projects.status`／`milestones.status` → 止めている状態（アーカイブを優先）。
+fn halt_state(status: &str, archived: bool) -> crate::wait::HaltState {
+    if archived {
+        crate::wait::HaltState::Archived
+    } else if status == "cancelled" {
+        crate::wait::HaltState::Cancelled
+    } else {
+        crate::wait::HaltState::Paused
     }
 }

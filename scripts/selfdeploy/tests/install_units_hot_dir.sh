@@ -2,9 +2,9 @@
 # scripts/selfdeploy/tests/install_units_hot_dir.sh — ADR-0136「path の契約」:
 #
 #   install-units.sh が hot の根（CELERIS_STATE_DIR、または ~/.config/celeris/paths.env）を指定されると、
-#   celeris@・celeris-gui@・celeris-credentiald@ の unit に
+#   celeris@・celeris-web@・celeris-credentiald@ の unit に
 #   `%h/.local/celeris` を残さず根の絶対 path から読むこと、`~/.config/celeris` の参照は home のまま、
-#   celeris-web@ はテンプレートのまま、未指定なら従来と同一（テンプレートと byte 一致）であることを確かめる。
+#   未指定なら従来と同一（テンプレートと byte 一致）であることを確かめる。
 #
 # 本番には触れない: HOME・CELERIS_CONFIG_DIR・SD_UNIT_DIR は一時ディレクトリ、`systemctl` は PATH 先頭の偽物。
 # 実行: bash scripts/selfdeploy/tests/install_units_hot_dir.sh（引数なし）
@@ -41,8 +41,8 @@ run_install() {
     bash "$SD/install-units.sh" >"$WORK/$name/out.log" 2>&1
 }
 
-TEMPLATED="celeris@.service celeris-gui@.service celeris-web@.service celeris-web-lan.socket celeris-web-lan.service"
-HOT_UNITS="celeris@.service celeris-gui@.service celeris-credentiald@.service"
+TEMPLATED="celeris@.service celeris-web@.service celeris-web-lan.socket celeris-web-lan.service"
+HOT_UNITS="celeris@.service celeris-web@.service celeris-credentiald@.service"
 
 # ---- 1. 未指定: 従来と同一 ---------------------------------------------------
 if run_install default; then ok "default: install-units.sh exit 0"; else ng "default: exit non-zero: $(cat "$WORK/default/out.log")"; fi
@@ -84,17 +84,13 @@ check_hot() {
   grep -qx "WorkingDirectory=$root" "$f" || ng "$name: celeris@ WorkingDirectory is not $root"
   grep -q "^ExecStart=$root/releases/%i/bin/celeris --config %h/.config/celeris/config.toml " "$f" ||
     ng "$name: celeris@ ExecStart does not read $root/releases"
-  grep -qx "WorkingDirectory=$root/releases/%i/gui" "$WORK/$name/units/celeris-gui@.service" ||
-    ng "$name: celeris-gui@ WorkingDirectory is not under $root/releases"
   grep -q "exec $root/releases/%i/bin/celeris-credentiald serve" "$WORK/$name/units/celeris-credentiald@.service" ||
     ng "$name: credentiald ExecStart does not read $root/releases"
   grep -qx "Environment=CELERIS_CREDENTIALD_DATA_DIR=$root/credentiald" "$WORK/$name/units/celeris-credentiald@.service" ||
     ng "$name: credentiald data dir is not $root/credentiald"
-  if cmp -s "$SRC/celeris-web@.service" "$WORK/$name/units/celeris-web@.service"; then
-    ok "$name: celeris-web@ left as the template"
-  else
-    ng "$name: celeris-web@ changed"
-  fi
+  grep -qx "WorkingDirectory=$root/releases/%i/web/app" "$WORK/$name/units/celeris-web@.service" ||
+    ng "$name: web WorkingDirectory does not read the hot release"
+
 }
 
 ROOT=/local/celeris/"state"

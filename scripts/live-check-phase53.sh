@@ -4,7 +4,7 @@
 #
 #   bash scripts/live-check-phase53.sh
 #
-# 本番（~/.local/celeris/、ポート 7710/7700、systemd）には一切触らない:
+# 本番（~/.local/celeris/、ポート 7710/7720/7721、systemd）には一切触らない:
 #   - DB・workspaces・設定は `mktemp -d` の下だけ
 #   - API は 127.0.0.1 の**空きポート**（既定 7719。`PORT=... ` で変えられる）
 #   - ワーカーは `fake` アダプタ（LLM を呼ばない。ADR-0041 D5 と同じ流儀）
@@ -26,7 +26,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-[ "$PORT" != "7710" ] && [ "$PORT" != "7700" ] || { echo "本番のポートは使わない" >&2; exit 2; }
+[ "$PORT" != "7710" ] && [ "$PORT" != "7720" ] && [ "$PORT" != "7721" ] || { echo "本番のポートは使わない" >&2; exit 2; }
 
 echo "== build =="
 (cd "$ROOT" && cargo build -q -p celeris -p celerisctl)

@@ -60,9 +60,7 @@ CoSの `create_task` に `tier` を追加し、既存の部署管理者の `dele
 - 追加テスト: 各階層のID解決、未対応・無効ID、旧設定と秘密の移行・0600・失敗時の保持、API往復・非公開値の非露出、CoSの指定、観測欠落・期限切れ、難易度と残量の組み合わせ、起動前停止。
 - 実行経路: CLIスタブの実引数でClaude／GPT双方の全階層の `--model` と認証環境を確認。ディスパッチャーでは残量90%・20%・5%・不明と固定アカウントを使い、ワーカーが受け取ったモデルと実行イベントの一致を検証。実LLM呼び出しは行っていない。
 
-GUI再現: `cd gui && ./node_modules/.bin/react-router build` の後、リポジトリ直下で `node scripts/check-model-routing.mjs`。一時ポートのモックAPI・GUIのみを使用し、運用サービスには接続しない。既定の測定JSONは `/tmp/celeris-model-routing-measurements.json`。PNGは `docs/gui/model-routing/`。
-
-[スマホのプロバイダー画面](../gui/model-routing/providers-393.png)／[PCのプロバイダー画面](../gui/model-routing/providers-1440.png)／[スマホのアカウント画面](../gui/model-routing/accounts-393.png)。360／393／412／1440pxで確認。プロバイダー入力欄は44px以上、画面の横はみ出しなし。保存したIDがAPIに届くこととJSエラーなしを確認。
+画面の実装・再現手順・画像は廃止前の git 履歴に保存されている。
 
 このベースには記憶にある `docs/gui/mobile-gui-investigation-2026-09-20.md` は無かった。現在のナビ・Console実装を維持し、設定画面だけ変更した。Nothing 2a実機・IME・実アカウントでの6モデル利用可否は未検証。運用への取り込み後、実行IDの確認・設定と実機確認が必要。
 

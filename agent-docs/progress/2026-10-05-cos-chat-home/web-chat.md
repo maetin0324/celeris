@@ -67,6 +67,6 @@ ADR 2026-10-05-cos-chat-home D5・D6 に従い、web のホーム（`web/routes/
 - **共有 Markdown の表パース**: `web/components/content/markdown.tsx` の `textBlocks` は code fence の直後に表が続くと表として解析しない（fence 除去で段落先頭に `\n` が残るため）。e2e は表を fence より前に置いて回避済み。`web/components/` は web-chat の範囲外なので未修正（e2e-chat.md の未解決に記録）。
 - **CoS 代答カードの詳細 link の実 route 不在**: `card.href` をそのまま使うが、実 daemon が代答カードに置く `/cos/operations/{o}` のような href に web の route が無く、404 画面になる。fixture では実在 route（`/tasks/{id}`・`/inbox`・`/?thread=…`）で検証済み。実 route の追加は API/schema に触れるため別 task（cards.md の提案）。
 - **triage が作るカードの href は `/?thread=<inbox>`**: 元の待ちの画面（`/tasks/{id}` など）へ直接行けない。元待ちの href を Card に足す案は API schema の変更のため別 task（cards.md の提案）。
-- **override の本文の食い違い**: data 層は `gui-api.md` §3.129・生成型 `OverrideBody {action, reason}` に従った（ADR D2 の表の `{idempotency_key, expected_event_id, mode, reason}` と食い違う。実装と生成型を正とした。data.md の未解決）。
+- **override の本文の食い違い**: data 層は `api.md` §3.129・生成型 `OverrideBody {action, reason}` に従った（ADR D2 の表の `{idempotency_key, expected_event_id, mode, reason}` と食い違う。実装と生成型を正とした。data.md の未解決）。
 - **受信箱の badge 件数**: thread API に含まれず、home が既存の受信箱データ（`inboxItemsQuery` の `counts.total`）から `inboxWaitingCount` を渡す。100 件より古い受信箱は最初の頁に入らない限り表示できない（API に `kind=inbox` フィルタが無い。threads.md の未解決）。
 - **keyboard は `visualViewport` fake**: 実端末 OS の keyboard・IME の実機確認は含まない（e2e-narrow.md）。

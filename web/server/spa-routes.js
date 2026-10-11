@@ -28,6 +28,8 @@ export const spaRoutePatterns = [
   "/tasks/$id/changes",
   "/tasks/$id/runs/$runId",
   "/plans/new",
+  "/cron",
+  "/cron/$id",
   "/daemon",
   "/providers",
   "/models",

@@ -26,7 +26,7 @@ updated: 2026-10-04
 - `task_ops::view::ExecutionWorkUnitView.check_progress`（最後の試行の現在の検査・済んだ検査）。
 - `GET /api/v1/tasks/{id}/work-units/{wu_id}/check-log[?index&bytes]` → `WorkUnitCheckLog`（既定 16 KiB・上限 64 KiB、
   UTF-8 境界）。
-- 文書: `docs/api/v1/gui-api.md`（§2 #177・§3.5 の注・§3.126.19）と写し `gui/docs/celeris-api-v1.md`
+- 文書: `docs/api/v1/api.md`（§2 #177・§3.5 の注・§3.126.19）と写し `gui/docs/celeris-api-v1.md`
   （`scripts/sync-gui-docs.sh`）。schema 再生成（`docs/api/v1/*.schema.json`・`gui/app/celeris/types.ts`・
   `web/api/generated/*`）。
 - GUI: タスク詳細の WU の行に「検査 i/n 実行中: cmd（済・不合格）」・済んだ検査（通過/不合格・exit・所要時間）・

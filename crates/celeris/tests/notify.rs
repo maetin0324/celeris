@@ -730,7 +730,7 @@ fn task_failed_notes_when_the_task_was_already_delivered() {
 // ---- 文面のリンク ----
 
 #[test]
-fn links_are_added_only_when_a_gui_base_url_is_configured() {
+fn links_are_added_only_when_a_web_base_url_is_configured() {
     let env = Env::new();
     env.seed_org();
     let project = env.seed_project(ProjectStatus::Active);
@@ -754,7 +754,7 @@ fn links_are_added_only_when_a_gui_base_url_is_configured() {
     let with = notify::scan(
         env.as_store(),
         env.started_at,
-        Some("http://192.168.1.103:7700"),
+        Some("http://192.168.1.103:7720"),
     )
     .unwrap_or_else(|e| panic!("scan: {e}"));
     // ADR-0079 D13（Phase R5a）: `milestone_ready` は無いので、秘書の返事（`secretary_reply`）のリンクで見る。
@@ -765,7 +765,7 @@ fn links_are_added_only_when_a_gui_base_url_is_configured() {
         .body;
     assert!(
         body.contains(&format!(
-            "http://192.168.1.103:7700/?scope=project:{project}"
+            "http://192.168.1.103:7720/?scope=project:{project}"
         )),
         "{body}"
     );

@@ -6,7 +6,7 @@ updated: 2026-10-06
 ---
 # web-chat / data
 
-ADR 2026-10-05-cos-chat-home D2（gui-api.md §3.127・「チャット stream」節）と D5 に従い、`web/features/chat/data/` に CoS チャットの data 層を作った。型は `web/api/generated/types.ts` の `Chat*` を使う。API schema・`gui/`・`crates/` は変えていない。
+ADR 2026-10-05-cos-chat-home D2（api.md §3.127・「チャット stream」節）と D5 に従い、`web/features/chat/data/` に CoS チャットの data 層を作った。型は `web/api/generated/types.ts` の `Chat*` を使う。API schema・`gui/`・`crates/` は変えていない。
 
 ## 作ったもの
 
@@ -37,7 +37,7 @@ attempt 1 の再検証（2026-10-06、HEAD `82940843`）: 初回の `install --o
 ## 未解決
 
 - base（c40b3669）の時点で `pnpm lint` が既存 4 試験 file（`components/content/artifact-preview.test.tsx`・`components/ui/{confirm-dialog,drawer,gallery}.test.tsx`）の import 並び（biome organizeImports）で exit 1 だった。計画の check（全体 lint）を通すため、各 file の import 1 行を biome の並び（`OVERLAY_FIXTURE_TIMEOUT` を先頭）に直した（attempt 2）。中身の変更は無い。同じ修正を並行の葉が当てても同一の差分になる。
-- override の本文は gui-api.md §3.129・生成型 `OverrideBody {action, reason}` に従った（ADR D2 の表の `{idempotency_key, expected_event_id, mode, reason}` とは食い違う。実装と生成型を正とした）。
+- override の本文は api.md §3.129・生成型 `OverrideBody {action, reason}` に従った（ADR D2 の表の `{idempotency_key, expected_event_id, mode, reason}` とは食い違う。実装と生成型を正とした）。
 
 ## 提案
 

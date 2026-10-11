@@ -36,7 +36,7 @@ browser 台帳生成は release 全体を失敗にしない。prepare が成功�
 celerisctl browser doctor --config /absolute/path/to/config.toml
 celerisctl browser doctor --config /absolute/path/to/config.toml --json
 # API の場所を明示する場合（token 自体は argv に載せない）
-celerisctl --api-url http://127.0.0.1:7700/api/v1 browser doctor \
+celerisctl --api-url http://127.0.0.1:7710/api/v1 browser doctor \
   --token-file /absolute/path/to/api-token
 ```
 

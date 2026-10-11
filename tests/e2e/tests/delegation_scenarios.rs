@@ -158,6 +158,7 @@ model = "fake"
 
     fn celerisctl(&self, args: &[&str]) -> String {
         let out = Command::new(bin("celerisctl"))
+            .env_remove("CELERIS_CONFIG")
             .arg("--db")
             .arg(&self.db)
             .args(args)

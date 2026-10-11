@@ -9,7 +9,7 @@
 - `docs/DESIGN.md` の crate 内参照を `docs/SPEC.md` に変更した。
 - テスト中のパス例も agent-docs 配置へ合わせた。
 - `cargo fmt` の差分（`crates/celerisctl/src/commands/mcp.rs`、本文は docs パス変更のみで整形は無関係）を適用。
-- 型の doc comment（`docs/gui/api.md`→`docs/api/v1/gui-api.md`、`docs/knowledge.md`→`docs/guides/knowledge.md`、`docs/adr/0074-...`→`agent-docs/adr/0074-...`）の更新で生成 schema の description が変わったため、`UPDATE_SCHEMA=1 cargo test -p task-api --lib` と `UPDATE_SCHEMA=1 cargo test -p task-core --lib store::tests::event_row_schema_matches_committed` で `docs/api/v1/api-v1.schema.json`・`docs/api/v1/event.schema.json` を再生成した（memory: 型の doc comment を変えると生成 schema の description も変わる）。
+- 型の doc comment（`docs/gui/api.md`→`docs/api/v1/api.md`、`docs/knowledge.md`→`docs/guides/knowledge.md`、`docs/adr/0074-...`→`agent-docs/adr/0074-...`）の更新で生成 schema の description が変わったため、`UPDATE_SCHEMA=1 cargo test -p task-api --lib` と `UPDATE_SCHEMA=1 cargo test -p task-core --lib store::tests::event_row_schema_matches_committed` で `docs/api/v1/api-v1.schema.json`・`docs/api/v1/event.schema.json` を再生成した（memory: 型の doc comment を変えると生成 schema の description も変わる）。
 
 ## plan_issue（2 回目の run、解消済み）
 

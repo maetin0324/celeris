@@ -20,7 +20,7 @@ tasks: [01M4CDNAYX6J68WTX7SKF0DJ64]
 - `PATCH /org/{id}/browser-settings`: `credential_use: bool` を追加（Phase 1 集合を実体化して `credential_use` を足す/外す）。
   `credential_policy_ids` は実在しない id で 422 `unknown_site_policy`。承認方針は不変（`ALWAYS_APPROVED`）。
 - `UPDATE_SCHEMA=1` で `docs/api/v1/api-v1.schema.json` 再生成、web（`pnpm -C web gen:types`）・gui（`node scripts/gen-types.mjs`。pnpm 版不一致のため直接）の生成型更新。
-  `docs/api/v1/gui-api.md` §3.132 を追加。
+  `docs/api/v1/api.md` §3.132 を追加。
 - 版数固定の試験（`SCHEMA_VERSION, 58` 12 箇所・chat の `assert_eq!(version, 58)`・delivery.rs の版数一覧に 60）を更新。
 
 ## ADR との差（付記の提案）

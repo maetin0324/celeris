@@ -170,7 +170,7 @@ rollover は context 上限、`[sessions] rollover_tokens`、または harness/s
 導入後と通知設定を変えた後に、人が web と API で次の 4 点を確かめる。本番での test 送信と override は人が行う。
 
 1. **代答**: `GET /api/v1/cos/inbox?state=answered` で item の `reason`・`policy_version`・`operation_id` を見る。`GET /api/v1/cos/operations/{operation_id}` と元 task の events で actor=cos と理由を確認し、「受信箱」スレッドに「CoS が代わりに答えた」カードがあることを見る。
-2. **Discord escalation**: `state=escalated` の item に対応する通知が `GET /api/v1/notify` に 1 件だけあり、本文に要点・選択肢・推奨と理由・web link（`[notify] gui_base_url` + 該当画面）が入っていることを見る。`gui_base_url` が未設定・不正なら送信せず、`notify.gui_base_url is missing or invalid` として未達のまま残る。webhook の secret（`[notify] discord_webhook_secret`）が無ければ未設定扱いで未達になる。どちらでも元の待ちは解決しない。Discord の返信・リアクションでは状態が変わらないことも確かめる。
+2. **Discord escalation**: `state=escalated` の item に対応する通知が `GET /api/v1/notify` に 1 件だけあり、本文に要点・選択肢・推奨と理由・web link（`[notify] web_base_url` + 該当画面）が入っていることを見る。`web_base_url` が未設定・不正なら送信せず、`notify.web_base_url is missing or invalid` として未達のまま残る。webhook の secret（`[notify] discord_webhook_secret`）が無ければ未設定扱いで未達になる。どちらでも元の待ちは解決しない。Discord の返信・リアクションでは状態が変わらないことも確かめる。
 3. **CoS 不在の退避**: `cos.enabled=false`・CoS run の失敗・quota 切れ・`unavailable_after_secs` 超過のどれかで、item が `fallback` になり、「CoS 不在のため直接通知」の見出しと不在理由が付いた通知が revision ごとに 1 件だけ出ることを見る。CoS が回復しても同じ revision を再通知・代答しない。
 4. **取消・差し戻し**: 代答カードの取消/差し戻し、または `POST /api/v1/cos/operations/{o}/override`（`mode=revoke|return`、人の認証のみ、理由必須）を使う。未消費の回答は待ちが新 revision で開き直り、消費済みは対象 task が pause されて新しい人待ちになり、不可逆な副作用は補償 task の id が返る。いずれも元の events は消えない。CoS の認証で override すると拒否される。
 

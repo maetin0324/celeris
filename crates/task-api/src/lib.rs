@@ -1,4 +1,4 @@
-//! `task-api`: celeris の HTTP API v1（`docs/api/v1/gui-api.md`、ADR-0013 D2〜D4 / D8 / D11）。
+//! `task-api`: celeris の HTTP API v1（`docs/api/v1/api.md`、ADR-0013 D2〜D4 / D8 / D11）。
 //!
 //! - `/api/v1` 配下の 26 エンドポイント。JSON で応答し、エラーは `application/problem+json`、通知は SSE。
 //! - ハンドラは協調判断をしない。読み取りはストアのクエリと `task-ops` のビュー、状態変更は `task-ops` 経由だけ。
@@ -228,8 +228,8 @@ pub struct ApiSettings {
     /// ADR-0037 D2（Phase 39）: `[notify] discord_webhook_secret`。この id の秘密が `[secrets] dir` に
     /// あれば「設定済み」。**値は API では読まない**（指紋だけ出す）。
     pub notify_secret_id: String,
-    /// ADR-0037 D3: `[notify] gui_base_url`（文面のリンクの根。無ければリンク無し）。
-    pub notify_gui_base_url: Option<String>,
+    /// ADR-0037 D3: `[notify] web_base_url`（文面のリンクの根。無ければリンク無し）。
+    pub notify_web_base_url: Option<String>,
     /// ADR-0133 D6: outbound inbox and digest policy values exposed by GET /notify.
     pub notify_inbox_batch_secs: u64,
     pub notify_inbox_reminder_secs: u64,
@@ -325,7 +325,7 @@ impl std::fmt::Debug for ApiSettings {
             )
             .field("memory_dir", &self.memory_dir)
             .field("notify_secret_id", &self.notify_secret_id)
-            .field("notify_gui_base_url", &self.notify_gui_base_url)
+            .field("notify_web_base_url", &self.notify_web_base_url)
             .field("releases", &self.releases.as_ref().map(|_| "<source>"))
             .field("release", &self.release)
             .field("mode", &self.mode)

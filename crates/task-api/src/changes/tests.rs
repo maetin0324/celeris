@@ -84,7 +84,7 @@ fn the_pull_request_body_is_deterministic_and_links_back_to_celeris() {
         )),
         "{body}"
     );
-    // `gui_base_url` が無ければリンクは付けない。
+    // `web_base_url` が無ければリンクは付けない。
     let plain = pr_body(&task, None, None);
     assert!(
         plain.contains(&format!("Celeris task {}", task.id)),

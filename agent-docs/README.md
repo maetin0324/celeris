@@ -8,7 +8,7 @@ ADR-0128 により、設計判断の経緯・進捗・作業記録は `docs/` �
 1. [`../docs/SPEC.md`](../docs/SPEC.md) — 現行の仕様（正本）
 2. [`../docs/architecture-map.md`](../docs/architecture-map.md) — subsystem → crate/module → entry point → ADR の索引
 3. 関係する ADR — `adr/`（番号付き、0128 まで）と `adr/YYYY-MM-DD-<slug>.md`（0128 以降の新しい ADR）。
-   `gui/adr/`・`web/adr/` はそれぞれ gui・web/ SPA 固有の ADR。
+   `web/adr/` は SPA 固有の ADR。廃止された画面の ADR も歴史的判断として保持する。
 4. `progress/` の索引 — `sh scripts/dev/progress-index.sh` で現在地（running・blocked を先に）を生成する。
    旧 `PROGRESS.md`（凍結、以後の追記は無い）はこの索引ができる前の記録。
 
@@ -21,7 +21,7 @@ ADR-0128 により、設計判断の経緯・進捗・作業記録は `docs/` �
 - `notes/` — 作業メモ
 - `ops/` — 一度きりの作業手順・agent 向け運用規則
 - `guides/` — agent 向けの設計・検証・作業規則（例: `guides/testing.md`、WU の `checks` と範囲 check の書き方 `guides/work-unit-checks.md`）
-- `gui/`, `web/` — gui・web/ SPA の設計記録・ADR・進捗
+- `web/` — SPA の設計記録・ADR・進捗
 - `GOAL_TEMPLATE.md` — 新規 goal のテンプレート
 - `PROGRESS.md` — 旧 `docs/PROGRESS.md`（凍結。追記しない）
 

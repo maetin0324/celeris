@@ -204,6 +204,7 @@ model = "fake"
 
     fn replay_is_consistent(&self) {
         let out = Command::new(bin("celerisctl"))
+            .env_remove("CELERIS_CONFIG")
             .args(["--db", self.db.to_str().unwrap(), "replay"])
             .output()
             .unwrap();

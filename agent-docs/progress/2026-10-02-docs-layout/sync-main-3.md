@@ -16,7 +16,7 @@ updated: 2026-10-03
 - 衝突 3 件を解いた:
   - `docs/PROGRESS.md`（modify/delete）: `sh scripts/dev/progress-transition.sh main` で解いた。
   - `scripts/selfdeploy/install-units.sh`: main の hot root の unit 描画（`paths_env_state_dir`・`render_unit`・`UNITS`・`RENDER_DIR`）を基に、
-    この branch の変更（運用文書のパス `docs/ops/web-parallel-operation.md`）だけ重ねた。
+    この branch の変更（運用文書のパス `docs/ops/web-operation.md`）だけ重ねた。
   - `agent-docs/adr/0138-browser-prod-admission-confidential-release.md`: main の本文（2026-10-03 訂正）を基に、手順書リンクを `../../docs/ops/` へ直しただけ。
 - main が旧配置に足したものを新配置へ移した:
   - `docs/adr/0136-local-hot-data-layout.md`・`docs/adr/0139-langmem-proxy-bearer-and-verify-proxy-bind.md` → `agent-docs/adr/`。

@@ -6,7 +6,7 @@ updated: 2026-10-02
 ---
 # docs 再構成 — 壊れた文書参照の修正（cleanup-api / links）
 
-前回の全体リンク検査で残った参照を、実在する移動先へ直すか、廃止された参照を文言に置き換えた。`gui/docs/celeris-api-v1.md` は変更禁止のため、参照先 `docs/api/v1/overview.md` を `gui-api.md` への短い案内ページとして再作成した。API の説明本文は `gui-api.md` に集約したまま、コピー元の旧パスを壊さない。
+前回の全体リンク検査で残った参照を、実在する移動先へ直すか、廃止された参照を文言に置き換えた。`gui/docs/celeris-api-v1.md` は変更禁止のため、参照先 `docs/api/v1/overview.md` を `api.md` への短い案内ページとして再作成した。API の説明本文は `api.md` に集約したまま、コピー元の旧パスを壊さない。
 
 ## 修正一覧
 
@@ -19,10 +19,10 @@ updated: 2026-10-02
 | README.md:166-167 | `docs/adr/0046*`〜`0048*` | `agent-docs/adr/` |
 | README.md:169 | `docs/providers.md` | `docs/guides/providers.md` |
 | README.md:170 | `docs/workspace.md` | `docs/guides/workspace.md` |
-| README.md:170 | `docs/gui/api.md` | `docs/api/v1/gui-api.md` |
+| README.md:170 | `docs/gui/api.md` | `docs/api/v1/api.md` |
 | agent-docs/adr/0081-web-spa-frontend.md:9 | `../../gui/docs/adr/0002-frontend-stack.md` | `../gui/adr/0002-frontend-stack.md`（既存 agent-docs 内の ADR） |
 | agent-docs/adr/0081-web-spa-frontend.md:206 | `../api/v1/api-v1.schema.json` | `../../docs/api/v1/api-v1.schema.json` |
-| agent-docs/gui/design.md:6,229,431 | `api.md` | `../../docs/api/v1/gui-api.md` |
+| agent-docs/gui/design.md:6,229,431 | `api.md` | `../../docs/api/v1/api.md` |
 | agent-docs/gui/design.md:7,433 | `bootstrap/README.md` | 削除（bootstrap 資料が現行ツリーに無い旨を記載） |
 | agent-docs/gui/design.md:7 | `docs/adr/0013-celeris-api-and-gui-foundations.md` | `../adr/0013-taskd-api-and-gui-foundations.md` |
 | agent-docs/progress/phase-R.md:832 | `../ops/adr-0079-r5b-runbook.md` | 削除（当時の手順参照を記録文に置換） |
@@ -40,16 +40,16 @@ updated: 2026-10-02
 | docs/guides/providers.md:123 | `selfdeploy.md` | `../ops/selfdeploy.md` |
 | docs/guides/providers.md:126 | ADR-0049 の docs/adr 相対参照 | `../../agent-docs/adr/0049-portable-providers-and-codex-usage.md` |
 | docs/guides/repository-documentation-maintenance.md:7 | ADR-0068 の docs/adr 相対参照 | `../../agent-docs/adr/0068-knowledge-gc-and-repository-docs-maintenance.md` |
-| docs/ops/web-parallel-operation.md:15 | `adr/web-0003-parallel-operation.md` | `../../agent-docs/web/adr/web-0003-parallel-operation.md` |
-| docs/ops/web-parallel-operation.md:34 | `../selfdeploy.md` | 同ディレクトリの `selfdeploy.md` |
-| docs/ops/web-parallel-operation.md:105 | `../progress/phase-web.md` | `../../agent-docs/progress/phase-web.md` |
+| docs/ops/web-operation.md:15 | `adr/web-0003-parallel-operation.md` | `../../agent-docs/web/adr/web-0003-parallel-operation.md` |
+| docs/ops/web-operation.md:34 | `../selfdeploy.md` | 同ディレクトリの `selfdeploy.md` |
+| docs/ops/web-operation.md:105 | `../progress/phase-web.md` | `../../agent-docs/progress/phase-web.md` |
 | gui/docs/celeris-api-v1.md:3 | `../../docs/api/v1/overview.md` | gui/ は変更禁止のため据え置き。移動先の転送ページを復元 |
-| docs/api/v1/overview.md | 削除済みだった旧 API overview | `gui-api.md` へ誘導する短い転送ページとして再作成 |
+| docs/api/v1/overview.md | 削除済みだった旧 API overview | `api.md` へ誘導する短い転送ページとして再作成 |
 
 旧ファイルの最終 commit は README.md が `4f0e1ab9`、overview.md が統合前 `a42f9a54`、その他の修正対象 Markdown は `a42f9a54`。gui の参照元は `01fd1f91`。`overview.md` は新規作成のため旧ファイルの記録では `a42f9a54` を使用。
 
 ## 検証
 
 - `sh scripts/dev/check-doc-links.sh` — exit 0、`check-doc-links: ok`。
-- `docs/api/v1/overview.md` は `gui-api.md` へのリンクのみを持つ短い案内ページ。
+- `docs/api/v1/overview.md` は `api.md` へのリンクのみを持つ短い案内ページ。
 - `gui/`、`crates/`、`web/`、`scripts/`、schema JSON は変更していない。

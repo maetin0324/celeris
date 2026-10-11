@@ -19,7 +19,7 @@ completed: 2026-10-07
     未知 id の失効 404 `device_not_found`。
 - `ApiState` に注入できる時計 `ApiClock`（UNIX 秒）と `with_clock` を足した。端末の期限と assertion の期限はこの時計で判定する。
 - schema（`docs/api/v1/api-v1.schema.json`）を `UPDATE_SCHEMA=1` で再生成し、gui（`pnpm gen:types`）・web（`gen-types.mjs`）の生成型を再生成した。
-- `docs/api/v1/gui-api.md` に表の #187〜190 と §3.128 を足した。
+- `docs/api/v1/api.md` に表の #187〜190 と §3.128 を足した。
 - ADR に付記（api 葉の実装突き合わせ）を足した。D2 の `…/resume` は `…/verify`、`…/{id}/revoke` は `DELETE …/{id}` になった（WU の objective に合わせた）。
 
 ## 証拠

@@ -1,12 +1,12 @@
 ---
-title: docs 再構成 — gui-api.md §3.1〜§3.62 を handler・型と照らして直す（cleanup-api / api-s3a）
+title: docs 再構成 — api.md §3.1〜§3.62 を handler・型と照らして直す（cleanup-api / api-s3a）
 tasks: [01M3YNFVFZG5AFFM0RS05X22ZT]
 status: done
 updated: 2026-10-02
 ---
-# docs 再構成 — gui-api.md §3.1〜§3.62 を handler・型と照らして直す（cleanup-api / api-s3a）
+# docs 再構成 — api.md §3.1〜§3.62 を handler・型と照らして直す（cleanup-api / api-s3a）
 
-完了日: 2026-10-02。編集は `docs/api/v1/gui-api.md` の `### 3.1` から `### 3.63`（retry）の見出しの手前までだけ。
+完了日: 2026-10-02。編集は `docs/api/v1/api.md` の `### 3.1` から `### 3.63`（retry）の見出しの手前までだけ。
 `## 3.` の見出し・記法の行と `### 3.63` の見出し行、§2 の表は触っていない。crates/・web/・gui/・scripts/・CLAUDE.md・.claude/・
 docs-layout.tsv・*.schema.json は読んだだけ。
 
@@ -14,7 +14,7 @@ docs-layout.tsv・*.schema.json は読んだだけ。
 
 | 処理(削除/統合/移動/修正) | 旧パス | 新パス or - | 理由 | 最後の commit |
 |---|---|---|---|---|
-| 修正 | `docs/api/v1/gui-api.md`（§3.1〜§3.62） | - | 各節を task-api の handler・types.rs・task-ops と照合し、食い違い・撤去済みの挙動・経緯を直した | `d9524c0f` |
+| 修正 | `docs/api/v1/api.md`（§3.1〜§3.62） | - | 各節を task-api の handler・types.rs・task-ops と照合し、食い違い・撤去済みの挙動・経緯を直した | `d9524c0f` |
 
 ## 直した点（要点。根拠は crates/ のファイル:行）
 
@@ -34,7 +34,7 @@ docs-layout.tsv・*.schema.json は読んだだけ。
 ## 証拠コマンドと結果
 
 - 見出しの route: `find crates/task-api/src -name '*.rs' -exec cat {} + | tr -d '\n' | grep -oE '\.route\( *"[^"]+"'` で route を取り、範囲内の `###`/`####` 見出しのパスを照合 → 不一致は §3.8 の `{a|b}` 表記 1 件のみ（展開した 5 本＋artifacts/{idx} はすべて実在）。
-- 範囲外不変: `git diff -U0 docs/api/v1/gui-api.md` の hunk は旧 472〜1638 行の中だけ（§2 の表・`### 3.63` 見出し以降は差分なし）。
+- 範囲外不変: `git diff -U0 docs/api/v1/api.md` の hunk は旧 472〜1638 行の中だけ（§2 の表・`### 3.63` 見出し以降は差分なし）。
 - 新規の相対リンクなし（差分行に `](` 0 件）。
 - 照合は 4 つの subagent が chunk ごとに読み、主要な主張（POST /tasks の require_admin、milestones decide の 410、SCHEMA_VERSION 37、CONVERSATION_MAX_TURNS 10）を手で再確認した。
 - cargo test / clippy は docs のみの変更のため未実行。

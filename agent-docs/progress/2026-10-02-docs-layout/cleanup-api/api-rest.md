@@ -1,19 +1,19 @@
 ---
-title: docs 再構成 — gui-api.md §4〜§10 を実装と照らして直し、経緯の節を畳む（cleanup-api / api-rest）
+title: docs 再構成 — api.md §4〜§10 を実装と照らして直し、経緯の節を畳む（cleanup-api / api-rest）
 tasks: [01M3YNFVFZG5AFFM0RS05X22ZT]
 status: done
 updated: 2026-10-02
 ---
-# docs 再構成 — gui-api.md §4〜§10 を実装と照らして直し、経緯の節を畳む（cleanup-api / api-rest）
+# docs 再構成 — api.md §4〜§10 を実装と照らして直し、経緯の節を畳む（cleanup-api / api-rest）
 
-完了日: 2026-10-02。担当は `docs/api/v1/gui-api.md` の §4 以降だけ（§1〜§3 は兄弟 leaf）。crates/・web/・gui/・scripts/・
+完了日: 2026-10-02。担当は `docs/api/v1/api.md` の §4 以降だけ（§1〜§3 は兄弟 leaf）。crates/・web/・gui/・scripts/・
 CLAUDE.md・.claude/・`scripts/dev/docs-layout.tsv`・`*.schema.json` は読んだだけで変えていない。
 
 ## 処理した文書
 
 | 処理(削除/統合/移動/修正) | 旧パス | 新パス or - | 理由 | 最後の commit |
 |---|---|---|---|---|
-| 修正 | `docs/api/v1/gui-api.md` §4〜§10 | - | sse.rs・types.rs・schema.rs・task-ops の計算と照らして食い違いを直し、手書きの Rust 型の写し（旧 §6.2、約 600 行）を削って型の出所の索引にした。§9『未決・確認事項』を本文へ畳み、§10 の経緯の題を外した | `d9524c0f` |
+| 修正 | `docs/api/v1/api.md` §4〜§10 | - | sse.rs・types.rs・schema.rs・task-ops の計算と照らして食い違いを直し、手書きの Rust 型の写し（旧 §6.2、約 600 行）を削って型の出所の索引にした。§9『未決・確認事項』を本文へ畳み、§10 の経緯の題を外した | `d9524c0f` |
 
 ## 直した点
 
@@ -31,12 +31,12 @@ CLAUDE.md・.claude/・`scripts/dev/docs-layout.tsv`・`*.schema.json` は読ん
 
 ## 証拠
 
-- `grep -nE '^#+ .*(未決|Phase 9b)' docs/api/v1/gui-api.md` → 出力なし（exit 1）。
-- `grep -n '^## ' docs/api/v1/gui-api.md` → §4 SSE、§5、§6、§7、§8 試験の置き場所、§10 要求の検査と細部の挙動。
-- `sh scripts/dev/check-doc-links.sh` → exit 1（43 件）。gui-api.md の行は 0 件。残りは他の文書（`docs/ops/web-parallel-operation.md`、`gui/docs/celeris-api-v1.md` の overview.md など）で、この leaf の範囲外。
+- `grep -nE '^#+ .*(未決|Phase 9b)' docs/api/v1/api.md` → 出力なし（exit 1）。
+- `grep -n '^## ' docs/api/v1/api.md` → §4 SSE、§5、§6、§7、§8 試験の置き場所、§10 要求の検査と細部の挙動。
+- `sh scripts/dev/check-doc-links.sh` → exit 1（43 件）。api.md の行は 0 件。残りは他の文書（`docs/ops/web-operation.md`、`gui/docs/celeris-api-v1.md` の overview.md など）で、この leaf の範囲外。
 - 照合は sse.rs・lib.rs・schema.rs・types.rs・task-ops の inbox.rs / view.rs / derive.rs / gate.rs・task-api の stats.rs / middleware.rs / files.rs を読んで行った（file:line は作業中に確認）。
-- `git diff --stat` → `docs/api/v1/gui-api.md | 829 +++---…`（106 行追加・723 行削除）。この記録以外のファイルは変えていない。
-- cargo test / clippy は実行していない（変更は Markdown だけで、crates から gui-api.md を `include_str!` / 読み込みしている箇所は無い: `grep -rn 'gui-api.md' crates --include=*.rs | grep -E 'include_str|read'` → 0 件）。
+- `git diff --stat` → `docs/api/v1/api.md | 829 +++---…`（106 行追加・723 行削除）。この記録以外のファイルは変えていない。
+- cargo test / clippy は実行していない（変更は Markdown だけで、crates から api.md を `include_str!` / 読み込みしている箇所は無い: `grep -rn 'api.md' crates --include=*.rs | grep -E 'include_str|read'` → 0 件）。
 
 ## 未解決
 

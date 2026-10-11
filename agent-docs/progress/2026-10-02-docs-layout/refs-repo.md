@@ -22,15 +22,15 @@ updated: 2026-10-02
 - `.claude/agents/auditor.md`・`implementer.md`: DESIGN.md の参照を SPEC.md・関係 ADR・CLAUDE.md の禁止事項へ。
 - `docs/architecture-map.md`: `adr/…` を `../agent-docs/adr/…`、`progress/…` を `../agent-docs/progress/…`、`selfdeploy.md` を `ops/selfdeploy.md`、
   web の implementation plan を `../agent-docs/web/` へ。DESIGN 節へのリンクは対応する ADR（0001・0002・0003・0004・0005・0006・0008・0010・0013・0020・0026・0027）と SPEC へ置き換えた。
-- `scripts/`: selfdeploy（`docs/ops/selfdeploy.md`・`docs/ops/web-parallel-operation.md`、`SD_SENSITIVE_PATTERNS` の ADR-0040/0041 を `agent-docs/adr/`）、
-  `sync-gui-docs.sh`（正本を `docs/api/v1/gui-api.md` に。写しへの名前置換と、正本と同じディレクトリへの相対リンクの向け直し）、
+- `scripts/`: selfdeploy（`docs/ops/selfdeploy.md`・`docs/ops/web-operation.md`、`SD_SENSITIVE_PATTERNS` の ADR-0040/0041 を `agent-docs/adr/`）、
+  `sync-gui-docs.sh`（正本を `docs/api/v1/api.md` に。写しへの名前置換と、正本と同じディレクトリへの相対リンクの向け直し）、
   `check-browser-acceptance.sh`、`check-model-routing.mjs`（出力先 `agent-docs/gui/model-routing`）、`rdc/`、`dev/test-parallel.sh`・`source-size-report.toml`、
   `dev/check-architecture-map.py` の注記、`dev/check-doc-links.sh`（`check-adr-numbers.sh` を移行期間の対象外に追加。旧 ADR ディレクトリを名指しするため）。
 - `web/`: `check-parity.mjs`（と試験）が読む表を `agent-docs/web/feature-parity.md` に。コメントの参照、`api/generated/schema.json` の説明文
-  （`docs/api/v1/gui-api.md`・`docs/guides/knowledge.md`）。
-- `gui/`: コメントの参照（`docs/api/v1/gui-api.md`・`docs/guides/mcp.md`・`agent-docs/adr/…` など）、`check-run-log.mjs` の既定出力先の書き方、
+  （`docs/api/v1/api.md`・`docs/guides/knowledge.md`）。
+- `gui/`: コメントの参照（`docs/api/v1/api.md`・`docs/guides/mcp.md`・`agent-docs/adr/…` など）、`check-run-log.mjs` の既定出力先の書き方、
   `gui/docs/celeris-api-v1.md`・`gui/docs/adr/0002-frontend-stack.md` の壊れたリンク。
-- `docs/api/v1/gui-api.md` 3 行目の壊れたリンク（`../celeris-api-v1.md` → `overview.md`）。
+- `docs/api/v1/api.md` 3 行目の壊れたリンク（`../celeris-api-v1.md` → `overview.md`）。
 - `docs/README.md`・`agent-docs/README.md`: 一覧を最終の配置に合わせ、旧 `docs/adr/`・`docs/progress/` が移行期間の案内だけであること、検査 3 本を書いた。
 
 ## 証拠
@@ -45,7 +45,7 @@ updated: 2026-10-02
 ## 未解決
 
 - `web/api/generated/schema.json` は `docs/api/v1/api-v1.schema.json`（crates の doc comment から生成）の写しで、`web/scripts/gen-types.mjs --check` が一致を見る。
-  この branch では web 側だけ新パスに直したので、refs-crates が Rust の doc comment を同じ新パス（`docs/api/v1/gui-api.md`・`docs/guides/knowledge.md`）に直して
+  この branch では web 側だけ新パスに直したので、refs-crates が Rust の doc comment を同じ新パス（`docs/api/v1/api.md`・`docs/guides/knowledge.md`）に直して
   schema を再生成するまで、単独では一致しない。integrate-refs で `node web/scripts/gen-types.mjs --check` を確かめる。
 - `gui/docs/celeris-api-v1.md`（GUI 側の写し）はこの task 以前から正本とずれている（`sh scripts/sync-gui-docs.sh --check` は差分あり）。API 説明の整理は cleanup-api に任せ、ここでは同期していない。
 - web・gui の node_modules が無いので vitest（`web/test/scripts/check-parity.test.ts`）は走らせていない。

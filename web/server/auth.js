@@ -5,8 +5,7 @@ import express from "express";
 // 認証と session（agent-docs/web/implementation-plan.md P1-05、H3 の決まるまでの扱い）。
 // - 認証が有効になるのは CELERIS_WEB_PASSWORD_FILE があるとき（非 loopback では app.js が必須にする）。
 // - パスワードは SHA-256 同士を timingSafeEqual で比べる。失敗は 1 s 待つ。
-// - session は HMAC-SHA256 で署名した cookie。cookie 名と署名鍵は web/ 独自で、gui/ の
-//   `__celeris_gui_session` は読まない。鍵は CELERIS_WEB_SESSION_SECRET_FILE、無ければ process ごとの乱数。
+// - session は HMAC-SHA256 で署名した cookie。鍵は CELERIS_WEB_SESSION_SECRET_FILE、無ければ process ごとの乱数。
 
 export const SESSION_COOKIE_NAME = "__celeris_web_session";
 export const SESSION_MAX_AGE_SECONDS = 24 * 60 * 60;

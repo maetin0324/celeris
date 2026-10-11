@@ -1,0 +1,19 @@
+# Immutable historical ADR links retired by agent-docs/adr/2026-10-11-retire-gui.md.
+agent-docs/adr/0080-browser-phase2-policy-broker-approval.md	../../gui/app/auth.server.ts
+agent-docs/adr/0080-browser-phase2-policy-broker-approval.md	../../gui/app/components/BrowserRunsPanel.tsx
+agent-docs/adr/0081-web-spa-frontend.md	../../gui/app/routes.ts
+agent-docs/adr/0081-web-spa-frontend.md	../../gui/app/root.tsx
+agent-docs/adr/0081-web-spa-frontend.md	../../gui/app/hooks/useCelerisStream.ts
+agent-docs/adr/0081-web-spa-frontend.md	../../gui/package.json
+agent-docs/adr/0081-web-spa-frontend.md	../../gui/server.js
+agent-docs/adr/0081-web-spa-frontend.md	../../gui/app/auth.server.ts
+agent-docs/adr/0081-web-spa-frontend.md	../../gui/app/middleware/security.server.ts
+agent-docs/adr/0081-web-spa-frontend.md	../../gui/app/celeris/client.server.ts
+agent-docs/adr/0081-web-spa-frontend.md	../../gui/app/routes/files.runs.ts
+agent-docs/adr/0081-web-spa-frontend.md	../../gui/app/routes/files.artifacts.ts
+agent-docs/adr/0081-web-spa-frontend.md	../../gui/app/routes/events.ts
+agent-docs/adr/0081-web-spa-frontend.md	../../gui/app/routes/console.stream.ts
+agent-docs/adr/0081-web-spa-frontend.md	../../gui/scripts/mobile-audit.mjs
+agent-docs/adr/0081-web-spa-frontend.md	../../gui/scripts/lib/celeris-fixture.mjs
+agent-docs/adr/0081-web-spa-frontend.md	../../gui/e2e/g5-a11y.spec.ts
+agent-docs/adr/2026-10-09-cos-operations-all-mutations.md	../../docs/api/v1/gui-api.md

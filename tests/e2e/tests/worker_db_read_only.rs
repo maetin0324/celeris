@@ -221,8 +221,10 @@ concurrency = 1
     .unwrap();
 
     let log = root.join("celeris.log");
+    // The stub invokes celerisctl too; do not pass the release host's config to it.
     let mut child = Command::new(bin("celeris"))
         .env_remove(WORKER_DB_GUARD_ENV)
+        .env_remove("CELERIS_CONFIG")
         .args([
             "--config",
             config.to_str().unwrap(),

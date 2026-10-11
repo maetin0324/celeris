@@ -104,6 +104,7 @@ model = "fake"
 
     fn celerisctl(&self, args: &[&str]) -> String {
         let out = Command::new(bin("celerisctl"))
+            .env_remove("CELERIS_CONFIG")
             .arg("--db")
             .arg(&self.db)
             .args(args)
@@ -309,6 +310,7 @@ fn worker_run_cluster_executes_one_run_against_the_cluster_dir() {
     let events_before = env.events(id);
 
     let out = Command::new(bin("celerisctl"))
+        .env_remove("CELERIS_CONFIG")
         .arg("--db")
         .arg(&env.db)
         .args([
@@ -370,6 +372,7 @@ fn worker_run_cluster_without_control_master_exits_4() {
     let id = env.add_remote("offline worker run", "offline", &remote, "true");
 
     let out = Command::new(bin("celerisctl"))
+        .env_remove("CELERIS_CONFIG")
         .arg("--db")
         .arg(&env.db)
         .args([

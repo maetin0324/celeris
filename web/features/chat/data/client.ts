@@ -1,4 +1,4 @@
-// CoS チャットの API client（ADR 2026-10-05-cos-chat-home D2、gui-api.md §3.127・§3.129）。
+// CoS チャットの API client（ADR 2026-10-05-cos-chat-home D2、api.md §3.127・§3.129）。
 // JSON の要求は api/client.ts の apiFetch を通す（same-origin・timeout・session の打ち切り）。
 // 添付の upload だけは進捗と取消のため XHR を使う。変更系はここで再送しない（再送は send.ts が同じ冪等 key で行う）。
 

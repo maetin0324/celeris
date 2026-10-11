@@ -56,7 +56,7 @@ function checkResultLabel(result: string): string {
   return Object.hasOwn(checkLabel, result) ? checkLabel[result as ProviderCheckResult] : result;
 }
 
-/** 除外理由（GET /accounts の excluded_reason）の日本語。未知の値はそのまま出す（旧 GUI と同じ語）。 */
+/** 除外理由（GET /accounts の excluded_reason）の日本語。未知の値はそのまま出す。 */
 export const EXCLUDED_REASON_LABEL: Readonly<Record<string, string>> = {
   not_logged_in: "未ログイン",
   at_capacity: "上限に達しています",
@@ -74,7 +74,7 @@ export function excludedReasonLabel(reason: string): string {
 
 export type UsageTone = "normal" | "warning" | "danger";
 
-/** 使用率の段階（旧 GUI の usageTone と同じ境目: 70% で注意、90% で上限間近）。 */
+/** 使用率の段階（境目: 70% で注意、90% で上限間近）。 */
 export function usageTone(utilization: number): UsageTone {
   if (utilization >= 0.9) return "danger";
   if (utilization >= 0.7) return "warning";
@@ -192,7 +192,7 @@ function isDenied(results: Record<string, ActionResult>) {
   return Object.values(results).some((r) => r.status === 403 || r.status === 401);
 }
 
-/** アカウントごとの上限 max_runs の範囲（PATCH /accounts/{adapter}/{id} が受ける 1..=32。gui-api.md §3.29a）。 */
+/** アカウントごとの上限 max_runs の範囲（PATCH /accounts/{adapter}/{id} が受ける 1..=32。api.md §3.29a）。 */
 export const MAX_RUNS_MIN = 1;
 export const MAX_RUNS_MAX = 32;
 
@@ -207,7 +207,7 @@ export function parseMaxRunsInput(raw: string): { value: number } | { error: str
 
 /**
  * URL の path 断片。`encodeURIComponent` は `:` も符号化するが、暗黙アカウントの id は
- * `openai_compatible:<source id>` で `:` を含む（ADR 2026-10-08 §(e)・gui-api.md §3.29a）。
+ * `openai_compatible:<source id>` で `:` を含む（ADR 2026-10-08 §(e)・api.md §3.29a）。
  * `:` は RFC 3986 の pchar なので path 断片にそのまま書ける。文書と e2e の fake daemon も生の `:` を期待する。
  */
 function pathSegment(value: string): string {

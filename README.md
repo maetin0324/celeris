@@ -63,9 +63,9 @@ LangMem による知識整理などのアダプタを持ちます。利用には
 
 ```text
 ブラウザ
-  │ :7700
+  │ :7720
   ▼
-Web GUI（React / React Router、Node BFF）
+Web（React / TanStack Router、Node gateway）
   │ :7710 / HTTP API v1 + SSE
   ▼
 celeris（Rust デーモン）
@@ -121,14 +121,15 @@ target/debug/celeris --config ~/.config/celeris/config.toml
 別の端末で GUI を起動します。
 
 ```sh
-cd gui
-pnpm install --frozen-lockfile
-CELERIS_API_URL=http://127.0.0.1:7710 pnpm dev
+cd web
+corepack pnpm@12.6.0 install --frozen-lockfile
+corepack pnpm@12.6.0 build
+CELERIS_API_URL=http://127.0.0.1:7710 corepack pnpm@12.6.0 start
 ```
 
-ブラウザで `http://127.0.0.1:7700/` を開くと Console が表示されます。
+ブラウザで `http://127.0.0.1:7720/` を開くとホームが表示されます。
 API の `token_file` を設定した場合は、GUI にも `CELERIS_API_TOKEN_FILE` を指定してください。
-GUI の認証・公開設定は [gui/README.md](gui/README.md)、継続運用は [デプロイ手順](docs/ops/selfdeploy.md)を参照してください。
+GUI の認証・公開設定は [web 運用手順](docs/ops/web-operation.md)、継続運用は [デプロイ手順](docs/ops/selfdeploy.md)を参照してください。
 画面の説明と操作方法は GUI の `/help` にあります。
 
 ## クラスタで実行する
@@ -157,7 +158,7 @@ scripts/cluster-check.sh pegasus /work/NBB/$USER/workspace/rust/benchfs
 | `crates/task-worker` | ワーカープロトコル、アダプタ、ワークスペース、SSH 実行 |
 | `crates/task-api` | HTTP API v1 と SSE（axum） |
 | `crates/celeris` / `crates/celerisctl` | デーモンと CLI |
-| `gui/` | Web GUI と BFF |
+| `web/` | SPA と API gateway |
 | `config/` | 設定例と組織の種 |
 | `scripts/` / `deploy/` | クラスタ、コンテナ、知識整理、リリースと運用の道具 |
 
@@ -167,7 +168,7 @@ scripts/cluster-check.sh pegasus /work/NBB/$USER/workspace/rust/benchfs
 - [PROGRESS.md](agent-docs/PROGRESS.md) — 実装・検証・実機運用の記録と未解決事項。
 - [モデル供給とアカウント](docs/guides/providers.md) — 自動選択、Codex の残量確認、既存の Claude 固定設定の移行。
 - [ワークスペース](docs/guides/workspace.md) / [知識ベース](docs/guides/knowledge.md) — 各機能の仕様と使い方。
-- [HTTP API v1](docs/api/v1/gui-api.md) — GUI が使う API の正本。
+- [HTTP API v1](docs/api/v1/api.md) — GUI が使う API の正本。
 
 ## 開発と検証
 
@@ -179,5 +180,5 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-GUI の変更では `gui/` で `pnpm lint`、`pnpm typecheck`、`pnpm test`、`pnpm build` を実行します。
-実 celeris を使う E2E の手順は [GUI の開発手順](gui/README.md#開発)を参照してください。
+GUI の変更では `web/` で `pnpm lint`、`pnpm typecheck`、`pnpm test`、`pnpm build` を実行します。
+実 celeris を使う E2E の手順は [フロントエンド契約](docs/frontend/FRONTEND_CONTRACT.md)を参照してください。

@@ -224,4 +224,4 @@ CoS も上の表の `PATCH /api/v1/tasks/<id>`（task.update）で同じ修復�
 ## 本文の形が分からないとき
 
 `request.body` は指定先の既存 JSON schema で検証される。推測で送らず、`docs/api/v1/` の schema
-（[gui-api.md](../../../docs/api/v1/gui-api.md)）を読む。422 `validation` は本文の形の誤り。
+（[api.md](../../../docs/api/v1/api.md)）を読む。422 `validation` は本文の形の誤り。

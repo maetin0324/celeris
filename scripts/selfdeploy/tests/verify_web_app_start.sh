@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ADR-0135 D4: verify records web app probe success/failure without blocking verify.
+# ADR-0135 D4: verify records web app probe success/failure as a mandatory check.
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")/.." && pwd)"
@@ -30,9 +30,9 @@ CREATE TABLE messages (id TEXT, node_id TEXT);
 CREATE TABLE schema_migrations (version INTEGER);
 INSERT INTO schema_migrations VALUES (5);
 SQL
-read -r api_port gui_port old_port web_port <<<"$(free_ports)"
+read -r api_port old_port web_port unused_port <<<"$(free_ports)"
 mkdir -p "$root/bin" "$root/config" "$root/state/releases/aaaaaaaaaaaa/bin" \
-  "$root/state/releases/aaaaaaaaaaaa/gui/node_modules/@playwright/test"
+  "$root/state/releases/aaaaaaaaaaaa/web/app/server"
 : >"$root/config/config.toml"
 rel="$root/state/releases/aaaaaaaaaaaa"
 printf '{"sha12":"aaaaaaaaaaaa","schema_version":5}\n' >"$rel/manifest.json"
@@ -60,10 +60,6 @@ class H(BaseHTTPRequestHandler):
         n=int(self.headers.get('Content-Length') or 0); self.rfile.read(n); return self.send({'id':'t1','status':'ready'})
 ThreadingHTTPServer((host,int(port)),H).serve_forever()
 PY
-cat >"$rel/gui/server.js" <<'JS'
-const http=require('http'); const [host,port]=process.env.CELERIS_GUI_BIND.split(':');
-http.createServer((req,res)=>{if(req.url==='/healthz'){res.setHeader('Content-Type','application/json');res.end(JSON.stringify({release:process.env.CELERIS_GUI_RELEASE}));}else res.end('ok');}).listen(Number(port),host);
-JS
 printf '#!/usr/bin/env bash\nexec python3 %q "$@"\n' "$root/fake-celeris.py" >"$rel/bin/celeris"
 chmod +x "$rel/bin/celeris"
 mkdir -p "$root/state/releases/bbbbbbbbbbbb/bin"
@@ -92,7 +88,7 @@ cp "$root/web-app.js" "$rel/web/app/server/index.js"
 run_verify() {
   CELERIS_STATE_DIR="$root/state" CELERIS_CONFIG_DIR="$root/config" CELERIS_CONFIG="$root/config/config.toml" \
     CELERIS_DB="$root/prod.sqlite3" SD_REPO="$root/no-repo" SD_PNPM_SHIM_DIR="$root/bin" \
-    SD_STAGING_API_PORT="$api_port" SD_STAGING_GUI_PORT="$gui_port" SD_STAGING_OLD_API_PORT="$old_port" \
+    SD_STAGING_API_PORT="$api_port" SD_STAGING_OLD_API_PORT="$old_port" \
     SD_VERIFY_WEB_PROBE_PORT="$web_port" SD_WEB_NODE="$root/bin/node" SD_WEB_PROBE_TIMEOUT=2 \
     PATH="$root/bin:$PATH" bash "$here/verify.sh" aaaaaaaaaaaa >"$root/verify.out" 2>&1
 }
@@ -102,16 +98,19 @@ run_verify || fail "verify.sh failed despite successful web probe"
 python3 - "$rel/verify.json" <<'PY' || fail "successful web probe was not recorded"
 import json,sys
 v=json.load(open(sys.argv[1])); c=next(c for c in v['checks'] if c['id']=='4d')
+assert [c['id'] for c in v['checks']] == ['1','2','3','5','6','4d']
+assert all(c['secs'] >= 0 for c in v['checks'])
+assert all(v['durations'][k] >= 0 for k in ('lock_wait_s','prepare_s','n1_s','total_s'))
 assert c['name']=='web-app-start' and c['ok'] is True and '/healthz 200' in c['detail'], c
 PY
 
-# Broken app is a failed non-blocking record: overall verification remains successful.
+# Missing dependencies block verification.
 rm -rf "$rel/web/app/node_modules"
-run_verify || fail "verify.sh became blocking after web probe failure"
-python3 - "$rel/verify.json" <<'PY' || fail "failed web probe was not recorded non-blockingly"
+if run_verify; then fail "verify succeeded with missing web dependencies"; fi
+python3 - "$rel/verify.json" <<'PY' || fail "failed web probe was not recorded as a required failure"
 import json,sys
 v=json.load(open(sys.argv[1])); c=next(c for c in v['checks'] if c['id']=='4d')
-assert v['ok'] is True and c['ok'] is False and 'non-blocking' in c['detail'], (v['ok'],c)
+assert v['ok'] is False and c['ok'] is False, (v['ok'],c)
 PY
 
 if ss -ltn "sport = :$web_port" 2>/dev/null | tail -n +2 | grep -q .; then fail "web probe left its listener running"; fi

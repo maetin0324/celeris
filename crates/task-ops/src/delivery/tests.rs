@@ -230,6 +230,7 @@ fn routed_event(store: &SqliteStore, task: &Task, run: &str, owner: &str, unit: 
     let decision =
         task_core::model_policy::decide_for_task(task, &task_core::LaneCeiling::default()).unwrap();
     let record = RoutingRecord {
+        features: None,
         org_node: Some(owner.into()),
         harness: Some("coding".into()),
         decision,

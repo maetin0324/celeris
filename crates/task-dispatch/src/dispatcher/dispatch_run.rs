@@ -717,7 +717,40 @@ impl Dispatcher {
                     decision.lane, task.worker_hint.tier
                 ));
             }
+            let feature_ref = match self.store.record_route_features(
+                task_core::route_extract::Subject {
+                    kind: if current_wu.is_some() {
+                        "work_unit"
+                    } else {
+                        "task"
+                    }
+                    .to_owned(),
+                    id: current_wu
+                        .as_ref()
+                        .map(|wu| wu.id.clone())
+                        .unwrap_or_else(|| task.id.to_string()),
+                },
+                Some(task_core::route_extract::RouteFeatureContext {
+                    lane: Some(
+                        task_core::model_catalog::assignments::tier_str(task.worker_hint.tier)
+                            .to_owned(),
+                    ),
+                    harness: Some(adapter_id.clone()),
+                    task_features_v69: Some(decision.features),
+                }),
+            ) {
+                Ok(f) => Some(task_core::RouteFeaturesRef {
+                    schema: f.schema,
+                    template: f.template,
+                    hash: f.hash,
+                }),
+                Err(error) => {
+                    tracing::warn!(task_id = %task.id, %error, "routing feature extraction failed; dispatch continues without snapshot");
+                    None
+                }
+            };
             let record = task_core::RoutingRecord {
+                features: feature_ref,
                 org_node: task.assignee.clone(),
                 harness: task.genre.clone(),
                 resolution: task_core::model_routing::LaneResolution {

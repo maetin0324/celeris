@@ -107,3 +107,59 @@ Status は Proposed のまま。以下は実装（views・routes・routes-wire�
 
 - 受信箱の discard/hold の操作先を item に載せる変更は crate の変更になるため、この WorkUnit では行わない（次の WorkUnit の候補）。
 - web の操作画面は、記録上 views・routes・cli・e2e のいずれでも作っていない。
+
+## 付記: 取り残し検出の不備（2026-10-11 本番 deploy）
+
+### 起きたこと
+
+50f349d84fea の本番 deploy で初回の sweep が done root task 218 件を `unintegrated` として受信箱に出した。
+
+- 180 件は reason `repository default branch is missing`。agent-platform の `project_repos.default_branch` が NULL。うち 175 件は branch head が main の祖先で、誤検出。delivery（`crates/task-ops/src/delivery.rs` の `changes::default_branch(path, row.default_branch)`）は NULL のとき repo から既定 branch を解決するが、sweep（`crates/task-ops/src/stranded.rs` の `record.default_branch.is_none()`）は解決しない。解決の経路が 2 つあり食い違っていた。運用で `PATCH /api/v1/repos/01M2XPE3NZ1FZE061FKDY4A9PK` により `default_branch=main` を入れて回避した（データの書き換えのみ）。
+- 38 件は reason `repository cannot be resolved`。benchfs の repository が `WorkspaceSpec::Remote`（pegasus・sirius）で、`crates/celeris/src/daemon/stranded_sweep.rs` は Remote の path を `None` にする。遠隔 repo の task は永久に受信箱に残る。
+- sweep は状態が同じでも 5 分ごとに行を upsert して `checked_at`・`updated_at` を進める。受信箱 item の `at` は `checked_at` から作る（`crates/task-ops/src/inbox.rs` の `AttentionItem::Unintegrated`）ため、購読側には同じ item が新着に見えた。
+
+### F1. default branch の解決は `task_ops::changes::resolve_default_branch` の 1 関数だけ
+
+- 新しい関数 `task_ops::changes::resolve_default_branch(repo: &Path, configured: Option<&str>) -> Result<String, DefaultBranchError>` を唯一の解決経路にする。順序は次のとおり（既存の `default_branch` の規則を引き継ぐ）。
+  1. 設定（`project_repos.default_branch`、前後の空白を除いて空でないもの）
+  2. `git symbolic-ref --quiet --short refs/remotes/origin/HEAD` の `origin/` を除いた名前
+  3. `refs/heads/main` が存在すれば `main`
+  4. `refs/heads/master` が存在すれば `master`
+  5. どれも無ければ `Err`（理由の文字列を持つ。例: `default branch cannot be resolved: no configured branch, origin/HEAD, main or master`）。**`"main"` を盲目に返さない**。
+- 設定された名前は検証しない（設定が正）。設定した branch が存在しなければ、呼び出し元の ref 解決で従来どおり失敗する。
+- 消すもの（同じ変更で）: 旧 `task_ops::changes::default_branch`（何も無ければ `"main"` を返す）、sweep の個別判定（`record.default_branch.is_none()` で `repository default branch is missing` とする分岐）と `BranchRecord.default_branch: Option<String>` を設定値のまま渡す経路、`crates/task-api/src/handlers/tasks.rs` の `repo.default_branch.unwrap_or_else(|| "main")`、`crates/task-dispatch/src/checkpoint.rs` の `default_branch(dir, None)`。
+- 呼び出し元と、解決できないときの振る舞い:
+
+| 呼び出し元 | 解決できないとき |
+|---|---|
+| sweep（`crates/task-ops/src/stranded.rs`。`stranded_sweep.rs` は path と設定値を渡すだけ） | `unintegrated`、reason は `resolve_default_branch` の Err の文字列。設定 NULL でも origin/HEAD・main・master で解決できれば祖先判定に進む |
+| delivery（`crates/task-ops/src/delivery.rs`） | `Skip::Report { reason: RefsUnresolvable }` と同じ扱いで、理由に Err の文字列を載せる。統合はしない |
+| doc_gardener（`crates/celeris/src/doc_gardener.rs`） | その repo の監査を行わず `Err(String)` を返す（周期処理の既存の失敗記録に載る） |
+| task-api changes（`crates/task-api/src/changes.rs`） | 変更一覧は `Missing` 扱い（差分なしではなく「解決できない」を返す）。merge は 409 の problem で理由を返す |
+| task-api docs（`crates/task-api/src/docs.rs`） | その repository の docs 一覧を空にし、理由を応答の該当 repo に載せられなければ log に残す |
+| task-api integrations（`crates/task-api/src/integrations.rs`）・handlers（`handlers/tasks.rs`） | その repository を `IntegrationContext.repositories` に入れない（merge は 409、詳細の promotion 計算は対象外）。`"main"` で埋めない |
+| task-dispatch behind_target（`dispatcher/behind_target.rs`） | `DispatchError` を返し、behind は `null`（review sync はその repo を対象外） |
+| task-dispatch housekeeping（`dispatcher/housekeeping.rs` の scratch seed） | その repo の seed を `commit: None` にする（seed を作らない） |
+| task-dispatch run_context（`dispatcher/run_context.rs`） | その mount の docs 一覧を空にする |
+| task-dispatch checkpoint（`checkpoint.rs`） | `(None, Vec::new())`（checkpoint に repo 状態を載せない） |
+| celerisctl（`commands/docs_maintenance.rs`） | `--default-branch` の既定値 `main` を消し、省略時は `resolve_default_branch(repo, None)` で解決する。解決できなければ理由つきで非 0 終了 |
+
+- 試験: 設定 NULL・origin/HEAD 無し・`main` のある repo で、取り込み済みの branch を sweep が `integrated` と判定する（`resolve_default_branch` の単体試験と sweep の試験）。どれも無い repo で `Err` と理由が返る。
+
+### F2. 遠隔 repo（`WorkspaceSpec::Remote`）は sweep で判定しない: 新しい状態 `not_applicable`
+
+- `TaskRepoIntegrationStatus` に `NotApplicable`（文字列 `not_applicable`）を足す。migration で `task_repo_integration_states.state` の CHECK に `'not_applicable'` を加える（SQLite は CHECK を変えられないので、表を作り直して行を写す。行は失わない）。
+- sweep は Remote の repository を持つ record を ssh せず `not_applicable`、reason `remote repository is not checked by the stranded sweep` で記録する。
+- 理由: 5 分周期の sweep から TOTP を伴う ssh（pegasus）は不安定で、失敗のたびに偽の状態を作る。delivery も遠隔 repo を main に統合しないので、遠隔 repo について「main に入っていない」は取り残しの定義に当たらない。
+- `not_applicable` は受信箱に出さない（`crates/task-ops/src/inbox.rs` の対象は `unintegrated` だけ）。API・celerisctl・web の統合状態表示には `not_applicable` として出す（`integration list --state not_applicable` で引ける）。merge・discard・hold・reopen は `not_applicable` から 409（遷移不可）。
+- 既存の `unintegrated` 行（benchfs の 38 件）は次の sweep で `not_applicable` に移る。状態の変化は既存どおり event の追記で残し、過去の events は書き換えない。
+- `discarded`・`held` の行は sweep が触らない既存の規則を保つ（遠隔 repo でも人の判断を上書きしない）。
+- 遠隔で `git merge-base` を実行する判定は採らない。必要になれば別の ADR で、cluster の接続がある時だけ走る人起動の確認として決める。
+
+### F3. 状態が変わらない再 sweep は行を書かない（受信箱 item の同一性）
+
+- sweep は前回の行と `state`・`branch`・`head_sha`・`reason` がすべて同じなら upsert しない。`checked_at`・`updated_at` は変わらない。
+- 受信箱 item の `at`（`checked_at` 由来）と id はこの行から作るので、状態が変わらない限り変わらない。購読側に新着として見えない。
+- 4 欄のどれかが変われば従来どおり upsert し、`checked_at`・`updated_at` を進める（新着として見えるのは状態が変わった時だけ）。
+- 「最後に確かめた時刻」を別に持つ欄は足さない（必要が出たら別に決める）。
+- 試験: 同じ repo 状態で sweep を 2 回走らせ、受信箱 item の id と `at`、行の `checked_at` が同じであること。head が変わった時は `at` が進むこと。

@@ -46,8 +46,10 @@ broker（celeris-credentiald）の `serve_inner` / `socket` は runtime dir を 
     これで別 UID の拒否を UID の差だけに帰す。
 - D4. 試験は `crates/celeris-credentiald/tests/injection_peer_uid.rs` の
   `real_process_with_another_uid_is_rejected_by_dac_then_peer_uid_mismatch`。追跡表 A13 はこれと
-  `launcher_chrome_denies_daemon_uid_ptrace` を引用して「合格」にする。
-- D5. host での実行は人（運用セッション）が `TMPDIR=/tmp CELERIS_LAUNCHER_TESTS=require` で行い、証跡を
+  `launcher_chrome_denies_daemon_uid_ptrace` を引用し、host での実行証跡（D5）が進捗ファイルに入るまでは
+  「後続」（ptrace 拒否は実証済み、broker の別 UID 試験は host 実行待ち）とし、証跡が入ってから「合格」にする。
+  試験があるだけでは合格にしない（P4-B-6 の解放判断の前提になるため）。
+- D5. host での実行は人（運用セッション）が後続 task（この task の followups で起票）として `TMPDIR=/tmp CELERIS_LAUNCHER_TESTS=require` で行い、証跡を
   `agent-docs/progress/2026-10-11-browser-a13-launcher-peer-uid.md` に残す。worker sandbox は uid_map が `1001 1001 1` の
   1 行で別 host UID が存在せず、`sudo`・`newuidmap` も no_new_privs で使えないため、sandbox では skip 理由が出る。
 

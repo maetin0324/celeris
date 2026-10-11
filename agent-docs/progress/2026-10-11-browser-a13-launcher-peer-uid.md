@@ -10,7 +10,11 @@ updated: 2026-10-11
 ## 現在地
 
 2026-10-11 完了（worker 側）。設計は [ADR 2026-10-11](../adr/2026-10-11-browser-a13-broker-peer-uid-real-process.md)。
-host での 1 回の実行（`sudo -u celeris-browser` が要る）は人が行う（下の「本番 host での実行」）。本番 config・DB の変更は無い。
+host での 1 回の実行（`sudo -u celeris-browser` が要る）は人が行う（下の「本番 host での実行」。後続 task をこの run の followups で起票）。本番 config・DB の変更は無い。
+
+再 run（attempt 2、2026-10-11）: review が「broker の別 UID 試験は一度も通っていないのに追跡表 A13 を『合格』にした」を不備とした。
+追跡表 A13 は『後続』（ptrace 拒否は実証済み、broker の別 UID 試験は試験あり・host 実行待ち）に戻し、P4-B-4・P4-B-6・phase-browser-4.md・
+browser-followups.md・PROGRESS.md・ADR D4/D5 の「launcher 方式で合格」も同じ表現に直した。host の証跡が入ってから後続 task で『合格』にする。
 
 ## やったこと
 
@@ -24,8 +28,8 @@ host での 1 回の実行（`sudo -u celeris-browser` が要る）は人が行�
      既定は `CELERIS_USERNS_TESTS=1` の opt-in（ADR-0126 B）。
    - `inner_peer_uid_probe`（別 UID の子の側。環境変数が無ければ no-op）、`probe_line_round_trips`、
      `same_uid_control_is_worker_not_allowed`（正の対照の単体）。
-2. docs: 追跡表 `phase-browser-acceptance.md` の A13 を「合格」にし、ptrace 拒否（`launcher_chrome_denies_daemon_uid_ptrace`）と
-   broker の別 UID 拒否（上の試験）を引用。P4-B-4・P4-B-6 の A13 言及、`browser-followups.md` の a13-real-process 行、
+2. docs: 追跡表 `phase-browser-acceptance.md` の A13 を「後続（task 01M4NV0KJTQYJQXXY4YTJM3NQN、host 実行待ち）」にし、
+   ptrace 拒否（`launcher_chrome_denies_daemon_uid_ptrace`、実証済み）と broker の別 UID 拒否（上の試験、host 実行待ち）を引用。P4-B-4・P4-B-6 の A13 言及、`browser-followups.md` の a13-real-process 行、
    `phase-browser-4.md` の状態行 2 箇所、`PROGRESS.md` の 2026-09-30 の記録 1 行を「01M3SPN8HE は subuid 経路のため破棄（2026-10-11）」に直した。
    ADR-0138「検証と本番反映」に試験の所在を付記。ADR-0098・phase-R.md の task 起票の記録（履歴）は残した。
 
@@ -62,11 +66,11 @@ test real_process_with_another_uid_is_rejected_by_dac_then_peer_uid_mismatch ...
 `sudo -n -u celeris-browser` が通らない（password・sudoers）と `require` で panic する。その場合は `sudo -v` の後に再実行するか、
 `CELERIS_PEER_UID_USER=<別の local user>` を与える。
 
-- 実行記録: （未実施。実行したら日付・exit code・上の 4 行を貼る）
+- 実行記録: （未実施。実行したら `実行記録: 2026-MM-DD exit=0` の形で日付・exit code・上の 4 行を貼り、追跡表 A13 を『合格』に直す。後続 task の check がこの行と追跡表を見る）
 
 ## 未解決事項
 
-- host での実行は未実施（上の手順）。
+- host での実行は未実施（上の手順）。後続 task（この run の followups.json、check: human + 進捗ファイルの『実行記録: 20…』と追跡表 A13 『合格』の grep）で人が行う。それまで追跡表 A13 は『後続』のまま。
 - 追跡表 P4-A-7・P4-B-6・P4-C-6 の後続 task（01M3SPN8H05・01M3SPN8HP）は subuid 経路の時代の起票で、launcher 方式での扱いは別途見直しが要る（この task の範囲外）。
 
 ## 提案
@@ -77,6 +81,16 @@ test real_process_with_another_uid_is_rejected_by_dac_then_peer_uid_mismatch ...
 ## 全体検査
 
 2026-10-11、この task の tree（worker sandbox、`TMPDIR=/tmp`）:
+
+attempt 2（docs を『後続』に戻した後の tree、2026-10-11）:
+
+- `TMPDIR=/tmp bash scripts/dev/test-parallel.sh`: exit 0（summary: passed 5175 / failed 0 / ignored 14、nextest_exit 0、doctest_exit 0）。
+- `cargo clippy --workspace -- -D warnings`: exit 0。
+- `TMPDIR=/tmp CELERIS_USERNS_TESTS=1 cargo test -p celeris-credentiald --test injection_peer_uid -- --nocapture`: exit 0、4 passed、
+  real_process は `SKIP: (not passed) cannot run a process as celeris-browser: sudo -n -u celeris-browser true exit=Some(1): sudo: /etc/sudo.conf is owned by uid 65534 …`。
+- `scripts/check-browser-acceptance.sh` 静的部: exit 0（rows 76、tests cited 146、file:line refs 28）。check-doc-links・check-adr-numbers・check-doc-layout・check-architecture-map: すべて exit 0。`git diff --check`: exit 0。
+
+attempt 1（2026-10-11）:
 
 - `TMPDIR=/tmp bash scripts/dev/test-parallel.sh`: exit 0。nextest `5172 tests run: 5172 passed, 13 skipped`、doctest 3 passed
   （summary: passed 5175 / failed 0 / ignored 14）。

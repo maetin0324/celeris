@@ -73,6 +73,69 @@ fn sample_task(kind: TaskKind, status: Status) -> Task {
     }
 }
 
+#[test]
+fn integration_api_views_attach_store_state_to_summary_and_detail() {
+    let store = SqliteStore::open_in_memory().expect("store");
+    let task = sample_task(TaskKind::Execute, Status::Done);
+    store.insert(&task).expect("task");
+    let repo_id = task_core::RepoId::new();
+    let now = OffsetDateTime::now_utc();
+    store
+        .task_integration_upsert(&task_core::TaskRepoIntegrationState {
+            task_id: task.id,
+            repo_id,
+            branch: "task/stranded".into(),
+            head_sha: "abc123".into(),
+            state: task_core::TaskRepoIntegrationStatus::Unintegrated,
+            reason: Some("not merged".into()),
+            actor: "sweep".into(),
+            checked_at: now,
+            updated_at: now,
+        })
+        .expect("integration state");
+    let context = crate::stranded::IntegrationContext {
+        repositories: [(
+            repo_id,
+            crate::stranded::IntegrationRepoContext {
+                name: "sample".into(),
+                path: PathBuf::from("/repo"),
+                default_branch: "main".into(),
+            },
+        )]
+        .into_iter()
+        .collect(),
+        releases_dir: None,
+    };
+    let mut summary = task_summary(&store, &task, &view_ctx(), now).expect("summary");
+    let (mut integrations, mut promotion) = (None, None);
+    attach_integrations(
+        &store,
+        task.id,
+        &mut integrations,
+        &mut promotion,
+        Some(&context),
+    )
+    .expect("attach summary");
+    summary.integrations = integrations;
+    summary.promotion = promotion;
+    assert_eq!(summary.integrations.as_ref().unwrap()[0].repo, "sample");
+    assert_eq!(
+        summary.integrations.as_ref().unwrap()[0].state,
+        task_core::TaskRepoIntegrationStatus::Unintegrated
+    );
+    assert!(summary.promotion.is_none());
+    let mut detail = task_detail(&store, task.id, &view_ctx(), now).expect("detail");
+    attach_integrations(
+        &store,
+        task.id,
+        &mut detail.integrations,
+        &mut detail.promotion,
+        Some(&context),
+    )
+    .expect("attach detail");
+    assert_eq!(detail.integrations.as_ref().unwrap()[0].head, "abc123");
+}
+
 fn row(seq: u64, ts: &str, task_id: TaskId, event: Event) -> EventRow {
     EventRow {
         id: seq,

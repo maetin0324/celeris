@@ -7,6 +7,20 @@ use task_core::{
 };
 use time::OffsetDateTime;
 
+/// Caller supplied repository/release context; this module never reads daemon configuration.
+#[derive(Debug, Clone, PartialEq)]
+pub struct IntegrationContext {
+    pub repositories: std::collections::HashMap<RepoId, IntegrationRepoContext>,
+    pub releases_dir: Option<std::path::PathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct IntegrationRepoContext {
+    pub name: String,
+    pub path: std::path::PathBuf,
+    pub default_branch: String,
+}
+
 /// Deployment status is independent of whether a task branch has reached the repository's main.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]

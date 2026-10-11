@@ -60,7 +60,7 @@ async fn spawn_check_reports_ok_and_records_observation_via_event() {
         reply_tx,
     );
     let outcome = reply_rx.await.unwrap().unwrap();
-    assert_eq!(outcome.result, task_api::ProviderCheckResult::Ok);
+    assert_eq!(outcome.result, task_api::AccountCheckResult::Ok);
     let event = rx.recv().await.unwrap();
     match event {
         AccountAdminEvent::Checked {
@@ -125,7 +125,7 @@ echo '{"id":3,"result":{"rateLimits":{"primary":{"usedPercent":25,"windowDuratio
         reply_tx,
     );
     let outcome = reply_rx.await.unwrap().unwrap();
-    assert_eq!(outcome.result, task_api::ProviderCheckResult::Ok);
+    assert_eq!(outcome.result, task_api::AccountCheckResult::Ok);
     let event = rx.recv().await.unwrap();
     match event {
         AccountAdminEvent::Checked {
@@ -164,7 +164,7 @@ echo '{"id":1,"error":{"message":"401 Unauthorized"}}'"#,
         reply_tx,
     );
     let outcome = reply_rx.await.unwrap().unwrap();
-    assert_eq!(outcome.result, task_api::ProviderCheckResult::AuthFailed);
+    assert_eq!(outcome.result, task_api::AccountCheckResult::AuthFailed);
 }
 
 #[tokio::test]

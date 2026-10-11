@@ -155,7 +155,6 @@ async fn config_is_returned_as_given_and_secrets_never_appear() {
 
     for path in [
         "/api/v1/config",
-        "/api/v1/providers",
         "/api/v1/clusters",
         "/api/v1/daemon",
         "/api/v1/health",

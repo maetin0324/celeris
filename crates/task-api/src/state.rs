@@ -88,8 +88,6 @@ pub(crate) struct Inner {
     /// Phase 30（ADR-0033 D4 追記）: 対話は常にこの分野で走る（ノードの `genre` は使わない）。
     pub(crate) conversation_genre: String,
     pub(crate) celeris_version: String,
-    pub(crate) providers_dir: Option<std::path::PathBuf>,
-    pub(crate) openai_compatible_source_ids: std::collections::HashSet<String>,
     pub(crate) admin_tx: Option<tokio::sync::mpsc::Sender<crate::admin::AdminRequest>>,
     pub(crate) accounts_roots: HashMap<AccountAdapter, std::path::PathBuf>,
     pub(crate) max_runs_per_account: usize,
@@ -177,8 +175,6 @@ impl ApiState {
             genres: settings.genres,
             conversation_genre: settings.conversation_genre,
             celeris_version: settings.celeris_version,
-            providers_dir: settings.providers_dir,
-            openai_compatible_source_ids: settings.openai_compatible_source_ids,
             admin_tx: settings.admin_tx,
             accounts_roots: settings.accounts_roots,
             max_runs_per_account: settings.max_runs_per_account,

@@ -2,8 +2,6 @@
 //!
 //! - `models list [--json]` — `GET /llm/models`（既定は表。`--json` で応答そのまま）。
 //! - `models discover [--source S]` — `POST /llm/models/discover`（202 の要約を JSON で出す）。
-//! - `models assign <source> <tier> <model_id> [--note N]` — `PUT /llm/models/assignments/{source}/{tier}`（ADR 2026-10-06 model-role-assignments）。
-//! - `models unassign <source> <tier>` — `DELETE /llm/models/assignments/{source}/{tier}`。
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -23,28 +21,6 @@ pub enum ModelsCommand {
     List(ListArgs),
     /// Run model discovery now (all sources, or one with `--source`).
     Discover(DiscoverArgs),
-    /// Assign a catalog model to a role (frontier | standard | cheap) of a source.
-    Assign(AssignArgs),
-    /// Remove a role assignment (the config value applies again).
-    Unassign(UnassignArgs),
-}
-
-#[derive(Args, Debug)]
-pub struct AssignArgs {
-    /// claude-oauth | codex-oauth | opencode-go | openai-compatible:<id>
-    pub source: String,
-    /// frontier | standard | cheap
-    pub tier: String,
-    /// A model id from `celerisctl models list` for that source.
-    pub model_id: String,
-    #[arg(long)]
-    pub note: Option<String>,
-}
-
-#[derive(Args, Debug)]
-pub struct UnassignArgs {
-    pub source: String,
-    pub tier: String,
 }
 
 #[derive(Args, Debug)]
@@ -87,17 +63,11 @@ pub fn run(config_path: Option<PathBuf>, command: ModelsCommand) -> Result<ExitC
                 }
             }
         }
-        ModelsCommand::Discover(_) | ModelsCommand::Assign(_) => {
+        ModelsCommand::Discover(_) => {
             if let Some((method, path, body)) = request_of(&command)? {
                 let result = request(&api, method, &path, body)?;
                 print_json(&result)?;
             }
-        }
-        ModelsCommand::Unassign(ref args) => {
-            if let Some((method, path, body)) = request_of(&command)? {
-                request(&api, method, &path, body)?;
-            }
-            outln!("unassigned {} {}", args.source, args.tier);
         }
     }
     Ok(ExitCode::SUCCESS)
@@ -119,39 +89,7 @@ pub fn request_of(command: &ModelsCommand) -> Result<Option<Request>, CliError> 
                 None => json!({}),
             }),
         )),
-        ModelsCommand::Assign(args) => {
-            let mut body = json!({ "model_id": args.model_id });
-            if let Some(note) = &args.note {
-                body["note"] = json!(note);
-            }
-            Some((
-                "PUT",
-                assignment_path(&args.source, &args.tier)?,
-                Some(body),
-            ))
-        }
-        ModelsCommand::Unassign(args) => {
-            Some(("DELETE", assignment_path(&args.source, &args.tier)?, None))
-        }
     })
-}
-
-/// `/llm/models/assignments/{source}/{tier}`。tier はここで確かめる（API も 400 で返す）。`source` は
-/// `openai-compatible:<id>` の `:` 以外の記号を含まない前提で、path 区間に使えない文字は拒否する。
-fn assignment_path(source: &str, tier: &str) -> Result<String, CliError> {
-    if !matches!(tier, "frontier" | "standard" | "cheap") {
-        return Err(CliError::msg(format!(
-            "unknown tier {tier:?} (expected frontier, standard or cheap)"
-        )));
-    }
-    if source.is_empty()
-        || !source
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | ':' | '.'))
-    {
-        return Err(CliError::msg(format!("invalid source {source:?}")));
-    }
-    Ok(format!("/llm/models/assignments/{source}/{tier}"))
 }
 
 fn print_json(value: &Value) -> Result<(), CliError> {
@@ -260,17 +198,6 @@ mod tests {
         assert!(lines[3].contains("FAILED: HTTP 500"));
     }
 
-    #[test]
-    fn assignment_path_validates_tier_and_source() {
-        assert_eq!(
-            assignment_path("opencode-go", "cheap").as_deref().ok(),
-            Some("/llm/models/assignments/opencode-go/cheap")
-        );
-        assert!(assignment_path("openai-compatible:qwen", "frontier").is_ok());
-        assert!(assignment_path("opencode-go", "godlike").is_err());
-        assert!(assignment_path("a/b", "cheap").is_err());
-        assert!(assignment_path("", "cheap").is_err());
-    }
 
     #[test]
     fn empty_catalog_points_at_discover() {

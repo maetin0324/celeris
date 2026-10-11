@@ -6,8 +6,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use task_api::types::{
-    ApiConfigView, ClusterConfigView, ConfigView, GenreConfigView, ProviderConfigView,
-    ReviewerConfigView, RoleConfigView,
+    ApiConfigView, ClusterConfigView, ConfigView, GenreConfigView, ReviewerConfigView,
+    RoleConfigView,
 };
 use task_api::{ApiError, ApiSettings, ApiState};
 use task_core::{DaemonMode, SharedRole};
@@ -16,7 +16,7 @@ use task_ops::view::ViewContext;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
-use super::adapters::{effective_models, provider_lives, secret_usage};
+use super::adapters::{provider_lives, secret_usage};
 use super::bootstrap::hostname;
 use crate::{Config, DaemonError, InstanceIdentity};
 
@@ -85,7 +85,6 @@ impl task_api::RoutingCatalogReader for RoutingCatalogAdapter {
 
 /// ADR-0013 / `docs/api/v1/api.md` §3.21: `GET /api/v1/config` に出す設定の要約。env は**キー名だけ**、トークンとその場所は出さない。
 pub fn config_view(config: &Config, listen: SocketAddr) -> ConfigView {
-    let models = effective_models(config);
     ConfigView {
         config_path: config
             .source_path
@@ -109,28 +108,6 @@ pub fn config_view(config: &Config, listen: SocketAddr) -> ConfigView {
             adapter: config.reviewer.adapter.clone(),
             tier: config.reviewer.tier,
         },
-        providers: config
-            .providers
-            .iter()
-            .map(|p| {
-                let mut env_keys: Vec<String> = p.env.keys().cloned().collect();
-                env_keys.sort();
-                ProviderConfigView {
-                    kind: config.provider_kind(&p.id).unwrap_or_default(),
-                    llm_source: config.provider_llm_source(&p.id),
-                    credential_refs: task_core::model_routing::credential_refs(&p.env_from_secrets),
-                    tier_models: p.tier_models.clone(),
-                    account_id: p.account_id.clone(),
-                    id: p.id.clone(),
-                    adapter: p.adapter.clone(),
-                    tiers: p.tiers.clone(),
-                    concurrency: p.concurrency.unwrap_or(1),
-                    model: models.get(&p.id).filter(|m| !m.is_empty()).cloned(),
-                    env_keys,
-                    account_pool: p.account_pool.is_on(),
-                }
-            })
-            .collect(),
         clusters: config
             .clusters
             .iter()
@@ -290,14 +267,6 @@ pub fn api_settings(
         celeris_version: env!("CARGO_PKG_VERSION").to_string(),
         instance_id,
         started_at,
-        providers_dir: config.providers_dir.clone(),
-        openai_compatible_source_ids: config
-            .llm_proxy
-            .sources
-            .openai_compatible
-            .iter()
-            .map(|source| source.id.clone())
-            .collect(),
         admin_tx,
         accounts_roots: config
             .accounts

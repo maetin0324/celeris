@@ -91,7 +91,6 @@ async fn draining_refuses_the_same_endpoints_and_plain_endpoints_keep_working() 
 
     for (method, path, body) in [
         ("POST", "/api/v1/reload", Some(json!({}))),
-        ("POST", "/api/v1/providers/p1/check", Some(json!({}))),
         ("POST", "/api/v1/notify/test", Some(json!({}))),
         ("POST", "/api/v1/accounts/a/login", Some(json!({}))),
         (

@@ -15,7 +15,7 @@ use futures_util::StreamExt;
 use serde_json::Value;
 use task_api::{
     AdminRequest, ApiConfigView, ApiSettings, ApiState, ClusterConfigView, ConfigView,
-    GenreConfigView, ProviderConfigView, ReviewerConfigView, RoleConfigView,
+    GenreConfigView, ReviewerConfigView, RoleConfigView,
 };
 use task_core::{
     Budget, Check, Criterion, Event, SqliteStore, Status, Task, TaskId, TaskKind, TaskStore, Tier,
@@ -47,8 +47,6 @@ pub struct EnvOptions {
     /// `task_core::CONVERSATION_GENRE`。
     pub conversation_genre: String,
     /// ADR-0017 M1: `providers.d/` の書き込み先。`None` なら管理系の作成/変更/削除は使えない。
-    pub providers_dir: Option<PathBuf>,
-    pub openai_compatible_source_ids: std::collections::HashSet<String>,
     /// ADR-0017 M2: `reload`/`check` を受け取るチャネルの送信側。`None` ならどちらも使えない。
     pub admin_tx: Option<mpsc::Sender<AdminRequest>>,
     /// ADR-0024 D1: `[accounts] claude_dir`。`None` なら claude-code のプールは無し。
@@ -56,8 +54,6 @@ pub struct EnvOptions {
     /// ADR-0025 D1: `[accounts] codex_dir`。`None` なら codex のプールは無し。
     pub codex_accounts_root: Option<PathBuf>,
     pub opencode_accounts_root: Option<PathBuf>,
-    /// `config_view.providers` の末尾に足す provider 行。
-    pub extra_providers: Vec<task_api::types::ProviderConfigView>,
     pub max_runs_per_account: usize,
     /// ADR-0030 D1: `[secrets] dir`。`None` なら秘密の管理系は 409 `secrets_unavailable`。
     pub secrets_dir: Option<PathBuf>,
@@ -99,13 +95,10 @@ impl Default for EnvOptions {
             genres: Vec::new(),
             // Phase 30: 既定の対話用分野は他の既定値と同じく `task_core::CONVERSATION_GENRE`。
             conversation_genre: task_core::CONVERSATION_GENRE.to_string(),
-            providers_dir: None,
-            openai_compatible_source_ids: Default::default(),
             admin_tx: None,
             accounts_root: None,
             codex_accounts_root: None,
             opencode_accounts_root: None,
-            extra_providers: Vec::new(),
             max_runs_per_account: 0,
             secrets_dir: None,
             secret_usage: std::collections::HashMap::new(),
@@ -241,42 +234,6 @@ pub fn config_view() -> ConfigView {
             adapter: Some("claude-code".into()),
             tier: Some(Tier::Standard),
         },
-        providers: vec![
-            ProviderConfigView {
-                kind: Default::default(),
-                llm_source: Some(task_core::ResolvedLlmSource {
-                    source: task_core::LlmSourceRef::ClaudeOauth,
-                    origin: task_core::SourceOrigin::Derived,
-                }),
-                credential_refs: Default::default(),
-                tier_models: Default::default(),
-                account_id: None,
-                id: "claude-a".into(),
-                adapter: "claude-code".into(),
-                tiers: vec![Tier::Frontier, Tier::Standard],
-                concurrency: 2,
-                model: Some("claude-sonnet-5".into()),
-                env_keys: vec!["CLAUDE_CONFIG_DIR".into()],
-                account_pool: false,
-            },
-            ProviderConfigView {
-                kind: Default::default(),
-                llm_source: Some(task_core::ResolvedLlmSource {
-                    source: task_core::LlmSourceRef::ClaudeOauth,
-                    origin: task_core::SourceOrigin::Derived,
-                }),
-                credential_refs: Default::default(),
-                tier_models: Default::default(),
-                account_id: None,
-                id: "claude-b".into(),
-                adapter: "claude-code".into(),
-                tiers: vec![Tier::Frontier],
-                concurrency: 1,
-                model: None,
-                env_keys: vec!["CLAUDE_CONFIG_DIR".into()],
-                account_pool: false,
-            },
-        ],
         clusters: vec![ClusterConfigView {
             id: "pegasus".into(),
             host: "pegasus".into(),
@@ -331,19 +288,13 @@ pub fn settings(
         busy_timeout: Duration::from_millis(5000),
         background_checkpoint: false,
         view: view_context(workspace_root),
-        config_view: {
-            let mut view = config_view();
-            view.providers.extend(options.extra_providers);
-            view
-        },
+        config_view: config_view(),
         roles: options.roles,
         genres: options.genres,
         conversation_genre: options.conversation_genre,
         celeris_version: "0.9.0-test".into(),
         instance_id: "01J9ZX5T3K8Q7W6V5R4P3N2M1H".into(),
         started_at: "2026-09-14T00:00:00Z".into(),
-        providers_dir: options.providers_dir,
-        openai_compatible_source_ids: options.openai_compatible_source_ids,
         admin_tx: options.admin_tx,
         accounts_roots: {
             let mut roots = std::collections::HashMap::new();

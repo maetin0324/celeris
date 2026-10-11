@@ -37,9 +37,8 @@ use crate::types::{
     ClusterSettingsPutBody, ClusterSettingsView, Clusters, CommentBody, CommentList, ConfigView,
     DaemonView, DecisionBody, EventsPage, Health, MilestoneCreateBody, MilestonePatchBody,
     OrgCreateBody, OrgList, OrgPatchBody, Problem, ProjectCreateBody, ProjectDetail, ProjectList,
-    ProjectPatchBody, ProviderCheckResponse, ProviderConfigView, Providers, ReleasePromoteAccepted,
-    Releases, ReloadResult, ReopenBody, RetryBody, RunList, SecretList, SecretPutResult,
-    StreamHeartbeat, StreamHello, StreamReset, Timeline,
+    ProjectPatchBody, ReleasePromoteAccepted, Releases, ReloadResult, ReopenBody, RetryBody,
+    RunList, SecretList, SecretPutResult, StreamHeartbeat, StreamHello, StreamReset, Timeline,
 };
 
 /// コミット済みのスキーマ（`GET /schema` の本体）。
@@ -87,11 +86,7 @@ pub struct ApiV1Schema {
     pub execution_decompose: task_ops::regate::DecomposeRequest,
     pub execution_decompose_result: task_ops::regate::DecomposeResult,
     pub replay_report: ReplayReport,
-    pub providers: Providers,
-    /// `POST /api/v1/providers` と `PATCH /api/v1/providers/{id}` の応答（ADR-0017）。
-    pub provider_config: ProviderConfigView,
     pub reload: ReloadResult,
-    pub provider_check: ProviderCheckResponse,
     pub clusters: Clusters,
     /// ADR-0032 D5: `POST /clusters/{id}/connect` と `POST /clusters/{id}/connect/code` の応答。
     pub cluster_connect_start: ClusterConnectStart,
@@ -353,14 +348,6 @@ pub struct ApiV1Schema {
     pub model_catalog_override: crate::model_catalog::ModelCatalogOverrideView,
     pub model_discover: crate::model_catalog::DiscoverBody,
     pub model_discover_result: crate::model_catalog::DiscoverResponse,
-    /// ADR 2026-10-06 model-role-assignments D4: 割り当て（`GET`/`PUT`/`DELETE`/`preview` の本文と応答）。
-    pub model_role_members: crate::model_assignments::RoleMembersBody,
-    pub model_role_members_result: crate::model_assignments::RoleMembersResponse,
-    pub model_assignment_list: crate::model_assignments::AssignmentList,
-    pub model_assignment_put: crate::model_assignments::AssignmentPutBody,
-    pub model_assignment_put_result: crate::model_assignments::AssignmentPutResponse,
-    pub model_assignment_preview: crate::model_assignments::AssignmentPreviewBody,
-    pub model_assignment_preview_result: crate::model_assignments::AssignmentPreviewResponse,
 }
 
 /// 生成したスキーマ（`serde_json::Value`）。

@@ -633,12 +633,12 @@ fn account_check_result_name(result: &AccountCheckResult) -> &'static str {
     }
 }
 
-fn map_check_result(result: AccountCheckResult) -> task_api::ProviderCheckResult {
+fn map_check_result(result: AccountCheckResult) -> task_api::AccountCheckResult {
     match result {
-        AccountCheckResult::Ok => task_api::ProviderCheckResult::Ok,
-        AccountCheckResult::AuthFailed => task_api::ProviderCheckResult::AuthFailed,
-        AccountCheckResult::Throttled => task_api::ProviderCheckResult::Throttled,
-        AccountCheckResult::SpawnFailed => task_api::ProviderCheckResult::SpawnFailed,
+        AccountCheckResult::Ok => task_api::AccountCheckResult::Ok,
+        AccountCheckResult::AuthFailed => task_api::AccountCheckResult::AuthFailed,
+        AccountCheckResult::Throttled => task_api::AccountCheckResult::Throttled,
+        AccountCheckResult::SpawnFailed => task_api::AccountCheckResult::SpawnFailed,
     }
 }
 

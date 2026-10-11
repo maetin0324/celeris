@@ -297,22 +297,6 @@ impl OperationAudit {
         }
     }
 
-    /// Record a value-only operation (a preview that writes nothing) or the validation problem
-    /// that refused it.
-    pub(crate) fn record(
-        &self,
-        store: &SqliteStore,
-        target_kind: &str,
-        target_id: &str,
-        action: &str,
-        outcome: Result<Value, ApiProblem>,
-    ) -> Result<CosOperation, ApiProblem> {
-        match outcome {
-            Ok(value) => self.apply(store, target_kind, target_id, action, |_| Ok(value)),
-            Err(problem) => Err(self.reject(store, target_kind, target_id, problem)),
-        }
-    }
-
     /// Record `problem` as a rejected operation (row + reasoned audit event) and give it back.
     /// When recording itself fails, that failure is returned instead.
     pub(crate) fn reject(

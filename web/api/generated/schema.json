@@ -13,7 +13,7 @@
           ]
         },
         "result": {
-          "$ref": "#/$defs/ProviderCheckResult"
+          "$ref": "#/$defs/AccountCheckResult"
         },
         "usage": {
           "anyOf": [
@@ -31,6 +31,16 @@
         "checked_at"
       ],
       "type": "object"
+    },
+    "AccountCheckResult": {
+      "description": "Account connectivity check result.",
+      "enum": [
+        "ok",
+        "auth_failed",
+        "throttled",
+        "spawn_failed"
+      ],
+      "type": "string"
     },
     "AccountCooldownLive": {
       "description": "アカウントの cooldown（Unix 秒）。",
@@ -1330,104 +1340,6 @@
         "forbidden"
       ],
       "type": "object"
-    },
-    "AssignmentList": {
-      "properties": {
-        "effective": {
-          "items": {
-            "$ref": "#/$defs/RoleSlotView"
-          },
-          "type": "array"
-        },
-        "items": {
-          "items": {
-            "$ref": "#/$defs/EffectiveAssignmentView"
-          },
-          "type": "array"
-        }
-      },
-      "required": [
-        "items",
-        "effective"
-      ],
-      "type": "object"
-    },
-    "AssignmentPreviewBody": {
-      "additionalProperties": false,
-      "description": "`POST …/assignments/preview` の本文。`model_id` が `null`（省略）なら解除した場合の影響。",
-      "properties": {
-        "model_id": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "source": {
-          "type": "string"
-        },
-        "tier": {
-          "$ref": "#/$defs/Tier"
-        }
-      },
-      "required": [
-        "source",
-        "tier"
-      ],
-      "type": "object"
-    },
-    "AssignmentPreviewResponse": {
-      "properties": {
-        "impact": {
-          "$ref": "#/$defs/ImpactView"
-        }
-      },
-      "required": [
-        "impact"
-      ],
-      "type": "object"
-    },
-    "AssignmentPutBody": {
-      "additionalProperties": false,
-      "description": "`PUT …/assignments/{source}/{tier}` の本文。",
-      "properties": {
-        "model_id": {
-          "type": "string"
-        },
-        "note": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "required": [
-        "model_id"
-      ],
-      "type": "object"
-    },
-    "AssignmentPutResponse": {
-      "properties": {
-        "impact": {
-          "$ref": "#/$defs/ImpactView"
-        },
-        "item": {
-          "$ref": "#/$defs/EffectiveAssignmentView"
-        }
-      },
-      "required": [
-        "item",
-        "impact"
-      ],
-      "type": "object"
-    },
-    "AssignmentStateView": {
-      "enum": [
-        "assigned",
-        "excluded"
-      ],
-      "type": "string"
     },
     "AttentionItem": {
       "oneOf": [
@@ -3090,10 +3002,6 @@
         "context_limits"
       ],
       "type": "object"
-    },
-    "CatalogSource": {
-      "description": "catalog の source 名。`claude-oauth`・`codex-oauth`・`opencode-go`・`openai-compatible:<id>`\n（llm-proxy / routing の source 名と同じ）。",
-      "type": "string"
     },
     "ChangeDiffView": {
       "description": "`GET /tasks/{id}/changes/{repo}/diff?path=` の応答（ADR-0043 D5。200 KiB で切る）。",
@@ -5662,12 +5570,6 @@
         "plan_auto_accept": {
           "type": "boolean"
         },
-        "providers": {
-          "items": {
-            "$ref": "#/$defs/ProviderConfigView"
-          },
-          "type": "array"
-        },
         "retry_backoff_base_secs": {
           "format": "uint64",
           "minimum": 0,
@@ -5719,7 +5621,6 @@
         "max_requeues",
         "plan_auto_accept",
         "reviewer",
-        "providers",
         "api"
       ],
       "type": "object"
@@ -7793,37 +7694,6 @@
       ],
       "type": "object"
     },
-    "DailyUsage": {
-      "properties": {
-        "day": {
-          "description": "`YYYY-MM-DD`（UTC）。",
-          "type": "string"
-        },
-        "input_tokens": {
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "output_tokens": {
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "runs": {
-          "description": "その日に終わった run の数。",
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        }
-      },
-      "required": [
-        "day",
-        "runs",
-        "input_tokens",
-        "output_tokens"
-      ],
-      "type": "object"
-    },
     "DbInfo": {
       "properties": {
         "busy_timeout_ms": {
@@ -9357,58 +9227,6 @@
       "required": [
         "task",
         "fields"
-      ],
-      "type": "object"
-    },
-    "EffectiveAssignmentView": {
-      "description": "割り当て 1 件（実効の状態つき）。",
-      "properties": {
-        "excluded_reason": {
-          "description": "`override:disabled` か `catalog:unavailable`（`state = excluded` のとき）。",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "model_id": {
-          "type": "string"
-        },
-        "note": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "priority": {
-          "format": "uint32",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "source": {
-          "type": "string"
-        },
-        "state": {
-          "$ref": "#/$defs/AssignmentStateView"
-        },
-        "tier": {
-          "$ref": "#/$defs/Tier"
-        },
-        "updated_at": {
-          "description": "RFC3339（UTC）。",
-          "type": "string"
-        },
-        "updated_by": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "source",
-        "tier",
-        "model_id",
-        "priority",
-        "state",
-        "updated_at",
-        "updated_by"
       ],
       "type": "object"
     },
@@ -15026,64 +14844,6 @@
       ],
       "type": "object"
     },
-    "ImpactChangeView": {
-      "properties": {
-        "after": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "before": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "excluded_reason": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "id": {
-          "type": "string"
-        },
-        "kind": {
-          "$ref": "#/$defs/ImpactKind"
-        },
-        "tier": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "kind",
-        "id",
-        "tier"
-      ],
-      "type": "object"
-    },
-    "ImpactKind": {
-      "enum": [
-        "provider",
-        "proxy"
-      ],
-      "type": "string"
-    },
-    "ImpactView": {
-      "properties": {
-        "changes": {
-          "items": {
-            "$ref": "#/$defs/ImpactChangeView"
-          },
-          "type": "array"
-        }
-      },
-      "required": [
-        "changes"
-      ],
-      "type": "object"
-    },
     "ImplicitAccountLive": {
       "description": "ADR 2026-10-08 account-concurrency-limits §(e): 暗黙アカウント 1 件の観測値。単位は LLM source で、\n同じ source を使う非プール行は 1 件を共有する。上限の保存値は DB（`account_limits`）が正本で、\n旧 `[[providers]].concurrency` は上限に使わない。",
       "properties": {
@@ -16777,7 +16537,7 @@
       "type": "object"
     },
     "LaneResolution": {
-      "description": "ADR-0069 D4: lane → provider / account / model / reasoning effort の解決結果（監査記録）。\n解決そのものは従来の `select_provider` → `TieredAdapter::model_for_tier` → `select_tier` のまま。",
+      "description": "ADR-0069 D4: lane → provider / account / model / reasoning effort の解決結果（監査記録）。",
       "properties": {
         "account": {
           "type": [
@@ -21665,39 +21425,6 @@
       ],
       "type": "string"
     },
-    "ProviderCheckResponse": {
-      "description": "`POST /api/v1/providers/{id}/check` の応答（ADR-0017 D2）。",
-      "properties": {
-        "checked_at": {
-          "type": "string"
-        },
-        "detail": {
-          "description": "ADR-0022 M1: 人が読むための一行の手がかり（ワーカーの返答、失敗の理由）。無ければ `null`。",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "result": {
-          "$ref": "#/$defs/ProviderCheckResult"
-        }
-      },
-      "required": [
-        "result",
-        "checked_at"
-      ],
-      "type": "object"
-    },
-    "ProviderCheckResult": {
-      "description": "`POST /api/v1/providers/{id}/check` の結果（ADR-0017 D2）。",
-      "enum": [
-        "ok",
-        "auth_failed",
-        "throttled",
-        "spawn_failed"
-      ],
-      "type": "string"
-    },
     "ProviderCheckView": {
       "description": "ADR-0022 D2: 1 回の疎通確認の記録。",
       "properties": {
@@ -21720,100 +21447,6 @@
       "required": [
         "at",
         "result"
-      ],
-      "type": "object"
-    },
-    "ProviderConfigView": {
-      "properties": {
-        "account_id": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "account_pool": {
-          "default": false,
-          "description": "ADR-0024 D2: `[accounts]` のプールから選ぶか（既定 `false`）。",
-          "type": "boolean"
-        },
-        "adapter": {
-          "type": "string"
-        },
-        "concurrency": {
-          "deprecated": true,
-          "description": "Deprecated（ADR 2026-10-08 account-concurrency-limits §(a)）: 書かれた旧値（無ければ 1）。意味を持たない。",
-          "format": "uint",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "credential_refs": {
-          "additionalProperties": {
-            "type": "string"
-          },
-          "default": {},
-          "type": "object"
-        },
-        "env_keys": {
-          "description": "`[[providers]].env` のキー名だけ。",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "id": {
-          "type": "string"
-        },
-        "kind": {
-          "$ref": "#/$defs/ProviderKind",
-          "default": "adapter"
-        },
-        "llm_source": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ResolvedLlmSource"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "model": {
-          "description": "実効モデル（空なら `null`）。",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "tier_models": {
-          "additionalProperties": false,
-          "default": {},
-          "properties": {
-            "cheap": {
-              "$ref": "#/$defs/ModelBinding"
-            },
-            "frontier": {
-              "$ref": "#/$defs/ModelBinding"
-            },
-            "standard": {
-              "$ref": "#/$defs/ModelBinding"
-            }
-          },
-          "type": "object"
-        },
-        "tiers": {
-          "items": {
-            "$ref": "#/$defs/Tier"
-          },
-          "type": "array"
-        }
-      },
-      "required": [
-        "id",
-        "adapter",
-        "tiers",
-        "concurrency",
-        "env_keys"
       ],
       "type": "object"
     },
@@ -21867,14 +21500,7 @@
           "type": "string"
         },
         "in_use": {
-          "description": "実行中の run と Reviewer run の合計。ADR-0089（Phase R6-5）: CoS の対話 run は含めない\n（`in_use_cos`）。",
-          "format": "uint32",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "in_use_cos": {
-          "default": 0,
-          "description": "ADR-0089（Phase R6-5）: このプロバイダで走っている CoS の対話 run の数（`concurrency` の外。\n古いスナップショットには無いので既定 0）。",
+          "description": "実行中の通常 run と Reviewer run の合計。",
           "format": "uint32",
           "minimum": 0,
           "type": "integer"
@@ -21995,223 +21621,6 @@
           "type": "string"
         }
       ]
-    },
-    "ProviderStats": {
-      "description": "プロバイダ別の run 集計（task-api のメモリ内の観測値。再起動で再計算）。",
-      "properties": {
-        "by_day": {
-          "description": "`WorkerFinished.ts` の UTC 日付で直近 30 日（昇順。run の無い日は現れない）。",
-          "items": {
-            "$ref": "#/$defs/DailyUsage"
-          },
-          "type": "array"
-        },
-        "done": {
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "error": {
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "input_tokens": {
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "lease_expired": {
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "output_tokens": {
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "question": {
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "requeue": {
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "runs": {
-          "description": "`WorkerStarted` の数（実行中を含む）。",
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        }
-      },
-      "required": [
-        "runs",
-        "done",
-        "question",
-        "error",
-        "requeue",
-        "lease_expired",
-        "input_tokens",
-        "output_tokens",
-        "by_day"
-      ],
-      "type": "object"
-    },
-    "ProviderView": {
-      "properties": {
-        "account_id": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "account_pool": {
-          "default": false,
-          "description": "ADR-0024 D2: `[accounts]` のプールから選ぶか（既定 `false`）。",
-          "type": "boolean"
-        },
-        "adapter": {
-          "type": "string"
-        },
-        "concurrency": {
-          "deprecated": true,
-          "description": "Deprecated（ADR 2026-10-08 account-concurrency-limits §(a)）: config / `providers.d` に書かれた旧値（無ければ 1）。\ndispatch では使わず、何とも比べない。同時実行数はアカウント（暗黙アカウントを含む）の `max_runs` で決まる。",
-          "format": "uint",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "cooldown": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/CooldownView"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "スナップショットが無い、または cooldown 中でなければ `null`。"
-        },
-        "credential_refs": {
-          "additionalProperties": {
-            "type": "string"
-          },
-          "default": {},
-          "type": "object"
-        },
-        "env_keys": {
-          "description": "`env` のキー名だけ（値は出さない）。",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "id": {
-          "type": "string"
-        },
-        "in_use": {
-          "description": "この行で走っている CoS 以外の run（プロバイダを使うレビュー run を含む）の数。観測値で、上限とは比べない。\nスナップショットが無ければ `null`。ADR-0089（Phase R6-5）: CoS の対話 run は含めない（`in_use_cos`）。",
-          "format": "uint32",
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "in_use_cos": {
-          "description": "ADR-0089（Phase R6-5）: このプロバイダで走っている CoS の対話 run の数（`in_use` とは別に数える観測値）。\nスナップショットが無ければ `null`。",
-          "format": "uint32",
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "kind": {
-          "$ref": "#/$defs/ProviderKind",
-          "default": "adapter"
-        },
-        "last_check": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ProviderCheckView"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "ADR-0022 D2: 直近の `POST /providers/{id}/check` の結果（`{at, result}`）。まだ確認していない、\nまたは celeris を再起動した後は `null`（メモリだけに持つ観測値）。"
-        },
-        "llm_source": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ResolvedLlmSource"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "model": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "stats": {
-          "$ref": "#/$defs/ProviderStats"
-        },
-        "tier_models": {
-          "additionalProperties": false,
-          "default": {},
-          "properties": {
-            "cheap": {
-              "$ref": "#/$defs/ModelBinding"
-            },
-            "frontier": {
-              "$ref": "#/$defs/ModelBinding"
-            },
-            "standard": {
-              "$ref": "#/$defs/ModelBinding"
-            }
-          },
-          "type": "object"
-        },
-        "tiers": {
-          "items": {
-            "$ref": "#/$defs/Tier"
-          },
-          "type": "array"
-        }
-      },
-      "required": [
-        "id",
-        "adapter",
-        "tiers",
-        "concurrency",
-        "env_keys",
-        "stats"
-      ],
-      "type": "object"
-    },
-    "Providers": {
-      "description": "`GET /providers`。",
-      "properties": {
-        "items": {
-          "items": {
-            "$ref": "#/$defs/ProviderView"
-          },
-          "type": "array"
-        }
-      },
-      "required": [
-        "items"
-      ],
-      "type": "object"
     },
     "QualityEstimate": {
       "properties": {
@@ -24608,140 +24017,6 @@
       "required": [
         "id",
         "has_instructions"
-      ],
-      "type": "object"
-    },
-    "RoleMember": {
-      "additionalProperties": false,
-      "description": "One model's membership in a role. Priority is global within that role.",
-      "properties": {
-        "model_id": {
-          "type": "string"
-        },
-        "priority": {
-          "format": "uint32",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "source": {
-          "$ref": "#/$defs/CatalogSource"
-        }
-      },
-      "required": [
-        "source",
-        "model_id",
-        "priority"
-      ],
-      "type": "object"
-    },
-    "RoleMembersBody": {
-      "additionalProperties": false,
-      "description": "Complete membership of one role, in all sources. An empty list disables the role.",
-      "properties": {
-        "members": {
-          "items": {
-            "$ref": "#/$defs/RoleMember"
-          },
-          "type": "array"
-        }
-      },
-      "required": [
-        "members"
-      ],
-      "type": "object"
-    },
-    "RoleMembersResponse": {
-      "properties": {
-        "after": {
-          "items": {
-            "$ref": "#/$defs/RoleMember"
-          },
-          "type": "array"
-        },
-        "before": {
-          "items": {
-            "$ref": "#/$defs/RoleMember"
-          },
-          "type": "array"
-        },
-        "impact": {
-          "$ref": "#/$defs/ImpactView"
-        }
-      },
-      "required": [
-        "before",
-        "after",
-        "impact"
-      ],
-      "type": "object"
-    },
-    "RoleSlotView": {
-      "description": "1 つの `(source, tier)` の枠の実効。",
-      "properties": {
-        "available": {
-          "description": "catalog に行があるときだけ。",
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "excluded_reason": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "last_seen": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "model_id": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "origin": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/SlotOrigin"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "priority": {
-          "format": "uint32",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "providers": {
-          "description": "この枠を使う provider の id（昇順）。",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "proxy": {
-          "description": "llm-proxy の lane がこの枠を使うか。",
-          "type": "boolean"
-        },
-        "source": {
-          "type": "string"
-        },
-        "tier": {
-          "$ref": "#/$defs/Tier"
-        }
-      },
-      "required": [
-        "source",
-        "tier",
-        "priority",
-        "providers",
-        "proxy"
       ],
       "type": "object"
     },
@@ -27493,6 +26768,7 @@
       ],
       "type": "object"
     },
+<<<<<<< HEAD
     "SlotOrigin": {
       "enum": [
         "assignment",
@@ -27516,6 +26792,8 @@
       ],
       "type": "object"
     },
+=======
+>>>>>>> 87249274 (wu/api-unprovider: provider 管理 API と model_assignments を消す)
     "SourceOrigin": {
       "enum": [
         "explicit",
@@ -32545,21 +31823,6 @@
     "milestone_patch": {
       "$ref": "#/$defs/MilestonePatchBody"
     },
-    "model_assignment_list": {
-      "$ref": "#/$defs/AssignmentList"
-    },
-    "model_assignment_preview": {
-      "$ref": "#/$defs/AssignmentPreviewBody"
-    },
-    "model_assignment_preview_result": {
-      "$ref": "#/$defs/AssignmentPreviewResponse"
-    },
-    "model_assignment_put": {
-      "$ref": "#/$defs/AssignmentPutBody"
-    },
-    "model_assignment_put_result": {
-      "$ref": "#/$defs/AssignmentPutResponse"
-    },
     "model_catalog": {
       "$ref": "#/$defs/ModelCatalogView",
       "description": "ADR 2026-10-06 D5: モデル catalog。`GET /llm/models`、上書きの本文（応答は 1 項目）、発見の本文と応答。"
@@ -32575,13 +31838,6 @@
     },
     "model_discover_result": {
       "$ref": "#/$defs/DiscoverResponse"
-    },
-    "model_role_members": {
-      "$ref": "#/$defs/RoleMembersBody",
-      "description": "ADR 2026-10-06 model-role-assignments D4: 割り当て（`GET`/`PUT`/`DELETE`/`preview` の本文と応答）。"
-    },
-    "model_role_members_result": {
-      "$ref": "#/$defs/RoleMembersResponse"
     },
     "new_plan": {
       "$ref": "#/$defs/NewPlanSpec"
@@ -32668,16 +31924,6 @@
     },
     "project_plan_decided": {
       "$ref": "#/$defs/ProjectPlanDecided"
-    },
-    "provider_check": {
-      "$ref": "#/$defs/ProviderCheckResponse"
-    },
-    "provider_config": {
-      "$ref": "#/$defs/ProviderConfigView",
-      "description": "`POST /api/v1/providers` と `PATCH /api/v1/providers/{id}` の応答（ADR-0017）。"
-    },
-    "providers": {
-      "$ref": "#/$defs/Providers"
     },
     "release_promote": {
       "$ref": "#/$defs/ReleasePromoteAccepted"
@@ -32909,10 +32155,7 @@
     "execution_decompose",
     "execution_decompose_result",
     "replay_report",
-    "providers",
-    "provider_config",
     "reload",
-    "provider_check",
     "clusters",
     "cluster_connect_start",
     "cluster_connect_result",
@@ -33100,14 +32343,7 @@
     "model_catalog_item",
     "model_catalog_override",
     "model_discover",
-    "model_discover_result",
-    "model_role_members",
-    "model_role_members_result",
-    "model_assignment_list",
-    "model_assignment_put",
-    "model_assignment_put_result",
-    "model_assignment_preview",
-    "model_assignment_preview_result"
+    "model_discover_result"
   ],
   "title": "ApiV1Schema",
   "type": "object"

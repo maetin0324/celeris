@@ -1,15 +1,8 @@
 //! API から委譲された管理要求（reload / provider check / notify test）の処理。
 
-use std::path::PathBuf;
-use std::time::Duration;
-
 use task_dispatch::Dispatcher;
-use task_ops::daemon::ProviderCheckView;
-use task_worker::Workspace;
-use time::OffsetDateTime;
-use time::format_description::well_known::Rfc3339;
 
-use super::adapters::{build_adapters, build_harness_adapters, provider_lives};
+use super::adapters::{build_harness_adapters, provider_lives};
 use super::clusters::ClusterMasters;
 use crate::{Config, accounts_admin, cluster_admin, config, notify};
 
@@ -20,7 +13,6 @@ pub(crate) async fn handle_admin_request(
     dispatcher: &mut Dispatcher,
     config: &mut Config,
     req: task_api::AdminRequest,
-    check_tx: tokio::sync::mpsc::Sender<(String, ProviderCheckView)>,
     login_sessions: accounts_admin::LoginSessions,
     codex_login_sessions: accounts_admin::CodexLoginSessions,
     account_tx: tokio::sync::mpsc::Sender<accounts_admin::AccountAdminEvent>,
@@ -37,24 +29,6 @@ pub(crate) async fn handle_admin_request(
                 tracing::warn!(who = "admin", ?result, "reload rejected");
             }
             let _ = reply.send(result);
-        }
-        task_api::AdminRequest::Check { provider_id, reply } => {
-            let config_path = config.source_path.clone();
-            tokio::spawn(async move {
-                let outcome = check_provider(config_path, provider_id.clone()).await;
-                // ADR-0022 D2: 確認できたときだけ記録する（設定エラー・celeris 側の都合は「確認の結果」ではない）。
-                if let Ok(outcome) = &outcome {
-                    let check = ProviderCheckView {
-                        at: OffsetDateTime::now_utc()
-                            .format(&Rfc3339)
-                            .unwrap_or_default(),
-                        result: provider_check_result_name(&outcome.result).to_string(),
-                        detail: outcome.detail.clone(),
-                    };
-                    let _ = check_tx.send((provider_id, check)).await;
-                }
-                let _ = reply.send(outcome);
-            });
         }
         task_api::AdminRequest::AccountCheck { adapter, id, reply } => {
             accounts_admin::spawn_check(config, adapter, id, account_tx, reply);
@@ -311,190 +285,6 @@ pub(crate) fn accounts_section_changed(
         }
         _ => true,
     }
-}
-
-/// ADR-0022 D2: `ProviderCheckResult` の serde 名（`GET /providers` の `last_check.result` に出る文字列）。
-pub(crate) fn provider_check_result_name(result: &task_api::ProviderCheckResult) -> &'static str {
-    match result {
-        task_api::ProviderCheckResult::Ok => "ok",
-        task_api::ProviderCheckResult::AuthFailed => "auth_failed",
-        task_api::ProviderCheckResult::Throttled => "throttled",
-        task_api::ProviderCheckResult::SpawnFailed => "spawn_failed",
-    }
-}
-
-/// ADR-0017 D2: 1 アカウントだけ短い疎通確認を行う。`Dispatcher`/DB には触れない（タスク・イベントに残さない）。
-/// 設定は毎回 `Config::load` で読み直すので、`reload` 前の `providers.d/` の新規ファイルも確認できる。
-pub(crate) async fn check_provider(
-    config_path: Option<PathBuf>,
-    provider_id: String,
-) -> Result<task_api::ProviderCheckOutcome, task_api::CheckError> {
-    let path = config_path.ok_or_else(|| {
-        task_api::CheckError::Unavailable("config was not loaded from a file; cannot check".into())
-    })?;
-    let config =
-        Config::load(&path).map_err(|e| task_api::CheckError::ConfigInvalid(e.to_string()))?;
-    if !config.providers.iter().any(|p| p.id == provider_id) {
-        return Err(task_api::CheckError::NotFound);
-    }
-    let adapters = build_adapters(&config);
-    let adapter = adapters
-        .get(&provider_id)
-        .ok_or(task_api::CheckError::NotFound)?
-        .clone();
-
-    let dir = std::env::temp_dir().join(format!("celeris-provider-check-{}", ulid::Ulid::new()));
-    let now = OffsetDateTime::now_utc();
-    let task = task_core::Task {
-        harness_id: None,
-        requirements: Default::default(),
-        tree: None,
-        paused_at: None,
-        routing: None,
-        repos: Vec::new(),
-        id: task_core::TaskId::new(),
-        parent_id: None,
-        kind: task_core::TaskKind::Execute,
-        title: "provider check".into(),
-        objective: "Reply with a short confirmation that you are ready. Do not change any files."
-            .into(),
-        acceptance: vec![task_core::Criterion {
-            text: "reply".into(),
-            check: task_core::Check::Human,
-        }],
-        inputs: vec![],
-        depends_on: vec![],
-        status: task_core::Status::Ready,
-        priority: 0,
-        worker_hint: task_core::WorkerHint {
-            tier: task_core::Tier::Standard,
-            adapter: None,
-        },
-        workspace: task_core::WorkspaceSpec::Local {
-            path: dir.clone(),
-            mode: None,
-        },
-        // ADR-0022 M1: 1 ターンではワーカープロトコル（`artifacts/result.json` を書く）を完了できず、
-        // 健全なアカウントでも `error_max_turns` になる。人が読む信号にするため少しだけ余裕を持たせる。
-        budget: task_core::Budget {
-            max_turns: 3,
-            max_wall_secs: 30,
-            max_retries: 0,
-        },
-        attempts: 0,
-        lease: None,
-        created_at: now,
-        updated_at: now,
-        role: None,
-        genre: None,
-        aggregate: false,
-        project_id: None,
-        milestone_id: None,
-        assignee: None,
-        conversation: None,
-        skills: Vec::new(),
-        mode: task_core::TaskMode::default(),
-        labels: Vec::new(),
-        category: Default::default(),
-    };
-    let prepared = task_worker::LocalWorkspace::new(dir.clone())
-        .prepare(&task)
-        .await
-        .map_err(|e| {
-            task_api::CheckError::Unavailable(format!("failed to prepare check workspace: {e}"))
-        })?;
-    let run_id = task_core::TaskId::new().to_string();
-    // ADR-0036 D1: 疎通確認用の単独タスク（親なし）なので従来どおり `<workspace>/artifacts`。
-    let artifacts_dir = task_core::artifacts::artifacts_dir_for(&task, &prepared);
-    let req = task_worker::RunRequest {
-        llm_route: None,
-        cargo_target_dir: None,
-        protocol: task_worker::PROTOCOL_VERSION,
-        task,
-        workspace: prepared,
-        // 疎通確認は celeris 自身が作った使い捨てのディレクトリで動かす（worktree は関係しない）。
-        work_dir: None,
-        artifacts_dir,
-        context: task_worker::RunContext {
-            prior_review: vec![],
-            inputs: vec![],
-            answers: vec![],
-            review: None,
-            role: None,
-            children: vec![],
-            available_genres: vec![],
-            // プロバイダの疎通確認なので、役職・記憶・やり取り・組織図は渡さない（ADR-0033 D4 / D6）。
-            ..task_worker::RunContext::default()
-        },
-    };
-    let limits = task_worker::RunLimits {
-        wall_clock: Duration::from_secs(30),
-        idle_timeout: Duration::from_secs(config.idle_timeout_secs.min(30)),
-        kill_grace: Duration::from_secs(config.kill_grace_secs),
-    };
-    let result = adapter
-        .run(req, &run_id, limits, &task_worker::adapter::NullSink)
-        .await;
-    let _ = tokio::fs::remove_dir_all(&dir).await;
-    // ADR-0022 M1（実機確認で修正）: 見ているのは「このアカウントで CLI が起動して応答するか」だけ。
-    // ワーカープロトコル上のエラー（`Terminal::Error`。1 ターンでは result.json を書けない等）は
-    // **アカウントの問題ではない**ので `ok` とし、理由を `detail` に残す。起動できない・認証切れ・
-    // 枯渇は `AdapterError` 側で分かる。
-    Ok(match result {
-        Ok(outcome) => match outcome.terminal {
-            task_worker::Terminal::Done { summary, .. } => {
-                (task_api::ProviderCheckResult::Ok, Some(summary))
-            }
-            task_worker::Terminal::Question { text } => {
-                (task_api::ProviderCheckResult::Ok, Some(text))
-            }
-            task_worker::Terminal::Error { message, .. } => {
-                (task_api::ProviderCheckResult::Ok, Some(message))
-            }
-            // ADR-0072 D7（Phase E1）: 疎通確認はアカウントの問題を見るだけなので、yield / 予算切れも
-            // 起動して応答した証拠として `Ok` にする（continuation はしない。短命の疎通 run のため）。
-            task_worker::Terminal::Yielded { .. } => (
-                task_api::ProviderCheckResult::Ok,
-                Some("yielded".to_string()),
-            ),
-            task_worker::Terminal::BudgetExhausted { kind, message, .. } => (
-                task_api::ProviderCheckResult::Ok,
-                Some(format!("budget exhausted ({kind:?}): {message}")),
-            ),
-            task_worker::Terminal::Waiting { .. } => (
-                task_api::ProviderCheckResult::Ok,
-                Some("asked for a cluster job wait".to_string()),
-            ),
-        },
-        Err(e @ task_worker::AdapterError::AuthFailed(_)) => (
-            task_api::ProviderCheckResult::AuthFailed,
-            Some(e.to_string()),
-        ),
-        Err(
-            e @ (task_worker::AdapterError::Throttled { .. }
-            | task_worker::AdapterError::Exhausted(_)),
-        ) => (
-            task_api::ProviderCheckResult::Throttled,
-            Some(e.to_string()),
-        ),
-        Err(e) => (
-            task_api::ProviderCheckResult::SpawnFailed,
-            Some(e.to_string()),
-        ),
-    })
-    .map(|(result, detail)| task_api::ProviderCheckOutcome {
-        result,
-        detail: detail.map(|d| truncate_detail(&d)),
-    })
-}
-
-/// `detail` は人が読む手がかりなので短くする（1 行・200 文字まで）。
-pub(crate) fn truncate_detail(text: &str) -> String {
-    let one_line: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    if one_line.chars().count() <= 200 {
-        return one_line;
-    }
-    one_line.chars().take(199).collect::<String>() + "…"
 }
 
 #[cfg(test)]

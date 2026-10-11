@@ -38,7 +38,6 @@ async fn admin_loop(
     config: &mut Config,
     mut rx: tokio::sync::mpsc::Receiver<task_api::AdminRequest>,
 ) {
-    let (check_tx, _check_rx) = tokio::sync::mpsc::channel(16);
     let (account_tx, _account_rx) = tokio::sync::mpsc::channel(16);
     let (cluster_tx, _cluster_rx) = tokio::sync::mpsc::channel(16);
     let login_sessions = accounts_admin::new_sessions();
@@ -49,7 +48,6 @@ async fn admin_loop(
             dispatcher,
             config,
             req,
-            check_tx.clone(),
             login_sessions.clone(),
             codex_login_sessions.clone(),
             account_tx.clone(),

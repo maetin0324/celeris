@@ -136,33 +136,6 @@ impl ApiProblem {
         Self::new(StatusCode::NOT_FOUND, "not_found", "no such endpoint")
     }
 
-    /// ADR-0017: 指定した provider id が `providers.d/` に無い。
-    pub(crate) fn provider_not_found(id: &str) -> Self {
-        Self::new(
-            StatusCode::NOT_FOUND,
-            "provider_not_found",
-            format!("provider not found: {id}"),
-        )
-    }
-
-    /// ADR-0017 D1: `POST /api/v1/providers` の id が既に `providers.d/<id>.toml` にある。
-    pub(crate) fn provider_exists(id: &str) -> Self {
-        Self::new(
-            StatusCode::CONFLICT,
-            "provider_exists",
-            format!("provider already exists: {id}"),
-        )
-    }
-
-    /// ADR-0017 M1: `providers_include` が未設定で、管理系の書き込みができない。
-    pub(crate) fn providers_admin_unavailable() -> Self {
-        Self::new(
-            StatusCode::CONFLICT,
-            "providers_admin_unavailable",
-            "the [api] provider admin endpoints require `providers_include` to be configured in config.toml",
-        )
-    }
-
     /// ADR-0040 D4（Phase 47）: いまこのプロセスは `standby`（または `draining`）なので、ディスパッチャの
     /// 状態を要する管理系は受けられない。窓は 1〜2 tick なので、GUI は `Retry-After` の秒数だけ待って
     /// もう一度出せばよい（本文の `detail` は `"standby"` ちょうど）。
@@ -228,11 +201,6 @@ impl ApiProblem {
             "login_code_not_supported",
             "this adapter's login does not use a code submission step",
         )
-    }
-
-    /// ADR-0024 D5: `account_pool = true` だが `adapter != "claude-code"`（API 側で判定できる範囲）。
-    pub(crate) fn invalid_provider(detail: impl Into<String>) -> Self {
-        Self::new(StatusCode::UNPROCESSABLE_ENTITY, "invalid_provider", detail)
     }
 
     /// ADR-0053 D1/D4（Phase 65）: `[llm_proxy]` が無効（`effective_enabled() == false`）。

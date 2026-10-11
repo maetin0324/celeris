@@ -11,11 +11,7 @@ use task_core::decision::{
     DecisionRaisedBy, DecisionRequest, DecisionStatus,
 };
 use task_core::feed::{NoticeEvent, NoticeKind, NoticeStore};
-use task_core::model_catalog::{CatalogSource, DiscoveredModel};
-use task_core::{
-    Check, Criterion, Event, ModelCatalogStore, Status, TaskId, TaskKind, TaskRouting, TaskStore,
-    Tier,
-};
+use task_core::{Check, Criterion, Event, Status, TaskId, TaskKind, TaskRouting, TaskStore};
 
 fn raise_decision(env: &TestEnv, task: TaskId, id: &str) {
     let opt = |key: &str| DecisionOption {
@@ -586,71 +582,6 @@ async fn cos_ops_mutations_execution_plan_put_replans_an_active_plan() {
     let row = env
         .store
         .cos_operation_find(&thread, "first")
-        .expect("lookup")
-        .expect("row");
-    assert_eq!(row.state, "rejected");
-}
-
-#[tokio::test]
-async fn cos_ops_mutations_llm_assignment_put_and_delete() {
-    let env = admin_env();
-    let source = CatalogSource::new("opencode-go");
-    env.store
-        .model_catalog_apply(&source, &[DiscoveredModel::new("glm-5")], 1_700_000_000)
-        .expect("catalog");
-    let path = "/api/v1/llm/models/assignments/opencode-go/cheap";
-
-    let op = run_domain(
-        &env,
-        "assign-put",
-        "PUT",
-        path,
-        json!({"model_id": "glm-5", "note": "安い枠"}),
-        "model_assignment.put",
-    )
-    .await;
-    assert_eq!(op["result"]["model_id"], "glm-5");
-    let rows = env.store.model_role_assignments().expect("rows");
-    let row = rows
-        .iter()
-        .find(|a| a.source == source && a.tier == Tier::Cheap)
-        .expect("assignment");
-    assert_eq!(row.model_id, "glm-5");
-    assert_eq!(row.updated_by, "cos");
-
-    run_domain(
-        &env,
-        "assign-delete",
-        "DELETE",
-        path,
-        json!(null),
-        "model_assignment.delete",
-    )
-    .await;
-    assert!(
-        !env.store
-            .model_role_assignments()
-            .expect("rows")
-            .iter()
-            .any(|a| a.source == source && a.tier == Tier::Cheap)
-    );
-
-    // A model outside the catalog is refused before any write, recorded with the reason.
-    let app = env.router();
-    let (thread, _, bearer) = cos_bearer(&env, "assign-unknown");
-    let resp = send(
-        &app,
-        post_json_with(
-            OPS,
-            &op_body("unknown", "PUT", path, json!({"model_id": "nope"})),
-            &[("authorization", &bearer)],
-        ),
-    )
-    .await;
-    assert_problem(&resp, 400, "model_not_in_catalog");
-    let row = env
-        .store
-        .cos_operation_find(&thread, "unknown")
         .expect("lookup")
         .expect("row");
     assert_eq!(row.state, "rejected");

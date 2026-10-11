@@ -157,7 +157,7 @@ pub struct Config {
     #[serde(default)]
     pub providers_include: Option<String>,
     /// `providers_include` を解決したディレクトリの絶対パス（`Config::load` が計算。TOML には書かない。
-    /// `POST /api/v1/providers` 等が書き込む先）。
+    /// daemon 設定の管理操作が書き込む先。
     #[serde(skip)]
     pub providers_dir: Option<PathBuf>,
     /// ADR-0018: コマンドを実行するクラスタ。`WorkspaceSpec::Remote{cluster, path}` の `cluster` がここの `id` を指す。

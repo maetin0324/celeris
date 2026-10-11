@@ -265,7 +265,7 @@ listen = "127.0.0.1:7710"      # これを書いたときだけ API が動く（
 | `too_many_streams` | 503 | SSE 接続数が 16 を超えた。`Retry-After: 5` |
 | `db_busy` | 503 | `SQLITE_BUSY`（busy_timeout 超過）。`Retry-After: 1` |
 | `replay_in_progress` | 503 | 別の `POST /replay` が走っている。`Retry-After: 5` |
-| `standby` | 503 | ADR-0040 D4: いまこのプロセスは `standby`（または `draining`）なので、ディスパッチャの状態を要する管理系（`POST /reload`、`POST /providers/{id}/check`、クラスタ接続、アカウントの確認・削除・ログイン中継、`POST /notify/test`）を受けられない。`detail` は `"standby"`、`Retry-After: 2`。窓は 1〜2 tick（昇格の引き継ぎ中）なので、GUI はその間だけ「切り替え中」を出して再送すればよい。読み書きの通常のエンドポイントはそのまま動く |
+| `standby` | 503 | ADR-0040 D4: いまこのプロセスは `standby`（または `draining`）なので、ディスパッチャの状態を要する管理系（`POST /reload`、クラスタ接続、アカウントの確認・削除・ログイン中継、`POST /notify/test`）を受けられない。`detail` は `"standby"`、`Retry-After: 2`。窓は 1〜2 tick（昇格の引き継ぎ中）なので、GUI はその間だけ「切り替え中」を出して再送すればよい。読み書きの通常のエンドポイントはそのまま動く |
 | `internal` | 500 | その他（`detail` にエラー文。スタックやパスは出さない） |
 
 `task_ops::OpsError` からの写像（Phase 9a の型）:
@@ -323,16 +323,11 @@ listen = "127.0.0.1:7710"      # これを書いたときだけ API が動く（
 | 19 | GET | `/graph` | DAG（`depends_on` の辺、`parent_id` の入れ子） | `Graph` | task-ops |
 | 20 | GET | `/events` | 全タスク横断のイベント（`after_id`。ポーリング / `curl` 用） | `EventsPage` | store `events_since` |
 | 21 | GET | `/stream` | SSE（§4） | `text/event-stream` | store `events_since` + スナップショット |
-| 22 | GET | `/providers` | 定義 + 稼働状況 + 集計 | `Providers` | 設定 + スナップショット + task-api の集計 |
 | 23 | GET | `/daemon` | ディスパッチャのメモリ上のスナップショット | `DaemonView` | `tokio::sync::watch` |
 | 24 | GET | `/config` | `config.toml` の要約（秘密は出さない） | `ConfigView` | 設定（celeris が起動時に渡す） |
 | 25 | GET | `/schema` | `api-v1.schema.json` の内容 | `application/schema+json` | `include_str!` |
 | 26 | GET | `/clusters` | `[[clusters]]` の定義 + 接続の有無 + cooldown（ADR-0018、Phase 12） | `Clusters` | 設定 + スナップショット |
-| 27 | POST | `/providers` | `providers.d/<id>.toml` を作る（ADR-0017、Phase 11。**管理系: トークン必須**） | 201 `ProviderConfigView`（`Location`） | celeris（ファイル書き込みのみ） |
-| 28 | PATCH | `/providers/{id}` | 並列度・tier・model・env を変更する（**管理系**） | 200 `ProviderConfigView` | celeris（ファイル書き込みのみ） |
-| 29 | DELETE | `/providers/{id}` | `providers.d/<id>.toml` を消す（**管理系**） | 200 `{}` | celeris（ファイル削除のみ） |
-| 30 | POST | `/providers/{id}/check` | そのアカウントの env で短い疎通確認を 1 回行う（**管理系**） | 200 `ProviderCheckResponse` | celeris（`task-worker` 経由。タスク・イベントには残らない） |
-| 31 | POST | `/reload` | 設定と `providers.d/` を読み直し、稼働中のプロバイダ選定・アダプタを差し替える（**管理系**） | 200 `ReloadResult` | celeris（`Dispatcher` の差し替え） |
+| 31 | POST | `/reload` | config を読み直して実行設定を再適用する（**管理系**） | 200 `ReloadResult` | celeris（`Dispatcher` の再構成） |
 | 32 | GET | `/tasks/{id}/runs/{run_id}/request` | `runs/<run_id>/request.json`（ワーカーに渡した `RunRequest`。ADR-0023 D2） | `application/json` | ファイル |
 | 33 | GET | `/tasks/{id}/runs/{run_id}/prompt` | `runs/<run_id>/prompt.txt`（claude-code / codex に実際に渡した文面。ADR-0023 M1） | `text/plain` | ファイル |
 | 34 | GET | `/secrets` | GUI から預かる秘密（API キー等）の一覧。値は含まない（ADR-0030、Phase 20。**管理系**） | `SecretList` | celeris（ファイル読み取りのみ） |
@@ -511,10 +506,6 @@ listen = "127.0.0.1:7710"      # これを書いたときだけ API が動く（
 | 204 | PUT | `/llm/models/{source}/{model_id}/override` | モデルの上書き（`disabled` / `tier` / `alias` / `note`）を置く | `ModelCatalogItem` | store `model_catalog_set_override` |
 | 205 | DELETE | `/llm/models/{source}/{model_id}/override` | 上書きを消す（204。無ければ 404 `model_override_not_found`） | なし | store `model_catalog_delete_override` |
 | 206 | POST | `/llm/models/discover` | 発見を今すぐ走らせる（202） | `DiscoverResponse` | celeris の `ModelDiscoveryHook` |
-| 207 | GET | `/llm/models/assignments` | source × 役割（tier）→ model の割り当て（実効の状態つき）と全枠の実効（§3.127.4。ADR 2026-10-06 model-role-assignments D4） | `AssignmentList` | store `model_role_assignment_view` + routing catalog |
-| 208 | PUT | `/llm/models/assignments/{source}/{tier}` | 割り当てを置く（`{model_id, note?}`。200 `{item, impact}`） | `AssignmentPutResponse` | store `model_role_assignment_set` |
-| 209 | DELETE | `/llm/models/assignments/{source}/{tier}` | 割り当てを外す（204。無ければ 404 `model_assignment_not_found`） | なし | store `model_role_assignment_delete` |
-| 210 | POST | `/llm/models/assignments/preview` | 書かずに影響（impact）だけ返す（`{source, tier, model_id?}`） | `AssignmentPreviewResponse` | routing catalog + providers |
 | 211 | POST | `/browser/trusted-devices` | 信頼端末を登録する（201。秘密の hash と名前。owner session の assertion）（**管理系** + assertion。§3.131.1） | `TrustedDeviceResult` | store `trusted_device_register` |
 | 212 | POST | `/browser/trusted-devices/verify` | 提示された hash を検証し回転する（`readonly: true` は何も書かない。§3.131.2）（**管理系** + assertion） | `TrustedDeviceResult` | store `trusted_device_verify_and_rotate` / `trusted_device_verify_readonly` |
 | 213 | GET | `/browser/trusted-devices` | 信頼端末の一覧（hash は返さない。§3.131.3）（**管理系** + header の assertion） | `TrustedDeviceList` | store `trusted_device_list` |
@@ -943,26 +934,9 @@ planner が行う（`POST /tasks` で root task を作る。§3.4）。既存の
 
 §4。
 
-### 3.19 `GET /providers` → 200 `Providers`
+### 3.19 `GET /providers`（削除）
 
-`items[]` は `[[providers]]` の順。定義（`id` / `adapter` / `tiers` / `concurrency` / `model` = 実効モデル / `env_keys` = **キー名だけ** /
-`account_pool` / `account_id` / `tier_models` / `credential_refs`）は設定から、`in_use` と `in_use_cos` と `cooldown` と
-`last_check` はスナップショット（無ければ `null`）、`stats` は §5.8 の集計。クエリは受けない。
-
-`concurrency` は **deprecated**（ADR 2026-10-08-account-concurrency-limits §(a)）: config / `providers.d` に書かれた旧値（無ければ 1）を
-出すだけで、dispatch では使わず何とも比べない。同時実行数はアカウントの上限（§3.29 の `effective_max_runs`。アカウントを持たない行は
-その行の暗黙アカウント）で決まる。削除は別の ADR で決める。
-
-`in_use`: その行で走っている CoS 以外の run（プロバイダを使うレビュー run を含む）の数。`in_use_cos`: そのプロバイダで走っている
-**CoS の対話 run**（Console から CoS に話しかけた一言）の数。どちらも**観測値**で、上限と比べる値ではない（ADR-0089 規則 3 の
-「`in_use` は CoS を含まない」は維持）。
-
-`last_check`（ADR-0022 D2）は直近の `POST /providers/{id}/check` の結果 `{at, result, detail?}`
-（`result` は §3.27 と同じ 4 値、`detail` は人が読む一行で、無ければ省略。ADR-0022 M1）。
-**メモリだけに持つ観測値**で、celeris を再起動すると `null` に戻る（イベントにも DB にも残さない）。自動では走らないので、
-値が入るのは人が `check` を叩いた後だけ。`reload` でプロバイダ表を差し替えても、同じ `id` の記録は残る。
-
-ADR-0017 M4: `POST /reload` に成功すると、次の tick のスナップショットに乗った一覧（`providers.d/` を含む）を優先して返す。最初の tick が来る前だけ起動時に固定した一覧にフォールバックする。`GET /config` の `providers[]` も同じ規則。
+旧 provider の定義・稼働状況・集計 API は削除した。実行設定は `llm_sources`、`harnesses`、`routes` から得る。
 
 ### 3.20 `GET /daemon` → 200 `DaemonView`
 
@@ -1088,99 +1062,10 @@ ADR-0017 M4: `POST /reload` に成功すると、次の tick のスナップシ�
 ]}
 ```
 
-### 3.24〜3.28 プロバイダ管理（ADR-0017。**すべて管理系: `token_file` 未設定でも 401**）
+### 3.24〜3.28 provider 管理 API（削除）
 
-設計は ADR-0017。`config.toml` を直接書き換えず、`providers_include`（例: `providers_include = "providers.d/*.toml"`）が指す
-ディレクトリに 1 アカウント 1 ファイル（`providers.d/<id>.toml`。`[[providers]]` の 1 行と同じ形）を読み書きする。
-反映（実際の dispatch と `GET /providers`/`GET /config` への表示）は `POST /reload` を呼んだ**次の tick から**で、
-実行中の run には影響しない。`providers_include` が設定されていない構成では、3.24〜3.26 は 409
-`providers_admin_unavailable` を返す（3.27・3.28 は celeris への管理要求の経路が無い構成で同じ 409）。
-3.27・3.28 は `active` のときだけ受け、`standby`/`draining` の間は 503 `standby`（§1.5）。
-
-#### 3.24 `POST /providers` → 201 `ProviderConfigView`（`Location: /api/v1/providers/{id}`）
-
-要求本文: `{"id": "acct-b", "adapter": "fake"|"claude-code"|"codex"|"acp"|"paperqa"|"local-deep-research", "tiers"?: [...], "concurrency"?: 1, "model"?: "", "env"?: {...}, "account_pool"?: false, "account_id"?: "…", "tier_models"?: {...}, "credential_refs"?: {...}}`
-（省略したものは `[[providers]]` と同じ既定。`tiers` は 3 tier 全部）。**`concurrency` は deprecated**（ADR 2026-10-08-account-concurrency-limits
-§(a)）: 型だけ検査し（0 は従来どおり 400）、`providers.d/<id>.toml` には**保存しない**（warn を 1 行出す）。応答の `concurrency` は 1。
-上限はアカウント画面（§3.29a。この行がプールでなければ、その行の LLM source の暗黙アカウント `implicit/<llm source id>`）で設定する。`id` は 1〜64 文字の ASCII 英数字・`-`・`_`
-（`providers.d/<id>.toml` のファイル名になるため、パス区切りは拒否）。`adapter` は既知の 6 種類のみ。
-`id`・`adapter` の形が不正、`concurrency` が 0 は 400 `bad_request`。`id` が既にあれば 409 `provider_exists`。
-応答・ログとも `env` は `env_keys`（キー名だけ）で、値は一切出さない。
-
-- `tier_models`（ADR-0069 D4）: tier → `{name, model_id?, unavailable_reason?, reasoning_effort?}` の明示束縛。
-  `adapter` が `"claude-code"`/`"codex"` 以外で空でなければ 400 `bad_request`。
-- `account_id`: プールの中の特定アカウントに固定する。`account_pool = true` が要り（無ければ 400）、
-  形はアカウント id と同じ規則（不正なら 400）。
-- `credential_refs`: LLM の認証用環境変数（`ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` / `OPENAI_API_KEY` /
-  `CODEX_API_KEY`）→ 秘密 id（§3.36〜3.38）。ファイルの `env_from_secrets` に書かれる。キーがこの 4 つ以外か、
-  秘密 id の形が不正なら 400。
-- `[secrets]` が設定されている構成では、`env` に上の 4 つのキーの値が平文で入っていると、書き込む前に
-  秘密（id は `migrated-<ULID>`）へ移し、`env_from_secrets` からの参照に置き換える（値はファイルに残さない）。
-
-**`command`/`args`（ADR-0026 D2: `adapter = "acp"` の行だけが持つ実行ファイル／引数の上書き）・`settings`
-（ADR-0027 D3: `adapter = "paperqa"` の行だけが持つ PaperQA 設定ファイルの上書き）・`env_from_secrets`
-（ADR-0030 D2）は本文に含められない**（含まれていたら値を見る前に 422 `invalid_provider`。実行するコマンド／設定を
-HTTP から差し替えられないようにするため。`providers.d/<id>.toml` は人が直接編集する。ADR-0026 D7、ADR-0027 D3）。
-`local-deep-research` の `[adapters.local_deep_research].settings`（ADR-0029 D1）は行ごとの上書きが無く、
-そもそも `ProviderConfig` に対応するフィールドが無いので、この制約の対象外（本文に置けるフィールドは他アダプタと同じ）。
-
-#### 3.25 `PATCH /providers/{id}` → 200 `ProviderConfigView`
-
-要求本文は `{"tiers"?, "concurrency"?, "model"?, "env"?, "account_pool"?, "account_id"?, "tier_models"?, "credential_refs"?}`
-（渡したフィールドだけ上書き。`id`/`adapter` は変更不可。空の本文は `{}` と同じ）。`concurrency` は 3.24 と同じく deprecated で、
-受け付けるが保存しない（file に人が書いた旧値はそのまま往復で残る）。`account_id: ""` は固定を外す。
-`credential_refs` は既存の認証用キーの参照を置き換え、それ以外の `env_from_secrets` は残す。検証と 400 の条件は 3.24 と同じ
-（patch 後の組み合わせで判定する）。存在しない `id`（形が不正な `id` を含む）は 404 `provider_not_found`。
-**`command`/`args`/`settings`/`env_from_secrets` は 3.24 と同じく本文に含められない**（422
-`invalid_provider`。含まれていたらファイルには一切触れない）。ファイルに人が直接書いたこれらの値は、
-これらを含まない PATCH では変更されずそのまま残る。
-
-#### 3.26 `DELETE /providers/{id}` → 200 `{}`
-
-`providers.d/<id>.toml` を削除する。存在しない `id`（形が不正な `id` を含む）は 404 `provider_not_found`。
-
-#### 3.27 `POST /providers/{id}/check` → 200 `ProviderCheckResponse`
-
-```json
-{"result": "ok" | "auth_failed" | "throttled" | "spawn_failed", "checked_at": "…", "detail": "Confirmed ready; …"}
-```
-
-`detail`（ADR-0022 M1）は人が読むための一行（ワーカーの返答、または失敗の理由。無ければ欄ごと省略）。`GET /providers` の `last_check.detail` にも同じ値が出る。
-**見ているのは「このアカウントで CLI が起動して応答するか」だけ**なので、ワーカープロトコル上のエラー（`Terminal::Error`）は
-アカウントの問題ではなく `ok` として扱い、理由を `detail` に入れる。起動できない・認証切れ・枯渇はそれぞれ
-`spawn_failed` / `auth_failed` / `throttled`。
-
-そのアカウントの env で短い run（30 秒・3 ターンまで）を 1 回だけ行い、疎通を確かめる（ADR-0017 D2）。設定は毎回
-読み直すので、`reload` 前に足した `providers.d/` の行も確かめられる。DB には
-一切触れない（タスクにもイベント列にも残らない、観測値）。結果は**次の tick のスナップショット**にも載り、
-`GET /providers` の `last_check` として読める（ADR-0022 D2。celeris の再起動で消える）。
-**自動では走らない**（起動時の一括確認も定期実行もしない。1 回ごとに実際の API 呼び出しを消費するため。ADR-0022 D3）。存在しない `id` は 404 `provider_not_found`。設定の
-再読込自体が失敗した（`providers.d/` の壊れた TOML 等）場合は 400 `bad_request`。40 秒以内に結果が返らなければ 500 `internal`。
-**celeris（`task-worker` に依存する側）が実行し、task-api 自身はワーカーを起動しない**（DESIGN §5.10 の境界。ADR-0017 M2）。
-
-#### 3.28 `POST /reload` → 200 `ReloadResult`（`{"reloaded": true}`）
-
-`config.toml` と `providers_include` の指すディレクトリを読み直す。設定の検証に失敗したら 400 `bad_request`
-（`detail` は `invalid config: …`）を返し、稼働中の状態には触れない（古い設定のまま動き続ける）。実行中の run はそれぞれ差し替え前のアダプタ・役割・
-分野の写しを既に掴んでいるので、reload の影響を受けない。**反映は次に起動する run / 次 tick から**。
-
-反映されるもの:
-
-| 設定 | 反映先 | いつから効くか |
-| --- | --- | --- |
-| `[[providers]]` / `providers.d/` | `StaticPolicy`・アダプタ一式・`GET /providers`/`GET /config` の一覧 | 次 tick の dispatch から |
-| `[[roles]]` / `[[genres]]` / `[delegation]` | `Dispatcher` の役割・分野・委譲設定（`RunContext`、委譲される子の budget） | 次に起動する run から（実行中の run は古い写しのまま） |
-| `[reports]` | 報告の圧縮の閾値 | 次 tick から |
-| `[notify]` | 通知の間隔・webhook の秘密 id・GUI base URL | 次 tick から |
-| `[conversation]` | 対話が常に走る分野 | 次に始まる対話から |
-| `[selfdeploy]` の `delivery_projects` / `delivery_default_departments` | 納品の方針 | 次 tick から |
-
-**cooldown はメモリ上（`StaticPolicy` の内部状態）なので reload で消える**（ADR-0017 D1）。
-
-再起動が要るもの（reload では触れない。変更しても黙って古いまま動き続ける）: `db` / `workspace_root` /
-`[api]` / `[[clusters]]`、および秘密の `used_by`（§3.36）。**`[accounts]` だけは例外的にこの reload 自体を 400 で拒否する**（ADR-0024）:
-`claude_dir` / `codex_dir` / `max_runs_per_account` / `check_model` のどれかが読み直した設定で変わっていれば、`detail` に
-再起動が必要な旨を書いて拒否する（それ以外のフィールドの変更は反映されない）。
+llm source と harness の選択を実行時に行うため、`GET/POST /providers`、`PATCH/DELETE /providers/{id}`、
+`POST /providers/{id}/check` は削除した。設定の再読込を行う `POST /reload` は引き続き利用できる。
 
 ### 3.29〜3.35 アカウントのプール（claude-code / codex。ADR-0024・ADR-0025）と上限（ADR 2026-10-08-account-concurrency-limits）
 
@@ -1329,16 +1214,10 @@ exit 0 かつ `.credentials.json` ができたら `ok`。空・空白だけの�
 
 `?adapter=`（省略時 `claude-code`）。進行中のログインを止める（無ければ何もしない）。
 
-#### プロバイダ管理への追加（3.19 / 3.24 / 3.25）
+#### provider account-pool API（削除）
 
-`ProviderView` / `ProviderConfigView` / `POST /providers` / `PATCH /providers/{id}` の本文に `account_pool: bool`（既定 `false`）を追加。
-`true` は `adapter` が `"claude-code"` か `"codex"` で、かつ `[accounts]` にそのアダプタの根ディレクトリが設定されているときだけ有効
-（ADR-0025 D1）。それ以外の `adapter` はもちろん、
-**対応する根ディレクトリが設定されていない構成（`GET /accounts` の `roots["<adapter>"]: null`）で `account_pool = true` を
-`POST`/`PATCH /providers` に渡した時点で** 422 `invalid_provider` を返す（reload を待たない）。
-プール経由の run の失敗は、原因がアカウント側（throttled/auth_failed/exhausted）ならアカウントを cooldown に
-しプロバイダは cooldown にしない。**Spawn 失敗（起動できない）はアカウントの責任ではないので、通常どおり
-プロバイダを cooldown にする**（ADR-0024 D4）。
+provider を使った account-pool の作成・編集 API は削除した。アカウント自体は `POST /accounts` と
+`[accounts]` の source 設定で管理する。
 
 ### 3.36〜3.38 秘密（API キー等）の管理（ADR-0030。**すべて管理系: `token_file` 未設定でも 401**）
 
@@ -3430,38 +3309,10 @@ SQLite の catalog に残す。発見は決定的な HTTP・コマンド実行�
 を返す。係が無い process（試験・standby 等）では `{"results": [], "unavailable": true}`。不明な `source` は 400。
 `celerisctl models list|discover [--source S]` が同じ API を呼ぶ。
 
-#### 3.127.4 `/llm/models/assignments`（役割への割り当て）
+#### 3.127.4 model assignment API（削除）
 
-2026-10-07 付記: `effective` はモデルごとの候補行となり、同じ `(source, tier)` の行が複数ある。`items` / `effective` に `priority`（非負、小さい順）を追加した。
-
-- `PUT /llm/models/assignments/roles/{tier}`: `{"members":[{"source":"opencode-go","model_id":"glm-5","priority":0}]}`。全 source のその役割の集合を原子的に置換し、200 `{before, after, impact}` を返す。空の配列は役割を明示的に空にし、config を復活させない。
-- `POST /llm/models/assignments/roles/{tier}/preview`: 同じ本文、同じ応答。書き込みなし。
-- config の各モデルは未編集の scope に限って候補として互換読み取りする。旧 `PUT/DELETE …/{source}/{tier}` は互換 API（PUT はその scope を 1 モデルに置換、DELETE は config へ戻す）。web の複数モデル編集は新しい集合 API を使う。
-
-以下は旧単体 API の説明。
-
-人が「source の frontier / standard / cheap にはこのモデル」と決める表（ADR 2026-10-06 model-role-assignments）。
-catalog の自動発見は表を消さない。`GET /llm/models` の各 item には、そのモデルが割り当てられている tier の一覧
-`assigned_tiers` が付く。書き込み（`PUT`/`DELETE`/`preview`）は管理系（bearer 必須）。
-
-- `GET` → 200 `{items: [{source, tier, model_id, state: "assigned"|"excluded", excluded_reason, note, updated_at, updated_by}],
-  effective: [{source, tier, model_id, origin: "assignment"|"config"|null, excluded_reason, providers[], proxy, available, last_seen}]}`。
-  `effective` は (catalog の source ∪ provider の `llm_source` ∪ routing catalog の source) × 3 tier の全枠。割り当てがあれば
-  `origin = "assignment"`、無ければ config の値（`origin = "config"`。provider は provider の一覧の `tier_models[lane].model_id`、無ければ `model`。
-  llm-proxy の lane は routing catalog の `legacy:*` deployment の upstream model。`<source>/` 接頭辞は外す）、どちらも無ければ `null`。
-  `providers` は枠を使う provider の id、`proxy` は llm-proxy の lane が使うか。
-- `state = "excluded"` は割り当て行は残るが routing には使えない状態。`excluded_reason` は `override:disabled`（上書きで無効）か
-  `catalog:unavailable`（発見で見えなくなった）。
-- `PUT` の本文は `{model_id, note?}`（未知のキーは 400）。`source`・`tier`（`frontier|standard|cheap`）が不正、または `model_id` が
-  その source の catalog に無いときは 400（`model_not_in_catalog`）。200 `{item, impact}`。成功すると event
-  `model_role_assignment_changed` を catalog の疑似 task の列に追記する。
-- `impact.changes[]` は `{kind: "provider"|"proxy", id, tier, before, after, excluded_reason}`。枠を使う provider と proxy の lane ごとに、
-  今の実効の model と変更後の model を**実行用の名前**で並べる（ADR 2026-10-06 model-role-assignments 付記 2026-10-07 wire-prefix:
-  provider 行は config の `model` / `tier_models` の `<prefix>/` を引き継ぐ。例 `qwen-local/qwen3.8-27b`、`opencode-go/glm-5`。
-  proxy の lane は接頭辞なし）。解除（`preview` の `model_id = null`）の `after` は config の値。provider は routing hook が割り当てを反映済みでも provider の一覧の値が出る。
-  proxy の lane は割り当て中に config の値を判別できないとき（catalog の値が割り当てと同じ）`after = null`。
-- `preview` は書き込みなしで `{impact}` だけ返す。`model_id` が `null`（省略）なら解除した場合。
-- `source` / `tier` の path 区間は `%` 符号化に対応する。
+旧 `model_assignments` の model 別 role assignment API は削除した。source × model の選択は `llm_route` と
+config の route 宣言で行う。
 
 
 ### 3.128 CoS チャット: スレッド・メッセージ・run・添付（ADR 2026-10-05-cos-chat-home D2）
@@ -3576,11 +3427,6 @@ registry は `crates/task-api/src/cos/ops/{tasks,decisions,projects,admin,surfac
 | projects | `PUT /projects/{id}/docs/page` | `docs.page_put`（外部効果。etag 不一致・main 編集中・path の誤りは変更前の拒否で `rejected`） |
 | projects | `DELETE /projects/{id}/docs/page` | `docs.page_delete`（`path`・`etag`・`message` は body。外部効果） |
 | projects | `POST /projects/{id}/docs/maintenance` | `docs.maintenance`（記録の action は `docs.maintenance_<op>`。apply 後の失敗 `docs_maintenance_partial` は pending のまま人の確認へ） |
-| admin | `PUT /llm/models/assignments/{source}/{tier}` | `model_assignment.put`（actor `cos`） |
-| admin | `DELETE /llm/models/assignments/{source}/{tier}` | `model_assignment.delete`（無ければ 404） |
-| admin | `POST /llm/models/assignments/preview` | `model_assignment.preview`（書き込まない。影響を `result` に記録） |
-| admin | `PUT /llm/models/assignments/roles/{tier}` | `model_role.replace`（構成員の丸ごと置き換え。`updated_by = cos`） |
-| admin | `POST /llm/models/assignments/roles/{tier}/preview` | `model_role.preview`（書き込まない） |
 | admin | `PUT /llm/models/{source}/{model_id}/override` | `model_override.put` |
 | admin | `DELETE /llm/models/{source}/{model_id}/override` | `model_override.delete`（無ければ 404） |
 | admin | `POST /llm/models/discover` | `model_catalog.discover`（外部効果: daemon の発見 hook を 1 回） |
@@ -3596,10 +3442,6 @@ registry は `crates/task-api/src/cos/ops/{tasks,decisions,projects,admin,surfac
 | admin | `PATCH /repos/{id}` | `repo.update` |
 | admin | `DELETE /repos/{id}` | `repo.delete`（未終了 task が使っていれば 409） |
 | admin | `PUT /clusters/{id}/settings` | `cluster.settings_put` |
-| admin | `POST /providers` | `provider.create`（`providers.d` の file 書き込みを監査 transaction の最後に行う。`env` に秘密の値があれば 422 `secret_operations`、本文は記録しない） |
-| admin | `PATCH /providers/{id}` | `provider.update`（同上） |
-| admin | `DELETE /providers/{id}` | `provider.delete` |
-| admin | `POST /providers/{id}/check` | `provider.check`（外部効果: daemon channel） |
 | admin | `POST /accounts` | `account.create`（ディレクトリ作成を監査 transaction の最後に行う） |
 | admin | `DELETE /accounts/{id}` | `account.delete`（外部効果: daemon が退避する。`?adapter=` の代わりに body `{"adapter"}`） |
 | admin | `POST /accounts/{id}/check` | `account.check`（外部効果。body `{"adapter"}` 任意） |
@@ -3637,7 +3479,7 @@ registry は `crates/task-api/src/cos/ops/{tasks,decisions,projects,admin,surfac
 | surface | `POST /tasks/{id}/browser/control/{run}/{session}/auth-section` | `browser.auth_section`（外部効果） |
 | surface | `POST /tasks/{id}/browser/live/{run}/{session}/events` | `browser.live_event`（外部効果。run が動いている間だけ） |
 
-tasks の実行計画初回採用 `POST /api/v1/tasks/{id}/execution-plan`（`execution.plan_adopt`）と既存計画への late tree adoption `POST /api/v1/tasks/{id}/tree/adopt`（`tree.adopt`）も登録済み。両方とも domain write と operation audit を同一 transaction で commit する。CoS credential での `celerisctl execution plan set` と `celerisctl tree adopt` はこれらの operation 経由で送る。CoS credential の `celerisctl cron create|update|pause|resume|run` は `cron_job.*` を送る。`celerisctl models discover|assign|unassign` は `model_catalog.discover`・`model_assignment.*`、`celerisctl replay`（`--check`/`--apply` なし）は `daemon.replay`、`celerisctl approve|reject|accept|cancel|rereview|retry|answer`・`execution phase-gate`・`execution plan replan` は `task.*`・`question.answer`・`execution.*` を送る（CoS credential の変更系 subcommand の包みは試験 `cos_mapped_table_wraps_every_allowed_subcommand` で固定。API に対応 route の無い手元の操作は CoS credential では拒否）。daemon channel（reload・check・account 退避・notify test）・発見・release 昇格・skill の KB 書き込みも外部効果の手順で記録する。task の取り込み（integrate）と PR merge、案件の文書、KB ページの編集、定期実行の手動実行は外部効果の手順（ADR 2026-10-09-cos-operations-external-effects: pending を先に記録し 1 回だけ実行、再送は再実行しない、変更前の拒否は `rejected`、結果不明は pending のまま起動時に `needs_remediation`）で記録する。
+tasks の実行計画初回採用 `POST /api/v1/tasks/{id}/execution-plan`（`execution.plan_adopt`）と既存計画への late tree adoption `POST /api/v1/tasks/{id}/tree/adopt`（`tree.adopt`）も登録済み。両方とも domain write と operation audit を同一 transaction で commit する。CoS credential での `celerisctl execution plan set` と `celerisctl tree adopt` はこれらの operation 経由で送る。CoS credential の `celerisctl cron create|update|pause|resume|run` は `cron_job.*` を送る。`celerisctl models discover` は `model_catalog.discover`、`celerisctl replay`（`--check`/`--apply` なし）は `daemon.replay`、`celerisctl approve|reject|accept|cancel|rereview|retry|answer`・`execution phase-gate`・`execution plan replan` は `task.*`・`question.answer`・`execution.*` を送る（CoS credential の変更系 subcommand の包みは試験 `cos_mapped_table_wraps_every_allowed_subcommand` で固定。API に対応 route の無い手元の操作は CoS credential では拒否）。daemon channel（reload・check・account 退避・notify test）・発見・release 昇格・skill の KB 書き込みも外部効果の手順で記録する。task の取り込み（integrate）と PR merge、案件の文書、KB ページの編集、定期実行の手動実行は外部効果の手順（ADR 2026-10-09-cos-operations-external-effects: pending を先に記録し 1 回だけ実行、再送は再実行しない、変更前の拒否は `rejected`、結果不明は pending のまま起動時に `needs_remediation`）で記録する。
 
 除外（422 `cos_operation_not_allowed`、detail に理由コード）: 秘密の値を扱う操作（`secret_operations`。`/secrets/*`・
 `/accounts/{id}/login*`・`/clusters/{id}/connect*`）、browser の credential/attestation 系
@@ -3889,7 +3731,7 @@ events を後ろから見て最初に見つかった質問。次の 2 つを同�
 
 ### 5.8 プロバイダの集計（`task_api::stats`。task-ops ではなく task-api のメモリ）
 
-- 最初の `GET /providers`（または `GET /accounts`）で `events_since(0, 5000)` を繰り返して全イベントを走査し、以後は要求のたびに増分だけ読む。**メモリ内の観測値**で、真実ではない（再起動で再計算）。
+- `GET /accounts`で `events_since(0, 5000)` を繰り返して全イベントを走査し、以後は要求のたびに増分だけ読む。**メモリ内の観測値**で、真実ではない（再起動で再計算）。
 - `WorkerStarted{run_id, provider}` で run 表に `provider`（`null` なら `"unknown"`）を登録し、`WorkerFinished{run_id, outcome, usage}` で閉じる。分類は §5.2（`continued` / `interrupted` はどの区分にも数えない）。`input_tokens` / `output_tokens` は `usage` の和（`null` は 0）。
 - `runs` は `WorkerStarted` の数（実行中を含む）。`by_day` は `WorkerFinished.ts` の UTC 日付で今日を含む直近 30 日、`by_day[].runs` はその日に終わった run の数。
 - Reviewer run（`role: reviewer`）も同じ規則で集計に**含める**（ADR-0014 D1）。
@@ -3910,7 +3752,7 @@ events を後ろから見て最初に見つかった質問。次の 2 つを同�
 | `crates/task-ops/src/inbox.rs` | `Inbox`, `InboxCounts`, `ApprovalItem`, `ApprovalArtifact`, `EvidenceView`, `QuestionItem`, `DraftGroup`, `AttentionItem` |
 | `crates/task-ops/src/daemon.rs` | `DaemonSnapshot`, `InFlight`, `InFlightKind`, `CooldownView`, `ProviderLive`, `AccountLive` ほか（task-dispatch が作り task-api が読むので、両者が依存する task-ops に置く。ADR-0013 D3/D4） |
 | `crates/task-ops/src/` のその他（`add.rs`, `plan.rs`, `gate.rs`, `graph.rs`, `replay.rs`, `retry.rs`, `decision.rs`, `tree_view.rs`, …） | `NewTaskSpec`, `NewPlanSpec`（`POST /tasks` / `POST /plans` の本文そのもの。`deny_unknown_fields`）, `TransitionResult`, `Graph`, `ReplayReport`, `RetryResult`, `DecisionInboxItem` ほか |
-| `crates/task-api/src/types.rs` | HTTP の要求・応答の包み（`Health`, `Problem`, `DecisionBody`, `AnswerBody`, `CancelBody`, `ReopenBody`, `EventsPage`, `RunList`, `ArtifactList`, `Providers`, `DaemonView`, `ConfigView`, `StreamHello`, `StreamHeartbeat`, `StreamReset`, `AccountList`, `SecretList`, `TaskRoutingView` …） |
+| `crates/task-api/src/types.rs` | HTTP の要求・応答の包み（`Health`, `Problem`, `DecisionBody`, `AnswerBody`, `CancelBody`, `ReopenBody`, `EventsPage`, `RunList`, `ArtifactList`, `DaemonView`, `ConfigView`, `StreamHello`, `StreamHeartbeat`, `StreamReset`, `AccountList`, `SecretList`, `TaskRoutingView` …） |
 | `crates/task-api/src/` のその他（`approvals.rs`, `browser.rs`, `knowledge.rs`, `skills.rs`, `docs.rs`, `project_plan.rs`, `reports.rs`, `console.rs`, …） | その module の endpoint だけが使う要求・応答 |
 
 ### 6.2 表記の約束

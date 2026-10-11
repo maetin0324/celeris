@@ -24,7 +24,7 @@ pub(crate) mod accounts;
 pub(crate) mod clusters;
 pub(crate) mod org;
 pub(crate) mod projects;
-pub(crate) mod providers;
+pub(crate) mod reload;
 mod secrets;
 pub(crate) mod system;
 pub(crate) mod task_actions;
@@ -44,9 +44,7 @@ use org::{create_org_node, delete_org_node, org_list, patch_browser_settings, pa
 use projects::{
     create_milestone, create_project, patch_milestone, patch_project, project_detail, project_list,
 };
-use providers::{
-    check_provider, create_provider, delete_provider, patch_provider, providers, reload,
-};
+use reload::reload;
 use secrets::{delete_secret, put_secret, secrets_list};
 use system::{config, create_plan, daemon, graph, health, inbox, metrics_scratch, replay, schema};
 use task_actions::{
@@ -101,16 +99,10 @@ pub(crate) fn router(state: ApiState) -> Router {
         .route("/api/v1/tasks/{id}/retry", post(retry))
         .route("/api/v1/plans", post(create_plan))
         .route("/api/v1/replay", post(replay))
+        .route("/api/v1/reload", post(reload))
         .route("/api/v1/graph", get(graph))
         .route("/api/v1/events", get(events))
         .route("/api/v1/stream", get(crate::sse::stream))
-        .route("/api/v1/providers", get(providers).post(create_provider))
-        .route(
-            "/api/v1/providers/{id}",
-            patch(patch_provider).delete(delete_provider),
-        )
-        .route("/api/v1/providers/{id}/check", post(check_provider))
-        .route("/api/v1/reload", post(reload))
         .route("/api/v1/accounts", get(accounts).post(create_account))
         .route("/api/v1/accounts/{id}", delete(delete_account))
         // ADR 2026-10-08 account-concurrency-limits §(d): `PATCH /accounts/{adapter}/{id}`。最初の段の引数名は
@@ -213,7 +205,6 @@ pub(crate) fn router(state: ApiState) -> Router {
         .merge(crate::routing_catalog::routes())
         // ADR 2026-10-06 D5: モデル catalog。実装は `crate::model_catalog`。
         .merge(crate::model_catalog::routes())
-        .merge(crate::model_assignments::routes())
         // ADR-0056 D4（Phase 78）: MCP クライアント / 呼び出しログの観測。実装は `crate::mcp_admin`。
         .merge(crate::mcp_admin::routes())
         // ADR-0056 D3 続き（Phase 82）: skills を GUI から見る・作る・mount する。実装は `crate::skills`。

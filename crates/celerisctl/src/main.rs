@@ -910,27 +910,6 @@ mod cos_mapping_tests {
             ("POST", "/api/v1/llm/models/discover")
         );
         assert_eq!(body, serde_json::json!({"source": "opencode-go"}));
-        let (method, path, body) = cos_mapped(&parse(&[
-            "models",
-            "assign",
-            "opencode-go",
-            "cheap",
-            "glm-5",
-        ]))
-        .expect("map")
-        .expect("mapped");
-        assert_eq!(
-            (method, path.as_str()),
-            ("PUT", "/api/v1/llm/models/assignments/opencode-go/cheap")
-        );
-        assert_eq!(body["model_id"], "glm-5");
-        let (method, path, _) = cos_mapped(&parse(&["models", "unassign", "opencode-go", "cheap"]))
-            .expect("map")
-            .expect("mapped");
-        assert_eq!(
-            (method, path.as_str()),
-            ("DELETE", "/api/v1/llm/models/assignments/opencode-go/cheap")
-        );
         assert!(
             cos_mapped(&parse(&["models", "list"]))
                 .expect("map")
@@ -1058,16 +1037,6 @@ mod cos_mapping_tests {
                 vec!["models", "discover", "--source", "opencode-go"],
                 "POST",
                 "/api/v1/llm/models/discover".into(),
-            ),
-            (
-                vec!["models", "assign", "opencode-go", "cheap", "glm-5"],
-                "PUT",
-                "/api/v1/llm/models/assignments/opencode-go/cheap".into(),
-            ),
-            (
-                vec!["models", "unassign", "opencode-go", "cheap"],
-                "DELETE",
-                "/api/v1/llm/models/assignments/opencode-go/cheap".into(),
             ),
             (vec!["replay"], "POST", "/api/v1/replay".into()),
         ];

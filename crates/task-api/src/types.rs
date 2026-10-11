@@ -8,7 +8,7 @@ use task_core::{
     ArtifactRef, EventRow, Milestone, MilestoneId, MilestoneStatus, OrgKind, OrgNode, Project,
     ProjectStatus, Status, TaskId, Tier,
 };
-use task_ops::daemon::{CooldownView, DaemonSnapshot};
+use task_ops::daemon::DaemonSnapshot;
 use task_ops::view::{ExecutionPhase, RunSummary};
 
 /// `GET /health`（無認証）。
@@ -321,91 +321,10 @@ pub struct ArtifactView {
     pub sha256_matches: Option<bool>,
 }
 
-/// `GET /providers`。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct Providers {
-    pub items: Vec<ProviderView>,
-}
-
 /// `POST /api/v1/reload` の応答（ADR-0017 D1）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ReloadResult {
     pub reloaded: bool,
-}
-
-/// `POST /api/v1/providers/{id}/check` の応答（ADR-0017 D2）。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct ProviderCheckResponse {
-    pub result: crate::admin::ProviderCheckResult,
-    pub checked_at: String,
-    /// ADR-0022 M1: 人が読むための一行の手がかり（ワーカーの返答、失敗の理由）。無ければ `null`。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub detail: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct ProviderView {
-    #[serde(default)]
-    pub kind: task_core::ProviderKind,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub llm_source: Option<task_core::ResolvedLlmSource>,
-    #[serde(default)]
-    pub credential_refs: std::collections::HashMap<String, String>,
-    #[serde(default)]
-    pub tier_models: task_core::model_routing::TierModels,
-    #[serde(default)]
-    pub account_id: Option<String>,
-    pub id: String,
-    pub adapter: String,
-    pub tiers: Vec<Tier>,
-    /// Deprecated（ADR 2026-10-08 account-concurrency-limits §(a)）: config / `providers.d` に書かれた旧値（無ければ 1）。
-    /// dispatch では使わず、何とも比べない。同時実行数はアカウント（暗黙アカウントを含む）の `max_runs` で決まる。
-    #[schemars(extend("deprecated" = true))]
-    pub concurrency: usize,
-    pub model: Option<String>,
-    /// `env` のキー名だけ（値は出さない）。
-    pub env_keys: Vec<String>,
-    /// この行で走っている CoS 以外の run（プロバイダを使うレビュー run を含む）の数。観測値で、上限とは比べない。
-    /// スナップショットが無ければ `null`。ADR-0089（Phase R6-5）: CoS の対話 run は含めない（`in_use_cos`）。
-    pub in_use: Option<u32>,
-    /// ADR-0089（Phase R6-5）: このプロバイダで走っている CoS の対話 run の数（`in_use` とは別に数える観測値）。
-    /// スナップショットが無ければ `null`。
-    pub in_use_cos: Option<u32>,
-    /// スナップショットが無い、または cooldown 中でなければ `null`。
-    pub cooldown: Option<CooldownView>,
-    /// ADR-0022 D2: 直近の `POST /providers/{id}/check` の結果（`{at, result}`）。まだ確認していない、
-    /// または celeris を再起動した後は `null`（メモリだけに持つ観測値）。
-    pub last_check: Option<task_ops::daemon::ProviderCheckView>,
-    pub stats: ProviderStats,
-    /// ADR-0024 D2: `[accounts]` のプールから選ぶか（既定 `false`）。
-    #[serde(default)]
-    pub account_pool: bool,
-}
-
-/// プロバイダ別の run 集計（task-api のメモリ内の観測値。再起動で再計算）。
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct ProviderStats {
-    /// `WorkerStarted` の数（実行中を含む）。
-    pub runs: u64,
-    pub done: u64,
-    pub question: u64,
-    pub error: u64,
-    pub requeue: u64,
-    pub lease_expired: u64,
-    pub input_tokens: u64,
-    pub output_tokens: u64,
-    /// `WorkerFinished.ts` の UTC 日付で直近 30 日（昇順。run の無い日は現れない）。
-    pub by_day: Vec<DailyUsage>,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct DailyUsage {
-    /// `YYYY-MM-DD`（UTC）。
-    pub day: String,
-    /// その日に終わった run の数。
-    pub runs: u64,
-    pub input_tokens: u64,
-    pub output_tokens: u64,
 }
 
 /// `GET /daemon`。
@@ -435,7 +354,6 @@ pub struct ConfigView {
     pub max_requeues: u32,
     pub plan_auto_accept: bool,
     pub reviewer: ReviewerConfigView,
-    pub providers: Vec<ProviderConfigView>,
     /// ADR-0018: `[[clusters]]` の要約（`env` はキー名だけ、`setup` は有無だけ）。
     #[serde(default)]
     pub clusters: Vec<ClusterConfigView>,
@@ -489,33 +407,6 @@ pub struct ReviewerConfigView {
     /// lane に一致させ組織の天井で丸める（`Dispatcher::pick_reviewer` が動的に決める）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tier: Option<Tier>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct ProviderConfigView {
-    #[serde(default)]
-    pub kind: task_core::ProviderKind,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub llm_source: Option<task_core::ResolvedLlmSource>,
-    #[serde(default)]
-    pub credential_refs: std::collections::HashMap<String, String>,
-    #[serde(default)]
-    pub tier_models: task_core::model_routing::TierModels,
-    #[serde(default)]
-    pub account_id: Option<String>,
-    pub id: String,
-    pub adapter: String,
-    pub tiers: Vec<Tier>,
-    /// Deprecated（ADR 2026-10-08 account-concurrency-limits §(a)）: 書かれた旧値（無ければ 1）。意味を持たない。
-    #[schemars(extend("deprecated" = true))]
-    pub concurrency: usize,
-    /// 実効モデル（空なら `null`）。
-    pub model: Option<String>,
-    /// `[[providers]].env` のキー名だけ。
-    pub env_keys: Vec<String>,
-    /// ADR-0024 D2: `[accounts]` のプールから選ぶか（既定 `false`）。
-    #[serde(default)]
-    pub account_pool: bool,
 }
 
 /// `[[clusters]]` 1 行の要約（ADR-0018 D7: `env` の値は出さない）。
@@ -801,7 +692,7 @@ pub struct AccountCreateBody {
 /// `POST /accounts/{id}/check` の応答（ADR-0024 D6）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct AccountCheckResponse {
-    pub result: crate::admin::ProviderCheckResult,
+    pub result: crate::admin::AccountCheckResult,
     pub checked_at: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,

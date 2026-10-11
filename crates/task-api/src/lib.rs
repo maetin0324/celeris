@@ -59,7 +59,6 @@ pub mod mcp_admin;
 pub mod memory;
 mod middleware;
 pub mod milestones;
-pub mod model_assignments;
 pub mod model_catalog;
 pub mod notify;
 mod problem;
@@ -86,10 +85,9 @@ pub mod tree;
 pub mod types;
 
 pub use admin::{
-    AccountAdminError, AccountCheckOutcome, AccountLoginCodeOutcome, AccountLoginStartOutcome,
-    AdminRequest, CheckError, ClusterAdminError, ClusterConnectCodeOutcome,
-    ClusterConnectStartOutcome, NotifyAdminError, NotifyTestOutcome, ProviderCheckOutcome,
-    ProviderCheckResult,
+    AccountAdminError, AccountCheckOutcome, AccountCheckResult, AccountLoginCodeOutcome,
+    AccountLoginStartOutcome, AdminRequest, ClusterAdminError, ClusterConnectCodeOutcome,
+    ClusterConnectStartOutcome, NotifyAdminError, NotifyTestOutcome,
 };
 pub use approvals::{
     ApprovalDecideBody, ApprovalDecideResult, ApprovalList, StandingRuleCreateBody,
@@ -120,8 +118,7 @@ pub use types::{
     AnswerBody, ApiConfigView, ArtifactList, ArtifactView, CancelBody, ClusterConfigView,
     ClusterConnectCodeBody, ClusterConnectResult, ClusterConnectStart, ClusterForwardView,
     ClusterSettingsPutBody, ClusterSettingsView, ClusterView, Clusters, ConfigView, DaemonView,
-    DailyUsage, DbInfo, DecisionBody, DeliveryHead, DeliveryList, EventsPage, GenreConfigView,
-    Health, Problem, ProviderConfigView, ProviderStats, ProviderView, Providers,
+    DbInfo, DecisionBody, DeliveryHead, DeliveryList, EventsPage, GenreConfigView, Health, Problem,
     RELEASE_NOTES_FIRST_PARENT_LIMIT, ReleaseChanges, ReleaseCommit, ReleaseItem, ReleaseNoteChild,
     ReleaseNoteCommit, ReleaseNoteConfig, ReleaseNoteFile, ReleaseNoteGateSkip, ReleaseNoteSchema,
     ReleaseNoteTask, ReleaseNotes, ReleasePromoteAccepted, ReleasePromotionPreview,
@@ -204,12 +201,7 @@ pub struct ApiSettings {
     pub instance_id: String,
     /// RFC 3339。
     pub started_at: String,
-    /// ADR-0017 M1: `providers.d/<id>.toml` の書き込み先。`providers_include` が未設定なら `None`
-    /// （そのときは管理系の作成/変更/削除が使えない）。
-    pub providers_dir: Option<PathBuf>,
-    /// IDs of configured OpenAI-compatible sources, supplied by the daemon.
-    pub openai_compatible_source_ids: std::collections::HashSet<String>,
-    /// ADR-0017 M2: `reload` / `check` を celeris（ワーカー起動ができる側）へ委譲するチャネル。`None` なら両方使えない。
+    /// Daemon administration requests are delegated to celeris.
     pub admin_tx: Option<mpsc::Sender<AdminRequest>>,
     /// ADR-0024 D1 / ADR-0025 D1/D6: アダプタごとの `[accounts]` の根ディレクトリの絶対パス（設定されている
     /// アダプタだけキーを持つ）。`[accounts]` が無ければ空（そのときは `GET /accounts` が
@@ -314,7 +306,6 @@ impl std::fmt::Debug for ApiSettings {
             .field("celeris_version", &self.celeris_version)
             .field("instance_id", &self.instance_id)
             .field("started_at", &self.started_at)
-            .field("providers_dir", &self.providers_dir)
             .field("admin_tx", &self.admin_tx.as_ref().map(|_| "<sender>"))
             .field("accounts_roots", &self.accounts_roots)
             .field("max_runs_per_account", &self.max_runs_per_account)

@@ -296,11 +296,6 @@ model = "fake"
 
     // ADR-0013 D11: /config の要約には env のキー名だけが載り、値は載らない。
     let view = config_view(&cfg, "127.0.0.1:7710".parse().unwrap());
-    assert_eq!(view.providers[0].env_keys, ["CLAUDE_CONFIG_DIR"]);
-    assert_eq!(
-        view.providers[1].model.as_deref(),
-        Some("adapter-default-model")
-    );
     assert_eq!(
         (view.api.bind.as_str(), view.api.auth_required),
         ("127.0.0.1:7710", false)

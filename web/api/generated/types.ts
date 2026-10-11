@@ -3,9 +3,11 @@
 export type AccountCheckResponse = {
   "checked_at": string;
   "detail"?: string | null;
-  "result": ProviderCheckResult;
+  "result": AccountCheckResult;
   "usage"?: AccountUsageView | null;
 };
+
+export type AccountCheckResult = "ok" | "auth_failed" | "throttled" | "spawn_failed";
 
 export type AccountCooldownLive = {
   "reason": string;
@@ -268,33 +270,6 @@ export type ArtifactView = {
   "size"?: number | null;
   "ts": string;
 };
-
-export type AssignmentList = {
-  "effective": Array<RoleSlotView>;
-  "items": Array<EffectiveAssignmentView>;
-};
-
-export type AssignmentPreviewBody = {
-  "model_id"?: string | null;
-  "source": string;
-  "tier": Tier;
-};
-
-export type AssignmentPreviewResponse = {
-  "impact": ImpactView;
-};
-
-export type AssignmentPutBody = {
-  "model_id": string;
-  "note"?: string | null;
-};
-
-export type AssignmentPutResponse = {
-  "impact": ImpactView;
-  "item": EffectiveAssignmentView;
-};
-
-export type AssignmentStateView = "assigned" | "excluded";
 
 export type AttentionItem = {
   "at": string;
@@ -626,8 +601,6 @@ export type CatalogModelView = {
   "quality"?: Array<QualityIndex> | null;
   "revision": string;
 };
-
-export type CatalogSource = string;
 
 export type ChangeDiffView = {
   "diff": string;
@@ -1198,7 +1171,6 @@ export type ConfigView = {
   "max_concurrency": number;
   "max_requeues": number;
   "plan_auto_accept": boolean;
-  "providers": Array<ProviderConfigView>;
   "retry_backoff_base_secs": number;
   "retry_backoff_max_secs": number;
   "review_timeout_secs": number;
@@ -1632,13 +1604,6 @@ export type DaemonView = {
   "snapshot"?: DaemonSnapshot | null;
 };
 
-export type DailyUsage = {
-  "day": string;
-  "input_tokens": number;
-  "output_tokens": number;
-  "runs": number;
-};
-
 export type DbInfo = {
   "busy_timeout_ms": number;
   "device"?: string | null;
@@ -1956,18 +1921,6 @@ export type DraftGroup = {
 export type EditResult = {
   "fields": Array<string>;
   "task": Task;
-};
-
-export type EffectiveAssignmentView = {
-  "excluded_reason"?: string | null;
-  "model_id": string;
-  "note"?: string | null;
-  "priority": number;
-  "source": string;
-  "state": AssignmentStateView;
-  "tier": Tier;
-  "updated_at": string;
-  "updated_by": string;
 };
 
 export type EffectiveProfile = {
@@ -3016,21 +2969,6 @@ export type HumanInboxView = {
   "suppressed": {
   [key: string]: number;
 };
-};
-
-export type ImpactChangeView = {
-  "after"?: string | null;
-  "before"?: string | null;
-  "excluded_reason"?: string | null;
-  "id": string;
-  "kind": ImpactKind;
-  "tier": string;
-};
-
-export type ImpactKind = "provider" | "proxy";
-
-export type ImpactView = {
-  "changes": Array<ImpactChangeView>;
 };
 
 export type ImplicitAccountLive = {
@@ -4326,39 +4264,10 @@ export type ProviderCandidateKind = "local" | "pool" | "other";
 
 export type ProviderCandidateOutcome = "selected" | "available" | "full" | "down" | "cooldown" | "unsupported" | "no_account";
 
-export type ProviderCheckResponse = {
-  "checked_at": string;
-  "detail"?: string | null;
-  "result": ProviderCheckResult;
-};
-
-export type ProviderCheckResult = "ok" | "auth_failed" | "throttled" | "spawn_failed";
-
 export type ProviderCheckView = {
   "at": string;
   "detail"?: string | null;
   "result": string;
-};
-
-export type ProviderConfigView = {
-  "account_id"?: string | null;
-  "account_pool"?: boolean;
-  "adapter": string;
-  "concurrency": number;
-  "credential_refs"?: {
-  [key: string]: string;
-};
-  "env_keys": Array<string>;
-  "id": string;
-  "kind"?: ProviderKind;
-  "llm_source"?: ResolvedLlmSource | null;
-  "model"?: string | null;
-  "tier_models"?: {
-  "cheap"?: ModelBinding;
-  "frontier"?: ModelBinding;
-  "standard"?: ModelBinding;
-};
-  "tiers": Array<Tier>;
 };
 
 export type ProviderKind = "adapter";
@@ -4374,7 +4283,6 @@ export type ProviderLive = {
   "env_keys"?: Array<string>;
   "id": string;
   "in_use": number;
-  "in_use_cos"?: number;
   "kind"?: ProviderKind;
   "last_check"?: ProviderCheckView | null;
   "llm_source"?: ResolvedLlmSource | null;
@@ -4393,48 +4301,6 @@ export type ProviderSelection = {
 };
 
 export type ProviderSelectionReason = "local_preferred" | "local_full" | "local_down" | "pool" | "fallback" | "sticky";
-
-export type ProviderStats = {
-  "by_day": Array<DailyUsage>;
-  "done": number;
-  "error": number;
-  "input_tokens": number;
-  "lease_expired": number;
-  "output_tokens": number;
-  "question": number;
-  "requeue": number;
-  "runs": number;
-};
-
-export type ProviderView = {
-  "account_id"?: string | null;
-  "account_pool"?: boolean;
-  "adapter": string;
-  "concurrency": number;
-  "cooldown"?: CooldownView | null;
-  "credential_refs"?: {
-  [key: string]: string;
-};
-  "env_keys": Array<string>;
-  "id": string;
-  "in_use"?: number | null;
-  "in_use_cos"?: number | null;
-  "kind"?: ProviderKind;
-  "last_check"?: ProviderCheckView | null;
-  "llm_source"?: ResolvedLlmSource | null;
-  "model"?: string | null;
-  "stats": ProviderStats;
-  "tier_models"?: {
-  "cheap"?: ModelBinding;
-  "frontier"?: ModelBinding;
-  "standard"?: ModelBinding;
-};
-  "tiers": Array<Tier>;
-};
-
-export type Providers = {
-  "items": Array<ProviderView>;
-};
 
 export type QualityEstimate = {
   "confidence"?: number | null;
@@ -4923,35 +4789,6 @@ export type RoleConfigView = {
   "max_turns"?: number | null;
   "max_wall_secs"?: number | null;
   "tier"?: Tier | null;
-};
-
-export type RoleMember = {
-  "model_id": string;
-  "priority": number;
-  "source": CatalogSource;
-};
-
-export type RoleMembersBody = {
-  "members": Array<RoleMember>;
-};
-
-export type RoleMembersResponse = {
-  "after": Array<RoleMember>;
-  "before": Array<RoleMember>;
-  "impact": ImpactView;
-};
-
-export type RoleSlotView = {
-  "available"?: boolean | null;
-  "excluded_reason"?: string | null;
-  "last_seen"?: string | null;
-  "model_id"?: string | null;
-  "origin"?: SlotOrigin | null;
-  "priority": number;
-  "providers": Array<string>;
-  "proxy": boolean;
-  "source": string;
-  "tier": Tier;
 };
 
 export type RollupMetrics = {
@@ -5471,6 +5308,7 @@ export type SkillSummaryView = {
   "updated"?: string | null;
 };
 
+<<<<<<< HEAD
 export type SlotOrigin = "assignment" | "config";
 
 export type SnapshotTaskWait = {
@@ -5478,6 +5316,8 @@ export type SnapshotTaskWait = {
   "wait": TaskWait;
 };
 
+=======
+>>>>>>> 87249274 (wu/api-unprovider: provider 管理 API と model_assignments を消す)
 export type SourceOrigin = "explicit" | "derived";
 
 export type StageHint = {

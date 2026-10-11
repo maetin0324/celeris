@@ -12,18 +12,39 @@ use task_ops::view::RunOutcomeKind;
 use time::format_description::well_known::Rfc3339;
 use time::{Date, OffsetDateTime, UtcOffset};
 
-use crate::types::{DailyUsage, ExecutionMetricsGroup, ExecutionMetricsSummary, ProviderStats};
+use crate::types::{ExecutionMetricsGroup, ExecutionMetricsSummary};
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(crate) struct DailyUsage {
+    day: String,
+    runs: u64,
+    input_tokens: u64,
+    output_tokens: u64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(crate) struct RunStats {
+    pub runs: u64,
+    pub done: u64,
+    pub question: u64,
+    pub error: u64,
+    pub requeue: u64,
+    pub lease_expired: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub by_day: Vec<DailyUsage>,
+}
 
 const STATS_BATCH: usize = 5_000;
 const STATS_DAYS: i64 = 30;
-const UNKNOWN_PROVIDER: &str = "unknown";
+const UNKNOWN_SOURCE: &str = "unknown";
 
 #[derive(Debug, Default)]
 pub(crate) struct StatsState {
     cursor: u64,
     /// `WorkerStarted` 済みで `WorkerFinished` がまだの run → provider。
     open_runs: HashMap<String, String>,
-    providers: HashMap<String, Totals>,
+    sources: HashMap<String, Totals>,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -102,8 +123,8 @@ impl StatsState {
             } => {
                 let provider = provider
                     .clone()
-                    .unwrap_or_else(|| UNKNOWN_PROVIDER.to_string());
-                self.providers.entry(provider.clone()).or_default().runs += 1;
+                    .unwrap_or_else(|| UNKNOWN_SOURCE.to_string());
+                self.sources.entry(provider.clone()).or_default().runs += 1;
                 self.open_runs.insert(run_id.clone(), provider);
             }
             Event::WorkerFinished {
@@ -116,8 +137,8 @@ impl StatsState {
                 let provider = self
                     .open_runs
                     .remove(run_id)
-                    .unwrap_or_else(|| UNKNOWN_PROVIDER.to_string());
-                let totals = self.providers.entry(provider).or_default();
+                    .unwrap_or_else(|| UNKNOWN_SOURCE.to_string());
+                let totals = self.sources.entry(provider).or_default();
                 match classify_outcome(outcome, end.as_ref()) {
                     RunOutcomeKind::Done => totals.done += 1,
                     RunOutcomeKind::Question => totals.question += 1,
@@ -144,9 +165,9 @@ impl StatsState {
     }
 
     /// `provider` の集計。`by_day` は `today` を含む直近 30 日（UTC）。
-    pub(crate) fn view(&self, provider: &str, today: Date) -> ProviderStats {
-        let Some(totals) = self.providers.get(provider) else {
-            return ProviderStats::default();
+    pub(crate) fn view(&self, provider: &str, today: Date) -> RunStats {
+        let Some(totals) = self.sources.get(provider) else {
+            return RunStats::default();
         };
         let first = today
             .checked_sub(time::Duration::days(STATS_DAYS - 1))
@@ -161,7 +182,7 @@ impl StatsState {
                 output_tokens: d.output_tokens,
             })
             .collect();
-        ProviderStats {
+        RunStats {
             runs: totals.runs,
             done: totals.done,
             question: totals.question,

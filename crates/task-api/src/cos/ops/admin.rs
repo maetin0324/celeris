@@ -9,34 +9,8 @@ use serde_json::Value;
 use task_core::chat::CosOperation;
 use task_core::store::SqliteStore;
 
-/// Registered `(method, path, action)` operations. The first match wins, so a literal segment
-/// (`assignments/roles/{tier}`) is listed before the placeholder row it would also match.
+/// Registered `(method, path, action)` operations.
 pub(crate) const ALLOWED: &[(&str, &str, &str)] = &[
-    (
-        "PUT",
-        "/api/v1/llm/models/assignments/roles/{tier}",
-        "model_role.replace",
-    ),
-    (
-        "PUT",
-        "/api/v1/llm/models/assignments/{source}/{tier}",
-        "model_assignment.put",
-    ),
-    (
-        "DELETE",
-        "/api/v1/llm/models/assignments/{source}/{tier}",
-        "model_assignment.delete",
-    ),
-    (
-        "POST",
-        "/api/v1/llm/models/assignments/preview",
-        "model_assignment.preview",
-    ),
-    (
-        "POST",
-        "/api/v1/llm/models/assignments/roles/{tier}/preview",
-        "model_role.preview",
-    ),
     (
         "PUT",
         "/api/v1/llm/models/{source}/{model_id}/override",
@@ -71,10 +45,6 @@ pub(crate) const ALLOWED: &[(&str, &str, &str)] = &[
         "/api/v1/clusters/{id}/settings",
         "cluster.settings_put",
     ),
-    ("POST", "/api/v1/providers", "provider.create"),
-    ("PATCH", "/api/v1/providers/{id}", "provider.update"),
-    ("DELETE", "/api/v1/providers/{id}", "provider.delete"),
-    ("POST", "/api/v1/providers/{id}/check", "provider.check"),
     ("POST", "/api/v1/accounts", "account.create"),
     ("DELETE", "/api/v1/accounts/{id}", "account.delete"),
     ("POST", "/api/v1/accounts/{id}/check", "account.check"),
@@ -152,16 +122,10 @@ pub(crate) const EXCLUDED: &[(&str, &str, &str)] = &[
     ),
 ];
 
-const ASSIGNMENT: &str = "/api/v1/llm/models/assignments/{source}/{tier}";
-const ROLE: &str = "/api/v1/llm/models/assignments/roles/{tier}";
 const SKILL: &str = "/api/v1/skills/{name}";
 const UNMOUNT: &str = "/api/v1/org/{id}/skills/{skill}";
 const PROMOTE: &str = "/api/v1/releases/{sha12}/promote";
 const OVERRIDE: &str = "/api/v1/llm/models/{source}/{model_id}/override";
-
-fn to_value<T: serde::Serialize>(value: &T) -> Result<Value, ApiProblem> {
-    serde_json::to_value(value).map_err(|e| ApiProblem::internal(e.to_string()))
-}
 
 /// The CoS form of a route whose domain request has no body: `null` or `{}` only.
 fn require_empty_body(
@@ -206,38 +170,6 @@ fn account_adapter(body: Value) -> Result<task_core::AccountAdapter, ApiProblem>
             ApiProblem::bad_request("adapter must be claude-code, codex or opencode-go")
         }),
     }
-}
-
-/// Provider bodies with inline credential values (`env.OPENAI_API_KEY` …) are secret operations
-/// (ADR D2, human decision secrets=exclude): refused with the body redacted from the record, so
-/// the value never lands in the audit row. Credentials go through `/secrets` by a person.
-fn refuse_inline_credentials(
-    store: &SqliteStore,
-    audit: &OperationAudit,
-    path: &str,
-    body: &Value,
-) -> Result<(), ApiProblem> {
-    let inline = body
-        .get("env")
-        .and_then(Value::as_object)
-        .is_some_and(|env| {
-            env.keys()
-                .any(|k| task_core::model_routing::CREDENTIAL_KEYS.contains(&k.as_str()))
-        });
-    if !inline {
-        return Ok(());
-    }
-    let mut redacted = audit.clone();
-    redacted.payload["body"] = serde_json::json!({"redacted": true});
-    Err(redacted.reject(
-        store,
-        "provider",
-        path,
-        unprocessable(
-            "secret_operations",
-            "inline credential values are secret operations; register them in /secrets (a person) and use credential_refs",
-        ),
-    ))
 }
 
 /// Run a C operation whose effect is a route's [`crate::cos::operations::Effect`].
@@ -285,44 +217,6 @@ pub(crate) fn dispatch(
 ) -> Result<CosOperation, ApiProblem> {
     let decode = |error| decode_problem(store, audit, path, error);
     match matched.action {
-        "model_assignment.put" => {
-            let input = serde_json::from_value(body).map_err(decode)?;
-            crate::model_assignments::put_assignment_audited(
-                store,
-                &path_param(ASSIGNMENT, path, "{source}"),
-                &path_param(ASSIGNMENT, path, "{tier}"),
-                input,
-                audit,
-            )
-        }
-        "model_assignment.delete" => {
-            require_empty_body(store, audit, "model_assignment", path, &body)?;
-            crate::model_assignments::delete_assignment_audited(
-                store,
-                &path_param(ASSIGNMENT, path, "{source}"),
-                &path_param(ASSIGNMENT, path, "{tier}"),
-                audit,
-            )
-        }
-        "model_assignment.preview" => {
-            let input = serde_json::from_value(body).map_err(decode)?;
-            let impact = crate::model_assignments::ImpactEnv::of(&env.api);
-            let outcome = crate::model_assignments::preview_impact(store, &impact, &input)
-                .and_then(|response| to_value(&response));
-            audit.record(store, "model_assignment", path, matched.action, outcome)
-        }
-        "model_role.replace" | "model_role.preview" => {
-            let input = serde_json::from_value(body).map_err(decode)?;
-            let impact = crate::model_assignments::ImpactEnv::of(&env.api);
-            crate::model_assignments::edit_role_audited(
-                store,
-                &impact,
-                &path_param(ROLE, path, "{tier}"),
-                input,
-                matched.action == "model_role.preview",
-                audit,
-            )
-        }
         "model_override.put" => {
             let input = decode_optional(body).map_err(decode)?;
             let routing = env.api.inner.routing_catalog.as_ref().map(|r| r.view());
@@ -446,54 +340,6 @@ pub(crate) fn dispatch(
                 Some(audit),
             )?)
         }
-        "provider.create" | "provider.update" => {
-            refuse_inline_credentials(store, audit, path, &body)?;
-            let bytes =
-                serde_json::to_vec(&body).map_err(|e| ApiProblem::internal(e.to_string()))?;
-            let api = &env.api;
-            if matched.action == "provider.create" {
-                let input: crate::admin::ProviderCreateBody =
-                    crate::handlers::providers::provider_json(&bytes, false)
-                        .map_err(|p| audit.reject(store, "provider", path, p))?;
-                let id = input.id.clone();
-                audited(crate::cos::operations::file_op(
-                    store,
-                    Some(audit),
-                    "provider",
-                    &id,
-                    matched.action,
-                    || crate::handlers::providers::create_provider_op(api, input),
-                )?)
-            } else {
-                let id = matched.id.unwrap_or_default();
-                let input: crate::admin::ProviderPatchBody =
-                    crate::handlers::providers::provider_json(&bytes, true)
-                        .map_err(|p| audit.reject(store, "provider", &id, p))?;
-                audited(crate::cos::operations::file_op(
-                    store,
-                    Some(audit),
-                    "provider",
-                    &id,
-                    matched.action,
-                    || crate::handlers::providers::patch_provider_op(api, &id, input),
-                )?)
-            }
-        }
-        "provider.delete" => {
-            let id = matched.id.unwrap_or_default();
-            require_empty_body(store, audit, "provider", path, &body)?;
-            audited(crate::cos::operations::file_op(
-                store,
-                Some(audit),
-                "provider",
-                &id,
-                matched.action,
-                || {
-                    crate::handlers::providers::delete_provider_op(&env.api, &id)
-                        .map(|()| serde_json::json!({"id": id, "deleted": true}))
-                },
-            )?)
-        }
         "account.create" => {
             let input: crate::types::AccountCreateBody =
                 serde_json::from_value(body).map_err(decode)?;
@@ -550,15 +396,6 @@ pub(crate) fn dispatch(
                 })
             }
         }
-        "provider.check" => {
-            let id = matched.id.unwrap_or_default();
-            require_empty_body(store, audit, "provider", path, &body)?;
-            external(store, audit, ("provider", &id), matched.action, || {
-                block_on(crate::handlers::providers::check_provider_effect(
-                    &env.api, &id,
-                ))
-            })
-        }
         "model_catalog.discover" => {
             let input: crate::model_catalog::DiscoverBody =
                 decode_optional(body).map_err(decode)?;
@@ -580,7 +417,7 @@ pub(crate) fn dispatch(
         "daemon.reload" => {
             require_empty_body(store, audit, "daemon", path, &body)?;
             external(store, audit, ("daemon", "reload"), matched.action, || {
-                block_on(crate::handlers::providers::reload_effect(&env.api))
+                block_on(crate::handlers::reload::reload_effect(&env.api))
             })
         }
         "daemon.replay" => {

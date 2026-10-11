@@ -250,6 +250,7 @@ listen = "127.0.0.1:7710"      # これを書いたときだけ API が動く（
 | `release_not_promotable` | 409 | ADR-0040 D6: 昇格を受け付けられない（`verify.json` が無い／`ok` でない、既に `current`、既に昇格中、`scripts/promote.sh` が無い、`[selfdeploy]` が無い）。`detail` に理由の一行 |
 | `default_branch_busy` | 409 | ADR-0043 D5（§3.81）: 人のチェックアウトが取り込み先のブランチを出したまま未コミットの変更を持っている。`detail` は `"<default_branch> が編集中"`。**何も触っていない**ので、人が片付けてからもう一度押す |
 | `pr_unavailable` | 409 | ADR-0043 D5（§3.81 / §3.82）: PR の経路が使えない（`origin` リモートが無い、`gh` が PATH に無いか認証されていない、merge しようとした PR が開いていない）。`detail` に理由の一行 |
+| `default_branch_unresolvable` | 409 | ADR 2026-10-11-stranded-done-branches F1: repository の既定の branch を決められない（`project_repos.default_branch` が空で、`origin/HEAD`・`main`・`master` のどれも無い）。変更の diff・取り込み（merge / PR）・取り残しの merge が返す。`detail` は `"<repo>: <理由>"`。何も触っていない |
 | `docs_unavailable` | 409 | ADR-0044 D7（§3.92〜3.97）: 案件の文書の根が使えない（まだ無い＝`POST /projects/{id}/docs/init` で用意する、primary がリモート、`$HOME` が無い、`git` が動かない、置き場が空でない）。`detail` に理由の一行 |
 | `etag_mismatch` | 409 | ADR-0044 D7（§3.95 / §3.96）: 読んでから誰かがそのページを直した（ページがあるのに `etag` を付けなかったときも同じ）。拡張フィールド `etag` にいまの値。再読み込みしてから直す |
 | `page_exists` | 409 | ADR-0044 D7（§3.97）: 昇格の宛先にもうページがある。`overwrite: true` なら上書きできる |

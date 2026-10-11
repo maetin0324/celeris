@@ -415,7 +415,8 @@ pub struct BranchRecord {
     pub task_id: TaskId,
     pub repo_id: RepoId,
     pub repo_path: Option<std::path::PathBuf>,
-    pub default_branch: Option<String>,
+    /// `crate::changes::resolve_default_branch` の結果。`Err` は理由つきで unintegrated になる。
+    pub default_branch: Result<String, crate::changes::DefaultBranchError>,
     pub branch: Option<String>,
     pub head: Option<String>,
     pub done: bool,
@@ -456,16 +457,23 @@ pub fn sweep(
             Some("task branch is missing".to_owned())
         } else if head.is_empty() {
             Some("recorded task head is missing".to_owned())
-        } else if record.default_branch.is_none() {
-            Some("repository default branch is missing".to_owned())
-        } else if !ancestor(
-            record.repo_path.as_deref().unwrap_or(Path::new("")),
-            head,
-            record.default_branch.as_deref().unwrap_or(""),
-        ) {
-            Some("recorded head is not an ancestor of the repository default branch".to_owned())
         } else {
-            None
+            match &record.default_branch {
+                Err(error) => Some(error.to_string()),
+                Ok(default_branch)
+                    if !ancestor(
+                        record.repo_path.as_deref().unwrap_or(Path::new("")),
+                        head,
+                        default_branch,
+                    ) =>
+                {
+                    Some(
+                        "recorded head is not an ancestor of the repository default branch"
+                            .to_owned(),
+                    )
+                }
+                Ok(_) => None,
+            }
         };
         let state = TaskRepoIntegrationState {
             task_id: record.task_id,
@@ -605,7 +613,7 @@ mod tests {
             task_id: task,
             repo_id: repo,
             repo_path: Some(dir.clone()),
-            default_branch: Some("main".into()),
+            default_branch: Ok("main".into()),
             branch: Some("task".into()),
             head: Some(head),
             done: true,

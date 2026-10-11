@@ -280,7 +280,17 @@ fn prepare(
             format!("branch {branch} が {} で終わらない", task.id),
         )));
     }
-    let default_branch = crate::changes::default_branch(path, row.default_branch.as_deref());
+    // ADR 2026-10-11-stranded-done-branches F1: sweep と同じ解決。解決できなければ統合しない。
+    let default_branch =
+        match crate::changes::resolve_default_branch(path, row.default_branch.as_deref()) {
+            Ok(branch) => branch,
+            Err(error) => {
+                return Ok(Err(report(
+                    DeliverySkipReason::RefsUnresolvable,
+                    format!("{}: {error}", path.display()),
+                )));
+            }
+        };
     let resolve = |r: &str| {
         crate::changes::git(path, &["rev-parse", "--verify", r], Duration::from_secs(10))
             .filter(|o| o.ok)

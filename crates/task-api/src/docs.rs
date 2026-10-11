@@ -269,12 +269,18 @@ fn docs_target(
                 if let Some(warning) = warning {
                     tracing::warn!(repo = %repo.name, warning, "workspace.toml could not be read; using defaults");
                 }
+                // ADR 2026-10-11-stranded-done-branches F1: 解決できなければ理由を返す。
+                let default_branch =
+                    ops_changes::resolve_default_branch(path, repo.default_branch.as_deref())
+                        .map_err(|error| {
+                            docs_unavailable(format!(
+                                "主なリポジトリ {} の既定の branch を決められません（{error}）",
+                                repo.name
+                            ))
+                        })?;
                 return Ok(DocsTarget {
                     repo: repo.name.clone(),
-                    default_branch: ops_changes::default_branch(
-                        path,
-                        repo.default_branch.as_deref(),
-                    ),
+                    default_branch,
                     path: path.clone(),
                     root: ops_docs::normalize_root(&config.outputs.docs),
                     created: false,

@@ -794,7 +794,11 @@ impl Dispatcher {
         };
         let (config, _) = task_core::workspace_config::load_or_default(path);
         let docs_root = mount.docs.clone().unwrap_or(config.outputs.docs);
-        let branch = task_ops::changes::default_branch(path, repo.default_branch.as_deref());
+        let Ok(branch) =
+            task_ops::changes::resolve_default_branch(path, repo.default_branch.as_deref())
+        else {
+            return Vec::new();
+        };
         let label = mount.label();
         task_ops::docs::list(path, &branch, &docs_root)
             .into_iter()

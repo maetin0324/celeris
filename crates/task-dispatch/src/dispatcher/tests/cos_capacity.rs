@@ -354,6 +354,68 @@ fn dispatcher_account_limits_load_on_start_and_reload() {
     );
 }
 
+#[test]
+fn account_limits_source_account_and_source_limits_are_independent() {
+    let accounts = accounts_fixture();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let mut d = pool_dispatcher(
+        store,
+        slow_pool_adapter(),
+        None,
+        accounts.path().to_path_buf(),
+        2,
+        1,
+    );
+
+    // Account overrides are indexed by the migrated (source_id, account_id) key.
+    d.set_account_limit("claude-code", "a", Some(3)).unwrap();
+    d.set_account_limit("claude-code", "b", Some(1)).unwrap();
+    assert_eq!(d.account_run_limit(AccountAdapter::ClaudeCode, "a", false), 3);
+    assert_eq!(d.account_run_limit(AccountAdapter::ClaudeCode, "b", false), 1);
+
+    // A source-owned limit has no fabricated shared unknown account: it uses the
+    // explicit source key and the source's stable implicit account identity.
+    d.set_account_limit("implicit", "shared-source", Some(4)).unwrap();
+    assert_eq!(
+        d.account_limits
+            .as_ref()
+            .and_then(|limits| limits.get(&(
+                task_core::llm_route::SourceId::from("implicit"),
+                task_core::llm_route::AccountId::from("shared-source"),
+            )))
+            .copied(),
+        Some(4)
+    );
+    assert_eq!(d.account_max_runs("claude-code", "shared-source"), None);
+}
+
+#[test]
+fn account_limits_source_cooldown_excludes_only_the_cooled_account() {
+    let mut book = AccountBook::new_in_memory();
+    book.set_cooldown(
+        "a",
+        crate::accounts::AccountCooldown {
+            reason: crate::accounts::AccountCooldownReason::Throttled,
+            until: 2_000,
+        },
+        1_000,
+    );
+    let a = evaluate(
+        &AccountCandidate { id: "a", logged_in: true, in_use: 0 },
+        book.state("a"),
+        2,
+        1_500,
+    );
+    let b = evaluate(
+        &AccountCandidate { id: "b", logged_in: true, in_use: 0 },
+        book.state("b"),
+        2,
+        1_500,
+    );
+    assert_eq!(a.excluded, Some(ExcludedReason::Cooldown));
+    assert_eq!(b.excluded, None);
+}
+
 /// A CoS run using its extra slot does not consume the remaining leaf slot.
 #[tokio::test]
 async fn cos_account_usage_does_not_consume_leaf_capacity() {

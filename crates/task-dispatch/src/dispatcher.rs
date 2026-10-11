@@ -1277,7 +1277,15 @@ pub struct Dispatcher {
     /// アダプタだけキーを持つ）。実行中の run のシンクとも共有する。reload では差し替えない（設定ファイルの
     /// 再読込では消えない観測値）。
     account_books: HashMap<AccountAdapter, Arc<StdMutex<AccountBook>>>,
-    account_limits: Option<HashMap<(String, String), usize>>,
+    account_limits: Option<
+        HashMap<
+            (
+                task_core::llm_route::SourceId,
+                task_core::llm_route::AccountId,
+            ),
+            usize,
+        >,
+    >,
     /// ADR-0024 D1: 選択のたびにディレクトリを読み直さないよう、tick につき高々 1 回だけスキャンする（アダプタごと）。
     accounts_scan_cache: HashMap<AccountAdapter, Vec<AccountDir>>,
     /// ADR-0024 D5/D7 / ADR-0025 D5: celeris（GUI の管理 API）が進行中のログイン中継を持っているアカウント
@@ -1476,7 +1484,15 @@ impl Dispatcher {
         let account_limits = match store.account_limits() {
             Ok(rows) => Some(
                 rows.into_iter()
-                    .map(|row| ((row.source_id, row.account_id), row.max_runs))
+                    .map(|row| {
+                        (
+                            (
+                                task_core::llm_route::SourceId::from(row.source_id),
+                                task_core::llm_route::AccountId::from(row.account_id),
+                            ),
+                            row.max_runs,
+                        )
+                    })
                     .collect(),
             ),
             Err(error) => {
@@ -1887,7 +1903,15 @@ impl Dispatcher {
         let rows = self.store.account_limits()?;
         self.account_limits = Some(
             rows.into_iter()
-                .map(|r| ((r.source_id, r.account_id), r.max_runs))
+                .map(|r| {
+                    (
+                        (
+                            task_core::llm_route::SourceId::from(r.source_id),
+                            task_core::llm_route::AccountId::from(r.account_id),
+                        ),
+                        r.max_runs,
+                    )
+                })
                 .collect(),
         );
         Ok(())
@@ -1902,7 +1926,10 @@ impl Dispatcher {
     ) -> Result<(), task_core::StoreError> {
         self.store.set_account_limit(adapter, id, max_runs)?;
         if let Some(limits) = self.account_limits.as_mut() {
-            let key = (adapter.to_owned(), id.to_owned());
+            let key = (
+                task_core::llm_route::SourceId::from(adapter),
+                task_core::llm_route::AccountId::from(id),
+            );
             if let Some(max_runs) = max_runs {
                 limits.insert(key, max_runs);
             } else {
@@ -1917,7 +1944,10 @@ impl Dispatcher {
     pub fn account_max_runs(&self, adapter: &str, id: &str) -> Option<usize> {
         self.account_limits
             .as_ref()?
-            .get(&(adapter.to_owned(), id.to_owned()))
+            .get(&(
+                task_core::llm_route::SourceId::from(adapter),
+                task_core::llm_route::AccountId::from(id),
+            ))
             .copied()
     }
 
@@ -1991,8 +2021,8 @@ impl Dispatcher {
             .account_limits
             .as_ref()?
             .get(&(
-                crate::capacity::IMPLICIT_ACCOUNT_ADAPTER.to_owned(),
-                source.to_owned(),
+                task_core::llm_route::SourceId::from(crate::capacity::IMPLICIT_ACCOUNT_ADAPTER),
+                task_core::llm_route::AccountId::from(source),
             ))
             .copied();
         Some(crate::capacity::effective_account_limit(

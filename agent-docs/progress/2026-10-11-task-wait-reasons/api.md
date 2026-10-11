@@ -22,14 +22,15 @@ updated: 2026-10-11
   `TaskExecutionView.awaiting_children`、`TreeNodePhase::{AwaitingChildren, HeldOnDecision, BlockedInfra}`、`view.rs::awaits_only_children`。
   参照の追従: celerisctl（`task_detail` の引数）、web `execution-panel.tsx` のラベルと e2e fixture、gui `tree.ts`（`treeNodeHold` は `waits` の
   `human_decision`／`units_blocked(infra)` から）・`task-execution.ts`・test fixture（JSON と TS）。
-- schema・生成型: `UPDATE_SCHEMA=1 cargo test -p task-api --lib`、`node web/scripts/gen-types.mjs`、`gui/scripts/gen-types.mjs`（`gui/app/celeris/types.ts`）。
+- schema・生成型: `UPDATE_SCHEMA=1 cargo test -p task-api --lib`、`node web/scripts/gen-types.mjs`、`node gui/scripts/gen-types.mjs`（`gui/app/celeris/types.ts`）。追跡 API 文書 `docs/api/v1/gui-api.md` と `gui/docs/celeris-api-v1.md` の旧 `pending_children`／Execution の `awaiting_children`／旧 TreeNodePhase の説明も更新。
 
 ## 証拠
 - `cargo test -p task-api --test task_wait_api` → 6 passed（一覧の子待ち・depends_on 待ち・paused・snapshot の枠待ち／run_state／古い snapshot／詳細／木の WU 待ち key と段の順／子節点の waits）
 - `cargo test -p task-ops --lib task_wait_api` → 2 passed
 - `TMPDIR=/tmp bash scripts/dev/test-parallel.sh -E 'package(task-core) | package(task-ops) | package(task-api) | package(task-dispatch) | package(celerisctl) | package(celeris-mcp)'` → exit 0、`3257 tests run: 3257 passed, 3 skipped`
 - `cargo clippy --workspace --all-targets -- -D warnings` → exit 0
-- `node web/scripts/gen-types.mjs --check` → exit 0、gui の gen:types 再実行で `app/celeris/types.ts` 差分ゼロ
+- `git diff --check`・`sh "$CELERIS_WU_SCOPE_PATHS"` → exit 0（今回の追加差分は API 文書 2 件のみ）
+- `node web/scripts/gen-types.mjs --check`・`node gui/scripts/gen-types.mjs --check` → exit 0
 - web: `pnpm typecheck` exit 0、`vitest run` → 92 files / 676 passed
 - gui: `pnpm typecheck` exit 0、`vitest run` → 1342 中 browser-phase2 の 1 件だけ失敗（run の長い TMPDIR で unix socket が作れない。`TMPDIR=/tmp` で 19/19 passed）
 

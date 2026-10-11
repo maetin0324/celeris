@@ -1,5 +1,16 @@
 import { Link } from "@tanstack/react-router";
-import type { TaskSummary, TaskWait } from "../../api/generated/types";
+import type { HumanGateKind, TaskSummary, TaskWait } from "../../api/generated/types";
+
+function humanGateReason(gate: HumanGateKind, stage: string | null | undefined): string {
+  switch (gate) {
+    case "plan_approval":
+      return "計画の承認待ち";
+    case "stage_review":
+      return stage ? `段の確認待ち: ${stage}` : "段の確認待ち";
+    case "phase_checkpoint":
+      return stage ? `途中確認待ち: ${stage}` : "途中確認待ち";
+  }
+}
 
 export function waitReason(wait: TaskWait): string {
   switch (wait.kind) {
@@ -26,7 +37,7 @@ export function waitReason(wait: TaskWait): string {
     case "human_decision":
       return "人の決定待ち";
     case "human_gate":
-      return "人の確認待ち";
+      return humanGateReason(wait.gate, wait.stage);
     case "units_blocked":
       return "WU 停止中";
     case "capacity":

@@ -17,4 +17,10 @@ describe("task wait reasons", () => {
       }),
     ).toBe("WU 待ち: dispatch-prune ← cos-route");
   });
+  test("tells the human gates apart", () => {
+    expect(waitReason({ kind: "human_gate", gate: "plan_approval", stage: null })).toBe("計画の承認待ち");
+    expect(waitReason({ kind: "human_gate", gate: "stage_review", stage: "edges" })).toBe("段の確認待ち: edges");
+    expect(waitReason({ kind: "human_gate", gate: "phase_checkpoint", stage: "remove" })).toBe("途中確認待ち: remove");
+    expect(waitReason({ kind: "human_gate", gate: "phase_checkpoint", stage: null })).toBe("途中確認待ち");
+  });
 });

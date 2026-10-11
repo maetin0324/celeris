@@ -1778,6 +1778,45 @@
             "at"
           ],
           "type": "object"
+        },
+        {
+          "description": "Completed task changes not yet reachable from the repository default branch.",
+          "properties": {
+            "at": {
+              "type": "string"
+            },
+            "branch": {
+              "type": "string"
+            },
+            "head_sha": {
+              "type": "string"
+            },
+            "reason": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "repo_id": {
+              "$ref": "#/$defs/RepoId"
+            },
+            "task": {
+              "$ref": "#/$defs/TaskRef"
+            },
+            "type": {
+              "const": "unintegrated",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "task",
+            "repo_id",
+            "branch",
+            "head_sha",
+            "at"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -15344,7 +15383,8 @@
         "cluster_login",
         "disk_full",
         "delivery_skipped",
-        "integration_request"
+        "integration_request",
+        "unintegrated"
       ],
       "type": "string"
     },

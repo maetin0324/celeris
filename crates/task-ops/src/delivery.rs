@@ -170,15 +170,30 @@ fn prepare(
     policy: &DeliveryPolicy,
 ) -> Result<Result<Prepared, Skip>, StoreError> {
     let Some(project_id) = task.project_id else {
-        return Ok(Err(Skip::Silent));
+        return Ok(Err(report(
+            DeliverySkipReason::NoProject,
+            "task に project_id がありません".into(),
+        )));
     };
     // ADR-0079 D6（Phase R1c）: 木の子 task は main に取り込まない（成果は親の段階末尾の統合で親の
     // ブランチに入る）。部署の取り込み判定・`deliveries` の行・release は root だけ。
-    if !policy.projects.contains(&project_id.to_string())
-        || task_core::support_kind(task).is_some()
-        || task_core::tree::is_tree_child(task)
-    {
-        return Ok(Err(Skip::Silent));
+    if !policy.projects.contains(&project_id.to_string()) {
+        return Ok(Err(report(
+            DeliverySkipReason::ProjectNotEnabled,
+            format!("project {project_id} は selfdeploy.delivery_projects の対象外です"),
+        )));
+    }
+    if task_core::support_kind(task).is_some() {
+        return Ok(Err(report(
+            DeliverySkipReason::SupportTask,
+            "support task は delivery しません".into(),
+        )));
+    }
+    if task_core::tree::is_tree_child(task) {
+        return Ok(Err(report(
+            DeliverySkipReason::TreeChild,
+            "tree child は親 task の統合工程で扱います".into(),
+        )));
     }
     if task.repos.len() != 1 {
         return Ok(Err(report(

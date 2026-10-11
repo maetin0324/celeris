@@ -241,6 +241,20 @@ async fn a_plan_with_no_work_left_proceeds_to_review_without_a_run() {
             reasons.iter().any(|r| r == "plan_complete"),
             "cancelled={cancelled} {reasons:?}"
         );
+        assert!(
+            store
+                .events_for(task_id)
+                .unwrap()
+                .iter()
+                .any(|(_, event)| matches!(
+                    event,
+                    Event::DeliverySkipped {
+                        reason: task_core::DeliverySkipReason::NoProject,
+                        ..
+                    }
+                )),
+            "a completed plan records why root delivery was skipped"
+        );
         assert_eq!(adapter.worker_runs.load(Ordering::SeqCst), 0);
         assert_eq!(adapter.planner_runs.load(Ordering::SeqCst), 0);
         assert_eq!(store.execution_plan_list(task_id).unwrap().len(), 1);

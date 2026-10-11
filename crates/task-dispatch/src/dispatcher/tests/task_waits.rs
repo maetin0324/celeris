@@ -71,7 +71,10 @@ async fn task_wait_full_capacity_and_unroutable_skips_are_in_the_snapshot() {
     let mut d = dispatcher(store.clone(), slow_adapter(), 1);
     let rx = publish(&mut d);
     assert_eq!(d.tick().unwrap().dispatched, 1);
-    assert_eq!(store.get(first.id).unwrap().unwrap().status, Status::Running);
+    assert_eq!(
+        store.get(first.id).unwrap().unwrap().status,
+        Status::Running
+    );
 
     assert!(matches!(
         snapshot_wait(&rx, no_route.id),

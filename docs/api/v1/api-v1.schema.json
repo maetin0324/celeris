@@ -1921,6 +1921,14 @@
       ],
       "type": "object"
     },
+    "BackoffCause": {
+      "description": "バックオフの原因（M5）。",
+      "enum": [
+        "retry",
+        "infra"
+      ],
+      "type": "string"
+    },
     "BehindTarget": {
       "description": "Task value: the repo with the largest behind commits (ADR-0130 D4), plus all repos.",
       "properties": {
@@ -2932,6 +2940,31 @@
         "excluded_reasons"
       ],
       "type": "object"
+    },
+    "CapacityScope": {
+      "description": "枠が満杯の範囲（M1/M9）。",
+      "oneOf": [
+        {
+          "const": "global",
+          "description": "全体の `max_concurrency`（窓・容量で今 tick 照合されなかった M9 を含む）。",
+          "type": "string"
+        },
+        {
+          "const": "cos",
+          "description": "CoS の対話の枠（`max_cos_runs`）。",
+          "type": "string"
+        },
+        {
+          "const": "account",
+          "description": "account の上限（またはクラスタの並列度）。",
+          "type": "string"
+        },
+        {
+          "const": "source",
+          "description": "暗黙アカウント（LLM source）の上限・選べる source が全部満杯。",
+          "type": "string"
+        }
+      ]
     },
     "CatalogCapabilitiesView": {
       "description": "Capability support is nullable because legacy configuration may not specify it.",
@@ -7753,6 +7786,14 @@
         },
         "started_at": {
           "type": "string"
+        },
+        "task_waits": {
+          "default": [],
+          "description": "ADR 2026-10-11-task-wait-reasons D4: この tick に dispatcher のメモリだけで決まった見送りの理由（M1〜M9。\n枠満杯・経路なし・クラスタ・write-set・バックオフ・disk critical・委譲した子待ち・人の承認待ち）。task_id 順、\n1 task に 1 件。DB で決まる理由（`task_core::db_waits` / `plan_waits`）は入れない。",
+          "items": {
+            "$ref": "#/$defs/SnapshotTaskWait"
+          },
+          "type": "array"
         },
         "tick_ms": {
           "format": "uint64",
@@ -14781,6 +14822,15 @@
       ],
       "type": "object"
     },
+    "HaltState": {
+      "description": "案件・途中目標が dispatch を止めている状態。",
+      "enum": [
+        "paused",
+        "cancelled",
+        "archived"
+      ],
+      "type": "string"
+    },
     "HarnessErrorClass": {
       "description": "D7: harness / 供給側都合の失敗の種類。",
       "enum": [
@@ -14882,6 +14932,15 @@
         "signature"
       ],
       "type": "object"
+    },
+    "HumanGateKind": {
+      "description": "人の gate の種類（D12）。",
+      "enum": [
+        "plan_approval",
+        "stage_review",
+        "phase_checkpoint"
+      ],
+      "type": "string"
     },
     "HumanInboxCounts": {
       "description": "D5 `GET /inbox/items` の `counts`。",
@@ -27408,6 +27467,22 @@
       ],
       "type": "string"
     },
+    "SnapshotTaskWait": {
+      "description": "ADR 2026-10-11-task-wait-reasons D4: dispatcher が見送った task と、その理由（メモリの理由）。",
+      "properties": {
+        "task_id": {
+          "$ref": "#/$defs/TaskId"
+        },
+        "wait": {
+          "$ref": "#/$defs/TaskWait"
+        }
+      },
+      "required": [
+        "task_id",
+        "wait"
+      ],
+      "type": "object"
+    },
     "SourceOrigin": {
       "enum": [
         "explicit",
@@ -29490,6 +29565,418 @@
       ],
       "type": "object"
     },
+    "TaskWait": {
+      "description": "task の待ちの理由 1 件。並びは宣言順（DB の理由 → メモリの理由）。",
+      "oneOf": [
+        {
+          "description": "D1/D2。`by` が自分なら自分の一時停止。",
+          "properties": {
+            "by": {
+              "$ref": "#/$defs/TaskId"
+            },
+            "kind": {
+              "const": "paused",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "by"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "D2: 祖先が止まった案件に属す。",
+          "properties": {
+            "kind": {
+              "const": "ancestor_project_halted",
+              "type": "string"
+            },
+            "project_id": {
+              "$ref": "#/$defs/ProjectId"
+            },
+            "task_id": {
+              "$ref": "#/$defs/TaskId"
+            }
+          },
+          "required": [
+            "kind",
+            "task_id",
+            "project_id"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "D3。",
+          "properties": {
+            "kind": {
+              "const": "project_halted",
+              "type": "string"
+            },
+            "project_id": {
+              "$ref": "#/$defs/ProjectId"
+            },
+            "state": {
+              "$ref": "#/$defs/HaltState"
+            }
+          },
+          "required": [
+            "kind",
+            "project_id",
+            "state"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "D4。",
+          "properties": {
+            "kind": {
+              "const": "milestone_halted",
+              "type": "string"
+            },
+            "milestone_id": {
+              "$ref": "#/$defs/MilestoneId"
+            },
+            "state": {
+              "$ref": "#/$defs/HaltState"
+            }
+          },
+          "required": [
+            "kind",
+            "milestone_id",
+            "state"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "D5: 未完の先行 task（id 順）。",
+          "properties": {
+            "kind": {
+              "const": "depends_on",
+              "type": "string"
+            },
+            "task_ids": {
+              "items": {
+                "$ref": "#/$defs/TaskId"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "task_ids"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "D6: 親が未完の Approval。",
+          "properties": {
+            "kind": {
+              "const": "approval_parent",
+              "type": "string"
+            },
+            "task_id": {
+              "$ref": "#/$defs/TaskId"
+            }
+          },
+          "required": [
+            "kind",
+            "task_id"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "D7: 未完の子と、その代理 unit の key。",
+          "properties": {
+            "kind": {
+              "const": "children",
+              "type": "string"
+            },
+            "task_ids": {
+              "items": {
+                "$ref": "#/$defs/TaskId"
+              },
+              "type": "array"
+            },
+            "unit_keys": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "task_ids",
+            "unit_keys"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "D8/D9: runnable な unit が無く、待っている unit がある。",
+          "properties": {
+            "kind": {
+              "const": "work_units",
+              "type": "string"
+            },
+            "units": {
+              "items": {
+                "$ref": "#/$defs/UnitWait"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "units"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "D10: 段に failed / blocked がある。",
+          "properties": {
+            "kind": {
+              "const": "stage_halted",
+              "type": "string"
+            },
+            "stage": {
+              "type": "string"
+            },
+            "unit_keys": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "stage",
+            "unit_keys"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "D11。",
+          "properties": {
+            "decision_keys": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "kind": {
+              "const": "human_decision",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "decision_keys"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "D12。",
+          "properties": {
+            "gate": {
+              "$ref": "#/$defs/HumanGateKind"
+            },
+            "kind": {
+              "const": "human_gate",
+              "type": "string"
+            },
+            "stage": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "gate"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "D13（infra / cluster_jobs）。",
+          "properties": {
+            "kind": {
+              "const": "units_blocked",
+              "type": "string"
+            },
+            "reason": {
+              "$ref": "#/$defs/WorkUnitBlockedReason"
+            },
+            "unit_keys": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "reason",
+            "unit_keys"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "M1/M9。",
+          "properties": {
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "const": "capacity",
+              "type": "string"
+            },
+            "scope": {
+              "$ref": "#/$defs/CapacityScope"
+            }
+          },
+          "required": [
+            "kind",
+            "scope"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "M2。",
+          "properties": {
+            "detail": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "unroutable",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "detail"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "M3。",
+          "properties": {
+            "cluster_id": {
+              "type": "string"
+            },
+            "detail": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "cluster",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "cluster_id",
+            "detail"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "M4。",
+          "properties": {
+            "blocking_task_ids": {
+              "items": {
+                "$ref": "#/$defs/TaskId"
+              },
+              "type": "array"
+            },
+            "kind": {
+              "const": "write_set",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "blocking_task_ids"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "M5。`until` は RFC 3339。",
+          "properties": {
+            "cause": {
+              "$ref": "#/$defs/BackoffCause"
+            },
+            "kind": {
+              "const": "backoff",
+              "type": "string"
+            },
+            "until": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "until",
+            "cause"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "M6。",
+          "properties": {
+            "kind": {
+              "const": "disk_critical",
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "path"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "M7。",
+          "properties": {
+            "kind": {
+              "const": "delegated_children",
+              "type": "string"
+            },
+            "task_ids": {
+              "items": {
+                "$ref": "#/$defs/TaskId"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "task_ids"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "M8。",
+          "properties": {
+            "kind": {
+              "const": "review_awaiting_human",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "Tier": {
       "description": "DESIGN §5.4 の `WorkerHint`。",
       "enum": [
@@ -30708,6 +31195,39 @@
           "type": "string"
         }
       ]
+    },
+    "UnitWait": {
+      "description": "待っている WorkUnit 1 件（D8/D9）。",
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "stage": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "waiting_on": {
+          "description": "depends_on のうち done でない key（宣言順）。`child:<key>` 依存もそのまま出す。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "waiting_stage": {
+          "description": "前の段が終わっていないなら、その段の key（D9）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "key",
+        "waiting_on"
+      ],
+      "type": "object"
     },
     "UnreadCountView": {
       "properties": {

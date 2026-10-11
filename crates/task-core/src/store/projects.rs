@@ -200,7 +200,10 @@ impl SqliteStore {
     /// ADR-0079 D13（Phase R5a）/ ADR 2026-10-11-task-wait-reasons D3: `task` の祖先の行（親から root へ）。
     /// 祖先は `parent_id`、無ければ木の親（`tree.parent_unit.task_id`。採用で `parent_id` を書き換えない子）
     /// を辿る。循環と深すぎる鎖は `MAX_ANCESTRY` で打ち切る（壊れた行で dispatch 全体を止めない）。
-    pub(super) fn ancestors_locked(conn: &Connection, task: &Task) -> Result<Vec<Task>, StoreError> {
+    pub(super) fn ancestors_locked(
+        conn: &Connection,
+        task: &Task,
+    ) -> Result<Vec<Task>, StoreError> {
         let mut out = Vec::new();
         let mut seen = std::collections::HashSet::new();
         let mut next = crate::wait::parent_of(task);

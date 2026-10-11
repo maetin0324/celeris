@@ -209,3 +209,15 @@ pub struct UnitWait {
 ## 実装時の付記
 
 （後の葉が実装との食い違いをここに書く）
+
+### 葉 core（2026-10-11）
+- `wait.rs` の関数は ADR の名前どおり。加えて `halt_waits`（D1〜D4 だけ。`halted_by_pause` が使う）、`resolve_children`（`ChildFacts{task_id,status,labels}` から
+  `child:<key>` の done/failed と待つ unit を返す。dispatcher の `resolve_child_dependencies` と `plan_waits` が共有）、`parent_of`・`MAX_ANCESTRY` を公開した。
+  `plan_waits` の第 2 引数は ADR の `child_status: &dyn Fn` ではなく `&[ChildFacts]`（label で `child:<key>` と結ぶのに要る）。
+- `HaltedSet` は id → `HaltState` の `HashMap`。`halted_projects_locked` はアーカイブを `Archived`、それ以外を status で分ける。
+- D3 の `TaskStore::task_waits` は trait には足さず、`SqliteStore::db_waits_for(&[Task])`（DB の D1〜D6 だけ）を置いた。計画の待ちは api 葉が
+  `work_units_for` と `plan_waits` で足す。
+- D4: provider が選べなかった見送りは、`unroutable` に入っていれば `Unroutable`、そうでなければ `Capacity{scope: source}`（満杯と cooldown を区別しない）。
+  クラスタの並列度の満杯は `Capacity{account}` ではなく `Cluster{detail: "concurrency full"}`。全部の枠が埋まって `dispatch_ready` が早期 return する tick も、
+  窓の ready に `Capacity{global}` を付ける（ready_tasks を 1 回読む）。
+- D4 の旧 3 欄（`unroutable`・`awaiting_children`・`awaiting_human`）の削除は未了（gui の読み手が core・api 葉の範囲外）。進捗 core.md の「未解決」。

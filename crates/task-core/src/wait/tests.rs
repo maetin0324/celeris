@@ -8,7 +8,13 @@ use crate::message::MessageId;
 use crate::store::tests::sample_task;
 use crate::store::{SqliteStore, TaskStore};
 
-fn unit(key: &str, phase: Option<&str>, seq: u32, status: WorkUnitStatus, deps: &[&str]) -> WorkUnitRow {
+fn unit(
+    key: &str,
+    phase: Option<&str>,
+    seq: u32,
+    status: WorkUnitStatus,
+    deps: &[&str],
+) -> WorkUnitRow {
     let spec = WorkUnitSpec {
         key: key.to_string(),
         kind: if key.starts_with("integrate-") {
@@ -198,7 +204,13 @@ fn task_wait_unit_waits_agree_with_newly_ready_on_depends_on_and_stage() {
     // 段 edges → remove（直列）。edges の dispatch-prune は cos-route を待つ。
     let units = vec![
         unit("cos-route", Some("edges"), 0, WorkUnitStatus::Running, &[]),
-        unit("dispatch-prune", Some("edges"), 1, WorkUnitStatus::Pending, &["cos-route"]),
+        unit(
+            "dispatch-prune",
+            Some("edges"),
+            1,
+            WorkUnitStatus::Pending,
+            &["cos-route"],
+        ),
         unit("free", Some("edges"), 2, WorkUnitStatus::Pending, &[]),
         unit(
             "integrate-edges",

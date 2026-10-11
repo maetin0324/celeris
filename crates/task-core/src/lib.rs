@@ -268,10 +268,6 @@ pub use execution_plan::{
     UnitContext, effective_needs_decisions, internal_view, is_phased_schema, normalized_decisions,
     validate_with,
 };
-pub use wait::{
-    BackoffCause, CapacityScope, ChildFacts, ChildResolution, HaltState, HaltedSet, HumanGateKind,
-    TaskWait, UnitWait, WaitFacts, db_waits, halt_waits, plan_waits, resolve_children, unit_waits,
-};
 pub use tree::{
     DepthCounters, LimitHold, LivenessClass, LivenessUnitFacts, NextRun, NodeLiveness,
     NodeLivenessFacts, ParentUnit, PlanApproval, PlanApprovalFacts, RunLimitBreach, StageHint,
@@ -279,6 +275,10 @@ pub use tree::{
     UnitGate, UnitGateAction, UnitGateContext, UnitGateReport,
 };
 pub use tree_metrics::{DepthRollup, RollupMetrics, RollupNodeFacts, SubtreeMetrics};
+pub use wait::{
+    BackoffCause, CapacityScope, ChildFacts, ChildResolution, HaltState, HaltedSet, HumanGateKind,
+    TaskWait, UnitWait, WaitFacts, db_waits, halt_waits, plan_waits, resolve_children, unit_waits,
+};
 // ---- ADR-0072 D13（Phase E3）: Complexity Gate ----
 pub use direct_route::{
     DIRECT_ROUTE_POLICY_VERSION, DirectRouteInputs, Route, RouteDecision, RouteReason,

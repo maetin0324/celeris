@@ -3133,8 +3133,6 @@ mod undeclared_artifacts_scan;
 
 mod cluster_job_wait;
 mod cos_capacity;
-/// ADR 2026-10-11-task-wait-reasons: 見送りの理由（snapshot の task_waits と共有の待ち判定）。
-mod task_waits;
 #[path = "../cos_chat/harness_tests.rs"]
 mod cos_chat_harness_tests;
 mod cos_chat_launch;
@@ -3142,6 +3140,8 @@ mod cos_chat_rollover;
 mod cos_chat_triage;
 mod cos_live_fix_d4;
 mod human_gates;
+/// ADR 2026-10-11-task-wait-reasons: 見送りの理由（snapshot の task_waits と共有の待ち判定）。
+mod task_waits;
 
 /// ADR-0079 付記 R7-5: WU の checks の不合格の記録・次の run と replan への伝達・usage
 /// （`src/dispatcher/tests/work_unit_check_failures.rs`）。

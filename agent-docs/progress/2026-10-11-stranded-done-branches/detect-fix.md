@@ -43,3 +43,35 @@ tasks: [01M4MAZNNYT4JVRYKCVZ1TF1VF]
 ## 提案
 
 - sandbox の失敗を gate 上で区別できるように、browser 系の試験に既知の sandbox 印（環境変数など）を付け、その試験を sandbox 外でだけ要求する形にする。
+
+## 再検証（2026-10-11, 2 回目の run）
+
+- `UPDATE_SCHEMA=1 cargo test -p task-api schema` の後も `git status --short` は空。生成物（docs/api/v1・gui・web の生成型）は commit 済みの d4266df9 と一致し、差分は出ない。
+- `cargo test -p task-api schema` — `schema::tests::committed_schema_matches_generated ... ok`、`schema_endpoint_returns_the_committed_file ... ok`。
+- `cargo test -p task-api --no-fail-fast` — 失敗は browser_e2e・browser_live_cross・browser_waits の browser 系だけ（前回と同じ族）。受け入れ条件 0 の「exit 0」はこの browser 系が sandbox で落ちるため未達。
+- 前回の run の check 不合格（`out of scope: web/features/inbox/inbox-model.ts`）の原因: `KIND_LABELS: Record<InboxKind, string>` の網羅のため、このファイルの変更は型検査に必要。範囲 check の許可 path（crates/・docs/api/v1/・docs/protocol/・gui/app/・web/api/・進捗ディレクトリ）に `web/features/inbox/` が無い。ファイルを戻すと web の typecheck が落ちるため、範囲 check 側の修正（plan_issue）を申告する。
+- test-parallel の結果は前回 run（同じ commit d4266df9）の記録のとおり。この run では再実行していない。
+- 2 回目の run で `web/features/inbox/inbox-model.ts` を基点の版へ戻して `corepack pnpm@12.6.0 -C web typecheck`（`tsc -b`）を流したところ exit 1（`features/inbox/inbox-model.ts(25,14): error TS2741: Property 'unintegrated' is missing ... Record<InboxKind, string>`）。`tsc --noEmit -p .` は戻した状態でも通るが、それは `tsc -b` と同じ検査ではないため誤判定だった。よってこのファイルの変更は必要で、d4266df9 の版（`unintegrated` 追加）を残した。
+- 範囲 check が落ちる原因は、check の許可 path に `web/features/inbox/` が無いこと。成果を直しても（戻せば typecheck が落ち、残せば check が落ちる）check が通らないため plan_issue を申告する。
+
+## 提案（範囲 check の修正）
+
+- 検出 unit（detect-fix）の範囲 check の許可 path に `web/features/inbox/` を足す。`InboxKind` に variant を足す葉は web の `KIND_LABELS: Record<InboxKind, string>` と `INBOX_KINDS` も更新が要る（`web/api/generated/` だけでは型検査が落ちる）。
+
+## 再検証（2026-10-11, 3 回目の run）
+
+- 対象 commit: d4266df9（inbox-model.ts の `unintegrated` 追加を含む。この run で追加の変更は無し）。
+- `cargo test -p task-api schema` — `committed_schema_matches_generated ... ok`、`schema_endpoint_returns_the_committed_file ... ok`、exit 0。
+- `corepack pnpm@12.6.0 -C web typecheck`（`tsc -b`）— exit 0。`inbox-model.ts` の `unintegrated` が無いと TS2741 で落ちるため、このファイルの変更は必要（前 run で確認）。
+- `corepack pnpm@12.6.0 -C web exec vitest run features/inbox` — 5 passed。
+- `bash scripts/dev/test-parallel.sh` — exit 100。`5133 tests run: 5025 passed, 108 failed, 13 skipped`（同じ commit の 2 回目の run と同数）。失敗は sandbox 族のみ: `celeris-credentiald::injection_ipc` 17 件（ほか broker 3・browser_doctor 1）、`task-api::browser_e2e` 3 件・`browser_live_cross` 3 件、`celeris` 2 件、`celerisctl::bin/celerisctl`（approve の private socket）1 件。stranded・inbox・schema・store の試験は失敗 0 件。
+- 受け入れ条件 0「cargo test -p task-api が exit 0」は未達（browser 系の sandbox 失敗のため）。
+- 範囲 check（`scope`）は依然として `web/features/inbox/inbox-model.ts` で落ちる。Objective は web/features/ を範囲内としているが、check の許可 path（crates/・docs/api/v1/・docs/protocol/・gui/app/・web/api/・進捗ディレクトリ）には無い。check 側の修正が要る（plan_issue）。
+
+## 再検証（2026-10-11, 4 回目の run）
+
+- 人の回答（承認）により、範囲 check の許可 path に `web/features/inbox/` を含めた。`web/features/inbox/inbox-model.ts` の変更（`unintegrated` の INBOX_KINDS と KIND_LABELS）は残した。範囲 check の再実行 — `scope ok`（変更 path は docs/api/v1/・gui/app/・web/api/・web/features/inbox/・進捗ディレクトリのみ）。
+- `cargo test -p task-api schema` — `committed_schema_matches_generated ... ok`、exit 0。
+- `corepack pnpm@12.6.0 -C web typecheck`（`tsc -b`）— exit 0。
+- `bash scripts/dev/test-parallel.sh` — exit 100。`5133 tests run: 5025 passed, 108 failed, 13 skipped`（前 run と同数）。失敗は sandbox 族のみ: `celeris-credentiald::injection_ipc` 17、`broker` 3、`browser_doctor` 1、`task-api::browser_e2e` 3、`browser_live_cross` 3、`celeris` 2、`celerisctl::bin/celerisctl` 1。stranded・inbox・schema・store の試験は失敗 0。
+- 受け入れ条件 0「`cargo test -p task-api` が exit 0」は未達（browser_e2e・browser_live_cross の 6 件が fixture 待ちで落ちる。sandbox 族）。この run では sandbox 外での再確認はしていない。

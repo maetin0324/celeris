@@ -42,6 +42,11 @@ pub struct FeaturesAux {
     pub context_paths_n: Option<usize>,
     pub crates_n: Option<usize>,
     pub repos_n: Option<usize>,
+    /// D2「触る範囲」の書き込み集合の予測: 前の試行の `run_write_sets`（WU は
+    /// `work_unit_write_sets` も）の path を `<repo>:<path>` で正規化・重複除去・整列したもの。
+    pub write_set: Option<Vec<String>>,
+    /// 書き込み集合の元の行のうち status が `incomplete`／`unavailable` のもの。
+    pub write_set_gaps: Vec<WriteSetGap>,
     pub prior_runs_n: Option<u64>,
     pub prior_failed_n: Option<u64>,
     pub retries_n: Option<u64>,
@@ -51,6 +56,15 @@ pub struct FeaturesAux {
     pub task_features_v69: Option<LaneFeatures>,
     pub missing: Vec<String>,
     pub truncated: Vec<Truncation>,
+}
+
+/// 書き込み集合の不完全な元の行 1 件（`source` は `run_write_sets`／`work_unit_write_sets`）。
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub struct WriteSetGap {
+    pub source: String,
+    pub owner_id: String,
+    pub repo: String,
+    pub status: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -71,6 +85,7 @@ pub struct FeaturesInput {
     pub paths: Option<Vec<String>>,
     pub repos: Option<Vec<String>>,
     pub write_set: Option<Vec<String>>,
+    pub write_set_gaps: Vec<WriteSetGap>,
     pub genre: Option<String>,
     pub kind: Option<String>,
     pub harness: Option<String>,
@@ -288,6 +303,8 @@ pub fn build_task_features(input: &FeaturesInput) -> TaskFeatures {
         context_paths_n: input.context_paths_n,
         crates_n: input.crates_n,
         repos_n: input.repos_n,
+        write_set: input.write_set.clone(),
+        write_set_gaps: input.write_set_gaps.clone(),
         prior_runs_n: input.prior_runs_n,
         prior_failed_n: input.prior_failed_n,
         retries_n: input.retries_n,

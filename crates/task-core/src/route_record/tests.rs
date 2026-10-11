@@ -123,7 +123,7 @@ fn route_record_schema_pinned() {
     );
     assert_eq!(
         f.hash,
-        "sha256:3574d17f410b6a366f67b61ea1a871cc6ba193dc4458b41a5d3f4ef05f7ad20d"
+        "sha256:49393ff873e73bfb8cc9b99e56549723ca6cf89a6354af34bb023cb6609db15a"
     );
 }
 

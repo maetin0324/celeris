@@ -13,9 +13,10 @@ use crate::{
     model::Criterion,
     route_record::{
         AcceptanceInput, CheckInput, FailedCriterionInput, FeaturesInput, PriorRunInput,
-        ROUTE_OUTCOME_SCHEMA, RouteOutcome, TaskFeatures, build_task_features,
+        ROUTE_OUTCOME_SCHEMA, RouteOutcome, TaskFeatures, WriteSetGap, build_task_features,
     },
     store::{SqliteStore, StoreError},
+    write_set::WritePathHint,
 };
 
 type SubjectRow = (
@@ -107,6 +108,9 @@ pub fn features_for_subject(
                 .map(|v| v.len() as u64)
         };
         let mut input=FeaturesInput {title,objective,acceptance_n:acceptance.as_ref().map(|v|v.len() as u64),check_command_n:Some(command_n),check_artifact_n:Some(artifact_n),check_reviewer_n:Some(reviewer_n),check_human_n:Some(human_n),acceptance,checks,done_when:arr_strings(&wu["done_when"]),outputs:arr_strings(&wu["outputs"]),paths:paths.clone(),repos:repos.clone(),genre:str(&task,"genre"),kind:if subject.kind=="work_unit"{str(&wu,"kind")}else{Some("task".into())},harness:ctx.harness.or(old_harness),lane:ctx.lane.or(old_lane),depth:Some(depth),deps_n,prior_runs_n:Some(prior),prior_failed_n:Some(failed),prior_runs:Some(prior_runs),retries_n:retries,repairs_n:repairs,budget_turns,budget_wall_s,task_features_v69:v69,..Default::default()};
+        let (write_set, write_set_gaps) = prior_write_set(c, &subject, &as_of)?;
+        input.write_set = write_set;
+        input.write_set_gaps = write_set_gaps;
         input.context_paths_n=paths.as_ref().map(|v|v.len()); input.repos_n=repos.as_ref().map(|v|v.len());
         input.crates_n=paths.as_ref().map(|v|v.iter().filter_map(|s|s.strip_prefix("crates/").and_then(|s|s.split('/').next())).collect::<std::collections::HashSet<_>>().len());
         input.phase_index=plan.as_deref().and_then(|p|serde_json::from_str::<Value>(p).ok()).and_then(|p|p["phases"].as_array().and_then(|a|a.iter().position(|x|x["key"]==wu["phase"]).map(|i|i as u64)));
@@ -137,6 +141,77 @@ pub fn outcome_labels_for_run(
         missing.extend(["quota_used","changed_lines","changed_files_n","changed_crates_n","retries_after","repaired"].map(str::to_owned));
         Ok(RouteOutcome{schema:ROUTE_OUTCOME_SCHEMA.into(),labels:serde_json::json!({"run_status":status,"checks_passed":if total>0{Some(passed)}else{None},"checks_total":if total>0{Some(total)}else{None},"review_pass":review,"wall_s":wall,"cost_usd_list":usage.get("cost_usd_list"),"tokens_in":usage.get("tokens_in"),"tokens_out":usage.get("tokens_out"),"quota_used":null,"changed_lines":null,"changed_files_n":null,"changed_crates_n":null,"retries_after":null,"repaired":null,"missing":missing})})
     })
+}
+
+/// D2「触る範囲」の書き込み集合の予測。task は `run_write_sets`（task_id 一致）、WU は
+/// `run_write_sets`（work_unit_id 一致）と `work_unit_write_sets`。判断時点より後の行は読まない:
+/// `AsOf::Timestamp` は `recorded_at` と run の `started_at`、`AsOf::EventSeq` は runs と同じく
+/// その run を指す event の `seq` と、境界 seq までの event の最大 `ts` 以前の `recorded_at`。
+/// path は `<repo>:<path>` に正規化（先頭 `./` と末尾 `/` を落とす、不正な path は捨てる）し、
+/// 重複を除いて整列する。`incomplete`／`unavailable` の行は `WriteSetGap` に残す。
+/// 行が無い（または complete の行が無く path も無い）ときは `None`（欠測）。
+fn prior_write_set(
+    c: &rusqlite::Connection,
+    subject: &Subject,
+    as_of: &Option<AsOf>,
+) -> Result<(Option<Vec<String>>, Vec<WriteSetGap>), StoreError> {
+    let ts = match as_of {
+        Some(AsOf::Timestamp(s)) => Some(s.as_str()),
+        _ => None,
+    };
+    let seq = match as_of {
+        Some(AsOf::EventSeq(n)) => Some(*n),
+        _ => None,
+    };
+    let is_wu = subject.kind == "work_unit";
+    let owner_column = if is_wu { "work_unit_id" } else { "task_id" };
+    let mut sql = format!(
+        "SELECT 'run_write_sets',ws.run_id,ws.repo_id,ws.paths_json,ws.status FROM run_write_sets ws \
+         JOIN runs r ON r.run_id=ws.run_id WHERE ws.{owner_column}=?1 \
+         AND (?2 IS NULL OR (ws.recorded_at<=?2 AND r.started_at<=?2)) \
+         AND (?3 IS NULL OR (EXISTS (SELECT 1 FROM events e WHERE e.task_id=r.task_id AND e.seq<=?3 AND json_extract(e.json,'$.run_id')=r.run_id) \
+         AND ws.recorded_at<=(SELECT MAX(e.ts) FROM events e WHERE e.task_id=ws.task_id AND e.seq<=?3)))"
+    );
+    if is_wu {
+        sql.push_str(
+            " UNION ALL SELECT 'work_unit_write_sets',w.work_unit_id,w.repo_id,w.paths_json,w.status FROM work_unit_write_sets w \
+             WHERE w.work_unit_id=?1 AND (?2 IS NULL OR w.recorded_at<=?2) \
+             AND (?3 IS NULL OR w.recorded_at<=(SELECT MAX(e.ts) FROM events e WHERE e.task_id=w.task_id AND e.seq<=?3))",
+        );
+    }
+    sql.push_str(" ORDER BY 1,2,3");
+    let mut stmt = c.prepare(&sql)?;
+    let mut rows = stmt.query(rusqlite::params![subject.id, ts, seq])?;
+    let mut paths = std::collections::BTreeSet::new();
+    let mut gaps = std::collections::BTreeSet::new();
+    let mut complete = false;
+    while let Some(r) = rows.next()? {
+        let source: String = r.get(0)?;
+        let owner_id: String = r.get(1)?;
+        let repo: String = r.get(2)?;
+        let paths_json: String = r.get(3)?;
+        let status: String = r.get(4)?;
+        let raw: Vec<String> = serde_json::from_str(&paths_json).unwrap_or_default();
+        for p in raw {
+            let p = p.trim();
+            let p = p.strip_prefix("./").unwrap_or(p);
+            if let Ok(hint) = WritePathHint::parse(p) {
+                paths.insert(format!("{repo}:{}", hint.as_str()));
+            }
+        }
+        if status == "complete" {
+            complete = true;
+        } else {
+            gaps.insert(WriteSetGap {
+                source,
+                owner_id,
+                repo,
+                status,
+            });
+        }
+    }
+    let write_set = (complete || !paths.is_empty()).then(|| paths.into_iter().collect());
+    Ok((write_set, gaps.into_iter().collect()))
 }
 
 fn str(v: &Value, k: &str) -> Option<String> {
@@ -381,5 +456,151 @@ mod tests {
         .unwrap();
         assert_eq!(features.aux.deps_n, Some(3));
         assert!(!features.aux.missing.iter().any(|name| name == "deps_n"));
+    }
+
+    /// 実データ形（migration 済み store、`record_write_set` と同じ列）の書き込み集合を足す。
+    /// r1（00:01 開始）の complete、r2（00:03 開始）の incomplete、wu-1 の WU 単位の complete。
+    fn write_set_fixture() -> SqliteStore {
+        let s = fixture();
+        let c = s.lock().unwrap();
+        c.execute("INSERT INTO run_write_sets(run_id,task_id,work_unit_id,repo_id,base_sha,head_sha,paths_json,status,reason,recorded_at) VALUES('r1','task-1','wu-1','repo','b1','h1',?1,'complete',NULL,'2026-01-01T00:02:00Z')",[r#"["./crates/task-core/src/route_extract.rs","crates/task-core/src/lib.rs","crates/task-core/src/lib.rs","../escape","crates/task-core/"]"#]).unwrap();
+        c.execute("INSERT INTO run_write_sets(run_id,task_id,work_unit_id,repo_id,base_sha,head_sha,paths_json,status,reason,recorded_at) VALUES('r2','task-1','wu-1','repo','b2',NULL,?1,'incomplete','git diff failed','2026-01-01T00:03:30Z')",[r#"["crates/future/src/late.rs"]"#]).unwrap();
+        c.execute("INSERT INTO work_unit_write_sets(work_unit_id,task_id,repo_id,base_sha,head_sha,paths_json,status,reason,recorded_at) VALUES('wu-1','task-1','repo','b1','h1',?1,'complete',NULL,'2026-01-01T00:02:10Z')",[r#"["docs/wu.md","crates/task-core/src/lib.rs"]"#]).unwrap();
+        drop(c);
+        s
+    }
+
+    fn subject(kind: &str, id: &str) -> Subject {
+        Subject {
+            kind: kind.into(),
+            id: id.into(),
+        }
+    }
+
+    fn strings(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    #[test]
+    fn route_extract_write_set_work_unit_prior_attempt_in_brief_and_aux() {
+        let s = write_set_fixture();
+        let f = features_for_subject(&s, subject("work_unit", "wu-1"), None, None).unwrap();
+        assert_eq!(
+            f.aux.write_set,
+            Some(strings(&[
+                "repo:crates/future/src/late.rs",
+                "repo:crates/task-core",
+                "repo:crates/task-core/src/lib.rs",
+                "repo:crates/task-core/src/route_extract.rs",
+                "repo:docs/wu.md",
+            ]))
+        );
+        assert_eq!(
+            f.aux.write_set_gaps,
+            vec![WriteSetGap {
+                source: "run_write_sets".into(),
+                owner_id: "r2".into(),
+                repo: "repo".into(),
+                status: "incomplete".into(),
+            }]
+        );
+        assert!(!f.aux.missing.iter().any(|m| m == "write_set"));
+        assert!(f.brief.contains(
+            "書き込み集合:\n- repo:crates/future/src/late.rs\n- repo:crates/task-core\n- repo:crates/task-core/src/lib.rs\n- repo:crates/task-core/src/route_extract.rs\n- repo:docs/wu.md\n\n# 置かれた位置"
+        ));
+        let again = features_for_subject(&s, subject("work_unit", "wu-1"), None, None).unwrap();
+        assert_eq!(f.hash, again.hash);
+    }
+
+    #[test]
+    fn route_extract_write_set_task_prior_attempt_in_brief_and_aux() {
+        let s = write_set_fixture();
+        let f = features_for_subject(&s, subject("task", "task-1"), None, None).unwrap();
+        // task subject は run_write_sets（task_id 一致）だけを読み、WU 単位の集合は読まない。
+        assert_eq!(
+            f.aux.write_set,
+            Some(strings(&[
+                "repo:crates/future/src/late.rs",
+                "repo:crates/task-core",
+                "repo:crates/task-core/src/lib.rs",
+                "repo:crates/task-core/src/route_extract.rs",
+            ]))
+        );
+        assert_eq!(f.aux.write_set_gaps.len(), 1);
+        assert!(!f.aux.missing.iter().any(|m| m == "write_set"));
+        assert!(f.brief.contains("書き込み集合:\n- repo:crates/future/src/late.rs\n"));
+        assert!(!f.brief.contains("docs/wu.md"));
+    }
+
+    fn insert_fresh_subjects(s: &SqliteStore) {
+        let c = s.lock().unwrap();
+        c.execute("INSERT INTO tasks(id,status,kind,parent_id,priority,created_at,json) VALUES('task-2','running','task',NULL,0,'2026-01-01T00:00:00Z','{\"title\":\"Fresh\",\"objective\":\"New\"}')",[]).unwrap();
+        c.execute("INSERT INTO work_units(id,task_id,plan_id,key,seq,kind,status,depends_on_json,retries,json,created_at,updated_at) VALUES('wu-2','task-1','p1','fresh',3,'implement','ready','[]',0,'{\"objective\":\"New\"}','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')",[]).unwrap();
+    }
+
+    #[test]
+    fn route_extract_write_set_work_unit_without_prior_attempt_is_missing() {
+        let s = write_set_fixture();
+        insert_fresh_subjects(&s);
+        let f = features_for_subject(&s, subject("work_unit", "wu-2"), None, None).unwrap();
+        assert_eq!(f.aux.prior_runs_n, Some(0));
+        assert_eq!(f.aux.write_set, None);
+        assert!(f.aux.write_set_gaps.is_empty());
+        assert!(f.aux.missing.iter().any(|m| m == "write_set"));
+        assert!(f.brief.contains("書き込み集合:\n範囲の記述なし\n"));
+    }
+
+    #[test]
+    fn route_extract_write_set_task_without_prior_attempt_is_missing() {
+        let s = write_set_fixture();
+        insert_fresh_subjects(&s);
+        let f = features_for_subject(&s, subject("task", "task-2"), None, None).unwrap();
+        assert_eq!(f.aux.prior_runs_n, Some(0));
+        assert_eq!(f.aux.write_set, None);
+        assert!(f.aux.missing.iter().any(|m| m == "write_set"));
+        assert!(f.brief.contains("書き込み集合:\n範囲の記述なし\n"));
+    }
+
+    #[test]
+    fn route_extract_write_set_excludes_sets_recorded_after_decision_time() {
+        let s = write_set_fixture();
+        let at = |kind: &str, id: &str, as_of: AsOf| {
+            features_for_subject(&s, subject(kind, id), Some(as_of), None)
+                .unwrap()
+                .aux
+        };
+        let r1 = [
+            "repo:crates/task-core",
+            "repo:crates/task-core/src/lib.rs",
+            "repo:crates/task-core/src/route_extract.rs",
+        ];
+        // r1 の集合は 00:02:00 記録。それより前の判断には何も入らない。
+        let early = at("work_unit", "wu-1", AsOf::Timestamp("2026-01-01T00:01:30Z".into()));
+        assert_eq!(early.write_set, None);
+        assert!(early.missing.iter().any(|m| m == "write_set"));
+        // 00:02:05: r1 だけ（WU 集合 00:02:10・r2 00:03:30 は後）。
+        let mid = at("work_unit", "wu-1", AsOf::Timestamp("2026-01-01T00:02:05Z".into()));
+        assert_eq!(mid.write_set, Some(strings(&r1)));
+        assert!(mid.write_set_gaps.is_empty());
+        let task_mid = at("task", "task-1", AsOf::Timestamp("2026-01-01T00:03:10Z".into()));
+        assert_eq!(task_mid.write_set, Some(strings(&r1)));
+        // EventSeq: seq 2 の ts は 00:01:00 で r1 の集合（00:02:00）は後。
+        let seq2 = at("work_unit", "wu-1", AsOf::EventSeq(2));
+        assert_eq!(seq2.write_set, None);
+        // seq 3（ts 00:03:00）: r1 と WU 集合は入り、r2（00:03:30 記録）は入らない。
+        let seq3 = at("work_unit", "wu-1", AsOf::EventSeq(3));
+        let mut expected = r1.to_vec();
+        expected.push("repo:docs/wu.md");
+        assert_eq!(seq3.write_set, Some(strings(&expected)));
+        assert!(seq3.write_set_gaps.is_empty());
+        let task_seq3 = at("task", "task-1", AsOf::EventSeq(3));
+        assert_eq!(task_seq3.write_set, Some(strings(&r1)));
+        // seq 5（ts 00:05:00）: r2 の incomplete も入り gap に残る。
+        let seq5 = at("work_unit", "wu-1", AsOf::EventSeq(5));
+        assert!(seq5
+            .write_set
+            .unwrap()
+            .contains(&"repo:crates/future/src/late.rs".to_owned()));
+        assert_eq!(seq5.write_set_gaps.len(), 1);
     }
 }

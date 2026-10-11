@@ -148,8 +148,8 @@ Status は Proposed のまま。以下は実装（views・routes・routes-wire�
 
 ### F2. 遠隔 repo（`WorkspaceSpec::Remote`）は sweep で判定しない: 新しい状態 `not_applicable`
 
-- `TaskRepoIntegrationStatus` に `NotApplicable`（文字列 `not_applicable`）を足す。migration で `task_repo_integration_states.state` の CHECK に `'not_applicable'` を加える（SQLite は CHECK を変えられないので、表を作り直して行を写す。行は失わない）。
-- sweep は Remote の repository を持つ record を ssh せず `not_applicable`、reason `remote repository is not checked by the stranded sweep` で記録する。
+- `TaskRepoIntegrationStatus` に `NotApplicable`（文字列 `not_applicable`）を足す。migration で `task_integrations.state` の CHECK に `'not_applicable'` を加える（SQLite は CHECK を変えられないので、表を作り直して行を写す。行は失わない）。
+- sweep は Remote の repository を持つ record を ssh せず `not_applicable`、reason `remote repository: not checked by the sweep` で記録する。
 - 理由: 5 分周期の sweep から TOTP を伴う ssh（pegasus）は不安定で、失敗のたびに偽の状態を作る。delivery も遠隔 repo を main に統合しないので、遠隔 repo について「main に入っていない」は取り残しの定義に当たらない。
 - `not_applicable` は受信箱に出さない（`crates/task-ops/src/inbox.rs` の対象は `unintegrated` だけ）。API・celerisctl・web の統合状態表示には `not_applicable` として出す（`integration list --state not_applicable` で引ける）。merge・discard・hold・reopen は `not_applicable` から 409（遷移不可）。
 - 既存の `unintegrated` 行（benchfs の 38 件）は次の sweep で `not_applicable` に移る。状態の変化は既存どおり event の追記で残し、過去の events は書き換えない。
@@ -189,9 +189,9 @@ Status は Proposed のまま。以下は実装（views・routes・routes-wire�
 - 受信箱: `crates/task-ops/src/inbox.rs` は `task_integration_list(Some(Unintegrated))` だけを読む。`not_applicable` は出ない。
 - 409: `stranded.rs` の `merge`・`reopen`・`set_disposition`（discard・hold）は `NotApplicable` で `StoreError::Invalid` を返し、`crates/task-api/src/integrations.rs` の `invalid_problem` が 409 `invalid_transition` にする。celerisctl の `integration list --state not_applicable` は受け付ける。web は `対象外（遠隔 repo）` を操作ボタン無しで出す。
 - 試験: `stranded_remote_migrates_unintegrated_row_to_not_applicable`、`stranded_remote_actions_reject_not_applicable_rows`（ともに `crates/task-ops/src/stranded.rs`）、`stranded_remote_not_applicable_state_is_hidden_from_inbox`（`crates/task-ops/src/inbox/tests.rs`）。
-- ずれ:
-  - 表の名前: 決定本文は `task_repo_integration_states.state` と書いたが、実際の表は `task_integrations`（`0067_task_repo_integration_states.sql` が作った表）。
-  - reason の文字列: 決定は `remote repository is not checked by the stranded sweep`。実装は `remote repository: not checked by the sweep`。merge の拒否理由は `remote repository was not checked by the sweep`、reopen・discard・hold は `not-applicable integrations cannot be changed locally`。
+- ずれ（解消: 決定本文を実装に合わせて改訂した。final-verify 段で確認）:
+  - 表の名前: 決定本文の `task_repo_integration_states` は `task_integrations`（`0067_task_repo_integration_states.sql` が作った表）に直した。
+  - reason の文字列: 決定本文の文字列を `remote repository: not checked by the sweep` に直した。merge の拒否理由は `remote repository was not checked by the sweep`、reopen・discard・hold は `not-applicable integrations cannot be changed locally`。
   - event（解消済み）: 決定どおり `unintegrated` 等から `not_applicable` への遷移は `Event::IntegrationNotApplicable` （`crates/task-core/src/model.rs`、serde 名 `integration_not_applicable`、`repo_id`・`branch`・`head_sha`・`reason`・`actor` を持つ）として追記する。追記は `crates/task-core/src/store/task_integration_state.rs` の `task_integration_upsert_impl` が行い、状態が同じなら追記しない（既存の規則）。試験: `stranded_audit_remote_not_applicable_appends_one_event_and_no_repeat`（`crates/task-ops/src/stranded.rs`）。移行で書き換わった行の過去の events は書き換えていない。event 名は `crates/task-api/src/query.rs` の `EVENT_TYPES` と web の `event-kinds.ts`・`invalidation-map.ts` に追従済み。
   - repos 空の task（`repoless_records`）は Local の repository だけを走査し、Remote の repository の branch は record を作らない（`not_applicable` の行もできない）。`task.repos` を持つ task だけが `not_applicable` で記録される。
 

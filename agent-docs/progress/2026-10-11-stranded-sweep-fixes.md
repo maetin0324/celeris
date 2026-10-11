@@ -34,15 +34,16 @@ tasks: [01M4NM5720BYCYHXT02297GFKK]
 
 ## 証拠
 
-最終検証（na-event 統合後 HEAD `ca0dd20b`、final-verify 段）の結果。詳細は [final-verify.md](2026-10-11-stranded-sweep-fixes/final-verify.md)（前段の verify.md は `00e3dcb0` 時点）。
+最終検証（na-event 統合後 HEAD `75ed7cb3`、final-verify 段）の結果。詳細は [final-verify.md](2026-10-11-stranded-sweep-fixes/final-verify.md)（前段の verify.md は `00e3dcb0` 時点）。
 
 | コマンド | exit | 要点 |
 |---|---|---|
-| `TMPDIR=/tmp bash scripts/dev/test-parallel.sh` | 0 | nextest 5178 run / 5178 passed / 13 skipped、doctest 3 passed（JSON 集計 5181 passed・0 failed） |
+| `TMPDIR=/tmp bash scripts/dev/test-parallel.sh` | 0 | JSON 集計 passed 5181・failed 0・ignored 14（doctest 含む）。1 件の試験が一度だけ落ちた記録は final-verify.md の「不安定だった試験」 |
 | `cargo clippy --workspace -- -D warnings` | 0 | 警告無し |
 | `cargo fmt --all -- --check` | 0 | 差分無し |
 | `sh scripts/dev/check-doc-links.sh` / `check-adr-numbers.sh` / `progress-index.sh --check` / `check-doc-layout.sh scripts/dev/docs-layout.tsv` | 0 | いずれも ok |
 | `cargo nextest run --workspace -E 'test(stranded_)'` | 0 | 24 passed |
+| `git diff --quiet "$CELERIS_WU_BASE" -- crates/ web/` | 0 | 差分ゼロ |
 
 - 葉の記録: [adr.md](2026-10-11-stranded-sweep-fixes/adr.md)・[resolve.md](2026-10-11-stranded-sweep-fixes/resolve.md)・[remote.md](2026-10-11-stranded-sweep-fixes/remote.md)・[identity.md](2026-10-11-stranded-sweep-fixes/identity.md)・[web-state.md](2026-10-11-stranded-sweep-fixes/web-state.md)・[na-event.md](2026-10-11-stranded-sweep-fixes/na-event.md)・[verify.md](2026-10-11-stranded-sweep-fixes/verify.md)・[final-verify.md](2026-10-11-stranded-sweep-fixes/final-verify.md)
 - ADR 付記の「実装との突き合わせ（F1〜F3、2026-10-11 close 段）」に関数名・migration 0070・試験名（`stranded_default_branch_*` 6 件・`stranded_remote_*` 3 件・`stranded_identity_*` 1 件・`stranded_audit_*` 1 件）と決定からのずれを書いた。F2 の event のずれは na-event 葉で実装して解消した（commit `eb7968ef`、試験 `stranded_audit_remote_not_applicable_appends_one_event_and_no_repeat`）。
@@ -51,7 +52,8 @@ tasks: [01M4NM5720BYCYHXT02297GFKK]
 ## 未解決事項
 
 - （解消）`unintegrated` → `not_applicable` の遷移の event 欠落は na-event 葉で解消（`integration_not_applicable` を追記、commit `eb7968ef`、試験 `stranded_audit_remote_not_applicable_appends_one_event_and_no_repeat`）。
-- ADR F2 の文言のずれ（人の判断が要る・ADR 本文か実装のどちらを直すか）: 表の名前（決定 `task_repo_integration_states`／実装 `task_integrations`）、remote の reason 文字列（決定 `remote repository is not checked by the stranded sweep`／実装 `remote repository: not checked by the sweep`）。event 以外は監査要件に当たらないため、文言の改訂は後続に回す。
+- （解消）ADR F2 の文言のずれ（表の名前・remote の reason 文字列）は決定本文を実装に合わせて改訂した（final-verify 段、agent-docs/adr/2026-10-11-stranded-done-branches.md の F2）。実装は変えていない。
+- 一度だけ落ちた試験: `task-dispatch` の `an_interrupted_integration_is_redone_idempotently_after_restart` は、同じ run の全体試験で 1 回 exit 100、その後の全体試験と単独実行では通った。原因は未調査（final-verify.md）。
 - task-api docs と task-dispatch behind_target の解決失敗時の振る舞いが ADR F1 の表と少し違う（ADR 付記に記載）。
 - `default_branch_unresolvable`（409）が `docs/api/v1/api.md` のエラーコード表に無い。
 - repos 空の task で Remote の repository に branch がある場合は記録しない（`not_applicable` 行もできない）。

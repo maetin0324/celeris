@@ -113,9 +113,6 @@ fn cluster_config(clusters: Vec<celeris::config::ClusterConfig>) -> Config {
         review: Default::default(),
         dispatch: Default::default(),
         api: Default::default(),
-        providers: vec![],
-        providers_include: None,
-        providers_dir: None,
         clusters,
         roles: vec![],
         genres: vec![],
@@ -348,9 +345,6 @@ fn route_config(accounts_dir: &Path) -> Config {
     // The loader still requires a provider row until the provider config is removed.
     let text = format!(
         r#"
-[[providers]]
-id = "p"
-adapter = "fake"
 
 [accounts]
 claude_dir = "{claude}"

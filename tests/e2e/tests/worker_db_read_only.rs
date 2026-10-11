@@ -210,11 +210,6 @@ retry_backoff_base_secs = 0
 command = "{stub}"
 extra_args = ["--approve-for-me"]
 
-[[providers]]
-id = "codex-local"
-adapter = "codex"
-tiers = ["frontier", "standard", "cheap"]
-concurrency = 1
 "#,
             stub = stub.display()
         ),

@@ -205,9 +205,6 @@ fn task_detail_json_with_a_config_reports_the_worktree() {
         &config_path,
         r#"workspace_root = "ws"
 max_requeues = 3
-[[providers]]
-id = "p"
-adapter = "fake"
 [[clusters]]
 id = "pegasus"
 host = "pegasus"

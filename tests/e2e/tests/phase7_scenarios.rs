@@ -96,12 +96,6 @@ required_capabilities = []
 [route_defaults.fake]
 candidates = [{{ source = "fake", model = "fake" }}]
 
-[[providers]]
-id = "fake-local"
-adapter = "fake"
-tiers = ["frontier", "standard", "cheap"]
-concurrency = 2
-model = "fake"
 "#,
             script = script.display()
         );

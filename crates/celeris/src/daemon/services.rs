@@ -327,7 +327,7 @@ mod routing_tests {
             &path,
             format!(
                 "db = {:?}\nworkspace_root = {:?}\n[api]\ntoken_file = {token:?}\n\
-                 [llm_proxy]\nenabled = true\n[[providers]]\nid = \"x\"\nadapter = \"fake\"\n",
+                 [llm_proxy]\nenabled = true\n",
                 dir.path().join("db.sqlite3"),
                 dir.path().join("ws"),
             ),

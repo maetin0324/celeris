@@ -7,13 +7,13 @@ use task_core::{
 fn write_config(dir: &std::path::Path, workspace_root: &std::path::Path) -> PathBuf {
     let path = dir.join("config.toml");
     std::fs::write(
-            &path,
-            format!(
-                "db = \"t.sqlite3\"\nworkspace_root = \"{}\"\n[workspace]\nprune_after_secs = 1\n[[providers]]\nid = \"x\"\nadapter = \"fake\"\n",
-                workspace_root.display()
-            ),
-        )
-        .unwrap();
+        &path,
+        format!(
+            "db = \"t.sqlite3\"\nworkspace_root = \"{}\"\n[workspace]\nprune_after_secs = 1\n",
+            workspace_root.display()
+        ),
+    )
+    .unwrap();
     path
 }
 

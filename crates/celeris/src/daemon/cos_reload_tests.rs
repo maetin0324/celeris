@@ -40,22 +40,6 @@ listen = "127.0.0.1:7700"
 disk_watch = []
 [cos]
 {cos}
-[[providers]]
-id = "claude"
-adapter = "claude-code"
-concurrency = 8
-tiers = ["frontier", "standard"]
-[providers.tier_models.frontier]
-name = "fable"
-model_id = "old-fable"
-[providers.tier_models.standard]
-name = "opus"
-model_id = "new-opus"
-[[providers]]
-id = "codex"
-adapter = "codex"
-concurrency = 8
-tiers = ["frontier", "standard"]
 "#
         ),
     )

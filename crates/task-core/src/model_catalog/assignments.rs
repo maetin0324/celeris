@@ -317,7 +317,7 @@ pub fn default_wire_prefix(source: &str, adapter: &str) -> Option<&'static str> 
 /// から provider 行ごとの実行用モデル名（wire）を作る規則。dispatcher・llm-proxy・routing catalog・API の preview が
 /// 同じ規則を使う。
 ///
-/// 1. 行の config の wire（lane の `tier_models` binding → 行の `model`）に `<prefix>/` があればそれを引き継ぐ
+/// 1. 行の config の wire（lane の binding → 行の `model`）に `<prefix>/` があればそれを引き継ぐ
 ///    （行が既に使っている形が正。opencode の provider 名は `OPENCODE_CONFIG` の中にあり celeris は知らない）。
 /// 2. 無ければ `default_wire_prefix(source, adapter)` の表。
 /// 3. `model_id` が既にその接頭辞で始まっていれば重ねない。
@@ -535,7 +535,7 @@ mod tests {
             "glm-5",
             AssignmentState::Assigned,
         )]);
-        // model も tier_models も無い opencode go の acp 行: 表の `opencode-go/`。
+        // model も lane の binding も無い opencode go の acp 行: 表の `opencode-go/`。
         let got = apply_to_bindings(
             &TierModels::new(),
             "opencode-go",

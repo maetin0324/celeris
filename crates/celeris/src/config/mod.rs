@@ -2,12 +2,12 @@
 //! ディレクトリからの相対と解釈する。
 //!
 //! 流れはこのファイルで読める: `Config::load` が TOML を読み、subsystem ごとに相対パスを解決し
-//! （`org_include`・`providers_include` の取り込みを含む）、`[[harnesses]]` を合流し、`Config::validate`
+//! （`org_include` の取り込みを含む）、`[[harnesses]]` を合流し、`Config::validate`
 //! を通す。`validate` は subsystem ごとの検証を決まった順に呼ぶ（最初に見つかった誤りを返す）。
 //! CLI の上書き（`apply_overrides`）と煙試験（`apply_verify_smoke`）は `load` の後に呼ぶ。
 //!
 //! 型・serde の既定・検証・パスの解決は subsystem ごとのファイルに同居する:
-//! `db` / `api` / `providers` / `adapters` / `accounts`（＋`[secrets]`）/ `proxy`（`[llm_proxy]`）/
+//! `db` / `api` / `adapters` / `accounts`（＋`[secrets]`）/ `proxy`（`[llm_proxy]`）/
 //! `harness`（`[[harnesses]]`・`[[roles]]`・`[[genres]]`）/ `org` / `delegation` / `dispatch`
 //! （`[reviewer]`・`[review]`・`[dispatch]`・`[plan]`・`[sessions]`）/ `execution` / `cluster` /
 //! `workspace`（＋`[containers]`）/ `scratch` / `github` / `selfdeploy`（＋`[handoff]`）/
@@ -37,7 +37,6 @@ mod maintenance;
 mod model_catalog;
 mod model_routing;
 mod org;
-mod providers;
 mod proxy;
 mod scratch;
 mod selfdeploy;
@@ -63,7 +62,6 @@ pub use maintenance::*;
 pub use model_catalog::*;
 pub use model_routing::*;
 pub use org::*;
-pub use providers::*;
 pub use scratch::*;
 pub use selfdeploy::*;
 pub use storage::*;
@@ -150,16 +148,6 @@ pub struct Config {
     pub execution: ExecutionTomlConfig,
     #[serde(default)]
     pub api: ApiConfig,
-    #[serde(default)]
-    pub providers: Vec<ProviderConfig>,
-    /// ADR-0017 M1: `providers.d/*.toml`（1 ファイル 1 アカウント）を追加で読み込む glob。末尾は必ず `/*.toml`。
-    /// 相対パスは設定ファイル基準。マッチしたファイルはファイル名昇順で `providers` に追記してから `validate()` を通す。
-    #[serde(default)]
-    pub providers_include: Option<String>,
-    /// `providers_include` を解決したディレクトリの絶対パス（`Config::load` が計算。TOML には書かない。
-    /// daemon 設定の管理操作が書き込む先。
-    #[serde(skip)]
-    pub providers_dir: Option<PathBuf>,
     /// ADR-0018: コマンドを実行するクラスタ。`WorkspaceSpec::Remote{cluster, path}` の `cluster` がここの `id` を指す。
     #[serde(default)]
     pub clusters: Vec<ClusterConfig>,
@@ -416,6 +404,14 @@ impl Config {
     /// existing sub-struct so adding them does not change `Config` struct literals.
     pub(crate) fn parse_with_delivery(text: &str) -> Result<Self, ConfigError> {
         let mut table: toml::Table = toml::from_str(text)?;
+        if table.contains_key("providers")
+            || table.contains_key("providers.d")
+            || table.contains_key("providers_include")
+        {
+            return Err(ConfigError::Invalid(
+                "legacy provider configuration is no longer supported; declare [llm_sources.<id>] and [harnesses.<id>] and select routes with [route_defaults.<harness>]".into(),
+            ));
+        }
         let harnesses_value = table.remove("harnesses");
         let harness_declarations = harnesses_value
             .as_ref()
@@ -482,11 +478,6 @@ impl Config {
         if let Some(org_include) = &cfg.org_include {
             cfg.org = org::load_org_seed(org_include, &base)?;
         }
-        if let Some(pattern) = &cfg.providers_include {
-            let dir = providers::providers_include_dir(pattern, &base)?;
-            cfg.providers.extend(load_provider_files(&dir)?);
-            cfg.providers_dir = Some(dir);
-        }
         if let Some(accounts) = &mut cfg.accounts {
             accounts.resolve_paths(&base);
         }
@@ -501,7 +492,6 @@ impl Config {
         cfg.selfdeploy.resolve_paths(&base);
         cfg.storage.resolve_paths();
         cfg.adapters.paperqa.resolve_paths(&base);
-        providers::resolve_provider_settings(&mut cfg.providers, &base);
 
         // 2. 旧い `[[genres]]` + `[[roles]]` と `[[harnesses]]` の合流（ADR-0046 D3）。
         cfg.merge_harnesses();
@@ -516,9 +506,6 @@ impl Config {
         let catalog = std::sync::Arc::new(catalog);
         cfg.routing_catalog_snapshot = Some(std::sync::Arc::clone(&catalog));
         cfg.routing_catalog_state = Some(std::sync::Arc::new(std::sync::RwLock::new(catalog)));
-        for code in cfg.provider_kind_warnings() {
-            tracing::warn!(warning = %code, "provider kind compatibility warning");
-        }
         // ADR-0139 D3: 知識整理 run が bearer を持たずに起きる設定を、run の前に知らせる。
         for warning in cfg.langmem_auth_warnings() {
             tracing::warn!(%warning, "knowledge.langmem auth warning");
@@ -548,7 +535,6 @@ impl Config {
         self.storage.validate()?;
         self.cos.validate()?;
         self.validate_cos_mapping()?;
-        providers::validate_providers(self)?;
         if let Some(accounts) = &self.accounts {
             accounts.validate()?;
         }

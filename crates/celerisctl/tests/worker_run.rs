@@ -72,8 +72,8 @@ fn write_script(dir: &Path, name: &str, body: &str) -> PathBuf {
 }
 
 /// A fake LLM source and two fake harnesses (`stub` is the default; `other` passes `other` to the
-/// script) with `route_defaults`, plus `extra_toml`.
-fn write_config(dir: &Path, script: &Path, extra_toml: &str) -> PathBuf {
+/// script) with `route_defaults`.
+fn write_config(dir: &Path, script: &Path) -> PathBuf {
     let workspace_root = dir.join("workspaces");
     let text = format!(
         r#"workspace_root = {workspace_root:?}
@@ -110,17 +110,12 @@ candidates = [{{ source = "fake", model = "fake" }}]
 
 [route_defaults.other]
 candidates = [{{ source = "fake", model = "fake" }}]
-
-{extra_toml}
 "#,
     );
     let path = dir.join("config.toml");
     std::fs::write(&path, text).expect("write config");
     path
 }
-
-/// The loader still requires a provider row until the provider config is removed.
-const PROVIDER_ROW: &str = "[[providers]]\nid = \"p\"\nadapter = \"fake\"\n";
 
 fn run_celerisctl(db: &Path, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_celerisctl"))
@@ -140,7 +135,7 @@ fn manual_run_cannot_silently_drop_browser_capability() {
     let tmp = tempfile::tempdir().unwrap();
     let db = tmp.path().join("celeris.sqlite3");
     let script = write_script(tmp.path(), "must-not-run.sh", "touch invoked\n");
-    let config = write_config(tmp.path(), &script, PROVIDER_ROW);
+    let config = write_config(tmp.path(), &script);
     let store = SqliteStore::open(&db).unwrap();
     let mut task = sample_task(
         Status::Ready,
@@ -193,7 +188,7 @@ echo '{"type":"done","summary":"ok","evidence":[]}'
 "#,
     );
 
-    let config_path = write_config(tmp.path(), &script, PROVIDER_ROW);
+    let config_path = write_config(tmp.path(), &script);
     let workspace_dir = tmp.path().join("ws");
 
     let store = SqliteStore::open(&db_path).expect("open store");
@@ -267,7 +262,7 @@ fn question_exits_three() {
 echo '{"type":"question","text":"which one?"}'
 "#,
     );
-    let config_path = write_config(tmp.path(), &script, PROVIDER_ROW);
+    let config_path = write_config(tmp.path(), &script);
 
     let store = SqliteStore::open(&db_path).expect("open store");
     let task = sample_task(
@@ -314,7 +309,7 @@ fn harness_flag_starts_the_declared_harness_command() {
         "harness.sh",
         "cat > /dev/null\necho \"{\\\"type\\\":\\\"progress\\\",\\\"msg\\\":\\\"harness=${1:-stub}\\\"}\"\necho '{\"type\":\"done\",\"summary\":\"ok\",\"evidence\":[]}'\n",
     );
-    let config_path = write_config(tmp.path(), &script, PROVIDER_ROW);
+    let config_path = write_config(tmp.path(), &script);
 
     let store = SqliteStore::open(&db_path).expect("open store");
     let task = sample_task(
@@ -390,7 +385,7 @@ fn running_task_requires_explicit_workspace() {
         "done.sh",
         "cat > /dev/null\necho '{\"type\":\"done\",\"summary\":\"ok\",\"evidence\":[]}'\n",
     );
-    let config_path = write_config(tmp.path(), &script, PROVIDER_ROW);
+    let config_path = write_config(tmp.path(), &script);
 
     let store = SqliteStore::open(&db_path).expect("open store");
     let task = sample_task(
@@ -451,7 +446,7 @@ fn unknown_harness_errors() {
         "done.sh",
         "cat > /dev/null\necho '{\"type\":\"done\",\"summary\":\"ok\",\"evidence\":[]}'\n",
     );
-    let config_path = write_config(tmp.path(), &script, PROVIDER_ROW);
+    let config_path = write_config(tmp.path(), &script);
 
     let store = SqliteStore::open(&db_path).expect("open store");
     let task = sample_task(
@@ -499,7 +494,7 @@ fn error_with_provider_failure_exits_four_and_preserves_provider_failure() {
 echo '{"type":"error","message":"429","retryable":true,"provider_failure":{"kind":"throttled","retry_after_secs":7}}'
 "#,
     );
-    let config_path = write_config(tmp.path(), &script, PROVIDER_ROW);
+    let config_path = write_config(tmp.path(), &script);
 
     let store = SqliteStore::open(&db_path).expect("open store");
     let task = sample_task(
@@ -576,7 +571,6 @@ echo '{"type":"turn.completed"}'
 workspace_root = {:?}
 [accounts]
 codex_dir = {:?}
-{PROVIDER_ROW}
 [llm_sources.codex]
 kind = "codex_oauth"
 models = ["fixture-model"]

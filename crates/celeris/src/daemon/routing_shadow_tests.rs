@@ -70,7 +70,7 @@ async fn fake_upstream() -> (String, Arc<AtomicU32>) {
 
 fn base(dir: &std::path::Path) -> String {
     format!(
-        "db = {:?}\nworkspace_root = {:?}\n[[providers]]\nid = \"x\"\nadapter = \"fake\"\n",
+        "db = {:?}\nworkspace_root = {:?}\n",
         dir.join("db.sqlite3"),
         dir.join("ws"),
     )

@@ -584,7 +584,7 @@ impl Config {
     }
 }
 
-/// ADR-0046 D3（Phase 59）: ハーネスの id は重複させない。adapter は providers と同じ判定。
+/// ADR-0046 D3（Phase 59）: ハーネスの id は重複させない。adapter は既知の種別だけを受け付ける。
 pub(super) fn validate_harnesses(harnesses: &[HarnessConfig]) -> Result<(), ConfigError> {
     let mut harness_ids = std::collections::HashSet::new();
     for h in harnesses {
@@ -640,7 +640,7 @@ pub(super) fn validate_harnesses(harnesses: &[HarnessConfig]) -> Result<(), Conf
     Ok(())
 }
 
-/// ADR-0016 D1: 役割の id は重複させない。adapter は providers と同じ判定。上限は 1 以上。
+/// ADR-0016 D1: 役割の id は重複させない。adapter は既知の種別だけを受け付ける。上限は 1 以上。
 /// 返り値は定義された役割の id（`[[genres]]` の検証が使う）。
 pub(super) fn validate_roles(roles: &[RoleConfig]) -> Result<HashSet<&String>, ConfigError> {
     let mut role_ids = std::collections::HashSet::new();

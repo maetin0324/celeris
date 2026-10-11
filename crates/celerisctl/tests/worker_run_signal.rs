@@ -44,10 +44,6 @@ idle_timeout_secs = 120
 [adapters.fake]
 command = ["sh", "{}"]
 
-[[providers]]
-id = "local"
-adapter = "fake"
-
 [llm_sources.fake]
 kind = "fake"
 accounts = ["local"]

@@ -184,12 +184,10 @@ fn v3_plan_json(adopt: TaskId) -> String {
 fn config_file(dir: &std::path::Path, tree_enabled: bool) -> PathBuf {
     let path = dir.join("config.toml");
     std::fs::write(
-            &path,
-            format!(
-                "[[providers]]\nid = \"fake-local\"\nadapter = \"fake\"\n\n[execution.tree]\nenabled = {tree_enabled}\n"
-            ),
-        )
-        .unwrap();
+        &path,
+        format!("\n[execution.tree]\nenabled = {tree_enabled}\n"),
+    )
+    .unwrap();
     path
 }
 

@@ -9,10 +9,6 @@ use crate::config::{Config, DEFAULT_DEV_BUILD_CACHE, TargetSweepConfig};
 const BASE: &str = r#"
 db = "t.sqlite3"
 
-[[providers]]
-id = "fake"
-adapter = "fake"
-
 [workspace]
 build_cache_dir = "/srv/build-cache"
 "#;

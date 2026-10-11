@@ -73,13 +73,6 @@ auto_accept = false
 [adapters.fake]
 command = ["sh", "{script}"]
 
-[[providers]]
-id = "fake-local"
-adapter = "fake"
-tiers = ["frontier", "standard", "cheap"]
-concurrency = {max_concurrency}
-model = "fake"
-
 [llm_sources.fake]
 kind = "fake"
 accounts = ["local"]

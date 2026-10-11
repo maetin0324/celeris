@@ -57,10 +57,6 @@ db = "celeris.sqlite3"
 workspace_root = "ws"
 org_include = "org.toml"
 
-[[providers]]
-id = "x"
-adapter = "fake"
-
 [memory]
 dir = "memory"
 
@@ -353,10 +349,6 @@ fn config_to_harnesses_prints_the_new_shape_from_the_legacy_one() {
         r#"
 db = "celeris.sqlite3"
 workspace_root = "ws"
-
-[[providers]]
-id = "x"
-adapter = "fake"
 
 [[roles]]
 id = "implementer"

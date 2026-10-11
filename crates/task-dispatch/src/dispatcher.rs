@@ -1355,7 +1355,7 @@ pub struct Dispatcher {
     /// ADR-0052 D1: 検査の結果のキャッシュ（`base_url` → (いつ調べたか, 結果)）。60 秒。
     knowledge_probe_cache: HashMap<String, (Instant, Reachability)>,
     /// ADR 2026-10-06 model-role-assignments D2: DB の `source × 役割 → model` の割り当てを読む口。
-    /// 無ければ（試験・celerisctl）従来どおり config の `tier_models` だけで解決する。
+    /// 無ければ（試験・celerisctl）config の lane binding だけで解決する。
     role_assignments: Option<Arc<dyn task_core::model_catalog::assignments::RoleAssignmentReader>>,
     /// 付記「モデルごとの複数役割」: routing catalog の model profile（品質）を読む口。無ければ品質 unknown。
     routing_model_profiles: Option<Arc<dyn RoutingModelProfiles>>,

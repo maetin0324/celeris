@@ -232,12 +232,6 @@ required_capabilities = []
 [route_defaults.codex]
 candidates = [{{ source = "codex", model = "codex" }}]
 
-[[providers]]
-id = "pool"
-adapter = "codex"
-tiers = ["frontier", "standard", "cheap"]
-concurrency = 1
-account_pool = true
 "#,
             port = self.port,
             codex = codex.display(),

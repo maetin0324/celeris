@@ -39,7 +39,6 @@ struct Env {
 }
 
 /// ADR 2026-10-11 llm-source-harness-selection: 偽の source・harness と、どのタスクもそれを選ぶ規則。
-/// `[[providers]]` は読み込みがまだ 1 行を要求するので残すが、dispatch はこの宣言で経路を決める。
 const FAKE_ROUTE: &str = r#"
 [llm_sources.local]
 kind = "fake"
@@ -88,9 +87,6 @@ impl Env {
 [adapters.fake]
 command = ["sh", "-c", '{SLOW_FAKE}']
 
-[[providers]]
-id = "p1"
-adapter = "fake"
 {FAKE_ROUTE}
 {extra}
 "#
@@ -280,9 +276,6 @@ async fn a_newer_release_takes_over_while_the_old_one_finishes_its_run() {
 [adapters.fake]
 command = ["sh", "-c", '{gated_fake}']
 
-[[providers]]
-id = "p1"
-adapter = "fake"
 {FAKE_ROUTE}
 "#
     ));
@@ -529,10 +522,6 @@ roles = ["smoke"]
     assert_eq!(genres[0].roles, vec!["smoke".to_string()]);
 
     // 経路は偽の source・harness だけ（本物の LLM を呼ぶ宣言は上書きされる。ADR-0041 §3）。
-    assert!(
-        verify.providers.iter().all(|p| p.id != "smoke"),
-        "verify は provider を足さない"
-    );
     assert_eq!(verify.llm_sources["smoke"].kind, "fake");
     assert_eq!(verify.llm_sources["smoke"].models, vec!["fake".to_string()]);
     assert_eq!(verify.harness_declarations["smoke"].kind, "fake");
@@ -569,10 +558,6 @@ async fn normal_mode_does_not_inject_the_smoke_builtins() {
     // 偽の source・harness も `smoke` を選ぶ規則も書かない設定（本番の `config.toml` と同じ形）。
     let env = Env::with_body(
         r#"
-[[providers]]
-id = "acp-only"
-adapter = "acp"
-tiers = ["standard"]
 
 [llm_sources.main]
 kind = "openai_compatible"

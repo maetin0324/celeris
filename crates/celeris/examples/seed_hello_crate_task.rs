@@ -27,10 +27,10 @@ struct Cli {
     /// `celerisctl --db` / `config.toml` の `db` と同じファイルを指すこと。
     #[arg(long)]
     db: PathBuf,
-    /// `examples/hello-crate` の絶対パス。`config.toml` の provider が `--adapter` に対応する設定である前提。
+    /// `examples/hello-crate` の絶対パス。`config.toml` の harness が `--adapter` に対応する設定である前提。
     #[arg(long)]
     workspace: PathBuf,
-    /// `worker_hint.adapter`（`config.toml` の `[[providers]]` の `adapter` と一致させること）。
+    /// `worker_hint.adapter`（`config.toml` の `[harnesses.<id>]` と一致させること）。
     #[arg(long, default_value = "claude-code")]
     adapter: String,
 }

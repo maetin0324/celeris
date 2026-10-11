@@ -95,12 +95,6 @@ required_capabilities = []
 [route_defaults.fake]
 candidates = [{{ source = "fake", model = "model-a" }}, {{ source = "fake", model = "model-b" }}, {{ source = "fake", model = "fake" }}]
 
-# Temporary config-loader sentinel until the later config-removal unit removes providers.
-[[providers]]
-id = "fixture-sentinel"
-adapter = "fake"
-model = "model-a"
-
 "#,
             script = script.display(),
             account_root = self.root.join("claude-accounts").display(),

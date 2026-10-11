@@ -301,7 +301,7 @@ async fn ticker_spawns_once_and_clears_the_flag() {
     )])
     .await;
     let text = format!(
-        "[[llm_proxy.sources.openai_compatible]]\nid = \"qwen\"\nbase_url = \"{base}/v1\"\n[model_catalog]\nrefresh_interval_seconds = 60\n[[providers]]\nid = \"x\"\nadapter = \"fake\"\n"
+        "[[llm_proxy.sources.openai_compatible]]\nid = \"qwen\"\nbase_url = \"{base}/v1\"\n[model_catalog]\nrefresh_interval_seconds = 60\n"
     );
     let config: Config = toml::from_str(&text).unwrap();
     let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
@@ -331,7 +331,7 @@ fn targets_come_from_the_config_and_the_defaults_are_set() {
     std::fs::write(claude.join("a1/.credentials.json"), "{}").unwrap();
     std::fs::create_dir_all(claude.join("a0")).unwrap(); // 未ログイン（目印なし）
     let text = format!(
-        "[accounts]\nclaude_dir = {claude:?}\nopencode_dir = \"/x/opencode\"\n[[llm_proxy.sources.openai_compatible]]\nid = \"qwen\"\nbase_url = \"http://h/v1\"\napi_key = \"k\"\n[[providers]]\nid = \"x\"\nadapter = \"fake\"\n"
+        "[accounts]\nclaude_dir = {claude:?}\nopencode_dir = \"/x/opencode\"\n[[llm_proxy.sources.openai_compatible]]\nid = \"qwen\"\nbase_url = \"http://h/v1\"\napi_key = \"k\"\n"
     );
     let config: Config = toml::from_str(&text).unwrap();
     assert_eq!(config.model_catalog.refresh_interval_seconds, 3600);
@@ -361,7 +361,7 @@ fn targets_come_from_the_config_and_the_defaults_are_set() {
         }
         other => panic!("{other:?}"),
     }
-    let off: Config = toml::from_str("[model_catalog]\nrefresh_interval_seconds = 0\nopencode_go_models_url = \"http://x/m\"\nopencode_cli = \"oc\"\n[[providers]]\nid = \"x\"\nadapter = \"fake\"\n").unwrap();
+    let off: Config = toml::from_str("[model_catalog]\nrefresh_interval_seconds = 0\nopencode_go_models_url = \"http://x/m\"\nopencode_cli = \"oc\"\n").unwrap();
     assert_eq!(off.model_catalog.refresh_interval_seconds, 0);
     assert_eq!(off.model_catalog.opencode_cli, "oc");
     assert!(targets_from_config(&off).is_empty());

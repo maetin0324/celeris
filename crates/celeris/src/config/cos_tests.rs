@@ -4,7 +4,7 @@ use super::*;
 fn load(text: &str) -> Result<Config, ConfigError> {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("celeris.toml");
-    let text = format!("{text}\n[[providers]]\nid = \"fake\"\nadapter = \"fake\"\n");
+    let text = format!("{text}\n");
     std::fs::write(&path, text).expect("write config");
     Config::load(&path)
 }

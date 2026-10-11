@@ -22,9 +22,6 @@ fn seeds_the_org_once_into_an_empty_db_and_never_again() {
         format!(
             "db = \"celeris.sqlite3\"\nworkspace_root = \"ws\"\norg_include = \"org.toml\"\n{}",
             r#"
-[[providers]]
-id = "x"
-adapter = "fake"
 
 [[roles]]
 id = "implementer"
@@ -150,10 +147,10 @@ parent_id = "research-survey"
     .unwrap();
     let path = dir.path().join("config.toml");
     std::fs::write(
-            &path,
-            "db = \"celeris.sqlite3\"\nworkspace_root = \"ws\"\norg_include = \"org.toml\"\n[[providers]]\nid = \"x\"\nadapter = \"fake\"\n",
-        )
-        .unwrap();
+        &path,
+        "db = \"celeris.sqlite3\"\nworkspace_root = \"ws\"\norg_include = \"org.toml\"\n",
+    )
+    .unwrap();
     let config = Config::load(&path).unwrap();
     let store = SqliteStore::open(&config.db.path).unwrap();
 
@@ -170,11 +167,7 @@ parent_id = "research-survey"
 fn without_org_include_nothing_is_seeded() {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("celeris.sqlite3");
-    let config: Config = toml::from_str(&format!(
-        "db = \"{}\"\n[[providers]]\nid = \"x\"\nadapter = \"fake\"\n",
-        db.display()
-    ))
-    .unwrap();
+    let config: Config = toml::from_str(&format!("db = \"{}\"\n", db.display())).unwrap();
     let store = SqliteStore::open(&config.db.path).unwrap();
     assert_eq!(seed_org_if_empty(&store, &config).unwrap(), 0);
     assert!(store.org_list().unwrap().is_empty());
@@ -196,10 +189,6 @@ description = "write and fix code"
 default_role = "implementer"
 roles = ["lead", "implementer"]
 
-[[providers]]
-id = "local-fake"
-adapter = "fake"
-model = "fake"
 "#;
     let cfg: Config = toml::from_str(text).unwrap();
     cfg.validate().unwrap();
@@ -235,10 +224,6 @@ output_artifacts = ["answer.md: 引用付きの答え", "citations.json"]
 default_role = "literature-reader"
 roles = ["literature-reader"]
 
-[[providers]]
-id = "local-fake"
-adapter = "fake"
-model = "fake"
 "#;
     let cfg: Config = toml::from_str(text).unwrap();
     cfg.validate().unwrap();
@@ -273,7 +258,7 @@ model = "fake"
 /// 優先し、`model` は行の値がそのまま（`[adapters.acp]` にモデルの既定値は無い）。
 #[test]
 fn langmem_knowledge_config_defaults_to_disabled() {
-    let cfg: Config = toml::from_str("[[providers]]\nid = \"x\"\nadapter = \"fake\"\n").unwrap();
+    let cfg: Config = toml::from_str("").unwrap();
     assert!(!cfg.knowledge.langmem.enabled);
     assert_eq!(
         cfg.knowledge.langmem.provider,
@@ -290,7 +275,7 @@ fn langmem_knowledge_config_defaults_to_disabled() {
 /// 未知のアダプタは `langmem` を含めた既知の一覧で拒否される。
 #[test]
 fn unknown_adapter_message_lists_langmem() {
-    let cfg: Config = toml::from_str("[[providers]]\nid = \"x\"\nadapter = \"bogus\"\n").unwrap();
+    let cfg: Config = toml::from_str("[[harnesses]]\nid = \"x\"\nadapter = \"bogus\"\n").unwrap();
     let err = cfg.validate().unwrap_err().to_string();
     assert!(err.contains("langmem"), "{err}");
 }
@@ -384,7 +369,7 @@ fn api_settings_carries_secrets_dir_and_usage() {
     let path = dir.path().join("config.toml");
     std::fs::write(
             &path,
-            "[secrets]\ndir = \"secrets\"\n\n[adapters.local_deep_research]\nenv_from_secrets = { TAVILY = \"tavily\" }\n\n[[providers]]\nid = \"x\"\nadapter = \"fake\"\n",
+            "[secrets]\ndir = \"secrets\"\n\n[adapters.local_deep_research]\nenv_from_secrets = { TAVILY = \"tavily\" }\n\n",
         )
         .unwrap_or_else(|e| panic!("{e}"));
     let cfg = Config::load(&path).unwrap_or_else(|e| panic!("{e}"));
@@ -425,7 +410,7 @@ fn reload_providers_rejects_changes_to_the_accounts_section() {
         std::fs::write(
                 &config_path,
                 format!(
-                    "db = {db:?}\nworkspace_root = {ws:?}\n[accounts]\nclaude_dir = {accounts_dir:?}\nmax_runs_per_account = {max_runs}\n[[providers]]\nid = \"x\"\nadapter = \"fake\"\n"
+                    "db = {db:?}\nworkspace_root = {ws:?}\n[accounts]\nclaude_dir = {accounts_dir:?}\nmax_runs_per_account = {max_runs}\n"
                 ),
             )
             .unwrap_or_else(|e| panic!("{e}"));
@@ -527,7 +512,6 @@ fn reload_rereads_roles_genres_delegation_and_reports_notify_conversation() {
             &config_path,
             format!(
                 "db = {db:?}\nworkspace_root = {ws:?}\n\
-                     [[providers]]\nid = \"x\"\nadapter = \"fake\"\n\
                      [[roles]]\nid = \"implementer\"\nmax_turns = {max_turns}\n\
                      [delegation]\nmax_delegate_per_run = 3\n\
                      [notify]\ninterval_secs = {notify_interval}\n"
@@ -583,10 +567,6 @@ async fn a_totp_cluster_with_a_forward_does_not_panic_the_first_tick_phase_66b()
         r#"
 db = "celeris.sqlite3"
 workspace_root = "ws"
-
-[[providers]]
-id = "x"
-adapter = "fake"
 
 [[clusters]]
 id = "test-cluster"
@@ -672,10 +652,6 @@ async fn a_publickey_cluster_with_a_ready_task_does_not_panic_the_first_tick_pha
         r#"
 db = "celeris.sqlite3"
 workspace_root = "ws"
-
-[[providers]]
-id = "x"
-adapter = "fake"
 
 [[clusters]]
 id = "auto"
@@ -808,10 +784,6 @@ async fn a_totp_cluster_with_a_live_master_skips_the_connector_but_ensures_the_f
 db = "celeris.sqlite3"
 workspace_root = "ws"
 
-[[providers]]
-id = "x"
-adapter = "fake"
-
 [[clusters]]
 id = "test-cluster"
 host = "test-cluster"
@@ -873,9 +845,7 @@ fn routing_config_reload_is_atomic() {
     let path = dir.path().join("config.toml");
     let db = dir.path().join("db.sqlite3");
     let ws = dir.path().join("ws");
-    let base = format!(
-        "db = {db:?}\nworkspace_root = {ws:?}\n[[providers]]\nid = \"x\"\nadapter = \"fake\"\n"
-    );
+    let base = format!("db = {db:?}\nworkspace_root = {ws:?}\n");
     std::fs::write(&path, &base).unwrap();
     let mut config = Config::load(&path).unwrap();
     let old = Arc::clone(config.routing_catalog_snapshot.as_ref().unwrap());
@@ -923,9 +893,7 @@ fn routing_shadow_invalid_reload_keeps_previous_snapshot() {
     let path = dir.path().join("config.toml");
     let db = dir.path().join("db.sqlite3");
     let ws = dir.path().join("ws");
-    let base = format!(
-        "db = {db:?}\nworkspace_root = {ws:?}\n[[providers]]\nid = \"x\"\nadapter = \"fake\"\n"
-    );
+    let base = format!("db = {db:?}\nworkspace_root = {ws:?}\n");
     std::fs::write(&path, &base).unwrap();
     let mut config = Config::load(&path).unwrap();
     let old = Arc::clone(config.model_routing.runtime.as_ref().unwrap());
@@ -975,9 +943,7 @@ fn routing_runtime_is_wired_to_the_dispatcher_and_reload_is_atomic() {
     let path = dir.path().join("config.toml");
     let db = dir.path().join("db.sqlite3");
     let ws = dir.path().join("ws");
-    let base = format!(
-        "db = {db:?}\nworkspace_root = {ws:?}\n[[providers]]\nid = \"x\"\nadapter = \"fake\"\n"
-    );
+    let base = format!("db = {db:?}\nworkspace_root = {ws:?}\n");
     std::fs::write(
         &path,
         format!(

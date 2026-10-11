@@ -24,7 +24,7 @@ fn stub_command(dir: &std::path::Path, script: &str) -> String {
 
 fn config_with_accounts(claude_dir: PathBuf, command: String) -> Config {
     let text = format!(
-        "[accounts]\nclaude_dir = {claude_dir:?}\n[adapters.claude_code]\ncommand = {command:?}\n[[providers]]\nid = \"x\"\nadapter = \"claude-code\"\n"
+        "[accounts]\nclaude_dir = {claude_dir:?}\n[adapters.claude_code]\ncommand = {command:?}\n"
     );
     let cfg: Config = toml::from_str(&text).unwrap();
     cfg.validate().unwrap();
@@ -32,9 +32,8 @@ fn config_with_accounts(claude_dir: PathBuf, command: String) -> Config {
 }
 
 fn config_with_codex_accounts(codex_dir: PathBuf, command: String) -> Config {
-    let text = format!(
-        "[accounts]\ncodex_dir = {codex_dir:?}\n[adapters.codex]\ncommand = {command:?}\n[[providers]]\nid = \"x\"\nadapter = \"codex\"\n"
-    );
+    let text =
+        format!("[accounts]\ncodex_dir = {codex_dir:?}\n[adapters.codex]\ncommand = {command:?}\n");
     let cfg: Config = toml::from_str(&text).unwrap();
     cfg.validate().unwrap();
     cfg

@@ -299,7 +299,7 @@ mod cos_chat_config_tests {
         let write_config = |cos: &str| {
             std::fs::write(
                 &path,
-                format!("db = {db:?}\nworkspace_root = {ws:?}\n[cos]\n{cos}\n[[providers]]\nid = \"test\"\nadapter = \"claude-code\"\ntiers = [\"standard\"]\n"),
+                format!("db = {db:?}\nworkspace_root = {ws:?}\n[cos]\n{cos}\n"),
             )
             .unwrap();
         };

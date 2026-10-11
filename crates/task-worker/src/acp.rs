@@ -63,7 +63,7 @@ pub enum AcpPermission {
     Deny,
 }
 
-/// `[adapters.acp]` / `[[providers]]` 行の上書き分（config.toml, ADR-0026 D2）。
+/// `[adapters.acp]` / `[harnesses.<id>]` 宣言の上書き分（config.toml, ADR-0026 D2）。
 #[derive(Debug, Clone)]
 pub struct AcpConfig {
     /// 起動する ACP エージェントの実行ファイル。既定 `"opencode"`。

@@ -177,7 +177,7 @@ impl Env {
     }
 
     /// `api` は `[api]` 節の本体（空なら節を書かない）。
-    fn write_config(&self, script: &Path, api: &str, provider_env: &str) -> PathBuf {
+    fn write_config(&self, script: &Path, api: &str) -> PathBuf {
         let path = self.root.join("config.toml");
         // The worker db guard stays on (ADR-0126): this daemon uses only a private test DB,
         // state dir and test token, so inside a guarded worker run it is exempt from the
@@ -228,20 +228,8 @@ required_capabilities = []
 [route_defaults.fake]
 candidates = [{{ source = "fake", model = "fake" }}]
 
-[[providers]]
-id = "fake-local"
-adapter = "fake"
-tiers = ["frontier", "standard", "cheap"]
-concurrency = 2
-model = "fake"
-env = {provider_env}
 "#,
             script = script.display(),
-            provider_env = if provider_env.is_empty() {
-                "{}"
-            } else {
-                provider_env
-            },
         );
         std::fs::write(&path, text).unwrap();
         path
@@ -481,7 +469,7 @@ fn worker_guard_exempt_daemon_starts_on_a_test_db_with_the_guard_on() {
     }
     let env = Env::new();
     let script = env.write_script("exit 0");
-    let config = env.write_config(&script, &env.api_listen(), "");
+    let config = env.write_config(&script, &env.api_listen());
     let text = std::fs::read_to_string(&config).unwrap();
     assert!(!text.contains("worker_read_only"), "{text}");
     let mut daemon = env.start_celeris(&config);
@@ -509,7 +497,7 @@ fn api_is_off_by_default_and_health_reports_versions_when_enabled() {
         "cat >/dev/null\necho '{\"type\":\"done\",\"summary\":\"ok\",\"evidence\":[]}'",
     );
 
-    let config = env.write_config(&script, "", "");
+    let config = env.write_config(&script, "");
     let mut daemon = env.start_celeris(&config);
     std::thread::sleep(Duration::from_millis(800));
     assert!(
@@ -524,7 +512,7 @@ fn api_is_off_by_default_and_health_reports_versions_when_enabled() {
     );
     drop(daemon);
 
-    let config = env.write_config(&script, &env.api_listen(), "");
+    let config = env.write_config(&script, &env.api_listen());
     let mut daemon = env.start_celeris(&config);
     env.wait_api(&mut daemon);
     let health = env.get("/health");
@@ -566,7 +554,7 @@ esac"#,
     );
     // ADR-0044 Phase 53 追記（Phase 55）: 変更系はトークンが要る。
     let api = env.api_listen_with_token();
-    let config = env.write_config(&script, &api, "");
+    let config = env.write_config(&script, &api);
     let mut daemon = env.start_celeris(&config);
     env.wait_api(&mut daemon);
     let ws = env.workspace("ws-q");
@@ -799,7 +787,7 @@ fn sse_delivers_created_quickly_and_resumes_from_last_event_id() {
     let script = env.write_script(
         "cat >/dev/null\necho '{\"type\":\"done\",\"summary\":\"ok\",\"evidence\":[]}'",
     );
-    let config = env.write_config(&script, &env.api_listen(), "");
+    let config = env.write_config(&script, &env.api_listen());
     let mut daemon = env.start_celeris(&config);
     env.wait_api(&mut daemon);
 
@@ -913,7 +901,7 @@ else
   echo '{"type":"done","summary":"slow ok","evidence":[]}'
 fi"#,
     );
-    let config = env.write_config(&script, &env.api_listen(), "");
+    let config = env.write_config(&script, &env.api_listen());
     let ws_slow = env.workspace("ws-slow");
     let ws_throttle = env.workspace("ws-throttle");
     std::fs::write(Path::new(&ws_throttle).join("throttle-me"), "").unwrap();
@@ -1012,7 +1000,7 @@ fn api_enforces_token_host_and_workspace_boundaries_without_leaking_env_values()
     );
 
     // loopback 以外で token_file 無し → 設定エラー（exit 2）。
-    let config = env.write_config(&script, &format!("listen = \"0.0.0.0:{}\"", env.port), "");
+    let config = env.write_config(&script, &format!("listen = \"0.0.0.0:{}\"", env.port));
     let mut bad = env.start_celeris(&config);
     assert!(
         wait_until(Duration::from_secs(120), || bad
@@ -1032,11 +1020,7 @@ fn api_enforces_token_host_and_workspace_boundaries_without_leaking_env_values()
 
     std::fs::write(env.root.join("api.token"), "  tok-9f8e7d\n").unwrap();
     let api = format!("{}\ntoken_file = \"api.token\"", env.api_listen());
-    let config = env.write_config(
-        &script,
-        &api,
-        r#"{ SECRET_TOKEN = "s3cr3t-provider-value" }"#,
-    );
+    let config = env.write_config(&script, &api);
     let mut daemon = env.start_celeris(&config);
     env.wait_api(&mut daemon);
 
@@ -1071,12 +1055,7 @@ fn api_enforces_token_host_and_workspace_boundaries_without_leaking_env_values()
     for path in ["/config", "/daemon", "/health"] {
         let r = env.get(path);
         assert_eq!(r.status, 200, "{path}: {}", r.body);
-        for secret in [
-            "s3cr3t-provider-value",
-            "adapter-s3cr3t-value",
-            "tok-9f8e7d",
-            "api.token",
-        ] {
+        for secret in ["adapter-s3cr3t-value", "tok-9f8e7d", "api.token"] {
             assert!(
                 !r.body.contains(secret),
                 "{path} leaks {secret}: {}",
@@ -1144,7 +1123,7 @@ fn writes_from_celerisctl_and_api_while_celeris_ticks_fast_never_hit_database_is
     );
     // ADR-0044 Phase 53 追記（Phase 55）: `POST /tasks` は管理系になったのでトークンを持たせる。
     let api = env.api_listen_with_token();
-    let config = env.write_config(&script, &api, "");
+    let config = env.write_config(&script, &api);
     let text = std::fs::read_to_string(&config)
         .unwrap()
         .replace("tick_ms = 50", "tick_ms = 20");
@@ -1216,7 +1195,7 @@ fn clusters_endpoint_inbox_attention_and_task_detail_show_an_offline_cluster() {
     let env = Env::new();
     let script = env
         .write_script(r#"cat >/dev/null; echo '{"type":"done","summary":"unused","evidence":[]}'"#);
-    let config = env.write_config(&script, &env.api_listen(), "");
+    let config = env.write_config(&script, &env.api_listen());
     let mut text = std::fs::read_to_string(&config).unwrap();
     text.push_str(
         "\n[[clusters]]\nid = \"offline\"\nhost = \"celeris-no-such-host-for-tests\"\nconcurrency = 1\n\
@@ -1362,7 +1341,7 @@ impl BrowserFixture {
             "{}\nbrowser_attestation_public_key_file = \"gui.pub\"\nbrowser_credentiald_control_socket = \"broker/control.sock\"",
             env.api_listen_with_token()
         );
-        let config = env.write_config(&script, &api, "");
+        let config = env.write_config(&script, &api);
         let seed = env.add(&["--title", "fixture", "--check-cmd", "true"]);
         let template = env.task(seed);
         let started_at = time::OffsetDateTime::now_utc()

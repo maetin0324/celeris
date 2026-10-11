@@ -319,7 +319,7 @@ pub struct ContainerProbeView {
 
 /// ADR 2026-10-08 account-concurrency-limits §(e): 暗黙アカウント 1 件の観測値。単位は LLM source で、
 /// 同じ source を使う非プール行は 1 件を共有する。上限の保存値は DB（`account_limits`）が正本で、
-/// 旧 `[[providers]].concurrency` は上限に使わない。
+/// config の値は上限に使わない。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ImplicitAccountLive {
     /// 解決済み LLM source の id（= 暗黙アカウントの id。`celeris` / `openai_compatible:<id>` 等）。

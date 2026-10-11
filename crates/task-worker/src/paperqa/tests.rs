@@ -2464,7 +2464,7 @@ fn strip_provider_prefix_drops_only_a_litellm_style_prefix() {
     assert_eq!(strip_provider_prefix("openai/"), "openai/");
 }
 
-/// 検索語を立てるモデルは `acquire.query_model` → `[[providers]] model` → settings の `llm` の順
+/// 検索語を立てるモデルは `acquire.query_model` → run の route が選んだ model → settings の `llm` の順
 /// （PaperQA2 と同じ LLM 先。ADR-0035 D5）。
 #[tokio::test]
 async fn provider_kind_paperqa_query_model_uses_proxy_tier_from_settings() {
@@ -2485,13 +2485,13 @@ async fn provider_kind_paperqa_query_model_uses_proxy_tier_from_settings() {
         query_llm_model(&config).await.as_deref(),
         Some("celeris/standard")
     );
-    // `[[providers]] model`（`--llm`）が勝つ。
+    // run の route が選んだ model（`--llm`）が勝つ。
     config.model = Some("openai/other-model".to_string());
     assert_eq!(
         query_llm_model(&config).await.as_deref(),
         Some("other-model")
     );
-    // proxy の抽象名を `[[providers]] model` に直書きしても tier を落とさない。
+    // proxy の抽象名を run の route が選んだ model に直書きしても tier を落とさない。
     config.model = Some("celeris/cheap".to_string());
     assert_eq!(
         query_llm_model(&config).await.as_deref(),

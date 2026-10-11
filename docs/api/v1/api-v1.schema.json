@@ -14610,7 +14610,7 @@
       "type": "object"
     },
     "ImplicitAccountLive": {
-      "description": "ADR 2026-10-08 account-concurrency-limits §(e): 暗黙アカウント 1 件の観測値。単位は LLM source で、\n同じ source を使う非プール行は 1 件を共有する。上限の保存値は DB（`account_limits`）が正本で、\n旧 `[[providers]].concurrency` は上限に使わない。",
+      "description": "ADR 2026-10-08 account-concurrency-limits §(e): 暗黙アカウント 1 件の観測値。単位は LLM source で、\n同じ source を使う非プール行は 1 件を共有する。上限の保存値は DB（`account_limits`）が正本で、\nconfig の値は上限に使わない。",
       "properties": {
         "in_use": {
           "description": "これらの行で走っている全 run（非 CoS・CoS・プロバイダを使うレビュー run）の数。",

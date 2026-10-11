@@ -239,12 +239,6 @@ required_capabilities = []
 [route_defaults.claude_code]
 candidates = [{{ source = "claude", model = "haiku" }}]
 
-[[providers]]
-id = "pool"
-adapter = "claude-code"
-tiers = ["frontier", "standard", "cheap"]
-concurrency = 1
-account_pool = true
 "#,
             port = self.port,
             claude = claude.display(),

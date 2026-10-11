@@ -122,9 +122,6 @@ max_turns = 40
 max_wall_secs = 1800
 instructions = "You lead the work."
 
-[[providers]]
-id = "fake-local"
-adapter = "fake"
 "#,
     )
     .expect("write config");
@@ -196,9 +193,6 @@ description = "related work survey"
 default_role = "literature-reader"
 roles = ["literature-reader"]
 
-[[providers]]
-id = "fake-local"
-adapter = "fake"
 "#,
     )
     .expect("write config");
@@ -253,9 +247,6 @@ id = "coding"
 description = "d"
 roles = ["implementer"]
 
-[[providers]]
-id = "fake-local"
-adapter = "fake"
 "#,
     )
     .expect("write config");

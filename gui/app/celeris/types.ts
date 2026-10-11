@@ -2140,6 +2140,9 @@ export interface ApiV1Schema {
   inbox_items: HumanInboxView;
   integrate: IntegrateBody;
   integrate_result: IntegrateResult;
+  integration_action_result: IntegrationActionResult;
+  integration_list: IntegrationList;
+  integration_reason: ReasonBody;
   knowledge_accept: KnowledgeAcceptBody;
   knowledge_candidate: KnowledgeCandidate;
   knowledge_inbox: KnowledgeInbox;
@@ -7789,6 +7792,33 @@ export interface IntegrateResult {
    */
   child_task_id?: string | null;
   integration: TaskIntegration;
+}
+export interface IntegrationActionResult {
+  /**
+   * `true` means branch is already an ancestor of the configured default branch.
+   */
+  integrated: boolean;
+  state: TaskRepoIntegrationState;
+}
+/**
+ * Current per-task, per-repository disposition of a completed branch.
+ */
+export interface TaskRepoIntegrationState {
+  actor: string;
+  branch: string;
+  checked_at: string;
+  head_sha: string;
+  reason?: string | null;
+  repo_id: RepoId;
+  state: TaskRepoIntegrationStatus;
+  task_id: TaskId;
+  updated_at: string;
+}
+export interface IntegrationList {
+  items: TaskRepoIntegrationState[];
+}
+export interface ReasonBody {
+  reason: string;
 }
 /**
  * `POST /knowledge/inbox/{id}/accept` の本文（省略してよい）。

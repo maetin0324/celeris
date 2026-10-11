@@ -47,6 +47,7 @@ pub mod execution;
 mod files;
 mod handlers;
 mod inbox_notifications;
+mod integrations;
 /// ADR-0047（Phase 61）: 知識ベース（`~/.local/share/celeris/knowledge` の Markdown が正本）。ツリー・ページ・`_inbox`。
 pub mod knowledge;
 /// ADR-0044 D6（Phase 55）: 案件・途中目標の中止・一時停止・アーカイブ。
@@ -365,7 +366,7 @@ pub enum ApiError {
 
 /// `/api/v1` の全エンドポイントと共通の検査（Host / 認証 / Origin / Content-Type / 本文サイズ）を持つルータ。
 pub fn router(state: ApiState) -> axum::Router {
-    handlers::router(state)
+    handlers::router(state.clone()).merge(integrations::routes().with_state(state))
 }
 
 /// `settings.listen` に bind し、`shutdown` が完了したら SSE を閉じて graceful に止める。

@@ -10,7 +10,7 @@ pub const TASK_FEATURES_SCHEMA: &str = "celeris.task-features/1";
 pub const ROUTE_OPTIONS_SCHEMA: &str = "celeris.route-options/1";
 pub const ROUTE_DECISION_SCHEMA: &str = "celeris.route-decision/1";
 pub const ROUTE_OUTCOME_SCHEMA: &str = "celeris.route-outcome/1";
-pub const TASK_BRIEF_TEMPLATE: &str = "task-brief/2";
+pub const TASK_BRIEF_TEMPLATE: &str = "task-brief/3";
 pub const CANDIDATES_ONE_SHOT_BUILDER: &str = "candidates-one-shot/1";
 pub const OBJECTIVE_MAX_CHARS: usize = 4_000;
 
@@ -77,6 +77,7 @@ pub struct Truncation {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct FeaturesInput {
     pub title: Option<String>,
+    pub project_name: Option<String>,
     pub objective: Option<String>,
     pub acceptance: Option<Vec<AcceptanceInput>>,
     pub checks: Option<Vec<CheckInput>>,
@@ -371,7 +372,12 @@ pub fn build_task_features(input: &FeaturesInput) -> TaskFeatures {
         input.write_set.as_deref(),
         "範囲の記述なし",
     );
+    let project = input
+        .project_name
+        .as_deref()
+        .map(|name| bounded(&mut aux, name, "project_name"));
     let position = [
+        ("project", project.as_deref()),
         ("genre", input.genre.as_deref()),
         ("kind", input.kind.as_deref()),
         ("harness", input.harness.as_deref()),

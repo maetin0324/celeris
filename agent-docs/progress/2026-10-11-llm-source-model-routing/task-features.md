@@ -6,6 +6,14 @@
 - unit ごとに [task-features/](task-features/)（schema / store / migrate-fix / extract / dispatch / export-core / export-cli）
 - ADR: [2026-10-11-task-routing-features.md](../../adr/2026-10-11-task-routing-features.md)（実装の付記を本日追加）
 
+## 再試行 field audit（2026-10-11）
+
+- [D2・D3(a)・D3(b) 全欄 × subject 照合表](task-features/field-audit.md)。各セルは実装済みの抽出元・コード位置・`route_extract_` fixture 試験、または ADR 文言を根拠にした該当なし。
+- 差分修正: task subject の `retries_n` は判断時点内 run 数 − 初回 run（下限 0）、`repairs_n` は所属 task の repair WU 数。task/WU fixture は `route_extract_task_retry_repair_and_budget_fields_use_task_fixture` と `route_extract_work_unit_retry_repair_and_budget_fields_use_work_unit_fixture`。
+- D2 の project 名が brief に未出力だったため `tasks.project_id` → `projects.title` を実装し、template を `task-brief/3` に更新。`route_record_schema_pinned` の hash は `sha256:da5704c36693709b084a3652f5d04b5ee248fecf8374770029ae3f4c253a6c0b`。
+- 対象検査: `cargo test -p task-core route_extract_ --lib` 成功（12 tests）。この追試の全体 reverify は `reverify3` が担当。
+- 前回失敗 check の原因は `route_dispatch_records_feature_reference_and_snapshot` が旧 template `task-brief/2` を期待していたこと。案件名を含める `/3` への移行に合わせ固定期待値を更新した。指定 check `cargo test -p task-core route_ && cargo test -p task-ops routing && cargo test -p task-dispatch cheap_local_first && cargo test -p celerisctl --test routing_cli` は成功（36 + 12 + 9 + 1 tests）。`git diff --check` も成功。
+
 ## 実装した schema と template の版
 
 固定の版定数（`crates/task-core/src/route_record.rs`、`route_record_schema_pinned` 試験で固定）:
@@ -16,11 +24,11 @@
 | `ROUTE_OPTIONS_SCHEMA` | `celeris.route-options/1` |
 | `ROUTE_DECISION_SCHEMA` | `celeris.route-decision/1` |
 | `ROUTE_OUTCOME_SCHEMA` | `celeris.route-outcome/1` |
-| `TASK_BRIEF_TEMPLATE` | `task-brief/2` |
+| `TASK_BRIEF_TEMPLATE` | `task-brief/3` |
 | `CANDIDATES_ONE_SHOT_BUILDER` | `candidates-one-shot/1` |
 | export の行 | `celeris.route-training/1`（`task-ops::routing_export`） |
 
-`route_record_schema_pinned` は schema / template / builder の文字列と、固定入力の brief・aux・hash（`sha256:3574d17f…`）を byte 固定する。版の文字列を変えると落ちる。
+`route_record_schema_pinned` は schema / template / builder の文字列と、固定入力の brief・aux・hash を byte 固定する。再試行 field audit 後の hash は `sha256:da5704c36693709b084a3652f5d04b5ee248fecf8374770029ae3f4c253a6c0b`。
 
 ### `task-brief/1` から `task-brief/2` へ上げた理由
 
@@ -39,7 +47,7 @@ final review（reviewer 01M4NZVDGH3EQ2RV476X3PJENR）の差し戻し 6 点を直
 
 ## features の節と aux の欄
 
-brief は `build_task_features`（`crates/task-core/src/route_record.rs`）が LLM を使わず決定的に組み立てる。節の順・見出しは `task-brief/2` が固定。自由文は `redact_secrets`（secret 置換）→ `bounded_secret`（上限 4,000 字。超過は先頭・末尾と `…（N 文字省略、sha256=…）`、`aux.truncated` に残す）で入れる。
+brief は `build_task_features`（`crates/task-core/src/route_record.rs`）が LLM を使わず決定的に組み立てる。節の順・見出しは `task-brief/3` が固定。自由文は `redact_secrets`（secret 置換）→ `bounded_secret`（上限 4,000 字。超過は先頭・末尾と `…（N 文字省略、sha256=…）`、`aux.truncated` に残す）で入れる。
 
 ### brief の節（D2）
 
@@ -48,7 +56,7 @@ brief は `build_task_features`（`crates/task-core/src/route_record.rs`）が L
 | 要求 | task title + 判断対象の目的文（WU なら WU objective、葉 task なら task objective） | `tasks.title`、`work_units.json.objective`／`tasks.objective` | 空は「（目的の記述なし）」＋ `aux.missing` に `objective` |
 | 期待する成果物 | 受け入れ条件（「文（検査: 種類）」の 1 行ずつ）・checks（`command` は実行ファイル名＋ subcommand まで）・`done_when`・`outputs` | `tasks.json.acceptance`（`Criterion`）、`work_units.json.{checks,done_when,outputs}` | 無ければ「決定的な検査なし」 |
 | 触る範囲 | 予定 path・repo・crate・書き込み集合 | `work_units.json.context.paths`、`tasks.repos_json`、`run_write_sets` | 無ければ「範囲の記述なし」 |
-| 置かれた位置 | genre・kind・harness・lane・depth・phase_index・deps_n | `tasks.genre`、`work_units.kind/phase/depends_on_json`、`tasks.parent_id` の連鎖 | 不明は「不明」 |
+| 置かれた位置 | project・genre・kind・harness・lane・depth・phase_index・deps_n | `tasks.project_id` → `projects.title`、`tasks.genre`、`work_units.kind/phase/depends_on_json`、`tasks.parent_id` の連鎖 | 不明は「不明」 |
 | 過去の試行 | 前の run 数・失敗数（数の行）、run ごとの 1 行（古い順: status・model・壁時計・落ちた criterion の文と exit）、repair 数の行 | `runs`（WU なら `work_unit_id`、葉 task なら `task_id`。判断時点で絞る）、`events` の `review_verdict` | 前の run が無ければ「初回」。取れない欄は「不明」 |
 | 性質（既存の判定） | ADR-0069 の 9 軸を固定の名前と段（低／中／高）で 1 軸 1 行。軸の順は固定 | 今回の判断（dispatch の `RouteFeatureContext.task_features_v69`）。無いときだけ過去の `routing_decided` event | 無ければ節ごと省き aux に `missing` |
 
@@ -65,8 +73,8 @@ brief は `build_task_features`（`crates/task-core/src/route_record.rs`）が L
 | `objective_chars` / `objective_truncated` | 整数・真偽 | 目的文の長さ・切ったか |
 | `context_paths_n` / `crates_n` / `repos_n` | 整数 | `work_units.json.context.paths`（`crates/<name>/` を数える）、`tasks.repos_json` |
 | `prior_runs_n` / `prior_failed_n` | 整数 | `runs`（判断時点で絞る。失敗 = `failed` と `budget_exhausted`） |
-| `retries_n` | 整数 | `work_units.retries` 列（WU のみ。葉 task は欠測） |
-| `repairs_n` | 整数 | 同じ task の `kind='repair'` の WU 数（WU のみ） |
+| `retries_n` | 整数 | WU は `work_units.retries` 列、task は判断時点内 run 数 − 初回 run（下限 0） |
+| `repairs_n` | 整数 | task/WU 共に所属 task の `kind='repair'` の WU 数 |
 | `budget_turns` / `budget_wall_s` | 整数 | WU の `json.budget.{max_turns,max_wall_secs}`、無ければ task の `json.budget` |
 | `task_features_v69` | カテゴリ 9 個 | 今回の判断の `RouteFeatureContext.task_features_v69`（dispatch の `decision.features`）。無いときだけ過去の `routing_decided` |
 | `missing` / `truncated` | 文字列配列 / 切断記録 | 取れなかった欄・切った欄 |
@@ -127,7 +135,7 @@ fixture（`route_features`／`route_options`／`route_decisions`／`route_outcom
     "brief": "sample brief",
     "hash": "sha256:abc123",
     "schema": "celeris.task-features/1",
-    "template": "task-brief/2"
+    "template": "task-brief/3"
   },
   "options": {
     "builder": "candidates-one-shot/1",

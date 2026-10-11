@@ -26,6 +26,7 @@ type SubjectRow = (
     String,
     Option<String>,
     Option<String>,
+    Option<String>,
 );
 type OutcomeRow = (String, Option<String>, Option<String>, Option<String>);
 
@@ -61,14 +62,19 @@ pub fn features_for_subject(
 ) -> Result<TaskFeatures, StoreError> {
     store.with_read_conn(|c| {
         let row: Option<SubjectRow> = c.query_row(
-            "SELECT t.json,t.parent_id,t.kind,t.created_at,w.json,w.depends_on_json FROM tasks t LEFT JOIN work_units w ON w.id=?2 AND w.task_id=t.id WHERE t.id=?1",
+            "SELECT t.json,t.parent_id,t.kind,t.created_at,w.json,w.depends_on_json,t.project_id FROM tasks t LEFT JOIN work_units w ON w.id=?2 AND w.task_id=t.id WHERE t.id=?1",
             rusqlite::params![if subject.kind == "work_unit" { let x: Option<String> = c.query_row("SELECT task_id FROM work_units WHERE id=?1",[&subject.id],|r|r.get(0)).optional()?; x.unwrap_or_else(|| subject.id.clone()) } else {subject.id.clone()}, if subject.kind == "work_unit" {Some(subject.id.clone())} else {None}],
-            |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?))).optional()?;
-        let Some((task_json,parent_id,task_kind,_,wu_json,depends_json))=row else { return Err(StoreError::Invalid(format!("routing feature subject not found: {}", subject.id))); };
+            |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?))).optional()?;
+        let Some((task_json,parent_id,task_kind,_,wu_json,depends_json,project_id))=row else { return Err(StoreError::Invalid(format!("routing feature subject not found: {}", subject.id))); };
         let task: Value=serde_json::from_str(&task_json)?;
         let wu=wu_json.as_deref().map(serde_json::from_str::<Value>).transpose()?.unwrap_or(Value::Null);
         let plan_id: Option<String> = if subject.kind=="work_unit" { c.query_row("SELECT plan_id FROM work_units WHERE id=?1",[&subject.id],|r|r.get(0)).optional()? } else {None};
         let plan: Option<String> = plan_id.as_ref().and_then(|id| c.query_row("SELECT json FROM execution_plans WHERE id=?1",[id],|r|r.get::<_,String>(0)).optional().ok().flatten());
+        let project_name: Option<String> = project_id
+            .as_deref()
+            .map(|id| c.query_row("SELECT title FROM projects WHERE id=?1", [id], |r| r.get(0)).optional())
+            .transpose()?
+            .flatten();
         let title=str(&task,"title"); let objective=if subject.kind=="work_unit" {str(&wu,"objective")} else {str(&task,"objective")};
         let acceptance=arr_values(&task["acceptance"]).map(|v|v.into_iter().filter_map(|x|serde_json::from_value::<Criterion>(x).ok()).map(|c|AcceptanceInput::from(&c)).collect::<Vec<_>>());
         let checks=if subject.kind=="work_unit" { arr_values(&wu["checks"]).map(|v|v.into_iter().filter_map(|x|serde_json::from_value::<WorkUnitCheck>(x).ok()).map(|c|CheckInput::Command{cmd:c.cmd}).collect::<Vec<_>>()) } else {None};
@@ -91,8 +97,8 @@ pub fn features_for_subject(
         let check_types=acceptance.as_deref().unwrap_or(&[]).iter().map(|x|&x.check).chain(checks.as_deref().unwrap_or(&[]).iter());
         let (mut command_n,mut artifact_n,mut reviewer_n,mut human_n)=(0u64,0u64,0u64,0u64);
         for check in check_types { match check {CheckInput::Command{..}=>command_n+=1,CheckInput::ArtifactExists|CheckInput::KnowledgePage=>artifact_n+=1,CheckInput::Reviewer=>reviewer_n+=1,CheckInput::Human=>human_n+=1} }
-        let retries:Option<u64>=if subject.kind=="work_unit" {c.query_row("SELECT retries FROM work_units WHERE id=?1",[&subject.id],|r|r.get(0)).optional()?}else{None};
-        let repairs:Option<u64>=if subject.kind=="work_unit" {Some(c.query_row("SELECT COUNT(*) FROM work_units WHERE task_id=(SELECT task_id FROM work_units WHERE id=?1) AND kind='repair'",[&subject.id],|r|r.get(0))?)}else{None};
+        let retries:Option<u64>=if subject.kind=="work_unit" {c.query_row("SELECT retries FROM work_units WHERE id=?1",[&subject.id],|r|r.get(0)).optional()?}else{Some(prior.saturating_sub(1))};
+        let repairs:Option<u64>=Some(if subject.kind=="work_unit" {c.query_row("SELECT COUNT(*) FROM work_units WHERE task_id=(SELECT task_id FROM work_units WHERE id=?1) AND kind='repair'",[&subject.id],|r|r.get(0))?}else{c.query_row("SELECT COUNT(*) FROM work_units WHERE task_id=?1 AND kind='repair'",[&subject.id],|r|r.get(0))?});
         let task_budget=task.get("budget").unwrap_or(&Value::Null); let wu_budget=wu.get("budget").unwrap_or(&Value::Null);
         let budget_turns=wu_budget["max_turns"].as_u64().or(task_budget["max_turns"].as_u64());
         let budget_wall_s=wu_budget["max_wall_secs"].as_u64().or(task_budget["max_wall_secs"].as_u64());
@@ -107,7 +113,7 @@ pub fn features_for_subject(
                 .and_then(Value::as_array)
                 .map(|v| v.len() as u64)
         };
-        let mut input=FeaturesInput {title,objective,acceptance_n:acceptance.as_ref().map(|v|v.len() as u64),check_command_n:Some(command_n),check_artifact_n:Some(artifact_n),check_reviewer_n:Some(reviewer_n),check_human_n:Some(human_n),acceptance,checks,done_when:arr_strings(&wu["done_when"]),outputs:arr_strings(&wu["outputs"]),paths:paths.clone(),repos:repos.clone(),genre:str(&task,"genre"),kind:if subject.kind=="work_unit"{str(&wu,"kind")}else{Some("task".into())},harness:ctx.harness.or(old_harness),lane:ctx.lane.or(old_lane),depth:Some(depth),deps_n,prior_runs_n:Some(prior),prior_failed_n:Some(failed),prior_runs:Some(prior_runs),retries_n:retries,repairs_n:repairs,budget_turns,budget_wall_s,task_features_v69:v69,..Default::default()};
+        let mut input=FeaturesInput {title,project_name,objective,acceptance_n:acceptance.as_ref().map(|v|v.len() as u64),check_command_n:Some(command_n),check_artifact_n:Some(artifact_n),check_reviewer_n:Some(reviewer_n),check_human_n:Some(human_n),acceptance,checks,done_when:arr_strings(&wu["done_when"]),outputs:arr_strings(&wu["outputs"]),paths:paths.clone(),repos:repos.clone(),genre:str(&task,"genre"),kind:if subject.kind=="work_unit"{str(&wu,"kind")}else{Some("task".into())},harness:ctx.harness.or(old_harness),lane:ctx.lane.or(old_lane),depth:Some(depth),deps_n,prior_runs_n:Some(prior),prior_failed_n:Some(failed),prior_runs:Some(prior_runs),retries_n:retries,repairs_n:repairs,budget_turns,budget_wall_s,task_features_v69:v69,..Default::default()};
         let (write_set, write_set_gaps) = prior_write_set(c, &subject, &as_of)?;
         input.write_set = write_set;
         input.write_set_gaps = write_set_gaps;
@@ -239,6 +245,12 @@ mod tests {
         let c = s.lock().unwrap();
         c.execute("INSERT INTO tasks(id,status,kind,parent_id,priority,created_at,json) VALUES('task-1','running','task',NULL,0,'2026-01-01T00:00:00Z',?1)",[
             r#"{"title":"A task","objective":"Build it","genre":"coding","depends_on":["upstream-1","upstream-2"],"budget":{"max_turns":22,"max_wall_secs":600,"max_retries":3},"acceptance":[{"text":"works","check":{"type":"command","cmd":"cargo test -p task-core","expect_exit":0}},{"text":"docs","check":{"type":"artifact_exists","name":"docs.md"}},{"text":"review","check":{"type":"reviewer"}},{"text":"human","check":{"type":"human"}}],"repos":["repo"]}"#]).unwrap();
+        c.execute("INSERT INTO projects(id,title,request,status,created_at,updated_at) VALUES('project-1','Routing project','Request','active','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')",[]).unwrap();
+        c.execute(
+            "UPDATE tasks SET project_id='project-1' WHERE id='task-1'",
+            [],
+        )
+        .unwrap();
         c.execute("INSERT INTO execution_plans(id,task_id,version,origin,status,json,created_at) VALUES('p1','task-1',1,'fixture','active','{}','2026-01-01T00:00:00Z')",[]).unwrap();
         c.execute("INSERT INTO work_units(id,task_id,plan_id,key,seq,kind,status,depends_on_json,retries,json,created_at,updated_at) VALUES('wu-1','task-1','p1','leaf',1,'implement','ready','[]',2,?1,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')",[r#"{"objective":"Do work","budget":{"max_turns":30,"max_wall_secs":900},"checks":[{"cmd":"cargo clippy --workspace","expect_exit":0,"scope":true}],"context":{"paths":["crates/task-core/src/lib.rs"]}}"#]).unwrap();
         c.execute("INSERT INTO work_units(id,task_id,plan_id,key,seq,kind,status,depends_on_json,retries,json,created_at,updated_at) VALUES('wu-repair','task-1','p1','repair',2,'repair','ready','[]',0,'{}','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')",[]).unwrap();
@@ -397,10 +409,14 @@ mod tests {
         assert_eq!(features.aux.deps_n, Some(2));
         assert!(!features.aux.missing.iter().any(|name| name == "deps_n"));
         assert_eq!(features.aux.kind.as_deref(), Some("task"));
+        assert!(features.brief.contains("- project: Routing project"));
         assert_eq!(features.aux.acceptance_n, Some(4));
         assert_eq!(features.aux.repos_n, Some(1));
         assert_eq!(features.aux.budget_turns, Some(22));
         assert_eq!(features.aux.budget_wall_s, Some(600));
+        assert_eq!(features.aux.prior_runs_n, Some(2));
+        assert_eq!(features.aux.retries_n, Some(1));
+        assert_eq!(features.aux.repairs_n, Some(1));
         assert_eq!(features.aux.check_command_n, Some(1));
         assert_eq!(features.aux.check_artifact_n, Some(1));
         assert_eq!(features.aux.check_reviewer_n, Some(1));
@@ -436,6 +452,47 @@ mod tests {
         .unwrap();
         assert_eq!(features.aux.deps_n, Some(0));
         assert!(!features.aux.missing.iter().any(|name| name == "deps_n"));
+    }
+
+    #[test]
+    fn route_extract_task_retry_repair_and_budget_fields_use_task_fixture() {
+        let s = fixture();
+        let features = features_for_subject(
+            &s,
+            Subject {
+                kind: "task".into(),
+                id: "task-1".into(),
+            },
+            Some(AsOf::Timestamp("2026-01-01T00:04:30Z".into())),
+            None,
+        )
+        .unwrap();
+        assert_eq!(features.aux.prior_runs_n, Some(2));
+        assert_eq!(features.aux.retries_n, Some(1));
+        assert_eq!(features.aux.repairs_n, Some(1));
+        assert_eq!(features.aux.budget_turns, Some(22));
+        assert_eq!(features.aux.budget_wall_s, Some(600));
+    }
+
+    #[test]
+    fn route_extract_work_unit_retry_repair_and_budget_fields_use_work_unit_fixture() {
+        let s = fixture();
+        let features = features_for_subject(
+            &s,
+            Subject {
+                kind: "work_unit".into(),
+                id: "wu-1".into(),
+            },
+            Some(AsOf::Timestamp("2026-01-01T00:04:30Z".into())),
+            None,
+        )
+        .unwrap();
+        assert_eq!(features.aux.prior_runs_n, Some(2));
+        assert_eq!(features.aux.retries_n, Some(2));
+        assert_eq!(features.aux.repairs_n, Some(1));
+        assert_eq!(features.aux.budget_turns, Some(30));
+        assert_eq!(features.aux.budget_wall_s, Some(900));
+        assert!(features.brief.contains("- project: Routing project"));
     }
 
     #[test]
@@ -528,7 +585,10 @@ mod tests {
         );
         assert_eq!(f.aux.write_set_gaps.len(), 1);
         assert!(!f.aux.missing.iter().any(|m| m == "write_set"));
-        assert!(f.brief.contains("書き込み集合:\n- repo:crates/future/src/late.rs\n"));
+        assert!(
+            f.brief
+                .contains("書き込み集合:\n- repo:crates/future/src/late.rs\n")
+        );
         assert!(!f.brief.contains("docs/wu.md"));
     }
 
@@ -575,14 +635,26 @@ mod tests {
             "repo:crates/task-core/src/route_extract.rs",
         ];
         // r1 の集合は 00:02:00 記録。それより前の判断には何も入らない。
-        let early = at("work_unit", "wu-1", AsOf::Timestamp("2026-01-01T00:01:30Z".into()));
+        let early = at(
+            "work_unit",
+            "wu-1",
+            AsOf::Timestamp("2026-01-01T00:01:30Z".into()),
+        );
         assert_eq!(early.write_set, None);
         assert!(early.missing.iter().any(|m| m == "write_set"));
         // 00:02:05: r1 だけ（WU 集合 00:02:10・r2 00:03:30 は後）。
-        let mid = at("work_unit", "wu-1", AsOf::Timestamp("2026-01-01T00:02:05Z".into()));
+        let mid = at(
+            "work_unit",
+            "wu-1",
+            AsOf::Timestamp("2026-01-01T00:02:05Z".into()),
+        );
         assert_eq!(mid.write_set, Some(strings(&r1)));
         assert!(mid.write_set_gaps.is_empty());
-        let task_mid = at("task", "task-1", AsOf::Timestamp("2026-01-01T00:03:10Z".into()));
+        let task_mid = at(
+            "task",
+            "task-1",
+            AsOf::Timestamp("2026-01-01T00:03:10Z".into()),
+        );
         assert_eq!(task_mid.write_set, Some(strings(&r1)));
         // EventSeq: seq 2 の ts は 00:01:00 で r1 の集合（00:02:00）は後。
         let seq2 = at("work_unit", "wu-1", AsOf::EventSeq(2));
@@ -597,10 +669,11 @@ mod tests {
         assert_eq!(task_seq3.write_set, Some(strings(&r1)));
         // seq 5（ts 00:05:00）: r2 の incomplete も入り gap に残る。
         let seq5 = at("work_unit", "wu-1", AsOf::EventSeq(5));
-        assert!(seq5
-            .write_set
-            .unwrap()
-            .contains(&"repo:crates/future/src/late.rs".to_owned()));
+        assert!(
+            seq5.write_set
+                .unwrap()
+                .contains(&"repo:crates/future/src/late.rs".to_owned())
+        );
         assert_eq!(seq5.write_set_gaps.len(), 1);
     }
 }

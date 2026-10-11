@@ -79,6 +79,20 @@ async fn target_sync_pre_review_sync_root_reviews_the_rebased_sha() {
     check_snapshot(&store, &task, &target, &reviewed);
     assert!(run_until_idle(&mut d, 100).await.idle);
     assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Done);
+    assert!(
+        store
+            .events_for(task.id)
+            .unwrap()
+            .iter()
+            .any(|(_, event)| matches!(
+                event,
+                Event::DeliverySkipped {
+                    reason: task_core::DeliverySkipReason::ProjectNotEnabled,
+                    ..
+                }
+            )),
+        "a root task without a reviewer run still records why delivery did not start"
+    );
 }
 
 #[tokio::test]

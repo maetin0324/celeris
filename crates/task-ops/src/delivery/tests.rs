@@ -87,8 +87,7 @@ fn existing_reviewer_gets_a_pinned_merge_criterion_without_extra_tasks() {
             .into_iter()
             .collect(),
     };
-    // ADR-0079 D6（Phase R1c）: 同じ task が木の子なら、取り込みの判定も `deliveries` の行も作らない
-    // （成果は親の段階の統合で親のブランチへ）。root は下のとおり今までと同じ（回帰）。
+    // 木の子は親の統合工程で扱い、delivery は作らず除外理由を記録する。
     let mut as_child = task.clone();
     let parent_id = TaskId::new();
     as_child.tree = Some(TreeInfo {
@@ -114,6 +113,19 @@ fn existing_reviewer_gets_a_pinned_merge_criterion_without_extra_tasks() {
         "no merge criterion for a child"
     );
     assert!(store.delivery_get(task.id).unwrap().is_none());
+    assert!(
+        store
+            .events_for(task.id)
+            .unwrap()
+            .iter()
+            .any(|(_, event)| matches!(
+                event,
+                Event::DeliverySkipped {
+                    reason: DeliverySkipReason::TreeChild,
+                    ..
+                }
+            ))
+    );
     let d = begin(
         &store,
         &mut task,
@@ -158,6 +170,19 @@ fn existing_reviewer_gets_a_pinned_merge_criterion_without_extra_tasks() {
         begin(&store, &mut unrelated, &root, &policy, "w", "r")
             .unwrap()
             .is_none()
+    );
+    assert!(
+        store
+            .events_for(task.id)
+            .unwrap()
+            .iter()
+            .any(|(_, event)| matches!(
+                event,
+                Event::DeliverySkipped {
+                    reason: DeliverySkipReason::NoProject,
+                    ..
+                }
+            ))
     );
 }
 
@@ -669,13 +694,13 @@ fn delivery_skip_once_per_head() {
 }
 
 #[test]
-fn delivery_skip_tree_child_and_out_of_policy_emit_nothing() {
+fn delivery_skip_tree_child_and_out_of_policy_are_recorded() {
     let mut f = skip_fixture();
-    // 対象外の案件（marker も部署も無いが、何も積まない）。
+    // 対象外の案件（marker も部署も無いので project 除外理由を優先する）。
     f.policy.projects.clear();
     fs::remove_file(f.root.join(f.task.id.to_string()).join("worktree.json")).unwrap();
     assert!(f.begin().is_none());
-    assert!(f.skips().is_empty());
+    assert_eq!(f.skips()[0].0, DeliverySkipReason::ProjectNotEnabled);
     // 対象案件の木の子。
     f.policy
         .projects
@@ -694,6 +719,6 @@ fn delivery_skip_tree_child_and_out_of_policy_emit_nothing() {
         base_commit: None,
     });
     assert!(f.begin().is_none());
-    assert!(f.skips().is_empty());
+    assert_eq!(f.skips()[1].0, DeliverySkipReason::TreeChild);
     assert!(f.store.delivery_get(f.task.id).unwrap().is_none());
 }

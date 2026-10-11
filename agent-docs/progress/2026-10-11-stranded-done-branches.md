@@ -21,6 +21,20 @@ tasks: [01M4M8D4ANYGCWVZ0A0WSW53X7]
 
 `crates/celeris/src/delivery.rs:158-176` の `tick` は既存 deliveries 行だけを走査する。行が無い task の branch を検索せず、未記録 task を検出できない。木の子を skip する安全策もある。よって begin 未到達や silent skip 後に補完する daemon 経路は現状ない。
 
+## delivery-fix 実装
+
+review 完了時に `delivery::begin` を必ず呼ぶ。delivery policy 対象の root task は既存 acceptance に Reviewer 条件が無くても部署内 reviewer run を先に選ぶため、`begin` が追加する criterion も同じ最終 review で評価される。policy 対象外・project_id 不在・support task・tree child は reviewer run を要求せず、`prepare` が `DeliverySkipped` に理由を記録する。設定形式は変更していないため、本番設定の移行は不要。
+
+回帰試験は `target_sync_pre_review_sync_root_reviews_the_rebased_sha` と `a_plan_with_no_work_left_proceeds_to_review_without_a_run` に追加した。Reviewer 条件を持たない root task と計画付き root の最終 review が done へ進んだ後、delivery 行の代わりに project policy 除外理由がイベントに保存されることを検査する。store と git fixture を使用し、LLM・外部ネットワークには依存しない。
+
+修正前の呼び出し条件（`if let Some(reviewer_run)`）へ一時的に戻した状態では、この回帰試験が理由イベントの assertion で失敗した。修正を戻した状態で同試験と `done_then_command_review_passes_and_events_are_recorded`、delivery fixture 試験は pass した。
+
+最終確認: `TMPDIR=/tmp cargo test -p task-ops -p task-dispatch -p celeris` は成功（task-ops 515、task-dispatch 934、celeris 426 unit tests pass。integration tests も pass）、`cargo clippy --workspace -- -D warnings` と `cargo fmt --all -- --check` も成功。
+
+## 本番への移行
+
+設定形式の変更はない。リリース後の本番反映は通常の release/promote 手順で行う。host、daemon、DB、設定ファイルの直接変更はしていない。
+
 ## 経路表
 
 | task 経路 | review / done 経路 | begin 到達条件 | 判定 |

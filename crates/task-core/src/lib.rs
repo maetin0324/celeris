@@ -92,6 +92,8 @@ pub mod quota;
 pub mod report;
 /// ADR-0043 D1 / D2（Phase 52）: 案件のリポジトリ（`project_repos`）とタスクの `repos`。
 pub mod repos;
+/// ADR 2026-10-11 task-routing-features D1-D4: deterministic feature and option records.
+pub mod route_record;
 pub mod store;
 pub mod transition;
 /// ADR-0079（Phase R1a）: 再帰的な task 分解の木（`Task.tree`・`[execution.tree]` の上限・深さ）。

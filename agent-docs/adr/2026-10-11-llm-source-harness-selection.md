@@ -35,7 +35,7 @@ kind = "claude_oauth"
 accounts = ["claude-a", "claude-b"]
 max_runs = 4
 quota = { five_hour = 0.8, seven_day = 0.9 }
-models = ["claude-sonnet-4-5", "claude-opus-4-1"]
+models = ["claude-sonnet-5", "claude-opus-5-5"]
 
 [llm_sources.qwen]
 kind = "openai_compatible"
@@ -43,7 +43,7 @@ endpoint = "http://127.0.0.1:17942/v1"
 credential_ref = "qwen-api-key"
 accounts = ["shared-qwen"]
 max_runs = 2
-models = ["Qwen3-Coder"]
+models = ["qwen3.9-32b"]
 ```
 
 既存 account CRUD と `account_limits` 永続化は活かす。現行 `crates/task-core/src/store/account_limits.rs` の adapter key は、source ID と account ID の組に移行し、`max_runs` の読み書きを維持する。source に複数 account がある場合、各 account の明示上限と source 全体の上限の両方を満たすよう admission を行う。quota・cooldown・利用中数は account/source の状態として扱い、harness や task lane に所属させない。暗黙 account を必要とする source は source ID を安定した所有者として明示的に作成し、`unknown` の共有枠は認めない。
@@ -52,7 +52,7 @@ models = ["Qwen3-Coder"]
 
 Harness は task を実行するプログラムとその起動契約である。宣言は種別、受け付ける API 形式、利用できる source の種類、能力、必要な command/args を含む。API 形式（例: OpenAI-compatible、Anthropic、CLI 固有 protocol）と source の認証方式は別属性にする。受け付ける組み合わせが実測されていない場合は自動で互換と見なさず、明示的に追加されるまで候補にしない。
 
-### 宣言の形（## harness）
+### 宣言の形（harness）
 
 ```toml
 [harnesses.claude_code]
@@ -76,32 +76,44 @@ args = ["acp"]
 
 ## harness の選択
 
-Harness は供給元や model を見る前に task 情報から決定的に選ぶ。優先順は (1) task に明示された harness ID、(2) task の `worker_hint.adapter` を一意の harness ID に解決した値、(3) `genre` と `role` に対応する設定済み harness、(4) repo 作業等の明示された execution class に対する設定済み既定、とする。同じ優先段で候補が複数なら設定順で選ばず、設定エラーまたは未割当として扱う。利用可能な既定が無ければ task を未割当で止める。
+Harness は source/model の選択とは独立に、task の構造化情報から決定する。人が指定する場合は task の `harness` 欄に登録済み harness ID を記す。未指定なら `genre`、`requirements`、harness の宣言能力、repo の有無、明示された execution class に対する設定済み選択規則を使う。規則で一意に決まらない場合や適格な harness が無い場合は未割当で fail closed とする。文面を解析して推測せず、LLM も呼び出さない。
+
+旧 task の `worker_hint.adapter` は harness 選択で読み取らない。schema migration はその値を task の `harness` 欄へ移し、登録済み harness ID として解決できない値は `harness = null` にして `harness_migration_unresolved` event を追記する。以後の選択経路は task の `harness` 欄のみを読む。
 
 ```toml
 [harness_selection]
-default_by_execution_class = { coding = "codex", conversation = "claude_code" }
-by_genre = { research = "local_deep_research" }
+# genre/requirements/capabilities/repo の適格性に基づく規則を宣言する。
+# 一意に決まらない場合は fail closed。
 ```
 
-人が指定する場合は task の `harness` 欄に登録済み ID を記す。`worker_hint.adapter` は既存 task との移行中に同じ ID へ解決する入力として残す。genre の `capabilities` は説明・適格性条件に利用できるが、文面を解析して harness を推測しない。dispatcher は設定済みの優先規則と task の構造化欄だけを使い、LLM を呼び出さない。`adapter_policy = model_family` のように model family から harness を逆算する規則は廃止する。
+`adapter_policy = model_family` のように model family から harness を逆算する規則は廃止する。
 
 ## source と model の選択
 
-Harness 決定後、候補を `source × model` の組として列挙する。候補は source の宣言済み model だけから作り、harness が受け付ける source kind と API format の条件を満たすものに限る。制約は account availability/cooldown、account と source の同時実行数、quota、task に明示された model、harness との組み合わせである。各除外理由を routing trace に残せる形にする。
+Harness 決定後、適格性・quota・cooldown・同時実行数を確認した source/model 候補を、設定に明示した優先順で選ぶ。通常 task の既定は `[route_defaults.<harness_id>]` の `candidates` 配列であり、必要なら execution class ごとに同じ形式を定義できる。`default_route_policy` はこの配列順だけを使い、適格な候補の最初を選ぶ。候補宣言の無い harness/class、または全候補が不適格なら fail closed とする。設定順や lane/Tier から候補の優先度を作らない。
 
 ```toml
-[llm_sources.qwen]
-kind = "openai_compatible"
-models = ["Qwen3-Coder", "Qwen3-Reasoner"]
+[route_defaults.claude_code]
+candidates = [
+  { source = "claude_oauth", model = "claude-sonnet-5" },
+  { source = "codex_oauth", model = "gpt-6-sol" },
+]
 
-[harnesses.pi]
-kind = "pi"
-api_formats = ["openai_compatible"]
-source_kinds = ["openai_compatible"]
+[route_defaults.codex]
+candidates = [
+  { source = "codex_oauth", model = "gpt-6-sol" },
+  { source = "claude_oauth", model = "claude-sonnet-5" },
+]
+
+[route_defaults.opencode]
+candidates = [
+  { source = "qwen", model = "qwen3.9-32b" },
+]
 ```
 
-選択根拠となる cost、latency、品質の観測が存在しない間は、適格候補を source ID、model ID の辞書順で整列し先頭を選ぶ。この順序は再現可能な暫定既定であり、設定順・ランダム値・暗黙の lane から優先度を作らない。task が model ID を指定した場合は一致する候補だけを残し、該当なしなら失敗として明示する。`frontier`/`standard`/`cheap` は task の予算・方針ラベルとして残せるが、特定 source や model を暗黙に意味しない。
+この例は本番の使い分けを表す。coding task は claude と codex をこの順で選択でき、軽い仕事は Qwen を使う。必要な場合は execution class ごとに candidates を分ける。langmem、local deep research（LDR）、paperqa は tier alias ではなく、各設定で具体的な source と model を指定する。task が model ID を明示した場合は候補をその ID に絞り、該当が無ければ明示的に失敗させる。
+
+`lane` / `Tier` は provider/model の対応付けに使わない。この値を source/model 選択入力に使うかどうかは後続 task 01M4M8D4AQ が決める。この ADR の選択では入力にしない。`RouteRequest` に `lane` は保持し、後続の policy が差し替えられる境界とする。
 
 ## 結合
 
@@ -111,13 +123,13 @@ Harness 宣言が受け付ける source kind と API format を source 宣言と
 [[llm_routes]]
 harness = "local_deep_research"
 source = "qwen"
-model = "Qwen3-Coder"
+model = "qwen3.9-32b"
 via = "llm_proxy"
 from_api = "openai_compatible"
 to_api = "openai_compatible"
 ```
 
-`crates/llm-proxy/src/config.rs` の source 定義、model alias、`selection.rs` の選択・変換を、harness から要求された形式を満たす明示経路として整理する。`celeris/<tier>` 等の alias は source/model ID の代用にせず、alias を使う場合も解決後の source/model を trace に記録する。API 形式の一致だけで認証方式や実接続可能性を推測してはならない。
+`crates/llm-proxy/src/config.rs` の source 定義、model alias、`selection.rs` の選択・変換を、harness から要求された形式を満たす明示経路として整理する。API 形式の一致だけで認証方式や実接続可能性を推測してはならない。
 
 ## 削除する欄と仕組み
 
@@ -128,28 +140,37 @@ to_api = "openai_compatible"
 | `llm_source`、provider `model` | provider から削除 | source/model 候補、必要なら明示 route |
 | `tiers`、`tier_models` | provider 設定から削除 | lane は task 方針に残し、model 対応は明示候補・route に置く |
 | `lane` / `Tier` | 廃止しない | task 予算・routing policy のラベル。source/model/harness の別名にはしない |
-| `worker_hint.adapter` | 互換入力として限定的に残す | 登録 harness ID への決定的な手動制約。新 task は `harness` 欄を使う |
+| `worker_hint.adapter` | 削除 | migration で `harness` 欄へ移し、解決不能なら null と `harness_migration_unresolved` event。以後は読まない |
 | `account_pool` | provider から削除 | source の `accounts` |
 | provider `concurrency`、API `in_use_cos` | 削除 | source/account の admission と観測へ移す |
 | `account_limits` | 維持・key を更新 | `(source_id, account_id)` ごとの上限永続化 |
 | `env_keys`、`credential_refs` | provider から削除 | source credential 参照と harness process env を分離 |
 | `command`、`args`、adapter `settings` | provider から削除 | harness 定義に置く |
 | `SourceOrigin::Derived`、`Unknown`、source derive | 削除 | 登録済み source のみ許可し、不明値は設定/dispatch error |
-| `[llm_proxy.models]` の tier alias | proxy から直ちには削除しない | 移行中の名前解決に限り利用可能。選択 trace は具体的 source/model を記録 |
+| `[llm_proxy.models]` の tier alias | 即時削除 | langmem・LDR・paperqa を含む利用箇所は設定で具体的 source/model を指定 |
 
 既存 config に削除対象の provider 欄が残る場合は設定エラーにし、読み替えや警告だけの互換動作を実装しない。account 上限の永続データは source/account の識別子が一意に対応するものだけを移し、対応不明な値を推測で割り当てない。
 
 ## CoS の経路
 
-CoS chat は通常 task の genre routing とは別の固定用途として維持する。実行器は `claude_code` harness、供給元は `claude_oauth` source とし、本番の CoS は Claude OAuth account pool を使う。CoS 設定に provider ID を保存せず、必要な model を source の model 集合から選ぶ。既存の pinned account/session 再開情報は source/account/model と session の実体に結び付け、provider ID 変更で session の同一性が壊れないようにする。設定時にこの source×harness の組が明示適格でない場合は起動時に拒否する。
+CoS chat の harness は `claude_code` に固定する。source/model は `[cos.route_candidates]` に明示した優先順の候補から、通常 task と同じ適格性確認・account admission で選ぶ。代替 source は task 01M4E0WA5Z で定めた fallback を候補に含めて維持する。例えば次の候補は Claude OAuth を優先し、Codex OAuth を fallback にする。CoS 設定に provider ID は置かない。
 
-CoS の account 選択も source/account の quota・cooldown・同時実行数を使い、provider snapshot や `in_use_cos` を別の容量台帳として残さない。通常 task の source routing policy を CoS の会話へ暗黙適用しない一方、後続の評価選択が CoS に適用される場合も、入口は同じ候補と制約の型を利用する。
+```toml
+[cos]
+harness = "claude_code"
+route_candidates = [
+  { source = "claude_oauth", model = "claude-opus-5-5" },
+  { source = "codex_oauth", model = "gpt-6-astra" },
+]
+```
+
+CoS の account 選択も source/account の quota・cooldown・同時実行数を使い、provider snapshot や `in_use_cos` を別の容量台帳として残さない。CoS 候補が空またはすべて不適格なら fail closed とする。
 
 ## llm-proxy の位置
 
-`llm-proxy` は harness ではなく、source に対する接続・認証・quota の実行面と、source API 形式から harness が必要とする API 形式への変換器である。proxy 自身を `celeris` という LLM source として数えない。source ID は上流の実体（例 `qwen`、`claude_oauth`）、model ID はその source の model とする。`celeris/cheap` のような旧 alias は明示された source/model への名前解決としてのみ残し、最終選択には使わない。
+`llm-proxy` は harness ではなく、source に対する接続・認証・quota の実行面と、source API 形式から harness が必要とする API 形式への変換器である。proxy 自身を LLM source として数えない。source ID は上流の実体（例 `qwen`、`claude_oauth`）、model ID はその source の model とする。`[llm_proxy.models]` の tier alias（例 `celeris/cheap`）は移行期間を設けず削除する。langmem・LDR・paperqa の設定には具体的な source/model を書く。
 
-`llm-proxy` 内の `[sources.*]` 接続情報と `[models.*]` alias→source/model 写像は proxy の接続設定に属する。Celeris の canonical source registry は source kind、account、quota、同時実行上限、利用可能 model を持ち、proxy はその source ID/model ID を参照する。両者の重複設定を避け、proxy の alias を canonical model と誤認しない。変換 route は harness の入力形式と source の出力形式の対応を宣言し、認証・account 使用量・cooldown は常に上流 source/account に計上する。
+`llm-proxy` 内の `[sources.*]` 接続情報は proxy の接続設定に属する。Celeris の canonical source registry は source kind、account、quota、同時実行上限、利用可能 model を持ち、proxy はその source ID/model ID を参照する。両者の重複設定を避け、proxy に tier alias を残さない。変換 route は harness の入力形式と source の出力形式の対応を宣言し、認証・account 使用量・cooldown は常に上流 source/account に計上する。
 
 ## API と画面
 
@@ -176,10 +197,10 @@ fn constrain_for_harness(candidates: Vec<Candidate>, harness: &HarnessSpec) -> V
 fn admit_source(candidate: &Candidate, accounts: &AccountSnapshot, quota: &QuotaSnapshot,
                 reservations: &ReservationSnapshot) -> Admission;
 trait RoutePolicy { fn choose(&self, eligible: &[Candidate]) -> Result<Candidate, NoEligibleCandidate>; }
-fn default_route_policy(eligible: &[Candidate]) -> Result<Candidate, NoEligibleCandidate>;
+fn default_route_policy(eligible: &[Candidate], priority: &[CandidateKey]) -> Result<Candidate, NoEligibleCandidate>;
 ```
 
-Enumeration yields only declared source×model pairs. Harness compatibility is applied before account admission; admission checks account/source quota, cooldown and simultaneous execution limits and returns a reservation owner. `RoutePolicy` is the sole replaceable decision point for task 01M4M8D4AQ. Until evidence-based policy exists, the default sorts by `(source_id, model_id)` and chooses the first eligible candidate; empty sets fail closed with per-candidate reasons. The harness selection result is an input and is not changed by source routing. Explicit task model hints filter the set before policy choice.
+Enumeration yields only declared source×model pairs. Harness compatibility is applied before account admission; admission checks account/source quota, cooldown and simultaneous execution limits and returns a reservation owner. `RoutePolicy` is the sole replaceable decision point for task 01M4M8D4AQ. The default route policy preserves the order declared in `route_defaults.<harness_id>.candidates`; it chooses the first eligible candidate and fails closed when no declared candidate is eligible. The harness selection result is an input and is not changed by source routing. Explicit task model hints filter the set before policy choice. `lane` remains in `RouteRequest` but does not influence this source/model choice; task 01M4M8D4AQ decides whether a later policy consumes it.
 
 ## 本番 config の移行
 
@@ -192,8 +213,8 @@ Enumeration yields only declared source×model pairs. Harness compatibility is a
 | `opencode-qwen` | `qwen` OpenAI-compatible source と実 model ID | `opencode`/ACP harness。適格性を宣言 | Qwen の軽量仕事 |
 | `pi-qwen` | 同じ `qwen` source/model を共有 | `pi` harness。適格性を宣言 | Qwen の軽量仕事 |
 | `pi-opencode-go` | `opencode_go` source とその catalog model IDs | `pi` harness。適格性を宣言 | OpenCode Go を使う仕事 |
-| `ldr-qwen` | 上流 `qwen` source/model。必要な場合は明示された proxy 変換経路 | `local_deep_research` harness を research genre/capability から選択 | Web 調査 |
-| `paperqa-qwen` | 移行時に実 credential/config の接続先を確認して canonical source/model を明記（推測しない） | `paperqa` harness を literature/research 文脈から選択 | 学術文献調査 |
-| `langmem-main` | 上流 source/model を明示。`celeris/cheap` は解決先へ展開 | `langmem` harness を記憶整理 task から選択 | LangMem の記憶整理 |
+| `ldr-qwen` | LDR 設定に具体的な source/model を明記 | `local_deep_research` harness を research genre/capability から選択 | Web 調査 |
+| `paperqa-qwen` | paperqa 設定に具体的な source/model を明記 | `paperqa` harness を literature/research 文脈から選択 | 学術文献調査 |
+| `langmem-main` | langmem 設定に具体的な source/model を明記 | `langmem` harness を記憶整理 task から選択 | LangMem の記憶整理 |
 
-この対応は harness ごとの固定 provider 行を作り直すものではない。同一 `qwen` source は opencode、pi、LDR から共有可能で、候補適格性だけを harness 宣言で制約する。本番で現在使用中の model ID/account 名/quota は移行時に既存 config と DB から照合し、source/account の stable ID を保つ。設定検証が通り、CoS が `claude_oauth` で起動できることと各用途の route が適格であることを確認後に reload する。失敗時は保存した config backup を戻して旧版 daemon を再起動する手順を運用 runbook に記録する。
+この対応は harness ごとの固定 provider 行を作り直すものではない。同一 `qwen` source は複数 harness から共有でき、候補適格性は harness 宣言で制約する。本番で現在使用中の model ID/account 名/quota は移行時に既存 config と DB から照合し、source/account の stable ID を保つ。設定検証が通り、CoS が `claude_oauth` で起動できることと各用途の route が適格であることを確認後に reload する。失敗時は保存した config backup を戻して旧版 daemon を再起動する手順を運用 runbook に記録する。

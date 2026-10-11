@@ -7,7 +7,7 @@ updated: 2026-10-11
 
 # WorkUnit の受け入れ検査ログを作業ツリーの外に置く
 
-verdict: reproduced（WU の検査ログ `work-unit-checks`）／ integration-checks は not-reproduced
+verdict: reproduced（WU の検査ログ `work-unit-checks`）／ integration-checks は not-reproduced（shared mode の統合は検査を流さない）。置き場所は 2026-10-11 reopen で `check_log_root` 基準へ揃えた
 
 ## 再現（WU repro-fix）
 
@@ -69,6 +69,42 @@ integration-checks が再現しない理由: 統合のログは `ws.task_dir`（
   - `sh scripts/dev/check-doc-links.sh` → exit 0、`check-doc-links: ok`
   - `sh scripts/dev/check-adr-numbers.sh` → exit 0、`check-adr-numbers: ok (194 files)`
   - `sh scripts/dev/progress-index.sh --check` → exit 0、`progress-index --check: ok`
+
+## 統合ログの移動（2026-10-11 reopen）
+
+日次整理の reviewer（01M4P79NAZ）の指摘: 統合 WU の `ObservedIntegration.log_dir` が `ws.task_dir.join(INTEGRATION_CHECK_LOG_DIR)`
+のままで、shared mode では作業ツリーに入りうる。
+
+- **修正前の試験結果**: `wu_check_log_outside_tree_shared_mode_after_integration`（shared mode、`.gitignore` は
+  `ignore_runtime_but_not_check_logs`、段 build の WU a に非範囲 check `test -f a/one.txt`、段 next の WU c に
+  `git ls-files --others --exclude-standard | grep '^integration-checks/'` があれば exit 1 の範囲 check）を修正前のコードで
+  流すと FAIL した。ただし落ちたのは最初の assert「`integrate-build` の `IntegrationCheckStarted` が出る」で
+  （`scope_checks.rs:675` panicked、events は `integrate-build` が `integrate`→`integrated` と遷移するだけで `IntegrationCheck*` が無い）、
+  c の範囲 check は通っていた（`WorkUnitChecksFailed` 無し、task は Done）。
+- **原因の確認**: shared mode は `parallel_mode` が並列 1（`worktrees: false`）に倒し、`start_integration` は
+  merge も検査もせずに `on_integration_finished(.., IntegrationRun::default())` を返す（ADR-0074 D1.2）。統合の検査が走るのは
+  worktree mode だけで、そこでは `task_workspaces_for` の `task_dir` = `<workspace_root>/<task_id>` = `check_log_root`。
+  つまり指摘の「shared mode で統合ログが作業ツリーに入る」経路は今の HEAD には無く、旧 ADR 付記の「共有 mode では統合検査が走らない」は正しかった。
+- **修正**: それでも規則を 1 つにするため、`phase_integration.rs` の統合 WU の `log_dir` を
+  `self.check_log_root(task_id).join(INTEGRATION_CHECK_LOG_DIR).join(&integ.key)` にした（旧い `ws.task_dir` 基準は削除、分岐なし）。
+  定数 `INTEGRATION_CHECK_LOG_DIR` のコメントも「Task の作業ディレクトリ直下」から `check_log_root` 基準へ直した。
+  実際のログの場所は worktree mode で変わらないので、本番への移行は不要。
+- **試験**: 上の試験は実際の挙動に合わせて「`integrate-build` が integrated になり、統合の検査は流れず（`IntegrationCheckStarted` 無し）、
+  c の厳しい範囲 check が通り、task は Done、repo 作業ツリーに `integration-checks/` が無い」を assert する形にした。
+  統合の検査が走る worktree mode でのログの場所（`<workspace_root>/<task_id>/integration-checks/integrate-build`）は既存の
+  `wu_check_log_outside_tree_second_stage_ignores_integration_check_logs` が見る。
+- **読む側・docs**: `check-log` API（`task-api/src/handlers/task_io.rs`）は event の絶対 `log_path` を読むので変更なし。
+  fixture（`task-api/tests/files.rs` は `env.workspace(task)` = `<workspace_root>/<task_id>`、`task-api/src/query/tests.rs`・
+  `task-ops/src/view/tests.rs` は event の path 文字列だけ）も新しい場所と矛盾しないので変更なし。`docs/api/v1/api.md` の
+  `<task_dir>/integration-checks/` を `<workspace_root>/<task_id>/integration-checks/` に、ADR 2026-10-04-integration-check-progress に
+  D2 付記、ADR 2026-10-08-work-unit-scope-snapshot の付記を訂正。`agent-docs/guides/work-unit-checks.md` は既に新しい場所を書いていた。
+  `crates/task-worker/src/preamble.rs` はログの置き場所に触れておらず矛盾なし。
+- **証拠**:
+  - `cargo nextest run -p task-dispatch scope_checks integration_check_progress` → 15 passed。
+  - `cargo nextest run -p task-dispatch -p task-api -p task-ops --no-fail-fast` → 2162 中 2154 passed、8 failed。落ちたのは
+    browser 試験 8 本（`browser_live_cross` 3・`browser_e2e` 4・`browser_waits` 1）だけで、`bind: path must be shorter than SUN_LEN`
+    （worker sandbox の長い TMPDIR）による環境起因。本変更と無関係。
+  - `cargo clippy --workspace -- -D warnings` → exit 0。
 
 ## 未解決事項
 

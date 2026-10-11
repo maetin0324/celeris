@@ -96,7 +96,17 @@ pub fn features_for_subject(
         let budget_turns=wu_budget["max_turns"].as_u64().or(task_budget["max_turns"].as_u64());
         let budget_wall_s=wu_budget["max_wall_secs"].as_u64().or(task_budget["max_wall_secs"].as_u64());
         let paths=arr_strings(&wu["context"]["paths"]); let repos=arr_strings(&task["repos"]);
-        let mut input=FeaturesInput {title,objective,acceptance_n:acceptance.as_ref().map(|v|v.len() as u64),check_command_n:Some(command_n),check_artifact_n:Some(artifact_n),check_reviewer_n:Some(reviewer_n),check_human_n:Some(human_n),acceptance,checks,done_when:arr_strings(&wu["done_when"]),outputs:arr_strings(&wu["outputs"]),paths:paths.clone(),repos:repos.clone(),genre:str(&task,"genre"),kind:if subject.kind=="work_unit"{str(&wu,"kind")}else{Some("task".into())},harness:ctx.harness.or(old_harness),lane:ctx.lane.or(old_lane),depth:Some(depth),deps_n:depends_json.as_deref().and_then(|s|serde_json::from_str::<Vec<Value>>(s).ok()).map(|v|v.len() as u64),prior_runs_n:Some(prior),prior_failed_n:Some(failed),prior_runs:Some(prior_runs),retries_n:retries,repairs_n:repairs,budget_turns,budget_wall_s,task_features_v69:v69,..Default::default()};
+        let deps_n = if subject.kind == "work_unit" {
+            depends_json
+                .as_deref()
+                .and_then(|s| serde_json::from_str::<Vec<Value>>(s).ok())
+                .map(|v| v.len() as u64)
+        } else {
+            task.get("depends_on")
+                .and_then(Value::as_array)
+                .map(|v| v.len() as u64)
+        };
+        let mut input=FeaturesInput {title,objective,acceptance_n:acceptance.as_ref().map(|v|v.len() as u64),check_command_n:Some(command_n),check_artifact_n:Some(artifact_n),check_reviewer_n:Some(reviewer_n),check_human_n:Some(human_n),acceptance,checks,done_when:arr_strings(&wu["done_when"]),outputs:arr_strings(&wu["outputs"]),paths:paths.clone(),repos:repos.clone(),genre:str(&task,"genre"),kind:if subject.kind=="work_unit"{str(&wu,"kind")}else{Some("task".into())},harness:ctx.harness.or(old_harness),lane:ctx.lane.or(old_lane),depth:Some(depth),deps_n,prior_runs_n:Some(prior),prior_failed_n:Some(failed),prior_runs:Some(prior_runs),retries_n:retries,repairs_n:repairs,budget_turns,budget_wall_s,task_features_v69:v69,..Default::default()};
         input.context_paths_n=paths.as_ref().map(|v|v.len()); input.repos_n=repos.as_ref().map(|v|v.len());
         input.crates_n=paths.as_ref().map(|v|v.iter().filter_map(|s|s.strip_prefix("crates/").and_then(|s|s.split('/').next())).collect::<std::collections::HashSet<_>>().len());
         input.phase_index=plan.as_deref().and_then(|p|serde_json::from_str::<Value>(p).ok()).and_then(|p|p["phases"].as_array().and_then(|a|a.iter().position(|x|x["key"]==wu["phase"]).map(|i|i as u64)));
@@ -153,7 +163,7 @@ mod tests {
         let s = SqliteStore::open_in_memory().unwrap();
         let c = s.lock().unwrap();
         c.execute("INSERT INTO tasks(id,status,kind,parent_id,priority,created_at,json) VALUES('task-1','running','task',NULL,0,'2026-01-01T00:00:00Z',?1)",[
-            r#"{"title":"A task","objective":"Build it","genre":"coding","budget":{"max_turns":22,"max_wall_secs":600,"max_retries":3},"acceptance":[{"text":"works","check":{"type":"command","cmd":"cargo test -p task-core","expect_exit":0}},{"text":"docs","check":{"type":"artifact_exists","name":"docs.md"}},{"text":"review","check":{"type":"reviewer"}},{"text":"human","check":{"type":"human"}}],"repos":["repo"]}"#]).unwrap();
+            r#"{"title":"A task","objective":"Build it","genre":"coding","depends_on":["upstream-1","upstream-2"],"budget":{"max_turns":22,"max_wall_secs":600,"max_retries":3},"acceptance":[{"text":"works","check":{"type":"command","cmd":"cargo test -p task-core","expect_exit":0}},{"text":"docs","check":{"type":"artifact_exists","name":"docs.md"}},{"text":"review","check":{"type":"reviewer"}},{"text":"human","check":{"type":"human"}}],"repos":["repo"]}"#]).unwrap();
         c.execute("INSERT INTO execution_plans(id,task_id,version,origin,status,json,created_at) VALUES('p1','task-1',1,'fixture','active','{}','2026-01-01T00:00:00Z')",[]).unwrap();
         c.execute("INSERT INTO work_units(id,task_id,plan_id,key,seq,kind,status,depends_on_json,retries,json,created_at,updated_at) VALUES('wu-1','task-1','p1','leaf',1,'implement','ready','[]',2,?1,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')",[r#"{"objective":"Do work","budget":{"max_turns":30,"max_wall_secs":900},"checks":[{"cmd":"cargo clippy --workspace","expect_exit":0,"scope":true}],"context":{"paths":["crates/task-core/src/lib.rs"]}}"#]).unwrap();
         c.execute("INSERT INTO work_units(id,task_id,plan_id,key,seq,kind,status,depends_on_json,retries,json,created_at,updated_at) VALUES('wu-repair','task-1','p1','repair',2,'repair','ready','[]',0,'{}','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')",[]).unwrap();
@@ -294,5 +304,82 @@ mod tests {
                 .unwrap()
                 .contains(&Value::String("changed_lines".into()))
         );
+    }
+
+    #[test]
+    fn route_extract_task_uses_task_json_dependencies_and_populates_task_fields() {
+        let s = fixture();
+        let features = features_for_subject(
+            &s,
+            Subject {
+                kind: "task".into(),
+                id: "task-1".into(),
+            },
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(features.aux.deps_n, Some(2));
+        assert!(!features.aux.missing.iter().any(|name| name == "deps_n"));
+        assert_eq!(features.aux.kind.as_deref(), Some("task"));
+        assert_eq!(features.aux.acceptance_n, Some(4));
+        assert_eq!(features.aux.repos_n, Some(1));
+        assert_eq!(features.aux.budget_turns, Some(22));
+        assert_eq!(features.aux.budget_wall_s, Some(600));
+        assert_eq!(features.aux.check_command_n, Some(1));
+        assert_eq!(features.aux.check_artifact_n, Some(1));
+        assert_eq!(features.aux.check_reviewer_n, Some(1));
+        assert_eq!(features.aux.check_human_n, Some(1));
+        assert!(!features.aux.missing.iter().any(|name| {
+            [
+                "genre",
+                "kind",
+                "acceptance_n",
+                "repos_n",
+                "budget_turns",
+                "budget_wall_s",
+            ]
+            .contains(&name.as_str())
+        }));
+    }
+
+    #[test]
+    fn route_extract_task_empty_dependencies_are_zero() {
+        let s = fixture();
+        s.lock().unwrap().execute(
+            "UPDATE tasks SET json=json_set(json, '$.depends_on', json('[]')) WHERE id='task-1'", [],
+        ).unwrap();
+        let features = features_for_subject(
+            &s,
+            Subject {
+                kind: "task".into(),
+                id: "task-1".into(),
+            },
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(features.aux.deps_n, Some(0));
+        assert!(!features.aux.missing.iter().any(|name| name == "deps_n"));
+    }
+
+    #[test]
+    fn route_extract_work_unit_dependencies_still_use_work_unit_column() {
+        let s = fixture();
+        s.lock().unwrap().execute(
+            "UPDATE work_units SET depends_on_json='[\"wu-parent-1\",\"wu-parent-2\",\"wu-parent-3\"]' WHERE id='wu-1'", [],
+        ).unwrap();
+        let features = features_for_subject(
+            &s,
+            Subject {
+                kind: "work_unit".into(),
+                id: "wu-1".into(),
+            },
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(features.aux.deps_n, Some(3));
+        assert!(!features.aux.missing.iter().any(|name| name == "deps_n"));
     }
 }

@@ -136,7 +136,7 @@ pub struct RoleConfig {
     pub tier: Option<Tier>,
     /// 省略時は tier だけで選ぶ（fake / claude-code / codex）。
     #[serde(default)]
-    pub adapter: Option<String>,
+    pub harness: Option<String>,
     #[serde(default)]
     pub max_turns: Option<u32>,
     #[serde(default)]
@@ -265,7 +265,7 @@ impl Config {
         self.roles.push(RoleConfig {
             id: SMOKE_ID.to_string(),
             tier: Some(Tier::Standard),
-            adapter: Some(FakeAdapter::ID.to_string()),
+            harness: Some(FakeAdapter::ID.to_string()),
             max_turns: Some(SMOKE_MAX_TURNS),
             max_wall_secs: Some(SMOKE_MAX_WALL_SECS),
             instructions: Some(SMOKE_INSTRUCTIONS.to_string()),
@@ -289,7 +289,7 @@ impl Config {
             .map(|r| RoleSpec {
                 id: r.id.clone(),
                 tier: r.tier,
-                adapter: r.adapter.clone(),
+                harness: r.harness.clone(),
                 max_turns: r.max_turns,
                 max_wall_secs: r.max_wall_secs,
                 instructions: r.instructions.clone(),
@@ -387,7 +387,7 @@ impl Config {
                 RoleConfig {
                     id: r.id,
                     tier: r.tier,
-                    adapter: r.adapter,
+                    harness: r.harness,
                     max_turns: r.max_turns,
                     max_wall_secs: r.max_wall_secs,
                     instructions: r.instructions,
@@ -652,22 +652,6 @@ pub(super) fn validate_roles(roles: &[RoleConfig]) -> Result<HashSet<&String>, C
         }
         if !role_ids.insert(&r.id) {
             return Err(ConfigError::Invalid(format!("duplicate role id: {}", r.id)));
-        }
-        if let Some(adapter) = &r.adapter
-            && adapter != task_worker::FakeAdapter::ID
-            && adapter != task_worker::ClaudeCodeAdapter::ID
-            && adapter != task_worker::CodexAdapter::ID
-            && adapter != task_worker::PiAdapter::ID
-            && adapter != task_worker::AcpAdapter::ID
-            && adapter != task_worker::BrowserSpecialistAdapter::ID
-            && adapter != task_worker::PaperQaAdapter::ID
-            && adapter != task_worker::LdrAdapter::ID
-            && adapter != task_worker::LangMemAdapter::ID
-        {
-            return Err(ConfigError::Invalid(format!(
-                "[[roles]] {}: adapter {adapter:?} is not available in this build (fake, claude-code, codex, pi, acp, browser-specialist, paperqa, local-deep-research, langmem only)",
-                r.id
-            )));
         }
         if r.max_turns == Some(0) {
             return Err(ConfigError::Invalid(format!(

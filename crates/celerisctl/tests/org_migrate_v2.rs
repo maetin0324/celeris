@@ -153,7 +153,7 @@ fn seed(env: &Env) -> (Vec<OrgNode>, TaskId) {
         priority: 10,
         worker_hint: WorkerHint {
             tier: Tier::Standard,
-            adapter: None,
+
         },
         workspace: WorkspaceSpec::local(env.root.join("ws")),
         repos: vec![],

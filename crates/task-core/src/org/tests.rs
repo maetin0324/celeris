@@ -232,7 +232,7 @@ fn plain_task(kind: crate::model::TaskKind) -> crate::model::Task {
         priority: 0,
         worker_hint: WorkerHint {
             tier: Tier::Standard,
-            adapter: None,
+
         },
         workspace: WorkspaceSpec::Local {
             path: "ws".into(),

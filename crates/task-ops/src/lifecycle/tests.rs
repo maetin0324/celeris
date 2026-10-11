@@ -64,7 +64,7 @@ fn a_task(
         priority: 0,
         worker_hint: WorkerHint {
             tier: Tier::Standard,
-            adapter: None,
+
         },
         workspace: WorkspaceSpec::Local {
             path: "/tmp/workspace".into(),

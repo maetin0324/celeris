@@ -37,7 +37,7 @@ fn spec() -> NewTaskSpec {
         workspace: Some(PathBuf::from("/tmp/workspace")),
         cluster: None,
         workspace_mode: None,
-        adapter: None,
+        harness: None,
         labels: Vec::new(),
         category: None,
         status: None,

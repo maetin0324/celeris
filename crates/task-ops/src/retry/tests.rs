@@ -46,7 +46,7 @@ fn base_spec(title: &str) -> crate::add::NewTaskSpec {
         workspace: None,
         cluster: None,
         workspace_mode: None,
-        adapter: None,
+        harness: None,
         labels: Vec::new(),
         category: None,
         status: None,
@@ -115,7 +115,7 @@ fn raw_task(status: Status, depends_on: Vec<TaskId>, conversation: Option<Messag
         priority: 0,
         worker_hint: WorkerHint {
             tier: Tier::Standard,
-            adapter: None,
+
         },
         workspace: WorkspaceSpec::Local {
             path: "/tmp/workspace".into(),

@@ -50,7 +50,7 @@ fn blocked_task_with_approval(store: &SqliteStore, node_id: &str) -> (Task, Appr
         priority: 0,
         worker_hint: WorkerHint {
             tier: Tier::Standard,
-            adapter: None,
+
         },
         workspace: WorkspaceSpec::Local {
             path: "ws".into(),

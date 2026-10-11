@@ -6326,7 +6326,7 @@
           "$ref": "#/$defs/Status"
         },
         "harness": {
-          "description": "ハーネス（`worker_hint.adapter`。未指定なら役割・分野から決まるので `null`）。",
+          "description": "タスクに明示されたハーネス。未指定なら route selection に委ねる。",
           "type": [
             "string",
             "null"
@@ -17960,14 +17960,6 @@
           },
           "type": "array"
         },
-        "adapter": {
-          "default": null,
-          "description": "省略時は役割の既定 → 指定なし。",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
         "aggregate": {
           "default": false,
           "description": "ADR-0016 D3: 委譲した子が全て終端になった後に集約 run を 1 回行う。",
@@ -18053,6 +18045,14 @@
         "genre": {
           "default": null,
           "description": "ADR-0027 D1: 分野名（自由記述）。省略時は `role` の分野（`[[genres]] roles` に含む分野がちょうど\n1 つのとき）を継ぐ。`genres` が設定されていれば、知らない `genre` や `role` とその分野の不整合は\nエラー（`genres` が空の設定では検証しない。分野は任意）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "harness": {
+          "default": null,
+          "description": "省略時は役割の既定 → 指定なし。",
           "type": [
             "string",
             "null"
@@ -23428,7 +23428,7 @@
     "RoleConfigView": {
       "description": "`[[roles]]` 1 行の要約（ADR-0016 D1）。`instructions` は**本文を出さない**（プロンプトの中身は設定ファイルにだけ置く）。",
       "properties": {
-        "adapter": {
+        "harness": {
           "type": [
             "string",
             "null"
@@ -27417,13 +27417,6 @@
             "null"
           ]
         },
-        "adapter": {
-          "description": "`worker_hint.adapter`（`null` で外す）。",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
         "assignee": {
           "description": "組織のノード（`null` で外す）。",
           "type": [
@@ -27473,7 +27466,7 @@
           ]
         },
         "harness": {
-          "description": "ADR-0046 D3（Phase 59）: ハーネス（`tasks.genre` 列をそのまま harness id として使う）。\n`null` で外す。`genres`（= ハーネスのレジストリの射影）が空でなければ知らない id は 422。",
+          "description": "ハーネス ID。`null` で外す。",
           "type": [
             "string",
             "null"
@@ -27869,12 +27862,6 @@
           },
           "type": "array"
         },
-        "adapter": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
         "assignee": {
           "description": "ADR-0033 D2 の `Task.assignee`（組織のノード id。GUI-R3: 一覧に「誰の仕事か」を出すため）。",
           "type": [
@@ -27917,6 +27904,12 @@
         },
         "genre": {
           "description": "ADR-0027 D1 の `Task.genre`（`role` と同じ理由で一覧に出す。`TaskDetail.genre` と同じ値）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "harness": {
           "type": [
             "string",
             "null"
@@ -30048,12 +30041,6 @@
     },
     "WorkerHint": {
       "properties": {
-        "adapter": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
         "tier": {
           "$ref": "#/$defs/Tier"
         }

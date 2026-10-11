@@ -41,7 +41,7 @@ fn sample_task(status: Status, workspace: WorkspaceSpec) -> Task {
         priority: 0,
         worker_hint: WorkerHint {
             tier: Tier::Standard,
-            adapter: None,
+
         },
         workspace,
         budget: Budget {

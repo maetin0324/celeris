@@ -107,7 +107,7 @@ fn sigterm_kills_the_worker_process_and_exits_130() {
         priority: 0,
         worker_hint: WorkerHint {
             tier: Tier::Standard,
-            adapter: None,
+
         },
         workspace: WorkspaceSpec::Local {
             path: ws.clone(),

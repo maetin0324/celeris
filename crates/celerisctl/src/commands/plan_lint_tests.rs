@@ -28,7 +28,7 @@ fn base_task(status: Status, acceptance: Vec<Criterion>) -> Task {
         priority: 0,
         worker_hint: WorkerHint {
             tier: Tier::Standard,
-            adapter: None,
+
         },
         workspace: WorkspaceSpec::Local {
             path: id.to_string().into(),

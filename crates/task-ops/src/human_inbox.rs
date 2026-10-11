@@ -744,9 +744,8 @@ impl Builder<'_> {
                 kind: InboxKind::Unroutable,
                 title: format!("担当が決まらない: {}", task.title),
                 detail: clip(&format!(
-                    "tier={:?} adapter={}",
-                    hint.tier,
-                    hint.adapter.as_deref().unwrap_or("-")
+                    "tier={:?} harness=route-selected",
+                    hint.tier
                 )),
                 options: vec![
                     opt(

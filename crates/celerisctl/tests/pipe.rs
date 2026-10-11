@@ -49,7 +49,7 @@ fn sample_task(i: usize) -> Task {
         priority: 0,
         worker_hint: WorkerHint {
             tier: Tier::Standard,
-            adapter: None,
+
         },
         workspace: WorkspaceSpec::Local {
             path: format!("ws-{i}").into(),

@@ -495,7 +495,7 @@ pub(crate) fn event_blocks(
             cursor: cursor.encode(),
             title: task.title.clone(),
             assignee: task.assignee.clone(),
-            harness: task.worker_hint.adapter.clone(),
+            harness: task.harness_id.as_ref().map(ToString::to_string),
             tier: task.worker_hint.tier,
             project_id: task.project_id,
             progress: group,

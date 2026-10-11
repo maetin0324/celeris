@@ -8691,12 +8691,6 @@
     },
     "WorkerHint": {
       "properties": {
-        "adapter": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
         "tier": {
           "$ref": "#/$defs/Tier"
         }

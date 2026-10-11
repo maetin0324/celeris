@@ -374,7 +374,7 @@ pub struct ConfigView {
 pub struct RoleConfigView {
     pub id: String,
     pub tier: Option<Tier>,
-    pub adapter: Option<String>,
+    pub harness: Option<String>,
     pub max_turns: Option<u32>,
     pub max_wall_secs: Option<u64>,
     /// 指示文が 1 文字以上あるか（中身は出さない）。

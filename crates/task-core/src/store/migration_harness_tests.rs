@@ -42,14 +42,14 @@ fn migration_harness_adds_task_and_run_selection_columns() {
 fn migration_harness_resolves_registered_and_audits_unresolved_once() {
     let dir = tempfile::tempdir().expect("temporary directory");
     let store = SqliteStore::open(&dir.path().join("migration.db")).expect("open migrated store");
-    let mut resolved = sample_task(Status::Draft);
-    resolved.worker_hint.adapter = Some("harness-a".into());
+    let resolved = sample_task(Status::Draft);
     let resolved_id = resolved.id;
     store.insert(&resolved).expect("insert resolvable task");
-    let mut unresolved = sample_task(Status::Draft);
-    unresolved.worker_hint.adapter = Some("removed-harness".into());
+    set_legacy_hint_adapter(&store, resolved_id, "harness-a");
+    let unresolved = sample_task(Status::Draft);
     let unresolved_id = unresolved.id;
     store.insert(&unresolved).expect("insert unresolved task");
+    set_legacy_hint_adapter(&store, unresolved_id, "removed-harness");
 
     let registered = BTreeSet::from([crate::llm_route::HarnessId::from("harness-a")]);
     assert_eq!(
@@ -86,4 +86,24 @@ fn migration_harness_resolves_registered_and_audits_unresolved_once() {
             .count(),
         1
     );
+}
+
+fn set_legacy_hint_adapter(store: &SqliteStore, task_id: crate::TaskId, value: &str) {
+    let conn = store.lock().expect("lock store");
+    let mut task: serde_json::Value = serde_json::from_str(
+        &conn
+            .query_row(
+                "SELECT json FROM tasks WHERE id=?1",
+                [task_id.to_string()],
+                |row| row.get::<_, String>(0),
+            )
+            .expect("read task json"),
+    )
+    .expect("parse task json");
+    task["worker_hint"]["adapter"] = serde_json::json!(value);
+    conn.execute(
+        "UPDATE tasks SET json=?2 WHERE id=?1",
+        rusqlite::params![task_id.to_string(), serde_json::to_string(&task).expect("serialize task")],
+    )
+    .expect("write legacy task json");
 }

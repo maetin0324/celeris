@@ -671,7 +671,7 @@ async fn create_task_returns_201_with_location_and_cli_defaults() {
     assert_eq!(task.get("labels"), None, "空のラベルは JSON に出さない");
     assert_eq!(
         task["worker_hint"],
-        json!({"tier": "standard", "adapter": null})
+        json!({"tier": "standard"})
     );
     assert_eq!(
         task["budget"],

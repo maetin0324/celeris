@@ -688,7 +688,7 @@ auth = "publickey"
         priority: 0,
         worker_hint: task_core::WorkerHint {
             tier: task_core::Tier::Standard,
-            adapter: None,
+
         },
         workspace: task_core::WorkspaceSpec::Remote {
             cluster: "auto".into(),

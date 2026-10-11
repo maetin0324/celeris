@@ -47,7 +47,7 @@ pub(crate) fn insert_task(
         priority: 0,
         worker_hint: WorkerHint {
             tier: task_core::Tier::Standard,
-            adapter: None,
+
         },
         workspace: WorkspaceSpec::Local {
             path: PathBuf::from("/tmp/ws"),

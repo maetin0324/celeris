@@ -781,7 +781,7 @@ async fn a_compaction_task_does_not_get_a_worktree_even_when_its_project_has_a_p
         workspace: None,
         cluster: None,
         workspace_mode: Some(task_core::WorkspaceMode::Shared),
-        adapter: None,
+        harness: None,
         repos: Vec::new(),
         labels: Vec::new(),
         skills: Vec::new(),

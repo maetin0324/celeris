@@ -47,7 +47,7 @@ fn insert_done_task(store: &SqliteStore, updated_at: OffsetDateTime) -> TaskId {
         priority: 0,
         worker_hint: WorkerHint {
             tier: task_core::Tier::Standard,
-            adapter: None,
+
         },
         workspace: WorkspaceSpec::Local {
             path: PathBuf::from("/tmp/ws"),

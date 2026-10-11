@@ -108,7 +108,7 @@ fn notify_digest_phase_checkpoint_is_batched_as_inbox_new() {
             priority: 0,
             worker_hint: WorkerHint {
                 tier: Tier::Standard,
-                adapter: None,
+
             },
             workspace: WorkspaceSpec::Local {
                 path: "ws".into(),

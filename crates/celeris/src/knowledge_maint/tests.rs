@@ -76,7 +76,7 @@ fn terminal_task(
         priority: 1,
         worker_hint: WorkerHint {
             tier: Tier::Standard,
-            adapter: None,
+
         },
         workspace: WorkspaceSpec::Local {
             path: "ws".into(),
@@ -368,7 +368,7 @@ fn a_failed_run_is_retried_exactly_once() {
     assert!(run.retried_at.is_some());
     assert!(run.via.is_none(), "やり直しで経路の記録は消える");
     let second = store.get(second_run_id).expect("get").expect("some");
-    assert_eq!(second.worker_hint.adapter.as_deref(), Some(LANGMEM_ADAPTER));
+    assert_eq!(second.harness_id.as_ref().map(AsRef::as_ref), Some(LANGMEM_ADAPTER));
     assert_eq!(
         task_core::report::support_kind(&second),
         Some("knowledge"),

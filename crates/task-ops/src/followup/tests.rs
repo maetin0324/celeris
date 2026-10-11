@@ -323,7 +323,7 @@ fn worker_only_fields_are_dropped_and_status_is_always_draft() {
     };
     assert_eq!(t.parent_id, None);
     assert_eq!(t.assignee, None);
-    assert_eq!(t.worker_hint.adapter, None);
+    assert_eq!(t.harness_id, None);
     assert_eq!(t.status, Status::Draft);
     assert!(
         matches!(&t.workspace, WorkspaceSpec::Local { path, .. } if path == &PathBuf::from(t.id.to_string()))

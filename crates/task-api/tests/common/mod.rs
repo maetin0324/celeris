@@ -248,7 +248,7 @@ pub fn config_view() -> ConfigView {
         roles: vec![RoleConfigView {
             id: "lead".into(),
             tier: Some(Tier::Frontier),
-            adapter: None,
+            harness: None,
             max_turns: Some(40),
             max_wall_secs: None,
             has_instructions: true,
@@ -363,7 +363,7 @@ pub fn new_task(kind: TaskKind, status: Status) -> Task {
         priority: 0,
         worker_hint: WorkerHint {
             tier: Tier::Standard,
-            adapter: None,
+
         },
         workspace: WorkspaceSpec::Local {
             path: PathBuf::from(id.to_string()),

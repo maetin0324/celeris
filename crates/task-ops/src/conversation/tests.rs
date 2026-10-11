@@ -52,14 +52,14 @@ fn specs() -> (Vec<RoleSpec>, Vec<GenreSpec>) {
         RoleSpec {
             id: "secretary".into(),
             tier: Some(Tier::Standard),
-            adapter: Some("claude-code".into()),
+            harness: Some("claude-code".into()),
             max_turns: Some(40),
             ..RoleSpec::default()
         },
         RoleSpec {
             id: "literature-reader".into(),
             tier: Some(Tier::Cheap),
-            adapter: Some("paperqa".into()),
+            harness: Some("paperqa".into()),
             ..RoleSpec::default()
         },
     ];
@@ -134,7 +134,7 @@ fn talking_to_a_node_records_the_message_and_makes_one_ready_conversation_task()
     assert_eq!(task.project_id, Some(project.id));
     assert_eq!(task.genre.as_deref(), Some("secretary"));
     assert_eq!(task.role.as_deref(), Some("secretary"));
-    assert_eq!(task.worker_hint.adapter.as_deref(), Some("claude-code"));
+    assert_eq!(task.harness_id.as_ref().map(AsRef::as_ref), Some("claude-code"));
     assert_eq!(
         task.budget.max_turns, CONVERSATION_MAX_TURNS,
         "役割の 40 ではなく対話用の予算"
@@ -192,7 +192,7 @@ fn conversation_always_uses_the_conversation_genre_regardless_of_the_nodes_own_g
     );
     assert_eq!(survey.task.role.as_deref(), Some("secretary"));
     assert_eq!(
-        survey.task.worker_hint.adapter.as_deref(),
+        survey.task.harness_id.as_ref().map(AsRef::as_ref),
         Some("claude-code"),
         "paperqa ではなく対話用の adapter"
     );
@@ -261,7 +261,7 @@ fn a_web_research_node_still_talks_through_the_conversation_genre() {
     );
     assert_eq!(started.task.role.as_deref(), Some("secretary"));
     assert_eq!(
-        started.task.worker_hint.adapter.as_deref(),
+        started.task.harness_id.as_ref().map(AsRef::as_ref),
         Some("claude-code")
     );
 }

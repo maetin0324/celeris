@@ -63,7 +63,7 @@ fn new_task(dir: &std::path::Path, check: Check, max_retries: u32) -> Task {
         priority: 0,
         worker_hint: WorkerHint {
             tier: Tier::Standard,
-            adapter: None,
+
         },
         workspace: WorkspaceSpec::Local {
             path: dir.to_path_buf(),

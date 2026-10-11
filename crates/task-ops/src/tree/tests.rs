@@ -30,7 +30,7 @@ fn parent(repos: &[&str]) -> Task {
         priority: 2,
         worker_hint: WorkerHint {
             tier: Tier::Standard,
-            adapter: None,
+
         },
         workspace: WorkspaceSpec::Local {
             path: "/tmp/ws".into(),

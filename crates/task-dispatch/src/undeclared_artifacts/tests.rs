@@ -317,7 +317,7 @@ mod backfill_tests {
             priority: 0,
             worker_hint: WorkerHint {
                 tier: task_core::Tier::Standard,
-                adapter: None,
+
             },
             workspace,
             budget: Budget {

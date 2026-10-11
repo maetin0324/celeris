@@ -2088,12 +2088,12 @@ fn harness_genre_contexts() -> (GenreContext, GenreContext) {
     let roles = vec![
         task_core::RoleSpec {
             id: "literature-reader".into(),
-            adapter: Some("paperqa".into()),
+            harness: Some("paperqa".into()),
             ..task_core::RoleSpec::default()
         },
         task_core::RoleSpec {
             id: "implementer".into(),
-            adapter: Some("claude-code".into()),
+            harness: Some("claude-code".into()),
             ..task_core::RoleSpec::default()
         },
     ];

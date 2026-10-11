@@ -163,7 +163,6 @@ impl Dispatcher {
             } else {
                 self.config.execution.planner.tier
             };
-            task.worker_hint.adapter = Some(self.config.execution.planner.adapter.clone());
             task.budget.max_turns = self.config.execution.planner.max_turns;
             task.budget.max_wall_secs = self.config.execution.planner.max_wall_secs;
         } else if let Some(wu) = &current_wu {
@@ -439,12 +438,12 @@ impl Dispatcher {
         }
         // ADR-0052 D1 / D2（Phase 64）: 知識整理 run は dispatch の直前に `langmem` の接続先へ
         // `GET /models` を当て、届かなければ tier `cheap` の**汎用**ハーネスへ倒す
-        // （`worker_hint.adapter` を外すだけ ＝ ADR-0049 の選び方にそのまま乗る）。LLM は呼ばない。
+        // （task harness の固定を外すだけで、通常の route 選択へ戻す）。LLM は呼ばない。
         let fallback_reason = self.knowledge_fallback_reason(&task, now);
         if let Some(reason) = &fallback_reason
             && let Some(tier) = self.config.knowledge.fallback_tier
         {
-            task.worker_hint.adapter = None;
+            task.harness_id = None;
             task.worker_hint.tier = tier;
             task.budget.max_turns = KNOWLEDGE_FALLBACK_MAX_TURNS;
             task.budget.max_wall_secs = KNOWLEDGE_FALLBACK_MAX_WALL_SECS;

@@ -27,7 +27,7 @@ fn task(status: Status, genre: &str, age: i64) -> Task {
         priority: 0,
         worker_hint: WorkerHint {
             tier: Tier::Standard,
-            adapter: None,
+
         },
         workspace: WorkspaceSpec::local(id.to_string()),
         budget: Budget {

@@ -309,7 +309,7 @@ fn sample_task() -> crate::model::Task {
         priority: 10,
         worker_hint: WorkerHint {
             tier: Tier::Standard,
-            adapter: None,
+
         },
         workspace: WorkspaceSpec::local("/tmp"),
         repos: vec![],

@@ -213,7 +213,7 @@ fn build_run_spec(
             // ADR-0047 D4: harness の解決に頼らず、adapter/tier を明示する（`knowledge` harness は
             // 組み込みのままで `[[genres]]`/`[[roles]]` に射影されないため。task_core::report::KNOWLEDGE_ROLE
             // のドキュメントコメント参照）。
-            adapter: Some(LANGMEM_ADAPTER.to_string()),
+            harness: Some(LANGMEM_ADAPTER.to_string()),
             labels: Vec::new(),
             category: None,
             status: None,

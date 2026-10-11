@@ -206,7 +206,7 @@ fn remote_task() -> Task {
         priority: 0,
         worker_hint: WorkerHint {
             tier: Tier::Standard,
-            adapter: None,
+
         },
         workspace: WorkspaceSpec::Remote {
             cluster: "sirius".into(),

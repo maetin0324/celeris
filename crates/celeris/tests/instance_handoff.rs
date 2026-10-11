@@ -147,17 +147,17 @@ drain_timeout_secs = 60
 
     /// ADR-0041 D5: 検証の煙試験と同じ形のタスク（`genre = "smoke"`、アダプタは `fake`）。
     /// `verify.sh` の検査 6 が `POST /tasks {genre: "smoke", role: "smoke"}` で作るものと同じ
-    /// （組み込みの分野 `smoke` の `default_role` が `adapter = "fake"` を入れる）。
+    /// （組み込みの `smoke` 役割が `harness = "fake"` を入れる）。
     fn smoke_task(&self, title: &str) -> TaskId {
         self.ready_task_with(title, Some("smoke"), Some("fake"))
     }
 
-    fn ready_task_with(&self, title: &str, genre: Option<&str>, adapter: Option<&str>) -> TaskId {
+    fn ready_task_with(&self, title: &str, genre: Option<&str>, harness: Option<&str>) -> TaskId {
         let ws = self.root.join("ws").join(title);
         std::fs::create_dir_all(&ws).unwrap_or_else(|e| panic!("ws: {e}"));
         let now = OffsetDateTime::now_utc();
         let task = Task {
-            harness_id: None,
+            harness_id: harness.map(task_core::llm_route::HarnessId::from),
             requirements: Default::default(),
             tree: None,
             paused_at: None,
@@ -183,7 +183,7 @@ drain_timeout_secs = 60
             priority: 0,
             worker_hint: WorkerHint {
                 tier: Tier::Standard,
-                adapter: adapter.map(str::to_string),
+
             },
             workspace: WorkspaceSpec::Local {
                 path: ws,
@@ -489,7 +489,7 @@ roles = ["smoke"]
         .into_iter()
         .find(|r| r.id == "smoke")
         .unwrap_or_else(|| panic!("role"));
-    assert_eq!(role.adapter.as_deref(), Some("claude-code"));
+    assert_eq!(role.harness.as_deref(), Some("claude-code"));
     let genre = plain
         .genre_specs()
         .into_iter()
@@ -507,7 +507,7 @@ roles = ["smoke"]
         .filter(|r| r.id == "smoke")
         .collect();
     assert_eq!(roles.len(), 1, "`smoke` の役割は 1 つだけ");
-    assert_eq!(roles[0].adapter.as_deref(), Some("fake"));
+    assert_eq!(roles[0].harness.as_deref(), Some("fake"));
     assert_eq!(roles[0].tier, Some(Tier::Standard));
     assert_eq!(roles[0].max_turns, Some(1));
 

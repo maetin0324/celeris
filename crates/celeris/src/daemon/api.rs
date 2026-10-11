@@ -154,7 +154,7 @@ pub fn config_view(config: &Config, listen: SocketAddr) -> ConfigView {
             .map(|r| RoleConfigView {
                 id: r.id.clone(),
                 tier: r.tier,
-                adapter: r.adapter.clone(),
+                harness: r.harness.clone(),
                 max_turns: r.max_turns,
                 max_wall_secs: r.max_wall_secs,
                 has_instructions: r.instructions.as_ref().is_some_and(|s| !s.is_empty()),

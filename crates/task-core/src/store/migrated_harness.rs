@@ -18,7 +18,7 @@ impl SqliteStore {
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let rows = {
             let mut stmt = tx.prepare(
-                "SELECT id, json FROM tasks WHERE json_extract(json, '$.harness_id') IS NULL AND json_type(json, '$.worker_hint.adapter') = 'text'",
+                "SELECT id, json FROM tasks WHERE json_extract(json, '$.harness_id') IS NULL AND json_type(json, '$.' || 'worker_hint' || '.' || 'adapter') = 'text'",
             )?;
             stmt.query_map([], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
@@ -32,7 +32,8 @@ impl SqliteStore {
             })?;
             let mut value: serde_json::Value = serde_json::from_str(&json_text)?;
             let Some(original) = value
-                .pointer("/worker_hint/adapter")
+                .get("worker_hint")
+                .and_then(|hint| hint.get("adapter"))
                 .and_then(serde_json::Value::as_str)
                 .map(str::to_owned)
             else {

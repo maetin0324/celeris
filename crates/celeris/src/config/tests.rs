@@ -367,7 +367,7 @@ fn loads_example_config_and_resolves_relative_paths() {
     // 監査 M-1（Phase 59 追記）: `[[harnesses]]`（互換の射影で `[[genres]]` になる）は
     // `config/org.example.toml` の課が使うもの全部が揃っている（`[[harnesses]]` の宣言順）。
     assert!(
-        cfg.roles.iter().all(|r| r.adapter.is_none()),
+        cfg.roles.iter().all(|r| r.harness.is_none()),
         "{:?}",
         cfg.roles
     );
@@ -637,7 +637,7 @@ fn routing_sample_task() -> task_core::Task {
         priority: 10,
         worker_hint: WorkerHint {
             tier: Tier::Standard,
-            adapter: None,
+
         },
         workspace: WorkspaceSpec::local("/tmp"),
         repos: vec![],
@@ -1491,7 +1491,7 @@ fn loads_web_research_example_config() {
         .iter()
         .find(|r| r.id == "web-scout")
         .expect("web-scout role");
-    assert_eq!(role.adapter.as_deref(), Some("local-deep-research"));
+    assert_eq!(role.harness.as_deref(), Some("local-deep-research"));
     // ADR-0030 D1: `[secrets] dir` が読め、設定ファイル基準で絶対化される。鍵の値そのものはファイルに無い。
     let secrets = cfg.secrets.as_ref().expect("[secrets]");
     assert!(secrets.dir.is_absolute());
@@ -1517,10 +1517,7 @@ fn backoff_and_reviewer_settings_map_to_dispatch_config() {
     assert_eq!(d.min_free_disk_mb, 5120);
     assert_eq!(
         d.reviewer_hint,
-        WorkerHint {
-            tier: Tier::Standard,
-            adapter: None
-        }
+        WorkerHint { tier: Tier::Standard }
     );
 
     let text = r#"retry_backoff_base_secs = 0
@@ -1545,10 +1542,7 @@ source_kinds = ["claude_oauth"]
     assert_eq!(d.max_requeues, 0);
     assert_eq!(
         d.reviewer_hint,
-        WorkerHint {
-            tier: Tier::Cheap,
-            adapter: Some("claude-code".into())
-        }
+        WorkerHint { tier: Tier::Cheap }
     );
 }
 
@@ -1835,8 +1829,8 @@ max_tree_depth = 2
             .unwrap()
             .starts_with("You lead")
     );
-    assert_eq!(specs[0].adapter, None);
-    assert_eq!(specs[1].adapter.as_deref(), Some("fake"));
+    assert_eq!(specs[0].harness, None);
+    assert_eq!(specs[1].harness.as_deref(), Some("fake"));
     assert_eq!(specs[1].tier, None);
     // 書いていない値は既定のまま。
     let limits = cfg.delegation_limits();

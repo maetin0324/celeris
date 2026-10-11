@@ -159,7 +159,7 @@ fn schedules_once_across_restarts_disabled_and_inflight_do_not_schedule() {
     let initial = std::fs::read(&path).unwrap();
     let state: State = serde_json::from_slice(&initial).unwrap();
     let task = store.get(state.pending.unwrap().task).unwrap().unwrap();
-    assert_eq!(task.worker_hint.adapter.as_deref(), Some("langmem"));
+    assert_eq!(task.harness_id.as_ref().map(AsRef::as_ref), Some("langmem"));
     assert_eq!(task_core::report::support_kind(&task), Some("knowledge"));
     tick(
         &store,

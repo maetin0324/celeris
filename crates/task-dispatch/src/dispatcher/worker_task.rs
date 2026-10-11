@@ -155,7 +155,7 @@ pub(super) async fn run_worker(
     // ADR-0052 D2（Phase 64）: フォールバックした知識整理 run は、DB のタスクではなく**ワーカーに渡す
     // 写し**だけを書き換える（専用アダプタの固定を外し、予算を `max_turns = 8` / `max_wall_secs = 600` に）。
     if let Some(fallback) = &extras.knowledge_fallback {
-        task.worker_hint.adapter = None;
+        task.harness_id = None;
         task.budget = fallback.budget;
         tracing::debug!(task_id = %task_id, adapter = %fallback.adapter, "knowledge: running the fallback extraction");
     }

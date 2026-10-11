@@ -25,7 +25,7 @@ fn sample_task(status: Status, parent_id: Option<TaskId>) -> Task {
         priority: 0,
         worker_hint: WorkerHint {
             tier: task_core::Tier::Standard,
-            adapter: None,
+
         },
         workspace: WorkspaceSpec::Local {
             path: "/tmp".into(),

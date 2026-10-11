@@ -197,7 +197,7 @@ fn task_fixture(status: Status, workspace: WorkspaceSpec) -> Task {
         priority: 0,
         worker_hint: task_core::WorkerHint {
             tier: task_core::Tier::Standard,
-            adapter: None,
+
         },
         workspace,
         budget: task_core::Budget {

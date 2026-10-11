@@ -140,7 +140,7 @@ pub struct NewTaskSpec {
     pub workspace_mode: Option<task_core::WorkspaceMode>,
     /// 省略時は役割の既定 → 指定なし。
     #[serde(default)]
-    pub adapter: Option<String>,
+    pub harness: Option<String>,
     /// ADR-0043 D2: このタスクが使う案件のリポジトリを**名前で**指定する（`project_repos.name`）。
     /// 省略すると **親 → 案件の primary** を継ぐ。案件に無い名前は 422、リモートのリポジトリを
     /// 他と混ぜたものも 422（`task_core::resolve_task_repos`）。
@@ -666,7 +666,7 @@ fn build_task(
             ));
         }
         Some(
-            task_core::browser::browser_adapter(spec.adapter.as_deref())
+            task_core::browser::browser_adapter(spec.harness.as_deref())
                 .map_err(OpsError::Validation)?
                 .to_owned(),
         )
@@ -817,7 +817,12 @@ fn build_task(
         route: None,
     };
     let task = Task {
-        harness_id: None,
+        harness_id: browser_adapter
+            .or(spec.harness)
+            .or_else(|| role.and_then(|r| r.harness.clone()))
+            .or_else(|| org_role.and_then(|r| r.harness.clone()))
+            .or_else(|| genre_role.and_then(|r| r.harness.clone()))
+            .map(task_core::llm_route::HarnessId::from),
         requirements: spec.requirements,
         tree: None,
         paused_at: None,
@@ -840,11 +845,6 @@ fn build_task(
                 .or(org_role.and_then(|r| r.tier))
                 .or(genre_role.and_then(|r| r.tier))
                 .unwrap_or(DEFAULT_TIER),
-            adapter: browser_adapter
-                .or(spec.adapter)
-                .or_else(|| role.and_then(|r| r.adapter.clone()))
-                .or_else(|| org_role.and_then(|r| r.adapter.clone()))
-                .or_else(|| genre_role.and_then(|r| r.adapter.clone())),
         },
         workspace,
         budget,

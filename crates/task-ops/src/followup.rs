@@ -129,8 +129,8 @@ pub fn bind_to_origin(
             "assignee {assignee} ignored (celeris assigns the owner deterministically; ADR-0069 D1)"
         ));
     }
-    if let Some(adapter) = spec.adapter.take() {
-        notes.push(format!("adapter {adapter} ignored (routing is celeris's)"));
+    if let Some(adapter) = spec.harness.take() {
+        notes.push(format!("harness {adapter} ignored (routing is celeris's)"));
     }
     let dropped_workspace = spec.workspace.take().is_some();
     let dropped_cluster = spec.cluster.take().is_some();

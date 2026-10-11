@@ -105,7 +105,7 @@ pub fn create_plan(
         priority: spec.priority,
         worker_hint: WorkerHint {
             tier: spec.tier,
-            adapter: None,
+
         },
         workspace,
         budget,

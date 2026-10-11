@@ -29,7 +29,7 @@ fn create_plan_inserts_plan_task_and_created_event() {
     assert_eq!(task.status, Status::Draft);
     assert!(task.acceptance.is_empty());
     assert_eq!(task.worker_hint.tier, Tier::Frontier);
-    assert_eq!(task.worker_hint.adapter, None);
+    assert_eq!(task.harness_id, None);
     assert_eq!(task.budget.max_turns, DEFAULT_MAX_TURNS);
     assert_eq!(task.budget.max_wall_secs, DEFAULT_MAX_WALL_SECS);
     assert_eq!(task.budget.max_retries, DEFAULT_MAX_RETRIES);

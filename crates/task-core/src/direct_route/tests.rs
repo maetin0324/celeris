@@ -29,7 +29,7 @@ fn task() -> Task {
         priority: 10,
         worker_hint: WorkerHint {
             tier: Tier::Standard,
-            adapter: None,
+
         },
         workspace: WorkspaceSpec::local("/tmp/direct-route"),
         repos: vec![RepoRef {

@@ -30,7 +30,7 @@ struct Cli {
     /// `examples/hello-crate` の絶対パス。`config.toml` の harness が `--adapter` に対応する設定である前提。
     #[arg(long)]
     workspace: PathBuf,
-    /// `worker_hint.adapter`（`config.toml` の `[harnesses.<id>]` と一致させること）。
+    /// タスクの harness id（`config.toml` の `[harnesses.<id>]` と一致させること）。
     #[arg(long, default_value = "claude-code")]
     adapter: String,
 }
@@ -81,7 +81,7 @@ fn main() {
         priority: 0,
         worker_hint: WorkerHint {
             tier: Tier::Standard,
-            adapter: Some(cli.adapter.clone()),
+
         },
         workspace: WorkspaceSpec::Local {
             path: cli.workspace,

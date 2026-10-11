@@ -260,7 +260,7 @@ impl CosChatContext {
             priority: 0,
             worker_hint: WorkerHint {
                 tier: Tier::Frontier,
-                adapter: None,
+
             },
             workspace: WorkspaceSpec::Local {
                 path: workspace.to_path_buf(),

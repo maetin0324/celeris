@@ -45,7 +45,7 @@ fn task(assignee: Option<&str>, project: Option<ProjectId>) -> Task {
         priority: 0,
         worker_hint: WorkerHint {
             tier: Tier::Cheap,
-            adapter: None,
+
         },
         workspace: WorkspaceSpec::Local {
             path: PathBuf::from("."),

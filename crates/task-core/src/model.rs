@@ -83,7 +83,6 @@ pub enum Tier {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct WorkerHint {
     pub tier: Tier,
-    pub adapter: Option<String>,
 }
 
 /// ADR-0041 D1: ローカルの作業場所の使い方。並列のタスクが同じ作業ツリーで `git checkout` して
@@ -645,7 +644,7 @@ pub struct RoleSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tier: Option<Tier>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub adapter: Option<String>,
+    pub harness: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_turns: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -719,7 +718,7 @@ impl GenreSpec {
     /// （`default_role` の役割の `adapter`）。`default_role` が無い・役割が無い・アダプタ指定が無ければ `None`。
     pub fn harness_adapter<'a>(&self, roles: &'a [RoleSpec]) -> Option<&'a str> {
         let default_role = self.default_role.as_deref()?;
-        RoleSpec::find(roles, default_role)?.adapter.as_deref()
+        RoleSpec::find(roles, default_role)?.harness.as_deref()
     }
 
     /// Phase 38（ADR-0028 追記）: 「ハーネス系の分野」か（決定的。`default_role` のアダプタが
@@ -2073,7 +2072,7 @@ mod tests {
     fn a_genre_is_a_harness_genre_when_its_default_role_runs_paperqa_or_ldr() {
         let paperqa = vec![RoleSpec {
             id: "literature-reader".into(),
-            adapter: Some("paperqa".into()),
+            harness: Some("paperqa".into()),
             ..RoleSpec::default()
         }];
         assert_eq!(literature().harness_adapter(&paperqa), Some("paperqa"));
@@ -2081,7 +2080,7 @@ mod tests {
 
         let ldr = vec![RoleSpec {
             id: "literature-reader".into(),
-            adapter: Some("local-deep-research".into()),
+            harness: Some("local-deep-research".into()),
             ..RoleSpec::default()
         }];
         assert!(literature().is_harness(&ldr));
@@ -2089,7 +2088,7 @@ mod tests {
         // claude-code / codex / acp / アダプタ指定なし / `default_role` なしはハーネス系でない。
         let coding = vec![RoleSpec {
             id: "literature-reader".into(),
-            adapter: Some("claude-code".into()),
+            harness: Some("claude-code".into()),
             ..RoleSpec::default()
         }];
         assert_eq!(literature().harness_adapter(&coding), Some("claude-code"));

@@ -2415,7 +2415,7 @@ impl Dispatcher {
     ///
     /// 検査は `base_url` ごとに 60 秒キャッシュするので、tick ごとには叩かない。
     fn knowledge_fallback_reason(&mut self, task: &Task, now: Instant) -> Option<String> {
-        if task.worker_hint.adapter.as_deref() != Some(task_worker::LangMemAdapter::ID) {
+        if !task.harness_id.as_ref().is_some_and(|id| id.as_ref() == task_worker::LangMemAdapter::ID) {
             return None;
         }
         if support_kind(task) != Some("knowledge") {

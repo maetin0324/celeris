@@ -6,8 +6,9 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::Response;
 use schemars::JsonSchema;
 use serde::Deserialize;
+use std::collections::HashMap;
 use task_core::{
-    ListFilter, ListOrder, MilestoneId, ProjectId, Status, StoreError, Task, TaskKind,
+    ListFilter, ListOrder, MilestoneId, ProjectId, Status, StoreError, Task, TaskKind, TaskStore,
 };
 use task_ops::OpsError;
 use task_ops::add::NewTaskSpec;
@@ -23,6 +24,42 @@ use crate::state::ApiState;
 use super::{ApiResult, Params, json_response, no_query, read_json};
 
 const TITLE_QUERY_MAX_CHARS: usize = 200;
+
+fn attach_task_integrations(
+    store: &dyn TaskStore,
+    id: task_core::TaskId,
+    integrations: &mut Option<Vec<task_ops::view::IntegrationView>>,
+    promotion: &mut Option<task_ops::stranded::PromotionView>,
+    releases_dir: Option<&std::path::Path>,
+) -> Result<(), ApiProblem> {
+    let Some(task) = store.get(id).map_err(crate::problem::store_problem)? else {
+        return Ok(());
+    };
+    let mut repositories = HashMap::new();
+    if let Some(project_id) = task.project_id {
+        for repo in store
+            .repo_list(project_id)
+            .map_err(crate::problem::store_problem)?
+        {
+            if let task_core::WorkspaceSpec::Local { path, .. } = repo.location {
+                repositories.insert(
+                    repo.id,
+                    task_ops::stranded::IntegrationRepoContext {
+                        name: repo.name,
+                        path,
+                        default_branch: repo.default_branch.unwrap_or_else(|| "main".to_string()),
+                    },
+                );
+            }
+        }
+    }
+    let context = task_ops::stranded::IntegrationContext {
+        repositories,
+        releases_dir: releases_dir.map(std::path::Path::to_path_buf),
+    };
+    task_ops::view::attach_integrations(store, id, integrations, promotion, Some(&context))
+        .map_err(|e| crate::problem::ops_problem(store, e, None))
+}
 
 /// POST /tasks accepts the task specification and an optional write path hint.
 #[derive(Deserialize, JsonSchema)]
@@ -181,9 +218,10 @@ pub(super) async fn list_tasks(
         .filter(|c| !c.is_empty())
         .map(str::to_string);
     let ctx = state.inner.view.clone();
+    let releases_dir = state.inner.integration_releases_dir.clone();
     let list = state
         .blocking(move |store| {
-            task_ops::view::task_list(
+            let mut list = task_ops::view::task_list(
                 store,
                 &filter,
                 order,
@@ -199,7 +237,17 @@ pub(super) async fn list_tasks(
                     ApiProblem::bad_request("invalid cursor")
                 }
                 other => ops_problem(store, other, None),
-            })
+            })?;
+            for item in &mut list.items {
+                attach_task_integrations(
+                    store,
+                    item.id,
+                    &mut item.integrations,
+                    &mut item.promotion,
+                    releases_dir.as_deref(),
+                )?;
+            }
+            Ok(list)
         })
         .await?;
     Ok(json_response(StatusCode::OK, &list))
@@ -374,11 +422,19 @@ pub(super) async fn task_detail(
     no_query(&raw)?;
     let id = parse_task_id(&id)?;
     let ctx = state.inner.view.clone();
+    let releases_dir = state.inner.integration_releases_dir.clone();
     let detail = state
         .blocking(move |store| {
             let mut detail =
                 task_ops::view::task_detail(store, id, &ctx, OffsetDateTime::now_utc())
                     .map_err(|e| ops_problem(store, e, None))?;
+            attach_task_integrations(
+                store,
+                id,
+                &mut detail.integrations,
+                &mut detail.promotion,
+                releases_dir.as_deref(),
+            )?;
             let task = &detail.task;
             for run in &mut detail.runs {
                 run.files = Some(files::run_files(task, &ctx.workspace_root, &run.run_id));

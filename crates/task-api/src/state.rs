@@ -110,6 +110,7 @@ pub(crate) struct Inner {
     /// ADR-0040 D6（Phase 48）: `[selfdeploy] releases_dir` を読む係（celeris が渡す）。`None` なら
     /// `GET /releases` は空、`POST /releases/{sha12}/promote` は 409。
     pub(crate) releases: Option<crate::releases::SharedReleaseSource>,
+    pub(crate) integration_releases_dir: Option<std::path::PathBuf>,
     /// ADR-0040 D4（Phase 47）: `GET /health` の `release` / `mode` と、管理 API の 503 に使う役割。
     pub(crate) release: String,
     pub(crate) mode: task_core::DaemonMode,
@@ -191,6 +192,7 @@ impl ApiState {
             notify_digest_interval_secs: settings.notify_digest_interval_secs,
             notify_digest_max_lines: settings.notify_digest_max_lines,
             releases: settings.releases,
+            integration_releases_dir: settings.integration_releases_dir,
             release: settings.release,
             mode: settings.mode,
             role: settings.role,

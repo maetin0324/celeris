@@ -96,7 +96,7 @@ pub struct RunLimits {
 
 /// アダプタ内部の失敗（プロトコル上の `error` ではなく、起動不能など）。
 /// ディスパッチャは `WorkerError{retryable:true}` に写し、`Throttled`/`AuthFailed`/`Exhausted` は
-/// `ProviderPolicy::report` にも渡す（ADR-0005 D4/D6）。
+/// AccountBook の (source_id, account_id) cooldown にも記録する（ADR-0005 D4/D6）。
 #[derive(Debug, thiserror::Error)]
 pub enum AdapterError {
     #[error("failed to spawn worker: {0}")]

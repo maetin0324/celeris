@@ -3,13 +3,13 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use task_dispatch::{Dispatcher, StaticPolicy};
+use task_dispatch::Dispatcher;
 use task_ops::daemon::ProviderCheckView;
 use task_worker::Workspace;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
-use super::adapters::{build_adapters, build_harness_adapters, effective_models, provider_lives};
+use super::adapters::{build_adapters, build_harness_adapters, provider_lives};
 use super::clusters::ClusterMasters;
 use crate::{Config, accounts_admin, cluster_admin, config, notify};
 
@@ -221,37 +221,20 @@ pub(crate) fn reload_providers(
     }
     let cos_launch =
         super::cos_launch::build_cos_chat_launch(&new_config, &config.db.path, config.api.listen);
-    let policy = StaticPolicy::new(
-        new_config.provider_specs(),
-        Duration::from_secs(new_config.error_cooldown_secs),
-    );
     let llm_route_registry = new_config.llm_route_registry().map_err(|e| e.to_string())?;
     let harness_adapters = build_harness_adapters(&new_config).map_err(|e| e.to_string())?;
-    let adapters = build_adapters(&new_config);
-    let models = effective_models(&new_config);
     dispatcher
         .reload_account_limits()
         .map_err(|e| e.to_string())?;
-    dispatcher.reload_providers(
-        Box::new(policy),
-        models,
-        adapters,
-        new_config.account_pool_providers(),
-    );
     dispatcher.reload_cos_chat_launch(cos_launch);
     // ADR 2026-10-11 llm-source-harness-selection: harness and source×model are chosen from these.
     dispatcher.set_llm_route_registry(llm_route_registry);
     dispatcher.set_harness_adapters(harness_adapters);
-    // ADR 2026-10-08 account-concurrency-limits §(e): implicit accounts are per LLM source, so the
-    // new config's resolved sources must be in place before pruning or limiting.
-    dispatcher.set_provider_llm_sources(new_config.provider_llm_sources());
-    // §(d): a stored implicit limit goes away when no non-pool row uses its LLM source any more
-    // (row removed, turned into a pool, or moved to another source). Other stored limits survive.
+    // ADR 2026-10-08 account-concurrency-limits §(d)(e): a stored implicit limit goes away when its
+    // source is no longer declared without an account pool. Other stored limits survive.
     if let Err(error) = dispatcher.prune_implicit_account_limits() {
         tracing::warn!(%error, "cannot prune implicit account limits");
     }
-    // ADR-0132 付記 L1/L7: ローカルの行と probe 先も新しい設定から作り直す（health のキャッシュも捨てる）。
-    dispatcher.set_local_providers(new_config.local_cheap_providers());
     dispatcher.set_snapshot_providers(provider_lives(&new_config));
     // Phase 44: 役割・分野・委譲設定はディスパッチャ側（次に起動する run から効く）。
     dispatcher.reload_config(

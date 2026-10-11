@@ -42,7 +42,7 @@ fn fixture_on(
     String,
 ) {
     let db_path = dir.path().join("chat.sqlite");
-    let mut d = dispatcher_with_adapter_id(store.clone(), adapter, 2, true, harness);
+    let mut d = dispatcher_with_test_clock(store.clone(), adapter, 2, true);
     d.config.min_free_disk_mb = 0;
     d.config.execution.max_cos_runs = 2;
     d.config.knowledge.root = dir.path().join("knowledge");

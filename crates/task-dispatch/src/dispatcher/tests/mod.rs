@@ -1,6 +1,5 @@
 use super::*;
 
-use crate::policy::{ProviderSpec, StaticPolicy};
 
 use async_trait::async_trait;
 
@@ -105,41 +104,11 @@ fn dispatcher_with_test_clock(
     max_concurrency: usize,
     use_test_clock: bool,
 ) -> Dispatcher {
-    dispatcher_with_adapter_id(store, adapter, max_concurrency, use_test_clock, "instant")
-}
-
-/// `dispatcher_with_test_clock` と同じだが、provider `p1` のアダプタ id を選べる
-/// （ADR-0140: continuation の resume は `claude-code` だけが対象）。
-fn dispatcher_with_adapter_id(
-    store: Arc<dyn TaskStore>,
-    adapter: Arc<dyn WorkerAdapter>,
-    max_concurrency: usize,
-    use_test_clock: bool,
-    adapter_id: &str,
-) -> Dispatcher {
-    let mut policy = StaticPolicy::new(
-        vec![ProviderSpec {
-            id: "p1".into(),
-            adapter: adapter_id.into(),
-            tiers: vec![Tier::Frontier, Tier::Standard, Tier::Cheap],
-            concurrency: Some(max_concurrency),
-            model: "m".into(),
-        }],
-        Duration::from_secs(1),
-    );
     let policy_clock = Arc::new(StdMutex::new(Instant::now()));
-    if use_test_clock {
-        policy.set_test_clock(policy_clock.clone());
-    }
-    let mut adapters: HashMap<ProviderId, Arc<dyn WorkerAdapter>> = HashMap::new();
-    adapters.insert("p1".into(), adapter.clone());
     let mut dispatcher = Dispatcher::new(
         store,
-        Box::new(policy),
-        HashMap::from([("p1".to_string(), "m".to_string())]),
-        adapters,
-        std::collections::HashSet::new(),
         DispatchConfig {
+            source_error_cooldown: Duration::from_secs(1),
             delivery: Default::default(),
             max_concurrency,
             lease_grace: Duration::from_secs(60),
@@ -1247,38 +1216,14 @@ fn pool_dispatcher_with_requeues(
     max_concurrency: usize,
     max_requeues: u32,
 ) -> Dispatcher {
-    let mut providers = vec![ProviderSpec {
-        id: "p1".into(),
-        adapter: "claude-code".into(),
-        tiers: vec![Tier::Frontier, Tier::Standard, Tier::Cheap],
-        concurrency: Some(max_concurrency),
-        model: "m".into(),
-    }];
-    let mut adapters: HashMap<ProviderId, Arc<dyn WorkerAdapter>> = HashMap::new();
-    adapters.insert("p1".into(), adapter.clone());
     let mut route_sources = vec![(AccountAdapter::ClaudeCode.as_str(), "claude_oauth")];
     if let Some((id, _)) = &second_provider {
         route_sources.push((id, "test"));
     }
-    if let Some((id, a)) = second_provider {
-        providers.push(ProviderSpec {
-            id: id.into(),
-            adapter: "instant".into(),
-            tiers: vec![Tier::Frontier, Tier::Standard, Tier::Cheap],
-            concurrency: Some(max_concurrency),
-            model: "m".into(),
-        });
-        adapters.insert(id.into(), a);
-    }
-    let policy = StaticPolicy::new(providers, Duration::from_secs(1));
-    let account_pool_providers: std::collections::HashSet<ProviderId> = ["p1".to_string()].into();
     let mut d = Dispatcher::new(
         store,
-        Box::new(policy),
-        HashMap::from([("p1".to_string(), "m".to_string())]),
-        adapters,
-        account_pool_providers,
         DispatchConfig {
+            source_error_cooldown: Duration::from_secs(1),
             delivery: Default::default(),
             max_concurrency,
             lease_grace: Duration::from_secs(60),
@@ -2490,16 +2435,6 @@ fn parallel_dispatcher(
     let mut d = dispatcher(store, adapter, max_concurrency);
     d.config.workspace_root = workspace_root.to_path_buf();
     d.config.execution.max_parallel_work_units = limit;
-    d.policy = Box::new(StaticPolicy::new(
-        vec![ProviderSpec {
-            id: "p1".into(),
-            adapter: "instant".into(),
-            tiers: vec![Tier::Frontier, Tier::Standard, Tier::Cheap],
-            concurrency: Some(provider_concurrency),
-            model: "m".into(),
-        }],
-        Duration::from_secs(1),
-    ));
     d.set_account_limit("implicit", "p1", Some(provider_concurrency))
         .unwrap();
     d

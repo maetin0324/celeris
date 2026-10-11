@@ -421,6 +421,20 @@ impl Dispatcher {
                     }
                 }
             }
+            // ADR 2026-10-08 §(e): a source without an account pool cools down as one implicit account.
+            if account_adapter_for_source_kind(spec.kind.as_ref()).is_none()
+                && self
+                    .source_cooldowns
+                    .get(source_id)
+                    .is_some_and(|c| c.until > now)
+            {
+                for account in &accounts {
+                    state
+                        .quota
+                        .cooling_down
+                        .insert((source_id.clone(), account.clone()));
+                }
+            }
             if self.account_limits.is_some() {
                 for account in &accounts {
                     let key = (source_id.clone(), account.clone());

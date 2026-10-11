@@ -521,31 +521,15 @@ async fn department_reviewer_runs_share_and_continue_one_lead_session() {
     let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     seed_conversation_org(store.as_ref());
 
-    let policy = StaticPolicy::new(
-        vec![ProviderSpec {
-            id: "p1".into(),
-            // ADR-0054 D1: セッション継続に対応するアダプタ id（`crate::sessions::SUPPORTED_ADAPTERS`）。
-            adapter: "claude-code".into(),
-            tiers: vec![Tier::Frontier, Tier::Standard, Tier::Cheap],
-            concurrency: Some(2),
-            model: "m".into(),
-        }],
-        Duration::from_secs(1),
-    );
     let file_adapter = Arc::new(FileAdapter {
         plan_json: String::new(),
         review_json: r#"{"verdicts":[{"criterion":0,"pass":true,"reason":"ok"}]}"#.into(),
         delay: Duration::from_millis(5),
     });
-    let mut adapters: HashMap<ProviderId, Arc<dyn WorkerAdapter>> = HashMap::new();
-    adapters.insert("p1".into(), file_adapter.clone());
     let mut d = Dispatcher::new(
         store.clone(),
-        Box::new(policy),
-        HashMap::from([("p1".to_string(), "m".to_string())]),
-        adapters,
-        std::collections::HashSet::new(),
         DispatchConfig {
+            source_error_cooldown: Duration::from_secs(1),
             delivery: Default::default(),
             max_concurrency: 2,
             lease_grace: Duration::from_secs(60),
@@ -652,28 +636,13 @@ async fn a_rejected_lead_session_resume_retires_it_and_the_next_review_starts_fr
     let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     seed_conversation_org(store.as_ref());
 
-    let policy = StaticPolicy::new(
-        vec![ProviderSpec {
-            id: "p1".into(),
-            adapter: "claude-code".into(),
-            tiers: vec![Tier::Frontier, Tier::Standard, Tier::Cheap],
-            concurrency: Some(2),
-            model: "m".into(),
-        }],
-        Duration::from_secs(1),
-    );
     let adapter = Arc::new(ResumeRejectingReviewAdapter {
         review_json: r#"{"verdicts":[{"criterion":0,"pass":true,"reason":"ok"}]}"#.into(),
     });
-    let mut adapters: HashMap<ProviderId, Arc<dyn WorkerAdapter>> = HashMap::new();
-    adapters.insert("p1".into(), adapter.clone());
     let mut d = Dispatcher::new(
         store.clone(),
-        Box::new(policy),
-        HashMap::from([("p1".to_string(), "m".to_string())]),
-        adapters,
-        std::collections::HashSet::new(),
         DispatchConfig {
+            source_error_cooldown: Duration::from_secs(1),
             delivery: Default::default(),
             max_concurrency: 2,
             lease_grace: Duration::from_secs(60),
@@ -781,30 +750,15 @@ async fn a_resume_rejection_that_still_produced_a_result_self_heals_and_the_retr
     let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     seed_conversation_org(store.as_ref());
 
-    let policy = StaticPolicy::new(
-        vec![ProviderSpec {
-            id: "p1".into(),
-            adapter: "claude-code".into(),
-            tiers: vec![Tier::Frontier, Tier::Standard, Tier::Cheap],
-            concurrency: Some(2),
-            model: "m".into(),
-        }],
-        Duration::from_secs(1),
-    );
     let adapter = Arc::new(ResumeRejectingThenSucceedingReviewAdapter {
         review_json: r#"{"verdicts":[{"criterion":0,"pass":true,"reason":"ok"}]}"#.into(),
         calls: AtomicUsize::new(0),
     });
     let adapter_handle = adapter.clone();
-    let mut adapters: HashMap<ProviderId, Arc<dyn WorkerAdapter>> = HashMap::new();
-    adapters.insert("p1".into(), adapter.clone());
     let mut d = Dispatcher::new(
         store.clone(),
-        Box::new(policy),
-        HashMap::from([("p1".to_string(), "m".to_string())]),
-        adapters,
-        std::collections::HashSet::new(),
         DispatchConfig {
+            source_error_cooldown: Duration::from_secs(1),
             delivery: Default::default(),
             max_concurrency: 2,
             lease_grace: Duration::from_secs(60),

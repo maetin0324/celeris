@@ -293,7 +293,7 @@ fn yielded() -> Terminal {
 }
 
 fn claude_dispatcher(store: &Arc<dyn TaskStore>, adapter: Arc<ClaudeScriptAdapter>) -> Dispatcher {
-    let mut d = dispatcher_with_adapter_id(store.clone(), adapter, 1, false, "claude-code");
+    let mut d = dispatcher_with_test_clock(store.clone(), adapter, 1, false);
     d.config.execution.max_continuations_per_work_unit = 10;
     d
 }
@@ -1232,7 +1232,7 @@ fn session_jsonl(config: &std::path::Path, cwd: &std::path::Path, session_id: &s
 
 /// 再起動を挟む試験の dispatcher。時計は注入した試験用の時計（`test_now`）。
 fn restart_dispatcher(store: &Arc<dyn TaskStore>, adapter: Arc<ClaudeScriptAdapter>) -> Dispatcher {
-    let mut d = dispatcher_with_adapter_id(store.clone(), adapter, 1, true, "claude-code");
+    let mut d = dispatcher_with_test_clock(store.clone(), adapter, 1, true);
     d.config.execution.max_continuations_per_work_unit = 10;
     d
 }
@@ -1743,7 +1743,7 @@ async fn session_resume_comment_interrupt_resumes_phase_work_unit_session() {
         Vec::new(),
         vec![("a", vec![comment_interrupt(false)])],
     ));
-    let mut d = dispatcher_with_adapter_id(store.clone(), adapter.clone(), 2, false, "claude-code");
+    let mut d = dispatcher_with_test_clock(store.clone(), adapter.clone(), 2, false);
     d.config.workspace_root = root.path().to_path_buf();
     d.config.execution.max_parallel_work_units = 2;
     d.config.execution.max_continuations_per_work_unit = 10;

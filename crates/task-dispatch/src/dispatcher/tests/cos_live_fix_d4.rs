@@ -32,7 +32,7 @@ fn fixture(script: &str) -> Fixture {
         "-c".into(),
         script.into(),
     ]));
-    let mut d = dispatcher_with_adapter_id(store.clone(), adapter, 2, true, "fake");
+    let mut d = dispatcher_with_test_clock(store.clone(), adapter, 2, true);
     d.test_now = Some(Arc::new(StdMutex::new(
         OffsetDateTime::from_unix_timestamp(1_790_000_000).expect("clock"),
     )));

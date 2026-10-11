@@ -537,8 +537,9 @@ async fn tick_publishes_daemon_snapshot_to_watch() {
     assert_eq!(snap.providers[0].in_use, 1);
     assert!(snap.cooldowns.is_empty());
 
-    d.policy.report(
-        "p1".into(),
+    d.record_source_failure(
+        "p1",
+        "throttled",
         &ProviderOutcome::Throttled {
             retry_after: Duration::from_secs(60),
         },

@@ -1033,17 +1033,15 @@ impl Dispatcher {
         }
     }
 
-    /// ADR-0107 D2: browser fallback candidates for one run. Only providers that are enabled
-    /// (configured in the policy table, not an account pool), healthy
-    /// (not in cooldown) and whose adapter id is conformant in the runner-recorded ledger are
-    /// offered, ordered specialist first and one per adapter id. A `CredentialUse` policy never
+    /// ADR-0107 D2: browser fallback candidates for one run. Only declared harnesses whose
+    /// adapter id is a browser backend conformant in the runner-recorded ledger are offered,
+    /// ordered specialist first and one per adapter id. A `CredentialUse` policy never
     /// falls back (credential waits and auth sections must not be replayed). When a browser task
     /// ends up without any candidate the refusal is recorded as a progress event.
     pub(super) fn browser_fallback_candidates(
         &self,
         task_id: TaskId,
         run_id: &str,
-        primary_provider: &ProviderId,
         primary_adapter: &str,
         record: Option<&std::path::Path>,
     ) -> Vec<Arc<dyn WorkerAdapter>> {
@@ -1075,41 +1073,20 @@ impl Dispatcher {
             Some(Ok(ids)) => Some(ids),
             Some(Err(_)) | None => None,
         };
-        let cooling: std::collections::HashSet<ProviderId> = self
-            .policy
-            .cooldowns(Instant::now())
-            .into_iter()
-            .map(|c| c.provider)
-            .collect();
         let mut excluded: Vec<String> = Vec::new();
-        let mut candidates: Vec<(String, ProviderId, Arc<dyn WorkerAdapter>)> = Vec::new();
-        let mut providers: Vec<(&ProviderId, &Arc<dyn WorkerAdapter>)> =
-            self.adapters.iter().collect();
-        providers.sort_by(|a, b| a.0.cmp(b.0));
-        for (provider, adapter) in providers {
+        let mut candidates: Vec<(String, String, Arc<dyn WorkerAdapter>)> = Vec::new();
+        let mut harnesses: Vec<(&task_core::llm_route::HarnessId, &Arc<dyn WorkerAdapter>)> =
+            self.harness_adapters.iter().collect();
+        harnesses.sort_by(|a, b| a.0.cmp(b.0));
+        for (harness, adapter) in harnesses {
             let id = adapter.id();
-            if provider == primary_provider
-                || id == primary_adapter
-                || !task_worker::browser::BROWSER_BACKEND_IDS.contains(&id)
-            {
+            if id == primary_adapter || !task_worker::browser::BROWSER_BACKEND_IDS.contains(&id) {
                 continue;
             }
-            let reason = if self.account_pool_providers.contains(provider)
-                || self
-                    .implicit_account_limit(&self.implicit_source_of(provider))
-                    .is_none_or(|(limit, _)| limit == 0)
-            {
-                Some("disabled")
-            } else if cooling.contains(provider) {
-                Some("unhealthy")
-            } else if !conformant.as_ref().is_some_and(|ids| ids.contains(id)) {
-                Some("not_conformant")
+            if conformant.as_ref().is_some_and(|ids| ids.contains(id)) {
+                candidates.push((id.to_string(), harness.to_string(), Arc::clone(adapter)));
             } else {
-                None
-            };
-            match reason {
-                Some(reason) => excluded.push(format!("{provider}={reason}")),
-                None => candidates.push((id.to_string(), provider.clone(), Arc::clone(adapter))),
+                excluded.push(format!("{harness}=not_conformant"));
             }
         }
         candidates.sort_by(|a, b| {
@@ -1130,7 +1107,7 @@ impl Dispatcher {
                 task_id,
                 run_id,
                 &format!(
-                    "browser fallback refused: no enabled, healthy, conformant alternate backend ({ledger}; excluded: [{}])",
+                    "browser fallback refused: no conformant alternate backend ({ledger}; excluded: [{}])",
                     excluded.join(", ")
                 ),
             );
@@ -1180,12 +1157,11 @@ impl Dispatcher {
             extras.input_attachment_source = self.input_attachment_source();
         }
         let store = self.store.clone();
-        // ADR-0107 D2: the dispatcher builds the browser fallback list from provider state and
-        // the runner-recorded ledger; the worker wraps each candidate like the primary (ADR-0107).
+        // ADR-0107 D2: the dispatcher builds the browser fallback list from the declared harnesses
+        // and the runner-recorded ledger; the worker wraps each candidate like the primary (ADR-0107).
         let browser_candidates = self.browser_fallback_candidates(
             task_id,
             &run_id,
-            &provider,
             adapter.id(),
             task_worker::browser::conformance_record_path().as_deref(),
         );

@@ -56,7 +56,7 @@ pub(super) fn account_cooldown_reason_from_failure(reason: &str) -> AccountCoold
     }
 }
 
-/// 供給側失敗（ADR-0010 D5）なら `ProviderPolicy::report` に渡す結果を返す。起動失敗（`Spawn`）も供給側として扱う。
+/// 供給側失敗（ADR-0010 D5）なら cooldown の種別を決める結果を返す。起動失敗（`Spawn`）も供給側として扱う。
 /// `AdapterError`/`ProviderOutcome` は `task-dispatch`/`task-worker` の型なので、`task-ops` には移さない。
 pub fn provider_failure_outcome(e: &AdapterError) -> Option<ProviderOutcome> {
     match e {
@@ -70,30 +70,46 @@ pub fn provider_failure_outcome(e: &AdapterError) -> Option<ProviderOutcome> {
 }
 
 impl Dispatcher {
-    /// ADR-0013 D9: cooldown に入った供給側失敗の `ProviderThrottled`。期限はポリシーの `cooldowns()` から取り、
-    /// ポリシーが公開しない場合は `Throttled.retry_after` から計算する（どちらも無ければ記録しない）。
-    pub(super) fn provider_throttled_event(
-        &self,
-        provider: &str,
-        outcome: &ProviderOutcome,
+    /// ADR-0013 D9 / ADR 2026-10-08 §(e): a supply-side failure on a source without an account
+    /// pool cools down the source's implicit account (id = source id) and returns the
+    /// `ProviderThrottled` event recorded with the transition.
+    pub(super) fn record_source_failure(
+        &mut self,
+        source: &str,
         reason: &str,
-    ) -> Option<Event> {
-        let now = Instant::now();
-        let until = self
-            .policy
-            .cooldowns(now)
-            .into_iter()
-            .find(|c| c.provider == provider)
-            .map(|c| c.until)
-            .or(match outcome {
-                ProviderOutcome::Throttled { retry_after } => Some(now + *retry_after),
-                _ => None,
-            })?;
-        Some(Event::ProviderThrottled {
-            provider: provider.to_string(),
-            until: OffsetDateTime::now_utc() + until.saturating_duration_since(now),
+        outcome: &ProviderOutcome,
+    ) -> Event {
+        let now = (self.now_unix_fn)();
+        let fallback_secs = match outcome {
+            ProviderOutcome::Throttled { retry_after } if retry_after.as_secs() > 0 => {
+                retry_after.as_secs()
+            }
+            _ => self.config.source_error_cooldown.as_secs(),
+        };
+        let key = task_core::llm_route::SourceId::from(source);
+        let current = self
+            .source_cooldowns
+            .get(&key)
+            .filter(|c| c.until > now)
+            .cloned()
+            .map(|cooldown| crate::accounts::AccountState {
+                cooldown: Some(cooldown),
+                ..Default::default()
+            });
+        let cooldown = cooldown_for_failure(
+            current.as_ref(),
+            account_cooldown_reason_from_failure(reason),
+            now,
+            fallback_secs,
+        );
+        let until = OffsetDateTime::from_unix_timestamp(cooldown.until)
+            .unwrap_or_else(|_| OffsetDateTime::now_utc());
+        self.source_cooldowns.insert(key, cooldown);
+        Event::ProviderThrottled {
+            provider: source.to_string(),
+            until,
             reason: Some(reason.to_string()),
-        })
+        }
     }
 
     /// ADR-0024 D4: プール run の供給側失敗をアカウントの cooldown として記録する（プロバイダは cooldown にしない）。

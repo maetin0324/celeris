@@ -54,22 +54,22 @@ impl Dispatcher {
             })
         }));
         in_flight.sort_by(|a, b| a.since.cmp(&b.since).then(a.task_id.cmp(&b.task_id)));
-        let cooldowns = self
-            .policy
-            .cooldowns(now_instant)
-            .into_iter()
-            .map(|c| CooldownView {
-                source: self.implicit_source_of(&c.provider),
-                account_id: self.implicit_source_of(&c.provider),
-                until: rfc3339(now + c.until.saturating_duration_since(now_instant)),
-                reason: match c.reason {
-                    CooldownReason::Throttled => "throttled",
-                    CooldownReason::AuthFailed => "auth_failed",
-                    CooldownReason::Exhausted => "exhausted",
-                }
-                .to_string(),
+        // ADR 2026-10-08 §(e): cooldowns of the implicit accounts (id = source id).
+        let now_unix = (self.now_unix_fn)();
+        let mut cooldowns: Vec<CooldownView> = self
+            .source_cooldowns
+            .iter()
+            .filter(|(_, c)| c.until > now_unix)
+            .map(|(source, c)| CooldownView {
+                source: source.to_string(),
+                account_id: source.to_string(),
+                until: rfc3339(
+                    OffsetDateTime::from_unix_timestamp(c.until).unwrap_or(now),
+                ),
+                reason: account_cooldown_reason_name(c.reason).to_string(),
             })
             .collect();
+        cooldowns.sort_by(|a, b| a.source.cmp(&b.source));
         let task_waits = self.snapshot_task_waits();
         let providers = publisher
             .providers
@@ -172,8 +172,8 @@ impl Dispatcher {
     /// ADR-0024 D5 / ADR-0025 D6: スナップショットに載せる `accounts_root`（claude-code の別名）/ `accounts_roots`
     /// （アダプタ → 根ディレクトリ）/ `max_runs_per_account` / `accounts[]`（`adapter` → `id` の順）。
     /// `[accounts]` が無ければ全て空。
-    /// ADR 2026-10-08 account-concurrency-limits §(e): 非プール行の LLM source ごとの暗黙アカウント
-    /// （最初の行の設定順）。
+    /// ADR 2026-10-08 account-concurrency-limits §(e): account pool を持たない LLM source ごとの暗黙アカウント
+    /// （source id 順）。
     /// 上限の保存値は DB が正本なので、API が `account_limits` を読んで実効上限を組む。
     /// ADR 2026-10-11-task-wait-reasons D4: メモリの見送り理由（task_id 順・1 task に 1 件）。この tick の
     /// `dispatch_waits`（M1〜M6・M9）に、reviewing のまま委譲した子を待つ親（M7）と人の承認を待つ親（M8）を足す。
@@ -216,7 +216,7 @@ impl Dispatcher {
             .into_iter()
             .map(|source| task_ops::daemon::ImplicitAccountLive {
                 in_use: self.implicit_account_in_use(&source) as u32,
-                providers: self.implicit_account_providers(&source),
+                providers: Vec::new(),
                 source,
             })
             .collect()

@@ -21,7 +21,7 @@ fn fixture(
     let db_path = dir.path().join("celeris.db");
     let store = Arc::new(SqliteStore::open(&db_path).expect("store"));
     let adapter: Arc<dyn WorkerAdapter> = Arc::new(FakeAdapter::new(command));
-    let mut d = dispatcher_with_adapter_id(store.clone(), adapter, 2, true, "fake");
+    let mut d = dispatcher_with_test_clock(store.clone(), adapter, 2, true);
     d.config.execution.max_cos_runs = max_cos_runs;
     d.config.min_free_disk_mb = 0;
     d.config.knowledge.root = dir.path().join("knowledge");

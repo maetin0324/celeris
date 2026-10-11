@@ -187,15 +187,11 @@ impl Dispatcher {
                             cooldown_reason_name(&classified),
                             &classified,
                         ),
-                        _ => {
-                            if let Some(ev) = self.provider_throttled_event(
-                                &source,
-                                &classified,
-                                cooldown_reason_name(&classified),
-                            ) {
-                                throttled_events.push(ev);
-                            }
-                        }
+                        _ => throttled_events.push(self.record_source_failure(
+                            &source,
+                            cooldown_reason_name(&classified),
+                            &classified,
+                        )),
                     }
                 }
             }

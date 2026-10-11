@@ -12,19 +12,20 @@ use crate::{accounts_admin, build_dispatcher};
 
 const TOKEN: &str = "account-limits-token";
 
-fn write_config(dir: &Path, rows: &str) -> PathBuf {
+/// account pool を持つ source（`claude_oauth`）と持たない source（`qwen`、fake）を宣言する。`sources` は
+/// 追加の `[llm_sources.<id>]`。
+fn write_config(dir: &Path, sources: &str) -> PathBuf {
     let path = dir.join("config.toml");
     let db = dir.join("celeris.db");
     let ws = dir.join("ws");
     let accounts = dir.join("claude-accounts");
-    std::fs::create_dir_all(dir.join("providers.d")).expect("providers.d");
     std::fs::write(
         &path,
         format!(
-            "db = {db:?}\nworkspace_root = {ws:?}\nproviders_include = \"providers.d/*.toml\"\n\
+            "db = {db:?}\nworkspace_root = {ws:?}\n\
              [accounts]\nclaude_dir = {accounts:?}\nmax_runs_per_account = 2\n\
-             [[providers]]\nid = \"pool\"\nadapter = \"claude-code\"\naccount_pool = true\nconcurrency = 1\n\
-             [[providers]]\nid = \"qwen\"\nadapter = \"fake\"\nconcurrency = 1\n{rows}"
+             [llm_sources.claude_oauth]\nkind = \"claude_oauth\"\napi_format = \"anthropic\"\nmodels = [\"claude-sonnet-5\"]\n\
+             [llm_sources.qwen]\nkind = \"fake\"\nmodels = [\"fake\"]\n{sources}"
         ),
     )
     .expect("write config");
@@ -137,7 +138,6 @@ async fn patch_account_limits_validate_persist_and_survive_reload_and_restart() 
     let mut dispatcher = build_dispatcher(&config, Default::default()).expect("dispatcher");
     let (admin_tx, admin_rx) = tokio::sync::mpsc::channel(8);
     let (base, client, stop, server) = spawn_api(&config, &mut dispatcher, admin_tx).await;
-    let qwen_dir = dir.path().to_path_buf();
 
     let requests = async {
         let get = || async {
@@ -166,7 +166,7 @@ async fn patch_account_limits_validate_persist_and_survive_reload_and_restart() 
             }
         };
 
-        // GET: 実アカウントの既定、暗黙アカウント（既定。旧 concurrency は使わない）。プール行には暗黙アカウントが無い。
+        // GET: 実アカウントの既定、暗黙アカウント（既定）。account pool を持つ source には暗黙アカウントが無い。
         let list = get().await;
         assert_eq!(list["max_runs_per_account"], json!(2));
         let a = item(&list, "claude-code", "a");
@@ -174,9 +174,8 @@ async fn patch_account_limits_validate_persist_and_survive_reload_and_restart() 
         assert_eq!(a["effective_max_runs"], json!(2));
         assert_eq!(a["max_runs_source"], json!("default"));
         assert_eq!(a["implicit"], json!(false));
-        let qwen = item(&list, "implicit", "none");
+        let qwen = item(&list, "implicit", "qwen");
         assert_eq!(qwen["implicit"], json!(true));
-        assert_eq!(qwen["providers"], json!(["qwen"]));
         assert_eq!(qwen["dir"], json!(null));
         assert_eq!(qwen["effective_max_runs"], json!(2));
         assert_eq!(qwen["max_runs_source"], json!("default"));
@@ -185,8 +184,8 @@ async fn patch_account_limits_validate_persist_and_survive_reload_and_restart() 
                 .as_array()
                 .expect("items")
                 .iter()
-                .any(|v| v["adapter"] == "implicit" && v["id"] == "pool"),
-            "pool rows have no implicit account: {list}"
+                .any(|v| v["adapter"] == "implicit" && v["id"] == "claude_oauth"),
+            "pool sources have no implicit account: {list}"
         );
         // 実アカウントが先、暗黙アカウントが後ろ。
         let adapters: Vec<&str> = list["items"]
@@ -204,7 +203,7 @@ async fn patch_account_limits_validate_persist_and_survive_reload_and_restart() 
         assert_eq!(body["max_runs"], json!(3));
         assert_eq!(body["effective_max_runs"], json!(3));
         assert_eq!(body["max_runs_source"], json!("account"));
-        let (status, body) = patch("implicit/none".into(), json!({"max_runs": 2})).await;
+        let (status, body) = patch("implicit/qwen".into(), json!({"max_runs": 2})).await;
         assert_eq!(status, 200, "{body}");
         assert_eq!(body["implicit"], json!(true));
         assert_eq!(body["effective_max_runs"], json!(2));
@@ -237,12 +236,11 @@ async fn patch_account_limits_validate_persist_and_survive_reload_and_restart() 
         let (status, body) = patch("claude-code/bad.id".into(), json!({"max_runs": 2})).await;
         assert_eq!((status, body["code"].clone()), (400, json!("bad_request")));
 
-        // 存在しないアカウント（404）: 実アカウントのディレクトリが無い、非プール行が無い、プール行の id。
+        // 存在しないアカウント（404）: 実アカウントのディレクトリが無い、宣言の無い source、pool を持つ source。
         for path in [
             "claude-code/missing",
             "implicit/nope",
-            "implicit/pool",
-            "implicit/qwen",
+            "implicit/claude_oauth",
         ] {
             let (status, body) = patch(path.into(), json!({"max_runs": 2})).await;
             assert_eq!(status, 404, "{path}: {body}");
@@ -263,21 +261,7 @@ async fn patch_account_limits_validate_persist_and_survive_reload_and_restart() 
             .expect("patch");
         assert_eq!(resp.status().as_u16(), 401);
 
-        // providers の concurrency は受け付けるが保存せず、暗黙アカウントの上限にも効かない。
-        let resp = client
-            .post(format!("{base}/providers"))
-            .bearer_auth(TOKEN)
-            .json(&json!({"id": "extra", "adapter": "fake", "concurrency": 5}))
-            .send()
-            .await
-            .expect("create provider");
-        assert_eq!(resp.status().as_u16(), 201);
-        let file = std::fs::read_to_string(qwen_dir.join("providers.d/extra.toml"))
-            .expect("providers.d file");
-        assert!(!file.contains("concurrency"), "{file}");
-
-        // reload を跨いで残る（DB が正本）。reload で足した非プール行（`extra`、fake → 同じ source `none`）は
-        // 別の暗黙アカウントを作らず、同じ 1 件を共有する。
+        // reload を跨いで残る（DB が正本）。
         let resp = client
             .post(format!("{base}/reload"))
             .bearer_auth(TOKEN)
@@ -291,9 +275,8 @@ async fn patch_account_limits_validate_persist_and_survive_reload_and_restart() 
             item(&list, "claude-code", "a")["effective_max_runs"],
             json!(3)
         );
-        let shared = item(&list, "implicit", "none");
+        let shared = item(&list, "implicit", "qwen");
         assert_eq!(shared["effective_max_runs"], json!(2));
-        assert_eq!(shared["providers"], json!(["qwen", "extra"]));
         assert_eq!(shared["max_runs_source"], json!("account"));
 
         // null で保存値を消して既定へ戻す。
@@ -302,10 +285,10 @@ async fn patch_account_limits_validate_persist_and_survive_reload_and_restart() 
         assert_eq!(body["max_runs"], json!(null));
         assert_eq!(body["effective_max_runs"], json!(2));
         assert_eq!(body["max_runs_source"], json!("default"));
-        let (status, body) = patch("implicit/none".into(), json!({"max_runs": null})).await;
+        let (status, body) = patch("implicit/qwen".into(), json!({"max_runs": null})).await;
         assert_eq!(status, 200, "{body}");
         assert_eq!(body["max_runs_source"], json!("default"));
-        let (status, _) = patch("implicit/none".into(), json!({"max_runs": 3})).await;
+        let (status, _) = patch("implicit/qwen".into(), json!({"max_runs": 3})).await;
         assert_eq!(status, 200);
     };
     tokio::select! {
@@ -319,17 +302,12 @@ async fn patch_account_limits_validate_persist_and_survive_reload_and_restart() 
     assert_eq!(dispatcher.account_max_runs("claude-code", "a"), None);
     assert_eq!(dispatcher.account_max_runs("claude-code", "check"), Some(4));
     assert_eq!(
-        dispatcher.implicit_account_limit("none"),
+        dispatcher.implicit_account_limit("qwen"),
         Some((3, task_dispatch::capacity::MaxRunsSource::Account))
-    );
-    assert_eq!(
-        dispatcher.implicit_account_providers("none"),
-        vec!["qwen".to_string(), "extra".to_string()],
-        "the deprecated concurrency of POST /providers must not reach dispatch"
     );
     drop(dispatcher);
     let restarted = build_dispatcher(&config, Default::default()).expect("restart");
-    assert_eq!(restarted.account_max_runs("implicit", "none"), Some(3));
+    assert_eq!(restarted.account_max_runs("implicit", "qwen"), Some(3));
     assert_eq!(restarted.account_max_runs("claude-code", "login"), Some(4));
     let store = SqliteStore::open(&config.db.path).expect("store");
     assert_eq!(store.account_limits().expect("limits").len(), 3);
@@ -337,14 +315,13 @@ async fn patch_account_limits_validate_persist_and_survive_reload_and_restart() 
 
 /// ADR 2026-10-08 account-concurrency-limits §(d)(e)（人の決定 implicit-account）:
 /// `PATCH /api/v1/accounts/implicit/<llm source id>` は source 単位の暗黙アカウントを保存し、
-/// `POST /reload` を跨いで残る。同じ source を使う非プール行（ここでは fake 行 2 本 → `none`）は
-/// 1 件を共有し、`GET /accounts` はその行の一覧を `providers` で返す。
+/// `POST /reload` を跨いで残る。account pool を持たない source ごとに 1 件で、source 同士は上限を共有しない。
 #[tokio::test]
 async fn implicit_source_account_limit_survives_reload() {
     let dir = tempfile::tempdir().expect("tempdir");
     let config_path = write_config(
         dir.path(),
-        "[[providers]]\nid = \"qwen2\"\nadapter = \"fake\"\nconcurrency = 1\n",
+        "[llm_sources.qwen2]\nkind = \"fake\"\nmodels = [\"fake\"]\n",
     );
     let mut config = Config::load(&config_path).expect("config");
     let mut dispatcher = build_dispatcher(&config, Default::default()).expect("dispatcher");
@@ -354,7 +331,7 @@ async fn implicit_source_account_limit_survives_reload() {
 
     let requests = async {
         let resp = client
-            .patch(format!("{base}/accounts/implicit/none"))
+            .patch(format!("{base}/accounts/implicit/qwen"))
             .bearer_auth(TOKEN)
             .json(&json!({"max_runs": 1}))
             .send()
@@ -363,13 +340,11 @@ async fn implicit_source_account_limit_survives_reload() {
         assert_eq!(resp.status().as_u16(), 200);
         let body = resp.json::<Value>().await.expect("json");
         assert_eq!(body["adapter"], json!("implicit"));
-        assert_eq!(body["id"], json!("none"));
+        assert_eq!(body["id"], json!("qwen"));
         assert_eq!(body["implicit"], json!(true));
         assert_eq!(body["max_runs"], json!(1));
         assert_eq!(body["effective_max_runs"], json!(1));
         assert_eq!(body["max_runs_source"], json!("account"));
-        // 2 行が 1 件の暗黙アカウントを共有する。
-        assert_eq!(body["providers"], json!(["qwen", "qwen2"]));
 
         let resp = client
             .post(format!("{base}/reload"))
@@ -387,7 +362,7 @@ async fn implicit_source_account_limit_survives_reload() {
             .await
             .expect("get");
         let list = resp.json::<Value>().await.expect("json");
-        let after = item(&list, "implicit", "none");
+        let after = item(&list, "implicit", "qwen");
         assert_eq!(
             after["max_runs"],
             json!(1),
@@ -395,16 +370,10 @@ async fn implicit_source_account_limit_survives_reload() {
         );
         assert_eq!(after["effective_max_runs"], json!(1));
         assert_eq!(after["max_runs_source"], json!("account"));
-        assert_eq!(after["providers"], json!(["qwen", "qwen2"]));
-        // 行の id では引けない（暗黙アカウントは source 単位）。
-        assert!(
-            !list["items"]
-                .as_array()
-                .expect("items")
-                .iter()
-                .any(|v| v["adapter"] == "implicit" && v["id"] == "qwen"),
-            "{list}"
-        );
+        // 別の source（`qwen2`）は自分の暗黙アカウントを持ち、`qwen` の上限を共有しない。
+        let other = item(&list, "implicit", "qwen2");
+        assert_eq!(other["effective_max_runs"], json!(2));
+        assert_eq!(other["max_runs_source"], json!("default"));
     };
     tokio::select! {
         () = requests => {}
@@ -413,19 +382,22 @@ async fn implicit_source_account_limit_survives_reload() {
     let _ = stop.send(());
     server.await.expect("join").expect("serve");
 
-    // reload 後のディスパッチャの表: 両行が同じ上限で止まる。
+    // reload 後のディスパッチャの表: `qwen` だけが保存値で止まる。
     assert_eq!(
-        dispatcher.implicit_account_limit("none"),
+        dispatcher.implicit_account_limit("qwen"),
         Some((1, task_dispatch::capacity::MaxRunsSource::Account))
     );
-    assert_eq!(dispatcher.implicit_account_ids(), vec!["none".to_string()]);
+    assert_eq!(
+        dispatcher.implicit_account_ids(),
+        vec!["qwen".to_string(), "qwen2".to_string()]
+    );
     drop(dispatcher);
     // 再起動（同じ DB で作り直す）でも残る。
     let restarted = build_dispatcher(&config, Default::default()).expect("restart");
-    assert_eq!(restarted.account_max_runs("implicit", "none"), Some(1));
+    assert_eq!(restarted.account_max_runs("implicit", "qwen"), Some(1));
     let store = SqliteStore::open(&db).expect("store");
     let limits = store.account_limits().expect("limits");
     assert_eq!(limits.len(), 1, "{limits:?}");
     assert_eq!(limits[0].source_id, "implicit");
-    assert_eq!(limits[0].account_id, "none");
+    assert_eq!(limits[0].account_id, "qwen");
 }

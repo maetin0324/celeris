@@ -494,19 +494,19 @@ impl Config {
     /// ADR 2026-10-06 model-role-assignments D3: 割り当てから deployment を足せる provider 行（catalog source を
     /// 持つもの）。`apply_role_assignments` の `seeds`。
     pub fn provider_lane_seeds(&self) -> Vec<ProviderLaneSeed> {
-        self.provider_specs()
-            .into_iter()
+        self.providers
+            .iter()
             .enumerate()
-            .filter_map(|(order, spec)| {
-                let resolved = self.provider_llm_source(&spec.id)?;
+            .filter_map(|(order, p)| {
+                let resolved = self.provider_llm_source(&p.id)?;
                 let source = task_core::model_catalog::assignments::source_name_for_llm_source(
                     &resolved.source,
                 )?;
                 Some(ProviderLaneSeed {
-                    provider_id: spec.id,
+                    provider_id: p.id.clone(),
                     source,
-                    adapter: spec.adapter,
-                    lanes: spec.tiers,
+                    adapter: p.adapter.clone(),
+                    lanes: self.provider_lanes(&p.id),
                     config_order: order,
                 })
             })
@@ -538,12 +538,7 @@ impl Config {
                     .entry(wire.clone())
                     .or_insert_with(|| unknown_model(&wire, "providers.model"));
                 let dep_id = format!("provider:{}", provider.id);
-                let lanes = self
-                    .provider_specs()
-                    .into_iter()
-                    .find(|s| s.id == provider.id)
-                    .map(|s| s.tiers)
-                    .unwrap_or_default();
+                let lanes = self.provider_lanes(&provider.id);
                 deployments.insert(
                     dep_id.clone(),
                     deployment(dep_id, source.clone(), wire.clone(), wire, lanes, order),

@@ -301,29 +301,19 @@ async fn cos_account_usage_does_not_consume_leaf_capacity() {
     assert_eq!(d.tick().unwrap().dispatched, 0);
 }
 
-/// A non-pool row (`account_pool = false`) as in production Qwen: `p1` with the
-/// deprecated `concurrency` written as `legacy` (`None` = not written).
+/// A source without an account pool as in production Qwen: `p1` with a stored implicit
+/// limit `legacy` (`None` = not stored).
 fn non_pool_dispatcher(store: Arc<dyn TaskStore>, legacy: Option<usize>) -> Dispatcher {
     let mut d = dispatcher(store, slow_pool_adapter(), 8);
     // 旧 `concurrency` の値を暗黙アカウントの保存値として置く（None なら保存値に触らない）。
     if let Some(n) = legacy {
         d.set_account_limit("implicit", "p1", Some(n)).unwrap();
     }
-    d.policy = Box::new(StaticPolicy::new(
-        vec![ProviderSpec {
-            id: "p1".into(),
-            adapter: "instant".into(),
-            tiers: vec![Tier::Frontier, Tier::Standard, Tier::Cheap],
-            concurrency: legacy,
-            model: "m".into(),
-        }],
-        Duration::from_secs(1),
-    ));
     d
 }
 
-/// Overrides survive a reload that keeps the row; a reload that drops the row (or
-/// makes it a pool) prunes the implicit override. Real-account rows are never touched,
+/// Overrides survive a reload that keeps the source; a reload that drops the source (or
+/// gives it an account pool) prunes the implicit override. Real-account rows are never touched,
 /// even when a real account shares the provider id (`implicit` is a reserved adapter).
 #[test]
 fn implicit_account_overrides_survive_reload_and_are_pruned_with_their_row() {
@@ -349,26 +339,10 @@ fn implicit_account_overrides_survive_reload_and_are_pruned_with_their_row() {
     assert_eq!(d.prune_implicit_account_limits().unwrap(), vec!["gone"]);
     assert_eq!(d.account_max_runs("implicit", "gone"), None);
 
-    // 同じ行のままの reload（＋ daemon 再起動）を跨いで残る。
-    let same = |legacy| -> Box<dyn ProviderPolicy> {
-        Box::new(StaticPolicy::new(
-            vec![ProviderSpec {
-                id: "p1".into(),
-                adapter: "instant".into(),
-                tiers: vec![Tier::Standard],
-                concurrency: legacy,
-                model: "m".into(),
-            }],
-            Duration::from_secs(1),
-        ))
-    };
+    // 同じ宣言のままの reload（＋ daemon 再起動）を跨いで残る。
     d.reload_account_limits().unwrap();
-    d.reload_providers(
-        same(Some(1)),
-        HashMap::new(),
-        HashMap::new(),
-        Default::default(),
-    );
+    let declared = d.llm_route_registry().clone();
+    d.set_llm_route_registry(declared.clone());
     assert!(d.prune_implicit_account_limits().unwrap().is_empty());
     assert_eq!(d.implicit_account_limit("p1").unwrap().0, 2);
     drop(d);
@@ -379,13 +353,12 @@ fn implicit_account_overrides_survive_reload_and_are_pruned_with_their_row() {
         Some((2, crate::capacity::MaxRunsSource::Account))
     );
 
-    // 行がプールに変わると暗黙アカウントは無くなり、保存値も消える。実アカウントの値は残る。
-    d.reload_providers(
-        same(Some(1)),
-        HashMap::new(),
-        HashMap::new(),
-        std::collections::HashSet::from(["p1".to_string()]),
-    );
+    // source が account pool の種類に変わると暗黙アカウントは無くなり、保存値も消える。実アカウントの値は残る。
+    let mut pooled = declared;
+    if let Some(spec) = pooled.sources.get_mut(&"p1".into()) {
+        spec.kind = "claude_oauth".into();
+    }
+    d.set_llm_route_registry(pooled);
     assert!(d.implicit_account_ids().is_empty());
     assert_eq!(d.implicit_account_limit("p1"), None);
     assert_eq!(d.prune_implicit_account_limits().unwrap(), vec!["p1"]);

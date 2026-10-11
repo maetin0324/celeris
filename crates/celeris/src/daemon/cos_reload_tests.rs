@@ -6,7 +6,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use task_core::chat::{ChatCreateThreadRequest, ChatPostMessageRequest, ChatSendMode};
 use task_core::{InstanceRole, SqliteStore};
-use task_dispatch::{Dispatcher, StaticPolicy};
+use task_dispatch::Dispatcher;
 use task_worker::{AdapterError, EventSink, RunLimits, RunOutcome, RunRequest, WorkerAdapter};
 use time::OffsetDateTime;
 
@@ -14,77 +14,6 @@ use super::{admin::reload_providers, api::api_settings};
 use crate::{Config, DaemonMode, SharedRole};
 
 type Seen = (String, RunRequest, String, Vec<(String, String)>);
-
-#[derive(Clone)]
-struct HeldFake {
-    harness: String,
-    model: String,
-    env: Vec<(String, String)>,
-    seen: tokio::sync::mpsc::UnboundedSender<Seen>,
-}
-
-#[async_trait]
-impl WorkerAdapter for HeldFake {
-    fn id(&self) -> &str {
-        &self.harness
-    }
-    fn with_model(&self, model: &str) -> Option<Arc<dyn WorkerAdapter>> {
-        Some(Arc::new(Self {
-            model: model.into(),
-            ..self.clone()
-        }))
-    }
-    fn with_env(&self, env: &[(String, String)]) -> Option<Arc<dyn WorkerAdapter>> {
-        Some(Arc::new(Self {
-            env: env.to_vec(),
-            ..self.clone()
-        }))
-    }
-    async fn run(
-        &self,
-        req: RunRequest,
-        id: &str,
-        _: RunLimits,
-        _: &dyn EventSink,
-    ) -> Result<RunOutcome, AdapterError> {
-        self.seen
-            .send((id.into(), req, self.model.clone(), self.env.clone()))
-            .unwrap();
-        // Keep the run in flight across reload; the test runtime cancels this future on exit.
-        std::future::pending().await
-    }
-}
-
-fn install_fakes(
-    d: &mut Dispatcher,
-    config: &Config,
-    seen: &tokio::sync::mpsc::UnboundedSender<Seen>,
-) {
-    let adapters: HashMap<_, Arc<dyn WorkerAdapter>> = config
-        .providers
-        .iter()
-        .map(|p| {
-            (
-                p.id.clone(),
-                Arc::new(HeldFake {
-                    harness: p.adapter.clone(),
-                    model: String::new(),
-                    env: vec![],
-                    seen: seen.clone(),
-                }) as Arc<dyn WorkerAdapter>,
-            )
-        })
-        .collect();
-    d.reload_providers(
-        Box::new(StaticPolicy::new(
-            config.provider_specs(),
-            Duration::from_secs(1),
-        )),
-        HashMap::new(),
-        adapters,
-        Default::default(),
-    );
-}
 
 fn write_config(dir: &std::path::Path, cos: &str) -> Config {
     let path = dir.join("config.toml");

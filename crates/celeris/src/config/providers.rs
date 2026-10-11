@@ -7,7 +7,6 @@ use serde::Deserialize;
 use task_core::{
     AccountAdapter, LlmSourceRef, ProviderKind, ResolvedLlmSource, SourceOrigin, Tier,
 };
-use task_dispatch::ProviderSpec;
 
 use super::{AccountsConfig, Config, ConfigError};
 
@@ -156,21 +155,19 @@ impl Config {
             .collect()
     }
 
-    pub fn provider_specs(&self) -> Vec<ProviderSpec> {
+    /// The lanes a `[[providers]]` row offers (a fixed-model Qwen ACP row is cheap only).
+    pub fn provider_lanes(&self, id: &str) -> Vec<Tier> {
         self.providers
             .iter()
-            .map(|p| ProviderSpec {
-                id: p.id.clone(),
-                adapter: p.adapter.clone(),
-                tiers: if self.is_qwen_acp(p) {
+            .find(|p| p.id == id)
+            .map(|p| {
+                if self.is_qwen_acp(p) {
                     vec![Tier::Cheap]
                 } else {
                     p.tiers.clone()
-                },
-                concurrency: p.concurrency,
-                model: p.model.clone(),
+                }
             })
-            .collect()
+            .unwrap_or_default()
     }
 
     /// The source and whether it was written explicitly or inferred from a legacy row.
@@ -187,53 +184,6 @@ impl Config {
                 SourceOrigin::Derived
             },
         })
-    }
-
-    /// ADR-0132 付記 L1/L4/L7: cheap lane で順位付けより先に試すローカルの行と probe 先（設定順）。
-    /// `account_pool = false` で `tiers` に cheap を含み、実効 `llm_source` が `openai_compatible:<id>`
-    /// （probe 先はその source。無ければ空 = 確かめられない）のもの。proxy の行は具体的な source/model を
-    /// 要求するのでローカルの行にしない。専用契約のアダプタ（`paperqa` / `local-deep-research` / `langmem`）の行は含めない。
-    /// `[execution] cheap_local_first = false` なら空。
-    pub fn local_cheap_providers(&self) -> Vec<task_dispatch::LocalProviderSpec> {
-        if !self.execution.cheap_local_first {
-            return Vec::new();
-        }
-        let target =
-            |s: &llm_proxy::config::OpenAiCompatibleConfig| task_dispatch::LocalHealthTarget {
-                base_url: s.base_url.clone(),
-                bearer_token: s.api_key.clone(),
-            };
-        self.providers
-            .iter()
-            .filter(|p| !p.account_pool.is_on() && p.tiers.contains(&Tier::Cheap))
-            // 専用契約のアダプタ（ADR-0049。`StaticPolicy` が hint の無い仕事を渡さない）は、それに固定された
-            // 仕事の唯一の行であることが多い。前段で不通として外すと従来の経路（ADR-0052 の倒し方）を
-            // 塞ぐので、ローカルの行にしない。
-            .filter(|p| {
-                !matches!(
-                    p.adapter.as_str(),
-                    "paperqa" | "local-deep-research" | "langmem"
-                )
-            })
-            .filter_map(|p| {
-                let health = match self.provider_llm_source(&p.id)?.source {
-                    // 直結の行は proxy の `enabled` に依らず動くので、無効な source でも `base_url` は見る。
-                    LlmSourceRef::OpenaiCompatible(id) => self
-                        .llm_proxy
-                        .sources
-                        .openai_compatible
-                        .iter()
-                        .filter(|s| s.id == id)
-                        .map(target)
-                        .collect(),
-                    _ => return None,
-                };
-                Some(task_dispatch::LocalProviderSpec {
-                    provider: p.id.clone(),
-                    health,
-                })
-            })
-            .collect()
     }
 
     pub fn provider_kind(&self, id: &str) -> Option<ProviderKind> {

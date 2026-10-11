@@ -131,7 +131,7 @@ impl WorkerAdapter for RefusingFake {
 }
 
 fn fixture(adapter: Arc<dyn WorkerAdapter>, store: Arc<SqliteStore>, dir: &Path) -> Dispatcher {
-    let mut d = dispatcher_with_adapter_id(store.clone(), adapter, 2, true, "fake");
+    let mut d = dispatcher_with_test_clock(store.clone(), adapter, 2, true);
     d.config.execution.max_cos_runs = 2;
     d.config.min_free_disk_mb = 0;
     d.config.knowledge.root = dir.join("knowledge");

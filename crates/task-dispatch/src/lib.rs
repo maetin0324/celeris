@@ -1,5 +1,5 @@
 //! task-dispatch: 決定的ディスパッチャ、リース管理、リトライ、並列度制御（DESIGN §5.2）、
-//! `ProviderPolicy`（§5.5）、Reviewer（§5.7。`Command`/`ArtifactExists`/`Plan` 検証は決定的、`Reviewer` はアダプタ経由の別 run）。
+//! Reviewer（§5.7。`Command`/`ArtifactExists`/`Plan` 検証は決定的、`Reviewer` はアダプタ経由の別 run）。
 //! **LLM 呼び出しはここに書かない。**
 
 pub mod accounts;
@@ -45,17 +45,14 @@ pub use accounts::{
 pub use dispatcher::{
     AccountsRuntimeConfig, ClusterSpec, ContainerDecision, ContainerRun, ContainersRuntimeConfig,
     DEFAULT_MAX_RUNS_PER_ACCOUNT, DispatchConfig, DispatchError, DispatchRoutingSettings,
-    Dispatcher, ExecutionConfig, KnowledgeRuntimeConfig, LocalHealthTarget, LocalProviderProbe,
-    LocalProviderSpec, MEMBER_RANKING_ESTIMATOR, MEMBER_RANKING_PRIORITY, MemberRanking,
+    Dispatcher, ExecutionConfig, KnowledgeRuntimeConfig, MEMBER_RANKING_ESTIMATOR, MEMBER_RANKING_PRIORITY, MemberRanking,
     RouteFailure, RouteInput, RoutePick, RouteState, RouteTrace, RoutingModelProfiles,
     RoutingShadowListener, SelfHostLoad, SnapshotPublisher, StaticModelProfiles, TaskFilter,
     TickReport, harness_request_for, route_select,
 };
 /// ADR 2026-10-11 llm-source-harness-selection: launch inputs of an admitted route.
 pub use dispatcher::{RouteLaunchError, account_adapter_for_source_kind, selected_llm_route};
-pub use policy::{
-    AdapterId, ProviderId, ProviderOutcome, ProviderPolicy, ProviderSpec, StaticPolicy,
-};
+pub use policy::{AdapterId, ProviderId, ProviderOutcome};
 pub use review::{
     PLAN_FILE_NAME, PlanCheck, REVIEW_FILE_NAME, ReviewExtras, ReviewOutcome, ReviewSubject,
     ReviewerProviderFailure, ReviewerRun, Verdict, needs_reviewer_run, review_task, reviewer_hint,

@@ -253,7 +253,7 @@ pub async fn remove_account(
 }
 
 /// ADR 2026-10-08 account-concurrency-limits §(d): `PATCH /accounts/{adapter}/{id}`。存在を確かめ（実アカウントは
-/// 根の下のディレクトリ、暗黙アカウントは今の設定の非プール行）、DB に書いてからディスパッチャの表を更新する
+/// 根の下のディレクトリ、暗黙アカウントは account pool を持たない宣言済み source）、DB に書いてからディスパッチャの表を更新する
 /// （次の tick から効く。走っている run は止めない）。`max_runs` の範囲は task-api が検査済み（DB の CHECK でも弾く）。
 pub fn set_account_limit(
     config: &Config,

@@ -26,6 +26,25 @@ use super::{
 };
 
 impl TaskStore for SqliteStore {
+    fn task_integration_upsert(
+        &self,
+        s: &crate::TaskRepoIntegrationState,
+    ) -> Result<(), StoreError> {
+        self.task_integration_upsert_impl(s)
+    }
+    fn task_integration_get(
+        &self,
+        t: crate::model::TaskId,
+        r: crate::repos::RepoId,
+    ) -> Result<Option<crate::TaskRepoIntegrationState>, StoreError> {
+        self.task_integration_get_impl(t, r)
+    }
+    fn task_integration_list(
+        &self,
+        s: Option<crate::TaskRepoIntegrationStatus>,
+    ) -> Result<Vec<crate::TaskRepoIntegrationState>, StoreError> {
+        self.task_integration_list_impl(s)
+    }
     fn account_limits(&self) -> Result<Vec<super::AccountLimit>, StoreError> {
         self.account_limits_impl()
     }

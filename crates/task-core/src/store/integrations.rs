@@ -8,7 +8,7 @@ use crate::repos::RepoId;
 use super::{SqliteStore, StoreError, format_rfc3339, parse_rfc3339};
 
 impl SqliteStore {
-    // ---- ADR-0043 D5（Phase 54）: 変更の取り込み（`task_integrations`）----
+    // ---- ADR-0043 D5（Phase 54）: 変更の取り込み履歴（`task_change_integrations`）----
     pub(super) const INTEGRATION_COLUMNS: &'static str = "id, task_id, repo_id, repo_name, method, state, pr_number, \
          pr_url, merged_at, detail, created_at, updated_at";
 
@@ -27,7 +27,7 @@ impl SqliteStore {
             IntegrationState::parse(&state_col),
         ) else {
             return Ok(Err(StoreError::Invalid(format!(
-                "invalid task_integrations row: id={id} task_id={task_id} method={method_col} state={state_col}"
+                "invalid task_change_integrations row: id={id} task_id={task_id} method={method_col} state={state_col}"
             ))));
         };
         let repo_id = match repo_id.as_deref() {
@@ -36,7 +36,7 @@ impl SqliteStore {
                 Ok(v) => Some(v),
                 Err(_) => {
                     return Ok(Err(StoreError::Invalid(format!(
-                        "invalid task_integrations repo_id for {id}: {raw:?}"
+                        "invalid task_change_integrations repo_id for {id}: {raw:?}"
                     ))));
                 }
             },
@@ -68,7 +68,7 @@ impl SqliteStore {
     ) -> Result<(), StoreError> {
         conn.execute(
             &format!(
-                "INSERT OR REPLACE INTO task_integrations ({}) \
+                "INSERT OR REPLACE INTO task_change_integrations ({}) \
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
                 Self::INTEGRATION_COLUMNS
             ),
@@ -96,7 +96,7 @@ impl SqliteStore {
         params: &[&dyn rusqlite::ToSql],
     ) -> Result<Vec<TaskIntegration>, StoreError> {
         let mut stmt = conn.prepare(&format!(
-            "SELECT {} FROM task_integrations WHERE {where_sql} ORDER BY created_at DESC, id DESC",
+            "SELECT {} FROM task_change_integrations WHERE {where_sql} ORDER BY created_at DESC, id DESC",
             Self::INTEGRATION_COLUMNS
         ))?;
         let rows = stmt.query_map(params, Self::integration_row)?;
@@ -161,11 +161,11 @@ impl SqliteStore {
         self.with_read_conn(|conn| {
             // タスク × リポジトリごとに最新の 1 件（`created_at` が同じなら `id`〈ULID〉で決める）。
             let mut stmt = conn.prepare(&format!(
-                "SELECT {cols} FROM task_integrations i \
+                "SELECT {cols} FROM task_change_integrations i \
                  JOIN tasks t ON t.id = i.task_id \
                  WHERE t.project_id = ?1 \
                    AND NOT EXISTS ( \
-                     SELECT 1 FROM task_integrations n \
+                     SELECT 1 FROM task_change_integrations n \
                      WHERE n.task_id = i.task_id AND n.repo_name = i.repo_name \
                        AND (n.created_at > i.created_at OR (n.created_at = i.created_at AND n.id > i.id)) \
                    ) \

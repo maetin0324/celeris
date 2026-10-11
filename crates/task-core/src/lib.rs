@@ -92,6 +92,7 @@ pub mod quota;
 pub mod report;
 /// ADR-0043 D1 / D2（Phase 52）: 案件のリポジトリ（`project_repos`）とタスクの `repos`。
 pub mod repos;
+pub mod route_extract;
 /// ADR 2026-10-11 task-routing-features D1-D4: deterministic feature and option records.
 pub mod route_record;
 pub mod store;
@@ -314,9 +315,9 @@ pub mod model_policy;
 pub mod retry_policy;
 pub mod routing_audit;
 pub use model_policy::{
-    LANE_POLICY_VERSION, LaneCeiling, LaneDecision, Level, ModelPolicy, RoutingRecord,
-    ShadowClassifier, ShadowDecision, TaskFeatureHints, TaskFeatures, WorkUnitLaneCap,
-    decide_for_task, decide_for_work_unit,
+    LANE_POLICY_VERSION, LaneCeiling, LaneDecision, Level, ModelPolicy, RouteFeaturesRef,
+    RoutingRecord, ShadowClassifier, ShadowDecision, TaskFeatureHints, TaskFeatures,
+    WorkUnitLaneCap, decide_for_task, decide_for_work_unit,
 };
 pub use retry_policy::{
     AttemptOutcome, AttemptRecord, BudgetState, EscalationAudit, EscalationPolicy,

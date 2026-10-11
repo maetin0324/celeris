@@ -497,9 +497,10 @@ fn routing_dispatch_legacy_tier_models_feed_model_identity_only() {
 /// tick を通して、worker run の `RoutingDecided` に選択の理由が残る（付記 L8）。
 async fn routing_decided_with_probe(
     probe_outcome: Reachability,
-) -> (task_core::RoutingRecord, Arc<AtomicUsize>) {
+) -> (task_core::RoutingRecord, Arc<AtomicUsize>, Arc<SqliteStore>) {
     let ws = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let sqlite = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<dyn TaskStore> = sqlite.clone();
     let mut task = new_task(
         ws.path(),
         Check::Command {
@@ -547,12 +548,12 @@ async fn routing_decided_with_probe(
     d.tick().unwrap();
     let events = store.events_for(task.id).unwrap();
     let record = routing_record(&events).expect("routing_decided");
-    (record, calls)
+    (record, calls, sqlite)
 }
 
 #[tokio::test]
 async fn cheap_local_first_routing_decided_records_reason() {
-    let (record, calls) = routing_decided_with_probe(Reachability::Ok).await;
+    let (record, calls, _) = routing_decided_with_probe(Reachability::Ok).await;
     let trace = record.optimizer.as_ref().expect("legacy optimizer trace");
     assert_eq!(
         trace.mode,
@@ -567,7 +568,7 @@ async fn cheap_local_first_routing_decided_records_reason() {
     assert_eq!(selection.reason, ProviderSelectionReason::LocalPreferred);
     assert_eq!(calls.load(Ordering::SeqCst), 1);
 
-    let (record, _) = routing_decided_with_probe(Reachability::Unreachable {
+    let (record, _, _) = routing_decided_with_probe(Reachability::Unreachable {
         reason: "timed out".into(),
     })
     .await;
@@ -578,4 +579,17 @@ async fn cheap_local_first_routing_decided_records_reason() {
         local_outcome(&selection),
         Some(ProviderCandidateOutcome::Down)
     );
+}
+
+#[tokio::test]
+async fn route_dispatch_records_feature_reference_and_snapshot() {
+    let (record, _, store) = routing_decided_with_probe(Reachability::Ok).await;
+    let reference = record.features.expect("routing_decided feature reference");
+    assert_eq!(reference.schema, "celeris.task-features/1");
+    assert_eq!(reference.template, "task-brief/1");
+    let stored = store
+        .route_features_get(&reference.hash)
+        .unwrap()
+        .expect("matching route_features row");
+    assert_eq!(stored.hash, reference.hash);
 }

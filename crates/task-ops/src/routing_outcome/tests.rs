@@ -65,6 +65,7 @@ fn run_events(task: &task_core::Task) -> Vec<Event> {
         Event::RoutingDecided {
             run_id: "r1".into(),
             record: Box::new(RoutingRecord {
+                features: None,
                 org_node: Some("software-engineering".into()),
                 harness: Some("coding".into()),
                 decision,

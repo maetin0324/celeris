@@ -67,8 +67,8 @@ pub struct EnvOptions {
     pub memory_dir: Option<PathBuf>,
     /// ADR-0037 D2（Phase 39）: `[notify] discord_webhook_secret`。
     pub notify_secret_id: String,
-    /// ADR-0037 D3: `[notify] gui_base_url`。
-    pub notify_gui_base_url: Option<String>,
+    /// ADR-0037 D3: `[notify] web_base_url`。
+    pub notify_web_base_url: Option<String>,
     pub notify_inbox_batch_secs: u64,
     pub notify_inbox_reminder_secs: u64,
     pub notify_digest_interval_secs: u64,
@@ -110,7 +110,7 @@ impl Default for EnvOptions {
             secret_usage: std::collections::HashMap::new(),
             memory_dir: None,
             notify_secret_id: task_core::DEFAULT_WEBHOOK_SECRET_ID.to_string(),
-            notify_gui_base_url: None,
+            notify_web_base_url: None,
             notify_inbox_batch_secs: 60,
             notify_inbox_reminder_secs: 86_400,
             notify_digest_interval_secs: 3_600,
@@ -361,7 +361,7 @@ pub fn settings(
         secret_usage: options.secret_usage,
         memory_dir: options.memory_dir,
         notify_secret_id: options.notify_secret_id,
-        notify_gui_base_url: options.notify_gui_base_url,
+        notify_web_base_url: options.notify_web_base_url,
         notify_inbox_batch_secs: options.notify_inbox_batch_secs,
         notify_inbox_reminder_secs: options.notify_inbox_reminder_secs,
         notify_digest_interval_secs: options.notify_digest_interval_secs,

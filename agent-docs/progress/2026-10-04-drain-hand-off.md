@@ -30,7 +30,7 @@ events にも GUI にも出なかった。
     1 件ごとの event とログ（`<task_dir>/work-unit-checks/<wu_key>/<ms>-<i>.log`）を残す。
 - task-ops: `check_progress`（WU の行）が WU 検査の event も読む。task-api: `check-log` が `WorkUnitCheckStarted` も読む。
   `EVENT_TYPES` に 3 語（59 → 62）。
-- 文書・型: `docs/api/v1/gui-api.md` と `gui/docs/celeris-api-v1.md`（§3.126.19 と `check_progress` の説明）、
+- 文書・型: `docs/api/v1/api.md` と `gui/docs/celeris-api-v1.md`（§3.126.19 と `check_progress` の説明）、
   `docs/api/v1/{api-v1,event}.schema.json`（`UPDATE_SCHEMA=1`）、`gui/app/celeris/types.ts`・`web/api/generated/*`（gen:types）、
   `web/api/realtime/{event-kinds,invalidation-map}.ts`。
 - GUI（gui/）: WU の行の検査表示は統合で入れたものがそのまま葉の WU にも出る。コメントを更新し、偽 celeris の

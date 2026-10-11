@@ -402,7 +402,7 @@ celeris 側の扱い（ADR-0016 D2, 実装メモ M2/M6/M7）:
 
 - **run は止まらない**（非終端）。状態機械も動かない。
 - **人を起こさない**（通知は ADR-0037 の 5 種のまま）。人が書いたコメントだけが
-  `POST /tasks/{id}/comments` 経由で担当を起こす（[gui-api.md](../api/v1/gui-api.md) の `POST /tasks/{id}/comments`）。
+  `POST /tasks/{id}/comments` 経由で担当を起こす（[api.md](../api/v1/api.md) の `POST /tasks/{id}/comments`）。
 - 空白だけの本文・20,000 文字超は捨てる（警告だけ。run は続く）。
 - 前置きには「短い進捗や判断の記録はコメントに書け」と書いてある（`context.comments_enabled`）。
   長い成果は成果物（`artifact`）に書くこと。

@@ -8,7 +8,7 @@ import { cronFixtures } from "./cron-fixtures.mjs";
 const schema = JSON.parse(
   readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../api/generated/schema.json"), "utf8"),
 );
-const reservedPorts = new Set([7700, 7701, 7710, 7711, 7712]);
+const reservedPorts = new Set([7710, 7711, 7712, 7720, 7721]);
 const delayValues = new Set([0, 5000, 10000]);
 
 function resolve(node) {
@@ -3353,7 +3353,7 @@ export function createFakeDaemon({
           ...a,
         });
         if (parts[0] === "accounts") {
-          // PATCH /accounts/{adapter}/{id}: {max_runs: 1..=32 | null}（gui-api.md §3.29a）。
+          // PATCH /accounts/{adapter}/{id}: {max_runs: 1..=32 | null}（api.md §3.29a）。
           if (parts.length === 3 && req.method === "PATCH") {
             const [, adapter, id] = parts;
             const real = ac.accounts.find((a) => (a.adapter ?? "claude-code") === adapter && a.id === id);

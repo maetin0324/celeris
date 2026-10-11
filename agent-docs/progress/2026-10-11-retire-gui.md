@@ -1,7 +1,7 @@
 ---
 title: "旧 GUI を廃止し web に一本化する"
 tasks: [01M4NAKDCESYK36PNY7TTCTJ5E]
-status: running
+status: done
 updated: 2026-10-11
 ---
 
@@ -9,8 +9,8 @@ updated: 2026-10-11
 
 ## 現在地
 
-2026-10-11: 人が必要とした2機能を web に実装した。旧 GUI の削除と selfdeploy の変更は未着手。
-全受け入れ条件の完了ではない。本番の unit・config・DB には触れていない。
+2026-10-11: 人が必要とした2機能を web に実装し、旧 GUI のソース・配布・検査経路を撤去した。
+撤去後の最終検査は合格。本番の unit・config・DB には触れていない。
 方針は [廃止 ADR](../adr/2026-10-11-retire-gui.md) と
 [破壊的変更を既定にする ADR](../adr/2026-10-11-breaking-changes-by-default.md)。
 
@@ -72,29 +72,196 @@ Rust の指定検査も完了:
 `TMPDIR=/tmp` を指定して全件合格した。source/依存のコピーや build 出力を /tmp に置いていない。
 CARGO_TARGET_DIR・compiler wrapper・build 設定は渡されたまま。失敗した版と正常結果を取り違えないこと。
 
-## 未解決・次の工程
+## 撤去（Phase 2）
 
-1. `gui/`、専用 script/unit、build/deploy/verify 段と試験を撤去する。
-2. web の release/verify を必須 gate とし、promote/rollback/status/migrate から旧 GUI を外す。
-   現在の `web-follow.sh` は失敗しても exit 0 なので、唯一の画面として必要な成功判定を検討・検査する。
-3. README・SPEC・architecture-map・現行 guide を web に合わせる。過去 ADR は改変しない。
-4. 削除後の参照走査、selfdeploy の試験、workspace/clippy と web 検査を再実行する。
-   削除前の走査 `gui-removal-remaining.txt` は416行（scripts/deploy/web/README/docs/guides の限定走査）。
-5. 削除と運用経路の変更が揃ってから本番への移行手順を確定する。
+`gui/`、専用 unit、check-mobile/delivery/upgrade/model-routing、sync-gui-docs、旧名称への一度きりの
+移行台本を削除した。web の配布・verify・promote は必須で、失敗を成功扱いしない。
+現行 API 文書は `docs/api/v1/api.md` に移動した。既存 ADR は本文を改変せず保持する。
 
-## 本番への移行（撤去実装後に確定）
+通知の config/API 欄を `web_base_url`、Browser CLI の socket 環境変数を `CELERIS_WEB_OWNER_SOCKET` に変更。
+生成 schema と web 型も更新した。DB migration は追加せず、events・credentials・cron API は維持する。
 
-**本番操作は未実施。現時点で旧 GUI の unit を止めない。** 次工程で新 release の build/verify/promote
-が web のみで動くことを確かめた後、運用セッションが以下を実行する具体的手順を確定する。
+## 検証（Phase 2・撤去後）
 
-- `celeris-gui@` の active/enabled instance、unit 本文と drop-in、旧 port（既定7700）を使う proxy を棚卸し・保存。
-- web の login、本人承認、Live View、SSE、file 配信、cron、検査ログを確認。
-  `CELERIS_API_URL` と `CELERIS_WEB_LIVE_VIEW_UPSTREAM` が旧 GUI を向いていないことを確認。
-- gui 無しの release を build/verify/promote し、web の healthz release と current の一致を確認。
-- 旧 instance を停止・無効化し、template/drop-in の退避と除去、daemon-reload、不要 listener/proxy 設定の解除。
-- DB・events・credential・既存 release・rollback に必要な依存/鍵は消さない。旧版へ戻す際は保存した unit と
-  旧 release の手順を使用し、新コードに互換分岐を残さない。
+全て exit 0。ログの根は上の task artifacts。失敗した中間版ではなく次の最終ログを参照する。
 
-## 提案
+| コマンド | 結果・ログ |
+|---|---|
+| `TMPDIR=/tmp bash scripts/dev/test-parallel.sh` | **5,132 passed / 0 failed / 14 ignored**（nextest 5,129＋doctest 3）。`removal-test-parallel-final.log` |
+| `cargo clippy --workspace -- -D warnings` | 合格。`removal-clippy.log` |
+| `cargo fmt --all -- --check` | 合格。`removal-fmt.log` |
+| `corepack pnpm@12.6.0 -C web typecheck` | 合格。`removal-web-typecheck.log` |
+| `corepack pnpm@12.6.0 -C web test` | vitest **677件**＋gateway **93件**合格。`removal-web-test.log` |
+| `corepack pnpm@12.6.0 -C web build` | 合格。既存の chunk size 警告のみ。`removal-web-build.log` |
+| `corepack pnpm@12.6.0 -C web e2e e2e/parity/cron-check-logs.spec.ts e2e/parity/task-detail.spec.ts` | **10件**合格。`removal-e2e.log` |
+| `corepack pnpm@12.6.0 -C web e2e e2e/parity/gateway-auth.spec.ts` | **4件**合格。`removal-auth-e2e.log` |
+| `corepack pnpm@12.6.0 -C web e2e e2e/parity/gateway.spec.ts` | **6件**合格（型再生成一致・境界・認証・CSRF・Host・token を含む）。`removal-gateway-e2e.log` |
+| `for f in scripts/selfdeploy/tests/*.sh; do bash "$f"; done` | **25本全て成功**。`selfdeploy/summary.tsv` と各同名 `.log`。本番 systemctl は使用せず隔離 fixture を使用 |
+| `sh scripts/dev/check-doc-links.sh` と `--self-test` | 合格。`removal-doc-links.log` / `removal-doc-links-self-test.log` |
+| `sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv` | 合格。`removal-doc-layout.log` |
+| `sh scripts/dev/check-adr-numbers.sh`、`python3 scripts/dev/check-architecture-map.py`、`sh scripts/dev/progress-index.sh --check` | 合格。`removal-adr-numbers.log` / `removal-architecture-map.log` / `removal-progress-index.log` |
+| `python3 -m unittest discover -s scripts/tests -p test_source_size_report.py` | **28件**合格。`removal-source-size.log` |
 
-なし。人から承認済みの2機能と廃止だけを対象とする。
+selfdeploy の確認範囲は、web 必須 gate、依存の無い梱包の拒否、verify の app 起動失敗、初回 web 起動、
+web 切替失敗時の復旧、live/stop-start 両経路の再試行、hot root の unit と web/app 配布。
+staging の read-only E2E は旧 GUI の health を見ず、web gateway と daemon を見る。
+本番向け release の作成・実 staging verify・promote は下の運用手順で行う。
+
+### 残存参照の走査
+
+`git ls-files gui/` は空、作業場所の同ディレクトリも存在しない。
+追跡ファイルを `rg -n '(?i)\bgui\b|remix'` と、旧パス・unit・config・環境変数を限定する式で全走査した。
+再現 script は task artifacts の `scan-removal.py`。全件は `removal-rg-all.txt` / `removal-rg-legacy.txt`、
+集計は `removal-rg-summary.json`。現行の実行・build・deploy・検査に必要な旧実装への参照は **0件**。
+
+「GUI」という一般的な画面の呼び名や、過去の ADR・進捗・検証報告までゼロにした、という意味ではない。
+過去192本の ADR 本文は変更前とバイト一致を確認し、廃止されたアプリ内 ADR は履歴側へ移した。
+残す旧名称は歴史記録、本廃止の移行・復旧手順、ADR の所在/リンク検査、廃止 config 欄の拒否試験。
+`removal-rg-unclassified.txt` は空。旧画面の設計説明・現行運用ガイド・生成型の二重管理は撤去した。
+
+## 本番への移行
+
+**以下は運用セッションが実行する手順。本 task から本番操作はしていない。**
+通常の配布の詳細は [selfdeploy](../../docs/ops/selfdeploy.md) と [web 運用](../../docs/ops/web-operation.md)。
+今回の config 改名は新旧バイナリ間で互換でないため、旧 config の控えと新 config を揃えてから切り替える。
+
+### 1. 現状の確認・復旧材料の保存
+
+Bash で、確定した撤去コミットを `NEW_SHA` に指定する。秘密を標準出力へ出さない。
+
+```bash
+NEW_SHA='REPLACE_WITH_12_CHAR_SHA'
+[[ "$NEW_SHA" =~ ^[0-9a-f]{12}$ ]] || exit 1
+CONFIG_DIR="${CELERIS_CONFIG_DIR:-$HOME/.config/celeris}"
+if [ -f "$CONFIG_DIR/paths.env" ]; then set -a; . "$CONFIG_DIR/paths.env"; set +a; fi
+STATE_DIR="${CELERIS_STATE_DIR:-$HOME/.local/celeris}"
+BACKUPS_DIR="${CELERIS_BACKUPS_DIR:-$STATE_DIR/backups}"
+umask 077
+mkdir -p "$BACKUPS_DIR"
+MIGRATION_DIR=$(mktemp -d "$BACKUPS_DIR/gui-retirement.XXXXXX")
+OLD_SHA=$(basename "$(readlink -f "$STATE_DIR/current")")
+printf '%s\n' "$OLD_SHA" >"$MIGRATION_DIR/old-sha"
+cp -p "$CONFIG_DIR/config.toml" "$MIGRATION_DIR/config.toml"
+[ ! -f "$CONFIG_DIR/web.env" ] || cp -p "$CONFIG_DIR/web.env" "$MIGRATION_DIR/web.env"
+systemctl --user list-units --all --plain --no-legend 'celeris-gui@*.service' >"$MIGRATION_DIR/gui-units.txt"
+systemctl --user list-unit-files --no-legend 'celeris-gui@*.service' >"$MIGRATION_DIR/gui-unit-files.txt"
+systemctl --user cat celeris-gui@.service >"$MIGRATION_DIR/gui-template.txt"
+systemctl --user cat 'celeris-web@.service' >"$MIGRATION_DIR/web-template.txt"
+mkdir -p "$MIGRATION_DIR/units"
+for f in "$HOME/.config/systemd/user"/celeris-gui*; do
+  [ ! -e "$f" ] || cp -a "$f" "$MIGRATION_DIR/units/"
+done
+ss -ltnp >"$MIGRATION_DIR/listeners.txt"
+```
+
+`gui-units.txt` と `gui-unit-files.txt` から停止対象の instance を確認する。単発 `celeris-gui.service` が
+残っていないかも確認する。テンプレート・instance ごとの drop-in による port 上書きも調べる。
+web の unit と web.env で `CELERIS_API_URL` が daemon（通常7710）、`CELERIS_WEB_LIVE_VIEW_UPSTREAM` が
+Browser dashboard（設定がある場合）を指し、7700や旧 GUI を経由していないことを確認する。
+環境変数の全値を共有ログへ出さず、秘密を含む調査出力は上の0700ディレクトリだけに保存する。
+
+公開 URL を提供する nginx/Caddy/SSH tunnel 等の設定は、その管理場所で原本を退避する。
+7700向けの upstream・WebSocket/SSE・ファイル転送設定を特定する。web は通常7720、既存LAN中継は7721。
+実際の公開 URL・TLS・Host allowlist を確認し、切替先を決める。host の現物は本 task では未検査。
+
+### 2. 新 config と gui 無し release の準備・verify
+
+旧 config と同じディレクトリに候補を置く（相対パスの解決先を変えない）。候補の `[notify]` に
+`gui_base_url` があれば `web_base_url` に改名し、値を確認済みの web 公開 URL にする。
+同欄が無ければ追加は不要。他の設定・秘密は変えない。旧欄を残すと新 daemon は起動を拒否する。
+CLI のログイン補助を使う shell 設定も `CELERIS_GUI_OWNER_SOCKET` から `CELERIS_WEB_OWNER_SOCKET` へ変更し、
+値は `web.env` の owner socket と揃える。旧 GUI 用秘密や信頼端末・credential は削除しない。
+
+```bash
+cp -p "$CONFIG_DIR/config.toml" "$CONFIG_DIR/config.web-next.toml"
+# 人が config.web-next.toml の上記1欄だけを編集する。
+SD_REPO="$PWD" scripts/selfdeploy/release.sh "$NEW_SHA"
+REL="$STATE_DIR/releases/$NEW_SHA"
+test ! -e "$REL/gui" && test -f "$REL/web/app/server/index.js" && test -d "$REL/web/app/node_modules"
+python3 - "$REL/gate.json" <<'PY'
+import json, sys
+v = json.load(open(sys.argv[1]))
+assert v['ok'] and v['web']['ok'] and v['web']['blocking']
+PY
+CELERIS_CONFIG="$CONFIG_DIR/config.web-next.toml" scripts/selfdeploy/verify.sh "$NEW_SHA"
+python3 - "$REL/verify.json" <<'PY'
+import json, sys
+v = json.load(open(sys.argv[1]))
+assert v['ok']
+assert any(c['name'] == 'web-app-start' and c['ok'] for c in v['checks'])
+PY
+```
+
+release/verify は失敗ならここで止め、`.build/<sha>/` または staging のログを確認する。
+候補 config を旧バイナリが読めず `live_ok=false` となる場合は正常な判定で、停止→起動で昇格する。
+旧 config を変更していないこの段階は本番を切り替えず中断できる。
+
+### 3. 切替・動作確認
+
+```bash
+scripts/selfdeploy/install-units.sh
+install -m 0600 "$CONFIG_DIR/config.web-next.toml" "$CONFIG_DIR/config.toml"
+"$REL/scripts/promote.sh" "$NEW_SHA"
+test "$(basename "$(readlink -f "$STATE_DIR/current")")" = "$NEW_SHA"
+systemctl --user is-active "celeris@$NEW_SHA" "celeris-web@$NEW_SHA"
+curl -fsS http://127.0.0.1:7720/healthz
+```
+
+bind を上書きしている場合は最後の URL をその値に合わせる。health の release が `NEW_SHA` と一致すること。
+promote は daemon の認可・backup・handoff の後に web を切り替える。web が失敗した場合は非0、current は更新せず、
+旧 web を復旧する。ただし daemon は既に新しい場合がある。`promote_failed.json` とログを読み、修復後に同じ
+promote を再実行する（無条件に daemon を再起動しない）。
+
+web へログインし、タスク・WorkUnit 検査ログの更新、cron 一覧/詳細/履歴、本人認証・Browser Live View、
+SSE の更新、成果物ファイル取得を確認する。確認のために本番タスクや cron の手動実行を作らない。
+その後、保存したリバースプロキシ設定の upstream を web に変更し、設定検査→管理者の通常の reload 手順で反映する。
+公開 URL でも login・SSE・Live View/WebSocket・file が使えることを確かめる。proxy の種類が host ごとに異なるため、
+ここで別製品のコマンドを自動実行しない。
+
+### 4. 旧 unit の停止・無効化・除去
+
+web と公開 URL の確認後に行う。状態一覧に記録された instance を全て指定する（下は旧 current の例）。
+
+```bash
+systemctl --user disable --now "celeris-gui@$OLD_SHA.service"
+# gui-units.txt / gui-unit-files.txt に他の instance があれば、その正確な名前にも同じ操作を行う。
+systemctl --user list-units --state=active --no-legend 'celeris-gui@*.service'
+systemctl --user list-unit-files --state=enabled --no-legend 'celeris-gui@*.service'
+```
+
+両方が空であることを確かめる。単発 unit があれば同様に停止・無効化する。保存したテンプレート・drop-in が
+復元可能であることを確認してから、user unit の原本を退避する。
+
+```bash
+mkdir -p "$MIGRATION_DIR/removed-units"
+for f in "$HOME/.config/systemd/user"/celeris-gui*; do
+  [ ! -e "$f" ] || mv "$f" "$MIGRATION_DIR/removed-units/"
+done
+systemctl --user daemon-reload
+ss -ltnp 'sport = :7700'
+```
+
+旧portに listener が残った場合は所有 process・unit を特定してから停止し、portだけを根拠に kill しない。
+旧port向けの proxy upstream・不要な forward/listen/firewall 公開を、その設定の管理手順で除去する。
+DB・events・credentials・既存 release・共有依存 cache・旧認証鍵は削除しない。旧版の rollback に必要である。
+
+### 5. 復旧
+
+この変更は DB schema を変更しない。画面撤去の復旧では **`--restore-db` を使わない**。
+昇格後のデータを保持し、保存した config・旧 unit・proxy と旧 release を戻す。
+
+1. proxy を戻す前に旧 unit のテンプレート/drop-in を `$MIGRATION_DIR/units/` から元の場所へコピーし、
+   `systemctl --user daemon-reload`。旧 GUI の秘密と依存 cache が残っていることを確認する。
+2. `$MIGRATION_DIR/config.toml` を0600で本番 config に戻す。保存した web.env も変更していた場合だけ復元する。
+3. **旧 release に同梱された** `"$STATE_DIR/releases/$OLD_SHA/scripts/promote.sh" "$OLD_SHA"` を実行する。
+   current が新へ更新済みなら旧同梱の rollback.sh も利用できるが、失敗した昇格では previous が指す先を推測しない。
+   旧同梱 script は旧 GUI を起動できる。新コードへ互換経路は追加しない。
+4. daemon と画面の health/release を確認し、proxy を保存した設定へ戻す。新 web が残る場合は新 instance を
+   disable/stop し、旧 web を使っていた場合は保存した web unit と旧 release の web-follow.sh で復旧する。
+   旧 GUI の表示とログイン、SSE・file・Live View を確認する。
+
+別の同時変更で DB schema が進んでいて旧版が読めない場合はここで停止し、DBを戻してデータを失う操作は別途判断する。
+
+## 未解決事項・提案
+
+本番切替は運用セッションで上記の手順を実行する。追加の機能判断は無い。

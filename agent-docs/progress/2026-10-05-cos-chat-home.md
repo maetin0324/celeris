@@ -83,7 +83,7 @@ web の試験は決定的（fake timer・試験側 stream、fake-daemon 制御 e
 - **plan gate の withdraw は 422**（cos-run 付記 D3 代答）: 中止の連鎖を伴うため拒否。
 - **web の代答カード href**（web-chat 未解決）: 実 daemon が置く `/cos/operations/{o}` 等の href に web の route が無く 404。triage のカードは `/?thread=<inbox>` だけで元待ち画面へ直行できない。route/schema 追加は別 task。
 - **共有 Markdown の表パース**（web-chat 未解決）: `web/components/content/markdown.tsx` の fence 直後の表を解析しない。`web/components/` は web-chat の範囲外。
-- **override の本文**（web-chat 未解決）: data 層は `gui-api.md` §3.129・生成型 `{action, reason}` を正としており、ADR D2 表の `{idempotency_key, expected_event_id, mode, reason}` と食い違う（実装と生成型を正とした）。
+- **override の本文**（web-chat 未解決）: data 層は `api.md` §3.129・生成型 `{action, reason}` を正としており、ADR D2 表の `{idempotency_key, expected_event_id, mode, reason}` と食い違う（実装と生成型を正とした）。
 - **受信箱 badge の件数**（web-chat 未解決）: thread API に無く、home が受信箱データの `counts.total` を使う。100 件より古い項目は最初の頁に入らない限り数に入らない（`kind=inbox` フィルタ無し）。
 - **dispatcher と API router の 1 本通し試験**（cos-run 未解決）: 偽 harness が resolve API を HTTP で実際に呼ぶ試験は無く、両側を同じ triple 契約で別々に検証済み。
 - **opencode（acp）の session/load・画像能力未確認時の明示 fresh**（cos-run 付記 D2 縮退）: ADR の「能力なし・拒否なら明示 fresh」どおりの挙動。

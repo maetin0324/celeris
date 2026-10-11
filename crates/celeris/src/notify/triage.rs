@@ -11,7 +11,7 @@ use time::OffsetDateTime;
 use super::{CONTENT_MAX_CHARS, NotifyConfig, excerpt};
 
 /// A missing or invalid web URL is a visible configuration failure, never a sent notification.
-pub const NO_GUI_URL: &str = "notify.gui_base_url is missing or invalid";
+pub const NO_WEB_URL: &str = "notify.web_base_url is missing or invalid";
 
 fn field<'a>(value: &'a Value, name: &str) -> &'a str {
     value.get(name).and_then(Value::as_str).unwrap_or("")
@@ -20,8 +20,8 @@ fn field<'a>(value: &'a Value, name: &str) -> &'a str {
 /// Only the structured packet's public summary and options enter Discord. The URL is
 /// supplied by the daemon; the worker cannot provide an external host.
 pub fn render(row: &Notification, config: &NotifyConfig) -> Result<String, &'static str> {
-    let base = config.base_url().ok_or(NO_GUI_URL)?;
-    let parsed = reqwest::Url::parse(base).map_err(|_| NO_GUI_URL)?;
+    let base = config.base_url().ok_or(NO_WEB_URL)?;
+    let parsed = reqwest::Url::parse(base).map_err(|_| NO_WEB_URL)?;
     if !matches!(parsed.scheme(), "http" | "https")
         || parsed.host_str().is_none()
         || !parsed.username().is_empty()
@@ -29,7 +29,7 @@ pub fn render(row: &Notification, config: &NotifyConfig) -> Result<String, &'sta
         || parsed.query().is_some()
         || parsed.fragment().is_some()
     {
-        return Err(NO_GUI_URL);
+        return Err(NO_WEB_URL);
     }
     let packet: Value = serde_json::from_str(&row.body).map_err(|_| "invalid CoS outbox packet")?;
     let path = field(&packet, "web_path");

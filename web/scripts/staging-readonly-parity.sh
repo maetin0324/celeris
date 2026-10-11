@@ -2,14 +2,12 @@
 # verify.sh hook: run the released gateway against its live staging snapshot.
 set -euo pipefail
 
-[ "$#" -eq 5 ] || { echo "usage: $0 <sha12> <release-dir> <api-url> <gui-url> <token-file>" >&2; exit 2; }
+[ "$#" -eq 4 ] || { echo "usage: $0 <sha12> <release-dir> <api-url> <token-file>" >&2; exit 2; }
 sha12="$1"
 release_dir="$2"
 api_url="$3"
-gui_url="$4"
-token_file="$5"
+token_file="$4"
 [ "$api_url" = 'http://127.0.0.1:7711' ] || { echo "refusing non-staging API: $api_url" >&2; exit 2; }
-[ "$gui_url" = 'http://127.0.0.1:7701' ] || { echo "refusing non-staging GUI: $gui_url" >&2; exit 2; }
 [ -f "$release_dir/web/app/server/index.js" ] || { echo "release web/app missing" >&2; exit 1; }
 : "${WEB_STAGING_LOG_DIR:?set WEB_STAGING_LOG_DIR to the run artifacts directory}"
 mkdir -p "$WEB_STAGING_LOG_DIR"
@@ -66,9 +64,8 @@ for _ in $(seq 1 60); do
   sleep 1
 done
 [ "$ready" = true ] || { echo "web gateway did not become healthy" >&2; exit 1; }
-curl --fail --silent "$gui_url/healthz" >"$WEB_STAGING_LOG_DIR/gui-health.json"
 
-echo "staging gui=$gui_url api=$api_url web=$base sha12=$sha12"
+echo "staging api=$api_url web=$base sha12=$sha12"
 set +e
 (
   cd "$repo_dir/web"

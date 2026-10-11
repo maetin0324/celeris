@@ -18,9 +18,9 @@ pub const PRUNABLE_SUBPATHS: &[&str] = &[
     "target",
     "node_modules",
     "build",
+    "web/node_modules",
+    "web/dist",
     ".venv",
-    "gui/node_modules",
-    "gui/build",
 ];
 
 /// 1 タスクの作業場所で見つかった、刈れる生成物。

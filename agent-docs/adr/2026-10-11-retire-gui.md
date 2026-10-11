@@ -19,3 +19,18 @@ web gateway は daemon に直接接続し、login・SSE・ファイル配信・B
 web の build・test・配布・verify は必須の release gate とする。
 DB・events・credential・cron の daemon/API/CLI は保持する。本番の unit・proxy・port の変更は
 進捗ファイルの「本番への移行」に記載し、運用セッションで実行する。
+
+## 実装（2026-10-11）
+
+- `gui/` と専用の check/sync script・unit・旧名称の初回移行台本を削除した。
+  アプリ内の ADR は本文を変えず `agent-docs/gui/adr/` へ移した。同番号の設計案が既にある
+  0001/0002 のアプリ内版は `agent-docs/gui/standalone/` に保持する。
+- release の web gate と production dependency 梱包、verify の app 起動、promote の web 切替を必須にした。
+  失敗した web で成功 release / promoted.json を作らない。旧 web の起動復旧と昇格再試行を試験する。
+  `web-follow` は初回も起動し、失敗時は非0。current は web の健康確認後に更新する。
+- `migrate-to-local` は web/app を除外せず、unit も同じ hot root を使う。作業ツリーの生成物清掃は web を対象とする。
+- `[notify] gui_base_url` と API の同欄は `web_base_url` へ変更した。旧 config 欄は serde の
+  `deny_unknown_fields` で失敗し、新欄名を示す。CLI の本人認証 socket は `CELERIS_WEB_OWNER_SOCKET` を使う。
+- 現行 API 仕様は `docs/api/v1/api.md`、運用は `docs/ops/web-operation.md` に統合した。
+  既存 ADR の削除済みソースへのリンクは `scripts/dev/retired-doc-links.tsv` の source/target 完全一致で
+  歴史的参照と判定する。現行文書の欠落リンクは引き続き検査失敗になる。

@@ -37,4 +37,4 @@ ADR-0128（`agent-docs/adr/0128-docs-layout.md`）と `scripts/dev/docs-layout.t
 
 ## 未解決
 
-- `docs/protocol/worker-protocol.md`・`docs/api/v1/gui-api.md` の本文に DESIGN への言及が残る（範囲外。cleanup-api で扱う）。
+- `docs/protocol/worker-protocol.md`・`docs/api/v1/api.md` の本文に DESIGN への言及が残る（範囲外。cleanup-api で扱う）。

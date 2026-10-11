@@ -6958,7 +6958,7 @@
       "type": "object"
     },
     "CriterionSpec": {
-      "description": "受け入れ条件 1 件の指定。現在の `celerisctl add` の `--accept`/`--check-cmd`/\n`--check-artifact`/`--check-reviewer` に対応する。API の `POST /tasks` の `acceptance[]` でもある（`docs/api/v1/gui-api.md` §3.4）。",
+      "description": "受け入れ条件 1 件の指定。現在の `celerisctl add` の `--accept`/`--check-cmd`/\n`--check-artifact`/`--check-reviewer` に対応する。API の `POST /tasks` の `acceptance[]` でもある（`docs/api/v1/api.md` §3.4）。",
       "oneOf": [
         {
           "additionalProperties": false,
@@ -7806,7 +7806,7 @@
           ]
         },
         "filesystem": {
-          "description": "ADR-0064 D1: `/proc/self/mountinfo` から引けたファイルシステム種別（`\"ext4\"` 等）。\n`GET /health` は無認証（`docs/api/v1/gui-api.md` §1.1 / auth_and_guards.rs のテスト）なので、DB の\n**絶対パス自体はここに出さない**（それは認証済みの `GET /api/v1/config` の `config.db` が\n既に返している）。判定できなければ `null`。",
+          "description": "ADR-0064 D1: `/proc/self/mountinfo` から引けたファイルシステム種別（`\"ext4\"` 等）。\n`GET /health` は無認証（`docs/api/v1/api.md` §1.1 / auth_and_guards.rs のテスト）なので、DB の\n**絶対パス自体はここに出さない**（それは認証済みの `GET /api/v1/config` の `config.db` が\n既に返している）。判定できなければ `null`。",
           "type": [
             "string",
             "null"
@@ -18106,7 +18106,7 @@
     },
     "NewPlanSpec": {
       "additionalProperties": false,
-      "description": "`celerisctl plan` から組み立てる新規 Plan タスクの指定。API の `POST /plans` の本文でもある（`docs/api/v1/gui-api.md` §3.14）。",
+      "description": "`celerisctl plan` から組み立てる新規 Plan タスクの指定。API の `POST /plans` の本文でもある（`docs/api/v1/api.md` §3.14）。",
       "properties": {
         "goal": {
           "description": "大目標。1行目の先頭80文字が `title` になる。",
@@ -18880,13 +18880,6 @@
             "null"
           ]
         },
-        "gui_base_url": {
-          "description": "`[notify] gui_base_url`（文面のリンクの根）。",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
         "inbox_batch_secs": {
           "description": "`[notify]` outbound route configuration (ADR-0133 D6).",
           "format": "uint64",
@@ -18915,6 +18908,13 @@
         "secret_id": {
           "description": "`[notify] discord_webhook_secret`（GUI は「この id で API キー画面に登録して」と案内する）。",
           "type": "string"
+        },
+        "web_base_url": {
+          "description": "`[notify] web_base_url`（文面のリンクの根）。",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
@@ -29485,7 +29485,7 @@
       "properties": {
         "cascaded": {
           "default": [],
-          "description": "この遷移の伝播で `cancelled` になった、対象タスク以外のタスク（`docs/api/v1/gui-api.md` §5.7）。",
+          "description": "この遷移の伝播で `cancelled` になった、対象タスク以外のタスク（`docs/api/v1/api.md` §5.7）。",
           "items": {
             "$ref": "#/$defs/TaskRef"
           },

@@ -1,6 +1,6 @@
 import type { IconName } from "../ui/icon";
 
-// ナビの項目（P2-02）。path は現行 gui/ と同じ（S5）。
+// ナビの項目（P2-02）。SPA の route と一致させる。
 // group はナビの見出しの区分（DESIGN.md: 日々の仕事と管理に分ける）。並びは navItems の順のまま。
 export const navItems = [
   { to: "/", label: "ホーム", group: "work" },
@@ -34,7 +34,7 @@ export const navGroups: readonly { key: NavGroup; label: string }[] = [
   { key: "admin", label: "組織と管理" },
 ];
 
-// md 未満の画面下のタブ（旧 GUI の MobileTabBar と同じ形）。この 4 つと「その他」で 5 列にする。
+// md 未満の画面下のタブ（スマホの主要な導線）。この 4 つと「その他」で 5 列にする。
 // 「その他」のシートには navItems のうちここに無いものを navItems の順で出す。
 export const mobileTabs = [
   { to: "/", label: "ホーム", icon: "home" },

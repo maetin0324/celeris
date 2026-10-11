@@ -32,7 +32,7 @@ completed: 2026-10-07
 - schema: `knowledge_record` / `knowledge_record_result` を足し、`UPDATE_SCHEMA=1` で `docs/api/v1/api-v1.schema.json`、
   gui（pnpm@11.27.0 `gen:types`）・web（`node web/scripts/gen-types.mjs`）の生成型を更新。新しい Event は足していない
   （監査は既存の `cos_operations` と監査 event）。
-- `docs/api/v1/gui-api.md`: 表の 93b、§3.104a（新 route）、§3.129 に登録済み KB 操作の段落。
+- `docs/api/v1/api.md`: 表の 93b、§3.104a（新 route）、§3.129 に登録済み KB 操作の段落。
 
 ## 証拠
 

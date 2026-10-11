@@ -14,7 +14,7 @@ chip を `aria-pressed` 付きのボタンに変え、押下時に URL の状態
 
 `GET /api/v1/tasks/counts` は既存の `TaskStore::count_by_status`（SQLite の `GROUP BY status`）から集計値だけを返す。一覧の行は取得しない。web の件数 query は task list 系の key に置き、状態が変わる SSE で再取得する。gateway は `/api/tasks/counts` を既存の規則で中継する。daemon の複数 status 指定は `QueryParams::list` と `ListFilter.statuses` で OR として処理されることを API 試験で確認した。
 
-API の契約は `gui-api.md`、生成した `api-v1.schema.json`、追加操作の `task-counts.openapi.yaml` に記録した。`web/api/generated/types.ts` も同じ schema から再生成した。CLI の `celerisctl show --json` はタスク詳細を返す既存契約を保ち、件数専用 API は CLI に追加しない。
+API の契約は `api.md`、生成した `api-v1.schema.json`、追加操作の `task-counts.openapi.yaml` に記録した。`web/api/generated/types.ts` も同じ schema から再生成した。CLI の `celerisctl show --json` はタスク詳細を返す既存契約を保ち、件数専用 API は CLI に追加しない。
 
 `gui/app/celeris/types.ts` は今回再生成しない。共通 schema を再生成すると GUI 側にも `TaskStatusCounts` と `task_status_counts` が増えるが、このタスクの指示「gui/ は変えない」を優先した。GUI はこの新しい API を呼ばないため実行上の影響はない。GUI の生成型と共通 schema の完全一致は今回の範囲に含めず、GUI を変更する作業で `pnpm -C gui gen:types` を実行する。
 

@@ -1,3 +1,4 @@
+# GUI 関連の削除行は 2026-10-11 廃止 ADR に追従。以下の reason は旧移動時の記録。
 # Format: old path<TAB>proposed new path<TAB>human|agent|delete; paths are repository-relative; delete uses - as the new path; proposals do not move files.
 # human = current reader-facing specification/guide/operation; agent = decision/progress/work record or agent-only rule; delete = obsolete or duplicate, with the reason recorded below.
 # Roots follow ADR-0128: docs/ = minimal current human documentation, agent-docs/ = agent records and work rules. Unchanged paths are listed with old = new.
@@ -23,7 +24,7 @@
 # reason docs/execution-decomposition-report-2026-09-25.md: cleanup-reports で削除。E6 時点の分析で、挙げた問題は Phase F で実装済み、gate 提案は ADR-0079 で置き換わった（最後の commit a42f9a54）。
 # reason docs/execution-parallel-report-2026-09-28.md: cleanup-reports で削除。案件計画（ADR-0074 D3）は ADR-0079 で廃止され、決定は ADR-0074 本文にある（最後の commit a42f9a54）。
 # reason docs/notes/build-cache-tiering-input-2026-09-28.md: cleanup-reports で削除。ADR-0075 の入力メモで、方針は ADR-0075 と実装に入り、現状の記述（sccache 未導入など）は食い違う（最後の commit a42f9a54）。
-# reason docs/celeris-api-v1.md: cleanup-api で中身を docs/api/v1/gui-api.md §3.125 へ統合した。docs/api/v1/overview.md は gui/docs/celeris-api-v1.md（変更禁止）の参照を保つ転送ページ。
+# reason docs/celeris-api-v1.md: cleanup-api で中身を docs/api/v1/api.md §3.125 へ統合した。docs/api/v1/overview.md は gui/docs/celeris-api-v1.md（変更禁止）の参照を保つ転送ページ。
 # 末尾の 9 行は task の base（0d438ec1）以降に main が旧配置へ足したもの。land-verify が ADR-0128 D6 で移した。
 docs/DESIGN.md	-	delete
 docs/GOAL_TEMPLATE.md	agent-docs/GOAL_TEMPLATE.md	agent
@@ -147,25 +148,25 @@ docs/celeris-api-v1.md	docs/api/v1/overview.md	human
 docs/execution-architecture-2026-09-24.md	-	delete
 docs/execution-decomposition-report-2026-09-25.md	-	delete
 docs/execution-parallel-report-2026-09-28.md	-	delete
-docs/gui/DESIGN-GUI.md	agent-docs/gui/design.md	agent
+docs/gui/DESIGN-GUI.md	-	delete
 docs/gui/adr/0001-architecture-boundary.md	agent-docs/gui/adr/0001-architecture-boundary.md	agent
 docs/gui/adr/0002-frontend-stack.md	agent-docs/gui/adr/0002-frontend-stack.md	agent
-docs/gui/api.md	docs/api/v1/gui-api.md	human
+docs/gui/api.md	docs/api/v1/api.md	human
 docs/gui/bootstrap/CLAUDE.md	-	delete
 docs/gui/bootstrap/GOAL_TEMPLATE.md	-	delete
 docs/gui/bootstrap/PROGRESS.md	-	delete
 docs/gui/bootstrap/README.md	-	delete
 docs/gui/bootstrap/agents/auditor.md	-	delete
 docs/gui/bootstrap/agents/implementer.md	-	delete
-docs/gui/celeris-proposals.md	agent-docs/gui/celeris-proposals.md	agent
-docs/gui/model-routing/accounts-1440.png	agent-docs/gui/model-routing/accounts-1440.png	agent
-docs/gui/model-routing/accounts-360.png	agent-docs/gui/model-routing/accounts-360.png	agent
-docs/gui/model-routing/accounts-393.png	agent-docs/gui/model-routing/accounts-393.png	agent
-docs/gui/model-routing/accounts-412.png	agent-docs/gui/model-routing/accounts-412.png	agent
-docs/gui/model-routing/providers-1440.png	agent-docs/gui/model-routing/providers-1440.png	agent
-docs/gui/model-routing/providers-360.png	agent-docs/gui/model-routing/providers-360.png	agent
-docs/gui/model-routing/providers-393.png	agent-docs/gui/model-routing/providers-393.png	agent
-docs/gui/model-routing/providers-412.png	agent-docs/gui/model-routing/providers-412.png	agent
+docs/gui/celeris-proposals.md	-	delete
+docs/gui/model-routing/accounts-1440.png	-	delete
+docs/gui/model-routing/accounts-360.png	-	delete
+docs/gui/model-routing/accounts-393.png	-	delete
+docs/gui/model-routing/accounts-412.png	-	delete
+docs/gui/model-routing/providers-1440.png	-	delete
+docs/gui/model-routing/providers-360.png	-	delete
+docs/gui/model-routing/providers-393.png	-	delete
+docs/gui/model-routing/providers-412.png	-	delete
 docs/knowledge.md	docs/guides/knowledge.md	human
 docs/llm-source.md	docs/guides/llm-source.md	human
 docs/mcp.md	docs/guides/mcp.md	human
@@ -220,7 +221,7 @@ docs/web/gates/p5-01-latency.md	agent-docs/web/gates/p5-01-latency.md	agent
 docs/web/gates/p5-02-security.md	agent-docs/web/gates/p5-02-security.md	agent
 docs/web/gates/p5-03-mobile-a11y.md	agent-docs/web/gates/p5-03-mobile-a11y.md	agent
 docs/web/implementation-plan.md	agent-docs/web/implementation-plan.md	agent
-docs/web/parallel-operation.md	docs/ops/web-parallel-operation.md	human
+docs/web/parallel-operation.md	docs/ops/web-operation.md	human
 docs/workspace.md	docs/guides/workspace.md	human
 docs/adr/0116-browser-launcher-implementation.md	agent-docs/adr/0116-browser-launcher-implementation.md	agent
 docs/adr/0125-deterministic-time-tests.md	agent-docs/adr/0125-deterministic-time-tests.md	agent

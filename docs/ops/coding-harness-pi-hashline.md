@@ -72,7 +72,7 @@ extensions/tools の未指定・OAuth pool 指定は daemon 起動時の config 
 
 ## 5. (model, harness) 別の metrics の見方
 
-- run 単位: `GET /api/v1/tasks/{id}/routing`（[gui-api](../api/v1/gui-api.md)）の run ごとの監査に `adapter`（`pi` / `claude-code` …）と
+- run 単位: `GET /api/v1/tasks/{id}/routing`（[HTTP API](../api/v1/api.md)）の run ごとの監査に `adapter`（`pi` / `claude-code` …）と
   `model` が別欄で出る。`harness` 欄は genre（`coding`）なので比較には `adapter` 欄を使う。
 - 選ばれ方: 監査の `adapter_choice`（explicit / preferred / fallback と理由 / provider_order）で、既定解決で選ばれたか
   fallback に倒れたかが分かる。fallback が多ければ Pi 行の枠・cooldown を疑う。

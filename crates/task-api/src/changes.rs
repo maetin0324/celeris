@@ -345,7 +345,7 @@ fn pr_unavailable(detail: impl Into<String>) -> ApiProblem {
 pub(crate) struct ChangesEnv {
     pub(crate) workspace_root: std::path::PathBuf,
     pub(crate) github: crate::GithubSettings,
-    pub(crate) gui_base_url: Option<String>,
+    pub(crate) web_base_url: Option<String>,
 }
 
 impl ChangesEnv {
@@ -353,7 +353,7 @@ impl ChangesEnv {
         Self {
             workspace_root: state.inner.view.workspace_root.clone(),
             github: state.inner.github.clone(),
-            gui_base_url: state.inner.notify_gui_base_url.clone(),
+            web_base_url: state.inner.notify_web_base_url.clone(),
         }
     }
 }
@@ -521,7 +521,7 @@ fn run_integrate(
             Err(detail) => (record(IntegrationState::Failed, detail), None),
             Ok(()) => {
                 let report = latest_report_for(store, task);
-                let body = pr_body(task, report.as_ref(), env.gui_base_url.as_deref());
+                let body = pr_body(task, report.as_ref(), env.web_base_url.as_deref());
                 match ops_changes::gh_pr_create(
                     &env.github.gh,
                     &target.source,
@@ -805,7 +805,7 @@ fn latest_report_for(
 pub fn pr_body(
     task: &Task,
     report: Option<&task_core::Report>,
-    gui_base_url: Option<&str>,
+    web_base_url: Option<&str>,
 ) -> String {
     let mut out = String::new();
     out.push_str("## 目的\n\n");
@@ -831,7 +831,7 @@ pub fn pr_body(
         }
     }
     out.push_str("\n---\n\n");
-    match gui_base_url.map(str::trim).filter(|u| !u.is_empty()) {
+    match web_base_url.map(str::trim).filter(|u| !u.is_empty()) {
         Some(base) => out.push_str(&format!(
             "Celeris task {id}: {base}/tasks/{id}\n",
             id = task.id,

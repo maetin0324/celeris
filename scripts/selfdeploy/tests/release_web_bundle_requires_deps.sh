@@ -1,13 +1,4 @@
 #!/usr/bin/env bash
-# P6-02（web ADR-W3 D3）: release.sh の web/ の段は**非 blocking**。
-#   (1) web/ の段（web-pnpm-install / typecheck / test / release）が全部通る → リリースが作られ、gate.json の `web.ok`
-#       が true、リリースに web/<tarball> と展開済みの web/app/（offline の prod install 済み）がある。
-#   (2) web/ の段が落ちる（web-pnpm-test が exit 1）→ **それでもリリースは作られ** gate.json は `ok: true`、
-#       `web.ok` は false・`web.failed_step` は web-pnpm-test、後ろの web-pnpm-release は skipped。gui の昇格に使う
-#       `releases/<sha12>/manifest.json` は `gate_ok: true`。web/ の配布物は置かれない。
-#   (3) ビルドする sha に web/ が無い → web の段は全部 skipped（理由 `no web/ directory`）。既存の gui の段は変えない。
-#   (4) gui の gate が落ちる（pnpm typecheck が exit 1）→ 従来どおりリリースは作られず、web の段は走らない。
-# 偽の cargo / pnpm / node / corepack / celerisctl を使い、本番のパス・ネットワーク（:7700 / :7710 / staging）には触れない。
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")/.." && pwd)"
@@ -42,18 +33,6 @@ case "$1" in
     mkdir -p "$CARGO_TARGET_DIR/release"
     for b in celeris celerisctl celeris-credentiald; do printf '#!/bin/sh\nexit 0\n' >"$CARGO_TARGET_DIR/release/$b"; chmod +x "$CARGO_TARGET_DIR/release/$b"; done
     ;;
-esac
-exit 0
-EOF2
-# gui の pnpm（corepack の shim 相当）。GUI_FAIL_STEP=typecheck なら gui の gate を落とす。
-cat >"$root/bin/pnpm" <<'EOF2'
-#!/usr/bin/env bash
-printf '%s\t%s\n' "$PWD" "$*" >>"$PNPM_LOG"
-[ "${GUI_FAIL_STEP:-}" = "$1" ] && { echo "gui $1 failed (fake)"; exit 1; }
-case "$1" in
-  --version) echo 11.27.0 ;;
-  install) mkdir -p node_modules && : >node_modules/.modules.yaml ;;
-  build) mkdir -p build && echo ok >build/index.html ;;
 esac
 exit 0
 EOF2
@@ -110,11 +89,7 @@ chmod +x "$root/bin/"*
 # ---- 元のリポジトリ（web/ は c1 で足す） --------------------------------------------
 
 repo="$root/repo"
-mkdir -p "$repo/gui" "$repo/crates/task-core/src" "$repo/crates/celeris" "$repo/crates/x/src" "$repo/scripts/selfdeploy"
-printf '{"name":"celeris-gui","version":"0.1.0","packageManager":"pnpm@11.27.0"}\n' >"$repo/gui/package.json"
-printf 'lockfileVersion: 9.0\n' >"$repo/gui/pnpm-lock.yaml"
-printf 'packages:\n  - "."\n' >"$repo/gui/pnpm-workspace.yaml"
-printf '// server\n' >"$repo/gui/server.js"
+mkdir -p "$repo/crates/task-core/src" "$repo/crates/celeris" "$repo/crates/x/src" "$repo/scripts/selfdeploy"
 printf 'pub const SCHEMA_VERSION: u32 = 7;\n' >"$repo/crates/task-core/src/store.rs"
 printf '[package]\nname = "celeris"\nversion = "0.1.0"\n' >"$repo/crates/celeris/Cargo.toml"
 printf '// v0\n' >"$repo/crates/x/src/lib.rs"
@@ -136,7 +111,7 @@ run_release() {
   CELERIS_STATE_DIR="$root/state" CELERIS_CONFIG_DIR="$root/config" CELERIS_CONFIG="$root/config/config.toml" \
     SD_REPO="$repo" SD_CELERISCTL="$root/bin/celerisctl" SD_PNPM_SHIM_DIR="$root/bin" \
     PNPM_LOG="$root/pnpm.log" COREPACK_LOG="$root/corepack.log" FAKE_COREPACK="$root/bin/corepack" \
-    SD_WEB_PNPM="$root/bin/web-pnpm" FAKE_SCRATCH="$root/scratch" SD_GATE_SKIP_WEB=0 \
+    SD_WEB_PNPM="$root/bin/web-pnpm" FAKE_SCRATCH="$root/scratch" \
     PATH="$root/bin:$PATH" bash "$here/release.sh" "$1" >"$root/release.out" 2>&1
 }
 
@@ -149,20 +124,20 @@ steps = {s["step"]: s for s in g["steps"]}
 sys.exit(0 if eval(sys.argv[2], {"g": g, "steps": steps}) else 1)
 PY
 }
-GUI_GATE_RAN='all(not steps[n]["skipped"] and steps[n]["exit"] == 0 for n in ("cargo-fmt-check", "cargo-test", "cargo-clippy", "cargo-build", "pnpm-install", "pnpm-typecheck", "pnpm-build"))'
 WEB_STEP_NAMES='("web-pnpm-install", "web-pnpm-typecheck", "web-pnpm-test", "web-pnpm-release")'
 
-# Missing dependencies must make the web gate false while keeping the GUI release.
+# Missing dependencies must make the web gate false and prevent publication.
 mkdir -p "$repo/web/server"
 printf '{"name":"celeris-web","version":"0.1.0","packageManager":"pnpm@12.6.0"}\n' >"$repo/web/package.json"
 printf 'lockfileVersion: 9.0\n' >"$repo/web/pnpm-lock.yaml"
 printf '// gateway\n' >"$repo/web/server/index.js"
 c1="$(commit web-without-prod-deps)"
 c1_12="${c1:0:12}"
-WEB_SKIP_PROD_NODE_MODULES=1 run_release "$c1" || fail "missing web dependencies blocked the GUI release"
-rel1="$root/state/releases/$c1_12"
+if WEB_SKIP_PROD_NODE_MODULES=1 run_release "$c1"; then fail "missing dependencies published"; fi
+rel1="$root/state/releases/.build/$c1_12"
+[ ! -d "$root/state/releases/$c1_12" ] || fail "missing dependencies published"
 [ -f "$rel1/gate.json" ] || fail "gate.json missing"
-gate_is "$rel1/gate.json" "g['ok'] is True and g['web']['ok'] is False and g['web']['failed_step'] == 'web-bundle' and g['web']['bundle'] is None" || fail "missing node_modules passed the web gate"
+gate_is "$rel1/gate.json" "g['ok'] is False and g['web']['ok'] is False and g['web']['failed_step'] == 'web-bundle' and g['web']['bundle'] is None" || fail "missing node_modules passed the web gate"
 [ ! -d "$rel1/web/app/node_modules" ] || fail "fake pnpm unexpectedly created node_modules"
 grep -q 'node_modules missing' "$root/release.out" || fail "missing dependency reason was not logged"
 
@@ -180,9 +155,10 @@ gate_is "$rel2/gate.json" "g['ok'] is True and g['web']['ok'] is True and g['web
 printf '// gateway v3\n' >"$repo/web/server/index.js"
 c3="$(commit web-with-unresolvable-deps)"
 c3_12="${c3:0:12}"
-WEB_IMPORT_FAIL=1 run_release "$c3" || fail "unresolvable web dependencies blocked the GUI release"
-rel3="$root/state/releases/$c3_12"
-gate_is "$rel3/gate.json" "g['ok'] is True and g['web']['ok'] is False and g['web']['failed_step'] == 'web-bundle' and g['web']['bundle'] is None" || fail "unresolvable dependencies passed the web gate"
+if WEB_IMPORT_FAIL=1 run_release "$c3"; then fail "unresolvable dependencies published"; fi
+rel3="$root/state/releases/.build/$c3_12"
+[ ! -d "$root/state/releases/$c3_12" ] || fail "unresolvable dependencies published"
+gate_is "$rel3/gate.json" "g['ok'] is False and g['web']['ok'] is False and g['web']['failed_step'] == 'web-bundle' and g['web']['bundle'] is None" || fail "unresolvable dependencies passed the web gate"
 grep -q 'server dependencies unresolved' "$root/release.out" || fail "import failure reason was not logged"
 
 echo "release_web_bundle_requires_deps: ok"

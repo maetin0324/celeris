@@ -1,4 +1,4 @@
-# CoS triage schema・生成型・gui-api.md
+# CoS triage schema・生成型・api.md
 
 ---
 tasks: [01M47VN95D8QQ65ATZVGHFFXA7]
@@ -21,7 +21,7 @@ completed: 2026-10-06
 4. `corepack pnpm@11.27.0 -C gui gen:types` → `gui/app/celeris/types.ts` を更新（`cos_escalation`/`cos_fallback` の union 順序の並び替えを含む生成差分）。`pnpm install --offline` は不要だった（corepack が node_modules を立てた）。
 5. `sh scripts/sync-gui-docs.sh` → `gui/docs/celeris-api-v1.md` を正本から写し直し。`--check` で up to date。
 
-## docs/api/v1/gui-api.md
+## docs/api/v1/api.md
 
 - §2 の一覧に 199〜201 の 3 行（`GET /cos/inbox`、`POST /cos/inbox/{i}/resolve`、`POST /cos/operations/{o}/override`）を追記し、見出しの count を `201 = … + CoS triage 3` にした。
 - §3.129「CoS 受信箱の一次対応と代答の取消（ADR 2026-10-06-cos-inbox-triage / 2026-10-05-cos-chat-home D3・D6）」を新設。3 route の認証・入力・成功・409/403/422 の条件・override の 3 経路（reversible の新待ち・不可逆の remediation task・消費済みの pause）を記す。

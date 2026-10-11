@@ -3762,12 +3762,12 @@ export type NotifyView = {
   "digest_last_sent_at"?: string | null;
   "digest_max_lines": number;
   "fingerprint"?: string | null;
-  "gui_base_url"?: string | null;
   "inbox_batch_secs": number;
   "inbox_new_last_sent_at"?: string | null;
   "inbox_reminder_secs": number;
   "recent": Array<NotifyRecent>;
   "secret_id": string;
+  "web_base_url"?: string | null;
 };
 
 export type Objective = "quality_first" | "balanced" | "resource_first";

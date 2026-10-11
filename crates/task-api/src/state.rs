@@ -101,8 +101,8 @@ pub(crate) struct Inner {
     pub(crate) memory_dir: Option<std::path::PathBuf>,
     /// ADR-0037 D2（Phase 39）: `[notify] discord_webhook_secret`。
     pub(crate) notify_secret_id: String,
-    /// ADR-0037 D3: `[notify] gui_base_url`。
-    pub(crate) notify_gui_base_url: Option<String>,
+    /// ADR-0037 D3: `[notify] web_base_url`。
+    pub(crate) notify_web_base_url: Option<String>,
     pub(crate) notify_inbox_batch_secs: u64,
     pub(crate) notify_inbox_reminder_secs: u64,
     pub(crate) notify_digest_interval_secs: u64,
@@ -185,7 +185,7 @@ impl ApiState {
             secret_usage: settings.secret_usage,
             memory_dir: settings.memory_dir,
             notify_secret_id: settings.notify_secret_id,
-            notify_gui_base_url: settings.notify_gui_base_url,
+            notify_web_base_url: settings.notify_web_base_url,
             notify_inbox_batch_secs: settings.notify_inbox_batch_secs,
             notify_inbox_reminder_secs: settings.notify_inbox_reminder_secs,
             notify_digest_interval_secs: settings.notify_digest_interval_secs,

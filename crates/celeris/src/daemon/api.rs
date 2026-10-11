@@ -83,7 +83,7 @@ impl task_api::RoutingCatalogReader for RoutingCatalogAdapter {
     }
 }
 
-/// ADR-0013 / `docs/api/v1/gui-api.md` §3.21: `GET /api/v1/config` に出す設定の要約。env は**キー名だけ**、トークンとその場所は出さない。
+/// ADR-0013 / `docs/api/v1/api.md` §3.21: `GET /api/v1/config` に出す設定の要約。env は**キー名だけ**、トークンとその場所は出さない。
 pub fn config_view(config: &Config, listen: SocketAddr) -> ConfigView {
     let models = effective_models(config);
     ConfigView {
@@ -320,7 +320,7 @@ pub fn api_settings(
         secret_usage: secret_usage(config),
         memory_dir: config.memory.as_ref().map(|m| m.dir.clone()),
         notify_secret_id: config.notify.discord_webhook_secret.clone(),
-        notify_gui_base_url: config.notify.base_url().map(str::to_string),
+        notify_web_base_url: config.notify.base_url().map(str::to_string),
         notify_inbox_batch_secs: config.notify.inbox_batch_secs,
         notify_inbox_reminder_secs: config.notify.inbox_reminder_secs,
         notify_digest_interval_secs: config.notify.digest_interval_secs,

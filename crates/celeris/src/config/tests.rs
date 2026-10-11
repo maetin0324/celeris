@@ -2073,14 +2073,14 @@ fn api_section_defaults_to_disabled_and_requires_token_off_loopback() {
     assert!(cfg.api.listen.is_none());
 
     let cfg: Config =
-        toml::from_str(&format!("[api]\nlisten = \"127.0.0.1:7700\"\n{providers}")).unwrap();
+        toml::from_str(&format!("[api]\nlisten = \"127.0.0.1:7720\"\n{providers}")).unwrap();
     assert!(cfg.validate().is_ok());
     let cfg: Config =
-        toml::from_str(&format!("[api]\nlisten = \"[::1]:7700\"\n{providers}")).unwrap();
+        toml::from_str(&format!("[api]\nlisten = \"[::1]:7720\"\n{providers}")).unwrap();
     assert!(cfg.validate().is_ok());
 
     let cfg: Config =
-        toml::from_str(&format!("[api]\nlisten = \"0.0.0.0:7700\"\n{providers}")).unwrap();
+        toml::from_str(&format!("[api]\nlisten = \"0.0.0.0:7720\"\n{providers}")).unwrap();
     assert!(
         cfg.validate()
             .unwrap_err()
@@ -2088,7 +2088,7 @@ fn api_section_defaults_to_disabled_and_requires_token_off_loopback() {
             .contains("token_file is required")
     );
     let cfg: Config = toml::from_str(&format!(
-        "[api]\nlisten = \"0.0.0.0:7700\"\ntoken_file = \"api.token\"\n{providers}"
+        "[api]\nlisten = \"0.0.0.0:7720\"\ntoken_file = \"api.token\"\n{providers}"
     ))
     .unwrap();
     assert!(cfg.validate().is_ok());
@@ -2099,7 +2099,7 @@ fn api_section_defaults_to_disabled_and_requires_token_off_loopback() {
     std::fs::write(
         &path,
         format!(
-            "[api]\nlisten = \"127.0.0.1:7700\"\ntoken_file = \"secrets/api.token\"\n{providers}"
+            "[api]\nlisten = \"127.0.0.1:7720\"\ntoken_file = \"secrets/api.token\"\n{providers}"
         ),
     )
     .unwrap();
@@ -2768,12 +2768,12 @@ fn notify_defaults_are_used_when_the_section_is_absent() {
 
     let cfg: Config = toml::from_str(
         "[notify]\ndiscord_webhook_secret = \"hook\"\ninterval_secs = 60\n\
-             gui_base_url = \"http://192.168.1.103:7700/\"\n",
+             web_base_url = \"http://192.168.1.103:7720/\"\n",
     )
     .unwrap();
     assert_eq!(cfg.notify.discord_webhook_secret, "hook");
     assert_eq!(cfg.notify.interval_secs, 60);
-    assert_eq!(cfg.notify.base_url(), Some("http://192.168.1.103:7700"));
+    assert_eq!(cfg.notify.base_url(), Some("http://192.168.1.103:7720"));
 
     let cfg: Config = toml::from_str(
         "[notify]\ninbox_batch_secs = 15\ninbox_reminder_secs = 7200\n\

@@ -51,7 +51,7 @@ GUI の task/run 詳細にある **Open Browser Live View** は、認証済み�
 同一 origin の `/browser/live/{task_id}/{run_id}` を開く。実行中の run、本人登録、
 読み取り専用 relay の設定が必要で、認証を扱う区間では表示を止める。
 `live_view_url` は表示の可否にだけ使い、dashboard の生 URL を利用者へ渡さない。
-実装は `gui/app/celeris/browser-live.server.ts` と `gui/app/components/BrowserRunsPanel.tsx`。
+実装は `web/server/browser-live.js` と `web/features/browser/`。
 
 ## Worker の利用範囲
 
@@ -101,7 +101,7 @@ python3 scripts/browser-smoke.py --agent-browser /absolute/bin/agent-browser \
   --chromium /absolute/chrome --output /absolute/task-artifacts/browser-smoke
 ```
 
-GUI は `gui/` で `pnpm install --frozen-lockfile` 後に `pnpm typecheck` / `pnpm test` / `pnpm build`。
+web は `web/` で `pnpm install --frozen-lockfile` 後に `pnpm typecheck` / `pnpm test` / `pnpm build`。
 `node scripts/browser-check.mjs /absolute/task-artifacts` で offline fixture の task/run/mobile 表示を検証する。
 release/verify は指定 worktree の full SHA を渡し、gate.json / verify.json を task artifacts に保管する。
 ADR-0041 により旧 `self/<task-id>` 規約は Celeris が用意した task branch に置き換わっている。

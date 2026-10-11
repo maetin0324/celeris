@@ -25,7 +25,6 @@ const REPO_PATH_MARKERS: &[&str] = &[
     "scripts/",
     "tests/",
     "web/",
-    "gui/",
     "docs/",
     "Cargo.toml",
     "package.json",

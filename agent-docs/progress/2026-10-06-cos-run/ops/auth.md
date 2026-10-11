@@ -20,4 +20,4 @@ completed: 2026-10-06
 
 未解決・提案:
 - 接頭辞で始まる admin token は使えない（CoS として扱われ 401）。config 検査で弾く案。
-- 新 route と problem code（cos_audit_context_required・cos_identity_claim・cos_credential_required）の schema・gui-api.md 追記は schema 葉で行う。
+- 新 route と problem code（cos_audit_context_required・cos_identity_claim・cos_credential_required）の schema・api.md 追記は schema 葉で行う。

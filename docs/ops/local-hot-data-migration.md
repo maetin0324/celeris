@@ -34,7 +34,7 @@ tasks: [01M3Z08A0T81ZQ60XVR62XJMPD]
 | --- | --- | --- | --- | --- |
 | 1 | presync | `migrate-to-local.sh presync --dry-run` → 確認後 `migrate-to-local.sh presync` | 稼働中 | `/local` の検査、DB ディレクトリの `chattr +C`、hot 項目（DB family を除く）の初回 rsync コピー。容量不足なら `not enough space` で止まる → §1 の gc に戻る |
 | 2 | gc | `migrate-to-local.sh gc --dry-run` → 必要なら `migrate-to-local.sh gc` | 稼働中 | 終端 task の workspace・target と scratch の回収。`presync` を取り直して空きを測り直す |
-| 3 | stop | `migrate-to-local.sh stop --dry-run` → `migrate-to-local.sh stop` | **停止** | in-flight（running + reviewing）が 0、release.sh/verify.sh の lock が空いていることを確認してから `celeris@` / `celeris-gui@` / `celeris-credentiald@ <current>` を止め、旧 DB を `wal_checkpoint(TRUNCATE)` + `integrity_check` で検査する |
+| 3 | stop | `migrate-to-local.sh stop --dry-run` → `migrate-to-local.sh stop` | **停止** | in-flight（running + reviewing）が 0、release.sh/verify.sh の lock が空いていることを確認してから `celeris@` / `celeris-web@` / `celeris-credentiald@ <current>` を止め、旧 DB を `wal_checkpoint(TRUNCATE)` + `integrity_check` で検査する |
 | 4 | delta | `migrate-to-local.sh delta --dry-run` → `migrate-to-local.sh delta` | 停止中 | 差分を `rsync --delete` で再コピーし、DB は SQLite backup API で `+C` のディレクトリへ写して `integrity_check` |
 | 5 | switch | `migrate-to-local.sh switch --dry-run` → `migrate-to-local.sh switch` | 停止中 | `config.toml` の path key と `paths.env` を書き換え（`.bak-migrate-<ts>` を残す）、旧い場所を `.bak-migrate-<ts>` に退けて `/local` への symlink に替え、`install-units.sh` で unit を新しい根で再設置 |
 | 6 | start | `migrate-to-local.sh start --dry-run` → `migrate-to-local.sh start` | 再開 | `/local` の mount を確認し、`systemctl --user daemon-reload` のあと stop で止めた unit を起こす |
@@ -51,16 +51,15 @@ tasks: [01M3Z08A0T81ZQ60XVR62XJMPD]
 - 認証付き `GET /api/v1/config` の `db` が新しい DB path（`/local/celeris/data/db/celeris.sqlite3`）と一致。
 - 新 DB の `PRAGMA integrity_check` が `ok`。
 - `/local/celeris/data/db` に `C` 属性が付いている（`lsattr -d`）。
-- `$NEW_STATE/current` が `$NEW_STATE/releases/...` を指す（GUI の `node_modules` も `/local` 配下に解決されること）。
+- `$NEW_STATE/current` が `$NEW_STATE/releases/...` を指す（web の `web/app/node_modules` も `/local` 配下に解決されること）。
 - `/local` の空きが `MIGRATE_MIN_FREE_GIB`（既定 30GiB）以上。
 - 旧 path を指したままの symlink が `/local` 配下に残っていないか（警告として列挙）。
 
 これに加えて人が確認する:
 
-- `scripts/selfdeploy/status.sh` の JSON（`current` / `previous` / `health` / `gui_health` / `daemon_instances` / `stale_instances`）。読むだけで何も変えない。
-- `journalctl --user -u 'celeris@*' -u 'celeris-gui@*' -u 'celeris-credentiald@*' -n 100` でエラーが出ていないこと。
+- `scripts/selfdeploy/status.sh` の JSON（`current` / `previous` / `health` / `web_health` / `daemon_instances` / `stale_instances`）。読むだけで何も変えない。
+- `journalctl --user -u 'celeris@*' -u 'celeris-web@*' -u 'celeris-credentiald@*' -n 100` でエラーが出ていないこと。
 - 新規 backup（`[db].backup_dir` = `/local/celeris/state/backups`）が作られ、検証済みの世代を home の archive に人が複製したこと（`verify` は backup の home 転送まではしない。転送が済むまで移行完了とはしない — ADR-0136 §2）。
-- web 配布物（`web/app`）は移行の成功判定に含めない（移行当時は release.sh の `SD_GATE_SKIP_WEB` が既定 1 — main f1904ecd。2026-10-05 に既定 0 へ戻した）。
 
 ## 4. 戻し方（rollback）
 
@@ -97,3 +96,5 @@ ADR-0136 の分類どおり、次は home（NFS）のまま: `~/.config/celeris`
 ## 8. 本番での実行について
 
 この手順は**人が本番 host 上で実際のコマンドを実行する**ことを前提に書いている。実装エージェント（Celeris の run）は systemd 操作・本番 `~/.config/celeris` や `~/.local/celeris` の書き換え・本番 DB への書込みを行わない（ADR-0095 付記 D-d）。`--dry-run` による確認の実行結果をこの run の証跡として残すことはできるが、本実行・停止・起動・削除は人が行う。
+
+web 配布物と本番依存（`web/app/`）も移行し、gateway の起動と /healthz を確認する。

@@ -27,7 +27,7 @@ updated: 2026-10-09
 除外の照合を instructed_by と body の領域検証より先に行う。
 既存仕様どおり、同じ key/hash の再送は同じ rejected operation を 200 で返す。拒否には applied card を作らない。
 
-網羅性試験は router の Rust AST と gui-api.md の endpoint 表の和集合を取得し、全行が
+網羅性試験は router の Rust AST と api.md の endpoint 表の和集合を取得し、全行が
 ALLOWED/EXCLUDED/PENDING の一方だけに入ることを検査する。BASE/format!・put_route 別名・引数名の差を扱う。
 ADR の領域割当と除外理由の一致も検査する。PENDING が空であることはこの unit の条件にしない。
 

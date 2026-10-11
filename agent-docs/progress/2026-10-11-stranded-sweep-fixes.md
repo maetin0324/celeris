@@ -38,10 +38,10 @@ tasks: [01M4NM5720BYCYHXT02297GFKK]
 
 | コマンド | exit | 要点 |
 |---|---|---|
-| `TMPDIR=/tmp bash scripts/dev/test-parallel.sh` | 0 | JSON 集計 passed 5209・failed 0・ignored 14（doctest 含む）。1 件の試験が一度だけ落ちた記録は final-verify.md の「不安定だった試験」 |
+| `TMPDIR=/tmp bash scripts/dev/test-parallel.sh` | 0 | JSON 集計 passed 5209・failed 0・ignored 14（doctest 含む）。今回の実行は 5206 件すべて pass、doctest 3 件 pass・1 件 ignored。1 件の試験が一度だけ落ちた記録は final-verify.md の「不安定だった試験」 |
 | `cargo clippy --workspace -- -D warnings` | 0 | 警告無し |
 | `cargo fmt --all -- --check` | 0 | 差分無し |
-| `sh scripts/dev/check-doc-links.sh` / `check-adr-numbers.sh` / `progress-index.sh --check` / `check-doc-layout.sh scripts/dev/docs-layout.tsv` | 0 | いずれも ok |
+| `sh scripts/dev/check-doc-links.sh` / `sh scripts/dev/check-adr-numbers.sh` / `sh scripts/dev/progress-index.sh --check` / `sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv` | 0 | いずれも ok（ADR 196 files） |
 | `git diff --quiet "$CELERIS_WU_BASE" -- crates/ web/` | 0 | 差分ゼロ |
 
 - 葉の記録: [adr.md](2026-10-11-stranded-sweep-fixes/adr.md)・[resolve.md](2026-10-11-stranded-sweep-fixes/resolve.md)・[remote.md](2026-10-11-stranded-sweep-fixes/remote.md)・[identity.md](2026-10-11-stranded-sweep-fixes/identity.md)・[web-state.md](2026-10-11-stranded-sweep-fixes/web-state.md)・[na-event.md](2026-10-11-stranded-sweep-fixes/na-event.md)・[verify.md](2026-10-11-stranded-sweep-fixes/verify.md)・[final-verify.md](2026-10-11-stranded-sweep-fixes/final-verify.md)・[api-errors.md](2026-10-11-stranded-sweep-fixes/api-errors.md)・[final-verify2.md](2026-10-11-stranded-sweep-fixes/final-verify2.md)
@@ -52,12 +52,12 @@ tasks: [01M4NM5720BYCYHXT02297GFKK]
 
 - （解消）`unintegrated` → `not_applicable` の遷移の event 欠落は na-event 葉で解消（`integration_not_applicable` を追記、commit `eb7968ef`、試験 `stranded_audit_remote_not_applicable_appends_one_event_and_no_repeat`）。
 - （解消）ADR F2 の文言のずれ（表の名前・remote の reason 文字列）は決定本文を実装に合わせて改訂した（final-verify 段、agent-docs/adr/2026-10-11-stranded-done-branches.md の F2）。実装は変えていない。
-- 一度だけ落ちた試験: `task-dispatch` の `an_interrupted_integration_is_redone_idempotently_after_restart` は、同じ run の全体試験で 1 回 exit 100、その後の全体試験と単独実行では通った。原因は未調査（final-verify.md）。
-- task-api docs と task-dispatch behind_target の解決失敗時の振る舞いが ADR F1 の表と少し違う（ADR 付記に記載）。
-- （解消）`default_branch_unresolvable`（409）・`checkout_busy`（409）の api.md 未記載は api-errors 葉で解消（commit `c8309aed`、統合 `1e498748`）。記載箇所: `docs/api/v1/api.md` §1.5 エラーコード表（行 253・254）と §2 表 行 75〜78・§3.80・§3.81。final-verify2 段で突き合わせ済み（[final-verify2.md](2026-10-11-stranded-sweep-fixes/final-verify2.md)）。
-- repos 空の task で Remote の repository に branch がある場合は記録しない（`not_applicable` 行もできない）。
-- test-parallel の要約が nextest の `passed (N slow)` を数え落とす既知の問題（本件の範囲外、未修正）。
-- web の mobile 幅の overlay 試験は `not_applicable` の section を含まない。
+- 一度だけ落ちた試験: `task-dispatch` の `an_interrupted_integration_is_redone_idempotently_after_restart` は、同じ run の全体試験で 1 回 exit 100、その後の全体試験と単独実行では通った。原因は未調査（final-verify.md）。再発条件の調査は後続候補で、本 task の acceptance を阻まずマージ欠陥ではない。
+- task-api docs と task-dispatch behind_target の解決失敗時の振る舞いが ADR F1 の表と少し違う（ADR 付記に記載）。整合は後続候補で、本 task の acceptance を阻まずマージ欠陥ではない。
+- （解消）`default_branch_unresolvable`（409）・`checkout_busy`（409）の api.md 未記載は api-errors 葉で解消（commit `c8309aed`、統合 `1e498748`、現 HEAD `ba294fee`）。記載箇所: `docs/api/v1/api.md` §1.5 エラーコード表（行 253・254）と §2 表 行 75〜78・§3.80・§3.81。API 実装 `crates/task-api/src/integrations.rs` / `changes.rs` の両 code との突き合わせを final-verify2 で再確認（[final-verify2.md](2026-10-11-stranded-sweep-fixes/final-verify2.md)）。
+- repos 空の task で Remote の repository に branch がある場合は記録しない（`not_applicable` 行もできない）。対象外の記録範囲に関する後続候補で、今回の acceptance を阻まずマージ欠陥ではない。
+- test-parallel の要約が nextest の `passed (N slow)` を数え落とす既知の問題（本件の範囲外、未修正）。検査は exit 0 で詳細集計も正常なため、本件を阻む欠陥ではない。
+- web の mobile 幅の overlay 試験は `not_applicable` の section を含まない。UI 試験範囲の後続候補で、本件の acceptance を阻まずマージ欠陥ではない。
 
 ## 本番への移行
 

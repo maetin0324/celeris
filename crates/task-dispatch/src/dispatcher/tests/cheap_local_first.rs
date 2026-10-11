@@ -453,47 +453,6 @@ fn routing_dispatch_legacy_equivalence_matrix() {
     }
 }
 
-#[test]
-fn routing_dispatch_legacy_tier_models_feed_model_identity_only() {
-    let claude = accounts_fixture();
-    let (probe, _) = counting_probe(Reachability::Ok);
-    let mut d = local_first_dispatcher(&claude, vec![Tier::Cheap], probe);
-    let (tx, _) = tokio::sync::watch::channel(None);
-    d.set_snapshot_publisher(crate::dispatcher::SnapshotPublisher {
-        tx,
-        instance_id: "test".into(),
-        hostname: "test".into(),
-        started_at: String::new(),
-        tick_ms: 1000,
-        providers: vec![
-            serde_json::from_value(serde_json::json!({
-                "id": "qwen", "adapter": "acp", "tiers": ["cheap"],
-                "concurrency": 1, "model": "old-model", "in_use": 0,
-                "llm_source": {"source": "openai_compatible:qwen", "origin": "explicit"},
-                "tier_models": {"cheap": {"name": "qwen", "model_id": "qwen-from-binding"}}
-            }))
-            .unwrap(),
-        ],
-        provider_checks: Default::default(),
-    });
-    let trace = d
-        .legacy_optimizer_trace(&hint(Tier::Cheap, None), "run", "qwen")
-        .unwrap();
-    assert_eq!(trace.candidates[1].model_profile_id, "qwen-from-binding");
-    assert_eq!(trace.fallback_order, ["p1", "qwen"]);
-    let (picked, selection) = d.select_provider_for(
-        &hint(Tier::Cheap, None),
-        Instant::now(),
-        TaskId::new(),
-        &mut Default::default(),
-        None,
-        false,
-        true,
-    );
-    assert_eq!(picked.unwrap().1, "qwen");
-    assert_eq!(selection.reason, ProviderSelectionReason::LocalPreferred);
-}
-
 /// tick を通して、worker run の `RoutingDecided` に選択の理由が残る（付記 L8）。
 async fn routing_decided_with_probe(
     probe_outcome: Reachability,

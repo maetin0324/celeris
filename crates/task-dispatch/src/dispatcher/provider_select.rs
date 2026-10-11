@@ -7,9 +7,7 @@ use task_core::model_catalog::assignments::{
 };
 use task_core::model_router::{
     optimizer::{Candidate, OptimizationResult, legacy_rank},
-    policy::RoutingMode,
     profiles::{Billing, Capabilities, ContextLimits, DeploymentProfile, ModelProfile, Support},
-    trace::{CandidateTrace, RoutingTraceV1},
 };
 use task_core::model_routing::{
     ProviderCandidate, ProviderCandidateKind, ProviderCandidateOutcome, ProviderSelection,
@@ -89,13 +87,12 @@ pub fn provider_failure_outcome(e: &AdapterError) -> Option<ProviderOutcome> {
     }
 }
 
-/// 設定行を正規化した 1 候補（`proxy_routed` は `llm_source` を持つ行）。
+/// 設定行を正規化した 1 候補。
 pub(super) struct LegacyProfile {
     /// 容量・account・cooldown の identity（設定行の id）。候補の identity は `deployment.id`。
     pub provider_id: ProviderId,
     pub model: ModelProfile,
     pub deployment: DeploymentProfile,
-    pub proxy_routed: bool,
 }
 
 impl Dispatcher {
@@ -308,7 +305,6 @@ impl Dispatcher {
                     "providers.tier_models".into()
                 },
             };
-            let proxy_routed = live.and_then(|p| p.llm_source.as_ref()).is_some();
             let source_ref = live
                 .and_then(|p| p.llm_source.as_ref())
                 .map(|s| match &s.source {
@@ -379,7 +375,6 @@ impl Dispatcher {
                         provider_id: spec.id.clone(),
                         model,
                         deployment,
-                        proxy_routed,
                     });
                 }
             } else {
@@ -387,7 +382,6 @@ impl Dispatcher {
                     provider_id: spec.id.clone(),
                     model,
                     deployment,
-                    proxy_routed,
                 });
             }
         }
@@ -404,66 +398,6 @@ impl Dispatcher {
                 ))
         });
         profiles
-    }
-
-    pub(super) fn legacy_optimizer_trace(
-        &self,
-        hint: &task_core::WorkerHint,
-        run_id: &str,
-        selected: &str,
-    ) -> Option<RoutingTraceV1> {
-        let result = self.legacy_provider_rank(hint);
-        if result.allowlist.is_empty() {
-            return None;
-        }
-        let assigned_any = self
-            .legacy_provider_profiles(hint)
-            .iter()
-            .any(|p| p.model.provenance == "model_role_assignments");
-        Some(RoutingTraceV1 {
-            decision_id: run_id.into(),
-            parent_decision_id: None,
-            task_id: None,
-            work_unit_id: None,
-            run_id: Some(run_id.into()),
-            request_id: None,
-            stage: "dispatcher".into(),
-            mode: RoutingMode::Legacy,
-            policy_version: "legacy-provider-config-v1".into(),
-            catalog_version: if assigned_any {
-                "model_role_assignments+providers.tier_models".into()
-            } else {
-                "providers.tier_models".into()
-            },
-            feature_version: "legacy".into(),
-            estimator_version: "none".into(),
-            snapshot_id: "provider-config".into(),
-            observed_at: None,
-            requested_lane: hint.tier,
-            selected_lane: Some(hint.tier),
-            candidates: result
-                .ranked
-                .iter()
-                .map(|c| CandidateTrace {
-                    model_profile_id: c.model_profile_id.clone(),
-                    deployment_id: c.deployment_id.clone(),
-                    eligible_provider_ids: c.eligible_provider_ids.clone(),
-                    excluded_reasons: vec![],
-                    quality: None,
-                    cost_usd: None,
-                    latency_ms: None,
-                    pressure: None,
-                    score: None,
-                    ..Default::default()
-                })
-                .collect(),
-            selected: Some(selected.into()),
-            fallback_order: result.allowlist,
-            reasons: vec!["providers.tier_models/config_order".into()],
-            source_id: None,
-            model: None,
-            account_id: None,
-        })
     }
 
     /// ADR-0013 D9: cooldown に入った供給側失敗の `ProviderThrottled`。期限はポリシーの `cooldowns()` から取り、

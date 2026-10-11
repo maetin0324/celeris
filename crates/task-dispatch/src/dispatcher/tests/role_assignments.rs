@@ -49,13 +49,6 @@ fn config_models(prefix: &str) -> task_core::model_routing::TierModels {
     .collect()
 }
 
-fn hint(tier: Tier, adapter: Option<&str>) -> task_core::WorkerHint {
-    task_core::WorkerHint {
-        tier,
-        adapter: adapter.map(str::to_string),
-    }
-}
-
 fn item(source: &str, tier: Tier, model: &str, state: AssignmentState) -> EffectiveAssignment {
     EffectiveAssignment {
         priority: 0,
@@ -228,46 +221,6 @@ fn claude_dispatcher(
 }
 
 #[tokio::test]
-async fn assignment_beats_config_tier_models() {
-    let accounts = accounts_fixture();
-    let ws = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
-    let id = insert_task(&store, ws.path(), Tier::Frontier);
-    let mut d = claude_dispatcher(
-        &accounts,
-        store.clone(),
-        Some(view(vec![item(
-            "claude-oauth",
-            Tier::Frontier,
-            "claude-assigned",
-            AssignmentState::Assigned,
-        )])),
-    );
-    d.tick().unwrap();
-    let s = started(&store, id).expect("worker started");
-    assert_eq!(s.provider.as_deref(), Some("p1"));
-    assert_eq!(s.model, "claude-assigned");
-    assert_eq!(s.account.as_deref(), Some("a"));
-    // 候補の model identity も実効 bindings（割り当て）に従う。
-    let profiles = d.legacy_provider_profiles(&hint(Tier::Frontier, None));
-    let p1 = profiles.iter().find(|p| p.provider_id == "p1").unwrap();
-    assert_eq!(p1.model.id, "claude-assigned");
-    assert_eq!(p1.model.provenance, "model_role_assignments");
-    assert_eq!(p1.deployment.id, "p1/model:claude-assigned");
-    let p2 = profiles.iter().find(|p| p.provider_id == "p2").unwrap();
-    assert_eq!(p2.deployment.id, "p2");
-    assert_eq!(p2.model.id, "p2-frontier-id");
-    assert_eq!(p2.model.provenance, "providers.tier_models");
-    let trace = d
-        .legacy_optimizer_trace(&hint(Tier::Frontier, None), "run", "p1")
-        .unwrap();
-    assert_eq!(
-        trace.catalog_version,
-        "model_role_assignments+providers.tier_models"
-    );
-}
-
-#[tokio::test]
 async fn lanes_without_an_assignment_keep_config_models() {
     let accounts = accounts_fixture();
     let ws = tempfile::tempdir().unwrap();
@@ -358,31 +311,6 @@ async fn excluded_lane_with_no_other_provider_is_unroutable_not_started() {
     d.tick().unwrap();
     assert!(started(&store, id).is_none());
     assert_eq!(store.get(id).unwrap().unwrap().status, Status::Ready);
-}
-
-#[tokio::test]
-async fn without_a_reader_or_with_an_empty_view_nothing_changes() {
-    for reader in [None, Some(AssignmentView::empty())] {
-        let accounts = accounts_fixture();
-        let ws = tempfile::tempdir().unwrap();
-        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
-        let id = insert_task(&store, ws.path(), Tier::Frontier);
-        let mut d = claude_dispatcher(&accounts, store.clone(), reader);
-        d.tick().unwrap();
-        let s = started(&store, id).expect("worker started");
-        assert_eq!(s.provider.as_deref(), Some("p1"));
-        assert_eq!(s.model, "frontier-id");
-        let profiles = d.legacy_provider_profiles(&hint(Tier::Frontier, None));
-        assert!(
-            profiles
-                .iter()
-                .all(|p| p.model.provenance == "providers.tier_models")
-        );
-        let trace = d
-            .legacy_optimizer_trace(&hint(Tier::Frontier, None), "run", "p1")
-            .unwrap();
-        assert_eq!(trace.catalog_version, "providers.tier_models");
-    }
 }
 
 /// og = ACP + opencode go のプール（`tier_models` なし）、p2 = 非プールの別 provider。
@@ -574,97 +502,6 @@ async fn modelless_opencode_go_row_routes_only_through_assignments() {
     );
     // standard はまだ og に出ない（og だけの policy なので Ready のまま）。
     assert!(started(&store, only).is_none());
-}
-
-#[tokio::test]
-async fn role_members_priority_all_candidates_and_opencode_execution() {
-    let accounts = opencode_accounts();
-    let ws = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
-    let mut preferred = item(
-        "opencode-go",
-        Tier::Cheap,
-        "preferred",
-        AssignmentState::Assigned,
-    );
-    preferred.priority = 1;
-    let mut second = item(
-        "opencode-go",
-        Tier::Cheap,
-        "second",
-        AssignmentState::Assigned,
-    );
-    second.priority = 2;
-    let mut removed = item("opencode-go", Tier::Cheap, "removed", excluded());
-    removed.priority = 0;
-    let mut fallback_member = item(
-        "openai-compatible:p2",
-        Tier::Cheap,
-        "p2-cheap-id",
-        AssignmentState::Assigned,
-    );
-    fallback_member.priority = 20;
-    let mut d = opencode_dispatcher(
-        store.clone(),
-        &accounts,
-        view(vec![second.clone(), removed, preferred, fallback_member]),
-    );
-    let profiles = d.legacy_provider_profiles(&hint(Tier::Cheap, None));
-    let candidates: Vec<_> = profiles
-        .iter()
-        .filter(|p| p.provider_id == "og")
-        .map(|p| p.model.id.as_str())
-        .collect();
-    assert_eq!(candidates, ["opencode-go/preferred", "opencode-go/second"]);
-    // 候補の identity はモデルごと、容量の identity は provider。
-    assert_eq!(
-        profiles
-            .iter()
-            .filter(|p| p.provider_id == "og")
-            .map(|p| p.deployment.id.as_str())
-            .collect::<Vec<_>>(),
-        ["og/model:preferred", "og/model:second"]
-    );
-    let round = d.enforce_round(&hint(Tier::Cheap, None));
-    assert_eq!(
-        round
-            .candidates
-            .iter()
-            .filter(|c| c.eligible_provider_ids == ["og"])
-            .count(),
-        2
-    );
-    let cheap = insert_task(&store, ws.path(), Tier::Cheap);
-    assert!(run_until_idle(&mut d, 200).await.idle);
-    assert_eq!(
-        started(&store, cheap).unwrap().model,
-        "opencode-go/preferred"
-    );
-    // The pool quota belongs to the source, so exhaustion skips both models together.
-    d.record_account_failure(
-        AccountAdapter::OpencodeGo,
-        "a",
-        "exhausted",
-        &ProviderOutcome::Exhausted,
-    );
-    let ws2 = tempfile::tempdir().unwrap();
-    let fallback = insert_task(&store, ws2.path(), Tier::Cheap);
-    assert!(run_until_idle(&mut d, 200).await.idle);
-    assert_eq!(
-        started(&store, fallback).unwrap().provider.as_deref(),
-        Some("p2")
-    );
-    // Excluding the preferred model selects the next model without removing its role.
-    d.set_role_assignment_reader(Arc::new(StaticAssignments(view(vec![
-        item("opencode-go", Tier::Cheap, "preferred", excluded()),
-        second,
-    ]))));
-    assert_eq!(
-        d.effective_lane_model("og", Tier::Cheap)
-            .unwrap()
-            .as_deref(),
-        Some("opencode-go/second")
-    );
 }
 
 fn model_profile(id: &str, quality: f64) -> ModelProfile {

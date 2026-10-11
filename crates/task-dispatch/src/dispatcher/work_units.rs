@@ -1862,7 +1862,6 @@ impl Dispatcher {
     /// 後ろの WU を試す（同じ tick に同じ WU を二度試さない）。
     pub(super) fn dispatch_parallel_work_units(
         &mut self,
-        full: &mut std::collections::HashSet<ProviderId>,
         now: Instant,
     ) -> Result<(usize, bool), DispatchError> {
         if self.workers_in_flight() >= self.config.max_concurrency {
@@ -1910,7 +1909,7 @@ impl Dispatcher {
                     break;
                 };
                 tried.insert(wu.id.clone());
-                if self.dispatch_one(task.clone(), Some(wu), full, now)? {
+                if self.dispatch_one(task.clone(), Some(wu), now)? {
                     dispatched += 1;
                 }
             }

@@ -254,49 +254,6 @@ async fn max_cos_runs_zero_disables_the_exemption() {
     assert_eq!(status(&store, chat.id), Status::Ready);
 }
 
-/// A pool can run four leaves despite legacy provider concurrency=1, and stops at
-/// the two accounts' limits. Clearing a live override immediately restores default.
-#[tokio::test]
-async fn pool_ignores_provider_concurrency_and_uses_account_overrides() {
-    let accounts = accounts_fixture();
-    let ws = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
-    seed_org(&store);
-    let mut d = pool_dispatcher(
-        store.clone(),
-        slow_pool_adapter(),
-        None,
-        accounts.path().to_path_buf(),
-        2,
-        1,
-    );
-    d.config.max_concurrency = 8;
-    d.set_account_limit("claude-code", "a", Some(1)).unwrap();
-    let leaves: Vec<_> = (0..5).map(|_| leaf(ws.path())).collect();
-    for task in &leaves {
-        store.insert(task).unwrap();
-    }
-    assert_eq!(d.tick().unwrap().dispatched, 3);
-    assert_eq!(d.account_in_use(AccountAdapter::ClaudeCode, "a"), 1);
-    assert_eq!(d.account_in_use(AccountAdapter::ClaudeCode, "b"), 2);
-    assert_eq!(d.tick().unwrap().dispatched, 0);
-    assert!(!d.account_usable(AccountAdapter::ClaudeCode, "a", false));
-    assert!(d.account_usable(AccountAdapter::ClaudeCode, "a", true));
-    assert_eq!(
-        d.peek_account(AccountAdapter::ClaudeCode, "p1", false),
-        None
-    );
-    assert!(
-        d.legacy_provider_profiles(&leaf(ws.path()).worker_hint)
-            .iter()
-            .all(|p| p.deployment.concurrency_limit.is_none())
-    );
-    d.set_account_limit("claude-code", "a", None).unwrap();
-    assert_eq!(d.tick().unwrap().dispatched, 1);
-    assert_eq!(d.account_in_use(AccountAdapter::ClaudeCode, "a"), 2);
-    assert_eq!(d.tick().unwrap().dispatched, 0);
-}
-
 #[test]
 fn dispatcher_account_limits_load_on_start_and_reload() {
     let accounts = accounts_fixture();

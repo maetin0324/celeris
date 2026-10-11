@@ -185,8 +185,64 @@ fn dispatcher_with_adapter_id(
             dispatcher.test_policy_clock = Some(policy_clock);
         }
     }
-
+    install_test_routes(&mut dispatcher, adapter, &[("p1", "test")]);
     dispatcher
+}
+
+/// ADR 2026-10-11 llm-source-harness-selection: the test dispatchers' declared routes. One
+/// harness `test` (every capability, catch-all selection rule) runs `adapter`; its
+/// `route_defaults` are `sources` in order, each `(source id, source kind)` offering model `m`.
+/// A non-OAuth source declares the account `default`; an OAuth source uses the logged-in
+/// accounts of its `[accounts]` root.
+fn install_test_routes(d: &mut Dispatcher, adapter: Arc<dyn WorkerAdapter>, sources: &[(&str, &str)]) {
+    use task_core::llm_route::{CandidateKey, HarnessRule, HarnessSpec, Registry, SourceSpec};
+    let mut r = Registry::default();
+    let mut kinds = std::collections::BTreeSet::new();
+    for (id, kind) in sources {
+        let oauth = crate::dispatcher::route_select::account_adapter_for_source_kind(kind).is_some();
+        r.sources.insert(
+            (*id).into(),
+            SourceSpec {
+                kind: (*kind).into(),
+                api_format: "test".into(),
+                accounts: if oauth { vec![] } else { vec!["default".into()] },
+                models: vec!["m".into()],
+                max_runs: None,
+                account_max_runs: Default::default(),
+                quota: None,
+                endpoint: None,
+                credential_ref: None,
+            },
+        );
+        kinds.insert((*kind).into());
+        r.route_defaults
+            .entry("test".into())
+            .or_default()
+            .push(CandidateKey {
+                source: (*id).into(),
+                model: "m".into(),
+            });
+    }
+    r.harnesses.insert(
+        "test".into(),
+        HarnessSpec {
+            kind: "cli".into(),
+            api_formats: ["test".into()].into(),
+            source_kinds: kinds,
+            capabilities: ["tools", "repo", crate::dispatcher::route_select::BROWSER_CAPABILITY]
+                .iter()
+                .map(|c| (*c).to_string())
+                .collect(),
+            command: None,
+            args: vec![],
+        },
+    );
+    r.harness_selection.rules = vec![HarnessRule {
+        harness: "test".into(),
+        ..Default::default()
+    }];
+    d.set_llm_route_registry(r);
+    d.set_harness_adapters(HashMap::from([("test".into(), adapter)]));
 }
 
 // For single-run tests: await the worker wrapper, not just the adapter. The wrapper
@@ -1337,7 +1393,11 @@ fn pool_dispatcher_with_requeues(
         model: "m".into(),
     }];
     let mut adapters: HashMap<ProviderId, Arc<dyn WorkerAdapter>> = HashMap::new();
-    adapters.insert("p1".into(), adapter);
+    adapters.insert("p1".into(), adapter.clone());
+    let mut route_sources = vec![(AccountAdapter::ClaudeCode.as_str(), "claude_oauth")];
+    if let Some((id, _)) = &second_provider {
+        route_sources.push((id, "test"));
+    }
     if let Some((id, a)) = second_provider {
         providers.push(ProviderSpec {
             id: id.into(),
@@ -1350,7 +1410,7 @@ fn pool_dispatcher_with_requeues(
     }
     let policy = StaticPolicy::new(providers, Duration::from_secs(1));
     let account_pool_providers: std::collections::HashSet<ProviderId> = ["p1".to_string()].into();
-    Dispatcher::new(
+    let mut d = Dispatcher::new(
         store,
         Box::new(policy),
         HashMap::from([("p1".to_string(), "m".to_string())]),
@@ -1396,7 +1456,9 @@ fn pool_dispatcher_with_requeues(
             workspace_prune_after_secs: 0,
             execution: ExecutionConfig::default(),
         },
-    )
+    );
+    install_test_routes(&mut d, adapter, &route_sources);
+    d
 }
 
 fn usage_window(utilization: f64, resets_at_secs_from_now: i64) -> RateLimitObservation {
@@ -3068,7 +3130,6 @@ mod build_cache;
 mod cheap_local_first;
 mod cleanup_and_disk;
 mod cluster_tunnel;
-mod coding_harness_default;
 mod conversation_cos;
 mod cos_chat_attach_handoff;
 mod cron_jobs;

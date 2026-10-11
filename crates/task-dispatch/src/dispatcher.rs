@@ -1105,6 +1105,8 @@ struct RunExtras {
     /// planner でない worker run にだけ入れ、`run_worker` が stage して `RunContext.input_attachments`
     /// にする（CoS chat が未設定の daemon では `None`）。
     input_attachment_source: Option<input_attachments::InputAttachmentSource>,
+    /// ADR 2026-10-11 llm-source-harness-selection: the admitted route (`RunRequest.llm_route`).
+    llm_route: Option<task_worker::protocol::SelectedLlmRoute>,
 }
 
 struct ReviewEntry {
@@ -1302,6 +1304,8 @@ pub struct Dispatcher {
     >,
     /// ADR-0024 D1: 選択のたびにディレクトリを読み直さないよう、tick につき高々 1 回だけスキャンする（アダプタごと）。
     accounts_scan_cache: HashMap<AccountAdapter, Vec<AccountDir>>,
+    /// Tasks whose last dispatch found no launchable llm route (the refusal is recorded once).
+    route_refused: std::collections::HashSet<TaskId>,
     /// ADR-0024 D5/D7 / ADR-0025 D5: celeris（GUI の管理 API）が進行中のログイン中継を持っているアカウント
     /// （キーは `"<adapter>:<id>"`。同じ id でもアダプタが違えば別のログインとして扱う）。
     login_pending_accounts: std::collections::HashSet<String>,
@@ -1622,6 +1626,7 @@ impl Dispatcher {
             harness_adapters: HashMap::new(),
             account_limits,
             accounts_scan_cache: HashMap::new(),
+            route_refused: std::collections::HashSet::new(),
             login_pending_accounts: std::collections::HashSet::new(),
             container_probe: task_worker::RuntimeProbe::default(),
             cluster_connector: None,
@@ -2654,8 +2659,6 @@ impl Dispatcher {
         let candidates = self.order_write_set_starved_first(candidates);
         let now = self.monotonic_now();
         let mut dispatched = 0;
-        // この tick で並列度の上限に達していると分かったプロバイダ（tick 内では空きが増えないので共有する）。
-        let mut full: std::collections::HashSet<ProviderId> = std::collections::HashSet::new();
         // 容量が尽きて照合しなかった候補が残ったか（残れば write-set の待機の数えを引き継ぐ）。
         let mut capacity_cut = false;
         for task in candidates {
@@ -2672,13 +2675,13 @@ impl Dispatcher {
             if self.run_maintenance_task(&task)? {
                 continue;
             }
-            if self.dispatch_one(task, None, &mut full, now)? {
+            if self.dispatch_one(task, None, now)? {
                 dispatched += 1;
             }
         }
         // ADR-0074 D1.3 3.（Phase F2b）: 公平性。Ready の Task の 1 本目を先に起こし、残りの枠を
         // 「Running で、現在の工程に runnable な WU を持つ Task」の 2 本目以降に回す（作成順）。
-        let (parallel, parallel_cut) = self.dispatch_parallel_work_units(&mut full, now)?;
+        let (parallel, parallel_cut) = self.dispatch_parallel_work_units(now)?;
         dispatched += parallel;
         if capacity_cut || parallel_cut {
             self.carry_write_set_waits();

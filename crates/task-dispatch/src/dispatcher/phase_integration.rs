@@ -77,7 +77,8 @@ pub(super) fn integration_checks_for_phase(
     checks
 }
 
-/// 2026-10-04 統合の検査の進み具合 D2: 統合の検査のログを置く Task の作業ディレクトリ直下のディレクトリ。
+/// 2026-10-04 統合の検査の進み具合 D2: 統合の検査のログの置き場所
+/// （`<workspace_root>/<task_id>/integration-checks/<wu_key>`。葉の WU のログと同じく `check_log_root` を見よ）。
 pub(crate) const INTEGRATION_CHECK_LOG_DIR: &str = "integration-checks";
 /// 2026-10-04 WU 検査の引き継ぎ D3: 葉の WU の受け入れ検査のログの置き場所
 /// （`<workspace_root>/<task_id>/work-unit-checks/<wu_key>`。`check_log_root` を見よ）。
@@ -640,7 +641,10 @@ impl Dispatcher {
             work_unit_id: integ.id.clone(),
             key: integ.key.clone(),
             run_id: None,
-            log_dir: ws.task_dir.join(INTEGRATION_CHECK_LOG_DIR).join(&integ.key),
+            log_dir: self
+                .check_log_root(task_id)
+                .join(INTEGRATION_CHECK_LOG_DIR)
+                .join(&integ.key),
         };
         let handle = tokio::spawn(async move {
             let phase_for_merge = phase.clone();

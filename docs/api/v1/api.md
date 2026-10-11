@@ -3363,7 +3363,8 @@ assertion で owner session を確認し、worker の route は daemon bearer �
 流す。検査 1 件ごとに event `integration_check_started`（`work_unit_id`・`key`・`index`（0 始まり）・`total`・`cmd`・
 `log_path`・`started_at`）と `integration_check_finished`（`pass`・`exit`・`timed_out`・`duration_ms`。所要時間は
 timeout の再実行・merge-base の修復を含む）が残り、stdout と stderr は出た順に
-`<task_dir>/integration-checks/<wu_key>/<started_ms>-<index>.log` へ逐次書かれる（1 件 8 MiB で切り、その旨を 1 行残す）。
+`<workspace_root>/<task_id>/integration-checks/<wu_key>/<started_ms>-<index>.log`（repo の作業ツリーの外）へ逐次書かれる
+（1 件 8 MiB で切り、その旨を 1 行残す）。
 
 葉の WU の受け入れ検査（`spec.checks`）も worker の run の外で daemon が流す（ADR-0040 付記 2026-10-04 D3）。同じ形の
  event `work_unit_check_started` / `work_unit_check_finished`（上の欄に、検査を起こした worker run の `run_id` を足したもの）

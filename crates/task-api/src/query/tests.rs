@@ -335,6 +335,13 @@ fn integration_state_event_types_match_their_serde_names() {
     }
 }
 
+#[test]
+fn stranded_integration_status_serializes_for_api_clients() {
+    let value = serde_json::to_value(task_core::TaskRepoIntegrationStatus::Unintegrated)
+        .expect("serialize stranded integration status");
+    assert_eq!(value, "unintegrated");
+}
+
 /// 2026-10-04 多目的 routing ADR §6（Phase 3）: feature・request・outcome の Event の `type` 名が serde の名前・
 /// `event_type_name`・`EVENT_TYPES` で一致する（`EVENT_TYPES` は 65 語）。
 #[test]

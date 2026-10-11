@@ -1,6 +1,6 @@
 ---
 tasks: [01M4MEEKX485VD5SWKX0P30D4Y]
-status: running
+status: done
 title: Dispatcher harness and source×model selection
 updated: 2026-10-11
 ---
@@ -53,3 +53,51 @@ updated: 2026-10-11
 ## Production migration
 
 - None yet. Once dispatch uses the registry, production config must declare `[llm_sources.*]`, `[harnesses.*]`, `[harness_selection]` and `[route_defaults.*]` before the daemon reload. Without them, every task fails closed as unroutable.
+
+## Continuation check (session 2)
+
+- Rechecked `cargo test -p task-dispatch harness_select_ -- --nocapture` — exit 0, 4 passed.
+- Rechecked `cargo test -p task-dispatch route_select_ -- --nocapture` — exit 0, 5 passed.
+- `sh "$CELERIS_WU_SCOPE_PATHS"` — exit 0; all paths are within this unit's recorded scope.
+- The runtime switch remains incomplete: `dispatch_run.rs` still calls `select_provider_with_default`, and `review_spawn.rs` still calls `select_provider`. The legacy `provider_select.rs` and `ProviderSpec` remain. Continue by integrating the worker harness/source/model/account inputs at the dispatcher boundary, then remove the legacy selector and dependent tests. No runtime migration was attempted.
+
+## Continuation check (session 3)
+
+- `sh "$CELERIS_WU_SCOPE_PATHS"` — exit 0; changed paths remain within this unit's recorded scope.
+- The pure route selector, daemon registry wiring, and run selection persistence are present from the prior session.
+- Normal dispatch still calls the provider selector. The current `RunRequest` has no selected source/model/account fields, and adapters resolve the model from `worker_hint.tier`. Mapping the new route onto that interface would preserve the tier-bound behavior this ADR removes. Dispatcher runtime integration and legacy path deletion remain pending the worker-harness protocol boundary; no runtime migration was attempted in this session.
+
+## Continuation check (session 4)
+
+- `cargo test -p task-dispatch route_select_` — exit 0, 5 passed.
+- `sh "$CELERIS_WU_SCOPE_PATHS"` — exit 0; changed paths remain within this unit's recorded scope.
+- Runtime integration remains blocked on the parallel worker-harness protocol boundary: `task_worker::RunRequest` still has no selected source/model/account fields, and dispatcher adapters still resolve model from tier. The normal and reviewer dispatch paths still use provider selection, so provider removal and workspace acceptance checks are not yet satisfied. No edits were made to worker-owned protocol files.
+
+## Final leaf (session 5, replan v4): landing and closure
+
+This leaf lands the selector and its records. It does not switch dispatch. The switch and the removals move to the next leaves:
+
+- **dispatch-switch**: switch `dispatch_run.rs` and `review_spawn.rs` from provider selection to `select_route`. Set `RunEntry.route`, call `record_route_selection`, and pass the chosen route in the worker start input.
+- **dispatch-prune**: delete `provider_select.rs`, `coding_default.rs`, `ProviderSpec`, the `StaticPolicy` provider rows, `routing_shadow`/`routing_enforce`/`routing_members`, and the provider-bound tests listed in Remaining.
+- **worker-harness**: extend `task_worker::RunRequest` with the selected harness, source, model, and account.
+
+Changes in this leaf:
+
+- `crates/task-core/src/llm_route.rs`: removed two `unwrap()` calls from non-test code (`select_harness` best-match and `unique_harness`). Both now fail closed through `if let` and `ok_or`. The behavior is the same. `cargo fmt -p task-core` also reflowed the `id_type!` derive list in this file.
+
+### Commands and results
+
+- `cargo test -p task-dispatch --lib -- harness_select_ route_select_` — exit 0, 9 passed (4 `harness_select_`, 5 `route_select_`).
+- `cargo test -p task-core --lib -- harness_select_ route_select_` — exit 0, 5 passed.
+- `cargo build --workspace` — exit 0.
+- `cargo clippy --workspace -- -D warnings` — exit 0.
+- `cargo fmt -p task-core -- --check` — exit 0 after the reflow. The fmt run also touched four store-migrate files (`cluster_job/tests.rs`, `store/migrated_harness.rs`, `store/migration_harness_tests.rs`, `store/tests.rs`). I restored them with `git checkout`, so this unit does not touch them.
+- `sh "$CELERIS_WU_SCOPE_PATHS"` — exit 0; all changed paths are within this unit's scope.
+
+### Not run in this leaf
+
+- `bash scripts/dev/test-parallel.sh` was not run. It is the phase-level gate for the integration step (`integrate-select`), not this leaf's check.
+
+### Known gap carried forward
+
+- Normal and reviewer dispatch still use provider selection. A run's selected source and model are not yet used to start the worker, so the new selection is recorded but does not drive execution until dispatch-switch lands.

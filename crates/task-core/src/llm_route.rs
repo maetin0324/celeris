@@ -7,7 +7,17 @@ use thiserror::Error;
 macro_rules! id_type {
     ($name:ident) => {
         #[derive(
-            Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, schemars::JsonSchema,
+            Debug,
+            Clone,
+            Default,
+            PartialEq,
+            Eq,
+            PartialOrd,
+            Ord,
+            Hash,
+            Serialize,
+            Deserialize,
+            schemars::JsonSchema,
         )]
         #[serde(transparent)]
         pub struct $name(pub String);
@@ -148,8 +158,7 @@ pub fn select_harness(
                     .is_some_and(|h| req.required_capabilities.is_subset(&h.capabilities))
         })
         .collect();
-    if !matches.is_empty() {
-        let best = matches.iter().map(|r| specificity(r)).max().unwrap();
+    if let Some(best) = matches.iter().map(|r| specificity(r)).max() {
         let ids: BTreeSet<_> = matches
             .into_iter()
             .filter(|r| specificity(r) == best)
@@ -180,11 +189,12 @@ fn specificity(r: &HarnessRule) -> usize {
         + usize::from(r.execution_class.is_some())
 }
 fn unique_harness(ids: BTreeSet<HarnessId>) -> Result<HarnessId, HarnessSelectionError> {
-    match ids.len() {
-        0 => Err(HarnessSelectionError::NoneEligible),
-        1 => Ok(ids.into_iter().next().unwrap()),
-        _ => Err(HarnessSelectionError::Ambiguous(ids.into_iter().collect())),
+    if ids.len() > 1 {
+        return Err(HarnessSelectionError::Ambiguous(ids.into_iter().collect()));
     }
+    ids.into_iter()
+        .next()
+        .ok_or(HarnessSelectionError::NoneEligible)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

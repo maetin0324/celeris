@@ -21,7 +21,7 @@
 2. **discarded**: 人または明示的に認可された運用操作が変更を捨てた。
 3. **held**: 人または認可された運用操作が保留理由を付けた。
 
-判定不能・repo 未設定・branch/head 消失は integrated と見なさず、未解決として inbox に残す。done は作業完了を表し続け、integration 状態は別の durable state とする。repository ごとの task integration 表を設け、task_id/repo_id を一意キー、branch/head SHA、状態、理由、更新時刻、処理者を保存する。migration は 기존 task/event を保全し、events は append-only のまま `integration_detected`、`integration_merged`、`integration_discarded`、`integration_held`、`integration_reopened` 等を追記する。event は監査履歴、表は現在状態の索引とする。
+判定不能・repository の解決不能・branch/head 消失は integrated と見なさず、未解決として inbox に残す。`task.repos` を持たない task の repository は D3 の規則で解決する。done は作業完了を表し続け、integration 状態は別の durable state とする。repository ごとの task integration 表を設け、task_id/repo_id を一意キー、branch/head SHA、状態、理由、更新時刻、処理者を保存する。migration は 기존 task/event を保全し、events は append-only のまま `integration_detected`、`integration_merged`、`integration_discarded`、`integration_held`、`integration_reopened` 等を追記する。event は監査履歴、表は現在状態の索引とする。
 
 ### D2. Delivery と統合経路
 
@@ -31,7 +31,12 @@ delivery は自動 merge を試みる。成功したら main への到達を git
 
 ### D3. LLM を使わない定期検出
 
-daemon の定期 sweep は done の対象 root task を列挙し、DB の repo/worktree/branch/head 情報に対して git を実行する。記録 head（または task が完了した時点の head）が repo の main の祖先かを確認し、祖先でなければ integration state を unresolved にして inbox item を upsert する。LLM 判定・要約を検出条件に使わない。既存 delivery row の tick に依存せず全 done task を走査するため、初回 sweep で 01M4F3V643 等、過去の取り残しも検出する。main 更新・branch 消失・対象 repo の解決不能を含む再走査は冪等であり、状態変化は event に記録する。
+daemon の定期 sweep は done の root task を列挙し、task ごとに対象 repository を次の規則で解決してから git を実行する。
+
+- **`task.repos` を持つ task**: その repository ごとに `refs/heads/celeris/<task id>` の head を読み、対象にする（branch が無ければ head 消失として未解決）。
+- **`task.repos` が空の task**（project も repos も持たない task。本番 DB では done root 763 件中 548 件、01M4D7RVKX・01M4F3V643 もこの形で、実体は `<workspace>/repos/<name>` の worktree と登録 repo 側の `celeris/<task id>` branch）: store に登録された Local の repository（全案件の repo 一覧）ごとに `git for-each-ref refs/heads/celeris/` を 1 回だけ読み、`celeris/<task id>` がある repository をその task の対象にする（task×repo ごとに rev-parse しない）。どの登録 repository にも branch が無い task は repository を変えていない扱いで、何も記録しない。
+
+解決した head が repo の既定 branch の祖先なら integrated、そうでなければ integration state を unintegrated にして inbox item を upsert する。git は store の lock の外で読む。LLM 判定・要約を検出条件に使わない。既存 delivery row の tick に依存せず全 done task を走査するため、初回 sweep で 01M4F3V643 等、project も repos も無い過去の取り残しも検出する。main 更新・branch 消失・対象 repo の解決不能を含む再走査は冪等であり、状態変化は event に記録する。
 
 ### D4. 受信箱（inbox）操作/API と可視化
 
@@ -82,9 +87,15 @@ Status は Proposed のまま。以下は実装（views・routes・routes-wire�
 - CoS の operation registry では 4 mutation route を `EXCLUDED`（理由 `integration_human_decision`、`crates/task-api/src/cos/ops/tasks.rs:73-` 付近）。agent からは実行させない。
 - 欄（`crates/task-ops/src/view.rs`）: TaskSummary/TaskDetail に `integrations: Option<Vec<IntegrationView>>` と `promotion: Option<PromotionView>`。`IntegrationView` は `repo_id`・`repo`・`state`・`reason`・`actor`・`branch`・`head`・`checked_at`。`PromotionView` は `status`（`not_applicable|promotion_pending|promoted`）と `release_sha`。前回の記録にあった `integration_status[]` という名前ではない。
 - promotion は全 state の行で計算する（e2e の変更）。ADR の「統合状態と独立して表示」に合わせた。
-- 配線: `[selfdeploy] releases_dir` → `ApiState.integration_releases_dir`（`crates/task-api/src/lib.rs:241-242`）。repo path と default branch は project の repository 行と worktree marker から得る。
+- 配線: `[selfdeploy] releases_dir` → `ApiState.integration_releases_dir`（`crates/task-api/src/lib.rs:241-242`）。repo path と default branch は project の repository 行と worktree marker から得る。project の無い task では、task の integration 行が指す登録 repository（sweep が `celeris/<task id>` branch から解決したもの）から得る（`resolve_repo`・`attach_task_integrations`）。
 - celerisctl（`crates/celerisctl/src/commands/integration.rs`）: `integration list [--state] [--task] [--json]`、`merge <task> <repo>`、`discard|hold <task> <repo> --reason <r>`（`--reason` は必須）、`reopen <task> <repo>`。
 - schema と生成型: `docs/api/v1/api-v1.schema.json` に `IntegrationView`・`PromotionStatus` がある。`node web/scripts/gen-types.mjs --check` は exit 0 で web の生成型と一致（2026-10-11 に確認）。
+
+### repos 未設定 task の解決（D3、sweep-repoless）
+
+- `crates/celeris/src/daemon/stranded_sweep.rs` の `run` は done root task を `task.repos` の有無で分ける。`task.repos` を持つ task は従来どおり repo ごとに `rev-parse refs/heads/celeris/<id>`。空の task は `repoless_records` が `project_list` → `repo_list` で全登録 repository を集め、Local のものだけ `git for-each-ref --format='%(refname) %(objectname)' refs/heads/celeris/` を 1 回読み、`celeris/<task id>` があればその `repo_id` で `BranchRecord` を作る。Remote の repository と branch の無い task は記録しない。repos 空の done root task が 1 件も無ければ git を読まない。
+- API: `crates/task-api/src/integrations.rs` の `resolve_repo` と `crates/task-api/src/handlers/tasks.rs` の `attach_task_integrations` は、project の repository に加えて task の integration 行が指す repository を名前解決に使う。project の無い task でも `/tasks/{id}/integrations/{repo}/{merge,discard,hold,reopen}` と task 詳細・一覧の `integrations` が働く。merge は従来どおり worktree marker の repo を使う。
+- 試験（`crates/celeris/tests/integration_api.rs`）: `integration_api_repoless_done_task_detected_in_inbox_and_detail_then_discarded`（検出・受信箱・詳細・discard で受信箱から消える）、`integration_api_repoless_task_without_branch_records_nothing`、`integration_api_repoless_branch_in_main_is_integrated`。
 
 ### 決定からのずれ（人の判断が要る）
 

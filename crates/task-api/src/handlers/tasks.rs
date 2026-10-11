@@ -35,22 +35,38 @@ fn attach_task_integrations(
     let Some(task) = store.get(id).map_err(crate::problem::store_problem)? else {
         return Ok(());
     };
-    let mut repositories = HashMap::new();
-    if let Some(project_id) = task.project_id {
-        for repo in store
+    let mut repos = match task.project_id {
+        Some(project_id) => store
             .repo_list(project_id)
-            .map_err(crate::problem::store_problem)?
+            .map_err(crate::problem::store_problem)?,
+        None => Vec::new(),
+    };
+    // ADR 2026-10-11 D3: a task without a project names its repositories through the integration
+    // rows the sweep resolved from registered `celeris/<task id>` branches.
+    for state in store
+        .task_integration_list(None)
+        .map_err(crate::problem::store_problem)?
+    {
+        if state.task_id == id
+            && !repos.iter().any(|repo| repo.id == state.repo_id)
+            && let Some(repo) = store
+                .repo_get(state.repo_id)
+                .map_err(crate::problem::store_problem)?
         {
-            if let task_core::WorkspaceSpec::Local { path, .. } = repo.location {
-                repositories.insert(
-                    repo.id,
-                    task_ops::stranded::IntegrationRepoContext {
-                        name: repo.name,
-                        path,
-                        default_branch: repo.default_branch.unwrap_or_else(|| "main".to_string()),
-                    },
-                );
-            }
+            repos.push(repo);
+        }
+    }
+    let mut repositories = HashMap::new();
+    for repo in repos {
+        if let task_core::WorkspaceSpec::Local { path, .. } = repo.location {
+            repositories.insert(
+                repo.id,
+                task_ops::stranded::IntegrationRepoContext {
+                    name: repo.name,
+                    path,
+                    default_branch: repo.default_branch.unwrap_or_else(|| "main".to_string()),
+                },
+            );
         }
     }
     let context = task_ops::stranded::IntegrationContext {

@@ -263,13 +263,20 @@ fn resolve_repo(store: &dyn TaskStore, id: TaskId, name: &str) -> Result<RepoId,
         .get(id)
         .map_err(store_problem)?
         .ok_or_else(|| ApiProblem::task_not_found(id))?;
-    if task.project_id.is_none() {
-        return Err(ApiProblem::file_not_found("task has no project repository"));
+    let mut repos = match task.project_id {
+        Some(project) => store.repo_list(project).map_err(store_problem)?,
+        None => Vec::new(),
+    };
+    // ADR 2026-10-11 D3: a task without a project was resolved by the sweep through a registered
+    // repository's `celeris/<task id>` branch; its integration rows name that repository.
+    for state in store.task_integration_list(None).map_err(store_problem)? {
+        if state.task_id == id
+            && let Some(repo) = store.repo_get(state.repo_id).map_err(store_problem)?
+        {
+            repos.push(repo);
+        }
     }
-    let project = task.project_id.expect("checked above");
-    store
-        .repo_list(project)
-        .map_err(store_problem)?
+    repos
         .into_iter()
         .find(|repo| repo.name == name)
         .map(|repo| repo.id)

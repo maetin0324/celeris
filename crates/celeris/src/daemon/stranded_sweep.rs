@@ -1,6 +1,6 @@
 //! Periodic, deterministic detection of completed task branches.
 
-use std::{path::PathBuf, process::Command, sync::Arc, time::Duration};
+use std::{collections::HashMap, path::PathBuf, process::Command, sync::Arc, time::Duration};
 
 use task_core::{InstanceRole, SharedRole, Status, TaskStore, WorkspaceSpec};
 use time::OffsetDateTime;
@@ -23,7 +23,14 @@ where
 pub(crate) fn run(store: &dyn TaskStore, now: OffsetDateTime) -> Result<usize, String> {
     let tasks = store.list(Some(Status::Done)).map_err(|e| e.to_string())?;
     let mut records = Vec::new();
-    for task in tasks.into_iter().filter(|t| t.parent_id.is_none()) {
+    let (with_repos, repoless): (Vec<_>, Vec<_>) = tasks
+        .into_iter()
+        .filter(|t| t.parent_id.is_none())
+        .partition(|t| !t.repos.is_empty());
+    if !repoless.is_empty() {
+        records.extend(repoless_records(store, &repoless)?);
+    }
+    for task in with_repos {
         for reference in &task.repos {
             let repo = store
                 .repo_get(reference.repo_id)
@@ -57,6 +64,59 @@ pub(crate) fn run(store: &dyn TaskStore, now: OffsetDateTime) -> Result<usize, S
         }
     }
     task_ops::stranded::sweep(store, &records, now).map_err(|e| e.to_string())
+}
+
+/// ADR 2026-10-11 D3: a done root task without `task.repos` is resolved through the registered
+/// Local repositories. Each repository's `refs/heads/celeris/*` is read once and matched against
+/// the task ids; a task whose branch exists nowhere did not change a repository and is skipped.
+fn repoless_records(
+    store: &dyn TaskStore,
+    tasks: &[task_core::Task],
+) -> Result<Vec<task_ops::stranded::BranchRecord>, String> {
+    let mut repos = Vec::new();
+    for project in store.project_list().map_err(|e| e.to_string())? {
+        repos.extend(store.repo_list(project.id).map_err(|e| e.to_string())?);
+    }
+    let mut records = Vec::new();
+    for repo in repos {
+        let WorkspaceSpec::Local { path, .. } = repo.location else {
+            continue;
+        };
+        // One git read per repository; no store lock is held here.
+        let Some(refs) = git_output(
+            &path,
+            &[
+                "for-each-ref",
+                "--format=%(refname) %(objectname)",
+                "refs/heads/celeris/",
+            ],
+        ) else {
+            continue;
+        };
+        let heads: HashMap<&str, &str> = refs
+            .lines()
+            .filter_map(|line| line.split_once(' '))
+            .filter_map(|(name, sha)| Some((name.strip_prefix("refs/heads/")?, sha)))
+            .collect();
+        for task in tasks {
+            let branch = format!("celeris/{}", task.id);
+            let Some(head) = heads.get(branch.as_str()) else {
+                continue;
+            };
+            records.push(task_ops::stranded::BranchRecord {
+                task_id: task.id,
+                repo_id: repo.id,
+                repo_path: Some(path.clone()),
+                default_branch: repo.default_branch.clone(),
+                branch: Some(branch),
+                head: Some((*head).to_owned()),
+                done: true,
+                root: true,
+                changed_repo: true,
+            });
+        }
+    }
+    Ok(records)
 }
 
 fn git_output(repo: &PathBuf, args: &[&str]) -> Option<String> {

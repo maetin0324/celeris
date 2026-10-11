@@ -518,7 +518,9 @@ pub fn sweep(
                 || p.head_sha != state.head_sha
                 || p.reason != state.reason
         });
-        store.task_integration_upsert(&state)?;
+        if differs {
+            store.task_integration_upsert(&state)?;
+        }
         changed += usize::from(differs);
     }
     Ok(changed)

@@ -180,6 +180,23 @@ reverify（2026-10-11、WU reverify。HEAD = 00ba6d56 の後の作業ツリー�
 
 個別の試験（`route_extract_*`・`route_record_*`・`routing_export_*`・`routing_cli`・`route_dispatch_records_feature_reference_and_snapshot`）は上の全体 run に含まれ、いずれも 0 failed。`route_extract` の fixture は実データ形（`Criterion` の object、`work_units.retries`、dispatch の context）で aux の各欄が埋まることを確かめる。
 
+reverify2（2026-10-11、WU reverify2。task subject の `deps_n` 修正後。`CELERIS_WU_BASE` = 4fa839f4、crates/ と docs/・scripts/ の差分ゼロ）の結果:
+
+| コマンド | 結果 |
+|---|---|
+| `TMPDIR=/tmp bash scripts/dev/test-parallel.sh` | exit 0。`CELERIS_TEST_SUMMARY`: nextest 5145 passed / 0 failed / 14 ignored、binaries 178（nextest 168・doctest 10）、nextest_exit 0 / doctest_exit 0、nextest 99.5 秒。`tmp_leftovers`: 4（警告のみ、exit に影響しない） |
+| `cargo fmt --all -- --check` | exit 0（差分なし） |
+| `cargo clippy --workspace -- -D warnings` | exit 0（`Finished dev profile`、警告 0） |
+| `sh scripts/dev/check-doc-links.sh` | exit 0（`check-doc-links: ok`） |
+| `sh scripts/dev/check-adr-numbers.sh` | exit 0（`check-adr-numbers: ok (183 files)`） |
+| `python3 scripts/dev/check-architecture-map.py` | exit 1。`docs/architecture-map.md` の 3 件（`<workspace>/runs/<run_id>/tmp/`、`check-test-tmp-leftovers.sh`、`test-parallel.sh`）が存在しないと判定。reverify（上）と同じ既存の不一致で、本 WU の差分（docs/・scripts/ とも base から 0）とは無関係 |
+| `cargo test -p task-core --lib route_extract_` | 5 passed / 0 failed（task subject の `deps_n` 試験 3 本を含む） |
+| `cargo test -p task-core --lib route_record_schema_pinned` | 1 passed / 0 failed |
+
+注記: `TMPDIR` を run の作業 tmp（長い path）にしたまま走らせると、nextest が 108 件落ちた（`path must be shorter than SUN_LEN` の unix socket bind など。browser・credentiald・celerisctl の socket 試験）。`TMPDIR=/tmp` の短い path で全件通った。これは試験環境の path 長の問題で、コードの不備ではない。
+
+`deps_n` の task subject 修正の確認: `route_extract_task_uses_task_json_dependencies_and_populates_task_fields`（task の `tasks.json.depends_on` 2 件 → 2）、`route_extract_task_empty_dependencies_are_zero`（空配列 → 0、missing に入らない）、`route_extract_work_unit_dependencies_still_use_work_unit_column`（WU の `depends_on_json` 3 件 → 3）が通ることを上の `route_extract_` 実行で確認した。
+
 ## selector へ渡す未実装
 
 - `route_decisions`・`route_outcomes` の書き手: dispatch は現状 features snapshot の記録（`routing_decided.features`）まで。判断 1 回ごとの `route_decisions` 行、run 終わりの `route_outcomes` 行を書くのは selector / rollout 段（判断 record の書き込みは `selector` leaf、ADR D5・D6）。

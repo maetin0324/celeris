@@ -1,7 +1,7 @@
 # ADR: task の「なぜ今走らないか」（待ちの理由）を dispatcher と同じ根拠から出す
 
 - Date: 2026-10-11
-- Status: Accepted（未実装。実装は task 01M4NAKDCCS5XYAAJ518MVZ134 の葉 core・api・web-list・web-tree）
+- Status: 実装済み（D4 の DaemonSnapshot 旧 3 欄の削除を除く。付記「検証葉 verify」を参照）。実装は task 01M4NAKDCCS5XYAAJ518MVZ134 の葉 core・api・web-list・web-tree
 - 決定者: 人の依頼（2026-10-11 運用セッション）を受けた計画。方式の細部はこの ADR が決める
 - 関連: ADR-0044 D6（案件・途中目標の停止）、ADR-0079 D5/D13（子待ち・subtree の一時停止）、ADR-0074 D1.3（工程の scheduler）、
   ADR-0130（write-set）、ADR 2026-10-08-account-concurrency-limits（枠）、[破壊的変更を既定とする](2026-10-11-breaking-changes-by-default.md)
@@ -229,3 +229,9 @@ pub struct UnitWait {
 - `run_state` の頁は SQL の cursor ではなく、絞った後の位置（`rs:<n>`）で切る。`total` は絞った後の件数。
 - `TreeStageView.order` は段の位置（0 から）。`TaskExecutionView`（`GET /tasks/{id}/execution`）にも `waits` を出し、`awaiting_children` を消した。
 - D4 の旧 3 欄（`DaemonSnapshot.unroutable` 等）の削除は api 葉でも未了（読み手が gui・web の daemon 画面）。
+
+### 検証葉 verify（2026-10-11）
+- 実装と食い違う点: D4 の `DaemonSnapshot.unroutable`・`.awaiting_children`・`.awaiting_human` は削除されていない（`crates/task-ops/src/daemon.rs` に残り、dispatcher の内部集合も同名で残る）。
+  `task_waits` には同じ情報が入っているが、旧 3 欄を消す作業（D4・D6 の最後の行）は未了。core・api 葉の範囲外として残した。
+- 対応: 旧 3 欄の削除を後続の葉か task に分ける（進捗 `agent-docs/progress/2026-10-11-task-wait-reasons.md` の「未解決」）。
+- 検証の結果（test-parallel・clippy・fmt・web typecheck/lint/vitest/e2e）は進捗の証拠節を参照。

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Browser capability Phase 1〜4 受け入れ行の追跡表（agent-docs/progress/phase-browser-acceptance.md）を検査する。
 #
-# 1. 表の各行（`| P…` と `| A…`）の判定が `合格`・`後続`・`未達`。合格行は `cmd:` と `test:`、後続行は ULID の task id、未達行は `理由:` と `後続:` を持つ。A1〜A17 が全部ある。
+# 1. 判定は `合格`・`後続`・`未達`、A13 は `ptrace 実証済み / broker SKIP` も可。合格行は `cmd:` と `test:`、後続行は ULID、未達行は `理由:` と `後続:`、A13 の分離判定は両試験と skip 理由を持つ。A1〜A17 が全部ある。
 # 2. 文書中の `test: \`<名前>\`` の各名前が crates/ 配下に `fn <名前>` として実在する。
 # 3. 決定適合節の `crates/...rs:N` が実在ファイルで、N がその行数以内。
 # 4. 引用した `cmd:` を (crate, target) ごとにまとめて cargo test で実行し、全部 exit 0 かつ引用した各テストが `... ok` と出る。
@@ -36,6 +36,18 @@ while IFS= read -r line; do
   evidence="$(awk -F'|' '{print $5}' <<<"$line")"
   [[ "$id" =~ ^A([0-9]+)$ ]] && seen_a[${BASH_REMATCH[1]}]=1
   case "$verdict" in
+    'ptrace 実証済み / broker SKIP')
+      [[ "$id" == A13 ]] || err "$id: ptrace/broker の分離判定は A13 専用"
+      grep -q '理由:' <<<"$evidence" || err "$id: broker SKIP の理由がない"
+      grep -Eq "task: \`?$ULID_RE" <<<"$evidence" || err "$id: 試験記録の task id がない"
+      for citation in \
+        'cmd: `cargo test -p task-worker --test browser_launcher_ptrace launcher_chrome_denies_daemon_uid_ptrace`' \
+        'test: `launcher_chrome_denies_daemon_uid_ptrace`' \
+        'cmd: `cargo test -p celeris-credentiald --test injection_peer_uid real_process_with_another_uid_is_rejected_by_dac_then_peer_uid_mismatch`' \
+        'test: `real_process_with_another_uid_is_rejected_by_dac_then_peer_uid_mismatch`'; do
+        grep -Fq "$citation" <<<"$evidence" || err "$id: 分離判定に $citation がない"
+      done
+      ;;
     合格)
       grep -q 'cmd: `cargo test ' <<<"$evidence" || err "$id: 合格行に cmd: がない"
       grep -q 'test: `' <<<"$evidence" || err "$id: 合格行に test: がない"
@@ -48,7 +60,7 @@ while IFS= read -r line; do
       grep -q '後続:' <<<"$evidence" || err "$id: 未達行に 後続: がない"
       ;;
     *)
-      err "$id: 判定が '合格'・'後続'・'未達' のいずれでもない（'$verdict'）"
+      err "$id: 判定が '合格'・'後続'・'未達' または A13 の分離判定ではない（'$verdict'）"
       ;;
   esac
 done < <(grep -E '^\| (P|A)[0-9A-Za-z-]* \|' "$DOC")

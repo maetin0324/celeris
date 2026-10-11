@@ -7795,9 +7795,10 @@ export interface IntegrateResult {
 }
 export interface IntegrationActionResult {
   /**
-   * `true` means branch is already an ancestor of the configured default branch.
+   * `true` means the task head is an ancestor of the configured default branch.
    */
   integrated: boolean;
+  reason: string | null;
   state: TaskRepoIntegrationState;
 }
 /**

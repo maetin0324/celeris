@@ -208,18 +208,20 @@ fn stranded_detects_inbox_merge_discard_hold_and_promotion_independently() {
         actor: "test",
         now,
     };
-    assert!(!stranded::merge(&store, &merge).expect("route through integration request"));
+    assert_eq!(
+        stranded::merge(&store, &merge).expect("merge task branch"),
+        stranded::MergeOutcome::Integrated
+    );
     assert_eq!(
         store
             .open_integration_requests()
             .expect("integration requests")
             .len(),
-        1
+        0
     );
-    git(repo.path(), &["merge", "--ff-only", "task/merge"]);
     assert_eq!(
         stranded::sweep(&store, &records, now).expect("confirm delivery merge"),
-        1
+        0
     );
     assert_eq!(
         store

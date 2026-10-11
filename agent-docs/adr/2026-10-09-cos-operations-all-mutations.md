@@ -85,6 +85,10 @@ Live View の grant/check/read は owner attestation を入力するため除外
 | POST | `/tasks/{id}/browser/waits/{wait_id}/registered` | `browser_credential_attestation` | 人の決定 secrets=exclude。credential・封緘 state・receipt・owner attestation／信頼端末を扱う系列。値を含まない失効・削除も除外。 |
 | POST | `/tasks/{id}/browser/waits/{wait_id}/revoke` | `browser_credential_attestation` | 人の決定 secrets=exclude。credential・封緘 state・receipt・owner attestation／信頼端末を扱う系列。値を含まない失効・削除も除外。 |
 | POST | `/plans` | `removed_by_adr_0079` | ADR-0079 D13/R5a で撤去済み。人にも変更できない 410 の互換入口を復活させない。 |
+| POST | `/tasks/{id}/integrations/{repo}/merge` | `integration_human_decision` | merge is a human-only filesystem git operation and cannot run as an agent CoS operation |
+| POST | `/tasks/{id}/integrations/{repo}/discard` | `integration_human_decision` | discard is an explicit human disposition and requires the admin credential |
+| POST | `/tasks/{id}/integrations/{repo}/hold` | `integration_human_decision` | hold is an explicit human disposition and requires the admin credential |
+| POST | `/tasks/{id}/integrations/{repo}/reopen` | `integration_human_decision` | reopen is an explicit human disposition and requires the admin credential |
 
 `/cos/*` は上の現存 4 route だけでなく subtree 全体を再帰対象として拒否する（method に依らない）。
 checkpoint・resolve は本来の CoS 制御 API として直接使う。人の override を操作 envelope に内包しない。
@@ -99,19 +103,19 @@ checkpoint・resolve は本来の CoS 制御 API として直接使う。人の 
 POST / PUT / PATCH / DELETE を method/path ごとに数えた。`put_route` 別名と browser control の BASE/format! を展開し、
 `{a}`/`{id}` 等の引数名の差は同じ route として照合した。query（docs/page の path/etag 等）は
 route key に含めず、共有処理の既存検査へ渡す。GET はこの変更表に含めない。
-**142 行、router と文書で共通 128 行、router のみ 14 行、文書のみ 0 行**。
+**146 行、router と文書で共通 132 行、router のみ 14 行、文書のみ 0 行**。
 文書にない route も落とさない（cron、notifications、inbox answer、role assignment、site policy 等）。
 実在しない project/milestone DELETE を人の回答の例示から新設しない。
 
 A は監査付き許可、R は書込みをしない POST だが method の網羅性のため監査付き許可、X は D2 の理由付き除外。
 foundation は A/R の既存登録を ALLOWED に、未実装行を PENDING に、X を EXCLUDED に置く。
-verify では PENDING を消し、全 142 行が ALLOWED/EXCLUDED の一方だけに入ることを検査する。
+verify では PENDING を消し、全 146 行が ALLOWED/EXCLUDED の一方だけに入ることを検査する。
 R の操作では領域 write は不要だが operation・event・card は同一 transaction に記録する。
 今後の route 追加では同時にこの範囲契約と registry・ctl・skill を更新する。
 
 | registry 領域 | 担当 unit | 境界 | 全行 | 許可 A/R | 除外 X |
 |---|---|---|---|---|---|
-| tasks | ops-tasks | task・comments・execution・tree adopt・task changes・旧 plans | 22 | 21 | 1 |
+| tasks | ops-tasks | task・comments・execution・tree adopt・task changes・integration dispositions・旧 plans | 26 | 21 | 5 |
 | decisions | ops-decisions | decision・approval・inbox・knowledge・notifications | 11 | 11 | 0 |
 | projects | ops-projects | project・milestone・旧 project plan・project docs・reports・standing rules | 23 | 15 | 8 |
 | admin | ops-admin | provider・account・cluster・secret・org 設定・repo・skill・LLM・cron・release・daemon | 45 | 37 | 8 |
@@ -134,6 +138,10 @@ R の操作では領域 write は不要だが operation・event・card は同一
 | POST | `/tasks/{id}/cancel` | A | `handlers.rs` | 共通 |
 | POST | `/tasks/{id}/changes/{repo}/integrate` | A | `changes.rs` | 共通 |
 | POST | `/tasks/{id}/changes/{repo}/pr/merge` | A | `changes.rs` | 共通 |
+| POST | `/tasks/{id}/integrations/{repo}/merge` | X: `integration_human_decision` | `integrations.rs` | 共通 |
+| POST | `/tasks/{id}/integrations/{repo}/discard` | X: `integration_human_decision` | `integrations.rs` | 共通 |
+| POST | `/tasks/{id}/integrations/{repo}/hold` | X: `integration_human_decision` | `integrations.rs` | 共通 |
+| POST | `/tasks/{id}/integrations/{repo}/reopen` | X: `integration_human_decision` | `integrations.rs` | 共通 |
 | POST | `/tasks/{id}/comments` | A | `handlers.rs` | 共通 |
 | POST | `/tasks/{id}/execution-plan` | A | `execution.rs` | 共通 |
 | PUT | `/tasks/{id}/execution-plan` | A | `execution.rs` | 共通 |

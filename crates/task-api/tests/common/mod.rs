@@ -75,6 +75,7 @@ pub struct EnvOptions {
     pub notify_digest_max_lines: usize,
     /// ADR-0040 D6（Phase 48）: `GET /releases` / `POST /releases/{sha12}/promote` が読む係。
     pub releases: Option<task_api::SharedReleaseSource>,
+    pub integration_releases_dir: Option<PathBuf>,
     /// ADR-0040 D4（Phase 47）: `GET /health` の `release` / `mode` と、管理系の 503 に使う役割。
     pub release: String,
     pub mode: task_core::DaemonMode,
@@ -116,6 +117,7 @@ impl Default for EnvOptions {
             notify_digest_interval_secs: 3_600,
             notify_digest_max_lines: 10,
             releases: None,
+            integration_releases_dir: None,
             release: "dev".to_string(),
             mode: task_core::DaemonMode::Normal,
             role: task_core::SharedRole::new(task_core::InstanceRole::Active),
@@ -367,6 +369,7 @@ pub fn settings(
         notify_digest_interval_secs: options.notify_digest_interval_secs,
         notify_digest_max_lines: options.notify_digest_max_lines,
         releases: options.releases,
+        integration_releases_dir: options.integration_releases_dir,
         release: options.release,
         mode: options.mode,
         role: options.role,

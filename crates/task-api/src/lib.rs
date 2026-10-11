@@ -47,6 +47,7 @@ pub mod execution;
 mod files;
 mod handlers;
 mod inbox_notifications;
+mod integrations;
 /// ADR-0047（Phase 61）: 知識ベース（`~/.local/share/celeris/knowledge` の Markdown が正本）。ツリー・ページ・`_inbox`。
 pub mod knowledge;
 /// ADR-0044 D6（Phase 55）: 案件・途中目標の中止・一時停止・アーカイブ。
@@ -237,6 +238,8 @@ pub struct ApiSettings {
     /// ADR-0040 D6（Phase 48）: `[selfdeploy] releases_dir` を読む係（celeris が渡す。task-api は
     /// リリースのファイル規約を知らない）。`None` なら `GET /releases` は空、昇格は 409。
     pub releases: Option<SharedReleaseSource>,
+    /// `[selfdeploy] releases_dir` used by task integration promotion views.
+    pub integration_releases_dir: Option<PathBuf>,
     /// ADR-0040 D4（Phase 47）: このプロセスのリリース（`--release <sha12>` / `CELERIS_RELEASE` / `"dev"`）。
     /// `GET /health` の `release`。
     pub release: String,
@@ -365,7 +368,7 @@ pub enum ApiError {
 
 /// `/api/v1` の全エンドポイントと共通の検査（Host / 認証 / Origin / Content-Type / 本文サイズ）を持つルータ。
 pub fn router(state: ApiState) -> axum::Router {
-    handlers::router(state)
+    handlers::router(state.clone()).merge(integrations::routes().with_state(state))
 }
 
 /// `settings.listen` に bind し、`shutdown` が完了したら SSE を閉じて graceful に止める。

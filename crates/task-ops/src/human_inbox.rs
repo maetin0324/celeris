@@ -1025,17 +1025,21 @@ impl Builder<'_> {
             }
             AttentionItem::Unintegrated {
                 task,
+                repo_id,
+                repo,
+                state,
+                operation_path,
                 branch,
                 head_sha,
                 reason,
                 at,
-                ..
             } => self.finish(Draft {
-                id: format!("unintegrated-{}", task.id),
+                // 1 task に未取り込み repo が複数あるため、item は task×repo で一意にする。
+                id: format!("unintegrated-{}-{repo_id}", task.id),
                 kind: InboxKind::Unintegrated,
                 title: format!("未取り込み: {}", task.title),
                 detail: Some(format!(
-                    "branch `{branch}` / head `{head_sha}`\n{}",
+                    "repository `{repo}` / state `{state:?}` / branch `{branch}` / head `{head_sha}`\n{}",
                     reason.as_deref().unwrap_or("default branch に未到達")
                 )),
                 options: vec![
@@ -1043,26 +1047,26 @@ impl Builder<'_> {
                         "merge",
                         "merge を依頼",
                         false,
-                        &format!("POST /api/v1/tasks/{}/integration/merge", task.id),
+                        "default branch に取り込む",
                     ),
                     opt(
                         "discard",
                         "破棄",
-                        false,
-                        &format!("POST /api/v1/tasks/{}/integration/discard", task.id),
+                        true,
+                        "理由を付けて破棄する",
                     ),
                     opt(
                         "hold",
                         "保留",
-                        false,
-                        &format!("POST /api/v1/tasks/{}/integration/hold", task.id),
+                        true,
+                        "理由を付けて保留する",
                     ),
                 ],
                 recommended: None,
                 due_at: None,
                 blocking: self.only_task(task),
                 blocked_by: Vec::new(),
-                native: None,
+                native: native("POST", format!("{operation_path}merge")),
                 project_id: self.project_of(task.id),
                 task: Some(task.clone()),
                 created_at: at.clone(),

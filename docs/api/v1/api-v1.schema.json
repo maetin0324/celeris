@@ -1791,14 +1791,23 @@
             "head_sha": {
               "type": "string"
             },
+            "operation_path": {
+              "type": "string"
+            },
             "reason": {
               "type": [
                 "string",
                 "null"
               ]
             },
+            "repo": {
+              "type": "string"
+            },
             "repo_id": {
               "$ref": "#/$defs/RepoId"
+            },
+            "state": {
+              "$ref": "#/$defs/TaskRepoIntegrationStatus"
             },
             "task": {
               "$ref": "#/$defs/TaskRef"
@@ -1812,6 +1821,9 @@
             "type",
             "task",
             "repo_id",
+            "repo",
+            "state",
+            "operation_path",
             "branch",
             "head_sha",
             "at"
@@ -15537,6 +15549,22 @@
       ],
       "type": "object"
     },
+    "IntegrationActionResult": {
+      "properties": {
+        "integrated": {
+          "description": "`true` means branch is already an ancestor of the configured default branch.",
+          "type": "boolean"
+        },
+        "state": {
+          "$ref": "#/$defs/TaskRepoIntegrationState"
+        }
+      },
+      "required": [
+        "state",
+        "integrated"
+      ],
+      "type": "object"
+    },
     "IntegrationCheckDone": {
       "description": "済んだ統合の検査 1 件。",
       "properties": {
@@ -15635,6 +15663,20 @@
     "IntegrationId": {
       "description": "取り込みの記録の一意識別子（ULID）。",
       "type": "string"
+    },
+    "IntegrationList": {
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/TaskRepoIntegrationState"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "type": "object"
     },
     "IntegrationMethod": {
       "description": "取り込みの方法（ADR-0043 D5）。",
@@ -15878,6 +15920,47 @@
           "type": "string"
         }
       ]
+    },
+    "IntegrationView": {
+      "properties": {
+        "actor": {
+          "type": "string"
+        },
+        "branch": {
+          "type": "string"
+        },
+        "checked_at": {
+          "type": "string"
+        },
+        "head": {
+          "type": "string"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "repo": {
+          "type": "string"
+        },
+        "repo_id": {
+          "$ref": "#/$defs/RepoId"
+        },
+        "state": {
+          "$ref": "#/$defs/TaskRepoIntegrationStatus"
+        }
+      },
+      "required": [
+        "repo_id",
+        "repo",
+        "state",
+        "actor",
+        "branch",
+        "head",
+        "checked_at"
+      ],
+      "type": "object"
     },
     "KnowledgeAcceptBody": {
       "additionalProperties": false,
@@ -21377,6 +21460,33 @@
       ],
       "type": "object"
     },
+    "PromotionStatus": {
+      "description": "Deployment status is independent of whether a task branch has reached the repository's main.",
+      "enum": [
+        "not_applicable",
+        "promotion_pending",
+        "promoted"
+      ],
+      "type": "string"
+    },
+    "PromotionView": {
+      "description": "Read-only promotion view for a task branch.",
+      "properties": {
+        "release_sha": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "$ref": "#/$defs/PromotionStatus"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "type": "object"
+    },
     "ProposedMilestone": {
       "description": "`Event::ProjectPlanProposed.milestones[]`（ADR-0074 D3.3）。",
       "properties": {
@@ -22344,6 +22454,18 @@
           ]
         }
       },
+      "type": "object"
+    },
+    "ReasonBody": {
+      "additionalProperties": false,
+      "properties": {
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "reason"
+      ],
       "type": "object"
     },
     "ReleaseChanges": {
@@ -27980,6 +28102,15 @@
           ],
           "description": "ADR-0120 D5: review 前同期の衝突解消（IntegrationRepair）の現在の状況。履歴が無い task では\n省略する。`failure`（実装失敗・レビュー不合格）とは別の欄: review を妨げず成果を保って衝突を\n解消する試みであり、`exhausted` でも task を直接 `failed` にはしない（従来経路へ落ちるだけ）。"
         },
+        "integrations": {
+          "items": {
+            "$ref": "#/$defs/IntegrationView"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "is_root_task": {
           "default": false,
           "description": "ADR-0079 D13（Phase R5a）: 案件の root task か（`task_core::is_root_task`）。",
@@ -28011,6 +28142,16 @@
         "priority_label": {
           "description": "ADR-0044 D3（Phase 53）: `task.priority` を P0〜P3 に丸めたもの（GUI の編集フォーム用）。",
           "type": "string"
+        },
+        "promotion": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PromotionView"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "role": {
           "description": "ADR-0016 D1: `Task.role`（GUI の表示用に最上位にも出す）。",
@@ -28750,6 +28891,61 @@
       ],
       "type": "object"
     },
+    "TaskRepoIntegrationState": {
+      "description": "Current per-task, per-repository disposition of a completed branch.",
+      "properties": {
+        "actor": {
+          "type": "string"
+        },
+        "branch": {
+          "type": "string"
+        },
+        "checked_at": {
+          "type": "string"
+        },
+        "head_sha": {
+          "type": "string"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "repo_id": {
+          "$ref": "#/$defs/RepoId"
+        },
+        "state": {
+          "$ref": "#/$defs/TaskRepoIntegrationStatus"
+        },
+        "task_id": {
+          "$ref": "#/$defs/TaskId"
+        },
+        "updated_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "repo_id",
+        "branch",
+        "head_sha",
+        "state",
+        "actor",
+        "checked_at",
+        "updated_at"
+      ],
+      "type": "object"
+    },
+    "TaskRepoIntegrationStatus": {
+      "enum": [
+        "unintegrated",
+        "integrated",
+        "discarded",
+        "held"
+      ],
+      "type": "string"
+    },
     "TaskRequirements": {
       "additionalProperties": false,
       "properties": {
@@ -28984,6 +29180,15 @@
         "id": {
           "$ref": "#/$defs/TaskId"
         },
+        "integrations": {
+          "items": {
+            "$ref": "#/$defs/IntegrationView"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "is_root_task": {
           "default": false,
           "description": "ADR-0079 D13（Phase R5a）: 案件の root task か（`task_core::is_root_task`）。",
@@ -29059,6 +29264,16 @@
             }
           ],
           "description": "ADR-0033 D2 の `Task.project_id`（ボードは案件で絞るので一覧にも出す）。"
+        },
+        "promotion": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PromotionView"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "role": {
           "description": "ADR-0016 D1 の `Task.role`（GUI-R2: 一覧の各行に役割のラベルを出すため。`TaskDetail.role` と同じ値）。",
@@ -31585,6 +31800,15 @@
     "integrate_result": {
       "$ref": "#/$defs/IntegrateResult"
     },
+    "integration_action_result": {
+      "$ref": "#/$defs/IntegrationActionResult"
+    },
+    "integration_list": {
+      "$ref": "#/$defs/IntegrationList"
+    },
+    "integration_reason": {
+      "$ref": "#/$defs/ReasonBody"
+    },
     "knowledge_accept": {
       "$ref": "#/$defs/KnowledgeAcceptBody"
     },
@@ -31997,6 +32221,9 @@
     "inbox_item",
     "inbox_answer",
     "inbox_answer_result",
+    "integration_list",
+    "integration_reason",
+    "integration_action_result",
     "notifications",
     "notifications_unread_count",
     "notification_read",

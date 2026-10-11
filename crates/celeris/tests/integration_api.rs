@@ -1,0 +1,514 @@
+//! ADR 2026-10-11（stranded done branches）: 取り残しの読み出しと人の処分 route を、daemon の config から
+//! 配線した `ApiState` で HTTP に通して確かめる。
+//!
+//! 流れ: store と一時 git repo（`main` と未取り込みの `celeris/<task>`）を作る → 定期 sweep と同じ
+//! 経路（`celeris::sweep_stranded_branches`）→ 一覧・task 詳細・受信箱に `unintegrated` と
+//! `promotion_pending` が出る → hold → reopen → discard → reopen → merge（統合依頼の記録）→ `main` へ
+//! ff merge → sweep で `integrated` → release の昇格で `promoted`。各段で task の統合 event が
+//! 追記されることを、順番ごと検査する。
+//!
+//! 時計は sweep に注入する（固定の unix 時刻）。HTTP の handler は実時計を使う。外部ネットワーク・
+//! userns・本番の `~/.local/celeris` には触れない（loopback と tempdir だけ）。
+
+use std::net::SocketAddr;
+use std::path::Path;
+use std::time::Duration;
+
+use celeris::Config;
+use serde_json::{Value, json};
+use task_core::{
+    Check, Criterion, DaemonMode, Event, InstanceRole, Project, ProjectId, ProjectRepo,
+    ProjectStatus, RepoId, RepoKind, RepoRef, RepoRun, SharedRole, SqliteStore, Status, Task,
+    TaskId, TaskKind, TaskStore, WorkspaceSpec,
+};
+use task_ops::workspace::{WorktreeMarker, WorktreeMarkerRepo, write_marker};
+use time::OffsetDateTime;
+
+const TOKEN: &str = "integration-api-token";
+const REPO_NAME: &str = "agent-platform";
+
+struct Daemon {
+    dir: tempfile::TempDir,
+    store: SqliteStore,
+    base: String,
+    /// 落とすと `watch` が閉じるので、テストの間は持ち続ける。
+    _daemon_tx: tokio::sync::watch::Sender<Option<task_ops::daemon::DaemonSnapshot>>,
+    stop: Option<tokio::sync::oneshot::Sender<()>>,
+    handle: Option<tokio::task::JoinHandle<Result<(), task_api::ApiError>>>,
+}
+
+impl Daemon {
+    /// `<home>/config.toml` を読み、その設定から `ApiState` を作って loopback に立てる。
+    async fn start() -> Self {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("tempdir: {e}"));
+        let home = dir.path();
+        std::fs::create_dir_all(home.join("ws")).unwrap_or_else(|e| panic!("ws: {e}"));
+        std::fs::write(home.join("api.token"), format!("{TOKEN}\n"))
+            .unwrap_or_else(|e| panic!("token: {e}"));
+        std::fs::write(
+            home.join("config.toml"),
+            r#"
+db = "celeris.sqlite3"
+workspace_root = "ws"
+tick_ms = 200
+
+[api]
+listen = "127.0.0.1:0"
+token_file = "api.token"
+
+[selfdeploy]
+releases_dir = "releases"
+repo = "repo"
+# ADR-0095 付記 D-c: 実行環境の systemd bus には触れない。
+detach = "inline"
+
+[[providers]]
+id = "p1"
+adapter = "fake"
+"#,
+        )
+        .unwrap_or_else(|e| panic!("config: {e}"));
+        let config =
+            Config::load(&home.join("config.toml")).unwrap_or_else(|e| panic!("load: {e}"));
+        // 試験の store は daemon と同じ DB ファイルを開く（マイグレーションもここで流れる）。
+        let store = SqliteStore::open(&config.db.path).unwrap_or_else(|e| panic!("open: {e}"));
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .unwrap_or_else(|e| panic!("bind: {e}"));
+        let addr: SocketAddr = listener
+            .local_addr()
+            .unwrap_or_else(|e| panic!("addr: {e}"));
+        let settings = celeris::api_settings(
+            &config,
+            addr,
+            Some(TOKEN.to_string()),
+            "01J00000000000000000000000".to_string(),
+            "2026-10-11T00:00:00Z".to_string(),
+            None,
+            "dev".to_string(),
+            DaemonMode::Normal,
+            SharedRole::new(InstanceRole::Active),
+            None,
+        );
+        let (daemon_tx, daemon_rx) = tokio::sync::watch::channel(None);
+        let state =
+            task_api::ApiState::new(settings, daemon_rx).unwrap_or_else(|e| panic!("state: {e}"));
+        let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+        let handle = tokio::spawn(task_api::serve_with_listener(listener, state, async move {
+            let _ = stopped.await;
+        }));
+        Self {
+            dir,
+            store,
+            base: format!("http://{addr}"),
+            _daemon_tx: daemon_tx,
+            stop: Some(stop),
+            handle: Some(handle),
+        }
+    }
+
+    fn home(&self) -> &Path {
+        self.dir.path()
+    }
+
+    async fn get(&self, path: &str) -> (u16, Value) {
+        let resp = reqwest::Client::new()
+            .get(format!("{}{path}", self.base))
+            .header("authorization", format!("Bearer {TOKEN}"))
+            .send()
+            .await
+            .unwrap_or_else(|e| panic!("get {path}: {e}"));
+        read(resp).await
+    }
+
+    async fn post(&self, path: &str, body: Value) -> (u16, Value) {
+        let resp = reqwest::Client::new()
+            .post(format!("{}{path}", self.base))
+            .header("authorization", format!("Bearer {TOKEN}"))
+            .json(&body)
+            .send()
+            .await
+            .unwrap_or_else(|e| panic!("post {path}: {e}"));
+        read(resp).await
+    }
+
+    async fn shutdown(mut self) {
+        if let Some(stop) = self.stop.take() {
+            let _ = stop.send(());
+        }
+        if let Some(handle) = self.handle.take() {
+            tokio::time::timeout(Duration::from_secs(60), handle)
+                .await
+                .expect("fixture server stopped")
+                .expect("fixture server task")
+                .expect("fixture server result");
+        }
+    }
+}
+
+async fn read(resp: reqwest::Response) -> (u16, Value) {
+    let status = resp.status().as_u16();
+    let text = resp.text().await.unwrap_or_default();
+    (status, serde_json::from_str(&text).unwrap_or(Value::Null))
+}
+
+fn git(dir: &Path, args: &[&str]) -> String {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .output()
+        .expect("run git");
+    assert!(
+        output.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).trim().to_owned()
+}
+
+/// `main` に base、`celeris/<task>` に 1 commit を持つ repo を作る（`main` は base のまま）。
+fn fixture_repo(path: &Path, task_branch: &str) -> String {
+    std::fs::create_dir_all(path).expect("repo dir");
+    git(path, &["init", "-b", "main"]);
+    git(path, &["config", "user.email", "test@example.invalid"]);
+    git(path, &["config", "user.name", "integration api"]);
+    std::fs::write(path.join("base"), "base\n").expect("base file");
+    git(path, &["add", "base"]);
+    git(path, &["commit", "-m", "base"]);
+    git(path, &["switch", "-c", task_branch]);
+    std::fs::write(path.join("task.txt"), "task\n").expect("task file");
+    git(path, &["add", "task.txt"]);
+    git(path, &["commit", "-m", "task change"]);
+    let head = git(path, &["rev-parse", "HEAD"]);
+    git(path, &["switch", "main"]);
+    head
+}
+
+fn done_task(id: TaskId, project: ProjectId, repo: RepoId) -> Task {
+    let now = OffsetDateTime::from_unix_timestamp(1_800_000_000).expect("fixed clock");
+    Task {
+        requirements: Default::default(),
+        tree: None,
+        paused_at: None,
+        routing: None,
+        mode: Default::default(),
+        skills: Vec::new(),
+        repos: vec![RepoRef {
+            repo_id: repo,
+            name: REPO_NAME.into(),
+        }],
+        id,
+        parent_id: None,
+        kind: TaskKind::Execute,
+        title: "integration api fixture".into(),
+        objective: "exercise integration routes".into(),
+        acceptance: vec![Criterion {
+            text: "fixture exists".into(),
+            check: Check::Command {
+                cmd: "true".into(),
+                expect_exit: 0,
+            },
+        }],
+        inputs: Vec::new(),
+        depends_on: Vec::new(),
+        status: Status::Done,
+        priority: 0,
+        worker_hint: task_core::WorkerHint {
+            tier: task_core::Tier::Standard,
+            adapter: None,
+        },
+        workspace: WorkspaceSpec::Local {
+            path: "workspace".into(),
+            mode: None,
+        },
+        budget: task_core::Budget {
+            max_turns: 1,
+            max_wall_secs: 60,
+            max_retries: 0,
+        },
+        attempts: 0,
+        lease: None,
+        created_at: now,
+        updated_at: now,
+        role: None,
+        genre: None,
+        aggregate: false,
+        project_id: Some(project),
+        milestone_id: None,
+        assignee: None,
+        conversation: None,
+        labels: Vec::new(),
+        category: Default::default(),
+    }
+}
+
+/// task の統合 event を順番どおりの名前で返す（`IntegrationRequested` は状態変化ではないので除く）。
+fn integration_events(store: &SqliteStore, task: TaskId) -> Vec<&'static str> {
+    store
+        .events_for(task)
+        .expect("event history")
+        .into_iter()
+        .filter_map(|(_, event)| match event {
+            Event::IntegrationDetected { .. } => Some("detected"),
+            Event::IntegrationHeld { .. } => Some("held"),
+            Event::IntegrationReopened { .. } => Some("reopened"),
+            Event::IntegrationDiscarded { .. } => Some("discarded"),
+            Event::IntegrationMerged { .. } => Some("merged"),
+            _ => None,
+        })
+        .collect()
+}
+
+/// 受信箱の応答の中から、この task の `unintegrated` item を探す（形は入れ子でもよい）。
+fn find_unintegrated(value: &Value, task: TaskId) -> Option<&Value> {
+    match value {
+        Value::Object(map) => {
+            if map.get("type") == Some(&json!("unintegrated"))
+                && map.get("task").and_then(|t| t.get("id")) == Some(&json!(task.to_string()))
+            {
+                return Some(value);
+            }
+            map.values().find_map(|v| find_unintegrated(v, task))
+        }
+        Value::Array(items) => items.iter().find_map(|v| find_unintegrated(v, task)),
+        _ => None,
+    }
+}
+
+#[tokio::test]
+async fn integration_api_stranded_branch_round_trip_through_routes_and_events() {
+    let daemon = Daemon::start().await;
+    let home = daemon.home().to_path_buf();
+    let repo_path = home.join("repo");
+    let task_id = TaskId::new();
+    let branch = format!("celeris/{task_id}");
+    fixture_repo(&repo_path, &branch);
+
+    // 案件と repo（`agent-platform`、既定ブランチ main）。
+    let now = OffsetDateTime::from_unix_timestamp(1_800_000_000).expect("fixed clock");
+    let project = Project {
+        auto_advance: false,
+        slug: None,
+        id: ProjectId::new(),
+        title: "agent-platform".into(),
+        request: "stranded".into(),
+        status: ProjectStatus::Active,
+        secretary_summary: None,
+        workspace: None,
+        archived_at: None,
+        paused_from: None,
+        created_at: now,
+        updated_at: now,
+    };
+    daemon.store.project_create(&project).expect("project");
+    let repo = ProjectRepo {
+        id: RepoId::new(),
+        project_id: project.id,
+        name: REPO_NAME.into(),
+        kind: RepoKind::Git,
+        location: WorkspaceSpec::local(repo_path.clone()),
+        default_branch: Some("main".into()),
+        sync: None,
+        run: RepoRun::Auto,
+        is_primary: true,
+        created_at: now,
+    };
+    daemon.store.repo_create(&repo).expect("repo");
+
+    // 完了した root task。担当の worktree 目印（merge route が読む）も置く。
+    let task = done_task(task_id, project.id, repo.id);
+    daemon.store.insert(&task).expect("insert task");
+    let task_dir = home.join("ws").join(task_id.to_string());
+    write_marker(
+        &task_dir,
+        &WorktreeMarker {
+            repo: repo_path.display().to_string(),
+            dir: String::new(),
+            branch: branch.clone(),
+            base: String::new(),
+            base_kind: String::new(),
+            repos: vec![WorktreeMarkerRepo {
+                name: REPO_NAME.into(),
+                kind: "git".into(),
+                source: repo_path.display().to_string(),
+                dir: task_dir.join("repos").join(REPO_NAME).display().to_string(),
+                branch: Some(branch.clone()),
+                base: None,
+                base_kind: None,
+            }],
+        },
+    )
+    .expect("worktree marker");
+
+    // 1. 定期 sweep と同じ経路。取り残しは 1 件の変化として記録される。
+    assert_eq!(
+        celeris::sweep_stranded_branches(&daemon.store, now).expect("sweep"),
+        1
+    );
+    assert_eq!(integration_events(&daemon.store, task_id), ["detected"]);
+    let path_unintegrated = "/integrations?state=unintegrated";
+    let (status, list) = daemon.get(&format!("/api/v1{path_unintegrated}")).await;
+    assert_eq!(status, 200, "{list}");
+    let items = list["items"].as_array().expect("items");
+    assert_eq!(items.len(), 1, "{list}");
+    assert_eq!(items[0]["state"], "unintegrated");
+    assert_eq!(items[0]["branch"], branch.as_str());
+
+    // 2. 詳細・一覧・受信箱に取り残しと promotion_pending が出る。
+    let (status, detail) = daemon.get(&format!("/api/v1/tasks/{task_id}")).await;
+    assert_eq!(status, 200, "{detail}");
+    assert_eq!(
+        detail["integrations"][0]["state"], "unintegrated",
+        "{detail}"
+    );
+    assert_eq!(
+        detail["promotion"]["status"], "promotion_pending",
+        "{detail}"
+    );
+    let (status, tasks) = daemon.get("/api/v1/tasks").await;
+    assert_eq!(status, 200, "{tasks}");
+    assert!(
+        tasks["items"]
+            .as_array()
+            .expect("task items")
+            .iter()
+            .any(|item| {
+                item["id"] == task_id.to_string()
+                    && item["integrations"][0]["state"] == "unintegrated"
+            }),
+        "{tasks}"
+    );
+    let (status, inbox) = daemon.get("/api/v1/inbox").await;
+    assert_eq!(status, 200, "{inbox}");
+    let item = find_unintegrated(&inbox, task_id).unwrap_or_else(|| panic!("inbox: {inbox}"));
+    assert!(
+        item["operation_path"]
+            .as_str()
+            .expect("operation path")
+            .ends_with(&format!(
+                "/api/v1/tasks/{task_id}/integrations/{REPO_NAME}/"
+            )),
+        "{item}"
+    );
+
+    // 3. hold（理由必須）→ reopen。
+    let base = format!("/api/v1/tasks/{task_id}/integrations/{REPO_NAME}");
+    let (status, held) = daemon
+        .post(
+            &format!("{base}/hold"),
+            json!({"reason": "waiting for a decision"}),
+        )
+        .await;
+    assert_eq!(status, 200, "{held}");
+    assert_eq!(held["state"]["state"], "held");
+    assert_eq!(
+        integration_events(&daemon.store, task_id),
+        ["detected", "held"]
+    );
+    let (status, reopened) = daemon.post(&format!("{base}/reopen"), json!({})).await;
+    assert_eq!(status, 200, "{reopened}");
+    assert_eq!(reopened["state"]["state"], "unintegrated");
+    assert_eq!(
+        integration_events(&daemon.store, task_id),
+        ["detected", "held", "reopened"]
+    );
+
+    // 4. discard（理由必須）→ reopen。
+    let (status, discarded) = daemon
+        .post(&format!("{base}/discard"), json!({"reason": "superseded"}))
+        .await;
+    assert_eq!(status, 200, "{discarded}");
+    assert_eq!(discarded["state"]["state"], "discarded");
+    assert_eq!(discarded["state"]["reason"], "superseded");
+    assert_eq!(
+        integration_events(&daemon.store, task_id),
+        ["detected", "held", "reopened", "discarded"]
+    );
+    let (status, reopened) = daemon.post(&format!("{base}/reopen"), json!({})).await;
+    assert_eq!(status, 200, "{reopened}");
+    assert_eq!(reopened["state"]["state"], "unintegrated");
+    assert_eq!(
+        integration_events(&daemon.store, task_id),
+        ["detected", "held", "reopened", "discarded", "reopened"]
+    );
+
+    // 5. merge は統合依頼の記録だけ。取り込み完了ではないので integrated は false のまま。
+    let (status, requested) = daemon.post(&format!("{base}/merge"), json!({})).await;
+    assert_eq!(status, 200, "{requested}");
+    assert_eq!(requested["integrated"], false);
+    assert_eq!(requested["state"]["state"], "unintegrated");
+    assert_eq!(
+        daemon
+            .store
+            .open_integration_requests()
+            .expect("integration requests")
+            .len(),
+        1
+    );
+
+    // 6. main に ff merge された後は sweep で integrated になり、詳細にも出る。
+    git(&repo_path, &["merge", "--ff-only", &branch]);
+    assert_eq!(
+        celeris::sweep_stranded_branches(&daemon.store, now).expect("sweep after merge"),
+        1
+    );
+    assert_eq!(
+        integration_events(&daemon.store, task_id),
+        [
+            "detected",
+            "held",
+            "reopened",
+            "discarded",
+            "reopened",
+            "merged"
+        ]
+    );
+    let (status, detail) = daemon.get(&format!("/api/v1/tasks/{task_id}")).await;
+    assert_eq!(status, 200, "{detail}");
+    assert_eq!(detail["integrations"][0]["state"], "integrated", "{detail}");
+    // 統合されても昇格は別の欄で、まだ release が無いので pending のまま。
+    assert_eq!(
+        detail["promotion"]["status"], "promotion_pending",
+        "{detail}"
+    );
+
+    // 7. 同じ merge は冪等: 既に main の祖先なので integrated=true、event は増えない。
+    let (status, again) = daemon.post(&format!("{base}/merge"), json!({})).await;
+    assert_eq!(status, 200, "{again}");
+    assert_eq!(again["integrated"], true);
+    assert_eq!(again["state"]["state"], "integrated");
+    assert_eq!(
+        integration_events(&daemon.store, task_id).len(),
+        6,
+        "idempotent merge must not append an event"
+    );
+
+    // 8. release が main（取り込んだ head を含む）を昇格すると promoted になる。
+    let main_head = git(&repo_path, &["rev-parse", "main"]);
+    assert_eq!(main_head, git(&repo_path, &["rev-parse", "HEAD"]));
+    let release = home.join("releases").join(&main_head[..12]);
+    std::fs::create_dir_all(&release).expect("release dir");
+    std::fs::write(
+        release.join("manifest.json"),
+        json!({"sha": main_head}).to_string(),
+    )
+    .expect("manifest");
+    std::fs::write(
+        release.join("promoted.json"),
+        json!({"promoted_at": "2026-10-11T00:00:00Z"}).to_string(),
+    )
+    .expect("promoted marker");
+    let (status, detail) = daemon.get(&format!("/api/v1/tasks/{task_id}")).await;
+    assert_eq!(status, 200, "{detail}");
+    assert_eq!(detail["promotion"]["status"], "promoted", "{detail}");
+    assert_eq!(detail["promotion"]["release_sha"], main_head.as_str());
+
+    // 取り残しが無くなったので受信箱にも出ない。
+    let (status, inbox) = daemon.get("/api/v1/inbox").await;
+    assert_eq!(status, 200, "{inbox}");
+    assert!(find_unintegrated(&inbox, task_id).is_none(), "{inbox}");
+
+    daemon.shutdown().await;
+}

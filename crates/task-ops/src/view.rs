@@ -47,6 +47,20 @@ pub struct ClusterViewInfo {
     pub auth: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
+pub struct IntegrationView {
+    pub repo_id: task_core::RepoId,
+    pub repo: String,
+    pub state: task_core::TaskRepoIntegrationStatus,
+    pub reason: Option<String>,
+    pub actor: String,
+    pub branch: String,
+    pub head: String,
+    pub checked_at: String,
+}
+
+pub type PromotionView = crate::stranded::PromotionView;
+
 /// worktree のブランチ名の接頭辞（ADR-0019 D2）。`task_worker::WorktreeSettings::default().branch_prefix` と同じ値。
 pub const WORKTREE_BRANCH_PREFIX: &str = "celeris/";
 
@@ -110,6 +124,10 @@ pub struct TaskSummary {
     pub project_id: Option<task_core::ProjectId>,
     /// ADR-0033 D2 の `Task.milestone_id`（カードに途中目標を出すため）。
     pub milestone_id: Option<task_core::MilestoneId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub integrations: Option<Vec<IntegrationView>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub promotion: Option<PromotionView>,
     // ---- ADR-0044 D3/D4（Phase 53）: ここまで ----
 }
 
@@ -142,6 +160,10 @@ pub fn task_status_counts(store: &dyn TaskStore) -> Result<TaskStatusCounts, Ops
 #[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 pub struct TaskDetail {
     pub task: Task,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub integrations: Option<Vec<IntegrationView>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub promotion: Option<PromotionView>,
     /// ADR-0130: effective task hint, including inheritance from a parent unit.
     pub expected_write_paths: Option<Vec<String>>,
     /// Committed diffs for this task's runs, with snapshot status and Git SHAs.
@@ -975,6 +997,8 @@ pub(crate) fn build_task_summary(
         priority_label: task_core::priority_label(task.priority).to_string(),
         project_id: task.project_id,
         milestone_id: task.milestone_id,
+        integrations: None,
+        promotion: None,
     }
 }
 
@@ -1412,6 +1436,8 @@ pub fn task_detail(
     let behind_target = crate::behind_target::behind_target_of(store, id, now)?;
 
     Ok(TaskDetail {
+        integrations: None,
+        promotion: None,
         expected_write_paths,
         actual_run_write_sets,
         actual_work_unit_write_sets,
@@ -1443,6 +1469,52 @@ pub fn task_detail(
         failure,
         execution,
     })
+}
+
+/// Add durable integration records and (when configured) the independent release promotion state.
+pub fn attach_integrations(
+    store: &dyn TaskStore,
+    task_id: TaskId,
+    integrations: &mut Option<Vec<IntegrationView>>,
+    promotion: &mut Option<PromotionView>,
+    context: Option<&crate::stranded::IntegrationContext>,
+) -> Result<(), OpsError> {
+    let Some(context) = context else {
+        return Ok(());
+    };
+    let states = store.task_integration_list(None)?;
+    let matching = states
+        .into_iter()
+        .filter(|state| state.task_id == task_id)
+        .collect::<Vec<_>>();
+    let mut views = Vec::with_capacity(matching.len());
+    for state in matching {
+        let Some(repo) = context.repositories.get(&state.repo_id) else {
+            continue;
+        };
+        // ADR 2026-10-11-stranded-done-branches: promotion pending is shown independently of the
+        // integration state, so an unintegrated head that no release contains is pending as well.
+        if let Some(releases_dir) = context.releases_dir.as_deref() {
+            *promotion = Some(crate::stranded::promotion_view(
+                &repo.name,
+                &repo.path,
+                &state.head_sha,
+                releases_dir,
+            ));
+        }
+        views.push(IntegrationView {
+            repo_id: state.repo_id,
+            repo: repo.name.clone(),
+            state: state.state,
+            reason: state.reason,
+            actor: state.actor,
+            branch: state.branch,
+            head: state.head_sha,
+            checked_at: to_rfc3339(state.checked_at),
+        });
+    }
+    *integrations = Some(views);
+    Ok(())
 }
 
 /// ADR-0079 D13（Phase R5a）: `task` の dispatch を subtree の一時停止で止めている task（自分か、`paused_at` を持つ

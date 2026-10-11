@@ -232,6 +232,9 @@ pub enum AttentionItem {
     Unintegrated {
         task: TaskRef,
         repo_id: task_core::RepoId,
+        repo: String,
+        state: task_core::TaskRepoIntegrationStatus,
+        operation_path: String,
         branch: String,
         head_sha: String,
         reason: Option<String>,
@@ -1066,9 +1069,16 @@ fn build_attention(
         {
             continue;
         }
+        let repo_name = store
+            .repo_get(state.repo_id)?
+            .map(|repo| repo.name)
+            .unwrap_or_else(|| state.repo_id.to_string());
         items.push(AttentionItem::Unintegrated {
             task: view::task_ref(task),
             repo_id: state.repo_id,
+            repo: repo_name.clone(),
+            state: state.state,
+            operation_path: format!("/api/v1/tasks/{}/integrations/{repo_name}/", state.task_id),
             branch: state.branch,
             head_sha: state.head_sha,
             reason: state.reason,

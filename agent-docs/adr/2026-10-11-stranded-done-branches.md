@@ -63,3 +63,36 @@ web の task 詳細・一覧および inbox は次の状態を表示する: inte
 ## Consequences
 
 完了 task の変更が状態なしで取り残されなくなり、初回走査で過去分も可視化される。状態表・migration・daemon sweep・inbox/API/web が必要になる。done と本番反映を分離するため、運用者は integrated と promotion pending を区別できる。
+
+## 付記: 実装との突き合わせ（2026-10-11）
+
+Status は Proposed のまま。以下は実装（views・routes・routes-wire・cli・e2e の各 WorkUnit）を読んで確かめた事実と、決定からのずれである。決定本文は変えていない。
+
+### 実装した経路と欄
+
+- route（`crates/task-api/src/integrations.rs:19-30`）:
+  - `GET /api/v1/integrations?state=`（`unintegrated|integrated|discarded|held`）
+  - `GET /api/v1/tasks/{id}/integrations`
+  - `POST /api/v1/tasks/{id}/integrations/{repo}/merge`
+  - `POST /api/v1/tasks/{id}/integrations/{repo}/discard`（body `{"reason": "…"}`、空白のみは不可）
+  - `POST /api/v1/tasks/{id}/integrations/{repo}/hold`（同上）
+  - `POST /api/v1/tasks/{id}/integrations/{repo}/reopen`
+  - `{repo}` は repository の名前（受信箱の `operation_path` は `/api/v1/tasks/{task}/integrations/{repo_name}/`）。
+- 認可は既存の人の操作と同じ admin bearer（`require_admin`）で、actor は `human`。不正な遷移は 409 の problem。
+- CoS の operation registry では 4 mutation route を `EXCLUDED`（理由 `integration_human_decision`、`crates/task-api/src/cos/ops/tasks.rs:73-` 付近）。agent からは実行させない。
+- 欄（`crates/task-ops/src/view.rs`）: TaskSummary/TaskDetail に `integrations: Option<Vec<IntegrationView>>` と `promotion: Option<PromotionView>`。`IntegrationView` は `repo_id`・`repo`・`state`・`reason`・`actor`・`branch`・`head`・`checked_at`。`PromotionView` は `status`（`not_applicable|promotion_pending|promoted`）と `release_sha`。前回の記録にあった `integration_status[]` という名前ではない。
+- promotion は全 state の行で計算する（e2e の変更）。ADR の「統合状態と独立して表示」に合わせた。
+- 配線: `[selfdeploy] releases_dir` → `ApiState.integration_releases_dir`（`crates/task-api/src/lib.rs:241-242`）。repo path と default branch は project の repository 行と worktree marker から得る。
+- celerisctl（`crates/celerisctl/src/commands/integration.rs`）: `integration list [--state] [--task] [--json]`、`merge <task> <repo>`、`discard|hold <task> <repo> --reason <r>`（`--reason` は必須）、`reopen <task> <repo>`。
+- schema と生成型: `docs/api/v1/api-v1.schema.json` に `IntegrationView`・`PromotionStatus` がある。`node web/scripts/gen-types.mjs --check` は exit 0 で web の生成型と一致（2026-10-11 に確認）。
+
+### 決定からのずれ（人の判断が要る）
+
+1. **受信箱の操作先**（D4）: `Unintegrated` item の `answer.native` は merge の 1 件だけ（`crates/task-ops/src/human_inbox.rs:1068`）。discard と hold の選択肢には native が無く、web は `operation_path` に `discard`/`hold` を足して route を呼ぶ必要がある。旧い説明文だけの `/integration/{merge,discard,hold}` の URL は `human_inbox.rs` から消えている（検索で 0 件）。
+2. **merge の意味**（D2・D4）: API の merge は、既に main の祖先なら integrated を記録し、そうでなければ既存の integration request を開く（`merge_requested` の記録）。取り込み完了を API が git で行うのではない。決定の「merge 操作も同じ git 到達確認を通す」とは一致しない。
+3. **discard の確認**: 実装は reason の必須だけで、確認フラグは無い。決定は確認を求めていない。
+
+### 未実施
+
+- 受信箱の discard/hold の操作先を item に載せる変更は crate の変更になるため、この WorkUnit では行わない（次の WorkUnit の候補）。
+- web の操作画面は、記録上 views・routes・cli・e2e のいずれでも作っていない。

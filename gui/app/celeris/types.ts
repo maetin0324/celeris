@@ -1707,8 +1707,11 @@ export type AttentionItem =
       at: string;
       branch: string;
       head_sha: string;
+      operation_path: string;
       reason?: string | null;
+      repo: string;
       repo_id: RepoId;
+      state: TaskRepoIntegrationStatus;
       task: TaskRef;
       type: "unintegrated";
     };
@@ -1716,6 +1719,11 @@ export type AttentionItem =
  * ADR-0120 D5: 最後の integration repair の結末。
  */
 export type IntegrationRepairState = "scheduled" | "resolved" | "exhausted";
+export type TaskRepoIntegrationStatus = "unintegrated" | "integrated" | "discarded" | "held";
+/**
+ * Deployment status is independent of whether a task branch has reached the repository's main.
+ */
+export type PromotionStatus = "not_applicable" | "promotion_pending" | "promoted";
 /**
  * D2: 受信箱の種類。宣言順が D2 の並びの固定順。
  */
@@ -2132,6 +2140,9 @@ export interface ApiV1Schema {
   inbox_items: HumanInboxView;
   integrate: IntegrateBody;
   integrate_result: IntegrateResult;
+  integration_action_result: IntegrationActionResult;
+  integration_list: IntegrationList;
+  integration_reason: ReasonBody;
   knowledge_accept: KnowledgeAcceptBody;
   knowledge_candidate: KnowledgeCandidate;
   knowledge_inbox: KnowledgeInbox;
@@ -7558,6 +7569,7 @@ export interface TaskSummary {
    */
   genre?: string | null;
   id: TaskId;
+  integrations?: IntegrationView[] | null;
   /**
    * ADR-0079 D13（Phase R5a）: 案件の root task か（`task_core::is_root_task`）。
    */
@@ -7589,6 +7601,7 @@ export interface TaskSummary {
    * ADR-0033 D2 の `Task.project_id`（ボードは案件で絞るので一覧にも出す）。
    */
   project_id?: ProjectId | null;
+  promotion?: PromotionView | null;
   /**
    * ADR-0016 D1 の `Task.role`（GUI-R2: 一覧の各行に役割のラベルを出すため。`TaskDetail.role` と同じ値）。
    */
@@ -7602,6 +7615,23 @@ export interface TaskSummary {
   tier: Tier;
   title: string;
   updated_at: string;
+}
+export interface IntegrationView {
+  actor: string;
+  branch: string;
+  checked_at: string;
+  head: string;
+  reason?: string | null;
+  repo: string;
+  repo_id: RepoId;
+  state: TaskRepoIntegrationStatus;
+}
+/**
+ * Read-only promotion view for a task branch.
+ */
+export interface PromotionView {
+  release_sha?: string | null;
+  status: PromotionStatus;
 }
 /**
  * `DraftGroup.project_plan`。
@@ -7762,6 +7792,33 @@ export interface IntegrateResult {
    */
   child_task_id?: string | null;
   integration: TaskIntegration;
+}
+export interface IntegrationActionResult {
+  /**
+   * `true` means branch is already an ancestor of the configured default branch.
+   */
+  integrated: boolean;
+  state: TaskRepoIntegrationState;
+}
+/**
+ * Current per-task, per-repository disposition of a completed branch.
+ */
+export interface TaskRepoIntegrationState {
+  actor: string;
+  branch: string;
+  checked_at: string;
+  head_sha: string;
+  reason?: string | null;
+  repo_id: RepoId;
+  state: TaskRepoIntegrationStatus;
+  task_id: TaskId;
+  updated_at: string;
+}
+export interface IntegrationList {
+  items: TaskRepoIntegrationState[];
+}
+export interface ReasonBody {
+  reason: string;
 }
 /**
  * `POST /knowledge/inbox/{id}/accept` の本文（省略してよい）。
@@ -11178,6 +11235,7 @@ export interface TaskDetail {
    * 解消する試みであり、`exhausted` でも task を直接 `failed` にはしない（従来経路へ落ちるだけ）。
    */
   integration_repair?: IntegrationRepairView | null;
+  integrations?: IntegrationView[] | null;
   /**
    * ADR-0079 D13（Phase R5a）: 案件の root task か（`task_core::is_root_task`）。
    */
@@ -11193,6 +11251,7 @@ export interface TaskDetail {
    * ADR-0044 D3（Phase 53）: `task.priority` を P0〜P3 に丸めたもの（GUI の編集フォーム用）。
    */
   priority_label: string;
+  promotion?: PromotionView | null;
   /**
    * ADR-0016 D1: `Task.role`（GUI の表示用に最上位にも出す）。
    */

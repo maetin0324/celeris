@@ -77,6 +77,8 @@ pub(crate) async fn tick_loop(
         false
     };
     let tick = config.tick();
+    let _stranded_sweep =
+        crate::daemon::stranded_sweep::spawn(dispatcher.store(), roles.role.clone());
     let mut ticks: u64 = 0;
     // ADR-0040 D4: 手元の run とレビューの数（drain の判定に使う。最後の tick の値）。
     let mut in_flight: usize = 0;

@@ -23,6 +23,10 @@ pub enum DeliveryState {
 )]
 #[serde(rename_all = "snake_case")]
 pub enum DeliverySkipReason {
+    NoProject,
+    ProjectNotEnabled,
+    SupportTask,
+    TreeChild,
     MultipleRepos,
     NoMarker,
     MarkerRepoMismatch,
@@ -40,6 +44,10 @@ impl DeliverySkipReason {
     /// 機械可読コード（serde の値と同じ）。
     pub fn code(self) -> &'static str {
         match self {
+            Self::NoProject => "no_project",
+            Self::ProjectNotEnabled => "project_not_enabled",
+            Self::SupportTask => "support_task",
+            Self::TreeChild => "tree_child",
             Self::MultipleRepos => "multiple_repos",
             Self::NoMarker => "no_marker",
             Self::MarkerRepoMismatch => "marker_repo_mismatch",
@@ -57,6 +65,10 @@ impl DeliverySkipReason {
     /// 人が読む 1 行（受信箱の文面）。
     pub fn label(self) -> &'static str {
         match self {
+            Self::NoProject => "案件が設定されていません",
+            Self::ProjectNotEnabled => "案件が delivery 対象に設定されていません",
+            Self::SupportTask => "support task は delivery 対象外です",
+            Self::TreeChild => "木の子 task は親の統合工程で扱います",
             Self::MultipleRepos => "リポジトリがちょうど 1 つではありません",
             Self::NoMarker => "作業ツリーの目印（worktree.json）が読めません",
             Self::MarkerRepoMismatch => "作業ツリーのリポジトリが task のリポジトリと一致しません",

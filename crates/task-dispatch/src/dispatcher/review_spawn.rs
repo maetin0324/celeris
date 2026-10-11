@@ -342,7 +342,15 @@ impl Dispatcher {
             }
         };
 
-        let reviewer = if needs_reviewer_run(&task) {
+        let delivery_requires_reviewer_run = task.project_id.is_some_and(|project_id| {
+            self.config
+                .delivery
+                .projects
+                .contains(&project_id.to_string())
+                && task_core::support_kind(&task).is_none()
+                && !task_core::tree::is_tree_child(&task)
+        });
+        let reviewer = if needs_reviewer_run(&task) || delivery_requires_reviewer_run {
             match self.pick_reviewer(&task, &run_id) {
                 Some(r) => Some(r),
                 None => {
@@ -617,17 +625,20 @@ impl Dispatcher {
         } else {
             Vec::new()
         };
-        if let Some(run) = &reviewer_run {
-            task_ops::delivery::begin(
-                self.store.as_ref(),
-                &mut task,
-                &self.config.workspace_root,
-                &self.config.delivery,
-                &run_id,
-                &run.run_id,
-            )
-            .map_err(DispatchError::from)?;
-        }
+        // Delivery is part of every successful root-task review, independently of
+        // whether the task requested an LLM reviewer. The worker run is a stable
+        // fallback review identifier when no reviewer run exists.
+        task_ops::delivery::begin(
+            self.store.as_ref(),
+            &mut task,
+            &self.config.workspace_root,
+            &self.config.delivery,
+            &run_id,
+            reviewer_run
+                .as_ref()
+                .map_or(&run_id, |run| run.run_id.as_str()),
+        )
+        .map_err(DispatchError::from)?;
         for snapshot in &synced {
             if let Some(old) = self.store.delivery_get(task_id)?
                 && old.repo_id == snapshot.repo_id

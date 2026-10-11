@@ -1718,6 +1718,39 @@
           "type": "object"
         },
         {
+          "description": "ADR 2026-10-11 stranded-done-branches F2: 遠隔 repo など sweep の対象外になった（`not_applicable`）。",
+          "properties": {
+            "actor": {
+              "type": "string"
+            },
+            "branch": {
+              "type": "string"
+            },
+            "head_sha": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "repo_id": {
+              "$ref": "#/$defs/RepoId"
+            },
+            "type": {
+              "const": "integration_not_applicable",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "repo_id",
+            "branch",
+            "head_sha",
+            "reason",
+            "actor"
+          ],
+          "type": "object"
+        },
+        {
           "description": "CoS operation attempt, including rejected attempts. The envelope is immutable.",
           "properties": {
             "actor": {

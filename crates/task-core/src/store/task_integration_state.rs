@@ -67,7 +67,15 @@ impl SqliteStore {
                     reason: value.reason.clone().unwrap_or_default(),
                     actor: value.actor.clone(),
                 }),
-                (_, TaskRepoIntegrationStatus::NotApplicable) => None,
+                (_, TaskRepoIntegrationStatus::NotApplicable) => {
+                    Some(Event::IntegrationNotApplicable {
+                        repo_id: value.repo_id,
+                        branch: value.branch.clone(),
+                        head_sha: value.head_sha.clone(),
+                        reason: value.reason.clone().unwrap_or_default(),
+                        actor: value.actor.clone(),
+                    })
+                }
             };
             if let Some(event) = event {
                 Self::append_event_tx(&tx, value.task_id, &event)?;

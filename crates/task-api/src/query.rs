@@ -149,7 +149,7 @@ pub(crate) fn parse_snake<T: DeserializeOwned>(what: &str, value: &str) -> Resul
 }
 
 /// `Event` の serde の `type` 名（`types` クエリの語彙）。
-pub(crate) const EVENT_TYPES: [&str; 81] = [
+pub(crate) const EVENT_TYPES: [&str; 82] = [
     "browser_updated",
     // ADR 2026-10-07-worker-no-subagents-no-llm-cli D5: subagent 道具・別 LLM CLI/API の起動の検出。
     "worker_policy_violation",
@@ -262,6 +262,7 @@ pub(crate) const EVENT_TYPES: [&str; 81] = [
     "integration_discarded",
     "integration_held",
     "integration_reopened",
+    "integration_not_applicable",
 ];
 
 pub(crate) fn event_type_name(event: &Event) -> &'static str {
@@ -293,6 +294,7 @@ pub(crate) fn event_type_name(event: &Event) -> &'static str {
         Event::IntegrationDiscarded { .. } => "integration_discarded",
         Event::IntegrationHeld { .. } => "integration_held",
         Event::IntegrationReopened { .. } => "integration_reopened",
+        Event::IntegrationNotApplicable { .. } => "integration_not_applicable",
         Event::ApprovalRequested => "approval_requested",
         Event::ApprovalDecided { .. } => "approval_decided",
         Event::ApprovalsWithdrawn { .. } => "approvals_withdrawn",

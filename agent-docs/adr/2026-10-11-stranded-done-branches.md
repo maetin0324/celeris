@@ -192,7 +192,7 @@ Status は Proposed のまま。以下は実装（views・routes・routes-wire�
 - ずれ:
   - 表の名前: 決定本文は `task_repo_integration_states.state` と書いたが、実際の表は `task_integrations`（`0067_task_repo_integration_states.sql` が作った表）。
   - reason の文字列: 決定は `remote repository is not checked by the stranded sweep`。実装は `remote repository: not checked by the sweep`。merge の拒否理由は `remote repository was not checked by the sweep`、reopen・discard・hold は `not-applicable integrations cannot be changed locally`。
-  - event: 決定は「状態の変化は既存どおり event の追記で残す」。`crates/task-core/src/store/task_integration_state.rs` の upsert は `NotApplicable` への遷移で event を追記しない（`(_, NotApplicable) => None`）。`unintegrated` → `not_applicable` の移行は行の書き換えだけが残り、event には現れない。過去の events は書き換えていない。
+  - event（解消済み）: 決定どおり `unintegrated` 等から `not_applicable` への遷移は `Event::IntegrationNotApplicable` （`crates/task-core/src/model.rs`、serde 名 `integration_not_applicable`、`repo_id`・`branch`・`head_sha`・`reason`・`actor` を持つ）として追記する。追記は `crates/task-core/src/store/task_integration_state.rs` の `task_integration_upsert_impl` が行い、状態が同じなら追記しない（既存の規則）。試験: `stranded_audit_remote_not_applicable_appends_one_event_and_no_repeat`（`crates/task-ops/src/stranded.rs`）。移行で書き換わった行の過去の events は書き換えていない。event 名は `crates/task-api/src/query.rs` の `EVENT_TYPES` と web の `event-kinds.ts`・`invalidation-map.ts` に追従済み。
   - repos 空の task（`repoless_records`）は Local の repository だけを走査し、Remote の repository の branch は record を作らない（`not_applicable` の行もできない）。`task.repos` を持つ task だけが `not_applicable` で記録される。
 
 #### F3（状態が変わらない再 sweep は書かない）

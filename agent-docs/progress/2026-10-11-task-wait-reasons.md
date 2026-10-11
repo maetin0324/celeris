@@ -49,10 +49,34 @@ updated: 2026-10-11
 - `corepack pnpm@12.6.0 -C web exec playwright test e2e/work/wait-reasons.spec.ts e2e/work/task-tree-waits.spec.ts`（TMPDIR=/tmp）→ exit 0、`2 passed`。両方に 390×844 の横溢れ無しの assert を含む。
 - 既存の生成型の整合（葉 api で確認済み）: `node web/scripts/gen-types.mjs --check`、`node gui/scripts/gen-types.mjs --check` は api 葉の記録のとおり exit 0。verify ではコードを変えていないので再実行していない。
 
+## stage-gate 後の全体検証（2026-10-11、verify 葉の再実行）
+
+HEAD `2878637c`（integrate wu/web-label）上で実行。コードは変えていない。
+
+- `bash scripts/dev/test-parallel.sh`（既定 TMPDIR = 93 文字）→ exit 100。`5185 tests run: 5077 passed, 108 failed, 13 skipped`。
+  失敗 108 件はすべて browser・credentiald 系（`task-worker::browser_*`、`task-api::browser_e2e` など）。ログの 158 行が `path must be shorter than SUN_LEN`、48 行が `timed out waiting for fixture readiness`。環境要因（unix socket の path 長）。
+- `TMPDIR=/tmp bash scripts/dev/test-parallel.sh` → exit 0。`CELERIS_TEST_SUMMARY`: `passed 5188, failed 0, ignored 14, nextest_exit 0, doctest_exit 0`、`5185 tests run: 5185 passed, 13 skipped`。
+  警告 1 行 `tests left 4 entries in TMPDIR (removed on exit)`（exit は 0。残った項目の中身は未調査）。
+- `cargo clippy --workspace -- -D warnings` → exit 0。
+- `cargo fmt --all -- --check` → exit 0。
+- `corepack pnpm@12.6.0 -C web install --offline --frozen-lockfile` → exit 0。
+- `corepack pnpm@12.6.0 -C web typecheck`（`tsc -b`）→ exit 0。
+- `corepack pnpm@12.6.0 -C web lint`（`biome check .`）→ exit 0、`Checked 485 files`、`Found 4 warnings`（すべて `web/styles.css:220-223` の `noImportantStyles`。今回の変更の外）。
+- `TMPDIR=/tmp corepack pnpm@12.6.0 -C web test` → exit 0、`Test Files 95 passed (95)`、`Tests 691 passed (691)`。
+- `node web/scripts/gen-types.mjs --check` → exit 0。
+- 文書検査 3 本: `bash scripts/dev/check-adr-numbers.sh` → exit 0（`ok (195 files)`）。`sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv` → exit 0（`ok`）。`bash scripts/dev/check-doc-links.sh` → exit 0（`ok`）。
+  （`check-doc-layout.sh` は引数に manifest の tsv が要る。引数無しでは usage で exit 1。）
+- stage-gate の受け入れ試験:
+  - `cargo test -p task-ops task_wait_api_stage_review` → 3 passed（`_is_distinct_from_plan_approval`・`_falls_back_to_phase_checkpoint`・`_reports_the_stage_key`）。
+  - `cargo test -p task-dispatch task_wait_stage_gate` → 2 passed（`task_wait_stage_gate_hold_iff_waits`・`task_wait_stage_gate_review_human_hold_matches_the_api_waits`）。
+- 旧欄の確認: `crates/task-ops/src/daemon.rs` に `unroutable`・`awaiting_children`・`awaiting_human` は残っていない（grep 0 件）。
+- 共有の確認: `crates/task-dispatch/src/dispatcher/tree_units.rs:516` が `task_ops::wait::human_gate_waits(task, Some(plan), events)` を呼ぶ。`crates/task-ops/src/wait.rs` に `StageReview` が出る。旧 `gate_waits` は crates に残っていない。
+
 ## 未解決
 
-- ADR D4 の `DaemonSnapshot.unroutable`・`.awaiting_children`・`.awaiting_human` が削除されていない（`crates/task-ops/src/daemon.rs` に残る。dispatcher の内部集合も同名で残る）。`task_waits` に同じ情報があるので機能は足りるが、ADR の「旧欄は同じ変更で消す」に反する。core・api 葉の範囲外として残し、verify では直さなかった（コードは変えない方針）。
 - 一覧の応答で非終端 task の計画を読む負荷は未計測（ADR Consequences）。
+- `tests left 4 entries in TMPDIR` の警告の中身は未調査（試験の残留物の可能性。exit には影響しない）。
+- 既定 TMPDIR（93 文字）では browser・credentiald の 108 件が socket path 長で落ちる。run の TMPDIR を短くするかは人の判断（運用の既知事項）。
 
 ## 本番への移行
 
@@ -61,7 +85,6 @@ updated: 2026-10-11
 ## 提案
 
 - 後続の小さな task を 1 つ: `DaemonSnapshot` の旧 3 欄と dispatcher の同名集合を `task_waits` へ寄せて消す（ADR D4・D6 の最後の行）。試験は `crates/task-dispatch` の `task_wait_` 系で足りる。
-- `gate_waits` で `StageReview`（`human_gate_hold`）を出すかは人が決める（ADR 付記の `api` 葉の未解決）。
 
 ## final review 失敗の修正（fix-tests、2026-10-11）
 

@@ -89,7 +89,7 @@ Status は Proposed のまま。以下は実装（views・routes・routes-wire�
 ### 決定からのずれ（人の判断が要る）
 
 1. **受信箱の操作先**（D4）: `Unintegrated` item の `answer.native` は merge の 1 件だけ（`crates/task-ops/src/human_inbox.rs:1068`）。discard と hold の選択肢には native が無く、web は `operation_path` に `discard`/`hold` を足して route を呼ぶ必要がある。旧い説明文だけの `/integration/{merge,discard,hold}` の URL は `human_inbox.rs` から消えている（検索で 0 件）。
-2. **merge の意味**（D2・D4）: API の merge は、既に main の祖先なら integrated を記録し、そうでなければ既存の integration request を開く（`merge_requested` の記録）。取り込み完了を API が git で行うのではない。決定の「merge 操作も同じ git 到達確認を通す」とは一致しない。
+2. **merge の意味**（D2・D4）: API merge は task branch head を既定 branch に実際に取り込む。既に祖先なら冪等に integrated を返し、ff 可能なら fast-forward、そうでなければ detached の一時 worktree で `git merge --no-ff` してから既定 branch を進める。既定 branch の checkout が dirty なら `409 checkout_busy` とし、衝突時は既定 branch を変えず integration request と理由を記録して `integrated: false` を返す。取り込み後に `git merge-base --is-ancestor` で head が既定 branch の祖先であることを確認してから integrated と `IntegrationMerged` event を記録する。origin へ push はしない。
 3. **discard の確認**: 実装は reason の必須だけで、確認フラグは無い。決定は確認を求めていない。
 
 ### 未実施

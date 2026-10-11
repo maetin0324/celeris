@@ -3,8 +3,8 @@
 //!
 //! 流れ: store と一時 git repo（`main` と未取り込みの `celeris/<task>`）を作る → 定期 sweep と同じ
 //! 経路（`celeris::sweep_stranded_branches`）→ 一覧・task 詳細・受信箱に `unintegrated` と
-//! `promotion_pending` が出る → hold → reopen → discard → reopen → merge（統合依頼の記録）→ `main` へ
-//! ff merge → sweep で `integrated` → release の昇格で `promoted`。各段で task の統合 event が
+//! `promotion_pending` が出る → hold → reopen → discard → reopen → API merge で `integrated`
+//! （main が task head を含む）→ 冪等 merge → release の昇格で `promoted`。各段で task の統合 event が
 //! 追記されることを、順番ごと検査する。
 //!
 //! 時計は sweep に注入する（固定の unix 時刻）。HTTP の handler は実時計を使う。外部ネットワーク・
@@ -434,25 +434,20 @@ async fn integration_api_stranded_branch_round_trip_through_routes_and_events() 
         ["detected", "held", "reopened", "discarded", "reopened"]
     );
 
-    // 5. merge は統合依頼の記録だけ。取り込み完了ではないので integrated は false のまま。
-    let (status, requested) = daemon.post(&format!("{base}/merge"), json!({})).await;
-    assert_eq!(status, 200, "{requested}");
-    assert_eq!(requested["integrated"], false);
-    assert_eq!(requested["state"]["state"], "unintegrated");
-    assert_eq!(
-        daemon
-            .store
-            .open_integration_requests()
-            .expect("integration requests")
-            .len(),
-        1
-    );
-
-    // 6. main に ff merge された後は sweep で integrated になり、詳細にも出る。
-    git(&repo_path, &["merge", "--ff-only", &branch]);
-    assert_eq!(
-        celeris::sweep_stranded_branches(&daemon.store, now).expect("sweep after merge"),
-        1
+    // 5. API 自身が main に merge し、祖先確認後に integrated を返す。
+    let task_head = git(&repo_path, &["rev-parse", &branch]);
+    let (status, merged) = daemon.post(&format!("{base}/merge"), json!({})).await;
+    assert_eq!(status, 200, "{merged}");
+    assert_eq!(merged["integrated"], true);
+    assert_eq!(merged["state"]["state"], "integrated");
+    assert!(
+        std::process::Command::new("git")
+            .args(["-C"])
+            .arg(&repo_path)
+            .args(["merge-base", "--is-ancestor", &task_head, "main"])
+            .status()
+            .expect("ancestor check")
+            .success()
     );
     assert_eq!(
         integration_events(&daemon.store, task_id),
@@ -474,7 +469,19 @@ async fn integration_api_stranded_branch_round_trip_through_routes_and_events() 
         "{detail}"
     );
 
-    // 7. 同じ merge は冪等: 既に main の祖先なので integrated=true、event は増えない。
+    let (status, tasks) = daemon.get("/api/v1/tasks").await;
+    assert_eq!(status, 200, "{tasks}");
+    assert!(
+        tasks["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["id"] == task_id.to_string()
+                && item["integrations"][0]["state"] == "integrated"),
+        "{tasks}"
+    );
+
+    // 6. 同じ merge は冪等: event は増えない。
     let (status, again) = daemon.post(&format!("{base}/merge"), json!({})).await;
     assert_eq!(status, 200, "{again}");
     assert_eq!(again["integrated"], true);
@@ -485,7 +492,7 @@ async fn integration_api_stranded_branch_round_trip_through_routes_and_events() 
         "idempotent merge must not append an event"
     );
 
-    // 8. release が main（取り込んだ head を含む）を昇格すると promoted になる。
+    // 7. release が main（取り込んだ head を含む）を昇格すると promoted になる。
     let main_head = git(&repo_path, &["rev-parse", "main"]);
     assert_eq!(main_head, git(&repo_path, &["rev-parse", "HEAD"]));
     let release = home.join("releases").join(&main_head[..12]);
@@ -510,5 +517,121 @@ async fn integration_api_stranded_branch_round_trip_through_routes_and_events() 
     assert_eq!(status, 200, "{inbox}");
     assert!(find_unintegrated(&inbox, task_id).is_none(), "{inbox}");
 
+    daemon.shutdown().await;
+}
+
+#[tokio::test]
+async fn integration_api_merge_conflict_keeps_main_unintegrated() {
+    let daemon = Daemon::start().await;
+    let home = daemon.home().to_path_buf();
+    let repo_path = home.join("repo");
+    let task_id = TaskId::new();
+    let branch = format!("celeris/{task_id}");
+    fixture_repo(&repo_path, &branch);
+    git(&repo_path, &["switch", &branch]);
+    std::fs::write(repo_path.join("base"), "task version\n").expect("task edit");
+    git(&repo_path, &["add", "base"]);
+    git(&repo_path, &["commit", "-m", "task conflict edit"]);
+    git(&repo_path, &["switch", "main"]);
+    std::fs::write(repo_path.join("base"), "main version\n").expect("main edit");
+    git(&repo_path, &["add", "base"]);
+    git(&repo_path, &["commit", "-m", "main conflict edit"]);
+    let main_before = git(&repo_path, &["rev-parse", "main"]);
+
+    let now = OffsetDateTime::from_unix_timestamp(1_800_000_000).expect("fixed clock");
+    let project = Project {
+        auto_advance: false,
+        slug: None,
+        id: ProjectId::new(),
+        title: "agent-platform".into(),
+        request: "stranded conflict".into(),
+        status: ProjectStatus::Active,
+        secretary_summary: None,
+        workspace: None,
+        archived_at: None,
+        paused_from: None,
+        created_at: now,
+        updated_at: now,
+    };
+    daemon.store.project_create(&project).expect("project");
+    let repo = ProjectRepo {
+        id: RepoId::new(),
+        project_id: project.id,
+        name: REPO_NAME.into(),
+        kind: RepoKind::Git,
+        location: WorkspaceSpec::local(repo_path.clone()),
+        default_branch: Some("main".into()),
+        sync: None,
+        run: RepoRun::Auto,
+        is_primary: true,
+        created_at: now,
+    };
+    daemon.store.repo_create(&repo).expect("repo");
+    daemon
+        .store
+        .insert(&done_task(task_id, project.id, repo.id))
+        .expect("insert task");
+    let task_dir = home.join("ws").join(task_id.to_string());
+    write_marker(
+        &task_dir,
+        &WorktreeMarker {
+            repo: repo_path.display().to_string(),
+            dir: String::new(),
+            branch: branch.clone(),
+            base: String::new(),
+            base_kind: String::new(),
+            repos: vec![WorktreeMarkerRepo {
+                name: REPO_NAME.into(),
+                kind: "git".into(),
+                source: repo_path.display().to_string(),
+                dir: task_dir.join("repos").join(REPO_NAME).display().to_string(),
+                branch: Some(branch),
+                base: None,
+                base_kind: None,
+            }],
+        },
+    )
+    .expect("worktree marker");
+    assert_eq!(
+        celeris::sweep_stranded_branches(&daemon.store, now).expect("sweep"),
+        1
+    );
+
+    let (status, result) = daemon
+        .post(
+            &format!("/api/v1/tasks/{task_id}/integrations/{REPO_NAME}/merge"),
+            json!({}),
+        )
+        .await;
+    assert_eq!(status, 200, "{result}");
+    assert_eq!(result["integrated"], false, "{result}");
+    assert!(
+        result["reason"].as_str().is_some_and(|s| !s.is_empty()),
+        "{result}"
+    );
+    assert_eq!(git(&repo_path, &["rev-parse", "main"]), main_before);
+    let (status, detail) = daemon.get(&format!("/api/v1/tasks/{task_id}")).await;
+    assert_eq!(status, 200, "{detail}");
+    assert_eq!(
+        detail["integrations"][0]["state"], "unintegrated",
+        "{detail}"
+    );
+    assert!(
+        daemon
+            .store
+            .open_integration_requests()
+            .expect("requests")
+            .iter()
+            .any(|row| { matches!(row.event, Event::IntegrationRequested { .. }) })
+    );
+    let worktrees = git(&repo_path, &["worktree", "list", "--porcelain"]);
+    assert_eq!(
+        worktrees
+            .lines()
+            .filter(|line| line.starts_with("worktree "))
+            .count(),
+        1,
+        "{worktrees}"
+    );
     daemon.shutdown().await;
 }

@@ -45,6 +45,15 @@ pub use daemon::clusters::{ClusterMasters, wire_cluster_liveness_hooks};
 pub use daemon::run::run;
 pub use instance::InstanceIdentity;
 
+/// ADR 2026-10-11 D6: one pass of the daemon's stranded-branch sweep (the same records the periodic
+/// job builds from the store and the project repositories). Returns the number of changed rows.
+pub fn sweep_stranded_branches(
+    store: &dyn TaskStore,
+    now: OffsetDateTime,
+) -> Result<usize, String> {
+    daemon::stranded_sweep::run(store, now)
+}
+
 pub(crate) use daemon::secrets::resolve_secret;
 
 #[derive(Debug, thiserror::Error)]

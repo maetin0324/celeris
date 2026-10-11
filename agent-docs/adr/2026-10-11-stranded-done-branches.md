@@ -163,3 +163,41 @@ Status は Proposed のまま。以下は実装（views・routes・routes-wire�
 - 4 欄のどれかが変われば従来どおり upsert し、`checked_at`・`updated_at` を進める（新着として見えるのは状態が変わった時だけ）。
 - 「最後に確かめた時刻」を別に持つ欄は足さない（必要が出たら別に決める）。
 - 試験: 同じ repo 状態で sweep を 2 回走らせ、受信箱 item の id と `at`、行の `checked_at` が同じであること。head が変わった時は `at` が進むこと。
+
+### 実装との突き合わせ（F1〜F3、2026-10-11 close 段）
+
+統合後の task branch（`e83fb32a`）のコードを読み、試験名は `grep -rn 'fn stranded_…' crates` で実在を確かめた。決定本文（F1〜F3）は変えていない。食い違いは各項の「ずれ」に書く。
+
+#### F1（default branch の一本化）
+
+- 関数: `task_ops::changes::resolve_default_branch(repo: &Path, configured: Option<&str>) -> Result<String, DefaultBranchError>`（`crates/task-ops/src/changes.rs`）。順序は 設定（trim して空でないもの）→ `git symbolic-ref --quiet --short refs/remotes/origin/HEAD` の `origin/` を除いた名前 → `refs/heads/main` → `refs/heads/master` → `Err("default branch cannot be resolved: no configured branch, origin/HEAD, main or master")`。`"main"` を盲目に返す経路は無い。
+- 旧経路の撤去: `pub fn default_branch(` は crates に 0 件。sweep の `repository default branch is missing` 分岐も無い。`crates/task-api/src/handlers/tasks.rs` と `crates/task-dispatch/src/checkpoint.rs` に `"main"` の埋めは無い（`crates/task-api/src/docs.rs` に残る `"main"` は新規 docs repo の初期 branch で、解決の fallback ではない）。
+- `resolve_default_branch` を呼ぶのは次の 13 file（`grep -rl resolve_default_branch crates`）: sweep（`crates/celeris/src/daemon/stranded_sweep.rs` の `default_branch_for` が path と設定値を渡し、結果を `BranchRecord.default_branch: Result<String, DefaultBranchError>` に入れる。`crates/task-ops/src/stranded.rs` の `sweep` は `Err` の文字列を reason にして `unintegrated`）、delivery（`Skip::Report { RefsUnresolvable }`、detail に理由）、doc_gardener（`Err(String)`）、task-api changes（一覧は `missing: true`、diff・merge は 409 `default_branch_unresolvable`）、task-api integrations（取り残しの merge は 409 `default_branch_unresolvable`）、handlers/tasks.rs（`IntegrationContext.repositories` に入れず warn log）、task-api docs、task-dispatch behind_target・housekeeping（seed の `commit: None`）・run_context（docs 一覧を空）・checkpoint（`(None, Vec::new())`）、celerisctl `docs_maintenance`（`--default-branch` の既定 `main` を消し、省略時は解決、失敗で非 0）。
+- 試験:
+  - `crates/task-ops/src/changes/tests.rs`: `stranded_default_branch_is_configured_then_detected`、`stranded_default_branch_prefers_origin_head`、`stranded_default_branch_unresolvable_is_an_error_with_reason`
+  - `crates/celeris/tests/stranded_default_branch.rs`: `stranded_default_branch_null_with_main_is_integrated`、`stranded_default_branch_null_with_origin_head_is_integrated_for_repoless_task`、`stranded_default_branch_unresolvable_is_unintegrated_with_reason`
+- ずれ:
+  - task-api docs: 決定は「その repository の docs 一覧を空にし理由を載せる」。応答に repo ごとの理由欄が無いため、既存の `docs_unavailable` problem に理由を載せて返す。
+  - task-dispatch behind_target / review sync: 決定は「`DispatchError` を返す」。実装は `review_target_ref` が `Ok(None)` を返してその repo だけを対象外にする（他の repo の sync を止めないため）。behind は `null` で決定と同じ。
+  - 新しいエラーコード `default_branch_unresolvable`（409）は `docs/api/v1/api.md` のエラーコード表に載っていない（resolve 葉の範囲外。進捗ファイルの「提案」）。
+
+#### F2（遠隔 repo は `not_applicable`）
+
+- 状態: `TaskRepoIntegrationStatus::NotApplicable`（`crates/task-core/src/integrations.rs`、文字列 `not_applicable`）。
+- migration: `crates/task-core/migrations/0070_task_integration_not_applicable.sql`。`task_integrations_new` を CHECK に `'not_applicable'` を足して作り、全行を `INSERT … SELECT` で写してから旧表を DROP・RENAME し、index `idx_task_integrations_disposition` を作り直す。行は失わない。0068・0069 は他 branch が使うため飛ばした。
+- sweep: `crates/celeris/src/daemon/stranded_sweep.rs` が `WorkspaceSpec::Remote` の repository に `not_applicable: true` を立て、ssh も git も実行しない。`crates/task-ops/src/stranded.rs` の `sweep` は `not_applicable` の record を `NotApplicable` で記録する。`Discarded`・`Held` の行は従来どおり先に飛ばす（遠隔でも人の判断を上書きしない）。
+- 受信箱: `crates/task-ops/src/inbox.rs` は `task_integration_list(Some(Unintegrated))` だけを読む。`not_applicable` は出ない。
+- 409: `stranded.rs` の `merge`・`reopen`・`set_disposition`（discard・hold）は `NotApplicable` で `StoreError::Invalid` を返し、`crates/task-api/src/integrations.rs` の `invalid_problem` が 409 `invalid_transition` にする。celerisctl の `integration list --state not_applicable` は受け付ける。web は `対象外（遠隔 repo）` を操作ボタン無しで出す。
+- 試験: `stranded_remote_migrates_unintegrated_row_to_not_applicable`、`stranded_remote_actions_reject_not_applicable_rows`（ともに `crates/task-ops/src/stranded.rs`）、`stranded_remote_not_applicable_state_is_hidden_from_inbox`（`crates/task-ops/src/inbox/tests.rs`）。
+- ずれ:
+  - 表の名前: 決定本文は `task_repo_integration_states.state` と書いたが、実際の表は `task_integrations`（`0067_task_repo_integration_states.sql` が作った表）。
+  - reason の文字列: 決定は `remote repository is not checked by the stranded sweep`。実装は `remote repository: not checked by the sweep`。merge の拒否理由は `remote repository was not checked by the sweep`、reopen・discard・hold は `not-applicable integrations cannot be changed locally`。
+  - event: 決定は「状態の変化は既存どおり event の追記で残す」。`crates/task-core/src/store/task_integration_state.rs` の upsert は `NotApplicable` への遷移で event を追記しない（`(_, NotApplicable) => None`）。`unintegrated` → `not_applicable` の移行は行の書き換えだけが残り、event には現れない。過去の events は書き換えていない。
+  - repos 空の task（`repoless_records`）は Local の repository だけを走査し、Remote の repository の branch は record を作らない（`not_applicable` の行もできない）。`task.repos` を持つ task だけが `not_applicable` で記録される。
+
+#### F3（状態が変わらない再 sweep は書かない）
+
+- 実装: `crates/task-ops/src/stranded.rs` の `sweep` は `store.task_integration_get` で前回の行を読み、`state`・`branch`・`head_sha`・`reason` のどれかが違う（または行が無い）ときだけ `task_integration_upsert` を呼ぶ。同じなら `checked_at`・`updated_at` は変わらない。戻り値の件数も書いた行だけを数える。
+- 受信箱 item の `at` は従来どおり `checked_at` から作る（`AttentionItem::Unintegrated`）。通知 feed も同じ inbox view を元にする。
+- 試験: `stranded_identity_preserves_attention_item_id_and_at_until_head_changes`（`crates/task-ops/src/inbox/tests.rs`。5 分あけた 2 回の sweep で item の id と `at` が同じ、head を変えると `at` が進む）。
+- ずれ: 無し。

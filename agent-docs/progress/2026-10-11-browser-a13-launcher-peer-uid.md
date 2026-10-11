@@ -87,4 +87,4 @@ test real_process_with_another_uid_is_rejected_by_dac_then_peer_uid_mismatch ...
   `browser_live_frame_authorization_is_bound_and_scrubbed` に改名されたまま表に残っていた（この task 以前の取り残し）ので、同じ変更で直した。
   cargo test 部（22 群）は sandbox では実 browser 試験が完走しないため host で回す。
 - `scripts/dev/check-doc-links.sh`・`check-adr-numbers.sh`・`check-doc-layout.sh scripts/dev/docs-layout.tsv`・`check-architecture-map.py`: すべて ok。
-- `scripts/dev/check-test-tmp-leftovers.sh`: 既定 TMPDIR（run の長い path）では unix socket の path 長で celeris lib の browser_doctor 試験 2 件が落ちる（既知、ADR-0126 系の fixture）。`TMPDIR=/tmp` では exit 1。
+- `scripts/dev/check-test-tmp-leftovers.sh`: 既定 TMPDIR（run の長い path）では unix socket の path 長で celeris lib の browser_doctor 試験 2 件が落ちる（既知、ADR-0126 系の fixture）。`TMPDIR=/tmp` の workspace 全体では他 crate の試験が残す dir 6 件で exit 1（この task 以前から。test-parallel の summary でも tmp_leftovers 4）。この task の試験だけ（`-p celeris-credentiald --test injection_peer_uid`）は `no leftovers`、exit 0。既存の `--test injection_ipc` も exit 0。

@@ -62,3 +62,10 @@ updated: 2026-10-11
 
 - 後続の小さな task を 1 つ: `DaemonSnapshot` の旧 3 欄と dispatcher の同名集合を `task_waits` へ寄せて消す（ADR D4・D6 の最後の行）。試験は `crates/task-dispatch` の `task_wait_` 系で足りる。
 - `gate_waits` で `StageReview`（`human_gate_hold`）を出すかは人が決める（ADR 付記の `api` 葉の未解決）。
+
+## final review 失敗の修正（fix-tests、2026-10-11）
+
+- final review の `bash scripts/dev/test-parallel.sh` は nextest exit 101。原因は `crates/task-ops/src/view/tests.rs` の `task_summary`・`task_detail` の呼び出しが、main 取り込みで入った 4 引数のままだったこと（api 葉の `&crate::wait::MemoryWaits` が無い）。引数を足して直した（挙動は変えていない）。
+- 直した後の `cargo nextest run --workspace --no-run` は exit 0。
+- `TMPDIR=/tmp bash scripts/dev/test-parallel.sh` → exit 0、5180 passed、13 skipped。`clippy -D warnings` exit 0、`fmt --check` exit 0。
+- 既定の TMPDIR では 108 件が socket path 長（146 > 107 バイト）で fixture 待ち timeout により落ちる。これはコードの失敗ではなく run の TMPDIR の長さの問題。詳細は `2026-10-11-task-wait-reasons/fix-tests.md`。

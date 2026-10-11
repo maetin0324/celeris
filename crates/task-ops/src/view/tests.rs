@@ -106,7 +106,14 @@ fn integration_api_views_attach_store_state_to_summary_and_detail() {
         .collect(),
         releases_dir: None,
     };
-    let mut summary = task_summary(&store, &task, &view_ctx(), now).expect("summary");
+    let mut summary = task_summary(
+        &store,
+        &task,
+        &view_ctx(),
+        &crate::wait::MemoryWaits::default(),
+        now,
+    )
+    .expect("summary");
     let (mut integrations, mut promotion) = (None, None);
     attach_integrations(
         &store,
@@ -124,7 +131,14 @@ fn integration_api_views_attach_store_state_to_summary_and_detail() {
         task_core::TaskRepoIntegrationStatus::Unintegrated
     );
     assert!(summary.promotion.is_none());
-    let mut detail = task_detail(&store, task.id, &view_ctx(), now).expect("detail");
+    let mut detail = task_detail(
+        &store,
+        task.id,
+        &view_ctx(),
+        &crate::wait::MemoryWaits::default(),
+        now,
+    )
+    .expect("detail");
     attach_integrations(
         &store,
         task.id,

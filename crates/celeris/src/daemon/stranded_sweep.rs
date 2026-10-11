@@ -35,12 +35,19 @@ pub(crate) fn run(store: &dyn TaskStore, now: OffsetDateTime) -> Result<usize, S
             let repo = store
                 .repo_get(reference.repo_id)
                 .map_err(|e| e.to_string())?;
-            let (path, default_branch) = match repo {
+            let (path, configured, not_applicable) = match repo {
                 Some(repo) => match repo.location {
-                    WorkspaceSpec::Local { path, .. } => (Some(path), repo.default_branch),
-                    WorkspaceSpec::Remote { .. } => (None, repo.default_branch),
+                    WorkspaceSpec::Local { path, .. } => (Some(path), repo.default_branch, false),
+                    WorkspaceSpec::Remote { .. } => (None, repo.default_branch, true),
                 },
-                None => (None, None),
+                None => (None, None, false),
+            };
+            let default_branch = if not_applicable {
+                Err(task_ops::changes::DefaultBranchError(
+                    "remote repository: not checked by the sweep".into(),
+                ))
+            } else {
+                default_branch_for(path.as_ref(), configured.as_deref())
             };
             let branch = format!("celeris/{}", task.id);
             // Resolve HEAD before entering task_ops::stranded::sweep. No store lock is held here.
@@ -60,6 +67,7 @@ pub(crate) fn run(store: &dyn TaskStore, now: OffsetDateTime) -> Result<usize, S
                 done: true,
                 root: true,
                 changed_repo: true,
+                not_applicable,
             });
         }
     }
@@ -107,16 +115,31 @@ fn repoless_records(
                 task_id: task.id,
                 repo_id: repo.id,
                 repo_path: Some(path.clone()),
-                default_branch: repo.default_branch.clone(),
+                default_branch: default_branch_for(Some(&path), repo.default_branch.as_deref()),
                 branch: Some(branch),
                 head: Some((*head).to_owned()),
                 done: true,
                 root: true,
                 changed_repo: true,
+                not_applicable: false,
             });
         }
     }
     Ok(records)
+}
+
+/// ADR 2026-10-11-stranded-done-branches F1: the sweep uses the same resolver as delivery.
+/// An unresolvable repository path is reported by the sweep before the default branch is read.
+fn default_branch_for(
+    path: Option<&PathBuf>,
+    configured: Option<&str>,
+) -> Result<String, task_ops::changes::DefaultBranchError> {
+    match path {
+        Some(path) => task_ops::changes::resolve_default_branch(path, configured),
+        None => Err(task_ops::changes::DefaultBranchError(
+            "repository cannot be resolved".to_owned(),
+        )),
+    }
 }
 
 fn git_output(repo: &PathBuf, args: &[&str]) -> Option<String> {

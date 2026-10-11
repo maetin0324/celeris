@@ -40,6 +40,7 @@ pub enum TaskRepoIntegrationStatus {
     Integrated,
     Discarded,
     Held,
+    NotApplicable,
 }
 
 impl TaskRepoIntegrationStatus {
@@ -49,6 +50,7 @@ impl TaskRepoIntegrationStatus {
             Self::Integrated => "integrated",
             Self::Discarded => "discarded",
             Self::Held => "held",
+            Self::NotApplicable => "not_applicable",
         }
     }
     pub fn parse(s: &str) -> Option<Self> {
@@ -57,6 +59,7 @@ impl TaskRepoIntegrationStatus {
             "integrated" => Some(Self::Integrated),
             "discarded" => Some(Self::Discarded),
             "held" => Some(Self::Held),
+            "not_applicable" => Some(Self::NotApplicable),
             _ => None,
         }
     }

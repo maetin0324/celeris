@@ -32,43 +32,46 @@ impl SqliteStore {
         if old.as_deref() != Some(value.state.as_str()) {
             let event = match (old.as_deref(), value.state) {
                 (Some("held" | "discarded"), TaskRepoIntegrationStatus::Unintegrated) => {
-                    Event::IntegrationReopened {
+                    Some(Event::IntegrationReopened {
                         repo_id: value.repo_id,
                         branch: value.branch.clone(),
                         head_sha: value.head_sha.clone(),
                         reason: value.reason.clone(),
                         actor: value.actor.clone(),
-                    }
+                    })
                 }
-                (_, TaskRepoIntegrationStatus::Unintegrated) => Event::IntegrationDetected {
+                (_, TaskRepoIntegrationStatus::Unintegrated) => Some(Event::IntegrationDetected {
                     repo_id: value.repo_id,
                     branch: value.branch.clone(),
                     head_sha: value.head_sha.clone(),
                     reason: value.reason.clone(),
                     actor: value.actor.clone(),
-                },
-                (_, TaskRepoIntegrationStatus::Integrated) => Event::IntegrationMerged {
+                }),
+                (_, TaskRepoIntegrationStatus::Integrated) => Some(Event::IntegrationMerged {
                     repo_id: value.repo_id,
                     branch: value.branch.clone(),
                     head_sha: value.head_sha.clone(),
                     actor: value.actor.clone(),
-                },
-                (_, TaskRepoIntegrationStatus::Discarded) => Event::IntegrationDiscarded {
-                    repo_id: value.repo_id,
-                    branch: value.branch.clone(),
-                    head_sha: value.head_sha.clone(),
-                    reason: value.reason.clone().unwrap_or_default(),
-                    actor: value.actor.clone(),
-                },
-                (_, TaskRepoIntegrationStatus::Held) => Event::IntegrationHeld {
+                }),
+                (_, TaskRepoIntegrationStatus::Discarded) => Some(Event::IntegrationDiscarded {
                     repo_id: value.repo_id,
                     branch: value.branch.clone(),
                     head_sha: value.head_sha.clone(),
                     reason: value.reason.clone().unwrap_or_default(),
                     actor: value.actor.clone(),
-                },
+                }),
+                (_, TaskRepoIntegrationStatus::Held) => Some(Event::IntegrationHeld {
+                    repo_id: value.repo_id,
+                    branch: value.branch.clone(),
+                    head_sha: value.head_sha.clone(),
+                    reason: value.reason.clone().unwrap_or_default(),
+                    actor: value.actor.clone(),
+                }),
+                (_, TaskRepoIntegrationStatus::NotApplicable) => None,
             };
-            Self::append_event_tx(&tx, value.task_id, &event)?;
+            if let Some(event) = event {
+                Self::append_event_tx(&tx, value.task_id, &event)?;
+            }
         }
         tx.commit()?;
         Ok(())

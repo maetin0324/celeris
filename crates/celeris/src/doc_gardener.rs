@@ -158,7 +158,8 @@ fn schedule_repo(
     {
         return Ok(None);
     }
-    let branch = task_ops::changes::default_branch(path, repo.default_branch.as_deref());
+    let branch = task_ops::changes::resolve_default_branch(path, repo.default_branch.as_deref())
+        .map_err(|e| e.to_string())?;
     let audit = docs::audit_with_policy(path, &branch, policy)?;
     let context = docs::bounded_review(
         &audit,

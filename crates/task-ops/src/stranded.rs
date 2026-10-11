@@ -143,6 +143,11 @@ pub fn reopen(
     let mut state = store
         .task_integration_get(task_id, repo_id)?
         .ok_or_else(|| StoreError::Invalid("task integration not found".into()))?;
+    if state.state == TaskRepoIntegrationStatus::NotApplicable {
+        return Err(StoreError::Invalid(
+            "not-applicable integrations cannot be changed locally".into(),
+        ));
+    }
     if !matches!(
         state.state,
         TaskRepoIntegrationStatus::Held | TaskRepoIntegrationStatus::Discarded
@@ -177,6 +182,11 @@ fn set_disposition(
     let mut state = store
         .task_integration_get(task_id, repo_id)?
         .ok_or_else(|| StoreError::Invalid("task integration not found".into()))?;
+    if state.state == TaskRepoIntegrationStatus::NotApplicable {
+        return Err(StoreError::Invalid(
+            "not-applicable integrations cannot be changed locally".into(),
+        ));
+    }
     state.state = disposition;
     state.reason = Some(reason.trim().to_owned());
     state.actor = actor.to_owned();
@@ -220,6 +230,11 @@ pub fn merge(store: &dyn TaskStore, input: &MergeRequest<'_>) -> Result<MergeOut
     let mut state = store
         .task_integration_get(*task_id, *repo_id)?
         .ok_or_else(|| StoreError::Invalid("task integration not found".into()))?;
+    if state.state == TaskRepoIntegrationStatus::NotApplicable {
+        return Err(StoreError::Invalid(
+            "remote repository was not checked by the sweep".into(),
+        ));
+    }
     let actual_head = Command::new("git")
         .args(["-C"])
         .arg(repo)
@@ -415,12 +430,15 @@ pub struct BranchRecord {
     pub task_id: TaskId,
     pub repo_id: RepoId,
     pub repo_path: Option<std::path::PathBuf>,
-    pub default_branch: Option<String>,
+    /// `crate::changes::resolve_default_branch` の結果。`Err` は理由つきで unintegrated になる。
+    pub default_branch: Result<String, crate::changes::DefaultBranchError>,
     pub branch: Option<String>,
     pub head: Option<String>,
     pub done: bool,
     pub root: bool,
     pub changed_repo: bool,
+    /// Remote workspaces are intentionally outside this local git sweep.
+    pub not_applicable: bool,
 }
 
 fn ancestor(repo: &Path, head: &str, default_branch: &str) -> bool {
@@ -450,29 +468,40 @@ pub fn sweep(
             continue;
         }
         let head = record.head.as_deref().unwrap_or("");
-        let reason = if record.repo_path.is_none() {
+        let reason = if record.not_applicable {
+            Some("remote repository: not checked by the sweep".to_owned())
+        } else if record.repo_path.is_none() {
             Some("repository cannot be resolved".to_owned())
         } else if record.branch.is_none() {
             Some("task branch is missing".to_owned())
         } else if head.is_empty() {
             Some("recorded task head is missing".to_owned())
-        } else if record.default_branch.is_none() {
-            Some("repository default branch is missing".to_owned())
-        } else if !ancestor(
-            record.repo_path.as_deref().unwrap_or(Path::new("")),
-            head,
-            record.default_branch.as_deref().unwrap_or(""),
-        ) {
-            Some("recorded head is not an ancestor of the repository default branch".to_owned())
         } else {
-            None
+            match &record.default_branch {
+                Err(error) => Some(error.to_string()),
+                Ok(default_branch)
+                    if !ancestor(
+                        record.repo_path.as_deref().unwrap_or(Path::new("")),
+                        head,
+                        default_branch,
+                    ) =>
+                {
+                    Some(
+                        "recorded head is not an ancestor of the repository default branch"
+                            .to_owned(),
+                    )
+                }
+                Ok(_) => None,
+            }
         };
         let state = TaskRepoIntegrationState {
             task_id: record.task_id,
             repo_id: record.repo_id,
             branch: record.branch.clone().unwrap_or_default(),
             head_sha: head.to_owned(),
-            state: if reason.is_some() {
+            state: if record.not_applicable {
+                TaskRepoIntegrationStatus::NotApplicable
+            } else if reason.is_some() {
                 TaskRepoIntegrationStatus::Unintegrated
             } else {
                 TaskRepoIntegrationStatus::Integrated
@@ -489,7 +518,9 @@ pub fn sweep(
                 || p.head_sha != state.head_sha
                 || p.reason != state.reason
         });
-        store.task_integration_upsert(&state)?;
+        if differs {
+            store.task_integration_upsert(&state)?;
+        }
         changed += usize::from(differs);
     }
     Ok(changed)
@@ -605,12 +636,13 @@ mod tests {
             task_id: task,
             repo_id: repo,
             repo_path: Some(dir.clone()),
-            default_branch: Some("main".into()),
+            default_branch: Ok("main".into()),
             branch: Some("task".into()),
             head: Some(head),
             done: true,
             root: true,
             changed_repo: true,
+            not_applicable: false,
         };
         let now = OffsetDateTime::from_unix_timestamp(1_800_000_000).expect("clock");
         assert_eq!(
@@ -644,6 +676,92 @@ mod tests {
             TaskRepoIntegrationStatus::Integrated
         );
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn stranded_remote_migrates_unintegrated_row_to_not_applicable() {
+        let store = SqliteStore::open_in_memory().expect("store");
+        let task_id = TaskId::new();
+        let repo_id = RepoId::new();
+        let now = OffsetDateTime::from_unix_timestamp(1_800_000_000).expect("clock");
+        store
+            .task_integration_upsert(&TaskRepoIntegrationState {
+                task_id,
+                repo_id,
+                branch: "celeris/task".into(),
+                head_sha: "abc".into(),
+                state: TaskRepoIntegrationStatus::Unintegrated,
+                reason: Some("repository cannot be resolved".into()),
+                actor: "sweep".into(),
+                checked_at: now,
+                updated_at: now,
+            })
+            .expect("seed prior row");
+        let record = BranchRecord {
+            task_id,
+            repo_id,
+            repo_path: None,
+            default_branch: Err(crate::changes::DefaultBranchError(
+                "remote repository: not checked by the sweep".into(),
+            )),
+            branch: Some("celeris/task".into()),
+            head: None,
+            done: true,
+            root: true,
+            changed_repo: true,
+            not_applicable: true,
+        };
+        assert_eq!(sweep(&store, &[record], now).expect("remote sweep"), 1);
+        let state = store
+            .task_integration_get(task_id, repo_id)
+            .expect("get")
+            .expect("row");
+        assert_eq!(state.state, TaskRepoIntegrationStatus::NotApplicable);
+        assert_eq!(
+            state.reason.as_deref(),
+            Some("remote repository: not checked by the sweep")
+        );
+        assert!(
+            store
+                .task_integration_list(Some(TaskRepoIntegrationStatus::Unintegrated))
+                .expect("list")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn stranded_remote_actions_reject_not_applicable_rows() {
+        let store = SqliteStore::open_in_memory().expect("store");
+        let task_id = TaskId::new();
+        let repo_id = RepoId::new();
+        let now = OffsetDateTime::from_unix_timestamp(1_800_000_000).expect("clock");
+        store
+            .task_integration_upsert(&TaskRepoIntegrationState {
+                task_id,
+                repo_id,
+                branch: "celeris/task".into(),
+                head_sha: String::new(),
+                state: TaskRepoIntegrationStatus::NotApplicable,
+                reason: Some("remote repository: not checked by the sweep".into()),
+                actor: "sweep".into(),
+                checked_at: now,
+                updated_at: now,
+            })
+            .expect("seed");
+        assert!(discard(&store, task_id, repo_id, "reason", "human", now).is_err());
+        assert!(hold(&store, task_id, repo_id, "reason", "human", now).is_err());
+        assert!(reopen(&store, task_id, repo_id, "human", now).is_err());
+        let request = MergeRequest {
+            task_id,
+            repo_id,
+            repo: Path::new("/no/local/remote/repository"),
+            branch: "celeris/task",
+            head: "head",
+            default_branch: "main",
+            actor: "human",
+            now,
+        };
+        assert!(merge(&store, &request).is_err());
     }
 
     #[test]

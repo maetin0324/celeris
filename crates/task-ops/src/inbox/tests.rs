@@ -70,6 +70,57 @@ fn sample_task(kind: TaskKind, status: Status) -> Task {
     }
 }
 
+#[test]
+fn stranded_identity_preserves_attention_item_id_and_at_until_head_changes() {
+    use task_core::{RepoId, TaskRepoIntegrationStatus};
+    let store = SqliteStore::open_in_memory().expect("store");
+    let task = sample_task(TaskKind::Execute, Status::Done);
+    let task_id = task.id;
+    let repo_id = RepoId::new();
+    store.create_task(&task, vec![]).expect("task");
+    let t1 = OffsetDateTime::from_unix_timestamp(1_800_000_000).expect("time");
+    let t2 = t1 + time::Duration::minutes(5);
+    let record = |head: &str| crate::stranded::BranchRecord {
+        task_id,
+        repo_id,
+        repo_path: None,
+        default_branch: Err(crate::changes::DefaultBranchError(
+            "repository unavailable".into(),
+        )),
+        branch: Some("topic".into()),
+        head: Some(head.into()),
+        done: true,
+        root: true,
+        changed_repo: true,
+        not_applicable: false,
+    };
+    crate::stranded::sweep(&store, &[record("head-1")], t1).expect("first sweep");
+    let read_item = |now| {
+        let result = inbox(&store, None, &view_ctx(), now, &|_, _| vec![]).expect("inbox");
+        result
+            .attention
+            .iter()
+            .find_map(|item| match item {
+                AttentionItem::Unintegrated { task, at, .. } => Some((task.id, at.clone())),
+                _ => None,
+            })
+            .expect("unintegrated item")
+    };
+    let first = read_item(t1);
+    crate::stranded::sweep(&store, &[record("head-1")], t2).expect("repeat sweep");
+    assert_eq!(read_item(t2), first);
+    crate::stranded::sweep(&store, &[record("head-2")], t2).expect("changed head");
+    assert_ne!(read_item(t2), first);
+    assert_eq!(
+        store
+            .task_integration_get(task_id, repo_id)
+            .expect("state")
+            .unwrap()
+            .state,
+        TaskRepoIntegrationStatus::Unintegrated
+    );
+}
+
 fn no_evidence(_task: &Task, _run_id: &str) -> Vec<EvidenceView> {
     Vec::new()
 }
@@ -113,6 +164,38 @@ fn integration_api_unintegrated_state_creates_actionable_inbox_item() {
     assert_eq!(*state, task_core::TaskRepoIntegrationStatus::Unintegrated);
     assert_eq!(repo, &repo_id.to_string());
     assert!(operation_path.contains("/integrations/"));
+}
+
+#[test]
+fn stranded_remote_not_applicable_state_is_hidden_from_inbox() {
+    let store = SqliteStore::open_in_memory().expect("open store");
+    let task = sample_task(TaskKind::Execute, Status::Done);
+    store.insert(&task).expect("insert task");
+    store
+        .task_integration_upsert(&task_core::TaskRepoIntegrationState {
+            task_id: task.id,
+            repo_id: task_core::RepoId::new(),
+            branch: "celeris/remote".into(),
+            head_sha: String::new(),
+            state: task_core::TaskRepoIntegrationStatus::NotApplicable,
+            reason: Some("remote repository: not checked by the sweep".into()),
+            actor: "sweep".into(),
+            checked_at: OffsetDateTime::now_utc(),
+            updated_at: OffsetDateTime::now_utc(),
+        })
+        .expect("record not applicable state");
+
+    let result = inbox(
+        &store,
+        None,
+        &view_ctx(),
+        OffsetDateTime::now_utc(),
+        &no_evidence,
+    )
+    .expect("inbox");
+    assert!(!result.attention.iter().any(
+        |item| matches!(item, AttentionItem::Unintegrated { task: t, .. } if t.id == task.id)
+    ));
 }
 
 #[test]

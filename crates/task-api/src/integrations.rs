@@ -211,10 +211,17 @@ async fn mutate_simple(state: ApiState, raw_id: String, repo: String, action: Ac
                         .into_iter()
                         .find(|r| r.id == repo_id);
                     let path = std::path::PathBuf::from(marker_repo.source);
-                    let default_branch = task_ops::changes::default_branch(
+                    let default_branch = task_ops::changes::resolve_default_branch(
                         &path,
                         row.as_ref().and_then(|r| r.default_branch.as_deref()),
-                    );
+                    )
+                    .map_err(|error| {
+                        ApiProblem::new(
+                            StatusCode::CONFLICT,
+                            "default_branch_unresolvable",
+                            format!("{repo}: {error}"),
+                        )
+                    })?;
                     let outcome = task_ops::stranded::merge(
                         store,
                         &task_ops::stranded::MergeRequest {

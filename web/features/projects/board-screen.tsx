@@ -12,6 +12,7 @@ import { ScrollTabs } from "../../components/ui/scroll-tabs";
 import { StatusBadge } from "../../components/ui/status-badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { cn } from "../../lib/utils";
+import { TaskWaitReason } from "../tasks/wait-reason";
 import {
   type BoardColumnId,
   type BoardFilters,
@@ -145,6 +146,9 @@ function BoardRow({
             {labelOf(priorityLabels, task.priority_label)} · {labelOf(tierLabels, task.tier)} · 担当{" "}
             {task.assignee || "なし"}
           </p>
+          <div className="mt-1 min-w-0">
+            <TaskWaitReason task={task} />
+          </div>
         </TableCell>
         <TableCell className="hidden whitespace-nowrap sm:table-cell">
           <StatusBadge status={task.status} className="whitespace-nowrap" />
@@ -221,6 +225,31 @@ function StateFilter({
           })}
         </ul>
       </ScrollTabs>
+    </nav>
+  );
+}
+
+function RunStateFilter({ filter, total }: { filter: BoardFilters; total: number }) {
+  const options = [
+    { key: undefined, label: "すべて" },
+    { key: "runnable" as const, label: "走れる" },
+    { key: "waiting" as const, label: "待ち" },
+  ];
+  return (
+    <nav aria-label="実行可否で絞り込む" className="flex flex-wrap gap-2" data-testid="board-run-state">
+      {options.map((option) => (
+        <Link
+          key={option.key ?? "all"}
+          to="/board"
+          search={searchObject({ ...filter, run_state: option.key })}
+          activeOptions={{ exact: true }}
+          aria-current={filter.run_state === option.key ? "page" : undefined}
+          className="inline-flex min-h-11 items-center rounded-md border border-input bg-surface px-3 text-label text-foreground"
+        >
+          {option.label}
+          {option.key === undefined ? ` ${total}` : ""}
+        </Link>
+      ))}
     </nav>
   );
 }
@@ -332,6 +361,9 @@ export function BoardScreen({ searchStr }: { searchStr: string }) {
             {tasks.data && (
               <div className="min-w-0 space-y-3">
                 <StateFilter filter={filter} counts={counts} total={visible.length} />
+                {!filter.column || filter.column === "waiting" ? (
+                  <RunStateFilter filter={filter} total={visible.length} />
+                ) : null}
                 {shown.length === 0 || shown.every((group) => group.items.length === 0) ? (
                   <p className="text-muted-foreground" data-testid="board-empty">
                     {filter.column ? "この状態のタスクはありません。" : "条件に合うタスクはありません。"}

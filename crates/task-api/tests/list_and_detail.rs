@@ -233,6 +233,7 @@ async fn detail_matches_task_ops_task_detail_byte_for_byte() {
         &env.store,
         parent.id,
         &env.view_context(),
+        &task_ops::wait::MemoryWaits::default(),
         OffsetDateTime::now_utc(),
     )
     .expect("task_detail");

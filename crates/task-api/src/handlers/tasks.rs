@@ -151,6 +151,8 @@ pub(super) async fn list_tasks(
             "priority",
             // ADR-0044 D6（Phase 55）: アーカイブされた案件のタスクは既定で隠す。
             "archived",
+            // ADR 2026-10-11-task-wait-reasons D5: 走れる／待ち。
+            "run_state",
         ],
     )?;
     let mut filter = ListFilter::default();
@@ -236,6 +238,16 @@ pub(super) async fn list_tasks(
         Some("created_desc") => ListOrder::CreatedDesc,
         Some(other) => return Err(ApiProblem::bad_request(format!("unknown order `{other}`"))),
     };
+    let run_state = match query.single("run_state")? {
+        None | Some("") => None,
+        Some("runnable") => Some(task_ops::view::RunState::Runnable),
+        Some("waiting") => Some(task_ops::view::RunState::Waiting),
+        Some(other) => {
+            return Err(ApiProblem::bad_request(format!(
+                "unknown run_state `{other}` (runnable | waiting)"
+            )));
+        }
+    };
     let limit = query.limit("limit", 100, 500)?;
     let cursor = query
         .single("cursor")?
@@ -243,6 +255,7 @@ pub(super) async fn list_tasks(
         .map(str::to_string);
     let ctx = state.inner.view.clone();
     let releases_dir = state.inner.integration_releases_dir.clone();
+    let memory = state.memory_waits();
     let list = state
         .blocking(move |store| {
             let mut list = task_ops::view::task_list(
@@ -251,7 +264,9 @@ pub(super) async fn list_tasks(
                 order,
                 cursor.as_deref(),
                 limit,
+                run_state,
                 &ctx,
+                &memory,
                 OffsetDateTime::now_utc(),
             )
             .map_err(|e| match e {
@@ -447,10 +462,11 @@ pub(super) async fn task_detail(
     let id = parse_task_id(&id)?;
     let ctx = state.inner.view.clone();
     let releases_dir = state.inner.integration_releases_dir.clone();
+    let memory = state.memory_waits();
     let detail = state
         .blocking(move |store| {
             let mut detail =
-                task_ops::view::task_detail(store, id, &ctx, OffsetDateTime::now_utc())
+                task_ops::view::task_detail(store, id, &ctx, &memory, OffsetDateTime::now_utc())
                     .map_err(|e| ops_problem(store, e, None))?;
             attach_task_integrations(
                 store,

@@ -1582,7 +1582,7 @@ async fn non_aggregate_parent_stays_reviewing_until_children_finish_then_complet
         "parent should be reviewing while its delegated child runs"
     );
     assert_eq!(
-        rx.borrow().as_ref().map(|s| s.awaiting_children.clone()),
+        rx.borrow().as_ref().map(delegated_children_waits),
         Some(vec![parent.id]),
         "ADR-0023 D3: 子待ちの親がスナップショットに出る（GUI が「判定中」と区別できる）"
     );
@@ -1591,7 +1591,7 @@ async fn non_aggregate_parent_stays_reviewing_until_children_finish_then_complet
     let p = store.get(parent.id).unwrap().unwrap();
     assert_eq!(p.status, Status::Done);
     assert_eq!(
-        rx.borrow().as_ref().map(|s| s.awaiting_children.clone()),
+        rx.borrow().as_ref().map(delegated_children_waits),
         Some(vec![]),
         "子が終われば待ちも消える"
     );
@@ -2147,4 +2147,13 @@ fn review_policy_violations_collects_only_the_subject_runs_detections() {
     let serialized = serde_json::to_value(&store.events_for(task.id).unwrap()[0].1).unwrap();
     assert_eq!(serialized["type"], "worker_policy_violation");
     assert_eq!(serialized["kind"], "subagent_tool");
+}
+
+/// ADR 2026-10-11-task-wait-reasons D4: 委譲した子を待つ親は snapshot の `task_waits` の `DelegatedChildren`。
+fn delegated_children_waits(s: &task_ops::daemon::DaemonSnapshot) -> Vec<TaskId> {
+    s.task_waits
+        .iter()
+        .filter(|w| matches!(w.wait, task_core::TaskWait::DelegatedChildren { .. }))
+        .map(|w| w.task_id)
+        .collect()
 }

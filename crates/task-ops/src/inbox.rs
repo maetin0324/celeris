@@ -659,6 +659,18 @@ fn build_drafts(
     keys.sort_by_key(|k| sort_key_for_draft_group(&Some(*k), by_id));
     // 子の件数は全件から 1 回だけ集計する（draft ごとに全件を読むと件数の二乗になる。Phase 9 監査）。
     let counts = view::child_counts(all_tasks);
+    // ADR 2026-10-11-task-wait-reasons D5: draft の `waits`（DB と計画の分。draft は dispatcher が見ないのでメモリの分は無い）。
+    let draft_tasks: Vec<Task> = all_tasks
+        .iter()
+        .filter(|t| t.status == task_core::Status::Draft)
+        .cloned()
+        .collect();
+    let draft_waits = crate::wait::task_waits(
+        store,
+        &draft_tasks,
+        all_tasks,
+        &crate::wait::MemoryWaits::default(),
+    )?;
 
     let mut out = Vec::with_capacity(keys.len() + project_plan_drafts.len() + 1);
     for key in keys {
@@ -683,8 +695,9 @@ fn build_drafts(
         let drafts: Vec<TaskSummary> = members
             .iter()
             .map(|t| {
-                let (children, pending) = counts.get(&t.id).copied().unwrap_or((0, 0));
-                view::build_task_summary(t, children, pending, ctx, now)
+                let children = counts.get(&t.id).copied().unwrap_or(0);
+                let waits = draft_waits.get(&t.id).cloned().unwrap_or_default();
+                view::build_task_summary(t, children, waits, ctx, now)
             })
             .collect();
 
@@ -716,8 +729,9 @@ fn build_drafts(
         let drafts: Vec<TaskSummary> = members
             .iter()
             .map(|t| {
-                let (children, pending) = counts.get(&t.id).copied().unwrap_or((0, 0));
-                view::build_task_summary(t, children, pending, ctx, now)
+                let children = counts.get(&t.id).copied().unwrap_or(0);
+                let waits = draft_waits.get(&t.id).cloned().unwrap_or_default();
+                view::build_task_summary(t, children, waits, ctx, now)
             })
             .collect();
         out.push(DraftGroup {
@@ -738,8 +752,9 @@ fn build_drafts(
         let drafts: Vec<TaskSummary> = root_drafts
             .iter()
             .map(|t| {
-                let (children, pending) = counts.get(&t.id).copied().unwrap_or((0, 0));
-                view::build_task_summary(t, children, pending, ctx, now)
+                let children = counts.get(&t.id).copied().unwrap_or(0);
+                let waits = draft_waits.get(&t.id).cloned().unwrap_or_default();
+                view::build_task_summary(t, children, waits, ctx, now)
             })
             .collect();
         out.push(DraftGroup {
@@ -1104,8 +1119,12 @@ fn build_attention(
     }
 
     if let Some(snap) = snapshot {
-        for tid in &snap.unroutable {
-            if let Some(t) = by_id.get(tid) {
+        // ADR 2026-10-11-task-wait-reasons D4: 経路なしは `task_waits` の `Unroutable`（task_id 順）。
+        for w in &snap.task_waits {
+            if !matches!(w.wait, task_core::TaskWait::Unroutable { .. }) {
+                continue;
+            }
+            if let Some(t) = by_id.get(&w.task_id) {
                 items.push(AttentionItem::Unroutable {
                     task: view::task_ref(t),
                     hint: t.worker_hint.clone(),

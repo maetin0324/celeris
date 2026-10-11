@@ -210,7 +210,7 @@ fn fixture() -> Fixture {
     inbox.drafts.push(DraftGroup {
         parent: Some(tref.clone()),
         plan_summary: Some("子を 1 つ作る".to_string()),
-        drafts: vec![view::build_task_summary(&draft, 0, 0, &ctx, now())],
+        drafts: vec![view::build_task_summary(&draft, 0, Vec::new(), &ctx, now())],
         project_plan: None,
     });
     inbox.drafts.push(DraftGroup {

@@ -381,6 +381,14 @@ fn is_phase_lease_holder(holder: &str) -> bool {
     holder.starts_with(PHASE_LEASE_PREFIX)
 }
 
+/// ADR 2026-10-11-task-wait-reasons M1/M9: 全体の枠（`max_concurrency`）が満杯。
+fn global_capacity() -> task_core::TaskWait {
+    task_core::TaskWait::Capacity {
+        scope: task_core::CapacityScope::Global,
+        id: None,
+    }
+}
+
 fn rfc3339(t: OffsetDateTime) -> String {
     t.format(&Rfc3339).unwrap_or_default()
 }
@@ -1199,6 +1207,10 @@ pub struct Dispatcher {
     warned_cluster_tool: std::collections::HashSet<TaskId>,
     /// この tick で `NoMatchingProvider` だった ready タスク（`is_idle` で待ち対象から外す。ADR-0012 D2）。
     unroutable: std::collections::HashSet<TaskId>,
+    /// ADR 2026-10-11-task-wait-reasons D4: この tick で `dispatch_one` が見送った ready タスクの理由（メモリにしか
+    /// 無い M1〜M6・M9。`dispatch_ready` の先頭で空にし、同じ task の 2 件目は上書きしない）。snapshot の
+    /// `task_waits` に載る。
+    dispatch_waits: HashMap<TaskId, task_core::TaskWait>,
     /// ADR-0044 D2（Phase 53）: **この tick で run を打ち切った**タスク。次の tick まで dispatch しない。
     /// 打ち切りは `handle.abort()`（= 子プロセスへの SIGKILL）で、**孫プロセスは即死しない**ので、
     /// 同じ tick で同じ worktree に次の run を入れると 2 つの書き手が重なる（Phase 53 の監査で発見）。
@@ -1549,6 +1561,7 @@ impl Dispatcher {
             write_set_waits: HashMap::new(),
             write_set_hold_seq: 0,
             unroutable: std::collections::HashSet::new(),
+            dispatch_waits: HashMap::new(),
             cluster_waiting: std::collections::HashSet::new(),
             awaiting_human: std::collections::HashSet::new(),
             review_sync_queue: HashMap::new(),
@@ -2579,10 +2592,15 @@ impl Dispatcher {
     fn dispatch_ready(&mut self) -> Result<usize, DispatchError> {
         self.unroutable.clear();
         self.cluster_waiting.clear();
+        self.dispatch_waits.clear();
         // ADR-0089（Phase R6-5）: 非 CoS の枠が埋まっていても、CoS の対話 run の枠が空いていれば走査する。
         if !self.run_load().any_slot() {
             // 容量切れで照合しなかった tick: write-set の待機の数えを戻さない（2026-10-03-write-set-no-starvation）。
             self.carry_write_set_waits();
+            // ADR 2026-10-11-task-wait-reasons M9: 照合しなかった ready は全体の枠待ち（窓の分だけ）。
+            for task in self.store.ready_tasks(self.ready_window())? {
+                self.note_dispatch_wait(task.id, global_capacity());
+            }
             return Ok(0);
         }
         // 上位から見て見送りが続いても後続を試せるよう、窓は広めに取る。
@@ -2601,13 +2619,12 @@ impl Dispatcher {
         let mut capacity_cut = false;
         for task in candidates {
             let load = self.run_load();
-            if !load.any_slot() {
+            if !load.any_slot() || (!load.admits(false) && !task_core::is_conversation(&task)) {
+                // ADR 2026-10-11-task-wait-reasons M9: 容量で今 tick 照合しなかった候補。
+                self.note_dispatch_wait(task.id, global_capacity());
                 capacity_cut = true;
-                break;
-            }
-            // ADR-0089: 非 CoS の枠が無いときは対話用タスク（CoS の候補）だけを見る（判定は dispatch_one）。
-            if !load.admits(false) && !task_core::is_conversation(&task) {
-                capacity_cut = true;
+                // ADR-0089: 非 CoS の枠が無いときは対話用タスク（CoS の候補）だけを見る（判定は dispatch_one）。
+                // 全部の枠が尽きたら残りは照合しない（理由だけ付ける）。
                 continue;
             }
             // ADR 2026-10-07-build-tmp-hygiene D1.4: 手動実行・queued から作られた保守 task も worker に渡さない。
@@ -2626,6 +2643,11 @@ impl Dispatcher {
             self.carry_write_set_waits();
         }
         Ok(dispatched)
+    }
+
+    /// ADR 2026-10-11-task-wait-reasons D4: この tick の見送りの理由を 1 件記録する（同じ task の 2 件目は上書きしない）。
+    pub(super) fn note_dispatch_wait(&mut self, task_id: TaskId, wait: task_core::TaskWait) {
+        self.dispatch_waits.entry(task_id).or_insert(wait);
     }
 
     fn is_idle(&self) -> Result<bool, DispatchError> {

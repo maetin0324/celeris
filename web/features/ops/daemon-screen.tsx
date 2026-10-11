@@ -145,8 +145,14 @@ function DaemonContent({ view, fetchedAt, exhausted }: { view: DaemonView; fetch
                     { label: "開始", value: <Time value={s.started_at} /> },
                     { label: "動作確認", value: `${s.ticks} 回（${s.tick_ms} ms）` },
                     { label: "実行中", value: s.in_flight.length },
-                    { label: "人の待ち", value: s.awaiting_human.length },
-                    { label: "担当なし", value: s.unroutable.length },
+                    {
+                      label: "人の待ち",
+                      value: (s.task_waits ?? []).filter((w) => w.wait.kind === "review_awaiting_human").length,
+                    },
+                    {
+                      label: "担当なし",
+                      value: (s.task_waits ?? []).filter((w) => w.wait.kind === "unroutable").length,
+                    },
                     { label: "待機中", value: s.cooldowns.length },
                     { label: "プロバイダ", value: s.providers.length },
                   ]

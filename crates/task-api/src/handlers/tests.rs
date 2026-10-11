@@ -189,7 +189,7 @@ async fn metrics_scratch_matches_the_status_schema() {
     let mut snapshot: task_ops::daemon::DaemonSnapshot = serde_json::from_value(serde_json::json!({
             "instance_id": "01TEST", "pid": 1, "hostname": "h", "started_at": "2026-09-28T00:00:00Z",
             "last_tick_at": "2026-09-28T00:00:00Z", "ticks": 1, "tick_ms": 1000, "in_flight": [],
-            "cooldowns": [], "awaiting_human": [], "unroutable": [], "providers": []
+            "cooldowns": [], "task_waits": [], "providers": []
         }))
         .unwrap_or_else(|e| panic!("{e}"));
     snapshot.scratch = Some(status.clone());

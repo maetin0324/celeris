@@ -3,6 +3,7 @@
 実行・計画・木・決定の要求のエンドポイントは §3.125 にある。
 
 - 状態: **Accepted**（人間の決定 H1 / H5〜H7。celeris 側の ADR-0013、GUI 側の ADR-GUI-0001）。改訂日 2026-09-14
+- 改訂: 2026-10-11（ADR 2026-10-11-task-wait-reasons D4・D6）— **破壊的。v1 のまま**。`DaemonSnapshot.awaiting_human[]`・`awaiting_children[]`・`unroutable[]` を消し、`DaemonSnapshot.task_waits[]` の kind（`review_awaiting_human`・`delegated_children`・`unroutable`）へ寄せた（§3.20）。
 - 改訂: 2026-10-08（ADR 2026-10-08-account-concurrency-limits）— **追加と deprecate。v1 のまま**。エンドポイント 216:
   `PATCH /accounts/{adapter}/{id}`（アカウントごとの上限 `max_runs`。§3.29a）。`AccountView` に `max_runs` /
   `effective_max_runs` / `max_runs_source` / `implicit` / `providers` を追加し、`dir` は暗黙アカウントで `null` になる。
@@ -564,7 +565,7 @@ browser の制御（`crate::browser_control`）の 6 本は、route を定数 `B
 `{approvals, questions, drafts, attention, browser_waits, decisions, counts}`（`counts` は各配列の件数と
 DB 全体の status 別件数 `by_status`）。`attention[]` は `type` で区別する（`failed` / `requeue_limit_near` /
 `unroutable` / `cluster_unavailable` / `phase_checkpoint` / `plan_approval` / `delivery_skipped`）。
-`type: "unroutable"` はデーモンのスナップショット（3.20）から合成する。スナップショットがまだ無ければ出ない。
+`type: "unroutable"` はデーモンのスナップショット（3.20）の `task_waits[]` の `unroutable` から合成する。スナップショットがまだ無ければ出ない。
 
 - `questions[].approval_id`: その質問に対応する**未決の** `approvals` の id（§3.56）。GUI はこれで
   `POST /approvals/{id}/decide`（3.57）へ直接リンクできる。行がまだ無い、または既に決定済みなら `null`。
@@ -594,9 +595,9 @@ DB 全体の status 別件数 `by_status`）。`attention[]` は `type` で区�
 | `cursor` | 不透明文字列 | — | 前応答の `next_cursor`（`Page<T>.next_cursor` をそのまま）。解読できない cursor は 400 |
 
 - 知らないクエリキー、複数可でないキーの重複は 400。
-- `task_ops::view::task_list`（`TaskStore::list_page(&ListFilter, ListOrder, cursor, limit) -> Page<Task>`）を使い、`Task` を `TaskSummary` に写す（`children` / `pending_children` / `backoff_until` の付加は task-ops）。
+- `task_ops::view::task_list`（`TaskStore::list_page(&ListFilter, ListOrder, cursor, limit) -> Page<Task>`）を使い、`Task` を `TaskSummary` に写す（`children` / `waits` / `runnable` / `backoff_until` の付加は task-ops）。
 - `total` は `Page.total`（同じフィルタでの総件数。cursor に依らない）。
-- `items[].children` / `pending_children` は `parent_id` で集計（`pending` = 非終端）。`backoff_until` は §5.3。
+- `items[].children` は `parent_id` で集計。`waits` は DB・計画・直近 daemon snapshot の待ち理由、`runnable` は ready かつ待ち理由が空であることを示す。`run_state=runnable|waiting` で絞り込める。`backoff_until` は §5.3。
 - `items[].role` は `Task.role`（ADR-0016 D1）。一覧の行に役割のラベルを出すための値で、`TaskDetail.role` と同じ（役割なしは `null`）。
 - `items[].genre` は `Task.genre`（ADR-0027 D1）。`role` と同じ理由で一覧の行に出す値で、`TaskDetail.genre` と同じ（分野なしは `null`）。
 - `items[].assignee` は `Task.assignee`（組織のノード id。ADR-0033 D2。担当なしは `null`）、
@@ -967,7 +968,7 @@ ADR-0017 M4: `POST /reload` に成功すると、次の tick のスナップシ�
 {"now":"…","snapshot":{"instance_id":"01J…","pid":1234,"hostname":"lab-01","started_at":"…","last_tick_at":"…","ticks":8812,"tick_ms":2000,
   "in_flight":[{"task_id":"01J…","run_id":"01J…","provider":"claude-a","kind":"worker","since":"…"}],
   "cooldowns":[{"provider":"claude-b","until":"…","reason":"throttled"}],
-  "awaiting_human":["01J…"],"awaiting_children":["01J…"],"unroutable":[],
+  "task_waits":[{"task_id":"01J…","wait":{"kind":"review_awaiting_human"}},{"task_id":"01J…","wait":{"kind":"delegated_children","task_ids":["01J…"]}}],
   "reports":null,"approvals_pending":0,"decisions_open":0,
   "providers":[{"id":"claude-a","adapter":"claude-code","tiers":["frontier","standard","cheap"],"concurrency":2,"model":"claude-sonnet-5","env_keys":[],"in_use":1,"in_use_cos":0,"account_pool":false}],
   "clusters":[],"accounts_root":null,"max_runs_per_account":null,"accounts_roots":{},"accounts":[]}}
@@ -980,9 +981,10 @@ ADR-0017 M4: `POST /reload` に成功すると、次の tick のスナップシ�
 - `clusters[]`（ADR-0018）、`accounts_root` / `max_runs_per_account` / `accounts_roots` / `accounts[]`（ADR-0024 / ADR-0025）、
   `implicit_accounts[]`（`{source, providers[], in_use}`。LLM source 単位の暗黙アカウント。ADR 2026-10-08-account-concurrency-limits）、
   `scratch`（scratch pool の観測値。無ければ省略。`GET /metrics/scratch` と同じ。ADR-0075 D6）も載る。
-- `awaiting_human[]` は承認待ちで延期中のタスク、`awaiting_children[]` は**委譲した子が終わるのを待っている親**
-  （どちらも `reviewing` のままだが理由が違う。ADR-0023 D3）。GUI はこれを見て「判定中」と「部下待ち」を区別する
-  （`reviewing` かつ子が非終端、という再計算を GUI 側でしない）。
+- `task_waits[]`（ADR 2026-10-11-task-wait-reasons D4）は、この tick に dispatcher のメモリだけで決まった見送りの理由
+  （`{task_id, wait: TaskWait}`。task_id 順・1 task に 1 件）。承認待ちで延期中の reviewing は `review_awaiting_human`、
+  委譲した子を待つ reviewing の親は `delegated_children`（未完の子の id）、設定に合う経路が無い ready は `unroutable`。
+  旧 `awaiting_human[]`・`awaiting_children[]`・`unroutable[]` は消した（同じ情報が `task_waits` の kind にある）。
 - cooldown は `ProviderPolicy::cooldowns(now) -> Vec<Cooldown{provider, until: Instant, reason: CooldownReason}>` で取り、`Instant` を壁時計に直す。`reason` の語彙は `throttled | auth_failed | exhausted`（`Spawn` は `provider_failure_outcome` が `Exhausted` に写すので cooldown の理由としては現れない。`ProviderThrottled.reason` には `spawn` も入りうる）。
 - `last_tick_at` が `now` から `3 × tick_ms` 以上古ければ GUI は「ディスパッチャが遅延」と表示する（API は判定しない）。
 - API に繋がらないこと自体が「celeris 停止」を意味する（GUI 側で表示）。
@@ -3100,7 +3102,7 @@ ExecutionPlan と WorkUnit、再帰的な task の木（ADR-0079）、人への�
 
 #### 3.125.1 `GET /tasks/{id}/execution` → 200 `TaskExecutionView`
 
-タスクの実行詳細。`runs`（`RunSummary[]`）と `metrics`（`ExecutionMetrics`）は必須。次の欄は値が無ければ省略する（`null` は出さない）: `gate`（`ExecutionGateDecision`。gate の対象外か未判定なら無い）、`phase`（`ExecutionPhase`）、`plan`（`ExecutionPlanView`。計画の無い atomic タスクでは無い）、`phase_checkpoint`（工程の後の途中確認で止まっているときだけ）、`awaiting_children`（`phase = awaiting_children` のときだけ。空なら省略）、`plan_approval`（`PlanApprovalView`。`phase = awaiting_plan_approval` のときだけ）。`metrics.total_cache_read_tokens` は観測できた cached input tokens の合計で、未観測なら省略する。不明なタスクは 404。クエリは受け付けない。
+タスクの実行詳細。`runs`（`RunSummary[]`）と `metrics`（`ExecutionMetrics`）は必須。次の欄は値が無ければ省略する（`null` は出さない）: `gate`（`ExecutionGateDecision`。gate の対象外か未判定なら無い）、`phase`（`ExecutionPhase`）、`plan`（`ExecutionPlanView`。計画の無い atomic タスクでは無い）、`phase_checkpoint`（工程の後の途中確認で止まっているときだけ）、`waits`（待ち理由。空なら省略）、`plan_approval`（`PlanApprovalView`。`phase = awaiting_plan_approval` のときだけ）。`metrics.total_cache_read_tokens` は観測できた cached input tokens の合計で、未観測なら省略する。不明なタスクは 404。クエリは受け付けない。
 
 #### 3.125.2 `GET /tasks/{id}/execution-plan` → 200 `ExecutionPlanView`
 
@@ -3175,7 +3177,7 @@ ADR 2026-10-08-browser-prod-enablement D2: browser の前提（適合台帳）�
 
 #### 3.125.10 `GET /tasks/{id}/task-tree?root=` → 200 `TaskTreeView`
 
-ADR-0079 D11: 再帰的な task の木と roll-up（読み取り。トークン不要）。ADR の `GET /tasks/{id}/tree` は ADR-0043 D6 の作業ツリーの閲覧（`TreeView`）が既に使っているため、パスは `task-tree`（ADR-0079 付記「R4a 実装時の逸脱・明確化」）。既定は問い合わせた task を根にした subtree、`root=true` なら木の root から。応答は `root_id`（木の root）、`subtree_root`（この view の根）、`tree_enabled`（`[execution.tree] enabled`）、`nodes[]`（`TaskTreeNode`。前順 = 親が子より先、先頭が view の根）、`totals`（view の根の subtree の合計。`nodes[0].subtree` と同じ）が必須で、`limits`（`TreeLimitsUsage`: `leaves` / `max_leaves`、`runs` / `max_runs`〈reviewer を除く〉、`replans` / `max_replans`、`tokens` / `max_tokens?`、`open_decisions` / `max_open_decisions`。`max_*` は `raise-once` / `replan` の回答の余裕を当てた値）は view の根が木の root のときだけ。各節点は `id`、`title`、`status`、`phase?`（`TreeNodePhase`: `planning` / `executing` / `repairing` / `verifying` / `awaiting_human` / `awaiting_children` / `awaiting_plan_approval` / `held_on_decision`〈節点の `self` の決定、または答えを待つ `blocked(decision)` の unit〉/ `blocked_infra`〈子の基盤の失敗の unit〉。終端・待ちの無い task は省略）、`depth`（root = 1）、`parent_id?`（view の根では省略）、`parent_unit_key?` / `parent_stage?`（この節点を作った親の unit）、`plan_version?`、`open_decisions`（この節点が出した未回答の決定）、`stall?`（ADR-0079 D10。`TreeNodeStall`: `reason`、`since?`、`detail`。節点の最後の event が `StallDetected` で終端でないときだけ = D10 の「理由なく止まっています」。何か event が積まれれば消える）、`children[]`（作られた順）、`units[]`（`TreeUnitView`: `key`、`stage?`、`kind`、`title`、`status`、`blocked_reason?`、`child_task_id?`。統合 WU と superseded を含む履歴）、`own`（自分の分）、`subtree`（自分と子孫の合計）。`own` / `subtree` は `RollupMetrics`（§3.125.5 の `group_by=depth` と同じ形）で、件数・トークン・定価・quota は和、`cost_usd_complete` は論理積、壁時計は最小の開始と最大の終わりなので、root の `subtree` は各節点の `own` の和と一致する。木の無い task（`[execution.tree] enabled = false` の旧い task を含む）は 1 節点（深さ 1）の木。不明な task は 404 `task_not_found`、知らないクエリ・真偽値でない `root` は 400。`GET /tasks/{id}/execution` の `metrics` は自分の分のまま（互換）。
+ADR-0079 D11: 再帰的な task の木と roll-up（読み取り。トークン不要）。ADR の `GET /tasks/{id}/tree` は ADR-0043 D6 の作業ツリーの閲覧（`TreeView`）が既に使っているため、パスは `task-tree`（ADR-0079 付記「R4a 実装時の逸脱・明確化」）。既定は問い合わせた task を根にした subtree、`root=true` なら木の root から。応答は `root_id`（木の root）、`subtree_root`（この view の根）、`tree_enabled`（`[execution.tree] enabled`）、`nodes[]`（`TaskTreeNode`。前順 = 親が子より先、先頭が view の根）、`totals`（view の根の subtree の合計。`nodes[0].subtree` と同じ）が必須で、`limits`（`TreeLimitsUsage`: `leaves` / `max_leaves`、`runs` / `max_runs`〈reviewer を除く〉、`replans` / `max_replans`、`tokens` / `max_tokens?`、`open_decisions` / `max_open_decisions`。`max_*` は `raise-once` / `replan` の回答の余裕を当てた値）は view の根が木の root のときだけ。各節点は `id`、`title`、`status`、`phase?`（`TreeNodePhase`: `planning` / `executing` / `repairing` / `verifying` / `awaiting_human` / `awaiting_plan_approval`。終端・待ちの無い task は省略）、`depth`（root = 1）、`parent_id?`（view の根では省略）、`parent_unit_key?` / `parent_stage?`（この節点を作った親の unit）、`plan_version?`、`open_decisions`（この節点が出した未回答の決定）、`stall?`（ADR-0079 D10。`TreeNodeStall`: `reason`、`since?`、`detail`。節点の最後の event が `StallDetected` で終端でないときだけ = D10 の「理由なく止まっています」。何か event が積まれれば消える）、`children[]`（作られた順）、`waits[]`（未完の理由）、`stages[]`（`TreeStageView`: `key`、`order`、`state` = `done|current|pending`、`integrate_key`。段の直列順）、`units[]`（`TreeUnitView`: `key`、`stage?`、`kind`、`title`、`status`、`blocked_reason?`、`child_task_id?`、`seq`、宣言順の `depends_on[]`、未完の依存 `waiting_on[]`、前段待ちの `waiting_stage?`。統合 WU と superseded を含む履歴）、`own`（自分の分）、`subtree`（自分と子孫の合計）。`own` / `subtree` は `RollupMetrics`（§3.125.5 の `group_by=depth` と同じ形）で、件数・トークン・定価・quota は和、`cost_usd_complete` は論理積、壁時計は最小の開始と最大の終わりなので、root の `subtree` は各節点の `own` の和と一致する。木の無い task（`[execution.tree] enabled = false` の旧い task を含む）は 1 節点（深さ 1）の木。不明な task は 404 `task_not_found`、知らないクエリ・真偽値でない `root` は 400。`GET /tasks/{id}/execution` の `metrics` は自分の分のまま（互換）。
 
 #### 3.125.11 `POST /tasks/{id}/execution/phase-gate` → 200 `TransitionResult`（管理系）
 
@@ -3952,7 +3954,7 @@ GUI はこれを契約として扱ってよい（ADR-0013 の実装メモ）。
 
 **デーモンのスナップショット**
 - `DaemonSnapshot.in_flight[]` の `kind: "reviewer"` の `run_id` は **Reviewer run 自身の id**（`WorkerStarted{role: reviewer}` と同じ。ADR-0014 D1）。
-- `DaemonSnapshot.unroutable[]` は「設定に合うプロバイダ／クラスタが無い」タスクだけ。クラスタの多重接続待ち（cooldown 中を含む）のタスクはここには**入らない**（受信箱の `attention[].cluster_unavailable` が代わりに知らせる。ADR-0018 実装メモ M8）。
+- `DaemonSnapshot.task_waits[]` の `unroutable` は「設定に合うプロバイダ／クラスタが無い」タスクだけ。クラスタの多重接続待ち（cooldown 中を含む）のタスクは `cluster` で、`unroutable` には**ならない**（受信箱の `attention[].cluster_unavailable` が代わりに知らせる。ADR-0018 実装メモ M8）。
 
 **SSE**
 - 送る順は `hello` →（必要なら）`reset` → `task.event` …（§4）。

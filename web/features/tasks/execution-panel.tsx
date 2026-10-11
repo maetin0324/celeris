@@ -31,7 +31,6 @@ const phaseLabel: Readonly<Record<ExecutionPhase, string>> = {
   repairing: "修復中",
   verifying: "検証中",
   awaiting_human: "人の判断待ち",
-  awaiting_children: "子 task の完了待ち",
   awaiting_plan_approval: "計画の承認待ち",
 };
 

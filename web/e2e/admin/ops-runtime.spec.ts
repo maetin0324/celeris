@@ -62,8 +62,7 @@ function snapshot(tickAgoMs: number, now: number): DaemonSnapshot {
     tick_ms: 12,
     ticks: 300,
     in_flight: [],
-    awaiting_human: [],
-    unroutable: [],
+    task_waits: [],
     cooldowns: [],
     providers: [],
   };

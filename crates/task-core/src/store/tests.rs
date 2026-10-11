@@ -14,7 +14,7 @@ use crate::repos::{ProjectRepo, RepoId, RepoRun};
 
 use super::*;
 
-pub(super) fn sample_task(status: Status) -> Task {
+pub(crate) fn sample_task(status: Status) -> Task {
     let now = OffsetDateTime::now_utc();
     Task {
         requirements: Default::default(),

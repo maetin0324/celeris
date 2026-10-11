@@ -70,6 +70,8 @@ pub use integrations::{TaskRepoIntegrationState, TaskRepoIntegrationStatus};
 pub mod knowledge;
 /// ADR-0047 D4（Phase 62）: 知識整理 run の追跡（`knowledge_runs`）。
 pub mod knowledge_run;
+/// ADR 2026-10-11: harness 選択と source/model routing の純粋な境界。
+pub mod llm_route;
 /// ADR-0056 D1 / D4（Phase 78）: MCP サーバーの認証（`mcp_clients`）とログ（`mcp_calls`）。
 pub mod mcp;
 pub mod message;

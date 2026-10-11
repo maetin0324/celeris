@@ -75,9 +75,11 @@ async fn integration_checks_record_start_finish_events_and_log_files() {
     let second_log = std::fs::read_to_string(&started[1].3).expect("second log");
     assert_eq!(second_log, "second-out\n");
     assert!(
-        started[0]
-            .3
-            .contains("/integration-checks/integrate-build/"),
+        Path::new(&started[0].3).starts_with(
+            root.path()
+                .join(task.id.to_string())
+                .join("integration-checks/integrate-build")
+        ),
         "{}",
         started[0].3
     );

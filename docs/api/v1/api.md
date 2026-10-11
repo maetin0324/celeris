@@ -3371,8 +3371,9 @@ timeout の再実行・merge-base の修復を含む）が残り、stdout と st
 `<task_dir>/integration-checks/<wu_key>/<started_ms>-<index>.log` へ逐次書かれる（1 件 8 MiB で切り、その旨を 1 行残す）。
 
 葉の WU の受け入れ検査（`spec.checks`）も worker の run の外で daemon が流す（ADR-0040 付記 2026-10-04 D3）。同じ形の
-event `work_unit_check_started` / `work_unit_check_finished`（上の欄に、検査を起こした worker run の `run_id` を足したもの）
-が残り、出力は `<task_dir>/work-unit-checks/<wu_key>/<started_ms>-<index>.log` へ逐次書かれる。live 引き継ぎで draining
+ event `work_unit_check_started` / `work_unit_check_finished`（上の欄に、検査を起こした worker run の `run_id` を足したもの）
+が残り、出力は `<workspace_root>/<task_id>/work-unit-checks/<wu_key>/<started_ms>-<index>.log` へ逐次書かれる。
+この保存先は repo の作業ツリー外にある。live 引き継ぎで draining
 になった旧 instance は検査を始めず（途中の検査は止め）、event `work_unit_checks_handed_off`（`work_unit_id`・`key`・
 `run_id`）を残す。新しい active instance が `runs/<run_id>/result.json` から確定し直して検査を始める（状態は変えない event）。
 

@@ -85,7 +85,8 @@ impl Dispatcher {
             work_unit_id: wu.id.clone(),
             key: wu.key.clone(),
             run_id: Some(run_id.clone()),
-            log_dir: dir
+            log_dir: self
+                .check_log_root(task_id)
                 .join(super::phase_integration::WORK_UNIT_CHECK_LOG_DIR)
                 .join(&wu.key),
         };

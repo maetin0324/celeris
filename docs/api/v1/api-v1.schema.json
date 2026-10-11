@@ -16777,7 +16777,7 @@
       "type": "object"
     },
     "LaneResolution": {
-      "description": "ADR-0069 D4: lane → provider / account / model / reasoning effort の解決結果（監査記録）。\n解決そのものは従来の `select_provider` → `TieredAdapter::model_for_tier` → `select_tier` のまま。",
+      "description": "ADR-0069 D4: lane → provider / account / model / reasoning effort の解決結果（監査記録）。",
       "properties": {
         "account": {
           "type": [

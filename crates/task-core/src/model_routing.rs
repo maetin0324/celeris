@@ -29,7 +29,6 @@ pub fn reasoning_effort(bindings: &TierModels, tier: Tier) -> Option<String> {
 }
 
 /// ADR-0069 D4: lane → provider / account / model / reasoning effort の解決結果（監査記録）。
-/// 解決そのものは従来の `select_provider` → `TieredAdapter::model_for_tier` → `select_tier` のまま。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct LaneResolution {
     /// 残量による調整の後に実際に走らせる lane（`None` は解決前）。

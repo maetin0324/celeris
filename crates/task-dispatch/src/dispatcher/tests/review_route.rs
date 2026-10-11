@@ -336,22 +336,3 @@ impl WorkerAdapter for IdAs {
         self.inner.run(req, run_id, limits, sink).await
     }
 }
-
-/// An OAuth pool route: source `claude_oauth` (its logged-in `[accounts]` directories) on the
-/// `claude-code` harness `h1`.
-pub(super) fn install_oauth_test_route(d: &mut Dispatcher, adapter: Arc<dyn WorkerAdapter>) {
-    let mut r = Registry::default();
-    let mut src = source("claude_oauth", "unused", "m");
-    src.accounts.clear();
-    r.sources.insert("claude_oauth".into(), src);
-    r.harnesses
-        .insert("h1".into(), harness("claude-code", "claude_oauth"));
-    r.harness_selection.rules.push(HarnessRule {
-        harness: "h1".into(),
-        ..Default::default()
-    });
-    r.route_defaults
-        .insert("h1".into(), vec![key("claude_oauth", "m")]);
-    d.set_llm_route_registry(r);
-    d.set_harness_adapters(HashMap::from([(HarnessId::from("h1"), adapter)]));
-}

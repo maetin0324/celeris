@@ -595,12 +595,8 @@ pub fn build_dispatcher(
     if let Some(shared) = config.routing_catalog_state.as_ref() {
         dispatcher.set_routing_model_profiles(Arc::new(SharedCatalogProfiles(Arc::clone(shared))));
     }
-    // ADR 2026-10-06 D3: `account_pool = "opencode-go"` のように pool の adapter を明示した行。
-    dispatcher.set_account_pool_adapters(config.account_pool_adapters());
     // ADR-0132 付記 L1/L2: cheap lane で先に試すローカルの行（`[execution] cheap_local_first = false` なら空）。
     dispatcher.set_local_providers(config.local_cheap_providers());
-    // ADR 2026-10-07: coding の既定ハーネス解決（`adapter_policy = "model_family"` のハーネス）。
-    dispatcher.set_coding_harness_default(config.coding_harness_default());
     // ADR 2026-10-04 Phase 2: `[model_routing]` の mode・観測 TTL・窓の reserve_value（既定 legacy）。
     if let Some(runtime) = &config.model_routing.runtime {
         dispatcher.set_dispatch_routing(runtime.dispatch_settings());

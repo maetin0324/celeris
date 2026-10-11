@@ -659,51 +659,6 @@ fn done_outcome() -> RunOutcome {
     }
 }
 
-/// heartbeat を送りながら少し待ってから done を返すアダプタ。
-struct HeartbeatAdapter;
-
-#[async_trait]
-impl WorkerAdapter for HeartbeatAdapter {
-    fn id(&self) -> &str {
-        "instant"
-    }
-    async fn run(
-        &self,
-        req: RunRequest,
-        _run_id: &str,
-        _limits: RunLimits,
-        sink: &dyn EventSink,
-    ) -> Result<RunOutcome, AdapterError> {
-        for _ in 0..8 {
-            sink.heartbeat();
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-        std::fs::write(req.workspace.join("touched"), "1").unwrap();
-        Ok(done_outcome())
-    }
-}
-
-/// レビューが無く、`sink.heartbeat()` も呼ばない（テストが lease の自然な更新に邪魔されないよう
-/// に）、しばらく走り続けるだけのアダプタ。
-struct SlowNoHeartbeatAdapter;
-
-#[async_trait]
-impl WorkerAdapter for SlowNoHeartbeatAdapter {
-    fn id(&self) -> &str {
-        "instant"
-    }
-    async fn run(
-        &self,
-        _req: RunRequest,
-        _run_id: &str,
-        _limits: RunLimits,
-        _sink: &dyn EventSink,
-    ) -> Result<RunOutcome, AdapterError> {
-        tokio::time::sleep(Duration::from_millis(500)).await;
-        Ok(done_outcome())
-    }
-}
-
 /// 2 回目以降の run でだけ `second` を作るアダプタ。
 struct CountingAdapter {
     calls: AtomicUsize,
@@ -835,29 +790,6 @@ fn transition_reasons(store: &Arc<dyn TaskStore>, id: TaskId) -> Vec<String> {
         .collect()
 }
 
-/// 常に分類できない `Err`（`AdapterError::Other`）を返すワーカー run（ADR-0070 D3。resume 拒否や
-/// result.json 不在などが実機で取る経路のスタンド・イン）。
-struct AlwaysInfraFailingWorkerAdapter {
-    calls: AtomicUsize,
-}
-
-#[async_trait]
-impl WorkerAdapter for AlwaysInfraFailingWorkerAdapter {
-    fn id(&self) -> &str {
-        "instant"
-    }
-    async fn run(
-        &self,
-        _req: RunRequest,
-        _run_id: &str,
-        _limits: RunLimits,
-        _sink: &dyn EventSink,
-    ) -> Result<RunOutcome, AdapterError> {
-        self.calls.fetch_add(1, Ordering::SeqCst);
-        Err(AdapterError::Other("session resume rejected".into()))
-    }
-}
-
 /// 監査 M-1〜M-3（ADR-0034 D2）: 報告はタスクの終端状態に合わせて作るテスト向けの、最小の組織（秘書 → coding → coding-poc）。
 fn seed_org_for_reports(store: &Arc<dyn TaskStore>) {
     let now = OffsetDateTime::now_utc();
@@ -912,32 +844,6 @@ impl WorkerAdapter for AttemptGatedAdapter {
                 usage: None,
             },
             exit_code: Some(0),
-        })
-    }
-}
-
-/// worker が返す `retryable: true` の `error` を毎回返すアダプタ(供給側失敗ではなく、ワーカー自身の申告)。
-struct RetryableErrorAdapter;
-
-#[async_trait]
-impl WorkerAdapter for RetryableErrorAdapter {
-    fn id(&self) -> &str {
-        "instant"
-    }
-    async fn run(
-        &self,
-        _req: RunRequest,
-        _run_id: &str,
-        _limits: RunLimits,
-        sink: &dyn EventSink,
-    ) -> Result<RunOutcome, AdapterError> {
-        sink.progress("working");
-        Ok(RunOutcome {
-            terminal: Terminal::Error {
-                message: "flaky".into(),
-                retryable: true,
-            },
-            exit_code: Some(1),
         })
     }
 }
@@ -1218,44 +1124,6 @@ fn progress_msgs(store: &Arc<dyn TaskStore>, id: TaskId) -> Vec<String> {
             _ => None,
         })
         .collect()
-}
-
-/// ADR-0027 D1 / 受け入れ 3: 委譲できる run（lead, genre=coding）のプロンプト文脈に設定済みの
-/// 全分野（`available_genres`）が渡り、`DelegateTask.genre` で子を別分野（literature）に委譲できる。
-struct GenreDelegatingAdapter {
-    proposal: DelegateTask,
-    seen_available_genres: std::sync::Mutex<Option<Vec<task_worker::GenreContext>>>,
-}
-
-#[async_trait]
-impl WorkerAdapter for GenreDelegatingAdapter {
-    fn id(&self) -> &str {
-        "instant"
-    }
-    async fn run(
-        &self,
-        req: RunRequest,
-        _run_id: &str,
-        _limits: RunLimits,
-        sink: &dyn EventSink,
-    ) -> Result<RunOutcome, AdapterError> {
-        let done = |summary: &str| {
-            Ok(RunOutcome {
-                terminal: Terminal::Done {
-                    summary: summary.into(),
-                    evidence: vec![],
-                    usage: None,
-                },
-                exit_code: Some(0),
-            })
-        };
-        if req.task.role.as_deref() == Some("literature-reader") {
-            return done("child");
-        }
-        *self.seen_available_genres.lock().unwrap() = Some(req.context.available_genres.clone());
-        sink.delegate(std::slice::from_ref(&self.proposal));
-        done("delegated")
-    }
 }
 
 async fn wait_for_approval_child(
@@ -2018,16 +1886,6 @@ fn routing_record(events: &[(u64, Event)]) -> Option<task_core::RoutingRecord> {
 }
 
 // ---- ADR-0056 D3（Phase 79）: mount された skills を run に届ける ----
-
-fn write_kb_skill(kb_root: &std::path::Path, name: &str, description: &str, body: &str) {
-    let dir = kb_root.join("skills").join(name);
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(
-        dir.join("SKILL.md"),
-        format!("---\nname: {name}\ndescription: {description}\n---\n\n{body}\n"),
-    )
-    .unwrap();
-}
 
 // ========== ADR-0072（Phase E1）: run lifecycle / checkpoint / continuation ==========
 
@@ -3127,7 +2985,6 @@ fn parent_sccache_family() -> String {
 }
 
 mod build_cache;
-mod cheap_local_first;
 mod cleanup_and_disk;
 mod cluster_tunnel;
 mod conversation_cos;
@@ -3137,12 +2994,10 @@ mod git_workspace;
 mod integration_check_progress;
 mod integration_ready_race;
 mod planning_and_gate;
-mod provider_and_retry;
 mod review;
 mod review_route;
 mod route_launch;
 mod route_select;
-mod routing_and_quota;
 mod run_tmpdir;
 mod target_env;
 mod target_sync;
@@ -3189,9 +3044,6 @@ mod tree_approval;
 /// 木でない Task の生存確認（`src/dispatcher/tests/finished_plan.rs`）。
 mod finished_plan;
 
-/// ADR-0052（Phase 64）: 知識整理 run のフォールバック（`src/dispatcher/tests/knowledge_fallback.rs`）。
-mod knowledge_fallback;
-
 /// ADR-0079 R5b-fix2: remote workspace の run 後の push（`src/dispatcher/tests/remote_push_after_run.rs`）。
 mod remote_push_after_run;
 /// ADR-0067 付記 2026-10-07: remote の task と question / wait で終わった run の未申告成果物の登録。
@@ -3228,7 +3080,6 @@ mod write_set_record;
 /// ADR 2026-10-05-browser-department-web-live-view D2.0: run 時の task ∩ grant と grant 縮小の即時適用
 /// （`src/dispatcher/tests/browser_allowed_domains.rs`）。
 mod browser_allowed_domains;
-mod browser_fallback;
 mod browser_ledger_gate;
 /// ADR 2026-10-08-browser-prod-enablement D2 末尾・D4: 保存 policy の無い browser task は
 /// `browser_policy_missing` で止まり、PUT で戻る（`src/dispatcher/tests/browser_policy_missing.rs`）。

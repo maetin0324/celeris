@@ -3,8 +3,8 @@
 //! （task-core の `optimize` + 品質推定）で 1 つに決める。推定できない（品質 unknown・同点）ときは
 //! membership の priority 順で決定的に選ぶ。legacy はこの module を使わず、priority 順の先頭を使う。
 //!
-//! - 候補の identity は `<provider>/model:<model_id>`（`LegacyProfile.deployment.id`）、容量・account の
-//!   identity は provider（`LegacyProfile.provider_id`）。kernel には同じ source 状態を全メンバーに渡す。
+//! - 候補の identity は `<provider>/model:<model_id>`、容量・account の identity は provider。kernel には
+//!   同じ source 状態を全メンバーに渡す。
 //! - 品質は daemon が差し込む routing catalog の model profile（`RoutingModelProfiles`）から引く。無ければ
 //!   `quality_unknown` で priority 順に落ちる。LLM も HTTP も呼ばない。
 

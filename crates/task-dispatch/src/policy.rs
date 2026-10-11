@@ -284,6 +284,3 @@ impl ProviderPolicy for StaticPolicy {
         }
     }
 }
-
-#[cfg(test)]
-mod tests;

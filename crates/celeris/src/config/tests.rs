@@ -4402,43 +4402,6 @@ tools = ["hashline_read", "hashline_edit", "bash"]
     }
 }
 
-/// ADR 2026-10-07: `[[harnesses]] adapter_policy = "model_family"` が dispatcher の既定解決の材料になる。
-#[test]
-fn coding_harness_default_config_builds_dispatcher_inputs() {
-    let cfg: Config = toml::from_str(
-        r#"
-[[providers]]
-id = "cc"
-adapter = "claude-code"
-[[providers]]
-id = "pi-go"
-adapter = "pi"
-llm_source = "opencode_go"
-model = "opencode-go/deepseek-v4-pro"
-extensions = ["/opt/hashline/index.ts"]
-tools = ["hashline_read", "hashline_edit", "bash"]
-[[harnesses]]
-id = "coding"
-adapter_policy = "model_family"
-[[harnesses]]
-id = "writing"
-"#,
-    )
-    .unwrap();
-    cfg.validate().unwrap();
-    let d = cfg.coding_harness_default();
-    assert_eq!(d.harnesses, vec!["coding".to_string()]);
-    assert_eq!(d.sources["cc"], task_core::LlmSourceRef::ClaudeOauth);
-    assert_eq!(d.sources["pi-go"], task_core::LlmSourceRef::OpencodeGo);
-    assert_eq!(
-        cfg.harness_registry()
-            .get("writing")
-            .unwrap()
-            .adapter_policy,
-        task_core::AdapterPolicy::ProviderOrder
-    );
-}
-
 /// 固定 adapter・対話用ハーネスと `model_family` は両立しない。未知の値は読み込みで落ちる。
 #[test]
 fn coding_harness_default_config_rejects_fixed_adapter_and_unknown_policy() {

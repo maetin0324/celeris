@@ -29,7 +29,7 @@
 //! | `snapshot` | デーモン状態の snapshot の組み立てと公開 | L1 |
 //! | `quota_book` | quota の見積りと release | L1 |
 //! | `sinks` | run 途中のイベントの sink（`StoreSink`・`ReviewerSink`） | L1 |
-//! | `provider_select` | provider / account の選択と cooldown | L1 |
+//! | `route_failure` | route の供給側失敗の分類と account cooldown の記録 | L1 |
 //! | `workspaces` | 作業場所・worktree・container の準備 | L1 |
 //! | `run_context` | run の文脈（extras・session・knowledge・skills） | L1 |
 //! | `worker_task` | worker 本体（free fn の `run_worker`。`Dispatcher` に依存しない） | L1 |
@@ -92,15 +92,10 @@ use crate::accounts::{
 };
 use crate::policy::{CooldownReason, ProviderId, ProviderOutcome, ProviderPolicy};
 
-#[cfg(test)]
-use crate::policy::{AdapterId, Selection};
-
 // ADR-0082: 責務別の子モジュール（層は L1 ← L2 ← L3 ← L4 ← tick）。
 mod browser_prereq;
 mod cluster_job_wait;
-mod coding_default;
 pub use cluster_job_wait::{ClusterJobPollRequest, ClusterJobPoller, ssh_cluster_job_poller};
-pub use coding_default::CodingHarnessDefault;
 mod auto_leaf;
 /// ADR-0130 D4: review 前 sync の前後で target からの behind を記録する。
 mod behind_target;
@@ -119,10 +114,10 @@ mod maintenance;
 mod ownerless_runs;
 mod phase_integration;
 mod planner_flow;
-mod provider_select;
 mod quota_book;
 mod review_spawn;
 mod review_verdict;
+mod route_failure;
 mod route_launch;
 mod route_select;
 mod routing_context;
@@ -154,7 +149,7 @@ pub use cluster::{
     TUNNEL_PROBE_MAX_INTERVAL_SECS, TunnelEvent, TunnelEventKind, TunnelForwardEnsurer,
     TunnelListenerProbe, TunnelProbe,
 };
-pub use provider_select::provider_failure_outcome;
+pub use route_failure::provider_failure_outcome;
 pub use route_launch::{RouteLaunchError, selected_llm_route};
 pub use route_select::account_adapter_for_source_kind;
 pub use route_select::{
@@ -186,7 +181,7 @@ use planner_flow::{
     REJECTED_PLAN_FILE, planner_blocked_question, planner_rejections_since_last_plan,
     planner_retry_message,
 };
-use provider_select::{
+use route_failure::{
     account_cooldown_reason_name, cooldown_reason_name, excluded_reason_name,
     provider_failure_reason,
 };
@@ -1287,12 +1282,6 @@ pub struct Dispatcher {
     /// **この source 単位**（`implicit/<llm source id>`）で、同じ source を使う行は上限と in_use を共有する。
     /// `set_provider_llm_sources` が起動時と reload で差し替える。
     provider_llm_sources: HashMap<ProviderId, String>,
-    /// 行の adapter 名と pool の adapter が一致しない行（ACP + opencode-go。ADR 2026-10-06 D3）の
-    /// provider id → pool の adapter。`account_pool = "<adapter>"` と書かれた行だけが入る。
-    #[cfg(test)]
-    account_pool_adapters: HashMap<ProviderId, AccountAdapter>,
-    /// ADR 2026-10-07: coding の既定ハーネス解決（`adapter_policy = "model_family"` のハーネスと材料）。
-    coding_default: CodingHarnessDefault,
     /// ADR-0024 D4 / ADR-0025 D1: アダプタごとのアカウントの観測値・cooldown・確認の帳簿（設定された根ディレクトリの
     /// アダプタだけキーを持つ）。実行中の run のシンクとも共有する。reload では差し替えない（設定ファイルの
     /// 再読込では消えない観測値）。
@@ -1626,9 +1615,6 @@ impl Dispatcher {
             publisher: None,
             account_pool_providers,
             provider_llm_sources: HashMap::new(),
-            #[cfg(test)]
-            account_pool_adapters: HashMap::new(),
-            coding_default: CodingHarnessDefault::default(),
             account_books,
             llm_route_registry: Arc::default(),
             harness_adapters: HashMap::new(),
@@ -1722,45 +1708,6 @@ impl Dispatcher {
     pub fn set_local_provider_probe(&mut self, probe: LocalProviderProbe) {
         self.local_probe = probe;
         self.local_probe_cache.clear();
-    }
-
-    /// ADR-0132 付記 L4: ローカルの行の health。probe 先が無ければ「確かめられない」= 生きている扱い。
-    /// どれか 1 つが `Ok` か `Unknown` なら生きている。全部 `Unreachable` なら最初の理由を返す。
-    /// 結果は `base_url` ごとに 60 秒キャッシュ（`knowledge_reachability` と同じ型）。
-    #[cfg(test)]
-    fn local_provider_health(
-        &mut self,
-        health: &[LocalHealthTarget],
-        now: Instant,
-    ) -> Result<(), String> {
-        let mut first_reason = None;
-        for target in health {
-            let outcome = match self.local_probe_cache.get(&target.base_url) {
-                Some((checked_at, cached))
-                    if now.saturating_duration_since(*checked_at)
-                        < task_worker::PROBE_CACHE_TTL =>
-                {
-                    cached.clone()
-                }
-                _ => {
-                    let started = Instant::now();
-                    let outcome =
-                        (self.local_probe)(&target.base_url, target.bearer_token.as_deref());
-                    log_slow_step("local_provider_probe", started);
-                    tracing::debug!(base_url = %target.base_url, ?outcome, "dispatch: probed a local provider");
-                    self.local_probe_cache
-                        .insert(target.base_url.clone(), (now, outcome.clone()));
-                    outcome
-                }
-            };
-            match outcome {
-                Reachability::Ok | Reachability::Unknown { .. } => return Ok(()),
-                Reachability::Unreachable { reason } => {
-                    first_reason.get_or_insert(format!("{}: {reason}", target.base_url));
-                }
-            }
-        }
-        first_reason.map_or(Ok(()), Err)
     }
 
     /// ADR-0052 D1: `[knowledge.langmem].base_url` の到達性（60 秒キャッシュ）。
@@ -2188,27 +2135,6 @@ impl Dispatcher {
         self.account_books.get(&adapter).cloned()
     }
 
-    pub fn set_account_pool_adapters(&mut self, adapters: HashMap<ProviderId, AccountAdapter>) {
-        #[cfg(test)]
-        {
-            self.account_pool_adapters = adapters;
-        }
-        #[cfg(not(test))]
-        let _ = adapters;
-    }
-
-    #[cfg(test)]
-    pub(super) fn pool_adapter_of(
-        &self,
-        provider: &ProviderId,
-        row_adapter: &str,
-    ) -> Option<AccountAdapter> {
-        self.account_pool_adapters
-            .get(provider)
-            .copied()
-            .or_else(|| AccountAdapter::parse(row_adapter))
-    }
-
     /// D6: 手動確認の結果を `AccountBook` に記録して保存する（`source = "check"`）。
     pub fn record_account_check(
         &mut self,
@@ -2610,18 +2536,6 @@ impl Dispatcher {
             return Ok(false);
         }
         Ok(crate::capacity::is_cos_run(task, &self.store.org_list()?))
-    }
-
-    #[cfg(test)]
-    pub(super) fn implicit_account_full(&self, provider: &ProviderId, extra: usize) -> bool {
-        if self.account_pool_providers.contains(provider) {
-            return false;
-        }
-        let source = self.implicit_source_of(provider);
-        let Some((limit, _)) = self.implicit_account_limit(&source) else {
-            return true;
-        };
-        crate::capacity::implicit_account_full(self.implicit_account_in_use(&source) + extra, limit)
     }
 
     /// そのプロバイダで走っている通常 run の数。

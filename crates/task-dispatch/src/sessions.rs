@@ -4,7 +4,7 @@
 //! `Dispatcher::resolve_node_session`（`dispatcher.rs`）が行う。ここに置くのは、テストしやすい形の
 //! 「続けるか、新しく作るか」の判断と、前置きに出す差分・要約の行の組み立てだけ。
 
-use task_core::{BudgetKind, MessageRole, NodeSession, RunEnd, Tier, WorkUnitSession};
+use task_core::{BudgetKind, MessageRole, NodeSession, RunEnd, WorkUnitSession};
 use time::OffsetDateTime;
 
 pub mod cos_chat;
@@ -148,61 +148,6 @@ pub fn session_id_is_valid_for_adapter(adapter_id: &str, session_id: &str) -> bo
         task_worker::provider::is_valid_uuid(session_id)
     } else {
         true
-    }
-}
-
-/// ADR-0054 Phase 67c: `tier` の「能力」の順位（大きいほど高性能・高コスト）。`Tier` の宣言順とは
-/// 逆（`Frontier` が最上位）。sticky 選択の「同じ tier 以上」を決定的に比べるためだけの道具。
-pub fn tier_rank(tier: Tier) -> u8 {
-    match tier {
-        Tier::Cheap => 0,
-        Tier::Standard => 1,
-        Tier::Frontier => 2,
-    }
-}
-
-/// [`decide_sticky`] が返す判断。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StickyDecision {
-    /// 現役セッションのアダプタ・アカウントのまま run する。
-    Stick,
-    /// 使えないので、通常の ADR-0049 ランキングにフォールバックする（結果としてアダプタ・アカウントが
-    /// 変われば、次の [`decide`] が `AccountChanged`/`AdapterChanged` で retire する。既存の経路）。
-    FallBack,
-}
-
-/// ADR-0054 Phase 67c: 継続セッションがあるノードの provider/account 選択は、まずそのセッションの
-/// `(adapter, account_id)` に留まることを試す（D1「同じアカウントで続ける」）。ADR-0049 の残量
-/// ランキングを毎 run 走らせてアカウントを付け替え続けると、セッションが尽きるたびに前置きを全量に
-/// 戻し 5 万トークン級の再送を発生させる（本番 2026-09-21 観測: claude-code → codex/
-/// chatgpt_plus_personal への付け替えで 52,629 input tokens の全量前置きが再送された）。
-///
-/// 純粋関数: 「使えるか」を表す 2 つの bool は呼び出し側（`Dispatcher::select_provider`）が集める
-/// （アカウントプールの状態・設定表の現在の中身は I/O）。
-///
-/// - `active` が無ければ sticky の対象外。
-/// - `rollover_tokens` を超えていればどのみち次の run で作り直すので、無理に留まらない。
-/// - `account_usable`: プールを使わない（`account_id` が無い）セッションは常に `true`
-///   （ログイン・cooldown・枯渇の概念が無い）。プールを使うなら、そのアカウントがログイン済み・
-///   cooldown 外・上限未満・枯渇していないことを呼び出し側が確かめて渡す。
-/// - `provider_offers_tier`: このアダプタの設定行が、要求された tier と同じかそれ以上を提供し、かつ
-///   cooldown 中でも並列度上限でもないことを呼び出し側が確かめて渡す。
-pub fn decide_sticky(
-    active: Option<&NodeSession>,
-    rollover_tokens: u64,
-    account_usable: bool,
-    provider_offers_tier: bool,
-) -> StickyDecision {
-    let Some(active) = active else {
-        return StickyDecision::FallBack;
-    };
-    if active.approx_tokens as u64 >= rollover_tokens {
-        return StickyDecision::FallBack;
-    }
-    if account_usable && provider_offers_tier {
-        StickyDecision::Stick
-    } else {
-        StickyDecision::FallBack
     }
 }
 

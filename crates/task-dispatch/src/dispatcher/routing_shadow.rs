@@ -1,7 +1,7 @@
 //! ADR 2026-10-04 multi-objective model routing §7.1・§10 Phase 4（dispatch-shadow）: decision shadow。
 //!
-//! - `mode = shadow` のとき primary は legacy の経路（`select_provider_for` と `select_tier`）のまま決め、
-//!   同じ候補行（`legacy_provider_profiles`）と同じ source 状態（account 帳簿・cooldown・in-use）で
+//! - `mode = shadow` のとき primary は legacy の経路のまま決め、同じ候補行と同じ source 状態
+//!   （account 帳簿・cooldown・in-use）で
 //!   候補 policy（Phase 2 の heuristic kernel = enforce の判断）を**純粋に**計算する。
 //! - 計算は読むだけ: upstream・HTTP・health probe・worker 起動・reviewer 追加・run 再実行をしない。
 //!   `full`・`unroutable`・警告の集合・アカウントの scan cache も書き換えない。ローカル行の health は

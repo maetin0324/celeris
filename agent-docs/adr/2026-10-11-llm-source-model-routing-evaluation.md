@@ -100,6 +100,8 @@ Codex account は quota の実測が無いので、10 run の dry-run で usage 
 
 選択順は (1) task に明示された model/source 制約、(2) enforce 対象なら根拠表の選択可能集合、(3) 同等集合内の quota 順、(4) shadow または根拠無しなら harness×lane の `route_defaults` 順。根拠表と人の既定が競合する場合、enforce では根拠表を使い、人の既定は shadow / 根拠無し期間にのみ適用する。人が enforce 中の既定を変更したい場合は、その genre×harness の段階を shadow に戻して設定・再承認する。trace に根拠表選択か `route_defaults` のどちらを用いたか記録する。
 
+**判断の記録。** 選択は根拠表・`route_defaults`・model 指定のどれで決まっても、[2026-10-11-task-routing-features.md](2026-10-11-task-routing-features.md) の `celeris.route-decision/1`（Input = task の自然言語記述・context・constraints・candidates と根拠表の値、Output = selected・action・候補ごとの score・propensity）で DB に残し、結果（`celeris.route-outcome/1`）と結合して export する。`RoutePolicy` の入力はその ADR D9 の `RouteInput` で、decision model（判定器）は dispatcher の外で判定して DB に書いたものを読むだけにする。
+
 **探索。** enforce 中の genre では ε=0.1 の確率で、同等集合の中から選択規則と違う候補を選ぶ（乱数の種は run_id から決定的に導く。再現可能）。
 探索の有無と propensity を `routing_decided` に記録し、以後のオフライン評価（DR）の材料にする。探索は同等集合の外には出ない（劣る候補を本番に出さない）。
 
@@ -162,6 +164,8 @@ runner は dispatcher・store に LLM 呼び出しを入れない（LLM を呼�
 `RoutePolicy` 実装を差し替えるだけにする。guardrail の判定は daemon の tick で決定的に行う（LLM を呼ばない）。
 D4 の削除は同じ unit で行う。
 
+**判断 record と学習データ（build 段 `task-features`）。** task の記述（`celeris.task-features/1`、自然言語の brief が主・aux が補助）・選択肢・判断・結果の表、`celerisctl routing export` の JSONL、`RouteInput`／`RouteOutput` の境界は [2026-10-11-task-routing-features.md](2026-10-11-task-routing-features.md) に従う。評価 runner は manifest 作成時に各問題へ同じ template の features を付け、評価 run の割り当ても同じ判断 record（`stage="eval"`）で残す。
+
 **境界。** runner → selector は DB の `routing_evidence` だけで結ぶ（runner が selector の型に依存しない。selector が runner を呼ばない）。
 両方が共有するのは鍵の型 `(genre, harness_id, harness_version, source_id, model_id)` と区間の型だけで、`task-core` に置く。
 
@@ -192,6 +196,8 @@ D4 の削除は同じ unit で行う。
 ## 改訂履歴
 
 - 2026-10-11: 人の確認を反映。評価対象を 7 model に限定し、fable-5-1 / gpt-6-astra を k=1・層別部分集合、通常 5 model を k=2・30 問に縮小。Codex の quota は実測前に率を仮定せず、10-run dry-run と週 15% gate を必須化。opencode-go は根拠表対象外、qwen はローカル既定候補として明記。辞書順 fallback と `[routing.defaults.<genre>]` を除き、lane ごとの人の既定を harness×lane `route_defaults` に統合。
+
+- 2026-10-11: 人の補足（decision model は自然言語の入力・選択肢・確率）と人の補足 2（Input/Output の形）を受け、判断の記録と学習データの export を [2026-10-11-task-routing-features.md](2026-10-11-task-routing-features.md) に分けて決め、D2・D5 から参照した。
 
 ## 未解決（evaluate・land 段で決める）
 

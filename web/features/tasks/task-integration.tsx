@@ -18,6 +18,7 @@ const STATE_LABELS: Record<string, string> = {
   pending: "未取り込み",
   discarded: "捨てた",
   held: "保留",
+  not_applicable: "対象外（遠隔 repo）",
 };
 
 export function integrationLabel(state: string): string {
@@ -84,6 +85,7 @@ export function TaskIntegrationActions({
       <IntegrationControls
         path={(method) => integrationActionPath(taskId, integration.repo, method)}
         target={integration.repo}
+        // not_applicable は遷移できない（API は 409）ので操作を出さない。
         methods={
           pending
             ? ["merge", "discard", "hold"]

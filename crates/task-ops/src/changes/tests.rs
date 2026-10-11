@@ -438,18 +438,53 @@ fn discard_removes_the_worktree_and_the_branch() {
     assert!(repo.join("README.md").is_file(), "元のリポジトリは無事");
 }
 
-/// `default_branch` は設定 → `origin/HEAD` → `main` → `master` の順。
+/// `resolve_default_branch` は設定 → `origin/HEAD` → `main` → `master` の順。
 #[test]
-fn the_default_branch_is_configured_then_detected() {
+fn stranded_default_branch_is_configured_then_detected() {
     let root = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
     let repo = root.path().join("code");
     init_repo(&repo);
-    assert_eq!(default_branch(&repo, Some("trunk")), "trunk");
-    assert_eq!(default_branch(&repo, Some("  ")), "main");
-    assert_eq!(default_branch(&repo, None), "main");
+    let resolve = |configured| resolve_default_branch(&repo, configured);
+    assert_eq!(resolve(Some("trunk")).as_deref(), Ok("trunk"));
+    assert_eq!(resolve(Some("  ")).as_deref(), Ok("main"));
+    assert_eq!(resolve(None).as_deref(), Ok("main"));
     git_must(&repo, &["branch", "-m", "main", "master"]);
-    assert_eq!(default_branch(&repo, None), "master");
+    assert_eq!(resolve(None).as_deref(), Ok("master"));
     assert!(!has_origin(&repo));
+}
+
+/// origin/HEAD があればそれを優先する。
+#[test]
+fn stranded_default_branch_prefers_origin_head() {
+    let root = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let repo = root.path().join("code");
+    init_repo(&repo);
+    git_must(&repo, &["branch", "trunk"]);
+    git_must(&repo, &["update-ref", "refs/remotes/origin/trunk", "HEAD"]);
+    git_must(
+        &repo,
+        &[
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/trunk",
+        ],
+    );
+    assert_eq!(resolve_default_branch(&repo, None).as_deref(), Ok("trunk"));
+}
+
+/// 設定・origin/HEAD・main・master のどれも無ければ理由つきの Err（`"main"` を返さない）。
+#[test]
+fn stranded_default_branch_unresolvable_is_an_error_with_reason() {
+    let root = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let repo = root.path().join("code");
+    init_repo(&repo);
+    git_must(&repo, &["branch", "-m", "main", "trunk"]);
+    let err = resolve_default_branch(&repo, None).expect_err("unresolvable");
+    assert!(
+        err.to_string()
+            .contains("default branch cannot be resolved"),
+        "{err}"
+    );
 }
 
 /// 子プロセスの待ち時間: 終わらないコマンドは殺して `timed_out` を立てる。

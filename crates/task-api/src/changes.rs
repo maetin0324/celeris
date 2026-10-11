@@ -78,7 +78,21 @@ struct RepoTarget {
     branch: String,
     /// 目印に書いてある base（`merge-base` が取れなかったときの保険）。
     base: Option<String>,
-    default_branch: String,
+    /// `ops_changes::resolve_default_branch` の結果（ADR 2026-10-11-stranded-done-branches F1）。
+    default_branch: Result<String, ops_changes::DefaultBranchError>,
+}
+
+impl RepoTarget {
+    /// 解決できた default branch。解決できなければ 409（`"main"` で埋めない）。
+    fn default_branch(&self) -> Result<&str, ApiProblem> {
+        self.default_branch.as_deref().map_err(|error| {
+            ApiProblem::new(
+                StatusCode::CONFLICT,
+                "default_branch_unresolvable",
+                format!("{}: {error}", self.name),
+            )
+        })
+    }
 }
 
 /// そのタスクの git のリポジトリを並べる（`dir` のリポジトリは対象外。ADR-0043 D5）。
@@ -106,8 +120,10 @@ fn targets_for(
             .and_then(|r| rows.iter().find(|row| row.id == r.repo_id))
             .or_else(|| rows.iter().find(|row| row.name == repo.name));
         let source = PathBuf::from(&repo.source);
-        let default_branch =
-            ops_changes::default_branch(&source, row.and_then(|r| r.default_branch.as_deref()));
+        let default_branch = ops_changes::resolve_default_branch(
+            &source,
+            row.and_then(|r| r.default_branch.as_deref()),
+        );
         out.push(RepoTarget {
             name: repo.name.clone(),
             repo_id: row.map(|r| r.id),
@@ -213,13 +229,20 @@ async fn changes(
             let now = OffsetDateTime::now_utc();
             let mut repos = Vec::with_capacity(targets.len());
             for target in &targets {
-                let c = ops_changes::changes(
-                    &target.source,
-                    Some(&target.worktree),
-                    &target.branch,
-                    &target.default_branch,
-                    target.base.as_deref(),
-                );
+                // 既定の branch を解決できない repo は差分なしではなく `missing` で返す。
+                let c = match &target.default_branch {
+                    Ok(default_branch) => ops_changes::changes(
+                        &target.source,
+                        Some(&target.worktree),
+                        &target.branch,
+                        default_branch,
+                        target.base.as_deref(),
+                    ),
+                    Err(_) => ops_changes::RepoChanges {
+                        missing: true,
+                        ..Default::default()
+                    },
+                };
                 let integration = store
                     .integration_latest(task_id, &target.name)
                     .map_err(store_problem)?
@@ -227,7 +250,7 @@ async fn changes(
                 repos.push(RepoChangesView {
                     repo: target.name.clone(),
                     branch: target.branch.clone(),
-                    default_branch: target.default_branch.clone(),
+                    default_branch: target.default_branch.clone().unwrap_or_default(),
                     base: c.base,
                     head: c.head,
                     ahead: c.ahead,
@@ -295,7 +318,7 @@ async fn diff(
                 &target.source,
                 Some(&target.worktree),
                 &target.branch,
-                &target.default_branch,
+                target.default_branch()?,
                 target.base.as_deref(),
                 &path,
             )
@@ -379,6 +402,9 @@ fn prepare_integrate(
     }
     let targets = targets_for(store, &task, &env.workspace_root)?;
     let target = pick_target(&targets, repo)?;
+    if request.method != IntegrationMethod::Discard {
+        target.default_branch()?;
+    }
     if request.method == IntegrationMethod::Pr {
         if !ops_changes::has_origin(&target.source) {
             return Err(pr_unavailable(format!(
@@ -443,6 +469,7 @@ fn run_integrate(
             }
         }
         IntegrationMethod::Merge => {
+            let default_branch = target.default_branch()?;
             let temp = env
                 .workspace_root
                 .join(".integrate")
@@ -450,7 +477,7 @@ fn run_integrate(
             match ops_changes::merge_into_default_branch(
                 &target.source,
                 &target.branch,
-                &target.default_branch,
+                default_branch,
                 &temp,
             ) {
                 // ADR-0043 D5: 人が片付けてから押す。何も触っていないので記録も残さない。
@@ -461,7 +488,7 @@ fn run_integrate(
                         task,
                         &target.name,
                         &target.worktree,
-                        &target.default_branch,
+                        default_branch,
                         &files,
                         now,
                     );
@@ -484,7 +511,7 @@ fn run_integrate(
                             IntegrationState::Conflict,
                             format!(
                                 "{} への rebase が衝突しました{listed}。解消タスク {} を作りました",
-                                target.default_branch, child.id
+                                default_branch, child.id
                             ),
                         ),
                         Some(child.id),
@@ -496,7 +523,7 @@ fn run_integrate(
                 } => {
                     let mut detail = format!(
                         "{} を {} まで進めました（{}）",
-                        target.default_branch,
+                        default_branch,
                         sha.chars().take(12).collect::<String>(),
                         if fast_forwarded {
                             "fast-forward"
@@ -520,12 +547,13 @@ fn run_integrate(
         IntegrationMethod::Pr => match ops_changes::push_branch(&target.source, &target.branch) {
             Err(detail) => (record(IntegrationState::Failed, detail), None),
             Ok(()) => {
+                let default_branch = target.default_branch()?;
                 let report = latest_report_for(store, task);
                 let body = pr_body(task, report.as_ref(), env.web_base_url.as_deref());
                 match ops_changes::gh_pr_create(
                     &env.github.gh,
                     &target.source,
-                    &target.default_branch,
+                    default_branch,
                     &target.branch,
                     &task.title,
                     &body,

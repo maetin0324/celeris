@@ -2087,6 +2087,13 @@ export type Event = {
   "type": "integration_reopened";
 } | {
   "actor": string;
+  "branch": string;
+  "head_sha": string;
+  "reason": string;
+  "repo_id": RepoId;
+  "type": "integration_not_applicable";
+} | {
+  "actor": string;
   "operation_id": string;
   "policy_version": string;
   "reason": string;
@@ -5736,7 +5743,7 @@ export type TaskRepoIntegrationState = {
   "updated_at": string;
 };
 
-export type TaskRepoIntegrationStatus = "unintegrated" | "integrated" | "discarded" | "held";
+export type TaskRepoIntegrationStatus = "unintegrated" | "integrated" | "discarded" | "held" | "not_applicable";
 
 export type TaskRequirements = {
   "browser"?: BrowserRequirements | null;

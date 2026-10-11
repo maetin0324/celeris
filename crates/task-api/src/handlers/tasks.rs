@@ -59,14 +59,22 @@ fn attach_task_integrations(
     let mut repositories = HashMap::new();
     for repo in repos {
         if let task_core::WorkspaceSpec::Local { path, .. } = repo.location {
-            repositories.insert(
-                repo.id,
-                task_ops::stranded::IntegrationRepoContext {
-                    name: repo.name,
-                    path,
-                    default_branch: repo.default_branch.unwrap_or_else(|| "main".to_string()),
-                },
-            );
+            // ADR 2026-10-11-stranded-done-branches F1: 解決できない repo は context に入れない。
+            match task_ops::changes::resolve_default_branch(&path, repo.default_branch.as_deref()) {
+                Ok(default_branch) => {
+                    repositories.insert(
+                        repo.id,
+                        task_ops::stranded::IntegrationRepoContext {
+                            name: repo.name,
+                            path,
+                            default_branch,
+                        },
+                    );
+                }
+                Err(error) => {
+                    tracing::warn!(repo = %repo.name, %error, "integration context skips repository");
+                }
+            }
         }
     }
     let context = task_ops::stranded::IntegrationContext {

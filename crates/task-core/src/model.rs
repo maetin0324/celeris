@@ -1070,6 +1070,14 @@ pub enum Event {
         reason: Option<String>,
         actor: String,
     },
+    /// ADR 2026-10-11 stranded-done-branches F2: 遠隔 repo など sweep の対象外になった（`not_applicable`）。
+    IntegrationNotApplicable {
+        repo_id: crate::RepoId,
+        branch: String,
+        head_sha: String,
+        reason: String,
+        actor: String,
+    },
     /// CoS operation attempt, including rejected attempts. The envelope is immutable.
     CosOperation {
         actor: String,

@@ -409,7 +409,11 @@ impl Dispatcher {
                 let Some(reference) = task.repos.iter().find(|r| r.name == repo.name) else {
                     continue;
                 };
-                let target_ref = self.review_target_ref(&task, reference.repo_id, &repo.source)?;
+                let Some(target_ref) =
+                    self.review_target_ref(&task, reference.repo_id, &repo.source)?
+                else {
+                    continue;
+                };
                 // A failed repair deliberately reviews the restored, unsynced HEAD.
                 // ADR-0120 付記（fallback の解除）: その HEAD のままで target を含まない間だけ同期を省く。
                 // branch が変われば（HEAD が動いた・target が祖先になった）通常の同期へ戻り、

@@ -29,6 +29,9 @@ fn integration_api_list_paths_and_filters() {
     let (_, path, _) =
         request_of(&parse(&["integration", "list", "--state", "held"]).unwrap()).unwrap();
     assert_eq!(path, "/integrations?state=held");
+    let (_, path, _) =
+        request_of(&parse(&["integration", "list", "--state", "not_applicable"]).unwrap()).unwrap();
+    assert_eq!(path, "/integrations?state=not_applicable");
 
     let (_, path, _) =
         request_of(&parse(&["integration", "list", "--task", &id]).unwrap()).unwrap();

@@ -67,7 +67,7 @@ pub struct ReasonTargetArgs {
 
 fn parse_status(raw: &str) -> Result<TaskRepoIntegrationStatus, String> {
     TaskRepoIntegrationStatus::parse(raw).ok_or_else(|| {
-        format!("unknown integration state '{raw}' (unintegrated | integrated | discarded | held)")
+        format!("unknown integration state '{raw}' (unintegrated | integrated | discarded | held | not_applicable)")
     })
 }
 

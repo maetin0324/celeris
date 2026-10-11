@@ -250,6 +250,8 @@ listen = "127.0.0.1:7710"      # これを書いたときだけ API が動く（
 | `release_not_found` | 404 | ADR-0040 D6: `POST /releases/{sha12}/promote` の sha12 が `[selfdeploy] releases_dir` に無い（sha12 の形でないときも同じ） |
 | `release_not_promotable` | 409 | ADR-0040 D6: 昇格を受け付けられない（`verify.json` が無い／`ok` でない、既に `current`、既に昇格中、`scripts/promote.sh` が無い、`[selfdeploy]` が無い）。`detail` に理由の一行 |
 | `default_branch_busy` | 409 | ADR-0043 D5（§3.81）: 人のチェックアウトが取り込み先のブランチを出したまま未コミットの変更を持っている。`detail` は `"<default_branch> が編集中"`。**何も触っていない**ので、人が片付けてからもう一度押す |
+| `default_branch_unresolvable` | 409 | ADR 2026-10-11-stranded-done-branches F1（§3.80・§3.81、取り込みの表の merge）: 取り込み先の既定 branch を解決できない（`project_repos.default_branch` が空で、`origin/HEAD`・`main`・`master` のどれも無い）。`detail` は `"<repo>: <理由>"`。**git に触る前に止まる**ので記録は残らない。`PATCH /repos/{id}` で既定 branch を入れてから押し直す（`discard` は解決しないので影響が無い） |
+| `checkout_busy` | 409 | ADR 2026-10-11-stranded-done-branches（取り込みの表の merge、`POST /tasks/{id}/integrations/{repo}/merge`）: 取り込み先のブランチを人のチェックアウトが出したまま未コミットの変更を持っている。`detail` は理由の一行（`default branch checkout has uncommitted changes`）。git は触らないが、取り込みの記録は残る（`unintegrated` のまま `reason` を書き換え、integration request を 1 件起票する）。片付けてから押し直す |
 | `pr_unavailable` | 409 | ADR-0043 D5（§3.81 / §3.82）: PR の経路が使えない（`origin` リモートが無い、`gh` が PATH に無いか認証されていない、merge しようとした PR が開いていない）。`detail` に理由の一行 |
 | `docs_unavailable` | 409 | ADR-0044 D7（§3.92〜3.97）: 案件の文書の根が使えない（まだ無い＝`POST /projects/{id}/docs/init` で用意する、primary がリモート、`$HOME` が無い、`git` が動かない、置き場が空でない）。`detail` に理由の一行 |
 | `etag_mismatch` | 409 | ADR-0044 D7（§3.95 / §3.96）: 読んでから誰かがそのページを直した（ページがあるのに `etag` を付けなかったときも同じ）。拡張フィールド `etag` にいまの値。再読み込みしてから直す |
@@ -372,12 +374,12 @@ listen = "127.0.0.1:7710"      # これを書いたときだけ API が動く（
 | 70 | POST | `/tasks/{id}/changes/{repo}/integrate` | 取り込む（`merge` / `pr` / `discard`）（**管理系: `token_file` 未設定でも 401**） | 200 `IntegrateResult` | `git` / `gh` + store |
 | 71 | POST | `/tasks/{id}/changes/{repo}/pr/merge` | その PR を Celeris から merge する（**管理系**） | 200 `IntegrateResult` | `gh pr merge` + store |
 | 72 | GET | `/projects/{id}/integrations` | その案件の PR と取り込み（タスク × リポジトリごとに最新の 1 件） | `ProjectIntegrations` | store + `gh pr view` |
-| 73 | GET | `/integrations?state=` | 取り込み状態の一覧（state は任意） | `IntegrationList` | store |
+| 73 | GET | `/integrations?state=` | 取り込み状態の一覧（state は任意。値は `unintegrated` / `integrated` / `discarded` / `held` / `not_applicable`。`not_applicable` は遠隔 repo など sweep の対象外の行） | `IntegrationList` | store |
 | 74 | GET | `/tasks/{id}/integrations` | タスクのリポジトリ別取り込み状態 | `IntegrationList` | store |
-| 75 | POST | `/tasks/{id}/integrations/{repo}/merge` | merge 依頼。既に default branch の祖先なら integrated、未到達なら既存 integration request を起票 | `IntegrationActionResult` | store + git |
-| 76 | POST | `/tasks/{id}/integrations/{repo}/discard` | 取り込みを破棄（`reason` 必須） | `IntegrationActionResult` | store |
-| 77 | POST | `/tasks/{id}/integrations/{repo}/hold` | 取り込みを保留（`reason` 必須） | `IntegrationActionResult` | store |
-| 78 | POST | `/tasks/{id}/integrations/{repo}/reopen` | held/discarded を unintegrated に戻す | `IntegrationActionResult` | store |
+| 75 | POST | `/tasks/{id}/integrations/{repo}/merge` | merge 依頼。既に default branch の祖先なら integrated、未到達なら既存 integration request を起票。409: `default_branch_unresolvable`（既定 branch を解決できない・記録なし）、`checkout_busy`（人のチェックアウトが既定 branch を未コミットで出している。`unintegrated` のまま reason を書き換え依頼を起票）、`invalid_transition`（`not_applicable` の行。既定 branch の解決が先に走るので、解決できなければ `default_branch_unresolvable` が先に返る） | `IntegrationActionResult` | store + git |
+| 76 | POST | `/tasks/{id}/integrations/{repo}/discard` | 取り込みを破棄（`reason` 必須）。`not_applicable` の行は 409 `invalid_transition`（遷移不可） | `IntegrationActionResult` | store |
+| 77 | POST | `/tasks/{id}/integrations/{repo}/hold` | 取り込みを保留（`reason` 必須）。`not_applicable` の行は 409 `invalid_transition`（遷移不可） | `IntegrationActionResult` | store |
+| 78 | POST | `/tasks/{id}/integrations/{repo}/reopen` | held/discarded を unintegrated に戻す。`not_applicable` の行は 409 `invalid_transition`（遷移不可） | `IntegrationActionResult` | store |
 | 73 | POST | `/projects/{id}/cancel` | 案件を中止し、属する非終端タスクと途中目標を連鎖で `cancelled` にする（ADR-0044 D6、Phase 55。**管理系: `token_file` 未設定でも 401**） | 200 `ProjectLifecycle` | `task_ops::lifecycle` |
 | 74 | POST | `/projects/{id}/pause` | 案件を一時停止する（属するタスクは dispatch されない。**管理系**） | 200 `ProjectLifecycle` | `task_ops::lifecycle` |
 | 75 | POST | `/projects/{id}/resume` | 一時停止を解く（`paused_from` へ戻す。**管理系**） | 200 `ProjectLifecycle` | `task_ops::lifecycle` |
@@ -2464,6 +2466,7 @@ celeris はここで **`git` と `gh` だけ**を、待ち時間の上限付き�
 - そのタスクに無い `repo` は 404 `file_not_found`
 - **200 KiB で切る**（切ったら `truncated: true`）。差分が無ければ `diff` は空文字列
 - 追跡外のファイルは `git diff --no-index -- /dev/null <path>` の出力（「全部追加」の形）
+- 既定 branch を解決できないときは 409 `default_branch_unresolvable`（`detail` は `"<repo>: <理由>"`）。`base` の計算に既定 branch を使うため
 
 #### 3.81 `POST /tasks/{id}/changes/{repo}/integrate` → 200 `IntegrateResult`（**管理系**）
 
@@ -2486,8 +2489,10 @@ celeris はここで **`git` と `gh` だけ**を、待ち時間の上限付き�
   `Celeris task <id>` と `[notify] web_base_url` があればそのリンク）。LLM は使わない
 - **`discard`**: `{"confirm": true}` が要る（無ければ 422 `validation`、`errors[0].field = "confirm"`）。
   worktree を消してブランチを `git branch -D` し、`state = "done"`
+- 既定 branch を解決できない（`merge` と `pr`。`discard` は解決しない）ときは **409 `default_branch_unresolvable`**
+  （`detail` は `"<repo>: <理由>"`）。git にも記録にも触らない
 - `git` / `gh` が失敗したときは **200** を返し、記録が `state = "failed"` と `detail`（理由の一行）を持つ
-  （GUI はそれをそのまま出す）。409 になるのは上の 2 つだけ
+  （GUI はそれをそのまま出す）。409 になるのは `default_branch_busy`・`pr_unavailable`・`default_branch_unresolvable` だけ
 - `note` は記録の `detail` の先頭に入る（PR の本文には入れない）
 
 **衝突の解消タスク**（ADR-0043 D5）: 親 = 元のタスク、担当（`assignee` / `role` / `genre` / `tier` / 予算）は

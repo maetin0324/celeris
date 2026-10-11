@@ -635,3 +635,185 @@ async fn integration_api_merge_conflict_keeps_main_unintegrated() {
     );
     daemon.shutdown().await;
 }
+
+/// ADR 2026-10-11 D3: 案件と Local の登録 repo（既定ブランチ main）だけを作る。task は案件に属さない。
+fn register_repo(store: &SqliteStore, repo_path: &Path) -> ProjectRepo {
+    let now = OffsetDateTime::from_unix_timestamp(1_800_000_000).expect("fixed clock");
+    let project = Project {
+        auto_advance: false,
+        slug: None,
+        id: ProjectId::new(),
+        title: "agent-platform".into(),
+        request: "repoless".into(),
+        status: ProjectStatus::Active,
+        secretary_summary: None,
+        workspace: None,
+        archived_at: None,
+        paused_from: None,
+        created_at: now,
+        updated_at: now,
+    };
+    store.project_create(&project).expect("project");
+    let repo = ProjectRepo {
+        id: RepoId::new(),
+        project_id: project.id,
+        name: REPO_NAME.into(),
+        kind: RepoKind::Git,
+        location: WorkspaceSpec::local(repo_path.to_path_buf()),
+        default_branch: Some("main".into()),
+        sync: None,
+        run: RepoRun::Auto,
+        is_primary: true,
+        created_at: now,
+    };
+    store.repo_create(&repo).expect("repo");
+    repo
+}
+
+/// 本番の 01M4D7RVKX・01M4F3V643 と同じ形: project_id なし・repos 空・workspace は task id。
+fn repoless_done_task(id: TaskId) -> Task {
+    let mut task = done_task(id, ProjectId::new(), RepoId::new());
+    task.project_id = None;
+    task.repos = Vec::new();
+    task.workspace = WorkspaceSpec::Local {
+        path: id.to_string().into(),
+        mode: None,
+    };
+    task
+}
+
+#[tokio::test]
+async fn integration_api_repoless_done_task_detected_in_inbox_and_detail_then_discarded() {
+    let daemon = Daemon::start().await;
+    let repo_path = daemon.home().join("repo");
+    let task_id = TaskId::new();
+    let branch = format!("celeris/{task_id}");
+    let head = fixture_repo(&repo_path, &branch);
+    let repo = register_repo(&daemon.store, &repo_path);
+    daemon
+        .store
+        .insert(&repoless_done_task(task_id))
+        .expect("insert task");
+    let now = OffsetDateTime::from_unix_timestamp(1_800_000_000).expect("fixed clock");
+
+    // (1) 登録 repo の celeris/<id> branch から解決され、main に無い commit は unintegrated。
+    assert_eq!(
+        celeris::sweep_stranded_branches(&daemon.store, now).expect("sweep"),
+        1
+    );
+    let state = daemon
+        .store
+        .task_integration_get(task_id, repo.id)
+        .expect("state")
+        .expect("row");
+    assert_eq!(
+        state.state,
+        task_core::TaskRepoIntegrationStatus::Unintegrated
+    );
+    assert_eq!(state.branch, branch);
+    assert_eq!(state.head_sha, head);
+    assert_eq!(integration_events(&daemon.store, task_id), ["detected"]);
+    let (status, inbox) = daemon.get("/api/v1/inbox").await;
+    assert_eq!(status, 200, "{inbox}");
+    assert!(find_unintegrated(&inbox, task_id).is_some(), "{inbox}");
+    let (status, detail) = daemon.get(&format!("/api/v1/tasks/{task_id}")).await;
+    assert_eq!(status, 200, "{detail}");
+    assert_eq!(
+        detail["integrations"][0]["state"], "unintegrated",
+        "{detail}"
+    );
+    assert_eq!(detail["integrations"][0]["repo"], REPO_NAME, "{detail}");
+    // 繰り返しの sweep は変化なし。
+    assert_eq!(
+        celeris::sweep_stranded_branches(&daemon.store, now).expect("repeat sweep"),
+        0
+    );
+
+    // (2) discard（project なしでも repo 名で解決）→ discarded、受信箱から消え、sweep も戻さない。
+    let (status, discarded) = daemon
+        .post(
+            &format!("/api/v1/tasks/{task_id}/integrations/{REPO_NAME}/discard"),
+            json!({"reason": "superseded by a manual merge"}),
+        )
+        .await;
+    assert_eq!(status, 200, "{discarded}");
+    assert_eq!(discarded["state"]["state"], "discarded");
+    let (status, inbox) = daemon.get("/api/v1/inbox").await;
+    assert_eq!(status, 200, "{inbox}");
+    assert!(find_unintegrated(&inbox, task_id).is_none(), "{inbox}");
+    assert_eq!(
+        celeris::sweep_stranded_branches(&daemon.store, now).expect("sweep after discard"),
+        0
+    );
+    assert_eq!(
+        integration_events(&daemon.store, task_id),
+        ["detected", "discarded"]
+    );
+    daemon.shutdown().await;
+}
+
+#[tokio::test]
+async fn integration_api_repoless_task_without_branch_records_nothing() {
+    let daemon = Daemon::start().await;
+    let repo_path = daemon.home().join("repo");
+    // 登録 repo には別 task の branch だけがある。
+    fixture_repo(&repo_path, &format!("celeris/{}", TaskId::new()));
+    register_repo(&daemon.store, &repo_path);
+    let task_id = TaskId::new();
+    daemon
+        .store
+        .insert(&repoless_done_task(task_id))
+        .expect("insert task");
+    let now = OffsetDateTime::from_unix_timestamp(1_800_000_000).expect("fixed clock");
+
+    // (3) branch が無い repos 空 task は repo を変えていない扱いで、何も記録しない。
+    assert_eq!(
+        celeris::sweep_stranded_branches(&daemon.store, now).expect("sweep"),
+        0
+    );
+    assert!(
+        daemon
+            .store
+            .task_integration_list(None)
+            .expect("integration list")
+            .is_empty()
+    );
+    assert!(integration_events(&daemon.store, task_id).is_empty());
+    daemon.shutdown().await;
+}
+
+#[tokio::test]
+async fn integration_api_repoless_branch_in_main_is_integrated() {
+    let daemon = Daemon::start().await;
+    let repo_path = daemon.home().join("repo");
+    let task_id = TaskId::new();
+    let branch = format!("celeris/{task_id}");
+    let head = fixture_repo(&repo_path, &branch);
+    git(&repo_path, &["merge", "--ff-only", &branch]);
+    let repo = register_repo(&daemon.store, &repo_path);
+    daemon
+        .store
+        .insert(&repoless_done_task(task_id))
+        .expect("insert task");
+    let now = OffsetDateTime::from_unix_timestamp(1_800_000_000).expect("fixed clock");
+
+    // (4) branch head が main の祖先なら integrated。受信箱には出ない。
+    assert_eq!(
+        celeris::sweep_stranded_branches(&daemon.store, now).expect("sweep"),
+        1
+    );
+    let state = daemon
+        .store
+        .task_integration_get(task_id, repo.id)
+        .expect("state")
+        .expect("row");
+    assert_eq!(
+        state.state,
+        task_core::TaskRepoIntegrationStatus::Integrated
+    );
+    assert_eq!(state.head_sha, head);
+    let (status, inbox) = daemon.get("/api/v1/inbox").await;
+    assert_eq!(status, 200, "{inbox}");
+    assert!(find_unintegrated(&inbox, task_id).is_none(), "{inbox}");
+    daemon.shutdown().await;
+}

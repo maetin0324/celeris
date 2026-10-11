@@ -43,6 +43,7 @@ pub enum InboxKind {
     DiskFull,
     DeliverySkipped,
     IntegrationRequest,
+    Unintegrated,
     // 人の決定 2026-10-08: KB の取り込み待ち（旧 `knowledge_review`）は受信箱に出さない。知識画面で扱う。
 }
 
@@ -82,6 +83,7 @@ impl InboxKind {
             InboxKind::DiskFull => "disk_full",
             InboxKind::DeliverySkipped => "delivery_skipped",
             InboxKind::IntegrationRequest => "integration_request",
+            InboxKind::Unintegrated => "unintegrated",
         }
     }
 }
@@ -182,6 +184,7 @@ pub fn route_attention(item: &AttentionItem) -> Option<InboxKind> {
         AttentionItem::PlanApproval { .. } => Some(InboxKind::PlanGate),
         AttentionItem::DeliverySkipped { .. } => Some(InboxKind::DeliverySkipped),
         AttentionItem::IntegrationRequest { .. } => Some(InboxKind::IntegrationRequest),
+        AttentionItem::Unintegrated { .. } => Some(InboxKind::Unintegrated),
         // ADR 2026-10-08-browser-prod-enablement D2: browser の前提で止まった task。人の手は task 詳細の
         // browser 節（policy の編集）か release・台帳の作り直しなので、browser の人手の種類に入れる。
         AttentionItem::BrowserPrerequisite { .. } => Some(InboxKind::BrowserWait),
@@ -1020,6 +1023,51 @@ impl Builder<'_> {
                     links: Vec::new(),
                 })
             }
+            AttentionItem::Unintegrated {
+                task,
+                branch,
+                head_sha,
+                reason,
+                at,
+                ..
+            } => self.finish(Draft {
+                id: format!("unintegrated-{}", task.id),
+                kind: InboxKind::Unintegrated,
+                title: format!("未取り込み: {}", task.title),
+                detail: Some(format!(
+                    "branch `{branch}` / head `{head_sha}`\n{}",
+                    reason.as_deref().unwrap_or("default branch に未到達")
+                )),
+                options: vec![
+                    opt(
+                        "merge",
+                        "merge を依頼",
+                        false,
+                        &format!("POST /api/v1/tasks/{}/integration/merge", task.id),
+                    ),
+                    opt(
+                        "discard",
+                        "破棄",
+                        false,
+                        &format!("POST /api/v1/tasks/{}/integration/discard", task.id),
+                    ),
+                    opt(
+                        "hold",
+                        "保留",
+                        false,
+                        &format!("POST /api/v1/tasks/{}/integration/hold", task.id),
+                    ),
+                ],
+                recommended: None,
+                due_at: None,
+                blocking: self.only_task(task),
+                blocked_by: Vec::new(),
+                native: None,
+                project_id: self.project_of(task.id),
+                task: Some(task.clone()),
+                created_at: at.clone(),
+                links: vec![link("task 詳細", format!("/tasks/{}", task.id))],
+            }),
         })
     }
 

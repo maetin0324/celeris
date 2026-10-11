@@ -1492,9 +1492,9 @@ pub fn attach_integrations(
         let Some(repo) = context.repositories.get(&state.repo_id) else {
             continue;
         };
-        if state.state == task_core::TaskRepoIntegrationStatus::Integrated
-            && let Some(releases_dir) = context.releases_dir.as_deref()
-        {
+        // ADR 2026-10-11-stranded-done-branches: promotion pending is shown independently of the
+        // integration state, so an unintegrated head that no release contains is pending as well.
+        if let Some(releases_dir) = context.releases_dir.as_deref() {
             *promotion = Some(crate::stranded::promotion_view(
                 &repo.name,
                 &repo.path,

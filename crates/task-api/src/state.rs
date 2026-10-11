@@ -326,6 +326,14 @@ impl ApiState {
         self.inner.daemon.borrow().clone()
     }
 
+    /// ADR 2026-10-11-task-wait-reasons D4: 最後の tick の dispatcher のメモリの見送り理由（古い snapshot は空）。
+    pub(crate) fn memory_waits(&self) -> task_ops::wait::MemoryWaits {
+        task_ops::wait::MemoryWaits::from_snapshot(
+            self.inner.daemon.borrow().as_ref(),
+            time::OffsetDateTime::now_utc(),
+        )
+    }
+
     /// DB を使う同期処理を `spawn_blocking` で実行する。
     pub(crate) async fn blocking<T, F>(&self, f: F) -> Result<T, ApiProblem>
     where

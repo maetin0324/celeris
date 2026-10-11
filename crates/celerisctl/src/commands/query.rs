@@ -235,7 +235,13 @@ fn task_detail_json(
             clusters: Default::default(),
         },
     };
-    let detail = view::task_detail(store, id, &ctx, OffsetDateTime::now_utc())?;
+    let detail = view::task_detail(
+        store,
+        id,
+        &ctx,
+        &task_ops::wait::MemoryWaits::default(),
+        OffsetDateTime::now_utc(),
+    )?;
     // `GET /api/v1/tasks/{id}` と同じ compact な直列化（docs/api/v1/api.md §3.5）。整形は `jq` 等で行う。
     serde_json::to_string(&detail)
         .map_err(|e| CliError::msg(format!("failed to encode task detail: {e}")))

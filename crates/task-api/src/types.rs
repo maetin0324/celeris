@@ -2320,9 +2320,9 @@ pub struct TaskExecutionView {
     /// ADR-0074 D2.4（Phase F3 途中確認）: 工程の後の途中確認で止まっているときだけ。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub phase_checkpoint: Option<task_ops::view::PhaseCheckpointView>,
-    /// ADR-0079 D5（Phase R1b）: `phase = awaiting_children` のときだけ。待っている子 task。
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub awaiting_children: Vec<task_ops::view::AwaitedChildView>,
+    /// ADR 2026-10-11-task-wait-reasons D5/D6: なぜ今走らないか（`TaskDetail.waits` と同じ。子待ちは `children`）。
+    #[serde(default)]
+    pub waits: Vec<task_core::TaskWait>,
     /// ADR-0079 D8（Phase R3b）: `phase = awaiting_plan_approval` のときだけ。承認を待つ計画と理由。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan_approval: Option<task_ops::view::PlanApprovalView>,

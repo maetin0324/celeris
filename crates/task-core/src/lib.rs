@@ -99,6 +99,8 @@ pub mod transition;
 pub mod tree;
 /// ADR-0079 D11（Phase R4a）: 木の roll-up（純粋関数）。
 pub mod tree_metrics;
+// ADR 2026-10-11-task-wait-reasons: task の待ちの理由（dispatcher と画面が同じ関数を使う）。
+pub mod wait;
 /// ADR-0043 D4（Phase 52）: リポジトリの中の設定 `.config/celeris/workspace.toml`。
 pub mod workspace_config;
 pub mod write_set;
@@ -273,6 +275,10 @@ pub use tree::{
     UnitGate, UnitGateAction, UnitGateContext, UnitGateReport,
 };
 pub use tree_metrics::{DepthRollup, RollupMetrics, RollupNodeFacts, SubtreeMetrics};
+pub use wait::{
+    BackoffCause, CapacityScope, ChildFacts, ChildResolution, HaltState, HaltedSet, HumanGateKind,
+    TaskWait, UnitWait, WaitFacts, db_waits, halt_waits, plan_waits, resolve_children, unit_waits,
+};
 // ---- ADR-0072 D13（Phase E3）: Complexity Gate ----
 pub use direct_route::{
     DIRECT_ROUTE_POLICY_VERSION, DirectRouteInputs, Route, RouteDecision, RouteReason,

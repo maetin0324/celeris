@@ -160,6 +160,12 @@ impl TaskStore for SqliteStore {
     fn halted_by_pause(&self, task: &Task) -> Result<bool, StoreError> {
         self.halted_by_pause_impl(task)
     }
+    fn db_waits_for(
+        &self,
+        tasks: &[Task],
+    ) -> Result<std::collections::HashMap<TaskId, Vec<crate::wait::TaskWait>>, StoreError> {
+        self.db_waits_for_impl(tasks)
+    }
 
     fn ready_tasks(&self, limit: usize) -> Result<Vec<Task>, StoreError> {
         self.ready_tasks_impl(limit)

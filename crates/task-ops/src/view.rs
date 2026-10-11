@@ -92,7 +92,10 @@ pub struct TaskSummary {
     pub lease_expires_at: Option<String>,
     pub backoff_until: Option<String>,
     pub children: u32,
-    pub pending_children: u32,
+    /// ADR 2026-10-11-task-wait-reasons D5: なぜ今走らないか（DB → 計画 → 人の gate → dispatcher のメモリの順）。
+    pub waits: Vec<task_core::TaskWait>,
+    /// D5: `status == ready && waits が空`（サーバで決める。web は再計算しない）。
+    pub runnable: bool,
     /// ADR-0016 D1 の `Task.role`（GUI-R2: 一覧の各行に役割のラベルを出すため。`TaskDetail.role` と同じ値）。
     pub role: Option<String>,
     /// ADR-0027 D1 の `Task.genre`（`role` と同じ理由で一覧に出す。`TaskDetail.genre` と同じ値）。
@@ -205,6 +208,10 @@ pub struct TaskDetail {
     /// checkpoint・WorkUnit の遷移）が 1 件も無ければ `None`（D23: 既存の古いタスクの詳細を壊さない）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub execution: Option<ExecutionView>,
+    /// ADR 2026-10-11-task-wait-reasons D5: `TaskSummary.waits` と同じ（子待ちの子は `Children` の `task_ids`）。
+    pub waits: Vec<task_core::TaskWait>,
+    /// D5: `status == ready && waits が空`。
+    pub runnable: bool,
     /// ADR-0079 D13（Phase R5a）: 案件の root task か（`task_core::is_root_task`）。
     #[serde(default)]
     pub is_root_task: bool,
@@ -375,10 +382,6 @@ pub enum ExecutionPhase {
     /// ADR-0074 D2.2（Phase F3 途中確認）: 工程の後の途中確認で止まっている（`blocked` で、直前の
     /// 遷移の reason が `awaiting_human`）。
     AwaitingHuman,
-    /// ADR-0079 D5（Phase R1b）: `ready` のまま、走れる自分の leaf が無く子 task（計画の kind task の
-    /// unit）だけを待っている（dispatch されず lease も持たない。待っている子は
-    /// `ExecutionView.awaiting_children`）。
-    AwaitingChildren,
     /// ADR-0079 D8（Phase R3b）: root の計画が人の承認を待っている（`blocked` で、直前の遷移の reason が
     /// `awaiting_plan_approval`）。理由は `ExecutionView.plan_approval`。
     AwaitingPlanApproval,
@@ -392,20 +395,6 @@ pub struct PlanApprovalView {
     pub reasons: Vec<String>,
     /// 理由の人が読む 1 行。
     pub summary: String,
-}
-
-/// ADR-0079 D5（Phase R1b）: 親が待っている子 task 1 件（`ExecutionPhase::AwaitingChildren` の理由）。
-#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
-pub struct AwaitedChildView {
-    /// 親の計画の unit の key。
-    pub unit_key: String,
-    /// 子 task（まだ作られていない unit〈`max_parallel_child_tasks` の空き待ち〉は `None`）。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub task_id: Option<TaskId>,
-    pub title: String,
-    /// 子の状態（作られていなければ `None`）。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub status: Option<Status>,
 }
 
 /// ADR-0074 D2.3/D2.4（Phase F3 途中確認）: 途中確認で止まっている Task の途中報告（Execution 節と
@@ -437,9 +426,6 @@ pub struct ExecutionView {
     /// ADR-0074 D2.4（Phase F3 途中確認）: `awaiting_human` のときだけ。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub phase_checkpoint: Option<PhaseCheckpointView>,
-    /// ADR-0079 D5（Phase R1b）: `awaiting_children` のときだけ。待っている子（unit の `seq` 順）。
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub awaiting_children: Vec<AwaitedChildView>,
     /// ADR-0079 D8（Phase R3b）: `awaiting_plan_approval` のときだけ。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan_approval: Option<PlanApprovalView>,
@@ -944,16 +930,12 @@ fn backoff_until_str(task: &Task, ctx: &ViewContext, now: OffsetDateTime) -> Opt
     }
 }
 
-/// `parent_id` ごとの `(children, pending_children)`（`pending` = 非終端）。一覧と受信箱で全件を 1 回だけ走査するために使う。
-pub(crate) fn child_counts(all_tasks: &[Task]) -> HashMap<TaskId, (u32, u32)> {
-    let mut counts: HashMap<TaskId, (u32, u32)> = HashMap::new();
+/// `parent_id` ごとの子の数。一覧と受信箱で全件を 1 回だけ走査するために使う。
+pub(crate) fn child_counts(all_tasks: &[Task]) -> HashMap<TaskId, u32> {
+    let mut counts: HashMap<TaskId, u32> = HashMap::new();
     for t in all_tasks {
         if let Some(parent) = t.parent_id {
-            let entry = counts.entry(parent).or_insert((0, 0));
-            entry.0 += 1;
-            if !t.status.is_terminal() {
-                entry.1 += 1;
-            }
+            *counts.entry(parent).or_insert(0) += 1;
         }
     }
     counts
@@ -962,11 +944,13 @@ pub(crate) fn child_counts(all_tasks: &[Task]) -> HashMap<TaskId, (u32, u32)> {
 pub(crate) fn build_task_summary(
     task: &Task,
     children: u32,
-    pending_children: u32,
+    waits: Vec<task_core::TaskWait>,
     ctx: &ViewContext,
     now: OffsetDateTime,
 ) -> TaskSummary {
     TaskSummary {
+        runnable: crate::wait::is_runnable(task, &waits),
+        waits,
         id: task.id,
         parent_id: task.parent_id,
         kind: task.kind,
@@ -983,7 +967,6 @@ pub(crate) fn build_task_summary(
         lease_expires_at: lease_expires_at_str(task),
         backoff_until: backoff_until_str(task, ctx, now),
         children,
-        pending_children,
         role: task.role.clone(),
         genre: task.genre.clone(),
         assignee: task.assignee.clone(),
@@ -1170,43 +1153,132 @@ pub fn task_summary(
     store: &dyn TaskStore,
     task: &Task,
     ctx: &ViewContext,
+    memory: &crate::wait::MemoryWaits,
     now: OffsetDateTime,
 ) -> Result<TaskSummary, OpsError> {
-    let (children, pending_children) = child_counts(&store.list(None)?)
-        .get(&task.id)
-        .copied()
-        .unwrap_or((0, 0));
-    Ok(build_task_summary(
-        task,
-        children,
-        pending_children,
-        ctx,
-        now,
-    ))
+    let all = store.list(None)?;
+    let children = child_counts(&all).get(&task.id).copied().unwrap_or(0);
+    let waits = crate::wait::task_waits(store, std::slice::from_ref(task), &all, memory)?
+        .remove(&task.id)
+        .unwrap_or_default();
+    Ok(build_task_summary(task, children, waits, ctx, now))
 }
 
+/// ADR 2026-10-11-task-wait-reasons D5: `GET /tasks?run_state=`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunState {
+    /// `runnable == true`（ready で待ちが無い）。
+    Runnable,
+    /// 非終端で `waits` が空でない。
+    Waiting,
+}
+
+/// `run_state` で絞るときの cursor の接頭辞（絞り込みは `waits` を組んだ後なので、SQL の cursor ではなく位置で進める）。
+const RUN_STATE_CURSOR: &str = "rs:";
+
 /// `docs/api/v1/api.md` §3.3: `list_page` の結果を `TaskSummary` に写し、`counts_by_status` を付ける。
+/// `run_state` があれば、`waits` を組んでから絞って位置で頁を切る（対象は ready／非終端に限るので件数は小さい）。
+#[allow(clippy::too_many_arguments)]
 pub fn task_list(
     store: &dyn TaskStore,
     filter: &ListFilter,
     order: ListOrder,
     cursor: Option<&str>,
     limit: usize,
+    run_state: Option<RunState>,
     ctx: &ViewContext,
+    memory: &crate::wait::MemoryWaits,
     now: OffsetDateTime,
 ) -> Result<TaskList, OpsError> {
-    let page = store.list_page(filter, order, cursor, limit)?;
+    // `children` は `parent_id` で集計する。数千件を想定し、`list(None)` を 1 回読んで全ページ分の項目に
+    // 共通のカウントマップを使う（項目ごとに全件走査しない）。子の事実（`waits` の D7）も同じ全件から引く。
+    let all = store.list(None)?;
+    let child_counts = child_counts(&all);
 
-    // `children` / `pending_children` は `parent_id` で集計する。数千件を想定し、`list(None)` を
-    // 1 回読んで全ページ分の項目に共通のカウントマップを使う（項目ごとに全件走査しない）。
-    let child_counts = child_counts(&store.list(None)?);
+    let (tasks, next_cursor, total) = match run_state {
+        None => {
+            let page = store.list_page(filter, order, cursor, limit)?;
+            (page.items, page.next_cursor, page.total)
+        }
+        Some(rs) => {
+            let offset = match cursor {
+                None => 0,
+                Some(c) => c
+                    .strip_prefix(RUN_STATE_CURSOR)
+                    .and_then(|n| n.parse::<usize>().ok())
+                    .ok_or_else(|| {
+                        OpsError::Store(task_core::StoreError::Invalid(format!(
+                            "invalid cursor `{c}`"
+                        )))
+                    })?,
+            };
+            let mut f = filter.clone();
+            let live: Vec<Status> = match rs {
+                RunState::Runnable => vec![Status::Ready],
+                RunState::Waiting => vec![
+                    Status::Draft,
+                    Status::Ready,
+                    Status::Running,
+                    Status::Blocked,
+                    Status::Reviewing,
+                ],
+            };
+            f.statuses = if f.statuses.is_empty() {
+                live
+            } else {
+                f.statuses.retain(|s| live.contains(s));
+                if f.statuses.is_empty() {
+                    // 指定の status が全部範囲外なら何も返さない。
+                    return Ok(TaskList {
+                        items: Vec::new(),
+                        next_cursor: None,
+                        total: 0,
+                        counts_by_status: task_status_counts(store)?.counts_by_status,
+                    });
+                }
+                f.statuses
+            };
+            let mut candidates = Vec::new();
+            let mut c: Option<String> = None;
+            loop {
+                let page = store.list_page(&f, order, c.as_deref(), 500)?;
+                candidates.extend(page.items);
+                match page.next_cursor {
+                    Some(n) => c = Some(n),
+                    None => break,
+                }
+            }
+            let waits = crate::wait::task_waits(store, &candidates, &all, memory)?;
+            let matched: Vec<Task> = candidates
+                .into_iter()
+                .filter(|t| {
+                    let w = waits.get(&t.id).map(Vec::as_slice).unwrap_or(&[]);
+                    match rs {
+                        RunState::Runnable => crate::wait::is_runnable(t, w),
+                        RunState::Waiting => !w.is_empty(),
+                    }
+                })
+                .collect();
+            let total = matched.len() as u64;
+            let end = offset.saturating_add(limit).min(matched.len());
+            let next = (end < matched.len()).then(|| format!("{RUN_STATE_CURSOR}{end}"));
+            let items = matched.into_iter().skip(offset).take(limit).collect();
+            (items, next, total)
+        }
+    };
 
-    let items = page
-        .items
+    let mut waits = crate::wait::task_waits(store, &tasks, &all, memory)?;
+    let items = tasks
         .iter()
         .map(|t| {
-            let (children, pending_children) = child_counts.get(&t.id).copied().unwrap_or((0, 0));
-            build_task_summary(t, children, pending_children, ctx, now)
+            let children = child_counts.get(&t.id).copied().unwrap_or(0);
+            build_task_summary(
+                t,
+                children,
+                waits.remove(&t.id).unwrap_or_default(),
+                ctx,
+                now,
+            )
         })
         .collect();
 
@@ -1214,8 +1286,8 @@ pub fn task_list(
 
     Ok(TaskList {
         items,
-        next_cursor: page.next_cursor,
-        total: page.total,
+        next_cursor,
+        total,
         counts_by_status,
     })
 }
@@ -1225,6 +1297,7 @@ pub fn task_detail(
     store: &dyn TaskStore,
     id: TaskId,
     ctx: &ViewContext,
+    memory: &crate::wait::MemoryWaits,
     now: OffsetDateTime,
 ) -> Result<TaskDetail, OpsError> {
     let task = store.get(id)?.ok_or(OpsError::NotFound(id))?;
@@ -1385,6 +1458,10 @@ pub fn task_detail(
     let task_actions = actions_with_events(&task, &events);
     let failure = task_failure(&task, &events, store)?;
     let execution = build_execution_view(store, &task, &events, now)?;
+    let waits = crate::wait::task_waits(store, std::slice::from_ref(&task), &all_tasks, memory)?
+        .remove(&task.id)
+        .unwrap_or_default();
+    let task_for_waits = task.clone();
     let worker_run_hint = if task.status.is_terminal() {
         None
     } else {
@@ -1468,6 +1545,8 @@ pub fn task_detail(
         worktree,
         failure,
         execution,
+        runnable: crate::wait::is_runnable(&task_for_waits, &waits),
+        waits,
     })
 }
 
@@ -1774,33 +1853,6 @@ fn build_execution_view(
     } else {
         phase
     };
-    // ADR-0079 D5（Phase R1b）: 子 task だけを待っている親の理由（待っている子の題名と状態）。
-    let mut awaiting_children = Vec::new();
-    if phase == Some(ExecutionPhase::AwaitingChildren) {
-        for u in active_units.iter().filter(|u| {
-            u.kind == task_core::WorkUnitKind::Task
-                && !u.status.is_terminal()
-                && u.status != task_core::WorkUnitStatus::Pending
-        }) {
-            let child = match u
-                .child_task_id
-                .as_deref()
-                .and_then(|s| s.parse::<TaskId>().ok())
-            {
-                Some(id) => store.get(id)?,
-                None => None,
-            };
-            awaiting_children.push(AwaitedChildView {
-                unit_key: u.key.clone(),
-                task_id: child.as_ref().map(|c| c.id),
-                title: child
-                    .as_ref()
-                    .map(|c| c.title.clone())
-                    .unwrap_or_else(|| u.spec.title.clone()),
-                status: child.as_ref().map(|c| c.status),
-            });
-        }
-    }
     Ok(Some(ExecutionView {
         gate,
         route,
@@ -1808,7 +1860,6 @@ fn build_execution_view(
         plan,
         metrics,
         phase_checkpoint,
-        awaiting_children,
         plan_approval,
     }))
 }
@@ -1820,10 +1871,6 @@ fn execution_phase(
 ) -> Option<ExecutionPhase> {
     match task.status {
         Status::Reviewing => Some(ExecutionPhase::Verifying),
-        // ADR-0079 D5（Phase R1b）: 走れる自分の leaf が無く、子 task（kind task の unit）だけを待つ。
-        Status::Ready if awaits_only_children(active_units) => {
-            Some(ExecutionPhase::AwaitingChildren)
-        }
         Status::Running => {
             if active_units.is_empty() {
                 None
@@ -1842,30 +1889,6 @@ fn execution_phase(
         }
         _ => None,
     }
-}
-
-/// ADR-0079 D5（Phase R1b）: 非終端の kind task の unit（子を待つ・子の生成を待つ）があり、leaf（統合 WU を
-/// 除く）に走れる・走っているものが無い。
-fn awaits_only_children(active_units: &[&task_core::WorkUnitRow]) -> bool {
-    let waiting_on_child = active_units.iter().any(|u| {
-        u.kind == task_core::WorkUnitKind::Task
-            && matches!(
-                u.status,
-                task_core::WorkUnitStatus::Ready | task_core::WorkUnitStatus::Running
-            )
-    });
-    let leaf_runnable = active_units.iter().any(|u| {
-        !matches!(
-            u.kind,
-            task_core::WorkUnitKind::Task | task_core::WorkUnitKind::Integrate
-        ) && matches!(
-            u.status,
-            task_core::WorkUnitStatus::Ready
-                | task_core::WorkUnitStatus::NeedsContinuation
-                | task_core::WorkUnitStatus::Running
-        )
-    });
-    waiting_on_child && !leaf_runnable
 }
 
 /// `Approval needed: <title> — criterion <idx> (attempt <n>)`（`derive::human_approval_title` の書式）を解析して

@@ -944,4 +944,4 @@ mod routing_log_tests;
 #[cfg(test)]
 mod routing_shadow_tests;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

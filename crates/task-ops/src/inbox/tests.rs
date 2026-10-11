@@ -675,9 +675,12 @@ fn inbox_attention_unroutable_only_populated_with_snapshot() {
         tick_ms: 2000,
         in_flight: vec![],
         cooldowns: vec![],
-        awaiting_human: vec![],
-        awaiting_children: vec![],
-        unroutable: vec![stuck.id],
+        task_waits: vec![crate::daemon::SnapshotTaskWait {
+            task_id: stuck.id,
+            wait: task_core::TaskWait::Unroutable {
+                detail: "no provider".into(),
+            },
+        }],
         reports: None,
         approvals_pending: 0,
         decisions_open: 0,
@@ -769,7 +772,7 @@ fn inbox_draft_count_is_tasks_not_groups_and_child_counts_are_filled() {
         .iter()
         .find(|s| s.id == parent.id)
         .expect("parent summary");
-    assert_eq!((summary.children, summary.pending_children), (2, 1));
+    assert_eq!(summary.children, 2);
 }
 
 /// Phase 9 監査: 一度も requeue していない ready タスクは、`max_requeues = 1` でも `requeue_limit_near` にならない。
@@ -949,9 +952,7 @@ fn inbox_attention_cluster_unavailable_hidden_once_reconnected_and_host_filled_f
         tick_ms: 2000,
         in_flight: vec![],
         cooldowns: vec![],
-        awaiting_human: vec![],
-        awaiting_children: vec![],
-        unroutable: vec![],
+        task_waits: vec![],
         reports: None,
         approvals_pending: 0,
         decisions_open: 0,
@@ -1194,9 +1195,12 @@ fn inbox_cleanup_r3_terminal_snapshot_unroutable_is_hidden() {
         tick_ms: 2000,
         in_flight: vec![],
         cooldowns: vec![],
-        awaiting_human: vec![],
-        awaiting_children: vec![],
-        unroutable: vec![done.id],
+        task_waits: vec![crate::daemon::SnapshotTaskWait {
+            task_id: done.id,
+            wait: task_core::TaskWait::Unroutable {
+                detail: "no provider".into(),
+            },
+        }],
         reports: None,
         approvals_pending: 0,
         decisions_open: 0,

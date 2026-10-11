@@ -680,25 +680,23 @@ impl Dispatcher {
         {
             return Ok((false, false));
         }
-        let mut done: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-        let mut failed: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-        for child in self.store.children(task_id)? {
-            for label in &child.labels {
-                let Some(key) = label.strip_prefix("child-") else {
-                    continue;
-                };
-                let dep = format!("{prefix}{key}");
-                match child.status {
-                    Status::Done => {
-                        done.insert(dep);
-                    }
-                    Status::Failed | Status::Cancelled => {
-                        failed.insert(dep);
-                    }
-                    _ => {}
-                }
-            }
-        }
+        // ADR 2026-10-11-task-wait-reasons D3: 子の状態での解決と「子待ち」は task-core の `resolve_children`
+        // （一覧・木の `Children` と同じ関数）。
+        let children: Vec<task_core::ChildFacts> = self
+            .store
+            .children(task_id)?
+            .into_iter()
+            .map(|c| task_core::ChildFacts {
+                task_id: c.id,
+                status: c.status,
+                labels: c.labels,
+            })
+            .collect();
+        let task_core::ChildResolution {
+            done,
+            failed,
+            waiting_units,
+        } = task_core::resolve_children(units, &children);
         let mut changed = false;
         for u in units.iter().filter(|u| {
             u.status == task_core::WorkUnitStatus::Pending
@@ -746,12 +744,7 @@ impl Dispatcher {
                 changed = true;
             }
         }
-        let waiting = units.iter().any(|u| {
-            u.status == task_core::WorkUnitStatus::Pending
-                && u.depends_on
-                    .iter()
-                    .any(|d| d.starts_with(prefix) && !done.contains(d) && !failed.contains(d))
-        });
+        let waiting = !waiting_units.is_empty();
         Ok((changed, waiting))
     }
 

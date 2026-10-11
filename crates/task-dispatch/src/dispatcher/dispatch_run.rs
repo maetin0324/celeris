@@ -21,6 +21,12 @@ impl Dispatcher {
         // ADR-0089（Phase R6-5）: CoS の対話 run は `max_concurrency` ではなく `max_cos_runs` で数える。
         let cos = !second_pass && self.is_cos_task(&task)?;
         if !self.run_load().admits(cos) {
+            let scope = if cos {
+                task_core::CapacityScope::Cos
+            } else {
+                task_core::CapacityScope::Global
+            };
+            self.note_dispatch_wait(task.id, task_core::TaskWait::Capacity { scope, id: None });
             return Ok(false);
         }
         // ADR-0044 D2: この tick で打ち切ったばかりの run と同じ worktree に、すぐ次の run を
@@ -35,6 +41,18 @@ impl Dispatcher {
         // ADR 2026-10-07-build-tmp-hygiene 付記 A4: 監視している path が `critical` のあいだは新しい coding run を
         // 起こさない（ready のまま。attempts を消費しない。並列 WU の 2 本目以降も同じ）。
         if self.held_by_disk_critical(&task) {
+            let path = self
+                .disk_watch
+                .as_ref()
+                .map(|r| {
+                    r.entries
+                        .iter()
+                        .map(|e| e.path.display().to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
+                .unwrap_or_default();
+            self.note_dispatch_wait(task.id, task_core::TaskWait::DiskCritical { path });
             return Ok(false);
         }
         // ADR-0046 D5（Phase 59）: 担当が決まっていないタスクは dispatch の前に matching で決める
@@ -176,6 +194,13 @@ impl Dispatcher {
             );
             if self.now_utc() < task.updated_at + delay {
                 tracing::debug!(task_id = %task.id, attempts = task.attempts, delay_ms = delay.as_millis() as u64, "retry backoff; not dispatching yet");
+                self.note_dispatch_wait(
+                    task.id,
+                    task_core::TaskWait::Backoff {
+                        until: rfc3339(task.updated_at + delay),
+                        cause: task_core::BackoffCause::Retry,
+                    },
+                );
                 return Ok(false);
             }
         }
@@ -185,6 +210,13 @@ impl Dispatcher {
         if !second_pass && let Some(until) = self.infra_backoff.get(&task.id).copied() {
             if self.now_utc() < until {
                 tracing::debug!(task_id = %task.id, %until, "infra backoff; not dispatching yet");
+                self.note_dispatch_wait(
+                    task.id,
+                    task_core::TaskWait::Backoff {
+                        until: rfc3339(until),
+                        cause: task_core::BackoffCause::Infra,
+                    },
+                );
                 return Ok(false);
             }
             self.infra_backoff.remove(&task.id);
@@ -215,6 +247,12 @@ impl Dispatcher {
             && let Some(blocker) = self.write_set_blocker(&run_key, reservation)
         {
             self.note_write_set_hold(&run_key, &blocker, reservation);
+            self.note_dispatch_wait(
+                task.id,
+                task_core::TaskWait::WriteSet {
+                    blocking_task_ids: vec![blocker.task],
+                },
+            );
             return Ok(false);
         }
         // ADR-0018: リモート実行のタスクは、クラスタの設定・cooldown・並列度・多重接続を先に確かめる。
@@ -234,6 +272,12 @@ impl Dispatcher {
                     tracing::warn!(task_id = %task.id, cluster = %cluster_id, "no such cluster in the config; task left ready");
                 }
                 self.unroutable.insert(task.id);
+                self.note_dispatch_wait(
+                    task.id,
+                    task_core::TaskWait::Unroutable {
+                        detail: "no such cluster in the config".to_string(),
+                    },
+                );
                 return Ok(false);
             }
             ClusterResolution::AssigneeLacksTool { cluster } => {
@@ -249,9 +293,11 @@ impl Dispatcher {
             {
                 // ADR-0018 D2: 人がログインするまで進まないので、待ち対象には数えない（`--until-idle` を止めない）。
                 self.cluster_waiting.insert(task.id);
+                self.note_dispatch_wait(task.id, cluster_wait(&spec.id, "cooldown"));
                 return Ok(false);
             }
             if self.cluster_in_use(&spec.id) >= spec.concurrency {
+                self.note_dispatch_wait(task.id, cluster_wait(&spec.id, "concurrency full"));
                 return Ok(false);
             }
             // この tick の `refresh_cluster_liveness` の結果を使う（1 tick に 1 回だけ `ssh -O check` を呼ぶ）。
@@ -281,6 +327,10 @@ impl Dispatcher {
                             format!("auto-connect failed: {detail}"),
                         )?;
                         self.cluster_waiting.insert(task.id);
+                        self.note_dispatch_wait(
+                            task.id,
+                            cluster_wait(&spec.id, &format!("auto-connect failed: {detail}")),
+                        );
                         return Ok(false);
                     }
                     None => {
@@ -293,6 +343,10 @@ impl Dispatcher {
                             ),
                         )?;
                         self.cluster_waiting.insert(task.id);
+                        self.note_dispatch_wait(
+                            task.id,
+                            cluster_wait(&spec.id, "no ssh ControlMaster connection"),
+                        );
                         return Ok(false);
                     }
                 }
@@ -522,6 +576,18 @@ impl Dispatcher {
                     tracing::info!(task_id = %task.id, tier = ?task.worker_hint.tier, excluded = %round.summary(),
                         "routing enforce: no source in the requested lane; deferring (lane is not lowered)");
                 }
+                // ADR 2026-10-11-task-wait-reasons M1/M2: 設定に合う行が無ければ経路なし、あれば満杯（cooldown を含む）。
+                let wait = if self.unroutable.contains(&task.id) {
+                    task_core::TaskWait::Unroutable {
+                        detail: "no provider in the config matches this worker_hint".to_string(),
+                    }
+                } else {
+                    task_core::TaskWait::Capacity {
+                        scope: task_core::CapacityScope::Source,
+                        id: None,
+                    }
+                };
+                self.note_dispatch_wait(task.id, wait);
                 return Ok(false);
             };
             let Some(base_adapter) = self.adapters.get(&provider_id).cloned() else {
@@ -1649,5 +1715,13 @@ fn describe_escalation(audit: &task_core::EscalationAudit) -> String {
         )
     } else {
         format!("retry at {:?}: {}", audit.selected_lane, audit.reason)
+    }
+}
+
+/// ADR 2026-10-11-task-wait-reasons M3: クラスタ待ち。
+fn cluster_wait(cluster_id: &str, detail: &str) -> task_core::TaskWait {
+    task_core::TaskWait::Cluster {
+        cluster_id: cluster_id.to_string(),
+        detail: detail.to_string(),
     }
 }

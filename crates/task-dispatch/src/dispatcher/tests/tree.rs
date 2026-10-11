@@ -657,7 +657,7 @@ pub(super) async fn tick_until_child_runs(
 }
 
 /// R1b (d): 親が子だけを待つ間は `Ready` のまま dispatch されず（lease なし、gate は Skip）、
-/// `GET /tasks/{id}/execution` の phase が `awaiting_children`（待っている子の題名と状態つき）。
+/// `GET /tasks/{id}` の `waits` が `Children`（待っている子の id と unit の key。ADR 2026-10-11-task-wait-reasons D6）。
 #[tokio::test]
 async fn parent_waits_without_lease() {
     let dir = tempfile::tempdir().unwrap();
@@ -686,20 +686,21 @@ async fn parent_waits_without_lease() {
         store.as_ref(),
         root_id,
         &view_ctx(),
+        &task_ops::wait::MemoryWaits::default(),
         OffsetDateTime::now_utc(),
     )
     .unwrap();
     let execution = detail.execution.expect("execution view");
+    assert_eq!(execution.phase, None, "ready の親は進み具合を持たない");
+    // ADR 2026-10-11-task-wait-reasons D6: 子待ちは `waits` の `Children`（dispatcher と同じ `plan_waits`）。
+    assert!(!detail.runnable);
     assert_eq!(
-        execution.phase,
-        Some(task_ops::view::ExecutionPhase::AwaitingChildren)
+        detail.waits.first(),
+        Some(&task_core::TaskWait::Children {
+            task_ids: vec![child],
+            unit_keys: vec!["c".to_string()],
+        })
     );
-    assert_eq!(execution.awaiting_children.len(), 1);
-    let waiting = &execution.awaiting_children[0];
-    assert_eq!(waiting.unit_key, "c");
-    assert_eq!(waiting.task_id, Some(child));
-    assert_eq!(waiting.title, "Child c");
-    assert_eq!(waiting.status, Some(Status::Running));
     // 親の worker / planner run はこの間 1 本も増えない（planner の 1 本だけ）。
     let runs = store.runs_for_task(root_id).unwrap();
     assert_eq!(runs.len(), 1, "{runs:?}");

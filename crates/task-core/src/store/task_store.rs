@@ -139,6 +139,11 @@ pub trait TaskStore:
     /// 停止（paused / cancelled / archived）で止まっているか。`ready_tasks` と同じ判定を、既に `running` の
     /// task の並列 WU の 2 本目以降（`dispatch_parallel_work_units`）にも当てるために出す。対話は常に `false`。
     fn halted_by_pause(&self, task: &Task) -> Result<bool, StoreError>;
+    /// ADR 2026-10-11-task-wait-reasons D3: `ready_tasks` と同じ読み方の DB の待ち（D1〜D6）。終端の task は空。
+    fn db_waits_for(
+        &self,
+        tasks: &[Task],
+    ) -> Result<std::collections::HashMap<TaskId, Vec<crate::wait::TaskWait>>, StoreError>;
     /// `transition::transition()` で検証した任意のトリガーを適用する汎用の書き込み口
     /// （ADR-0004 D1）。タスクの取得・`transition()` の呼び出し・`tasks` 行の更新・
     /// `Event::Transitioned` の追記（と任意の `extra_event`）を単一トランザクションで行う。

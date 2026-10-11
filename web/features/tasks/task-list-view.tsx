@@ -12,6 +12,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 import { mergeTaskPages } from "./merge-pages";
 import { integrationLabel } from "./task-integration";
 import { type TaskListFilters, taskCountsQuery, taskListPath, taskListQuery } from "./task-list-query";
+import { TaskWaitReason } from "./wait-reason";
 
 const STATUSES = ["draft", "ready", "running", "blocked", "reviewing", "done", "failed", "cancelled"] as const;
 const ORDERS = [
@@ -40,11 +41,13 @@ export function TasksListScreen({
   status,
   order,
   limit,
+  runState,
 }: {
   q: string | undefined;
   status: readonly string[];
   order: string | undefined;
   limit: string | undefined;
+  runState?: "runnable" | "waiting";
 }) {
   const router = useRouter();
   const moreId = useId();
@@ -64,7 +67,7 @@ export function TasksListScreen({
     if (pageSize instanceof HTMLSelectElement) pageSize.value = limit ?? "";
   }, [order, limit]);
   useEffect(() => setDraftQ(q ?? ""), [q]);
-  const filters: TaskListFilters = { q, status, order, limit };
+  const filters: TaskListFilters = { q, status, order, limit, run_state: runState };
   const key = filterKey(filters);
   const base = useQuery({ ...taskListQuery(filters) });
   const counts = useQuery({ ...taskCountsQuery() });
@@ -120,6 +123,7 @@ export function TasksListScreen({
     for (const value of nextStatus) params.append("status", value);
     params.set("order", nextOrder);
     if (nextLimit) params.set("limit", nextLimit);
+    if (runState) params.set("run_state", runState);
     router.history.push(`/tasks?${params}`, {});
   }
 
@@ -131,6 +135,28 @@ export function TasksListScreen({
       >
         タスク
       </h1>
+      <nav aria-label="実行可否で絞り込む" className="flex flex-wrap gap-2" data-testid="tasks-run-state">
+        {[
+          { value: undefined, label: "すべて" },
+          { value: "runnable" as const, label: "走れる" },
+          { value: "waiting" as const, label: "待ち" },
+        ].map((option) => {
+          const params = new URLSearchParams(window.location.search);
+          params.delete("run_state");
+          if (option.value) params.set("run_state", option.value);
+          return (
+            <Link
+              key={option.value ?? "all"}
+              to="/tasks"
+              search={Object.fromEntries(params)}
+              aria-current={runState === option.value ? "page" : undefined}
+              className="inline-flex min-h-11 items-center rounded-md border border-input bg-surface px-3 text-label text-foreground"
+            >
+              {option.label}
+            </Link>
+          );
+        })}
+      </nav>
 
       {/* 狭い幅では 検索＋並び の 1 行、状態の横 scroll 1 行、絞り込み（件数は「その他の条件」で開く）の 3 段に詰め、
           一覧の先頭行を最初の 1 画面に入れる。sm 以上は sm:contents で従来どおり 1 本の折り返し行に並べる。 */}
@@ -311,6 +337,9 @@ function TaskTable({ items, total }: { items: TaskSummary[]; total: number }) {
                       </span>
                     ) : null}
                   </Link>
+                  <div className="min-w-0 py-1">
+                    <TaskWaitReason task={item} />
+                  </div>
                 </TableCell>
                 <TableCell
                   className="flex w-1/2 min-w-0 items-center gap-1 px-0 py-1 sm:table-cell sm:w-auto sm:px-2"

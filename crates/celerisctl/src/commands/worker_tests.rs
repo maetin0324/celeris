@@ -85,6 +85,12 @@ fn normalize_outcome_maps_adapter_errors_to_provider_failure() {
 /// `Config` を toml を経由せず直接組み立てる（celerisctl は `toml` crate に依存していないため）。
 fn cluster_config(clusters: Vec<celeris::config::ClusterConfig>) -> Config {
     Config {
+        llm_sources: Default::default(),
+        harness_selection: Default::default(),
+        harness_declarations: Default::default(),
+        llm_routes: Vec::new(),
+        route_defaults: Default::default(),
+        cos_route_candidates: Vec::new(),
         browser: Default::default(),
         harnesses: Vec::new(),
         db: celeris::config::DbConfig {

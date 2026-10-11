@@ -4604,6 +4604,17 @@ fn legacy_provider_concurrency_is_optional_and_warns_including_zero_and_include(
     std::fs::write(&config, format!(
         "providers_include = \"providers.d/*.toml\"\n[accounts]\nclaude_dir = {:?}\n[[providers]]\nid = \"pool\"\nadapter = \"claude-code\"\naccount_pool = true\nconcurrency = 0\n[[providers]]\nid = \"omitted\"\nadapter = \"fake\"\n[[providers]]\nid = \"legacy\"\nadapter = \"fake\"\nconcurrency = 3\n",
         dir.path().join("accounts"))).unwrap();
+    // 警告の callsite は初めて hit した時点の default で interest が決まる。この試験の subscriber が
+    // 唯一の登録 dispatcher のとき、並列の別 thread が先に hit すると「無効」で固定されて捕捉できない。
+    // 常駐の sink 用 global subscriber を置いて、登録の結果が試験の順序に依らないようにする。
+    static RESIDENT: std::sync::Once = std::sync::Once::new();
+    RESIDENT.call_once(|| {
+        let resident = tracing_subscriber::fmt()
+            .with_writer(std::io::sink)
+            .with_max_level(tracing::Level::WARN)
+            .finish();
+        tracing::subscriber::set_global_default(resident).unwrap();
+    });
     let bytes = Arc::new(Mutex::new(Vec::new()));
     let writer = Capture(bytes.clone());
     let subscriber = tracing_subscriber::fmt()

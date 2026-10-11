@@ -9,6 +9,8 @@ tasks: [01M4M8D4ANYGCWVZ0A0WSW53X7]
 
 設計決定は [ADR: done task の変更を取り残さない](../adr/2026-10-11-stranded-done-branches.md) を参照。
 
+完了日: 2026-10-11（ただし全体 test suite は上の証拠節のとおり 4 件失敗が残る。未解決事項を参照）。
+
 ## 原因
 
 第一の根因は、delivery の開始が task の done 遷移や「review 合格」全体に結び付いていないこと。`crates/task-dispatch/src/dispatcher/review_spawn.rs:620-630` は `reviewer_run` が `Some` の場合にだけ `task_ops::delivery::begin` を呼ぶ。`reviewer_run` は `needs_reviewer_run(&task)` が真、つまり既存の acceptance に `Check::Reviewer` があり、さらに reviewer を選べた場合にだけ作られる（`crates/task-dispatch/src/review.rs:169-174`、`review_spawn.rs:345-354`）。Reviewer 条件のない task の review は他の check で合格して done になれても `begin` を通らない。delivery 自身が追加する部署内 reviewer criterion は `begin` の後（`crates/task-ops/src/delivery.rs:375-376`）なので、これを開始条件にできない。
@@ -50,15 +52,22 @@ review 完了時に `delivery::begin` を必ず呼ぶ。delivery policy 対象�
 
 ## 未解決事項
 
+- **全体 suite は未だ green でない。** `task-api::browser_e2e` の 4 件（上の証拠節）が全体 run で 60 秒の fixture readiness 待ちに入って落ちる（単独 run は pass）。`crates/task-api/tests/browser_e2e.rs:87-110` は credentiald の `ipc::serve` を `std::thread::spawn` の中で起動し、その戻り値を捨てている。そのため bind 失敗などは readiness timeout としてしか見えない。並走時の socket・path 衝突か serve の早期失敗かは未確定。コードは変更していない。次の対処として serve の結果を観測可能にするか、readiness 待ちを出来事待ちへ直す。
+- 通常の TMPDIR（run の作業 path）では socket path が `SUN_LEN` を超え、108 件が落ちる。全体 suite は短い TMPDIR で回す必要がある。
 - 初回 production sweep 後の task×repo 件数と 01M4F3V643 の repo 名・branch head は運用セッションで確認する。本番 DB はこの run から参照していない。
 - discard 後に人の判断を覆して再統合する場合は、`celerisctl integration reopen` の後に merge を別途判断する。
 
 ## 証拠
 
-- `TMPDIR=/tmp bash scripts/dev/test-parallel.sh` — exit 0。`CELERIS_TEST_SUMMARY`: 5155 passed / 0 failed / 14 ignored（182 binaries、nextest 5152 run: 5152 passed / 13 skipped、doctest exit 0）。通常の TMPDIR での初回実行は socket path 長（`SUN_LEN`）と fixture readiness timeout を報告したため停止し、短い `/tmp` で完走を確認した。
-- `cargo clippy --workspace -- -D warnings` — exit 0。
-- `cargo fmt --all -- --check` — exit 0。
-- `sh scripts/dev/check-doc-links.sh && sh scripts/dev/check-adr-numbers.sh && sh scripts/dev/progress-index.sh --check && git diff --quiet "${CELERIS_WU_BASE:-HEAD}" -- crates/ web/ gui/` — exit 0。文書検査 3 本 pass、crates/web/gui に差分なし。
+この節は 2026-10-11 の検証 run（作業ツリー 11ec89e4 基点）の記録。以前の記録（5155 passed / 0 failed）は今回の run では再現していない。
+
+- `bash scripts/dev/test-parallel.sh`（TMPDIR=run の既定の長い path）— exit 100。`CELERIS_TEST_SUMMARY`: passed 5047 / failed 108 / ignored 14。失敗の大半は `bind: path must be shorter than SUN_LEN`（Unix socket path が長すぎる）と `timed out waiting for fixture readiness`。socket path の問題であり、コードの失敗ではない。
+- `TMPDIR=/tmp/wu-sock.4fij bash scripts/dev/test-parallel.sh`（socket 用に短い TMPDIR）— exit 100（2 回実行、結果は同じ）。1 回目: passed 5151 / failed 4 / ignored 14、2 回目: passed 5151 / failed 4 / ignored 14。nextest_exit 100、doctest_exit 0、182 binaries。失敗は 4 件で、いずれも `task-api::browser_e2e` の `denied_approval_fails_the_task_without_a_lease`、`auth_section_store_denies_takeover_until_closed`、`registered_credential_does_not_open_approval_for_uncertified_backend`、`approved_credential_requires_conformance_and_does_not_consume_approval`（60 秒の `timed out waiting for fixture readiness`）。
+- `TMPDIR=/tmp/wu-sock.4fij cargo nextest run -p task-api --test browser_e2e` — exit 0。4 tests run: 4 passed, 0 skipped。単独では 4 件とも通るため、全体 run の負荷・並走下での readiness 待ちの問題と判断した（根因は未確定。未解決事項を参照）。
+- `cargo clippy --workspace -- -D warnings` — exit 0（`Finished dev profile`、警告・エラーなし）。
+- `cargo fmt --all -- --check` — exit 0（差分なし）。
+- 文書検査 3 本: `sh scripts/dev/check-doc-links.sh` — exit 0（`check-doc-links: ok`）。`sh scripts/dev/check-adr-numbers.sh` — exit 0（`ok (182 files)`）。`sh scripts/dev/progress-index.sh --check` — exit 0。
+- 参考: `sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv` — exit 0（`check-doc-layout: ok`）。`git diff --quiet "${CELERIS_WU_BASE:-HEAD}" -- crates/ web/ gui/` — 差分なし（この run はコードを変更していない）。
 
 ## 提案
 

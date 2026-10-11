@@ -20,6 +20,8 @@ updated: 2026-10-11
 - `cargo test -p llm-proxy`: lib 56 passed、proxy_integration 24 passed、estimator_sidecar 2、proxy_routing_context 2 — 全部 ok。
 - `cargo nextest run -p celeris -p llm-proxy --no-fail-fast`: 599 run, 597 passed, 2 failed。失敗 2 件は `browser_doctor::tests::*`（`path must be shorter than SUN_LEN`。run の TMPDIR が長いことによる環境要因で、この変更と無関係）。
 - `cargo clippy -p llm-proxy -p celeris --all-targets -- -D warnings`: exit 0（警告なし）。
+- 再試行（attempt 1 の check 不合格）: `celerisctl routing show` が `config.llm_proxy.models` を読んでいて celerisctl が compile できなかった（E0609）。`crates/celerisctl/src/commands/routing.rs` から `[llm_proxy.models]` の表と試験の該当 assert を削除（providers の tier_models 表は config-remove の範囲なので残す）。
+- check `test -s …/proxy-concrete.md && cargo clippy --workspace --all-targets -- -D warnings && cargo test -p task-core -p task-api -p task-worker schema_matches`: exit 0（schema 試験 1+8+1 passed）。`cargo test -p celerisctl routing`: 3+3+1 passed。
 - workspace 全体の test-parallel は統合（integrate-edges）で見る。
 
 ## 未解決

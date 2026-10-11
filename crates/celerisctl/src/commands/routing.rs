@@ -1,10 +1,9 @@
 //! `celerisctl routing show`（ADR-0069 Phase 118 D3）。
 //!
 //! 設定ファイルだけを読む読み取り専用コマンド（`config to-harnesses` と同じく DB を開かない）。
-//! 2 つの表を出す: (1) `[[providers]] tier_models` の provider ごとの
-//! `tier → name / model_id（または unavailable の理由）/ reasoning_effort`、
-//! (2) `[llm_proxy.models]` の `tier → claude/gpt/qwen ごとの model`。
-//! どちらも設定ファイルに書かれた値をそのまま見せるだけで、到達性・残量は見ない
+//! `[[providers]] tier_models` の provider ごとの
+//! `tier → name / model_id（または unavailable の理由）/ reasoning_effort` を表にする。
+//! 設定ファイルに書かれた値をそのまま見せるだけで、到達性・残量は見ない
 //! （到達性・cooldown は既存の `GET /llm/sources` の仕事）。
 //!
 //! `routing export` / `routing evaluate`（ADR 2026-10-04-multi-objective-model-routing §7.2・Phase 4）:
@@ -31,8 +30,7 @@ const TIER_ORDER: [Tier; 3] = [Tier::Frontier, Tier::Standard, Tier::Cheap];
 
 #[derive(Subcommand, Debug)]
 pub enum RoutingCommand {
-    /// provider ごとの tier → 実行モデル/effort と、`[llm_proxy.models]` の tier → 供給元ごとの
-    /// モデルを表にして出す。
+    /// provider ごとの tier → 実行モデル/effort を表にして出す。
     Show(RoutingShowArgs),
     /// 過去の events から routing dataset（`dataset.jsonl` + `manifest.json`、schema v1）を書き出す。
     /// DB は全体の `--db` で明示したものだけを読み取り専用で開く（環境変数・既定の DB は使わない）。
@@ -497,42 +495,6 @@ pub fn render_routing_table(config: &Config) -> String {
             ));
         }
     }
-    out.push('\n');
-    out.push_str("=== [llm_proxy.models] (tier -> source model) ===\n");
-    out.push_str(&format!(
-        "  {:<8} {:<24} {:<24} {}\n",
-        "tier", "claude", "gpt", "qwen"
-    ));
-    for tier in TIER_ORDER {
-        let claude = config
-            .llm_proxy
-            .models
-            .claude
-            .get(&tier)
-            .map(String::as_str)
-            .unwrap_or("(未設定)");
-        let gpt = config
-            .llm_proxy
-            .models
-            .gpt
-            .get(&tier)
-            .map(String::as_str)
-            .unwrap_or("(未設定)");
-        let qwen = config
-            .llm_proxy
-            .models
-            .qwen
-            .get(&tier)
-            .map(String::as_str)
-            .unwrap_or("(未設定)");
-        out.push_str(&format!(
-            "  {:<8} {:<24} {:<24} {}\n",
-            tier_label(tier),
-            claude,
-            gpt,
-            qwen
-        ));
-    }
     out
 }
 
@@ -547,7 +509,7 @@ mod tests {
     }
 
     #[test]
-    fn shows_provider_tier_models_and_llm_proxy_models_defaults() {
+    fn shows_provider_tier_models() {
         let dir = tempfile::tempdir().unwrap();
         let path = write_config(
             dir.path(),
@@ -577,11 +539,7 @@ adapter = "fake"
         assert!(table.contains("standard opus -> unavailable: not verified yet"));
         assert!(table.contains("cheap    sonnet -> claude-sonnet-5"));
         assert!(table.contains("legacy (fake): tier_models not configured"));
-        // llm_proxy.models の既定表（ADR-0069 Phase 118 D2）。
-        assert!(table.contains("[llm_proxy.models]"));
-        assert!(table.contains("claude-fable-5-1"));
-        assert!(table.contains("gpt-6-astra"));
-        assert!(table.contains("qwen3.8-27b"));
+        assert!(!table.contains("llm_proxy"));
     }
 
     #[test]

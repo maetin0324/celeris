@@ -109,6 +109,7 @@ model = "fake"
     /// `(exit code, stdout, stderr)`。
     fn celerisctl_raw(&self, args: &[&str]) -> (Option<i32>, String, String) {
         let out = Command::new(bin("celerisctl"))
+            .env_remove("CELERIS_CONFIG")
             .arg("--db")
             .arg(&self.db)
             .args(args)

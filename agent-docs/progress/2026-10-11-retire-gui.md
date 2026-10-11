@@ -119,6 +119,37 @@ staging の read-only E2E は旧 GUI の health を見ず、web gateway と daem
 残す旧名称は歴史記録、本廃止の移行・復旧手順、ADR の所在/リンク検査、廃止 config 欄の拒否試験。
 `removal-rg-unclassified.txt` は空。旧画面の設計説明・現行運用ガイド・生成型の二重管理は撤去した。
 
+## delivery-repair（2026-10-11）
+
+差し戻しの `prepare.log` と `.build/30c820ef45d7/.gate-cargo-test.log` を確認した。
+18件の失敗は、配送 daemon から継承した `CELERIS_CONFIG` が本番 config を指し、
+試験の `celerisctl add` が廃止済みの通知設定を読んだためだった。`--db` は設定の指定を解除しない。
+worker DB read-only 試験でも、スタブ内の CLI が同じ設定エラーになり、本来の書込み拒否の検証まで届いていなかった。
+
+`tests/e2e/tests/` の CLI 呼出し11箇所と DB read-only 試験の daemon 起動で、子プロセスに渡す
+`CELERIS_CONFIG` を除いた。試験が明示する `--config`、本体の設定読込み、旧設定の拒否、
+user namespace の gate は変更していない。nextest と直接の cargo test の両方に効く修正である。
+
+回帰確認では、秘密を含まない旧設定の fixture を task artifacts の `repair-invalid-config.toml` に作り、
+それを `CELERIS_CONFIG` に指定して試験する。本番 config を編集・複製せずに再現する。
+検証ログは同じ task artifacts の `repair-*.log` と `repair-selfdeploy/` に保存する。
+
+検証時の `A=/local/celeris/data/workspaces/01M4NAKDCESYK36PNY7TTCTJ5E/artifacts`。
+`repair-invalid-config.toml` の内容は `[notify]` と `gui_base_url = "http://invalid.example"` の2行。
+
+| コマンド | 結果・ログ |
+|---|---|
+| `CELERIS_CONFIG="$A/repair-invalid-config.toml" TMPDIR=/tmp bash scripts/dev/test-parallel.sh` | **5,132 passed / 0 failed / 14 ignored**。`repair-test-parallel.log` |
+| `CELERIS_CONFIG="$A/repair-invalid-config.toml" CELERIS_USERNS_TESTS=1 CELERIS_ISOLATION_TESTS=require TMPDIR=/tmp bash scripts/dev/test-parallel.sh -E 'package(e2e)'` | **E2E 48＋doctest 3 passed / 0 failed**、userns=true。`repair-e2e-userns.log`。sandbox 外で一時 DB とスタブを使用し、差し戻し18件を含む E2E 全体を実行 |
+| `cargo clippy --workspace -- -D warnings` / `cargo fmt --all -- --check` | 両方 exit 0。`repair-clippy.log` / `repair-fmt.log` |
+| `corepack pnpm@12.6.0 -C web typecheck` / `corepack pnpm@12.6.0 -C web test` | 合格、**677＋93件**。`repair-web-typecheck.log` / `repair-web-test.log` |
+| `for f in scripts/selfdeploy/tests/*.sh; do bash "$f"; done` | **25本全て exit 0**。`repair-selfdeploy/summary.tsv` と各 `.log` |
+| `python3 "$A/scan-removal.py"` | 追跡された旧アプリ0件、未分類0件。全体3,998行/506ファイル、legacy限定1,291行/210ファイル。`repair-reference-check.log` |
+| `sh scripts/dev/check-doc-links.sh` / `sh scripts/dev/check-adr-numbers.sh` / `sh scripts/dev/progress-index.sh --check` | 合格。`repair-doc-links.log` / `repair-adr-numbers.log` / `repair-progress-index.log` |
+
+`TMPDIR=/tmp` は Unix socket の長さ制限を避ける小さな試験 fixture 用。コンパイル出力と依存は
+渡された `CARGO_TARGET_DIR` を維持した。release 作成・staging verify・昇格は実行していない。
+
 ## 本番への移行
 
 **以下は運用セッションが実行する手順。本 task から本番操作はしていない。**
@@ -165,6 +196,13 @@ Browser dashboard（設定がある場合）を指し、7700や旧 GUI を経由
 実際の公開 URL・TLS・Host allowlist を確認し、切替先を決める。host の現物は本 task では未検査。
 
 ### 2. 新 config と gui 無し release の準備・verify
+
+**初回の注意:** 旧 release の `current/scripts/prepare.sh` は同梱の旧 `release.sh` / `verify.sh` を
+呼ぶ。今回の失敗ログにも `gui steps` が記録されているため、Rust 試験の修正だけでは旧台本の
+GUI build 段は消えない。以下のコマンドは、撤去と本 repair を含むコミットのチェックアウトで実行する。
+古い `current/scripts/` から実行しない。旧 config を本番で動かしたまま、新版の台本で release と
+候補 config の verify を済ませ、その後に昇格する。一度新版へ昇格すれば同梱台本も更新される。
+この初回切替は運用セッションの作業であり、本 repair では自動配送や本番台本を変更していない。
 
 旧 config と同じディレクトリに候補を置く（相対パスの解決先を変えない）。候補の `[notify]` に
 `gui_base_url` があれば `web_base_url` に改名し、値を確認済みの web 公開 URL にする。

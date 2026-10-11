@@ -371,6 +371,12 @@ listen = "127.0.0.1:7710"      # これを書いたときだけ API が動く（
 | 70 | POST | `/tasks/{id}/changes/{repo}/integrate` | 取り込む（`merge` / `pr` / `discard`）（**管理系: `token_file` 未設定でも 401**） | 200 `IntegrateResult` | `git` / `gh` + store |
 | 71 | POST | `/tasks/{id}/changes/{repo}/pr/merge` | その PR を Celeris から merge する（**管理系**） | 200 `IntegrateResult` | `gh pr merge` + store |
 | 72 | GET | `/projects/{id}/integrations` | その案件の PR と取り込み（タスク × リポジトリごとに最新の 1 件） | `ProjectIntegrations` | store + `gh pr view` |
+| 73 | GET | `/integrations?state=` | 取り込み状態の一覧（state は任意） | `IntegrationList` | store |
+| 74 | GET | `/tasks/{id}/integrations` | タスクのリポジトリ別取り込み状態 | `IntegrationList` | store |
+| 75 | POST | `/tasks/{id}/integrations/{repo}/merge` | merge 依頼。既に default branch の祖先なら integrated、未到達なら既存 integration request を起票 | `IntegrationActionResult` | store + git |
+| 76 | POST | `/tasks/{id}/integrations/{repo}/discard` | 取り込みを破棄（`reason` 必須） | `IntegrationActionResult` | store |
+| 77 | POST | `/tasks/{id}/integrations/{repo}/hold` | 取り込みを保留（`reason` 必須） | `IntegrationActionResult` | store |
+| 78 | POST | `/tasks/{id}/integrations/{repo}/reopen` | held/discarded を unintegrated に戻す | `IntegrationActionResult` | store |
 | 73 | POST | `/projects/{id}/cancel` | 案件を中止し、属する非終端タスクと途中目標を連鎖で `cancelled` にする（ADR-0044 D6、Phase 55。**管理系: `token_file` 未設定でも 401**） | 200 `ProjectLifecycle` | `task_ops::lifecycle` |
 | 74 | POST | `/projects/{id}/pause` | 案件を一時停止する（属するタスクは dispatch されない。**管理系**） | 200 `ProjectLifecycle` | `task_ops::lifecycle` |
 | 75 | POST | `/projects/{id}/resume` | 一時停止を解く（`paused_from` へ戻す。**管理系**） | 200 `ProjectLifecycle` | `task_ops::lifecycle` |

@@ -214,8 +214,16 @@ fn serve(
             }
             continue;
         }
-        let Some(frame) = read_ws(&mut stream) else {
-            break;
+        let frame = match read_ws(&mut stream) {
+            Some(WsFrame::Text(frame)) => frame,
+            Some(WsFrame::Ping(payload)) => {
+                if send_ws_payload(&mut stream, 0x8a, &payload).is_err() {
+                    break;
+                }
+                continue;
+            }
+            Some(WsFrame::Pong) => continue,
+            None => break,
         };
         let Ok(command) = serde_json::from_slice::<Value>(&frame) else {
             break;
@@ -443,13 +451,24 @@ fn read_headers(stream: &mut UnixStream) -> Option<String> {
     None
 }
 
-fn read_ws(stream: &mut UnixStream) -> Option<Vec<u8>> {
+enum WsFrame {
+    Text(Vec<u8>),
+    Ping(Vec<u8>),
+    Pong,
+}
+
+fn read_ws(stream: &mut UnixStream) -> Option<WsFrame> {
     let mut h = [0; 2];
     stream.read_exact(&mut h).ok()?;
-    if h[0] != 0x81 || h[1] & 0x80 == 0 {
+    // Only complete, uncompressed, masked client frames. Keepalive control
+    // frames never enter the CDP parser and must use a payload of <= 125 bytes.
+    if !matches!(h[0], 0x81 | 0x89 | 0x8a) || h[1] & 0x80 == 0 {
         return None;
     }
     let mut n = (h[1] & 0x7f) as usize;
+    if h[0] != 0x81 && n > 125 {
+        return None;
+    }
     if n == 126 {
         let mut ext = [0; 2];
         stream.read_exact(&mut ext).ok()?;
@@ -469,12 +488,20 @@ fn read_ws(stream: &mut UnixStream) -> Option<Vec<u8>> {
     for (i, byte) in payload.iter_mut().enumerate() {
         *byte ^= mask[i % 4];
     }
-    Some(payload)
+    Some(match h[0] {
+        0x89 => WsFrame::Ping(payload),
+        0x8a => WsFrame::Pong,
+        _ => WsFrame::Text(payload),
+    })
 }
 
 fn send_ws(stream: &mut UnixStream, message: &Value) -> std::io::Result<()> {
     let bytes = serde_json::to_vec(message)?;
-    let mut header = vec![0x81];
+    send_ws_payload(stream, 0x81, &bytes)
+}
+
+fn send_ws_payload(stream: &mut UnixStream, opcode: u8, bytes: &[u8]) -> std::io::Result<()> {
+    let mut header = vec![opcode];
     if bytes.len() < 126 {
         header.push(bytes.len() as u8);
     } else if bytes.len() <= u16::MAX as usize {
@@ -485,7 +512,7 @@ fn send_ws(stream: &mut UnixStream, message: &Value) -> std::io::Result<()> {
         header.extend_from_slice(&(bytes.len() as u64).to_be_bytes());
     }
     stream.write_all(&header)?;
-    stream.write_all(&bytes)
+    stream.write_all(bytes)
 }
 
 fn sha1(input: &[u8]) -> [u8; 20] {
@@ -545,6 +572,146 @@ fn sha1(input: &[u8]) -> [u8; 20] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn client_frame(opcode: u8, payload: &[u8]) -> Vec<u8> {
+        let mask = [1, 2, 3, 4];
+        let mut frame = vec![opcode];
+        if payload.len() < 126 {
+            frame.push(0x80 | payload.len() as u8);
+        } else {
+            frame.push(0x80 | 126);
+            frame.extend_from_slice(&(payload.len() as u16).to_be_bytes());
+        }
+        frame.extend_from_slice(&mask);
+        frame.extend(payload.iter().enumerate().map(|(i, b)| b ^ mask[i % 4]));
+        frame
+    }
+
+    fn server_frame(client: &mut UnixStream) -> (u8, Vec<u8>) {
+        let mut header = [0; 2];
+        client.read_exact(&mut header).expect("server frame header");
+        assert_eq!(header[1] & 0x80, 0, "server must not mask");
+        let len = if header[1] == 126 {
+            let mut ext = [0; 2];
+            client.read_exact(&mut ext).expect("length");
+            u16::from_be_bytes(ext) as usize
+        } else {
+            header[1] as usize
+        };
+        let mut payload = vec![0; len];
+        client.read_exact(&mut payload).expect("server payload");
+        (header[0], payload)
+    }
+
+    #[test]
+    fn websocket_keepalive_preserves_cdp_and_authorization() {
+        use std::fs::File;
+        use std::os::fd::OwnedFd;
+
+        let (pipe, mut browser) = UnixStream::pair().expect("browser pipe");
+        browser
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let write = File::from(OwnedFd::from(pipe.try_clone().unwrap()));
+        let controller = Arc::new(Mutex::new(CdpController::new(
+            write,
+            File::from(OwnedFd::from(pipe)),
+        )));
+        let (mut client, server) = UnixStream::pair().expect("agent connection");
+        client
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let serving = std::thread::spawn(move || serve(server, &controller, &"a".repeat(64), &[]));
+        write!(
+            client,
+            "GET /{} HTTP/1.1\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n",
+            "a".repeat(64)
+        )
+        .unwrap();
+        assert!(
+            read_headers(&mut client)
+                .unwrap()
+                .starts_with("HTTP/1.1 101")
+        );
+
+        // No clock or browser timing: inject the keepalive frames directly.
+        for payload in [vec![], vec![0, 255, 1], vec![42; 125]] {
+            client.write_all(&client_frame(0x89, &payload)).unwrap();
+            assert_eq!(server_frame(&mut client), (0x8a, payload));
+        }
+        client
+            .write_all(&client_frame(0x8a, b"unsolicited pong"))
+            .unwrap();
+        client
+            .write_all(&client_frame(
+                0x81,
+                br#"{"id":71,"method":"Browser.getVersion"}"#,
+            ))
+            .unwrap();
+        let mut command = Vec::new();
+        loop {
+            let mut byte = [0];
+            browser.read_exact(&mut byte).expect("CDP after keepalive");
+            if byte[0] == 0 {
+                break;
+            }
+            command.push(byte[0]);
+        }
+        let command: Value = serde_json::from_slice(&command).unwrap();
+        assert_eq!(command["method"], "Browser.getVersion");
+        let mut reply =
+            serde_json::to_vec(&json!({"id":command["id"],"result":{"product":"fixture"}}))
+                .unwrap();
+        reply.push(0);
+        browser.write_all(&reply).unwrap();
+        let (opcode, reply) = server_frame(&mut client);
+        assert_eq!(opcode, 0x81);
+        assert_eq!(
+            serde_json::from_slice::<Value>(&reply).unwrap(),
+            json!({"id":71,"result":{"product":"fixture"}})
+        );
+
+        client
+            .write_all(&client_frame(
+                0x81,
+                br#"{"id":72,"method":"Network.getCookies"}"#,
+            ))
+            .unwrap();
+        let (_, denied) = server_frame(&mut client);
+        assert_eq!(
+            serde_json::from_slice::<Value>(&denied).unwrap(),
+            error(&json!(72), "cdp_command_denied")
+        );
+        client
+            .write_all(&client_frame(0x89, b"still connected"))
+            .unwrap();
+        assert_eq!(
+            server_frame(&mut client),
+            (0x8a, b"still connected".to_vec())
+        );
+        drop(client);
+        serving.join().unwrap();
+    }
+
+    #[test]
+    fn websocket_keepalive_rejects_invalid_control_frames() {
+        let oversized = vec![0; 126];
+        let mut unmasked = client_frame(0x89, b"");
+        unmasked[1] = 0;
+        for frame in [
+            client_frame(0x09, b"fragmented ping"),
+            client_frame(0xc9, b"reserved bit"),
+            client_frame(0x89, &oversized),
+            client_frame(0x8a, &oversized),
+            client_frame(0x8b, b"unknown opcode"),
+            unmasked,
+        ] {
+            let (mut client, mut server) = UnixStream::pair().unwrap();
+            client.write_all(&frame).unwrap();
+            client.shutdown(Shutdown::Write).unwrap();
+            assert!(read_ws(&mut server).is_none(), "invalid frame accepted");
+        }
+    }
 
     /// sun_path（107 byte）を確実に超える深さの dir を作る。
     fn long_dir(base: &Path) -> PathBuf {

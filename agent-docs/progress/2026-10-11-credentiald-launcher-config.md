@@ -137,6 +137,51 @@ vault の鍵を再初期化しない。今回の変更に DB migration はない
 - `cargo clippy --workspace -- -D warnings`: exit 0、警告なし。
   `Finished dev profile [unoptimized + debuginfo] target(s) in 1m 21s`。`clippy.log`。
 
+## delivery-repair（2026-10-11）
+
+`d30e6cc37eae` の prepare は cargo-test で exit 100。
+保存ログ `/local/celeris/state/releases/.build/d30e6cc37eae/.gate-cargo-test.log` では
+`real_sandbox_launcher_chrome_downloads_inline_pdf_after_login` の MouseDown PDF が
+`CDP connection closed` で失敗していた。UID 一本化の検査は通っていた。
+
+user namespace 有効の全体試験で同じ箇所を再現し、一時診断で relay が masked Ping
+（header `0x89 0x80`）を拒否して切断していることを確認した。診断ログは
+`repair-full-diagnostic.log`（5168 passed / 1 failed）。単独実行は通ったため、
+単独合格を修復の証拠にはしない。
+
+[CDP relay の ADR 付記](../adr/2026-10-09-browser-credential-username-and-post-login-read.md#付記-2026-10-11-cdp-relay-の-websocket-keepalive)
+に従い、Ping に同じ payload の Pong を返し、Pong を読み捨てて CDP 処理を続ける。
+mask・FIN・RSV・125 bytes 上限は検査する。socket-pair 回帰試験は heartbeat を直接送り、
+接続継続と CDP 応答・認可拒否を確認する。一時診断は撤去済み。
+UID 設定・unit・config・DB 形式は追加変更しない。本番への移行は上記手順に従い、
+この relay を含む launcher も同じ修正版から再 build し、
+[launcher 入れ替え手順](../../docs/ops/browser-launcher-credential-release.md#1-配送後の確認と-launcher-入れ替えroot)で
+退避・差し替え・必須実証を行う（protocol 9 のまま）。
+
+### 修正後の検証
+
+成果物は上記絶対パス内の `repair-*.log`。
+
+- `TMPDIR=/tmp cargo test -p task-worker --lib websocket_keepalive -- --nocapture`:
+  旧実装は exit 101（Ping 直後の EOF、1 failed / 1 passed）、修正後は exit 0（2 passed）。
+  `repair-keepalive-red.log` / `repair-keepalive-green.log`。
+- `TMPDIR=/tmp CELERIS_USERNS_TESTS=1 CELERIS_ISOLATION_TESTS=require bash scripts/dev/test-parallel.sh`:
+  exit 0。nextest Summary: `5168 tests run: 5168 passed (1 slow), 13 skipped`、
+  doctest 3 passed / 1 ignored。合計 **5171 passed / 0 failed / 14 skipped・ignored**。
+  差し戻し対象の実 Chrome 試験は 112.576 秒で合格。`repair-test-parallel.log`。
+  `userns=true, nextest_exit=0, doctest_exit=0`。長い socket path を避け fixture の TMPDIR だけを
+  `/tmp` とし、渡された CARGO_TARGET_DIR とコンパイラ設定は維持。一時残存 7 項目は台本が削除。
+  既存の summary parser は `passed (1 slow)` を数えず JSON の passed が 3 となるため、
+  件数は同ログの nextest Summary と doctest 結果を採用した。これは集計表示の既存不備で、今回の変更対象外。
+- `bash scripts/selfdeploy/tests/install_units_hot_dir.sh`: exit 0（`repair-install-units.log`）。
+  selfdeploy 全25本の逐次実行も exit 0、`SUMMARY: 25 selfdeploy scripts passed`（`repair-selfdeploy.log`）。
+- `cargo fmt --all -- --check`、`sh scripts/dev/check-doc-links.sh`、
+  `sh scripts/dev/check-adr-numbers.sh`、`sh scripts/dev/progress-index.sh --check`: exit 0。
+  `repair-fmt.log` / `repair-doc-links.log` / `repair-adr-numbers.log` / `repair-progress-check.log`。
+
+- `cargo clippy --workspace -- -D warnings`: exit 0、警告なし。
+  `Finished dev profile [unoptimized + debuginfo] target(s) in 48.81s`（`repair-clippy.log`）。
+
 ## 未解決事項
 
 コード・回帰試験に未解決事項なし。本番への適用と承認付き CredentialUse の確認は、上記手順を運用セッションが実施する。

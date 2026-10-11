@@ -187,7 +187,11 @@ async fn offline_cluster_is_reported_in_the_snapshot_and_the_event_carries_the_h
         snap.last_tick_at
     );
     assert!(
-        !snap.unroutable.contains(&task.id),
+        !snap
+            .task_waits
+            .iter()
+            .any(|w| w.task_id == task.id
+                && matches!(w.wait, task_core::TaskWait::Unroutable { .. })),
         "人待ちは経路なしではない（監査 4-1）: {snap:?}"
     );
     assert!(d.cluster_waiting.contains(&task.id));

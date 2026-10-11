@@ -5,8 +5,7 @@ fn snapshot_at(last_tick_at: &str, tick_ms: u64, task_id: TaskId) -> DaemonSnaps
     serde_json::from_value(serde_json::json!({
         "instance_id": "i", "pid": 1, "hostname": "h", "started_at": last_tick_at,
         "last_tick_at": last_tick_at, "ticks": 1, "tick_ms": tick_ms,
-        "in_flight": [], "cooldowns": [], "awaiting_human": [], "awaiting_children": [],
-        "unroutable": [], "approvals_pending": 0, "decisions_open": 0, "providers": [],
+        "in_flight": [], "cooldowns": [], "approvals_pending": 0, "decisions_open": 0, "providers": [],
         "task_waits": [SnapshotTaskWait { task_id, wait: TaskWait::ReviewAwaitingHuman }],
     }))
     .expect("snapshot")

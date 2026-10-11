@@ -7630,21 +7630,6 @@
           "minimum": 0,
           "type": "integer"
         },
-        "awaiting_children": {
-          "default": [],
-          "description": "ADR-0023 D3: 委譲した子が終わるのを待っている親（`reviewing` のまま。id 昇順）。\n「自分の判定待ち」と区別するための観測値。古いスナップショットには無いので既定は空。",
-          "items": {
-            "$ref": "#/$defs/TaskId"
-          },
-          "type": "array"
-        },
-        "awaiting_human": {
-          "description": "人間の承認待ちでレビューを延期している reviewing タスク。",
-          "items": {
-            "$ref": "#/$defs/TaskId"
-          },
-          "type": "array"
-        },
         "clusters": {
           "default": [],
           "description": "ADR-0018: `[[clusters]]` の稼働状況（`id` 昇順）。第 2 段階で追加したので、古いスナップショットには無い。",
@@ -7765,13 +7750,6 @@
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
-        },
-        "unroutable": {
-          "description": "設定に合うプロバイダが無い ready タスク（この tick の判定）。",
-          "items": {
-            "$ref": "#/$defs/TaskId"
-          },
-          "type": "array"
         }
       },
       "required": [
@@ -7784,8 +7762,6 @@
         "tick_ms",
         "in_flight",
         "cooldowns",
-        "awaiting_human",
-        "unroutable",
         "providers"
       ],
       "type": "object"

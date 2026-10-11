@@ -235,3 +235,12 @@ pub struct UnitWait {
   `task_waits` には同じ情報が入っているが、旧 3 欄を消す作業（D4・D6 の最後の行）は未了。core・api 葉の範囲外として残した。
 - 対応: 旧 3 欄の削除を後続の葉か task に分ける（進捗 `agent-docs/progress/2026-10-11-task-wait-reasons.md` の「未解決」）。
 - 検証の結果（test-parallel・clippy・fmt・web typecheck/lint/vitest/e2e）は進捗の証拠節を参照。
+
+### 葉 snapshot-old（2026-10-11、final review の差し戻し修正）
+- D4・D6 の最後の行を実装した: `DaemonSnapshot.unroutable`・`.awaiting_children`・`.awaiting_human` を `crates/task-ops/src/daemon.rs` から消し、
+  `crates/task-dispatch/src/dispatcher/snapshot.rs` の組み立てからも消した。互換の分岐・deprecated は残さない。API schema（`docs/api/v1/api-v1.schema.json`）と
+  web の生成型（`web/api/generated/`）からも消えた。
+- dispatcher の内部集合（`Dispatcher.unroutable`・`awaiting_children`・`awaiting_human`。`is_idle`・レビュー延期が使う）は D4 どおり残し、
+  `snapshot_task_waits` が `Unroutable`（`dispatch_waits` 経由）・`DelegatedChildren`・`ReviewAwaitingHuman` に写す。
+- 読み手の移し先: 受信箱の `attention[].unroutable`（`task_ops::inbox`）は `task_waits` の `Unroutable` から組む。web の daemon 画面の
+  「人の待ち」「担当なし」は `task_waits` を kind（`review_awaiting_human`・`unroutable`）で数える。`docs/api/v1/api.md` §3.20 を書き換えた。

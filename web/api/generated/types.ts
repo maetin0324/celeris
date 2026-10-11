@@ -1606,8 +1606,6 @@ export type DaemonSnapshot = {
   [key: string]: string;
 };
   "approvals_pending"?: number;
-  "awaiting_children"?: Array<TaskId>;
-  "awaiting_human": Array<TaskId>;
   "clusters"?: Array<ClusterLive>;
   "containers"?: ContainersLive | null;
   "cooldowns": Array<CooldownView>;
@@ -1626,7 +1624,6 @@ export type DaemonSnapshot = {
   "task_waits"?: Array<SnapshotTaskWait>;
   "tick_ms": number;
   "ticks": number;
-  "unroutable": Array<TaskId>;
 };
 
 export type DaemonView = {

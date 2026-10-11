@@ -7,6 +7,10 @@ tasks: [01M3WW2RBB9QW9NPN862TZEK9P]
 
 この手順を終えても機密能力（`CredentialInjection` / `IdentityRestore`）は解放しない。daemon の既定は `runtime = "daemon"` のまま変わらない。
 
+CredentialUse の有効化時は [credential 解放手順](browser-launcher-credential-release.md#0-daemon-と-credentiald-の共通設定)に従い、
+専用 user の host UID を daemon の config.toml の `[browser].launcher_uid` にだけ書く。
+credentiald も同じ config を読み、unit の手動 UID 引数は使わない。
+
 ## 記号
 
 | 記号 | 意味 | この host での値 |

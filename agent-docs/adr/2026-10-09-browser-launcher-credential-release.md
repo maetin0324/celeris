@@ -70,7 +70,7 @@ daemon→launcher の protocol には固定 `Verb::Authenticate` と対応する
 
 final review は「条件を満たさない session も launcher に接続・session 起動した後に拒否している」として差し戻した。launcher session 証明（ns owner・ns inode・responder UID）は launcher が session を作らないと採れないため、人の決定（preconnect-meaning = a）に従い、「接続前に拒否」を次の二段 gate として実装する。
 
-1. **接続前 gate**（`browser_launcher_run.rs::preconnect_credential_gate`、`open_launcher_session` の最初）。CredentialUse を求める run（policy の `CredentialUse`、または最後の wait が credential_use の Registered / Approved）について、launcher socket の設定がある・`[browser] launcher_uid`（credentiald の `--launcher-uid` と同じ値）が設定され 0 でも daemon UID でもない・credentiald の制御経路（credentiald 設定の `runtime_dir`、無ければ `XDG_RUNTIME_DIR`）が取れる・wait store が読める、の全部を `LauncherRuntime::start_guarded` の `spawn_blocking` より前に検査する。不成立なら launcher socket に接続せず `browser credential use is not available through the launcher runtime` で拒否する。admission の対象にならないが admission 無しでは必ず拒否される run（credential 以外の登録済み wait、操作の無い承認）もここで拒否する。
+1. **接続前 gate**（`browser_launcher_run.rs::preconnect_credential_gate`、`open_launcher_session` の最初）。CredentialUse を求める run（policy の `CredentialUse`、または最後の wait が credential_use の Registered / Approved）について、launcher socket の設定がある・`[browser] launcher_uid`（daemon と credentiald が同じ config から読む）が設定され 0 でも daemon UID でもない・credentiald の制御経路（credentiald 設定の `runtime_dir`、無ければ `XDG_RUNTIME_DIR`）が取れる・wait store が読める、の全部を `LauncherRuntime::start_guarded` の `spawn_blocking` より前に検査する。不成立なら launcher socket に接続せず `browser credential use is not available through the launcher runtime` で拒否する。admission の対象にならないが admission 無しでは必ず拒否される run（credential 以外の登録済み wait、操作の無い承認）もここで拒否する。
 2. **証明依存 gate**（session 起動・隔離検査の後、credentiald 登録より前）。`launcher_session_proof` の検証成功・ns owner が daemon UID でない・`isolation_ok`・証明の launcher UID が `[browser] launcher_uid` と一致、のどれかが欠ければ `runtime.stop()` で session を止めてから同じ文言で拒否する。credentiald への `register_live_session` / `attach_launcher_proof`、shim の `credential_use: true`、`Authenticate`、harness 起動はどれも起きない。credentiald 登録の失敗も stop してから同じ文言で拒否する。上の実装付記の `refuse_confidential` はこの二段（`credential_demand` で拒否対象を決め、`open_launcher_session` で判定）に置き換えた。
 
 境界: 接続前に決まる条件（設定・UID 分離・credentiald 経路・wait store）は launcher に接続する前、証明に依存する条件は launcher session 作成後・credentiald / CDP / harness への接続と秘密の注入より前。秘密が launcher・Chrome に渡るのは両方の gate と credentiald の Attested admission を通った後だけである。CredentialUse を求めない run は接続前 gate を素通しし、`launcher_uid` 未設定でも従来どおり動く。
@@ -115,7 +115,7 @@ final review は「条件を満たさない session も launcher に接続・ses
 
 理由: launcher 経路の承認後 Authenticate は一度も通っていなかった（`agent-docs/progress/2026-10-09-launcher-registered-approval.md` の未解決 5 件）。読んで確かめた事実は次のとおりで、上の実装付記の「launcher が credentiald の injection socket に直接繋ぐ」形は本番で成立しない。
 
-- credentiald の control（`bind`・`grant`・`open_auth_section`・`close_auth_section`・`revoke`）は daemon の PID + starttime（`serve <pid>`）からしか受けない。launcher（別 UID・別 PID）は呼べない。
+- credentiald の control（`bind`・`grant`・`open_auth_section`・`close_auth_section`・`revoke`）は daemon の PID + starttime（`serve --config <path> <pid>`）からしか受けない。launcher（別 UID・別 PID）は呼べない。
 - injection の照合は `peer.uid == broker UID`（daemon UID）かつ peer が登録 session の controller（`controller_pid` = daemon worker）でなければ `peer_uid_mismatch` / `worker_not_allowed`。credentiald の socket dir は daemon UID の 0700 で、launcher UID からは開けない。本番の `launcher.toml` に `injection_socket` も無い。
 - daemon 経路は lease を `grant_h3_lease`（`bind` → `grant`）で発行し、注入時に credentiald が `consume_for_injection` で消費する。launcher 経路は lease を発行せず、launcher session の lease（launcher protocol の認可用）を `AuthenticateArgs.lease_id` に渡していた → `lease_invalid`。
 - launcher backend は `args.origin`（例 `https://idp.account.tsukuba.ac.jp`）へ navigate し、trusted login の `login_url` を使わない。Shibboleth は root にログイン form が無い → timeout。`submit_selector` も使わない。
@@ -124,7 +124,7 @@ final review は「条件を満たさない session も launcher に接続・ses
 決定:
 
 1. **lease は daemon が発行し、credentiald の稼働 session（launcher が採番した `runtime.session_id`）に束縛する。** 注入要求が名指す session は credentiald に `register_live_session` した session（launcher 経路では `runtime.session_id`）で、`consume_for_injection` は lease の `session_id` と要求の `session_id` の一致を見る。したがって `grant_h3_lease` は束縛先の稼働 session id を引数で受ける。daemon 経路は従来どおり wait の `session_id`（= 登録した session）を渡すので挙動は変わらない。wait の `session_id`（Celeris の論理 session）は store 側の記録（`BrowserRun`、`browser_auth_section`、control gate）にだけ使う。launcher protocol の `lease_id` は launcher session の認可で、credentiald の lease とは別の欄（`credential_lease_id`）で渡す。lease の TTL（60 秒・承認期限以下）、承認・policy hash・credential revision の照合は変えない。
-2. **credentiald と話すのは daemon だけ。秘密は daemon を通らない。** control 操作（`bind`/`grant`/`open_auth_section`/`close_auth_section`/`revoke`）は daemon が行う。injection.sock への接続も daemon が `connect` する（`SO_PEERCRED` は daemon worker = 登録 controller なので Injector として照合される）。daemon は接続済みの stream の FD を `authenticate` 要求に `SCM_RIGHTS` で 1 本だけ付けて launcher に渡し、送った直後に自分の写しを閉じる。launcher はその stream に `InjectionRequest` と自分の CDP sink FD（`SOCK_SEQPACKET`）を送り、credentiald は sink に注入 frame を書く。秘密は credentiald → launcher の sink → launcher 所有の CDP pipe の一方向で、daemon・harness・LLM・log・event・artifact に渡らない。credentiald の socket 権限、`--launcher-uid`、Attested admission（launcher 証明の再検証）は変えない。launcher の `injection_socket` 設定と `CELERIS_CREDENTIALD_INJECTION_SOCKET` は廃止して削除する（launcher は credentiald の path を知らない）。
+2. **credentiald と話すのは daemon だけ。秘密は daemon を通らない。** control 操作（`bind`/`grant`/`open_auth_section`/`close_auth_section`/`revoke`）は daemon が行う。injection.sock への接続も daemon が `connect` する（`SO_PEERCRED` は daemon worker = 登録 controller なので Injector として照合される）。daemon は接続済みの stream の FD を `authenticate` 要求に `SCM_RIGHTS` で 1 本だけ付けて launcher に渡し、送った直後に自分の写しを閉じる。launcher はその stream に `InjectionRequest` と自分の CDP sink FD（`SOCK_SEQPACKET`）を送り、credentiald は sink に注入 frame を書く。秘密は credentiald → launcher の sink → launcher 所有の CDP pipe の一方向で、daemon・harness・LLM・log・event・artifact に渡らない。credentiald の socket 権限、設定上の launcher UID、Attested admission（launcher 証明の再検証）は変えない。launcher の `injection_socket` 設定と `CELERIS_CREDENTIALD_INJECTION_SOCKET` は廃止して削除する（launcher は credentiald の path を知らない）。
 3. **sink frame の固定照合（両 runtime）。** launcher は渡された stream の相手を自力では認証できない（credentiald は daemon と同じ UID）。偽の broker が sink を通じて任意の CDP command を流し、cookie 等を読むことを防ぐため、`CdpController::inject` は sink から来た frame を Chrome に書く前に照合する: JSON object で、key は `id`・`method`・`params`・`sessionId` だけ、`id` は予約した command id、`method` は `Runtime.callFunctionOn`、`sessionId` は注入用 CDP session、`params` は `objectId`（解決した要素）・`functionDeclaration`（credentiald の固定 `INJECT_FUNCTION` と byte 一致）・`arguments`（`[origin, depth, field, value]`、origin・depth・field は要求どおり、value は文字列）・`returnByValue: true`・`silent: true` だけ。外れれば Chrome に書かず `sink_failed`。照合に使った値の写しは zeroize する。daemon runtime にも同じ照合を掛ける（credentiald の frame はこの形なので挙動は変わらない）。加えて launcher は渡された FD が接続済み unix stream で、相手の UID が要求元 daemon 接続の UID と同じことを確かめる。
 4. **launcher protocol v4。** `hello` は `protocol_version: 4` を返す。
    - 新要求 `auth_begin {session_id, lease_id, auth_section_id}` → 応答 `auth_begun {cdp_target_id}`。launcher は自分の `CdpController::open_auth_section`（agent の CDP・event・新規接続を止める）をしてから `Target.createTarget(about:blank)` し、target id だけを返す（CDP の不透明な id で、秘密・page 内容ではない）。1 session に 1 回だけ。
@@ -148,3 +148,26 @@ final review は「条件を満たさない session も launcher に接続・ses
 ## 付記 2026-10-10: 保存済み credential の使用
 
 credential request は daemon が owner と DB の現在の site policy で vault を検索する。一致する登録があれば入力待ちを経ず、TrustedLogin を固定した credential_use の承認待ちを作る。毎回の承認後の Authenticate と秘密非露出の境界は維持する。認証失敗・post-login 保留は登録を削除し、session を閉じて再入力へ戻す。承認後の policy 変更・describe 失敗も再入力へ戻す。詳細は username-and-post-login-read ADR の付記 2026-10-10j。
+
+
+## 付記 2026-10-11: launcher UID の正本と unit 更新
+
+task: `01M4NM5722YETPEYN74JR82ERD`。install-units が運用で追加した起動引数を
+雛形で上書きし、credentiald の launcher UID が失われたため、以下に一本化する。
+
+- UID の正本は daemon と同じ config.toml の `[browser].launcher_uid`。credentiald の
+  `serve --config <path> <daemon-pid>...` は起動時に TOML からこの項目を読む。
+  unit は daemon と同じ `%h/.config/celeris/config.toml` を明示する。config の別コピー、
+  UID の環境変数、手動の `--launcher-uid` は設けない。旧引数は削除し、渡したら起動エラー。
+- credentiald は依存方向を保つため config の browser UID だけを型付きで読み取る。
+  config の未読・構文不正・UID の型不正・0・broker と同じ UID は起動失敗。
+  UID 未設定は非機密用途のため許すが、Attested admission は従来どおり注入を拒否する。
+  エラーは既存の固定 code のみとし、設定内容を出さない。変更時は daemon と broker を再起動する。
+- install-units は home/hot root とも credentiald unit を配る。全 unit を先に render し、
+  既存と異なるものは diff を表示して、書込み・backup・daemon-reload の前に停止する。
+  人が差分と必要設定を確認した場合だけ `--replace-existing` で置換する。これは新旧動作の
+  切替ではなく unit 更新の確認であり、旧 CLI を許すものではない。置換時も backup を残す。
+  mask・symlink・通常ファイル以外の配置はこの指定でも拒否し、運用者の個別確認を要する。
+  root 移行台本は既存の一括 backup/自動復旧の下で、この置換を明示する。
+- 復旧は unit/config の退避と旧 release に戻す。vault・鍵・DB・events は変更しない。
+  初回の順序と確認は [移行記録](../progress/2026-10-11-credentiald-launcher-config.md) に示す。

@@ -62,3 +62,14 @@ review 完了時に `delivery::begin` を必ず呼ぶ。delivery policy 対象�
 - 文書検査: `check-doc-links.sh`、`check-doc-layout.sh`、`check-adr-numbers.sh` — 3 本とも passed。
 
 試験の決定的な主張は、本番 DB や daemon tick に依存させず、fixture の task status・acceptance・project policy・git refs を固定して `done` と deliveries 行の有無を検査すること。現在は調査 WorkUnit のため、試験追加・コード変更は行っていない。
+
+## web-status の前提（API・CLI）の解消
+
+前回の記録にあった「web-status API 確認」「web-status attempt 3 の前提確認」という見出しはこの文書に無いため、ここで前提の解消を記録する。前提だった 2 点は次のとおり解消した（2026-10-11）。
+
+- TaskSummary/TaskDetail の取り込み状態・promotion 欄と、受信箱 `Unintegrated` の状態・操作先: [views](2026-10-11-stranded-done-branches/views.md)。
+- task-api の merge/discard/hold/reopen route と一覧 route: [routes](2026-10-11-stranded-done-branches/routes.md)、[routes-wire](2026-10-11-stranded-done-branches/routes-wire.md)。
+- celerisctl の list/merge/discard/hold/reopen: [cli](2026-10-11-stranded-done-branches/cli.md)。
+- 結合試験（`integration_api_` 接頭辞、store と git fixture）: [e2e](2026-10-11-stranded-done-branches/e2e.md)。
+
+[api-cli](2026-10-11-stranded-done-branches/api-cli.md) の未解決は解消済みに更新した。受け入れ条件ごとの証拠・残った未解決・提案は [close](2026-10-11-stranded-done-branches/close.md) にある。残りは、受信箱の discard/hold の操作先（`native` は merge のみ）と、ADR D4 の merge 意味の差（人の判断）。

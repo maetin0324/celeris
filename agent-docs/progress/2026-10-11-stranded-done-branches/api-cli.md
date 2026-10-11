@@ -5,20 +5,24 @@ tasks: [01M4MAZNNYT4JVRYKCVZ1TF1VF]
 
 ## Status
 
-未完了。開始時の変更は `query/tests.rs` の既存型 serialization 試験と前回記録だけだった。`task-ops::stranded` に discard/hold/reopen/merge の操作はあるが、この WorkUnit の差分範囲は `task-api` と `celerisctl` が中心で、task list/detail は `task-ops::view::{TaskSummary,TaskDetail}`、受信箱の `AttentionItem::Unintegrated` も task-ops が組み立てる。状態と promotion を list/detail/inbox に一貫して載せるにはそれらの view 型変更が必要となる。
+解消済み（2026-10-11）。前回の「未完了」の理由だった view 型・API route・daemon 配線・CLI・schema/生成型は、次の WorkUnit の記録で実装されている。
 
-API handler の操作に必要な repository path/default branch/release directory を安全に得る wiring も未特定。既存の `changes` の統合経路は `task_integrations`（ADR-0043）で、今回の `task_integration_state` による git ancestry 判定・状態遷移とは別経路である。従って、この状態で表面だけ追加すると要求された意味の merge と誤認される危険があり、未実装のまま停止した。
+- view（TaskSummary/TaskDetail の `integrations`・`promotion`、受信箱 `Unintegrated`）: [views](views.md)
+- API route（`GET /api/v1/integrations`、`GET /api/v1/tasks/{id}/integrations`、`POST …/{repo}/{merge|discard|hold|reopen}`）: [routes](routes.md)、[routes-wire](routes-wire.md)（CoS 登録・daemon の `releases_dir` 配線・summary/detail の取り込み状態配線）
+- celerisctl（`integration list/merge/discard/hold/reopen`）: [cli](cli.md)
+- daemon 配線込みの結合試験（取り残し→一覧・詳細→route 操作→events）: [e2e](e2e.md)
+- 突き合わせと残りの差分: [ADR 2026-10-11-stranded-done-branches の付記](../../adr/2026-10-11-stranded-done-branches.md)、[close](close.md)
 
-## 確認
+前回の「API handler の操作に必要な repository path/default branch/release directory の wiring が未特定」は、routes の記録どおり、task の worktree marker と project repository の default branch・`[selfdeploy] releases_dir`（`ApiState.integration_releases_dir`）で解消した。
 
-- `task-ops/src/stranded.rs`: 状態遷移と既存 integration request への merge route を確認。
-- `task-ops/src/inbox.rs`, `human_inbox.rs`: Unintegrated item の生成と kind を確認。
-- `task-ops/src/view.rs`: TaskSummary/TaskDetail の所有位置を確認。
-- `celerisctl/src/main.rs`, `commands/cos_ops.rs`: API request は run credential 前提の別系統で、通常の integration CLI とは異なることを確認。
-- `cargo test -p task-api -p celerisctl -- stranded_`: 前回は exit 0 だが対象試験が 0 件（test result の passed count が 0）。
+## 確認（前回からの継続分）
+
+- `task-ops/src/stranded.rs`: 状態遷移と既存 integration request への merge route。
+- `task-ops/src/inbox.rs`, `human_inbox.rs`: Unintegrated item の生成と kind。
+- `task-ops/src/view.rs`: TaskSummary/TaskDetail の所有位置。
+- `celerisctl/src/main.rs`: `integration` は `cron`/`models` と同じく DB を開く前に処理し、CoS run 下の mutation は拒否される。
 
 ## 未解決
 
-- API の一覧・詳細・inbox status/promotion 欄と、操作/list endpoints。
-- celerisctl integration list/merge/discard/hold/reopen と試験。
-- schema/generated types と acceptance checks。
+- 受信箱の discard/hold は item の `native` に入っていない（`native` は merge だけ）。web は `operation_path` に操作名を足して呼ぶ必要がある。詳細は [close](close.md) の未解決 1。
+- ADR D4 の「merge は git 到達確認を通す」と API の merge（既に integrated なら記録、未取り込みなら統合依頼の記録）の差。人の判断が要る（close の未解決 2）。

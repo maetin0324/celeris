@@ -13,3 +13,4 @@ completed: 2026-10-11
 ## 証拠コマンド
 - `sh scripts/dev/progress-index.sh --check`: exit 0
 - `git diff --quiet "$CELERIS_WU_BASE" -- crates/ web/ gui/`: exit 0（コードは変えていない）
+- `sh scripts/dev/check-doc-links.sh && sh scripts/dev/check-adr-numbers.sh && sh scripts/dev/progress-index.sh --check`: exit 0（2 回目の run。1 回目は先行 task 01M4M8D4AP の ADR への Markdown リンクが main 取り込み前で解決できず不合格 → file 名と branch の名指しに変えた）

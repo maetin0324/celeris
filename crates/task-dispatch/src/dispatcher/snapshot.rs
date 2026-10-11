@@ -76,6 +76,7 @@ impl Dispatcher {
         awaiting_children.sort();
         let mut unroutable: Vec<TaskId> = self.unroutable.iter().copied().collect();
         unroutable.sort();
+        let task_waits = self.snapshot_task_waits();
         let providers = publisher
             .providers
             .iter()
@@ -143,6 +144,7 @@ impl Dispatcher {
             awaiting_human,
             awaiting_children,
             unroutable,
+            task_waits,
             reports: None,
             // ADR-0033 D5（Phase 26）: 未読の件数は API が応答を組むときに埋める（`reports` と同じ理由）。
             approvals_pending: 0,
@@ -183,6 +185,42 @@ impl Dispatcher {
     /// ADR 2026-10-08 account-concurrency-limits §(e): 非プール行の LLM source ごとの暗黙アカウント
     /// （最初の行の設定順）。
     /// 上限の保存値は DB が正本なので、API が `account_limits` を読んで実効上限を組む。
+    /// ADR 2026-10-11-task-wait-reasons D4: メモリの見送り理由（task_id 順・1 task に 1 件）。この tick の
+    /// `dispatch_waits`（M1〜M6・M9）に、reviewing のまま委譲した子を待つ親（M7）と人の承認を待つ親（M8）を足す。
+    pub(super) fn snapshot_task_waits(&self) -> Vec<task_ops::daemon::SnapshotTaskWait> {
+        let mut waits: std::collections::BTreeMap<TaskId, task_core::TaskWait> = self
+            .dispatch_waits
+            .iter()
+            .map(|(id, w)| (*id, w.clone()))
+            .collect();
+        for parent in self.awaiting_children.keys() {
+            // 未完の子（読めなければ空。snapshot は観測値で、tick を止めない）。
+            let mut task_ids: Vec<TaskId> = self
+                .store
+                .children(*parent)
+                .map(|cs| {
+                    cs.into_iter()
+                        .filter(|c| !c.status.is_terminal())
+                        .map(|c| c.id)
+                        .collect()
+                })
+                .unwrap_or_default();
+            task_ids.sort();
+            waits
+                .entry(*parent)
+                .or_insert(task_core::TaskWait::DelegatedChildren { task_ids });
+        }
+        for id in &self.awaiting_human {
+            waits
+                .entry(*id)
+                .or_insert(task_core::TaskWait::ReviewAwaitingHuman);
+        }
+        waits
+            .into_iter()
+            .map(|(task_id, wait)| task_ops::daemon::SnapshotTaskWait { task_id, wait })
+            .collect()
+    }
+
     pub(super) fn implicit_accounts_snapshot(&self) -> Vec<task_ops::daemon::ImplicitAccountLive> {
         self.implicit_account_ids()
             .into_iter()

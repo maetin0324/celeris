@@ -3133,6 +3133,8 @@ mod undeclared_artifacts_scan;
 
 mod cluster_job_wait;
 mod cos_capacity;
+/// ADR 2026-10-11-task-wait-reasons: 見送りの理由（snapshot の task_waits と共有の待ち判定）。
+mod task_waits;
 #[path = "../cos_chat/harness_tests.rs"]
 mod cos_chat_harness_tests;
 mod cos_chat_launch;

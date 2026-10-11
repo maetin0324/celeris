@@ -28,6 +28,11 @@ pub struct DaemonSnapshot {
     pub awaiting_children: Vec<TaskId>,
     /// 設定に合うプロバイダが無い ready タスク（この tick の判定）。
     pub unroutable: Vec<TaskId>,
+    /// ADR 2026-10-11-task-wait-reasons D4: この tick に dispatcher のメモリだけで決まった見送りの理由（M1〜M9。
+    /// 枠満杯・経路なし・クラスタ・write-set・バックオフ・disk critical・委譲した子待ち・人の承認待ち）。task_id 順、
+    /// 1 task に 1 件。DB で決まる理由（`task_core::db_waits` / `plan_waits`）は入れない。
+    #[serde(default)]
+    pub task_waits: Vec<SnapshotTaskWait>,
     /// ADR-0033 D3（Phase 25）: 秘書レベルの未読の報告と通知の判定。**API が応答を組むときに埋める**
     /// 唯一のフィールド（`last_notified_at` は `POST /reports/notified` が進める API プロセスの観測値で、
     /// ディスパッチャは知らない）。ディスパッチャが送るスナップショットでは常に `None`。
@@ -390,6 +395,13 @@ pub struct AccountCooldownLive {
     pub until: i64,
     /// `"auth_failed" | "throttled" | "exhausted"`。
     pub reason: String,
+}
+
+/// ADR 2026-10-11-task-wait-reasons D4: dispatcher が見送った task と、その理由（メモリの理由）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct SnapshotTaskWait {
+    pub task_id: TaskId,
+    pub wait: task_core::TaskWait,
 }
 
 /// 実行中の run（ワーカー run、またはプロバイダを使う Reviewer run）。

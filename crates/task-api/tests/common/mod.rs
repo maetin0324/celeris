@@ -464,6 +464,7 @@ pub fn snapshot(ticks: u64) -> DaemonSnapshot {
         awaiting_human: vec![],
         awaiting_children: vec![],
         unroutable: vec![],
+        task_waits: vec![],
         reports: None,
         approvals_pending: 0,
         decisions_open: 0,

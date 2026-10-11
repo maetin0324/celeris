@@ -7,7 +7,7 @@ updated: 2026-10-11
 
 # 待ちの理由（task-wait-reasons）
 
-- 決定: [ADR 2026-10-11-task-wait-reasons](../adr/2026-10-11-task-wait-reasons.md)（Status: 実装済み。D4 の旧 3 欄の削除を除く）
+- 決定: [ADR 2026-10-11-task-wait-reasons](../adr/2026-10-11-task-wait-reasons.md)（Status: 実装済み）
 - 共通規則: `/local/celeris/data/workspaces/01M4NAKDCCS5XYAAJ518MVZ134/artifacts/plan-common.md`
 - 葉ごとの記録: `2026-10-11-task-wait-reasons/<unit key>.md`
 - 完了日: 2026-10-11
@@ -72,6 +72,18 @@ HEAD `2878637c`（integrate wu/web-label）上で実行。コードは変えて�
 - 旧欄の確認: `crates/task-ops/src/daemon.rs` に `unroutable`・`awaiting_children`・`awaiting_human` は残っていない（grep 0 件）。
 - 共有の確認: `crates/task-dispatch/src/dispatcher/tree_units.rs:516` が `task_ops::wait::human_gate_waits(task, Some(plan), events)` を呼ぶ。`crates/task-ops/src/wait.rs` に `StageReview` が出る。旧 `gate_waits` は crates に残っていない。
 
+## 差し戻し修正後の全体検証（2026-10-11、final-verify 葉）
+
+記録: `agent-docs/progress/2026-10-11-task-wait-reasons/final-verify.md`。コードは `2cc3cb46` で検査。以後の HEAD はその記録の追加だけで、`git diff --quiet "${CELERIS_WU_BASE:-HEAD}" -- crates/ web/` は exit 0。
+
+- `TMPDIR=/tmp bash scripts/dev/test-parallel.sh` → exit 0。nextest `5185 tests run: 5185 passed, 13 skipped`、doctest `3 passed`、summary `passed 5188, failed 0, ignored 14`。
+- `cargo clippy --workspace -- -D warnings` → exit 0（警告 0）。
+- `cargo fmt --all -- --check` → exit 0。
+- web: `pnpm -C web install --offline --frozen-lockfile` exit 0、`typecheck`（tsc -b）exit 0、`test` exit 0（Test Files 95 passed、Tests 691 passed）。
+- e2e: `playwright test e2e/work/wait-reasons.spec.ts e2e/work/task-tree-waits.spec.ts` exit 0、`2 passed`。
+- 文書検査: `check-adr-numbers.sh` exit 0、`check-doc-layout.sh` exit 0、`check-doc-links.sh` exit 0。
+- 既定の TMPDIR（93 文字）では browser・credentiald の 108 件が unix socket path 長で落ちる。環境要因で、run の TMPDIR を短くするかは人の判断（既知事項）。
+
 ## 未解決
 
 - 一覧の応答で非終端 task の計画を読む負荷は未計測（ADR Consequences）。
@@ -80,11 +92,13 @@ HEAD `2878637c`（integrate wu/web-label）上で実行。コードは変えて�
 
 ## 本番への移行
 
-なし（本番 host・DB・config への操作は無い）。
+- GET /daemon（`DaemonSnapshot`）から旧 3 欄（`unroutable`・`awaiting_children`・`awaiting_human`）が消えた。代わりに `task_waits` を読む。受信箱の `attention[].unroutable` は `task_waits` の `Unroutable` から組む。
+- config・DB の書き換えは不要（DaemonSnapshot は tick ごとのメモリ上の snapshot で、DB の列も config 欄も変えていない）。migration も無い。
+- 本番 host・DB・config への操作は無い。人の作業は無い。
 
 ## 提案
 
-- 後続の小さな task を 1 つ: `DaemonSnapshot` の旧 3 欄と dispatcher の同名集合を `task_waits` へ寄せて消す（ADR D4・D6 の最後の行）。試験は `crates/task-dispatch` の `task_wait_` 系で足りる。
+- なし。旧 3 欄の削除は葉 snapshot-old で済んだ（ADR 付記の「葉 snapshot-old」）。
 
 ## final review 失敗の修正（fix-tests、2026-10-11）
 

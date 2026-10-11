@@ -730,6 +730,62 @@ mod tests {
     }
 
     #[test]
+    fn stranded_audit_remote_not_applicable_appends_one_event_and_no_repeat() {
+        let store = SqliteStore::open_in_memory().expect("store");
+        let task_id = TaskId::new();
+        let repo_id = RepoId::new();
+        let now = OffsetDateTime::from_unix_timestamp(1_800_000_000).expect("clock");
+        store
+            .task_integration_upsert(&TaskRepoIntegrationState {
+                task_id,
+                repo_id,
+                branch: "celeris/task".into(),
+                head_sha: "abc".into(),
+                state: TaskRepoIntegrationStatus::Unintegrated,
+                reason: Some("repository cannot be resolved".into()),
+                actor: "sweep".into(),
+                checked_at: now,
+                updated_at: now,
+            })
+            .expect("seed unintegrated row");
+        let record = BranchRecord {
+            task_id,
+            repo_id,
+            repo_path: None,
+            default_branch: Err(crate::changes::DefaultBranchError(
+                "remote repository: not checked by the sweep".into(),
+            )),
+            branch: Some("celeris/task".into()),
+            head: None,
+            done: true,
+            root: true,
+            changed_repo: true,
+            not_applicable: true,
+        };
+        let not_applicable_events = |store: &SqliteStore| {
+            store
+                .events_for(task_id)
+                .expect("events")
+                .iter()
+                .filter(|(_, event)| {
+                    matches!(event, task_core::Event::IntegrationNotApplicable { .. })
+                })
+                .count()
+        };
+        assert_eq!(
+            sweep(&store, std::slice::from_ref(&record), now).expect("remote sweep"),
+            1
+        );
+        assert_eq!(not_applicable_events(&store), 1);
+        let later = now + time::Duration::minutes(5);
+        assert_eq!(
+            sweep(&store, std::slice::from_ref(&record), later).expect("repeat sweep"),
+            0
+        );
+        assert_eq!(not_applicable_events(&store), 1);
+    }
+
+    #[test]
     fn stranded_remote_actions_reject_not_applicable_rows() {
         let store = SqliteStore::open_in_memory().expect("store");
         let task_id = TaskId::new();

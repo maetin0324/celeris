@@ -192,6 +192,7 @@ export const EVENT_INVALIDATION: Record<EventKind, KindSpec> = {
   integration_discarded: { sets: ["T", "L"] },
   integration_held: { sets: ["T", "L"] },
   integration_reopened: { sets: ["T", "L"] },
+  integration_not_applicable: { sets: ["T", "L"] },
   // 統合 WU の検査の開始・終了（TaskDetail の WU 行の check_progress）。
   integration_check_started: { sets: ["T", "E"] },
   integration_check_finished: { sets: ["T", "E"] },

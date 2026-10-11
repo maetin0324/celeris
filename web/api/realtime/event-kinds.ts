@@ -90,6 +90,7 @@ export const EVENT_KINDS = [
   "integration_discarded",
   "integration_held",
   "integration_reopened",
+  "integration_not_applicable",
   "integration_check_started",
   "integration_check_finished",
   "work_unit_check_started",

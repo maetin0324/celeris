@@ -213,7 +213,7 @@ fn cluster_job_wait_event_types_match_their_serde_names() {
     }
     let unique: std::collections::BTreeSet<&str> = EVENT_TYPES.iter().copied().collect();
     assert_eq!(unique.len(), EVENT_TYPES.len());
-    assert_eq!(EVENT_TYPES.len(), 81);
+    assert_eq!(EVENT_TYPES.len(), 82);
 }
 
 #[test]
@@ -326,6 +326,13 @@ fn integration_state_event_types_match_their_serde_names() {
             reason: None,
             actor: "human".into(),
         },
+        Event::IntegrationNotApplicable {
+            repo_id,
+            branch: "celeris/t1".into(),
+            head_sha: "head".into(),
+            reason: "remote repository: not checked by the sweep".into(),
+            actor: "sweep".into(),
+        },
     ];
     for event in events {
         let value = serde_json::to_value(&event).unwrap();
@@ -407,7 +414,7 @@ fn routing_feedback_event_types_match_their_serde_names() {
         assert_eq!(serde_name, event_type_name(&event));
         assert!(EVENT_TYPES.contains(&serde_name), "{serde_name}");
     }
-    assert_eq!(EVENT_TYPES.len(), 81);
+    assert_eq!(EVENT_TYPES.len(), 82);
 }
 
 /// ADR 2026-10-07-worker-no-subagents-no-llm-cli D5: `WorkerPolicyViolation` の `type` 名が serde の名前・

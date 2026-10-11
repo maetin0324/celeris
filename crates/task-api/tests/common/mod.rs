@@ -21,9 +21,7 @@ use task_core::{
     Budget, Check, Criterion, Event, SqliteStore, Status, Task, TaskId, TaskKind, TaskStore, Tier,
     WorkerHint, WorkspaceSpec,
 };
-use task_ops::daemon::{
-    ClusterLive, CooldownView, DaemonSnapshot, InFlight, InFlightKind, ProviderLive,
-};
+use task_ops::daemon::{ClusterLive, CooldownView, DaemonSnapshot, InFlight, InFlightKind};
 use task_ops::view::ViewContext;
 use time::OffsetDateTime;
 use tokio::sync::{mpsc, watch};
@@ -438,51 +436,6 @@ pub fn snapshot(ticks: u64) -> DaemonSnapshot {
             connection_stats: Default::default(),
             tunnel_forwards: vec![],
         }],
-        providers: vec![
-            ProviderLive {
-                kind: Default::default(),
-                llm_source: Some(task_core::ResolvedLlmSource {
-                    source: task_core::LlmSourceRef::ClaudeOauth,
-                    origin: task_core::SourceOrigin::Derived,
-                }),
-                credential_refs: Default::default(),
-                tier_models: Default::default(),
-                account_id: None,
-                id: "claude-a".into(),
-                adapter: "claude-code".into(),
-                tiers: vec![Tier::Frontier, Tier::Standard],
-                concurrency: 2,
-                model: Some("claude-sonnet-5".into()),
-                env_keys: vec!["CLAUDE_CONFIG_DIR".into()],
-                in_use: 1,
-                // ADR-0022 D2: 一度 check した後のスナップショット（`GET /providers` の last_check に出る）。
-                last_check: Some(task_ops::daemon::ProviderCheckView {
-                    at: "2026-09-16T01:00:00Z".into(),
-                    result: "ok".into(),
-                    detail: Some("ready".into()),
-                }),
-                account_pool: false,
-            },
-            ProviderLive {
-                kind: Default::default(),
-                llm_source: Some(task_core::ResolvedLlmSource {
-                    source: task_core::LlmSourceRef::ClaudeOauth,
-                    origin: task_core::SourceOrigin::Derived,
-                }),
-                credential_refs: Default::default(),
-                tier_models: Default::default(),
-                account_id: None,
-                id: "claude-b".into(),
-                adapter: "claude-code".into(),
-                tiers: vec![Tier::Frontier],
-                concurrency: 1,
-                model: None,
-                env_keys: vec![],
-                in_use: 0,
-                last_check: None,
-                account_pool: false,
-            },
-        ],
     }
 }
 

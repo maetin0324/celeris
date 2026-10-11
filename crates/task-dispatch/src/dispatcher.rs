@@ -60,7 +60,7 @@ use task_core::{
 };
 use task_ops::daemon::{
     AccountCooldownLive, AccountLive, AccountUsageLive, ClusterLive, CooldownView, DaemonSnapshot,
-    InFlight, InFlightKind, ProviderCheckView, ProviderLive, TunnelForwardLive,
+    InFlight, InFlightKind, AccountCheckView, TunnelForwardLive,
 };
 use task_ops::delegate::{pending_children, plan_delegation};
 use task_ops::derive::{
@@ -2099,29 +2099,6 @@ impl Dispatcher {
         }
     }
 
-    /// ADR-0017 M4: 次 tick のスナップショットに乗るプロバイダ一覧を差し替える（`reload_providers` とあわせて呼ぶ）。
-    /// `set_snapshot_publisher` より前（`publisher` が無い状態）で呼んでも無害（何もしない）。
-    pub fn set_snapshot_providers(&mut self, providers: Vec<ProviderLive>) {
-        if let Some(publisher) = self.publisher.as_mut() {
-            // ADR-0022 D2: 消えた id の確認記録は落とし、残った id の記録は保つ。
-            let ids: std::collections::HashSet<&str> =
-                providers.iter().map(|p| p.id.as_str()).collect();
-            publisher
-                .provider_checks
-                .retain(|id, _| ids.contains(id.as_str()));
-            publisher.providers = providers;
-        }
-    }
-
-    /// ADR-0022 D2: 疎通確認の結果をスナップショットに載せる（DB には書かない）。次の tick から `GET /providers` に出る。
-    pub fn set_provider_check(&mut self, provider_id: &str, check: ProviderCheckView) {
-        if let Some(publisher) = self.publisher.as_mut() {
-            publisher
-                .provider_checks
-                .insert(provider_id.to_string(), check);
-        }
-    }
-
     /// 1 tick。tokio ランタイム内から呼ぶ（ワーカーとレビューを `tokio::spawn` する）。
     pub fn tick(&mut self) -> Result<TickReport, DispatchError> {
         self.ticks += 1;
@@ -2431,14 +2408,6 @@ impl Dispatcher {
             return Ok(false);
         }
         Ok(crate::capacity::is_cos_run(task, &self.store.org_list()?))
-    }
-
-    /// そのプロバイダで走っている通常 run の数。
-    fn provider_in_use(&self, provider: &ProviderId) -> usize {
-        self.running
-            .values()
-            .filter(|e| !e.cos && &e.provider == provider)
-            .count()
     }
 
     /// ADR-0052 D1: このタスクが「知識整理 run（`langmem` 固定）」で、かつ接続先に届かないなら、

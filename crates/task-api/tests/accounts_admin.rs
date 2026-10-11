@@ -788,12 +788,12 @@ async fn implicit_accounts_are_listed_and_patchable_without_the_accounts_section
     snap.implicit_accounts = vec![
         task_ops::daemon::ImplicitAccountLive {
             source: "openai_compatible:qwen".into(),
-            providers: vec!["opencode-qwen".into(), "pi-qwen".into()],
+            models: vec!["qwen3.8-27b".into(), "qwen3.8-27b-instruct".into()],
             in_use: 2,
         },
         task_ops::daemon::ImplicitAccountLive {
             source: "celeris".into(),
-            providers: vec!["x".into()],
+            models: vec!["m1".into()],
             in_use: 0,
         },
     ];
@@ -811,7 +811,7 @@ async fn implicit_accounts_are_listed_and_patchable_without_the_accounts_section
     assert_eq!(items.len(), 2, "{items:?}");
     assert_eq!(items[0]["adapter"], json!("implicit"));
     assert_eq!(items[0]["id"], json!("openai_compatible:qwen"));
-    assert_eq!(items[0]["providers"], json!(["opencode-qwen", "pi-qwen"]));
+    assert_eq!(items[0]["models"], json!(["qwen3.8-27b", "qwen3.8-27b-instruct"]));
     assert_eq!(items[0]["implicit"], json!(true));
     assert_eq!(items[0]["dir"], json!(null));
     assert_eq!(items[0]["logged_in"], json!(true));
@@ -821,7 +821,7 @@ async fn implicit_accounts_are_listed_and_patchable_without_the_accounts_section
     assert_eq!(items[0]["max_runs_source"], json!("default"));
     assert_eq!(items[0]["excluded_reason"], json!("at_capacity"));
     assert_eq!(items[1]["id"], json!("celeris"));
-    assert_eq!(items[1]["providers"], json!(["x"]));
+    assert_eq!(items[1]["models"], json!(["m1"]));
     assert_eq!(items[1]["effective_max_runs"], json!(2));
     assert_eq!(items[1]["max_runs_source"], json!("default"));
 

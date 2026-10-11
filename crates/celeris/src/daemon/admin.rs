@@ -2,7 +2,7 @@
 
 use task_dispatch::Dispatcher;
 
-use super::adapters::{build_harness_adapters, provider_lives};
+use super::adapters::build_harness_adapters;
 use super::clusters::ClusterMasters;
 use crate::{Config, accounts_admin, cluster_admin, config, notify};
 
@@ -209,7 +209,6 @@ pub(crate) fn reload_providers(
     if let Err(error) = dispatcher.prune_implicit_account_limits() {
         tracing::warn!(%error, "cannot prune implicit account limits");
     }
-    dispatcher.set_snapshot_providers(provider_lives(&new_config));
     // Phase 44: 役割・分野・委譲設定はディスパッチャ側（次に起動する run から効く）。
     dispatcher.reload_config(
         new_config.role_specs(),

@@ -175,7 +175,7 @@ impl Config {
                 // ADR-0052 D1（Phase 64）: dispatch の直前に `GET <base_url>/models` を当てる先。
                 langmem_base_url: self.knowledge.langmem.base_url.clone(),
                 // Phase 65b / ADR-0139 D2: probe の `Authorization: Bearer` に使う平文のトークン。
-                // `build_adapters` の langmem アダプタと同じ `Config::langmem_api_key`（proxy を指すなら
+                // `build_harness_adapters` の langmem アダプタと同じ `Config::langmem_api_key`（proxy を指すなら
                 // `[api]` のトークン）。**値はここにしか無い**（ログには出さない）。
                 langmem_api_key: self.langmem_api_key(),
                 // ADR-0052 D2: `knowledge` ハーネスの `fallback`（組み込みの既定は tier `cheap`）。

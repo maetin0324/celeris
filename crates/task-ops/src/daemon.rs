@@ -6,7 +6,7 @@
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use task_core::{TaskId, Tier};
+use task_core::TaskId;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct DaemonSnapshot {
@@ -38,7 +38,6 @@ pub struct DaemonSnapshot {
     /// `approvals_pending` と同じく **API が応答を組むときに埋める**（ディスパッチャが送るスナップショットでは常に 0）。
     #[serde(default)]
     pub decisions_open: u32,
-    pub providers: Vec<ProviderLive>,
     /// ADR-0018: `[[clusters]]` の稼働状況（`id` 昇順）。第 2 段階で追加したので、古いスナップショットには無い。
     #[serde(default)]
     pub clusters: Vec<ClusterLive>,
@@ -325,9 +324,9 @@ pub struct ContainerProbeView {
 pub struct ImplicitAccountLive {
     /// 解決済み LLM source の id（= 暗黙アカウントの id。`celeris` / `openai_compatible:<id>` 等）。
     pub source: String,
-    /// この source を使う非プール行の id（設定順）。
+    /// この source を選択する route の model id（設定順）。
     #[serde(default)]
-    pub providers: Vec<String>,
+    pub models: Vec<String>,
     /// これらの行で走っている全 run（非 CoS・CoS・プロバイダを使うレビュー run）の数。
     pub in_use: u32,
 }
@@ -354,10 +353,19 @@ pub struct AccountLive {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cooldown: Option<AccountCooldownLive>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_check: Option<ProviderCheckView>,
+    pub last_check: Option<AccountCheckView>,
     /// 進行中のログイン中継（ADR-0024 D7）があるか。
     #[serde(default)]
     pub login_pending: bool,
+}
+
+/// Result of a credential check retained in the in-memory account view.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct AccountCheckView {
+    pub at: String,
+    pub result: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
 }
 
 /// `RateLimitObservation` の観測値部分（Unix 秒のまま。壁時計の文字列化は task-api が行う）。
@@ -421,54 +429,6 @@ pub struct CooldownView {
     pub until: String,
     /// `"throttled" | "auth_failed" | "exhausted"`。
     pub reason: String,
-}
-
-/// プロバイダ（`[[providers]]` の行。認証アカウントは別参照）の稼働状況。`env` の値は含めない。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct ProviderLive {
-    #[serde(default)]
-    pub kind: task_core::ProviderKind,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub llm_source: Option<task_core::ResolvedLlmSource>,
-    #[serde(default)]
-    pub credential_refs: std::collections::HashMap<String, String>,
-    #[serde(default)]
-    pub tier_models: task_core::model_routing::TierModels,
-    #[serde(default)]
-    pub account_id: Option<String>,
-    pub id: String,
-    pub adapter: String,
-    pub tiers: Vec<Tier>,
-    /// Deprecated（ADR 2026-10-08 account-concurrency-limits §(a)）: config に書かれた旧値（無ければ 1）。
-    /// dispatch では使わず、何とも比べない。同時実行数はアカウント（暗黙アカウントを含む）の上限で決まる。
-    #[schemars(extend("deprecated" = true))]
-    pub concurrency: usize,
-    /// 実効モデル（空なら `None`）。
-    pub model: Option<String>,
-    /// `env` のキー名だけ（値は出さない）。古いスナップショットには無いので既定は空（ADR-0017 M4）。
-    #[serde(default)]
-    pub env_keys: Vec<String>,
-    /// 実行中の通常 run と Reviewer run の合計。
-    pub in_use: u32,
-    /// ADR-0022 D2: 直近の疎通確認（`POST /providers/{id}/check`）の結果。**メモリだけに持つ観測値**で、
-    /// celeris を再起動すると消える（イベントにも DB にも残さない）。一度も確認していなければ `None`。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_check: Option<ProviderCheckView>,
-    /// ADR-0024 D2: `[accounts]` のプールから選ぶか。古いスナップショットには無いので既定 `false`。
-    #[serde(default)]
-    pub account_pool: bool,
-}
-
-/// ADR-0022 D2: 1 回の疎通確認の記録。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct ProviderCheckView {
-    /// 確認した時刻（RFC 3339）。
-    pub at: String,
-    /// `ok` / `auth_failed` / `throttled` / `spawn_failed`（`task_api::ProviderCheckResult` の serde 名）。
-    pub result: String,
-    /// 人が読むための一行の手がかり（ワーカーの返答や失敗の理由。ADR-0022 M1）。無ければ `null`。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub detail: Option<String>,
 }
 
 /// クラスタ（`[[clusters]]` の行）の稼働状況（ADR-0018 D2 / D5）。`env` の値・`setup` の中身は含めない。

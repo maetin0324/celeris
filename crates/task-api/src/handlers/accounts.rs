@@ -60,7 +60,7 @@ async fn account_items(state: &ApiState) -> Result<Vec<AccountView>, ApiProblem>
         .map(|(a, d)| (a.as_str().to_string(), d.id.clone()))
         .collect();
     // §(e): 暗黙アカウントは LLM source 単位。同じ source を使う行の集計を足し合わせる。
-    let implicit_rows: Vec<Vec<String>> = implicit.iter().map(|i| i.providers.clone()).collect();
+    let implicit_rows: Vec<Vec<String>> = implicit.iter().map(|i| i.models.clone()).collect();
     let inner = Arc::clone(&state.inner);
     let today = time::OffsetDateTime::now_utc().date();
     let (limits, real_stats, implicit_stats) = state
@@ -150,7 +150,7 @@ async fn account_items(state: &ApiState) -> Result<Vec<AccountView>, ApiProblem>
             effective_max_runs: effective,
             max_runs_source: source.to_string(),
             implicit: false,
-            providers: Vec::new(),
+            models: Vec::new(),
         });
     }
     for (live, stats) in implicit.iter().zip(implicit_stats) {
@@ -187,7 +187,7 @@ fn implicit_view(
         effective_max_runs: effective,
         max_runs_source: source.to_string(),
         implicit: true,
-        providers: live.providers.clone(),
+        models: live.models.clone(),
     }
 }
 
@@ -383,7 +383,7 @@ pub(crate) async fn set_account_limit_effect(
         None if implicit => implicit_view(
             &task_ops::daemon::ImplicitAccountLive {
                 source: id.to_string(),
-                providers: Vec::new(),
+                models: Vec::new(),
                 in_use: 0,
             },
             max_runs,
@@ -473,7 +473,7 @@ pub(crate) fn create_account_op(
         effective_max_runs: state.inner.max_runs_per_account,
         max_runs_source: "default".to_string(),
         implicit: false,
-        providers: Vec::new(),
+        models: Vec::new(),
     })
 }
 

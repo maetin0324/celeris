@@ -24,7 +24,7 @@ pub struct AdaptersConfig {
     #[serde(default)]
     pub local_deep_research: LdrAdapterConfig,
     /// ADR-0047 D4（Phase 62）: 知識整理 run を起こす python（venv の python）と無出力タイムアウト。
-    /// LLM の接続先（provider/base_url/model/api_key_secret）は `[knowledge.langmem]` の方（`build_adapters`
+    /// LLM の接続先（provider/base_url/model/api_key_secret）は `[knowledge.langmem]` の方（`build_harness_adapters`
     /// が両方を合わせて `task_worker::LangMemConfig` を作る）。
     #[serde(default)]
     pub langmem: LangMemAdapterConfig,

@@ -279,7 +279,7 @@ impl RoleAssignmentReader for StaticAssignments {
     }
 }
 
-/// `ProviderLive.llm_source` から catalog の source 名を求める。catalog を持たない source は `None`。
+/// LLM source から catalog の source 名を求める。catalog を持たない source は `None`。
 pub fn source_name_for_llm_source(source: &crate::LlmSourceRef) -> Option<String> {
     match source {
         crate::LlmSourceRef::ClaudeOauth => Some(CatalogSource::CLAUDE_OAUTH.to_string()),

@@ -156,8 +156,6 @@ async fn offline_cluster_is_reported_in_the_snapshot_and_the_event_carries_the_h
         hostname: "host-1".into(),
         started_at: "2026-09-15T00:00:00Z".into(),
         tick_ms: 50,
-        providers: vec![],
-        provider_checks: Default::default(),
     });
 
     let report = d.tick().unwrap();
@@ -1626,8 +1624,6 @@ async fn cluster_live_carries_auth_and_connect_pending() {
         hostname: "host-1".into(),
         started_at: "2026-09-17T00:00:00Z".into(),
         tick_ms: 50,
-        providers: vec![],
-        provider_checks: Default::default(),
     });
 
     d.tick().unwrap();

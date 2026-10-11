@@ -16,7 +16,7 @@ use task_ops::view::ViewContext;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
-use super::adapters::{provider_lives, secret_usage};
+use super::adapters::secret_usage;
 use super::bootstrap::hostname;
 use crate::{Config, DaemonError, InstanceIdentity};
 
@@ -440,8 +440,6 @@ pub(crate) async fn start_api(
         hostname: hostname(),
         started_at: started_at.clone(),
         tick_ms: config.tick_ms,
-        providers: provider_lives(config),
-        provider_checks: std::collections::HashMap::new(),
     });
     // ADR-0017 M2: `reload`/`check` は API 側では実行できない（task-worker/task-dispatch に依存しない
     // 境界を守るため）。celeris の tick ループへ委譲するチャネルを作り、送信側だけ API に渡す。

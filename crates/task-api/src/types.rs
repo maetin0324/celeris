@@ -614,7 +614,7 @@ pub struct AccountView {
     /// `"not_logged_in" | "at_capacity" | "cooldown" | "five_hour_exhausted" | "seven_day_exhausted" | "one_month_exhausted" | "rejected"`。
     pub excluded_reason: Option<String>,
     pub cooldown: Option<AccountCooldownView>,
-    pub last_check: Option<task_ops::daemon::ProviderCheckView>,
+    pub last_check: Option<task_ops::daemon::AccountCheckView>,
     /// ADR-0024 D7: 進行中のログイン中継があるか。
     pub login_pending: bool,
     pub stats: AccountStats,
@@ -626,9 +626,9 @@ pub struct AccountView {
     pub max_runs_source: String,
     /// §(e): 暗黙アカウント（`adapter = "implicit"`、非プール行の LLM source ごとに 1 件）か。
     pub implicit: bool,
-    /// 暗黙アカウントの LLM source（= `id`）を使う非プール行の id（設定順）。実アカウントは空。
+    /// 暗黙アカウントの source に紐付く model id（設定順）。実アカウントは空。
     #[serde(default)]
-    pub providers: Vec<String>,
+    pub models: Vec<String>,
 }
 
 /// `PATCH /accounts/{adapter}/{id}` の要求本文（ADR 2026-10-08 account-concurrency-limits §(d)）。

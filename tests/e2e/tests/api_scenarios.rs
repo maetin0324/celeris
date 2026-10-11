@@ -1068,7 +1068,7 @@ fn api_enforces_token_host_and_workspace_boundaries_without_leaking_env_values()
     );
 
     // env の値・トークン・token_file の場所は応答に出ない（キー名は出る）。
-    for path in ["/config", "/providers", "/daemon", "/health"] {
+    for path in ["/config", "/daemon", "/health"] {
         let r = env.get(path);
         assert_eq!(r.status, 200, "{path}: {}", r.body);
         for secret in [
@@ -1085,10 +1085,6 @@ fn api_enforces_token_host_and_workspace_boundaries_without_leaking_env_values()
         }
     }
     let cfg = env.get("/config").json();
-    assert!(
-        cfg.to_string().contains("SECRET_TOKEN"),
-        "env keys are listed: {cfg}"
-    );
     assert_eq!(cfg["api"]["auth_required"], true, "{cfg}");
 
     // ワークスペース外を指す成果物は 403（`..` と symlink の両方）。中のものは読める。

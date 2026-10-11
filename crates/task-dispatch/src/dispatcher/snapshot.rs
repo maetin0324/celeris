@@ -11,11 +11,6 @@ pub struct SnapshotPublisher {
     /// RFC 3339。
     pub started_at: String,
     pub tick_ms: u64,
-    /// `[[providers]]` の定義（`in_use` は毎 tick に埋める）。
-    pub providers: Vec<ProviderLive>,
-    /// ADR-0022 D2: プロバイダ id → 直近の疎通確認。`reload` でプロバイダ表を差し替えても保持する
-    /// （確認した事実は設定の書き換えでは古くならない）。celeris を再起動すると消える。
-    pub provider_checks: HashMap<String, ProviderCheckView>,
 }
 
 impl Dispatcher {
@@ -63,23 +58,12 @@ impl Dispatcher {
             .map(|(source, c)| CooldownView {
                 source: source.to_string(),
                 account_id: source.to_string(),
-                until: rfc3339(
-                    OffsetDateTime::from_unix_timestamp(c.until).unwrap_or(now),
-                ),
+                until: rfc3339(OffsetDateTime::from_unix_timestamp(c.until).unwrap_or(now)),
                 reason: account_cooldown_reason_name(c.reason).to_string(),
             })
             .collect();
         cooldowns.sort_by(|a, b| a.source.cmp(&b.source));
         let task_waits = self.snapshot_task_waits();
-        let providers = publisher
-            .providers
-            .iter()
-            .map(|p| ProviderLive {
-                in_use: self.provider_in_use(&p.id) as u32,
-                last_check: publisher.provider_checks.get(&p.id).cloned(),
-                ..p.clone()
-            })
-            .collect();
         // ADR-0018: クラスタの稼働状況（id 昇順）。`env` の値や `setup` は含めない。
         let mut clusters: Vec<ClusterLive> = self
             .config
@@ -139,7 +123,6 @@ impl Dispatcher {
             // ADR-0033 D5（Phase 26）: 未読の件数は API が応答を組むときに埋める（`reports` と同じ理由）。
             approvals_pending: 0,
             decisions_open: 0,
-            providers,
             clusters,
             accounts_root,
             max_runs_per_account,
@@ -214,10 +197,24 @@ impl Dispatcher {
     pub(super) fn implicit_accounts_snapshot(&self) -> Vec<task_ops::daemon::ImplicitAccountLive> {
         self.implicit_account_ids()
             .into_iter()
-            .map(|source| task_ops::daemon::ImplicitAccountLive {
-                in_use: self.implicit_account_in_use(&source) as u32,
-                providers: Vec::new(),
-                source,
+            .map(|source| {
+                let registry = &self.llm_route_registry;
+                let mut models: Vec<String> = registry
+                    .route_defaults
+                    .values()
+                    .flatten()
+                    .chain(registry.llm_routes.iter().map(|route| &route.key))
+                    .chain(registry.cos_route_candidates.iter())
+                    .filter(|candidate| candidate.source.0 == source)
+                    .map(|candidate| candidate.model.to_string())
+                    .collect();
+                models.sort();
+                models.dedup();
+                task_ops::daemon::ImplicitAccountLive {
+                    models,
+                    in_use: self.implicit_account_in_use(&source) as u32,
+                    source,
+                }
             })
             .collect()
     }
@@ -292,7 +289,7 @@ impl Dispatcher {
                         }
                     }),
                     last_check: state.and_then(|s| s.last_check.as_ref()).map(|c| {
-                        ProviderCheckView {
+                        AccountCheckView {
                             at: rfc3339(
                                 OffsetDateTime::from_unix_timestamp(c.at)
                                     .unwrap_or(OffsetDateTime::UNIX_EPOCH),

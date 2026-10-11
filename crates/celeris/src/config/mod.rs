@@ -414,7 +414,7 @@ fn default_error_cooldown_secs() -> u64 {
 impl Config {
     /// `[delivery]` is a top-level TOML table, but its runtime settings live in an
     /// existing sub-struct so adding them does not change `Config` struct literals.
-    fn parse_with_delivery(text: &str) -> Result<Self, ConfigError> {
+    pub(crate) fn parse_with_delivery(text: &str) -> Result<Self, ConfigError> {
         let mut table: toml::Table = toml::from_str(text)?;
         let harnesses_value = table.remove("harnesses");
         let harness_declarations = harnesses_value

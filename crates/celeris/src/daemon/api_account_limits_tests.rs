@@ -88,8 +88,6 @@ async fn spawn_api(
         hostname: "h".into(),
         started_at: "t".into(),
         tick_ms: config.tick_ms,
-        providers: provider_lives(config),
-        provider_checks: std::collections::HashMap::new(),
     });
     dispatcher.tick().expect("first tick");
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")

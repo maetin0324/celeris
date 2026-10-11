@@ -1533,8 +1533,6 @@ async fn non_aggregate_parent_stays_reviewing_until_children_finish_then_complet
         hostname: "host-1".into(),
         started_at: "2026-09-16T00:00:00Z".into(),
         tick_ms: 10,
-        providers: vec![],
-        provider_checks: Default::default(),
     });
     // 親の run と判定が終わり、子がまだ走っている間に観察する。
     let mut observed_waiting = false;

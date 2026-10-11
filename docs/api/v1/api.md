@@ -946,7 +946,6 @@ planner が行う（`POST /tasks` で root task を作る。§3.4）。既存の
   "cooldowns":[{"source":"claude-code","account_id":"acct-1","until":"…","reason":"throttled"}],
   "awaiting_human":["01J…"],"awaiting_children":["01J…"],"unroutable":[],
   "reports":null,"approvals_pending":0,"decisions_open":0,
-  "providers":[{"id":"claude-a","adapter":"claude-code","tiers":["frontier","standard","cheap"],"concurrency":2,"model":"claude-sonnet-5","env_keys":[],"in_use":1,"in_use_cos":0,"account_pool":false}],
   "clusters":[],"accounts_root":null,"max_runs_per_account":null,"accounts_roots":{},"accounts":[]}}
 ```
 
@@ -955,7 +954,7 @@ planner が行う（`POST /tasks` で root task を作る。§3.4）。既存の
 - `reports`（秘書レベルの未読の報告と通知の判定）・`approvals_pending`（未決定の認可の件数）・`decisions_open`（未回答の決定の要求の件数）は
   ディスパッチャではなく **API が応答を組むときに埋める**（ADR-0033 D3/D5、ADR-0079 D7）。
 - `clusters[]`（ADR-0018）、`accounts_root` / `max_runs_per_account` / `accounts_roots` / `accounts[]`（ADR-0024 / ADR-0025）、
-  `implicit_accounts[]`（`{source, providers[], in_use}`。LLM source 単位の暗黙アカウント。ADR 2026-10-08-account-concurrency-limits）、
+  `implicit_accounts[]`（`{source, models[], in_use}`。LLM source 単位の暗黙アカウント。ADR 2026-10-08-account-concurrency-limits）、
   `scratch`（scratch pool の観測値。無ければ省略。`GET /metrics/scratch` と同じ。ADR-0075 D6）も載る。
 - `task_waits[]`（ADR 2026-10-11-task-wait-reasons D4）は、この tick に dispatcher のメモリだけで決まった見送りの理由
   （`{task_id, wait: TaskWait}`。task_id 順・1 task に 1 件）。承認待ちで延期中の reviewing は `review_awaiting_human`、
@@ -1106,7 +1105,7 @@ llm source と harness の選択を実行時に行うため、`GET/POST /provide
      "last_check": null, "login_pending": false,
      "stats": {"runs": 40, "done": 38, "error": 1, "input_tokens": 0, "output_tokens": 0},
      "max_runs": null, "effective_max_runs": 2, "max_runs_source": "default", "implicit": true,
-     "providers": ["opencode-qwen", "pi-qwen"]}]}
+     "models": ["qwen3.8-27b", "qwen3.8-27b-instruct"]}]}
 ```
 
 （1 件目の `claude-code/a` も同じ 5 欄を持つ。例では省略した。）

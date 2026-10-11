@@ -20,8 +20,10 @@ impl SqliteStore {
             let mut stmt = tx.prepare(
                 "SELECT id, json FROM tasks WHERE json_extract(json, '$.harness_id') IS NULL AND json_type(json, '$.worker_hint.adapter') = 'text'",
             )?;
-            stmt.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?
-                .collect::<Result<Vec<_>, _>>()?
+            stmt.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?
         };
         let mut resolved = 0;
         for (id_text, json_text) in rows {

@@ -254,8 +254,18 @@ async fn route_select_dispatch_review_does_not_start_an_incompatible_reviewer() 
     assert!(seen.lock().unwrap().is_empty());
     assert!(reviewer_started(&store, task.id).is_empty());
     let events = events_of(&store, task.id);
-    assert_eq!(events.iter().filter(|e| matches!(e, Event::LlmRouteSelected { .. })).count(), 1);
-    assert!(!events.iter().any(|e| matches!(e, Event::ReviewVerdict { .. })));
+    assert_eq!(
+        events
+            .iter()
+            .filter(|e| matches!(e, Event::LlmRouteSelected { .. }))
+            .count(),
+        1
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, Event::ReviewVerdict { .. }))
+    );
     // The refusal is recorded once, not on every deferred tick.
     let refused: Vec<String> = progress_msgs(&store, task.id)
         .into_iter()

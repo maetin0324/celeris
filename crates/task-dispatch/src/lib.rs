@@ -48,8 +48,8 @@ pub use dispatcher::{
     DispatchRoutingSettings, Dispatcher, ExecutionConfig, KnowledgeRuntimeConfig,
     LocalHealthTarget, LocalProviderProbe, LocalProviderSpec, MEMBER_RANKING_ESTIMATOR,
     MEMBER_RANKING_PRIORITY, MemberRanking, RouteFailure, RouteInput, RoutePick, RouteState,
-    RouteTrace, RoutingModelProfiles, RoutingShadowListener, harness_request_for, route_select,
-    SelfHostLoad, SnapshotPublisher, StaticModelProfiles, TaskFilter, TickReport,
+    RouteTrace, RoutingModelProfiles, RoutingShadowListener, SelfHostLoad, SnapshotPublisher,
+    StaticModelProfiles, TaskFilter, TickReport, harness_request_for, route_select,
 };
 pub use policy::{
     AdapterId, ProviderId, ProviderOutcome, ProviderPolicy, ProviderSpec, StaticPolicy,

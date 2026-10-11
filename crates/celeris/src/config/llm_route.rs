@@ -124,7 +124,8 @@ impl super::Config {
             );
         }
         r.cos_route_candidates = self
-            .cos_route_candidates
+            .cos
+            .route_candidates
             .iter()
             .map(|c| CandidateKey {
                 source: c.source.as_str().into(),
@@ -227,6 +228,33 @@ fn validate_registry(r: &task_core::llm_route::Registry) -> Result<(), ConfigErr
                     c.source, c.model
                 )));
             }
+        }
+    }
+    let cos_harness = task_core::llm_route::HarnessId::from("claude_code");
+    for c in &r.cos_route_candidates {
+        let s = r.sources.get(&c.source).ok_or_else(|| {
+            ConfigError::Invalid(format!(
+                "cos.route_candidates references undeclared source {}",
+                c.source
+            ))
+        })?;
+        if !s.models.contains(&c.model) {
+            return Err(ConfigError::Invalid(format!(
+                "cos.route_candidates references undeclared model {}",
+                c.model
+            )));
+        }
+        let compatible = r.harnesses.get(&cos_harness).is_some_and(|h| {
+            (h.source_kinds.contains(&s.kind) && h.api_formats.contains(&s.api_format))
+                || r.llm_routes
+                    .iter()
+                    .any(|route| route.harness == cos_harness && route.key == *c)
+        });
+        if !compatible {
+            return Err(ConfigError::Invalid(format!(
+                "cos.route_candidates candidate {}/{} is incompatible with claude_code",
+                c.source, c.model
+            )));
         }
     }
     Ok(())

@@ -237,7 +237,11 @@ model = "fake"
 env = {provider_env}
 "#,
             script = script.display(),
-            provider_env = if provider_env.is_empty() { "{}" } else { provider_env },
+            provider_env = if provider_env.is_empty() {
+                "{}"
+            } else {
+                provider_env
+            },
         );
         std::fs::write(&path, text).unwrap();
         path
@@ -939,9 +943,7 @@ fi"#,
     let in_flight_has_slow = |snap: &Value| {
         snap["in_flight"].as_array().is_some_and(|v| {
             v.iter().any(|r| {
-                r["task_id"] == slow.to_string()
-                    && r["kind"] == "worker"
-                    && r["provider"] == "fake"
+                r["task_id"] == slow.to_string() && r["kind"] == "worker" && r["provider"] == "fake"
             })
         })
     };
@@ -959,8 +961,9 @@ fi"#,
     let seen = wait_until(Duration::from_secs(120), || {
         snap = env.get("/daemon").json()["snapshot"].clone();
         snap["cooldowns"].as_array().is_some_and(|c| {
-            c.iter()
-                .any(|c| c["source"] == "fake" && c["account_id"] == "fake" && c["reason"] == "throttled")
+            c.iter().any(|c| {
+                c["source"] == "fake" && c["account_id"] == "fake" && c["reason"] == "throttled"
+            })
         })
     });
     assert!(seen, "no cooldown in /daemon: {snap}");
@@ -969,7 +972,9 @@ fi"#,
         "the slow run is still in flight during the cooldown: {snap}"
     );
     assert!(
-        snap["in_flight"].as_array().is_some_and(|runs| !runs.is_empty()),
+        snap["in_flight"]
+            .as_array()
+            .is_some_and(|runs| !runs.is_empty()),
         "the in-flight view still contains the slow route: {snap}"
     );
     assert!(

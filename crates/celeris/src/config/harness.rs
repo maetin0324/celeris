@@ -242,7 +242,7 @@ impl Config {
         for defaults in self.route_defaults.values_mut() {
             defaults.candidates.retain(|c| c.source != SMOKE_ID);
         }
-        self.cos_route_candidates.retain(|c| c.source != SMOKE_ID);
+        self.cos.route_candidates.retain(|c| c.source != SMOKE_ID);
         self.route_defaults.insert(
             SMOKE_ID.to_string(),
             RouteDefaultConfig {

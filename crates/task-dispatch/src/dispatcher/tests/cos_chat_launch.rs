@@ -9,30 +9,6 @@ use task_core::chat::{
 };
 use task_worker::fake::FakeAdapter;
 
-#[derive(Clone)]
-struct NamedFake(Arc<dyn WorkerAdapter>);
-
-#[async_trait]
-impl WorkerAdapter for NamedFake {
-    fn id(&self) -> &str {
-        "claude-code"
-    }
-
-    async fn run(
-        &self,
-        req: RunRequest,
-        run_id: &str,
-        limits: RunLimits,
-        sink: &dyn EventSink,
-    ) -> Result<RunOutcome, AdapterError> {
-        self.0.run(req, run_id, limits, sink).await
-    }
-
-    fn with_env(&self, extra: &[(String, String)]) -> Option<Arc<dyn WorkerAdapter>> {
-        Some(Arc::new(Self(self.0.with_env(extra)?)))
-    }
-}
-
 fn fixture(
     command: Vec<String>,
     max_cos_runs: usize,
@@ -62,14 +38,8 @@ fn fixture(
         store.clone(),
         CosChatLaunchConfig {
             enabled: true,
-            fallbacks: Vec::new(),
             worker_reserve_five_hour: 0.90,
             harness: "fake".into(),
-            llm_source: Some("test".into()),
-            provider: Some("p1".into()),
-            account_id: None,
-            model: None,
-            tier: Tier::Frontier,
             max_turns: 2,
             max_wall_secs: 30,
             unavailable_reason: None,
@@ -409,8 +379,10 @@ async fn cos_chat_run_control_live_interrupt_waits_for_old_worker_exit() {
         store.chat_run_get(&t, &old.id).expect("old").state,
         ChatRunState::Interrupted
     );
-    d.adapters
-        .insert("p1".into(), Arc::new(FakeAdapter::default()));
+    d.set_harness_adapters(HashMap::from([(
+        "claude_code".into(),
+        Arc::new(FakeAdapter::default()) as Arc<dyn WorkerAdapter>,
+    )]));
     d.tick_cos_chat_launch();
     let urgent = active_run(&store, &t);
     let messages = store
@@ -678,6 +650,10 @@ async fn cos_chat_run_launch_fake_progress_credential_and_session() {
     post(&store, &t, "one");
     d.tick_cos_chat_launch();
     let run = runs(&store, &t).pop().expect("claimed run");
+    assert_eq!(run.harness.as_deref(), Some("claude_code"));
+    assert_eq!(run.llm_source.as_deref(), Some("p1"));
+    assert_eq!(run.model.as_deref(), Some("m"));
+    assert_eq!(run.account_id.as_deref(), Some("default"));
     assert_eq!(
         run.session_mode,
         Some(task_core::chat::ChatSessionMode::New)
@@ -832,47 +808,6 @@ async fn cos_chat_run_launch_two_threads_start_in_one_tick() {
 }
 
 #[tokio::test]
-async fn cos_chat_run_launch_non_pool_provider_keeps_its_limit() {
-    let (_dir, store, mut d) = fixture(FakeAdapter::default_command(), 2);
-    d.policy = Box::new(StaticPolicy::new(
-        vec![ProviderSpec {
-            id: "p1".into(),
-            adapter: "fake".into(),
-            tiers: vec![Tier::Frontier],
-            concurrency: Some(1),
-            model: "m".into(),
-        }],
-        Duration::from_secs(1),
-    ));
-    d.set_account_limit("implicit", "p1", Some(1)).unwrap();
-    let a = thread(&store, "non-pool-a");
-    let b = thread(&store, "non-pool-b");
-    post(&store, &a, "one");
-    post(&store, &b, "two");
-    d.tick_cos_chat_launch();
-    assert_eq!(d.cos_chat_launch.as_ref().expect("launch").running.len(), 1);
-    let first = d
-        .cos_chat_launch
-        .as_ref()
-        .expect("launch")
-        .running
-        .keys()
-        .next()
-        .cloned()
-        .expect("first");
-    let second = if first == a { &b } else { &a };
-    let unavailable = runs(&store, second).pop().expect("unavailable run");
-    assert_eq!(unavailable.state, ChatRunState::Failed);
-    assert!(
-        unavailable
-            .reason
-            .as_deref()
-            .is_some_and(|reason| reason.contains("capacity"))
-    );
-    join(&mut d, &first).await;
-}
-
-#[tokio::test]
 async fn cos_chat_run_launch_max_cos_zero_disables_global_exception() {
     let (_dir, store, mut d) = fixture(FakeAdapter::default_command(), 0);
     d.config.max_concurrency = 0;
@@ -927,117 +862,6 @@ async fn cos_chat_run_launch_missing_required_skill_is_unavailable() {
         run.reason
             .as_deref()
             .is_some_and(|reason| reason.contains("cos-operator"))
-    );
-}
-
-#[tokio::test]
-async fn cos_chat_run_launch_fixed_account_gets_one_extra_slot_then_reports_unavailable() {
-    let (_dir, store, mut d) = fixture(FakeAdapter::default_command(), 2);
-    let account_root = _dir.path().join("accounts");
-    let account_dir = account_root.join("a");
-    std::fs::create_dir_all(&account_dir).expect("account dir");
-    std::fs::write(account_dir.join(".credentials.json"), "{}").expect("login marker");
-    d.config.accounts = Some(AccountsRuntimeConfig {
-        roots: HashMap::from([(AccountAdapter::ClaudeCode, account_root.clone())]),
-        max_runs_per_account: 0,
-        check_model: "test".into(),
-        fallback_cooldown_secs: 60,
-    });
-    d.account_books.insert(
-        AccountAdapter::ClaudeCode,
-        Arc::new(StdMutex::new(crate::accounts::AccountBook::load(
-            &account_root.join(".celeris-usage.json"),
-        ))),
-    );
-    d.account_pool_providers.insert("p1".into());
-    d.adapters.insert(
-        "p1".into(),
-        Arc::new(NamedFake(Arc::new(FakeAdapter::default()))),
-    );
-    let launch = d.cos_chat_launch.as_mut().expect("launch");
-    launch.config.harness = "claude-code".into();
-    launch.config.account_id = Some("a".into());
-    let a = thread(&store, "account-a");
-    let b = thread(&store, "account-b");
-    post(&store, &a, "one");
-    post(&store, &b, "two");
-    d.tick_cos_chat_launch();
-    assert_eq!(d.cos_chat_launch.as_ref().expect("launch").running.len(), 1);
-    let first = d
-        .cos_chat_launch
-        .as_ref()
-        .expect("launch")
-        .running
-        .keys()
-        .next()
-        .cloned()
-        .expect("first");
-    let second = if first == a { &b } else { &a };
-    let failed = runs(&store, second).pop().expect("unavailable run");
-    assert_eq!(failed.state, ChatRunState::Failed);
-    assert!(
-        store
-            .chat_message_list(second, &ChatMessageQuery::default())
-            .unwrap()
-            .items
-            .iter()
-            .any(|m| m.text.contains("再送してください"))
-    );
-    join(&mut d, &first).await;
-    d.tick_cos_chat_launch();
-    assert!(
-        d.cos_chat_launch
-            .as_ref()
-            .expect("launch")
-            .running
-            .is_empty()
-    );
-    assert_eq!(runs(&store, &a).len(), 1);
-    assert_eq!(runs(&store, &b).len(), 1);
-}
-
-#[tokio::test]
-async fn cos_chat_run_launch_sticky_account_falls_back_when_logged_out() {
-    let (_dir, store, mut d) = fixture(FakeAdapter::default_command(), 2);
-    let account_root = _dir.path().join("accounts");
-    for id in ["a", "b"] {
-        let path = account_root.join(id);
-        std::fs::create_dir_all(&path).expect("account dir");
-        std::fs::write(path.join(".credentials.json"), "{}").expect("login marker");
-    }
-    d.config.accounts = Some(AccountsRuntimeConfig {
-        roots: HashMap::from([(AccountAdapter::ClaudeCode, account_root.clone())]),
-        max_runs_per_account: 1,
-        check_model: "test".into(),
-        fallback_cooldown_secs: 60,
-    });
-    d.account_books.insert(
-        AccountAdapter::ClaudeCode,
-        Arc::new(StdMutex::new(crate::accounts::AccountBook::load(
-            &account_root.join(".celeris-usage.json"),
-        ))),
-    );
-    d.account_pool_providers.insert("p1".into());
-    d.adapters.insert(
-        "p1".into(),
-        Arc::new(NamedFake(Arc::new(FakeAdapter::default()))),
-    );
-    d.cos_chat_launch.as_mut().expect("launch").config.harness = "claude-code".into();
-    let t = thread(&store, "sticky");
-    post(&store, &t, "first");
-    d.tick_cos_chat_launch();
-    join(&mut d, &t).await;
-    assert_eq!(runs(&store, &t)[0].account_id.as_deref(), Some("a"));
-    std::fs::remove_file(account_root.join("a/.credentials.json")).expect("logout");
-    post(&store, &t, "second");
-    d.tick_cos_chat_launch();
-    join(&mut d, &t).await;
-    let runs = runs(&store, &t);
-    assert_eq!(runs.len(), 2);
-    assert_eq!(runs[1].account_id.as_deref(), Some("b"));
-    assert_eq!(
-        runs[1].session_mode,
-        Some(task_core::chat::ChatSessionMode::Fresh)
     );
 }
 
@@ -1173,13 +997,13 @@ async fn cos_chat_run_e2e_send_stream_interrupt_stop_resume_and_restart() {
     ];
     let (dir, store, mut d) = fixture(command.clone(), 2);
     let (progress_sent, progress_ready) = std::sync::mpsc::channel();
-    d.adapters.insert(
-        "p1".into(),
+    d.set_harness_adapters(HashMap::from([(
+        "claude_code".into(),
         Arc::new(SignallingFake {
             inner: Arc::new(FakeAdapter::new(command)),
             progress_sent,
-        }),
-    );
+        }) as Arc<dyn WorkerAdapter>,
+    )]));
     d.test_now = Some(Arc::new(StdMutex::new(OffsetDateTime::now_utc())));
     d.config.kill_grace = std::time::Duration::from_millis(20);
     let t = thread(&store, "e2e");
@@ -1365,8 +1189,10 @@ async fn cos_chat_run_e2e_send_stream_interrupt_stop_resume_and_restart() {
             .expect("exists")
             .queue_paused
     );
-    d.adapters
-        .insert("p1".into(), Arc::new(FakeAdapter::default()));
+    d.set_harness_adapters(HashMap::from([(
+        "claude_code".into(),
+        Arc::new(FakeAdapter::default()) as Arc<dyn WorkerAdapter>,
+    )]));
     let revision = store
         .chat_thread_get(&t)
         .expect("thread")
@@ -1580,72 +1406,3 @@ async fn cos_workspace_files_limits_do_not_fail_reply() {
         );
     }
 }
-
-#[tokio::test]
-async fn cos_chat_pool_uses_account_override_plus_one_and_ignores_provider_zero() {
-    let (_dir, store, mut d) = fixture(FakeAdapter::default_command(), 4);
-    let account_root = _dir.path().join("accounts");
-    let account_dir = account_root.join("a");
-    std::fs::create_dir_all(&account_dir).expect("account dir");
-    std::fs::write(account_dir.join(".credentials.json"), "{}").expect("login marker");
-    d.config.accounts = Some(AccountsRuntimeConfig {
-        roots: HashMap::from([(AccountAdapter::ClaudeCode, account_root.clone())]),
-        max_runs_per_account: 2,
-        check_model: "test".into(),
-        fallback_cooldown_secs: 60,
-    });
-    d.account_books.insert(
-        AccountAdapter::ClaudeCode,
-        Arc::new(StdMutex::new(crate::accounts::AccountBook::load(
-            &account_root.join(".celeris-usage.json"),
-        ))),
-    );
-    d.account_pool_providers.insert("p1".into());
-    d.adapters.insert(
-        "p1".into(),
-        Arc::new(NamedFake(Arc::new(FakeAdapter::default()))),
-    );
-    let launch = d.cos_chat_launch.as_mut().expect("launch");
-    launch.config.harness = "claude-code".into();
-    launch.config.account_id = Some("a".into());
-
-    d.set_account_limit("claude-code", "a", Some(1)).unwrap();
-    d.policy = Box::new(StaticPolicy::new(
-        vec![ProviderSpec {
-            id: "p1".into(),
-            adapter: "claude-code".into(),
-            tiers: vec![Tier::Frontier],
-            concurrency: Some(0),
-            model: "m".into(),
-        }],
-        Duration::from_secs(1),
-    ));
-    let threads: Vec<_> = (0..3)
-        .map(|i| {
-            let t = thread(&store, &format!("override-{i}"));
-            post(&store, &t, "hello");
-            t
-        })
-        .collect();
-    d.tick_cos_chat_launch();
-    let launch = d.cos_chat_launch.as_ref().unwrap();
-    assert_eq!(
-        launch.running.len(),
-        2,
-        "account max_runs=1 plus one CoS slot"
-    );
-    let active: Vec<_> = launch.running.keys().cloned().collect();
-    let waiting = threads.iter().find(|t| !active.contains(t)).unwrap();
-    // The pinned account is full: the third request does not start on it. (Since the CoS source
-    // fallback change the route is reported unavailable instead of leaving the input queued.)
-    assert!(
-        !launch.running.contains_key(waiting),
-        "full account does not launch a third CoS run"
-    );
-    for t in active {
-        join(&mut d, &t).await;
-    }
-}
-
-#[path = "cos_source_fallback.rs"]
-mod source_fallback;

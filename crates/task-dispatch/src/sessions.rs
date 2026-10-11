@@ -211,7 +211,7 @@ pub fn decide_sticky(
 /// UUID 形式で発行する。`codex`/`acp` はアダプタ自身が run の途中で初めて確定させるので、確定するまでは
 /// 空文字のまま（`EventSink::session_established` が後で上書きする。Phase 67 のまま変更なし）。
 pub fn new_session_id(adapter_id: &str) -> String {
-    if adapter_id == "claude-code" {
+    if matches!(adapter_id, "claude-code" | "claude_code") {
         random_uuid_v4()
     } else {
         String::new()

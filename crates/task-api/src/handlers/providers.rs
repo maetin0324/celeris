@@ -170,10 +170,7 @@ pub(super) async fn providers(State(state): State<ApiState>, RawQuery(raw): RawQ
                 .as_ref()
                 .and_then(|s| s.providers.iter().find(|live| live.id == provider.id))
                 .map(|live| live.in_use),
-            in_use_cos: snapshot
-                .as_ref()
-                .and_then(|s| s.providers.iter().find(|live| live.id == provider.id))
-                .map(|live| live.in_use_cos),
+            in_use_cos: None,
             cooldown: None,
             // ADR-0022 D2: スナップショットに載っている確認の記録（無ければ null）。
             last_check: snapshot

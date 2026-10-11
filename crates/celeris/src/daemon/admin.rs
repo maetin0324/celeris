@@ -530,21 +530,21 @@ mod cos_chat_config_tests {
         let write_config = |cos: &str| {
             std::fs::write(
                 &path,
-                format!("db = {db:?}\nworkspace_root = {ws:?}\n[cos]\n{cos}\n[[providers]]\nid = \"claude\"\nadapter = \"claude-code\"\n"),
+                format!("db = {db:?}\nworkspace_root = {ws:?}\n[cos]\n{cos}\n[[providers]]\nid = \"test\"\nadapter = \"claude-code\"\ntiers = [\"standard\"]\n"),
             )
             .unwrap();
         };
         write_config("max_turns = 12");
         let mut config = Config::load(&path).unwrap();
         let mut dispatcher = crate::build_dispatcher(&config, Default::default()).unwrap();
-        write_config("max_turns = 99\nprovider = \"claude\"\nharness = \"codex\"");
+        write_config("max_turns = 99\nharness = \"codex\"");
         assert!(
             reload_providers(&mut dispatcher, &mut config)
                 .unwrap_err()
-                .contains("conflicts")
+                .contains("fixed to claude_code")
         );
         assert_eq!(config.cos.max_turns, 12);
-        assert_eq!(config.resolve_cos_provider().unwrap().provider, "claude");
+        assert_eq!(config.cos.harness, crate::config::CosHarness::ClaudeCode);
         write_config("max_turns = 99");
         reload_providers(&mut dispatcher, &mut config).unwrap();
         assert_eq!(config.cos.max_turns, 99);

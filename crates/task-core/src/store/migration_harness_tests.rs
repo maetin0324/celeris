@@ -30,7 +30,10 @@ fn migration_harness_adds_task_and_run_selection_columns() {
             .collect::<Result<Vec<_>, _>>()
             .expect("collect columns");
         for column in expected {
-            assert!(columns.iter().any(|actual| actual == column), "{table}.{column}");
+            assert!(
+                columns.iter().any(|actual| actual == column),
+                "{table}.{column}"
+            );
         }
     }
 }
@@ -49,13 +52,38 @@ fn migration_harness_resolves_registered_and_audits_unresolved_once() {
     store.insert(&unresolved).expect("insert unresolved task");
 
     let registered = BTreeSet::from([crate::llm_route::HarnessId::from("harness-a")]);
-    assert_eq!(store.resolve_migrated_task_harnesses(&registered).expect("resolve"), 1);
-    assert_eq!(store.resolve_migrated_task_harnesses(&registered).expect("repeat"), 0);
+    assert_eq!(
+        store
+            .resolve_migrated_task_harnesses(&registered)
+            .expect("resolve"),
+        1
+    );
+    assert_eq!(
+        store
+            .resolve_migrated_task_harnesses(&registered)
+            .expect("repeat"),
+        0
+    );
 
-    let resolved = store.get(resolved_id).expect("read resolved task").expect("task");
-    assert_eq!(resolved.harness_id, Some(crate::llm_route::HarnessId::from("harness-a")));
-    let unresolved = store.get(unresolved_id).expect("read unresolved task").expect("task");
+    let resolved = store
+        .get(resolved_id)
+        .expect("read resolved task")
+        .expect("task");
+    assert_eq!(
+        resolved.harness_id,
+        Some(crate::llm_route::HarnessId::from("harness-a"))
+    );
+    let unresolved = store
+        .get(unresolved_id)
+        .expect("read unresolved task")
+        .expect("task");
     assert_eq!(unresolved.harness_id, None);
     let events = store.events_for(unresolved_id).expect("read events");
-    assert_eq!(events.iter().filter(|(_, event)| matches!(event, crate::Event::HarnessMigrationUnresolved { .. })).count(), 1);
+    assert_eq!(
+        events
+            .iter()
+            .filter(|(_, event)| matches!(event, crate::Event::HarnessMigrationUnresolved { .. }))
+            .count(),
+        1
+    );
 }

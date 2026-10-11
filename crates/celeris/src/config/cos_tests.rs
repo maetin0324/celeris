@@ -144,250 +144,26 @@ fn chat_config_example_toml_carries_the_defaults() {
 }
 
 #[test]
-fn cos_chat_config_defaults_and_unavailable_reason() {
+fn cos_chat_config_defaults_to_fixed_harness_and_route_candidates() {
     let cfg = load("").unwrap();
     assert!(cfg.cos.enabled);
     assert_eq!(cfg.cos.harness, CosHarness::ClaudeCode);
-    assert_eq!(cfg.cos.tier, Tier::Frontier);
+    assert!(cfg.cos.route_candidates.is_empty());
     assert_eq!(cfg.cos.max_turns, 70);
     assert_eq!(cfg.cos.max_wall_secs, 900);
     assert_eq!(cfg.cos.triage.policy_skill, "cos-inbox-triage");
-    assert_eq!(cfg.cos.triage.policy_version, "1");
-    assert_eq!(cfg.cos.triage.min_confidence, 0.85);
-    assert_eq!(cfg.cos.triage.human_required, default_human_required());
-    assert_eq!(cfg.cos.triage.unavailable_after_secs, 120);
-    let reason = cfg.resolve_cos_provider().unwrap_err();
-    assert!(reason.contains("no provider"), "{reason}");
-    assert!(reason.contains("claude-code"), "{reason}");
 }
 
 #[test]
-fn cos_chat_config_rejects_unknown_and_invalid_values() {
+fn cos_chat_config_rejects_legacy_route_fields() {
     for text in [
-        "[cos]\nunknown = 1\n",
-        "[cos.triage]\nunknown = 1\n",
-        "[cos]\nharness = \"fake\"\n",
-        "[cos]\nllm_source = \"invalid\"\n",
+        "[cos]\nprovider = \"missing\"\n",
+        "[cos]\ntier = \"frontier\"\n",
+        "[cos]\nmodel = \"old-model\"\n",
+        "[cos]\nllm_source = \"claude_oauth\"\n",
+        "[[cos.fallbacks]]\nharness = \"codex\"\n",
     ] {
         assert!(matches!(load(text), Err(ConfigError::Parse(_))), "{text}");
     }
-    for (text, needle) in [
-        ("[cos]\nllm_source = \"none\"\n", "llm_source"),
-        ("[cos]\nllm_source = \"unknown\"\n", "llm_source"),
-        ("[cos]\nmax_turns = 0\n", "max_turns"),
-        ("[cos.triage]\nmin_confidence = 1.1\n", "min_confidence"),
-        (
-            "[cos.triage]\nunavailable_after_secs = 0\n",
-            "unavailable_after_secs",
-        ),
-        ("[cos]\nprovider = \"missing\"\n", "provider"),
-        (
-            "[cos]\nharness = \"codex\"\nllm_source = \"claude_oauth\"\n",
-            "llm_source",
-        ),
-        ("[cos]\nmodel = \"celeris/frontier\"\n", "model"),
-    ] {
-        let err = load(text).unwrap_err().to_string();
-        assert!(err.contains(needle), "{text}: {err}");
-    }
-}
-
-#[test]
-fn cos_chat_config_explicit_provider_conflicts_and_resolves() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("config.toml");
-    let provider = "[[providers]]\nid = \"claude\"\nadapter = \"claude-code\"\n[providers.tier_models.frontier]\nname = \"opus\"\nmodel_id = \"claude-opus-5-5\"\n";
-    std::fs::write(
-        &path,
-        format!("[cos]\nprovider = \"claude\"\nllm_source = \"codex_oauth\"\n{provider}"),
-    )
-    .unwrap();
-    assert!(
-        Config::load(&path)
-            .unwrap_err()
-            .to_string()
-            .contains("llm_source")
-    );
-    std::fs::write(
-        &path,
-        format!("[cos]\nprovider = \"claude\"\nllm_source = \"claude_oauth\"\n{provider}"),
-    )
-    .unwrap();
-    let cfg = Config::load(&path).unwrap();
-    let resolved = cfg.resolve_cos_provider().unwrap();
-    assert_eq!(resolved.provider, "claude");
-    assert_eq!(resolved.llm_source, LlmSourceRef::ClaudeOauth);
-    assert_eq!(resolved.model.as_deref(), Some("claude-opus-5-5"));
-}
-
-#[test]
-fn cos_chat_config_reload_rejects_change_and_preserves_old_values() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("config.toml");
-    std::fs::write(
-        &path,
-        "[cos]\nmax_turns = 12\n[[providers]]\nid = \"claude\"\nadapter = \"claude-code\"\n",
-    )
-    .unwrap();
-    let old = Config::load(&path).unwrap();
-    std::fs::write(&path, "[cos]\nmax_turns = 99\nprovider = \"claude\"\nharness = \"codex\"\n[[providers]]\nid = \"claude\"\nadapter = \"claude-code\"\n").unwrap();
-    assert!(Config::load(&path).is_err());
-    assert_eq!(old.cos.max_turns, 12);
-    assert_eq!(old.resolve_cos_provider().unwrap().provider, "claude");
-}
-
-#[test]
-fn cos_chat_harness_config_claude_code_has_no_capability_warnings() {
-    let cfg = load("[cos]\nharness = \"claude-code\"\n").unwrap();
-    assert_eq!(cfg.cos_harness_capability_warnings(), Vec::<String>::new());
-}
-
-#[test]
-fn cos_chat_harness_config_codex_has_no_capability_warnings() {
-    let cfg = load("[cos]\nharness = \"codex\"\n").unwrap();
-    assert_eq!(cfg.cos_harness_capability_warnings(), Vec::<String>::new());
-}
-
-#[test]
-fn cos_chat_harness_config_opencode_lists_unconfirmed_capabilities() {
-    let cfg = load("[cos]\nharness = \"opencode\"\n").unwrap();
-    let warnings = cfg.cos_harness_capability_warnings();
-    assert_eq!(warnings.len(), 4, "{warnings:?}");
-    assert!(
-        warnings
-            .iter()
-            .any(|w| w.contains("shell") && w.contains("no command was run"))
-    );
-    assert!(
-        warnings
-            .iter()
-            .any(|w| w.contains("file") && w.contains("no file was read or changed"))
-    );
-    assert!(warnings.iter().any(|w| w.contains("MCP")));
-    assert!(
-        warnings
-            .iter()
-            .any(|w| w.contains("image") && w.contains("not inspected"))
-    );
-    // A non-fatal gap never changes the configured harness or blocks loading.
-    assert_eq!(cfg.cos.harness, CosHarness::Opencode);
-}
-
-#[test]
-fn cos_chat_harness_config_capability_warnings_do_not_block_reload() {
-    // A harness with unconfirmed capabilities (opencode) still loads and resolves, unlike an
-    // explicit contradiction (e.g. harness/llm_source mismatch), which remains rejected.
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("config.toml");
-    std::fs::write(
-        &path,
-        "[cos]\nharness = \"opencode\"\nprovider = \"oc\"\n\
-         [[providers]]\nid = \"oc\"\nadapter = \"acp\"\nllm_source = \"celeris\"\n\
-         model = \"celeris/frontier\"\n",
-    )
-    .unwrap();
-    let cfg = Config::load(&path).expect("opencode with unconfirmed capabilities still loads");
-    let resolved = cfg.resolve_cos_provider().expect("resolves");
-    assert_eq!(resolved.harness, CosHarness::Opencode);
-    assert_eq!(resolved.capability_warnings.len(), 4);
-    assert_eq!(
-        resolved.capability_warnings,
-        cfg.cos_harness_capability_warnings()
-    );
-}
-
-#[test]
-fn cos_chat_harness_config_unavailable_reason_carries_capability_notes() {
-    // No provider matches (unrelated reason), but the opencode capability gaps are still
-    // surfaced in the reason text rather than silently dropped.
-    let cfg = load("[cos]\nharness = \"opencode\"\n").unwrap();
-    let reason = cfg.resolve_cos_provider().unwrap_err();
-    assert!(reason.contains("no provider"), "{reason}");
-    assert!(reason.contains("harness capability notes"), "{reason}");
-    assert!(reason.contains("no command was run"), "{reason}");
-}
-
-#[test]
-fn cos_chat_config_unavailable_tier_keeps_reason() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("config.toml");
-    std::fs::write(&path, "[cos]\nprovider = \"claude\"\n[[providers]]\nid = \"claude\"\nadapter = \"claude-code\"\n[providers.tier_models.frontier]\nname = \"frontier\"\nunavailable_reason = \"account cannot access this model\"\n").unwrap();
-    let cfg = Config::load(&path).unwrap();
-    assert!(
-        cfg.resolve_cos_provider()
-            .unwrap_err()
-            .contains("account cannot access this model")
-    );
-}
-
-#[test]
-fn cos_source_fallback_config_order_resolution_and_validation() {
-    let text = r#"
-[cos]
-account_id = "primary-only"
-worker_reserve_five_hour = 0.85
-[[cos.fallbacks]]
-harness = "codex"
-llm_source = "codex_oauth"
-model = "gpt-6.1-sol"
-[[cos.fallbacks]]
-harness = "claude-code"
-provider = "claude"
-[[providers]]
-id = "claude"
-adapter = "claude-code"
-[[providers]]
-id = "codex"
-adapter = "codex"
-"#;
-    let cfg = load(text).unwrap();
-    let routes = cfg.resolve_cos_fallbacks();
-    assert_eq!(routes.len(), 2);
-    assert_eq!(routes[0].as_ref().unwrap().provider, "codex");
-    assert_eq!(
-        routes[0].as_ref().unwrap().model.as_deref(),
-        Some("gpt-6.1-sol")
-    );
-    assert_eq!(routes[1].as_ref().unwrap().provider, "claude");
-    assert!(
-        routes
-            .iter()
-            .all(|r| r.as_ref().unwrap().account_id.is_none())
-    );
-    assert_eq!(cfg.cos.worker_reserve_five_hour, 0.85);
-    let defaults = load("").unwrap();
-    assert!(defaults.cos.fallbacks.is_empty());
-    assert_eq!(defaults.cos.worker_reserve_five_hour, 0.90);
-    for value in ["0", "-0.1", "0.98", "nan", "inf"] {
-        assert!(load(&format!("[cos]\nworker_reserve_five_hour = {value}\n")).is_err());
-    }
-    for route in [
-        "harness = 'codex'\nllm_source = 'claude_oauth'",
-        "harness = 'codex'\nprovider = 'missing'",
-        "harness = 'fake'",
-        "harness = 'codex'\nbogus = 1",
-    ] {
-        assert!(
-            load(&format!("[[cos.fallbacks]]\n{route}\n")).is_err(),
-            "{route}"
-        );
-    }
-    assert!(load(&"[[cos.fallbacks]]\nharness = 'codex'\n".repeat(9)).is_err());
-    // Missing runtime providers are non-fatal, allowing a later route to serve CoS.
-    let cfg = load("[[cos.fallbacks]]\nharness = 'codex'\n").unwrap();
-    assert!(cfg.resolve_cos_fallbacks()[0].is_err());
-}
-
-#[test]
-fn cos_source_fallback_opencode_go_is_compatible() {
-    let cfg =
-        load("[[cos.fallbacks]]\nharness = 'opencode'\nllm_source = 'opencode_go'\n[accounts]\nopencode_dir = 'acct'\n[[providers]]\nid = 'go'\nadapter = 'acp'\nllm_source = 'opencode_go'\nmodel = 'opencode-go/kimi-k3'\naccount_pool = 'opencode-go'\ntiers = ['frontier']\n").unwrap();
-    assert_eq!(
-        cfg.cos.fallbacks[0].llm_source,
-        Some(LlmSourceRef::OpencodeGo)
-    );
-    assert_eq!(
-        cfg.resolve_cos_fallbacks()[0].as_ref().unwrap().provider,
-        "go"
-    );
+    assert!(load("[cos]\nmax_turns = 0\n").is_err());
 }

@@ -11,10 +11,10 @@ use super::*;
 use std::collections::BTreeMap;
 use task_core::llm_route::{
     AccountId, AccountSnapshot, Admission, Candidate, CandidateKey, CandidateRejection,
-    DefaultRoutePolicy, ExclusionReason, HarnessId, HarnessRequest, HarnessSelectionError,
-    ModelId, QuotaSnapshot, Registry, ReservationSnapshot, RoutePolicy, RouteRequest,
-    RunSelection, SourceId, admit_source, constrain_for_harness, enumerate_candidates,
-    route_priority, select_harness,
+    DefaultRoutePolicy, ExclusionReason, HarnessId, HarnessRequest, HarnessSelectionError, ModelId,
+    QuotaSnapshot, Registry, ReservationSnapshot, RoutePolicy, RouteRequest, RunSelection,
+    SourceId, admit_source, constrain_for_harness, enumerate_candidates, route_priority,
+    select_harness,
 };
 
 /// Version of the `selection_metadata_json` / `llm_route_selected.metadata` shape.
@@ -151,7 +151,9 @@ pub fn route_select(
     let mut ordered = Vec::new();
     for key in &priority {
         let Some(source) = registry.sources.get(&key.source) else {
-            trace.rejections.push(rejection(key, "", ExclusionReason::UnknownSource));
+            trace
+                .rejections
+                .push(rejection(key, "", ExclusionReason::UnknownSource));
             continue;
         };
         if let Some(c) = declared.iter().find(|c| c.key() == *key) {
@@ -321,9 +323,28 @@ impl Dispatcher {
                 .or_default() += 1;
         }
         for (source_id, spec) in &registry.sources {
+            if cos && let Some(launch) = self.cos_chat_launch.as_ref() {
+                for (source, account) in launch.route_reservations.values() {
+                    if source == source_id {
+                        *state
+                            .reservations
+                            .source_in_use
+                            .entry(source.clone())
+                            .or_default() += 1;
+                        *state
+                            .reservations
+                            .account_in_use
+                            .entry((source.clone(), account.clone()))
+                            .or_default() += 1;
+                    }
+                }
+            }
             let mut accounts: Vec<AccountId> = spec.accounts.clone();
             if let Some(adapter) = account_adapter_for_source_kind(spec.kind.as_ref()) {
-                let scanned = match (self.config.accounts.clone(), self.accounts_scan_cache.get(&adapter)) {
+                let scanned = match (
+                    self.config.accounts.clone(),
+                    self.accounts_scan_cache.get(&adapter),
+                ) {
                     (_, Some(dirs)) => dirs.clone(),
                     (Some(cfg), None) => match cfg.root_for(adapter) {
                         Some(root) => {
@@ -343,7 +364,10 @@ impl Dispatcher {
                 accounts = if accounts.is_empty() {
                     logged_in
                 } else {
-                    accounts.into_iter().filter(|a| logged_in.contains(a)).collect()
+                    accounts
+                        .into_iter()
+                        .filter(|a| logged_in.contains(a))
+                        .collect()
                 };
                 if let Some(book) = self.account_book(adapter) {
                     let book = book.lock().unwrap_or_else(|e| e.into_inner());
@@ -351,7 +375,9 @@ impl Dispatcher {
                     // source×model routing. Admission chooses the first eligible account.
                     accounts.sort_by(|left, right| {
                         let in_use = |account: &AccountId| {
-                            state.reservations.account_in_use
+                            state
+                                .reservations
+                                .account_in_use
                                 .get(&(source_id.clone(), account.clone()))
                                 .copied()
                                 .unwrap_or(0)
@@ -424,6 +450,22 @@ impl Dispatcher {
     ) -> (Result<RoutePick, RouteFailure>, RouteTrace) {
         let state = self.route_state(input.cos);
         route_select(input, &self.llm_route_registry, &state)
+    }
+
+    /// Select from the remaining CoS candidates after earlier attempts failed.
+    pub(super) fn select_cos_route_from(
+        &mut self,
+        input: &RouteInput,
+        start: usize,
+    ) -> (Result<RoutePick, RouteFailure>, RouteTrace) {
+        let state = self.route_state(true);
+        let mut registry = (*self.llm_route_registry).clone();
+        registry.cos_route_candidates = registry
+            .cos_route_candidates
+            .into_iter()
+            .skip(start)
+            .collect();
+        route_select(input, &registry, &state)
     }
 
     /// Append `harness_selected` and `llm_route_selected` for an admitted route and write the

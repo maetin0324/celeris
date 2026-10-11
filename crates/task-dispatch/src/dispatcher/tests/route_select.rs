@@ -47,7 +47,12 @@ fn registry() -> Registry {
     let mut r = Registry::default();
     r.sources.insert(
         "claude_oauth".into(),
-        source("claude_oauth", "claude_cli", &["ca", "cb"], &["sonnet", "opus"]),
+        source(
+            "claude_oauth",
+            "claude_cli",
+            &["ca", "cb"],
+            &["sonnet", "opus"],
+        ),
     );
     r.sources.insert(
         "codex_oauth".into(),
@@ -55,7 +60,12 @@ fn registry() -> Registry {
     );
     r.sources.insert(
         "qwen".into(),
-        source("openai_compatible", "openai_compatible", &["shared"], &["qwen3"]),
+        source(
+            "openai_compatible",
+            "openai_compatible",
+            &["shared"],
+            &["qwen3"],
+        ),
     );
     r.harnesses.insert(
         "claude_code".into(),
@@ -196,7 +206,10 @@ fn harness_select_reads_structured_task_fields_only() {
         ..Default::default()
     };
     assert_eq!(
-        route_select(&input, &r, &all_available(&r)).0.unwrap().harness,
+        route_select(&input, &r, &all_available(&r))
+            .0
+            .unwrap()
+            .harness,
         "claude_code".into()
     );
     task.harness_id = Some("opencode".into());
@@ -261,9 +274,7 @@ fn route_select_model_hint_narrows_and_unmatched_fails() {
 fn route_select_admission_excludes_full_and_exhausted_accounts() {
     let r = registry();
     let mut state = all_available(&r);
-    state
-        .account_max_runs
-        .insert(pair("claude_oauth", "ca"), 1);
+    state.account_max_runs.insert(pair("claude_oauth", "ca"), 1);
     state
         .reservations
         .account_in_use
@@ -276,14 +287,48 @@ fn route_select_admission_excludes_full_and_exhausted_accounts() {
         .insert(pair("claude_oauth", "cb"), 0.0);
     let (pick, trace) = route_select(&input("coding"), &r, &state);
     assert_eq!(pick.unwrap().candidate.key(), key("codex_oauth", "gpt"));
-    assert!(trace.rejections.iter().any(|x| x.candidate.source == "claude_oauth".into()
-        && x.reason == ExclusionReason::AccountConcurrency));
+    assert!(
+        trace
+            .rejections
+            .iter()
+            .any(|x| x.candidate.source == "claude_oauth".into()
+                && x.reason == ExclusionReason::AccountConcurrency)
+    );
     // Nothing admissible anywhere: fail closed.
     state.accounts.available.clear();
     assert_eq!(
         route_select(&input("coding"), &r, &state).0,
         Err(RouteFailure::NoEligible("claude_code".into()))
     );
+}
+
+#[test]
+fn cos_route_candidates_keep_priority_and_fail_closed_when_none_is_eligible() {
+    let mut r = registry();
+    r.cos_route_candidates = vec![key("claude_oauth", "sonnet"), key("codex_oauth", "gpt")];
+    let cos_input = RouteInput {
+        task_id: "cos-thread".into(),
+        harness: task_core::llm_route::HarnessRequest {
+            harness: Some("claude_code".into()),
+            ..Default::default()
+        },
+        cos: true,
+        ..Default::default()
+    };
+    let mut state = RouteState::default();
+    // The first candidate has no admitted account, so selection proceeds in declaration order.
+    state
+        .accounts
+        .available
+        .insert("codex_oauth".into(), vec!["xa".into()]);
+    let (selected, trace) = route_select(&cos_input, &r, &state);
+    let selected = selected.expect("second candidate is eligible");
+    assert_eq!(selected.candidate.key(), key("codex_oauth", "gpt"));
+    assert_eq!(trace.candidates, r.cos_route_candidates);
+
+    state.accounts.available.clear();
+    let (refused, _) = route_select(&cos_input, &r, &state);
+    assert!(matches!(refused, Err(RouteFailure::NoEligible(_))));
 }
 
 #[test]
@@ -296,10 +341,16 @@ fn route_select_rejects_unregistered_combination_before_dispatch() {
     state.quota.cooling_down.insert(pair("claude_oauth", "cb"));
     let (pick, trace) = route_select(&input("coding"), &r, &state);
     assert_eq!(pick, Err(RouteFailure::NoEligible("claude_code".into())));
-    assert!(trace.rejections.iter().any(|x| x.candidate.key() == key("codex_oauth", "gpt")
-        && x.reason == ExclusionReason::NoCompatibleRoute));
+    assert!(
+        trace
+            .rejections
+            .iter()
+            .any(|x| x.candidate.key() == key("codex_oauth", "gpt")
+                && x.reason == ExclusionReason::NoCompatibleRoute)
+    );
     // No route_defaults for the harness: fail closed even though a compatible source exists.
-    r.route_defaults.remove(&task_core::llm_route::HarnessId::from("opencode"));
+    r.route_defaults
+        .remove(&task_core::llm_route::HarnessId::from("opencode"));
     assert_eq!(
         route_select(&input("light"), &r, &state).0,
         Err(RouteFailure::NoDeclaredDefault("opencode".into()))
@@ -375,11 +426,24 @@ fn route_select_records_events_and_run_row() {
             "SELECT selected_harness_id, selected_source_id, selected_model_id, \
              selected_account_id, selection_metadata_json FROM runs WHERE run_id = ?1",
             [run_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
         )
         .unwrap();
     assert_eq!(
-        (row.0.as_str(), row.1.as_str(), row.2.as_str(), row.3.as_str()),
+        (
+            row.0.as_str(),
+            row.1.as_str(),
+            row.2.as_str(),
+            row.3.as_str()
+        ),
         ("opencode", "qwen", "qwen3", "shared")
     );
     let stored: serde_json::Value = serde_json::from_str(&row.4).unwrap();
@@ -395,9 +459,11 @@ fn route_select_records_events_and_run_row() {
     );
     d.record_route_selection(task.id, None, &refused, &outcome, &trace)
         .unwrap();
-    assert!(progress_msgs(&store, task.id)
-        .iter()
-        .any(|m| m.contains("route refused") && m.contains("missing")));
+    assert!(
+        progress_msgs(&store, task.id)
+            .iter()
+            .any(|m| m.contains("route refused") && m.contains("missing"))
+    );
 }
 
 /// Records the route each run was launched with.

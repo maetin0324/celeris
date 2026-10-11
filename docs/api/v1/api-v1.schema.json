@@ -21867,14 +21867,7 @@
           "type": "string"
         },
         "in_use": {
-          "description": "実行中の run と Reviewer run の合計。ADR-0089（Phase R6-5）: CoS の対話 run は含めない\n（`in_use_cos`）。",
-          "format": "uint32",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "in_use_cos": {
-          "default": 0,
-          "description": "ADR-0089（Phase R6-5）: このプロバイダで走っている CoS の対話 run の数（`concurrency` の外。\n古いスナップショットには無いので既定 0）。",
+          "description": "実行中の通常 run と Reviewer run の合計。",
           "format": "uint32",
           "minimum": 0,
           "type": "integer"

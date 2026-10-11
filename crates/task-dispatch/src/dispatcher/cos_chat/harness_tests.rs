@@ -4,12 +4,10 @@ use super::*;
 use crate::dispatcher::cos_chat::launch::CosChatLaunchConfig;
 use task_core::chat::attachments::ChatAttachmentStore;
 use task_core::chat::{
-    ChatCreateThreadRequest, ChatEventData, ChatEventQuery, ChatEventType, ChatPostMessageRequest,
-    ChatRunState, ChatSendMode,
+    ChatCreateThreadRequest, ChatEventQuery, ChatEventType, ChatPostMessageRequest, ChatRunState,
+    ChatSendMode,
 };
-use task_worker::acp::{AcpAdapter, AcpConfig, AcpPermission};
 use task_worker::claude_code::{ClaudeCodeAdapter, ClaudeCodeConfig};
-use task_worker::codex::{CodexAdapter, CodexConfig};
 
 fn stub(dir: &Path, name: &str, body: &str) -> String {
     let path = dir.join(name);
@@ -63,14 +61,8 @@ fn fixture_on(
         store.clone(),
         CosChatLaunchConfig {
             enabled: true,
-            fallbacks: Vec::new(),
             worker_reserve_five_hour: 0.90,
             harness: harness.into(),
-            llm_source: Some("test".into()),
-            provider: Some("p1".into()),
-            account_id: None,
-            model: None,
-            tier: Tier::Frontier,
             max_turns: 3,
             max_wall_secs: 30,
             unavailable_reason: None,
@@ -229,132 +221,6 @@ printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"thinking","sum
 }
 
 #[tokio::test]
-async fn cos_chat_harness_e2e_codex_initial_resume_events_and_native_image() {
-    let script = r#"
-if [ -e first.args ]; then dest=second; else dest=first; fi
-printf '%s\n' "$@" > "$dest.args"
-cat > "$dest.input"
-find .taskd/chat-runs -mindepth 1 -maxdepth 1 -type d -exec sh -c 'printf "%s" "{\"summary\":\"hello\",\"evidence\":[]}" > "$1/result.json"' sh {} \;
-printf '%s\n' '{"type":"thread.started","thread_id":"thread-cos-1"}' '{"type":"item.completed","item":{"id":"s","type":"todo_list","text":"checking"}}' '{"type":"item.completed","item":{"id":"m","type":"agent_message","text":"hello"}}' '{"type":"item.started","item":{"id":"t","type":"command_execution","command":"pwd"}}' '{"type":"item.completed","item":{"id":"t","type":"command_execution","command":"pwd","aggregated_output":"ok","exit_code":0}}' '{"type":"turn.completed","usage":{"input_tokens":3,"output_tokens":4}}'
-"#;
-    let dir = crate::test_support::WritableTempDir::new();
-    let command = stub(dir.path(), "codex.sh", script);
-    let adapter = Arc::new(CodexAdapter::new(CodexConfig {
-        command,
-        env: vec![(
-            "CODEX_HOME".into(),
-            dir.path().join("codex-home").to_string_lossy().into_owned(),
-        )],
-        ..Default::default()
-    }));
-    let (data, store, mut d, thread) = fixture("codex", adapter);
-    let workspace = data
-        .path()
-        .join("cos/threads")
-        .join(&thread)
-        .join("workspace");
-    post(&store, &d, &thread, "one", vec![]);
-    let first = run(&mut d, &store, &thread).await;
-    assert_mapped(&events(&store, &thread, &first.id));
-    let args = std::fs::read_to_string(workspace.join("first.args")).unwrap();
-    assert!(args.contains("exec\n"));
-    assert!(!args.contains("sandbox_mode=\"read-only\""));
-    let image = upload_image(data.path(), &store, &thread);
-    post(&store, &d, &thread, "two", vec![image]);
-    let second = run(&mut d, &store, &thread).await;
-    let args = std::fs::read_to_string(workspace.join("second.args")).unwrap();
-    assert!(args.contains("resume\nthread-cos-1\n"), "{args}");
-    assert!(args.contains("--image\n"), "{args}");
-    let image_path = args
-        .lines()
-        .skip_while(|arg| *arg != "--image")
-        .nth(1)
-        .expect("image path");
-    assert!(std::path::Path::new(image_path).is_file());
-    assert_mapped(&events(&store, &thread, &second.id));
-}
-
-#[tokio::test]
-async fn cos_chat_harness_e2e_acp_new_load_events_and_image_capabilities() {
-    let script = r#"
-read -r init
-if [ -e enable-native ]; then
-  printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"agentCapabilities":{"loadSession":true,"promptCapabilities":{"image":true}}}}'
-else
-  printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"agentCapabilities":{"loadSession":true}}}'
-fi
-read -r session
-printf '%s\n' "$session" > session.json
-if [ -e first.session ]; then printf '%s\n' "$session" > second.session; else printf '%s\n' "$session" > first.session; fi
-printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"acp-session-1"}}'
-read -r prompt
-printf '%s\n' "$prompt" > prompt.json
-printf '%s\n' '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"plan"}}}' '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"hello"}}}}' '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"tool_call","title":"Bash","status":"in_progress"}}}' '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"tool_call_update","title":"Bash","status":"completed","rawOutput":"ok"}}}'
-find .taskd/chat-runs -mindepth 1 -maxdepth 1 -type d -exec sh -c 'printf "%s" "{\"summary\":\"hello\",\"evidence\":[]}" > "$1/result.json"' sh {} \;
-printf '%s\n' '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}'
-"#;
-    let dir = crate::test_support::WritableTempDir::new();
-    let command = stub(dir.path(), "acp.sh", script);
-    let adapter = Arc::new(AcpAdapter::new(AcpConfig {
-        command,
-        args: vec![],
-        permission: AcpPermission::Deny,
-        startup_timeout: Duration::from_secs(5),
-        ..Default::default()
-    }));
-    let (data, store, mut d, thread) = fixture("acp", adapter);
-    let workspace = data
-        .path()
-        .join("cos/threads")
-        .join(&thread)
-        .join("workspace");
-    post(&store, &d, &thread, "one", vec![]);
-    let first = run(&mut d, &store, &thread).await;
-    assert_mapped(&events(&store, &thread, &first.id));
-    let first_req: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(workspace.join("first.session")).unwrap()).unwrap();
-    assert_eq!(first_req["method"], "session/new");
-    let image = upload_image(data.path(), &store, &thread);
-    post(&store, &d, &thread, "two", vec![image]);
-    let second = run(&mut d, &store, &thread).await;
-    let second_req: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(workspace.join("second.session")).unwrap()).unwrap();
-    assert_eq!(second_req["method"], "session/load");
-    assert_eq!(second_req["params"]["sessionId"], "acp-session-1");
-    let prompt: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(workspace.join("prompt.json")).unwrap()).unwrap();
-    let prompt_text = prompt.to_string();
-    assert!(
-        prompt_text.contains("unsupported") && prompt_text.contains("not inspected"),
-        "{prompt_text}"
-    );
-    assert_mapped(&events(&store, &thread, &second.id));
-    assert!(
-        !events(&store, &thread, &second.id)
-            .iter()
-            .any(|e| matches!(&e.data,
-        ChatEventData::Status(s) if s.summary.contains("inspected image")))
-    );
-
-    std::fs::write(workspace.join("enable-native"), "1").unwrap();
-    let image = upload_image(data.path(), &store, &thread);
-    post(&store, &d, &thread, "three", vec![image]);
-    let third = run(&mut d, &store, &thread).await;
-    let prompt: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(workspace.join("prompt.json")).unwrap()).unwrap();
-    assert_eq!(prompt["params"]["prompt"][1]["type"], "image");
-    assert_eq!(prompt["params"]["prompt"][1]["mimeType"], "image/png");
-    assert!(
-        prompt["params"]["prompt"][1]["data"]
-            .as_str()
-            .is_some_and(|s| !s.is_empty())
-    );
-    assert_mapped(&events(&store, &thread, &third.id));
-}
-
-/// live-check 不具合 1: the claude CLI streams the reply and writes no `result.json` (the CoS chat
-/// preamble does not ask for it); the chat run completes and the output message is the reply.
-#[tokio::test]
 async fn cos_chat_harness_e2e_claude_without_result_json_completes() {
     let script = r#"
 cat > /dev/null
@@ -403,8 +269,6 @@ enum DeltaStep {
     Refuse,
     /// Ends with an error before the run completes.
     Fail,
-    /// Applies an operation before hitting a supply limit and switching routes.
-    SupplyFail,
     /// Ends with the context budget exhausted.
     ContextExhausted,
     /// The daemon "restarted": the run is taken over as an orphan while the worker is alive.
@@ -490,29 +354,6 @@ impl WorkerAdapter for DeltaProbe {
             }
             DeltaStep::Refuse => {}
             DeltaStep::Fail => return error("worker crashed before the end"),
-            DeltaStep::SupplyFail => {
-                self.store
-                    .cos_operation_apply(
-                        &task_core::chat::AuditContext {
-                            actor: task_core::chat::ChatActor::Cos,
-                            thread_id: chat.thread_id.clone(),
-                            run_id: chat.run_id.clone(),
-                            operation_id: ulid::Ulid::new().to_string(),
-                            reason: "fixture operation".into(),
-                            policy_version: "v1".into(),
-                        },
-                        "delta-fallback-key",
-                        "fixture-hash",
-                        "project",
-                        "fixture-project",
-                        None,
-                        "edit",
-                        &serde_json::json!({}),
-                        |_, _| Ok(serde_json::json!({"done": true})),
-                    )
-                    .expect("applied receipt");
-                return error("provider exhausted: session limit");
-            }
             DeltaStep::ContextExhausted => {
                 return Ok(RunOutcome {
                     terminal: Terminal::BudgetExhausted {
@@ -674,12 +515,7 @@ async fn cos_chat_resume_delta_resumed_run_gets_only_messages_after_the_cursor()
 /// A fresh session for every retire reason gets the summary and the unsummarized history.
 #[tokio::test]
 async fn cos_chat_resume_delta_fresh_reasons_deliver_the_full_text() {
-    for reason in [
-        "token_rollover",
-        "cache_missing",
-        "key_changed",
-        "context_exhausted",
-    ] {
+    for reason in ["token_rollover", "cache_missing", "context_exhausted"] {
         let steps = if reason == "context_exhausted" {
             vec![DeltaStep::Checkpoint("S1"), DeltaStep::ContextExhausted]
         } else {
@@ -707,13 +543,6 @@ async fn cos_chat_resume_delta_fresh_reasons_deliver_the_full_text() {
             }
             "cache_missing" => {
                 store.chat_session_set_id(&row.id, "").expect("cache gone");
-            }
-            "key_changed" => {
-                d.cos_chat_launch
-                    .as_mut()
-                    .expect("launch")
-                    .config
-                    .llm_source = Some("other".into());
             }
             _ => {
                 post(&store, &d, &t, "exhaust", vec![]); // seq 3, reply 4 (not completed)
@@ -907,145 +736,6 @@ async fn cos_chat_resume_delta_checkpoint_watermark_and_cursor_are_independent()
     assert_eq!(seqs(&c), vec![6, 7, 8, 9]);
 }
 
-#[tokio::test]
-async fn cos_chat_resume_delta_fallback_route_gets_full_history() {
-    let (_dir, store, mut d, t, probe) = delta_fixture(vec![
-        DeltaStep::Checkpoint("saved summary"),
-        DeltaStep::Ok,
-        DeltaStep::SupplyFail,
-        DeltaStep::Ok,
-    ]);
-    // Use the same key for both routes to ensure switching always starts another session.
-    d.cos_chat_launch.as_mut().unwrap().config.fallbacks =
-        vec![crate::dispatcher::cos_chat::launch::CosChatRoute {
-            harness: "fake".into(),
-            llm_source: Some("test".into()),
-            provider: Some("p1".into()),
-            account_id: None,
-            model: None,
-            tier: Tier::Frontier,
-            unavailable_reason: None,
-        }];
-    post(&store, &d, &t, "one", vec![]);
-    run(&mut d, &store, &t).await;
-    post(&store, &d, &t, "two", vec![]);
-    run(&mut d, &store, &t).await;
-    let old = store.chat_session_active(&t).unwrap().unwrap();
-    assert!(old.delivered_through_seq > 1);
-    post(&store, &d, &t, "three", vec![]);
-    let failed_attempt = run_any(&mut d, &store, &t).await;
-    assert_eq!(failed_attempt.state, ChatRunState::Running);
-    assert_eq!(session_detail(&store, &failed_attempt.id), "resumed");
-    assert_eq!(probe.chat(2).summary, None);
-    assert_eq!(
-        probe.chat(2).delivered_through_seq,
-        Some(old.delivered_through_seq)
-    );
-    assert!(!seqs(&probe.chat(2)).contains(&2));
-    assert_eq!(
-        store
-            .chat_session_get(&old.id)
-            .unwrap()
-            .unwrap()
-            .delivered_through_seq,
-        old.delivered_through_seq,
-        "a failed attempt must not move the cursor"
-    );
-
-    // The route retry continues the same durable run/input after the first worker exited.
-    let finished = run(&mut d, &store, &t).await;
-    assert_eq!(finished.id, failed_attempt.id);
-    assert_eq!(finished.input_message_id, failed_attempt.input_message_id);
-    let full = probe.chat(3);
-    assert_eq!(full.delivered_through_seq, None);
-    let summary = full.summary.as_deref().expect("full summary with receipt");
-    assert!(summary.starts_with("saved summary"));
-    assert!(summary.contains("Applied operations from the previous route (do not reapply)"));
-    assert!(summary.contains("edit project:fixture-project"));
-    assert!(summary.contains("idempotency_key=delta-fallback-key"));
-    assert_eq!(full.summary_through_seq, 1);
-    let expected = crate::dispatcher::cos_chat::rollover::history_since_summary(
-        &store,
-        &t,
-        full.inputs[0].seq as u64,
-    )
-    .unwrap()
-    .2;
-    assert_eq!(
-        full.unsummarized, expected,
-        "all unsummarized history is sent"
-    );
-    assert!(
-        seqs(&full).contains(&2),
-        "history already held by the old session is resent"
-    );
-    assert!(
-        full.unsummarized
-            .messages
-            .iter()
-            .any(|m| m.text == "message two")
-    );
-    assert_eq!(full.inputs[0].text, "message three");
-    let seen = probe.seen.lock().unwrap();
-    assert!(!seen[3].context.session.as_ref().unwrap().resume);
-    drop(seen);
-    let active = store.chat_session_active(&t).unwrap().unwrap();
-    assert_ne!(active.id, old.id);
-    assert!(active.delivered_through_seq >= full.inputs[0].seq);
-    assert_eq!(
-        store
-            .chat_run_session_record(&finished.id)
-            .unwrap()
-            .session_row_id,
-        Some(active.id)
-    );
-    assert_eq!(
-        store
-            .chat_session_get(&old.id)
-            .unwrap()
-            .unwrap()
-            .delivered_through_seq,
-        old.delivered_through_seq,
-        "only the completing session advances"
-    );
-    assert_eq!(
-        store
-            .cos_operation_applied_for_run(&finished.id)
-            .unwrap()
-            .len(),
-        1
-    );
-}
-
-/// ADR 2026-10-08-cos-chat-prompt-cache T5: `cos-inbox-triage` is mounted only for the inbox scene.
-#[test]
-fn cos_chat_skills_mount_triage_only_in_the_inbox_thread_or_with_inbox_items() {
-    use crate::dispatcher::cos_chat::launch::cos_chat_skills;
-    assert_eq!(cos_chat_skills(false, &[]), vec!["cos-operator"]);
-    assert_eq!(
-        cos_chat_skills(true, &[]),
-        vec!["cos-operator", "cos-inbox-triage"]
-    );
-    let item = task_worker::protocol::CosChatInboxItem {
-        item_id: "i1".into(),
-        state: "pending".into(),
-        source_kind: "question".into(),
-        source_key: "q1".into(),
-        source_revision: "1".into(),
-        summary: "s".into(),
-        reason: None,
-        decision: None,
-        answer_path: None,
-        created_at: "2026-10-08T00:00:00Z".into(),
-    };
-    assert_eq!(
-        cos_chat_skills(false, &[item]),
-        vec!["cos-operator", "cos-inbox-triage"]
-    );
-}
-
-/// An ordinary thread's run gets `cos-operator` only: neither the delivered skill directory nor
-/// the prompt carries the triage procedure.
 #[tokio::test]
 async fn cos_chat_skill_ordinary_thread_run_does_not_mount_inbox_triage() {
     let script = r#"

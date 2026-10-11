@@ -1,9 +1,11 @@
 //! provider / account の選択と cooldown 判定（ADR-0012、ADR-0013、ADR-0024、ADR-0049）。ADR-0082 の L1。
 
 use super::*;
-use task_core::model_catalog::assignments::{AssignmentView, WireRule, apply_to_bindings, source_name_for_llm_source};
 #[cfg(test)]
 use task_core::model_catalog::assignments::{AssignmentState, configured_wire};
+use task_core::model_catalog::assignments::{
+    AssignmentView, WireRule, apply_to_bindings, source_name_for_llm_source,
+};
 #[cfg(test)]
 use task_core::model_router::profiles::DeploymentProfile;
 #[cfg(test)]
@@ -11,10 +13,11 @@ use task_core::model_router::{
     optimizer::{Candidate, OptimizationResult, legacy_rank},
     profiles::{Billing, Capabilities, ContextLimits, ModelProfile, Support},
 };
+use task_core::model_routing::TierModels;
 #[cfg(test)]
-use task_core::model_routing::{ProviderCandidate, ProviderCandidateKind, ProviderCandidateOutcome, ProviderSelection, ProviderSelectionReason};
 use task_core::model_routing::{
-    TierModels,
+    ProviderCandidate, ProviderCandidateKind, ProviderCandidateOutcome, ProviderSelection,
+    ProviderSelectionReason,
 };
 
 /// ADR 2026-10-06 model-role-assignments D2: 割り当てで除外された provider を候補の記録に残すときの語彙
@@ -834,6 +837,7 @@ impl Dispatcher {
     }
 
     /// Keep the observed last portion of Claude's five-hour budget for CoS.
+    #[cfg(test)]
     pub(super) fn reserved_for_cos(
         &self,
         adapter: AccountAdapter,
@@ -858,6 +862,7 @@ impl Dispatcher {
     /// ADR-0054 Phase 67c: 指定した 1 アカウントが今すぐ使えるか（ログイン済み・cooldown 外・上限未満・
     /// 枯渇していない。`crate::accounts::evaluate` の除外判定をそのまま使う）。`pick_account` と同じ
     /// 読み取りだが、ベストスコアを探すのではなく特定の 1 件が使えるかだけを見る。
+    #[cfg(test)]
     pub(super) fn account_usable(
         &mut self,
         adapter: AccountAdapter,

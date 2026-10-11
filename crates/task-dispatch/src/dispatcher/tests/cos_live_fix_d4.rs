@@ -52,14 +52,8 @@ fn fixture(script: &str) -> Fixture {
         store.clone(),
         CosChatLaunchConfig {
             enabled: true,
-            fallbacks: Vec::new(),
             worker_reserve_five_hour: 0.90,
             harness: "fake".into(),
-            llm_source: Some("test".into()),
-            provider: Some("p1".into()),
-            account_id: None,
-            model: None,
-            tier: Tier::Frontier,
             max_turns: 2,
             max_wall_secs: 30,
             unavailable_reason: None,
@@ -182,7 +176,7 @@ impl Fixture {
 
     fn slot_held(&self, thread: &str) -> bool {
         let launch = self.d.cos_chat_launch.as_ref().expect("launch");
-        launch.running.contains_key(thread) || launch.providers_in_flight.contains_key(thread)
+        launch.running.contains_key(thread) || launch.route_reservations.contains_key(thread)
     }
 
     fn chat_thread(&self, key: &str) -> String {

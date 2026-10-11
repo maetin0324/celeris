@@ -31,6 +31,3 @@ pub(crate) mod secrets;
 pub(crate) mod services;
 pub(crate) mod stranded_sweep;
 pub(crate) mod tick_loop;
-
-#[cfg(test)]
-mod cos_reload_tests;

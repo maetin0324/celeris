@@ -90,9 +90,7 @@ use crate::accounts::{
     AccountBook, AccountCandidate, AccountCheckRecord, AccountCooldownReason, AccountDir,
     ExcludedReason, ObservationSource, cooldown_for_failure, evaluate, scan_accounts,
 };
-use crate::policy::{
-    CooldownReason, ProviderId, ProviderOutcome, ProviderPolicy,
-};
+use crate::policy::{CooldownReason, ProviderId, ProviderOutcome, ProviderPolicy};
 
 #[cfg(test)]
 use crate::policy::{AdapterId, Selection};
@@ -1121,7 +1119,10 @@ struct ReviewEntry {
     handle: JoinHandle<()>,
     /// `Reviewer` run を起動する場合に選んだ `(source, account)`（並列度と admission の枠を消費する。
     /// ADR 2026-10-11 llm-source-harness-selection）。
-    route: Option<(task_core::llm_route::SourceId, task_core::llm_route::AccountId)>,
+    route: Option<(
+        task_core::llm_route::SourceId,
+        task_core::llm_route::AccountId,
+    )>,
     /// レビューを延期（Reviewer run の供給側失敗）するときに次 tick へ持ち越す `done` の内容。
     subject: ReviewSubject,
     /// レビュー対象の run（デーモンのスナップショット用）。
@@ -1287,6 +1288,7 @@ pub struct Dispatcher {
     provider_llm_sources: HashMap<ProviderId, String>,
     /// 行の adapter 名と pool の adapter が一致しない行（ACP + opencode-go。ADR 2026-10-06 D3）の
     /// provider id → pool の adapter。`account_pool = "<adapter>"` と書かれた行だけが入る。
+    #[cfg(test)]
     account_pool_adapters: HashMap<ProviderId, AccountAdapter>,
     /// ADR 2026-10-07: coding の既定ハーネス解決（`adapter_policy = "model_family"` のハーネスと材料）。
     coding_default: CodingHarnessDefault,
@@ -1623,6 +1625,7 @@ impl Dispatcher {
             publisher: None,
             account_pool_providers,
             provider_llm_sources: HashMap::new(),
+            #[cfg(test)]
             account_pool_adapters: HashMap::new(),
             coding_default: CodingHarnessDefault::default(),
             account_books,
@@ -2061,7 +2064,20 @@ impl Dispatcher {
     pub fn implicit_account_in_use(&self, source: &str) -> usize {
         self.implicit_account_providers(source)
             .iter()
-            .map(|p| self.provider_in_use(p) + self.provider_in_use_cos(p))
+            .map(|provider| {
+                self.provider_in_use(provider)
+                    + self
+                        .running
+                        .values()
+                        .filter(|run| run.cos && &run.provider == provider)
+                        .count()
+                    + self.cos_chat_launch.as_ref().map_or(0, |chat| {
+                        chat.route_reservations
+                            .values()
+                            .filter(|(active, _)| active.as_ref() == source)
+                            .count()
+                    })
+            })
             .sum()
     }
 
@@ -2127,9 +2143,21 @@ impl Dispatcher {
                 .filter(|e| matches(&e.account_adapter, &e.account))
                 .count()
             + self.cos_chat_launch.as_ref().map_or(0, |chat| {
-                chat.accounts_in_flight
+                chat.route_reservations
                     .values()
-                    .filter(|(a, account)| *a == adapter && account == id)
+                    .filter(|(source, account)| {
+                        account.as_ref() == id
+                        && self
+                            .llm_route_registry
+                            .sources
+                            .get(source)
+                            .and_then(|spec| {
+                                crate::dispatcher::route_select::account_adapter_for_source_kind(
+                                    spec.kind.as_ref(),
+                                )
+                            })
+                            == Some(adapter)
+                    })
                     .count()
             })
     }
@@ -2155,16 +2183,20 @@ impl Dispatcher {
             .contains(&Self::login_pending_key(adapter, id))
     }
 
-    /// ADR-0053 D1（Phase 65）: `llm-proxy` が同じアカウントプールの cooldown・観測値を共有するための
-    /// アクセサでもある（CLI ワーカーの dispatch と**同じ帳簿**を返す。別の写しを作らない）。
-    /// そのアダプタの `[accounts]` 根が設定されていなければ `None`。
-    /// `account_pool = "<adapter>"` で pool の adapter を明示した行の対応を差し替える（`reload_providers` と
-    /// 同じ場面で呼ぶ。ADR 2026-10-06 D3）。
-    pub fn set_account_pool_adapters(&mut self, adapters: HashMap<ProviderId, AccountAdapter>) {
-        self.account_pool_adapters = adapters;
+    pub fn account_book(&self, adapter: AccountAdapter) -> Option<Arc<StdMutex<AccountBook>>> {
+        self.account_books.get(&adapter).cloned()
     }
 
-    /// 行 `provider`（adapter 名 `row_adapter`）が使う pool の adapter。明示があればそれ、無ければ行の adapter 名。
+    pub fn set_account_pool_adapters(&mut self, adapters: HashMap<ProviderId, AccountAdapter>) {
+        #[cfg(test)]
+        {
+            self.account_pool_adapters = adapters;
+        }
+        #[cfg(not(test))]
+        let _ = adapters;
+    }
+
+    #[cfg(test)]
     pub(super) fn pool_adapter_of(
         &self,
         provider: &ProviderId,
@@ -2174,10 +2206,6 @@ impl Dispatcher {
             .get(provider)
             .copied()
             .or_else(|| AccountAdapter::parse(row_adapter))
-    }
-
-    pub fn account_book(&self, adapter: AccountAdapter) -> Option<Arc<StdMutex<AccountBook>>> {
-        self.account_books.get(&adapter).cloned()
     }
 
     /// D6: 手動確認の結果を `AccountBook` に記録して保存する（`source = "check"`）。
@@ -2583,10 +2611,7 @@ impl Dispatcher {
         Ok(crate::capacity::is_cos_run(task, &self.store.org_list()?))
     }
 
-    /// ADR 2026-10-08 §(e): is this non-pool row's LLM source at its implicit account's limit?
-    /// Pool rows have no implicit account (their real accounts limit them) and are never full here.
-    /// Rows that share a source share one limit and one in-use count.
-    /// `extra` counts runs not yet visible in `running` (CoS chat launches in flight).
+    #[cfg(test)]
     pub(super) fn implicit_account_full(&self, provider: &ProviderId, extra: usize) -> bool {
         if self.account_pool_providers.contains(provider) {
             return false;
@@ -2598,22 +2623,7 @@ impl Dispatcher {
         crate::capacity::implicit_account_full(self.implicit_account_in_use(&source) + extra, limit)
     }
 
-    /// ADR-0089（Phase R6-5）: そのプロバイダで走っている CoS の対話 run の数（`GET /providers` の `in_use_cos`）。
-    fn provider_in_use_cos(&self, provider: &ProviderId) -> usize {
-        self.running
-            .values()
-            .filter(|e| e.cos && &e.provider == provider)
-            .count()
-            + self.cos_chat_launch.as_ref().map_or(0, |chat| {
-                chat.providers_in_flight
-                    .values()
-                    .filter(|active| *active == provider)
-                    .count()
-            })
-    }
-
-    /// そのプロバイダで走っている run の数。ADR-0089（Phase R6-5）: CoS の対話 run は数えない
-    /// （`provider_in_use_cos`）。
+    /// そのプロバイダで走っている通常 run の数。
     fn provider_in_use(&self, provider: &ProviderId) -> usize {
         self.running
             .values()

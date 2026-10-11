@@ -156,6 +156,9 @@ fn new_session_id_mints_a_uuid_only_for_claude_code() {
         task_worker::provider::is_valid_uuid(&id),
         "{id} is not a valid UUID"
     );
+    assert!(task_worker::provider::is_valid_uuid(&new_session_id(
+        "claude_code"
+    )));
     assert_eq!(new_session_id("codex"), "");
     assert_eq!(new_session_id("acp"), "");
     assert_eq!(new_session_id("unknown-future-adapter"), "");

@@ -251,6 +251,13 @@ fn install_test_routes(
             args: vec![],
         },
     );
+    r.harnesses.insert(
+        "claude_code".into(),
+        r.harnesses
+            .get(&"test".into())
+            .expect("test harness")
+            .clone(),
+    );
     r.harness_selection.rules = vec![HarnessRule {
         harness: "test".into(),
         ..Default::default()
@@ -268,7 +275,10 @@ fn install_test_routes(
         }
     }
     d.set_llm_route_registry(r);
-    d.set_harness_adapters(HashMap::from([("test".into(), adapter)]));
+    d.set_harness_adapters(HashMap::from([
+        ("test".into(), Arc::clone(&adapter)),
+        ("claude_code".into(), adapter),
+    ]));
 }
 
 // For single-run tests: await the worker wrapper, not just the adapter. The wrapper

@@ -586,10 +586,21 @@ async fn route_dispatch_records_feature_reference_and_snapshot() {
     let (record, _, store) = routing_decided_with_probe(Reachability::Ok).await;
     let reference = record.features.expect("routing_decided feature reference");
     assert_eq!(reference.schema, "celeris.task-features/1");
-    assert_eq!(reference.template, "task-brief/1");
+    assert_eq!(reference.template, "task-brief/2");
     let stored = store
         .route_features_get(&reference.hash)
         .unwrap()
         .expect("matching route_features row");
     assert_eq!(stored.hash, reference.hash);
+    assert_eq!(stored.aux.lane.as_deref(), Some("cheap"));
+    assert_eq!(stored.aux.harness.as_deref(), Some("acp"));
+    assert!(stored.aux.task_features_v69.is_some());
+    assert!(stored.brief.contains("# 性質（既存の判定）\n- 判断の重さ:"));
+    assert!(
+        !stored
+            .aux
+            .missing
+            .iter()
+            .any(|field| { ["lane", "harness", "task_features_v69"].contains(&field.as_str()) })
+    );
 }

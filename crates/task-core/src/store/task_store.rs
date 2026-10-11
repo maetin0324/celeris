@@ -53,6 +53,7 @@ pub trait TaskStore:
     fn record_route_features(
         &self,
         subject: crate::route_extract::Subject,
+        context: Option<crate::route_extract::RouteFeatureContext>,
     ) -> Result<crate::route_record::TaskFeatures, StoreError>;
     /// Authoritative per-account concurrency overrides (not event projections).
     fn account_limits(&self) -> Result<Vec<super::AccountLimit>, StoreError>;

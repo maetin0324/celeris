@@ -19,7 +19,7 @@ fn fixture(path: &std::path::Path) {
       CREATE TABLE route_options(hash TEXT PRIMARY KEY,builder TEXT,question TEXT,options_json TEXT,created_at TEXT);
       CREATE TABLE route_decisions(decision_id TEXT PRIMARY KEY,subject_kind TEXT,subject_id TEXT,run_id TEXT,features_hash TEXT,options_hash TEXT,input_json TEXT,output_json TEXT,judge_json TEXT,stage TEXT,created_at TEXT);
       CREATE TABLE route_outcomes(decision_id TEXT PRIMARY KEY,schema TEXT,labels_json TEXT,recorded_at TEXT);
-      INSERT INTO route_features VALUES('sha256:feature','celeris.task-features/1','task-brief/1','task','t1','safe brief','{}','2026-10-11T00:00:00Z');
+      INSERT INTO route_features VALUES('sha256:feature','celeris.task-features/1','task-brief/2','task','t1','safe brief','{}','2026-10-11T00:00:00Z');
       INSERT INTO route_options VALUES('sha256:options','candidates-one-shot/1','Choose','[{\"option_id\":\"o1\",\"text\":\"candidate\",\"binds\":null}]','2026-10-11T00:00:00Z');
       INSERT INTO route_decisions VALUES('d1','task','t1',NULL,'sha256:feature','sha256:options','{\"context\":{},\"constraints\":{},\"candidates\":[]}','{\"selected\":{},\"action\":\"execute\",\"scores\":[],\"rule\":\"evidence\",\"propensity\":1}','{\"kind\":\"rule\"}','shadow','2026-10-11T00:00:00Z');").unwrap();
 }

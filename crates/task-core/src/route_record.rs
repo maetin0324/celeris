@@ -2,11 +2,15 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::execution_plan::WorkUnitCheck;
+use crate::model::{Check, Criterion};
+use crate::model_policy::{Level, TaskFeatures as LaneFeatures};
+
 pub const TASK_FEATURES_SCHEMA: &str = "celeris.task-features/1";
 pub const ROUTE_OPTIONS_SCHEMA: &str = "celeris.route-options/1";
 pub const ROUTE_DECISION_SCHEMA: &str = "celeris.route-decision/1";
 pub const ROUTE_OUTCOME_SCHEMA: &str = "celeris.route-outcome/1";
-pub const TASK_BRIEF_TEMPLATE: &str = "task-brief/1";
+pub const TASK_BRIEF_TEMPLATE: &str = "task-brief/2";
 pub const CANDIDATES_ONE_SHOT_BUILDER: &str = "candidates-one-shot/1";
 pub const OBJECTIVE_MAX_CHARS: usize = 4_000;
 
@@ -44,7 +48,7 @@ pub struct FeaturesAux {
     pub repairs_n: Option<u64>,
     pub budget_turns: Option<u64>,
     pub budget_wall_s: Option<u64>,
-    pub task_features_v69: Option<serde_json::Value>,
+    pub task_features_v69: Option<LaneFeatures>,
     pub missing: Vec<String>,
     pub truncated: Vec<Truncation>,
 }
@@ -60,7 +64,7 @@ pub struct Truncation {
 pub struct FeaturesInput {
     pub title: Option<String>,
     pub objective: Option<String>,
-    pub acceptance: Option<Vec<String>>,
+    pub acceptance: Option<Vec<AcceptanceInput>>,
     pub checks: Option<Vec<CheckInput>>,
     pub done_when: Option<Vec<String>>,
     pub outputs: Option<Vec<String>>,
@@ -84,17 +88,138 @@ pub struct FeaturesInput {
     pub repos_n: Option<usize>,
     pub prior_runs_n: Option<u64>,
     pub prior_failed_n: Option<u64>,
+    /// D2「過去の試行」: 前の run ごとの要約（古い順）。
+    pub prior_runs: Option<Vec<PriorRunInput>>,
     pub retries_n: Option<u64>,
     pub repairs_n: Option<u64>,
     pub budget_turns: Option<u64>,
     pub budget_wall_s: Option<u64>,
-    pub task_features_v69: Option<serde_json::Value>,
+    pub task_features_v69: Option<LaneFeatures>,
+}
+
+/// D2「期待する成果物」: 受け入れ条件 1 件（`Criterion` の文と check の種類）。
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AcceptanceInput {
+    pub text: String,
+    pub check: CheckInput,
+}
+
+impl From<&Criterion> for AcceptanceInput {
+    fn from(c: &Criterion) -> Self {
+        Self {
+            text: c.text.clone(),
+            check: CheckInput::from(&c.check),
+        }
+    }
+}
+
+/// `Criterion.check` の種類、または WU の `WorkUnitCheck`（常に command）。
+/// command の `cmd` は元の文字列を持ち、brief には実行ファイル名と subcommand だけを出す。
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum CheckInput {
+    Command { cmd: String },
+    ArtifactExists,
+    KnowledgePage,
+    Reviewer,
+    Human,
+}
+
+impl CheckInput {
+    fn render(&self) -> String {
+        match self {
+            CheckInput::Command { cmd } => format!("command `{}`", command_name(cmd)),
+            CheckInput::ArtifactExists => "artifact_exists".into(),
+            CheckInput::KnowledgePage => "knowledge_page".into(),
+            CheckInput::Reviewer => "reviewer".into(),
+            CheckInput::Human => "human".into(),
+        }
+    }
+}
+
+impl From<&Check> for CheckInput {
+    fn from(c: &Check) -> Self {
+        match c {
+            Check::Command { cmd, .. } => CheckInput::Command { cmd: cmd.clone() },
+            Check::ArtifactExists { .. } => CheckInput::ArtifactExists,
+            Check::KnowledgePage { .. } => CheckInput::KnowledgePage,
+            Check::Reviewer => CheckInput::Reviewer,
+            Check::Human => CheckInput::Human,
+        }
+    }
+}
+
+impl From<&WorkUnitCheck> for CheckInput {
+    fn from(c: &WorkUnitCheck) -> Self {
+        CheckInput::Command { cmd: c.cmd.clone() }
+    }
+}
+
+/// D2「過去の試行」の 1 run。`failed_criteria` は落ちた検査の criterion 文と exit code
+/// （review の stdout は入れない）。
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct PriorRunInput {
+    pub status: String,
+    pub model: Option<String>,
+    pub wall_s: Option<u64>,
+    pub failed_criteria: Vec<FailedCriterionInput>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct CheckInput {
-    pub kind: String,
-    pub description: String,
+pub struct FailedCriterionInput {
+    pub text: String,
+    pub exit: Option<i32>,
+}
+
+/// 実行ファイル名（basename）と subcommand まで。先頭の `VAR=value`、option、path 形の引数は落とす。
+fn command_name(cmd: &str) -> String {
+    let mut words = cmd
+        .split_whitespace()
+        .skip_while(|w| w.contains('=') && !w.starts_with('-'));
+    let Some(exe) = words.next() else {
+        return String::new();
+    };
+    let exe = exe.rsplit('/').next().unwrap_or(exe);
+    match words.next() {
+        Some(sub)
+            if !sub.starts_with('-')
+                && !sub.contains(['/', '=', '.', '$', '"', '\''])
+                && !sub.is_empty() =>
+        {
+            format!("{exe} {sub}")
+        }
+        _ => exe.to_owned(),
+    }
+}
+
+/// ADR-0069 の 9 軸の日本語名（brief「性質」節の行の順）。
+fn lane_feature_lines(f: &LaneFeatures) -> String {
+    [
+        ("判断の重さ", f.judgment),
+        ("要求の曖昧さ", f.ambiguity),
+        ("決定的な検証のしやすさ", f.verifiability),
+        ("やり直しやすさ", f.reversibility),
+        ("失敗したときの損失", f.consequence),
+        ("読むべき文脈の大きさ", f.context_size),
+        ("道具を使う度合い", f.tool_intensity),
+        ("想定される長さ", f.expected_length),
+        ("領域をまたぐ度合い", f.cross_cutting),
+    ]
+    .iter()
+    .map(|(name, level)| {
+        let level = match level {
+            Level::Low => "低",
+            Level::Medium => "中",
+            Level::High => "高",
+        };
+        format!("- {name}: {level}")
+    })
+    .collect::<Vec<_>>()
+    .join("\n")
+}
+
+fn opt_num<T: ToString>(v: Option<T>) -> String {
+    v.map_or("不明".into(), |n| n.to_string())
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -169,7 +294,7 @@ pub fn build_task_features(input: &FeaturesInput) -> TaskFeatures {
         repairs_n: input.repairs_n,
         budget_turns: input.budget_turns,
         budget_wall_s: input.budget_wall_s,
-        task_features_v69: input.task_features_v69.clone(),
+        task_features_v69: input.task_features_v69,
         missing: Vec::new(),
         truncated: Vec::new(),
     };
@@ -191,22 +316,26 @@ pub fn build_task_features(input: &FeaturesInput) -> TaskFeatures {
             "（目的の記述なし）".into()
         }
     };
-    let accepts = list(
-        &mut aux,
-        "acceptance",
-        input.acceptance.as_deref(),
-        "決定的な検査なし",
-    );
+    let accepts = match input.acceptance.as_deref() {
+        Some(v) if !v.is_empty() => v
+            .iter()
+            .enumerate()
+            .map(|(i, a)| {
+                let text = bounded(&mut aux, &a.text, &format!("acceptance[{i}]"));
+                format!("- {text}（検査: {}）", bounded_plain(&a.check.render()))
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+        Some(_) => "決定的な検査なし".into(),
+        None => {
+            aux.missing.push("acceptance".into());
+            "決定的な検査なし".into()
+        }
+    };
     let check_text = match input.checks.as_deref() {
         Some(v) if !v.is_empty() => v
             .iter()
-            .map(|c| {
-                format!(
-                    "- {}: {}",
-                    c.kind,
-                    bounded_secret(&c.description, "check", 1000).0
-                )
-            })
+            .map(|c| format!("- {}", bounded_plain(&c.render())))
             .collect::<Vec<_>>()
             .join("\n"),
         Some(_) => "決定的な検査なし".into(),
@@ -235,28 +364,15 @@ pub fn build_task_features(input: &FeaturesInput) -> TaskFeatures {
     .map(|(k, v)| format!("- {k}: {}", v.unwrap_or("不明")))
     .collect::<Vec<_>>()
     .join("\n");
-    let prior = match input.prior_runs_n {
-        Some(0) => "初回".into(),
-        Some(n) => format!(
-            "前の run 数: {n}; failed: {}",
-            input
-                .prior_failed_n
-                .map_or("不明".into(), |x| x.to_string())
-        ),
-        None => {
-            aux.missing.push("prior_runs_n".into());
-            "過去の試行: 不明".into()
-        }
-    };
+    let prior = prior_section(&mut aux, input);
+    let nature = input.task_features_v69.as_ref().map_or(String::new(), |f| {
+        format!("\n\n# 性質（既存の判定）\n{}", lane_feature_lines(f))
+    });
     let brief = format!(
-        "# 要求\nタイトル: {title}\n目的: {objective}\n\n# 期待する成果物\n受け入れ条件:\n{accepts}\nchecks:\n{check_text}\ndone_when:\n{done}\noutputs:\n{outputs}\n\n# 触る範囲\n予定 path:\n{paths}\nrepo:\n{repos}\n書き込み集合:\n{writes}\n\n# 置かれた位置\n{position}\n- depth: {}\n- phase_index: {}\n- deps_n: {}\n\n# 過去の試行\n{prior}\n\n# 性質（既存の判定）\n{}",
-        input.depth.map_or("不明".into(), |n| n.to_string()),
-        input.phase_index.map_or("不明".into(), |n| n.to_string()),
-        input.deps_n.map_or("不明".into(), |n| n.to_string()),
-        input
-            .task_features_v69
-            .as_ref()
-            .map_or("不明".into(), |v| format!("判断の重さ: {}", v))
+        "# 要求\nタイトル: {title}\n目的: {objective}\n\n# 期待する成果物\n受け入れ条件:\n{accepts}\nchecks:\n{check_text}\ndone_when:\n{done}\noutputs:\n{outputs}\n\n# 触る範囲\n予定 path:\n{paths}\nrepo:\n{repos}\n書き込み集合:\n{writes}\n\n# 置かれた位置\n{position}\n- depth: {}\n- phase_index: {}\n- deps_n: {}\n\n# 過去の試行\n{prior}{nature}",
+        opt_num(input.depth),
+        opt_num(input.phase_index),
+        opt_num(input.deps_n),
     );
     for (name, present) in [
         ("genre", input.genre.is_some()),
@@ -305,18 +421,60 @@ pub fn build_task_features(input: &FeaturesInput) -> TaskFeatures {
     }
 }
 
+/// D2「過去の試行」: 数の行、run ごとの 1 行（古い順）、repair 数の行。前の run が無ければ「初回」。
+fn prior_section(aux: &mut FeaturesAux, input: &FeaturesInput) -> String {
+    let runs = input.prior_runs.as_deref();
+    let count = input.prior_runs_n.or_else(|| runs.map(|r| r.len() as u64));
+    let mut lines = vec![match count {
+        Some(0) => "初回".to_owned(),
+        Some(n) => format!(
+            "前の run: {n} 回（うち失敗 {}）",
+            opt_num(input.prior_failed_n)
+        ),
+        None => "前の run: 不明".to_owned(),
+    }];
+    match runs {
+        Some(runs) => {
+            for (i, run) in runs.iter().enumerate() {
+                let failed = if run.failed_criteria.is_empty() {
+                    "なし".to_owned()
+                } else {
+                    run.failed_criteria
+                        .iter()
+                        .enumerate()
+                        .map(|(j, c)| {
+                            let text =
+                                bounded(aux, &c.text, &format!("prior_runs[{i}].failed[{j}]"));
+                            format!("「{text}」(exit {})", opt_num(c.exit))
+                        })
+                        .collect::<Vec<_>>()
+                        .join("、")
+                };
+                lines.push(format!(
+                    "- run {}: {}、model: {}、壁時計: {}、落ちた検査: {failed}",
+                    i + 1,
+                    bounded_plain(&run.status),
+                    run.model.as_deref().map_or("不明".into(), bounded_plain),
+                    run.wall_s.map_or("不明".into(), |s| format!("{s} 秒")),
+                ));
+            }
+        }
+        None => aux.missing.push("prior_runs".into()),
+    }
+    lines.push(
+        input
+            .repairs_n
+            .map_or("repair: 不明".into(), |n| format!("repair: {n} 件")),
+    );
+    lines.join("\n")
+}
+
 fn list(aux: &mut FeaturesAux, name: &str, value: Option<&[String]>, empty: &str) -> String {
     match value {
         Some(v) if !v.is_empty() => v
             .iter()
             .enumerate()
-            .map(|(i, s)| {
-                let (s, n) = bounded_secret(s, &format!("{name}[{i}]"), 1000);
-                if let Some(n) = n {
-                    aux.truncated.push(n);
-                }
-                format!("- {s}")
-            })
+            .map(|(i, s)| format!("- {}", bounded(aux, s, &format!("{name}[{i}]"))))
             .collect::<Vec<_>>()
             .join("\n"),
         Some(_) => empty.into(),
@@ -325,6 +483,18 @@ fn list(aux: &mut FeaturesAux, name: &str, value: Option<&[String]>, empty: &str
             empty.into()
         }
     }
+}
+/// 1,000 字上限の自由文。切ったら `aux.truncated` に残す。
+fn bounded(aux: &mut FeaturesAux, s: &str, field: &str) -> String {
+    let (s, n) = bounded_secret(s, field, 1000);
+    if let Some(n) = n {
+        aux.truncated.push(n);
+    }
+    s
+}
+/// 短い識別子（check の種類・command 名・status・model）。切断は記録しない。
+fn bounded_plain(s: &str) -> String {
+    bounded_secret(s, "", 1000).0
 }
 fn bounded_secret(s: &str, field: &str, max: usize) -> (String, Option<Truncation>) {
     let cleaned = redact_secrets(s);
@@ -348,64 +518,77 @@ fn bounded_secret(s: &str, field: &str, max: usize) -> (String, Option<Truncatio
         }),
     )
 }
+
+const TOKEN_PREFIXES: [&str; 7] = [
+    "sk-",
+    "sk_live_",
+    "ghp_",
+    "gho_",
+    "github_pat_",
+    "xoxb-",
+    "xoxp-",
+];
+const KEY_PREFIXES: [&str; 4] = ["api_key=", "token=", "secret=", "password="];
+
 /// Replace common credential-shaped literals before text enters a feature record.
+/// One pass over the bytes: every pattern starts with ASCII, so a match can only begin on a
+/// char boundary, and unmatched spans are copied as slices of `text` (no per-position copies).
 pub fn redact_secrets(text: &str) -> String {
+    let bytes = text.as_bytes();
     let mut out = String::with_capacity(text.len());
-    let chars: Vec<char> = text.chars().collect();
+    let mut copied = 0;
     let mut i = 0;
-    while i < chars.len() {
-        let rest: String = chars[i..].iter().collect();
-        if let Some(n) = rest.strip_prefix("Bearer ").map(|v| {
-            v.chars()
-                .take_while(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
-                .count()
-        }) && n >= 8
-        {
-            out.push_str("Bearer <redacted>");
-            i += 7 + n;
-            continue;
+    while i < bytes.len() {
+        let rest = &bytes[i..];
+        if rest.starts_with(b"Bearer ") {
+            let n = ascii_run(&rest[7..], |b| {
+                b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.')
+            });
+            if n >= 8 {
+                out.push_str(&text[copied..i]);
+                out.push_str("Bearer <redacted>");
+                i += 7 + n;
+                copied = i;
+                continue;
+            }
         }
-        let prefixes = [
-            "sk-",
-            "sk_live_",
-            "ghp_",
-            "gho_",
-            "github_pat_",
-            "xoxb-",
-            "xoxp-",
-        ];
-        if let Some(prefix) = prefixes.iter().find(|p| rest.starts_with(**p)) {
-            let n = rest
-                .chars()
-                .take_while(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
-                .count();
+        if let Some(prefix) = TOKEN_PREFIXES
+            .iter()
+            .find(|p| rest.starts_with(p.as_bytes()))
+        {
+            let n = ascii_run(rest, |b| {
+                b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_')
+            });
             if n >= prefix.len() + 8 {
+                out.push_str(&text[copied..i]);
                 out.push_str("<redacted>");
                 i += n;
+                copied = i;
                 continue;
             }
         }
-        if rest.starts_with("api_key=")
-            || rest.starts_with("token=")
-            || rest.starts_with("secret=")
-            || rest.starts_with("password=")
-        {
-            let n = rest
-                .chars()
-                .take_while(|c| !c.is_whitespace() && !matches!(c, '&' | ';' | ',' | '}'))
-                .count();
-            if n > rest.find('=').unwrap_or(0) + 1 {
-                let k = rest.find('=').unwrap() + 1;
-                out.extend(chars[i..i + k].iter());
+        if let Some(prefix) = KEY_PREFIXES.iter().find(|p| rest.starts_with(p.as_bytes())) {
+            let k = prefix.len();
+            let n = text[i + k..]
+                .char_indices()
+                .find(|(_, c)| c.is_whitespace() || matches!(c, '&' | ';' | ',' | '}'))
+                .map_or(text.len() - i - k, |(j, _)| j);
+            if n > 0 {
+                out.push_str(&text[copied..i + k]);
                 out.push_str("<redacted>");
-                i += n;
+                i += k + n;
+                copied = i;
                 continue;
             }
         }
-        out.push(chars[i]);
         i += 1;
     }
+    out.push_str(&text[copied..]);
     out
+}
+/// Length of the leading run of ASCII bytes that satisfy `keep`.
+fn ascii_run(bytes: &[u8], keep: impl Fn(u8) -> bool) -> usize {
+    bytes.iter().take_while(|b| keep(**b)).count()
 }
 #[derive(Serialize)]
 struct FeatureBody<'a> {

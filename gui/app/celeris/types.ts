@@ -1702,6 +1702,15 @@ export type AttentionItem =
       request_id: string;
       task: TaskRef;
       type: "integration_request";
+    }
+  | {
+      at: string;
+      branch: string;
+      head_sha: string;
+      reason?: string | null;
+      repo_id: RepoId;
+      task: TaskRef;
+      type: "unintegrated";
     };
 /**
  * ADR-0120 D5: 最後の integration repair の結末。
@@ -1725,7 +1734,8 @@ export type InboxKind =
   | "cluster_login"
   | "disk_full"
   | "delivery_skipped"
-  | "integration_request";
+  | "integration_request"
+  | "unintegrated";
 /**
  * ADR-0047 D1 / D4。
  */

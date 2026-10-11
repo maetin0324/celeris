@@ -361,6 +361,14 @@ export type AttentionItem = {
   "request_id": string;
   "task": TaskRef;
   "type": "integration_request";
+} | {
+  "at": string;
+  "branch": string;
+  "head_sha": string;
+  "reason"?: string | null;
+  "repo_id": RepoId;
+  "task": TaskRef;
+  "type": "unintegrated";
 };
 
 export type AttestationClaims = {
@@ -3090,7 +3098,7 @@ export type InboxItem = {
   "title": string;
 };
 
-export type InboxKind = "decision" | "plan_gate" | "phase_gate" | "authorization" | "browser_wait" | "question" | "acceptance_check" | "draft_accept" | "project_plan" | "failed" | "unroutable" | "cluster_login" | "disk_full" | "delivery_skipped" | "integration_request";
+export type InboxKind = "decision" | "plan_gate" | "phase_gate" | "authorization" | "browser_wait" | "question" | "acceptance_check" | "draft_accept" | "project_plan" | "failed" | "unroutable" | "cluster_login" | "disk_full" | "delivery_skipped" | "integration_request" | "unintegrated";
 
 export type InboxLink = {
   "href": string;

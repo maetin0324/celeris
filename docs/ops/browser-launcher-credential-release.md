@@ -7,6 +7,17 @@ username 欄の注入とログイン後の読み取り（launcher protocol 5）�
 launcher protocol 8（Live View の映像）への差し替えと確認の手順は [launcher Live View の本番反映](browser-launcher-live-view.md)。
 この手順は運用セッションで人が実行する。worker は root 操作、本番設定変更、資格情報の入力をしない。秘密値を shell history、ログ、台帳、成果物へ書かない。解放条件と fail-closed の境界は[決定記録](../../agent-docs/adr/2026-10-09-browser-launcher-credential-release.md)および[ADR-0138](../../agent-docs/adr/0138-browser-prod-admission-confidential-release.md)に従う。
 
+## 0. daemon と credentiald の共通設定
+
+専用 user の `id -u celeris-browser` を確認し、daemon の config.toml の `[browser].launcher_uid` に設定する。
+credentiald は unit の `serve --config %h/.config/celeris/config.toml` で同じ項目を読む。
+UID を unit の起動引数へ追加しない。設定変更後は daemon と credentiald の両方を再起動する。
+`systemctl --user cat celeris@.service celeris-credentiald@.service` で drop-in を含む config path が同じことを確認する。
+UID が未設定なら注入を拒否し、0・broker と同じ UID・不正な TOML なら broker は起動失敗する。
+
+unit を更新するときは [selfdeploy 手順](selfdeploy.md)で差分を確認する。旧 UID 引数付き unit からの
+移行と rollback は [本番への移行](../../agent-docs/progress/2026-10-11-credentiald-launcher-config.md#本番への移行)を参照。
+
 ## 1. 配送後の確認と launcher 入れ替え（root）
 
 更新を含む release が配送・承認されてから実行する。launcher は task-worker の同じ release HEAD から作り、既存 binary を退避して hash を記録する。稼働 browser session がないことを確認し、socket/service を停止してから入れ替える。

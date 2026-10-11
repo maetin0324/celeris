@@ -8,7 +8,7 @@ tasks: [01M3YBGM64RYPEY9NZANF79A0M]
 
 ## 起動と設定
 
-broker は daemon と同じ OS ユーザーの systemd user service で起動する。[unit 例](../../deploy/systemd/celeris-credentiald@.service) は daemon の MainPID を control 許可リストに渡す。`XDG_RUNTIME_DIR` は本人所有の 0700 directory が必要。socket は `$XDG_RUNTIME_DIR/celeris-credentiald/{control,resolve}.sock` に 0600 で作られる。
+broker は daemon と同じ OS ユーザーの systemd user service で起動する。[unit 例](../../deploy/systemd/celeris-credentiald@.service) は `serve --config %h/.config/celeris/config.toml <MainPID>` で daemon と同じ config を読み、MainPID を control 許可リストに渡す。`XDG_RUNTIME_DIR` は本人所有の 0700 directory が必要。socket は `$XDG_RUNTIME_DIR/celeris-credentiald/{control,resolve}.sock` に 0600 で作られる。
 
 ```toml
 [api]
@@ -17,6 +17,14 @@ browser_credentiald_control_socket = "/run/user/UID/celeris-credentiald/control.
 ```
 
 両項目を設定する。task の browser policy は `PUT /api/v1/tasks/{id}/browser/policy` で登録し、`GET` で確認できる。登録前の browser task は起動しない。credentiald に接続できない場合は手動登録を拒否し、秘密を DB に書かない。
+
+launcher 経由の CredentialUse では同じ config に `[browser] launcher_uid = <専用 user の host UID>` を設定する。
+UID は config だけに置く。`--launcher-uid` は廃止され、渡すと起動失敗する。
+`serve --config` は必須で、config の読取り失敗・構文不正・UID の型不正・0・broker と同じ UID は
+固定エラーで起動失敗する。UID 未設定の場合は credential 注入が拒否される。
+config の変更後は daemon と credentiald を再起動する。
+unit の設置・更新には [selfdeploy](../ops/selfdeploy.md) の差分確認手順を使う。
+初回の切替順序と rollback は [本番への移行](../../agent-docs/progress/2026-10-11-credentiald-launcher-config.md#本番への移行)を参照。
 
 ## 認証利用の条件
 

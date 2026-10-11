@@ -168,7 +168,9 @@ def main():
         d.mkdir(mode=0o700, exist_ok=True)
     r = subprocess.run([args.credentiald, "init"], env=denv, capture_output=True, text=True)
     note(step="credentiald init", exit=r.returncode, stderr=r.stderr.strip())
-    broker = subprocess.Popen([args.credentiald, "serve", str(os.getpid())], env=denv,
+    broker_config = home / ".config/celeris/config.toml"
+    broker_config.write_text("")  # This fixture does not enable launcher injection.
+    broker = subprocess.Popen([args.credentiald, "serve", "--config", str(broker_config), str(os.getpid())], env=denv,
                               stdout=subprocess.DEVNULL, stderr=open(out / "credentiald.stderr", "w"))
     control = run / "celeris-credentiald/control.sock"
     for _ in range(100):

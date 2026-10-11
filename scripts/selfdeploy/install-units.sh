@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# scripts/selfdeploy/install-units.sh [--remove-qwen-tunnel] — deploy/systemd/ の
+# scripts/selfdeploy/install-units.sh [--replace-existing] [--remove-qwen-tunnel] — deploy/systemd/ の
 # テンプレート unit を ~/.config/systemd/user/ に置いて `systemctl --user daemon-reload` する
 # （ADR-0040 D4、ADR-0045 D3）。
 #
-# **人が一度だけ実行する**（ワーカーは実行しない。D5）。これ自体は何も起動しない。
+# **人が初回・雛形更新時に実行する**（ワーカーは実行しない。D5）。これ自体は何も起動しない。
+# 差分があれば全 unit の書込み前に止まる。人が確認した差分だけ --replace-existing で置換する。
 # linger は既に有効（`loginctl enable-linger rmaeda`）である前提。
 #
 #   --remove-qwen-tunnel  celeris が自分でトンネルを張るようになった（ADR-0053 D3、Phase 66）ので、
@@ -19,7 +20,7 @@
 # 設置し、`[Service]` に `EnvironmentFile=-%h/.config/celeris/paths.env` と `CELERIS_STATE_DIR` を差し込む
 # （systemd は `WorkingDirectory=` / `ExecStart=` の path に EnvironmentFile の変数を一律には使えないため）。
 # `~/.config/celeris` の参照（config.toml・token・password・secret）は home のまま。
-# 根を指定したときは celeris-credentiald@.service も同じ根で設置する（release の bin と vault が根の下に移るため）。
+# celeris-credentiald@.service は常に配布し、daemon と同じ config.toml を読む。
 # 未指定（または根が従来の場所）のときはテンプレートをそのまま置く（従来と同じ unit）。
 # celeris-web@.service も同じ release の根に合わせる。
 set -euo pipefail
@@ -34,16 +35,19 @@ SD_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
   cat >&2 <<'EOF'
-usage: install-units.sh [--remove-qwen-tunnel]
+usage: install-units.sh [--replace-existing] [--remove-qwen-tunnel]
 
+  --replace-existing   差分を確認した既存 unit を backup して置換する。未指定なら差分表示後に停止。
   --remove-qwen-tunnel  旧い celeris-qwen-tunnel.service/.timer を無効化して消す（ADR-0053 D3）。
 EOF
   exit 2
 }
 
+REPLACE_EXISTING=false
 REMOVE_QWEN_TUNNEL=false
 while [ $# -gt 0 ]; do
   case "$1" in
+    --replace-existing) REPLACE_EXISTING=true; shift ;;
     --remove-qwen-tunnel) REMOVE_QWEN_TUNNEL=true; shift ;;
     -h | --help) usage ;;
     *) usage ;;
@@ -105,17 +109,30 @@ render_unit() {
 
 # ADR-0129 (1): sccache/cache-server units are no longer deployed. Existing host units
 # are stopped and removed by a human following docs/ops/sccache-l1.md.
-UNITS="celeris@.service celeris-web@.service celeris-web-lan.socket celeris-web-lan.service"
+UNITS="celeris@.service celeris-web@.service celeris-web-lan.socket celeris-web-lan.service celeris-credentiald@.service"
 if [ -n "$HOT_ROOT" ]; then
-  UNITS="$UNITS celeris-credentiald@.service"
   sd_log "hot root: $HOT_ROOT (units read releases and state from there; ~/.config/celeris stays in home)"
 fi
 RENDER_DIR="$(mktemp -d)"
 trap 'rm -rf "$RENDER_DIR"' EXIT
-# ADR-0135 D3: LAN 中継の socket/service も置くだけ。既存の起動状態は変えない。
+# 全差分を先に確認する。途中の unit が違っても、それ以前の unit を書き換えない。
+CHANGED=false
 for unit in $UNITS; do
   [ -f "$SRC/$unit" ] || sd_die "missing $SRC/$unit"
   render_unit "$unit" "$RENDER_DIR/$unit"
+  if [ -L "$DEST/$unit" ] || { [ -e "$DEST/$unit" ] && [ ! -f "$DEST/$unit" ]; }; then
+    sd_die "not a regular unit file: $DEST/$unit; review masks/symlinks before installing"
+  fi
+  if [ -f "$DEST/$unit" ] && ! cmp -s "$RENDER_DIR/$unit" "$DEST/$unit"; then
+    CHANGED=true
+    diff -u "$DEST/$unit" "$RENDER_DIR/$unit" || [ "$?" -eq 1 ]
+  fi
+done
+if [ "$CHANGED" = true ] && [ "$REPLACE_EXISTING" = false ]; then
+  sd_die "existing units differ; no units changed. Review the diff and required settings, then rerun with --replace-existing"
+fi
+# ADR-0135 D3: LAN 中継の socket/service も置くだけ。既存の起動状態は変えない。
+for unit in $UNITS; do
   if [ -f "$DEST/$unit" ] && ! cmp -s "$RENDER_DIR/$unit" "$DEST/$unit"; then
     cp -p "$DEST/$unit" "$DEST/$unit.bak-$(sd_stamp)"
     sd_log "kept the old $unit as $DEST/$unit.bak-*"

@@ -416,7 +416,8 @@ pub enum InFlightKind {
 /// `task_dispatch::policy::Cooldown`（`Instant`）を壁時計に直したもの。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct CooldownView {
-    pub provider: String,
+    pub source: String,
+    pub account_id: String,
     pub until: String,
     /// `"throttled" | "auth_failed" | "exhausted"`。
     pub reason: String,

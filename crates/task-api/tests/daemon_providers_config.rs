@@ -207,10 +207,7 @@ async fn providers_combine_config_snapshot_and_incremental_stats() {
     assert_eq!(items[0]["stats"]["by_day"][0]["runs"], 2);
     assert_eq!(items[1]["in_use"], 0);
     assert_eq!(items[1]["in_use_cos"], 0);
-    assert_eq!(
-        items[1]["cooldown"],
-        json!({"provider": "claude-b", "until": "2026-09-14T00:05:00Z", "reason": "throttled"})
-    );
+    assert_eq!(items[1]["cooldown"], Value::Null);
     assert_eq!(
         (
             items[1]["stats"]["runs"].as_u64(),

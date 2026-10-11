@@ -969,8 +969,8 @@ ADR-0017 M4: `POST /reload` に成功すると、次の tick のスナップシ�
 ```json
 {"now":"…","snapshot":{"instance_id":"01J…","pid":1234,"hostname":"lab-01","started_at":"…","last_tick_at":"…","ticks":8812,"tick_ms":2000,
   "in_flight":[{"task_id":"01J…","run_id":"01J…","provider":"claude-a","kind":"worker","since":"…"}],
-  "cooldowns":[{"provider":"claude-b","until":"…","reason":"throttled"}],
-  "task_waits":[{"task_id":"01J…","wait":{"kind":"review_awaiting_human"}},{"task_id":"01J…","wait":{"kind":"delegated_children","task_ids":["01J…"]}}],
+  "cooldowns":[{"source":"claude-code","account_id":"acct-1","until":"…","reason":"throttled"}],
+  "awaiting_human":["01J…"],"awaiting_children":["01J…"],"unroutable":[],
   "reports":null,"approvals_pending":0,"decisions_open":0,
   "providers":[{"id":"claude-a","adapter":"claude-code","tiers":["frontier","standard","cheap"],"concurrency":2,"model":"claude-sonnet-5","env_keys":[],"in_use":1,"in_use_cos":0,"account_pool":false}],
   "clusters":[],"accounts_root":null,"max_runs_per_account":null,"accounts_roots":{},"accounts":[]}}
@@ -988,6 +988,7 @@ ADR-0017 M4: `POST /reload` に成功すると、次の tick のスナップシ�
   委譲した子を待つ reviewing の親は `delegated_children`（未完の子の id）、設定に合う経路が無い ready は `unroutable`。
   旧 `awaiting_human[]`・`awaiting_children[]`・`unroutable[]` は消した（同じ情報が `task_waits` の kind にある）。
 - cooldown は `ProviderPolicy::cooldowns(now) -> Vec<Cooldown{provider, until: Instant, reason: CooldownReason}>` で取り、`Instant` を壁時計に直す。`reason` の語彙は `throttled | auth_failed | exhausted`（`Spawn` は `provider_failure_outcome` が `Exhausted` に写すので cooldown の理由としては現れない。`ProviderThrottled.reason` には `spawn` も入りうる）。
+- cooldown は source・account 単位で公開する。プールを持たない source は `account_id` が source ID の暗黙 account となる。`until` は RFC 3339、`reason` は `throttled | auth_failed | exhausted`。
 - `last_tick_at` が `now` から `3 × tick_ms` 以上古ければ GUI は「ディスパッチャが遅延」と表示する（API は判定しない）。
 - API に繋がらないこと自体が「celeris 停止」を意味する（GUI 側で表示）。
 - **`containers`**（ADR-0043 D3。古いスナップショットには無いので任意）: コンテナ実行の設定と、

@@ -1404,8 +1404,9 @@ export type ContinuationRunTotals = {
 };
 
 export type CooldownView = {
-  "provider": string;
+  "account_id": string;
   "reason": string;
+  "source": string;
   "until": string;
 };
 

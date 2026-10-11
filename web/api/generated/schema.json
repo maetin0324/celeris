@@ -6713,11 +6713,14 @@
     "CooldownView": {
       "description": "`task_dispatch::policy::Cooldown`（`Instant`）を壁時計に直したもの。",
       "properties": {
-        "provider": {
+        "account_id": {
           "type": "string"
         },
         "reason": {
           "description": "`\"throttled\" | \"auth_failed\" | \"exhausted\"`。",
+          "type": "string"
+        },
+        "source": {
           "type": "string"
         },
         "until": {
@@ -6725,7 +6728,8 @@
         }
       },
       "required": [
-        "provider",
+        "source",
+        "account_id",
         "until",
         "reason"
       ],

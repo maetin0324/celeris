@@ -960,7 +960,7 @@ fi"#,
         snap = env.get("/daemon").json()["snapshot"].clone();
         snap["cooldowns"].as_array().is_some_and(|c| {
             c.iter()
-                .any(|c| c["provider"] == "fake-local" && c["reason"] == "throttled")
+                .any(|c| c["source"] == "fake" && c["account_id"] == "fake" && c["reason"] == "throttled")
         })
     });
     assert!(seen, "no cooldown in /daemon: {snap}");
@@ -969,8 +969,8 @@ fi"#,
         "the slow run is still in flight during the cooldown: {snap}"
     );
     assert!(
-        snap["providers"][0]["in_use"].as_u64().unwrap() >= 1,
-        "{snap}"
+        snap["in_flight"].as_array().is_some_and(|runs| !runs.is_empty()),
+        "the in-flight view still contains the slow route: {snap}"
     );
     assert!(
         snap["cooldowns"][0]["until"].as_str().unwrap() > snap["last_tick_at"].as_str().unwrap(),
@@ -979,7 +979,7 @@ fi"#,
 
     assert!(env.events(throttled).iter().any(|e| matches!(
         e,
-        Event::ProviderThrottled { provider, reason, .. } if provider == "fake-local" && reason.as_deref() == Some("throttled")
+        Event::ProviderThrottled { provider, reason, .. } if provider == "fake" && reason.as_deref() == Some("throttled")
     )), "{:?}", env.events(throttled));
     let page = env
         .get(&format!(

@@ -553,10 +553,11 @@ async fn tick_publishes_daemon_snapshot_to_watch() {
     assert_eq!(snap.cooldowns.len(), 1);
     assert_eq!(
         (
-            snap.cooldowns[0].provider.as_str(),
+            snap.cooldowns[0].source.as_str(),
+            snap.cooldowns[0].account_id.as_str(),
             snap.cooldowns[0].reason.as_str()
         ),
-        ("p1", "throttled")
+        ("p1", "p1", "throttled")
     );
     assert!(
         snap.cooldowns[0].until > snap.last_tick_at,

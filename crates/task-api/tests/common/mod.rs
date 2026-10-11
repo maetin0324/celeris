@@ -458,7 +458,8 @@ pub fn snapshot(ticks: u64) -> DaemonSnapshot {
             since: "2026-09-14T00:00:01Z".into(),
         }],
         cooldowns: vec![CooldownView {
-            provider: "claude-b".into(),
+            source: "claude-code".into(),
+            account_id: "acct-1".into(),
             until: "2026-09-14T00:05:00Z".into(),
             reason: "throttled".into(),
         }],

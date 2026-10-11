@@ -59,7 +59,8 @@ impl Dispatcher {
             .cooldowns(now_instant)
             .into_iter()
             .map(|c| CooldownView {
-                provider: c.provider,
+                source: self.implicit_source_of(&c.provider),
+                account_id: self.implicit_source_of(&c.provider),
                 until: rfc3339(now + c.until.saturating_duration_since(now_instant)),
                 reason: match c.reason {
                     CooldownReason::Throttled => "throttled",

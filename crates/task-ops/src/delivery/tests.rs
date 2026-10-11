@@ -722,3 +722,68 @@ fn delivery_skip_tree_child_and_out_of_policy_are_recorded() {
     assert_eq!(f.skips()[1].0, DeliverySkipReason::TreeChild);
     assert!(f.store.delivery_get(f.task.id).unwrap().is_none());
 }
+
+impl SkipFixture {
+    fn git(&self, args: &[&str]) -> String {
+        let out = crate::changes::git(&self.repo, args, Duration::from_secs(10)).unwrap();
+        assert!(out.ok, "{}", out.stderr);
+        out.stdout.trim().to_string()
+    }
+
+    fn with_department(mut self) -> Self {
+        let project = self.task.project_id.unwrap().to_string();
+        self.policy
+            .default_departments
+            .insert(project, "worker".into());
+        self
+    }
+
+    fn assert_no_commits_skip(&mut self) {
+        assert!(self.begin().is_none());
+        assert_eq!(self.task.acceptance.len(), 1, "no merge criterion");
+        assert!(self.store.delivery_get(self.task.id).unwrap().is_none());
+        let skips = self.skips();
+        assert_eq!(skips.len(), 1, "{skips:?}");
+        assert_eq!(skips[0].0, DeliverySkipReason::NoCommits);
+        assert_eq!(skips[0].0.code(), "no_commits");
+        assert_eq!(skips[0].2.as_deref(), Some(self.head().as_str()));
+    }
+}
+
+/// 2026-10-11 付記: task の commit が 0 件（head = base）の root は取り込み判定を作らない。
+#[test]
+fn delivery_skip_no_commits_when_head_equals_base() {
+    let mut f = skip_fixture().with_department();
+    f.git(&["reset", "--hard", "main"]);
+    assert_eq!(f.head(), f.git(&["rev-parse", "main"]));
+    f.assert_no_commits_skip();
+    // 同じ head では 1 件だけ。
+    assert!(f.begin().is_none());
+    assert_eq!(f.skips().len(), 1);
+}
+
+/// head が base の祖先（main が先に進んだ）でも取り込む commit は無い。
+#[test]
+fn delivery_skip_no_commits_when_head_is_ancestor_of_base() {
+    let mut f = skip_fixture().with_department();
+    f.git(&["reset", "--hard", "main"]);
+    f.git(&["checkout", "main"]);
+    f.git(&["commit", "--allow-empty", "-m", "another task"]);
+    assert_ne!(f.head(), f.git(&["rev-parse", "main"]));
+    f.assert_no_commits_skip();
+}
+
+/// head ≠ base の criterion は審査範囲を base..head と明示する。
+#[test]
+fn merge_criterion_names_base_to_head_range() {
+    let mut f = skip_fixture().with_department();
+    let d = f.begin().unwrap();
+    let base = f.git(&["rev-parse", "main"]);
+    assert_eq!(d.base, base);
+    assert!(f.skips().is_empty());
+    let text = &f.task.acceptance[d.criterion_idx].text;
+    assert!(text.contains(&format!("{base}..{}", d.head)), "{text}");
+    assert!(text.contains(&format!("{base}...{}", d.head)), "{text}");
+    assert!(text.contains("審査対象ではない"), "{text}");
+    assert!(!text.contains("指定SHA"), "{text}");
+}

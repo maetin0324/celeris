@@ -1030,6 +1030,10 @@ fn build_attention(
         else {
             continue;
         };
+        // 取り込む commit が無い root は正常な no-op（監査用に event だけ残る）。
+        if reason == task_core::DeliverySkipReason::NoCommits {
+            continue;
+        }
         let delivered = store
             .delivery_get(t.id)?
             .is_some_and(|d| head.as_ref().is_none_or(|h| *h == d.head));

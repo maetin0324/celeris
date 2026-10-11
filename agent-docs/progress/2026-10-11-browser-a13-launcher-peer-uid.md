@@ -12,9 +12,13 @@ updated: 2026-10-11
 2026-10-11 完了（worker 側）。設計は [ADR 2026-10-11](../adr/2026-10-11-browser-a13-broker-peer-uid-real-process.md)。
 host での 1 回の実行（`sudo -u celeris-browser` が要る）は人が行う（下の「本番 host での実行」。後続 task をこの run の followups で起票）。本番 config・DB の変更は無い。
 
-再 run（attempt 2、2026-10-11）: review が「broker の別 UID 試験は一度も通っていないのに追跡表 A13 を『合格』にした」を不備とした。
-追跡表 A13 は『後続』（ptrace 拒否は実証済み、broker の別 UID 試験は試験あり・host 実行待ち）に戻し、P4-B-4・P4-B-6・phase-browser-4.md・
-browser-followups.md・PROGRESS.md・ADR D4/D5 の「launcher 方式で合格」も同じ表現に直した。host の証跡が入ってから後続 task で『合格』にする。
+配送修復 review 後（run `01M4NZWTHN1SGJ9HC42XNYJA0X`、2026-10-11）:
+追跡表 A13 の判定欄を **「ptrace 実証済み / broker SKIP」** に変更した。
+`launcher_chrome_denies_daemon_uid_ptrace` の実証と、
+`real_process_with_another_uid_is_rejected_by_dac_then_peer_uid_mismatch` の理由付き skip を別々に記録する。
+判定欄を一括で「後続」にして実証済みの範囲を隠すことも、未実行の broker 拒否を「合格」にすることも避ける。
+Phase 4・followups・PROGRESS・ADR D4 も同じ判定に揃え、追跡表検査は A13 に限ってこの表記と両試験・skip 理由・記録 task id を要求する。
+別 UID 不在時の理由付き skip は本 task の受け入れ条件 0 を満たすが、broker 拒否の実証や本番解放の根拠にはならない。
 
 ## やったこと
 
@@ -28,10 +32,10 @@ browser-followups.md・PROGRESS.md・ADR D4/D5 の「launcher 方式で合格」
      既定は `CELERIS_USERNS_TESTS=1` の opt-in（ADR-0126 B）。
    - `inner_peer_uid_probe`（別 UID の子の側。環境変数が無ければ no-op）、`probe_line_round_trips`、
      `same_uid_control_is_worker_not_allowed`（正の対照の単体）。
-2. docs: 追跡表 `phase-browser-acceptance.md` の A13 を「後続（task 01M4NV0KJTQYJQXXY4YTJM3NQN、host 実行待ち）」にし、
-   ptrace 拒否（`launcher_chrome_denies_daemon_uid_ptrace`、実証済み）と broker の別 UID 拒否（上の試験、host 実行待ち）を引用。P4-B-4・P4-B-6 の A13 言及、`browser-followups.md` の a13-real-process 行、
+2. docs: 追跡表 `phase-browser-acceptance.md` の A13 を「ptrace 実証済み / broker SKIP」にし、
+   ptrace 拒否（`launcher_chrome_denies_daemon_uid_ptrace`、実証済み）と broker の別 UID 拒否（上の試験、sudo 不可のため SKIP）を引用。P4-B-4・P4-B-6 の A13 言及、`browser-followups.md` の a13-real-process 行、
    `phase-browser-4.md` の状態行 2 箇所、`PROGRESS.md` の 2026-09-30 の記録 1 行を「01M3SPN8HE は subuid 経路のため破棄（2026-10-11）」に直した。
-   ADR-0138「検証と本番反映」に試験の所在を付記。ADR-0098・phase-R.md の task 起票の記録（履歴）は残した。
+   ADR-0138「検証と本番反映」に試験の所在を付記。ADR-0098・phase-R.md の task 起票の履歴にも旧 task の破棄日と理由を付記した。
 
 ## 証拠
 
@@ -76,13 +80,13 @@ staging の task 数が 0 と数えられたもの。
 
 - 同じ snapshot に対して本番の現行 binary（N-1、50f349d84fea）も同じ timeout で落ちた。同じ binary は 15:16 の 130f9f345c88 の verify では通っている。
   binary に依らず、そのときの host 負荷（直後の `uptime` で load average 83.63 / 54.64 / 48.78、24 CPU）による timeout と判断する。
-- この task の差分は試験（`crates/credentiald/tests/injection_peer_uid.rs`）と文書だけで、API・DB・migration に触れない。
+- この task の差分は試験（`crates/celeris-credentiald/tests/injection_peer_uid.rs`）と文書だけで、API・DB・migration に触れない。
 - cab85f3f は既に main（87cf045d）の祖先。コードの修正は無く、検査を取り直してこの節を足した commit で release を取り直す。
   再び落ちる場合は負荷の低い時間に verify を回すか、verify.sh の tasks 一覧の timeout を見直す（この task の範囲外）。
 
 ## 未解決事項
 
-- host での実行は未実施（上の手順）。後続 task（この run の followups.json、check: human + 進捗ファイルの『実行記録: 20…』と追跡表 A13 『合格』の grep）で人が行う。それまで追跡表 A13 は『後続』のまま。
+- host での実行は未実施（上の手順）。後続 task（この run の followups.json、check: human + 進捗ファイルの『実行記録: 20…』と追跡表 A13 『合格』の grep）で人が行う。それまでは追跡表 A13 に「ptrace 実証済み / broker SKIP」と理由を表示する。
 - 追跡表 P4-A-7・P4-B-6・P4-C-6 の後続 task（01M3SPN8H05・01M3SPN8HP）は subuid 経路の時代の起票で、launcher 方式での扱いは別途見直しが要る（この task の範囲外）。
 
 ## 提案
@@ -91,6 +95,41 @@ staging の task 数が 0 と数えられたもの。
   参照している ADR-0105/0109 の付記ごと整理する task を置く。
 
 ## 全体検査
+
+配送修復 review 後（run `01M4NZWTHN1SGJ9HC42XNYJA0X`、基点 `608d29c1`）:
+
+今回実行した検査:
+
+- `TMPDIR=/tmp CELERIS_USERNS_TESTS=1 cargo test -p celeris-credentiald --test injection_peer_uid -- --nocapture --test-threads=1`: exit 0。
+  harness の集計は `4 passed; 0 failed` だが、別 UID の実 process ケースは次の出力で **SKIP（not passed）**。
+  同 UID の正の対照と出力 parser は通過した。ログは workspace の成果物ディレクトリ `injection-peer-uid-repair.log`。
+
+  ```text
+  SKIP: (not passed) cannot run a process as celeris-browser: `sudo -n -u celeris-browser true` exit=Some(1): sudo: /etc/sudo.conf is owned by uid 65534, should be 0
+  sudo: The "no new privileges" flag is set, which prevents sudo from running as root.
+  ```
+
+- `scripts/check-browser-acceptance.sh` 静的部（1〜3 節を抽出、ROOT を worktree に指定）: exit 0、`rows: 76 / tests cited: 146 / file:line refs: 28`。
+  作業ツリー外の一時文書で skip 理由・broker 試験名・ptrace 試験名・記録 task id をそれぞれ削除する 4 件と、
+  A12 に分離判定を付ける 1 件はすべて exit 1。ログは成果物ディレクトリ `browser-ledger-repair.log`。
+- `bash -n scripts/check-browser-acceptance.sh`、`bash scripts/dev/check-doc-links.sh`、
+  `bash scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv`、`bash scripts/dev/check-adr-numbers.sh`、`git diff --check`: exit 0。
+- host 実行・release 再作成・deploy は実施していない。
+
+今回の差分は判定文書と `scripts/check-browser-acceptance.sh`。Rust の実装・試験には変更がないため、
+指定された全体検査は依頼に添付された前回の celeris 決定的チェックの pass を引き継ぐ（review criterion 2: 再実行不要）。
+次はその出力の抜粋であり、今回の再実行結果ではない。
+
+```text
+$ bash scripts/dev/test-parallel.sh
+CELERIS_TEST_SUMMARY {"runner": "nextest", "nextest_version": "0.9.146", "jobs": 8, "binaries": 185, "nextest_binaries": 175, "doc_binaries": 10, "passed": 5199, "failed": 0, "ignored": 14, "nextest_exit": 0, "doctest_exit": 0, "nextest_secs": 372.7, "doctest_secs": 15.2, "tmp_leftovers": 3, "summary_parsed": true, "userns": null}
+test-parallel: ok
+exit=0
+$ cargo clippy --workspace -- -D warnings
+Finished `dev` profile [unoptimized + debuginfo] target(s) in 50.83s
+exit=0
+```
+
 
 配送差し戻し後（2026-10-11、HEAD cab85f3f）:
 

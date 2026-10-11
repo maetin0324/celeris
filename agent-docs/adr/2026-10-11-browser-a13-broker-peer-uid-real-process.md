@@ -13,7 +13,7 @@ tasks: [01M4NV0KJTQYJQXXY4YTJM3NQN]
 ## Context
 
 A13（別 host UID の実 process からの injection 要求 → `peer_uid_mismatch`）は、2026-09-30 の追跡表で
-「後続 `01M3SPN8HE6A1TZ54GBZGHMZYJ`」のまま止まっていた。その branch（celeris/01M3SPN8HE）は subuid の bwrap 経路
+旧 task `01M3SPN8HE6A1TZ54GBZGHMZYJ`（subuid 経路のため破棄、2026-10-11）に紐づいていた。その branch（celeris/01M3SPN8HE）は subuid の bwrap 経路
 （ADR-0105 の same-uid runtime を別 host UID で起こす前提）で攻撃試験を組んでいたが、その経路は ADR-0115/0116 の
 権限分離 launcher（`[browser].launcher_uid = 995`、celeris-browser）に置き換わった。launcher 経路での ptrace 拒否は
 main の `crates/task-worker/tests/browser_launcher_ptrace.rs`（`launcher_chrome_denies_daemon_uid_ptrace`）で実 process
@@ -47,7 +47,7 @@ broker（celeris-credentiald）の `serve_inner` / `socket` は runtime dir を 
 - D4. 試験は `crates/celeris-credentiald/tests/injection_peer_uid.rs` の
   `real_process_with_another_uid_is_rejected_by_dac_then_peer_uid_mismatch`。追跡表 A13 はこれと
   `launcher_chrome_denies_daemon_uid_ptrace` を引用し、host での実行証跡（D5）が進捗ファイルに入るまでは
-  「後続」（ptrace 拒否は実証済み、broker の別 UID 試験は host 実行待ち）とし、証跡が入ってから「合格」にする。
+  「ptrace 実証済み / broker SKIP」とし、broker の skip 理由と試験名を明記する。証跡が入ってから全体を「合格」にする。
   試験があるだけでは合格にしない（P4-B-6 の解放判断の前提になるため）。
 - D5. host での実行は人（運用セッション）が後続 task（この task の followups で起票）として `TMPDIR=/tmp CELERIS_LAUNCHER_TESTS=require` で行い、証跡を
   `agent-docs/progress/2026-10-11-browser-a13-launcher-peer-uid.md` に残す。worker sandbox は uid_map が `1001 1001 1` の

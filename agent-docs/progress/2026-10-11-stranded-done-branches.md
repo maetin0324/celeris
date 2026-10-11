@@ -50,6 +50,8 @@ review 完了時に `delivery::begin` を必ず呼ぶ。delivery policy 対象�
    discard は git branch を削除せず durable な disposition を記録する。結果の `state.status` が `discarded`、reason・repo・branch が対象と一致することを確認する。等価 API は `POST /api/v1/tasks/01M4F3V643Q4A3DXTXPT04J14Y/integrations/<URL-encoded-repo-name>/discard`、body `{"reason":"人の決定: この stranded branch の変更を破棄"}`。`repo` は repo ID でなく repo 名。admin 認証が必要で、body は `reason` のみを受け付ける。
 5. **01M4D7RVKX の統合を確認する。** `celerisctl show 01M4D7RVKX --json`（`GET /api/v1/tasks/01M4D7RVKX` と同じ TaskDetail）を取得し、`integrations[]` の対象 repo で `state: integrated` を確認する。公開欄名は任意欄 `integrations` で `integration_status` ではない。これは main 到達の確認で、本番 release の promote 状態とは独立している。
 
+merge 操作（`celerisctl integration merge` と `POST /api/v1/tasks/{id}/integrations/{repo}/merge`）は、project repo の既定 branch を実際に進める（git merge。fast-forward、または detached 一時 worktree の `--no-ff`）。push はしない。衝突時は既定 branch を変えず integrated にしない。
+
 ## 未解決事項
 
 - **全体 suite は未だ green でない。** `task-api::browser_e2e` の 4 件（上の証拠節）が全体 run で 60 秒の fixture readiness 待ちに入って落ちる（単独 run は pass）。`crates/task-api/tests/browser_e2e.rs:87-110` は credentiald の `ipc::serve` を `std::thread::spawn` の中で起動し、その戻り値を捨てている。そのため bind 失敗などは readiness timeout としてしか見えない。並走時の socket・path 衝突か serve の早期失敗かは未確定。コードは変更していない。次の対処として serve の結果を観測可能にするか、readiness 待ちを出来事待ちへ直す。
@@ -68,6 +70,21 @@ review 完了時に `delivery::begin` を必ず呼ぶ。delivery policy 対象�
 - `cargo fmt --all -- --check` — exit 0（差分なし）。
 - 文書検査 3 本: `sh scripts/dev/check-doc-links.sh` — exit 0（`check-doc-links: ok`）。`sh scripts/dev/check-adr-numbers.sh` — exit 0（`ok (182 files)`）。`sh scripts/dev/progress-index.sh --check` — exit 0。
 - 参考: `sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv` — exit 0（`check-doc-layout: ok`）。`git diff --quiet "${CELERIS_WU_BASE:-HEAD}" -- crates/ web/ gui/` — 差分なし（この run はコードを変更していない）。
+
+### 2026-10-11 全体検証（fix-verify WU、merge-exec 後、コード変更なし）
+
+受け入れ条件 0（test-parallel・clippy・fmt が exit 0）は**未達**。原因は下記の `task-api::browser_e2e` の 4 件で、merge 変更とは無関係の既存の問題。
+
+- `TMPDIR=<run の既定 path> bash scripts/dev/test-parallel.sh` — exit 100。`CELERIS_TEST_SUMMARY`: passed 5052 / failed 108 / ignored 14。108 件は `bind: path must be shorter than SUN_LEN` と fixture readiness timeout（run の長い TMPDIR に起因）。
+- `TMPDIR=$(mktemp -d /tmp/wu-sock.XXXX) bash scripts/dev/test-parallel.sh` — exit 100。`CELERIS_TEST_SUMMARY`: passed 5156 / failed 4 / ignored 14、nextest_exit 100、doctest_exit 0、182 binaries、nextest 154.1s。`Summary [153.085s] 5157 tests run: 5153 passed, 4 failed, 13 skipped`。失敗は 4 件のみ: `task-api::browser_e2e` の `approved_credential_requires_conformance_and_does_not_consume_approval`、`auth_section_store_denies_takeover_until_closed`、`denied_approval_fails_the_task_without_a_lease`、`registered_credential_does_not_open_approval_for_uncertified_backend`。いずれも `browser_e2e.rs:107` の `timed out waiting for fixture readiness`（前回記録と同じ 4 件）。
+- `TMPDIR=<短い socket 用 dir> cargo nextest run -p task-api --test browser_e2e` — exit 0。`4 tests run: 4 passed, 0 skipped`。同じ試験は単独では通る。
+- `cargo clippy --workspace -- -D warnings` — exit 0（`Finished dev profile`、警告なし）。
+- `cargo fmt --all -- --check` — exit 0（差分なし）。
+- 前回記録の「5155 passed / 0 failed」はこの run では再現していない。
+
+- `TMPDIR=<短い socket 用 dir> cargo nextest run -p task-ops -p task-api -p celeris -E 'test(stranded) | test(integration_api)'` — exit 0。`21 tests run: 21 passed, 1696 skipped`（merge-exec の `stranded_merge_*` と `integration_api` を含む）。
+
+判定: merge-exec の試験は全件 pass。残る 4 件は `browser_e2e.rs:87-110` の fixture（serve の戻り値を捨てる）の readiness 待ちで、根因は未確定。次の対処は未解決事項の 1 件目を参照。
 
 ## 提案
 
@@ -110,4 +127,4 @@ review 完了時に `delivery::begin` を必ず呼ぶ。delivery policy 対象�
 - celerisctl の list/merge/discard/hold/reopen: [cli](2026-10-11-stranded-done-branches/cli.md)。
 - 結合試験（`integration_api_` 接頭辞、store と git fixture）: [e2e](2026-10-11-stranded-done-branches/e2e.md)。
 
-[api-cli](2026-10-11-stranded-done-branches/api-cli.md) の未解決は解消済みに更新した。受け入れ条件ごとの証拠・残った未解決・提案は [close](2026-10-11-stranded-done-branches/close.md) にある。残りは、受信箱の discard/hold の操作先（`native` は merge のみ）と、ADR D4 の merge 意味の差（人の判断）。
+[api-cli](2026-10-11-stranded-done-branches/api-cli.md) の未解決は解消済みに更新した。受け入れ条件ごとの証拠・残った未解決・提案は [close](2026-10-11-stranded-done-branches/close.md) にある。残りは受信箱の discard/hold の操作先（`native` は merge のみ）だけ。ADR D4 の merge 意味の差（人の判断）は解消済み: CoS 代答（2026-10-11）で「merge は人が処分で選んだ取り残しだけに働かせ、衝突時は自動で解決せず人に回す」と決まり、merge 操作は git merge を実際に行うよう実装された（[merge-exec](2026-10-11-stranded-done-branches/merge-exec.md)、`stranded::merge`、祖先確認後に integrated）。

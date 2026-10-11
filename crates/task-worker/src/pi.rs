@@ -124,6 +124,22 @@ impl WorkerAdapter for PiAdapter {
         Some(Arc::new(Self::new(config)))
     }
 
+    fn with_llm_endpoint(
+        &self,
+        base_url: &str,
+        api_key: Option<&str>,
+    ) -> Option<Arc<dyn WorkerAdapter>> {
+        let mut config = self.config.clone();
+        config.base_url = Some(base_url.to_owned());
+        if let Some(key) = api_key {
+            config.env.retain(|(k, _)| k != "CELERIS_PI_API_KEY");
+            config
+                .env
+                .push(("CELERIS_PI_API_KEY".into(), key.to_owned()));
+        }
+        Some(Arc::new(Self::new(config)))
+    }
+
     fn with_container(&self, plan: crate::container::SharedPlan) -> Option<Arc<dyn WorkerAdapter>> {
         let mut config = self.config.clone();
         config.container = Some(plan);

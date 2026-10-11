@@ -326,278 +326,195 @@ fn resolve_cluster_target_rejects_running_or_reviewing_task_even_with_workspace_
     }
 }
 
-// ---- ADR-0024 D2: resolve_account ----
+// ---- ADR 2026-10-11 llm-source-harness-selection: route selection ----
 
-fn args_fixture(account: Option<&str>) -> WorkerRunArgs {
+fn args_fixture() -> WorkerRunArgs {
     WorkerRunArgs {
         config: PathBuf::from("config.toml"),
         task: "01J000000000000000000000AA".into(),
-        provider: None,
-        adapter: None,
+        harness: None,
+        source: None,
+        model: None,
         workspace: None,
         cluster: None,
-        account: account.map(str::to_string),
+        account: None,
     }
 }
 
-fn pool_provider_config(accounts_dir: &Path, max_runs_per_account: usize) -> Config {
-    let mut config = cluster_config(vec![]);
-    config.providers = vec![celeris::config::ProviderConfig {
-        kind: None,
-        llm_source: None,
-        tier_models: Default::default(),
-        account_id: None,
-        id: "pool".into(),
-        adapter: "claude-code".into(),
-        tiers: vec![task_core::Tier::Standard],
-        concurrency: Some(1),
-        model: String::new(),
-        env: Default::default(),
-        env_from_secrets: Default::default(),
-        account_pool: true.into(),
-        command: None,
-        args: None,
-        settings: None,
-        extensions: Vec::new(),
-        tools: Vec::new(),
-    }];
-    config.accounts = Some(celeris::config::AccountsConfig {
-        opencode_dir: None,
-        opencode_go_usage_url: "https://opencode.ai/zen/go/v1/usage".into(),
-        claude_dir: Some(accounts_dir.to_path_buf()),
-        codex_dir: None,
-        max_runs_per_account,
-        check_model: "haiku".into(),
-    });
-    config
+/// A config with an OpenAI-compatible source, a Claude OAuth pool and three harnesses.
+fn route_config(accounts_dir: &Path) -> Config {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    // The loader still requires a provider row until the provider config is removed.
+    let text = format!(
+        r#"
+[[providers]]
+id = "p"
+adapter = "fake"
+
+[accounts]
+claude_dir = "{claude}"
+
+[llm_sources.qwen]
+kind = "openai_compatible"
+models = ["qwen3-coder"]
+accounts = ["qwen"]
+endpoint = "http://127.0.0.1:18000/v1"
+
+[llm_sources.claude_main]
+kind = "claude_oauth"
+api_format = "claude_cli"
+models = ["claude-sonnet-5-5", "claude-opus-5-5"]
+
+[harnesses.claude]
+kind = "claude_code"
+api_formats = ["claude_cli"]
+source_kinds = ["claude_oauth"]
+command = "claude-declared"
+
+[harnesses.pi]
+kind = "pi"
+api_formats = ["openai_compatible"]
+source_kinds = ["openai_compatible"]
+
+[harnesses.stub]
+kind = "fake"
+
+[route_defaults.claude]
+candidates = [
+  {{ source = "claude_main", model = "claude-sonnet-5-5" }},
+  {{ source = "claude_main", model = "claude-opus-5-5" }},
+]
+
+[route_defaults.pi]
+candidates = [{{ source = "qwen", model = "qwen3-coder" }}]
+"#,
+        claude = accounts_dir.join("claude").display()
+    );
+    std::fs::write(&path, text).unwrap();
+    Config::load(&path).unwrap()
 }
 
-#[test]
-fn resolve_account_non_pool_provider_ignores_missing_account_and_rejects_explicit_one() {
-    let config = cluster_config(vec![]);
-    assert_eq!(
-        resolve_account(&config, "p1", "claude-code", &args_fixture(None)).unwrap(),
-        None
-    );
-    let err = resolve_account(&config, "p1", "claude-code", &args_fixture(Some("a"))).unwrap_err();
-    assert!(
-        err.to_string().contains("does not have account_pool"),
-        "{err}"
-    );
+fn login(accounts_dir: &Path, id: &str) {
+    let dir = accounts_dir.join("claude").join(id);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join(".credentials.json"), "{}").unwrap();
 }
 
-/// ADR-0026 D5: acp はアカウントのプールを使わない（`Config::validate` が `account_pool = true` を
-/// claude-code/codex 以外で拒否しているので、acp プロバイダは常に `is_pool = false` になる）。
-/// `--account` 無しなら無視され、`--account` を付けたらエラーになる（他の非プールプロバイダと同じ扱い）。
-#[test]
-fn resolve_account_ignores_or_rejects_account_flag_for_acp_provider() {
-    let mut config = cluster_config(vec![]);
-    config.providers = vec![celeris::config::ProviderConfig {
-        kind: None,
-        llm_source: None,
-        tier_models: Default::default(),
-        account_id: None,
-        id: "opencode-qwen".into(),
-        adapter: "acp".into(),
-        tiers: vec![task_core::Tier::Standard],
-        concurrency: Some(1),
-        model: "qwen-local/qwen3.8-27b".into(),
-        env: Default::default(),
-        env_from_secrets: Default::default(),
-        account_pool: false.into(),
-        command: None,
-        args: None,
-        settings: None,
-        extensions: Vec::new(),
-        tools: Vec::new(),
-    }];
-    assert_eq!(
-        resolve_account(&config, "opencode-qwen", "acp", &args_fixture(None)).unwrap(),
-        None
-    );
-    let err =
-        resolve_account(&config, "opencode-qwen", "acp", &args_fixture(Some("a"))).unwrap_err();
-    assert!(
-        err.to_string().contains("does not have account_pool"),
-        "{err}"
-    );
-}
-
-/// ADR-0026 D2: `celerisctl worker run` の `build_adapters` 経由でも acp プロバイダのアダプタが引ける
-/// （`select_provider` / `resolve_account` を通した後の配線が壊れていないことの確認）。
-#[test]
-fn build_adapters_resolves_an_instance_for_an_acp_provider_selected_by_worker_run() {
-    let mut config = cluster_config(vec![]);
-    config.providers = vec![celeris::config::ProviderConfig {
-        kind: None,
-        llm_source: None,
-        tier_models: Default::default(),
-        account_id: None,
-        id: "opencode-qwen".into(),
-        adapter: "acp".into(),
-        tiers: vec![task_core::Tier::Standard],
-        concurrency: Some(1),
-        model: "qwen-local/qwen3.8-27b".into(),
-        env: Default::default(),
-        env_from_secrets: Default::default(),
-        account_pool: false.into(),
-        command: None,
-        args: None,
-        settings: None,
-        extensions: Vec::new(),
-        tools: Vec::new(),
-    }];
-    let adapters = celeris::build_adapters(&config);
-    let adapter = adapters
-        .get("opencode-qwen")
-        .expect("acp provider has an adapter instance");
-    assert_eq!(adapter.id(), "acp");
-}
-
-#[test]
-fn resolve_account_pool_provider_without_accounts_section_errors() {
-    let mut config = cluster_config(vec![]);
-    config.providers = vec![celeris::config::ProviderConfig {
-        kind: None,
-        llm_source: None,
-        tier_models: Default::default(),
-        account_id: None,
-        id: "pool".into(),
-        adapter: "claude-code".into(),
-        tiers: vec![task_core::Tier::Standard],
-        concurrency: Some(1),
-        model: String::new(),
-        env: Default::default(),
-        env_from_secrets: Default::default(),
-        account_pool: true.into(),
-        command: None,
-        args: None,
-        settings: None,
-        extensions: Vec::new(),
-        tools: Vec::new(),
-    }];
-    let err = resolve_account(&config, "pool", "claude-code", &args_fixture(None)).unwrap_err();
-    assert!(
-        err.to_string().contains("[accounts] is not configured"),
-        "{err}"
-    );
-}
-
-#[test]
-fn resolve_account_explicit_flag_validates_the_id_and_directory() {
-    let tmp = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(tmp.path().join("b")).unwrap();
-    let config = pool_provider_config(tmp.path(), 2);
-
-    assert_eq!(
-        resolve_account(&config, "pool", "claude-code", &args_fixture(Some("b"))).unwrap(),
-        Some("b".into())
-    );
-
-    let err = resolve_account(
-        &config,
-        "pool",
-        "claude-code",
-        &args_fixture(Some("missing")),
+fn local_task() -> Task {
+    task_fixture(
+        Status::Ready,
+        WorkspaceSpec::Local {
+            path: PathBuf::from("w"),
+            mode: None,
+        },
     )
-    .unwrap_err();
-    assert!(err.to_string().contains("account not found"), "{err}");
-
-    let err =
-        resolve_account(&config, "pool", "claude-code", &args_fixture(Some("../x"))).unwrap_err();
-    assert!(err.to_string().contains("invalid --account id"), "{err}");
 }
 
 #[test]
-fn resolve_account_without_flag_picks_the_account_with_more_headroom_from_the_persisted_book() {
-    let tmp = tempfile::tempdir().unwrap();
-    for id in ["a", "b"] {
-        std::fs::create_dir_all(tmp.path().join(id)).unwrap();
-        std::fs::write(tmp.path().join(id).join(".credentials.json"), "{}").unwrap();
-    }
-    let mut book = task_dispatch::AccountBook::load(&tmp.path().join(".celeris-usage.json"));
-    let now = time::OffsetDateTime::now_utc().unix_timestamp();
-    let window = |u: f64| task_core::RateLimitObservation {
-        one_month: None,
-        five_hour: Some(task_core::RateWindow {
-            utilization: u,
-            resets_at: now + 90_000,
-        }),
-        seven_day: None,
-        status: None,
-        resets_at: None,
-        observed_at: now,
-    };
-    book.record_observation("a", window(0.9), task_dispatch::ObservationSource::Run);
-    book.record_observation("b", window(0.1), task_dispatch::ObservationSource::Run);
-    book.save().unwrap();
-
-    let config = pool_provider_config(tmp.path(), 2);
+fn worker_route_cli_uses_the_given_harness_and_the_first_declared_candidate() {
+    let accounts = tempfile::tempdir().unwrap();
+    login(accounts.path(), "ca");
+    let config = route_config(accounts.path());
+    let registry = config.llm_route_registry().unwrap();
+    let mut args = args_fixture();
+    args.harness = Some("claude".into());
+    let route = select_worker_route(&config, &registry, &local_task(), &args).unwrap();
     assert_eq!(
-        resolve_account(&config, "pool", "claude-code", &args_fixture(None)).unwrap(),
-        Some("b".into())
+        (
+            route.harness_id.as_str(),
+            route.source_id.as_str(),
+            route.model_id.as_str(),
+            route.account_id.as_str()
+        ),
+        ("claude", "claude_main", "claude-sonnet-5-5", "ca")
+    );
+    assert_eq!(
+        route.credential,
+        Some(
+            task_worker::protocol::CredentialReference::AccountDirectory {
+                path: accounts.path().join("claude").join("ca"),
+                env: task_core::AccountAdapter::ClaudeCode.env_var().into(),
+            }
+        )
+    );
+    let adapter = route_launch_adapter(&config, &route).unwrap();
+    assert_eq!(adapter.id(), "claude-code");
+}
+
+#[test]
+fn worker_route_cli_model_flag_selects_that_model() {
+    let accounts = tempfile::tempdir().unwrap();
+    login(accounts.path(), "ca");
+    let config = route_config(accounts.path());
+    let registry = config.llm_route_registry().unwrap();
+    let mut args = args_fixture();
+    args.harness = Some("claude".into());
+    args.model = Some("claude-opus-5-5".into());
+    let route = select_worker_route(&config, &registry, &local_task(), &args).unwrap();
+    assert_eq!(route.model_id, "claude-opus-5-5");
+}
+
+#[test]
+fn worker_route_cli_openai_compatible_source_carries_its_endpoint() {
+    let accounts = tempfile::tempdir().unwrap();
+    let config = route_config(accounts.path());
+    let registry = config.llm_route_registry().unwrap();
+    let mut args = args_fixture();
+    args.harness = Some("pi".into());
+    let route = select_worker_route(&config, &registry, &local_task(), &args).unwrap();
+    assert_eq!(
+        (route.source_id.as_str(), route.account_id.as_str()),
+        ("qwen", "qwen")
+    );
+    assert_eq!(
+        route.endpoint.and_then(|e| e.base_url).as_deref(),
+        Some("http://127.0.0.1:18000/v1")
     );
 }
 
 #[test]
-fn resolve_account_no_eligible_account_errors() {
-    let tmp = tempfile::tempdir().unwrap();
-    // ディレクトリはあるがログインしていない（.credentials.json が無い）ので選べない。
-    std::fs::create_dir_all(tmp.path().join("a")).unwrap();
-    let config = pool_provider_config(tmp.path(), 2);
-    let err = resolve_account(&config, "pool", "claude-code", &args_fixture(None)).unwrap_err();
-    assert!(err.to_string().contains("no eligible account"), "{err}");
+fn worker_route_cli_fails_closed() {
+    let accounts = tempfile::tempdir().unwrap();
+    let config = route_config(accounts.path());
+    let registry = config.llm_route_registry().unwrap();
+    let task = local_task();
+    // Unknown harness.
+    let mut args = args_fixture();
+    args.harness = Some("aider".into());
+    let err = select_worker_route(&config, &registry, &task, &args).unwrap_err();
+    assert!(err.to_string().contains("aider"), "{err}");
+    // No logged-in account in the OAuth pool.
+    args.harness = Some("claude".into());
+    let err = select_worker_route(&config, &registry, &task, &args).unwrap_err();
+    assert!(err.to_string().contains("no route"), "{err}");
+    // A harness without declared defaults.
+    args.harness = Some("stub".into());
+    let err = select_worker_route(&config, &registry, &task, &args).unwrap_err();
+    assert!(err.to_string().contains("route_defaults"), "{err}");
+    // Unknown source and an invalid account id.
+    let mut args = args_fixture();
+    args.source = Some("nowhere".into());
+    let err = select_worker_route(&config, &registry, &task, &args).unwrap_err();
+    assert!(err.to_string().contains("nowhere"), "{err}");
+    let mut args = args_fixture();
+    args.account = Some("../x".into());
+    let err = select_worker_route(&config, &registry, &task, &args).unwrap_err();
+    assert!(err.to_string().contains("invalid --account"), "{err}");
 }
 
-/// ADR-0025 D2: codex の `account_pool` プロバイダは `[accounts] codex_dir` の下から選び、`auth.json` を
-/// ログイン済みの目印にする（claude-code の `.credentials.json` とは別物）。
 #[test]
-fn resolve_account_codex_pool_provider_uses_codex_dir_and_auth_json_marker() {
-    let tmp = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(tmp.path().join("c")).unwrap();
-    std::fs::write(tmp.path().join("c").join("auth.json"), "{}").unwrap();
-    let mut config = cluster_config(vec![]);
-    config.providers = vec![celeris::config::ProviderConfig {
-        kind: None,
-        llm_source: None,
-        tier_models: Default::default(),
-        account_id: None,
-        id: "pool".into(),
-        adapter: "codex".into(),
-        tiers: vec![task_core::Tier::Standard],
-        concurrency: Some(1),
-        model: String::new(),
-        env: Default::default(),
-        env_from_secrets: Default::default(),
-        account_pool: true.into(),
-        command: None,
-        args: None,
-        settings: None,
-        extensions: Vec::new(),
-        tools: Vec::new(),
-    }];
-    config.accounts = Some(celeris::config::AccountsConfig {
-        opencode_dir: None,
-        opencode_go_usage_url: "https://opencode.ai/zen/go/v1/usage".into(),
-        claude_dir: None,
-        codex_dir: Some(tmp.path().to_path_buf()),
-        max_runs_per_account: 2,
-        check_model: "haiku".into(),
-    });
-
-    assert_eq!(
-        resolve_account(&config, "pool", "codex", &args_fixture(Some("c"))).unwrap(),
-        Some("c".into())
-    );
-    assert_eq!(
-        resolve_account(&config, "pool", "codex", &args_fixture(None)).unwrap(),
-        Some("c".into())
-    );
-
-    let err = resolve_account(&config, "pool", "claude-code", &args_fixture(None)).unwrap_err();
-    assert!(
-        err.to_string().contains("not a pool adapter")
-            || err.to_string().contains("no root configured"),
-        "{err}"
-    );
+fn worker_route_cli_account_flag_narrows_the_pool() {
+    let accounts = tempfile::tempdir().unwrap();
+    login(accounts.path(), "ca");
+    login(accounts.path(), "cb");
+    let config = route_config(accounts.path());
+    let registry = config.llm_route_registry().unwrap();
+    let mut args = args_fixture();
+    args.harness = Some("claude".into());
+    args.account = Some("cb".into());
+    let route = select_worker_route(&config, &registry, &local_task(), &args).unwrap();
+    assert_eq!(route.account_id, "cb");
+    args.account = Some("missing".into());
+    assert!(select_worker_route(&config, &registry, &local_task(), &args).is_err());
 }

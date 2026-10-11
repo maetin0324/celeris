@@ -49,10 +49,12 @@ pub fn selected_llm_route(
         .sources
         .get(&pick.candidate.source)
         .ok_or_else(|| RouteLaunchError::UnknownSource(pick.candidate.source.clone()))?;
-    let oauth = account_adapter_for_source_kind(source.kind.as_ref()).is_some();
-    let credential = if oauth {
+    let account_adapter = account_adapter_for_source_kind(source.kind.as_ref());
+    let oauth = account_adapter.is_some();
+    let credential = if let Some(account_adapter) = account_adapter {
         account_root.map(|root| CredentialReference::AccountDirectory {
             path: root.join(pick.account.as_ref()),
+            env: account_adapter.env_var().to_string(),
         })
     } else {
         source

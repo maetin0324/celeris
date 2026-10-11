@@ -1064,8 +1064,14 @@ pub struct LlmEndpointReference {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum CredentialReference {
-    Environment { name: String },
-    AccountDirectory { path: PathBuf },
+    Environment {
+        name: String,
+    },
+    /// An OAuth account's login directory and the environment variable the harness reads it from.
+    AccountDirectory {
+        path: PathBuf,
+        env: String,
+    },
 }
 
 /// How an adapter carried the daemon-issued routing reference.

@@ -43,6 +43,13 @@ impl WorkerAdapter for BrowserSpecialistAdapter {
     fn with_model(&self, model: &str) -> Option<Arc<dyn WorkerAdapter>> {
         Self::wrap(self.inner.with_model(model))
     }
+    fn with_llm_endpoint(
+        &self,
+        base_url: &str,
+        api_key: Option<&str>,
+    ) -> Option<Arc<dyn WorkerAdapter>> {
+        Self::wrap(self.inner.with_llm_endpoint(base_url, api_key))
+    }
 
     fn with_permission_mode(&self, mode: &str) -> Option<Arc<dyn WorkerAdapter>> {
         Self::wrap(self.inner.with_permission_mode(mode))

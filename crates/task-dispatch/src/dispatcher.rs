@@ -156,6 +156,7 @@ pub use cluster::{
 };
 pub use provider_select::provider_failure_outcome;
 pub use route_launch::{RouteLaunchError, selected_llm_route};
+pub use route_select::account_adapter_for_source_kind;
 pub use route_select::{
     RouteFailure, RouteInput, RoutePick, RouteState, RouteTrace, harness_request_for, route_select,
 };

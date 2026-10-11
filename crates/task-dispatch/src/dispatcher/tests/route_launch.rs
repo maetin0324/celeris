@@ -256,6 +256,7 @@ fn route_select_dispatch_adapter_selected_llm_route_carries_references_only() {
         oauth.credential,
         Some(CredentialReference::AccountDirectory {
             path: PathBuf::from("/accounts/claude/ca"),
+            env: task_core::AccountAdapter::ClaudeCode.env_var().into(),
         })
     );
     assert_eq!(

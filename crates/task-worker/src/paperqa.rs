@@ -321,6 +321,13 @@ impl WorkerAdapter for PaperQaAdapter {
         config.env.extend(extra.iter().cloned());
         Some(Arc::new(PaperQaAdapter::new(config)))
     }
+
+    /// The selected route's model (ADR 2026-10-11 llm-source-harness-selection).
+    fn with_model(&self, model: &str) -> Option<Arc<dyn WorkerAdapter>> {
+        let mut config = self.config.clone();
+        config.model = Some(model.to_owned());
+        Some(Arc::new(PaperQaAdapter::new(config)))
+    }
 }
 
 /// タスクの目的から `pqa ask` に渡す問いを組み立てる（ADR-0027 D3）。`claude_code::build_prompt` は

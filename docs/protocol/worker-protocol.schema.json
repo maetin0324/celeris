@@ -1154,7 +1154,11 @@
           "type": "object"
         },
         {
+          "description": "An OAuth account's login directory and the environment variable the harness reads it from.",
           "properties": {
+            "env": {
+              "type": "string"
+            },
             "kind": {
               "const": "account_directory",
               "type": "string"
@@ -1165,7 +1169,8 @@
           },
           "required": [
             "kind",
-            "path"
+            "path",
+            "env"
           ],
           "type": "object"
         }

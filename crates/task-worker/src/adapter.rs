@@ -280,6 +280,16 @@ pub trait WorkerAdapter: Send + Sync {
     fn with_model(&self, _model: &str) -> Option<Arc<dyn WorkerAdapter>> {
         None
     }
+    /// ADR 2026-10-11 llm-source-harness-selection: a copy that talks to the selected source's
+    /// OpenAI-compatible `base_url` with `api_key` (already resolved from the credential reference).
+    /// `None` = this harness cannot be pointed at an endpoint; the route fails closed.
+    fn with_llm_endpoint(
+        &self,
+        _base_url: &str,
+        _api_key: Option<&str>,
+    ) -> Option<Arc<dyn WorkerAdapter>> {
+        None
+    }
 
     /// ADR 2026-10-06 model-role-assignments D2: lane ごとの束縛（`TierModels`）を差し替えた複製を返す。
     /// DB の割り当てを反映した実効 bindings で run を起こすために使う。既定は `None`（束縛を持たない

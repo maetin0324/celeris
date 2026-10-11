@@ -1,6 +1,6 @@
 //! `celerisctl worker run` の統合テスト（ADR-0012 D4）。実バイナリ（`CARGO_BIN_EXE_celerisctl`）を
 //! `fake` アダプタ設定で起動し、ネットワークに出ずに done/question/error/provider_failure/
-//! `--provider`・`--adapter` の分岐・running タスクの `--workspace` 要求を確認する。
+//! `--harness`・`--account` による route の選択・running タスクの `--workspace` 要求を確認する。
 //! DB への書き込みが一切無いこと（`events_for` の件数・タスクの status が変わらない）も検証する。
 
 use std::path::{Path, PathBuf};
@@ -71,18 +71,56 @@ fn write_script(dir: &Path, name: &str, body: &str) -> PathBuf {
     path
 }
 
-/// `[adapters.fake]` の `command` と `[[providers]]` を組み合わせた `config.toml` を書く。
-fn write_config(dir: &Path, script: &Path, providers_toml: &str) -> PathBuf {
+/// A fake LLM source and two fake harnesses (`stub` is the default; `other` passes `other` to the
+/// script) with `route_defaults`, plus `extra_toml`.
+fn write_config(dir: &Path, script: &Path, extra_toml: &str) -> PathBuf {
     let workspace_root = dir.join("workspaces");
-    let workspace_root_str = workspace_root.display().to_string();
-    let script_str = script.display().to_string();
     let text = format!(
-        "workspace_root = {workspace_root_str:?}\n\n[adapters.fake]\ncommand = [\"sh\", {script_str:?}]\n\n{providers_toml}\n"
+        r#"workspace_root = {workspace_root:?}
+
+[adapters.fake]
+command = ["sh", {script:?}]
+
+[llm_sources.fake]
+kind = "fake"
+accounts = ["local"]
+models = ["fake"]
+
+[harnesses.stub]
+kind = "fake"
+api_formats = ["fake"]
+source_kinds = ["fake"]
+
+[harnesses.other]
+kind = "fake"
+api_formats = ["fake"]
+source_kinds = ["fake"]
+command = "sh"
+args = [{script:?}, "other"]
+
+[harness_selection]
+execution_class_defaults = {{}}
+
+[[harness_selection.rules]]
+harness = "stub"
+required_capabilities = []
+
+[route_defaults.stub]
+candidates = [{{ source = "fake", model = "fake" }}]
+
+[route_defaults.other]
+candidates = [{{ source = "fake", model = "fake" }}]
+
+{extra_toml}
+"#,
     );
     let path = dir.join("config.toml");
     std::fs::write(&path, text).expect("write config");
     path
 }
+
+/// The loader still requires a provider row until the provider config is removed.
+const PROVIDER_ROW: &str = "[[providers]]\nid = \"p\"\nadapter = \"fake\"\n";
 
 fn run_celerisctl(db: &Path, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_celerisctl"))
@@ -102,11 +140,7 @@ fn manual_run_cannot_silently_drop_browser_capability() {
     let tmp = tempfile::tempdir().unwrap();
     let db = tmp.path().join("celeris.sqlite3");
     let script = write_script(tmp.path(), "must-not-run.sh", "touch invoked\n");
-    let config = write_config(
-        tmp.path(),
-        &script,
-        "[[providers]]\nid = \"fake-local\"\nadapter = \"fake\"\n",
-    );
+    let config = write_config(tmp.path(), &script, PROVIDER_ROW);
     let store = SqliteStore::open(&db).unwrap();
     let mut task = sample_task(
         Status::Ready,
@@ -159,8 +193,7 @@ echo '{"type":"done","summary":"ok","evidence":[]}'
 "#,
     );
 
-    let providers = "[[providers]]\nid = \"fake-local\"\nadapter = \"fake\"\n";
-    let config_path = write_config(tmp.path(), &script, providers);
+    let config_path = write_config(tmp.path(), &script, PROVIDER_ROW);
     let workspace_dir = tmp.path().join("ws");
 
     let store = SqliteStore::open(&db_path).expect("open store");
@@ -234,8 +267,7 @@ fn question_exits_three() {
 echo '{"type":"question","text":"which one?"}'
 "#,
     );
-    let providers = "[[providers]]\nid = \"fake-local\"\nadapter = \"fake\"\n";
-    let config_path = write_config(tmp.path(), &script, providers);
+    let config_path = write_config(tmp.path(), &script, PROVIDER_ROW);
 
     let store = SqliteStore::open(&db_path).expect("open store");
     let task = sample_task(
@@ -271,18 +303,18 @@ echo '{"type":"question","text":"which one?"}'
     assert!(stdout.contains(r#"result: {"type":"question""#), "{stdout}");
 }
 
-/// `--provider` は指定した行の env を使う。省略時は設定表の先頭行。
+/// `--harness` starts that harness's declared command; without it the task's harness selection
+/// (`[[harness_selection.rules]]`) decides. The printed route names harness, source, model, account.
 #[test]
-fn provider_selects_the_matching_account_env() {
+fn harness_flag_starts_the_declared_harness_command() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let db_path = tmp.path().join("celeris.sqlite3");
     let script = write_script(
         tmp.path(),
-        "account.sh",
-        "cat > /dev/null\necho \"{\\\"type\\\":\\\"progress\\\",\\\"msg\\\":\\\"account=$ACCOUNT\\\"}\"\necho '{\"type\":\"done\",\"summary\":\"ok\",\"evidence\":[]}'\n",
+        "harness.sh",
+        "cat > /dev/null\necho \"{\\\"type\\\":\\\"progress\\\",\\\"msg\\\":\\\"harness=${1:-stub}\\\"}\"\necho '{\"type\":\"done\",\"summary\":\"ok\",\"evidence\":[]}'\n",
     );
-    let providers = "[[providers]]\nid = \"acct-a\"\nadapter = \"fake\"\nenv = { ACCOUNT = \"a\" }\n\n[[providers]]\nid = \"acct-b\"\nadapter = \"fake\"\nenv = { ACCOUNT = \"b\" }\n";
-    let config_path = write_config(tmp.path(), &script, providers);
+    let config_path = write_config(tmp.path(), &script, PROVIDER_ROW);
 
     let store = SqliteStore::open(&db_path).expect("open store");
     let task = sample_task(
@@ -303,10 +335,10 @@ fn provider_selects_the_matching_account_env() {
             config_path.to_str().expect("utf8"),
             "--task",
             &task.id.to_string(),
-            "--provider",
-            "acct-b",
+            "--harness",
+            "other",
             "--workspace",
-            tmp.path().join("ws-b").to_str().expect("utf8"),
+            tmp.path().join("ws-other").to_str().expect("utf8"),
         ],
     );
     assert_eq!(
@@ -315,7 +347,12 @@ fn provider_selects_the_matching_account_env() {
         "stderr: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    assert!(stdout_of(&out).contains("account=b"), "{}", stdout_of(&out));
+    let stdout = stdout_of(&out);
+    assert!(stdout.contains("harness=other"), "{stdout}");
+    assert!(
+        stdout.contains("harness=other source=fake model=fake account=local"),
+        "{stdout}"
+    );
 
     let out = run_celerisctl(
         &db_path,
@@ -336,7 +373,11 @@ fn provider_selects_the_matching_account_env() {
         "stderr: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    assert!(stdout_of(&out).contains("account=a"), "{}", stdout_of(&out));
+    assert!(
+        stdout_of(&out).contains("harness=stub"),
+        "{}",
+        stdout_of(&out)
+    );
 }
 
 /// running/reviewing のタスクは `--workspace` 無しでは拒否し、指定すれば実行できる。
@@ -349,8 +390,7 @@ fn running_task_requires_explicit_workspace() {
         "done.sh",
         "cat > /dev/null\necho '{\"type\":\"done\",\"summary\":\"ok\",\"evidence\":[]}'\n",
     );
-    let providers = "[[providers]]\nid = \"fake-local\"\nadapter = \"fake\"\n";
-    let config_path = write_config(tmp.path(), &script, providers);
+    let config_path = write_config(tmp.path(), &script, PROVIDER_ROW);
 
     let store = SqliteStore::open(&db_path).expect("open store");
     let task = sample_task(
@@ -401,9 +441,9 @@ fn running_task_requires_explicit_workspace() {
     );
 }
 
-/// 存在しないプロバイダ ID は exit 1。
+/// An undeclared harness fails closed with exit 1.
 #[test]
-fn unknown_provider_id_errors() {
+fn unknown_harness_errors() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let db_path = tmp.path().join("celeris.sqlite3");
     let script = write_script(
@@ -411,8 +451,7 @@ fn unknown_provider_id_errors() {
         "done.sh",
         "cat > /dev/null\necho '{\"type\":\"done\",\"summary\":\"ok\",\"evidence\":[]}'\n",
     );
-    let providers = "[[providers]]\nid = \"fake-local\"\nadapter = \"fake\"\n";
-    let config_path = write_config(tmp.path(), &script, providers);
+    let config_path = write_config(tmp.path(), &script, PROVIDER_ROW);
 
     let store = SqliteStore::open(&db_path).expect("open store");
     let task = sample_task(
@@ -433,7 +472,7 @@ fn unknown_provider_id_errors() {
             config_path.to_str().expect("utf8"),
             "--task",
             &task.id.to_string(),
-            "--provider",
+            "--harness",
             "nope",
             "--workspace",
             tmp.path().join("ws").to_str().expect("utf8"),
@@ -460,8 +499,7 @@ fn error_with_provider_failure_exits_four_and_preserves_provider_failure() {
 echo '{"type":"error","message":"429","retryable":true,"provider_failure":{"kind":"throttled","retry_after_secs":7}}'
 "#,
     );
-    let providers = "[[providers]]\nid = \"fake-local\"\nadapter = \"fake\"\n";
-    let config_path = write_config(tmp.path(), &script, providers);
+    let config_path = write_config(tmp.path(), &script, PROVIDER_ROW);
 
     let store = SqliteStore::open(&db_path).expect("open store");
     let task = sample_task(
@@ -500,106 +538,22 @@ echo '{"type":"error","message":"429","retryable":true,"provider_failure":{"kind
     );
 }
 
-/// Exercise the actual CLI, account environment and final --model without an LLM service.
+/// The real codex CLI path: the declared harness command is started with the route's model and
+/// the chosen OAuth account's directory, without touching the store or the account book.
 #[cfg(unix)]
 #[test]
-fn fixed_account_and_quota_routing_reach_the_cli_without_mutating_the_store() {
+fn codex_route_reaches_the_cli_without_mutating_the_store() {
     use std::os::unix::fs::PermissionsExt;
-    for (fixed, flag, utilization, stale, binding, expected, error) in [
-        ("b", None, None, false, "fixture-cheap", "frontier", ""),
-        (
-            "b",
-            Some("b"),
-            Some(0.1),
-            false,
-            "fixture-cheap",
-            "frontier",
-            "",
-        ),
-        ("b", None, Some(0.8), false, "fixture-cheap", "standard", ""),
-        ("b", None, Some(0.95), false, "fixture-cheap", "cheap", ""),
-        (
-            "",
-            Some("b"),
-            Some(0.95),
-            false,
-            "fixture-cheap",
-            "cheap",
-            "",
-        ),
-        ("b", None, Some(0.95), true, "fixture-cheap", "frontier", ""),
-        (
-            "missing-fixed-account",
-            None,
-            None,
-            false,
-            "fixture-cheap",
-            "",
-            "no eligible account",
-        ),
-        (
-            "b",
-            Some("a"),
-            None,
-            false,
-            "fixture-cheap",
-            "",
-            "conflicts",
-        ),
-        (
-            "b",
-            None,
-            Some(0.97),
-            false,
-            "fixture-cheap",
-            "",
-            "no eligible account",
-        ),
-        (
-            "b",
-            None,
-            Some(0.95),
-            false,
-            "bad model",
-            "",
-            "executable model ID",
-        ),
-        (
-            "",
-            Some("b"),
-            Some(0.97),
-            false,
-            "fixture-cheap",
-            "",
-            "execution deferred",
-        ),
+    for (flag, expected_account, error) in [
+        (None, Some("a"), ""),
+        (Some("b"), Some("b"), ""),
+        (Some("missing"), None, "no route"),
     ] {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join("accounts");
         for id in ["a", "b"] {
             std::fs::create_dir_all(root.join(id)).unwrap();
             std::fs::write(root.join(id).join("auth.json"), "{}").unwrap();
-        }
-        if let Some(u) = utilization {
-            let now = OffsetDateTime::now_utc().unix_timestamp();
-            let window = task_core::RateWindow {
-                utilization: u,
-                resets_at: now + 3600,
-            };
-            let mut book = task_dispatch::AccountBook::load(&root.join(".celeris-usage.json"));
-            book.record_observation(
-                "b",
-                task_core::RateLimitObservation {
-                    one_month: None,
-                    five_hour: Some(window),
-                    seven_day: Some(window),
-                    status: None,
-                    resets_at: None,
-                    observed_at: now - if stale { 600 } else { 0 },
-                },
-                task_dispatch::ObservationSource::Run,
-            );
-            book.save().unwrap();
         }
         let book_before = std::fs::read(root.join(".celeris-usage.json")).ok();
         let script = write_script(
@@ -614,11 +568,6 @@ echo '{"type":"turn.completed"}'
 "#,
         );
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
-        let fixed_line = if fixed.is_empty() {
-            String::new()
-        } else {
-            format!("account_id = {fixed:?}")
-        };
         let config = tmp.path().join("config.toml");
         std::fs::write(
             &config,
@@ -627,22 +576,17 @@ echo '{"type":"turn.completed"}'
 workspace_root = {:?}
 [accounts]
 codex_dir = {:?}
-[[providers]]
-id = "gpt"
-adapter = "codex"
-account_pool = true
-{fixed_line}
-[adapters.codex]
+{PROVIDER_ROW}
+[llm_sources.codex]
+kind = "codex_oauth"
+models = ["fixture-model"]
+[harnesses.codex]
+kind = "codex"
+api_formats = ["codex_oauth"]
+source_kinds = ["codex_oauth"]
 command = {:?}
-[providers.tier_models.frontier]
-name = "astra"
-model_id = "fixture-frontier"
-[providers.tier_models.standard]
-name = "sol"
-model_id = "fixture-standard"
-[providers.tier_models.cheap]
-name = "luna"
-model_id = {binding:?}
+[route_defaults.codex]
+candidates = [{{ source = "codex", model = "fixture-model" }}]
 "#,
                 tmp.path().join("workspaces"),
                 root,
@@ -653,14 +597,13 @@ model_id = {binding:?}
         let ws = tmp.path().join("ws");
         let db = tmp.path().join("tasks.db");
         let store = SqliteStore::open(&db).unwrap();
-        let mut task = sample_task(
+        let task = sample_task(
             Status::Ready,
             WorkspaceSpec::Local {
                 path: ws.clone(),
                 mode: None,
             },
         );
-        task.worker_hint.tier = Tier::Frontier;
         store.insert(&task).unwrap();
         let id = task.id.to_string();
         let mut args = vec![
@@ -670,8 +613,8 @@ model_id = {binding:?}
             config.to_str().unwrap(),
             "--task",
             &id,
-            "--provider",
-            "gpt",
+            "--harness",
+            "codex",
         ];
         if let Some(flag) = flag {
             args.extend(["--account", flag]);
@@ -679,27 +622,22 @@ model_id = {binding:?}
         let out = run_celerisctl(&db, &args);
         let stdout = stdout_of(&out);
         let stderr = String::from_utf8_lossy(&out.stderr);
-        if error.is_empty() {
+        if let Some(account) = expected_account {
             assert!(out.status.success(), "{stdout}\n{stderr}");
             let argv = std::fs::read_to_string(ws.join("args.txt")).unwrap();
-            assert!(
-                argv.contains(&format!("--model\nfixture-{expected}\n")),
-                "{argv}"
-            );
+            assert!(argv.contains("--model\nfixture-model\n"), "{argv}");
             assert_eq!(
                 std::fs::read_to_string(ws.join("account.txt"))
                     .unwrap()
                     .trim(),
-                root.join("b").to_str().unwrap()
+                root.join(account).to_str().unwrap()
             );
             assert!(
-                stdout.contains(&format!("model=fixture-{expected}")),
+                stdout.contains(&format!(
+                    "harness=codex source=codex model=fixture-model account={account}"
+                )),
                 "{stdout}"
             );
-            assert!(stdout.contains("difficulty=Frontier"), "{stdout}");
-            if utilization.is_none() || stale {
-                assert!(stdout.contains("remaining unknown"), "{stdout}");
-            }
         } else {
             assert!(!out.status.success(), "{stdout}");
             assert!(stderr.contains(error), "expected {error}: {stderr}");

@@ -1,14 +1,17 @@
 //! `celerisctl worker run` — DESIGN.md §5.9 のデバッグ用コマンド（ADR-0012 D4）。
 //!
-//! デーモンとディスパッチャを経由せず、1 タスクを 1 つのプロバイダ（アカウント）のアダプタで
-//! 1 回だけ実行する。**状態は変えない**: リースを取らず、遷移もイベントの追記もしない
+//! デーモンとディスパッチャを経由せず、1 タスクを 1 つの route（harness・LLM source・model・
+//! account）で 1 回だけ実行する。**状態は変えない**: リースを取らず、遷移もイベントの追記もしない
 //! （DB は読むだけ）。レビューも行わない。`context.prior_review` / `context.answers` は
 //! ディスパッチャと同じ派生関数（`task_ops::derive::{prior_review_from_events,
 //! answers_from_events}`）で events から組み立て、ワーカープロトコルの型
 //! （`task_worker::{PriorReview, Answer}`）へ写す（ADR-0013 D7）。
 //!
-//! プロバイダは `--provider`（ID 指定）/ `--adapter`（種別の先頭行）/ どちらも省略
-//! （`StaticPolicy::select` に `worker_hint` を渡す、cooldown なし）の順で決める。
+//! route はディスパッチャと同じ純関数 `task_dispatch::route_select` で決める（ADR 2026-10-11
+//! llm-source-harness-selection）。`--harness` はタスクの harness 欄の代わり、`--model` は model の
+//! 指定、`--source` / `--account` は候補を絞るだけ。admission の状態は宣言とログイン済み account の
+//! 走査から組み、実行中の数・cooldown は見ない（読むだけ）。実行器は `[harnesses.<id>]` の宣言から
+//! 組んだアダプタに route を当てたもの（`task_worker::route::route_adapter`）。
 //! 作業ディレクトリは `--workspace` があればそれ、無ければタスクの `WorkspaceSpec::Local`
 //! （相対なら `workspace_root` 基準）。タスクが `running`/`reviewing` のときは、デーモンの
 //! run と作業ディレクトリを取り合うため `--workspace` 指定なしでは拒否する。
@@ -17,16 +20,15 @@
 //! ディレクトリに対して 1 回 run する（デーモンを介さない動作確認）。DB はここでも変えない。
 //! 多重接続（`ControlMaster`）が無ければ何も実行せず exit 4 で理由を返す。
 
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use celeris::Config;
 use clap::{Args, Subcommand};
+use task_core::llm_route::{AccountId, ModelId, Registry, SourceId};
 use task_core::{ArtifactRef, Event, Status, Task, TaskId, TaskStore, WorkspaceSpec};
-use task_dispatch::policy::Selection;
-use task_dispatch::{ClusterSpec, ProviderPolicy, StaticPolicy};
+use task_dispatch::{ClusterSpec, RouteInput, RouteState};
 use task_ops::derive::{AnswerNote, ReviewNote, answers_from_events, prior_review_from_events};
 use task_worker::{
     AdapterError, Answer, EventSink, LocalWorkspace, PROTOCOL_VERSION, PriorReview,
@@ -34,12 +36,14 @@ use task_worker::{
     WorkerAdapter, WorkerMessage, Workspace, WorkspaceError, remote_exec_instructions,
 };
 
+use task_worker::protocol::SelectedLlmRoute;
+
 use crate::error::CliError;
 use crate::outln;
 
 #[derive(Subcommand, Debug)]
 pub enum WorkerCommand {
-    /// 1 タスクを 1 つのプロバイダのアダプタで 1 回だけ実行する（ADR-0012 D4）。
+    /// 1 タスクを 1 つの route（harness・source・model・account）で 1 回だけ実行する。
     Run(WorkerRunArgs),
 }
 
@@ -54,13 +58,17 @@ pub struct WorkerRunArgs {
     #[arg(long)]
     pub task: String,
 
-    /// 使うプロバイダ ID（`[[providers]].id`）。`--adapter` と同時指定不可。
-    #[arg(long, conflicts_with = "adapter")]
-    pub provider: Option<String>,
-
-    /// 使うアダプタ種別（`[[providers]].adapter` に合う最初の行）。`--provider` と同時指定不可。
+    /// 使う harness（`[harnesses.<id>]`）。省略時はタスクの harness 欄と `[harness_selection]` で決める。
     #[arg(long)]
-    pub adapter: Option<String>,
+    pub harness: Option<String>,
+
+    /// 使う LLM source（`[llm_sources.<id>]`）。`route_defaults` の候補をこの source に絞る。
+    #[arg(long)]
+    pub source: Option<String>,
+
+    /// 使う model。宣言された候補のうちこの model を出すものに絞る。
+    #[arg(long)]
+    pub model: Option<String>,
 
     /// 作業ディレクトリ。省略時はタスクの workspace（相対なら `workspace_root` 基準）。
     /// `--cluster` と併用時は「クラスタ側」のパス（`celerisctl add --cluster` と同じ意味）。
@@ -73,11 +81,8 @@ pub struct WorkerRunArgs {
     #[arg(long)]
     pub cluster: Option<String>,
 
-    /// ADR-0024 D2 / ADR-0025 D2: `account_pool = true` のプロバイダで使うアカウント id（プロバイダの
-    /// `adapter` に応じて `[accounts] claude_dir`/`codex_dir` の下のディレクトリ）。
-    /// 固定 `account_id` があればそのアカウントのみを使い、異なる `--account` は拒否する。
-    /// 固定参照も `--account` もなければ `<root>/.celeris-usage.json` の観測値を読むだけで選ぶ
-    /// （in_use は分からないので 0 として扱う）。`account_pool` でないプロバイダに指定するとエラー。
+    /// 使う account（OAuth source ならログイン済みの account ディレクトリ、それ以外は source に宣言した
+    /// account）。省略時は宣言順・ログイン済みの最初の account。
     #[arg(long)]
     pub account: Option<String>,
 }
@@ -156,107 +161,127 @@ fn resolve_cluster_target(
     })
 }
 
-/// 選ばれたプロバイダ（`--provider`/`--adapter`/`select` のいずれか）。
-struct Selected {
-    provider_id: String,
-    adapter_kind: String,
-    model: String,
-    /// ADR-0024 D2: `account_pool` のプロバイダで使うアカウント（プールを使わなければ `None`）。
-    account: Option<String>,
+/// Admission state read from the declarations only: OAuth sources offer their logged-in account
+/// directories (narrowed to the declared accounts, if any), other sources their declared accounts.
+/// `--source` / `--account` narrow it. In-flight runs and cooldowns are not consulted.
+fn route_state(config: &Config, registry: &Registry, args: &WorkerRunArgs) -> RouteState {
+    let mut state = RouteState::default();
+    for (source_id, spec) in &registry.sources {
+        if args
+            .source
+            .as_deref()
+            .is_some_and(|s| s != source_id.as_ref())
+        {
+            continue;
+        }
+        let mut accounts: Vec<AccountId> = spec.accounts.clone();
+        if let Some(adapter) = task_dispatch::account_adapter_for_source_kind(spec.kind.as_ref()) {
+            let logged_in: Vec<AccountId> = config
+                .accounts
+                .as_ref()
+                .and_then(|a| a.root_for(adapter))
+                .map(|root| task_dispatch::scan_accounts(root, adapter))
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|d| d.logged_in)
+                .map(|d| AccountId::from(d.id.as_str()))
+                .collect();
+            accounts = if accounts.is_empty() {
+                logged_in
+            } else {
+                accounts
+                    .into_iter()
+                    .filter(|a| logged_in.contains(a))
+                    .collect()
+            };
+        }
+        if let Some(account) = &args.account {
+            accounts.retain(|a| a.as_ref() == account);
+        }
+        if !accounts.is_empty() {
+            state.accounts.available.insert(source_id.clone(), accounts);
+        }
+    }
+    state
 }
 
-/// プロバイダ行の pool の adapter（`account_pool = true` は行の adapter 名、`"opencode-go"` 等は明示した名前）。
-fn pool_adapter(
+/// The route this manual run uses: the dispatcher's pure selection over the declared registry.
+fn select_worker_route(
     config: &Config,
-    provider_id: &str,
-    adapter_kind: &str,
-) -> Option<task_core::AccountAdapter> {
-    config
-        .providers
-        .iter()
-        .find(|p| p.id == provider_id)
-        .and_then(|p| p.account_pool.pool_adapter(adapter_kind))
-}
-
-/// ADR-0024 D2 / ADR-0025 D2: `account_pool = true` のプロバイダのアカウントを決める。`--account` があれば
-/// それ（固定 account_id と異なる指定は拒否）、無ければ固定参照または `<root>/.celeris-usage.json`（永続化された観測値）を読み取り専用で見て選ぶ（`in_use` は 0
-/// 扱い）。`account_pool` でないプロバイダに `--account` を渡したらエラー。アダプタ（claude-code/codex）は
-/// プロバイダの `adapter` から決まる。
-fn resolve_account(
-    config: &Config,
-    provider_id: &str,
-    adapter_kind: &str,
+    registry: &Registry,
+    task: &Task,
     args: &WorkerRunArgs,
-) -> Result<Option<String>, CliError> {
-    let provider = config.providers.iter().find(|p| p.id == provider_id);
-    let fixed_account = provider.and_then(|p| p.account_id.as_deref());
-    let is_pool = provider.is_some_and(|p| p.account_pool.is_on());
-    if let (Some(fixed), Some(requested)) = (fixed_account, args.account.as_deref())
-        && fixed != requested
+) -> Result<SelectedLlmRoute, CliError> {
+    if let Some(source) = &args.source
+        && !registry
+            .sources
+            .contains_key(&SourceId::from(source.as_str()))
     {
         return Err(CliError::msg(format!(
-            "--account {requested} conflicts with provider {provider_id} fixed account_id {fixed}"
+            "llm source not found in config: {source}"
         )));
     }
-    if !is_pool {
-        if args.account.is_some() {
-            return Err(CliError::msg(format!(
-                "provider {provider_id} does not have account_pool = true; --account is not applicable"
-            )));
-        }
-        return Ok(None);
+    if let Some(account) = &args.account
+        && !task_dispatch::valid_account_id(account)
+    {
+        return Err(CliError::msg(format!("invalid --account id: {account}")));
     }
-    let account_adapter = pool_adapter(config, provider_id, adapter_kind).ok_or_else(|| {
-        CliError::msg(format!("provider {provider_id} has account_pool = true but adapter {adapter_kind:?} is not a pool adapter"))
-    })?;
-    let accounts = config.accounts.as_ref().ok_or_else(|| {
+    let mut harness = task_dispatch::harness_request_for(task);
+    if let Some(h) = &args.harness {
+        harness.harness = Some(h.as_str().into());
+    }
+    let input = RouteInput {
+        task_id: task.id.to_string(),
+        harness,
+        model_hint: args.model.as_deref().map(ModelId::from),
+        lane: None,
+        cos: false,
+    };
+    let state = route_state(config, registry, args);
+    let (outcome, trace) = task_dispatch::route_select(&input, registry, &state);
+    let pick = outcome.map_err(|failure| {
+        let rejected: Vec<String> = trace
+            .rejections
+            .iter()
+            .map(|r| {
+                format!(
+                    "{}/{}: {:?}",
+                    r.candidate.source, r.candidate.model, r.reason
+                )
+            })
+            .collect();
         CliError::msg(format!(
-            "provider {provider_id} has account_pool = true but [accounts] is not configured"
+            "no route for task {}: {} [{}]",
+            task.id,
+            failure.reason(),
+            rejected.join(", ")
         ))
     })?;
-    let root = accounts.root_for(account_adapter).ok_or_else(|| {
-        CliError::msg(format!(
-            "provider {provider_id} has account_pool = true but [accounts] has no root configured for adapter {adapter_kind}"
-        ))
-    })?;
-    if fixed_account.is_none()
-        && let Some(id) = &args.account
-    {
-        if !task_dispatch::valid_account_id(id) {
-            return Err(CliError::msg(format!("invalid --account id: {id}")));
-        }
-        if !root.join(id).is_dir() {
-            return Err(CliError::msg(format!(
-                "account not found: {id} (looked in {})",
-                root.display()
-            )));
-        }
-        return Ok(Some(id.clone()));
-    }
-    if let Some(id) = fixed_account
-        && !task_dispatch::valid_account_id(id)
-    {
-        return Err(CliError::msg(format!("invalid fixed account_id: {id}")));
-    }
-    let dirs = task_dispatch::scan_accounts(root, account_adapter);
-    let book = task_dispatch::AccountBook::load(&root.join(".celeris-usage.json"));
-    let now = time::OffsetDateTime::now_utc().unix_timestamp();
-    let candidates: Vec<task_dispatch::AccountCandidate<'_>> = dirs
-        .iter()
-        .filter(|d| fixed_account.is_none_or(|id| d.id == id))
-        .map(|d| task_dispatch::AccountCandidate {
-            id: d.id.as_str(),
-            logged_in: d.logged_in,
-            in_use: 0,
-        })
-        .collect();
-    task_dispatch::select_account(&candidates, &book, accounts.max_runs_per_account, now)
-        .map(Some)
-        .ok_or_else(|| {
-            CliError::msg(format!(
-                "no eligible account in the pool for provider {provider_id}"
-            ))
-        })
+    let root = registry
+        .sources
+        .get(&pick.candidate.source)
+        .and_then(|s| task_dispatch::account_adapter_for_source_kind(s.kind.as_ref()))
+        .and_then(|a| config.accounts.as_ref()?.root_for(a).cloned());
+    task_dispatch::selected_llm_route(registry, &pick, root.as_deref())
+        .map_err(|e| CliError::msg(format!("cannot launch route: {e}")))
+}
+
+/// A credential reference's value from `[secrets] dir` (never from the protocol payload).
+fn read_secret(config: &Config, name: &str) -> Option<String> {
+    let path = config.secrets.as_ref()?.dir.join(name);
+    let text = std::fs::read_to_string(path).ok()?;
+    Some(text.trim_end_matches(['\n', '\r']).to_string())
+}
+
+/// The adapter that runs `route`: `[harnesses.<id>]`'s adapter with the route applied.
+fn route_launch_adapter(
+    config: &Config,
+    route: &SelectedLlmRoute,
+) -> Result<std::sync::Arc<dyn WorkerAdapter>, CliError> {
+    let adapters = celeris::build_harness_adapters(config)
+        .map_err(|e| CliError::msg(format!("invalid harness declarations: {e}")))?;
+    task_worker::route::route_adapter(&adapters, route, &|name| read_secret(config, name))
+        .map_err(|e| CliError::msg(format!("cannot launch route: {e}")))
 }
 
 pub fn run_run(store: &dyn TaskStore, args: WorkerRunArgs) -> Result<ExitCode, CliError> {
@@ -268,7 +293,7 @@ pub fn run_run(store: &dyn TaskStore, args: WorkerRunArgs) -> Result<ExitCode, C
         ))
     })?;
 
-    let mut task = store.get(task_id)?.ok_or_else(|| {
+    let task = store.get(task_id)?.ok_or_else(|| {
         CliError::msg(format!(
             "task not found: {task_id} (check that --db points at the same db as `db` in {})",
             args.config.display()
@@ -284,86 +309,12 @@ pub fn run_run(store: &dyn TaskStore, args: WorkerRunArgs) -> Result<ExitCode, C
         ));
     }
 
-    let (provider_id, adapter_kind) = select_provider(&config, &task, &args)?;
-    let account = resolve_account(&config, &provider_id, &adapter_kind, &args)?;
-
-    let adapters = celeris::build_adapters(&config);
-    let base_adapter = adapters
-        .get(&provider_id)
-        .ok_or_else(|| CliError::msg(format!("provider {provider_id} has no adapter instance")))?;
-    // ADR-0024 D2 / ADR-0025 D2: アカウントが決まっていれば、celeris の dispatch と同じように env の末尾に重ねる。
-    let effective_adapter: std::sync::Arc<dyn WorkerAdapter> = match &account {
-        Some(account_id) => {
-            // B3: `resolve_account` は `account_pool` のプロバイダでしか `Some` を返さない（そのときは
-            // `[accounts]` に対応する根ディレクトリが要る、と検証済み）はずだが、`.expect()` は使わず、
-            // 万一の不整合はエラーとして返す。
-            let account_adapter = pool_adapter(&config, &provider_id, &adapter_kind).ok_or_else(|| {
-                CliError::msg(format!("provider {provider_id} resolved an account but adapter {adapter_kind:?} is not a pool adapter"))
-            })?;
-            let accounts = config.accounts.as_ref().ok_or_else(|| {
-                CliError::msg(format!(
-                    "provider {provider_id} resolved an account but [accounts] is not configured"
-                ))
-            })?;
-            let root = accounts.root_for(account_adapter).ok_or_else(|| {
-                CliError::msg(format!("provider {provider_id} resolved an account but [accounts] has no root for adapter {adapter_kind}"))
-            })?;
-            let dir = root.join(account_id);
-            base_adapter
-                .with_env(&[(
-                    account_adapter.env_var().to_string(),
-                    dir.display().to_string(),
-                )])
-                .ok_or_else(|| {
-                    CliError::msg(format!(
-                        "adapter for provider {provider_id} does not support account pools"
-                    ))
-                })?
-        }
-        None => base_adapter.clone(),
-    };
-    let adapter = effective_adapter.as_ref();
-    let remaining = account.as_deref().and_then(|id| {
-        let kind = pool_adapter(&config, &provider_id, &adapter_kind)?;
-        let root = config.accounts.as_ref()?.root_for(kind)?;
-        let book = task_dispatch::AccountBook::load(&root.join(".celeris-usage.json"));
-        task_dispatch::accounts::measured_remaining(
-            book.state(id)?.usage.as_ref()?,
-            time::OffsetDateTime::now_utc().unix_timestamp(),
-        )
-    });
-    let (tier, reason) = task_core::model_routing::select_tier(task.worker_hint.tier, remaining)
-        .map_err(CliError::msg)?;
-    // Match dispatch: legacy providers retain their historical model/tier.
-    if adapter
-        .model_for_tier(task.worker_hint.tier)
-        .map_err(CliError::msg)?
-        .is_some()
-    {
-        task.worker_hint.tier = tier;
-    }
-    let model = adapter
-        .model_for_tier(task.worker_hint.tier)
-        .map_err(CliError::msg)?
-        .unwrap_or_else(|| {
-            celeris::effective_models(&config)
-                .get(&provider_id)
-                .cloned()
-                .unwrap_or_default()
-        });
-    outln!(
-        "routing: tier={:?} model={} reason={}",
-        task.worker_hint.tier,
-        model,
-        reason
-    );
-
-    let selected = Selected {
-        provider_id,
-        adapter_kind,
-        model,
-        account,
-    };
+    let registry = config
+        .llm_route_registry()
+        .map_err(|e| CliError::msg(format!("invalid llm route declarations: {e}")))?;
+    let route = select_worker_route(&config, &registry, &task, &args)?;
+    let launch = route_launch_adapter(&config, &route)?;
+    let adapter = launch.as_ref();
 
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -376,7 +327,7 @@ pub fn run_run(store: &dyn TaskStore, args: WorkerRunArgs) -> Result<ExitCode, C
             eprintln!("warning: {warning}");
         }
         return rt.block_on(execute_on_cluster(
-            &task, &events, target, &config, &selected, adapter,
+            &task, &events, target, &config, &route, adapter,
         ));
     }
 
@@ -407,49 +358,9 @@ pub fn run_run(store: &dyn TaskStore, args: WorkerRunArgs) -> Result<ExitCode, C
         &events,
         workspace_dir,
         &config,
-        &selected,
+        &route,
         adapter,
     ))
-}
-
-/// `--provider` / `--adapter` / どちらも省略（`select`、cooldown なし）の順でプロバイダを決める
-/// （ADR-0012 D4）。
-fn select_provider(
-    config: &Config,
-    task: &Task,
-    args: &WorkerRunArgs,
-) -> Result<(String, String), CliError> {
-    let specs = config.provider_specs();
-
-    if let Some(provider) = &args.provider {
-        return specs
-            .iter()
-            .find(|p| &p.id == provider)
-            .map(|p| (p.id.clone(), p.adapter.clone()))
-            .ok_or_else(|| CliError::msg(format!("provider not found in config: {provider}")));
-    }
-
-    if let Some(adapter) = &args.adapter {
-        return specs
-            .iter()
-            .find(|p| &p.adapter == adapter)
-            .map(|p| (p.id.clone(), p.adapter.clone()))
-            .ok_or_else(|| {
-                CliError::msg(format!("no provider configured for adapter: {adapter}"))
-            });
-    }
-
-    let policy = StaticPolicy::new(specs, Duration::from_secs(config.error_cooldown_secs));
-    match policy.select(&task.worker_hint, Instant::now(), &HashSet::new()) {
-        Selection::Picked { adapter, provider } => Ok((provider, adapter)),
-        Selection::Busy => Err(CliError::msg(
-            "no provider available right now (matching providers are all cooling down)",
-        )),
-        Selection::NoMatchingProvider => Err(CliError::msg(format!(
-            "no provider configured for worker_hint {:?}",
-            task.worker_hint
-        ))),
-    }
 }
 
 async fn execute(
@@ -457,7 +368,7 @@ async fn execute(
     events: &[(u64, Event)],
     workspace_dir: PathBuf,
     config: &Config,
-    selected: &Selected,
+    route: &SelectedLlmRoute,
     adapter: &dyn WorkerAdapter,
 ) -> Result<ExitCode, CliError> {
     let prepared = LocalWorkspace::new(workspace_dir)
@@ -469,7 +380,7 @@ async fn execute(
     // ADR-0036 D1: 成果物ディレクトリはタスクごと（共有 workspace の子は `.taskd/artifacts/<task_id>/`）。
     let artifacts_dir = task_core::artifacts::artifacts_dir_for(task, &prepared);
     let req = RunRequest {
-        llm_route: None,
+        llm_route: Some(route.clone()),
         cargo_target_dir: None,
         protocol: PROTOCOL_VERSION,
         task: task.clone(),
@@ -493,12 +404,12 @@ async fn execute(
     };
 
     outln!(
-        "worker run: task={} provider={} adapter={} model={} account={} workspace={} run_id={run_id}",
+        "worker run: task={} harness={} source={} model={} account={} workspace={} run_id={run_id}",
         task.id,
-        selected.provider_id,
-        selected.adapter_kind,
-        selected.model,
-        selected.account.as_deref().unwrap_or("-"),
+        route.harness_id,
+        route.source_id,
+        route.model_id,
+        route.account_id,
         prepared.display(),
     );
 
@@ -537,7 +448,7 @@ async fn execute_on_cluster(
     events: &[(u64, Event)],
     target: ClusterTarget,
     config: &Config,
-    selected: &Selected,
+    route: &SelectedLlmRoute,
     adapter: &dyn WorkerAdapter,
 ) -> Result<ExitCode, CliError> {
     // ADR-0059 D1: タスクの `WorkspaceSpec::Remote.mode`（`--workspace` で上書きしたパスでも、
@@ -574,7 +485,7 @@ async fn execute_on_cluster(
     // ADR-0036 D1: Remote の写しは `workspace_root/<task_id>` でタスクごとなので `<写し>/artifacts`。
     let artifacts_dir = task_core::artifacts::artifacts_dir_for(&run_task, &prepared);
     let req = RunRequest {
-        llm_route: None,
+        llm_route: Some(route.clone()),
         cargo_target_dir: None,
         protocol: PROTOCOL_VERSION,
         task: run_task,
@@ -598,11 +509,12 @@ async fn execute_on_cluster(
     };
 
     outln!(
-        "worker run: task={} provider={} adapter={} model={} workspace={} run_id={run_id} cluster={} remote={}:{}",
+        "worker run: task={} harness={} source={} model={} account={} workspace={} run_id={run_id} cluster={} remote={}:{}",
         task.id,
-        selected.provider_id,
-        selected.adapter_kind,
-        selected.model,
+        route.harness_id,
+        route.source_id,
+        route.model_id,
+        route.account_id,
         prepared.display(),
         target.spec.id,
         target.spec.host,

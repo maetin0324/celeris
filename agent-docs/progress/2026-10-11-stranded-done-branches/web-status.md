@@ -1,20 +1,15 @@
 # Web stranded integration status
 
-tasks: [web-status]
+tasks: [01M4N33RH4ER5SRZ902QMR1PQJ]
 
-## Status
+## 実装
 
-Stopped before implementation because the integration API contract required by this unit is incomplete in the current worktree. Per the task constraints, the web client must not infer a route or reuse the unrelated ADR-0043 `task_integrations` changes route.
+- task 一覧と詳細で integration の `unintegrated` / `integrated` / `discarded` / `held` を区別し、promotion の `promotion_pending` は「昇格待ち」と表示する。
+- 詳細と受信箱の未取り込み item に merge / discard / hold / reopen 操作を追加。discard と hold は理由を要求し、discard は `confirm: true` を送る。
+- task-api の integration route を用い、既存 `task_integrations` と `integration_repair` は操作に使わない。
+- 操作 UI のボタンと入力は `min-h-11 min-w-11` を確保。
 
-## Available contract
+## 確認
 
-- Generated `TaskSummary` and `TaskDetail` include `integrations?: IntegrationView[] | null` and `promotion?: PromotionView | null`.
-- `IntegrationView` exposes repo id/name, state (`unintegrated | integrated | discarded | held`), reason, actor, branch, head, and checked time.
-- Inbox `unintegrated` items include `operation_path: string`, but the generated API does not define an operation-specific request body for the stranded flow.
-- ADR `agent-docs/adr/2026-10-11-stranded-done-branches.md` requires merge/discard/hold/reopen, with required notes for discard and hold.
-
-## Missing contract
-
-The current generated schema/types only describe `IntegrateBody` for the legacy `/tasks/{id}/changes/{repo}/integrate` route, with methods `merge | pr | discard`. There is no generated contract for the stranded integration operation that supports `merge | discard | hold | reopen`, including its route, payload, and result. Consequently the inbox `operation_path` cannot safely be turned into the required actions, and using the legacy route would violate the task's explicit separation from ADR-0043 integrations.
-
-No web implementation or tests were added. Resume this unit after the integration-api child publishes the stranded operation contract and regenerates web API types.
+- `corepack pnpm@12.6.0 -C web install --prefer-offline --frozen-lockfile && corepack pnpm@12.6.0 -C web typecheck && corepack pnpm@12.6.0 -C web lint && corepack pnpm@12.6.0 -C web test` 成功（vitest 678 tests、server 93 tests）。lint は既存 `styles.css` の `!important` 警告 4 件のみ。
+- 状態回帰試験を `web/features/tasks/task-integration.test.tsx` に追加。

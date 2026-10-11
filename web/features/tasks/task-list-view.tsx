@@ -10,6 +10,7 @@ import { ScrollTabs } from "../../components/ui/scroll-tabs";
 import { StatusBadge, statusView } from "../../components/ui/status-badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { mergeTaskPages } from "./merge-pages";
+import { integrationLabel } from "./task-integration";
 import { type TaskListFilters, taskCountsQuery, taskListPath, taskListQuery } from "./task-list-query";
 
 const STATUSES = ["draft", "ready", "running", "blocked", "reviewing", "done", "failed", "cancelled"] as const;
@@ -292,6 +293,23 @@ function TaskTable({ items, total }: { items: TaskSummary[]; total: number }) {
                     <span className="block max-w-full truncate text-label text-muted-foreground" title={item.id}>
                       {item.id}
                     </span>
+                    {item.integrations?.map((integration) => (
+                      <span
+                        key={integration.repo_id}
+                        className="inline-flex min-h-11 items-center gap-1 text-label"
+                        data-testid="task-list-integration"
+                      >
+                        {integration.repo}: {integrationLabel(integration.state)}
+                      </span>
+                    ))}
+                    {item.promotion?.status === "promotion_pending" ? (
+                      <span
+                        className="inline-flex min-h-11 items-center text-label text-warning-foreground"
+                        data-testid="task-list-promotion"
+                      >
+                        昇格待ち
+                      </span>
+                    ) : null}
                   </Link>
                 </TableCell>
                 <TableCell

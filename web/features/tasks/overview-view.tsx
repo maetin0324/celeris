@@ -14,6 +14,7 @@ import { integrationRepairDisplay, integrationRepairTone } from "./integration-r
 import { IntegrationRepairPanel } from "./integration-repair-panel";
 import { taskDetailQuery } from "./task-detail-query";
 import { type MobileSection, mobileSectionClass } from "./task-detail-tabs";
+import { TaskIntegrationActions } from "./task-integration";
 
 // /tasks/:id の概要（P3-08）と観測性の header・木（2026-10-04 screens-ops）。
 // 長時間の task で「いまどうなっているか・次に何をするか」を header で一目に、親子 task・段・WU・
@@ -222,6 +223,22 @@ export function OverviewView({
       </div>
 
       {panels}
+
+      {detail.integrations?.length ? (
+        <section className={card} aria-label="取り込み状態" data-testid="task-integrations">
+          <h2 className={heading}>取り込み状態</h2>
+          <div className="mt-3 grid gap-4">
+            {detail.integrations.map((integration) => (
+              <TaskIntegrationActions
+                key={integration.repo_id}
+                taskId={task.id}
+                integration={integration}
+                promotion={detail.promotion}
+              />
+            ))}
+          </div>
+        </section>
+      ) : null}
 
       <div className={mobileSectionClass("summary", section)}>
         <section className={card}>

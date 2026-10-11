@@ -172,7 +172,7 @@ printf '{"type":"result","subtype":"success","is_error":false,"result":"ok"}\n'
         }
     }
 
-    fn write_config(&self, claude: &Path, token: Option<&str>, extra_provider: &str) -> PathBuf {
+    fn write_config(&self, claude: &Path, token: Option<&str>) -> PathBuf {
         let path = self.root.join("config.toml");
         // この台本は「ワーカー run がプールのどのアカウントに行くか」だけを見る。プールの消費者を
         // ワーカー run に限るため、次の 2 つを切る（どちらもホストや既定値に結果が左右されないように）。
@@ -219,13 +219,32 @@ listen = "127.0.0.1:{port}"
 [adapters.claude_code]
 command = "{claude}"
 
+[llm_sources.claude]
+kind = "claude_oauth"
+accounts = ["a", "b", "local"]
+models = ["haiku", "sonnet"]
+
+[harnesses.claude_code]
+kind = "claude_code"
+api_formats = ["claude_oauth"]
+source_kinds = ["claude_oauth"]
+
+[harness_selection]
+execution_class_defaults = {{}}
+
+[[harness_selection.rules]]
+harness = "claude_code"
+required_capabilities = []
+
+[route_defaults.claude_code]
+candidates = [{{ source = "claude", model = "haiku" }}]
+
 [[providers]]
 id = "pool"
 adapter = "claude-code"
 tiers = ["frontier", "standard", "cheap"]
 concurrency = 1
 account_pool = true
-{extra_provider}
 "#,
             port = self.port,
             claude = claude.display(),
@@ -433,7 +452,7 @@ fn account_selection_follows_headroom_and_survives_restart_and_throttle_only_coo
     // a は残量が少ない（util 0.9）、b は多い（util 0.2）。
     env.account("a", Some(0.9));
     env.account("b", Some(0.2));
-    let config = env.write_config(&claude, None, "");
+    let config = env.write_config(&claude, None);
     let mut daemon = env.start_celeris(&config);
     let env_ref = &env;
     env_ref.wait_api(&mut daemon);
@@ -527,7 +546,7 @@ exec "{claude}" "$@"
         std::fs::set_permissions(&claude_conditional, std::fs::Permissions::from_mode(0o755))
             .unwrap();
     }
-    let config = env.write_config(&claude_conditional, None, "");
+    let config = env.write_config(&claude_conditional, None);
     let mut daemon = env.start_celeris(&config);
     env.wait_api(&mut daemon);
 
@@ -579,7 +598,7 @@ fn http_login_flow_ends_with_logged_in_true_and_management_requires_a_token() {
     {
         let env = Env::new();
         let claude = env.write_claude_stub();
-        let config = env.write_config(&claude, None, "");
+        let config = env.write_config(&claude, None);
         let mut daemon = env.start_celeris(&config);
         env.wait_api(&mut daemon);
 
@@ -591,7 +610,7 @@ fn http_login_flow_ends_with_logged_in_true_and_management_requires_a_token() {
     // token_file 設定あり: 認証を通した後、POST /accounts → login → login/code → logged_in: true の一連が通る。
     let env = Env::new();
     let claude = env.write_claude_stub();
-    let config = env.write_config(&claude, Some("s3cret-admin-token"), "");
+    let config = env.write_config(&claude, Some("s3cret-admin-token"));
     let mut daemon = env.start_celeris(&config);
     let mut env = env;
     env.wait_api(&mut daemon);

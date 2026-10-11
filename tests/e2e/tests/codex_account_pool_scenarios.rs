@@ -212,6 +212,26 @@ listen = "127.0.0.1:{port}"
 [adapters.codex]
 command = "{codex}"
 
+[llm_sources.codex]
+kind = "codex_oauth"
+accounts = []
+models = ["codex"]
+
+[harnesses.codex]
+kind = "codex"
+api_formats = ["codex_oauth"]
+source_kinds = ["codex_oauth"]
+
+[harness_selection]
+execution_class_defaults = {{}}
+
+[[harness_selection.rules]]
+harness = "codex"
+required_capabilities = []
+
+[route_defaults.codex]
+candidates = [{{ source = "codex", model = "codex" }}]
+
 [[providers]]
 id = "pool"
 adapter = "codex"

@@ -176,7 +176,7 @@ impl Env {
         path
     }
 
-    /// `api` は `[api]` 節の本体（空なら節を書かない）。`provider_env` は `[[providers]]` の `env` の TOML インライン表。
+    /// `api` は `[api]` 節の本体（空なら節を書かない）。
     fn write_config(&self, script: &Path, api: &str, provider_env: &str) -> PathBuf {
         let path = self.root.join("config.toml");
         // The worker db guard stays on (ADR-0126): this daemon uses only a private test DB,
@@ -208,6 +208,26 @@ releases_dir = "releases"
 command = ["sh", "{script}"]
 env = {{ ADAPTER_SECRET = "adapter-s3cr3t-value" }}
 
+[llm_sources.fake]
+kind = "fake"
+accounts = ["local"]
+models = ["fake"]
+
+[harnesses.fake]
+kind = "fake"
+api_formats = ["fake"]
+source_kinds = ["fake"]
+
+[harness_selection]
+execution_class_defaults = {{}}
+
+[[harness_selection.rules]]
+harness = "fake"
+required_capabilities = []
+
+[route_defaults.fake]
+candidates = [{{ source = "fake", model = "fake" }}]
+
 [[providers]]
 id = "fake-local"
 adapter = "fake"
@@ -217,11 +237,7 @@ model = "fake"
 env = {provider_env}
 "#,
             script = script.display(),
-            provider_env = if provider_env.is_empty() {
-                "{}"
-            } else {
-                provider_env
-            },
+            provider_env = if provider_env.is_empty() { "{}" } else { provider_env },
         );
         std::fs::write(&path, text).unwrap();
         path
@@ -525,7 +541,6 @@ fn api_is_off_by_default_and_health_reports_versions_when_enabled() {
         .json()["snapshot"]
         .is_null()));
     let snap = env.get("/daemon").json()["snapshot"].clone();
-    assert_eq!(snap["providers"][0]["id"], "fake-local", "{snap}");
     assert_eq!(snap["tick_ms"], 50, "{snap}");
     assert_eq!(
         env.get("/config").json()["db"],
@@ -926,7 +941,7 @@ fi"#,
             v.iter().any(|r| {
                 r["task_id"] == slow.to_string()
                     && r["kind"] == "worker"
-                    && r["provider"] == "fake-local"
+                    && r["provider"] == "fake"
             })
         })
     };

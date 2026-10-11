@@ -73,6 +73,26 @@ review_timeout_secs = 30
 [adapters.fake]
 command = ["sh", "{script}"]
 
+[llm_sources.fake]
+kind = "fake"
+accounts = ["local"]
+models = ["fake"]
+
+[harnesses.fake]
+kind = "fake"
+api_formats = ["fake"]
+source_kinds = ["fake"]
+
+[harness_selection]
+execution_class_defaults = {{}}
+
+[[harness_selection.rules]]
+harness = "fake"
+required_capabilities = []
+
+[route_defaults.fake]
+candidates = [{{ source = "fake", model = "fake" }}]
+
 [[providers]]
 id = "fake-local"
 adapter = "fake"

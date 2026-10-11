@@ -347,6 +347,33 @@ impl Dispatcher {
                 };
                 if let Some(book) = self.account_book(adapter) {
                     let book = book.lock().unwrap_or_else(|e| e.into_inner());
+                    // Preserve the account pool's headroom policy when adapting it to
+                    // source×model routing. Admission chooses the first eligible account.
+                    accounts.sort_by(|left, right| {
+                        let in_use = |account: &AccountId| {
+                            state.reservations.account_in_use
+                                .get(&(source_id.clone(), account.clone()))
+                                .copied()
+                                .unwrap_or(0)
+                        };
+                        let score = |account: &AccountId| {
+                            evaluate(
+                                &AccountCandidate {
+                                    id: account.as_ref(),
+                                    logged_in: true,
+                                    in_use: in_use(account) as usize,
+                                },
+                                book.state(account.as_ref()),
+                                usize::MAX,
+                                now,
+                            )
+                            .score
+                        };
+                        score(right)
+                            .partial_cmp(&score(left))
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                            .then_with(|| left.cmp(right))
+                    });
                     for account in &accounts {
                         let key = (source_id.clone(), account.clone());
                         let candidate = AccountCandidate {

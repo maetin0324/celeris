@@ -297,7 +297,7 @@ fn an_origin_without_project_cannot_pick_one_and_creates_project_less_followups(
     );
 }
 
-/// D3-4/5: parent・assignee・adapter・workspace・cluster は使わず、status は常に draft。理由は進行に残す。
+/// D3-4/5: parent・assignee・harness・workspace・cluster は使わず、status は常に draft。理由は進行に残す。
 #[test]
 fn worker_only_fields_are_dropped_and_status_is_always_draft() {
     let f = fixture();
@@ -305,7 +305,7 @@ fn worker_only_fields_are_dropped_and_status_is_always_draft() {
     let mut body = minimal("over-specified");
     body["parent"] = json!(x.id.to_string());
     body["assignee"] = json!("dev");
-    body["adapter"] = json!("codex");
+    body["harness"] = json!("codex");
     body["workspace"] = json!("/etc");
     body["status"] = json!("ready");
     let (result, notes) = create_followup(
@@ -329,7 +329,7 @@ fn worker_only_fields_are_dropped_and_status_is_always_draft() {
         matches!(&t.workspace, WorkspaceSpec::Local { path, .. } if path == &PathBuf::from(t.id.to_string()))
     );
     assert_eq!(t.project_id, Some(f.project));
-    for needle in ["parent", "assignee", "adapter", "workspace", "status"] {
+    for needle in ["parent", "assignee", "harness", "workspace", "status"] {
         assert!(
             notes.iter().any(|n| n.starts_with(needle)),
             "{needle}: {notes:?}"

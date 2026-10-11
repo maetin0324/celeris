@@ -185,7 +185,7 @@ candidates = [{ source = "fake", model = "fake" }]
 # Web 調査の役割（ADR-0029 D2）。役割名は自由記述で、下の [[genres]] の roles に含めれば分野に属する。
 [[roles]]
 id = "web-scout"
-adapter = "local-deep-research"
+harness = "local-deep-research"
 tier = "cheap"
 instructions = "あなたは Web 調査担当。問いに対して、出典 URL 付きで分かったことと分からなかったことを書く。"
 

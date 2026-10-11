@@ -514,7 +514,7 @@ interval_secs = 30                                # 判定と送信の間隔（�
 # fake アダプタ: サブプロセスとして起動するコマンド。省略時は progress + done を返す sh スクリプト。
 #
 # ADR-0041 D5（Phase 51）: `celeris --mode verify`（`scripts/selfdeploy/verify.sh` の検証段）は、この設定を
-# そのまま読んだうえで**組み込みで** `smoke` の役割・分野・プロバイダ（すべて `adapter = "fake"`）を足し、
+# そのまま読んだうえで**組み込みで** `smoke` の役割・分野・source・harness（harness は偽のアダプタ）を足し、
 # `[adapters.fake].command` を既定に、`[reviewer]` を `fake` / `standard` に固定する。verify の celeris は
 # `genre = "smoke"` のタスク**だけ**を dispatch するので、本番のデータのコピーに対して煙試験を 1 件流しても
 # 他のタスクは 1 つも動かない。**この設定ファイルに `smoke` という id の役割・分野・プロバイダを書いても
@@ -589,7 +589,7 @@ interval_hours = 168
 batch_pages = 8
 max_context_chars = 24000
 # assignee = "software-engineering"
-# adapter = "codex"
+# harness = "codex"
 
 # ADR-0089（Phase R6-5）: CoS の対話 run（Console から CoS に話しかけた一言）は `max_concurrency` と
 # `account_pool = true` のプロバイダの `concurrency` の外で走る（アカウントは消費し、走っている run の最も少ない

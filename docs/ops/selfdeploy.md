@@ -242,15 +242,20 @@ SD_VERIFY_LOCK_WAIT=60 scripts/selfdeploy/verify.sh <sha12>   # 他の検証を 
 
 **verify モードの celeris は `genre = "smoke"` のタスクだけを dispatch する**（それ以外の ready は
 従来どおり 1 件も動かさない。リースも奪わない、レビューも拾わない、`daemon_instances` にも書かない）。
-`smoke` の**役割・分野・プロバイダは verify モードが組み込みで足す**（`Config::apply_verify_smoke`）:
+`smoke` の**役割・分野・source・harness は verify モードが組み込みで足す**（`Config::apply_verify_smoke`）:
 
 | | 中身 |
 |---|---|
-| `[[providers]] id = "smoke"` | `adapter = "fake"`、`tiers = ["standard"]`（同時実行数は暗黙アカウント `implicit/none`（fake 行の派生 source）の既定） |
-| `[[roles]] id = "smoke"` | `adapter = "fake"`、`tier = "standard"`、`max_turns = 1`、`max_wall_secs = 60` |
+| `[llm_sources.smoke]` | `kind = "fake"`、`accounts = ["smoke"]`、`models = ["fake"]` |
+| `[harnesses.smoke]` | `kind = "fake"`（起動コマンドは `FakeAdapter::default_command()`） |
+| `[route_defaults.smoke]` | `candidates = [{ source = "smoke", model = "fake" }]` だけ |
+| `[harness_selection]` | `genre = "smoke"` → harness `smoke` の規則 1 つだけ（worker run も reviewer run も偽の harness） |
+| `[[roles]] id = "smoke"` | `harness = "smoke"`、`tier = "standard"`、`max_turns = 1`、`max_wall_secs = 60` |
 | `[[genres]] id = "smoke"` | `description = "検証の煙試験"`、`default_role = "smoke"`、`roles = ["smoke"]` |
 | `[adapters.fake].command` | `FakeAdapter::default_command()` に固定 |
-| `[reviewer]` | `adapter = "fake"` / `tier = "standard"` |
+
+verify の dispatcher が拾うのは `genre = "smoke"` かつ task の harness が `smoke` のタスクだけ
+（`smoke` harness は上書きで必ず kind `fake` になる）。
 
 設定ファイル（`~/.config/celeris/config.toml`）に同じ id があっても**上書きする**。本番の設定に何を書いても、
 煙試験が本物の LLM を呼ぶ経路は無い（ADR-0041 §3「煙試験で本物の LLM を呼ばない。`fake` だけ」）。

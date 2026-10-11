@@ -429,7 +429,7 @@ spec = {
     "objective": "検証（staging）の煙試験。偽のアダプタが 1 往復するだけ（ADR-0041 D5）。",
     "acceptance": [{"type": "command", "cmd": "true", "expect_exit": 0}],
     "genre": "smoke",
-    # 組み込みの役割（`adapter = "fake"`）を明示する。`assignee` を付けると、役割を省略した場合は
+    # 組み込みの役割（`harness = "smoke"`、偽のアダプタ）を明示する。`assignee` を付けると、役割を省略した場合は
     # そのノードの分野の既定の役割（＝本物のアダプタ）が勝ってしまう。
     "role": "smoke",
     "max_retries": 0,

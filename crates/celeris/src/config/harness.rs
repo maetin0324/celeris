@@ -265,7 +265,7 @@ impl Config {
         self.roles.push(RoleConfig {
             id: SMOKE_ID.to_string(),
             tier: Some(Tier::Standard),
-            harness: Some(FakeAdapter::ID.to_string()),
+            harness: Some(SMOKE_ID.to_string()),
             max_turns: Some(SMOKE_MAX_TURNS),
             max_wall_secs: Some(SMOKE_MAX_WALL_SECS),
             instructions: Some(SMOKE_INSTRUCTIONS.to_string()),
@@ -640,7 +640,7 @@ pub(super) fn validate_harnesses(harnesses: &[HarnessConfig]) -> Result<(), Conf
     Ok(())
 }
 
-/// ADR-0016 D1: 役割の id は重複させない。adapter は既知の種別だけを受け付ける。上限は 1 以上。
+/// ADR-0016 D1: 役割の id は重複させない。上限は 1 以上。
 /// 返り値は定義された役割の id（`[[genres]]` の検証が使う）。
 pub(super) fn validate_roles(roles: &[RoleConfig]) -> Result<HashSet<&String>, ConfigError> {
     let mut role_ids = std::collections::HashSet::new();

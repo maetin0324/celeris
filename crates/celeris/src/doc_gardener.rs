@@ -13,7 +13,7 @@ pub struct GardenerConfig {
     pub batch_pages: usize,
     pub max_context_chars: usize,
     pub assignee: Option<String>,
-    pub adapter: Option<String>,
+    pub harness: Option<String>,
 }
 impl Default for GardenerConfig {
     fn default() -> Self {
@@ -23,7 +23,7 @@ impl Default for GardenerConfig {
             batch_pages: 8,
             max_context_chars: 24_000,
             assignee: None,
-            adapter: None,
+            harness: None,
         }
     }
 }
@@ -189,7 +189,7 @@ is eligible for explicit docs publication.\n\n{}",
             "kind":"execute", "tier":"cheap", "priority":0, "max_turns":6,
             "max_wall_secs":900, "max_retries":0, "role":"doc-gardener",
             "project_id":repo.project_id, "repos":[repo.name],
-            "assignee":config.assignee, "adapter":config.adapter, "labels":labels
+            "assignee":config.assignee, "harness":config.harness, "labels":labels
         })).map_err(|e| e.to_string())?;
         let task = task_ops::add::create_support_task(store, spec, roles, genres, now)
             .map_err(|e| e.to_string())?;

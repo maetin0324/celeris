@@ -194,7 +194,6 @@ fn harness_select_reads_structured_task_fields_only() {
     let mut task = new_task(dir.path(), Check::Reviewer, 0);
     task.genre = Some("coding".into());
     task.objective = "use opencode with qwen please".into();
-    task.harness_id = Some(task_core::llm_route::HarnessId::from("acp"));
     let req = crate::dispatcher::harness_request_for(&task);
     assert_eq!(req.genre.as_deref(), Some("coding"));
     assert_eq!(req.harness, None);

@@ -1804,7 +1804,7 @@ instructions = "You lead the work. Delegate implementation."
 
 [[roles]]
 id = "implementer"
-adapter = "fake"
+harness = "fake"
 
 [delegation]
 max_delegate_per_run = 3
@@ -1874,9 +1874,9 @@ fn delegation_on_child_failure_is_parsed_and_validated() {
     assert!(err.contains("on_child_failure"), "{err}");
 }
 
-/// ADR-0016: 役割 id の重複、未知の adapter、0 の上限は設定エラー。
+/// ADR-0016: 役割 id の重複、消した `adapter` 欄、0 の上限は設定エラー。
 #[test]
-fn rejects_duplicate_roles_unknown_role_adapter_and_zero_limits() {
+fn rejects_duplicate_roles_removed_role_adapter_and_zero_limits() {
     let dup = "[[roles]]\nid = \"lead\"\n[[roles]]\nid = \"lead\"\n".to_string();
     let cfg: Config = toml::from_str(&dup).unwrap();
     assert_eq!(
@@ -1884,12 +1884,8 @@ fn rejects_duplicate_roles_unknown_role_adapter_and_zero_limits() {
         "invalid config: duplicate role id: lead"
     );
 
-    let bogus = "[[roles]]\nid = \"lead\"\nadapter = \"bogus\"\n".to_string();
-    let cfg: Config = toml::from_str(&bogus).unwrap();
-    assert_eq!(
-        cfg.validate().unwrap_err().to_string(),
-        "invalid config: [[roles]] lead: adapter \"bogus\" is not available in this build (fake, claude-code, codex, pi, acp, browser-specialist, paperqa, local-deep-research, langmem only)"
-    );
+    // 役割は adapter を持たない（harness 欄だけ）。旧い `adapter` 欄は読み込みエラー。
+    assert!(toml::from_str::<Config>("[[roles]]\nid = \"lead\"\nadapter = \"fake\"\n").is_err());
 
     let empty = "[[roles]]\nid = \"  \"\n".to_string();
     let cfg: Config = toml::from_str(&empty).unwrap();

@@ -190,19 +190,19 @@ instructions = "あなたは実装担当。受け取った範囲だけを実装�
 # 関連研究調査の役割（ADR-0027）。役割名は自由記述で、下の [[genres]] の roles に含めれば分野に属する。
 [[roles]]
 id = "literature-scout"
-adapter = "paperqa"
+harness = "paperqa"
 tier = "cheap"
 instructions = "広く候補論文を探し、見落としが無いか洗い出す（深読みはしない）。"
 
 [[roles]]
 id = "literature-reader"
-adapter = "paperqa"
+harness = "paperqa"
 tier = "standard"
 instructions = "候補論文を読み込み、引用付きで要点と新規性への影響をまとめる。"
 
 [[roles]]
 id = "novelty-skeptic"
-adapter = "paperqa"
+harness = "paperqa"
 tier = "standard"
 instructions = "「本当に新規か」を疑う側に立ち、近い先行研究が無いか反証を試みる。"
 

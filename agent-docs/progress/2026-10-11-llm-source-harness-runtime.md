@@ -12,7 +12,20 @@ runtime の実行経路は `llm_route` に切り替え済み。provider 固定�
 
 残件だった task-worker の tier→model の束縛は 2026-10-12 に撤去した（`2026-10-11-llm-source-harness-runtime/tier-drop-operator.md`）。ADR の決定はすべて実装済み。
 
-検査の HEAD は `a3c63b8a`（e2e-flake）。各葉の変更と個別 check は `agent-docs/progress/2026-10-11-llm-source-harness-runtime/<unit>.md` に記録済み。
+検査の HEAD は `d9db3eba`（operator の tier 束縛撤去）。各葉の変更と個別 check は `agent-docs/progress/2026-10-11-llm-source-harness-runtime/<unit>.md` に記録済み。
+
+## reverify-tier（2026-10-12、HEAD `d9db3eba`）
+
+final review が task-worker の `with_tier_models` 残りで落ちた件（受け入れ grep 失敗）は、運用セッションの `d9db3eba`（TierModels 撤去）で解消済み。closeout2 の「tier_models 0 件」は誤りで、撤去前は task-worker に 8 件残っていた。この検査は crates/ を変えず、`d9db3eba` の HEAD で全体を流し直した。
+
+- 受け入れ grep `! grep -rnE 'ProviderConfig|ProviderSpec|provider_select|providers_dir|tier_models|in_use_cos|SourceOrigin|worker_hint\.adapter' crates --include=*.rs`: 0 件（exit 0）。
+- `TMPDIR=/local/x bash scripts/dev/test-parallel.sh`: exit 0（`test-parallel: ok`）。`CELERIS_TEST_SUMMARY`: `passed 4888, failed 0, ignored 14, nextest_exit 0, doctest_exit 0, summary_parsed true`。約 7 分 28 秒。ログは `/local/x_tp.log`（run の作業 `artifacts/` 外の一時ログ）。
+- `cargo clippy --workspace --all-targets -- -D warnings`: exit 0（`Finished`、警告 0）。
+- 名前付き試験 3 組（すべて exit 0）:
+  - `cargo test -p celeris -- legacy_providers_rejected_ config_examples_load`: 2 passed（`legacy_providers_rejected_with_new_config_guidance`・`config_examples_load`）。
+  - `cargo test -p task-dispatch -- harness_select_ route_select_`: 18 passed（harness_select 系 6、route_select 系 12）。
+  - `cargo test -p task-core -- migration_harness_ account_limits_source_`: 3 passed。
+- 注: test-parallel は `TMPDIR=/local/x` で流した（run の TMPDIR は 93 byte あり SUN_LEN の問題を避けるため。既定の run TMPDIR での再実行はしていない）。
 
 ## 葉の一覧（runtime-v2）
 

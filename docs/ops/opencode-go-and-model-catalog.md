@@ -66,24 +66,11 @@ candidates = [{ source = "opencode_go", model = "opencode-go/<model>" }]
    idle の logged-in account は 300 秒おきに確認される。すぐ見たいときは `POST /api/v1/llm/sources/opencode_go/accounts/main/check`。
 4. web の `/accounts` に 3 本目のバー（1 か月）、`/models` に source ごとの表と発見ボタン・上書き編集があることを見る。
 
-## 3a. 画面から役割へモデルを割り当てる（config を編集しない）
+## 3a. 旧モデル役割割り当て手順
 
-ADR 2026-10-06 model-role-assignments。`[[providers]]` の `model` / `tier_models` を書かなくても、web の `/models` 画面で
-source ごとに「frontier / standard / cheap にはこのモデル」を決められる。
-
-1. `[accounts] opencode_dir` を設定し account を作っておく（§1・§2）。これだけは config が要る。
-2. `/models` で opencode-go の source を開き、`発見` でモデル一覧を取る（`celerisctl models discover` でも同じ）。
-3. 役割（frontier / standard / cheap）ごとにモデルを選んで保存する。保存前の影響表示（preview）で、その枠を使う provider 行と
-   llm-proxy の lane が何から何に変わるかを確かめる。決めた値は DB に残り、次の解決から効く（daemon の再起動も reload も要らない）。
-4. `opencode go を使う` を押すと、`llm_source = opencode_go` の provider 行が無いときだけ
-   `{id: "opencode-go", adapter: "acp", llm_source: "opencode_go", account_pool: "opencode-go", tiers: [frontier, standard, cheap]}` を
-   `POST /api/v1/providers` で作る（providers.d に書いて reload）。割り当てが無い役割はその provider の候補にならない。
-   `account_pool` は `true` / `false` に加えて pool 名の文字列（`"opencode-go"`）を API でも設定できる。名前付き pool は
-   `[accounts]` に対応する dir（opencode なら `opencode_dir`）があるときだけ受け付ける（無ければ 422 `invalid_provider`）。
-
-API: `GET /api/v1/llm/models/assignments`（割り当てと全枠の実効）、`PUT`/`DELETE …/assignments/{source}/{tier}`、
-`POST …/assignments/preview`。割り当ての変更は event `model_role_assignment_changed` に残る。
-`celerisctl models assign <source> <tier> <model_id>` / `unassign <source> <tier>` も同じ API を呼ぶ。
+この節の旧 `/models` 画面から provider 行を作る手順と `POST /api/v1/providers` の説明は廃止された。
+現行のモデル選択・source/harness 設定については [LLM source と harness の移行手順](provider-llm-source-migration.md)
+および [LLM source ガイド](../guides/llm-source.md)を参照する。
 
 ### Excluded（除外）とは
 

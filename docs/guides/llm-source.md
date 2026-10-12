@@ -1,31 +1,22 @@
-# LLM source のローカル OpenAI 互換プロキシ（ADR-0053 D1/D2、Phase 65）
+# LLM source のローカル OpenAI 互換プロキシ
 
 celeris は `[llm_proxy]` を有効にすると、`127.0.0.1:18100`（既定）で OpenAI 互換の
-`POST /v1/chat/completions` を提供する。ログイン済みの Claude Code / Codex の資格情報
+`POST /v1/chat/completions` を提供する。source/model の候補は現行の `[llm_sources.*]` と
+route 設定で明示する。ログイン済みの Claude Code / Codex の資格情報
 （`[accounts] claude_dir` / `codex_dir`）と、既存の OpenAI 互換エンドポイント（Qwen 等）を
 「供給元（LLM source）」として束ね、opencode・PaperQA・Local Deep Research・LangMem のような
-「adapter を選ばない」ハーネスから、供給元を意識せずに使えるようにする。
+ハーネスに対して、設定済みの具体的な source/model へ要求を中継する。
 
 実装は `crates/llm-proxy`（独立クレート）。celeris（daemon）はこれを起動・停止するだけで、
 選択やトークン更新の判断ロジックは持たない。
 
 ## 1. モデル名
 
-ACP の Qwen 直指定モデル、`llm_source = "openai_compatible:qwen"`、Qwen 固定の `OPENCODE_CONFIG` を使う行は cheap だけで dispatch する。proxy の `celeris/<tier>` を使う ACP 行は全 tier を使える。
+proxy の旧 `celeris/<tier>`、`claude/<tier>`、`gpt/<tier>`、`qwen/<tier>` alias と
+`[llm_proxy.models]` は廃止された。旧設定を現行の source/model route に移す場合は
+[provider 設定の移行手順](../ops/provider-llm-source-migration.md)を参照する。
 
-- `celeris/<tier>`（`frontier` / `standard` / `cheap`）: 供給元をプロキシが決定的に選ぶ。
-- `claude/<tier>` / `gpt/<tier>` / `qwen/<tier>`: 供給元を明示的に固定する。
-- `<source>:<具体モデル名>`（例 `claude:claude-sonnet-5`）: 素通り。tier 写像を経由しない。
-  供給元の接頭辞（`claude` / `gpt` / `qwen`）を明示したときだけ許す。
-
-tier → 具体モデルの写像は `[llm_proxy.models]`。既定値は 2026-09-24 に CLI を実際に実行して確認した
-ID（ADR-0069 Phase 118 D2。`agent-docs/adr/0069-routing-four-layers.md` Phase 118 追記に実測の経緯がある）:
-claude は frontier=`claude-fable-5-1` / standard=`claude-opus-5-5` / cheap=`claude-sonnet-5`、
-gpt は frontier=`gpt-6-astra` / standard=`gpt-6-sol` / cheap=`gpt-6-luna`。運用側の実際のプラン・
-契約で使えるモデルが違えば `[llm_proxy.models]` で上書きすること。
-Qwen は cheap にだけ `qwen3.8-27b` を割り当てる（ADR-0132 D3）。
-
-### 単価表
+### 参考: 旧単価表
 
 `task_core::pricing` の USD / 100 万トークン。Claude の値はこのタスクの計画時に
 オフラインの `claude-api` skill（`SKILL.md` の「Current Models (cached 2026-06-24)」、
@@ -172,57 +163,11 @@ standard = "claude-sonnet-5"
 # ... 運用前に確認・上書きすること（§1 参照）
 ```
 
-## 6. ハーネスをプロキシに向ける（ADR-0053 D2）
+## 6. 廃止済みの tier alias 設定
 
-既定の設定は 4 つのプロバイダをプロキシに向ける。**PaperQA だけ `celeris/standard`、他は
-`celeris/cheap`**。
-
-| プロバイダ | 設定ファイル | 変更点 |
-|---|---|---|
-| `paperqa-qwen` | `config/celeris.research.example.toml` | `[adapters.paperqa].env`: `OPENAI_BASE_URL` → `http://127.0.0.1:18100/v1`、`OPENAI_API_KEY` → `[api] token_file` と同じ値。`model = "openai/celeris/standard"` |
-| `ldr-qwen` | `config/celeris.web-research.example.toml` | `[adapters.local_deep_research.settings]`: `llm.openai_endpoint.url` → プロキシ、`llm.openai_endpoint.api_key` → 同上、`llm.model = "celeris/cheap"`。`[[providers]] model = "celeris/cheap"` |
-| `langmem-main` | `config/celeris.example.toml`（`[knowledge.langmem]`）、`docs/guides/knowledge.md` | `base_url` → プロキシ、`model = "celeris/cheap"` |
-| `opencode-qwen` | `config/celeris.acp-opencode.example.toml` | **コメントで手順を示すのみ**（下の §7 を参照。実機で opencode の provider/model の区切り方を確認できていないため、既定は直接 Qwen のまま） |
-
-いずれも Qwen が生きていれば従来どおり Qwen、落ちていれば自動で Claude / GPT のアカウントプールに
-倒れる（`prefer_free = true` のときの `celeris/<tier>` の振る舞い。ADR-0052 の
-knowledge_maint 側フォールバックはこのプロキシの中に吸収される）。
-
-**注意**: 上の 3 つ（paperqa/ldr/langmem）はいずれも `OPENAI_API_KEY` / `api_key` にプロキシの
-bearer トークン（`[api] token_file` の中身）が必要。直接 Qwen を叩いていた頃の `"unused"` は
-このプロキシには通らない（`GET /healthz` を除く全エンドポイントが Bearer を要求する）。
-
-## 7. opencode をプロキシに向ける（未検証。ADR-0053 D2）
-
-`tools/opencode/` はこのリポジトリにまだ無いので、ここに JSON を示す
-（`config/opencode.openai-compat.example.json` の書き方を踏襲）。
-
-```json
-{
-  "$schema": "https://opencode.ai/config.json",
-  "provider": {
-    "celeris-proxy": {
-      "npm": "@ai-sdk/openai-compatible",
-      "name": "celeris LLM source proxy",
-      "options": { "baseURL": "http://127.0.0.1:18100/v1", "apiKey": "{env:CELERIS_API_TOKEN}" },
-      "models": { "celeris/cheap": { "name": "celeris (auto)" } }
-    }
-  },
-  "model": "celeris-proxy/celeris/cheap",
-  "permission": { "edit": "allow", "bash": "allow", "webfetch": "deny", "task": "deny" }
-}
-```
-
-`CELERIS_API_TOKEN` は `[api] token_file` と同じ値（`[[providers]] env` で渡す）。
-
-**未検証・要確認**: opencode の `"model"` フィールドは `"<providerId>/<modelId>"` の形だが、
-`modelId` 自体に `celeris/cheap` のようにスラッシュを含めてよいか（opencode 側が最初の `/` だけで
-区切るか）は、このセッションでは opencode の実機・ソースで確認していない。安全側に振るなら、
-`models` のキーをスラッシュ無しの別名（例 `"celeris-cheap"`）にし、`[llm_proxy]` 側で
-`qwen:<model>` 形の素通り構文と同様の別名解決を別 ADR で足す運用にしてもよい。**この理由により
-`config/celeris.acp-opencode.example.toml` の既定はまだ直接 Qwen を指すままにしてあり、上の JSON は
-コメントで参照するだけにした**（ADR-0053 D1/D2 の受け入れ条件「too hard なら明示的に無効のまま出す」
-に従った判断）。
+旧版の `celeris/cheap` / `celeris/standard` を使う proxy 設定例（旧 §§6–7）は、LLM source と model の
+選択を分離した構成では使えない。`[llm_proxy.models]` の tier alias と `[[providers]]` は新しい binary
+で読み込みエラーになる。現行 config への移行は[移行手順](../ops/provider-llm-source-migration.md)を参照する。
 
 ## 8. 本番の運用手順
 

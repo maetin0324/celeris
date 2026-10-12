@@ -108,10 +108,9 @@ cp -n config/org.example.toml ~/.config/celeris/org.toml
   相対パスは設定ファイルのあるディレクトリ基準になる。
 - トップレベルの `org_include = "org.toml"` を有効にする。組織の種は DB が空のときだけ読み込まれ、以後は GUI で編集する。
 - `[api]` と `listen = "127.0.0.1:7710"` のコメントを外す。
-- 例のプロバイダは **`fake`（開発用）**。実際の依頼を処理するには `[[providers]]` と必要なアダプタ設定を変更する。
-  [Claude Code](config/celeris.claude-code.example.toml)、[Codex](config/celeris.codex.example.toml)、
-  [複数アカウント](config/celeris.multi-account.example.toml)、[調査](config/celeris.research.example.toml)の例を参照する。
-  これらは用途別の設定例なので、組織・ハーネス・API の設定と合わせて使う。
+- 例のハーネスは **`fake`（開発用）**。実際の依頼を処理するには `[llm_sources.<id>]` と
+  `[harnesses.<id>]` を設定する。用途別の例は [config/](config/) と
+  [LLM source / harness ガイド](docs/guides/llm-source.md)を参照する。
 
 ```sh
 # デーモン

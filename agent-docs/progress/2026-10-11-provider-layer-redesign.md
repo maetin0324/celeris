@@ -397,7 +397,24 @@ grep で洗った結果と、この run で消したもの。
 
 ## 提案
 
-1. 上の非 cargo 台本と文書の旧手順を、次の小さい WU（docs・scripts の書き換え）にまとめる。台本は source・harness の fixture に書き換え、`scripts/test_portable_providers.py` は対象の関数ごと消すかを決める。
-2. `scratch.sccache`・cache server の説明文と schema を、schema 再生成と一緒に直す（UPDATE_SCHEMA=1）。
-3. `reload_providers` と `ProviderSelection` / `ProviderCandidate` の名前を、API の欄名と合わせて整理する（欄名は変えない限り、crate 内の名前だけ）。
-4. 本番移行の後で、旧 `providers.d` と `[[providers]]` を含む backup を人が確認してから削除する。
+1. 非 cargo fixture を現行 source/harness config に移す: `scripts/dev/cos-chat-bench.sh`、`scripts/dev/cos-chat-live.sh`、`scripts/live-check-phase53.sh`、`scripts/selfdeploy/tests/migrate_to_local_test.sh`、`scripts/test_portable_providers.py`。最後の script は provider 専用処理を削除するか要判断。
+2. 現行文書を更新する: `docs/guides/knowledge.md` の LangMem 例、`docs/ops/selfdeploy.md` の `providers.d/`、`docs/api/v1/gui-api.md` の provider API/schema 全文、`gui/docs/DESIGN.md`・`PROGRESS.md`・`celeris-api-v1.md`。API 文書には削除済み endpoint 節や provider fields が複数箇所に残るため、この closeout の小修正を超える。
+3. `scripts/selfdeploy/migrate-to-celeris.sh` の `providers.d` 移送は旧 install の移行用。旧形式を明示的に拒否する新 binary とどう共存させるか整理し、不要なら撤去する。
+4. `scratch.sccache`・cache server の説明文と schema を schema 再生成と一緒に直す（UPDATE_SCHEMA=1）。
+5. `reload_providers`・`ProviderSelection` / `ProviderCandidate` は内部名の残り。API 欄名（provider は source ID）と区別したうえで整理する。
+6. 本番移行の後で、旧 `providers.d` と `[[providers]]` を含む backup を人が確認してから削除する。
+
+## 検証（closeout-v3、2026-10-12）
+
+統合後 HEAD `36c2a8e3e209b8ac3d647053c9c7e3b7fffbf55e` のソース状態で実行。文書の小修正はコードを変更しない。
+
+| 検査 | 結果 |
+|---|---|
+| `TMPDIR=/tmp/x bash scripts/dev/test-parallel.sh` | exit 0。nextest 4902 passed / 0 failed / 13 skipped、doc-test 3 passed / 0 failed / 1 ignored、`CELERIS_TEST_SUMMARY` passed 4905 / failed 0 / ignored 14。`tmp_leftovers=1` は script が後片付けし、`userns=null`。 |
+| sandbox 既知失敗（browser・launcher・credentiald・CDP 系） | 今回は失敗 0 件。対象名の列挙なし。 |
+| `cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings` | exit 0。 |
+| doc links / ADR 番号 / progress index | すべて exit 0（ADR 182 files）。 |
+
+test-parallel の当初指定候補 `/local/x` は read-only、`/var/tmp/x` は作成不可、`/dev/shm/x` は作成後に見えなくなり利用不可だったため、許可された短い一時 path `/tmp/x` を使った。
+
+旧い仕組みの残りを再走査し、README の `[[providers]]` 指示、LLM source ガイドの proxy tier alias 運用説明、opencode-go の旧 provider POST 手順、architecture map の `provider_select.rs` 参照はこの closeout で現行記述へ直した。旧 ADR/API 仕様・GUI 設計履歴・移行 script/fixture は上の提案に列挙し、実行コードの利用経路とは分けた。実装上は `ProviderConfig`・`provider_select`・`/api/v1/providers` route・`worker_hint.adapter` 読取・`default_planner_adapter`・proxy tier alias の選択経路は残っていない。移行エラー案内、廃止を示す説明、migration SQL、旧 fixture と履歴文書中の文字列は意図的な残存。

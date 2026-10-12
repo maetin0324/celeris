@@ -150,6 +150,7 @@ pub fn route_select(
     };
     let mut rejected = Vec::new();
     let mut last = None;
+    let mut saw_ineligible = None;
     let mut aggregate = RouteTrace::default();
     for harness in harnesses {
         let mut one = input.clone();
@@ -173,12 +174,17 @@ pub fn route_select(
                     reason: error.reason(),
                     rejections: current_trace.rejections,
                 });
+                if matches!(error, RouteFailure::NoEligible(_)) {
+                    saw_ineligible = Some(error.clone());
+                }
                 last = Some(error);
             }
         }
     }
     aggregate.harness_rejections = rejected;
-    let failure = last.unwrap_or(RouteFailure::Harness(HarnessSelectionError::NoneEligible));
+    let failure = saw_ineligible
+        .or(last)
+        .unwrap_or(RouteFailure::Harness(HarnessSelectionError::NoneEligible));
     aggregate.harness = aggregate
         .harness_rejections
         .last()

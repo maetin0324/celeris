@@ -158,6 +158,11 @@ fn validate_registry(r: &task_core::llm_route::Registry) -> Result<(), ConfigErr
                     "harness_selection default references undeclared harness {id}"
                 )));
             }
+            if !r.route_defaults.contains_key(id) {
+                return Err(ConfigError::Invalid(format!(
+                    "harness_selection execution class {class} references harness {id} without route_defaults"
+                )));
+            }
             if !seen.insert(id) {
                 return Err(ConfigError::Invalid(format!(
                     "duplicate harness {id} in execution class {class} defaults"
@@ -324,6 +329,18 @@ candidates = [{ source = "main", model = "m1" }]
                 .unwrap_err()
                 .to_string()
                 .contains("no compatible")
+        );
+    }
+
+    #[test]
+    fn execution_class_harness_requires_route_defaults() {
+        let text = DECLS.replace("[route_defaults.cli]\ncandidates = [{ source = \"main\", model = \"m1\" }]", "[harness_selection]\nrules = []\n[harness_selection.execution_class_defaults]\nplanner = [\"cli\"]");
+        let cfg = Config::parse_with_delivery(&text).unwrap();
+        assert!(
+            cfg.llm_route_registry()
+                .unwrap_err()
+                .to_string()
+                .contains("without route_defaults")
         );
     }
 }

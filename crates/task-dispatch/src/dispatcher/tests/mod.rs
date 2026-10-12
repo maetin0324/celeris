@@ -2885,6 +2885,7 @@ fn parent_sccache_family() -> String {
 }
 
 mod build_cache;
+mod class_route;
 mod cleanup_and_disk;
 mod cluster_tunnel;
 mod conversation_cos;

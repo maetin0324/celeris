@@ -448,6 +448,30 @@ mod tests {
     }
 
     #[test]
+    fn route_outcome_changed_counts_from_write_set_base_head() {
+        // task-ops supplies the base..head numstat result; task-core only
+        // accepts the values and removes the corresponding missing labels.
+        let s = fixture();
+        let outcome = outcome_labels_for_run(
+            &s,
+            "r1",
+            Some(ChangeCount {
+                changed_lines: 17,
+                changed_files_n: 4,
+                changed_crates_n: 2,
+            }),
+        )
+        .unwrap();
+        assert_eq!(outcome.labels["changed_lines"], 17);
+        assert_eq!(outcome.labels["changed_files_n"], 4);
+        assert_eq!(outcome.labels["changed_crates_n"], 2);
+        let missing = outcome.labels["missing"].as_array().unwrap();
+        for field in ["changed_lines", "changed_files_n", "changed_crates_n"] {
+            assert!(!missing.contains(&Value::String(field.into())));
+        }
+    }
+
+    #[test]
     fn route_outcome_retries_after_and_repaired_task_and_wu() {
         let s = fixture();
         {

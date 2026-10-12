@@ -1,3 +1,5 @@
+#![allow(clippy::duplicate_mod)] // Included integration suites each own their standalone `common` module.
+
 //! API-v2 source/account admin regression suite.
 //!
 //! The focused route suites are included here so the combined API contract can be

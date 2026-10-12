@@ -255,7 +255,7 @@ impl Dispatcher {
             let rows = self
                 .store
                 .eval_trials_list(None, Some(status))
-                .map_err(|e| DispatchError::Store(e))?;
+                .map_err(DispatchError::Store)?;
             n += rows.len();
         }
         Ok(n)
@@ -577,9 +577,11 @@ impl Dispatcher {
             "eval problem {} trial {} (manifest {})",
             trial.problem_id, trial.trial_no, trial.manifest_sha
         );
-        let mut aux = FeaturesAux::default();
-        aux.genre = Some(EVAL_SUBJECT_KIND.to_owned());
-        aux.harness = Some(trial.harness_id.clone());
+        let aux = FeaturesAux {
+            genre: Some(EVAL_SUBJECT_KIND.to_owned()),
+            harness: Some(trial.harness_id.clone()),
+            ..FeaturesAux::default()
+        };
         let features = TaskFeatures {
             schema: TASK_FEATURES_SCHEMA.to_owned(),
             template: EVAL_FEATURES_TEMPLATE.to_owned(),
@@ -721,13 +723,13 @@ impl Dispatcher {
         let (index_status, usage) = match &result {
             Ok(outcome) => match &outcome.terminal {
                 Terminal::Done { usage, .. } => {
-                    (task_core::RunIndexStatus::Completed, usage.clone())
+                    (task_core::RunIndexStatus::Completed, *usage)
                 }
                 Terminal::Yielded { usage, .. } => {
-                    (task_core::RunIndexStatus::Yielded, usage.clone())
+                    (task_core::RunIndexStatus::Yielded, *usage)
                 }
                 Terminal::BudgetExhausted { usage, .. } => {
-                    (task_core::RunIndexStatus::BudgetExhausted, usage.clone())
+                    (task_core::RunIndexStatus::BudgetExhausted, *usage)
                 }
                 _ => (task_core::RunIndexStatus::Completed, None),
             },

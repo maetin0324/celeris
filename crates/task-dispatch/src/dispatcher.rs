@@ -1127,6 +1127,8 @@ struct ReviewEntry {
     account_adapter: Option<AccountAdapter>,
 }
 
+type EvalVersionProbe = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
+
 pub struct Dispatcher {
     store: Arc<dyn TaskStore>,
     cos_chat_launch: Option<cos_chat::launch::CosChatLaunch>,
@@ -1170,7 +1172,7 @@ pub struct Dispatcher {
     /// （予約枠は `config.eval.reserved_runs`）。真実は `eval_trials` の行。
     eval_runs: HashMap<String, eval_trials::EvalRunEntry>,
     /// 評価 run の harness の版の測り方（試験用差し替え。`None` なら `probe_harness_version`）。
-    eval_version_probe: Option<Arc<dyn Fn(&str) -> Option<String> + Send + Sync>>,
+    eval_version_probe: Option<EvalVersionProbe>,
     reviewing: HashMap<TaskId, ReviewEntry>,
     /// レビューを開始できなかった（`Reviewer` run の枠が無い）タスクの `done` 内容。次 tick で使う。
     pending_subjects: HashMap<TaskId, ReviewSubject>,

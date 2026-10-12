@@ -153,6 +153,7 @@ fn dispatcher(
             scratch: task_worker::scratch::ScratchSettings::disabled(),
             workspace_prune_after_secs: 0,
             execution: task_dispatch::ExecutionConfig::default(),
+            eval: task_dispatch::capacity::EvalRuntimeConfig::default(),
         },
     )
 }

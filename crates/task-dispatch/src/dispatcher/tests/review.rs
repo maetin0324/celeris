@@ -568,6 +568,7 @@ async fn department_reviewer_runs_share_and_continue_one_lead_session() {
             scratch: task_worker::scratch::ScratchSettings::disabled(),
             workspace_prune_after_secs: 0,
             execution: ExecutionConfig::default(),
+            eval: crate::capacity::EvalRuntimeConfig::default(),
         },
     );
 
@@ -690,6 +691,7 @@ async fn a_rejected_lead_session_resume_retires_it_and_the_next_review_starts_fr
             scratch: task_worker::scratch::ScratchSettings::disabled(),
             workspace_prune_after_secs: 0,
             execution: ExecutionConfig::default(),
+            eval: crate::capacity::EvalRuntimeConfig::default(),
         },
     );
 
@@ -815,6 +817,7 @@ async fn a_resume_rejection_that_still_produced_a_result_self_heals_and_the_retr
             scratch: task_worker::scratch::ScratchSettings::disabled(),
             workspace_prune_after_secs: 0,
             execution: ExecutionConfig::default(),
+            eval: crate::capacity::EvalRuntimeConfig::default(),
         },
     );
 

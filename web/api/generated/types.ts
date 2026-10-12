@@ -2045,6 +2045,69 @@ export type EstimatorShadowSummary = {
   "timeout": number;
 };
 
+export type EvalTrialCheckBody = {
+  "cmd": string;
+  "timeout_secs"?: number;
+};
+
+export type EvalTrialCreateItem = {
+  "base_commit": string;
+  "check": EvalTrialCheckBody;
+  "harness_id": string;
+  "model_id": string;
+  "objective": string;
+  "problem_id": string;
+  "repo": string;
+  "source_id": string;
+  "trial_no": number;
+};
+
+export type EvalTrialList = {
+  "trials": Array<EvalTrialView>;
+};
+
+export type EvalTrialSummary = {
+  "problem_id": string;
+  "status": string;
+  "trial_id": string;
+  "trial_no": number;
+};
+
+export type EvalTrialView = {
+  "base_commit": string;
+  "batch_id": string;
+  "check_exit"?: number | null;
+  "check_timeout_secs": number;
+  "created_at": string;
+  "decision_id"?: string | null;
+  "error"?: string | null;
+  "finished_at"?: string | null;
+  "harness_id": string;
+  "harness_version"?: string | null;
+  "manifest_sha": string;
+  "model_id": string;
+  "problem_id": string;
+  "repo": string;
+  "run_id"?: string | null;
+  "source_id": string;
+  "started_at"?: string | null;
+  "status": string;
+  "timed_out": boolean;
+  "trial_id": string;
+  "trial_no": number;
+  "worktree_path"?: string | null;
+};
+
+export type EvalTrialsCreateBody = {
+  "manifest_sha": string;
+  "trials": Array<EvalTrialCreateItem>;
+};
+
+export type EvalTrialsCreated = {
+  "batch_id": string;
+  "trials": Array<EvalTrialSummary>;
+};
+
 export type Event = {
   "actor": string;
   "operation_id": string;
@@ -4895,6 +4958,12 @@ export type RouteDecision = {
   "shadow": boolean;
 };
 
+export type RouteFeaturesRef = {
+  "hash": string;
+  "schema": string;
+  "template": string;
+};
+
 export type RouteReason = {
   "detail": string;
   "ok": boolean;
@@ -4963,6 +5032,7 @@ export type RoutingPolicy = {
 export type RoutingRecord = {
   "decision": LaneDecision;
   "escalation"?: EscalationAudit | null;
+  "features"?: RouteFeaturesRef | null;
   "harness"?: string | null;
   "optimizer"?: RoutingTraceV1 | null;
   "org_node"?: string | null;

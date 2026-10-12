@@ -118,6 +118,12 @@ impl Dispatcher {
             if self.holds_run_in_hand(&row.run_id) {
                 continue;
             }
+            // ADR 2026-10-11-llm-source-model-routing-evaluation 付記 2026-10-12（eval-dispatch）D4:
+            // 評価 run（role="eval"）は tasks 行を持たない（`task_id` は batch_id）ので、Task の状態に
+            // 依る照合の対象外。生死は `eval_trials` の行が持つ（daemon 再起動後の照合は採点側）。
+            if row.role == task_core::RunIndexRole::Eval {
+                continue;
+            }
             let Ok(task_id) = row.task_id.parse::<TaskId>() else {
                 tracing::warn!(task_id = %row.task_id, run_id = %row.run_id, "runs index row with an invalid task id");
                 continue;
@@ -155,6 +161,8 @@ impl Dispatcher {
                 task_core::RunIndexRole::Reviewer => Some(RunRole::Reviewer),
                 task_core::RunIndexRole::Planner => Some(RunRole::Planner),
                 task_core::RunIndexRole::WrapUp => None,
+                // eval run は上で飛ばす（tasks 行が無いので `RunRole` の事件も書けない）。
+                task_core::RunIndexRole::Eval => None,
             };
             tracing::warn!(
                 %task_id, run_id = %row.run_id, role = row.role.as_str(), why,
@@ -243,6 +251,7 @@ impl Dispatcher {
                 .values()
                 .any(|e| e.run_id == run_id || e.review_run_id.as_deref() == Some(run_id))
             || self.checking.contains_key(run_id)
+            || self.holds_eval_run(run_id)
     }
 
     /// テスト専用: デーモンのクラッシュ（SIGKILL・OOM 等）を模す。手元の run・レビュー・検査・統合の

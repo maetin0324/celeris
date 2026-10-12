@@ -174,6 +174,7 @@ fn dispatcher_with_adapter_id(
             scratch: task_worker::scratch::ScratchSettings::disabled(),
             workspace_prune_after_secs: 0,
             execution: ExecutionConfig::default(),
+            eval: crate::capacity::EvalRuntimeConfig::default(),
         },
     );
     #[cfg(test)]
@@ -1390,6 +1391,7 @@ fn pool_dispatcher_with_requeues(
             scratch: task_worker::scratch::ScratchSettings::disabled(),
             workspace_prune_after_secs: 0,
             execution: ExecutionConfig::default(),
+            eval: crate::capacity::EvalRuntimeConfig::default(),
         },
     )
 }
@@ -3090,6 +3092,8 @@ mod orphan_takeover;
 /// 持ち主の居ない `running` の `runs` 行（lease を持たない reviewer run 等）の取り残しと照合
 /// （`src/dispatcher/tests/ownerless_runs.rs`）。
 mod ownerless_runs;
+
+mod eval_trial_dispatch;
 
 /// Phase F5-fix7: 依存 WU のブランチが無いときの基点と、準備の失敗で黙って止まらないこと
 /// （`src/dispatcher/tests/work_unit_dependency_base.rs`）。

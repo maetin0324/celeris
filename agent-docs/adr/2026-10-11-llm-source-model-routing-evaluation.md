@@ -193,6 +193,50 @@ D4 の削除は同じ unit で行う。
 - `enforce` へ進むのは人、戻すのは daemon。人の承認なしに本番の経路が変わることはない。
 - events は消さない。旧 payload の `routing_decided` と `routing_shadow_recorded` は読み取り API で `legacy` として表示する。
 
+## 付記 2026-10-12: 評価 run の受け口（eval-dispatch）
+
+D1 の評価 run を Celeris の run 経路で起こす受け口の形を固定する（task 01M4Q7C4X2QR3HYPTTQAG5GXQ9）。後続の実装が食い違えばこの節に具体的に追記する。
+
+1. **表 `eval_trials`（migration 0072）**: 1 行 = 1 試行（harness 固定・source×model 固定・新 session・新 worktree の評価 run 1 本）。
+   列は trial_id（ULID）・batch_id（1 回の投入 = 1 batch）・manifest_sha・problem_id・trial_no・source_id・model_id・harness_id・
+   harness_version（起動時に埋める）・repo・base_commit・objective（worker に見せる本文）・check_cmd（採点専用、worker に渡さない）・
+   check_timeout_secs・status・run_id・decision_id・worktree_path・check_exit・timed_out・error・created_at・started_at・finished_at。
+   UNIQUE(manifest_sha, problem_id, trial_no, source_id, model_id, harness_id) で、同じ試行の再投入は既存行を返す（冪等）。
+   型は `task_core::routing_eval_trial`（`EvalTrialSpec`・`EvalTrial`・`EvalTrialStatus`）、store は `SqliteStore::{insert_eval_trials,
+   eval_trials_list, eval_trial_get, eval_trial_claim_next, eval_trial_unclaim, eval_trial_mark_started, eval_trial_mark_scoring,
+   eval_trial_finish, eval_trial_cancel}`。
+   状態遷移: `queued → running`（claim。条件付き UPDATE で二重 claim しない）、`running → queued`（unclaim。admission で起こせず run 未記録のときだけ）、
+   `running` のまま run を記録（mark_started。1 回だけ）、`running → scoring`（run 記録後）、`scoring → passed|failed`、`running|scoring → error`、
+   `queued|running → cancelled`。それ以外は `StoreError::Invalid`。
+2. **API**（task-api `routing_eval`）: `POST /api/v1/routing-eval/trials`（本体 `{manifest_sha, trials:[{problem_id, trial_no, source_id, model_id,
+   harness_id, repo, base_commit, objective, check:{cmd, timeout_secs}}]}` → 201 `{batch_id, trials:[{trial_id, problem_id, trial_no, status}]}`。
+   空 trials・catalog に無い source/model/harness・repo 不在は 400）、`GET /api/v1/routing-eval/trials?batch_id=&status=`（check_cmd は返さない）、
+   `POST /api/v1/routing-eval/trials/{trial_id}/cancel`（200 / 409）。認可は既存の書き込み API と同じ。
+   実装（`crates/task-api/src/routing_eval.rs`、2026-10-12 trial-api）の細目: 400 は code `eval_trial_invalid`（`detail` に全理由を `; ` 区切りで並べる）で、
+   空 trials・256 件超・空欄（manifest_sha / problem_id / base_commit / objective / check.cmd）・未知の source/model/harness・repo のディレクトリ不在・
+   `timeout_secs` が 0 または 86400 超・同じ batch 内の重複試行。id の照合先は daemon の設定（`[[providers]]` の adapter・model・lane 束縛・解決した LLM source）・
+   routing catalog・`[[genres]]`＋組み込み harness で、source は `-`/`_` と大文字小文字を区別しない（`claude-oauth` = `claude_oauth`）。
+   照合先が空の欄（最小構成の daemon）は検査しない。cancel の 409 は `eval_trial_not_cancellable`、無い id は 404 `eval_trial_not_found`。
+   `check.timeout_secs` の既定は 900。GET・cancel の応答の型（`EvalTrialView`）には `check_cmd` だけでなく `objective` の欄も無い（`docs/api/v1/gui-api.md` §3.133）。
+3. **評価予約枠**: config `[routing_eval] reserved_runs = <n>`（既定 0 = 評価 run を起こさない）。評価 run は本番の全体並列度に数えず、
+   専用枠の中だけで走り、tick では本番の dispatch の後に配る。account の同時実行と quota 上限は本番と同じ判定に従う。
+   純関数 `eval_admission(reserved_runs, eval_in_flight, account_in_use, account_limit, quota_ok) -> Result<(), EvalDefer>`
+   （`EvalDefer = Disabled | ReservedFull | AccountFull | QuotaCap`）を task-dispatch の capacity に置く。
+4. **起動**（dispatcher の tick 段 `eval_trials`）: claim → admission（不可なら unclaim）→ harness の版（実行 file の `--version`。
+   `harness_version_major` の major と生の出力を両方記録）→ 新 worktree（`git worktree add --detach <data>/eval/<trial_id>/repo <base_commit>`）→
+   RunRequest は harness 固定・source×model 固定・新 session（resume・checkpoint なし）・objective だけで acceptance・checks は空 →
+   runs 1 行（role="eval"、task_id=batch_id、work_unit_id NULL）→ route_features（template "eval"、subject_kind "eval_problem"）・route_options（候補 1 件）・
+   route_decisions 1 行（stage="eval"、subject_id=problem_id、input_json `{manifest_sha, trial_no, candidate}`、
+   output_json `{selected:{source_id, model_id, harness_id, harness_version}}`）。role="eval" の run は task 行が無くても回収・統計・受信箱の経路を壊さない。
+5. **採点**: worker 終了 → scoring → worktree で check_cmd を `sh -c`（timeout check_timeout_secs、WU check と同じ環境の絞り方）→
+   route_outcomes 1 行（labels に passed・check_exit・timed_out・wall_secs・usage・usd_list・run の終了状態）→ passed/failed（異常は error）→ worktree 削除。
+   daemon 再起動で running/scoring のまま run が消えた試行は理由つきで error にする。
+6. **CLI**: `celeris-routing-eval run --api <url> --manifest <file> --candidates <id,...> [--token-file <path>] [--repo <path>] [--wait] [--out <file>]`。
+   check の command は POST にだけ載せ、標準出力・要約に出さない。`--wait` は GET の間隔 poll で全試行の終端を待つ。
+7. **通し試験**: `crates/celeris/tests/routing_eval_run.rs` が一時 DB・一時 git repo・stub harness・reserved_runs=1 で 1 問 × 2 試行を回し、
+   runs(role=eval)・route_decisions(stage=eval、harness_version あり)・route_outcomes が各 2、worktree・session が試行ごとに別、
+   stub の prompt に check_cmd が無い、同時に 2 本走らないことを確かめる。
+
 ## 改訂履歴
 
 - 2026-10-11: 人の確認を反映。評価対象を 7 model に限定し、fable-5-1 / gpt-6-astra を k=1・層別部分集合、通常 5 model を k=2・30 問に縮小。Codex の quota は実測前に率を仮定せず、10-run dry-run と週 15% gate を必須化。opencode-go は根拠表対象外、qwen はローカル既定候補として明記。辞書順 fallback と `[routing.defaults.<genre>]` を除き、lane ごとの人の既定を harness×lane `route_defaults` に統合。

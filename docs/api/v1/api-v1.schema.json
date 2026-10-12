@@ -9834,6 +9834,283 @@
       ],
       "type": "object"
     },
+    "EvalTrialCheckBody": {
+      "additionalProperties": false,
+      "description": "採点用の check（`check_cmd` は worker に渡さない。応答にも出さない）。",
+      "properties": {
+        "cmd": {
+          "description": "採点側が worktree で `sh -c` する command。",
+          "type": "string"
+        },
+        "timeout_secs": {
+          "default": 900,
+          "description": "省略時は `DEFAULT_CHECK_TIMEOUT_SECS`。",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "cmd"
+      ],
+      "type": "object"
+    },
+    "EvalTrialCreateItem": {
+      "additionalProperties": false,
+      "description": "`POST /routing-eval/trials` の 1 試行。",
+      "properties": {
+        "base_commit": {
+          "description": "worktree の detach 先 commit。",
+          "type": "string"
+        },
+        "check": {
+          "$ref": "#/$defs/EvalTrialCheckBody"
+        },
+        "harness_id": {
+          "description": "harness（例 `claude-code`）。この harness で固定して起こす。",
+          "type": "string"
+        },
+        "model_id": {
+          "description": "model（例 `claude-opus-5-5`）。",
+          "type": "string"
+        },
+        "objective": {
+          "description": "worker に見せる本文（acceptance の command は含めない）。",
+          "type": "string"
+        },
+        "problem_id": {
+          "description": "manifest の問題 id（`celeris.routing-eval-manifest/1`）。",
+          "type": "string"
+        },
+        "repo": {
+          "description": "worktree を作る元の repo（daemon から見える path）。無ければ 400。",
+          "type": "string"
+        },
+        "source_id": {
+          "description": "LLM source（例 `claude-oauth`）。daemon の catalog に無ければ 400。",
+          "type": "string"
+        },
+        "trial_no": {
+          "description": "同じ問題の何回目か（1 始まり。candidates の `k`）。",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "problem_id",
+        "trial_no",
+        "source_id",
+        "model_id",
+        "harness_id",
+        "repo",
+        "base_commit",
+        "objective",
+        "check"
+      ],
+      "type": "object"
+    },
+    "EvalTrialList": {
+      "description": "`GET /routing-eval/trials` の応答。",
+      "properties": {
+        "trials": {
+          "items": {
+            "$ref": "#/$defs/EvalTrialView"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "trials"
+      ],
+      "type": "object"
+    },
+    "EvalTrialSummary": {
+      "description": "投入の応答の 1 試行（`check` は返さない）。",
+      "properties": {
+        "problem_id": {
+          "type": "string"
+        },
+        "status": {
+          "description": "`queued` など（`task_core::routing_eval_trial::EvalTrialStatus` の文字列）。",
+          "type": "string"
+        },
+        "trial_id": {
+          "type": "string"
+        },
+        "trial_no": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "trial_id",
+        "problem_id",
+        "trial_no",
+        "status"
+      ],
+      "type": "object"
+    },
+    "EvalTrialView": {
+      "description": "`eval_trials` 1 行の利用者向け view。`check_cmd`（採点専用）と `objective`（worker 専用）は含めない。",
+      "properties": {
+        "base_commit": {
+          "type": "string"
+        },
+        "batch_id": {
+          "type": "string"
+        },
+        "check_exit": {
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "check_timeout_secs": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "decision_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "finished_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "harness_id": {
+          "type": "string"
+        },
+        "harness_version": {
+          "description": "起動時に埋まる（`--version` の生出力）。まだなら `null`。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "manifest_sha": {
+          "type": "string"
+        },
+        "model_id": {
+          "type": "string"
+        },
+        "problem_id": {
+          "type": "string"
+        },
+        "repo": {
+          "type": "string"
+        },
+        "run_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source_id": {
+          "type": "string"
+        },
+        "started_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "type": "string"
+        },
+        "timed_out": {
+          "type": "boolean"
+        },
+        "trial_id": {
+          "type": "string"
+        },
+        "trial_no": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "worktree_path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "trial_id",
+        "batch_id",
+        "manifest_sha",
+        "problem_id",
+        "trial_no",
+        "source_id",
+        "model_id",
+        "harness_id",
+        "repo",
+        "base_commit",
+        "check_timeout_secs",
+        "status",
+        "timed_out",
+        "created_at"
+      ],
+      "type": "object"
+    },
+    "EvalTrialsCreateBody": {
+      "additionalProperties": false,
+      "description": "`POST /routing-eval/trials` の本文。",
+      "properties": {
+        "manifest_sha": {
+          "description": "凍結した manifest の sha256。",
+          "type": "string"
+        },
+        "trials": {
+          "items": {
+            "$ref": "#/$defs/EvalTrialCreateItem"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "manifest_sha",
+        "trials"
+      ],
+      "type": "object"
+    },
+    "EvalTrialsCreated": {
+      "description": "`POST /routing-eval/trials` の応答。",
+      "properties": {
+        "batch_id": {
+          "description": "この batch の id。既存の試行が混ざる再投入では、最初の試行が属する batch を返す。",
+          "type": "string"
+        },
+        "trials": {
+          "items": {
+            "$ref": "#/$defs/EvalTrialSummary"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "batch_id",
+        "trials"
+      ],
+      "type": "object"
+    },
     "Event": {
       "description": "DESIGN §4.3 の `Event`（追記専用）。ADR-0002 D2: `Transitioned` は遷移の\n*結果* を記録するものであり、`transition()` の入力（`Trigger`）とは別物。\n`JsonSchema` は ADR-0013 D8: `docs/api/v1/event.schema.json`（`EventRow` 経由）の契約に使う。",
       "oneOf": [
@@ -31363,6 +31640,19 @@
       "$ref": "#/$defs/DocsTree",
       "description": "Phase 57（ADR-0044 D7）: 文書（git が正本）。ツリー・ページ・編集・用意・昇格。"
     },
+    "eval_trial": {
+      "$ref": "#/$defs/EvalTrialView"
+    },
+    "eval_trial_list": {
+      "$ref": "#/$defs/EvalTrialList"
+    },
+    "eval_trials_create": {
+      "$ref": "#/$defs/EvalTrialsCreateBody",
+      "description": "ADR 2026-10-11-llm-source-model-routing-evaluation 付記 2026-10-12（eval-dispatch 契約 2）:\n評価 run の試行（`POST`/`GET /routing-eval/trials`、`POST /routing-eval/trials/{id}/cancel`）。\n`check_cmd` と `objective` は応答の型に無い（採点専用・worker 専用）。"
+    },
+    "eval_trials_created": {
+      "$ref": "#/$defs/EvalTrialsCreated"
+    },
     "events_page": {
       "$ref": "#/$defs/EventsPage"
     },
@@ -31998,6 +32288,10 @@
     "cron_job_list",
     "cron_job_run_list",
     "cron_run_result",
+    "eval_trials_create",
+    "eval_trials_created",
+    "eval_trial",
+    "eval_trial_list",
     "chat_thread",
     "chat_message",
     "chat_run",

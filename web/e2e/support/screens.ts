@@ -44,7 +44,6 @@ export const screens = [
   { path: "/cron", fixture: "/cron", heading: "定期実行", v3: true },
   { path: "/cron/$id", fixture: "/cron/daily", heading: "知識ベースの日次整理", v3: true },
   { path: "/daemon", fixture: "/daemon", heading: "daemon", v3: true },
-  { path: "/providers", fixture: "/providers", heading: "プロバイダ", v3: true },
   { path: "/models", fixture: "/models", heading: "モデル", v3: true },
   { path: "/accounts", fixture: "/accounts", heading: "アカウント", v3: true },
   { path: "/clusters", fixture: "/clusters", heading: "クラスタ", v3: true },

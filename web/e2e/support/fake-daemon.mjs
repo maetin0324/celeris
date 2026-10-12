@@ -17,6 +17,8 @@ function resolve(node) {
 
 export function fixtureFor(node, seen = new Set()) {
   node = resolve(node);
+  // `unknown`（serde_json::Value 等）は JSON Schema の true。任意の値でよいので null を返す。
+  if (node === true) return null;
   if (Object.hasOwn(node, "const")) return node.const;
   if (node.enum) return node.enum[0];
   if (node.anyOf || node.oneOf) return fixtureFor((node.anyOf ?? node.oneOf)[0], seen);
@@ -2461,6 +2463,7 @@ export function createBrowserBackend({
     model: "sonnet",
     started_at: "2026-10-04T08:30:00Z",
     finished_at: r.finished_at,
+    selection: { status: "legacy_unresolved" },
     outcome: r.outcome,
     progress: 0,
     artifacts: 0,

@@ -154,7 +154,6 @@ function DaemonContent({ view, fetchedAt, exhausted }: { view: DaemonView; fetch
                       value: (s.task_waits ?? []).filter((w) => w.wait.kind === "unroutable").length,
                     },
                     { label: "待機中", value: s.cooldowns.length },
-                    { label: "プロバイダ", value: s.providers.length },
                   ]
                 : []),
             ]}

@@ -31,7 +31,6 @@ export const spaRoutePatterns = [
   "/cron",
   "/cron/$id",
   "/daemon",
-  "/providers",
   "/models",
   "/accounts",
   "/clusters",

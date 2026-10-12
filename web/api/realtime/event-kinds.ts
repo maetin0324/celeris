@@ -102,6 +102,9 @@ export const EVENT_KINDS = [
   "trusted_device_used",
   "trusted_device_revoked",
   "trusted_device_rejected",
+  "harness_selected",
+  "llm_route_selected",
+  "harness_migration_unresolved",
 ] as const satisfies readonly EventKind[];
 
 /** EVENT_KINDS が EventKind を漏れなく含むことの型検査（漏れがあると never でなくなり代入できない）。 */

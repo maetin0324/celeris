@@ -9,6 +9,12 @@ export type AccountCheckResponse = {
 
 export type AccountCheckResult = "ok" | "auth_failed" | "throttled" | "spawn_failed";
 
+export type AccountCheckView = {
+  "at": string;
+  "detail"?: string | null;
+  "result": string;
+};
+
 export type AccountCooldownLive = {
   "reason": string;
   "until": number;
@@ -34,7 +40,7 @@ export type AccountLive = {
   "excluded_reason"?: string | null;
   "id": string;
   "in_use": number;
-  "last_check"?: ProviderCheckView | null;
+  "last_check"?: AccountCheckView | null;
   "logged_in": boolean;
   "login_pending"?: boolean;
   "score"?: number | null;
@@ -96,12 +102,12 @@ export type AccountView = {
   "id": string;
   "implicit": boolean;
   "in_use": number;
-  "last_check"?: ProviderCheckView | null;
+  "last_check"?: AccountCheckView | null;
   "logged_in": boolean;
   "login_pending": boolean;
   "max_runs"?: number | null;
   "max_runs_source": string;
-  "providers"?: Array<string>;
+  "models"?: Array<string>;
   "score"?: number | null;
   "stats": AccountStats;
   "usage"?: AccountUsageView | null;
@@ -1590,7 +1596,6 @@ export type DaemonSnapshot = {
   "last_tick_at": string;
   "max_runs_per_account"?: number | null;
   "pid": number;
-  "providers": Array<ProviderLive>;
   "reports"?: ReportsLive | null;
   "scratch"?: ScratchStatus | null;
   "started_at": string;
@@ -2927,6 +2932,11 @@ export type GraphNode = {
   "title": string;
 };
 
+export type HarnessCandidateView = {
+  "model_id": string;
+  "source_id": string;
+};
+
 export type HaltState = "paused" | "cancelled" | "archived";
 
 export type HarnessErrorClass = "supply" | "infra" | "lease_expired" | "idle_timeout";
@@ -2934,6 +2944,25 @@ export type HarnessErrorClass = "supply" | "infra" | "lease_expired" | "idle_tim
 export type HarnessPrefs = {
   "allowed"?: Array<string>;
   "default"?: string | null;
+};
+
+export type HarnessRuleView = {
+  "execution_class"?: string | null;
+  "genre"?: string | null;
+  "required_capabilities": Array<string>;
+  "requires_repo"?: boolean | null;
+  "role"?: string | null;
+};
+
+export type HarnessView = {
+  "api_formats": Array<string>;
+  "capabilities": Array<string>;
+  "execution_class_defaults": Array<string>;
+  "id": string;
+  "kind": string;
+  "route_defaults": Array<HarnessCandidateView>;
+  "rules": Array<HarnessRuleView>;
+  "source_kinds": Array<string>;
 };
 
 export type Health = {
@@ -2973,7 +3002,7 @@ export type HumanInboxView = {
 
 export type ImplicitAccountLive = {
   "in_use": number;
-  "providers"?: Array<string>;
+  "models"?: Array<string>;
   "source": string;
 };
 
@@ -3376,8 +3405,6 @@ export type LlmSourceOpportunityCostView = {
   "shadow_usd"?: number | null;
 };
 
-export type LlmSourceRef = string;
-
 export type LlmSourceStateView = {
   "cost"?: LlmSourceCostView | null;
   "deployment_id": string;
@@ -3593,15 +3620,7 @@ export type MilestoneView = {
   "updated_at": string;
 };
 
-export type ModelBinding = {
-  "model_id"?: string | null;
-  "name": string;
-  "reasoning_effort"?: string | null;
-  "unavailable_reason"?: string | null;
-};
-
 export type ModelCatalogItem = {
-  "assigned_tiers": Array<Tier>;
   "available": boolean;
   "capabilities": unknown;
   "display_name"?: string | null;
@@ -3669,7 +3688,6 @@ export type NewPlanSpec = {
 
 export type NewTaskBody = {
   "acceptance": Array<CriterionSpec>;
-  "adapter"?: string | null;
   "aggregate"?: boolean;
   "assignee"?: string | null;
   "attachment_ids"?: Array<string>;
@@ -3680,6 +3698,7 @@ export type NewTaskBody = {
   "expected_write_paths"?: Array<string> | null;
   "features"?: TaskFeatureHints | null;
   "genre"?: string | null;
+  "harness"?: string | null;
   "kind"?: TaskKind;
   "labels"?: Array<string>;
   "max_retries"?: number;
@@ -4264,37 +4283,6 @@ export type ProviderCandidateKind = "local" | "pool" | "other";
 
 export type ProviderCandidateOutcome = "selected" | "available" | "full" | "down" | "cooldown" | "unsupported" | "no_account";
 
-export type ProviderCheckView = {
-  "at": string;
-  "detail"?: string | null;
-  "result": string;
-};
-
-export type ProviderKind = "adapter";
-
-export type ProviderLive = {
-  "account_id"?: string | null;
-  "account_pool"?: boolean;
-  "adapter": string;
-  "concurrency": number;
-  "credential_refs"?: {
-  [key: string]: string;
-};
-  "env_keys"?: Array<string>;
-  "id": string;
-  "in_use": number;
-  "kind"?: ProviderKind;
-  "last_check"?: ProviderCheckView | null;
-  "llm_source"?: ResolvedLlmSource | null;
-  "model"?: string | null;
-  "tier_models"?: {
-  "cheap"?: ModelBinding;
-  "frontier"?: ModelBinding;
-  "standard"?: ModelBinding;
-};
-  "tiers": Array<Tier>;
-};
-
 export type ProviderSelection = {
   "candidates"?: Array<ProviderCandidate>;
   "reason": ProviderSelectionReason;
@@ -4744,11 +4732,6 @@ export type ResolveResponse = {
   "operation": OperationView;
 };
 
-export type ResolvedLlmSource = {
-  "origin": SourceOrigin;
-  "source": LlmSourceRef;
-};
-
 export type RetryBody = {
   "accept"?: boolean;
   "execution"?: ExecutionMode | null;
@@ -4783,7 +4766,7 @@ export type ReviewerConfigView = {
 };
 
 export type RoleConfigView = {
-  "adapter"?: string | null;
+  "harness"?: string | null;
   "has_instructions": boolean;
   "id": string;
   "max_turns"?: number | null;
@@ -5026,6 +5009,17 @@ export type RunRoutingAudit = {
   "wall_ms"?: number | null;
 };
 
+export type RunSelectionView = {
+  "account_id": string;
+  "basis": unknown;
+  "harness_id": string;
+  "model_id": string;
+  "source_id": string;
+  "status": "selected";
+} | {
+  "status": "legacy_unresolved";
+};
+
 export type RunSummary = {
   "account"?: string | null;
   "adapter": string;
@@ -5041,6 +5035,7 @@ export type RunSummary = {
   "reviewer_deferrals": number;
   "role": RunRole;
   "run_id": string;
+  "selection": RunSelectionView;
   "started_at": string;
   "usage"?: Usage | null;
   "verdicts": number;
@@ -5308,17 +5303,12 @@ export type SkillSummaryView = {
   "updated"?: string | null;
 };
 
-<<<<<<< HEAD
 export type SlotOrigin = "assignment" | "config";
 
 export type SnapshotTaskWait = {
   "task_id": TaskId;
   "wait": TaskWait;
 };
-
-=======
->>>>>>> 87249274 (wu/api-unprovider: provider 管理 API と model_assignments を消す)
-export type SourceOrigin = "explicit" | "derived";
 
 export type StageHint = {
   "scope"?: string;
@@ -5547,7 +5537,6 @@ export type TaskMode = "prototype" | "production" | "research";
 
 export type TaskPatchBody = {
   "acceptance"?: Array<CriterionSpec> | null;
-  "adapter"?: string | null;
   "assignee"?: string | null;
   "category"?: TaskCategory | null;
   "depends_on"?: Array<TaskId> | null;
@@ -5634,7 +5623,6 @@ export type TaskStatusCounts = {
 
 export type TaskSummary = {
   "actions": Array<Action>;
-  "adapter"?: string | null;
   "assignee"?: string | null;
   "attempts": number;
   "backoff_until"?: string | null;
@@ -5644,6 +5632,7 @@ export type TaskSummary = {
   "created_at": string;
   "depends_on": Array<TaskId>;
   "genre"?: string | null;
+  "harness"?: string | null;
   "id": TaskId;
   "integrations"?: Array<IntegrationView> | null;
   "is_root_task"?: boolean;
@@ -6135,7 +6124,6 @@ export type WorkUnitView = {
 };
 
 export type WorkerHint = {
-  "adapter"?: string | null;
   "tier": Tier;
 };
 

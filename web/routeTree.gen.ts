@@ -23,7 +23,6 @@ import { Route as InboxRouteImport } from './routes/inbox'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as ModelsRouteImport } from './routes/models'
 import { Route as NotificationsRouteImport } from './routes/notifications'
-import { Route as ProvidersRouteImport } from './routes/providers'
 import { Route as ReleasesRouteImport } from './routes/releases'
 import { Route as ReportsRouteImport } from './routes/reports'
 import { Route as BrowserIndexRouteImport } from './routes/browser.index'
@@ -119,11 +118,6 @@ const ModelsRoute = ModelsRouteImport.update({
 const NotificationsRoute = NotificationsRouteImport.update({
   id: '/notifications',
   path: '/notifications',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ProvidersRoute = ProvidersRouteImport.update({
-  id: '/providers',
-  path: '/providers',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ReleasesRoute = ReleasesRouteImport.update({
@@ -274,7 +268,6 @@ export interface FileRoutesByFullPath {
   '/login': typeof LoginRoute
   '/models': typeof ModelsRoute
   '/notifications': typeof NotificationsRoute
-  '/providers': typeof ProvidersRoute
   '/releases': typeof ReleasesRoute
   '/reports': typeof ReportsRoute
   '/browser/devices': typeof BrowserDevicesRoute
@@ -317,7 +310,6 @@ export interface FileRoutesByTo {
   '/login': typeof LoginRoute
   '/models': typeof ModelsRoute
   '/notifications': typeof NotificationsRoute
-  '/providers': typeof ProvidersRoute
   '/releases': typeof ReleasesRoute
   '/reports': typeof ReportsRoute
   '/browser/devices': typeof BrowserDevicesRoute
@@ -361,7 +353,6 @@ export interface FileRoutesById {
   '/login': typeof LoginRoute
   '/models': typeof ModelsRoute
   '/notifications': typeof NotificationsRoute
-  '/providers': typeof ProvidersRoute
   '/releases': typeof ReleasesRoute
   '/reports': typeof ReportsRoute
   '/browser/devices': typeof BrowserDevicesRoute
@@ -406,7 +397,6 @@ export interface FileRouteTypes {
     | '/login'
     | '/models'
     | '/notifications'
-    | '/providers'
     | '/releases'
     | '/reports'
     | '/browser/devices'
@@ -449,7 +439,6 @@ export interface FileRouteTypes {
     | '/login'
     | '/models'
     | '/notifications'
-    | '/providers'
     | '/releases'
     | '/reports'
     | '/browser/devices'
@@ -492,7 +481,6 @@ export interface FileRouteTypes {
     | '/login'
     | '/models'
     | '/notifications'
-    | '/providers'
     | '/releases'
     | '/reports'
     | '/browser/devices'
@@ -536,7 +524,6 @@ export interface RootRouteChildren {
   LoginRoute: typeof LoginRoute
   ModelsRoute: typeof ModelsRoute
   NotificationsRoute: typeof NotificationsRoute
-  ProvidersRoute: typeof ProvidersRoute
   ReleasesRoute: typeof ReleasesRoute
   ReportsRoute: typeof ReportsRoute
   BrowserDevicesRoute: typeof BrowserDevicesRoute
@@ -663,13 +650,6 @@ declare module '@tanstack/react-router' {
       path: '/notifications'
       fullPath: '/notifications'
       preLoaderRoute: typeof NotificationsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/providers': {
-      id: '/providers'
-      path: '/providers'
-      fullPath: '/providers'
-      preLoaderRoute: typeof ProvidersRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/releases': {
@@ -872,7 +852,6 @@ const rootRouteChildren: RootRouteChildren = {
   LoginRoute: LoginRoute,
   ModelsRoute: ModelsRoute,
   NotificationsRoute: NotificationsRoute,
-  ProvidersRoute: ProvidersRoute,
   ReleasesRoute: ReleasesRoute,
   ReportsRoute: ReportsRoute,
   BrowserDevicesRoute: BrowserDevicesRoute,

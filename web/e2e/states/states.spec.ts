@@ -89,7 +89,6 @@ const checks: Record<StateKey, Check> = {
       "/console": "画面群の長文",
       "/tasks": "複数の画面",
       "/tasks/T1/runs/R1": "検証ログ 1",
-      "/providers": "claude-main",
     };
     await expect(page.locator("#main")).toContainText(content[url], timeout);
     if (url === "/tasks" || url === "/tasks/T1/runs/R1") {

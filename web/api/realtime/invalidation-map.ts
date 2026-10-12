@@ -98,6 +98,10 @@ export const EVENT_INVALIDATION: Record<EventKind, KindSpec> = {
       event.type === "delegated" ? stringArray(event.task_ids).map((id) => taskKeys.detail(id)) : [],
   },
   cluster_unavailable: { sets: ["T", "L", "clusters", "daemonRest"] },
+  // run の選択（harness・source・model・account）は task detail の runs と timeline に出る。
+  harness_selected: { sets: ["T", "R", "E", "L"] },
+  llm_route_selected: { sets: ["T", "R", "E", "L"] },
+  harness_migration_unresolved: { sets: ["T", "E", "L"] },
   cluster_master_exited: { sets: ["T", "L", "clusters", "daemonRest"] },
   provider_throttled: { sets: ["T", "providers", "accounts", "daemonRest"] },
   retried: {

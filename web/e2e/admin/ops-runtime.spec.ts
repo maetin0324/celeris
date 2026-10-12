@@ -64,7 +64,6 @@ function snapshot(tickAgoMs: number, now: number): DaemonSnapshot {
     in_flight: [],
     task_waits: [],
     cooldowns: [],
-    providers: [],
   };
 }
 

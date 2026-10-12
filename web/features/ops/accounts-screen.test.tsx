@@ -237,7 +237,7 @@ const implicitAccount = account({
   id: "openai_compatible:qwen",
   dir: null,
   implicit: true,
-  providers: ["opencode-qwen", "pi-qwen"],
+  models: ["qwen3-coder", "qwen3-max"],
   in_use: 1,
   max_runs: null,
   effective_max_runs: 1,
@@ -344,7 +344,7 @@ describe("アカウントごとの上限（PATCH /accounts/{adapter}/{id}）", (
     expect(out).toContain('data-implicit="true"');
     expect(out).toContain(">暗黙アカウント</span>");
     expect(out).toContain("アカウントを持たない行の LLM source「openai_compatible:qwen」");
-    expect(out).toContain("opencode-qwen, pi-qwen");
+    expect(out).toContain("qwen3-coder, qwen3-max");
     expect(out).toContain("1 / 実効上限 1（既定（max_runs_per_account = 2））");
     expect(out).toContain("上限を保存");
     expect(out).not.toContain("ログイン開始");

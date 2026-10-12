@@ -25,6 +25,7 @@ const run = (stdout: boolean, extra: Partial<RunSummary> = {}): RunSummary => ({
   reviewer_deferrals: 0,
   verdicts: 0,
   role: "worker",
+  selection: { status: "legacy_unresolved" },
   finished_at: "2026-10-10T00:00:02Z",
   files: { stdout: stdout, stderr: false, result: true },
   ...extra,

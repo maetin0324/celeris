@@ -20,7 +20,6 @@ export const navItems = [
   { to: "/approvals", label: "承認", group: "admin" },
   { to: "/cron", label: "定期実行", group: "admin" },
   { to: "/daemon", label: "daemon", group: "admin" },
-  { to: "/providers", label: "プロバイダ", group: "admin" },
   { to: "/accounts", label: "アカウント", group: "admin" },
   { to: "/clusters", label: "クラスタ", group: "admin" },
   { to: "/releases", label: "リリース", group: "admin" },

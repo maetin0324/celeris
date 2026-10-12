@@ -6,7 +6,7 @@ import type {
   AccountList,
   AccountLoginStart,
   AccountView,
-  ProviderCheckResult,
+  AccountCheckResult,
 } from "../../api/generated/types";
 import { accountKeys } from "../../api/queries/keys";
 import {
@@ -45,7 +45,7 @@ function accountKey(item: AccountView) {
   return `${item.adapter ?? "claude-code"}:${item.id}`;
 }
 
-const checkLabel: Readonly<Record<ProviderCheckResult, string>> = {
+const checkLabel: Readonly<Record<AccountCheckResult, string>> = {
   ok: "正常",
   auth_failed: "認証失敗",
   throttled: "利用制限中",
@@ -53,7 +53,7 @@ const checkLabel: Readonly<Record<ProviderCheckResult, string>> = {
 };
 
 function checkResultLabel(result: string): string {
-  return Object.hasOwn(checkLabel, result) ? checkLabel[result as ProviderCheckResult] : result;
+  return Object.hasOwn(checkLabel, result) ? checkLabel[result as AccountCheckResult] : result;
 }
 
 /** 除外理由（GET /accounts の excluded_reason）の日本語。未知の値はそのまま出す。 */
@@ -407,7 +407,7 @@ export function AccountCard({
   );
   if (item.implicit) {
     // 暗黙アカウント（LLM source ごとに 1 件。同じ source を使う行が共有する）: ログイン・確認・削除は無く、上限だけを編集する。
-    const rows = item.providers ?? [];
+    const rows = item.models ?? [];
     return (
       <li
         className="min-w-0 space-y-3 rounded-lg border border-border bg-surface p-4"
@@ -430,8 +430,8 @@ export function AccountCard({
         <DataList
           items={[
             {
-              key: "provider",
-              label: "実行枠（この source を使う行）",
+              key: "models",
+              label: "使う model",
               value: rows.length > 0 ? rows.join(", ") : item.id,
             },
             {

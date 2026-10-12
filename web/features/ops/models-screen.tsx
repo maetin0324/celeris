@@ -15,7 +15,7 @@ import { formatAbsolute } from "../../lib/time";
 import { cn } from "../../lib/utils";
 import { ModelAssignmentsSection } from "./model-assignments";
 import { type LlmModel, type ModelOverride, type ModelTier, modelSourceLabel } from "./models-catalog";
-import { deniedMessage, isDenied } from "./providers-form";
+import { deniedMessage, isDenied } from "./denied";
 
 export type { LlmModel, ModelOverride, ModelTier };
 export { modelSourceLabel };
@@ -287,7 +287,7 @@ export function ModelsScreen() {
     <ScreenFrame
       title="モデル"
       route="/models"
-      breadcrumb={[{ label: "プロバイダ", link: { to: "/providers" } }, { label: "モデル" }]}
+      breadcrumb={[{ label: "モデル" }]}
       description="供給元（LLM source）が公開するモデルの一覧です。発見で最新にし、無効化・別名を上書きできます。役割への割り当ては先頭の「役割の割り当て」で決めます。"
       actions={
         <Button

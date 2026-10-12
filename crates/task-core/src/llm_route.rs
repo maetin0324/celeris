@@ -187,6 +187,28 @@ pub fn select_harness(
     }
     Err(HarnessSelectionError::NoneEligible)
 }
+
+/// Return harnesses in admission priority order. A declared execution-class list takes
+/// precedence over explicit task harnesses and genre/role rules; unknown registry entries
+/// are ignored while preserving the configured order.
+pub fn harness_candidates(
+    req: &HarnessRequest,
+    registry: &Registry,
+) -> Result<Vec<HarnessId>, HarnessSelectionError> {
+    if let Some(class) = &req.execution_class
+        && let Some(ids) = registry
+            .harness_selection
+            .execution_class_defaults
+            .get(class)
+    {
+        return Ok(ids
+            .iter()
+            .filter(|id| registry.harnesses.contains_key(*id))
+            .cloned()
+            .collect());
+    }
+    select_harness(req, registry).map(|id| vec![id])
+}
 fn specificity(r: &HarnessRule) -> usize {
     usize::from(r.genre.is_some())
         + usize::from(r.role.is_some())

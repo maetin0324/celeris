@@ -13,8 +13,8 @@ use task_core::llm_route::{
     AccountId, AccountSnapshot, Admission, Candidate, CandidateKey, CandidateRejection,
     DefaultRoutePolicy, ExclusionReason, HarnessId, HarnessRequest, HarnessSelectionError, ModelId,
     QuotaSnapshot, Registry, ReservationSnapshot, RoutePolicy, RouteRequest, RunSelection,
-    SourceId, admit_source, constrain_for_harness, enumerate_candidates, route_priority,
-    select_harness,
+    SourceId, admit_source, constrain_for_harness, enumerate_candidates, harness_candidates,
+    route_priority, select_harness,
 };
 
 /// Version of the `selection_metadata_json` / `llm_route_selected.metadata` shape.
@@ -88,6 +88,14 @@ pub struct RouteTrace {
     pub harness: Option<HarnessId>,
     pub candidates: Vec<CandidateKey>,
     pub rejections: Vec<CandidateRejection>,
+    pub harness_rejections: Vec<HarnessRejection>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct HarnessRejection {
+    pub harness: HarnessId,
+    pub reason: String,
+    pub rejections: Vec<CandidateRejection>,
 }
 
 impl RouteTrace {
@@ -111,6 +119,15 @@ impl RouteTrace {
                 "model": r.candidate.model,
                 "reason": r.reason,
             })).collect::<Vec<_>>(),
+            "harness_rejections": self.harness_rejections.iter().map(|h| serde_json::json!({
+                "harness": h.harness,
+                "reason": h.reason,
+                "rejections": h.rejections.iter().map(|r| serde_json::json!({
+                    "source": r.candidate.source,
+                    "model": r.candidate.model,
+                    "reason": r.reason,
+                })).collect::<Vec<_>>(),
+            })).collect::<Vec<_>>(),
             "decision": decision.map(|p| serde_json::json!({
                 "source": p.candidate.source,
                 "model": p.candidate.model,
@@ -123,6 +140,53 @@ impl RouteTrace {
 
 /// Pure decision: no I/O, no clock. Same inputs give the same pick.
 pub fn route_select(
+    input: &RouteInput,
+    registry: &Registry,
+    state: &RouteState,
+) -> (Result<RoutePick, RouteFailure>, RouteTrace) {
+    let harnesses = match harness_candidates(&input.harness, registry) {
+        Ok(ids) => ids,
+        Err(error) => return (Err(RouteFailure::Harness(error)), RouteTrace::default()),
+    };
+    let mut rejected = Vec::new();
+    let mut last = None;
+    let mut aggregate = RouteTrace::default();
+    for harness in harnesses {
+        let mut one = input.clone();
+        one.harness.harness = Some(harness.clone());
+        one.harness.execution_class = None;
+        let (result, current_trace) = route_select_one(&one, registry, state);
+        match result {
+            Ok(pick) => {
+                aggregate.candidates = current_trace.candidates;
+                aggregate.rejections.extend(current_trace.rejections);
+                aggregate.harness_rejections = rejected;
+                aggregate.harness = Some(pick.harness.clone());
+                return (Ok(pick), aggregate);
+            }
+            Err(error) => {
+                aggregate
+                    .rejections
+                    .extend(current_trace.rejections.clone());
+                rejected.push(HarnessRejection {
+                    harness,
+                    reason: error.reason(),
+                    rejections: current_trace.rejections,
+                });
+                last = Some(error);
+            }
+        }
+    }
+    aggregate.harness_rejections = rejected;
+    let failure = last.unwrap_or(RouteFailure::Harness(HarnessSelectionError::NoneEligible));
+    aggregate.harness = aggregate
+        .harness_rejections
+        .last()
+        .map(|r| r.harness.clone());
+    (Err(failure), aggregate)
+}
+
+fn route_select_one(
     input: &RouteInput,
     registry: &Registry,
     state: &RouteState,

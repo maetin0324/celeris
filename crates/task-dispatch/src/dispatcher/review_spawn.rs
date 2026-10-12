@@ -1077,7 +1077,11 @@ impl Dispatcher {
 
         let route_input = RouteInput {
             task_id: task.id.to_string(),
-            harness: reviewer_harness_request(task),
+            harness: {
+                let mut request = reviewer_harness_request(task);
+                request.execution_class = Some("review".into());
+                request
+            },
             model_hint: None,
             lane: serde_json::to_value(reviewer_lane)
                 .ok()

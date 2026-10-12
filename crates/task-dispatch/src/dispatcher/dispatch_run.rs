@@ -507,7 +507,13 @@ impl Dispatcher {
         // worker に渡す `SelectedLlmRoute` を作る。選べなければ起動しない（別の source へ倒さない）。
         let route_input = route_select::RouteInput {
             task_id: task.id.to_string(),
-            harness: route_select::harness_request_for(&task),
+            harness: {
+                let mut request = route_select::harness_request_for(&task);
+                if is_planner_dispatch {
+                    request.execution_class = Some("planner".into());
+                }
+                request
+            },
             model_hint: None,
             lane: Some(tier_label(task.worker_hint.tier).to_string()),
             cos,

@@ -25,6 +25,7 @@ pub struct MeasuredUsage {
 pub struct CandidateEstimate {
     pub source_id: String,
     pub account: String,
+    pub harness_id: String,
     pub model_id: String,
     pub problems: usize,
     pub k: usize,
@@ -130,6 +131,7 @@ pub fn estimate(
         estimates.push(CandidateEstimate {
             source_id: c.source_id.into(),
             account: c.account.into(),
+            harness_id: c.harness_id.into(),
             model_id: c.model_id.into(),
             problems,
             k: c.k,
@@ -326,13 +328,14 @@ fn shrink(
 
 fn to_markdown(report: &DryRunReport) -> String {
     let mut out = format!(
-        "# Evaluation dry-run\n\nManifest `{}`\n\n| Account | Model | Problems × k | Calls | List USD |\n|---|---|---:|---:|---:|\n",
+        "# Evaluation dry-run\n\nManifest `{}`\n\n| Account | Harness | Model | Problems × k | Calls | List USD |\n|---|---|---|---:|---:|---:|\n",
         report.manifest_sha256
     );
     for e in &report.candidates {
         out.push_str(&format!(
-            "| {} | {} | {} × {} | {} | {} |\n",
+            "| {} | {} | {} | {} × {} | {} | {} |\n",
             e.account,
+            e.harness_id,
             e.model_id,
             e.problems,
             e.k,

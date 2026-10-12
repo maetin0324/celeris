@@ -71,6 +71,13 @@ impl WorkerAdapter for FakeAdapter {
         Self::ID
     }
 
+    /// `fake` does not call a model provider, but accepting the selected model lets it serve as a
+    /// deterministic harness in routing and evaluation tests. The selected model remains recorded
+    /// by the caller; execution of the configured stub command is unchanged.
+    fn with_model(&self, _model: &str) -> Option<Arc<dyn WorkerAdapter>> {
+        Some(Arc::new(self.clone()))
+    }
+
     async fn run(
         &self,
         req: RunRequest,

@@ -3117,7 +3117,11 @@ export function createFakeDaemon({
     // accounts/clusters (P4-13..15)
     // accounts・secrets・llm sources・mcp clients・clusters を状態付きで返す。ログイン・接続の途中状態（login_pending /
     // connect_pending）はサーバが持ち、GET で返す。secret の値は保存せず fingerprint だけ持つ。
-    if (/^\/api\/v1\/(llm\/accounts|secrets|llm\/sources|llm\/models|mcp\/clients|clusters)(\/|$)/.test(pathname)) {
+    if (
+      /^\/api\/v1\/(llm\/accounts|secrets|llm\/sources|llm\/models|harnesses|mcp\/clients|clusters)(\/|$)/.test(
+        pathname,
+      )
+    ) {
       if (!server.fakeAc) {
         server.fakeAc = {
           accounts: [
@@ -3334,7 +3338,42 @@ export function createFakeDaemon({
           }
           return json(404, { error: "not found" });
         }
+        if (parts[0] === "llm" && parts[1] === "sources" && parts.length === 3 && req.method === "GET") {
+          const found = llmSourcesFixture.sources.find((source) => source.id === decodeURIComponent(parts[2]));
+          return found ? json(200, found) : json(404, { error: "not found" });
+        }
         if (parts[0] === "llm" && req.method === "GET") return json(200, llmSourcesFixture);
+        if (parts[0] === "harnesses" && req.method === "GET")
+          return json(200, [
+            {
+              id: "claude-code",
+              kind: "cli",
+              api_formats: ["anthropic"],
+              source_kinds: ["claude-oauth"],
+              capabilities: ["coding", "repo"],
+              execution_class_defaults: ["coding"],
+              route_defaults: [{ source_id: "claude_oauth", model_id: "claude-opus" }],
+              rules: [
+                {
+                  genre: "coding",
+                  role: null,
+                  execution_class: "coding",
+                  required_capabilities: ["repo"],
+                  requires_repo: true,
+                },
+              ],
+            },
+            {
+              id: "codex",
+              kind: "cli",
+              api_formats: ["openai"],
+              source_kinds: ["codex-oauth"],
+              capabilities: ["coding"],
+              execution_class_defaults: [],
+              route_defaults: [],
+              rules: [],
+            },
+          ]);
         if (parts[0] === "mcp" && parts.length === 2 && req.method === "GET")
           return json(200, {
             items: [{ id: "c1", name: "editor", created_at: "2026-09-01T00:00:00Z", scopes: ["tasks:read"] }],

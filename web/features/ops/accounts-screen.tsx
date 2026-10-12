@@ -451,6 +451,7 @@ export function AccountCard({
   }
   return (
     <li
+      id={`${item.source_id}-${item.account_id}`}
       className="min-w-0 space-y-3 rounded-lg border border-border bg-surface p-4"
       aria-label={`アカウント ${item.account_id}`}
     >
@@ -489,7 +490,15 @@ export function AccountCard({
                   ? `除外: ${excludedReasonLabel(item.excluded_reason)}`
                   : "-",
           },
-          { key: "source", label: "LLM source", value: sourceLabel(item.source_id) },
+          {
+            key: "source",
+            label: "LLM source",
+            value: (
+              <a className="underline" href={`/sources/${encodeURIComponent(item.source_id)}`}>
+                {sourceLabel(item.source_id)}
+              </a>
+            ),
+          },
           {
             key: "credential",
             label: "認証情報",

@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { useSearch } from "@tanstack/react-router";
 import { useId, useState } from "react";
 import { apiGet } from "../../api/client";
 import { modelKeys } from "../../api/queries/keys";
@@ -198,7 +199,14 @@ function SourceSection({ group, sender, blocked }: { group: SourceGroup; sender:
   const discoverId = `discover:${source}`;
   return (
     <Section
-      title={`${label}（${items.length}）`}
+      title={
+        <>
+          <a className="underline" href={`/sources/${encodeURIComponent(source)}`}>
+            {label}
+          </a>
+          （{items.length}）
+        </>
+      }
       level={2}
       data-source={source}
       actions={
@@ -266,6 +274,7 @@ export function ModelsView({ data, sender, blocked }: { data: LlmModelCatalog; s
 }
 
 export function ModelsScreen() {
+  const { source } = useSearch({ from: "/models" });
   const query = useQuery({
     queryKey: modelKeys.list(),
     queryFn: ({ signal }: { signal: AbortSignal }) => apiGet<LlmModelCatalog>("/api/llm/models", signal),
@@ -300,7 +309,19 @@ export function ModelsScreen() {
               </p>
             )}
             <ActionResultView result={sender.results["discover:all"]} />
-            <ModelsView data={query.data} sender={sender} blocked={denied} />
+            <ModelsView
+              data={
+                source
+                  ? {
+                      ...query.data,
+                      items: query.data.items.filter((item) => item.source === source),
+                      last_discovery: query.data.last_discovery.filter((item) => item.source === source),
+                    }
+                  : query.data
+              }
+              sender={sender}
+              blocked={denied}
+            />
           </div>
         )}
       </FetchFrame>

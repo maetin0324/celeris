@@ -85,7 +85,7 @@ describe("ModelsView", () => {
 
   it("source ごとの節と発見の結果・件数・失敗理由を出す", () => {
     expect(out.match(/data-source="/g)).toHaveLength(3);
-    expect(out).toContain("OpenCode Go（subscription）（2）");
+    expect(out).toContain('href="/sources/opencode-go">OpenCode Go（subscription）</a>（2）');
     expect(out).toContain("self-host qwen");
     expect(out).toContain("成功 / 2 件");
     expect(out).toContain("失敗 / 0 件（401 unauthorized）");

@@ -18,6 +18,7 @@ import { Route as ClustersRouteImport } from './routes/clusters'
 import { Route as ConsoleRouteImport } from './routes/console'
 import { Route as DaemonRouteImport } from './routes/daemon'
 import { Route as GraphRouteImport } from './routes/graph'
+import { Route as HarnessesRouteImport } from './routes/harnesses'
 import { Route as HelpRouteImport } from './routes/help'
 import { Route as InboxRouteImport } from './routes/inbox'
 import { Route as LoginRouteImport } from './routes/login'
@@ -38,6 +39,8 @@ import { Route as OrgIdRouteImport } from './routes/org.$id'
 import { Route as OrgSecretaryRouteImport } from './routes/org.secretary'
 import { Route as PlansNewRouteImport } from './routes/plans.new'
 import { Route as ProjectsIndexRouteImport } from './routes/projects.index'
+import { Route as SourcesIndexRouteImport } from './routes/sources.index'
+import { Route as SourcesSourceIdRouteImport } from './routes/sources.$sourceId'
 import { Route as TasksIndexRouteImport } from './routes/tasks.index'
 import { Route as TasksNewRouteImport } from './routes/tasks.new'
 import { Route as ProjectsIdIndexRouteImport } from './routes/projects.$id.index'
@@ -93,6 +96,11 @@ const DaemonRoute = DaemonRouteImport.update({
 const GraphRoute = GraphRouteImport.update({
   id: '/graph',
   path: '/graph',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const HarnessesRoute = HarnessesRouteImport.update({
+  id: '/harnesses',
+  path: '/harnesses',
   getParentRoute: () => rootRouteImport,
 } as any)
 const HelpRoute = HelpRouteImport.update({
@@ -195,6 +203,16 @@ const ProjectsIndexRoute = ProjectsIndexRouteImport.update({
   path: '/projects/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const SourcesIndexRoute = SourcesIndexRouteImport.update({
+  id: '/sources/',
+  path: '/sources/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SourcesSourceIdRoute = SourcesSourceIdRouteImport.update({
+  id: '/sources/$sourceId',
+  path: '/sources/$sourceId',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const TasksIndexRoute = TasksIndexRouteImport.update({
   id: '/tasks/',
   path: '/tasks/',
@@ -263,6 +281,7 @@ export interface FileRoutesByFullPath {
   '/console': typeof ConsoleRoute
   '/daemon': typeof DaemonRoute
   '/graph': typeof GraphRoute
+  '/harnesses': typeof HarnessesRoute
   '/help': typeof HelpRoute
   '/inbox': typeof InboxRoute
   '/login': typeof LoginRoute
@@ -278,12 +297,14 @@ export interface FileRoutesByFullPath {
   '/org/$id': typeof OrgIdRoute
   '/org/secretary': typeof OrgSecretaryRoute
   '/plans/new': typeof PlansNewRoute
+  '/sources/$sourceId': typeof SourcesSourceIdRoute
   '/tasks/new': typeof TasksNewRoute
   '/browser/': typeof BrowserIndexRoute
   '/cron/': typeof CronIndexRoute
   '/knowledge/': typeof KnowledgeIndexRoute
   '/org/': typeof OrgIndexRoute
   '/projects/': typeof ProjectsIndexRoute
+  '/sources/': typeof SourcesIndexRoute
   '/tasks/': typeof TasksIndexRoute
   '/projects/$id/browser-identities': typeof ProjectsIdBrowserIdentitiesRoute
   '/tasks/$id/changes': typeof TasksIdChangesRoute
@@ -305,6 +326,7 @@ export interface FileRoutesByTo {
   '/console': typeof ConsoleRoute
   '/daemon': typeof DaemonRoute
   '/graph': typeof GraphRoute
+  '/harnesses': typeof HarnessesRoute
   '/help': typeof HelpRoute
   '/inbox': typeof InboxRoute
   '/login': typeof LoginRoute
@@ -320,12 +342,14 @@ export interface FileRoutesByTo {
   '/org/$id': typeof OrgIdRoute
   '/org/secretary': typeof OrgSecretaryRoute
   '/plans/new': typeof PlansNewRoute
+  '/sources/$sourceId': typeof SourcesSourceIdRoute
   '/tasks/new': typeof TasksNewRoute
   '/browser': typeof BrowserIndexRoute
   '/cron': typeof CronIndexRoute
   '/knowledge': typeof KnowledgeIndexRoute
   '/org': typeof OrgIndexRoute
   '/projects': typeof ProjectsIndexRoute
+  '/sources': typeof SourcesIndexRoute
   '/tasks': typeof TasksIndexRoute
   '/projects/$id/browser-identities': typeof ProjectsIdBrowserIdentitiesRoute
   '/tasks/$id/changes': typeof TasksIdChangesRoute
@@ -348,6 +372,7 @@ export interface FileRoutesById {
   '/console': typeof ConsoleRoute
   '/daemon': typeof DaemonRoute
   '/graph': typeof GraphRoute
+  '/harnesses': typeof HarnessesRoute
   '/help': typeof HelpRoute
   '/inbox': typeof InboxRoute
   '/login': typeof LoginRoute
@@ -363,12 +388,14 @@ export interface FileRoutesById {
   '/org/$id': typeof OrgIdRoute
   '/org/secretary': typeof OrgSecretaryRoute
   '/plans/new': typeof PlansNewRoute
+  '/sources/$sourceId': typeof SourcesSourceIdRoute
   '/tasks/new': typeof TasksNewRoute
   '/browser/': typeof BrowserIndexRoute
   '/cron/': typeof CronIndexRoute
   '/knowledge/': typeof KnowledgeIndexRoute
   '/org/': typeof OrgIndexRoute
   '/projects/': typeof ProjectsIndexRoute
+  '/sources/': typeof SourcesIndexRoute
   '/tasks/': typeof TasksIndexRoute
   '/projects/$id/browser-identities': typeof ProjectsIdBrowserIdentitiesRoute
   '/tasks/$id/changes': typeof TasksIdChangesRoute
@@ -392,6 +419,7 @@ export interface FileRouteTypes {
     | '/console'
     | '/daemon'
     | '/graph'
+    | '/harnesses'
     | '/help'
     | '/inbox'
     | '/login'
@@ -407,12 +435,14 @@ export interface FileRouteTypes {
     | '/org/$id'
     | '/org/secretary'
     | '/plans/new'
+    | '/sources/$sourceId'
     | '/tasks/new'
     | '/browser/'
     | '/cron/'
     | '/knowledge/'
     | '/org/'
     | '/projects/'
+    | '/sources/'
     | '/tasks/'
     | '/projects/$id/browser-identities'
     | '/tasks/$id/changes'
@@ -434,6 +464,7 @@ export interface FileRouteTypes {
     | '/console'
     | '/daemon'
     | '/graph'
+    | '/harnesses'
     | '/help'
     | '/inbox'
     | '/login'
@@ -449,12 +480,14 @@ export interface FileRouteTypes {
     | '/org/$id'
     | '/org/secretary'
     | '/plans/new'
+    | '/sources/$sourceId'
     | '/tasks/new'
     | '/browser'
     | '/cron'
     | '/knowledge'
     | '/org'
     | '/projects'
+    | '/sources'
     | '/tasks'
     | '/projects/$id/browser-identities'
     | '/tasks/$id/changes'
@@ -476,6 +509,7 @@ export interface FileRouteTypes {
     | '/console'
     | '/daemon'
     | '/graph'
+    | '/harnesses'
     | '/help'
     | '/inbox'
     | '/login'
@@ -491,12 +525,14 @@ export interface FileRouteTypes {
     | '/org/$id'
     | '/org/secretary'
     | '/plans/new'
+    | '/sources/$sourceId'
     | '/tasks/new'
     | '/browser/'
     | '/cron/'
     | '/knowledge/'
     | '/org/'
     | '/projects/'
+    | '/sources/'
     | '/tasks/'
     | '/projects/$id/browser-identities'
     | '/tasks/$id/changes'
@@ -519,6 +555,7 @@ export interface RootRouteChildren {
   ConsoleRoute: typeof ConsoleRoute
   DaemonRoute: typeof DaemonRoute
   GraphRoute: typeof GraphRoute
+  HarnessesRoute: typeof HarnessesRoute
   HelpRoute: typeof HelpRoute
   InboxRoute: typeof InboxRoute
   LoginRoute: typeof LoginRoute
@@ -534,12 +571,14 @@ export interface RootRouteChildren {
   OrgIdRoute: typeof OrgIdRoute
   OrgSecretaryRoute: typeof OrgSecretaryRoute
   PlansNewRoute: typeof PlansNewRoute
+  SourcesSourceIdRoute: typeof SourcesSourceIdRoute
   TasksNewRoute: typeof TasksNewRoute
   BrowserIndexRoute: typeof BrowserIndexRoute
   CronIndexRoute: typeof CronIndexRoute
   KnowledgeIndexRoute: typeof KnowledgeIndexRoute
   OrgIndexRoute: typeof OrgIndexRoute
   ProjectsIndexRoute: typeof ProjectsIndexRoute
+  SourcesIndexRoute: typeof SourcesIndexRoute
   TasksIndexRoute: typeof TasksIndexRoute
   ProjectsIdBrowserIdentitiesRoute: typeof ProjectsIdBrowserIdentitiesRoute
   TasksIdChangesRoute: typeof TasksIdChangesRoute
@@ -615,6 +654,13 @@ declare module '@tanstack/react-router' {
       path: '/graph'
       fullPath: '/graph'
       preLoaderRoute: typeof GraphRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/harnesses': {
+      id: '/harnesses'
+      path: '/harnesses'
+      fullPath: '/harnesses'
+      preLoaderRoute: typeof HarnessesRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/help': {
@@ -757,6 +803,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ProjectsIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/sources/': {
+      id: '/sources/'
+      path: '/sources'
+      fullPath: '/sources/'
+      preLoaderRoute: typeof SourcesIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/sources/$sourceId': {
+      id: '/sources/$sourceId'
+      path: '/sources/$sourceId'
+      fullPath: '/sources/$sourceId'
+      preLoaderRoute: typeof SourcesSourceIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/tasks/': {
       id: '/tasks/'
       path: '/tasks'
@@ -847,6 +907,7 @@ const rootRouteChildren: RootRouteChildren = {
   ConsoleRoute: ConsoleRoute,
   DaemonRoute: DaemonRoute,
   GraphRoute: GraphRoute,
+  HarnessesRoute: HarnessesRoute,
   HelpRoute: HelpRoute,
   InboxRoute: InboxRoute,
   LoginRoute: LoginRoute,
@@ -862,12 +923,14 @@ const rootRouteChildren: RootRouteChildren = {
   OrgIdRoute: OrgIdRoute,
   OrgSecretaryRoute: OrgSecretaryRoute,
   PlansNewRoute: PlansNewRoute,
+  SourcesSourceIdRoute: SourcesSourceIdRoute,
   TasksNewRoute: TasksNewRoute,
   BrowserIndexRoute: BrowserIndexRoute,
   CronIndexRoute: CronIndexRoute,
   KnowledgeIndexRoute: KnowledgeIndexRoute,
   OrgIndexRoute: OrgIndexRoute,
   ProjectsIndexRoute: ProjectsIndexRoute,
+  SourcesIndexRoute: SourcesIndexRoute,
   TasksIndexRoute: TasksIndexRoute,
   ProjectsIdBrowserIdentitiesRoute: ProjectsIdBrowserIdentitiesRoute,
   TasksIdChangesRoute: TasksIdChangesRoute,

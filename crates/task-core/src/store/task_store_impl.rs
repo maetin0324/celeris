@@ -1004,4 +1004,99 @@ impl TaskStore for SqliteStore {
             plan_event,
         )
     }
+
+    // ADR 2026-10-11-llm-source-model-routing-evaluation 付記 2026-10-12（eval-dispatch）:
+    // 評価 run の受け口（実体は `store/eval_trials.rs` と `store/route_records.rs` の固有 method。
+    // 固有 method が trait method より先に解決されるので、これは再帰しない）。
+    fn eval_trials_list(
+        &self,
+        batch_id: Option<&str>,
+        status: Option<crate::routing_eval_trial::EvalTrialStatus>,
+    ) -> Result<Vec<crate::routing_eval_trial::EvalTrial>, StoreError> {
+        SqliteStore::eval_trials_list(self, batch_id, status)
+    }
+
+    fn eval_trial_get(
+        &self,
+        trial_id: &str,
+    ) -> Result<Option<crate::routing_eval_trial::EvalTrial>, StoreError> {
+        SqliteStore::eval_trial_get(self, trial_id)
+    }
+
+    fn eval_trial_claim_next(
+        &self,
+    ) -> Result<Option<crate::routing_eval_trial::EvalTrial>, StoreError> {
+        SqliteStore::eval_trial_claim_next(self)
+    }
+
+    fn eval_trial_unclaim(&self, trial_id: &str) -> Result<(), StoreError> {
+        SqliteStore::eval_trial_unclaim(self, trial_id)
+    }
+
+    fn eval_trial_mark_started(
+        &self,
+        trial_id: &str,
+        run_id: &str,
+        decision_id: &str,
+        harness_version: &str,
+        worktree_path: &str,
+    ) -> Result<(), StoreError> {
+        SqliteStore::eval_trial_mark_started(
+            self,
+            trial_id,
+            run_id,
+            decision_id,
+            harness_version,
+            worktree_path,
+        )
+    }
+
+    fn eval_trial_mark_scoring(&self, trial_id: &str) -> Result<(), StoreError> {
+        SqliteStore::eval_trial_mark_scoring(self, trial_id)
+    }
+
+    fn eval_trial_finish(
+        &self,
+        trial_id: &str,
+        status: crate::routing_eval_trial::EvalTrialStatus,
+        check_exit: Option<i32>,
+        timed_out: bool,
+        error: Option<&str>,
+    ) -> Result<(), StoreError> {
+        SqliteStore::eval_trial_finish(self, trial_id, status, check_exit, timed_out, error)
+    }
+
+    fn insert_route_features(
+        &self,
+        hash: &str,
+        subject_kind: &str,
+        subject_id: &str,
+        features: &crate::route_record::TaskFeatures,
+        created_at: &str,
+    ) -> Result<(), StoreError> {
+        SqliteStore::insert_route_features(self, hash, subject_kind, subject_id, features, created_at)
+    }
+
+    fn insert_route_options(
+        &self,
+        hash: &str,
+        options: &crate::route_record::RouteOptions,
+        created_at: &str,
+    ) -> Result<(), StoreError> {
+        SqliteStore::insert_route_options(self, hash, options, created_at)
+    }
+
+    fn insert_route_decision(
+        &self,
+        decision: &crate::store::route_records::StoredRouteDecision,
+    ) -> Result<(), StoreError> {
+        SqliteStore::insert_route_decision(self, decision)
+    }
+
+    fn insert_route_outcome(
+        &self,
+        outcome: &crate::store::route_records::StoredRouteOutcome,
+    ) -> Result<(), StoreError> {
+        SqliteStore::insert_route_outcome(self, outcome)
+    }
 }

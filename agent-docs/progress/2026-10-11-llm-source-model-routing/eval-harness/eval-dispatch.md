@@ -38,6 +38,18 @@ ADR-2026-10-11-llm-source-model-routing-evaluation の付記（2026-10-12）ど�
 
 （参考）`python3 scripts/dev/check-architecture-map.py` は exit 1。検査対象は `docs/architecture-map.md` の 68 行目（試験の一時 dir の後片付け行）の `<workspace>/runs/<run_id>/tmp/`・`test-parallel.sh`・`check-test-tmp-leftovers.sh` の 3 件。同じ行は main（7b524e2f）にも既にあり、この task の変更による失敗ではない。上の 3 本の文書検査には含まれない。直すなら、表の該当行を検査が読める書き方に改める（別 WU の範囲なので、この締め leaf では触らなかった）。
 
+### 0 の再検証（締め leaf の再実行、2026-10-12）
+
+- 指示された check `mkdir -p /local/x/edc && TMPDIR=/local/x/edc bash scripts/dev/test-parallel.sh && cargo clippy ...` は exit 100 で不合格。
+  `task-api::browser_e2e` の 4 件が `timed out waiting for fixture readiness`（60 s）。
+  原因は TMPDIR の長さ。gate は `$TMPDIR/celeris-test-parallel.XXXXXX/tmp` を掘るため、`/local/x/edc` だと試験の credentiald の control.sock の path が 109 byte になり、unix socket の上限 108 byte を超える（bind が失敗し、serve が黙って戻る）。`/local/x` なら 104 byte で通る。
+  同じ試験を単独（`cargo nextest run -p task-api -E 'binary(browser_e2e)'`）で `TMPDIR=/local/x/edc` で流すと 4/4 pass。失敗は負荷でなく path 長による。コードは変えていない。
+- 直したあとの再実行（同じコミット、`export TMPDIR=/local/x`）:
+  - `bash scripts/dev/test-parallel.sh` → exit 0。`CELERIS_TEST_SUMMARY {"binaries":183,"nextest_binaries":172,"doc_binaries":11,"passed":5190,"failed":0,"ignored":14,"nextest_exit":0,"doctest_exit":0,"tmp_leftovers":1}`。`test-parallel: ok`。`tmp_leftovers: 1` は gate が終了時に trap で消す警告（exit は 0）。
+  - `cargo clippy --workspace -- -D warnings` → exit 0。
+  - `sh scripts/dev/check-adr-numbers.sh` → ok (183 files)、exit 0。`sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv` → ok、exit 0。`sh scripts/dev/check-doc-links.sh` → ok、exit 0。
+- 結論: 指示の check は TMPDIR の path が長すぎて、コードをどう直しても通らない（test-parallel が一時 dir を 1 段入れるため）。締めの成果は `TMPDIR=/local/x` で検証済み。check の TMPDIR を `/local/x` にするか、gate の一時 dir の入れ子をやめるかを計画側で決める必要がある（下の「提案」）。
+
 ## 受け口の要点（実装と ADR 付記の対応）
 
 - 予約枠: `[routing_eval] reserved_runs`（既定 0 = 評価 run を起こさない。未知欄は設定エラー）。`eval_admission` 純関数の判断順は reserved_runs = 0 → 予約枠満杯 → account 同時実行満杯 → quota 上限。
@@ -69,3 +81,5 @@ ADR-2026-10-11-llm-source-model-routing-evaluation の付記（2026-10-12）ど�
 
 - `check-architecture-map.py` の対象行（68 行目）を、検査が読める表記（path を backtick で単独に書く）に直す小さな WU を 1 つ足す。
 - 試験の TMPDIR の注意（`test-parallel.sh` 経由では TMPDIR を `/local/x` 程度まで短くする）を、`agent-docs/guides/testing.md` に 1 行足す。
+- 締めの check の TMPDIR を `/local/x/edc` から `/local/x` に直す（path 長の上限は 108 byte。`/local/x/edc` は 5 byte 超える）。または `test-parallel.sh` の一時 dir の入れ子を 1 段減らす。どちらにするかは計画側で決める。
+- `browser_e2e` は control.sock の path が上限を超えると黙って serve が戻り、60 s の待ちで落ちる。path 長を試験の前段で検査してエラーにすると、原因が次から分かる（小さな WU）。

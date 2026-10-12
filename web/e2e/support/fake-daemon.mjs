@@ -356,6 +356,7 @@ export const routingShadowFixture = {
       task_id: "T3",
       org_node: "software-engineering",
       lane: "standard",
+      harness: "claude-code",
       provider: "claude-oauth",
       model: "claude-sonnet",
       account: "main",

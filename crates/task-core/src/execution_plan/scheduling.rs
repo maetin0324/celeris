@@ -206,6 +206,9 @@ pub enum RunIndexRole {
     Reviewer,
     Planner,
     WrapUp,
+    /// ADR 2026-10-11-llm-source-model-routing-evaluation 付記 2026-10-12（eval-dispatch）D4:
+    /// routing-eval の評価 run（1 試行 = 1 本）。`task_id` は batch_id で、tasks 行を持たない。
+    Eval,
 }
 
 impl RunIndexRole {
@@ -215,6 +218,7 @@ impl RunIndexRole {
             RunIndexRole::Reviewer => "reviewer",
             RunIndexRole::Planner => "planner",
             RunIndexRole::WrapUp => "wrap_up",
+            RunIndexRole::Eval => "eval",
         }
     }
 
@@ -224,6 +228,7 @@ impl RunIndexRole {
             "reviewer" => Some(RunIndexRole::Reviewer),
             "planner" => Some(RunIndexRole::Planner),
             "wrap_up" => Some(RunIndexRole::WrapUp),
+            "eval" => Some(RunIndexRole::Eval),
             _ => None,
         }
     }

@@ -56,10 +56,7 @@ fn task(assignee: Option<&str>, project: Option<ProjectId>) -> Task {
         depends_on: vec![],
         status: Status::Running,
         priority: 0,
-        worker_hint: WorkerHint {
-            tier: Tier::Cheap,
-
-        },
+        worker_hint: WorkerHint { tier: Tier::Cheap },
         workspace: WorkspaceSpec::Local {
             path: ".".into(),
             mode: None,

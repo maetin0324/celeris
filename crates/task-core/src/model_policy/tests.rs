@@ -40,7 +40,6 @@ pub(crate) fn task(objective: &str, acceptance: Vec<Criterion>) -> Task {
         priority: 10,
         worker_hint: WorkerHint {
             tier: Tier::Standard,
-
         },
         workspace: WorkspaceSpec::local("/tmp/x"),
         repos: vec![],

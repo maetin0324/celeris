@@ -329,7 +329,6 @@ fn conversation_task(
         priority: CONVERSATION_PRIORITY,
         worker_hint: WorkerHint {
             tier: role.and_then(|r| r.tier).unwrap_or(Tier::Standard),
-
         },
         // ADR-0006 Phase 115 D3: 対話は diff を作らない（repos も常に空。上の `repos: Vec::new()`）ので
         // worktree を作らない。念のため `mode: Shared` を明示する（`resolve_repos` は経由しないが、

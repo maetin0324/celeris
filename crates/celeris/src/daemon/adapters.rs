@@ -56,7 +56,6 @@ pub fn build_harness_adapters(
                     command: command(&base.command),
                     extra_args: args(&base.extra_args),
                     model: None,
-                    reasoning_effort: None,
                     env: env(&base.env, &base.env_from_secrets),
                     container: None,
                     resume_mode: base.resolved_resume_mode(),

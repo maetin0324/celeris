@@ -29,7 +29,6 @@ fn cos_task() -> Task {
         priority: 1,
         worker_hint: WorkerHint {
             tier: Tier::Standard,
-
         },
         workspace: WorkspaceSpec::Local {
             path: "ws".into(),

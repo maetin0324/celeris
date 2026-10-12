@@ -2565,106 +2565,42 @@ echo '{{"type":"result","subtype":"success","is_error":false}}'
         "the adapter's default permission mode must not leak through: {seen}"
     );
 }
+/// ADR 2026-10-11 llm-source-harness-selection: the route's model (`with_model`) reaches the CLI's
+/// `--model` and survives the account environment layered on top (`with_env`).
 #[tokio::test]
-async fn tier_binding_reaches_cli_model_argument_and_preserves_account_env() {
-    use task_core::{Tier, model_routing::ModelBinding};
-    for tier in [Tier::Frontier, Tier::Standard, Tier::Cheap] {
-        let dir = tempfile::tempdir().unwrap();
-        let config = stub_claude(
-            dir.path(),
-            r#"
+async fn route_model_reaches_cli_model_argument_and_preserves_account_env() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = stub_claude(
+        dir.path(),
+        r#"
 for a in "$@"; do printf '%s\0' "$a" >> args.log; done
 printf '%s' "$ROUTING_ACCOUNT" > account.log
 mkdir -p artifacts
 printf '%s' '{"summary":"ok","evidence":[]}' > artifacts/result.json
 printf '%s\n' '{"type":"turn.completed"}'
 "#,
-        );
-        let expected = format!("explicit-{tier:?}");
-        let adapter = crate::tiered::TieredAdapter {
-            base: Arc::new(ClaudeCodeAdapter::new(config)),
-            account_id: Some("account-a".into()),
-            credential_error: None,
-            models: [(
-                tier,
-                ModelBinding {
-                    name: "requested-name".into(),
-                    model_id: Some(expected.clone()),
-                    unavailable_reason: None,
-                    reasoning_effort: None,
-                },
-            )]
-            .into(),
-        };
-        let adapter = adapter
-            .with_env(&[("ROUTING_ACCOUNT".into(), "account-a".into())])
-            .unwrap();
-        assert_eq!(adapter.account_id(), Some("account-a"));
-        let mut req = sample_req(dir.path().to_path_buf());
-        req.task.worker_hint.tier = tier;
-        let _ = adapter
-            .run(req, "tier-run", default_limits(), &RecordingSink::default())
-            .await
-            .unwrap();
-        let args = std::fs::read_to_string(dir.path().join("args.log")).unwrap();
-        let args: Vec<_> = args.split('\0').collect();
-        let model = args.windows(2).find(|pair| pair[0] == "--model").unwrap()[1];
-        assert_eq!(model, expected);
-        assert_eq!(
-            std::fs::read_to_string(dir.path().join("account.log")).unwrap(),
-            "account-a"
-        );
-    }
-}
-
-/// ADR-0069 Phase 118 D1: claude-code には effort 相当の CLI 引数・環境変数が無い
-/// （`claude --help` を実行して確認できる本物の CLI が無いこの環境では、この判断は運用側の
-/// 実測メモに基づく）。`WorkerAdapter` の既定（`supports_reasoning_effort() == false`、
-/// `with_reasoning_effort` は `None`）のままなので、設定に `reasoning_effort` を書いても argv には
-/// 一切現れない（`--model` は従来どおり渡る）。
-#[tokio::test]
-async fn tier_reasoning_effort_does_not_reach_claude_code_argv() {
-    use task_core::{Tier, model_routing::ModelBinding};
-    let dir = tempfile::tempdir().unwrap();
-    let config = stub_claude(dir.path(), args_log_script());
-    let base = ClaudeCodeAdapter::new(config);
-    assert!(!base.supports_reasoning_effort());
-    assert!(base.with_reasoning_effort("high").is_none());
-    let adapter = crate::tiered::TieredAdapter {
-        base: Arc::new(base),
-        account_id: None,
-        credential_error: None,
-        models: [(
-            Tier::Standard,
-            ModelBinding {
-                name: "requested-name".into(),
-                model_id: Some("claude-sonnet-5".into()),
-                unavailable_reason: None,
-                reasoning_effort: Some("medium".into()),
-            },
-        )]
-        .into(),
-    };
-    let mut req = sample_req(dir.path().to_path_buf());
-    req.task.worker_hint.tier = Tier::Standard;
+    );
+    let adapter = ClaudeCodeAdapter::new(config)
+        .with_model("route-model")
+        .expect("claude-code takes a model")
+        .with_env(&[("ROUTING_ACCOUNT".into(), "account-a".into())])
+        .expect("claude-code takes an env");
     let _ = adapter
         .run(
-            req,
-            "tier-run-1",
+            sample_req(dir.path().to_path_buf()),
+            "route-run",
             default_limits(),
             &RecordingSink::default(),
         )
         .await
         .unwrap();
     let args = captured_args(dir.path());
-    assert!(
-        !args
-            .iter()
-            .any(|a| a.to_ascii_lowercase().contains("reasoning") || a == "medium"),
-        "{args:?}"
-    );
     let model = args.windows(2).find(|pair| pair[0] == "--model").unwrap()[1].clone();
-    assert_eq!(model, "claude-sonnet-5");
+    assert_eq!(model, "route-model");
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("account.log")).unwrap(),
+        "account-a"
+    );
 }
 
 fn args_log_script() -> &'static str {

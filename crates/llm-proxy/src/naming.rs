@@ -67,7 +67,9 @@ pub struct ModelRequest {
 pub enum ModelNameError {
     #[error("empty model name")]
     Empty,
-    #[error("model name {0:?} is not <source_id>/<model_id> (e.g. qwen/qwen3.8-27b, claude_oauth/claude-sonnet-5)")]
+    #[error(
+        "model name {0:?} is not <source_id>/<model_id> (e.g. qwen/qwen3.8-27b, claude_oauth/claude-sonnet-5)"
+    )]
     NotConcrete(String),
 }
 

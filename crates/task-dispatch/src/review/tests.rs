@@ -34,7 +34,6 @@ fn task_with(checks: Vec<Check>, dir: &Path) -> Task {
         priority: 0,
         worker_hint: WorkerHint {
             tier: Tier::Standard,
-
         },
         workspace: WorkspaceSpec::Local {
             path: PathBuf::from(dir),
@@ -71,7 +70,6 @@ fn synthetic_review_task_inherits_the_subjects_project_milestone_and_assignee() 
     subject.assignee = Some("research-survey".into());
     let hint = WorkerHint {
         tier: Tier::Standard,
-
     };
     let review = synthetic_review_task(&subject, "run-1", &hint);
     assert_eq!(review.project_id, subject.project_id);

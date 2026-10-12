@@ -134,7 +134,10 @@ fn talking_to_a_node_records_the_message_and_makes_one_ready_conversation_task()
     assert_eq!(task.project_id, Some(project.id));
     assert_eq!(task.genre.as_deref(), Some("secretary"));
     assert_eq!(task.role.as_deref(), Some("secretary"));
-    assert_eq!(task.harness_id.as_ref().map(AsRef::as_ref), Some("claude-code"));
+    assert_eq!(
+        task.harness_id.as_ref().map(AsRef::as_ref),
+        Some("claude-code")
+    );
     assert_eq!(
         task.budget.max_turns, CONVERSATION_MAX_TURNS,
         "役割の 40 ではなく対話用の予算"

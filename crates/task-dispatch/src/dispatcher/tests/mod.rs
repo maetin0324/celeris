@@ -1,6 +1,5 @@
 use super::*;
 
-
 use async_trait::async_trait;
 
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -63,7 +62,6 @@ fn new_task(dir: &std::path::Path, check: Check, max_retries: u32) -> Task {
         priority: 0,
         worker_hint: WorkerHint {
             tier: Tier::Standard,
-
         },
         workspace: WorkspaceSpec::Local {
             path: dir.to_path_buf(),
@@ -1788,39 +1786,6 @@ fn project_with_repos(
         out.push(store.repo_get(repo.id).unwrap().unwrap());
     }
     (project.id, out)
-}
-
-/// ADR-0069（Phase 114）テスト用: 3 lane の束縛を持つ TieredAdapter（cheap だけ reasoning effort 付き）。
-fn three_lane_adapter() -> Arc<dyn WorkerAdapter> {
-    use task_core::model_routing::ModelBinding;
-    Arc::new(task_worker::tiered::TieredAdapter {
-        base: Arc::new(InstantAdapter {
-            terminal: Terminal::Question {
-                text: "not needed".into(),
-            },
-            delay: Duration::ZERO,
-        }),
-        models: [
-            (Tier::Frontier, "frontier-id", None),
-            (Tier::Standard, "standard-id", None),
-            (Tier::Cheap, "cheap-id", Some("low")),
-        ]
-        .into_iter()
-        .map(|(tier, id, effort)| {
-            (
-                tier,
-                ModelBinding {
-                    name: id.into(),
-                    model_id: Some(id.into()),
-                    unavailable_reason: None,
-                    reasoning_effort: effort.map(str::to_string),
-                },
-            )
-        })
-        .collect(),
-        account_id: None,
-        credential_error: None,
-    })
 }
 
 fn routing_record(events: &[(u64, Event)]) -> Option<task_core::RoutingRecord> {

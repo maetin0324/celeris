@@ -198,7 +198,6 @@ mod tests {
         assert!(lines[3].contains("FAILED: HTTP 500"));
     }
 
-
     #[test]
     fn empty_catalog_points_at_discover() {
         let lines = render_table(&json!({"items": [], "last_discovery": []}));

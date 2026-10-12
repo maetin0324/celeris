@@ -298,7 +298,13 @@ async fn routing_context_is_registered_recorded_once_and_released_at_run_end() {
     });
     store.insert(&task).unwrap();
     let registry = Arc::new(RecordingRegistry::default());
-    let mut d = dispatcher(store.clone(), three_lane_adapter(), 1);
+    let adapter: Arc<dyn WorkerAdapter> = Arc::new(InstantAdapter {
+        terminal: Terminal::Question {
+            text: "not needed".into(),
+        },
+        delay: Duration::ZERO,
+    });
+    let mut d = dispatcher(store.clone(), adapter, 1);
     d.set_routing_context_registry(registry.clone());
     d.tick().unwrap();
 

@@ -558,7 +558,6 @@ pub fn materialize_delegated_logging(
                 }),
                 worker_hint: WorkerHint {
                     tier: defaults.tier,
-
                 },
                 // ADR-0039 D2: 明示 > 案件の workspace > 親の workspace（従来）。
                 // ADR-0062 B2: 継承した Remote は、担当が cluster:<id> を持たなければ Local に落とす。

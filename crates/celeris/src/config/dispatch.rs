@@ -150,7 +150,6 @@ impl Config {
                 // run の lane は `Dispatcher::pick_reviewer` が `reviewer_tier_override` /
                 // `profile.review_tier` / worker lane から動的に決める。
                 tier: self.reviewer.tier.unwrap_or_else(default_reviewer_tier),
-
             },
             // ADR-0069 Phase 118 D4: `[reviewer] tier` が明示されているときだけ `Some`。
             reviewer_tier_override: self.reviewer.tier,

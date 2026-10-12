@@ -272,7 +272,7 @@ fn role_assignments_survive_catalog_changes_and_view_reflects_them() {
 
 #[test]
 fn role_members_multiple_roles_priority_and_explicit_empty_survive_restart() {
-    use crate::model_catalog::assignments::{RoleMember, apply_to_bindings};
+    use crate::model_catalog::assignments::RoleMember;
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("roles.db");
     let src = CatalogSource::new("opencode-go");
@@ -355,25 +355,6 @@ fn role_members_multiple_roles_priority_and_explicit_empty_survive_restart() {
     let view = store.model_role_assignment_view().unwrap();
     assert!(view.manages(src.as_str(), Tier::Standard));
     assert!(view.members(src.as_str(), Tier::Standard).is_empty());
-    let configured = [(
-        Tier::Standard,
-        crate::model_routing::ModelBinding {
-            name: "legacy".into(),
-            model_id: Some("legacy".into()),
-            unavailable_reason: None,
-            reasoning_effort: None,
-        },
-    )]
-    .into_iter()
-    .collect();
-    let effective = apply_to_bindings(
-        &configured,
-        src.as_str(),
-        &[Tier::Standard],
-        crate::model_catalog::assignments::WireRule::proxy(src.as_str()),
-        &view,
-    );
-    assert!(crate::model_routing::resolve(&effective, Tier::Standard).is_err());
     assert_eq!(
         view.get(src.as_str(), Tier::Frontier).unwrap().model_id,
         "a"

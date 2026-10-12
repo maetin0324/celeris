@@ -573,7 +573,6 @@ pub fn materialize_logging(
                 }),
                 worker_hint: WorkerHint {
                     tier: defaults.tier,
-
                 },
                 harness_id: defaults.harness_id.clone(),
                 // ADR-0039 D2: 明示 > 案件の workspace > 親の workspace（従来）。

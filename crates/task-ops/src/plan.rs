@@ -103,10 +103,7 @@ pub fn create_plan(
         depends_on: vec![],
         status: Status::Draft,
         priority: spec.priority,
-        worker_hint: WorkerHint {
-            tier: spec.tier,
-
-        },
+        worker_hint: WorkerHint { tier: spec.tier },
         workspace,
         budget,
         attempts: 0,

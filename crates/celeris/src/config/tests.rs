@@ -637,7 +637,6 @@ fn routing_sample_task() -> task_core::Task {
         priority: 10,
         worker_hint: WorkerHint {
             tier: Tier::Standard,
-
         },
         workspace: WorkspaceSpec::local("/tmp"),
         repos: vec![],
@@ -1517,7 +1516,9 @@ fn backoff_and_reviewer_settings_map_to_dispatch_config() {
     assert_eq!(d.min_free_disk_mb, 5120);
     assert_eq!(
         d.reviewer_hint,
-        WorkerHint { tier: Tier::Standard }
+        WorkerHint {
+            tier: Tier::Standard
+        }
     );
 
     let text = r#"retry_backoff_base_secs = 0
@@ -1540,10 +1541,7 @@ source_kinds = ["claude_oauth"]
     let d = cfg.dispatch_config();
     assert_eq!(d.retry_backoff_base, Duration::ZERO);
     assert_eq!(d.max_requeues, 0);
-    assert_eq!(
-        d.reviewer_hint,
-        WorkerHint { tier: Tier::Cheap }
-    );
+    assert_eq!(d.reviewer_hint, WorkerHint { tier: Tier::Cheap });
 }
 
 /// `[scratch.cargo]` は従来どおり有効。廃止された cache 設定は worker に渡さない。

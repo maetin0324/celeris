@@ -85,7 +85,7 @@ fn base_spec() -> NewTaskSpec {
         cluster: None,
         workspace_mode: None,
         harness: None,
-        
+
         labels: Vec::new(),
         category: None,
         status: None,

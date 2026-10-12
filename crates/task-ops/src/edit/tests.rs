@@ -29,7 +29,6 @@ fn task_with(status: Status) -> Task {
         priority: 0,
         worker_hint: WorkerHint {
             tier: Tier::Standard,
-
         },
         workspace: WorkspaceSpec::local("/tmp/ws"),
         repos: Vec::new(),

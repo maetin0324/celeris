@@ -613,11 +613,8 @@ impl Dispatcher {
                     provider: Some(source_id.clone()),
                     account: account.clone(),
                     model_id: model.clone(),
-                    // ADR-0069 Phase 118 D1: 監査記録は「設定した」値ではなく「実際に CLI へ
-                    // 渡った」値を残す（対応しないアダプタでは `None` になる）。
-                    reasoning_effort: adapter
-                        .reasoning_effort_for_tier(task.worker_hint.tier)
-                        .filter(|_| adapter.supports_reasoning_effort()),
+                    // The selected route carries no reasoning effort, so none reaches the harness.
+                    reasoning_effort: None,
                     selection: None,
                     coding_default: None,
                 },

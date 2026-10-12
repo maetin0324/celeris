@@ -369,7 +369,6 @@ mod routing_tests {
             priority: 0,
             worker_hint: WorkerHint {
                 tier: Tier::Standard,
-
             },
             workspace: WorkspaceSpec::local("/tmp/routing-test"),
             repos: vec![],

@@ -285,4 +285,3 @@ pub(crate) fn reload_estimator_sidecar(config: &crate::Config) {
         tracing::info!(active, "model_routing.estimator.sidecar reloaded");
     }
 }
-

@@ -49,7 +49,6 @@ fn sample_task(kind: TaskKind, status: Status) -> Task {
         priority: 0,
         worker_hint: task_core::WorkerHint {
             tier: Tier::Standard,
-
         },
         workspace: WorkspaceSpec::Local {
             path: "workspace".into(),

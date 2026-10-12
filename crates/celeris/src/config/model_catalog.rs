@@ -155,7 +155,7 @@ fn ensure_model(catalog_models: &mut Vec<ModelProfile>, id: &str, family: Option
 
 /// ADR 2026-10-06 model-role-assignments D2: DB の割り当て（`source × 役割 → model`）を routing catalog の
 /// deployment に重ねる。`apply_model_catalog` の前に適用する（割り当て済みで使えない model はここで外すので、
-/// 後段と警告は重ならない。config の model が消えていても、利用可能な model への割り当てで lane が復活する）。dispatcher の `apply_to_bindings`・llm-proxy の
+/// 後段と警告は重ならない。config の model が消えていても、利用可能な model への割り当てで lane が復活する）。llm-proxy の
 /// `normalize_legacy_config_with` と同じ `(source, tier) → model` を返す。
 ///
 /// 対象は `legacy:<source>:<Tier>`（llm-proxy 由来）の 1 lane deployment。`source_ref` を catalog の source 名に

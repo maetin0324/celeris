@@ -59,8 +59,8 @@ use task_core::{
     TaskId, TaskKind, TaskStore, Tier, Trigger, WorkspaceMode, WorkspaceSpec, support_kind,
 };
 use task_ops::daemon::{
-    AccountCooldownLive, AccountLive, AccountUsageLive, ClusterLive, CooldownView, DaemonSnapshot,
-    InFlight, InFlightKind, AccountCheckView, TunnelForwardLive,
+    AccountCheckView, AccountCooldownLive, AccountLive, AccountUsageLive, ClusterLive,
+    CooldownView, DaemonSnapshot, InFlight, InFlightKind, TunnelForwardLive,
 };
 use task_ops::delegate::{pending_children, plan_delegation};
 use task_ops::derive::{
@@ -1454,10 +1454,7 @@ impl Dispatcher {
         }
         Instant::now()
     }
-    pub fn new(
-        store: Arc<dyn TaskStore>,
-        config: DispatchConfig,
-    ) -> Self {
+    pub fn new(store: Arc<dyn TaskStore>, config: DispatchConfig) -> Self {
         let account_limits = match store.account_limits() {
             Ok(rows) => Some(
                 rows.into_iter()
@@ -1910,7 +1907,10 @@ impl Dispatcher {
                 .as_ref()
                 .is_some_and(|(active, _)| active.as_ref() == source)
         };
-        self.running.values().filter(|run| on_source(&run.route)).count()
+        self.running
+            .values()
+            .filter(|run| on_source(&run.route))
+            .count()
             + self
                 .reviewing
                 .values()
@@ -2415,7 +2415,11 @@ impl Dispatcher {
     ///
     /// 検査は `base_url` ごとに 60 秒キャッシュするので、tick ごとには叩かない。
     fn knowledge_fallback_reason(&mut self, task: &Task, now: Instant) -> Option<String> {
-        if !task.harness_id.as_ref().is_some_and(|id| id.as_ref() == task_worker::LangMemAdapter::ID) {
+        if !task
+            .harness_id
+            .as_ref()
+            .is_some_and(|id| id.as_ref() == task_worker::LangMemAdapter::ID)
+        {
             return None;
         }
         if support_kind(task) != Some("knowledge") {

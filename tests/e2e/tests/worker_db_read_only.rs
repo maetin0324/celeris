@@ -97,7 +97,6 @@ fn ready_task(store: &SqliteStore, dir: &Path, project: Option<ProjectId>) -> Ta
         priority: 0,
         worker_hint: WorkerHint {
             tier: Tier::Standard,
-            
         },
         workspace: WorkspaceSpec::Local {
             path: dir.to_path_buf(),

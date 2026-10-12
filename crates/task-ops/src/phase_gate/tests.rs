@@ -31,7 +31,6 @@ fn blocked_task(store: &SqliteStore, awaiting: bool) -> TaskId {
         priority: 0,
         worker_hint: WorkerHint {
             tier: Tier::Standard,
-
         },
         workspace: WorkspaceSpec::Local {
             path: "/tmp/workspace".into(),

@@ -64,7 +64,6 @@ fn parent() -> Task {
         priority: 3,
         worker_hint: WorkerHint {
             tier: Tier::Frontier,
-
         },
         workspace: WorkspaceSpec::Local {
             path: PathBuf::from("/tmp/ws"),
@@ -403,7 +402,10 @@ fn materialize_applies_role_and_genre_defaults_like_delegation() {
         OffsetDateTime::now_utc(),
     );
     // harness: role(implementer) の既定が優先。
-    assert_eq!(children[0].harness_id.as_ref().map(AsRef::as_ref), Some("codex"));
+    assert_eq!(
+        children[0].harness_id.as_ref().map(AsRef::as_ref),
+        Some("codex")
+    );
     // tier: role に既定が無いので分野の既定役割（lead）から。
     assert_eq!(children[0].worker_hint.tier, Tier::Cheap);
     assert_eq!(children[0].budget.max_turns, 20);

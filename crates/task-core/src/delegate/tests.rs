@@ -46,7 +46,6 @@ fn parent() -> Task {
         priority: 3,
         worker_hint: WorkerHint {
             tier: Tier::Frontier,
-
         },
         workspace: WorkspaceSpec::Local {
             path: PathBuf::from("/tmp/ws"),
@@ -524,7 +523,10 @@ fn materialize_drops_the_delegated_assignee_and_records_it() {
         now,
     );
     assert_eq!(out[0].assignee, None);
-    assert_eq!(out[0].harness_id.as_ref().map(AsRef::as_ref), Some("claude-code"));
+    assert_eq!(
+        out[0].harness_id.as_ref().map(AsRef::as_ref),
+        Some("claude-code")
+    );
     assert_eq!(out[0].worker_hint.tier, Tier::Standard);
 
     // 3. 分野を持たないノード・組織に無い id は既定を変えない（知らない id は担当にもしない）。

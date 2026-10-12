@@ -115,7 +115,6 @@ fn raw_task(status: Status, depends_on: Vec<TaskId>, conversation: Option<Messag
         priority: 0,
         worker_hint: WorkerHint {
             tier: Tier::Standard,
-
         },
         workspace: WorkspaceSpec::Local {
             path: "/tmp/workspace".into(),

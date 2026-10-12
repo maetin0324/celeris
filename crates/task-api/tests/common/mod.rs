@@ -363,7 +363,6 @@ pub fn new_task(kind: TaskKind, status: Status) -> Task {
         priority: 0,
         worker_hint: WorkerHint {
             tier: Tier::Standard,
-
         },
         workspace: WorkspaceSpec::Local {
             path: PathBuf::from(id.to_string()),

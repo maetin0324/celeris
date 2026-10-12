@@ -307,7 +307,13 @@ async fn claude_non_stream_round_trip() {
     let (addr, _h2) = spawn(router(state)).await;
 
     let client = reqwest::Client::new();
-    let resp = post_chat(&client, addr, &chat_request("claude_oauth/claude-opus-5-5", false), None).await;
+    let resp = post_chat(
+        &client,
+        addr,
+        &chat_request("claude_oauth/claude-opus-5-5", false),
+        None,
+    )
+    .await;
     assert_eq!(resp.status(), StatusCode::OK);
     assert_eq!(
         resp.headers()
@@ -370,7 +376,13 @@ async fn claude_stream_round_trip() {
     let (addr, _h2) = spawn(router(state)).await;
 
     let client = reqwest::Client::new();
-    let resp = post_chat(&client, addr, &chat_request("claude_oauth/claude-opus-5-5", true), None).await;
+    let resp = post_chat(
+        &client,
+        addr,
+        &chat_request("claude_oauth/claude-opus-5-5", true),
+        None,
+    )
+    .await;
     assert_eq!(resp.status(), StatusCode::OK);
     let text = resp.text().await.expect("text");
     assert!(text.contains("\"content\":\"Hello\""), "{text}");
@@ -543,7 +555,13 @@ async fn claude_401_refreshes_and_retries_then_writes_back_the_credentials_file(
     );
     let (addr, _h2) = spawn(router(state)).await;
     let client = reqwest::Client::new();
-    let resp = post_chat(&client, addr, &chat_request("claude_oauth/claude-opus-5-5", false), None).await;
+    let resp = post_chat(
+        &client,
+        addr,
+        &chat_request("claude_oauth/claude-opus-5-5", false),
+        None,
+    )
+    .await;
     assert_eq!(resp.status(), StatusCode::OK);
     let body: Value = resp.json().await.expect("json");
     assert_eq!(body["choices"][0]["message"]["content"], "ok after refresh");
@@ -643,7 +661,13 @@ async fn claude_429_falls_back_to_the_next_account_and_records_a_cooldown() {
     let (addr, _h4) = spawn(router(state)).await;
     let client = reqwest::Client::new();
 
-    let resp = post_chat(&client, addr, &chat_request("claude_oauth/claude-opus-5-5", false), None).await;
+    let resp = post_chat(
+        &client,
+        addr,
+        &chat_request("claude_oauth/claude-opus-5-5", false),
+        None,
+    )
+    .await;
     assert_eq!(resp.status(), StatusCode::OK);
     assert_eq!(
         resp.headers()
@@ -829,7 +853,13 @@ async fn codex_non_stream_round_trip() {
     );
     let (addr, _h2) = spawn(router(state)).await;
     let client = reqwest::Client::new();
-    let resp = post_chat(&client, addr, &chat_request("codex_oauth/gpt-6-sol", false), None).await;
+    let resp = post_chat(
+        &client,
+        addr,
+        &chat_request("codex_oauth/gpt-6-sol", false),
+        None,
+    )
+    .await;
     assert_eq!(resp.status(), StatusCode::OK);
     assert_eq!(
         resp.headers()
@@ -940,7 +970,13 @@ async fn codex_stream_round_trip() {
     );
     let (addr, _h2) = spawn(router(state)).await;
     let client = reqwest::Client::new();
-    let resp = post_chat(&client, addr, &chat_request("codex_oauth/gpt-6-luna", true), None).await;
+    let resp = post_chat(
+        &client,
+        addr,
+        &chat_request("codex_oauth/gpt-6-luna", true),
+        None,
+    )
+    .await;
     assert_eq!(resp.status(), StatusCode::OK);
     let text = resp.text().await.expect("text");
     assert!(text.contains("\"content\":\"Hi\""), "{text}");
@@ -989,7 +1025,13 @@ async fn codex_400_upstream_error_surfaces_the_detail_field() {
     );
     let (addr, _h2) = spawn(router(state)).await;
     let client = reqwest::Client::new();
-    let resp = post_chat(&client, addr, &chat_request("codex_oauth/gpt-6-sol", false), None).await;
+    let resp = post_chat(
+        &client,
+        addr,
+        &chat_request("codex_oauth/gpt-6-sol", false),
+        None,
+    )
+    .await;
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     let body: Value = resp.json().await.expect("json");
     assert!(
@@ -1062,7 +1104,13 @@ async fn relay_non_stream_passes_through_and_rewrites_the_model_field() {
     );
     let (addr, _h2) = spawn(router(state)).await;
     let client = reqwest::Client::new();
-    let resp = post_chat(&client, addr, &chat_request("qwen/qwen3.8-27b", false), None).await;
+    let resp = post_chat(
+        &client,
+        addr,
+        &chat_request("qwen/qwen3.8-27b", false),
+        None,
+    )
+    .await;
     assert_eq!(resp.status(), StatusCode::OK);
     assert_eq!(
         resp.headers()
@@ -1194,7 +1242,13 @@ async fn proxy_route_relay_request_never_falls_back_to_another_source() {
     );
     let (addr, _h2) = spawn(router(state)).await;
     let client = reqwest::Client::new();
-    let resp = post_chat(&client, addr, &chat_request("qwen/qwen3.8-27b", false), None).await;
+    let resp = post_chat(
+        &client,
+        addr,
+        &chat_request("qwen/qwen3.8-27b", false),
+        None,
+    )
+    .await;
     assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
     assert!(fake.captured.lock().expect("lock").is_empty());
 
@@ -1369,7 +1423,13 @@ async fn a_successful_request_is_recorded_with_tokens_and_no_body() {
     );
     let (addr, _h2) = spawn(router(state)).await;
     let client = reqwest::Client::new();
-    let resp = post_chat(&client, addr, &chat_request("claude_oauth/claude-opus-5-5", false), None).await;
+    let resp = post_chat(
+        &client,
+        addr,
+        &chat_request("claude_oauth/claude-opus-5-5", false),
+        None,
+    )
+    .await;
     assert_eq!(resp.status(), StatusCode::OK);
 
     let conn = rusqlite::Connection::open(&db_path).expect("open");
@@ -1535,7 +1595,13 @@ async fn relay_probe_reports_the_reason_and_recovers_after_the_cache_expires() {
 
     let (addr, _h2) = spawn(router(state)).await;
     let client = reqwest::Client::new();
-    let resp = post_chat(&client, addr, &chat_request("qwen/qwen3.8-27b", false), None).await;
+    let resp = post_chat(
+        &client,
+        addr,
+        &chat_request("qwen/qwen3.8-27b", false),
+        None,
+    )
+    .await;
     assert_eq!(resp.status(), StatusCode::OK);
     assert_eq!(
         resp.headers()
@@ -1691,7 +1757,13 @@ async fn no_secret_value_appears_in_the_logs_even_across_a_token_refresh() {
 
     let (addr, _h2) = spawn(router(state)).await;
     let client = reqwest::Client::new();
-    let resp = post_chat(&client, addr, &chat_request("claude_oauth/claude-opus-5-5", false), None).await;
+    let resp = post_chat(
+        &client,
+        addr,
+        &chat_request("claude_oauth/claude-opus-5-5", false),
+        None,
+    )
+    .await;
     assert_eq!(resp.status(), StatusCode::OK);
 
     // 少し待ってログの flush を確実にする（同一スレッドの current_thread ランタイムなので基本は同期的）。
@@ -1763,7 +1835,13 @@ async fn no_source_available_rescans_after_a_short_wait_and_then_succeeds() {
 
     let client = reqwest::Client::new();
     let started = std::time::Instant::now();
-    let resp = post_chat(&client, addr, &chat_request("claude_oauth/claude-opus-5-5", false), None).await;
+    let resp = post_chat(
+        &client,
+        addr,
+        &chat_request("claude_oauth/claude-opus-5-5", false),
+        None,
+    )
+    .await;
     assert_eq!(resp.status(), StatusCode::OK);
     assert!(
         started.elapsed() >= std::time::Duration::from_millis(900),
@@ -1821,7 +1899,13 @@ async fn no_source_available_gives_up_with_retry_after_when_nothing_ever_recover
 
     let client = reqwest::Client::new();
     let started = std::time::Instant::now();
-    let resp = post_chat(&client, addr, &chat_request("claude_oauth/claude-opus-5-5", false), None).await;
+    let resp = post_chat(
+        &client,
+        addr,
+        &chat_request("claude_oauth/claude-opus-5-5", false),
+        None,
+    )
+    .await;
     let elapsed = started.elapsed();
     assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(

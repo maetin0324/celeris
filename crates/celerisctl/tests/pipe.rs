@@ -49,7 +49,6 @@ fn sample_task(i: usize) -> Task {
         priority: 0,
         worker_hint: WorkerHint {
             tier: Tier::Standard,
-
         },
         workspace: WorkspaceSpec::Local {
             path: format!("ws-{i}").into(),

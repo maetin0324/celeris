@@ -35,7 +35,6 @@ fn sample_task() -> Task {
         priority: 0,
         worker_hint: WorkerHint {
             tier: Tier::Standard,
-
         },
         workspace: WorkspaceSpec::Local {
             path: PathBuf::from("/tmp/ws"),

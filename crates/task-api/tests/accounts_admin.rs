@@ -811,7 +811,10 @@ async fn implicit_accounts_are_listed_and_patchable_without_the_accounts_section
     assert_eq!(items.len(), 2, "{items:?}");
     assert_eq!(items[0]["adapter"], json!("implicit"));
     assert_eq!(items[0]["id"], json!("openai_compatible:qwen"));
-    assert_eq!(items[0]["models"], json!(["qwen3.8-27b", "qwen3.8-27b-instruct"]));
+    assert_eq!(
+        items[0]["models"],
+        json!(["qwen3.8-27b", "qwen3.8-27b-instruct"])
+    );
     assert_eq!(items[0]["implicit"], json!(true));
     assert_eq!(items[0]["dir"], json!(null));
     assert_eq!(items[0]["logged_in"], json!(true));

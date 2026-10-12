@@ -195,7 +195,6 @@ fn is_milestones_plan_task_needs_the_kind_and_the_label() {
         priority: 0,
         worker_hint: WorkerHint {
             tier: Tier::Standard,
-
         },
         workspace: WorkspaceSpec::Local {
             path: "ws".into(),

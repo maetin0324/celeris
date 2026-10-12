@@ -90,11 +90,8 @@ fn world(site: Value) -> World {
         .prefix("ce-runtime-")
         .tempdir_in("/tmp")
         .expect("short runtime directory");
-    std::fs::set_permissions(
-        runtime_root.path(),
-        std::fs::Permissions::from_mode(0o700),
-    )
-    .expect("secure runtime directory");
+    std::fs::set_permissions(runtime_root.path(), std::fs::Permissions::from_mode(0o700))
+        .expect("secure runtime directory");
     let runtime = runtime_root.path().to_path_buf();
     let config = broker_root.join("config");
     let data = broker_root.join("data");
@@ -110,9 +107,8 @@ fn world(site: Value) -> World {
     let broker = Arc::new(Broker::new(manual, data.join("audit")).unwrap());
     let control = runtime.join("celeris-credentiald/control.sock");
     let serve_runtime = runtime.clone();
-    let serve = std::thread::spawn(move || {
-        ipc::serve(broker, &serve_runtime, vec![std::process::id()])
-    });
+    let serve =
+        std::thread::spawn(move || ipc::serve(broker, &serve_runtime, vec![std::process::id()]));
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
     loop {
         if control.exists() && control.with_file_name("resolve.sock").exists() {
@@ -120,7 +116,10 @@ fn world(site: Value) -> World {
         }
         // serve が sockets を作る前に終わったなら、60 秒待たずにその結果で落とす。
         if serve.is_finished() {
-            panic!("ipc::serve exited before fixture readiness: {:?}", serve.join());
+            panic!(
+                "ipc::serve exited before fixture readiness: {:?}",
+                serve.join()
+            );
         }
         assert!(
             std::time::Instant::now() < deadline,

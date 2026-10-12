@@ -114,7 +114,10 @@ async fn talking_to_a_node_returns_202_and_makes_one_ready_conversation_task() {
     // Phase 30（ADR-0033 D4 追記）: 対話はノードの genre（ここでは literature / paperqa）を使わない。
     // 常に対話用分野（secretary）の役割・adapter で走る（実機の事故: 検索ハーネスは会話できない）。
     assert_eq!(task.genre.as_deref(), Some("secretary"));
-    assert_eq!(task.harness_id.as_ref().map(AsRef::as_ref), Some("claude-code"));
+    assert_eq!(
+        task.harness_id.as_ref().map(AsRef::as_ref),
+        Some("claude-code")
+    );
     assert!(task_core::is_conversation(&task), "対話由来の印が付く");
 
     // 読み取りは管理系ではない（下の `posting_a_message_is_an_admin_endpoint` で確かめる）。

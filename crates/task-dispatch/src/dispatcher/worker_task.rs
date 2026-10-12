@@ -32,8 +32,8 @@ pub(super) struct RunAdapterPrep {
 
 /// ADR-0107（agent-docs/adr/0107-browser-fallback-candidate-preparation.md）D1: 主 adapter と browser
 /// fallback 候補の run ごとの準備を 1 か所にまとめる。順序は ADR-0075 の env 設定 →
-/// コンテナ（ADR-0043 D3）→ planner の permission mode（ADR-0072 D14）。tier ごとのモデルは
-/// 各 adapter（`TieredAdapter`）が同じ `req.task.worker_hint.tier` から run 時に解決する。
+/// コンテナ（ADR-0043 D3）→ planner の permission mode（ADR-0072 D14）。モデルは選んだ route の
+/// model を `route_adapter` が載せ済み（lane から model を引かない）。
 /// 戻り値の `bool` は env（`CARGO_TARGET_DIR`）が実際に適用されたかどうか。
 pub(super) fn prepare_run_adapter(
     adapter: Arc<dyn WorkerAdapter>,

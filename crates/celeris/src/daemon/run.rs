@@ -196,7 +196,10 @@ pub async fn run(config: Config, opts: RunOptions) -> Result<Exit, DaemonError> 
     if verify {
         dispatcher.set_eligible_tasks(Arc::new(|task: &task_core::Task| {
             task.genre.as_deref() == Some(config::SMOKE_ID)
-                && task.harness_id.as_ref().is_some_and(|id| id.as_ref() == config::SMOKE_ID)
+                && task
+                    .harness_id
+                    .as_ref()
+                    .is_some_and(|id| id.as_ref() == config::SMOKE_ID)
         }));
     }
     // ADR-0064 D3/D5（Phase 110a）: 背景チェックポイントと定期バックアップ。`verify` はデータのコピーに

@@ -40,7 +40,6 @@ fn task(title: &str, status: Status, parent: Option<(&Task, &str)>) -> Task {
         priority: 2,
         worker_hint: WorkerHint {
             tier: Tier::Standard,
-
         },
         workspace: WorkspaceSpec::Local {
             path: "/tmp/ws".into(),

@@ -117,10 +117,7 @@ async fn unknown_role_is_stored_without_defaults() {
     assert_eq!(resp.status, 201, "{}", resp.text());
     let task = resp.json();
     assert_eq!(task["role"], "researcher");
-    assert_eq!(
-        task["worker_hint"],
-        json!({"tier": "standard"})
-    );
+    assert_eq!(task["worker_hint"], json!({"tier": "standard"}));
     assert_eq!(
         task["budget"],
         json!({"max_turns": 10, "max_wall_secs": 600, "max_retries": 2})

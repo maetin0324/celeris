@@ -238,7 +238,6 @@ fn make_task(parent_id: Option<TaskId>, status: Status) -> Task {
         priority: 3,
         worker_hint: WorkerHint {
             tier: Tier::Frontier,
-
         },
         workspace: WorkspaceSpec::Local {
             path: PathBuf::from("/tmp/ws"),

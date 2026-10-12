@@ -191,7 +191,6 @@ fn task(status: crate::Status) -> crate::Task {
         priority: 0,
         worker_hint: WorkerHint {
             tier: Tier::Standard,
-
         },
         workspace: WorkspaceSpec::Local {
             path: "ws".into(),

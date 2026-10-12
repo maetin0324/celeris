@@ -501,10 +501,16 @@ async fn tick_publishes_daemon_snapshot_to_watch() {
         started_at: "2026-09-14T00:00:00Z".into(),
         tick_ms: 50,
     });
-    assert!(rx.borrow().is_none(), "nothing is published before the first tick");
+    assert!(
+        rx.borrow().is_none(),
+        "nothing is published before the first tick"
+    );
     d.tick().unwrap();
     let snap = rx.borrow().clone().expect("snapshot after the first tick");
-    assert_eq!((snap.ticks, snap.instance_id.as_str(), snap.tick_ms), (1, "inst-1", 50));
+    assert_eq!(
+        (snap.ticks, snap.instance_id.as_str(), snap.tick_ms),
+        (1, "inst-1", 50)
+    );
     assert_eq!(snap.pid, std::process::id());
     assert_eq!(snap.in_flight.len(), 1);
     assert_eq!(snap.in_flight[0].task_id, task.id);

@@ -103,7 +103,10 @@ fn set_legacy_hint_adapter(store: &SqliteStore, task_id: crate::TaskId, value: &
     task["worker_hint"]["adapter"] = serde_json::json!(value);
     conn.execute(
         "UPDATE tasks SET json=?2 WHERE id=?1",
-        rusqlite::params![task_id.to_string(), serde_json::to_string(&task).expect("serialize task")],
+        rusqlite::params![
+            task_id.to_string(),
+            serde_json::to_string(&task).expect("serialize task")
+        ],
     )
     .expect("write legacy task json");
 }

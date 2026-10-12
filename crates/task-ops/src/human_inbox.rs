@@ -743,10 +743,7 @@ impl Builder<'_> {
                 id: format!("unroutable-{}", task.id),
                 kind: InboxKind::Unroutable,
                 title: format!("担当が決まらない: {}", task.title),
-                detail: clip(&format!(
-                    "tier={:?} harness=route-selected",
-                    hint.tier
-                )),
+                detail: clip(&format!("tier={:?} harness=route-selected", hint.tier)),
                 options: vec![
                     opt(
                         "reassign",

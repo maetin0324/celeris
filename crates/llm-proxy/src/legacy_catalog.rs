@@ -217,9 +217,7 @@ pub fn normalize_legacy_config_with(
                 .filter(|s| s.enabled)
             {
                 let source_ref = format!("openai-compatible:{}", source.id);
-                for (wire, priority) in
-                    resolve(&source_ref, tier)
-                {
+                for (wire, priority) in resolve(&source_ref, tier) {
                     add(
                         &source_ref,
                         "qwen",

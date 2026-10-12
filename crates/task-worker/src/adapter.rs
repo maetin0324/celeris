@@ -270,13 +270,6 @@ pub trait WorkerAdapter: Send + Sync {
     fn account_id(&self) -> Option<&str> {
         None
     }
-    fn model_for_tier(&self, _tier: task_core::Tier) -> Result<Option<String>, String> {
-        Ok(None)
-    }
-    /// ADR-0069 D4（Phase 114）: その lane の設定上の reasoning effort（監査記録用。既定は無し）。
-    fn reasoning_effort_for_tier(&self, _tier: task_core::Tier) -> Option<String> {
-        None
-    }
     fn with_model(&self, _model: &str) -> Option<Arc<dyn WorkerAdapter>> {
         None
     }
@@ -291,32 +284,10 @@ pub trait WorkerAdapter: Send + Sync {
         None
     }
 
-    /// ADR 2026-10-06 model-role-assignments D2: lane ごとの束縛（`TierModels`）を差し替えた複製を返す。
-    /// DB の割り当てを反映した実効 bindings で run を起こすために使う。既定は `None`（束縛を持たない
-    /// アダプタ。呼び出し側は元のアダプタのまま実行する）。`TieredAdapter` だけが実装する。
-    fn with_tier_models(
-        &self,
-        _models: task_core::model_routing::TierModels,
-    ) -> Option<Arc<dyn WorkerAdapter>> {
-        None
-    }
-
     /// ADR-0072 D14（Phase E4b 項目3）: `mode`（例: `"plan"`）を CLI の permission-mode に使う複製を
     /// 返す（`with_model` と同じ形）。既定は `None` = この経路を持たないアダプタ（呼び出し側は元の
     /// アダプタのまま実行する。permission-mode の概念が無い研究系ハーネスなどはこの既定のまま）。
     fn with_permission_mode(&self, _mode: &str) -> Option<Arc<dyn WorkerAdapter>> {
-        None
-    }
-
-    /// ADR-0069 Phase 118 D1: このアダプタは reasoning effort を実際に CLI へ渡せるか
-    /// （`with_reasoning_effort` が `Some` を返しうるか）。既定 `false`（対応する引数・環境変数が
-    /// 無い。`claude-code` はこの既定のまま）。
-    fn supports_reasoning_effort(&self) -> bool {
-        false
-    }
-    /// ADR-0069 Phase 118 D1: 指定した reasoning effort を持つ複製を返す（`with_model` と同じ形）。
-    /// 対応しないアダプタは既定の `None`（呼び出し側は元のアダプタのまま実行する）。
-    fn with_reasoning_effort(&self, _effort: &str) -> Option<Arc<dyn WorkerAdapter>> {
         None
     }
 

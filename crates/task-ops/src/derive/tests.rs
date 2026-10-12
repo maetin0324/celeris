@@ -404,7 +404,6 @@ fn sample_task(title: &str, attempts: u32) -> Task {
         priority: 0,
         worker_hint: task_core::WorkerHint {
             tier: task_core::Tier::Standard,
-
         },
         workspace: task_core::WorkspaceSpec::Local {
             path: "/tmp".into(),

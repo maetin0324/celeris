@@ -179,7 +179,6 @@ pub fn needs_reviewer_run(task: &Task) -> bool {
 pub fn reviewer_hint() -> WorkerHint {
     WorkerHint {
         tier: Tier::Standard,
-
     }
 }
 

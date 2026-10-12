@@ -10,7 +10,7 @@ updated: 2026-10-12
 
 runtime の実行経路は `llm_route` に切り替え済み。provider 固定選択・adapter hint・llm-proxy の tier alias は撤去した。全体検査（`test-parallel`・`clippy`）は通った。ADR `2026-10-11-llm-source-harness-selection.md` は「決定（実装済み: runtime）」に更新した。
 
-残件（撤去できていない）: task-worker の `TierModels` による tier→model の束縛（`with_tier_models`、`tiered.rs`・`adapter.rs`・`browser_specialist.rs`、8 件）。ADR は「lane/Tier を provider/model の対応付けに使わない」と定めるが、worker 側の束縛は残っている。closeout は `crates/` を変えない範囲のため撤去していない。次段で扱う。ADR の実装済みの表示は、この残件を除いた決定について言う。
+残件だった task-worker の tier→model の束縛は 2026-10-12 に撤去した（`2026-10-11-llm-source-harness-runtime/tier-drop-operator.md`）。ADR の決定はすべて実装済み。
 
 検査の HEAD は `a3c63b8a`（e2e-flake）。各葉の変更と個別 check は `agent-docs/progress/2026-10-11-llm-source-harness-runtime/<unit>.md` に記録済み。
 
@@ -54,7 +54,7 @@ HEAD `a3c63b8a`、作業ツリーは本 unit の docs 変更のみ。
 
 ## 未解決
 
-- task-worker の `with_tier_models`（`crates/task-worker/src/tiered.rs`・`adapter.rs`・`browser_specialist.rs`、試験 `with_tier_models_replaces_only_the_bindings` を含む）は tier 別 model の差し替えで、ADR の撤去対象（legacy tier の焼き付け）に当たるかをまだ確かめていない。closeout は crates/ を変えない方針のため未撤去。次段で、tier を worker の model 選択から外せるかを決める。
+- task-worker の `with_tier_models`（`crates/task-worker/src/tiered.rs`・`adapter.rs`・`browser_specialist.rs`、試験 `with_tier_models_replaces_only_the_bindings` を含む）は tier 別 model の差し替えで、ADR の撤去対象（legacy tier の焼き付け）に当たるかをまだ確かめていない。closeout は crates/ を変えない方針のため未撤去。次段で、tier を worker の model 選択から外せるかを決める。→ 2026-10-12 撤去済み（`tier-drop-operator.md`）。
 - 旧い comment 4 か所（動作は無い）: `crates/task-api/src/admin.rs` 1 行目・13 行目の `providers.d/`、`crates/task-api/tests/common/mod.rs` 47 行目、`crates/task-api/src/cos/operations.rs` 88 行目。`config/mod.rs` と `config/tests.rs` の `providers.d` は読み込み拒否の判定と拒否試験なので残す。
 - web の生成型と画面に旧型が残る: `web/api/generated/types.ts`・`web/api/generated/schema.json` に `ProviderView`・`ResolvedLlmSource` が残り、`web/features/ops/providers-*.ts(x)` と `gui/app/routes/providers.tsx`・`accounts.tsx`・`gui/app/celeris/types.ts` が旧型を使う。`web/` と `gui/` は本 unit の範囲外。画面は ui-v2、生成型の再生成は api-v2 で行う。
 - README と `gui/docs/DESIGN.md` に旧い provider の記述が残る可能性がある（未確認）。

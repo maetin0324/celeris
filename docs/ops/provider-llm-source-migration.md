@@ -1,43 +1,72 @@
 ---
-tasks: [01M3YF3NSR46FM314VHG14T3N6, 01M4D7RVKXY9A967ZXDADWVHQJ]
+tasks: [01M4R918GDSZBS2MC2XQABBJTM]
 ---
-# provider と LLM source の分離・Qwen cheap 専用化の移行手順
+# 本番 provider 設定を source・harness 方式へ移行する
 
-対象は 2026-10-02 の本番 `~/.config/celeris/config.toml`。実行者は人。以下は適用例であり、
-このタスクでは本番の設定・DB・daemon を変更しない。[ADR-0132](../../agent-docs/adr/0132-provider-llm-source-split-and-cheap-qwen.md) D2・D7 に従う。
+この手順は人が本番 host で実行する。Celeris の新 binary が `[[providers]]` と
+`providers.d` を拒否するため、設定の変換と binary の切替を同じ停止時間内に行う。
+この文書を作った run は本番 config・DB・credential・daemon を変更していない。
 
-## 何を変えるか
+## 選択結果
 
-`[[providers]]` は adapter / harness の実行枠で、LLM source の登録場所ではない。
-`kind = "adapter"` と `llm_source` を明示する。source と tier の対応は `[llm_proxy.sources.*]` と
-`[llm_proxy.models]` に置く。`celeris/<tier>` は proxy が実行時に source を選ぶ抽象モデルであり、
-`llm_source = "celeris"` は Qwen 固定を意味しない。
+`harness_selection` が task の role/genre/実行 class から harness を決め、各
+`route_defaults.<harness>.candidates` が先頭から source/model を試す。候補は
+compatibility、quota、cooldown、capacity を通った最初のものになる。
 
-| 2026-10-02 の provider ID | 移行後の ID | adapter とモデル |
-|---|---|---|
-| `opencode-qwen` | `opencode` | `acp`、cheap の `celeris-proxy/celeris/cheap` |
-| `ldr-qwen` | `ldr` | `local-deep-research`、`celeris/cheap` |
-| `paperqa-qwen` | `paperqa` | `paperqa`、`openai/celeris/standard` |
-| `langmem-main` | `langmem-main` | `langmem`、`celeris/cheap` |
-| `claude-pool` / `codex-pool` | 同じ | 各 CLI の OAuth source |
+| 現在の用途 | 選択規則 | harness | 先頭候補 |
+|---|---|---|---|
+| coding worker | coding role の通常選択 | `claude_code` | `claude_oauth / claude-opus-5-5` |
+| coding worker の予備 | Claude 候補が admission 不可のとき | `codex` | `codex_oauth / gpt-6.1-sol` |
+| Pi coding | role `pi` または既存の Pi 指定 | `pi` | `opencode_go / opencode-go/grok-4.6` |
+| 軽い仕事 | role `local-qwen` | `opencode` (ACP) | `qwen / qwen3.8-27b` |
+| 文献調査 | literature harness | `paperqa` | `claude_oauth / claude-opus-5-5`、次に `codex_oauth / gpt-6.1-sol` |
+| 深掘り Web 調査 | research harness | `local-deep-research` | `qwen / qwen3.8-27b`、次に Claude/Codex cheap |
+| 知識整理 | LangMem の専用起動設定 | `langmem` | `qwen / qwen3.8-27b`、次に Claude/Codex cheap |
+| CoS | `[cos].route_candidates` の順 | `claude_code` | `claude_oauth / claude-opus-5-5` |
+| planner | execution class の順。満杯なら次へ | `claude_code`, `codex` | 上記 coding 候補の順 |
+| reviewer | execution class の順 | `claude_code`, `codex` | 上記 coding 候補の順 |
 
-旧 ID は旧設定として読み込めるが、改名によって provider の stats・cooldown・
-`providers.d/<id>.toml` の鍵が変わる。履歴や cooldown は新 ID に自動移管されない。
-`providers_include` を使う場合は該当ファイル名とファイル内の `id` を対応させ、
-同じ ID の行を本体と include の両方に残さない。
+`qwen` は本番 proxy の source ID として宣言し、tier alias を使わない。旧
+`celeris/cheap` は利用可能なら Qwen を優先し、fallback に Claude/Codex cheap を使う。
+旧 `celeris/standard` は Claude/Codex standard の account pool を使う。これを具体的な
+source/model 候補として宣言する。CoS は本番の standard（Claude Opus）を先頭にし、既存 fallback の Codex
+standard を後ろに保持する。
 
-## 移行後の設定例
+## 切替前の退避と確認
 
-既存の DB、workspace、アカウントディレクトリ、API listen などは維持する。
-`[[providers]].concurrency` は deprecated なので書かない。同時実行数はアカウント（アカウントを持たない行はその行の暗黙アカウント）で決める。
-既に書いてある行から外す手順は [下の節](#プロバイダの-concurrency-を外し同時実行数をアカウントで管理する)。
-以下は該当節の抜粋で、`<…>` は人が秘密ストアまたはファイルから設定する値を示す。
-秘密の値を本書・ログ・コミットに書かない。
+以下は本番 host で人が実行する。作業用コピーは同じ権限の private directory に置く。
+設定と `providers.d` には secret reference や endpoint があるため、backup を共有・表示しない。
 
+```sh
+set -eu
+cfg="$HOME/.config/celeris/config.toml"
+stamp=$(date -u +%Y%m%dT%H%M%SZ)
+backup="$HOME/.config/celeris/config.toml.pre-source-migration.$stamp"
+cp -a -- "$cfg" "$backup"
+if [ -d "$HOME/.config/celeris/providers.d" ]; then
+  cp -a -- "$HOME/.config/celeris/providers.d" "$HOME/.config/celeris/providers.d.pre-source-migration.$stamp"
+fi
+chmod 600 "$backup"
+sha256sum "$cfg" "$backup"
+```
+
+`providers.d` の各行を下の source/harness 定義へ移し、include を外す。旧設定の secret
+reference、account pool directory、proxy URL、PaperQA/LDR の settings path、LangMem の
+secret reference は現行値を保つ。`~/.config/celeris/config.toml` の DB path、workspace、
+API、cluster、browser、account 設定も変更しない。DB/events と credential directory は
+移動・削除・再生成しない。
+
+## 移行後の TOML
+
+以下のブロックは移行に関係する設定の完成形である。既存の無関係な設定は同じファイルに
+残す。コメントで示した endpoint/path/secret reference は backup から値を移し、秘密値を
+この文書や shell history に書かない。Claude/Codex の account pool は既存の account 設定を
+使う。
+
+<!-- migration-runbook-toml:start -->
 ```toml
 [llm_proxy]
 enabled = true
-prefer_free = true
 
 [llm_proxy.sources.claude_oauth]
 # accounts_dir は既存の [accounts] claude_dir を使う
@@ -47,96 +76,236 @@ prefer_free = true
 
 [[llm_proxy.sources.openai_compatible]]
 id = "qwen"
-base_url = "http://127.0.0.1:18000/v1" # 既存の到達可能な中継先
+base_url = "<現在のQwen endpoint>/v1"
 
-[llm_proxy.models.qwen]
-cheap = "qwen3.8-27b" # frontier / standard は書かない
+[llm_sources.claude_oauth]
+kind = "claude_oauth"
+api_format = "anthropic"
+models = ["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5"]
 
-[[providers]]
-id = "claude-pool"
-kind = "adapter"
-adapter = "claude-code"
-llm_source = "claude_oauth"
-account_pool = true
-tiers = ["frontier", "standard", "cheap"]
-# tier_models 等の既存設定を保持
+[llm_sources.codex_oauth]
+kind = "codex_oauth"
+api_format = "openai_compatible"
+models = ["gpt-6-astra", "gpt-6.1-sol", "gpt-6-luna"]
 
-[[providers]]
-id = "codex-pool"
-kind = "adapter"
-adapter = "codex"
-llm_source = "codex_oauth"
-account_pool = true
-tiers = ["frontier", "standard", "cheap"]
-# tier_models 等の既存設定を保持
+[llm_sources.qwen]
+kind = "openai_compatible"
+api_format = "openai_compatible"
+endpoint = "<現在のQwen endpoint>/v1"
+models = ["qwen3.8-27b"]
 
-[[providers]]
-id = "opencode"
-kind = "adapter"
-adapter = "acp"
-llm_source = "celeris"
-tiers = ["cheap"]
-model = "celeris-proxy/celeris/cheap"
-env = { OPENCODE_CONFIG = "<proxy を使う opencode 設定 JSON の絶対パス>", OPENCODE_DISABLE_PROJECT_CONFIG = "1", LITELLM_MODEL = "celeris/cheap" }
-env_from_secrets = { CELERIS_API_TOKEN = "<API token の secret id>" }
+[llm_sources.opencode_go]
+kind = "opencode_go"
+api_format = "openai_compatible"
+models = ["opencode-go/grok-4.6"]
 
-[[providers]]
-id = "ldr"
-kind = "adapter"
-adapter = "local-deep-research"
-llm_source = "celeris"
-tiers = ["cheap"]
-model = "celeris/cheap"
+[harnesses.claude_code]
+kind = "claude_code"
+api_formats = ["anthropic"]
+source_kinds = ["claude_oauth", "codex_oauth"]
+capabilities = ["tools", "repo", "skills"]
 
-[[providers]]
-id = "paperqa"
-kind = "adapter"
-adapter = "paperqa"
-llm_source = "celeris"
-tiers = ["standard"]
-model = "openai/celeris/standard"
+[harnesses.codex]
+kind = "codex"
+api_formats = ["openai_compatible"]
+source_kinds = ["codex_oauth"]
+capabilities = ["tools", "repo", "skills"]
 
-[[providers]]
-id = "langmem-main"
-kind = "adapter"
-adapter = "langmem"
-llm_source = "celeris"
-tiers = ["cheap"]
+[harnesses.pi]
+kind = "pi"
+api_formats = ["openai_compatible"]
+source_kinds = ["opencode_go", "openai_compatible"]
+capabilities = ["tools", "repo", "skills"]
+
+[harnesses.opencode]
+kind = "acp"
+api_formats = ["openai_compatible"]
+source_kinds = ["openai_compatible"]
+capabilities = ["tools", "repo", "skills"]
+
+[harnesses.local-deep-research]
+kind = "local-deep-research"
+api_formats = ["openai_compatible"]
+source_kinds = ["openai_compatible", "claude_oauth", "codex_oauth"]
+capabilities = ["web", "sources", "citations"]
+
+[harnesses.paperqa]
+kind = "paperqa"
+api_formats = ["openai_compatible"]
+source_kinds = ["openai_compatible", "claude_oauth", "codex_oauth"]
+capabilities = ["literature", "citations"]
+
+[harnesses.langmem]
+kind = "langmem"
+api_formats = ["openai_compatible"]
+source_kinds = ["openai_compatible", "claude_oauth", "codex_oauth"]
+capabilities = ["memory"]
+
+[[llm_routes]]
+harness = "local-deep-research"
+source = "qwen"
+model = "qwen3.8-27b"
+via = "llm_proxy"
+from_api = "openai_compatible"
+to_api = "openai_compatible"
+
+[[llm_routes]]
+harness = "paperqa"
+source = "qwen"
+model = "qwen3.8-27b"
+via = "llm_proxy"
+from_api = "openai_compatible"
+to_api = "openai_compatible"
+
+[[llm_routes]]
+harness = "local-deep-research"
+source = "claude_oauth"
+model = "claude-sonnet-5-5"
+via = "llm_proxy"
+from_api = "anthropic"
+to_api = "openai_compatible"
+
+[[llm_routes]]
+harness = "local-deep-research"
+source = "codex_oauth"
+model = "gpt-6-luna"
+via = "llm_proxy"
+from_api = "openai_compatible"
+to_api = "openai_compatible"
+
+[[llm_routes]]
+harness = "langmem"
+source = "claude_oauth"
+model = "claude-sonnet-5-5"
+via = "llm_proxy"
+from_api = "anthropic"
+to_api = "openai_compatible"
+
+[[llm_routes]]
+harness = "langmem"
+source = "codex_oauth"
+model = "gpt-6-luna"
+via = "llm_proxy"
+from_api = "openai_compatible"
+to_api = "openai_compatible"
+
+[[llm_routes]]
+harness = "paperqa"
+source = "claude_oauth"
+model = "claude-opus-5-5"
+via = "llm_proxy"
+from_api = "anthropic"
+to_api = "openai_compatible"
+
+[[llm_routes]]
+harness = "paperqa"
+source = "codex_oauth"
+model = "gpt-6.1-sol"
+via = "llm_proxy"
+from_api = "openai_compatible"
+to_api = "openai_compatible"
+
+[[llm_routes]]
+harness = "claude_code"
+source = "codex_oauth"
+model = "gpt-6-astra"
+via = "llm_proxy"
+from_api = "openai_compatible"
+to_api = "anthropic"
+
+[route_defaults.claude_code]
+candidates = [{ source = "claude_oauth", model = "claude-opus-5-5" }, { source = "claude_oauth", model = "claude-fable-5-1" }, { source = "claude_oauth", model = "claude-sonnet-5-5" }]
+
+[route_defaults.codex]
+candidates = [{ source = "codex_oauth", model = "gpt-6.1-sol" }, { source = "codex_oauth", model = "gpt-6-astra" }, { source = "codex_oauth", model = "gpt-6-luna" }]
+
+[route_defaults.pi]
+candidates = [{ source = "opencode_go", model = "opencode-go/grok-4.6" }, { source = "qwen", model = "qwen3.8-27b" }]
+
+[route_defaults.opencode]
+candidates = [{ source = "qwen", model = "qwen3.8-27b" }]
+
+[route_defaults.local-deep-research]
+candidates = [{ source = "qwen", model = "qwen3.8-27b" }, { source = "claude_oauth", model = "claude-sonnet-5-5" }, { source = "codex_oauth", model = "gpt-6-luna" }]
+
+[route_defaults.paperqa]
+candidates = [{ source = "claude_oauth", model = "claude-opus-5-5" }, { source = "codex_oauth", model = "gpt-6.1-sol" }]
+
+[route_defaults.langmem]
+candidates = [{ source = "qwen", model = "qwen3.8-27b" }, { source = "claude_oauth", model = "claude-sonnet-5-5" }, { source = "codex_oauth", model = "gpt-6-luna" }]
+
+[harness_selection]
+rules = [
+  { role = "local-qwen", required_capabilities = [], harness = "opencode" },
+  { role = "pi", required_capabilities = [], harness = "pi" },
+  { genre = "coding", required_capabilities = [], requires_repo = true, harness = "claude_code" },
+  { genre = "literature", required_capabilities = [], harness = "paperqa" },
+  { genre = "web-research", required_capabilities = [], harness = "local-deep-research" },
+]
+execution_class_defaults = { planner = ["claude_code", "codex"], review = ["claude_code", "codex"] }
+
+[execution.planner]
+# adapter は削除する。budget/permission 等の既存値は保持する。
+max_turns = 70
+max_wall_secs = 900
+
+[cos]
+enabled = true
+harness = "claude-code"
+# tier / llm_source は削除し、具体的な候補順を route_candidates に置く。
+route_candidates = [
+  { source = "claude_oauth", model = "claude-opus-5-5" },
+  { source = "codex_oauth", model = "gpt-6-astra" },
+]
+max_turns = 70
+max_wall_secs = 900
 
 [knowledge.langmem]
 enabled = true
 provider = "openai-compatible"
-base_url = "http://127.0.0.1:18100/v1"
-model = "celeris/cheap"
-api_key_secret = "<API token の secret id>"
+base_url = "<現在のLangMem proxy URL>"
+model = "qwen3.8-27b"
+api_key_secret = "<現在のsecret reference>"
+
+[adapters.local_deep_research]
+settings = { "llm.model" = "qwen3.8-27b", "llm.openai_endpoint.url" = "<現在のQwen endpoint>/v1", "llm.openai_endpoint.api_key" = "<現在のsecret reference>" }
+
+[adapters.paperqa]
+settings = "<現在のPaperQA settings path>"
 ```
+<!-- migration-runbook-toml:end -->
 
-PaperQA の設定 JSON は [`config/paperqa.proxy.example.json`](../../config/paperqa.proxy.example.json) を基に
-`llm`・`summary_llm`・`agent.agent_llm` を `openai/celeris/standard`、`api_base` を proxy、
-`api_key` を API token にする。`[adapters.paperqa].settings` にはコピー先の `.json` を除いたパスを置く。
-LDR は `[adapters.local_deep_research.settings]` の `llm.model = "celeris/cheap"`、
-`llm.openai_endpoint.url` を proxy、`api_key` を同じ token にする。
-opencode の JSON は [`config/opencode.openai-compat.example.json`](../../config/opencode.openai-compat.example.json) を基に
-`celeris-proxy/celeris/cheap` を選び、`CELERIS_API_TOKEN` を秘密ストアから渡す。
-現行の設定検査は opencode の `celeris-proxy/` 接頭辞を見ないため、行の
-`LITELLM_MODEL = "celeris/cheap"` は `llm_source = "celeris"` の検査にも使う。
-Qwen 直指定の旧 opencode 経路を一時的に残すなら、その行の `tiers` は `cheap` だけにする。
-`OPENCODE_CONFIG` が無い Qwen 直指定や `llm_source = "openai_compatible:qwen"` の ACP 行も cheap に限定される。管理 API で `tiers` を省略すると `[cheap]` が保存され、非 cheap の明示指定は拒否される。
-frontier / standard でも opencode を使う場合は、Qwen 固定の `OPENCODE_CONFIG` と別の行を作り、
-proxy の `celeris/frontier` / `celeris/standard` を使う。
+`[adapters.paperqa].settings` が指す PaperQA settings では `llm`、`summary_llm`、
+`agent.agent_llm` を `qwen3.8-27b`、endpoint は現在の proxy URL、認証は既存 secret とする。
+opencode ACP の既存 `OPENCODE_CONFIG` と `CELERIS_API_TOKEN` secret injection は保持し、
+model を `qwen3.8-27b` にする。LangMem・LDR・PaperQA の本番 endpoint は backup の値を
+転記する。`providers.d` の eight IDs は新形式の宣言を確認した後に退避名へ移し、旧 include
+を外す。TOML の説明用 placeholder は実 config に残さない。
 
-## cheap lane のローカル優先（ADR-0132 付記 2026-10-04）
+## 読み込み・切替・確認
 
-cheap lane の worker run は、アカウントプール（`claude-pool`・`codex-pool`）の順位付けより先にローカルの行を選ぶ。
+1. daemon を停止し、設定全体と `providers.d` を編集する。新 binary は旧 provider config を
+   読めないため、設定保存前に binary を差し替えない。
+2. 新 binary と同じ release の `celerisctl` で、実際の起動引数にある config path を
+   指定して `celerisctl routing show --config "$cfg"` を実行する。この command は config と
+   routing registry を読み、DB を開かない。source/harness/candidate の表が出ることを確認する。
+3. 新 binary に差し替え、daemon を起動する。GUI/API で harness route と source status を確認し、
+   低リスクな coding task、Pi task、`local-qwen` task、CoS の順に実行して run audit の
+   harness/source/model を上表と照合する。planner/reviewer は候補順を確認する。
+4. 設定 parse error、source が unavailable、期待した model/harness と異なる場合は追加 task を
+   投入せず rollback する。
 
-| 項目 | 内容 |
-| --- | --- |
-| ローカルの行 | `account_pool` が無く、`tiers` に cheap を含み、実効 `llm_source` が `openai_compatible:<id>`（本番の `opencode-qwen`）か、`celeris` で proxy に有効な `openai_compatible` source と `[llm_proxy.models.qwen].cheap` がある行。`paperqa`・`local-deep-research`・`langmem` の行は含めない |
-| 同時実行数 | その行の LLM source の暗黙アカウント `implicit/<llm source id>` の実効上限（ADR 2026-10-08 account-concurrency-limits §(e)。同じ source を使う行は 1 件を共有する）。保存値が無ければ `[accounts] max_runs_per_account`（旧 `[[providers]].concurrency` は引き継がない）。GPU 1 枚の Qwen は 1 のままにする（アカウント画面で設定。[下の節](#プロバイダの-concurrency-を外し同時実行数をアカウントで管理する)） |
-| health | `GET <source の base_url>/models`（本番は `http://127.0.0.1:18000/v1/models`）。時間切れ 3 秒、結果は 60 秒キャッシュ。LLM は呼ばない |
-| プールに倒す条件 | ローカルの行が満杯・不通・cooldown 中・その仕事の adapter 指定に合わない |
-| 変わらないもの | standard / frontier、reviewer run、CoS の対話 run、継続セッション |
-| 切り替え | `[execution] cheap_local_first = false`（既定 `true`）で従来の選び方に戻る。`POST /api/v1/reload` で反映される |
+## rollback
+
+daemon を停止し、同じ backup の `config.toml` と `providers.d` を元の path へ `cp -a` で戻す。
+旧 binary を元の release から戻して daemon を起動し、health と既存 run/event を確認する。
+DB、events、credential、account directory は変更していないため復元対象にしない。新 binary
+起動後に DB migration が行われた場合でも、DB を古い binary へ安易に戻してはならない。
+release の DB migration rollback 手順に従い、DB の復元が必要なら daemon 停止中に取得した
+整合 backup のみを使用する。旧 binary が schema を読めないと分かった時点で再起動を止め、
+新 binary と移行後 config を戻して起動する。
+
+<!-- target-side operational notes retained below -->
 
 選んだ理由は `routing_decided` の `record.resolution.selection` に残る。
 

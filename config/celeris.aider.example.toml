@@ -27,7 +27,7 @@ auto_accept = false
 kind = "anthropic_api"
 api_format = "anthropic"
 credential_ref = "anthropic-api-key"
-models = ["claude-sonnet-5"]
+models = ["claude-sonnet-5-5"]
 
 [harnesses.aider]
 kind = "aider"
@@ -36,4 +36,4 @@ source_kinds = ["anthropic_api"]
 capabilities = ["repo"]
 
 [route_defaults.aider]
-candidates = [{ source = "anthropic_api", model = "claude-sonnet-5" }]
+candidates = [{ source = "anthropic_api", model = "claude-sonnet-5-5" }]

@@ -41,7 +41,7 @@ startup_timeout_secs = 300
 [llm_sources.opencode_go]
 kind = "opencode_go"
 api_format = "openai_compatible"
-models = ["opencode-go/kimi-k3"]
+models = ["opencode-go/grok-4.6"]
 
 # harness: opencode の ACP 起動（command/args は harness 宣言で持つ）。
 [harnesses.opencode]
@@ -53,4 +53,4 @@ command = "opencode"
 args = ["acp"]
 
 [route_defaults.opencode]
-candidates = [{ source = "opencode_go", model = "opencode-go/kimi-k3" }]
+candidates = [{ source = "opencode_go", model = "opencode-go/grok-4.6" }]

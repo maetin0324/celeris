@@ -46,7 +46,7 @@ permission_mode = "bypassPermissions"
 [llm_sources.claude_oauth]
 kind = "claude_oauth"
 api_format = "anthropic"
-models = ["claude-sonnet-5"]
+models = ["claude-sonnet-5-5"]
 max_runs = 2
 
 [harnesses.claude_code]
@@ -56,7 +56,7 @@ source_kinds = ["claude_oauth"]
 capabilities = ["tools", "repo", "skills"]
 
 [route_defaults.claude_code]
-candidates = [{ source = "claude_oauth", model = "claude-sonnet-5" }]
+candidates = [{ source = "claude_oauth", model = "claude-sonnet-5-5" }]
 
 [[clusters]]
 id = "pegasus"

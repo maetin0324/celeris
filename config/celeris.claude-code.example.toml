@@ -16,14 +16,14 @@ auto_accept = false               # Phase 5 の受け入れ条件どおり、子
 [adapters.claude_code]
 # command = "claude"                  # PATH 上の claude を使うなら省略可
 # permission_mode = "bypassPermissions"  # 既定。celeris は許可プロンプトに応答できない
-# model = "claude-sonnet-5"           # 省略時は claude の既定モデル（route の model は別に決まる）
+# model = "claude-sonnet-5-5"           # 省略時は claude の既定モデル（route の model は別に決まる）
 
 # LLM source（供給元）と harness（実行器）は別々に宣言する（ADR 2026-10-11 llm-source-harness-selection）。
 # model と account は route の選択で決まるので、ここには書かない。
 [llm_sources.claude_oauth]
 kind = "claude_oauth"
 api_format = "anthropic"
-models = ["claude-sonnet-5"]
+models = ["claude-sonnet-5-5"]
 
 [harnesses.claude_code]
 kind = "claude_code"
@@ -33,4 +33,4 @@ capabilities = ["tools", "repo", "skills"]
 
 # harness ごとの候補列（優先順）。先頭から適格なものを選ぶ。
 [route_defaults.claude_code]
-candidates = [{ source = "claude_oauth", model = "claude-sonnet-5" }]
+candidates = [{ source = "claude_oauth", model = "claude-sonnet-5-5" }]

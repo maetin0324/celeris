@@ -50,7 +50,7 @@ kind = "claude_oauth"
 api_format = "anthropic"
 accounts = ["a", "b"]
 max_runs = 2
-models = ["claude-sonnet-5"]
+models = ["claude-sonnet-5-5"]
 
 [llm_sources.codex_oauth]
 kind = "codex_oauth"
@@ -73,7 +73,7 @@ capabilities = ["tools", "repo", "skills"]
 
 # 候補は優先順。先頭のアカウントが上限に達したら、同じ候補の次のアカウントへ行く。
 [route_defaults.claude_code]
-candidates = [{ source = "claude_oauth", model = "claude-sonnet-5" }]
+candidates = [{ source = "claude_oauth", model = "claude-sonnet-5-5" }]
 
 [route_defaults.codex]
 candidates = [{ source = "codex_oauth", model = "gpt-5-codex" }]

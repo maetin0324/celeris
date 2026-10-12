@@ -552,7 +552,7 @@ models = ["fake"]
 # [llm_sources.claude_oauth]
 # kind = "claude_oauth"
 # api_format = "anthropic"
-# models = ["claude-opus-5-5", "claude-sonnet-5"]
+# models = ["claude-opus-5-5", "claude-sonnet-5-5"]
 # max_runs = 4
 # [harnesses.claude_code]
 # kind = "claude_code"
@@ -560,7 +560,7 @@ models = ["fake"]
 # source_kinds = ["claude_oauth"]
 # capabilities = ["tools", "repo", "skills"]
 # [route_defaults.claude_code]
-# candidates = [{ source = "claude_oauth", model = "claude-sonnet-5" }]
+# candidates = [{ source = "claude_oauth", model = "claude-sonnet-5-5" }]
 
 # 知識整理 run 用の harness（ADR-0047 D4、Phase 62）。有効化するには上の `[adapters.langmem]` と
 # `[knowledge.langmem]` を有効にしたうえで、このコメントを外す。供給元は具体的な source/model で書く。

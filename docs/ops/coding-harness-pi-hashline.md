@@ -53,7 +53,7 @@ tool 集合は read/edit（Hashline）+ bash/grep/find/ls 程度に絞る。suba
 - `[llm_sources.opencode_go]`（供給元）と `[harnesses.pi]`（実行器。`extensions`（Hashline path）、`tools`（allowlist）、
   必要なら `command`/`args`。B で入れた場合は `command = "~/.local/celeris/npm/bin/pi"`、A なら
   `command = "node"` と `args = ["<cli.js の path>"]`）。
-- `[route_defaults.pi]` の候補（`{ source = "opencode_go", model = "opencode-go/kimi-k3" }`）と `[harness_selection]` の規則。
+- `[route_defaults.pi]` の候補（`{ source = "opencode_go", model = "opencode-go/grok-4.6" }`）と `[harness_selection]` の規則。
 - `[[harnesses]] id = "coding"` に `adapter_policy = "model_family"`。
 
 反映後の確認（人が実行）:

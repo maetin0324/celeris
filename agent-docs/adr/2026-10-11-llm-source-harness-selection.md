@@ -307,6 +307,27 @@ candidates = [{ source = "opencode_go", model = "opencode-go/kimi-k3" }]
 
 `config/celeris.pi-hashline.example.toml` が同じ書き方の例である。
 
+## 実装突き合わせ付記（2026-10-12、本番移行 runbook）
+
+本番移行例は [provider/source/harness 移行手順](../../docs/ops/provider-llm-source-migration.md)
+と [進捗記録](../progress/2026-10-11-provider-layer-redesign.md) に記載する。確認した本番
+8 行の model ID は Claude `claude-fable-5-1` / `claude-opus-5-5` / `claude-sonnet-5-5`、
+Codex `gpt-6-astra` / `gpt-6.1-sol` / `gpt-6-luna`、Qwen `qwen3.8-27b`、Pi の
+OpenCode Go `opencode-go/grok-4.6` である。Pi の先頭候補は OpenCode Go、その後ろに Qwen
+を置く。coding standard は Claude Opus を先頭、Codex 6.1 を次にする。
+
+CoS は harness を `claude_code` に固定し、standard の `claude-opus-5-5` を先頭に、task
+01M4E0WA5Z の Codex OAuth `gpt-6-astra` fallback を続ける。Codex→Claude Code の候補は
+`llm_routes` に API 変換を明記する。planner/reviewer は `claude_code`、`codex` の順で
+admission し、どちらも空いていない場合 defer する。Qwen の軽量仕事は `local-qwen` role
+から ACP/OpenCode harness を選ぶ。
+
+旧 proxy tier alias を撤去し、LDR/LangMem の cheap は利用可能な Qwen を先頭に Claude/Codex
+cheap fallback を明記する。PaperQA の standard は Claude Opus、次に Codex 6.1 とする。
+Runbook TOML を `crates/celeris/src/config/tests.rs::migration_runbook_toml_loads` が読み、
+harness ごとの先頭候補、CoS の候補順、planner の harness 順と進捗内 TOML との一致を検証する。
+本番移行後の daemon、DB、credential の変更は本 task の範囲外で、人が別途実行する。
+
 **宣言の検証（読み込み時）。** `validate_registry`（`crates/celeris/src/config/llm_route.rs`）は execution class の各候補 harness について次を確かめ、違えば読み込みエラーにする。
 - `[harnesses.<id>]` で宣言されている（未宣言は既存の検証で拒否）。
 - `[route_defaults.<id>]` を持つ。持たないと admission で必ず `NoDeclaredDefault` になるため、読み込みで止める（試験 `execution_class_harness_requires_route_defaults`）。

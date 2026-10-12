@@ -13,12 +13,12 @@ codex_dir = "codex-accounts"
 [llm_sources.claude_oauth]
 kind = "claude_oauth"
 api_format = "anthropic"
-models = ["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5"]
+models = ["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5"]
 
 [llm_sources.codex_oauth]
 kind = "codex_oauth"
 api_format = "openai_responses"
-models = ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna"]
+models = ["gpt-6-astra", "gpt-6.1-sol", "gpt-6-luna"]
 
 [harnesses.claude_code]
 kind = "claude_code"
@@ -38,12 +38,12 @@ capabilities = ["tools", "repo", "skills"]
 candidates = [
   { source = "claude_oauth", model = "claude-fable-5-1" },
   { source = "claude_oauth", model = "claude-opus-5-5" },
-  { source = "claude_oauth", model = "claude-sonnet-5" },
+  { source = "claude_oauth", model = "claude-sonnet-5-5" },
 ]
 
 [route_defaults.codex]
 candidates = [
   { source = "codex_oauth", model = "gpt-6-astra" },
-  { source = "codex_oauth", model = "gpt-6-sol" },
+  { source = "codex_oauth", model = "gpt-6.1-sol" },
   { source = "codex_oauth", model = "gpt-6-luna" },
 ]

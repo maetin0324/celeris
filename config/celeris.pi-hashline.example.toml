@@ -12,7 +12,7 @@ opencode_dir = "~/.local/celeris/opencode-accounts"
 [llm_sources.claude_oauth]
 kind = "claude_oauth"
 api_format = "anthropic"
-models = ["claude-sonnet-5"]
+models = ["claude-sonnet-5-5"]
 
 [harnesses.claude_code]
 kind = "claude_code"
@@ -25,7 +25,7 @@ capabilities = ["tools", "repo", "skills"]
 [llm_sources.opencode_go]
 kind = "opencode_go"
 api_format = "openai_compatible"
-models = ["opencode-go/kimi-k3"]
+models = ["opencode-go/grok-4.6"]
 
 [harnesses.pi]
 kind = "pi"
@@ -35,10 +35,10 @@ capabilities = ["tools", "repo", "skills"]
 
 # 候補は優先順。先頭から適格なものを選ぶ（適格性・quota・cooldown・同時実行数）。
 [route_defaults.claude_code]
-candidates = [{ source = "claude_oauth", model = "claude-sonnet-5" }]
+candidates = [{ source = "claude_oauth", model = "claude-sonnet-5-5" }]
 
 [route_defaults.pi]
-candidates = [{ source = "opencode_go", model = "opencode-go/kimi-k3" }]
+candidates = [{ source = "opencode_go", model = "opencode-go/grok-4.6" }]
 
 # harness の選択規則（genre・repo の有無から決める。一意に決まらなければ fail closed）。
 [harness_selection]

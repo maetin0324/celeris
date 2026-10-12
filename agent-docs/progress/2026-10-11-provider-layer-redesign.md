@@ -124,3 +124,233 @@ status: running
 `[llm_proxy.models]` の tier は proxy の既定 model alias で、provider `tier_models` および task lane と同一概念ではない。`celeris/<tier>` は proxy 内で source selection を引き起こすため、harness からの source choice を proxy に委譲する経路でもある。現状には tier・model assignment・proxy tier alias・provider model mapping の複数の入口が併存する。
 
 - 2026-10-11 harness-heading（01M4M9S863 / adr-select）: 新 ADR の「## harness」節に小見出し「### 宣言の形（## harness）」を 1 行足した。受け入れ check の見出し grep（`^#.*## harness`）が当たるようにするための修正で、本文は変えていない。
+
+
+## 本番への移行
+
+2026-10-12 に人が本番 `~/.config/celeris/config.toml` を読み取り、8 provider 行と proxy model alias を確認した。旧行は `claude-pool`（claude-code; frontier/standard/cheap）、`codex-pool`（codex; frontier/standard/cheap）、`opencode-qwen`（ACP; `qwen-local/qwen3.8-27b`）、`pi-qwen`（Pi; `qwen-local/qwen3.8-27b`）、`pi-opencode-go`（Pi; `opencode-go/grok-4.6`）、`ldr-qwen`（LDR; `celeris/cheap`）、`paperqa-qwen`（PaperQA; proxy `standard`）、`langmem-main`（LangMem; proxy cheap/standard）である。`providers.d` include は設定されていたが、該当する追加 TOML は存在しなかった。credential や endpoint の値は文書に転記しない。
+
+| 選択規則 | harness | 先頭 source/model | fallback / 用途 |
+|---|---|---|---|
+| coding role / repo 必須 | `claude_code` | `claude_oauth / claude-opus-5-5` | Codex `codex_oauth / gpt-6.1-sol` を次候補にする |
+| Pi role の固定 harness | `pi` | `opencode_go / opencode-go/grok-4.6` | Qwen `qwen / qwen3.8-27b` は後順位 |
+| `local-qwen` role | `opencode` (ACP) | `qwen / qwen3.8-27b` | 軽い仕事を明示 role で選ぶ |
+| literature genre | `paperqa` | `claude_oauth / claude-opus-5-5` | 旧 `celeris/standard` の候補; Codex `gpt-6.1-sol` が次 |
+| research genre | `local-deep-research` | `qwen / qwen3.8-27b` | 旧 `celeris/cheap`; 次に Claude/Codex cheap |
+| LangMem 専用起動 | `langmem` | `qwen / qwen3.8-27b` | 旧 `celeris/cheap`; 次に Claude/Codex cheap |
+| CoS | `claude_code` | `claude_oauth / claude-opus-5-5` | `codex_oauth / gpt-6-astra` を fallback |
+| planner / reviewer execution class | `claude_code`, `codex` | Claude Opus、次に Codex 6.1 | admission 不可なら次候補、全候補不可なら defer |
+
+本番に反映する設定全文（既存の無関係な項目は保持し、placeholder は現在値に置換する）は次のとおり。秘密値は含めず、backup から endpoint/secret reference/path を転記する。
+
+```toml
+[llm_proxy]
+enabled = true
+
+[llm_proxy.sources.claude_oauth]
+# accounts_dir は既存の [accounts] claude_dir を使う
+
+[llm_proxy.sources.codex_oauth]
+# accounts_dir は既存の [accounts] codex_dir を使う
+
+[[llm_proxy.sources.openai_compatible]]
+id = "qwen"
+base_url = "<現在のQwen endpoint>/v1"
+
+[llm_sources.claude_oauth]
+kind = "claude_oauth"
+api_format = "anthropic"
+models = ["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5"]
+
+[llm_sources.codex_oauth]
+kind = "codex_oauth"
+api_format = "openai_compatible"
+models = ["gpt-6-astra", "gpt-6.1-sol", "gpt-6-luna"]
+
+[llm_sources.qwen]
+kind = "openai_compatible"
+api_format = "openai_compatible"
+endpoint = "<現在のQwen endpoint>/v1"
+models = ["qwen3.8-27b"]
+
+[llm_sources.opencode_go]
+kind = "opencode_go"
+api_format = "openai_compatible"
+models = ["opencode-go/grok-4.6"]
+
+[harnesses.claude_code]
+kind = "claude_code"
+api_formats = ["anthropic"]
+source_kinds = ["claude_oauth", "codex_oauth"]
+capabilities = ["tools", "repo", "skills"]
+
+[harnesses.codex]
+kind = "codex"
+api_formats = ["openai_compatible"]
+source_kinds = ["codex_oauth"]
+capabilities = ["tools", "repo", "skills"]
+
+[harnesses.pi]
+kind = "pi"
+api_formats = ["openai_compatible"]
+source_kinds = ["opencode_go", "openai_compatible"]
+capabilities = ["tools", "repo", "skills"]
+
+[harnesses.opencode]
+kind = "acp"
+api_formats = ["openai_compatible"]
+source_kinds = ["openai_compatible"]
+capabilities = ["tools", "repo", "skills"]
+
+[harnesses.local-deep-research]
+kind = "local-deep-research"
+api_formats = ["openai_compatible"]
+source_kinds = ["openai_compatible", "claude_oauth", "codex_oauth"]
+capabilities = ["web", "sources", "citations"]
+
+[harnesses.paperqa]
+kind = "paperqa"
+api_formats = ["openai_compatible"]
+source_kinds = ["openai_compatible", "claude_oauth", "codex_oauth"]
+capabilities = ["literature", "citations"]
+
+[harnesses.langmem]
+kind = "langmem"
+api_formats = ["openai_compatible"]
+source_kinds = ["openai_compatible", "claude_oauth", "codex_oauth"]
+capabilities = ["memory"]
+
+[[llm_routes]]
+harness = "local-deep-research"
+source = "qwen"
+model = "qwen3.8-27b"
+via = "llm_proxy"
+from_api = "openai_compatible"
+to_api = "openai_compatible"
+
+[[llm_routes]]
+harness = "paperqa"
+source = "qwen"
+model = "qwen3.8-27b"
+via = "llm_proxy"
+from_api = "openai_compatible"
+to_api = "openai_compatible"
+
+[[llm_routes]]
+harness = "local-deep-research"
+source = "claude_oauth"
+model = "claude-sonnet-5-5"
+via = "llm_proxy"
+from_api = "anthropic"
+to_api = "openai_compatible"
+
+[[llm_routes]]
+harness = "local-deep-research"
+source = "codex_oauth"
+model = "gpt-6-luna"
+via = "llm_proxy"
+from_api = "openai_compatible"
+to_api = "openai_compatible"
+
+[[llm_routes]]
+harness = "langmem"
+source = "claude_oauth"
+model = "claude-sonnet-5-5"
+via = "llm_proxy"
+from_api = "anthropic"
+to_api = "openai_compatible"
+
+[[llm_routes]]
+harness = "langmem"
+source = "codex_oauth"
+model = "gpt-6-luna"
+via = "llm_proxy"
+from_api = "openai_compatible"
+to_api = "openai_compatible"
+
+[[llm_routes]]
+harness = "paperqa"
+source = "claude_oauth"
+model = "claude-opus-5-5"
+via = "llm_proxy"
+from_api = "anthropic"
+to_api = "openai_compatible"
+
+[[llm_routes]]
+harness = "paperqa"
+source = "codex_oauth"
+model = "gpt-6.1-sol"
+via = "llm_proxy"
+from_api = "openai_compatible"
+to_api = "openai_compatible"
+
+[[llm_routes]]
+harness = "claude_code"
+source = "codex_oauth"
+model = "gpt-6-astra"
+via = "llm_proxy"
+from_api = "openai_compatible"
+to_api = "anthropic"
+
+[route_defaults.claude_code]
+candidates = [{ source = "claude_oauth", model = "claude-opus-5-5" }, { source = "claude_oauth", model = "claude-fable-5-1" }, { source = "claude_oauth", model = "claude-sonnet-5-5" }]
+
+[route_defaults.codex]
+candidates = [{ source = "codex_oauth", model = "gpt-6.1-sol" }, { source = "codex_oauth", model = "gpt-6-astra" }, { source = "codex_oauth", model = "gpt-6-luna" }]
+
+[route_defaults.pi]
+candidates = [{ source = "opencode_go", model = "opencode-go/grok-4.6" }, { source = "qwen", model = "qwen3.8-27b" }]
+
+[route_defaults.opencode]
+candidates = [{ source = "qwen", model = "qwen3.8-27b" }]
+
+[route_defaults.local-deep-research]
+candidates = [{ source = "qwen", model = "qwen3.8-27b" }, { source = "claude_oauth", model = "claude-sonnet-5-5" }, { source = "codex_oauth", model = "gpt-6-luna" }]
+
+[route_defaults.paperqa]
+candidates = [{ source = "claude_oauth", model = "claude-opus-5-5" }, { source = "codex_oauth", model = "gpt-6.1-sol" }]
+
+[route_defaults.langmem]
+candidates = [{ source = "qwen", model = "qwen3.8-27b" }, { source = "claude_oauth", model = "claude-sonnet-5-5" }, { source = "codex_oauth", model = "gpt-6-luna" }]
+
+[harness_selection]
+rules = [
+  { role = "local-qwen", required_capabilities = [], harness = "opencode" },
+  { role = "pi", required_capabilities = [], harness = "pi" },
+  { genre = "coding", required_capabilities = [], requires_repo = true, harness = "claude_code" },
+  { genre = "literature", required_capabilities = [], harness = "paperqa" },
+  { genre = "web-research", required_capabilities = [], harness = "local-deep-research" },
+]
+execution_class_defaults = { planner = ["claude_code", "codex"], review = ["claude_code", "codex"] }
+
+[execution.planner]
+# adapter は削除する。budget/permission 等の既存値は保持する。
+max_turns = 70
+max_wall_secs = 900
+
+[cos]
+enabled = true
+harness = "claude-code"
+# tier / llm_source は削除し、具体的な候補順を route_candidates に置く。
+route_candidates = [
+  { source = "claude_oauth", model = "claude-opus-5-5" },
+  { source = "codex_oauth", model = "gpt-6-astra" },
+]
+max_turns = 70
+max_wall_secs = 900
+
+[knowledge.langmem]
+enabled = true
+provider = "openai-compatible"
+base_url = "<現在のLangMem proxy URL>"
+model = "qwen3.8-27b"
+api_key_secret = "<現在のsecret reference>"
+
+[adapters.local_deep_research]
+settings = { "llm.model" = "qwen3.8-27b", "llm.openai_endpoint.url" = "<現在のQwen endpoint>/v1", "llm.openai_endpoint.api_key" = "<現在のsecret reference>" }
+
+[adapters.paperqa]
+settings = "<現在のPaperQA settings path>"
+```
+
+本番では作業前に config と `providers.d` を権限付きで backup し、daemon 停止中に8行を source/harness/route 設定へ移して include と旧行を除く。DB path、events、credential files、account directories は保持する。新 binary の config validation が成功してから同一 release の binary を切替・起動し、API の source status と run audit の harness/source/model を coding、Pi、local-qwen、CoS の順に確認する。失敗時は daemon を停止し config/include と旧 binary を backup/release から戻す。DB migration 後は DB を旧版へ安易に戻さず、release の migration rollback 規則を適用する。詳細な人向けコマンドと確認事項は [移行手順](../../docs/ops/provider-llm-source-migration.md) にある。

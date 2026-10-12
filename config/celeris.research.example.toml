@@ -142,7 +142,7 @@ insufficient_is_error = false
 [llm_sources.claude_oauth]
 kind = "claude_oauth"
 api_format = "anthropic"
-models = ["claude-sonnet-5"]
+models = ["claude-sonnet-5-5"]
 
 [llm_sources.fake]
 kind = "fake"
@@ -164,13 +164,13 @@ capabilities = ["tools"]
 [[llm_routes]]
 harness = "paperqa"
 source = "claude_oauth"
-model = "claude-sonnet-5"
+model = "claude-sonnet-5-5"
 via = "llm_proxy"
 from_api = "anthropic"
 to_api = "openai_compatible"
 
 [route_defaults.paperqa]
-candidates = [{ source = "claude_oauth", model = "claude-sonnet-5" }]
+candidates = [{ source = "claude_oauth", model = "claude-sonnet-5-5" }]
 
 [route_defaults.fake]
 candidates = [{ source = "fake", model = "fake" }]

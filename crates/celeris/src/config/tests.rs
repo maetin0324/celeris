@@ -40,6 +40,79 @@ fn planner_without_adapter_keeps_its_budget_and_permission_settings() {
 }
 
 #[test]
+fn migration_runbook_toml_loads() {
+    let runbook = include_str!("../../../../docs/ops/provider-llm-source-migration.md");
+    let progress = include_str!("../../../../agent-docs/progress/2026-10-11-provider-layer-redesign.md");
+    let start = "<!-- migration-runbook-toml:start -->";
+    let end = "<!-- migration-runbook-toml:end -->";
+    let toml = runbook
+        .split_once(start)
+        .and_then(|(_, tail)| tail.split_once(end))
+        .map(|(toml, _)| toml.trim().trim_start_matches("```toml").trim_end_matches("```"))
+        .expect("migration runbook TOML markers");
+    assert!(progress.contains(toml), "progress TOML matches runbook TOML");
+    let cfg = Config::parse_with_delivery(toml).expect("runbook config parses");
+    let registry = cfg.llm_route_registry().expect("routes validate");
+
+    for (harness, source, model) in [
+        ("claude_code", "claude_oauth", "claude-opus-5-5"),
+        ("codex", "codex_oauth", "gpt-6.1-sol"),
+        ("pi", "opencode_go", "opencode-go/grok-4.6"),
+        ("opencode", "qwen", "qwen3.8-27b"),
+        ("local-deep-research", "qwen", "qwen3.8-27b"),
+        ("paperqa", "claude_oauth", "claude-opus-5-5"),
+        ("langmem", "qwen", "qwen3.8-27b"),
+    ] {
+        assert_eq!(
+            registry.route_defaults[&task_core::llm_route::HarnessId::from(harness)]
+                [0]
+                .source
+                .0,
+            source,
+            "{harness} source"
+        );
+        assert_eq!(
+            registry.route_defaults[&task_core::llm_route::HarnessId::from(harness)]
+                [0]
+                .model
+                .0,
+            model,
+            "{harness} first model"
+        );
+    }
+    assert_eq!(
+        registry.harness_selection.execution_class_defaults
+            [&task_core::llm_route::ExecutionClass::from("planner")]
+            .iter()
+            .map(|id| id.0.as_str())
+            .collect::<Vec<_>>(),
+        ["claude_code", "codex"]
+    );
+    assert_eq!(
+        registry.cos_route_candidates[0].model.0,
+        "claude-opus-5-5"
+    );
+    assert_eq!(
+        registry.cos_route_candidates[1].model.0,
+        "gpt-6-astra"
+    );
+    assert_eq!(registry.cos_route_candidates[1].source.0, "codex_oauth");
+    assert_eq!(
+        registry.route_defaults[&task_core::llm_route::HarnessId::from("paperqa")].len(),
+        2
+    );
+    assert_eq!(
+        registry.route_defaults[&task_core::llm_route::HarnessId::from("local-deep-research")]
+            .len(),
+        3
+    );
+    assert_eq!(
+        registry.route_defaults[&task_core::llm_route::HarnessId::from("langmem")].len(),
+        3
+    );
+}
+
+#[test]
 fn browser_settings_default_to_unconfigured_and_site_policy_validates() {
     let cfg: Config = toml::from_str("").unwrap();
     assert!(cfg.browser.egress.resolver.is_none());
@@ -1054,7 +1127,7 @@ fn loads_aider_example_config() {
     assert_eq!(cfg.harness_declarations["aider"].kind, "aider");
     assert_eq!(
         cfg.llm_sources["anthropic_api"].models,
-        vec!["claude-sonnet-5"]
+        vec!["claude-sonnet-5-5"]
     );
 }
 

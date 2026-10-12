@@ -65,3 +65,33 @@ reviewer が「指定SHAの実際の差分」を `4d97d291..ca7025be`（別 task
 
 - `scripts/dev/test-parallel.sh` は試験の `TMPDIR` を入れ子にしない（または試験の socket dir を短い固定の場所へ置く）。そうすれば `TMPDIR` の長さに依らず browser 試験が通る。試験と script の変更を伴うので別の task で扱う。
 - 本番 `release` の host でも同じ `TMPDIR` 条件になるかを確かめる（人の判断）。
+
+## release 準備の中断（2026-10-12）
+
+差し戻し（delivery-repair）の release 準備（ref・sha `e53a27e9793e8449ec193de3199a7045b2a131be`）は、step `cargo-test` の途中で `Terminated` により止まった。コードの欠陥による失敗ではないと判断した。
+
+### 原因（環境要因）
+
+- `prepare.log` 末尾: `2026-10-12T02:38:17Z [release] step cargo-test: bash .../scripts/dev/test-parallel.sh` の後、時刻の無い `Terminated` が 2 行。`prepare.log` の最終更新時刻（mtime）は `2026-10-12 02:39:45.789Z`。
+- 同時刻に本番 daemon が handoff した（依頼の記述: journal の `daemon shutdown` → `Started celeris@3fcdbc74b61f` が 02:39:45Z）。実行中の release.sh が巻き添えで止まったと見ている。handoff 時刻と log の最終書込みは一致する。
+- 依頼文の「開始 28 秒後」とは一致しない。log の step 開始（02:38:17Z）から最終書込み（02:39:45Z）までは約 88 秒。
+- 制約: 本 WU から journal の celeris unit は読めなかった（`journalctl -u 'celeris@*'` が `No data available`）。journal 側の行は依頼文の記述による。本番 host（systemctl・releases・state）には触れていない。release.sh は流していない。
+
+### 統合後 HEAD `7837413bda6c8684ef96a2dca7038a5bb43f65f2` での再検証
+
+| 検査 | 結果 |
+| --- | --- |
+| `cargo fmt --all -- --check` | exit 0 |
+| `TMPDIR=/var/tmp bash scripts/dev/test-parallel.sh` | exit 0。`CELERIS_TEST_SUMMARY {"nextest_exit":0,"doctest_exit":0,"passed":5215,"failed":0,"ignored":14,"summary_parsed":true}`（nextest 5212 run: 5212 passed、13 skipped）。ログ: `artifacts/test-parallel-vartmp.log` |
+| `cargo clippy --workspace -- -D warnings` | exit 0（`Finished dev profile`）。ログ: `artifacts/clippy.log` |
+| `sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv` | exit 0（`check-doc-layout: ok`） |
+| `sh scripts/dev/check-doc-links.sh` | exit 0（`check-doc-links: ok`） |
+| `sh scripts/dev/check-adr-numbers.sh` | exit 0（`ok (196 files)`） |
+
+- 初回の test-parallel は `TMPDIR` を指定せず実行した。このときの run の `TMPDIR`（`.../runs/01M4PZQZJ20X10ZJG276WZMVEA/tmp`）が長く、exit 100。`nextest` は 5212 run 中 5102 passed・110 failed。失敗の大半は `path must be shorter than SUN_LEN`（142 件）と、その後の `timed out waiting for fixture readiness`。コードの欠陥ではなく、上の「前回の失敗と原因」と同じ `TMPDIR` の長さの問題。ログ: `artifacts/test-parallel-runtmp-fail.log`。
+- `TMPDIR=/var/tmp` の再実行で全試験が通った。したがって本 WU で直すべきコードの欠陥は見つからなかった。
+
+### 未解決事項（追加）
+
+- release 準備の `TMPDIR` が長いと同じ `SUN_LEN` 失敗が起きる。本番 release の host で既定の `TMPDIR` がどの長さになるかは未確認（上の提案を参照）。
+- 中断の時刻（02:39:45Z）と handoff の関係は log の mtime で一致を確かめたが、journal の行は本 WU では読めていない。

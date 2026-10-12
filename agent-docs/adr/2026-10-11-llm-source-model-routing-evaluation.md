@@ -237,6 +237,26 @@ D1 の評価 run を Celeris の run 経路で起こす受け口の形を固定�
    runs(role=eval)・route_decisions(stage=eval、harness_version あり)・route_outcomes が各 2、worktree・session が試行ごとに別、
    stub の prompt に check_cmd が無い、同時に 2 本走らないことを確かめる。
 
+## 付記 2026-10-12: 評価 runner の実装（eval-harness）
+
+D5 の評価 runner（crate `routing-eval`、bin `celeris-routing-eval`）と根拠表の型・表を実装した（task 01M4Q53E9WQEKMAS448GZMWTFB）。後続の変更が食い違えばこの節に具体的に追記する。
+
+1. **harness_version の major（D1 の未解決を確定）**: `task_core::routing_evidence::harness_version_major(harness_id, version_output)`。
+   `claude-code`・`codex` は version 出力の中の最初の `X.Y.Z` 形の語の major（`v` 接頭辞は外す。例 `Claude Code 1.8.2` → `1`）。
+   それ以外（acp・pi など）は version 出力を trim した全体。major が取れないときも全体を使う。根拠表の鍵は major、生の出力は `eval_trials`（付記 2026-10-12 の 1）側に残す。
+   試験は `task-core` の routing_evidence 単体試験が固定する。
+2. **評価集合 manifest（`celeris.routing-eval-manifest/1`）**: `manifest.json` の欄は `schema`・`version`（既定 `1`）・`cutoff`（既定 `2026-10-05`。作成時期で dev < cutoff ≤ held-out）・`seed`・`problems[]`・`sha256`（全体）。
+   問題の欄は `id`・`task_id`・`work_unit_id`・`created_at`・`genre`・`kind`・`command`（採点用の check。manifest 以外には出さない）・`split`・`stratum`・`subset_12`・`base_commit`・`head_commit`・`features`（`celeris.task-features/1`、作成時点 as_of）・`features_sha256`・問題ごとの `sha256`。
+   `recheck` は各問題の check を base で失敗・head で成功と再実行で検め、結果を manifest の `recheck` 欄に書く（除外理由つき）。同じ `version` で sha256 が違う上書きは拒否し、`--version` を上げさせる。
+   集合の内訳は ADR D1 の表どおり: 通常 5 model は 30 問（k=2）、fable・astra は 30 問の層を保つ 12 問（k=1）。候補の表は `candidates.rs` の `CANDIDATES` 定数 7 件だけ。
+3. **根拠表 `routing_evidence`（migration 0071_routing_evidence.sql）**: 列は `genre`・`harness_id`・`harness_version`（major）・`source_id`・`model_id`・`evidence_version`・`n`・`pass`・`pass_lower`・`pass_upper`・`wall_median_s`・`usd_list_median`・`quota_per_run_json`（窓→率の JSON）・`timeout_rate`・`low_confidence`（k=1・部分集合）。
+   主キーは鍵 + `evidence_version`。`evidence_version` は `<manifest sha256>-<集計日 UTC>`。同じ版は丸ごと置換し、別の版は追記する（store の `insert_routing_evidence` / `list_routing_evidence`）。
+   書くのは `aggregate --write-evidence` だけ。API と GUI に編集経路は作らない（ADR D2 の「手で編集しない」）。
+4. **評価 run の DB 契約（付記 2026-10-12 の 4 と同じ。aggregate が読む側）**: 1 試行 = `route_decisions` 1 行（stage `eval`、subject_kind `eval_problem`、input `{manifest_sha, trial_no, candidate}`、output `{selected:{source_id, model_id, harness_id, harness_version}}`）＋ `runs` 1 行（role `eval`、run_id で結合）＋ `route_outcomes`（passed・check_exit・timed_out・wall_secs・usage・usd_list）。aggregate は決定的 check の判定・timeout・token・quota を集め、同じ鍵の試行を問題単位で束ねて `stats` に渡す。
+5. **dry-run の見積り**: 呼び出し数は問題数 × k、account ごとに合算する。定価換算 USD は本番 runs の model 別の token 中央値に単価表（`dryrun.rs` の定数。claude 4 model のみ）を掛ける。codex の 2 model は単価が無いので USD を出さず「未算定」と書く。quota は `quota_estimated` のうち `method=measured` の行だけを率にする（無ければ「未測定」）。`--measured` は 10 run 実測の JSON（`runs` = 10 が必須）で率を置き換える。週窓の率が 15% を越える account は縮小案を出す。
+6. **統計（`stats`）**: Wilson 95%・問題単位の seed 固定 bootstrap・exact McNemar・paired 差の区間・Pareto・根拠成立（30×2 は有効 24 問以上、12×1 は全問）・同等集合（区間の重なり）・`may_claim_superiority`（k=1 は常に偽）・held-out で選択の符号が反転したら不成立。CLI の `stats` は単独入力を持たず、`aggregate` が呼ぶ（CLI から呼ぶと説明つきの失敗を返す）。
+7. **本番で評価を走らせる手順は人の決定待ち**: LLM を呼ぶ評価（`run` の本番実行）は、eval-budget の人の回答と dry-run の受信箱決定（呼び出し数・費用・quota の見積り）の後にだけ行う。今回の run では実行せず、試験は stub harness と一時 DB だけで行った（`crates/routing-eval/tests/pipeline_stub.rs`）。
+
 ## 改訂履歴
 
 - 2026-10-11: 人の確認を反映。評価対象を 7 model に限定し、fable-5-1 / gpt-6-astra を k=1・層別部分集合、通常 5 model を k=2・30 問に縮小。Codex の quota は実測前に率を仮定せず、10-run dry-run と週 15% gate を必須化。opencode-go は根拠表対象外、qwen はローカル既定候補として明記。辞書順 fallback と `[routing.defaults.<genre>]` を除き、lane ごとの人の既定を harness×lane `route_defaults` に統合。

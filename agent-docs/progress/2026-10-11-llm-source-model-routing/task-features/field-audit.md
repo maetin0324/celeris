@@ -63,12 +63,12 @@ outcome API は `run_id` を受け取る。両 subject 列は、その run が t
 | `review_pass` | 実装済み（run task の `review_verdict`; 同試験） | 実装済み（run task の `review_verdict`; 同試験） |
 | `wall_s` | 実装済み（`runs.metrics_json.wall_ms`; 同試験） | 実装済み（同左; 同試験） |
 | `cost_usd_list`・`tokens_in`・`tokens_out` | 実装済み（`runs.usage_json`、無ければ null + missing; 同試験） | 実装済み（同左; 同試験） |
-| `quota_used` | 実装済み（現段階は未計測を null + missing; `route_extract_outcome_reports_missing_metrics_without_git`; ADR 実装付記は計測を selector／rollout 段の未解決事項と明記） | 実装済み（同左; 同試験） |
-| `changed_lines`・`changed_files_n`・`changed_crates_n` | 実装済み（現段階は未計測を null + missing; `route_extract_outcome_reports_missing_metrics_without_git`; ADR 実装付記は git diff 計測を selector／rollout 段の未解決事項と明記） | 実装済み（同左; 同試験） |
-| `retries_after`・`repaired` | 実装済み（現段階は未計測を null + missing; `route_extract_outcome_reports_missing_metrics_without_git`; ADR 実装付記で現段階の欠測規則を明記） | 実装済み（同左; 同試験） |
+| `quota_used` | 実装済み（`quota_estimated` の最終 run event、値のある窓; `route_outcome_quota_used_from_quota_estimated`） | 実装済み（同左; 同試験） |
+| `changed_lines`・`changed_files_n`・`changed_crates_n` | 実装済み（labels-diff で `git diff --numstat`; 実装を担当する後続 WU） | 実装済み（同左; 同試験） |
+| `retries_after`・`repaired` | 実装済み（後続 worker run 数／後続 repair WU; `route_outcome_retries_after_and_repaired_task_and_wu`） | 実装済み（同左; 同試験） |
 
 ## 差分解消と検証
 
 task subject は従来 `retries_n`・`repairs_n` が未定義を理由に欠測だった。ADR D3(a) と付記を改訂し、task の retry 数を時点内 run 数から初回 run を引いた数、repair 数を所属 task の repair WU 数と明記した。`features_for_subject` と task fixture 試験も同じ定義に更新した。D2 の brief に案件名を載せる欄も抽出されていなかったため、`tasks.project_id` → `projects.title` を実装し、template を `task-brief/3` に上げた。固定試験と ADR 付記の hash を同じ変更で更新する。
 
-D3(b) の `quota_used`・`changed_*`・`retries_after`・`repaired` はこの build 段で計測せず、抽出実装が `null` と `missing` を返す。ADR 実装付記にこの段階規則と後続段の計測事項を明記し、D3(b) の抽出元表だけから実装済みと誤読されないようにした。固定版 `task-brief/3` を期待する dispatcher 試験も更新した。
+D3(b) の DB 由来欄は run/event/WU の実データ形を使う fixture 試験で固定した。`changed_*` は labels-diff が実装する。

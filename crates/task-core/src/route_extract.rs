@@ -28,7 +28,7 @@ type SubjectRow = (
     Option<String>,
     Option<String>,
 );
-type OutcomeRow = (String, Option<String>, Option<String>, Option<String>);
+type OutcomeRow = (String, Option<String>, Option<String>, Option<String>, String, Option<String>);
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Subject {
@@ -125,15 +125,14 @@ pub fn features_for_subject(
 }
 
 /// Extract a run's `celeris.route-outcome/1` labels for an evaluation/export runner.
-/// Unavailable metrics (including git-derived change counts and quota) are null and
-/// listed in `missing`; this function performs no git operations.
+/// Git-derived change counts are unavailable; DB-backed labels are extracted here.
 pub fn outcome_labels_for_run(
     store: &SqliteStore,
     run_id: &str,
 ) -> Result<RouteOutcome, StoreError> {
     store.with_read_conn(|c| {
-        let row: Option<OutcomeRow>=c.query_row("SELECT status,usage_json,metrics_json,work_unit_id FROM runs WHERE run_id=?1",[run_id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional()?;
-        let Some((status,usage,metrics,wu))=row else{return Err(StoreError::Invalid(format!("run not found: {run_id}")));};
+        let row: Option<OutcomeRow>=c.query_row("SELECT status,usage_json,metrics_json,work_unit_id,task_id,started_at FROM runs WHERE run_id=?1",[run_id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?))).optional()?;
+        let Some((status,usage,metrics,wu,task_id,started_at))=row else{return Err(StoreError::Invalid(format!("run not found: {run_id}")));};
         let usage:Value=usage.as_deref().and_then(|s|serde_json::from_str(s).ok()).unwrap_or(Value::Null);let metrics:Value=metrics.as_deref().and_then(|s|serde_json::from_str(s).ok()).unwrap_or(Value::Null);
         let mut verdict_stmt=c.prepare("SELECT json FROM events WHERE json_extract(json,'$.type')='review_verdict' AND (?1 IS NULL OR task_id=(SELECT task_id FROM runs WHERE run_id=?2)) ORDER BY seq")?;
         let rows=verdict_stmt.query_map(rusqlite::params![wu,run_id],|r|r.get::<_,String>(0))?;
@@ -144,8 +143,25 @@ pub fn outcome_labels_for_run(
         if usage["cost_usd_list"].is_null(){missing.push("cost_usd_list".into());}
         if usage["tokens_in"].is_null(){missing.push("tokens_in".into());}
         if usage["tokens_out"].is_null(){missing.push("tokens_out".into());}
-        missing.extend(["quota_used","changed_lines","changed_files_n","changed_crates_n","retries_after","repaired"].map(str::to_owned));
-        Ok(RouteOutcome{schema:ROUTE_OUTCOME_SCHEMA.into(),labels:serde_json::json!({"run_status":status,"checks_passed":if total>0{Some(passed)}else{None},"checks_total":if total>0{Some(total)}else{None},"review_pass":review,"wall_s":wall,"cost_usd_list":usage.get("cost_usd_list"),"tokens_in":usage.get("tokens_in"),"tokens_out":usage.get("tokens_out"),"quota_used":null,"changed_lines":null,"changed_files_n":null,"changed_crates_n":null,"retries_after":null,"repaired":null,"missing":missing})})
+        let quota: Option<Value> = {
+            let mut st=c.prepare("SELECT json FROM events WHERE task_id=?1 AND json_extract(json,'$.type')='quota_estimated' AND json_extract(json,'$.run_id')=?2 ORDER BY seq DESC")?;
+            let mut rows=st.query(rusqlite::params![task_id,run_id])?;
+            let mut result=None;
+            if let Some(r)=rows.next()? { let event:Value=serde_json::from_str(&r.get::<_,String>(0)?)?; let mut map=serde_json::Map::new();
+                if let Some(windows)=event["windows"].as_array(){for w in windows {if let Some(pct)=w["used_pct"].as_f64() && let Some(name)=w["window"].as_str(){map.insert(name.to_owned(),serde_json::json!(pct));}}}
+                if !map.is_empty(){result=Some(Value::Object(map));}
+            } result
+        };
+        let retries_after: Option<u64> = if let Some(start)=started_at.as_deref() {
+            let count:i64=if let Some(wu_id)=wu.as_deref(){c.query_row("SELECT COUNT(*) FROM runs WHERE work_unit_id=?1 AND role='worker' AND started_at>?2",rusqlite::params![wu_id,start],|r|r.get(0))?}
+            else {c.query_row("SELECT COUNT(*) FROM runs WHERE task_id=?1 AND work_unit_id IS NULL AND role='worker' AND started_at>?2",rusqlite::params![task_id,start],|r|r.get(0))?}; Some(count as u64)
+        } else {None};
+        let repaired: Option<bool> = started_at.as_deref().map(|start| c.query_row("SELECT EXISTS(SELECT 1 FROM work_units WHERE task_id=?1 AND kind='repair' AND created_at>?2)",rusqlite::params![task_id,start],|r|r.get::<_,bool>(0))).transpose()?;
+        if quota.is_none() { missing.push("quota_used".into()); }
+        if retries_after.is_none() { missing.push("retries_after".into()); }
+        if repaired.is_none() { missing.push("repaired".into()); }
+        missing.extend(["changed_lines","changed_files_n","changed_crates_n"].map(str::to_owned));
+        Ok(RouteOutcome{schema:ROUTE_OUTCOME_SCHEMA.into(),labels:serde_json::json!({"run_status":status,"checks_passed":if total>0{Some(passed)}else{None},"checks_total":if total>0{Some(total)}else{None},"review_pass":review,"wall_s":wall,"cost_usd_list":usage.get("cost_usd_list"),"tokens_in":usage.get("tokens_in"),"tokens_out":usage.get("tokens_out"),"quota_used":quota,"changed_lines":null,"changed_files_n":null,"changed_crates_n":null,"retries_after":retries_after,"repaired":repaired,"missing":missing})})
     })
 }
 
@@ -391,6 +407,51 @@ mod tests {
                 .unwrap()
                 .contains(&Value::String("changed_lines".into()))
         );
+    }
+
+    #[test]
+    fn route_outcome_retries_after_and_repaired_task_and_wu() {
+        let s=fixture();
+        {
+            let c=s.lock().unwrap();
+            c.execute("INSERT INTO runs(run_id,task_id,role,seq,status,started_at) VALUES('task-base','task-1','worker',5,'completed','2026-01-01T00:01:30Z')",[]).unwrap();
+        }
+        let task_base=outcome_labels_for_run(&s,"task-base").unwrap();
+        assert_eq!(task_base.labels["retries_after"],0);
+        assert_eq!(task_base.labels["repaired"],false);
+        let task=outcome_labels_for_run(&s,"r1").unwrap();
+        assert_eq!(task.labels["retries_after"],1);
+        assert_eq!(task.labels["repaired"],false);
+        {
+            let c=s.lock().unwrap();
+            c.execute("INSERT INTO work_units(id,task_id,plan_id,key,seq,kind,status,depends_on_json,retries,json,created_at,updated_at) VALUES('repair-later','task-1','p1','repair-later',3,'repair','ready','[]',0,'{}','2026-01-01T00:04:00Z','2026-01-01T00:04:00Z')",[]).unwrap();
+            c.execute("INSERT INTO runs(run_id,task_id,role,seq,status,started_at) VALUES('task-later','task-1','worker',3,'completed','2026-01-01T00:03:00Z')",[]).unwrap();
+            c.execute("INSERT INTO runs(run_id,task_id,work_unit_id,role,seq,status,started_at) VALUES('wu-later','task-1','wu-1','worker',4,'completed','2026-01-01T00:04:00Z')",[]).unwrap();
+        }
+        let task=outcome_labels_for_run(&s,"r1").unwrap();
+        assert_eq!(task.labels["retries_after"],2);
+        assert_eq!(task.labels["repaired"],true);
+        let task_after=outcome_labels_for_run(&s,"task-base").unwrap();
+        assert_eq!(task_after.labels["retries_after"],1);
+        assert_eq!(task_after.labels["repaired"],true);
+        let wu=outcome_labels_for_run(&s,"r2").unwrap();
+        assert_eq!(wu.labels["retries_after"],1);
+        assert_eq!(wu.labels["repaired"],true);
+    }
+
+    #[test]
+    fn route_outcome_quota_used_from_quota_estimated() {
+        let s=fixture();
+        {
+            let c=s.lock().unwrap();
+            c.execute("INSERT INTO events(task_id,seq,ts,json) VALUES('task-1',6,'2026-01-01T00:06:00Z',?1)", [r#"{"type":"quota_estimated","run_id":"r1","windows":[{"window":"five_hour","used_pct":12.5},{"window":"seven_day","used_pct":null}]}"#]).unwrap();
+        }
+        let labels=outcome_labels_for_run(&s,"r1").unwrap().labels;
+        assert_eq!(labels["quota_used"],serde_json::json!({"five_hour":12.5}));
+        assert!(!labels["missing"].as_array().unwrap().contains(&Value::String("quota_used".into())));
+        let absent=outcome_labels_for_run(&s,"r2").unwrap().labels;
+        assert!(absent["quota_used"].is_null());
+        assert!(absent["missing"].as_array().unwrap().contains(&Value::String("quota_used".into())));
     }
 
     #[test]

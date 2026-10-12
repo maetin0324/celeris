@@ -38,6 +38,7 @@ mod model_routing;
 mod org;
 mod providers;
 mod proxy;
+mod routing_eval;
 mod scratch;
 mod selfdeploy;
 mod storage;
@@ -62,6 +63,7 @@ pub use model_catalog::*;
 pub use model_routing::*;
 pub use org::*;
 pub use providers::*;
+pub use routing_eval::*;
 pub use scratch::*;
 pub use selfdeploy::*;
 pub use storage::*;
@@ -135,6 +137,10 @@ pub struct Config {
     /// ADR-0072 D18（Phase E1）: `[execution]`。continuation（予算切れ・yield の続き）の可否と上限。
     #[serde(default)]
     pub execution: ExecutionTomlConfig,
+    /// ADR 2026-10-11-llm-source-model-routing-evaluation 付記（eval-dispatch）: `[routing_eval]`。
+    /// 評価 run（routing-eval の試行）専用の予約枠。既定 0 = 評価 run を起こさない。
+    #[serde(default)]
+    pub routing_eval: RoutingEvalConfig,
     #[serde(default)]
     pub api: ApiConfig,
     #[serde(default)]

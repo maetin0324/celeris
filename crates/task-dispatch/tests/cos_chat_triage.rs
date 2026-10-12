@@ -140,6 +140,7 @@ fn dispatcher(store: Arc<SqliteStore>, script: &str, dir: &Path) -> Dispatcher {
             scratch: task_worker::scratch::ScratchSettings::disabled(),
             workspace_prune_after_secs: 0,
             execution,
+            eval: task_dispatch::capacity::EvalRuntimeConfig::default(),
         },
     )
 }

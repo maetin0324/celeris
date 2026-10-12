@@ -534,6 +534,10 @@ pub struct DispatchConfig {
     pub workspace_prune_after_secs: u64,
     /// ADR-0072 D18（Phase E1）: `[execution]`。continuation の可否と上限。
     pub execution: ExecutionConfig,
+    /// `[routing_eval]`（ADR 2026-10-11-llm-source-model-routing-evaluation 付記「評価 run の受け口」）:
+    /// 評価 run 専用の予約枠。評価 run は `max_concurrency` に数えず、この枠の中だけで走る
+    /// （`crate::capacity::eval_admission`）。既定 0 = 評価 run を起こさない。
+    pub eval: crate::capacity::EvalRuntimeConfig,
 }
 
 /// ADR-0072 D18（Phase E1）: `[execution]`。continuation（予算切れ・yield の続き）の可否と上限。

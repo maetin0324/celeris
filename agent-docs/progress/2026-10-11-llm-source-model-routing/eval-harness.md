@@ -72,3 +72,34 @@ celeris-routing-eval export --db <path> --manifest <dir>/manifest.json --out <fi
 
 - 本番で評価を走らせる前に、人が次を決める: (a) eval-budget の上限、(b) codex の単価の出所、(c) `[routing_eval] reserved_runs` の値（既定 0 = 評価 run を起こさない）。決まったら、dry-run → 10 run の実測 → 受信箱決定 → `run --wait` → `aggregate --write-evidence` の順で回す。
 - `scripts/dev/test-parallel.sh` の TMPDIR の掘り方を、web/e2e と同じく短い固定 path に寄せるか、browser_e2e の socket path を短くする修正を別の unit にする（今回は触れていない）。
+
+## v4: 差し戻し（final review v3）への対応
+
+差し戻し内容は次の 2 点。(a) 全候補の trial が `harness_id="claude-code"` に固定され、codex 候補も claude-code で起動されていた、(b) 根拠行に cell の問題単位 bootstrap 区間が無く Wilson だけだった。
+
+- (a) 対応: `candidates.rs` の `CANDIDATES` に harness 列（claude 4 候補 = claude-code、codex 3 候補 = codex）。`run.rs` の `make_trials` はこの欄を読む。比較は harness の中だけ（`paired_comparisons_never_cross_harnesses`）。unit harness-fix（commit 0c508130）で入れ、integrate-fix（3f47c27f）で統合済み。
+- (b) 対応: `aggregate` の根拠行に `pass_boot_lower`・`pass_boot_upper`（問題単位 bootstrap 95%、seed 42・2,000 resamples）を Wilson と並べて持つ。`routing_evidence`（migration 0073）・Markdown 根拠表・JSON・JSONL export に出す。unit boot-interval（commit b4c7ace7）で入れ、integrate-fix で統合済み。
+- ADR: 付記 2026-10-12（v4）を追加（候補表の harness 列、根拠行の bootstrap 列、dry-run と評価 run の扱い）。
+
+### v4 の証拠（統合後 HEAD = 3f47c27f、TMPDIR=/local/x）
+
+- `bash scripts/dev/test-parallel.sh`: exit 0。nextest 5211 passed・0 failed・14 ignored（173 binaries、nextest_exit 0）。doc-test 11 binary ok（doctest_exit 0）。`CELERIS_TEST_SUMMARY` の `tmp_leftovers` は 1。script が `warning: tests left 1 entries in TMPDIR (removed on exit)` を出したが、exit 0 で、script が exit 時に削除する。
+- `cargo clippy --workspace -- -D warnings`: exit 0。
+- `cargo clippy --workspace --all-targets -- -D warnings`: exit 0。
+- `cargo fmt --all -- --check`: exit 0（差分ゼロ）。
+- `sh scripts/dev/check-adr-numbers.sh`: exit 0。
+- `sh scripts/dev/check-doc-links.sh`: exit 0。
+- `sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv`: exit 0。
+- `python3 scripts/dev/check-architecture-map.py`: exit 0。
+- `sh scripts/dev/check-test-tmp-leftovers.sh -p routing-eval`: exit 0（`no leftovers`）。
+- `cargo test -p routing-eval`: 23 unit passed・stub pipeline 1 passed（exit 0）。`run::tests::candidates_expand_k_and_subset_and_keep_checks_out_of_objective`・`aggregate::tests::paired_comparisons_never_cross_harnesses`・`stats::tests::bootstrap_is_seeded_and_problem_level` ok。
+- `cargo test -p task-core routing_evidence`: 3 passed（exit 0）。
+
+### v4 で動かしていないもの（dry-run の語）
+
+- LLM を呼ぶ評価 run と dry-run の本番実測（10 run の usage 前後差）は走らせていない。試験は stub のみ。dry-run は `celeris-routing-eval dry-run --manifest <file> --db <path>` を人が手で回す（本番 DB は読み取り専用）。実行の前に人の決定（eval-budget・見積りの承認）が要る（未解決 1）。
+
+### v4 の未解決（変化なし）
+
+- codex 3 model の定価換算 USD は単価表が無く「未算定」（未解決 2）。
+- 本番での評価 run は人の決定待ち。

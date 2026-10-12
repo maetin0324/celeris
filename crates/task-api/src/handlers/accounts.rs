@@ -83,8 +83,8 @@ fn effective_max_runs(stored: Option<usize>, default: usize) -> (usize, &'static
     }
 }
 
-/// D3.29 `GET /accounts` の items: フィルタシステムのスキャン（`logged_in`・`dir`）+ スナップショットの観測値 + 集計 +
-/// DB の上限の保存値（`account_limits`。PATCH の直後から反映される）を merge する。実アカウントを `adapter` → `id` の順
+/// `GET /api/v1/llm/accounts` の items: フィルタシステムのスキャン（`logged_in`・`dir`）+ スナップショットの観測値 + 集計 +
+/// DB の上限の保存値（`account_limits`。PATCH の直後から反映される）を merge する。実アカウントを `source_id` → `account_id` の順
 /// （ADR-0025 D6）に並べ、その後ろに暗黙アカウントを行の設定順に並べる（`[accounts]` が無くても出る）。
 async fn account_items(state: &ApiState) -> Result<Vec<AccountView>, ApiProblem> {
     let snapshot = state.snapshot();
@@ -244,7 +244,7 @@ fn implicit_view(
     }
 }
 
-/// D3.29 `GET /accounts`。読み取りなので認証は不要（管理系は 3.30 以降）。
+/// `GET /api/v1/llm/accounts`。読み取りなので認証は不要（管理系は作成以降）。
 pub(super) async fn accounts(State(state): State<ApiState>, RawQuery(raw): RawQuery) -> ApiResult {
     no_query(&raw)?;
     let items = account_items(&state).await?;
@@ -443,9 +443,8 @@ pub(crate) async fn set_account_limit_effect(
     Ok(Ok(view))
 }
 
-/// 3.30 `POST /accounts`: ディレクトリを 0700 で作る。task-api 自身は `Dispatcher`/`AccountBook` に触れない
-/// （次の選択のタイミングで celeris がディレクトリを見つける。ADR-0024 D1）。`adapter`（既定 `claude-code`）が
-/// 指す根ディレクトリが設定されていなければ 409（ADR-0025 D6）。
+/// `POST /api/v1/llm/sources/{source_id}/accounts`: ディレクトリを 0700 で作る。task-api 自身は `Dispatcher`/`AccountBook` に触れない
+/// （次の選択のタイミングで celeris がディレクトリを見つける。ADR-0024 D1）。`source_id` が指す根ディレクトリが設定されていなければ 409（ADR-0025 D6）。
 pub(super) async fn create_account(
     State(state): State<ApiState>,
     headers: HeaderMap,
@@ -484,7 +483,7 @@ pub(super) async fn create_account(
     Ok(response)
 }
 
-/// `POST /accounts`: create the account directory (shared with CoS `account.create`).
+/// `POST /api/v1/llm/sources/{source_id}/accounts`: create the account directory (shared with CoS `account.create`).
 pub(crate) fn create_account_op(
     state: &ApiState,
     account_adapter: task_core::AccountAdapter,
@@ -715,8 +714,8 @@ pub(crate) async fn check_account_effect(
     }
 }
 
-/// 3.33 `POST /accounts/{id}/login`（ADR-0024 D7, ADR-0025 D5）: ログインを開始する（claude-code は
-/// `claude auth login`、codex は `codex login --device-auth`）。`?adapter=`（省略時 claude-code）。
+/// `POST /api/v1/llm/sources/{source_id}/accounts/{account_id}/login`（ADR-0024 D7, ADR-0025 D5）: ログインを開始する（claude_oauth は
+/// `claude auth login`、codex_oauth は `codex login --device-auth`）。source_id から内部 adapter を解く。
 pub(super) async fn start_account_login(
     State(state): State<ApiState>,
     headers: HeaderMap,
@@ -776,8 +775,8 @@ pub(super) async fn start_account_login(
     }
 }
 
-/// 3.34 `POST /accounts/{id}/login/code`（ADR-0024 D7）: コードは受け取ってもログにも応答にも出さない。
-/// claude-code のみ（ADR-0025 D5）。`?adapter=codex` は 409 `login_code_not_supported`。
+/// `POST /api/v1/llm/sources/{source_id}/accounts/{account_id}/login/code`（ADR-0024 D7）: コードは受け取ってもログにも応答にも出さない。
+/// claude_oauth のみ（ADR-0025 D5）。`codex_oauth` は 409 `login_code_not_supported`。
 pub(super) async fn submit_account_login_code(
     State(state): State<ApiState>,
     headers: HeaderMap,

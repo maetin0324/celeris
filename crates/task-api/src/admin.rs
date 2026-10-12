@@ -96,7 +96,7 @@ pub enum NotifyAdminError {
     Unavailable(String),
 }
 
-/// ADR-0024 D6: `POST /accounts/{id}/check` の結果。
+/// ADR-0024 D6: `POST …/accounts/{account_id}/check` の結果。
 #[derive(Debug, Clone, PartialEq)]
 pub struct AccountCheckOutcome {
     pub result: AccountCheckResult,
@@ -105,7 +105,7 @@ pub struct AccountCheckOutcome {
     pub observation: Option<task_core::RateLimitObservation>,
 }
 
-/// ADR-0024 D7 / ADR-0025 D5: `POST /accounts/{id}/login` の結果。
+/// ADR-0024 D7 / ADR-0025 D5: `POST …/accounts/{account_id}/login` の結果。
 #[derive(Debug, Clone, PartialEq)]
 pub struct AccountLoginStartOutcome {
     pub url: String,
@@ -115,7 +115,7 @@ pub struct AccountLoginStartOutcome {
     pub user_code: Option<String>,
 }
 
-/// ADR-0024 D7: `POST /accounts/{id}/login/code` の結果。
+/// ADR-0024 D7: `POST …/accounts/{account_id}/login/code` の結果。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountLoginCodeOutcome {
     pub ok: bool,

@@ -39,7 +39,7 @@ updated: 2026-10-12
 
 ## 未解決
 
-1. **accounts の HTTP 路が `(source_id, account_id)` になっていない**（brief の要求）。`crates/task-api/src/handlers.rs:106-127` は `{id}` のまま（意味は adapter）。`POST /accounts`・`DELETE /accounts/{id}`・`PATCH /accounts/{id}/{account}`・`check`・`login` も同じ。旧 adapter key の路は消されていない。内部の `handlers/accounts.rs:72` だけが tuple。
+1. **（実装済み 2026-10-12: accounts-rekey。進捗 `agent-docs/progress/2026-10-12-accounts-rekey.md`）** accounts の HTTP 路が `(source_id, account_id)` になっていない**（brief の要求）。`crates/task-api/src/handlers.rs:106-127` は `{id}` のまま（意味は adapter）。`POST /accounts`・`DELETE /accounts/{id}`・`PATCH /accounts/{id}/{account}`・`check`・`login` も同じ。旧 adapter key の路は消されていない。内部の `handlers/accounts.rs:72` だけが tuple。
 2. **`llm/sources` に catalog と health が無い**。`32c60bac` の diff は detail 路の追加だけで、`LlmSourceView`（`crates/task-api/src/types.rs:2082`）に catalog・health の欄は増えていない。
 3. **試験が不足**。`crates/task-api/tests/llm_routes_admin.rs` は harness 一覧と run selection の 2 試験だけ。accounts の CRUD、sources の catalog・detail の試験は無い。旧 `accounts_admin.rs`・`llm_sources.rs` は通るが旧 key を前提にしている可能性があり、移し替えは未着手。
 4. **web の残り**: `web/api/model-assignments.ts` と `web/features/ops/model-assignments.tsx` が残る。後者は `/api/providers` を呼ぶので実行時は 404（ADR の削除対象）。cache domain の `providers` も残る（gen-types の記録どおり）。
@@ -48,7 +48,7 @@ updated: 2026-10-12
 
 ## 提案
 
-- 残りを一つの unit `accounts-rekey` にまとめる: HTTP 路を `/api/v1/accounts/{source_id}/{account_id}` に作り直し、旧 adapter key の路を消す。`cos/ops/admin.rs` の表（ALLOWED/EXCLUDED）と ADR 2026-10-09-cos-operations-all-mutations の D3 表を同時に直す（registry 試験に掛かる）。試験は `llm_routes_admin.rs` に移し、旧 `accounts_admin.rs` の key 試験は消す。
+- **実装済み（2026-10-12、unit `accounts-rekey`。進捗 `agent-docs/progress/2026-10-12-accounts-rekey.md`、ADR 2026-10-11-llm-source-harness-selection の 2026-10-12 付記（accounts-rekey））**。旧 adapter key 路と `?adapter=` は消した。以下は提案の原文（記録として残す）: 残りを一つの unit `accounts-rekey` にまとめる: HTTP 路を `/api/v1/accounts/{source_id}/{account_id}` に作り直し、旧 adapter key の路を消す。`cos/ops/admin.rs` の表（ALLOWED/EXCLUDED）と ADR 2026-10-09-cos-operations-all-mutations の D3 表を同時に直す（registry 試験に掛かる）。試験は `llm_routes_admin.rs` に移し、旧 `accounts_admin.rs` の key 試験は消す。
 - `llm-sources-catalog-health` を別 unit にする: `LlmSourceView` に catalog（model 一覧と override）と health（到達性・quota・cooldown の要約）を足し、schema を `UPDATE_SCHEMA=1` で再生成する。
 - web の `model-assignments`（ts・tsx）と cache domain `providers` の削除は ui-v2 で扱う（既存の提案どおり）。
 - 進捗の status は、上の 2 unit が入るまで `running` のまま。task 全体の完了判定は api-v2 の再計画後に行う。

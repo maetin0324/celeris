@@ -207,8 +207,8 @@ pub struct ApiSettings {
     /// Daemon administration requests are delegated to celeris.
     pub admin_tx: Option<mpsc::Sender<AdminRequest>>,
     /// ADR-0024 D1 / ADR-0025 D1/D6: アダプタごとの `[accounts]` の根ディレクトリの絶対パス（設定されている
-    /// アダプタだけキーを持つ）。`[accounts]` が無ければ空（そのときは `GET /accounts` が
-    /// `{root: null, roots: {}, items: []}`、管理系は 409 `accounts_unavailable`）。
+    /// アダプタだけキーを持つ）。`[accounts]` が無ければ空（そのときは `GET /api/v1/llm/accounts` が
+    /// `{roots: {}, items: []}`、管理系は 409 `accounts_unavailable`）。
     pub accounts_roots: HashMap<AccountAdapter, PathBuf>,
     /// ADR-0024 D1: `[accounts] max_runs_per_account`。
     pub max_runs_per_account: usize,

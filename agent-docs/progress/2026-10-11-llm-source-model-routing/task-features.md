@@ -14,6 +14,23 @@
 - 対象検査: `cargo test -p task-core route_extract_ --lib` 成功（12 tests）。この追試の全体 reverify は `reverify3` が担当。
 - 前回失敗 check の原因は `route_dispatch_records_feature_reference_and_snapshot` が旧 template `task-brief/2` を期待していたこと。案件名を含める `/3` への移行に合わせ固定期待値を更新した。指定 check `cargo test -p task-core route_ && cargo test -p task-ops routing && cargo test -p task-dispatch cheap_local_first && cargo test -p celerisctl --test routing_cli` は成功（36 + 12 + 9 + 1 tests）。`git diff --check` も成功。
 
+## 再試行 reverify4（2026-10-12、task 01M4P7CTS4）
+
+- 前回 branch 引継ぎ: `celeris/01M4NM332S384YYC4VC5DB7KCY`（816a6a5b）は HEAD の祖先に入っている（merge-prev 済み。抽出・brief task-brief/2・aux・route 表・routing_decided の hash・export・試験 5138 件 pass の成果を作り直していない）。
+- 差し戻し（前回 reviewer の唯一の不備）: `features_for_subject` が `write_set` を設定せず、抽出 SQL に `run_write_sets` の読取が無かったため brief が常に「範囲の記述なし」だった。
+- 直し（writeset、7cd9444c）: task subject は時点内の `run_write_sets`（task_id 一致）、WU subject は `run_write_sets`（work_unit_id 一致）と `work_unit_write_sets` を、判断時点（`AsOf`）より前の行だけ読む。path は `<repo>:<path>` に正規化・重複除去・整列して brief の「触る範囲」節と aux の `write_set` に入れる。不完全な行（`incomplete`／`unavailable`）は `write_set_gaps` に残す。
+- template: `task-brief/3`（項目「触る範囲」の中身が変わるため）。`route_record_schema_pinned` の期待値と ADR 付記の `sha256:da5704c3…` は同じ変更で更新済みで、HEAD の試験で一致している。
+- 突き合わせ表: ADR の抽出元表（D2・D3(a)・D3(b)）の全欄 × subject 種別（task／WU）を [task-features/field-audit.md](task-features/field-audit.md) に書いた（field-audit、30402847）。各セルは実装済みの抽出元と fixture 試験名、または ADR 文言による該当なし。未実装のセルは残っていない（`git grep 未実装` で確認）。
+- 実データ形の fixture（前の試行あり／なし、判断時点より後の行は読まない）: `route_extract_write_set_{work_unit,task}_prior_attempt_in_brief_and_aux`、`route_extract_write_set_{work_unit,task}_without_prior_attempt_is_missing`、`route_extract_write_set_excludes_sets_recorded_after_decision_time`。fixture の path は `notes/wu.md`（文書参照にしない。doclink-fix）。
+- reverify3 の失敗 2 件の診断:
+  - `check-doc-links.sh` の exit 1（5 件）: `crates/task-core/src/route_extract.rs` の write set fixture の `docs/wu.md` が、`crates/*.rs` の生きた文書参照として検査された。doclink-fix（144529b3）で `notes/wu.md` に替えて解消。
+  - clippy の timeout: host の load average が 70 台だった時の時間切れ。同じ HEAD で前の 2 回は 1.7 秒・10.9 秒で終わっていた。reverify4 の clippy は exit 0（警告 0、1 分 10 秒）で完了し、コードの失敗は見つからなかった。
+- 試験数（reverify4、HEAD 144529b3）: `test-parallel.sh` は nextest 5152 passed / 0 failed / 14 ignored、doctest exit 0。`cargo clippy --workspace -- -D warnings` exit 0。`check-doc-links`・`check-adr-numbers`・`progress-index --check` は exit 0。`cargo test -p task-core --lib route_` は 36 passed。詳細は [task-features/reverify4.md](task-features/reverify4.md)。
+- 試験の環境: 作業 tmp（94 字）のまま回すと unix socket の path が `SUN_LEN` を超えて credentiald・task-api・celerisctl の socket 試験 158 箇所が落ちる（コードの失敗ではない）。`TMPDIR=/tmp/rv4` で全件通った。
+- 残り（この WU の範囲外）:
+  - label の `changed_lines`・`changed_files_n`・`changed_crates_n`・`quota_used`・`retries_after`・`repaired` は未計測（null＋missing）。ADR D3(b) は `changed_*` の抽出元を `run_write_sets`／`work_unit_write_sets` の base..head の `git diff --numstat` と書くが、この段では計測を入れていない。ADR 実装付記で selector／rollout 段の未解決事項と明記済み。ADR の schema・抽出元表と実装の不一致として reviewer が指摘しうる欄はこの 6 欄だけ。
+  - 「提案」: 次の段で `changed_*` を export 時の遅延計算（base..head の `git diff --numstat`）にするか、daemon の終了処理に置くかを決め、ADR D3(b) の抽出元欄を実装と揃える。
+
 ## 実装した schema と template の版
 
 固定の版定数（`crates/task-core/src/route_record.rs`、`route_record_schema_pinned` 試験で固定）:

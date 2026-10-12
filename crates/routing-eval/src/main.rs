@@ -17,7 +17,7 @@ fn main() -> ExitCode {
     let values: Vec<String> = args.collect();
     let result = match command.as_str() {
         "manifest" => manifest(&values),
-        "recheck" => routing_eval::recheck::run(),
+        "recheck" => routing_eval::recheck::run(&values),
         "dry-run" => routing_eval::dryrun::run(),
         "run" => routing_eval::run::run(),
         "aggregate" => routing_eval::aggregate::run(),

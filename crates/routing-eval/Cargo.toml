@@ -14,6 +14,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "json", "blocking"] }
+time = { version = "0.3", features = ["formatting"] }
 
 [dev-dependencies]
 tempfile = "3"

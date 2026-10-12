@@ -1,15 +1,9 @@
-//! ADR 2026-10-06 model-role-assignments 付記: モデルごとの役割 membership・優先度と、
-//! その実効の解決（純粋関数）。
-//!
-//! 表は `model_role_assignments`（migration 0053 → 0054）。人が決めた割り当てで、catalog の自動更新は消さない。
-//! 実効の状態（`AssignmentState`）は catalog の `available` と上書きの `disabled` から都度求める。
-//! llm-proxy・routing catalog は同じ `RoleAssignmentReader` を見て、同じ `AssignmentView::get` で
-//! 解決する。I/O も LLM 呼び出しも持たない。
+//! Legacy model routing helpers retained for old event interpretation and wire-name normalization.
 
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
-use super::{CatalogEntry, CatalogOverrideRow, CatalogSource};
+use super::CatalogSource;
 use crate::Tier;
 
 /// `Tier` の表・API 上の文字列（`frontier` / `standard` / `cheap`）。
@@ -29,29 +23,6 @@ pub fn tier_from_str(s: &str) -> Option<Tier> {
         "cheap" => Some(Tier::Cheap),
         _ => None,
     }
-}
-
-/// 表の 1 行（D1）。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct RoleAssignment {
-    pub source: CatalogSource,
-    pub tier: Tier,
-    pub model_id: String,
-    /// Lower values are preferred; ties use source and model ID.
-    #[serde(default)]
-    pub priority: u32,
-    pub note: Option<String>,
-    pub updated_at: i64,
-    pub updated_by: String,
-}
-
-/// One model's membership in a role. Priority is global within that role.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct RoleMember {
-    pub source: CatalogSource,
-    pub model_id: String,
-    pub priority: u32,
 }
 
 /// 割り当ての実効の状態。`Excluded` は割り当て行は残るが routing には使えない（D2）。
@@ -98,60 +69,6 @@ impl AssignmentView {
         Self::default()
     }
 
-    /// store の 3 表から組む（純粋）。上書きの `disabled` を先に、次に catalog の `available = 0` を見る。
-    /// catalog に行が無いモデルは `Assigned` のまま（書き込み時に API が未知のモデルを弾くので、
-    /// 行が消えたことで黙って除外しない）。
-    pub fn build(
-        assignments: &[RoleAssignment],
-        entries: &[CatalogEntry],
-        overrides: &[CatalogOverrideRow],
-    ) -> Self {
-        let mut items: Vec<EffectiveAssignment> = assignments
-            .iter()
-            .map(|a| {
-                let disabled = overrides
-                    .iter()
-                    .any(|o| o.source == a.source && o.model_id == a.model_id && o.value.disabled);
-                let unavailable = entries
-                    .iter()
-                    .any(|e| e.source == a.source && e.model_id == a.model_id && !e.available);
-                let state = if disabled {
-                    AssignmentState::Excluded {
-                        reason: AssignmentState::REASON_DISABLED,
-                    }
-                } else if unavailable {
-                    AssignmentState::Excluded {
-                        reason: AssignmentState::REASON_UNAVAILABLE,
-                    }
-                } else {
-                    AssignmentState::Assigned
-                };
-                EffectiveAssignment {
-                    source: a.source.clone(),
-                    tier: a.tier,
-                    model_id: a.model_id.clone(),
-                    priority: a.priority,
-                    state,
-                    note: a.note.clone(),
-                    updated_at: a.updated_at,
-                    updated_by: a.updated_by.clone(),
-                }
-            })
-            .collect();
-        items.sort_by(|a, b| {
-            (a.priority, a.source.as_str(), &a.model_id, tier_str(a.tier)).cmp(&(
-                b.priority,
-                b.source.as_str(),
-                &b.model_id,
-                tier_str(b.tier),
-            ))
-        });
-        Self {
-            items,
-            managed: Vec::new(),
-        }
-    }
-
     pub fn manages(&self, source: &str, tier: Tier) -> bool {
         self.managed
             .iter()
@@ -181,21 +98,6 @@ impl AssignmentView {
             .copied()
             .find(|a| a.state == AssignmentState::Assigned)
             .or_else(|| members.first().copied())
-    }
-}
-
-/// llm-proxy・routing catalog が割り当てを読む口。`SqliteStore` が実装する。
-pub trait RoleAssignmentReader: Send + Sync {
-    fn assignment_view(&self) -> Result<AssignmentView, String>;
-}
-
-/// 固定の view を返す reader（他 crate の試験用）。
-#[derive(Debug, Clone, Default)]
-pub struct StaticAssignments(pub AssignmentView);
-
-impl RoleAssignmentReader for StaticAssignments {
-    fn assignment_view(&self) -> Result<AssignmentView, String> {
-        Ok(self.0.clone())
     }
 }
 
@@ -296,86 +198,6 @@ impl<'a> WireRule<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model_catalog::CatalogOverride;
-
-    fn assignment(source: &str, tier: Tier, model: &str) -> RoleAssignment {
-        RoleAssignment {
-            priority: 0,
-            source: CatalogSource::new(source),
-            tier,
-            model_id: model.into(),
-            note: None,
-            updated_at: 1,
-            updated_by: "admin".into(),
-        }
-    }
-
-    fn entry(source: &str, model: &str, available: bool) -> CatalogEntry {
-        CatalogEntry {
-            source: CatalogSource::new(source),
-            model_id: model.into(),
-            display_name: None,
-            first_seen: 1,
-            last_seen: 1,
-            available,
-            capabilities: serde_json::json!({}),
-        }
-    }
-
-    fn disabled(source: &str, model: &str) -> CatalogOverrideRow {
-        CatalogOverrideRow {
-            source: CatalogSource::new(source),
-            model_id: model.into(),
-            value: CatalogOverride {
-                disabled: true,
-                ..CatalogOverride::default()
-            },
-            updated_at: 1,
-        }
-    }
-
-    #[test]
-    fn build_marks_unavailable_and_disabled_as_excluded() {
-        let assignments = [
-            assignment("opencode-go", Tier::Frontier, "glm-5"),
-            assignment("opencode-go", Tier::Standard, "gone"),
-            assignment("opencode-go", Tier::Cheap, "off"),
-            assignment("claude-oauth", Tier::Cheap, "no-row"),
-        ];
-        let entries = [
-            entry("opencode-go", "glm-5", true),
-            entry("opencode-go", "gone", false),
-            // disabled と unavailable が重なったら disabled を先に見る。
-            entry("opencode-go", "off", false),
-        ];
-        let overrides = [disabled("opencode-go", "off")];
-        let view = AssignmentView::build(&assignments, &entries, &overrides);
-        assert_eq!(view.items.len(), 4);
-        assert_eq!(
-            view.get("opencode-go", Tier::Frontier).map(|a| a.state),
-            Some(AssignmentState::Assigned)
-        );
-        assert_eq!(
-            view.get("opencode-go", Tier::Standard).map(|a| a.state),
-            Some(AssignmentState::Excluded {
-                reason: "catalog:unavailable"
-            })
-        );
-        assert_eq!(
-            view.get("opencode-go", Tier::Cheap).map(|a| a.state),
-            Some(AssignmentState::Excluded {
-                reason: "override:disabled"
-            })
-        );
-        // catalog に行が無いモデルは Assigned のまま。
-        assert_eq!(
-            view.get("claude-oauth", Tier::Cheap).map(|a| a.state),
-            Some(AssignmentState::Assigned)
-        );
-        assert!(view.get("claude-oauth", Tier::Frontier).is_none());
-        assert!(AssignmentView::empty().get("x", Tier::Cheap).is_none());
-    }
-
     #[test]
     fn wire_rule_inherits_the_row_prefix_and_falls_back_to_the_table() {
         let qwen = "openai-compatible:qwen";

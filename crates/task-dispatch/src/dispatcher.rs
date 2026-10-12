@@ -1354,9 +1354,6 @@ pub struct Dispatcher {
     knowledge_probe: KnowledgeProbe,
     /// ADR-0052 D1: 検査の結果のキャッシュ（`base_url` → (いつ調べたか, 結果)）。60 秒。
     knowledge_probe_cache: HashMap<String, (Instant, Reachability)>,
-    /// ADR 2026-10-06 model-role-assignments D2: DB の `source × 役割 → model` の割り当てを読む口。
-    /// 無ければ（試験・celerisctl）config の lane binding だけで解決する。
-    role_assignments: Option<Arc<dyn task_core::model_catalog::assignments::RoleAssignmentReader>>,
     /// 付記「モデルごとの複数役割」: routing catalog の model profile（品質）を読む口。無ければ品質 unknown。
     routing_model_profiles: Option<Arc<dyn RoutingModelProfiles>>,
     /// multi-objective routing Phase 2: dispatcher の routing 設定（既定 legacy。enforce は opt-in）。
@@ -1597,7 +1594,6 @@ impl Dispatcher {
                 task_worker::probe_models(base_url, task_worker::PROBE_TIMEOUT, bearer_token)
             }),
             knowledge_probe_cache: HashMap::new(),
-            role_assignments: None,
             routing_model_profiles: None,
             dispatch_routing: routing_enforce::DispatchRoutingSettings::default(),
             routing_context_registry: None,
@@ -1622,22 +1618,6 @@ impl Dispatcher {
     pub fn set_knowledge_probe(&mut self, probe: KnowledgeProbe) {
         self.knowledge_probe = probe;
         self.knowledge_probe_cache.clear();
-    }
-
-    /// ADR 2026-10-06 model-role-assignments D2: 割り当ての reader を差し込む（daemon が store を渡す）。
-    /// provider 選択と run 起動のたびに読むので、DB を書けば次の解決から効く。
-    pub fn set_role_assignment_reader(
-        &mut self,
-        reader: Arc<dyn task_core::model_catalog::assignments::RoleAssignmentReader>,
-    ) {
-        self.role_assignments = Some(reader);
-    }
-
-    /// 差し込んだ割り当ての reader（daemon が llm-proxy に同じ reader を渡すために使う）。
-    pub fn role_assignment_reader(
-        &self,
-    ) -> Option<Arc<dyn task_core::model_catalog::assignments::RoleAssignmentReader>> {
-        self.role_assignments.clone()
     }
 
     /// 多目的 routing Phase 3: run 開始時に RoutingContext を登録する registry を差し込む（daemon が配線する）。

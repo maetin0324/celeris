@@ -17704,13 +17704,6 @@
     },
     "ModelCatalogItem": {
       "properties": {
-        "assigned_tiers": {
-          "description": "ADR 2026-10-06 model-role-assignments D4: このモデルが割り当てられている役割（tier）。",
-          "items": {
-            "$ref": "#/$defs/Tier"
-          },
-          "type": "array"
-        },
         "available": {
           "type": "boolean"
         },
@@ -17756,8 +17749,7 @@
         "first_seen",
         "last_seen",
         "capabilities",
-        "routing",
-        "assigned_tiers"
+        "routing"
       ],
       "type": "object"
     },

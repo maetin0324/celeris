@@ -577,7 +577,6 @@ pub fn build_dispatcher(
         super::cos_launch::build_cos_chat_launch(config, &config.db.path, config.api.listen),
     );
     // ADR 2026-10-06 model-role-assignments D2: DB の割り当てを同じ store から読む（run 起動のたびに解決）。
-    dispatcher.set_role_assignment_reader(sqlite);
     // 付記「モデルごとの複数役割」: shadow / enforce の役割メンバーの順位づけに routing catalog の品質を使う。
     if let Some(shared) = config.routing_catalog_state.as_ref() {
         dispatcher.set_routing_model_profiles(Arc::new(SharedCatalogProfiles(Arc::clone(shared))));

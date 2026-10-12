@@ -19,7 +19,6 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use task_core::model_catalog::assignments::RoleAssignment;
 use task_core::model_catalog::{
     CatalogDelta, CatalogEntry, CatalogOverride, CatalogOverrideRow, CatalogSource, DiscoveryRecord,
 };
@@ -68,8 +67,6 @@ pub struct ModelCatalogItem {
     #[serde(rename = "override")]
     pub override_: Option<ModelCatalogOverrideView>,
     pub routing: ModelCatalogRoutingView,
-    /// ADR 2026-10-06 model-role-assignments D4: このモデルが割り当てられている役割（tier）。
-    pub assigned_tiers: Vec<Tier>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
@@ -210,7 +207,6 @@ fn override_view(value: &CatalogOverride) -> ModelCatalogOverrideView {
 fn item(
     entry: &CatalogEntry,
     overrides: &[CatalogOverrideRow],
-    assignments: &[RoleAssignment],
     catalog: Option<&crate::routing_catalog::RoutingCatalogView>,
 ) -> ModelCatalogItem {
     let ov = overrides
@@ -226,11 +222,6 @@ fn item(
         capabilities: entry.capabilities.clone(),
         override_: ov.map(|o| override_view(&o.value)),
         routing: routing_for(catalog, entry.source.as_str(), &entry.model_id),
-        assigned_tiers: assignments
-            .iter()
-            .filter(|a| a.source == entry.source && a.model_id == entry.model_id)
-            .map(|a| a.tier)
-            .collect(),
     }
 }
 
@@ -262,14 +253,13 @@ async fn list_models(State(state): State<ApiState>, RawQuery(raw): RawQuery) -> 
         .blocking(move |store| {
             let entries = store.model_catalog_list().map_err(store_problem)?;
             let overrides = store.model_catalog_overrides().map_err(store_problem)?;
-            let assignments = store.model_role_assignments().map_err(store_problem)?;
             let records = store
                 .model_catalog_discovery_records()
                 .map_err(store_problem)?;
             Ok(ModelCatalogView {
                 items: entries
                     .iter()
-                    .map(|e| item(e, &overrides, &assignments, routing.as_ref()))
+                    .map(|e| item(e, &overrides, routing.as_ref()))
                     .collect(),
                 last_discovery: records.iter().map(record_view).collect(),
             })
@@ -313,7 +303,6 @@ pub(crate) fn put_override_op(
     let read_item =
         |store: &task_core::store::SqliteStore| -> Result<ModelCatalogItem, ApiProblem> {
             let overrides = store.model_catalog_overrides().map_err(store_problem)?;
-            let assignments = store.model_role_assignments().map_err(store_problem)?;
             let entry = store
                 .model_catalog_list()
                 .map_err(store_problem)?
@@ -329,7 +318,7 @@ pub(crate) fn put_override_op(
                     available: false,
                     capabilities: serde_json::json!({}),
                 });
-            Ok(item(&entry, &overrides, &assignments, routing))
+            Ok(item(&entry, &overrides, routing))
         };
     let Some(audit) = audit else {
         store

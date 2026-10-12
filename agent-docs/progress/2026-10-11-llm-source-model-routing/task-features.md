@@ -29,6 +29,14 @@
 - 試験の環境: 作業 tmp（94 字）のまま回すと unix socket の path が `SUN_LEN` を超えて credentiald・task-api・celerisctl の socket 試験 158 箇所が落ちる（コードの失敗ではない）。`TMPDIR=/tmp/rv4` で全件通った。
 - この検証時点（reverify4）では `changed_*` が残っていた。labels-diff WU で task-ops の遅延計算と task-core の数値受け口を実装し、6欄すべてが抽出済み。詳細は [labels-diff](task-features/labels-diff.md)。
 
+## 再試行 reverify5（2026-10-12、task 01M4P7CTS4、判定: fail）
+
+- label 段の結果: `quota_used`・`retries_after`・`repaired` は `route_extract::outcome_labels_for_run` が DB から抽出し、`changed_lines`・`changed_files_n`・`changed_crates_n` は task-ops `routing_labels` が base..head の `git diff --numstat` から計算する。前回 reviewer の指摘（6 欄が null 固定）は解消している。抽出元の全欄 × subject 種別の照合は [field-audit.md](task-features/field-audit.md) の D3(b) 節。
+- 検査（HEAD `1d2f06c0`）: `cargo clippy --workspace -- -D warnings` exit 0。`check-doc-links`・`check-adr-numbers`・`progress-index --check` exit 0。`bash scripts/dev/test-parallel.sh` は **exit 100**（nextest 5153 passed / 3 failed / 14 ignored。doctest exit 0）。
+- 失敗 3 件: `task-api::browser_e2e` の `approved_credential_requires_conformance_and_does_not_consume_approval`、`denied_approval_fails_the_task_without_a_lease`、`registered_credential_does_not_open_approval_for_uncertified_backend`。broker 呼び出しが 503（credential broker is not configured）になる。同じ条件で 2 回再現。試験 crate はこの範囲で変わっていない。原因は未特定。
+- TMPDIR の結果（同じ HEAD）: 作業 tmp（93 字）は 108 件失敗（SUN_LEN と daemon 起動待ちの timeout）、31 字は 31 件、9 字（`/local/rv5`）は 3 件。reverify4 の `/tmp/rv4` では全件通っていた。
+- 詳細と証拠: [task-features/reverify5.md](task-features/reverify5.md)。
+
 ## 実装した schema と template の版
 
 固定の版定数（`crates/task-core/src/route_record.rs`、`route_record_schema_pinned` 試験で固定）:

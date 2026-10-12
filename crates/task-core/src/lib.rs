@@ -95,6 +95,8 @@ pub mod repos;
 pub mod route_extract;
 /// ADR 2026-10-11 task-routing-features D1-D4: deterministic feature and option records.
 pub mod route_record;
+/// 評価 run の試行（付記 2026-10-12 eval-dispatch）。
+pub mod routing_eval_trial;
 /// Versioned evidence rows produced by routing evaluation.
 pub mod routing_evidence;
 pub mod store;

@@ -4612,7 +4612,27 @@ fn legacy_provider_concurrency_is_optional_and_warns_including_zero_and_include(
         .with_max_level(tracing::Level::WARN)
         .with_writer(move || writer.clone())
         .finish();
-    let cfg = tracing::subscriber::with_default(subscriber, || Config::load(&config).unwrap());
+    // tracing の callsite interest は process 全体で共有される。dispatcher が 1 つしか登録されていないと
+    // interest は登録した thread の既定 subscriber だけで決まるため、並走する別 thread（subscriber なし）が
+    // この warn! callsite を先に登録すると Interest::never が残り、この試験の with_default に警告が届かない。
+    // 常時 1 つ anchor を登録して registry を複数 dispatcher の経路に乗せ、interest を thread に依らず決める。
+    static CALLSITE_ANCHOR: std::sync::OnceLock<tracing::Dispatch> = std::sync::OnceLock::new();
+    CALLSITE_ANCHOR.get_or_init(|| {
+        tracing::Dispatch::new(
+            tracing_subscriber::fmt()
+                .with_writer(std::io::sink)
+                .with_max_level(tracing::Level::WARN)
+                .finish(),
+        )
+    });
+    let cfg = tracing::subscriber::with_default(subscriber, || {
+        // 別 thread がこの scope の中で初めて callsite を登録する並走を再現する（anchor が無いと失敗する）。
+        let other = config.clone();
+        std::thread::spawn(move || Config::load(&other).unwrap())
+            .join()
+            .unwrap();
+        Config::load(&config).unwrap()
+    });
     let log = String::from_utf8(bytes.lock().unwrap().clone()).unwrap();
     for id in ["pool", "included", "legacy"] {
         assert!(

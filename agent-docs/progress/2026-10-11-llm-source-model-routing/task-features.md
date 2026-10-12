@@ -27,8 +27,7 @@
   - clippy の timeout: host の load average が 70 台だった時の時間切れ。同じ HEAD で前の 2 回は 1.7 秒・10.9 秒で終わっていた。reverify4 の clippy は exit 0（警告 0、1 分 10 秒）で完了し、コードの失敗は見つからなかった。
 - 試験数（reverify4、HEAD 144529b3）: `test-parallel.sh` は nextest 5152 passed / 0 failed / 14 ignored、doctest exit 0。`cargo clippy --workspace -- -D warnings` exit 0。`check-doc-links`・`check-adr-numbers`・`progress-index --check` は exit 0。`cargo test -p task-core --lib route_` は 36 passed。詳細は [task-features/reverify4.md](task-features/reverify4.md)。
 - 試験の環境: 作業 tmp（94 字）のまま回すと unix socket の path が `SUN_LEN` を超えて credentiald・task-api・celerisctl の socket 試験 158 箇所が落ちる（コードの失敗ではない）。`TMPDIR=/tmp/rv4` で全件通った。
-- 残り（この WU の範囲外）:
-  - `changed_*` は labels-diff で base..head の `git diff --numstat` から実装する。`quota_used`・`retries_after`・`repaired` は outcome label の DB 抽出として実装済み。
+- この検証時点（reverify4）では `changed_*` が残っていた。labels-diff WU で task-ops の遅延計算と task-core の数値受け口を実装し、6欄すべてが抽出済み。詳細は [labels-diff](task-features/labels-diff.md)。
 
 ## 実装した schema と template の版
 
@@ -111,7 +110,7 @@ brief は `build_task_features`（`crates/task-core/src/route_record.rs`）が L
 | `quota_used` | `quota_estimated` event の最後の `windows[].used_pct`（run_id 一致） | event または値のある窓が無ければ null＋missing |
 | `retries_after` | 同じ subject の後続 worker run 数（task: task_id と work_unit_id NULL、WU: work_unit_id） | started_at が無ければ null＋missing |
 | `repaired` | run 後に同じ task に作られた repair WU の有無 | started_at が無ければ null＋missing |
-| `changed_lines` / `changed_files_n` / `changed_crates_n` | labels-diff: write set の base..head `git diff --numstat` | labels-diff で実装 |
+| `changed_lines` / `changed_files_n` / `changed_crates_n` | run の `run_write_sets`（WU は行が無い場合 `work_unit_write_sets`）の complete な base..head を task-ops が `git diff --numstat` | binary は 0 行、path は repo:path で重複除去、crate は `crates/<name>/` の異なり数。取得不能なら null＋missing |
 
 ## 記録の時点
 
@@ -124,7 +123,7 @@ brief は `build_task_features`（`crates/task-core/src/route_record.rs`）が L
 - `task_core::route_extract::features_for_subject(store, Subject, as_of, context) -> TaskFeatures`
   - WU / 葉 task の `celeris.task-features/1` snapshot を読む。`Subject { kind: "work_unit"|"task", id }`。`context: Option<RouteFeatureContext>` は dispatch が渡す今回の判断の lane・harness・9 軸（評価 manifest など判断でない呼び出しは `None`）。
   - `as_of: None`（現在の DB）か `Some(AsOf::Timestamp(rfc3339))`（判断時点の timestamp）・`Some(AsOf::EventSeq(n))`（判断時点の event seq）。評価 manifest は元の判断時点の `AsOf` を渡して、将来の情報を混ぜずに作る。
-- `task_core::route_extract::outcome_labels_for_run(store, run_id) -> RouteOutcome`
+- `task_ops::routing_labels::outcome_labels_for_run(store, run_id, work_unit_id) -> RouteOutcome`（task-core の抽出器は `ChangeCount` を受け取る）
   - 1 run の `celeris.route-outcome/1` label。git 操作をしない。DB 由来欄は runs／events／work_units、値が得られない欄だけ `null` ＋ `missing`。
 - `task_core::route_record::build_task_features(&FeaturesInput) -> TaskFeatures`
   - 純関数。`FeaturesInput` → 固定 brief ＋ aux ＋ 内容 hash。DB を使わず、評価集合の問題や任意の snapshot に使える。
@@ -226,10 +225,10 @@ reverify2（2026-10-11、WU reverify2。task subject の `deps_n` 修正後。`C
 
 ## 残る実装項目
 
-- `changed_*` は labels-diff で実装する。
+- D3(b) の6 label はすべて抽出済み。selector 側では run 終端の outcome 記録へ接続する。
 
 ## ADR の未解決 3 点の決着
 
 - **secret 置換の規則をどの既存実装から取るか**: `task-worker` に自由文向けの汎用 token/key redactor は無いため、`task-core::route_record::redact_secrets` に Bearer、`sk-`/`sk_live_`/`ghp_`/`gho_`/`github_pat_`/`xox*` 等の token 形、`api_key=`/`token=`/`secret=`/`password=` の key=value 形を写した。自由文は record 化前にこの関数を通す（task-worker への依存を作らない）。`route_record_secret_replacement_covers_token_and_key_shapes` で固定。
 - **brief の各節の字数上限の具体値**: 目的文は 4,000 字（`OBJECTIVE_MAX_CHARS`、ADR D2 の仮値のまま。超過は先頭・末尾＋省略マーカーで `task-brief/2` に残す）。title / check / 各 list 項目は 1,000 字。評価集合の文の長さ分布を見て要調整なら `task-brief/2` の版を上げる。
-- **`changed_lines` を数える git 操作の置き場所**: 未実装のため未決。現状は `outcome_labels_for_run` が git 操作をせず `null` ＋ `missing` を返す。置き場所（daemon の終了処理か export 時の遅延計算か）と実装は selector / rollout 段で決める。
+- **`changed_lines` を数える git 操作の置き場所**: 決着 — export／label 抽出時の遅延計算を task-ops に置き、task-core には `ChangeCount` の数値だけを渡す。run の complete な `run_write_sets` を読み、WU は該当 run の行が無い場合 `work_unit_write_sets` を使う。各 repo の base..head に `git diff --numstat` を実行し、追加＋削除を合計（binary の `-` は 0）、変更ファイルは repo:path で重複除去、crate は `crates/<name>/` の異なり数とする。行・SHA・repo・git のいずれかが取得不能なら3欄とも null＋missing。`routing_outcome_git_numstat_counts_lines_files_crates` と task-core の値受け渡し試験で固定する。

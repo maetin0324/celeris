@@ -64,7 +64,7 @@ outcome API は `run_id` を受け取る。両 subject 列は、その run が t
 | `wall_s` | 実装済み（`runs.metrics_json.wall_ms`; 同試験） | 実装済み（同左; 同試験） |
 | `cost_usd_list`・`tokens_in`・`tokens_out` | 実装済み（`runs.usage_json`、無ければ null + missing; 同試験） | 実装済み（同左; 同試験） |
 | `quota_used` | 実装済み（`quota_estimated` の最終 run event、値のある窓; `route_outcome_quota_used_from_quota_estimated`） | 実装済み（同左; 同試験） |
-| `changed_lines`・`changed_files_n`・`changed_crates_n` | 実装済み（labels-diff で `git diff --numstat`; 実装を担当する後続 WU） | 実装済み（同左; 同試験） |
+| `changed_lines`・`changed_files_n`・`changed_crates_n` | 実装済み（task-ops `run_write_sets`／WU fallback `work_unit_write_sets` base..head `git diff --numstat`; `routing_outcome_git_numstat_counts_lines_files_crates` + `route_extract_outcome_reports_missing_metrics_without_git`） | 実装済み（同左; 同試験） |
 | `retries_after`・`repaired` | 実装済み（後続 worker run 数／後続 repair WU; `route_outcome_retries_after_and_repaired_task_and_wu`） | 実装済み（同左; 同試験） |
 
 ## 差分解消と検証

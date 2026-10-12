@@ -49,6 +49,16 @@ ADR-2026-10-11-llm-source-model-routing-evaluation の付記（2026-10-12）ど�
   - `cargo clippy --workspace -- -D warnings` → exit 0。
   - `sh scripts/dev/check-adr-numbers.sh` → ok (183 files)、exit 0。`sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv` → ok、exit 0。`sh scripts/dev/check-doc-links.sh` → ok、exit 0。
 - 結論: 指示の check は TMPDIR の path が長すぎて、コードをどう直しても通らない（test-parallel が一時 dir を 1 段入れるため）。締めの成果は `TMPDIR=/local/x` で検証済み。check の TMPDIR を `/local/x` にするか、gate の一時 dir の入れ子をやめるかを計画側で決める必要がある（下の「提案」）。
+- 3 回目の再検証（同じコミット、2026-10-12）: 長さの計算。gate の一時 dir（`celeris-test-parallel.XXXXXX/tmp`）と試験の tempdir・credentiald の `control.sock` の path は TMPDIR の外で約 97 byte。unix socket の上限 108 byte を超えないため、TMPDIR は 11 byte 以下でなければならない。`/local/x`（8 byte）は通り、`/local/x/edc`（12 byte）は必ず落ちる。
+  - `export TMPDIR=/local/x && bash scripts/dev/test-parallel.sh` → exit 0。`CELERIS_TEST_SUMMARY {"binaries":183,"nextest_binaries":172,"doc_binaries":11,"passed":5190,"failed":0,"ignored":14,"nextest_exit":0,"doctest_exit":0,"nextest_secs":142.1,"doctest_secs":10.7}`。`test-parallel: ok`。
+  - `cargo clippy --workspace -- -D warnings` → exit 0。
+  - `check-adr-numbers.sh` → ok (183 files)、`check-doc-layout.sh` → ok、`check-doc-links.sh` → ok（いずれも exit 0）。
+  - 指示の check（`TMPDIR=/local/x/edc`）は計画の問題として申告する（result.json の yield）。コードの変更は無い。
+- 4 回目の再検証（run 01M4QKJ75R3DGP0K1ZCSCSZEQN、同じコミット 6e6243e3、2026-10-12）: 全体の検査を `TMPDIR=/local/x` で流し直した。
+  - `bash scripts/dev/test-parallel.sh` → exit 0。`CELERIS_TEST_SUMMARY {"binaries":183,"nextest_binaries":172,"doc_binaries":11,"passed":5190,"failed":0,"ignored":14,"nextest_exit":0,"doctest_exit":0,"nextest_secs":271.0,"doctest_secs":9.5,"tmp_leftovers":0}`。`test-parallel: ok`。
+  - `cargo clippy --workspace -- -D warnings` → exit 0。
+  - `check-adr-numbers.sh` → ok (183 files)、`check-doc-layout.sh` → ok、`check-doc-links.sh` → ok（いずれも exit 0）。
+  - 前回 run の check（`/local/x/edc`）は上の理由で通らない。この run の検査は `/local/x` で流した。
 
 ## 受け口の要点（実装と ADR 付記の対応）
 

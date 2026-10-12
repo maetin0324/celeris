@@ -1,6 +1,6 @@
 ---
 title: "stranded sweep を single-flight にし、取り込み済みで head 不変の記録は git を呼ばない"
-tasks: []
+tasks: [main-direct]
 status: done
 updated: 2026-10-12
 completed: 2026-10-12

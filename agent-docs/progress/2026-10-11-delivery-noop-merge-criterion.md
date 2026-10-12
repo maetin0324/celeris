@@ -95,3 +95,16 @@ reviewer が「指定SHAの実際の差分」を `4d97d291..ca7025be`（別 task
 
 - release 準備の `TMPDIR` が長いと同じ `SUN_LEN` 失敗が起きる。本番 release の host で既定の `TMPDIR` がどの長さになるかは未確認（上の提案を参照）。
 - 中断の時刻（02:39:45Z）と handoff の関係は log の mtime で一致を確かめたが、journal の行は本 WU では読めていない。
+
+## 統合検査の失敗（2026-10-12、front matter）
+
+integrate-close の統合検査で `sh scripts/dev/progress-index.sh --check` が `agent-docs/progress/2026-10-12-stranded-sweep-single-flight.md:1`（『tasks が [<task id>, ...] の形でない』）で落ちた。
+
+- 原因: main の hotfix `3fcdbc74`（task なし）が front matter を `tasks: []` で入れた。`--check` は全 task の close 統合で同じ検査を走らせるため、この file が 1 件あるだけで落ちる。
+- 直した 1 行: `agent-docs/progress/2026-10-12-stranded-sweep-single-flight.md` の `tasks: []` → `tasks: [main-direct]`（task なしの main 直接の変更の慣例。前例は `2026-10-07-acctpool-e2e-cos.md`）。本文と他の欄は変えていない。
+- 経緯: 修正葉 `fm-fix`（v3）は基点 `d409d8e8` に main 由来の file が無く、同じ file を ADR 写しと一緒に作ると範囲 check で止まった。`carry-main`（main を WU branch に no-ff merge するだけの葉）を前段に置いた後、`fm-fix2` で直した。
+- 検査（作業ツリー、`tasks` 修正後）:
+  - `sh scripts/dev/progress-index.sh --check`: exit 0（`progress-index --check: ok`）
+  - `sh scripts/dev/check-doc-links.sh`: exit 0（`check-doc-links: ok`）
+  - `sh scripts/dev/check-adr-numbers.sh`: exit 0（`check-adr-numbers: ok (197 files)`）
+- crates/・scripts/・agent-docs/adr/ は変更していない。

@@ -9,6 +9,7 @@ import { Drawer } from "../../components/ui/drawer";
 import { StatusBadge, statusView } from "../../components/ui/status-badge";
 import { browserWaitsQuery } from "../browser/browser-query";
 import { TaskBrowserSection } from "../browser/task-browser-section";
+import { runSelectionText } from "../runs/run-header";
 import { executionQuery } from "./execution-panel";
 import { integrationRepairDisplay, integrationRepairTone } from "./integration-repair";
 import { IntegrationRepairPanel } from "./integration-repair-panel";
@@ -290,9 +291,7 @@ export function OverviewView({
                     {run.files?.stdout === false ? "進捗を開く" : <ShortId id={run.run_id} />}
                   </Link>
                   <StatusBadge status={runStatus(run)} />
-                  <span className="min-w-0 break-words text-muted-foreground">
-                    {run.adapter} / {run.model}
-                  </span>
+                  <span className="min-w-0 break-words text-muted-foreground">{runSelectionText(run.selection)}</span>
                 </li>
               ))}
             </ul>

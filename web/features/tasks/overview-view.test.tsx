@@ -30,6 +30,7 @@ function render(stdout: boolean) {
         run_id: "RUN-123456789",
         adapter: "codex",
         model: "test-model",
+        selection: { status: "legacy_unresolved" },
         started_at: "2026-10-10T00:00:00Z",
         progress: 1,
         artifacts: 0,

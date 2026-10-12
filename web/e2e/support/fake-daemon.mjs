@@ -2392,7 +2392,18 @@ export function createBrowserBackend({
     model: "sonnet",
     started_at: "2026-10-04T08:30:00Z",
     finished_at: r.finished_at,
-    selection: { status: "legacy_unresolved" },
+    // R0 は解決済みの選択、R1 と T2 の R2 は旧 run（記録なし）。
+    selection:
+      r.run_id === "R0"
+        ? {
+            status: "selected",
+            harness_id: "claude-code",
+            source_id: "claude-oauth",
+            model_id: "claude-opus",
+            account_id: "main",
+            basis: null,
+          }
+        : { status: "legacy_unresolved" },
     outcome: r.outcome,
     progress: 0,
     artifacts: 0,

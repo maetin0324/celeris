@@ -8,8 +8,17 @@ import { RunLogScreen } from "./run-log-view";
 const { useRunLog } = vi.hoisted(() => ({ useRunLog: vi.fn() }));
 vi.mock("./use-run-log", () => ({ useRunLog }));
 vi.mock("@tanstack/react-router", () => ({
-  Link: ({ to, children, ...props }: { to: string; children: React.ReactNode }) => (
-    <a href={to} {...props}>
+  Link: ({
+    to,
+    params,
+    children,
+    ...props
+  }: {
+    to: string;
+    params?: Record<string, string>;
+    children: React.ReactNode;
+  }) => (
+    <a href={to.replace(/\$(\w+)/g, (_, key: string) => params?.[key] ?? "")} {...props}>
       {children}
     </a>
   ),
@@ -108,6 +117,35 @@ describe("RunLogScreen stdout availability", () => {
     expect(html).toContain("次に進めますか？");
     expect(html).not.toContain('data-testid="run-log"');
     fetchSpy.mockRestore();
+  });
+
+  it("shows the selected harness, source link, model and account in the run header", () => {
+    const html = render(
+      run(true, {
+        selection: {
+          status: "selected",
+          harness_id: "claude-code",
+          source_id: "claude-oauth",
+          model_id: "claude-opus",
+          account_id: "main",
+          basis: null,
+        },
+      }),
+    );
+    expect(html).toContain('data-testid="run-header"');
+    expect(html).toContain(">claude-code<");
+    expect(html).toContain('href="/sources/claude-oauth"');
+    expect(html).toContain(">claude-oauth<");
+    expect(html).toContain(">claude-opus<");
+    expect(html).toContain(">main<");
+    expect(html).not.toContain("記録なし（旧 run）");
+  });
+
+  it("says the selection is not recorded for a legacy run", () => {
+    const html = render(run(true));
+    expect(html).toContain("記録なし（旧 run）");
+    expect(html).not.toContain('href="/sources/');
+    expect(html).not.toContain("test-model");
   });
 
   it("keeps the stdout log path and rendered output when files.stdout: true", () => {

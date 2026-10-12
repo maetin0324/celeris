@@ -273,7 +273,12 @@ managed account pool を持つ `claude_oauth` / `codex_oauth` / `opencode_go` so
 2. task が model を指定していて候補に無ければ `ModelHintUnmatched` で落ちる。
 3. `route_defaults.<harness>.candidates` の source×model を enumerate し、account admission（quota・cooldown・同時実行数）を通した最初の候補を `RoutePolicy`（既定は宣言順）で選ぶ。全候補が不適格なら `NoEligible`。
 
-最初に成功した harness の (harness, source, model, account) で起動する。全候補の harness が失敗した場合は `RouteFailure` を返す（最後に試した harness の `NoEligible` が基本）。`NoEligible` は「今は埋まっている」なので run は起動せず defer する（失敗にしない）。`NoDeclaredDefault`・`ModelHintUnmatched`・未登録の harness は設定を直すまで解けないものとして、既存どおり unroutable に数える。
+最初に成功した harness の (harness, source, model, account) で起動する。
+
+全候補の harness が落ちた場合の規則:
+- 候補のどれかが `NoEligible` なら、その `NoEligible` を返す。末尾の候補が `NoDeclaredDefault` などでも、先に `NoEligible` の候補があれば defer になる（2026-10-12 `wu/class-tests`（db30c4fe）で直した。直す前は末尾の失敗理由が返り、defer にならなかった）。
+- `NoEligible` は「今は埋まっている」なので run は起動せず defer する（失敗にしない）。
+- どの候補も `NoEligible` でなければ、最後に試した harness の失敗を返す。`NoDeclaredDefault`・`ModelHintUnmatched`・未登録の harness は設定を直すまで解けないものとして、既存どおり unroutable に数える。
 
 **記録。** 選択の結果は次の 3 箇所に残す。
 - `harness_selected` event は、成功時は選ばれた harness、失敗時は最後に試した harness を記録する。
@@ -300,6 +305,13 @@ candidates = [{ source = "claude_oauth", model = "claude-sonnet-5" }]
 candidates = [{ source = "opencode_go", model = "opencode-go/kimi-k3" }]
 ```
 
-`config/celeris.pi-hashline.example.toml` が同じ書き方の例である。宣言の検証は既存どおり（未宣言の harness と同一 class 内の重複を読み込みエラー）。
+`config/celeris.pi-hashline.example.toml` が同じ書き方の例である。
+
+**宣言の検証（読み込み時）。** `validate_registry`（`crates/celeris/src/config/llm_route.rs`）は execution class の各候補 harness について次を確かめ、違えば読み込みエラーにする。
+- `[harnesses.<id>]` で宣言されている（未宣言は既存の検証で拒否）。
+- `[route_defaults.<id>]` を持つ。持たないと admission で必ず `NoDeclaredDefault` になるため、読み込みで止める（試験 `execution_class_harness_requires_route_defaults`）。
+- 同一 class 内に同じ harness を重複させない。
+
+**試験。** `crates/task-dispatch/src/dispatcher/tests/class_route.rs` は注入した `RouteState` で `route_select` を呼ぶ（LLM・外部 network なし）。(a) claude_code が埋まり codex が空き → codex、(b) 両方埋まり → `NoEligible`（defer）、(c) review も同じ、(d) 宣言なし → genre・role の従来選択で、落ちた harness を `harness_rejections` に残す、(e) 末尾の候補が未宣言でも先頭の `NoEligible` で defer する。
 
 **後続 task 01M4M8D4AQ との境界。** execution class の候補列は harness の選択入力である。source と model の選択は変えない。source×model の方針は `RoutePolicy` だけが持ち、今回の候補列は `RoutePolicy` に入らない。`RouteRequest` の `lane` は保持するが、この選択では使わない。後続 task が `RoutePolicy` を差し替えても、harness の候補列と admission の規則は変わらない。

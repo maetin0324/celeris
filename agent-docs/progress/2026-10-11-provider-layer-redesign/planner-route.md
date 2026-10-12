@@ -39,16 +39,38 @@ WU の内訳:
 
 ## 未解決
 
-1. **決定的な admission 試験が無い（最大の残件）。** `execution_class`・`harness_candidates`・`harness_rejections` を使う試験は既存に無い（grep で確認。既存の試験は config の読み込みと、`execution_class_defaults = {}` を書くだけの fixture）。総合受け入れの「claude_oauth が埋まり codex_oauth が空いているとき planner・reviewer が codex で起動する」「両方埋まると defer する」は未検証。注入した `RouteState` で `route_select` を呼ぶ試験を追加する必要がある（LLM・外部 network は使わない）。この WU の objective には試験追加が無いため、ここに残した。
-2. **不具合の疑い（直していない）。** `route_select` の失敗理由は「最後に試した harness」の理由になる。候補列の末尾の harness が `route_defaults` を持たない（`NoDeclaredDefault`）と、他の候補が単に埋まっているだけでも `unroutable`（設定変更待ち）として扱われ、defer にならない。`validate_registry`（`crates/celeris/src/config/llm_route.rs`）は execution class の候補が `route_defaults` を持つかを確かめていない。
-3. 例は `pi-hashline` の 1 つだけに足した。`celeris.example.toml` には planner・review の例が無い。
-4. `pi` を planner の 2 番目に置いたのは例示のため。本番で何を planner に使うかは人が決める。
+### 解決済み（closeout2）
+
+1. **決定的な admission 試験**（解決）。`wu/class-tests`（db30c4fe）が `crates/task-dispatch/src/dispatcher/tests/class_route.rs` を足し、注入した `RouteState` で `route_select` を呼ぶ。
+   - `planner_and_review_class_routes_skip_full_first_harness_and_defer_when_all_full` — planner と review の両方で、claude_oauth が埋まり codex_oauth が空き → `codex` が選ばれ、`harness_rejections[0]` に `claude_code` が残る。両方埋まり → `NoEligible`（defer）。
+   - `undeclared_class_uses_only_normal_genre_selection` — class 未宣言のとき genre の規則だけで `claude_code` を選び、埋まっていれば `NoEligible`。
+   - `an_ineligible_harness_wins_over_a_later_undeclared_default` — 末尾の候補（codex）が `route_defaults` を持たなくても、先頭の `NoEligible` で defer する（下の 2 も確かめる）。
+   - 実行: `cargo test -p task-dispatch class_route` — exit 0、`3 passed; 0 failed`（3 件とも ok）。
+2. **末尾候補の未宣言で defer しない不具合**（解決）。`route_select` は `NoEligible` を見つけたら、それを優先して返すように直した（`route_select.rs` の `saw_ineligible`）。`validate_registry` は execution class の候補が `route_defaults` を持つことを読み込み時に確かめる（`crates/celeris/src/config/llm_route.rs`）。
+   - 実行: `cargo test -p celeris --lib execution_class` — exit 0、`execution_class_harness_requires_route_defaults ... ok`（1 passed）。
+## 未解決
+
+1. 例は `pi-hashline` の 1 つだけに足した。`celeris.example.toml` には planner・review の例が無い。
+2. `pi` を planner の 2 番目に置いたのは例示のため。本番で何を planner に使うかは人が決める。
 
 ## 提案
 
-- 試験 WU を 1 つ足す（planner-route 段の後）: `route_select` に注入した `RouteState` で、(a) claude_code が埋まり codex が空き → codex 起動、(b) 両方埋まり → `NoEligible`（defer）、(c) review も同じ、(d) 宣言なし → 従来の genre・role の選択、の 4 件。
-- `validate_registry` で execution class の候補 harness が `route_defaults` を持つことを読み込み時に確かめる（または `NoDeclaredDefault` を `NoEligible` と同じく待ち扱いにする）。どちらにするかは人の決定。
 - 本番 config の書き換えは下の手順で人が行う。
+- `celeris.example.toml` にも planner・review の例を足すかは人が決める。
+
+## closeout2 の証拠（試験と defer 規則の追記後）
+
+作業ディレクトリは `repos/agent-platform`、`TMPDIR=/local/x/ar`。コードは変えていない（変更は ADR 付記と本進捗だけ）。
+
+- `cargo test -p task-dispatch class_route` — exit 0、`3 passed; 0 failed`。
+- `cargo test -p celeris --lib execution_class` — exit 0、`1 passed; 0 failed`。
+- `bash scripts/dev/test-parallel.sh` — exit 0。`4901 tests run: 4901 passed, 13 skipped`。`CELERIS_TEST_SUMMARY`: `passed: 4904, failed: 0, ignored: 14, nextest_exit: 0, doctest_exit: 0, tmp_leftovers: 0`。
+- `cargo clippy --workspace --all-targets -- -D warnings` — exit 0（試験コードを含む）。
+- `cargo fmt --all -- --check` — exit 0。
+- `sh scripts/dev/check-doc-links.sh` — exit 0、`check-doc-links: ok`。
+- `sh scripts/dev/check-adr-numbers.sh` — exit 0、`check-adr-numbers: ok (182 files)`。
+- `sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv` — exit 0、`check-doc-layout: ok`。
+- `sh scripts/dev/progress-index.sh --check` — exit 0、`progress-index --check: ok`。
 
 ## 本番への移行（人が実行する手順）
 
@@ -56,7 +78,7 @@ WU の内訳:
 
 1. 本番 config（`~/.config/celeris` 配下の celeris の設定ファイル。実際の名前は人が確認）をバックアップする。
 2. `[execution.planner]` の `adapter = …` の行があれば削る。この欄が残ると新しい loader は読み込みエラーにする（互換の読み替えは無い）。
-3. `[harness_selection]` に `execution_class_defaults = { planner = [...], review = [...] }` を書く。並びは優先順。書く harness ID は `[harnesses.<id>]` で宣言済みで、かつ `[route_defaults.<id>]` を持つこと（宣言されていない ID は読み込みエラー）。
+3. `[harness_selection]` に `execution_class_defaults = { planner = [...], review = [...] }` を書く。並びは優先順。書く harness ID は `[harnesses.<id>]` で宣言済みで、かつ `[route_defaults.<id>]` を持つこと（宣言されていない ID、`route_defaults` を持たない ID、同じ class 内の重複は読み込みエラー）。
 4. 新しい config を読み込ませ、`invalid config` が出ないことを確かめる。
 5. 通常の手順（selfdeploy の release・reload）で daemon に反映する。反映後、次に planner run が起きたら `llm_route_selected` の source・harness と、run の `selection_metadata_json` の `harness_rejections` を確かめる。
 6. 失敗したらバックアップを戻し、旧 daemon を再起動する。

@@ -75,6 +75,7 @@ impl Dispatcher {
     ///
     /// 本番の `dispatch_ready` の**後**に呼ぶ（本番を先に配る。付記 D3）。
     pub(super) fn tick_eval_trials(&mut self) -> usize {
+        self.reconcile_eval_trials();
         if self.config.eval.reserved_runs == 0 {
             return 0;
         }
@@ -116,6 +117,135 @@ impl Dispatcher {
                 }
             }
         }
+    }
+
+    /// Recover rows left behind by a daemon restart and finish any durable scoring work.
+    fn reconcile_eval_trials(&mut self) {
+        let rows = match self.store.eval_trials_list(None, None) {
+            Ok(rows) => rows,
+            Err(e) => {
+                tracing::warn!(error = %e, "eval trials: recovery scan failed");
+                return;
+            }
+        };
+        for trial in rows {
+            match eval_recovery_action(
+                trial.status,
+                trial
+                    .run_id
+                    .as_deref()
+                    .is_some_and(|id| self.eval_runs.contains_key(id)),
+            ) {
+                EvalRecoveryAction::Score => {
+                    let run = trial
+                        .run_id
+                        .as_deref()
+                        .and_then(|id| self.store.run_index_get(id).ok().flatten());
+                    let wall_secs = trial
+                        .started_at
+                        .as_deref()
+                        .and_then(|s| {
+                            time::OffsetDateTime::parse(
+                                s,
+                                &time::format_description::well_known::Rfc3339,
+                            )
+                            .ok()
+                        })
+                        .map(|start| (OffsetDateTime::now_utc() - start).as_seconds_f64());
+                    self.score_eval_trial(&trial, run.and_then(|r| r.usage), wall_secs);
+                }
+                EvalRecoveryAction::Error => {
+                    self.fail_and_cleanup_eval_trial(
+                        &trial,
+                        "daemon recovery: run disappeared while trial was running",
+                    );
+                }
+                EvalRecoveryAction::None => {}
+            }
+        }
+    }
+
+    fn fail_and_cleanup_eval_trial(&self, trial: &EvalTrial, reason: &str) {
+        let _ = self.store.eval_trial_finish(
+            &trial.trial_id,
+            EvalTrialStatus::Error,
+            None,
+            false,
+            Some(reason),
+        );
+        self.remove_eval_worktree(trial);
+    }
+
+    fn remove_eval_worktree(&self, trial: &EvalTrial) {
+        if let Some(path) = trial.worktree_path.as_deref() {
+            let _ = std::process::Command::new("git")
+                .args(["-C", &trial.repo, "worktree", "remove", "--force", path])
+                .output();
+            let _ = std::fs::remove_dir_all(path);
+        }
+    }
+
+    fn score_eval_trial(
+        &self,
+        trial: &EvalTrial,
+        usage: Option<task_core::Usage>,
+        wall_secs: Option<f64>,
+    ) {
+        let Some(decision_id) = trial.decision_id.as_deref() else {
+            self.fail_and_cleanup_eval_trial(trial, "scoring trial has no route decision");
+            return;
+        };
+        let Some(cwd) = trial.worktree_path.as_deref() else {
+            self.fail_and_cleanup_eval_trial(trial, "scoring trial has no worktree");
+            return;
+        };
+        let scored = run_eval_check(
+            cwd,
+            &trial.check_cmd,
+            Duration::from_secs(trial.check_timeout_secs as u64),
+        );
+        if scored.exit.is_none() && !scored.timed_out {
+            self.fail_and_cleanup_eval_trial(trial, "hidden check could not be started");
+            return;
+        }
+        let passed = !scored.timed_out && scored.exit == Some(0);
+        let labels = serde_json::json!({
+            "passed": passed, "check_exit": scored.exit, "timed_out": scored.timed_out,
+            "wall_secs": wall_secs, "usage": usage, "usd_list": usage.and_then(|u| u.cost_usd),
+            "run_status": "done"
+        });
+        let record = task_core::store::StoredRouteOutcome {
+            decision_id: decision_id.to_owned(),
+            outcome: task_core::route_record::RouteOutcome {
+                schema: task_core::route_record::ROUTE_OUTCOME_SCHEMA.into(),
+                labels,
+            },
+            recorded_at: time::OffsetDateTime::now_utc()
+                .format(&time::format_description::well_known::Rfc3339)
+                .unwrap_or_default(),
+        };
+        let status = if passed {
+            EvalTrialStatus::Passed
+        } else {
+            EvalTrialStatus::Failed
+        };
+        if let Err(e) = self.store.insert_route_outcome(&record) {
+            self.fail_and_cleanup_eval_trial(
+                trial,
+                &format!("could not record route outcome: {e}"),
+            );
+            return;
+        }
+        if let Err(e) = self.store.eval_trial_finish(
+            &trial.trial_id,
+            status,
+            scored.exit,
+            scored.timed_out,
+            None,
+        ) {
+            tracing::warn!(trial_id = %trial.trial_id, error = %e, "eval trials: could not finish scoring");
+        }
+        self.remove_eval_worktree(trial);
     }
 
     /// 動いている評価 run の本数（`running` と `scoring`。daemon 再起動をまたいで `eval_trials` から数える）。
@@ -617,34 +747,48 @@ impl Dispatcher {
         let outcome = match result {
             Ok(outcome) => outcome,
             Err(e) => {
-                self.store
-                    .eval_trial_finish(
-                        &entry.trial_id,
-                        EvalTrialStatus::Error,
-                        None,
-                        false,
-                        Some(&format!("adapter: {e}")),
-                    )
-                    .ok();
+                if let Ok(Some(trial)) = self.store.eval_trial_get(&entry.trial_id) {
+                    self.fail_and_cleanup_eval_trial(&trial, &format!("adapter: {e}"));
+                }
+                return;
+            }
+        };
+        let trial = match self.store.eval_trial_get(&entry.trial_id) {
+            Ok(Some(trial)) => trial,
+            Ok(None) => return,
+            Err(e) => {
+                tracing::warn!(error = %e, "eval trials: trial lookup failed after worker completion");
                 return;
             }
         };
         match &outcome.terminal {
-            Terminal::Done { .. } => {
+            Terminal::Done { usage, .. } => {
                 if let Err(e) = self.store.eval_trial_mark_scoring(&entry.trial_id) {
                     tracing::warn!(trial_id = %entry.trial_id, error = %e, "eval trials: could not mark scoring");
+                    self.fail_and_cleanup_eval_trial(
+                        &trial,
+                        &format!("could not mark scoring: {e}"),
+                    );
+                } else {
+                    let wall_secs = trial
+                        .started_at
+                        .as_deref()
+                        .and_then(|s| {
+                            time::OffsetDateTime::parse(
+                                s,
+                                &time::format_description::well_known::Rfc3339,
+                            )
+                            .ok()
+                        })
+                        .map(|start| (OffsetDateTime::now_utc() - start).as_seconds_f64());
+                    self.score_eval_trial(&trial, *usage, wall_secs);
                 }
             }
             other => {
-                self.store
-                    .eval_trial_finish(
-                        &entry.trial_id,
-                        EvalTrialStatus::Error,
-                        None,
-                        false,
-                        Some(&format!("run ended as {}", terminal_kind(other))),
-                    )
-                    .ok();
+                self.fail_and_cleanup_eval_trial(
+                    &trial,
+                    &format!("run ended as {}", terminal_kind(other)),
+                );
             }
         }
     }
@@ -687,6 +831,114 @@ impl Dispatcher {
         F: Fn(&str) -> Option<String> + Send + Sync + 'static,
     {
         self.eval_version_probe = Some(Arc::new(probe));
+    }
+}
+
+struct EvalCheckResult {
+    exit: Option<i32>,
+    timed_out: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EvalRecoveryAction {
+    None,
+    Score,
+    Error,
+}
+
+fn eval_recovery_action(status: EvalTrialStatus, tracked: bool) -> EvalRecoveryAction {
+    match status {
+        EvalTrialStatus::Scoring => EvalRecoveryAction::Score,
+        EvalTrialStatus::Running if !tracked => EvalRecoveryAction::Error,
+        _ => EvalRecoveryAction::None,
+    }
+}
+
+fn run_eval_check(cwd: &str, command: &str, timeout: Duration) -> EvalCheckResult {
+    let mut child = match std::process::Command::new("sh")
+        .arg("-c")
+        .arg(command)
+        .current_dir(cwd)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(_) => {
+            return EvalCheckResult {
+                exit: None,
+                timed_out: false,
+            };
+        }
+    };
+    let start = std::time::Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                return EvalCheckResult {
+                    exit: status.code(),
+                    timed_out: false,
+                };
+            }
+            Ok(None) if start.elapsed() < timeout => std::thread::sleep(Duration::from_millis(10)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return EvalCheckResult {
+                    exit: None,
+                    timed_out: true,
+                };
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod score_tests {
+    use super::{EvalRecoveryAction, eval_recovery_action, run_eval_check};
+    use std::{path::Path, time::Duration};
+    use task_core::routing_eval_trial::EvalTrialStatus;
+
+    #[test]
+    fn eval_trial_check_passes_and_fails_by_exit_code() {
+        let cwd = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .to_str()
+            .expect("manifest path");
+        assert_eq!(
+            run_eval_check(cwd, "exit 0", Duration::from_secs(1)).exit,
+            Some(0)
+        );
+        assert_eq!(
+            run_eval_check(cwd, "exit 7", Duration::from_secs(1)).exit,
+            Some(7)
+        );
+    }
+
+    #[test]
+    fn eval_trial_check_timeout_kills_a_sleeping_stub() {
+        let cwd = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .to_str()
+            .expect("manifest path");
+        let result = run_eval_check(cwd, "exec sleep 5", Duration::from_millis(30));
+        assert!(result.timed_out);
+        assert_eq!(result.exit, None);
+    }
+
+    #[test]
+    fn eval_trial_recovery_marks_untracked_running_as_error_and_rescores() {
+        assert_eq!(
+            eval_recovery_action(EvalTrialStatus::Running, false),
+            EvalRecoveryAction::Error
+        );
+        assert_eq!(
+            eval_recovery_action(EvalTrialStatus::Scoring, false),
+            EvalRecoveryAction::Score
+        );
+        assert_eq!(
+            eval_recovery_action(EvalTrialStatus::Running, true),
+            EvalRecoveryAction::None
+        );
     }
 }
 

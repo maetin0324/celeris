@@ -8,7 +8,9 @@ updated: 2026-10-12
 
 ## 状態
 
-runtime の実行経路は `llm_route` に切り替え済み。provider 固定選択・adapter hint・tier alias は撤去した。全体検査（`test-parallel`・`clippy`）は通った。ADR `2026-10-11-llm-source-harness-selection.md` は「決定（実装済み: runtime）」に更新した。
+runtime の実行経路は `llm_route` に切り替え済み。provider 固定選択・adapter hint・llm-proxy の tier alias は撤去した。全体検査（`test-parallel`・`clippy`）は通った。ADR `2026-10-11-llm-source-harness-selection.md` は「決定（実装済み: runtime）」に更新した。
+
+残件（撤去できていない）: task-worker の `TierModels` による tier→model の束縛（`with_tier_models`、`tiered.rs`・`adapter.rs`・`browser_specialist.rs`、8 件）。ADR は「lane/Tier を provider/model の対応付けに使わない」と定めるが、worker 側の束縛は残っている。closeout は `crates/` を変えない範囲のため撤去していない。次段で扱う。ADR の実装済みの表示は、この残件を除いた決定について言う。
 
 検査の HEAD は `a3c63b8a`（e2e-flake）。各葉の変更と個別 check は `agent-docs/progress/2026-10-11-llm-source-harness-runtime/<unit>.md` に記録済み。
 
@@ -24,6 +26,8 @@ runtime の実行経路は `llm_route` に切り替え済み。provider 固定�
 ## closeout 検査（この run の実行結果）
 
 HEAD `a3c63b8a`、作業ツリーは本 unit の docs 変更のみ。
+
+- 本 run の再検査（closeout2、`crates/` 差分ゼロ）: `TMPDIR=/local/x bash scripts/dev/test-parallel.sh` exit 0、`CELERIS_TEST_SUMMARY` は `passed 4900, failed 0, ignored 14, nextest_exit 0, doctest_exit 0, summary_parsed true`（ログ `artifacts/closeout2-test-parallel-3.log`）。`cargo clippy --workspace -- -D warnings` exit 0（ログ `artifacts/closeout2-clippy-3.log`）。
 
 - `bash scripts/dev/test-parallel.sh`（TMPDIR を短くした。下の注）
   - 最終 run: `TMPDIR=/local/x` で exit 0。`CELERIS_TEST_SUMMARY`: `passed 4900, failed 0, ignored 14, nextest_exit 0, doctest_exit 0, summary_parsed true`。ログは `artifacts/closeout2-test-parallel.log`。

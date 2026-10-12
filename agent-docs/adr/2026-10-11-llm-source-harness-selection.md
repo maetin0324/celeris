@@ -231,6 +231,7 @@ runtime の決定は実装済み。closeout HEAD `a3c63b8a` で以下を確認�
 | config の provider 宣言を拒否し、新宣言例を使う | 実装済み。`[[providers]]` / `providers.d` の拒否、examples 読み込み試験を含む | `config-drop.md`、`examples.md` |
 | API・snapshot・catalog の provider 概念と proxy の tier alias を除去する | 実装済み | `api-unprovider.md`、`snapshot-unprovider.md`、`catalog-unprovider.md`、`proxy-concrete.md` |
 | task-worker と celerisctl が選択済み harness/source/model を受ける | 実装済み。worker protocol schema も更新 | `worker-harness.md`、`remove-integration-fix.md`。schema_matches pass |
+| lane/Tier を provider/model の対応付けに使わない（legacy tier の焼き付けを除去） | 残件。llm-proxy の tier alias は除去済み。task-worker の `TierModels` による束縛（`with_tier_models`、8 件）が残る | `progress/2026-10-11-llm-source-harness-runtime.md` の残件節。次段で扱う |
 
 最終確認（closeout、HEAD `a3c63b8a`）: `TMPDIR=/local/x bash scripts/dev/test-parallel.sh` は exit 0。4900 passed、0 failed、14 ignored。`cargo clippy --workspace -- -D warnings` は exit 0。TMPDIR を長くすると unix socket の SUN_LEN 上限で試験が落ちるため、短い TMPDIR を使った（環境の注意で、branch の問題ではない）。これに伴い状態を「決定（実装済み: runtime）」にした。詳細は progress の closeout 節。
 

@@ -1872,6 +1872,7 @@ dependencies = [
 name = "routing-eval"
 version = "0.1.0"
 dependencies = [
+ "reqwest",
  "rusqlite",
  "serde",
  "serde_json",

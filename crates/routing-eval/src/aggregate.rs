@@ -281,12 +281,17 @@ pub fn build(manifest: &Manifest, trials: &[Trial]) -> (Aggregate, Vec<Value>) {
 }
 
 fn paired_comparisons(manifest: &Manifest, trials: &[Trial]) -> Vec<Value> {
-    let mut candidates: BTreeMap<String, BTreeMap<String, bool>> = BTreeMap::new();
+    let mut candidates: BTreeMap<(String, String, String), BTreeMap<String, bool>> =
+        BTreeMap::new();
     for t in trials {
         candidates
-            .entry(format!(
-                "{}:{}:{}",
-                t.key.source_id, t.key.model_id, t.key.harness_id
+            .entry((
+                t.key.genre.clone(),
+                t.key.harness_id.clone(),
+                format!(
+                    "{}:{}:{}",
+                    t.key.source_id, t.key.model_id, t.key.harness_id
+                ),
             ))
             .or_default()
             .entry(t.problem_id.clone())
@@ -296,6 +301,9 @@ fn paired_comparisons(manifest: &Manifest, trials: &[Trial]) -> Vec<Value> {
     let mut out = Vec::new();
     for i in 0..entries.len() {
         for j in i + 1..entries.len() {
+            if entries[i].0.0 != entries[j].0.0 || entries[i].0.1 != entries[j].0.1 {
+                continue;
+            }
             let ids: Vec<_> = entries[i]
                 .1
                 .keys()
@@ -314,7 +322,7 @@ fn paired_comparisons(manifest: &Manifest, trials: &[Trial]) -> Vec<Value> {
                 stats::mcnemar_exact(&a, &b),
                 stats::paired_difference_interval(&a, &b, 0xA661, 2000, 0.95),
             ) {
-                out.push(json!({"left":entries[i].0,"right":entries[j].0,"n":ids.len(),"mcnemar_p":p,"difference_left_minus_right":diff}));
+                out.push(json!({"genre":entries[i].0.0,"harness_id":entries[i].0.1,"left":entries[i].0.2,"right":entries[j].0.2,"n":ids.len(),"mcnemar_p":p,"difference_left_minus_right":diff}));
             }
         }
     }
@@ -400,6 +408,61 @@ pub fn run_args(args: Vec<String>) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn paired_comparisons_never_cross_harnesses() {
+        let problem = Problem {
+            id: "p".into(),
+            task_id: "t".into(),
+            work_unit_id: "w".into(),
+            created_at: "".into(),
+            genre: "coding".into(),
+            kind: "task".into(),
+            command: "check".into(),
+            split: "dev".into(),
+            stratum: "coding:task".into(),
+            subset_12: true,
+            head_commit: None,
+            base_commit: None,
+            features_sha256: "".into(),
+            features: json!({}),
+            sha256: "".into(),
+        };
+        let manifest = Manifest {
+            schema: "x".into(),
+            version: "1".into(),
+            cutoff: "".into(),
+            seed: 0,
+            problems: vec![problem],
+            sha256: "x".into(),
+        };
+        let make_trial = |harness: &str, source: &str| Trial {
+            decision_id: source.into(),
+            problem_id: "p".into(),
+            trial_no: 1,
+            key: EvidenceKey {
+                genre: "coding".into(),
+                harness_id: harness.into(),
+                harness_version: "1".into(),
+                source_id: source.into(),
+                model_id: "m".into(),
+            },
+            passed: true,
+            timed_out: false,
+            wall_secs: None,
+            usd_list: None,
+            quota: BTreeMap::new(),
+            status: "passed".into(),
+        };
+        let comparisons = paired_comparisons(
+            &manifest,
+            &[
+                make_trial("claude-code", "claude-oauth"),
+                make_trial("codex", "codex-oauth"),
+            ],
+        );
+        assert!(comparisons.is_empty());
+    }
+
     #[test]
     fn aggregate_emits_intervals_metrics_pareto_and_k1_low_confidence() {
         let p = Problem {

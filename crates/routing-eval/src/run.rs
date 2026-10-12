@@ -201,7 +201,7 @@ fn make_trials(
                 .as_deref()
                 .ok_or_else(|| format!("problem {} has no base_commit", p.id))?;
             for trial_no in 1..=c.k {
-                result.push(TrialRequest { problem_id:p.id.clone(),trial_no:trial_no as u32,source_id:c.source_id.into(),model_id:c.model_id.into(),harness_id:"claude-code".into(),repo:repo.into(),base_commit:base_commit.into(),objective:format!("Complete evaluation problem {} (source task {}). Make the required repository change and do not run or request evaluation checks.",p.id,p.task_id),check:Check{cmd:p.command.clone(),timeout_secs:600} });
+                result.push(TrialRequest { problem_id:p.id.clone(),trial_no:trial_no as u32,source_id:c.source_id.into(),model_id:c.model_id.into(),harness_id:c.harness_id.into(),repo:repo.into(),base_commit:base_commit.into(),objective:format!("Complete evaluation problem {} (source task {}). Make the required repository change and do not run or request evaluation checks.",p.id,p.task_id),check:Check{cmd:p.command.clone(),timeout_secs:600} });
             }
         }
     }
@@ -230,6 +230,15 @@ mod tests {
         assert!(!trials[0].objective.contains("SECRET_CHECK"));
         assert_eq!(trials[4].problem_id, "p2");
         assert_eq!(trials[4].check.cmd, "SECRET_CHECK2");
+        assert_eq!(trials[0].harness_id, "claude-code");
+        assert_eq!(trials[4].harness_id, "claude-code");
+        let codex = make_trials(&manifest, &[&CANDIDATES[4]], "/repo").expect("codex");
+        assert!(codex.iter().all(|trial| trial.harness_id == "codex"));
+        assert!(
+            CANDIDATES
+                .iter()
+                .all(|candidate| !candidate.harness_id.is_empty())
+        );
     }
 
     #[test]

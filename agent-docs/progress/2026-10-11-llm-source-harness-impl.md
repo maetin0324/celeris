@@ -7,6 +7,28 @@ updated: 2026-10-12
 
 # LLM source・harness 実装の進捗
 
+## 再 review 対応（2026-10-12）
+
+reviewer の差し戻し（criterion 3: 旧い互換経路が残る）を受けて、統合後 HEAD で検査を流し直した。コードは変えていない。直したのは ADR の api-v2 付記と本番移行節だけ。HEAD は `b1ff2b88`（integrate wu/accounts-rekey）。
+
+- `cargo clippy --workspace -- -D warnings`: exit 0。`Finished dev profile`、警告 0。ログ `artifacts/clippy.log`。
+- `TMPDIR=/local/x/cl bash scripts/dev/test-parallel.sh`: exit 0、`test-parallel: ok`。`CELERIS_TEST_SUMMARY`: `passed 4898, failed 0, ignored 14, nextest_exit 0, doctest_exit 0, summary_parsed true, tmp_leftovers 0, userns null`（nextest 160 binaries・doctest 10 binaries）。ログ `artifacts/test-parallel.log`。
+- 旧い仕組みの grep（`crates/` `gui/app` `web` `tests` を対象）:
+  - `RoutingMode::Legacy`: 0 件。
+  - `LegacyCatalog`: 0 件。
+  - `ProviderConfig`: 0 件。
+  - `/api/v1/providers` の route 登録: `crates/` に 0 件。
+  - 旧 `/api/v1/accounts` 路: route は 0 件。残りは `crates/task-api/src/problem.rs:156` の doc comment 1 行（`POST /api/v1/accounts` と書いた古い説明）。挙動には影響しない。
+- 旧い仕組みの文字列が残っている箇所（コードの経路ではない。後続で消す）:
+  - `web/e2e/support/fake-daemon.mjs:3063`: `/api/v1/providers` を返す試験用の fake daemon の分岐。
+  - `docs/ops/opencode-go-and-model-catalog.md:80`: `POST /api/v1/providers` で providers.d に書く旧手順。
+  - `docs/ops/provider-llm-source-migration.md:185`: `GET /api/v1/providers` を使う旧手順。
+- 文書検査（HEAD 上の文書を編集した後に流した）: `bash scripts/dev/check-doc-links.sh` exit 0（`ok`）、`bash scripts/dev/check-adr-numbers.sh` exit 0（`ok (182 files)`）、`bash scripts/dev/progress-index.sh --check` exit 0、`sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv` exit 0（`ok`）。
+
+criterion 3 のうち「互換経路・切替 flag が残っていない」は、上の grep の範囲では満たす。reviewer が指した `model_routing` の Legacy 既定と `llm-proxy` の legacy 分岐は、legacy-purge で消えている（`RoutingMode::Legacy` 0 件、`LegacyCatalog` 0 件）。省略時の既定は `Shadow`（`crates/task-core/src/model_router/policy.rs` の `#[default]`）。
+
+api-v2 の残り（`llm/sources` の catalog 欄）は ADR の付記に残る別工程として書いた。実装状況表の行はすべて実装済み。
+
 ## 全体検査（closeout、HEAD `674fb840` + 本 unit の文書のみ）
 
 crates/ は変えていない。実装は runtime / api の各 unit（`2026-10-11-llm-source-harness-runtime/`、`2026-10-11-llm-source-harness-api.md`）で入った。
@@ -42,6 +64,7 @@ crates/ は変えていない。実装は runtime / api の各 unit（`2026-10-1
 書き換えの例は `config/celeris.multi-account.example.toml`（`[llm_sources.*]`・`[harnesses.*]`・`[route_defaults.*]`）と `config/celeris.research.example.toml`（`[[llm_routes]]`）にある。
 
 - 旧い `[[providers]]`・`providers.d`・`providers_include` が 1 つでも残ると、loader が読み込みエラーで拒否し、新しい書き方を案内する（`legacy_providers_rejected_with_new_config_guidance`）。黙って無視はしない。
+- `[model_routing]` を置く config は `mode = "shadow"` か `mode = "enforce"` を明示する。`mode` を省略すると既定の `shadow` になる（`RoutingMode` の `#[default]`）。shadow は観測だけで、実行の選択には使われない（ADR の付記どおり）。どちらにするかは人が決めて書く。`[model_routing]` の表そのものを消せば routing は無効になる。
 - `account_limits` の旧 key（`adapter`）は、migration 0068 で `claude-code`→`claude_oauth`、`codex`→`codex_oauth`、それ以外はそのまま `source_id` に写る。写った `source_id` が新 config の `[llm_sources.<id>]` と一致するかを確認する。一致しない行は手で直すか、新 source の id に合わせる。
 
 ### 3. DB migration

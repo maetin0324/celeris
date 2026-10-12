@@ -239,7 +239,7 @@ runtime の決定は実装済み。closeout HEAD `a3c63b8a` で以下を確認�
 
 - 画面側の provider UI / 旧型追随は ui-v2 の対象。
 - 新しい source/account/harness API は api-v2 の対象。
-  - 2026-10-12 付記（api-v2 の状態: 一部実装）: 実装済みは `GET /api/v1/harnesses`（一覧・詳細）、`GET /api/v1/llm/sources/{source_id}`、run detail の `selection`（旧 run は `legacy_unresolved`）、model role assignments の削除（migration 0069）、web・gui の生成型の再生成。2026-10-12 accounts-rekey で accounts の HTTP 路を `(source_id, account_id)` に作り直し、旧 adapter key 路と `?adapter=` を消した（実装済み。付記は下の「2026-10-12 付記（accounts-rekey）」）。未実装は `llm/sources` の catalog・health 欄。詳細と次の unit の提案は `agent-docs/progress/2026-10-11-llm-source-harness-api.md`。
+  - 2026-10-12 付記（api-v2 の状態）: 実装済みは `GET /api/v1/harnesses`（一覧・詳細）、`GET /api/v1/llm/sources/{source_id}`、run detail の `selection`（旧 run は `legacy_unresolved`）、model role assignments の削除（migration 0069）、web・gui の生成型の再生成。accounts の HTTP 路の `(source_id, account_id)` 化は 2026-10-12 accounts-rekey で実装済み（付記は下の「2026-10-12 付記（accounts-rekey）」）。`llm/sources` の catalog 欄（model 一覧）は未実装で、この表の外の残りとして扱う（`llm/sources` の health は既存の `reachable`・`deployments` 欄で一部だけ満たす）。詳細と次の unit の提案は `agent-docs/progress/2026-10-11-llm-source-harness-api.md`。
 - reasoning effort は selected route に載っていない。tier 束縛の撤去で、codex へ effort を渡す経路（`-c model_reasoning_effort`）も消え、routing 監査の `reasoning_effort` は新しい run では常に空になる。route に effort を持たせるかは別の決定として扱う（`tier-drop-operator.md` の提案）。
 - 本番 config の `[[providers]]`・`providers.d`・`[llm_proxy.models]` を新形へ書き換え、account_limits の移送残行と `harness_migration_unresolved` event を確認する作業は人が実行する。本番 host・DB の変更はこの closeout では行っていない。
 

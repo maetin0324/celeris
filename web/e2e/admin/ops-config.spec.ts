@@ -9,7 +9,7 @@ import { makeTmpDir } from "../support/tmp-dir";
 // beforeAll の一時 dir・server をこの file の試験で共有するので、file 内は 1 worker で順に流す（2026-10-04 の並列化と同じ扱い）。
 test.describe.configure({ mode: "default" });
 
-// 設定系 ops（/providers・/accounts の secret・MCP）: 状態を文字で読めること、secret の値が DOM に出ないこと、
+// 設定系 ops（/accounts の secret・上限・MCP）: 状態を文字で読めること、secret の値が DOM に出ないこと、
 // form の label・項目の error・失敗時の focus、403 で操作を止めて理由を出すこと。
 // 403 は fixture に経路が無いので、browser の要求を page.route で 403 にする（fixture は変えない）。
 
@@ -37,54 +37,6 @@ test.describe("ops-config", () => {
     await gateway.close();
     await daemon.close();
     rmSync(dir, { recursive: true, force: true });
-  });
-
-  test("providers: 状態の表と card が状態を文字で示し、確認で変わる", async ({ page }) => {
-    await page.goto(`${gateway.base}/providers`);
-    await expect(page.getByRole("heading", { level: 1, name: "プロバイダ" })).toBeVisible();
-    const table = page.getByRole("region", { name: "実行枠の状態" });
-    const row = table.getByRole("row").filter({ hasText: "claude-main" });
-    await expect(row.locator("[data-slot=badge]")).toHaveText("未確認");
-    const card = page.getByRole("listitem", { name: "プロバイダ claude-main" });
-    await expect(card.locator("[data-slot=badge]").first()).toHaveText("未確認");
-    await card.getByRole("button", { name: "接続を確認" }).click();
-    await expect(card.getByText("確認結果: ok")).toBeVisible();
-    await expect(card.locator("[data-slot=badge]").first()).toHaveText("接続確認済み");
-    await expect(row.locator("[data-slot=badge]")).toHaveText("接続確認済み");
-  });
-
-  test("providers: 追加 form は可視 label・項目の error・最初の error へ focus", async ({ page }) => {
-    await page.goto(`${gateway.base}/providers`);
-    const form = page.getByRole("form", { name: "プロバイダを追加" });
-    const id = form.getByLabel("新規 id");
-    // 同時実行数はアカウントで管理する（入力欄は無く、アカウント画面へ導く）。
-    await expect(form.getByLabel(/同時実行数/)).toHaveCount(0);
-    await expect(form.getByRole("link", { name: "アカウントで管理" })).toHaveAttribute("href", "/accounts");
-    // 空の id: id へ focus。
-    await form.getByRole("button", { name: "追加" }).click();
-    await expectFieldError(page, id, "id を入力してください");
-    // サーバの 422（重複）は id 欄に結び付けて focus を戻す。
-    await id.fill("claude-main");
-    await form.getByRole("button", { name: "追加" }).click();
-    await expectFieldError(page, id, "id が不正か重複しています");
-  });
-
-  test("providers: 403 で変更操作を止め、理由を出す", async ({ page }) => {
-    await page.route("**/api/providers/claude-main/check", (route) =>
-      route.fulfill({ status: 403, contentType: "application/json", body: JSON.stringify({ error: "forbidden" }) }),
-    );
-    await page.goto(`${gateway.base}/providers`);
-    const card = page.getByRole("listitem", { name: "プロバイダ claude-main" });
-    await card.getByRole("button", { name: "接続を確認" }).click();
-    const notice = page.getByRole("alert").filter({ hasText: "この操作を行う権限がありません" });
-    await expect(notice).toBeVisible();
-    const noticeId = await notice.getAttribute("id");
-    for (const name of ["変更を保存", "接続を確認", "削除"]) {
-      const button = card.getByRole("button", { name });
-      await expect(button).toBeDisabled();
-      await expect(button).toHaveAttribute("aria-describedby", noticeId ?? "");
-    }
-    await expect(page.getByRole("button", { name: "追加" })).toBeDisabled();
   });
 
   test("secret: 値は DOM に出ず、置き換えは ConfirmDialog で影響を示し、削除の確認に影響を書く", async ({ page }) => {
@@ -176,11 +128,10 @@ test.describe("ops-config", () => {
     ).toBe(true);
     await main.getByRole("button", { name: "既定に戻す" }).click();
     await expect(main.getByText("0 / 実効上限 1（既定（max_runs_per_account = 1））")).toBeVisible();
-    // 暗黙アカウント（LLM source 単位。同じ source を使う行を `providers` で出す）: 印があり、
+    // 暗黙アカウント（LLM source 単位）: 印があり、
     // ログイン・削除は無く、同じ欄で上限を変える。
     const implicit = page.getByRole("listitem", { name: "アカウント openai_compatible:qwen" });
     await expect(implicit.getByText("暗黙アカウント", { exact: true })).toBeVisible();
-    await expect(implicit.getByText("qwen-local")).toBeVisible();
     await expect(implicit.getByRole("button", { name: "ログイン開始" })).toHaveCount(0);
     await expect(implicit.getByRole("button", { name: "削除" })).toHaveCount(0);
     await implicit.getByLabel("同時実行数の上限（1〜32）").fill("2");

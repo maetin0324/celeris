@@ -121,7 +121,7 @@
   **`~/.local/celeris/workspaces`** に変わった（ADR-0042 D3。どちらも `config.toml` で変えられる）。
   worktree は**終端では消えなくなり**、**中止（`POST /tasks/{id}/cancel`）で worktree とブランチが消える**（ADR-0043 D2）
 - 改訂: 2026-09-19 Phase 51（ADR-0041 D5）— **型は変わらない**。`mode = "verify"` のプロセスに限り、
-  `GET /config` の `roles[]` / `genres[]` / `providers[]` に組み込みの `smoke`（`adapter = "fake"`）が
+  `GET /config` の `roles[]` / `genres[]` / `harnesses[]` / `llm_sources[]` に組み込みの `smoke`（`kind = "fake"`）が
   1 つずつ増え、`reviewer` が `{adapter: "fake", tier: "standard"}` になる（`Config::apply_verify_smoke`。
   設定ファイルに同じ id があっても上書きする）。`mode = "normal"`（本番）の応答は 1 バイトも変わらない。
   `POST /tasks` はそのプロセスで `{"genre":"smoke","role":"smoke"}` を受け付け、verify の celeris はその
@@ -179,13 +179,11 @@ listen = "127.0.0.1:7710"      # これを書いたときだけ API が動く（
 - `token_file` の内容（前後の空白を除いた 1 行）がトークン。ファイルが読めない・空 → 設定エラー。トークンはログにも API にも出さない（task-api は SHA-256 の値だけを持つ）。
 - SSE の同時接続数の上限は task-api の定数 `MAX_STREAMS = 16`（設定キーにしない）。
 - API は**自分専用の `SqliteStore` 接続**を持ち、DB 呼び出しは `spawn_blocking` で行う（ディスパッチャの接続と Mutex を共有しない。ADR-0013 D3）。
-- `providers_include = "providers.d/*.toml"`（トップレベル、`[[providers]]` と併用可。ADR-0017 M1）を設定すると、
-  §3.24〜3.28 のプロバイダ管理エンドポイントが `providers.d/<id>.toml`（1 アカウント 1 ファイル、ファイル名昇順で
-  `[[providers]]` の後ろに連結）を読み書きできるようになる。未設定なら 5 本とも 409。
+- LLM の接続先は `[llm_sources.<id>]`、実行器は `[harnesses.<id>]`、組み合わせの既定候補は `[route_defaults.<harness>]` で宣言する（ADR 2026-10-11 llm-source-harness-selection）。
 - `[secrets] dir = "secrets"`（ADR-0030 D1。GUI から API キー等を預かる置き場所）を設定すると、§3.36〜3.38 の
   秘密管理エンドポイントが `dir` 配下に 1 秘密 1 ファイル（0600）で読み書きできるようになる。未設定なら 3 本とも
   409 `secrets_unavailable`。値を環境変数として run に流し込む `env_from_secrets` は `[adapters.<種別>]` と
-  `[[providers]]` の行の両方に書ける（§3.36 参照）。
+  `[llm_sources.<id>]` の両方に書ける（§3.36 参照）。
 
 ### 1.2 プロトコルと共通規約
 
@@ -843,7 +841,7 @@ run は止めない。同じ内容は `worker_progress`（`kind = status`・`err
 3. run: 対象 = `<ws>/runs/<run_id>/{stdout.jsonl|stderr.log|result.json|request.json|prompt.txt}`。
    `request.json` は**ワーカーに渡した `RunRequest`**（objective・役割の指示文・クラスタ用の追記・前回の判定・人の回答・子の結果。ADR-0023 D2）。
    `prompt.txt` は claude-code / codex に**実際に渡した文面**（`build_prompt` の結果。ADR-0023 M1。fake アダプタの run には無い）。
-   どちらにも秘密は含まれない（`[[providers]].env` の値やトークンは `RunRequest` に入らない）。run のディレクトリごと無ければ 404 `run_not_found`。
+   どちらにも秘密は含まれない（source の環境変数やトークンは `RunRequest` に入らない）。run のディレクトリごと無ければ 404 `run_not_found`。
 4. 成果物: `idx` は `GET /tasks/{id}/artifacts` の `items[].idx`（`ArtifactProduced` の出現順、0 始まり）。範囲外 → 404 `artifact_not_found`。
    記録された `ArtifactRef.path` が空・絶対パス・`..` を含む → 403 `path_forbidden`。対象 = `<ws>` + `ArtifactRef.path`。
 5. 対象を `canonicalize` し、`<ws>` の canonical パスで始まらなければ 403 `path_forbidden`（symlink でワークスペース外へ出るものを弾く）。ファイルでなければ（ディレクトリ等）403。存在しなければ 404 `file_not_found`。
@@ -945,7 +943,7 @@ planner が行う（`POST /tasks` で root task を作る。§3.4）。既存の
 
 ```json
 {"now":"…","snapshot":{"instance_id":"01J…","pid":1234,"hostname":"lab-01","started_at":"…","last_tick_at":"…","ticks":8812,"tick_ms":2000,
-  "in_flight":[{"task_id":"01J…","run_id":"01J…","provider":"claude-a","kind":"worker","since":"…"}],
+  "in_flight":[{"task_id":"01J…","run_id":"01J…","source":"claude_oauth","kind":"worker","since":"…"}],
   "cooldowns":[{"source":"claude-code","account_id":"acct-1","until":"…","reason":"throttled"}],
   "awaiting_human":["01J…"],"awaiting_children":["01J…"],"unroutable":[],
   "reports":null,"approvals_pending":0,"decisions_open":0,
@@ -959,11 +957,7 @@ planner が行う（`POST /tasks` で root task を作る。§3.4）。既存の
 - `clusters[]`（ADR-0018）、`accounts_root` / `max_runs_per_account` / `accounts_roots` / `accounts[]`（ADR-0024 / ADR-0025）、
   `implicit_accounts[]`（`{source, models[], in_use}`。LLM source 単位の暗黙アカウント。ADR 2026-10-08-account-concurrency-limits）、
   `scratch`（scratch pool の観測値。無ければ省略。`GET /metrics/scratch` と同じ。ADR-0075 D6）も載る。
-- `task_waits[]`（ADR 2026-10-11-task-wait-reasons D4）は、この tick に dispatcher のメモリだけで決まった見送りの理由
-  （`{task_id, wait: TaskWait}`。task_id 順・1 task に 1 件）。承認待ちで延期中の reviewing は `review_awaiting_human`、
-  委譲した子を待つ reviewing の親は `delegated_children`（未完の子の id）、設定に合う経路が無い ready は `unroutable`。
-  旧 `awaiting_human[]`・`awaiting_children[]`・`unroutable[]` は消した（同じ情報が `task_waits` の kind にある）。
-- cooldown は `ProviderPolicy::cooldowns(now) -> Vec<Cooldown{provider, until: Instant, reason: CooldownReason}>` で取り、`Instant` を壁時計に直す。`reason` の語彙は `throttled | auth_failed | exhausted`（`Spawn` は `provider_failure_outcome` が `Exhausted` に写すので cooldown の理由としては現れない。`ProviderThrottled.reason` には `spawn` も入りうる）。
+- `task_waits[]`（ADR 2026-10-11-task-wait-reasons D4）は、この tick に dispatcher のメモリだけで決まった見送りの理由（`{task_id, wait: TaskWait}`）。
 - cooldown は source・account 単位で公開する。プールを持たない source は `account_id` が source ID の暗黙 account となる。`until` は RFC 3339、`reason` は `throttled | auth_failed | exhausted`。
 - `last_tick_at` が `now` から `3 × tick_ms` 以上古ければ GUI は「ディスパッチャが遅延」と表示する（API は判定しない）。
 - API に繋がらないこと自体が「celeris 停止」を意味する（GUI 側で表示）。
@@ -986,7 +980,7 @@ planner が行う（`POST /tasks` で root task を作る。§3.4）。既存の
 ### 3.21 `GET /config` → 200 `ConfigView`
 
 `config.toml` の要約。`config_path`、`db`（絶対パス）、`workspace_root`、`tick_ms`、`max_concurrency`、`lease_grace_secs`、`idle_timeout_secs`、`kill_grace_secs`、`review_timeout_secs`、`error_cooldown_secs`、`retry_backoff_base_secs`、`retry_backoff_max_secs`、`max_requeues`、`plan_auto_accept`（`[plan] auto_accept`）、`reviewer{adapter, tier?}`（`tier` は `[reviewer] tier` を明示したときだけ。無ければ worker run の lane に合わせて動的に決まる）、
-`providers[]{id, adapter, tiers, concurrency, model, env_keys, account_pool, account_id, tier_models, credential_refs}`、
+`harnesses[]` と `llm_sources[]`（source の `id`, `kind`, `models` など）、
 `clusters[]{id, host, work_dir?, concurrency, sync, delete_on_push, has_setup, env_keys, rsync_excludes, auth, forwards}`（ADR-0018。`work_dir` は設定ファイルの値だけ）、
 `roles[]{id, tier, adapter, max_turns, max_wall_secs, has_instructions}`（`[[roles]]` の順。ADR-0016 D1）、
 `genres[]{id, description, capabilities?, input_artifacts?, output_artifacts?, default_role, roles}`（ADR-0027 D1 / ADR-0028 D1。
@@ -994,10 +988,10 @@ planner が行う（`POST /tasks` で root task を作る。§3.4）。既存の
 `[[genres]]` の順。`[[genres]]` を書かない設定では `[]`）、
 `delegation{max_delegate_per_run, max_tree_depth, max_tree_runs, on_child_failure}`（ADR-0021。既定 8 / 5 / 100 /
 `"retry_then_ask"`。`on_child_failure` は `"retry_then_ask"` か `"ignore"`）、`api{bind, auth_required, allowed_hosts}`。クエリは受けない。
-`[[providers]].env` の**値**、`[adapters.*].env` の値、`[[clusters]].env` の値と `setup` の中身、`[[roles]].instructions` の**本文**（有無だけを `has_instructions` で出す）、`token_file` のパスと内容は出さない。
+source 環境変数の**値**、`[adapters.*].env` の値、`[[clusters]].env` の値と `setup` の中身、`[[roles]].instructions` の**本文**（有無だけを `has_instructions` で出す）、`token_file` のパスと内容は出さない。
 
 - `GET /health` の `mode` が `"verify"` のプロセスでは、`roles[]` / `genres[]` /
-  `providers[]` の末尾に組み込みの **`smoke`**（`adapter = "fake"`、`tier`/`tiers` は `standard`）が 1 つずつ
+  `harnesses[]` / `llm_sources[]` の末尾に組み込みの **`smoke`**（`kind = "fake"`）が
   増え、`reviewer` が `{adapter: "fake", tier: "standard"}` になる。設定ファイルに同じ id があっても
   上書きされる（煙試験が本物の LLM を呼ぶ経路を設定で開けられないようにするため。ADR-0041 D5）。**型は変わらない**し、
   本番（`mode = "normal"`）の応答も変わらない。`task-api` は `celeris` crate に依存しないので、この型は task-api に置き、celeris が起動時に値を作って `ApiState` に渡す。
@@ -1222,13 +1216,13 @@ API は無い**（作成・削除だけ）。`[secrets]` が未設定なら 3 �
 と同じ（1〜64 文字の ASCII 英数字・`-`・`_`。`PUT`/`DELETE` の id はパスにあるので、無効な形は
 provider 路は 2026-10-12 に廃止したので、他の管理系と同じく 404 `secret_not_found` にする）。
 
-**使い方（`env_from_secrets`）**: `[adapters.<種別>]` と `[[providers]]` の行の両方に、環境変数名 → 秘密 id の
-対応 `env_from_secrets = { LDR_SEARCH_ENGINE_WEB_TAVILY_API_KEY = "tavily" }` を書ける（`[[providers]]` の行の
+**使い方（`env_from_secrets`）**: `[adapters.<種別>]` と `[llm_sources.<id>]` の両方に、環境変数名 → 秘密 id の
+対応 `env_from_secrets = { LDR_SEARCH_ENGINE_WEB_TAVILY_API_KEY = "tavily" }` を書ける（source の設定の
 LLM 認証用キーは 3.24 の `credential_refs` からも書ける）。値は `build_adapters`
 （アダプタを組み立てるとき）に読むので、鍵を入れ替えたら `POST /reload` が要る（GUI は保存後に自動で呼ぶ）。
 優先順は celeris の環境 < `[adapters.*].env` < `[adapters.*].env_from_secrets` < 行の `env` < 行の
 `env_from_secrets`。**秘密が見つからないのは設定エラーにしない**（`warn!` を出してその環境変数を渡さず、その層
-は下の層の値に道を譲る。run はワーカー自身のエラー（鍵が無い）で失敗する）。`[[providers]].env` に平文で書く
+は下の層の値に道を譲る。run はワーカー自身のエラー（鍵が無い）で失敗する）。source の環境変数に平文で書く
 従来の方法も残る（既存設定を壊さない）。
 
 #### 3.36 `GET /secrets` → 200 `SecretList`
@@ -1239,7 +1233,7 @@ LLM 認証用キーは 3.24 の `credential_refs` からも書ける）。値は
    {"id": "tavily", "updated_at": "2026-09-17T01:00:00Z", "fingerprint": "a1b2c3d4",
     "used_by": [
       {"scope": "adapter", "name": "local-deep-research", "env": "LDR_SEARCH_ENGINE_WEB_TAVILY_API_KEY"},
-      {"scope": "provider", "name": "ldr-tavily", "env": "LDR_SEARCH_ENGINE_WEB_TAVILY_API_KEY"}
+      {"scope": "llm_source", "name": "claude_oauth", "env": "LDR_SEARCH_ENGINE_WEB_TAVILY_API_KEY"}
     ]}]}
 ```
 

@@ -26,6 +26,19 @@ tasks: [01M4QHBJW4GBG10QA8F231W7XZ]
 - `sh "$CELERIS_WU_SCOPE_PATHS"` — listed only this unit's intended paths.
 - `rg -n 'RoutingMode::Legacy' crates` — no matches.
 - `git diff --check` — pass.
+
+## catalog-drop
+
+- Removed `llm-proxy/src/legacy_catalog.rs` and its `[llm_proxy]`/role-assignment normalizer and tests.
+- Added `llm_proxy::catalog::ProxyCatalog`; daemon wiring copies the validated `routing_catalog_snapshot`, or uses an empty catalog when no snapshot exists. Config declarations reach the proxy through the validated catalog built during config loading. Estimator shadow only consumes the startup catalog.
+- Renamed `rank_pool` to `rank_source_accounts`; selection documentation now defines account identity as `(source_id, account_id)`.
+- Added a daemon test for the empty-catalog fallback and a declared source catalog flowing through the validated snapshot.
+- `cargo test -p llm-proxy` — pass (49 unit, 28 integration).
+- `cargo test -p celeris proxy_catalog_uses_validated_snapshot_and_empty_when_absent` — pass.
+- `cargo clippy -p llm-proxy -p celeris --all-targets -- -D warnings` — pass.
+- `sh "$CELERIS_WU_SCOPE_PATHS"` — pass; all changed paths are in the catalog-drop scope.
+- `! rg -n 'legacy_catalog|normalize_legacy_config|rank_pool|LegacyCatalog' crates` — pass.
+- `git diff --check` — pass.
 - `cargo test -p task-api --test routing` — pass (6 tests), including the corrected additive routing event fixture.
 - `UPDATE_SCHEMA=1 TMPDIR=/tmp/xd cargo test -p task-api` — generated schema and unit/most integration suites passed; exposed the stale `mode = legacy` fixture in `tests/routing.rs`. After updating it, the complete routing integration suite passed.
 - `cargo test -p celeris routing_table_requires_explicit_mode` — pass, verifying `Config::load` rejects an omitted mode while a config without `[model_routing]` still loads.

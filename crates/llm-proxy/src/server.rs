@@ -290,7 +290,6 @@ impl ProxyState {
                 .map(|c| c.as_text())
                 .unwrap_or_default()
         });
-        let catalog = None;
         let outcome = estimator.submit(EstimatorShadowInput {
             primary_decision_id: routing.decision_id.clone(),
             task_id: routing.task_id().map(str::to_owned),
@@ -302,7 +301,6 @@ impl ProxyState {
             candidates: candidates.to_vec(),
             primary: primary.clone(),
             prompt,
-            catalog,
         });
         tracing::debug!(?outcome, "llm-proxy: estimator shadow submitted");
     }
@@ -441,7 +439,7 @@ impl ProxyState {
             in_use: &|id| self.in_use_count(&format!("claude-oauth:{id}")),
             max_concurrent_per_account: self.config.max_concurrent_per_account,
         };
-        selection::rank_pool(SourceKind::Claude, &input, now)
+        selection::rank_source_accounts(SourceKind::Claude, &input, now)
     }
 
     fn rank_codex(&self, dirs: &[AccountDir], now: i64) -> Vec<SelectedAccount> {
@@ -455,7 +453,7 @@ impl ProxyState {
             in_use: &|id| self.in_use_count(&format!("codex-oauth:{id}")),
             max_concurrent_per_account: self.config.max_concurrent_per_account,
         };
-        selection::rank_pool(SourceKind::Gpt, &input, now)
+        selection::rank_source_accounts(SourceKind::Gpt, &input, now)
     }
 
     async fn rank_relays(&self, sources: &[OpenAiCompatibleConfig]) -> Vec<OpenAiCompatibleConfig> {

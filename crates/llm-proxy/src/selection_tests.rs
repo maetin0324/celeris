@@ -31,7 +31,7 @@ fn select_from_pool_prefers_the_unused_account_and_ties_break_by_id() {
 }
 
 #[test]
-fn rank_pool_orders_all_eligible_candidates_and_drops_excluded_ones() {
+fn rank_source_accounts_orders_all_eligible_candidates_and_drops_excluded_ones() {
     let mut dirs = dirs(&["a", "b", "c"]);
     dirs[2].logged_in = false; // c: excluded
     let mut book = AccountBook::new_in_memory();
@@ -49,7 +49,7 @@ fn rank_pool_orders_all_eligible_candidates_and_drops_excluded_ones() {
         in_use: &no_in_use,
         max_concurrent_per_account: 4,
     };
-    let ranked = rank_pool(SourceKind::Claude, &input, 1_000);
+    let ranked = rank_source_accounts(SourceKind::Claude, &input, 1_000);
     assert_eq!(
         ranked.into_iter().map(|s| s.account_id).collect::<Vec<_>>(),
         vec!["b"]

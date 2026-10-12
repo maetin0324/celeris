@@ -1,6 +1,6 @@
 //! ADR 2026-10-04 §7.3・§10 Phase 5: estimator shadow（`kind = estimator` の decision shadow）。
 //!
-//! primary は heuristic / legacy で選んだまま変えない。primary が成功した後に [`EstimatorShadow::submit`]
+//! primary の選択は変えない。primary が成功した後に [`EstimatorShadow::submit`]
 //! が同期で返り、sidecar への `POST /estimate` は `tokio::spawn` の中で走る（primary は完了を待たない）。
 //! 返った検証済み snapshot を [`QualityEstimator`] として shadow kernel（task-core の `optimize`）に渡し、
 //! 選ばれた候補を primary と比べて `routing_shadow_recorded`（ADR §6 の `routing_shadow_evaluated`、
@@ -32,8 +32,8 @@ use task_core::model_router::shadow::{
 };
 use tokio::time::Instant;
 
+use crate::catalog::ProxyCatalog;
 use crate::estimator_sidecar::{SidecarEstimatorClient, SidecarUnavailable};
-use crate::legacy_catalog::LegacyCatalog;
 use crate::reservation::{Clock, ReservationTable, SlotKey};
 use crate::shadow::{ShadowBudget, ShadowCandidate, ShadowEvent, ShadowSink};
 
@@ -81,9 +81,6 @@ pub struct EstimatorShadowInput {
     pub candidates: Vec<ShadowCandidate>,
     pub primary: ShadowCandidate,
     pub prompt: Option<String>,
-    /// 付記「モデルごとの複数役割」: 要求時点の割り当てを写した catalog（legacy の正規化）。起動時の catalog に
-    /// 無い役割メンバーを候補に写せるよう、`extended_with` で重ねて使う。`None` なら起動時の catalog だけ。
-    pub catalog: Option<Arc<LegacyCatalog>>,
 }
 
 /// `submit` の結果（primary はこれを見るだけで sidecar を待たない）。
@@ -110,10 +107,10 @@ pub struct KernelChoice {
 }
 
 /// shadow kernel: `candidates` を catalog の deployment に写し、`optimize` に `estimator` を渡して
-/// 先頭を返す。policy は `Shadow` mode で回す（legacy の素通しにしない）。catalog に無い候補は
+/// 先頭を返す。policy は `Shadow` mode で回す。catalog に無い候補は
 /// 比較の対象外。hard constraint・privacy の除外は estimate より前に当たる。
 pub fn kernel_choice(
-    catalog: &LegacyCatalog,
+    catalog: &ProxyCatalog,
     policy: &RoutingPolicy,
     context: &RoutingContext,
     candidates: &[ShadowCandidate],
@@ -178,7 +175,7 @@ pub fn kernel_choice(
     }
 }
 
-fn lane_policy(catalog: &LegacyCatalog, lane: Tier) -> RoutingPolicy {
+fn lane_policy(catalog: &ProxyCatalog, lane: Tier) -> RoutingPolicy {
     catalog
         .policies
         .iter()
@@ -229,7 +226,7 @@ impl EstimatorShadowSlot {
 pub struct EstimatorShadow {
     config: EstimatorShadowConfig,
     client: Arc<SidecarEstimatorClient>,
-    catalog: Arc<LegacyCatalog>,
+    catalog: Arc<ProxyCatalog>,
     budget: Arc<dyn ShadowBudget>,
     sink: Arc<dyn ShadowSink>,
     clock: Arc<dyn Clock>,
@@ -242,7 +239,7 @@ impl EstimatorShadow {
     pub fn new(
         config: EstimatorShadowConfig,
         client: Arc<SidecarEstimatorClient>,
-        catalog: Arc<LegacyCatalog>,
+        catalog: Arc<ProxyCatalog>,
         owner: impl Into<String>,
         budget: Arc<dyn ShadowBudget>,
         sink: Arc<dyn ShadowSink>,
@@ -296,7 +293,7 @@ impl EstimatorShadow {
             return EstimatorSubmit::NotAdmitted(reason);
         }
         let shadow_id = format!("she_{}", ulid::Ulid::new());
-        let catalog = self.catalog_for(&input);
+        let catalog = Arc::clone(&self.catalog);
         let policy = lane_policy(&catalog, input.lane);
         let heuristic = kernel_choice(
             &catalog,
@@ -319,19 +316,11 @@ impl EstimatorShadow {
         EstimatorSubmit::Started
     }
 
-    /// 起動時の catalog に要求時点の割り当て（`input.catalog`）を重ねたもの。
-    fn catalog_for(&self, input: &EstimatorShadowInput) -> Arc<LegacyCatalog> {
-        match &input.catalog {
-            Some(dynamic) => Arc::new(self.catalog.extended_with(dynamic)),
-            None => Arc::clone(&self.catalog),
-        }
-    }
-
     async fn run(
         &self,
         shadow_id: String,
         input: EstimatorShadowInput,
-        catalog: Arc<LegacyCatalog>,
+        catalog: Arc<ProxyCatalog>,
         policy: RoutingPolicy,
         heuristic: KernelChoice,
     ) {

@@ -20,9 +20,9 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use llm_proxy::catalog::ProxyCatalog;
 use llm_proxy::estimator_shadow::{EstimatorShadow, EstimatorShadowConfig, EstimatorShadowSlot};
 use llm_proxy::estimator_sidecar::{MonotonicClock, SidecarClientConfig, SidecarEstimatorClient};
-use llm_proxy::legacy_catalog::LegacyCatalog;
 use llm_proxy::reservation::Clock;
 use llm_proxy::shadow::{ShadowBudget, ShadowSink};
 use task_core::model_router::estimator::sidecar::{EstimatorDependencies, EstimatorDescriptor};
@@ -87,7 +87,7 @@ impl EstimatorSidecarControl {
 
     /// 設定を適用する。off（`enabled = false`）なら外し、有効なら組み直して差し替える。組めなければ
     /// warn を出して外す（fail-closed）。戻り値は適用後に有効か。
-    pub(crate) fn apply(&self, entry: &SidecarEntry, catalog: Arc<LegacyCatalog>) -> bool {
+    pub(crate) fn apply(&self, entry: &SidecarEntry, catalog: Arc<ProxyCatalog>) -> bool {
         let mut applied = self.applied.lock().unwrap_or_else(|e| e.into_inner());
         if !entry.enabled {
             self.slot.set(None);
@@ -115,7 +115,7 @@ impl EstimatorSidecarControl {
     fn build(
         &self,
         entry: &SidecarEntry,
-        catalog: Arc<LegacyCatalog>,
+        catalog: Arc<ProxyCatalog>,
     ) -> Result<Arc<EstimatorShadow>, String> {
         let (config, client_config) = shadow_settings(entry)?;
         let caps = config
@@ -262,16 +262,16 @@ impl ShadowBudget for SidecarDailyBudget {
     }
 }
 
-/// proxy の catalog: config の検証済み routing catalog（無ければ legacy config から導く）。
-pub(crate) fn proxy_catalog(config: &crate::Config) -> Arc<LegacyCatalog> {
+/// proxy の catalog: config の検証済み routing catalog。未設定時は deployment のない空 catalog。
+pub(crate) fn proxy_catalog(config: &crate::Config) -> Arc<ProxyCatalog> {
     Arc::new(match &config.routing_catalog_snapshot {
-        Some(catalog) => LegacyCatalog {
+        Some(catalog) => ProxyCatalog {
             models: catalog.models.clone(),
             deployments: catalog.deployments.clone(),
             policies: catalog.policies.clone(),
-            warnings: Vec::new(),
+            warnings: catalog.warnings.clone(),
         },
-        None => llm_proxy::legacy_catalog::normalize_legacy_config(&config.llm_proxy),
+        None => ProxyCatalog::default(),
     })
 }
 
@@ -283,5 +283,27 @@ pub(crate) fn reload_estimator_sidecar(config: &crate::Config) {
             proxy_catalog(config),
         );
         tracing::info!(active, "model_routing.estimator.sidecar reloaded");
+    }
+}
+
+#[cfg(test)]
+mod catalog_tests {
+    use super::*;
+
+    #[test]
+    fn proxy_catalog_uses_validated_snapshot_and_empty_when_absent() {
+        let mut config = crate::config::Config::parse_with_delivery("").unwrap();
+        let absent = proxy_catalog(&config);
+        assert!(absent.deployments.is_empty());
+
+        config = crate::config::Config::parse_with_delivery(
+            "[model_routing]\nmode = \"shadow\"\n[llm_sources.main]\nkind = \"fake\"\nmodels = [\"model-a\"]\n[[model_routing.models]]\nid = \"model-a\"\n",
+        )
+        .unwrap();
+        let declared = config.routing_catalog().unwrap();
+        config.routing_catalog_snapshot = Some(Arc::new(declared));
+        let from_snapshot = proxy_catalog(&config);
+        assert_eq!(from_snapshot.models.len(), 1);
+        assert_eq!(from_snapshot.models[0].id, "model-a");
     }
 }

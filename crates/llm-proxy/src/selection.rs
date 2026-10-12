@@ -1,7 +1,7 @@
-//! 決定的な選択（ADR-0053 D1 / ADR-0049 の規則の再利用）。
+//! 決定的な source account admission（ADR-0053 D1 / ADR-0049 の規則の再利用）。
 //!
 //! 要求は具体的な `<source_id>/<model_id>`（`crate::naming`）。`claude_oauth` / `codex_oauth` はその
-//! プールのアカウントを残量スコア順に、openai-compatible はその id の relay だけを見る。
+//! source 内の各 account を `(source_id, account_id)` 単位で順位付けし、openai-compatible はその id の relay だけを見る。
 //!
 //! 429/401 を受けて次の候補へやり直せるよう（ADR-0053 D1）、選択は**順位付きの列**を返す
 //! （1 位が failed candidate/account_book 更新を受けても、この列は要求の最初に決めたまま進む。
@@ -72,8 +72,12 @@ fn rank_in_pool(input: &PoolInput<'_>, now: i64) -> Vec<(String, f64, usize)> {
     scored
 }
 
-/// `claude_oauth/<model>` / `codex_oauth/<model>` 用: 1 プールを順位付きで返す。
-pub fn rank_pool(source: SourceKind, input: &PoolInput<'_>, now: i64) -> Vec<SelectedAccount> {
+/// `claude_oauth/<model>` / `codex_oauth/<model>` 用: source の account 候補を順位付きで返す。
+pub fn rank_source_accounts(
+    source: SourceKind,
+    input: &PoolInput<'_>,
+    now: i64,
+) -> Vec<SelectedAccount> {
     rank_in_pool(input, now)
         .into_iter()
         .map(|(id, _, _)| SelectedAccount {
@@ -89,7 +93,7 @@ pub fn select_from_pool(
     input: &PoolInput<'_>,
     now: i64,
 ) -> Option<SelectedAccount> {
-    rank_pool(source, input, now).into_iter().next()
+    rank_source_accounts(source, input, now).into_iter().next()
 }
 
 /// 設定順で到達可能な relay を順位付きで返す。
@@ -111,7 +115,7 @@ pub fn pick_relay(
     rank_relays(sources, reachable).into_iter().next()
 }
 
-/// Phase 2 の state 選択（SourceState・制約・effective cost・予約の枠）。legacy の経路は上の関数のまま。
+/// Phase 2 の state 選択（SourceState・制約・effective cost・予約の枠）。
 #[path = "selection_state.rs"]
 pub mod state;
 

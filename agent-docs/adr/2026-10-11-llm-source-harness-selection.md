@@ -256,3 +256,50 @@ Accounts HTTP API は source と account を別々の path key にする。全 s
 managed account pool を持つ `claude_oauth` / `codex_oauth` / `opencode_go` source は、それぞれ内部の ClaudeCode / Codex / OpencodeGo adapter に固定対応する。内部 effect・store key は従来の adapter key を保つ。暗黙 account の公開 `account_id` は `source_id` そのものとし、上限の内部 key は `implicit` と source ID の組を保つ。
 
 この付記により本文 177 行の旧 `/api/v1/accounts` 記述を更新する。
+
+
+### 2026-10-12 付記（planner・reviewer の選択）
+
+計画 run（planner）と reviewer run は、固定の adapter ではなく execution class の候補列で harness を決める。実装は `wu/class-select`（0a3bf4c5）と `wu/adapter-purge`（64789ef9）。
+
+**class の付け方。** `dispatch_run.rs` は planner 起動の `RouteInput` の harness 要求に `execution_class = "planner"` を付け、`review_spawn.rs` は reviewer の要求に `"review"` を付ける。それ以外の run は class を持たない。
+
+**harness の候補。** `task_core::llm_route::harness_candidates` が候補列を返す。
+- `[harness_selection.execution_class_defaults]` に class の宣言がある場合: その列を宣言順のまま返す（登録済みの harness ID だけ残す）。task の `harness` 欄と genre・role の規則は見ない。
+- 宣言が無い場合: 従来どおり `select_harness`（task の harness 欄、genre・role の規則）が 1 件を返す。組み込みの adapter 既定は置かない。
+
+**admission。** `route_select::route_select` は候補 harness を先頭から順に試す。各 harness について execution class を外し、`route_select_one` を呼ぶ。`route_select_one` は次の順で判定する。
+1. `route_defaults.<harness>` が無ければ `NoDeclaredDefault` で、その harness は落ちる。
+2. task が model を指定していて候補に無ければ `ModelHintUnmatched` で落ちる。
+3. `route_defaults.<harness>.candidates` の source×model を enumerate し、account admission（quota・cooldown・同時実行数）を通した最初の候補を `RoutePolicy`（既定は宣言順）で選ぶ。全候補が不適格なら `NoEligible`。
+
+最初に成功した harness の (harness, source, model, account) で起動する。全候補の harness が失敗した場合は `RouteFailure` を返す（最後に試した harness の `NoEligible` が基本）。`NoEligible` は「今は埋まっている」なので run は起動せず defer する（失敗にしない）。`NoDeclaredDefault`・`ModelHintUnmatched`・未登録の harness は設定を直すまで解けないものとして、既存どおり unroutable に数える。
+
+**記録。** 選択の結果は次の 3 箇所に残す。
+- `harness_selected` event は、成功時は選ばれた harness、失敗時は最後に試した harness を記録する。
+- `llm_route_selected` event と `runs.selection_metadata_json` は、採用された (harness, source, model, account) と `metadata`（`harness_rejections` を含む）を記録する。
+- 失敗時は `worker_progress`（`routing`）の `route refused` に理由と metadata を残す。
+
+`harness_rejections` は試した harness ごとに `{harness, reason, rejections}` を持つ。`rejections` は、その harness の各 source×model 候補が落ちた理由（quota・cooldown・同時実行など）。どの harness が、どの候補の理由で落ちたかを後から追える。
+
+**config。** `[execution.planner] adapter` は撤去した。この欄を書いた config は読み込みエラーになり、`[harness_selection.execution_class_defaults] planner = [...]` の書き方を案内する（`crates/celeris/src/config/mod.rs`）。読み替えや警告だけの経路は無い。`PlannerConfig.adapter` と `default_planner_adapter` も消した。
+
+```toml
+# 削除: [execution.planner] adapter = "claude-code"
+[harness_selection]
+rules = [
+  { genre = "coding", required_capabilities = [], requires_repo = true, harness = "pi" },
+]
+# 優先順。claude_code が埋まると pi へ回る。両方埋まれば planner run は defer する。
+execution_class_defaults = { planner = ["claude_code", "pi"], review = ["claude_code"] }
+
+[route_defaults.claude_code]
+candidates = [{ source = "claude_oauth", model = "claude-sonnet-5" }]
+
+[route_defaults.pi]
+candidates = [{ source = "opencode_go", model = "opencode-go/kimi-k3" }]
+```
+
+`config/celeris.pi-hashline.example.toml` が同じ書き方の例である。宣言の検証は既存どおり（未宣言の harness と同一 class 内の重複を読み込みエラー）。
+
+**後続 task 01M4M8D4AQ との境界。** execution class の候補列は harness の選択入力である。source と model の選択は変えない。source×model の方針は `RoutePolicy` だけが持ち、今回の候補列は `RoutePolicy` に入らない。`RouteRequest` の `lane` は保持するが、この選択では使わない。後続 task が `RoutePolicy` を差し替えても、harness の候補列と admission の規則は変わらない。

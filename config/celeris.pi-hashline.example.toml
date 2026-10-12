@@ -45,4 +45,8 @@ candidates = [{ source = "opencode_go", model = "opencode-go/kimi-k3" }]
 rules = [
   { genre = "coding", required_capabilities = [], requires_repo = true, harness = "pi" },
 ]
-execution_class_defaults = {}
+# execution class ごとの harness の候補（優先順）。宣言した class の run は genre・role の規則を見ず、
+# この順に harness を試す。各 harness は route_defaults の source×model を admission にかけ、最初に通った組で起動する。
+# 全て埋まっていれば defer（失敗にしない）。宣言の無い class は上の rules で選ぶ。
+# planner は claude_code が埋まると pi（opencode go）へ回る。reviewer は claude_code だけを試す（埋まれば defer）。
+execution_class_defaults = { planner = ["claude_code", "pi"], review = ["claude_code"] }

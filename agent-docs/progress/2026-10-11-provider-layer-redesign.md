@@ -44,7 +44,7 @@ status: running
 | `paperqa-qwen` | **unknown (誤推定を避ける)**。文書はproxy利用を示すが、現configの明示sourceは本番非参照 | `paperqa` | PaperQA settings / `openai/celeris/standard` との記載あり | 中。repositoryの過去例・文書は食い違う。下記コードがsource判定不能になりうる根拠 |
 | `langmem-main` | `celeris` proxy | `langmem` | `celeris/cheap` | 高。移行手順/設定例に記載 |
 
-`paperqa-qwen` が `unknown` となるコード根拠: [providers.rs](../../crates/celeris/src/config/providers.rs) の `derive_llm_source` (302行付近) は `fake`, `claude-code`, `codex`, ACP/Pi opencode-go、Celeris model、特定ACP Qwen条件だけを認識し、それ以外は `LlmSourceRef::Unknown` を返す。`paperqa` adapter はこの分岐にない。明示 `llm_source` が無い行では `provider_llm_source` (177–185行付近) が derived値へフォールバックし、validation/warning (368–371行付近) が `unknown_llm_source` を出す。PaperQA設定ファイル内のmodel/endpointをこの判定関数がsourceとして解析しないため、行IDの `-qwen` suffixだけではsourceを決定できない。従って資料上のproxy利用から本番sourceを断定せずunknownとした。
+`paperqa-qwen` が `unknown` となるコード根拠: `crates/celeris/src/config/providers.rs`（削除済み） の `derive_llm_source` (302行付近) は `fake`, `claude-code`, `codex`, ACP/Pi opencode-go、Celeris model、特定ACP Qwen条件だけを認識し、それ以外は `LlmSourceRef::Unknown` を返す。`paperqa` adapter はこの分岐にない。明示 `llm_source` が無い行では `provider_llm_source` (177–185行付近) が derived値へフォールバックし、validation/warning (368–371行付近) が `unknown_llm_source` を出す。PaperQA設定ファイル内のmodel/endpointをこの判定関数がsourceとして解析しないため、行IDの `-qwen` suffixだけではsourceを決定できない。従って資料上のproxy利用から本番sourceを断定せずunknownとした。
 
 ## 旧欄・互換の具体的な残存
 

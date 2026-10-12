@@ -4,7 +4,7 @@ title: LLM source と harness の選択
 ---
 # LLM source と harness の選択
 
-- 状態: 決定（実装待ち）
+- 状態: 決定（実装済み: runtime）
 
 この ADR は、実行器の選択と供給元・model の選択を独立させ、dispatcher が明示された情報だけで決定的に実行条件を確定する設計を定める。現行の `crates/celeris/src/config/providers.rs` と `crates/task-dispatch/src/dispatcher/provider_select.rs` では adapter、model、source、account pool、容量が同じ provider 行と選択処理に結び付いている。`crates/celeris/src/config/harness.rs` には harness/genre の宣言が既にあり、task の genre や `worker_hint.adapter` も存在する。以下ではこれらの責務を分ける。
 
@@ -218,3 +218,24 @@ Enumeration yields only declared source×model pairs. Harness compatibility is a
 | `langmem-main` | langmem 設定に具体的な source/model を明記 | `langmem` harness を記憶整理 task から選択 | LangMem の記憶整理 |
 
 この対応は harness ごとの固定 provider 行を作り直すものではない。同一 `qwen` source は複数 harness から共有でき、候補適格性は harness 宣言で制約する。本番で現在使用中の model ID/account 名/quota は移行時に既存 config と DB から照合し、source/account の stable ID を保つ。設定検証が通り、CoS が `claude_oauth` で起動できることと各用途の route が適格であることを確認後に reload する。失敗時は保存した config backup を戻して旧版 daemon を再起動する手順を運用 runbook に記録する。
+
+## 2026-10-11 付記: runtime 実装との突き合わせ
+
+runtime の決定は実装済み。closeout HEAD `a3c63b8a` で以下を確認した。
+
+| 決定 | 実装の状態 | 確認箇所・証拠 |
+|---|---|---|
+| provider 選択を廃止し、task の harness と source×model route を別々に選ぶ | 実装済み。通常 run と reviewer run は `select_route` を使い、旧 provider selector / policy と adapter hint を撤去 | `dispatch-select.md`、`run-switch.md`、`review-switch.md`、`prune-select.md`、`prune-policy.md`、`hint-drop.md`。workspace test-parallel pass |
+| 選択結果を run と event に記録する | 実装済み。task-core migration と dispatcher の route 選択・記録を追加 | `store-migrate.md`、`dispatch-select.md`。schema_matches pass |
+| account 上限・quota・cooldown・同時実行を source/account 所有にする | 実装済み。CoS と暗黙 account も AccountBook の同じ admission に統合 | `accounts-source.md`、`cos-route.md`、`e2e-api.md` |
+| config の provider 宣言を拒否し、新宣言例を使う | 実装済み。`[[providers]]` / `providers.d` の拒否、examples 読み込み試験を含む | `config-drop.md`、`examples.md` |
+| API・snapshot・catalog の provider 概念と proxy の tier alias を除去する | 実装済み | `api-unprovider.md`、`snapshot-unprovider.md`、`catalog-unprovider.md`、`proxy-concrete.md` |
+| task-worker と celerisctl が選択済み harness/source/model を受ける | 実装済み。worker protocol schema も更新 | `worker-harness.md`、`remove-integration-fix.md`。schema_matches pass |
+
+最終確認（closeout、HEAD `a3c63b8a`）: `TMPDIR=/local/x bash scripts/dev/test-parallel.sh` は exit 0。4900 passed、0 failed、14 ignored。`cargo clippy --workspace -- -D warnings` は exit 0。TMPDIR を長くすると unix socket の SUN_LEN 上限で試験が落ちるため、短い TMPDIR を使った（環境の注意で、branch の問題ではない）。これに伴い状態を「決定（実装済み: runtime）」にした。詳細は progress の closeout 節。
+
+### 残る別工程
+
+- 画面側の provider UI / 旧型追随は ui-v2 の対象。
+- 新しい source/account/harness API は api-v2 の対象。
+- 本番 config の `[[providers]]`・`providers.d`・`[llm_proxy.models]` を新形へ書き換え、account_limits の移送残行と `harness_migration_unresolved` event を確認する作業は人が実行する。本番 host・DB の変更はこの closeout では行っていない。

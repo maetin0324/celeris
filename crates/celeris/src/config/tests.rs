@@ -89,6 +89,14 @@ fn migration_runbook_toml_loads() {
         ["claude_code", "codex"]
     );
     assert_eq!(
+        registry.harness_selection.execution_class_defaults
+            [&task_core::llm_route::ExecutionClass::from("coding")]
+            .iter()
+            .map(|id| id.0.as_str())
+            .collect::<Vec<_>>(),
+        ["claude_code", "codex"]
+    );
+    assert_eq!(
         registry.cos_route_candidates[0].model.0,
         "claude-opus-5-5"
     );

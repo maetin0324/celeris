@@ -19,7 +19,7 @@ Celeris は source・model の候補と、task を実行する harness を別々
 `[harnesses.<id>]` は実行方式と能力を宣言します。`[harness_selection].rules` は role、
 genre、repo の有無、execution class などから harness を決めます。planner と reviewer
 などは `execution_class_defaults` の候補順を使います。候補がすべて admission 不可なら、
-planner/reviewer は次の候補を試し、全候補が使えない場合は defer します。
+coding task は coding execution class の順に harness を admission し、Claude Code が使えない場合は Codex を試します。planner/reviewer も各 class の候補順を使い、全候補が使えない場合は defer します。
 
 ```toml
 [llm_sources.claude_oauth]
@@ -37,8 +37,7 @@ capabilities = ["tools", "repo", "skills"]
 candidates = [{ source = "claude_oauth", model = "claude-opus-5-5" }]
 
 [harness_selection]
-rules = [{ genre = "coding", requires_repo = true, harness = "claude_code" }]
-execution_class_defaults = { planner = ["claude_code", "codex"], review = ["claude_code", "codex"] }
+execution_class_defaults = { coding = ["claude_code", "codex"], planner = ["claude_code", "codex"], review = ["claude_code", "codex"] }
 ```
 
 本番の coding 候補は Claude Code / `claude-opus-5-5` を先にし、Codex /

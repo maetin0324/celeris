@@ -340,7 +340,7 @@ pub fn harness_request_for(task: &Task) -> HarnessRequest {
         role: task.role.clone(),
         required_capabilities,
         has_repo: !task.repos.is_empty(),
-        execution_class: None,
+        execution_class: (task.genre.as_deref() == Some("coding")).then(|| "coding".into()),
     }
 }
 

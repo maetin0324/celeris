@@ -15,8 +15,8 @@ compatibility、quota、cooldown、capacity を通った最初のものになる
 
 | 現在の用途 | 選択規則 | harness | 先頭候補 |
 |---|---|---|---|
-| coding worker | coding role の通常選択 | `claude_code` | `claude_oauth / claude-opus-5-5` |
-| coding worker の予備 | Claude 候補が admission 不可のとき | `codex` | `codex_oauth / gpt-6.1-sol` |
+| coding worker | genre `coding` → coding execution class | `claude_code`, `codex` | `claude_oauth / claude-opus-5-5` を先頭、admission 不可なら Codex `gpt-6.1-sol` |
+
 | Pi coding | role `pi` または既存の Pi 指定 | `pi` | `opencode_go / opencode-go/grok-4.6` |
 | 軽い仕事 | role `local-qwen` | `opencode` (ACP) | `qwen / qwen3.8-27b` |
 | 文献調査 | literature harness | `paperqa` | `claude_oauth / claude-opus-5-5`、次に `codex_oauth / gpt-6.1-sol` |
@@ -238,11 +238,10 @@ candidates = [{ source = "qwen", model = "qwen3.8-27b" }, { source = "claude_oau
 rules = [
   { role = "local-qwen", required_capabilities = [], harness = "opencode" },
   { role = "pi", required_capabilities = [], harness = "pi" },
-  { genre = "coding", required_capabilities = [], requires_repo = true, harness = "claude_code" },
   { genre = "literature", required_capabilities = [], harness = "paperqa" },
   { genre = "web-research", required_capabilities = [], harness = "local-deep-research" },
 ]
-execution_class_defaults = { planner = ["claude_code", "codex"], review = ["claude_code", "codex"] }
+execution_class_defaults = { coding = ["claude_code", "codex"], planner = ["claude_code", "codex"], review = ["claude_code", "codex"] }
 
 [execution.planner]
 # adapter は削除する。budget/permission 等の既存値は保持する。

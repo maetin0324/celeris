@@ -1092,7 +1092,6 @@ pub enum Event {
         task_id: String,
         original_value: String,
     },
-    },
     /// CoS operation attempt, including rejected attempts. The envelope is immutable.
     CosOperation {
         actor: String,

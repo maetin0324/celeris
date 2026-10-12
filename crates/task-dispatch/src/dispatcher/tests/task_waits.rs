@@ -34,8 +34,6 @@ fn publish(d: &mut Dispatcher) -> tokio::sync::watch::Receiver<Option<DaemonSnap
         hostname: "host-1".into(),
         started_at: "2026-10-11T00:00:00Z".into(),
         tick_ms: 50,
-        providers: vec![],
-        provider_checks: Default::default(),
     });
     rx
 }
@@ -60,7 +58,12 @@ async fn task_wait_full_capacity_and_unroutable_skips_are_in_the_snapshot() {
     let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut no_route = true_task(dir.path());
     no_route.priority = 10;
-    no_route.worker_hint.adapter = Some("nonexistent".into());
+    // 設定に無いクラスタは route 選択より前に `Unroutable` になる（未宣言の harness は route 拒否で、wait にならない）。
+    no_route.workspace = task_core::WorkspaceSpec::Remote {
+        cluster: "nowhere".into(),
+        path: "work".into(),
+        mode: None,
+    };
     store.insert(&no_route).unwrap();
     let mut first = true_task(dir.path());
     first.priority = 5;

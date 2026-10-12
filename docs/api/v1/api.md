@@ -1220,7 +1220,7 @@ provider を使った account-pool の作成・編集 API は削除した。ア�
 `[secrets] dir` の下にファイルで持つ（1 秘密 = 1 ファイル、ファイル名 = id、中身 = 値 1 行・0600。ディレクトリは 0700）。**値を返す
 API は無い**（作成・削除だけ）。`[secrets]` が未設定なら 3 本とも 409 `secrets_unavailable`。`id` の規則はプロバイダ
 と同じ（1〜64 文字の ASCII 英数字・`-`・`_`。`PUT`/`DELETE` の id はパスにあるので、無効な形は
-`PATCH`/`DELETE /providers/{id}` と同じ規約で 404 `secret_not_found` にする）。
+provider 路は 2026-10-12 に廃止したので、他の管理系と同じく 404 `secret_not_found` にする）。
 
 **使い方（`env_from_secrets`）**: `[adapters.<種別>]` と `[[providers]]` の行の両方に、環境変数名 → 秘密 id の
 対応 `env_from_secrets = { LDR_SEARCH_ENGINE_WEB_TAVILY_API_KEY = "tavily" }` を書ける（`[[providers]]` の行の
@@ -1257,7 +1257,7 @@ GUI は再計算しない）。**設定が参照している id は、まだ鍵�
 atomic（一時ファイル→rename）に書く。空文字・空白だけの値は 422 `validation`。本文が JSON として読めない・型違いは
 400 `bad_request`（`detail` は固定文で、本文の値を反射しない）。応答は
 `{"id", "updated_at", "fingerprint"}`（**値は含まない**）。無効な id（パス区切りを含む等）は 404
-`secret_not_found`（`PATCH`/`DELETE /providers/{id}` と同じ規約。本文を見る前に判定する）。
+`secret_not_found`（他の管理系と同じ規約。本文を見る前に判定する）。
 
 #### 3.38 `DELETE /secrets/{id}` → 200 `{}`
 

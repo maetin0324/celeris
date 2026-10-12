@@ -85,3 +85,56 @@ provider API の呼び出しも消した。`crates/` は変えていない。ADR
 - 編集 API の要否: 人が source の model 制約・harness の適格条件を web から変えたいなら、`PATCH /api/v1/llm/sources/{source_id}` と harness の編集 API を別 unit で切る。変えるのが config だけで足りるなら、この読み取り画面で完了とし、編集 API は作らない。どちらにするかは人が決める。
 - 次の unit: run の `RunSummary.adapter`・`model` を `selection` へ寄せ、timeline・console のラベルも `selection` から出す（adapter 撤去の残り）。
 - R30 の `/providers` の行は後継の試験（`parity: /sources /harnesses ...`）で閉じた。`check:parity` の廃止行の扱い（gate が廃止行を数えるか）は、web-purge の提案のとおり人が決める。
+
+## 差し戻し修正（final review, closeout2）
+
+final review の差し戻し（画面に残る旧 provider 表示）を直した。修正は 2 unit で、記録は次のとおり。
+
+| unit | 内容 | 記録 |
+|---|---|---|
+| gui-provider-ui | 旧 gui の run 一覧・run 詳細・routing パネル・daemon・accounts・help の provider 表示を harness・source・model・account に置き換え | `agent-docs/progress/2026-10-12-web-source-harness-ui/gui-provider-ui.md` |
+| web-provider-ui | web の routing 監査表示（実行枠行）を harness・source・model・口座の語で出す | `agent-docs/progress/2026-10-12-web-source-harness-ui/web-provider-ui.md` |
+
+ADR の変更: `agent-docs/adr/2026-10-11-llm-source-harness-selection.md` の「2026-10-12 付記（ui-v2の差し戻し修正）」に、画面の置き換えと API 欄名 `provider` の扱い、後続の提案を書いた。
+
+### 証拠（closeout2、run の worktree、`TMPDIR=/local/x/ui2`）
+
+| 条件 | 実行したコマンド | 結果 |
+|---|---|---|
+| web lint | `corepack pnpm@12.6.0 -C web run lint` | exit 0（既存の styles.css `!important` 警告 4 件。今回の変更と無関係） |
+| web typecheck | `corepack pnpm@12.6.0 -C web run typecheck` | exit 0 |
+| web test | `corepack pnpm@12.6.0 -C web run test` | exit 0。Test Files 91 passed (91)、Tests 655 passed (655) |
+| web build | `corepack pnpm@12.6.0 -C web run build` | exit 0 |
+| web 境界・秘密・parity | `run check:boundaries`・`run check:secrets`・`run check:parity` | 各 exit 0 |
+| gui typecheck | `cd gui && corepack pnpm@11.27.0 run typecheck` | exit 0 |
+| gui lint | `cd gui && corepack pnpm@11.27.0 run lint` | exit 0。Found 2 infos（既存） |
+| gui test | `cd gui && corepack pnpm@11.27.0 run test` | exit 0。Test Files 93 passed (93)、Tests 1306 passed (1306) |
+| gui build | `cd gui && corepack pnpm@11.27.0 run build` | exit 0 |
+| fixture | `bash gui/scripts/check-fixture-configs.sh` | exit 0（4 件表示。すべて ok） |
+| 文書検査 1 | `sh scripts/dev/check-adr-numbers.sh` | exit 0（ok, 182 files） |
+| 文書検査 2 | `sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv` | exit 0（ok） |
+| 文書検査 3 | `sh scripts/dev/check-doc-links.sh` | exit 0（ok） |
+| 進捗の索引 | `sh scripts/dev/progress-index.sh --check` | exit 0（ok） |
+| crates 差分 | `git diff --quiet "${CELERIS_WU_BASE:-HEAD}" -- crates/` | exit 0（差分ゼロ） |
+| provider 表示 grep（画面） | `grep -rn "プロバイダ\|provider" gui/app/routes gui/app/components gui/app/lib`、`grep -rni "プロバイダ\|provider" web/routes web/features web/components web/lib` | 残りは下の 3 件だけ（意図した残り） |
+| provider API 呼び出し | `grep -rn "api/v1/providers" web gui/app` | 0 件（前回の受け入れ 1 と同じ） |
+
+provider 表示の grep の残り（意図した残り）:
+- `gui/app/routes/daemon.tsx`: `item.provider` を source の Badge として出す。値は `InFlight.provider` の source id。欄名は API の名前のまま。
+- `gui/app/components/BrowserWaitsPanel.tsx`: `credential.provider`。credential の provider で、LLM provider ではない。
+- `gui/app/components/task-detail/TimelineTab.tsx`: `provider_throttled` は event 種別の一覧。
+- `web/e2e/...` の `?providerId=lms` は IdP の SAML 試験 URL で、LLM provider とは無関係。
+
+### 未解決事項
+
+- gui の e2e（Playwright、実 celeris 起動）は、この run では流していない。`gui-provider-ui` の記録のとおり、g4 の `in-flight-source` の期待値は fixture の source id と未照合。
+- API 欄名 `provider`（`RunSummary`・`LaneResolution`・`InFlight`・`RunRoutingAudit`）は crates/ を変えない制約で残した。画面では source の語で出す。
+- `RunSummary.adapter`・`RunRoutingAudit.adapter`、timeline・console の `{adapter} / {model}` 表示は、まだ adapter 由来の値を読む。
+- web の `event-kinds.ts` の `provider_throttled`・`model_role_assignment_changed` と gui の `TimelineTab` の `provider_throttled` は生成型の Event enum に残るため消していない。
+
+### 提案
+
+- crates の schema で `provider` 欄を `source` へ改名する。破壊的変更の方針に従い、改名と同じ変更で旧欄名を消し、`UPDATE_SCHEMA=1` と gui・web の `gen:types` で型を再生成する。
+- `adapter` 欄（`RunSummary`・`RunRoutingAudit`）を撤去し、表示は `selection` の harness から出す。
+- gui の e2e（g4 ほか）を実 celeris で流し、`in-flight-source` の期待値を確かめる。
+- gui の `browser-phase2` の試験は、TMPDIR が長いと unix socket の 108 byte 上限で落ちる（既存の提案のとおり。この unit では直していない）。

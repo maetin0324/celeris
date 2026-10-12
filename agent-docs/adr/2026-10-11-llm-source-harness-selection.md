@@ -353,3 +353,26 @@ web/ の provider 画面を削除し、source・account・harness の画面を�
 - source と harness の編集 API と画面。ADR の「source と harness の編集画面は別にし」は未実装で、現状の画面は読み取りだけ。編集は config に残る。
 - `llm/sources` の catalog 欄（source が持つ model 一覧と利用可否）は未実装。`/sources/$sourceId` の model 欄は既存の deployments 欄を使い、`/models?source=` へ結ぶ。
 - run の `adapter`・`model` 欄（`RunSummary`）と timeline・console の `worker_started` ラベルは、まだ adapter 由来の値を読んでいる。選択結果の `selection` だけを表示源にする整理は別 unit。
+
+### 2026-10-12 付記（ui-v2 の差し戻し修正）
+
+final review の差し戻し（画面に残る旧 provider 表示）を直した。`crates/` は変えていない。
+
+旧 `gui/` の画面は、run の選択を `RunSummary.selection`（harness・source・model・account）から出すように置き換えた:
+- run 一覧（`gui/app/components/task-detail/OverviewTab.tsx`）の `adapter`・`provider` 列を `harness`・`source` 列に。旧 run（`legacy_unresolved`）は「記録なし（旧 run）」。
+- run 詳細（`gui/app/routes/tasks.$id.runs.$runId.tsx`）の見出しを `harness / source / model / 口座 account` に。
+- routing パネル（`gui/app/components/TaskRoutingPanel.tsx`）の「選択」行を、同じ run の `selection` から出す。`run.provider` の表示は消した。
+- daemon（`gui/app/routes/daemon.tsx`）の in-flight 列は `source`、cooldown 列は `source / account`。
+- accounts（`gui/app/routes/accounts.tsx`）の provider 分岐と存在しない目次項目を消した。
+- help（`gui/app/routes/help.tsx`）の用語を `harness`・`LLM source` の 2 項に置き換えた。
+- web の routing 監査表示（`web/features/tasks/routing-audit-view.tsx`）の実行枠行は `harness / source / model / 口座`。harness が無い run は「harness 不明」。
+
+API の欄名 `provider`（`RunSummary.provider`・`LaneResolution.provider`・`InFlight.provider`・`RunRoutingAudit.provider`）は、crates/ を変えないこの task では残した。中身は source id。画面では欄名を出さず、source の語で出す。
+
+後続の提案（別 unit、crates を変える）:
+- 上の欄名を `source` へ改名する。破壊的変更の方針に従い、改名と同じ変更で旧欄名を消す（互換の別名を残さない）。生成型の再生成（`UPDATE_SCHEMA=1`、gui・web の `gen:types`）を含める。
+- `RunSummary.adapter` と `RunRoutingAudit.adapter` は harness が入った後は同じ情報の重複なので撤去する。`TimelineTab`・`console.ts` の `{adapter} / {model}` 表示も `selection` から出す。
+
+残り（provider の語を残すが LLM provider の表示ではないもの）:
+- `gui/app/components/BrowserWaitsPanel.tsx` の `credential.provider` は credential の provider で、LLM provider ではない。
+- `gui/app/components/task-detail/TimelineTab.tsx` の `provider_throttled` は event 種別の一覧（生成型の Event enum に残る）。

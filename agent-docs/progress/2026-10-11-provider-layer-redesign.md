@@ -1,8 +1,9 @@
 ---
 tasks: [01M4M8D4AP4YY4F9TV09HG30SJ]
 title: provider 層の再設計: 現状棚卸し
-updated: 2026-10-11
-status: running
+updated: 2026-10-12
+status: done
+completed: 2026-10-12
 ---
 # provider 層の再設計: 現状棚卸し
 
@@ -353,3 +354,50 @@ settings = "<現在のPaperQA settings path>"
 ```
 
 本番では作業前に config と `providers.d` を権限付きで backup し、daemon 停止中に8行を source/harness/route 設定へ移して include と旧行を除く。DB path、events、credential files、account directories は保持する。新 binary の config validation が成功してから同一 release の binary を切替・起動し、API の source status と run audit の harness/source/model を coding、Pi、local-qwen、CoS の順に確認する。失敗時は daemon を停止し config/include と旧 binary を backup/release から戻す。DB migration 後は DB を旧版へ安易に戻さず、release の migration rollback 規則を適用する。詳細な人向けコマンドと確認事項は [移行手順](../../docs/ops/provider-llm-source-migration.md) にある。
+
+## 検証（closeout-v2、2026-10-12）
+
+検証は作業ツリー（親 `d47bc3b4`、本 commit の変更を含む）で実行した。同じ変更を含む commit が作業ブランチ `celeris/01M4RARW8GVJ7TA3XDDGP15FW3` に入る。
+
+| 検査 | 結果 |
+|---|---|
+| `cargo fmt --all -- --check` | exit 0。base の `crates/celeris/src/config/tests.rs` が未整形だったため `cargo fmt --all` で整形（この 1 file のみ） |
+| `cargo clippy --workspace --all-targets -- -D warnings` | exit 0。`error` 行 0 |
+| `bash scripts/dev/test-parallel.sh` | exit 0。nextest 4902 件 passed・0 failed・13 skipped（doc-test 成功）。`CELERIS_TEST_SUMMARY`: passed 4905 / failed 0 / ignored 14、`nextest_exit` 0、`doctest_exit` 0、`tmp_leftovers` 0 |
+| sandbox 既知失敗（browser・launcher・credentiald・CDP 系） | 今回の実行では 1 件も失敗しなかった。名前の列挙対象は無し（`userns` は null） |
+| `sh scripts/dev/check-doc-links.sh` | exit 0 |
+| `sh scripts/dev/check-adr-numbers.sh` | exit 0（182 files） |
+| `sh scripts/dev/progress-index.sh --check` | exit 0 |
+
+最初の test-parallel は exit 100（celerisctl `commands::scratch::tests` の 4 件が失敗）。原因は試験の config に廃止した `[scratch.l2]`・`[scratch.cache_server]` を書いていたこと。この節を読み込みエラーにしたため、試験 fixture から外して直し、上の表は直した後の実行。
+
+## 旧い仕組みの残りの洗い出し（closeout-v2）
+
+grep で洗った結果と、この run で消したもの。
+
+消した（この run）:
+- `[scratch.sccache]`・`[scratch.l2]`・`[scratch.cache_server]`: 「警告して無視する」経路（`ScratchConfig::deprecated_sections` と `Config::load` の warn）を消し、フィールドも消した。`deny_unknown_fields` により読み込みエラーになる。試験 `removed_scratch_cache_sections_are_load_errors` で固定した。
+- `scripts/selfdeploy/verify.sh` の probe 対象 `/api/v1/providers`（既に route が無く 404 になる）を `/api/v1/llm/sources`・`/api/v1/harnesses` に置き換えた。
+- stale な説明: `crates/task-api/src/admin.rs`（providers.d の説明）、`crates/task-api/src/cos/operations.rs`、`crates/task-api/tests/common/mod.rs`（providers.d 書き込み先）の doc comment を現状に合わせた。
+- ADR 状態: `agent-docs/adr/2026-10-11-llm-source-harness-selection.md` を「実装済み」にした。
+
+既に消えていたこと（確認のみ）: `[[providers]]` を読む経路（読み込みエラーの案内だけ残る。`config/mod.rs` の `providers` / `providers.d` 検出は意図的な案内）、`/api/v1/providers` route、`provider_select`、`SourceOrigin`、`RoutingMode::Legacy`、`legacy_catalog`、`default_planner_adapter`、`llm_proxy.models` の tier alias（読み込みエラー）、`worker_hint.adapter`（migration 0068 の移行 SQL の中だけ）。
+
+残っていて、この run では消さなかったもの（提案節へ）。
+
+## 未解決事項
+
+- 旧 provider 形の fixture を使う非 cargo の台本: `scripts/dev/cos-chat-bench.sh`、`scripts/dev/cos-chat-live.sh`、`scripts/live-check-phase53.sh`、`scripts/selfdeploy/tests/migrate_to_local_test.sh`、`scripts/test_portable_providers.py`。いずれも `[[providers]]` を書いており、新 binary では読み込みエラーになる。test-parallel の対象外なので今回の検査では落ちない。
+- 文書の旧い手順: `docs/ops/opencode-go-and-model-catalog.md` §3a（`POST /api/v1/providers` と `/models` 画面で provider 行を作る手順）、`docs/guides/knowledge.md` の langmem 例（`[[providers]]`・`concurrency`）、`docs/ops/selfdeploy.md` の `providers.d/` 行。現行の API・設定と食い違う。
+- `docs/api/v1/gui-api.md` の `providers_include` 説明（§182〜184、§1215 付近）と `gui/docs` 配下の旧 provider 記述（DESIGN.md・PROGRESS.md・celeris-api-v1.md）。gui-api.md の §3.24〜3.28 は「（削除）」と書いてあり、本文は残っている。
+- `scripts/selfdeploy/migrate-to-celeris.sh` の `providers.d` 移送（旧 install からの移行スクリプト。移行の用途として残すかどうかは人の判断）。
+- `scratch.sccache`・cache server の欄が `task-ops/src/daemon.rs` の doc comment と `web/api/generated/schema.json`・`gui/app/celeris/types.ts` の説明文に残る（説明が廃止した設定を指す）。直すには schema 再生成（UPDATE_SCHEMA=1 と gui の gen:types）が要る。
+- 名前の残り（挙動には影響なし）: `crates/celeris/src/daemon/admin.rs` の `reload_providers`、`crates/task-core/src/model_routing.rs` の `ProviderSelection` / `ProviderCandidate`（API 欄名 `provider` は crates 側に残す方針。InFlight.provider の中身は source id）。
+- 本番 config の移行: 本番の `~/.config/celeris` の 8 行の移行は人が `docs/ops/provider-llm-source-migration.md` の手順で行う（この run では本番を触っていない）。
+
+## 提案
+
+1. 上の非 cargo 台本と文書の旧手順を、次の小さい WU（docs・scripts の書き換え）にまとめる。台本は source・harness の fixture に書き換え、`scripts/test_portable_providers.py` は対象の関数ごと消すかを決める。
+2. `scratch.sccache`・cache server の説明文と schema を、schema 再生成と一緒に直す（UPDATE_SCHEMA=1）。
+3. `reload_providers` と `ProviderSelection` / `ProviderCandidate` の名前を、API の欄名と合わせて整理する（欄名は変えない限り、crate 内の名前だけ）。
+4. 本番移行の後で、旧 `providers.d` と `[[providers]]` を含む backup を人が確認してから削除する。

@@ -85,7 +85,7 @@ pub(crate) fn effect_value<T: Serialize>(effect: Effect<T>) -> Effect<Value> {
     })
 }
 
-/// Run a route's file effect (`providers.d`, account directories) directly, or with `audit`
+/// Run a route's file effect (account directories) directly, or with `audit`
 /// inside the CoS operation transaction as its last step: a failure rolls the record back to a
 /// rejected row, so an applied record always has its file written.
 pub(crate) fn file_op<T: Serialize, F>(

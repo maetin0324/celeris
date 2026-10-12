@@ -42,15 +42,23 @@ fn planner_without_adapter_keeps_its_budget_and_permission_settings() {
 #[test]
 fn migration_runbook_toml_loads() {
     let runbook = include_str!("../../../../docs/ops/provider-llm-source-migration.md");
-    let progress = include_str!("../../../../agent-docs/progress/2026-10-11-provider-layer-redesign.md");
+    let progress =
+        include_str!("../../../../agent-docs/progress/2026-10-11-provider-layer-redesign.md");
     let start = "<!-- migration-runbook-toml:start -->";
     let end = "<!-- migration-runbook-toml:end -->";
     let toml = runbook
         .split_once(start)
         .and_then(|(_, tail)| tail.split_once(end))
-        .map(|(toml, _)| toml.trim().trim_start_matches("```toml").trim_end_matches("```"))
+        .map(|(toml, _)| {
+            toml.trim()
+                .trim_start_matches("```toml")
+                .trim_end_matches("```")
+        })
         .expect("migration runbook TOML markers");
-    assert!(progress.contains(toml), "progress TOML matches runbook TOML");
+    assert!(
+        progress.contains(toml),
+        "progress TOML matches runbook TOML"
+    );
     let cfg = Config::parse_with_delivery(toml).expect("runbook config parses");
     let registry = cfg.llm_route_registry().expect("routes validate");
 
@@ -64,16 +72,14 @@ fn migration_runbook_toml_loads() {
         ("langmem", "qwen", "qwen3.8-27b"),
     ] {
         assert_eq!(
-            registry.route_defaults[&task_core::llm_route::HarnessId::from(harness)]
-                [0]
+            registry.route_defaults[&task_core::llm_route::HarnessId::from(harness)][0]
                 .source
                 .0,
             source,
             "{harness} source"
         );
         assert_eq!(
-            registry.route_defaults[&task_core::llm_route::HarnessId::from(harness)]
-                [0]
+            registry.route_defaults[&task_core::llm_route::HarnessId::from(harness)][0]
                 .model
                 .0,
             model,
@@ -96,14 +102,8 @@ fn migration_runbook_toml_loads() {
             .collect::<Vec<_>>(),
         ["claude_code", "codex"]
     );
-    assert_eq!(
-        registry.cos_route_candidates[0].model.0,
-        "claude-opus-5-5"
-    );
-    assert_eq!(
-        registry.cos_route_candidates[1].model.0,
-        "gpt-6-astra"
-    );
+    assert_eq!(registry.cos_route_candidates[0].model.0, "claude-opus-5-5");
+    assert_eq!(registry.cos_route_candidates[1].model.0, "gpt-6-astra");
     assert_eq!(registry.cos_route_candidates[1].source.0, "codex_oauth");
     assert_eq!(
         registry.route_defaults[&task_core::llm_route::HarnessId::from("paperqa")].len(),
@@ -1674,30 +1674,16 @@ fn scratch_cargo_defaults_disable_incremental() {
     assert!(toml::from_str::<Config>("[scratch.cargo]\nbogus = 1\n").is_err());
 }
 
-/// 旧節は未知の項目を含んでも読めるが、検出して警告でき、値は実行設定へ届かない。
+/// 廃止した `[scratch.sccache]`・`[scratch.l2]`・`[scratch.cache_server]` は読み込みエラー（警告して無視しない）。
 #[test]
-fn legacy_scratch_cache_sections_are_ignored_and_reported() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("config.toml");
-    std::fs::write(
-        &path,
-        "[scratch.sccache]\nenabled = true\nport = 4300\nbogus = 1\n[scratch.cache_server]\nenabled = true\nport = 4299\n[scratch.l2]\nenabled = true\ndir = \"/nfs/l2\"\n",
-    )
-    .unwrap();
-    let cfg = Config::load(&path).unwrap();
-    assert_eq!(
-        cfg.scratch.deprecated_sections(),
-        ["scratch.sccache", "scratch.l2", "scratch.cache_server"]
-    );
-    let settings = cfg.scratch_settings_unchecked();
-    let env = task_worker::scratch::cargo_env(&settings, &task_worker::scratch::Owner::task("01T"));
-    assert!(
-        env.iter()
-            .all(|(k, _)| !k.starts_with("SCCACHE_") && k != "RUSTC_WRAPPER"),
-        "{env:?}"
-    );
-    let clean: Config = toml::from_str("").unwrap();
-    assert!(clean.scratch.deprecated_sections().is_empty());
+fn removed_scratch_cache_sections_are_load_errors() {
+    for section in ["sccache", "l2", "cache_server"] {
+        let text = format!("[scratch.{section}]\nenabled = true\n");
+        let err = toml::from_str::<Config>(&text)
+            .expect_err("removed scratch section must be rejected")
+            .to_string();
+        assert!(err.contains(section), "{section}: {err}");
+    }
 }
 
 /// ADR-0075 D7: `[scratch] dir` の既定は `build_cache_dir` の親の `scratch/`。

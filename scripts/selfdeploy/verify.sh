@@ -604,7 +604,7 @@ probe_api() {
   local base="$1" token="$2" path bad="" body tmp code
   tmp="$(mktemp)"
   for path in "/api/v1/inbox" "/api/v1/org/$FIRST_ORG/memory" "/api/v1/notify" "/api/v1/clusters" \
-    "/api/v1/providers" "/api/v1/config"; do
+    "/api/v1/llm/sources" "/api/v1/harnesses" "/api/v1/config"; do
     code="$(sd_http_status "$base$path" "$token")"
     if [ "$code" != 200 ]; then
       bad="$bad $path($code)"

@@ -44,8 +44,7 @@ pub struct EnvOptions {
     /// Phase 30（ADR-0033 D4 追記）: 対話は常にこの分野で走る。既定は `Default` impl で
     /// `task_core::CONVERSATION_GENRE`。
     pub conversation_genre: String,
-    /// ADR-0017 M1: `providers.d/` の書き込み先。`None` なら管理系の作成/変更/削除は使えない。
-    /// ADR-0017 M2: `reload`/`check` を受け取るチャネルの送信側。`None` ならどちらも使えない。
+    /// ADR-0017 M2: `reload`/`check` を受け取るチャネルの送信側。`None` なら使えない。
     pub admin_tx: Option<mpsc::Sender<AdminRequest>>,
     /// ADR-0024 D1: `[accounts] claude_dir`。`None` なら claude-code のプールは無し。
     pub accounts_root: Option<PathBuf>,

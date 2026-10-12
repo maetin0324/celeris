@@ -468,10 +468,6 @@ impl Config {
             source,
         })?;
         let mut cfg = Self::parse_with_delivery(&text)?;
-        let deprecated = cfg.scratch.deprecated_sections();
-        if !deprecated.is_empty() {
-            tracing::warn!(sections = %deprecated.join(", "), "deprecated scratch cache settings are ignored");
-        }
         let base = path
             .parent()
             .filter(|p| !p.as_os_str().is_empty())

@@ -4,7 +4,7 @@ title: LLM source と harness の選択
 ---
 # LLM source と harness の選択
 
-- 状態: 決定（実装済み: runtime）
+- 状態: 実装済み（決定 2026-10-11。実装の closeout は 2026-10-12、進捗 `agent-docs/progress/2026-10-11-provider-layer-redesign.md`）
 
 この ADR は、実行器の選択と供給元・model の選択を独立させ、dispatcher が明示された情報だけで決定的に実行条件を確定する設計を定める。現行の `crates/celeris/src/config/providers.rs` と `crates/task-dispatch/src/dispatcher/provider_select.rs` では adapter、model、source、account pool、容量が同じ provider 行と選択処理に結び付いている。`crates/celeris/src/config/harness.rs` には harness/genre の宣言が既にあり、task の genre や `worker_hint.adapter` も存在する。以下ではこれらの責務を分ける。
 

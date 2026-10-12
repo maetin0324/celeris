@@ -1,4 +1,4 @@
-//! プロバイダ（アカウント）の管理（ADR-0017）。`create`/`patch`/`delete` は `providers.d/<id>.toml` への
+//! アカウントの管理（ADR-0017）。`create`/`patch`/`delete` は account directory への
 //! ファイル読み書きだけで完結する（LLM もワーカーも起動しない、DESIGN §5.10 の境界を守る）。`reload`/`check` は
 //! 稼働中の `Dispatcher` の差し替え・実際のワーカー起動が要るので、celeris（task-worker/task-dispatch に依存する側）
 //! へ `AdminRequest` で委譲する（ADR-0017 M2）。
@@ -10,7 +10,7 @@ use tokio::sync::oneshot;
 
 /// task-api → celeris（`ApiSettings.admin_tx` 経由）。稼働中の `Dispatcher`・ワーカーの起動が要る操作だけを運ぶ。
 pub enum AdminRequest {
-    /// 設定ファイルと `providers.d/` を読み直し、稼働中のプロバイダ選定・アダプタ一式を差し替える。
+    /// 設定ファイルを読み直し、稼働中の source・harness の選定と実行アダプタ一式を差し替える。
     Reload {
         reply: oneshot::Sender<Result<(), String>>,
     },

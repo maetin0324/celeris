@@ -221,6 +221,9 @@ pub struct ApiV1Schema {
     pub stream_reset: StreamReset,
     /// Phase 65（ADR-0053 D4）: `GET /llm/sources`（API と型のみ。GUI 表示は Phase 66）。
     pub llm_sources: crate::types::LlmSourcesView,
+    pub harnesses: Vec<crate::types::HarnessView>,
+    pub harness_rule: crate::types::HarnessRuleView,
+    pub harness_candidate: crate::types::HarnessCandidateView,
     /// Phase 1: credential-free model and deployment catalog.
     pub routing_catalog: crate::routing_catalog::RoutingCatalogView,
     /// Phase 78（ADR-0056 D4）: `GET /mcp/clients` と `GET /mcp/calls?client=`。

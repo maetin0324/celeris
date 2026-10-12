@@ -46,6 +46,7 @@ pub mod docs;
 pub mod execution;
 mod files;
 mod handlers;
+pub mod harnesses;
 mod inbox_notifications;
 mod integrations;
 /// ADR-0047（Phase 61）: 知識ベース（`~/.local/share/celeris/knowledge` の Markdown が正本）。ツリー・ページ・`_inbox`。
@@ -97,6 +98,7 @@ pub use conversation::{MessageAccepted, MessageList, MessagePostBody};
 pub use cron_jobs::{
     CronJobCreateBody, CronJobList, CronJobPatchBody, CronJobRunList, CronJobView, CronRunResult,
 };
+pub use harnesses::{HarnessesReader, SharedHarnessesReader};
 pub use llm_sources::{LlmSourcesReader, SharedLlmSourcesReader};
 pub use memory::MemoryView;
 pub use milestones::{MilestoneDecideBody, MilestoneDecided};
@@ -126,6 +128,7 @@ pub use types::{
     ReviewerConfigView, RoleConfigView, RunList, SecretList, SecretPutBody, SecretPutResult,
     SecretUse, SecretView, StreamHeartbeat, StreamHello, StreamReset, ValidationError,
 };
+pub use types::{HarnessCandidateView, HarnessRuleView, HarnessView};
 // ---- ADR-0043（Phase 52）: 案件のリポジトリとファイル閲覧 ----
 pub use types::{
     RepoCreateBody, RepoList, RepoPatchBody, TreeEntry, TreeFileView, TreeRepoView, TreeView,
@@ -257,6 +260,7 @@ pub struct ApiSettings {
     /// `[llm_proxy]` が有効なときだけ `Some`（celeris が渡す）。`None` なら `GET /llm/sources` は 409
     /// `llm_proxy_unavailable`。
     pub llm_sources: Option<llm_sources::SharedLlmSourcesReader>,
+    pub harnesses: Option<harnesses::SharedHarnessesReader>,
     /// Credential-free model routing catalog, refreshed atomically by the daemon.
     pub routing_catalog: Option<routing_catalog::SharedRoutingCatalogReader>,
     /// ADR 2026-10-06 D5: `POST /llm/models/discover` が呼ぶ発見の実行（daemon が渡す）。`None` なら

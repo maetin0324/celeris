@@ -122,6 +122,7 @@ pub(crate) struct Inner {
     pub(crate) knowledge_root: Option<std::path::PathBuf>,
     /// ADR-0053 D4（Phase 65）: `GET /llm/sources`。`None` なら 409 `llm_proxy_unavailable`。
     pub(crate) llm_sources: Option<crate::llm_sources::SharedLlmSourcesReader>,
+    pub(crate) harnesses: Option<crate::harnesses::SharedHarnessesReader>,
     pub(crate) routing_catalog: Option<crate::routing_catalog::SharedRoutingCatalogReader>,
     pub(crate) model_discovery: Option<crate::model_catalog::SharedModelDiscoveryHook>,
     pub(crate) account_stats: Mutex<crate::stats::AccountStatsState>,
@@ -199,6 +200,7 @@ impl ApiState {
                 .unwrap_or_else(task_ops::docs_maintenance::state_root),
             knowledge_root: settings.knowledge_root,
             llm_sources: settings.llm_sources,
+            harnesses: settings.harnesses,
             routing_catalog: settings.routing_catalog,
             model_discovery: settings.model_discovery,
             tree_limits: settings.tree_limits,

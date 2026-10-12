@@ -2182,6 +2182,34 @@ pub struct LlmSourcesView {
     #[serde(default)]
     pub celeris_tiers: Vec<LlmCelerisTierView>,
 }
+
+/// Public declaration and eligibility metadata for one configured LLM harness.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct HarnessView {
+    pub id: String,
+    pub kind: String,
+    pub api_formats: Vec<String>,
+    pub source_kinds: Vec<String>,
+    pub capabilities: Vec<String>,
+    pub rules: Vec<HarnessRuleView>,
+    pub execution_class_defaults: Vec<String>,
+    pub route_defaults: Vec<HarnessCandidateView>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct HarnessRuleView {
+    pub genre: Option<String>,
+    pub role: Option<String>,
+    pub required_capabilities: Vec<String>,
+    pub requires_repo: Option<bool>,
+    pub execution_class: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct HarnessCandidateView {
+    pub source_id: String,
+    pub model_id: String,
+}
 // ========== ADR-0053（Phase 65）: ここまで ==========
 
 // ============================================================================

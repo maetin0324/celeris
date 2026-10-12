@@ -87,6 +87,7 @@ async fn routing_catalog_redacts_secrets_and_keeps_legacy_fields() {
         token: Some(TOKEN.into()),
         routing_catalog: Some(Arc::new(Catalog)),
         llm_sources: Some(Arc::new(Sources)),
+        harnesses: None,
         ..Default::default()
     });
     let task = new_task(TaskKind::Execute, Status::Ready);

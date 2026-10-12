@@ -14456,6 +14456,21 @@
       ],
       "type": "object"
     },
+    "HarnessCandidateView": {
+      "properties": {
+        "model_id": {
+          "type": "string"
+        },
+        "source_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_id",
+        "model_id"
+      ],
+      "type": "object"
+    },
     "HarnessErrorClass": {
       "description": "D7: harness / 供給側都合の失敗の種類。",
       "enum": [
@@ -14483,6 +14498,102 @@
           ]
         }
       },
+      "type": "object"
+    },
+    "HarnessRuleView": {
+      "properties": {
+        "execution_class": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "genre": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "required_capabilities": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "requires_repo": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "role": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "required_capabilities"
+      ],
+      "type": "object"
+    },
+    "HarnessView": {
+      "description": "Public declaration and eligibility metadata for one configured LLM harness.",
+      "properties": {
+        "api_formats": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "capabilities": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "execution_class_defaults": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "route_defaults": {
+          "items": {
+            "$ref": "#/$defs/HarnessCandidateView"
+          },
+          "type": "array"
+        },
+        "rules": {
+          "items": {
+            "$ref": "#/$defs/HarnessRuleView"
+          },
+          "type": "array"
+        },
+        "source_kinds": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "api_formats",
+        "source_kinds",
+        "capabilities",
+        "rules",
+        "execution_class_defaults",
+        "route_defaults"
+      ],
       "type": "object"
     },
     "Health": {
@@ -30923,6 +31034,18 @@
     "graph": {
       "$ref": "#/$defs/Graph"
     },
+    "harness_candidate": {
+      "$ref": "#/$defs/HarnessCandidateView"
+    },
+    "harness_rule": {
+      "$ref": "#/$defs/HarnessRuleView"
+    },
+    "harnesses": {
+      "items": {
+        "$ref": "#/$defs/HarnessView"
+      },
+      "type": "array"
+    },
     "health": {
       "$ref": "#/$defs/Health"
     },
@@ -31452,6 +31575,9 @@
     "stream_heartbeat",
     "stream_reset",
     "llm_sources",
+    "harnesses",
+    "harness_rule",
+    "harness_candidate",
     "routing_catalog",
     "mcp_clients",
     "mcp_calls",

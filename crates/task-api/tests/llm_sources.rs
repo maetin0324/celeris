@@ -44,6 +44,7 @@ fn env_with_llm_sources() -> TestEnv {
     TestEnv::with(EnvOptions {
         token: Some(TOKEN.into()),
         llm_sources: Some(Arc::new(FakeReader)),
+        harnesses: None,
         ..Default::default()
     })
 }

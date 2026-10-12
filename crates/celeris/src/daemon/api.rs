@@ -187,6 +187,62 @@ pub fn config_view(config: &Config, listen: SocketAddr) -> ConfigView {
 /// （task-api は `llm-proxy`/`task-dispatch`/`task-worker` を知らない。ADR-0017 M2 と同じ境界）。
 pub(crate) struct LlmSourcesAdapter(Arc<llm_proxy::ProxyState>);
 
+struct HarnessesAdapter(task_core::llm_route::Registry);
+
+impl task_api::HarnessesReader for HarnessesAdapter {
+    fn harnesses(&self) -> Vec<task_api::types::HarnessView> {
+        use task_api::types::{HarnessCandidateView, HarnessRuleView, HarnessView};
+        self.0
+            .harnesses
+            .iter()
+            .map(|(id, spec)| {
+                let rules = self
+                    .0
+                    .harness_selection
+                    .rules
+                    .iter()
+                    .filter(|r| r.harness == *id)
+                    .map(|r| HarnessRuleView {
+                        genre: r.genre.clone(),
+                        role: r.role.clone(),
+                        required_capabilities: r.required_capabilities.iter().cloned().collect(),
+                        requires_repo: r.requires_repo,
+                        execution_class: r.execution_class.as_ref().map(ToString::to_string),
+                    })
+                    .collect();
+                let execution_class_defaults = self
+                    .0
+                    .harness_selection
+                    .execution_class_defaults
+                    .iter()
+                    .filter(|(_, ids)| ids.contains(id))
+                    .map(|(class, _)| class.to_string())
+                    .collect();
+                HarnessView {
+                    id: id.to_string(),
+                    kind: spec.kind.clone(),
+                    api_formats: spec.api_formats.iter().map(ToString::to_string).collect(),
+                    source_kinds: spec.source_kinds.iter().map(ToString::to_string).collect(),
+                    capabilities: spec.capabilities.iter().cloned().collect(),
+                    rules,
+                    execution_class_defaults,
+                    route_defaults: self
+                        .0
+                        .route_defaults
+                        .get(id)
+                        .into_iter()
+                        .flatten()
+                        .map(|c| HarnessCandidateView {
+                            source_id: c.source.to_string(),
+                            model_id: c.model.to_string(),
+                        })
+                        .collect(),
+                }
+            })
+            .collect()
+    }
+}
+
 #[async_trait::async_trait]
 impl task_api::LlmSourcesReader for LlmSourcesAdapter {
     async fn view(&self, now: i64) -> task_api::LlmSourcesView {
@@ -313,6 +369,9 @@ pub fn api_settings(
         knowledge_root: Some(config.knowledge.root.clone()),
         llm_sources: llm_proxy_state
             .map(|s| Arc::new(LlmSourcesAdapter(s)) as task_api::SharedLlmSourcesReader),
+        harnesses: config.llm_route_registry().ok().map(|registry| {
+            Arc::new(HarnessesAdapter(registry)) as task_api::SharedHarnessesReader
+        }),
         routing_catalog: config.routing_catalog_state.as_ref().map(|snapshot| {
             Arc::new(RoutingCatalogAdapter(Arc::clone(snapshot)))
                 as task_api::SharedRoutingCatalogReader

@@ -212,6 +212,14 @@ impl ApiProblem {
         )
     }
 
+    pub(crate) fn harnesses_unavailable() -> Self {
+        Self::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "harnesses_unavailable",
+            "harness declarations are unavailable",
+        )
+    }
+
     /// ADR-0030 D1: `[secrets]` が設定されていない。
     pub(crate) fn secrets_unavailable() -> Self {
         Self::new(

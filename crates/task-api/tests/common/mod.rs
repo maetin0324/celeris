@@ -78,6 +78,7 @@ pub struct EnvOptions {
     pub github: task_api::GithubSettings,
     /// ADR-0053 D4（Phase 65）: `GET /llm/sources` が読む係。`None` なら 409 `llm_proxy_unavailable`。
     pub llm_sources: Option<task_api::SharedLlmSourcesReader>,
+    pub harnesses: Option<task_api::SharedHarnessesReader>,
     pub routing_catalog: Option<task_api::SharedRoutingCatalogReader>,
     pub model_discovery: Option<task_api::SharedModelDiscoveryHook>,
     /// ADR-0079 R4a: `[execution.tree]`（既定は無効）。
@@ -114,6 +115,7 @@ impl Default for EnvOptions {
             role: task_core::SharedRole::new(task_core::InstanceRole::Active),
             github: task_api::GithubSettings::default(),
             llm_sources: None,
+            harnesses: None,
             routing_catalog: None,
             model_discovery: None,
             tree_limits: task_core::TreeLimits::default(),
@@ -329,6 +331,7 @@ pub fn settings(
         // ADR-0047（Phase 61）: 知識ベースも tempdir の中。
         knowledge_root: Some(knowledge_root.to_path_buf()),
         llm_sources: options.llm_sources,
+        harnesses: options.harnesses,
         routing_catalog: options.routing_catalog,
         model_discovery: options.model_discovery,
         browser: Default::default(),

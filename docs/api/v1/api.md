@@ -403,6 +403,8 @@ listen = "127.0.0.1:7710"      # これを書いたときだけ API が動く（
 | 96 | POST | `/console/instruct` | CoS への指示（Console から。ADR-0048 D3、Phase 60b）（**管理系**） | 202 `ConsoleInstructAccepted` | `crate::console` + `task_ops::conversation` |
 | 97 | GET | `/llm/sources` | LLM source ごとの到達性・残量・cooldown・直近 1 時間の要求数（ADR-0053 D4。`[llm_proxy]` が無効なら 409） | `LlmSourcesView` | celeris の `LlmSourcesReader` |
 | — | GET | `/llm/sources/{source_id}` | source 1 件の詳細（一覧と同じ catalog・health view） | `LlmSourceView` | celeris の `LlmSourcesReader` |
+| 103 | GET | `/harnesses` | LLM harness 宣言・適格規則・route candidates | `Vec<HarnessView>` | celeris の `HarnessesReader` |
+| — | GET | `/harnesses/{harness_id}` | harness 1 件の詳細（不明 id は 404） | `HarnessView` | celeris の `HarnessesReader` |
 | 98 | POST | `/console/new-conversation` | 互換 scope の既定 legacy thread を新規作成（CoS chat D6、**管理系**） | 204 | store `chat_threads` / `feed_cursor` |
 | 99 | GET | `/mcp/clients` | MCP クライアントの一覧（トークンの値は出ない。ADR-0056 D4） | `McpClientsView` | store `mcp_clients` |
 | 100 | GET | `/mcp/calls` | MCP の呼び出しログ（`?client=`） | `McpCallsView` | store `mcp_calls` |
@@ -2794,6 +2796,10 @@ Console の入力欄の文の入口。`POST /org/{id}/messages`（§3.47）と�
   （ADR-0054 を参照）。
 
 ### 3.108 `GET /llm/sources` → 200 `LlmSourcesView`（ADR-0053 D4）
+
+### `GET /harnesses` / `GET /harnesses/{harness_id}`
+
+Returns configured LLM harness declarations, eligible selection rules, execution-class defaults, and source/model route candidates. The API omits command and argument details. The detail route returns 404 for an unknown id. Both routes are read-only and use the standard read authentication.
 
 `GET /llm/sources/{source_id}` は一覧と同じ認証・query 制約を持ち、指定 source の `LlmSourceView` を返す。source が無ければ 404。
 

@@ -77,6 +77,18 @@ async fn returns_the_readers_view_when_configured() {
 }
 
 #[tokio::test]
+async fn returns_source_detail_and_404_for_unknown_source() {
+    let env = env_with_llm_sources();
+    let app = env.router();
+    let resp = send(&app, g("/api/v1/llm/sources/openai-compatible%3Aqwen")).await;
+    assert_eq!(resp.status.as_u16(), 200, "{}", resp.text());
+    assert_eq!(resp.json()["kind"], "openai-compatible");
+
+    let resp = send(&app, g("/api/v1/llm/sources/missing")).await;
+    assert_eq!(resp.status.as_u16(), 404, "{}", resp.text());
+}
+
+#[tokio::test]
 async fn requires_a_bearer_token() {
     let env = env_with_llm_sources();
     let app = env.router();

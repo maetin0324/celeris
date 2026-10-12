@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use axum::extract::{RawQuery, State};
+use axum::extract::{Path, RawQuery, State};
 
 use crate::handlers::{ApiResult, json_response};
 use crate::problem::ApiProblem;
@@ -40,9 +40,28 @@ pub(crate) async fn list(State(state): State<ApiState>, RawQuery(raw): RawQuery)
     Ok(json_response(axum::http::StatusCode::OK, &view))
 }
 
+/// `GET /llm/sources/{source_id}` returns the same source record exposed in the collection.
+pub(crate) async fn detail(
+    State(state): State<ApiState>,
+    Path(source_id): Path<String>,
+    RawQuery(raw): RawQuery,
+) -> ApiResult {
+    crate::handlers::no_query(&raw)?;
+    let Some(reader) = state.inner.llm_sources.clone() else {
+        return Err(ApiProblem::llm_proxy_unavailable());
+    };
+    let now = time::OffsetDateTime::now_utc().unix_timestamp();
+    let view = reader.view(now).await;
+    let source = view.sources.into_iter().find(|source| source.id == source_id)
+        .ok_or_else(ApiProblem::not_found)?;
+    Ok(json_response(axum::http::StatusCode::OK, &source))
+}
+
 pub(crate) fn routes() -> axum::Router<ApiState> {
     use axum::routing::get;
-    axum::Router::new().route("/api/v1/llm/sources", get(list))
+    axum::Router::new()
+        .route("/api/v1/llm/sources", get(list))
+        .route("/api/v1/llm/sources/{source_id}", get(detail))
 }
 
 /// ADR 2026-10-04-multi-objective-model-routing Phase 2: `SourceState` と effective cost の見積もりを

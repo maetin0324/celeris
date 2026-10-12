@@ -44,7 +44,7 @@ pub fn run() -> Result<(), String> {
     run_args(std::env::args().skip(2).collect())
 }
 
-fn run_args(raw_args: Vec<String>) -> Result<(), String> {
+pub fn run_args(raw_args: Vec<String>) -> Result<(), String> {
     let mut args = raw_args.into_iter();
     let mut api = None;
     let mut manifest = None;

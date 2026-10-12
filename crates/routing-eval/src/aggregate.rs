@@ -322,7 +322,10 @@ fn paired_comparisons(manifest: &Manifest, trials: &[Trial]) -> Vec<Value> {
 }
 
 pub fn run() -> Result<(), String> {
-    let args: Vec<String> = std::env::args().skip(2).collect();
+    run_args(std::env::args().skip(2).collect())
+}
+
+pub fn run_args(args: Vec<String>) -> Result<(), String> {
     let value = |flag: &str| -> Result<String, String> {
         args.iter()
             .position(|x| x == flag)

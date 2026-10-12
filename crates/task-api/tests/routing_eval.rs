@@ -142,7 +142,10 @@ async fn reposting_the_same_trials_is_idempotent() {
         partial.json()["trials"][0]["trial_id"],
         first["trials"][0]["trial_id"]
     );
-    assert_eq!(env.store.eval_trials_list(None, None).expect("list").len(), 2);
+    assert_eq!(
+        env.store.eval_trials_list(None, None).expect("list").len(),
+        2
+    );
 
     // manifest が違えば別の試行（新しい batch に入る）。
     let other = post_batch(&app, "sha-manifest-3", &repo).await;
@@ -190,7 +193,10 @@ async fn post_rejects_empty_unknown_route_and_missing_repo_with_400() {
         &app,
         post_json(
             BASE,
-            &body("sha-1", vec![trial("p1", 1, "/nonexistent/eval-trial-repo")]),
+            &body(
+                "sha-1",
+                vec![trial("p1", 1, "/nonexistent/eval-trial-repo")],
+            ),
         ),
     )
     .await;
@@ -268,10 +274,18 @@ async fn list_filters_by_batch_and_status() {
     assert_eq!(rows.len(), 1, "{rows:?}");
     assert_eq!(rows[0]["trial_id"], running_id.as_str());
 
-    let both = send(&app, get(&format!("{BASE}?batch_id={batch_a}&status=queued"))).await;
+    let both = send(
+        &app,
+        get(&format!("{BASE}?batch_id={batch_a}&status=queued")),
+    )
+    .await;
     assert_eq!(both.json()["trials"].as_array().expect("t").len(), 1);
 
-    let none = send(&app, get(&format!("{BASE}?batch_id={batch_a}&status=passed"))).await;
+    let none = send(
+        &app,
+        get(&format!("{BASE}?batch_id={batch_a}&status=passed")),
+    )
+    .await;
     assert_eq!(none.json()["trials"].as_array().expect("t").len(), 0);
 
     let bad_status = send(&app, get(&format!("{BASE}?status=bogus"))).await;
@@ -330,7 +344,9 @@ async fn cancel_moves_a_queued_trial_and_conflicts_afterwards() {
             "/nonexistent/eval-worktree",
         )
         .expect("mark started");
-    env.store.eval_trial_mark_scoring(&done_id).expect("scoring");
+    env.store
+        .eval_trial_mark_scoring(&done_id)
+        .expect("scoring");
     env.store
         .eval_trial_finish(&done_id, EvalTrialStatus::Passed, Some(0), false, None)
         .expect("finish");
@@ -361,7 +377,11 @@ async fn writes_need_the_bearer_token_when_the_daemon_has_one() {
     let app = env.router();
     let repo = env.dir.path().to_str().expect("utf-8 path").to_string();
 
-    let no_token = send(&app, post_json(BASE, &body("sha-auth", vec![trial("p1", 1, &repo)]))).await;
+    let no_token = send(
+        &app,
+        post_json(BASE, &body("sha-auth", vec![trial("p1", 1, &repo)])),
+    )
+    .await;
     assert_problem(&no_token, 401, "unauthorized");
     let cancel_no_token = send(&app, cancel("01JNOPE00000000000000000")).await;
     assert_problem(&cancel_no_token, 401, "unauthorized");

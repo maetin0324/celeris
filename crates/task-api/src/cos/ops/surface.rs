@@ -116,8 +116,16 @@ pub(crate) const ALLOWED: &[(&str, &str, &str)] = &[
 
 /// ADR D2 exclusions: `(method, path, reason code and detail)`.
 pub(crate) const EXCLUDED: &[(&str, &str, &str)] = &[
-    ("POST", "/api/v1/routing-eval/trials", "evaluation_dispatch: 評価試行の投入は評価 dispatcher 専用の運用操作。"),
-    ("POST", "/api/v1/routing-eval/trials/{trial_id}/cancel", "evaluation_dispatch: 評価試行の取消は評価 dispatcher 専用の運用操作。"),
+    (
+        "POST",
+        "/api/v1/routing-eval/trials",
+        "evaluation_dispatch: 評価試行の投入は評価 dispatcher 専用の運用操作。",
+    ),
+    (
+        "POST",
+        "/api/v1/routing-eval/trials/{trial_id}/cancel",
+        "evaluation_dispatch: 評価試行の取消は評価 dispatcher 専用の運用操作。",
+    ),
     (
         "DELETE",
         "/api/v1/browser/credentials/{id}",

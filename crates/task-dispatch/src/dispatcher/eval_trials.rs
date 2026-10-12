@@ -722,12 +722,8 @@ impl Dispatcher {
         };
         let (index_status, usage) = match &result {
             Ok(outcome) => match &outcome.terminal {
-                Terminal::Done { usage, .. } => {
-                    (task_core::RunIndexStatus::Completed, *usage)
-                }
-                Terminal::Yielded { usage, .. } => {
-                    (task_core::RunIndexStatus::Yielded, *usage)
-                }
+                Terminal::Done { usage, .. } => (task_core::RunIndexStatus::Completed, *usage),
+                Terminal::Yielded { usage, .. } => (task_core::RunIndexStatus::Yielded, *usage),
                 Terminal::BudgetExhausted { usage, .. } => {
                     (task_core::RunIndexStatus::BudgetExhausted, *usage)
                 }
@@ -896,54 +892,6 @@ fn run_eval_check(cwd: &str, command: &str, timeout: Duration) -> EvalCheckResul
     }
 }
 
-#[cfg(test)]
-mod score_tests {
-    use super::{EvalRecoveryAction, eval_recovery_action, run_eval_check};
-    use std::{path::Path, time::Duration};
-    use task_core::routing_eval_trial::EvalTrialStatus;
-
-    #[test]
-    fn eval_trial_check_passes_and_fails_by_exit_code() {
-        let cwd = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .to_str()
-            .expect("manifest path");
-        assert_eq!(
-            run_eval_check(cwd, "exit 0", Duration::from_secs(1)).exit,
-            Some(0)
-        );
-        assert_eq!(
-            run_eval_check(cwd, "exit 7", Duration::from_secs(1)).exit,
-            Some(7)
-        );
-    }
-
-    #[test]
-    fn eval_trial_check_timeout_kills_a_sleeping_stub() {
-        let cwd = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .to_str()
-            .expect("manifest path");
-        let result = run_eval_check(cwd, "exec sleep 5", Duration::from_millis(30));
-        assert!(result.timed_out);
-        assert_eq!(result.exit, None);
-    }
-
-    #[test]
-    fn eval_trial_recovery_marks_untracked_running_as_error_and_rescores() {
-        assert_eq!(
-            eval_recovery_action(EvalTrialStatus::Running, false),
-            EvalRecoveryAction::Error
-        );
-        assert_eq!(
-            eval_recovery_action(EvalTrialStatus::Scoring, false),
-            EvalRecoveryAction::Score
-        );
-        assert_eq!(
-            eval_recovery_action(EvalTrialStatus::Running, true),
-            EvalRecoveryAction::None
-        );
-    }
-}
-
 /// 終端の短い名前（`eval_trials.error` の理由に書く）。
 fn terminal_kind(terminal: &Terminal) -> &'static str {
     match terminal {
@@ -1009,4 +957,52 @@ fn run_version(program: &str) -> Option<String> {
         return None;
     }
     Some(first.chars().take(VERSION_MAX_CHARS).collect())
+}
+
+#[cfg(test)]
+mod score_tests {
+    use super::{EvalRecoveryAction, eval_recovery_action, run_eval_check};
+    use std::{path::Path, time::Duration};
+    use task_core::routing_eval_trial::EvalTrialStatus;
+
+    #[test]
+    fn eval_trial_check_passes_and_fails_by_exit_code() {
+        let cwd = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .to_str()
+            .expect("manifest path");
+        assert_eq!(
+            run_eval_check(cwd, "exit 0", Duration::from_secs(1)).exit,
+            Some(0)
+        );
+        assert_eq!(
+            run_eval_check(cwd, "exit 7", Duration::from_secs(1)).exit,
+            Some(7)
+        );
+    }
+
+    #[test]
+    fn eval_trial_check_timeout_kills_a_sleeping_stub() {
+        let cwd = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .to_str()
+            .expect("manifest path");
+        let result = run_eval_check(cwd, "exec sleep 5", Duration::from_millis(30));
+        assert!(result.timed_out);
+        assert_eq!(result.exit, None);
+    }
+
+    #[test]
+    fn eval_trial_recovery_marks_untracked_running_as_error_and_rescores() {
+        assert_eq!(
+            eval_recovery_action(EvalTrialStatus::Running, false),
+            EvalRecoveryAction::Error
+        );
+        assert_eq!(
+            eval_recovery_action(EvalTrialStatus::Scoring, false),
+            EvalRecoveryAction::Score
+        );
+        assert_eq!(
+            eval_recovery_action(EvalTrialStatus::Running, true),
+            EvalRecoveryAction::None
+        );
+    }
 }

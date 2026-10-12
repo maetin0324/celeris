@@ -1074,7 +1074,14 @@ impl TaskStore for SqliteStore {
         features: &crate::route_record::TaskFeatures,
         created_at: &str,
     ) -> Result<(), StoreError> {
-        SqliteStore::insert_route_features(self, hash, subject_kind, subject_id, features, created_at)
+        SqliteStore::insert_route_features(
+            self,
+            hash,
+            subject_kind,
+            subject_id,
+            features,
+            created_at,
+        )
     }
 
     fn insert_route_options(

@@ -118,7 +118,7 @@ async fn eval_trial_reserved_slot_hides_checks_and_records_selected_version() {
     let request = seen.lock().unwrap()[0].clone();
     assert!(request.task.acceptance.is_empty());
     assert_eq!(request.task.objective, "Only this objective is visible.");
-    assert_eq!(request.context.session.as_ref().unwrap().resume, false);
+    assert!(!request.context.session.as_ref().unwrap().resume);
     assert!(
         !serde_json::to_string(&request)
             .unwrap()

@@ -322,7 +322,10 @@ fn validate(
         require_text(&mut errors, &format!("{at}.objective"), &item.objective);
         require_text(&mut errors, &format!("{at}.check.cmd"), &item.check.cmd);
         if !known.knows_source(&item.source_id) {
-            errors.push(format!("{at}.source_id: unknown source {:?}", item.source_id));
+            errors.push(format!(
+                "{at}.source_id: unknown source {:?}",
+                item.source_id
+            ));
         }
         if !known.knows_model(&item.model_id) {
             errors.push(format!("{at}.model_id: unknown model {:?}", item.model_id));

@@ -242,7 +242,7 @@ pub struct Config {
     /// （`Config::load` が行う。`Config::validate` が「必要なのに埋まらない」を弾く）。
     #[serde(default)]
     pub llm_proxy: llm_proxy::config::LlmProxyConfig,
-    /// Phase 1 model catalog and lane policies; legacy remains the default execution mode.
+    /// Optional model routing observation and policy configuration.
     #[serde(default)]
     pub model_routing: ModelRoutingConfig,
     /// ADR 2026-10-06 D4: `[model_catalog]`。利用可能モデルの自動発見（周期・opencode go の取得先）。
@@ -404,6 +404,16 @@ impl Config {
     /// existing sub-struct so adding them does not change `Config` struct literals.
     pub(crate) fn parse_with_delivery(text: &str) -> Result<Self, ConfigError> {
         let mut table: toml::Table = toml::from_str(text)?;
+        if let Some(model_routing) = table.get("model_routing")
+            && model_routing
+                .as_table()
+                .is_some_and(|value| !value.contains_key("mode"))
+        {
+            return Err(ConfigError::Invalid(
+                "[model_routing].mode is required; set mode = \"shadow\" or mode = \"enforce\""
+                    .into(),
+            ));
+        }
         if table.contains_key("providers")
             || table.contains_key("providers.d")
             || table.contains_key("providers_include")

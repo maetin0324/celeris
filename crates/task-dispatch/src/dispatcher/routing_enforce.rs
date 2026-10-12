@@ -5,7 +5,7 @@
 //! - `mode = enforce`（heuristic のみ・既定 off）の dispatcher 経路: 候補 allowlist を作り、task/組織固有の
 //!   制約を proxy に渡せない経路は除外理由を残して外す。quota の枯渇・圧迫は lane を下げず、同じ lane の
 //!   別 source を先に試し、無ければ defer する（ADR §7 の「暗黙降格の廃止」）。
-//! - legacy は従来どおり `select_tier` の結果。cheap-local-first（`prefer_local`）の前段は変えない。
+//! - `route_select` が source と model を選ぶ。cheap-local-first（`prefer_local`）の前段は変えない。
 
 use super::*;
 use crate::accounts::AccountState;
@@ -18,9 +18,10 @@ use task_core::model_router::{
 /// 観測の鮮度（`accounts::measured_remaining` と同じ 300 秒）。
 const OBSERVATION_TTL_SECS: i64 = 300;
 
-/// dispatcher 側の model routing 設定。既定は legacy（enforce は人の opt-in）。
+/// dispatcher 側の model routing 設定（enforce は人の opt-in）。
 #[derive(Debug, Clone, PartialEq)]
 pub struct DispatchRoutingSettings {
+    pub configured: bool,
     pub mode: RoutingMode,
     /// task/組織固有の追加制約。既定（空）なら制約なし。
     pub constraints: Constraints,
@@ -37,7 +38,8 @@ pub struct DispatchRoutingSettings {
 impl Default for DispatchRoutingSettings {
     fn default() -> Self {
         Self {
-            mode: RoutingMode::Legacy,
+            configured: false,
+            mode: RoutingMode::Shadow,
             constraints: Constraints::default(),
             freshness: FreshnessPolicy::default(),
             window_reserves: std::collections::BTreeMap::new(),
@@ -265,7 +267,7 @@ pub fn constraint_exclusions(c: &Constraints, src: &EnforceSource<'_>) -> Vec<&'
 }
 
 impl Dispatcher {
-    /// dispatcher の model routing 設定（既定 legacy）。
+    /// dispatcher の model routing 設定。
     pub fn set_dispatch_routing(&mut self, settings: DispatchRoutingSettings) {
         self.dispatch_routing = settings;
     }

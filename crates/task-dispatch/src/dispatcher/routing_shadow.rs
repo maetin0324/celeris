@@ -1,6 +1,6 @@
 //! ADR 2026-10-04 multi-objective model routing §7.1・§10 Phase 4（dispatch-shadow）: decision shadow。
 //!
-//! - `mode = shadow` のとき primary は legacy の経路のまま決め、同じ候補行と同じ source 状態
+//! - `mode = shadow` のとき primary は `route_select` の経路で決め、同じ候補行と同じ source 状態
 //!   （account 帳簿・cooldown・in-use）で
 //!   候補 policy（Phase 2 の heuristic kernel = enforce の判断）を**純粋に**計算する。
 //! - 計算は読むだけ: upstream・HTTP・health probe・worker 起動・reviewer 追加・run 再実行をしない。
@@ -8,7 +8,7 @@
 //!   primary の選択がこの tick に見た結果（`ProviderSelection.candidates`）だけを使う。
 //! - 結果は `Event::RoutingShadowRecorded`（kind = decision）1 件。primary との差・除外理由・候補比較は
 //!   `DecisionShadowComparison`（version 1）を JSON にして `ShadowRecord.detail` に入れる
-//!   （本文・prompt・credential・tokens・費用は持たない）。mode = legacy / enforce では何も記録しない。
+//!   （本文・prompt・credential・tokens・費用は持たない）。mode = enforce では何も記録しない。
 
 use super::*;
 use serde::{Deserialize, Serialize};
@@ -33,7 +33,7 @@ pub struct DecisionShadowCandidate {
     /// 候補 policy がこの行を選んだ。
     #[serde(default)]
     pub selected: bool,
-    /// primary（legacy）がこの行を選んだ。
+    /// primary (`route_select`) がこの行を選んだ。
     #[serde(default)]
     pub primary: bool,
 }
@@ -67,7 +67,7 @@ pub struct DecisionShadowComparison {
 /// `[model_routing.shadow]` の差し替えを受け取る側（daemon が llm-proxy の shadow queue を繋ぐ）。
 /// `mode` は同じ時点の `DispatchRoutingSettings.mode`。呼び出し側を待たせない実装にする。
 pub trait RoutingShadowListener: Send + Sync {
-    fn reload(&self, mode: RoutingMode, policy: &ShadowPolicy);
+    fn reload(&self, configured: bool, mode: RoutingMode, policy: &ShadowPolicy);
 }
 
 impl Dispatcher {
@@ -76,7 +76,11 @@ impl Dispatcher {
     pub fn set_routing_shadow(&mut self, policy: ShadowPolicy) {
         self.routing_shadow_policy = policy;
         for listener in &self.routing_shadow_listeners {
-            listener.reload(self.dispatch_routing.mode, &self.routing_shadow_policy);
+            listener.reload(
+                self.dispatch_routing.configured,
+                self.dispatch_routing.mode,
+                &self.routing_shadow_policy,
+            );
         }
     }
 
@@ -86,7 +90,11 @@ impl Dispatcher {
 
     /// listener を足す。足した時点の mode と policy をすぐ 1 回渡す。
     pub fn add_routing_shadow_listener(&mut self, listener: Arc<dyn RoutingShadowListener>) {
-        listener.reload(self.dispatch_routing.mode, &self.routing_shadow_policy);
+        listener.reload(
+            self.dispatch_routing.configured,
+            self.dispatch_routing.mode,
+            &self.routing_shadow_policy,
+        );
         self.routing_shadow_listeners.push(listener);
     }
 }

@@ -5,9 +5,14 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum RoutingMode {
-    Legacy,
     Shadow,
     Enforce,
+}
+
+impl Default for RoutingMode {
+    fn default() -> Self {
+        Self::Shadow
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

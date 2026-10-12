@@ -1,7 +1,7 @@
 //! ADR 2026-10-04 multi-objective model routing §7.1・§10 Phase 4（daemon-wire）: `[model_routing.shadow]`
 //! を task-dispatch の decision shadow と llm-proxy の shadow へ配線する。
 //!
-//! - 既定（`mode = legacy`・`execute = false`）では llm-proxy に shadow を差し込まない（候補列も作らず、
+//! - `[model_routing]` が無いか `execute = false` の既定では llm-proxy に shadow を差し込まない（候補列も作らず、
 //!   shadow queue・予約 store も作らない。upstream への追加送信 0）。
 //! - `mode = shadow` なら proxy の decision shadow（追加呼出しなし）を差し込む。`execute = true` で
 //!   上限が揃っていれば実行 shadow の queue を作り、日次上限は共有 DB の予約
@@ -82,9 +82,11 @@ impl ProxyShadowControl {
 }
 
 impl RoutingShadowListener for ProxyShadowControl {
-    fn reload(&self, mode: RoutingMode, policy: &ShadowPolicy) {
-        self.decision_on
-            .store(mode == RoutingMode::Shadow, Ordering::SeqCst);
+    fn reload(&self, configured: bool, mode: RoutingMode, policy: &ShadowPolicy) {
+        self.decision_on.store(
+            self.installed && configured && mode == RoutingMode::Shadow,
+            Ordering::SeqCst,
+        );
         match &self.queue {
             Some(queue) => {
                 let budget = self.budget_store.as_ref().and_then(|store| {
@@ -111,12 +113,15 @@ impl RoutingShadowListener for ProxyShadowControl {
 /// 起動時の配線。`mode` と `policy` は検証済みの `RoutingRuntime` のもの（無ければ既定 = off）。
 pub(crate) fn wire_proxy_shadow(
     mode: RoutingMode,
+    routing_configured: bool,
     policy: &ShadowPolicy,
     deps: ShadowDeps,
 ) -> Result<ProxyShadowWiring, String> {
-    let decision_on = Arc::new(AtomicBool::new(mode == RoutingMode::Shadow));
+    let decision_on = Arc::new(AtomicBool::new(
+        routing_configured && mode == RoutingMode::Shadow,
+    ));
     let executes = policy.daily_caps().is_some();
-    if mode != RoutingMode::Shadow && !executes {
+    if !routing_configured && !executes {
         return Ok(ProxyShadowWiring {
             shadow: None,
             control: Arc::new(ProxyShadowControl {
@@ -182,11 +187,12 @@ pub(crate) fn wire_proxy_shadow(
 /// （登録時に現在の mode・policy が 1 度渡る。以後 reload のたびに渡る）。
 pub(crate) fn install_proxy_shadow(
     dispatcher: &mut Dispatcher,
+    routing_configured: bool,
     deps: ShadowDeps,
 ) -> Result<ProxyShadowWiring, String> {
     let mode = dispatcher.dispatch_routing().mode;
     let policy = dispatcher.routing_shadow_policy().clone();
-    let wiring = wire_proxy_shadow(mode, &policy, deps)?;
+    let wiring = wire_proxy_shadow(mode, routing_configured, &policy, deps)?;
     dispatcher
         .add_routing_shadow_listener(Arc::clone(&wiring.control) as Arc<dyn RoutingShadowListener>);
     Ok(wiring)

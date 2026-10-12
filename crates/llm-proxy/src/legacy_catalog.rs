@@ -90,7 +90,7 @@ pub fn normalize_legacy_config_with(
         policies: [Tier::Frontier, Tier::Standard, Tier::Cheap]
             .into_iter()
             .map(|lane| {
-                let mut policy = RoutingPolicy::defaults(lane, RoutingMode::Legacy);
+                let mut policy = RoutingPolicy::defaults(lane, RoutingMode::Shadow);
                 policy.prefer_free = config.prefer_free;
                 policy
             })

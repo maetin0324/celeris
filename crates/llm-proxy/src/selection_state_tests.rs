@@ -194,13 +194,6 @@ fn constraints_exclude_before_score_and_reasons_are_traced() {
 }
 
 #[test]
-fn legacy_mode_does_not_use_state_selection() {
-    let policy = RoutingPolicy::defaults(Tier::Cheap, RoutingMode::Legacy);
-    let ctx = context();
-    assert!(select_state(&input(&policy, &ctx), &[], NOW, None).is_err());
-}
-
-#[test]
 fn routing_reservation_conflict_reselects_once() {
     let m_a = model("m-a", 0.9, Support::Supported);
     let m_b = model("m-b", 0.5, Support::Supported);

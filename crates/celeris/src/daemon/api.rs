@@ -675,10 +675,10 @@ mod routing_catalog_tests {
             config_order: 0,
         };
         let catalog = crate::config::RoutingCatalog {
-            mode: RoutingMode::Legacy,
+            mode: RoutingMode::Shadow,
             models: vec![model],
             deployments: vec![deployment],
-            policies: vec![RoutingPolicy::defaults(Tier::Cheap, RoutingMode::Legacy)],
+            policies: vec![RoutingPolicy::defaults(Tier::Cheap, RoutingMode::Shadow)],
             warnings: vec![],
         };
         let adapter = RoutingCatalogAdapter(Arc::new(std::sync::RwLock::new(Arc::new(catalog))));

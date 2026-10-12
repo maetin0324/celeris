@@ -431,7 +431,7 @@ async fn routing_projects_optional_optimizer_trace_without_changing_old_fields()
         "run_id": "run-trace",
         "request_id": null,
         "stage": "dispatch",
-        "mode": "legacy",
+        "mode": "shadow",
         "policy_version": "phase1-v1",
         "catalog_version": "phase1-v1",
         "feature_version": "1",

@@ -149,9 +149,10 @@ pub(crate) fn build_llm_proxy_state(
     };
     let sink: Arc<dyn ProxyEventSink> = Arc::new(TaskProxyEventSink::new(dispatcher.store()));
     let state = state.with_routing_context(Some(registry), Some(sink));
-    // ADR 2026-10-04 §7.1・Phase 4: `[model_routing.shadow]`。既定（legacy・execute = false）は差し込まない。
+    // ADR 2026-10-04 §7.1・Phase 4: `[model_routing.shadow]`。設定が無い場合や execute = false の場合は差し込まない。
     let wiring = super::routing_shadow::install_proxy_shadow(
         dispatcher,
+        config.model_routing.mode.is_some(),
         super::routing_shadow::ShadowDeps {
             db_path: config.db.path.clone(),
             busy_timeout: config.db.busy_timeout(),

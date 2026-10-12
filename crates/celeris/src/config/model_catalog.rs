@@ -160,7 +160,7 @@ mod tests {
 
     fn routing() -> RoutingCatalog {
         RoutingCatalog {
-            mode: RoutingMode::Legacy,
+            mode: RoutingMode::Shadow,
             models: vec![],
             deployments: vec![
                 dep("a", "opencode_go", "opencode-go/glm-5"),
@@ -230,5 +230,4 @@ mod tests {
         assert_eq!(catalog.deployments.len(), 4);
         assert!(catalog.warnings.is_empty());
     }
-
 }

@@ -3214,7 +3214,7 @@ fn proxy_tier_alias_rejected_in_celeris_config() {
 #[test]
 fn routing_catalog_takes_models_and_policies_only_from_model_routing() {
     use task_core::Tier;
-    let fixture = "[llm_sources.qwen]\nkind = \"openai_compatible\"\nmodels = [\"qwen3.8-27b\"]\n";
+    let fixture = "[model_routing]\nmode = \"shadow\"\n[llm_sources.qwen]\nkind = \"openai_compatible\"\nmodels = [\"qwen3.8-27b\"]\n";
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.toml");
     std::fs::write(&path, fixture).unwrap();
@@ -3248,7 +3248,11 @@ fn routing_catalog_takes_models_and_policies_only_from_model_routing() {
         "v1"
     );
 
-    std::fs::write(&path, format!("{fixture}\n[model_routing]\nmode = \"shadow\"\n[model_routing.policies.cheap]\nmin_quality = 0.55\n")).unwrap();
+    std::fs::write(
+        &path,
+        format!("{fixture}\n[model_routing.policies.cheap]\nmin_quality = 0.55\n"),
+    )
+    .unwrap();
     let cfg = Config::load(&path).unwrap();
     let catalog = cfg.routing_catalog_snapshot.as_ref().unwrap();
     assert_eq!(
@@ -3278,7 +3282,7 @@ fn routing_catalog_takes_models_and_policies_only_from_model_routing() {
 
     std::fs::write(
         &path,
-        format!("{fixture}\n[model_routing]\nmode = \"enforce\"\n"),
+        fixture.replace("mode = \"shadow\"", "mode = \"enforce\""),
     )
     .unwrap();
     assert!(
@@ -3290,6 +3294,15 @@ fn routing_catalog_takes_models_and_policies_only_from_model_routing() {
 }
 
 fn routing_phase2_load(extra: &str) -> Result<Config, String> {
+    let extra = if extra.contains("[model_routing") && !extra.contains("mode =") {
+        if let Some(rest) = extra.strip_prefix("[model_routing]\n") {
+            format!("[model_routing]\nmode = \"shadow\"\n{rest}")
+        } else {
+            format!("[model_routing]\nmode = \"shadow\"\n{extra}")
+        }
+    } else {
+        extra.to_owned()
+    };
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.toml");
     let db = dir.path().join("db.sqlite3");
@@ -3303,9 +3316,25 @@ fn routing_phase2_load(extra: &str) -> Result<Config, String> {
 }
 
 #[test]
+fn routing_table_requires_explicit_mode() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(&path, "[model_routing]\n").unwrap();
+    let error = Config::load(&path).unwrap_err().to_string();
+    assert!(error.contains("mode = \"shadow\""), "{error}");
+    assert!(error.contains("mode = \"enforce\""), "{error}");
+    assert!(routing_phase2_load("").is_ok());
+}
+
+#[test]
 fn routing_shadow_config_defaults_off_and_requires_caps() {
-    let legacy = routing_phase2_load("").unwrap();
-    let policy = &legacy.model_routing.runtime.as_ref().unwrap().shadow;
+    let config_without_routing = routing_phase2_load("").unwrap();
+    let policy = &config_without_routing
+        .model_routing
+        .runtime
+        .as_ref()
+        .unwrap()
+        .shadow;
     assert!(!policy.execute);
     assert_eq!(policy.sample_rate, 0.0);
     assert!(policy.daily_caps().is_none());
@@ -3469,7 +3498,7 @@ fn routing_enforce_opt_in_validates_heuristic_only() {
         "{err}"
     );
     // heuristic 以外の optimizer は enforce でも shadow でも拒否。
-    for mode in ["enforce", "shadow", "legacy"] {
+    for mode in ["enforce", "shadow"] {
         let err = routing_phase2_load(&format!(
             "[model_routing]\nmode = \"{mode}\"\n[model_routing.estimator]\nkind = \"routellm\"\n"
         ))
@@ -3536,7 +3565,7 @@ fn routing_config_defaults_do_not_seed_unknown_as_zero() {
     use task_core::model_router::policy::{FreshnessPolicy, RoutingMode};
     let cfg = routing_phase2_load("").unwrap();
     let runtime = cfg.model_routing.runtime.as_ref().unwrap();
-    assert_eq!(runtime.mode, RoutingMode::Legacy);
+    assert_eq!(runtime.mode, RoutingMode::Shadow);
     assert_eq!(runtime.freshness, FreshnessPolicy::default());
     assert!(runtime.window_reserves.is_empty());
     assert!(runtime.resource_groups.is_empty());

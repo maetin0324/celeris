@@ -242,3 +242,8 @@ runtime の決定は実装済み。closeout HEAD `a3c63b8a` で以下を確認�
   - 2026-10-12 付記（api-v2 の状態: 一部実装）: 実装済みは `GET /api/v1/harnesses`（一覧・詳細）、`GET /api/v1/llm/sources/{source_id}`、run detail の `selection`（旧 run は `legacy_unresolved`）、model role assignments の削除（migration 0069）、web・gui の生成型の再生成。未実装は accounts の HTTP 路の `(source_id, account_id)` 化（旧 adapter key 路は残存）と `llm/sources` の catalog・health 欄。詳細と次の unit の提案は `agent-docs/progress/2026-10-11-llm-source-harness-api.md`。
 - reasoning effort は selected route に載っていない。tier 束縛の撤去で、codex へ effort を渡す経路（`-c model_reasoning_effort`）も消え、routing 監査の `reasoning_effort` は新しい run では常に空になる。route に effort を持たせるかは別の決定として扱う（`tier-drop-operator.md` の提案）。
 - 本番 config の `[[providers]]`・`providers.d`・`[llm_proxy.models]` を新形へ書き換え、account_limits の移送残行と `harness_migration_unresolved` event を確認する作業は人が実行する。本番 host・DB の変更はこの closeout では行っていない。
+
+
+### 2026-10-12 付記（Legacy routing の撤去）
+
+実行時の source・model 選択は `task_core::llm_route::route_select` だけが担う。`model_routing` は shadow による観測、または後続 task `01M4M8D4AQ` の入力として扱い、実行選択の互換経路にはしない。`RoutingMode::Legacy` は存在しない。`[model_routing]` を設定する場合は `mode = "shadow"` または `mode = "enforce"` を明示する。設定表そのものを省略した場合は routing 無効として従来どおり読み込める。

@@ -900,7 +900,9 @@ fn routing_shadow_invalid_reload_keeps_previous_snapshot() {
     let mut dispatcher = build_dispatcher(&config, Default::default()).unwrap();
     std::fs::write(
         &path,
-        format!("{base}\n[model_routing.shadow]\nexecute = true\n"),
+        format!(
+            "{base}\n[model_routing]\nmode = \"shadow\"\n[model_routing.shadow]\nexecute = true\n"
+        ),
     )
     .unwrap();
     let err = reload_providers(&mut dispatcher, &mut config).unwrap_err();
@@ -915,7 +917,7 @@ fn routing_shadow_invalid_reload_keeps_previous_snapshot() {
     ));
     std::fs::write(
         &path,
-        format!("{base}\n[model_routing.shadow]\nsample_rate = 0.5\n"),
+        format!("{base}\n[model_routing]\nmode = \"shadow\"\n[model_routing.shadow]\nsample_rate = 0.5\n"),
     )
     .unwrap();
     reload_providers(&mut dispatcher, &mut config).unwrap();
@@ -946,13 +948,13 @@ fn routing_runtime_is_wired_to_the_dispatcher_and_reload_is_atomic() {
     std::fs::write(
         &path,
         format!(
-            "{base}\n[model_routing.subscription_windows.five_hour]\nreserve_value_usd = 2.0\n"
+            "{base}\n[model_routing]\nmode = \"shadow\"\n[model_routing.subscription_windows.five_hour]\nreserve_value_usd = 2.0\n"
         ),
     )
     .unwrap();
     let mut config = Config::load(&path).unwrap();
     let mut dispatcher = build_dispatcher(&config, Default::default()).unwrap();
-    assert_eq!(dispatcher.dispatch_routing().mode, RoutingMode::Legacy);
+    assert_eq!(dispatcher.dispatch_routing().mode, RoutingMode::Shadow);
     assert_eq!(
         dispatcher
             .dispatch_routing()
@@ -1009,5 +1011,5 @@ fn routing_runtime_is_wired_to_the_dispatcher_and_reload_is_atomic() {
     ));
     std::fs::write(&path, &base).unwrap();
     reload_providers(&mut dispatcher, &mut config).unwrap();
-    assert_eq!(dispatcher.dispatch_routing().mode, RoutingMode::Legacy);
+    assert_eq!(dispatcher.dispatch_routing().mode, RoutingMode::Shadow);
 }

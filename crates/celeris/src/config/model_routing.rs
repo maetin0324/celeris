@@ -1,4 +1,4 @@
-//! Phase 1 catalog adapter. It does not change the legacy execution selector.
+//! Phase 1 catalog adapter. Execution source and model selection is handled by `llm_route`.
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
@@ -273,6 +273,7 @@ impl ShadowEntry {
 /// 検証済みの Phase 2 実行時設定。dispatcher と proxy に配る（未知は None のまま）。
 #[derive(Debug, Clone, PartialEq)]
 pub struct RoutingRuntime {
+    pub configured: bool,
     pub mode: RoutingMode,
     pub enforce_routes: Vec<String>,
     pub freshness: FreshnessPolicy,
@@ -297,6 +298,7 @@ pub const ENFORCE_ROUTES: [&str; 2] = ["standalone", "server"];
 impl RoutingRuntime {
     pub fn dispatch_settings(&self) -> task_dispatch::DispatchRoutingSettings {
         task_dispatch::DispatchRoutingSettings {
+            configured: self.configured,
             mode: self.mode,
             constraints: Default::default(),
             freshness: self.freshness,
@@ -482,7 +484,7 @@ fn lane_name(lane: Tier) -> &'static str {
 impl Config {
     /// Builds a complete, credential-free snapshot before it can replace a running one.
     pub fn routing_catalog(&self) -> Result<RoutingCatalog, ConfigError> {
-        let mode = self.model_routing.mode.unwrap_or(RoutingMode::Legacy);
+        let mode = self.model_routing.mode.unwrap_or_default();
         self.validate_enforce_opt_in(mode)?;
         let mut models = BTreeMap::<String, ModelProfile>::new();
         let mut deployments = BTreeMap::<String, DeploymentProfile>::new();
@@ -669,7 +671,7 @@ impl Config {
                 if let Some(v) = row.prefer_free {
                     policy.prefer_free = v;
                 }
-                warnings.insert(format!("model_routing.policies.{lane:?} overrides llm_proxy.prefer_free -> model_routing.policies (legacy)"));
+                warnings.insert(format!("model_routing.policies.{lane:?} overrides llm_proxy.prefer_free -> model_routing.policies"));
             }
             policy.validate().map_err(|reason| {
                 ConfigError::Invalid(format!("model_routing.policies.{lane:?}: {reason}"))
@@ -787,7 +789,7 @@ impl Config {
             }
             escalation.max_total_attempts = value;
         }
-        let mode = mr.mode.unwrap_or(RoutingMode::Legacy);
+        let mode = mr.mode.unwrap_or_default();
         self.validate_enforce_opt_in(mode)?;
         let mut freshness = FreshnessPolicy::default();
         if let Some(ttl) = mr.observation_ttl_seconds {
@@ -887,6 +889,7 @@ impl Config {
             ));
         }
         Ok(RoutingRuntime {
+            configured: mr.mode.is_some(),
             mode,
             enforce_routes: mr
                 .enforce_routes

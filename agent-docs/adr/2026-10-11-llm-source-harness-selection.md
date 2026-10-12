@@ -336,3 +336,20 @@ harness ごとの先頭候補、CoS の候補順、planner の harness 順と進
 **試験。** `crates/task-dispatch/src/dispatcher/tests/class_route.rs` は注入した `RouteState` で `route_select` を呼ぶ（LLM・外部 network なし）。(a) claude_code が埋まり codex が空き → codex、(b) 両方埋まり → `NoEligible`（defer）、(c) review も同じ、(d) 宣言なし → genre・role の従来選択で、落ちた harness を `harness_rejections` に残す、(e) 末尾の候補が未宣言でも先頭の `NoEligible` で defer する。
 
 **後続 task 01M4M8D4AQ との境界。** execution class の候補列は harness の選択入力である。source と model の選択は変えない。source×model の方針は `RoutePolicy` だけが持ち、今回の候補列は `RoutePolicy` に入らない。`RouteRequest` の `lane` は保持するが、この選択では使わない。後続 task が `RoutePolicy` を差し替えても、harness の候補列と admission の規則は変わらない。
+
+## 2026-10-12 付記（ui-v2）
+
+web/ の provider 画面を削除し、source・account・harness の画面を置いた。旧 `gui/` の `/providers` 画面と provider API の呼び出し・試験・fixture も消した。
+
+実装した画面（すべて読み取り専用。`web/` の route）:
+- `/sources`: LLM source の一覧（種別・到達可否・deployment 数・account 数）。
+- `/sources/$sourceId`: source の詳細。account は `/accounts` の該当行へ、model は `/models?source=<id>` へ結ぶ。
+- `/harnesses`: harness の一覧（宣言された形式・source 種別・能力・既定・適格条件）。設定の変更は config で行う旨を help に書く。
+- `/tasks/$id/runs/$runId` の run ヘッダと task 詳細の run 一覧: 選ばれた harness・source（`/sources/$sourceId` へのリンク）・model・口座を並べて出す。旧 run（`selection.status = legacy_unresolved`）は `記録なし（旧 run）` と出し、adapter や model で補わない。
+
+`/providers` は削除済み。`/accounts`・`/models`・`/sources`・`/harnesses` の 4 画面はこの ADR の「API と画面」の source・account・harness の分離に従う。
+
+残り（この付記の範囲外。次の unit の提案は `agent-docs/progress/2026-10-12-web-source-harness-ui.md`）:
+- source と harness の編集 API と画面。ADR の「source と harness の編集画面は別にし」は未実装で、現状の画面は読み取りだけ。編集は config に残る。
+- `llm/sources` の catalog 欄（source が持つ model 一覧と利用可否）は未実装。`/sources/$sourceId` の model 欄は既存の deployments 欄を使い、`/models?source=` へ結ぶ。
+- run の `adapter`・`model` 欄（`RunSummary`）と timeline・console の `worker_started` ラベルは、まだ adapter 由来の値を読んでいる。選択結果の `selection` だけを表示源にする整理は別 unit。

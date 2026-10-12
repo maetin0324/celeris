@@ -6,7 +6,7 @@ import { createFakeDaemon } from "../support/fake-daemon.mjs";
 import { startGateway } from "../support/gateway";
 import { makeTmpDir } from "../support/tmp-dir";
 
-test("source と harness の一覧・詳細を読み取り専用で表示する", async ({ page }) => {
+test("parity: /sources /harnesses 一覧・詳細を読み取り専用で表示する", async ({ page }) => {
   const dir = makeTmpDir("celeris-sources-");
   const tokenFile = path.join(dir, "token");
   writeFileSync(tokenFile, `${FIXTURE_TOKEN}\n`);

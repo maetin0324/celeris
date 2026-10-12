@@ -27,9 +27,15 @@
   - clippy の timeout: host の load average が 70 台だった時の時間切れ。同じ HEAD で前の 2 回は 1.7 秒・10.9 秒で終わっていた。reverify4 の clippy は exit 0（警告 0、1 分 10 秒）で完了し、コードの失敗は見つからなかった。
 - 試験数（reverify4、HEAD 144529b3）: `test-parallel.sh` は nextest 5152 passed / 0 failed / 14 ignored、doctest exit 0。`cargo clippy --workspace -- -D warnings` exit 0。`check-doc-links`・`check-adr-numbers`・`progress-index --check` は exit 0。`cargo test -p task-core --lib route_` は 36 passed。詳細は [task-features/reverify4.md](task-features/reverify4.md)。
 - 試験の環境: 作業 tmp（94 字）のまま回すと unix socket の path が `SUN_LEN` を超えて credentiald・task-api・celerisctl の socket 試験 158 箇所が落ちる（コードの失敗ではない）。`TMPDIR=/tmp/rv4` で全件通った。
-- 残り（この WU の範囲外）:
-  - label の `changed_lines`・`changed_files_n`・`changed_crates_n`・`quota_used`・`retries_after`・`repaired` は未計測（null＋missing）。ADR D3(b) は `changed_*` の抽出元を `run_write_sets`／`work_unit_write_sets` の base..head の `git diff --numstat` と書くが、この段では計測を入れていない。ADR 実装付記で selector／rollout 段の未解決事項と明記済み。ADR の schema・抽出元表と実装の不一致として reviewer が指摘しうる欄はこの 6 欄だけ。
-  - 「提案」: 次の段で `changed_*` を export 時の遅延計算（base..head の `git diff --numstat`）にするか、daemon の終了処理に置くかを決め、ADR D3(b) の抽出元欄を実装と揃える。
+- この検証時点（reverify4）では `changed_*` が残っていた。labels-diff WU で task-ops の遅延計算と task-core の数値受け口を実装し、6欄すべてが抽出済み。詳細は [labels-diff](task-features/labels-diff.md)。
+
+## 再試行 reverify5（2026-10-12、task 01M4P7CTS4、判定: fail）
+
+- label 段の結果: `quota_used`・`retries_after`・`repaired` は `route_extract::outcome_labels_for_run` が DB から抽出し、`changed_lines`・`changed_files_n`・`changed_crates_n` は task-ops `routing_labels` が base..head の `git diff --numstat` から計算する。前回 reviewer の指摘（6 欄が null 固定）は解消している。抽出元の全欄 × subject 種別の照合は [field-audit.md](task-features/field-audit.md) の D3(b) 節。
+- 検査（HEAD `1d2f06c0`）: `cargo clippy --workspace -- -D warnings` exit 0。`check-doc-links`・`check-adr-numbers`・`progress-index --check` exit 0。`bash scripts/dev/test-parallel.sh` は **exit 100**（nextest 5153 passed / 3 failed / 14 ignored。doctest exit 0）。
+- 失敗 3 件: `task-api::browser_e2e` の `approved_credential_requires_conformance_and_does_not_consume_approval`、`denied_approval_fails_the_task_without_a_lease`、`registered_credential_does_not_open_approval_for_uncertified_backend`。broker 呼び出しが 503（credential broker is not configured）になる。同じ条件で 2 回再現。試験 crate はこの範囲で変わっていない。原因は未特定。
+- TMPDIR の結果（同じ HEAD）: 作業 tmp（93 字）は 108 件失敗（SUN_LEN と daemon 起動待ちの timeout）、31 字は 31 件、9 字（`/local/rv5`）は 3 件。reverify4 の `/tmp/rv4` では全件通っていた。
+- 詳細と証拠: [task-features/reverify5.md](task-features/reverify5.md)。
 
 ## 実装した schema と template の版
 
@@ -109,7 +115,10 @@ brief は `build_task_features`（`crates/task-core/src/route_record.rs`）が L
 | `review_pass` | `review_verdict` | reviewer・人 |
 | `wall_s` | `runs.metrics_json.wall_ms` / 1000 | 無ければ `missing` |
 | `cost_usd_list` / `tokens_in` / `tokens_out` | `runs.usage_json` | 無ければ `missing` |
-| `quota_used` / `changed_lines` / `changed_files_n` / `changed_crates_n` / `retries_after` / `repaired` | — | 計測・git 未実装のため `null` ＋ `missing`（下「未実装」参照） |
+| `quota_used` | `quota_estimated` event の最後の `windows[].used_pct`（run_id 一致） | event または値のある窓が無ければ null＋missing |
+| `retries_after` | 同じ subject の後続 worker run 数（task: task_id と work_unit_id NULL、WU: work_unit_id） | started_at が無ければ null＋missing |
+| `repaired` | run 後に同じ task に作られた repair WU の有無 | started_at が無ければ null＋missing |
+| `changed_lines` / `changed_files_n` / `changed_crates_n` | run の `run_write_sets`（WU は行が無い場合 `work_unit_write_sets`）の complete な base..head を task-ops が `git diff --numstat` | binary は 0 行、path は repo:path で重複除去、crate は `crates/<name>/` の異なり数。取得不能なら null＋missing |
 
 ## 記録の時点
 
@@ -122,8 +131,8 @@ brief は `build_task_features`（`crates/task-core/src/route_record.rs`）が L
 - `task_core::route_extract::features_for_subject(store, Subject, as_of, context) -> TaskFeatures`
   - WU / 葉 task の `celeris.task-features/1` snapshot を読む。`Subject { kind: "work_unit"|"task", id }`。`context: Option<RouteFeatureContext>` は dispatch が渡す今回の判断の lane・harness・9 軸（評価 manifest など判断でない呼び出しは `None`）。
   - `as_of: None`（現在の DB）か `Some(AsOf::Timestamp(rfc3339))`（判断時点の timestamp）・`Some(AsOf::EventSeq(n))`（判断時点の event seq）。評価 manifest は元の判断時点の `AsOf` を渡して、将来の情報を混ぜずに作る。
-- `task_core::route_extract::outcome_labels_for_run(store, run_id) -> RouteOutcome`
-  - 1 run の `celeris.route-outcome/1` label。git 操作をしない。計測不能の欄は `null` ＋ `missing`。
+- `task_ops::routing_labels::outcome_labels_for_run(store, run_id, work_unit_id) -> RouteOutcome`（task-core の抽出器は `ChangeCount` を受け取る）
+  - 1 run の `celeris.route-outcome/1` label。git 操作をしない。DB 由来欄は runs／events／work_units、値が得られない欄だけ `null` ＋ `missing`。
 - `task_core::route_record::build_task_features(&FeaturesInput) -> TaskFeatures`
   - 純関数。`FeaturesInput` → 固定 brief ＋ aux ＋ 内容 hash。DB を使わず、評価集合の問題や任意の snapshot に使える。
 - `task_core::route_record::candidates_one_shot(question, &[Candidate]) -> RouteOptions`
@@ -173,7 +182,7 @@ fixture（`route_features`／`route_options`／`route_decisions`／`route_outcom
   },
   "judge": { "deterministic": true, "id": "evidence-policy", "kind": "rule", "version": "routing-policy/1" },
   "outcome": {
-    "labels": { "checks_passed": 3, "checks_total": 3, "cost_usd_list": 0.38, "missing": ["quota_used","changed_lines","changed_files_n","changed_crates_n","retries_after","repaired"], "review_pass": true, "run_status": "completed", "tokens_in": 12000, "tokens_out": 3400, "wall_s": 610.5 },
+    "labels": { "checks_passed": 3, "checks_total": 3, "cost_usd_list": 0.38, "missing": ["changed_lines","changed_files_n","changed_crates_n"], "review_pass": true, "run_status": "completed", "tokens_in": 12000, "tokens_out": 3400, "wall_s": 610.5 },
     "schema": "celeris.route-outcome/1"
   },
   "evidence_version": "evidence/2026-10-11"
@@ -222,14 +231,12 @@ reverify2（2026-10-11、WU reverify2。task subject の `deps_n` 修正後。`C
 
 `deps_n` の task subject 修正の確認: `route_extract_task_uses_task_json_dependencies_and_populates_task_fields`（task の `tasks.json.depends_on` 2 件 → 2）、`route_extract_task_empty_dependencies_are_zero`（空配列 → 0、missing に入らない）、`route_extract_work_unit_dependencies_still_use_work_unit_column`（WU の `depends_on_json` 3 件 → 3）が通ることを上の `route_extract_` 実行で確認した。
 
-## selector へ渡す未実装
+## 残る実装項目
 
-- `route_decisions`・`route_outcomes` の書き手: dispatch は現状 features snapshot の記録（`routing_decided.features`）まで。判断 1 回ごとの `route_decisions` 行、run 終わりの `route_outcomes` 行を書くのは selector / rollout 段（判断 record の書き込みは `selector` leaf、ADR D5・D6）。
-- `route_judgments` の API: 表と store API（`insert_route_judgment` / `route_judgment_get` / `route_judgments_for_hashes`）は作ってあるが、`POST /api/v1/routing/judgments` の HTTP API と判定器（decision model）本体・sidecar・`JudgePolicy` は未実装（ADR D9。この task では表と API の形だけ）。
-- `changed_lines` / `changed_files_n` / `changed_crates_n` / `quota_used` / `retries_after` / `repaired`: label 側は現状 `null` ＋ `missing`。`run_write_sets`／`work_unit_write_sets` の base..head を `git diff --numstat` で数える git 操作と quota 計測は未実装（ADR D3(b)・未解決 3）。
+- D3(b) の6 label はすべて抽出済み。selector 側では run 終端の outcome 記録へ接続する。
 
 ## ADR の未解決 3 点の決着
 
 - **secret 置換の規則をどの既存実装から取るか**: `task-worker` に自由文向けの汎用 token/key redactor は無いため、`task-core::route_record::redact_secrets` に Bearer、`sk-`/`sk_live_`/`ghp_`/`gho_`/`github_pat_`/`xox*` 等の token 形、`api_key=`/`token=`/`secret=`/`password=` の key=value 形を写した。自由文は record 化前にこの関数を通す（task-worker への依存を作らない）。`route_record_secret_replacement_covers_token_and_key_shapes` で固定。
 - **brief の各節の字数上限の具体値**: 目的文は 4,000 字（`OBJECTIVE_MAX_CHARS`、ADR D2 の仮値のまま。超過は先頭・末尾＋省略マーカーで `task-brief/2` に残す）。title / check / 各 list 項目は 1,000 字。評価集合の文の長さ分布を見て要調整なら `task-brief/2` の版を上げる。
-- **`changed_lines` を数える git 操作の置き場所**: 未実装のため未決。現状は `outcome_labels_for_run` が git 操作をせず `null` ＋ `missing` を返す。置き場所（daemon の終了処理か export 時の遅延計算か）と実装は selector / rollout 段で決める。
+- **`changed_lines` を数える git 操作の置き場所**: 決着 — export／label 抽出時の遅延計算を task-ops に置き、task-core には `ChangeCount` の数値だけを渡す。run の complete な `run_write_sets` を読み、WU は該当 run の行が無い場合 `work_unit_write_sets` を使う。各 repo の base..head に `git diff --numstat` を実行し、追加＋削除を合計（binary の `-` は 0）、変更ファイルは repo:path で重複除去、crate は `crates/<name>/` の異なり数とする。行・SHA・repo・git のいずれかが取得不能なら3欄とも null＋missing。`routing_outcome_git_numstat_counts_lines_files_crates` と task-core の値受け渡し試験で固定する。

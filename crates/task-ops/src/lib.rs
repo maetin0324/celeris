@@ -62,6 +62,7 @@ pub mod retry;
 pub mod routing_audit;
 /// Deterministic read-only JSONL export for versioned routing training records (ADR D8).
 pub mod routing_export;
+pub mod routing_labels;
 pub mod routing_outcome;
 pub mod tree;
 pub mod tree_adopt;

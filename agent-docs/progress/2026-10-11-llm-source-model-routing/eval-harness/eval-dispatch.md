@@ -105,3 +105,17 @@ ADR-2026-10-11-llm-source-model-routing-evaluation の付記（2026-10-12）ど�
 - 注記: 同じ実行で `tmp_leftovers: 3` と警告が出た（script が終了時に消した）。失敗ではない。
 
 結論: 最終検査の受け入れ条件（clippy --all-targets・fmt・test-parallel・routing_eval_run がすべて exit 0）を満たした。
+
+## final review 再提出前の再検査（review-recheck, task 01M4Q7C4X2QR3HYPTTQAG5GXQ9）
+
+前回の final review（01M4QP7H2PKVD03WTZ0VFJK07X）は、reviewer が書いた review.json が不正 JSON（文字列中の未エスケープの `"`、line 1 column 721）で無効になっただけだった。決定的 check は全て exit 0、reviewer の判定本文も pass だった。この WU ではコードを変えず、HEAD（`c0cf6b84`）で全 check を流し直した。LLM を呼ぶ評価は走らせていない。
+
+- `cargo fmt --all -- --check`: exit 0（差分なし）
+- `cargo clippy --workspace --all-targets -- -D warnings`: exit 0（`Finished dev profile`、warning・error なし）
+- `mkdir -p /local/x && TMPDIR=/local/x bash scripts/dev/test-parallel.sh`: exit 0。`CELERIS_TEST_SUMMARY`: nextest 172 binaries・doc 11 binaries、passed 5190・failed 0・ignored 14、nextest_exit 0、doctest_exit 0。`test-parallel: ok`。注記として `tests left 1 entries in TMPDIR (removed on exit)` の警告が出た（script が終了時に消した。失敗ではない）。
+- `mkdir -p /local/x && TMPDIR=/local/x cargo test -p celeris --test routing_eval_run`: exit 0。`daemon_runs_two_stub_trials_with_hidden_checks_and_eval_records ... ok`（1 passed, 0 failed）
+- `sh scripts/dev/check-adr-numbers.sh`: `check-adr-numbers: ok (183 files)`、exit 0
+- `sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv`: `check-doc-layout: ok`、exit 0
+- `sh scripts/dev/check-doc-links.sh`: `check-doc-links: ok`、exit 0
+
+結論: 全 check が exit 0。前回の reviewer 失敗は review.json の JSON 形式の問題で、コードの不備ではない。final review を再提出してよい。

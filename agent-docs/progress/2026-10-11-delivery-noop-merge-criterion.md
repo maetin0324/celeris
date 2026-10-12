@@ -1,8 +1,8 @@
 ---
 title: "commit の無い root で取り込み判定を出さず、審査範囲を base..head と明示する"
 tasks: [01M4P84BYNVR2FT0Y7VTN8P8PF]
-status: running
-updated: 2026-10-11
+status: done
+updated: 2026-10-12
 ---
 
 # 取り込む commit が無い root の delivery 見送り（2026-10-11）
@@ -27,10 +27,31 @@ reviewer が「指定SHAの実際の差分」を `4d97d291..ca7025be`（別 task
 - `cargo test -p task-ops --lib -- no_commits merge_criterion delivery_skip existing_reviewer` → 13 passed, 0 failed。
 - `cargo test -p task-ops --lib -- delivery inbox` → 75 passed, 0 failed。
 - `grep -c no_commits docs/api/v1/api-v1.schema.json docs/api/v1/event.schema.json web/api/generated/types.ts web/api/generated/schema.json` → 各 1。
-- `bash scripts/dev/test-parallel.sh` → 5212 run: 5102 passed, 110 failed, 13 skipped。失敗は全て browser/launcher/credentiald（celeris-credentiald・task-worker・task-api・celerisctl）で、sandbox の長い `$TMPDIR`（93 文字）で Unix socket path が `SUN_LEN` を超える（`path must be shorter than SUN_LEN`、fixture readiness timeout）。delivery・inbox の試験に失敗なし。
-- 同 4 package を短い TMPDIR で取り直し: `TMPDIR=$(mktemp -d /tmp/np.XXXX) cargo nextest run -p celeris-credentiald -p task-worker -p task-api -p celerisctl --no-fail-fast` → exit 0、2077 passed, 11 skipped。
-- `cargo clippy --workspace -- -D warnings` → exit 0。
-- `sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv`・`check-doc-links.sh`・`check-adr-numbers.sh` → 全て exit 0。
+### 検証 WU（Run #2、統合後の branch `celeris-wu/01M4P84BYNVR2FT0Y7VTN8P8PF/verify`、HEAD `c470611f`）
+
+- `TMPDIR=/var/tmp bash scripts/dev/test-parallel.sh` → exit 0。`CELERIS_TEST_SUMMARY {"nextest_exit":0,"doctest_exit":0,"passed":5215,"failed":0,"ignored":14,"tmp_leftovers":0,"summary_parsed":true}`（nextest は 5212 run: 5212 passed, 13 skipped、doc-test 10 binary 全 ok）。ログ: `artifacts/test-parallel-8.log`。
+- `cargo clippy --workspace -- -D warnings` → exit 0（`Finished dev profile`）。
+- `sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv` → exit 0（`ok`）。`check-doc-links.sh` → exit 0（`ok`）。`check-adr-numbers.sh` → exit 0（`ok (196 files)`）。
+
+### 再検証（Run #4、HEAD `c470611f`、同じ branch）
+
+- `TMPDIR=/var/tmp bash scripts/dev/test-parallel.sh` 1 回目 → exit 100。`CELERIS_TEST_SUMMARY {"passed":5211,"failed":4,"nextest_exit":100}`。失敗は task-worker `browser::launcher_run::tests::launcher_login` の 4 件（`launcher_authenticate_rejected`、負荷 load average 20〜50 の中で発生）。ログ: `artifacts/test-parallel-run4.log`。
+- 同 6 件を単独で `cargo nextest run -p task-worker -E 'test(launcher_login)'` → exit 0、6 passed。ログ: `artifacts/launcher-login-alone.log`。本 branch は task-worker の browser 経路に触れていない（`ca7025be..HEAD` の変更は task-core・task-ops・schema・進捗のみ）ので、負荷による揺れと判断した。
+- `TMPDIR=/var/tmp bash scripts/dev/test-parallel.sh` 2 回目 → exit 0。`CELERIS_TEST_SUMMARY {"runner":"nextest","binaries":186,"passed":5215,"failed":0,"ignored":14,"nextest_exit":0,"doctest_exit":0,"tmp_leftovers":0,"summary_parsed":true}`（nextest 5212 run: 5212 passed、13 skipped、doc-test 10 binary ok）。ログ: `artifacts/test-parallel-run4b.log`。
+- `cargo clippy --workspace -- -D warnings` → exit 0（`Finished dev profile`）。ログ: `artifacts/clippy-run4.log`。
+- `sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv` → exit 0（`ok`）。`sh scripts/dev/check-doc-links.sh` → exit 0（`ok`）。`sh scripts/dev/check-adr-numbers.sh` → exit 0（`ok (196 files)`）。
+
+### 前回の失敗と原因（試験の期待値は変えていない）
+
+- 既定の `$TMPDIR`（93 文字）のままでは browser 系の試験（celeris-credentiald・task-worker・task-api・celerisctl）が、Unix socket path の `SUN_LEN`（108 byte）超過で fixture readiness timeout になった（上の初回証拠）。
+- `test-parallel.sh` は `$TMPDIR/celeris-test-parallel.XXXXXX/tmp` を入れ子にして試験の `TMPDIR` にするため、socket path は `TMPDIR` を `/run/user/1001`（14 文字）にしても超えた（`browser_e2e` 4 件が 60 秒の readiness timeout）。`TMPDIR` は 9 文字以下が要る。
+- `TMPDIR=/dev/shm` は短いが、db guard 試験が「/dev overlaps the production directory」で Refuse し、`worker_db_guard_*` 2 件と `dispatch_browser_fallback_*` 1 件が落ちた。db guard の判定は正しいので、`/dev` 配下を避ける必要がある。
+- `TMPDIR=/var/tmp` で全試験が通った（上の最終証拠）。`/var/tmp` は 8 文字で socket 条件を満たし、`/dev` 配下でもない。
+- 負荷（load 30〜110）による timing の揺れは、単独実行（`five-alone.log` で 5 件 pass、`nextest-4pkg.log` で 2077 pass）では再現しなかった。
+
+### 検証 WU で得た注意
+
+- 試験の `TMPDIR` は `test-parallel.sh` の入れ子で socket path を長くする。release host 側でも `TMPDIR` が長いと同じ失敗になる。直すなら `test-parallel.sh` の入れ子を短くするか、試験の socket dir を短くする（`scripts/dev/` と試験の変更になるため、本 WU では行わない。提案節を参照）。
 
 ## 本番への移行
 
@@ -38,8 +59,9 @@ reviewer が「指定SHAの実際の差分」を `4d97d291..ca7025be`（別 task
 
 ## 未解決事項
 
-- 全体試験は sandbox の TMPDIR 長で browser 系が落ちる（本変更と無関係）。verify WU では短い TMPDIR で取るか同じ切り分けを記す。
+- `test-parallel.sh` の入れ子 TMPDIR と browser 試験の socket path 長の関係は本変更と無関係。検証は `TMPDIR=/var/tmp` で通した。`/var/tmp` は共有の場所なので、人が release の既定を決めるまでの暫定。
 
 ## 提案
 
-- なし。
+- `scripts/dev/test-parallel.sh` は試験の `TMPDIR` を入れ子にしない（または試験の socket dir を短い固定の場所へ置く）。そうすれば `TMPDIR` の長さに依らず browser 試験が通る。試験と script の変更を伴うので別の task で扱う。
+- 本番 `release` の host でも同じ `TMPDIR` 条件になるかを確かめる（人の判断）。

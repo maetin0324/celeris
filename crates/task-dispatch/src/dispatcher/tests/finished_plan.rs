@@ -145,7 +145,6 @@ async fn empty_replan_after_review_fail_goes_to_final_review() {
 
     let adapter = Arc::new(EmptyReplanAdapter::new(flag.clone(), 1));
     let mut d = dispatcher(store.clone(), adapter.clone(), 1);
-    d.config.execution.planner.adapter = "instant".to_string();
     d.config.execution.max_replans = 1;
     d.config.retry_backoff_base = Duration::ZERO;
     d.config.retry_backoff_max = Duration::ZERO;
@@ -226,7 +225,6 @@ async fn a_plan_with_no_work_left_proceeds_to_review_without_a_run() {
 
         let adapter = Arc::new(EmptyReplanAdapter::new(dir.path().join("unused"), 1));
         let mut d = dispatcher(store.clone(), adapter.clone(), 1);
-        d.config.execution.planner.adapter = "instant".to_string();
         let report = run_until_idle(&mut d, 50).await;
         assert!(report.idle, "{report:?}");
 
@@ -289,7 +287,6 @@ async fn a_stalled_non_tree_plan_is_detected() {
 
     let adapter = Arc::new(EmptyReplanAdapter::new(dir.path().join("unused"), 1));
     let mut d = dispatcher(store.clone(), adapter.clone(), 1);
-    d.config.execution.planner.adapter = "instant".to_string();
     d.config.execution.max_replans = 0;
     assert!(!d.config.execution.limits.tree.enabled);
     let t0 = OffsetDateTime::now_utc() + time::Duration::minutes(5);

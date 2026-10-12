@@ -209,7 +209,6 @@ impl Config {
                 no_progress_limit: self.execution.no_progress_limit,
                 gate: task_core::GateMode::parse(&self.execution.gate).unwrap_or_default(),
                 planner: task_core::PlannerConfig {
-                    adapter: self.execution.planner.adapter.clone(),
                     permission_mode: self.execution.planner.permission_mode.clone(),
                     tier: self.execution.planner.tier,
                     max_turns: self.execution.planner.max_turns,

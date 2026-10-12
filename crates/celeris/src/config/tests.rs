@@ -15,6 +15,31 @@ fn legacy_providers_rejected_with_new_config_guidance() {
 }
 
 #[test]
+fn planner_adapter_is_rejected_with_candidate_guidance() {
+    for legacy in [
+        "[execution.planner]\nadapter = 'claude-code'\n",
+        "[execution.planner]\nadapter = 'codex'\nmax_turns = 10\n",
+    ] {
+        let err = Config::parse_with_delivery(legacy).unwrap_err().to_string();
+        assert!(
+            err.contains("[execution.planner] adapter"),
+            "{legacy}: {err}"
+        );
+        assert!(
+            err.contains("[harness_selection.execution_class_defaults]"),
+            "{legacy}: {err}"
+        );
+    }
+}
+
+#[test]
+fn planner_without_adapter_keeps_its_budget_and_permission_settings() {
+    let cfg = Config::parse_with_delivery("[execution.planner]\nmax_turns = 10\n").unwrap();
+    assert_eq!(cfg.execution.planner.max_turns, 10);
+    assert_eq!(cfg.execution.planner.permission_mode, "bypassPermissions");
+}
+
+#[test]
 fn browser_settings_default_to_unconfigured_and_site_policy_validates() {
     let cfg: Config = toml::from_str("").unwrap();
     assert!(cfg.browser.egress.resolver.is_none());

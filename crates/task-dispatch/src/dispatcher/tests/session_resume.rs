@@ -602,7 +602,6 @@ async fn session_resume_fresh_session_for_planner_and_independent_work_unit() {
     ));
     let mut d = claude_dispatcher(&store, adapter.clone());
     d.config.execution.gate = task_core::GateMode::On;
-    d.config.execution.planner.adapter = "claude-code".to_string();
     let report = run_until_idle(&mut d, 400).await;
     assert!(report.idle, "{report:?}");
     assert_eq!(store.get(task_id).unwrap().unwrap().status, Status::Done);
@@ -908,7 +907,6 @@ async fn session_resume_reviewer_stays_fresh() {
     ));
     let mut d = claude_dispatcher(&store, adapter.clone());
     d.config.execution.gate = task_core::GateMode::On;
-    d.config.execution.planner.adapter = "claude-code".to_string();
     let report = run_until_idle(&mut d, 400).await;
     assert!(report.idle, "{report:?}");
     assert_eq!(store.get(task_id).unwrap().unwrap().status, Status::Done);

@@ -422,6 +422,18 @@ impl Config {
                 "legacy provider configuration is no longer supported; declare [llm_sources.<id>] and [harnesses.<id>] and select routes with [route_defaults.<harness>]".into(),
             ));
         }
+        // 計画 run の harness は固定の adapter 欄ではなく、execution class の候補で決める。
+        if table
+            .get("execution")
+            .and_then(|v| v.as_table())
+            .and_then(|t| t.get("planner"))
+            .and_then(|v| v.as_table())
+            .is_some_and(|t| t.contains_key("adapter"))
+        {
+            return Err(ConfigError::Invalid(
+                "[execution.planner] adapter is no longer supported; planner runs pick a harness from the candidates in [harness_selection.execution_class_defaults], e.g. planner = [\"claude_code\", \"codex\"] (remove the adapter line)".into(),
+            ));
+        }
         let harnesses_value = table.remove("harnesses");
         let harness_declarations = harnesses_value
             .as_ref()

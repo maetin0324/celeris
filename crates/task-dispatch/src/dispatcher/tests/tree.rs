@@ -136,7 +136,6 @@ pub(super) fn tree_dispatcher(
 ) -> Dispatcher {
     let mut d = dispatcher(store.clone(), adapter, 3);
     d.config.execution.gate = task_core::GateMode::On;
-    d.config.execution.planner.adapter = "instant".to_string();
     d.config.execution.limits = tree_limits();
     d
 }

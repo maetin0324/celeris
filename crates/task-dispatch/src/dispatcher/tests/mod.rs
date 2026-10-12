@@ -174,6 +174,7 @@ fn dispatcher_with_adapter_id(
             scratch: task_worker::scratch::ScratchSettings::disabled(),
             workspace_prune_after_secs: 0,
             execution: ExecutionConfig::default(),
+            eval: crate::capacity::EvalRuntimeConfig::default(),
         },
     );
     #[cfg(test)]
@@ -1390,6 +1391,7 @@ fn pool_dispatcher_with_requeues(
             scratch: task_worker::scratch::ScratchSettings::disabled(),
             workspace_prune_after_secs: 0,
             execution: ExecutionConfig::default(),
+            eval: crate::capacity::EvalRuntimeConfig::default(),
         },
     )
 }

@@ -144,6 +144,7 @@ fn cluster_config(clusters: Vec<celeris::config::ClusterConfig>) -> Config {
         mcp: Default::default(),
         source_path: None,
         execution: Default::default(),
+        routing_eval: Default::default(),
     }
 }
 

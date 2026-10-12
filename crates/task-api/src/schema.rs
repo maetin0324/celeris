@@ -292,6 +292,13 @@ pub struct ApiV1Schema {
     pub cron_job_list: crate::cron_jobs::CronJobList,
     pub cron_job_run_list: crate::cron_jobs::CronJobRunList,
     pub cron_run_result: crate::cron_jobs::CronRunResult,
+    /// ADR 2026-10-11-llm-source-model-routing-evaluation 付記 2026-10-12（eval-dispatch 契約 2）:
+    /// 評価 run の試行（`POST`/`GET /routing-eval/trials`、`POST /routing-eval/trials/{id}/cancel`）。
+    /// `check_cmd` と `objective` は応答の型に無い（採点専用・worker 専用）。
+    pub eval_trials_create: crate::routing_eval::EvalTrialsCreateBody,
+    pub eval_trials_created: crate::routing_eval::EvalTrialsCreated,
+    pub eval_trial: crate::routing_eval::EvalTrialView,
+    pub eval_trial_list: crate::routing_eval::EvalTrialList,
     // ---- ADR 2026-10-05-cos-chat-home D2: CoS チャット（スレッド・メッセージ・run・添付・SSE） ----
     pub chat_thread: ChatThread,
     pub chat_message: ChatMessage,

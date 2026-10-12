@@ -47,6 +47,8 @@ Live View の grant/check/read は owner attestation を入力するため除外
 
 | method | path | 理由コード | 理由 |
 |---|---|---|---|
+| POST | `/routing-eval/trials` | `evaluation_dispatch` | 評価試行の投入は評価 dispatcher 専用の運用操作。 |
+| POST | `/routing-eval/trials/{trial_id}/cancel` | `evaluation_dispatch` | 評価試行の取消は評価 dispatcher 専用の運用操作。 |
 | DELETE | `/accounts/{id}/login` | `secret_operations` | 人の決定 secrets=exclude。秘密値を扱う系列を全て除外（取消・削除も含む）。 |
 | POST | `/accounts/{id}/login` | `secret_operations` | 人の決定 secrets=exclude。秘密値を扱う系列を全て除外（取消・削除も含む）。 |
 | POST | `/accounts/{id}/login/code` | `secret_operations` | 人の決定 secrets=exclude。秘密値を扱う系列を全て除外（取消・削除も含む）。 |
@@ -99,13 +101,13 @@ checkpoint・resolve は本来の CoS 制御 API として直接使う。人の 
 POST / PUT / PATCH / DELETE を method/path ごとに数えた。`put_route` 別名と browser control の BASE/format! を展開し、
 `{a}`/`{id}` 等の引数名の差は同じ route として照合した。query（docs/page の path/etag 等）は
 route key に含めず、共有処理の既存検査へ渡す。GET はこの変更表に含めない。
-**142 行、router と文書で共通 128 行、router のみ 14 行、文書のみ 0 行**。
+**144 行、router と文書で共通 128 行、router のみ 16 行、文書のみ 0 行**。
 文書にない route も落とさない（cron、notifications、inbox answer、role assignment、site policy 等）。
 実在しない project/milestone DELETE を人の回答の例示から新設しない。
 
 A は監査付き許可、R は書込みをしない POST だが method の網羅性のため監査付き許可、X は D2 の理由付き除外。
 foundation は A/R の既存登録を ALLOWED に、未実装行を PENDING に、X を EXCLUDED に置く。
-verify では PENDING を消し、全 142 行が ALLOWED/EXCLUDED の一方だけに入ることを検査する。
+verify では PENDING を消し、全 144 行が ALLOWED/EXCLUDED の一方だけに入ることを検査する。
 R の操作では領域 write は不要だが operation・event・card は同一 transaction に記録する。
 今後の route 追加では同時にこの範囲契約と registry・ctl・skill を更新する。
 
@@ -115,7 +117,7 @@ R の操作では領域 write は不要だが operation・event・card は同一
 | decisions | ops-decisions | decision・approval・inbox・knowledge・notifications | 11 | 11 | 0 |
 | projects | ops-projects | project・milestone・旧 project plan・project docs・reports・standing rules | 23 | 15 | 8 |
 | admin | ops-admin | provider・account・cluster・secret・org 設定・repo・skill・LLM・cron・release・daemon | 45 | 37 | 8 |
-| surface | ops-surface | chat・添付・成果物ページ昇格・org messages・console・browser・cos の再帰除外 | 41 | 22 | 19 |
+| surface | ops-surface | chat・添付・成果物ページ昇格・org messages・console・browser・cos の再帰除外・評価 dispatcher | 43 | 22 | 21 |
 
 領域は route の先頭だけで決めない。`projects/.../repos` は admin、`org/.../messages` は surface、
 `org/.../browser-settings` は admin、task 下の browser と artifacts/promote は surface、project docs は projects。
@@ -249,6 +251,8 @@ R の操作では領域 write は不要だが operation・event・card は同一
 
 | method | path | 判定 | 根拠となる router module | API 表 |
 |---|---|---|---|---|
+| POST | `/routing-eval/trials` | X: `evaluation_dispatch` | `routing_eval.rs` | router のみ |
+| POST | `/routing-eval/trials/{trial_id}/cancel` | X: `evaluation_dispatch` | `routing_eval.rs` | router のみ |
 | POST | `/browser/identities` | X: `browser_credential_attestation` | `browser_identity.rs` | 共通 |
 | DELETE | `/browser/identities/{id}` | X: `browser_credential_attestation` | `browser_identity.rs` | 共通 |
 | DELETE | `/browser/credentials/{id}` | X: `browser_credential_attestation` | `browser_credentials.rs` | 共通 |

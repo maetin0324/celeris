@@ -93,3 +93,15 @@ ADR-2026-10-11-llm-source-model-routing-evaluation の付記（2026-10-12）ど�
 - 試験の TMPDIR の注意（`test-parallel.sh` 経由では TMPDIR を `/local/x` 程度まで短くする）を、`agent-docs/guides/testing.md` に 1 行足す。
 - 締めの check の TMPDIR を `/local/x/edc` から `/local/x` に直す（path 長の上限は 108 byte。`/local/x/edc` は 5 byte 超える）。または `test-parallel.sh` の一時 dir の入れ子を 1 段減らす。どちらにするかは計画側で決める。
 - `browser_e2e` は control.sock の path が上限を超えると黙って serve が戻り、60 s の待ちで落ちる。path 長を試験の前段で検査してエラーにすると、原因が次から分かる（小さな WU）。
+
+## 最終検査（lint-verify, task 01M4Q7C4X2QR3HYPTTQAG5GXQ9）
+
+前回の失敗（`items_after_test_module`・`bool_assert_comparison` の 2 件）は、operator の commit `ca19c8ed` で直っていることを `git log` と `git diff` で確かめた。この WU では code を変えず、検査だけを流した。
+
+- `cargo fmt --all -- --check`: exit 0（差分なし）
+- `cargo clippy --workspace --all-targets -- -D warnings`: exit 0（`error` 0 件、`Finished` を確認）
+- `mkdir -p /local/x && TMPDIR=/local/x cargo test -p celeris --test routing_eval_run`: exit 0。`daemon_runs_two_stub_trials_with_hidden_checks_and_eval_records ... ok`（1 passed, 0 failed）
+- `mkdir -p /local/x && TMPDIR=/local/x bash scripts/dev/test-parallel.sh`: exit 0。`CELERIS_TEST_SUMMARY`: nextest 172 binaries・doc 11 binaries、passed 5190・failed 0・ignored 14、nextest_exit 0、doctest_exit 0。`test-parallel: ok`。
+- 注記: 同じ実行で `tmp_leftovers: 3` と警告が出た（script が終了時に消した）。失敗ではない。
+
+結論: 最終検査の受け入れ条件（clippy --all-targets・fmt・test-parallel・routing_eval_run がすべて exit 0）を満たした。

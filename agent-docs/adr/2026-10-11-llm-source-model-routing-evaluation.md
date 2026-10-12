@@ -212,6 +212,12 @@ D1 の評価 run を Celeris の run 経路で起こす受け口の形を固定�
    harness_id, repo, base_commit, objective, check:{cmd, timeout_secs}}]}` → 201 `{batch_id, trials:[{trial_id, problem_id, trial_no, status}]}`。
    空 trials・catalog に無い source/model/harness・repo 不在は 400）、`GET /api/v1/routing-eval/trials?batch_id=&status=`（check_cmd は返さない）、
    `POST /api/v1/routing-eval/trials/{trial_id}/cancel`（200 / 409）。認可は既存の書き込み API と同じ。
+   実装（`crates/task-api/src/routing_eval.rs`、2026-10-12 trial-api）の細目: 400 は code `eval_trial_invalid`（`detail` に全理由を `; ` 区切りで並べる）で、
+   空 trials・256 件超・空欄（manifest_sha / problem_id / base_commit / objective / check.cmd）・未知の source/model/harness・repo のディレクトリ不在・
+   `timeout_secs` が 0 または 86400 超・同じ batch 内の重複試行。id の照合先は daemon の設定（`[[providers]]` の adapter・model・lane 束縛・解決した LLM source）・
+   routing catalog・`[[genres]]`＋組み込み harness で、source は `-`/`_` と大文字小文字を区別しない（`claude-oauth` = `claude_oauth`）。
+   照合先が空の欄（最小構成の daemon）は検査しない。cancel の 409 は `eval_trial_not_cancellable`、無い id は 404 `eval_trial_not_found`。
+   `check.timeout_secs` の既定は 900。GET・cancel の応答の型（`EvalTrialView`）には `check_cmd` だけでなく `objective` の欄も無い（`docs/api/v1/gui-api.md` §3.133）。
 3. **評価予約枠**: config `[routing_eval] reserved_runs = <n>`（既定 0 = 評価 run を起こさない）。評価 run は本番の全体並列度に数えず、
    専用枠の中だけで走り、tick では本番の dispatch の後に配る。account の同時実行と quota 上限は本番と同じ判定に従う。
    純関数 `eval_admission(reserved_runs, eval_in_flight, account_in_use, account_limit, quota_ok) -> Result<(), EvalDefer>`

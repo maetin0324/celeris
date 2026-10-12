@@ -513,6 +513,9 @@ listen = "127.0.0.1:7710"      # これを書いたときだけ API が動く（
 | 214 | DELETE | `/browser/trusted-devices/{id}` | 信頼端末を失効させる（actor 付き event。§3.131.4）（**管理系** + header の assertion） | `TrustedDeviceRevokeResult` | store `trusted_device_revoke` |
 | 215 | GET | `/chat/threads/{t}/runs` | run 一覧（`before` / `limit`）と usage telemetry | `ChatRunListResponse` | `crate::chat` |
 | 216 | PATCH | `/accounts/{adapter}/{id}` | アカウント（暗黙アカウントを含む）の上限 `max_runs` を設定・解除する（§3.29a）（**管理系**） | `AccountView` | celeris（`AdminRequest::AccountLimitSet`） |
+| 217 | POST | `/routing-eval/trials` | 評価 run の試行をまとめて投入する（1 回の POST = 1 batch。同じ試行の再投入は既存行を返す＝冪等。§3.133.1） | 201 `EvalTrialsCreated` | store `insert_eval_trials` |
+| 218 | GET | `/routing-eval/trials` | 評価試行の一覧（`?batch_id=` / `?status=`。`check_cmd` は返さない。§3.133.2） | `EvalTrialList` | store `eval_trials_list` |
+| 219 | POST | `/routing-eval/trials/{trial_id}/cancel` | 評価試行の取り消し（`queued` / `running` だけ。終端は 409。§3.133.3） | `EvalTrialView` | store `eval_trial_cancel` |
 
 browser の制御（`crate::browser_control`）の 6 本は、route を定数 `BASE`（`/api/v1/tasks/{id}/browser/control/{run}/{session}`）と `format!` で組み立てて登録している（`browser_control.rs` の `routes()`）。詳細は `docs/guides/browser-capability.md`。
 
@@ -3728,6 +3731,44 @@ browser wait が参照していれば 409 `site_policy_in_use`（`node_ids`・`w
   から）。`false` は外す。`allowed_actions` の任意編集は開けない。使用は毎回人の承認のまま（`BrowserAction::ALWAYS_APPROVED`）。
 - `credential_policy_ids` の各 id が `browser_site_policies` に無ければ 422 `unknown_site_policy`（`policy_ids`）。
 - 変化は従来どおり `org_browser_events` の before/after（`allowed_actions` を含む）に残る。
+
+### 3.133 評価 run の試行（ADR 2026-10-11-llm-source-model-routing-evaluation 付記 2026-10-12「評価 run の受け口（eval-dispatch）」）
+
+評価 run 1 試行 = harness 固定・source×model 固定・新 session・新 worktree の run 1 本。行の正本は `eval_trials`（migration 0072）。
+この API は行を投入・観測・取り消すだけで、run は dispatcher の `eval_trials` 段が起こす（評価予約枠 `[routing_eval] reserved_runs` の中だけ）。
+採点用の `check_cmd` は worker にも API の利用者にも見せない: 応答の型（`EvalTrialView`・`EvalTrialSummary`）に欄が無い。
+書き込み（POST）は他の書き込み API と同じ認証（daemon token を設定していれば bearer 必須）。
+
+#### 3.133.1 `POST /routing-eval/trials` → 201 `EvalTrialsCreated`
+
+本文 `EvalTrialsCreateBody` `{manifest_sha, trials[]}`（`deny_unknown_fields`）。`trials[]` は
+`{problem_id, trial_no, source_id, model_id, harness_id, repo, base_commit, objective, check: {cmd, timeout_secs?}}`
+（`timeout_secs` の既定は 900、上限 86400）。応答は `{batch_id, trials: [{trial_id, problem_id, trial_no, status}]}`。
+
+- **冪等**: `(manifest_sha, problem_id, trial_no, source_id, model_id, harness_id)` が既にある試行は行を作らず既存行を返す
+  （`batch_id` も既存のまま。再送で二重に評価しない）。
+- 400 `eval_trial_invalid`（`detail` に全ての理由を `; ` 区切りで並べる）: 空の `trials`・256 件超・空欄
+  （`manifest_sha` / `problem_id` / `base_commit` / `objective` / `check.cmd`）・daemon が知らない
+  `source_id` / `model_id` / `harness_id`・`repo` のディレクトリが無い・`timeout_secs` が 0 または上限超・同じ batch 内の重複試行。
+  id の照合先は daemon の設定（`[[providers]]` の adapter・model・lane 束縛・解決した LLM source）・routing catalog
+  （`GET /llm/routing/catalog` と同じ snapshot）・`[[genres]]`＋組み込み harness。source は `-`/`_` と大文字小文字を区別しない
+  （`claude-oauth` = `claude_oauth`）。照合先が空の欄（最小構成の daemon）はその欄を検査しない。
+- 400 `bad_request`: JSON の構文誤り・未知欄・型違い・query を付けた。
+
+#### 3.133.2 `GET /routing-eval/trials` → 200 `EvalTrialList`
+
+`{trials: [EvalTrialView]}`（投入順）。query は `batch_id` と `status`（`queued|running|scoring|passed|failed|error|cancelled`）だけ。
+`EvalTrialView` は `trial_id`・`batch_id`・`manifest_sha`・`problem_id`・`trial_no`・`source_id`・`model_id`・`harness_id`・
+`harness_version`・`repo`・`base_commit`・`check_timeout_secs`・`status`・`run_id`・`decision_id`・`worktree_path`・`check_exit`・
+`timed_out`・`error`・`created_at`・`started_at`・`finished_at`。`check_cmd` と `objective` は返さない。
+未知の `status` は 400 `eval_trial_invalid`、未知の query は 400 `bad_request`。
+
+#### 3.133.3 `POST /routing-eval/trials/{trial_id}/cancel` → 200 `EvalTrialView`
+
+`queued` / `running` の試行を `cancelled` にする（`finished_at` を書く）。応答は取り消した行。
+`running` の run 自体を止めるのは dispatcher 側（この端点は行の状態だけを変える）。
+`scoring`・終端（`passed` / `failed` / `error` / `cancelled`）は 409 `eval_trial_not_cancellable`、無い id は 404 `eval_trial_not_found`。
+本文は取らない（空か `{}`）。
 
 ---
 

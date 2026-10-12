@@ -211,6 +211,9 @@ pub(crate) fn router(state: ApiState) -> Router {
         // ADR-0053 D4（Phase 65）: LLM source の観測。実装は `crate::llm_sources`。
         .merge(crate::llm_sources::routes())
         .merge(crate::routing_catalog::routes())
+        // ADR 2026-10-11-llm-source-model-routing-evaluation 付記 2026-10-12（eval-dispatch 契約 2）:
+        // 評価 run の試行の投入・一覧・取消。実装は `crate::routing_eval`。
+        .merge(crate::routing_eval::routes())
         // ADR 2026-10-06 D5: モデル catalog。実装は `crate::model_catalog`。
         .merge(crate::model_catalog::routes())
         .merge(crate::model_assignments::routes())

@@ -2064,6 +2064,10 @@ export interface ApiV1Schema {
   doc_page_result: DocPageResult;
   docs_init: DocsInitResult;
   docs_tree: DocsTree;
+  eval_trial: EvalTrialView;
+  eval_trial_list: EvalTrialList;
+  eval_trials_create: EvalTrialsCreateBody;
+  eval_trials_created: EvalTrialsCreated;
   events_page: EventsPage;
   execution_decompose: DecomposeRequest;
   execution_decompose_result: DecomposeResult;
@@ -5395,6 +5399,127 @@ export interface DocItem {
   updated_at?: string | null;
 }
 /**
+ * `eval_trials` 1 行の利用者向け view。`check_cmd`（採点専用）と `objective`（worker 専用）は含めない。
+ */
+export interface EvalTrialView {
+  base_commit: string;
+  batch_id: string;
+  check_exit?: number | null;
+  check_timeout_secs: number;
+  created_at: string;
+  decision_id?: string | null;
+  error?: string | null;
+  finished_at?: string | null;
+  harness_id: string;
+  /**
+   * 起動時に埋まる（`--version` の生出力）。まだなら `null`。
+   */
+  harness_version?: string | null;
+  manifest_sha: string;
+  model_id: string;
+  problem_id: string;
+  repo: string;
+  run_id?: string | null;
+  source_id: string;
+  started_at?: string | null;
+  status: string;
+  timed_out: boolean;
+  trial_id: string;
+  trial_no: number;
+  worktree_path?: string | null;
+}
+/**
+ * `GET /routing-eval/trials` の応答。
+ */
+export interface EvalTrialList {
+  trials: EvalTrialView[];
+}
+/**
+ * ADR 2026-10-11-llm-source-model-routing-evaluation 付記 2026-10-12（eval-dispatch 契約 2）:
+ * 評価 run の試行（`POST`/`GET /routing-eval/trials`、`POST /routing-eval/trials/{id}/cancel`）。
+ * `check_cmd` と `objective` は応答の型に無い（採点専用・worker 専用）。
+ */
+export interface EvalTrialsCreateBody {
+  /**
+   * 凍結した manifest の sha256。
+   */
+  manifest_sha: string;
+  trials: EvalTrialCreateItem[];
+}
+/**
+ * `POST /routing-eval/trials` の 1 試行。
+ */
+export interface EvalTrialCreateItem {
+  /**
+   * worktree の detach 先 commit。
+   */
+  base_commit: string;
+  check: EvalTrialCheckBody;
+  /**
+   * harness（例 `claude-code`）。この harness で固定して起こす。
+   */
+  harness_id: string;
+  /**
+   * model（例 `claude-opus-5-5`）。
+   */
+  model_id: string;
+  /**
+   * worker に見せる本文（acceptance の command は含めない）。
+   */
+  objective: string;
+  /**
+   * manifest の問題 id（`celeris.routing-eval-manifest/1`）。
+   */
+  problem_id: string;
+  /**
+   * worktree を作る元の repo（daemon から見える path）。無ければ 400。
+   */
+  repo: string;
+  /**
+   * LLM source（例 `claude-oauth`）。daemon の catalog に無ければ 400。
+   */
+  source_id: string;
+  /**
+   * 同じ問題の何回目か（1 始まり。candidates の `k`）。
+   */
+  trial_no: number;
+}
+/**
+ * 採点用の check（`check_cmd` は worker に渡さない。応答にも出さない）。
+ */
+export interface EvalTrialCheckBody {
+  /**
+   * 採点側が worktree で `sh -c` する command。
+   */
+  cmd: string;
+  /**
+   * 省略時は `DEFAULT_CHECK_TIMEOUT_SECS`。
+   */
+  timeout_secs?: number;
+}
+/**
+ * `POST /routing-eval/trials` の応答。
+ */
+export interface EvalTrialsCreated {
+  /**
+   * この batch の id。既存の試行が混ざる再投入では、最初の試行が属する batch を返す。
+   */
+  batch_id: string;
+  trials: EvalTrialSummary[];
+}
+/**
+ * 投入の応答の 1 試行（`check` は返さない）。
+ */
+export interface EvalTrialSummary {
+  problem_id: string;
+  /**
+   * `queued` など（`task_core::routing_eval_trial::EvalTrialStatus` の文字列）。
+   */
+  status: string;
+  trial_id: string;
+  trial_no: number;
+}
+/**
  * `GET /tasks/{id}/events`、`GET /events`。
  */
 export interface EventsPage {
@@ -5888,6 +6013,10 @@ export interface RoutingRecord {
    */
   escalation?: EscalationAudit | null;
   /**
+   * ADR 2026-10-11 D6: immutable task feature snapshot reference (older events omit it).
+   */
+  features?: RouteFeaturesRef | null;
+  /**
    * Harness 層: ハーネス id（`Task.genre`）。
    */
   harness?: string | null;
@@ -6004,6 +6133,14 @@ export interface EscalationAudit {
   reason: string;
   requested_lane: Tier;
   selected_lane: Tier;
+}
+/**
+ * Content-addressed reference to a stored task feature snapshot.
+ */
+export interface RouteFeaturesRef {
+  hash: string;
+  schema: string;
+  template: string;
 }
 export interface RoutingTraceV1 {
   /**

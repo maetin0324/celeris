@@ -27,9 +27,10 @@ HEAD `a3c63b8a`、作業ツリーは本 unit の docs 変更のみ。
 
 - `bash scripts/dev/test-parallel.sh`（TMPDIR を短くした。下の注）
   - 最終 run: `TMPDIR=/local/x` で exit 0。`CELERIS_TEST_SUMMARY`: `passed 4900, failed 0, ignored 14, nextest_exit 0, doctest_exit 0, summary_parsed true`。ログは `artifacts/closeout2-test-parallel.log`。
-- `cargo clippy --workspace -- -D warnings`: exit 0（`Finished`、警告 0）。`--all-targets` 付きも exit 0。
+  - 再実行（closeout2 の同じ検査を 1 回やり直し、HEAD `64541a80`、crates/ 差分ゼロ）: `TMPDIR=/local/x bash scripts/dev/test-parallel.sh` exit 0、`passed 4900, failed 0, ignored 14, nextest_exit 0, doctest_exit 0`。ログは `artifacts/closeout2-test-parallel-rerun.log`。
+- `cargo clippy --workspace -- -D warnings`: exit 0（`Finished`、警告 0）。`--all-targets` 付きも exit 0。再実行も exit 0（ログ `artifacts/closeout2-clippy-rerun.log`）。
 - `schema_matches`（`task-core`・`task-api`・`task-worker`）は test-parallel の中で通った。
-- 残存名検査: `ProviderConfig|SourceOrigin|tier_models|ProviderSpec|LocalProviderSpec|provider_select|in_use_cos|ProviderView` は `crates/` の `.rs` に 0 件。`worker_hint.adapter` と `/api/v1/providers` も 0 件。
+- 残存名検査（`grep -rn --include=*.rs -F`、`crates/` 内）: `ProviderConfig|SourceOrigin|ProviderSpec|LocalProviderSpec|provider_select|in_use_cos|ProviderView` は 0 件。`worker_hint.adapter` と `/api/v1/providers` も 0 件。`tier_models` は 8 件で、すべて task-worker の `with_tier_models`（`adapter.rs`・`browser_specialist.rs`・`tiered.rs`）。config の `tier_models` 欄は消えている。worker 側の `with_tier_models` は未撤去（下の未解決）。
 - 試験名の存在: `legacy_providers_rejected_`（1）・`config_examples_load`（1）・`migration_harness_`（2）・`account_limits_source_`（3）・`harness_select_`（5）・`route_select_`（20）。
 
 ### TMPDIR の注（環境起因）
@@ -49,6 +50,7 @@ HEAD `a3c63b8a`、作業ツリーは本 unit の docs 変更のみ。
 
 ## 未解決
 
+- task-worker の `with_tier_models`（`crates/task-worker/src/tiered.rs`・`adapter.rs`・`browser_specialist.rs`、試験 `with_tier_models_replaces_only_the_bindings` を含む）は tier 別 model の差し替えで、ADR の撤去対象（legacy tier の焼き付け）に当たるかをまだ確かめていない。closeout は crates/ を変えない方針のため未撤去。次段で、tier を worker の model 選択から外せるかを決める。
 - 旧い comment 4 か所（動作は無い）: `crates/task-api/src/admin.rs` 1 行目・13 行目の `providers.d/`、`crates/task-api/tests/common/mod.rs` 47 行目、`crates/task-api/src/cos/operations.rs` 88 行目。`config/mod.rs` と `config/tests.rs` の `providers.d` は読み込み拒否の判定と拒否試験なので残す。
 - web の生成型と画面に旧型が残る: `web/api/generated/types.ts`・`web/api/generated/schema.json` に `ProviderView`・`ResolvedLlmSource` が残り、`web/features/ops/providers-*.ts(x)` と `gui/app/routes/providers.tsx`・`accounts.tsx`・`gui/app/celeris/types.ts` が旧型を使う。`web/` と `gui/` は本 unit の範囲外。画面は ui-v2、生成型の再生成は api-v2 で行う。
 - README と `gui/docs/DESIGN.md` に旧い provider の記述が残る可能性がある（未確認）。

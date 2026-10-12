@@ -845,6 +845,11 @@ pub trait TaskStore:
         run_id: &str,
         selection: &crate::llm_route::RunSelection,
     ) -> Result<bool, StoreError>;
+    /// Persisted complete route selections for a task, keyed by run id. Legacy partial rows are omitted.
+    fn run_selections_for_task(
+        &self,
+        task_id: TaskId,
+    ) -> Result<std::collections::HashMap<String, crate::llm_route::RunSelection>, StoreError>;
     /// D5: run 終了時に `runs` の行を更新する。無ければ `Ok(false)`。
     #[allow(clippy::too_many_arguments)]
     fn run_index_finish(

@@ -720,6 +720,8 @@ pub struct RunSummary {
     /// プールのアカウント（ADR-0024 D4 / ADR-0025）。`WorkerStarted.account` がある run だけ。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub account: Option<String>,
+    /// Persisted routing decision for this run; event provider/adapter values are not used to infer it.
+    pub selection: RunSelectionView,
     pub started_at: String,
     pub finished_at: Option<String>,
     pub outcome: Option<RunOutcomeKind>,
@@ -740,6 +742,19 @@ pub struct RunSummary {
     pub reviewer_deferrals: u32,
     /// `runs/<run_id>/` のファイルの有無。task-ops は `None` を入れ、task-api が埋める。
     pub files: Option<RunFiles>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum RunSelectionView {
+    Selected {
+        harness_id: String,
+        source_id: String,
+        model_id: String,
+        account_id: String,
+        basis: serde_json::Value,
+    },
+    LegacyUnresolved,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
@@ -1050,6 +1065,7 @@ pub fn runs(rows: &[EventRow]) -> Vec<RunSummary> {
                     model: model.clone(),
                     provider: provider.clone(),
                     account: account.clone(),
+                    selection: RunSelectionView::LegacyUnresolved,
                     started_at: row.ts.clone(),
                     finished_at: None,
                     outcome: None,
@@ -1108,6 +1124,29 @@ pub fn runs(rows: &[EventRow]) -> Vec<RunSummary> {
         .collect();
     out.sort_by(|a, b| a.started_at.cmp(&b.started_at));
     out
+}
+
+/// Fill selection from the runs index after event-based summaries have been assembled.
+pub fn run_selections(
+    store: &dyn TaskStore,
+    task_id: TaskId,
+) -> Result<HashMap<String, RunSelectionView>, OpsError> {
+    Ok(store
+        .run_selections_for_task(task_id)?
+        .into_iter()
+        .map(|(run_id, selection)| {
+            (
+                run_id,
+                RunSelectionView::Selected {
+                    harness_id: selection.harness.to_string(),
+                    source_id: selection.source.to_string(),
+                    model_id: selection.model.to_string(),
+                    account_id: selection.account.to_string(),
+                    basis: selection.metadata,
+                },
+            )
+        })
+        .collect())
 }
 
 /// ADR-0072 D20（Phase E5）: `run_id` → WorkUnit の `key`。`work_units`/`runs` の派生索引から
@@ -1395,8 +1434,12 @@ pub fn task_detail(
 
     let mut run_summaries = runs(&rows);
     let wu_keys_by_run = run_work_unit_keys(store, id)?;
+    let selections = run_selections(store, id)?;
     for r in &mut run_summaries {
         r.work_unit = wu_keys_by_run.get(&r.run_id).cloned();
+        if let Some(selection) = selections.get(&r.run_id) {
+            r.selection = selection.clone();
+        }
     }
     let timers_view = timers(&task, &rows, ctx, now);
     let prior_review = derive::prior_review_from_events(&events);

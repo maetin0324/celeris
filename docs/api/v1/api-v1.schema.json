@@ -24889,6 +24889,52 @@
       ],
       "type": "object"
     },
+    "RunSelectionView": {
+      "oneOf": [
+        {
+          "properties": {
+            "account_id": {
+              "type": "string"
+            },
+            "basis": true,
+            "harness_id": {
+              "type": "string"
+            },
+            "model_id": {
+              "type": "string"
+            },
+            "source_id": {
+              "type": "string"
+            },
+            "status": {
+              "const": "selected",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "harness_id",
+            "source_id",
+            "model_id",
+            "account_id",
+            "basis"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "status": {
+              "const": "legacy_unresolved",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "RunSummary": {
       "properties": {
         "account": {
@@ -24976,6 +25022,10 @@
         "run_id": {
           "type": "string"
         },
+        "selection": {
+          "$ref": "#/$defs/RunSelectionView",
+          "description": "Persisted routing decision for this run; event provider/adapter values are not used to infer it."
+        },
         "started_at": {
           "type": "string"
         },
@@ -25007,6 +25057,7 @@
         "role",
         "adapter",
         "model",
+        "selection",
         "started_at",
         "progress",
         "artifacts",

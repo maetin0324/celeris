@@ -917,6 +917,13 @@ impl TaskStore for SqliteStore {
         self.run_record_selection_impl(run_id, selection)
     }
 
+    fn run_selections_for_task(
+        &self,
+        task_id: TaskId,
+    ) -> Result<std::collections::HashMap<String, crate::llm_route::RunSelection>, StoreError> {
+        self.run_selections_for_task_impl(task_id)
+    }
+
     fn run_index_finish(
         &self,
         run_id: &str,

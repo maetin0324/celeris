@@ -3704,6 +3704,7 @@ KB の取り込み待ち（`GET /knowledge/inbox` の候補）は `GET /api/v1/i
 - `interrupted` と `continued` は失敗ではないので、`bad_news`（ADR-0034）にも `error_cooldown` にも §5.8 の集計にも数えない。
 - `outcome_text` は接頭辞を除いた残り（`error` は文字列全体、`lease_expired` は `null`）。
 - `WorkerFinished` が無い run は `finished_at = null, outcome = null`（実行中、または回収前）。
+- `selection` は `runs` 索引の保存値から後段で埋める。4 欄が揃った run は `{status:"selected", harness_id, source_id, model_id, account_id, basis}`、選択記録が無い導入前の run は `{status:"legacy_unresolved"}`。provider / adapter から推測しない。
 - Reviewer run も `WorkerStarted` / `WorkerFinished`（`role: "reviewer"`）を持つので一覧に現れ、`RunSummary.role` が `reviewer` になる（ADR-0014 D1。`role` の無いイベントは `worker`）。Reviewer run の進捗は対象 run に `reviewer run <id>: ` 接頭辞で付き、`reviewer run requeued: ` で始まるものは対象 run の `reviewer_deferrals` に数える。
 
 ### 5.3 タイマー（`task_ops::view::timers(task, rows, ctx: &ViewContext, now)`）

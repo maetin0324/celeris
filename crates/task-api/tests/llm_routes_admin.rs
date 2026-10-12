@@ -81,3 +81,104 @@ mod harnesses {
         );
     }
 }
+
+mod run_selection {
+    use super::common::*;
+    use serde_json::Value;
+    use task_core::{Event, RunIndexRole, RunIndexStatus, RunRow, TaskKind, TaskStore};
+    use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn task_runs_expose_persisted_selection_and_legacy_unresolved() {
+        let env = TestEnv::new();
+        let task = new_task(TaskKind::Execute, task_core::Status::Running);
+        let selected = "selected-run";
+        let legacy = "legacy-run";
+        env.seed_with(
+            &task,
+            vec![
+                Event::WorkerStarted {
+                    run_id: selected.into(),
+                    adapter: "fake".into(),
+                    model: "m".into(),
+                    provider: Some("old-provider".into()),
+                    account: None,
+                    role: None,
+                    task_role: None,
+                },
+                Event::WorkerStarted {
+                    run_id: legacy.into(),
+                    adapter: "fake".into(),
+                    model: "m".into(),
+                    provider: None,
+                    account: None,
+                    role: None,
+                    task_role: None,
+                },
+            ],
+        );
+        for (run_id, seq) in [(selected, 1), (legacy, 2)] {
+            env.store
+                .run_index_start(RunRow {
+                    run_id: run_id.into(),
+                    task_id: task.id.to_string(),
+                    work_unit_id: None,
+                    role: RunIndexRole::Worker,
+                    seq,
+                    status: RunIndexStatus::Running,
+                    adapter: None,
+                    model: None,
+                    account: None,
+                    session_id: None,
+                    checkpoint: None,
+                    usage: None,
+                    metrics: None,
+                    started_at: format!("2026-10-12T00:00:0{seq}Z"),
+                    finished_at: None,
+                })
+                .unwrap();
+        }
+        let selection = task_core::llm_route::RunSelection {
+            harness: "h".into(),
+            source: "s".into(),
+            model: "m2".into(),
+            account: "a".into(),
+            metadata: serde_json::json!({"version":1,"basis":"route"}),
+        };
+        env.store
+            .run_record_selection(selected, &selection)
+            .unwrap();
+        let response = env
+            .router()
+            .oneshot(get(&format!("/api/v1/tasks/{}/runs", task.id)))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let body: Value = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            body["runs"][0]["selection"],
+            serde_json::json!({"status":"selected","harness_id":"h","source_id":"s","model_id":"m2","account_id":"a","basis":{"version":1,"basis":"route"}})
+        );
+        assert_eq!(
+            body["runs"][1]["selection"],
+            serde_json::json!({"status":"legacy_unresolved"})
+        );
+        let detail = env
+            .router()
+            .oneshot(get(&format!("/api/v1/tasks/{}", task.id)))
+            .await
+            .unwrap();
+        let detail: Value = serde_json::from_slice(
+            &axum::body::to_bytes(detail.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(detail["runs"][0]["selection"], body["runs"][0]["selection"]);
+    }
+}

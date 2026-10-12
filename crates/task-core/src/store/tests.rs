@@ -5105,6 +5105,52 @@ fn run_index_round_trips_start_and_finish() {
     );
 }
 
+#[test]
+fn run_selections_for_task_returns_only_complete_persisted_selections() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let task = sample_task(Status::Draft);
+    store.insert(&task).unwrap();
+    let base = RunRow {
+        run_id: "selected-run".into(),
+        task_id: task.id.to_string(),
+        work_unit_id: None,
+        role: RunIndexRole::Worker,
+        seq: 1,
+        status: RunIndexStatus::Running,
+        adapter: None,
+        model: None,
+        account: None,
+        session_id: None,
+        checkpoint: None,
+        usage: None,
+        metrics: None,
+        started_at: "2026-09-24T00:00:00Z".into(),
+        finished_at: None,
+    };
+    store.run_index_start(base.clone()).unwrap();
+    store
+        .run_index_start(RunRow {
+            run_id: "legacy-run".into(),
+            ..base
+        })
+        .unwrap();
+    let selection = crate::llm_route::RunSelection {
+        harness: "h".into(),
+        source: "s".into(),
+        model: "m".into(),
+        account: "a".into(),
+        metadata: serde_json::json!({"version": 1, "reason": "test"}),
+    };
+    assert!(
+        store
+            .run_record_selection("selected-run", &selection)
+            .unwrap()
+    );
+    let got = store.run_selections_for_task(task.id).unwrap();
+    assert_eq!(got.get("selected-run"), Some(&selection));
+    assert!(!got.contains_key("legacy-run"));
+}
+
 /// `runs_running` は `running` の行だけを `started_at` 昇順で返す（閉じた行は含めない）。
 #[test]
 fn runs_running_lists_only_running_rows_oldest_first() {

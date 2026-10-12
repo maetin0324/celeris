@@ -62,7 +62,7 @@ async fn all_three_endpoints_require_a_token_even_on_loopback() {
 }
 
 /// ADR-0017 M3 の規律は「`token_file` が**無くても**管理系は 401」。上のテストはトークンを設定した
-/// 構成なので、`token_file` 未設定（loopback だけの構成）の側も確かめる（`accounts_admin.rs` と同じ形）。
+/// 構成なので、`token_file` 未設定（loopback だけの構成）の側も確かめる（`llm_accounts_admin.rs` と同じ形）。
 #[tokio::test]
 async fn all_three_endpoints_require_a_token_when_token_file_is_not_configured() {
     let secrets_tmp = tempfile::tempdir().expect("tempdir");

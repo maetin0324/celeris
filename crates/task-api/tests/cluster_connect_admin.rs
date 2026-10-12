@@ -98,7 +98,7 @@ async fn management_routes_all_require_a_token() {
 }
 
 /// ADR-0017 M3: `token_file` が**無くても**（loopback だけの構成でも）管理系は 401。`GET /clusters` は
-/// 読み取りなので token 不要（`accounts_admin.rs`/`secrets_admin.rs` と同じ形の回帰テスト）。
+/// 読み取りなので token 不要（`llm_accounts_admin.rs`/`secrets_admin.rs` と同じ形の回帰テスト）。
 #[tokio::test]
 async fn management_routes_require_a_token_even_when_token_file_is_not_configured() {
     let env = TestEnv::with(EnvOptions {

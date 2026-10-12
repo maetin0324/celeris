@@ -515,8 +515,8 @@ async fn cos_ops_admin_config_daemon_and_external_effects_run_once() {
         &env,
         "acheck",
         "POST",
-        "/api/v1/accounts/acct1/check",
-        json!({"adapter": "claude-code"}),
+        "/api/v1/llm/sources/claude_oauth/accounts/acct1/check",
+        json!({}),
         "account.check",
     )
     .await;
@@ -524,7 +524,7 @@ async fn cos_ops_admin_config_daemon_and_external_effects_run_once() {
         &env,
         "aremove",
         "DELETE",
-        "/api/v1/accounts/acct1",
+        "/api/v1/llm/sources/claude_oauth/accounts/acct1",
         json!(null),
         "account.delete",
     )
@@ -588,11 +588,11 @@ async fn cos_ops_admin_config_daemon_and_external_effects_run_once() {
                 409,
             ),
             (
-                "bad-adapter",
+                "bad-account-source",
                 "POST",
-                "/api/v1/accounts/acct1/check",
-                json!({"adapter": "x"}),
-                400,
+                "/api/v1/llm/sources/nope/accounts/acct1/check",
+                json!({}),
+                404,
             ),
             (
                 "bad-source",

@@ -7,6 +7,7 @@ members = [
     "crates/task-api",
     "crates/task-worker",
     "crates/task-dispatch",
+    "crates/routing-eval",
     "crates/llm-proxy",
     "crates/celeris-mcp",
     "crates/celeris",

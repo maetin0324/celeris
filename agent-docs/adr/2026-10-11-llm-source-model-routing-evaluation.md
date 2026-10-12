@@ -257,6 +257,22 @@ D5 の評価 runner（crate `routing-eval`、bin `celeris-routing-eval`）と根
 6. **統計（`stats`）**: Wilson 95%・問題単位の seed 固定 bootstrap・exact McNemar・paired 差の区間・Pareto・根拠成立（30×2 は有効 24 問以上、12×1 は全問）・同等集合（区間の重なり）・`may_claim_superiority`（k=1 は常に偽）・held-out で選択の符号が反転したら不成立。CLI の `stats` は単独入力を持たず、`aggregate` が呼ぶ（CLI から呼ぶと説明つきの失敗を返す）。
 7. **本番で評価を走らせる手順は人の決定待ち**: LLM を呼ぶ評価（`run` の本番実行）は、eval-budget の人の回答と dry-run の受信箱決定（呼び出し数・費用・quota の見積り）の後にだけ行う。今回の run では実行せず、試験は stub harness と一時 DB だけで行った（`crates/routing-eval/tests/pipeline_stub.rs`）。
 
+## 付記 2026-10-12（v4）: 候補ごとの harness 固定と cell bootstrap 区間
+
+差し戻し（final review v3）への対応。D1 の候補表に harness 列を足し、評価 run の起動と根拠行の区間を揃えた。
+
+1. **候補表の harness 列**（`crates/routing-eval/src/candidates.rs` の `CANDIDATES`、run の `make_trials` はこの欄を読む）:
+
+   | source / account | harness_id | model |
+   |---|---|---|
+   | claude-oauth / claude | claude-code | claude-opus-5-5、claude-sonnet-5-5、claude-haiku-5-5、claude-fable-5-1（k=1・12 問） |
+   | codex-oauth / codex | codex | gpt-6.1-sol、gpt-6-luna、gpt-6-astra（k=1・12 問） |
+
+   評価 run の trial は候補ごとに固定の harness で起こす（claude 4 候補は claude-code、codex 3 候補は codex）。`eval_trials` の UNIQUE 鍵と `route_decisions` の output に harness_id を残す。
+   比較は harness の中だけで行う（`aggregate` の paired 比較は harness が違う組を作らない）。試験は `run::tests::candidates_expand_k_and_subset_and_keep_checks_out_of_objective` と `aggregate::tests::paired_comparisons_never_cross_harnesses` が固定する。
+2. **cell の区間は Wilson と問題単位 bootstrap の 2 本**: 根拠行（`EvidenceRow`）の `pass_lower`・`pass_upper`（Wilson 95%）と並べて `pass_boot_lower`・`pass_boot_upper`（問題単位の bootstrap 95%、seed 42・2,000 resamples、各問題の最初の試行を 1 標本とする）を持つ。`routing_evidence`（migration 0073）・aggregate の JSON と Markdown 根拠表・JSONL export に同じ欄で出す。bootstrap は cell 単位の区間であり、paired 差の区間（比較用）の代わりにはしない。
+3. **dry-run の扱いは変えない**: 呼び出し数・定価換算・quota の見積りは dry-run（`celeris-routing-eval dry-run`）の出力のままで、LLM を呼ぶ評価 run は本 ADR の付記 2026-10-12（eval-dispatch）の 7 と同じく人の決定待ち。
+
 ## 改訂履歴
 
 - 2026-10-11: 人の確認を反映。評価対象を 7 model に限定し、fable-5-1 / gpt-6-astra を k=1・層別部分集合、通常 5 model を k=2・30 問に縮小。Codex の quota は実測前に率を仮定せず、10-run dry-run と週 15% gate を必須化。opencode-go は根拠表対象外、qwen はローカル既定候補として明記。辞書順 fallback と `[routing.defaults.<genre>]` を除き、lane ごとの人の既定を harness×lane `route_defaults` に統合。

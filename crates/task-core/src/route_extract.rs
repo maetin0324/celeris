@@ -522,7 +522,7 @@ mod tests {
         let c = s.lock().unwrap();
         c.execute("INSERT INTO run_write_sets(run_id,task_id,work_unit_id,repo_id,base_sha,head_sha,paths_json,status,reason,recorded_at) VALUES('r1','task-1','wu-1','repo','b1','h1',?1,'complete',NULL,'2026-01-01T00:02:00Z')",[r#"["./crates/task-core/src/route_extract.rs","crates/task-core/src/lib.rs","crates/task-core/src/lib.rs","../escape","crates/task-core/"]"#]).unwrap();
         c.execute("INSERT INTO run_write_sets(run_id,task_id,work_unit_id,repo_id,base_sha,head_sha,paths_json,status,reason,recorded_at) VALUES('r2','task-1','wu-1','repo','b2',NULL,?1,'incomplete','git diff failed','2026-01-01T00:03:30Z')",[r#"["crates/future/src/late.rs"]"#]).unwrap();
-        c.execute("INSERT INTO work_unit_write_sets(work_unit_id,task_id,repo_id,base_sha,head_sha,paths_json,status,reason,recorded_at) VALUES('wu-1','task-1','repo','b1','h1',?1,'complete',NULL,'2026-01-01T00:02:10Z')",[r#"["docs/wu.md","crates/task-core/src/lib.rs"]"#]).unwrap();
+        c.execute("INSERT INTO work_unit_write_sets(work_unit_id,task_id,repo_id,base_sha,head_sha,paths_json,status,reason,recorded_at) VALUES('wu-1','task-1','repo','b1','h1',?1,'complete',NULL,'2026-01-01T00:02:10Z')",[r#"["notes/wu.md","crates/task-core/src/lib.rs"]"#]).unwrap();
         drop(c);
         s
     }
@@ -549,7 +549,7 @@ mod tests {
                 "repo:crates/task-core",
                 "repo:crates/task-core/src/lib.rs",
                 "repo:crates/task-core/src/route_extract.rs",
-                "repo:docs/wu.md",
+                "repo:notes/wu.md",
             ]))
         );
         assert_eq!(
@@ -563,7 +563,7 @@ mod tests {
         );
         assert!(!f.aux.missing.iter().any(|m| m == "write_set"));
         assert!(f.brief.contains(
-            "書き込み集合:\n- repo:crates/future/src/late.rs\n- repo:crates/task-core\n- repo:crates/task-core/src/lib.rs\n- repo:crates/task-core/src/route_extract.rs\n- repo:docs/wu.md\n\n# 置かれた位置"
+            "書き込み集合:\n- repo:crates/future/src/late.rs\n- repo:crates/task-core\n- repo:crates/task-core/src/lib.rs\n- repo:crates/task-core/src/route_extract.rs\n- repo:notes/wu.md\n\n# 置かれた位置"
         ));
         let again = features_for_subject(&s, subject("work_unit", "wu-1"), None, None).unwrap();
         assert_eq!(f.hash, again.hash);
@@ -589,7 +589,7 @@ mod tests {
             f.brief
                 .contains("書き込み集合:\n- repo:crates/future/src/late.rs\n")
         );
-        assert!(!f.brief.contains("docs/wu.md"));
+        assert!(!f.brief.contains("notes/wu.md"));
     }
 
     fn insert_fresh_subjects(s: &SqliteStore) {
@@ -662,7 +662,7 @@ mod tests {
         // seq 3（ts 00:03:00）: r1 と WU 集合は入り、r2（00:03:30 記録）は入らない。
         let seq3 = at("work_unit", "wu-1", AsOf::EventSeq(3));
         let mut expected = r1.to_vec();
-        expected.push("repo:docs/wu.md");
+        expected.push("repo:notes/wu.md");
         assert_eq!(seq3.write_set, Some(strings(&expected)));
         assert!(seq3.write_set_gaps.is_empty());
         let task_seq3 = at("task", "task-1", AsOf::EventSeq(3));

@@ -110,6 +110,7 @@ mod messages;
 mod model_catalog;
 pub use model_catalog::ModelCatalogStore;
 mod account_limits;
+mod eval_trials;
 pub(crate) mod migrations;
 mod org;
 mod projects;

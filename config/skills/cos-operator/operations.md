@@ -105,12 +105,10 @@ curl -sS -X POST "$API/api/v1/cos/operations" -H "Authorization: Bearer $CELERIS
 | リポジトリの更新 | `PATCH /api/v1/repos/<id>` | repo.update | 変える欄だけ（1 つ以上） |
 | リポジトリの削除 | `DELETE /api/v1/repos/<id>` | repo.delete | body なし。未終了の task が使っていれば 409 |
 | クラスタの作業ディレクトリ | `PUT /api/v1/clusters/<id>/settings` | cluster.settings_put | `{"work_dir":"/abs/path"}`。`null` で設定ファイルの値に戻す |
-| アカウントの作成 | `POST /api/v1/accounts` | account.create | `{"id","adapter"?}`（adapter 既定 claude-code）。ログインは人（除外） |
-| アカウントの退避 | `DELETE /api/v1/accounts/<id>` | account.delete | `{"adapter"?}`（query の代わりに body）。daemon が移す外部効果。使用中は 409 |
-| アカウントの確認 | `POST /api/v1/accounts/<id>/check` | account.check | `{"adapter"?}`。外部効果 |
-| アカウントの同時実行数の上限 | `PATCH /api/v1/accounts/<id>/<account>` | account.limit_set | 路の `<id>` は adapter（`claude-code`・`codex`・`opencode-go`、暗黙アカウントは `implicit` で `<account>` は LLM source id）。`{"max_runs": 1..32}`、`null` で既定に戻す。外部効果 |
-| 同上（id が `check` のアカウント） | `PATCH /api/v1/accounts/<id>/check` | account.limit_set | 同上 |
-| 同上（id が `login` のアカウント） | `PATCH /api/v1/accounts/<id>/login` | account.limit_set | 同上 |
+| アカウントの作成 | `POST /api/v1/llm/sources/<source_id>/accounts` | account.create | body `{"id"}`。source が account pool を持つ場合だけ作成可能 |
+| アカウントの退避 | `DELETE /api/v1/llm/sources/<source_id>/accounts/<account_id>` | account.delete | body なし。daemon が移す外部効果。使用中は 409 |
+| アカウントの確認 | `POST /api/v1/llm/sources/<source_id>/accounts/<account_id>/check` | account.check | body なし。外部効果 |
+| アカウントの同時実行数の上限 | `PATCH /api/v1/llm/sources/<source_id>/accounts/<account_id>` | account.limit_set | `{"max_runs": 1..32}`、`null` で既定に戻す。暗黙 account の account_id は source_id。外部効果 |
 | モデルの発見 | `POST /api/v1/llm/models/discover` | model_catalog.discover | `{"source"?}`。外部効果（daemon の発見を 1 回走らせる） |
 | 通知のテスト送信 | `POST /api/v1/notify/test` | notify.test | body なし。Discord に 1 通送る外部効果 |
 | 設定の再読み込み | `POST /api/v1/reload` | daemon.reload | body は `{}`。外部効果。設定の誤りは 400 で rejected |
@@ -157,7 +155,7 @@ curl -sS -X POST "$API/api/v1/cos/operations" -H "Authorization: Bearer $CELERIS
 
 | 系列 | path | 理由 |
 |---|---|---|
-| `secret_operations` | `/secrets/<id>`（PUT・DELETE）、`/accounts/<id>/login*`、`/clusters/<id>/connect*` | 秘密の値を扱う（取消・削除も含め全て除外） |
+| `secret_operations` | `/secrets/<id>`（PUT・DELETE）、`/llm/sources/<source_id>/accounts/<account_id>/login*`、`/clusters/<id>/connect*` | 秘密の値を扱う（取消・削除も含め全て除外） |
 | `browser_credential_attestation` | `/browser/identities*`、`/browser/trusted-devices*`、`/tasks/<id>/browser/waits/<w>/{credential,decision,registered,revoke}`、`/tasks/<id>/browser/live/<run>/<session>/{check,grant,read}` | credential・封緘 state・receipt・owner attestation／信頼端末を扱う |
 | `console_instruction_chain` | `POST /console/instruct` | 別の指示経路へ入り監査の鎖が二重になる |
 | `recursive_cos` | `/cos/operations`・`/cos/operations/<o>/override`・`/cos/inbox/<i>/resolve`・`/cos/threads/<t>/checkpoint` | CoS 制御 API の再帰。受信箱の解決は envelope の外で直接呼ぶ |

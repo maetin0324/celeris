@@ -247,3 +247,12 @@ runtime の決定は実装済み。closeout HEAD `a3c63b8a` で以下を確認�
 ### 2026-10-12 付記（Legacy routing の撤去）
 
 実行時の source・model 選択は `task_core::llm_route::route_select` だけが担う。`model_routing` は shadow による観測、または後続 task `01M4M8D4AQ` の入力として扱い、実行選択の互換経路にはしない。`RoutingMode::Legacy` は存在しない。`[model_routing]` を設定する場合は `mode = "shadow"` または `mode = "enforce"` を明示する。設定表そのものを省略した場合は routing 無効として従来どおり読み込める。
+
+
+### 2026-10-12 付記（accounts-rekey）
+
+Accounts HTTP API は source と account を別々の path key にする。全 source の一覧は `GET /api/v1/llm/accounts`、作成は `POST /api/v1/llm/sources/{source_id}/accounts`、個別操作は `/api/v1/llm/sources/{source_id}/accounts/{account_id}` とその `check`・`login`・`login/code` suffix を使う。旧 `/api/v1/accounts` 路および `?adapter=` は残さない。
+
+managed account pool を持つ `claude_oauth` / `codex_oauth` / `opencode_go` source は、それぞれ内部の ClaudeCode / Codex / OpencodeGo adapter に固定対応する。内部 effect・store key は従来の adapter key を保つ。暗黙 account の公開 `account_id` は `source_id` そのものとし、上限の内部 key は `implicit` と source ID の組を保つ。
+
+この付記により本文 177 行の旧 `/api/v1/accounts` 記述を更新する。

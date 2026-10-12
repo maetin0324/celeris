@@ -47,9 +47,9 @@ Live View の grant/check/read は owner attestation を入力するため除外
 
 | method | path | 理由コード | 理由 |
 |---|---|---|---|
-| DELETE | `/accounts/{id}/login` | `secret_operations` | 人の決定 secrets=exclude。秘密値を扱う系列を全て除外（取消・削除も含む）。 |
-| POST | `/accounts/{id}/login` | `secret_operations` | 人の決定 secrets=exclude。秘密値を扱う系列を全て除外（取消・削除も含む）。 |
-| POST | `/accounts/{id}/login/code` | `secret_operations` | 人の決定 secrets=exclude。秘密値を扱う系列を全て除外（取消・削除も含む）。 |
+| DELETE | `/llm/sources/{source_id}/accounts/{account_id}/login` | `secret_operations` | 人の決定 secrets=exclude。秘密値を扱う系列を全て除外（取消・削除も含む）。 |
+| POST | `/llm/sources/{source_id}/accounts/{account_id}/login` | `secret_operations` | 人の決定 secrets=exclude。秘密値を扱う系列を全て除外（取消・削除も含む）。 |
+| POST | `/llm/sources/{source_id}/accounts/{account_id}/login/code` | `secret_operations` | 人の決定 secrets=exclude。秘密値を扱う系列を全て除外（取消・削除も含む）。 |
 | DELETE | `/clusters/{id}/connect` | `secret_operations` | 人の決定 secrets=exclude。秘密値を扱う系列を全て除外（取消・削除も含む）。 |
 | POST | `/clusters/{id}/connect` | `secret_operations` | 人の決定 secrets=exclude。秘密値を扱う系列を全て除外（取消・削除も含む）。 |
 | POST | `/clusters/{id}/connect/code` | `secret_operations` | 人の決定 secrets=exclude。秘密値を扱う系列を全て除外（取消・削除も含む）。 |
@@ -204,15 +204,14 @@ R の操作では領域 write は不要だが operation・event・card は同一
 
 | method | path | 判定 | 根拠となる router module | API 表 |
 |---|---|---|---|---|
-| POST | `/accounts` | A | `handlers.rs` | 共通 |
-| DELETE | `/accounts/{id}` | A | `handlers.rs` | 共通 |
-| POST | `/accounts/{id}/check` | A | `handlers.rs` | 共通 |
-| PATCH | `/accounts/{id}/{account}` | A | `handlers.rs` | 共通（ADR 2026-10-08-account-concurrency-limits §(d) の統合で追加。`{id}` は adapter） |
-| PATCH | `/accounts/{id}/check` | A | `handlers.rs` | 共通（同上。id が `check` のアカウント） |
-| PATCH | `/accounts/{id}/login` | A | `handlers.rs` | 共通（同上。id が `login` のアカウント） |
-| DELETE | `/accounts/{id}/login` | X: `secret_operations` | `handlers.rs` | 共通 |
-| POST | `/accounts/{id}/login` | X: `secret_operations` | `handlers.rs` | 共通 |
-| POST | `/accounts/{id}/login/code` | X: `secret_operations` | `handlers.rs` | 共通 |
+| GET | `/llm/accounts` | read | handlers.rs | 共通 |
+| POST | `/llm/sources/{source_id}/accounts` | A | handlers.rs | 共通 |
+| DELETE | `/llm/sources/{source_id}/accounts/{account_id}` | A | handlers.rs | 共通 |
+| POST | `/llm/sources/{source_id}/accounts/{account_id}/check` | A | handlers.rs | 共通 |
+| PATCH | `/llm/sources/{source_id}/accounts/{account_id}` | A | handlers.rs | 共通 |
+| DELETE | `/llm/sources/{source_id}/accounts/{account_id}/login` | X: `secret_operations` | handlers.rs | 共通 |
+| POST | `/llm/sources/{source_id}/accounts/{account_id}/login` | X: `secret_operations` | handlers.rs | 共通 |
+| POST | `/llm/sources/{source_id}/accounts/{account_id}/login/code` | X: `secret_operations` | handlers.rs | 共通 |
 | DELETE | `/clusters/{id}/connect` | X: `secret_operations` | `handlers.rs` | 共通 |
 | POST | `/clusters/{id}/connect` | X: `secret_operations` | `handlers.rs` | 共通 |
 | POST | `/clusters/{id}/connect/code` | X: `secret_operations` | `handlers.rs` | 共通 |

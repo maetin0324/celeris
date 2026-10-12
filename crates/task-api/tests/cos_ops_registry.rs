@@ -18,7 +18,7 @@ async fn cos_ops_registry_exclusions_record_reasoned_rejections_without_body_or_
         ),
         (
             "DELETE",
-            "/api/v1/accounts/example/login",
+            "/api/v1/llm/sources/claude_oauth/accounts/example/login",
             "secret_operations",
             "取消・削除も含む",
         ),

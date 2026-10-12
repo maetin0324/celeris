@@ -52,7 +52,10 @@ pub(crate) async fn detail(
     };
     let now = time::OffsetDateTime::now_utc().unix_timestamp();
     let view = reader.view(now).await;
-    let source = view.sources.into_iter().find(|source| source.id == source_id)
+    let source = view
+        .sources
+        .into_iter()
+        .find(|source| source.id == source_id)
         .ok_or_else(ApiProblem::not_found)?;
     Ok(json_response(axum::http::StatusCode::OK, &source))
 }

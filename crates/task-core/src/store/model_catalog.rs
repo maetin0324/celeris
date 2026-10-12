@@ -116,7 +116,6 @@ pub trait ModelCatalogStore: Send + Sync {
         source: &CatalogSource,
         model_id: &str,
     ) -> Result<bool, StoreError>;
-
 }
 
 impl ModelCatalogStore for SqliteStore {
@@ -313,8 +312,6 @@ impl ModelCatalogStore for SqliteStore {
         let conn = self.lock()?;
         Self::model_catalog_delete_override_tx(&conn, source, model_id)
     }
-
-
 }
 
 /// Model catalog override writes used inside caller-owned transactions.
@@ -357,6 +354,4 @@ impl SqliteStore {
         )?;
         Ok(n > 0)
     }
-
-
 }

@@ -5,9 +5,9 @@
 - 状態: **Accepted**（人間の決定 H1 / H5〜H7。celeris 側の ADR-0013、GUI 側の ADR-GUI-0001）。改訂日 2026-09-14
 - 改訂: 2026-10-11（ADR 2026-10-11-task-wait-reasons D4・D6）— **破壊的。v1 のまま**。`DaemonSnapshot.awaiting_human[]`・`awaiting_children[]`・`unroutable[]` を消し、`DaemonSnapshot.task_waits[]` の kind（`review_awaiting_human`・`delegated_children`・`unroutable`）へ寄せた（§3.20）。
 - 改訂: 2026-10-08（ADR 2026-10-08-account-concurrency-limits）— **追加と deprecate。v1 のまま**。エンドポイント 216:
-  `PATCH /accounts/{adapter}/{id}`（アカウントごとの上限 `max_runs`。§3.29a）。`AccountView` に `max_runs` /
+  `PATCH /llm/sources/{source_id}/accounts/{account_id}`（アカウントごとの上限 `max_runs`。§3.29a）。`AccountView` に `max_runs` /
   `effective_max_runs` / `max_runs_source` / `implicit` / `providers` を追加し、`dir` は暗黙アカウントで `null` になる。
-  `GET /accounts` はアカウントを持たない行の **LLM source ごとの暗黙アカウント**（`adapter = "implicit"`、`id = <llm source id>`。
+  `GET /llm/accounts` はアカウントを持たない行の **LLM source ごとの暗黙アカウント**（`adapter = "implicit"`、`id = <llm source id>`。
   同じ source を使う行は 1 件を共有する）も返す。`max_runs_per_account` は
   「保存値の無いアカウントの既定」になり、`[accounts]` が無い構成でも組み込みの既定 2 を返す。`DaemonSnapshot.implicit_accounts` を追加。
   `ProviderView` / `ProviderConfigView` / `ProviderLive` の `concurrency` は **deprecated**（schema に `deprecated: true`。値は残るが
@@ -420,13 +420,13 @@ listen = "127.0.0.1:7710"      # これを書いたときだけ API が動く（
 | 110 | POST | `/tasks/{id}/rereview` | `done`（または最終レビューの不合格だけで `failed`）の task の最終レビューをやり直す（**管理系**） | `TransitionResult` | `task_ops::comment::rereview` |
 | 111 | POST | `/tasks/{id}/pause` | task の subtree を一時停止する（ADR-0079 D13。§3.125.9）（**管理系**） | `TaskPauseResult` | `task_ops::lifecycle::pause_task` |
 | 112 | POST | `/tasks/{id}/resume` | subtree の一時停止を解く（§3.125.9）（**管理系**） | `TaskPauseResult` | `task_ops::lifecycle::resume_task` |
-| 113 | GET | `/accounts` | アカウントのプール（claude-code / codex。ADR-0024・ADR-0025）と暗黙アカウント、各アカウントの実効上限（§3.29） | `AccountList` | `[accounts]` のディレクトリ + スナップショット + `account_limits` |
-| 114 | POST | `/accounts` | アカウントを足す（§3.30）（**管理系**） | 201 `AccountView`（`Location`） | celeris（ディレクトリ作成） |
-| 115 | DELETE | `/accounts/{id}` | アカウントを消す（使用中は 409。§3.31）（**管理系**） | 200 `{}` | celeris（`AdminRequest`） |
-| 116 | POST | `/accounts/{id}/check` | アカウントの疎通確認（§3.32）（**管理系**） | `AccountCheckResponse` | celeris（`AdminRequest`） |
-| 117 | POST | `/accounts/{id}/login` | ログインの中継を始める（§3.33）（**管理系**） | `AccountLoginStart` | celeris（`AdminRequest`） |
-| 118 | POST | `/accounts/{id}/login/code` | ログインのコードを渡す（§3.34）（**管理系**） | `AccountLoginResult` | celeris（`AdminRequest`） |
-| 119 | DELETE | `/accounts/{id}/login` | 進行中のログインを取り消す（§3.35）（**管理系**） | 200 `{}` | celeris（`AdminRequest`） |
+| 113 | GET | `/llm/accounts` | アカウントのプール（claude-code / codex。ADR-0024・ADR-0025）と暗黙アカウント、各アカウントの実効上限（§3.29） | `AccountList` | `[accounts]` のディレクトリ + スナップショット + `account_limits` |
+| 114 | POST | `/llm/sources/{source_id}/accounts` | アカウントを足す（§3.30）（**管理系**） | 201 `AccountView`（`Location`） | celeris（ディレクトリ作成） |
+| 115 | DELETE | `/llm/sources/{source_id}/accounts/{account_id}` | アカウントを消す（使用中は 409。§3.31）（**管理系**） | 200 `{}` | celeris（`AdminRequest`） |
+| 116 | POST | `/llm/sources/{source_id}/accounts/{account_id}/check` | アカウントの疎通確認（§3.32）（**管理系**） | `AccountCheckResponse` | celeris（`AdminRequest`） |
+| 117 | POST | `/llm/sources/{source_id}/accounts/{account_id}/login` | ログインの中継を始める（§3.33）（**管理系**） | `AccountLoginStart` | celeris（`AdminRequest`） |
+| 118 | POST | `/llm/sources/{source_id}/accounts/{account_id}/login/code` | ログインのコードを渡す（§3.34）（**管理系**） | `AccountLoginResult` | celeris（`AdminRequest`） |
+| 119 | DELETE | `/llm/sources/{source_id}/accounts/{account_id}/login` | 進行中のログインを取り消す（§3.35）（**管理系**） | 200 `{}` | celeris（`AdminRequest`） |
 | 120 | PUT | `/clusters/{id}/settings` | クラスタの `work_dir` を設定する（**管理系**） | `ClusterSettingsView` | store |
 | 121 | GET | `/org/{id}/memory` | そのノードの覚え書き（`?project=`。`[memory] dir` が無ければ 409。§3.62） | `MemoryView` | `[memory] dir` のファイル |
 | 122 | GET | `/reports` | 報告の一覧（ADR-0033 D3。§3.50） | `ReportList` | store |
@@ -514,7 +514,7 @@ listen = "127.0.0.1:7710"      # これを書いたときだけ API が動く（
 | 213 | GET | `/browser/trusted-devices` | 信頼端末の一覧（hash は返さない。§3.131.3）（**管理系** + header の assertion） | `TrustedDeviceList` | store `trusted_device_list` |
 | 214 | DELETE | `/browser/trusted-devices/{id}` | 信頼端末を失効させる（actor 付き event。§3.131.4）（**管理系** + header の assertion） | `TrustedDeviceRevokeResult` | store `trusted_device_revoke` |
 | 215 | GET | `/chat/threads/{t}/runs` | run 一覧（`before` / `limit`）と usage telemetry | `ChatRunListResponse` | `crate::chat` |
-| 216 | PATCH | `/accounts/{adapter}/{id}` | アカウント（暗黙アカウントを含む）の上限 `max_runs` を設定・解除する（§3.29a）（**管理系**） | `AccountView` | celeris（`AdminRequest::AccountLimitSet`） |
+| 216 | PATCH | `/llm/sources/{source_id}/accounts/{account_id}` | アカウント（暗黙アカウントを含む）の上限 `max_runs` を設定・解除する（§3.29a）（**管理系**） | `AccountView` | celeris（`AdminRequest::AccountLimitSet`） |
 
 browser の制御（`crate::browser_control`）の 6 本は、route を定数 `BASE`（`/api/v1/tasks/{id}/browser/control/{run}/{session}`）と `format!` で組み立てて登録している（`browser_control.rs` の `routes()`）。詳細は `docs/guides/browser-capability.md`。
 
@@ -1078,14 +1078,14 @@ llm source と harness の選択を実行時に行うため、`GET/POST /provide
 `token_count` の `rate_limits` が出す `five_hour` / `seven_day` の `utilization`）から選んだアカウントの環境変数
 （claude-code は `CLAUDE_SECURESTORAGE_CONFIG_DIR`、codex は `CODEX_HOME`）で起動する（選び方は ADR-0024 D3。
 アダプタが違っても同じ計算式を使う）。`[accounts]` はどちらか一方の根ディレクトリだけでもよい。
-`[accounts]` が無い構成では、`GET /accounts` は `{"root": null, "roots": {}, "max_runs_per_account": 2, "items": [<暗黙アカウントだけ>]}`、
+`[accounts]` が無い構成では、`GET /llm/accounts` は `{"root": null, "roots": {}, "max_runs_per_account": 2, "items": [<暗黙アカウントだけ>]}`、
 3.30〜3.35 は 409 `accounts_unavailable`（3.29a の暗黙アカウントの編集は使える）。**3.30 以降はすべて管理系**（`token_file` 未設定でも 401。ADR-0017 M3）。3.29 は無認証の読み取り。
 `id` の規則はプロバイダと同じ（1〜64 文字の ASCII 英数字・`-`・`_`）。3.31〜3.35 は `?adapter=` クエリを受け取る
 （省略時 `"claude-code"`。未知の値は 400 `bad_request`）。3.30 はクエリを受け取らず、本文の `adapter` で指定する。
 3.31〜3.35 は `active` のときだけ受け、`standby`/`draining` の間は 503 `standby`（§1.5）。celeris への管理要求の経路が
 無い構成も 409 `accounts_unavailable`。
 
-#### 3.29 `GET /accounts` → 200 `AccountList`
+#### 3.29 `GET /llm/accounts` → 200 `AccountList`
 
 ```json
 {"root": "/home/u/celeris/claude-accounts",
@@ -1141,41 +1141,41 @@ llm source と harness の選択を実行時に行うため、`GET/POST /provide
   `stats` は `providers` の行の run（`WorkerStarted.provider`）の集計（行をまたいで合計）。3.30〜3.35（作成・削除・確認・ログイン）の対象外で、
   その source を使う行の有無に追従する（行を消す・プールに変える・`llm_source` を変えて reload / 再起動し、source を使う行が無くなると
   保存値も消える。`DELETE /providers/{id}` の後も次の reload で同じ判定。他の行が同じ source を使い続けていれば保存値は残る）。
-  実アカウントの `id`・`max_runs` は `(adapter, id)` ごとで、`DELETE /accounts/{id}` で保存値も消え、`POST /accounts` で作り直すと古い保存値は引き継がない。
+  実アカウントの `id`・`max_runs` は `(adapter, id)` ごとで、`DELETE /llm/sources/{source_id}/accounts/{account_id}` で保存値も消え、`POST /llm/sources/{source_id}/accounts` で作り直すと古い保存値は引き継がない。
 
-#### 3.29a `PATCH /accounts/{adapter}/{id}` → 200 `AccountView`
+#### 3.29a `PATCH /llm/sources/{source_id}/accounts/{account_id}` → 200 `AccountView`
 
 **管理系**（`token_file` 未設定でも 401）。`active` のときだけ受け、`standby`/`draining` の間は 503 `standby`。クエリは受けない。
 アカウントの上限を設定・解除する（ADR 2026-10-08-account-concurrency-limits §(d)）。
 
 - 要求本文 `{"max_runs": 3}` で設定、`{"max_runs": null}` で保存値を消して既定（3.29 の `effective_max_runs` の 2・3 番目）に戻す。
   `max_runs` の欄が無い本文・未知の欄・オブジェクトでない本文・1..=32 の整数でない値（0、負数、33 以上、小数、文字列）は 400 `bad_request`。
-- `{adapter}` は `claude-code` / `codex` / `opencode-go` / `implicit`。それ以外、または `{id}` が 1〜64 文字の ASCII 英数字・`-`・`_` で
-  なければ 400 `bad_request`。暗黙アカウントの `{id}` は LLM source なので `openai_compatible:<source id>` の `:` だけは追加で許す。
+- `{source_id}` は source ID、`{account_id}` は公開 account ID。実 account の account ID が 1〜64 文字の ASCII 英数字・`-`・`_` で
+  なければ 400 `bad_request`。暗黙 account の account ID は source ID と同じ。
 - 存在しないアカウント（実: 根の下にディレクトリが無い。暗黙: その source を使う非プール行が今の設定に無い。プール行の id も含む）は 404
   `account_not_found`。実アダプタの根が設定されていない構成・celeris への管理要求の経路が無い構成は 409 `accounts_unavailable`。
   暗黙アカウントは `[accounts]` が無くても編集できる。
 - **使用中でも変更できる**。下げても走っている run は止めない（新しい run が `in_use` が下がるまで待つ）。celeris が DB に書いてから
   ディスパッチャの表を更新するので、**次の tick から効く**。再起動も `POST /reload` も要らず、どちらを跨いでも残る（DB が正本。backups の対象）。
-- `id` が `check` / `login` のアカウントも同じ形で編集できる（`/accounts/{adapter}/check`・`/login` の路でも PATCH を受ける）。
+- PATCH は `/llm/sources/{source_id}/accounts/{account_id}` を使い、静的な `check` / `login` suffix と衝突しない。
 - 応答は更新後の `AccountView`（3.29 と同じ形）。
- `POST /accounts` → 201 `AccountView`（`Location: /api/v1/accounts/{id}`）
+ `POST /llm/sources/{source_id}/accounts` → 201 `AccountView`（Location も同じ source/account 路）
 
 要求本文 `{"id": "b", "adapter": "codex"}`（`adapter` 省略時 `"claude-code"`）。`id` の形が不正、または `adapter` が
 `"claude-code"`/`"codex"` 以外なら 400 `bad_request`。`<root>/<id>/` を 0700 で作る
 （`root` はそのアダプタの根ディレクトリ。設定されていなければ 409 `accounts_unavailable`）。既にあれば 409
 `account_exists`。作っただけでは `logged_in: false`（3.33 でログインする）。
 
-#### 3.31 `DELETE /accounts/{id}` → 200 `{}`
+#### 3.31 `DELETE /llm/sources/{source_id}/accounts/{account_id}` → 200 `{}`
 
-`?adapter=`（省略時 `claude-code`）。ディレクトリを `<root>/.removed/<id>-<unix秒>/` に移す（認証ファイルは消さない。人が後で片付ける）。
+`source_id` は account pool に対応する source ID。ディレクトリを `<root>/.removed/<id>-<unix秒>/` に移す（認証ファイルは消さない。人が後で片付ける）。
 `in_use > 0` なら 409 `account_in_use`、無ければ 404 `account_not_found`。進行中のログインは止める。
 **実装は celeris 側で行う**（`AdminRequest::AccountRemove` 経由。`in_use` はディスパッチャの権威ある値
 `account_in_use`（running/reviewing を直接見る。`(adapter, id)` で判定）で判定するので、task-api のスナップショット経由のレースが無い）。
 
-#### 3.32 `POST /accounts/{id}/check` → 200 `AccountCheckResponse`
+#### 3.32 `POST /llm/sources/{source_id}/accounts/{account_id}/check` → 200 `AccountCheckResponse`
 
-`?adapter=`（省略時 `claude-code`）。
+`source_id` は account pool に対応する source ID。
 
 ```json
 {"result": "ok" | "auth_failed" | "throttled" | "spawn_failed", "checked_at": "…", "detail": "ok",
@@ -1189,9 +1189,9 @@ claude-code はそのアカウントで `claude -p … --max-turns 1 --model <[a
 再試行を待たずに打ち切って `auth_failed` にする（未ログインだと 10 回ほど再試行して約 40 秒かかるため）。
 **自動では走らない**（ADR-0022 D3 と同じ理由）。celeris 側で実行する（task-api はプロセスを起動しない）。
 
-#### 3.33 `POST /accounts/{id}/login` → 200 `AccountLoginStart`
+#### 3.33 `POST /llm/sources/{source_id}/accounts/{account_id}/login` → 200 `AccountLoginStart`
 
-`?adapter=`（省略時 `claude-code`）。アダプタで流儀が違う（ADR-0025 D5）:
+`source_id` は account pool に対応する source ID。アダプタで流儀が違う（ADR-0025 D5）:
 
 - **claude-code**（`kind: "paste_code"`）: `{"kind": "paste_code", "url": "https://claude.com/cai/oauth/authorize?…", "expires_at": "…"}`。
   celeris が `claude auth login` を `CLAUDE_SECURESTORAGE_CONFIG_DIR=<dir>` で起動し、出力から認可 URL を取り出して返す
@@ -1205,20 +1205,20 @@ claude-code はそのアカウントで `claude -p … --max-turns 1 --model <[a
 
 どちらも既に進行中のログインがあれば古い方を止めてやり直す。**`user_code`・URL はログに出さない**（3.34 も同様）。
 
-#### 3.34 `POST /accounts/{id}/login/code` → 200 `AccountLoginResult`
+#### 3.34 `POST /llm/sources/{source_id}/accounts/{account_id}/login/code` → 200 `AccountLoginResult`
 
 claude-code のみ。要求本文 `{"code": "…"}`。`{"result": "ok" | "failed", "detail": "…"}`（`detail` は無ければ省略）。コードを `claude auth login` の標準入力に渡し、終了を 30 秒まで待つ。
 exit 0 かつ `.credentials.json` ができたら `ok`。空・空白だけのコードは 422 `validation`（`errors[].field = "code"`）。
 進行中のログインが無ければ 409 `login_not_started`。**コードはログにも応答にも出さない**。
-`?adapter=codex` は本文を見る前に 409 `login_code_not_supported`（codex はデバイス認証だけで完結する。ADR-0025 D5）。
+source が Claude account pool 以外の場合は 409 `login_code_not_supported`（codex はデバイス認証だけで完結する。ADR-0025 D5）。
 
-#### 3.35 `DELETE /accounts/{id}/login` → 200 `{}`
+#### 3.35 `DELETE /llm/sources/{source_id}/accounts/{account_id}/login` → 200 `{}`
 
-`?adapter=`（省略時 `claude-code`）。進行中のログインを止める（無ければ何もしない）。
+`source_id` は account pool に対応する source ID。進行中のログインを止める（無ければ何もしない）。
 
 #### provider account-pool API（削除）
 
-provider を使った account-pool の作成・編集 API は削除した。アカウント自体は `POST /accounts` と
+provider を使った account-pool の作成・編集 API は削除した。アカウント自体は `POST /llm/sources/{source_id}/accounts` と
 `[accounts]` の source 設定で管理する。
 
 ### 3.36〜3.38 秘密（API キー等）の管理（ADR-0030。**すべて管理系: `token_file` 未設定でも 401**）
@@ -2811,7 +2811,7 @@ catalog snapshot を渡せない場合は 409 `llm_proxy_unavailable`。reload �
 
 LLM source のローカル OpenAI 互換プロキシ（`crates/llm-proxy`。`127.0.0.1:18100`、`/api/v1` の外）が
 使っている供給元の観測。判断（選択・cooldown）はプロキシの中で決定的に行われる。ここは**見えるように
-するだけ**（GUI の表示は `/accounts` の「LLM source」節）。
+するだけ**（GUI の表示は `/llm/accounts` の「LLM source」節）。
 
 - 通常の読み取り認証（`token_file` があれば Bearer 必須）。
 - `[llm_proxy]` が無効（`enabled = false`、または `claude_oauth`/`codex_oauth`/`openai_compatible` が
@@ -2841,7 +2841,7 @@ LLM source のローカル OpenAI 互換プロキシ（`crates/llm-proxy`。`127
 - `accounts[].remaining`: 0.0〜1.0。短期・長期のうち**厳しい方**（残りが少ない方）。測れないとき
   （観測が古い・無い）はフィールドを省略する（値を捏造しない。ADR-0024 D3 と同じ規律）。
   `cooldown_until`/`cooldown_reason` も 429/401 を受けた直後だけ載る（このアカウントプールは CLI
-  ワーカーの dispatch と**同じ帳簿**を共有するので、`GET /accounts` の cooldown とも一致する）。
+  ワーカーの dispatch と**同じ帳簿**を共有するので、`GET /llm/accounts` の cooldown とも一致する）。
 - `accounts[].remaining_short` / `remaining_long`（ADR-0053 D4）: 短期枠（Claude の 5 時間 /
   Codex の週内相当）・長期枠（7 日）それぞれ単独の残り。`remaining` と同じ「測れないときは省略」の規律。
 - `last_hour_*`: `llm_proxy_requests`（migration 0022）の直近 1 時間の集計。本文は記録しないので
@@ -3450,10 +3450,10 @@ registry は `crates/task-api/src/cos/ops/{tasks,decisions,projects,admin,surfac
 | admin | `PATCH /repos/{id}` | `repo.update` |
 | admin | `DELETE /repos/{id}` | `repo.delete`（未終了 task が使っていれば 409） |
 | admin | `PUT /clusters/{id}/settings` | `cluster.settings_put` |
-| admin | `POST /accounts` | `account.create`（ディレクトリ作成を監査 transaction の最後に行う） |
-| admin | `DELETE /accounts/{id}` | `account.delete`（外部効果: daemon が退避する。`?adapter=` の代わりに body `{"adapter"}`） |
-| admin | `POST /accounts/{id}/check` | `account.check`（外部効果。body `{"adapter"}` 任意） |
-| admin | `PATCH /accounts/{adapter}/{id}` | `account.limit_set`（外部効果。body `{"max_runs": 1..=32 または null}`。暗黙アカウントは `adapter = implicit`。ADR 2026-10-08-account-concurrency-limits §(d)） |
+| admin | `POST /llm/sources/{source_id}/accounts` | `account.create`（ディレクトリ作成を監査 transaction の最後に行う） |
+| admin | `DELETE /llm/sources/{source_id}/accounts/{account_id}` | `account.delete`（外部効果: daemon が退避する。body は空） |
+| admin | `POST /llm/sources/{source_id}/accounts/{account_id}/check` | `account.check`（外部効果。body は空） |
+| admin | `PATCH /llm/sources/{source_id}/accounts/{account_id}` | `account.limit_set`（外部効果。body `{"max_runs": 1..=32 または null}`。暗黙 account の account_id は source_id。ADR 2026-10-08-account-concurrency-limits §(d)） |
 | admin | `POST /notify/test` | `notify.test`（外部効果: Discord に 1 通） |
 | admin | `POST /reload` | `daemon.reload`（外部効果。設定の誤りは 400 で `rejected`） |
 | admin | `POST /replay` | `daemon.replay`（同時に 1 つ。実行中は 409） |
@@ -3490,7 +3490,7 @@ registry は `crates/task-api/src/cos/ops/{tasks,decisions,projects,admin,surfac
 tasks の実行計画初回採用 `POST /api/v1/tasks/{id}/execution-plan`（`execution.plan_adopt`）と既存計画への late tree adoption `POST /api/v1/tasks/{id}/tree/adopt`（`tree.adopt`）も登録済み。両方とも domain write と operation audit を同一 transaction で commit する。CoS credential での `celerisctl execution plan set` と `celerisctl tree adopt` はこれらの operation 経由で送る。CoS credential の `celerisctl cron create|update|pause|resume|run` は `cron_job.*` を送る。`celerisctl models discover` は `model_catalog.discover`、`celerisctl replay`（`--check`/`--apply` なし）は `daemon.replay`、`celerisctl approve|reject|accept|cancel|rereview|retry|answer`・`execution phase-gate`・`execution plan replan` は `task.*`・`question.answer`・`execution.*` を送る（CoS credential の変更系 subcommand の包みは試験 `cos_mapped_table_wraps_every_allowed_subcommand` で固定。API に対応 route の無い手元の操作は CoS credential では拒否）。daemon channel（reload・check・account 退避・notify test）・発見・release 昇格・skill の KB 書き込みも外部効果の手順で記録する。task の取り込み（integrate）と PR merge、案件の文書、KB ページの編集、定期実行の手動実行は外部効果の手順（ADR 2026-10-09-cos-operations-external-effects: pending を先に記録し 1 回だけ実行、再送は再実行しない、変更前の拒否は `rejected`、結果不明は pending のまま起動時に `needs_remediation`）で記録する。
 
 除外（422 `cos_operation_not_allowed`、detail に理由コード）: 秘密の値を扱う操作（`secret_operations`。`/secrets/*`・
-`/accounts/{id}/login*`・`/clusters/{id}/connect*`）、browser の credential/attestation 系
+`/llm/sources/{source_id}/accounts/{account_id}/login*`・`/clusters/{id}/connect*`）、browser の credential/attestation 系
 （`browser_credential_attestation`）、`/console/instruct`（`console_instruction_chain`）、`/cos/*`（`recursive_cos`）、
 ADR-0079 で撤去済みの入口（`removed_by_adr_0079`）。
 path の placeholder は 1 segment（英数字・`-`・`_`・`.`・`:`）に一致する。
@@ -3740,11 +3740,11 @@ events を後ろから見て最初に見つかった質問。次の 2 つを同�
 
 ### 5.8 プロバイダの集計（`task_api::stats`。task-ops ではなく task-api のメモリ）
 
-- `GET /accounts`で `events_since(0, 5000)` を繰り返して全イベントを走査し、以後は要求のたびに増分だけ読む。**メモリ内の観測値**で、真実ではない（再起動で再計算）。
+- `GET /llm/accounts`で `events_since(0, 5000)` を繰り返して全イベントを走査し、以後は要求のたびに増分だけ読む。**メモリ内の観測値**で、真実ではない（再起動で再計算）。
 - `WorkerStarted{run_id, provider}` で run 表に `provider`（`null` なら `"unknown"`）を登録し、`WorkerFinished{run_id, outcome, usage}` で閉じる。分類は §5.2（`continued` / `interrupted` はどの区分にも数えない）。`input_tokens` / `output_tokens` は `usage` の和（`null` は 0）。
 - `runs` は `WorkerStarted` の数（実行中を含む）。`by_day` は `WorkerFinished.ts` の UTC 日付で今日を含む直近 30 日、`by_day[].runs` はその日に終わった run の数。
 - Reviewer run（`role: reviewer`）も同じ規則で集計に**含める**（ADR-0014 D1）。
-- アカウント別（`GET /accounts` の `stats`）は `WorkerStarted.account` と `adapter` の組で同じ規則。
+- アカウント別（`GET /llm/accounts` の `stats`）は `WorkerStarted.account` と `adapter` の組で同じ規則。
 
 ---
 

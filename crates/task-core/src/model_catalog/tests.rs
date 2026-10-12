@@ -184,10 +184,14 @@ fn historical_model_role_assignment_event_survives_assignment_table_removal() {
         .unwrap();
     {
         let conn = store.lock().unwrap();
-        conn.execute_batch(include_str!("../../migrations/0053_model_role_assignments.sql"))
-            .unwrap();
-        conn.execute_batch(include_str!("../../migrations/0054_model_role_memberships.sql"))
-            .unwrap();
+        conn.execute_batch(include_str!(
+            "../../migrations/0053_model_role_assignments.sql"
+        ))
+        .unwrap();
+        conn.execute_batch(include_str!(
+            "../../migrations/0054_model_role_memberships.sql"
+        ))
+        .unwrap();
         conn.execute("DELETE FROM schema_migrations WHERE version = 69", [])
             .unwrap();
     }
@@ -208,5 +212,9 @@ fn historical_model_role_assignment_event_survives_assignment_table_removal() {
         let rows = stmt.query_map([], |row| row.get(0)).unwrap();
         rows.collect::<rusqlite::Result<Vec<String>>>().unwrap()
     };
-    assert!(!tables.iter().any(|name| name == "model_role_assignments" || name == "model_role_scopes"));
+    assert!(
+        !tables
+            .iter()
+            .any(|name| name == "model_role_assignments" || name == "model_role_scopes")
+    );
 }

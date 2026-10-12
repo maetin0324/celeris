@@ -578,29 +578,24 @@ pub struct StreamReset {
 
 // ---- Phase 13（ADR-0024）: Claude アカウントのプール ----
 
-/// `GET /accounts`。
+/// `GET /api/v1/llm/accounts`。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct AccountList {
-    /// `[accounts] claude_dir` の絶対パス。`[accounts]` が無ければ `null`。ADR-0025 D6: `roots["claude-code"]`
-    /// の別名として残す（後方互換）。
-    pub root: Option<String>,
-    /// ADR-0025 D6: `"claude-code"` / `"codex"` → 設定されていればその絶対パス、無ければ `null`。
+    /// source_id → 設定されていれば account pool の絶対パス。
     #[serde(default)]
     pub roots: std::collections::HashMap<String, Option<String>>,
     /// ADR 2026-10-08 account-concurrency-limits §(c): 保存値（`max_runs`）の無いアカウントの既定の上限
     /// （`[accounts] max_runs_per_account`。`[accounts]` が無い構成では組み込みの既定 2）。
     pub max_runs_per_account: usize,
-    /// 実アカウントを `adapter` → `id` の順に並べ、その後ろに暗黙アカウント（`implicit = true`）を行の設定順に並べる。
+    /// 実アカウントを source_id → account_id の順に並べ、その後ろに暗黙アカウントを設定順に並べる。
     pub items: Vec<AccountView>,
 }
 
-/// 1 アカウント（`GET /accounts` の要素、`POST /accounts` の応答）。
+/// 1 アカウント（`GET /api/v1/llm/accounts` の要素、accounts API の応答）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct AccountView {
-    /// ADR-0025 D1: `"claude-code"` | `"codex"`。
-    #[serde(default = "default_account_adapter")]
-    pub adapter: String,
-    pub id: String,
+    pub source_id: String,
+    pub account_id: String,
     /// アカウントディレクトリの絶対パス（ログイン手順に要る。秘密の中身は含まない）。暗黙アカウントは `null`。
     pub dir: Option<String>,
     /// ログイン済みを示すファイル（claude-code は `.credentials.json`、codex は `auth.json`）の有無
@@ -631,7 +626,7 @@ pub struct AccountView {
     pub models: Vec<String>,
 }
 
-/// `PATCH /accounts/{adapter}/{id}` の要求本文（ADR 2026-10-08 account-concurrency-limits §(d)）。
+/// `PATCH /api/v1/llm/sources/{source_id}/accounts/{account_id}` の要求本文（ADR 2026-10-08 account-concurrency-limits §(d)）。
 /// `max_runs` は必須（`null` で保存値を消して既定に戻す）。値は 1..=32 の整数。未知の欄は 400。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct AccountLimitPatchBody {
@@ -675,21 +670,14 @@ pub struct AccountStats {
     pub output_tokens: u64,
 }
 
-fn default_account_adapter() -> String {
-    "claude-code".to_string()
-}
-
-/// `POST /accounts` の要求本文。
+/// `POST /api/v1/llm/sources/{source_id}/accounts` の要求本文。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct AccountCreateBody {
     pub id: String,
-    /// ADR-0025 D6: `"claude-code"`（既定）| `"codex"`。
-    #[serde(default = "default_account_adapter")]
-    pub adapter: String,
 }
 
-/// `POST /accounts/{id}/check` の応答（ADR-0024 D6）。
+/// `POST /api/v1/llm/sources/{source_id}/accounts/{account_id}/check` の応答（ADR-0024 D6）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct AccountCheckResponse {
     pub result: crate::admin::AccountCheckResult,
@@ -700,7 +688,7 @@ pub struct AccountCheckResponse {
     pub usage: Option<AccountUsageView>,
 }
 
-/// `POST /accounts/{id}/login` の応答（ADR-0024 D7、ADR-0025 D5）。
+/// `POST /api/v1/llm/sources/{source_id}/accounts/{account_id}/login` の応答（ADR-0024 D7、ADR-0025 D5）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct AccountLoginStart {
     /// `"paste_code"`（claude-code: URL を開いて認可し、表示されたコードを `login/code` に貼る）|
@@ -719,14 +707,14 @@ fn default_login_kind() -> String {
     "paste_code".to_string()
 }
 
-/// `POST /accounts/{id}/login/code` の要求本文。
+/// `POST /api/v1/llm/sources/{source_id}/accounts/{account_id}/login/code` の要求本文。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct AccountLoginCodeBody {
     pub code: String,
 }
 
-/// `POST /accounts/{id}/login/code` の応答。
+/// `POST /api/v1/llm/sources/{source_id}/accounts/{account_id}/login/code` の応答。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct AccountLoginResult {
     /// `"ok" | "failed"`。

@@ -81,7 +81,7 @@ const ADD: &[&str] = &[
 #[test]
 fn celerisctl_refuses_an_older_db_and_leaves_its_schema_alone() {
     // The immediately preceding real schema must also be refused without migration.
-    const OLD_SCHEMA_VERSION: u32 = 52;
+    const OLD_SCHEMA_VERSION: u32 = 72;
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
     let db = db_at(dir.path(), OLD_SCHEMA_VERSION);
     for args in [&["ls"][..], ADD] {

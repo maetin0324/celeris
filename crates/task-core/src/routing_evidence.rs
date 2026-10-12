@@ -26,6 +26,8 @@ pub struct EvidenceRow {
     pub pass: u32,
     pub pass_lower: f64,
     pub pass_upper: f64,
+    pub pass_boot_lower: f64,
+    pub pass_boot_upper: f64,
     pub wall_median_s: Option<f64>,
     pub usd_list_median: Option<f64>,
     pub quota_per_run: BTreeMap<String, f64>,

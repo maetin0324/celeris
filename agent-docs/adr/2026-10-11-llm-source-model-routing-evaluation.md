@@ -249,7 +249,7 @@ D5 の評価 runner（crate `routing-eval`、bin `celeris-routing-eval`）と根
    問題の欄は `id`・`task_id`・`work_unit_id`・`created_at`・`genre`・`kind`・`command`（採点用の check。manifest 以外には出さない）・`split`・`stratum`・`subset_12`・`base_commit`・`head_commit`・`features`（`celeris.task-features/1`、作成時点 as_of）・`features_sha256`・問題ごとの `sha256`。
    `recheck` は各問題の check を base で失敗・head で成功と再実行で検め、結果を manifest の `recheck` 欄に書く（除外理由つき）。同じ `version` で sha256 が違う上書きは拒否し、`--version` を上げさせる。
    集合の内訳は ADR D1 の表どおり: 通常 5 model は 30 問（k=2）、fable・astra は 30 問の層を保つ 12 問（k=1）。候補の表は `candidates.rs` の `CANDIDATES` 定数 7 件だけ。
-3. **根拠表 `routing_evidence`（migration 0071_routing_evidence.sql）**: 列は `genre`・`harness_id`・`harness_version`（major）・`source_id`・`model_id`・`evidence_version`・`n`・`pass`・`pass_lower`・`pass_upper`・`wall_median_s`・`usd_list_median`・`quota_per_run_json`（窓→率の JSON）・`timeout_rate`・`low_confidence`（k=1・部分集合）。
+3. **根拠表 `routing_evidence`（migration 0071 + 付記 migration 0073）**: 列は `genre`・`harness_id`・`harness_version`（major）・`source_id`・`model_id`・`evidence_version`・`n`・`pass`・`pass_lower`・`pass_upper`（Wilson 95%）・`pass_boot_lower`・`pass_boot_upper`（問題単位 bootstrap 95%、seed 42、2000 resamples）・`wall_median_s`・`usd_list_median`・`quota_per_run_json`（窓→率の JSON）・`timeout_rate`・`low_confidence`（k=1・部分集合）。根拠表 Markdown、aggregate JSON、特徴量つき trial export にも Wilson と bootstrap を併記する。
    主キーは鍵 + `evidence_version`。`evidence_version` は `<manifest sha256>-<集計日 UTC>`。同じ版は丸ごと置換し、別の版は追記する（store の `insert_routing_evidence` / `list_routing_evidence`）。
    書くのは `aggregate --write-evidence` だけ。API と GUI に編集経路は作らない（ADR D2 の「手で編集しない」）。
 4. **評価 run の DB 契約（付記 2026-10-12 の 4 と同じ。aggregate が読む側）**: 1 試行 = `route_decisions` 1 行（stage `eval`、subject_kind `eval_problem`、input `{manifest_sha, trial_no, candidate}`、output `{selected:{source_id, model_id, harness_id, harness_version}}`）＋ `runs` 1 行（role `eval`、run_id で結合）＋ `route_outcomes`（passed・check_exit・timed_out・wall_secs・usage・usd_list）。aggregate は決定的 check の判定・timeout・token・quota を集め、同じ鍵の試行を問題単位で束ねて `stats` に渡す。
@@ -262,6 +262,7 @@ D5 の評価 runner（crate `routing-eval`、bin `celeris-routing-eval`）と根
 - 2026-10-11: 人の確認を反映。評価対象を 7 model に限定し、fable-5-1 / gpt-6-astra を k=1・層別部分集合、通常 5 model を k=2・30 問に縮小。Codex の quota は実測前に率を仮定せず、10-run dry-run と週 15% gate を必須化。opencode-go は根拠表対象外、qwen はローカル既定候補として明記。辞書順 fallback と `[routing.defaults.<genre>]` を除き、lane ごとの人の既定を harness×lane `route_defaults` に統合。
 
 - 2026-10-11: 人の補足（decision model は自然言語の入力・選択肢・確率）と人の補足 2（Input/Output の形）を受け、判断の記録と学習データの export を [2026-10-11-task-routing-features.md](2026-10-11-task-routing-features.md) に分けて決め、D2・D5 から参照した。
+- 2026-10-12: aggregate の根拠行にも問題単位 bootstrap 95% 区間を Wilson と並べ、routing_evidence および Markdown / JSON / JSONL export に保存する（migration 0073、seed 42・2000 resamples）。
 
 ## 未解決（evaluate・land 段で決める）
 

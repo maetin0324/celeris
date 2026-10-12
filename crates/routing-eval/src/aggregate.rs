@@ -198,6 +198,7 @@ pub fn build(manifest: &Manifest, trials: &[Trial]) -> (Aggregate, Vec<Value>) {
             .collect();
         let pass = outcomes.iter().filter(|&&p| p).count();
         let interval = stats::wilson_95(pass, outcomes.len());
+        let bootstrap = stats::bootstrap_interval(&outcomes, 42, 2_000, 0.95);
         let values: Vec<&Trial> = by_problem
             .values()
             .flat_map(|v| v.iter().copied())
@@ -238,6 +239,8 @@ pub fn build(manifest: &Manifest, trials: &[Trial]) -> (Aggregate, Vec<Value>) {
             pass: pass as u32,
             pass_lower: interval.lower,
             pass_upper: interval.upper,
+            pass_boot_lower: bootstrap.lower,
+            pass_boot_upper: bootstrap.upper,
             wall_median_s: median(values.iter().filter_map(|t| t.wall_secs).collect()),
             usd_list_median: median(values.iter().filter_map(|t| t.usd_list).collect()),
             quota_per_run,
@@ -356,14 +359,14 @@ pub fn run_args(args: Vec<String>) -> Result<(), String> {
     )
     .map_err(|e| e.to_string())?;
     let md = format!(
-        "# Routing evaluation evidence\n\nManifest: `{}`  \nEvidence version: `{}`\n\n| Genre | Harness | Version | Source | Model | n | Pass | Wilson 95% | Timeout | USD median | Wall median (s) | Low confidence |\n|---|---|---|---|---|---:|---:|---|---:|---:|---:|---|\n{}\n\nPareto set: {}\n\nPaired comparisons: {}\n",
+        "# Routing evaluation evidence\n\nManifest: `{}`  \nEvidence version: `{}`\n\n| Genre | Harness | Version | Source | Model | n | Pass | Wilson 95% | Bootstrap 95% | Timeout | USD median | Wall median (s) | Low confidence |\n|---|---|---|---|---|---:|---:|---|---|---:|---:|---:|---|\n{}\n\nPareto set: {}\n\nPaired comparisons: {}\n",
         result.manifest_sha256,
         result.evidence_version,
         result
             .rows
             .iter()
             .map(|r| format!(
-                "| {} | {} | {} | {} | {} | {} | {} | {:.3}–{:.3} | {:.3} | {} | {} | {} |",
+                "| {} | {} | {} | {} | {} | {} | {} | {:.3}–{:.3} | {:.3}–{:.3} | {:.3} | {} | {} | {} |",
                 r.key.genre,
                 r.key.harness_id,
                 r.key.harness_version,
@@ -373,6 +376,8 @@ pub fn run_args(args: Vec<String>) -> Result<(), String> {
                 r.pass,
                 r.pass_lower,
                 r.pass_upper,
+                r.pass_boot_lower,
+                r.pass_boot_upper,
                 r.timeout_rate,
                 r.usd_list_median.map_or("—".into(), |v| format!("{v:.4}")),
                 r.wall_median_s.map_or("—".into(), |v| format!("{v:.2}")),
@@ -514,6 +519,7 @@ mod tests {
         assert_eq!(row.n, 1);
         assert_eq!(row.pass, 1);
         assert!(row.pass_lower < 1.0 && row.pass_upper == 1.0);
+        assert_eq!((row.pass_boot_lower, row.pass_boot_upper), (1.0, 1.0));
         assert!(row.low_confidence);
         assert_eq!(row.usd_list_median, Some(0.4));
         assert_eq!(row.quota_per_run["7d"], 0.02);

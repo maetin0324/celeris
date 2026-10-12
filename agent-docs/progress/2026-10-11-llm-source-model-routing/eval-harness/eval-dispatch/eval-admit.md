@@ -24,6 +24,7 @@ Verification:
 - `cargo test -p celerisctl --bins`: exit 0。127 passed, 0 failed。
 - `cargo clippy --workspace --all-targets`: 警告・エラーなし。`cargo fmt --check -p task-dispatch -p celeris -p celerisctl`: 差分なし。
 - `cargo check --workspace --all-targets`: exit 0。
+- `scripts/dev/test-parallel.sh`（workspace 全体）はこの unit では走らせていない（担当は closeout）。変更が触る 3 crate（task-dispatch・celeris・celerisctl）の試験と workspace の clippy・check で代替した。
 
 未解決事項:
 - `eval_admission` の呼び出し側（`account_in_use`・`account_limit`・`quota_ok` の実測の集め方、defer した試行を `queued` に戻す経路）は起動段の unit（trial-run）が配線する。`EvalDefer::as_str()` はそのときの記録・ログ用。

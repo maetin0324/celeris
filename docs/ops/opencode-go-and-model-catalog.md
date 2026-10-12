@@ -62,8 +62,8 @@ candidates = [{ source = "opencode_go", model = "opencode-go/<model>" }]
 
 1. `celerisctl models discover` を実行する。source ごとに ok / error が出る。
 2. `celerisctl models list` で source（`claude-oauth` / `codex-oauth` / `opencode-go` / `openai-compatible:<id>`）ごとのモデルを見る。
-3. `GET /api/v1/accounts` に adapter `opencode-go` の account があり、`five_hour` / `seven_day` / `one_month` の 3 窓が出る。
-   idle の logged-in account は 300 秒おきに確認される。すぐ見たいときは `POST /api/v1/accounts/opencode-go/main/check`。
+3. `GET /api/v1/llm/accounts` に source_id `opencode_go` の account があり、`five_hour` / `seven_day` / `one_month` の 3 窓が出る。
+   idle の logged-in account は 300 秒おきに確認される。すぐ見たいときは `POST /api/v1/llm/sources/opencode_go/accounts/main/check`。
 4. web の `/accounts` に 3 本目のバー（1 か月）、`/models` に source ごとの表と発見ボタン・上書き編集があることを見る。
 
 ## 3a. 画面から役割へモデルを割り当てる（config を編集しない）

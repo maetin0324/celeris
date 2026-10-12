@@ -3249,13 +3249,13 @@ export function createFakeDaemon({
     // accounts/clusters (P4-13..15)
     // accounts・secrets・llm sources・mcp clients・clusters を状態付きで返す。ログイン・接続の途中状態（login_pending /
     // connect_pending）はサーバが持ち、GET で返す。secret の値は保存せず fingerprint だけ持つ。
-    if (/^\/api\/v1\/(accounts|secrets|llm\/sources|llm\/models|mcp\/clients|clusters)(\/|$)/.test(pathname)) {
+    if (/^\/api\/v1\/(llm\/accounts|secrets|llm\/sources|llm\/models|mcp\/clients|clusters)(\/|$)/.test(pathname)) {
       if (!server.fakeAc) {
         server.fakeAc = {
           accounts: [
             {
-              id: "main",
-              adapter: "claude-code",
+              source_id: "claude_oauth",
+              account_id: "main",
               logged_in: true,
               login_pending: false,
               usage: {
@@ -3268,8 +3268,8 @@ export function createFakeDaemon({
               },
             },
             {
-              id: "go-main",
-              adapter: "opencode-go",
+              source_id: "opencode_go",
+              account_id: "go-main",
               logged_in: true,
               login_pending: false,
               usage: {
@@ -3317,8 +3317,8 @@ export function createFakeDaemon({
         }
         const parts = pathname.replace("/api/v1/", "").split("/");
         const defaultMax = 1;
-        const limitView = (adapter, id) => {
-          const saved = ac.limits[`${adapter}/${id}`] ?? null;
+        const limitView = (source, account) => {
+          const saved = ac.limits[`${source}/${account}`] ?? null;
           return {
             max_runs: saved,
             effective_max_runs: saved ?? defaultMax,
@@ -3326,8 +3326,8 @@ export function createFakeDaemon({
           };
         };
         const implicitView = (a) => ({
-          adapter: "implicit",
-          id: a.id,
+          source_id: a.id,
+          account_id: a.id,
           dir: null,
           logged_in: true,
           login_pending: false,
@@ -3335,13 +3335,13 @@ export function createFakeDaemon({
           implicit: true,
           providers: a.providers ?? [],
           stats: { done: 0, error: 0, input_tokens: 0, output_tokens: 0, runs: 0 },
-          ...limitView("implicit", a.id),
+          ...limitView(a.id, a.id),
         });
         const view = (a) => ({
-          dir: `/accounts/${a.id}`,
+          dir: `/accounts/${a.account_id}`,
           in_use: 0,
           implicit: false,
-          ...limitView(a.adapter ?? "claude-code", a.id),
+          ...limitView(a.source_id, a.account_id),
           stats: {
             done: 0,
             error: 0,
@@ -3355,47 +3355,47 @@ export function createFakeDaemon({
           },
           ...a,
         });
-        if (parts[0] === "accounts") {
-          // PATCH /accounts/{adapter}/{id}: {max_runs: 1..=32 | null}（api.md §3.29a）。
-          if (parts.length === 3 && req.method === "PATCH") {
-            const [, adapter, id] = parts;
-            const real = ac.accounts.find((a) => (a.adapter ?? "claude-code") === adapter && a.id === id);
-            const implicit = adapter === "implicit" ? ac.implicit.find((a) => a.id === id) : undefined;
+        // 新路（ADR 2026-10-11 llm-source-harness-selection）: GET /llm/accounts・
+        // /llm/sources/{source_id}/accounts[/{account_id}[/check|/login|/login/code]]。暗黙アカウントの account_id は source_id。
+        if (parts[0] === "llm" && parts[1] === "accounts" && parts.length === 2 && req.method === "GET")
+          return json(200, {
+            items: [...ac.accounts.map(view), ...ac.implicit.map(implicitView)],
+            max_runs_per_account: defaultMax,
+            roots: {},
+          });
+        if (parts[0] === "llm" && parts[1] === "sources" && parts[3] === "accounts") {
+          const sourceId = parts[2];
+          const accountId = parts[4];
+          const sub = parts.slice(5).join("/");
+          if (parts.length === 4 && req.method === "POST") {
+            if (!input.id || ac.accounts.some((a) => a.source_id === sourceId && a.account_id === input.id))
+              return json(422, { detail: "id が不正か重複しています" });
+            const created = { source_id: sourceId, account_id: input.id, logged_in: false, login_pending: false };
+            ac.accounts.push(created);
+            return json(200, view(created));
+          }
+          const real = ac.accounts.find((a) => a.source_id === sourceId && a.account_id === accountId);
+          const implicit = ac.implicit.find((a) => a.id === sourceId && accountId === sourceId);
+          if (parts.length === 5 && req.method === "PATCH") {
+            // PATCH /llm/sources/{s}/accounts/{a}: {max_runs: 1..=32 | null}（gui-api.md §3.29a）。
             if (!real && !implicit) return json(404, { error: "account_not_found", message: "account not found" });
             const m = input.max_runs;
             if (!("max_runs" in input) || (m !== null && !(Number.isInteger(m) && m >= 1 && m <= 32)))
               return json(400, { error: "bad_request", message: "max_runs は 1..=32 の整数か null" });
-            if (m === null) delete ac.limits[`${adapter}/${id}`];
-            else ac.limits[`${adapter}/${id}`] = m;
+            if (m === null) delete ac.limits[`${sourceId}/${accountId}`];
+            else ac.limits[`${sourceId}/${accountId}`] = m;
             return json(200, real ? view(real) : implicitView(implicit));
           }
-          const acc = ac.accounts.find((a) => a.id === parts[1]);
-          if (parts.length === 1 && req.method === "GET")
-            return json(200, {
-              items: [...ac.accounts.map(view), ...ac.implicit.map(implicitView)],
-              max_runs_per_account: defaultMax,
-            });
-          if (parts.length === 1 && req.method === "POST") {
-            if (!input.id || ac.accounts.some((a) => a.id === input.id))
-              return json(422, { detail: "id が不正か重複しています" });
-            const created = {
-              id: input.id,
-              adapter: input.adapter ?? "claude-code",
-              logged_in: false,
-              login_pending: false,
-            };
-            ac.accounts.push(created);
-            return json(200, view(created));
-          }
-          if (!acc) return json(404, { error: "not found" });
-          if (parts.length === 2 && req.method === "DELETE") {
-            ac.accounts.splice(ac.accounts.indexOf(acc), 1);
+          if (!real && !implicit) return json(404, { error: "not found" });
+          if (implicit) return json(409, { detail: `implicit account of source ${sourceId} cannot be changed` });
+          if (parts.length === 5 && req.method === "DELETE") {
+            ac.accounts.splice(ac.accounts.indexOf(real), 1);
             return json(200, {});
           }
-          if (parts[2] === "check" && req.method === "POST")
+          if (sub === "check" && req.method === "POST")
             return json(200, { checked_at: "2026-09-30T00:00:00Z", result: "ok" });
-          if (parts[2] === "login" && parts.length === 3 && req.method === "POST") {
-            acc.login_pending = true;
+          if (sub === "login" && req.method === "POST") {
+            real.login_pending = true;
             return json(200, {
               kind: "paste_code",
               url: "https://login.example/auth",
@@ -3403,14 +3403,14 @@ export function createFakeDaemon({
               user_code: "ABCD-1234",
             });
           }
-          if (parts[2] === "login" && parts.length === 3 && req.method === "DELETE") {
-            acc.login_pending = false;
+          if (sub === "login" && req.method === "DELETE") {
+            real.login_pending = false;
             return json(200, {});
           }
-          if (parts[2] === "login" && parts[3] === "code" && req.method === "POST") {
+          if (sub === "login/code" && req.method === "POST") {
             if (!input.code) return json(422, { detail: "code が空です" });
-            acc.login_pending = false;
-            acc.logged_in = true;
+            real.login_pending = false;
+            real.logged_in = true;
             return json(200, { result: "ok" });
           }
         }

@@ -58,20 +58,20 @@ CoS の指示文や他のハーネスを消す必要はありません。
   `concurrency = 0` は従来どおり設定エラーです。管理 API（`POST /providers`・`PATCH /providers/{id}`）の本文に
   `concurrency` を入れても型だけを検査し、`providers.d/` には保存しません。応答の `concurrency` は互換のために残していますが、意味は持ちません。
 - **上限はアカウントごとの `max_runs`** です。GUI の「アカウント」画面で各アカウントの上限を編集できます。
-  API では `PATCH /api/v1/accounts/{adapter}/{id}` に `{"max_runs": 3}` を送ります。`{"max_runs": null}` を送ると保存値を消して既定に戻ります。
+  API では `PATCH /api/v1/llm/sources/{source_id}/accounts/{account_id}` に `{"max_runs": 3}` を送ります（実アカウントは `source_id` が `claude_oauth` / `codex_oauth` / `opencode_go`）。`{"max_runs": null}` を送ると保存値を消して既定に戻ります。
   値は 1〜32 です。変更は再起動も reload も要らず、次の tick から効きます。下げても、走っている run は止めません。
   保存先は daemon の DB（`account_limits` 表）で、再起動と `POST /reload` を跨いで残ります。
-- **実効上限**は、次の順に決まります。`GET /api/v1/accounts` の各 item の `effective_max_runs` と、どれを使ったかを示す `max_runs_source` で確認できます。
+- **実効上限**は、次の順に決まります。`GET /api/v1/llm/accounts` の各 item の `effective_max_runs` と、どれを使ったかを示す `max_runs_source` で確認できます。
   1. そのアカウントに保存した `max_runs`（`"account"`）
   2. `[accounts] max_runs_per_account`（`"default"`。`[accounts]` が無い構成では 2）
 
   行に書かれた旧 `[[providers]].concurrency` は、プールの行でも暗黙アカウントでも上限に使いません（読めて警告が出るだけです）。
 - `[accounts] max_runs_per_account` は、保存値の無いアカウントの**既定値**です。これを変えたときは、従来どおり再起動が必要です。
 - **暗黙アカウント**: アカウントを持たない行（`account_pool` が無い、または false。ローカルの Qwen、PaperQA、LDR、LangMem など）には、
-  その行の **LLM source ごとに**暗黙のアカウントが 1 件あります（`adapter = "implicit"`、id は解決済み LLM source の id）。
+  その行の **LLM source ごとに**暗黙のアカウントが 1 件あります（`account_id` は解決済み LLM source の id と同じ。`source_id` も同じ値）。
   同じ source を使う行は 1 件を共有します（例: `opencode-qwen` と `pi-qwen` はどちらも `openai_compatible:qwen` なので、上限も実行中の数も 1 件分）。
   アカウント画面に「暗黙アカウント」の印と、その source を使う行の一覧（`providers`）が出ます。上限の欄は他のアカウントと同じです。
-  API のパスは `/api/v1/accounts/implicit/<llm source id>`（例: `/api/v1/accounts/implicit/openai_compatible:qwen`）です。ログイン・確認・削除はありません。
+  API のパスは `/api/v1/llm/sources/<llm source id>/accounts/<llm source id>`（例: `/api/v1/llm/sources/openai_compatible:qwen/accounts/openai_compatible:qwen`）です。ログイン・確認・削除はありません。
   その source を使う行を消す、またはプールに変えると、次の reload か再起動でその暗黙アカウントの保存値も消えます
   （同じ source を使う他の行が残っていれば保存値は残ります）。
 - **CoS の対話 run**（ADR-0089、Phase R6-5）は、全体の `max_concurrency` に数えません。葉の run で枠が埋まっていても起動します。

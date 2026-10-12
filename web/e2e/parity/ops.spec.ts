@@ -238,7 +238,11 @@ test.describe("P4-13..15 accounts/clusters", () => {
       .getByRole("button", { name: "sub を削除" })
       .click();
     await expect(page.getByRole("listitem", { name: "アカウント sub" })).toHaveCount(0);
-    expect(seen.some((r) => r.path.startsWith("/api/v1/accounts/sub/login/code") && r.method === "POST")).toBe(true);
+    expect(
+      seen.some(
+        (r) => r.path.startsWith("/api/v1/llm/sources/claude_oauth/accounts/sub/login/code") && r.method === "POST",
+      ),
+    ).toBe(true);
   });
 
   test("parity: mcp/clients/:id/calls 取得", async ({ page }) => {

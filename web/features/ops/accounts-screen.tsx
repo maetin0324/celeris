@@ -3,10 +3,10 @@ import { useId, useRef, useState } from "react";
 import { apiGet } from "../../api/client";
 import type {
   AccountCheckResponse,
+  AccountCheckResult,
   AccountList,
   AccountLoginStart,
   AccountView,
-  AccountCheckResult,
 } from "../../api/generated/types";
 import { accountKeys } from "../../api/queries/keys";
 import {
@@ -27,22 +27,27 @@ import { cn } from "../../lib/utils";
 import { McpClientsSection } from "./mcp-clients";
 import { SecretsSection } from "./secrets-section";
 
-/** account の道具（adapter）の表示名。未知の値はそのまま。 */
-export function adapterLabel(adapter: string): string {
-  return adapter === "opencode-go" ? "OpenCode Go" : adapter;
+/** LLM source（source_id）の表示名。未知の値はそのまま。 */
+export function sourceLabel(sourceId: string): string {
+  const labels: Record<string, string> = {
+    claude_oauth: "claude-code",
+    codex_oauth: "codex",
+    opencode_go: "OpenCode Go",
+  };
+  return labels[sourceId] ?? sourceId;
 }
 
 type Sender = ReturnType<typeof useActionResult>;
 // 枠の色は styles.css の @layer base（--color-input）に任せ、ここでは寸法だけを持つ。
 const inputClass = "block w-full min-h-11 rounded border p-2";
 const fieldErrorClass = "mt-1 text-label text-danger-foreground";
-export const ADAPTER_CHOICES = ["claude-code", "codex", "opencode-go"] as const;
+export const SOURCE_CHOICES = ["claude_oauth", "codex_oauth", "opencode_go"] as const;
 
 /** ログイン中の状態（url・user_code）は account 単位で画面の state に持つ。取り直しでは消さない。 */
 type Logins = Record<string, AccountLoginStart>;
 
 function accountKey(item: AccountView) {
-  return `${item.adapter ?? "claude-code"}:${item.id}`;
+  return `${item.source_id}:${item.account_id}`;
 }
 
 const checkLabel: Readonly<Record<AccountCheckResult, string>> = {
@@ -56,7 +61,7 @@ function checkResultLabel(result: string): string {
   return Object.hasOwn(checkLabel, result) ? checkLabel[result as AccountCheckResult] : result;
 }
 
-/** 除外理由（GET /accounts の excluded_reason）の日本語。未知の値はそのまま出す。 */
+/** 除外理由（GET /llm/accounts の excluded_reason）の日本語。未知の値はそのまま出す（旧 GUI と同じ語）。 */
 export const EXCLUDED_REASON_LABEL: Readonly<Record<string, string>> = {
   not_logged_in: "未ログイン",
   at_capacity: "上限に達しています",
@@ -192,7 +197,7 @@ function isDenied(results: Record<string, ActionResult>) {
   return Object.values(results).some((r) => r.status === 403 || r.status === 401);
 }
 
-/** アカウントごとの上限 max_runs の範囲（PATCH /accounts/{adapter}/{id} が受ける 1..=32。api.md §3.29a）。 */
+/** アカウントごとの上限 max_runs の範囲（PATCH /api/v1/llm/sources/{source_id}/accounts/{account_id} が受ける 1..=32。gui-api.md §3.29a）。 */
 export const MAX_RUNS_MIN = 1;
 export const MAX_RUNS_MAX = 32;
 
@@ -214,12 +219,11 @@ function pathSegment(value: string): string {
   return encodeURIComponent(value).replaceAll("%3A", ":");
 }
 
-/** 上限を設定（数値）・解除（null）する要求。暗黙アカウントも adapter = "implicit" で同じ形。 */
+/** 上限を設定（数値）・解除（null）する要求。暗黙アカウントも同じ形（account_id は source_id）。 */
 export function accountLimitTarget(item: AccountView, maxRuns: number | null): ActionTarget {
-  const adapter = item.adapter ?? "claude-code";
   return {
     id: `limit:${accountKey(item)}`,
-    path: `/api/accounts/${pathSegment(adapter)}/${pathSegment(item.id)}`,
+    path: `/api/llm/sources/${pathSegment(item.source_id)}/accounts/${pathSegment(item.account_id)}`,
     method: "PATCH",
     body: { max_runs: maxRuns } satisfies Pick<AccountView, "max_runs">,
   };
@@ -251,7 +255,7 @@ function limitErrorText(result: ActionResult) {
   return `保存できませんでした: ${result.message}`;
 }
 
-/** 実効上限がどこから来たか（GET /accounts の max_runs_source）。 */
+/** 実効上限がどこから来たか（GET /llm/accounts の max_runs_source）。 */
 export function limitSourceLabel(item: Pick<AccountView, "max_runs_source">, defaultMax: number): string {
   switch (item.max_runs_source) {
     case "account":
@@ -300,7 +304,7 @@ function LimitEditor({
     <form
       noValidate
       className="min-w-0 space-y-2 rounded-md border border-border bg-background p-3"
-      aria-label={`上限 ${item.id}`}
+      aria-label={`上限 ${item.account_id}`}
       onSubmit={(event) => {
         event.preventDefault();
         send(value);
@@ -359,7 +363,7 @@ export function AccountCard({
   setLogin,
 }: {
   item: AccountView;
-  /** 保存値の無いアカウントの既定（GET /accounts の max_runs_per_account）。 */
+  /** 保存値の無いアカウントの既定（GET /llm/accounts の max_runs_per_account）。 */
   defaultMax: number;
   /** 一覧を取得した時刻（server 時計に補正済み）。残り時間と観測の相対時刻の基準。 */
   fetchedAtMs: number;
@@ -373,10 +377,8 @@ export function AccountCard({
   const [codeError, setCodeError] = useState<string | null>(null);
   const codeRef = useRef<HTMLInputElement>(null);
   const codeErrorId = useId();
-  const adapter = item.adapter ?? "claude-code";
   const key = accountKey(item);
-  const base = `/api/accounts/${encodeURIComponent(item.id)}`;
-  const q = `?adapter=${encodeURIComponent(adapter)}`;
+  const base = `/api/llm/sources/${pathSegment(item.source_id)}/accounts/${pathSegment(item.account_id)}`;
   const check = sender.results[`check:${key}`];
   const checked = check?.ok ? (check.response as AccountCheckResponse | undefined) : undefined;
   const state = accountState(item);
@@ -411,11 +413,11 @@ export function AccountCard({
     return (
       <li
         className="min-w-0 space-y-3 rounded-lg border border-border bg-surface p-4"
-        aria-label={`アカウント ${item.id}`}
+        aria-label={`アカウント ${item.account_id}`}
         data-implicit="true"
       >
         <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <h3 className="min-w-0 break-words text-body font-semibold text-foreground">{item.id}</h3>
+          <h3 className="min-w-0 break-words text-body font-semibold text-foreground">{item.account_id}</h3>
           <Badge tone="info">暗黙アカウント</Badge>
           {item.excluded_reason && (
             <Badge tone="danger" data-state="除外中">
@@ -424,7 +426,7 @@ export function AccountCard({
           )}
         </div>
         <p className="break-words text-label text-muted-foreground">
-          アカウントを持たない行の LLM source「{item.id}」{" "}
+          アカウントを持たない行の LLM source「{item.account_id}」{" "}
           の同時実行数をここで管理します。ログイン・確認・削除はありません。
         </p>
         <DataList
@@ -432,7 +434,7 @@ export function AccountCard({
             {
               key: "models",
               label: "使う model",
-              value: rows.length > 0 ? rows.join(", ") : item.id,
+              value: rows.length > 0 ? rows.join(", ") : item.account_id,
             },
             {
               key: "state",
@@ -450,15 +452,15 @@ export function AccountCard({
   return (
     <li
       className="min-w-0 space-y-3 rounded-lg border border-border bg-surface p-4"
-      aria-label={`アカウント ${item.id}`}
+      aria-label={`アカウント ${item.account_id}`}
     >
       <div className="flex min-w-0 flex-wrap items-center gap-2">
-        <h3 className="min-w-0 break-words text-body font-semibold text-foreground">{item.id}</h3>
+        <h3 className="min-w-0 break-words text-body font-semibold text-foreground">{item.account_id}</h3>
         <Badge tone={state.tone} data-state={state.label}>
           {state.label}
         </Badge>
       </div>
-      <section className="min-w-0 space-y-3" aria-label={`使用量 ${item.id}`}>
+      <section className="min-w-0 space-y-3" aria-label={`使用量 ${item.account_id}`}>
         <UsageBar label="短期枠（5時間）" window={item.usage?.five_hour} fetchedAtMs={fetchedAtMs} />
         <UsageBar label="長期枠（7日）" window={item.usage?.seven_day} fetchedAtMs={fetchedAtMs} />
         <UsageBar label="月間枠（1か月）" window={item.usage?.one_month} fetchedAtMs={fetchedAtMs} />
@@ -487,7 +489,7 @@ export function AccountCard({
                   ? `除外: ${excludedReasonLabel(item.excluded_reason)}`
                   : "-",
           },
-          { key: "adapter", label: "道具", value: adapterLabel(adapter) },
+          { key: "source", label: "LLM source", value: sourceLabel(item.source_id) },
           {
             key: "credential",
             label: "認証情報",
@@ -509,7 +511,7 @@ export function AccountCard({
         <Button
           disabled={disabled}
           aria-describedby={deniedId}
-          onClick={() => void sender.run([{ id: `check:${key}`, path: `${base}/check${q}`, body: {} }])}
+          onClick={() => void sender.run([{ id: `check:${key}`, path: `${base}/check`, body: {} }])}
         >
           確認
         </Button>
@@ -517,7 +519,7 @@ export function AccountCard({
           disabled={disabled}
           aria-describedby={deniedId}
           onClick={() =>
-            void sender.run([{ id: `login:${key}`, path: `${base}/login${q}`, body: {} }]).then((out) => {
+            void sender.run([{ id: `login:${key}`, path: `${base}/login`, body: {} }]).then((out) => {
               if (out[0]?.ok) setLogin(key, out[0].response as AccountLoginStart);
             })
           }
@@ -531,13 +533,13 @@ export function AccountCard({
             </Button>
           }
           title="アカウントを削除しますか"
-          target={item.id}
+          target={item.account_id}
           consequence="このアカウントの登録を削除し、以後の run で選べなくなります。"
           reversibility="削除は元に戻せません。必要ならアカウントを追加し直してください。"
           followUp="アカウント一覧で削除結果を確認できます。"
-          confirmLabel={`${item.id} を削除`}
+          confirmLabel={`${item.account_id} を削除`}
           onConfirm={async () => {
-            const [result] = await sender.run([{ id: `delete:${key}`, path: `${base}${q}`, method: "DELETE" }]);
+            const [result] = await sender.run([{ id: `delete:${key}`, path: base, method: "DELETE" }]);
             if (result && !result.ok) throw new Error(result.message);
           }}
         />
@@ -553,7 +555,7 @@ export function AccountCard({
       {awaiting && (
         <section
           className="min-w-0 space-y-2 rounded-md border border-border bg-background p-3"
-          aria-label={`ログイン ${item.id}`}
+          aria-label={`ログイン ${item.account_id}`}
         >
           <p role="status" className="text-label font-medium text-foreground">
             ログイン待ち
@@ -583,16 +585,14 @@ export function AccountCard({
               }
               setCode("");
               setCodeError(null);
-              void sender
-                .run([{ id: `code:${key}`, path: `${base}/login/code${q}`, body: { code: sent } }])
-                .then((out) => {
-                  const r = out[0];
-                  if (r?.ok) setLogin(key, null);
-                  else if (r && r.status !== 403 && r.status !== 401) {
-                    setCodeError(r.message);
-                    codeRef.current?.focus();
-                  }
-                });
+              void sender.run([{ id: `code:${key}`, path: `${base}/login/code`, body: { code: sent } }]).then((out) => {
+                const r = out[0];
+                if (r?.ok) setLogin(key, null);
+                else if (r && r.status !== 403 && r.status !== 401) {
+                  setCodeError(r.message);
+                  codeRef.current?.focus();
+                }
+              });
             }}
           >
             <label className="block text-label text-foreground">
@@ -621,11 +621,9 @@ export function AccountCard({
                 disabled={disabled}
                 aria-describedby={deniedId}
                 onClick={() =>
-                  void sender
-                    .run([{ id: `cancel:${key}`, path: `${base}/login${q}`, method: "DELETE" }])
-                    .then((out) => {
-                      if (out[0]?.ok) setLogin(key, null);
-                    })
+                  void sender.run([{ id: `cancel:${key}`, path: `${base}/login`, method: "DELETE" }]).then((out) => {
+                    if (out[0]?.ok) setLogin(key, null);
+                  })
                 }
               >
                 ログインを取り消す
@@ -641,7 +639,7 @@ export function AccountCard({
 
 function CreateForm({ sender, blocked, deniedId }: { sender: Sender; blocked: boolean; deniedId: string | undefined }) {
   const [id, setId] = useState("");
-  const [adapter, setAdapter] = useState<string>("claude-code");
+  const [sourceId, setSourceId] = useState<string>("claude_oauth");
   const [error, setError] = useState<string | null>(null);
   const idRef = useRef<HTMLInputElement>(null);
   const errorId = useId();
@@ -660,14 +658,16 @@ function CreateForm({ sender, blocked, deniedId }: { sender: Sender; blocked: bo
           return;
         }
         setError(null);
-        void sender.run([{ id: "create", path: "/api/accounts", body: { id: value, adapter } }]).then((out) => {
-          const r = out[0];
-          if (r?.ok) setId("");
-          else if (r && r.status !== 403 && r.status !== 401) {
-            setError(r.message);
-            idRef.current?.focus();
-          }
-        });
+        void sender
+          .run([{ id: "create", path: `/api/llm/sources/${pathSegment(sourceId)}/accounts`, body: { id: value } }])
+          .then((out) => {
+            const r = out[0];
+            if (r?.ok) setId("");
+            else if (r && r.status !== 403 && r.status !== 401) {
+              setError(r.message);
+              idRef.current?.focus();
+            }
+          });
       }}
     >
       <h2 className="text-section font-semibold text-foreground">アカウントを追加</h2>
@@ -692,11 +692,11 @@ function CreateForm({ sender, blocked, deniedId }: { sender: Sender; blocked: bo
           )}
         </div>
         <label className="block min-w-0 text-label text-foreground">
-          道具（adapter）
-          <select className={inputClass} value={adapter} onChange={(e) => setAdapter(e.target.value)}>
-            {ADAPTER_CHOICES.map((a) => (
+          LLM source
+          <select className={inputClass} value={sourceId} onChange={(e) => setSourceId(e.target.value)}>
+            {SOURCE_CHOICES.map((a) => (
               <option key={a} value={a}>
-                {adapterLabel(a)}
+                {sourceLabel(a)}
               </option>
             ))}
           </select>
@@ -713,7 +713,7 @@ function CreateForm({ sender, blocked, deniedId }: { sender: Sender; blocked: bo
 export function AccountsScreen() {
   const query = useQuery({
     queryKey: accountKeys.list({ section: "accounts" }),
-    queryFn: ({ signal }: { signal: AbortSignal }) => apiGet<AccountList>("/api/accounts", signal),
+    queryFn: ({ signal }: { signal: AbortSignal }) => apiGet<AccountList>("/api/llm/accounts", signal),
   });
   const sender = useActionResult(accountKeys.all);
   const [logins, setLogins] = useState<Logins>({});

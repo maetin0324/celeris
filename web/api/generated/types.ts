@@ -28,7 +28,6 @@ export type AccountCooldownView = {
 export type AccountList = {
   "items": Array<AccountView>;
   "max_runs_per_account": number;
-  "root"?: string | null;
   "roots"?: {
   [key: string]: string | null;
 };
@@ -94,12 +93,11 @@ export type AccountUsageView = {
 };
 
 export type AccountView = {
-  "adapter"?: string;
+  "account_id": string;
   "cooldown"?: AccountCooldownView | null;
   "dir"?: string | null;
   "effective_max_runs": number;
   "excluded_reason"?: string | null;
-  "id": string;
   "implicit": boolean;
   "in_use": number;
   "last_check"?: AccountCheckView | null;
@@ -109,6 +107,7 @@ export type AccountView = {
   "max_runs_source": string;
   "models"?: Array<string>;
   "score"?: number | null;
+  "source_id": string;
   "stats": AccountStats;
   "usage"?: AccountUsageView | null;
 };

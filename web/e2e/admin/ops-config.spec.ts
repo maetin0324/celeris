@@ -163,13 +163,17 @@ test.describe("ops-config", () => {
     await input.fill("33");
     await main.getByRole("button", { name: "上限を保存" }).click();
     await expectFieldError(page, input, "1〜32 の整数");
-    expect(daemon.requests.some((r) => r.method === "PATCH" && r.path.startsWith("/api/v1/accounts/"))).toBe(false);
+    expect(
+      daemon.requests.some(
+        (r) => r.method === "PATCH" && r.path.startsWith("/api/v1/llm/sources/claude_oauth/accounts/"),
+      ),
+    ).toBe(false);
     await input.fill("3");
     await main.getByRole("button", { name: "上限を保存" }).click();
     await expect(main.getByText("0 / 実効上限 3（このアカウントに保存した上限）")).toBeVisible();
-    expect(daemon.requests.some((r) => r.method === "PATCH" && r.path === "/api/v1/accounts/claude-code/main")).toBe(
-      true,
-    );
+    expect(
+      daemon.requests.some((r) => r.method === "PATCH" && r.path === "/api/v1/llm/sources/claude_oauth/accounts/main"),
+    ).toBe(true);
     await main.getByRole("button", { name: "既定に戻す" }).click();
     await expect(main.getByText("0 / 実効上限 1（既定（max_runs_per_account = 1））")).toBeVisible();
     // 暗黙アカウント（LLM source 単位。同じ source を使う行を `providers` で出す）: 印があり、
@@ -184,7 +188,9 @@ test.describe("ops-config", () => {
     await expect(implicit.getByText("0 / 実効上限 2（このアカウントに保存した上限）")).toBeVisible();
     expect(
       daemon.requests.some(
-        (r) => r.method === "PATCH" && r.path === "/api/v1/accounts/implicit/openai_compatible:qwen",
+        (r) =>
+          r.method === "PATCH" &&
+          r.path === "/api/v1/llm/sources/openai_compatible:qwen/accounts/openai_compatible:qwen",
       ),
     ).toBe(true);
     await implicit.getByRole("button", { name: "既定に戻す" }).click();
@@ -192,7 +198,7 @@ test.describe("ops-config", () => {
   });
 
   test("accounts: 上限の保存の API エラーを項目に出す", async ({ page }) => {
-    await page.route("**/api/accounts/claude-code/main", (route) =>
+    await page.route("**/api/llm/sources/claude_oauth/accounts/main", (route) =>
       route.request().method() === "PATCH"
         ? route.fulfill({
             status: 400,

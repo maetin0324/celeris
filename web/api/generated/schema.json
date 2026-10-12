@@ -1,7 +1,7 @@
 {
   "$defs": {
     "AccountCheckResponse": {
-      "description": "`POST /accounts/{id}/check` の応答（ADR-0024 D6）。",
+      "description": "`POST /api/v1/llm/sources/{source_id}/accounts/{account_id}/check` の応答（ADR-0024 D6）。",
       "properties": {
         "checked_at": {
           "type": "string"
@@ -99,10 +99,10 @@
       "type": "object"
     },
     "AccountList": {
-      "description": "`GET /accounts`。",
+      "description": "`GET /api/v1/llm/accounts`。",
       "properties": {
         "items": {
-          "description": "実アカウントを `adapter` → `id` の順に並べ、その後ろに暗黙アカウント（`implicit = true`）を行の設定順に並べる。",
+          "description": "実アカウントを source_id → account_id の順に並べ、その後ろに暗黙アカウントを設定順に並べる。",
           "items": {
             "$ref": "#/$defs/AccountView"
           },
@@ -114,13 +114,6 @@
           "minimum": 0,
           "type": "integer"
         },
-        "root": {
-          "description": "`[accounts] claude_dir` の絶対パス。`[accounts]` が無ければ `null`。ADR-0025 D6: `roots[\"claude-code\"]`\nの別名として残す（後方互換）。",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
         "roots": {
           "additionalProperties": {
             "type": [
@@ -129,7 +122,7 @@
             ]
           },
           "default": {},
-          "description": "ADR-0025 D6: `\"claude-code\"` / `\"codex\"` → 設定されていればその絶対パス、無ければ `null`。",
+          "description": "source_id → 設定されていれば account pool の絶対パス。",
           "type": "object"
         }
       },
@@ -219,7 +212,7 @@
       "type": "object"
     },
     "AccountLoginResult": {
-      "description": "`POST /accounts/{id}/login/code` の応答。",
+      "description": "`POST /api/v1/llm/sources/{source_id}/accounts/{account_id}/login/code` の応答。",
       "properties": {
         "detail": {
           "type": [
@@ -238,7 +231,7 @@
       "type": "object"
     },
     "AccountLoginStart": {
-      "description": "`POST /accounts/{id}/login` の応答（ADR-0024 D7、ADR-0025 D5）。",
+      "description": "`POST /api/v1/llm/sources/{source_id}/accounts/{account_id}/login` の応答（ADR-0024 D7、ADR-0025 D5）。",
       "properties": {
         "expires_at": {
           "description": "claude-code は 10 分後、codex は 15 分後（RFC 3339）。",
@@ -452,11 +445,9 @@
       "type": "object"
     },
     "AccountView": {
-      "description": "1 アカウント（`GET /accounts` の要素、`POST /accounts` の応答）。",
+      "description": "1 アカウント（`GET /api/v1/llm/accounts` の要素、accounts API の応答）。",
       "properties": {
-        "adapter": {
-          "default": "claude-code",
-          "description": "ADR-0025 D1: `\"claude-code\"` | `\"codex\"`。",
+        "account_id": {
           "type": "string"
         },
         "cooldown": {
@@ -488,9 +479,6 @@
             "string",
             "null"
           ]
-        },
-        "id": {
-          "type": "string"
         },
         "implicit": {
           "description": "§(e): 暗黙アカウント（`adapter = \"implicit\"`、非プール行の LLM source ごとに 1 件）か。",
@@ -549,6 +537,9 @@
             "null"
           ]
         },
+        "source_id": {
+          "type": "string"
+        },
         "stats": {
           "$ref": "#/$defs/AccountStats"
         },
@@ -564,7 +555,8 @@
         }
       },
       "required": [
-        "id",
+        "source_id",
+        "account_id",
         "logged_in",
         "in_use",
         "login_pending",

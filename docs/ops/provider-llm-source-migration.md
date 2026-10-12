@@ -218,7 +218,7 @@ Qwen を非 cheap tier に戻すことはない。戻した後も providers API�
 | プール行（`account_pool = true`） | 行の `concurrency` と各アカウントの `max_runs_per_account` の両方で止まる | 各アカウントの実効上限（`effective_max_runs`）だけで止まる |
 | 非プール行（本番の `opencode-qwen`・`pi-qwen`・`ldr-qwen`・`paperqa-qwen`・`langmem-main`） | 行の `concurrency` | その行の LLM source の**暗黙アカウント** `implicit/<llm source id>` の実効上限（同じ source を使う行は 1 件を共有する）。保存値が無ければ `max_runs_per_account`（既定 2）。旧 `concurrency` は使わない |
 | `[accounts] max_runs_per_account` | 全アカウント共通の上限 | 保存値の無いアカウントの既定値（変更には再起動が要る。従来どおり） |
-| アカウントごとの上限 | 無い | アカウント画面か `PATCH /api/v1/accounts/{adapter}/{id}` で即時に設定（DB に保存） |
+| アカウントごとの上限 | 無い | アカウント画面か `PATCH /api/v1/llm/sources/{source_id}/accounts/{account_id}` で即時に設定（DB に保存） |
 
 **リリースを入れ替えた時点で、非プール行の上限は旧 `concurrency` から既定 2 に変わる**（旧 `concurrency` は上限に効かない）。
 Qwen 行（GPU 1 枚）を 1 本に保つには、新リリースの daemon が動いた直後に手順 3 で `max_runs = 1` を保存する。
@@ -232,7 +232,7 @@ PATCH は新リリースにしか無いので、保存までの数分は Qwen �
 
 ### 前提
 
-- 新しいリリース（`account_limits` の migration と `PATCH /api/v1/accounts/{adapter}/{id}` を含むもの）が稼働していること。
+- 新しいリリース（`account_limits` の migration と `PATCH /api/v1/llm/sources/{source_id}/accounts/{account_id}` を含むもの）が稼働していること。
   リリースの入れ替えは [selfdeploy.md](selfdeploy.md) に従う。
 - 以下のコマンドは Bash で実行し、パイプ途中の失敗も検出する。API token をシェル変数 `TOKEN` に安全に読み込んで実行する（値を画面・ログに残さない）。
   API の listen が `127.0.0.1:7710` と違えば URL を替える。
@@ -251,8 +251,8 @@ cp -a ~/.config/celeris/config.toml ~/.config/celeris/config.toml.bak-account-li
 # providers.d を使っていれば
 cp -a ~/.config/celeris/providers.d ~/.config/celeris/providers.d.bak-account-limits-20261008
 # 変更前の保存値・実効上限だけを控える（既存の控えを上書きしない）
-(umask 077; set -C; curl -fsS -H "Authorization: Bearer $TOKEN" "$API/accounts" \
-  | jq -e '{max_runs_per_account, items: [.items[] | {adapter, id, max_runs, effective_max_runs, max_runs_source}]}' \
+(umask 077; set -C; curl -fsS -H "Authorization: Bearer $TOKEN" "$API/llm/accounts" \
+  | jq -e '{max_runs_per_account, items: [.items[] | {source_id, account_id, max_runs, effective_max_runs, max_runs_source}]}' \
   > ~/.config/celeris/account-limits-before-20261008.json)
 ```
 
@@ -265,7 +265,7 @@ cp -a ~/.config/celeris/providers.d ~/.config/celeris/providers.d.bak-account-li
 # config と providers.d に残っている concurrency
 grep -n '^[[:space:]]*concurrency[[:space:]]*=' ~/.config/celeris/config.toml ~/.config/celeris/providers.d/*.toml 2>/dev/null
 # 各アカウント（暗黙アカウントを含む）の実効上限と、その出どころ
-curl -fsS -H "Authorization: Bearer $TOKEN" "$API/accounts" \
+curl -fsS -H "Authorization: Bearer $TOKEN" "$API/llm/accounts" \
   | jq -r '.max_runs_per_account as $d | "default=\($d)",
            (.items[] | [.adapter, .id, (.provider // "-"), (.max_runs|tostring), .effective_max_runs, .max_runs_source, .in_use] | @tsv)'
 ```
@@ -294,16 +294,16 @@ GUI の「アカウント」画面で各アカウント（「暗黙アカウン�
 # id は行の id ではなく LLM source。同じ source を使う行（opencode-qwen・pi-qwen・ldr-qwen・paperqa-qwen）は
 # この 1 件でまとめて止まるので、PATCH は source ごとに 1 回でよい。
 curl -fsS -X PATCH -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d '{"max_runs": 1}' "$API/accounts/implicit/openai_compatible:qwen" | jq '{id, providers, max_runs, effective_max_runs, max_runs_source}'
+  -d '{"max_runs": 1}' "$API/llm/sources/openai_compatible:qwen/accounts/openai_compatible:qwen" | jq '{account_id, providers, max_runs, effective_max_runs, max_runs_source}'
 # langmem-main のように source が celeris の行（同じ source を使う他の非プール行と 1 件を共有する）
 curl -fsS -X PATCH -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d '{"max_runs": 1}' "$API/accounts/implicit/celeris" | jq '{id, providers, max_runs, effective_max_runs, max_runs_source}'
+  -d '{"max_runs": 1}' "$API/llm/sources/celeris/accounts/celeris" | jq '{account_id, providers, max_runs, effective_max_runs, max_runs_source}'
 # 実アカウント: プールの同時数を旧 concurrency に近づけたいときだけ（例: opencode-go のアカウントを 1 本に）
 curl -fsS -X PATCH -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d '{"max_runs": 1}' "$API/accounts/opencode-go/<アカウント id>" | jq '{id, max_runs, effective_max_runs, max_runs_source}'
+  -d '{"max_runs": 1}' "$API/llm/sources/opencode_go/accounts/<アカウント id>" | jq '{account_id, max_runs, effective_max_runs, max_runs_source}'
 ```
 
-- 自分の構成の source id は `GET /accounts` の暗黙アカウントの `id` と `providers` で確認する（行の id では引けない）。
+- 自分の構成の source id は `GET /llm/accounts` の暗黙アカウントの `account_id` と `providers` で確認する（行の id では引けない）。
 - 応答の `max_runs_source` が `account` になっていればよい。値は 1〜32。反映は次の tick からで、再起動も reload も要らない。
 - 旧 `concurrency` と同じ上限を残したい非プール行も、その source の暗黙アカウントに `max_runs` を保存する。
   保存しない source は手順 4 の後で `max_runs_per_account`（本番は 2）に変わる。旧値と異なる場合は、その変更を意図していることを確認する。
@@ -347,7 +347,7 @@ reload で反映できない事情があれば、人が対象の user service �
 
 ```sh
 # 実効上限: 暗黙アカウントは保存値（account）か既定（default）。旧 concurrency は使わない
-curl -fsS -H "Authorization: Bearer $TOKEN" "$API/accounts" \
+curl -fsS -H "Authorization: Bearer $TOKEN" "$API/llm/accounts" \
   | jq -r '.items[] | [.adapter, .id, (.max_runs|tostring), .effective_max_runs, .max_runs_source, .in_use, (.excluded_reason // "-")] | @tsv'
 # 警告ログが消えたこと（reload / 再起動の時刻より後に 1 行も出ない）
 journalctl --user -u 'celeris@<現在のリリース>.service' --since '<手順 5 の時刻>' --no-pager | grep -c 'concurrency is deprecated'
@@ -371,7 +371,7 @@ curl -fsS -H "Authorization: Bearer $TOKEN" "$API/providers" | jq -r '.items[] |
 
   ```sh
   curl -fsS -X PATCH -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-    -d '{"max_runs": null}' "$API/accounts/implicit/openai_compatible:qwen" | jq '{id, providers, max_runs, effective_max_runs, max_runs_source}'
+    -d '{"max_runs": null}' "$API/llm/sources/openai_compatible:qwen/accounts/openai_compatible:qwen" | jq '{account_id, providers, max_runs, effective_max_runs, max_runs_source}'
   ```
 
   即時に効く。解除後は GET の実効上限を再確認する。暗黙アカウントは保存値が無ければ `default`（`max_runs_per_account`）に戻る。旧 `concurrency` は上限に効かない。

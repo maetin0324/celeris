@@ -100,8 +100,8 @@ export const defaultFixtures = Object.fromEntries(
 // ADR 2026-10-04-multi-objective-model-routing §9/§10 Phase 1: GET /llm/routing/catalog。
 // 旧設定から導いた形を模す。品質・価格・能力・context の欠測は null（画面は「不明」と出す）。
 export const routingCatalogFixture = {
-  catalog_version: "legacy-fixture-1",
-  mode: "legacy",
+  catalog_version: "fixture-1",
+  mode: "shadow",
   models: [
     {
       id: "claude-opus",

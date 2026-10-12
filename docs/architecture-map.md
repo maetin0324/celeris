@@ -142,7 +142,7 @@ tasks: [01M3QEQPP31ZB29RH6YGFGTAPF, 01M3XZ5PYSTTC6GXAH8TZVRHSA]
 |---|---|---|---|
 | `celerisctl`（CLI。migration をしない `open_client`） | celerisctl::main | `crates/celerisctl/src/main.rs` | [ADR-0004](../agent-docs/adr/0004-taskctl-cli.md), [ADR-0095](../agent-docs/adr/0095-worker-runs-see-the-db-read-only.md) |
 | `llm-proxy`（ローカル LLM 供給プロキシ） | llm-proxy::server | `crates/llm-proxy/src/server.rs` | [ADR-0053](../agent-docs/adr/0053-llm-source-proxy.md), [ADR-0132](../agent-docs/adr/0132-provider-llm-source-split-and-cheap-qwen.md) |
-| llm-proxy の多目的ルーティング側（state 選択・fallback/breaker、shadow queue、estimator sidecar client、routing context 解決） | llm-proxy | `crates/llm-proxy/src/{selection_state,fallback,shadow,shadow_budget,estimator_sidecar,estimator_shadow,routing_context,legacy_catalog}.rs` | [ADR 2026-10-04](../agent-docs/adr/2026-10-04-multi-objective-model-routing.md) §2・§4・§5・§7 |
+| llm-proxy の多目的ルーティング側（state 選択・fallback/breaker、shadow queue、estimator sidecar client、routing context 解決） | llm-proxy | `crates/llm-proxy/src/{selection_state,fallback,shadow,shadow_budget,estimator_sidecar,estimator_shadow,routing_context}.rs` | [ADR 2026-10-04](../agent-docs/adr/2026-10-04-multi-objective-model-routing.md) §2・§4・§5・§7 |
 | `celeris-mcp`（外部エージェント向け MCP） | celeris-mcp::rpc | `crates/celeris-mcp/src/rpc.rs` | [ADR-0056](../agent-docs/adr/0056-mcp-server.md) |
 | `celeris-credentiald`（credential broker） | celeris-credentiald::lib | `crates/celeris-credentiald/src/lib.rs` | [ADR-0080](../agent-docs/adr/0080-browser-phase2-policy-broker-approval.md) |
 | `tests/e2e`（daemon 起動を伴う結合テスト） | e2e | `tests/e2e/tests/scenarios.rs` | [ADR-0010](../agent-docs/adr/0010-phase7-hardening.md) |

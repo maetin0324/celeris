@@ -17,7 +17,6 @@ export const UNKNOWN = "不明";
 
 export function routingModeLabel(mode: RoutingMode): string {
   const known: Record<RoutingMode, string> = {
-    legacy: "legacy（従来の選択）",
     shadow: "shadow（比較の記録だけ）",
     enforce: "enforce（policy で選択）",
   };

@@ -4839,7 +4839,7 @@ export type RoutingFeaturesRecord = {
   "stage"?: FeatureStage | null;
 };
 
-export type RoutingMode = "legacy" | "shadow" | "enforce";
+export type RoutingMode = "shadow" | "enforce";
 
 export type RoutingOutcome = {
   "acceptance_passed"?: boolean | null;

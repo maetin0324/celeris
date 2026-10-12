@@ -23891,7 +23891,6 @@
     },
     "RoutingMode": {
       "enum": [
-        "legacy",
         "shadow",
         "enforce"
       ],

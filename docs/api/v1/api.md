@@ -6,8 +6,8 @@
 - 改訂: 2026-10-11（ADR 2026-10-11-task-wait-reasons D4・D6）— **破壊的。v1 のまま**。`DaemonSnapshot.awaiting_human[]`・`awaiting_children[]`・`unroutable[]` を消し、`DaemonSnapshot.task_waits[]` の kind（`review_awaiting_human`・`delegated_children`・`unroutable`）へ寄せた（§3.20）。
 - 改訂: 2026-10-08（ADR 2026-10-08-account-concurrency-limits）— **追加と deprecate。v1 のまま**。エンドポイント 216:
   `PATCH /llm/sources/{source_id}/accounts/{account_id}`（アカウントごとの上限 `max_runs`。§3.29a）。`AccountView` に `max_runs` /
-  `effective_max_runs` / `max_runs_source` / `implicit` / `providers` を追加し、`dir` は暗黙アカウントで `null` になる。
-  `GET /llm/accounts` はアカウントを持たない行の **LLM source ごとの暗黙アカウント**（`adapter = "implicit"`、`id = <llm source id>`。
+  `effective_max_runs` / `max_runs_source` / `implicit` / `models` を追加し、`dir` は暗黙アカウントで `null` になる（2026-10-12 に `adapter` / `id` 欄を `source_id` / `account_id` に改め、`root` を `roots` に統合した）。
+  `GET /llm/accounts` はアカウントを持たない行の **LLM source ごとの暗黙アカウント**（`implicit: true`、`source_id` と `account_id` が <llm source id>。
   同じ source を使う行は 1 件を共有する）も返す。`max_runs_per_account` は
   「保存値の無いアカウントの既定」になり、`[accounts]` が無い構成でも組み込みの既定 2 を返す。`DaemonSnapshot.implicit_accounts` を追加。
   `ProviderView` / `ProviderConfigView` / `ProviderLive` の `concurrency` は **deprecated**（schema に `deprecated: true`。値は残るが
@@ -1072,38 +1072,33 @@ llm source と harness の選択を実行時に行うため、`GET/POST /provide
 ### 3.29〜3.35 アカウントのプール（claude-code / codex。ADR-0024・ADR-0025）と上限（ADR 2026-10-08-account-concurrency-limits）
 
 設計は ADR-0024（claude-code）と ADR-0025（codex を追加）。`[accounts] claude_dir` / `codex_dir` の下の 1
-ディレクトリ（`<claude_dir>/<id>/` または `<codex_dir>/<id>/`）が 1 アカウントで、アカウントは `(adapter, id)`
-で識別する（**id が同じでもアダプタが違えば別のアカウント**）。`account_pool = true` のプロバイダ
-（claude-code か codex）の run は、残量（claude-code は stream-json の `rate_limit_event`、codex は
-`token_count` の `rate_limits` が出す `five_hour` / `seven_day` の `utilization`）から選んだアカウントの環境変数
-（claude-code は `CLAUDE_SECURESTORAGE_CONFIG_DIR`、codex は `CODEX_HOME`）で起動する（選び方は ADR-0024 D3。
-アダプタが違っても同じ計算式を使う）。`[accounts]` はどちらか一方の根ディレクトリだけでもよい。
-`[accounts]` が無い構成では、`GET /llm/accounts` は `{"root": null, "roots": {}, "max_runs_per_account": 2, "items": [<暗黙アカウントだけ>]}`、
+ディレクトリ（`<claude_dir>/<id>/` または `<codex_dir>/<id>/`）が 1 アカウントで、アカウントは `(source_id, account_id)`
+で識別する（**account_id が同じでも source が違えば別のアカウント**）。source ID と内部のアダプタの対応は固定で、
+`claude_oauth` が claude-code、`codex_oauth` が codex、`opencode_go` が opencode-go（ADR 2026-10-11-llm-source-harness-selection）。
+プールを持たない LLM source には暗黙アカウントが 1 件あり、その `account_id` は source ID と同じ。
+実アカウントの run は残量（claude-code は stream-json の `rate_limit_event`、codex は `token_count` の `rate_limits` が出す
+`five_hour` / `seven_day` の `utilization`）から選んだアカウントの環境変数（claude-code は `CLAUDE_SECURESTORAGE_CONFIG_DIR`、
+codex は `CODEX_HOME`）で起動する（選び方は ADR-0024 D3。アダプタが違っても同じ計算式を使う）。`[accounts]` はどちらか一方の根ディレクトリだけでもよい。
+`[accounts]` が無い構成では、`GET /llm/accounts` は `{"roots": {}, "max_runs_per_account": 2, "items": [<暗黙アカウントだけ>]}`、
 3.30〜3.35 は 409 `accounts_unavailable`（3.29a の暗黙アカウントの編集は使える）。**3.30 以降はすべて管理系**（`token_file` 未設定でも 401。ADR-0017 M3）。3.29 は無認証の読み取り。
-`id` の規則はプロバイダと同じ（1〜64 文字の ASCII 英数字・`-`・`_`）。3.31〜3.35 は `?adapter=` クエリを受け取る
-（省略時 `"claude-code"`。未知の値は 400 `bad_request`）。3.30 はクエリを受け取らず、本文の `adapter` で指定する。
-3.31〜3.35 は `active` のときだけ受け、`standby`/`draining` の間は 503 `standby`（§1.5）。celeris への管理要求の経路が
+`account_id` の規則は 1〜64 文字の ASCII 英数字・`-`・`_`（暗黙アカウントは source ID そのもの）。
+クエリ（`?adapter=`）は無い。3.31〜3.35 は `active` のときだけ受け、`standby`/`draining` の間は 503 `standby`（§1.5）。celeris への管理要求の経路が
 無い構成も 409 `accounts_unavailable`。
 
 #### 3.29 `GET /llm/accounts` → 200 `AccountList`
 
 ```json
-{"root": "/home/u/celeris/claude-accounts",
- "roots": {"claude-code": "/home/u/celeris/claude-accounts", "codex": "/home/u/celeris/codex-accounts"},
+{"roots": {"claude_oauth": "/home/u/celeris/claude-accounts", "codex_oauth": "/home/u/celeris/codex-accounts"},
  "max_runs_per_account": 2,
  "items": [
-   {"adapter": "claude-code", "id": "a", "dir": "/home/u/celeris/claude-accounts/a", "logged_in": true, "in_use": 1,
+   {"source_id": "claude_oauth", "account_id": "a", "dir": "/home/u/celeris/claude-accounts/a", "logged_in": true, "in_use": 1,
      "usage": {"five_hour": {"utilization": 0.14, "resets_at": "…"}, "seven_day": {"utilization": 0.24, "resets_at": "…"},
                "status": "allowed", "observed_at": "…", "source": "run"},
      "score": 0.81, "excluded_reason": null, "cooldown": null,
      "last_check": {"at": "…", "result": "ok", "detail": "ok"}, "login_pending": false,
-     "stats": {"runs": 12, "done": 10, "error": 1, "input_tokens": 1234, "output_tokens": 567}},
-   {"adapter": "codex", "id": "c", "dir": "/home/u/celeris/codex-accounts/c", "logged_in": false, "in_use": 0,
-     "usage": null, "score": null, "excluded_reason": "not_logged_in", "cooldown": null,
-     "last_check": null, "login_pending": false,
-     "stats": {"runs": 0, "done": 0, "error": 0, "input_tokens": 0, "output_tokens": 0},
-     "max_runs": 3, "effective_max_runs": 3, "max_runs_source": "account", "implicit": false, "providers": []},
-   {"adapter": "implicit", "id": "openai_compatible:qwen", "dir": null, "logged_in": true, "in_use": 2,
+     "stats": {"runs": 12, "done": 10, "error": 1, "input_tokens": 1234, "output_tokens": 567},
+     "max_runs": null, "effective_max_runs": 2, "max_runs_source": "default", "implicit": false, "models": []},
+   {"source_id": "qwen", "account_id": "qwen", "dir": null, "logged_in": true, "in_use": 2,
      "usage": null, "score": null, "excluded_reason": "at_capacity", "cooldown": null,
      "last_check": null, "login_pending": false,
      "stats": {"runs": 40, "done": 38, "error": 1, "input_tokens": 0, "output_tokens": 0},
@@ -1111,17 +1106,18 @@ llm source と harness の選択を実行時に行うため、`GET/POST /provide
      "models": ["qwen3.8-27b", "qwen3.8-27b-instruct"]}]}
 ```
 
-（1 件目の `claude-code/a` も同じ 5 欄を持つ。例では省略した。）
+（1 件目の `claude_oauth/a` と codex の実アカウントも同じ欄を持つ。例では省略した。）
 
-- `root` は `roots["claude-code"]` の別名として残す（後方互換。ADR-0025 D6）。`roots` はアダプタ →
-  設定されていればその絶対パス・無ければ `null`。
-- `items[]` は `adapter` → `id` の順（`"claude-code"` が先）。`logged_in` はログイン済みを示すファイル
-  （claude-code は `.credentials.json`、codex は `auth.json`）の有無（中身は読まない）。
+- `roots` は source ID → 設定されていればその絶対パス・無ければ `null`。旧 `root`（claude-code 専用の別名）は無い。
+- `items[]` は実アカウントを `source_id` → `account_id` の順に並べ（`"claude_oauth"` が先）、その後ろに暗黙アカウントを設定順に並べる。
+  `logged_in` はログイン済みを示すファイル（claude-code は `.credentials.json`、codex は `auth.json`）の有無（中身は読まない）。
+- 各要素の欄: `source_id`・`account_id`・`implicit`（暗黙アカウントは `true`）・`models`（暗黙アカウントの source に紐付く model id。実アカウントは空）。
+  旧 `adapter` / `id` 欄は無い。
 - `usage` / `score` / `excluded_reason` / `cooldown` / `last_check` / `login_pending` / `in_use` はスナップショットの観測値（最初の tick 前は `null` / `false` / 0）。
   `usage` と `cooldown` はそのアダプタの根ディレクトリの `.celeris-usage.json` にも保存され、再起動後も残る（`last_check` も同じ）。
 - `excluded_reason`（選ばれない理由）: `not_logged_in` / `at_capacity` / `cooldown` / `five_hour_exhausted` / `seven_day_exhausted` / `rejected`。選べるなら `null` で `score` が入る。
 - `cooldown` は `{until, reason}`。`reason`: `auth_failed`（再ログインが必要）/ `throttled` / `exhausted`。
-- `stats` は `WorkerStarted.account` と対応する `WorkerFinished` から、同じ `WorkerStarted.adapter` のものだけ集計する（§5.8 のプロバイダ集計と同じ規則。同じ id でもアダプタが違えば別集計）。
+- `stats` は `WorkerStarted.account` と対応する `WorkerFinished` から、同じ `WorkerStarted.adapter` のものだけ集計する（§5.8 のプロバイダ集計と同じ規則。同じ id でも source が違えば別集計）。
 - 時刻はすべて RFC 3339。
 - **上限**（ADR 2026-10-08-account-concurrency-limits §(c)）: `max_runs` はそのアカウントに保存された上限（3.29a で設定。無ければ `null`）。
   `effective_max_runs` は実効上限で、`max_runs` → `max_runs_per_account` の順に決まる（旧 `[[providers]].concurrency` は使わない）。
@@ -1131,17 +1127,13 @@ llm source と harness の選択を実行時に行うため、`GET/POST /provide
   （`in_use` / `excluded_reason` はスナップショットなので次の tick から）。
 - `max_runs_per_account` は保存値の無いアカウントの**既定**（`[accounts] max_runs_per_account`。`[accounts]` が無ければ組み込みの 2）。
   これの変更は従来どおり再起動が要る。
-- **暗黙アカウント**（§(e)）: アカウントを持たない行（`account_pool` が off。`providers.d` を含む）が使う **LLM source ごとに 1 件**、
-  `adapter = "implicit"`・`id = <llm source id>`（`celeris` / `claude_oauth` / `codex_oauth` / `opencode_go` / `openai_compatible:<source id>` /
-  `none` / `unknown`）・`implicit: true`・`providers: [その source を使う非プール行の id…]`（設定順）。同じ source を使う行は 1 件を共有する
-  （本番の `opencode-qwen` と `pi-qwen` はどちらも `openai_compatible:qwen` なので 1 件）。実アカウントの後ろに source を使い始めた行の
-  設定順で並ぶ（スナップショットから作るので最初の tick 前は出ない）。
-  `dir: null`・`logged_in: true`・`usage` / `score` / `cooldown` / `last_check` は `null`。`in_use` はその source を使う行の全 run
-  （非 CoS・CoS・レビュー）の合計で、CoS の +1 は無い（全数を `effective_max_runs` と比べ、満杯なら `excluded_reason: "at_capacity"`）。
-  `stats` は `providers` の行の run（`WorkerStarted.provider`）の集計（行をまたいで合計）。3.30〜3.35（作成・削除・確認・ログイン）の対象外で、
-  その source を使う行の有無に追従する（行を消す・プールに変える・`llm_source` を変えて reload / 再起動し、source を使う行が無くなると
-  保存値も消える。`DELETE /providers/{id}` の後も次の reload で同じ判定。他の行が同じ source を使い続けていれば保存値は残る）。
-  実アカウントの `id`・`max_runs` は `(adapter, id)` ごとで、`DELETE /llm/sources/{source_id}/accounts/{account_id}` で保存値も消え、`POST /llm/sources/{source_id}/accounts` で作り直すと古い保存値は引き継がない。
+- **暗黙アカウント**（§(e)）: プールを持たない LLM source ごとに 1 件。`implicit: true`・`account_id = source_id`・`models`（その source の model id、設定順）。
+  同じ source を使う行は 1 件を共有する。実アカウントの後ろに、source を使い始めた順に並ぶ（スナップショットから作るので最初の tick 前は出ない）。
+  `dir: null`・`logged_in: true`・`usage` / `score` / `cooldown` / `last_check` は `null`。`in_use` はその source を使う run の合計で、
+  CoS の +1 は無い（全数を `effective_max_runs` と比べ、満杯なら `excluded_reason: "at_capacity"`）。
+  3.30〜3.35（作成・削除・確認・ログイン）の対象外。保存値は source を使う行が無くなると消える（reload / 再起動で判定）。
+  実アカウントの `account_id`・`max_runs` は `(source_id, account_id)` ごとで、`DELETE /llm/sources/{source_id}/accounts/{account_id}` で保存値も消え、
+  `POST /llm/sources/{source_id}/accounts` で作り直すと古い保存値は引き継がない。
 
 #### 3.29a `PATCH /llm/sources/{source_id}/accounts/{account_id}` → 200 `AccountView`
 
@@ -1150,28 +1142,29 @@ llm source と harness の選択を実行時に行うため、`GET/POST /provide
 
 - 要求本文 `{"max_runs": 3}` で設定、`{"max_runs": null}` で保存値を消して既定（3.29 の `effective_max_runs` の 2・3 番目）に戻す。
   `max_runs` の欄が無い本文・未知の欄・オブジェクトでない本文・1..=32 の整数でない値（0、負数、33 以上、小数、文字列）は 400 `bad_request`。
-- `{source_id}` は source ID、`{account_id}` は公開 account ID。実 account の account ID が 1〜64 文字の ASCII 英数字・`-`・`_` で
-  なければ 400 `bad_request`。暗黙 account の account ID は source ID と同じ。
-- 存在しないアカウント（実: 根の下にディレクトリが無い。暗黙: その source を使う非プール行が今の設定に無い。プール行の id も含む）は 404
-  `account_not_found`。実アダプタの根が設定されていない構成・celeris への管理要求の経路が無い構成は 409 `accounts_unavailable`。
-  暗黙アカウントは `[accounts]` が無くても編集できる。
+- `{source_id}` は source ID（`claude_oauth` / `codex_oauth` / `opencode_go` / 暗黙の source の ID）、`{account_id}` は公開 account ID。
+  実 account の account ID が 1〜64 文字の ASCII 英数字・`-`・`_` でなければ 400 `bad_request`。暗黙アカウントの account ID は source ID と同じ。
+- 存在しないアカウントは 404 `account_not_found`。実 account: 根の下にディレクトリが無い、または source の根が設定されていない。
+  暗黙アカウント: `account_id` が source ID と違う、または source が今の設定に無い。
+  管理要求の経路が無い構成・根が無い構成の管理要求は 409 `accounts_unavailable`。暗黙アカウントは `[accounts]` が無くても編集できる。
 - **使用中でも変更できる**。下げても走っている run は止めない（新しい run が `in_use` が下がるまで待つ）。celeris が DB に書いてから
   ディスパッチャの表を更新するので、**次の tick から効く**。再起動も `POST /reload` も要らず、どちらを跨いでも残る（DB が正本。backups の対象）。
 - PATCH は `/llm/sources/{source_id}/accounts/{account_id}` を使い、静的な `check` / `login` suffix と衝突しない。
 - 応答は更新後の `AccountView`（3.29 と同じ形）。
- `POST /llm/sources/{source_id}/accounts` → 201 `AccountView`（Location も同じ source/account 路）
 
-要求本文 `{"id": "b", "adapter": "codex"}`（`adapter` 省略時 `"claude-code"`）。`id` の形が不正、または `adapter` が
-`"claude-code"`/`"codex"` 以外なら 400 `bad_request`。`<root>/<id>/` を 0700 で作る
-（`root` はそのアダプタの根ディレクトリ。設定されていなければ 409 `accounts_unavailable`）。既にあれば 409
-`account_exists`。作っただけでは `logged_in: false`（3.33 でログインする）。
+#### 3.30 `POST /llm/sources/{source_id}/accounts` → 201 `AccountView`（`Location` も同じ source/account 路）
+
+**管理系**。要求本文 `{"id": "b"}`。`source_id` は account pool に対応する source ID（`claude_oauth` / `codex_oauth`）。
+`id` の形が不正なら 400 `bad_request`。`<root>/<id>/` を 0700 で作る
+（`root` はその source の根ディレクトリ。設定されていなければ 409 `accounts_unavailable`）。既にあれば 409
+`account_exists`。作っただけでは `logged_in: false`（3.33 でログインする）。本文に `adapter` 欄は無い（未知の欄は 400）。
 
 #### 3.31 `DELETE /llm/sources/{source_id}/accounts/{account_id}` → 200 `{}`
 
 `source_id` は account pool に対応する source ID。ディレクトリを `<root>/.removed/<id>-<unix秒>/` に移す（認証ファイルは消さない。人が後で片付ける）。
 `in_use > 0` なら 409 `account_in_use`、無ければ 404 `account_not_found`。進行中のログインは止める。
 **実装は celeris 側で行う**（`AdminRequest::AccountRemove` 経由。`in_use` はディスパッチャの権威ある値
-`account_in_use`（running/reviewing を直接見る。`(adapter, id)` で判定）で判定するので、task-api のスナップショット経由のレースが無い）。
+`account_in_use`（running/reviewing を直接見る。`(source_id, account_id)` に対応する実 account で判定するので、task-api のスナップショット経由のレースが無い）。
 
 #### 3.32 `POST /llm/sources/{source_id}/accounts/{account_id}/check` → 200 `AccountCheckResponse`
 
@@ -1182,7 +1175,7 @@ llm source と harness の選択を実行時に行うため、`GET/POST /provide
  "usage": {"five_hour": {…}, "seven_day": {…}, "status": "allowed", "observed_at": "…", "source": "check"}}
 ```
 
-`detail` と `usage` は無ければ欄ごと省略。存在しない `id` は 404 `account_not_found`。
+`detail` と `usage` は無ければ欄ごと省略。存在しない `account_id` は 404 `account_not_found`。
 claude-code はそのアカウントで `claude -p … --max-turns 1 --model <[accounts].check_model>` を、codex は
 `codex exec --json --skip-git-repo-check "Reply with exactly: ok"`（モデルは指定しない）を、それぞれ 1 回だけ
 （60 秒まで）実行し、観測値（`rate_limit_event` / `token_count`）を記録する。codex は出力に 401 の行が出たら

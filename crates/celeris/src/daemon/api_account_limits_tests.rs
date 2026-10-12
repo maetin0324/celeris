@@ -1,5 +1,6 @@
-//! ADR 2026-10-08 account-concurrency-limits §(d)(e): `PATCH /api/v1/accounts/{adapter}/{id}` と `GET /accounts` を、
-//! 本物の API（`api_settings` → `ApiState`）・本物の管理要求の処理（`handle_admin_request`）・本物の `Dispatcher` で通す。
+//! ADR 2026-10-08 account-concurrency-limits §(d)(e): `PATCH /api/v1/llm/sources/{source_id}/accounts/{account_id}` と
+//! `GET /api/v1/llm/accounts` を、本物の API（`api_settings` → `ApiState`）・本物の管理要求の処理（`handle_admin_request`）・
+//! 本物の `Dispatcher` で通す。
 
 use std::path::Path;
 
@@ -60,13 +61,13 @@ async fn admin_loop(
     }
 }
 
-fn item<'a>(list: &'a Value, adapter: &str, id: &str) -> &'a Value {
+fn item<'a>(list: &'a Value, source: &str, account: &str) -> &'a Value {
     list["items"]
         .as_array()
         .expect("items")
         .iter()
-        .find(|v| v["adapter"] == adapter && v["id"] == id)
-        .unwrap_or_else(|| panic!("{adapter}/{id} not in {list}"))
+        .find(|v| v["source_id"] == source && v["account_id"] == account)
+        .unwrap_or_else(|| panic!("{source}/{account} not in {list}"))
 }
 
 /// 本物の API（`api_settings` → `ApiState` → `serve_with_listener`）を起動し、`(base, client, stop, server)`
@@ -138,7 +139,7 @@ async fn patch_account_limits_validate_persist_and_survive_reload_and_restart() 
     let requests = async {
         let get = || async {
             let resp = client
-                .get(format!("{base}/accounts"))
+                .get(format!("{base}/llm/accounts"))
                 .bearer_auth(TOKEN)
                 .send()
                 .await
@@ -146,9 +147,11 @@ async fn patch_account_limits_validate_persist_and_survive_reload_and_restart() 
             assert_eq!(resp.status().as_u16(), 200);
             resp.json::<Value>().await.expect("json")
         };
+        // `path` は `<source_id>/<account_id>`。
         let patch = |path: String, body: Value| {
             let client = client.clone();
-            let url = format!("{base}/accounts/{path}");
+            let (source, account) = path.split_once('/').expect("source/account");
+            let url = format!("{base}/llm/sources/{source}/accounts/{account}");
             async move {
                 let resp = client
                     .patch(url)
@@ -165,12 +168,12 @@ async fn patch_account_limits_validate_persist_and_survive_reload_and_restart() 
         // GET: 実アカウントの既定、暗黙アカウント（既定）。account pool を持つ source には暗黙アカウントが無い。
         let list = get().await;
         assert_eq!(list["max_runs_per_account"], json!(2));
-        let a = item(&list, "claude-code", "a");
+        let a = item(&list, "claude_oauth", "a");
         assert_eq!(a["max_runs"], json!(null));
         assert_eq!(a["effective_max_runs"], json!(2));
         assert_eq!(a["max_runs_source"], json!("default"));
         assert_eq!(a["implicit"], json!(false));
-        let qwen = item(&list, "implicit", "qwen");
+        let qwen = item(&list, "qwen", "qwen");
         assert_eq!(qwen["implicit"], json!(true));
         assert_eq!(qwen["dir"], json!(null));
         assert_eq!(qwen["effective_max_runs"], json!(2));
@@ -180,35 +183,34 @@ async fn patch_account_limits_validate_persist_and_survive_reload_and_restart() 
                 .as_array()
                 .expect("items")
                 .iter()
-                .any(|v| v["adapter"] == "implicit" && v["id"] == "claude_oauth"),
+                .any(|v| v["implicit"] == true && v["source_id"] == "claude_oauth"),
             "pool sources have no implicit account: {list}"
         );
         // 実アカウントが先、暗黙アカウントが後ろ。
-        let adapters: Vec<&str> = list["items"]
-            .as_array()
-            .expect("items")
-            .iter()
-            .map(|v| v["adapter"].as_str().expect("adapter"))
-            .collect();
-        assert_eq!(adapters.last(), Some(&"implicit"));
-        assert_eq!(adapters.first(), Some(&"claude-code"));
+        let items = list["items"].as_array().expect("items");
+        assert_eq!(
+            items.first().expect("first")["source_id"],
+            json!("claude_oauth")
+        );
+        assert_eq!(items.last().expect("last")["implicit"], json!(true));
 
         // 設定。
-        let (status, body) = patch("claude-code/a".into(), json!({"max_runs": 3})).await;
+        let (status, body) = patch("claude_oauth/a".into(), json!({"max_runs": 3})).await;
         assert_eq!(status, 200, "{body}");
+        assert_eq!(body["account_id"], json!("a"));
         assert_eq!(body["max_runs"], json!(3));
         assert_eq!(body["effective_max_runs"], json!(3));
         assert_eq!(body["max_runs_source"], json!("account"));
-        let (status, body) = patch("implicit/qwen".into(), json!({"max_runs": 2})).await;
+        let (status, body) = patch("qwen/qwen".into(), json!({"max_runs": 2})).await;
         assert_eq!(status, 200, "{body}");
         assert_eq!(body["implicit"], json!(true));
         assert_eq!(body["effective_max_runs"], json!(2));
         assert_eq!(body["max_runs_source"], json!("account"));
         // 静的な段と同名の id（`check` / `login`）も編集できる。
         for id in ["check", "login"] {
-            let (status, body) = patch(format!("claude-code/{id}"), json!({"max_runs": 4})).await;
+            let (status, body) = patch(format!("claude_oauth/{id}"), json!({"max_runs": 4})).await;
             assert_eq!(status, 200, "{id}: {body}");
-            assert_eq!(body["id"], json!(id));
+            assert_eq!(body["account_id"], json!(id));
             assert_eq!(body["max_runs"], json!(4));
         }
 
@@ -223,34 +225,30 @@ async fn patch_account_limits_validate_persist_and_survive_reload_and_restart() 
             json!({"max_runs": 2, "extra": true}),
             json!([2]),
         ] {
-            let (status, body) = patch("claude-code/a".into(), bad.clone()).await;
+            let (status, body) = patch("claude_oauth/a".into(), bad.clone()).await;
             assert_eq!(status, 400, "{bad}: {body}");
             assert_eq!(body["code"], json!("bad_request"), "{bad}");
         }
-        let (status, body) = patch("bogus/a".into(), json!({"max_runs": 2})).await;
-        assert_eq!((status, body["code"].clone()), (400, json!("bad_request")));
-        let (status, body) = patch("claude-code/bad.id".into(), json!({"max_runs": 2})).await;
+        let (status, body) = patch("claude_oauth/bad.id".into(), json!({"max_runs": 2})).await;
         assert_eq!((status, body["code"].clone()), (400, json!("bad_request")));
 
-        // 存在しないアカウント（404）: 実アカウントのディレクトリが無い、宣言の無い source、pool を持つ source。
+        // 存在しないアカウント・source（404）: 実アカウントのディレクトリが無い、宣言の無い source、
+        // pool の source に対応する暗黙アカウントは無い、暗黙アカウントで account_id が source_id と違う、
+        // 根が設定されていない pool の source（`codex_oauth` は `[accounts]` に無い）。
         for path in [
-            "claude-code/missing",
-            "implicit/nope",
-            "implicit/claude_oauth",
+            "claude_oauth/missing",
+            "qwen/nope",
+            "claude_oauth/claude_oauth",
+            "bogus/a",
+            "codex_oauth/a",
         ] {
             let (status, body) = patch(path.into(), json!({"max_runs": 2})).await;
             assert_eq!(status, 404, "{path}: {body}");
             assert_eq!(body["code"], json!("account_not_found"), "{path}");
         }
-        // 根が設定されていないアダプタは 409。
-        let (status, body) = patch("codex/a".into(), json!({"max_runs": 2})).await;
-        assert_eq!(
-            (status, body["code"].clone()),
-            (409, json!("accounts_unavailable"))
-        );
         // 管理系なので token が要る。
         let resp = client
-            .patch(format!("{base}/accounts/claude-code/a"))
+            .patch(format!("{base}/llm/sources/claude_oauth/accounts/a"))
             .json(&json!({"max_runs": 2}))
             .send()
             .await
@@ -268,23 +266,23 @@ async fn patch_account_limits_validate_persist_and_survive_reload_and_restart() 
         assert_eq!(resp.status().as_u16(), 200);
         let list = get().await;
         assert_eq!(
-            item(&list, "claude-code", "a")["effective_max_runs"],
+            item(&list, "claude_oauth", "a")["effective_max_runs"],
             json!(3)
         );
-        let shared = item(&list, "implicit", "qwen");
+        let shared = item(&list, "qwen", "qwen");
         assert_eq!(shared["effective_max_runs"], json!(2));
         assert_eq!(shared["max_runs_source"], json!("account"));
 
         // null で保存値を消して既定へ戻す。
-        let (status, body) = patch("claude-code/a".into(), json!({"max_runs": null})).await;
+        let (status, body) = patch("claude_oauth/a".into(), json!({"max_runs": null})).await;
         assert_eq!(status, 200, "{body}");
         assert_eq!(body["max_runs"], json!(null));
         assert_eq!(body["effective_max_runs"], json!(2));
         assert_eq!(body["max_runs_source"], json!("default"));
-        let (status, body) = patch("implicit/qwen".into(), json!({"max_runs": null})).await;
+        let (status, body) = patch("qwen/qwen".into(), json!({"max_runs": null})).await;
         assert_eq!(status, 200, "{body}");
         assert_eq!(body["max_runs_source"], json!("default"));
-        let (status, _) = patch("implicit/qwen".into(), json!({"max_runs": 3})).await;
+        let (status, _) = patch("qwen/qwen".into(), json!({"max_runs": 3})).await;
         assert_eq!(status, 200);
     };
     tokio::select! {
@@ -310,7 +308,7 @@ async fn patch_account_limits_validate_persist_and_survive_reload_and_restart() 
 }
 
 /// ADR 2026-10-08 account-concurrency-limits §(d)(e)（人の決定 implicit-account）:
-/// `PATCH /api/v1/accounts/implicit/<llm source id>` は source 単位の暗黙アカウントを保存し、
+/// `PATCH /api/v1/llm/sources/<llm source id>/accounts/<llm source id>` は source 単位の暗黙アカウントを保存し、
 /// `POST /reload` を跨いで残る。account pool を持たない source ごとに 1 件で、source 同士は上限を共有しない。
 #[tokio::test]
 async fn implicit_source_account_limit_survives_reload() {
@@ -327,7 +325,7 @@ async fn implicit_source_account_limit_survives_reload() {
 
     let requests = async {
         let resp = client
-            .patch(format!("{base}/accounts/implicit/qwen"))
+            .patch(format!("{base}/llm/sources/qwen/accounts/qwen"))
             .bearer_auth(TOKEN)
             .json(&json!({"max_runs": 1}))
             .send()
@@ -335,8 +333,8 @@ async fn implicit_source_account_limit_survives_reload() {
             .expect("patch");
         assert_eq!(resp.status().as_u16(), 200);
         let body = resp.json::<Value>().await.expect("json");
-        assert_eq!(body["adapter"], json!("implicit"));
-        assert_eq!(body["id"], json!("qwen"));
+        assert_eq!(body["source_id"], json!("qwen"));
+        assert_eq!(body["account_id"], json!("qwen"));
         assert_eq!(body["implicit"], json!(true));
         assert_eq!(body["max_runs"], json!(1));
         assert_eq!(body["effective_max_runs"], json!(1));
@@ -352,13 +350,13 @@ async fn implicit_source_account_limit_survives_reload() {
         assert_eq!(resp.status().as_u16(), 200);
 
         let resp = client
-            .get(format!("{base}/accounts"))
+            .get(format!("{base}/llm/accounts"))
             .bearer_auth(TOKEN)
             .send()
             .await
             .expect("get");
         let list = resp.json::<Value>().await.expect("json");
-        let after = item(&list, "implicit", "qwen");
+        let after = item(&list, "qwen", "qwen");
         assert_eq!(
             after["max_runs"],
             json!(1),
@@ -367,7 +365,7 @@ async fn implicit_source_account_limit_survives_reload() {
         assert_eq!(after["effective_max_runs"], json!(1));
         assert_eq!(after["max_runs_source"], json!("account"));
         // 別の source（`qwen2`）は自分の暗黙アカウントを持ち、`qwen` の上限を共有しない。
-        let other = item(&list, "implicit", "qwen2");
+        let other = item(&list, "qwen2", "qwen2");
         assert_eq!(other["effective_max_runs"], json!(2));
         assert_eq!(other["max_runs_source"], json!("default"));
     };

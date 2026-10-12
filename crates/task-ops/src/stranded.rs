@@ -73,17 +73,7 @@ pub fn promotion_view(
             release_sha: None,
         };
     };
-    let included = Command::new("git")
-        .arg("-C")
-        .arg(repository_path)
-        .args([
-            "merge-base",
-            "--is-ancestor",
-            branch_head,
-            release_sha.as_str(),
-        ])
-        .status()
-        .is_ok_and(|status| status.success());
+    let included = release_contains(repository_path, branch_head, &release_sha);
     PromotionView {
         status: if included {
             PromotionStatus::Promoted
@@ -92,6 +82,55 @@ pub fn promotion_view(
         },
         release_sha: Some(release_sha),
     }
+}
+
+/// ADR 2026-10-12-stranded-sweep-single-flight D4: ancestry between two fixed SHAs never changes,
+/// so a decided answer (git exit 0 or 1) is remembered in-process. Failures are not remembered.
+const PROMOTION_CACHE_LIMIT: usize = 4096;
+
+type PromotionKey = (std::path::PathBuf, String, String);
+
+fn promotion_cache() -> &'static std::sync::Mutex<std::collections::HashMap<PromotionKey, bool>> {
+    static CACHE: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<PromotionKey, bool>>,
+    > = std::sync::OnceLock::new();
+    CACHE.get_or_init(Default::default)
+}
+
+fn release_contains(repository_path: &Path, branch_head: &str, release_sha: &str) -> bool {
+    let key = (
+        repository_path.to_path_buf(),
+        branch_head.to_owned(),
+        release_sha.to_owned(),
+    );
+    if let Some(known) = promotion_cache()
+        .lock()
+        .ok()
+        .and_then(|cache| cache.get(&key).copied())
+    {
+        return known;
+    }
+    let decided = Command::new("git")
+        .arg("-C")
+        .arg(repository_path)
+        .args(["merge-base", "--is-ancestor", branch_head, release_sha])
+        .status()
+        .ok()
+        .and_then(|status| match status.code() {
+            Some(0) => Some(true),
+            Some(1) => Some(false),
+            _ => None,
+        });
+    let Some(included) = decided else {
+        return false;
+    };
+    if let Ok(mut cache) = promotion_cache().lock() {
+        if cache.len() >= PROMOTION_CACHE_LIMIT {
+            cache.clear();
+        }
+        cache.insert(key, included);
+    }
+    included
 }
 
 /// Explicit human disposition. Reasons are retained in the current row and append-only event log.
@@ -451,6 +490,27 @@ fn ancestor(repo: &Path, head: &str, default_branch: &str) -> bool {
         .is_ok_and(|status| status.success())
 }
 
+/// ADR 2026-10-12-stranded-sweep-single-flight D2: the default branch only moves forward, so a
+/// stored integrated row whose branch and head match the record stays integrated without git.
+/// Records that would fail resolution keep the full check so their reason is still recorded.
+fn unchanged_integrated(
+    record: &BranchRecord,
+    head: &str,
+    previous: Option<&TaskRepoIntegrationState>,
+) -> bool {
+    let Some(previous) = previous else {
+        return false;
+    };
+    !record.not_applicable
+        && record.repo_path.is_some()
+        && record.default_branch.is_ok()
+        && !head.is_empty()
+        && previous.state == TaskRepoIntegrationStatus::Integrated
+        && previous.reason.is_none()
+        && record.branch.as_deref() == Some(previous.branch.as_str())
+        && previous.head_sha == head
+}
+
 /// Sweep candidates at the caller's injected timestamp. Held and discarded states are terminal
 /// until an explicit reopen operation; repeat scans only append events for actual state changes.
 pub fn sweep(
@@ -463,11 +523,15 @@ pub fn sweep(
         .iter()
         .filter(|r| r.done && r.root && r.changed_repo)
     {
-        if matches!(store.task_integration_get(record.task_id, record.repo_id)?, Some(s) if matches!(s.state, TaskRepoIntegrationStatus::Discarded | TaskRepoIntegrationStatus::Held))
+        let previous = store.task_integration_get(record.task_id, record.repo_id)?;
+        if matches!(&previous, Some(s) if matches!(s.state, TaskRepoIntegrationStatus::Discarded | TaskRepoIntegrationStatus::Held))
         {
             continue;
         }
         let head = record.head.as_deref().unwrap_or("");
+        if unchanged_integrated(record, head, previous.as_ref()) {
+            continue;
+        }
         let reason = if record.not_applicable {
             Some("remote repository: not checked by the sweep".to_owned())
         } else if record.repo_path.is_none() {
@@ -511,7 +575,6 @@ pub fn sweep(
             checked_at: now,
             updated_at: now,
         };
-        let previous = store.task_integration_get(record.task_id, record.repo_id)?;
         let differs = previous.as_ref().is_none_or(|p| {
             p.state != state.state
                 || p.branch != state.branch
@@ -1163,5 +1226,106 @@ mod tests {
         assert_eq!(git(repo, &["symbolic-ref", "--short", "HEAD"]), "other");
         assert_eq!(git(repo, &["rev-parse", "main"]), head);
         worktrees(repo);
+    }
+
+    #[test]
+    fn stranded_sweep_skips_git_for_unchanged_integrated_record() {
+        // The repository path does not exist: any `git merge-base` would fail and turn the row
+        // unintegrated. An unchanged integrated record must not reach git at all.
+        let missing = std::env::temp_dir().join(format!("stranded-missing-{}", TaskId::new()));
+        let store = SqliteStore::open_in_memory().expect("store");
+        let task_id = TaskId::new();
+        let repo_id = RepoId::new();
+        let now = OffsetDateTime::from_unix_timestamp(1_800_000_000).expect("clock");
+        store
+            .task_integration_upsert(&TaskRepoIntegrationState {
+                task_id,
+                repo_id,
+                branch: "celeris/task".into(),
+                head_sha: "abc123".into(),
+                state: TaskRepoIntegrationStatus::Integrated,
+                reason: None,
+                actor: "sweep".into(),
+                checked_at: now,
+                updated_at: now,
+            })
+            .expect("seed integrated row");
+        let events = store.events_for(task_id).expect("events").len();
+        let record = |head: &str| BranchRecord {
+            task_id,
+            repo_id,
+            repo_path: Some(missing.clone()),
+            default_branch: Ok("main".into()),
+            branch: Some("celeris/task".into()),
+            head: Some(head.into()),
+            done: true,
+            root: true,
+            changed_repo: true,
+            not_applicable: false,
+        };
+        let later = now + time::Duration::minutes(5);
+        assert_eq!(sweep(&store, &[record("abc123")], later).expect("sweep"), 0);
+        let state = store
+            .task_integration_get(task_id, repo_id)
+            .expect("get")
+            .expect("row");
+        assert_eq!(state.state, TaskRepoIntegrationStatus::Integrated);
+        assert_eq!(state.checked_at, now);
+        assert_eq!(store.events_for(task_id).expect("events").len(), events);
+        // A moved head is checked again; git fails here, so the row becomes unintegrated.
+        assert_eq!(sweep(&store, &[record("def456")], later).expect("moved"), 1);
+        assert_eq!(
+            store
+                .task_integration_get(task_id, repo_id)
+                .expect("get")
+                .expect("row")
+                .state,
+            TaskRepoIntegrationStatus::Unintegrated
+        );
+    }
+
+    #[test]
+    fn stranded_promotion_remembers_decided_ancestry() {
+        let tmp = tempfile::tempdir().expect("temporary directory");
+        let repo = tmp.path().join("repo");
+        let releases = tmp.path().join("releases");
+        fs::create_dir_all(&repo).expect("repo");
+        git(&repo, &["init", "-b", "main"]);
+        git(&repo, &["config", "user.email", "test@example.invalid"]);
+        git(&repo, &["config", "user.name", "test"]);
+        fs::write(repo.join("base"), "base").expect("base");
+        git(&repo, &["add", "base"]);
+        git(&repo, &["commit", "-m", "base"]);
+        let head = git(&repo, &["rev-parse", "HEAD"]);
+        let release = releases.join("release-1");
+        fs::create_dir_all(&release).expect("release");
+        fs::write(
+            release.join("manifest.json"),
+            format!(r#"{{"sha":"{head}"}}"#),
+        )
+        .expect("manifest");
+        fs::write(
+            release.join("promoted.json"),
+            r#"{"promoted_at":"2026-10-10T00:00:00Z"}"#,
+        )
+        .expect("marker");
+        assert_eq!(
+            promotion_view("agent-platform", &repo, &head, &releases).status,
+            PromotionStatus::Promoted
+        );
+        // With the repository gone git cannot answer; the remembered answer is served.
+        fs::remove_dir_all(&repo).expect("remove repo");
+        assert_eq!(
+            promotion_view("agent-platform", &repo, &head, &releases).status,
+            PromotionStatus::Promoted
+        );
+        // An undecided answer (git failed) is not remembered.
+        let other = "0".repeat(40);
+        assert!(!release_contains(&repo, &other, &head));
+        assert!(!promotion_cache().lock().expect("cache").contains_key(&(
+            repo.clone(),
+            other,
+            head
+        )));
     }
 }

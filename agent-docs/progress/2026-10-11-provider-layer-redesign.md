@@ -343,7 +343,7 @@ max_wall_secs = 900
 enabled = true
 provider = "openai-compatible"
 base_url = "<現在のLangMem proxy URL>"
-model = "qwen3.8-27b"
+model = "qwen/qwen3.8-27b"
 api_key_secret = "<現在のsecret reference>"
 
 [adapters.local_deep_research]
@@ -387,19 +387,15 @@ grep で洗った結果と、この run で消したもの。
 
 ## 未解決事項
 
-- 旧 provider 形の fixture を使う非 cargo の台本: `scripts/dev/cos-chat-bench.sh`、`scripts/dev/cos-chat-live.sh`、`scripts/live-check-phase53.sh`、`scripts/selfdeploy/tests/migrate_to_local_test.sh`、`scripts/test_portable_providers.py`。いずれも `[[providers]]` を書いており、新 binary では読み込みエラーになる。test-parallel の対象外なので今回の検査では落ちない。
-- 文書の旧い手順: `docs/ops/opencode-go-and-model-catalog.md` §3a（`POST /api/v1/providers` と `/models` 画面で provider 行を作る手順）、`docs/guides/knowledge.md` の langmem 例（`[[providers]]`・`concurrency`）、`docs/ops/selfdeploy.md` の `providers.d/` 行。現行の API・設定と食い違う。
-- `docs/api/v1/gui-api.md` の `providers_include` 説明（§182〜184、§1215 付近）と `gui/docs` 配下の旧 provider 記述（DESIGN.md・PROGRESS.md・celeris-api-v1.md）。gui-api.md の §3.24〜3.28 は「（削除）」と書いてあり、本文は残っている。
-- `scripts/selfdeploy/migrate-to-celeris.sh` の `providers.d` 移送（旧 install からの移行スクリプト。移行の用途として残すかどうかは人の判断）。
 - `scratch.sccache`・cache server の欄が `task-ops/src/daemon.rs` の doc comment と `web/api/generated/schema.json`・`gui/app/celeris/types.ts` の説明文に残る（説明が廃止した設定を指す）。直すには schema 再生成（UPDATE_SCHEMA=1 と gui の gen:types）が要る。
 - 名前の残り（挙動には影響なし）: `crates/celeris/src/daemon/admin.rs` の `reload_providers`、`crates/task-core/src/model_routing.rs` の `ProviderSelection` / `ProviderCandidate`（API 欄名 `provider` は crates 側に残す方針。InFlight.provider の中身は source id）。
 - 本番 config の移行: 本番の `~/.config/celeris` の 8 行の移行は人が `docs/ops/provider-llm-source-migration.md` の手順で行う（この run では本番を触っていない）。
 
 ## 提案
 
-1. 非 cargo fixture を現行 source/harness config に移す: `scripts/dev/cos-chat-bench.sh`、`scripts/dev/cos-chat-live.sh`、`scripts/live-check-phase53.sh`、`scripts/selfdeploy/tests/migrate_to_local_test.sh`、`scripts/test_portable_providers.py`。最後の script は provider 専用処理を削除するか要判断。
-2. 現行文書を更新する: `docs/guides/knowledge.md` の LangMem 例、`docs/ops/selfdeploy.md` の `providers.d/`、`docs/api/v1/gui-api.md` の provider API/schema 全文、`gui/docs/DESIGN.md`・`PROGRESS.md`・`celeris-api-v1.md`。API 文書には削除済み endpoint 節や provider fields が複数箇所に残るため、この closeout の小修正を超える。
-3. `scripts/selfdeploy/migrate-to-celeris.sh` の `providers.d` 移送は旧 install の移行用。旧形式を明示的に拒否する新 binary とどう共存させるか整理し、不要なら撤去する。
+1. 済み（closeout-fix5）: 非 cargo fixture の現行 config 形への移行。`scripts/test_portable_providers.py` の `[[providers]]` 試験 fixture も書き換えた。`scripts/portable-providers.py` は `[[harnesses]] adapter` を書く現行の欄を扱うので残した（close5/scripts.md）。
+2. 済み（closeout-fix5）: 現行文書の更新は `knowledge.md`・`selfdeploy.md`・`opencode-go` §3a の範囲。`gui-api.md`・`gui/docs` は tree に無い。API 文書の削除済み endpoint 節（§3.19 など）は残っているが、「削除」と明記してある。
+3. 済み（closeout-fix5）: `scripts/selfdeploy/migrate-to-celeris.sh` は tree に無い（撤去済み）。
 4. `scratch.sccache`・cache server の説明文と schema を schema 再生成と一緒に直す（UPDATE_SCHEMA=1）。
 5. `reload_providers`・`ProviderSelection` / `ProviderCandidate` は内部名の残り。API 欄名（provider は source ID）と区別したうえで整理する。
 6. 本番移行の後で、旧 `providers.d` と `[[providers]]` を含む backup を人が確認してから削除する。

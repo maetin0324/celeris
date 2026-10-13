@@ -374,7 +374,9 @@ env = { OPENAI_BASE_URL = "http://proxy" }
     #[tokio::test]
     async fn pi_harness_declaration_reaches_pi_process() {
         use task_worker::adapter::NullSink;
-        use task_worker::protocol::{PROTOCOL_VERSION, RunContext, RunRequest, sample_task_for_tests};
+        use task_worker::protocol::{
+            PROTOCOL_VERSION, RunContext, RunRequest, sample_task_for_tests,
+        };
         use task_worker::{RunLimits, Terminal};
 
         let dir = tempfile::tempdir().unwrap();

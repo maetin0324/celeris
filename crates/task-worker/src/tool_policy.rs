@@ -496,10 +496,10 @@ mod tests {
         assert_eq!(fresh, serde_json::json!({"tools": {"task": false}}));
 
         let merged: serde_json::Value = serde_json::from_str(&opencode_overlay(Some(
-            r#"{"model":"opencode/celeris/frontier","tools":{"webfetch":true},"provider":{"x":{"options":{"baseURL":"http://127.0.0.1:1/v1"}}}}"#,
+            r#"{"model":"opencode-go/grok-4.6","tools":{"webfetch":true},"provider":{"x":{"options":{"baseURL":"http://127.0.0.1:1/v1"}}}}"#,
         )))
         .unwrap();
-        assert_eq!(merged["model"], "opencode/celeris/frontier");
+        assert_eq!(merged["model"], "opencode-go/grok-4.6");
         assert_eq!(merged["tools"]["webfetch"], true);
         assert_eq!(merged["tools"]["task"], false);
         assert_eq!(

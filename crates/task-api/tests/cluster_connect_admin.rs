@@ -445,7 +445,7 @@ async fn disconnect_maps_failed_to_502() {
 }
 
 /// `admin_tx` が配線されていない構成（`[api]` はあるが celeris への経路が無い）では、既知の id でも
-/// 内部エラーとして扱う（accounts/providers の `reload`/`check` と同じ、celeris が受け取れない場合の扱い）。
+/// 内部エラーとして扱う（`POST /reload` と同じ、celeris が受け取れない場合の扱い）。
 #[tokio::test]
 async fn connect_without_admin_tx_does_not_panic() {
     let env = TestEnv::with(EnvOptions {

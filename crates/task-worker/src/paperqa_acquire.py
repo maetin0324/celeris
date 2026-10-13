@@ -33,7 +33,7 @@ Contract with the adapter (crates/task-worker/src/paperqa.rs):
 
 INPUT (all paths absolute):
   {"queries": ["asynchronous I/O runtime", ...],   # deterministic fallback
-   "query_llm": {"enabled": true, "model": "celeris/standard",
+   "query_llm": {"enabled": true, "model": "qwen/qwen3.8-27b",
                  "base_url": "http://127.0.0.1:18000/v1" | null,
                  "api_key": "unused" | null,
                  "timeout_secs": 300, "max_tokens": 2000,

@@ -66,7 +66,7 @@ pub(super) async fn secrets_list(
 }
 
 /// `id` はファイル名に使う（`secret_file_path`）。パストラバーサル防止のため、無効な形は
-/// `PATCH`/`DELETE /providers/{id}` と同じく 404 `secret_not_found` にする（本文を見る前に判定する）。
+/// 404 `secret_not_found` にする（本文を見る前に判定する）。
 pub(super) async fn put_secret(
     State(state): State<ApiState>,
     headers: HeaderMap,

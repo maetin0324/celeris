@@ -222,8 +222,13 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":3,"result":{{"stopReason":"end_turn"}}}}'
         "{\"context_transport\":\"header\"}\n",
     );
 
+    // 接続先は overlay（OPENCODE_CONFIG_CONTENT）側に置く。ファイル設定が無くても baseURL があれば header は付く。
     let mut default_location = config.clone();
-    default_location.env.clear();
+    default_location.env = vec![(
+        "OPENCODE_CONFIG_CONTENT".into(),
+        r#"{"provider":{"celeris-proxy":{"options":{"baseURL":"http://127.0.0.1:18100/v1"}}}}"#
+            .into(),
+    )];
     AcpAdapter::new(default_location)
         .run(req.clone(), "default-config", default_limits(), &sink)
         .await
@@ -233,6 +238,29 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":3,"result":{{"stopReason":"end_turn"}}}}'
     assert_eq!(
         overlay["provider"]["celeris-proxy"]["options"]["headers"]["x-celeris-routing-context"],
         "daemon-issued-ref",
+    );
+
+    // 接続先（baseURL）が無ければ、daemon の ref があっても header は付けない。
+    let mut no_base_url = config.clone();
+    no_base_url.env = vec![(
+        "OPENCODE_CONFIG_CONTENT".into(),
+        r#"{"provider":{"celeris-proxy":{"npm":"@ai-sdk/openai-compatible"}}}"#.into(),
+    )];
+    AcpAdapter::new(no_base_url)
+        .run(req.clone(), "no-base-url", default_limits(), &sink)
+        .await
+        .unwrap();
+    let overlay: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(dir.path().join("overlay.json")).unwrap()).unwrap();
+    assert!(
+        overlay["provider"]["celeris-proxy"]["options"]["headers"]
+            .get("x-celeris-routing-context")
+            .is_none()
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("runs/no-base-url/context-transport.json"))
+            .unwrap(),
+        "{\"context_transport\":\"unsupported\"}\n",
     );
 
     config.model = Some("unrelated/model".into());

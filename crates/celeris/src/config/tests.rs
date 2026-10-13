@@ -184,7 +184,7 @@ fn migration_runbook_toml_loads() {
     let registry = cfg.llm_route_registry().expect("routes validate");
 
     for (harness, source, model) in [
-        ("claude_code", "claude_oauth", "claude-opus-5-5"),
+        ("claude_code", "claude_oauth", "claude-sonnet-5-5"),
         ("codex", "codex_oauth", "gpt-6.1-sol"),
         ("pi", "opencode_go", "opencode-go/grok-4.6"),
         ("opencode", "qwen", "qwen3.8-27b"),
@@ -222,6 +222,14 @@ fn migration_runbook_toml_loads() {
             .map(|id| id.0.as_str())
             .collect::<Vec<_>>(),
         ["claude_code", "codex"]
+    );
+    let claude_code = task_core::llm_route::HarnessId::from("claude_code");
+    assert_eq!(
+        registry.route_class_defaults[&claude_code]
+            [&task_core::llm_route::ExecutionClass::from("coding")][0]
+            .model
+            .0,
+        "claude-opus-5-5"
     );
     assert_eq!(registry.cos_route_candidates[0].model.0, "claude-opus-5-5");
     assert_eq!(registry.cos_route_candidates[1].model.0, "gpt-6-astra");

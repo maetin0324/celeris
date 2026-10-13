@@ -15,15 +15,16 @@ compatibility、quota、cooldown、capacity を通った最初のものになる
 
 | 現在の用途 | 選択規則 | harness | 先頭候補 |
 |---|---|---|---|
-| coding worker | genre `coding` → coding execution class | `claude_code`, `codex` | `claude_oauth / claude-opus-5-5` を先頭、admission 不可なら Codex `gpt-6.1-sol` |
+| coding worker | genre `coding` → coding execution class | `claude_code`, `codex` | `claude_oauth / claude-opus-5-5`（coding class の唯一の候補。admission 不可なら claude_code は飛ばされ、Codex `gpt-6.1-sol`） |
 | Pi coding | role `pi` または既存の Pi 指定 | `pi` | `opencode_go / opencode-go/grok-4.6` |
 | 軽い仕事 | role `local-qwen` | `opencode` (ACP) | `qwen / qwen3.8-27b` |
 | 文献調査 | literature harness | `paperqa` | `qwen / qwen3.8-27b`、次に `claude_oauth / claude-opus-5-5`、`codex_oauth / gpt-6.1-sol`（今の proxy `celeris/standard` の「届けば Qwen、落ちていれば Claude/Codex」を明示の順にしたもの） |
 | 深掘り Web 調査 | research harness | `local-deep-research` | `qwen / qwen3.8-27b`、次に Claude/Codex cheap |
 | 知識整理 | LangMem の専用起動設定 | `langmem` | `qwen / qwen3.8-27b`、次に Claude/Codex cheap |
-| CoS | `[cos].route_candidates` の順 | `claude_code` | `claude_oauth / claude-opus-5-5` |
-| planner | execution class の順。満杯なら次へ | `claude_code`, `codex` | 上記 coding 候補の順 |
-| reviewer | execution class の順 | `claude_code`, `codex` | 上記 coding 候補の順 |
+| CoS | `[cos].route_candidates` の順（execution class に依らない） | `claude_code` | `claude_oauth / claude-opus-5-5`、次に `codex_oauth / gpt-6-astra` |
+| planner | execution class の順。満杯なら次へ | `claude_code`, `codex` | `claude_oauth / claude-sonnet-5-5`（`claude_code` 既定）、次に Codex `gpt-6.1-sol` |
+| reviewer | execution class の順 | `claude_code`, `codex` | `claude_oauth / claude-sonnet-5-5`（`claude_code` 既定）、次に Codex `gpt-6.1-sol` |
+| その他の claude_code 仕事 | harness 既定（class 宣言なし） | `claude_code` | `claude_oauth / claude-sonnet-5-5`、次に `claude-opus-5-5`、`claude-fable-5-1` |
 
 `qwen` は本番 proxy の source ID として宣言する。tier alias（`[llm_proxy.models]`）は廃止され、
 新しい binary では読み込みエラーになる（[ADR 2026-10-11 llm-source-harness-selection](../../agent-docs/adr/2026-10-11-llm-source-harness-selection.md)）。
@@ -230,7 +231,10 @@ from_api = "openai_compatible"
 to_api = "anthropic"
 
 [route_defaults.claude_code]
-candidates = [{ source = "claude_oauth", model = "claude-opus-5-5" }, { source = "claude_oauth", model = "claude-fable-5-1" }, { source = "claude_oauth", model = "claude-sonnet-5-5" }]
+candidates = [{ source = "claude_oauth", model = "claude-sonnet-5-5" }, { source = "claude_oauth", model = "claude-opus-5-5" }, { source = "claude_oauth", model = "claude-fable-5-1" }]
+
+[route_defaults.claude_code.classes.coding]
+candidates = [{ source = "claude_oauth", model = "claude-opus-5-5" }]
 
 [route_defaults.codex]
 candidates = [{ source = "codex_oauth", model = "gpt-6.1-sol" }, { source = "codex_oauth", model = "gpt-6-astra" }, { source = "codex_oauth", model = "gpt-6-luna" }]
@@ -379,7 +383,7 @@ PROXY=http://127.0.0.1:18100
    ```
 
    期待: `pi` の候補が `opencode_go/opencode-go/grok-4.6 > qwen/qwen3.8-27b`、`claude_code` の先頭が
-   `claude_oauth/claude-opus-5-5`、`local-deep-research` と `langmem` の先頭が `qwen/qwen3.8-27b`。
+   `claude_oauth/claude-sonnet-5-5`（coding class の先頭は `claude_oauth/claude-opus-5-5`）、`local-deep-research` と `langmem` の先頭が `qwen/qwen3.8-27b`。
 7. proxy を経由する harness（LDR・PaperQA・LangMem）のために、proxy が具体的な source/model を
    中継することを確かめる。確認リクエストには機密データを入れず、token と応答本文をログへ残さない:
 

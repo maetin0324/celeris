@@ -12,8 +12,7 @@ route 設定で明示する。ログイン済みの Claude Code / Codex の資�
 
 ## 1. モデル名
 
-proxy の旧 `celeris/<tier>`、`claude/<tier>`、`gpt/<tier>`、`qwen/<tier>` alias と
-`[llm_proxy.models]` は廃止された。旧設定を現行の source/model route に移す場合は
+proxy の旧 tier alias と `[llm_proxy.models]` は廃止された。具体的な `<source_id>/<model_id>` を書く。旧設定を現行の source/model route に移す場合は
 [provider 設定の移行手順](../ops/provider-llm-source-migration.md)を参照する。
 
 ### 参考: 旧単価表
@@ -161,8 +160,8 @@ base_url = "http://127.0.0.1:18000/v1"
 
 ## 6. 廃止済みの tier alias 設定
 
-旧版の `celeris/cheap` / `celeris/standard` を使う proxy 設定例（旧 §§6–7）は、LLM source と model の
-選択を分離した構成では使えない。`[llm_proxy.models]` の tier alias と `[[providers]]` は新しい binary
+旧版の tier alias を使う proxy 設定例（旧 §§6–7）は、LLM source と model の
+選択を分離した構成では使えない。tier alias は廃止済みで、具体的な `<source_id>/<model_id>` を書く。`[llm_proxy.models]` の tier alias と `[[providers]]` は新しい binary
 で読み込みエラーになる。現行 config への移行は[移行手順](../ops/provider-llm-source-migration.md)を参照する。
 
 ## 8. 本番の運用手順

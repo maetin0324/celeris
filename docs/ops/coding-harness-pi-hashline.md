@@ -79,7 +79,7 @@ extensions/tools の未指定・OAuth pool 指定は daemon 起動時の config 
   fallback に倒れたかが分かる。fallback が多ければ Pi 行の枠・cooldown を疑う。
 - 比較: `celerisctl routing export --db <backup の写し>` → `celerisctl routing evaluate`（`docs/ops/model-routing-migration.md` §9。読み取り専用）。
   success・token・cache-hit・cost は run の usage（Pi は `message_end` の `usage` を合算）から (model, adapter) で集計する。
-- 注意: proxy 経由 run の `model` は lane 名（`celeris/<tier>`）で実 model ではないので別群に分ける。task 単位の
+- 注意: proxy 経由 run の `model` は lane 名（旧 tier alias）で実 model ではないので別群に分ける。task 単位の
   `GET /metrics/execution` は adapter で group しない（ADR「metrics 整合」）。
 
 ## 6. 確認の流れ

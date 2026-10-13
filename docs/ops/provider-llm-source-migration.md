@@ -263,7 +263,7 @@ max_wall_secs = 900
 enabled = true
 provider = "openai-compatible"
 base_url = "<現在のLangMem proxy URL>"
-model = "qwen3.8-27b"
+model = "qwen/qwen3.8-27b"
 api_key_secret = "<現在のsecret reference>"
 
 [adapters.local_deep_research]
@@ -283,7 +283,7 @@ model を `qwen3.8-27b` にする。LangMem・LDR・PaperQA の本番 endpoint �
 
 `[knowledge.langmem].base_url` を Celeris の llm-proxy（`[llm_proxy]` の listen）に向ける場合、
 proxy は具体的な `<source_id>/<model_id>` だけを受けるため、`model` は `qwen/qwen3.8-27b` の形で書く。
-Qwen の endpoint を直接指す場合は上の `qwen3.8-27b` のままでよい。
+Qwen の endpoint を直接指す場合は `qwen3.8-27b` のままでよい（上の TOML 例は proxy を指すので `qwen/qwen3.8-27b`）。
 
 ## 前提
 

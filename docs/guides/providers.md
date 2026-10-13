@@ -48,10 +48,9 @@ harness を選び、Qwen source を使います。CoS は `[cos].route_candidate
 
 ## 特化 harness
 
-LDR、PaperQA、LangMem は tier alias（`celeris/cheap`、`celeris/standard`）を設定に残さず、
-source と具体的な model 候補を宣言します。cheap は利用可能なら Qwen `qwen3.8-27b` を
-先にし、Claude/Codex cheap を続けます。standard は Claude Opus を先にし Codex 6.1 を
-続けます。LDR/PaperQA は source/model route を持ち、LangMem は
+LDR、PaperQA、LangMem は tier alias を設定に残さず、source と具体的な model 候補を宣言します。
+tier alias は廃止済みで、具体的な `<source_id>/<model_id>` を書きます。
+Qwen `qwen3.8-27b` を先に置き、Claude/Codex の候補を続けます。LDR/PaperQA は source/model route を持ち、LangMem は
 `[knowledge.langmem]` の endpoint/model/secret reference と LangMem harness を設定します。
 秘密の値は config へ直書きせず、credential store の reference を使ってください。
 

@@ -25,8 +25,6 @@ pub(crate) mod browser_ledger_path;
 pub(crate) mod clusters;
 mod cos_launch;
 pub(crate) mod routing_guardrail;
-pub(crate) mod routing_shadow;
-pub(crate) mod routing_sidecar;
 pub(crate) mod run;
 pub(crate) mod secrets;
 pub(crate) mod services;

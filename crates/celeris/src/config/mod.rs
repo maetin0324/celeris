@@ -95,6 +95,8 @@ pub struct Config {
     pub llm_routes: Vec<LlmRouteConfig>,
     #[serde(default)]
     pub route_defaults: std::collections::BTreeMap<String, RouteDefaultConfig>,
+    #[serde(default)]
+    pub route_selection: RouteSelectionConfig,
     /// Isolated browser runtime is disabled unless its API and provider are configured.
     #[serde(default)]
     pub browser: BrowserRuntimeConfig,

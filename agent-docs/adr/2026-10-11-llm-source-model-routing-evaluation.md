@@ -206,3 +206,10 @@ D4 の削除は同じ unit で行う。
 - k=1 の fable/astra は区間が広く、単独の優越判定ができない場合に同等集合として扱う。週 15% を満たす実行可能数は実行直前の実測見積りで確定する。
 - Codex account の 1 run quota 消費は dry-run で測るまで不明。opencode-go は今回の評価対象外。
 - harness_version の major の決め方（claude-code・codex は semver、acp・pi は command の version 文字列）は eval-harness で確定する。
+### 2026-10-13 selector lane defaults implementation
+
+選択器の設定は `[route_defaults.<harness>]` に harness 共通 `candidates`、lane ごとに `[route_defaults.<harness>.lanes.<lane>]` の `candidates` を置く。lane 列があれば優先し、なければ harness 共通列へ戻る。`[route_selection]` は `exploration_epsilon`（0.1）、`guardrail_window`（50）、`guardrail_quota_floor`（0.1）、source ごとの `evaluation_reservations`（同時 run 数）を持つ。guardrail の品質閾値は D3 の固定条件（pass Wilson 下限対 pass_lower、失敗率 2 倍、wall median 2 倍、quota 10%）であり、設定可能なのは窓と quota floor のみ。
+
+config reader は lane 列の harness/source/model と互換 route を検査し、予約枠の source も宣言必須にする。route-selection 値は epsilon / quota floor が 0..=1、window が正であることを検査する。
+
+検査: `cargo test -p celeris config::llm_route`（この WorkUnit で実行）。

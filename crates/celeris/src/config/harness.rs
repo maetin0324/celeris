@@ -241,6 +241,9 @@ impl Config {
             .retain(|r| r.harness != SMOKE_ID && r.source != SMOKE_ID);
         for defaults in self.route_defaults.values_mut() {
             defaults.candidates.retain(|c| c.source != SMOKE_ID);
+            for lane in defaults.lanes.values_mut() {
+                lane.candidates.retain(|c| c.source != SMOKE_ID);
+            }
         }
         self.cos.route_candidates.retain(|c| c.source != SMOKE_ID);
         self.route_defaults.insert(
@@ -250,6 +253,7 @@ impl Config {
                     source: SMOKE_ID.to_string(),
                     model: fake,
                 }],
+                lanes: Default::default(),
             },
         );
         self.harness_selection = HarnessSelection {

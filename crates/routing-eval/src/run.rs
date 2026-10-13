@@ -201,7 +201,7 @@ fn make_trials(
                 .as_deref()
                 .ok_or_else(|| format!("problem {} has no base_commit", p.id))?;
             for trial_no in 1..=c.k {
-                result.push(TrialRequest { problem_id:p.id.clone(),trial_no:trial_no as u32,source_id:c.source_id.into(),model_id:c.model_id.into(),harness_id:c.harness_id.into(),repo:repo.into(),base_commit:base_commit.into(),objective:format!("Complete evaluation problem {} (source task {}). Make the required repository change and do not run or request evaluation checks.",p.id,p.task_id),check:Check{cmd:p.command.clone(),timeout_secs:600} });
+                result.push(TrialRequest { problem_id:p.id.clone(),trial_no:trial_no as u32,source_id:c.source_id.into(),model_id:c.model_id.into(),harness_id:c.harness_id.into(),repo:repo.into(),base_commit:base_commit.into(),objective:format!("This is an evaluation problem. Make the requested repository change. Do not run or request evaluation checks.\n\n{}",p.prompt),check:Check{cmd:p.command.clone(),timeout_secs:600} });
             }
         }
     }
@@ -219,14 +219,15 @@ mod tests {
         net::TcpListener,
     };
     #[test]
-    fn candidates_expand_k_and_subset_and_keep_checks_out_of_objective() {
+    fn trial_objective_carries_problem_text_without_check() {
         let mut manifest: Manifest = serde_json::from_value(json!({"schema":"x","version":"1","cutoff":"x","seed":0,"sha256":"abc","problems":[
-            {"id":"p1","task_id":"t1","work_unit_id":"w1","created_at":"","genre":"coding","kind":"leaf","command":"SECRET_CHECK","split":"dev","stratum":"x","subset_12":false,"head_commit":null,"base_commit":"abc","features_sha256":"","features":{},"sha256":""},
-            {"id":"p2","task_id":"t2","work_unit_id":"w2","created_at":"","genre":"coding","kind":"leaf","command":"SECRET_CHECK2","split":"dev","stratum":"x","subset_12":true,"head_commit":null,"base_commit":"def","features_sha256":"","features":{},"sha256":""}] })).expect("fixture");
+            {"id":"p1","task_id":"t1","work_unit_id":"w1","created_at":"","genre":"coding","kind":"leaf","command":"SECRET_CHECK","prompt":"Implement the widget","split":"dev","stratum":"x","subset_12":false,"head_commit":null,"base_commit":"abc","features_sha256":"","features":{},"sha256":""},
+            {"id":"p2","task_id":"t2","work_unit_id":"w2","created_at":"","genre":"coding","kind":"leaf","command":"SECRET_CHECK2","prompt":"Fix the parser","split":"dev","stratum":"x","subset_12":true,"head_commit":null,"base_commit":"def","features_sha256":"","features":{},"sha256":""}] })).expect("fixture");
         manifest.problems.sort_by(|a, b| a.id.cmp(&b.id));
         let trials =
             make_trials(&manifest, &[&CANDIDATES[0], &CANDIDATES[3]], "/repo").expect("trials");
         assert_eq!(trials.len(), 5); // 2 problems × k=2, plus subset problem × k=1
+        assert!(trials[0].objective.contains("Implement the widget"));
         assert!(!trials[0].objective.contains("SECRET_CHECK"));
         assert_eq!(trials[4].problem_id, "p2");
         assert_eq!(trials[4].check.cmd, "SECRET_CHECK2");
@@ -304,7 +305,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("manifest.json");
         let output = dir.path().join("summary.json");
-        let manifest = json!({"schema":"x","version":"1","cutoff":"x","seed":0,"sha256":"abc","problems":[{"id":"p1","task_id":"t1","work_unit_id":"w1","created_at":"","genre":"coding","kind":"leaf","command":"PRIVATE_CHECK_TOKEN","split":"dev","stratum":"x","subset_12":true,"head_commit":null,"base_commit":"abc","features_sha256":"","features":{},"sha256":""}]});
+        let manifest = json!({"schema":"x","version":"1","cutoff":"x","seed":0,"sha256":"abc","problems":[{"id":"p1","task_id":"t1","work_unit_id":"w1","created_at":"","genre":"coding","kind":"leaf","command":"PRIVATE_CHECK_TOKEN","prompt":"Repair the cache invalidation behavior","split":"dev","stratum":"x","subset_12":true,"head_commit":null,"base_commit":"abc","features_sha256":"","features":{},"sha256":""}]});
         fs::write(&path, manifest.to_string()).expect("write manifest");
         run_args(vec![
             "--api".into(),

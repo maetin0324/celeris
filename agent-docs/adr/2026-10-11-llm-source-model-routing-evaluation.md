@@ -286,6 +286,12 @@ D5 の評価 runner（crate `routing-eval`、bin `celeris-routing-eval`）と根
 5. **評価 run の経路**: provider 層の撤去に合わせ、評価 run の harness・source・model は宣言（`[harnesses]`・`[llm_sources]`）から引き（`-` と `_`・大文字小文字を区別しない）、account は本番と同じ `admit_source`（手元の評価 run の `(source, account)` も合算）で選ぶ。worker には `SelectedLlmRoute` を渡す。宣言に無い経路の試行は `error`。投入 API の照合先も宣言（`HarnessesReader::source_models` と harness 一覧・`[[genres]]`）に替えた（routing catalog・`[[providers]]` は無い）。
 6. **execution class の候補列と lane の候補列**: main の `[route_defaults.<h>].classes.<class>`（ADR 2026-10-11-llm-source-harness-selection 付記 2026-10-13 §5。宣言した class の列は他の列に戻らない）と本 ADR の `[route_defaults.<h>].lanes.<lane>` を一緒に持つ。優先列の決め方は CoS → class の列（宣言があれば、それだけ）→ harness×lane の列 → harness 全体の列（`task_core::llm_route::route_priority`）。lane 列も harness 全体の列と同じ検証（重複・未宣言・互換・proxy 必須）を通す。class×lane の組の列は作らない。class の列を宣言した execution class では lane による既定の切り替えは効かない（根拠表による選択はその列の中で行う）。
 
+## 付記 2026-10-13: 評価 trial の問題文（eval-prompt）
+
+凍結 manifest の各 `problems[]` は必須の `prompt` を持つ。本文は WU の `objective`・`done_when` と親 task の `title`・`objective` から作り、acceptance と checks は含めない。問題文に check command の文字列が含まれる場合は `[check command redacted]` に置換する。`prompt` は問題 SHA と manifest SHA の双方に含める。旧 manifest は `prompt` が無いため読み込みエラーとし、互換分岐は設けない。
+
+`make_trials` は「評価問題であること」「評価 checks を実行・要求しないこと」を伝える短い前置きに `prompt` を続けて worker objective にする。採点 command は引き続き別欄で runner に渡し、worker 本文やログへ含めない。
+
 ## 改訂履歴
 
 - 2026-10-11: 人の確認を反映。評価対象を 7 model に限定し、fable-5-1 / gpt-6-astra を k=1・層別部分集合、通常 5 model を k=2・30 問に縮小。Codex の quota は実測前に率を仮定せず、10-run dry-run と週 15% gate を必須化。opencode-go は根拠表対象外、qwen はローカル既定候補として明記。辞書順 fallback と `[routing.defaults.<genre>]` を除き、lane ごとの人の既定を harness×lane `route_defaults` に統合。

@@ -76,6 +76,7 @@ mod tests {
             genre: "coding".into(),
             kind: "task".into(),
             command: "secret check".into(),
+            prompt: "Fixture problem description".into(),
             split: "dev".into(),
             stratum: "coding:task".into(),
             subset_12: false,

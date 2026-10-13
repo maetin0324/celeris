@@ -20,69 +20,6 @@ use super::adapters::secret_usage;
 use super::bootstrap::hostname;
 use crate::{Config, DaemonError, InstanceIdentity};
 
-/// Keep the raw catalog inside celeris. The API projection has no credential or account fields.
-struct RoutingCatalogAdapter(Arc<std::sync::RwLock<Arc<crate::config::RoutingCatalog>>>);
-
-impl task_api::RoutingCatalogReader for RoutingCatalogAdapter {
-    fn view(&self) -> task_api::RoutingCatalogView {
-        use task_api::routing_catalog::{
-            CatalogCapabilitiesView, CatalogDeploymentView, CatalogModelView,
-        };
-        use task_core::model_router::profiles::Support;
-
-        let support = |value| match value {
-            Support::Supported => Some(true),
-            Support::Unsupported => Some(false),
-            Support::Unknown => None,
-        };
-
-        let catalog = self
-            .0
-            .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone();
-        task_api::RoutingCatalogView {
-            catalog_version: "phase1-v1".into(),
-            mode: catalog.mode,
-            models: catalog
-                .models
-                .iter()
-                .map(|model| CatalogModelView {
-                    id: model.id.clone(),
-                    revision: model.revision.clone(),
-                    family: model.family.clone(),
-                    capabilities: CatalogCapabilitiesView {
-                        tools: support(model.capabilities.tools),
-                        structured_output: support(model.capabilities.structured_output),
-                        vision: support(model.capabilities.vision),
-                        streaming: support(model.capabilities.streaming),
-                        reasoning_efforts: (!model.capabilities.reasoning_efforts.is_empty())
-                            .then(|| model.capabilities.reasoning_efforts.clone()),
-                    },
-                    context_limits: model.context_limits.clone(),
-                    quality: (!model.quality.is_empty()).then(|| model.quality.clone()),
-                    pricing: model.pricing.clone(),
-                })
-                .collect(),
-            deployments: catalog
-                .deployments
-                .iter()
-                .map(|deployment| CatalogDeploymentView {
-                    id: deployment.id.clone(),
-                    source_ref: deployment.source_ref.clone(),
-                    model_profile_id: deployment.model_profile_id.clone(),
-                    upstream_model: deployment.upstream_model.clone(),
-                    billing: deployment.billing,
-                    allowed_lanes: deployment.allowed_lanes.clone(),
-                    price_override: deployment.price_override.clone(),
-                })
-                .collect(),
-            policies: catalog.policies.clone(),
-            warnings: catalog.warnings.clone(),
-        }
-    }
-}
-
 /// ADR-0013 / `docs/api/v1/api.md` §3.21: `GET /api/v1/config` に出す設定の要約。env は**キー名だけ**、トークンとその場所は出さない。
 pub fn config_view(config: &Config, listen: SocketAddr) -> ConfigView {
     ConfigView {
@@ -372,10 +309,6 @@ pub fn api_settings(
         harnesses: config.llm_route_registry().ok().map(|registry| {
             Arc::new(HarnessesAdapter(registry)) as task_api::SharedHarnessesReader
         }),
-        routing_catalog: config.routing_catalog_state.as_ref().map(|snapshot| {
-            Arc::new(RoutingCatalogAdapter(Arc::clone(snapshot)))
-                as task_api::SharedRoutingCatalogReader
-        }),
         // ADR 2026-10-06 D5: `POST /llm/models/discover` の実行は `wire_model_discovery` が差す（store と config を持つ側）。
         model_discovery: None,
         // ADR-0079 R4a: 木の view の上限の使用率（`GET /tasks/{id}/task-tree`）。
@@ -618,78 +551,6 @@ pub(crate) async fn start_api(
 #[cfg(test)]
 #[path = "api_chat_tests.rs"]
 mod chat_tests;
-
-#[cfg(test)]
-mod routing_catalog_tests {
-    use super::*;
-    use task_api::RoutingCatalogReader;
-    use task_core::Tier;
-    use task_core::model_router::{
-        policy::{RoutingMode, RoutingPolicy},
-        profiles::{
-            Billing, Capabilities, ContextLimits, DeploymentProfile, ModelProfile, Support,
-        },
-    };
-
-    #[test]
-    fn catalog_adapter_omits_secret_bearing_config_fields() {
-        let marker = "private-token-sentinel";
-        let model = ModelProfile {
-            id: "model".into(),
-            revision: "unknown".into(),
-            family: "unknown".into(),
-            capabilities: Capabilities {
-                tools: Support::Unknown,
-                structured_output: Support::Unknown,
-                vision: Support::Unknown,
-                streaming: Support::Unknown,
-                reasoning_efforts: vec![],
-            },
-            context_limits: ContextLimits {
-                input: None,
-                output: None,
-                total: None,
-            },
-            quality: vec![],
-            pricing: None,
-            provenance: marker.into(),
-        };
-        let deployment = DeploymentProfile {
-            id: "deployment".into(),
-            source_ref: "openai_compatible:local".into(),
-            model_profile_id: model.id.clone(),
-            upstream_model: "model".into(),
-            adapter_constraints: vec![marker.into()],
-            billing: Billing::SelfHosted,
-            host: Some(marker.into()),
-            region: None,
-            trust_zone: None,
-            external_network: false,
-            retains_data: None,
-            allowed_lanes: vec![Tier::Cheap],
-            resource_group_id: Some(marker.into()),
-            concurrency_limit: None,
-            rpm_limit: None,
-            tpm_limit: None,
-            price_override: None,
-            config_order: 0,
-        };
-        let catalog = crate::config::RoutingCatalog {
-            mode: RoutingMode::Shadow,
-            models: vec![model],
-            deployments: vec![deployment],
-            policies: vec![RoutingPolicy::defaults(Tier::Cheap, RoutingMode::Shadow)],
-            warnings: vec![],
-        };
-        let adapter = RoutingCatalogAdapter(Arc::new(std::sync::RwLock::new(Arc::new(catalog))));
-        let view = adapter.view();
-        let json = serde_json::to_string(&view).unwrap();
-        assert!(!json.contains(marker));
-        assert_eq!(view.models[0].capabilities.tools, None);
-        assert!(view.models[0].quality.is_none());
-        assert!(view.models[0].pricing.is_none());
-    }
-}
 
 #[cfg(test)]
 #[path = "api_account_limits_tests.rs"]

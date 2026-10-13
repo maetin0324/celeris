@@ -1788,13 +1788,6 @@ fn project_with_repos(
     (project.id, out)
 }
 
-fn routing_record(events: &[(u64, Event)]) -> Option<task_core::RoutingRecord> {
-    events.iter().rev().find_map(|(_, e)| match e {
-        Event::RoutingDecided { record, .. } => Some((**record).clone()),
-        _ => None,
-    })
-}
-
 // ---- ADR-0056 D3（Phase 79）: mount された skills を run に届ける ----
 
 // ========== ADR-0072（Phase E1）: run lifecycle / checkpoint / continuation ==========

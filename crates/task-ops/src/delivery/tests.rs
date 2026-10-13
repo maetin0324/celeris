@@ -259,11 +259,9 @@ fn routed_event(store: &SqliteStore, task: &Task, run: &str, owner: &str, unit: 
         org_node: Some(owner.into()),
         harness: Some("coding".into()),
         decision,
-        resolution: Default::default(),
         quota_reason: None,
         work_unit_id: unit.map(str::to_owned),
         escalation: None,
-        optimizer: None,
     };
     store
         .append_event(

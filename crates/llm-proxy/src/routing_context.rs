@@ -237,7 +237,6 @@ pub fn build_event(
         decision_id: routing.decision_id.clone(),
         parent_decision_id: routing.parent_decision_id.clone(),
         run_id: ctx.run_id.clone(),
-        trace: None,
         attempts: attempts.to_vec(),
         fallback_reason,
     };

@@ -1,7 +1,6 @@
 use super::*;
-use crate::model::{RunMetrics, Status, TaskRouting, Tier, TierSource, Usage};
+use crate::model::{RunMetrics, Status, TaskRouting, TierSource, Usage};
 use crate::model_policy::{LaneCeiling, RoutingRecord, decide_for_task};
-use crate::model_routing::LaneResolution;
 
 fn routing_decided(run_id: &str) -> Event {
     let mut t = crate::model_policy::tests::task("crates/x.rs の typo を直す", vec![]);
@@ -17,19 +16,8 @@ fn routing_decided(run_id: &str) -> Event {
             org_node: Some("software-engineering".into()),
             harness: Some("coding".into()),
             decision,
-            resolution: LaneResolution {
-                lane: Some(Tier::Cheap),
-                adapter: "claude-code".into(),
-                provider: Some("cc-1".into()),
-                account: None,
-                model_id: "model-cheap".into(),
-                reasoning_effort: None,
-                selection: None,
-                coding_default: None,
-            },
             quota_reason: None,
             work_unit_id: None,
-            optimizer: None,
             escalation: None,
         }),
     }
@@ -75,7 +63,6 @@ fn request(request_id: &str) -> Event {
             decision_id: format!("proxy:{request_id}"),
             parent_decision_id: Some("run:r1".into()),
             run_id: Some("r1".into()),
-            trace: None,
             attempts: vec![RequestSourceAttempt {
                 source_id: "qwen-local".into(),
                 model: Some("qwen".into()),

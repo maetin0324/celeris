@@ -82,9 +82,6 @@ pub struct RoutingAudit {
     pub retries: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub review: Option<ReviewResult>,
-    /// Phase 1 optimizer trace. Absent from events written before model routing.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub optimizer: Option<crate::model_router::trace::RoutingTraceV1>,
     /// Phase 3: run 間 escalation の構造化監査（`RoutingRecord.escalation`）。旧 event は None。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub escalation_audit: Option<EscalationAudit>,
@@ -97,16 +94,13 @@ pub struct RoutingAudit {
     /// Phase 3: outcome の状態。dispatch の `RoutingDecided` も outcome も無い run は None。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outcome_state: Option<RoutingOutcomeState>,
-    /// ADR 2026-10-07: coding の既定ハーネス解決（`RoutingDecided.resolution.coding_default`）。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub coding_default: Option<crate::model_routing::CodingDefaultResolution>,
 }
 
 impl RoutingAudit {
-    /// Phase 3: dispatch の decision id（`optimizer.decision_id`）。feature・outcome はこの id で結ぶ。
-    /// 欄として複写せず trace から読む（Phase 2 の trace の無い旧 run は None）。
     pub fn decision_id(&self) -> Option<&str> {
-        self.optimizer.as_ref().map(|t| t.decision_id.as_str())
+        self.routing_features
+            .as_ref()
+            .map(|record| record.decision_id.as_str())
     }
 }
 
@@ -175,19 +169,13 @@ pub fn routing_audit(task: &Task, events: &[Event]) -> Vec<RoutingAudit> {
                 if record.harness.is_some() {
                     a.harness = record.harness.clone();
                 }
-                a.lane = Some(record.resolution.lane.unwrap_or(record.decision.lane));
-                if !record.resolution.model_id.is_empty() {
-                    a.model = Some(record.resolution.model_id.clone());
-                }
-                a.reasoning_effort = record.resolution.reasoning_effort.clone();
-                a.coding_default = record.resolution.coding_default.clone();
+                a.lane = Some(record.decision.lane);
                 a.features = Some(record.decision.features);
                 a.rule_id = Some(record.decision.rule_id.clone());
                 a.policy_version = Some(record.decision.policy_version.clone());
                 a.reasons = record.decision.reasons.clone();
                 a.escalation = record.decision.escalation.clone();
                 a.escalation_audit = record.escalation.clone();
-                a.optimizer = record.optimizer.clone();
             }
             Event::WorkerFinished {
                 run_id,
@@ -278,7 +266,6 @@ mod tests {
     use super::*;
     use crate::model::{RunMetrics, Status, TaskRouting, TierSource, Usage};
     use crate::model_policy::{LaneCeiling, decide_for_task};
-    use crate::model_routing::LaneResolution;
 
     #[test]
     fn joins_routing_usage_wall_retries_and_review_per_run() {
@@ -294,20 +281,9 @@ mod tests {
             org_node: Some("software-engineering".into()),
             harness: Some("coding".into()),
             decision: decision.clone(),
-            resolution: LaneResolution {
-                lane: Some(Tier::Standard),
-                adapter: "claude-code".into(),
-                provider: Some("cc-1".into()),
-                account: None,
-                model_id: "model-std".into(),
-                reasoning_effort: Some("medium".into()),
-                selection: None,
-                coding_default: None,
-            },
             quota_reason: None,
             work_unit_id: None,
             escalation: None,
-            optimizer: None,
         };
         let events = vec![
             Event::WorkerStarted {
@@ -371,7 +347,7 @@ mod tests {
         assert_eq!(a.adapter.as_deref(), Some("claude-code"));
         assert_eq!(a.lane, Some(Tier::Standard));
         assert_eq!(a.model.as_deref(), Some("model-std"));
-        assert_eq!(a.reasoning_effort.as_deref(), Some("medium"));
+        assert_eq!(a.reasoning_effort, None);
         assert_eq!(a.features, Some(decision.features));
         assert_eq!(a.rule_id.as_deref(), Some(decision.rule_id.as_str()));
         assert_eq!(a.policy_version.as_deref(), Some("lane-policy/1"));
@@ -400,131 +376,5 @@ mod tests {
         assert_eq!(audit.len(), 1);
         assert!(audit[0].lane.is_none() && audit[0].rule_id.is_none());
         assert_eq!(audit[0].outcome.as_deref(), Some("done: ok"));
-    }
-
-    fn ev(v: serde_json::Value) -> Event {
-        serde_json::from_value(v).unwrap()
-    }
-
-    /// Phase 3: features・escalation・最新 outcome を run に結び、supersede された outcome は出さない。
-    /// 未レビュー（判定 null）と outcome 未追記を区別する。
-    #[test]
-    fn joins_features_escalation_and_latest_outcome_per_run() {
-        let t = crate::model_policy::tests::task("x", vec![]);
-        let decision = decide_for_task(&t, &LaneCeiling::default()).unwrap();
-        let mut trace: crate::model_router::trace::RoutingTraceV1 =
-            serde_json::from_value(serde_json::json!({
-                "decision_id": "d1", "stage": "dispatch", "mode": "shadow",
-                "policy_version": "p", "catalog_version": "c", "feature_version": "1",
-                "estimator_version": "e", "snapshot_id": "s", "requested_lane": "cheap",
-                "candidates": [], "fallback_order": [], "reasons": []
-            }))
-            .unwrap();
-        trace.run_id = Some("r1".into());
-        let record = |trace: Option<crate::model_router::trace::RoutingTraceV1>| {
-            Box::new(crate::model_policy::RoutingRecord {
-                features: None,
-                org_node: None,
-                harness: None,
-                decision: decision.clone(),
-                resolution: LaneResolution::default(),
-                quota_reason: None,
-                work_unit_id: None,
-                escalation: Some(EscalationAudit {
-                    requested_lane: Tier::Cheap,
-                    previous_lane: Some(Tier::Cheap),
-                    selected_lane: Tier::Standard,
-                    reason: "2 quality failures".into(),
-                    counted_failures: 2,
-                    interval_id: "initial".into(),
-                }),
-                optimizer: trace,
-            })
-        };
-        let outcome = |id: &str, run: &str, sup: Option<&str>, review: Option<bool>| {
-            ev(serde_json::json!({
-                "type": "routing_outcome_recorded", "outcome_id": id, "decision_id": "d1",
-                "run_id": run, "evaluation_version": "routing-outcome/1",
-                "supersedes": sup, "review_passed": review
-            }))
-        };
-        let events = vec![
-            Event::RoutingDecided {
-                run_id: "r1".into(),
-                record: record(Some(trace.clone())),
-            },
-            ev(serde_json::json!({
-                "type": "routing_features_recorded", "decision_id": "d1",
-                "context_version": "routing-context/1", "features": {"phase": "implementation"},
-                "missing_fields": ["network"], "run_id": "r1", "stage": "dispatch"
-            })),
-            // proxy 時点の特徴は run の特徴にしない
-            ev(serde_json::json!({
-                "type": "routing_features_recorded", "decision_id": "p1",
-                "context_version": "routing-context/1", "run_id": "r1",
-                "request_id": "q1", "stage": "proxy"
-            })),
-            outcome("o1", "r1", None, None),
-            outcome("o2", "r1", Some("o1"), Some(true)),
-            // 要求単位の outcome は run の outcome にしない
-            ev(serde_json::json!({
-                "type": "routing_outcome_recorded", "outcome_id": "o3", "decision_id": "d1",
-                "run_id": "r1", "request_id": "q1", "evaluation_version": "routing-outcome/1"
-            })),
-            Event::RoutingDecided {
-                run_id: "r2".into(),
-                record: record(Some({
-                    let mut t2 = trace.clone();
-                    t2.decision_id = "d2".into();
-                    t2.run_id = Some("r2".into());
-                    t2
-                })),
-            },
-            Event::RoutingDecided {
-                run_id: "r3".into(),
-                record: record(None),
-            },
-        ];
-        let audit = routing_audit(&t, &events);
-        assert_eq!(audit.len(), 3, "{audit:?}");
-        let a = &audit[0];
-        assert_eq!(a.decision_id(), Some("d1"));
-        assert_eq!(
-            a.escalation_audit.as_ref().map(|e| e.selected_lane),
-            Some(Tier::Standard)
-        );
-        let f = a.routing_features.as_ref().expect("features");
-        assert_eq!(f.decision_id, "d1");
-        assert_eq!(f.missing_fields, vec!["network".to_string()]);
-        let o = a.routing_outcome.as_ref().expect("outcome");
-        assert_eq!(o.outcome_id, "o2");
-        assert_eq!(o.review_passed, Some(true));
-        assert_eq!(a.outcome_state, Some(RoutingOutcomeState::Judged));
-        // decision はあるが outcome 未追記
-        assert!(audit[1].routing_outcome.is_none());
-        assert_eq!(
-            audit[1].outcome_state,
-            Some(RoutingOutcomeState::NotRecorded)
-        );
-        // Phase 2 trace の無い run も dispatch の決定があれば未追記（decision id は None）
-        assert!(audit[2].decision_id().is_none());
-        assert_eq!(
-            audit[2].outcome_state,
-            Some(RoutingOutcomeState::NotRecorded)
-        );
-
-        // 判定の無い outcome は unreviewed（false とみなさない）
-        let unreviewed = routing_audit(&t, &events[..4]);
-        assert_eq!(
-            unreviewed[0].outcome_state,
-            Some(RoutingOutcomeState::Unreviewed)
-        );
-        assert_eq!(
-            unreviewed[0]
-                .routing_outcome
-                .as_ref()
-                .map(|o| o.review_passed),
-            Some(None)
-        );
     }
 }

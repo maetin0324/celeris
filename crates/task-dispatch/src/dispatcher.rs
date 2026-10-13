@@ -152,29 +152,9 @@ pub use route_select::account_adapter_for_source_kind;
 pub use route_select::{
     RouteFailure, RouteInput, RoutePick, RouteState, RouteTrace, harness_request_for, route_select,
 };
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct DispatchRoutingSettings {
-    pub configured: bool,
-    pub mode: task_core::model_router::policy::RoutingMode,
-    pub constraints: task_core::model_router::policy::Constraints,
-    pub freshness: task_core::model_router::policy::FreshnessPolicy,
-    pub window_reserves: std::collections::BTreeMap<String, f64>,
-    pub context_safety_margin: Option<u64>,
     pub escalation: task_core::EscalationThresholds,
-}
-
-impl Default for DispatchRoutingSettings {
-    fn default() -> Self {
-        Self {
-            configured: false,
-            mode: task_core::model_router::policy::RoutingMode::Shadow,
-            constraints: Default::default(),
-            freshness: Default::default(),
-            window_reserves: Default::default(),
-            context_safety_margin: None,
-            escalation: Default::default(),
-        }
-    }
 }
 pub use snapshot::SnapshotPublisher;
 

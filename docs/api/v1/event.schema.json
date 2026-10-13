@@ -3307,7 +3307,6 @@
               ]
             },
             "detail": {
-              "description": "秘密を含まない短い説明（任意）。",
               "type": [
                 "string",
                 "null"
@@ -3340,7 +3339,6 @@
               ]
             },
             "output_sha256": {
-              "description": "出力本文の SHA-256（小文字 16 進 64 桁）。本文は保存しない。",
               "type": [
                 "string",
                 "null"
@@ -3355,11 +3353,9 @@
               ]
             },
             "policy_version": {
-              "description": "判断した policy/estimator の版。",
               "type": "string"
             },
             "primary_decision_id": {
-              "description": "shadow が比べた primary の決定（`RoutingTraceV1.decision_id`）。",
               "type": "string"
             },
             "reason": {
@@ -3370,8 +3366,7 @@
                 {
                   "type": "null"
                 }
-              ],
-              "description": "completed は `None`。failed/dropped は必須。"
+              ]
             },
             "request_id": {
               "type": [
@@ -3380,7 +3375,6 @@
               ]
             },
             "reservation_id": {
-              "description": "実行 shadow の日次予約（store の reservation id）。decision shadow・予約前の drop は `None`。",
               "type": [
                 "string",
                 "null"
@@ -7853,7 +7847,6 @@
       "type": "object"
     },
     "ShadowKind": {
-      "description": "shadow の種類。`decision` は追加呼出しなし、`execution` は候補で生成、\n`estimator` は品質推定を primary heuristic と比較する。",
       "enum": [
         "decision",
         "execution",
@@ -7862,46 +7855,21 @@
       "type": "string"
     },
     "ShadowReason": {
-      "description": "failed/dropped の安定 reason code（説明文は別欄 `detail`。secret を入れない）。",
-      "oneOf": [
-        {
-          "enum": [
-            "not_allowlisted",
-            "sampled_out",
-            "queue_full",
-            "concurrency_limit",
-            "timeout",
-            "privacy",
-            "upstream_error"
-          ],
-          "type": "string"
-        },
-        {
-          "const": "off",
-          "description": "shadow 実行が設定で off（既定）または設定が不完全。",
-          "type": "string"
-        },
-        {
-          "const": "cap_exceeded",
-          "description": "日次の request/token/effective 上限を超える（予約できない）。",
-          "type": "string"
-        },
-        {
-          "const": "unknown_cost",
-          "description": "最悪消費の費用が分からない（実行対象にしない）。",
-          "type": "string"
-        },
-        {
-          "const": "resource_group_shared",
-          "description": "primary と同じ非分離の resource group を使う。",
-          "type": "string"
-        },
-        {
-          "const": "primary_pressure",
-          "description": "primary の予約待ちが発生したので未開始の shadow を落とした。",
-          "type": "string"
-        }
-      ]
+      "enum": [
+        "off",
+        "not_allowlisted",
+        "sampled_out",
+        "queue_full",
+        "concurrency_limit",
+        "cap_exceeded",
+        "unknown_cost",
+        "timeout",
+        "privacy",
+        "resource_group_shared",
+        "primary_pressure",
+        "upstream_error"
+      ],
+      "type": "string"
     },
     "ShadowStatus": {
       "enum": [

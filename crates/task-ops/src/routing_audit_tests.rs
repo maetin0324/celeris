@@ -383,3 +383,35 @@ fn request_records_link_to_runs_with_actual_source() {
         Some("req-u")
     );
 }
+
+#[test]
+fn legacy_shadow_history_fixture_deserializes_and_appears_in_audit() {
+    let event: Event = serde_json::from_str(include_str!(
+        "../tests/fixtures/routing_shadow_recorded.json"
+    ))
+    .unwrap();
+    let Event::RoutingShadowRecorded { record } = &event else {
+        panic!("fixture must decode as routing shadow history");
+    };
+    assert_eq!(record.shadow_id, "shadow-legacy-001");
+    assert_eq!(record.request_id, None);
+
+    let store = SqliteStore::open_in_memory().unwrap();
+    let task = new_task(&store);
+    let audit = routing_audit_with_requests(
+        &task,
+        &[decided(&task, "run-legacy-001", None), event],
+        &FakeLog::default(),
+    )
+    .unwrap();
+    let shadow = &audit.runs[0].routing_shadow.as_ref().unwrap()[0];
+    assert_eq!(shadow.shadow_id, "shadow-legacy-001");
+    assert_eq!(
+        shadow.estimator.as_ref().unwrap().vs_primary,
+        Some(EstimatorComparison::Differs)
+    );
+    assert_eq!(
+        shadow.estimator.as_ref().unwrap().vs_heuristic,
+        Some(EstimatorComparison::Same)
+    );
+}

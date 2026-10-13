@@ -14,7 +14,9 @@ use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
 
 /// `ShadowRecord` の wire 版（§6 の version 1）。
-pub const SHADOW_RECORD_VERSION: u32 = 1;
+pub use crate::routing_shadow_history::{
+    SHADOW_RECORD_VERSION, ShadowKind, ShadowReason, ShadowRecord, ShadowStatus,
+};
 
 /// allowlist の 1 次元で「何でもよい」を明示する値。空の次元は「対象なし」で、`*` とは別。
 pub const SHADOW_ALLOW_ANY: &str = "*";
@@ -190,89 +192,6 @@ pub fn sampled_in(decision_id: &str, sample_rate: f64) -> bool {
     // 53 bit に落として f64 で正確に表す。
     let unit = (u64::from_be_bytes(head) >> 11) as f64 / (1u64 << 53) as f64;
     unit < sample_rate
-}
-
-/// shadow の種類。`decision` は追加呼出しなし、`execution` は候補で生成、
-/// `estimator` は品質推定を primary heuristic と比較する。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum ShadowKind {
-    Decision,
-    Execution,
-    Estimator,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum ShadowStatus {
-    Completed,
-    Failed,
-    Dropped,
-}
-
-/// failed/dropped の安定 reason code（説明文は別欄 `detail`。secret を入れない）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum ShadowReason {
-    /// shadow 実行が設定で off（既定）または設定が不完全。
-    Off,
-    NotAllowlisted,
-    SampledOut,
-    QueueFull,
-    ConcurrencyLimit,
-    /// 日次の request/token/effective 上限を超える（予約できない）。
-    CapExceeded,
-    /// 最悪消費の費用が分からない（実行対象にしない）。
-    UnknownCost,
-    Timeout,
-    Privacy,
-    /// primary と同じ非分離の resource group を使う。
-    ResourceGroupShared,
-    /// primary の予約待ちが発生したので未開始の shadow を落とした。
-    PrimaryPressure,
-    UpstreamError,
-}
-
-/// `Event::RoutingShadowRecorded` の中身（wire では event の欄に平たく並ぶ）。primary の結果とは別欄。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct ShadowRecord {
-    pub shadow_id: String,
-    /// shadow が比べた primary の決定（`RoutingTraceV1.decision_id`）。
-    pub primary_decision_id: String,
-    pub kind: ShadowKind,
-    pub status: ShadowStatus,
-    /// completed は `None`。failed/dropped は必須。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reason: Option<ShadowReason>,
-    /// 秘密を含まない短い説明（任意）。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub detail: Option<String>,
-    /// 判断した policy/estimator の版。
-    pub policy_version: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub run_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub request_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub candidate_model: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub candidate_source: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub input_tokens: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub output_tokens: Option<u64>,
-    /// 出力本文の SHA-256（小文字 16 進 64 桁）。本文は保存しない。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub output_sha256: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cash_usd: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub effective_usd: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub latency_ms: Option<u64>,
-    /// 実行 shadow の日次予約（store の reservation id）。decision shadow・予約前の drop は `None`。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reservation_id: Option<String>,
 }
 
 /// `ShadowRecord::validate` の失敗。

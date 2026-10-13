@@ -16,8 +16,8 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use task_core::model_router::feedback::{RequestSourceAttempt, RoutingRequestRecord};
-use task_core::model_router::shadow::{ShadowKind, ShadowReason, ShadowRecord, ShadowStatus};
 use task_core::model_router::trace::RoutingTraceV1;
+use task_core::routing_shadow_history::{ShadowKind, ShadowReason, ShadowRecord, ShadowStatus};
 use task_core::store::{RoutingCorrelation, ShadowReservationAudit};
 use task_core::{Event, RoutingAudit, SqliteStore, TaskId, TaskStore};
 

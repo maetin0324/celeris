@@ -376,3 +376,71 @@ API の欄名 `provider`（`RunSummary.provider`・`LaneResolution.provider`・`
 残り（provider の語を残すが LLM provider の表示ではないもの）:
 - `gui/app/components/BrowserWaitsPanel.tsx` の `credential.provider` は credential の provider で、LLM provider ではない。
 - `gui/app/components/task-detail/TimelineTab.tsx` の `provider_throttled` は event 種別の一覧（生成型の Event enum に残る）。
+
+## 2026-10-13 付記（本番投入の不具合）
+
+provider 廃止版の本番 verify で見つかった 5 件を、次の契約で修正する。既存の provider 廃止・source/harness 分離の決定は変えない。proxy に渡す wire model の source 接頭辞と OpenCode の provider namespace は別の名前空間である。前者は `llm_routes.via`、後者は `[harnesses.opencode].model_namespace` だけから決める。
+
+### 1. 旧 `routing_decided` event の読み込み — `legacy-events`
+
+**決定**: `RoutingMode::Legacy` を durable event の deserialize のみで受ける互換 variant として戻す。新しい設定・policy・dispatch・event serialize 経路からは選べないようにし、新規 event は引き続き `shadow` / `enforce` のみを書く。独立 parser や event migration は作らず、通常の `Event` deserialize で読む。
+
+**理由**: `RoutingDecided.record.optimizer.mode = "legacy"` は旧 selector が残した監査値で、現行設定の選択肢ではない。`tasks_with_events_impl` の `serde_json::from_str::<Event>` が `RoutingMode` の未知 variant で失敗し、store から全 task/event を読む daemon bootstrap に伝播して起動を止める。
+
+provider 削除履歴を調べるときは、provider 関連 commit の名前だけで互換対象とせず、各削除 diff の serde `Deserialize` 型を Event variant/payload から包含関係で追い、保存済み event の実例、append site と現行 reader を照合する。`WorkerHint.adapter` は `Created.task` 内に残り得るが未知 struct field は無視される。runtime config/catalog 型の削除は event payload 型でない。したがって現時点で追加互換が必要なのは `RoutingTraceV1.mode` の `legacy` である。
+
+**変更箇所（file:関数）**: `crates/task-core/src/model_router/policy.rs:RoutingMode`; `crates/task-core/src/model_router/trace.rs:RoutingTraceV1`; `crates/task-core/src/store/events.rs:events_for_impl`・`tasks_with_events_impl`（reader の回帰固定）。daemon bootstrap からの伝播も確認する。
+
+**実装 leaf と試験名**: `legacy-events` — `task_core::model_router::tests::routing_old_legacy_mode_event_deserializes_and_is_not_written`; `task_core::store::tests::legacy_routing_decided_event_loads_from_store`; `celeris::daemon::tests::startup_loads_legacy_routing_decided_event`。
+
+### 2. Pi の実行宣言 — `pi-harness`
+
+**決定**: `[harnesses.pi]` に `extensions: Vec<PathBuf>`、`tools: Vec<String>`、`env: HashMap<String, String>` を持たせる。extensions は設定ファイルからの相対 path とし、extensions/tools が空なら設定を拒否する。旧 `pi-*` provider 宣言の値を移す。env は既存の secret reference 解決を通して Pi process に渡し、route が足す account directory・credential・endpoint env は宣言 env を保持して合成する。値が本番 backup にしかない項目は推測せず、運用者が既存値を照合する。
+
+**理由**: provider 行を廃止した後も Pi adapter は `-e` extensions、`--tools` allowlist と process env を要する。現 harness builder が空値を渡し、Pi 側 validation が起動を拒否する状態を解消する。
+
+**変更箇所（file:関数）**: `crates/celeris/src/config/harness.rs:HarnessConfig`・検証/path 解決; `crates/celeris/src/daemon/adapters.rs:build_harness_adapters`; `crates/task-worker/src/route.rs:route_adapter`; `crates/task-worker/src/pi.rs` の起動 env/args。
+
+**実装 leaf と試験名**: `pi-harness` — `celeris::config::harness::tests::pi_harness_deserializes_extensions_tools_and_env`; `celeris::config::harness::tests::pi_harness_resolves_relative_extension_paths`; `celeris::daemon::adapters::tests::pi_harness_declaration_reaches_pi_adapter`; `task_worker::route::tests::route_endpoint_preserves_pi_declared_environment`; `task_worker::pi::tests::pi_adapter_passes_declared_environment`。
+
+### 3. proxy harness の model wire 名 — `model-names`
+
+**決定**: `via = "llm_proxy"` の明示 route では harness に `<source_id>/<model_id>` を渡す。直接接続は model ID のまま。変換は daemon の route 選択時に一度だけ行い、選択結果の wire model を adapter 起動と `SelectedLlmRoute.model_id` の双方で使う。event/run の canonical model は接頭辞なしの source model ID のまま保つ。proxy route の endpoint は source endpoint を渡さず `None` とし、proxy URL と bearer secret は各 harness の接続設定に置く。
+
+LDR は proxy 経由のまま維持する。Claude/Codex source へ fallback しても route source に応じて wire name だけを替える。PaperQA は `settings.llm`、`settings.summary_llm`、`settings.agent.agent_llm` の3欄を wire name で上書きし、検索語 LLM にも同じ名前を渡す。LangMem は `with_model` で route model を使う。LDR は既存の route model override を使う。
+
+**理由**: proxy parser は最初の `/` までを source ID として解決する。現在は選択 model が裸のまま渡り、proxy 経由と宣言しても 422 になる。PaperQA の `strip_provider_prefix` は wire 名の source 部分を落とし、要約/agent LLM は settings file の古い model を残していた。LangMem も route の model を無視していた。registry を持つ daemon で変換すれば worker と daemon の二重変換を避けられる。
+
+**変更箇所（file:関数）**: `crates/task-core/src/llm_route.rs:wire_model_id`・`route_via`; `crates/task-dispatch/src/dispatcher/route_select.rs:route_select_one`; `crates/task-dispatch/src/dispatcher/route_launch.rs:Dispatcher::route_adapter`・`selected_llm_route`; `crates/celeris/src/config/llm_route.rs:validate_proxy_routes`; `crates/task-worker/src/paperqa.rs:query_llm_model`・`strip_provider_prefix`; `crates/task-worker/src/paperqa_ask.py` の settings 上書き; `crates/task-worker/src/langmem.rs:LangMemAdapter::with_model`。
+
+**実装 leaf と試験名**: `model-names` — `task_core::llm_route::tests::wire_model_id_qualifies_only_routes_declared_via_llm_proxy`; `task_core::llm_route::tests::wire_model_id_keeps_a_model_that_already_contains_a_slash`; `task_dispatch::dispatcher::tests::route_select::proxy_route_pick_carries_the_qualified_wire_model`; `task_dispatch::dispatcher::tests::route_select::direct_route_pick_keeps_the_bare_model`; `task_dispatch::dispatcher::tests::route_launch::route_adapter_launches_the_wire_model`; `celeris::config::tests::proxy_bound_harness_candidates_all_need_a_via_llm_proxy_route`; `task_worker::paperqa::tests::route_model_overrides_llm_summary_llm_and_agent_llm`; `task_worker::paperqa::tests::query_llm_model_keeps_the_source_qualified_name`; `task_worker::langmem::tests::with_model_replaces_the_configured_model`; `task_worker::local_deep_research::tests::route_model_overrides_settings_llm_model`。
+
+**本番への移行**: `docs/ops/provider-llm-source-migration.md` の実装 leaf で、LDR/PaperQA/LangMem の proxy URL・token secret reference・接頭辞付き既定 model、明示 `via = "llm_proxy"` route、稼働中の config backup に基づく Pi 値を反映する。`claude_code` は proxy endpoint を宣言できないため Codex OAuth proxy fallback を候補から外し、CoS は Claude source のみとする。設定検証、`celerisctl routing show`、proxy の接頭辞付き成功/裸 model の 422 を確認してから人が reload する。daemon 本番設定はこの付記作業では変更しない。
+
+### 4. OpenCode ACP model ID — `model-names`
+
+**決定**: `[harnesses.opencode]` に任意の `model_namespace` を宣言し、OpenCode ACP だけ `model_namespace/model_id` を adapter に渡す。今回は namespace を `qwen-local`、route model を `qwen3.8-27b` とし、OpenCode が要求する `qwen-local/qwen3.8-27b` にする。namespace 未指定なら従来どおり route model を渡し、空値または `/` を含む値は拒否する。proxy source prefix から namespace を推測しない。
+
+**理由**: OpenCode config の provider namespace `qwen-local` と LLM source ID `qwen` は異なる識別子である。`<source>/<model>` は proxy wire protocol のための名前であり、OpenCode の model catalog ID を表さないため、設定で明示する。
+
+**変更箇所（file:関数）**: `crates/celeris/src/config/harness.rs:HarnessConfig`・検証; `crates/celeris/src/daemon/adapters.rs:build_harness_adapters`; `crates/task-worker/src/route.rs:route_adapter`; `crates/task-worker/src/acp.rs` の `with_model` から session model option への引き渡し。
+
+**実装 leaf と試験名**: `model-names` — `celeris::config::harness::tests::opencode_model_namespace_deserializes_and_validates`; `celeris::daemon::adapters::tests::opencode_harness_passes_model_namespace`; `task_worker::route::tests::opencode_model_id_uses_declared_namespace`; `task_worker::route::tests::non_opencode_model_id_remains_route_model`; `task_worker::acp::tests::opencode_receives_qualified_route_model_id`。
+
+**本番への移行**: 同じ runbook 反映で `[harnesses.opencode].model_namespace = "qwen-local"` を宣言し、route の canonical model は `qwen3.8-27b` のままにする。既存 OpenCode config の provider ID と一致することを確認する。
+
+### 5. execution class ごとの route 候補 — `class-routes`
+
+**決定**: `[route_defaults.<harness>].classes.<execution_class>.candidates` を追加し、`coding` class だけ `claude-opus-5-5` を候補先頭にする。`[route_defaults.claude_code].candidates` の通常既定は `claude-sonnet-5-5` を先頭にする。class 候補が宣言された場合はその候補列で置き換え、全候補不適格なら `NoEligible` として fail closed する。lane/tier と `RoutePolicy` は使わず、後続 task 01M4M8D4AQ の policy 境界を変更しない。class 名は `coding` / `planner` / `review` に限定し、route 候補と既定候補で同じ適格性検証を行う。
+
+**理由**: 本番要件は coding のみ Opus、通常の Claude Code は Sonnet。harness の execution class 選択と source/model 候補選択は別段階なので、既存 `route_defaults` に class 別の候補表を持たせ、route 選択時に class を保持するのが最小の変更となる。class 候補から既定への暗黙 fallback は宣言順の意味を損なう。
+
+**変更箇所（file:関数）**: `crates/celeris/src/config/llm_route.rs:RouteDefaultConfig`・`validate_registry`; `crates/task-core/src/llm_route.rs:Registry`・`route_priority`; `crates/task-dispatch/src/dispatcher/route_select.rs:route_select`・`route_select_one`（harness loop で class を落とさない）; `crates/celeris/src/config/harness.rs:apply_verify_smoke`; `crates/celerisctl/src/commands/routing.rs` の `routing show`。
+
+**実装 leaf と試験名**: `class-routes` — `task_core::llm_route::tests::route_priority_prefers_the_execution_class_list`; `task_core::llm_route::tests::route_priority_ignores_the_class_for_cos`; `task_dispatch::dispatcher::tests::class_route::coding_class_picks_the_class_candidate_first`; `task_dispatch::dispatcher::tests::class_route::class_list_does_not_fall_back_to_the_harness_defaults`; `task_dispatch::dispatcher::tests::route_select::class_candidates_survive_the_harness_loop`; `celeris::config::tests::route_defaults_classes_build_the_registry`; `celeris::config::tests::class_candidates_are_validated_like_harness_candidates`; `celeris::config::tests::empty_class_candidates_are_a_config_error`; `celeris::config::tests::unknown_execution_class_is_a_config_error`; `celeris::config::tests::apply_verify_smoke_drops_smoke_from_class_candidates`; `celerisctl::commands::routing::tests::show_prints_class_candidates`。
+
+**本番への移行**: 同 runbook の `route_defaults.claude_code.candidates` は Sonnet、`route_defaults.claude_code.classes.coding.candidates` は Opus を先頭にする。planner/review は通常既定を使い、CoS は独立した候補表を維持する。reload 前に `celerisctl routing show` で両候補列を確認する。
+
+### 残る別工程
+
+`claude_code` / `codex` harness 自体を llm-proxy 経由にする機能は今回の決定に含めない。Claude Code の endpoint/auth 注入と daemon 起動経路への適用、proxy bearer secret の引き渡しが揃うまで、該当 fallback は設定しない。必要になった場合は別の設計・実装 task とする。

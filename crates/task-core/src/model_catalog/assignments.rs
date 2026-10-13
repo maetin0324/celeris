@@ -1,7 +1,4 @@
-//! Legacy model routing helpers retained for old event interpretation and wire-name normalization.
-
-use schemars::JsonSchema;
-use serde::Serialize;
+//! Wire-name normalization helpers for model catalog and route configuration.
 
 use super::CatalogSource;
 use crate::Tier;
@@ -22,82 +19,6 @@ pub fn tier_from_str(s: &str) -> Option<Tier> {
         "standard" => Some(Tier::Standard),
         "cheap" => Some(Tier::Cheap),
         _ => None,
-    }
-}
-
-/// 割り当ての実効の状態。`Excluded` は割り当て行は残るが routing には使えない（D2）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
-pub enum AssignmentState {
-    Assigned,
-    /// `reason` は `override:disabled`（先に見る）か `catalog:unavailable`。
-    Excluded {
-        reason: &'static str,
-    },
-}
-
-impl AssignmentState {
-    pub const REASON_DISABLED: &'static str = "override:disabled";
-    pub const REASON_UNAVAILABLE: &'static str = "catalog:unavailable";
-}
-
-/// 割り当て行に実効の状態を足したもの。
-#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
-pub struct EffectiveAssignment {
-    pub source: CatalogSource,
-    pub tier: Tier,
-    pub model_id: String,
-    /// Lower values are preferred; ties use source and model ID.
-    #[serde(default)]
-    pub priority: u32,
-    pub state: AssignmentState,
-    pub note: Option<String>,
-    pub updated_at: i64,
-    pub updated_by: String,
-}
-
-/// 全割り当ての実効の一覧（priority、source、model_id、tier の順）。
-#[derive(Debug, Clone, Default, PartialEq, Serialize, JsonSchema)]
-pub struct AssignmentView {
-    pub items: Vec<EffectiveAssignment>,
-    /// Explicitly managed scopes, including roles with no remaining members.
-    #[serde(default)]
-    pub managed: Vec<(CatalogSource, Tier)>,
-}
-
-impl AssignmentView {
-    pub fn empty() -> Self {
-        Self::default()
-    }
-
-    pub fn manages(&self, source: &str, tier: Tier) -> bool {
-        self.managed
-            .iter()
-            .any(|(s, t)| s.as_str() == source && *t == tier)
-            || self
-                .items
-                .iter()
-                .any(|a| a.source.as_str() == source && a.tier == tier)
-    }
-
-    /// All members in deterministic priority order, including excluded members for display.
-    pub fn members(&self, source: &str, tier: Tier) -> Vec<&EffectiveAssignment> {
-        let mut items: Vec<_> = self
-            .items
-            .iter()
-            .filter(|a| a.source.as_str() == source && a.tier == tier)
-            .collect();
-        items.sort_by_key(|a| (a.priority, a.source.as_str(), &a.model_id));
-        items
-    }
-
-    /// Legacy selection skips unavailable members before trying the next priority.
-    pub fn get(&self, source: &str, tier: Tier) -> Option<&EffectiveAssignment> {
-        let members = self.members(source, tier);
-        members
-            .iter()
-            .copied()
-            .find(|a| a.state == AssignmentState::Assigned)
-            .or_else(|| members.first().copied())
     }
 }
 

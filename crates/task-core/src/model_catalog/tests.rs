@@ -163,7 +163,7 @@ fn failure_is_recorded_without_touching_catalog() {
     assert_eq!(rec[0].at, 20);
 }
 
-/// Existing assignment events remain readable after the tables are removed by migration 0069.
+/// Existing assignment events remain readable after the tables are removed by migration 0072.
 #[test]
 fn historical_model_role_assignment_event_survives_assignment_table_removal() {
     let dir = tempfile::tempdir().unwrap();

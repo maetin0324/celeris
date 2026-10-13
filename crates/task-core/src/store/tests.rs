@@ -172,6 +172,102 @@ fn append_event_reads_back_in_seq_order() {
 }
 
 #[test]
+fn legacy_routing_decided_event_loads_from_store() {
+    let store = SqliteStore::open_in_memory().expect("open migrated store");
+    let task = sample_task(Status::Draft);
+    store.insert(&task).expect("insert task");
+
+    let policy_task = crate::model_policy::tests::task("legacy-store-task", vec![]);
+    let record = crate::model_policy::RoutingRecord {
+        org_node: None,
+        harness: None,
+        decision: crate::model_policy::decide_for_task(&policy_task, &Default::default())
+            .expect("routing decision"),
+        resolution: Default::default(),
+        quota_reason: None,
+        work_unit_id: None,
+        escalation: None,
+        optimizer: None,
+    };
+    let mut event = serde_json::to_value(Event::RoutingDecided {
+        run_id: "legacy-run".into(),
+        record: Box::new(record),
+    })
+    .expect("serialize current event shape");
+    // This is the old durable optimizer trace shape: mode=legacy, with no newer optional fields.
+    event["record"]["optimizer"] = serde_json::json!({
+        "decision_id": "legacy-decision",
+        "task_id": task.id.to_string(),
+        "run_id": "legacy-run",
+        "stage": "dispatch",
+        "mode": "legacy",
+        "policy_version": "phase1-v1",
+        "catalog_version": "legacy-catalog",
+        "feature_version": "1",
+        "estimator_version": "heuristic-1",
+        "snapshot_id": "legacy-snapshot",
+        "requested_lane": "standard",
+        "candidates": [],
+        "fallback_order": [],
+        "reasons": []
+    });
+    let payload = event.to_string();
+    {
+        let conn = store.lock().expect("lock store");
+        conn.execute(
+            "INSERT INTO events (task_id, seq, ts, json) VALUES (?1, 0, ?2, ?3)",
+            rusqlite::params![
+                task.id.to_string(),
+                format_rfc3339(OffsetDateTime::now_utc()).unwrap(),
+                payload,
+            ],
+        )
+        .expect("insert legacy durable payload");
+    }
+
+    let raw_before: (i64, String) = store
+        .with_read_conn(|conn| {
+            conn.query_row(
+                "SELECT COUNT(*), MIN(json) FROM events WHERE task_id = ?1",
+                [task.id.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .map_err(Into::into)
+        })
+        .expect("read raw event before loading");
+    assert_eq!(raw_before, (1, payload.clone()));
+
+    let events = store.events_for(task.id).expect("events_for legacy event");
+    assert_eq!(events.len(), 1);
+    assert!(matches!(
+        &events[0].1,
+        Event::RoutingDecided { record, .. }
+            if record.optimizer.as_ref().is_some_and(|trace| trace.mode == crate::model_router::policy::RoutingMode::Legacy)
+    ));
+    let tasks = store.tasks_with_events().expect("tasks_with_events");
+    let (_, all_events) = tasks
+        .into_iter()
+        .find(|(stored_task, _)| stored_task.id == task.id)
+        .expect("task with legacy event");
+    assert_eq!(all_events, events);
+
+    let raw_after: (i64, String) = store
+        .with_read_conn(|conn| {
+            conn.query_row(
+                "SELECT COUNT(*), MIN(json) FROM events WHERE task_id = ?1",
+                [task.id.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .map_err(Into::into)
+        })
+        .expect("read raw event after loading");
+    assert_eq!(
+        raw_after, raw_before,
+        "loading must not rewrite durable JSON"
+    );
+}
+
+#[test]
 fn acquire_lease_is_exclusive_under_concurrency() {
     let store = Arc::new(SqliteStore::open_in_memory().expect("open"));
     let task = sample_task(Status::Ready);

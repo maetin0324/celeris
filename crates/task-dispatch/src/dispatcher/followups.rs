@@ -34,8 +34,29 @@ pub(super) fn followups_env(
     ];
     if let Some(db) = run_db {
         env.push((ENV_RUN_DB.to_string(), db.display().to_string()));
+    } else {
+        // Adapters inherit the daemon process environment. An absent db_guard must
+        // explicitly shadow an outer run's CELERIS_RUN_DB, or celerisctl add can
+        // mistake a child run for that outer run and write to its follow-ups file.
+        env.push((ENV_RUN_DB.to_string(), String::new()));
     }
     env
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inherited_run_db_is_cleared_when_db_guard_is_unavailable() {
+        let env = followups_env(TaskId::new(), "run", Path::new("artifacts"), None);
+        assert_eq!(
+            env.iter()
+                .find(|(key, _)| key == ENV_RUN_DB)
+                .map(|(_, value)| value.as_str()),
+            Some("")
+        );
+    }
 }
 
 /// ADR-0098 D1: 前の run（lease を失った・daemon ごと落ちた）が残した宣言を今回のものと誤読しない。

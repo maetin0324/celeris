@@ -343,7 +343,7 @@ max_wall_secs = 900
 enabled = true
 provider = "openai-compatible"
 base_url = "<現在のLangMem proxy URL>"
-model = "qwen3.8-27b"
+model = "qwen/qwen3.8-27b"
 api_key_secret = "<現在のsecret reference>"
 
 [adapters.local_deep_research]

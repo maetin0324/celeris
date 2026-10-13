@@ -150,6 +150,27 @@ fn harness_select_rules_are_deterministic() {
 }
 
 #[test]
+fn proxy_route_pick_carries_the_qualified_wire_model() {
+    let mut r = registry();
+    r.route_defaults
+        .insert("claude_code".into(), vec![key("codex_oauth", "gpt")]);
+    let pick = route_select(&input("coding"), &r, &all_available(&r))
+        .0
+        .unwrap();
+    assert_eq!(pick.candidate.model.as_ref(), "gpt");
+    assert_eq!(pick.wire_model_id.as_ref(), "codex_oauth/gpt");
+}
+
+#[test]
+fn direct_route_pick_keeps_the_bare_model() {
+    let pick = route_select(&input("coding"), &registry(), &all_available(&registry()))
+        .0
+        .unwrap();
+    assert_eq!(pick.candidate.model.as_ref(), "sonnet");
+    assert_eq!(pick.wire_model_id.as_ref(), "sonnet");
+}
+
+#[test]
 fn harness_select_explicit_task_field_wins_over_rules() {
     let r = registry();
     let mut req = input("coding");

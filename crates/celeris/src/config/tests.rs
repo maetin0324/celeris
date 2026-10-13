@@ -60,6 +60,12 @@ fn migration_runbook_toml_loads() {
         "progress TOML matches runbook TOML"
     );
     let cfg = Config::parse_with_delivery(toml).expect("runbook config parses");
+    assert_eq!(
+        cfg.harness_declarations["opencode"]
+            .model_namespace
+            .as_deref(),
+        Some("qwen-local")
+    );
     let registry = cfg.llm_route_registry().expect("routes validate");
 
     for (harness, source, model) in [
@@ -118,6 +124,38 @@ fn migration_runbook_toml_loads() {
         registry.route_defaults[&task_core::llm_route::HarnessId::from("langmem")].len(),
         3
     );
+}
+
+#[test]
+fn opencode_model_namespace_deserializes_and_validates() {
+    for (value, valid) in [("qwen-local", true), ("", false), ("qwen/local", false)] {
+        let text = format!("[harnesses.opencode]\nkind='acp'\nmodel_namespace={value:?}\n");
+        let result = Config::parse_with_delivery(&text).and_then(|cfg| cfg.validate().map(|_| cfg));
+        assert_eq!(result.is_ok(), valid, "{value:?}");
+    }
+}
+
+#[test]
+fn pi_harness_declaration_deserializes_extensions_tools_and_env() {
+    let cfg = Config::parse_with_delivery(
+        r#"
+[harnesses.pi]
+kind = "pi"
+extensions = ["extensions/hashline.ts"]
+tools = ["hashline_read", "hashline_edit", "bash"]
+env = { OPENAI_BASE_URL = "http://proxy" }
+env_from_secrets = { CELERIS_PI_API_KEY = "pi-key" }
+"#,
+    )
+    .unwrap();
+    let pi = &cfg.harness_declarations["pi"];
+    assert_eq!(
+        pi.extensions,
+        [std::path::PathBuf::from("extensions/hashline.ts")]
+    );
+    assert_eq!(pi.tools, ["hashline_read", "hashline_edit", "bash"]);
+    assert_eq!(pi.env["OPENAI_BASE_URL"], "http://proxy");
+    assert_eq!(pi.env_from_secrets["CELERIS_PI_API_KEY"], "pi-key");
 }
 
 #[test]

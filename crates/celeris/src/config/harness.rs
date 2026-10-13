@@ -229,11 +229,16 @@ impl Config {
             SMOKE_ID.to_string(),
             HarnessDeclarationConfig {
                 kind: fake.clone(),
+                model_namespace: None,
                 api_formats: [fake.clone()].into(),
                 source_kinds: [fake.clone()].into(),
                 capabilities: Default::default(),
                 command: None,
                 args: Vec::new(),
+                extensions: Vec::new(),
+                tools: Vec::new(),
+                env: Default::default(),
+                env_from_secrets: Default::default(),
             },
         );
         // 上書きした `smoke` の source・harness を指す本番の宣言は、上書き後の形と合わないので外す。

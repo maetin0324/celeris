@@ -41,8 +41,15 @@ pub fn route_adapter(
     let base = adapters
         .get(&HarnessId::from(harness))
         .ok_or_else(|| RouteError::UnknownHarness(harness.to_string()))?;
+    let model_id = if harness == "opencode" && base.id() == crate::AcpAdapter::ID {
+        base.model_namespace()
+            .map(|namespace| format!("{namespace}/{}", route.model_id))
+    } else {
+        None
+    };
+    let model_id = model_id.as_deref().unwrap_or(&route.model_id);
     let mut adapter = base
-        .with_model(&route.model_id)
+        .with_model(model_id)
         .unwrap_or_else(|| Arc::clone(base));
     let api_key = match &route.credential {
         Some(CredentialReference::AccountDirectory { path, env }) => {

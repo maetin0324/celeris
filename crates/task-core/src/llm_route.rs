@@ -113,6 +113,28 @@ pub struct Registry {
     pub harness_selection: HarnessSelection,
 }
 
+/// Model name sent over the harness wire. Only explicitly proxied routes need a
+/// source namespace; direct connections keep the canonical model id.
+pub fn route_via<'a>(
+    registry: &'a Registry,
+    harness: &HarnessId,
+    key: &CandidateKey,
+) -> Option<&'a str> {
+    registry
+        .llm_routes
+        .iter()
+        .find(|route| route.harness == *harness && route.key == *key)
+        .and_then(|route| route.via.as_deref())
+}
+
+pub fn wire_model_id(registry: &Registry, harness: &HarnessId, key: &CandidateKey) -> ModelId {
+    if route_via(registry, harness, key) == Some("llm_proxy") {
+        format!("{}/{}", key.source, key.model).into()
+    } else {
+        key.model.clone()
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct HarnessRequest {
     pub harness: Option<HarnessId>,
@@ -460,6 +482,47 @@ pub struct RunSelection {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wire_model_id_qualifies_only_routes_declared_via_llm_proxy() {
+        let mut registry = Registry::default();
+        let harness: HarnessId = "h".into();
+        let key = CandidateKey {
+            source: "qwen".into(),
+            model: "m".into(),
+        };
+        registry.llm_routes.push(LlmRoute {
+            harness: harness.clone(),
+            key: key.clone(),
+            via: Some("llm_proxy".into()),
+            from_api: None,
+            to_api: None,
+        });
+        assert_eq!(wire_model_id(&registry, &harness, &key).as_ref(), "qwen/m");
+        registry.llm_routes[0].via = Some("other".into());
+        assert_eq!(wire_model_id(&registry, &harness, &key).as_ref(), "m");
+    }
+
+    #[test]
+    fn wire_model_id_keeps_a_model_that_already_contains_a_slash() {
+        let mut registry = Registry::default();
+        let harness: HarnessId = "h".into();
+        let key = CandidateKey {
+            source: "qwen".into(),
+            model: "vendor/model".into(),
+        };
+        registry.llm_routes.push(LlmRoute {
+            harness: harness.clone(),
+            key: key.clone(),
+            via: Some("llm_proxy".into()),
+            from_api: None,
+            to_api: None,
+        });
+        assert_eq!(
+            wire_model_id(&registry, &harness, &key).as_ref(),
+            "qwen/vendor/model"
+        );
+    }
     fn harness(id: &str) -> HarnessId {
         id.into()
     }

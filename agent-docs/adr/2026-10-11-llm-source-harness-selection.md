@@ -153,14 +153,13 @@ to_api = "openai_compatible"
 
 ## CoS の経路
 
-CoS chat の harness は `claude_code` に固定する。source/model は `[cos.route_candidates]` に明示した優先順の候補から、通常 task と同じ適格性確認・account admission で選ぶ。代替 source は task 01M4E0WA5Z で定めた fallback を候補に含めて維持する。例えば次の候補は Claude OAuth を優先し、Codex OAuth を fallback にする。CoS 設定に provider ID は置かない。
+CoS chat の harness は `claude_code` に固定する。source/model は `[cos.route_candidates]` に明示した候補から、通常 task と同じ適格性確認・account admission で選ぶ。候補は `claude_oauth / claude-opus-5-5` の 1 件だけとする。Codex を CoS の候補に置かないのは、`claude_code` が proxy endpoint を宣言できず、Codex OAuth への経路を持たないためである。CoS 設定に provider ID は置かない。
 
 ```toml
 [cos]
 harness = "claude_code"
 route_candidates = [
   { source = "claude_oauth", model = "claude-opus-5-5" },
-  { source = "codex_oauth", model = "gpt-6-astra" },
 ]
 ```
 
@@ -316,8 +315,7 @@ Codex `gpt-6-astra` / `gpt-6.1-sol` / `gpt-6-luna`、Qwen `qwen3.8-27b`、Pi の
 OpenCode Go `opencode-go/grok-4.6` である。Pi の先頭候補は OpenCode Go、その後ろに Qwen
 を置く。coding standard は Claude Opus を先頭、Codex 6.1 を次にする。
 
-CoS は harness を `claude_code` に固定し、standard の `claude-opus-5-5` を先頭に、task
-01M4E0WA5Z の Codex OAuth `gpt-6-astra` fallback を続ける。Codex→Claude Code の候補は
+CoS は harness を `claude_code` に固定し、standard の `claude-opus-5-5` の 1 件だけを候補にする（Codex へは落とさない）。Codex→Claude Code の候補は
 `llm_routes` に API 変換を明記する。planner/reviewer は `claude_code`、`codex` の順で
 admission し、どちらも空いていない場合 defer する。Qwen の軽量仕事は `local-qwen` role
 から ACP/OpenCode harness を選ぶ。
@@ -325,7 +323,7 @@ admission し、どちらも空いていない場合 defer する。Qwen の軽�
 旧 proxy tier alias を撤去し、LDR/LangMem の cheap は利用可能な Qwen を先頭に Claude/Codex
 cheap fallback を明記する。PaperQA の standard は Claude Opus、次に Codex 6.1 とする。
 Runbook TOML を `crates/celeris/src/config/tests.rs::migration_runbook_toml_loads` が読み、
-harness ごとの先頭候補、CoS の候補順、planner の harness 順と進捗内 TOML との一致を検証する。
+harness ごとの先頭候補、CoS の候補（Claude の 1 件）、planner の harness 順と進捗内 TOML との一致を検証する。
 本番移行後の daemon、DB、credential の変更は本 task の範囲外で、人が別途実行する。
 
 **宣言の検証（読み込み時）。** `validate_registry`（`crates/celeris/src/config/llm_route.rs`）は execution class の各候補 harness について次を確かめ、違えば読み込みエラーにする。
@@ -449,10 +447,10 @@ LDR は proxy 経由のまま維持する。Claude/Codex source へ fallback し
 
 人の決定 `cos-codex`（2026-10-13）: **(a) CoS は Claude のみ**。CoS の候補に Codex OAuth（`codex_oauth` / `gpt-6-astra`）を fallback として置かない。CoS の候補は `claude_oauth / claude-opus-5-5` の 1 件とする。
 
-1. **置き換え**: 次の記述は本付記で置き換える。既存の文は書き換えず、この付記を優先する。
-   - 「## CoS の経路」の例（`[cos].route_candidates` に `codex_oauth` / `gpt-6-astra` を 2 件目として置く例）。
-   - 2026-10-12 付記（planner・reviewer の選択）と「実装突き合わせ付記（2026-10-12、本番移行 runbook）」が指す本番移行 runbook（`docs/ops/provider-llm-source-migration.md` の CoS 行の `codex_oauth / gpt-6-astra`、`[cos]` の `route_candidates`、および `[[llm_routes]]` の `harness = "claude_code"` / `source = "codex_oauth"` 宣言）。
-   - 「選択結果」の表の CoS 行と、確認手順の「次に `codex_oauth` / `gpt-6-astra`」。
+1. **置き換え**: 本文（CoS の経路・runbook 付記）を本付記に合わせて書き換えた。書き換えた箇所は次のとおり。
+   - 「## CoS の経路」: CoS の候補は `claude_oauth / claude-opus-5-5` の 1 件とし、Codex を候補に置かない理由を書いた。
+   - 「実装突き合わせ付記（2026-10-12、本番移行 runbook）」: CoS の文と候補順の検証の記述を Claude の 1 件に合わせた。
+   - 本番移行 runbook `docs/ops/provider-llm-source-migration.md`、進捗 TOML、選択結果の表の CoS 行と確認手順: Claude の 1 件に揃えた。
    - 2026-10-13 付記 §3「本番への移行」の「CoS は Claude source のみとする」は本決定と同じ内容で、そのまま有効。
 
 2. **揃える対象**: runbook、進捗 TOML（`agent-docs/progress/2026-10-11-provider-layer-redesign.md` の `[cos]` 区間）、試験 `celeris::config::tests::migration_runbook_toml_loads` の CoS 候補数 assert を Claude のみに揃える。試験は候補数 1 件と、その source / model を `assert` する。

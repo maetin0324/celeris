@@ -72,16 +72,10 @@ pub(crate) fn configure_acp(
     let selected = model
         .or_else(|| overlay.get("model").and_then(Value::as_str))
         .or_else(|| file_config.as_ref()?.get("model")?.as_str());
-    let Some((provider_id, wire_model)) = selected.and_then(|name| name.split_once('/')) else {
+    let Some((provider_id, _model_id)) = selected.and_then(|name| name.split_once('/')) else {
         return false;
     };
     let provider_id = provider_id.to_owned();
-    if !matches!(
-        wire_model,
-        "celeris/frontier" | "celeris/standard" | "celeris/cheap"
-    ) {
-        return false;
-    }
     let base_url = overlay
         .get("provider")
         .and_then(|providers| providers.get(&provider_id))
@@ -99,9 +93,6 @@ pub(crate) fn configure_acp(
         });
     match base_url {
         Some(url) if url.starts_with("http://") || url.starts_with("https://") => {}
-        // The daemon-selected celeris/* wire model is sufficient when OpenCode
-        // loads a provider from its default or JSONC configuration location.
-        None if model.is_some() => {}
         _ => return false,
     }
     let inherited_header_names: Vec<String> = file_config
@@ -149,17 +140,13 @@ pub(crate) fn configure_acp(
 pub(crate) fn configure_aider(
     command: &mut Command,
     env: &[(String, String)],
-    model: Option<&str>,
+    _model: Option<&str>,
     extra_args: &[String],
     run_dir: &Path,
     req: &RunRequest,
 ) -> Option<tempfile::NamedTempFile> {
     let reference = valid_ref(req)?;
-    if !matches!(
-        model,
-        Some("openai/celeris/frontier" | "openai/celeris/standard" | "openai/celeris/cheap")
-    ) || (env_value(env, "OPENAI_API_BASE").is_none()
-        && env_value(env, "OPENAI_BASE_URL").is_none())
+    if (env_value(env, "OPENAI_API_BASE").is_none() && env_value(env, "OPENAI_BASE_URL").is_none())
         || extra_args
             .iter()
             .any(|arg| arg == "--model-settings-file" || arg.starts_with("--model-settings-file="))
@@ -174,4 +161,108 @@ pub(crate) fn configure_aider(
     file.write_all(body.as_bytes()).ok()?;
     command.arg("--model-settings-file").arg(file.path());
     Some(file)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::protocol::{PROTOCOL_VERSION, RunContext};
+
+    fn request(with_ref: bool) -> RunRequest {
+        RunRequest {
+            protocol: PROTOCOL_VERSION,
+            task: crate::protocol::tests::sample_task(),
+            workspace: std::env::temp_dir(),
+            artifacts_dir: std::env::temp_dir().join("artifacts"),
+            work_dir: None,
+            context: RunContext {
+                routing_context_ref: with_ref.then(|| "opaque-ref".into()),
+                ..Default::default()
+            },
+            cargo_target_dir: None,
+            llm_route: None,
+        }
+    }
+
+    #[test]
+    fn opencode_transport_requires_routing_ref_and_provider_base_url() {
+        let mut command = Command::new("opencode");
+        let config = r#"{"model":"opencode-go/grok-4.6","provider":{"opencode-go":{"options":{"baseURL":"http://127.0.0.1:18100/v1"}}}}"#;
+        assert!(configure_acp(
+            &mut command,
+            &[("OPENCODE_CONFIG_CONTENT".into(), config.into())],
+            Some("opencode-go/grok-4.6"),
+            &request(true),
+        ));
+        assert!(!configure_acp(
+            &mut Command::new("opencode"),
+            &[("OPENCODE_CONFIG_CONTENT".into(), config.into())],
+            Some("opencode-go/grok-4.6"),
+            &request(false),
+        ));
+        let missing_url = r#"{"model":"opencode-go/grok-4.6"}"#;
+        assert!(!configure_acp(
+            &mut Command::new("opencode"),
+            &[("OPENCODE_CONFIG_CONTENT".into(), missing_url.into())],
+            Some("opencode-go/grok-4.6"),
+            &request(true),
+        ));
+        let configured_url = r#"{"model":"opencode-go/grok-4.6","provider":{"opencode-go":{"options":{"baseURL":"https://api.example/v1"}}}}"#;
+        assert!(configure_acp(
+            &mut Command::new("opencode"),
+            &[("OPENCODE_CONFIG_CONTENT".into(), configured_url.into())],
+            Some("opencode-go/grok-4.6"),
+            &request(true),
+        ));
+    }
+
+    #[test]
+    fn aider_transport_requires_routing_ref_and_api_base() {
+        let dir = tempfile::tempdir().unwrap();
+        let env = vec![("OPENAI_API_BASE".into(), "http://127.0.0.1:18100/v1".into())];
+        let mut command = Command::new("aider");
+        let settings = configure_aider(
+            &mut command,
+            &env,
+            Some("opencode-go/grok-4.6"),
+            &[],
+            dir.path(),
+            &request(true),
+        );
+        let contents = std::fs::read_to_string(settings.unwrap().path()).unwrap();
+        assert!(contents.contains(HEADER));
+        assert!(
+            configure_aider(
+                &mut Command::new("aider"),
+                &env,
+                Some("qwen/qwen3.8-27b"),
+                &[],
+                dir.path(),
+                &request(true),
+            )
+            .is_some()
+        );
+        assert!(
+            configure_aider(
+                &mut Command::new("aider"),
+                &[],
+                Some("opencode-go/grok-4.6"),
+                &[],
+                dir.path(),
+                &request(true),
+            )
+            .is_none()
+        );
+        assert!(
+            configure_aider(
+                &mut Command::new("aider"),
+                &env,
+                Some("opencode-go/grok-4.6"),
+                &[],
+                dir.path(),
+                &request(false),
+            )
+            .is_none()
+        );
+    }
 }

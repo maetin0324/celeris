@@ -5024,7 +5024,6 @@ export type RoutingShadowAudit = {
   "output_tokens"?: number | null;
   "primary_decision_id": string;
   "reason"?: ShadowReason | null;
-  "reservation"?: ShadowReservationAudit | null;
   "shadow_id": string;
   "status": ShadowStatus;
 };
@@ -5390,15 +5389,6 @@ export type ShadowDecision = {
 export type ShadowKind = "decision" | "execution" | "estimator";
 
 export type ShadowReason = "off" | "not_allowlisted" | "sampled_out" | "queue_full" | "concurrency_limit" | "cap_exceeded" | "unknown_cost" | "timeout" | "privacy" | "resource_group_shared" | "primary_pressure" | "upstream_error";
-
-export type ShadowReservationAudit = {
-  "charged_effective_usd": number;
-  "charged_tokens": number;
-  "reserved_effective_usd": number;
-  "reserved_tokens": number;
-  "state": string;
-  "utc_day": string;
-};
 
 export type ShadowStatus = "completed" | "failed" | "dropped";
 

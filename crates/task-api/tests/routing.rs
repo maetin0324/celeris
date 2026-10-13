@@ -4,9 +4,6 @@ mod common;
 
 use common::*;
 use serde_json::json;
-use task_core::model_router::shadow::{
-    ShadowDailyCaps, ShadowReservation, ShadowReservationRequest, ShadowSettlement,
-};
 use task_core::{Event, Status, TaskId, TaskKind, TaskRouting, TaskStore, TierSource};
 
 fn admin() -> [(&'static str, &'static str); 1] {
@@ -87,34 +84,6 @@ async fn routing_shadow_audit_keeps_primary_outcome_separate() {
     ] {
         env.store.append_event(id, &event).unwrap();
     }
-    let now = time::OffsetDateTime::parse(
-        "2026-10-05T10:00:00Z",
-        &time::format_description::well_known::Rfc3339,
-    )
-    .unwrap();
-    let reservation = env
-        .store
-        .routing_shadow_reserve(
-            &ShadowDailyCaps {
-                max_requests: 2,
-                max_tokens: 1000,
-                max_effective_usd: 1.0,
-            },
-            &ShadowReservationRequest {
-                shadow_id: "shadow-timeout".into(),
-                owner: "test".into(),
-                worst_tokens: 500,
-                worst_effective_usd: Some(0.2),
-            },
-            now,
-        )
-        .unwrap();
-    let ShadowReservation::Reserved { reservation_id, .. } = reservation else {
-        panic!("reservation denied")
-    };
-    env.store
-        .routing_shadow_settle(&reservation_id, ShadowSettlement::TimedOut, now)
-        .unwrap();
     for shadow in [
         json!({ "type": "routing_shadow_recorded", "shadow_id": "shadow-decision",
             "primary_decision_id": "decision-1", "run_id": "run-1", "kind": "decision",
@@ -122,7 +91,7 @@ async fn routing_shadow_audit_keeps_primary_outcome_separate() {
         json!({ "type": "routing_shadow_recorded", "shadow_id": "shadow-timeout",
             "primary_decision_id": "decision-1", "run_id": "run-1", "kind": "execution",
             "status": "failed", "reason": "timeout", "policy_version": "p4",
-            "candidate_model": "candidate", "input_tokens": 20, "reservation_id": reservation_id }),
+            "candidate_model": "candidate", "input_tokens": 20, "reservation_id": "res-old" }),
         json!({ "type": "routing_shadow_recorded", "shadow_id": "shadow-drop",
             "primary_decision_id": "decision-1", "run_id": "run-1", "kind": "execution",
             "status": "dropped", "reason": "queue_full", "policy_version": "p4" }),
@@ -149,13 +118,9 @@ async fn routing_shadow_audit_keeps_primary_outcome_separate() {
     assert_eq!(shadows[1]["status"], "failed");
     assert_eq!(shadows[1]["reason"], "timeout");
     assert_eq!(shadows[1]["input_tokens"], 20);
-    assert_eq!(shadows[1]["reservation"]["state"], "timed_out");
-    assert_eq!(shadows[1]["reservation"]["reserved_tokens"], 500);
-    assert_eq!(shadows[1]["reservation"]["charged_tokens"], 500);
-    assert_eq!(shadows[1]["reservation"]["reserved_effective_usd"], 0.2);
-    assert_eq!(shadows[1]["reservation"]["charged_effective_usd"], 0.2);
+    // 旧 event の reservation_id は読めるが、予約の表は消えたので予約の表示は無い。
+    assert!(shadows[1].get("reservation").is_none());
     assert_eq!(shadows[2]["status"], "dropped");
-    assert!(shadows[2].get("reservation").is_none());
     let stored = env.store.get(id).unwrap().unwrap();
     assert_eq!(stored.status, Status::Done);
     assert_eq!(stored.attempts, task.attempts);

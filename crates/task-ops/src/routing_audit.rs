@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use task_core::model_router::feedback::{RequestSourceAttempt, RoutingRequestRecord};
 use task_core::model_router::trace::RoutingTraceV1;
 use task_core::routing_shadow_history::{ShadowKind, ShadowReason, ShadowRecord, ShadowStatus};
-use task_core::store::{RoutingCorrelation, ShadowReservationAudit};
+use task_core::store::RoutingCorrelation;
 use task_core::{Event, RoutingAudit, SqliteStore, TaskId, TaskStore};
 
 use crate::error::OpsError;
@@ -50,26 +50,11 @@ pub const ACTUAL_FROM_PROXY_TRACE: &str = "proxy_trace";
 pub trait RequestLog {
     /// 要求 `request_id` の相関欄。行が無ければ `None`。
     fn correlation(&self, request_id: &str) -> Result<Option<RoutingCorrelation>, OpsError>;
-
-    /// 実行 shadow の共有予約。偽 log と旧 DB では予約を表示しない。
-    fn shadow_reservation(
-        &self,
-        _reservation_id: &str,
-    ) -> Result<Option<ShadowReservationAudit>, OpsError> {
-        Ok(None)
-    }
 }
 
 impl RequestLog for SqliteStore {
     fn correlation(&self, request_id: &str) -> Result<Option<RoutingCorrelation>, OpsError> {
         Ok(self.routing_correlation_get(request_id)?)
-    }
-
-    fn shadow_reservation(
-        &self,
-        reservation_id: &str,
-    ) -> Result<Option<ShadowReservationAudit>, OpsError> {
-        Ok(self.routing_shadow_reservation_audit(reservation_id)?)
     }
 }
 
@@ -93,8 +78,6 @@ pub struct RoutingShadowAudit {
     pub input_tokens: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_tokens: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reservation: Option<ShadowReservationAudit>,
     /// Phase 5: `kind = estimator` のときだけ。estimator の id/version・依存・評価不能理由・
     /// heuristic primary との差（primary の outcome・attempts とは別）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -289,7 +272,7 @@ pub fn routing_audit_with_requests(
             }),
         };
         if let Some(i) = target {
-            let shadow = shadow_audit(record, &runs[i], log)?;
+            let shadow = shadow_audit(record, &runs[i]);
             runs[i]
                 .routing_shadow
                 .get_or_insert_with(Vec::new)
@@ -339,11 +322,7 @@ pub fn routing_audit_with_requests(
     })
 }
 
-fn shadow_audit(
-    record: &ShadowRecord,
-    run: &RunRoutingAudit,
-    log: &dyn RequestLog,
-) -> Result<RoutingShadowAudit, OpsError> {
+fn shadow_audit(record: &ShadowRecord, run: &RunRoutingAudit) -> RoutingShadowAudit {
     let primary_request = run
         .requests
         .iter()
@@ -381,13 +360,7 @@ fn shadow_audit(
             .map(|(a, b)| a != b),
     ];
     let differs_from_primary = differences.into_iter().flatten().reduce(|a, b| a || b);
-    let reservation = record
-        .reservation_id
-        .as_deref()
-        .map(|id| log.shadow_reservation(id))
-        .transpose()?
-        .flatten();
-    Ok(RoutingShadowAudit {
+    RoutingShadowAudit {
         shadow_id: record.shadow_id.clone(),
         primary_decision_id: record.primary_decision_id.clone(),
         kind: record.kind,
@@ -398,9 +371,8 @@ fn shadow_audit(
         differs_from_primary,
         input_tokens: record.input_tokens,
         output_tokens: record.output_tokens,
-        reservation,
         estimator: estimator_shadow_audit(record),
-    })
+    }
 }
 
 /// 要求単位の決定を proxy log と照合する。request id と decision id が一致したときだけ結ぶ。

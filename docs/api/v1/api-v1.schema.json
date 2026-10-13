@@ -25165,16 +25165,6 @@
             }
           ]
         },
-        "reservation": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ShadowReservationAudit"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
         "shadow_id": {
           "type": "string"
         },
@@ -27134,44 +27124,6 @@
         "upstream_error"
       ],
       "type": "string"
-    },
-    "ShadowReservationAudit": {
-      "description": "監査表示用の予約と確定の消費。額は effective USD。",
-      "properties": {
-        "charged_effective_usd": {
-          "format": "double",
-          "type": "number"
-        },
-        "charged_tokens": {
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "reserved_effective_usd": {
-          "format": "double",
-          "type": "number"
-        },
-        "reserved_tokens": {
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "state": {
-          "type": "string"
-        },
-        "utc_day": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "utc_day",
-        "state",
-        "reserved_tokens",
-        "reserved_effective_usd",
-        "charged_tokens",
-        "charged_effective_usd"
-      ],
-      "type": "object"
     },
     "ShadowStatus": {
       "enum": [

@@ -8,7 +8,7 @@
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use task_core::model_router::shadow::{ShadowKind, ShadowReason, ShadowRecord, ShadowStatus};
+use task_core::routing_shadow_history::{ShadowKind, ShadowReason, ShadowRecord, ShadowStatus};
 
 /// estimator shadow の `policy_version` の接頭辞（llm-proxy `EstimatorShadow::policy_version`）。
 pub const ESTIMATOR_POLICY_PREFIX: &str = "estimator:";

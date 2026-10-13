@@ -5389,7 +5389,7 @@ export type ShadowDecision = {
 
 export type ShadowKind = "decision" | "execution" | "estimator";
 
-export type ShadowReason = "not_allowlisted" | "sampled_out" | "queue_full" | "concurrency_limit" | "timeout" | "privacy" | "upstream_error" | "off" | "cap_exceeded" | "unknown_cost" | "resource_group_shared" | "primary_pressure";
+export type ShadowReason = "off" | "not_allowlisted" | "sampled_out" | "queue_full" | "concurrency_limit" | "cap_exceeded" | "unknown_cost" | "timeout" | "privacy" | "resource_group_shared" | "primary_pressure" | "upstream_error";
 
 export type ShadowReservationAudit = {
   "charged_effective_usd": number;

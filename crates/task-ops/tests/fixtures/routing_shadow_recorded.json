@@ -1,0 +1,13 @@
+{
+  "type": "routing_shadow_recorded",
+  "shadow_id": "shadow-legacy-001",
+  "primary_decision_id": "decision-legacy-001",
+  "kind": "estimator",
+  "status": "completed",
+  "detail": "differs_from_primary;heuristic:same_as_primary",
+  "policy_version": "estimator:legacy-v1/1",
+  "run_id": "run-legacy-001",
+  "candidate_model": "model-candidate",
+  "candidate_source": "source-candidate",
+  "latency_ms": 17
+}

@@ -262,6 +262,10 @@ candidates = [{{ source = "codex", model = "codex" }}]
     let mut child = Command::new(bin("celeris"))
         .env_remove(WORKER_DB_GUARD_ENV)
         .env_remove("CELERIS_CONFIG")
+        .env_remove("CELERIS_RUN_DB")
+        .env_remove("CELERIS_FOLLOWUPS_FILE")
+        .env_remove("CELERIS_TASK_ID")
+        .env_remove("CELERIS_RUN_ID")
         .args([
             "--config",
             config.to_str().unwrap(),

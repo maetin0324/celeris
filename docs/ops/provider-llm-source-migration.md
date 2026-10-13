@@ -165,6 +165,14 @@ from_api = "openai_compatible"
 to_api = "openai_compatible"
 
 [[llm_routes]]
+harness = "langmem"
+source = "qwen"
+model = "qwen3.8-27b"
+via = "llm_proxy"
+from_api = "openai_compatible"
+to_api = "openai_compatible"
+
+[[llm_routes]]
 harness = "local-deep-research"
 source = "claude_oauth"
 model = "claude-sonnet-5-5"

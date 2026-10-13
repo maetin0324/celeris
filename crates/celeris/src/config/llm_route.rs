@@ -249,6 +249,23 @@ fn validate_registry(r: &task_core::llm_route::Registry) -> Result<(), ConfigErr
             }
         }
     }
+    for harness_name in ["local-deep-research", "paperqa", "langmem"] {
+        let harness = task_core::llm_route::HarnessId::from(harness_name);
+        if let Some(candidates) = r.route_defaults.get(&harness) {
+            for candidate in candidates {
+                if !r.llm_routes.iter().any(|route| {
+                    route.harness == harness
+                        && route.key == *candidate
+                        && route.via.as_deref() == Some("llm_proxy")
+                }) {
+                    return Err(ConfigError::Invalid(format!(
+                        "proxy-bound harness {harness} candidate {}/{} requires via = llm_proxy",
+                        candidate.source, candidate.model
+                    )));
+                }
+            }
+        }
+    }
     let cos_harness = task_core::llm_route::HarnessId::from("claude_code");
     for c in &r.cos_route_candidates {
         let s = r.sources.get(&c.source).ok_or_else(|| {
@@ -351,5 +368,16 @@ candidates = [{ source = "main", model = "m1" }]
                 .to_string()
                 .contains("without route_defaults")
         );
+    }
+
+    #[test]
+    fn proxy_bound_harness_candidates_all_need_a_via_llm_proxy_route() {
+        let text = DECLS
+            .replace("[harnesses.cli]", "[harnesses.paperqa]")
+            .replace("[route_defaults.cli]", "[route_defaults.paperqa]")
+            + "\n[[llm_routes]]\nharness = 'paperqa'\nsource = 'main'\nmodel = 'm1'\nvia = 'direct'\n";
+        let cfg = Config::parse_with_delivery(&text).unwrap();
+        let err = cfg.llm_route_registry().unwrap_err().to_string();
+        assert!(err.contains("requires via = llm_proxy"), "{err}");
     }
 }

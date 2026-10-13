@@ -14,7 +14,7 @@ use task_core::llm_route::{
     DefaultRoutePolicy, ExclusionReason, HarnessId, HarnessRequest, HarnessSelectionError, ModelId,
     QuotaSnapshot, Registry, ReservationSnapshot, RoutePolicy, RouteRequest, RunSelection,
     SourceId, admit_source, constrain_for_harness, enumerate_candidates, harness_candidates,
-    route_priority, select_harness,
+    route_priority, select_harness, wire_model_id,
 };
 
 /// Version of the `selection_metadata_json` / `llm_route_selected.metadata` shape.
@@ -50,6 +50,8 @@ pub struct RouteInput {
 pub struct RoutePick {
     pub harness: HarnessId,
     pub candidate: Candidate,
+    /// Model identifier passed to the harness adapter; candidate.model stays canonical.
+    pub wire_model_id: ModelId,
     pub account: AccountId,
 }
 
@@ -285,6 +287,7 @@ fn route_select_one(
                 .unwrap_or_default();
             (
                 Ok(RoutePick {
+                    wire_model_id: wire_model_id(registry, &harness, &candidate.key()),
                     harness,
                     candidate,
                     account,

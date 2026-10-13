@@ -117,6 +117,7 @@ fn pick(harness: &str, source: &str, api: &str, model: &str, account: &str) -> R
             model: model.into(),
             api_format: api.into(),
         },
+        wire_model_id: model.into(),
         account: account.into(),
     }
 }
@@ -135,6 +136,18 @@ fn launch_dispatcher(accounts_root: PathBuf) -> Dispatcher {
         (
             HarnessId::from("opencode"),
             RecordingAdapter::boxed("opencode", None, vec![]),
+        ),
+        (
+            HarnessId::from("local-deep-research"),
+            RecordingAdapter::boxed("local-deep-research", None, vec![]),
+        ),
+        (
+            HarnessId::from("paperqa"),
+            RecordingAdapter::boxed("paperqa", None, vec![]),
+        ),
+        (
+            HarnessId::from("langmem"),
+            RecordingAdapter::boxed("langmem", None, vec![]),
         ),
     ]));
     d
@@ -267,4 +280,59 @@ fn route_select_dispatch_adapter_selected_llm_route_carries_references_only() {
         ),
         Err(RouteLaunchError::UnknownSource("nowhere".into()))
     );
+}
+
+#[test]
+fn route_adapter_launches_the_wire_model() {
+    let d = launch_dispatcher(PathBuf::from("/accounts/claude"));
+    let mut p = pick("opencode", "qwen", "openai_compatible", "qwen3", "shared");
+    p.wire_model_id = "qwen/qwen3".into();
+    let adapter = d.route_adapter(&p).unwrap();
+    assert!(
+        adapter.id().contains("model=qwen/qwen3"),
+        "{}",
+        adapter.id()
+    );
+}
+
+fn assert_proxy_model_name(harness: &str, source: &str, model: &str) {
+    let d = launch_dispatcher(PathBuf::from("/accounts/claude"));
+    let mut p = pick(harness, source, "openai_compatible", model, "shared");
+    p.wire_model_id = format!("{source}/{model}").into();
+    let adapter = d.route_adapter(&p).unwrap();
+    assert!(
+        adapter.id().contains(&format!("model={source}/{model}")),
+        "{}",
+        adapter.id()
+    );
+}
+
+#[test]
+fn route_launch_proxy_model_name_ldr_qwen() {
+    assert_proxy_model_name("local-deep-research", "qwen", "qwen3.8-27b");
+}
+
+#[test]
+fn route_launch_proxy_model_name_ldr_claude() {
+    assert_proxy_model_name("local-deep-research", "claude_main", "claude-opus-5-5");
+}
+
+#[test]
+fn route_launch_proxy_model_name_paperqa_qwen() {
+    assert_proxy_model_name("paperqa", "qwen", "qwen3.8-27b");
+}
+
+#[test]
+fn route_launch_proxy_model_name_paperqa_claude() {
+    assert_proxy_model_name("paperqa", "claude_main", "claude-opus-5-5");
+}
+
+#[test]
+fn route_launch_proxy_model_name_langmem_qwen() {
+    assert_proxy_model_name("langmem", "qwen", "qwen3.8-27b");
+}
+
+#[test]
+fn route_launch_proxy_model_name_langmem_claude() {
+    assert_proxy_model_name("langmem", "claude_main", "claude-opus-5-5");
 }

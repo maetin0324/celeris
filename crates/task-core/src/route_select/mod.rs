@@ -5,9 +5,12 @@ pub mod stage;
 pub mod trace;
 
 pub use evidence::{EvidenceKey, EvidenceRow, WilsonInterval, wilson_interval};
-pub use policy::{PolicyInput, PolicyOutput, SelectionSource, select};
+pub use policy::{NoRoute, PolicyInput, PolicyOutput, SelectionSource, select};
 pub use stage::{
     GuardrailInput, GuardrailReason, GuardrailResult, RoutingStage, RoutingStageChange,
     evaluate_guardrail,
 };
-pub use trace::{RouteAction, RouteDecision};
+pub use trace::{
+    EvidenceSnapshot, RouteAction, RouteCandidate, RouteDecision, RouteDecisionInput,
+    RouteExclusion, RouteJudge, RouteRule, RouteScore, build_route_decision,
+};

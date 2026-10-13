@@ -624,6 +624,21 @@ fn digest(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 
+/// ADR D5: the stable option id of a candidate label (`candidates-one-shot/1`). The same label
+/// always gives the same id, so `output.scores[].option_id` joins to `route_options`.
+pub fn option_id(label: &str) -> String {
+    let id = digest(redact_secrets(label).as_bytes());
+    id[..16].into()
+}
+
+/// Content address of a `celeris.route-options/1` record (`route_options.hash`).
+pub fn options_hash(options: &RouteOptions) -> String {
+    format!(
+        "sha256:{}",
+        digest(&serde_json::to_vec(options).unwrap_or_default())
+    )
+}
+
 pub fn candidates_one_shot(question: &str, candidates: &[Candidate]) -> RouteOptions {
     RouteOptions {
         schema: ROUTE_OPTIONS_SCHEMA.into(),
@@ -631,18 +646,14 @@ pub fn candidates_one_shot(question: &str, candidates: &[Candidate]) -> RouteOpt
         question: redact_secrets(question),
         options: candidates
             .iter()
-            .map(|c| {
-                let text = redact_secrets(&c.label);
-                let id = digest(text.as_bytes());
-                RouteOption {
-                    option_id: id[..16].into(),
-                    text,
-                    binds: Some(RouteOptionBinds {
-                        source_id: c.source_id.clone(),
-                        model_id: c.model_id.clone(),
-                        harness_id: c.harness_id.clone(),
-                    }),
-                }
+            .map(|c| RouteOption {
+                option_id: option_id(&c.label),
+                text: redact_secrets(&c.label),
+                binds: Some(RouteOptionBinds {
+                    source_id: c.source_id.clone(),
+                    model_id: c.model_id.clone(),
+                    harness_id: c.harness_id.clone(),
+                }),
             })
             .collect(),
     }

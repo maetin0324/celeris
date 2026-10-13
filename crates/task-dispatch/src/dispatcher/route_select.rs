@@ -11,19 +11,24 @@ use super::*;
 use std::collections::BTreeMap;
 use task_core::llm_route::{
     AccountId, AccountSnapshot, Admission, Candidate, CandidateKey, CandidateRejection,
-    DefaultRoutePolicy, ExclusionReason, HarnessId, HarnessRequest, HarnessSelectionError, ModelId,
-    QuotaSnapshot, Registry, ReservationSnapshot, RoutePolicy, RouteRequest, RunSelection,
-    SourceId, admit_source, constrain_for_harness, enumerate_candidates, harness_candidates,
-    route_priority, select_harness,
+    ExclusionReason, HarnessId, HarnessRequest, HarnessSelectionError, ModelId, QuotaSnapshot,
+    Registry, ReservationSnapshot, RouteRequest, RunSelection, SourceId, admit_source,
+    constrain_for_harness, enumerate_candidates, harness_candidates, route_priority,
+    select_harness,
+};
+use task_core::model_policy::RouteFeaturesRef;
+use task_core::route_select::{
+    EvidenceRow, PolicyInput, PolicyOutput, RouteDecision, RouteDecisionInput, RoutingStage,
+    build_route_decision, select as select_by_evidence,
 };
 
 /// Version of the `selection_metadata_json` / `llm_route_selected.metadata` shape.
-pub const ROUTE_SELECTION_VERSION: u32 = 1;
+pub const ROUTE_SELECTION_VERSION: u32 = 2;
 
 /// Capability a task needs when it carries browser requirements.
 pub const BROWSER_CAPABILITY: &str = "browser_context";
 
-/// Mutable state the admission step reads, captured once per decision.
+/// Mutable state the selection and admission steps read, captured once per decision.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct RouteState {
     pub accounts: AccountSnapshot,
@@ -31,6 +36,19 @@ pub struct RouteState {
     pub reservations: ReservationSnapshot,
     /// Per `(source, account)` run limit (stored `account_limits` or the default).
     pub account_max_runs: BTreeMap<(SourceId, AccountId), u32>,
+    /// Evidence table snapshot per harness (ADR 2026-10-11 D2). Empty = no evidence yet, so the
+    /// `route_defaults` column decides.
+    pub evidence: BTreeMap<HarnessId, Vec<EvidenceRow>>,
+    /// Stage per harness (ADR D3). A harness without a row is `shadow`.
+    pub stages: BTreeMap<HarnessId, RoutingStage>,
+    /// Live harness versions; evidence is usable only while the major version agrees (ADR D2).
+    pub harness_versions: BTreeMap<HarnessId, String>,
+    /// Seed of the deterministic ε exploration (the run id; the task id when there is no run yet).
+    pub run_seed: Option<String>,
+    /// The one task features snapshot of this dispatch (ADR-task-routing-features D6).
+    pub features: Option<RouteFeaturesRef>,
+    /// The work unit this dispatch runs, when it runs one (the decision subject).
+    pub work_unit_id: Option<String>,
 }
 
 /// One routing request: the harness inputs plus the source/model inputs.
@@ -39,10 +57,20 @@ pub struct RouteInput {
     pub task_id: String,
     pub harness: HarnessRequest,
     pub model_hint: Option<ModelId>,
-    /// Kept for the replaceable policy boundary; the default policy does not read it.
+    /// Lane label (frontier/standard/cheap): picks the harness×lane `route_defaults` column.
     pub lane: Option<String>,
     /// CoS chat: priority comes from `cos.route_candidates`.
     pub cos: bool,
+}
+
+/// Per-dispatch context that is neither registry nor admission state: the run the decision is for
+/// (the ε exploration seed), the one task features snapshot of this dispatch, and the work unit
+/// (the decision subject). Absent for dry runs and for CoS chat.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct RouteContext {
+    pub run_id: Option<String>,
+    pub features: Option<RouteFeaturesRef>,
+    pub work_unit_id: Option<String>,
 }
 
 /// The admitted route.
@@ -89,6 +117,9 @@ pub struct RouteTrace {
     pub candidates: Vec<CandidateKey>,
     pub rejections: Vec<CandidateRejection>,
     pub harness_rejections: Vec<HarnessRejection>,
+    /// The `celeris.route-decision/1` record of the harness that decided (ADR 2026-10-11 D2/D5):
+    /// stage, rule, equivalent set, exclusion reasons, propensity and evidence version.
+    pub decision: Option<RouteDecision>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -113,6 +144,22 @@ impl RouteTrace {
             "cos": input.cos,
             "model_hint": input.model_hint,
             "lane": input.lane,
+            // The selector's own record (ADR 2026-10-11 D2/D3): which rule decided, at which
+            // stage, with which evidence version and propensity. The full `celeris.route-decision/1`
+            // record is on `routing_decided` and in `route_decisions`.
+            "route_decision": self.decision.as_ref().map(|d| serde_json::json!({
+                "schema": d.schema,
+                "decision_id": d.decision_id,
+                "stage": d.stage,
+                "rule": d.rule,
+                "action": d.action,
+                "propensity": d.propensity,
+                "evidence_version": d.evidence_version,
+                "options_hash": d.options_hash,
+                "features_hash": d.features_hash,
+                "features_schema": d.features_schema,
+                "equivalent": d.equivalent,
+            })),
             "candidates": self.candidates,
             "rejections": self.rejections.iter().map(|r| serde_json::json!({
                 "source": r.candidate.source,
@@ -163,12 +210,14 @@ pub fn route_select(
                 aggregate.rejections.extend(current_trace.rejections);
                 aggregate.harness_rejections = rejected;
                 aggregate.harness = Some(pick.harness.clone());
+                aggregate.decision = current_trace.decision;
                 return (Ok(pick), aggregate);
             }
             Err(error) => {
                 aggregate
                     .rejections
                     .extend(current_trace.rejections.clone());
+                aggregate.decision = current_trace.decision.clone();
                 rejected.push(HarnessRejection {
                     harness,
                     reason: error.reason(),
@@ -192,6 +241,10 @@ pub fn route_select(
     (Err(failure), aggregate)
 }
 
+/// Decide one harness: the declared priority column (harness×lane `route_defaults`, or the CoS
+/// list) narrowed by an explicit task model and by harness/source compatibility; then the stage's
+/// rule (ADR 2026-10-11 D2: the evidence table in `enforce`, the same declared column in `shadow`);
+/// then `(source, account)` admission walking the rule's fallback order. Every step fails closed.
 fn route_select_one(
     input: &RouteInput,
     registry: &Registry,
@@ -203,7 +256,7 @@ fn route_select_one(
         Err(e) => return (Err(RouteFailure::Harness(e)), trace),
     };
     trace.harness = Some(harness.clone());
-    let priority = route_priority(registry, &harness, input.cos).to_vec();
+    let priority = route_priority(registry, &harness, input.lane.as_deref(), input.cos).to_vec();
     if priority.is_empty() {
         return (Err(RouteFailure::NoDeclaredDefault(harness)), trace);
     }
@@ -242,6 +295,14 @@ fn route_select_one(
     if ordered.is_empty()
         && let Some(hint) = &input.model_hint
     {
+        trace.decision = Some(refusal_record(
+            input,
+            state,
+            &harness,
+            &priority,
+            &[],
+            &trace,
+        ));
         return (Err(RouteFailure::ModelHintUnmatched(hint.clone())), trace);
     }
     let Some(spec) = registry.harnesses.get(&harness) else {
@@ -255,45 +316,211 @@ fn route_select_one(
     let (eligible, incompatible) = constrain_for_harness(ordered, spec, registry, &harness);
     trace.rejections.extend(incompatible);
     let limited = with_account_limits(registry, state);
-    let mut admitted = Vec::new();
-    let mut owners = Vec::new();
-    for c in eligible {
-        match admit_source(
-            &c,
-            &state.accounts,
-            &state.quota,
-            &state.reservations,
-            &limited,
-        ) {
-            Admission::Admitted(owner) => {
-                owners.push((c.key(), owner.account_id));
-                admitted.push(c);
+    let evidence = state
+        .evidence
+        .get(&harness)
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    // No row for this genre×harness yet: the stage is `shadow` and the declared column decides.
+    let stage = state
+        .stages
+        .get(&harness)
+        .copied()
+        .unwrap_or(RoutingStage::Shadow);
+    let genre = input.harness.genre.as_deref().unwrap_or_default();
+    let version = harness_version(state, &harness, evidence);
+    let pressure = quota_pressure(evidence, &state.quota);
+    // The exploration seed is the run id; a dry run without one falls back to the task id, so the
+    // choice stays deterministic and reproducible (ADR D2 探索).
+    let seed = state
+        .run_seed
+        .clone()
+        .unwrap_or_else(|| input.task_id.clone());
+    let output = select_by_evidence(&PolicyInput {
+        eligible: &eligible,
+        evidence,
+        genre,
+        harness_id: harness.as_ref(),
+        harness_version: &version,
+        route_defaults: &priority,
+        quota_remaining: &pressure,
+        stage,
+        epsilon: registry.route_selection.exploration_epsilon,
+        run_id: &seed,
+    })
+    .ok();
+    let outcome = match &output {
+        Some(output) => {
+            // Admission walks the rule's order: the chosen candidate, then its ranked fallbacks
+            // (ADR D2 fallback). Nothing outside that order is ever tried.
+            let mut order = vec![output.selected.clone()];
+            order.extend(output.ranked_fallbacks.iter().cloned());
+            let mut admitted = None;
+            for candidate in order {
+                match admit_source(
+                    &candidate,
+                    &state.accounts,
+                    &state.quota,
+                    &state.reservations,
+                    &limited,
+                ) {
+                    Admission::Admitted(owner) => {
+                        admitted = Some((candidate, owner.account_id));
+                        break;
+                    }
+                    Admission::Rejected(reason) => {
+                        trace
+                            .rejections
+                            .push(CandidateRejection { candidate, reason });
+                    }
+                }
             }
-            Admission::Rejected(reason) => trace.rejections.push(CandidateRejection {
-                candidate: c,
-                reason,
-            }),
-        }
-    }
-    let policy = DefaultRoutePolicy { priority };
-    match policy.choose(&admitted) {
-        Ok(candidate) => {
-            let account = owners
-                .iter()
-                .find(|(k, _)| *k == candidate.key())
-                .map(|(_, a)| a.clone())
-                .unwrap_or_default();
-            (
-                Ok(RoutePick {
-                    harness,
+            match admitted {
+                Some((candidate, account)) => Ok(RoutePick {
+                    harness: harness.clone(),
                     candidate,
                     account,
                 }),
-                trace,
-            )
+                None => Err(RouteFailure::NoEligible(harness.clone())),
+            }
         }
-        Err(_) => (Err(RouteFailure::NoEligible(harness)), trace),
+        // No candidate satisfies the stage's rule: fail closed (no lexicographic fallback).
+        None => Err(RouteFailure::NoEligible(harness.clone())),
+    };
+    trace.decision = Some(decision_record(
+        input, state, &harness, &priority, &eligible, &trace, genre, &version, stage, evidence,
+        &output,
+    ));
+    (outcome, trace)
+}
+
+/// The `celeris.route-decision/1` record of this decision (ADR-task-routing-features D5).
+#[allow(clippy::too_many_arguments)]
+fn decision_record(
+    input: &RouteInput,
+    state: &RouteState,
+    harness: &HarnessId,
+    priority: &[CandidateKey],
+    eligible: &[Candidate],
+    trace: &RouteTrace,
+    genre: &str,
+    harness_version: &str,
+    stage: RoutingStage,
+    evidence: &[EvidenceRow],
+    output: &Option<PolicyOutput>,
+) -> RouteDecision {
+    // `trace.rejections` cannot be borrowed while `trace.decision` is assigned by the caller.
+    let exclusions = trace.rejections.clone();
+    build_route_decision(&RouteDecisionInput {
+        decision_id: &decision_id(state),
+        run_id: state.run_seed.as_deref(),
+        subject_kind: if state.work_unit_id.is_some() {
+            "work_unit"
+        } else {
+            "task"
+        },
+        subject_id: state.work_unit_id.as_deref().unwrap_or(&input.task_id),
+        features: state.features.as_ref(),
+        genre,
+        harness_id: harness.as_ref(),
+        harness_version,
+        stage,
+        lane: input.lane.as_deref(),
+        model_pin: input.model_hint.as_ref().map(ModelId::as_ref),
+        quota_remaining: &source_quota(&state.quota),
+        considered: eligible,
+        exclusions: &exclusions,
+        evidence,
+        route_defaults: priority,
+        output: output.as_ref(),
+    })
+}
+
+/// The record of a decision that never reached the rule (an unmatched explicit model).
+fn refusal_record(
+    input: &RouteInput,
+    state: &RouteState,
+    harness: &HarnessId,
+    priority: &[CandidateKey],
+    eligible: &[Candidate],
+    trace: &RouteTrace,
+) -> RouteDecision {
+    let genre = input.harness.genre.as_deref().unwrap_or_default();
+    let evidence = state
+        .evidence
+        .get(harness)
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    let stage = state
+        .stages
+        .get(harness)
+        .copied()
+        .unwrap_or(RoutingStage::Shadow);
+    let version = harness_version(state, harness, evidence);
+    decision_record(
+        input, state, harness, priority, eligible, trace, genre, &version, stage, evidence, &None,
+    )
+}
+
+/// `routing_decided` and `route_decisions` share one id: `run:<run_id>` when the run is already
+/// known. A refusal has no run, so the recorder assigns a fresh id (see `record_route_selection`).
+fn decision_id(state: &RouteState) -> String {
+    state
+        .run_seed
+        .as_ref()
+        .map(|run| format!("run:{run}"))
+        .unwrap_or_default()
+}
+
+/// The version the evidence must agree with (major) to be usable. The registry and the adapters
+/// carry no harness version, so a caller that knows it fills `RouteState.harness_versions`;
+/// otherwise the version the evidence itself was recorded against is used.
+fn harness_version(state: &RouteState, harness: &HarnessId, evidence: &[EvidenceRow]) -> String {
+    state
+        .harness_versions
+        .get(harness)
+        .cloned()
+        .or_else(|| evidence.first().map(|row| row.key.harness_version.clone()))
+        .unwrap_or_default()
+}
+
+/// Remaining units per `(source, model, quota window)`: the rule's quota pressure comparison
+/// (ADR D2: within the equivalent set, the least quota pressure wins). Windows come from the
+/// evidence rows; the remaining amount is the source's remaining quota.
+fn quota_pressure(
+    evidence: &[EvidenceRow],
+    quota: &QuotaSnapshot,
+) -> BTreeMap<(String, String, String), f64> {
+    let mut out = BTreeMap::new();
+    for row in evidence {
+        let Some(remaining) = quota
+            .source_remaining
+            .get(&SourceId::from(row.key.source_id.as_str()))
+            .copied()
+        else {
+            continue;
+        };
+        for (window, _) in &row.quota_per_run {
+            out.insert(
+                (
+                    row.key.source_id.clone(),
+                    row.key.model_id.clone(),
+                    window.clone(),
+                ),
+                remaining,
+            );
+        }
     }
+    out
+}
+
+/// Remaining units per source, as recorded in the decision's constraints.
+fn source_quota(quota: &QuotaSnapshot) -> BTreeMap<String, f64> {
+    quota
+        .source_remaining
+        .iter()
+        .map(|(source, remaining)| (source.to_string(), *remaining))
+        .collect()
 }
 
 fn rejection(key: &CandidateKey, api_format: &str, reason: ExclusionReason) -> CandidateRejection {
@@ -527,13 +754,57 @@ impl Dispatcher {
         state
     }
 
-    /// Decide the route for `input` against the current registry and admission state.
+    /// Decide the route for `input` against the current registry, admission state and the stored
+    /// stage/evidence snapshot.
     pub fn select_route(
         &mut self,
         input: &RouteInput,
     ) -> (Result<RoutePick, RouteFailure>, RouteTrace) {
-        let state = self.route_state(input.cos);
+        self.select_route_with(input, &RouteContext::default())
+    }
+
+    /// Same, with the per-dispatch context (run id, features snapshot, work unit) that the decision
+    /// record carries. The stage and evidence table are read from the store here — one snapshot per
+    /// decision, no LLM call, no clock beyond the store read.
+    pub fn select_route_with(
+        &mut self,
+        input: &RouteInput,
+        context: &RouteContext,
+    ) -> (Result<RoutePick, RouteFailure>, RouteTrace) {
+        let mut state = self.route_state(input.cos);
+        state.run_seed = context.run_id.clone();
+        state.features = context.features.clone();
+        state.work_unit_id = context.work_unit_id.clone();
+        self.fill_route_stage(input, &mut state);
         route_select(input, &self.llm_route_registry, &state)
+    }
+
+    /// Read the genre×harness stage and the latest evidence rows of every harness this request can
+    /// select. A store error leaves the harness without a row, which means `shadow` and no evidence:
+    /// the declared `route_defaults` column decides (fail closed, never an undeclared source).
+    fn fill_route_stage(&self, input: &RouteInput, state: &mut RouteState) {
+        let genre = input.harness.genre.as_deref().unwrap_or_default();
+        let Ok(harnesses) = harness_candidates(&input.harness, &self.llm_route_registry) else {
+            return;
+        };
+        for harness in harnesses {
+            match self.store.latest_routing_evidence(genre, harness.as_ref()) {
+                Ok(rows) => {
+                    state.evidence.insert(harness.clone(), rows);
+                }
+                Err(error) => {
+                    tracing::warn!(%genre, harness = %harness, %error, "routing evidence unavailable; selecting without evidence")
+                }
+            }
+            match self.store.routing_stage(genre, harness.as_ref()) {
+                Ok(stage) => {
+                    state.stages.insert(harness.clone(), stage);
+                }
+                Err(error) => {
+                    tracing::warn!(%genre, harness = %harness, %error, "routing stage unavailable; treating the genre as shadow")
+                }
+            }
+        }
     }
 
     /// Select from the remaining CoS candidates after earlier attempts failed.

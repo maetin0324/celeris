@@ -553,12 +553,19 @@ pub struct RoutingRecord {
     pub escalation: Option<crate::retry_policy::EscalationAudit>,
 }
 
-/// Content-addressed reference to a stored task feature snapshot.
+/// Content-addressed reference to a stored task feature snapshot, plus the one routing decision
+/// that used it (ADR 2026-10-11-task-routing-features D6: `routing_decided` carries `decision_id`,
+/// the features schema version and hash, and `options_hash`; the routing ADR D4 adds the stage,
+/// evidence version, propensity, equivalent set and exclusion reasons).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct RouteFeaturesRef {
     pub schema: String,
     pub template: String,
     pub hash: String,
+    /// The `celeris.route-decision/1` record of this dispatch (the same row as `route_decisions`).
+    /// Its own `features_*` fields repeat this ref; older events omit it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision: Option<Box<crate::route_select::RouteDecision>>,
 }
 
 /// 規則 1 件。`when` が真なら `lane`。

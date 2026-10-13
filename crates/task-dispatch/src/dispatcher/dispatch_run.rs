@@ -518,7 +518,47 @@ impl Dispatcher {
             lane: Some(tier_label(task.worker_hint.tier).to_string()),
             cos,
         };
-        let (route_outcome, route_trace) = self.select_route(&route_input);
+        let run_id = ulid::Ulid::new().to_string();
+        // Capture the task-features snapshot before selection. The selector, route_decisions row,
+        // and RoutingDecided event must all refer to this same content-addressed input.
+        let route_features = lane_decision.as_ref().and_then(|decision| {
+            match self.store.record_route_features(
+                task_core::route_extract::Subject {
+                    kind: if current_wu.is_some() { "work_unit" } else { "task" }.to_owned(),
+                    id: current_wu
+                        .as_ref()
+                        .map(|wu| wu.id.clone())
+                        .unwrap_or_else(|| task.id.to_string()),
+                },
+                Some(task_core::route_extract::RouteFeatureContext {
+                    lane: Some(
+                        task_core::model_catalog::assignments::tier_str(task.worker_hint.tier)
+                            .to_owned(),
+                    ),
+                    harness: task.harness_id.as_ref().map(ToString::to_string),
+                    task_features_v69: Some(decision.features),
+                }),
+            ) {
+                Ok(features) => Some(task_core::RouteFeaturesRef {
+                    schema: features.schema,
+                    template: features.template,
+                    hash: features.hash,
+                    decision: None,
+                }),
+                Err(error) => {
+                    tracing::warn!(task_id = %task.id, %error, "routing feature extraction failed; dispatch continues without snapshot");
+                    None
+                }
+            }
+        });
+        let (route_outcome, mut route_trace) = self.select_route_with(
+            &route_input,
+            &route_select::RouteContext {
+                run_id: Some(run_id.clone()),
+                features: route_features.clone(),
+                work_unit_id: current_wu.as_ref().map(|wu| wu.id.clone()),
+            },
+        );
         let launch = match &route_outcome {
             Ok(pick) => self
                 .route_adapter(pick)
@@ -554,7 +594,6 @@ impl Dispatcher {
         // The pool account of an OAuth source (other sources book `(source, account)` on the route only).
         let account = account_adapter.map(|_| pick.account.to_string());
 
-        let run_id = ulid::Ulid::new().to_string();
         let wall = Duration::from_secs(task.budget.max_wall_secs);
         let ttl = wall + self.config.lease_grace;
         let lease_started = Instant::now();
@@ -610,38 +649,20 @@ impl Dispatcher {
         // ADR-0077 D1 の dispatch での途中目標の `in_progress` は ADR-0079 D13（Phase R5a）で廃止（途中目標は凍結）。
         let mut routing_decision_id: Option<String> = None;
         if let Some(decision) = lane_decision {
-            let feature_ref = match self.store.record_route_features(
-                task_core::route_extract::Subject {
-                    kind: if current_wu.is_some() {
-                        "work_unit"
-                    } else {
-                        "task"
-                    }
-                    .to_owned(),
-                    id: current_wu
-                        .as_ref()
-                        .map(|wu| wu.id.clone())
-                        .unwrap_or_else(|| task.id.to_string()),
-                },
-                Some(task_core::route_extract::RouteFeatureContext {
-                    lane: Some(
-                        task_core::model_catalog::assignments::tier_str(task.worker_hint.tier)
-                            .to_owned(),
-                    ),
-                    harness: Some(adapter_id.clone()),
-                    task_features_v69: Some(decision.features),
-                }),
-            ) {
-                Ok(f) => Some(task_core::RouteFeaturesRef {
-                    schema: f.schema,
-                    template: f.template,
-                    hash: f.hash,
-                }),
-                Err(error) => {
-                    tracing::warn!(task_id = %task.id, %error, "routing feature extraction failed; dispatch continues without snapshot");
-                    None
-                }
-            };
+            let feature_ref = route_features;
+            if let (Some(route_decision), Some(feature_ref)) =
+                (route_trace.decision.as_mut(), feature_ref.as_ref())
+            {
+                route_decision.features_schema = Some(feature_ref.schema.clone());
+                route_decision.features_template = Some(feature_ref.template.clone());
+                route_decision.features_hash = Some(feature_ref.hash.clone());
+                route_decision.run_id = Some(run_id.clone());
+                self.store.record_route_decision(route_decision)?;
+            }
+            let feature_ref = feature_ref.map(|mut feature_ref| {
+                feature_ref.decision = route_trace.decision.clone().map(Box::new);
+                feature_ref
+            });
             let record = task_core::RoutingRecord {
                 features: feature_ref,
                 org_node: task.assignee.clone(),

@@ -86,6 +86,47 @@ impl SqliteStore {
         Ok(())
     }
 
+    /// Write the one `celeris.route-decision/1` row of a routing decision (ADR 2026-10-11
+    /// task-routing-features D6/D7): its `celeris.route-options/1` options (content-addressed, so a
+    /// repeat is a no-op) and the decision row. The features snapshot must already exist
+    /// (`route_decisions.features_hash` references `route_features`), so a decision taken without
+    /// one is refused rather than recorded half-way.
+    pub fn record_route_decision_impl(
+        &self,
+        decision: &crate::route_select::RouteDecision,
+    ) -> Result<(), StoreError> {
+        let Some(features_hash) = decision.features_hash.clone() else {
+            return Err(StoreError::Invalid(
+                "route decision without a task features snapshot".into(),
+            ));
+        };
+        let Some(options_hash) = decision.options_hash.clone() else {
+            return Err(StoreError::Invalid("route decision without options".into()));
+        };
+        if decision.decision_id.is_empty() {
+            return Err(StoreError::Invalid(
+                "route decision without a decision_id".into(),
+            ));
+        }
+        let created_at = time::OffsetDateTime::now_utc()
+            .format(&time::format_description::well_known::Rfc3339)
+            .map_err(|e| StoreError::Invalid(format!("format route decision timestamp: {e}")))?;
+        self.insert_route_options(&options_hash, &decision.route_options(), &created_at)?;
+        self.insert_route_decision(&StoredRouteDecision {
+            decision_id: decision.decision_id.clone(),
+            subject_kind: decision.subject_kind.clone(),
+            subject_id: decision.subject_id.clone(),
+            run_id: decision.run_id.clone(),
+            features_hash,
+            options_hash,
+            input: decision.input_json(),
+            output: decision.output_json(),
+            judge: decision.judge_json(),
+            stage: decision.stage.as_str().to_owned(),
+            created_at,
+        })
+    }
+
     /// A decision has at most one outcome; a second insert returns the SQLite constraint error.
     pub fn insert_route_outcome(&self, outcome: &StoredRouteOutcome) -> Result<(), StoreError> {
         let conn = self.lock()?;

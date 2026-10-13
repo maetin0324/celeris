@@ -76,7 +76,7 @@ pub struct HarnessSpec {
     pub command: Option<String>,
     pub args: Vec<String>,
 }
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct CandidateKey {
     pub source: SourceId,
     pub model: ModelId,
@@ -264,7 +264,7 @@ pub struct RouteRequest {
     pub lane: Option<String>,
     pub execution_class: Option<ExecutionClass>,
 }
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Candidate {
     pub source: SourceId,
     pub model: ModelId,
@@ -278,7 +278,7 @@ impl Candidate {
         }
     }
 }
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum ExclusionReason {
     UnknownSource,
     ModelNotDeclared,
@@ -437,43 +437,19 @@ pub fn admit_source(
             .unwrap_or(ExclusionReason::AccountUnavailable),
     )
 }
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
-#[error("no eligible candidate in declared route priority")]
-pub struct NoEligibleCandidate;
-pub trait RoutePolicy {
-    fn choose(&self, eligible: &[Candidate]) -> Result<Candidate, NoEligibleCandidate>;
-}
-#[derive(Debug, Clone, Default)]
-pub struct DefaultRoutePolicy {
-    pub priority: Vec<CandidateKey>,
-}
-impl RoutePolicy for DefaultRoutePolicy {
-    fn choose(&self, eligible: &[Candidate]) -> Result<Candidate, NoEligibleCandidate> {
-        default_route_policy(eligible, &self.priority)
-    }
-}
-pub fn default_route_policy(
-    eligible: &[Candidate],
-    priority: &[CandidateKey],
-) -> Result<Candidate, NoEligibleCandidate> {
-    priority
-        .iter()
-        .find_map(|key| eligible.iter().find(|c| c.key() == *key).cloned())
-        .ok_or(NoEligibleCandidate)
-}
+/// The one default priority path (ADR 2026-10-11-llm-source-model-routing-evaluation D2):
+/// CoS chat uses `cos.route_candidates`; everything else uses the harness×lane `route_defaults`
+/// column, falling back to the harness-wide column. There is no lexicographic fallback.
 pub fn route_priority<'a>(
     registry: &'a Registry,
     harness: &HarnessId,
+    lane: Option<&str>,
     cos: bool,
 ) -> &'a [CandidateKey] {
     if cos {
         &registry.cos_route_candidates
     } else {
-        registry
-            .route_defaults
-            .get(harness)
-            .map(Vec::as_slice)
-            .unwrap_or(&[])
+        registry.route_defaults_for(harness, lane.unwrap_or_default())
     }
 }
 
@@ -629,24 +605,44 @@ mod tests {
         );
     }
     #[test]
-    fn route_select_default_fails_closed_and_cos_uses_declared_fallback() {
-        let c = candidate();
-        assert_eq!(
-            default_route_policy(std::slice::from_ref(&c), &[]),
-            Err(NoEligibleCandidate)
-        );
-        let fallback = CandidateKey {
+    fn route_priority_is_the_lane_column_then_the_harness_column_then_cos() {
+        let mut r = fixture();
+        let harness_wide = CandidateKey {
+            source: "s".into(),
+            model: "m".into(),
+        };
+        let cheap = CandidateKey {
             source: "backup".into(),
             model: "m2".into(),
         };
-        let eligible = Candidate {
-            source: "backup".into(),
-            model: "m2".into(),
-            api_format: "openai".into(),
+        let cos = CandidateKey {
+            source: "chat".into(),
+            model: "m3".into(),
         };
+        r.route_defaults
+            .insert(harness("h"), vec![harness_wide.clone()]);
+        r.lane_route_defaults
+            .insert((harness("h"), "cheap".into()), vec![cheap.clone()]);
+        r.cos_route_candidates = vec![cos.clone()];
+        // A lane column wins over the harness-wide column; an unknown lane falls back to it.
         assert_eq!(
-            default_route_policy(&[c, eligible.clone()], &[fallback]),
-            Ok(eligible)
+            route_priority(&r, &harness("h"), Some("cheap"), false).to_vec(),
+            vec![cheap]
         );
+        assert_eq!(
+            route_priority(&r, &harness("h"), Some("frontier"), false).to_vec(),
+            vec![harness_wide.clone()]
+        );
+        assert_eq!(
+            route_priority(&r, &harness("h"), None, false).to_vec(),
+            vec![harness_wide]
+        );
+        // CoS chat keeps its own declared list, and an undeclared harness has no default at all
+        // (the caller fails closed; there is no lexicographic fallback).
+        assert_eq!(
+            route_priority(&r, &harness("h"), Some("cheap"), true).to_vec(),
+            vec![cos]
+        );
+        assert!(route_priority(&r, &harness("missing"), None, false).is_empty());
     }
 }

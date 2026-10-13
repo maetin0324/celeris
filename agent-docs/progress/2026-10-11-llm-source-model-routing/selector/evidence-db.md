@@ -14,6 +14,8 @@ title: selector evidence and stage persistence
 
 ## 検査
 
+- 今回の再確認: `cargo test -p task-core --lib routing_evidence -- --nocapture`（1 passed）、`cargo test -p task-api --lib query::tests -- --nocapture`（13 passed）、`cargo test -p task-core --lib event_row_schema_matches_committed`（1 passed）、`cargo test -p celerisctl --test no_migrate`（4 passed）。
+- `sh "$CELERIS_WU_SCOPE_PATHS"` と `git diff --check`: 成功。変更は許可範囲内。
 - `cargo test -p task-core --lib -- routing_evidence event_row_schema_matches_committed migration_00`: 16 passed / 0 failed（根拠表の版置換・最新版読み・無行 shadow・stage 遷移と event 追記を含む）。
 - `cargo check --workspace --all-targets`: 成功（event 追加に伴う task-api の網羅 match を含む）。
 - `cargo test -p celerisctl --test no_migrate`: 成功（4 tests。前回 run の記録）。
@@ -23,10 +25,6 @@ title: selector evidence and stage persistence
 
 ## 未解決
 
-1. **範囲 check が通らない（plan_issue で報告）**。`Event` に `routing_stage_changed` を足すと次も必ず変わるが、unit の範囲 allowlist（`crates/task-core/`・`crates/celerisctl/tests/`・`docs/protocol/`・`agent-docs/(progress|adr)/`）に入っていない:
-   - `crates/task-api/src/query.rs`・`crates/task-api/src/query/tests.rs`（`EVENT_TYPES` の網羅列と `event_type_name` の網羅 match。直さないと workspace がコンパイルできない）
-   - `docs/api/v1/event.schema.json`・`docs/api/v1/api-v1.schema.json`（task-core の `event_row_schema_matches_committed` が一致を要求。event schema の実体は `docs/protocol/` ではなく `docs/api/v1/`）
-   - `web/api/generated/schema.json`・`web/api/generated/types.ts`（`docs/api/v1/api-v1.schema.json` の写し）
-   - `web/api/realtime/event-kinds.ts`・`web/api/realtime/invalidation-map.ts`（`invalidation-map.test.ts` が schema の全 kind を両方に要求）
-2. **別 task（eval-harness 01M4Q53E9WQEKMAS448GZMWTFB）と同じ表・同じ module path を作っている**。あの branch には `crates/task-core/src/routing_evidence.rs`（`EvidenceKey`/`Interval`/`EvidenceRow`）と `crates/task-core/src/store/routing_evidence.rs`、migration `0071_routing_evidence.sql`・`0072_eval_trials.sql`・`0073_routing_evidence_bootstrap.sql` があり、`routing_evidence` 表は ADR D2 の同じ列で作られている（あちらは `low_confidence` あり・`wall_median_s`/`usd_list_median` が NULL 可）。まだ main には入っていない。両方が main に入ると `CREATE TABLE routing_evidence` の重複（0071 と 0074）と `store/routing_evidence.rs` の内容衝突が起きる。この unit の範囲では解けない（selector 側の型は policy-core が `route_select/evidence.rs` に作った）。統合作業か人の決定が要る。
-3. `latest_routing_evidence` は `MAX(evidence_version)` を文字列比較で取る。evidence_version が辞書順にならない形式（`v2` と `v10`）だと最新版を誤る。評価 runner が書く版の形式（時刻やゼロ埋め序号）を lane-defaults / eval 側と合わせる。
+1. 別 task（eval-harness 01M4Q53E9WQEKMAS448GZMWTFB）の旧案にも `routing_evidence` 表と store module がある。現ブランチは migration 0074 と `route_select::EvidenceRow` を用いるため並行実装間で差分・migration の競合が予想される。統合時に先行実装との重複がないか確認し、必要なら統合 unit で一本化する。
+2. `latest_routing_evidence` は `MAX(evidence_version)` を文字列比較で取る。評価 runner は manifest sha と集計日を含む版を発行するため、日付が比較の先頭になる形式（または同等の順序保証）を lane-defaults / eval 側と合わせる。
+3. 今回も `corepack pnpm@12.6.0 -C web install --offline --frozen-lockfile` は pnpm store に `@vitest/mocker@5.0.0` が無く失敗した。共通規則に従いネットワーク取得はせず、web typecheck/test は未実行。既存の generated files は commit 済みで、API schema の一致試験は通過した。

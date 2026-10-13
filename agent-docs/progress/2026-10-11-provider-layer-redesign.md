@@ -145,6 +145,7 @@ completed: 2026-10-12
 本番に反映する設定全文（既存の無関係な項目は保持し、placeholder は現在値に置換する）は次のとおり。秘密値は含めず、backup から endpoint/secret reference/path を転記する。
 
 ```toml
+
 [llm_proxy]
 enabled = true
 
@@ -366,10 +367,11 @@ model = "qwen/qwen3.8-27b"
 api_key_secret = "<現在のsecret reference>"
 
 [adapters.local_deep_research]
-settings = { "llm.model" = "qwen3.8-27b", "llm.openai_endpoint.url" = "<現在のQwen endpoint>/v1", "llm.openai_endpoint.api_key" = "<現在のsecret reference>" }
+settings = { "llm.model" = "qwen/qwen3.8-27b", "llm.openai_endpoint.url" = "<現在のQwen endpoint>/v1", "llm.openai_endpoint.api_key" = "<現在のsecret reference>" }
 
 [adapters.paperqa]
 settings = "<現在のPaperQA settings path>"
+
 ```
 
 本番では作業前に config と `providers.d` を権限付きで backup し、daemon 停止中に8行を source/harness/route 設定へ移して include と旧行を除く。DB path、events、credential files、account directories は保持する。新 binary の config validation が成功してから同一 release の binary を切替・起動し、API の source status と run audit の harness/source/model を coding、Pi、local-qwen、CoS の順に確認する。失敗時は daemon を停止し config/include と旧 binary を backup/release から戻す。DB migration 後は DB を旧版へ安易に戻さず、release の migration rollback 規則を適用する。詳細な人向けコマンドと確認事項は [移行手順](../../docs/ops/provider-llm-source-migration.md) にある。

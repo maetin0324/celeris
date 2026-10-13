@@ -76,6 +76,7 @@ pub struct AcpConfig {
     pub permission: AcpPermission,
     /// `session/set_config_option` で設定するモデル（空/`None` なら送らない）。
     pub model: Option<String>,
+    pub model_namespace: Option<String>,
     /// `session/set_config_option` の `configId`（`session/new` の `configOptions[].id`）。既定 `"model"`。
     pub model_option_id: String,
     /// `initialize` の応答を待つ上限（初回はエージェント側のプロバイダ取得で数分かかりうる。既定 300 秒）。
@@ -95,6 +96,7 @@ impl Default for AcpConfig {
             env: Vec::new(),
             permission: AcpPermission::Allow,
             model: None,
+            model_namespace: None,
             model_option_id: "model".to_string(),
             startup_timeout: Duration::from_secs(300),
             container: None,
@@ -120,6 +122,10 @@ impl AcpAdapter {
 impl WorkerAdapter for AcpAdapter {
     fn id(&self) -> &str {
         Self::ID
+    }
+
+    fn model_namespace(&self) -> Option<&str> {
+        self.config.model_namespace.as_deref()
     }
 
     async fn run(

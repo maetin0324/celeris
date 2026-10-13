@@ -206,6 +206,7 @@ tools = ["<Hashline read tool>", "<Hashline edit tool>", "bash", "grep", "find",
 
 [harnesses.opencode]
 kind = "acp"
+model_namespace = "qwen-local"
 api_formats = ["openai_compatible"]
 source_kinds = ["openai_compatible"]
 capabilities = ["tools", "repo", "skills"]
@@ -238,6 +239,14 @@ to_api = "openai_compatible"
 
 [[llm_routes]]
 harness = "paperqa"
+source = "qwen"
+model = "qwen3.8-27b"
+via = "llm_proxy"
+from_api = "openai_compatible"
+to_api = "openai_compatible"
+
+[[llm_routes]]
+harness = "langmem"
 source = "qwen"
 model = "qwen3.8-27b"
 via = "llm_proxy"

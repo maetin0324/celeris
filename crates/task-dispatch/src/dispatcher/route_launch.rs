@@ -62,14 +62,17 @@ pub fn selected_llm_route(
             .as_ref()
             .map(|name| CredentialReference::Environment { name: name.clone() })
     };
-    let endpoint = (source.endpoint.is_some() || !oauth).then(|| LlmEndpointReference {
-        base_url: source.endpoint.clone(),
-        api_format: pick.candidate.api_format.to_string(),
-    });
+    let proxy = task_core::llm_route::route_via(registry, &pick.harness, &pick.candidate.key())
+        == Some("llm_proxy");
+    let endpoint =
+        (!proxy && (source.endpoint.is_some() || !oauth)).then(|| LlmEndpointReference {
+            base_url: source.endpoint.clone(),
+            api_format: pick.candidate.api_format.to_string(),
+        });
     Ok(SelectedLlmRoute {
         harness_id: pick.harness.to_string(),
         source_id: pick.candidate.source.to_string(),
-        model_id: pick.candidate.model.to_string(),
+        model_id: pick.wire_model_id.to_string(),
         account_id: pick.account.to_string(),
         endpoint,
         credential,
@@ -103,7 +106,7 @@ impl Dispatcher {
             .get(&pick.candidate.source)
             .ok_or_else(|| RouteLaunchError::UnknownSource(pick.candidate.source.clone()))?;
         let adapter = base
-            .with_model(pick.candidate.model.as_ref())
+            .with_model(pick.wire_model_id.as_ref())
             .unwrap_or_else(|| Arc::clone(base));
         match account_adapter_for_source_kind(source.kind.as_ref()) {
             Some(account_adapter) => self

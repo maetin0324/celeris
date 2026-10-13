@@ -1022,7 +1022,7 @@ printf '%s\n' '{"jsonrpc":"2.0","id":4,"result":{"stopReason":"end_turn"}}'
 
 /// `with_model` の複製は、config の model を置き換えて `session/set_config_option` に渡す。
 #[tokio::test]
-async fn with_model_sends_the_replacement_model_instead_of_the_configured_one() {
+async fn opencode_receives_qualified_route_model_id() {
     let dir = tempfile::tempdir().unwrap();
     let config = AcpConfig {
         model: Some("configured/model".to_string()),

@@ -20,6 +20,7 @@ struct Seen {
 struct Recorder {
     seen: Seen,
     takes_endpoint: bool,
+    namespace: Option<String>,
     log: Arc<Mutex<Vec<Seen>>>,
 }
 
@@ -31,6 +32,7 @@ impl Recorder {
                 ..Seen::default()
             },
             takes_endpoint,
+            namespace: (harness == "opencode").then(|| "qwen-local".to_string()),
             log: Arc::clone(log),
         }
     }
@@ -39,7 +41,14 @@ impl Recorder {
 #[async_trait]
 impl WorkerAdapter for Recorder {
     fn id(&self) -> &str {
-        "recorder"
+        if self.seen.harness == "opencode" {
+            "acp"
+        } else {
+            "recorder"
+        }
+    }
+    fn model_namespace(&self) -> Option<&str> {
+        self.namespace.as_deref()
     }
     fn with_model(&self, model: &str) -> Option<Arc<dyn WorkerAdapter>> {
         let mut next = self.clone();
@@ -82,6 +91,10 @@ fn adapters(log: &Arc<Mutex<Vec<Seen>>>) -> HashMap<HarnessId, Arc<dyn WorkerAda
         Arc::new(Recorder::new("claude", false, log)),
     );
     out.insert("pi".into(), Arc::new(Recorder::new("pi", true, log)));
+    out.insert(
+        "opencode".into(),
+        Arc::new(Recorder::new("opencode", true, log)),
+    );
     out
 }
 
@@ -137,6 +150,54 @@ async fn worker_route_runs_the_given_harness_with_the_given_model() {
             ..Seen::default()
         }]
     );
+}
+
+#[tokio::test]
+async fn opencode_model_id_uses_declared_namespace() {
+    let log = Arc::new(Mutex::new(Vec::new()));
+    let dir = tempfile::tempdir().unwrap();
+    let req = request(dir.path(), Some(route("opencode", "qwen3.8-27b")));
+    let adapter = request_adapter(&adapters(&log), &req, &no_secret).unwrap();
+    let _ = adapter.run(req, "r-opencode", limits(), &NullSink).await;
+    assert_eq!(
+        log.lock().unwrap()[0].model.as_deref(),
+        Some("qwen-local/qwen3.8-27b")
+    );
+}
+
+#[tokio::test]
+async fn opencode_without_namespace_keeps_route_model() {
+    let log = Arc::new(Mutex::new(Vec::new()));
+    let mut map = adapters(&log);
+    map.insert(
+        "opencode".into(),
+        Arc::new(Recorder {
+            seen: Seen {
+                harness: "opencode".into(),
+                ..Seen::default()
+            },
+            takes_endpoint: true,
+            namespace: None,
+            log: Arc::clone(&log),
+        }),
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let req = request(dir.path(), Some(route("opencode", "qwen3.8-27b")));
+    let adapter = request_adapter(&map, &req, &no_secret).unwrap();
+    let _ = adapter
+        .run(req, "r-opencode-unqualified", limits(), &NullSink)
+        .await;
+    assert_eq!(log.lock().unwrap()[0].model.as_deref(), Some("qwen3.8-27b"));
+}
+
+#[tokio::test]
+async fn non_opencode_model_id_remains_route_model() {
+    let log = Arc::new(Mutex::new(Vec::new()));
+    let dir = tempfile::tempdir().unwrap();
+    let req = request(dir.path(), Some(route("pi", "qwen3.8-27b")));
+    let adapter = request_adapter(&adapters(&log), &req, &no_secret).unwrap();
+    let _ = adapter.run(req, "r-pi", limits(), &NullSink).await;
+    assert_eq!(log.lock().unwrap()[0].model.as_deref(), Some("qwen3.8-27b"));
 }
 
 #[test]

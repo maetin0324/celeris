@@ -547,6 +547,19 @@ impl Config {
     pub fn validate(&self) -> Result<(), ConfigError> {
         let registry = self.llm_route_registry()?;
         for (id, harness) in &self.harness_declarations {
+            if let Some(namespace) = &harness.model_namespace {
+                if id != "opencode" || harness.kind.replace('_', "-") != task_worker::AcpAdapter::ID
+                {
+                    return Err(ConfigError::Invalid(format!(
+                        "[harnesses.{id}] model_namespace is only supported for opencode (acp)"
+                    )));
+                }
+                if namespace.trim().is_empty() || namespace.contains('/') {
+                    return Err(ConfigError::Invalid(format!(
+                        "[harnesses.{id}] model_namespace must be non-empty and must not contain '/'"
+                    )));
+                }
+            }
             if harness.kind.replace('_', "-") == task_worker::PiAdapter::ID {
                 if harness.extensions.is_empty() || harness.tools.is_empty() {
                     return Err(ConfigError::Invalid(format!(

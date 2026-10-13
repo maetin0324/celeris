@@ -2,7 +2,7 @@
 title: provider 廃止リリースを本番に入れられる形にする — 不具合 5 件の修正と closeout
 tasks: [01M4T94XWN31GW9SENK41GAP8F]
 status: done
-completed: 2026-10-13（受け入れ条件 0・1 を満たす。未達は無し。未解決は下の事項 2〜8）
+completed: 2026-10-13（受け入れ条件 0・1 を満たす。未達は無し。未解決は下の事項 2（i）・3〜8）
 updated: 2026-10-13
 ---
 
@@ -45,7 +45,7 @@ updated: 2026-10-13
   - 手順 3 に claude_code の先頭 sonnet・coding opus の確認、手順 7 に裸 model の 422 確認を足した。
   - 手順 8 に「旧 `routing_decided`（mode `legacy`）は読み取りだけで残り、移行で書き換えない」を足した。
 - `agent-docs/progress/2026-10-11-provider-layer-redesign.md`: `migration_runbook_toml_loads` が runbook と一字一句一致を見るため、marker 間の TOML の写しを runbook に合わせた。
-- `agent-docs/adr/2026-10-11-llm-source-harness-selection.md`（fix2 の後の整合）: 付記 §2 の Pi 試験名を実在する名前に直し、未作成の 2 試験を明記した（事項 2）。
+- `agent-docs/adr/2026-10-11-llm-source-harness-selection.md`（fix2 の後の整合）: 付記 §2 の Pi 試験名を実在する名前に直し、未作成の 2 試験を明記した（事項 2）。その後 pi-process で宣言の process 到達試験を足し、未作成は相対 path の 1 件（事項 2（i））だけになった。
 
 ## 証拠
 
@@ -55,14 +55,23 @@ updated: 2026-10-13
 - `env -u CELERIS_USERNS_TESTS TMPDIR=/local/prb bash scripts/dev/test-parallel.sh > /local/prb/tp-nouserns-cosfb.log 2>&1` — exit 0。nextest `Summary [102.318s] 5036 tests run: 5036 passed, 13 skipped`。doc-test は全て ok。`CELERIS_TEST_SUMMARY` は `passed: 5039`、`failed: 0`、`userns: null`。
 - `cargo clippy --workspace -- -D warnings` — exit 0（`Finished dev profile`、警告なし）。
 - 文書検査: `sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv`, `sh scripts/dev/check-doc-links.sh`, `sh scripts/dev/check-adr-numbers.sh`, `sh scripts/dev/progress-index.sh --check` — 全て exit 0（それぞれ `check-doc-layout: ok`, `check-doc-links: ok`, `check-adr-numbers: ok (198 files)`, `progress-index --check: ok`）。
-- 付記の試験名: 付記 §1・§3・§4・§5 の試験名は `grep -rn "fn <name>\b" crates` で全件実在。付記 §2 の Pi 試験名 5 件はすべて実在しなかった。実在する 3 件（別名または近い試験）に置き換え、残り 2 件は試験未作成として ADR に明記した（事項 2）。
+- 付記の試験名: 付記 §1・§3・§4・§5 の試験名は `grep -rn "fn <name>\b" crates` で全件実在。付記 §2 の Pi 試験名 5 件はすべて実在しなかった。実在する 3 件（別名または近い試験）に置き換え、残り 2 件は試験未作成として ADR に明記した（事項 2）。（閉じた時点の記述。pi-process で (ii) の試験を追加し、未解決は (i) のみ。下の pi-process の証拠を参照）
+
+pi-process（Pi の宣言が process まで届く試験、2026-10-13。`TMPDIR=/local/prb/pp`）:
+
+- 試験の追加: `cargo test -p celeris --lib pi_harness_declaration -- ` — `pi_harness_declaration_deserializes_extensions_tools_and_env`・`pi_harness_declaration_reaches_pi_config`・`pi_harness_declaration_reaches_pi_process` の 3 件が `ok`（`test result: ok. 3 passed; 0 failed`）。
+- 製品コードの変更は無し。試験用に `task-worker` の `Task` 最小例を `protocol::sample_task_for_tests()`（`#[doc(hidden)] pub`）へ移し、既存の `tests::sample_task` はそれを呼ぶ薄い wrapper にした。
+- `CELERIS_USERNS_TESTS=1 TMPDIR=/local/prb/pp bash scripts/dev/test-parallel.sh` — exit 0。nextest `Summary [248.742s] 5037 tests run: 5037 passed (1 slow), 13 skipped`。`CELERIS_TEST_SUMMARY` は `failed: 0`、`userns: true`（`passed: 3` は事項 8）。
+- `TMPDIR=/local/prb/pp bash scripts/dev/test-parallel.sh`（USERNS 無し） — exit 0。nextest `Summary [108.172s] 5037 tests run: 5037 passed, 13 skipped`。`CELERIS_TEST_SUMMARY` は `passed: 5040`、`failed: 0`、`userns: null`（`passed` 欄の差は事項 8 の集計の不具合）。
+- `cargo clippy --workspace -- -D warnings` — exit 0（`Finished dev profile`、警告なし）。
+- 文書検査: `check-doc-layout.sh` ok、`check-doc-links.sh` ok、`check-adr-numbers.sh` ok (198 files)、`progress-index.sh --check` ok（すべて exit 0）。
 
 前段（fix2 の前、closeout の再実行）の結果は、旧 event 試験が無い・`browser_h3_injection` が 503 で落ちた状態。この WU の最終検査はそれを上書きする。
 
 ## 未解決事項
 
 1. **CoS の Codex fallback — 決定・対応済み。** `cos-codex` は (a) Claude のみ。ADR 付記・runbook・進捗 TOML・`migration_runbook_toml_loads` を一致させ、CoS route は `claude_oauth / claude-opus-5-5` の 1 件にした。詳細は [align-cos](2026-10-13-provider-release-blockers/cos-fallback/align-cos.md) と [adr-note](2026-10-13-provider-release-blockers/cos-fallback/adr-note.md)。
-2. **Pi の未作成試験 2 件。** (i) `[harnesses.pi].extensions` の相対 path が TOML 基準で解決されることを名前付きで確かめる試験（`config/mod.rs` の解決処理は通るが、試験は無い）。(ii) 宣言 `env` と `env_from_secrets` が Pi の run process まで届くことを確かめる試験（`celeris::daemon::adapters::tests::pi_harness_declaration_reaches_pi_config` は PiConfig までしか確かめない）。どちらも既存の実装は変えずに試験を足す作業で、次の WU の範囲。
+2. **Pi の試験 2 件のうち 1 件は未解決。** (i) 未解決: `[harnesses.pi].extensions` の相対 path が TOML 基準で解決されることを名前付きで確かめる試験（`config/mod.rs` の解決処理は通るが、試験は無い）。次の WU の範囲。(ii) 解消（pi-process）: 宣言 `extensions`・`tools`・`env`・`env_from_secrets` が PiAdapter の起動する process まで届くことを `celeris::daemon::adapters::harness_adapter_tests::pi_harness_declaration_reaches_pi_process` で確かめる。stub の pi が argv（1 行 1 引数）と `env` の出力を一時 file に書き、試験がそれを検査する。`pi_config` の試験（PiConfig まで）は残す。
 3. **proxy_model_name 試験の件数。** `cargo test -p celeris proxy_model_name` は 0 件実行（celeris crate に該当試験が無い）。受け入れ条件に使うなら、`-p task-dispatch` と `-p task-worker` に寄せるか、celeris に 1 件足す。
 4. **coding class は opus 1 件だけ。** opus が使えないと sonnet へは落ちず、claude_code が飛ばされて Codex へ行く。sonnet を 2 番目に入れるかは人が決める。
 5. **daemon の `GET /api/v1/harnesses` は class 候補を出さない。** runbook 手順 6 の jq では coding class は見えないので、確認は `routing show`（手順 3）で行う。

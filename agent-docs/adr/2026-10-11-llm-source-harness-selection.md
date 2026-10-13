@@ -401,7 +401,7 @@ provider 削除履歴を調べるときは、provider 関連 commit の名前だ
 
 **変更箇所（file:関数）**: `crates/celeris/src/config/harness.rs:HarnessConfig`・検証/path 解決; `crates/celeris/src/daemon/adapters.rs:build_harness_adapters`; `crates/task-worker/src/route.rs:route_adapter`; `crates/task-worker/src/pi.rs` の起動 env/args。
 
-**実装 leaf と試験名**: `pi-harness` — `celeris::config::tests::pi_harness_declaration_deserializes_extensions_tools_and_env`; `celeris::daemon::adapters::tests::pi_harness_declaration_reaches_pi_config`; `task_worker::pi::tests::pi_adapter_args_tools_isolation_cwd_and_large_prompt`（run 側で `-e` extension と `--tools` が渡ることを確かめる）。**未作成（実装の食い違い）**: 相対 extension path の TOML 基準解決（`config/mod.rs` の extensions 解決）を名前付きで確かめる試験、宣言 `env` が Pi の run process まで届くことを確かめる試験（route 経由を含む）は、まだ無い。試験の追加は次の WU の範囲。
+**実装 leaf と試験名**: `pi-harness` — `celeris::config::tests::pi_harness_declaration_deserializes_extensions_tools_and_env`; `celeris::daemon::adapters::harness_adapter_tests::pi_harness_declaration_reaches_pi_config`; `task_worker::pi::tests::pi_adapter_args_tools_isolation_cwd_and_large_prompt`（run 側で `-e` extension と `--tools` が渡ることを確かめる）; `celeris::daemon::adapters::harness_adapter_tests::pi_harness_declaration_reaches_pi_process`（daemon の `build_harness_adapters` で得た pi adapter に `run` を通し、stub の pi が受け取った argv に宣言の `-e`・`--tools`、環境に宣言 `env` と `env_from_secrets` の値が入ることを確かめる。stub は一時 directory に置き、外部ネットワークと本物の pi は使わない）。**未作成（実装の食い違い）**: 相対 extension path の TOML 基準解決（`config/mod.rs` の extensions 解決）を名前付きで確かめる試験は、まだ無い。試験の追加は次の WU の範囲。
 
 ### 3. proxy harness の model wire 名 — `model-names`
 

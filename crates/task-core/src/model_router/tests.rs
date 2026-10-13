@@ -55,11 +55,13 @@ fn legacy_routing_event_deserializes_without_becoming_writable() {
     let mut event = serde_json::to_value(Event::RoutingDecided {
         run_id: "legacy-run".into(),
         record: Box::new(record),
-    }).unwrap();
+    })
+    .unwrap();
     let mut trace = serde_json::to_value(trace_with(vec![])).unwrap();
     trace["mode"] = serde_json::json!("legacy");
     event["record"]["optimizer"] = trace;
-    let decoded: Event = serde_json::from_value(event).expect("legacy durable event remains readable");
+    let decoded: Event =
+        serde_json::from_value(event).expect("legacy durable event remains readable");
     assert!(matches!(decoded, Event::RoutingDecided { .. }));
     assert!(serde_json::to_value(RoutingMode::Legacy).is_err());
 }

@@ -38,6 +38,31 @@ fn model(id: &str, quality: Option<f64>) -> ModelProfile {
         provenance: "test".into(),
     }
 }
+
+#[test]
+fn legacy_routing_event_deserializes_without_becoming_writable() {
+    let task = crate::model_policy::tests::task("legacy-task", vec![]);
+    let record = crate::model_policy::RoutingRecord {
+        org_node: None,
+        harness: None,
+        decision: crate::model_policy::decide_for_task(&task, &Default::default()).unwrap(),
+        resolution: Default::default(),
+        quota_reason: None,
+        work_unit_id: None,
+        escalation: None,
+        optimizer: None,
+    };
+    let mut event = serde_json::to_value(Event::RoutingDecided {
+        run_id: "legacy-run".into(),
+        record: Box::new(record),
+    }).unwrap();
+    let mut trace = serde_json::to_value(trace_with(vec![])).unwrap();
+    trace["mode"] = serde_json::json!("legacy");
+    event["record"]["optimizer"] = trace;
+    let decoded: Event = serde_json::from_value(event).expect("legacy durable event remains readable");
+    assert!(matches!(decoded, Event::RoutingDecided { .. }));
+    assert!(serde_json::to_value(RoutingMode::Legacy).is_err());
+}
 fn deployment(id: &str, model_id: &str, order: usize) -> DeploymentProfile {
     DeploymentProfile {
         id: id.into(),

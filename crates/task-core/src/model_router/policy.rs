@@ -8,6 +8,11 @@ pub enum RoutingMode {
     #[default]
     Shadow,
     Enforce,
+    /// Read-only compatibility for durable traces written before legacy routing was removed.
+    /// This mode must never be emitted by current configuration or dispatch code.
+    #[serde(skip_serializing)]
+    #[schemars(skip)]
+    Legacy,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

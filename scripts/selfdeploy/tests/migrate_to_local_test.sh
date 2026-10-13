@@ -156,9 +156,15 @@ build_cache_dir = "$var/build-cache"
 [memory]
 dir = "$var/memory"
 
-[[providers]]
-id = "x"
-adapter = "fake"
+[llm_sources.x]
+kind = "fake"
+api_format = "fake"
+models = ["fake"]
+
+[harnesses.x]
+kind = "fake"
+api_formats = ["fake"]
+source_kinds = ["fake"]
 EOF
   echo token >"$d/home/.config/celeris/api.token"
   printf '[Service]\nExecStart=%%h/.local/celeris/releases/%%i/bin/celeris\n' >"$d/home/.config/systemd/user/celeris@.service"

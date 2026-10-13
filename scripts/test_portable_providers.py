@@ -18,10 +18,10 @@ instructions = "Keep the contract"
 [[harnesses]]
 id = "literature"
 adapter = "paperqa"
-[[providers]]
-id = "claude"
-adapter = "claude-code"
-env = { SECRET = "must-stay-private" }
+[llm_sources.claude]
+kind = "claude_oauth"
+api_format = "anthropic"
+accounts = ["must-stay-private"]
 '''
         updated, changes = portable.migrate(original)
         self.assertEqual(len(changes), 1)

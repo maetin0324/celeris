@@ -2,7 +2,7 @@
 # CoS chat の prompt cache baseline / after 用 live ベンチ（ADR 2026-10-08-cos-chat-prompt-cache D3.4-2）。
 # scripts/dev/cos-chat-live.sh と同じ隔離方式（試験用 data dir・一時 DB・別 port・本番を読まない）。
 #
-#   bash scripts/dev/cos-chat-bench.sh <repo> <bin dir> <data dir> dry|full|cold-ttl|same-thread|answers [claude-code|codex] [reduced]
+#   bash scripts/dev/cos-chat-bench.sh <repo> <bin dir> <data dir> dry|full|cold-ttl|same-thread|answers [claude-code] [reduced]
 #
 #   full      : 台本 scripts/dev/cos-chat-bench-script.json を流す（claude-code は LLM run 26 回）。
 #               claude_oauth の既存ログインだけを使う。API 課金 source は使わない
@@ -15,22 +15,22 @@
 #   answers   : 補助台本の質問回答 3 件。COS_CHAT_BENCH_LAB_DIR に claude_max_lab の場所を指定。
 #               archive の repo では COS_CHAT_BENCH_SOURCE_SHA を指定し、
 #               COS_CHAT_BENCH_DRIVER_REPO にこの補助台本を含む worktree を指定。
-#   reduced   : 縮小版（新規 2 thread + 同一 thread 3 turn。codex 等の確認用）
-#   第 5 引数 : harness（既定 claude-code）。codex は llm_source=codex_oauth の既存ログインが要る
+#   reduced   : 縮小版（新規 2 thread + 同一 thread 3 turn。確認用）
+#   第 5 引数 : harness（claude-code のみ。CoS の harness は [cos] で claude-code に固定されるため codex は受け付けない）
 #
 # 結果は <data dir>/evidence/{runs.json,runs.csv,summary.json,tables.md,steps.log}。
 # 本番の設定・DB・KB・port は読まない・書かない。終わりに daemon の process group を止める。
 set -eu
 usage() {
-  echo "usage: bash scripts/dev/cos-chat-bench.sh <repo> <bin dir> <data dir> dry|full|cold-ttl|same-thread|answers [claude-code|codex] [reduced]" >&2
+  echo "usage: bash scripts/dev/cos-chat-bench.sh <repo> <bin dir> <data dir> dry|full|cold-ttl|same-thread|answers [claude-code] [reduced]" >&2
   exit 2
 }
 [ "$#" -ge 4 ] && [ "$#" -le 6 ] || usage
 case "$4" in dry|full|cold-ttl|same-thread|answers) ;; *) usage ;; esac
 MODE=$4
 HARNESS=${5:-claude-code}
+case "$HARNESS" in claude-code) ;; *) usage ;; esac
 REDUCED=0; [ "${6:-}" = reduced ] && REDUCED=1
-case "$HARNESS" in claude-code) SRC=claude_oauth ;; codex) SRC=codex_oauth ;; *) usage ;; esac
 REPO=$(cd "$1" && pwd); BIN=$(cd "$2" && pwd); mkdir -p "$3"; OUT=$(cd "$3" && pwd)
 DRIVER_REPO=${COS_CHAT_BENCH_DRIVER_REPO:-$REPO}
 COS_CHAT_BENCH_SOURCE_SHA=${COS_CHAT_BENCH_SOURCE_SHA:-$(git -C "$REPO" rev-parse HEAD)}
@@ -82,7 +82,7 @@ env -u CELERIS_CONFIG -u CELERIS_API_URL "$BIN/celerisctl" knowledge init --root
 cp -r "$REPO/config/skills/cos-operator" "$REPO/config/skills/cos-inbox-triage" "$OUT/kb/skills/"
 [ -s "$OUT/api.token" ] || { head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$OUT/api.token"; }
 chmod 600 "$OUT/api.token"; TOK=$(cat "$OUT/api.token")
-POOL_CONFIG=; COS_ACCOUNT=
+ACCOUNT_POOL=0
 if [ "$MODE" = same-thread ] || { [ "$MODE" != answers ] && { [ -n "${COS_CHAT_BENCH_ACCOUNT_DIR:-}" ] || [ -n "${COS_CHAT_BENCH_LAB_DIR:-}" ]; }; }; then
   mkdir -p "$OUT/accounts/$ACCOUNT_ID"
   chmod 700 "$OUT/accounts" "$OUT/accounts/$ACCOUNT_ID"
@@ -92,45 +92,51 @@ if [ "$MODE" = same-thread ] || { [ "$MODE" != answers ] && { [ -n "${COS_CHAT_B
   mkdir -p "$OUT/claude-config"
   chmod 700 "$OUT/claude-config"
   export CLAUDE_CONFIG_DIR="$OUT/claude-config"
-  POOL_CONFIG='account_pool = true'
-  COS_ACCOUNT="account_id = \"$ACCOUNT_ID\""
+  ACCOUNT_POOL=1
 fi
 if [ "$MODE" = answers ]; then
   mkdir -p "$OUT/accounts/claude_max_lab"
   chmod 700 "$OUT/accounts" "$OUT/accounts/claude_max_lab"
   cp "$COS_CHAT_BENCH_LAB_DIR/.credentials.json" "$OUT/accounts/claude_max_lab/"
   chmod 600 "$OUT/accounts/claude_max_lab/.credentials.json"
-  POOL_CONFIG='account_pool = true'
-  COS_ACCOUNT='account_id = "claude_max_lab"'
+  ACCOUNT_POOL=1
 fi
 cat > "$OUT/config.toml" <<EOF
 # cos-chat-bench.sh の一時設定（ADR-0126 試験用 data dir）。本番 ~/.config/celeris は使わない
 db = { path = "celeris.sqlite3", worker_read_only = false }
 workspace_root = "workspaces"
 tick_ms = 1000
+# 1 では CoS の turn が task worker と受信箱の triage の後ろで止まった（live-check2 attempt 2）
+max_concurrency = 4
 
 [api]
 listen = "127.0.0.1:$PORT"
 token_file = "api.token"
 
-[[providers]]
-id = "bench-$HARNESS"
-kind = "adapter"
-adapter = "$HARNESS"
-llm_source = "$SRC"
-tiers = ["frontier", "standard", "cheap"]
-# 1 では CoS の turn が task worker と受信箱の triage の後ろで止まった（live-check2 attempt 2）
-concurrency = 4
-$POOL_CONFIG
+[llm_sources.claude_oauth]
+kind = "claude_oauth"
+api_format = "anthropic"
+models = ["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5"]
+
+[harnesses.claude_code]
+kind = "claude_code"
+api_formats = ["anthropic"]
+source_kinds = ["claude_oauth"]
+capabilities = ["tools", "repo", "skills"]
+
+[route_defaults.claude_code]
+candidates = [{ source = "claude_oauth", model = "claude-opus-5-5" }]
+
+[harness_selection]
+execution_class_defaults = {}
+rules = [{ harness = "claude_code", required_capabilities = [] }]
 
 [cos]
 enabled = true
-harness = "$HARNESS"
-llm_source = "$SRC"
-tier = "frontier"
+harness = "claude-code"
+route_candidates = [{ source = "claude_oauth", model = "claude-opus-5-5" }]
 max_turns = 20
 max_wall_secs = 600
-$COS_ACCOUNT
 
 [workspace]
 build_cache_dir = "build-cache"
@@ -141,7 +147,7 @@ dir = "memory"
 [knowledge]
 root = "kb"
 EOF
-if [ -n "$COS_ACCOUNT" ]; then
+if [ "$ACCOUNT_POOL" = 1 ]; then
   printf '\n[accounts]\nclaude_dir = "%s/accounts"\n' "$OUT" >> "$OUT/config.toml"
 fi
 
@@ -180,7 +186,6 @@ CLAUDE_VERSION=unknown
 if [ "$MODE" != same-thread ] && [ "$MODE" != answers ]; then
   CLAUDE_VERSION=$(claude --version 2>/dev/null | head -1 || echo unknown)
 fi
-[ "$HARNESS" = codex ] && CLAUDE_VERSION="codex $(codex --version 2>/dev/null | head -1 || echo unknown)"
 python3 "$DRIVER_REPO/scripts/dev/cos-chat-bench.py" "$API" "$TOK" "$OUT" "$REPO" "$MODE" "$REDUCED" "$CLAUDE_VERSION" || { log "driver failed"; cp "$OUT/daemon.log" "$EV/daemon.log"; exit 1; }
 cp "$OUT/daemon.log" "$EV/daemon.log"
 log "done; evidence in $EV (summary.json, tables.md)"

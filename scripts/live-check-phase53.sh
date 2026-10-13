@@ -80,12 +80,22 @@ token_file = "$RUN/token"
 command = ["sh", "$RUN/worker.sh"]
 env = { RUN_DIR = "$RUN" }
 
-[[providers]]
-id = "fake-local"
-adapter = "fake"
-tiers = ["frontier", "standard", "cheap"]
-concurrency = 2
-model = "fake"
+[llm_sources.fake]
+kind = "fake"
+api_format = "fake"
+models = ["fake"]
+
+[harnesses.fake]
+kind = "fake"
+api_formats = ["fake"]
+source_kinds = ["fake"]
+
+[route_defaults.fake]
+candidates = [{ source = "fake", model = "fake" }]
+
+[harness_selection]
+execution_class_defaults = {}
+rules = [{ harness = "fake", required_capabilities = [] }]
 CONF
 
 mkdir -p "$RUN/workspaces"

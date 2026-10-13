@@ -2279,6 +2279,15 @@ export type Event = {
   "run_id": string;
   "type": "routing_decided";
 } | {
+  "actor": string;
+  "from"?: string | null;
+  "genre": string;
+  "harness_id": string;
+  "reason": string;
+  "to": string;
+  "type": "routing_stage_changed";
+  "window": unknown;
+} | {
   "context_version": string;
   "decision_id": string;
   "features"?: unknown;
@@ -4810,6 +4819,12 @@ export type RouteDecision = {
   "shadow": boolean;
 };
 
+export type RouteFeaturesRef = {
+  "hash": string;
+  "schema": string;
+  "template": string;
+};
+
 export type RouteReason = {
   "detail": string;
   "ok": boolean;
@@ -4878,6 +4893,7 @@ export type RoutingPolicy = {
 export type RoutingRecord = {
   "decision": LaneDecision;
   "escalation"?: EscalationAudit | null;
+  "features"?: RouteFeaturesRef | null;
   "harness"?: string | null;
   "optimizer"?: RoutingTraceV1 | null;
   "org_node"?: string | null;

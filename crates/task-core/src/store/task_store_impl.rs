@@ -26,6 +26,34 @@ use super::{
 };
 
 impl TaskStore for SqliteStore {
+    fn replace_routing_evidence(
+        &self,
+        version: &str,
+        rows: &[crate::route_select::EvidenceRow],
+    ) -> Result<(), StoreError> {
+        self.replace_routing_evidence_impl(version, rows)
+    }
+    fn latest_routing_evidence(
+        &self,
+        genre: &str,
+        harness_id: &str,
+    ) -> Result<Vec<crate::route_select::EvidenceRow>, StoreError> {
+        self.latest_routing_evidence_impl(genre, harness_id)
+    }
+    fn routing_stage(
+        &self,
+        genre: &str,
+        harness_id: &str,
+    ) -> Result<crate::route_select::RoutingStage, StoreError> {
+        self.routing_stage_impl(genre, harness_id)
+    }
+    fn set_routing_stage(
+        &self,
+        task_id: TaskId,
+        change: &crate::route_select::RoutingStageChange,
+    ) -> Result<(), StoreError> {
+        self.set_routing_stage_impl(task_id, change)
+    }
     fn record_route_features(
         &self,
         subject: crate::route_extract::Subject,

@@ -2999,6 +2999,47 @@
           "type": "object"
         },
         {
+          "description": "Selector stage transition, recorded with its persisted projection.",
+          "properties": {
+            "actor": {
+              "type": "string"
+            },
+            "from": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "genre": {
+              "type": "string"
+            },
+            "harness_id": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "to": {
+              "type": "string"
+            },
+            "type": {
+              "const": "routing_stage_changed",
+              "type": "string"
+            },
+            "window": true
+          },
+          "required": [
+            "type",
+            "genre",
+            "harness_id",
+            "to",
+            "reason",
+            "window",
+            "actor"
+          ],
+          "type": "object"
+        },
+        {
           "description": "2026-10-04 多目的 routing ADR §6（Phase 3）: 決定 1 件の特徴 snapshot（本文・secret なし）。wire は\n`decision_id, context_version, features, provenance, missing_fields` が event の欄に平たく並ぶ。\n状態は変えない（`replay` は無視する）。",
           "properties": {
             "context_version": {

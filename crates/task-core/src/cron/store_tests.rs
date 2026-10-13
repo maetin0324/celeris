@@ -318,6 +318,7 @@ fn cron_job_migration_applies_to_an_existing_schema_37_db() {
              DROP TABLE chat_messages; DROP TABLE chat_threads; \
              DROP TABLE cron_job_runs; DROP TABLE cron_jobs; \
              DROP TABLE feed_notices; DROP TABLE feed_sources; DROP TABLE feed_cursor; \
+             DROP TABLE routing_stage; DROP TABLE routing_evidence; \
              DROP INDEX idx_events_integration_request; \
              DROP TABLE routing_shadow_reservations; \
              DROP INDEX idx_events_routing_decided; DROP INDEX idx_llm_proxy_requests_decision; \
@@ -358,7 +359,7 @@ fn cron_job_migration_applies_to_an_existing_schema_37_db() {
     }
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 73);
+    assert_eq!(SCHEMA_VERSION, 74);
     assert_eq!(
         store
             .cluster_settings_get("pegasus")

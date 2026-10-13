@@ -119,6 +119,9 @@ export const EVENT_INVALIDATION: Record<EventKind, KindSpec> = {
   routing_outcome_recorded: { sets: ["T", "R"] },
   // Phase 4: shadow 監査（primary とは別欄）。対象 task の routing 監査（R）だけを古くする。
   routing_shadow_recorded: { sets: ["T", "R"] },
+  // ADR 2026-10-11-llm-source-model-routing-evaluation D3: genre×harness の段階（shadow/enforce）の遷移。
+  // 対象 task の timeline と routing 監査（R）だけを古くする。
+  routing_stage_changed: { sets: ["T", "R"] },
   checkpoint_saved: { sets: ["T", "R", "E"] },
   execution_planned: { sets: TLE },
   work_unit_transitioned: { sets: TLE },

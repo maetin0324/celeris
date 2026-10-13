@@ -137,7 +137,7 @@ pub(crate) fn parse_snake<T: DeserializeOwned>(what: &str, value: &str) -> Resul
 }
 
 /// `Event` の serde の `type` 名（`types` クエリの語彙）。
-pub(crate) const EVENT_TYPES: [&str; 82] = [
+pub(crate) const EVENT_TYPES: [&str; 83] = [
     "browser_updated",
     // ADR 2026-10-07-worker-no-subagents-no-llm-cli D5: subagent 道具・別 LLM CLI/API の起動の検出。
     "worker_policy_violation",
@@ -242,6 +242,7 @@ pub(crate) const EVENT_TYPES: [&str; 82] = [
     "trusted_device_used",
     "trusted_device_revoked",
     "trusted_device_rejected",
+    "routing_stage_changed",
     "browser_prerequisite_blocked",
     "browser_prerequisite_resumed",
     // ADR 2026-10-11 stranded branches: task の取り込み状態の変化（検出・merge・discard・hold・reopen）。
@@ -347,6 +348,7 @@ pub(crate) fn event_type_name(event: &Event) -> &'static str {
         Event::TrustedDeviceUsed { .. } => "trusted_device_used",
         Event::TrustedDeviceRevoked { .. } => "trusted_device_revoked",
         Event::TrustedDeviceRejected { .. } => "trusted_device_rejected",
+        Event::RoutingStageChanged { .. } => "routing_stage_changed",
     }
 }
 

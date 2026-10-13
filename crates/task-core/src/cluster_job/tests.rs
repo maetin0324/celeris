@@ -403,6 +403,7 @@ fn migration_0034_adds_cluster_job_waits_to_a_schema_33_db() {
              DROP TABLE chat_events; DROP TABLE chat_runs; \
              DROP TABLE chat_messages; DROP TABLE chat_threads; \
              DROP TABLE task_behind_targets; \
+             DROP TABLE routing_stage; DROP TABLE routing_evidence; \
              DROP TABLE run_write_sets; DROP TABLE work_unit_write_sets; \
              DROP TABLE task_write_hints; \
              DROP TABLE cluster_job_waits; \
@@ -444,7 +445,7 @@ fn migration_0034_adds_cluster_job_waits_to_a_schema_33_db() {
     }
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), crate::SCHEMA_VERSION);
-    assert_eq!(crate::SCHEMA_VERSION, 73);
+    assert_eq!(crate::SCHEMA_VERSION, 74);
     assert!(store.cluster_job_waits_waiting().unwrap().is_empty());
     assert!(store.get(t.id).unwrap().is_some());
 }

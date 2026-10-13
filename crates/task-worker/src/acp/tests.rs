@@ -197,7 +197,7 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":3,"result":{{"stopReason":"end_turn"}}}}'
 "#
         ),
     );
-    config.model = Some("celeris-proxy/celeris/cheap".into());
+    config.model = Some("celeris-proxy/qwen/qwen3.8-27b".into());
     config.env = vec![
         ("OPENCODE_CONFIG".into(), config_path.to_string_lossy().into_owned()),
         ("OPENCODE_CONFIG_CONTENT".into(),
@@ -956,10 +956,10 @@ async fn agent_message_chunks_are_coalesced_into_few_progress_lines() {
 
 /// `model` を指定すると `session/set_config_option` が送られ、値がそのまま渡る。
 #[tokio::test]
-async fn provider_kind_acp_sends_proxy_cheap_model_to_stub() {
+async fn provider_kind_acp_sends_proxy_model_to_stub() {
     let dir = tempfile::tempdir().unwrap();
     let config = AcpConfig {
-        model: Some("celeris/cheap".to_string()),
+        model: Some("qwen/qwen3.8-27b".to_string()),
         ..stub_acp(
             dir.path(),
             r#"
@@ -988,13 +988,13 @@ printf '%s\n' '{"jsonrpc":"2.0","id":4,"result":{"stopReason":"end_turn"}}'
     assert!(matches!(outcome.terminal, Terminal::Done { .. }));
     let received = std::fs::read_to_string(dir.path().join("received.log")).unwrap();
     assert!(received.contains("session/set_config_option"), "{received}");
-    assert!(received.contains("celeris/cheap"), "{received}");
+    assert!(received.contains("qwen/qwen3.8-27b"), "{received}");
     assert!(received.contains("\"configId\":\"model\""), "{received}");
 }
 
 /// `with_model` の複製は、config の model を置き換えて `session/set_config_option` に渡す。
 #[tokio::test]
-async fn with_model_sends_the_tier_model_instead_of_the_configured_one() {
+async fn with_model_sends_the_replacement_model_instead_of_the_configured_one() {
     let dir = tempfile::tempdir().unwrap();
     let config = AcpConfig {
         model: Some("configured/model".to_string()),
@@ -1017,7 +1017,7 @@ printf '%s\n' '{"jsonrpc":"2.0","id":4,"result":{"stopReason":"end_turn"}}'
         )
     };
     let adapter = AcpAdapter::new(config)
-        .with_model("qwen-local/tier-model")
+        .with_model("qwen-local/replacement-model")
         .expect("acp supports with_model");
     let req = sample_req(dir.path().to_path_buf());
     let sink = RecordingSink::default();
@@ -1027,7 +1027,10 @@ printf '%s\n' '{"jsonrpc":"2.0","id":4,"result":{"stopReason":"end_turn"}}'
         .unwrap();
     assert!(matches!(outcome.terminal, Terminal::Done { .. }));
     let received = std::fs::read_to_string(dir.path().join("received.log")).unwrap();
-    assert!(received.contains("qwen-local/tier-model"), "{received}");
+    assert!(
+        received.contains("qwen-local/replacement-model"),
+        "{received}"
+    );
     assert!(!received.contains("configured/model"), "{received}");
 }
 
@@ -1370,7 +1373,7 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":3,"result":{{"stopReason":"end_turn"}}}}'
     let mut config = stub_acp(dir.path(), &script);
     config.env = vec![(
         "OPENCODE_CONFIG_CONTENT".into(),
-        r#"{"model":"opencode/celeris/frontier","tools":{"task":true,"webfetch":true}}"#.into(),
+        r#"{"model":"opencode/opencode-go/grok-4.6","tools":{"task":true,"webfetch":true}}"#.into(),
     )];
     AcpAdapter::new(config)
         .run(
@@ -1383,7 +1386,7 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":3,"result":{{"stopReason":"end_turn"}}}}'
         .unwrap();
     let overlay: serde_json::Value =
         serde_json::from_slice(&std::fs::read(dir.path().join("overlay.json")).unwrap()).unwrap();
-    assert_eq!(overlay["model"], "opencode/celeris/frontier");
+    assert_eq!(overlay["model"], "opencode/opencode-go/grok-4.6");
     assert_eq!(overlay["tools"]["webfetch"], true);
     assert_eq!(overlay["tools"]["task"], false);
 
@@ -1424,7 +1427,7 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":3,"result":{{"stopReason":"end_turn"}}}}'
 "#
         ),
     );
-    config.model = Some("celeris-proxy/celeris/cheap".into());
+    config.model = Some("celeris-proxy/qwen/qwen3.8-27b".into());
     config.env = vec![(
         "OPENCODE_CONFIG_CONTENT".into(),
         r#"{"provider":{"celeris-proxy":{"options":{"baseURL":"http://127.0.0.1:18100/v1"}}}}"#

@@ -8,6 +8,18 @@ pub enum RoutingStage {
     Enforce,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct RoutingStageChange {
+    pub genre: String,
+    pub harness_id: String,
+    pub stage: RoutingStage,
+    pub since: String,
+    pub evidence_version: Option<String>,
+    pub reason: String,
+    pub window: serde_json::Value,
+    pub actor: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GuardrailReason {

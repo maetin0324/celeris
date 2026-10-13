@@ -1424,6 +1424,16 @@ pub enum Event {
         run_id: String,
         record: Box<crate::model_policy::RoutingRecord>,
     },
+    /// Selector stage transition, recorded with its persisted projection.
+    RoutingStageChanged {
+        genre: String,
+        harness_id: String,
+        from: Option<String>,
+        to: String,
+        reason: String,
+        window: serde_json::Value,
+        actor: String,
+    },
     /// 2026-10-04 多目的 routing ADR §6（Phase 3）: 決定 1 件の特徴 snapshot（本文・secret なし）。wire は
     /// `decision_id, context_version, features, provenance, missing_fields` が event の欄に平たく並ぶ。
     /// 状態は変えない（`replay` は無視する）。

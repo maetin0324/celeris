@@ -49,6 +49,26 @@ pub trait TaskStore:
     + crate::cron::CronJobStore
     + crate::store::ModelCatalogStore
 {
+    fn replace_routing_evidence(
+        &self,
+        version: &str,
+        rows: &[crate::route_select::EvidenceRow],
+    ) -> Result<(), StoreError>;
+    fn latest_routing_evidence(
+        &self,
+        genre: &str,
+        harness_id: &str,
+    ) -> Result<Vec<crate::route_select::EvidenceRow>, StoreError>;
+    fn routing_stage(
+        &self,
+        genre: &str,
+        harness_id: &str,
+    ) -> Result<crate::route_select::RoutingStage, StoreError>;
+    fn set_routing_stage(
+        &self,
+        task_id: TaskId,
+        change: &crate::route_select::RoutingStageChange,
+    ) -> Result<(), StoreError>;
     /// Extract and persist a content-addressed routing feature snapshot for a dispatch subject.
     fn record_route_features(
         &self,

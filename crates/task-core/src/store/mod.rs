@@ -120,6 +120,7 @@ mod projects;
 mod query;
 mod repos;
 mod route_records;
+mod routing_evidence;
 mod routing_log;
 mod routing_shadow;
 mod site_policies;

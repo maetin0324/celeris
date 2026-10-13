@@ -128,10 +128,7 @@ export function SourceDetailScreen() {
                 <ul className="space-y-2">
                   {query.data.deployments.map((d) => (
                     <li key={d.deployment_id}>
-                      <Link className="underline" to="/models" search={{ source: sourceId }}>
-                        {deploymentModelId(d.deployment_id)}
-                      </Link>{" "}
-                      — {d.reachability}
+                      {deploymentModelId(d.deployment_id)} — {d.reachability}
                     </li>
                   ))}
                 </ul>

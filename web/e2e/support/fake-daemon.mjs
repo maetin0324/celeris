@@ -2476,6 +2476,52 @@ export function createFakeDaemon({
     ...cronFixtures,
     ...defaultFixtures,
     "/api/v1/tasks/T1/routing": routingAuditFixture,
+    "/api/v1/routing/stages": {
+      stages: [
+        {
+          genre: "coding",
+          harness_id: "codex",
+          stage: "shadow",
+          since: "2026-10-12T10:00:00Z",
+          evidence_version: "ev-5",
+          latest_evidence_version: "ev-5",
+          last_change: {
+            actor: "human",
+            from: null,
+            reason: "評価を開始",
+            task_id: "T1",
+            to: "shadow",
+            ts: "2026-10-12T10:00:00Z",
+            window: { minimum_n: 30 },
+          },
+        },
+      ],
+    },
+    "/api/v1/routing/evidence": {
+      groups: [
+        {
+          genre: "coding",
+          harness_id: "codex",
+          evidence_version: "ev-5",
+          rows: [
+            {
+              harness_version: "1.2",
+              model_id: "claude-opus",
+              n: 40,
+              pass: 38,
+              pass_lower: 0.82,
+              pass_upper: 0.98,
+              qualifies: true,
+              quota_per_run: [],
+              source_id: "claude_oauth",
+              timeout_rate: 0.025,
+              usd_list_median: 0.02,
+              wall_median_s: 12,
+            },
+          ],
+        },
+      ],
+    },
     ...(profile === "rich" ? richFixtures() : {}),
     ...fixtures,
   };

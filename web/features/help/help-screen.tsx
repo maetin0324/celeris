@@ -111,12 +111,12 @@ export function HelpScreen() {
               <li>
                 <Link className={linkClass} to="/accounts">
                   アカウント
-                </Link>{" "}
-                と{" "}
-                <Link className={linkClass} to="/models" search={() => ({ source: undefined })}>
-                  モデル
-                </Link>{" "}
-                を含め、これらの設定変更は config で行います。
+                </Link>
+                の設定変更は config で行います。{" "}
+                <Link className={linkClass} to="/routing">
+                  Routing
+                </Link>
+                では段階と評価根拠を確認できます。
               </li>
             </ul>
           </Section>

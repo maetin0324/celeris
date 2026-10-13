@@ -139,7 +139,7 @@ completed: 2026-10-12
 | literature genre | `paperqa` | `claude_oauth / claude-opus-5-5` | 旧 `celeris/standard` の候補; Codex `gpt-6.1-sol` が次 |
 | research genre | `local-deep-research` | `qwen / qwen3.8-27b` | 旧 `celeris/cheap`; 次に Claude/Codex cheap |
 | LangMem 専用起動 | `langmem` | `qwen / qwen3.8-27b` | 旧 `celeris/cheap`; 次に Claude/Codex cheap |
-| CoS | `claude_code` | `claude_oauth / claude-opus-5-5` | `codex_oauth / gpt-6-astra` を fallback |
+| CoS | `claude_code` | `claude_oauth / claude-opus-5-5` | fallback なし（候補は Claude の 1 件。不適格なら fail closed。Codex へは落とさない） |
 | planner / reviewer execution class | `claude_code`, `codex` | Claude Opus、次に Codex 6.1 | admission 不可なら次候補、全候補不可なら defer |
 
 本番に反映する設定全文（既存の無関係な項目は保持し、placeholder は現在値に置換する）は次のとおり。秘密値は含めず、backup から endpoint/secret reference/path を転記する。

@@ -11,6 +11,8 @@ Celeris は source・model の候補と、task を実行する harness を別々
 
 `[llm_sources.<id>]` は接続先、API 形式、利用可能な model と account pool を宣言します。
 `[route_defaults.<harness>].candidates` は source/model の候補を優先順で並べます。
+lane 固有の優先列は同じ table の `[route_defaults.<harness>.lanes.<lane>]` に
+`candidates` として宣言します。該当 lane がない場合は harness 共通列を使います。
 候補は harness の API 形式と source kind の互換性、quota、cooldown、capacity を満たす
 ものから選ばれます。tier 名や model family から候補を推測することはありません。
 
@@ -35,6 +37,14 @@ capabilities = ["tools", "repo", "skills"]
 
 [route_defaults.claude_code]
 candidates = [{ source = "claude_oauth", model = "claude-opus-5-5" }]
+[route_defaults.claude_code.lanes.cheap]
+candidates = [{ source = "claude_oauth", model = "claude-opus-5-5" }]
+
+[route_selection]
+exploration_epsilon = 0.1
+guardrail_window = 50
+guardrail_quota_floor = 0.1
+evaluation_reservations = { claude_oauth = 1 }
 
 [harness_selection]
 execution_class_defaults = { coding = ["claude_code", "codex"], planner = ["claude_code", "codex"], review = ["claude_code", "codex"] }

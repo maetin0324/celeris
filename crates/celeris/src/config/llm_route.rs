@@ -60,6 +60,47 @@ pub struct LlmRouteConfig {
 pub struct RouteDefaultConfig {
     #[serde(default)]
     pub candidates: Vec<RouteCandidateConfig>,
+    #[serde(default)]
+    pub lanes: BTreeMap<String, RouteLaneDefaultConfig>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RouteLaneDefaultConfig {
+    #[serde(default)]
+    pub candidates: Vec<RouteCandidateConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RouteSelectionConfig {
+    #[serde(default = "default_epsilon")]
+    pub exploration_epsilon: f64,
+    #[serde(default = "default_window")]
+    pub guardrail_window: u64,
+    #[serde(default = "default_quota_floor")]
+    pub guardrail_quota_floor: f64,
+    #[serde(default)]
+    pub evaluation_reservations: BTreeMap<String, u32>,
+}
+fn default_epsilon() -> f64 {
+    0.1
+}
+fn default_window() -> u64 {
+    50
+}
+fn default_quota_floor() -> f64 {
+    0.1
+}
+impl Default for RouteSelectionConfig {
+    fn default() -> Self {
+        Self {
+            exploration_epsilon: default_epsilon(),
+            guardrail_window: default_window(),
+            guardrail_quota_floor: default_quota_floor(),
+            evaluation_reservations: BTreeMap::new(),
+        }
+    }
 }
 
 impl super::Config {
@@ -72,6 +113,17 @@ impl super::Config {
         use task_core::llm_route::*;
         let mut r = Registry {
             harness_selection: self.harness_selection.clone(),
+            route_selection: task_core::llm_route::RouteSelectionSettings {
+                exploration_epsilon: self.route_selection.exploration_epsilon,
+                guardrail_window: self.route_selection.guardrail_window,
+                guardrail_quota_floor: self.route_selection.guardrail_quota_floor,
+                evaluation_reservations: self
+                    .route_selection
+                    .evaluation_reservations
+                    .iter()
+                    .map(|(s, n)| (s.as_str().into(), *n))
+                    .collect(),
+            },
             ..Default::default()
         };
         for (id, s) in &self.llm_sources {
@@ -127,6 +179,19 @@ impl super::Config {
                     })
                     .collect(),
             );
+            for (lane, defaults) in &d.lanes {
+                r.lane_route_defaults.insert(
+                    (h.as_str().into(), lane.clone()),
+                    defaults
+                        .candidates
+                        .iter()
+                        .map(|c| CandidateKey {
+                            source: c.source.as_str().into(),
+                            model: c.model.as_str().into(),
+                        })
+                        .collect(),
+                );
+            }
         }
         r.cos_route_candidates = self
             .cos
@@ -142,6 +207,28 @@ impl super::Config {
     }
 }
 fn validate_registry(r: &task_core::llm_route::Registry) -> Result<(), ConfigError> {
+    if !(0.0..=1.0).contains(&r.route_selection.exploration_epsilon)
+        || !r.route_selection.exploration_epsilon.is_finite()
+    {
+        return Err(ConfigError::Invalid(
+            "route_selection.exploration_epsilon must be between 0 and 1".into(),
+        ));
+    }
+    if r.route_selection.guardrail_window == 0
+        || !(0.0..=1.0).contains(&r.route_selection.guardrail_quota_floor)
+    {
+        return Err(ConfigError::Invalid(
+            "route_selection guardrail window must be positive and quota floor between 0 and 1"
+                .into(),
+        ));
+    }
+    for source in r.route_selection.evaluation_reservations.keys() {
+        if !r.sources.contains_key(source) {
+            return Err(ConfigError::Invalid(format!(
+                "route_selection evaluation_reservations references undeclared source {source}"
+            )));
+        }
+    }
     for rule in &r.harness_selection.rules {
         if !r.harnesses.contains_key(&rule.harness) {
             return Err(ConfigError::Invalid(format!(
@@ -171,12 +258,20 @@ fn validate_registry(r: &task_core::llm_route::Registry) -> Result<(), ConfigErr
         }
     }
     for (h, spec) in &r.harnesses {
-        let mut seen = BTreeSet::new();
-        for candidate in r.route_defaults.get(h).into_iter().flatten() {
-            if !seen.insert((candidate.source.clone(), candidate.model.clone())) {
-                return Err(ConfigError::Invalid(format!(
-                    "duplicate route candidate for harness {h}"
-                )));
+        let columns = r.route_defaults.get(h).into_iter().chain(
+            r.lane_route_defaults
+                .iter()
+                .filter(|((id, _), _)| id == h)
+                .map(|(_, candidates)| candidates),
+        );
+        for column in columns {
+            let mut seen = BTreeSet::new();
+            for candidate in column {
+                if !seen.insert((candidate.source.clone(), candidate.model.clone())) {
+                    return Err(ConfigError::Invalid(format!(
+                        "duplicate route candidate for harness {h}"
+                    )));
+                }
             }
         }
         let _ = spec;
@@ -212,7 +307,11 @@ fn validate_registry(r: &task_core::llm_route::Registry) -> Result<(), ConfigErr
             )));
         }
     }
-    for (h, defaults) in &r.route_defaults {
+    for (h, defaults) in r
+        .route_defaults
+        .iter()
+        .chain(r.lane_route_defaults.iter().map(|((h, _), d)| (h, d)))
+    {
         let hs = r.harnesses.get(h).ok_or_else(|| {
             ConfigError::Invalid(format!("route_defaults references undeclared harness {h}"))
         })?;
@@ -304,6 +403,25 @@ candidates = [{ source = "main", model = "m1" }]
     }
 
     #[test]
+    fn lane_route_defaults_override_harness_default_and_settings_load() {
+        let text = DECLS.replace("candidates = [{ source = \"main\", model = \"m1\" }]", "candidates = [{ source = \"main\", model = \"m1\" }]\n[route_defaults.cli.lanes.cheap]\ncandidates = [{ source = \"main\", model = \"m1\" }]\n[route_selection]\nexploration_epsilon = 0.2\nguardrail_window = 70\nguardrail_quota_floor = 0.15\nevaluation_reservations = { main = 2 }");
+        let cfg = Config::parse_with_delivery(&text).unwrap();
+        let registry = cfg.llm_route_registry().unwrap();
+        assert_eq!(registry.route_defaults_for(&"cli".into(), "cheap").len(), 1);
+        assert_eq!(
+            registry.route_defaults_for(&"cli".into(), "frontier").len(),
+            1
+        );
+        assert_eq!(registry.route_selection.exploration_epsilon, 0.2);
+        assert_eq!(registry.route_selection.guardrail_window, 70);
+        assert_eq!(registry.route_selection.guardrail_quota_floor, 0.15);
+        assert_eq!(
+            registry.route_selection.evaluation_reservations[&"main".into()],
+            2
+        );
+    }
+
+    #[test]
     fn harness_decl_rejects_unknown_route_source() {
         let cfg = Config::parse_with_delivery(
             &DECLS.replace("source = \"main\"", "source = \"missing\""),
@@ -314,6 +432,29 @@ candidates = [{ source = "main", model = "m1" }]
                 .unwrap_err()
                 .to_string()
                 .contains("undeclared source")
+        );
+    }
+
+    #[test]
+    fn lane_route_defaults_reject_unknown_source_and_settings_reject_bad_values() {
+        let text = DECLS.replace("candidates = [{ source = \"main\", model = \"m1\" }]", "candidates = [{ source = \"main\", model = \"m1\" }]\n[route_defaults.cli.lanes.cheap]\ncandidates = [{ source = \"missing\", model = \"m1\" }]");
+        let cfg = Config::parse_with_delivery(&text).unwrap();
+        assert!(
+            cfg.llm_route_registry()
+                .unwrap_err()
+                .to_string()
+                .contains("undeclared source")
+        );
+        let text = DECLS.replace(
+            "[route_defaults.cli]",
+            "[route_selection]\nexploration_epsilon = 2.0\n[route_defaults.cli]",
+        );
+        let cfg = Config::parse_with_delivery(&text).unwrap();
+        assert!(
+            cfg.llm_route_registry()
+                .unwrap_err()
+                .to_string()
+                .contains("exploration_epsilon")
         );
     }
 

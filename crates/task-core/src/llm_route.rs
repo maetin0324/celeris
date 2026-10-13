@@ -109,8 +109,39 @@ pub struct Registry {
     pub harnesses: BTreeMap<HarnessId, HarnessSpec>,
     pub llm_routes: Vec<LlmRoute>,
     pub route_defaults: BTreeMap<HarnessId, Vec<CandidateKey>>,
+    /// Lane-specific human priorities override the harness-wide priority when present.
+    pub lane_route_defaults: BTreeMap<(HarnessId, String), Vec<CandidateKey>>,
+    pub route_selection: RouteSelectionSettings,
     pub cos_route_candidates: Vec<CandidateKey>,
     pub harness_selection: HarnessSelection,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RouteSelectionSettings {
+    pub exploration_epsilon: f64,
+    pub guardrail_window: u64,
+    pub guardrail_quota_floor: f64,
+    pub evaluation_reservations: BTreeMap<SourceId, u32>,
+}
+impl Default for RouteSelectionSettings {
+    fn default() -> Self {
+        Self {
+            exploration_epsilon: 0.1,
+            guardrail_window: 50,
+            guardrail_quota_floor: 0.1,
+            evaluation_reservations: BTreeMap::new(),
+        }
+    }
+}
+impl Registry {
+    pub fn route_defaults_for(&self, harness: &HarnessId, lane: &str) -> &[CandidateKey] {
+        self.lane_route_defaults
+            .get(&(harness.clone(), lane.to_owned()))
+            .or_else(|| self.route_defaults.get(harness))
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

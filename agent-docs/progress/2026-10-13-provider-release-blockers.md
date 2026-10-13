@@ -2,7 +2,7 @@
 title: provider 廃止リリースを本番に入れられる形にする — 不具合 5 件の修正と closeout
 tasks: [01M4T94XWN31GW9SENK41GAP8F]
 status: done
-completed: 2026-10-13（closeout5 で USERNS 無し全体検査・clippy・文書検査 3 本を再確認。USERNS=1 の証拠は `/local/prb/tp-usns-fix5.log`。配送修復（cargo fmt --check）は fmt-gate で整形のみ当て直した。未解決は下の事項 2（i）・3〜8）
+completed: 2026-10-13（closeout5 で USERNS 無し全体検査・clippy・文書検査 3 本を再確認。USERNS=1 の証拠は `/local/prb/tp-usns-fix5.log`。配送修復（cargo fmt --check）は fmt-gate で整形のみ当て直した。未解決は下の事項 2（i）・3〜6・8。事項 7 は db-probe で解消）
 updated: 2026-10-13
 ---
 
@@ -35,6 +35,7 @@ updated: 2026-10-13
   - `opencode-ns`: `[harnesses.opencode].model_namespace` を OpenCode ACP にだけ適用。空値・`/` を含む値は拒否。
   - `pi-fixture`: `celerisctl` の `worker_tests.rs` の Pi fixture に extensions・tools を足した。
 - `class-routes`（[class-routes.md](2026-10-13-provider-release-blockers/class-routes.md)、leaf: `core-dispatch`・`config`）: `[route_defaults.<h>].classes.<coding|planner|review>.candidates` を追加。class 列が宣言されていれば harness 既定の代わりに使い、fallback しない。claude_code の既定は `claude-sonnet-5-5`、coding だけ `claude-opus-5-5`。lane・tier・`RoutePolicy` は使わない。
+- `db-probe`（[db-probe.md](2026-10-13-provider-release-blockers/db-probe.md)）: `worker_db_read_only` の `run_db` は外側 run から継いだ `CELERIS_RUN_DB`（db_guard 不在時に daemon が空で明示するよう直し、子 celeris の起動で継ぐ env を `env_remove`）。raw write は一時 DB、本番影響なし（事項 7）。
 
 ## closeout の変更（前段から）
 
@@ -106,6 +107,20 @@ final review の sandbox では `unshare -Ur` が Operation not permitted にな
 
 葉の check を条件 4 の証拠とする。reviewer は sandbox での再実行の失敗では判定しない。log に `"userns": true` が無いか、失敗が 1 件でもあれば不合格。release gate でも同じ試験が流れる。
 
+## worker_db_read_only の原因確定（db-probe）
+
+- 原因（file:line は事項 7 と [db-probe](2026-10-13-provider-release-blockers/db-probe.md)）: `run_db` は外側の run の `CELERIS_RUN_DB`。db_guard 不在の daemon は値を足さず、子が親環境を継いだ。raw write 先は一時 DB。injected は外側の follow-up に流れていない。本番 DB は読まず・書いていない。
+- 修正: `crates/task-dispatch/src/dispatcher/followups.rs:37-41`（空で明示）、試験 `dispatcher::followups::tests::inherited_run_db_is_cleared_when_db_guard_is_unavailable`（userns 不要）、`tests/e2e/tests/worker_db_read_only.rs:263-268`（`env_remove` 4 件）。
+- 証拠（この葉・closeout の再確認）:
+  - `CELERIS_USERNS_TESTS=1 cargo test -p e2e --test worker_db_read_only -- --exact a_codex_worker_run_cannot_write_the_daemon_db_but_can_read_it_with_celerisctl` → `test result: ok. 1 passed; 0 failed`（exit 0。`cargo build -p celeris -p celerisctl` の後。`unshare -Ur true` は exit 0 の host）。
+  - `cargo test -p task-dispatch --lib -- --exact dispatcher::followups::tests::inherited_run_db_is_cleared_when_db_guard_is_unavailable` → `1 passed`（exit 0）。
+  - 試験の USERNS 無しの実行は `SKIPPED`（ADR-0126 A3 の opt-in）。
+- 全体検査（db-probe の葉、USERNS 無し。log は `artifacts/tp-nouserns-db-probe.log`）:
+  - `bash scripts/dev/test-parallel.sh` → exit 0。`CELERIS_TEST_SUMMARY`: nextest passed 5041、failed 0、ignored 14、`nextest_exit 0`、`doctest_exit 0`、`userns: null`。
+  - `cargo clippy --workspace -- -D warnings` → exit 0（`Finished dev profile`、警告なし。log は `artifacts/clippy-db-probe.log`）。
+  - `cargo fmt --all -- --check` → exit 0。
+  - `sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv` → `check-doc-layout: ok`（exit 0）。`sh scripts/dev/check-doc-links.sh` → `check-doc-links: ok`（exit 0）。`sh scripts/dev/check-adr-numbers.sh` → `check-adr-numbers: ok (198 files)`（exit 0）。`sh scripts/dev/progress-index.sh --check` → `progress-index --check: ok`（exit 0）。
+
 ## 未解決事項
 
 1. **CoS の Codex fallback — 決定・対応済み。** `cos-codex` は (a) Claude のみ。ADR 付記・runbook・進捗 TOML・`migration_runbook_toml_loads` を一致させ、CoS route は `claude_oauth / claude-opus-5-5` の 1 件にした。詳細は [align-cos](2026-10-13-provider-release-blockers/cos-fallback/align-cos.md) と [adr-note](2026-10-13-provider-release-blockers/cos-fallback/adr-note.md)。
@@ -114,7 +129,7 @@ final review の sandbox では `unshare -Ur` が Operation not permitted にな
 4. **coding class は opus 1 件だけ。** opus が使えないと sonnet へは落ちず、claude_code が飛ばされて Codex へ行く。sonnet を 2 番目に入れるかは人が決める。
 5. **daemon の `GET /api/v1/harnesses` は class 候補を出さない。** runbook 手順 6 の jq では coding class は見えないので、確認は `routing show`（手順 3）で行う。
 6. **Pi の値は本番 backup からの転記が要る。** Hashline extension path と tool 名（read/edit）、env・env_from_secrets は、runbook では placeholder。checkout に旧 `pi-*` の実値は無かった。placeholder のまま `routing show` を通すと Pi 宣言の値が誤るので、転記してから検査する。
-7. **前回の全体検査で出た `e2e::worker_db_read_only` の失敗は原因未確認。** `h3-userns.md` によれば、修正前の USERNS 全体実行（5001 passed、34 failed）でこの試験が落ち、出力は `run_db=/local/celeris/data/db/celeris.sqlite3` と `raw_db_write_exit=0` / `raw_wal_write_exit=0` を示した。本 WU の 2 回の全体実行では落ちなかったが、ログは summary 行だけで個別の結果を確かめられない。live DB への書き込みが通ったように読める出力なので、試験の出力を単独で再現して確かめる必要がある。
+7. **解消（`e2e::worker_db_read_only` の `run_db` 出力）。** 原因: 試験の子 celeris が設定した値ではなく、外側の run（worker を起こした daemon の run）から継いだ `CELERIS_RUN_DB`。db_guard が入らない daemon（userns が作れない h3-userns の全体実行）は `CELERIS_RUN_DB` を足さず（`crates/task-dispatch/src/dispatcher/followups.rs:35-36`）、子の claude_code は親環境を継ぐ（`crates/task-worker/src/claude_code.rs:522`）ため、外側の本番 path が stub に届いた。`raw_db_write_exit=0` / `raw_wal_write_exit=0` の書き先は試験の一時 DB（`tests/e2e/tests/worker_db_read_only.rs:154`）で、本番 DB への書き込みではない。injected follow-up は外側の follow-up へ流れず（`crates/celerisctl/src/main.rs:268-278`、`--db` 明示の一時 DB に書かれた）、h3-userns の run 配下に followups.json は無い。本番影響なし（本番 DB は読まず・書かず、本番確認は不要）。修正: 本体は db_guard 不在時に `CELERIS_RUN_DB` を空で明示（`followups.rs:37-41`、試験 `inherited_run_db_is_cleared_when_db_guard_is_unavailable`、userns 不要）。試験は子 celeris の起動で `CELERIS_RUN_DB`・`CELERIS_FOLLOWUPS_FILE`・`CELERIS_TASK_ID`・`CELERIS_RUN_ID` を `env_remove` で消す（`tests/e2e/tests/worker_db_read_only.rs:263-268`）。詳細と証拠は [db-probe](2026-10-13-provider-release-blockers/db-probe.md) と下の「worker_db_read_only の原因確定」。
 8. **`CELERIS_TEST_SUMMARY` の `passed` 欄が USERNS 版で `3` になる。** 集計の解析が途中で止まる不具合で、`scripts/dev/test-parallel.sh` の要約行の解析を直す作業。検査の判定は nextest の Summary 行を使う。
 
 ## 提案

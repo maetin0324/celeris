@@ -241,6 +241,7 @@ fn routing_old_events_deserialize_without_optimizer() {
     let task = crate::model_policy::tests::task("test", vec![]);
     let decision = crate::model_policy::decide_for_task(&task, &Default::default()).unwrap();
     let mut record = crate::model_policy::RoutingRecord {
+        features: None,
         org_node: None,
         harness: None,
         decision,
@@ -382,6 +383,7 @@ fn routing_trace_fields_are_additive() {
     let task = crate::model_policy::tests::task("test", vec![]);
     let decision = crate::model_policy::decide_for_task(&task, &Default::default()).unwrap();
     let record = crate::model_policy::RoutingRecord {
+        features: None,
         org_node: None,
         harness: None,
         decision,

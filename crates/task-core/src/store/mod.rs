@@ -115,6 +115,7 @@ mod org;
 mod projects;
 mod query;
 mod repos;
+mod route_records;
 mod routing_log;
 mod routing_shadow;
 mod site_policies;
@@ -139,6 +140,9 @@ use migrations::{
     MIGRATION_0007, MIGRATION_0008, MIGRATION_0009, MIGRATION_0010, MIGRATION_0011,
 };
 pub use query::{ListFilter, ListOrder, Page};
+pub use route_records::{
+    RouteDecisionRow, StoredRouteDecision, StoredRouteJudgment, StoredRouteOutcome,
+};
 pub use routing_log::RoutingCorrelation;
 pub use task_store::TaskStore;
 

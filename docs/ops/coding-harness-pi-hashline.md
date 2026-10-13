@@ -76,7 +76,7 @@ extensions/tools の未指定・OAuth pool 指定は daemon 起動時の config 
   `model` が別欄で出る。`harness` 欄は genre（`coding`）なので比較には `adapter` 欄を使う。
 - 選ばれ方: 監査の `adapter_choice`（explicit / preferred / fallback と理由 / provider_order）で、既定解決で選ばれたか
   fallback に倒れたかが分かる。fallback が多ければ Pi 行の枠・cooldown を疑う。
-- 比較: `celerisctl routing export --db <backup の写し>` → `celerisctl routing evaluate`（`docs/ops/model-routing-migration.md` §9。読み取り専用）。
+- 記録の確認: `celerisctl routing export --db <backup の写し> --out <training.jsonl>`（読み取り専用。brief を含めない場合は `--text none`）。
   success・token・cache-hit・cost は run の usage（Pi は `message_end` の `usage` を合算）から (model, adapter) で集計する。
 - 注意: proxy 経由 run の `model` は lane 名（`celeris/<tier>`）で実 model ではないので別群に分ける。task 単位の
   `GET /metrics/execution` は adapter で group しない（ADR「metrics 整合」）。

@@ -290,6 +290,7 @@ mod tests {
         });
         let decision = decide_for_task(&t, &LaneCeiling::default()).unwrap();
         let record = crate::model_policy::RoutingRecord {
+            features: None,
             org_node: Some("software-engineering".into()),
             harness: Some("coding".into()),
             decision: decision.clone(),
@@ -422,6 +423,7 @@ mod tests {
         trace.run_id = Some("r1".into());
         let record = |trace: Option<crate::model_router::trace::RoutingTraceV1>| {
             Box::new(crate::model_policy::RoutingRecord {
+                features: None,
                 org_node: None,
                 harness: None,
                 decision: decision.clone(),

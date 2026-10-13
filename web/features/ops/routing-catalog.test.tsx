@@ -17,7 +17,10 @@ describe("routing catalog（ADR 2026-10-04-multi-objective-model-routing §10 Ph
     expect(out).toContain('aria-label="model qwen3-coder"');
     expect(out).toContain('aria-label="deployment openai-compatible:qwen/qwen3-coder"');
     expect(out).toContain("Qwen/Qwen3-Coder");
-    expect(out).toContain("celeris/cheap");
+    // deployment の lane は lane 名そのもの（旧 tier alias の接頭辞は出さない）。
+    expect(out).toContain('lane: </dt><dd class="inline"><span>cheap</span>');
+    expect(out).toContain('lane: </dt><dd class="inline"><span>frontier, standard</span>');
+    expect(out).not.toContain("celeris/");
 
     // 欠測の価格・品質・能力・context は「不明」。
     const qwen = out.slice(

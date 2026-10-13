@@ -218,6 +218,7 @@ fn plan_children_runs_the_delegation_checks_and_asks_before_crossing_departments
 fn make_task(parent_id: Option<TaskId>, status: Status) -> Task {
     let t = now();
     Task {
+        harness_id: None,
         requirements: Default::default(),
         tree: None,
         paused_at: None,
@@ -237,7 +238,6 @@ fn make_task(parent_id: Option<TaskId>, status: Status) -> Task {
         priority: 3,
         worker_hint: WorkerHint {
             tier: Tier::Frontier,
-            adapter: Some("fake".into()),
         },
         workspace: WorkspaceSpec::Local {
             path: PathBuf::from("/tmp/ws"),
@@ -277,7 +277,7 @@ fn accepts_proposals_maps_index_deps_and_applies_role_defaults() {
     let roles = vec![RoleSpec {
         id: "implementer".into(),
         tier: Some(Tier::Cheap),
-        adapter: Some("codex".into()),
+        harness: Some("codex".into()),
         max_turns: None,
         max_wall_secs: None,
         instructions: None,

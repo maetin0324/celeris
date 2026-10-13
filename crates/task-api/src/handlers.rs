@@ -1,4 +1,4 @@
-//! ルーティングとハンドラ（`docs/api/v1/gui-api.md` §2〜§3）。HTTP の写像だけを行い、判断は task-ops / ストアに任せる。
+//! ルーティングとハンドラ（`docs/api/v1/api.md` §2〜§3）。HTTP の写像だけを行い、判断は task-ops / ストアに任せる。
 
 use axum::Router;
 use axum::body::Body;
@@ -24,7 +24,7 @@ pub(crate) mod accounts;
 pub(crate) mod clusters;
 pub(crate) mod org;
 pub(crate) mod projects;
-pub(crate) mod providers;
+pub(crate) mod reload;
 mod secrets;
 pub(crate) mod system;
 pub(crate) mod task_actions;
@@ -33,8 +33,7 @@ pub(crate) mod tasks;
 
 use accounts::{
     accounts, cancel_account_login, check_account, create_account, delete_account,
-    patch_account_limit, patch_account_limit_check, patch_account_limit_login, start_account_login,
-    submit_account_login_code,
+    patch_account_limit, start_account_login, submit_account_login_code,
 };
 use clusters::{
     cancel_cluster_connect, clusters, put_cluster_settings, start_cluster_connect,
@@ -44,9 +43,7 @@ use org::{create_org_node, delete_org_node, org_list, patch_browser_settings, pa
 use projects::{
     create_milestone, create_project, patch_milestone, patch_project, project_detail, project_list,
 };
-use providers::{
-    check_provider, create_provider, delete_provider, patch_provider, providers, reload,
-};
+use reload::reload;
 use secrets::{delete_secret, put_secret, secrets_list};
 use system::{config, create_plan, daemon, graph, health, inbox, metrics_scratch, replay, schema};
 use task_actions::{
@@ -101,37 +98,29 @@ pub(crate) fn router(state: ApiState) -> Router {
         .route("/api/v1/tasks/{id}/retry", post(retry))
         .route("/api/v1/plans", post(create_plan))
         .route("/api/v1/replay", post(replay))
+        .route("/api/v1/reload", post(reload))
         .route("/api/v1/graph", get(graph))
         .route("/api/v1/events", get(events))
         .route("/api/v1/stream", get(crate::sse::stream))
-        .route("/api/v1/providers", get(providers).post(create_provider))
+        .route("/api/v1/llm/accounts", get(accounts))
         .route(
-            "/api/v1/providers/{id}",
-            patch(patch_provider).delete(delete_provider),
-        )
-        .route("/api/v1/providers/{id}/check", post(check_provider))
-        .route("/api/v1/reload", post(reload))
-        .route("/api/v1/accounts", get(accounts).post(create_account))
-        .route("/api/v1/accounts/{id}", delete(delete_account))
-        // ADR 2026-10-08 account-concurrency-limits §(d): `PATCH /accounts/{adapter}/{id}`。最初の段の引数名は
-        // 既存の路と同じ `{id}`（意味は adapter）。静的な `check` / `login` が優先されるので、その id の PATCH は
-        // それぞれの路で受ける。
-        .route(
-            "/api/v1/accounts/{id}/{account}",
-            patch(patch_account_limit),
+            "/api/v1/llm/sources/{source_id}/accounts",
+            post(create_account),
         )
         .route(
-            "/api/v1/accounts/{id}/check",
-            post(check_account).patch(patch_account_limit_check),
+            "/api/v1/llm/sources/{source_id}/accounts/{account_id}",
+            delete(delete_account).patch(patch_account_limit),
         )
         .route(
-            "/api/v1/accounts/{id}/login",
-            post(start_account_login)
-                .delete(cancel_account_login)
-                .patch(patch_account_limit_login),
+            "/api/v1/llm/sources/{source_id}/accounts/{account_id}/check",
+            post(check_account),
         )
         .route(
-            "/api/v1/accounts/{id}/login/code",
+            "/api/v1/llm/sources/{source_id}/accounts/{account_id}/login",
+            post(start_account_login).delete(cancel_account_login),
+        )
+        .route(
+            "/api/v1/llm/sources/{source_id}/accounts/{account_id}/login/code",
             post(submit_account_login_code),
         )
         .route("/api/v1/clusters", get(clusters))
@@ -195,6 +184,8 @@ pub(crate) fn router(state: ApiState) -> Router {
         .merge(crate::timeline::routes())
         // ADR-0069 D5: タスクの routing の監査。実装は `crate::routing`。
         .merge(crate::routing::routes())
+        // ADR 2026-10-11 D3: genre×harness の段階・根拠表と人の段階変更。
+        .merge(crate::routing_stage::routes())
         // ADR-0080 D5: browser の人待ち（登録依頼・承認）。
         .merge(crate::browser::routes())
         .merge(crate::browser_readiness::routes())
@@ -210,13 +201,12 @@ pub(crate) fn router(state: ApiState) -> Router {
         .merge(crate::console::routes())
         // ADR-0053 D4（Phase 65）: LLM source の観測。実装は `crate::llm_sources`。
         .merge(crate::llm_sources::routes())
-        .merge(crate::routing_catalog::routes())
         // ADR 2026-10-11-llm-source-model-routing-evaluation 付記 2026-10-12（eval-dispatch 契約 2）:
         // 評価 run の試行の投入・一覧・取消。実装は `crate::routing_eval`。
         .merge(crate::routing_eval::routes())
+        .merge(crate::harnesses::routes())
         // ADR 2026-10-06 D5: モデル catalog。実装は `crate::model_catalog`。
         .merge(crate::model_catalog::routes())
-        .merge(crate::model_assignments::routes())
         // ADR-0056 D4（Phase 78）: MCP クライアント / 呼び出しログの観測。実装は `crate::mcp_admin`。
         .merge(crate::mcp_admin::routes())
         // ADR-0056 D3 続き（Phase 82）: skills を GUI から見る・作る・mount する。実装は `crate::skills`。

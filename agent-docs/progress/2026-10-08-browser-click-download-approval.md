@@ -28,7 +28,7 @@ ADR `agent-docs/adr/2026-10-08-browser-click-download-approval-policy.md`（状�
   schema 再生成（`docs/api/v1/api-v1.schema.json`、`docs/protocol/worker-protocol.schema.json`、`web/api/generated/*`）。
 - web `/browser/settings`: 「毎回の承認が要る操作」の checkbox（click / download、既定どちらも外れ、credential_use は
   常に承認と明記、承認待ち 30 分の説明）。確認 dialog にも載る。`fake-daemon.mjs` が `approval_actions` を受ける。
-- 文書: `docs/SPEC.md` §3.6 に既定を 1 文、`docs/api/v1/gui-api.md`（期限 30 分・承認対象の規則）、
+- 文書: `docs/SPEC.md` §3.6 に既定を 1 文、`docs/api/v1/api.md`（期限 30 分・承認対象の規則）、
   `docs/ops/browser-department.md` §3（`approval_actions`）、ADR-0080 に上書きの参照。
   `config/skills/cos-operator/SKILL.md` には browser 承認の説明が無いので変更なし。
 - 監査（受け入れ 0 の「event・session 記録に残る」）: 経路は変えていない。承認なしの click/download も control gate
@@ -87,7 +87,7 @@ ADR `agent-docs/adr/2026-10-08-browser-click-download-approval-policy.md`（状�
   `consume_operation_approval`。
 - web `/browser/settings`: checkbox の説明を「押す前に毎回承認待ちになります。承認すると同じ session で一度だけ押します」
   （download も同様）に、期限の説明に受信箱の案内を加えた（レビューの指摘 2）。
-- 文書: ADR D2・§3・§4 付記、`docs/SPEC.md` §3.6、`docs/ops/browser-department.md` §3、`docs/api/v1/gui-api.md`。
+- 文書: ADR D2・§3・§4 付記、`docs/SPEC.md` §3.6、`docs/ops/browser-department.md` §3、`docs/api/v1/api.md`。
 
 ### 追加した試験
 

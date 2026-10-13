@@ -2640,6 +2640,7 @@ mod live_frame_tests {
             artifacts_dir: workspace.join("artifacts"),
             context: Default::default(),
             cargo_target_dir: None,
+            llm_route: None,
         }
     }
 

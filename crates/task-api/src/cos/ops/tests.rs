@@ -197,7 +197,7 @@ fn cos_ops_registry_classifies_every_mutation_as_allowed_or_excluded() {
         "router extractor returned no mutations"
     );
     let documented = api_table_inventory(
-        &std::fs::read_to_string(root.join("docs/api/v1/gui-api.md")).expect("API docs"),
+        &std::fs::read_to_string(root.join("docs/api/v1/api.md")).expect("API docs"),
     );
     assert!(
         !documented.is_empty(),

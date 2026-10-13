@@ -23,6 +23,7 @@ fn now() -> OffsetDateTime {
 fn sample_task(kind: TaskKind, status: Status) -> Task {
     let now = now();
     Task {
+        harness_id: None,
         requirements: Default::default(),
         tree: None,
         paused_at: None,
@@ -48,7 +49,6 @@ fn sample_task(kind: TaskKind, status: Status) -> Task {
         priority: 0,
         worker_hint: task_core::WorkerHint {
             tier: Tier::Standard,
-            adapter: None,
         },
         workspace: WorkspaceSpec::Local {
             path: "workspace".into(),
@@ -210,7 +210,7 @@ fn fixture() -> Fixture {
     inbox.drafts.push(DraftGroup {
         parent: Some(tref.clone()),
         plan_summary: Some("子を 1 つ作る".to_string()),
-        drafts: vec![view::build_task_summary(&draft, 0, 0, &ctx, now())],
+        drafts: vec![view::build_task_summary(&draft, 0, Vec::new(), &ctx, now())],
         project_plan: None,
     });
     inbox.drafts.push(DraftGroup {

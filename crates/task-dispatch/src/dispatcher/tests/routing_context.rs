@@ -298,17 +298,25 @@ async fn routing_context_is_registered_recorded_once_and_released_at_run_end() {
     });
     store.insert(&task).unwrap();
     let registry = Arc::new(RecordingRegistry::default());
-    let mut d = dispatcher(store.clone(), three_lane_adapter(), 1);
+    let adapter: Arc<dyn WorkerAdapter> = Arc::new(InstantAdapter {
+        terminal: Terminal::Question {
+            text: "not needed".into(),
+        },
+        delay: Duration::ZERO,
+    });
+    let mut d = dispatcher(store.clone(), adapter, 1);
     d.set_routing_context_registry(registry.clone());
     d.tick().unwrap();
 
     let events = store.events_for(task.id).unwrap();
-    let record = routing_record(&events).expect("routing_decided");
-    let decision_id = record
-        .optimizer
-        .as_ref()
-        .map(|t| t.decision_id.clone())
-        .expect("optimizer trace");
+    let run_id = events
+        .iter()
+        .find_map(|(_, e)| match e {
+            Event::RoutingDecided { run_id, .. } => Some(run_id.clone()),
+            _ => None,
+        })
+        .expect("routing_decided");
+    let decision_id = format!("run:{run_id}");
     let features: Vec<_> = events
         .iter()
         .filter_map(|(_, e)| match e {

@@ -5,7 +5,7 @@ title: LLM source・model の選択を評価に基づく決定的な方式に作
 # ADR: LLM source・model の選択を評価に基づく決定的な方式に作り直す
 
 - Date: 2026-10-11
-- Status: Accepted（design 段。実装は build・evaluate・land 段）
+- Status: Accepted（design 段。selector 段は実装済み 2026-10-13: 根拠表・route_select・段階・guardrail・legacy 撤去。eval-harness・evaluate・land 段は未）
 - 決定者: 人（2026-10-11 の運用セッション「既存のルーティングシステムの評価方法などを改めて調査し、モデルの評価方法の知見を踏まえて、ちゃんと動作させられるようにする」「source・model の選択と harness の選択を別々にする」）
 - 先行: 先行 task 01M4M8D4AP の ADR `2026-10-11-llm-source-harness-selection.md`（branch `celeris/01M4M8D4AP4YY4F9TV09HG30SJ`。main 取り込み前のためリンクにしない。provider の廃止、harness の選択、`RoutePolicy` 境界）、[2026-10-11-breaking-changes-by-default.md](2026-10-11-breaking-changes-by-default.md)
 - 根拠: 調査報告 `routing-evaluation-survey.md`（task 01M4M8D4AQ の artifacts。コード・本番 DB の実データ・出典 28 件）
@@ -164,6 +164,8 @@ runner は dispatcher・store に LLM 呼び出しを入れない（LLM を呼�
 `RoutePolicy` 実装を差し替えるだけにする。guardrail の判定は daemon の tick で決定的に行う（LLM を呼ばない）。
 D4 の削除は同じ unit で行う。
 
+**実装の付記（2026-10-13）。** 既存の `crates/task-core/src/routing.rs` は ADR-0061 の harness 骨格として使用中のため、選択器の配置先は名前の衝突を避けて `crates/task-core/src/route_select/` とする。D5 の `routing/` はこのモジュールへ読み替える。
+
 **判断 record と学習データ（build 段 `task-features`）。** task の記述（`celeris.task-features/1`、自然言語の brief が主・aux が補助）・選択肢・判断・結果の表、`celerisctl routing export` の JSONL、`RouteInput`／`RouteOutput` の境界は [2026-10-11-task-routing-features.md](2026-10-11-task-routing-features.md) に従う。評価 runner は manifest 作成時に各問題へ同じ template の features を付け、評価 run の割り当ても同じ判断 record（`stage="eval"`）で残す。
 
 **境界。** runner → selector は DB の `routing_evidence` だけで結ぶ（runner が selector の型に依存しない。selector が runner を呼ばない）。
@@ -197,7 +199,7 @@ D4 の削除は同じ unit で行う。
 
 D1 の評価 run を Celeris の run 経路で起こす受け口の形を固定する（task 01M4Q7C4X2QR3HYPTTQAG5GXQ9）。後続の実装が食い違えばこの節に具体的に追記する。
 
-1. **表 `eval_trials`（migration 0072）**: 1 行 = 1 試行（harness 固定・source×model 固定・新 session・新 worktree の評価 run 1 本）。
+1. **表 `eval_trials`（migration 0076。統合前の番号 0072）**: 1 行 = 1 試行（harness 固定・source×model 固定・新 session・新 worktree の評価 run 1 本）。
    列は trial_id（ULID）・batch_id（1 回の投入 = 1 batch）・manifest_sha・problem_id・trial_no・source_id・model_id・harness_id・
    harness_version（起動時に埋める）・repo・base_commit・objective（worker に見せる本文）・check_cmd（採点専用、worker に渡さない）・
    check_timeout_secs・status・run_id・decision_id・worktree_path・check_exit・timed_out・error・created_at・started_at・finished_at。
@@ -249,8 +251,8 @@ D5 の評価 runner（crate `routing-eval`、bin `celeris-routing-eval`）と根
    問題の欄は `id`・`task_id`・`work_unit_id`・`created_at`・`genre`・`kind`・`command`（採点用の check。manifest 以外には出さない）・`split`・`stratum`・`subset_12`・`base_commit`・`head_commit`・`features`（`celeris.task-features/1`、作成時点 as_of）・`features_sha256`・問題ごとの `sha256`。
    `recheck` は各問題の check を base で失敗・head で成功と再実行で検め、結果を manifest の `recheck` 欄に書く（除外理由つき）。同じ `version` で sha256 が違う上書きは拒否し、`--version` を上げさせる。
    集合の内訳は ADR D1 の表どおり: 通常 5 model は 30 問（k=2）、fable・astra は 30 問の層を保つ 12 問（k=1）。候補の表は `candidates.rs` の `CANDIDATES` 定数 7 件だけ。
-3. **根拠表 `routing_evidence`（migration 0071 + 付記 migration 0073）**: 列は `genre`・`harness_id`・`harness_version`（major）・`source_id`・`model_id`・`evidence_version`・`n`・`pass`・`pass_lower`・`pass_upper`（Wilson 95%）・`pass_boot_lower`・`pass_boot_upper`（問題単位 bootstrap 95%、seed 42、2000 resamples）・`wall_median_s`・`usd_list_median`・`quota_per_run_json`（窓→率の JSON）・`timeout_rate`・`low_confidence`（k=1・部分集合）。根拠表 Markdown、aggregate JSON、特徴量つき trial export にも Wilson と bootstrap を併記する。
-   主キーは鍵 + `evidence_version`。`evidence_version` は `<manifest sha256>-<集計日 UTC>`。同じ版は丸ごと置換し、別の版は追記する（store の `insert_routing_evidence` / `list_routing_evidence`）。
+3. **根拠表 `routing_evidence`（統合後は migration 0074 + 0077。付記 2026-10-13 を見よ）**: 列は `genre`・`harness_id`・`harness_version`（major）・`source_id`・`model_id`・`evidence_version`・`n`・`pass`・`pass_lower`・`pass_upper`（Wilson 95%）・`pass_boot_lower`・`pass_boot_upper`（問題単位 bootstrap 95%、seed 42、2000 resamples）・`wall_median_s`・`usd_list_median`・`quota_per_run_json`（窓→率の JSON）・`timeout_rate`・`low_confidence`（k=1・部分集合）。根拠表 Markdown、aggregate JSON、特徴量つき trial export にも Wilson と bootstrap を併記する。
+   主キーは鍵 + `evidence_version`。`evidence_version` は `<manifest sha256>-<集計日 UTC>`。同じ版は丸ごと置換し、別の版は追記する（store の `replace_routing_evidence` / `latest_routing_evidence`。付記 2026-10-13）。
    書くのは `aggregate --write-evidence` だけ。API と GUI に編集経路は作らない（ADR D2 の「手で編集しない」）。
 4. **評価 run の DB 契約（付記 2026-10-12 の 4 と同じ。aggregate が読む側）**: 1 試行 = `route_decisions` 1 行（stage `eval`、subject_kind `eval_problem`、input `{manifest_sha, trial_no, candidate}`、output `{selected:{source_id, model_id, harness_id, harness_version}}`）＋ `runs` 1 行（role `eval`、run_id で結合）＋ `route_outcomes`（passed・check_exit・timed_out・wall_secs・usage・usd_list）。aggregate は決定的 check の判定・timeout・token・quota を集め、同じ鍵の試行を問題単位で束ねて `stats` に渡す。
 5. **dry-run の見積り**: 呼び出し数は問題数 × k、account ごとに合算する。定価換算 USD は本番 runs の model 別の token 中央値に単価表（`dryrun.rs` の定数。claude 4 model のみ）を掛ける。codex の 2 model は単価が無いので USD を出さず「未算定」と書く。quota は `quota_estimated` のうち `method=measured` の行だけを率にする（無ければ「未測定」）。`--measured` は 10 run 実測の JSON（`runs` = 10 が必須）で率を置き換える。週窓の率が 15% を越える account は縮小案を出す。
@@ -270,8 +272,18 @@ D5 の評価 runner（crate `routing-eval`、bin `celeris-routing-eval`）と根
 
    評価 run の trial は候補ごとに固定の harness で起こす（claude 4 候補は claude-code、codex 3 候補は codex）。`eval_trials` の UNIQUE 鍵と `route_decisions` の output に harness_id を残す。
    比較は harness の中だけで行う（`aggregate` の paired 比較は harness が違う組を作らない）。試験は `run::tests::candidates_expand_k_and_subset_and_keep_checks_out_of_objective` と `aggregate::tests::paired_comparisons_never_cross_harnesses` が固定する。
-2. **cell の区間は Wilson と問題単位 bootstrap の 2 本**: 根拠行（`EvidenceRow`）の `pass_lower`・`pass_upper`（Wilson 95%）と並べて `pass_boot_lower`・`pass_boot_upper`（問題単位の bootstrap 95%、seed 42・2,000 resamples、各問題の最初の試行を 1 標本とする）を持つ。`routing_evidence`（migration 0073）・aggregate の JSON と Markdown 根拠表・JSONL export に同じ欄で出す。bootstrap は cell 単位の区間であり、paired 差の区間（比較用）の代わりにはしない。
+2. **cell の区間は Wilson と問題単位 bootstrap の 2 本**: 根拠行（`EvidenceRow`）の `pass_lower`・`pass_upper`（Wilson 95%）と並べて `pass_boot_lower`・`pass_boot_upper`（問題単位の bootstrap 95%、seed 42・2,000 resamples、各問題の最初の試行を 1 標本とする）を持つ。`routing_evidence`（統合後は migration 0077）・aggregate の JSON と Markdown 根拠表・JSONL export に同じ欄で出す。bootstrap は cell 単位の区間であり、paired 差の区間（比較用）の代わりにはしない。
 3. **dry-run の扱いは変えない**: 呼び出し数・定価換算・quota の見積りは dry-run（`celeris-routing-eval dry-run`）の出力のままで、LLM を呼ぶ評価 run は本 ADR の付記 2026-10-12（eval-dispatch）の 7 と同じく人の決定待ち。
+
+## 付記 2026-10-13: 選択器（selector）と評価 runner の統合
+
+子 task selector（01M4Q53EHAF7BS9V3QMM1WY352）と親 task の評価 runner（eval-harness）が同じ表 `routing_evidence` を別々に作っていたので、統合で 1 つにした。
+
+1. **表は 1 つ**: 作るのは selector の migration 0074（`routing_evidence`・`routing_stage`）。評価 runner の欄（`pass_boot_lower`・`pass_boot_upper`・`low_confidence`、`wall_median_s`・`usd_list_median` の NULL 許容、`n`・`pass`・`low_confidence` の CHECK）は migration 0077 で表を作り直して足す。runner 側の旧 migration（0071 routing_evidence・0073 routing_evidence_bootstrap）は消した。評価試行の表 `eval_trials` は 0072 から 0076 に振り直した（route_records は selector の 0073 のまま）。
+2. **行の型は 1 つ**: `task_core::routing_evidence::{EvidenceKey, EvidenceRow}`（表の行。runner が書き、選択器・guardrail・API が読む。D5 の「runner → selector は表だけで結ぶ」の表の型）。`route_select` は型を持たない。`n`・`pass` は u64、`quota_per_run` は窓→率の map（表では JSON object）。
+3. **store の API は 1 つ**: `TaskStore::replace_routing_evidence(version, rows)`（同じ版は置換）と `latest_routing_evidence(genre, harness_id)`。runner の `aggregate --write-evidence` も前者で書く。旧 `insert_routing_evidence` / `list_routing_evidence` は消した。
+4. **値の無い定価・時間は `None`**: 選択の同点比較（D2 の 3）では値のある候補より後に回す。guardrail の壁時計（D3）は根拠表に時間が無ければ見ない。`RouteScore.expected_cost_usd`・`EvidenceSnapshot` と API の `RoutingEvidenceRowView` の `wall_median_s`・`usd_list_median` も null を取る（過去の event の数値はそのまま読める）。
+5. **評価 run の経路**: provider 層の撤去に合わせ、評価 run の harness・source・model は宣言（`[harnesses]`・`[llm_sources]`）から引き（`-` と `_`・大文字小文字を区別しない）、account は本番と同じ `admit_source`（手元の評価 run の `(source, account)` も合算）で選ぶ。worker には `SelectedLlmRoute` を渡す。宣言に無い経路の試行は `error`。投入 API の照合先も宣言（`HarnessesReader::source_models` と harness 一覧・`[[genres]]`）に替えた（routing catalog・`[[providers]]` は無い）。
 
 ## 改訂履歴
 
@@ -285,3 +297,10 @@ D5 の評価 runner（crate `routing-eval`、bin `celeris-routing-eval`）と根
 - k=1 の fable/astra は区間が広く、単独の優越判定ができない場合に同等集合として扱う。週 15% を満たす実行可能数は実行直前の実測見積りで確定する。
 - Codex account の 1 run quota 消費は dry-run で測るまで不明。opencode-go は今回の評価対象外。
 - harness_version の major の決め方（claude-code・codex は semver、acp・pi は command の version 文字列）は eval-harness で確定する。
+### 2026-10-13 selector lane defaults implementation
+
+選択器の設定は `[route_defaults.<harness>]` に harness 共通 `candidates`、lane ごとに `[route_defaults.<harness>.lanes.<lane>]` の `candidates` を置く。lane 列があれば優先し、なければ harness 共通列へ戻る。`[route_selection]` は `exploration_epsilon`（0.1）、`guardrail_window`（50）、`guardrail_quota_floor`（0.1）、source ごとの `evaluation_reservations`（同時 run 数）を持つ。guardrail の品質閾値は D3 の固定条件（pass Wilson 下限対 pass_lower、失敗率 2 倍、wall median 2 倍、quota 10%）であり、設定可能なのは窓と quota floor のみ。
+
+config reader は lane 列の harness/source/model と互換 route を検査し、予約枠の source も宣言必須にする。route-selection 値は epsilon / quota floor が 0..=1、window が正であることを検査する。
+
+検査: `cargo test -p celeris config::llm_route`（この WorkUnit で実行）。

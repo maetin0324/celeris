@@ -50,3 +50,17 @@ git でない作業場所には拡張しない。snapshot commit は範囲比較
 worker と事後 check の変数一致、retry の一致、専用 worktree の分離、実 index・HEAD の保存、
 未追跡の変更・削除・symlink・commit 後比較、git GC 後の再利用を固定する。
 結果は [進捗](../progress/2026-10-08-work-unit-scope-snapshot.md) に記録する。
+
+## 付記: WU 検査ログの保存先（2026-10-11）
+
+共有 mode では `<task_dir>` が repo の作業ツリーそのものになる。`work-unit-checks/` が `.gitignore` に無い repo では、
+検査ログが `git ls-files --others --exclude-standard` に列挙され、scope check が自身や先行 WU のログを範囲外変更と
+誤判定することを決定的な試験で再現した。そこで葉 WU のログを `<workspace_root>/<task_id>/work-unit-checks/<wu_key>/`
+へ保存する。これは作業ツリー外であり、worktree mode では従来の task workspace と同じ場所になる。旧い
+`<task_dir>/work-unit-checks/` 保存経路は削除し、互換分岐は設けない。ログ取得 API は event の絶対 `log_path` を読む。
+
+統合検査のログ `integration-checks/` も同じ規則で `<workspace_root>/<task_id>/integration-checks/<wu_key>/` に置く
+（2026-10-11 reopen で `check_log_root` 基準へ揃えた。旧い `<task_dir>` 基準の経路は削除）。統合検査が走るのは worktree mode
+だけで、そこでは task_dir が `<workspace_root>/<task_id>` なので実際の場所は変わらない。共有 mode の統合は並列 1 の
+no-op（ADR-0074 D1.2）で統合検査を流さず、統合ログを作らない（`wu_check_log_outside_tree_shared_mode_after_integration`
+で固定）。詳細な再現結果と後続の読者側確認は [進捗](../progress/2026-10-11-wu-check-logs-outside-tree.md) に記録する。

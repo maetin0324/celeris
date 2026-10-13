@@ -120,7 +120,7 @@ impl LangMemProvider {
 }
 
 /// `[adapters.langmem]`（config.toml）＋ `[knowledge.langmem]` の LLM 接続先をまとめた設定
-/// （ADR-0047 D4）。celeris 側（`crates/celeris/src/lib.rs::build_adapters`）が 2 つの節を合わせて作る。
+/// （ADR-0047 D4）。celeris 側（`crates/celeris/src/daemon/adapters.rs::build_harness_adapters`）が 2 つの節を合わせて作る。
 #[derive(Debug, Clone)]
 pub struct LangMemConfig {
     /// 起動する python（`tools/langmem/.venv/bin/python` のような venv の python）。

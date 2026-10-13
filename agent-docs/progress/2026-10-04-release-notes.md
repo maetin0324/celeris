@@ -26,7 +26,7 @@ updated: 2026-10-04
 - `release.sh`: gate.json の後で `$STAGE/bin/celerisctl release notes` → `notes.json` / `notes.md`（失敗は警告だけ）。
 - `promote.sh`: 昇格前に preview をログへ、`promoted.json` に `included`（releases・tasks・complete）。
 - GUI `/releases`: 各リリースの「このリリースの内容」と「昇格したら入るもの」。
-- 文書: `docs/api/v1/gui-api.md`（§3.67a/§3.67b ほか）、`gui/docs/celeris-api-v1.md`（sync-gui-docs.sh）、
+- 文書: `docs/api/v1/api.md`（§3.67a/§3.67b ほか）、`gui/docs/celeris-api-v1.md`（sync-gui-docs.sh）、
   `docs/ops/selfdeploy.md` §4d、ADR。
 - 試験: `release_notes/tests.rs` 12 件（一時 git repo で task branch merge・早送り配送・直接 commit・migration・
   ADR・config、複数リリースの要約で task が 1 回）、`releases_api.rs` 2 件、`celerisctl` 5 件、

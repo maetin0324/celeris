@@ -39,10 +39,6 @@ mod tests {
 
     const BASE: &str = r#"
 db = "t.sqlite3"
-
-[[providers]]
-id = "fake"
-adapter = "fake"
 "#;
 
     fn load(extra: &str) -> Result<Config, crate::config::ConfigError> {

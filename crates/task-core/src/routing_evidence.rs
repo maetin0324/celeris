@@ -2,6 +2,8 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+/// 根拠表 `routing_evidence` の鍵（ADR 2026-10-11-llm-source-model-routing-evaluation D2）。
+/// `harness_version` は [`harness_version_major`] で畳んだ major。
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub struct EvidenceKey {
     pub genre: String,
@@ -18,20 +20,28 @@ pub struct Interval {
     pub upper: f64,
 }
 
+/// 根拠表 `routing_evidence` の 1 行（migration 0074 + 0077）。評価 runner（crate `routing-eval`）が書き、
+/// 選択器（`route_select`）・guardrail・API が読む。runner と選択器はこの表の行だけで結ぶ（ADR D5 の境界）。
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct EvidenceRow {
     pub key: EvidenceKey,
     pub evidence_version: String,
-    pub n: u32,
-    pub pass: u32,
+    pub n: u64,
+    pub pass: u64,
+    /// Wilson 95%。
     pub pass_lower: f64,
     pub pass_upper: f64,
+    /// 問題単位の bootstrap 95%（seed 42・2000 resamples）。
     pub pass_boot_lower: f64,
     pub pass_boot_upper: f64,
+    /// 結果の無い cell は `None`（選択の同点比較では最後に回る）。
     pub wall_median_s: Option<f64>,
+    /// 定価の無い source・結果の無い cell は `None`。
     pub usd_list_median: Option<f64>,
+    /// quota 窓 → 1 run あたりの消費率（表では窓→率の JSON object）。
     pub quota_per_run: BTreeMap<String, f64>,
     pub timeout_rate: f64,
+    /// k=1・部分集合の候補（優越を名乗れない）。
     pub low_confidence: bool,
 }
 

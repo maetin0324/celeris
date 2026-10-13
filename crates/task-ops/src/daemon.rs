@@ -1,4 +1,4 @@
-//! デーモンのメモリ上のスナップショット（ADR-0013 D4, `docs/api/v1/gui-api.md` §3.20 / §6.2）。
+//! デーモンのメモリ上のスナップショット（ADR-0013 D4, `docs/api/v1/api.md` §3.20 / §6.2）。
 //!
 //! ディスパッチャ（task-dispatch）が tick の最後に作って `tokio::sync::watch` に送り、API（task-api）が読む。両者が依存する
 //! この crate に型を置く（task-api は task-dispatch に依存しない）。真実ではなく観測値で、DB には書かず `replay` の対象外。
@@ -6,7 +6,7 @@
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use task_core::{TaskId, Tier};
+use task_core::TaskId;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct DaemonSnapshot {
@@ -20,14 +20,11 @@ pub struct DaemonSnapshot {
     pub tick_ms: u64,
     pub in_flight: Vec<InFlight>,
     pub cooldowns: Vec<CooldownView>,
-    /// 人間の承認待ちでレビューを延期している reviewing タスク。
-    pub awaiting_human: Vec<TaskId>,
-    /// ADR-0023 D3: 委譲した子が終わるのを待っている親（`reviewing` のまま。id 昇順）。
-    /// 「自分の判定待ち」と区別するための観測値。古いスナップショットには無いので既定は空。
+    /// ADR 2026-10-11-task-wait-reasons D4: この tick に dispatcher のメモリだけで決まった見送りの理由（M1〜M9。
+    /// 枠満杯・経路なし・クラスタ・write-set・バックオフ・disk critical・委譲した子待ち・人の承認待ち）。task_id 順、
+    /// 1 task に 1 件。DB で決まる理由（`task_core::db_waits` / `plan_waits`）は入れない。
     #[serde(default)]
-    pub awaiting_children: Vec<TaskId>,
-    /// 設定に合うプロバイダが無い ready タスク（この tick の判定）。
-    pub unroutable: Vec<TaskId>,
+    pub task_waits: Vec<SnapshotTaskWait>,
     /// ADR-0033 D3（Phase 25）: 秘書レベルの未読の報告と通知の判定。**API が応答を組むときに埋める**
     /// 唯一のフィールド（`last_notified_at` は `POST /reports/notified` が進める API プロセスの観測値で、
     /// ディスパッチャは知らない）。ディスパッチャが送るスナップショットでは常に `None`。
@@ -41,7 +38,6 @@ pub struct DaemonSnapshot {
     /// `approvals_pending` と同じく **API が応答を組むときに埋める**（ディスパッチャが送るスナップショットでは常に 0）。
     #[serde(default)]
     pub decisions_open: u32,
-    pub providers: Vec<ProviderLive>,
     /// ADR-0018: `[[clusters]]` の稼働状況（`id` 昇順）。第 2 段階で追加したので、古いスナップショットには無い。
     #[serde(default)]
     pub clusters: Vec<ClusterLive>,
@@ -323,14 +319,14 @@ pub struct ContainerProbeView {
 
 /// ADR 2026-10-08 account-concurrency-limits §(e): 暗黙アカウント 1 件の観測値。単位は LLM source で、
 /// 同じ source を使う非プール行は 1 件を共有する。上限の保存値は DB（`account_limits`）が正本で、
-/// 旧 `[[providers]].concurrency` は上限に使わない。
+/// config の値は上限に使わない。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ImplicitAccountLive {
     /// 解決済み LLM source の id（= 暗黙アカウントの id。`celeris` / `openai_compatible:<id>` 等）。
     pub source: String,
-    /// この source を使う非プール行の id（設定順）。
+    /// この source を選択する route の model id（設定順）。
     #[serde(default)]
-    pub providers: Vec<String>,
+    pub models: Vec<String>,
     /// これらの行で走っている全 run（非 CoS・CoS・プロバイダを使うレビュー run）の数。
     pub in_use: u32,
 }
@@ -357,10 +353,19 @@ pub struct AccountLive {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cooldown: Option<AccountCooldownLive>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_check: Option<ProviderCheckView>,
+    pub last_check: Option<AccountCheckView>,
     /// 進行中のログイン中継（ADR-0024 D7）があるか。
     #[serde(default)]
     pub login_pending: bool,
+}
+
+/// Result of a credential check retained in the in-memory account view.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct AccountCheckView {
+    pub at: String,
+    pub result: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
 }
 
 /// `RateLimitObservation` の観測値部分（Unix 秒のまま。壁時計の文字列化は task-api が行う）。
@@ -392,6 +397,13 @@ pub struct AccountCooldownLive {
     pub reason: String,
 }
 
+/// ADR 2026-10-11-task-wait-reasons D4: dispatcher が見送った task と、その理由（メモリの理由）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct SnapshotTaskWait {
+    pub task_id: TaskId,
+    pub wait: task_core::TaskWait,
+}
+
 /// 実行中の run（ワーカー run、またはプロバイダを使う Reviewer run）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct InFlight {
@@ -412,63 +424,11 @@ pub enum InFlightKind {
 /// `task_dispatch::policy::Cooldown`（`Instant`）を壁時計に直したもの。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct CooldownView {
-    pub provider: String,
+    pub source: String,
+    pub account_id: String,
     pub until: String,
     /// `"throttled" | "auth_failed" | "exhausted"`。
     pub reason: String,
-}
-
-/// プロバイダ（`[[providers]]` の行。認証アカウントは別参照）の稼働状況。`env` の値は含めない。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct ProviderLive {
-    #[serde(default)]
-    pub kind: task_core::ProviderKind,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub llm_source: Option<task_core::ResolvedLlmSource>,
-    #[serde(default)]
-    pub credential_refs: std::collections::HashMap<String, String>,
-    #[serde(default)]
-    pub tier_models: task_core::model_routing::TierModels,
-    #[serde(default)]
-    pub account_id: Option<String>,
-    pub id: String,
-    pub adapter: String,
-    pub tiers: Vec<Tier>,
-    /// Deprecated（ADR 2026-10-08 account-concurrency-limits §(a)）: config に書かれた旧値（無ければ 1）。
-    /// dispatch では使わず、何とも比べない。同時実行数はアカウント（暗黙アカウントを含む）の上限で決まる。
-    #[schemars(extend("deprecated" = true))]
-    pub concurrency: usize,
-    /// 実効モデル（空なら `None`）。
-    pub model: Option<String>,
-    /// `env` のキー名だけ（値は出さない）。古いスナップショットには無いので既定は空（ADR-0017 M4）。
-    #[serde(default)]
-    pub env_keys: Vec<String>,
-    /// 実行中の run と Reviewer run の合計。ADR-0089（Phase R6-5）: CoS の対話 run は含めない
-    /// （`in_use_cos`）。
-    pub in_use: u32,
-    /// ADR-0089（Phase R6-5）: このプロバイダで走っている CoS の対話 run の数（`concurrency` の外。
-    /// 古いスナップショットには無いので既定 0）。
-    #[serde(default)]
-    pub in_use_cos: u32,
-    /// ADR-0022 D2: 直近の疎通確認（`POST /providers/{id}/check`）の結果。**メモリだけに持つ観測値**で、
-    /// celeris を再起動すると消える（イベントにも DB にも残さない）。一度も確認していなければ `None`。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_check: Option<ProviderCheckView>,
-    /// ADR-0024 D2: `[accounts]` のプールから選ぶか。古いスナップショットには無いので既定 `false`。
-    #[serde(default)]
-    pub account_pool: bool,
-}
-
-/// ADR-0022 D2: 1 回の疎通確認の記録。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct ProviderCheckView {
-    /// 確認した時刻（RFC 3339）。
-    pub at: String,
-    /// `ok` / `auth_failed` / `throttled` / `spawn_failed`（`task_api::ProviderCheckResult` の serde 名）。
-    pub result: String,
-    /// 人が読むための一行の手がかり（ワーカーの返答や失敗の理由。ADR-0022 M1）。無ければ `null`。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub detail: Option<String>,
 }
 
 /// クラスタ（`[[clusters]]` の行）の稼働状況（ADR-0018 D2 / D5）。`env` の値・`setup` の中身は含めない。

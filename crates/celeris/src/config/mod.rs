@@ -2,12 +2,12 @@
 //! ディレクトリからの相対と解釈する。
 //!
 //! 流れはこのファイルで読める: `Config::load` が TOML を読み、subsystem ごとに相対パスを解決し
-//! （`org_include`・`providers_include` の取り込みを含む）、`[[harnesses]]` を合流し、`Config::validate`
+//! （`org_include` の取り込みを含む）、`[[harnesses]]` を合流し、`Config::validate`
 //! を通す。`validate` は subsystem ごとの検証を決まった順に呼ぶ（最初に見つかった誤りを返す）。
 //! CLI の上書き（`apply_overrides`）と煙試験（`apply_verify_smoke`）は `load` の後に呼ぶ。
 //!
 //! 型・serde の既定・検証・パスの解決は subsystem ごとのファイルに同居する:
-//! `db` / `api` / `providers` / `adapters` / `accounts`（＋`[secrets]`）/ `proxy`（`[llm_proxy]`）/
+//! `db` / `api` / `adapters` / `accounts`（＋`[secrets]`）/ `proxy`（`[llm_proxy]`）/
 //! `harness`（`[[harnesses]]`・`[[roles]]`・`[[genres]]`）/ `org` / `delegation` / `dispatch`
 //! （`[reviewer]`・`[review]`・`[dispatch]`・`[plan]`・`[sessions]`）/ `execution` / `cluster` /
 //! `workspace`（＋`[containers]`）/ `scratch` / `github` / `selfdeploy`（＋`[handoff]`）/
@@ -32,11 +32,10 @@ mod execution;
 mod github;
 mod harness;
 mod knowledge;
+mod llm_route;
 mod maintenance;
 mod model_catalog;
-mod model_routing;
 mod org;
-mod providers;
 mod proxy;
 mod routing_eval;
 mod scratch;
@@ -58,11 +57,10 @@ pub use execution::*;
 pub use github::*;
 pub use harness::*;
 pub use knowledge::*;
+pub use llm_route::*;
 pub use maintenance::*;
 pub use model_catalog::*;
-pub use model_routing::*;
 pub use org::*;
-pub use providers::*;
 pub use routing_eval::*;
 pub use scratch::*;
 pub use selfdeploy::*;
@@ -86,6 +84,19 @@ pub enum ConfigError {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
+    /// ADR 2026-10-11: canonical source/harness declarations and route policy inputs.
+    #[serde(default)]
+    pub llm_sources: std::collections::BTreeMap<String, LlmSourceConfig>,
+    #[serde(default)]
+    pub harness_selection: task_core::llm_route::HarnessSelection,
+    #[serde(default)]
+    pub harness_declarations: std::collections::BTreeMap<String, HarnessDeclarationConfig>,
+    #[serde(default)]
+    pub llm_routes: Vec<LlmRouteConfig>,
+    #[serde(default)]
+    pub route_defaults: std::collections::BTreeMap<String, RouteDefaultConfig>,
+    #[serde(default)]
+    pub route_selection: RouteSelectionConfig,
     /// Isolated browser runtime is disabled unless its API and provider are configured.
     #[serde(default)]
     pub browser: BrowserRuntimeConfig,
@@ -143,16 +154,6 @@ pub struct Config {
     pub routing_eval: RoutingEvalConfig,
     #[serde(default)]
     pub api: ApiConfig,
-    #[serde(default)]
-    pub providers: Vec<ProviderConfig>,
-    /// ADR-0017 M1: `providers.d/*.toml`（1 ファイル 1 アカウント）を追加で読み込む glob。末尾は必ず `/*.toml`。
-    /// 相対パスは設定ファイル基準。マッチしたファイルはファイル名昇順で `providers` に追記してから `validate()` を通す。
-    #[serde(default)]
-    pub providers_include: Option<String>,
-    /// `providers_include` を解決したディレクトリの絶対パス（`Config::load` が計算。TOML には書かない。
-    /// `POST /api/v1/providers` 等が書き込む先）。
-    #[serde(skip)]
-    pub providers_dir: Option<PathBuf>,
     /// ADR-0018: コマンドを実行するクラスタ。`WorkspaceSpec::Remote{cluster, path}` の `cluster` がここの `id` を指す。
     #[serde(default)]
     pub clusters: Vec<ClusterConfig>,
@@ -247,19 +248,10 @@ pub struct Config {
     /// （`Config::load` が行う。`Config::validate` が「必要なのに埋まらない」を弾く）。
     #[serde(default)]
     pub llm_proxy: llm_proxy::config::LlmProxyConfig,
-    /// Phase 1 model catalog and lane policies; legacy remains the default execution mode.
-    #[serde(default)]
-    pub model_routing: ModelRoutingConfig,
     /// ADR 2026-10-06 D4: `[model_catalog]`。利用可能モデルの自動発見（周期・opencode go の取得先）。
     #[serde(default)]
     pub model_catalog: ModelCatalogConfig,
     /// Fully validated catalog used by daemon bootstrap and replaced on successful reload.
-    #[serde(skip)]
-    pub routing_catalog_snapshot: Option<std::sync::Arc<RoutingCatalog>>,
-    /// Shared handle for API readers; each reader keeps its own immutable Arc snapshot.
-    #[serde(skip)]
-    pub routing_catalog_state:
-        Option<std::sync::Arc<std::sync::RwLock<std::sync::Arc<RoutingCatalog>>>>,
     // ---- ADR-0053（Phase 65）: ここまで ----
     // ---- ADR-0054 D1（Phase 67）: ノードごとの継続セッション。ここから ----
     /// `[sessions]`。CoS の対話・部門長のレビュー run の継続セッション（`node_sessions`）の逼迫判定。
@@ -290,7 +282,7 @@ pub struct BrowserRuntimeConfig {
     pub runtime: String,
     #[serde(default)]
     pub launcher_socket: Option<PathBuf>,
-    /// launcher の host UID（credentiald の `--launcher-uid` と同じ値）。launcher 経路の
+    /// launcher の host UID（daemon と credentiald が同じ config.toml から読む）。launcher 経路の
     /// CredentialUse は、この値があり daemon の UID と別のときだけ launcher に接続する
     /// （ADR 2026-10-09 付記「接続前 gate」）。無ければ CredentialUse は接続前に拒否される。
     #[serde(default)]
@@ -407,8 +399,45 @@ fn default_error_cooldown_secs() -> u64 {
 impl Config {
     /// `[delivery]` is a top-level TOML table, but its runtime settings live in an
     /// existing sub-struct so adding them does not change `Config` struct literals.
-    fn parse_with_delivery(text: &str) -> Result<Self, ConfigError> {
+    pub(crate) fn parse_with_delivery(text: &str) -> Result<Self, ConfigError> {
         let mut table: toml::Table = toml::from_str(text)?;
+        if table.contains_key("model_routing") {
+            return Err(ConfigError::Invalid(
+                "[model_routing] is no longer supported; configure source/model candidates in [routing] route_defaults"
+                    .into(),
+            ));
+        }
+        if table.contains_key("providers")
+            || table.contains_key("providers.d")
+            || table.contains_key("providers_include")
+        {
+            return Err(ConfigError::Invalid(
+                "legacy provider configuration is no longer supported; declare [llm_sources.<id>] and [harnesses.<id>] and select routes with [route_defaults.<harness>]".into(),
+            ));
+        }
+        // 計画 run の harness は固定の adapter 欄ではなく、execution class の候補で決める。
+        if table
+            .get("execution")
+            .and_then(|v| v.as_table())
+            .and_then(|t| t.get("planner"))
+            .and_then(|v| v.as_table())
+            .is_some_and(|t| t.contains_key("adapter"))
+        {
+            return Err(ConfigError::Invalid(
+                "[execution.planner] adapter is no longer supported; planner runs pick a harness from the candidates in [harness_selection.execution_class_defaults], e.g. planner = [\"claude_code\", \"codex\"] (remove the adapter line)".into(),
+            ));
+        }
+        let harnesses_value = table.remove("harnesses");
+        let harness_declarations = harnesses_value
+            .as_ref()
+            .and_then(|v| v.as_table())
+            .filter(|t| !t.contains_key("id"))
+            .cloned();
+        if harness_declarations.is_none()
+            && let Some(value) = harnesses_value
+        {
+            table.insert("harnesses".into(), value);
+        }
         let delivery = table
             .remove("delivery")
             .map(|value| value.try_into::<DeliveryConfig>())
@@ -416,6 +445,12 @@ impl Config {
             .unwrap_or_default();
         let mut cfg: Config = toml::Value::Table(table).try_into()?;
         cfg.selfdeploy.delivery = delivery;
+        if let Some(declarations) = harness_declarations {
+            cfg.harness_declarations = declarations
+                .into_iter()
+                .map(|(k, v)| Ok((k, v.try_into()?)))
+                .collect::<Result<_, toml::de::Error>>()?;
+        }
         Ok(cfg)
     }
 
@@ -426,10 +461,6 @@ impl Config {
             source,
         })?;
         let mut cfg = Self::parse_with_delivery(&text)?;
-        let deprecated = cfg.scratch.deprecated_sections();
-        if !deprecated.is_empty() {
-            tracing::warn!(sections = %deprecated.join(", "), "deprecated scratch cache settings are ignored");
-        }
         let base = path
             .parent()
             .filter(|p| !p.as_os_str().is_empty())
@@ -458,11 +489,6 @@ impl Config {
         if let Some(org_include) = &cfg.org_include {
             cfg.org = org::load_org_seed(org_include, &base)?;
         }
-        if let Some(pattern) = &cfg.providers_include {
-            let dir = providers::providers_include_dir(pattern, &base)?;
-            cfg.providers.extend(load_provider_files(&dir)?);
-            cfg.providers_dir = Some(dir);
-        }
         if let Some(accounts) = &mut cfg.accounts {
             accounts.resolve_paths(&base);
         }
@@ -477,24 +503,12 @@ impl Config {
         cfg.selfdeploy.resolve_paths(&base);
         cfg.storage.resolve_paths();
         cfg.adapters.paperqa.resolve_paths(&base);
-        providers::resolve_provider_settings(&mut cfg.providers, &base);
 
         // 2. 旧い `[[genres]]` + `[[roles]]` と `[[harnesses]]` の合流（ADR-0046 D3）。
         cfg.merge_harnesses();
 
         // 3. 検証。
         cfg.validate()?;
-        let catalog = cfg.routing_catalog()?;
-        cfg.model_routing.runtime = Some(std::sync::Arc::new(cfg.routing_runtime()?));
-        for warning in &catalog.warnings {
-            tracing::warn!(key = %warning, "model routing compatibility warning");
-        }
-        let catalog = std::sync::Arc::new(catalog);
-        cfg.routing_catalog_snapshot = Some(std::sync::Arc::clone(&catalog));
-        cfg.routing_catalog_state = Some(std::sync::Arc::new(std::sync::RwLock::new(catalog)));
-        for code in cfg.provider_kind_warnings() {
-            tracing::warn!(warning = %code, "provider kind compatibility warning");
-        }
         // ADR-0139 D3: 知識整理 run が bearer を持たずに起きる設定を、run の前に知らせる。
         for warning in cfg.langmem_auth_warnings() {
             tracing::warn!(%warning, "knowledge.langmem auth warning");
@@ -507,6 +521,7 @@ impl Config {
     }
 
     pub fn validate(&self) -> Result<(), ConfigError> {
+        let registry = self.llm_route_registry()?;
         self.selfdeploy.validate()?;
         self.selfdeploy.delivery.validate()?;
         self.browser.validate()?;
@@ -523,11 +538,10 @@ impl Config {
         self.storage.validate()?;
         self.cos.validate()?;
         self.validate_cos_mapping()?;
-        providers::validate_providers(self)?;
         if let Some(accounts) = &self.accounts {
             accounts.validate()?;
         }
-        self.reviewer.validate(&self.providers)?;
+        self.reviewer.validate(&registry)?;
         self.api.validate()?;
         cluster::validate_clusters(&self.clusters)?;
         self.workspace.validate()?;
@@ -560,7 +574,6 @@ impl Config {
             ));
         }
         proxy::validate(&self.llm_proxy)?;
-        self.routing_catalog()?;
         // ADR-0056 D1（Phase 78）: `auth = "none"` は loopback だけ、`client` は `none` のときだけ。
         self.mcp
             .resolve_listeners()

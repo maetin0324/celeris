@@ -15,6 +15,7 @@ fn view_ctx() -> ViewContext {
 fn sample_task(kind: TaskKind, status: Status) -> Task {
     let now = OffsetDateTime::now_utc();
     Task {
+        harness_id: None,
         requirements: Default::default(),
         tree: None,
         paused_at: None,
@@ -46,7 +47,6 @@ fn sample_task(kind: TaskKind, status: Status) -> Task {
         priority: 0,
         worker_hint: WorkerHint {
             tier: Tier::Standard,
-            adapter: None,
         },
         workspace: WorkspaceSpec::Local {
             path: "workspace".into(),
@@ -71,6 +71,83 @@ fn sample_task(kind: TaskKind, status: Status) -> Task {
         labels: Vec::new(),
         category: Default::default(),
     }
+}
+
+#[test]
+fn integration_api_views_attach_store_state_to_summary_and_detail() {
+    let store = SqliteStore::open_in_memory().expect("store");
+    let task = sample_task(TaskKind::Execute, Status::Done);
+    store.insert(&task).expect("task");
+    let repo_id = task_core::RepoId::new();
+    let now = OffsetDateTime::now_utc();
+    store
+        .task_integration_upsert(&task_core::TaskRepoIntegrationState {
+            task_id: task.id,
+            repo_id,
+            branch: "task/stranded".into(),
+            head_sha: "abc123".into(),
+            state: task_core::TaskRepoIntegrationStatus::Unintegrated,
+            reason: Some("not merged".into()),
+            actor: "sweep".into(),
+            checked_at: now,
+            updated_at: now,
+        })
+        .expect("integration state");
+    let context = crate::stranded::IntegrationContext {
+        repositories: [(
+            repo_id,
+            crate::stranded::IntegrationRepoContext {
+                name: "sample".into(),
+                path: PathBuf::from("/repo"),
+                default_branch: "main".into(),
+            },
+        )]
+        .into_iter()
+        .collect(),
+        releases_dir: None,
+    };
+    let mut summary = task_summary(
+        &store,
+        &task,
+        &view_ctx(),
+        &crate::wait::MemoryWaits::default(),
+        now,
+    )
+    .expect("summary");
+    let (mut integrations, mut promotion) = (None, None);
+    attach_integrations(
+        &store,
+        task.id,
+        &mut integrations,
+        &mut promotion,
+        Some(&context),
+    )
+    .expect("attach summary");
+    summary.integrations = integrations;
+    summary.promotion = promotion;
+    assert_eq!(summary.integrations.as_ref().unwrap()[0].repo, "sample");
+    assert_eq!(
+        summary.integrations.as_ref().unwrap()[0].state,
+        task_core::TaskRepoIntegrationStatus::Unintegrated
+    );
+    assert!(summary.promotion.is_none());
+    let mut detail = task_detail(
+        &store,
+        task.id,
+        &view_ctx(),
+        &crate::wait::MemoryWaits::default(),
+        now,
+    )
+    .expect("detail");
+    attach_integrations(
+        &store,
+        task.id,
+        &mut detail.integrations,
+        &mut detail.promotion,
+        Some(&context),
+    )
+    .expect("attach detail");
+    assert_eq!(detail.integrations.as_ref().unwrap()[0].head, "abc123");
 }
 
 fn row(seq: u64, ts: &str, task_id: TaskId, event: Event) -> EventRow {
@@ -488,7 +565,9 @@ fn task_list_filters_by_status() {
         ListOrder::CreatedDesc,
         None,
         100,
+        None,
         &ctx,
+        &crate::wait::MemoryWaits::default(),
         OffsetDateTime::now_utc(),
     )
     .expect("task_list");
@@ -521,7 +600,9 @@ fn task_list_counts_by_status_ignores_filter() {
         ListOrder::CreatedDesc,
         None,
         100,
+        None,
         &ctx,
+        &crate::wait::MemoryWaits::default(),
         OffsetDateTime::now_utc(),
     )
     .expect("task_list");
@@ -550,7 +631,9 @@ fn task_list_paginates_with_cursor_without_duplicates() {
             ListOrder::CreatedDesc,
             cursor.as_deref(),
             2,
+            None,
             &ctx,
+            &crate::wait::MemoryWaits::default(),
             now,
         )
         .expect("task_list");
@@ -566,7 +649,7 @@ fn task_list_paginates_with_cursor_without_duplicates() {
 }
 
 #[test]
-fn task_list_reports_children_and_pending_children() {
+fn task_list_reports_children() {
     let store = SqliteStore::open_in_memory().expect("open store");
     let parent = sample_task(TaskKind::Plan, Status::Done);
     store.insert(&parent).expect("insert parent");
@@ -584,7 +667,9 @@ fn task_list_reports_children_and_pending_children() {
         ListOrder::CreatedDesc,
         None,
         100,
+        None,
         &ctx,
+        &crate::wait::MemoryWaits::default(),
         OffsetDateTime::now_utc(),
     )
     .expect("task_list");
@@ -594,7 +679,8 @@ fn task_list_reports_children_and_pending_children() {
         .find(|t| t.id == parent.id)
         .expect("parent in list");
     assert_eq!(parent_summary.children, 2);
-    assert_eq!(parent_summary.pending_children, 1);
+    // ADR 2026-10-11-task-wait-reasons D6: `pending_children` は消した。待ちは `waits`。
+    assert!(parent_summary.waits.is_empty());
 }
 
 // ---- task_detail ----
@@ -615,14 +701,28 @@ fn task_detail_reports_cluster_and_mirror_for_remote_workspaces() {
     store.insert(&local).expect("insert");
 
     let ctx = view_ctx();
-    let detail = task_detail(&store, remote.id, &ctx, OffsetDateTime::now_utc()).expect("detail");
+    let detail = task_detail(
+        &store,
+        remote.id,
+        &ctx,
+        &crate::wait::MemoryWaits::default(),
+        OffsetDateTime::now_utc(),
+    )
+    .expect("detail");
     assert_eq!(detail.cluster.as_deref(), Some("pegasus"));
     assert_eq!(
         detail.workspace_dir.as_deref(),
         Some(format!("/tmp/workspaces/{}", remote.id).as_str()),
         "the mirror where runs/ live"
     );
-    let detail = task_detail(&store, local.id, &ctx, OffsetDateTime::now_utc()).expect("detail");
+    let detail = task_detail(
+        &store,
+        local.id,
+        &ctx,
+        &crate::wait::MemoryWaits::default(),
+        OffsetDateTime::now_utc(),
+    )
+    .expect("detail");
     assert_eq!(detail.cluster, None);
 }
 
@@ -664,8 +764,14 @@ fn task_detail_reports_the_worktree_for_worktree_clusters() {
         },
     );
 
-    let detail =
-        task_detail(&store, on_worktree.id, &ctx, OffsetDateTime::now_utc()).expect("detail");
+    let detail = task_detail(
+        &store,
+        on_worktree.id,
+        &ctx,
+        &crate::wait::MemoryWaits::default(),
+        OffsetDateTime::now_utc(),
+    )
+    .expect("detail");
     let wt = detail.worktree.expect("worktree cluster");
     assert_eq!(wt.project, "/work/NBB/x/benchfs");
     assert_eq!(
@@ -674,7 +780,14 @@ fn task_detail_reports_the_worktree_for_worktree_clusters() {
     );
     assert_eq!(wt.branch, format!("celeris/{}", on_worktree.id));
 
-    let detail = task_detail(&store, on_rsync.id, &ctx, OffsetDateTime::now_utc()).expect("detail");
+    let detail = task_detail(
+        &store,
+        on_rsync.id,
+        &ctx,
+        &crate::wait::MemoryWaits::default(),
+        OffsetDateTime::now_utc(),
+    )
+    .expect("detail");
     assert_eq!(
         detail.worktree, None,
         "rsync のクラスタには worktree が無い"
@@ -689,8 +802,14 @@ fn task_detail_reports_the_worktree_for_worktree_clusters() {
             ..Default::default()
         },
     );
-    let detail =
-        task_detail(&store, on_worktree.id, &ctx, OffsetDateTime::now_utc()).expect("detail");
+    let detail = task_detail(
+        &store,
+        on_worktree.id,
+        &ctx,
+        &crate::wait::MemoryWaits::default(),
+        OffsetDateTime::now_utc(),
+    )
+    .expect("detail");
     assert_eq!(
         detail.worktree.expect("worktree").dir,
         format!("/work/NBB/x/wt/{}", on_worktree.id)
@@ -713,7 +832,9 @@ fn task_list_items_carry_the_role() {
         ListOrder::CreatedDesc,
         None,
         100,
+        None,
         &view_ctx(),
+        &crate::wait::MemoryWaits::default(),
         OffsetDateTime::now_utc(),
     )
     .expect("task_list");
@@ -750,7 +871,9 @@ fn task_list_items_carry_the_support_kind() {
         ListOrder::CreatedDesc,
         None,
         100,
+        None,
         &view_ctx(),
+        &crate::wait::MemoryWaits::default(),
         OffsetDateTime::now_utc(),
     )
     .expect("task_list");
@@ -784,7 +907,9 @@ fn task_list_items_carry_the_genre() {
         ListOrder::CreatedDesc,
         None,
         100,
+        None,
         &view_ctx(),
+        &crate::wait::MemoryWaits::default(),
         OffsetDateTime::now_utc(),
     )
     .expect("task_list");
@@ -824,7 +949,14 @@ fn task_detail_reports_role_and_delegated_children() {
         .expect("append delegated");
 
     let ctx = view_ctx();
-    let detail = task_detail(&store, parent.id, &ctx, OffsetDateTime::now_utc()).expect("detail");
+    let detail = task_detail(
+        &store,
+        parent.id,
+        &ctx,
+        &crate::wait::MemoryWaits::default(),
+        OffsetDateTime::now_utc(),
+    )
+    .expect("detail");
     assert_eq!(detail.role.as_deref(), Some("lead"));
     assert_eq!(detail.delegated.len(), 1);
     assert_eq!(detail.delegated[0].run_id, "run-1");
@@ -845,7 +977,14 @@ fn task_detail_reports_genre() {
     store.insert(&task).expect("insert");
 
     let ctx = view_ctx();
-    let detail = task_detail(&store, task.id, &ctx, OffsetDateTime::now_utc()).expect("detail");
+    let detail = task_detail(
+        &store,
+        task.id,
+        &ctx,
+        &crate::wait::MemoryWaits::default(),
+        OffsetDateTime::now_utc(),
+    )
+    .expect("detail");
     assert_eq!(detail.genre.as_deref(), Some("literature"));
 }
 
@@ -854,7 +993,13 @@ fn task_detail_missing_task_returns_not_found() {
     let store = SqliteStore::open_in_memory().expect("open store");
     let missing = TaskId::new();
     let ctx = view_ctx();
-    let result = task_detail(&store, missing, &ctx, OffsetDateTime::now_utc());
+    let result = task_detail(
+        &store,
+        missing,
+        &ctx,
+        &crate::wait::MemoryWaits::default(),
+        OffsetDateTime::now_utc(),
+    );
     assert!(matches!(result, Err(OpsError::NotFound(id)) if id == missing));
 }
 
@@ -874,8 +1019,14 @@ fn task_detail_reports_dependencies_dependents_children_and_actions() {
     store.insert(&child).expect("insert child");
 
     let ctx = view_ctx();
-    let detail =
-        task_detail(&store, task.id, &ctx, OffsetDateTime::now_utc()).expect("task_detail");
+    let detail = task_detail(
+        &store,
+        task.id,
+        &ctx,
+        &crate::wait::MemoryWaits::default(),
+        OffsetDateTime::now_utc(),
+    )
+    .expect("task_detail");
     assert_eq!(
         detail.dependencies.iter().map(|r| r.id).collect::<Vec<_>>(),
         vec![dep.id]
@@ -912,8 +1063,14 @@ fn task_detail_blocked_task_reports_latest_question() {
         .expect("append worker finished");
 
     let ctx = view_ctx();
-    let detail =
-        task_detail(&store, task.id, &ctx, OffsetDateTime::now_utc()).expect("task_detail");
+    let detail = task_detail(
+        &store,
+        task.id,
+        &ctx,
+        &crate::wait::MemoryWaits::default(),
+        OffsetDateTime::now_utc(),
+    )
+    .expect("task_detail");
     assert_eq!(detail.latest_question.as_deref(), Some("which version?"));
     assert!(detail.actions.contains(&Action::Answer));
 }
@@ -924,8 +1081,14 @@ fn task_detail_terminal_task_has_no_worker_run_hint() {
     let task = sample_task(TaskKind::Execute, Status::Done);
     store.insert(&task).expect("insert task");
     let ctx = view_ctx();
-    let detail =
-        task_detail(&store, task.id, &ctx, OffsetDateTime::now_utc()).expect("task_detail");
+    let detail = task_detail(
+        &store,
+        task.id,
+        &ctx,
+        &crate::wait::MemoryWaits::default(),
+        OffsetDateTime::now_utc(),
+    )
+    .expect("task_detail");
     assert!(detail.worker_run_hint.is_none());
     // ADR-0044 D2（Phase 53）: `done` は編集できないが「再開」はできる。
     assert_eq!(detail.actions, vec![Action::Reopen]);
@@ -966,8 +1129,14 @@ fn task_detail_failed_task_reports_failure_and_rereview_when_review_fail_is_the_
         .expect("transitioned");
 
     let ctx = view_ctx();
-    let detail =
-        task_detail(&store, task.id, &ctx, OffsetDateTime::now_utc()).expect("task_detail");
+    let detail = task_detail(
+        &store,
+        task.id,
+        &ctx,
+        &crate::wait::MemoryWaits::default(),
+        OffsetDateTime::now_utc(),
+    )
+    .expect("task_detail");
     let failure = detail.failure.expect("failure summary");
     assert_eq!(failure.class, derive::FailureClass::Work);
     assert_eq!(failure.reason, "テストが落ちている");
@@ -998,8 +1167,14 @@ fn task_detail_infra_failed_task_reports_infra_class_without_rereview() {
         .expect("finished");
 
     let ctx = view_ctx();
-    let detail =
-        task_detail(&store, task.id, &ctx, OffsetDateTime::now_utc()).expect("task_detail");
+    let detail = task_detail(
+        &store,
+        task.id,
+        &ctx,
+        &crate::wait::MemoryWaits::default(),
+        OffsetDateTime::now_utc(),
+    )
+    .expect("task_detail");
     let failure = detail.failure.expect("failure summary");
     assert_eq!(failure.class, derive::FailureClass::Infra);
     assert!(detail.actions.contains(&Action::Retry));
@@ -1047,8 +1222,14 @@ fn task_detail_links_human_approval_children_by_attempt_and_marks_decided() {
     store.insert(&approval2).expect("insert approval2");
 
     let ctx = view_ctx();
-    let detail =
-        task_detail(&store, parent.id, &ctx, OffsetDateTime::now_utc()).expect("task_detail");
+    let detail = task_detail(
+        &store,
+        parent.id,
+        &ctx,
+        &crate::wait::MemoryWaits::default(),
+        OffsetDateTime::now_utc(),
+    )
+    .expect("task_detail");
 
     assert_eq!(detail.approvals.len(), 2);
     let approved = detail
@@ -1194,7 +1375,14 @@ fn task_detail_execution_is_none_for_a_task_with_no_execution_activity() {
         .expect("append");
 
     let ctx = view_ctx();
-    let detail = task_detail(&store, task.id, &ctx, OffsetDateTime::now_utc()).expect("detail");
+    let detail = task_detail(
+        &store,
+        task.id,
+        &ctx,
+        &crate::wait::MemoryWaits::default(),
+        OffsetDateTime::now_utc(),
+    )
+    .expect("detail");
     assert!(detail.execution.is_none());
 }
 
@@ -1259,7 +1447,14 @@ fn task_detail_write_set_and_behind_show_durable_snapshots() {
         &time::format_description::well_known::Rfc3339,
     )
     .unwrap();
-    let detail = task_detail(&store, task.id, &view_ctx(), now).unwrap();
+    let detail = task_detail(
+        &store,
+        task.id,
+        &view_ctx(),
+        &crate::wait::MemoryWaits::default(),
+        now,
+    )
+    .unwrap();
     assert_eq!(detail.expected_write_paths, Some(vec!["src".into()]));
     assert_eq!(detail.actual_run_write_sets[0].paths, ["src/main.rs"]);
     assert_eq!(detail.actual_run_write_sets[0].status, "complete");
@@ -1302,7 +1497,14 @@ fn task_detail_execution_shows_gate_only_when_there_is_no_plan() {
         .expect("append");
 
     let ctx = view_ctx();
-    let detail = task_detail(&store, task.id, &ctx, OffsetDateTime::now_utc()).expect("detail");
+    let detail = task_detail(
+        &store,
+        task.id,
+        &ctx,
+        &crate::wait::MemoryWaits::default(),
+        OffsetDateTime::now_utc(),
+    )
+    .expect("detail");
     let execution = detail.execution.expect("execution present");
     assert_eq!(
         execution.gate.map(|g| g.mode),
@@ -1367,7 +1569,14 @@ fn task_detail_execution_direct_route_is_reported_when_the_event_is_present() {
         .expect("append route");
 
     let ctx = view_ctx();
-    let detail = task_detail(&store, task.id, &ctx, OffsetDateTime::now_utc()).expect("detail");
+    let detail = task_detail(
+        &store,
+        task.id,
+        &ctx,
+        &crate::wait::MemoryWaits::default(),
+        OffsetDateTime::now_utc(),
+    )
+    .expect("detail");
     let execution = detail.execution.expect("execution present");
     assert_eq!(execution.route, Some(decision));
 }
@@ -1403,7 +1612,14 @@ fn task_detail_execution_direct_route_is_absent_without_the_event() {
         .expect("append gate");
 
     let ctx = view_ctx();
-    let detail = task_detail(&store, task.id, &ctx, OffsetDateTime::now_utc()).expect("detail");
+    let detail = task_detail(
+        &store,
+        task.id,
+        &ctx,
+        &crate::wait::MemoryWaits::default(),
+        OffsetDateTime::now_utc(),
+    )
+    .expect("detail");
     let execution = detail.execution.expect("execution present");
     assert!(execution.route.is_none());
 }
@@ -1432,7 +1648,14 @@ fn task_detail_execution_reports_the_plan_and_work_unit_table() {
     set_status(&store, task.id, "build", task_core::WorkUnitStatus::Running);
 
     let ctx = view_ctx();
-    let detail = task_detail(&store, task.id, &ctx, OffsetDateTime::now_utc()).expect("detail");
+    let detail = task_detail(
+        &store,
+        task.id,
+        &ctx,
+        &crate::wait::MemoryWaits::default(),
+        OffsetDateTime::now_utc(),
+    )
+    .expect("detail");
     let execution = detail.execution.expect("execution present");
     assert_eq!(execution.phase, Some(ExecutionPhase::Executing));
     let plan = execution.plan.expect("plan present");
@@ -1481,7 +1704,14 @@ fn task_detail_execution_reports_replan_version_history() {
     .expect("replan");
 
     let ctx = view_ctx();
-    let detail = task_detail(&store, task.id, &ctx, OffsetDateTime::now_utc()).expect("detail");
+    let detail = task_detail(
+        &store,
+        task.id,
+        &ctx,
+        &crate::wait::MemoryWaits::default(),
+        OffsetDateTime::now_utc(),
+    )
+    .expect("detail");
     let plan = detail
         .execution
         .expect("execution present")
@@ -1602,4 +1832,155 @@ fn work_unit_check_progress_shows_the_running_acceptance_check() {
     );
     assert_eq!(p.finished.len(), 1);
     assert_eq!(p.finished[0].duration_ms, 900);
+}
+
+/// ADR 2026-10-11-task-wait-reasons D5/D12: gate の事実が無ければ人の gate は空、`runnable` は ready かつ待ち無し。
+#[test]
+fn task_wait_api_human_gate_waits_and_runnable() {
+    let ready = sample_task(TaskKind::Execute, Status::Ready);
+    assert!(crate::wait::human_gate_waits(&ready, None, &[]).is_empty());
+    assert!(crate::wait::is_runnable(&ready, &[]));
+    assert!(!crate::wait::is_runnable(
+        &ready,
+        &[task_core::TaskWait::ReviewAwaitingHuman]
+    ));
+    let blocked = sample_task(TaskKind::Execute, Status::Blocked);
+    assert!(!crate::wait::is_runnable(&blocked, &[]));
+    assert!(
+        crate::wait::human_gate_waits(&blocked, None, &[]).is_empty(),
+        "no gate events"
+    );
+}
+
+fn stage_gate_plan(schema: &str, review_human: bool) -> task_core::ExecutionPlanRow {
+    let stage = |key: &str, review| task_core::StageSpec {
+        key: key.to_string(),
+        kind: task_core::WorkUnitKind::Implement,
+        title: format!("stage {key}"),
+        review,
+    };
+    let review = if review_human {
+        task_core::StageReview::Human
+    } else {
+        task_core::StageReview::None
+    };
+    task_core::ExecutionPlanRow {
+        id: "plan-1".to_string(),
+        task_id: TaskId::new().to_string(),
+        version: 1,
+        origin: task_core::PlanOrigin::Planner,
+        planner_run_id: None,
+        status: task_core::PlanStatus::Active,
+        spec: task_core::ExecutionPlanSpec {
+            stages: vec![
+                stage("design", review),
+                stage("build", task_core::StageReview::None),
+            ],
+            units: Vec::new(),
+            decisions: Vec::new(),
+            schema: schema.to_string(),
+            rationale: String::new(),
+            work_units: Vec::new(),
+            phases: Vec::new(),
+            children: Vec::new(),
+        },
+        created_at: "2026-10-11T00:00:00Z".to_string(),
+        superseded_at: None,
+    }
+}
+
+fn seq_events(events: Vec<Event>) -> Vec<(u64, Event)> {
+    events
+        .into_iter()
+        .enumerate()
+        .map(|(i, e)| (i as u64 + 1, e))
+        .collect()
+}
+
+/// 段の後で止まった events（`PhaseReported{design}` → `awaiting_human`）。
+fn stopped_after_design() -> Vec<(u64, Event)> {
+    seq_events(vec![
+        Event::PhaseReported {
+            phase: "design".into(),
+            report: Box::new(task_core::PhaseReport {
+                phase: "design".into(),
+                phase_title: "設計".into(),
+                next_phase: Some("build".into()),
+                ..Default::default()
+            }),
+        },
+        Event::Transitioned {
+            from: Status::Running,
+            to: Status::Blocked,
+            reason: crate::phase_gate::AWAITING_HUMAN.to_string(),
+        },
+    ])
+}
+
+/// D12（葉 stage-gate）: /3 の計画の `review: human` の段で止まった task は `StageReview` と段 key を出す。
+#[test]
+fn task_wait_api_stage_review_reports_the_stage_key() {
+    let task = sample_task(TaskKind::Execute, Status::Blocked);
+    let plan = stage_gate_plan(task_core::EXECUTION_PLAN_SCHEMA_V3, true);
+    assert_eq!(
+        crate::wait::human_gate_waits(&task, Some(&plan), &stopped_after_design()),
+        vec![task_core::TaskWait::HumanGate {
+            gate: task_core::HumanGateKind::StageReview,
+            stage: Some("design".to_string()),
+        }]
+    );
+}
+
+/// D12（葉 stage-gate）: 計画の承認待ちは `PlanApproval`（段 key なし）で、段の review と区別される。
+#[test]
+fn task_wait_api_stage_review_is_distinct_from_plan_approval() {
+    let task = sample_task(TaskKind::Execute, Status::Blocked);
+    let plan = stage_gate_plan(task_core::EXECUTION_PLAN_SCHEMA_V3, true);
+    let plan_approval = vec![task_core::TaskWait::HumanGate {
+        gate: task_core::HumanGateKind::PlanApproval,
+        stage: None,
+    }];
+    // 承認待ちで止まった（遷移の reason）。
+    let awaiting = seq_events(vec![Event::Transitioned {
+        from: Status::Running,
+        to: Status::Blocked,
+        reason: crate::plan_gate::AWAITING_PLAN_APPROVAL.to_string(),
+    }]);
+    assert_eq!(
+        crate::wait::human_gate_waits(&task, Some(&plan), &awaiting),
+        plan_approval
+    );
+    // 有効な版が PlanGate を通っていない（ready でも dispatcher は止める。同じ判定）。
+    let ready = sample_task(TaskKind::Execute, Status::Ready);
+    let requested = seq_events(vec![Event::PlanApprovalRequested {
+        plan_id: plan.id.clone(),
+        reasons: vec!["review_human:design".to_string()],
+    }]);
+    assert_eq!(
+        crate::wait::human_gate_waits(&ready, Some(&plan), &requested),
+        plan_approval
+    );
+}
+
+/// D12（葉 stage-gate）: `review: human` でない段（/2 の `pause_after` など）の途中確認は `PhaseCheckpoint`。
+#[test]
+fn task_wait_api_stage_review_falls_back_to_phase_checkpoint() {
+    let task = sample_task(TaskKind::Execute, Status::Blocked);
+    let checkpoint = vec![task_core::TaskWait::HumanGate {
+        gate: task_core::HumanGateKind::PhaseCheckpoint,
+        stage: Some("design".to_string()),
+    }];
+    for plan in [
+        stage_gate_plan(task_core::EXECUTION_PLAN_SCHEMA_V3, false),
+        stage_gate_plan(task_core::EXECUTION_PLAN_SCHEMA_V2, true),
+    ] {
+        assert_eq!(
+            crate::wait::human_gate_waits(&task, Some(&plan), &stopped_after_design()),
+            checkpoint
+        );
+    }
+    assert_eq!(
+        crate::wait::human_gate_waits(&task, None, &stopped_after_design()),
+        checkpoint
+    );
 }

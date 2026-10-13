@@ -1175,16 +1175,6 @@ impl Dispatcher {
             }
             questions.extend(cross_department.iter().cloned());
         }
-        // ADR-0024 D4 / S10: プール経由の run の失敗は、原因がアカウント側（throttled/auth_failed/exhausted）なら
-        // アカウントを cooldown にしプロバイダは cooldown にしない。`Spawn` 失敗（起動できない）はアカウントの
-        // 責任ではないので、通常どおりプロバイダを cooldown にする（`failure_reason == Some("spawn")`）。
-        let account_at_fault = account.is_some() && failure_reason != Some("spawn");
-        let policy_outcome = if account_at_fault {
-            ProviderOutcome::Ok
-        } else {
-            provider_outcome.clone()
-        };
-        self.policy.report(provider.clone(), &policy_outcome);
 
         // ADR-0061（Phase 104）: `retries` はこの run が始まった時点でタスクが既に消費していた試行回数
         // （= 遷移前の `task.attempts`）。
@@ -1383,15 +1373,9 @@ impl Dispatcher {
                 (Some(acct), Some(adapter)) if reason != "spawn" => {
                     self.record_account_failure(adapter, acct, reason, &provider_outcome)
                 }
-                // ADR-0013 D9 / S10: プールを使わない、または Spawn 失敗（アカウント非依存）はプロバイダの
-                // cooldown として、遷移と同じトランザクションで記録する。
-                _ => {
-                    if let Some(ev) =
-                        self.provider_throttled_event(&provider, &provider_outcome, reason)
-                    {
-                        events.push(ev);
-                    }
-                }
+                // ADR-0013 D9 / ADR 2026-10-08 §(e): プールを使わない、または Spawn 失敗（アカウント非依存）は
+                // source の暗黙アカウントの cooldown として、遷移と同じトランザクションで記録する。
+                _ => events.push(self.record_source_failure(&provider, reason, &provider_outcome)),
             }
         }
         // ADR-0033 D5（Phase 26 / Phase 27）: `Question` で終わった run（部をまたぐ委譲の質問への置き換えも

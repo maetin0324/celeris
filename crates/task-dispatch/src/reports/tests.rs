@@ -38,6 +38,7 @@ fn store_with_org() -> Arc<dyn TaskStore> {
 fn task(assignee: Option<&str>, project: Option<ProjectId>) -> Task {
     let now = OffsetDateTime::now_utc();
     Task {
+        harness_id: None,
         requirements: Default::default(),
         tree: None,
         paused_at: None,
@@ -55,10 +56,7 @@ fn task(assignee: Option<&str>, project: Option<ProjectId>) -> Task {
         depends_on: vec![],
         status: Status::Running,
         priority: 0,
-        worker_hint: WorkerHint {
-            tier: Tier::Cheap,
-            adapter: None,
-        },
+        worker_hint: WorkerHint { tier: Tier::Cheap },
         workspace: WorkspaceSpec::Local {
             path: ".".into(),
             mode: None,

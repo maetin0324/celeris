@@ -59,9 +59,6 @@ pub struct TaskEdit {
     /// ADR-0033 D2 の最上位「タスク」の tier 指定（`worker_hint.tier`）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tier: Option<Tier>,
-    /// `worker_hint.adapter`（`null` で外す）。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub adapter: Option<Option<String>>,
     /// 途中目標（`null` で外す）。そのタスクの案件のものであること。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub milestone_id: Option<Option<MilestoneId>>,
@@ -80,8 +77,7 @@ pub struct TaskEdit {
     /// ADR-0046 D4（Phase 59）: 進め方（`prototype` / `production` / `research`）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<task_core::TaskMode>,
-    /// ADR-0046 D3（Phase 59）: ハーネス（`tasks.genre` 列をそのまま harness id として使う）。
-    /// `null` で外す。`genres`（= ハーネスのレジストリの射影）が空でなければ知らない id は 422。
+    /// ハーネス ID。`null` で外す。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub harness: Option<Option<String>>,
     /// 楽観的排他（現在の `status` と違えば 409）。
@@ -134,7 +130,7 @@ pub struct EditResult {
 ///
 /// **`tier` / `adapter` / 予算は再解決しない**（ADR-0033 D2 の「タスク > 役割 > 担当 > 分野」は
 /// **作成時に 1 回**だけ効く）。`assignee` や `role` を変えても、既に焼き付いた `worker_hint` と
-/// `budget` はそのまま残る — 変えたければ同じ `PATCH` で明示的に書く（`docs/api/v1/gui-api.md` §3.74）。
+/// `budget` はそのまま残る — 変えたければ同じ `PATCH` で明示的に書く（`docs/api/v1/api.md` §3.74）。
 pub fn edit_task(
     store: &dyn TaskStore,
     id: TaskId,
@@ -303,17 +299,11 @@ pub fn plan_edit(
         task.mode = mode;
         fields.push("mode".to_string());
     }
-    // ADR-0046 D3（Phase 59）: ハーネス（`tasks.genre` 列）。知らない id は 422
-    // （`genres` が空の設定では検証しない。作成時と同じ規律）。
+    // Harness choice is stored directly on the task.
     if let Some(harness) = edit.harness {
-        if let Some(id) = harness.as_deref()
-            && !genres.is_empty()
-            && GenreSpec::find(genres, id).is_none()
-        {
-            return Err(OpsError::Validation(format!("unknown harness: {id:?}")));
-        }
-        if harness != task.genre {
-            task.genre = harness;
+        let selected = harness.map(task_core::llm_route::HarnessId::from);
+        if selected != task.harness_id {
+            task.harness_id = selected;
             fields.push("harness".to_string());
         }
     }
@@ -404,12 +394,6 @@ pub fn plan_edit(
             routing.pause_after_source = task_core::PauseSource::Human;
             fields.push("pause_after".to_string());
         }
-    }
-    if let Some(adapter) = edit.adapter
-        && adapter != task.worker_hint.adapter
-    {
-        task.worker_hint.adapter = adapter;
-        fields.push("adapter".to_string());
     }
     if let Some(milestone_id) = edit.milestone_id {
         if let Some(mid) = milestone_id {

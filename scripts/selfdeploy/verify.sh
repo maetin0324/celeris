@@ -9,13 +9,7 @@
 #        tasks / projects / milestones / org_nodes / approvals / reports / messages の件数と
 #        tasks の {id,status} のダイジェスト。**本番 API は読まない**（本番は検証の間も動いているので、
 #        本番と比べると当たり前にずれて偽陰性になる。ADR-0041 §1-2）
-#     3. 主要 GET が 200 かつ JSON（inbox / org/<node>/memory / notify / clusters / providers / config）
-#     4. 新リリースの GUI を 127.0.0.1:7701 に起こして主要ページが 200
-#     4b. **GUI の e2e（読み取り専用。Phase 83 / G36、ADR-0041 追記）**: `gui/`（devDependencies 込みの方。
-#        `$SD_REPO/gui` か、無ければ release の `gui/`）から `pnpm e2e:staging` を検査 4 の GUI/celeris に
-#        対して走らせる。mobile-audit と同じ画面一覧の 200 応答・コンソールエラー無し・`/accounts` や
-#        `/knowledge/skills` の描画・既存タスクでのタブ切り替えを確かめる。タスクは作らない
-#        （検査 6 の煙試験より前に置く）。Playwright が無ければ「未インストール」で false（クラッシュしない）
+#     3. 主要 GET が 200 かつ JSON（inbox / org/<node>/memory / notify / clusters / llm/sources / harnesses / config）
 #     5. N-1 互換: `current` の旧デーモンを、**新バイナリがマイグレーションした後の**同じスナップショットに
 #        対して 127.0.0.1:7712 に起こし、1〜3 と同じ検査（件数はスナップショットと比べる。
 #        落ちたら live_ok = false）
@@ -24,20 +18,17 @@
 #        （`assignee` を付けられたときは）その run の報告が `GET /reports` に出ることを確かめる。
 #        verify の celeris は `genre = "smoke"` だけを dispatch し、役割・分野・プロバイダはすべて
 #        **偽のアダプタ**の組み込み（LLM は呼ばない）。**検査 5 の後**に行う（検査 2 / 5 の件数を動かさない）
-#   を行い、`$CELERIS_STATE_DIR/releases/<sha12>/verify.json` を書く。`ok` は 1〜4・4b・6 が全部真のとき。
 #
 #   **所要時間と並行（Phase SD-1）**: 検査ごとの秒数を verify.json の `checks[].secs` に、準備・ロック待ち・
-#   全体の秒数を `durations` に書く。検査 4b（gui-e2e: 新しい celeris 7711 / GUI 7701 を読むだけ）と
 #   検査 5（N-1: 旧 celeris を 7712 に起こして読むだけ）は**並行に**回す。どちらも同じスナップショットを
 #   開くが、それは以前から（新しい celeris が起きたまま検査 5 を回していた）で、どちらも書き込まない
-#   （4b はタスクを作らない、5 は GET だけ）。書き込むのは検査 6 だけで、両方が終わってから回す。
 #
 #   **直列化（ADR-0041 D2）**: `$SD_STAGING/.lock` を `flock` で取る（待ちの上限
 #   `SD_VERIFY_LOCK_WAIT`、既定 1800 秒）。取れなければ exit 75（EX_TEMPFAIL）。
-#   staging のディレクトリもポート（7711 / 7701 / 7712）も固定なので、2 本同時には走れない。
+#   staging のディレクトリもポート（7711 / 7712）も固定なので、2 本同時には走れない。
 #
 # 本番には触れない: DB は `.backup` と `mode=ro` で読むだけ、**本番 API は一切叩かない**、
-# 本番のプロセスには一切シグナルを送らない。127.0.0.1:7710 / 0.0.0.0:7700 には bind しない。
+# 本番のプロセスには一切シグナルを送らない。127.0.0.1:7710 / 127.0.0.1:7720 には bind しない。
 set -euo pipefail
 
 SD_PROG=verify
@@ -48,7 +39,7 @@ usage() {
   cat >&2 <<'EOF'
 usage: verify.sh [--dry-run] <sha12>
 
-  --dry-run   何も起こさずに、前提（スナップショットが取れる / ポート 7711・7701・7712 が空いている /
+  --dry-run   何も起こさずに、前提（スナップショットが取れる / ポート 7711・7712 が空いている /
               current の状態）だけ確かめ、実行するはずのコマンドを表示して終わる。
               Phase 47（--mode / --db / --listen …）が本番の `current` に入る前でも使える。
 
@@ -84,7 +75,6 @@ command -v curl >/dev/null 2>&1 || sd_die "curl not found"
 REL="$(sd_release_dir "$SHA12")"
 [ -d "$REL" ] || sd_die "no such release: $REL (run release.sh first)"
 [ -x "$REL/bin/celeris" ] || sd_die "missing $REL/bin/celeris"
-[ -f "$REL/gui/server.js" ] || sd_die "missing $REL/gui/server.js"
 [ -f "$SD_CONFIG" ] || sd_die "missing $SD_CONFIG"
 [ -r "$SD_DB" ] || sd_die "cannot read $SD_DB"
 [ "$(sd_json_get "$REL/gate.json" ok 2>/dev/null || echo false)" = true ] \
@@ -96,9 +86,9 @@ NEW_SCHEMA="$(sd_json_get "$REL/manifest.json" schema_version)" \
 CUR="$(sd_current_sha)"
 
 # staging のポートは env で変えられる（テスト用。lib.sh）が、本番のポートにはさせない（ADR-0040 D1 の安全規則）。
-for p in "$SD_STAGING_API_PORT" "$SD_STAGING_GUI_PORT" "$SD_STAGING_OLD_API_PORT"; do
+for p in "$SD_STAGING_API_PORT" "$SD_STAGING_OLD_API_PORT"; do
   case "$p" in
-    7710 | 7700 | "") sd_die "staging port '$p' is a production port or empty; refusing" ;;
+    7710 | 7720 | 7721 | "") sd_die "staging port '$p' is a production port or empty; refusing" ;;
   esac
 done
 VERIFY_T0="$(sd_now)"
@@ -191,7 +181,6 @@ PREPARE_T0="$(sd_now)"
 # ---- staging を作り直してスナップショットを取る ----------------------------
 
 sd_require_port_free "$SD_STAGING_API_PORT" "staging celeris"
-sd_require_port_free "$SD_STAGING_GUI_PORT" "staging gui"
 sd_require_port_free "$SD_STAGING_OLD_API_PORT" "staging N-1 celeris"
 
 # `.lock` 以外を消す（`rm -rf "$SD_STAGING"` だとロックしている実体ごと消えてしまう）。
@@ -221,11 +210,6 @@ PREPARE_SECS="$(sd_secs_since "$PREPARE_T0")"
 NEW_CMD=("$REL/bin/celeris" --config "$SD_CONFIG" --mode verify --db "$SNAP"
   --listen "127.0.0.1:$SD_STAGING_API_PORT" --workspace-root "$SD_STAGING/workspaces"
   --token-file "$ST_TOKEN" --release "$SHA12")
-GUI_ENV=(CELERIS_API_URL="http://127.0.0.1:$SD_STAGING_API_PORT"
-  CELERIS_API_TOKEN_FILE="$ST_TOKEN"
-  CELERIS_GUI_BIND="127.0.0.1:$SD_STAGING_GUI_PORT"
-  CELERIS_GUI_RELEASE="$SHA12"
-  NODE_ENV=production)
 # ADR-0045: `current` は改名前のリリース（`bin/taskd`）のことがある（初回の移行）。
 # 新しい名前を先に見て、無ければ旧名を使う。**ここだけが旧名を知っている**。
 OLD_BIN=""
@@ -250,26 +234,13 @@ snapshot          : $SNAP (schema_version=$SNAP_SCHEMA, tasks=$SNAP_TASKS)
 snapshot counts   : $SNAP_JSON（マイグレーション前。検査 2 はこれと staging API を比べる）
 staging lock      : $SD_STAGING/.lock（取得済み。待ちの上限 ${SD_VERIFY_LOCK_WAIT}s）
 staging token     : $ST_TOKEN
-ports free        : $SD_STAGING_API_PORT (celeris) / $SD_STAGING_GUI_PORT (gui) / $SD_STAGING_OLD_API_PORT (N-1)
+ports free        : $SD_STAGING_API_PORT (celeris) / $SD_STAGING_OLD_API_PORT (N-1)
 current           : ${CUR:-<none>}  -> live_ok は $( [ -n "$CUR" ] && echo "N-1 の結果しだい" || echo "false（current が無い）" )
 production API    : 叩かない（ADR-0041 D2。件数は同じスナップショットの前後で比べる）
 
 --- dry run: 実行するはずのコマンド ---
 [1/6] ${NEW_CMD[*]}
-[3/6] curl http://127.0.0.1:$SD_STAGING_API_PORT/api/v1/{health,tasks,projects,org,approvals,reports,inbox,notify,clusters,providers,config}
-[4/6] ( cd $REL/gui && ${GUI_ENV[*]} /usr/bin/node server.js )
-      curl http://127.0.0.1:$SD_STAGING_GUI_PORT/{healthz,,org,projects,projects/<id>,approvals,reports,clusters}
-[4b/6] gui-e2e（Phase 83 / G36、ADR-0041 追記）: $(
-  DRY_GUI_TEST_DIR=""
-  for cand in "$REL/gui" "$SD_REPO/gui"; do
-    [ -d "$cand/node_modules/@playwright/test" ] && { DRY_GUI_TEST_DIR="$cand"; break; }
-  done
-  if [ -n "$DRY_GUI_TEST_DIR" ]; then
-    echo "( cd $DRY_GUI_TEST_DIR && E2E_REQUIRE_STAGING=1 E2E_GUI_URL=http://127.0.0.1:$SD_STAGING_GUI_PORT E2E_API_URL=http://127.0.0.1:$SD_STAGING_API_PORT E2E_TOKEN_FILE=$ST_TOKEN timeout ${SD_E2E_TIMEOUT:-240} pnpm e2e:staging )"
-  else
-    echo "not installed — @playwright/test not found in $REL/gui or $SD_REPO/gui"
-  fi
-)
+[3/6] curl http://127.0.0.1:$SD_STAGING_API_PORT/api/v1/{health,tasks,projects,org,approvals,reports,inbox,notify,clusters,llm/sources,harnesses,config}
 [5/6] $( [ ${#OLD_CMD[@]} -gt 0 ] && echo "${OLD_CMD[*]}" || echo "（current が無いので N-1 検査は行わない。live_ok=false）" )
 [6/6] curl -X POST http://127.0.0.1:$SD_STAGING_API_PORT/api/v1/tasks -d '{"title":"smoke","genre":"smoke","role":"smoke",...}'
       → approve → GET /tasks/<id> を 60 秒まで待って done → events → reports（ADR-0041 D5）
@@ -283,7 +254,6 @@ fi
 # ---- 検査の記録 ------------------------------------------------------------
 
 CHECKS_TSV="$(mktemp)"
-# `id` は文字列（`s`）。検査 4b（Phase 83 / G36。ADR-0041 追記）が id `4b` を足すため、数値専用の `i` にはできない。
 # `secs`（Phase SD-1）はその検査の壁時計の秒数（`check_begin` から `record` まで）。
 printf 'id:s name:s ok:b detail:s task_id:s elapsed_s:f secs:f\n' >"$CHECKS_TSV"
 # `check_begin` — 次の `record` までを 1 つの検査の所要時間として測り始める。
@@ -459,7 +429,7 @@ spec = {
     "objective": "検証（staging）の煙試験。偽のアダプタが 1 往復するだけ（ADR-0041 D5）。",
     "acceptance": [{"type": "command", "cmd": "true", "expect_exit": 0}],
     "genre": "smoke",
-    # 組み込みの役割（`adapter = "fake"`）を明示する。`assignee` を付けると、役割を省略した場合は
+    # 組み込みの役割（`harness = "smoke"`、偽のアダプタ）を明示する。`assignee` を付けると、役割を省略した場合は
     # そのノードの分野の既定の役割（＝本物のアダプタ）が勝ってしまう。
     "role": "smoke",
     "max_retries": 0,
@@ -634,7 +604,7 @@ probe_api() {
   local base="$1" token="$2" path bad="" body tmp code
   tmp="$(mktemp)"
   for path in "/api/v1/inbox" "/api/v1/org/$FIRST_ORG/memory" "/api/v1/notify" "/api/v1/clusters" \
-    "/api/v1/providers" "/api/v1/config"; do
+    "/api/v1/llm/sources" "/api/v1/harnesses" "/api/v1/config"; do
     code="$(sd_http_status "$base$path" "$token")"
     if [ "$code" != 200 ]; then
       bad="$bad $path($code)"
@@ -654,7 +624,7 @@ if [ "$OK1" = true ]; then
   BAD3="$(probe_api "$NEW_BASE" "$ST_TOKEN")"
   if [ -z "$BAD3" ]; then
     OK3=true
-    record 3 main-gets true "inbox, org/$FIRST_ORG/memory, notify, clusters, providers, config all 200 + JSON"
+    record 3 main-gets true "inbox, org/$FIRST_ORG/memory, notify, clusters, llm/sources, harnesses, config all 200 + JSON"
   else
     record 3 main-gets false "failing:$BAD3"
   fi
@@ -662,48 +632,9 @@ else
   record 3 main-gets false "skipped (check 1 failed)"
 fi
 
-# ---- 4. GUI -----------------------------------------------------------------
-
-check_begin
-OK4=false
-GUI_LOG="$SD_STAGING/logs/gui.log"
-if [ "$OK1" = true ]; then
-  sd_log "starting staging gui: ( cd $REL/gui && node server.js ) on 127.0.0.1:$SD_STAGING_GUI_PORT"
-  ( cd "$REL/gui" && env "${GUI_ENV[@]}" /usr/bin/node server.js ) >"$GUI_LOG" 2>&1 &
-  GUI_PID=$!
-  sd_track "$GUI_PID"
-  GUI_BASE="http://127.0.0.1:$SD_STAGING_GUI_PORT"
-  if sd_wait_http_200 "$GUI_BASE/healthz" 60; then
-    sd_http_get "$GUI_BASE/healthz" >"$SD_STAGING/logs/healthz.json" || true
-    GUI_RELEASE="$(sd_json_get "$SD_STAGING/logs/healthz.json" release || echo "-")"
-    BAD4=""
-    PAGES=("/" "/org" "/projects" "/approvals" "/reports" "/clusters")
-    [ -n "$LATEST_PROJECT" ] && PAGES+=("/projects/$LATEST_PROJECT")
-    # `/` は `/tasks` へ 302 するので、リダイレクトを追った先の status を見る。
-    for page in "${PAGES[@]}"; do
-      code="$(sd_http_status_follow "$GUI_BASE$page")"
-      [ "$code" = 200 ] || BAD4="$BAD4 $page($code)"
-    done
-    if [ -z "$BAD4" ] && [ "$GUI_RELEASE" = "$SHA12" ]; then
-      OK4=true
-      record 4 gui true "healthz release=$GUI_RELEASE, pages 200: ${PAGES[*]}"
-    elif [ -z "$BAD4" ]; then
-      record 4 gui false "pages are 200 but /healthz reports release=$GUI_RELEASE (want $SHA12)"
-    else
-      record 4 gui false "failing:$BAD4 (healthz release=$GUI_RELEASE); see $GUI_LOG"
-    fi
-  else
-    record 4 gui false "no 200 from $GUI_BASE/healthz within 60s; see $GUI_LOG ($(tail -n 3 "$GUI_LOG" | tr '\n' ' '))"
-  fi
-else
-  record 4 gui false "skipped (check 1 failed)"
-fi
-
 # ---- 5. N-1 互換（live_ok） -------------------------------------------------
 
-# Phase SD-1: 検査 4b と並行に回す（冒頭の「所要時間と並行」）。旧 celeris はこの（親の）シェルで起こして
 # `sd_track` する（後始末が止められるように）。待ち・集計・判定は裏のサブシェルで行い、結果は
-# `$N1_TSV`（検査の 1 行）と `$N1_LIVE`（true/false）に書く。親は 4b の後で待ち合わせて取り込む。
 LIVE_OK=false
 OLD_LOG="$SD_STAGING/logs/celeris-old.log"
 N1_TSV="$SD_STAGING/logs/check-5.tsv"
@@ -713,7 +644,6 @@ PARALLEL_T0="$(sd_now)"
 check_begin
 : >"$N1_TSV"
 printf 'false' >"$N1_LIVE"
-# 検査 5 の行は、どの場合も `$N1_TSV` に書いて 4b の後で取り込む（verify.json の checks の順を 4b → 5 に保つ）。
 if [ ${#OLD_CMD[@]} -eq 0 ]; then
   CHECKS_TSV="$N1_TSV" record 5 n-1-compat false "no \`current\` release (first migration): live_ok = false"
 elif [ "$OK1" != true ]; then
@@ -764,74 +694,16 @@ else
   sd_track "$N1_PID"
 fi
 
-# ---- 4b. GUI の e2e（read-only。Phase 83 / G36、ADR-0041 追記）-------------
-#
-# `pnpm e2e`（gui/e2e/*.spec.ts）はタスクを作って承認する結合テストなので、staging にはそのまま使えない
-# （検査 2/5 の件数一致は「検査 6 の煙試験だけが書き込む」という前提。ADR-0041 D2/D5）。代わりに
-# **読み取り専用**の `pnpm e2e:staging`（`gui/scripts/e2e-check.mjs`）を、検査 4 が起こした staging の
-# GUI（$GUI_BASE）と celeris（$NEW_BASE）に対して走らせる。ナビゲーションと `?tab=` の切り替えだけで、
-# タスクは作らない。**検査 6（煙試験）より前**に置く（検査 6 が足す 1 件がここに写り込まないように）。
-#
-# release の `gui/`（`release.sh` が `pnpm install --prod` した方）には Playwright が devDependency なので
-# 入っていない。**リポジトリの `gui/`**（`$SD_REPO/gui`。人・自己改善の作業ツリーが `pnpm install` 済みの方）
-# から走らせ、どちらにも `@playwright/test` が無ければクラッシュさせずに「未インストール」で false にする。
-check_begin
-OK4B=false
-E2E_LOG="$SD_STAGING/logs/e2e-staging.log"
-SD_E2E_TIMEOUT="${SD_E2E_TIMEOUT:-240}"
-if [ "$OK1" = true ] && [ "$OK4" = true ]; then
-  GUI_TEST_DIR=""
-  for cand in "$REL/gui" "$SD_REPO/gui"; do
-    if [ -d "$cand/node_modules/@playwright/test" ]; then
-      GUI_TEST_DIR="$cand"
-      break
-    fi
-  done
-  if [ -z "$GUI_TEST_DIR" ]; then
-    record 4b gui-e2e false "not installed — @playwright/test not found in $REL/gui or $SD_REPO/gui (release gui is pnpm install --prod; devDependencies are stripped there)"
-  else
-    sd_use_pnpm
-    sd_log "gui-e2e: pnpm e2e:staging in $GUI_TEST_DIR (timeout ${SD_E2E_TIMEOUT}s) against gui=$GUI_BASE api=$NEW_BASE"
-    E2E_RC=0
-    ( cd "$GUI_TEST_DIR" && E2E_REQUIRE_STAGING=1 E2E_GUI_URL="$GUI_BASE" E2E_API_URL="$NEW_BASE" \
-        E2E_TOKEN_FILE="$ST_TOKEN" timeout "$SD_E2E_TIMEOUT" pnpm e2e:staging ) >"$E2E_LOG" 2>&1 8>&- 9>&- \
-      || E2E_RC=$?
-    case "$E2E_RC" in
-      0)
-        OK4B=true
-        record 4b gui-e2e true "pnpm e2e:staging ok (from $GUI_TEST_DIR); see $E2E_LOG"
-        ;;
-      124)
-        record 4b gui-e2e false "timed out after ${SD_E2E_TIMEOUT}s (SD_E2E_TIMEOUT); see $E2E_LOG"
-        ;;
-      3)
-        record 4b gui-e2e false "not installed — see $E2E_LOG"
-        ;;
-      *)
-        record 4b gui-e2e false "exit $E2E_RC; see $E2E_LOG ($(tail -n 5 "$E2E_LOG" | tr '\n' ' '))"
-        ;;
-    esac
-  fi
-else
-  record 4b gui-e2e false "skipped (check 1 or 4 failed)"
-fi
-
-# Optional P6-02 staging hook. It runs while this verify owns the staging ports
-# and both the new celeris and gui are alive; the hook must only read the API.
+# Optional read-only web staging checks run while the snapshot API is alive.
 WEB_HOOK_OK=true
 if [ -n "${SD_VERIFY_WEB_HOOK:-}" ]; then
   check_begin
   WEB_HOOK_OK=false
-  if [ "$OK1" = true ] && [ "$OK4" = true ] && [ -x "$SD_VERIFY_WEB_HOOK" ]; then
-    if "$SD_VERIFY_WEB_HOOK" "$SHA12" "$REL" "$NEW_BASE" "$GUI_BASE" "$ST_TOKEN"; then
-      WEB_HOOK_OK=true
-      record 4c web-parity true "staging gateway and read-only parity e2e passed"
-    else
-      record 4c web-parity false "staging gateway or read-only parity e2e failed"
-    fi
-  else
-    record 4c web-parity false "staging unavailable or SD_VERIFY_WEB_HOOK is not executable"
+  if [ "$OK1" = true ] && [ -x "$SD_VERIFY_WEB_HOOK" ] &&
+      "$SD_VERIFY_WEB_HOOK" "$SHA12" "$REL" "$NEW_BASE" "$ST_TOKEN"; then
+    WEB_HOOK_OK=true
   fi
+  record 4c web-parity "$WEB_HOOK_OK" "read-only staging gateway checks"
 fi
 
 # ---- 検査 5（裏で回っている N-1）と待ち合わせる（Phase SD-1） -----------------
@@ -848,7 +720,7 @@ else
   record 5 n-1-compat false "the N-1 check did not report a result (subshell exit $N1_RC); see $OLD_LOG: live_ok = false"
 fi
 PARALLEL_SECS="$(sd_secs_since "$PARALLEL_T0")"
-sd_log "checks 4b + 5 (in parallel): ${PARALLEL_SECS}s wall"
+sd_log "check 5 (N-1): ${PARALLEL_SECS}s wall"
 
 # ---- 6. 煙試験（ADR-0041 D5）------------------------------------------------
 #
@@ -875,27 +747,28 @@ else
   record 6 smoke false "skipped (check 1 failed)"
 fi
 
-# ---- web app 起動確認（ADR-0135 D4、非 blocking）-----------------------------
+# ---- web app 起動確認（必須）-----------------------------
 check_begin
 WEB_PROBE_PORT="$SD_VERIFY_WEB_PROBE_PORT"
+WEB_APP_OK=false
 if [ "$(sd_json_get "$REL/gate.json" web.ok 2>/dev/null || echo false)" != true ]; then
   record 4d web-app-start false "skipped (gate.json web.ok is not true)"
 elif [ ! -d "$REL/web/app" ]; then
   record 4d web-app-start false "skipped (release has no web/app)"
 elif sd_web_app_probe "$REL/web/app" "$WEB_PROBE_PORT" "$SHA12"; then
+  WEB_APP_OK=true
   record 4d web-app-start true "temporary loopback app returned /healthz 200 on port $WEB_PROBE_PORT"
 else
-  record 4d web-app-start false "temporary loopback app failed /healthz on port $WEB_PROBE_PORT (non-blocking)"
+  record 4d web-app-start false "temporary loopback app failed /healthz on port $WEB_PROBE_PORT"
 fi
 
 # ---- verify.json ------------------------------------------------------------
 
 OK=false
-if [ "$OK1" = true ] && [ "$OK2" = true ] && [ "$OK3" = true ] && [ "$OK4" = true ] && [ "$OK4B" = true ] && [ "$WEB_HOOK_OK" = true ] && [ "$OK6" = true ]; then
+if [ "$OK1" = true ] && [ "$OK2" = true ] && [ "$OK3" = true ] && [ "$WEB_APP_OK" = true ] && [ "$WEB_HOOK_OK" = true ] && [ "$OK6" = true ]; then
   OK=true
 fi
 
-# 検査の順は 1, 2, 3, 4, 4b, 5, 6, 4d（4d は最後に実行し、blocking 集計から除外）。
 CHECKS_JSON="$(sd_tsv_to_json "$CHECKS_TSV")"
 TOTAL_SECS="$(sd_secs_since "$VERIFY_T0")"
 counts_or_null() { if sd_json_valid "$1"; then cat "$1"; else printf 'null'; fi; }
@@ -911,7 +784,7 @@ counts_or_null() { if sd_json_valid "$1"; then cat "$1"; else printf 'null'; fi;
   printf '  "current": %s,\n' "$(sd_json_str "$CUR")"
   printf '  "staging_dir": %s,\n' "$(sd_json_str "$SD_STAGING")"
   printf '  "checks": %s,\n' "$CHECKS_JSON"
-  printf '  "durations": {"lock_wait_s": %s, "prepare_s": %s, "parallel_4b_5_s": %s, "total_s": %s},\n' \
+  printf '  "durations": {"lock_wait_s": %s, "prepare_s": %s, "n1_s": %s, "total_s": %s},\n' \
     "$LOCK_WAIT_SECS" "$PREPARE_SECS" "${PARALLEL_SECS:-0}" "$TOTAL_SECS"
   printf '  "counts": {\n'
   printf '    "snapshot": %s,\n' "$(counts_or_null "$SNAP_JSON")"

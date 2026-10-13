@@ -22,8 +22,9 @@ pub enum DocsMaintenanceCommand {
         repo_id: String,
         plan: PathBuf,
         worktree: PathBuf,
-        #[arg(long, default_value = "main")]
-        default_branch: String,
+        /// Omitted: resolved like delivery (origin/HEAD → main → master).
+        #[arg(long)]
+        default_branch: Option<String>,
     },
 }
 fn read<T: serde::de::DeserializeOwned>(path: PathBuf) -> Result<T, CliError> {
@@ -52,6 +53,9 @@ pub fn run(command: DocsMaintenanceCommand) -> Result<ExitCode, CliError> {
             worktree,
             default_branch,
         } => {
+            let default_branch =
+                task_ops::changes::resolve_default_branch(&repo, default_branch.as_deref())
+                    .map_err(|e| CliError::msg(e.to_string()))?;
             let sha = docs::apply_plan(
                 &repo,
                 &default_branch,

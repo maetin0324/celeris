@@ -369,7 +369,7 @@ pub fn tick(
     }
     let spec = serde_json::from_value::<task_ops::add::NewTaskSpec>(serde_json::json!({
         "title":"Knowledge GC", "objective":objective,"acceptance":[],
-        "role":task_core::report::KNOWLEDGE_ROLE,"adapter":"langmem","tier":"cheap",
+        "role":task_core::report::KNOWLEDGE_ROLE,"harness":"langmem","tier":"cheap",
         "assignee":assignee,"max_turns":4,"max_wall_secs":900,"max_retries":0,
         "labels":["knowledge-gc"]
     }))

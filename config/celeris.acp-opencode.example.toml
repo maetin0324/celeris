@@ -8,7 +8,7 @@
 #
 # 冷スタートの暖気（ADR-0026 D6）: 初回起動は opencode 側がプロバイダの npm パッケージ
 # （`@ai-sdk/openai-compatible`）を取得するのに数分かかる（2 回目以降は数秒）。デーモンに載せる前に一度、
-#   celerisctl worker run --config config/celeris.acp-opencode.example.toml --task <id> --provider opencode
+#   celerisctl worker run --config config/celeris.acp-opencode.example.toml --task <id> --harness opencode
 # で 1 回実行して暖めておく。`startup_timeout_secs`（既定 300 秒）はこの初回取得を待てるように長めにしてある。
 
 db = "../celeris-acp-demo.sqlite3"
@@ -24,9 +24,8 @@ error_cooldown_secs = 300
 [plan]
 auto_accept = false
 
-# `[adapters.acp]` は共通設定（ADR-0026 D2）。`command`/`args`/`env`/`model` は `[[providers]]` の行ごとに
-# 上書きできる（別の ACP エージェント、例えば `goose acp` を同居させるときはプロバイダ行を増やすだけでよい。
-# コードは変えない）。
+# `[adapters.acp]` は共通設定（ADR-0026 D2）。`command`/`args` は `[harnesses.<id>]` の宣言で上書きできる
+# （別の ACP エージェント、例えば `goose acp` を同居させるときは harness 宣言を増やすだけでよい）。
 [adapters.acp]
 # command = "opencode"          # 既定。PATH 上の opencode を使うなら省略可
 # args = ["acp"]                # 既定
@@ -36,38 +35,34 @@ model_option_id = "model"       # session/set_config_option の configId（既�
                                  # 実機確認済み。opencode は optionId だと -32602 Invalid params を返す）
 startup_timeout_secs = 300      # initialize の応答を待つ上限。初回のプロバイダ取得で数分かかりうる
 
-[[providers]]
-id = "opencode"
-kind = "adapter"
-adapter = "acp"
-llm_source = "celeris"
-tiers = ["cheap"]
-# この行の同時実行数。ローカルの LLM（GPU 1 枚の Qwen）なら 1 のまま、vLLM 側の並列を増やしたときだけ上げる。
-# ADR-0132 付記（2026-10-04）: cheap lane の worker run は、proxy に有効な openai_compatible source と
-# `[llm_proxy.models.qwen].cheap` があれば、アカウントプール（claude-code / codex）より先にこの行を選ぶ。
-# ここが満杯（concurrency）・source に届かない（`GET <base_url>/models`）ときだけプールに倒れる。
-# 切るには `[execution] cheap_local_first = false`。
-concurrency = 1
-# ADR-0026 D3: 空でなければ session/set_config_option { configId: model_option_id, value: model } で設定する。
-# opencode 側の設定ファイルの "model" と合わせておく（下の env の OPENCODE_CONFIG を参照）。
-# CLI の --model フラグは使わない（acp はモデルを ACP のセッション経由で渡す）。
-#
-# ADR-0132 D5: cheap の抽象モデルを proxy に要求する。Qwen が利用可能なら proxy が選び、
-# 到達不能なら同じ cheap tier の Claude/GPT に倒す。
-model = "celeris-proxy/celeris/cheap"
-# env はこの行にだけ渡す（優先順: celeris 自身の環境 < [adapters.acp].env < この行の env。同名キーはこちらが勝つ。
-# ADR-0026 D2）。
-#
-# OPENCODE_CONFIG: celeris 側が用意した opencode の設定ファイル（config/opencode.openai-compat.example.json を
-#   コピーして書き換えたもの）。OpenAI 互換プロバイダ・既定モデル・権限をここで決める。
-# OPENCODE_DISABLE_PROJECT_CONFIG=1: **必ず**渡す。ワークスペース（run ごとの作業ディレクトリ）はエージェント
-#   自身が読み書きする使い捨ての場所なので、そこに書かれた opencode.json（エージェントが自分で作れる）に
-#   celeris が用意したこの設定を上書きさせない。渡し忘れると、エージェントが自分の権限やモデルを書き換えられて
-#   しまう（ADR-0026 D6）。
-# 現行の設定検査は `celeris-proxy/celeris/cheap` の外側の provider ID を解釈しないため、
-# LITELLM_MODEL でも proxy の抽象モデルを示す。opencode の選択自体は上の model と JSON が行う。
-env = { OPENCODE_CONFIG = "/home/u/celeris/opencode/celeris-proxy.json", OPENCODE_DISABLE_PROJECT_CONFIG = "1", LITELLM_MODEL = "celeris/cheap" }
-env_from_secrets = { CELERIS_API_TOKEN = "celeris-api-token" } # [api] token_file と同じ値を秘密ストアへ登録
+# LLM source: ローカルの OpenAI 互換の供給元（Qwen の tunnel など）。model は具体的な ID で書く
+# （tier alias の `celeris/cheap` は廃止された）。
+[llm_sources.qwen]
+kind = "openai_compatible"
+api_format = "openai_compatible"
+endpoint = "http://127.0.0.1:18000/v1"
+models = ["qwen3.8-27b"]
+# この供給元の同時 run 上限。ローカルの LLM（GPU 1 枚の Qwen）なら 1 のまま。
+max_runs = 1
+
+# harness: opencode の ACP 起動。
+[harnesses.opencode]
+kind = "acp"
+api_formats = ["openai_compatible"]
+source_kinds = ["openai_compatible"]
+capabilities = ["tools", "repo"]
+command = "opencode"
+args = ["acp"]
+
+# 候補は優先順。供給元に届かないときは次の候補へ（ここには 1 つだけ）。
+[route_defaults.opencode]
+candidates = [{ source = "qwen", model = "qwen3.8-27b" }]
+
+# 注意（未解決。ADR 2026-10-11 の harness 宣言に欄がまだ無い）:
+#   - OPENCODE_CONFIG（celeris が用意した opencode の設定ファイル）と OPENCODE_DISABLE_PROJECT_CONFIG=1 は
+#     harness 宣言の env では渡せない。OPENCODE_DISABLE_PROJECT_CONFIG=1 は**必ず**渡すこと（ADR-0026 D6）。
+#     渡す手段が入るまでは、opencode の既定の設定ファイルをワークスペースに置かない運用にする。
+#   - 上の供給元のエンドポイントは opencode 側の設定（opencode.openai-compat.example.json）とも一致させる。
 
 # OPENCODE_CONFIG が指す opencode 側の設定ファイル（config/opencode.openai-compat.example.json）では:
 #   - OpenAI 互換プロバイダを `provider.<name>.npm = "@ai-sdk/openai-compatible"` /

@@ -105,12 +105,16 @@ mod execution;
 mod instances;
 mod integrations;
 mod legacy;
+mod task_integration_state;
 pub use legacy::chat_legacy_new_conversation_tx;
 mod messages;
 mod model_catalog;
 pub use model_catalog::ModelCatalogStore;
 mod account_limits;
 mod eval_trials;
+mod migrated_harness;
+#[cfg(test)]
+mod migration_harness_tests;
 pub(crate) mod migrations;
 mod org;
 mod projects;
@@ -119,10 +123,8 @@ mod repos;
 mod route_records;
 mod routing_evidence;
 mod routing_log;
-mod routing_shadow;
 mod site_policies;
 pub use account_limits::AccountLimit;
-pub use routing_shadow::ShadowReservationAudit;
 pub(crate) use site_policies::site_policy_tx;
 pub use site_policies::{
     BrowserSitePolicy, BrowserSitePolicyDelete, BrowserSitePolicyRecord,
@@ -947,6 +949,4 @@ mod client_open_tests;
 #[cfg(test)]
 mod routing_log_tests;
 #[cfg(test)]
-mod routing_shadow_tests;
-#[cfg(test)]
-mod tests;
+pub(crate) mod tests;

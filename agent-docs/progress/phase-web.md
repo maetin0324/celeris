@@ -139,7 +139,7 @@ Playwright の読み取り検証: PC 幅 1440px は loopback URL、スマホ幅 
 
 - `docs/adr/0082-web-sse-invalidate-unlisted-kinds.md` → `docs/web/adr/web-0001-sse-invalidate-unlisted-kinds.md`（web ADR-W1）
 - `docs/adr/0083-web-project-plan-milestone-successors.md` → `docs/web/adr/web-0002-project-plan-milestone-successors.md`（web ADR-W2）
-- `docs/adr/0096-web-parallel-operation.md` → `docs/web/adr/web-0003-parallel-operation.md`（web ADR-W3）
+- `docs/adr/0096-web-operation.md` → `docs/web/adr/web-0003-parallel-operation.md`（web ADR-W3）
 
 `git mv` で移動し、本文中の自身の見出し番号だけ `ADR-NNNN` → `web ADR-Wn` に書き換えた（本文のその他の記述は変更していない）。参照していた web/・docs/web/・scripts/selfdeploy/ 側のコメントとリンクも新しい名前に直した。`git diff --quiet $(git merge-base HEAD main) -- docs/adr` は exit 0（`docs/adr/` は main と同じ）。main 由来の ADR-0082（dispatcher 分割）・ADR-0083（source-size guardrail）への既存の参照（docs/architecture-map.md、scripts/dev/source-size-report.*、docs/progress/phase-P0-dispatcher.md・phase-guardrail.md 等）は変更していない。
 

@@ -82,9 +82,10 @@ async fn get_task_tree(
     let from_root = query.bool("root")?.unwrap_or(false);
     let task_id = parse_task_id(&id)?;
     let limits = state.inner.tree_limits;
+    let memory = state.memory_waits();
     let view = state
         .blocking(move |store| {
-            task_ops::tree_view::task_tree(store, task_id, from_root, &limits)
+            task_ops::tree_view::task_tree(store, task_id, from_root, &limits, &memory)
                 .map_err(|e| ops_problem(store, e, Some("task_tree")))
         })
         .await?;
@@ -506,11 +507,17 @@ async fn get_task_execution(
     no_query(&raw)?;
     let task_id = parse_task_id(&id)?;
     let ctx = state.inner.view.clone();
+    let memory = state.memory_waits();
     let view = state
         .blocking(move |store| {
-            let mut detail =
-                task_ops::view::task_detail(store, task_id, &ctx, OffsetDateTime::now_utc())
-                    .map_err(|e| ops_problem(store, e, Some("task_execution_get")))?;
+            let mut detail = task_ops::view::task_detail(
+                store,
+                task_id,
+                &ctx,
+                &memory,
+                OffsetDateTime::now_utc(),
+            )
+            .map_err(|e| ops_problem(store, e, Some("task_execution_get")))?;
             let task = detail.task.clone();
             for run in &mut detail.runs {
                 run.files = Some(crate::files::run_files(
@@ -537,7 +544,7 @@ async fn get_task_execution(
                 }
                 None => None,
             };
-            let (gate, route, phase, metrics, phase_checkpoint, awaiting_children, plan_approval) =
+            let (gate, route, phase, metrics, phase_checkpoint, plan_approval) =
                 match detail.execution {
                     Some(e) => (
                         e.gate,
@@ -545,7 +552,6 @@ async fn get_task_execution(
                         e.phase,
                         e.metrics,
                         e.phase_checkpoint,
-                        e.awaiting_children,
                         e.plan_approval,
                     ),
                     None => (
@@ -562,7 +568,6 @@ async fn get_task_execution(
                             .map_err(|e| ops_problem(store, e, Some("task_execution_get")))?,
                         ),
                         None,
-                        Vec::new(),
                         None,
                     ),
                 };
@@ -574,7 +579,7 @@ async fn get_task_execution(
                 runs: detail.runs,
                 metrics,
                 phase_checkpoint,
-                awaiting_children,
+                waits: detail.waits,
                 plan_approval,
             })
         })

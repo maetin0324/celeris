@@ -235,8 +235,8 @@ pub fn build(manifest: &Manifest, trials: &[Trial]) -> (Aggregate, Vec<Value>) {
         let row = EvidenceRow {
             key: key.clone(),
             evidence_version: version.clone(),
-            n: outcomes.len() as u32,
-            pass: pass as u32,
+            n: outcomes.len() as u64,
+            pass: pass as u64,
             pass_lower: interval.lower,
             pass_upper: interval.upper,
             pass_boot_lower: bootstrap.lower,
@@ -397,9 +397,12 @@ pub fn run_args(args: Vec<String>) -> Result<(), String> {
     if args.iter().any(|x| x == "--write-evidence") {
         let (store, _) =
             SqliteStore::open_client(std::path::Path::new(&db)).map_err(|e| e.to_string())?;
-        store
-            .insert_routing_evidence(&result.rows)
-            .map_err(|e| e.to_string())?;
+        task_core::TaskStore::replace_routing_evidence(
+            &store,
+            &result.evidence_version,
+            &result.rows,
+        )
+        .map_err(|e| e.to_string())?;
     }
     println!(
         "trials={} cells={} evidence_version={}",

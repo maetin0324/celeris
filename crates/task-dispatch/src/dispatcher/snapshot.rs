@@ -11,11 +11,6 @@ pub struct SnapshotPublisher {
     /// RFC 3339。
     pub started_at: String,
     pub tick_ms: u64,
-    /// `[[providers]]` の定義（`in_use` は毎 tick に埋める）。
-    pub providers: Vec<ProviderLive>,
-    /// ADR-0022 D2: プロバイダ id → 直近の疎通確認。`reload` でプロバイダ表を差し替えても保持する
-    /// （確認した事実は設定の書き換えでは古くならない）。celeris を再起動すると消える。
-    pub provider_checks: HashMap<String, ProviderCheckView>,
 }
 
 impl Dispatcher {
@@ -45,47 +40,30 @@ impl Dispatcher {
             })
             .collect();
         in_flight.extend(self.reviewing.iter().filter_map(|(task_id, e)| {
-            e.provider.as_ref().map(|provider| InFlight {
+            e.route.as_ref().map(|(source, _)| InFlight {
                 task_id: *task_id,
                 run_id: e.review_run_id.clone().unwrap_or_else(|| e.run_id.clone()),
-                provider: provider.clone(),
+                provider: source.to_string(),
                 kind: InFlightKind::Reviewer,
                 since: rfc3339(e.since),
             })
         }));
         in_flight.sort_by(|a, b| a.since.cmp(&b.since).then(a.task_id.cmp(&b.task_id)));
-        let cooldowns = self
-            .policy
-            .cooldowns(now_instant)
-            .into_iter()
-            .map(|c| CooldownView {
-                provider: c.provider,
-                until: rfc3339(now + c.until.saturating_duration_since(now_instant)),
-                reason: match c.reason {
-                    CooldownReason::Throttled => "throttled",
-                    CooldownReason::AuthFailed => "auth_failed",
-                    CooldownReason::Exhausted => "exhausted",
-                }
-                .to_string(),
-            })
-            .collect();
-        let mut awaiting_human: Vec<TaskId> = self.awaiting_human.iter().copied().collect();
-        awaiting_human.sort();
-        // ADR-0023 D3: 委譲した子を待っている親（`reviewing` のまま）。GUI が「判定中」と区別して出せるように。
-        let mut awaiting_children: Vec<TaskId> = self.awaiting_children.keys().copied().collect();
-        awaiting_children.sort();
-        let mut unroutable: Vec<TaskId> = self.unroutable.iter().copied().collect();
-        unroutable.sort();
-        let providers = publisher
-            .providers
+        // ADR 2026-10-08 §(e): cooldowns of the implicit accounts (id = source id).
+        let now_unix = (self.now_unix_fn)();
+        let mut cooldowns: Vec<CooldownView> = self
+            .source_cooldowns
             .iter()
-            .map(|p| ProviderLive {
-                in_use: self.provider_in_use(&p.id) as u32,
-                in_use_cos: self.provider_in_use_cos(&p.id) as u32,
-                last_check: publisher.provider_checks.get(&p.id).cloned(),
-                ..p.clone()
+            .filter(|(_, c)| c.until > now_unix)
+            .map(|(source, c)| CooldownView {
+                source: source.to_string(),
+                account_id: source.to_string(),
+                until: rfc3339(OffsetDateTime::from_unix_timestamp(c.until).unwrap_or(now)),
+                reason: account_cooldown_reason_name(c.reason).to_string(),
             })
             .collect();
+        cooldowns.sort_by(|a, b| a.source.cmp(&b.source));
+        let task_waits = self.snapshot_task_waits();
         // ADR-0018: クラスタの稼働状況（id 昇順）。`env` の値や `setup` は含めない。
         let mut clusters: Vec<ClusterLive> = self
             .config
@@ -140,14 +118,11 @@ impl Dispatcher {
             tick_ms: publisher.tick_ms,
             in_flight,
             cooldowns,
-            awaiting_human,
-            awaiting_children,
-            unroutable,
+            task_waits,
             reports: None,
             // ADR-0033 D5（Phase 26）: 未読の件数は API が応答を組むときに埋める（`reports` と同じ理由）。
             approvals_pending: 0,
             decisions_open: 0,
-            providers,
             clusters,
             accounts_root,
             max_runs_per_account,
@@ -180,16 +155,66 @@ impl Dispatcher {
     /// ADR-0024 D5 / ADR-0025 D6: スナップショットに載せる `accounts_root`（claude-code の別名）/ `accounts_roots`
     /// （アダプタ → 根ディレクトリ）/ `max_runs_per_account` / `accounts[]`（`adapter` → `id` の順）。
     /// `[accounts]` が無ければ全て空。
-    /// ADR 2026-10-08 account-concurrency-limits §(e): 非プール行の LLM source ごとの暗黙アカウント
-    /// （最初の行の設定順）。
+    /// ADR 2026-10-08 account-concurrency-limits §(e): account pool を持たない LLM source ごとの暗黙アカウント
+    /// （source id 順）。
     /// 上限の保存値は DB が正本なので、API が `account_limits` を読んで実効上限を組む。
+    /// ADR 2026-10-11-task-wait-reasons D4: メモリの見送り理由（task_id 順・1 task に 1 件）。この tick の
+    /// `dispatch_waits`（M1〜M6・M9）に、reviewing のまま委譲した子を待つ親（M7）と人の承認を待つ親（M8）を足す。
+    pub(super) fn snapshot_task_waits(&self) -> Vec<task_ops::daemon::SnapshotTaskWait> {
+        let mut waits: std::collections::BTreeMap<TaskId, task_core::TaskWait> = self
+            .dispatch_waits
+            .iter()
+            .map(|(id, w)| (*id, w.clone()))
+            .collect();
+        for parent in self.awaiting_children.keys() {
+            // 未完の子（読めなければ空。snapshot は観測値で、tick を止めない）。
+            let mut task_ids: Vec<TaskId> = self
+                .store
+                .children(*parent)
+                .map(|cs| {
+                    cs.into_iter()
+                        .filter(|c| !c.status.is_terminal())
+                        .map(|c| c.id)
+                        .collect()
+                })
+                .unwrap_or_default();
+            task_ids.sort();
+            waits
+                .entry(*parent)
+                .or_insert(task_core::TaskWait::DelegatedChildren { task_ids });
+        }
+        for id in &self.awaiting_human {
+            waits
+                .entry(*id)
+                .or_insert(task_core::TaskWait::ReviewAwaitingHuman);
+        }
+        waits
+            .into_iter()
+            .map(|(task_id, wait)| task_ops::daemon::SnapshotTaskWait { task_id, wait })
+            .collect()
+    }
+
     pub(super) fn implicit_accounts_snapshot(&self) -> Vec<task_ops::daemon::ImplicitAccountLive> {
         self.implicit_account_ids()
             .into_iter()
-            .map(|source| task_ops::daemon::ImplicitAccountLive {
-                in_use: self.implicit_account_in_use(&source) as u32,
-                providers: self.implicit_account_providers(&source),
-                source,
+            .map(|source| {
+                let registry = &self.llm_route_registry;
+                let mut models: Vec<String> = registry
+                    .route_defaults
+                    .values()
+                    .flatten()
+                    .chain(registry.llm_routes.iter().map(|route| &route.key))
+                    .chain(registry.cos_route_candidates.iter())
+                    .filter(|candidate| candidate.source.0 == source)
+                    .map(|candidate| candidate.model.to_string())
+                    .collect();
+                models.sort();
+                models.dedup();
+                task_ops::daemon::ImplicitAccountLive {
+                    models,
+                    in_use: self.implicit_account_in_use(&source) as u32,
+                    source,
+                }
             })
             .collect()
     }
@@ -264,7 +289,7 @@ impl Dispatcher {
                         }
                     }),
                     last_check: state.and_then(|s| s.last_check.as_ref()).map(|c| {
-                        ProviderCheckView {
+                        AccountCheckView {
                             at: rfc3339(
                                 OffsetDateTime::from_unix_timestamp(c.at)
                                     .unwrap_or(OffsetDateTime::UNIX_EPOCH),

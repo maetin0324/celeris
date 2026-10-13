@@ -28,12 +28,6 @@ export function checkBoundaries(root = defaultRoot) {
       ...source.matchAll(/(?:\b(?:import|export)\s+(?:[^;]*?\s+from\s+)?|\bimport\s*\()\s*["']([^"']+)["']/gs),
     ].map((match) => match[1]);
     imports.set(file, found);
-    if (
-      !relative.startsWith("test/") &&
-      !relative.startsWith("scripts/") &&
-      found.some((name) => /(^|\/)gui(\/|$)/.test(name))
-    )
-      errors.push(`${relative}: gui import`);
     if (/(^|\/)(?:v2|next)(\/|\.|$)/i.test(relative) && !relative.startsWith("api/generated/"))
       errors.push(`${relative}: generation name`);
     if (relative.startsWith("routes/")) {
@@ -60,7 +54,6 @@ export function checkBoundaries(root = defaultRoot) {
     for (const specifier of imports.get(file) ?? []) {
       if (specifier.startsWith("../") || specifier.startsWith("./")) {
         const resolved = path.resolve(path.dirname(file), specifier);
-        if (resolved.includes(`${path.sep}gui${path.sep}`)) errors.push(`${path.relative(root, file)}: gui import`);
         if (resolved.includes(`${path.sep}server${path.sep}`))
           errors.push(`${path.relative(root, file)}: client imports server`);
         const next = [

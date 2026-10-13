@@ -20,7 +20,7 @@ use crate::error::OpsError;
 
 const TITLE_MAX_CHARS: usize = 80;
 
-/// `celerisctl plan` から組み立てる新規 Plan タスクの指定。API の `POST /plans` の本文でもある（`docs/api/v1/gui-api.md` §3.14）。
+/// `celerisctl plan` から組み立てる新規 Plan タスクの指定。API の `POST /plans` の本文でもある（`docs/api/v1/api.md` §3.14）。
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct NewPlanSpec {
@@ -87,6 +87,7 @@ pub fn create_plan(
     };
 
     let task = Task {
+        harness_id: None,
         requirements: Default::default(),
         tree: None,
         paused_at: None,
@@ -102,10 +103,7 @@ pub fn create_plan(
         depends_on: vec![],
         status: Status::Draft,
         priority: spec.priority,
-        worker_hint: WorkerHint {
-            tier: spec.tier,
-            adapter: None,
-        },
+        worker_hint: WorkerHint { tier: spec.tier },
         workspace,
         budget,
         attempts: 0,

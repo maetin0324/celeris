@@ -44,6 +44,7 @@ fn genre(id: &str, default_role: Option<&str>, roles: &[&str]) -> GenreSpec {
 fn parent() -> Task {
     let now = OffsetDateTime::now_utc();
     Task {
+        harness_id: Some(crate::llm_route::HarnessId::from("fake")),
         requirements: Default::default(),
         tree: None,
         paused_at: None,
@@ -63,7 +64,6 @@ fn parent() -> Task {
         priority: 3,
         worker_hint: WorkerHint {
             tier: Tier::Frontier,
-            adapter: Some("fake".into()),
         },
         workspace: WorkspaceSpec::Local {
             path: PathBuf::from("/tmp/ws"),
@@ -117,7 +117,7 @@ fn valid_plan_passes_and_materializes_children_with_inherited_fields() {
         assert_eq!(c.priority, 3);
         assert_eq!(c.workspace, p.workspace);
         assert_eq!(c.budget, p.budget);
-        assert_eq!(c.worker_hint.adapter.as_deref(), Some("fake"));
+        assert_eq!(c.harness_id.as_ref().map(AsRef::as_ref), Some("fake"));
         // ADR-0028 D3: tier に既定が無ければ（役割・分野・タスクいずれも無指定）親の tier を継ぐ
         // （委譲と同じ規則。以前は独立した既定 `Standard` だった）。
         assert_eq!(c.worker_hint.tier, Tier::Frontier);
@@ -372,7 +372,7 @@ fn materialize_applies_role_and_genre_defaults_like_delegation() {
     let roles = vec![RoleSpec {
         id: "implementer".into(),
         tier: None,
-        adapter: Some("codex".into()),
+        harness: Some("codex".into()),
         max_turns: None,
         max_wall_secs: None,
         instructions: None,
@@ -381,7 +381,7 @@ fn materialize_applies_role_and_genre_defaults_like_delegation() {
     let genre_default_role = vec![RoleSpec {
         id: "lead".into(),
         tier: Some(Tier::Cheap),
-        adapter: None,
+        harness: None,
         max_turns: Some(20),
         max_wall_secs: None,
         instructions: None,
@@ -401,8 +401,11 @@ fn materialize_applies_role_and_genre_defaults_like_delegation() {
         WorkspaceContext::default(),
         OffsetDateTime::now_utc(),
     );
-    // adapter: role(implementer) の既定が優先。
-    assert_eq!(children[0].worker_hint.adapter.as_deref(), Some("codex"));
+    // harness: role(implementer) の既定が優先。
+    assert_eq!(
+        children[0].harness_id.as_ref().map(AsRef::as_ref),
+        Some("codex")
+    );
     // tier: role に既定が無いので分野の既定役割（lead）から。
     assert_eq!(children[0].worker_hint.tier, Tier::Cheap);
     assert_eq!(children[0].budget.max_turns, 20);
@@ -435,14 +438,14 @@ fn materialize_drops_the_plan_supplied_assignee_and_records_it() {
         RoleSpec {
             id: "literature-reader".into(),
             tier: Some(Tier::Cheap),
-            adapter: Some("paperqa".into()),
+            harness: Some("paperqa".into()),
             max_turns: Some(5),
             ..RoleSpec::default()
         },
         RoleSpec {
             id: "writer".into(),
             tier: Some(Tier::Frontier),
-            adapter: Some("claude-code".into()),
+            harness: Some("claude-code".into()),
             ..RoleSpec::default()
         },
     ];
@@ -491,7 +494,7 @@ fn materialize_drops_the_plan_supplied_assignee_and_records_it() {
     assert_eq!(children[1].assignee, None);
     assert_eq!(dropped(1).as_deref(), Some("research-writing"));
     assert_eq!(
-        children[1].worker_hint.adapter.as_deref(),
+        children[1].harness_id.as_ref().map(AsRef::as_ref),
         Some("claude-code")
     );
     assert_eq!(children[1].worker_hint.tier, Tier::Frontier);
@@ -529,12 +532,12 @@ fn harness_setup() -> (Vec<crate::org::OrgNode>, Vec<RoleSpec>, Vec<GenreSpec>) 
     let roles = vec![
         RoleSpec {
             id: "literature-reader".into(),
-            adapter: Some("paperqa".into()),
+            harness: Some("paperqa".into()),
             ..RoleSpec::default()
         },
         RoleSpec {
             id: "implementer".into(),
-            adapter: Some("claude-code".into()),
+            harness: Some("claude-code".into()),
             ..RoleSpec::default()
         },
     ];

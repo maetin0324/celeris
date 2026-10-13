@@ -17,7 +17,6 @@ use crate::schema::API_V1_SCHEMA_JSON;
 use crate::state::ApiState;
 use crate::types::{DaemonView, DbInfo, Health};
 
-use super::providers::current_providers;
 use super::{ApiResult, json_response, no_query, now_rfc3339, read_json};
 
 // ---- 1. GET /health ----
@@ -208,9 +207,7 @@ fn daemon_snapshot_with_reports(state: &ApiState) -> Option<task_ops::daemon::Da
 
 pub(super) async fn config(State(state): State<ApiState>, RawQuery(raw): RawQuery) -> ApiResult {
     no_query(&raw)?;
-    let snapshot = state.snapshot();
-    let mut view = state.inner.config_view.clone();
-    view.providers = current_providers(&state, snapshot.as_ref());
+    let view = state.inner.config_view.clone();
     Ok(json_response(StatusCode::OK, &view))
 }
 

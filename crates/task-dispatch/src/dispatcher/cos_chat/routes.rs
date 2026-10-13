@@ -60,8 +60,7 @@ impl CosChatLaunch {
                 continue;
             }
             self.running.remove(&retry.thread_id);
-            self.accounts_in_flight.remove(&retry.thread_id);
-            self.providers_in_flight.remove(&retry.thread_id);
+            self.route_reservations.remove(&retry.thread_id);
             let Ok(run) = self.store.chat_run_get(&retry.thread_id, &retry.run_id) else {
                 continue;
             };
@@ -102,7 +101,7 @@ impl CosChatLaunch {
                 );
                 continue;
             }
-            let summary = if retry.next_route <= config.fallbacks.len() {
+            let summary = if retry.next_route == 0 {
                 format!(
                     "CoS の経路が利用上限・認証で失敗しました。次の代替経路で再試行します。理由: {}",
                     retry.reason
@@ -121,9 +120,7 @@ impl CosChatLaunch {
                 &summary,
                 now,
             );
-            if retry.next_route > config.fallbacks.len() {
-                self.fail_routes(&run, &retry.reason, Some(&retry.previous), now);
-            } else if !dispatcher.accepting_new_work || !dispatcher.disk_ready || !config.enabled {
+            if !dispatcher.accepting_new_work || !dispatcher.disk_ready || !config.enabled {
                 self.fail_routes(
                     &run,
                     "CoS の再試行を開始できません（停止中・ディスク・設定を確認してください）",
@@ -159,69 +156,49 @@ impl CosChatLaunch {
         now: OffsetDateTime,
     ) {
         let config = self.run_configs.get(thread).unwrap_or(&self.config).clone();
-        let mut last = "CoS unavailable: no usable route".to_string();
-        for index in first..=config.fallbacks.len() {
-            let mut cfg = config.clone();
-            if index > 0 {
-                let route = &config.fallbacks[index - 1];
-                cfg.harness.clone_from(&route.harness);
-                cfg.llm_source.clone_from(&route.llm_source);
-                cfg.provider.clone_from(&route.provider);
-                cfg.account_id.clone_from(&route.account_id);
-                cfg.model.clone_from(&route.model);
-                cfg.tier = route.tier;
-                cfg.unavailable_reason.clone_from(&route.unavailable_reason);
-            }
-            let elapsed = run
-                .started_at
-                .as_deref()
-                .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
-                .map_or(0, |start| (now - start).whole_seconds().max(0) as u64);
-            cfg.max_wall_secs = cfg.max_wall_secs.saturating_sub(elapsed);
-            if cfg.max_wall_secs == 0 {
-                last = "CoS run の実行期限に達しました".into();
-                break;
-            }
-            let result = self
-                .select_route_account(dispatcher, thread, &cfg)
-                .and_then(|account| {
-                    self.launch_claimed(
-                        dispatcher,
-                        &cfg,
-                        index,
-                        previous.clone(),
-                        thread,
-                        &run.id,
-                        run,
-                        account,
-                        now,
-                    )
-                });
-            match result {
-                Ok(()) => return,
-                Err(reason) => {
-                    let _ = self.store.cos_run_credential_revoke(&run.id, now);
-                    let next = if index < config.fallbacks.len() {
-                        "次の代替経路で再試行します。"
-                    } else {
-                        "再送してください。"
-                    };
-                    self.route_notice(
-                        &run.id,
-                        thread,
-                        index,
-                        "unavailable",
-                        &format!(
-                            "CoS 経路 {} は利用できません。{next} 理由: {reason}",
-                            cfg.harness
-                        ),
-                        now,
-                    );
-                    last = reason;
-                }
-            }
+        let elapsed = run
+            .started_at
+            .as_deref()
+            .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
+            .map_or(0, |start| (now - start).whole_seconds().max(0) as u64);
+        let mut cfg = config;
+        cfg.max_wall_secs = cfg.max_wall_secs.saturating_sub(elapsed);
+        if cfg.max_wall_secs == 0 {
+            self.fail_routes(
+                run,
+                "CoS run の実行期限に達しました",
+                previous.as_deref(),
+                now,
+            );
+            return;
         }
-        self.fail_routes(run, &last, previous.as_deref(), now);
+        let input = crate::dispatcher::route_select::RouteInput {
+            task_id: run.id.clone(),
+            harness: task_core::llm_route::HarnessRequest {
+                harness: Some("claude_code".into()),
+                ..Default::default()
+            },
+            cos: true,
+            ..Default::default()
+        };
+        let (outcome, trace) = dispatcher.select_cos_route_from(&input, first);
+        let metadata = trace.metadata(&input, outcome.as_ref().ok(), outcome.as_ref().err());
+        let result = outcome.map_err(|e| e.reason()).and_then(|pick| {
+            self.launch_claimed(
+                dispatcher, &cfg, first, previous, thread, &run.id, run, pick, metadata, now,
+            )
+        });
+        if let Err(reason) = result {
+            self.route_notice(
+                &run.id,
+                thread,
+                first,
+                "unavailable",
+                &format!("CoS route unavailable: {reason}"),
+                now,
+            );
+            self.fail_routes(run, &reason, None, now);
+        }
     }
 
     fn fail_routes(

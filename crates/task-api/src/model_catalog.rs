@@ -1,7 +1,6 @@
 //! ADR 2026-10-06 D5: モデル catalog の API。
 //!
-//! - `GET /api/v1/llm/models` — catalog 全件（source・model_id 昇順）と上書き・routing での使われ方・
-//!   source ごとの最終発見記録。
+//! - `GET /api/v1/llm/models` — catalog 全件（source・model_id 昇順）と上書き・source ごとの最終発見記録。
 //! - `PUT /api/v1/llm/models/{source}/{model_id}/override` — 上書き（`disabled` / `tier` / `alias` / `note`）→ 200 項目。
 //! - `DELETE /api/v1/llm/models/{source}/{model_id}/override` — 上書きを消す → 204（無ければ 404）。
 //! - `POST /api/v1/llm/models/discover` — 発見を今すぐ走らせる（任意で `source`）→ 202。発見そのもの
@@ -19,7 +18,6 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use task_core::model_catalog::assignments::RoleAssignment;
 use task_core::model_catalog::{
     CatalogDelta, CatalogEntry, CatalogOverride, CatalogOverrideRow, CatalogSource, DiscoveryRecord,
 };
@@ -38,20 +36,13 @@ use crate::state::ApiState;
 pub struct ModelCatalogOverrideView {
     #[serde(default)]
     pub disabled: bool,
-    /// routing で使う tier の上書き（無ければ `null`）。
+    /// catalog 上の lane annotation（無ければ `null`）。候補選択の順序には使わない。
     #[serde(default)]
     pub tier: Option<Tier>,
     #[serde(default)]
     pub alias: Option<String>,
     #[serde(default)]
     pub note: Option<String>,
-}
-
-/// routing で使われている tier・deployment（routing catalog の `source_ref` と `upstream_model` で突き合わせる）。
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, JsonSchema)]
-pub struct ModelCatalogRoutingView {
-    pub tiers: Vec<String>,
-    pub deployments: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
@@ -67,9 +58,6 @@ pub struct ModelCatalogItem {
     /// 人の上書き（無ければ `null`）。
     #[serde(rename = "override")]
     pub override_: Option<ModelCatalogOverrideView>,
-    pub routing: ModelCatalogRoutingView,
-    /// ADR 2026-10-06 model-role-assignments D4: このモデルが割り当てられている役割（tier）。
-    pub assigned_tiers: Vec<Tier>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
@@ -143,61 +131,6 @@ pub(crate) fn rfc3339(unix: i64) -> String {
         .unwrap_or_else(|| unix.to_string())
 }
 
-fn tier_name(tier: Tier) -> &'static str {
-    match tier {
-        Tier::Frontier => "frontier",
-        Tier::Standard => "standard",
-        Tier::Cheap => "cheap",
-    }
-}
-
-/// routing catalog の source 名（`claude_oauth` / `openai_compatible:x` 等）を catalog の source 名に揃える。
-pub(crate) fn normalize_source(source_ref: &str) -> String {
-    match source_ref.split_once(':') {
-        Some((head, rest)) => format!("{}:{rest}", head.replace('_', "-")),
-        None => source_ref.replace('_', "-"),
-    }
-}
-
-/// deployment の `upstream_model` が catalog の `model_id` を指すか（`<source>/` 接頭辞は外して比べる）。
-fn upstream_matches(upstream: &str, source: &str, model_id: &str) -> bool {
-    if upstream == model_id {
-        return true;
-    }
-    upstream
-        .strip_prefix(source)
-        .and_then(|rest| rest.strip_prefix('/'))
-        .is_some_and(|rest| rest == model_id)
-}
-
-fn routing_for(
-    catalog: Option<&crate::routing_catalog::RoutingCatalogView>,
-    source: &str,
-    model_id: &str,
-) -> ModelCatalogRoutingView {
-    let mut view = ModelCatalogRoutingView::default();
-    let Some(catalog) = catalog else {
-        return view;
-    };
-    for dep in &catalog.deployments {
-        if !upstream_matches(&dep.upstream_model, source, model_id) {
-            continue;
-        }
-        // `provider:<id>` の deployment は source を持たない行もあるので、source_ref が一致するものだけ数える。
-        if normalize_source(&dep.source_ref) != source {
-            continue;
-        }
-        view.deployments.push(dep.id.clone());
-        for lane in &dep.allowed_lanes {
-            let name = tier_name(*lane).to_string();
-            if !view.tiers.contains(&name) {
-                view.tiers.push(name);
-            }
-        }
-    }
-    view
-}
-
 fn override_view(value: &CatalogOverride) -> ModelCatalogOverrideView {
     ModelCatalogOverrideView {
         disabled: value.disabled,
@@ -207,12 +140,7 @@ fn override_view(value: &CatalogOverride) -> ModelCatalogOverrideView {
     }
 }
 
-fn item(
-    entry: &CatalogEntry,
-    overrides: &[CatalogOverrideRow],
-    assignments: &[RoleAssignment],
-    catalog: Option<&crate::routing_catalog::RoutingCatalogView>,
-) -> ModelCatalogItem {
+fn item(entry: &CatalogEntry, overrides: &[CatalogOverrideRow]) -> ModelCatalogItem {
     let ov = overrides
         .iter()
         .find(|o| o.source == entry.source && o.model_id == entry.model_id);
@@ -225,12 +153,6 @@ fn item(
         last_seen: rfc3339(entry.last_seen),
         capabilities: entry.capabilities.clone(),
         override_: ov.map(|o| override_view(&o.value)),
-        routing: routing_for(catalog, entry.source.as_str(), &entry.model_id),
-        assigned_tiers: assignments
-            .iter()
-            .filter(|a| a.source == entry.source && a.model_id == entry.model_id)
-            .map(|a| a.tier)
-            .collect(),
     }
 }
 
@@ -257,20 +179,15 @@ fn parse_source(raw: &str) -> Result<CatalogSource, ApiProblem> {
 
 async fn list_models(State(state): State<ApiState>, RawQuery(raw): RawQuery) -> ApiResult {
     no_query(&raw)?;
-    let routing = state.inner.routing_catalog.as_ref().map(|r| r.view());
     let view = state
         .blocking(move |store| {
             let entries = store.model_catalog_list().map_err(store_problem)?;
             let overrides = store.model_catalog_overrides().map_err(store_problem)?;
-            let assignments = store.model_role_assignments().map_err(store_problem)?;
             let records = store
                 .model_catalog_discovery_records()
                 .map_err(store_problem)?;
             Ok(ModelCatalogView {
-                items: entries
-                    .iter()
-                    .map(|e| item(e, &overrides, &assignments, routing.as_ref()))
-                    .collect(),
+                items: entries.iter().map(|e| item(e, &overrides)).collect(),
                 last_discovery: records.iter().map(record_view).collect(),
             })
         })
@@ -282,7 +199,6 @@ async fn list_models(State(state): State<ApiState>, RawQuery(raw): RawQuery) -> 
 /// (`model_override.put`, written with its audit record in one transaction).
 pub(crate) fn put_override_op(
     store: &task_core::store::SqliteStore,
-    routing: Option<&crate::routing_catalog::RoutingCatalogView>,
     raw_source: &str,
     model_id: &str,
     payload: ModelCatalogOverrideView,
@@ -313,7 +229,6 @@ pub(crate) fn put_override_op(
     let read_item =
         |store: &task_core::store::SqliteStore| -> Result<ModelCatalogItem, ApiProblem> {
             let overrides = store.model_catalog_overrides().map_err(store_problem)?;
-            let assignments = store.model_role_assignments().map_err(store_problem)?;
             let entry = store
                 .model_catalog_list()
                 .map_err(store_problem)?
@@ -329,7 +244,7 @@ pub(crate) fn put_override_op(
                     available: false,
                     capabilities: serde_json::json!({}),
                 });
-            Ok(item(&entry, &overrides, &assignments, routing))
+            Ok(item(&entry, &overrides))
         };
     let Some(audit) = audit else {
         store
@@ -396,11 +311,8 @@ async fn put_override(
         return Err(ApiProblem::bad_request("model_id is empty"));
     }
     let payload: ModelCatalogOverrideView = read_json(body, true).await?;
-    let routing = state.inner.routing_catalog.as_ref().map(|r| r.view());
     let result = state
-        .blocking(move |store| {
-            put_override_op(store, routing.as_ref(), &source, &model_id, payload, None)?.direct()
-        })
+        .blocking(move |store| put_override_op(store, &source, &model_id, payload, None)?.direct())
         .await?;
     tracing::info!(op = "model_catalog_override_set", source = %result.source, model_id = %result.model_id, "model catalog override set");
     Ok(json_response(StatusCode::OK, &result))

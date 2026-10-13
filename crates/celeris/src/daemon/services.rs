@@ -138,59 +138,8 @@ pub(crate) fn build_llm_proxy_state(
         Some(config.db.path.clone()),
         config.db.busy_timeout(),
     );
-    // ADR 2026-10-04 Phase 2: `[model_routing.retry]` の分類別上限と breaker（未設定は proxy の既定）。
-    // proxy は起動時に 1 度だけ組むので、retry の変更は再起動で効く（reload では変えない）。
-    let state = match &config.model_routing.runtime {
-        Some(runtime) => state.with_fallback(
-            runtime.fallback.clone(),
-            Arc::new(llm_proxy::reservation::SystemClock),
-        ),
-        None => state,
-    };
     let sink: Arc<dyn ProxyEventSink> = Arc::new(TaskProxyEventSink::new(dispatcher.store()));
     let state = state.with_routing_context(Some(registry), Some(sink));
-    // ADR 2026-10-06 model-role-assignments D2: dispatcher と同じ reader（store）で lane の割り当てを読む。
-    let state = state.with_role_assignments(dispatcher.role_assignment_reader());
-    // ADR 2026-10-04 §7.1・Phase 4: `[model_routing.shadow]`。既定（legacy・execute = false）は差し込まない。
-    let wiring = super::routing_shadow::install_proxy_shadow(
-        dispatcher,
-        super::routing_shadow::ShadowDeps {
-            db_path: config.db.path.clone(),
-            busy_timeout: config.db.busy_timeout(),
-            task_store: dispatcher.store(),
-            executor: Arc::new(llm_proxy::shadow::RelayShadowExecutor::new(
-                client,
-                config.llm_proxy.sources.openai_compatible.clone(),
-            )),
-            clock: Arc::new(llm_proxy::reservation::SystemClock),
-            owner: format!("celeris-pid-{}", std::process::id()),
-            cost: config
-                .routing_catalog_state
-                .as_ref()
-                .map(|catalog| super::routing_shadow::catalog_cost(Arc::clone(catalog))),
-        },
-    )
-    .map_err(ApiError::Startup)?;
-    let state = match wiring.shadow {
-        Some(shadow) => state.with_shadow(Some(shadow)),
-        None => state,
-    };
-    // ADR 2026-10-04 §10 Phase 5: `[model_routing.estimator.sidecar]`。既定 off は client を作らない。
-    // 差し替え口は proxy と共有し、reload（`reload_estimator_sidecar`）で中身を替える。
-    let control = Arc::new(super::routing_sidecar::EstimatorSidecarControl::new(
-        super::routing_sidecar::SidecarDeps {
-            sink: super::routing_shadow::task_shadow_sink(dispatcher.store()),
-            clock: Arc::new(llm_proxy::reservation::SystemClock),
-            monotonic: Arc::new(llm_proxy::estimator_sidecar::TokioClock),
-            owner: format!("celeris-pid-{}", std::process::id()),
-        },
-    ));
-    control.apply(
-        &config.model_routing.estimator.sidecar,
-        super::routing_sidecar::proxy_catalog(config),
-    );
-    let state = state.with_estimator_shadow_slot(control.slot());
-    config.model_routing.estimator_sidecar_control = Some(control);
     Ok(Some(state))
 }
 
@@ -218,8 +167,8 @@ impl ProxyEventSink for TaskProxyEventSink {
             .ok()?
             .into_iter()
             .find_map(|(_, event)| match event {
-                Event::RoutingDecided { run_id: id, record } if id == run_id => {
-                    record.optimizer.map(|trace| trace.decision_id)
+                Event::RoutingDecided { run_id: id, .. } if id == run_id => {
+                    Some(format!("run:{run_id}"))
                 }
                 _ => None,
             })
@@ -329,7 +278,7 @@ mod routing_tests {
             &path,
             format!(
                 "db = {:?}\nworkspace_root = {:?}\n[api]\ntoken_file = {token:?}\n\
-                 [llm_proxy]\nenabled = true\n[[providers]]\nid = \"x\"\nadapter = \"fake\"\n",
+                 [llm_proxy]\nenabled = true\n",
                 dir.path().join("db.sqlite3"),
                 dir.path().join("ws"),
             ),
@@ -358,6 +307,7 @@ mod routing_tests {
         let store = task_core::SqliteStore::open_in_memory().unwrap();
         let now = time::OffsetDateTime::now_utc();
         let task = Task {
+            harness_id: None,
             id: TaskId::new(),
             parent_id: None,
             kind: TaskKind::Execute,
@@ -370,7 +320,6 @@ mod routing_tests {
             priority: 0,
             worker_hint: WorkerHint {
                 tier: Tier::Standard,
-                adapter: None,
             },
             workspace: WorkspaceSpec::local("/tmp/routing-test"),
             repos: vec![],
@@ -436,7 +385,6 @@ mod routing_tests {
                 decision_id: "d1".into(),
                 parent_decision_id: None,
                 run_id: Some("run-1".into()),
-                trace: None,
                 attempts: vec![],
                 fallback_reason: None,
             },

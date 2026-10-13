@@ -169,10 +169,18 @@ async fn done_then_command_review_passes_and_events_are_recorded() {
             Event::WorkerProgress { .. } => "progress".into(),
             Event::WorkerFinished { outcome, .. } => format!("finished:{outcome}"),
             Event::ReviewVerdict { pass, .. } => format!("verdict:{pass}"),
+            Event::DeliverySkipped { reason, .. } => format!("delivery_skipped:{}", reason.code()),
             // ADR-0074 D4（Phase F3 quota）: `finish_worker_result` が毎 run 出す
             // `QuotaEstimated`（このテストの provider `p1` はアカウントプールを使わないので
             // `free`）。中身は quota 専用のテストで確かめるので、ここでは種別だけを見る。
             Event::QuotaEstimated { .. } => "quota_estimated".into(),
+            // ADR 2026-10-11 llm-source-harness-selection: the route chosen for the run.
+            Event::HarnessSelected { harness_id } => format!("harness:{harness_id}"),
+            Event::LlmRouteSelected {
+                source_id,
+                model_id,
+                ..
+            } => format!("route:{source_id}/{model_id}"),
             other => format!("{other:?}"),
         })
         .collect();
@@ -181,10 +189,13 @@ async fn done_then_command_review_passes_and_events_are_recorded() {
         vec![
             "Ready->Running:dispatch",
             "started",
+            "harness:test",
+            "route:p1/m",
             "progress",
             "Running->Reviewing:worker_done",
             "finished:done: ok",
             "quota_estimated",
+            "delivery_skipped:no_project",
             "Reviewing->Done:review_pass",
             "verdict:true",
         ]
@@ -510,31 +521,15 @@ async fn department_reviewer_runs_share_and_continue_one_lead_session() {
     let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     seed_conversation_org(store.as_ref());
 
-    let policy = StaticPolicy::new(
-        vec![ProviderSpec {
-            id: "p1".into(),
-            // ADR-0054 D1: セッション継続に対応するアダプタ id（`crate::sessions::SUPPORTED_ADAPTERS`）。
-            adapter: "claude-code".into(),
-            tiers: vec![Tier::Frontier, Tier::Standard, Tier::Cheap],
-            concurrency: Some(2),
-            model: "m".into(),
-        }],
-        Duration::from_secs(1),
-    );
     let file_adapter = Arc::new(FileAdapter {
         plan_json: String::new(),
         review_json: r#"{"verdicts":[{"criterion":0,"pass":true,"reason":"ok"}]}"#.into(),
         delay: Duration::from_millis(5),
     });
-    let mut adapters: HashMap<ProviderId, Arc<dyn WorkerAdapter>> = HashMap::new();
-    adapters.insert("p1".into(), file_adapter);
     let mut d = Dispatcher::new(
         store.clone(),
-        Box::new(policy),
-        HashMap::from([("p1".to_string(), "m".to_string())]),
-        adapters,
-        std::collections::HashSet::new(),
         DispatchConfig {
+            source_error_cooldown: Duration::from_secs(1),
             delivery: Default::default(),
             max_concurrency: 2,
             lease_grace: Duration::from_secs(60),
@@ -570,6 +565,12 @@ async fn department_reviewer_runs_share_and_continue_one_lead_session() {
             execution: ExecutionConfig::default(),
             eval: crate::capacity::EvalRuntimeConfig::default(),
         },
+    );
+    install_test_routes(
+        &mut d,
+        review_route::IdAs::wrap("claude-code", file_adapter.clone()),
+        &[("p1", "test")],
+        1,
     );
 
     // 1 本目: `coding-poc`（セクション）の Reviewer run。部署は `department_of` で `coding` に解決する。
@@ -636,28 +637,13 @@ async fn a_rejected_lead_session_resume_retires_it_and_the_next_review_starts_fr
     let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     seed_conversation_org(store.as_ref());
 
-    let policy = StaticPolicy::new(
-        vec![ProviderSpec {
-            id: "p1".into(),
-            adapter: "claude-code".into(),
-            tiers: vec![Tier::Frontier, Tier::Standard, Tier::Cheap],
-            concurrency: Some(2),
-            model: "m".into(),
-        }],
-        Duration::from_secs(1),
-    );
     let adapter = Arc::new(ResumeRejectingReviewAdapter {
         review_json: r#"{"verdicts":[{"criterion":0,"pass":true,"reason":"ok"}]}"#.into(),
     });
-    let mut adapters: HashMap<ProviderId, Arc<dyn WorkerAdapter>> = HashMap::new();
-    adapters.insert("p1".into(), adapter);
     let mut d = Dispatcher::new(
         store.clone(),
-        Box::new(policy),
-        HashMap::from([("p1".to_string(), "m".to_string())]),
-        adapters,
-        std::collections::HashSet::new(),
         DispatchConfig {
+            source_error_cooldown: Duration::from_secs(1),
             delivery: Default::default(),
             max_concurrency: 2,
             lease_grace: Duration::from_secs(60),
@@ -693,6 +679,12 @@ async fn a_rejected_lead_session_resume_retires_it_and_the_next_review_starts_fr
             execution: ExecutionConfig::default(),
             eval: crate::capacity::EvalRuntimeConfig::default(),
         },
+    );
+    install_test_routes(
+        &mut d,
+        review_route::IdAs::wrap("claude-code", adapter.clone()),
+        &[("p1", "test")],
+        1,
     );
 
     // 1 本目: `coding-poc` の Reviewer run。新規セッション（resume していないので拒否は起きない）。
@@ -760,30 +752,15 @@ async fn a_resume_rejection_that_still_produced_a_result_self_heals_and_the_retr
     let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     seed_conversation_org(store.as_ref());
 
-    let policy = StaticPolicy::new(
-        vec![ProviderSpec {
-            id: "p1".into(),
-            adapter: "claude-code".into(),
-            tiers: vec![Tier::Frontier, Tier::Standard, Tier::Cheap],
-            concurrency: Some(2),
-            model: "m".into(),
-        }],
-        Duration::from_secs(1),
-    );
     let adapter = Arc::new(ResumeRejectingThenSucceedingReviewAdapter {
         review_json: r#"{"verdicts":[{"criterion":0,"pass":true,"reason":"ok"}]}"#.into(),
         calls: AtomicUsize::new(0),
     });
     let adapter_handle = adapter.clone();
-    let mut adapters: HashMap<ProviderId, Arc<dyn WorkerAdapter>> = HashMap::new();
-    adapters.insert("p1".into(), adapter);
     let mut d = Dispatcher::new(
         store.clone(),
-        Box::new(policy),
-        HashMap::from([("p1".to_string(), "m".to_string())]),
-        adapters,
-        std::collections::HashSet::new(),
         DispatchConfig {
+            source_error_cooldown: Duration::from_secs(1),
             delivery: Default::default(),
             max_concurrency: 2,
             lease_grace: Duration::from_secs(60),
@@ -819,6 +796,12 @@ async fn a_resume_rejection_that_still_produced_a_result_self_heals_and_the_retr
             execution: ExecutionConfig::default(),
             eval: crate::capacity::EvalRuntimeConfig::default(),
         },
+    );
+    install_test_routes(
+        &mut d,
+        review_route::IdAs::wrap("claude-code", adapter.clone()),
+        &[("p1", "test")],
+        1,
     );
 
     // 1 本目: `coding-poc` の Reviewer run。新規セッション（resume していないので拒否は起きない）。
@@ -1553,8 +1536,6 @@ async fn non_aggregate_parent_stays_reviewing_until_children_finish_then_complet
         hostname: "host-1".into(),
         started_at: "2026-09-16T00:00:00Z".into(),
         tick_ms: 10,
-        providers: vec![],
-        provider_checks: Default::default(),
     });
     // 親の run と判定が終わり、子がまだ走っている間に観察する。
     let mut observed_waiting = false;
@@ -1583,7 +1564,7 @@ async fn non_aggregate_parent_stays_reviewing_until_children_finish_then_complet
         "parent should be reviewing while its delegated child runs"
     );
     assert_eq!(
-        rx.borrow().as_ref().map(|s| s.awaiting_children.clone()),
+        rx.borrow().as_ref().map(delegated_children_waits),
         Some(vec![parent.id]),
         "ADR-0023 D3: 子待ちの親がスナップショットに出る（GUI が「判定中」と区別できる）"
     );
@@ -1592,7 +1573,7 @@ async fn non_aggregate_parent_stays_reviewing_until_children_finish_then_complet
     let p = store.get(parent.id).unwrap().unwrap();
     assert_eq!(p.status, Status::Done);
     assert_eq!(
-        rx.borrow().as_ref().map(|s| s.awaiting_children.clone()),
+        rx.borrow().as_ref().map(delegated_children_waits),
         Some(vec![]),
         "子が終われば待ちも消える"
     );
@@ -2148,4 +2129,13 @@ fn review_policy_violations_collects_only_the_subject_runs_detections() {
     let serialized = serde_json::to_value(&store.events_for(task.id).unwrap()[0].1).unwrap();
     assert_eq!(serialized["type"], "worker_policy_violation");
     assert_eq!(serialized["kind"], "subagent_tool");
+}
+
+/// ADR 2026-10-11-task-wait-reasons D4: 委譲した子を待つ親は snapshot の `task_waits` の `DelegatedChildren`。
+fn delegated_children_waits(s: &task_ops::daemon::DaemonSnapshot) -> Vec<TaskId> {
+    s.task_waits
+        .iter()
+        .filter(|w| matches!(w.wait, task_core::TaskWait::DelegatedChildren { .. }))
+        .map(|w| w.task_id)
+        .collect()
 }

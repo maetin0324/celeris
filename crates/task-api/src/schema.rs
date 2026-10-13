@@ -1,4 +1,4 @@
-//! API v1 の JSON Schema（`docs/api/v1/gui-api.md` §7、ADR-0013 D8）。ルートは `ApiV1Schema`（1 フィールド = 1 公開型）。
+//! API v1 の JSON Schema（`docs/api/v1/api.md` §7、ADR-0013 D8）。ルートは `ApiV1Schema`（1 フィールド = 1 公開型）。
 //! 生成物は `docs/api/v1/api-v1.schema.json` にコミットし、`committed_schema_matches_generated` で一致を確かめる
 //! （`UPDATE_SCHEMA=1 cargo test -p task-api` で再生成）。
 
@@ -37,9 +37,8 @@ use crate::types::{
     ClusterSettingsPutBody, ClusterSettingsView, Clusters, CommentBody, CommentList, ConfigView,
     DaemonView, DecisionBody, EventsPage, Health, MilestoneCreateBody, MilestonePatchBody,
     OrgCreateBody, OrgList, OrgPatchBody, Problem, ProjectCreateBody, ProjectDetail, ProjectList,
-    ProjectPatchBody, ProviderCheckResponse, ProviderConfigView, Providers, ReleasePromoteAccepted,
-    Releases, ReloadResult, ReopenBody, RetryBody, RunList, SecretList, SecretPutResult,
-    StreamHeartbeat, StreamHello, StreamReset, Timeline,
+    ProjectPatchBody, ReleasePromoteAccepted, Releases, ReloadResult, ReopenBody, RetryBody,
+    RunList, SecretList, SecretPutResult, StreamHeartbeat, StreamHello, StreamReset, Timeline,
 };
 
 /// コミット済みのスキーマ（`GET /schema` の本体）。
@@ -56,6 +55,9 @@ pub struct ApiV1Schema {
     pub inbox_item: task_ops::human_inbox::InboxItem,
     pub inbox_answer: crate::inbox_notifications::InboxAnswerBody,
     pub inbox_answer_result: crate::inbox_notifications::InboxAnswerResult,
+    pub integration_list: crate::integrations::IntegrationList,
+    pub integration_reason: crate::integrations::ReasonBody,
+    pub integration_action_result: crate::integrations::IntegrationActionResult,
     pub notifications: crate::inbox_notifications::NotificationsView,
     pub notifications_unread_count: crate::inbox_notifications::UnreadCountView,
     pub notification_read: crate::inbox_notifications::NoticeReadResult,
@@ -84,11 +86,7 @@ pub struct ApiV1Schema {
     pub execution_decompose: task_ops::regate::DecomposeRequest,
     pub execution_decompose_result: task_ops::regate::DecomposeResult,
     pub replay_report: ReplayReport,
-    pub providers: Providers,
-    /// `POST /api/v1/providers` と `PATCH /api/v1/providers/{id}` の応答（ADR-0017）。
-    pub provider_config: ProviderConfigView,
     pub reload: ReloadResult,
-    pub provider_check: ProviderCheckResponse,
     pub clusters: Clusters,
     /// ADR-0032 D5: `POST /clusters/{id}/connect` と `POST /clusters/{id}/connect/code` の応答。
     pub cluster_connect_start: ClusterConnectStart,
@@ -223,8 +221,14 @@ pub struct ApiV1Schema {
     pub stream_reset: StreamReset,
     /// Phase 65（ADR-0053 D4）: `GET /llm/sources`（API と型のみ。GUI 表示は Phase 66）。
     pub llm_sources: crate::types::LlmSourcesView,
-    /// Phase 1: credential-free model and deployment catalog.
-    pub routing_catalog: crate::routing_catalog::RoutingCatalogView,
+    pub harnesses: Vec<crate::types::HarnessView>,
+    pub harness_rule: crate::types::HarnessRuleView,
+    pub harness_candidate: crate::types::HarnessCandidateView,
+    /// ADR 2026-10-11-llm-source-model-routing-evaluation D3: `GET`/`POST /routing/stages` と `GET /routing/evidence`。
+    pub routing_stages: task_ops::routing_stage::RoutingStageList,
+    pub routing_stage: task_ops::routing_stage::RoutingStageView,
+    pub routing_stage_change: crate::routing_stage::RoutingStageChangeBody,
+    pub routing_evidence: task_ops::routing_stage::RoutingEvidenceList,
     /// Phase 78（ADR-0056 D4）: `GET /mcp/clients` と `GET /mcp/calls?client=`。
     pub mcp_clients: crate::mcp_admin::McpClientsView,
     pub mcp_calls: crate::mcp_admin::McpCallsView,
@@ -357,14 +361,6 @@ pub struct ApiV1Schema {
     pub model_catalog_override: crate::model_catalog::ModelCatalogOverrideView,
     pub model_discover: crate::model_catalog::DiscoverBody,
     pub model_discover_result: crate::model_catalog::DiscoverResponse,
-    /// ADR 2026-10-06 model-role-assignments D4: 割り当て（`GET`/`PUT`/`DELETE`/`preview` の本文と応答）。
-    pub model_role_members: crate::model_assignments::RoleMembersBody,
-    pub model_role_members_result: crate::model_assignments::RoleMembersResponse,
-    pub model_assignment_list: crate::model_assignments::AssignmentList,
-    pub model_assignment_put: crate::model_assignments::AssignmentPutBody,
-    pub model_assignment_put_result: crate::model_assignments::AssignmentPutResponse,
-    pub model_assignment_preview: crate::model_assignments::AssignmentPreviewBody,
-    pub model_assignment_preview_result: crate::model_assignments::AssignmentPreviewResponse,
 }
 
 /// 生成したスキーマ（`serde_json::Value`）。

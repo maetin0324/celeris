@@ -115,7 +115,7 @@ impl Dispatcher {
         let reviewing: Vec<(TaskId, ReviewEntry)> = self.reviewing.drain().collect();
         for (task_id, entry) in reviewing {
             if let Some(review_run_id) = entry.review_run_id.clone() {
-                if let Some(provider) = entry.provider.clone() {
+                if let Some(provider) = entry.route.as_ref().map(|(source, _)| source.to_string()) {
                     self.release_quota_if_tracked(
                         &review_run_id,
                         entry.account.as_deref(),
@@ -611,9 +611,10 @@ impl Dispatcher {
             if !still_reviewing && let Some(entry) = self.reviewing.remove(&id) {
                 tracing::warn!(task_id = %id, "aborting review (task no longer reviewing)");
                 // ADR-0076: 止めた Reviewer run の `QuotaActivity` も閉じる（Event は残さない）。
-                if let (Some(review_run_id), Some(provider)) =
-                    (entry.review_run_id.clone(), entry.provider.clone())
-                {
+                if let (Some(review_run_id), Some(provider)) = (
+                    entry.review_run_id.clone(),
+                    entry.route.as_ref().map(|(source, _)| source.to_string()),
+                ) {
                     self.release_quota_if_tracked(
                         &review_run_id,
                         entry.account.as_deref(),

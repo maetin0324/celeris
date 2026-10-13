@@ -68,7 +68,6 @@ describe("staleTime（ADR-0081 D5）", () => {
     [daemonKeys.rest(), 5_000],
     [queryKeys.health.all, 5_000],
     [daemonKeys.stream(), 0],
-    [queryKeys.providers.list(), 10_000],
     [queryKeys.accounts.list(), 10_000],
     [queryKeys.clusters.list(), 10_000],
     [queryKeys.releases.list(), 10_000],

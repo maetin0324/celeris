@@ -200,9 +200,12 @@ impl Dispatcher {
                     let seed_repos: Vec<crate::scratch_gc::SeedRepo> = repos
                         .iter()
                         .map(|(path, configured)| {
-                            let branch =
-                                task_ops::changes::default_branch(path, configured.as_deref());
-                            let commit = task_worker::scratch::resolve_commit(path, &branch);
+                            let commit = task_ops::changes::resolve_default_branch(
+                                path,
+                                configured.as_deref(),
+                            )
+                            .ok()
+                            .and_then(|branch| task_worker::scratch::resolve_commit(path, &branch));
                             let cargo = commit.as_deref().is_some_and(|c| {
                                 task_worker::scratch::commit_has_cargo_manifest(path, c)
                             });

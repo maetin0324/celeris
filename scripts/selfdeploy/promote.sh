@@ -118,8 +118,8 @@ fi
 
 systemctl --user cat celeris@.service >/dev/null 2>&1 \
   || sd_die "systemd user template celeris@.service is not installed; run scripts/selfdeploy/install-units.sh first"
-systemctl --user cat celeris-gui@.service >/dev/null 2>&1 \
-  || sd_die "systemd user template celeris-gui@.service is not installed; run scripts/selfdeploy/install-units.sh first"
+systemctl --user cat celeris-web@.service >/dev/null 2>&1 \
+  || sd_die "systemd user template celeris-web@.service is not installed; run scripts/selfdeploy/install-units.sh first"
 
 # ---- いま動いているものを見る（読むだけ） ----------------------------------
 
@@ -135,9 +135,11 @@ else
   sd_log "no healthy celeris on $SD_PROD_API right now"
 fi
 
+RESUME_HANDOFF=false
 if [ "$LIVE_RELEASE" = "$SHA12" ]; then
-  if [ "$OLD" != "$SHA12" ] && [ "$LIVE_OK" = true ] && [ "$LIVE_ROLE" = active ] && [ -z "$PRE_START" ]; then
-    sd_log "celeris already took over; resuming the incomplete GUI/link handoff"
+  if [ "$OLD" != "$SHA12" ] && [ "$LIVE_ROLE" = active ] && [ -z "$PRE_START" ]; then
+    RESUME_HANDOFF=true
+    sd_log "celeris already took over; resuming the incomplete web/link handoff"
   else
     sd_die "the running celeris already reports release=$SHA12; nothing to promote"
   fi
@@ -311,14 +313,6 @@ ensure_an_active_remains() {
   return 1
 }
 
-# 0.0.0.0:7700 で LISTEN している node の pid（初回の移行で旧 GUI を止めるため）。
-find_old_gui_pid() {
-  local pid
-  pid="$(ss -ltnp "sport = :$SD_PROD_GUI_PORT" 2>/dev/null | sed -n 's/.*pid=\([0-9]\+\).*/\1/p' | head -n 1)"
-  [ -n "$pid" ] || return 1
-  printf '%s' "$pid"
-}
-
 kill_grace_secs() {
   local v
   v="$(sed -n 's/^[[:space:]]*kill_grace_secs[[:space:]]*=[[:space:]]*\([0-9]\+\).*$/\1/p' "$SD_CONFIG" | head -n 1)"
@@ -391,27 +385,7 @@ promote_live() {
     systemctl --user disable "celeris@$OLD" || sd_log "warning: disable celeris@$OLD failed"
   fi
 
-  sd_log "systemctl --user start celeris-gui@$SHA12"
-  systemctl --user start "celeris-gui@$SHA12" || sd_die "failed to start celeris-gui@$SHA12 (celeris is already the new one)"
-  # GUIは旧も応答し続ける。新からの応答を確認 → 旧を止める → 全応答が新か確認、の順。
-  if ! poll_release "http://127.0.0.1:$SD_PROD_GUI_PORT/healthz" release "$SHA12" - - 60 1; then
-    systemctl --user stop "celeris-gui@$SHA12" || true
-    sd_die "the new GUI did not take over :$SD_PROD_GUI_PORT within 60s (celeris is already the new one; fix the GUI by hand)"
-  fi
-  if [ -n "$OLD" ] && systemctl --user is-active --quiet "celeris-gui@$OLD"; then
-    sd_log "systemctl --user stop celeris-gui@$OLD"
-    systemctl --user stop "celeris-gui@$OLD" || sd_log "warning: stop celeris-gui@$OLD failed"
-  fi
-  if ! poll_release "http://127.0.0.1:$SD_PROD_GUI_PORT/healthz" release "$SHA12" - - 60; then
-    if [ -n "$OLD" ]; then systemctl --user start "celeris-gui@$OLD" || true; fi
-    systemctl --user stop "celeris-gui@$SHA12" || true
-    sd_die "GUI handoff could not be confirmed; restored the old GUI"
-  fi
-  systemctl --user enable "celeris-gui@$SHA12" || sd_log "warning: enable celeris-gui@$SHA12 failed"
-  if [ -n "$OLD" ]; then
-    systemctl --user disable "celeris-gui@$OLD" || sd_log "warning: disable celeris-gui@$OLD failed"
-  fi
-
+  follow_web
   update_links
   sd_log "live handoff complete. The old celeris keeps draining its runs; watch it with status.sh."
 }
@@ -419,7 +393,7 @@ promote_live() {
 # ---- 停止 → 起動（初回の移行はこれ） --------------------------------------
 
 promote_stop_start() {
-  local old_pid grace waited old_gui_pid
+  local old_pid grace waited
   grace="$(kill_grace_secs)"
 
   if old_pid="$(sd_resolve_old_daemon_pid "$OLD")"; then
@@ -497,29 +471,7 @@ promote_stop_start() {
     systemctl --user disable "celeris@$OLD" || sd_log "warning: disable celeris@$OLD failed"
   fi
 
-  # GUI: 初回の移行では systemd の外で動いている `node server.js` を止める。
-  if old_gui_pid="$(find_old_gui_pid)"; then
-    sd_log "old GUI pid=$old_gui_pid on :$SD_PROD_GUI_PORT; SIGTERM"
-    kill -TERM "$old_gui_pid" || true
-    waited=0
-    while kill -0 "$old_gui_pid" 2>/dev/null && [ "$waited" -lt 20 ]; do
-      sleep 1
-      waited=$((waited + 1))
-    done
-    if kill -0 "$old_gui_pid" 2>/dev/null; then sd_log "warning: old GUI pid $old_gui_pid is still alive"; fi
-  else
-    sd_log "nothing is listening on :$SD_PROD_GUI_PORT"
-  fi
-  sd_log "systemctl --user start celeris-gui@$SHA12"
-  systemctl --user start "celeris-gui@$SHA12" || sd_die "celeris is the new one, but celeris-gui@$SHA12 did not start"
-  if ! sd_wait_http_200 "http://127.0.0.1:$SD_PROD_GUI_PORT/healthz" 60; then
-    sd_die "celeris is the new one, but the GUI did not answer /healthz on :$SD_PROD_GUI_PORT within 60s"
-  fi
-  systemctl --user enable "celeris-gui@$SHA12" || sd_log "warning: enable celeris-gui@$SHA12 failed"
-  if [ -n "$OLD" ]; then
-    systemctl --user disable "celeris-gui@$OLD" || sd_log "warning: disable celeris-gui@$OLD failed"
-  fi
-
+  follow_web
   update_links
   sd_log "stop-start promotion complete"
 }
@@ -535,23 +487,28 @@ restore_old_daemon() {
   fi
 }
 
+follow_web() {
+  WEB_FOLLOW="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/web-follow.sh"
+  [ -x "$WEB_FOLLOW" ] || sd_die "missing $WEB_FOLLOW"
+  "$WEB_FOLLOW" "$SHA12" "$OLD" || sd_die "web handoff failed; daemon may already be new, links unchanged; retry after repair"
+}
+
 case "$MODE" in
   live) promote_live ;;
-  stop-start) promote_stop_start ;;
+  stop-start)
+    if [ "$RESUME_HANDOFF" = true ]; then
+      # Migration already happened. Do not stop the new daemon or run a hook again.
+      poll_release "$SD_PROD_API/api/v1/health" release "$SHA12" role active "${SD_HANDOFF_WAIT:-60}" \
+        || sd_die "cannot confirm the running release; links unchanged"
+      [ "$(sd_json_get "$PROD_HEALTH" schema_version)" = "$WANT_SCHEMA" ] \
+        || sd_die "schema_version mismatch while resuming; links unchanged"
+      follow_web
+      update_links
+    else
+      promote_stop_start
+    fi
+    ;;
 esac
-
-# ---- web/ の追従（ADR-0081 / web ADR-W3 付記 2026-10-02 (C)）----------------
-#
-# celeris と gui の切替が済んだ後に、旧 release の celeris-web@ が動いていれば新 release へ移す。
-# web-follow.sh は常に exit 0 の設計だが、万一失敗しても警告だけにして昇格は失敗にしない。
-# celeris@ の unit には触れない（web は daemon の handoff を起こさない）。
-WEB_FOLLOW="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/web-follow.sh"
-if [ -x "$WEB_FOLLOW" ]; then
-  "$WEB_FOLLOW" "$SHA12" "$OLD" 2>&1 | tee -a "$SD_LOG_FILE" >&2 \
-    || sd_log "warning: web-follow.sh $SHA12 ${OLD:-<none>} failed (promotion is not affected)"
-else
-  sd_log "warning: $WEB_FOLLOW not found; web was not moved to $SHA12"
-fi
 
 # ---- promoted.json（ADR-0041 D3）------------------------------------------
 #

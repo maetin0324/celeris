@@ -1,4 +1,5 @@
-//! `celerisctl routing show` and versioned routing training export.
+//! `celerisctl routing show`, versioned routing training export, and the selector stage/evidence
+//! views with the human stage change (ADR 2026-10-11-llm-source-model-routing-evaluation D3).
 use std::io::BufWriter;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -7,16 +8,67 @@ use crate::error::CliError;
 use crate::outln;
 use celeris::config::Config;
 use clap::Subcommand;
-use task_core::Tier;
+use task_core::{SqliteStore, TaskId};
 use task_ops::routing_export::{self, ExportOptions, ExportText};
-
-const TIER_ORDER: [Tier; 3] = [Tier::Frontier, Tier::Standard, Tier::Cheap];
+use task_ops::routing_stage::{self, HumanStageChange, RoutingEvidenceList, RoutingStageList};
 
 #[derive(Subcommand, Debug)]
 pub enum RoutingCommand {
     Show(RoutingShowArgs),
     /// Export recorded routing decisions as deterministic training JSONL.
     Export(RoutingExportArgs),
+    /// genre×harness ごとの段階（shadow / enforce）を見る・人が変える（ADR 2026-10-11 D3）。
+    #[command(subcommand)]
+    Stage(StageCommand),
+    /// 組ごとの最新版の根拠表（区間と D1 を満たすか）を見る。
+    Evidence(StageFilterArgs),
+}
+
+#[derive(Subcommand, Debug)]
+pub enum StageCommand {
+    /// 段階の一覧（直近の routing_stage_changed つき）。
+    List(StageFilterArgs),
+    /// 人の段階変更（actor human）。enforce は D1 の根拠が立たなければ拒否する。
+    Set(StageSetArgs),
+}
+
+#[derive(clap::Args, Debug)]
+pub struct StageFilterArgs {
+    /// Explicit read-only database path.
+    #[arg(long)]
+    pub db: Option<PathBuf>,
+    #[arg(long)]
+    pub genre: Option<String>,
+    #[arg(long)]
+    pub harness: Option<String>,
+    /// JSON（API と同じ形）で出す。
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct StageSetArgs {
+    /// Explicit database path.
+    #[arg(long)]
+    pub db: Option<PathBuf>,
+    /// routing_stage_changed を記録する task。
+    #[arg(long)]
+    pub task: String,
+    #[arg(long)]
+    pub genre: String,
+    #[arg(long)]
+    pub harness: String,
+    #[arg(long, value_enum)]
+    pub stage: StageName,
+    #[arg(long)]
+    pub reason: String,
+}
+
+#[derive(clap::ValueEnum, Clone, Copy, Debug)]
+#[value(rename_all = "snake_case")]
+pub enum StageName {
+    Shadow,
+    Enforce,
 }
 
 #[derive(clap::Args, Debug)]
@@ -101,6 +153,68 @@ pub fn run(_db: Option<&Path>, command: RoutingCommand) -> Result<ExitCode, CliE
             outln!("exported {count} rows to {}", args.out.display());
             Ok(ExitCode::SUCCESS)
         }
+        RoutingCommand::Stage(StageCommand::List(args)) => {
+            let db = explicit_db("routing stage list", args.db.as_deref())?;
+            let list =
+                routing_stage::list_stages(db, args.genre.as_deref(), args.harness.as_deref())
+                    .map_err(|e| CliError::msg(format!("routing stage list: {e}")))?;
+            if args.json {
+                outln!("{}", to_json(&list)?);
+            } else {
+                outln!("{}", render_stages(&list).trim_end());
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+        RoutingCommand::Stage(StageCommand::Set(args)) => {
+            let db = explicit_db("routing stage set", args.db.as_deref())?;
+            let task_id: TaskId = args.task.parse().map_err(|_| {
+                CliError::msg(format!("routing stage set: invalid task id {}", args.task))
+            })?;
+            let store = SqliteStore::open(db)
+                .map_err(|e| CliError::msg(format!("routing stage set: {e}")))?;
+            let since = time::OffsetDateTime::now_utc()
+                .format(&time::format_description::well_known::Rfc3339)
+                .map_err(|e| CliError::msg(format!("clock format: {e}")))?;
+            let view = routing_stage::set_stage_by_human(
+                &store,
+                db,
+                &HumanStageChange {
+                    task_id,
+                    genre: args.genre,
+                    harness_id: args.harness,
+                    stage: match args.stage {
+                        StageName::Shadow => task_core::route_select::RoutingStage::Shadow,
+                        StageName::Enforce => task_core::route_select::RoutingStage::Enforce,
+                    },
+                    reason: args.reason,
+                },
+                &since,
+            )
+            .map_err(|e| CliError::msg(format!("routing stage set: {e}")))?;
+            outln!(
+                "{}",
+                render_stages(&RoutingStageList { stages: vec![view] }).trim_end()
+            );
+            Ok(ExitCode::SUCCESS)
+        }
+        RoutingCommand::Evidence(args) => {
+            let db = explicit_db("routing evidence", args.db.as_deref())?;
+            let store = SqliteStore::open(db)
+                .map_err(|e| CliError::msg(format!("routing evidence: {e}")))?;
+            let list = routing_stage::list_evidence(
+                &store,
+                db,
+                args.genre.as_deref(),
+                args.harness.as_deref(),
+            )
+            .map_err(|e| CliError::msg(format!("routing evidence: {e}")))?;
+            if args.json {
+                outln!("{}", to_json(&list)?);
+            } else {
+                outln!("{}", render_evidence(&list).trim_end());
+            }
+            Ok(ExitCode::SUCCESS)
+        }
         RoutingCommand::Show(args) => {
             let config = Config::load(&args.config)
                 .map_err(|e| CliError::msg(format!("config {}: {e}", args.config.display())))?;
@@ -110,103 +224,152 @@ pub fn run(_db: Option<&Path>, command: RoutingCommand) -> Result<ExitCode, CliE
     }
 }
 
-fn tier_label(tier: Tier) -> &'static str {
-    match tier {
-        Tier::Frontier => "frontier",
-        Tier::Standard => "standard",
-        Tier::Cheap => "cheap",
+fn explicit_db<'a>(what: &str, db: Option<&'a Path>) -> Result<&'a Path, CliError> {
+    let db = db.ok_or_else(|| {
+        CliError::msg(format!(
+            "{what}: --db <path> is required (the daemon DB is never opened by default)"
+        ))
+    })?;
+    if !db.is_file() {
+        return Err(CliError::msg(format!(
+            "{what}: no database at {}",
+            db.display()
+        )));
     }
+    Ok(db)
 }
 
-/// provider の 1 tier の表示（`ModelBinding` が無ければ「未設定」、`unavailable_reason` があれば
-/// それを優先して見せる。`model_routing::resolve` と同じ優先順）。
-fn binding_cell(binding: Option<&task_core::model_routing::ModelBinding>) -> String {
-    match binding {
-        None => "(未設定)".to_string(),
-        Some(b) => {
-            let mut cell = b.name.clone();
-            if let Some(reason) = &b.unavailable_reason {
-                cell.push_str(&format!(" -> unavailable: {reason}"));
-            } else if let Some(id) = &b.model_id {
-                cell.push_str(&format!(" -> {id}"));
-            } else {
-                cell.push_str(" -> (model_id 未設定)");
-            }
-            if let Some(effort) = &b.reasoning_effort {
-                cell.push_str(&format!(" [effort={effort}]"));
-            }
-            cell
+fn to_json(value: &impl serde::Serialize) -> Result<String, CliError> {
+    serde_json::to_string_pretty(value).map_err(|e| CliError::msg(format!("json: {e}")))
+}
+
+/// `routing stage list|set` の表（1 組 1 行）。
+pub fn render_stages(list: &RoutingStageList) -> String {
+    if list.stages.is_empty() {
+        return "(no routing stages)\n".into();
+    }
+    let mut out = String::new();
+    for s in &list.stages {
+        out.push_str(&format!(
+            "{}/{}: {} since={} evidence={} latest={}",
+            s.genre,
+            s.harness_id,
+            s.stage,
+            s.since.as_deref().unwrap_or("-"),
+            s.evidence_version.as_deref().unwrap_or("-"),
+            s.latest_evidence_version.as_deref().unwrap_or("-"),
+        ));
+        if let Some(c) = &s.last_change {
+            out.push_str(&format!(
+                " last={}->{} by {} at {} ({})",
+                c.from.as_deref().unwrap_or("-"),
+                c.to,
+                c.actor,
+                c.ts,
+                c.reason
+            ));
+        }
+        out.push('\n');
+    }
+    out
+}
+
+/// `routing evidence` の表（組ごとに見出し、行ごとに区間）。
+pub fn render_evidence(list: &RoutingEvidenceList) -> String {
+    if list.groups.is_empty() {
+        return "(no routing evidence)\n".into();
+    }
+    let mut out = String::new();
+    for g in &list.groups {
+        out.push_str(&format!(
+            "=== {}/{} ({}) ===\n",
+            g.genre,
+            g.harness_id,
+            g.evidence_version.as_deref().unwrap_or("-")
+        ));
+        for r in &g.rows {
+            out.push_str(&format!(
+                "{}/{} harness={} n={} pass={} [{:.3}, {:.3}] wall={} usd={} timeout={:.3}{}\n",
+                r.source_id,
+                r.model_id,
+                r.harness_version,
+                r.n,
+                r.pass,
+                r.pass_lower,
+                r.pass_upper,
+                r.wall_median_s
+                    .map_or_else(|| "-".to_string(), |v| format!("{v:.1}s")),
+                r.usd_list_median
+                    .map_or_else(|| "-".to_string(), |v| format!("{v:.3}")),
+                r.timeout_rate,
+                if r.qualifies { " qualifies" } else { "" }
+            ));
         }
     }
+    out
 }
 
 /// `celerisctl routing show` の本体（純粋関数。テストしやすいよう `run` から分離）。
+/// ADR 2026-10-11-llm-source-harness-selection: LLM source（kind・model・account）、harness、
+/// `[[llm_routes]]` の結合、harness ごとの既定候補、CoS の候補を宣言の順に見せる。
 pub fn render_routing_table(config: &Config) -> String {
     let mut out = String::new();
-    out.push_str("=== providers (tier_models) ===\n");
-    if config.providers.is_empty() {
-        out.push_str("(no providers configured)\n");
+    out.push_str("=== llm_sources ===\n");
+    if config.llm_sources.is_empty() {
+        out.push_str("(no llm_sources configured)\n");
     }
-    for p in &config.providers {
-        if p.tier_models.is_empty() {
-            out.push_str(&format!(
-                "{} ({}): tier_models not configured (legacy single model = {:?})\n",
-                p.id,
-                p.adapter,
-                if p.model.is_empty() {
-                    "adapter default".to_string()
-                } else {
-                    p.model.clone()
-                }
-            ));
-            continue;
-        }
-        out.push_str(&format!("{} ({}):\n", p.id, p.adapter));
-        for tier in TIER_ORDER {
-            out.push_str(&format!(
-                "  {:<8} {}\n",
-                tier_label(tier),
-                binding_cell(p.tier_models.get(&tier))
-            ));
-        }
-    }
-    out.push('\n');
-    out.push_str("=== [llm_proxy.models] (tier -> source model) ===\n");
-    out.push_str(&format!(
-        "  {:<8} {:<24} {:<24} {}\n",
-        "tier", "claude", "gpt", "qwen"
-    ));
-    for tier in TIER_ORDER {
-        let claude = config
-            .llm_proxy
-            .models
-            .claude
-            .get(&tier)
-            .map(String::as_str)
-            .unwrap_or("(未設定)");
-        let gpt = config
-            .llm_proxy
-            .models
-            .gpt
-            .get(&tier)
-            .map(String::as_str)
-            .unwrap_or("(未設定)");
-        let qwen = config
-            .llm_proxy
-            .models
-            .qwen
-            .get(&tier)
-            .map(String::as_str)
-            .unwrap_or("(未設定)");
+    for (id, s) in &config.llm_sources {
         out.push_str(&format!(
-            "  {:<8} {:<24} {:<24} {}\n",
-            tier_label(tier),
-            claude,
-            gpt,
-            qwen
+            "{id} ({}, api_format={}): models=[{}] accounts=[{}]\n",
+            s.kind,
+            s.api_format.as_deref().unwrap_or(&s.kind),
+            s.models.join(", "),
+            s.accounts.join(", ")
         ));
     }
+    out.push_str("=== harnesses ===\n");
+    if config.harness_declarations.is_empty() {
+        out.push_str("(no harnesses declared)\n");
+    }
+    for (id, h) in &config.harness_declarations {
+        let formats: Vec<&str> = h.api_formats.iter().map(String::as_str).collect();
+        out.push_str(&format!(
+            "{id} ({}): api_formats=[{}]\n",
+            h.kind,
+            formats.join(", ")
+        ));
+    }
+    out.push_str("=== llm_routes ===\n");
+    if config.llm_routes.is_empty() {
+        out.push_str("(no llm_routes declared)\n");
+    }
+    for r in &config.llm_routes {
+        out.push_str(&format!("{} -> {}/{}", r.harness, r.source, r.model));
+        if let Some(via) = &r.via {
+            out.push_str(&format!(" via {via}"));
+        }
+        out.push('\n');
+    }
+    out.push_str("=== route_defaults ===\n");
+    for (harness, d) in &config.route_defaults {
+        out.push_str(&format!("{harness}: {}\n", candidates_cell(&d.candidates)));
+    }
+    out.push_str(&format!(
+        "cos: {}\n",
+        candidates_cell(&config.cos.route_candidates)
+    ));
     out
+}
+
+fn candidates_cell(candidates: &[celeris::config::RouteCandidateConfig]) -> String {
+    if candidates.is_empty() {
+        return "(none)".to_string();
+    }
+    candidates
+        .iter()
+        .map(|c| format!("{}/{}", c.source, c.model))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 #[cfg(test)]
@@ -220,62 +383,55 @@ mod tests {
     }
 
     #[test]
-    fn shows_provider_tier_models_and_llm_proxy_models_defaults() {
+    fn shows_llm_sources_harnesses_and_routes() {
         let dir = tempfile::tempdir().unwrap();
         let path = write_config(
             dir.path(),
             r#"
-[[providers]]
-id = "claude"
-adapter = "claude-code"
-[providers.tier_models.frontier]
-name = "fable"
-model_id = "claude-fable-5-1"
-[providers.tier_models.standard]
-name = "opus"
-unavailable_reason = "not verified yet"
-[providers.tier_models.cheap]
-name = "sonnet"
-model_id = "claude-sonnet-5"
+[llm_sources.claude]
+kind = "claude_oauth"
+api_format = "anthropic_messages"
+accounts = ["a1"]
+models = ["claude-sonnet-5"]
 
-[[providers]]
-id = "legacy"
-adapter = "fake"
+[harnesses.claude_code]
+kind = "claude_code"
+api_formats = ["anthropic_messages"]
+source_kinds = ["claude_oauth"]
+
+[[llm_routes]]
+harness = "claude_code"
+source = "claude"
+model = "claude-sonnet-5"
+
+[route_defaults.claude_code]
+candidates = [{ source = "claude", model = "claude-sonnet-5" }]
 "#,
         );
         let config = Config::load(&path).unwrap();
         let table = render_routing_table(&config);
-        assert!(table.contains("claude (claude-code):"));
-        assert!(table.contains("frontier fable -> claude-fable-5-1"));
-        assert!(table.contains("standard opus -> unavailable: not verified yet"));
-        assert!(table.contains("cheap    sonnet -> claude-sonnet-5"));
-        assert!(table.contains("legacy (fake): tier_models not configured"));
-        // llm_proxy.models の既定表（ADR-0069 Phase 118 D2）。
-        assert!(table.contains("[llm_proxy.models]"));
-        assert!(table.contains("claude-fable-5-1"));
-        assert!(table.contains("gpt-6-astra"));
-        assert!(table.contains("qwen3.8-27b"));
+        assert!(table.contains(
+            "claude (claude_oauth, api_format=anthropic_messages): models=[claude-sonnet-5] accounts=[a1]"
+        ));
+        assert!(table.contains("claude_code (claude_code): api_formats=[anthropic_messages]"));
+        assert!(table.contains("claude_code -> claude/claude-sonnet-5\n"));
+        assert!(table.contains("claude_code: claude/claude-sonnet-5\n"));
+        assert!(table.contains("cos: (none)"));
     }
 
     #[test]
-    fn a_provider_without_a_tier_binding_is_marked_unset() {
+    fn a_source_without_harnesses_or_routes_says_so() {
         let dir = tempfile::tempdir().unwrap();
         let path = write_config(
             dir.path(),
-            r#"
-[[providers]]
-id = "gpt"
-adapter = "codex"
-[providers.tier_models.frontier]
-name = "astra"
-model_id = "gpt-6-astra"
-reasoning_effort = "high"
-"#,
+            "[llm_sources.relay]\nkind = \"openai_compatible\"\nmodels = [\"m1\"]\n",
         );
         let config = Config::load(&path).unwrap();
         let table = render_routing_table(&config);
-        assert!(table.contains("frontier astra -> gpt-6-astra [effort=high]"));
-        assert!(table.contains("standard (未設定)"));
-        assert!(table.contains("cheap    (未設定)"));
+        assert!(table.contains(
+            "relay (openai_compatible, api_format=openai_compatible): models=[m1] accounts=[]"
+        ));
+        assert!(table.contains("(no harnesses declared)"));
+        assert!(table.contains("(no llm_routes declared)"));
     }
 }

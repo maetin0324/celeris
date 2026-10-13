@@ -55,6 +55,7 @@ pub mod protocol;
 pub mod provider;
 pub mod research_targets;
 pub mod result_report;
+pub mod route;
 mod routing_context_transport;
 pub mod run_tmpdir;
 /// ADR-0075 D1〜D3（Phase G1）: ローカルの scratch pool（owner ごとの `CARGO_TARGET_DIR`、lease、semantic GC の計画）。
@@ -137,5 +138,3 @@ pub use task_repos::{
     REPOS_DIR_NAME, SetupOutcome, TaskRepo, TaskWorkspaces, run_setup, run_setup_in,
 };
 pub use workspace::{ExecResult, LocalWorkspace, RemoteWorkspace, Workspace, WorkspaceError};
-
-pub mod tiered;

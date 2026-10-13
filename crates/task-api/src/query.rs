@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 
 use serde::de::DeserializeOwned;
-use task_core::{AccountAdapter, Event, TaskId};
+use task_core::{Event, TaskId};
 
 use crate::problem::ApiProblem;
 
@@ -101,18 +101,6 @@ impl QueryParams {
         }
     }
 
-    /// ADR-0025 D6: `?adapter=` クエリ（省略時 `claude-code`）。`"claude-code"` / `"codex"` 以外は 400。
-    pub(crate) fn account_adapter(&self) -> Result<AccountAdapter, ApiProblem> {
-        match self.single("adapter")? {
-            None => Ok(AccountAdapter::ClaudeCode),
-            Some(s) => AccountAdapter::parse(s).ok_or_else(|| {
-                ApiProblem::bad_request(format!(
-                    "unknown adapter `{s}` (must be claude-code, codex or opencode-go)"
-                ))
-            }),
-        }
-    }
-
     /// `types`: `Event` の `type` 名のカンマ区切り。未知の名前は 400。省略（または空）は `None` = 全て。
     pub(crate) fn event_types(&self) -> Result<Option<HashSet<&'static str>>, ApiProblem> {
         let names = self.list("types");
@@ -149,7 +137,7 @@ pub(crate) fn parse_snake<T: DeserializeOwned>(what: &str, value: &str) -> Resul
 }
 
 /// `Event` の serde の `type` 名（`types` クエリの語彙）。
-pub(crate) const EVENT_TYPES: [&str; 76] = [
+pub(crate) const EVENT_TYPES: [&str; 83] = [
     "browser_updated",
     // ADR 2026-10-07-worker-no-subagents-no-llm-cli D5: subagent 道具・別 LLM CLI/API の起動の検出。
     "worker_policy_violation",
@@ -254,12 +242,23 @@ pub(crate) const EVENT_TYPES: [&str; 76] = [
     "trusted_device_used",
     "trusted_device_revoked",
     "trusted_device_rejected",
+    "routing_stage_changed",
     "browser_prerequisite_blocked",
     "browser_prerequisite_resumed",
+    // ADR 2026-10-11 stranded branches: task の取り込み状態の変化（検出・merge・discard・hold・reopen）。
+    "integration_detected",
+    "integration_merged",
+    "integration_discarded",
+    "integration_held",
+    "integration_reopened",
+    "integration_not_applicable",
 ];
 
 pub(crate) fn event_type_name(event: &Event) -> &'static str {
     match event {
+        Event::HarnessSelected { .. } => "harness_selected",
+        Event::LlmRouteSelected { .. } => "llm_route_selected",
+        Event::HarnessMigrationUnresolved { .. } => "harness_migration_unresolved",
         Event::CosOperation { .. } => "cos_operation",
         Event::Created { .. } => "created",
         Event::BrowserUpdated { .. } => "browser_updated",
@@ -282,6 +281,12 @@ pub(crate) fn event_type_name(event: &Event) -> &'static str {
         Event::IntegrationRepairScheduled { .. } => "integration_repair_scheduled",
         Event::IntegrationRepairResolved { .. } => "integration_repair_resolved",
         Event::IntegrationRepairExhausted { .. } => "integration_repair_exhausted",
+        Event::IntegrationDetected { .. } => "integration_detected",
+        Event::IntegrationMerged { .. } => "integration_merged",
+        Event::IntegrationDiscarded { .. } => "integration_discarded",
+        Event::IntegrationHeld { .. } => "integration_held",
+        Event::IntegrationReopened { .. } => "integration_reopened",
+        Event::IntegrationNotApplicable { .. } => "integration_not_applicable",
         Event::ApprovalRequested => "approval_requested",
         Event::ApprovalDecided { .. } => "approval_decided",
         Event::ApprovalsWithdrawn { .. } => "approvals_withdrawn",
@@ -343,6 +348,7 @@ pub(crate) fn event_type_name(event: &Event) -> &'static str {
         Event::TrustedDeviceUsed { .. } => "trusted_device_used",
         Event::TrustedDeviceRevoked { .. } => "trusted_device_revoked",
         Event::TrustedDeviceRejected { .. } => "trusted_device_rejected",
+        Event::RoutingStageChanged { .. } => "routing_stage_changed",
     }
 }
 

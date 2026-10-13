@@ -132,9 +132,8 @@ fn resolve_department(
         .and_then(|id| department(id)))
 }
 
-/// ADR-0121 D2: `begin` が delivery を作らない理由。`Silent` は従来どおり何も残さない対象外。
+/// ADR-0121 D2: `begin` が delivery を作らない理由。
 enum Skip {
-    Silent,
     Report {
         reason: DeliverySkipReason,
         detail: String,
@@ -170,15 +169,30 @@ fn prepare(
     policy: &DeliveryPolicy,
 ) -> Result<Result<Prepared, Skip>, StoreError> {
     let Some(project_id) = task.project_id else {
-        return Ok(Err(Skip::Silent));
+        return Ok(Err(report(
+            DeliverySkipReason::NoProject,
+            "task に project_id がありません".into(),
+        )));
     };
     // ADR-0079 D6（Phase R1c）: 木の子 task は main に取り込まない（成果は親の段階末尾の統合で親の
     // ブランチに入る）。部署の取り込み判定・`deliveries` の行・release は root だけ。
-    if !policy.projects.contains(&project_id.to_string())
-        || task_core::support_kind(task).is_some()
-        || task_core::tree::is_tree_child(task)
-    {
-        return Ok(Err(Skip::Silent));
+    if !policy.projects.contains(&project_id.to_string()) {
+        return Ok(Err(report(
+            DeliverySkipReason::ProjectNotEnabled,
+            format!("project {project_id} は selfdeploy.delivery_projects の対象外です"),
+        )));
+    }
+    if task_core::support_kind(task).is_some() {
+        return Ok(Err(report(
+            DeliverySkipReason::SupportTask,
+            "support task は delivery しません".into(),
+        )));
+    }
+    if task_core::tree::is_tree_child(task) {
+        return Ok(Err(report(
+            DeliverySkipReason::TreeChild,
+            "tree child は親 task の統合工程で扱います".into(),
+        )));
     }
     if task.repos.len() != 1 {
         return Ok(Err(report(
@@ -266,7 +280,17 @@ fn prepare(
             format!("branch {branch} が {} で終わらない", task.id),
         )));
     }
-    let default_branch = crate::changes::default_branch(path, row.default_branch.as_deref());
+    // ADR 2026-10-11-stranded-done-branches F1: sweep と同じ解決。解決できなければ統合しない。
+    let default_branch =
+        match crate::changes::resolve_default_branch(path, row.default_branch.as_deref()) {
+            Ok(branch) => branch,
+            Err(error) => {
+                return Ok(Err(report(
+                    DeliverySkipReason::RefsUnresolvable,
+                    format!("{}: {error}", path.display()),
+                )));
+            }
+        };
     let resolve = |r: &str| {
         crate::changes::git(path, &["rev-parse", "--verify", r], Duration::from_secs(10))
             .filter(|o| o.ok)
@@ -286,12 +310,33 @@ fn prepare(
             head,
         }));
     };
+    // ADR-0121 付記（2026-10-11）: head が base の祖先（同一を含む）なら取り込む commit が無い。
+    // 取り込み判定の criterion を足すと reviewer が base 側の既存 commit を審査してしまうので作らない。
+    let no_commits = crate::changes::git(
+        path,
+        &["merge-base", "--is-ancestor", &head, &base],
+        Duration::from_secs(10),
+    )
+    .is_some_and(|o| o.ok);
+    if no_commits {
+        return Ok(Err(Skip::Report {
+            reason: DeliverySkipReason::NoCommits,
+            detail: format!(
+                "{}: {branch} の head {head} は {default_branch} ({base}) の祖先です",
+                path.display()
+            ),
+            head: Some(head),
+        }));
+    }
     let old = store.delivery_get(task.id)?;
     if old.as_ref().is_some_and(|d| {
         matches!(d.state, DeliveryState::Merging | DeliveryState::Preparing)
             || (d.state == DeliveryState::Ready && d.head == head)
     }) {
-        return Ok(Err(Skip::Silent));
+        return Ok(Err(report(
+            DeliverySkipReason::RefsUnresolvable,
+            "同一 head の delivery が既に進行中または完了しています".into(),
+        )));
     }
     let org = store.org_list()?;
     let Some(department) = resolve_department(store, task, policy, &org)? else {
@@ -362,7 +407,6 @@ pub fn begin(
         old,
     } = match prepare(store, task, workspace_root, policy)? {
         Ok(p) => p,
-        Err(Skip::Silent) => return Ok(None),
         Err(Skip::Report {
             reason,
             detail,
@@ -373,7 +417,7 @@ pub fn begin(
         }
     };
     let criterion_idx = task.acceptance.len();
-    task.acceptance.push(Criterion {check:Check::Reviewer,text:format!("【部署内のマージ可否判定】リポジトリ {} の {} ({}) に、コミット {} (ブランチ {}) を取り込めること。指定SHAの実際の差分、依頼範囲、テスト、移行・設定の互換性、秘密の混入を確認し、対象の実装worktreeに未コミット変更や未解決の欠陥があれば不合格にする。登録元リポジトリにはユーザーの未コミット変更があり得る。対象差分と重ならずfast-forwardで保持できる既存変更は拒否理由にせず、復元・コミット・stashしない。対象差分と衝突する変更は停止理由にする。レビューは部署をまとめる担当 {} がこの独立runで行い、上司やCoSで重複レビューしない。合格すると制御プレーンがマージ・release・verifyまで実行し、最終デプロイだけ人が押す。要件や権限などユーザーに確認しないと判断できない場合は、理由の先頭に [needs-human] と具体的な質問を含める。技術的な不備だけなら部署内で差し戻す。自分でmergeやdeploy、実装変更はしない。",path.display(),default_branch,base,head,branch,department) });
+    task.acceptance.push(Criterion {check:Check::Reviewer,text:format!("【部署内のマージ可否判定】リポジトリ {} の {} ({}) に、コミット {} (ブランチ {}) を取り込めること。審査対象は `git log {base}..{head}` の commit と `git diff {base}...{head}`（merge-base 起点）の差分だけで、コミット {head} 単体の親との差分や base 側の commit は審査対象ではない。その差分の依頼範囲、テスト、移行・設定の互換性、秘密の混入を確認し、対象の実装worktreeに未コミット変更や未解決の欠陥があれば不合格にする。登録元リポジトリにはユーザーの未コミット変更があり得る。対象差分と重ならずfast-forwardで保持できる既存変更は拒否理由にせず、復元・コミット・stashしない。対象差分と衝突する変更は停止理由にする。レビューは部署をまとめる担当 {} がこの独立runで行い、上司やCoSで重複レビューしない。合格すると制御プレーンがマージ・release・verifyまで実行し、最終デプロイだけ人が押す。要件や権限などユーザーに確認しないと判断できない場合は、理由の先頭に [needs-human] と具体的な質問を含める。技術的な不備だけなら部署内で差し戻す。自分でmergeやdeploy、実装変更はしない。",path.display(),default_branch,base,head,branch,department,base=base,head=head) });
     let d = Delivery {
         task_id: task.id,
         project_id,

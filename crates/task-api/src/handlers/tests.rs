@@ -54,7 +54,6 @@ fn state_rx(
                 adapter: None,
                 tier: Some(task_core::Tier::Standard),
             },
-            providers: vec![],
             clusters: vec![],
             roles: vec![],
             genres: vec![],
@@ -71,8 +70,6 @@ fn state_rx(
         celeris_version: "test".into(),
         instance_id: "01J00000000000000000000000".into(),
         started_at: "2026-09-14T00:00:00Z".into(),
-        providers_dir: None,
-        openai_compatible_source_ids: Default::default(),
         admin_tx: None,
         accounts_roots: std::collections::HashMap::new(),
         max_runs_per_account: 0,
@@ -80,12 +77,13 @@ fn state_rx(
         secret_usage: std::collections::HashMap::new(),
         memory_dir: None,
         notify_secret_id: task_core::DEFAULT_WEBHOOK_SECRET_ID.to_string(),
-        notify_gui_base_url: None,
+        notify_web_base_url: None,
         notify_inbox_batch_secs: 60,
         notify_inbox_reminder_secs: 86_400,
         notify_digest_interval_secs: 3_600,
         notify_digest_max_lines: 10,
         releases: None,
+        integration_releases_dir: None,
         release: "dev".to_string(),
         mode: task_core::DaemonMode::Normal,
         role: task_core::SharedRole::new(task_core::InstanceRole::Active),
@@ -93,7 +91,7 @@ fn state_rx(
         knowledge_root: None,
         docs_repo_root: Some(dir.join("workspace")),
         llm_sources: None,
-        routing_catalog: None,
+        harnesses: None,
         model_discovery: None,
         tree_limits: task_core::TreeLimits::default(),
     };
@@ -188,7 +186,7 @@ async fn metrics_scratch_matches_the_status_schema() {
     let mut snapshot: task_ops::daemon::DaemonSnapshot = serde_json::from_value(serde_json::json!({
             "instance_id": "01TEST", "pid": 1, "hostname": "h", "started_at": "2026-09-28T00:00:00Z",
             "last_tick_at": "2026-09-28T00:00:00Z", "ticks": 1, "tick_ms": 1000, "in_flight": [],
-            "cooldowns": [], "awaiting_human": [], "unroutable": [], "providers": []
+            "cooldowns": [], "task_waits": [], "providers": []
         }))
         .unwrap_or_else(|e| panic!("{e}"));
     snapshot.scratch = Some(status.clone());

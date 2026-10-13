@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
 import { type ReactNode, type UIEvent, useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { apiGet } from "../../api/client";
 import type { EventRow, EventsPage, RunSummary } from "../../api/generated/types";
@@ -14,7 +15,14 @@ import { Notice } from "../../components/ui/notice";
 import { StatusBadge } from "../../components/ui/status-badge";
 import { formatAbsolute, serverNowMs } from "../../lib/time";
 import { taskDetailQuery } from "../tasks/task-detail-query";
-import { eventKindLabel, isNearBottom, runDuration, runHarness, runStatus } from "./run-header";
+import {
+  eventKindLabel,
+  isNearBottom,
+  LEGACY_SELECTION_TEXT,
+  runDuration,
+  runSelectionParts,
+  runStatus,
+} from "./run-header";
 import { parseRunLog, type RunLogEvent } from "./run-log";
 import { useRunLog } from "./use-run-log";
 
@@ -206,9 +214,30 @@ function RunHeader({
     );
   const status = runStatus(run);
   const duration = runDuration(run, serverNowMs());
+  const parts = runSelectionParts(run.selection);
+  // 選択は API の selection だけから出す。旧 run は 1 項目で「記録なし」と言う。
+  const selectionItems: DataListItem[] = parts
+    ? [
+        { label: "harness", value: <span className="break-all">{parts.harness}</span> },
+        {
+          label: "source",
+          value: (
+            <Link
+              to="/sources/$sourceId"
+              params={{ sourceId: parts.sourceId }}
+              className="inline-flex min-h-11 min-w-11 max-w-full items-center break-all text-primary underline underline-offset-2"
+            >
+              {parts.sourceId}
+            </Link>
+          ),
+        },
+        { label: "model", value: <span className="break-all">{parts.model}</span> },
+        { label: "口座", value: <span className="break-all">{parts.account}</span> },
+      ]
+    : [{ label: "選択", value: <span className="text-muted-foreground">{LEGACY_SELECTION_TEXT}</span> }];
   const items: DataListItem[] = [
     { label: "状態", value: status ? <StatusBadge status={status} /> : "終了（結果の記録なし）" },
-    { label: "harness", value: <span className="break-all">{runHarness(run)}</span> },
+    ...selectionItems,
     { label: "開始", value: formatAbsolute(run.started_at) },
     { label: "所要時間", value: duration ?? "不明" },
   ];

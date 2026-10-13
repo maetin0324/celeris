@@ -27,10 +27,10 @@ events にも GUI にも出なかった。
   - `take_over_handed_off_checks`: active の毎 tick、照合より前に、印のある手元に無い running の WU run を
     `finalise_from_result_json` で確定し直す（検査は新 instance で走る）。
   - `spawn_work_unit_checks` は `run_integration_checks`（`ObservedIntegration.run_id = Some`）で検査を流し、
-    1 件ごとの event とログ（`<task_dir>/work-unit-checks/<wu_key>/<ms>-<i>.log`）を残す。
+    1 件ごとの event とログ（`<workspace_root>/<task_id>/work-unit-checks/<wu_key>/<ms>-<i>.log`）を残す。
 - task-ops: `check_progress`（WU の行）が WU 検査の event も読む。task-api: `check-log` が `WorkUnitCheckStarted` も読む。
   `EVENT_TYPES` に 3 語（59 → 62）。
-- 文書・型: `docs/api/v1/gui-api.md` と `gui/docs/celeris-api-v1.md`（§3.126.19 と `check_progress` の説明）、
+- 文書・型: `docs/api/v1/api.md` と `gui/docs/celeris-api-v1.md`（§3.126.19 と `check_progress` の説明）、
   `docs/api/v1/{api-v1,event}.schema.json`（`UPDATE_SCHEMA=1`）、`gui/app/celeris/types.ts`・`web/api/generated/*`（gen:types）、
   `web/api/realtime/{event-kinds,invalidation-map}.ts`。
 - GUI（gui/）: WU の行の検査表示は統合で入れたものがそのまま葉の WU にも出る。コメントを更新し、偽 celeris の

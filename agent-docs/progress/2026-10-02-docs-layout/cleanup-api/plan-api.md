@@ -5,7 +5,7 @@ updated: 2026-10-02
 completed: 2026-10-02
 ---
 
-# cleanup-api / plan-api: gui-api.md §3.125（実行・計画・木・決定）を task-api/task-core の実装に照らして直す
+# cleanup-api / plan-api: api.md §3.125（実行・計画・木・決定）を task-api/task-core の実装に照らして直す
 
 final review の指摘（§3.125.2 が plan.schema を /1・/2 に限定、§3.125.3 が `work_units` を必須と書く）を直し、
 §3.125 の他の小節も route・ハンドラ・型（serde 属性）と 1 つずつ照合した。`docs/api/v1/api-v1.schema.json` と
@@ -15,7 +15,7 @@ crates/・web/・gui/・scripts/ は変えていない。
 
 | 処理(削除/統合/移動/修正) | 旧パス | 新パス or - | 理由 | 最後の commit |
 |---|---|---|---|---|
-| 修正 | docs/api/v1/gui-api.md | - | §3.125.1・§3.125.2・§3.125.3・§3.125.5 を実装に合わせた（下記）。crates から参照される正本なので場所はそのまま | cfffd0f7 |
+| 修正 | docs/api/v1/api.md | - | §3.125.1・§3.125.2・§3.125.3・§3.125.5 を実装に合わせた（下記）。crates から参照される正本なので場所はそのまま | cfffd0f7 |
 
 ## 小節ごとの結論と根拠
 
@@ -75,7 +75,7 @@ crates/・web/・gui/・scripts/ は変えていない。
 ## 実行した check と結果
 
 - `sh scripts/dev/check-doc-links.sh` → exit 0（`check-doc-links: ok`）
-- 計画の check（§3.125.2 に `execution-plan/3`、§3.125.3 に `` `units` `` があるか）→ exit 0。attempt 2 では §3.125.2 が `/3` と略記していて文字列 `execution-plan/3` が無く exit 1 だったため、attempt 3 で `celeris.execution-plan/2`・`celeris.execution-plan/3` と完全な名前で書いた（gui-api.md:2851）。
+- 計画の check（§3.125.2 に `execution-plan/3`、§3.125.3 に `` `units` `` があるか）→ exit 0。attempt 2 では §3.125.2 が `/3` と略記していて文字列 `execution-plan/3` が無く exit 1 だったため、attempt 3 で `celeris.execution-plan/2`・`celeris.execution-plan/3` と完全な名前で書いた（api.md:2851）。
 - `git diff --quiet 9a53606d -- crates/ web/ gui/ scripts/ CLAUDE.md .claude/ docs/api/v1/api-v1.schema.json docs/api/v1/event.schema.json docs/protocol/` → exit 0
 - docs のみの変更のため `cargo test` / `clippy` は実行していない（コードに差分なし）。
 

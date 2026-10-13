@@ -387,6 +387,7 @@ impl Dispatcher {
             routing_context_ref: None,
             // ADR 2026-10-05 cos-chat-home D4: `spawn_worker` が planner でない run にだけ入れる。
             input_attachment_source: None,
+            llm_route: None,
         })
     }
 
@@ -416,33 +417,6 @@ impl Dispatcher {
                 }
             })
             .collect()
-    }
-
-    /// ADR-0054 Phase 67c: この run が CoS の対話 run になるなら、その現役セッション（あれば）を返す。
-    /// `run_extras` の `is_cos_conversation` と同じ判定（対話 run で、担当が `OrgKind::Secretary`）を
-    /// `select_provider` より前に行う（sticky 選択がランキングより先に効く必要があるため。ADR-0054 D1
-    /// の CoS セッションは `node_id = "cos"` 固定）。対象でなければ `Ok(None)`。
-    pub(super) fn cos_conversation_session(
-        &self,
-        task: &Task,
-    ) -> Result<Option<NodeSession>, DispatchError> {
-        if !task_core::is_conversation(task) {
-            return Ok(None);
-        }
-        let Some(assignee) = task.assignee.as_deref() else {
-            return Ok(None);
-        };
-        let org = self.store.org_list()?;
-        let is_secretary = org
-            .iter()
-            .find(|n| n.id == assignee)
-            .is_some_and(|n| n.kind == OrgKind::Secretary);
-        if !is_secretary {
-            return Ok(None);
-        }
-        Ok(self
-            .store
-            .node_session_active(task_core::COS_ID, SessionKind::Conversation, None)?)
     }
 
     /// ADR-0054 D1（Phase 67）: `(node_id, kind, project_id)` の継続セッションを決める・作る・引退させる
@@ -794,7 +768,11 @@ impl Dispatcher {
         };
         let (config, _) = task_core::workspace_config::load_or_default(path);
         let docs_root = mount.docs.clone().unwrap_or(config.outputs.docs);
-        let branch = task_ops::changes::default_branch(path, repo.default_branch.as_deref());
+        let Ok(branch) =
+            task_ops::changes::resolve_default_branch(path, repo.default_branch.as_deref())
+        else {
+            return Vec::new();
+        };
         let label = mount.label();
         task_ops::docs::list(path, &branch, &docs_root)
             .into_iter()

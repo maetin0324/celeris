@@ -77,7 +77,9 @@ printf '{"web":{"ok":true}}\n' >"$root/state/releases/$NEW/gate.json"
 fail() { echo "FAIL: $*" >&2; cat "$root/calls.log" "$root/out.log" >&2; exit 1; }
 run_follow() {
   : >"$root/calls.log"
-  bash "$here/web-follow.sh" "$NEW" "$OLD" >"$root/out.log" 2>&1 || fail 'nonzero exit'
+  local rc=0
+  bash "$here/web-follow.sh" "$NEW" "$OLD" >"$root/out.log" 2>&1 || rc=$?
+  [ "$rc" -eq "${1:-1}" ] || fail "exit $rc (expected ${1:-1})"
   if grep -q 'celeris@' "$root/calls.log"; then fail 'daemon unit touched'; fi
 }
 no_old_stop() { ! grep -q -- "--user stop celeris-web@$OLD" "$root/calls.log" || fail 'old web stopped'; }
@@ -111,11 +113,7 @@ run_follow
 no_old_stop
 ! grep -q -- "--user start celeris-web@$NEW" "$root/calls.log" || fail 'missing entry accepted'
 : >"$root/state/releases/$NEW/web/app/server/index.js"
-export FAKE_OLD_INACTIVE=1
-run_follow
-no_old_stop
-! grep -q -- "--user start celeris-web@$NEW" "$root/calls.log" || fail 'inactive old ignored'
-unset FAKE_OLD_INACTIVE
+
 # (b) 一時起動の失敗では旧 web を保持。
 export FAKE_PROBE_FAIL=1
 run_follow
@@ -137,7 +135,7 @@ grep -q -- "--user enable celeris-web@$OLD" "$root/calls.log" || fail 'old web n
 unset FAKE_POST_FAIL
 wait_probe_port
 # (d) 成功時は切替と LAN unit の復旧を記録。
-run_follow
+run_follow 0
 grep -q -- "--user start celeris-web@$NEW" "$root/calls.log" || fail 'new web not started'
 grep -q -- "--user stop celeris-web@$OLD" "$root/calls.log" || fail 'old web not stopped on success'
 grep -q -- '--user reset-failed celeris-web-lan.service celeris-web-lan.socket' "$root/calls.log" || fail 'LAN reset missing'
@@ -147,4 +145,10 @@ wait_probe_port
 export FAKE_START_FAIL=1
 run_follow
 grep -q -- "--user start celeris-web@$OLD" "$root/calls.log" || fail 'old web not started after start failure'
+unset FAKE_START_FAIL
+# First deployment starts web even without an active previous unit.
+export FAKE_OLD_INACTIVE=1
+run_follow 0
+no_old_stop
+grep -q -- "--user start celeris-web@$NEW" "$root/calls.log" || fail 'initial web not started'
 echo 'web_follow_health_gate: all ok'

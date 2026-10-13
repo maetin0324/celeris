@@ -2,29 +2,7 @@
 # scripts/selfdeploy/release.sh <git-ref> — ADR-0040 D1/D2 の「リリース」段。
 #
 #   作業チェックアウトとは別の detached の作業ツリー（$CELERIS_STATE_DIR/releases/.build/<sha12>）で
-#   cargo test（Phase SD-2: scripts/dev/test-parallel.sh でバイナリ並列）→ clippy → source-size-report
-#   （ADR-0083、warning のみ）→ build --release → GUI pnpm install/typecheck/test/build
-#   → pnpm mobile-audit → pnpm e2e:mock を順に回し、
-#   全部 exit 0 のときだけ $CELERIS_STATE_DIR/releases/<sha12>/ を作る。
-#   1 つでも非 0 なら**リリースを作らず**、.build/<sha12>/gate.json だけ残す。
-#
-# Phase 89（ADR-0041 追記、ADR-0055 D3）: `pnpm-build` の直後に `pnpm-mobile-audit`（`pnpm mobile-audit`。
-# ADR-0055 D1 の全画面 × light/dark）と `pnpm-e2e-mock`（`pnpm e2e:mock`。Phase 83 / G36 の読み取り専用
-# e2e をオフラインの偽 celeris に対して）を足した。どちらも `pnpm build` 済みの `$BUILD/gui/build` を
-# 使い回す（`MOBILE_AUDIT_SKIP_BUILD=1` / `E2E_SKIP_BUILD=1`）ので、ビルドをやり直さない。
-# これで見た目のデザイン退行（画面が壊れているのに 200 は返る等）を積んでリリースを作ることが無くなる。
-#
-# Phase SD-1（ADR-0075 追記「Phase SD-1 実装時の逸脱」、ADR-0041 追記 §7）: 1 周（release + verify）が
-# 14 分かかっていたのを縮める。
-#   - 作業ツリーは場所を固定（`.build/tree`）して使い回し、毎回 `git checkout --force <sha>` + `git clean -ffdx`
-#     でその sha のきれいな checkout にする。target は全リリースで 1 つの scratch owner `release-build`。
-#     git は内容の変わったファイルしか書き直さないので、cargo は変わった crate だけを作り直す。
-#   - `current` から gui/ に 1 つも変更が無いリリースでは、GUI の検査だけの段（`pnpm-test`・
-#     `pnpm-mobile-audit`・`pnpm-e2e-mock`）を飛ばし、gate.json に `skipped: true` と理由を残す。
-#     `pnpm-install` / `pnpm-typecheck` / `pnpm-build` は梱包に要るので必ず回す。Rust の段は必ず回す。
-#   - 梱包の `pnpm install --prod --frozen-lockfile` は lockfile ごとに 1 度だけ
-#     `releases/.pnpm-prod-cache/<key>/` で行い、リリースの `gui/node_modules` はそこへの相対 symlink にする。
-#
+# Rust と web の全 gate と梱包が成功したときだけ release を公開する。
 # ADR 2026-10-04-release-notes: gate.json を書いた後、梱包した `bin/celerisctl release notes` で
 # `<release>/notes.json` と `notes.md`（`current` からこの sha までの task・migration・schema・ADR・config 例・
 # gate の飛ばした段）を作る。失敗は警告だけでリリースは作る。`SD_RELEASE_NOTES_BIN` / `SD_RELEASE_NOTES_API` で差し替え。
@@ -47,14 +25,9 @@ env:
   CELERIS_CONFIG_DIR  既定 ~/.config/celeris（config.toml と秘密）
   CELERIS_STATE_DIR   既定 ~/.local/celeris（releases / backups / staging …）
   SD_REPO     既定 ~/workspace/agent-platform（git worktree を生やす元のリポジトリ）
-  SD_AUDIT_TIMEOUT  既定 600（秒）。`pnpm-mobile-audit` / `pnpm-e2e-mock` それぞれの壁時計の上限
-                    （Phase 89。ADR-0041 追記）。Playwright の Chromium 実行ファイルが
-                    ~/.cache/ms-playwright に無いホストでは、この 2 ステップは待たずに
-                    「false — playwright browser not installed」で失敗する（`docs/ops/selfdeploy.md` 参照）。
-  SD_GATE_FORCE_GUI  1 なら gui/ に変更が無くても GUI の検査の段を飛ばさない（Phase SD-1）
   SD_RELEASE_SCRATCH_OWNER  既定 release-build（全リリースで共有する scratch の owner。Phase SD-1）
   SD_RELEASE_TARGET_TTL     既定 172800（秒）。共有 target の lease の TTL（最後のリリースからこの間は P0）
-  SD_RELEASE_PRUNE   0 なら最後の掃除（古いリリースと使われない .pnpm-prod-cache の削除）を飛ばす
+  SD_RELEASE_PRUNE   0 なら最後の掃除（古いリリースの削除）を飛ばす
   SD_GATE_TEST_RUNNER  既定 nextest（`scripts/dev/test-parallel.sh`: テストバイナリを並列。Phase SD-2）。
                        cargo-test なら従来の `cargo test --workspace`（直列。非常用）
   SD_TEST_PARALLEL     既定 ビルドする sha の scripts/dev/test-parallel.sh（テスト用の差し替え口）
@@ -79,7 +52,6 @@ if [ "${SD_GATE_TEST_RUNNER:-nextest}" = nextest ]; then
   cargo nextest --version >/dev/null 2>&1 \
     || sd_die "cargo-nextest is not installed; install once: cargo install cargo-nextest --locked --version $(git -C "$SD_REPO" show "$REF:tools/nextest/VERSION" 2>/dev/null | tr -d ' \n' || true) (docs/ops/nextest.md), or set SD_GATE_TEST_RUNNER=cargo-test"
 fi
-sd_use_pnpm
 
 SHA12="$(sd_sha12 "$REF")"
 SHA_FULL="$(sd_sha_full "$REF")"
@@ -119,7 +91,7 @@ sd_log "build worktree: $BUILD"
 # ---- 作業ツリー（Phase SD-1: 場所を固定して使い回す） ----------------------
 #
 # `.build/tree` が同じリポジトリの有効な worktree なら `git checkout --detach --force <sha>` と
-# `git clean -ffdx`（追跡外・ignore 済みも全部消す: gui/node_modules・gui/build・前回の .gate-*.log）で
+# `git clean -ffdx`（追跡外・ignore 済みも全部消す: web/node_modules・web/dist・前回の .gate-*.log）で
 # **その sha のきれいな checkout**にする。無い・壊れているときだけ作り直す（`git worktree add`）。
 # git は内容の変わったファイルだけを書き直す（mtime が今になる）ので、同じ target を使い続ける cargo は
 # それを見て変わった crate だけを作り直す。内容の同じファイルの mtime は前回の checkout のまま＝前回の
@@ -246,59 +218,23 @@ skip_step() {
   printf '%s\t0\t0\t\ttrue\t%s\n' "$name" "$(printf '%s' "$reason" | tr '\t\n' '  ')" >>"$GATE_TSV"
 }
 
-# ---- web/ の段（web ADR-W3 D3、P6-02）: 非 blocking ---------------------------------
-#
-# gui/ の gate の**後ろ**で web/（ADR-0081 の SPA + gateway）の install / typecheck / test / release を回す。
-# 落ちても `GATE_OK` は倒さない（リリースは作られ、昇格は gui/ だけのリリースとして進む）。結果は gate.json の
-# `steps[]`（exit ≠ 0 のまま）と `web`（`ok` / `failed_step` / `blocking: false`）に残し、落ちた段より後ろの
-# web/ の段は `skipped: true` にする。ビルドする sha に `web/` が無い・`SD_GATE_SKIP_WEB=1` なら全部 skipped。
-# 2026-10-02（task 01M3YT4PT3）: node_modules が入らない不具合そのものは bundle_web（web-bundle 段。node_modules の
-# 有無と `node -e 'import.meta.resolve(...); await import("./server/app.js")'` による import 解決）で直り、
-# node_modules が無い・import できないリリースは web.ok=false になって web-follow が切り替えない（ADR-0135）。
-# 2026-10-05（ADR 2026-10-05-release-web-stage-default-on）: リリースは /local（ローカル LVM）に置くようになり、
-# NFS 上の展開を理由にした既定 skip をやめた。既定は 0（web の段を走らせる）。止めたいときは SD_GATE_SKIP_WEB=1。
+# web は唯一の画面。失敗は Rust と同じ release gate を落とす。
 WEB_OK=true
 WEB_FAILED_STEP=""
-WEB_SKIP_REASON=""
 WEB_STEPS=""
 WEB_PNPM_VERSION=""
 WEB_BUNDLE_JSON="null"
-
-# `web_step <name> <workdir> -- <cmd...>` — run_step と同じ記録だが、失敗しても gate を倒さない。
 web_step() {
-  local name="$1" workdir="$2"
-  shift 2
-  [ "$1" = "--" ] && shift
-  local log="$BUILD/.gate-$name.log" start end secs rc
-  if [ "$GATE_OK" != true ]; then return 0; fi
+  local name="$1"
   WEB_STEPS="$WEB_STEPS $name"
-  if [ -n "$WEB_SKIP_REASON" ]; then
-    skip_step "$name" "$WEB_SKIP_REASON"
-    return 0
-  fi
-  if [ "$WEB_OK" != true ]; then
-    skip_step "$name" "web stage failed at $WEB_FAILED_STEP (non-blocking)"
-    return 0
-  fi
-  sd_log "step $name (non-blocking): $* (cwd $workdir)"
-  sd_scratch_touch
-  start="$(date +%s.%N)"
-  rc=0
-  ( cd "$workdir" && "$@" ) >"$log" 2>&1 8>&- 9>&- || rc=$?
-  end="$(date +%s.%N)"
-  secs="$(awk -v a="$start" -v b="$end" 'BEGIN { printf "%.3f", b - a }')"
-  printf '%s\t%s\t%s\t%s\tfalse\t\n' "$name" "$rc" "$secs" ".gate-$name.log" >>"$GATE_TSV"
-  if [ "$rc" -eq 0 ]; then
-    sd_log "step $name: exit 0 in ${secs}s"
-  else
-    sd_log "step $name: exit $rc in ${secs}s — see $log (non-blocking: the gui release still proceeds)"
-    tail -n 30 "$log" >&2 || true
+  run_step "$@"
+  if [ "$GATE_OK" != true ]; then
     WEB_OK=false
-    WEB_FAILED_STEP="$name"
+    WEB_FAILED_STEP="$GATE_FAILED_STEP"
   fi
 }
 
-# web/ の pnpm は `corepack pnpm@<web/package.json の packageManager の版>` に固定する（host の pnpm と gui/ の版に依存しない）。
+# web/ の pnpm は `corepack pnpm@<web/package.json の packageManager の版>` に固定する（host の pnpm の版に依存しない）。
 # `SD_WEB_PNPM` で丸ごと差し替えられる（テストの偽 corepack もこれで入る）。
 web_pnpm() {
   if [ -n "${SD_WEB_PNPM:-}" ]; then
@@ -315,59 +251,12 @@ web_pnpm_release() {
   CELERIS_WEB_RELEASE="$SHA12" web_pnpm release
 }
 
-decide_web_skip() {
-  if [ "${SD_GATE_SKIP_WEB:-0}" = 1 ]; then
-    WEB_SKIP_REASON="SD_GATE_SKIP_WEB=1"
-  elif [ ! -f "$BUILD/web/package.json" ]; then
-    WEB_SKIP_REASON="no web/ directory"
-  else
-    WEB_PNPM_VERSION="$(sd_json_get "$BUILD/web/package.json" packageManager 2>/dev/null | sed -n 's/^pnpm@//p')"
-    [ -n "$WEB_PNPM_VERSION" ] || WEB_SKIP_REASON="web/package.json has no packageManager pnpm@<version>"
-  fi
-  [ -z "$WEB_SKIP_REASON" ] || sd_log "web steps: skipped — $WEB_SKIP_REASON"
-}
-
 web_json() {
   local steps_json="" n
   for n in $WEB_STEPS; do steps_json="$steps_json${steps_json:+, }$(sd_json_str "$n")"; done
-  printf '{"ok": %s, "blocking": false, "failed_step": %s, "skipped": %s, "reason": %s, "pnpm": %s, "steps": [%s], "bundle": %s}' \
-    "$WEB_OK" "$(sd_json_str "$WEB_FAILED_STEP")" "$([ -n "$WEB_SKIP_REASON" ] && echo true || echo false)" \
-    "$(sd_json_str "$WEB_SKIP_REASON")" "$(sd_json_str "${WEB_PNPM_VERSION:+pnpm@$WEB_PNPM_VERSION}")" "$steps_json" "$WEB_BUNDLE_JSON"
-}
-
-# Phase 89（ADR-0041 追記）: `pnpm-mobile-audit` / `pnpm-e2e-mock` の前置きチェック。
-# `pnpm install --frozen-lockfile`（`pnpm-install` ステップ）は `@playwright/test` という npm パッケージを
-# node_modules に入れるだけで、Playwright の Chromium 実行ファイルそのもの（`pnpm exec playwright install
-# chromium` で落とすもの）は入れない（このリポジトリに postinstall フックは無いことを確認済み）。
-# Chromium はホストの `~/.cache/ms-playwright/` に**バージョンごとに 1 つ**入っていて、`pnpm-lock.yaml` が
-# 固定されている限り worktree をいくつ切っても同じキャッシュを共有できる（Phase 89 で確認: このホストには
-# 既に chromium-1243 系が入っていた）。無ければ `chromium.launch()` の呼び出しがエラーで落ちる
-# （ハングはしないが、ステップの出力が Playwright のインストール手順の長い ASCII アートになって
-# 「何が悪いか」が gate.json だけからは分かりにくい）。ここで先に軽く（ブラウザを起動せずパスの存在だけ）
-# 確かめて、無ければ即座に分かりやすい 1 行で失敗させる。
-sd_check_playwright_chromium() {
-  node -e '
-    const { chromium } = require("@playwright/test");
-    const fs = require("fs");
-    const p = chromium.executablePath();
-    if (!fs.existsSync(p)) {
-      console.error(
-        "false — playwright browser not installed (missing " + p + "; " +
-        "run: pnpm exec playwright install chromium on this host, cached under ~/.cache/ms-playwright)"
-      );
-      process.exit(1);
-    }
-  '
-}
-
-run_pnpm_mobile_audit() {
-  sd_check_playwright_chromium || return 1
-  MOBILE_AUDIT_SKIP_BUILD=1 timeout "${SD_AUDIT_TIMEOUT:-600}" pnpm mobile-audit
-}
-
-run_pnpm_e2e_mock() {
-  sd_check_playwright_chromium || return 1
-  E2E_SKIP_BUILD=1 timeout "${SD_AUDIT_TIMEOUT:-600}" pnpm e2e:mock
+  printf '{"ok": %s, "blocking": true, "failed_step": %s, "skipped": %s, "reason": %s, "pnpm": %s, "steps": [%s], "bundle": %s}' \
+    "$WEB_OK" "$(sd_json_str "$WEB_FAILED_STEP")" false \
+    '""' "$(sd_json_str "${WEB_PNPM_VERSION:+pnpm@$WEB_PNPM_VERSION}")" "$steps_json" "$WEB_BUNDLE_JSON"
 }
 
 # `cargo test` のログから「走ったテストバイナリの数・合格・失敗・無視」を数える（Phase SD-1）。共有 target で
@@ -377,7 +266,7 @@ run_pnpm_e2e_mock() {
 # `cargo test` の出力（Running / Doc-tests / test result 行）を数える。
 cargo_test_summary_json() {
   local log="$BUILD/.gate-cargo-test.log"
-  { [ -f "$log" ] && [ "$SD_JSON_TOOL" = python3 ]; } || { printf 'null'; return 0; }
+  { [ -f "$log" ] && [ "$SD_JSON_TOOL" = python3 ]; } || { printf 'null'; return 1; }
   python3 - "$log" <<'PY'
 import json, re, sys
 for line in reversed(open(sys.argv[1], encoding="utf-8", errors="replace").read().splitlines()):
@@ -403,7 +292,7 @@ PY
 }
 
 # gate.json を書く（成功でも失敗でも同じ形）。Phase SD-1: `steps[]` に `skipped` / `reason`、
-# `build`（作業ツリー・共有 target の使い回し）、`gui_skip_base`（GUI の段を飛ばす判断に使った base）、
+# `build`（作業ツリー・共有 target の使い回し）、
 # `cargo_test`（上の集計）、`bundle`（梱包の所要）を足した（どれも読む側は無視してよい追加の欄）。
 write_gate_json() {
   local dest="$1" steps
@@ -419,11 +308,6 @@ write_gate_json() {
     printf '  "build": {"tree": %s, "tree_reused": %s, "cargo_target": %s, "scratch_owner": %s, "workspace_clean": %s},\n' \
       "$(sd_json_str "$BUILD")" "$BUILD_TREE_REUSED" "$(sd_json_str "$SD_CARGO_TARGET")" \
       "$(sd_json_str "$SD_SCRATCH_OWNER")" "$WS_CLEAN_NEEDED"
-    if [ -n "$GUI_SKIP_BASE" ]; then
-      printf '  "gui_skip_base": %s,\n' "$(sd_json_str "$GUI_SKIP_BASE")"
-    else
-      printf '  "gui_skip_base": null,\n'
-    fi
     printf '  "cargo_test": %s,\n' "$(cargo_test_summary_json)"
     printf '  "bundle": %s,\n' "${BUNDLE_JSON:-null}"
     printf '  "web": %s,\n' "$(web_json)"
@@ -434,51 +318,13 @@ write_gate_json() {
 }
 
 # `current` の完全な sha（`current/manifest.json` の `sha`。無ければ sha12）。`current` が無ければ空。
-# changes.json（ADR-0041 D4）と、GUI の段を飛ばす判断（Phase SD-1）の base。
+# changes.json（ADR-0041 D4）の base。
 base_ref_of_current() {
   local ref=""
   [ -n "$CUR" ] || return 0
   ref="$(sd_json_get "$(sd_release_dir "$CUR")/manifest.json" sha 2>/dev/null || true)"
   [ -n "$ref" ] || ref="$CUR"
   printf '%s' "$ref"
-}
-
-# ---- GUI の段を飛ばすか（Phase SD-1、ADR-0041 追記 §7） -----------------------
-#
-# `current`（gate を全段通って作られ、昇格されたリリース）から**この sha までに gui/ の下が 1 ファイルも
-# 変わっていない**ときだけ、GUI の検査だけの段（pnpm-test・pnpm-mobile-audit・pnpm-e2e-mock）を飛ばす。
-# これらの段の入力は gui/ の下だけ（偽の celeris も `gui/test/mock-celeris` / `gui/scripts/lib`）なので、
-# 同じ gui/ で `current` の gate が通っていれば結果は同じ。base が分からない（`current` が無い・その sha を
-# リポジトリが知らない・git diff が失敗した）ときは飛ばさない。`SD_GATE_FORCE_GUI=1` で常に回す。
-GUI_SKIP_BASE=""
-GUI_SKIP_REASON=""
-decide_gui_skip() {
-  local base diff_out
-  [ "${SD_GATE_FORCE_GUI:-0}" = 1 ] && { sd_log "gui steps: SD_GATE_FORCE_GUI=1; running all"; return 0; }
-  base="$(base_ref_of_current)"
-  [ -n "$base" ] || { sd_log "gui steps: no \`current\` release; running all"; return 0; }
-  git -C "$SD_REPO" rev-parse --verify --quiet "${base}^{commit}" >/dev/null \
-    || { sd_log "gui steps: base $CUR is not in $SD_REPO; running all"; return 0; }
-  diff_out="$(git -C "$SD_REPO" diff --name-only "$base" "$SHA_FULL" -- gui/ 2>/dev/null)" \
-    || { sd_log "gui steps: git diff against $CUR failed; running all"; return 0; }
-  if [ -n "$diff_out" ]; then
-    sd_log "gui steps: $(printf '%s\n' "$diff_out" | wc -l | tr -d ' ') file(s) under gui/ changed since $CUR; running all"
-    return 0
-  fi
-  GUI_SKIP_BASE="$CUR"
-  GUI_SKIP_REASON="no change under gui/"
-  sd_log "gui steps: no change under gui/ since current ($CUR); skipping pnpm-test, pnpm-mobile-audit, pnpm-e2e-mock"
-}
-decide_gui_skip
-
-# `gui_step <name> <workdir> -- <cmd...>` — GUI の検査だけの段。飛ばす判断が立っていれば skip_step。
-gui_step() {
-  local name="$1"
-  if [ -n "$GUI_SKIP_REASON" ]; then
-    skip_step "$name" "$GUI_SKIP_REASON"
-  else
-    run_step "$@"
-  fi
 }
 
 # ---- gate（D2 の順番どおり） ----------------------------------------------
@@ -527,17 +373,9 @@ run_step cargo-clippy "$BUILD" -- cargo clippy --workspace -- -D warnings
 # 壊れたときだけ（`--strict` を渡していないので閾値超過そのものでは落ちない）。
 run_step source-size-report "$BUILD" -- python3 scripts/dev/source-size-report.py
 run_step cargo-build "$BUILD" -- cargo build --release -p celeris -p celerisctl -p celeris-credentiald
-run_step pnpm-install "$BUILD/gui" -- pnpm install --frozen-lockfile
-run_step pnpm-typecheck "$BUILD/gui" -- pnpm typecheck
-gui_step pnpm-test "$BUILD/gui" -- pnpm test
-run_step pnpm-build "$BUILD/gui" -- pnpm build
-# Phase 89（ADR-0041 追記、ADR-0055 D3）: デザイン退行（画面は 200 を返すが壊れている）を積んだまま
-# リリースを作らないための 2 つ。どちらも直前の `pnpm-build` の `$BUILD/gui/build` を使い回す。
-gui_step pnpm-mobile-audit "$BUILD/gui" -- run_pnpm_mobile_audit
-gui_step pnpm-e2e-mock "$BUILD/gui" -- run_pnpm_e2e_mock
-
-# web ADR-W3 D3（P6-02）: web/ の段。gui/ の gate の後ろ、非 blocking（上の web_step）。
-decide_web_skip
+WEB_PNPM_VERSION="$(sd_json_get "$BUILD/web/package.json" packageManager 2>/dev/null | sed -n 's/^pnpm@//p' || true)"
+web_config() { [ -n "$WEB_PNPM_VERSION" ] || { echo 'web/package.json requires packageManager pnpm@<version>'; return 1; }; }
+web_step web-config "$BUILD" -- web_config
 web_step web-pnpm-install "$BUILD/web" -- web_pnpm install --frozen-lockfile
 web_step web-pnpm-typecheck "$BUILD/web" -- web_pnpm typecheck
 web_step web-pnpm-test "$BUILD/web" -- web_pnpm test
@@ -561,7 +399,7 @@ fi
 BUNDLE_T0="$(sd_now)"
 STAGE="$REL.partial"
 rm -rf "$STAGE"
-mkdir -p "$STAGE/bin" "$STAGE/gui"
+mkdir -p "$STAGE/bin"
 
 for b in celeris celerisctl celeris-credentiald; do
   [ -x "$SD_CARGO_TARGET/release/$b" ] || sd_die "built binary missing: $SD_CARGO_TARGET/release/$b"
@@ -573,105 +411,48 @@ done
 "$STAGE/bin/celerisctl" target sweep --apply --root "$SD_CARGO_TARGET" >&2 8>&- 9>&- \
   || sd_log "warning: target sweep failed (ignored)"
 
-[ -d "$BUILD/gui/build" ] || sd_die "gui build output missing: $BUILD/gui/build"
-cp -r "$BUILD/gui/build" "$STAGE/gui/build"
-for f in server.js package.json pnpm-lock.yaml pnpm-workspace.yaml; do
-  [ -f "$BUILD/gui/$f" ] || sd_die "gui file missing: $BUILD/gui/$f"
-  cp -p "$BUILD/gui/$f" "$STAGE/gui/$f"
-done
-
-# ---- gui の本番依存（Phase SD-1: lockfile ごとの cache への symlink） ----------
-#
-# 以前はリリースごとに `$STAGE/gui` で `pnpm install --prod --frozen-lockfile` していた（NFS 上に 4,000 余の
-# ファイル・約 90 秒）。hardlink での複製も NFS では 1 ファイル数百 ms かかり速くならない（実測。phase-G.md SD-1）。
-# そこで同じ入力（package.json / pnpm-lock.yaml / pnpm-workspace.yaml と node / pnpm の版）の install は
-# `releases/.pnpm-prod-cache/<key>/` で**1 度だけ** `pnpm install --prod --frozen-lockfile` し、リリースの
-# `gui/node_modules` はそこへの相対 symlink にする。cache の entry は作り終えてから rename で公開する
-# （作りかけを指さない）。どのリリースからも指されなくなった entry は下の prune_releases が消す。
-GUI_DEPS_KEY=""
-GUI_DEPS_REUSED=false
-GUI_DEPS_CREATED_BY=""
-install_gui_prod_deps() {
-  local gui="$1" key entry tmp f
-  key="$(
-    for f in package.json pnpm-lock.yaml pnpm-workspace.yaml; do
-      printf '%s ' "$f"
-      sha256sum <"$gui/$f" | cut -d' ' -f1
-    done
-    printf 'node %s\n' "$(node --version 2>/dev/null || echo none)"
-    printf 'pnpm %s\n' "$(cd "$gui" && pnpm --version 2>/dev/null || echo none)"
-  )"
-  key="$(printf '%s' "$key" | sha256sum | cut -c1-32)"
-  entry="$SD_PNPM_PROD_CACHE/$key"
-  mkdir -p "$SD_PNPM_PROD_CACHE"
-  if [ -d "$entry/node_modules" ] && [ -f "$entry/provenance.json" ]; then
-    GUI_DEPS_REUSED=true
-    GUI_DEPS_CREATED_BY="$(sd_json_get "$entry/provenance.json" created_by_sha12 2>/dev/null || true)"
-    sd_log "gui: prod node_modules cache hit $key (created by ${GUI_DEPS_CREATED_BY:-?})"
-  else
-    # 前の release.sh が作りかけで死んだ残骸（`.lock-release` を持っているのは自分だけなので、あれば残骸）。
-    rm -rf "$SD_PNPM_PROD_CACHE"/.tmp-* 2>/dev/null || true
-    tmp="$SD_PNPM_PROD_CACHE/.tmp-$key-$$"
-    mkdir -p "$tmp"
-    for f in package.json pnpm-lock.yaml pnpm-workspace.yaml; do cp -p "$gui/$f" "$tmp/$f"; done
-    sd_log "gui: pnpm install --prod --frozen-lockfile in $tmp (cache miss $key)"
-    ( cd "$tmp" && pnpm install --prod --frozen-lockfile ) >&2 8>&- 9>&- \
-      || sd_die "pnpm install --prod failed in the gui prod-deps cache ($tmp)"
-    [ -d "$tmp/node_modules" ] || sd_die "pnpm install --prod did not create $tmp/node_modules"
-    {
-      printf '{"key": %s, "created_at": %s, "created_by_sha12": %s, ' \
-        "$(sd_json_str "$key")" "$(sd_json_str "$(sd_ts)")" "$(sd_json_str "$SHA12")"
-      printf '"node": %s, "pnpm": %s, "command": "pnpm install --prod --frozen-lockfile"}\n' \
-        "$(sd_json_str "$(node --version 2>/dev/null || echo none)")" \
-        "$(sd_json_str "$(cd "$tmp" && pnpm --version 2>/dev/null || echo none)")"
-    } >"$tmp/provenance.json"
-    rm -rf "$entry"
-    mv -T "$tmp" "$entry"
-    GUI_DEPS_CREATED_BY="$SHA12"
-  fi
-  # 相対 symlink（`releases/` ごと動かしても切れない）。`$gui` は `releases/<sha12>.partial/gui`。
-  ln -s "../../$(basename "$SD_PNPM_PROD_CACHE")/$key/node_modules" "$gui/node_modules"
-  [ -d "$gui/node_modules/" ] || sd_die "gui/node_modules symlink does not resolve ($gui/node_modules)"
-  GUI_DEPS_KEY="$key"
-}
-GUI_DEPS_T0="$(sd_now)"
-install_gui_prod_deps "$STAGE/gui"
-GUI_DEPS_SECS="$(sd_secs_since "$GUI_DEPS_T0")"
-sd_log "gui: prod node_modules ready in ${GUI_DEPS_SECS}s (key $GUI_DEPS_KEY, reused=$GUI_DEPS_REUSED)"
-
-# ---- web/ の配布物（web ADR-W3 D3）: web の段が通ったときだけ。失敗は非 blocking（manifest / gate.json の `web` に残す） ----
+# ---- web/ の配布物（梱包の失敗も release を止める） ----
 bundle_web() {
   local tgz dir name
-  [ "$WEB_OK" = true ] && [ -z "$WEB_SKIP_REASON" ] || return 0
   tgz="$(ls -1 "$BUILD/web/release/celeris-web-"*"-$SHA12.tar.gz" 2>/dev/null | head -n 1)"
-  [ -n "$tgz" ] && [ -f "$tgz" ] || { WEB_OK=false; WEB_FAILED_STEP="web-bundle"; sd_log "web-bundle: no tarball under $BUILD/web/release for $SHA12 (non-blocking)"; return 0; }
+  [ -n "$tgz" ] && [ -f "$tgz" ] || { WEB_OK=false; WEB_FAILED_STEP="web-bundle"; sd_log "web-bundle: no tarball under $BUILD/web/release for $SHA12 (release blocked)"; return 1; }
   name="$(basename "$tgz" .tar.gz)"
-  mkdir -p "$STAGE/web"
-  cp -p "$tgz" "$STAGE/web/$name.tar.gz"
+  mkdir -p "$STAGE/web" || return 1
+  cp -p "$tgz" "$STAGE/web/$name.tar.gz" || return 1
   dir="$STAGE/web/app"
-  rm -rf "$dir"
-  mkdir -p "$dir"
+  rm -rf "$dir" || return 1
+  mkdir -p "$dir" || return 1
   if ! tar -xzf "$tgz" -C "$dir" --strip-components=1 >"$BUILD/.gate-web-bundle.log" 2>&1; then
-    WEB_OK=false; WEB_FAILED_STEP="web-bundle"; sd_log "web-bundle: tar failed (non-blocking); see $BUILD/.gate-web-bundle.log"; return 0
+    WEB_OK=false; WEB_FAILED_STEP="web-bundle"; sd_log "web-bundle: tar failed (release blocked); see $BUILD/.gate-web-bundle.log"; return 1
   fi
   if ! ( cd "$dir" && web_pnpm install --prod --offline --frozen-lockfile ) >>"$BUILD/.gate-web-bundle.log" 2>&1 8>&- 9>&-; then
-    WEB_OK=false; WEB_FAILED_STEP="web-bundle"; sd_log "web-bundle: offline prod install failed (non-blocking); see $BUILD/.gate-web-bundle.log"; return 0
+    WEB_OK=false; WEB_FAILED_STEP="web-bundle"; sd_log "web-bundle: offline prod install failed (release blocked); see $BUILD/.gate-web-bundle.log"; return 1
   fi
   # pnpm の終了コードだけでは実行可能な app を保証できない。server/index.js は
   # import 時に listen するため、同じ依存を読む app.js を import して確認する。
   if [ ! -d "$dir/node_modules/" ]; then
     printf '%s\n' 'web-bundle: offline prod install did not create a resolvable node_modules directory' >>"$BUILD/.gate-web-bundle.log"
-    WEB_OK=false; WEB_FAILED_STEP="web-bundle"; sd_log "web-bundle: node_modules missing (non-blocking); see $BUILD/.gate-web-bundle.log"; return 0
+    WEB_OK=false; WEB_FAILED_STEP="web-bundle"; sd_log "web-bundle: node_modules missing (release blocked); see $BUILD/.gate-web-bundle.log"; return 1
   fi
   if ! ( cd "$dir" && node --input-type=module -e 'import.meta.resolve("express"); await import("./server/app.js")' ) >>"$BUILD/.gate-web-bundle.log" 2>&1; then
     printf '%s\n' 'web-bundle: server dependencies could not be imported without listening' >>"$BUILD/.gate-web-bundle.log"
-    WEB_OK=false; WEB_FAILED_STEP="web-bundle"; sd_log "web-bundle: server dependencies unresolved (non-blocking); see $BUILD/.gate-web-bundle.log"; return 0
+    WEB_OK=false; WEB_FAILED_STEP="web-bundle"; sd_log "web-bundle: server dependencies unresolved (release blocked); see $BUILD/.gate-web-bundle.log"; return 1
   fi
   WEB_BUNDLE_JSON="{\"tarball\": $(sd_json_str "web/$name.tar.gz"), \"app\": \"web/app\"}"
   sd_log "web: bundle ready ($STAGE/web/$name.tar.gz, app at web/app)"
 }
 WEB_BUNDLE_T0="$(sd_now)"
-bundle_web
+if ! bundle_web; then
+  WEB_OK=false
+  WEB_FAILED_STEP=web-bundle
+  GATE_OK=false
+  GATE_FAILED_STEP=web-bundle
+  mkdir -p "$FAILED_DIR"
+  write_gate_json "$FAILED_DIR/gate.json"
+  cp -p "$BUILD"/.gate-*.log "$FAILED_DIR/"
+  rm -rf "$STAGE"
+  sd_die "web bundle failed; no release directory created"
+fi
 WEB_BUNDLE_SECS="$(sd_secs_since "$WEB_BUNDLE_T0")"
 
 # ---- browser 適合台帳（ADR 2026-10-08-browser-prod-enablement D1.2）: 非 blocking ----
@@ -692,7 +473,6 @@ CELERIS_VERSION="$(sed -n 's/^version[[:space:]]*=[[:space:]]*"\([^"]*\)".*$/\1/
 if [ -z "$CELERIS_VERSION" ]; then
   CELERIS_VERSION="$(sed -n '/^\[workspace\.package\]/,/^\[/ s/^version[[:space:]]*=[[:space:]]*"\([^"]*\)".*$/\1/p' "$BUILD/Cargo.toml" | head -n 1)"
 fi
-GUI_VERSION="$(sd_json_get "$STAGE/gui/package.json" version || true)"
 
 {
   printf '{\n'
@@ -704,9 +484,6 @@ GUI_VERSION="$(sd_json_get "$STAGE/gui/package.json" version || true)"
   printf '  "profile": "release",\n'
   printf '  "schema_version": %s,\n' "$SCHEMA_VERSION"
   printf '  "celeris_version": %s,\n' "$(sd_json_str "$CELERIS_VERSION")"
-  printf '  "gui_version": %s,\n' "$(sd_json_str "$GUI_VERSION")"
-  printf '  "gui_prod_deps": {"cache_key": %s, "reused": %s, "created_by_sha12": %s},\n' \
-    "$(sd_json_str "$GUI_DEPS_KEY")" "$GUI_DEPS_REUSED" "$(sd_json_str "$GUI_DEPS_CREATED_BY")"
   printf '  "web": %s,\n' "$(web_json)"
   printf '  "browser_ledger": %s,\n' "$BROWSER_LEDGER_JSON"
   printf '  "gate_ok": true\n'
@@ -783,7 +560,7 @@ done
 [ -x "$STAGE/scripts/promote.sh" ] || sd_die "bundled scripts/promote.sh is missing or not executable"
 [ -f "$STAGE/scripts/lib.sh" ] || sd_die "bundled scripts/lib.sh is missing"
 
-BUNDLE_JSON="{\"secs\": $(sd_secs_since "$BUNDLE_T0"), \"gui_prod_deps_secs\": $GUI_DEPS_SECS, \"gui_prod_deps_reused\": $GUI_DEPS_REUSED, \"web_bundle_secs\": $WEB_BUNDLE_SECS, \"release_total_secs\": $(sd_secs_since "$RELEASE_T0")}"
+BUNDLE_JSON="{\"secs\": $(sd_secs_since "$BUNDLE_T0"), \"web_bundle_secs\": $WEB_BUNDLE_SECS, \"release_total_secs\": $(sd_secs_since "$RELEASE_T0")}"
 write_gate_json "$STAGE/gate.json"
 
 # ADR 2026-10-04-release-notes: リリースの説明（notes.json / notes.md）。gate.json の飛ばした段を拾うので
@@ -847,30 +624,8 @@ prune_releases() {
     rm -rf "$dir" 2>/dev/null || sd_log "warning: could not fully remove $dir (a file is still in use, e.g. .nfs*); will retry next time"
   done
   rm -f "$keep_file"
-  prune_gui_prod_deps
 }
 
-# Phase SD-1: どの（残った）リリースの `gui/node_modules` からも指されていない `.pnpm-prod-cache/<key>` を消す。
-# いま作ったリリースが指す entry は必ず残る。symlink でない（Phase SD-1 より前の）node_modules は関係しない。
-prune_gui_prod_deps() {
-  local used entry key dir link
-  [ -d "$SD_PNPM_PROD_CACHE" ] || return 0
-  used="$(mktemp)"
-  printf '%s\n' "$GUI_DEPS_KEY" >>"$used"
-  for dir in "$SD_RELEASES"/*/; do
-    link="${dir}gui/node_modules"
-    [ -L "$link" ] || continue
-    basename "$(dirname "$(readlink "$link")")" >>"$used"
-  done
-  for entry in "$SD_PNPM_PROD_CACHE"/*/; do
-    [ -d "$entry" ] || continue
-    key="$(basename "$entry")"
-    if grep -qxF "$key" "$used"; then continue; fi
-    sd_log "pruning gui prod-deps cache $key (no release points at it)"
-    rm -rf "$entry" 2>/dev/null || sd_log "warning: could not fully remove $entry; will retry next time"
-  done
-  rm -f "$used"
-}
 PRUNE_T0="$(sd_now)"
 # `SD_RELEASE_PRUNE=0` で掃除を飛ばす（計測・試験のためのリリースで、他人の検証済みリリースを押し出さないため。Phase SD-1）。
 if [ "${SD_RELEASE_PRUNE:-1}" = 0 ]; then

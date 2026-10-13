@@ -97,7 +97,8 @@ fn stub_pipeline_freezes_estimates_runs_aggregates_and_exports_features() {
     ])
     .expect("aggregate --write-evidence");
     let (store, _) = SqliteStore::open_client(&db).expect("store");
-    let evidence = store.list_routing_evidence(None).expect("read evidence");
+    let evidence = task_core::TaskStore::latest_routing_evidence(&store, "coding", "claude-code")
+        .expect("read evidence");
     assert_eq!(evidence.len(), 1);
     assert_eq!(evidence[0].n, 1);
     assert!(evidence[0].pass_lower <= 1.0 && evidence[0].pass_upper >= 1.0);

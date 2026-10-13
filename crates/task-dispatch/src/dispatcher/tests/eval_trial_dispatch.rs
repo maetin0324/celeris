@@ -82,9 +82,10 @@ async fn eval_trial_reserved_slot_hides_checks_and_records_selected_version() {
             manifest_sha: "sha256:manifest".into(),
             problem_id: "problem-1".into(),
             trial_no,
-            source_id: "source-1".into(),
-            model_id: "model-1".into(),
-            harness_id: "eval-stub".into(),
+            // `dispatcher()` declares harness `test` and source `p1` (model `m`).
+            source_id: "p1".into(),
+            model_id: "m".into(),
+            harness_id: "test".into(),
             repo: repo.to_string_lossy().into_owned(),
             base_commit: base_commit.clone(),
             objective: "Only this objective is visible.".into(),
@@ -100,10 +101,9 @@ async fn eval_trial_reserved_slot_hides_checks_and_records_selected_version() {
         seen: seen.clone(),
         started: started.clone(),
     });
-    let mut dispatcher = dispatcher_with_adapter_id(store.clone(), adapter, 2, false, "eval-stub");
+    let mut dispatcher = dispatcher(store.clone(), adapter, 2);
     dispatcher.config.workspace_root = temp.path().join("data");
     dispatcher.config.eval.reserved_runs = 1;
-    dispatcher.set_provider_llm_sources(HashMap::from([("p1".into(), "source-1".into())]));
     dispatcher.set_eval_version_probe(|_| Some("eval-stub 3.4.1".into()));
 
     assert_eq!(dispatcher.tick_eval_trials(), 1);
@@ -119,6 +119,18 @@ async fn eval_trial_reserved_slot_hides_checks_and_records_selected_version() {
     assert!(request.task.acceptance.is_empty());
     assert_eq!(request.task.objective, "Only this objective is visible.");
     assert!(!request.context.session.as_ref().unwrap().resume);
+    // The run carries the declared route (harness `test`, source `p1`, model `m`).
+    assert_eq!(
+        request
+            .task
+            .harness_id
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
+        Some("test")
+    );
+    let route = request.llm_route.as_ref().expect("selected llm route");
+    assert_eq!(route.harness_id, "test");
     assert!(
         !serde_json::to_string(&request)
             .unwrap()

@@ -1,5 +1,6 @@
 //! review run の起動（`spawn_review`・`pick_reviewer`・最終レビュー）。per-task file lock は verdict の保存まで持ち続ける。ADR-0082 の L2。
 
+use super::route_select::{RouteInput, RoutePick, RouteTrace, account_adapter_for_source_kind};
 use super::*;
 
 /// ADR-0118 D4 付記: stale の自動再同期が上限に達し、reviewing のまま止めたことを示す `WorkerProgress` の接頭辞。
@@ -342,27 +343,43 @@ impl Dispatcher {
             }
         };
 
-        let reviewer = if needs_reviewer_run(&task) {
+        let delivery_requires_reviewer_run = task.project_id.is_some_and(|project_id| {
+            self.config
+                .delivery
+                .projects
+                .contains(&project_id.to_string())
+                && task_core::support_kind(&task).is_none()
+                && !task_core::tree::is_tree_child(&task)
+        });
+        let reviewer = if needs_reviewer_run(&task) || delivery_requires_reviewer_run {
             match self.pick_reviewer(&task, &run_id) {
                 Some(r) => Some(r),
                 None => {
-                    tracing::debug!(%task_id, "reviewer run deferred (no provider capacity)");
+                    tracing::debug!(%task_id, "reviewer run deferred (no admissible route)");
                     return Ok(false);
                 }
             }
         } else {
             None
         };
-        let provider = reviewer.as_ref().map(|(p, _, _)| p.clone());
-        // ADR-0024 D2: `account_pool` で選んだアカウント（プールを使わない、または Reviewer run を起動しない場合は `None`）。
-        let selected_account = reviewer.as_ref().and_then(|(_, a, _)| a.clone());
-        let account = selected_account.as_ref().map(|(_, id)| id.clone());
-        let account_adapter = selected_account.as_ref().map(|(a, _)| *a);
-        // ADR-0014 D1: (provider, Reviewer run の id, adapter) — WorkerStarted の記録と in_flight に使う。
-        let review_run = reviewer
+        // ADR 2026-10-11 llm-source-harness-selection: reviewer run が保持する `(source, account)`
+        // （admission の同時実行数に数える）。Reviewer run を起動しない場合は `None`。
+        let route = reviewer
             .as_ref()
-            .map(|(p, _, r)| (p.clone(), r.run_id.clone(), r.adapter.id().to_string()));
-        let reviewer_run = reviewer.map(|(_, _, r)| r);
+            .map(|r| (r.pick.candidate.source.clone(), r.pick.account.clone()));
+        let account = reviewer.as_ref().map(|r| r.pick.account.to_string());
+        let account_adapter = reviewer.as_ref().and_then(|r| r.account_adapter);
+        // 選択の記録（`run_index_start` の後に `record_route_selection` へ渡す）と in_flight に使う。
+        let review_selection = reviewer.as_ref().map(|r| {
+            (
+                r.route_input.clone(),
+                r.pick.clone(),
+                r.trace.clone(),
+                r.run.run_id.clone(),
+                r.run.adapter.id().to_string(),
+            )
+        });
+        let reviewer_run = reviewer.map(|r| r.run);
         // The review lock covers the rebase and the checks that consume its result.
         // A deferred review reaches this point again and reads the then-current target.
         // Tree children historically commit their remaining run output on completion.
@@ -401,7 +418,11 @@ impl Dispatcher {
                 let Some(reference) = task.repos.iter().find(|r| r.name == repo.name) else {
                     continue;
                 };
-                let target_ref = self.review_target_ref(&task, reference.repo_id, &repo.source)?;
+                let Some(target_ref) =
+                    self.review_target_ref(&task, reference.repo_id, &repo.source)?
+                else {
+                    continue;
+                };
                 // A failed repair deliberately reviews the restored, unsynced HEAD.
                 // ADR-0120 付記（fallback の解除）: その HEAD のままで target を含まない間だけ同期を省く。
                 // branch が変われば（HEAD が動いた・target が祖先になった）通常の同期へ戻り、
@@ -617,17 +638,20 @@ impl Dispatcher {
         } else {
             Vec::new()
         };
-        if let Some(run) = &reviewer_run {
-            task_ops::delivery::begin(
-                self.store.as_ref(),
-                &mut task,
-                &self.config.workspace_root,
-                &self.config.delivery,
-                &run_id,
-                &run.run_id,
-            )
-            .map_err(DispatchError::from)?;
-        }
+        // Delivery is part of every successful root-task review, independently of
+        // whether the task requested an LLM reviewer. The worker run is a stable
+        // fallback review identifier when no reviewer run exists.
+        task_ops::delivery::begin(
+            self.store.as_ref(),
+            &mut task,
+            &self.config.workspace_root,
+            &self.config.delivery,
+            &run_id,
+            reviewer_run
+                .as_ref()
+                .map_or(&run_id, |run| run.run_id.as_str()),
+        )
+        .map_err(DispatchError::from)?;
         for snapshot in &synced {
             if let Some(old) = self.store.delivery_get(task_id)?
                 && old.repo_id == snapshot.repo_id
@@ -723,26 +747,15 @@ impl Dispatcher {
         let events = self.store.events_for(task_id)?;
         let produced = artifacts_for_run(&events, &run_id);
         // ADR-0014 D1: Reviewer run も対象タスクに WorkerStarted（role: reviewer）を残す（アカウント別の集計に含めるため）。
-        if let Some((provider_id, review_run_id, adapter_id)) = &review_run {
-            let view = self.current_assignment_view();
-            let model = self
-                .adapters
-                .get(provider_id)
-                .map(|a| self.adapter_with_effective_models(provider_id, a.clone(), &view))
-                .and_then(|a| {
-                    a.model_for_tier(self.config.reviewer_hint.tier)
-                        .ok()
-                        .flatten()
-                })
-                .or_else(|| self.models.get(provider_id).cloned())
-                .unwrap_or_default();
+        if let Some((route_input, pick, trace, review_run_id, adapter_id)) = &review_selection {
+            let model = pick.candidate.model.to_string();
             self.store.append_event(
                 task_id,
                 &Event::WorkerStarted {
                     run_id: review_run_id.clone(),
                     adapter: adapter_id.clone(),
                     model: model.clone(),
-                    provider: Some(provider_id.clone()),
+                    provider: Some(pick.candidate.source.to_string()),
                     account: account.clone(),
                     role: Some(RunRole::Reviewer),
                     task_role: None,
@@ -760,7 +773,7 @@ impl Dispatcher {
                         + 1
                 })
                 .unwrap_or(1);
-            if let Err(e) = self.store.run_index_start(task_core::RunRow {
+            match self.store.run_index_start(task_core::RunRow {
                 run_id: review_run_id.clone(),
                 task_id: task_id.to_string(),
                 work_unit_id: None,
@@ -768,7 +781,7 @@ impl Dispatcher {
                 seq,
                 status: task_core::RunIndexStatus::Running,
                 adapter: Some(adapter_id.clone()),
-                model: Some(model.clone()),
+                model: Some(model),
                 account: account.clone(),
                 session_id: None,
                 checkpoint: None,
@@ -777,7 +790,21 @@ impl Dispatcher {
                 started_at: rfc3339(OffsetDateTime::now_utc()),
                 finished_at: None,
             }) {
-                tracing::warn!(%task_id, run_id = %review_run_id, error = %e, "failed to record the reviewer run start in the runs index");
+                Ok(()) => {
+                    // ADR 2026-10-11: `harness_selected`・`llm_route_selected` と runs の選択欄。
+                    if let Err(e) = self.record_route_selection(
+                        task_id,
+                        Some(review_run_id),
+                        route_input,
+                        &Ok(pick.clone()),
+                        trace,
+                    ) {
+                        tracing::warn!(%task_id, run_id = %review_run_id, error = %e, "failed to record the reviewer route selection");
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(%task_id, run_id = %review_run_id, error = %e, "failed to record the reviewer run start in the runs index");
+                }
             }
             // ADR-0076: reviewer run も worker と同じく quota の `before` を登録する
             // （`on_review_finished` が `resolve_quota_estimate` で閉じる）。
@@ -901,10 +928,10 @@ impl Dispatcher {
             ReviewEntry {
                 _review_lock: review_lock,
                 handle,
-                provider,
+                route,
                 subject: entry_subject,
                 run_id: entry_run_id,
-                review_run_id: review_run.map(|(_, id, _)| id),
+                review_run_id: review_selection.map(|(_, _, _, id, _)| id),
                 since: OffsetDateTime::now_utc(),
                 cluster: cluster_id,
                 account,
@@ -995,18 +1022,19 @@ impl Dispatcher {
         Ok(true)
     }
 
-    /// `Reviewer` run のアダプタ／プロバイダを選ぶ（ADR-0007 D5 1.）。並列度の枠は実行中 run と共有する。
-    /// ADR-0024 D2: 選んだプロバイダが `account_pool` ならアカウントも選ぶ（戻り値の第 2 要素）。
-    #[allow(clippy::type_complexity)]
+    /// `Reviewer` run の harness・source×model・account を選ぶ（ADR-0007 D5 1.、ADR 2026-10-11
+    /// llm-source-harness-selection）。並列度の枠は実行中 run と共有する。harness は reviewer の
+    /// harness 要求（[`reviewer_harness_request`]）で選び、source×model は通常 run と同じ
+    /// `select_route` の admission で決める。選べない・起動入力を作れないなら `None`（fail closed:
+    /// review は起動せず次の tick を待つ）。
     pub(super) fn pick_reviewer(
         &mut self,
         task: &Task,
         subject_run_id: &str,
-    ) -> Option<(ProviderId, Option<(AccountAdapter, String)>, ReviewerRun)> {
+    ) -> Option<ReviewerPick> {
         if self.workers_in_flight() >= self.config.max_concurrency {
             return None;
         }
-        // ADR-0012 D2: ワーカー run と同じ手順（上限のプロバイダを飛ばして次へ、候補なしは warn）で選ぶ。
         let org = self.store.org_list().ok()?;
         let department = task
             .assignee
@@ -1031,108 +1059,86 @@ impl Dispatcher {
             .unwrap_or_default();
         let (skills, _) =
             self.skills_context(&review_mounts, task_ops::knowledge::SkillUse::Review);
-        // ADR-0069 Phase 118 D4: reviewer の lane は、上ほど強い優先順位で決める。
-        //   1. 部署の `profile.review_tier`（ADR-0069 D2。最も具体的な指定）。
-        //   2. `[reviewer] tier` の明示（`reviewer_tier_override`）。
-        //   3. 既定: worker run の lane に一致させ、組織の天井（`lane_ceiling`）で丸める。
-        // 1./2. は丸めない（人・運用の明示は組織の既定より強い。D2 の「人の明示 tier は天井で
-        // 丸めない」と同じ考え方を運用の明示にも適用する）。
+        // ADR-0069 Phase 118 D4: reviewer の lane は、部署の `profile.review_tier`、`[reviewer] tier` の
+        // 明示、worker run の lane を組織の天井で丸めたもの、の順。lane は task 方針のラベルで、
+        // source×model の選択には使わない（`RouteInput.lane` に載せるだけ）。
         let ceiling = profile
             .as_ref()
             .map(|p| p.lane_ceiling())
             .unwrap_or_default();
-        let worker_lane = task.worker_hint.tier;
-        let (default_tier, default_clamp) = ceiling.clamp(worker_lane);
-        let (reviewer_lane, review_rule_id, review_reasons) = match (
-            profile.as_ref().and_then(|p| p.review_tier),
-            self.config.reviewer_tier_override,
-        ) {
-            (Some(dept_tier), _) => (
-                dept_tier,
-                "reviewer/department-review-tier",
-                vec![format!(
-                    "org profile review.tier = {dept_tier:?} (most specific; ADR-0069 D2)"
-                )],
-            ),
-            (None, Some(explicit)) => (
-                explicit,
-                "reviewer/explicit-config",
-                vec![format!(
-                    "[reviewer] tier = {explicit:?} (explicit config; Phase 118 D4)"
-                )],
-            ),
-            (None, None) => {
-                let mut reasons = vec![format!("default: matches the worker lane {worker_lane:?}")];
-                if let Some(clamp) = &default_clamp {
-                    reasons.push(clamp.clone());
-                }
-                (default_tier, "reviewer/matches-worker-lane", reasons)
-            }
-        };
+        let (default_tier, _) = ceiling.clamp(task.worker_hint.tier);
+        let reviewer_lane = profile
+            .as_ref()
+            .and_then(|p| p.review_tier)
+            .or(self.config.reviewer_tier_override)
+            .unwrap_or(default_tier);
         let mut hint = self.config.reviewer_hint.clone();
         hint.tier = reviewer_lane;
 
-        // ADR-0054 Phase 67c: 部署のレビュー・切り分け run（`kind = lead`）も、継続セッションの
-        // (adapter, account) に留まれるかを先に試す（`resolve_node_session` と同じキー）。
-        let sticky_session = match &department {
-            Some(dept_id) => self
-                .store
-                .node_session_active(dept_id, task_core::SessionKind::Lead, None)
+        let route_input = RouteInput {
+            task_id: task.id.to_string(),
+            harness: {
+                let mut request = reviewer_harness_request(task);
+                request.execution_class = Some("review".into());
+                request
+            },
+            model_hint: None,
+            lane: serde_json::to_value(reviewer_lane)
                 .ok()
-                .flatten(),
-            None => None,
+                .and_then(|v| v.as_str().map(str::to_string)),
+            cos: false,
         };
-        let mut full = std::collections::HashSet::new();
-        let (adapter_id, provider_id, selected_account) = self.select_provider(
-            &hint,
-            Instant::now(),
-            task.id,
-            &mut full,
-            sticky_session.as_ref(),
-        )?;
-        let base_adapter = match self.adapters.get(&provider_id) {
-            Some(a) => a.clone(),
-            None => {
-                tracing::warn!(task_id = %task.id, provider = %provider_id, adapter = %adapter_id, "no adapter instance for reviewer provider");
+        let (outcome, trace) = self.select_route(&route_input);
+        let launch = match &outcome {
+            Ok(pick) => self
+                .route_adapter(pick)
+                .and_then(|adapter| Ok((pick.clone(), adapter, self.route_launch_target(pick)?)))
+                .map_err(|e| e.to_string()),
+            Err(failure) => Err(failure.reason()),
+        };
+        let (pick, adapter, llm_route) = match launch {
+            Ok(v) => v,
+            Err(reason) => {
+                // 拒否は task ごとに 1 回だけ残す（毎 tick の再試行で events を増やさない）。
+                if self.warned_unroutable.insert(task.id) {
+                    match &outcome {
+                        Err(_) => {
+                            if let Err(e) = self.record_route_selection(
+                                task.id,
+                                None,
+                                &route_input,
+                                &outcome,
+                                &trace,
+                            ) {
+                                tracing::warn!(task_id = %task.id, error = %e, "failed to record the reviewer route refusal");
+                            }
+                        }
+                        Ok(_) => {
+                            let _ = self.store.append_event(
+                                task.id,
+                                &Event::worker_progress(
+                                    subject_run_id,
+                                    format!("reviewer route cannot be launched: {reason}"),
+                                ),
+                            );
+                        }
+                    }
+                }
+                tracing::debug!(task_id = %task.id, %reason, "reviewer run deferred (no admissible route)");
                 return None;
             }
         };
-        // ADR 2026-10-06 model-role-assignments D2: reviewer run も割り当てを重ねた実効 bindings で起こす。
-        let base_adapter = self.adapter_with_effective_models(
-            &provider_id,
-            base_adapter,
-            &self.current_assignment_view(),
-        );
-        if let Err(reason) = base_adapter.model_for_tier(hint.tier) {
-            if self.warned_unroutable.insert(task.id) {
-                let _ = self.store.append_event(
-                    task.id,
-                    &Event::worker_progress(
-                        subject_run_id,
-                        format!("review model routing blocked: {reason}"),
-                    ),
-                );
-            }
-            return None;
-        }
-        let adapter = match &selected_account {
-            Some((account_adapter, account_id)) => {
-                match self.adapter_for_account(&base_adapter, *account_adapter, account_id) {
-                    Some(a) => a,
-                    None => {
-                        tracing::warn!(task_id = %task.id, provider = %provider_id, account_id, "adapter does not support account pools for reviewer run; deferring");
-                        return None;
-                    }
-                }
-            }
-            None => base_adapter,
-        };
-        let account = selected_account.as_ref().map(|(_, id)| id.clone());
-        let account_adapter = selected_account.as_ref().map(|(a, _)| *a);
+        let account_adapter = self
+            .llm_route_registry
+            .sources
+            .get(&pick.candidate.source)
+            .and_then(|s| account_adapter_for_source_kind(s.kind.as_ref()));
+        let account = pick.account.to_string();
+        let adapter_id = adapter.id().to_string();
         let review_run_id = ulid::Ulid::new().to_string();
         // ADR-0054 D1 / Phase 67b 追記: 部署があれば、この run の `session_established`/
-        // `session_resume_failed` を Lead セッション（`kind = lead`）に配線する（Phase 67 で抜けていた
-        // 配線。下の `resolve_node_session` と同じ `(department, Lead, None)` のキー）。
+        // `session_resume_failed` を Lead セッション（`kind = lead`）に配線する（下の
+        // `resolve_node_session` と同じ `(department, Lead, None)` のキー）。
         let session_key = department
             .clone()
             .map(|dept_id| (dept_id, task_core::SessionKind::Lead, None));
@@ -1141,21 +1147,19 @@ impl Dispatcher {
             task_id: task.id,
             subject_run_id: subject_run_id.to_string(),
             review_run_id: review_run_id.clone(),
-            account: account.clone(),
+            account: Some(account.clone()),
             account_book: account_adapter.and_then(|a| self.account_book(a)),
             session_key,
         };
-        // ADR-0054 D1（Phase 67）: 部署の根ノード（engineering/research/operations）は
-        // レビュー・切り分け run を継続セッション（`kind = lead`）で走らせる（ADR-0051）。部署が無い
-        // 仕事（従来の独立レビュアー）では継続しない。store のエラーはレビューそのものを止めない
-        // （継続無し＝Phase 66 までと同じ挙動にフォールバックする）。
+        // ADR-0054 D1（Phase 67）: 部署の根ノードはレビュー・切り分け run を継続セッション
+        // （`kind = lead`）で走らせる。store のエラーはレビューそのものを止めない（継続無しで走らせる）。
         let (session, session_diff) = match &department {
             Some(dept_id) => match self.resolve_node_session(
                 dept_id,
                 task_core::SessionKind::Lead,
                 None,
                 &adapter_id,
-                account.as_deref(),
+                Some(account.as_str()),
                 OffsetDateTime::now_utc(),
             ) {
                 Ok(v) => v,
@@ -1166,75 +1170,21 @@ impl Dispatcher {
             },
             None => (None, Vec::new()),
         };
-        tracing::info!(task_id = %task.id, %review_run_id, adapter = %adapter_id, provider = %provider_id, account = account.as_deref(), "starting reviewer run");
-        // ADR-0069 Phase 118 D4: reviewer run にも `Event::RoutingDecided` を残す（Phase 114 は worker
-        // run にしか出していなかった）。reviewer は `TaskFeatures` 規則表を通らないので `rule_id` は
-        // 上で決めた 3 種のいずれか、`source = System`（policy ではなく config/組織の指定で決まる）。
-        // ストア書き込み失敗はレビューそのものを止めない（`warned_unroutable` と同じベストエフォート）。
-        let review_model_id = adapter
-            .model_for_tier(hint.tier)
-            .ok()
-            .flatten()
-            .unwrap_or_default();
-        let review_reasoning_effort = adapter
-            .reasoning_effort_for_tier(hint.tier)
-            .filter(|_| adapter.supports_reasoning_effort());
-        let review_record = task_core::RoutingRecord {
-            features: None,
-            org_node: department.clone(),
-            harness: Some("reviewer".to_string()),
-            decision: task_core::LaneDecision {
-                lane: reviewer_lane,
-                proposed: worker_lane,
-                source: task_core::TierSource::System,
-                rule_id: review_rule_id.to_string(),
-                policy_version: task_core::LANE_POLICY_VERSION.to_string(),
-                features: task_core::TaskFeatures::infer(task),
-                reasons: review_reasons,
-                clamped_by: if review_rule_id == "reviewer/matches-worker-lane" {
-                    default_clamp.clone()
-                } else {
-                    None
-                },
-                hint: None,
-                escalation: None,
-                shadow: None,
-            },
-            resolution: task_core::model_routing::LaneResolution {
-                lane: Some(reviewer_lane),
-                adapter: adapter_id.clone(),
-                provider: Some(provider_id.clone()),
-                account: account.clone(),
-                model_id: review_model_id,
-                reasoning_effort: review_reasoning_effort,
-                // ADR-0132 付記 L8: reviewer run の記録には選択の理由を付けない。
-                selection: None,
-                coding_default: None,
-            },
-            quota_reason: None,
-            work_unit_id: None,
-            escalation: None,
-            optimizer: None,
-        };
-        let _ = self.store.append_event(
-            task.id,
-            &Event::RoutingDecided {
-                run_id: review_run_id.clone(),
-                record: Box::new(review_record),
-            },
-        );
+        tracing::info!(task_id = %task.id, %review_run_id, harness = %pick.harness, source = %pick.candidate.source, model = %pick.candidate.model, account = %account, "starting reviewer run");
         // ADR 2026-10-07-build-tmp-hygiene 付記 A1（2026-10-09）: reviewer は反証の self-execution で cargo を
         // 走らせうる。run・検査と同じ `CARGO_TARGET_DIR`（対象 task の owner）を重ね、作業場所に target を作らせない。
         let (adapter, cargo_target_dir) = self.with_review_cargo_env(task, adapter);
-        Some((
-            provider_id,
-            selected_account,
-            ReviewerRun {
+        Some(ReviewerPick {
+            route_input,
+            trace,
+            account_adapter,
+            run: ReviewerRun {
                 cargo_target_dir,
                 node,
                 profile,
                 skills,
                 adapter,
+                llm_route,
                 run_id: review_run_id,
                 limits: RunLimits {
                     wall_clock: Duration::from_secs(task.budget.max_wall_secs),
@@ -1252,6 +1202,35 @@ impl Dispatcher {
                 session,
                 session_diff,
             },
-        ))
+            pick,
+        })
     }
 }
+
+/// 選んだ reviewer run（`pick_reviewer` の結果）。`spawn_review` が run 記録と `ReviewEntry.route` に使う。
+pub(super) struct ReviewerPick {
+    pub(super) route_input: RouteInput,
+    pub(super) pick: RoutePick,
+    pub(super) trace: RouteTrace,
+    /// OAuth 型 source の account 台帳（API 型 source なら `None`）。
+    pub(super) account_adapter: Option<AccountAdapter>,
+    pub(super) run: ReviewerRun,
+}
+
+/// reviewer run の harness 要求: role `reviewer` と対象 task の構造化情報（分野・repo の有無）。
+/// task の `harness` 欄は worker run への人の指定なので reviewer には使わない。reviewer は browser を
+/// 操作しないので browser の能力も要求しない。`[harness_selection]` の `role = "reviewer"` の規則が
+/// あればそれが、無ければ role を問わない規則が選ぶ。
+pub(super) fn reviewer_harness_request(task: &Task) -> task_core::llm_route::HarnessRequest {
+    task_core::llm_route::HarnessRequest {
+        harness: None,
+        genre: task.genre.clone(),
+        role: Some(REVIEWER_HARNESS_ROLE.to_string()),
+        required_capabilities: Default::default(),
+        has_repo: !task.repos.is_empty(),
+        execution_class: None,
+    }
+}
+
+/// [`reviewer_harness_request`] の role。
+pub(super) const REVIEWER_HARNESS_ROLE: &str = "reviewer";

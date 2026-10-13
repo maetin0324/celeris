@@ -2,7 +2,7 @@ openapi: 3.1.0
 info:
   title: Celeris task status counts
   version: 1.0.0
-  description: GET /tasks/counts の追加操作。API 全体の契約は gui-api.md と api-v1.schema.json を参照。
+  description: GET /tasks/counts の追加操作。API 全体の契約は api.md と api-v1.schema.json を参照。
 paths:
   /api/v1/tasks/counts:
     get:

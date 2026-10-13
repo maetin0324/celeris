@@ -1,37 +1,13 @@
 use super::*;
-use crate::daemon::{admin::*, bootstrap::*, secrets::*};
+use crate::daemon::{admin::*, secrets::*};
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use task_api::types::GenreConfigView;
 use task_core::{DaemonMode, InstanceRole, SharedRole, SqliteStore, TaskStore};
 use time::OffsetDateTime;
 
-#[test]
-fn browser_specialist_provider_uses_configured_acp_harness() {
-    let cfg: Config = toml::from_str(
-        r#"
-[[providers]]
-id = "browser-specialist-test"
-adapter = "browser-specialist"
-tiers = ["standard"]
-command = "scripted-acp"
-args = ["acp"]
-"#,
-    )
-    .unwrap();
-    cfg.validate().unwrap();
-    let adapters = build_adapters(&cfg);
-    assert_eq!(
-        adapters["browser-specialist-test"].id(),
-        "browser-specialist"
-    );
-}
-
-// ---- ADR-0033 D1（Phase 23）: 組織図の種蒔き ----
-
-/// 空の DB には例の組織図（15 ノード）が入り、2 回目は何もしない（以後は DB が正）。
 #[test]
 fn seeds_the_org_once_into_an_empty_db_and_never_again() {
     let dir = tempfile::tempdir().unwrap();
@@ -46,9 +22,6 @@ fn seeds_the_org_once_into_an_empty_db_and_never_again() {
         format!(
             "db = \"celeris.sqlite3\"\nworkspace_root = \"ws\"\norg_include = \"org.toml\"\n{}",
             r#"
-[[providers]]
-id = "x"
-adapter = "fake"
 
 [[roles]]
 id = "implementer"
@@ -174,10 +147,10 @@ parent_id = "research-survey"
     .unwrap();
     let path = dir.path().join("config.toml");
     std::fs::write(
-            &path,
-            "db = \"celeris.sqlite3\"\nworkspace_root = \"ws\"\norg_include = \"org.toml\"\n[[providers]]\nid = \"x\"\nadapter = \"fake\"\n",
-        )
-        .unwrap();
+        &path,
+        "db = \"celeris.sqlite3\"\nworkspace_root = \"ws\"\norg_include = \"org.toml\"\n",
+    )
+    .unwrap();
     let config = Config::load(&path).unwrap();
     let store = SqliteStore::open(&config.db.path).unwrap();
 
@@ -194,125 +167,13 @@ parent_id = "research-survey"
 fn without_org_include_nothing_is_seeded() {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("celeris.sqlite3");
-    let config: Config = toml::from_str(&format!(
-        "db = \"{}\"\n[[providers]]\nid = \"x\"\nadapter = \"fake\"\n",
-        db.display()
-    ))
-    .unwrap();
+    let config: Config = toml::from_str(&format!("db = \"{}\"\n", db.display())).unwrap();
     let store = SqliteStore::open(&config.db.path).unwrap();
     assert_eq!(seed_org_if_empty(&store, &config).unwrap(), 0);
     assert!(store.org_list().unwrap().is_empty());
 }
 
 /// ADR-0012 D1: 同じ claude-code を使う 2 アカウントが、それぞれの env と model を持つアダプタになる。
-#[test]
-fn build_adapters_creates_one_adapter_per_provider_with_merged_env_and_model() {
-    let text = r#"
-[adapters.claude_code]
-model = "adapter-default-model"
-env = { SHARED = "base", CLAUDE_CONFIG_DIR = "/base" }
-
-[[providers]]
-id = "acct-a"
-adapter = "claude-code"
-model = "model-a"
-env = { CLAUDE_CONFIG_DIR = "/accounts/a" }
-
-[[providers]]
-id = "acct-b"
-adapter = "claude-code"
-env = { CLAUDE_CONFIG_DIR = "/accounts/b" }
-
-[[providers]]
-id = "local-fake"
-adapter = "fake"
-model = "fake"
-"#;
-    let cfg: Config = toml::from_str(text).unwrap();
-    cfg.validate().unwrap();
-    let adapters = build_adapters(&cfg);
-    assert_eq!(adapters.len(), 3);
-    assert_eq!(adapters["acct-a"].id(), "claude-code");
-    assert_eq!(adapters["local-fake"].id(), "fake");
-
-    let a = merged_env(&cfg.adapters.claude_code.env, &cfg.providers[0].env);
-    assert_eq!(
-        a,
-        vec![
-            ("CLAUDE_CONFIG_DIR".into(), "/accounts/a".into()),
-            ("SHARED".into(), "base".into())
-        ]
-    );
-    let b = merged_env(&cfg.adapters.claude_code.env, &cfg.providers[1].env);
-    assert!(b.contains(&("CLAUDE_CONFIG_DIR".into(), "/accounts/b".into())));
-
-    let models = effective_models(&cfg);
-    assert_eq!(models["acct-a"], "model-a");
-    assert_eq!(models["acct-b"], "adapter-default-model");
-    assert_eq!(models["local-fake"], "fake");
-
-    // ADR-0013 D4: スナップショットの定義部分は設定の順・実効モデル（env は載せない）。
-    let lives = provider_lives(&cfg);
-    let ids: Vec<&str> = lives.iter().map(|p| p.id.as_str()).collect();
-    assert_eq!(ids, ["acct-a", "acct-b", "local-fake"]);
-    assert_eq!(lives[1].model.as_deref(), Some("adapter-default-model"));
-    assert_eq!(
-        (
-            lives[0].adapter.as_str(),
-            lives[0].concurrency,
-            lives[0].in_use
-        ),
-        ("claude-code", 1, 0)
-    );
-    assert!(!hostname().is_empty());
-
-    // ADR-0015 D3: マウント点の最長一致でファイルシステム種別を引く。
-    let mountinfo = "\
-25 30 0:24 / / rw,relatime shared:1 - ext4 /dev/mapper/root rw
-26 25 0:52 / /home rw,relatime shared:2 - nfs4 server:/home rw,vers=4.2
-27 26 0:53 / /home/u/local rw,relatime shared:3 - ext4 /dev/sdb1 rw";
-    assert_eq!(
-        filesystem_type_in(mountinfo, Path::new("/var/lib/celeris")).as_deref(),
-        Some("ext4")
-    );
-    assert_eq!(
-        filesystem_type_in(mountinfo, Path::new("/home/u/workspace")).as_deref(),
-        Some("nfs4")
-    );
-    // 同じマウント点に autofs と実体が並ぶ場合は後の行（実体）を採る。
-    let autofs_first = "\
-25 30 0:24 / / rw,relatime shared:1 - ext4 /dev/mapper/root rw
-26 25 0:51 / /home rw,relatime shared:2 - autofs systemd-1 rw
-27 25 0:52 / /home rw,relatime shared:3 - nfs4 server:/home rw,vers=4.2";
-    assert_eq!(
-        filesystem_type_in(autofs_first, Path::new("/home/u/x")).as_deref(),
-        Some("nfs4")
-    );
-    assert_eq!(
-        filesystem_type_in(mountinfo, Path::new("/home/u/local/db")).as_deref(),
-        Some("ext4")
-    );
-    assert_eq!(filesystem_type_in("garbage", Path::new("/home")), None);
-
-    // ADR-0013 D11: /config の要約には env のキー名だけが載り、値は載らない。
-    let view = config_view(&cfg, "127.0.0.1:7710".parse().unwrap());
-    assert_eq!(view.providers[0].env_keys, ["CLAUDE_CONFIG_DIR"]);
-    assert_eq!(
-        view.providers[1].model.as_deref(),
-        Some("adapter-default-model")
-    );
-    assert_eq!(
-        (view.api.bind.as_str(), view.api.auth_required),
-        ("127.0.0.1:7710", false)
-    );
-    let json = serde_json::to_string(&view).unwrap();
-    for secret in ["/accounts/a", "/accounts/b", "/base", "base\""] {
-        assert!(!json.contains(secret), "{secret} leaked: {json}");
-    }
-}
-
-/// ADR-0027 D1 / ADR-0028 D1: `[[genres]]` は `config_view` の `genres[]` に設定順のまま写る。
-/// `capabilities` / `input_artifacts` / `output_artifacts` を書かない分野は空のまま（既存設定との互換）。
 #[test]
 fn config_view_exposes_genres() {
     let text = r#"
@@ -328,10 +189,6 @@ description = "write and fix code"
 default_role = "implementer"
 roles = ["lead", "implementer"]
 
-[[providers]]
-id = "local-fake"
-adapter = "fake"
-model = "fake"
 "#;
     let cfg: Config = toml::from_str(text).unwrap();
     cfg.validate().unwrap();
@@ -367,10 +224,6 @@ output_artifacts = ["answer.md: 引用付きの答え", "citations.json"]
 default_role = "literature-reader"
 roles = ["literature-reader"]
 
-[[providers]]
-id = "local-fake"
-adapter = "fake"
-model = "fake"
 "#;
     let cfg: Config = toml::from_str(text).unwrap();
     cfg.validate().unwrap();
@@ -387,7 +240,7 @@ model = "fake"
         vec!["question".to_string(), "pdf".to_string()]
     );
     // Phase 38（ADR-0028 追記）: `名前: 説明` を書いても `GenreConfigView` の型は変わらず、値の文字列に
-    // 説明が付くだけ（GUI は `:` の前を名前として扱う。`docs/api/v1/gui-api.md`）。
+    // 説明が付くだけ（GUI は `:` の前を名前として扱う。`docs/api/v1/api.md`）。
     assert_eq!(
         view.genres[0].output_artifacts,
         vec![
@@ -404,283 +257,8 @@ model = "fake"
 /// ADR-0026 D2/D3: `acp` プロバイダの行は `[adapters.acp]` の env に重ね、`command`/`args` は行の値が
 /// 優先し、`model` は行の値がそのまま（`[adapters.acp]` にモデルの既定値は無い）。
 #[test]
-fn build_adapters_wires_an_acp_provider_with_merged_env_and_row_model() {
-    let text = r#"
-[adapters.acp]
-env = { SHARED = "base", OPENCODE_DISABLE_PROJECT_CONFIG = "1" }
-permission = "deny"
-model_option_id = "model"
-startup_timeout_secs = 120
-
-[[providers]]
-id = "opencode-qwen"
-adapter = "acp"
-tiers = ["standard"]
-model = "qwen-local/qwen3.8-27b"
-env = { OPENCODE_CONFIG = "/x/qwen.json" }
-
-[[providers]]
-id = "opencode-default"
-adapter = "acp"
-tiers = ["standard"]
-command = "goose"
-args = ["acp"]
-"#;
-    let cfg: Config = toml::from_str(text).unwrap();
-    cfg.validate().unwrap();
-    let adapters = build_adapters(&cfg);
-    assert_eq!(adapters.len(), 2);
-    assert_eq!(adapters["opencode-qwen"].id(), "acp");
-    assert_eq!(adapters["opencode-default"].id(), "acp");
-
-    let models = effective_models(&cfg);
-    assert_eq!(models["opencode-qwen"], "qwen-local/qwen3.8-27b");
-    // 行に model が無ければ空文字（`[adapters.acp]` にモデルの既定値が無いため、他のアダプタのような
-    // フォールバックは起きない）。
-    assert_eq!(models["opencode-default"], "");
-
-    let merged = merged_env(&cfg.adapters.acp.env, &cfg.providers[0].env);
-    assert_eq!(
-        merged,
-        vec![
-            ("OPENCODE_CONFIG".to_string(), "/x/qwen.json".to_string()),
-            (
-                "OPENCODE_DISABLE_PROJECT_CONFIG".to_string(),
-                "1".to_string()
-            ),
-            ("SHARED".to_string(), "base".to_string()),
-        ]
-    );
-
-    // 行の command/args が [adapters.acp] の既定（opencode/["acp"]）を上書きする。
-    assert_eq!(cfg.providers[1].command.as_deref(), Some("goose"));
-    assert_eq!(
-        cfg.providers[1].args.as_deref(),
-        Some(&["acp".to_string()][..])
-    );
-}
-
-/// ADR-0061: `aider` プロバイダの行は `[adapters.aider]` の env に重ね、`model` は行の値が
-/// `[adapters.aider]` の既定を上書きする（`codex` と同じ規則）。
-#[test]
-fn build_adapters_wires_an_aider_provider_with_merged_env_and_row_model() {
-    let text = r#"
-[adapters.aider]
-env = { SHARED = "base" }
-model = "anthropic/claude-haiku-4"
-
-[[providers]]
-id = "aider-1"
-adapter = "aider"
-tiers = ["standard"]
-model = "anthropic/claude-sonnet-5"
-env = { ANTHROPIC_API_KEY = "sk-x" }
-"#;
-    let cfg: Config = toml::from_str(text).unwrap();
-    cfg.validate().unwrap();
-    let adapters = build_adapters(&cfg);
-    assert_eq!(adapters.len(), 1);
-    assert_eq!(adapters["aider-1"].id(), "aider");
-
-    let models = effective_models(&cfg);
-    assert_eq!(models["aider-1"], "anthropic/claude-sonnet-5");
-
-    let merged = merged_env(&cfg.adapters.aider.env, &cfg.providers[0].env);
-    assert_eq!(
-        merged,
-        vec![
-            ("ANTHROPIC_API_KEY".to_string(), "sk-x".to_string()),
-            ("SHARED".to_string(), "base".to_string()),
-        ]
-    );
-}
-
-/// ADR-0027 D3: `paperqa` プロバイダの行は `[adapters.paperqa]` の env に重ね、`settings` は行の値が
-/// あればそちらを使い、`model` は行の値がそのまま（`[adapters.paperqa]` にモデルの既定値は無い）。
-#[test]
-fn build_adapters_wires_a_paperqa_provider_with_merged_env_and_row_overrides() {
-    let text = r#"
-[adapters.paperqa]
-command = "/opt/paperqa/.venv/bin/pqa"
-settings = "/opt/paperqa/settings/base"
-paper_directory = "/opt/paperqa/papers"
-index_directory = "/opt/paperqa/index"
-env = { SHARED = "base", OPENAI_BASE_URL = "http://old:1/v1" }
-
-[[providers]]
-id = "paperqa-qwen"
-adapter = "paperqa"
-tiers = ["standard"]
-model = "openai/qwen3.8-27b"
-settings = "/opt/paperqa/settings/qwen-local"
-env = { OPENAI_BASE_URL = "http://127.0.0.1:18000/v1" }
-
-[[providers]]
-id = "paperqa-default"
-adapter = "paperqa"
-tiers = ["standard"]
-"#;
-    let cfg: Config = toml::from_str(text).unwrap();
-    cfg.validate().unwrap();
-    let adapters = build_adapters(&cfg);
-    assert_eq!(adapters.len(), 2);
-    assert_eq!(adapters["paperqa-qwen"].id(), "paperqa");
-    assert_eq!(adapters["paperqa-default"].id(), "paperqa");
-
-    let models = effective_models(&cfg);
-    assert_eq!(models["paperqa-qwen"], "openai/qwen3.8-27b");
-    // 行に model が無ければ空文字（`[adapters.paperqa]` にモデルの既定値が無いため、他のアダプタのような
-    // フォールバックは起きない。ADR-0026 D3 と同じ理由）。
-    assert_eq!(models["paperqa-default"], "");
-
-    let merged = merged_env(&cfg.adapters.paperqa.env, &cfg.providers[0].env);
-    assert_eq!(
-        merged,
-        vec![
-            (
-                "OPENAI_BASE_URL".to_string(),
-                "http://127.0.0.1:18000/v1".to_string()
-            ),
-            ("SHARED".to_string(), "base".to_string()),
-        ]
-    );
-
-    // 行の settings が [adapters.paperqa] の既定を上書きする。上書きしない行は共通設定のまま。
-    assert_eq!(
-        cfg.providers[0].settings.as_deref(),
-        Some("/opt/paperqa/settings/qwen-local")
-    );
-    assert!(cfg.providers[1].settings.is_none());
-    assert_eq!(
-        cfg.adapters.paperqa.settings.as_deref(),
-        Some("/opt/paperqa/settings/base")
-    );
-}
-
-/// ADR-0029 D1: `local-deep-research` プロバイダの行は `[adapters.local_deep_research]` の env に重ね、
-/// `model` は行の値がそのまま（`[adapters.local_deep_research]` にモデルの既定値は無い。`acp`/`paperqa`
-/// と同じ理由）。行ごとの `settings` の上書きは無い（celeris 側の実装判断。`ProviderConfig.settings` は
-/// `paperqa` 専用のまま）。
-#[test]
-fn build_adapters_wires_a_local_deep_research_provider_with_merged_env() {
-    let text = r#"
-[adapters.local_deep_research]
-command = "/opt/ldr/.venv/bin/python"
-mode = "detailed"
-iterations = 3
-env = { SHARED = "base", OPENAI_BASE_URL = "http://old:1/v1" }
-
-[adapters.local_deep_research.settings]
-"llm.provider" = "openai_endpoint"
-"search.tool" = "wikipedia"
-
-[[providers]]
-id = "ldr-qwen"
-adapter = "local-deep-research"
-tiers = ["standard"]
-model = "qwen3.8-27b"
-env = { OPENAI_BASE_URL = "http://127.0.0.1:18000/v1" }
-
-[[providers]]
-id = "ldr-default"
-adapter = "local-deep-research"
-tiers = ["standard"]
-"#;
-    let cfg: Config = toml::from_str(text).unwrap();
-    cfg.validate().unwrap();
-    let adapters = build_adapters(&cfg);
-    assert_eq!(adapters.len(), 2);
-    assert_eq!(adapters["ldr-qwen"].id(), "local-deep-research");
-    assert_eq!(adapters["ldr-default"].id(), "local-deep-research");
-
-    let models = effective_models(&cfg);
-    assert_eq!(models["ldr-qwen"], "qwen3.8-27b");
-    // 行に model が無ければ空文字（`[adapters.local_deep_research]` にモデルの既定値が無い）。
-    assert_eq!(models["ldr-default"], "");
-
-    let merged = merged_env(&cfg.adapters.local_deep_research.env, &cfg.providers[0].env);
-    assert_eq!(
-        merged,
-        vec![
-            (
-                "OPENAI_BASE_URL".to_string(),
-                "http://127.0.0.1:18000/v1".to_string()
-            ),
-            ("SHARED".to_string(), "base".to_string()),
-        ]
-    );
-
-    assert_eq!(
-        cfg.adapters
-            .local_deep_research
-            .settings
-            .get("llm.provider")
-            .map(String::as_str),
-        Some("openai_endpoint")
-    );
-    assert_eq!(
-        cfg.adapters.local_deep_research.mode,
-        task_worker::LdrMode::Detailed
-    );
-    assert_eq!(cfg.adapters.local_deep_research.iterations, Some(3));
-}
-
-/// ADR-0047 D4: `[adapters.langmem]`（起動コマンド）と `[knowledge.langmem]`（LLM の接続先）を
-/// 合わせて 1 つの `LangMemConfig` にする。`api_key_secret` は `[secrets] dir` から解決される。
-#[test]
-fn build_adapters_wires_a_langmem_provider_from_both_config_sections() {
-    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("tempdir: {e}"));
-    let secrets_dir = dir.path().join("secrets");
-    std::fs::create_dir_all(&secrets_dir).unwrap_or_else(|e| panic!("mkdir: {e}"));
-    std::fs::write(secrets_dir.join("langmem-key"), "sk-test-value\n")
-        .unwrap_or_else(|e| panic!("write: {e}"));
-    let text = format!(
-        r#"
-[secrets]
-dir = "{secrets}"
-
-[adapters.langmem]
-command = "/opt/langmem/.venv/bin/python"
-idle_timeout_secs = 120
-env = {{ SHARED = "base" }}
-
-[knowledge.langmem]
-enabled = true
-provider = "openai-compatible"
-base_url = "http://bnode150:18000/v1"
-model = "qwen3.8-27b"
-api_key_secret = "langmem-key"
-max_related_pages = 5
-
-[[providers]]
-id = "langmem-main"
-adapter = "langmem"
-tiers = ["cheap", "standard"]
-"#,
-        secrets = secrets_dir.display()
-    );
-    let cfg: Config = toml::from_str(&text).unwrap_or_else(|e| panic!("parse: {e}"));
-    cfg.validate().unwrap_or_else(|e| panic!("validate: {e}"));
-    assert!(cfg.knowledge.langmem.enabled);
-    assert_eq!(cfg.knowledge.langmem.max_related_pages, 5);
-    let adapters = build_adapters(&cfg);
-    assert_eq!(adapters.len(), 1);
-    assert_eq!(adapters["langmem-main"].id(), "langmem");
-
-    let usage = secret_usage(&cfg);
-    assert!(
-        usage["langmem-key"]
-            .iter()
-            .any(|u| u.scope == "adapter" && u.name == "langmem" && u.env == "api_key"),
-        "{usage:?}"
-    );
-}
-
-/// `[knowledge.langmem]` の既定は無効（`enabled = false`）で、`base_url`/`model`/`api_key_secret` は
-/// 無い（ADR-0047 D4 §6: 明示的に有効化するまで知識整理 run は起きない）。
-#[test]
 fn langmem_knowledge_config_defaults_to_disabled() {
-    let cfg: Config = toml::from_str("[[providers]]\nid = \"x\"\nadapter = \"fake\"\n").unwrap();
+    let cfg: Config = toml::from_str("").unwrap();
     assert!(!cfg.knowledge.langmem.enabled);
     assert_eq!(
         cfg.knowledge.langmem.provider,
@@ -697,7 +275,7 @@ fn langmem_knowledge_config_defaults_to_disabled() {
 /// 未知のアダプタは `langmem` を含めた既知の一覧で拒否される。
 #[test]
 fn unknown_adapter_message_lists_langmem() {
-    let cfg: Config = toml::from_str("[[providers]]\nid = \"x\"\nadapter = \"bogus\"\n").unwrap();
+    let cfg: Config = toml::from_str("[[harnesses]]\nid = \"x\"\nadapter = \"bogus\"\n").unwrap();
     let err = cfg.validate().unwrap_err().to_string();
     assert!(err.contains("langmem"), "{err}");
 }
@@ -784,94 +362,14 @@ fn merged_env_with_secrets_follows_the_precedence_order_and_falls_back_when_a_se
     assert_eq!(map.get("K"), Some(&"base-secret".to_string()));
 }
 
-/// `build_adapters` は秘密が無くても設定エラーにせず、そのプロバイダのアダプタを組み立てる（run 自体は
-/// ワーカーの認証エラーで失敗する。ADR-0030 D2）。
-#[test]
-fn build_adapters_does_not_fail_when_a_referenced_secret_is_missing() {
-    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("tempdir: {e}"));
-    let secrets_dir = dir.path().join("secrets");
-    std::fs::create_dir_all(&secrets_dir).unwrap_or_else(|e| panic!("mkdir: {e}"));
-    // `tavily` の秘密ファイルは書かない。
-
-    let text = format!(
-        r#"[secrets]
-dir = {secrets_dir:?}
-
-[adapters.local_deep_research]
-env_from_secrets = {{ LDR_SEARCH_ENGINE_WEB_TAVILY_API_KEY = "tavily" }}
-
-[[providers]]
-id = "ldr"
-adapter = "local-deep-research"
-"#
-    );
-    let cfg: Config = toml::from_str(&text).unwrap_or_else(|e| panic!("{e}"));
-    cfg.validate().unwrap_or_else(|e| panic!("{e}"));
-    let adapters = build_adapters(&cfg);
-    assert_eq!(adapters.len(), 1);
-    assert_eq!(adapters["ldr"].id(), "local-deep-research");
-}
-
-/// `Config::load` は `[secrets] dir` を相対パスのまま toml から読むので、絶対化した設定を経由するには
-/// `Config::load` を使う（`toml::from_str` だけのテストでは相対のまま）。
-#[test]
-fn secret_usage_maps_adapter_and_provider_env_from_secrets_to_secret_ids() {
-    let text = r#"[secrets]
-dir = "secrets"
-
-[adapters.local_deep_research]
-env_from_secrets = { LDR_SEARCH_ENGINE_WEB_TAVILY_API_KEY = "tavily", LDR_SEARCH_ENGINE_WEB_EXA_API_KEY = "exa" }
-
-[[providers]]
-id = "ldr-tavily"
-adapter = "local-deep-research"
-env_from_secrets = { LDR_SEARCH_ENGINE_WEB_TAVILY_API_KEY = "tavily" }
-
-[[providers]]
-id = "ldr-exa"
-adapter = "local-deep-research"
-env_from_secrets = { LDR_SEARCH_ENGINE_WEB_EXA_API_KEY = "exa" }
-"#;
-    let cfg: Config = toml::from_str(text).unwrap_or_else(|e| panic!("{e}"));
-    cfg.validate().unwrap_or_else(|e| panic!("{e}"));
-    let usage = secret_usage(&cfg);
-    assert_eq!(usage.len(), 2);
-    let tavily = usage.get("tavily").expect("tavily uses");
-    assert_eq!(tavily.len(), 2);
-    assert!(tavily.iter().any(|u| u.scope == "adapter"
-        && u.name == "local-deep-research"
-        && u.env == "LDR_SEARCH_ENGINE_WEB_TAVILY_API_KEY"));
-    assert!(tavily.iter().any(|u| u.scope == "provider"
-        && u.name == "ldr-tavily"
-        && u.env == "LDR_SEARCH_ENGINE_WEB_TAVILY_API_KEY"));
-    let exa = usage.get("exa").expect("exa uses");
-    assert_eq!(exa.len(), 2);
-    assert!(
-        exa.iter()
-            .any(|u| u.scope == "adapter" && u.name == "local-deep-research")
-    );
-    assert!(
-        exa.iter()
-            .any(|u| u.scope == "provider" && u.name == "ldr-exa")
-    );
-
-    // 未参照の id は現れない。
-    assert!(!usage.contains_key("unused"));
-
-    // `env_from_secrets` を書かない設定は空のまま。
-    let plain: Config = toml::from_str("[[providers]]\nid = \"x\"\nadapter = \"fake\"\n")
-        .unwrap_or_else(|e| panic!("{e}"));
-    assert!(secret_usage(&plain).is_empty());
-}
-
-/// `api_settings` は `[secrets] dir` と `secret_usage` を `ApiSettings` に写す。
+/// API settings exposes secret references without exposing secret values.
 #[test]
 fn api_settings_carries_secrets_dir_and_usage() {
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("tempdir: {e}"));
     let path = dir.path().join("config.toml");
     std::fs::write(
             &path,
-            "[secrets]\ndir = \"secrets\"\n\n[adapters.local_deep_research]\nenv_from_secrets = { TAVILY = \"tavily\" }\n\n[[providers]]\nid = \"x\"\nadapter = \"fake\"\n",
+            "[secrets]\ndir = \"secrets\"\n\n[adapters.local_deep_research]\nenv_from_secrets = { TAVILY = \"tavily\" }\n\n",
         )
         .unwrap_or_else(|e| panic!("{e}"));
     let cfg = Config::load(&path).unwrap_or_else(|e| panic!("{e}"));
@@ -912,7 +410,7 @@ fn reload_providers_rejects_changes_to_the_accounts_section() {
         std::fs::write(
                 &config_path,
                 format!(
-                    "db = {db:?}\nworkspace_root = {ws:?}\n[accounts]\nclaude_dir = {accounts_dir:?}\nmax_runs_per_account = {max_runs}\n[[providers]]\nid = \"x\"\nadapter = \"fake\"\n"
+                    "db = {db:?}\nworkspace_root = {ws:?}\n[accounts]\nclaude_dir = {accounts_dir:?}\nmax_runs_per_account = {max_runs}\n"
                 ),
             )
             .unwrap_or_else(|e| panic!("{e}"));
@@ -942,69 +440,62 @@ fn reload_providers_rejects_changes_to_the_accounts_section() {
     assert!(err.contains("restart"), "{err}");
 }
 
-/// ADR 2026-10-08 account-concurrency-limits §(d)(e)（人の決定 implicit-account）: non-pool rows get
-/// one implicit account per **LLM source** (`implicit/<llm source id>`), not per row — two `fake`
-/// rows both resolve to the source `none` and share one account. A row's old `concurrency = 1`
-/// does not limit anything. A stored override survives `POST /reload` and a restart (new
-/// `build_dispatcher` on the same DB), and stays while any non-pool row still uses the source.
+/// ADR 2026-10-08 account-concurrency-limits §(d)(e)（人の決定 implicit-account）: a declared LLM source
+/// without an account pool gets one implicit account (`implicit/<llm source id>`). A stored override
+/// survives `POST /reload` and a restart (new `build_dispatcher` on the same DB), and is pruned once
+/// the source is no longer declared.
 #[test]
-fn implicit_account_limit_ignores_legacy_concurrency_and_survives_reload() {
+fn implicit_account_limit_survives_reload_and_is_pruned_with_its_source() {
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
     let config_path = dir.path().join("config.toml");
     let db = dir.path().join("celeris.db");
     let ws = dir.path().join("ws");
-    let write_config = |rows: &str| {
+    let write_config = |sources: &str| {
         std::fs::write(
             &config_path,
             format!(
                 "db = {db:?}\nworkspace_root = {ws:?}\n\
-                 [[providers]]\nid = \"x\"\nadapter = \"fake\"\n{rows}"
+                 [llm_sources.x]\nkind = \"fake\"\nmodels = [\"fake\"]\n{sources}"
             ),
         )
         .unwrap_or_else(|e| panic!("{e}"));
     };
-    let qwen = "[[providers]]\nid = \"qwen\"\nadapter = \"fake\"\nconcurrency = 1\n";
+    let qwen = "[llm_sources.qwen]\nkind = \"fake\"\nmodels = [\"fake\"]\n";
     write_config(qwen);
     let mut config = Config::load(&config_path).unwrap_or_else(|e| panic!("{e}"));
     let mut dispatcher =
         build_dispatcher(&config, Default::default()).unwrap_or_else(|e| panic!("{e}"));
-    // 2 行（`x` と `qwen`）はどちらも source `none` なので暗黙アカウントは 1 件。
-    assert_eq!(dispatcher.implicit_account_ids(), vec!["none".to_string()]);
     assert_eq!(
-        dispatcher.implicit_account_providers("none"),
-        vec!["x".to_string(), "qwen".to_string()]
+        dispatcher.implicit_account_ids(),
+        vec!["qwen".to_string(), "x".to_string()]
     );
     assert_eq!(
-        dispatcher.implicit_account_limit("none"),
+        dispatcher.implicit_account_limit("qwen"),
         Some((2, task_dispatch::capacity::MaxRunsSource::Default))
     );
-    // 行の id では引けない（旧 `concurrency = 1` も上限にならない）。
-    assert_eq!(dispatcher.implicit_account_limit("qwen"), None);
+    assert_eq!(dispatcher.implicit_account_limit("none"), None);
 
     dispatcher
-        .set_account_limit("implicit", "none", Some(1))
+        .set_account_limit("implicit", "qwen", Some(1))
         .unwrap();
     assert!(reload_providers(&mut dispatcher, &mut config).is_ok());
     assert_eq!(
-        dispatcher.implicit_account_limit("none"),
+        dispatcher.implicit_account_limit("qwen"),
         Some((1, task_dispatch::capacity::MaxRunsSource::Account))
     );
     drop(dispatcher);
     let mut dispatcher =
         build_dispatcher(&config, Default::default()).unwrap_or_else(|e| panic!("{e}"));
-    assert_eq!(dispatcher.account_max_runs("implicit", "none"), Some(1));
-
-    // 1 行を消しても同じ source を使う行が残るので、保存値は prune されない。
-    write_config("");
-    assert!(reload_providers(&mut dispatcher, &mut config).is_ok());
-    assert_eq!(dispatcher.implicit_account_ids(), vec!["none".to_string()]);
-    assert_eq!(
-        dispatcher.implicit_account_providers("none"),
-        vec!["x".to_string()]
-    );
-    assert_eq!(dispatcher.account_max_runs("implicit", "none"), Some(1));
+    assert_eq!(dispatcher.account_max_runs("implicit", "qwen"), Some(1));
     let store = SqliteStore::open(&db).unwrap();
     assert_eq!(store.account_limits().unwrap().len(), 1);
+
+    // source の宣言を消すと、その暗黙アカウントの保存値は reload で prune される。
+    write_config("");
+    assert!(reload_providers(&mut dispatcher, &mut config).is_ok());
+    assert_eq!(dispatcher.implicit_account_ids(), vec!["x".to_string()]);
+    assert_eq!(dispatcher.account_max_runs("implicit", "qwen"), None);
+    assert!(store.account_limits().unwrap().is_empty());
 }
 
 /// Phase 44（実機 2026-09-18）: `[[roles]]` の `max_turns` を変えて `reload` すると、次に作られる子の
@@ -1021,7 +512,6 @@ fn reload_rereads_roles_genres_delegation_and_reports_notify_conversation() {
             &config_path,
             format!(
                 "db = {db:?}\nworkspace_root = {ws:?}\n\
-                     [[providers]]\nid = \"x\"\nadapter = \"fake\"\n\
                      [[roles]]\nid = \"implementer\"\nmax_turns = {max_turns}\n\
                      [delegation]\nmax_delegate_per_run = 3\n\
                      [notify]\ninterval_secs = {notify_interval}\n"
@@ -1077,10 +567,6 @@ async fn a_totp_cluster_with_a_forward_does_not_panic_the_first_tick_phase_66b()
         r#"
 db = "celeris.sqlite3"
 workspace_root = "ws"
-
-[[providers]]
-id = "x"
-adapter = "fake"
 
 [[clusters]]
 id = "test-cluster"
@@ -1167,10 +653,6 @@ async fn a_publickey_cluster_with_a_ready_task_does_not_panic_the_first_tick_pha
 db = "celeris.sqlite3"
 workspace_root = "ws"
 
-[[providers]]
-id = "x"
-adapter = "fake"
-
 [[clusters]]
 id = "auto"
 host = "celeris-no-such-host-for-tests-auto-phase81"
@@ -1182,6 +664,7 @@ auth = "publickey"
     let store = SqliteStore::open(&config.db.path).unwrap_or_else(|e| panic!("open store: {e}"));
     let now = OffsetDateTime::now_utc();
     let task = task_core::Task {
+        harness_id: None,
         requirements: Default::default(),
         tree: None,
         paused_at: None,
@@ -1205,7 +688,6 @@ auth = "publickey"
         priority: 0,
         worker_hint: task_core::WorkerHint {
             tier: task_core::Tier::Standard,
-            adapter: None,
         },
         workspace: task_core::WorkspaceSpec::Remote {
             cluster: "auto".into(),
@@ -1301,10 +783,6 @@ async fn a_totp_cluster_with_a_live_master_skips_the_connector_but_ensures_the_f
 db = "celeris.sqlite3"
 workspace_root = "ws"
 
-[[providers]]
-id = "x"
-adapter = "fake"
-
 [[clusters]]
 id = "test-cluster"
 host = "test-cluster"
@@ -1357,208 +835,4 @@ target = "bnode150:18000"
         ensure_calls.load(std::sync::atomic::Ordering::SeqCst) >= 1,
         "the forward must still be (re-)established while the master is alive (ADR-0053 D3)"
     );
-}
-
-#[test]
-fn explicit_credential_reference_missing_blocks_instead_of_using_inherited_auth() {
-    let cfg: Config = toml::from_str(
-        r#"[[providers]]
-id = "gpt"
-adapter = "codex"
-[providers.env_from_secrets]
-OPENAI_API_KEY = "missing-key"
-[providers.tier_models.standard]
-name = "sol"
-model_id = "explicit-id"
-"#,
-    )
-    .unwrap();
-    let adapters = build_adapters(&cfg);
-    assert!(
-        adapters["gpt"]
-            .model_for_tier(task_core::Tier::Standard)
-            .unwrap_err()
-            .contains("missing-key")
-    );
-}
-
-#[test]
-fn routing_config_reload_is_atomic() {
-    use std::sync::Arc;
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("config.toml");
-    let db = dir.path().join("db.sqlite3");
-    let ws = dir.path().join("ws");
-    let base = format!(
-        "db = {db:?}\nworkspace_root = {ws:?}\n[[providers]]\nid = \"x\"\nadapter = \"fake\"\n"
-    );
-    std::fs::write(&path, &base).unwrap();
-    let mut config = Config::load(&path).unwrap();
-    let old = Arc::clone(config.routing_catalog_snapshot.as_ref().unwrap());
-    let shared = Arc::clone(config.routing_catalog_state.as_ref().unwrap());
-    let mut dispatcher = build_dispatcher(&config, Default::default()).unwrap();
-    std::fs::write(
-        &path,
-        format!("{base}\n[model_routing]\nmode = \"enforce\"\n"),
-    )
-    .unwrap();
-    assert!(
-        reload_providers(&mut dispatcher, &mut config)
-            .unwrap_err()
-            .contains("Phase 2")
-    );
-    assert!(Arc::ptr_eq(
-        config.routing_catalog_snapshot.as_ref().unwrap(),
-        &old
-    ));
-    assert!(Arc::ptr_eq(&shared.read().unwrap(), &old));
-    std::fs::write(
-        &path,
-        format!("{base}\n[model_routing]\nmode = \"shadow\"\n"),
-    )
-    .unwrap();
-    reload_providers(&mut dispatcher, &mut config).unwrap();
-    assert!(!Arc::ptr_eq(
-        config.routing_catalog_snapshot.as_ref().unwrap(),
-        &old
-    ));
-    assert!(Arc::ptr_eq(
-        &shared.read().unwrap(),
-        config.routing_catalog_snapshot.as_ref().unwrap()
-    ));
-    assert_eq!(
-        config.routing_catalog_snapshot.as_ref().unwrap().mode,
-        task_core::model_router::policy::RoutingMode::Shadow
-    );
-}
-
-#[test]
-fn routing_shadow_invalid_reload_keeps_previous_snapshot() {
-    use std::sync::Arc;
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("config.toml");
-    let db = dir.path().join("db.sqlite3");
-    let ws = dir.path().join("ws");
-    let base = format!(
-        "db = {db:?}\nworkspace_root = {ws:?}\n[[providers]]\nid = \"x\"\nadapter = \"fake\"\n"
-    );
-    std::fs::write(&path, &base).unwrap();
-    let mut config = Config::load(&path).unwrap();
-    let old = Arc::clone(config.model_routing.runtime.as_ref().unwrap());
-    let catalog = Arc::clone(config.routing_catalog_snapshot.as_ref().unwrap());
-    let mut dispatcher = build_dispatcher(&config, Default::default()).unwrap();
-    std::fs::write(
-        &path,
-        format!("{base}\n[model_routing.shadow]\nexecute = true\n"),
-    )
-    .unwrap();
-    let err = reload_providers(&mut dispatcher, &mut config).unwrap_err();
-    assert!(err.contains("daily_max_requests"), "{err}");
-    assert!(Arc::ptr_eq(
-        config.model_routing.runtime.as_ref().unwrap(),
-        &old
-    ));
-    assert!(Arc::ptr_eq(
-        config.routing_catalog_snapshot.as_ref().unwrap(),
-        &catalog
-    ));
-    std::fs::write(
-        &path,
-        format!("{base}\n[model_routing.shadow]\nsample_rate = 0.5\n"),
-    )
-    .unwrap();
-    reload_providers(&mut dispatcher, &mut config).unwrap();
-    assert!(!Arc::ptr_eq(
-        config.model_routing.runtime.as_ref().unwrap(),
-        &old
-    ));
-    assert_eq!(
-        config
-            .model_routing
-            .runtime
-            .as_ref()
-            .unwrap()
-            .shadow
-            .sample_rate,
-        0.5
-    );
-}
-
-#[test]
-fn routing_runtime_is_wired_to_the_dispatcher_and_reload_is_atomic() {
-    use task_core::model_router::policy::RoutingMode;
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("config.toml");
-    let db = dir.path().join("db.sqlite3");
-    let ws = dir.path().join("ws");
-    let base = format!(
-        "db = {db:?}\nworkspace_root = {ws:?}\n[[providers]]\nid = \"x\"\nadapter = \"fake\"\n"
-    );
-    std::fs::write(
-        &path,
-        format!(
-            "{base}\n[model_routing.subscription_windows.five_hour]\nreserve_value_usd = 2.0\n"
-        ),
-    )
-    .unwrap();
-    let mut config = Config::load(&path).unwrap();
-    let mut dispatcher = build_dispatcher(&config, Default::default()).unwrap();
-    assert_eq!(dispatcher.dispatch_routing().mode, RoutingMode::Legacy);
-    assert_eq!(
-        dispatcher
-            .dispatch_routing()
-            .window_reserves
-            .get("five_hour"),
-        Some(&2.0)
-    );
-    let enforce = format!(
-        "{base}\n[model_routing]\nmode = \"enforce\"\n[model_routing.estimator]\nkind = \"heuristic\"\n"
-    );
-    std::fs::write(&path, &enforce).unwrap();
-    reload_providers(&mut dispatcher, &mut config).unwrap();
-    assert_eq!(dispatcher.dispatch_routing().mode, RoutingMode::Enforce);
-    assert!(dispatcher.dispatch_routing().window_reserves.is_empty());
-    std::fs::write(&path, format!("{enforce}\n[model_routing.escalation]\nquality_failures_per_lane = 3\nmax_total_attempts = 5\n")).unwrap();
-    reload_providers(&mut dispatcher, &mut config).unwrap();
-    assert_eq!(
-        dispatcher
-            .dispatch_routing()
-            .escalation
-            .quality_failures_per_lane,
-        3
-    );
-    assert_eq!(
-        dispatcher.dispatch_routing().escalation.max_total_attempts,
-        5
-    );
-    let old = std::sync::Arc::clone(config.model_routing.runtime.as_ref().unwrap());
-    // 不正な設定は dispatcher・runtime・catalog のどれも変えない。
-    std::fs::write(
-        &path,
-        format!("{base}\n[model_routing]\nmode = \"enforce\"\nenforce_routes = [\"task\"]\n[model_routing.estimator]\nkind = \"heuristic\"\n"),
-    )
-    .unwrap();
-    assert!(
-        reload_providers(&mut dispatcher, &mut config)
-            .unwrap_err()
-            .contains("standalone or server-wide")
-    );
-    std::fs::write(
-        &path,
-        format!("{base}\n[model_routing]\nmode = \"enforce\"\n[model_routing.estimator]\nkind = \"routellm\"\n"),
-    )
-    .unwrap();
-    assert!(
-        reload_providers(&mut dispatcher, &mut config)
-            .unwrap_err()
-            .contains("only \"heuristic\"")
-    );
-    assert_eq!(dispatcher.dispatch_routing().mode, RoutingMode::Enforce);
-    assert!(std::sync::Arc::ptr_eq(
-        config.model_routing.runtime.as_ref().unwrap(),
-        &old
-    ));
-    std::fs::write(&path, &base).unwrap();
-    reload_providers(&mut dispatcher, &mut config).unwrap();
-    assert_eq!(dispatcher.dispatch_routing().mode, RoutingMode::Legacy);
 }

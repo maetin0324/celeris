@@ -49,7 +49,7 @@ fn startup_reaps_dead_instance_and_preserves_live_instance() {
     let config_path = temp.path().join("config.toml");
     std::fs::write(
         &config_path,
-        "db = \"celeris.sqlite3\"\nworkspace_root = \"ws\"\n[[providers]]\nid = \"p1\"\nadapter = \"fake\"\n",
+        "db = \"celeris.sqlite3\"\nworkspace_root = \"ws\"\n",
     )
     .unwrap();
     let config = Config::load(&config_path).unwrap();

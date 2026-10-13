@@ -64,9 +64,6 @@ releases_dir = "releases"
 [adapters.fake]
 command = ["sh", "-c", 'cat >/dev/null; printf "{{\"type\":\"done\",\"summary\":\"fake\",\"evidence\":[]}}\n"']
 
-[[providers]]
-id = "p1"
-adapter = "fake"
 "#
             ),
         )

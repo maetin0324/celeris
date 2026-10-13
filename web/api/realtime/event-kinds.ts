@@ -49,6 +49,7 @@ export const EVENT_KINDS = [
   "routing_request_decided",
   "routing_outcome_recorded",
   "routing_shadow_recorded",
+  "routing_stage_changed",
   "checkpoint_saved",
   "execution_planned",
   "work_unit_transitioned",
@@ -85,6 +86,12 @@ export const EVENT_KINDS = [
   "knowledge_curation_applied",
   "integration_requested",
   "integration_answered",
+  "integration_detected",
+  "integration_merged",
+  "integration_discarded",
+  "integration_held",
+  "integration_reopened",
+  "integration_not_applicable",
   "integration_check_started",
   "integration_check_finished",
   "work_unit_check_started",
@@ -96,6 +103,9 @@ export const EVENT_KINDS = [
   "trusted_device_used",
   "trusted_device_revoked",
   "trusted_device_rejected",
+  "harness_selected",
+  "llm_route_selected",
+  "harness_migration_unresolved",
 ] as const satisfies readonly EventKind[];
 
 /** EVENT_KINDS が EventKind を漏れなく含むことの型検査（漏れがあると never でなくなり代入できない）。 */

@@ -23,14 +23,6 @@ impl Dispatcher {
         result: Result<RunOutcome, AdapterError>,
     ) -> Result<(), DispatchError> {
         let now = OffsetDateTime::now_utc();
-        // ADR-0013 D9 / S10 と同じ扱い（planner run は account pool のプロバイダを使わない前提。
-        // `[execution.planner].adapter` は既定 claude-code で、アカウントの当たり外れは通常の
-        // policy 報告に任せる）。
-        let policy_outcome = match &result {
-            Ok(_) => ProviderOutcome::Ok,
-            Err(e) => provider_failure_outcome(e).unwrap_or(ProviderOutcome::Ok),
-        };
-        self.policy.report(provider.clone(), &policy_outcome);
 
         let (run_end, describe, usage): (
             Option<task_core::RunEnd>,

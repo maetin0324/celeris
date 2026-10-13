@@ -27,6 +27,7 @@ fn blocked_task_with_approval(store: &SqliteStore, node_id: &str) -> (Task, Appr
     let now = OffsetDateTime::now_utc();
     let id = TaskId::new();
     let task = Task {
+        harness_id: None,
         requirements: Default::default(),
         tree: None,
         paused_at: None,
@@ -49,7 +50,6 @@ fn blocked_task_with_approval(store: &SqliteStore, node_id: &str) -> (Task, Appr
         priority: 0,
         worker_hint: WorkerHint {
             tier: Tier::Standard,
-            adapter: None,
         },
         workspace: WorkspaceSpec::Local {
             path: "ws".into(),

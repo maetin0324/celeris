@@ -15,7 +15,6 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use super::trace::RoutingTraceV1;
 use crate::execution::{HarnessErrorClass, RunEnd};
 use crate::model::{Event, RunRole};
 
@@ -40,7 +39,7 @@ pub struct RoutingFeaturesRecord {
     /// §3.4 の特徴（本文・生の command・credential を除いた snapshot）。形は `context_version` が決める。
     #[serde(default)]
     pub features: serde_json::Value,
-    /// 欄名 → 出自（例 `task.acceptance`、`work_unit.spec`、`estimator:chars/4`）。
+    /// 欄名 → 出自（例 `task.acceptance`、`work_unit.spec`、`route_select:chars/4`）。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub provenance: BTreeMap<String, String>,
     /// 取れなかった欄（未知を低リスクと同一視しないため、欠測を明示する）。
@@ -79,9 +78,6 @@ pub struct RoutingRequestRecord {
     pub parent_decision_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_id: Option<String>,
-    /// proxy の trace（stage = proxy）。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub trace: Option<Box<RoutingTraceV1>>,
     /// 試した順の source。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attempts: Vec<RequestSourceAttempt>,
@@ -255,15 +251,9 @@ pub fn project_run_outcomes(events: &[Event], norm: &RewardNormalization) -> Vec
                 last_worker = Some(run_id.clone());
                 failed_review.clear();
             }
-            Event::RoutingDecided { run_id, record } => {
+            Event::RoutingDecided { run_id, .. } => {
                 let f = runs.entry(run_id.clone()).or_default();
-                f.decision_id = Some(
-                    record
-                        .optimizer
-                        .as_ref()
-                        .map(|t| t.decision_id.clone())
-                        .unwrap_or_else(|| format!("run:{run_id}")),
-                );
+                f.decision_id = Some(format!("run:{run_id}"));
             }
             Event::WorkerFinished {
                 run_id,

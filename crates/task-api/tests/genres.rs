@@ -16,7 +16,7 @@ fn env_with_coding_genre() -> TestEnv {
             RoleSpec {
                 id: "lead".into(),
                 tier: Some(Tier::Frontier),
-                adapter: None,
+                harness: None,
                 max_turns: Some(40),
                 max_wall_secs: None,
                 instructions: Some("You lead the work.".into()),
@@ -24,7 +24,7 @@ fn env_with_coding_genre() -> TestEnv {
             RoleSpec {
                 id: "implementer".into(),
                 tier: Some(Tier::Cheap),
-                adapter: Some("fake".into()),
+                harness: Some("fake".into()),
                 max_turns: None,
                 max_wall_secs: Some(900),
                 instructions: None,
@@ -132,10 +132,8 @@ async fn create_task_with_valid_genre_returns_201_and_applies_genre_defaults() {
         "genre alone must not set role: {task}"
     );
     // `coding` の `default_role` は `implementer`（tier=cheap, adapter=fake, max_wall_secs=900）。
-    assert_eq!(
-        task["worker_hint"],
-        json!({"tier": "cheap", "adapter": "fake"})
-    );
+    assert_eq!(task["harness_id"], "fake");
+    assert_eq!(task["worker_hint"], json!({"tier": "cheap"}));
     assert_eq!(
         task["budget"],
         json!({"max_turns": 10, "max_wall_secs": 900, "max_retries": 2})

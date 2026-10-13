@@ -156,6 +156,9 @@ fn new_session_id_mints_a_uuid_only_for_claude_code() {
         task_worker::provider::is_valid_uuid(&id),
         "{id} is not a valid UUID"
     );
+    assert!(task_worker::provider::is_valid_uuid(&new_session_id(
+        "claude_code"
+    )));
     assert_eq!(new_session_id("codex"), "");
     assert_eq!(new_session_id("acp"), "");
     assert_eq!(new_session_id("unknown-future-adapter"), "");
@@ -222,75 +225,6 @@ fn summary_lines_keeps_only_the_last_n_entries() {
 fn summary_lines_handles_fewer_entries_than_the_limit() {
     let history = vec![(MessageRole::User, "hi".to_string())];
     assert_eq!(summary_lines(&history, 20), vec!["人: hi".to_string()]);
-}
-
-// ---- Phase 67c: decide_sticky ----
-
-#[test]
-fn tier_rank_orders_frontier_above_standard_above_cheap() {
-    assert!(tier_rank(task_core::Tier::Frontier) > tier_rank(task_core::Tier::Standard));
-    assert!(tier_rank(task_core::Tier::Standard) > tier_rank(task_core::Tier::Cheap));
-}
-
-/// 受け入れ条件 1: セッションが使える（アカウント・tier とも問題なし）→ stick。
-#[test]
-fn a_usable_session_sticks() {
-    let s = session("claude-code", Some("claude_max_lab"), 10);
-    assert_eq!(
-        decide_sticky(Some(&s), 400_000, true, true),
-        StickyDecision::Stick
-    );
-}
-
-/// 受け入れ条件 1: アカウントが cooldown（枯渇・未ログイン等を含む） → 通常のランキングへ
-/// フォールバックする（このセッションはそのランキングの結果次第で `decide` が retire する）。
-#[test]
-fn an_account_in_cooldown_falls_back() {
-    let s = session("claude-code", Some("claude_max_lab"), 10);
-    assert_eq!(
-        decide_sticky(Some(&s), 400_000, false, true),
-        StickyDecision::FallBack
-    );
-}
-
-/// 受け入れ条件 1: プロバイダが設定から消えた（tier を提供する行が無い）→ フォールバック。
-#[test]
-fn a_provider_removed_from_config_falls_back() {
-    let s = session("claude-code", Some("claude_max_lab"), 10);
-    assert_eq!(
-        decide_sticky(Some(&s), 400_000, true, false),
-        StickyDecision::FallBack
-    );
-}
-
-#[test]
-fn no_active_session_never_sticks() {
-    assert_eq!(
-        decide_sticky(None, 400_000, true, true),
-        StickyDecision::FallBack
-    );
-}
-
-/// rollover 済みのセッションは、アカウント・tier が問題無くても留まらない（次の run で作り直す方が
-/// 一貫している。前置きの要約もそちらの経路が付ける）。
-#[test]
-fn a_session_past_rollover_falls_back_even_if_otherwise_usable() {
-    let s = session("claude-code", Some("claude_max_lab"), 400_000);
-    assert_eq!(
-        decide_sticky(Some(&s), 400_000, true, true),
-        StickyDecision::FallBack
-    );
-}
-
-/// プールを使わないセッション（`account_id = None`）は、アカウントの状態を問わず provider さえ
-/// あれば stick できる（呼び出し側が `account_usable = true` を渡す想定どおり）。
-#[test]
-fn a_poolless_session_sticks_without_an_account_check() {
-    let s = session("acp", None, 10);
-    assert_eq!(
-        decide_sticky(Some(&s), 400_000, true, true),
-        StickyDecision::Stick
-    );
 }
 
 // ---- ADR-0140 D1: `decide_continuation`（execute continuation の同一 session resume と fallback） ----

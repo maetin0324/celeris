@@ -1,4 +1,4 @@
-//! エラー応答（`application/problem+json`、`docs/api/v1/gui-api.md` §1.5）と、`OpsError` / `StoreError` からの写像。
+//! エラー応答（`application/problem+json`、`docs/api/v1/api.md` §1.5）と、`OpsError` / `StoreError` からの写像。
 //!
 //! ハンドラは `ApiProblem` を返すだけで、本体（`instance` = `X-Request-Id` を含む）は共通の middleware が
 //! 描画する（応答の拡張に `PendingProblem` を載せて渡す）。
@@ -136,33 +136,6 @@ impl ApiProblem {
         Self::new(StatusCode::NOT_FOUND, "not_found", "no such endpoint")
     }
 
-    /// ADR-0017: 指定した provider id が `providers.d/` に無い。
-    pub(crate) fn provider_not_found(id: &str) -> Self {
-        Self::new(
-            StatusCode::NOT_FOUND,
-            "provider_not_found",
-            format!("provider not found: {id}"),
-        )
-    }
-
-    /// ADR-0017 D1: `POST /api/v1/providers` の id が既に `providers.d/<id>.toml` にある。
-    pub(crate) fn provider_exists(id: &str) -> Self {
-        Self::new(
-            StatusCode::CONFLICT,
-            "provider_exists",
-            format!("provider already exists: {id}"),
-        )
-    }
-
-    /// ADR-0017 M1: `providers_include` が未設定で、管理系の書き込みができない。
-    pub(crate) fn providers_admin_unavailable() -> Self {
-        Self::new(
-            StatusCode::CONFLICT,
-            "providers_admin_unavailable",
-            "the [api] provider admin endpoints require `providers_include` to be configured in config.toml",
-        )
-    }
-
     /// ADR-0040 D4（Phase 47）: いまこのプロセスは `standby`（または `draining`）なので、ディスパッチャの
     /// 状態を要する管理系は受けられない。窓は 1〜2 tick なので、GUI は `Retry-After` の秒数だけ待って
     /// もう一度出せばよい（本文の `detail` は `"standby"` ちょうど）。
@@ -230,17 +203,20 @@ impl ApiProblem {
         )
     }
 
-    /// ADR-0024 D5: `account_pool = true` だが `adapter != "claude-code"`（API 側で判定できる範囲）。
-    pub(crate) fn invalid_provider(detail: impl Into<String>) -> Self {
-        Self::new(StatusCode::UNPROCESSABLE_ENTITY, "invalid_provider", detail)
-    }
-
     /// ADR-0053 D1/D4（Phase 65）: `[llm_proxy]` が無効（`effective_enabled() == false`）。
     pub(crate) fn llm_proxy_unavailable() -> Self {
         Self::new(
             StatusCode::CONFLICT,
             "llm_proxy_unavailable",
             "the [llm_proxy] section is not enabled in config.toml",
+        )
+    }
+
+    pub(crate) fn harnesses_unavailable() -> Self {
+        Self::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "harnesses_unavailable",
+            "harness declarations are unavailable",
         )
     }
 

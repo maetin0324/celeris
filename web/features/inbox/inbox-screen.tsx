@@ -23,6 +23,7 @@ import { shortId } from "../../components/ui/short-id";
 import { formatAbsolute, formatRelative, serverNowMs } from "../../lib/time";
 import { openBrowserWaitsQuery } from "../browser/browser-runs-screen";
 import { decisionHref, decisionIdFromItemId } from "../decisions/decision-model";
+import { InboxIntegrationActions } from "../tasks/task-integration";
 import {
   type AnswerOutcome,
   answerFailure,
@@ -351,7 +352,9 @@ function InboxRow({
         ) : null}
         {open ? (
           <div id={`item-${item.id}-answer`} className="min-w-0 max-w-2xl">
-            {needsNativeScreen(item) ? (
+            {item.kind === "unintegrated" ? (
+              <InboxIntegrationActions item={item} />
+            ) : needsNativeScreen(item) ? (
               <NativeGuide item={item} waits={waits} />
             ) : (
               <AnswerForm item={item} sender={sender} waits={waits} />

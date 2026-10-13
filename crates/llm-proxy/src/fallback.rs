@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex as StdMutex};
 
 use time::{Duration as TimeDuration, OffsetDateTime};
 
-use crate::naming::{ModelRequest, SourceKind, SourceScope};
+use crate::naming::{ModelRequest, SourceKind};
 use crate::sources::SourceError;
 
 /// 失敗の分類。fallback するか・breaker に数えるかはここで決まる。
@@ -214,24 +214,15 @@ impl FallbackBudget {
 /// fallback が引き継ぐ要求の制約。候補がこれに合わなければ倒さない（飛ばす）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RequestConstraints {
-    /// 要求が許す source（`claude/…` は Claude だけ、`qwen/…` は relay だけ、`celeris/…` は全部）。
+    /// 要求が許す source の種類（要求は具体的な source を 1 つ指す）。
     pub allowed: Vec<SourceKind>,
 }
 
 impl RequestConstraints {
     pub fn from_request(parsed: &ModelRequest) -> Self {
-        let allowed = match parsed {
-            ModelRequest::Explicit { source, .. } => vec![*source],
-            ModelRequest::Tiered {
-                scope: SourceScope::Only(kind),
-                ..
-            } => vec![*kind],
-            ModelRequest::Tiered {
-                scope: SourceScope::Any,
-                ..
-            } => vec![SourceKind::Claude, SourceKind::Gpt, SourceKind::Qwen],
-        };
-        Self { allowed }
+        Self {
+            allowed: vec![parsed.source.kind()],
+        }
     }
 
     pub fn admits(&self, kind: SourceKind) -> bool {

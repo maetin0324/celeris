@@ -5,11 +5,10 @@ fn config(tmp: &Path) -> PathBuf {
     std::fs::write(
             &path,
             format!(
-                "db = \"{}\"\n[workspace]\nbuild_cache_dir = \"{}\"\n[scratch]\ndir = \"{}\"\n[scratch.l2]\ndir = \"{}\"\n[scratch.cache_server]\nport = 1\n[selfdeploy]\nreleases_dir = \"{}\"\n[[providers]]\nid = \"x\"\nadapter = \"fake\"\n",
+                "db = \"{}\"\n[workspace]\nbuild_cache_dir = \"{}\"\n[scratch]\ndir = \"{}\"\n[selfdeploy]\nreleases_dir = \"{}\"\n",
                 tmp.join("celeris.sqlite3").display(),
                 tmp.join("build-cache").display(),
                 tmp.join("scratch").display(),
-                tmp.join("l2").display(),
                 tmp.join("releases").display(),
             ),
         )
@@ -251,11 +250,7 @@ fn gc_dry_run_lists_without_removing() {
 fn disabled_scratch_makes_lease_fail_so_release_sh_falls_back() {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("config.toml");
-    std::fs::write(
-        &path,
-        "[scratch]\nenabled = false\n[[providers]]\nid = \"x\"\nadapter = \"fake\"\n",
-    )
-    .unwrap();
+    std::fs::write(&path, "[scratch]\nenabled = false\n").unwrap();
     let err = run(
         None,
         ScratchCommand::Lease(LeaseArgs {

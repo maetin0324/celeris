@@ -7,7 +7,7 @@
 #
 # (1) 追跡されている全 .md の Markdown 相対リンク [..](target) の実在
 # (2) 生きた参照（CLAUDE.md, AGENTS.md, crates/**/*.rs, scripts/**, .claude/**,
-#     docs/architecture-map.md, web/・gui/ のソース）に出る docs/… と agent-docs/… の実在
+#     docs/architecture-map.md, web/ のソース）に出る docs/… と agent-docs/… の実在
 # 壊れた参照は「ファイル:行: パス」で標準出力に出し、1 件でもあれば exit 1。
 set -u
 
@@ -17,7 +17,8 @@ set -u
 MIGRATION_EXCLUDE="agent-docs/PROGRESS.md agent-docs/progress/phase-F.md scripts/dev/check-adr-numbers.sh scripts/dev/progress-transition.sh scripts/dev/tests/progress_transition_merge.sh"
 
 # 素のパスを見ない・Markdown も見ないもの（前方一致）。
-ALWAYS_EXCLUDE="scripts/dev/testdata/ scripts/dev/docs-layout.tsv scripts/dev/check-doc-links.sh"
+# retired-doc-links.tsv は廃止済み target の完全一致台帳（検査対象の参照ではない）。
+ALWAYS_EXCLUDE="scripts/dev/testdata/ scripts/dev/docs-layout.tsv scripts/dev/retired-doc-links.tsv scripts/dev/check-doc-links.sh"
 
 # docs/… が「このリポジトリ」ではなく別の文書リポジトリ・試験の作業場所を指すファイル（前方一致）。
 # celeris の文書機能（docs/ を持つ案件リポジトリ）と、その試験の fixture。(2) の素のパスを見ない。
@@ -35,7 +36,7 @@ crates/task-dispatch/src/auto_resolve/generated/tests.rs
 crates/task-dispatch/src/auto_resolve/records/tests.rs
 crates/task-dispatch/src/auto_resolve/renumber/tests.rs
 crates/task-dispatch/src/integration/tests.rs scripts/dev/tests/progress_union_merge.sh
-gui/app/lib/docs.ts gui/test/ gui/scripts/lib/celeris-fixture.mjs web/e2e/"
+web/e2e/"
 
 # progress・ADR・report の本文の素のパスは履歴なので、(2) は次の形のファイルだけ見る。
 is_live_ref() {
@@ -50,7 +51,7 @@ is_live_ref() {
         crates/*.rs) return 0 ;;
         scripts/*) return 0 ;;
         .claude/*) return 0 ;;
-        web/* | gui/*)
+        web/*)
             case "$1" in
                 */node_modules/* | */dist/* | */build/* | */.react-router/* | *pnpm-lock.yaml) return 1 ;;
                 *.ts | *.tsx | *.js | *.jsx | *.mjs | *.cjs | *.json | *.html | *.css | *.sh | *.toml | *.yaml | *.yml) return 0 ;;
@@ -202,6 +203,11 @@ run_check() {
     if [ -s "$md_list" ]; then
         while IFS="$TAB" read -r loc res raw; do
             [ -n "$loc" ] || continue
+            # Immutable ADR links to deliberately retired sources are recorded explicitly.
+            if [ -f scripts/dev/retired-doc-links.tsv ] &&
+                awk -F '\t' -v source="${loc%:*}" -v target="$raw" '$1 == source && $2 == target {found=1} END {exit !found}' scripts/dev/retired-doc-links.tsv; then
+                continue
+            fi
             [ -e "$res" ] || printf '%s: %s\n' "$loc" "$raw" >>"$out"
         done <<EOF
 $(md_files_args <"$md_list")

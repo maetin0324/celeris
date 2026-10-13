@@ -42,10 +42,6 @@ impl Fixture {
             format!(
                 r#"db = "test.sqlite3"
 
-[[providers]]
-id = "fake"
-adapter = "fake"
-
 [[harnesses]]
 id = "knowledge-curation"
 tier = "cheap"

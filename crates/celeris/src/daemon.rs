@@ -4,7 +4,7 @@
 //! | module | 中身 |
 //! |---|---|
 //! | `secrets` | `[secrets]` の解決と env の合成（ADR-0030）、実効モデル |
-//! | `adapters` | `build_adapters`・`secret_usage`・`effective_models`・`provider_lives` |
+//! | `adapters` | `build_harness_adapters`・`secret_usage` |
 //! | `bootstrap` | DB の置き場所の検査、`build_dispatcher`（store を開き migrate する）、`seed_org_if_empty`・`seed_cron_if_empty` |
 //! | `clusters` | ssh master・liveness hook・tunnel の配線（ADR-0032 / ADR-0062） |
 //! | `api` | `config_view`・`api_settings`・`bind_reuseport`・`start_api` |
@@ -24,12 +24,9 @@ pub(crate) mod bootstrap;
 pub(crate) mod browser_ledger_path;
 pub(crate) mod clusters;
 mod cos_launch;
-pub(crate) mod routing_shadow;
-pub(crate) mod routing_sidecar;
+pub(crate) mod routing_guardrail;
 pub(crate) mod run;
 pub(crate) mod secrets;
 pub(crate) mod services;
+pub(crate) mod stranded_sweep;
 pub(crate) mod tick_loop;
-
-#[cfg(test)]
-mod cos_reload_tests;

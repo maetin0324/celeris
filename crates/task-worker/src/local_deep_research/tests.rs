@@ -56,6 +56,7 @@ fn stub_ldr(dir: &Path, script: &str) -> LdrConfig {
 
 fn sample_req(workspace: std::path::PathBuf) -> RunRequest {
     RunRequest {
+        llm_route: None,
         cargo_target_dir: None,
         protocol: PROTOCOL_VERSION,
         task: crate::protocol::tests::sample_task(),
@@ -673,7 +674,7 @@ async fn provider_kind_ldr_passes_proxy_model_in_input_json() {
         ("llm.model".to_string(), "should-be-overridden".to_string()),
         ("search.tool".to_string(), "searxng".to_string()),
     ];
-    config.model = Some("celeris/cheap".to_string());
+    config.model = Some("qwen/qwen3.8-27b".to_string());
     // このテストは入力 JSON の組み立てを見るだけで、証拠ゲート（ADR-0031 D2）とは無関係なので無効にする
     // （スタブの CELERIS_RESULT に counts が無い）。
     config.evidence = EvidenceThresholds {
@@ -703,7 +704,7 @@ async fn provider_kind_ldr_passes_proxy_model_in_input_json() {
     assert_eq!(seen["settings"]["llm.provider"], "openai_endpoint");
     assert_eq!(seen["settings"]["search.tool"], "searxng");
     // `model` が `settings` の `llm.model` を上書きする。
-    assert_eq!(seen["settings"]["llm.model"], "celeris/cheap");
+    assert_eq!(seen["settings"]["llm.model"], "qwen/qwen3.8-27b");
     assert!(
         seen["report_path"]
             .as_str()
@@ -2000,7 +2001,7 @@ with tempfile.TemporaryDirectory() as d:
     payload = {
         "query": "what is the capital of France?",
         "mode": "detailed",
-        "settings": {"llm.provider": "openai_endpoint", "llm.model": "celeris/cheap"},
+        "settings": {"llm.provider": "openai_endpoint", "llm.model": "qwen/qwen3.8-27b"},
         "iterations": 1,
         "questions_per_iteration": 1,
         "report_path": report_path,
@@ -2046,7 +2047,7 @@ print(json.dumps({
         values["overrides_passed_to_snapshot"],
         serde_json::json!({
             "llm.provider": "openai_endpoint",
-            "llm.model": "celeris/cheap",
+            "llm.model": "qwen/qwen3.8-27b",
             "search.iterations": 1,
             "search.questions_per_iteration": 1,
         })
@@ -2068,7 +2069,7 @@ print(json.dumps({
         values["settings_snapshot_value"],
         serde_json::json!({"snapshot": true, "from_overrides": {
             "llm.provider": "openai_endpoint",
-            "llm.model": "celeris/cheap",
+            "llm.model": "qwen/qwen3.8-27b",
             "search.iterations": 1,
             "search.questions_per_iteration": 1,
         }})
@@ -2339,7 +2340,7 @@ def run_once(targets, aspects):
             "query": "CHFS について調べる",
             "mode": "quick",
             "settings": {
-                "llm.model": "celeris/cheap",
+                "llm.model": "qwen/qwen3.8-27b",
                 "llm.openai_endpoint.url": "http://127.0.0.1:18100/v1",
             },
             "report_path": report_path,
@@ -2674,7 +2675,7 @@ with tempfile.TemporaryDirectory() as d:
         return "| 対象 | 配置 |\n|---|---|\n| CHFS | 事実(readme) |\n\n### CHFS\n配置: 事実"
 
     applied = mod.apply_structured_synthesis(
-        path, ["CHFS"], ["配置"], [], flaky_synth, "celeris/cheap", "http://127.0.0.1:18100/v1", "k"
+        path, ["CHFS"], ["配置"], [], flaky_synth, "qwen/qwen3.8-27b", "http://127.0.0.1:18100/v1", "k"
     )
     with open(path, encoding="utf-8") as f:
         rewritten = f.read()

@@ -30,11 +30,13 @@ export type BoardFilters = {
   milestone?: string;
   show_support?: boolean;
   column?: BoardColumnId;
+  run_state?: "runnable" | "waiting";
 };
 function columnFromSearch(value: string | null): BoardColumnId | undefined {
   return boardColumns.find((column) => column.id === value)?.id;
 }
 export function boardFilterFromSearch(search: URLSearchParams): BoardFilters {
+  const runState = search.get("run_state");
   return {
     project: search.get("project") || undefined,
     q: search.get("q") || undefined,
@@ -46,6 +48,7 @@ export function boardFilterFromSearch(search: URLSearchParams): BoardFilters {
     milestone: search.get("milestone") || undefined,
     show_support: search.get("show_support") === "1",
     column: columnFromSearch(search.get("column")),
+    run_state: runState === "runnable" || runState === "waiting" ? runState : undefined,
   };
 }
 /** 絞り込みを /board の URL に戻す。状態の切り替えは他の絞り込みを保ったまま column だけを替える。 */
@@ -57,6 +60,7 @@ export function boardHref(filters: BoardFilters): string {
   }
   if (filters.show_support) params.set("show_support", "1");
   if (filters.column) params.set("column", filters.column);
+  if (filters.run_state) params.set("run_state", filters.run_state);
   return `/board${params.size ? `?${params}` : ""}`;
 }
 export function boardTasksPath(filters: BoardFilters): string {
@@ -67,6 +71,7 @@ export function boardTasksPath(filters: BoardFilters): string {
   }
   params.set("limit", "200");
   params.set("order", "created_desc");
+  if (filters.run_state) params.set("run_state", filters.run_state);
   return `/api/tasks?${params}`;
 }
 export function boardGroup(items: TaskSummary[]) {
@@ -74,7 +79,13 @@ export function boardGroup(items: TaskSummary[]) {
     ...column,
     items: items
       .filter((item) => (column.statuses as readonly string[]).includes(item.status))
-      .sort((a, b) => b.priority - a.priority || a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id)),
+      .sort(
+        (a, b) =>
+          Number(b.runnable) - Number(a.runnable) ||
+          b.priority - a.priority ||
+          a.created_at.localeCompare(b.created_at) ||
+          a.id.localeCompare(b.id),
+      ),
   }));
 }
 

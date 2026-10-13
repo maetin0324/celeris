@@ -131,7 +131,7 @@ impl WorkerAdapter for RefusingFake {
 }
 
 fn fixture(adapter: Arc<dyn WorkerAdapter>, store: Arc<SqliteStore>, dir: &Path) -> Dispatcher {
-    let mut d = dispatcher_with_adapter_id(store.clone(), adapter, 2, true, "fake");
+    let mut d = dispatcher_with_test_clock(store.clone(), adapter, 2, true);
     d.config.execution.max_cos_runs = 2;
     d.config.min_free_disk_mb = 0;
     d.config.knowledge.root = dir.join("knowledge");
@@ -148,14 +148,8 @@ fn fixture(adapter: Arc<dyn WorkerAdapter>, store: Arc<SqliteStore>, dir: &Path)
         store,
         CosChatLaunchConfig {
             enabled: true,
-            fallbacks: Vec::new(),
             worker_reserve_five_hour: 0.90,
             harness: "fake".into(),
-            llm_source: Some("test".into()),
-            provider: Some("p1".into()),
-            account_id: None,
-            model: None,
-            tier: Tier::Frontier,
             max_turns: 2,
             max_wall_secs: 30,
             unavailable_reason: None,
@@ -318,8 +312,8 @@ async fn cos_chat_run_rollover_resume_refusal_retries_fresh_exactly_once() {
         .expect("session")
         .expect("live");
     assert_eq!(record.session_row_id.as_deref(), Some(live.id.as_str()));
-    // The fresh attempt started without a session id and the harness reported its own.
-    assert_eq!(fresh.session_id, "");
+    // Claude Code gets a fresh UUID before spawn; the worker then reports the live session id.
+    assert!(task_worker::provider::is_valid_uuid(&fresh.session_id));
     assert_eq!(live.session_id, "fake-session-3");
 }
 
@@ -644,7 +638,7 @@ echo '{"type":"done","summary":"answer","evidence":[],"usage":{"input_tokens":11
     assert!(run.first_output_at.is_some());
     assert!(run.latency_ms.is_some());
     assert!(run.time_to_first_output_ms.is_some());
-    assert_eq!(run.harness.as_deref(), Some("fake"));
+    assert_eq!(run.harness.as_deref(), Some("claude_code"));
     assert!(run.session_mode.is_some());
     let reopened = SqliteStore::open(&dir.path().join("celeris.db")).expect("reopen");
     assert_eq!(reopened.chat_run_get(&t, &id).expect("persisted"), run);

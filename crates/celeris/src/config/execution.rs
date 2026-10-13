@@ -334,8 +334,6 @@ const MAX_COS_RUNS_CAP: usize = 8;
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ExecutionPlannerTomlConfig {
-    #[serde(default = "default_planner_adapter")]
-    pub adapter: String,
     /// planner run の `--permission-mode`。既定 `"bypassPermissions"`（アダプタ既定と同じ）。
     /// 2026-09-27 の F5-1 dogfood で `"plan"` だと claude-code が Plan Mode に入り、`Write` が plan
     /// ファイル以外へ書けず `ExitPlanMode` も非対話では使えないため、`execution-plan.json` /
@@ -357,7 +355,6 @@ pub struct ExecutionPlannerTomlConfig {
 impl Default for ExecutionPlannerTomlConfig {
     fn default() -> Self {
         Self {
-            adapter: default_planner_adapter(),
             permission_mode: default_planner_permission_mode(),
             tier: default_planner_tier(),
             max_turns: default_planner_max_turns(),
@@ -366,9 +363,6 @@ impl Default for ExecutionPlannerTomlConfig {
     }
 }
 
-fn default_planner_adapter() -> String {
-    "claude-code".to_string()
-}
 fn default_planner_permission_mode() -> String {
     "bypassPermissions".to_string()
 }

@@ -29,10 +29,6 @@ tick_ms = 100
 [adapters.fake]
 command = ["true"]
 
-[[providers]]
-id = "p1"
-adapter = "fake"
-
 [db]
 path = "{}"
 worker_read_only = {worker_read_only}

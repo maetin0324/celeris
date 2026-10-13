@@ -12,6 +12,10 @@
 use super::*;
 
 use sha2::{Digest, Sha256};
+use task_core::llm_route::{
+    AccountId, Admission, Candidate, ExclusionReason, HarnessId, ModelId, SourceId, admit_source,
+    constrain_for_harness,
+};
 use task_core::route_record::{
     FeaturesAux, ROUTE_OPTIONS_SCHEMA, RouteOption, RouteOptionBinds, RouteOptions,
     TASK_FEATURES_SCHEMA, TaskFeatures,
@@ -19,7 +23,9 @@ use task_core::route_record::{
 use task_core::routing_eval_trial::{EvalTrial, EvalTrialStatus};
 use task_core::store::StoredRouteDecision;
 use task_core::{Budget, WorkerHint};
+use task_worker::protocol::SelectedLlmRoute;
 
+use super::route_select::{RoutePick, with_account_limits};
 use crate::capacity::EvalDefer;
 
 /// 評価 run の `route_features.template`（本番の `task-brief/3` とは別の特徴量）。
@@ -38,22 +44,33 @@ const VERSION_TIMEOUT: Duration = Duration::from_secs(10);
 /// `--version` の出力の記録上限（生の出力をそのまま `harness_version` にはしない）。
 const VERSION_MAX_CHARS: usize = 200;
 
-/// 評価 run の経路（harness 固定・source×model 固定）。
+/// 評価 run の経路（harness 固定・source×model 固定。account だけ本番と同じ admission で決める）。
 struct EvalRoute {
-    provider: ProviderId,
+    pick: RoutePick,
     adapter: Arc<dyn WorkerAdapter>,
-    /// `runs.account`（= 解決した LLM source の id）。
-    account: String,
-    account_adapter: Option<AccountAdapter>,
-    model: String,
+    llm_route: SelectedLlmRoute,
+}
+
+/// 評価 run の経路を作れない理由。
+enum EvalRouteError {
+    /// 宣言に無い harness・source・model、または harness が話せない source（試行は `error`）。
+    Unroutable(String),
+    /// 宣言はあるが今は起こせない（account の同時実行・quota・cooldown。試行は `queued` のまま）。
+    Deferred(ExclusionReason),
 }
 
 /// 起動した評価 run の追跡（プロセス内のみ。真実は `eval_trials` の行と `runs` 索引）。
 pub(super) struct EvalRunEntry {
     trial_id: String,
-    account: String,
-    account_adapter: Option<AccountAdapter>,
+    /// この run が押さえている `(source, account)`（評価の admission で本番の run と合算する）。
+    route: (SourceId, AccountId),
     handle: JoinHandle<()>,
+}
+
+/// id の比べ方（`claude-oauth` と `claude_oauth`、`claude-code` と `claude_code` は同じ。
+/// 評価の manifest・候補表は `-`、設定の宣言は `_` で書く）。
+fn normalize_id(id: &str) -> String {
+    id.trim().to_ascii_lowercase().replace('-', "_")
 }
 
 /// `route_features.hash` の材料（`task_core::route_record::FeatureBody` と同じ形の直列化。
@@ -101,7 +118,15 @@ impl Dispatcher {
                 }
             };
             // 枠・account・quota のどれかで起こせないなら `queued` に戻して次の tick へ（attempts を消費しない）。
-            if let Err(why) = self.eval_admit(&trial, in_flight) {
+            // 宣言に無い経路は待っても起こせないので `error` にして次の試行を見る。
+            let admitted = match self.eval_admit(&trial, in_flight) {
+                Ok(admitted) => admitted,
+                Err(why) => {
+                    self.fail_eval_trial(&trial, &why);
+                    continue;
+                }
+            };
+            if let Err(why) = admitted {
                 if let Err(e) = self.store.eval_trial_unclaim(&trial.trial_id) {
                     tracing::warn!(trial_id = %trial.trial_id, error = %e, "eval trials: unclaim failed");
                 }
@@ -261,100 +286,133 @@ impl Dispatcher {
         Ok(n)
     }
 
-    /// 予約枠・account の同時実行・quota 上限（本番と同じ規則）を見る。
-    fn eval_admit(&self, trial: &EvalTrial, eval_in_flight: usize) -> Result<(), EvalDefer> {
-        let route = self
-            .eval_route(trial)
-            .ok_or(crate::capacity::EvalDefer::AccountFull)?;
-        let account_key = route.account_adapter.map(|a| (a, route.account.clone()));
-        let state = self.source_state_of(
-            route.provider.as_str(),
-            account_key.as_ref(),
-            Instant::now(),
-        );
-        let account_in_use = state.in_use.unwrap_or(0) as usize
-            + self.eval_account_in_use(route.account_adapter, &route.account);
-        let account_limit = self.eval_account_limit(route.account_adapter, &route.account);
-        // quota 上限（quota_book の見積り）は本番と同じ判定（`enforce_quota_verdict`）。circuit が
-        // 開いている source も起こさない。
-        let quota_ok = !state.circuit_open
-            && super::routing_enforce::enforce_quota_verdict(
-                task_core::Tier::Standard,
-                state.quota_remaining,
-            )
-            .is_ok();
-        crate::capacity::eval_admission(
-            self.config.eval.reserved_runs,
+    /// 予約枠・account の同時実行・quota 上限（本番と同じ規則）を見る。外側の `Err` は宣言に無い経路
+    /// （試行を `error` にする理由）、内側の `Err` は今は起こせない理由（`queued` に戻す）。
+    fn eval_admit(
+        &mut self,
+        trial: &EvalTrial,
+        eval_in_flight: usize,
+    ) -> Result<Result<(), EvalDefer>, String> {
+        let reserved = self.config.eval.reserved_runs;
+        // 枠の判定が先（`reserved_runs = 0`・枠満杯は account を見ずに返す）。
+        if let Err(defer) = crate::capacity::eval_admission(reserved, eval_in_flight, 0, 1, true) {
+            return Ok(Err(defer));
+        }
+        // account の同時実行・quota・cooldown は本番と同じ `admit_source` が決める。
+        let (account_in_use, account_limit, quota_ok) = match self.eval_pick(trial) {
+            Ok(_) => (0, 1, true),
+            Err(EvalRouteError::Unroutable(why)) => return Err(why),
+            Err(EvalRouteError::Deferred(
+                ExclusionReason::SourceQuota
+                | ExclusionReason::AccountQuota
+                | ExclusionReason::Cooldown,
+            )) => (0, 1, false),
+            Err(EvalRouteError::Deferred(_)) => (1, 1, true),
+        };
+        Ok(crate::capacity::eval_admission(
+            reserved,
             eval_in_flight,
             account_in_use,
             account_limit,
-            !state.cooldown && quota_ok,
-        )
+            quota_ok,
+        ))
     }
 
-    /// `account_in_use`（本番の `running` + `reviewing`）に載っていない評価 run の分を足す。
-    fn eval_account_in_use(&self, account_adapter: Option<AccountAdapter>, account: &str) -> usize {
-        self.eval_runs
-            .values()
-            .filter(|e| e.account == account && e.account_adapter == account_adapter)
-            .count()
-    }
-
-    /// account の同時実行の上限（本番と同じ解決: account の上書き → 既定。CoS の +1 は無い）。
-    fn eval_account_limit(&self, account_adapter: Option<AccountAdapter>, account: &str) -> usize {
-        let stored = account_adapter.and_then(|a| {
-            self.account_limits
-                .as_ref()
-                .and_then(|m| m.get(&(a.as_str().to_owned(), account.to_owned())))
-                .copied()
-        });
-        let (limit, _source) =
-            crate::capacity::effective_account_limit(stored, self.config.max_concurrency);
-        crate::capacity::account_run_limit(limit, false)
-    }
-
-    /// harness（adapter id）と LLM source から経路を引く。評価は routing を**しない**
-    /// （source×model は trial を作ったときに人が決めている）ので、候補は 1 件だけ。
-    fn eval_route(&self, trial: &EvalTrial) -> Option<EvalRoute> {
-        let harness = trial.harness_id.as_str();
-        let mut found: Option<(ProviderId, Arc<dyn WorkerAdapter>)> = None;
-        for (provider, adapter) in &self.adapters {
-            if adapter.id() != harness {
-                continue;
-            }
-            // 行が LLM source を持つなら、trial の source と一致する行だけを使う。
-            if let Some(source) = self.provider_llm_sources.get(provider)
-                && source != &trial.source_id
-            {
-                continue;
-            }
-            found = Some((provider.clone(), Arc::clone(adapter)));
-            break;
+    /// trial の harness・source・model を宣言（`[harnesses]`・`[llm_sources]`）から引き、account を
+    /// 本番と同じ admission（`admit_source`。手元の評価 run の `(source, account)` も合算）で選ぶ。
+    /// 評価は routing を**しない**（source×model は trial を作ったときに人が決めている）ので、候補は 1 件だけ。
+    fn eval_pick(&mut self, trial: &EvalTrial) -> Result<RoutePick, EvalRouteError> {
+        let registry = Arc::clone(&self.llm_route_registry);
+        let harness = registry
+            .harnesses
+            .keys()
+            .find(|h| normalize_id(h.as_ref()) == normalize_id(&trial.harness_id))
+            .cloned()
+            .ok_or_else(|| {
+                EvalRouteError::Unroutable(format!("harness {} is not declared", trial.harness_id))
+            })?;
+        let (source_id, source) = registry
+            .sources
+            .iter()
+            .find(|(id, _)| normalize_id(id.as_ref()) == normalize_id(&trial.source_id))
+            .ok_or_else(|| {
+                EvalRouteError::Unroutable(format!("source {} is not declared", trial.source_id))
+            })?;
+        let model = ModelId::from(trial.model_id.as_str());
+        if !source.models.contains(&model) {
+            return Err(EvalRouteError::Unroutable(format!(
+                "source {} does not declare model {}",
+                trial.source_id, trial.model_id
+            )));
         }
-        let (provider, base) = found?;
-        let account_adapter = self.pool_adapter_of(&provider, base.id());
-        let adapter = match account_adapter {
-            // プールの行: source id をアカウント id として資格情報を載せる。
-            Some(a) => self.adapter_for_account(&base, a, &trial.source_id)?,
-            None => Arc::clone(&base),
+        let candidate = Candidate {
+            source: source_id.clone(),
+            model,
+            api_format: source.api_format.clone(),
         };
-        let adapter = adapter.with_model(&trial.model_id)?;
-        Some(EvalRoute {
-            provider,
+        let spec = registry.harnesses.get(&harness).ok_or_else(|| {
+            EvalRouteError::Unroutable(format!("harness {} is not declared", trial.harness_id))
+        })?;
+        let (eligible, _) = constrain_for_harness(vec![candidate], spec, &registry, &harness);
+        let Some(candidate) = eligible.into_iter().next() else {
+            return Err(EvalRouteError::Unroutable(format!(
+                "harness {} cannot talk to source {}",
+                trial.harness_id, trial.source_id
+            )));
+        };
+        let mut state = self.route_state(false);
+        for (source, account) in self.eval_runs.values().map(|e| &e.route) {
+            *state
+                .reservations
+                .source_in_use
+                .entry(source.clone())
+                .or_default() += 1;
+            *state
+                .reservations
+                .account_in_use
+                .entry((source.clone(), account.clone()))
+                .or_default() += 1;
+        }
+        let limited = with_account_limits(&registry, &state);
+        match admit_source(
+            &candidate,
+            &state.accounts,
+            &state.quota,
+            &state.reservations,
+            &limited,
+        ) {
+            Admission::Admitted(owner) => Ok(RoutePick {
+                harness,
+                candidate,
+                account: owner.account_id,
+            }),
+            Admission::Rejected(reason) => Err(EvalRouteError::Deferred(reason)),
+        }
+    }
+
+    /// 選んだ経路の adapter（model・account の環境を載せたもの）と worker に渡す `SelectedLlmRoute`。
+    fn eval_route(&mut self, trial: &EvalTrial) -> Result<EvalRoute, String> {
+        let pick = match self.eval_pick(trial) {
+            Ok(pick) => pick,
+            Err(EvalRouteError::Unroutable(why)) => return Err(why),
+            Err(EvalRouteError::Deferred(reason)) => {
+                return Err(format!("route not admitted: {reason:?}"));
+            }
+        };
+        let adapter = self.route_adapter(&pick).map_err(|e| e.to_string())?;
+        let llm_route = self.route_launch_target(&pick).map_err(|e| e.to_string())?;
+        Ok(EvalRoute {
+            pick,
             adapter,
-            account: trial.source_id.clone(),
-            account_adapter,
-            model: trial.model_id.clone(),
+            llm_route,
         })
     }
 
     /// 評価 run を 1 本起こす（worktree → 記録 → adapter の起動）。
     fn start_eval_trial(&mut self, trial: EvalTrial) -> Result<(), String> {
-        let route = self.eval_route(&trial).ok_or_else(|| {
-            format!(
-                "no provider serves harness {} / source {}",
-                trial.harness_id, trial.source_id
-            )
+        let route = self.eval_route(&trial).map_err(|e| {
+            self.fail_eval_trial(&trial, &format!("route: {e}"));
+            e
         })?;
         let harness_version = self.eval_harness_version(&trial.harness_id);
         let run_id = ulid::Ulid::new().to_string();
@@ -384,7 +442,14 @@ impl Dispatcher {
             self.fail_eval_trial(&trial, &format!("runs index: {e}"));
             return Err(e.to_string());
         }
-        let req = self.eval_run_request(&trial, &worktree, &artifacts, &session_id);
+        let req = self.eval_run_request(
+            &trial,
+            &worktree,
+            &artifacts,
+            &session_id,
+            &route.pick.harness,
+            route.llm_route.clone(),
+        );
         if let Err(e) = self.store.eval_trial_mark_started(
             &trial.trial_id,
             &run_id,
@@ -424,8 +489,10 @@ impl Dispatcher {
             run_id,
             EvalRunEntry {
                 trial_id: trial.trial_id.clone(),
-                account: route.account.clone(),
-                account_adapter: route.account_adapter,
+                route: (
+                    route.pick.candidate.source.clone(),
+                    route.pick.account.clone(),
+                ),
                 handle,
             },
         );
@@ -434,7 +501,8 @@ impl Dispatcher {
             problem_id = %trial.problem_id,
             harness = %trial.harness_id,
             source = %trial.source_id,
-            model = %route.model,
+            model = %route.pick.candidate.model,
+            account = %route.pick.account,
             "started an evaluation run"
         );
         Ok(())
@@ -493,6 +561,8 @@ impl Dispatcher {
         worktree: &Path,
         artifacts: &Path,
         session_id: &str,
+        harness: &HarnessId,
+        llm_route: SelectedLlmRoute,
     ) -> RunRequest {
         let now = OffsetDateTime::now_utc();
         let task_id = trial
@@ -518,9 +588,9 @@ impl Dispatcher {
             depends_on: Vec::new(),
             status: Status::Running,
             priority: 0,
+            harness_id: Some(harness.clone()),
             worker_hint: WorkerHint {
                 tier: Tier::Standard,
-                adapter: Some(trial.harness_id.clone()),
             },
             workspace: WorkspaceSpec::Local {
                 path: worktree.to_path_buf(),
@@ -554,13 +624,14 @@ impl Dispatcher {
             context: RunContext {
                 // 新 session（resume しない・checkpoint なし）。
                 session: Some(task_worker::protocol::SessionHandle {
-                    adapter: trial.harness_id.clone(),
+                    adapter: harness.to_string(),
                     session_id: session_id.to_owned(),
                     resume: false,
                 }),
                 comments_enabled: false,
                 ..RunContext::default()
             },
+            llm_route: Some(llm_route),
             cargo_target_dir: None,
         }
     }
@@ -684,8 +755,8 @@ impl Dispatcher {
             seq: 1,
             status: task_core::RunIndexStatus::Running,
             adapter: Some(route.adapter.id().to_owned()),
-            model: Some(route.model.clone()),
-            account: Some(route.account.clone()),
+            model: Some(route.pick.candidate.model.to_string()),
+            account: Some(route.pick.account.to_string()),
             session_id: Some(session_id.to_owned()),
             checkpoint: None,
             usage: None,

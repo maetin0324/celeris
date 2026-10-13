@@ -40,7 +40,10 @@ pub fn gather_repo_facts_from(
     };
     let default_branch = match base {
         Some(b) => b.to_string(),
-        None => task_ops::changes::default_branch(dir, None),
+        None => match task_ops::changes::resolve_default_branch(dir, None) {
+            Ok(branch) => branch,
+            Err(_) => return (None, Vec::new()),
+        },
     };
     let changes = task_ops::changes::changes(dir, Some(dir), branch, &default_branch, None);
     if changes.missing {

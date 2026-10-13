@@ -8,6 +8,7 @@ fn task(status: Status, genre: &str, age: i64) -> Task {
     let id = TaskId::new();
     let now = OffsetDateTime::now_utc() - time::Duration::seconds(age);
     Task {
+        harness_id: None,
         requirements: Default::default(),
         tree: None,
         paused_at: None,
@@ -26,7 +27,6 @@ fn task(status: Status, genre: &str, age: i64) -> Task {
         priority: 0,
         worker_hint: WorkerHint {
             tier: Tier::Standard,
-            adapter: None,
         },
         workspace: WorkspaceSpec::local(id.to_string()),
         budget: Budget {
@@ -207,14 +207,9 @@ fn fixture() -> SqliteStore {
                         org_node: Some("engineering".into()),
                         harness: Some("coding".into()),
                         decision,
-                        resolution: task_core::model_routing::LaneResolution {
-                            lane: Some(Tier::Standard),
-                            ..Default::default()
-                        },
                         quota_reason: None,
                         work_unit_id: None,
                         escalation: None,
-                        optimizer: None,
                     }),
                 },
                 Event::WorkerFinished {

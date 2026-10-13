@@ -14,16 +14,16 @@ fn browser_task_routes_to_claude_code_by_default_and_accepts_acp() {
         spec.requirements.browser = Some(task_core::BrowserRequirements {
             allowed_domains: vec!["https://example.com".into()],
         });
-        spec.adapter = explicit.map(str::to_owned);
+        spec.harness = explicit.map(str::to_owned);
         let task = create_task(&store, spec, now()).unwrap();
-        assert_eq!(task.worker_hint.adapter.as_deref(), Some(expected));
+        assert_eq!(task.harness_id.as_ref().map(AsRef::as_ref), Some(expected));
     }
     let mut spec = base_spec();
     spec.skills = vec!["browser-enabled".into()];
     spec.requirements.browser = Some(task_core::BrowserRequirements {
         allowed_domains: vec!["https://example.com".into()],
     });
-    spec.adapter = Some("codex".into());
+    spec.harness = Some("codex".into());
     assert!(create_task(&store, spec, now()).is_err());
     let mut spec = base_spec();
     spec.skills = vec!["browser-enabled".into()];
@@ -84,7 +84,8 @@ fn base_spec() -> NewTaskSpec {
         workspace: Some(PathBuf::from("/tmp/workspace")),
         cluster: None,
         workspace_mode: None,
-        adapter: None,
+        harness: None,
+
         labels: Vec::new(),
         category: None,
         status: None,
@@ -112,7 +113,7 @@ fn create_task_inserts_task_and_created_event() {
     assert_eq!(task.kind, TaskKind::Execute);
     assert_eq!(task.status, Status::Draft);
     assert_eq!(task.worker_hint.tier, Tier::Standard);
-    assert_eq!(task.worker_hint.adapter, None);
+    assert_eq!(task.harness_id, None);
     assert_eq!(task.budget.max_turns, 10);
     assert_eq!(task.budget.max_wall_secs, 600);
     assert_eq!(task.budget.max_retries, 2);
@@ -196,7 +197,7 @@ fn create_task_with_roles_fills_omitted_values_from_the_role_then_global_default
     let roles = vec![RoleSpec {
         id: "lead".to_string(),
         tier: Some(Tier::Frontier),
-        adapter: Some("claude-code".to_string()),
+        harness: Some("claude-code".to_string()),
         max_turns: Some(40),
         max_wall_secs: None,
         instructions: Some("you lead".to_string()),
@@ -210,7 +211,7 @@ fn create_task_with_roles_fills_omitted_values_from_the_role_then_global_default
     assert!(task.aggregate);
     assert_eq!(task.worker_hint.tier, Tier::Frontier, "role default");
     assert_eq!(
-        task.worker_hint.adapter.as_deref(),
+        task.harness_id.as_ref().map(AsRef::as_ref),
         Some("claude-code"),
         "role default"
     );
@@ -298,7 +299,7 @@ fn literature_setup() -> (Vec<RoleSpec>, Vec<GenreSpec>) {
         RoleSpec {
             id: "literature-reader".into(),
             tier: Some(Tier::Cheap),
-            adapter: Some("paperqa".into()),
+            harness: Some("paperqa".into()),
             max_turns: Some(5),
             max_wall_secs: Some(1200),
             instructions: None,
@@ -306,7 +307,7 @@ fn literature_setup() -> (Vec<RoleSpec>, Vec<GenreSpec>) {
         RoleSpec {
             id: "lead".into(),
             tier: Some(Tier::Frontier),
-            adapter: Some("claude-code".into()),
+            harness: Some("claude-code".into()),
             ..RoleSpec::default()
         },
     ];
@@ -333,7 +334,7 @@ fn assignee_fills_the_worker_hint_from_the_org_nodes_genre() {
         "the node's genre is adopted"
     );
     assert_eq!(task.worker_hint.tier, Tier::Cheap);
-    assert_eq!(task.worker_hint.adapter.as_deref(), Some("paperqa"));
+    assert_eq!(task.harness_id.as_ref().map(AsRef::as_ref), Some("paperqa"));
     assert_eq!(task.budget.max_turns, 5);
     assert_eq!(task.budget.max_wall_secs, 1200);
     assert_eq!(task.role, None, "assignee does not invent a role name");
@@ -388,7 +389,7 @@ fn explicit_values_still_win_over_the_assignee() {
     assert_eq!(task.worker_hint.tier, Tier::Frontier, "the task value wins");
     assert_eq!(task.budget.max_turns, 33);
     assert_eq!(
-        task.worker_hint.adapter.as_deref(),
+        task.harness_id.as_ref().map(AsRef::as_ref),
         Some("paperqa"),
         "still filled from the assignee"
     );
@@ -413,7 +414,7 @@ fn explicit_values_still_win_over_the_assignee() {
         "the role's tier wins over the assignee's default"
     );
     assert_eq!(
-        task.worker_hint.adapter.as_deref(),
+        task.harness_id.as_ref().map(AsRef::as_ref),
         Some("claude-code"),
         "the role's adapter wins over the assignee's default"
     );
@@ -437,7 +438,7 @@ fn without_an_assignee_nothing_changes() {
     let (roles, genres) = literature_setup();
     let task = create_task_with_roles(&store, base_spec(), &roles, &genres, now()).expect("create");
     assert_eq!(task.worker_hint.tier, Tier::Standard, "global default");
-    assert_eq!(task.worker_hint.adapter, None);
+    assert_eq!(task.harness_id, None);
     assert_eq!(task.budget.max_turns, DEFAULT_MAX_TURNS);
     assert_eq!(task.assignee, None);
 
@@ -729,7 +730,7 @@ fn create_task_with_roles_applies_genre_default_role_when_task_has_no_role() {
     let roles = vec![RoleSpec {
         id: "literature-reader".to_string(),
         tier: Some(Tier::Standard),
-        adapter: Some("acp".to_string()),
+        harness: Some("acp".to_string()),
         max_turns: Some(5),
         max_wall_secs: Some(1200),
         instructions: None,
@@ -745,7 +746,7 @@ fn create_task_with_roles_applies_genre_default_role_when_task_has_no_role() {
     assert_eq!(task.role, None, "genre alone must not set the task's role");
     assert_eq!(task.genre.as_deref(), Some("literature"));
     assert_eq!(task.worker_hint.tier, Tier::Standard);
-    assert_eq!(task.worker_hint.adapter.as_deref(), Some("acp"));
+    assert_eq!(task.harness_id.as_ref().map(AsRef::as_ref), Some("acp"));
     assert_eq!(task.budget.max_turns, 5);
     assert_eq!(task.budget.max_wall_secs, 1200);
 }

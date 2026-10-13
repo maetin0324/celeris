@@ -134,7 +134,7 @@ impl HarnessSpec {
         RoleSpec {
             id: self.id.clone(),
             tier: self.tier,
-            adapter: self.adapter.clone(),
+            harness: self.adapter.clone(),
             max_turns: self.budget.max_turns,
             max_wall_secs: self.budget.max_wall_secs,
             instructions: self.instructions.clone(),
@@ -159,8 +159,8 @@ impl HarnessSpec {
         if role.tier.is_some() {
             self.tier = role.tier;
         }
-        if role.adapter.is_some() {
-            self.adapter = role.adapter.clone();
+        if role.harness.is_some() {
+            self.adapter = role.harness.clone();
         }
         if role.instructions.is_some() {
             self.instructions = role.instructions.clone();
@@ -226,9 +226,8 @@ pub fn builtin_harnesses() -> Vec<HarnessSpec> {
                 max_wall_secs: Some(900),
                 max_retries: Some(1),
             },
-            // ADR-0052 D2 / ADR-0132 D4: `langmem` は proxy の `celeris/cheap` を使う道具。その接続先
-            // （proxy）に届かなければ tier `cheap` の汎用ハーネスへ倒す。proxy の先の Qwen が落ちただけなら
-            // proxy 内の fallback（ADR-0132 D3）が Claude / GPT の cheap へ倒すので、ここでは倒さない。
+            // ADR-0052 D2: `langmem` の接続先に届かなければ、通常の route 選択に戻して
+            // tier `cheap` の汎用ハーネスへ倒す。具体的な source / model は route_defaults と model routing が選ぶ。
             fallback: Some(HarnessFallback::Tier(HarnessFallbackTier {
                 tier: Tier::Cheap,
             })),
@@ -390,7 +389,7 @@ mod tests {
             RoleSpec {
                 id: "implementer".into(),
                 tier: Some(Tier::Standard),
-                adapter: Some("claude-code".into()),
+                harness: Some("claude-code".into()),
                 max_turns: Some(20),
                 instructions: Some("あなたは実装担当。".into()),
                 ..RoleSpec::default()
@@ -513,7 +512,7 @@ mod tests {
         assert_eq!(g.output_artifacts, vec!["diff".to_string()]);
         let roles = registry.role_specs();
         let r = RoleSpec::find(&roles, "coding").expect("coding");
-        assert_eq!(r.adapter.as_deref(), Some("claude-code"));
+        assert_eq!(r.harness.as_deref(), Some("claude-code"));
         assert_eq!(r.max_turns, Some(60));
         assert_eq!(r.max_wall_secs, Some(3600));
         assert_eq!(r.instructions.as_deref(), Some("実装担当"));

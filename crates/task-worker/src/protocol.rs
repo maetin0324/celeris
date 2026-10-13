@@ -1033,11 +1033,45 @@ pub struct RunRequest {
     /// `<workspace>/.taskd/artifacts/<task_id>`。決めるのはディスパッチャで、アダプタはここに書くだけ。
     pub artifacts_dir: PathBuf,
     pub context: RunContext,
+    /// Dispatcher-selected execution route. Credentials are references only; secrets never travel
+    /// in the protocol payload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub llm_route: Option<SelectedLlmRoute>,
     /// ADR-0074 F5-fix: この run に daemon が実際に与えた `CARGO_TARGET_DIR`（共有ビルドキャッシュ。
     /// 並列の WU は WU ごと）。与えていなければ `None`（`request.json` に出ない）。ワーカーは読まなくてよい
     /// （環境変数そのものは別に渡る。ここは監査用の写し）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cargo_target_dir: Option<PathBuf>,
+}
+
+/// Concrete route selected for a worker run.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SelectedLlmRoute {
+    pub harness_id: String,
+    pub source_id: String,
+    pub model_id: String,
+    pub account_id: String,
+    pub endpoint: Option<LlmEndpointReference>,
+    pub credential: Option<CredentialReference>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct LlmEndpointReference {
+    pub base_url: Option<String>,
+    pub api_format: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum CredentialReference {
+    Environment {
+        name: String,
+    },
+    /// An OAuth account's login directory and the environment variable the harness reads it from.
+    AccountDirectory {
+        path: PathBuf,
+        env: String,
+    },
 }
 
 /// How an adapter carried the daemon-issued routing reference.

@@ -3,7 +3,7 @@
 //! - 出自（元の task X と run R）は呼び出し側（daemon）が**自分で R に割り当てた成果物ディレクトリ**から決める。
 //!   ファイルの中身の task id / project id は信じない（D2）。
 //! - 案件は X のもの。違う案件を書いた 1 件は拒否する。`repos` の省略は X の repos → 案件の primary（D3）。
-//! - `parent` / `assignee` / `adapter` / `workspace` / `cluster` / `workspace_mode` は使わず、`status` は常に `draft`（D3）。
+//! - `parent` / `assignee` / `harness` / `workspace` / `cluster` / `workspace_mode` は使わず、`status` は常に `draft`（D3）。
 //! - 同じ案件に終端でない同じ題名の task があれば作らない（D4）。
 //! - 作った task の `Event::Created.origin` は `worker_run{task_id, run_id}`、X には `WorkerProgress` を残す（D5）。
 //!
@@ -129,8 +129,8 @@ pub fn bind_to_origin(
             "assignee {assignee} ignored (celeris assigns the owner deterministically; ADR-0069 D1)"
         ));
     }
-    if let Some(adapter) = spec.adapter.take() {
-        notes.push(format!("adapter {adapter} ignored (routing is celeris's)"));
+    if let Some(harness) = spec.harness.take() {
+        notes.push(format!("harness {harness} ignored (routing is celeris's)"));
     }
     let dropped_workspace = spec.workspace.take().is_some();
     let dropped_cluster = spec.cluster.take().is_some();

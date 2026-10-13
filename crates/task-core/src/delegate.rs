@@ -350,7 +350,7 @@ pub struct ResolvedChildDefaults {
     /// ADR-0069 D1: `tier` の出自（計画・委譲が書いた tier はヒント）。
     pub tier_source: crate::model::TierSource,
     pub tier: Tier,
-    pub adapter: Option<String>,
+    pub harness_id: Option<crate::llm_route::HarnessId>,
     pub max_turns: u32,
     pub max_wall_secs: u64,
 }
@@ -404,10 +404,11 @@ pub fn resolve_child_defaults(
             .or(role.and_then(|r| r.tier))
             .or(genre_role.and_then(|r| r.tier))
             .unwrap_or(parent.worker_hint.tier),
-        adapter: role
-            .and_then(|r| r.adapter.clone())
-            .or_else(|| genre_role.and_then(|r| r.adapter.clone()))
-            .or_else(|| parent.worker_hint.adapter.clone()),
+        harness_id: role
+            .and_then(|r| r.harness.clone())
+            .or_else(|| genre_role.and_then(|r| r.harness.clone()))
+            .map(crate::llm_route::HarnessId::from)
+            .or_else(|| parent.harness_id.clone()),
         max_turns: role
             .and_then(|r| r.max_turns)
             .or_else(|| genre_role.and_then(|r| r.max_turns))
@@ -535,6 +536,7 @@ pub fn materialize_delegated_logging(
             budget.max_turns = defaults.max_turns;
             budget.max_wall_secs = defaults.max_wall_secs;
             Task {
+                harness_id: defaults.harness_id.clone(),
                 requirements: t.requirements.clone(),
                 tree: None,
                 paused_at: None,
@@ -556,7 +558,6 @@ pub fn materialize_delegated_logging(
                 }),
                 worker_hint: WorkerHint {
                     tier: defaults.tier,
-                    adapter: defaults.adapter,
                 },
                 // ADR-0039 D2: 明示 > 案件の workspace > 親の workspace（従来）。
                 // ADR-0062 B2: 継承した Remote は、担当が cluster:<id> を持たなければ Local に落とす。

@@ -1,15 +1,11 @@
 #!/usr/bin/env bash
-# scripts/selfdeploy/install-units.sh [--remove-old] [--remove-qwen-tunnel] — deploy/systemd/ の
+# scripts/selfdeploy/install-units.sh [--replace-existing] [--remove-qwen-tunnel] — deploy/systemd/ の
 # テンプレート unit を ~/.config/systemd/user/ に置いて `systemctl --user daemon-reload` する
 # （ADR-0040 D4、ADR-0045 D3）。
 #
-# **人が一度だけ実行する**（ワーカーは実行しない。D5）。これ自体は何も起動しない。
+# **人が初回・雛形更新時に実行する**（ワーカーは実行しない。D5）。これ自体は何も起動しない。
+# 差分があれば全 unit の書込み前に止まる。人が確認した差分だけ --replace-existing で置換する。
 # linger は既に有効（`loginctl enable-linger rmaeda`）である前提。
-#
-#   --remove-old  改名前のテンプレート unit も消す。**移行のときだけ**使う。消す対象の名前は
-#                 環境変数 `SD_OLD_UNITS`（空白区切り）で渡す — 旧い名前を知っているのは
-#                 `migrate-to-celeris.sh` だけ、という置き方（ADR-0045 D3）。
-#                 その名前の instance が動いていたら、消さずに止まる。
 #
 #   --remove-qwen-tunnel  celeris が自分でトンネルを張るようになった（ADR-0053 D3、Phase 66）ので、
 #                 旧い `celeris-qwen-tunnel.service` / `.timer`（手で ~/.config/systemd/user/ に置いた
@@ -24,9 +20,9 @@
 # 設置し、`[Service]` に `EnvironmentFile=-%h/.config/celeris/paths.env` と `CELERIS_STATE_DIR` を差し込む
 # （systemd は `WorkingDirectory=` / `ExecStart=` の path に EnvironmentFile の変数を一律には使えないため）。
 # `~/.config/celeris` の参照（config.toml・token・password・secret）は home のまま。
-# 根を指定したときは celeris-credentiald@.service も同じ根で設置する（release の bin と vault が根の下に移るため）。
+# celeris-credentiald@.service は常に配布し、daemon と同じ config.toml を読む。
 # 未指定（または根が従来の場所）のときはテンプレートをそのまま置く（従来と同じ unit）。
-# celeris-web@.service は人の判断で移行の範囲外なので、常にテンプレートのまま置く。
+# celeris-web@.service も同じ release の根に合わせる。
 set -euo pipefail
 
 # lib.sh が既定値を入れる前に、呼び出し側が明示した値だけを控える。
@@ -39,19 +35,19 @@ SD_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
   cat >&2 <<'EOF'
-usage: install-units.sh [--remove-old] [--remove-qwen-tunnel]
+usage: install-units.sh [--replace-existing] [--remove-qwen-tunnel]
 
-  --remove-old          改名前のテンプレート unit も ~/.config/systemd/user/ から消す（移行のときだけ）。
+  --replace-existing   差分を確認した既存 unit を backup して置換する。未指定なら差分表示後に停止。
   --remove-qwen-tunnel  旧い celeris-qwen-tunnel.service/.timer を無効化して消す（ADR-0053 D3）。
 EOF
   exit 2
 }
 
-REMOVE_OLD=false
+REPLACE_EXISTING=false
 REMOVE_QWEN_TUNNEL=false
 while [ $# -gt 0 ]; do
   case "$1" in
-    --remove-old) REMOVE_OLD=true; shift ;;
+    --replace-existing) REPLACE_EXISTING=true; shift ;;
     --remove-qwen-tunnel) REMOVE_QWEN_TUNNEL=true; shift ;;
     -h | --help) usage ;;
     *) usage ;;
@@ -90,7 +86,7 @@ fi
 # テンプレートを hot の根に合わせて書き出す（根が空ならそのまま写す）。
 render_unit() {
   local unit="$1" out="$2" extra=""
-  if [ -z "$HOT_ROOT" ] || [ "$unit" = celeris-web@.service ]; then
+  if [ -z "$HOT_ROOT" ]; then
     cat "$SRC/$unit" >"$out"
     return 0
   fi
@@ -113,18 +109,30 @@ render_unit() {
 
 # ADR-0129 (1): sccache/cache-server units are no longer deployed. Existing host units
 # are stopped and removed by a human following docs/ops/sccache-l1.md.
-# web ADR-W3 D1（P6-02）: celeris-web@.service（web/ の gateway、gui/ と並行）も置くだけ。有効化は人（docs/ops/web-parallel-operation.md）。
-UNITS="celeris@.service celeris-gui@.service celeris-web@.service celeris-web-lan.socket celeris-web-lan.service"
+UNITS="celeris@.service celeris-web@.service celeris-web-lan.socket celeris-web-lan.service celeris-credentiald@.service"
 if [ -n "$HOT_ROOT" ]; then
-  UNITS="$UNITS celeris-credentiald@.service"
   sd_log "hot root: $HOT_ROOT (units read releases and state from there; ~/.config/celeris stays in home)"
 fi
 RENDER_DIR="$(mktemp -d)"
 trap 'rm -rf "$RENDER_DIR"' EXIT
-# ADR-0135 D3: LAN 中継の socket/service も置くだけ。既存の起動状態は変えない。
+# 全差分を先に確認する。途中の unit が違っても、それ以前の unit を書き換えない。
+CHANGED=false
 for unit in $UNITS; do
   [ -f "$SRC/$unit" ] || sd_die "missing $SRC/$unit"
   render_unit "$unit" "$RENDER_DIR/$unit"
+  if [ -L "$DEST/$unit" ] || { [ -e "$DEST/$unit" ] && [ ! -f "$DEST/$unit" ]; }; then
+    sd_die "not a regular unit file: $DEST/$unit; review masks/symlinks before installing"
+  fi
+  if [ -f "$DEST/$unit" ] && ! cmp -s "$RENDER_DIR/$unit" "$DEST/$unit"; then
+    CHANGED=true
+    diff -u "$DEST/$unit" "$RENDER_DIR/$unit" || [ "$?" -eq 1 ]
+  fi
+done
+if [ "$CHANGED" = true ] && [ "$REPLACE_EXISTING" = false ]; then
+  sd_die "existing units differ; no units changed. Review the diff and required settings, then rerun with --replace-existing"
+fi
+# ADR-0135 D3: LAN 中継の socket/service も置くだけ。既存の起動状態は変えない。
+for unit in $UNITS; do
   if [ -f "$DEST/$unit" ] && ! cmp -s "$RENDER_DIR/$unit" "$DEST/$unit"; then
     cp -p "$DEST/$unit" "$DEST/$unit.bak-$(sd_stamp)"
     sd_log "kept the old $unit as $DEST/$unit.bak-*"
@@ -133,26 +141,8 @@ for unit in $UNITS; do
   sd_log "installed $DEST/$unit"
 done
 
-if [ "$REMOVE_OLD" = true ]; then
-  if [ -z "${SD_OLD_UNITS:-}" ]; then
-    sd_log "--remove-old: SD_OLD_UNITS is empty; nothing to remove (migrate-to-celeris.sh sets it)"
-  fi
-  for unit in ${SD_OLD_UNITS:-}; do
-    [ -f "$DEST/$unit" ] || continue
-    # 動いているものは消さない（テンプレートを消してから止められなくなる）。
-    if systemctl --user list-units --all --plain --no-legend "${unit%@.service}@*.service" 2>/dev/null | grep -q .; then
-      sd_die "$unit still has instances; stop them before removing the template"
-    fi
-    rm -f "$DEST/$unit"
-    sd_log "removed the pre-rename template $DEST/$unit"
-  done
-fi
-
 # ADR-0053 D3（Phase 66）: celeris が `[[clusters.forwards]]` を自分で張るようになったので、
 # 手で置いた旧い Qwen トンネルの unit（`celeris-qwen-tunnel.service`/`.timer`）を無効化して消す。
-# `celeris-qwen-tunnel.*` は `--remove-old` の対象（`SD_OLD_UNITS`）とは別枠 — あれは改名前の
-# **テンプレート**（`@.service`）の移行専用で、こちらは名前の変わらない単発 unit なので、
-# 同じ「動いていたら止まる」規律を保ったまま別の分岐にする。
 if [ "$REMOVE_QWEN_TUNNEL" = true ]; then
   removed_any=false
   for unit in celeris-qwen-tunnel.timer celeris-qwen-tunnel.service; do

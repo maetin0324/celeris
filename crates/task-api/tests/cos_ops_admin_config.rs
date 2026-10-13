@@ -8,8 +8,8 @@ mod common;
 use common::cos_ops::{OPS, cos_bearer, db, op_body, run_domain, run_external};
 use common::*;
 use serde_json::{Value, json};
+use task_core::ModelCatalogStore;
 use task_core::model_catalog::{CatalogSource, DiscoveredModel};
-use task_core::{ModelCatalogStore, Tier};
 
 fn rejected_count(env: &TestEnv, thread: &str) -> i64 {
     db(env)
@@ -60,51 +60,6 @@ async fn cos_ops_admin_config_llm_models_are_audited() {
 
     let op = run_domain(
         &env,
-        "assign-preview",
-        "POST",
-        "/api/v1/llm/models/assignments/preview",
-        json!({"source": "opencode-go", "tier": "cheap", "model_id": "glm-5"}),
-        "model_assignment.preview",
-    )
-    .await;
-    assert!(op["result"]["impact"]["changes"].is_array(), "{op}");
-    assert!(env.store.model_role_assignments().expect("rows").is_empty());
-
-    let members = json!({"members": [
-        {"source": "opencode-go", "model_id": "glm-5", "priority": 0},
-        {"source": "opencode-go", "model_id": "kimi-k3", "priority": 1}
-    ]});
-    let op = run_domain(
-        &env,
-        "role-preview",
-        "POST",
-        "/api/v1/llm/models/assignments/roles/standard/preview",
-        members.clone(),
-        "model_role.preview",
-    )
-    .await;
-    assert_eq!(op["result"]["after"].as_array().map(Vec::len), Some(2));
-    assert!(env.store.model_role_assignments().expect("rows").is_empty());
-
-    run_domain(
-        &env,
-        "role-replace",
-        "PUT",
-        "/api/v1/llm/models/assignments/roles/standard",
-        members,
-        "model_role.replace",
-    )
-    .await;
-    let rows = env.store.model_role_assignments().expect("rows");
-    assert_eq!(
-        rows.iter()
-            .filter(|a| a.tier == Tier::Standard && a.updated_by == "cos")
-            .count(),
-        2
-    );
-
-    let op = run_domain(
-        &env,
         "override-put",
         "PUT",
         "/api/v1/llm/models/opencode-go/glm-5/override",
@@ -135,29 +90,13 @@ async fn cos_ops_admin_config_llm_models_are_audited() {
     expect_rejected(
         &env,
         "llm-rejected",
-        vec![
-            (
-                "unknown-model",
-                "PUT",
-                "/api/v1/llm/models/assignments/roles/cheap",
-                json!({"members": [{"source": "opencode-go", "model_id": "nope", "priority": 0}]}),
-                400,
-            ),
-            (
-                "bad-tier",
-                "PUT",
-                "/api/v1/llm/models/assignments/roles/huge",
-                json!({"members": []}),
-                400,
-            ),
-            (
-                "no-override",
-                "DELETE",
-                "/api/v1/llm/models/opencode-go/glm-5/override",
-                json!(null),
-                404,
-            ),
-        ],
+        vec![(
+            "no-override",
+            "DELETE",
+            "/api/v1/llm/models/opencode-go/glm-5/override",
+            json!(null),
+            404,
+        )],
     )
     .await;
 }
@@ -433,134 +372,12 @@ async fn cos_ops_admin_config_repos_and_cluster_settings_are_audited() {
     assert!(env.store.repo_get(repo.id).expect("get").is_none());
 }
 
-#[tokio::test]
-async fn cos_ops_admin_config_providers_and_account_create_are_audited() {
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let providers = tmp.path().join("providers.d");
-    std::fs::create_dir_all(&providers).expect("mkdir");
-    let accounts = tmp.path().join("accounts");
-    let env = TestEnv::with(EnvOptions {
-        token: Some(TOKEN.into()),
-        providers_dir: Some(providers.clone()),
-        accounts_root: Some(accounts.clone()),
-        ..Default::default()
-    });
-
-    let op = run_domain(
-        &env,
-        "provider-create",
-        "POST",
-        "/api/v1/providers",
-        json!({"id": "fake-a", "adapter": "fake", "kind": "adapter", "llm_source": "none"}),
-        "provider.create",
-    )
-    .await;
-    assert_eq!(op["target_id"], "fake-a");
-    assert!(providers.join("fake-a.toml").exists());
-
-    run_domain(
-        &env,
-        "provider-patch",
-        "PATCH",
-        "/api/v1/providers/fake-a",
-        json!({"concurrency": 2, "model": "m2"}),
-        "provider.update",
-    )
-    .await;
-    let text = std::fs::read_to_string(providers.join("fake-a.toml")).expect("read");
-    assert!(text.contains("model = \"m2\""), "{text}");
-    // ADR 2026-10-08 account-concurrency-limits §(a): deprecated `concurrency` is accepted but not saved.
-    assert!(!text.contains("concurrency"), "{text}");
-
-    run_domain(
-        &env,
-        "account-create",
-        "POST",
-        "/api/v1/accounts",
-        json!({"id": "acct1"}),
-        "account.create",
-    )
-    .await;
-    assert!(accounts.join("acct1").is_dir());
-
-    // Inline credential values are secret operations: refused, and the value is not recorded.
-    let app = env.router();
-    let (thread, _, bearer) = cos_bearer(&env, "provider-secret");
-    let resp = send(
-        &app,
-        post_json_with(
-            OPS,
-            &op_body(
-                "secret",
-                "POST",
-                "/api/v1/providers",
-                json!({"id": "leaky", "adapter": "fake", "env": {"OPENAI_API_KEY": "sk-should-not-be-recorded"}}),
-            ),
-            &[("authorization", bearer.as_str())],
-        ),
-    )
-    .await;
-    assert_problem(&resp, 422, "secret_operations");
-    let payload: String = db(&env)
-        .query_row(
-            "SELECT payload_json FROM cos_operations WHERE thread_id=?1",
-            [&thread],
-            |row| row.get(0),
-        )
-        .expect("row");
-    assert!(!payload.contains("sk-should-not-be-recorded"), "{payload}");
-    assert!(!providers.join("leaky.toml").exists());
-
-    expect_rejected(
-        &env,
-        "providers-rejected",
-        vec![
-            (
-                "dup",
-                "POST",
-                "/api/v1/providers",
-                json!({"id": "fake-a", "adapter": "fake"}),
-                409,
-            ),
-            (
-                "missing",
-                "DELETE",
-                "/api/v1/providers/nope",
-                json!(null),
-                404,
-            ),
-            (
-                "account-dup",
-                "POST",
-                "/api/v1/accounts",
-                json!({"id": "acct1"}),
-                409,
-            ),
-        ],
-    )
-    .await;
-
-    run_domain(
-        &env,
-        "provider-delete",
-        "DELETE",
-        "/api/v1/providers/fake-a",
-        json!(null),
-        "provider.delete",
-    )
-    .await;
-    assert!(!providers.join("fake-a.toml").exists());
-}
-
 /// A stand-in for the daemon's admin channel: answers every request and counts them by kind.
 fn fake_daemon() -> (
     tokio::sync::mpsc::Sender<task_api::AdminRequest>,
     std::sync::Arc<std::sync::Mutex<Vec<&'static str>>>,
 ) {
-    use task_api::{
-        AccountCheckOutcome, AdminRequest, NotifyTestOutcome, ProviderCheckOutcome,
-        ProviderCheckResult,
-    };
+    use task_api::{AccountCheckOutcome, AccountCheckResult, AdminRequest, NotifyTestOutcome};
     let (tx, mut rx) = tokio::sync::mpsc::channel::<AdminRequest>(8);
     let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let log = seen.clone();
@@ -571,20 +388,9 @@ fn fake_daemon() -> (
                     let _ = reply.send(Ok(()));
                     "reload"
                 }
-                AdminRequest::Check { provider_id, reply } => {
-                    let _ = reply.send(if provider_id == "nope" {
-                        Err(task_api::CheckError::NotFound)
-                    } else {
-                        Ok(ProviderCheckOutcome {
-                            result: ProviderCheckResult::Ok,
-                            detail: None,
-                        })
-                    });
-                    "provider_check"
-                }
                 AdminRequest::AccountCheck { reply, .. } => {
                     let _ = reply.send(Ok(AccountCheckOutcome {
-                        result: ProviderCheckResult::Ok,
+                        result: AccountCheckResult::Ok,
                         detail: None,
                         observation: None,
                     }));
@@ -707,19 +513,10 @@ async fn cos_ops_admin_config_daemon_and_external_effects_run_once() {
     .await;
     run_external(
         &env,
-        "pcheck",
-        "POST",
-        "/api/v1/providers/fake-a/check",
-        json!({}),
-        "provider.check",
-    )
-    .await;
-    run_external(
-        &env,
         "acheck",
         "POST",
-        "/api/v1/accounts/acct1/check",
-        json!({"adapter": "claude-code"}),
+        "/api/v1/llm/sources/claude_oauth/accounts/acct1/check",
+        json!({}),
         "account.check",
     )
     .await;
@@ -727,7 +524,7 @@ async fn cos_ops_admin_config_daemon_and_external_effects_run_once() {
         &env,
         "aremove",
         "DELETE",
-        "/api/v1/accounts/acct1",
+        "/api/v1/llm/sources/claude_oauth/accounts/acct1",
         json!(null),
         "account.delete",
     )
@@ -737,13 +534,7 @@ async fn cos_ops_admin_config_daemon_and_external_effects_run_once() {
     kinds.sort_unstable();
     assert_eq!(
         kinds,
-        vec![
-            "account_check",
-            "account_remove",
-            "notify_test",
-            "provider_check",
-            "reload"
-        ],
+        vec!["account_check", "account_remove", "notify_test", "reload"],
         "each effect ran exactly once despite the resend"
     );
 
@@ -797,18 +588,11 @@ async fn cos_ops_admin_config_daemon_and_external_effects_run_once() {
                 409,
             ),
             (
-                "no-provider",
+                "bad-account-source",
                 "POST",
-                "/api/v1/providers/nope/check",
+                "/api/v1/llm/sources/nope/accounts/acct1/check",
                 json!({}),
                 404,
-            ),
-            (
-                "bad-adapter",
-                "POST",
-                "/api/v1/accounts/acct1/check",
-                json!({"adapter": "x"}),
-                400,
             ),
             (
                 "bad-source",

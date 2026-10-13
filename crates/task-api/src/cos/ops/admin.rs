@@ -9,34 +9,8 @@ use serde_json::Value;
 use task_core::chat::CosOperation;
 use task_core::store::SqliteStore;
 
-/// Registered `(method, path, action)` operations. The first match wins, so a literal segment
-/// (`assignments/roles/{tier}`) is listed before the placeholder row it would also match.
+/// Registered `(method, path, action)` operations.
 pub(crate) const ALLOWED: &[(&str, &str, &str)] = &[
-    (
-        "PUT",
-        "/api/v1/llm/models/assignments/roles/{tier}",
-        "model_role.replace",
-    ),
-    (
-        "PUT",
-        "/api/v1/llm/models/assignments/{source}/{tier}",
-        "model_assignment.put",
-    ),
-    (
-        "DELETE",
-        "/api/v1/llm/models/assignments/{source}/{tier}",
-        "model_assignment.delete",
-    ),
-    (
-        "POST",
-        "/api/v1/llm/models/assignments/preview",
-        "model_assignment.preview",
-    ),
-    (
-        "POST",
-        "/api/v1/llm/models/assignments/roles/{tier}/preview",
-        "model_role.preview",
-    ),
     (
         "PUT",
         "/api/v1/llm/models/{source}/{model_id}/override",
@@ -71,22 +45,26 @@ pub(crate) const ALLOWED: &[(&str, &str, &str)] = &[
         "/api/v1/clusters/{id}/settings",
         "cluster.settings_put",
     ),
-    ("POST", "/api/v1/providers", "provider.create"),
-    ("PATCH", "/api/v1/providers/{id}", "provider.update"),
-    ("DELETE", "/api/v1/providers/{id}", "provider.delete"),
-    ("POST", "/api/v1/providers/{id}/check", "provider.check"),
-    ("POST", "/api/v1/accounts", "account.create"),
-    ("DELETE", "/api/v1/accounts/{id}", "account.delete"),
-    ("POST", "/api/v1/accounts/{id}/check", "account.check"),
-    // ADR 2026-10-08 account-concurrency-limits §(d): the per-account limit. `check` / `login` as an
-    // account id reach the same operation through their static routes (as in the router).
+    (
+        "POST",
+        "/api/v1/llm/sources/{source_id}/accounts",
+        "account.create",
+    ),
+    (
+        "DELETE",
+        "/api/v1/llm/sources/{source_id}/accounts/{account_id}",
+        "account.delete",
+    ),
+    (
+        "POST",
+        "/api/v1/llm/sources/{source_id}/accounts/{account_id}/check",
+        "account.check",
+    ),
     (
         "PATCH",
-        "/api/v1/accounts/{id}/{account}",
+        "/api/v1/llm/sources/{source_id}/accounts/{account_id}",
         "account.limit_set",
     ),
-    ("PATCH", "/api/v1/accounts/{id}/check", "account.limit_set"),
-    ("PATCH", "/api/v1/accounts/{id}/login", "account.limit_set"),
     (
         "POST",
         "/api/v1/llm/models/discover",
@@ -111,18 +89,23 @@ pub(crate) const ALLOWED: &[(&str, &str, &str)] = &[
 /// ADR D2 exclusions: `(method, path, reason code and detail)`.
 pub(crate) const EXCLUDED: &[(&str, &str, &str)] = &[
     (
+        "POST",
+        "/api/v1/routing/stages",
+        "human_only: ADR 2026-10-11-llm-source-model-routing-evaluation D3。enforce へ進めるのは人の承認だけ（戻すのは daemon）。",
+    ),
+    (
         "DELETE",
-        "/api/v1/accounts/{id}/login",
+        "/api/v1/llm/sources/{source_id}/accounts/{account_id}/login",
         "secret_operations: 人の決定 secrets=exclude。秘密値を扱う系列を全て除外（取消・削除も含む）。",
     ),
     (
         "POST",
-        "/api/v1/accounts/{id}/login",
+        "/api/v1/llm/sources/{source_id}/accounts/{account_id}/login",
         "secret_operations: 人の決定 secrets=exclude。秘密値を扱う系列を全て除外（取消・削除も含む）。",
     ),
     (
         "POST",
-        "/api/v1/accounts/{id}/login/code",
+        "/api/v1/llm/sources/{source_id}/accounts/{account_id}/login/code",
         "secret_operations: 人の決定 secrets=exclude。秘密値を扱う系列を全て除外（取消・削除も含む）。",
     ),
     (
@@ -152,16 +135,10 @@ pub(crate) const EXCLUDED: &[(&str, &str, &str)] = &[
     ),
 ];
 
-const ASSIGNMENT: &str = "/api/v1/llm/models/assignments/{source}/{tier}";
-const ROLE: &str = "/api/v1/llm/models/assignments/roles/{tier}";
 const SKILL: &str = "/api/v1/skills/{name}";
 const UNMOUNT: &str = "/api/v1/org/{id}/skills/{skill}";
 const PROMOTE: &str = "/api/v1/releases/{sha12}/promote";
 const OVERRIDE: &str = "/api/v1/llm/models/{source}/{model_id}/override";
-
-fn to_value<T: serde::Serialize>(value: &T) -> Result<Value, ApiProblem> {
-    serde_json::to_value(value).map_err(|e| ApiProblem::internal(e.to_string()))
-}
 
 /// The CoS form of a route whose domain request has no body: `null` or `{}` only.
 fn require_empty_body(
@@ -186,58 +163,6 @@ fn require_empty_body(
 /// runtime context, and the request task drives the runtime while it waits).
 fn block_on<F: std::future::Future>(future: F) -> F::Output {
     tokio::runtime::Handle::current().block_on(future)
-}
-
-/// `{"adapter": "<adapter>"}` (default claude-code): the CoS form of the account routes'
-/// `?adapter=` query, since an operation path carries no query.
-#[derive(serde::Deserialize, Default)]
-#[serde(deny_unknown_fields)]
-struct AccountTarget {
-    #[serde(default)]
-    adapter: Option<String>,
-}
-
-fn account_adapter(body: Value) -> Result<task_core::AccountAdapter, ApiProblem> {
-    let target: AccountTarget = decode_optional(body)
-        .map_err(|e| unprocessable("validation", format!("request.body: {e}")))?;
-    match target.adapter {
-        None => Ok(task_core::AccountAdapter::ClaudeCode),
-        Some(raw) => task_core::AccountAdapter::parse(&raw).ok_or_else(|| {
-            ApiProblem::bad_request("adapter must be claude-code, codex or opencode-go")
-        }),
-    }
-}
-
-/// Provider bodies with inline credential values (`env.OPENAI_API_KEY` …) are secret operations
-/// (ADR D2, human decision secrets=exclude): refused with the body redacted from the record, so
-/// the value never lands in the audit row. Credentials go through `/secrets` by a person.
-fn refuse_inline_credentials(
-    store: &SqliteStore,
-    audit: &OperationAudit,
-    path: &str,
-    body: &Value,
-) -> Result<(), ApiProblem> {
-    let inline = body
-        .get("env")
-        .and_then(Value::as_object)
-        .is_some_and(|env| {
-            env.keys()
-                .any(|k| task_core::model_routing::CREDENTIAL_KEYS.contains(&k.as_str()))
-        });
-    if !inline {
-        return Ok(());
-    }
-    let mut redacted = audit.clone();
-    redacted.payload["body"] = serde_json::json!({"redacted": true});
-    Err(redacted.reject(
-        store,
-        "provider",
-        path,
-        unprocessable(
-            "secret_operations",
-            "inline credential values are secret operations; register them in /secrets (a person) and use credential_refs",
-        ),
-    ))
 }
 
 /// Run a C operation whose effect is a route's [`crate::cos::operations::Effect`].
@@ -285,50 +210,10 @@ pub(crate) fn dispatch(
 ) -> Result<CosOperation, ApiProblem> {
     let decode = |error| decode_problem(store, audit, path, error);
     match matched.action {
-        "model_assignment.put" => {
-            let input = serde_json::from_value(body).map_err(decode)?;
-            crate::model_assignments::put_assignment_audited(
-                store,
-                &path_param(ASSIGNMENT, path, "{source}"),
-                &path_param(ASSIGNMENT, path, "{tier}"),
-                input,
-                audit,
-            )
-        }
-        "model_assignment.delete" => {
-            require_empty_body(store, audit, "model_assignment", path, &body)?;
-            crate::model_assignments::delete_assignment_audited(
-                store,
-                &path_param(ASSIGNMENT, path, "{source}"),
-                &path_param(ASSIGNMENT, path, "{tier}"),
-                audit,
-            )
-        }
-        "model_assignment.preview" => {
-            let input = serde_json::from_value(body).map_err(decode)?;
-            let impact = crate::model_assignments::ImpactEnv::of(&env.api);
-            let outcome = crate::model_assignments::preview_impact(store, &impact, &input)
-                .and_then(|response| to_value(&response));
-            audit.record(store, "model_assignment", path, matched.action, outcome)
-        }
-        "model_role.replace" | "model_role.preview" => {
-            let input = serde_json::from_value(body).map_err(decode)?;
-            let impact = crate::model_assignments::ImpactEnv::of(&env.api);
-            crate::model_assignments::edit_role_audited(
-                store,
-                &impact,
-                &path_param(ROLE, path, "{tier}"),
-                input,
-                matched.action == "model_role.preview",
-                audit,
-            )
-        }
         "model_override.put" => {
             let input = decode_optional(body).map_err(decode)?;
-            let routing = env.api.inner.routing_catalog.as_ref().map(|r| r.view());
             audited(crate::model_catalog::put_override_op(
                 store,
-                routing.as_ref(),
                 &path_param(OVERRIDE, path, "{source}"),
                 &path_param(OVERRIDE, path, "{model_id}"),
                 input,
@@ -446,58 +331,24 @@ pub(crate) fn dispatch(
                 Some(audit),
             )?)
         }
-        "provider.create" | "provider.update" => {
-            refuse_inline_credentials(store, audit, path, &body)?;
-            let bytes =
-                serde_json::to_vec(&body).map_err(|e| ApiProblem::internal(e.to_string()))?;
-            let api = &env.api;
-            if matched.action == "provider.create" {
-                let input: crate::admin::ProviderCreateBody =
-                    crate::handlers::providers::provider_json(&bytes, false)
-                        .map_err(|p| audit.reject(store, "provider", path, p))?;
-                let id = input.id.clone();
-                audited(crate::cos::operations::file_op(
-                    store,
-                    Some(audit),
-                    "provider",
-                    &id,
-                    matched.action,
-                    || crate::handlers::providers::create_provider_op(api, input),
-                )?)
-            } else {
-                let id = matched.id.unwrap_or_default();
-                let input: crate::admin::ProviderPatchBody =
-                    crate::handlers::providers::provider_json(&bytes, true)
-                        .map_err(|p| audit.reject(store, "provider", &id, p))?;
-                audited(crate::cos::operations::file_op(
-                    store,
-                    Some(audit),
-                    "provider",
-                    &id,
-                    matched.action,
-                    || crate::handlers::providers::patch_provider_op(api, &id, input),
-                )?)
-            }
-        }
-        "provider.delete" => {
-            let id = matched.id.unwrap_or_default();
-            require_empty_body(store, audit, "provider", path, &body)?;
-            audited(crate::cos::operations::file_op(
-                store,
-                Some(audit),
-                "provider",
-                &id,
-                matched.action,
-                || {
-                    crate::handlers::providers::delete_provider_op(&env.api, &id)
-                        .map(|()| serde_json::json!({"id": id, "deleted": true}))
-                },
-            )?)
-        }
         "account.create" => {
             let input: crate::types::AccountCreateBody =
                 serde_json::from_value(body).map_err(decode)?;
             let id = input.id.clone();
+            let source = path_param(
+                "/api/v1/llm/sources/{source_id}/accounts",
+                path,
+                "{source_id}",
+            );
+            let adapter = super::super::super::handlers::accounts::pool_adapter(&source)
+                .ok_or_else(|| {
+                    audit.reject(
+                        store,
+                        "account",
+                        &id,
+                        ApiProblem::bad_request("source does not have a managed account pool"),
+                    )
+                })?;
             // ADR 2026-10-08 account-concurrency-limits §(d): a re-created account must not inherit
             // an old stored limit. The clear goes through the daemon (or the store), so it runs after
             // the audit transaction, and only when this request created the directory.
@@ -509,8 +360,9 @@ pub(crate) fn dispatch(
                 &id,
                 matched.action,
                 || {
-                    let view = crate::handlers::accounts::create_account_op(&env.api, &input)?;
-                    created.set(Some(view.adapter.clone()));
+                    let view =
+                        crate::handlers::accounts::create_account_op(&env.api, adapter, &input)?;
+                    created.set(Some(adapter.as_str().to_string()));
                     Ok(view)
                 },
             )?)?;
@@ -522,9 +374,49 @@ pub(crate) fn dispatch(
             Ok(op)
         }
         "account.limit_set" => {
-            // `/api/v1/accounts/{adapter}/{account}`: the first segment is the adapter (`{id}`).
-            let adapter = matched.id.unwrap_or_default();
-            let account = path.rsplit('/').next().unwrap_or_default().to_string();
+            let source = path_param(
+                "/api/v1/llm/sources/{source_id}/accounts/{account_id}",
+                path,
+                "{source_id}",
+            );
+            let account = path_param(
+                "/api/v1/llm/sources/{source_id}/accounts/{account_id}",
+                path,
+                "{account_id}",
+            );
+            let adapter = if let Some(a) =
+                super::super::super::handlers::accounts::pool_adapter(&source)
+            {
+                if !env.api.inner.accounts_roots.contains_key(&a) {
+                    return Err(audit.reject(
+                        store,
+                        "account",
+                        &source,
+                        ApiProblem::account_not_found(&source),
+                    ));
+                }
+                a.as_str().to_string()
+            } else if super::super::super::handlers::accounts::is_implicit_source(&env.api, &source)
+            {
+                "implicit".to_string()
+            } else {
+                return Err(audit.reject(
+                    store,
+                    "account",
+                    &source,
+                    ApiProblem::account_not_found(&source),
+                ));
+            };
+            let account = if adapter == "implicit" && account != source {
+                return Err(audit.reject(
+                    store,
+                    "account",
+                    &account,
+                    ApiProblem::account_not_found(&account),
+                ));
+            } else {
+                account
+            };
             let api = &env.api;
             external(store, audit, ("account", &account), matched.action, || {
                 block_on(crate::handlers::accounts::set_account_limit_effect(
@@ -533,9 +425,20 @@ pub(crate) fn dispatch(
             })
         }
         "account.delete" | "account.check" => {
-            let id = matched.id.unwrap_or_default();
-            let adapter =
-                account_adapter(body).map_err(|p| audit.reject(store, "account", &id, p))?;
+            let template = "/api/v1/llm/sources/{source_id}/accounts/{account_id}";
+            let source = path_param(template, path, "{source_id}");
+            let id = path_param(template, path, "{account_id}");
+            let adapter = super::super::super::handlers::accounts::resolve_pool_account(
+                &env.api,
+                &source,
+                &id,
+                if matched.action == "account.delete" {
+                    "deleted"
+                } else {
+                    "checked"
+                },
+            )
+            .map_err(|p| audit.reject(store, "account", &id, p))?;
             let api = &env.api;
             if matched.action == "account.delete" {
                 external(store, audit, ("account", &id), matched.action, || {
@@ -549,15 +452,6 @@ pub(crate) fn dispatch(
                     ))
                 })
             }
-        }
-        "provider.check" => {
-            let id = matched.id.unwrap_or_default();
-            require_empty_body(store, audit, "provider", path, &body)?;
-            external(store, audit, ("provider", &id), matched.action, || {
-                block_on(crate::handlers::providers::check_provider_effect(
-                    &env.api, &id,
-                ))
-            })
         }
         "model_catalog.discover" => {
             let input: crate::model_catalog::DiscoverBody =
@@ -580,7 +474,7 @@ pub(crate) fn dispatch(
         "daemon.reload" => {
             require_empty_body(store, audit, "daemon", path, &body)?;
             external(store, audit, ("daemon", "reload"), matched.action, || {
-                block_on(crate::handlers::providers::reload_effect(&env.api))
+                block_on(crate::handlers::reload::reload_effect(&env.api))
             })
         }
         "daemon.replay" => {

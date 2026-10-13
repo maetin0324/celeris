@@ -27,7 +27,7 @@ impl Dispatcher {
             && outcome.reviewer_run.as_ref().map(|r| r.run_id.as_str())
                 != Some(provisioned.as_str())
         {
-            if let Some(provider) = e.provider.clone() {
+            if let Some(provider) = e.route.as_ref().map(|(source, _)| source.to_string()) {
                 let (account, account_adapter) = (e.account.clone(), e.account_adapter);
                 self.release_quota_if_tracked(
                     &provisioned,
@@ -66,20 +66,24 @@ impl Dispatcher {
         // 見積もる（対象タスクが消えた・stale でも `QuotaActivity` を閉じるため、分岐より前）。
         // Reviewer run を起こさなかったレビュー（command 等だけ）には作らない。
         let reviewer_quota = match (&completed_review_run, entry.as_ref()) {
-            (Some(review_run_id), Some(e)) => e.provider.clone().map(|provider| {
-                let model = self.started_model_of(task_id, review_run_id);
-                let usage = worker_finished_usage(&reviewer_finished);
-                self.resolve_quota_estimate(
-                    task_id,
-                    review_run_id,
-                    None,
-                    e.account.as_deref(),
-                    e.account_adapter,
-                    &provider,
-                    &model,
-                    usage.as_ref(),
-                )
-            }),
+            (Some(review_run_id), Some(e)) => e
+                .route
+                .as_ref()
+                .map(|(source, _)| source.to_string())
+                .map(|provider| {
+                    let model = self.started_model_of(task_id, review_run_id);
+                    let usage = worker_finished_usage(&reviewer_finished);
+                    self.resolve_quota_estimate(
+                        task_id,
+                        review_run_id,
+                        None,
+                        e.account.as_deref(),
+                        e.account_adapter,
+                        &provider,
+                        &model,
+                        usage.as_ref(),
+                    )
+                }),
             _ => None,
         };
         let Some(task) = self.store.get(task_id)? else {
@@ -170,14 +174,12 @@ impl Dispatcher {
             if let Some(classified) = pf.outcome.clone() {
                 let review_account = entry.as_ref().and_then(|e| e.account.clone());
                 let review_account_adapter = entry.as_ref().and_then(|e| e.account_adapter);
-                if let Some(provider) = entry.as_ref().and_then(|e| e.provider.clone()) {
-                    // ADR-0024 D4: プール経由の Reviewer run の失敗もプロバイダを cooldown にせず、アカウントに向ける。
-                    let policy_outcome = if review_account.is_some() {
-                        ProviderOutcome::Ok
-                    } else {
-                        classified.clone()
-                    };
-                    self.policy.report(provider.clone(), &policy_outcome);
+                // ADR 2026-10-11: 供給側の失敗は reviewer run の `(source, account)` に向ける（OAuth 型
+                // source は account の台帳、API 型 source は source を記した throttled の記録）。
+                if let Some(source) = entry
+                    .as_ref()
+                    .and_then(|e| e.route.as_ref().map(|(source, _)| source.to_string()))
+                {
                     match (&review_account, review_account_adapter) {
                         (Some(acct), Some(adapter)) => self.record_account_failure(
                             adapter,
@@ -185,15 +187,11 @@ impl Dispatcher {
                             cooldown_reason_name(&classified),
                             &classified,
                         ),
-                        _ => {
-                            if let Some(ev) = self.provider_throttled_event(
-                                &provider,
-                                &classified,
-                                cooldown_reason_name(&classified),
-                            ) {
-                                throttled_events.push(ev);
-                            }
-                        }
+                        _ => throttled_events.push(self.record_source_failure(
+                            &source,
+                            cooldown_reason_name(&classified),
+                            &classified,
+                        )),
                     }
                 }
             }

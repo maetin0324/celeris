@@ -5,7 +5,7 @@ use axum::http::{HeaderMap, StatusCode};
 use task_core::{EventRow, SqliteStore, StoreError, Task, TaskId, TaskStore};
 
 use crate::files::{self, FileRequest, FileTarget, RunFile};
-use crate::problem::{ApiProblem, store_problem};
+use crate::problem::{ApiProblem, ops_problem, store_problem};
 use crate::query::{QueryParams, event_type_name, parse_task_id};
 use crate::state::ApiState;
 use crate::types::{ArtifactList, EventsPage, RunList, WorkUnitCheckLog};
@@ -154,8 +154,13 @@ pub(super) async fn task_runs(
                 .event_rows_for(id, None, usize::MAX)
                 .map_err(store_problem)?;
             let mut runs = task_ops::view::runs(&rows);
+            let selections = task_ops::view::run_selections(store, id)
+                .map_err(|e| ops_problem(store, e, None))?;
             for run in &mut runs {
                 run.files = Some(files::run_files(&task, &root, &run.run_id));
+                if let Some(selection) = selections.get(&run.run_id) {
+                    run.selection = selection.clone();
+                }
             }
             Ok(RunList { runs })
         })

@@ -132,8 +132,13 @@ async fn a_draining_instance_leaves_the_work_unit_checks_to_the_new_active() {
     assert_eq!(starts.len(), 2, "{starts:?}");
     assert!(starts.iter().all(|s| s.0 == run_id && s.2 == 2));
     assert_eq!((starts[0].1, starts[1].1), (0, 1));
+    // 2026-10-11 WU 検査ログの置き場所: `<workspace_root>/<task_id>/work-unit-checks/<key>`（作業ツリーの外）。
     assert!(
-        starts[1].4.contains("/work-unit-checks/a/"),
+        Path::new(&starts[1].4).starts_with(
+            root.path()
+                .join(task.id.to_string())
+                .join("work-unit-checks/a")
+        ),
         "{}",
         starts[1].4
     );

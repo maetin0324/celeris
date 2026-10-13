@@ -180,6 +180,7 @@ fn remote_task() -> Task {
     };
     let now = time::OffsetDateTime::now_utc();
     Task {
+        harness_id: None,
         requirements: Default::default(),
         tree: None,
         paused_at: None,
@@ -205,7 +206,6 @@ fn remote_task() -> Task {
         priority: 0,
         worker_hint: WorkerHint {
             tier: Tier::Standard,
-            adapter: None,
         },
         workspace: WorkspaceSpec::Remote {
             cluster: "sirius".into(),

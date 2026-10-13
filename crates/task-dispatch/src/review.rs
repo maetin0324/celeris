@@ -55,6 +55,8 @@ pub struct ReviewerRun {
     /// Skills mounted by the subject task's assignee for review (ADR-0122 D4).
     pub skills: Vec<task_worker::protocol::SkillMount>,
     pub adapter: Arc<dyn WorkerAdapter>,
+    /// 選ばれた harness・source・model・account（ADR 2026-10-11 llm-source-harness-selection）。
+    pub llm_route: task_worker::protocol::SelectedLlmRoute,
     pub run_id: String,
     pub limits: RunLimits,
     pub sink: Box<dyn EventSink>,
@@ -177,7 +179,6 @@ pub fn needs_reviewer_run(task: &Task) -> bool {
 pub fn reviewer_hint() -> WorkerHint {
     WorkerHint {
         tier: Tier::Standard,
-        adapter: None,
     }
 }
 
@@ -877,6 +878,7 @@ fn check_plan_file(
 pub fn synthetic_review_task(subject_task: &Task, run_id: &str, hint: &WorkerHint) -> Task {
     let now = time::OffsetDateTime::now_utc();
     Task {
+        harness_id: None,
         requirements: Default::default(),
         tree: None,
         paused_at: None,
@@ -1000,6 +1002,7 @@ async fn run_reviewer_inner(
         review_task.assignee = Some(node.id.clone());
     }
     let req = RunRequest {
+        llm_route: Some(run.llm_route.clone()),
         cargo_target_dir: run.cargo_target_dir.clone(),
         protocol: PROTOCOL_VERSION,
         task: review_task,

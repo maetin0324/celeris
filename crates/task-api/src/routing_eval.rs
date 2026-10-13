@@ -23,7 +23,7 @@ use axum::http::StatusCode;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use task_core::routing_eval_trial::{EvalTrial, EvalTrialSpec, EvalTrialStatus};
-use task_core::{LlmSourceRef, SqliteStore, StoreError, known_harness_ids};
+use task_core::{SqliteStore, StoreError, known_harness_ids};
 
 use crate::handlers::{ApiResult, Params, json_response, no_query, read_json};
 use crate::problem::{ApiProblem, store_problem};
@@ -191,18 +191,19 @@ pub(crate) fn routes() -> axum::Router<ApiState> {
 
 // ---- 検証（純粋関数） ----
 
-/// source id の比べ方（`claude-oauth` と `claude_oauth` は同じ）。
+/// source・harness id の比べ方（`claude-oauth` と `claude_oauth`、`claude-code` と `claude_code` は同じ）。
 fn normalize_source(id: &str) -> String {
     id.trim().to_ascii_lowercase().replace('-', "_")
 }
 
-/// daemon が知っている source/model/harness の id（設定・routing catalog・`[[genres]]` から作る写し）。
+/// daemon が知っている source/model/harness の id（`[llm_sources]`・`[harnesses]`・`[[genres]]` から作る写し）。
 /// 集合に無い id は未知として拒否する。設定されていない source/model/harness を黙って許可しない。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct KnownRouteIds {
     /// 正規化した source id（`normalize_source` 済み）。
     pub sources: BTreeSet<String>,
     pub models: BTreeSet<String>,
+    /// 正規化した harness id（`normalize_source` 済み）。
     pub harnesses: BTreeSet<String>,
 }
 
@@ -216,66 +217,25 @@ impl KnownRouteIds {
     }
 
     fn knows_harness(&self, id: &str) -> bool {
-        self.harnesses.contains(id)
+        self.harnesses.contains(&normalize_source(id))
     }
 }
 
-/// `ApiState`（設定の写し・routing catalog・`[[genres]]`）から照合用の id 集合を作る。
+/// `ApiState`（宣言された harness・LLM source とその model、`[[genres]]`）から照合用の id 集合を作る。
 pub(crate) fn known_route_ids(state: &ApiState) -> KnownRouteIds {
     let mut known = KnownRouteIds::default();
-    // source: 組み込みの LLM source と、設定の provider が解決した source。
-    for source in [
-        LlmSourceRef::Celeris,
-        LlmSourceRef::ClaudeOauth,
-        LlmSourceRef::CodexOauth,
-        LlmSourceRef::OpencodeGo,
-    ] {
-        known.sources.insert(normalize_source(source.as_str()));
-        known.sources.insert(normalize_source(&source.to_key()));
-    }
-    for provider in &state.inner.config_view.providers {
-        if let Some(resolved) = &provider.llm_source {
-            known
-                .sources
-                .insert(normalize_source(resolved.source.as_str()));
-            known
-                .sources
-                .insert(normalize_source(&resolved.source.to_key()));
+    if let Some(reader) = state.inner.harnesses.as_ref() {
+        for harness in reader.harnesses() {
+            known.harnesses.insert(normalize_source(&harness.id));
         }
-        // harness: provider の adapter はそのまま harness id。
-        if !provider.adapter.trim().is_empty() {
-            known.harnesses.insert(provider.adapter.clone());
-        }
-        // model: 実効モデルと lane ごとの束縛。
-        if let Some(model) = provider.model.as_deref() {
-            known.models.insert(model.to_string());
-        }
-        for binding in provider.tier_models.values() {
-            if !binding.name.trim().is_empty() {
-                known.models.insert(binding.name.clone());
-            }
-            if let Some(model_id) = binding.model_id.as_deref() {
-                known.models.insert(model_id.to_string());
-            }
+        for (source, models) in reader.source_models() {
+            known.sources.insert(normalize_source(&source));
+            known.models.extend(models);
         }
     }
     // harness: `[[genres]]`（= ハーネスの射影）と組み込み。genres が空なら空（検証しない）。
     for id in known_harness_ids(&state.inner.genres) {
-        known.harnesses.insert(id);
-    }
-    // catalog（daemon が llm-proxy の設定を持つときだけある）。
-    if let Some(reader) = state.inner.routing_catalog.as_ref() {
-        let view = reader.view();
-        for model in &view.models {
-            known.models.insert(model.id.clone());
-        }
-        for deployment in &view.deployments {
-            known
-                .sources
-                .insert(normalize_source(&deployment.source_ref));
-            known.models.insert(deployment.model_profile_id.clone());
-            known.models.insert(deployment.upstream_model.clone());
-        }
+        known.harnesses.insert(normalize_source(&id));
     }
     known
 }
@@ -505,7 +465,7 @@ mod tests {
         KnownRouteIds {
             sources: BTreeSet::from([normalize_source("claude_oauth")]),
             models: BTreeSet::from(["claude-opus-5-5".to_string()]),
-            harnesses: BTreeSet::from(["claude-code".to_string()]),
+            harnesses: BTreeSet::from([normalize_source("claude_code")]),
         }
     }
 

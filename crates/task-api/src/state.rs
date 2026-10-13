@@ -79,6 +79,8 @@ pub(crate) struct Inner {
     /// `None`。DB の絶対パス自体は `/health` に出さない（無認証のため。認証済みの `/config` が既に
     /// 返している）。
     pub(crate) db_mount: Option<task_core::mountinfo::MountInfo>,
+    /// 読み取り専用の view（`task_ops::routing_stage`）が別接続で開く DB の path。
+    pub(crate) db_path: std::path::PathBuf,
     pub(crate) view: ViewContext,
     pub(crate) config_view: ConfigView,
     /// ADR-0016 M3: `POST /tasks` の省略値を埋める `[[roles]]`。
@@ -88,8 +90,6 @@ pub(crate) struct Inner {
     /// Phase 30（ADR-0033 D4 追記）: 対話は常にこの分野で走る（ノードの `genre` は使わない）。
     pub(crate) conversation_genre: String,
     pub(crate) celeris_version: String,
-    pub(crate) providers_dir: Option<std::path::PathBuf>,
-    pub(crate) openai_compatible_source_ids: std::collections::HashSet<String>,
     pub(crate) admin_tx: Option<tokio::sync::mpsc::Sender<crate::admin::AdminRequest>>,
     pub(crate) accounts_roots: HashMap<AccountAdapter, std::path::PathBuf>,
     pub(crate) max_runs_per_account: usize,
@@ -101,8 +101,8 @@ pub(crate) struct Inner {
     pub(crate) memory_dir: Option<std::path::PathBuf>,
     /// ADR-0037 D2（Phase 39）: `[notify] discord_webhook_secret`。
     pub(crate) notify_secret_id: String,
-    /// ADR-0037 D3: `[notify] gui_base_url`。
-    pub(crate) notify_gui_base_url: Option<String>,
+    /// ADR-0037 D3: `[notify] web_base_url`。
+    pub(crate) notify_web_base_url: Option<String>,
     pub(crate) notify_inbox_batch_secs: u64,
     pub(crate) notify_inbox_reminder_secs: u64,
     pub(crate) notify_digest_interval_secs: u64,
@@ -110,6 +110,7 @@ pub(crate) struct Inner {
     /// ADR-0040 D6（Phase 48）: `[selfdeploy] releases_dir` を読む係（celeris が渡す）。`None` なら
     /// `GET /releases` は空、`POST /releases/{sha12}/promote` は 409。
     pub(crate) releases: Option<crate::releases::SharedReleaseSource>,
+    pub(crate) integration_releases_dir: Option<std::path::PathBuf>,
     /// ADR-0040 D4（Phase 47）: `GET /health` の `release` / `mode` と、管理 API の 503 に使う役割。
     pub(crate) release: String,
     pub(crate) mode: task_core::DaemonMode,
@@ -123,7 +124,7 @@ pub(crate) struct Inner {
     pub(crate) knowledge_root: Option<std::path::PathBuf>,
     /// ADR-0053 D4（Phase 65）: `GET /llm/sources`。`None` なら 409 `llm_proxy_unavailable`。
     pub(crate) llm_sources: Option<crate::llm_sources::SharedLlmSourcesReader>,
-    pub(crate) routing_catalog: Option<crate::routing_catalog::SharedRoutingCatalogReader>,
+    pub(crate) harnesses: Option<crate::harnesses::SharedHarnessesReader>,
     pub(crate) model_discovery: Option<crate::model_catalog::SharedModelDiscoveryHook>,
     pub(crate) account_stats: Mutex<crate::stats::AccountStatsState>,
     /// ADR-0079 D3 / D11（Phase R4a）: `[execution.tree]`（木の view の上限の使用率）。
@@ -170,14 +171,13 @@ impl ApiState {
             journal_mode,
             busy_timeout_ms: u64::try_from(settings.busy_timeout.as_millis()).unwrap_or(u64::MAX),
             db_mount,
+            db_path: settings.db_path.clone(),
             view: settings.view,
             config_view: settings.config_view,
             roles: settings.roles,
             genres: settings.genres,
             conversation_genre: settings.conversation_genre,
             celeris_version: settings.celeris_version,
-            providers_dir: settings.providers_dir,
-            openai_compatible_source_ids: settings.openai_compatible_source_ids,
             admin_tx: settings.admin_tx,
             accounts_roots: settings.accounts_roots,
             max_runs_per_account: settings.max_runs_per_account,
@@ -185,12 +185,13 @@ impl ApiState {
             secret_usage: settings.secret_usage,
             memory_dir: settings.memory_dir,
             notify_secret_id: settings.notify_secret_id,
-            notify_gui_base_url: settings.notify_gui_base_url,
+            notify_web_base_url: settings.notify_web_base_url,
             notify_inbox_batch_secs: settings.notify_inbox_batch_secs,
             notify_inbox_reminder_secs: settings.notify_inbox_reminder_secs,
             notify_digest_interval_secs: settings.notify_digest_interval_secs,
             notify_digest_max_lines: settings.notify_digest_max_lines,
             releases: settings.releases,
+            integration_releases_dir: settings.integration_releases_dir,
             release: settings.release,
             mode: settings.mode,
             role: settings.role,
@@ -201,7 +202,7 @@ impl ApiState {
                 .unwrap_or_else(task_ops::docs_maintenance::state_root),
             knowledge_root: settings.knowledge_root,
             llm_sources: settings.llm_sources,
-            routing_catalog: settings.routing_catalog,
+            harnesses: settings.harnesses,
             model_discovery: settings.model_discovery,
             tree_limits: settings.tree_limits,
             account_stats: Mutex::new(crate::stats::AccountStatsState::default()),
@@ -322,6 +323,14 @@ impl ApiState {
 
     pub(crate) fn snapshot(&self) -> Option<DaemonSnapshot> {
         self.inner.daemon.borrow().clone()
+    }
+
+    /// ADR 2026-10-11-task-wait-reasons D4: 最後の tick の dispatcher のメモリの見送り理由（古い snapshot は空）。
+    pub(crate) fn memory_waits(&self) -> task_ops::wait::MemoryWaits {
+        task_ops::wait::MemoryWaits::from_snapshot(
+            self.inner.daemon.borrow().as_ref(),
+            time::OffsetDateTime::now_utc(),
+        )
     }
 
     /// DB を使う同期処理を `spawn_blocking` で実行する。

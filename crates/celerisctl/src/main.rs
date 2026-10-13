@@ -25,6 +25,7 @@ use commands::execution::{
     self as execution_cmd, ExecutionCommand, ExecutionPlanCommand, PhaseGateActionArg, TreeCommand,
 };
 use commands::gate::{self, AnswerArgs, ApproveArgs, RejectArgs};
+use commands::integration::{self as integration_cmd, IntegrationCommand};
 use commands::knowledge::{self, KnowledgeCommand};
 use commands::mcp::{self, McpCommand};
 use commands::models::{self as models_cmd, ModelsCommand};
@@ -158,6 +159,14 @@ enum Command {
         #[command(subcommand)]
         command: ConfigCommand,
     },
+    /// 2026-10-11 stranded-done-branches: 取り残された task branch の取り込み状態（`list`）と人の処分
+    /// （`merge` / `discard` / `hold` / `reopen`）。daemon の HTTP API を admin token で呼ぶ。DB は開かない。
+    Integration {
+        #[command(subcommand)]
+        command: IntegrationCommand,
+        #[arg(long)]
+        config: Option<PathBuf>,
+    },
     /// ADR-0131 D5: cron jobs through the daemon API.
     Cron {
         #[command(subcommand)]
@@ -274,6 +283,7 @@ fn dispatch(store: &SqliteStore, db_path: &Path, command: Command) -> Result<Exi
         Command::ApiRequest(_) => unreachable!("handled before store open"),
         Command::DocsMaintenance { .. } => unreachable!("handled before store open"),
         Command::Cron { .. } => unreachable!("handled before store open"),
+        Command::Integration { .. } => unreachable!("handled before store open"),
         Command::Models { .. } => unreachable!("handled before store open"),
         Command::Curation { .. } => unreachable!("handled before store open"),
         Command::BuildCache { .. } => unreachable!("handled before store open"),
@@ -604,6 +614,15 @@ fn main() -> ExitCode {
             }
         };
     }
+    if let Command::Integration { command, config } = cli.command {
+        return match integration_cmd::run(config, command) {
+            Ok(code) => code,
+            Err(e) => {
+                eprintln!("error: {}", error::render(&e));
+                ExitCode::FAILURE
+            }
+        };
+    }
     if let Command::Models { command, config } = cli.command {
         return match models_cmd::run(config, command) {
             Ok(code) => code,
@@ -624,8 +643,9 @@ fn main() -> ExitCode {
         };
     }
     // ADR-0069 Phase 118 D3: `routing show` も設定ファイルしか読まない（DB を開かない）。
-    // `routing export` は明示の `--db` だけを task-ops の読み取り専用接続で開く
-    // （`CELERIS_DB` 等の既定は解決しない。store も開かない＝migration しない）。
+    // `routing export`・`routing stage list` は明示の `--db` だけを task-ops の読み取り専用接続で開く
+    // （`CELERIS_DB` 等の既定は解決しない。store も開かない＝migration しない）。人の段階変更
+    // `routing stage set` と `routing evidence` も明示の `--db` だけを store で開く（ADR 2026-10-11 D3）。
     if let Command::Routing { command } = cli.command {
         return match routing_cmd::run(cli.db.as_deref(), command) {
             Ok(code) => code,
@@ -891,27 +911,6 @@ mod cos_mapping_tests {
             ("POST", "/api/v1/llm/models/discover")
         );
         assert_eq!(body, serde_json::json!({"source": "opencode-go"}));
-        let (method, path, body) = cos_mapped(&parse(&[
-            "models",
-            "assign",
-            "opencode-go",
-            "cheap",
-            "glm-5",
-        ]))
-        .expect("map")
-        .expect("mapped");
-        assert_eq!(
-            (method, path.as_str()),
-            ("PUT", "/api/v1/llm/models/assignments/opencode-go/cheap")
-        );
-        assert_eq!(body["model_id"], "glm-5");
-        let (method, path, _) = cos_mapped(&parse(&["models", "unassign", "opencode-go", "cheap"]))
-            .expect("map")
-            .expect("mapped");
-        assert_eq!(
-            (method, path.as_str()),
-            ("DELETE", "/api/v1/llm/models/assignments/opencode-go/cheap")
-        );
         assert!(
             cos_mapped(&parse(&["models", "list"]))
                 .expect("map")
@@ -1039,16 +1038,6 @@ mod cos_mapping_tests {
                 vec!["models", "discover", "--source", "opencode-go"],
                 "POST",
                 "/api/v1/llm/models/discover".into(),
-            ),
-            (
-                vec!["models", "assign", "opencode-go", "cheap", "glm-5"],
-                "PUT",
-                "/api/v1/llm/models/assignments/opencode-go/cheap".into(),
-            ),
-            (
-                vec!["models", "unassign", "opencode-go", "cheap"],
-                "DELETE",
-                "/api/v1/llm/models/assignments/opencode-go/cheap".into(),
             ),
             (vec!["replay"], "POST", "/api/v1/replay".into()),
         ];

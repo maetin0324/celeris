@@ -83,7 +83,6 @@ pub enum Tier {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct WorkerHint {
     pub tier: Tier,
-    pub adapter: Option<String>,
 }
 
 /// ADR-0041 D1: ローカルの作業場所の使い方。並列のタスクが同じ作業ツリーで `git checkout` して
@@ -447,6 +446,8 @@ pub fn priority_label(priority: i32) -> &'static str {
 /// DESIGN §4.1 の `Task`。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Task {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harness_id: Option<crate::llm_route::HarnessId>,
     /// Per-task browser permissions. Absent for tasks created before this policy.
     #[serde(default, skip_serializing_if = "TaskRequirements::is_empty")]
     pub requirements: TaskRequirements,
@@ -643,7 +644,7 @@ pub struct RoleSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tier: Option<Tier>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub adapter: Option<String>,
+    pub harness: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_turns: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -717,7 +718,7 @@ impl GenreSpec {
     /// （`default_role` の役割の `adapter`）。`default_role` が無い・役割が無い・アダプタ指定が無ければ `None`。
     pub fn harness_adapter<'a>(&self, roles: &'a [RoleSpec]) -> Option<&'a str> {
         let default_role = self.default_role.as_deref()?;
-        RoleSpec::find(roles, default_role)?.adapter.as_deref()
+        RoleSpec::find(roles, default_role)?.harness.as_deref()
     }
 
     /// Phase 38（ADR-0028 追記）: 「ハーネス系の分野」か（決定的。`default_role` のアダプタが
@@ -1035,6 +1036,62 @@ pub struct TargetSweepSkip {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Event {
+    /// ADR 2026-10-11 stranded branches: durable integration state changed.
+    IntegrationDetected {
+        repo_id: crate::RepoId,
+        branch: String,
+        head_sha: String,
+        reason: Option<String>,
+        actor: String,
+    },
+    IntegrationMerged {
+        repo_id: crate::RepoId,
+        branch: String,
+        head_sha: String,
+        actor: String,
+    },
+    IntegrationDiscarded {
+        repo_id: crate::RepoId,
+        branch: String,
+        head_sha: String,
+        reason: String,
+        actor: String,
+    },
+    IntegrationHeld {
+        repo_id: crate::RepoId,
+        branch: String,
+        head_sha: String,
+        reason: String,
+        actor: String,
+    },
+    IntegrationReopened {
+        repo_id: crate::RepoId,
+        branch: String,
+        head_sha: String,
+        reason: Option<String>,
+        actor: String,
+    },
+    /// ADR 2026-10-11 stranded-done-branches F2: 遠隔 repo など sweep の対象外になった（`not_applicable`）。
+    IntegrationNotApplicable {
+        repo_id: crate::RepoId,
+        branch: String,
+        head_sha: String,
+        reason: String,
+        actor: String,
+    },
+    HarnessSelected {
+        harness_id: String,
+    },
+    LlmRouteSelected {
+        source_id: String,
+        model_id: String,
+        account_id: String,
+        metadata: serde_json::Value,
+    },
+    HarnessMigrationUnresolved {
+        task_id: String,
+        original_value: String,
+    },
     /// CoS operation attempt, including rejected attempts. The envelope is immutable.
     CosOperation {
         actor: String,
@@ -1367,6 +1424,16 @@ pub enum Event {
         run_id: String,
         record: Box<crate::model_policy::RoutingRecord>,
     },
+    /// Selector stage transition, recorded with its persisted projection.
+    RoutingStageChanged {
+        genre: String,
+        harness_id: String,
+        from: Option<String>,
+        to: String,
+        reason: String,
+        window: serde_json::Value,
+        actor: String,
+    },
     /// 2026-10-04 多目的 routing ADR §6（Phase 3）: 決定 1 件の特徴 snapshot（本文・secret なし）。wire は
     /// `decision_id, context_version, features, provenance, missing_fields` が event の欄に平たく並ぶ。
     /// 状態は変えない（`replay` は無視する）。
@@ -1391,7 +1458,7 @@ pub enum Event {
     /// 状態は変えない（`replay` は無視する）。
     RoutingShadowRecorded {
         #[serde(flatten)]
-        record: Box<crate::model_router::shadow::ShadowRecord>,
+        record: Box<crate::routing_shadow_history::ShadowRecord>,
     },
     /// ADR-0072 D5/D8（Phase E1）: run 終了時に daemon が確定させた checkpoint（worker の申告 +
     /// mechanical の合成）。状態は変えない（`replay` の attempts 計算は無視する）。
@@ -2014,7 +2081,7 @@ mod tests {
     fn a_genre_is_a_harness_genre_when_its_default_role_runs_paperqa_or_ldr() {
         let paperqa = vec![RoleSpec {
             id: "literature-reader".into(),
-            adapter: Some("paperqa".into()),
+            harness: Some("paperqa".into()),
             ..RoleSpec::default()
         }];
         assert_eq!(literature().harness_adapter(&paperqa), Some("paperqa"));
@@ -2022,7 +2089,7 @@ mod tests {
 
         let ldr = vec![RoleSpec {
             id: "literature-reader".into(),
-            adapter: Some("local-deep-research".into()),
+            harness: Some("local-deep-research".into()),
             ..RoleSpec::default()
         }];
         assert!(literature().is_harness(&ldr));
@@ -2030,7 +2097,7 @@ mod tests {
         // claude-code / codex / acp / アダプタ指定なし / `default_role` なしはハーネス系でない。
         let coding = vec![RoleSpec {
             id: "literature-reader".into(),
-            adapter: Some("claude-code".into()),
+            harness: Some("claude-code".into()),
             ..RoleSpec::default()
         }];
         assert_eq!(literature().harness_adapter(&coding), Some("claude-code"));

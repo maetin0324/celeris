@@ -13,9 +13,39 @@ use task_core::routing_eval_trial::EvalTrialStatus;
 
 const BASE: &str = "/api/v1/routing-eval/trials";
 
-/// `repo` に実在のディレクトリ（tempdir）を使う 1 試行。既定の `TestEnv` は provider
-/// `claude-a`（adapter `claude-code`・model `claude-sonnet-5`・source `claude_oauth`）を持つので、
-/// この 3 つの id は「daemon が知っている」側に入る。
+/// 宣言された harness `claude_code` と LLM source `claude_oauth`（model `claude-sonnet-5`）。
+struct DeclaredRoutes;
+
+impl task_api::HarnessesReader for DeclaredRoutes {
+    fn harnesses(&self) -> Vec<task_api::types::HarnessView> {
+        vec![task_api::types::HarnessView {
+            id: "claude_code".into(),
+            kind: "cli".into(),
+            api_formats: vec!["anthropic".into()],
+            source_kinds: vec!["claude_oauth".into()],
+            capabilities: vec!["repo".into()],
+            rules: vec![],
+            execution_class_defaults: vec![],
+            route_defaults: vec![],
+        }]
+    }
+
+    fn source_models(&self) -> Vec<(String, Vec<String>)> {
+        vec![("claude_oauth".into(), vec!["claude-sonnet-5".into()])]
+    }
+}
+
+/// 宣言（`DeclaredRoutes`）を持つ daemon の API。
+fn env_with_routes() -> TestEnv {
+    TestEnv::with(EnvOptions {
+        harnesses: Some(std::sync::Arc::new(DeclaredRoutes)),
+        ..Default::default()
+    })
+}
+
+/// `repo` に実在のディレクトリ（tempdir）を使う 1 試行。`env_with_routes` の daemon は harness
+/// `claude_code`・source `claude_oauth`（model `claude-sonnet-5`）を宣言しているので、`-` で書いた
+/// この 3 つの id も「daemon が知っている」側に入る。
 fn trial(problem: &str, trial_no: u32, repo: &str) -> Value {
     json!({
         "problem_id": problem,
@@ -57,7 +87,7 @@ fn cancel(path_id: &str) -> axum::http::Request<axum::body::Body> {
 
 #[tokio::test]
 async fn post_creates_a_batch_and_keeps_the_check_command_server_side() {
-    let env = TestEnv::new();
+    let env = env_with_routes();
     let app = env.router();
     let repo = env.dir.path().to_str().expect("utf-8 path").to_string();
 
@@ -116,7 +146,7 @@ async fn post_creates_a_batch_and_keeps_the_check_command_server_side() {
 
 #[tokio::test]
 async fn reposting_the_same_trials_is_idempotent() {
-    let env = TestEnv::new();
+    let env = env_with_routes();
     let app = env.router();
     let repo = env.dir.path().to_str().expect("utf-8 path").to_string();
 
@@ -159,7 +189,7 @@ async fn reposting_the_same_trials_is_idempotent() {
 
 #[tokio::test]
 async fn post_rejects_empty_unknown_route_and_missing_repo_with_400() {
-    let env = TestEnv::new();
+    let env = env_with_routes();
     let app = env.router();
     let repo = env.dir.path().to_str().expect("utf-8 path").to_string();
 
@@ -247,7 +277,7 @@ async fn post_rejects_empty_unknown_route_and_missing_repo_with_400() {
 
 #[tokio::test]
 async fn list_filters_by_batch_and_status() {
-    let env = TestEnv::new();
+    let env = env_with_routes();
     let app = env.router();
     let repo = env.dir.path().to_str().expect("utf-8 path").to_string();
     let first = post_batch(&app, "sha-a", &repo).await;
@@ -296,7 +326,7 @@ async fn list_filters_by_batch_and_status() {
 
 #[tokio::test]
 async fn cancel_moves_a_queued_trial_and_conflicts_afterwards() {
-    let env = TestEnv::new();
+    let env = env_with_routes();
     let app = env.router();
     let repo = env.dir.path().to_str().expect("utf-8 path").to_string();
     let created = post_batch(&app, "sha-cancel", &repo).await;

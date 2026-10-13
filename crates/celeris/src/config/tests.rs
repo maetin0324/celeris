@@ -1,150 +1,122 @@
 use super::*;
 
 #[test]
-fn provider_kind_legacy_production_inference_warnings_and_cheap_tier() {
-    use task_core::{LlmSourceRef as Source, SourceOrigin, Tier};
-    let fixture = include_str!("fixtures/provider_kind_legacy_production.toml");
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("config.toml");
-    std::fs::write(&path, fixture).unwrap();
-    let cfg = Config::load(&path).unwrap();
-    for (id, expected) in [
-        ("opencode-qwen", Source::OpenaiCompatible("qwen".into())),
-        ("ldr-qwen", Source::Celeris),
-        ("paperqa-qwen", Source::Celeris),
-        ("langmem-main", Source::Celeris),
-        ("claude-pool", Source::ClaudeOauth),
-        ("codex-pool", Source::CodexOauth),
-        ("unclassified-tool", Source::Unknown),
+fn legacy_providers_rejected_with_new_config_guidance() {
+    for legacy in [
+        "[[providers]]\nid = 'old'\nadapter = 'fake'\n",
+        "providers_include = 'providers.d/*.toml'\n",
+        "[providers.d]\ninclude = 'providers.d/*.toml'\n",
+        "[[providers]]\nid = 'old'\nadapter = 'fake'\nproviders_include = 'providers.d/*.toml'\n",
     ] {
-        let resolved = cfg.provider_llm_source(id).unwrap();
-        assert_eq!(resolved.source, expected, "{id}");
-        assert_eq!(resolved.origin, SourceOrigin::Derived, "{id}");
+        let err = Config::parse_with_delivery(legacy).unwrap_err().to_string();
+        assert!(err.contains("[llm_sources.<id>]"), "{legacy}: {err}");
+        assert!(err.contains("[harnesses.<id>]"), "{legacy}: {err}");
+    }
+}
+
+#[test]
+fn planner_adapter_is_rejected_with_candidate_guidance() {
+    for legacy in [
+        "[execution.planner]\nadapter = 'claude-code'\n",
+        "[execution.planner]\nadapter = 'codex'\nmax_turns = 10\n",
+    ] {
+        let err = Config::parse_with_delivery(legacy).unwrap_err().to_string();
+        assert!(
+            err.contains("[execution.planner] adapter"),
+            "{legacy}: {err}"
+        );
+        assert!(
+            err.contains("[harness_selection.execution_class_defaults]"),
+            "{legacy}: {err}"
+        );
+    }
+}
+
+#[test]
+fn planner_without_adapter_keeps_its_budget_and_permission_settings() {
+    let cfg = Config::parse_with_delivery("[execution.planner]\nmax_turns = 10\n").unwrap();
+    assert_eq!(cfg.execution.planner.max_turns, 10);
+    assert_eq!(cfg.execution.planner.permission_mode, "bypassPermissions");
+}
+
+#[test]
+fn migration_runbook_toml_loads() {
+    let runbook = include_str!("../../../../docs/ops/provider-llm-source-migration.md");
+    let progress =
+        include_str!("../../../../agent-docs/progress/2026-10-11-provider-layer-redesign.md");
+    let start = "<!-- migration-runbook-toml:start -->";
+    let end = "<!-- migration-runbook-toml:end -->";
+    let toml = runbook
+        .split_once(start)
+        .and_then(|(_, tail)| tail.split_once(end))
+        .map(|(toml, _)| {
+            toml.trim()
+                .trim_start_matches("```toml")
+                .trim_end_matches("```")
+        })
+        .expect("migration runbook TOML markers");
+    assert!(
+        progress.contains(toml),
+        "progress TOML matches runbook TOML"
+    );
+    let cfg = Config::parse_with_delivery(toml).expect("runbook config parses");
+    let registry = cfg.llm_route_registry().expect("routes validate");
+
+    for (harness, source, model) in [
+        ("claude_code", "claude_oauth", "claude-opus-5-5"),
+        ("codex", "codex_oauth", "gpt-6.1-sol"),
+        ("pi", "opencode_go", "opencode-go/grok-4.6"),
+        ("opencode", "qwen", "qwen3.8-27b"),
+        ("local-deep-research", "qwen", "qwen3.8-27b"),
+        ("paperqa", "qwen", "qwen3.8-27b"),
+        ("langmem", "qwen", "qwen3.8-27b"),
+    ] {
         assert_eq!(
-            cfg.provider_kind(id),
-            Some(task_core::ProviderKind::Adapter)
+            registry.route_defaults[&task_core::llm_route::HarnessId::from(harness)][0]
+                .source
+                .0,
+            source,
+            "{harness} source"
+        );
+        assert_eq!(
+            registry.route_defaults[&task_core::llm_route::HarnessId::from(harness)][0]
+                .model
+                .0,
+            model,
+            "{harness} first model"
         );
     }
     assert_eq!(
-        cfg.provider_specs()
+        registry.harness_selection.execution_class_defaults
+            [&task_core::llm_route::ExecutionClass::from("planner")]
             .iter()
-            .find(|p| p.id == "opencode-qwen")
-            .unwrap()
-            .tiers,
-        vec![Tier::Cheap]
+            .map(|id| id.0.as_str())
+            .collect::<Vec<_>>(),
+        ["claude_code", "codex"]
     );
     assert_eq!(
-        cfg.providers
+        registry.harness_selection.execution_class_defaults
+            [&task_core::llm_route::ExecutionClass::from("coding")]
             .iter()
-            .find(|p| p.id == "opencode-qwen")
-            .unwrap()
-            .tiers
+            .map(|id| id.0.as_str())
+            .collect::<Vec<_>>(),
+        ["claude_code", "codex"]
+    );
+    assert_eq!(registry.cos_route_candidates[0].model.0, "claude-opus-5-5");
+    assert_eq!(registry.cos_route_candidates[1].model.0, "gpt-6-astra");
+    assert_eq!(registry.cos_route_candidates[1].source.0, "codex_oauth");
+    assert_eq!(
+        registry.route_defaults[&task_core::llm_route::HarnessId::from("paperqa")].len(),
+        3
+    );
+    assert_eq!(
+        registry.route_defaults[&task_core::llm_route::HarnessId::from("local-deep-research")]
             .len(),
         3
     );
-    let warnings = cfg.provider_kind_warnings();
-    for code in [
-        "deprecated_qwen_provider_id",
-        "direct_qwen_model",
-        "unknown_llm_source",
-        "qwen_fixed_acp_noncheap_tier",
-    ] {
-        assert!(
-            warnings.iter().any(|warning| warning.starts_with(code)),
-            "{code}"
-        );
-    }
-    assert!(!warnings.join(" ").contains("fixture-secret-sentinel"));
-    assert!(!warnings.join(" ").contains("/fixture/qwen.json"));
-}
-
-#[test]
-fn provider_kind_explicit_source_rejects_adapter_model_and_missing_reference() {
-    let head = "[[llm_proxy.sources.openai_compatible]]\nid = \"qwen\"\nbase_url = \"http://127.0.0.1:9/v1\"\n";
-    for row in [
-        "id = \"bad\"\nadapter = \"fake\"\nllm_source = \"celeris\"",
-        "id = \"bad\"\nadapter = \"acp\"\nmodel = \"celeris/cheap\"\nllm_source = \"codex_oauth\"",
-        "id = \"bad\"\nadapter = \"acp\"\nllm_source = \"celeris\"",
-        "id = \"bad\"\nadapter = \"claude-code\"\nmodel = \"celeris/cheap\"\nllm_source = \"claude_oauth\"",
-        "id = \"bad\"\nadapter = \"acp\"\nllm_source = \"unknown\"",
-        "id = \"bad\"\nadapter = \"acp\"\nllm_source = \"openai_compatible:missing\"",
-    ] {
-        let cfg: Config = toml::from_str(&format!("{head}\n[[providers]]\n{row}\n")).unwrap();
-        assert!(
-            matches!(cfg.validate(), Err(ConfigError::Invalid(_))),
-            "{row}"
-        );
-    }
-    let cfg: Config = toml::from_str(&format!("{head}\n[[providers]]\nid = \"ok\"\nadapter = \"acp\"\nkind = \"adapter\"\nllm_source = \"openai_compatible:qwen\"\n")).unwrap();
-    cfg.validate().unwrap();
-    let resolved = cfg.provider_llm_source("ok").unwrap();
-    assert_eq!(resolved.origin, task_core::SourceOrigin::Explicit);
     assert_eq!(
-        cfg.provider_kind("ok"),
-        Some(task_core::ProviderKind::Adapter)
-    );
-    assert_eq!(
-        serde_json::to_string(&resolved.source).unwrap(),
-        "\"openai_compatible:qwen\""
-    );
-}
-
-#[test]
-fn provider_kind_qwen_id_without_model_does_not_guess_source() {
-    let cfg: Config = toml::from_str("[[providers]]\nid = \"opencode-qwen\"\nadapter = \"acp\"\nenv = { OPENCODE_CONFIG = \"/fixture/private.json\" }\n").unwrap();
-    cfg.validate().unwrap();
-    assert_eq!(
-        cfg.provider_llm_source("opencode-qwen").unwrap().source,
-        task_core::LlmSourceRef::Unknown
-    );
-    assert_eq!(cfg.provider_specs()[0].tiers.len(), 3);
-    assert!(
-        cfg.provider_kind_warnings()
-            .iter()
-            .any(|warning| warning.starts_with("unknown_llm_source"))
-    );
-}
-
-#[test]
-fn provider_kind_qwen_direct_acp_without_opencode_config_is_cheap_only() {
-    use task_core::Tier;
-    let cfg: Config =
-        toml::from_str("[[providers]]\nid = \"direct\"\nadapter = \"acp\"\nmodel = \"qwen3\"\n")
-            .unwrap();
-    cfg.validate().unwrap();
-    assert_eq!(cfg.provider_specs()[0].tiers, vec![Tier::Cheap]);
-    assert!(
-        cfg.provider_kind_warnings()
-            .iter()
-            .any(|warning| warning.starts_with("qwen_fixed_acp_noncheap_tier"))
-    );
-}
-
-#[test]
-fn provider_kind_qwen_direct_acp_source_reference_is_cheap_only() {
-    use task_core::Tier;
-    let cfg: Config = toml::from_str("[[llm_proxy.sources.openai_compatible]]\nid = \"qwen\"\nbase_url = \"http://127.0.0.1:9/v1\"\n[[providers]]\nid = \"source\"\nadapter = \"acp\"\nllm_source = \"openai_compatible:qwen\"\n").unwrap();
-    cfg.validate().unwrap();
-    assert_eq!(cfg.provider_specs()[0].tiers, vec![Tier::Cheap]);
-    assert!(
-        cfg.provider_kind_warnings()
-            .iter()
-            .any(|warning| warning.starts_with("qwen_fixed_acp_noncheap_tier"))
-    );
-}
-
-#[test]
-fn provider_kind_qwen_direct_acp_proxy_model_keeps_all_tiers() {
-    let cfg: Config = toml::from_str(
-        "[[providers]]\nid = \"proxy\"\nadapter = \"acp\"\nmodel = \"celeris/cheap\"\nenv = { OPENCODE_CONFIG = \"/fixture/old-qwen.json\" }\n",
-    )
-    .unwrap();
-    cfg.validate().unwrap();
-    assert_eq!(cfg.provider_specs()[0].tiers.len(), 3);
-    assert!(
-        !cfg.provider_kind_warnings()
-            .iter()
-            .any(|warning| warning.starts_with("qwen_fixed_acp_noncheap_tier"))
+        registry.route_defaults[&task_core::llm_route::HarnessId::from("langmem")].len(),
+        3
     );
 }
 
@@ -251,9 +223,6 @@ use task_core::{AccountAdapter, DelegationLimits, OrgKind, Tier, WorkerHint};
 /// 互換の `[[genres]]`（`conversation` / `coding` / `literature` / `web-research` / `data-analysis` /
 /// `writing`）として定義する（`config/celeris.example.toml` の `[[harnesses]]` の互換の射影と同じ集合）。
 const ORG_TEST_GENRES: &str = r#"
-[[providers]]
-id = "x"
-adapter = "fake"
 
 [[roles]]
 id = "implementer"
@@ -421,7 +390,7 @@ fn loads_the_org_example_and_maps_it_to_org_nodes() {
 /// `[[genres]]` に無い分野・重複 id・秘書が 0 か 2・知らない親は設定エラー。
 #[test]
 fn rejects_org_seeds_that_do_not_form_one_tree() {
-    let base = "db = \"t.sqlite3\"\norg_include = \"org.toml\"\n[[providers]]\nid = \"x\"\nadapter = \"fake\"\n";
+    let base = "db = \"t.sqlite3\"\norg_include = \"org.toml\"\n";
     let load = |org: &str| -> Result<Config, ConfigError> {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("org.toml"), org).unwrap();
@@ -474,11 +443,15 @@ fn rejects_org_seeds_that_do_not_form_one_tree() {
 /// `org_include` を書かなければ種は空、書いたのにファイルが無ければ設定エラー。
 #[test]
 fn org_include_is_optional_but_must_exist_when_written() {
-    let cfg: Config = toml::from_str("[[providers]]\nid = \"x\"\nadapter = \"fake\"\n").unwrap();
+    let cfg: Config = toml::from_str("").unwrap();
     assert!(cfg.org.is_empty());
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.toml");
-    std::fs::write(&path, "db = \"t.sqlite3\"\norg_include = \"missing.toml\"\n[[providers]]\nid = \"x\"\nadapter = \"fake\"\n").unwrap();
+    std::fs::write(
+        &path,
+        "db = \"t.sqlite3\"\norg_include = \"missing.toml\"\n",
+    )
+    .unwrap();
     assert!(matches!(Config::load(&path), Err(ConfigError::Read { .. })));
 }
 
@@ -492,16 +465,15 @@ fn loads_example_config_and_resolves_relative_paths() {
     assert!(cfg.db.path.is_absolute());
     assert!(cfg.workspace_root.is_absolute());
     assert_eq!(cfg.max_concurrency, 2);
-    assert_eq!(cfg.providers[0].adapter, "fake");
+    assert!(cfg.llm_sources.contains_key("fake"));
     assert_eq!(cfg.tick(), Duration::from_millis(2000));
-    assert_eq!(cfg.provider_specs()[0].concurrency, Some(2));
     assert!(!cfg.plan.auto_accept);
     assert!(!cfg.dispatch_config().plan_auto_accept);
     cfg.validate().unwrap();
     // 監査 M-1（Phase 59 追記）: `[[harnesses]]`（互換の射影で `[[genres]]` になる）は
     // `config/org.example.toml` の課が使うもの全部が揃っている（`[[harnesses]]` の宣言順）。
     assert!(
-        cfg.roles.iter().all(|r| r.adapter.is_none()),
+        cfg.roles.iter().all(|r| r.harness.is_none()),
         "{:?}",
         cfg.roles
     );
@@ -536,7 +508,7 @@ fn loads_example_config_and_resolves_relative_paths() {
 fn db_accepts_both_the_bare_path_string_and_the_table_form() {
     // 何も書かなければ既定（`~/.local/celeris/celeris.sqlite3`、busy_timeout 5000ms、
     // checkpoint 30s、backup_dir 無し、backup_interval 3600s、backup_keep 48）。
-    let raw: Config = toml::from_str("[[providers]]\nid = \"x\"\nadapter = \"fake\"\n").unwrap();
+    let raw: Config = toml::from_str("").unwrap();
     assert_eq!(raw.db, DbConfig::default());
     assert_eq!(raw.db.busy_timeout_ms, 5000);
     assert_eq!(raw.db.checkpoint_interval_secs, 30);
@@ -548,9 +520,7 @@ fn db_accepts_both_the_bare_path_string_and_the_table_form() {
     assert_eq!(raw.db.backup_max_total_bytes, 64 * 1024 * 1024 * 1024);
 
     // 文字列（従来どおり）。
-    let raw: Config =
-        toml::from_str("db = \"local.sqlite3\"\n[[providers]]\nid = \"x\"\nadapter = \"fake\"\n")
-            .unwrap();
+    let raw: Config = toml::from_str("db = \"local.sqlite3\"\n").unwrap();
     assert_eq!(raw.db.path, PathBuf::from("local.sqlite3"));
     assert_eq!(raw.db.busy_timeout_ms, 5000, "still the default");
 
@@ -559,7 +529,7 @@ fn db_accepts_both_the_bare_path_string_and_the_table_form() {
         "[db]\npath = \"/var/lib/celeris/celeris.sqlite3\"\nbusy_timeout_ms = 15000\n\
              checkpoint_interval_secs = 10\nbackup_dir = \"/var/backups/celeris\"\n\
              backup_interval_secs = 900\nbackup_keep = 12\nbackup_daily_keep = 5\nbackup_weekly_keep = 3\nbackup_max_total_bytes = 123456\n\
-             [[providers]]\nid = \"x\"\nadapter = \"fake\"\n",
+             ",
     )
     .unwrap();
     assert_eq!(
@@ -581,10 +551,8 @@ fn db_accepts_both_the_bare_path_string_and_the_table_form() {
 
     // ADR-0095 D5: 既定（文字列の形も）は worker から読み取り専用。`false` は明示の opt-out。
     assert!(DbConfig::default().worker_read_only);
-    let raw: Config = toml::from_str(
-        "[db]\npath = \"x.sqlite3\"\nworker_read_only = false\n[[providers]]\nid = \"x\"\nadapter = \"fake\"\n",
-    )
-    .unwrap();
+    let raw: Config =
+        toml::from_str("[db]\npath = \"x.sqlite3\"\nworker_read_only = false\n").unwrap();
     assert!(!raw.db.worker_read_only);
 
     // 綴り間違いは `[db]` テーブルの中でも設定エラー（`deny_unknown_fields`。`Repr` が
@@ -592,7 +560,7 @@ fn db_accepts_both_the_bare_path_string_and_the_table_form() {
     assert!(
         toml::from_str::<Config>(
             "[db]\npath = \"x.sqlite3\"\nbusy_timeout_msx = 1\n\
-                 [[providers]]\nid = \"x\"\nadapter = \"fake\"\n",
+                 ",
         )
         .is_err()
     );
@@ -603,7 +571,7 @@ fn db_accepts_both_the_bare_path_string_and_the_table_form() {
     std::fs::write(
         &path,
         "[db]\npath = \"d.sqlite3\"\nbackup_dir = \"backups\"\n\
-             [[providers]]\nid = \"x\"\nadapter = \"fake\"\n",
+             ",
     )
     .unwrap();
     let cfg = Config::load(&path).unwrap();
@@ -624,10 +592,6 @@ workspace_root = "."
 enabled = true
 base_url = "http://127.0.0.1:18000/v1"
 
-[[providers]]
-id = "p1"
-adapter = "fake"
-tiers = ["cheap", "standard", "frontier"]
 "#;
     let write = |extra: &str| {
         let dir = tempfile::tempdir().unwrap();
@@ -762,6 +726,7 @@ fn routing_sample_task() -> task_core::Task {
     };
     let now = time::OffsetDateTime::now_utc();
     Task {
+        harness_id: None,
         requirements: Default::default(),
         tree: None,
         paused_at: None,
@@ -778,7 +743,6 @@ fn routing_sample_task() -> task_core::Task {
         priority: 10,
         worker_hint: WorkerHint {
             tier: Tier::Standard,
-            adapter: None,
         },
         workspace: WorkspaceSpec::local("/tmp"),
         repos: vec![],
@@ -810,9 +774,6 @@ fn plan_auto_accept_is_parsed_and_unknown_plan_keys_are_rejected() {
     let cfg: Config = toml::from_str(
         r#"[plan]
 auto_accept = true
-[[providers]]
-id = "x"
-adapter = "fake"
 "#,
     )
     .unwrap();
@@ -826,9 +787,7 @@ adapter = "fake"
 #[test]
 fn mcp_listeners_parse_and_validate_are_wired_into_config() {
     let cfg: Config = toml::from_str(
-        r#"[[providers]]
-id = "x"
-adapter = "fake"
+        r#"
 [[mcp.listeners]]
 listen = "127.0.0.1:18200"
 auth = "token"
@@ -844,9 +803,7 @@ client = "chatgpt"
     assert_eq!(cfg.mcp.resolve_listeners().unwrap().len(), 2);
 
     let bad: Config = toml::from_str(
-        r#"[[providers]]
-id = "x"
-adapter = "fake"
+        r#"
 [[mcp.listeners]]
 listen = "0.0.0.0:18201"
 auth = "none"
@@ -857,29 +814,15 @@ client = "chatgpt"
     assert!(matches!(bad.validate(), Err(ConfigError::Invalid(_))));
 }
 
-#[test]
-fn rejects_unknown_adapter_and_missing_providers() {
-    let cfg: Config = toml::from_str("").unwrap();
-    assert!(matches!(cfg.validate(), Err(ConfigError::Invalid(_))));
-    let cfg: Config =
-        toml::from_str("[[providers]]\nid = \"x\"\nadapter = \"bogus-adapter\"\n").unwrap();
-    let err = cfg.validate().unwrap_err().to_string();
-    assert!(err.contains("bogus-adapter"));
-    assert!(toml::from_str::<Config>("bogus = 1\n").is_err());
-}
-
 /// ADR-0051 Phase 106追記: `[selfdeploy] push` / `push_remote` の既定と検査。
 #[test]
 fn selfdeploy_push_defaults_to_true_and_origin_and_rejects_blank_remote() {
-    let cfg: Config = toml::from_str("[[providers]]\nid = \"x\"\nadapter = \"fake\"\n").unwrap();
+    let cfg: Config = toml::from_str("").unwrap();
     assert!(cfg.selfdeploy.push);
     assert_eq!(cfg.selfdeploy.push_remote, "origin");
     cfg.validate().unwrap();
 
-    let cfg: Config = toml::from_str(
-            "[[providers]]\nid = \"x\"\nadapter = \"fake\"\n[selfdeploy]\npush = false\npush_remote = \"\"\n",
-        )
-        .unwrap();
+    let cfg: Config = toml::from_str("[selfdeploy]\npush = false\npush_remote = \"\"\n").unwrap();
     assert!(!cfg.selfdeploy.push);
     let err = cfg.validate().unwrap_err().to_string();
     assert!(err.contains("push_remote"));
@@ -903,9 +846,7 @@ fn parses_worktree_sync_and_maps_it_to_the_worker_settings() {
     assert_eq!(specs["fern03"].auth, "publickey");
 
     let cfg: Config = toml::from_str(
-        r#"[[providers]]
-id = "x"
-adapter = "fake"
+        r#"
 [[clusters]]
 id = "pegasus"
 host = "pegasus"
@@ -942,9 +883,7 @@ worktree_paths = ["src", "Cargo.toml"]
 fn rejects_unknown_sync_modes_and_worktree_auto_removal() {
     let base = |extra: &str| {
         format!(
-            r#"[[providers]]
-id = "x"
-adapter = "fake"
+            r#"
 [[clusters]]
 id = "c"
 host = "h"
@@ -971,9 +910,7 @@ host = "h"
 fn cluster_auth_defaults_to_manual_and_only_three_values_are_accepted() {
     let base = |extra: &str| {
         format!(
-            r#"[[providers]]
-id = "x"
-adapter = "fake"
+            r#"
 [[clusters]]
 id = "c"
 host = "h"
@@ -1007,9 +944,7 @@ host = "h"
 fn cluster_control_persist_defaults_to_yes_and_accepts_only_yes_or_positive_seconds() {
     let base = |extra: &str| {
         format!(
-            r#"[[providers]]
-id = "x"
-adapter = "fake"
+            r#"
 [[clusters]]
 id = "c"
 host = "h"
@@ -1048,9 +983,7 @@ host = "h"
 fn cluster_job_wait_defaults_and_validation() {
     let base = |extra: &str| {
         format!(
-            r#"[[providers]]
-id = "x"
-adapter = "fake"
+            r#"
 [[clusters]]
 id = "sirius"
 host = "sirius"
@@ -1102,14 +1035,13 @@ fn loads_claude_code_dogfood_example_config() {
     ));
     let cfg = Config::load(path).unwrap();
     assert!(cfg.validate().is_ok());
-    assert_eq!(cfg.providers[0].adapter, "claude-code");
+    assert_eq!(cfg.harness_declarations["claude_code"].kind, "claude_code");
     assert_eq!(cfg.adapters.claude_code.command, "claude");
 }
 
 #[test]
 fn accepts_claude_code_adapter_with_default_config() {
-    let cfg: Config =
-        toml::from_str("[[providers]]\nid = \"x\"\nadapter = \"claude-code\"\n").unwrap();
+    let cfg: Config = toml::from_str("").unwrap();
     assert!(cfg.validate().is_ok());
     assert_eq!(cfg.adapters.claude_code.command, "claude");
     assert_eq!(
@@ -1120,7 +1052,7 @@ fn accepts_claude_code_adapter_with_default_config() {
 
 #[test]
 fn rejects_unknown_fields_in_claude_code_adapter_config() {
-    let text = "[[providers]]\nid = \"x\"\nadapter = \"claude-code\"\n\n[adapters.claude_code]\nbogus = 1\n";
+    let text = "\n[adapters.claude_code]\nbogus = 1\n";
     assert!(toml::from_str::<Config>(text).is_err());
 }
 
@@ -1132,13 +1064,13 @@ fn loads_codex_dogfood_example_config() {
     ));
     let cfg = Config::load(path).unwrap();
     assert!(cfg.validate().is_ok());
-    assert_eq!(cfg.providers[0].adapter, "codex");
+    assert_eq!(cfg.harness_declarations["codex"].kind, "codex");
     assert_eq!(cfg.adapters.codex.command, "codex");
 }
 
 #[test]
 fn accepts_codex_adapter_with_default_config() {
-    let cfg: Config = toml::from_str("[[providers]]\nid = \"x\"\nadapter = \"codex\"\n").unwrap();
+    let cfg: Config = toml::from_str("").unwrap();
     assert!(cfg.validate().is_ok());
     assert_eq!(cfg.adapters.codex.command, "codex");
     assert!(cfg.adapters.codex.model.is_none());
@@ -1147,7 +1079,7 @@ fn accepts_codex_adapter_with_default_config() {
 /// ADR-0026 D2: `[adapters.acp]` の既定値（opencode を素の状態で使う）。
 #[test]
 fn accepts_acp_adapter_with_default_config() {
-    let cfg: Config = toml::from_str("[[providers]]\nid = \"x\"\nadapter = \"acp\"\n").unwrap();
+    let cfg: Config = toml::from_str("").unwrap();
     assert!(cfg.validate().is_ok());
     assert_eq!(cfg.adapters.acp.command, "opencode");
     assert_eq!(cfg.adapters.acp.args, vec!["acp".to_string()]);
@@ -1158,13 +1090,11 @@ fn accepts_acp_adapter_with_default_config() {
     assert_eq!(cfg.adapters.acp.model_option_id, "model");
     assert_eq!(cfg.adapters.acp.startup_timeout_secs, 300);
     assert!(cfg.adapters.acp.env.is_empty());
-    assert!(cfg.providers[0].command.is_none());
-    assert!(cfg.providers[0].args.is_none());
 }
 
 #[test]
 fn rejects_unknown_fields_in_acp_adapter_config() {
-    let text = "[[providers]]\nid = \"x\"\nadapter = \"acp\"\n\n[adapters.acp]\nbogus = 1\n";
+    let text = "\n[adapters.acp]\nbogus = 1\n";
     assert!(toml::from_str::<Config>(text).is_err());
 }
 
@@ -1172,37 +1102,8 @@ fn rejects_unknown_fields_in_acp_adapter_config() {
 /// serde の enum 検証で拒否される）。
 #[test]
 fn rejects_unknown_acp_permission_value() {
-    let text =
-        "[[providers]]\nid = \"x\"\nadapter = \"acp\"\n\n[adapters.acp]\npermission = \"maybe\"\n";
+    let text = "\n[adapters.acp]\npermission = \"maybe\"\n";
     assert!(toml::from_str::<Config>(text).is_err());
-}
-
-/// ADR-0026 D2: `command`/`args` は `adapter = "acp"` の行だけで意味を持つ。行ごとに上書きできる。
-#[test]
-fn command_and_args_are_only_allowed_on_acp_providers_and_override_per_row() {
-    let cfg: Config =
-        toml::from_str("[[providers]]\nid = \"x\"\nadapter = \"fake\"\ncommand = \"whatever\"\n")
-            .unwrap();
-    let err = cfg.validate().unwrap_err().to_string();
-    assert!(
-        err.contains("command/args are only allowed when adapter"),
-        "{err}"
-    );
-
-    let cfg: Config =
-        toml::from_str("[[providers]]\nid = \"x\"\nadapter = \"codex\"\nargs = [\"x\"]\n").unwrap();
-    assert!(cfg.validate().is_err());
-
-    let cfg: Config = toml::from_str(
-        "[[providers]]\nid = \"x\"\nadapter = \"acp\"\ncommand = \"goose\"\nargs = [\"acp\"]\n",
-    )
-    .unwrap();
-    assert!(cfg.validate().is_ok());
-    assert_eq!(cfg.providers[0].command.as_deref(), Some("goose"));
-    assert_eq!(
-        cfg.providers[0].args.as_deref(),
-        Some(&["acp".to_string()][..])
-    );
 }
 
 /// ADR-0026 D6: 冷スタート用の例の設定ファイルが読め、Phase 15 の設定検証を通る。
@@ -1214,18 +1115,11 @@ fn loads_acp_opencode_example_config() {
     ));
     let cfg = Config::load(path).unwrap();
     assert!(cfg.validate().is_ok());
-    assert_eq!(cfg.providers[0].adapter, "acp");
+    assert_eq!(cfg.harness_declarations["opencode"].kind, "acp");
     assert_eq!(cfg.adapters.acp.command, "opencode");
     assert_eq!(
         cfg.adapters.acp.permission,
         task_worker::AcpPermission::Allow
-    );
-    assert_eq!(
-        cfg.providers[0]
-            .env
-            .get("OPENCODE_DISABLE_PROJECT_CONFIG")
-            .map(String::as_str),
-        Some("1")
     );
 }
 
@@ -1238,14 +1132,10 @@ fn loads_aider_example_config() {
     ));
     let cfg = Config::load(path).unwrap();
     assert!(cfg.validate().is_ok());
-    assert_eq!(cfg.providers[0].adapter, "aider");
-    assert_eq!(cfg.providers[0].model, "anthropic/claude-sonnet-5");
+    assert_eq!(cfg.harness_declarations["aider"].kind, "aider");
     assert_eq!(
-        cfg.providers[0]
-            .env
-            .get("ANTHROPIC_API_KEY")
-            .map(String::as_str),
-        Some("sk-ant-...")
+        cfg.llm_sources["anthropic_api"].models,
+        vec!["claude-sonnet-5-5"]
     );
 }
 
@@ -1253,7 +1143,7 @@ fn loads_aider_example_config() {
 /// `pqa` CLI ではない）。
 #[test]
 fn accepts_paperqa_adapter_with_default_config() {
-    let cfg: Config = toml::from_str("[[providers]]\nid = \"x\"\nadapter = \"paperqa\"\n").unwrap();
+    let cfg: Config = toml::from_str("").unwrap();
     assert!(cfg.validate().is_ok());
     assert_eq!(cfg.adapters.paperqa.command, "python");
     assert_eq!(cfg.adapters.paperqa.max_asks, 10);
@@ -1263,7 +1153,6 @@ fn accepts_paperqa_adapter_with_default_config() {
     assert!(cfg.adapters.paperqa.index_name.is_none());
     assert!(cfg.adapters.paperqa.extra_args.is_empty());
     assert!(cfg.adapters.paperqa.env.is_empty());
-    assert!(cfg.providers[0].settings.is_none());
     // ADR-0035 D1 / D3: 取得と証拠ゲートの既定値。
     assert_eq!(
         cfg.adapters.paperqa.acquire,
@@ -1290,7 +1179,7 @@ fn accepts_paperqa_adapter_with_default_config() {
 /// （`0` を書けばその項目を見ない・取得の段を行わない）。
 #[test]
 fn reads_paperqa_acquire_and_evidence_tables() {
-    let text = "[[providers]]\nid = \"x\"\nadapter = \"paperqa\"\n\n\
+    let text = "\n\
              [adapters.paperqa.acquire]\ncommand = \"/opt/pq/.venv/bin/python3\"\nmax_candidates = 40\n\
              max_pdfs = 4\nper_query = 10\ntimeout_secs = 60\nmailto = \"who@example.org\"\n\n\
              [adapters.paperqa.evidence]\nmin_candidates = 0\nmin_pdfs = 1\nmin_cited = 0\n";
@@ -1316,39 +1205,24 @@ fn reads_paperqa_acquire_and_evidence_tables() {
         }
     );
     // 部分指定でも残りは既定値。
-    let partial: Config = toml::from_str(
-            "[[providers]]\nid = \"x\"\nadapter = \"paperqa\"\n\n[adapters.paperqa.acquire]\nmax_pdfs = 2\n",
-        )
-        .unwrap();
+    let partial: Config = toml::from_str("\n[adapters.paperqa.acquire]\nmax_pdfs = 2\n").unwrap();
     assert_eq!(partial.adapters.paperqa.acquire.max_pdfs, 2);
     assert_eq!(partial.adapters.paperqa.acquire.max_candidates, 30);
     // 綴り間違いは設定エラー（deny_unknown_fields）。
-    assert!(
-            toml::from_str::<Config>(
-                "[[providers]]\nid = \"x\"\nadapter = \"paperqa\"\n\n[adapters.paperqa.acquire]\nmax_pdf = 2\n"
-            )
-            .is_err()
-        );
-    assert!(
-            toml::from_str::<Config>(
-                "[[providers]]\nid = \"x\"\nadapter = \"paperqa\"\n\n[adapters.paperqa.evidence]\nmin_pdf = 2\n"
-            )
-            .is_err()
-        );
+    assert!(toml::from_str::<Config>("\n[adapters.paperqa.acquire]\nmax_pdf = 2\n").is_err());
+    assert!(toml::from_str::<Config>("\n[adapters.paperqa.evidence]\nmin_pdf = 2\n").is_err());
 }
 
 #[test]
 fn rejects_unknown_fields_in_paperqa_adapter_config() {
-    let text =
-        "[[providers]]\nid = \"x\"\nadapter = \"paperqa\"\n\n[adapters.paperqa]\nbogus = 1\n";
+    let text = "\n[adapters.paperqa]\nbogus = 1\n";
     assert!(toml::from_str::<Config>(text).is_err());
 }
 
 /// ADR-0029 D1: `[adapters.local_deep_research]` の既定値（`python3` を素の状態で使う。mode 既定 quick）。
 #[test]
 fn accepts_local_deep_research_adapter_with_default_config() {
-    let cfg: Config =
-        toml::from_str("[[providers]]\nid = \"x\"\nadapter = \"local-deep-research\"\n").unwrap();
+    let cfg: Config = toml::from_str("").unwrap();
     assert!(cfg.validate().is_ok());
     assert_eq!(cfg.adapters.local_deep_research.command, "python3");
     assert_eq!(
@@ -1382,7 +1256,7 @@ fn accepts_local_deep_research_adapter_with_default_config() {
 
 #[test]
 fn rejects_unknown_fields_in_local_deep_research_adapter_config() {
-    let text = "[[providers]]\nid = \"x\"\nadapter = \"local-deep-research\"\n\n[adapters.local_deep_research]\nbogus = 1\n";
+    let text = "\n[adapters.local_deep_research]\nbogus = 1\n";
     assert!(toml::from_str::<Config>(text).is_err());
 }
 
@@ -1391,7 +1265,7 @@ fn rejects_unknown_fields_in_local_deep_research_adapter_config() {
 /// 側のテスト）。未知のキーは拒否する。
 #[test]
 fn reads_local_deep_research_evidence_thresholds() {
-    let text = "[[providers]]\nid = \"x\"\nadapter = \"local-deep-research\"\n\n\
+    let text = "\n\
              [adapters.local_deep_research.evidence]\n\
              min_search_results = 10\n\
              min_sources = 4\n\
@@ -1408,7 +1282,7 @@ fn reads_local_deep_research_evidence_thresholds() {
 
 #[test]
 fn rejects_unknown_fields_in_local_deep_research_evidence_table() {
-    let text = "[[providers]]\nid = \"x\"\nadapter = \"local-deep-research\"\n\n\
+    let text = "\n\
              [adapters.local_deep_research.evidence]\nbogus = 1\n";
     assert!(toml::from_str::<Config>(text).is_err());
 }
@@ -1427,9 +1301,7 @@ fn reads_local_deep_research_adapter_settings() {
              \"llm.provider\" = \"openai_endpoint\"\n\
              \"search.engine.web.searxng.default_params.engines\" = \"[\\\"bing\\\"]\"\n\
              \n\
-             [[providers]]\n\
-             id = \"ldr\"\n\
-             adapter = \"local-deep-research\"\n";
+             ";
     let cfg: Config = toml::from_str(text).unwrap();
     assert!(cfg.validate().is_ok());
     assert_eq!(
@@ -1471,46 +1343,6 @@ fn reads_local_deep_research_adapter_settings() {
     );
 }
 
-/// ADR-0029 D1: `local-deep-research` の行には `paperqa` 専用の `settings`（`ProviderConfig.settings`）を
-/// 書けない（`paperqa` の行だけで意味を持つフィールドのまま。LDR の設定は `[adapters.local_deep_research]`
-/// の table 側だけで持つ、という celeris 側の実装判断）。
-#[test]
-fn rejects_row_level_settings_field_for_local_deep_research_provider() {
-    let cfg: Config = toml::from_str(
-        "[[providers]]\nid = \"x\"\nadapter = \"local-deep-research\"\nsettings = \"whatever\"\n",
-    )
-    .unwrap();
-    let err = cfg.validate().unwrap_err().to_string();
-    assert!(
-        err.contains("settings is only allowed when adapter"),
-        "{err}"
-    );
-}
-
-/// ADR-0027 D3: `settings` は `adapter = "paperqa"` の行だけで意味を持つ。行ごとに上書きできる
-/// （`acp` の `command`/`args` と同じ作り）。
-#[test]
-fn settings_is_only_allowed_on_paperqa_providers_and_overrides_per_row() {
-    let cfg: Config =
-        toml::from_str("[[providers]]\nid = \"x\"\nadapter = \"fake\"\nsettings = \"whatever\"\n")
-            .unwrap();
-    let err = cfg.validate().unwrap_err().to_string();
-    assert!(
-        err.contains("settings is only allowed when adapter"),
-        "{err}"
-    );
-
-    let cfg: Config = toml::from_str(
-        "[[providers]]\nid = \"x\"\nadapter = \"paperqa\"\nsettings = \"/settings/other\"\n",
-    )
-    .unwrap();
-    assert!(cfg.validate().is_ok());
-    assert_eq!(
-        cfg.providers[0].settings.as_deref(),
-        Some("/settings/other")
-    );
-}
-
 /// ADR-0027 D3: `[adapters.paperqa]` の `paper_directory`/`index_directory`/`settings`（共通・行の上書き
 /// どちらも）は他のパス設定と同じく設定ファイルのディレクトリ基準で絶対化する。
 #[test]
@@ -1524,10 +1356,7 @@ fn paperqa_paths_are_resolved_relative_to_the_config_file() {
              index_directory = \"index\"\n\
              settings = \"settings/qwen-local\"\n\
              \n\
-             [[providers]]\n\
-             id = \"pqa\"\n\
-             adapter = \"paperqa\"\n\
-             settings = \"settings/other\"\n",
+             ",
     )
     .unwrap();
     let cfg = Config::load(&path).unwrap();
@@ -1544,15 +1373,6 @@ fn paperqa_paths_are_resolved_relative_to_the_config_file() {
         cfg.adapters.paperqa.settings.as_deref(),
         Some(
             base.join("settings/qwen-local")
-                .to_string_lossy()
-                .into_owned()
-                .as_str()
-        )
-    );
-    assert_eq!(
-        cfg.providers[0].settings.as_deref(),
-        Some(
-            base.join("settings/other")
                 .to_string_lossy()
                 .into_owned()
                 .as_str()
@@ -1591,12 +1411,8 @@ fn loads_research_example_config() {
             .map(String::as_str),
         Some("http://127.0.0.1:18100/v1")
     );
-    let paperqa_provider = cfg
-        .providers
-        .iter()
-        .find(|p| p.adapter == "paperqa")
-        .expect("paperqa provider");
-    assert_eq!(paperqa_provider.model, "openai/celeris/standard");
+    assert!(cfg.harness_declarations.contains_key("paperqa"));
+    assert!(cfg.llm_routes.iter().any(|r| r.harness == "paperqa"));
     let genre_ids: Vec<&str> = cfg.genres.iter().map(|g| g.id.as_str()).collect();
     assert_eq!(genre_ids, vec!["coding", "literature"]);
     let literature = cfg
@@ -1733,12 +1549,11 @@ fn loads_web_research_example_config() {
             .map(String::as_str),
         Some("single-request")
     );
-    let ldr_provider = cfg
-        .providers
-        .iter()
-        .find(|p| p.adapter == "local-deep-research")
-        .expect("ldr provider");
-    assert_eq!(ldr_provider.model, "celeris/cheap");
+    assert!(cfg.harness_declarations.contains_key("local-deep-research"));
+    assert_eq!(
+        cfg.llm_sources["claude_oauth"].models,
+        vec!["claude-haiku-4-5"]
+    );
     // ADR-0031 D2: 既定の証拠ゲート閾値を明示している。
     assert_eq!(
         cfg.adapters.local_deep_research.evidence.min_search_results,
@@ -1781,7 +1596,7 @@ fn loads_web_research_example_config() {
         .iter()
         .find(|r| r.id == "web-scout")
         .expect("web-scout role");
-    assert_eq!(role.adapter.as_deref(), Some("local-deep-research"));
+    assert_eq!(role.harness.as_deref(), Some("local-deep-research"));
     // ADR-0030 D1: `[secrets] dir` が読め、設定ファイル基準で絶対化される。鍵の値そのものはファイルに無い。
     let secrets = cfg.secrets.as_ref().expect("[secrets]");
     assert!(secrets.dir.is_absolute());
@@ -1798,7 +1613,7 @@ fn loads_web_research_example_config() {
 /// ADR-0010 D6/D9: バックオフと `[reviewer]` の既定値・指定値が DispatchConfig に写る。
 #[test]
 fn backoff_and_reviewer_settings_map_to_dispatch_config() {
-    let cfg: Config = toml::from_str("[[providers]]\nid = \"x\"\nadapter = \"fake\"\n").unwrap();
+    let cfg: Config = toml::from_str("").unwrap();
     assert!(cfg.validate().is_ok());
     let d = cfg.dispatch_config();
     assert_eq!(d.retry_backoff_base, Duration::from_secs(10));
@@ -1808,8 +1623,7 @@ fn backoff_and_reviewer_settings_map_to_dispatch_config() {
     assert_eq!(
         d.reviewer_hint,
         WorkerHint {
-            tier: Tier::Standard,
-            adapter: None
+            tier: Tier::Standard
         }
     );
 
@@ -1819,32 +1633,27 @@ max_requeues = 0
 [reviewer]
 adapter = "claude-code"
 tier = "cheap"
-[[providers]]
-id = "f"
-adapter = "fake"
-[[providers]]
-id = "c"
-adapter = "claude-code"
-tiers = ["cheap"]
+[llm_sources.claude]
+kind = "claude_oauth"
+api_format = "anthropic_messages"
+models = ["claude-sonnet-5"]
+[harnesses.claude_code]
+kind = "claude_code"
+api_formats = ["anthropic_messages"]
+source_kinds = ["claude_oauth"]
 "#;
-    let cfg: Config = toml::from_str(text).unwrap();
+    let cfg = Config::parse_with_delivery(text).unwrap();
     assert!(cfg.validate().is_ok());
     let d = cfg.dispatch_config();
     assert_eq!(d.retry_backoff_base, Duration::ZERO);
     assert_eq!(d.max_requeues, 0);
-    assert_eq!(
-        d.reviewer_hint,
-        WorkerHint {
-            tier: Tier::Cheap,
-            adapter: Some("claude-code".into())
-        }
-    );
+    assert_eq!(d.reviewer_hint, WorkerHint { tier: Tier::Cheap });
 }
 
 /// `[scratch.cargo]` は従来どおり有効。廃止された cache 設定は worker に渡さない。
 #[test]
 fn scratch_cargo_defaults_disable_incremental() {
-    let cfg: Config = toml::from_str("[[providers]]\nid = \"x\"\nadapter = \"fake\"\n").unwrap();
+    let cfg: Config = toml::from_str("").unwrap();
     let s = cfg.scratch_settings_unchecked();
     assert_eq!(
         s.cargo,
@@ -1853,10 +1662,8 @@ fn scratch_cargo_defaults_disable_incremental() {
             dev_debug: Some("line-tables-only".to_string()),
         }
     );
-    let cfg: Config = toml::from_str(
-        "[[providers]]\nid = \"x\"\nadapter = \"fake\"\n[scratch.cargo]\nincremental = true\ndev_debug = \"\"\n",
-    )
-    .unwrap();
+    let cfg: Config =
+        toml::from_str("[scratch.cargo]\nincremental = true\ndev_debug = \"\"\n").unwrap();
     assert_eq!(
         cfg.scratch_settings_unchecked().cargo,
         task_worker::scratch::CargoTuning {
@@ -1867,39 +1674,24 @@ fn scratch_cargo_defaults_disable_incremental() {
     assert!(toml::from_str::<Config>("[scratch.cargo]\nbogus = 1\n").is_err());
 }
 
-/// 旧節は未知の項目を含んでも読めるが、検出して警告でき、値は実行設定へ届かない。
+/// 廃止した `[scratch.sccache]`・`[scratch.l2]`・`[scratch.cache_server]` は読み込みエラー（警告して無視しない）。
 #[test]
-fn legacy_scratch_cache_sections_are_ignored_and_reported() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("config.toml");
-    std::fs::write(
-        &path,
-        "[[providers]]\nid = \"x\"\nadapter = \"fake\"\n[scratch.sccache]\nenabled = true\nport = 4300\nbogus = 1\n[scratch.cache_server]\nenabled = true\nport = 4299\n[scratch.l2]\nenabled = true\ndir = \"/nfs/l2\"\n",
-    )
-    .unwrap();
-    let cfg = Config::load(&path).unwrap();
-    assert_eq!(
-        cfg.scratch.deprecated_sections(),
-        ["scratch.sccache", "scratch.l2", "scratch.cache_server"]
-    );
-    let settings = cfg.scratch_settings_unchecked();
-    let env = task_worker::scratch::cargo_env(&settings, &task_worker::scratch::Owner::task("01T"));
-    assert!(
-        env.iter()
-            .all(|(k, _)| !k.starts_with("SCCACHE_") && k != "RUSTC_WRAPPER"),
-        "{env:?}"
-    );
-    let clean: Config = toml::from_str("").unwrap();
-    assert!(clean.scratch.deprecated_sections().is_empty());
+fn removed_scratch_cache_sections_are_load_errors() {
+    for section in ["sccache", "l2", "cache_server"] {
+        let text = format!("[scratch.{section}]\nenabled = true\n");
+        let err = toml::from_str::<Config>(&text)
+            .expect_err("removed scratch section must be rejected")
+            .to_string();
+        assert!(err.contains(section), "{section}: {err}");
+    }
 }
 
 /// ADR-0075 D7: `[scratch] dir` の既定は `build_cache_dir` の親の `scratch/`。
 #[test]
 fn scratch_defaults_follow_the_build_cache_parent() {
-    let cfg: Config = toml::from_str(
-            "[[providers]]\nid = \"x\"\nadapter = \"fake\"\n[workspace]\nbuild_cache_dir = \"/var/lib/celeris/build-cache\"\n",
-        )
-        .unwrap();
+    let cfg: Config =
+        toml::from_str("[workspace]\nbuild_cache_dir = \"/var/lib/celeris/build-cache\"\n")
+            .unwrap();
     let s = cfg.scratch_settings_unchecked();
     assert!(s.enabled);
     assert_eq!(s.dir, PathBuf::from("/var/lib/celeris/scratch"));
@@ -1911,23 +1703,18 @@ fn scratch_defaults_follow_the_build_cache_parent() {
     assert!(s.adopt);
     // 明示すればそれを使う。未知のキーは拒否。
     let cfg: Config = toml::from_str(
-            "[[providers]]\nid = \"x\"\nadapter = \"fake\"\n[scratch]\ndir = \"/srv/scratch\"\ntargets_max_gb = 10\nhigh_watermark = 0.8\n",
-        )
-        .unwrap();
+        "[scratch]\ndir = \"/srv/scratch\"\ntargets_max_gb = 10\nhigh_watermark = 0.8\n",
+    )
+    .unwrap();
     let s = cfg.scratch_settings_unchecked();
     assert_eq!(s.dir, PathBuf::from("/srv/scratch"));
     assert_eq!(s.targets_max_bytes, 10 * task_worker::scratch::GIB);
     assert_eq!(s.high_watermark, 0.8);
-    assert!(
-        toml::from_str::<Config>(
-            "[[providers]]\nid = \"x\"\nadapter = \"fake\"\n[scratch]\nbogus = 1\n"
-        )
-        .is_err()
-    );
+    assert!(toml::from_str::<Config>("[scratch]\nbogus = 1\n").is_err());
     // 起動時の検査は一時ディレクトリ（ローカル）では有効のまま。
     let tmp = tempfile::tempdir().unwrap();
     let cfg: Config = toml::from_str(&format!(
-        "[[providers]]\nid = \"x\"\nadapter = \"fake\"\n[scratch]\ndir = \"{}\"\n",
+        "[scratch]\ndir = \"{}\"\n",
         tmp.path().join("scratch").display()
     ))
     .unwrap();
@@ -1941,7 +1728,7 @@ fn scratch_mount_falls_back_to_default_dir_and_seed_reflink_defaults_off() {
     let not_mounted = tmp.path().join("local");
     std::fs::create_dir_all(&not_mounted).unwrap();
     let cfg: Config = toml::from_str(&format!(
-        "[[providers]]\nid = \"x\"\nadapter = \"fake\"\n[scratch]\nmount = \"{m}\"\ndir = \"{m}/celeris/scratch\"\n",
+        "[scratch]\nmount = \"{m}\"\ndir = \"{m}/celeris/scratch\"\n",
         m = not_mounted.display()
     ))
     .unwrap();
@@ -1951,20 +1738,14 @@ fn scratch_mount_falls_back_to_default_dir_and_seed_reflink_defaults_off() {
     let s = cfg.scratch_settings();
     assert_eq!(s.dir, cfg.default_scratch_dir());
     assert!(s.dir_fallback_reason.unwrap().contains("not mounted"));
-    let cfg: Config = toml::from_str(
-        "[[providers]]\nid = \"x\"\nadapter = \"fake\"\n[scratch]\nseed_reflink = true\n",
-    )
-    .unwrap();
+    let cfg: Config = toml::from_str("[scratch]\nseed_reflink = true\n").unwrap();
     assert!(cfg.scratch_settings_unchecked().seed_reflink);
 }
 
 /// ADR-0075 D7: `[scratch] enabled = false` で F5-fix の挙動に戻す（dispatcher は build_cache_dir を使う）。
 #[test]
 fn scratch_can_be_disabled() {
-    let cfg: Config = toml::from_str(
-        "[[providers]]\nid = \"x\"\nadapter = \"fake\"\n[scratch]\nenabled = false\n",
-    )
-    .unwrap();
+    let cfg: Config = toml::from_str("[scratch]\nenabled = false\n").unwrap();
     let d = cfg.dispatch_config();
     assert!(!d.scratch.enabled);
     assert_eq!(d.scratch.disabled_reason, None);
@@ -1973,124 +1754,83 @@ fn scratch_can_be_disabled() {
 
 #[test]
 fn dispatch_min_free_disk_mb_can_be_configured() {
-    let cfg: Config = toml::from_str(
-        "[[providers]]\nid = \"x\"\nadapter = \"fake\"\n[dispatch]\nmin_free_disk_mb = 2048\n",
-    )
-    .unwrap();
+    let cfg: Config = toml::from_str("[dispatch]\nmin_free_disk_mb = 2048\n").unwrap();
     assert_eq!(cfg.dispatch_config().min_free_disk_mb, 2048);
 }
 
 /// ADR-0010 D9: Reviewer run を満たせるプロバイダが無い設定はエラー。未知キーも拒否。
 #[test]
-fn rejects_reviewer_without_matching_provider_and_unknown_reviewer_keys() {
-    let cfg: Config = toml::from_str(
-        "[reviewer]\nadapter = \"codex\"\n[[providers]]\nid = \"x\"\nadapter = \"fake\"\n",
-    )
-    .unwrap();
+fn reviewer_adapter_must_name_a_declared_harness_and_unknown_reviewer_keys_fail() {
+    const DECLS: &str = "[llm_sources.main]\nkind = \"openai_compatible\"\nmodels = [\"m1\"]\n\
+        [harnesses.cli]\nkind = \"acp\"\napi_formats = [\"openai_compatible\"]\n\
+        source_kinds = [\"openai_compatible\"]\n";
+    // ADR 2026-10-11-llm-source-harness-selection: 宣言に無い harness を指す `[reviewer] adapter` は拒否。
+    let cfg =
+        Config::parse_with_delivery(&format!("[reviewer]\nadapter = \"codex\"\n{DECLS}")).unwrap();
     let err = cfg.validate().unwrap_err().to_string();
     assert!(err.contains("[reviewer]") && err.contains("codex"), "{err}");
-    // ADR-0069 Phase 118 D4: `[reviewer] tier` が未設定なら lane は動的（worker lane に一致・
-    // 天井で丸め）なので、どれか 1 tier を提供していれば足りる（従来は既定の Standard 固定で
-    // 検査していたため、frontier だけのプロバイダはこの検査に落ちていた）。
-    let cfg: Config =
-        toml::from_str("[[providers]]\nid = \"x\"\nadapter = \"fake\"\ntiers = [\"frontier\"]\n")
-            .unwrap();
+    // 宣言の id でも kind でも通る。
+    for adapter in ["cli", "acp"] {
+        let cfg =
+            Config::parse_with_delivery(&format!("[reviewer]\nadapter = \"{adapter}\"\n{DECLS}"))
+                .unwrap();
+        assert!(cfg.validate().is_ok(), "{adapter}");
+    }
+    // `tier` は lane のラベルで、source×model の適格性には関わらない。
+    let cfg =
+        Config::parse_with_delivery(&format!("[reviewer]\ntier = \"cheap\"\n{DECLS}")).unwrap();
     assert!(cfg.validate().is_ok());
-    // `[reviewer] tier` を明示すれば、その 1 tier を提供するプロバイダが無ければ従来どおりエラー。
-    let cfg: Config = toml::from_str(
-            "[reviewer]\ntier = \"cheap\"\n[[providers]]\nid = \"x\"\nadapter = \"fake\"\ntiers = [\"frontier\"]\n",
-        )
-        .unwrap();
-    assert!(cfg.validate().unwrap_err().to_string().contains("Cheap"));
     assert!(toml::from_str::<Config>("[reviewer]\nbogus = 1\n").is_err());
-    let cfg: Config = toml::from_str("retry_backoff_base_secs = 20\nretry_backoff_max_secs = 10\n[[providers]]\nid = \"x\"\nadapter = \"fake\"\n").unwrap();
+    let cfg = Config::parse_with_delivery(&format!(
+        "retry_backoff_base_secs = 20\nretry_backoff_max_secs = 10\n{DECLS}"
+    ))
+    .unwrap();
     assert!(cfg.validate().is_err());
 }
 
 /// Phase 7 監査: cooldown 0（requeue のホットループ）と、リース延長の前提を破る猶予の組み合わせを拒否する。
 #[test]
 fn rejects_zero_cooldown_and_unsafe_lease_grace() {
-    let providers = "[[providers]]\nid = \"x\"\nadapter = \"fake\"\n";
-    let cfg: Config = toml::from_str(&format!("error_cooldown_secs = 0\n{providers}")).unwrap();
+    let cfg: Config = toml::from_str("error_cooldown_secs = 0\n").unwrap();
     assert!(
         cfg.validate()
             .unwrap_err()
             .to_string()
             .contains("error_cooldown_secs")
     );
-    let cfg: Config = toml::from_str(&format!(
-        "lease_grace_secs = 10\nkill_grace_secs = 10\n{providers}"
-    ))
-    .unwrap();
+    let cfg: Config = toml::from_str("lease_grace_secs = 10\nkill_grace_secs = 10\n").unwrap();
     assert!(
         cfg.validate()
             .unwrap_err()
             .to_string()
             .contains("lease_grace_secs")
     );
-    let cfg: Config = toml::from_str(&format!(
-        "lease_grace_secs = 60\nkill_grace_secs = 1\ntick_ms = 50\n{providers}"
-    ))
-    .unwrap();
+    let cfg: Config =
+        toml::from_str("lease_grace_secs = 60\nkill_grace_secs = 1\ntick_ms = 50\n").unwrap();
     assert!(cfg.validate().is_ok());
-}
-
-/// ADR-0012 D1: 同じアダプタ種別のプロバイダを複数並べ、それぞれに env を持たせられる。ID の重複は拒否。
-#[test]
-fn multi_account_providers_parse_and_duplicate_ids_are_rejected() {
-    let path = Path::new(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../config/celeris.multi-account.example.toml"
-    ));
-    let cfg = Config::load(path).unwrap();
-    let claude: Vec<&ProviderConfig> = cfg
-        .providers
-        .iter()
-        .filter(|p| p.adapter == "claude-code")
-        .collect();
-    assert!(claude.len() >= 2);
-    assert_ne!(
-        claude[0].env.get("CLAUDE_CONFIG_DIR"),
-        claude[1].env.get("CLAUDE_CONFIG_DIR")
-    );
-
-    let dup = "[[providers]]\nid = \"a\"\nadapter = \"fake\"\n[[providers]]\nid = \"a\"\nadapter = \"fake\"\n";
-    let cfg: Config = toml::from_str(dup).unwrap();
-    assert!(
-        cfg.validate()
-            .unwrap_err()
-            .to_string()
-            .contains("duplicate provider id")
-    );
 }
 
 /// ADR-0013 D3 / D11: `[api]` は既定で無効。loopback 以外はトークンファイル必須。相対パスは設定ファイル基準。
 #[test]
 fn api_section_defaults_to_disabled_and_requires_token_off_loopback() {
-    let providers = "[[providers]]\nid = \"x\"\nadapter = \"fake\"\n";
-    let cfg: Config = toml::from_str(providers).unwrap();
+    let cfg: Config = toml::from_str("").unwrap();
     assert!(cfg.validate().is_ok());
     assert!(cfg.api.listen.is_none());
 
-    let cfg: Config =
-        toml::from_str(&format!("[api]\nlisten = \"127.0.0.1:7700\"\n{providers}")).unwrap();
+    let cfg: Config = toml::from_str("[api]\nlisten = \"127.0.0.1:7720\"\n").unwrap();
     assert!(cfg.validate().is_ok());
-    let cfg: Config =
-        toml::from_str(&format!("[api]\nlisten = \"[::1]:7700\"\n{providers}")).unwrap();
+    let cfg: Config = toml::from_str("[api]\nlisten = \"[::1]:7720\"\n").unwrap();
     assert!(cfg.validate().is_ok());
 
-    let cfg: Config =
-        toml::from_str(&format!("[api]\nlisten = \"0.0.0.0:7700\"\n{providers}")).unwrap();
+    let cfg: Config = toml::from_str("[api]\nlisten = \"0.0.0.0:7720\"\n").unwrap();
     assert!(
         cfg.validate()
             .unwrap_err()
             .to_string()
             .contains("token_file is required")
     );
-    let cfg: Config = toml::from_str(&format!(
-        "[api]\nlisten = \"0.0.0.0:7700\"\ntoken_file = \"api.token\"\n{providers}"
-    ))
-    .unwrap();
+    let cfg: Config =
+        toml::from_str("[api]\nlisten = \"0.0.0.0:7720\"\ntoken_file = \"api.token\"\n").unwrap();
     assert!(cfg.validate().is_ok());
     assert!(toml::from_str::<Config>("[api]\nbogus = 1\n").is_err());
 
@@ -2098,9 +1838,7 @@ fn api_section_defaults_to_disabled_and_requires_token_off_loopback() {
     let path = dir.path().join("config.toml");
     std::fs::write(
         &path,
-        format!(
-            "[api]\nlisten = \"127.0.0.1:7700\"\ntoken_file = \"secrets/api.token\"\n{providers}"
-        ),
+        "[api]\nlisten = \"127.0.0.1:7720\"\ntoken_file = \"secrets/api.token\"\n",
     )
     .unwrap();
     // token_file が無い・空なら起動時の設定エラー（値は出さない）。
@@ -2129,9 +1867,8 @@ fn api_section_defaults_to_disabled_and_requires_token_off_loopback() {
 /// ADR-0016 D1 / D2: `[[roles]]` と `[delegation]` を読み、task-core の型と DispatchConfig に写す。
 #[test]
 fn roles_and_delegation_are_parsed_and_mapped() {
-    let providers = "[[providers]]\nid = \"x\"\nadapter = \"fake\"\n";
     // 既定（節を書かなければ空の役割表と DelegationLimits の既定）。
-    let cfg: Config = toml::from_str(providers).unwrap();
+    let cfg: Config = toml::from_str("").unwrap();
     assert!(cfg.validate().is_ok());
     assert!(cfg.roles.is_empty());
     assert_eq!(
@@ -2148,8 +1885,7 @@ fn roles_and_delegation_are_parsed_and_mapped() {
         }
     );
 
-    let text = format!(
-        r#"[[roles]]
+    let text = r#"[[roles]]
 id = "lead"
 tier = "frontier"
 max_turns = 40
@@ -2158,14 +1894,14 @@ instructions = "You lead the work. Delegate implementation."
 
 [[roles]]
 id = "implementer"
-adapter = "fake"
+harness = "fake"
 
 [delegation]
 max_delegate_per_run = 3
 max_tree_depth = 2
 
-{providers}"#
-    );
+"#
+    .to_string();
     let cfg: Config = toml::from_str(&text).unwrap();
     assert!(cfg.validate().is_ok());
     let specs = cfg.role_specs();
@@ -2183,8 +1919,8 @@ max_tree_depth = 2
             .unwrap()
             .starts_with("You lead")
     );
-    assert_eq!(specs[0].adapter, None);
-    assert_eq!(specs[1].adapter.as_deref(), Some("fake"));
+    assert_eq!(specs[0].harness, None);
+    assert_eq!(specs[1].harness.as_deref(), Some("fake"));
     assert_eq!(specs[1].tier, None);
     // 書いていない値は既定のまま。
     let limits = cfg.delegation_limits();
@@ -2208,11 +1944,7 @@ max_tree_depth = 2
 /// ADR-0021 D4: `on_child_failure` は `retry_then_ask`（既定）と `ignore` だけ。知らない値は設定エラー。
 #[test]
 fn delegation_on_child_failure_is_parsed_and_validated() {
-    let with = |v: &str| {
-        format!(
-            "[delegation]\non_child_failure = \"{v}\"\n[[providers]]\nid = \"p\"\nadapter = \"fake\"\n"
-        )
-    };
+    let with = |v: &str| format!("[delegation]\non_child_failure = \"{v}\"\n");
     let cfg: Config = toml::from_str(&with("ignore")).unwrap();
     cfg.validate().unwrap();
     assert_eq!(
@@ -2232,25 +1964,20 @@ fn delegation_on_child_failure_is_parsed_and_validated() {
     assert!(err.contains("on_child_failure"), "{err}");
 }
 
-/// ADR-0016: 役割 id の重複、未知の adapter、0 の上限は設定エラー。
+/// ADR-0016: 役割 id の重複、消した `adapter` 欄、0 の上限は設定エラー。
 #[test]
-fn rejects_duplicate_roles_unknown_role_adapter_and_zero_limits() {
-    let providers = "[[providers]]\nid = \"x\"\nadapter = \"fake\"\n";
-    let dup = format!("[[roles]]\nid = \"lead\"\n[[roles]]\nid = \"lead\"\n{providers}");
+fn rejects_duplicate_roles_removed_role_adapter_and_zero_limits() {
+    let dup = "[[roles]]\nid = \"lead\"\n[[roles]]\nid = \"lead\"\n".to_string();
     let cfg: Config = toml::from_str(&dup).unwrap();
     assert_eq!(
         cfg.validate().unwrap_err().to_string(),
         "invalid config: duplicate role id: lead"
     );
 
-    let bogus = format!("[[roles]]\nid = \"lead\"\nadapter = \"bogus\"\n{providers}");
-    let cfg: Config = toml::from_str(&bogus).unwrap();
-    assert_eq!(
-        cfg.validate().unwrap_err().to_string(),
-        "invalid config: [[roles]] lead: adapter \"bogus\" is not available in this build (fake, claude-code, codex, pi, acp, browser-specialist, paperqa, local-deep-research, langmem only)"
-    );
+    // 役割は adapter を持たない（harness 欄だけ）。旧い `adapter` 欄は読み込みエラー。
+    assert!(toml::from_str::<Config>("[[roles]]\nid = \"lead\"\nadapter = \"fake\"\n").is_err());
 
-    let empty = format!("[[roles]]\nid = \"  \"\n{providers}");
+    let empty = "[[roles]]\nid = \"  \"\n".to_string();
     let cfg: Config = toml::from_str(&empty).unwrap();
     assert!(
         cfg.validate()
@@ -2259,7 +1986,7 @@ fn rejects_duplicate_roles_unknown_role_adapter_and_zero_limits() {
             .contains("id must not be empty")
     );
 
-    let zero_turns = format!("[[roles]]\nid = \"lead\"\nmax_turns = 0\n{providers}");
+    let zero_turns = "[[roles]]\nid = \"lead\"\nmax_turns = 0\n".to_string();
     let cfg: Config = toml::from_str(&zero_turns).unwrap();
     assert!(
         cfg.validate()
@@ -2267,7 +1994,7 @@ fn rejects_duplicate_roles_unknown_role_adapter_and_zero_limits() {
             .to_string()
             .contains("max_turns must be >= 1")
     );
-    let zero_wall = format!("[[roles]]\nid = \"lead\"\nmax_wall_secs = 0\n{providers}");
+    let zero_wall = "[[roles]]\nid = \"lead\"\nmax_wall_secs = 0\n".to_string();
     let cfg: Config = toml::from_str(&zero_wall).unwrap();
     assert!(
         cfg.validate()
@@ -2277,7 +2004,7 @@ fn rejects_duplicate_roles_unknown_role_adapter_and_zero_limits() {
     );
 
     for key in ["max_delegate_per_run", "max_tree_depth", "max_tree_runs"] {
-        let text = format!("[delegation]\n{key} = 0\n{providers}");
+        let text = format!("[delegation]\n{key} = 0\n");
         let cfg: Config = toml::from_str(&text).unwrap();
         let err = cfg.validate().unwrap_err().to_string();
         assert_eq!(
@@ -2291,14 +2018,12 @@ fn rejects_duplicate_roles_unknown_role_adapter_and_zero_limits() {
 /// 今までどおり動く（分野は任意）。
 #[test]
 fn genres_are_parsed_and_mapped() {
-    let providers = "[[providers]]\nid = \"x\"\nadapter = \"fake\"\n";
-    let cfg: Config = toml::from_str(providers).unwrap();
+    let cfg: Config = toml::from_str("").unwrap();
     assert!(cfg.validate().is_ok());
     assert!(cfg.genres.is_empty());
     assert!(cfg.genre_specs().is_empty());
 
-    let text = format!(
-        r#"[[roles]]
+    let text = r#"[[roles]]
 id = "lead"
 
 [[roles]]
@@ -2319,8 +2044,8 @@ output_artifacts = ["answer.md", "citations.json"]
 default_role = "lead"
 roles = ["lead"]
 
-{providers}"#
-    );
+"#
+    .to_string();
     let cfg: Config = toml::from_str(&text).unwrap();
     assert!(cfg.validate().is_ok());
     let specs = cfg.genre_specs();
@@ -2370,11 +2095,10 @@ roles = ["lead"]
 /// `default_role` は設定エラー。
 #[test]
 fn rejects_duplicate_genre_ids_and_genres_referencing_unknown_or_mismatched_roles() {
-    let providers = "[[providers]]\nid = \"x\"\nadapter = \"fake\"\n";
     let roles = "[[roles]]\nid = \"lead\"\n\n[[roles]]\nid = \"implementer\"\n";
 
     let dup = format!(
-        "{roles}[[genres]]\nid = \"coding\"\ndescription = \"d\"\n[[genres]]\nid = \"coding\"\ndescription = \"d\"\n{providers}"
+        "{roles}[[genres]]\nid = \"coding\"\ndescription = \"d\"\n[[genres]]\nid = \"coding\"\ndescription = \"d\"\n"
     );
     let cfg: Config = toml::from_str(&dup).unwrap();
     assert_eq!(
@@ -2382,7 +2106,7 @@ fn rejects_duplicate_genre_ids_and_genres_referencing_unknown_or_mismatched_role
         "invalid config: duplicate genre id: coding"
     );
 
-    let empty_id = format!("[[genres]]\nid = \"  \"\ndescription = \"d\"\n{providers}");
+    let empty_id = "[[genres]]\nid = \"  \"\ndescription = \"d\"\n".to_string();
     let cfg: Config = toml::from_str(&empty_id).unwrap();
     assert!(
         cfg.validate()
@@ -2392,7 +2116,7 @@ fn rejects_duplicate_genre_ids_and_genres_referencing_unknown_or_mismatched_role
     );
 
     let unknown_role_in_roles = format!(
-        "{roles}[[genres]]\nid = \"coding\"\ndescription = \"d\"\nroles = [\"lead\", \"nobody\"]\n{providers}"
+        "{roles}[[genres]]\nid = \"coding\"\ndescription = \"d\"\nroles = [\"lead\", \"nobody\"]\n"
     );
     let cfg: Config = toml::from_str(&unknown_role_in_roles).unwrap();
     assert_eq!(
@@ -2401,7 +2125,7 @@ fn rejects_duplicate_genre_ids_and_genres_referencing_unknown_or_mismatched_role
     );
 
     let unknown_default_role = format!(
-        "{roles}[[genres]]\nid = \"coding\"\ndescription = \"d\"\nroles = [\"lead\"]\ndefault_role = \"nobody\"\n{providers}"
+        "{roles}[[genres]]\nid = \"coding\"\ndescription = \"d\"\nroles = [\"lead\"]\ndefault_role = \"nobody\"\n"
     );
     let cfg: Config = toml::from_str(&unknown_default_role).unwrap();
     assert_eq!(
@@ -2410,7 +2134,7 @@ fn rejects_duplicate_genre_ids_and_genres_referencing_unknown_or_mismatched_role
     );
 
     let default_role_not_in_roles = format!(
-        "{roles}[[genres]]\nid = \"coding\"\ndescription = \"d\"\nroles = [\"lead\"]\ndefault_role = \"implementer\"\n{providers}"
+        "{roles}[[genres]]\nid = \"coding\"\ndescription = \"d\"\nroles = [\"lead\"]\ndefault_role = \"implementer\"\n"
     );
     let cfg: Config = toml::from_str(&default_role_not_in_roles).unwrap();
     assert_eq!(
@@ -2424,17 +2148,15 @@ fn rejects_duplicate_genre_ids_and_genres_referencing_unknown_or_mismatched_role
 /// `[[genres]]` に無ければ「対話用の分野が無い」設定エラー。明示して存在すれば通る。
 #[test]
 fn conversation_genre_defaults_to_secretary_and_an_unknown_genre_is_a_config_error() {
-    let providers = "[[providers]]\nid = \"x\"\nadapter = \"fake\"\n";
-
     // `[conversation]` を書かない: 既定は `secretary`。`[[genres]]` の中身は検証しない
     // （最小構成 = genres 無しでも壊れない）。
-    let cfg: Config = toml::from_str(providers).unwrap();
+    let cfg: Config = toml::from_str("").unwrap();
     assert!(cfg.validate().is_ok());
     assert_eq!(cfg.conversation_genre_id(), task_core::CONVERSATION_GENRE);
     assert_eq!(cfg.conversation_genre_id(), "secretary");
 
     // `[conversation]` を書いて `genre` を省略: それでも既定は `secretary`。
-    let text = format!("[conversation]\n{providers}");
+    let text = "[conversation]\n".to_string();
     let cfg: Config = toml::from_str(&text).unwrap();
     assert_eq!(cfg.conversation_genre_id(), "secretary");
     // `secretary` が `[[genres]]` に無いので設定エラー（明示した以上は検証する）。
@@ -2444,7 +2166,7 @@ fn conversation_genre_defaults_to_secretary_and_an_unknown_genre_is_a_config_err
     );
 
     // 存在しない分野を明示して指す: 設定エラー。
-    let text = format!("[conversation]\ngenre = \"nope\"\n{providers}");
+    let text = "[conversation]\ngenre = \"nope\"\n".to_string();
     let cfg: Config = toml::from_str(&text).unwrap();
     assert_eq!(
         cfg.validate().unwrap_err().to_string(),
@@ -2452,9 +2174,7 @@ fn conversation_genre_defaults_to_secretary_and_an_unknown_genre_is_a_config_err
     );
 
     // 存在する分野を明示して指す: 通る。
-    let text = format!(
-        "[conversation]\ngenre = \"secretary\"\n[[genres]]\nid = \"secretary\"\ndescription = \"d\"\n{providers}"
-    );
+    let text = "[conversation]\ngenre = \"secretary\"\n[[genres]]\nid = \"secretary\"\ndescription = \"d\"\n".to_string();
     let cfg: Config = toml::from_str(&text).unwrap();
     assert!(cfg.validate().is_ok());
     assert_eq!(cfg.conversation_genre_id(), "secretary");
@@ -2465,178 +2185,11 @@ fn conversation_genre_defaults_to_secretary_and_an_unknown_genre_is_a_config_err
 
 #[test]
 fn rejects_unknown_fields_in_codex_adapter_config() {
-    let text = "[[providers]]\nid = \"x\"\nadapter = \"codex\"\n\n[adapters.codex]\nbogus = 1\n";
+    let text = "\n[adapters.codex]\nbogus = 1\n";
     assert!(toml::from_str::<Config>(text).is_err());
 }
 
-/// ADR-0017 M1: `providers_include` が `providers.d/*.toml` をファイル名昇順で読み、
-/// `[[providers]]` と合わせて重複 id を検出する。
-#[test]
-fn providers_include_merges_files_in_filename_order_and_still_rejects_duplicate_ids() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("config.toml");
-    std::fs::write(
-            &path,
-            "providers_include = \"providers.d/*.toml\"\n[[providers]]\nid = \"inline\"\nadapter = \"fake\"\n",
-        )
-        .unwrap();
-    std::fs::create_dir_all(dir.path().join("providers.d")).unwrap();
-    std::fs::write(
-            dir.path().join("providers.d/b-acct.toml"),
-            "id = \"b-acct\"\nadapter = \"claude-code\"\nconcurrency = 2\n[env]\nCLAUDE_CONFIG_DIR = \"/x/b\"\n",
-        )
-        .unwrap();
-    std::fs::write(
-        dir.path().join("providers.d/a-acct.toml"),
-        "id = \"a-acct\"\nadapter = \"fake\"\n",
-    )
-    .unwrap();
-
-    let cfg = Config::load(&path).unwrap();
-    let ids: Vec<&str> = cfg.providers.iter().map(|p| p.id.as_str()).collect();
-    assert_eq!(
-        ids,
-        vec!["inline", "a-acct", "b-acct"],
-        "providers.d files load in filename order after inline ones"
-    );
-    let b = cfg.providers.iter().find(|p| p.id == "b-acct").unwrap();
-    assert_eq!(b.concurrency, Some(2));
-    assert_eq!(
-        b.env.get("CLAUDE_CONFIG_DIR").map(String::as_str),
-        Some("/x/b")
-    );
-    assert_eq!(
-        cfg.providers_dir.as_deref(),
-        Some(
-            dir.path()
-                .join("providers.d")
-                .canonicalize()
-                .unwrap()
-                .as_path()
-        )
-    );
-
-    // 重複 id（inline と providers.d の両方に "inline"）は既存の検証がそのまま拒否する。
-    std::fs::write(
-        dir.path().join("providers.d/dup.toml"),
-        "id = \"inline\"\nadapter = \"fake\"\n",
-    )
-    .unwrap();
-    let err = Config::load(&path).unwrap_err().to_string();
-    assert!(err.contains("duplicate provider id"), "{err}");
-}
-
-/// `providers_include` は末尾が `*.toml` である glob だけを受け付ける。
-#[test]
-fn providers_include_rejects_patterns_not_ending_in_glob_toml() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("config.toml");
-    std::fs::write(
-            &path,
-            "providers_include = \"providers.d/*.yaml\"\n[[providers]]\nid = \"x\"\nadapter = \"fake\"\n",
-        )
-        .unwrap();
-    let err = Config::load(&path).unwrap_err().to_string();
-    assert!(err.contains("must end with"), "{err}");
-}
-
-/// `providers.d/` がまだ無い（1 つもアカウントを追加していない）ときは空のまま、inline だけで起動できる。
-#[test]
-fn providers_include_with_missing_directory_is_empty_not_an_error() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("config.toml");
-    std::fs::write(
-            &path,
-            "providers_include = \"providers.d/*.toml\"\n[[providers]]\nid = \"x\"\nadapter = \"fake\"\n",
-        )
-        .unwrap();
-    let cfg = Config::load(&path).unwrap();
-    assert_eq!(cfg.providers.len(), 1);
-}
-
 // ---- ADR-0024/0025: [accounts] / account_pool ----
-
-/// `account_pool = true` は `adapter = "claude-code"` かつ `[accounts] claude_dir` を要求する（ADR-0024 D2）。
-#[test]
-fn account_pool_requires_claude_code_adapter_and_accounts_section() {
-    // account_pool のプロバイダはあるが [accounts] が無い。
-    let cfg: Config = toml::from_str(
-        "[[providers]]\nid = \"pool\"\nadapter = \"claude-code\"\naccount_pool = true\n",
-    )
-    .unwrap();
-    let err = cfg.validate().unwrap_err().to_string();
-    assert!(err.contains("[accounts]"), "{err}");
-
-    // [accounts] はあるが adapter が claude-code/codex でない。
-    let cfg: Config = toml::from_str(
-            "[accounts]\nclaude_dir = \"acct\"\n[[providers]]\nid = \"pool\"\nadapter = \"fake\"\naccount_pool = true\n",
-        )
-        .unwrap();
-    let err = cfg.validate().unwrap_err().to_string();
-    assert!(err.contains("claude-code"), "{err}");
-
-    // 両方あれば通る。
-    let cfg: Config = toml::from_str(
-            "[accounts]\nclaude_dir = \"acct\"\n[[providers]]\nid = \"pool\"\nadapter = \"claude-code\"\naccount_pool = true\n",
-        )
-        .unwrap();
-    assert!(cfg.validate().is_ok());
-    assert_eq!(cfg.account_pool_providers(), ["pool".to_string()].into());
-}
-
-/// ADR-0025 D1: `account_pool = true` の codex プロバイダは `[accounts] codex_dir` を要求する
-/// （`claude_dir` だけでは足りない）。
-#[test]
-fn account_pool_for_codex_requires_codex_dir_specifically() {
-    let cfg: Config = toml::from_str(
-            "[accounts]\nclaude_dir = \"acct\"\n[[providers]]\nid = \"pool\"\nadapter = \"codex\"\naccount_pool = true\n",
-        )
-        .unwrap();
-    let err = cfg.validate().unwrap_err().to_string();
-    assert!(err.contains("codex_dir"), "{err}");
-
-    let cfg: Config = toml::from_str(
-            "[accounts]\ncodex_dir = \"acct\"\n[[providers]]\nid = \"pool\"\nadapter = \"codex\"\naccount_pool = true\n",
-        )
-        .unwrap();
-    assert!(cfg.validate().is_ok());
-    assert_eq!(cfg.account_pool_providers(), ["pool".to_string()].into());
-}
-
-/// ADR 2026-10-06 D2 / D3: `adapter = "acp"` + `llm_source = "opencode_go"` + `account_pool = "opencode-go"` の行は
-/// `[accounts] opencode_dir` があれば通り、無ければ設定エラー。
-#[test]
-fn opencode_go_pool_row_requires_opencode_dir() {
-    let row = "[[providers]]\nid = \"go\"\nadapter = \"acp\"\nllm_source = \"opencode_go\"\nmodel = \"opencode-go/kimi-k3\"\naccount_pool = \"opencode-go\"\ntiers = [\"standard\"]\n";
-    let cfg: Config =
-        toml::from_str(&format!("[accounts]\nopencode_dir = \"acct\"\n{row}")).unwrap();
-    cfg.validate().expect("opencode_dir set: valid");
-    assert_eq!(cfg.account_pool_providers(), ["go".to_string()].into());
-    assert_eq!(
-        cfg.account_pool_adapters().get("go"),
-        Some(&AccountAdapter::OpencodeGo)
-    );
-    assert_eq!(
-        cfg.accounts.as_ref().unwrap().opencode_go_usage_url,
-        "https://opencode.ai/zen/go/v1/usage"
-    );
-    assert_eq!(
-        cfg.provider_llm_source("go").unwrap().source,
-        task_core::LlmSourceRef::OpencodeGo
-    );
-
-    // opencode_dir が無い（claude_dir だけ）と拒否。
-    let cfg: Config = toml::from_str(&format!("[accounts]\nclaude_dir = \"acct\"\n{row}")).unwrap();
-    let err = cfg.validate().unwrap_err().to_string();
-    assert!(err.contains("opencode_dir"), "{err}");
-
-    // opencode_go は acp 以外の adapter では使えない。
-    let cfg: Config = toml::from_str(
-        "[accounts]\nopencode_dir = \"acct\"\n[[providers]]\nid = \"x\"\nadapter = \"codex\"\nllm_source = \"opencode_go\"\n",
-    )
-    .unwrap();
-    assert!(cfg.validate().is_err());
-}
 
 /// ADR 2026-10-06 D3: 例の設定 `config/celeris.opencode-go.example.toml` が読めて、routing の source 名が
 /// `opencode-go`（subscription）になる。
@@ -2645,17 +2198,8 @@ fn opencode_go_example_config_loads_and_routes_as_opencode_go_subscription() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../config/celeris.opencode-go.example.toml");
     let cfg = Config::load(&path).expect("example loads");
-    let catalog = cfg.routing_catalog().expect("catalog");
-    let dep = catalog
-        .deployments
-        .iter()
-        .find(|d| d.id == "provider:opencode-go")
-        .expect("deployment");
-    assert_eq!(dep.source_ref, "opencode-go");
-    assert_eq!(
-        dep.billing,
-        task_core::model_router::profiles::Billing::Subscription
-    );
+    assert_eq!(cfg.llm_sources["opencode_go"].kind, "opencode_go");
+    assert_eq!(cfg.harness_declarations["opencode"].kind, "acp");
 }
 
 /// `[accounts]` の既定値と、相対 `claude_dir`/`codex_dir` の解決（設定ファイル基準）。
@@ -2664,10 +2208,10 @@ fn accounts_section_defaults_and_relative_dirs_are_resolved() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.toml");
     std::fs::write(
-            &path,
-            "[accounts]\nclaude_dir = \"claude-accounts\"\ncodex_dir = \"codex-accounts\"\n[[providers]]\nid = \"pool\"\nadapter = \"claude-code\"\naccount_pool = true\n",
-        )
-        .unwrap();
+        &path,
+        "[accounts]\nclaude_dir = \"claude-accounts\"\ncodex_dir = \"codex-accounts\"\n",
+    )
+    .unwrap();
     let cfg = Config::load(&path).unwrap();
     let accounts = cfg.accounts.as_ref().unwrap();
     let claude_dir = accounts.claude_dir.clone().expect("claude_dir");
@@ -2700,18 +2244,15 @@ fn accounts_section_defaults_and_relative_dirs_are_resolved() {
 /// `max_runs_per_account = 0` は設定エラー。未知キーも拒否。どちらの根ディレクトリも無ければ設定エラー。
 #[test]
 fn accounts_section_rejects_zero_max_runs_and_unknown_keys() {
-    let cfg: Config = toml::from_str(
-            "[accounts]\nclaude_dir = \"acct\"\nmax_runs_per_account = 0\n[[providers]]\nid = \"x\"\nadapter = \"fake\"\n",
-        )
-        .unwrap();
+    let cfg: Config =
+        toml::from_str("[accounts]\nclaude_dir = \"acct\"\nmax_runs_per_account = 0\n").unwrap();
     let err = cfg.validate().unwrap_err().to_string();
     assert!(err.contains("max_runs_per_account"), "{err}");
 
     assert!(toml::from_str::<Config>("[accounts]\nbogus = 1\n").is_err());
 
     // Neither claude_dir nor codex_dir: deserializes fine (both optional) but validate() rejects it.
-    let cfg: Config =
-        toml::from_str("[accounts]\n[[providers]]\nid = \"x\"\nadapter = \"fake\"\n").unwrap();
+    let cfg: Config = toml::from_str("[accounts]\n").unwrap();
     let err = cfg.validate().unwrap_err().to_string();
     assert!(
         err.contains("claude_dir") && err.contains("codex_dir"),
@@ -2726,10 +2267,10 @@ fn ensure_accounts_dir_creates_the_directories_with_0700() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.toml");
     std::fs::write(
-            &path,
-            "[accounts]\nclaude_dir = \"claude-accounts\"\ncodex_dir = \"codex-accounts\"\n[[providers]]\nid = \"x\"\nadapter = \"fake\"\n",
-        )
-        .unwrap();
+        &path,
+        "[accounts]\nclaude_dir = \"claude-accounts\"\ncodex_dir = \"codex-accounts\"\n",
+    )
+    .unwrap();
     let cfg = Config::load(&path).unwrap();
     let claude_dir = cfg.accounts.as_ref().unwrap().claude_dir.clone().unwrap();
     let codex_dir = cfg.accounts.as_ref().unwrap().codex_dir.clone().unwrap();
@@ -2750,8 +2291,7 @@ fn ensure_accounts_dir_creates_the_directories_with_0700() {
     cfg.ensure_accounts_dir().unwrap();
 
     // [accounts] 無しは no-op。
-    let no_accounts: Config =
-        toml::from_str("[[providers]]\nid = \"x\"\nadapter = \"fake\"\n").unwrap();
+    let no_accounts: Config = toml::from_str("").unwrap();
     assert!(no_accounts.ensure_accounts_dir().is_ok());
 }
 
@@ -2760,7 +2300,7 @@ fn ensure_accounts_dir_creates_the_directories_with_0700() {
 /// `[notify]` は書かなくても既定値が入り、D6 の送り出し間隔を設定できる。
 #[test]
 fn notify_defaults_are_used_when_the_section_is_absent() {
-    let cfg: Config = toml::from_str("[[providers]]\nid = \"x\"\nadapter = \"fake\"\n").unwrap();
+    let cfg: Config = toml::from_str("").unwrap();
     assert_eq!(cfg.notify, crate::notify::NotifyConfig::default());
     assert_eq!(cfg.notify.discord_webhook_secret, "discord-webhook");
     assert_eq!(cfg.notify.interval_secs, 30);
@@ -2768,12 +2308,12 @@ fn notify_defaults_are_used_when_the_section_is_absent() {
 
     let cfg: Config = toml::from_str(
         "[notify]\ndiscord_webhook_secret = \"hook\"\ninterval_secs = 60\n\
-             gui_base_url = \"http://192.168.1.103:7700/\"\n",
+             web_base_url = \"http://192.168.1.103:7720/\"\n",
     )
     .unwrap();
     assert_eq!(cfg.notify.discord_webhook_secret, "hook");
     assert_eq!(cfg.notify.interval_secs, 60);
-    assert_eq!(cfg.notify.base_url(), Some("http://192.168.1.103:7700"));
+    assert_eq!(cfg.notify.base_url(), Some("http://192.168.1.103:7720"));
 
     let cfg: Config = toml::from_str(
         "[notify]\ninbox_batch_secs = 15\ninbox_reminder_secs = 7200\n\
@@ -2796,11 +2336,7 @@ fn notify_defaults_are_used_when_the_section_is_absent() {
 fn secrets_dir_is_parsed_and_resolved_relative_to_the_config_file() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.toml");
-    std::fs::write(
-        &path,
-        "[secrets]\ndir = \"secrets\"\n[[providers]]\nid = \"x\"\nadapter = \"fake\"\n",
-    )
-    .unwrap();
+    std::fs::write(&path, "[secrets]\ndir = \"secrets\"\n").unwrap();
     let cfg = Config::load(&path).unwrap();
     let secrets = cfg.secrets.as_ref().unwrap();
     assert!(secrets.dir.is_absolute());
@@ -2810,8 +2346,7 @@ fn secrets_dir_is_parsed_and_resolved_relative_to_the_config_file() {
     );
 
     // 節を書かなければ `None`。
-    let no_secrets: Config =
-        toml::from_str("[[providers]]\nid = \"x\"\nadapter = \"fake\"\n").unwrap();
+    let no_secrets: Config = toml::from_str("").unwrap();
     assert!(no_secrets.secrets.is_none());
     // 未知キーは拒否。
     assert!(toml::from_str::<Config>("[secrets]\nbogus = 1\n").is_err());
@@ -2827,7 +2362,7 @@ fn the_knowledge_section_resolves_its_root_and_checks_the_default_mounts() {
     std::fs::write(
             &path,
             "db = \"t.sqlite3\"\n[knowledge]\nroot = \"kb\"\ndefault_mounts = [\"kb:user\", \"memory\"]\n\
-             [[providers]]\nid = \"x\"\nadapter = \"fake\"\n",
+             ",
         )
         .unwrap();
     let cfg = Config::load(&path).unwrap();
@@ -2849,8 +2384,7 @@ fn the_knowledge_section_resolves_its_root_and_checks_the_default_mounts() {
     assert_eq!(cfg.dispatch_config().knowledge.default_mounts.len(), 2);
 
     // 節を書かなければ既定（`~/.local/share/celeris/knowledge` と `kb:user` / `kb:environment`）。
-    let default: Config =
-        toml::from_str("[[providers]]\nid = \"x\"\nadapter = \"fake\"\n").unwrap();
+    let default: Config = toml::from_str("").unwrap();
     assert_eq!(default.knowledge.root, task_core::knowledge::default_root());
     assert_eq!(
         default.knowledge.default_mounts,
@@ -2859,21 +2393,16 @@ fn the_knowledge_section_resolves_its_root_and_checks_the_default_mounts() {
     // 未知キーは拒否。
     assert!(toml::from_str::<Config>("[knowledge]\nbogus = 1\n").is_err());
     // 綴り間違いは `validate()` で落ちる（黙って無視しない）。
-    let bad: Config =
-            toml::from_str("[knowledge]\ndefault_mounts = [\"nope:x\"]\n[[providers]]\nid = \"x\"\nadapter = \"fake\"\n")
-                .unwrap();
+    let bad: Config = toml::from_str("[knowledge]\ndefault_mounts = [\"nope:x\"]\n").unwrap();
     let why = bad.validate().expect_err("bad mount").to_string();
     assert!(why.contains("[knowledge] default_mounts"), "{why}");
     // KB の外を指す scope も落ちる。
-    let escape: Config =
-            toml::from_str("[knowledge]\ndefault_mounts = [\"kb:../etc\"]\n[[providers]]\nid = \"x\"\nadapter = \"fake\"\n")
-                .unwrap();
+    let escape: Config = toml::from_str("[knowledge]\ndefault_mounts = [\"kb:../etc\"]\n").unwrap();
     assert!(escape.validate().is_err());
 }
 
 /// Phase 65b: `dispatch_config().knowledge.langmem_api_key` が `[knowledge.langmem].api_key_secret`
-/// を `[secrets] dir` から解決した平文の値になること（`build_adapters` の langmem アダプタと同じ
-/// 解決）。到達性 probe（`task_dispatch::Dispatcher::knowledge_reachability`）がこれを
+/// を `[secrets] dir` から解決した平文の値になること。到達性 probe（`task_dispatch::Dispatcher::knowledge_reachability`）がこれを
 /// `Authorization: Bearer` に使う（`llm-proxy` のような認証必須の上流のため）。
 #[test]
 fn dispatch_config_resolves_the_langmem_api_key_from_secrets() {
@@ -2890,12 +2419,9 @@ dir = "{secrets}"
 enabled = true
 provider = "openai-compatible"
 base_url = "http://127.0.0.1:18100/v1"
-model = "celeris/cheap"
+model = "qwen3.8-27b"
 api_key_secret = "langmem-key"
 
-[[providers]]
-id = "x"
-adapter = "fake"
 "#,
         secrets = secrets_dir.display()
     );
@@ -2907,9 +2433,9 @@ adapter = "fake"
 
     // `api_key_secret` が無ければ `None`（従来どおり、probe はトークン無しで検査する）。
     let without: Config = toml::from_str(
-            "[knowledge.langmem]\nenabled = true\nbase_url = \"http://127.0.0.1:18100/v1\"\n[[providers]]\nid = \"x\"\nadapter = \"fake\"\n",
-        )
-        .unwrap();
+        "[knowledge.langmem]\nenabled = true\nbase_url = \"http://127.0.0.1:18100/v1\"\n",
+    )
+    .unwrap();
     assert!(
         without
             .dispatch_config()
@@ -2925,11 +2451,7 @@ adapter = "fake"
 fn memory_dir_is_resolved_created_with_0700_and_passed_to_the_dispatcher() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.toml");
-    std::fs::write(
-            &path,
-            "db = \"t.sqlite3\"\n[memory]\ndir = \"memory\"\n[[providers]]\nid = \"x\"\nadapter = \"fake\"\n",
-        )
-        .unwrap();
+    std::fs::write(&path, "db = \"t.sqlite3\"\n[memory]\ndir = \"memory\"\n").unwrap();
     let cfg = Config::load(&path).unwrap();
     let memory = cfg.memory.as_ref().expect("[memory]");
     assert!(memory.dir.is_absolute());
@@ -2947,8 +2469,7 @@ fn memory_dir_is_resolved_created_with_0700_and_passed_to_the_dispatcher() {
     // 2 回目は何もしない（既にある）。
     cfg.ensure_memory_dir().unwrap();
 
-    let without: Config =
-        toml::from_str("[[providers]]\nid = \"x\"\nadapter = \"fake\"\n").unwrap();
+    let without: Config = toml::from_str("").unwrap();
     assert!(without.memory.is_none());
     assert!(without.dispatch_config().memory_dir.is_none());
     assert!(without.ensure_memory_dir().is_ok());
@@ -2963,11 +2484,7 @@ fn selfdeploy_releases_dir_defaults_to_the_state_dir_and_resolves_relative_paths
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.toml");
     // 節を書かない構成では新しい既定が効く。
-    std::fs::write(
-        &path,
-        "db = \"t.sqlite3\"\n[[providers]]\nid = \"x\"\nadapter = \"fake\"\n",
-    )
-    .unwrap();
+    std::fs::write(&path, "db = \"t.sqlite3\"\n").unwrap();
     let cfg = Config::load(&path).unwrap();
     assert!(cfg.selfdeploy.releases_dir.is_absolute());
     assert!(
@@ -2980,19 +2497,19 @@ fn selfdeploy_releases_dir_defaults_to_the_state_dir_and_resolves_relative_paths
 
     // 明示した相対パスも設定ファイル基準。
     std::fs::write(
-            &path,
-            "db = \"t.sqlite3\"\n[selfdeploy]\nreleases_dir = \"rel\"\n[[providers]]\nid = \"x\"\nadapter = \"fake\"\n",
-        )
-        .unwrap();
+        &path,
+        "db = \"t.sqlite3\"\n[selfdeploy]\nreleases_dir = \"rel\"\n",
+    )
+    .unwrap();
     let cfg = Config::load(&path).unwrap();
     assert_eq!(cfg.selfdeploy.releases_dir, dir.path().join("rel"));
 
     // 絶対パスはそのまま。
     std::fs::write(
-            &path,
-            "db = \"t.sqlite3\"\n[selfdeploy]\nreleases_dir = \"/srv/releases\"\n[[providers]]\nid = \"x\"\nadapter = \"fake\"\n",
-        )
-        .unwrap();
+        &path,
+        "db = \"t.sqlite3\"\n[selfdeploy]\nreleases_dir = \"/srv/releases\"\n",
+    )
+    .unwrap();
     let cfg = Config::load(&path).unwrap();
     assert_eq!(cfg.selfdeploy.releases_dir, PathBuf::from("/srv/releases"));
 
@@ -3000,11 +2517,7 @@ fn selfdeploy_releases_dir_defaults_to_the_state_dir_and_resolves_relative_paths
     assert!(toml::from_str::<Config>("[selfdeploy]\nbogus = 1\n").is_err());
 
     // ADR-0041 D3: `repo` は既定 `~/workspace/agent-platform` で、`~` は celeris の $HOME で展開する。
-    std::fs::write(
-        &path,
-        "db = \"t.sqlite3\"\n[[providers]]\nid = \"x\"\nadapter = \"fake\"\n",
-    )
-    .unwrap();
+    std::fs::write(&path, "db = \"t.sqlite3\"\n").unwrap();
     let cfg = Config::load(&path).unwrap();
     match task_core::home_dir() {
         Some(home) => assert_eq!(cfg.selfdeploy.repo, home.join("workspace/agent-platform")),
@@ -3016,10 +2529,10 @@ fn selfdeploy_releases_dir_defaults_to_the_state_dir_and_resolves_relative_paths
     }
     // 明示した絶対パスはそのまま（存在しなくてよい。`on_main` が `null` になるだけ）。
     std::fs::write(
-            &path,
-            "db = \"t.sqlite3\"\n[selfdeploy]\nrepo = \"/srv/agent-platform\"\n[[providers]]\nid = \"x\"\nadapter = \"fake\"\n",
-        )
-        .unwrap();
+        &path,
+        "db = \"t.sqlite3\"\n[selfdeploy]\nrepo = \"/srv/agent-platform\"\n",
+    )
+    .unwrap();
     let cfg = Config::load(&path).unwrap();
     assert_eq!(cfg.selfdeploy.repo, PathBuf::from("/srv/agent-platform"));
 }
@@ -3028,7 +2541,7 @@ fn selfdeploy_releases_dir_defaults_to_the_state_dir_and_resolves_relative_paths
 /// 知らない `merge_method` と空の `gh` は設定エラー。
 #[test]
 fn github_defaults_to_gh_and_merge_and_rejects_other_merge_methods() {
-    let base = "[[providers]]\nid = \"x\"\nadapter = \"fake\"\n".to_string();
+    let base = "".to_string();
     let cfg: Config = toml::from_str(&base).expect("defaults");
     assert_eq!(cfg.github.gh, "gh");
     assert_eq!(cfg.github.merge_method, "merge");
@@ -3057,7 +2570,7 @@ fn github_defaults_to_gh_and_merge_and_rejects_other_merge_methods() {
 /// `~/.local/celeris/containers` / 1800 秒）と `DispatchConfig` への写り、綴り間違いの拒否。
 #[test]
 fn containers_defaults_reach_the_dispatcher_and_bad_values_are_rejected() {
-    let base = "[[providers]]\nid = \"x\"\nadapter = \"fake\"\n".to_string();
+    let base = "".to_string();
     let cfg: Config = toml::from_str(&base).expect("defaults");
     assert_eq!(cfg.containers.runtime, "auto");
     assert_eq!(cfg.containers.image_default, "celeris-worker:latest");
@@ -3108,10 +2621,7 @@ fn containers_defaults_reach_the_dispatcher_and_bad_values_are_rejected() {
 #[test]
 fn omitted_paths_default_to_the_celeris_xdg_layout() {
     // 生の（`Config::load` を通す前の）既定値。`$HOME` に依らない。
-    let raw: Config = toml::from_str(
-        "[[providers]]\nid = \"x\"\nadapter = \"fake\"\n[memory]\n[secrets]\n[accounts]\n",
-    )
-    .unwrap();
+    let raw: Config = toml::from_str("[memory]\n[secrets]\n[accounts]\n").unwrap();
     assert_eq!(
         raw.db.path,
         PathBuf::from("~/.local/celeris/celeris.sqlite3")
@@ -3143,11 +2653,7 @@ fn omitted_paths_default_to_the_celeris_xdg_layout() {
     // `Config::load` は `~` を `$HOME` で展開し、絶対パスにする。
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.toml");
-    std::fs::write(
-        &path,
-        "[[providers]]\nid = \"x\"\nadapter = \"fake\"\n[memory]\n[secrets]\n",
-    )
-    .unwrap();
+    std::fs::write(&path, "[memory]\n[secrets]\n").unwrap();
     let cfg = Config::load(&path).unwrap();
     for p in [
         &cfg.db.path,
@@ -3189,8 +2695,7 @@ fn omitted_paths_default_to_the_celeris_xdg_layout() {
     // 書いてあれば従来どおり（相対は設定ファイルのディレクトリ基準）。
     std::fs::write(
             &path,
-            "db = \"d.sqlite3\"\nworkspace_root = \"ws\"\n[[providers]]\nid = \"x\"\nadapter = \"fake\"\n\
-             [memory]\ndir = \"mem\"\n[secrets]\ndir = \"sec\"\n[accounts]\nclaude_dir = \"ca\"\ncodex_dir = \"co\"\n\
+            "db = \"d.sqlite3\"\nworkspace_root = \"ws\"\n[memory]\ndir = \"mem\"\n[secrets]\ndir = \"sec\"\n[accounts]\nclaude_dir = \"ca\"\ncodex_dir = \"co\"\n\
              [selfdeploy]\nreleases_dir = \"rel\"\n",
         )
         .unwrap();
@@ -3221,11 +2726,7 @@ fn omitted_paths_default_to_the_celeris_xdg_layout() {
 fn containers_build_dir_expands_home_and_resolves_relative_paths() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.toml");
-    std::fs::write(
-        &path,
-        "db = \"t.sqlite3\"\n[[providers]]\nid = \"x\"\nadapter = \"fake\"\n",
-    )
-    .unwrap();
+    std::fs::write(&path, "db = \"t.sqlite3\"\n").unwrap();
     let cfg = Config::load(&path).unwrap();
     assert!(
         cfg.containers.build_dir.is_absolute(),
@@ -3241,10 +2742,10 @@ fn containers_build_dir_expands_home_and_resolves_relative_paths() {
     );
 
     std::fs::write(
-            &path,
-            "db = \"t.sqlite3\"\n[containers]\nbuild_dir = \"images\"\n[[providers]]\nid = \"x\"\nadapter = \"fake\"\n",
-        )
-        .unwrap();
+        &path,
+        "db = \"t.sqlite3\"\n[containers]\nbuild_dir = \"images\"\n",
+    )
+    .unwrap();
     let cfg = Config::load(&path).unwrap();
     assert_eq!(
         cfg.containers.build_dir,
@@ -3259,11 +2760,7 @@ fn workspace_worktree_branch_prefix_defaults_to_celeris_slash_and_reaches_the_di
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.toml");
     // 節を書かなくても既定が効く。
-    std::fs::write(
-        &path,
-        "db = \"t.sqlite3\"\n[[providers]]\nid = \"x\"\nadapter = \"fake\"\n",
-    )
-    .unwrap();
+    std::fs::write(&path, "db = \"t.sqlite3\"\n").unwrap();
     let cfg = Config::load(&path).unwrap();
     assert_eq!(cfg.workspace.worktree_branch_prefix, "celeris/");
     let dispatch = cfg.dispatch_config();
@@ -3276,10 +2773,10 @@ fn workspace_worktree_branch_prefix_defaults_to_celeris_slash_and_reaches_the_di
     );
 
     std::fs::write(
-            &path,
-            "db = \"t.sqlite3\"\n[workspace]\nworktree_branch_prefix = \"bot/\"\n[[providers]]\nid = \"x\"\nadapter = \"fake\"\n",
-        )
-        .unwrap();
+        &path,
+        "db = \"t.sqlite3\"\n[workspace]\nworktree_branch_prefix = \"bot/\"\n",
+    )
+    .unwrap();
     assert_eq!(
         Config::load(&path)
             .unwrap()
@@ -3290,10 +2787,10 @@ fn workspace_worktree_branch_prefix_defaults_to_celeris_slash_and_reaches_the_di
 
     // 空は拒否する（ブランチ名がタスク id そのものになってしまう）。
     std::fs::write(
-            &path,
-            "db = \"t.sqlite3\"\n[workspace]\nworktree_branch_prefix = \"\"\n[[providers]]\nid = \"x\"\nadapter = \"fake\"\n",
-        )
-        .unwrap();
+        &path,
+        "db = \"t.sqlite3\"\n[workspace]\nworktree_branch_prefix = \"\"\n",
+    )
+    .unwrap();
     assert!(Config::load(&path).is_err());
     // 知らないキーは拒否する（他の節と同じ）。
     assert!(toml::from_str::<Config>("[workspace]\nbogus = 1\n").is_err());
@@ -3304,11 +2801,7 @@ fn workspace_worktree_branch_prefix_defaults_to_celeris_slash_and_reaches_the_di
 fn ensure_secrets_dir_creates_the_directory_with_0700() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.toml");
-    std::fs::write(
-        &path,
-        "[secrets]\ndir = \"secrets\"\n[[providers]]\nid = \"x\"\nadapter = \"fake\"\n",
-    )
-    .unwrap();
+    std::fs::write(&path, "[secrets]\ndir = \"secrets\"\n").unwrap();
     let cfg = Config::load(&path).unwrap();
     let secrets_dir = cfg.secrets.as_ref().unwrap().dir.clone();
     assert!(!secrets_dir.exists());
@@ -3328,21 +2821,16 @@ fn ensure_secrets_dir_creates_the_directory_with_0700() {
     cfg.ensure_secrets_dir().unwrap();
 
     // [secrets] 無しは no-op。
-    let no_secrets: Config =
-        toml::from_str("[[providers]]\nid = \"x\"\nadapter = \"fake\"\n").unwrap();
+    let no_secrets: Config = toml::from_str("").unwrap();
     assert!(no_secrets.ensure_secrets_dir().is_ok());
 }
 
-/// `env_from_secrets` は `[adapters.*]` と行の両方で読める（未知キーは拒否）。
+/// `env_from_secrets` は `[adapters.*]` で読める（未知キーは拒否）。
 #[test]
-fn env_from_secrets_is_parsed_on_adapters_and_providers() {
+fn env_from_secrets_is_parsed_on_adapters() {
     let text = r#"[adapters.local_deep_research]
 env_from_secrets = { LDR_SEARCH_ENGINE_WEB_TAVILY_API_KEY = "tavily", LDR_SEARCH_ENGINE_WEB_EXA_API_KEY = "exa" }
 
-[[providers]]
-id = "ldr"
-adapter = "local-deep-research"
-env_from_secrets = { LDR_SEARCH_ENGINE_WEB_TAVILY_API_KEY = "tavily-row" }
 "#;
     let cfg: Config = toml::from_str(text).unwrap();
     assert!(cfg.validate().is_ok());
@@ -3354,13 +2842,6 @@ env_from_secrets = { LDR_SEARCH_ENGINE_WEB_TAVILY_API_KEY = "tavily-row" }
             .map(String::as_str),
         Some("tavily")
     );
-    assert_eq!(
-        cfg.providers[0]
-            .env_from_secrets
-            .get("LDR_SEARCH_ENGINE_WEB_TAVILY_API_KEY")
-            .map(String::as_str),
-        Some("tavily-row")
-    );
 
     for (section, extra) in [
         ("claude_code", ""),
@@ -3370,9 +2851,7 @@ env_from_secrets = { LDR_SEARCH_ENGINE_WEB_TAVILY_API_KEY = "tavily-row" }
         ("paperqa", ""),
     ] {
         let _ = extra;
-        let text = format!(
-            "[adapters.{section}]\nenv_from_secrets = {{ FOO = \"bar\" }}\n[[providers]]\nid = \"x\"\nadapter = \"fake\"\n"
-        );
+        let text = format!("[adapters.{section}]\nenv_from_secrets = {{ FOO = \"bar\" }}\n");
         let cfg: Config = toml::from_str(&text).unwrap_or_else(|e| panic!("{section}: {e}"));
         let _ = cfg;
     }
@@ -3381,7 +2860,7 @@ env_from_secrets = { LDR_SEARCH_ENGINE_WEB_TAVILY_API_KEY = "tavily-row" }
 /// ADR-0089（Phase R6-5）: `[execution] max_cos_runs` の既定（2）・写し・範囲（0..=8）。
 #[test]
 fn execution_max_cos_runs_default_and_validation() {
-    let base = "[[providers]]\nid = \"x\"\nadapter = \"fake\"\n";
+    let base = "";
     let cfg: Config = toml::from_str(base).unwrap();
     cfg.validate().unwrap();
     assert_eq!(cfg.execution.max_cos_runs, 2);
@@ -3401,7 +2880,7 @@ fn execution_max_cos_runs_default_and_validation() {
 /// 上限）と範囲の検査（`max_depth` は task の層数で 1..=3）。値は `ExecutionLimits.tree` に写る。
 #[test]
 fn execution_tree_defaults_and_validation() {
-    let base = "[[providers]]\nid = \"x\"\nadapter = \"fake\"\n";
+    let base = "";
     let cfg: Config = toml::from_str(base).unwrap();
     cfg.validate().unwrap();
     assert!(!cfg.execution.tree.enabled);
@@ -3501,8 +2980,9 @@ fn multi_account_example_mentions_account_pool_commented_out() {
         "/../../config/celeris.multi-account.example.toml"
     ));
     let text = std::fs::read_to_string(path).unwrap();
-    assert!(text.contains("# [accounts]"));
-    assert!(text.contains("# account_pool = true"));
+    assert!(text.contains("[accounts]"));
+    assert!(text.contains("claude_dir"));
+    assert!(text.contains("max_runs"));
     // 既存の受け入れ条件（Config::load が通る）はコメントアウトされているので変わらない。
     assert!(Config::load(path).is_ok());
 }
@@ -3566,7 +3046,7 @@ fn delivery_auto_resolve_overrides_and_validation() {
 fn hot_paths_follow_the_adr_0136_keys_and_default_to_the_previous_locations() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.toml");
-    std::fs::write(&path, "[[providers]]\nid = \"x\"\nadapter = \"fake\"\n").unwrap();
+    std::fs::write(&path, "").unwrap();
     let cfg = Config::load(&path).unwrap();
     let home = task_core::home_dir().expect("HOME in tests");
     let state = home.join(".local/celeris");
@@ -3602,9 +3082,6 @@ dir = "/local/celeris/data/memory"
 releases_dir = "/local/celeris/state/releases"
 [storage]
 hot_mount = "/local"
-[[providers]]
-id = "x"
-adapter = "fake"
 "#,
     )
     .unwrap();
@@ -3731,13 +3208,9 @@ listen = "127.0.0.1:18100"
 enabled = true
 provider = "openai-compatible"
 base_url = "{base_url}"
-model = "celeris/cheap"
+model = "qwen3.8-27b"
 {secret_line}
 
-[[providers]]
-id = "langmem-main"
-adapter = "langmem"
-tiers = ["cheap", "standard"]
 "#,
         token = token_file.display(),
         secrets = secrets_dir.display(),
@@ -3821,712 +3294,23 @@ fn verify_mode_config_does_not_serve_the_llm_proxy() {
     assert!(!crate::daemon::run::serves_llm_proxy(DaemonMode::Verify));
 }
 
-/// ADR-0132 付記 L1/L4: 本番の形（2026-10-02）では `opencode-qwen`（`openai_compatible:qwen`）だけが
-/// ローカルの行で、probe 先はその source の `base_url`。プールの行と専用契約のアダプタは入らない。
+/// `[llm_proxy.models]`（tier alias）は新しい書き方を示す読み込みエラー。
 #[test]
-fn cheap_local_first_legacy_production_yields_opencode_qwen() {
-    let fixture = include_str!("fixtures/provider_kind_legacy_production.toml");
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("config.toml");
-    std::fs::write(&path, fixture).unwrap();
-    let cfg = Config::load(&path).unwrap();
-    assert!(cfg.execution.cheap_local_first);
-    assert_eq!(
-        cfg.local_cheap_providers(),
-        vec![task_dispatch::LocalProviderSpec {
-            provider: "opencode-qwen".into(),
-            health: vec![task_dispatch::LocalHealthTarget {
-                base_url: "http://127.0.0.1:9/v1".into(),
-                bearer_token: None,
-            }],
-        }]
-    );
-}
-
-/// ADR-0132 付記 L1: `celeris`（proxy）の cheap 行は、有効な `openai_compatible` source と
-/// `[llm_proxy.models.qwen].cheap` があるときだけローカル。probe 先は有効な source 全部。
-#[test]
-fn cheap_local_first_celeris_row_needs_a_local_source_and_qwen_cheap() {
-    let row = "[[providers]]\nid = \"proxy-acp\"\nadapter = \"acp\"\nmodel = \"celeris/cheap\"\ntiers = [\"cheap\"]\n\
-               [[providers]]\nid = \"pool\"\nadapter = \"claude-code\"\naccount_pool = true\ntiers = [\"cheap\"]\n";
-    let sources = "[[llm_proxy.sources.openai_compatible]]\nid = \"qwen\"\nbase_url = \"http://127.0.0.1:9/v1\"\napi_key = \"k\"\n\
-                   [[llm_proxy.sources.openai_compatible]]\nid = \"off\"\nbase_url = \"http://127.0.0.1:10/v1\"\nenabled = false\n\
-                   [[llm_proxy.sources.openai_compatible]]\nid = \"qwen2\"\nbase_url = \"http://127.0.0.1:11/v1\"\n";
-    let cfg: Config = toml::from_str(&format!("{sources}{row}")).unwrap();
-    assert_eq!(
-        cfg.local_cheap_providers(),
-        vec![task_dispatch::LocalProviderSpec {
-            provider: "proxy-acp".into(),
-            health: vec![
-                task_dispatch::LocalHealthTarget {
-                    base_url: "http://127.0.0.1:9/v1".into(),
-                    bearer_token: Some("k".into()),
-                },
-                task_dispatch::LocalHealthTarget {
-                    base_url: "http://127.0.0.1:11/v1".into(),
-                    bearer_token: None,
-                },
-            ],
-        }]
-    );
-    // ローカルの source が無い proxy の行はローカルではない。
-    let cfg: Config = toml::from_str(row).unwrap();
-    assert!(cfg.local_cheap_providers().is_empty());
-    let cfg: Config = toml::from_str(&format!(
-        "[[llm_proxy.sources.openai_compatible]]\nid = \"off\"\nbase_url = \"http://127.0.0.1:10/v1\"\nenabled = false\n{row}"
-    ))
-    .unwrap();
-    assert!(cfg.local_cheap_providers().is_empty());
-    // proxy の cheap が Qwen に向かわない（`models.qwen.cheap` が無い）ならローカルではない。
-    let cfg: Config = toml::from_str(&format!("{sources}[llm_proxy.models.qwen]\n{row}")).unwrap();
-    assert!(cfg.llm_proxy.models.qwen.is_empty());
-    assert!(cfg.local_cheap_providers().is_empty());
-}
-
-/// ADR-0132 付記 L7: `[execution] cheap_local_first = false` でローカルの行を作らない。
-#[test]
-fn cheap_local_first_can_be_disabled() {
-    let body = "[[llm_proxy.sources.openai_compatible]]\nid = \"qwen\"\nbase_url = \"http://127.0.0.1:9/v1\"\n\
-                [[providers]]\nid = \"direct\"\nadapter = \"acp\"\ntiers = [\"cheap\"]\nllm_source = \"openai_compatible:qwen\"\n";
-    let cfg: Config = toml::from_str(body).unwrap();
-    assert_eq!(cfg.local_cheap_providers().len(), 1);
-    let cfg: Config =
-        toml::from_str(&format!("[execution]\ncheap_local_first = false\n{body}")).unwrap();
-    assert!(!cfg.execution.cheap_local_first);
-    assert!(cfg.local_cheap_providers().is_empty());
-    // cheap を提供しない行はローカルではない。
-    let cfg: Config = toml::from_str(&body.replace("[\"cheap\"]", "[\"standard\"]")).unwrap();
-    assert!(cfg.local_cheap_providers().is_empty());
-}
-
-/// ADR-0132 付記 L6: ローカルの行の同時実行数は既存の `concurrency`（既定 1）。
-#[test]
-fn cheap_local_first_legacy_concurrency_comes_from_the_provider_row() {
-    let head = "[[llm_proxy.sources.openai_compatible]]\nid = \"qwen\"\nbase_url = \"http://127.0.0.1:9/v1\"\n";
-    let row = "[[providers]]\nid = \"direct\"\nadapter = \"acp\"\ntiers = [\"cheap\"]\nllm_source = \"openai_compatible:qwen\"\n";
-    for (extra, expected) in [("", None), ("concurrency = 3\n", Some(3))] {
-        let cfg: Config = toml::from_str(&format!("{head}{row}{extra}")).unwrap();
-        assert_eq!(cfg.local_cheap_providers()[0].provider, "direct");
-        let spec = cfg
-            .provider_specs()
-            .into_iter()
-            .find(|p| p.id == "direct")
-            .unwrap();
-        assert_eq!(spec.concurrency, expected);
-    }
+fn proxy_tier_alias_rejected_in_celeris_config() {
+    let err = toml::from_str::<Config>("[llm_proxy.models.qwen]\ncheap = \"qwen3.8-27b\"\n")
+        .expect_err("[llm_proxy.models] must be rejected")
+        .to_string();
+    assert!(err.contains("<source_id>/<model_id>"), "{err}");
 }
 
 #[test]
-fn routing_legacy_config_normalizes_with_warnings() {
-    use task_core::Tier;
-    let fixture = include_str!("fixtures/provider_kind_legacy_production.toml");
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("config.toml");
-    std::fs::write(&path, fixture).unwrap();
-    let cfg = Config::load(&path).unwrap();
-    let catalog = cfg.routing_catalog_snapshot.as_ref().unwrap();
-    assert!(
-        catalog
-            .deployments
-            .iter()
-            .any(|d| d.source_ref == "openai_compatible:qwen"
-                && d.allowed_lanes == vec![Tier::Cheap])
-    );
-    assert!(
-        catalog
-            .deployments
-            .iter()
-            .filter(|d| d.model_profile_id.to_ascii_lowercase().contains("qwen"))
-            .all(|d| d.allowed_lanes == vec![Tier::Cheap])
-    );
-    assert!(
-        catalog
-            .warnings
-            .iter()
-            .any(|w| w.contains("llm_proxy.models.qwen"))
-    );
-    assert!(
-        catalog
-            .warnings
-            .iter()
-            .all(|w| !w.contains("fixture-secret-sentinel"))
-    );
-    let mut dedup = catalog.warnings.clone();
-    dedup.sort();
-    dedup.dedup();
-    assert_eq!(catalog.warnings, dedup);
-
-    let new = format!(
-        "{fixture}\n[[model_routing.models]]\nid = \"legacy:qwen:qwen3.8-27b\"\nrevision = \"v1\"\n"
-    );
-    std::fs::write(&path, new).unwrap();
-    let cfg = Config::load(&path).unwrap();
-    let catalog = cfg.routing_catalog_snapshot.as_ref().unwrap();
-    assert_eq!(
-        catalog
-            .models
-            .iter()
-            .find(|m| m.id == "legacy:qwen:qwen3.8-27b")
-            .unwrap()
-            .revision,
-        "v1"
-    );
-    assert!(catalog.warnings.iter().any(|w| w.contains("overrides")));
-
-    std::fs::write(&path, format!("{fixture}\n[model_routing]\nmode = \"shadow\"\n[model_routing.policies.cheap]\nmin_quality = 0.55\n")).unwrap();
-    let cfg = Config::load(&path).unwrap();
-    let catalog = cfg.routing_catalog_snapshot.as_ref().unwrap();
-    assert_eq!(
-        catalog.mode,
-        task_core::model_router::policy::RoutingMode::Shadow
-    );
-    assert_eq!(
-        catalog
-            .policies
-            .iter()
-            .find(|p| p.lane == Tier::Cheap)
-            .unwrap()
-            .min_quality,
-        0.55
-    );
-    std::fs::write(
-        &path,
-        format!("{fixture}\n[model_routing.policies.cheap]\nmin_quality = 1.5\n"),
-    )
-    .unwrap();
-    assert!(
-        Config::load(&path)
-            .unwrap_err()
-            .to_string()
-            .contains("min_quality")
-    );
-
-    std::fs::write(&path, format!("{fixture}\n[[model_routing.deployments]]\nid = \"legacy:openai-compatible:qwen:Cheap\"\nsource_ref = \"openai-compatible:qwen\"\nmodel_profile_id = \"legacy:qwen:qwen3.8-27b\"\nupstream_model = \"qwen3.8-27b\"\nhost = \"local-gpu\"\n")).unwrap();
-    let cfg = Config::load(&path).unwrap();
-    let dep = cfg
-        .routing_catalog_snapshot
-        .as_ref()
-        .unwrap()
-        .deployments
-        .iter()
-        .find(|d| d.id == "legacy:openai-compatible:qwen:Cheap")
-        .unwrap();
-    assert_eq!(dep.allowed_lanes, vec![Tier::Cheap]);
-    assert_eq!(
-        dep.billing,
-        task_core::model_router::profiles::Billing::SelfHosted
-    );
-    assert_eq!(dep.host.as_deref(), Some("local-gpu"));
-
-    std::fs::write(&path, format!("{fixture}\n[[model_routing.deployments]]\nid = \"bad\"\nsource_ref = \"openai_compatible:missing\"\nmodel_profile_id = \"legacy:qwen:qwen3.8-27b\"\nupstream_model = \"qwen3.8-27b\"\nallowed_lanes = [\"cheap\"]\n")).unwrap();
-    assert!(
-        Config::load(&path)
-            .unwrap_err()
-            .to_string()
-            .contains("unknown source_ref")
-    );
-    std::fs::write(&path, format!("{fixture}\n[[model_routing.deployments]]\nid = \"legacy:openai-compatible:qwen:Cheap\"\nsource_ref = \"codex-oauth\"\nmodel_profile_id = \"legacy:qwen:qwen3.8-27b\"\nupstream_model = \"qwen3.8-27b\"\nallowed_lanes = [\"cheap\"]\n")).unwrap();
-    assert!(
-        Config::load(&path)
-            .unwrap_err()
-            .to_string()
-            .contains("identity conflicts")
-    );
-    std::fs::write(
-        &path,
-        format!("{fixture}\n[model_routing]\nmode = \"enforce\"\n"),
-    )
-    .unwrap();
-    assert!(
-        Config::load(&path)
-            .unwrap_err()
-            .to_string()
-            .contains("Phase 2")
-    );
+fn model_routing_section_rejected_with_route_defaults_guidance() {
+    let error = Config::parse_with_delivery("[model_routing]\nmode = \"shadow\"\n")
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("route_defaults"), "{error}");
 }
 
-#[test]
-fn routing_legacy_equivalence_qwen_is_cheap_only() {
-    use task_core::Tier;
-    let fixture = include_str!("fixtures/provider_kind_legacy_production.toml");
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("config.toml");
-    std::fs::write(&path, fixture).unwrap();
-    let cfg = Config::load(&path).unwrap();
-    let catalog = cfg.routing_catalog_snapshot.as_ref().unwrap();
-    let legacy = cfg
-        .provider_specs()
-        .into_iter()
-        .find(|p| p.id == "opencode-qwen")
-        .unwrap();
-    let normalized = catalog
-        .deployments
-        .iter()
-        .find(|d| d.id == "provider:opencode-qwen")
-        .unwrap();
-    assert_eq!(legacy.tiers, vec![Tier::Cheap]);
-    assert_eq!(normalized.allowed_lanes, legacy.tiers);
-    assert_eq!(normalized.upstream_model, "qwen-local/qwen3.8-27b");
-    assert_eq!(
-        cfg.provider_llm_source(&legacy.id).unwrap().source,
-        task_core::LlmSourceRef::OpenaiCompatible("qwen".into())
-    );
-    assert_eq!(normalized.source_ref, "openai_compatible:qwen");
-}
-
-fn routing_phase2_load(extra: &str) -> Result<Config, String> {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("config.toml");
-    let db = dir.path().join("db.sqlite3");
-    let ws = dir.path().join("ws");
-    std::fs::write(
-        &path,
-        format!(
-            "db = {db:?}\nworkspace_root = {ws:?}\n[[providers]]\nid = \"x\"\nadapter = \"fake\"\n{extra}"
-        ),
-    )
-    .unwrap();
-    Config::load(&path).map_err(|e| e.to_string())
-}
-
-#[test]
-fn routing_shadow_config_defaults_off_and_requires_caps() {
-    let legacy = routing_phase2_load("").unwrap();
-    let policy = &legacy.model_routing.runtime.as_ref().unwrap().shadow;
-    assert!(!policy.execute);
-    assert_eq!(policy.sample_rate, 0.0);
-    assert!(policy.daily_caps().is_none());
-
-    let decision = routing_phase2_load("[model_routing]\nmode = \"shadow\"\n").unwrap();
-    assert!(
-        !decision
-            .model_routing
-            .runtime
-            .as_ref()
-            .unwrap()
-            .shadow
-            .execute
-    );
-
-    let base = "[model_routing.shadow]\nexecute = true\nsample_rate = 1.0\n";
-    let err = routing_phase2_load(base).unwrap_err();
-    assert!(err.contains("daily_max_requests"), "{err}");
-
-    let capped = format!(
-        "{base}candidate_policy = \"candidate-v1\"\ndaily_max_requests = 10\ndaily_max_tokens = 1000\n\
-         daily_max_effective_usd = 1.5\nmax_concurrency = 2\nmax_queue_depth = 4\n\
-         timeout_ms = 3000\n"
-    );
-    let err = routing_phase2_load(&capped).unwrap_err();
-    assert!(err.contains("allowlist"), "{err}");
-    let partial = format!("{capped}[model_routing.shadow.allowlist]\ntask_kinds = [\"*\"]\n");
-    let err = routing_phase2_load(&partial).unwrap_err();
-    assert!(err.contains("every allowlist dimension"), "{err}");
-    let valid = format!(
-        "{capped}[model_routing.shadow.allowlist]\n\
-         task_kinds = [\"*\"]\nroles = [\"*\"]\nlanes = [\"cheap\"]\nsources = [\"qwen\"]\n"
-    );
-    let config = routing_phase2_load(&valid).unwrap();
-    let runtime = config.model_routing.runtime.as_ref().unwrap();
-    assert!(runtime.shadow.execute);
-    assert_eq!(runtime.shadow.daily_caps().unwrap().max_requests, 10);
-    assert_eq!(runtime.shadow.allowlist.sources, ["qwen"]);
-    assert_eq!(
-        runtime.shadow_candidate_policy.as_deref(),
-        Some("candidate-v1")
-    );
-
-    for (suffix, reason) in [
-        ("sample_rate = 1.1\n", "sample_rate"),
-        ("sample_rate = -0.1\n", "sample_rate"),
-        ("daily_max_tokens = 0\n", "daily_max_tokens"),
-    ] {
-        let err = routing_phase2_load(&format!("[model_routing.shadow]\n{suffix}")).unwrap_err();
-        assert!(err.contains(reason), "{err}");
-    }
-}
-
-#[test]
-fn routing_sidecar_config_defaults_off_and_rejects_primary() {
-    let config = routing_phase2_load("").unwrap();
-    let sidecar = &config.model_routing.estimator.sidecar;
-    assert!(!sidecar.enabled);
-    assert!(sidecar.shadow_only);
-    assert!(!sidecar.send_prompt);
-    assert_eq!(sidecar.protocol_version, 1);
-
-    for (snippet, expected) in [
-        ("shadow_only = false\n", "shadow_only"),
-        ("enabled = true\n", "requires endpoint"),
-        (
-            "enabled = true\nendpoint = \"http://127.0.0.1:8080\"\n\
-             estimator_id = \"test\"\nestimator_version = \"v1\"\n",
-            "daily_max_requests",
-        ),
-        ("endpoint = \"http://example.com:8080\"\n", "endpoint"),
-    ] {
-        let err = routing_phase2_load(&format!("[model_routing.estimator.sidecar]\n{snippet}"))
-            .unwrap_err();
-        assert!(err.contains(expected), "{err}");
-    }
-
-    let valid = "[model_routing.estimator.sidecar]\n\
-        enabled = true\nendpoint = \"http://127.0.0.1:8080\"\n\
-        estimator_id = \"test\"\nestimator_version = \"v1\"\n\
-        daily_max_requests = 10\n\
-        [model_routing.estimator.sidecar.allowlist]\n\
-        task_kinds = [\"*\"]\nroles = [\"*\"]\nlanes = [\"cheap\"]\nsources = [\"qwen\"]\n";
-    let config = routing_phase2_load(valid).unwrap();
-    assert!(config.model_routing.estimator.sidecar.enabled);
-    assert!(config.model_routing.estimator.sidecar.shadow_only);
-}
-
-#[test]
-fn routing_sidecar_privacy_and_dependencies_gate_prompt() {
-    use task_core::model_router::shadow::ShadowTarget;
-
-    let base = "[model_routing.estimator.sidecar]\n\
-        endpoint = \"https://router.example/estimate\"\n\
-        network_allowlist = [\"router.example\"]\n";
-    let config = routing_phase2_load(base).unwrap();
-    let sidecar = &config.model_routing.estimator.sidecar;
-    let target = ShadowTarget {
-        task_kind: "coding".into(),
-        role: "software-engineering".into(),
-        lane: "cheap".into(),
-        source: "qwen".into(),
-    };
-    assert!(!sidecar.allows_prompt(&target));
-    assert!(sidecar.allows_dependencies(&["router.example".into()]));
-    assert!(!sidecar.allows_dependencies(&["embeddings.example".into()]));
-
-    let err = routing_phase2_load(&format!("{base}send_prompt = true\n")).unwrap_err();
-    assert!(err.contains("prompt_allowlist"), "{err}");
-    let config = routing_phase2_load(&format!(
-        "{base}send_prompt = true\n\
-         [model_routing.estimator.sidecar.prompt_allowlist]\n\
-         task_kinds = [\"coding\"]\nroles = [\"software-engineering\"]\n\
-         lanes = [\"cheap\"]\nsources = [\"qwen\"]\n"
-    ))
-    .unwrap();
-    assert!(
-        config
-            .model_routing
-            .estimator
-            .sidecar
-            .allows_prompt(&target)
-    );
-    assert!(
-        !config
-            .model_routing
-            .estimator
-            .sidecar
-            .allows_dependencies(&["embeddings.example".into()])
-    );
-}
-
-#[test]
-fn routing_enforce_opt_in_validates_heuristic_only() {
-    use task_core::model_router::policy::RoutingMode;
-    // heuristic の明示 opt-in だけが通る。
-    let cfg = routing_phase2_load(
-        "[model_routing]\nmode = \"enforce\"\n[model_routing.estimator]\nkind = \"heuristic\"\n",
-    )
-    .unwrap();
-    let runtime = cfg.model_routing.runtime.as_ref().unwrap();
-    assert_eq!(runtime.mode, RoutingMode::Enforce);
-    assert_eq!(
-        cfg.routing_catalog_snapshot.as_ref().unwrap().mode,
-        RoutingMode::Enforce
-    );
-    assert_eq!(runtime.enforce_routes, vec!["standalone", "server"]);
-    assert_eq!(runtime.dispatch_settings().mode, RoutingMode::Enforce);
-    let cfg = routing_phase2_load(
-        "[model_routing]\nmode = \"enforce\"\nenforce_routes = [\"standalone\"]\n[model_routing.estimator]\nkind = \"heuristic\"\n",
-    )
-    .unwrap();
-    assert_eq!(
-        cfg.model_routing.runtime.as_ref().unwrap().enforce_routes,
-        vec!["standalone"]
-    );
-    // opt-in の無い enforce は拒否（Phase 1 の文言を保つ）。
-    let err = routing_phase2_load("[model_routing]\nmode = \"enforce\"\n").unwrap_err();
-    assert!(
-        err.contains("Phase 2") && err.contains("heuristic"),
-        "{err}"
-    );
-    // heuristic 以外の optimizer は enforce でも shadow でも拒否。
-    for mode in ["enforce", "shadow", "legacy"] {
-        let err = routing_phase2_load(&format!(
-            "[model_routing]\nmode = \"{mode}\"\n[model_routing.estimator]\nkind = \"routellm\"\n"
-        ))
-        .unwrap_err();
-        assert!(err.contains("only \"heuristic\""), "{mode}: {err}");
-    }
-    // standalone でもサーバ全体の制約でもない経路は拒否。
-    for route in ["task", "org", ""] {
-        let err = routing_phase2_load(&format!(
-            "[model_routing]\nmode = \"enforce\"\nenforce_routes = [\"{route}\"]\n[model_routing.estimator]\nkind = \"heuristic\"\n"
-        ))
-        .unwrap_err();
-        assert!(err.contains("standalone or server-wide"), "{route}: {err}");
-    }
-    let err = routing_phase2_load(
-        "[model_routing]\nmode = \"enforce\"\nenforce_routes = []\n[model_routing.estimator]\nkind = \"heuristic\"\n",
-    )
-    .unwrap_err();
-    assert!(err.contains("enforce_routes is empty"), "{err}");
-    // shadow + heuristic の明示は従来どおり通る（mode=shadow の挙動は変えない）。
-    let cfg = routing_phase2_load(
-        "[model_routing]\nmode = \"shadow\"\n[model_routing.estimator]\nkind = \"heuristic\"\n",
-    )
-    .unwrap();
-    assert_eq!(
-        cfg.model_routing.runtime.as_ref().unwrap().mode,
-        RoutingMode::Shadow
-    );
-    // 不正な数値も拒否する。
-    for (extra, needle) in [
-        (
-            "[model_routing]\nobservation_ttl_seconds = 0\n",
-            "observation_ttl_seconds",
-        ),
-        (
-            "[model_routing.subscription_windows.five_hour]\nreserve_value_usd = -1\n",
-            "reserve_value_usd",
-        ),
-        (
-            "[[model_routing.resource_groups]]\nid = \"gpu0\"\nusd_per_gpu_second = nan\n",
-            "usd_per_gpu_second",
-        ),
-        (
-            "[[model_routing.resource_groups]]\nid = \"gpu0\"\nconcurrency_limit = 0\n",
-            "concurrency_limit",
-        ),
-        (
-            "[[model_routing.resource_groups]]\nid = \"g\"\n[[model_routing.resource_groups]]\nid = \"g\"\n",
-            "duplicate id",
-        ),
-        ("[model_routing.retry]\nclient = 1\n", "retry.client"),
-        (
-            "[model_routing.retry]\ntotal_attempts = 0\n",
-            "total_attempts",
-        ),
-    ] {
-        let err = routing_phase2_load(extra).unwrap_err();
-        assert!(err.contains(needle), "{extra}: {err}");
-    }
-}
-
-#[test]
-fn routing_config_defaults_do_not_seed_unknown_as_zero() {
-    use task_core::model_router::policy::{FreshnessPolicy, RoutingMode};
-    let cfg = routing_phase2_load("").unwrap();
-    let runtime = cfg.model_routing.runtime.as_ref().unwrap();
-    assert_eq!(runtime.mode, RoutingMode::Legacy);
-    assert_eq!(runtime.freshness, FreshnessPolicy::default());
-    assert!(runtime.window_reserves.is_empty());
-    assert!(runtime.resource_groups.is_empty());
-    let rates = runtime.self_host_rates(Some("gpu0"));
-    assert_eq!(rates.usd_per_gpu_second, None);
-    assert_eq!(rates.usd_per_wait_second, None);
-    assert!(runtime.capacity_limits(None).resource_groups.is_empty());
-    assert_eq!(
-        runtime.fallback,
-        llm_proxy::fallback::FallbackSettings::default()
-    );
-    let settings = runtime.dispatch_settings();
-    assert_eq!(settings, task_dispatch::DispatchRoutingSettings::default());
-    // 一部だけ書いた欄も、書いていない成分は unknown のまま（0 にしない）。
-    let cfg = routing_phase2_load(
-        "[model_routing]\nobservation_ttl_seconds = 120\n\
-         [model_routing.subscription_windows.five_hour]\nreserve_value_usd = 4.0\n\
-         [model_routing.subscription_windows.seven_day]\n\
-         [[model_routing.resource_groups]]\nid = \"gpu0\"\nconcurrency_limit = 2\n\
-         [[model_routing.resource_groups]]\nid = \"gpu1\"\nusd_per_gpu_second = 0.001\n\
-         [model_routing.retry]\nserver = 1\n",
-    )
-    .unwrap();
-    let runtime = cfg.model_routing.runtime.as_ref().unwrap();
-    assert_eq!(runtime.freshness.observation_ttl_seconds, 120.0);
-    assert_eq!(runtime.window_reserves.get("five_hour"), Some(&4.0));
-    assert_eq!(runtime.window_reserves.get("seven_day"), None);
-    assert_eq!(
-        runtime.self_host_rates(Some("gpu0")).usd_per_gpu_second,
-        None
-    );
-    assert_eq!(
-        runtime.self_host_rates(Some("gpu1")).usd_per_gpu_second,
-        Some(0.001)
-    );
-    assert_eq!(
-        runtime.self_host_rates(Some("gpu1")).usd_per_wait_second,
-        None
-    );
-    let caps = runtime.capacity_limits(Some(3));
-    assert_eq!(caps.per_account, Some(3));
-    assert_eq!(caps.resource_groups.get("gpu0"), Some(&2));
-    assert_eq!(caps.resource_groups.get("gpu1"), None);
-    assert_eq!(runtime.fallback.limits.server, 1);
-    assert_eq!(
-        runtime.fallback.limits.rate_limited,
-        llm_proxy::fallback::RetryLimits::default().rate_limited
-    );
-    assert_eq!(runtime.dispatch_settings().window_reserves.len(), 1);
-}
-
-#[test]
-fn routing_phase3_escalation_defaults_and_validation() {
-    let cfg = routing_phase2_load("").unwrap();
-    let runtime = cfg.model_routing.runtime.as_ref().unwrap();
-    assert_eq!(
-        runtime.escalation,
-        task_core::EscalationThresholds::default()
-    );
-    assert_eq!(runtime.context_safety_margin, None);
-    let cfg = routing_phase2_load("[model_routing]\ncontext_safety_margin = 512\n[model_routing.escalation]\nquality_failures_per_lane = 3\nmax_total_attempts = 5\n").unwrap();
-    let runtime = cfg.model_routing.runtime.as_ref().unwrap();
-    assert_eq!(runtime.context_safety_margin, Some(512));
-    assert_eq!(runtime.escalation.quality_failures_per_lane, 3);
-    assert_eq!(runtime.escalation.max_total_attempts, 5);
-    for key in ["quality_failures_per_lane", "max_total_attempts"] {
-        let err =
-            routing_phase2_load(&format!("[model_routing.escalation]\n{key} = 0\n")).unwrap_err();
-        assert!(err.contains(key), "{err}");
-    }
-    let cfg = routing_phase2_load("[model_routing]\nfuture_context_field = 1\n[model_routing.escalation]\nfuture_threshold = 7\n").unwrap();
-    assert_eq!(
-        cfg.model_routing.runtime.as_ref().unwrap().escalation,
-        task_core::EscalationThresholds::default()
-    );
-}
-
-#[test]
-fn pi_adapter_provider_config_loads_and_builds_with_relative_extension() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("config.toml");
-    std::fs::write(
-        &path,
-        r#"
-[[providers]]
-id = "pi-go"
-adapter = "pi"
-llm_source = "opencode_go"
-model = "opencode-go/deepseek-v4-pro"
-command = "node"
-args = ["/opt/pi/dist/cli.js"]
-extensions = ["hashline/index.ts"]
-tools = ["hashline_read", "hashline_edit", "bash", "grep", "find", "ls"]
-[[harnesses]]
-id = "pi-coding"
-adapter = "pi"
-[[roles]]
-id = "pi-coder"
-adapter = "pi"
-"#,
-    )
-    .unwrap();
-    let cfg = Config::load(&path).unwrap();
-    assert_eq!(
-        cfg.providers[0].extensions,
-        vec![dir.path().join("hashline/index.ts")]
-    );
-    assert_eq!(
-        cfg.provider_llm_source("pi-go").unwrap().source,
-        task_core::LlmSourceRef::OpencodeGo
-    );
-    let adapters = crate::build_adapters(&cfg);
-    assert_eq!(adapters["pi-go"].id(), "pi");
-    assert_eq!(
-        crate::effective_models(&cfg)["pi-go"],
-        "opencode-go/deepseek-v4-pro"
-    );
-}
-
-#[test]
-fn pi_adapter_config_rejects_missing_hashline_and_tools_on_other_adapters() {
-    for row in [
-        "adapter = 'pi'\nmodel = 'opencode-go/test'\nextensions = ['hashline.ts']",
-        "adapter = 'pi'\nmodel = 'opencode-go/test'\ntools = ['bash']",
-        "adapter = 'pi'\nmodel = 'opencode-go/test'\nextensions = ['hashline.ts']\ntools = ['planner']",
-        "adapter = 'fake'\nextensions = ['hashline.ts']\ntools = ['read']",
-    ] {
-        let cfg: Config = toml::from_str(&format!("[[providers]]\nid = 'test'\n{row}\n")).unwrap();
-        assert!(cfg.validate().is_err(), "{row}");
-    }
-}
-
-#[test]
-fn pi_adapter_config_preserves_go_pool_and_direct_compatible_source() {
-    for source in [
-        "llm_source = 'opencode_go'\naccount_pool = 'opencode-go'",
-        "llm_source = 'openai_compatible:local'",
-    ] {
-        let model = if source.contains("openai_compatible") {
-            "local/test"
-        } else {
-            "opencode-go/test"
-        };
-        let body = format!(
-            r#"
-[accounts]
-opencode_dir = "/fixture/accounts"
-[[llm_proxy.sources.openai_compatible]]
-id = "local"
-base_url = "http://127.0.0.1:9/v1"
-[[providers]]
-id = "pi"
-adapter = "pi"
-model = "{model}"
-extensions = ["hashline.ts"]
-tools = ["hashline_read", "hashline_edit", "bash"]
-{source}
-"#
-        );
-        let cfg: Config = toml::from_str(&body).unwrap();
-        cfg.validate().unwrap();
-        assert_eq!(crate::build_adapters(&cfg)["pi"].id(), "pi");
-    }
-}
-
-/// ADR 2026-10-07: `[[harnesses]] adapter_policy = "model_family"` が dispatcher の既定解決の材料になる。
-#[test]
-fn coding_harness_default_config_builds_dispatcher_inputs() {
-    let cfg: Config = toml::from_str(
-        r#"
-[[providers]]
-id = "cc"
-adapter = "claude-code"
-[[providers]]
-id = "pi-go"
-adapter = "pi"
-llm_source = "opencode_go"
-model = "opencode-go/deepseek-v4-pro"
-extensions = ["/opt/hashline/index.ts"]
-tools = ["hashline_read", "hashline_edit", "bash"]
-[[harnesses]]
-id = "coding"
-adapter_policy = "model_family"
-[[harnesses]]
-id = "writing"
-"#,
-    )
-    .unwrap();
-    cfg.validate().unwrap();
-    let d = cfg.coding_harness_default();
-    assert_eq!(d.harnesses, vec!["coding".to_string()]);
-    assert_eq!(d.sources["cc"], task_core::LlmSourceRef::ClaudeOauth);
-    assert_eq!(d.sources["pi-go"], task_core::LlmSourceRef::OpencodeGo);
-    assert_eq!(
-        cfg.harness_registry()
-            .get("writing")
-            .unwrap()
-            .adapter_policy,
-        task_core::AdapterPolicy::ProviderOrder
-    );
-}
-
-/// 固定 adapter・対話用ハーネスと `model_family` は両立しない。未知の値は読み込みで落ちる。
 #[test]
 fn coding_harness_default_config_rejects_fixed_adapter_and_unknown_policy() {
     for row in [
@@ -4548,8 +3332,7 @@ fn coding_harness_default_config_rejects_fixed_adapter_and_unknown_policy() {
 #[test]
 fn adapter_subagents_setting_resolves_deterministically_and_defaults_to_deny() {
     use task_worker::tool_policy::SubagentPolicy;
-    let cfg: Config =
-        toml::from_str("[[providers]]\nid = \"x\"\nadapter = \"claude-code\"\n").unwrap();
+    let cfg: Config = toml::from_str("").unwrap();
     assert_eq!(cfg.adapters.claude_code.subagents, "");
     assert_eq!(
         cfg.adapters.claude_code.resolved_subagents(),
@@ -4562,7 +3345,7 @@ fn adapter_subagents_setting_resolves_deterministically_and_defaults_to_deny() {
     assert_eq!(cfg.adapters.acp.resolved_subagents(), SubagentPolicy::Deny);
 
     let cfg: Config = toml::from_str(
-        "[[providers]]\nid = \"x\"\nadapter = \"claude-code\"\n\n[adapters.claude_code]\nsubagents = \"allow\"\n\n[adapters.codex]\nsubagents = \"allow_cos\"\n\n[adapters.acp]\nsubagents = \"whatever\"\n",
+        "\n[adapters.claude_code]\nsubagents = \"allow\"\n\n[adapters.codex]\nsubagents = \"allow_cos\"\n\n[adapters.acp]\nsubagents = \"whatever\"\n",
     )
     .unwrap();
     assert!(cfg.validate().is_ok());
@@ -4577,104 +3360,22 @@ fn adapter_subagents_setting_resolves_deterministically_and_defaults_to_deny() {
     assert_eq!(cfg.adapters.acp.resolved_subagents(), SubagentPolicy::Deny);
 }
 
+/// 例の設定（`config/*.example.toml`）は全部読めて、新しい供給元・harness・route の参照が解決する
+/// （ADR 2026-10-11 llm-source-harness-selection）。組織の例（`org.example.toml`）は `org_include` で読むので除く。
 #[test]
-fn legacy_provider_concurrency_is_optional_and_warns_including_zero_and_include() {
-    use std::io::Write;
-    use std::sync::{Arc, Mutex};
-    #[derive(Clone)]
-    struct Capture(Arc<Mutex<Vec<u8>>>);
-    impl Write for Capture {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(bytes);
-            Ok(bytes.len())
+fn config_examples_load() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../config");
+    let mut checked = 0;
+    for entry in std::fs::read_dir(&dir).unwrap() {
+        let path = entry.unwrap().path();
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        if !name.ends_with(".example.toml") || name == "org.example.toml" {
+            continue;
         }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
+        let cfg = Config::load(&path).unwrap_or_else(|e| panic!("{name}: {e}"));
+        cfg.llm_route_registry()
+            .unwrap_or_else(|e| panic!("{name}: llm_route_registry: {e}"));
+        checked += 1;
     }
-    let dir = tempfile::tempdir().unwrap();
-    let include = dir.path().join("providers.d");
-    std::fs::create_dir(&include).unwrap();
-    std::fs::write(
-        include.join("legacy.toml"),
-        "id = \"included\"\nadapter = \"fake\"\nconcurrency = 0\n",
-    )
-    .unwrap();
-    let config = dir.path().join("config.toml");
-    std::fs::write(&config, format!(
-        "providers_include = \"providers.d/*.toml\"\n[accounts]\nclaude_dir = {:?}\n[[providers]]\nid = \"pool\"\nadapter = \"claude-code\"\naccount_pool = true\nconcurrency = 0\n[[providers]]\nid = \"omitted\"\nadapter = \"fake\"\n[[providers]]\nid = \"legacy\"\nadapter = \"fake\"\nconcurrency = 3\n",
-        dir.path().join("accounts"))).unwrap();
-    let bytes = Arc::new(Mutex::new(Vec::new()));
-    let writer = Capture(bytes.clone());
-    let subscriber = tracing_subscriber::fmt()
-        .without_time()
-        .with_ansi(false)
-        .with_max_level(tracing::Level::WARN)
-        .with_writer(move || writer.clone())
-        .finish();
-    // tracing の callsite interest は process 全体で共有される。dispatcher が 1 つしか登録されていないと
-    // interest は登録した thread の既定 subscriber だけで決まるため、並走する別 thread（subscriber なし）が
-    // この warn! callsite を先に登録すると Interest::never が残り、この試験の with_default に警告が届かない。
-    // 常時 1 つ anchor を登録して registry を複数 dispatcher の経路に乗せ、interest を thread に依らず決める。
-    static CALLSITE_ANCHOR: std::sync::OnceLock<tracing::Dispatch> = std::sync::OnceLock::new();
-    CALLSITE_ANCHOR.get_or_init(|| {
-        tracing::Dispatch::new(
-            tracing_subscriber::fmt()
-                .with_writer(std::io::sink)
-                .with_max_level(tracing::Level::WARN)
-                .finish(),
-        )
-    });
-    let cfg = tracing::subscriber::with_default(subscriber, || {
-        // 別 thread がこの scope の中で初めて callsite を登録する並走を再現する（anchor が無いと失敗する）。
-        let other = config.clone();
-        std::thread::spawn(move || Config::load(&other).unwrap())
-            .join()
-            .unwrap();
-        Config::load(&config).unwrap()
-    });
-    let log = String::from_utf8(bytes.lock().unwrap().clone()).unwrap();
-    for id in ["pool", "included", "legacy"] {
-        assert!(
-            log.contains(&format!("provider {id}: concurrency is deprecated")),
-            "{log}"
-        );
-    }
-    assert!(!log.contains("provider omitted:"), "{log}");
-    assert!(log.contains("ignored for account pools"), "{log}");
-    // 非プール行の警告は上限の持ち主（その行の LLM source の暗黙アカウント）を指す。fake 行の source は `none`。
-    assert!(log.contains("ignored; the limit is the max_runs"), "{log}");
-    assert!(log.contains("(implicit/none)"), "{log}");
-    assert_eq!(
-        cfg.providers
-            .iter()
-            .find(|p| p.id == "omitted")
-            .unwrap()
-            .concurrency,
-        None
-    );
-    assert_eq!(
-        cfg.providers
-            .iter()
-            .find(|p| p.id == "pool")
-            .unwrap()
-            .concurrency,
-        Some(0)
-    );
-    assert_eq!(
-        cfg.providers
-            .iter()
-            .find(|p| p.id == "included")
-            .unwrap()
-            .concurrency,
-        Some(0)
-    );
-    assert_eq!(
-        cfg.providers
-            .iter()
-            .find(|p| p.id == "legacy")
-            .unwrap()
-            .concurrency,
-        Some(3)
-    );
+    assert!(checked >= 10, "example configs found: {checked}");
 }

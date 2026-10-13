@@ -60,7 +60,7 @@ impl Dispatcher {
                 continue;
             };
             if let Some(review_run_id) = entry.review_run_id.clone() {
-                if let Some(provider) = entry.provider.clone() {
+                if let Some(provider) = entry.route.as_ref().map(|(source, _)| source.to_string()) {
                     self.release_quota_if_tracked(
                         &review_run_id,
                         entry.account.as_deref(),

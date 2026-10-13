@@ -29,7 +29,7 @@ fn fixture_script(enabled: bool, script: &str) -> Fixture {
         "-c".into(),
         script.into(),
     ]));
-    let mut d = dispatcher_with_adapter_id(store.clone(), adapter, 2, true, "fake");
+    let mut d = dispatcher_with_test_clock(store.clone(), adapter, 2, true);
     d.test_now = Some(Arc::new(StdMutex::new(
         OffsetDateTime::from_unix_timestamp(1_790_000_000).expect("clock"),
     )));
@@ -48,15 +48,9 @@ fn fixture_script(enabled: bool, script: &str) -> Fixture {
     d.set_cos_chat_launch(
         store.clone(),
         CosChatLaunchConfig {
-            fallbacks: Vec::new(),
             worker_reserve_five_hour: 0.90,
             enabled,
             harness: "fake".into(),
-            llm_source: Some("test".into()),
-            provider: Some("p1".into()),
-            account_id: None,
-            model: None,
-            tier: Tier::Frontier,
             max_turns: 2,
             max_wall_secs: 30,
             unavailable_reason: None,

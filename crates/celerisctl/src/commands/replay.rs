@@ -129,6 +129,7 @@ mod tests {
         let store = SqliteStore::open_in_memory().expect("open");
         let now = time::OffsetDateTime::now_utc();
         let task = task_core::Task {
+            harness_id: None,
             requirements: Default::default(),
             tree: None,
             paused_at: None,
@@ -148,7 +149,6 @@ mod tests {
             priority: 0,
             worker_hint: task_core::WorkerHint {
                 tier: task_core::Tier::Standard,
-                adapter: None,
             },
             workspace: task_core::WorkspaceSpec::Local {
                 path: "/tmp/ws".into(),

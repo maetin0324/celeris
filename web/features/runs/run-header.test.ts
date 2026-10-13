@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { eventKindLabel, formatSeconds, isNearBottom, runDuration, runHarness, runStatus } from "./run-header";
+import {
+  eventKindLabel,
+  formatSeconds,
+  isNearBottom,
+  LEGACY_SELECTION_TEXT,
+  runDuration,
+  runSelectionParts,
+  runSelectionText,
+  runStatus,
+} from "./run-header";
 import { parseRunLog } from "./run-log";
 
 describe("run header", () => {
@@ -18,8 +27,23 @@ describe("run header", () => {
     expect(runStatus({ finished_at: null, outcome: null })).toBe("running");
     expect(runStatus({ finished_at: "2026-01-01T00:00:00Z", outcome: "done" })).toBe("done");
     expect(runStatus({ finished_at: "2026-01-01T00:00:00Z", outcome: null })).toBeUndefined();
-    expect(runHarness({ adapter: "claude-code", model: "opus" })).toBe("claude-code（opus）");
-    expect(runHarness({ adapter: "codex", model: "" })).toBe("codex");
+    const selected = {
+      status: "selected" as const,
+      harness_id: "claude-code",
+      source_id: "claude-oauth",
+      model_id: "claude-opus",
+      account_id: "main",
+      basis: null,
+    };
+    expect(runSelectionParts(selected)).toEqual({
+      harness: "claude-code",
+      sourceId: "claude-oauth",
+      model: "claude-opus",
+      account: "main",
+    });
+    expect(runSelectionText(selected)).toBe("claude-code / claude-oauth / claude-opus / 口座 main");
+    expect(runSelectionParts({ status: "legacy_unresolved" })).toBeUndefined();
+    expect(runSelectionText({ status: "legacy_unresolved" })).toBe(LEGACY_SELECTION_TEXT);
   });
 
   it("labels every event kind with text, not only color", () => {

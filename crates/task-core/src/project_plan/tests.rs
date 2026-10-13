@@ -172,6 +172,7 @@ fn is_milestones_plan_task_needs_the_kind_and_the_label() {
     };
     let now = time::OffsetDateTime::now_utc();
     let base = Task {
+        harness_id: None,
         requirements: Default::default(),
         tree: None,
         paused_at: None,
@@ -194,7 +195,6 @@ fn is_milestones_plan_task_needs_the_kind_and_the_label() {
         priority: 0,
         worker_hint: WorkerHint {
             tier: Tier::Standard,
-            adapter: None,
         },
         workspace: WorkspaceSpec::Local {
             path: "ws".into(),

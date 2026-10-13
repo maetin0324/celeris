@@ -21,7 +21,6 @@ import {
   modelKeys,
   notificationKeys,
   projectKeys,
-  providerKeys,
   reportKeys,
   taskKeys,
 } from "../queries/keys";
@@ -47,7 +46,6 @@ type Token =
   | "artifacts"
   | "metrics"
   | "clusters"
-  | "providers"
   | "accounts"
   | "llmModels"
   | "daemonRest";
@@ -98,8 +96,12 @@ export const EVENT_INVALIDATION: Record<EventKind, KindSpec> = {
       event.type === "delegated" ? stringArray(event.task_ids).map((id) => taskKeys.detail(id)) : [],
   },
   cluster_unavailable: { sets: ["T", "L", "clusters", "daemonRest"] },
+  // run の選択（harness・source・model・account）は task detail の runs と timeline に出る。
+  harness_selected: { sets: ["T", "R", "E", "L"] },
+  llm_route_selected: { sets: ["T", "R", "E", "L"] },
+  harness_migration_unresolved: { sets: ["T", "E", "L"] },
   cluster_master_exited: { sets: ["T", "L", "clusters", "daemonRest"] },
-  provider_throttled: { sets: ["T", "providers", "accounts", "daemonRest"] },
+  provider_throttled: { sets: ["T", "accounts", "daemonRest"] },
   retried: {
     sets: ["T", "L", "P"],
     extra: ({ event }) => (event.type === "retried" ? detailAndTimeline(String(event.from)) : []),
@@ -117,6 +119,9 @@ export const EVENT_INVALIDATION: Record<EventKind, KindSpec> = {
   routing_outcome_recorded: { sets: ["T", "R"] },
   // Phase 4: shadow 監査（primary とは別欄）。対象 task の routing 監査（R）だけを古くする。
   routing_shadow_recorded: { sets: ["T", "R"] },
+  // ADR 2026-10-11-llm-source-model-routing-evaluation D3: genre×harness の段階（shadow/enforce）の遷移。
+  // 対象 task の timeline と routing 監査（R）だけを古くする。
+  routing_stage_changed: { sets: ["T", "R"] },
   checkpoint_saved: { sets: ["T", "R", "E"] },
   execution_planned: { sets: TLE },
   work_unit_transitioned: { sets: TLE },
@@ -124,7 +129,7 @@ export const EVENT_INVALIDATION: Record<EventKind, KindSpec> = {
   execution_routed: { sets: ["T", "E"] },
   execution_hint_set: { sets: TLE },
   repair_scheduled: { sets: TLE },
-  quota_estimated: { sets: ["T", "R", "E", "accounts", "providers", "metrics", "P"] },
+  quota_estimated: { sets: ["T", "R", "E", "accounts", "metrics", "P"] },
   work_unit_committed: { sets: ["T", "E", "changes", "files", "artifacts", "P"] },
   phase_integrated: { sets: ["T", "E", "changes", "files", "artifacts", "P"] },
   work_units_serialized: { sets: ["T", "E"] },
@@ -169,10 +174,10 @@ export const EVENT_INVALIDATION: Record<EventKind, KindSpec> = {
   delivery_skipped: { sets: ["T", "L", "N"] },
   // ADR-0131 付記（2026-10-04）: 日次整理の適用・commit・push の記録。報告は別に 1 件ある。
   knowledge_curation_applied: { sets: ["T", "N"] },
-  // ADR 2026-10-06 opencode-go-and-model-catalog D4: catalog の入れ替わり。モデル一覧と providers（routing catalog）を古くする。
-  model_catalog_changed: { sets: ["llmModels", "providers"] },
-  // ADR 2026-10-06 model-role-assignments D2: 役割の割り当ての変更。assignments と models は同じ key 配下（llm-models）。
-  model_role_assignment_changed: { sets: ["llmModels", "providers"] },
+  // ADR 2026-10-06 opencode-go-and-model-catalog D4: catalog の入れ替わり。モデル一覧を古くする。
+  model_catalog_changed: { sets: ["llmModels"] },
+  // 旧 model 役割の割り当ての event（追記専用の履歴として残る）。割り当て画面は無いので models だけ古くする。
+  model_role_assignment_changed: { sets: ["llmModels"] },
   // ADR 2026-10-07-browser-trusted-devices D5: 信頼端末の監査 event（疑似 task の列）。端末の一覧と owner の状態を stale にする。
   trusted_device_registered: { sets: [], extra: () => [["browser", "trusted-devices"]] },
   trusted_device_used: { sets: [], extra: () => [["browser", "trusted-devices"]] },
@@ -186,6 +191,13 @@ export const EVENT_INVALIDATION: Record<EventKind, KindSpec> = {
   trusted_device_rejected: { sets: [], extra: () => [["browser", "trusted-devices"]] },
   integration_requested: { sets: ["L"] },
   integration_answered: { sets: ["L"] },
+  // ADR 2026-10-11 stranded branches: task の取り込み状態（受信箱の取り残し項目と task detail の取り込み欄）。
+  integration_detected: { sets: ["T", "L"] },
+  integration_merged: { sets: ["T", "L"] },
+  integration_discarded: { sets: ["T", "L"] },
+  integration_held: { sets: ["T", "L"] },
+  integration_reopened: { sets: ["T", "L"] },
+  integration_not_applicable: { sets: ["T", "L"] },
   // 統合 WU の検査の開始・終了（TaskDetail の WU 行の check_progress）。
   integration_check_started: { sets: ["T", "E"] },
   integration_check_finished: { sets: ["T", "E"] },
@@ -240,7 +252,6 @@ const TOKEN_KEYS: Record<Exclude<Token, "P">, (taskId: string) => QueryKey[]> = 
   artifacts: (id) => [taskKeys.artifacts(id)],
   metrics: () => [metricKeys.all],
   clusters: () => [clusterKeys.all],
-  providers: () => [providerKeys.all],
   accounts: () => [accountKeys.all],
   llmModels: () => [modelKeys.all],
   daemonRest: () => [daemonKeys.rest()],

@@ -30,3 +30,12 @@ workspace.toml の check（build・e2e・`cargo test --workspace` など）を d
 
 - leaf WU の run 後の checks（`work_units.rs`）は worker の run のログがあるので今回は変えない。
 - web/（SD_GATE_SKIP_WEB 中）。
+
+## 付記: D2 のログの置き場所（2026-10-11）
+
+統合の検査のログは `<workspace_root>/<task_id>/integration-checks/<wu_key>/<started_ms>-<index>.log` に置く
+（`Dispatcher::check_log_root(task_id)` 基準。葉の WU の受け入れ検査のログ `work-unit-checks/` と同じ規則で、
+repo の作業ツリーの外）。D2 本文の `<task_dir>/integration-checks/` は使わない。統合の検査が走るのは worktree mode
+（`task_dir` = `<workspace_root>/<task_id>`）だけなので、ログの実際の場所は変わらない。shared mode の統合は並列 1 の
+no-op（ADR-0074 D1.2）で検査を流さず、ログも作らない。読む側（`check-log` API）は従来どおり event の絶対
+`log_path` を読む。試験と経緯は [進捗](../progress/2026-10-11-wu-check-logs-outside-tree.md) の「統合ログの移動」節。

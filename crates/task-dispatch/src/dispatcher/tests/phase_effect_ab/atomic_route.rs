@@ -168,7 +168,6 @@ async fn run_variant(variant: Variant) -> AbMetric {
         None,
     );
     dispatcher.config.execution.gate = task_core::GateMode::On;
-    dispatcher.config.execution.planner.adapter = "instant".into();
     let report = run_until_idle(&mut dispatcher, 400).await;
     assert!(report.idle, "{variant:?}: {report:?}");
     assert_eq!(store.get(task_id).unwrap().unwrap().status, Status::Done);

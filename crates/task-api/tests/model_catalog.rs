@@ -35,10 +35,7 @@ async fn override_roundtrip_shows_in_list() {
     assert_eq!(body["items"][0]["available"], true);
     assert_eq!(body["items"][0]["first_seen"], "2023-11-14T22:13:20Z");
     assert_eq!(body["items"][0]["override"], json!(null));
-    assert_eq!(
-        body["items"][0]["routing"],
-        json!({"tiers": [], "deployments": []})
-    );
+    assert!(body["items"][0].get("routing").is_none());
     assert_eq!(body["last_discovery"][0]["source"], "opencode-go");
     assert_eq!(body["last_discovery"][0]["ok"], true);
     assert_eq!(body["last_discovery"][0]["count"], 2);

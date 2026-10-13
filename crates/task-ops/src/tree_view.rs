@@ -17,7 +17,8 @@ use task_core::{
 use crate::OpsError;
 use crate::view::ExecutionPhase;
 
-/// 木の節点の「今どこか」（ADR-0079 D5 / D10 の名指しの待ちを含む表示用の導出値。状態機械には足さない）。
+/// 木の節点の進み具合（表示用の導出値。状態機械には足さない）。待ちの理由は `TaskTreeNode.waits`
+/// （ADR 2026-10-11-task-wait-reasons D6: 子待ち・決定待ち・基盤の失敗はここから外した）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TreeNodePhase {
@@ -27,14 +28,8 @@ pub enum TreeNodePhase {
     Verifying,
     /// 段階の後の途中確認（ADR-0074 D2）。
     AwaitingHuman,
-    /// 子 task だけを待っている（D5）。
-    AwaitingChildren,
     /// root の計画の承認待ち（D8）。
     AwaitingPlanApproval,
-    /// 答えの無い決定で止まっている（節点の `self` の決定、または `blocked(decision)` の unit だけが残る）。
-    HeldOnDecision,
-    /// 子の基盤の失敗で unit が `blocked(infra)`（D9。人の再試行を待つ）。
-    BlockedInfra,
 }
 
 impl From<ExecutionPhase> for TreeNodePhase {
@@ -45,7 +40,6 @@ impl From<ExecutionPhase> for TreeNodePhase {
             ExecutionPhase::Repairing => TreeNodePhase::Repairing,
             ExecutionPhase::Verifying => TreeNodePhase::Verifying,
             ExecutionPhase::AwaitingHuman => TreeNodePhase::AwaitingHuman,
-            ExecutionPhase::AwaitingChildren => TreeNodePhase::AwaitingChildren,
             ExecutionPhase::AwaitingPlanApproval => TreeNodePhase::AwaitingPlanApproval,
         }
     }
@@ -66,6 +60,111 @@ pub struct TreeUnitView {
     /// kind task の unit の子 task。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub child_task_id: Option<TaskId>,
+    /// 計画の中の順（`work_units.seq`）。
+    pub seq: u32,
+    /// ADR 2026-10-11-task-wait-reasons D5: 宣言どおりの依存（`child:<key>` を含む）。
+    #[serde(default)]
+    pub depends_on: Vec<String>,
+    /// pending の unit の依存のうち done でない key（`task_core::unit_waits` の値。他の状態では空）。
+    #[serde(default)]
+    pub waiting_on: Vec<String>,
+    /// pending の unit が前の段の終わりを待っているなら、その段。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub waiting_stage: Option<String>,
+}
+
+/// 段の今（D5）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum StageState {
+    /// 段の有効な行（統合 WU を含む）が全部 done。
+    Done,
+    /// done でない最初の段。
+    Current,
+    /// その後の段。
+    Pending,
+}
+
+/// 節点の計画の段 1 つ（`phase_ranks` の順。段は直列に進む）。
+#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
+pub struct TreeStageView {
+    pub key: String,
+    /// 段の位置（0 から。`phase_ranks` の順）。
+    pub order: u32,
+    pub state: StageState,
+    /// 段の統合 WU の key（`integrate-<stage>`）。
+    pub integrate_key: String,
+}
+
+/// D5: 段の帯（`phase_ranks` の順。有効な行〈superseded・cancelled 以外〉だけで決める）。
+pub fn stage_views(units: &[WorkUnitRow]) -> Vec<TreeStageView> {
+    let ranks = task_core::phase_ranks(units);
+    let mut ordered: Vec<(u32, String)> = ranks.into_iter().map(|(k, r)| (r, k)).collect();
+    ordered.sort();
+    let mut current_seen = false;
+    ordered
+        .into_iter()
+        .enumerate()
+        .map(|(i, (_, key))| {
+            let order = u32::try_from(i).unwrap_or(u32::MAX);
+            let done = units
+                .iter()
+                .filter(|u| u.status.is_active() && u.phase.as_deref() == Some(key.as_str()))
+                .all(|u| u.status == WorkUnitStatus::Done);
+            let state = if done && !current_seen {
+                StageState::Done
+            } else if !current_seen {
+                current_seen = true;
+                StageState::Current
+            } else {
+                StageState::Pending
+            };
+            let integrate_key = units
+                .iter()
+                .find(|u| {
+                    u.kind == WorkUnitKind::Integrate && u.phase.as_deref() == Some(key.as_str())
+                })
+                .map(|u| u.key.clone())
+                .unwrap_or_else(|| format!("integrate-{key}"));
+            TreeStageView {
+                key,
+                order,
+                state,
+                integrate_key,
+            }
+        })
+        .collect()
+}
+
+/// D5: unit の行（seq 順）。pending の unit には `unit_waits` の未完の依存と前の段を付ける。
+pub fn unit_views(units: &[WorkUnitRow], children: &[task_core::ChildFacts]) -> Vec<TreeUnitView> {
+    let resolution = task_core::resolve_children(units, children);
+    let waits: BTreeMap<String, task_core::UnitWait> =
+        task_core::unit_waits(units, &resolution.done)
+            .into_iter()
+            .map(|w| (w.key.clone(), w))
+            .collect();
+    let mut sorted: Vec<&WorkUnitRow> = units.iter().collect();
+    sorted.sort_by_key(|u| u.seq);
+    sorted
+        .into_iter()
+        .map(|u| {
+            let w = waits.get(&u.key);
+            TreeUnitView {
+                key: u.key.clone(),
+                stage: u.phase.clone(),
+                kind: u.kind,
+                title: u.spec.title.clone(),
+                status: u.status,
+                blocked_reason: u.blocked_reason,
+                child_task_id: u.child_task_id.as_deref().and_then(|s| s.parse().ok()),
+                seq: u.seq,
+                depends_on: u.depends_on.clone(),
+                waiting_on: w.map(|w| w.waiting_on.clone()).unwrap_or_default(),
+                waiting_stage: w.and_then(|w| w.waiting_stage.clone()),
+            }
+        })
+        .collect()
 }
 
 /// 木の 1 節点。
@@ -74,9 +173,15 @@ pub struct TaskTreeNode {
     pub id: TaskId,
     pub title: String,
     pub status: Status,
-    /// 表示用の導出値（終端・計画も待ちも無い task は無し）。
+    /// 進み具合の表示用の導出値（終端・計画の無い task は無し）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub phase: Option<TreeNodePhase>,
+    /// ADR 2026-10-11-task-wait-reasons D5: なぜ今走らないか（`TaskSummary.waits` と同じ）。
+    #[serde(default)]
+    pub waits: Vec<task_core::TaskWait>,
+    /// D5: 計画の段（`phase_ranks` の順。直列に進む）。段の無い計画は空。
+    #[serde(default)]
+    pub stages: Vec<TreeStageView>,
     /// task の層（root = 1）。
     pub depth: u32,
     /// 木の親（root は無し）。
@@ -216,39 +321,12 @@ pub fn node_facts(
 }
 
 /// 表示用の導出値（[`TreeNodePhase`] の規則）: 終端なら無し。Execution 節の段階（計画・実行・修復・検証・
-/// 途中確認・承認待ち）があればそれ。そうでなければ、節点の `self` の決定 → `blocked(infra)` の unit →
-/// 子待ち → `blocked(decision)` の unit の順に名指しの待ちを選ぶ。
-fn node_phase(
-    task: &Task,
-    execution_phase: Option<ExecutionPhase>,
-    units: &[WorkUnitRow],
-    self_held: bool,
-) -> Option<TreeNodePhase> {
+/// 途中確認・承認待ち）があればそれ。待ちは `waits` が持つ。
+fn node_phase(task: &Task, execution_phase: Option<ExecutionPhase>) -> Option<TreeNodePhase> {
     if task.status.is_terminal() {
         return None;
     }
-    if let Some(p) = execution_phase
-        && p != ExecutionPhase::AwaitingChildren
-    {
-        return Some(p.into());
-    }
-    let active = || units.iter().filter(|u| u.status.is_active());
-    let blocked = |reason: WorkUnitBlockedReason| {
-        active().any(|u| u.status == WorkUnitStatus::Blocked && u.blocked_reason == Some(reason))
-    };
-    if self_held {
-        return Some(TreeNodePhase::HeldOnDecision);
-    }
-    if blocked(WorkUnitBlockedReason::Infra) {
-        return Some(TreeNodePhase::BlockedInfra);
-    }
-    if execution_phase == Some(ExecutionPhase::AwaitingChildren) {
-        return Some(TreeNodePhase::AwaitingChildren);
-    }
-    if blocked(WorkUnitBlockedReason::Decision) {
-        return Some(TreeNodePhase::HeldOnDecision);
-    }
-    None
+    execution_phase.map(Into::into)
 }
 
 /// D11 / §7 R4a: `GET /tasks/{id}/task-tree`。`from_root` なら木の root から、そうでなければ `task_id` の
@@ -259,6 +337,7 @@ pub fn task_tree(
     task_id: TaskId,
     from_root: bool,
     limits: &TreeLimits,
+    memory: &crate::wait::MemoryWaits,
 ) -> Result<TaskTreeView, OpsError> {
     let Some(task) = store.get(task_id)? else {
         return Err(OpsError::NotFound(task_id));
@@ -291,7 +370,12 @@ pub fn task_tree(
         }
     }
     let decisions = store.decisions_list(Some(root_id))?;
-    let (open_counts, self_held) = open_decisions_by_task(&decisions);
+    let (open_counts, _) = open_decisions_by_task(&decisions);
+    let node_tasks: Vec<Task> = order
+        .iter()
+        .filter_map(|id| by_id.get(id).map(|t| (*t).clone()))
+        .collect();
+    let mut waits = crate::wait::task_waits(store, &node_tasks, &all, memory)?;
 
     let mut facts: Vec<RollupNodeFacts> = Vec::with_capacity(order.len());
     let mut shells: Vec<TaskTreeNode> = Vec::with_capacity(order.len());
@@ -310,24 +394,24 @@ pub fn task_tree(
             .map(|p| p.version)
             .max();
         let parent_unit = t.tree.as_ref().and_then(|tr| tr.parent_unit.as_ref());
-        let units = f
-            .work_units
+        let child_facts: Vec<task_core::ChildFacts> = all
             .iter()
-            .map(|u| TreeUnitView {
-                key: u.key.clone(),
-                stage: u.phase.clone(),
-                kind: u.kind,
-                title: u.spec.title.clone(),
-                status: u.status,
-                blocked_reason: u.blocked_reason,
-                child_task_id: u.child_task_id.as_deref().and_then(|s| s.parse().ok()),
+            .filter(|c| task_core::wait::parent_of(c) == Some(t.id))
+            .map(|c| task_core::ChildFacts {
+                task_id: c.id,
+                status: c.status,
+                labels: c.labels.clone(),
             })
             .collect();
+        let units = unit_views(&f.work_units, &child_facts);
+        let stages = stage_views(&f.work_units);
         shells.push(TaskTreeNode {
             id: t.id,
             title: t.title.clone(),
             status: t.status,
-            phase: node_phase(t, execution_phase, &f.work_units, self_held.contains(&t.id)),
+            phase: node_phase(t, execution_phase),
+            waits: waits.remove(&t.id).unwrap_or_default(),
+            stages,
             depth: f.depth,
             parent_id: f
                 .parent_id

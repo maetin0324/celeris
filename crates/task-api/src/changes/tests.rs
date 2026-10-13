@@ -7,6 +7,7 @@ fn task() -> Task {
     let id = TaskId::new();
     let now = OffsetDateTime::now_utc();
     Task {
+        harness_id: None,
         requirements: Default::default(),
         tree: None,
         paused_at: None,
@@ -38,7 +39,6 @@ fn task() -> Task {
         priority: 0,
         worker_hint: WorkerHint {
             tier: Tier::Standard,
-            adapter: None,
         },
         workspace: WorkspaceSpec::Local {
             path: PathBuf::from("/srv/repo"),
@@ -84,7 +84,7 @@ fn the_pull_request_body_is_deterministic_and_links_back_to_celeris() {
         )),
         "{body}"
     );
-    // `gui_base_url` が無ければリンクは付けない。
+    // `web_base_url` が無ければリンクは付けない。
     let plain = pr_body(&task, None, None);
     assert!(
         plain.contains(&format!("Celeris task {}", task.id)),

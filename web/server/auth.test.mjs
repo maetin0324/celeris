@@ -125,7 +125,7 @@ test("logout clears the cookie", async () => {
   assert.match(header, /Expires=Thu, 01 Jan 1970/);
 });
 
-test("expired, tampered and gui/ cookies are unauthenticated", async () => {
+test("expired, tampered and foreign cookies are unauthenticated", async () => {
   let clock = Date.now();
   const auth = createAuth({ passwordFile, secretFile, now: () => clock });
   const token = auth.issue();
@@ -149,9 +149,9 @@ test("expired, tampered and gui/ cookies are unauthenticated", async () => {
   for (const cookie of [
     `${SESSION_COOKIE_NAME}=${expiredPayload}.${expiredMac}`,
     `${SESSION_COOKIE_NAME}=${payload}.${mac}x`,
-    // gui/ の cookie 名と形式（react-router の署名 cookie）は受け入れない。
-    `__celeris_gui_session=${encodeURIComponent(Buffer.from('{"iat":1,"id":"x"}').toString("base64"))}.abc`,
-    `__celeris_gui_session=${payload}.${mac}`,
+    // 異なる cookie 名・署名形式は受け入れない。
+    `__foreign_session=${encodeURIComponent(Buffer.from('{"iat":1,"id":"x"}').toString("base64"))}.abc`,
+    `__foreign_session=${payload}.${mac}`,
   ]) {
     const response = await fetch(`${base}/api/session`, { headers: { Cookie: cookie } });
     assert.equal((await response.json()).authenticated, false, cookie);

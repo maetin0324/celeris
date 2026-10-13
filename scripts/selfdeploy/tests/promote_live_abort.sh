@@ -44,6 +44,16 @@ count_calls() { grep -c -- "$1" "$FAKE_STATE/systemctl.log" 2>/dev/null || true;
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
+mkdir -p "$WORK/scripts"
+cp "$SD"/*.sh "$WORK/scripts/"
+SD="$WORK/scripts"
+cat >"$SD/web-follow.sh" <<'WEB_FOLLOW'
+#!/bin/sh
+# The separate web_follow_health_gate test exercises startup and restoration.
+exit "${FAKE_WEB_FOLLOW_EXIT:-0}"
+WEB_FOLLOW
+chmod +x "$SD/web-follow.sh"
+
 
 OLD=aaaaaaaaaaaa
 NEW=bbbbbbbbbbbb
@@ -84,7 +94,7 @@ EOF
 #                    listener を閉じた実機の旧）。どちらも無ければ 000（誰も答えない）。
 #   /api/v1/releases Authorization: Bearer <token> が無ければ 401。あれば $FAKE_STATE/releases.json を返す
 #                    （$FAKE_RELEASES_HTTP が立っていればその code で本文無し）。
-#   /healthz (GUI)   start 済みの GUI。
+#   /healthz (web)   start 済みの web。
 cat >"$FAKE_BIN/curl" <<'EOF'
 #!/usr/bin/env bash
 out=/dev/null url="" auth=""
@@ -116,10 +126,10 @@ case "$url" in
     else
       body="$(cat "$FAKE_STATE/releases.json")"; code=200
     fi ;;
-  *:7700/healthz)
+  *:7720/healthz)
     for sha in $FAKE_NEW $FAKE_OLD; do
-      if [ -e "$FAKE_STATE/started-celeris-gui@$sha" ]; then
-        body="{\"release\":\"$sha\",\"name\":\"celeris-gui\"}"; code=200; break
+      if [ -e "$FAKE_STATE/started-celeris-web@$sha" ]; then
+        body="{\"release\":\"$sha\",\"name\":\"celeris-web\"}"; code=200; break
       fi
     done ;;
 esac
@@ -196,7 +206,7 @@ setup() {
   done
   ln -sfn "releases/$OLD" "$CELERIS_STATE_DIR/current"
   # 旧が動いている（live 昇格になる）。
-  touch "$FAKE_STATE/started-celeris@$OLD" "$FAKE_STATE/started-celeris-gui@$OLD"
+  touch "$FAKE_STATE/started-celeris@$OLD" "$FAKE_STATE/started-celeris-web@$OLD"
   export FAKE_OLD_HEALTH=1
 }
 
@@ -252,7 +262,7 @@ assert_log "C: wording says it was left running" "was left running"
 assert_log "C: wording says not confirmed" "live handoff not confirmed"
 assert_no_log "C: no 'two active instances'" "two active instances"
 assert_eq "C: current unchanged" "releases/$OLD" "$(readlink "$CELERIS_STATE_DIR/current")"
-[ -f "$CELERIS_STATE_DIR/releases/$NEW/promote_failed.json" ] && ok "C: promote_failed.json written (GUI banner)" || ng "C: promote_failed.json missing"
+[ -f "$CELERIS_STATE_DIR/releases/$NEW/promote_failed.json" ] && ok "C: promote_failed.json written (web banner)" || ng "C: promote_failed.json missing"
 dump_on_fail
 fi
 

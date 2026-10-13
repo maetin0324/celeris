@@ -9,6 +9,7 @@ fn cos_task() -> Task {
     use task_core::{Budget, TaskId, TaskKind, Tier, WorkerHint, WorkspaceSpec};
     let t = now();
     Task {
+        harness_id: None,
         requirements: Default::default(),
         tree: None,
         paused_at: None,
@@ -28,7 +29,6 @@ fn cos_task() -> Task {
         priority: 1,
         worker_hint: WorkerHint {
             tier: Tier::Standard,
-            adapter: None,
         },
         workspace: WorkspaceSpec::Local {
             path: "ws".into(),

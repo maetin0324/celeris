@@ -4,21 +4,21 @@ import type { AccountView } from "../../api/generated/types";
 import type { ActionResult, ActionTarget } from "../../components/actions/use-action-result";
 import {
   AccountCard,
-  ADAPTER_CHOICES,
   accountLimitTarget,
   accountState,
   excludedReasonLabel,
   formatRemaining,
   limitSourceLabel,
   parseMaxRunsInput,
+  SOURCE_CHOICES,
   submitAccountLimit,
   usageTone,
 } from "./accounts-screen";
 
 const stats = { done: 1, error: 0, input_tokens: 0, output_tokens: 0, runs: 1 };
 const account = (over: Partial<AccountView>): AccountView => ({
-  id: "main",
-  adapter: "claude-code",
+  account_id: "main",
+  source_id: "claude_oauth",
   dir: "/accounts/main",
   in_use: 0,
   logged_in: true,
@@ -165,7 +165,7 @@ describe("使用量（5 時間枠・7 日枠）", () => {
   it("opencode-go: 3 本の meter が割合とリセット時刻を持つ", () => {
     const out = render(
       account({
-        adapter: "opencode-go",
+        source_id: "opencode_go",
         usage: {
           source: "opencode-go",
           status: "allowed",
@@ -197,7 +197,7 @@ describe("使用量（5 時間枠・7 日枠）", () => {
   });
 
   it("道具の選択肢と 1 か月枠の除外理由", () => {
-    expect(ADAPTER_CHOICES).toContain("opencode-go");
+    expect(SOURCE_CHOICES).toContain("opencode_go");
     expect(excludedReasonLabel("one_month_exhausted")).toBe("1 か月の枠切れ（one_month_exhausted）");
   });
 
@@ -232,19 +232,19 @@ function fakeRun(result: Omit<ActionResult, "id"> | null) {
 }
 
 const implicitAccount = account({
-  adapter: "implicit",
-  // 暗黙アカウントの id は LLM source。同じ source を使う行が 1 件を共有する。
-  id: "openai_compatible:qwen",
+  // 暗黙アカウントの account_id は source_id（LLM source）。同じ source を使う行が 1 件を共有する。
+  source_id: "openai_compatible:qwen",
+  account_id: "openai_compatible:qwen",
   dir: null,
   implicit: true,
-  providers: ["opencode-qwen", "pi-qwen"],
+  models: ["qwen3-coder", "qwen3-max"],
   in_use: 1,
   max_runs: null,
   effective_max_runs: 1,
   max_runs_source: "default",
 });
 
-describe("アカウントごとの上限（PATCH /accounts/{adapter}/{id}）", () => {
+describe("アカウントごとの上限（PATCH /api/v1/llm/sources/{source_id}/accounts/{account_id}）", () => {
   const renderCard = (item: AccountView, results: Record<string, ActionResult> = {}) =>
     renderToStaticMarkup(
       <ul>
@@ -269,17 +269,22 @@ describe("アカウントごとの上限（PATCH /accounts/{adapter}/{id}）", (
     }
   });
 
-  it("保存: 数値を PATCH /api/accounts/{adapter}/{id} に送る", async () => {
+  it("保存: 数値を PATCH /api/llm/sources/{source_id}/accounts/{account_id} に送る", async () => {
     const { run, sent } = fakeRun({ ok: true, message: "操作が完了しました" });
     expect(await submitAccountLimit(run, account({}), "3")).toEqual({ ok: true });
     expect(sent).toEqual([
-      { id: "limit:claude-code:main", path: "/api/accounts/claude-code/main", method: "PATCH", body: { max_runs: 3 } },
+      {
+        id: "limit:claude_oauth:main",
+        path: "/api/llm/sources/claude_oauth/accounts/main",
+        method: "PATCH",
+        body: { max_runs: 3 },
+      },
     ]);
   });
 
-  it("adapter と id はパスの各部分としてエンコードする", () => {
-    expect(accountLimitTarget(account({ adapter: "custom/adapter", id: "local source?#" }), 2)).toMatchObject({
-      path: "/api/accounts/custom%2Fadapter/local%20source%3F%23",
+  it("source_id と account_id はパスの各部分としてエンコードする", () => {
+    expect(accountLimitTarget(account({ source_id: "custom/source", account_id: "local source?#" }), 2)).toMatchObject({
+      path: "/api/llm/sources/custom%2Fsource/accounts/local%20source%3F%23",
       method: "PATCH",
       body: { max_runs: 2 },
     });
@@ -287,9 +292,19 @@ describe("アカウントごとの上限（PATCH /accounts/{adapter}/{id}）", (
 
   it("既定に戻す: max_runs に null を送る", async () => {
     const { run, sent } = fakeRun({ ok: true, message: "操作が完了しました" });
-    const item = account({ adapter: "codex", id: "b", max_runs: 4, effective_max_runs: 4, max_runs_source: "account" });
+    const item = account({
+      source_id: "codex_oauth",
+      account_id: "b",
+      max_runs: 4,
+      effective_max_runs: 4,
+      max_runs_source: "account",
+    });
     expect(await submitAccountLimit(run, item, null)).toEqual({ ok: true });
-    expect(sent[0]).toMatchObject({ path: "/api/accounts/codex/b", method: "PATCH", body: { max_runs: null } });
+    expect(sent[0]).toMatchObject({
+      path: "/api/llm/sources/codex_oauth/accounts/b",
+      method: "PATCH",
+      body: { max_runs: null },
+    });
   });
 
   it("検査に落ちた値は送らずに文言を返す", async () => {
@@ -333,7 +348,7 @@ describe("アカウントごとの上限（PATCH /accounts/{adapter}/{id}）", (
 
   it("画面: 保存の失敗（API エラー）を入力欄に結び付けて出す", () => {
     const out = renderCard(account({}), {
-      "limit:claude-code:main": { id: "limit:claude-code:main", ok: false, status: 400, message: "bad max_runs" },
+      "limit:claude_oauth:main": { id: "limit:claude_oauth:main", ok: false, status: 400, message: "bad max_runs" },
     });
     expect(out).toContain("保存できませんでした: bad max_runs");
     expect(out).toMatch(/<input[^>]*aria-invalid="true"/);
@@ -344,7 +359,7 @@ describe("アカウントごとの上限（PATCH /accounts/{adapter}/{id}）", (
     expect(out).toContain('data-implicit="true"');
     expect(out).toContain(">暗黙アカウント</span>");
     expect(out).toContain("アカウントを持たない行の LLM source「openai_compatible:qwen」");
-    expect(out).toContain("opencode-qwen, pi-qwen");
+    expect(out).toContain("qwen3-coder, qwen3-max");
     expect(out).toContain("1 / 実効上限 1（既定（max_runs_per_account = 2））");
     expect(out).toContain("上限を保存");
     expect(out).not.toContain("ログイン開始");
@@ -352,8 +367,8 @@ describe("アカウントごとの上限（PATCH /accounts/{adapter}/{id}）", (
     expect(out).not.toContain(">削除</button>");
     expect(out).not.toContain("使用量");
     expect(accountLimitTarget(implicitAccount, 2)).toEqual({
-      id: "limit:implicit:openai_compatible:qwen",
-      path: "/api/accounts/implicit/openai_compatible:qwen",
+      id: "limit:openai_compatible:qwen:openai_compatible:qwen",
+      path: "/api/llm/sources/openai_compatible:qwen/accounts/openai_compatible:qwen",
       method: "PATCH",
       body: { max_runs: 2 },
     });
@@ -361,8 +376,8 @@ describe("アカウントごとの上限（PATCH /accounts/{adapter}/{id}）", (
     expect(await submitAccountLimit(run, implicitAccount, "2")).toEqual({ ok: true });
     expect(await submitAccountLimit(run, implicitAccount, null)).toEqual({ ok: true });
     expect(sent.map((t) => [t.path, t.body])).toEqual([
-      ["/api/accounts/implicit/openai_compatible:qwen", { max_runs: 2 }],
-      ["/api/accounts/implicit/openai_compatible:qwen", { max_runs: null }],
+      ["/api/llm/sources/openai_compatible:qwen/accounts/openai_compatible:qwen", { max_runs: 2 }],
+      ["/api/llm/sources/openai_compatible:qwen/accounts/openai_compatible:qwen", { max_runs: null }],
     ]);
   });
 

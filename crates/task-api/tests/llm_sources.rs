@@ -44,6 +44,7 @@ fn env_with_llm_sources() -> TestEnv {
     TestEnv::with(EnvOptions {
         token: Some(TOKEN.into()),
         llm_sources: Some(Arc::new(FakeReader)),
+        harnesses: None,
         ..Default::default()
     })
 }
@@ -74,6 +75,18 @@ async fn returns_the_readers_view_when_configured() {
     assert_eq!(body["sources"][0]["id"], "openai-compatible:qwen");
     assert_eq!(body["sources"][0]["reachable"], true);
     assert_eq!(body["sources"][0]["last_hour_requests"], 3);
+}
+
+#[tokio::test]
+async fn returns_source_detail_and_404_for_unknown_source() {
+    let env = env_with_llm_sources();
+    let app = env.router();
+    let resp = send(&app, g("/api/v1/llm/sources/openai-compatible%3Aqwen")).await;
+    assert_eq!(resp.status.as_u16(), 200, "{}", resp.text());
+    assert_eq!(resp.json()["kind"], "openai-compatible");
+
+    let resp = send(&app, g("/api/v1/llm/sources/missing")).await;
+    assert_eq!(resp.status.as_u16(), 404, "{}", resp.text());
 }
 
 #[tokio::test]

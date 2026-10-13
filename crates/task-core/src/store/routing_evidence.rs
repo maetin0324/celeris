@@ -1,46 +1,82 @@
 use rusqlite::params;
 
+use crate::model::{Event, TaskId};
+use crate::route_select::{RoutingStage, RoutingStageChange};
+use crate::routing_evidence::{EvidenceKey, EvidenceRow};
+
 use super::{SqliteStore, StoreError};
-use crate::routing_evidence::EvidenceRow;
+
+/// 根拠表 `routing_evidence` の列（読み書きで同じ並び）。
+const EVIDENCE_COLUMNS: &str = "genre,harness_id,harness_version,source_id,model_id,evidence_version,n,pass,pass_lower,pass_upper,pass_boot_lower,pass_boot_upper,wall_median_s,usd_list_median,quota_per_run_json,timeout_rate,low_confidence";
+
+fn evidence_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<EvidenceRow> {
+    let quota: String = r.get(14)?;
+    Ok(EvidenceRow {
+        key: EvidenceKey {
+            genre: r.get(0)?,
+            harness_id: r.get(1)?,
+            harness_version: r.get(2)?,
+            source_id: r.get(3)?,
+            model_id: r.get(4)?,
+        },
+        evidence_version: r.get(5)?,
+        n: r.get(6)?,
+        pass: r.get(7)?,
+        pass_lower: r.get(8)?,
+        pass_upper: r.get(9)?,
+        pass_boot_lower: r.get(10)?,
+        pass_boot_upper: r.get(11)?,
+        wall_median_s: r.get(12)?,
+        usd_list_median: r.get(13)?,
+        quota_per_run: serde_json::from_str(&quota).map_err(|error| {
+            rusqlite::Error::FromSqlConversionFailure(
+                14,
+                rusqlite::types::Type::Text,
+                Box::new(error),
+            )
+        })?,
+        timeout_rate: r.get(15)?,
+        low_confidence: r.get(16)?,
+    })
+}
 
 impl SqliteStore {
-    /// Replace all rows for an evidence version atomically, retaining other versions.
-    pub fn insert_routing_evidence(&self, rows: &[EvidenceRow]) -> Result<(), StoreError> {
-        let Some(version) = rows.first().map(|row| row.evidence_version.as_str()) else {
-            return Ok(());
-        };
-        if rows.iter().any(|row| row.evidence_version != version) {
-            return Err(StoreError::Invalid(
-                "routing evidence batch must use one evidence_version".into(),
-            ));
-        }
+    /// 同じ版は丸ごと置き換え、別の版は残す（評価 runner の `aggregate --write-evidence` が書く）。
+    /// 行の版は引数 `version` で決まる（行の `evidence_version` は読まない）。
+    pub(super) fn replace_routing_evidence_impl(
+        &self,
+        version: &str,
+        rows: &[EvidenceRow],
+    ) -> Result<(), StoreError> {
         let mut conn = self.lock()?;
         let tx = conn.transaction()?;
         tx.execute(
             "DELETE FROM routing_evidence WHERE evidence_version = ?1",
-            [version],
+            params![version],
         )?;
         {
-            let mut stmt = tx.prepare("INSERT INTO routing_evidence(genre,harness_id,harness_version,source_id,model_id,evidence_version,n,pass,pass_lower,pass_upper,pass_boot_lower,pass_boot_upper,wall_median_s,usd_list_median,quota_per_run_json,timeout_rate,low_confidence) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)")?;
-            for row in rows {
+            let mut stmt = tx.prepare(&format!(
+                "INSERT INTO routing_evidence ({EVIDENCE_COLUMNS}) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)"
+            ))?;
+            for item in rows {
                 stmt.execute(params![
-                    row.key.genre,
-                    row.key.harness_id,
-                    row.key.harness_version,
-                    row.key.source_id,
-                    row.key.model_id,
-                    row.evidence_version,
-                    row.n,
-                    row.pass,
-                    row.pass_lower,
-                    row.pass_upper,
-                    row.pass_boot_lower,
-                    row.pass_boot_upper,
-                    row.wall_median_s,
-                    row.usd_list_median,
-                    serde_json::to_string(&row.quota_per_run)?,
-                    row.timeout_rate,
-                    row.low_confidence
+                    item.key.genre,
+                    item.key.harness_id,
+                    item.key.harness_version,
+                    item.key.source_id,
+                    item.key.model_id,
+                    version,
+                    item.n,
+                    item.pass,
+                    item.pass_lower,
+                    item.pass_upper,
+                    item.pass_boot_lower,
+                    item.pass_boot_upper,
+                    item.wall_median_s,
+                    item.usd_list_median,
+                    serde_json::to_string(&item.quota_per_run)?,
+                    item.timeout_rate,
+                    item.low_confidence
                 ])?;
             }
         }
@@ -48,97 +84,178 @@ impl SqliteStore {
         Ok(())
     }
 
-    /// List evidence, optionally restricted to one immutable evaluation version.
-    pub fn list_routing_evidence(
+    pub(super) fn latest_routing_evidence_impl(
         &self,
-        version: Option<&str>,
+        genre: &str,
+        harness_id: &str,
     ) -> Result<Vec<EvidenceRow>, StoreError> {
         let conn = self.lock()?;
-        let mut stmt = conn.prepare("SELECT genre,harness_id,harness_version,source_id,model_id,evidence_version,n,pass,pass_lower,pass_upper,pass_boot_lower,pass_boot_upper,wall_median_s,usd_list_median,quota_per_run_json,timeout_rate,low_confidence FROM routing_evidence WHERE (?1 IS NULL OR evidence_version = ?1) ORDER BY genre,harness_id,harness_version,source_id,model_id,evidence_version")?;
-        let rows = stmt.query_map([version], |row| {
-            let quota: String = row.get(14)?;
-            Ok(EvidenceRow {
-                key: crate::routing_evidence::EvidenceKey {
-                    genre: row.get(0)?,
-                    harness_id: row.get(1)?,
-                    harness_version: row.get(2)?,
-                    source_id: row.get(3)?,
-                    model_id: row.get(4)?,
-                },
-                evidence_version: row.get(5)?,
-                n: row.get(6)?,
-                pass: row.get(7)?,
-                pass_lower: row.get(8)?,
-                pass_upper: row.get(9)?,
-                pass_boot_lower: row.get(10)?,
-                pass_boot_upper: row.get(11)?,
-                wall_median_s: row.get(12)?,
-                usd_list_median: row.get(13)?,
-                quota_per_run: serde_json::from_str(&quota).map_err(|error| {
-                    rusqlite::Error::FromSqlConversionFailure(
-                        14,
-                        rusqlite::types::Type::Text,
-                        Box::new(error),
-                    )
-                })?,
-                timeout_rate: row.get(15)?,
-                low_confidence: row.get(16)?,
-            })
-        })?;
+        let version: Option<String> = conn.query_row(
+            "SELECT MAX(evidence_version) FROM routing_evidence WHERE genre=?1 AND harness_id=?2",
+            params![genre, harness_id],
+            |r| r.get(0),
+        )?;
+        let Some(version) = version else {
+            return Ok(Vec::new());
+        };
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {EVIDENCE_COLUMNS} FROM routing_evidence WHERE genre=?1 AND harness_id=?2 AND evidence_version=?3 ORDER BY source_id,model_id"
+        ))?;
+        let rows = stmt.query_map(params![genre, harness_id, version], evidence_row)?;
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(StoreError::from)
     }
+
+    pub(super) fn routing_stage_impl(
+        &self,
+        genre: &str,
+        harness_id: &str,
+    ) -> Result<RoutingStage, StoreError> {
+        let conn = self.lock()?;
+        let stage: Option<String> = conn
+            .query_row(
+                "SELECT stage FROM routing_stage WHERE genre=?1 AND harness_id=?2",
+                params![genre, harness_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        match stage.as_deref() {
+            Some("enforce") => Ok(RoutingStage::Enforce),
+            _ => Ok(RoutingStage::Shadow),
+        }
+    }
+
+    pub(super) fn set_routing_stage_impl(
+        &self,
+        task_id: TaskId,
+        change: &RoutingStageChange,
+    ) -> Result<(), StoreError> {
+        let RoutingStageChange {
+            genre,
+            harness_id,
+            stage,
+            since,
+            evidence_version,
+            reason,
+            window,
+            actor,
+        } = change;
+        if !matches!(actor.as_str(), "human" | "daemon") {
+            return Err(StoreError::Invalid(
+                "routing stage actor must be human or daemon".into(),
+            ));
+        }
+        let to = match stage {
+            RoutingStage::Shadow => "shadow",
+            RoutingStage::Enforce => "enforce",
+        };
+        let mut conn = self.lock()?;
+        let tx = conn.transaction()?;
+        let from: Option<String> = tx
+            .query_row(
+                "SELECT stage FROM routing_stage WHERE genre=?1 AND harness_id=?2",
+                params![genre, harness_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        tx.execute("INSERT INTO routing_stage (genre,harness_id,stage,since,evidence_version) VALUES (?1,?2,?3,?4,?5) ON CONFLICT(genre,harness_id) DO UPDATE SET stage=excluded.stage,since=excluded.since,evidence_version=excluded.evidence_version", params![genre,harness_id,to,since,evidence_version])?;
+        let event = Event::RoutingStageChanged {
+            genre: genre.into(),
+            harness_id: harness_id.into(),
+            from,
+            to: to.into(),
+            reason: reason.clone(),
+            window: window.clone(),
+            actor: actor.clone(),
+        };
+        Self::append_event_tx(&tx, task_id, &event)?;
+        tx.commit()?;
+        Ok(())
+    }
 }
+
+use rusqlite::OptionalExtension;
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::routing_evidence::EvidenceKey;
-    use std::collections::BTreeMap;
+    use crate::store::{SCHEMA_VERSION, TaskStore};
 
-    fn row(version: &str, model: &str, pass: u32) -> EvidenceRow {
-        EvidenceRow {
+    #[test]
+    fn evidence_versions_replace_and_stage_is_shadow_by_default_then_event_is_appended() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
+        assert_eq!(SCHEMA_VERSION, 77);
+        assert_eq!(
+            store.routing_stage("coding", "codex").unwrap(),
+            RoutingStage::Shadow
+        );
+        let row = |version: &str, pass| EvidenceRow {
             key: EvidenceKey {
                 genre: "coding".into(),
                 harness_id: "codex".into(),
-                harness_version: "1".into(),
-                source_id: "codex-oauth".into(),
-                model_id: model.into(),
+                harness_version: "1.2.0".into(),
+                source_id: "s".into(),
+                model_id: "m".into(),
             },
             evidence_version: version.into(),
-            n: 2,
+            n: 10,
             pass,
-            pass_lower: 0.1,
+            pass_lower: 0.5,
             pass_upper: 0.9,
-            pass_boot_lower: 0.2,
-            pass_boot_upper: 0.8,
-            wall_median_s: Some(10.0),
+            pass_boot_lower: 0.55,
+            pass_boot_upper: 0.85,
+            wall_median_s: Some(12.0),
             usd_list_median: None,
-            quota_per_run: BTreeMap::new(),
+            quota_per_run: [("7d".to_string(), 0.01)].into(),
             timeout_rate: 0.0,
-            low_confidence: false,
-        }
-    }
-
-    #[test]
-    fn routing_evidence_replaces_same_version_and_appends_another() {
-        let store = SqliteStore::open_in_memory().expect("open store");
+            low_confidence: version == "v2",
+        };
         store
-            .insert_routing_evidence(&[row("v1", "m1", 1)])
-            .expect("insert v1");
+            .replace_routing_evidence("v1", &[row("v1", 8)])
+            .unwrap();
         store
-            .insert_routing_evidence(&[row("v1", "m2", 2)])
-            .expect("replace v1");
+            .replace_routing_evidence("v1", &[row("v1", 9)])
+            .unwrap();
         store
-            .insert_routing_evidence(&[row("v2", "m1", 0)])
-            .expect("append v2");
-        let v1 = store.list_routing_evidence(Some("v1")).expect("list v1");
-        assert_eq!(v1.len(), 1);
-        assert_eq!(v1[0].key.model_id, "m2");
-        assert_eq!((v1[0].pass_boot_lower, v1[0].pass_boot_upper), (0.2, 0.8));
+            .replace_routing_evidence("v2", &[row("v2", 10)])
+            .unwrap();
+        let latest = store.latest_routing_evidence("coding", "codex").unwrap();
+        assert_eq!(latest.len(), 1);
+        assert_eq!(latest[0].evidence_version, "v2");
+        assert_eq!(latest[0].pass, 10);
+        // 評価 runner の欄（bootstrap 区間・低確度・値の無い定価）も同じ行で往復する（migration 0077）。
         assert_eq!(
-            store.list_routing_evidence(None).expect("list all").len(),
-            2
+            (latest[0].pass_boot_lower, latest[0].pass_boot_upper),
+            (0.55, 0.85)
+        );
+        assert!(latest[0].low_confidence);
+        assert_eq!(latest[0].usd_list_median, None);
+        assert_eq!(latest[0].quota_per_run.get("7d"), Some(&0.01));
+        let task = crate::store::tests::sample_task(crate::model::Status::Draft);
+        store.insert(&task).unwrap();
+        store
+            .set_routing_stage(
+                task.id,
+                &RoutingStageChange {
+                    genre: "coding".into(),
+                    harness_id: "codex".into(),
+                    stage: RoutingStage::Enforce,
+                    since: "now".into(),
+                    evidence_version: Some("v2".into()),
+                    reason: "human approved".into(),
+                    window: serde_json::json!({"runs": 50}),
+                    actor: "human".into(),
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            store.routing_stage("coding", "codex").unwrap(),
+            RoutingStage::Enforce
+        );
+        let events = store.events_for(task.id).unwrap();
+        assert!(
+            matches!(&events[0].1, Event::RoutingStageChanged { from: None, to, actor, .. } if to == "enforce" && actor == "human")
         );
     }
 }

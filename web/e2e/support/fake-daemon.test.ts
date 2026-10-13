@@ -295,7 +295,7 @@ it("serves schema-valid reports, approvals and review-pending execution data in 
 
 it("rejects non-loopback and reserved production or staging ports", () => {
   expect(() => createFakeDaemon({ host: "0.0.0.0" })).toThrow("loopback");
-  for (const port of [7700, 7701, 7710, 7711, 7712]) expect(() => createFakeDaemon({ port })).toThrow("reserved port");
+  for (const port of [7710, 7711, 7712, 7720, 7721]) expect(() => createFakeDaemon({ port })).toThrow("reserved port");
   expect(() => createFakeDaemon({ delayMs: 100 })).toThrow("JSON delay");
 });
 

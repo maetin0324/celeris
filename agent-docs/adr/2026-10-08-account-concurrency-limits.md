@@ -219,3 +219,7 @@ tasks: [01M4D7RVKXY9A967ZXDADWVHQJ]
 - `GET /accounts` に `effective_max_runs`・`max_runs_source`・暗黙アカウントが出ること。gui-api.md・schema・生成型の更新。
 - web のアカウント画面で上限を編集でき、プロバイダ画面から入力欄が消えていること（画面試験）。
 - `cargo clippy --workspace -- -D warnings`。本番 config・systemd・daemon・本番 DB は変更しない（本番の移行は人が docs/ops の手順で行う）。
+
+## 付記（2026-10-11、provider 廃止と source/harness の宣言）
+
+[ADR 2026-10-11 LLM source と harness の選択](2026-10-11-llm-source-harness-selection.md) が、provider concurrency の廃止に加え、account の所有関係（source 所有）、provider API field、暗黙 account の source key に関する本 ADR の該当決定を置き換える。provider 欄は削除し、残った旧 provider 欄は設定読み込みエラーとする（警告付きの受け入れはしない）。上限は source/account の admission として数え、既存の上限値は `account_limits` の `(source_id, account_id)` へ移す（新 ADR の「LLM source」「削除する欄と仕組み」）。

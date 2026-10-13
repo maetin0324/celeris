@@ -4,6 +4,7 @@ fn task(path: &str, mode: Option<WorkspaceMode>) -> Task {
     use task_core::*;
     let now = time::OffsetDateTime::now_utc();
     Task {
+        harness_id: None,
         requirements: Default::default(),
         tree: None,
         paused_at: None,
@@ -26,7 +27,6 @@ fn task(path: &str, mode: Option<WorkspaceMode>) -> Task {
         priority: 0,
         worker_hint: WorkerHint {
             tier: Tier::Standard,
-            adapter: None,
         },
         workspace: WorkspaceSpec::Local {
             path: PathBuf::from(path),

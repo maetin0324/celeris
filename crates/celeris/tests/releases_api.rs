@@ -67,9 +67,6 @@ repo = "repo"
 # `Inline` を使う（本物の user systemd bus には一切触れない）。
 detach = "inline"
 
-[[providers]]
-id = "p1"
-adapter = "fake"
 "#,
         )
         .unwrap_or_else(|e| panic!("config: {e}"));

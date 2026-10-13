@@ -6,7 +6,6 @@ use std::time::Duration;
 
 use task_core::InstanceRole;
 use task_dispatch::{Dispatcher, TickReport};
-use task_ops::daemon::ProviderCheckView;
 use time::OffsetDateTime;
 
 use super::admin::handle_admin_request;
@@ -18,7 +17,7 @@ use crate::{
 };
 
 /// tick ループ。SIGINT/SIGTERM で停止する。`admin_rx` があれば `POST /api/v1/reload` /
-/// `POST /api/v1/providers/{id}/check`（ADR-0017 M2）も同じループで受ける。
+/// daemon 管理操作も同じループで受ける。
 pub(crate) async fn tick_loop(
     dispatcher: &mut Dispatcher,
     config: &mut Config,
@@ -30,7 +29,6 @@ pub(crate) async fn tick_loop(
     roles: &mut RoleState,
 ) -> Result<Exit, DaemonError> {
     // ADR-0022 D2: `check` は spawn した先で終わるので、結果をここへ戻してスナップショットに載せる。
-    let (check_tx, mut check_rx) = tokio::sync::mpsc::channel::<(String, ProviderCheckView)>(16);
     // ADR-0024 D5〜D7: アカウントの確認・ログイン中継も同様に、spawn した先の結果をここへ戻す。
     let (account_tx, mut account_rx) =
         tokio::sync::mpsc::channel::<accounts_admin::AccountAdminEvent>(16);
@@ -77,6 +75,10 @@ pub(crate) async fn tick_loop(
         false
     };
     let tick = config.tick();
+    let _stranded_sweep =
+        crate::daemon::stranded_sweep::spawn(dispatcher.store(), roles.role.clone());
+    // ADR 2026-10-11 D3: enforce の guardrail 判定（間隔は `INTERVAL`。判定は決定的で LLM を呼ばない）。
+    let mut guardrail_ticker = crate::daemon::routing_guardrail::Ticker::default();
     let mut ticks: u64 = 0;
     // ADR-0040 D4: 手元の run とレビューの数（drain の判定に使う。最後の tick の値）。
     let mut in_flight: usize = 0;
@@ -142,14 +144,7 @@ pub(crate) async fn tick_loop(
             {
                 let now = OffsetDateTime::now_utc().unix_timestamp();
                 if model_discovery_ticker.due(config.model_catalog.refresh_interval_seconds, now) {
-                    let after_store = dispatcher.store();
-                    let after_config = config.clone();
-                    model_discovery_ticker.tick(dispatcher.store(), config, now, move |_| {
-                        crate::model_discovery::refresh_routing_catalog(
-                            after_store.as_ref(),
-                            &after_config,
-                        );
-                    });
+                    model_discovery_ticker.tick(dispatcher.store(), config, now, |_| {});
                 }
             }
             // ADR-0024 D7 / B1: 10 分を超えたログイン中継を打ち切る（tick をブロックしない軽い処理）。
@@ -213,6 +208,28 @@ pub(crate) async fn tick_loop(
                     tracing::warn!(error=%e, "delivery tick failed");
                 }
             }
+            {
+                // ADR 2026-10-11-llm-source-model-routing-evaluation D3: enforce の genre×harness の
+                // guardrail を判定し、止める条件に当たったら shadow へ戻す（event と受信箱の通知）。
+                let now = OffsetDateTime::now_utc();
+                if guardrail_ticker.due(crate::daemon::routing_guardrail::INTERVAL, now) {
+                    match crate::daemon::routing_guardrail::tick(dispatcher, config, now) {
+                        Ok(report) if report.reverted > 0 || report.notices > 0 => {
+                            tracing::info!(
+                                evaluated = report.evaluated,
+                                reverted = report.reverted,
+                                notices = report.notices,
+                                skipped_no_evidence = report.skipped_no_evidence,
+                                "routing guardrail: stage changes recorded"
+                            );
+                        }
+                        Ok(_) => {}
+                        Err(e) => {
+                            tracing::warn!(error = %e, "routing guardrail: tick failed");
+                        }
+                    }
+                }
+            }
             // ADR-0038 D1 の途中目標の判定 run（`milestone_review::schedule`）は ADR-0079 D13（Phase R5a）で廃止。
             // ADR-0047 D4 / B1（Phase 62）: 知識の自動メンテナンス。判断は決定的（ストアと KB のファイルを
             // 見るだけ）で、LLM が動くのは `langmem` アダプタが起こす python プロセスの中だけ。
@@ -251,7 +268,7 @@ pub(crate) async fn tick_loop(
                     tracing::warn!(error = %e, "knowledge GC: tick failed; continuing dispatch");
                 }
                 // ADR-0052 D3（Phase 64）: 失敗した知識整理 run を**一度だけ**作り直す（`retried_at`）。
-                // 2 回目が `langmem`（proxy の `celeris/cheap`）で走るか cheap の汎用ハーネスで走るかは
+                // 2 回目が `langmem`（`[knowledge.langmem]` の接続先）で走るか cheap の汎用ハーネスで走るかは
                 // dispatch 時の接続先（proxy）の到達性の検査が決める（ADR-0132 D4）。
                 match knowledge_maint::retry_failed(
                     store.as_ref(),
@@ -551,14 +568,10 @@ pub(crate) async fn tick_loop(
                 // ADR-0017 M2: 処理後は select に戻らず即座にループの先頭（次の `dispatcher.tick()`）へ進む
                 // ので、reload の効果は「次の tick から」になる。`tick_ms` の残りを待たない。
                 if let Some(req) = req {
-                    handle_admin_request(dispatcher, config, req, check_tx.clone(), login_sessions.clone(), codex_login_sessions.clone(), account_tx.clone(), cluster_sessions.clone(), Arc::clone(&cluster_masters), cluster_tx.clone()).await;
+                    handle_admin_request(dispatcher, config, req, login_sessions.clone(), codex_login_sessions.clone(), account_tx.clone(), cluster_sessions.clone(), Arc::clone(&cluster_masters), cluster_tx.clone()).await;
                 }
             }
             // ADR-0022 D2: 終わった `check` の結果を受け取り、次の tick のスナップショットに載せる。
-            Some((provider_id, check)) = check_rx.recv() => {
-                tracing::info!(who = "admin", provider_id = %provider_id, result = %check.result, "provider check recorded");
-                dispatcher.set_provider_check(&provider_id, check);
-            }
             // ADR-0024 D4〜D7 / ADR-0025 D4/D5: アカウントの確認・ログイン中継の結果を `AccountBook` /
             // `login_pending` に反映する。
             Some(event) = account_rx.recv() => {

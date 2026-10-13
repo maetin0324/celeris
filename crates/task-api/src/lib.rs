@@ -1,4 +1,4 @@
-//! `task-api`: celeris の HTTP API v1（`docs/api/v1/gui-api.md`、ADR-0013 D2〜D4 / D8 / D11）。
+//! `task-api`: celeris の HTTP API v1（`docs/api/v1/api.md`、ADR-0013 D2〜D4 / D8 / D11）。
 //!
 //! - `/api/v1` 配下の 26 エンドポイント。JSON で応答し、エラーは `application/problem+json`、通知は SSE。
 //! - ハンドラは協調判断をしない。読み取りはストアのクエリと `task-ops` のビュー、状態変更は `task-ops` 経由だけ。
@@ -46,7 +46,9 @@ pub mod docs;
 pub mod execution;
 mod files;
 mod handlers;
+pub mod harnesses;
 mod inbox_notifications;
+mod integrations;
 /// ADR-0047（Phase 61）: 知識ベース（`~/.local/share/celeris/knowledge` の Markdown が正本）。ツリー・ページ・`_inbox`。
 pub mod knowledge;
 /// ADR-0044 D6（Phase 55）: 案件・途中目標の中止・一時停止・アーカイブ。
@@ -58,7 +60,6 @@ pub mod mcp_admin;
 pub mod memory;
 mod middleware;
 pub mod milestones;
-pub mod model_assignments;
 pub mod model_catalog;
 pub mod notify;
 mod problem;
@@ -70,9 +71,10 @@ mod reports;
 pub mod repos;
 /// ADR-0069 D5: タスクの routing の監査（`GET /tasks/{id}/routing`）。
 pub mod routing;
-pub mod routing_catalog;
 /// 評価 run の試行の受け口（ADR 2026-10-11-llm-source-model-routing-evaluation 付記 2026-10-12）。
 pub mod routing_eval;
+/// ADR 2026-10-11-llm-source-model-routing-evaluation D3: 段階・根拠表の読み取りと人の段階変更。
+pub mod routing_stage;
 pub mod schema;
 pub mod secrets;
 /// Phase 82（ADR-0056 D3 続き）: skills を GUI から見る・作る・mount する（`GET/PUT/DELETE /skills…`、
@@ -87,10 +89,9 @@ pub mod tree;
 pub mod types;
 
 pub use admin::{
-    AccountAdminError, AccountCheckOutcome, AccountLoginCodeOutcome, AccountLoginStartOutcome,
-    AdminRequest, CheckError, ClusterAdminError, ClusterConnectCodeOutcome,
-    ClusterConnectStartOutcome, NotifyAdminError, NotifyTestOutcome, ProviderCheckOutcome,
-    ProviderCheckResult,
+    AccountAdminError, AccountCheckOutcome, AccountCheckResult, AccountLoginCodeOutcome,
+    AccountLoginStartOutcome, AdminRequest, ClusterAdminError, ClusterConnectCodeOutcome,
+    ClusterConnectStartOutcome, NotifyAdminError, NotifyTestOutcome,
 };
 pub use approvals::{
     ApprovalDecideBody, ApprovalDecideResult, ApprovalList, StandingRuleCreateBody,
@@ -100,6 +101,7 @@ pub use conversation::{MessageAccepted, MessageList, MessagePostBody};
 pub use cron_jobs::{
     CronJobCreateBody, CronJobList, CronJobPatchBody, CronJobRunList, CronJobView, CronRunResult,
 };
+pub use harnesses::{HarnessesReader, SharedHarnessesReader};
 pub use llm_sources::{LlmSourcesReader, SharedLlmSourcesReader};
 pub use memory::MemoryView;
 pub use milestones::{MilestoneDecideBody, MilestoneDecided};
@@ -112,7 +114,6 @@ pub use releases::{
 pub use reports::{
     ReportDetail, ReportList, ReportsNotifiedResult, ReportsReadBody, ReportsReadResult,
 };
-pub use routing_catalog::{RoutingCatalogReader, RoutingCatalogView, SharedRoutingCatalogReader};
 pub use schema::{API_V1_SCHEMA_JSON, ApiV1Schema, api_v1_schema_json, api_v1_schema_value};
 pub use state::{ApiClock, ApiState, StreamTuning};
 pub use stats::classify_outcome;
@@ -121,8 +122,7 @@ pub use types::{
     AnswerBody, ApiConfigView, ArtifactList, ArtifactView, CancelBody, ClusterConfigView,
     ClusterConnectCodeBody, ClusterConnectResult, ClusterConnectStart, ClusterForwardView,
     ClusterSettingsPutBody, ClusterSettingsView, ClusterView, Clusters, ConfigView, DaemonView,
-    DailyUsage, DbInfo, DecisionBody, DeliveryHead, DeliveryList, EventsPage, GenreConfigView,
-    Health, Problem, ProviderConfigView, ProviderStats, ProviderView, Providers,
+    DbInfo, DecisionBody, DeliveryHead, DeliveryList, EventsPage, GenreConfigView, Health, Problem,
     RELEASE_NOTES_FIRST_PARENT_LIMIT, ReleaseChanges, ReleaseCommit, ReleaseItem, ReleaseNoteChild,
     ReleaseNoteCommit, ReleaseNoteConfig, ReleaseNoteFile, ReleaseNoteGateSkip, ReleaseNoteSchema,
     ReleaseNoteTask, ReleaseNotes, ReleasePromoteAccepted, ReleasePromotionPreview,
@@ -130,6 +130,7 @@ pub use types::{
     ReviewerConfigView, RoleConfigView, RunList, SecretList, SecretPutBody, SecretPutResult,
     SecretUse, SecretView, StreamHeartbeat, StreamHello, StreamReset, ValidationError,
 };
+pub use types::{HarnessCandidateView, HarnessRuleView, HarnessView};
 // ---- ADR-0043（Phase 52）: 案件のリポジトリとファイル閲覧 ----
 pub use types::{
     RepoCreateBody, RepoList, RepoPatchBody, TreeEntry, TreeFileView, TreeRepoView, TreeView,
@@ -205,16 +206,11 @@ pub struct ApiSettings {
     pub instance_id: String,
     /// RFC 3339。
     pub started_at: String,
-    /// ADR-0017 M1: `providers.d/<id>.toml` の書き込み先。`providers_include` が未設定なら `None`
-    /// （そのときは管理系の作成/変更/削除が使えない）。
-    pub providers_dir: Option<PathBuf>,
-    /// IDs of configured OpenAI-compatible sources, supplied by the daemon.
-    pub openai_compatible_source_ids: std::collections::HashSet<String>,
-    /// ADR-0017 M2: `reload` / `check` を celeris（ワーカー起動ができる側）へ委譲するチャネル。`None` なら両方使えない。
+    /// Daemon administration requests are delegated to celeris.
     pub admin_tx: Option<mpsc::Sender<AdminRequest>>,
     /// ADR-0024 D1 / ADR-0025 D1/D6: アダプタごとの `[accounts]` の根ディレクトリの絶対パス（設定されている
-    /// アダプタだけキーを持つ）。`[accounts]` が無ければ空（そのときは `GET /accounts` が
-    /// `{root: null, roots: {}, items: []}`、管理系は 409 `accounts_unavailable`）。
+    /// アダプタだけキーを持つ）。`[accounts]` が無ければ空（そのときは `GET /api/v1/llm/accounts` が
+    /// `{roots: {}, items: []}`、管理系は 409 `accounts_unavailable`）。
     pub accounts_roots: HashMap<AccountAdapter, PathBuf>,
     /// ADR-0024 D1: `[accounts] max_runs_per_account`。
     pub max_runs_per_account: usize,
@@ -229,8 +225,8 @@ pub struct ApiSettings {
     /// ADR-0037 D2（Phase 39）: `[notify] discord_webhook_secret`。この id の秘密が `[secrets] dir` に
     /// あれば「設定済み」。**値は API では読まない**（指紋だけ出す）。
     pub notify_secret_id: String,
-    /// ADR-0037 D3: `[notify] gui_base_url`（文面のリンクの根。無ければリンク無し）。
-    pub notify_gui_base_url: Option<String>,
+    /// ADR-0037 D3: `[notify] web_base_url`（文面のリンクの根。無ければリンク無し）。
+    pub notify_web_base_url: Option<String>,
     /// ADR-0133 D6: outbound inbox and digest policy values exposed by GET /notify.
     pub notify_inbox_batch_secs: u64,
     pub notify_inbox_reminder_secs: u64,
@@ -239,6 +235,8 @@ pub struct ApiSettings {
     /// ADR-0040 D6（Phase 48）: `[selfdeploy] releases_dir` を読む係（celeris が渡す。task-api は
     /// リリースのファイル規約を知らない）。`None` なら `GET /releases` は空、昇格は 409。
     pub releases: Option<SharedReleaseSource>,
+    /// `[selfdeploy] releases_dir` used by task integration promotion views.
+    pub integration_releases_dir: Option<PathBuf>,
     /// ADR-0040 D4（Phase 47）: このプロセスのリリース（`--release <sha12>` / `CELERIS_RELEASE` / `"dev"`）。
     /// `GET /health` の `release`。
     pub release: String,
@@ -264,8 +262,7 @@ pub struct ApiSettings {
     /// `[llm_proxy]` が有効なときだけ `Some`（celeris が渡す）。`None` なら `GET /llm/sources` は 409
     /// `llm_proxy_unavailable`。
     pub llm_sources: Option<llm_sources::SharedLlmSourcesReader>,
-    /// Credential-free model routing catalog, refreshed atomically by the daemon.
-    pub routing_catalog: Option<routing_catalog::SharedRoutingCatalogReader>,
+    pub harnesses: Option<harnesses::SharedHarnessesReader>,
     /// ADR 2026-10-06 D5: `POST /llm/models/discover` が呼ぶ発見の実行（daemon が渡す）。`None` なら
     /// 202 で `results: []`・`unavailable: true`。
     pub model_discovery: Option<model_catalog::SharedModelDiscoveryHook>,
@@ -313,7 +310,6 @@ impl std::fmt::Debug for ApiSettings {
             .field("celeris_version", &self.celeris_version)
             .field("instance_id", &self.instance_id)
             .field("started_at", &self.started_at)
-            .field("providers_dir", &self.providers_dir)
             .field("admin_tx", &self.admin_tx.as_ref().map(|_| "<sender>"))
             .field("accounts_roots", &self.accounts_roots)
             .field("max_runs_per_account", &self.max_runs_per_account)
@@ -324,7 +320,7 @@ impl std::fmt::Debug for ApiSettings {
             )
             .field("memory_dir", &self.memory_dir)
             .field("notify_secret_id", &self.notify_secret_id)
-            .field("notify_gui_base_url", &self.notify_gui_base_url)
+            .field("notify_web_base_url", &self.notify_web_base_url)
             .field("releases", &self.releases.as_ref().map(|_| "<source>"))
             .field("release", &self.release)
             .field("mode", &self.mode)
@@ -332,10 +328,6 @@ impl std::fmt::Debug for ApiSettings {
             .field(
                 "llm_sources",
                 &self.llm_sources.as_ref().map(|_| "<reader>"),
-            )
-            .field(
-                "routing_catalog",
-                &self.routing_catalog.as_ref().map(|_| "<reader>"),
             )
             .field(
                 "model_discovery",
@@ -367,7 +359,7 @@ pub enum ApiError {
 
 /// `/api/v1` の全エンドポイントと共通の検査（Host / 認証 / Origin / Content-Type / 本文サイズ）を持つルータ。
 pub fn router(state: ApiState) -> axum::Router {
-    handlers::router(state)
+    handlers::router(state.clone()).merge(integrations::routes().with_state(state))
 }
 
 /// `settings.listen` に bind し、`shutdown` が完了したら SSE を閉じて graceful に止める。

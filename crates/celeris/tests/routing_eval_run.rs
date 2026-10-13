@@ -39,9 +39,13 @@ async fn daemon_runs_two_stub_trials_with_hidden_checks_and_eval_records() {
     git(&repo, &["init", "-q"]);
     git(&repo, &["commit", "--allow-empty", "-qm", "base"]);
     let base_commit = git(&repo, &["rev-parse", "HEAD"]);
-    let prompt_log = root.join("prompts.log");
-    let overlap_log = root.join("overlap.log");
-    let active_lock = root.join("active.lock");
+    // The worker run cannot create entries directly in the DB directory (ADR-0095 db_guard), so
+    // the stub's logs live in their own directory.
+    let logs = root.join("stub-logs");
+    std::fs::create_dir_all(&logs).expect("stub logs");
+    let prompt_log = logs.join("prompts.log");
+    let overlap_log = logs.join("overlap.log");
+    let active_lock = logs.join("active.lock");
     let stub = root.join("stub-harness.sh");
     std::fs::write(&stub, format!(
         "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'eval-stub 1.2.3'; exit 0; fi\nif ! mkdir '{}'; then echo overlap >> '{}'; else trap 'rmdir \"{}\"' EXIT; fi\ncat >> '{}'\nsleep 0.1\nprintf '{{\"type\":\"done\",\"summary\":\"stub done\",\"evidence\":[]}}\\n'\n",
@@ -88,14 +92,18 @@ reserved_runs = 1
 [adapters.fake]
 command = ["{}"]
 
-[[providers]]
-id = "celeris"
-adapter = "fake"
-model = "model-1"
+[llm_sources.local]
+kind = "fake"
+accounts = ["a1"]
+models = ["model-1"]
 
-[[harnesses]]
-id = "fake"
-adapter = "fake"
+[harnesses.fake]
+kind = "fake"
+api_formats = ["fake"]
+source_kinds = ["fake"]
+
+[route_defaults.fake]
+candidates = [{{ source = "local", model = "model-1" }}]
 "#,
             stub.display()
         ),
@@ -131,7 +139,7 @@ adapter = "fake"
     assert!(api_ready.is_ok(), "daemon API became ready");
 
     let body = json!({"manifest_sha":"sha256:fixture", "trials": (0..2).map(|trial_no| json!({
-        "problem_id":"problem-1", "trial_no":trial_no, "source_id":"none", "model_id":"model-1",
+        "problem_id":"problem-1", "trial_no":trial_no, "source_id":"local", "model_id":"model-1",
         "harness_id":"fake", "repo":repo, "base_commit":base_commit,
         "objective":"solve the fixture", "check":{"cmd":"printf hidden-check-marker", "timeout_secs":10}
     })).collect::<Vec<_>>()});

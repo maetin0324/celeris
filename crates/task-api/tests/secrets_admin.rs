@@ -259,8 +259,8 @@ async fn put_rejects_empty_or_whitespace_only_values() {
     );
 }
 
-/// `id` はファイル名に使う。無効な形（パストラバーサル含む）は `PATCH/DELETE /providers/{id}` と同じ規約で
-/// 404 `secret_not_found` にする（本文を見る前に判定する）。
+/// `id` はファイル名に使う。無効な形（パストラバーサル含む）は 404 `secret_not_found` にする
+/// （本文を見る前に判定する）。
 #[tokio::test]
 async fn put_and_delete_reject_invalid_ids_as_not_found() {
     let (env, secrets_tmp, dir) = env_with_secrets_dir();

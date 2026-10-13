@@ -1458,7 +1458,7 @@ pub enum Event {
     /// 状態は変えない（`replay` は無視する）。
     RoutingShadowRecorded {
         #[serde(flatten)]
-        record: Box<crate::model_router::shadow::ShadowRecord>,
+        record: Box<crate::routing_shadow_history::ShadowRecord>,
     },
     /// ADR-0072 D5/D8（Phase E1）: run 終了時に daemon が確定させた checkpoint（worker の申告 +
     /// mechanical の合成）。状態は変えない（`replay` の attempts 計算は無視する）。

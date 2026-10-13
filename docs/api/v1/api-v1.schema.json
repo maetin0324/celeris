@@ -610,37 +610,6 @@
         }
       ]
     },
-    "ActualSource": {
-      "description": "要求が実際に使った source（dispatch では未確定だった model を含む）。secret を含まない ID だけ。",
-      "properties": {
-        "account": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "from": {
-          "description": "出所: `proxy_log`（相関の取れた proxy log）・`request_attempts`（試した source の最後）・\n`proxy_trace`（proxy の trace の選択）。",
-          "type": "string"
-        },
-        "model": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "source_id": {
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "required": [
-        "from"
-      ],
-      "type": "object"
-    },
     "ActualWriteSetView": {
       "properties": {
         "base_sha": {
@@ -688,67 +657,6 @@
         "recorded_at"
       ],
       "type": "object"
-    },
-    "AdapterChoice": {
-      "description": "adapter をどう決めたか（routing audit に残す）。",
-      "oneOf": [
-        {
-          "description": "task・役割で明示された adapter。",
-          "properties": {
-            "kind": {
-              "const": "explicit",
-              "type": "string"
-            }
-          },
-          "required": [
-            "kind"
-          ],
-          "type": "object"
-        },
-        {
-          "description": "family の既定ハーネスに一致する行。",
-          "properties": {
-            "kind": {
-              "const": "preferred",
-              "type": "string"
-            }
-          },
-          "required": [
-            "kind"
-          ],
-          "type": "object"
-        },
-        {
-          "description": "既定ハーネスの行が使えず、絞る前の候補へ倒れた。",
-          "properties": {
-            "kind": {
-              "const": "fallback",
-              "type": "string"
-            },
-            "reason": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "kind",
-            "reason"
-          ],
-          "type": "object"
-        },
-        {
-          "description": "`AdapterPolicy::ProviderOrder`（従来どおり）。",
-          "properties": {
-            "kind": {
-              "const": "provider_order",
-              "type": "string"
-            }
-          },
-          "required": [
-            "kind"
-          ],
-          "type": "object"
-        }
-      ]
     },
     "AdoptRequest": {
       "additionalProperties": false,
@@ -1900,14 +1808,6 @@
       ],
       "type": "object"
     },
-    "Billing": {
-      "enum": [
-        "subscription",
-        "metered_api",
-        "self_hosted"
-      ],
-      "type": "string"
-    },
     "BrowserAction": {
       "description": "Task-level browser operation vocabulary (ADR-0080 D1). Unknown names are schema errors:\nno aliases, categories or pass-through of upstream names.",
       "enum": [
@@ -2713,136 +2613,6 @@
       ],
       "type": "object"
     },
-    "CandidateTrace": {
-      "properties": {
-        "cash_usd": {
-          "description": "Phase 2: API の実料金。",
-          "format": "double",
-          "type": [
-            "number",
-            "null"
-          ]
-        },
-        "config_order": {
-          "description": "Phase 2: 設定順（決定的な並びのキー）。旧 event には無い。",
-          "format": "uint",
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "cost_usd": {
-          "format": "double",
-          "type": [
-            "number",
-            "null"
-          ]
-        },
-        "deployment_id": {
-          "type": "string"
-        },
-        "effective_usd": {
-          "description": "Phase 2: cash + shadow + resource（どれかが未知なら None）。",
-          "format": "double",
-          "type": [
-            "number",
-            "null"
-          ]
-        },
-        "eligible_provider_ids": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "excluded_reason": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ExcludedReason"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Phase 2: 代表の除外理由。採用可能な候補・旧 event は None。"
-        },
-        "excluded_reasons": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "latency_ms": {
-          "format": "double",
-          "type": [
-            "number",
-            "null"
-          ]
-        },
-        "model_profile_id": {
-          "type": "string"
-        },
-        "pressure": {
-          "format": "double",
-          "type": [
-            "number",
-            "null"
-          ]
-        },
-        "quality": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/QualityEstimate"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "resource_usd": {
-          "description": "Phase 2: self-host の資源の機会費用。",
-          "format": "double",
-          "type": [
-            "number",
-            "null"
-          ]
-        },
-        "score": {
-          "format": "double",
-          "type": [
-            "number",
-            "null"
-          ]
-        },
-        "score_breakdown": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ScoreTrace"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Phase 2: score の内訳。score を計算しなかった候補・旧 event は None。"
-        },
-        "shadow_usd": {
-          "description": "Phase 2: subscription の shadow price。",
-          "format": "double",
-          "type": [
-            "number",
-            "null"
-          ]
-        }
-      },
-      "required": [
-        "model_profile_id",
-        "deployment_id",
-        "eligible_provider_ids",
-        "excluded_reasons"
-      ],
-      "type": "object"
-    },
     "CapacityScope": {
       "description": "枠が満杯の範囲（M1/M9）。",
       "oneOf": [
@@ -2867,45 +2637,6 @@
           "type": "string"
         }
       ]
-    },
-    "CatalogCapabilitiesView": {
-      "description": "Capability support is nullable because legacy configuration may not specify it.",
-      "properties": {
-        "reasoning_efforts": {
-          "items": {
-            "type": "string"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        },
-        "streaming": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "structured_output": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "tools": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "vision": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        }
-      },
-      "type": "object"
     },
     "CatalogDelta": {
       "description": "1 回の反映で変わったモデル。",
@@ -2937,98 +2668,6 @@
         "added",
         "removed",
         "restored"
-      ],
-      "type": "object"
-    },
-    "CatalogDeploymentView": {
-      "description": "A deployment is a source/model pairing; credentials and endpoint URLs are omitted.",
-      "properties": {
-        "allowed_lanes": {
-          "items": {
-            "$ref": "#/$defs/Tier"
-          },
-          "type": "array"
-        },
-        "billing": {
-          "$ref": "#/$defs/Billing"
-        },
-        "id": {
-          "type": "string"
-        },
-        "model_profile_id": {
-          "type": "string"
-        },
-        "price_override": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/TokenPricing"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "source_ref": {
-          "type": "string"
-        },
-        "upstream_model": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "id",
-        "source_ref",
-        "model_profile_id",
-        "upstream_model",
-        "billing",
-        "allowed_lanes"
-      ],
-      "type": "object"
-    },
-    "CatalogModelView": {
-      "description": "Catalog model metadata. Unknown capability support is null.",
-      "properties": {
-        "capabilities": {
-          "$ref": "#/$defs/CatalogCapabilitiesView"
-        },
-        "context_limits": {
-          "$ref": "#/$defs/ContextLimits"
-        },
-        "family": {
-          "type": "string"
-        },
-        "id": {
-          "type": "string"
-        },
-        "pricing": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/TokenPricing"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "quality": {
-          "items": {
-            "$ref": "#/$defs/QualityIndex"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        },
-        "revision": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "id",
-        "revision",
-        "family",
-        "capabilities",
-        "context_limits"
       ],
       "type": "object"
     },
@@ -5374,26 +5013,6 @@
       ],
       "type": "object"
     },
-    "CodingDefaultResolution": {
-      "description": "ADR 2026-10-07: coding の既定ハーネス解決の記録（routing audit で (model, adapter) を比べる材料）。",
-      "properties": {
-        "adapter_choice": {
-          "$ref": "#/$defs/AdapterChoice"
-        },
-        "family": {
-          "$ref": "#/$defs/ModelFamily"
-        },
-        "family_basis": {
-          "$ref": "#/$defs/FamilyBasis"
-        }
-      },
-      "required": [
-        "family",
-        "family_basis",
-        "adapter_choice"
-      ],
-      "type": "object"
-    },
     "CommentAuthorKind": {
       "description": "誰が書いたか（`task_comments.author_kind` の CHECK と対）。",
       "oneOf": [
@@ -6428,61 +6047,6 @@
       ],
       "type": "object"
     },
-    "Constraints": {
-      "properties": {
-        "allowed_deployments": {
-          "items": {
-            "type": "string"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        },
-        "allowed_sources": {
-          "items": {
-            "type": "string"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        },
-        "data_retention_allowed": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "external_network_allowed": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "max_cost_usd": {
-          "format": "double",
-          "type": [
-            "number",
-            "null"
-          ]
-        },
-        "max_latency_ms": {
-          "format": "double",
-          "type": [
-            "number",
-            "null"
-          ]
-        },
-        "required_region": {
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "type": "object"
-    },
     "ContainerProbeView": {
       "description": "`<runtime> info` の結果 1 件（`detail` は成功なら `\"ok\"`、失敗なら理由の 1 行）。",
       "properties": {
@@ -6535,35 +6099,6 @@
         "image_default",
         "build_dir"
       ],
-      "type": "object"
-    },
-    "ContextLimits": {
-      "properties": {
-        "input": {
-          "format": "uint64",
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "output": {
-          "format": "uint64",
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "total": {
-          "format": "uint64",
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        }
-      },
       "type": "object"
     },
     "ContinuationMetrics": {
@@ -9409,7 +8944,7 @@
       "type": "object"
     },
     "EscalationAudit": {
-      "description": "Run 間の lane 決定。selected_lane を次の optimizer の floor として使う。",
+      "description": "Run 間の lane 決定。selected_lane を後続の retry 判定に渡す。",
       "properties": {
         "counted_failures": {
           "format": "uint32",
@@ -9495,228 +9030,6 @@
         "options",
         "recommendation_reason",
         "web_path"
-      ],
-      "type": "object"
-    },
-    "EstimatorComparison": {
-      "description": "estimator の選択と比較相手の関係。",
-      "oneOf": [
-        {
-          "enum": [
-            "same",
-            "differs"
-          ],
-          "type": "string"
-        },
-        {
-          "const": "no_candidate",
-          "description": "estimator 側で選べる候補が無かった。",
-          "type": "string"
-        }
-      ]
-    },
-    "EstimatorDependencyAudit": {
-      "description": "descriptor の依存。記録から分かる値だけ `Some`（未記録は推定しない）。",
-      "properties": {
-        "external_embeddings": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "needs_network": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "needs_prompt": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "not_allowed": {
-          "description": "宣言された依存が daemon の許可（network allowlist・privacy）に合わず送らなかった。",
-          "type": "boolean"
-        }
-      },
-      "type": "object"
-    },
-    "EstimatorShadowAudit": {
-      "description": "`RoutingShadowAudit.estimator`（`kind = estimator` のときだけ）。",
-      "properties": {
-        "dependencies": {
-          "$ref": "#/$defs/EstimatorDependencyAudit"
-        },
-        "estimator_id": {
-          "description": "`policy_version` が `estimator:<id>/<version>` のときの id と version。",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "estimator_version": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "outcome": {
-          "$ref": "#/$defs/EstimatorShadowOutcome"
-        },
-        "overhead_ms": {
-          "description": "推論 overhead（sidecar 往復 ms）。",
-          "format": "uint64",
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "reason": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ShadowReason"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "unavailable_reason": {
-          "description": "評価不能の理由語（allowlist のみ。自由文は出さない）。",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "vs_heuristic": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/EstimatorComparison"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "estimator の選択と、同じ候補集合での heuristic 首位の差。completed のみ。"
-        },
-        "vs_primary": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/EstimatorComparison"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "estimator の選択と heuristic primary（実際の primary 決定）の差。completed のみ。"
-        }
-      },
-      "required": [
-        "dependencies",
-        "outcome"
-      ],
-      "type": "object"
-    },
-    "EstimatorShadowOutcome": {
-      "description": "estimator shadow 1 件の結果。primary の成否とは別。",
-      "oneOf": [
-        {
-          "enum": [
-            "completed",
-            "failed",
-            "timeout",
-            "dropped"
-          ],
-          "type": "string"
-        },
-        {
-          "const": "prompt_required",
-          "description": "sidecar が prompt を要したが `send_prompt=false`（または prompt allowlist 外）で評価不能。",
-          "type": "string"
-        }
-      ]
-    },
-    "EstimatorShadowSummary": {
-      "description": "task の estimator shadow の要約（run を跨いで数える）。対象が 0 件なら作らない。",
-      "properties": {
-        "completed": {
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "coverage": {
-          "description": "completed / targets。",
-          "format": "double",
-          "type": "number"
-        },
-        "differs_from_heuristic": {
-          "description": "completed のうち heuristic 首位と選択が違った件数。",
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "differs_from_primary": {
-          "description": "completed のうち heuristic primary と選択が違った件数。",
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "dropped": {
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "estimators": {
-          "description": "記録に現れた estimator（`<id>/<version>`、重複なし・昇順）。",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "failed": {
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "mean_overhead_ms": {
-          "description": "overhead の記録がある件の平均（ms）。",
-          "format": "double",
-          "type": [
-            "number",
-            "null"
-          ]
-        },
-        "prompt_required": {
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "targets": {
-          "description": "estimator shadow の記録数（評価の対象）。",
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "timeout": {
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        }
-      },
-      "required": [
-        "targets",
-        "completed",
-        "failed",
-        "timeout",
-        "dropped",
-        "prompt_required",
-        "coverage",
-        "differs_from_primary",
-        "differs_from_heuristic",
-        "estimators"
       ],
       "type": "object"
     },
@@ -11221,7 +10534,7 @@
               "additionalProperties": {
                 "type": "string"
               },
-              "description": "欄名 → 出自（例 `task.acceptance`、`work_unit.spec`、`estimator:chars/4`）。",
+              "description": "欄名 → 出自（例 `task.acceptance`、`work_unit.spec`、`route_select:chars/4`）。",
               "type": "object"
             },
             "request_id": {
@@ -11295,17 +10608,6 @@
                 "string",
                 "null"
               ]
-            },
-            "trace": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/RoutingTraceV1"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "proxy の trace（stage = proxy）。"
             },
             "type": {
               "const": "routing_request_decided",
@@ -11450,7 +10752,6 @@
               ]
             },
             "detail": {
-              "description": "秘密を含まない短い説明（任意）。",
               "type": [
                 "string",
                 "null"
@@ -11483,7 +10784,6 @@
               ]
             },
             "output_sha256": {
-              "description": "出力本文の SHA-256（小文字 16 進 64 桁）。本文は保存しない。",
               "type": [
                 "string",
                 "null"
@@ -11498,11 +10798,9 @@
               ]
             },
             "policy_version": {
-              "description": "判断した policy/estimator の版。",
               "type": "string"
             },
             "primary_decision_id": {
-              "description": "shadow が比べた primary の決定（`RoutingTraceV1.decision_id`）。",
               "type": "string"
             },
             "reason": {
@@ -11513,8 +10811,7 @@
                 {
                   "type": "null"
                 }
-              ],
-              "description": "completed は `None`。failed/dropped は必須。"
+              ]
             },
             "request_id": {
               "type": [
@@ -11523,7 +10820,6 @@
               ]
             },
             "reservation_id": {
-              "description": "実行 shadow の日次予約（store の reservation id）。decision shadow・予約前の drop は `None`。",
               "type": [
                 "string",
                 "null"
@@ -13182,182 +12478,6 @@
       ],
       "type": "object"
     },
-    "ExcludedReason": {
-      "description": "ADR §9（Phase 2）: 候補が落ちた理由の型。旧 event には無い（None）。\n既知の理由コード（optimizer・cost の `&'static str`）は [`ExcludedReason::from_code`] で写す。",
-      "oneOf": [
-        {
-          "description": "不合格の制約（lane・deployment・source・privacy・locality・adapter・capability・context・\nprovider・cost・latency・model_identity など）。`name` は制約名。",
-          "properties": {
-            "kind": {
-              "const": "constraint",
-              "type": "string"
-            },
-            "name": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "kind",
-            "name"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "kind": {
-              "const": "quota_exhausted",
-              "type": "string"
-            }
-          },
-          "required": [
-            "kind"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "kind": {
-              "const": "cooldown",
-              "type": "string"
-            }
-          },
-          "required": [
-            "kind"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "kind": {
-              "const": "concurrency",
-              "type": "string"
-            }
-          },
-          "required": [
-            "kind"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "kind": {
-              "const": "rate_limit",
-              "type": "string"
-            }
-          },
-          "required": [
-            "kind"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "kind": {
-              "const": "health_down",
-              "type": "string"
-            }
-          },
-          "required": [
-            "kind"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "kind": {
-              "const": "circuit_open",
-              "type": "string"
-            }
-          },
-          "required": [
-            "kind"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "kind": {
-              "const": "disabled",
-              "type": "string"
-            }
-          },
-          "required": [
-            "kind"
-          ],
-          "type": "object"
-        },
-        {
-          "description": "enforce で必須の値が未知（`context_unknown`・`quality_unknown` など）。`field` は欠けた値。",
-          "properties": {
-            "field": {
-              "type": "string"
-            },
-            "kind": {
-              "const": "unknown_required",
-              "type": "string"
-            }
-          },
-          "required": [
-            "kind",
-            "field"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "kind": {
-              "const": "quality_invalid",
-              "type": "string"
-            }
-          },
-          "required": [
-            "kind"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "kind": {
-              "const": "quality_below_min",
-              "type": "string"
-            }
-          },
-          "required": [
-            "kind"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "kind": {
-              "const": "invalid_estimate",
-              "type": "string"
-            }
-          },
-          "required": [
-            "kind"
-          ],
-          "type": "object"
-        },
-        {
-          "description": "上のどれにも当たらない理由コード（新しい版が足したコードを旧い読み手が落とさない）。",
-          "properties": {
-            "code": {
-              "type": "string"
-            },
-            "kind": {
-              "const": "other",
-              "type": "string"
-            }
-          },
-          "required": [
-            "kind",
-            "code"
-          ],
-          "type": "object"
-        }
-      ]
-    },
     "ExclusionReason": {
       "enum": [
         "UnknownSource",
@@ -14588,16 +13708,6 @@
         "reason"
       ],
       "type": "object"
-    },
-    "FamilyBasis": {
-      "description": "family をどの材料で決めたか（routing audit に残す）。",
-      "enum": [
-        "llm_source",
-        "account_pool",
-        "model_profile",
-        "unknown"
-      ],
-      "type": "string"
     },
     "FeatureStage": {
       "description": "特徴を記録した時点。run の時点と proxy の更新時点を区別し、後の review 結果を当時の特徴に混ぜない。",
@@ -16709,7 +15819,6 @@
       "type": "object"
     },
     "LaneDecision": {
-      "description": "ADR-0069 D3: lane の決定（監査記録の本体）。",
       "properties": {
         "clamped_by": {
           "type": [
@@ -16758,17 +15867,6 @@
         "rule_id": {
           "type": "string"
         },
-        "shadow": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ShadowDecision"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Phase 2 の予約（shadow 分類器）。Phase 1 では常に `None`。"
-        },
         "source": {
           "$ref": "#/$defs/TierSource"
         }
@@ -16781,70 +15879,6 @@
         "policy_version",
         "features"
       ],
-      "type": "object"
-    },
-    "LaneResolution": {
-      "description": "ADR-0069 D4: lane → provider / account / model / reasoning effort の解決結果（監査記録）。",
-      "properties": {
-        "account": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "adapter": {
-          "type": "string"
-        },
-        "coding_default": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/CodingDefaultResolution"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "ADR 2026-10-07（coding harness の既定）: `adapter_policy = \"model_family\"` のハーネスの run だけ。\n選んだ行の family と、adapter を明示・既定・fallback のどれで決めたか。他の run と旧イベントには無い。"
-        },
-        "lane": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Tier"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "残量による調整の後に実際に走らせる lane（`None` は解決前）。"
-        },
-        "model_id": {
-          "description": "実行するモデル（アダプタの既定モデルなら空文字列のこともある）。",
-          "type": "string"
-        },
-        "provider": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "reasoning_effort": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "selection": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ProviderSelection"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "ADR-0132 付記 L8: worker run の provider 選択の理由と見た候補。reviewer run と旧イベントには無い。"
-        }
-      },
       "type": "object"
     },
     "Lease": {
@@ -18184,9 +17218,6 @@
           ],
           "description": "人の上書き（無ければ `null`）。"
         },
-        "routing": {
-          "$ref": "#/$defs/ModelCatalogRoutingView"
-        },
         "source": {
           "type": "string"
         }
@@ -18197,8 +17228,7 @@
         "available",
         "first_seen",
         "last_seen",
-        "capabilities",
-        "routing"
+        "capabilities"
       ],
       "type": "object"
     },
@@ -18234,31 +17264,9 @@
             }
           ],
           "default": null,
-          "description": "routing で使う tier の上書き（無ければ `null`）。"
+          "description": "catalog 上の lane annotation（無ければ `null`）。候補選択の順序には使わない。"
         }
       },
-      "type": "object"
-    },
-    "ModelCatalogRoutingView": {
-      "description": "routing で使われている tier・deployment（routing catalog の `source_ref` と `upstream_model` で突き合わせる）。",
-      "properties": {
-        "deployments": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "tiers": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        }
-      },
-      "required": [
-        "tiers",
-        "deployments"
-      ],
       "type": "object"
     },
     "ModelCatalogView": {
@@ -18281,29 +17289,6 @@
         "last_discovery"
       ],
       "type": "object"
-    },
-    "ModelFamily": {
-      "description": "model の系統。未知（`Other`・`Unknown`）は非 Claude として扱う。",
-      "oneOf": [
-        {
-          "enum": [
-            "claude",
-            "gpt",
-            "qwen"
-          ],
-          "type": "string"
-        },
-        {
-          "const": "other",
-          "description": "family は書かれているが既知の系統ではない（DeepSeek 等）。",
-          "type": "string"
-        },
-        {
-          "const": "unknown",
-          "description": "family を決める材料が無い。",
-          "type": "string"
-        }
-      ]
     },
     "ModelPrefs": {
       "additionalProperties": false,
@@ -18839,23 +17824,6 @@
       ],
       "type": "object"
     },
-    "Normalization": {
-      "properties": {
-        "cost_reference_usd": {
-          "format": "double",
-          "type": "number"
-        },
-        "latency_reference_ms": {
-          "format": "double",
-          "type": "number"
-        }
-      },
-      "required": [
-        "cost_reference_usd",
-        "latency_reference_ms"
-      ],
-      "type": "object"
-    },
     "Notice": {
       "description": "通知の束（`feed_notices` の 1 行）。",
       "properties": {
@@ -19277,14 +18245,6 @@
         "digest_max_lines"
       ],
       "type": "object"
-    },
-    "Objective": {
-      "enum": [
-        "quality_first",
-        "balanced",
-        "resource_first"
-      ],
-      "type": "string"
     },
     "OnChildFailure": {
       "description": "ADR-0021: 委譲した子が `failed` になったとき、親をどうするか。",
@@ -21569,183 +20529,6 @@
       ],
       "type": "object"
     },
-    "ProviderCandidate": {
-      "description": "ADR-0132 付記 L8: 選択で見た 1 行。",
-      "properties": {
-        "detail": {
-          "description": "probe の失敗理由など。",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "kind": {
-          "$ref": "#/$defs/ProviderCandidateKind"
-        },
-        "outcome": {
-          "$ref": "#/$defs/ProviderCandidateOutcome"
-        },
-        "provider": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "provider",
-        "kind",
-        "outcome"
-      ],
-      "type": "object"
-    },
-    "ProviderCandidateKind": {
-      "description": "ADR-0132 付記 L8: 候補の種類。",
-      "oneOf": [
-        {
-          "const": "local",
-          "description": "付記 L1 のローカルの行。",
-          "type": "string"
-        },
-        {
-          "const": "pool",
-          "description": "アカウントプールの行。",
-          "type": "string"
-        },
-        {
-          "const": "other",
-          "description": "それ以外（プールを持たない非ローカルの行）。",
-          "type": "string"
-        }
-      ]
-    },
-    "ProviderCandidateOutcome": {
-      "description": "ADR-0132 付記 L8: 候補を見た結果。",
-      "enum": [
-        "selected",
-        "available",
-        "full",
-        "down",
-        "cooldown",
-        "unsupported",
-        "no_account"
-      ],
-      "type": "string"
-    },
-    "ProviderSelection": {
-      "description": "ADR-0132 付記 L8: provider 選択の記録（`LaneResolution.selection`）。",
-      "properties": {
-        "candidates": {
-          "items": {
-            "$ref": "#/$defs/ProviderCandidate"
-          },
-          "type": "array"
-        },
-        "reason": {
-          "$ref": "#/$defs/ProviderSelectionReason"
-        }
-      },
-      "required": [
-        "reason"
-      ],
-      "type": "object"
-    },
-    "ProviderSelectionReason": {
-      "description": "ADR-0132 付記 L8: provider を選んだ理由。",
-      "oneOf": [
-        {
-          "const": "local_preferred",
-          "description": "cheap lane でローカルの行を選んだ（付記 L2）。",
-          "type": "string"
-        },
-        {
-          "const": "local_full",
-          "description": "空きの無いローカルの行があり、順位付けへ倒した（付記 L3）。",
-          "type": "string"
-        },
-        {
-          "const": "local_down",
-          "description": "ローカルの行が不通・cooldown で、順位付けへ倒した（付記 L3/L4）。",
-          "type": "string"
-        },
-        {
-          "const": "pool",
-          "description": "アカウントプールの行を残量 score で選んだ（ADR-0049）。",
-          "type": "string"
-        },
-        {
-          "const": "fallback",
-          "description": "プールを持たない行へ倒れた、または何も選べなかった（ADR-0049）。",
-          "type": "string"
-        },
-        {
-          "const": "sticky",
-          "description": "継続セッションに留まった（ADR-0054）。",
-          "type": "string"
-        }
-      ]
-    },
-    "QualityEstimate": {
-      "properties": {
-        "confidence": {
-          "format": "double",
-          "type": [
-            "number",
-            "null"
-          ]
-        },
-        "feature_version": {
-          "type": "string"
-        },
-        "index": {
-          "format": "double",
-          "type": [
-            "number",
-            "null"
-          ]
-        },
-        "reasons": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        }
-      },
-      "required": [
-        "reasons",
-        "feature_version"
-      ],
-      "type": "object"
-    },
-    "QualityIndex": {
-      "properties": {
-        "domain": {
-          "type": "string"
-        },
-        "evaluation_version": {
-          "type": "string"
-        },
-        "index": {
-          "format": "double",
-          "type": "number"
-        },
-        "provenance": {
-          "type": "string"
-        },
-        "samples": {
-          "format": "uint64",
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        }
-      },
-      "required": [
-        "domain",
-        "index",
-        "evaluation_version",
-        "provenance"
-      ],
-      "type": "object"
-    },
     "QuestionItem": {
       "properties": {
         "approval_id": {
@@ -23620,105 +22403,20 @@
       ],
       "type": "object"
     },
-    "RequestLogLink": {
-      "description": "proxy log に記録された要求の実際の行き先（相関欄の写し）。",
-      "properties": {
-        "account": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "model": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "snapshot_id": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "source_id": {
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "type": "object"
-    },
     "RequestRoutingAudit": {
-      "description": "要求 1 件の子 trace。`log` は proxy log と結べたときだけ `Some`。",
       "properties": {
-        "actual": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ActualSource"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Phase 3: 実際に使った source/model（出所付き）。どこからも取れなければ None。"
-        },
-        "attempts": {
-          "description": "Phase 3: 試した順の source（`routing_request_decided.attempts`）。",
-          "items": {
-            "$ref": "#/$defs/RequestSourceAttempt"
-          },
-          "type": "array"
-        },
         "decision_id": {
           "type": "string"
-        },
-        "fallback_reason": {
-          "description": "Phase 3: 最終の source へ落ちた原因。",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "incomplete_reason": {
-          "description": "結べなかった理由（`request_log_missing` など）。結べたら None。",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "log": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/RequestLogLink"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "parent_decision_id": {
-          "description": "Phase 3: run 側 decision（`routing_request_decided.parent_decision_id`）。",
-          "type": [
-            "string",
-            "null"
-          ]
         },
         "request_id": {
           "type": [
             "string",
             "null"
           ]
-        },
-        "trace": {
-          "$ref": "#/$defs/RoutingTraceV1",
-          "description": "要求単位の決定（候補ごとの除外理由・score 内訳・最終 source/model/account）。"
         }
       },
       "required": [
-        "decision_id",
-        "trace"
+        "decision_id"
       ],
       "type": "object"
     },
@@ -24617,50 +23315,6 @@
       ],
       "type": "object"
     },
-    "RoutingCatalogView": {
-      "description": "Credential-free snapshot returned by `GET /llm/routing/catalog`.",
-      "properties": {
-        "catalog_version": {
-          "type": "string"
-        },
-        "deployments": {
-          "items": {
-            "$ref": "#/$defs/CatalogDeploymentView"
-          },
-          "type": "array"
-        },
-        "mode": {
-          "$ref": "#/$defs/RoutingMode"
-        },
-        "models": {
-          "items": {
-            "$ref": "#/$defs/CatalogModelView"
-          },
-          "type": "array"
-        },
-        "policies": {
-          "items": {
-            "$ref": "#/$defs/RoutingPolicy"
-          },
-          "type": "array"
-        },
-        "warnings": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        }
-      },
-      "required": [
-        "catalog_version",
-        "mode",
-        "models",
-        "deployments",
-        "policies",
-        "warnings"
-      ],
-      "type": "object"
-    },
     "RoutingEvidenceGroup": {
       "description": "genre×harness 1 組の最新版の根拠表。",
       "properties": {
@@ -24809,7 +23463,7 @@
           "additionalProperties": {
             "type": "string"
           },
-          "description": "欄名 → 出自（例 `task.acceptance`、`work_unit.spec`、`estimator:chars/4`）。",
+          "description": "欄名 → 出自（例 `task.acceptance`、`work_unit.spec`、`route_select:chars/4`）。",
           "type": "object"
         },
         "request_id": {
@@ -24840,13 +23494,6 @@
         "context_version"
       ],
       "type": "object"
-    },
-    "RoutingMode": {
-      "enum": [
-        "shadow",
-        "enforce"
-      ],
-      "type": "string"
     },
     "RoutingOutcome": {
       "description": "`Event::RoutingOutcomeRecorded` の中身（wire では event の欄に平たく並ぶ）。生の outcome vector が正本で、\n`reward` は offline 比較用の派生値。",
@@ -24971,62 +23618,6 @@
         }
       ]
     },
-    "RoutingPolicy": {
-      "properties": {
-        "constraints": {
-          "$ref": "#/$defs/Constraints"
-        },
-        "escalation": {
-          "type": "boolean"
-        },
-        "fallback": {
-          "type": "boolean"
-        },
-        "lane": {
-          "$ref": "#/$defs/Tier"
-        },
-        "local_preference": {
-          "type": "boolean"
-        },
-        "min_quality": {
-          "format": "double",
-          "type": "number"
-        },
-        "mode": {
-          "$ref": "#/$defs/RoutingMode"
-        },
-        "normalization": {
-          "$ref": "#/$defs/Normalization"
-        },
-        "objective": {
-          "$ref": "#/$defs/Objective"
-        },
-        "prefer_free": {
-          "type": "boolean"
-        },
-        "version": {
-          "type": "string"
-        },
-        "weights": {
-          "$ref": "#/$defs/Weights"
-        }
-      },
-      "required": [
-        "version",
-        "mode",
-        "lane",
-        "objective",
-        "min_quality",
-        "weights",
-        "normalization",
-        "constraints",
-        "fallback",
-        "escalation",
-        "local_preference",
-        "prefer_free"
-      ],
-      "type": "object"
-    },
     "RoutingRecord": {
       "description": "ADR-0069 D5: `Event::RoutingDecided` の中身。",
       "properties": {
@@ -25063,17 +23654,6 @@
             "null"
           ]
         },
-        "optimizer": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/RoutingTraceV1"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Optional Phase 1 optimizer audit. Older events omit this field."
-        },
         "org_node": {
           "description": "Ownership 層: 担当（`org_nodes.id`）。",
           "type": [
@@ -25088,10 +23668,6 @@
             "null"
           ]
         },
-        "resolution": {
-          "$ref": "#/$defs/LaneResolution",
-          "description": "Model 層（lane → provider / model）。"
-        },
         "work_unit_id": {
           "description": "ADR-0072 D21（Phase E2）: この run が属する WorkUnit（計画のある Task の WU の run だけ。\n暗黙の WorkUnit・導入前のイベントには無い）。",
           "type": [
@@ -25101,13 +23677,11 @@
         }
       },
       "required": [
-        "decision",
-        "resolution"
+        "decision"
       ],
       "type": "object"
     },
     "RoutingShadowAudit": {
-      "description": "primary の結果から独立した shadow 1 件の監査。",
       "properties": {
         "candidate_model": {
           "type": [
@@ -25122,22 +23696,10 @@
           ]
         },
         "differs_from_primary": {
-          "description": "primary の model/source と候補が両方分かる場合だけ比較する。",
           "type": [
             "boolean",
             "null"
           ]
-        },
-        "estimator": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/EstimatorShadowAudit"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Phase 5: `kind = estimator` のときだけ。estimator の id/version・依存・評価不能理由・\nheuristic primary との差（primary の outcome・attempts とは別）。"
         },
         "input_tokens": {
           "format": "uint64",
@@ -25165,16 +23727,6 @@
           "anyOf": [
             {
               "$ref": "#/$defs/ShadowReason"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "reservation": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ShadowReservationAudit"
             },
             {
               "type": "null"
@@ -25336,143 +23888,6 @@
         "genre",
         "harness_id",
         "stage"
-      ],
-      "type": "object"
-    },
-    "RoutingTraceV1": {
-      "properties": {
-        "account_id": {
-          "description": "Phase 2: 最終の account（OAuth pool の account 等）。",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "candidates": {
-          "items": {
-            "$ref": "#/$defs/CandidateTrace"
-          },
-          "type": "array"
-        },
-        "catalog_version": {
-          "type": "string"
-        },
-        "decision_id": {
-          "type": "string"
-        },
-        "estimator_version": {
-          "type": "string"
-        },
-        "fallback_order": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "feature_version": {
-          "type": "string"
-        },
-        "mode": {
-          "$ref": "#/$defs/RoutingMode"
-        },
-        "model": {
-          "description": "Phase 2: 最終の model。",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "observed_at": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "parent_decision_id": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "policy_version": {
-          "type": "string"
-        },
-        "reasons": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "request_id": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "requested_lane": {
-          "$ref": "#/$defs/Tier"
-        },
-        "run_id": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "selected": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "selected_lane": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Tier"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "snapshot_id": {
-          "type": "string"
-        },
-        "source_id": {
-          "description": "Phase 2: 最終の source（provider / deployment）。旧 event には無い。",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "stage": {
-          "type": "string"
-        },
-        "task_id": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "work_unit_id": {
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "required": [
-        "decision_id",
-        "stage",
-        "mode",
-        "policy_version",
-        "catalog_version",
-        "feature_version",
-        "estimator_version",
-        "snapshot_id",
-        "requested_lane",
-        "candidates",
-        "fallback_order",
-        "reasons"
       ],
       "type": "object"
     },
@@ -25716,7 +24131,7 @@
       ]
     },
     "RunRoutingAudit": {
-      "description": "ワーカー run 1 件の監査（旧欄）と Phase 2 の子 trace・完全性。",
+      "description": "ワーカー run 1 件の routing の監査。",
       "properties": {
         "account": {
           "type": [
@@ -25724,36 +24139,11 @@
             "null"
           ]
         },
-        "actual_sources": {
-          "description": "Phase 3: 子 trace の実際の source/model（要求の順、重複なし）。",
-          "items": {
-            "$ref": "#/$defs/ActualSource"
-          },
-          "type": "array"
-        },
         "adapter": {
           "type": [
             "string",
             "null"
           ]
-        },
-        "audit_incomplete": {
-          "description": "子 trace のどれかが proxy log と結べない（または決定が要求を指すのに子が無い）。旧 run は None。",
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "coding_default": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/CodingDefaultResolution"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "ADR 2026-10-07: coding の既定ハーネス解決（`RoutingDecided.resolution.coding_default`）。"
         },
         "cost_usd": {
           "format": "double",
@@ -25763,7 +24153,6 @@
           ]
         },
         "decision_id": {
-          "description": "Phase 3: dispatch の decision id（`optimizer.decision_id` の写し）。Phase 2 の trace の無い run は None。",
           "type": [
             "string",
             "null"
@@ -25802,13 +24191,6 @@
             "null"
           ]
         },
-        "incomplete_reasons": {
-          "description": "`audit_incomplete` の理由（整列・重複なし）。",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
         "input_tokens": {
           "format": "uint64",
           "minimum": 0,
@@ -25832,17 +24214,6 @@
             "string",
             "null"
           ]
-        },
-        "optimizer": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/RoutingTraceV1"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Phase 1 optimizer trace. Absent from events written before model routing."
         },
         "org_node": {
           "type": [
@@ -25899,16 +24270,6 @@
           },
           "type": "array"
         },
-        "requests": {
-          "description": "proxy の要求単位の子 trace。Phase 2 の trace を持たない旧 run は None。",
-          "items": {
-            "$ref": "#/$defs/RequestRoutingAudit"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        },
         "retries": {
           "format": "uint32",
           "minimum": 0,
@@ -25950,7 +24311,6 @@
           "description": "Phase 3: run 単位の最新の outcome（supersede された旧 outcome は出さない）。未追記は None。"
         },
         "routing_shadow": {
-          "description": "Phase 4: run に結び付いた decision/execution shadow。旧 run は欄なし。",
           "items": {
             "$ref": "#/$defs/RoutingShadowAudit"
           },
@@ -26201,65 +24561,6 @@
       },
       "required": [
         "items"
-      ],
-      "type": "object"
-    },
-    "ScoreTrace": {
-      "description": "score の内訳（ADR §4: score = wq·Q − wc·C − wl·L − wp·P）。C/L/P の未知は 1 で `unknown` に残す。",
-      "properties": {
-        "c": {
-          "format": "double",
-          "type": "number"
-        },
-        "l": {
-          "format": "double",
-          "type": "number"
-        },
-        "p": {
-          "format": "double",
-          "type": "number"
-        },
-        "q": {
-          "format": "double",
-          "type": "number"
-        },
-        "score": {
-          "format": "double",
-          "type": "number"
-        },
-        "unknown": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "wc": {
-          "format": "double",
-          "type": "number"
-        },
-        "wl": {
-          "format": "double",
-          "type": "number"
-        },
-        "wp": {
-          "format": "double",
-          "type": "number"
-        },
-        "wq": {
-          "format": "double",
-          "type": "number"
-        }
-      },
-      "required": [
-        "q",
-        "c",
-        "l",
-        "p",
-        "wq",
-        "wc",
-        "wl",
-        "wp",
-        "score"
       ],
       "type": "object"
     },
@@ -27094,30 +25395,7 @@
       ],
       "type": "object"
     },
-    "ShadowDecision": {
-      "description": "ADR-0069 §5（Phase 2 の予約）: shadow mode の分類器（例: Jev）の判断。lane は heuristic のままで、\nこれは並べて記録するだけ。**Phase 1 では作られない**。",
-      "properties": {
-        "classifier": {
-          "type": "string"
-        },
-        "confidence": {
-          "description": "0.0..=1.0。",
-          "format": "double",
-          "type": "number"
-        },
-        "lane": {
-          "$ref": "#/$defs/Tier"
-        }
-      },
-      "required": [
-        "classifier",
-        "lane",
-        "confidence"
-      ],
-      "type": "object"
-    },
     "ShadowKind": {
-      "description": "shadow の種類。`decision` は追加呼出しなし、`execution` は候補で生成、\n`estimator` は品質推定を primary heuristic と比較する。",
       "enum": [
         "decision",
         "execution",
@@ -27126,84 +25404,21 @@
       "type": "string"
     },
     "ShadowReason": {
-      "description": "failed/dropped の安定 reason code（説明文は別欄 `detail`。secret を入れない）。",
-      "oneOf": [
-        {
-          "enum": [
-            "not_allowlisted",
-            "sampled_out",
-            "queue_full",
-            "concurrency_limit",
-            "timeout",
-            "privacy",
-            "upstream_error"
-          ],
-          "type": "string"
-        },
-        {
-          "const": "off",
-          "description": "shadow 実行が設定で off（既定）または設定が不完全。",
-          "type": "string"
-        },
-        {
-          "const": "cap_exceeded",
-          "description": "日次の request/token/effective 上限を超える（予約できない）。",
-          "type": "string"
-        },
-        {
-          "const": "unknown_cost",
-          "description": "最悪消費の費用が分からない（実行対象にしない）。",
-          "type": "string"
-        },
-        {
-          "const": "resource_group_shared",
-          "description": "primary と同じ非分離の resource group を使う。",
-          "type": "string"
-        },
-        {
-          "const": "primary_pressure",
-          "description": "primary の予約待ちが発生したので未開始の shadow を落とした。",
-          "type": "string"
-        }
-      ]
-    },
-    "ShadowReservationAudit": {
-      "description": "監査表示用の予約と確定の消費。額は effective USD。",
-      "properties": {
-        "charged_effective_usd": {
-          "format": "double",
-          "type": "number"
-        },
-        "charged_tokens": {
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "reserved_effective_usd": {
-          "format": "double",
-          "type": "number"
-        },
-        "reserved_tokens": {
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "state": {
-          "type": "string"
-        },
-        "utc_day": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "utc_day",
-        "state",
-        "reserved_tokens",
-        "reserved_effective_usd",
-        "charged_tokens",
-        "charged_effective_usd"
+      "enum": [
+        "off",
+        "not_allowlisted",
+        "sampled_out",
+        "queue_full",
+        "concurrency_limit",
+        "cap_exceeded",
+        "unknown_cost",
+        "timeout",
+        "privacy",
+        "resource_group_shared",
+        "primary_pressure",
+        "upstream_error"
       ],
-      "type": "object"
+      "type": "string"
     },
     "ShadowStatus": {
       "enum": [
@@ -29182,17 +27397,6 @@
             "null"
           ]
         },
-        "estimator_shadow": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/EstimatorShadowSummary"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Phase 5: run を跨いだ estimator shadow（`routing_shadow[].estimator`）の coverage・失敗/timeout・\nprompt_required・heuristic primary との差・推論 overhead。primary の outcome とは別。無ければ省く。"
-        },
         "routing": {
           "anyOf": [
             {
@@ -29205,7 +27409,7 @@
           "description": "routing の出自（tier を誰が決めたか・捨てた LLM の担当 `dropped_assignee`・features の上書き）。"
         },
         "runs": {
-          "description": "run ごとの監査。ADR 2026-10-04-multi-objective-model-routing Phase 2 の `requests`（proxy の\n要求単位の子 trace）・`audit_incomplete`、Phase 3 の `escalation_audit`・`routing_features`・\n`routing_outcome`・`outcome_state`・`actual_sources` は旧欄と同じ object に並ぶ（旧 run は無い）。\nPhase 4 の `routing_shadow` は primary の結果から独立した optional の配列。Phase 5 の estimator\nshadow は各要素の `estimator`（id/version・依存・評価不能理由・heuristic primary との差）。",
+          "description": "run ごとの audit と、過去の読み取り専用 routing shadow event（存在する場合）。",
           "items": {
             "$ref": "#/$defs/RunRoutingAudit"
           },
@@ -30407,44 +28611,6 @@
       ],
       "type": "object"
     },
-    "TokenPricing": {
-      "properties": {
-        "as_of": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "cached_input_usd_per_million": {
-          "format": "double",
-          "type": [
-            "number",
-            "null"
-          ]
-        },
-        "input_usd_per_million": {
-          "format": "double",
-          "type": [
-            "number",
-            "null"
-          ]
-        },
-        "output_usd_per_million": {
-          "format": "double",
-          "type": [
-            "number",
-            "null"
-          ]
-        },
-        "provenance": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "provenance"
-      ],
-      "type": "object"
-    },
     "ToolPolicyKind": {
       "description": "ADR 2026-10-07-worker-no-subagents-no-llm-cli D5: `Event::WorkerPolicyViolation.kind`。",
       "oneOf": [
@@ -31471,33 +29637,6 @@
         "pass",
         "reason",
         "ts"
-      ],
-      "type": "object"
-    },
-    "Weights": {
-      "properties": {
-        "cost": {
-          "format": "double",
-          "type": "number"
-        },
-        "latency": {
-          "format": "double",
-          "type": "number"
-        },
-        "pressure": {
-          "format": "double",
-          "type": "number"
-        },
-        "quality": {
-          "format": "double",
-          "type": "number"
-        }
-      },
-      "required": [
-        "quality",
-        "cost",
-        "latency",
-        "pressure"
       ],
       "type": "object"
     },
@@ -32687,10 +30826,6 @@
     "retry_result": {
       "$ref": "#/$defs/RetryResult"
     },
-    "routing_catalog": {
-      "$ref": "#/$defs/RoutingCatalogView",
-      "description": "Phase 1: credential-free model and deployment catalog."
-    },
     "routing_evidence": {
       "$ref": "#/$defs/RoutingEvidenceList"
     },
@@ -32979,7 +31114,6 @@
     "harnesses",
     "harness_rule",
     "harness_candidate",
-    "routing_catalog",
     "routing_stages",
     "routing_stage",
     "routing_stage_change",

@@ -224,8 +224,6 @@ pub struct ApiV1Schema {
     pub harnesses: Vec<crate::types::HarnessView>,
     pub harness_rule: crate::types::HarnessRuleView,
     pub harness_candidate: crate::types::HarnessCandidateView,
-    /// Phase 1: credential-free model and deployment catalog.
-    pub routing_catalog: crate::routing_catalog::RoutingCatalogView,
     /// ADR 2026-10-11-llm-source-model-routing-evaluation D3: `GET`/`POST /routing/stages` と `GET /routing/evidence`。
     pub routing_stages: task_ops::routing_stage::RoutingStageList,
     pub routing_stage: task_ops::routing_stage::RoutingStageView,

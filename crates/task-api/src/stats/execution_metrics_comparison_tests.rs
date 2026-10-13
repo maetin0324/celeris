@@ -207,14 +207,9 @@ fn fixture() -> SqliteStore {
                         org_node: Some("engineering".into()),
                         harness: Some("coding".into()),
                         decision,
-                        resolution: task_core::model_routing::LaneResolution {
-                            lane: Some(Tier::Standard),
-                            ..Default::default()
-                        },
                         quota_reason: None,
                         work_unit_id: None,
                         escalation: None,
-                        optimizer: None,
                     }),
                 },
                 Event::WorkerFinished {

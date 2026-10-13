@@ -136,7 +136,7 @@ pub fn default_wire_prefix(source: &str, adapter: &str) -> Option<&'static str> 
 }
 
 /// ADR 2026-10-06 model-role-assignments 付記（2026-10-07 wire-prefix）: 割り当ての `model_id`（catalog の素の id）
-/// から provider 行ごとの実行用モデル名（wire）を作る規則。llm-proxy・routing catalog・API の preview が
+/// から provider 行ごとの実行用モデル名（wire）を作る規則。llm-proxy・route candidate resolution・API preview が
 /// 同じ規則を使う。
 ///
 /// 1. 行の config の wire（lane の binding → 行の `model`）に `<prefix>/` があればそれを引き継ぐ

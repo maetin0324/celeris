@@ -487,7 +487,6 @@ impl Dispatcher {
                     clamped_by: None,
                     hint: None,
                     escalation: None,
-                    shadow: None,
                 }),
                 None,
             )
@@ -667,24 +666,15 @@ impl Dispatcher {
                 features: feature_ref,
                 org_node: task.assignee.clone(),
                 harness: task.genre.clone(),
-                resolution: task_core::model_routing::LaneResolution {
-                    lane: Some(task.worker_hint.tier),
-                    adapter: adapter_id.clone(),
-                    provider: Some(source_id.clone()),
-                    account: account.clone(),
-                    model_id: model.clone(),
-                    // The selected route carries no reasoning effort, so none reaches the harness.
-                    reasoning_effort: None,
-                    selection: None,
-                    coding_default: None,
-                },
+                // The selected source/model is already recorded on WorkerStarted. This field is
+                // retained for old routing_decided event deserialization until the legacy audit
+                // record is removed from task-core.
                 quota_reason: None,
                 decision,
                 // ADR-0072 D21（Phase E3）: WU の run だけ `work_unit_id` を持つ。
                 work_unit_id: current_wu.as_ref().map(|wu| wu.id.clone()),
                 // Phase 3（ADR 2026-10-04 §5）: 上げた/上げなかった決定の構造化監査。task の run だけ。
                 escalation: escalation_audit,
-                optimizer: None,
             };
             routing_decision_id = Some(format!("run:{run_id}"));
             self.store.append_event(

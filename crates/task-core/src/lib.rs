@@ -100,6 +100,7 @@ pub mod route_extract;
 pub mod route_record;
 /// ADR 2026-10-11 D2/D3: pure evidence-based source/model selector and guardrails.
 pub mod route_select;
+pub mod routing_shadow_history;
 pub mod store;
 pub mod transition;
 /// ADR-0079（Phase R1a）: 再帰的な task 分解の木（`Task.tree`・`[execution.tree]` の上限・深さ）。
@@ -313,7 +314,6 @@ pub use pause::{
     quota_summary_line, resolve_pause_points, resolve_plan_pause_points, truncate_phase_report,
 };
 
-pub mod model_routing;
 // ---- ADR 2026-10-07（coding harness の既定）: model family と coding の既定 adapter ----
 pub mod coding_harness;
 pub mod model_family;
@@ -327,8 +327,8 @@ pub mod retry_policy;
 pub mod routing_audit;
 pub use model_policy::{
     LANE_POLICY_VERSION, LaneCeiling, LaneDecision, Level, ModelPolicy, RouteFeaturesRef,
-    RoutingRecord, ShadowClassifier, ShadowDecision, TaskFeatureHints, TaskFeatures,
-    WorkUnitLaneCap, decide_for_task, decide_for_work_unit,
+    RoutingRecord, TaskFeatureHints, TaskFeatures, WorkUnitLaneCap, decide_for_task,
+    decide_for_work_unit,
 };
 pub use retry_policy::{
     AttemptOutcome, AttemptRecord, BudgetState, EscalationAudit, EscalationPolicy,

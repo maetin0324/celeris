@@ -1,11 +1,13 @@
-import type { ExcludedReason, LlmSourceFreshnessView, LlmSourceStateView, ScoreTrace } from "../../api/generated/types";
-import { UNKNOWN } from "./routing-catalog";
+import type { LlmSourceFreshnessView, LlmSourceStateView } from "../../api/generated/types";
 
 /**
- * 動的な source の状態・費用・score・除外理由の表示用（ADR 2026-10-04-multi-objective-model-routing §6・§8）。
+ * 動的な source の状態・費用の表示用（ADR 2026-10-04-multi-objective-model-routing §6・§8）。
  * 請求（cash）と枠の機会費用（shadow・resource）は別の欄で、混ぜて一つの金額にしない。
- * 欠測（null）は「不明」と書き、0 円に見せない。選択や score は画面で再計算しない（返された値を言葉にするだけ）。
+ * 欠測（null）は「不明」と書き、0 円に見せない。選択は画面で再計算しない（返された値を言葉にするだけ）。
  */
+
+/** 欠測の表示。 */
+export const UNKNOWN = "不明";
 
 /** USD。欠測は「不明」。 */
 export function usdLabel(value: number | null | undefined): string {
@@ -41,56 +43,6 @@ export function freshnessLabel(freshness: LlmSourceFreshnessView): string {
 export function reachabilityLabel(reachability: string): string {
   const known: Record<string, string> = { up: "到達可", down: "届かない", unknown: "未確認" };
   return known[reachability] ?? reachability;
-}
-
-/** 候補の除外理由を一語にする。構造化の理由が無ければ旧形の code 列を使う。 */
-export function excludedLabel(reason: ExcludedReason | null | undefined, codes: readonly string[] = []): string {
-  if (!reason) return codes.length > 0 ? `除外: ${codes.join(", ")}` : "除外";
-  switch (reason.kind) {
-    case "constraint":
-      return `制約に合わない（${reason.name}）`;
-    case "quota_exhausted":
-      return "残量が枯渇している";
-    case "cooldown":
-      return "cooldown 中";
-    case "concurrency":
-      return "同時実行の上限に達している";
-    case "rate_limit":
-      return "速度制限に達している";
-    case "health_down":
-      return "到達できない（health down）";
-    case "circuit_open":
-      return "circuit が開いている";
-    case "disabled":
-      return "無効になっている";
-    case "unknown_required":
-      return `必要な値が不明（${reason.field}）`;
-    case "quality_invalid":
-      return "品質指数が不正";
-    case "quality_below_min":
-      return "品質が min_quality に届かない";
-    case "invalid_estimate":
-      return "費用・時間の見積もりが不正";
-    case "other":
-      return `その他（${reason.code}）`;
-  }
-}
-
-/** score の内訳。計算されていなければ「不明」、不明の成分は名前で添える。 */
-export function scoreLabel(breakdown: ScoreTrace | null | undefined, score?: number | null): string {
-  if (!breakdown) return `score ${score == null ? UNKNOWN : score}（内訳なし）`;
-  const terms = `品質 ${breakdown.q}×${breakdown.wq} − 費用 ${breakdown.c}×${breakdown.wc} − 遅延 ${breakdown.l}×${breakdown.wl} − 負荷 ${breakdown.p}×${breakdown.wp}`;
-  const unknown = breakdown.unknown?.length ? `（不明: ${breakdown.unknown.join(", ")}）` : "";
-  return `score ${breakdown.score}: ${terms}${unknown}`;
-}
-
-/** 監査の完全性。完全なら None。 */
-export function auditIncompleteLabel(
-  incomplete: boolean | null | undefined,
-  reasons: readonly string[] = [],
-): string | null {
-  if (!incomplete) return null;
-  return `監査が不完全です（${reasons.length > 0 ? reasons.join(", ") : "理由なし"}）。決定と proxy log が結べていません`;
 }
 
 /** source 状態の欄を言葉にする。費用は costRows で別に出すので、ここには含めない。 */

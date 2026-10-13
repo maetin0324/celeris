@@ -4,8 +4,7 @@ use task_core::model_policy::{LaneCeiling, RoutingRecord, decide_for_task};
 use task_core::model_router::feedback::{
     RequestSourceAttempt, RoutingOutcome, RoutingRequestRecord,
 };
-use task_core::model_routing::LaneResolution;
-use task_core::{Event, RunMetrics, SqliteStore, Status, TaskId, TaskStore, Tier, Usage};
+use task_core::{Event, RunMetrics, SqliteStore, Status, TaskId, TaskStore, Usage};
 use time::OffsetDateTime;
 
 use super::record_routing_outcomes;
@@ -71,19 +70,8 @@ fn run_events(task: &task_core::Task) -> Vec<Event> {
                 org_node: Some("software-engineering".into()),
                 harness: Some("coding".into()),
                 decision,
-                resolution: LaneResolution {
-                    lane: Some(Tier::Cheap),
-                    adapter: "claude-code".into(),
-                    provider: Some("cc-1".into()),
-                    account: None,
-                    model_id: "model-cheap".into(),
-                    reasoning_effort: None,
-                    selection: None,
-                    coding_default: None,
-                },
                 quota_reason: None,
                 work_unit_id: None,
-                optimizer: None,
                 escalation: None,
             }),
         },
@@ -184,7 +172,6 @@ fn routing_reward_waits_for_review_and_supersedes_idempotently() {
                 decision_id: "proxy:req-1".into(),
                 parent_decision_id: Some("run:r1".into()),
                 run_id: Some("r1".into()),
-                trace: None,
                 attempts: vec![RequestSourceAttempt {
                     source_id: "qwen-local".into(),
                     model: Some("qwen".into()),

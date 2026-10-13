@@ -195,7 +195,20 @@ pub(crate) fn reload_providers(
     }
     let cos_launch =
         super::cos_launch::build_cos_chat_launch(&new_config, &config.db.path, config.api.listen);
-    let llm_route_registry = new_config.llm_route_registry().map_err(|e| e.to_string())?;
+    let mut llm_route_registry = new_config.llm_route_registry().map_err(|e| e.to_string())?;
+    if let (Ok(entries), Ok(overrides)) = (
+        dispatcher.store().model_catalog_list(),
+        dispatcher.store().model_catalog_overrides(),
+    ) {
+        let dropped =
+            crate::config::apply_model_catalog(&mut llm_route_registry, &entries, &overrides);
+        if !dropped.is_empty() {
+            tracing::info!(
+                count = dropped.len(),
+                "model catalog filtered route candidates"
+            );
+        }
+    }
     let harness_adapters = build_harness_adapters(&new_config).map_err(|e| e.to_string())?;
     dispatcher
         .reload_account_limits()
@@ -225,32 +238,6 @@ pub(crate) fn reload_providers(
     config.notify = new_config.notify;
     config.cos = new_config.cos;
     config.conversation = new_config.conversation;
-    // Phase 2: dispatcher の routing 設定も新しい snapshot に揃える（`Config::load` を通った値だけ）。
-    if let Some(runtime) = &new_config.model_routing.runtime {
-        dispatcher.set_dispatch_routing(runtime.dispatch_settings());
-        // Phase 4: shadow policy も同じ snapshot から。listener（llm-proxy の shadow）へは新しい
-        // mode と policy の組が 1 回で渡り、queue は上限・予約先を丸ごと差し替える。
-        dispatcher.set_routing_shadow(runtime.shadow.clone());
-    }
-    let sidecar_control = config.model_routing.estimator_sidecar_control.take();
-    config.model_routing = new_config.model_routing;
-    config.model_routing.estimator_sidecar_control = sidecar_control;
-    config.routing_catalog_snapshot = new_config.routing_catalog_snapshot;
-    if let (Some(shared), Some(snapshot)) = (
-        config.routing_catalog_state.as_ref(),
-        config.routing_catalog_snapshot.as_ref(),
-    ) {
-        *shared
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = std::sync::Arc::clone(snapshot);
-    } else {
-        config.routing_catalog_state = new_config.routing_catalog_state;
-    }
-    // ADR 2026-10-06 D4: reload で組み直した snapshot にも catalog の `available` と上書きを当て直す
-    // （外す deployment が無ければ snapshot はそのまま）。
-    crate::model_discovery::apply_catalog_to_snapshot(dispatcher.store().as_ref(), config);
-    // Phase 5: estimator sidecar も新しい snapshot から組み直す（締める・off へ戻すのも再起動なし）。
-    super::routing_sidecar::reload_estimator_sidecar(config);
     config.selfdeploy.delivery_projects = new_config.selfdeploy.delivery_projects;
     config.selfdeploy.delivery_default_departments =
         new_config.selfdeploy.delivery_default_departments;

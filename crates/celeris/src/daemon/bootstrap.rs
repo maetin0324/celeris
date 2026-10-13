@@ -559,7 +559,19 @@ pub fn build_dispatcher(
     seed_cron_if_empty(store.as_ref(), config, OffsetDateTime::now_utc())?;
     let mut dispatcher = Dispatcher::new(store.clone(), config.dispatch_config());
     // ADR 2026-10-11 llm-source-harness-selection: harness and source×model are chosen from these.
-    dispatcher.set_llm_route_registry(config.llm_route_registry()?);
+    let mut llm_routes = config.llm_route_registry()?;
+    if let (Ok(entries), Ok(overrides)) =
+        (store.model_catalog_list(), store.model_catalog_overrides())
+    {
+        let dropped = crate::config::apply_model_catalog(&mut llm_routes, &entries, &overrides);
+        if !dropped.is_empty() {
+            tracing::info!(
+                count = dropped.len(),
+                "model catalog filtered route candidates"
+            );
+        }
+    }
+    dispatcher.set_llm_route_registry(llm_routes);
     dispatcher.set_harness_adapters(build_harness_adapters(config)?);
     // ADR 2026-10-08 account-concurrency-limits §(d)(e): implicit accounts are the declared sources
     // without an account pool; forget limits of implicit accounts no such source has any more.
@@ -577,16 +589,6 @@ pub fn build_dispatcher(
         super::cos_launch::build_cos_chat_launch(config, &config.db.path, config.api.listen),
     );
     // ADR 2026-10-06 model-role-assignments D2: DB の割り当てを同じ store から読む（run 起動のたびに解決）。
-    // 付記「モデルごとの複数役割」: shadow / enforce の役割メンバーの順位づけに routing catalog の品質を使う。
-    if let Some(shared) = config.routing_catalog_state.as_ref() {
-        dispatcher.set_routing_model_profiles(Arc::new(SharedCatalogProfiles(Arc::clone(shared))));
-    }
-    // ADR 2026-10-04 Phase 2: `[model_routing]` の mode・観測 TTL・窓の reserve_value（既定 legacy）。
-    if let Some(runtime) = &config.model_routing.runtime {
-        dispatcher.set_dispatch_routing(runtime.dispatch_settings());
-        // Phase 4: `[model_routing.shadow]`（既定 off）。listener は後で llm-proxy が足す。
-        dispatcher.set_routing_shadow(runtime.shadow.clone());
-    }
     dispatcher.set_cluster_connector(cluster_connector(
         masters.clone(),
         master_launchers(config),
@@ -693,17 +695,4 @@ pub fn seed_cron_if_empty(
         "cron: seeded the cron jobs from the config"
     );
     Ok(config.cron.seed.len())
-}
-
-/// 付記「モデルごとの複数役割」: 共有の routing catalog snapshot から model profile を読む（dispatcher 用）。
-struct SharedCatalogProfiles(Arc<std::sync::RwLock<Arc<crate::config::RoutingCatalog>>>);
-
-impl task_dispatch::RoutingModelProfiles for SharedCatalogProfiles {
-    fn model_profiles(&self) -> Vec<task_core::model_router::profiles::ModelProfile> {
-        self.0
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .models
-            .clone()
-    }
 }

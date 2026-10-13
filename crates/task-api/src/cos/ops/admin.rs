@@ -212,10 +212,8 @@ pub(crate) fn dispatch(
     match matched.action {
         "model_override.put" => {
             let input = decode_optional(body).map_err(decode)?;
-            let routing = env.api.inner.routing_catalog.as_ref().map(|r| r.view());
             audited(crate::model_catalog::put_override_op(
                 store,
-                routing.as_ref(),
                 &path_param(OVERRIDE, path, "{source}"),
                 &path_param(OVERRIDE, path, "{model_id}"),
                 input,

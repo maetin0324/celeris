@@ -4,8 +4,7 @@
 //! - 単一スコアではなく**規則表**（上から評価し、最初に当たった規則の `rule_id` を記録する）。
 //! - 特徴量は `TaskFeatures::infer(&Task)` がタスクの列から決定的に作る（LLM は呼ばない。DESIGN 原則 1）。
 //! - model は lane から引かず、dispatcher の LLM route（source×model）が決める。残量による
-//!   調整（`model_routing::select_tier`）はこの後に別の層として効く。
-//! - Phase 2 の shadow 分類器のための境界（`ShadowClassifier` / `LaneDecision.shadow`）だけを予約する。
+//!   quota による lane 再解決は行わない。
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -480,23 +479,6 @@ impl LaneCeiling {
     }
 }
 
-/// ADR-0069 §5（Phase 2 の予約）: shadow mode の分類器（例: Jev）の判断。lane は heuristic のままで、
-/// これは並べて記録するだけ。**Phase 1 では作られない**。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct ShadowDecision {
-    pub classifier: String,
-    pub lane: Tier,
-    /// 0.0..=1.0。
-    pub confidence: f64,
-}
-
-/// ADR-0069 §5（Phase 2 の予約）: shadow 分類器の境界。**実装は無い**（Phase 2）。
-pub trait ShadowClassifier: Send + Sync {
-    fn id(&self) -> &str;
-    fn classify(&self, task: &Task, features: &TaskFeatures) -> Option<ShadowDecision>;
-}
-
-/// ADR-0069 D3: lane の決定（監査記録の本体）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct LaneDecision {
     /// 最終的な lane（天井・エスカレーションの後。残量による調整の前）。
@@ -517,9 +499,6 @@ pub struct LaneDecision {
     /// リトライでのエスカレーションの判断（`retry_policy`）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub escalation: Option<String>,
-    /// Phase 2 の予約（shadow 分類器）。Phase 1 では常に `None`。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub shadow: Option<ShadowDecision>,
 }
 
 /// ADR-0069 D5: `Event::RoutingDecided` の中身。
@@ -536,8 +515,6 @@ pub struct RoutingRecord {
     pub harness: Option<String>,
     /// Model 層（lane）。
     pub decision: LaneDecision,
-    /// Model 層（lane → provider / model）。
-    pub resolution: crate::model_routing::LaneResolution,
     /// 残量による調整の理由（`select_tier`）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quota_reason: Option<String>,
@@ -545,9 +522,6 @@ pub struct RoutingRecord {
     /// 暗黙の WorkUnit・導入前のイベントには無い）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub work_unit_id: Option<String>,
-    /// Optional Phase 1 optimizer audit. Older events omit this field.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub optimizer: Option<crate::model_router::trace::RoutingTraceV1>,
     /// Phase 3 run 間 escalation の構造化監査。旧 event では欠落する。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub escalation: Option<crate::retry_policy::EscalationAudit>,
@@ -647,7 +621,6 @@ impl ModelPolicy {
             clamped_by,
             hint: None,
             escalation: None,
-            shadow: None,
         }
     }
 }
@@ -683,7 +656,6 @@ pub fn decide_for_task(task: &Task, ceiling: &LaneCeiling) -> Option<LaneDecisio
             clamped_by: None,
             hint: None,
             escalation: None,
-            shadow: None,
         });
     }
     let mut decision = ModelPolicy.decide(&features, ceiling);

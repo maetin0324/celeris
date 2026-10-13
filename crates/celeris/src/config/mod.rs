@@ -35,7 +35,6 @@ mod knowledge;
 mod llm_route;
 mod maintenance;
 mod model_catalog;
-mod model_routing;
 mod org;
 mod proxy;
 mod scratch;
@@ -60,7 +59,6 @@ pub use knowledge::*;
 pub use llm_route::*;
 pub use maintenance::*;
 pub use model_catalog::*;
-pub use model_routing::*;
 pub use org::*;
 pub use scratch::*;
 pub use selfdeploy::*;
@@ -244,19 +242,10 @@ pub struct Config {
     /// （`Config::load` が行う。`Config::validate` が「必要なのに埋まらない」を弾く）。
     #[serde(default)]
     pub llm_proxy: llm_proxy::config::LlmProxyConfig,
-    /// Optional model routing observation and policy configuration.
-    #[serde(default)]
-    pub model_routing: ModelRoutingConfig,
     /// ADR 2026-10-06 D4: `[model_catalog]`。利用可能モデルの自動発見（周期・opencode go の取得先）。
     #[serde(default)]
     pub model_catalog: ModelCatalogConfig,
     /// Fully validated catalog used by daemon bootstrap and replaced on successful reload.
-    #[serde(skip)]
-    pub routing_catalog_snapshot: Option<std::sync::Arc<RoutingCatalog>>,
-    /// Shared handle for API readers; each reader keeps its own immutable Arc snapshot.
-    #[serde(skip)]
-    pub routing_catalog_state:
-        Option<std::sync::Arc<std::sync::RwLock<std::sync::Arc<RoutingCatalog>>>>,
     // ---- ADR-0053（Phase 65）: ここまで ----
     // ---- ADR-0054 D1（Phase 67）: ノードごとの継続セッション。ここから ----
     /// `[sessions]`。CoS の対話・部門長のレビュー run の継続セッション（`node_sessions`）の逼迫判定。
@@ -406,13 +395,9 @@ impl Config {
     /// existing sub-struct so adding them does not change `Config` struct literals.
     pub(crate) fn parse_with_delivery(text: &str) -> Result<Self, ConfigError> {
         let mut table: toml::Table = toml::from_str(text)?;
-        if let Some(model_routing) = table.get("model_routing")
-            && model_routing
-                .as_table()
-                .is_some_and(|value| !value.contains_key("mode"))
-        {
+        if table.contains_key("model_routing") {
             return Err(ConfigError::Invalid(
-                "[model_routing].mode is required; set mode = \"shadow\" or mode = \"enforce\""
+                "[model_routing] is no longer supported; configure source/model candidates in [routing] route_defaults"
                     .into(),
             ));
         }
@@ -518,14 +503,6 @@ impl Config {
 
         // 3. 検証。
         cfg.validate()?;
-        let catalog = cfg.routing_catalog()?;
-        cfg.model_routing.runtime = Some(std::sync::Arc::new(cfg.routing_runtime()?));
-        for warning in &catalog.warnings {
-            tracing::warn!(key = %warning, "model routing compatibility warning");
-        }
-        let catalog = std::sync::Arc::new(catalog);
-        cfg.routing_catalog_snapshot = Some(std::sync::Arc::clone(&catalog));
-        cfg.routing_catalog_state = Some(std::sync::Arc::new(std::sync::RwLock::new(catalog)));
         // ADR-0139 D3: 知識整理 run が bearer を持たずに起きる設定を、run の前に知らせる。
         for warning in cfg.langmem_auth_warnings() {
             tracing::warn!(%warning, "knowledge.langmem auth warning");
@@ -591,7 +568,6 @@ impl Config {
             ));
         }
         proxy::validate(&self.llm_proxy)?;
-        self.routing_catalog()?;
         // ADR-0056 D1（Phase 78）: `auth = "none"` は loopback だけ、`client` は `none` のときだけ。
         self.mcp
             .resolve_listeners()

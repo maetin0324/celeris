@@ -31,7 +31,6 @@ use task_dispatch::accounts::{
 use ulid::Ulid;
 
 use crate::config::{LlmProxyConfig, OpenAiCompatibleConfig};
-use crate::estimator_shadow::{EstimatorShadow, EstimatorShadowInput, EstimatorShadowSlot};
 use crate::fallback::{
     AfterFailure, Breakers, FailureClass, FallbackBudget, FallbackSettings, RequestConstraints,
 };
@@ -43,7 +42,6 @@ use crate::routing_context::{
     self as rctx, InFlightContexts, InFlightGuard, ProxyEventSink, ResolvedRouting,
 };
 use crate::selection::{self, PoolInput, SelectedAccount};
-use crate::shadow::{ProxyShadow, ShadowCandidate, ShadowEvent, ShadowJob};
 use crate::sources::{SendOutcome, SourceError, claude, codex, relay};
 
 const X_SOURCE: &str = "x-celeris-source";
@@ -85,11 +83,6 @@ pub struct ProxyState {
     event_sink: Option<Arc<dyn ProxyEventSink>>,
     /// run ごとの in-flight 要求数（ref を外す前に daemon が見る）。
     in_flight: Arc<InFlightContexts>,
-    /// ADR 2026-10-04 §7.1・Phase 4: decision / execution shadow。`None`（既定）なら何もしない。
-    shadow: Option<ProxyShadow>,
-    /// ADR 2026-10-04 §10 Phase 5: sidecar estimator の shadow。空（既定）なら何もしない。daemon が
-    /// reload で差し替える。
-    estimator_shadow: Arc<EstimatorShadowSlot>,
 }
 
 impl ProxyState {
@@ -121,195 +114,7 @@ impl ProxyState {
             routing_registry: None,
             event_sink: None,
             in_flight: Arc::new(InFlightContexts::default()),
-            shadow: None,
-            estimator_shadow: Arc::new(EstimatorShadowSlot::default()),
         })
-    }
-
-    /// shadow を差し込む（作った直後、まだ共有していない `Arc` にだけ効く）。
-    pub fn with_shadow(mut self: Arc<Self>, shadow: Option<ProxyShadow>) -> Arc<Self> {
-        match Arc::get_mut(&mut self) {
-            Some(state) => state.shadow = shadow,
-            None => tracing::warn!("llm-proxy: shadow ignored (state already shared)"),
-        }
-        self
-    }
-
-    /// estimator shadow を差し込む（作った直後、まだ共有していない `Arc` にだけ効く）。
-    pub fn with_estimator_shadow(
-        mut self: Arc<Self>,
-        shadow: Option<Arc<EstimatorShadow>>,
-    ) -> Arc<Self> {
-        match Arc::get_mut(&mut self) {
-            Some(state) => state.estimator_shadow.set(shadow),
-            None => tracing::warn!("llm-proxy: estimator shadow ignored (state already shared)"),
-        }
-        self
-    }
-
-    /// estimator shadow の差し替え口を共有のものに替える（作った直後、まだ共有していない `Arc` に
-    /// だけ効く）。daemon は同じ口を持ち、reload で中身を差し替える。
-    pub fn with_estimator_shadow_slot(
-        mut self: Arc<Self>,
-        slot: Arc<EstimatorShadowSlot>,
-    ) -> Arc<Self> {
-        match Arc::get_mut(&mut self) {
-            Some(state) => state.estimator_shadow = slot,
-            None => {
-                tracing::warn!("llm-proxy: estimator shadow slot ignored (state already shared)")
-            }
-        }
-        self
-    }
-
-    /// shadow（decision / execution / estimator）のどれかが差し込まれているか。
-    fn any_shadow(&self) -> bool {
-        self.shadow.is_some() || self.estimator_shadow.current().is_some()
-    }
-
-    /// primary が成功した後に shadow を走らせる。decision shadow は記録だけ、実行 shadow は要求の
-    /// コピーを queue に入れるだけで、どちらも primary の応答を待たせない（同期で返る）。
-    fn shadow_after_primary(
-        &self,
-        routing: &ResolvedRouting,
-        request_id: &str,
-        lane: &str,
-        candidates: &[ShadowCandidate],
-        primary: &ShadowCandidate,
-        req: &ChatCompletionRequest,
-    ) {
-        self.estimator_after_primary(routing, request_id, lane, candidates, primary, req);
-        let Some(shadow) = &self.shadow else {
-            return;
-        };
-        let decision_id = routing.decision_id.clone();
-        let mut chosen: Option<ShadowCandidate> = None;
-        if let Some(policy) = &shadow.decision {
-            let record = crate::shadow::decision_record(
-                policy.as_ref(),
-                format!("shd_{}", Ulid::new()),
-                decision_id.clone(),
-                routing.run_id().map(str::to_owned),
-                Some(request_id.to_string()),
-                candidates,
-                primary,
-            );
-            chosen = record
-                .candidate_source
-                .clone()
-                .zip(record.candidate_model.clone())
-                .map(|(source, model)| ShadowCandidate { source, model });
-            shadow.sink.record(ShadowEvent {
-                task_id: routing.task_id().map(str::to_owned),
-                record,
-            });
-        }
-        let Some(queue) = &shadow.execution else {
-            return;
-        };
-        // 実行する候補: 比較 policy の選択が primary と違えばそれ、無ければ primary 以外の先頭。
-        let candidate = chosen
-            .filter(|c| c != primary)
-            .or_else(|| candidates.iter().find(|c| *c != primary).cloned());
-        let Some(candidate) = candidate else {
-            return;
-        };
-        let ctx = &routing.context;
-        let input_estimate = ctx.input_tokens.unwrap_or_else(|| {
-            let chars: usize = req
-                .messages
-                .iter()
-                .filter_map(|m| m.content.as_ref())
-                .map(|c| c.as_text().len())
-                .sum();
-            (chars as u64).div_ceil(4)
-        });
-        let output_cap = req
-            .max_tokens
-            .map(u64::from)
-            .or(ctx.output_reserve)
-            .unwrap_or(shadow.default_output_reserve);
-        let worst_tokens = input_estimate.saturating_add(output_cap);
-        let worst_effective_usd = shadow
-            .cost
-            .as_ref()
-            .and_then(|f| f(&candidate.source, &candidate.model, worst_tokens));
-        let outcome = queue.submit(ShadowJob {
-            shadow_id: format!("shx_{}", Ulid::new()),
-            primary_decision_id: decision_id,
-            task_id: routing.task_id().map(str::to_owned),
-            run_id: routing.run_id().map(str::to_owned),
-            request_id: Some(request_id.to_string()),
-            target: task_core::model_router::shadow::ShadowTarget {
-                task_kind: ctx.task_kind.clone().unwrap_or_default(),
-                role: ctx.role.clone().unwrap_or_default(),
-                lane: lane.to_string(),
-                source: candidate.source.clone(),
-            },
-            candidate_model: candidate.model,
-            primary_source: primary.source.clone(),
-            primary_resource_group: None,
-            candidate_resource_group: None,
-            request: req.clone(),
-            worst_tokens,
-            worst_effective_usd,
-        });
-        tracing::debug!(?outcome, "llm-proxy: execution shadow submitted");
-    }
-
-    /// sidecar estimator の比較を始める（同期で返り、sidecar の完了を待たない）。primary は変えない。
-    fn estimator_after_primary(
-        &self,
-        routing: &ResolvedRouting,
-        request_id: &str,
-        lane: &str,
-        candidates: &[ShadowCandidate],
-        primary: &ShadowCandidate,
-        req: &ChatCompletionRequest,
-    ) {
-        let Some(estimator) = self.estimator_shadow.current() else {
-            return;
-        };
-        // estimator の比較は lane の policy で回す（明示 model の要求は対象外）。
-        let Ok(tier) = serde_json::from_value::<task_core::Tier>(serde_json::json!(lane)) else {
-            return;
-        };
-        let ctx = &routing.context;
-        let target = task_core::model_router::shadow::ShadowTarget {
-            task_kind: ctx.task_kind.clone().unwrap_or_default(),
-            role: ctx.role.clone().unwrap_or_default(),
-            lane: lane.to_string(),
-            source: primary.source.clone(),
-        };
-        let prompt = estimator.prompt_allowed(&target).then(|| {
-            req.messages
-                .iter()
-                .rev()
-                .find(|m| m.role == "user")
-                .and_then(|m| m.content.as_ref())
-                .map(|c| c.as_text())
-                .unwrap_or_default()
-        });
-        let outcome = estimator.submit(EstimatorShadowInput {
-            primary_decision_id: routing.decision_id.clone(),
-            task_id: routing.task_id().map(str::to_owned),
-            run_id: routing.run_id().map(str::to_owned),
-            request_id: Some(request_id.to_string()),
-            lane: tier,
-            target,
-            context: ctx.clone(),
-            candidates: candidates.to_vec(),
-            primary: primary.clone(),
-            prompt,
-        });
-        tracing::debug!(?outcome, "llm-proxy: estimator shadow submitted");
-    }
-
-    /// primary が候補待ち（予約待ち）に入った: 未開始の実行 shadow を落とす。
-    fn shadow_primary_pressure(&self) {
-        if let Some(queue) = self.shadow.as_ref().and_then(|s| s.execution.as_ref()) {
-            queue.primary_pressure();
-        }
     }
 
     /// `context_ref` の registry と routing event の sink を差し込む（作った直後、まだ共有していない
@@ -1124,9 +929,6 @@ async fn chat_completions(
     // 過程で一瞬すべての候補が無くなり `no_source_available` を返した）。即 503 を返す前に短い待ち
     // を挟んで候補列をもう 1 周する（最大 2 周、合計 3 秒以内）。
     let mut rescans = 0u32;
-    if attempts.is_empty() {
-        state.shadow_primary_pressure();
-    }
     while attempts.is_empty() && rescans < NO_SOURCE_MAX_RESCANS {
         tokio::time::sleep(NO_SOURCE_RESCAN_DELAY).await;
         rescans += 1;
@@ -1154,20 +956,6 @@ async fn chat_completions(
     // byte を受け取る前だけ次の候補へ送る。分類別・総数の上限と deadline は budget が、deployment
     // の closed/open/half_open は breaker が決める（時刻は注入した時計）。
     let constraints = RequestConstraints::from_request(&parsed);
-    // routing shadow の lane: 具体的な source/model の要求は lane を持たない。
-    let shadow_lane = "explicit".to_string();
-    let shadow_candidates: Vec<ShadowCandidate> = if state.any_shadow() {
-        attempts
-            .iter()
-            .filter(|(a, _)| constraints.admits(a.source_kind()))
-            .map(|(a, m)| ShadowCandidate {
-                source: a.source_label(),
-                model: m.clone(),
-            })
-            .collect()
-    } else {
-        Vec::new()
-    };
     let mut budget = FallbackBudget::new(&state.fallback, state.clock.now());
     let mut breaker_skipped: Vec<String> = Vec::new();
     let mut last_error = None;
@@ -1221,17 +1009,6 @@ async fn chat_completions(
         match result {
             Ok(AttemptOutcome::NonStreamJson(value)) => {
                 permit.success(state.clock.now());
-                state.shadow_after_primary(
-                    &scope.routing,
-                    &scope.id,
-                    &shadow_lane,
-                    &shadow_candidates,
-                    &ShadowCandidate {
-                        source: source_label.clone(),
-                        model: upstream_model.clone(),
-                    },
-                    &req,
-                );
                 let usage = usage_from_value(&value);
                 scope
                     .log(
@@ -1247,17 +1024,6 @@ async fn chat_completions(
             Ok(AttemptOutcome::Stream(stream)) => {
                 // 最初の byte を受け取った。以後の失敗は caller に返す（再送しない）。
                 permit.success(state.clock.now());
-                state.shadow_after_primary(
-                    &scope.routing,
-                    &scope.id,
-                    &shadow_lane,
-                    &shadow_candidates,
-                    &ShadowCandidate {
-                        source: source_label.clone(),
-                        model: upstream_model.clone(),
-                    },
-                    &req,
-                );
                 let log = scope.log(
                     Some(source_label.clone()),
                     account_label.clone(),

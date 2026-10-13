@@ -134,23 +134,12 @@ pub(crate) fn render_table(view: &Value) -> Vec<String> {
             }
             None => "-".to_string(),
         };
-        let routing = item["routing"]["deployments"]
-            .as_array()
-            .map(|d| {
-                d.iter()
-                    .filter_map(|v| v.as_str())
-                    .collect::<Vec<_>>()
-                    .join(",")
-            })
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| "-".to_string());
         lines.push(format!(
-            "{:<28} {:<36} {:<12} {:<20} {}",
+            "{:<28} {:<36} {:<12} {}",
             s(&item["source"]),
             s(&item["model_id"]),
             state,
-            ov,
-            routing
+            ov
         ));
     }
     if items.is_empty() {
@@ -177,14 +166,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn table_shows_state_override_routing_and_discovery() {
+    fn table_shows_state_override_and_discovery() {
         let view = json!({
             "items": [
                 {"source": "opencode-go", "model_id": "glm-5", "available": true,
-                 "override": {"disabled": true, "tier": "cheap", "alias": null, "note": null},
-                 "routing": {"tiers": ["cheap"], "deployments": ["d1", "d2"]}},
+                 "override": {"disabled": true, "tier": "cheap", "alias": null, "note": null}},
                 {"source": "opencode-go", "model_id": "old", "available": false,
-                 "override": null, "routing": {"tiers": [], "deployments": []}}
+                 "override": null}
             ],
             "last_discovery": [
                 {"source": "opencode-go", "at": "t", "ok": false, "error": "HTTP 500", "count": 0}
@@ -193,8 +181,8 @@ mod tests {
         let lines = render_table(&view);
         assert!(lines[0].starts_with("SOURCE"));
         assert!(lines[1].contains("glm-5") && lines[1].contains("available"));
-        assert!(lines[1].contains("disabled,tier=cheap") && lines[1].ends_with("d1,d2"));
-        assert!(lines[2].contains("missing") && lines[2].ends_with(" -"));
+        assert!(lines[1].contains("disabled,tier=cheap"));
+        assert!(lines[2].contains("missing"));
         assert!(lines[3].contains("FAILED: HTTP 500"));
     }
 

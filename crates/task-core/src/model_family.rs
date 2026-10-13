@@ -3,7 +3,7 @@
 //! 自由文字列の `ModelProfile.family` を enum に変えるのは [`ModelFamily::parse`] だけにする。
 //! 他の crate で `family == "claude"`・`contains("claude")` のような直書きをしない。
 //! family は閉じた型（`LlmSourceRef`・`AccountAdapter`）から先に導き、決まらなければ
-//! routing catalog の `ModelProfile.family`、それでも決まらなければ `Unknown`（非 Claude）にする。
+//! route profile の `ModelProfile.family`、それでも決まらなければ `Unknown`（非 Claude）にする。
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -69,7 +69,7 @@ pub struct FamilyDecision {
 /// provider 行の family を導く。上から順に最初に決まったものを採る:
 /// 1. `LlmSourceRef`（`ClaudeOauth` → Claude、`CodexOauth` → Gpt）
 /// 2. 行の pool の `AccountAdapter`（`ClaudeCode` → Claude、`Codex` → Gpt。`OpencodeGo` は model 次第）
-/// 3. `ModelProfile.family`（routing catalog。[`ModelFamily::parse`]）
+/// 3. `ModelProfile.family`（[`ModelFamily::parse`]）
 /// 4. `Unknown`
 ///
 /// `DeploymentProfile.source_ref` のような文字列は判定に使わない。

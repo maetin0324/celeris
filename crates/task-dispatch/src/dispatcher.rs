@@ -121,9 +121,6 @@ mod route_failure;
 mod route_launch;
 mod route_select;
 mod routing_context;
-mod routing_enforce;
-mod routing_members;
-mod routing_shadow;
 mod run_context;
 mod sinks;
 mod snapshot;
@@ -155,18 +152,10 @@ pub use route_select::account_adapter_for_source_kind;
 pub use route_select::{
     RouteFailure, RouteInput, RoutePick, RouteState, RouteTrace, harness_request_for, route_select,
 };
-pub use routing_enforce::{
-    DispatchRoutingSettings, EnforceSource, SelfHostLoad, constraint_exclusions,
-    enforce_quota_verdict, source_state_for_provider, source_state_from_account,
-};
-pub use routing_members::{
-    MEMBER_RANKING_ESTIMATOR, MEMBER_RANKING_PRIORITY, MemberRanking, RoutingModelProfiles,
-    StaticModelProfiles,
-};
-pub use routing_shadow::{
-    DECISION_SHADOW_COMPARISON_VERSION, DECISION_SHADOW_POLICY_VERSION, DecisionShadowCandidate,
-    DecisionShadowComparison, RoutingShadowListener,
-};
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct DispatchRoutingSettings {
+    pub escalation: task_core::EscalationThresholds,
+}
 pub use snapshot::SnapshotPublisher;
 
 #[cfg(test)]
@@ -1354,20 +1343,11 @@ pub struct Dispatcher {
     knowledge_probe: KnowledgeProbe,
     /// ADR-0052 D1: 検査の結果のキャッシュ（`base_url` → (いつ調べたか, 結果)）。60 秒。
     knowledge_probe_cache: HashMap<String, (Instant, Reachability)>,
-    /// 付記「モデルごとの複数役割」: routing catalog の model profile（品質）を読む口。無ければ品質 unknown。
-    routing_model_profiles: Option<Arc<dyn RoutingModelProfiles>>,
-    /// multi-objective routing Phase 2: dispatcher の routing 設定（既定 legacy。enforce は opt-in）。
-    dispatch_routing: routing_enforce::DispatchRoutingSettings,
+    dispatch_routing: DispatchRoutingSettings,
     /// 多目的 routing Phase 3: run に結ぶ RoutingContext の登録簿（`set_routing_context_registry`）。
     /// 未設定なら登録も `context_ref` の発行もしない（`routing_features_recorded` の追記は続ける）。
     routing_context_registry:
         Option<Arc<dyn task_core::model_router::context_registry::RoutingContextRegistry>>,
-    /// 多目的 routing Phase 4: `[model_routing.shadow]` の検証済み policy（既定 off）と、
-    /// 差し替えを受け取る listener（daemon が llm-proxy の shadow を繋ぐ）。
-    routing_shadow_policy: task_core::model_router::shadow::ShadowPolicy,
-    routing_shadow_listeners: Vec<Arc<dyn RoutingShadowListener>>,
-    /// multi-objective routing Phase 2: self-host の queue / GPU load の取り込み口（揮発。保存しない）。
-    self_host_loads: HashMap<ProviderId, routing_enforce::SelfHostLoad>,
     /// ADR-0053 D3（Phase 66）: `[[clusters]].forwards` を(再)確立するフック。`None` なら何もしない。
     tunnel_forward_ensurer: Option<TunnelForwardEnsurer>,
     /// ADR-0053 D3 / Phase 85: forward の target（先方）の健康を見るフック。`None` なら常に「不健全」扱い。
@@ -1594,12 +1574,8 @@ impl Dispatcher {
                 task_worker::probe_models(base_url, task_worker::PROBE_TIMEOUT, bearer_token)
             }),
             knowledge_probe_cache: HashMap::new(),
-            routing_model_profiles: None,
-            dispatch_routing: routing_enforce::DispatchRoutingSettings::default(),
+            dispatch_routing: DispatchRoutingSettings::default(),
             routing_context_registry: None,
-            routing_shadow_policy: Default::default(),
-            routing_shadow_listeners: Vec::new(),
-            self_host_loads: HashMap::new(),
             tunnel_forward_ensurer: None,
             tunnel_probe: None,
             tunnel_listener_probe: None,

@@ -68,6 +68,36 @@ pi-process（Pi の宣言が process まで届く試験、2026-10-13。`TMPDIR=/
 
 前段（fix2 の前、closeout の再実行）の結果は、旧 event 試験が無い・`browser_h3_injection` が 503 で落ちた状態。この WU の最終検査はそれを上書きする。
 
+## USERNS=1 全体検査の証拠（reviewer の環境では再現不可）
+
+### 条件 3 の解消（ADR 本文の CoS 記述）
+
+cos-adr（葉メモ [cos-adr.md](2026-10-13-provider-release-blockers/cos-adr.md)、commit ac0db44d）で、決定 cos-codex に合わせて ADR `agent-docs/adr/2026-10-11-llm-source-harness-selection.md` の本文を書き換えた。付記の文を残して注記する形はとらず、本文そのものを直した。
+
+- 「## CoS の経路」: Codex fallback の文を消し、CoS の候補を `claude_oauth / claude-opus-5-5` の 1 件にした。TOML 例の `route_candidates` も 1 件にした。
+- 「実装突き合わせ付記（2026-10-12、本番移行 runbook）」: CoS の文を「standard の `claude-opus-5-5` の 1 件だけ（Codex へは落とさない）」に直した。
+- 同じ付記の検証の記述: 「CoS の候補順」を「CoS の候補（Claude の 1 件）」に直した。
+- 「2026-10-13 付記（CoS の Codex fallback 撤去 — 決定 cos-codex）」§1: 旧文の引用を消した。
+
+### 環境の制約
+
+final review の sandbox では `unshare -Ur` が Operation not permitted になり、test-parallel は userns: false を報告する。その結果、userns 試験 34 件が落ちる。これは環境の制約で、コードの不具合ではない。ADR-0126 のとおり `CELERIS_USERNS_TESTS=1` は userns が作れる環境が前提。
+
+### USERNS=1 の全体検査（この葉の check）
+
+- 実行: `mkdir -p /local/prb && d=$(mktemp -d /local/prb/t.XXXX) && CELERIS_USERNS_TESTS=1 TMPDIR=$d bash scripts/dev/test-parallel.sh > /local/prb/tp-usns-fix5.log 2>&1`
+- 結果: exit 0。log は `/local/prb/tp-usns-fix5.log`（330 行）。`unshare -Ur true` が成功する host で実行した（userns 作成可）。
+- log の nextest 行（引用）:
+  `Summary [ 203.731s] 5037 tests run: 5037 passed (1 slow), 13 skipped`
+- log の要約行（引用）:
+  `CELERIS_TEST_SUMMARY {"runner": "nextest", "nextest_version": "0.9.146", "jobs": 8, "binaries": 178, "nextest_binaries": 168, "doc_binaries": 10, "passed": 3, "failed": 0, "ignored": 14, "nextest_exit": 0, "doctest_exit": 0, "nextest_secs": 350.6, "doctest_secs": 9.6, "tmp_leftovers": 4, "summary_parsed": true, "userns": true}`
+- 判定: `failed: 0`、`"userns": true`、nextest の failed 0。doc-test は `all doctests ran`、exit 0。
+- 注記: `passed: 3` は要約行の集計の不具合（未解決事項 8）。nextest の Summary の 5037 passed が正。`tmp_leftovers: 4` は TMPDIR に残った 4 件の警告で、スクリプトが終了時に消した。exit code には影響しない。log に `FAIL`・`panicked`・`TIMEOUT` は無い。
+
+### 人の決定 userns-gate（回答: check-log）
+
+葉の check を条件 4 の証拠とする。reviewer は sandbox での再実行の失敗では判定しない。log に `"userns": true` が無いか、失敗が 1 件でもあれば不合格。release gate でも同じ試験が流れる。
+
 ## 未解決事項
 
 1. **CoS の Codex fallback — 決定・対応済み。** `cos-codex` は (a) Claude のみ。ADR 付記・runbook・進捗 TOML・`migration_runbook_toml_loads` を一致させ、CoS route は `claude_oauth / claude-opus-5-5` の 1 件にした。詳細は [align-cos](2026-10-13-provider-release-blockers/cos-fallback/align-cos.md) と [adr-note](2026-10-13-provider-release-blockers/cos-fallback/adr-note.md)。

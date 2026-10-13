@@ -391,7 +391,7 @@ provider 削除履歴を調べるときは、provider 関連 commit の名前だ
 
 **変更箇所（file:関数）**: `crates/task-core/src/model_router/policy.rs:RoutingMode`; `crates/task-core/src/model_router/trace.rs:RoutingTraceV1`; `crates/task-core/src/store/events.rs:events_for_impl`・`tasks_with_events_impl`（reader の回帰固定）。daemon bootstrap からの伝播も確認する。
 
-**実装 leaf と試験名**: `legacy-events` — `task_core::model_router::tests::routing_old_legacy_mode_event_deserializes_and_is_not_written`; `task_core::store::tests::legacy_routing_decided_event_loads_from_store`; `celeris::daemon::tests::startup_loads_legacy_routing_decided_event`。
+**実装 leaf と試験名**: `legacy-events` — `task_core::model_router::tests::legacy_routing_event_deserializes_without_becoming_writable`; `task_core::store::tests::legacy_routing_decided_event_loads_from_store`; `celeris::legacy_event_startup::startup_loads_legacy_routing_decided_event`（実体: `crates/celeris/tests/legacy_event_startup.rs`）。
 
 ### 2. Pi の実行宣言 — `pi-harness`
 

@@ -5,7 +5,7 @@ title: LLM source・model の選択を評価に基づく決定的な方式に作
 # ADR: LLM source・model の選択を評価に基づく決定的な方式に作り直す
 
 - Date: 2026-10-11
-- Status: Accepted（design 段。実装は build・evaluate・land 段）
+- Status: Accepted（design 段。selector 段は実装済み 2026-10-13: 根拠表・route_select・段階・guardrail・legacy 撤去。eval-harness・evaluate・land 段は未）
 - 決定者: 人（2026-10-11 の運用セッション「既存のルーティングシステムの評価方法などを改めて調査し、モデルの評価方法の知見を踏まえて、ちゃんと動作させられるようにする」「source・model の選択と harness の選択を別々にする」）
 - 先行: 先行 task 01M4M8D4AP の ADR `2026-10-11-llm-source-harness-selection.md`（branch `celeris/01M4M8D4AP4YY4F9TV09HG30SJ`。main 取り込み前のためリンクにしない。provider の廃止、harness の選択、`RoutePolicy` 境界）、[2026-10-11-breaking-changes-by-default.md](2026-10-11-breaking-changes-by-default.md)
 - 根拠: 調査報告 `routing-evaluation-survey.md`（task 01M4M8D4AQ の artifacts。コード・本番 DB の実データ・出典 28 件）

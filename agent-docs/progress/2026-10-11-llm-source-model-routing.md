@@ -23,7 +23,7 @@ ADR `2026-10-11-llm-source-harness-selection.md`〈branch `celeris/01M4M8D4AP4YY
 | design | survey-report | done |
 | design | adr | done |
 | design | adr-revise | done（2026-10-11 人の確認を反映。工程の再確認待ち） |
-| build | eval-harness / selector | pending |
+| build | eval-harness / selector | selector done（2026-10-13）、eval-harness pending |
 | evaluate | eval-run（eval-budget の人の回答と実行直前の見積りの承認が条件） | pending |
 | land | rollout / verify | pending |
 

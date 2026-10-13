@@ -50,25 +50,35 @@ cat > "$OUT/config.toml" <<EOF
 db = { path = "celeris.sqlite3", worker_read_only = false }
 workspace_root = "workspaces"
 tick_ms = 1000
+# 1 では CoS の turn が task worker と受信箱の triage の後ろで止まった（live-check2 attempt 2）
+max_concurrency = 4
 
 [api]
 listen = "127.0.0.1:$PORT"
 token_file = "api.token"
 
-[[providers]]
-id = "claude-live"
-kind = "adapter"
-adapter = "claude-code"
-llm_source = "claude_oauth"
-tiers = ["frontier", "standard", "cheap"]
-# 1 では CoS の turn が task worker と受信箱の triage の後ろで止まった（live-check2 attempt 2）
-concurrency = 4
+[llm_sources.claude_oauth]
+kind = "claude_oauth"
+api_format = "anthropic"
+models = ["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5"]
+
+[harnesses.claude_code]
+kind = "claude_code"
+api_formats = ["anthropic"]
+source_kinds = ["claude_oauth"]
+capabilities = ["tools", "repo", "skills"]
+
+[route_defaults.claude_code]
+candidates = [{ source = "claude_oauth", model = "claude-opus-5-5" }]
+
+[harness_selection]
+execution_class_defaults = {}
+rules = [{ harness = "claude_code", required_capabilities = [] }]
 
 [cos]
 enabled = true
 harness = "claude-code"
-llm_source = "claude_oauth"
-tier = "frontier"
+route_candidates = [{ source = "claude_oauth", model = "claude-opus-5-5" }]
 max_turns = 20
 max_wall_secs = 600
 

@@ -1,6 +1,6 @@
 //! 同時要求の枠の予約表（ADR 2026-10-04-multi-objective-model-routing Phase 2・p2-proxy-select）。
 //!
-//! state 選択（[`crate::selection::state`]）が選んだ候補は、上流へ送る前に枠を予約する。枠は 2 種で、
+//! 選んだ候補は、上流へ送る前に枠を予約する。枠は 2 種で、
 //! **別々に数える**:
 //! - account の枠（CLI/proxy が共有する OAuth account の window。`source_ref` + account id）
 //! - 共有 GPU の枠（self-host の resource group。同じ group の deployment は 1 つの枠を共有する）

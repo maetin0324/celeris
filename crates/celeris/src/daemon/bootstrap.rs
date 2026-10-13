@@ -577,10 +577,6 @@ pub fn build_dispatcher(
         super::cos_launch::build_cos_chat_launch(config, &config.db.path, config.api.listen),
     );
     // ADR 2026-10-06 model-role-assignments D2: DB の割り当てを同じ store から読む（run 起動のたびに解決）。
-    // 付記「モデルごとの複数役割」: shadow / enforce の役割メンバーの順位づけに routing catalog の品質を使う。
-    if let Some(shared) = config.routing_catalog_state.as_ref() {
-        dispatcher.set_routing_model_profiles(Arc::new(SharedCatalogProfiles(Arc::clone(shared))));
-    }
     dispatcher.set_cluster_connector(cluster_connector(
         masters.clone(),
         master_launchers(config),
@@ -687,17 +683,4 @@ pub fn seed_cron_if_empty(
         "cron: seeded the cron jobs from the config"
     );
     Ok(config.cron.seed.len())
-}
-
-/// 付記「モデルごとの複数役割」: 共有の routing catalog snapshot から model profile を読む（dispatcher 用）。
-struct SharedCatalogProfiles(Arc<std::sync::RwLock<Arc<crate::config::RoutingCatalog>>>);
-
-impl task_dispatch::RoutingModelProfiles for SharedCatalogProfiles {
-    fn model_profiles(&self) -> Vec<task_core::model_router::profiles::ModelProfile> {
-        self.0
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .models
-            .clone()
-    }
 }

@@ -77,6 +77,8 @@ pub(crate) async fn tick_loop(
     let tick = config.tick();
     let _stranded_sweep =
         crate::daemon::stranded_sweep::spawn(dispatcher.store(), roles.role.clone());
+    // ADR 2026-10-11 D3: enforce の guardrail 判定（間隔は `INTERVAL`。判定は決定的で LLM を呼ばない）。
+    let mut guardrail_ticker = crate::daemon::routing_guardrail::Ticker::default();
     let mut ticks: u64 = 0;
     // ADR-0040 D4: 手元の run とレビューの数（drain の判定に使う。最後の tick の値）。
     let mut in_flight: usize = 0;
@@ -211,6 +213,28 @@ pub(crate) async fn tick_loop(
                 let store = dispatcher.store();
                 if let Err(e) = delivery::tick(store.as_ref(), config, OffsetDateTime::now_utc()) {
                     tracing::warn!(error=%e, "delivery tick failed");
+                }
+            }
+            {
+                // ADR 2026-10-11-llm-source-model-routing-evaluation D3: enforce の genre×harness の
+                // guardrail を判定し、止める条件に当たったら shadow へ戻す（event と受信箱の通知）。
+                let now = OffsetDateTime::now_utc();
+                if guardrail_ticker.due(crate::daemon::routing_guardrail::INTERVAL, now) {
+                    match crate::daemon::routing_guardrail::tick(dispatcher, config, now) {
+                        Ok(report) if report.reverted > 0 || report.notices > 0 => {
+                            tracing::info!(
+                                evaluated = report.evaluated,
+                                reverted = report.reverted,
+                                notices = report.notices,
+                                skipped_no_evidence = report.skipped_no_evidence,
+                                "routing guardrail: stage changes recorded"
+                            );
+                        }
+                        Ok(_) => {}
+                        Err(e) => {
+                            tracing::warn!(error = %e, "routing guardrail: tick failed");
+                        }
+                    }
                 }
             }
             // ADR-0038 D1 の途中目標の判定 run（`milestone_review::schedule`）は ADR-0079 D13（Phase R5a）で廃止。

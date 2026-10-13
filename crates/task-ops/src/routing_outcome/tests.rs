@@ -1,7 +1,9 @@
 use std::path::PathBuf;
 
 use task_core::model_policy::{LaneCeiling, RoutingRecord, decide_for_task};
-use task_core::model_router::feedback::{RequestSourceAttempt, RoutingRequestRecord};
+use task_core::model_router::feedback::{
+    RequestSourceAttempt, RoutingOutcome, RoutingRequestRecord,
+};
 use task_core::model_routing::LaneResolution;
 use task_core::{Event, RunMetrics, SqliteStore, Status, TaskId, TaskStore, Tier, Usage};
 use time::OffsetDateTime;
@@ -264,4 +266,107 @@ fn routing_outcome_sums_finished_fragments_and_estimates_known_prices() {
     assert_eq!(result[0].wall_ms, Some(3_000));
     assert_eq!(result[0].retries, Some(3));
     assert_eq!(record_routing_outcomes(&store, id).unwrap(), 0);
+}
+
+/// guardrail の窓（ADR 2026-10-11-llm-source-model-routing-evaluation D3）: run ごとの最新 outcome を
+/// genre×harness に集計する。訂正（supersede）された outcome は二度数えず、genre の無い task は数えない。
+#[test]
+fn route_windows_projects_the_latest_outcome_per_run() {
+    let store = SqliteStore::open_in_memory().expect("open store");
+    let now = OffsetDateTime::now_utc();
+    let mut spec = spec();
+    spec.genre = Some("coding".to_string());
+    let task = create_task(&store, spec, now).expect("create task");
+    let id = task.id;
+    append_all(&store, id, &run_events(&task));
+    assert_eq!(record_routing_outcomes(&store, id).unwrap(), 1);
+
+    let since = now - time::Duration::days(1);
+    let windows = super::route_windows(&store, since, 50).expect("windows");
+    assert_eq!(windows.len(), 1);
+    let window = &windows[0];
+    assert_eq!(window.genre, "coding");
+    assert_eq!(window.harness_id, "coding");
+    assert_eq!(window.task_id, Some(id));
+    // review 未到着: 合格でも失敗でもない（未判定は `runs` だけに数える）。
+    assert_eq!(
+        (window.runs, window.successes, window.failures),
+        (1, 0, 0),
+        "{window:?}"
+    );
+    assert!(
+        (window.wall_median_s - 1800.0).abs() < 1e-9,
+        "wall={}",
+        window.wall_median_s
+    );
+    assert!(window.last_at.is_some_and(|at| at >= since));
+
+    // review 合格: 訂正された旧 outcome は数えず、同じ 1 run が合格になる。
+    append_all(
+        &store,
+        id,
+        &[Event::Transitioned {
+            from: Status::Reviewing,
+            to: Status::Done,
+            reason: "review_pass".into(),
+        }],
+    );
+    assert_eq!(record_routing_outcomes(&store, id).unwrap(), 1);
+    let windows = super::route_windows(&store, since, 50).expect("windows");
+    assert_eq!(
+        (windows[0].runs, windows[0].successes, windows[0].failures),
+        (1, 1, 0),
+        "{:?}",
+        windows[0]
+    );
+
+    // genre が無ければ集計しない（無い値を捏造しない）。
+    let other = create_task(&store, self::spec(), now).expect("create task");
+    append_all(&store, other.id, &run_events(&other));
+    assert_eq!(record_routing_outcomes(&store, other.id).unwrap(), 1);
+    let windows = super::route_windows(&store, since, 50).expect("windows");
+    assert_eq!(windows.len(), 1, "{windows:?}");
+}
+
+/// run の `routing_decided` が無いときは task の `harness_id` で帰属させる。
+#[test]
+fn route_windows_falls_back_to_the_task_harness() {
+    let store = SqliteStore::open_in_memory().expect("open store");
+    let now = OffsetDateTime::now_utc();
+    let mut spec = spec();
+    spec.genre = Some("coding".to_string());
+    spec.harness = Some("codex".to_string());
+    let task = create_task(&store, spec, now).expect("create task");
+    store
+        .append_event(
+            task.id,
+            &Event::RoutingOutcomeRecorded {
+                outcome: Box::new(RoutingOutcome {
+                    outcome_id: "o1".into(),
+                    decision_id: "d1".into(),
+                    run_id: Some("r9".into()),
+                    request_id: None,
+                    evaluation_version: "v1".into(),
+                    supersedes: None,
+                    acceptance_passed: Some(false),
+                    review_passed: None,
+                    failed_criterion_ids: vec!["c1".into()],
+                    failure_class: Some("check".into()),
+                    cash_usd: None,
+                    tokens: None,
+                    wall_ms: Some(500),
+                    retries: None,
+                    reward: None,
+                }),
+            },
+        )
+        .expect("append");
+    let windows = super::route_windows(&store, now - time::Duration::days(1), 50).expect("windows");
+    assert_eq!(windows.len(), 1, "{windows:?}");
+    assert_eq!(windows[0].harness_id, "codex");
+    assert_eq!(
+        (windows[0].runs, windows[0].successes, windows[0].failures,),
+        (1, 0, 1)
+    );
+    assert!((windows[0].wall_median_s - 0.5).abs() < 1e-9);
 }

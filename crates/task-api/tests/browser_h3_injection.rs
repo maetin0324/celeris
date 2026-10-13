@@ -31,6 +31,8 @@ type AuthCall = (bool, usize, bool, Option<String>);
 
 struct World {
     env: TestEnv,
+    // Keep this short, independent of TMPDIR: credentiald Unix sockets live here.
+    _socket_dir: tempfile::TempDir,
     app: axum::Router,
     key: ring::signature::Ed25519KeyPair,
     supervisor: CredentialSupervisor,
@@ -81,7 +83,11 @@ fn world() -> World {
     let env = admin_env();
     let root = env.dir.path().to_path_buf();
     let broker_root = root.join("credentiald");
-    let runtime = broker_root.join("runtime");
+    let socket_dir = tempfile::Builder::new()
+        .prefix("h3-")
+        .tempdir_in("/tmp")
+        .expect("short socket directory");
+    let runtime = socket_dir.path().join("runtime");
     let config = broker_root.join("config");
     let data = broker_root.join("data");
     std::fs::DirBuilder::new()
@@ -167,6 +173,7 @@ fn world() -> World {
             bridge: bridge_binary(),
             runtime_dir: Some(runtime),
         },
+        _socket_dir: socket_dir,
         env,
         app,
         key,

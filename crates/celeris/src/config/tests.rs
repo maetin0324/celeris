@@ -39,6 +39,121 @@ fn planner_without_adapter_keeps_its_budget_and_permission_settings() {
     assert_eq!(cfg.execution.planner.permission_mode, "bypassPermissions");
 }
 
+/// execution class の候補試験の土台。claude_code は Claude の source だけを見る。
+const CLASS_BASE: &str = r#"
+[llm_sources.claude]
+kind = "claude_oauth"
+api_format = "anthropic_messages"
+accounts = ["a1"]
+models = ["claude-sonnet-5-5", "claude-opus-5-5"]
+[harnesses.claude_code]
+kind = "claude_code"
+api_formats = ["anthropic_messages"]
+source_kinds = ["claude_oauth"]
+[route_defaults.claude_code]
+candidates = [{ source = "claude", model = "claude-sonnet-5-5" }]
+"#;
+
+#[test]
+fn route_defaults_classes_build_the_registry() {
+    let text = CLASS_BASE.to_string()
+        + "[route_defaults.claude_code.classes.coding]\ncandidates = [{ source = \"claude\", model = \"claude-opus-5-5\" }]\n";
+    let cfg = Config::parse_with_delivery(&text).unwrap();
+    let registry = cfg.llm_route_registry().unwrap();
+    let claude = task_core::llm_route::HarnessId::from("claude_code");
+    let coding = task_core::llm_route::ExecutionClass::from("coding");
+    let class = &registry.route_class_defaults[&claude][&coding];
+    assert_eq!(class.len(), 1);
+    assert_eq!(class[0].source.0, "claude");
+    assert_eq!(class[0].model.0, "claude-opus-5-5");
+    assert_eq!(
+        registry.route_defaults[&claude][0].model.0,
+        "claude-sonnet-5-5"
+    );
+}
+
+#[test]
+fn claude_code_class_route_override_picks_opus_for_coding_only() {
+    let text = CLASS_BASE.to_string()
+        + "[route_defaults.claude_code.classes.coding]\ncandidates = [{ source = \"claude\", model = \"claude-opus-5-5\" }]\n";
+    let cfg = Config::parse_with_delivery(&text).unwrap();
+    let registry = cfg.llm_route_registry().unwrap();
+    let claude = task_core::llm_route::HarnessId::from("claude_code");
+    let first_model = |class: &str| {
+        task_core::llm_route::route_priority(
+            &registry,
+            &claude,
+            false,
+            Some(&task_core::llm_route::ExecutionClass::from(class)),
+        )[0]
+        .model
+        .0
+        .clone()
+    };
+    assert_eq!(first_model("coding"), "claude-opus-5-5");
+    assert_eq!(first_model("planner"), "claude-sonnet-5-5");
+    assert_eq!(first_model("review"), "claude-sonnet-5-5");
+}
+
+#[test]
+fn class_candidates_are_validated_like_harness_candidates() {
+    let cases = [
+        (
+            "[route_defaults.claude_code.classes.coding]\ncandidates = [{ source = \"missing\", model = \"claude-opus-5-5\" }]\n",
+            "undeclared source",
+        ),
+        (
+            "[route_defaults.claude_code.classes.coding]\ncandidates = [{ source = \"claude\", model = \"claude-fable-5-1\" }]\n",
+            "undeclared model",
+        ),
+        (
+            "[llm_sources.relay]\nkind = \"openai_compatible\"\nmodels = [\"m1\"]\n[route_defaults.claude_code.classes.coding]\ncandidates = [{ source = \"relay\", model = \"m1\" }]\n",
+            "no compatible llm_routes entry",
+        ),
+        (
+            "[harnesses.paperqa]\nkind = \"paperqa\"\napi_formats = [\"anthropic_messages\"]\nsource_kinds = [\"claude_oauth\"]\n[route_defaults.paperqa.classes.review]\ncandidates = [{ source = \"claude\", model = \"claude-opus-5-5\" }]\n",
+            "requires via = llm_proxy",
+        ),
+    ];
+    for (extra, expected) in cases {
+        let cfg = Config::parse_with_delivery(&(CLASS_BASE.to_string() + extra)).unwrap();
+        let err = cfg.llm_route_registry().unwrap_err().to_string();
+        assert!(err.contains(expected), "{extra}: {err}");
+    }
+}
+
+#[test]
+fn empty_class_candidates_are_a_config_error() {
+    let text =
+        CLASS_BASE.to_string() + "[route_defaults.claude_code.classes.coding]\ncandidates = []\n";
+    let cfg = Config::parse_with_delivery(&text).unwrap();
+    let err = cfg.llm_route_registry().unwrap_err().to_string();
+    assert!(err.contains("has no candidates"), "{err}");
+}
+
+#[test]
+fn unknown_execution_class_is_a_config_error() {
+    let text = CLASS_BASE.to_string()
+        + "[route_defaults.claude_code.classes.judge]\ncandidates = [{ source = \"claude\", model = \"claude-opus-5-5\" }]\n";
+    let cfg = Config::parse_with_delivery(&text).unwrap();
+    let err = cfg.llm_route_registry().unwrap_err().to_string();
+    assert!(err.contains("unknown execution class judge"), "{err}");
+}
+
+#[test]
+fn apply_verify_smoke_drops_smoke_from_class_candidates() {
+    let text = CLASS_BASE.to_string()
+        + "[route_defaults.claude_code.classes.coding]\ncandidates = [{ source = \"smoke\", model = \"fake\" }, { source = \"claude\", model = \"claude-opus-5-5\" }]\n";
+    let mut cfg = Config::parse_with_delivery(&text).unwrap();
+    cfg.apply_verify_smoke();
+    let registry = cfg.llm_route_registry().unwrap();
+    let claude = task_core::llm_route::HarnessId::from("claude_code");
+    let coding = task_core::llm_route::ExecutionClass::from("coding");
+    let class = &registry.route_class_defaults[&claude][&coding];
+    assert_eq!(class.len(), 1);
+    assert_eq!(class[0].source.0, "claude");
+}
+
 #[test]
 fn migration_runbook_toml_loads() {
     let runbook = include_str!("../../../../docs/ops/provider-llm-source-migration.md");

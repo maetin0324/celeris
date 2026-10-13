@@ -233,7 +233,9 @@ impl SqliteStore {
                 "../../migrations/0070_task_integration_not_applicable.sql"
             )),
             71 => Ok(include_str!("../../migrations/0071_llm_route_store.sql")),
-            72 => Ok(include_str!("../../migrations/0072_drop_model_role_assignments.sql")),
+            72 => Ok(include_str!(
+                "../../migrations/0072_drop_model_role_assignments.sql"
+            )),
             other => Err(StoreError::Invalid(format!(
                 "unknown migration version: {other}"
             ))),

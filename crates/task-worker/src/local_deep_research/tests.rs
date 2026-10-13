@@ -657,8 +657,7 @@ async fn retry_run_escalates_mode_and_iterations_and_redacts_secrets() {
 
 /// 入力 JSON の組み立てを argv 経由で確認する: `query`/`mode`/`settings`（`model` が `llm.model` を
 /// 上書き）/`iterations`/`questions_per_iteration`/`report_path`（ADR-0029 D1）。
-#[tokio::test]
-async fn provider_kind_ldr_passes_proxy_model_in_input_json() {
+async fn assert_route_model_overrides_settings_llm_model() {
     let dir = tempfile::tempdir().unwrap();
     let mut config = stub_ldr(
         dir.path(),
@@ -705,6 +704,7 @@ async fn provider_kind_ldr_passes_proxy_model_in_input_json() {
     assert_eq!(seen["settings"]["search.tool"], "searxng");
     // `model` が `settings` の `llm.model` を上書きする。
     assert_eq!(seen["settings"]["llm.model"], "qwen/qwen3.8-27b");
+    assert_eq!(seen["settings"]["llm.model"], "qwen/qwen3.8-27b");
     assert!(
         seen["report_path"]
             .as_str()
@@ -715,6 +715,49 @@ async fn provider_kind_ldr_passes_proxy_model_in_input_json() {
     // `runs/<run_id>/ldr_run.py` は埋め込みランナーそのもの。
     let script = std::fs::read_to_string(dir.path().join("runs/run-6/ldr_run.py")).unwrap();
     assert_eq!(script, RUNNER_SCRIPT);
+}
+
+#[tokio::test]
+async fn route_model_overrides_settings_llm_model() {
+    assert_route_model_overrides_settings_llm_model().await;
+}
+
+#[tokio::test]
+async fn ldr_proxy_model_name_preserves_qwen_source() {
+    assert_route_model_overrides_settings_llm_model().await;
+}
+
+#[tokio::test]
+async fn ldr_proxy_model_name_preserves_claude_source() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = stub_ldr(
+        dir.path(),
+        "cp \"$2\" \"$(dirname \"$0\")/seen.json\"\nmkdir -p artifacts && echo hi > artifacts/report.md\necho 'CELERIS_RESULT {\"summary\": \"ok\", \"sources\": 0}'",
+    );
+    config.model = Some("claude_oauth/claude-sonnet-5-5".into());
+    config.evidence = EvidenceThresholds {
+        min_search_results: 0,
+        min_sources: 0,
+        min_cited: 0,
+        min_domains: 0,
+        insufficient_is_error: false,
+    };
+    let adapter = LdrAdapter::new(config);
+    let sink = RecordingSink::default();
+    adapter
+        .run(
+            sample_req(dir.path().to_path_buf()),
+            "proxy-claude",
+            default_limits(),
+            &sink,
+        )
+        .await
+        .unwrap();
+    let seen = read_json(&dir.path().join("seen.json"));
+    assert_eq!(
+        seen["settings"]["llm.model"],
+        "claude_oauth/claude-sonnet-5-5"
+    );
 }
 
 /// `iterations`/`questions_per_iteration` を設定しなければ `null` のまま渡す。

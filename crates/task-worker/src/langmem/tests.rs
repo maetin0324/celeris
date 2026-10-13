@@ -167,7 +167,7 @@ async fn happy_path_writes_candidates_and_result_files() {
 }
 
 #[tokio::test]
-async fn provider_kind_langmem_passes_proxy_model_to_stub() {
+async fn langmem_proxy_model_name_preserves_qwen_source() {
     let dir = tempfile::tempdir().unwrap();
     let mut config = stub_langmem(dir.path(), &fake_extractor_script());
     config.base_url = Some("http://127.0.0.1:18000/v1".to_string());
@@ -186,6 +186,54 @@ async fn provider_kind_langmem_passes_proxy_model_to_stub() {
     .unwrap();
     assert_eq!(input["llm"]["model"], "qwen/qwen3.8-27b");
     assert_eq!(input["llm"]["base_url"], "http://127.0.0.1:18000/v1");
+}
+
+#[tokio::test]
+async fn with_model_replaces_the_configured_model() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = stub_langmem(dir.path(), &fake_extractor_script());
+    config.model = Some("old/configured-model".into());
+    let adapter = LangMemAdapter::new(config)
+        .with_model("qwen/qwen3.8-27b")
+        .unwrap();
+    let sink = RecordingSink::default();
+    adapter
+        .run(
+            sample_req(dir.path().to_path_buf()),
+            "route-model",
+            default_limits(),
+            &sink,
+        )
+        .await
+        .unwrap();
+    let input: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(dir.path().join("runs/route-model/langmem_input.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(input["llm"]["model"], "qwen/qwen3.8-27b");
+}
+
+#[tokio::test]
+async fn langmem_proxy_model_name_preserves_claude_source() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = stub_langmem(dir.path(), &fake_extractor_script());
+    config.model = Some("claude_oauth/claude-sonnet-5-5".into());
+    let adapter = LangMemAdapter::new(config);
+    let sink = RecordingSink::default();
+    adapter
+        .run(
+            sample_req(dir.path().to_path_buf()),
+            "proxy-claude",
+            default_limits(),
+            &sink,
+        )
+        .await
+        .unwrap();
+    let input: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(dir.path().join("runs/proxy-claude/langmem_input.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(input["llm"]["model"], "claude_oauth/claude-sonnet-5-5");
 }
 
 /// `langmem` が import できない（venv 未セットアップ）は `retryable = false`（ADR-0047 D4）。

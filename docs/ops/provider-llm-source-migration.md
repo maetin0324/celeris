@@ -21,7 +21,7 @@ compatibility、quota、cooldown、capacity を通った最初のものになる
 | 文献調査 | literature harness | `paperqa` | `qwen / qwen3.8-27b`、次に `claude_oauth / claude-opus-5-5`、`codex_oauth / gpt-6.1-sol`（今の proxy `celeris/standard` の「届けば Qwen、落ちていれば Claude/Codex」を明示の順にしたもの） |
 | 深掘り Web 調査 | research harness | `local-deep-research` | `qwen / qwen3.8-27b`、次に Claude/Codex cheap |
 | 知識整理 | LangMem の専用起動設定 | `langmem` | `qwen / qwen3.8-27b`、次に Claude/Codex cheap |
-| CoS | `[cos].route_candidates` の順（execution class に依らない） | `claude_code` | `claude_oauth / claude-opus-5-5`、次に `codex_oauth / gpt-6-astra` |
+| CoS | `[cos].route_candidates` の順（execution class に依らない） | `claude_code` | `claude_oauth / claude-opus-5-5` のみ（Codex へは落とさない。候補が不適格なら fail closed） |
 | planner | execution class の順。満杯なら次へ | `claude_code`, `codex` | `claude_oauth / claude-sonnet-5-5`（`claude_code` 既定）、次に Codex `gpt-6.1-sol` |
 | reviewer | execution class の順 | `claude_code`, `codex` | `claude_oauth / claude-sonnet-5-5`（`claude_code` 既定）、次に Codex `gpt-6.1-sol` |
 | その他の claude_code 仕事 | harness 既定（class 宣言なし） | `claude_code` | `claude_oauth / claude-sonnet-5-5`、次に `claude-opus-5-5`、`claude-fable-5-1` |
@@ -30,8 +30,8 @@ compatibility、quota、cooldown、capacity を通った最初のものになる
 新しい binary では読み込みエラーになる（[ADR 2026-10-11 llm-source-harness-selection](../../agent-docs/adr/2026-10-11-llm-source-harness-selection.md)）。
 旧 alias が暗黙に行っていた選び方（cheap は利用可能なら Qwen、次に Claude/Codex の cheap な model。
 standard は Claude/Codex の standard な model）は、上表のとおり `route_defaults` の具体的な source/model
-候補として宣言する。Pi は OpenCode Go を先頭にし、Qwen を予備にする。CoS は Claude（Opus）を先頭にし、
-Codex を fallback として後ろに置く。
+候補として宣言する。Pi は OpenCode Go を先頭にし、Qwen を予備にする。CoS は Claude（Opus）の 1 件だけを候補にし、
+Codex へは落とさない（不適格なら fail closed）。
 
 ## 切替前の退避と確認
 
@@ -222,14 +222,6 @@ via = "llm_proxy"
 from_api = "openai_compatible"
 to_api = "openai_compatible"
 
-[[llm_routes]]
-harness = "claude_code"
-source = "codex_oauth"
-model = "gpt-6-astra"
-via = "llm_proxy"
-from_api = "openai_compatible"
-to_api = "anthropic"
-
 [route_defaults.claude_code]
 candidates = [{ source = "claude_oauth", model = "claude-sonnet-5-5" }, { source = "claude_oauth", model = "claude-opus-5-5" }, { source = "claude_oauth", model = "claude-fable-5-1" }]
 
@@ -274,7 +266,6 @@ harness = "claude-code"
 # tier / llm_source は削除し、具体的な候補順を route_candidates に置く。
 route_candidates = [
   { source = "claude_oauth", model = "claude-opus-5-5" },
-  { source = "codex_oauth", model = "gpt-6-astra" },
 ]
 max_turns = 70
 max_wall_secs = 900
@@ -348,7 +339,7 @@ PROXY=http://127.0.0.1:18100
    ```
 
    exit 0 で、source・harness・route candidate と `[cos] route_candidates` の表が「選択結果」の表と
-   一致することを確かめる（CoS は `claude_oauth / claude-opus-5-5`、次に `codex_oauth / gpt-6-astra`。
+   一致することを確かめる（CoS は `claude_oauth / claude-opus-5-5` の 1 件だけ。Codex の候補は無い。
    CoS の候補は API に出ないので、ここで確かめる）。`claude_code:` の行の先頭が `claude-sonnet-5-5`、`claude_code class coding:` の行が
    `claude-opus-5-5` だけであることも同じ出力で確かめる。
    `legacy provider configuration is no longer supported` などの読み込みエラーが出たら、その欄を

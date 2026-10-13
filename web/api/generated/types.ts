@@ -2010,19 +2010,6 @@ export type EstimatorShadowSummary = {
 };
 
 export type Event = {
-  "harness_id": string;
-  "type": "harness_selected";
-} | {
-  "account_id": string;
-  "metadata": unknown;
-  "model_id": string;
-  "source_id": string;
-  "type": "llm_route_selected";
-} | {
-  "original_value": string;
-  "task_id": string;
-  "type": "harness_migration_unresolved";
-} | {
   "actor": string;
   "branch": string;
   "head_sha": string;
@@ -2063,6 +2050,19 @@ export type Event = {
   "reason": string;
   "repo_id": RepoId;
   "type": "integration_not_applicable";
+} | {
+  "harness_id": string;
+  "type": "harness_selected";
+} | {
+  "account_id": string;
+  "metadata": unknown;
+  "model_id": string;
+  "source_id": string;
+  "type": "llm_route_selected";
+} | {
+  "original_value": string;
+  "task_id": string;
+  "type": "harness_migration_unresolved";
 } | {
   "actor": string;
   "operation_id": string;
@@ -2931,12 +2931,12 @@ export type GraphNode = {
   "title": string;
 };
 
+export type HaltState = "paused" | "cancelled" | "archived";
+
 export type HarnessCandidateView = {
   "model_id": string;
   "source_id": string;
 };
-
-export type HaltState = "paused" | "cancelled" | "archived";
 
 export type HarnessErrorClass = "supply" | "infra" | "lease_expired" | "idle_timeout";
 
@@ -5301,8 +5301,6 @@ export type SkillSummaryView = {
   "name": string;
   "updated"?: string | null;
 };
-
-export type SlotOrigin = "assignment" | "config";
 
 export type SnapshotTaskWait = {
   "task_id": TaskId;

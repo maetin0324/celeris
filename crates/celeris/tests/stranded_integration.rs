@@ -56,6 +56,7 @@ fn git(repo: &Path, args: &[&str]) -> String {
 fn done_task(id: TaskId) -> Task {
     let now = OffsetDateTime::from_unix_timestamp(1_800_000_000).expect("fixed clock");
     Task {
+        harness_id: None,
         requirements: Default::default(),
         tree: None,
         paused_at: None,
@@ -81,7 +82,6 @@ fn done_task(id: TaskId) -> Task {
         priority: 0,
         worker_hint: task_core::WorkerHint {
             tier: Tier::Standard,
-            adapter: None,
         },
         workspace: WorkspaceSpec::Local {
             path: "workspace".into(),

@@ -192,7 +192,7 @@ fn historical_model_role_assignment_event_survives_assignment_table_removal() {
             "../../migrations/0054_model_role_memberships.sql"
         ))
         .unwrap();
-        conn.execute("DELETE FROM schema_migrations WHERE version = 69", [])
+        conn.execute("DELETE FROM schema_migrations WHERE version = 72", [])
             .unwrap();
     }
     drop(store);

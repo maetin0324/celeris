@@ -89,6 +89,7 @@ fn register_repo(store: &SqliteStore, path: &Path) -> ProjectRepo {
 /// A done root task. `repo: None` is the repoless shape (resolved through `celeris/<id>`).
 fn done_task(id: TaskId, repo: Option<&ProjectRepo>) -> Task {
     Task {
+        harness_id: None,
         requirements: Default::default(),
         tree: None,
         paused_at: None,
@@ -120,7 +121,6 @@ fn done_task(id: TaskId, repo: Option<&ProjectRepo>) -> Task {
         priority: 0,
         worker_hint: task_core::WorkerHint {
             tier: Tier::Standard,
-            adapter: None,
         },
         workspace: WorkspaceSpec::Local {
             path: id.to_string().into(),

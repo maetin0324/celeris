@@ -62,9 +62,22 @@ repo = "repo"
 # ADR-0095 付記 D-c: 実行環境の systemd bus には触れない。
 detach = "inline"
 
-[[providers]]
-id = "p1"
-adapter = "fake"
+[llm_sources.local]
+kind = "fake"
+accounts = ["a1"]
+models = ["fake"]
+
+[harnesses.fake]
+kind = "fake"
+api_formats = ["fake"]
+source_kinds = ["fake"]
+
+[route_defaults.fake]
+candidates = [{ source = "local", model = "fake" }]
+
+[harness_selection]
+execution_class_defaults = {}
+rules = [{ harness = "fake", required_capabilities = [] }]
 "#,
         )
         .unwrap_or_else(|e| panic!("config: {e}"));
@@ -189,6 +202,7 @@ fn fixture_repo(path: &Path, task_branch: &str) -> String {
 fn done_task(id: TaskId, project: ProjectId, repo: RepoId) -> Task {
     let now = OffsetDateTime::from_unix_timestamp(1_800_000_000).expect("fixed clock");
     Task {
+        harness_id: None,
         requirements: Default::default(),
         tree: None,
         paused_at: None,
@@ -217,7 +231,6 @@ fn done_task(id: TaskId, project: ProjectId, repo: RepoId) -> Task {
         priority: 0,
         worker_hint: task_core::WorkerHint {
             tier: task_core::Tier::Standard,
-            adapter: None,
         },
         workspace: WorkspaceSpec::Local {
             path: "workspace".into(),

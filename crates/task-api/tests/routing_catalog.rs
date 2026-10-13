@@ -19,7 +19,7 @@ impl RoutingCatalogReader for Catalog {
     fn view(&self) -> RoutingCatalogView {
         RoutingCatalogView {
             catalog_version: "phase1-v1".into(),
-            mode: RoutingMode::Legacy,
+            mode: RoutingMode::Shadow,
             models: vec![CatalogModelView {
                 id: "qwen".into(),
                 revision: "unknown".into(),
@@ -48,7 +48,7 @@ impl RoutingCatalogReader for Catalog {
                 allowed_lanes: vec![Tier::Cheap],
                 price_override: None,
             }],
-            policies: vec![RoutingPolicy::defaults(Tier::Cheap, RoutingMode::Legacy)],
+            policies: vec![RoutingPolicy::defaults(Tier::Cheap, RoutingMode::Shadow)],
             warnings: vec!["legacy model mapping".into()],
         }
     }
@@ -82,11 +82,12 @@ fn authed(path: &str) -> axum::http::Request<axum::body::Body> {
 }
 
 #[tokio::test]
-async fn routing_catalog_redacts_secrets_and_keeps_legacy_fields() {
+async fn routing_catalog_redacts_secrets_and_keeps_unknown_fields() {
     let env = TestEnv::with(EnvOptions {
         token: Some(TOKEN.into()),
         routing_catalog: Some(Arc::new(Catalog)),
         llm_sources: Some(Arc::new(Sources)),
+        harnesses: None,
         ..Default::default()
     });
     let task = new_task(TaskKind::Execute, Status::Ready);
@@ -96,7 +97,7 @@ async fn routing_catalog_redacts_secrets_and_keeps_legacy_fields() {
     let resp = send(&app, authed("/api/v1/llm/routing/catalog")).await;
     assert_eq!(resp.status, 200, "{}", resp.text());
     let body = resp.json();
-    assert_eq!(body["mode"], "legacy");
+    assert_eq!(body["mode"], "shadow");
     assert_eq!(body["catalog_version"], "phase1-v1");
     assert_eq!(body["models"][0]["quality"], serde_json::Value::Null);
     assert_eq!(

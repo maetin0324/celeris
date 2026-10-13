@@ -175,7 +175,7 @@ fn compaction_spec(
         // （`workspace_mode: Shared` で `resolve_repos` の primary 継承もしない。
         // `work_dir = workspace` のまま走る。本番障害: 01M3915FARENW8M0JM11XVF6W0）。
         workspace_mode: Some(task_core::WorkspaceMode::Shared),
-        adapter: None,
+        harness: None,
         // ADR-0044 D3: 裏方（報告のまとめ）にラベル・種類は付けない。
         labels: Vec::new(),
         category: None,

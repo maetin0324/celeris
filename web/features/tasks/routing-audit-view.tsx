@@ -66,7 +66,8 @@ function RunAudit({ run }: { run: RunRoutingAudit }) {
       </p>
       {run.reasons && run.reasons.length > 0 && <p>選定理由: {run.reasons.join(", ")}</p>}
       <p>
-        実行枠: 供給元 {run.provider ?? UNKNOWN} / model {run.model ?? UNKNOWN} / 口座 {run.account ?? UNKNOWN}
+        実行枠: harness {run.harness ?? UNKNOWN} / source {run.provider ?? UNKNOWN} / model {run.model ?? UNKNOWN} /
+        口座 {run.account ?? UNKNOWN}
       </p>
       <p>実測の請求: {usdLabel(run.cost_usd)}</p>
       {incomplete && (

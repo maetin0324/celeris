@@ -3,8 +3,16 @@
 export type AccountCheckResponse = {
   "checked_at": string;
   "detail"?: string | null;
-  "result": ProviderCheckResult;
+  "result": AccountCheckResult;
   "usage"?: AccountUsageView | null;
+};
+
+export type AccountCheckResult = "ok" | "auth_failed" | "throttled" | "spawn_failed";
+
+export type AccountCheckView = {
+  "at": string;
+  "detail"?: string | null;
+  "result": string;
 };
 
 export type AccountCooldownLive = {
@@ -20,7 +28,6 @@ export type AccountCooldownView = {
 export type AccountList = {
   "items": Array<AccountView>;
   "max_runs_per_account": number;
-  "root"?: string | null;
   "roots"?: {
   [key: string]: string | null;
 };
@@ -32,7 +39,7 @@ export type AccountLive = {
   "excluded_reason"?: string | null;
   "id": string;
   "in_use": number;
-  "last_check"?: ProviderCheckView | null;
+  "last_check"?: AccountCheckView | null;
   "logged_in": boolean;
   "login_pending"?: boolean;
   "score"?: number | null;
@@ -86,21 +93,21 @@ export type AccountUsageView = {
 };
 
 export type AccountView = {
-  "adapter"?: string;
+  "account_id": string;
   "cooldown"?: AccountCooldownView | null;
   "dir"?: string | null;
   "effective_max_runs": number;
   "excluded_reason"?: string | null;
-  "id": string;
   "implicit": boolean;
   "in_use": number;
-  "last_check"?: ProviderCheckView | null;
+  "last_check"?: AccountCheckView | null;
   "logged_in": boolean;
   "login_pending": boolean;
   "max_runs"?: number | null;
   "max_runs_source": string;
-  "providers"?: Array<string>;
+  "models"?: Array<string>;
   "score"?: number | null;
+  "source_id": string;
   "stats": AccountStats;
   "usage"?: AccountUsageView | null;
 };
@@ -269,33 +276,6 @@ export type ArtifactView = {
   "ts": string;
 };
 
-export type AssignmentList = {
-  "effective": Array<RoleSlotView>;
-  "items": Array<EffectiveAssignmentView>;
-};
-
-export type AssignmentPreviewBody = {
-  "model_id"?: string | null;
-  "source": string;
-  "tier": Tier;
-};
-
-export type AssignmentPreviewResponse = {
-  "impact": ImpactView;
-};
-
-export type AssignmentPutBody = {
-  "model_id": string;
-  "note"?: string | null;
-};
-
-export type AssignmentPutResponse = {
-  "impact": ImpactView;
-  "item": EffectiveAssignmentView;
-};
-
-export type AssignmentStateView = "assigned" | "excluded";
-
 export type AttentionItem = {
   "at": string;
   "class": FailureClass;
@@ -361,6 +341,17 @@ export type AttentionItem = {
   "request_id": string;
   "task": TaskRef;
   "type": "integration_request";
+} | {
+  "at": string;
+  "branch": string;
+  "head_sha": string;
+  "operation_path": string;
+  "reason"?: string | null;
+  "repo": string;
+  "repo_id": RepoId;
+  "state": TaskRepoIntegrationStatus;
+  "task": TaskRef;
+  "type": "unintegrated";
 };
 
 export type AttestationClaims = {
@@ -375,12 +366,7 @@ export type AttestationClaims = {
   "wait_id": string;
 };
 
-export type AwaitedChildView = {
-  "status"?: Status | null;
-  "task_id"?: TaskId | null;
-  "title": string;
-  "unit_key": string;
-};
+export type BackoffCause = "retry" | "infra";
 
 export type BehindTarget = {
   "behind_target_age_seconds"?: number | null;
@@ -584,6 +570,8 @@ export type CandidateTrace = {
   "shadow_usd"?: number | null;
 };
 
+export type CapacityScope = "global" | "cos" | "account" | "source";
+
 export type CatalogCapabilitiesView = {
   "reasoning_efforts"?: Array<string> | null;
   "streaming"?: boolean | null;
@@ -618,8 +606,6 @@ export type CatalogModelView = {
   "quality"?: Array<QualityIndex> | null;
   "revision": string;
 };
-
-export type CatalogSource = string;
 
 export type ChangeDiffView = {
   "diff": string;
@@ -1190,7 +1176,6 @@ export type ConfigView = {
   "max_concurrency": number;
   "max_requeues": number;
   "plan_auto_accept": boolean;
-  "providers": Array<ProviderConfigView>;
   "retry_backoff_base_secs": number;
   "retry_backoff_max_secs": number;
   "review_timeout_secs": number;
@@ -1396,8 +1381,9 @@ export type ContinuationRunTotals = {
 };
 
 export type CooldownView = {
-  "provider": string;
+  "account_id": string;
   "reason": string;
+  "source": string;
   "until": string;
 };
 
@@ -1598,8 +1584,6 @@ export type DaemonSnapshot = {
   [key: string]: string;
 };
   "approvals_pending"?: number;
-  "awaiting_children"?: Array<TaskId>;
-  "awaiting_human": Array<TaskId>;
   "clusters"?: Array<ClusterLive>;
   "containers"?: ContainersLive | null;
   "cooldowns": Array<CooldownView>;
@@ -1611,25 +1595,17 @@ export type DaemonSnapshot = {
   "last_tick_at": string;
   "max_runs_per_account"?: number | null;
   "pid": number;
-  "providers": Array<ProviderLive>;
   "reports"?: ReportsLive | null;
   "scratch"?: ScratchStatus | null;
   "started_at": string;
+  "task_waits"?: Array<SnapshotTaskWait>;
   "tick_ms": number;
   "ticks": number;
-  "unroutable": Array<TaskId>;
 };
 
 export type DaemonView = {
   "now": string;
   "snapshot"?: DaemonSnapshot | null;
-};
-
-export type DailyUsage = {
-  "day": string;
-  "input_tokens": number;
-  "output_tokens": number;
-  "runs": number;
 };
 
 export type DbInfo = {
@@ -1823,7 +1799,7 @@ export type DeliveryList = {
   "items": Array<DeliveryHead>;
 };
 
-export type DeliverySkipReason = "multiple_repos" | "no_marker" | "marker_repo_mismatch" | "repo_row_missing" | "repo_not_local" | "repo_path_mismatch" | "not_git" | "no_branch" | "branch_name_mismatch" | "refs_unresolvable" | "department_unresolved";
+export type DeliverySkipReason = "no_project" | "project_not_enabled" | "support_task" | "tree_child" | "multiple_repos" | "no_marker" | "marker_repo_mismatch" | "repo_row_missing" | "repo_not_local" | "repo_path_mismatch" | "not_git" | "no_branch" | "branch_name_mismatch" | "refs_unresolvable" | "department_unresolved" | "no_commits";
 
 export type DeliveryState = "reviewing" | "merge_queued" | "merging" | "preparing" | "ready" | "blocked";
 
@@ -1951,18 +1927,6 @@ export type EditResult = {
   "task": Task;
 };
 
-export type EffectiveAssignmentView = {
-  "excluded_reason"?: string | null;
-  "model_id": string;
-  "note"?: string | null;
-  "priority": number;
-  "source": string;
-  "state": AssignmentStateView;
-  "tier": Tier;
-  "updated_at": string;
-  "updated_by": string;
-};
-
 export type EffectiveProfile = {
   "allowed_tiers"?: Array<Tier>;
   "approvals"?: Array<string>;
@@ -2046,6 +2010,60 @@ export type EstimatorShadowSummary = {
 };
 
 export type Event = {
+  "actor": string;
+  "branch": string;
+  "head_sha": string;
+  "reason"?: string | null;
+  "repo_id": RepoId;
+  "type": "integration_detected";
+} | {
+  "actor": string;
+  "branch": string;
+  "head_sha": string;
+  "repo_id": RepoId;
+  "type": "integration_merged";
+} | {
+  "actor": string;
+  "branch": string;
+  "head_sha": string;
+  "reason": string;
+  "repo_id": RepoId;
+  "type": "integration_discarded";
+} | {
+  "actor": string;
+  "branch": string;
+  "head_sha": string;
+  "reason": string;
+  "repo_id": RepoId;
+  "type": "integration_held";
+} | {
+  "actor": string;
+  "branch": string;
+  "head_sha": string;
+  "reason"?: string | null;
+  "repo_id": RepoId;
+  "type": "integration_reopened";
+} | {
+  "actor": string;
+  "branch": string;
+  "head_sha": string;
+  "reason": string;
+  "repo_id": RepoId;
+  "type": "integration_not_applicable";
+} | {
+  "harness_id": string;
+  "type": "harness_selected";
+} | {
+  "account_id": string;
+  "metadata": unknown;
+  "model_id": string;
+  "source_id": string;
+  "type": "llm_route_selected";
+} | {
+  "original_value": string;
+  "task_id": string;
+  "type": "harness_migration_unresolved";
+} | {
   "actor": string;
   "operation_id": string;
   "policy_version": string;
@@ -2744,7 +2762,7 @@ export type ExecutionMetricsSummary = {
 
 export type ExecutionMode = "atomic" | "compound";
 
-export type ExecutionPhase = "planning" | "executing" | "repairing" | "verifying" | "awaiting_human" | "awaiting_children" | "awaiting_plan_approval";
+export type ExecutionPhase = "planning" | "executing" | "repairing" | "verifying" | "awaiting_human" | "awaiting_plan_approval";
 
 export type ExecutionPlanOverview = {
   "id": string;
@@ -2807,7 +2825,6 @@ export type ExecutionPlanView = {
 };
 
 export type ExecutionView = {
-  "awaiting_children"?: Array<AwaitedChildView>;
   "gate"?: ExecutionGateDecision | null;
   "metrics": ExecutionMetrics;
   "phase"?: ExecutionPhase | null;
@@ -2914,11 +2931,37 @@ export type GraphNode = {
   "title": string;
 };
 
+export type HaltState = "paused" | "cancelled" | "archived";
+
+export type HarnessCandidateView = {
+  "model_id": string;
+  "source_id": string;
+};
+
 export type HarnessErrorClass = "supply" | "infra" | "lease_expired" | "idle_timeout";
 
 export type HarnessPrefs = {
   "allowed"?: Array<string>;
   "default"?: string | null;
+};
+
+export type HarnessRuleView = {
+  "execution_class"?: string | null;
+  "genre"?: string | null;
+  "required_capabilities": Array<string>;
+  "requires_repo"?: boolean | null;
+  "role"?: string | null;
+};
+
+export type HarnessView = {
+  "api_formats": Array<string>;
+  "capabilities": Array<string>;
+  "execution_class_defaults": Array<string>;
+  "id": string;
+  "kind": string;
+  "route_defaults": Array<HarnessCandidateView>;
+  "rules": Array<HarnessRuleView>;
+  "source_kinds": Array<string>;
 };
 
 export type Health = {
@@ -2939,6 +2982,8 @@ export type HumanAttestation = {
   "signature": string;
 };
 
+export type HumanGateKind = "plan_approval" | "stage_review" | "phase_checkpoint";
+
 export type HumanInboxCounts = {
   "by_kind": {
   [key: string]: number;
@@ -2954,24 +2999,9 @@ export type HumanInboxView = {
 };
 };
 
-export type ImpactChangeView = {
-  "after"?: string | null;
-  "before"?: string | null;
-  "excluded_reason"?: string | null;
-  "id": string;
-  "kind": ImpactKind;
-  "tier": string;
-};
-
-export type ImpactKind = "provider" | "proxy";
-
-export type ImpactView = {
-  "changes": Array<ImpactChangeView>;
-};
-
 export type ImplicitAccountLive = {
   "in_use": number;
-  "providers"?: Array<string>;
+  "models"?: Array<string>;
   "source": string;
 };
 
@@ -3056,7 +3086,7 @@ export type InboxItem = {
   "title": string;
 };
 
-export type InboxKind = "decision" | "plan_gate" | "phase_gate" | "authorization" | "browser_wait" | "question" | "acceptance_check" | "draft_accept" | "project_plan" | "failed" | "unroutable" | "cluster_login" | "disk_full" | "delivery_skipped" | "integration_request";
+export type InboxKind = "decision" | "plan_gate" | "phase_gate" | "authorization" | "browser_wait" | "question" | "acceptance_check" | "draft_accept" | "project_plan" | "failed" | "unroutable" | "cluster_login" | "disk_full" | "delivery_skipped" | "integration_request" | "unintegrated";
 
 export type InboxLink = {
   "href": string;
@@ -3093,6 +3123,12 @@ export type IntegrateResult = {
   "integration": TaskIntegration;
 };
 
+export type IntegrationActionResult = {
+  "integrated": boolean;
+  "reason"?: string | null;
+  "state": TaskRepoIntegrationState;
+};
+
 export type IntegrationCheckDone = {
   "cmd": string;
   "duration_ms": number;
@@ -3115,6 +3151,10 @@ export type IntegrationCheckRunning = {
 };
 
 export type IntegrationId = string;
+
+export type IntegrationList = {
+  "items": Array<TaskRepoIntegrationState>;
+};
 
 export type IntegrationMethod = "merge" | "pr" | "discard";
 
@@ -3151,6 +3191,17 @@ export type IntegrationRequest = {
 };
 
 export type IntegrationState = "done" | "open" | "merged" | "closed" | "conflict" | "failed";
+
+export type IntegrationView = {
+  "actor": string;
+  "branch": string;
+  "checked_at": string;
+  "head": string;
+  "reason"?: string | null;
+  "repo": string;
+  "repo_id": RepoId;
+  "state": TaskRepoIntegrationStatus;
+};
 
 export type KnowledgeAcceptBody = {
   "overwrite"?: boolean;
@@ -3352,8 +3403,6 @@ export type LlmSourceOpportunityCostView = {
   "resource_usd"?: number | null;
   "shadow_usd"?: number | null;
 };
-
-export type LlmSourceRef = string;
 
 export type LlmSourceStateView = {
   "cost"?: LlmSourceCostView | null;
@@ -3570,15 +3619,7 @@ export type MilestoneView = {
   "updated_at": string;
 };
 
-export type ModelBinding = {
-  "model_id"?: string | null;
-  "name": string;
-  "reasoning_effort"?: string | null;
-  "unavailable_reason"?: string | null;
-};
-
 export type ModelCatalogItem = {
-  "assigned_tiers": Array<Tier>;
   "available": boolean;
   "capabilities": unknown;
   "display_name"?: string | null;
@@ -3646,7 +3687,6 @@ export type NewPlanSpec = {
 
 export type NewTaskBody = {
   "acceptance": Array<CriterionSpec>;
-  "adapter"?: string | null;
   "aggregate"?: boolean;
   "assignee"?: string | null;
   "attachment_ids"?: Array<string>;
@@ -3657,6 +3697,7 @@ export type NewTaskBody = {
   "expected_write_paths"?: Array<string> | null;
   "features"?: TaskFeatureHints | null;
   "genre"?: string | null;
+  "harness"?: string | null;
   "kind"?: TaskKind;
   "labels"?: Array<string>;
   "max_retries"?: number;
@@ -3762,12 +3803,12 @@ export type NotifyView = {
   "digest_last_sent_at"?: string | null;
   "digest_max_lines": number;
   "fingerprint"?: string | null;
-  "gui_base_url"?: string | null;
   "inbox_batch_secs": number;
   "inbox_new_last_sent_at"?: string | null;
   "inbox_reminder_secs": number;
   "recent": Array<NotifyRecent>;
   "secret_id": string;
+  "web_base_url"?: string | null;
 };
 
 export type Objective = "quality_first" | "balanced" | "resource_first";
@@ -4217,6 +4258,13 @@ export type ProjectTaskView = {
   "title": string;
 };
 
+export type PromotionStatus = "not_applicable" | "promotion_pending" | "promoted";
+
+export type PromotionView = {
+  "release_sha"?: string | null;
+  "status": PromotionStatus;
+};
+
 export type ProposedMilestone = {
   "key": string;
   "milestone_id": MilestoneId;
@@ -4234,115 +4282,12 @@ export type ProviderCandidateKind = "local" | "pool" | "other";
 
 export type ProviderCandidateOutcome = "selected" | "available" | "full" | "down" | "cooldown" | "unsupported" | "no_account";
 
-export type ProviderCheckResponse = {
-  "checked_at": string;
-  "detail"?: string | null;
-  "result": ProviderCheckResult;
-};
-
-export type ProviderCheckResult = "ok" | "auth_failed" | "throttled" | "spawn_failed";
-
-export type ProviderCheckView = {
-  "at": string;
-  "detail"?: string | null;
-  "result": string;
-};
-
-export type ProviderConfigView = {
-  "account_id"?: string | null;
-  "account_pool"?: boolean;
-  "adapter": string;
-  "concurrency": number;
-  "credential_refs"?: {
-  [key: string]: string;
-};
-  "env_keys": Array<string>;
-  "id": string;
-  "kind"?: ProviderKind;
-  "llm_source"?: ResolvedLlmSource | null;
-  "model"?: string | null;
-  "tier_models"?: {
-  "cheap"?: ModelBinding;
-  "frontier"?: ModelBinding;
-  "standard"?: ModelBinding;
-};
-  "tiers": Array<Tier>;
-};
-
-export type ProviderKind = "adapter";
-
-export type ProviderLive = {
-  "account_id"?: string | null;
-  "account_pool"?: boolean;
-  "adapter": string;
-  "concurrency": number;
-  "credential_refs"?: {
-  [key: string]: string;
-};
-  "env_keys"?: Array<string>;
-  "id": string;
-  "in_use": number;
-  "in_use_cos"?: number;
-  "kind"?: ProviderKind;
-  "last_check"?: ProviderCheckView | null;
-  "llm_source"?: ResolvedLlmSource | null;
-  "model"?: string | null;
-  "tier_models"?: {
-  "cheap"?: ModelBinding;
-  "frontier"?: ModelBinding;
-  "standard"?: ModelBinding;
-};
-  "tiers": Array<Tier>;
-};
-
 export type ProviderSelection = {
   "candidates"?: Array<ProviderCandidate>;
   "reason": ProviderSelectionReason;
 };
 
 export type ProviderSelectionReason = "local_preferred" | "local_full" | "local_down" | "pool" | "fallback" | "sticky";
-
-export type ProviderStats = {
-  "by_day": Array<DailyUsage>;
-  "done": number;
-  "error": number;
-  "input_tokens": number;
-  "lease_expired": number;
-  "output_tokens": number;
-  "question": number;
-  "requeue": number;
-  "runs": number;
-};
-
-export type ProviderView = {
-  "account_id"?: string | null;
-  "account_pool"?: boolean;
-  "adapter": string;
-  "concurrency": number;
-  "cooldown"?: CooldownView | null;
-  "credential_refs"?: {
-  [key: string]: string;
-};
-  "env_keys": Array<string>;
-  "id": string;
-  "in_use"?: number | null;
-  "in_use_cos"?: number | null;
-  "kind"?: ProviderKind;
-  "last_check"?: ProviderCheckView | null;
-  "llm_source"?: ResolvedLlmSource | null;
-  "model"?: string | null;
-  "stats": ProviderStats;
-  "tier_models"?: {
-  "cheap"?: ModelBinding;
-  "frontier"?: ModelBinding;
-  "standard"?: ModelBinding;
-};
-  "tiers": Array<Tier>;
-};
-
-export type Providers = {
-  "items": Array<ProviderView>;
-};
 
 export type QualityEstimate = {
   "confidence"?: number | null;
@@ -4414,6 +4359,10 @@ export type ReadAllBody = {
   "before"?: string | null;
   "kind"?: NoticeKind | null;
   "project"?: string | null;
+};
+
+export type ReasonBody = {
+  "reason": string;
 };
 
 export type ReleaseChanges = {
@@ -4782,11 +4731,6 @@ export type ResolveResponse = {
   "operation": OperationView;
 };
 
-export type ResolvedLlmSource = {
-  "origin": SourceOrigin;
-  "source": LlmSourceRef;
-};
-
 export type RetryBody = {
   "accept"?: boolean;
   "execution"?: ExecutionMode | null;
@@ -4821,41 +4765,12 @@ export type ReviewerConfigView = {
 };
 
 export type RoleConfigView = {
-  "adapter"?: string | null;
+  "harness"?: string | null;
   "has_instructions": boolean;
   "id": string;
   "max_turns"?: number | null;
   "max_wall_secs"?: number | null;
   "tier"?: Tier | null;
-};
-
-export type RoleMember = {
-  "model_id": string;
-  "priority": number;
-  "source": CatalogSource;
-};
-
-export type RoleMembersBody = {
-  "members": Array<RoleMember>;
-};
-
-export type RoleMembersResponse = {
-  "after": Array<RoleMember>;
-  "before": Array<RoleMember>;
-  "impact": ImpactView;
-};
-
-export type RoleSlotView = {
-  "available"?: boolean | null;
-  "excluded_reason"?: string | null;
-  "last_seen"?: string | null;
-  "model_id"?: string | null;
-  "origin"?: SlotOrigin | null;
-  "priority": number;
-  "providers": Array<string>;
-  "proxy": boolean;
-  "source": string;
-  "tier": Tier;
 };
 
 export type RollupMetrics = {
@@ -4923,7 +4838,7 @@ export type RoutingFeaturesRecord = {
   "stage"?: FeatureStage | null;
 };
 
-export type RoutingMode = "legacy" | "shadow" | "enforce";
+export type RoutingMode = "shadow" | "enforce";
 
 export type RoutingOutcome = {
   "acceptance_passed"?: boolean | null;
@@ -5093,6 +5008,17 @@ export type RunRoutingAudit = {
   "wall_ms"?: number | null;
 };
 
+export type RunSelectionView = {
+  "account_id": string;
+  "basis": unknown;
+  "harness_id": string;
+  "model_id": string;
+  "source_id": string;
+  "status": "selected";
+} | {
+  "status": "legacy_unresolved";
+};
+
 export type RunSummary = {
   "account"?: string | null;
   "adapter": string;
@@ -5108,6 +5034,7 @@ export type RunSummary = {
   "reviewer_deferrals": number;
   "role": RunRole;
   "run_id": string;
+  "selection": RunSelectionView;
   "started_at": string;
   "usage"?: Usage | null;
   "verdicts": number;
@@ -5375,9 +5302,10 @@ export type SkillSummaryView = {
   "updated"?: string | null;
 };
 
-export type SlotOrigin = "assignment" | "config";
-
-export type SourceOrigin = "explicit" | "derived";
+export type SnapshotTaskWait = {
+  "task_id": TaskId;
+  "wait": TaskWait;
+};
 
 export type StageHint = {
   "scope"?: string;
@@ -5392,6 +5320,8 @@ export type StageSpec = {
   "review"?: StageReview;
   "title": string;
 };
+
+export type StageState = "done" | "current" | "pending";
 
 export type StandingRule = {
   "created_at": string;
@@ -5461,6 +5391,7 @@ export type Task = {
   "created_at": string;
   "depends_on": Array<TaskId>;
   "genre"?: string | null;
+  "harness_id"?: string | null;
   "id": TaskId;
   "inputs": Array<ArtifactRef>;
   "kind": TaskKind;
@@ -5517,22 +5448,25 @@ export type TaskDetail = {
   "failure"?: FailureSummary | null;
   "genre"?: string | null;
   "integration_repair"?: IntegrationRepairView | null;
+  "integrations"?: Array<IntegrationView> | null;
   "is_root_task"?: boolean;
   "latest_question"?: string | null;
   "paused_by"?: TaskId | null;
   "prior_review": Array<ReviewNote>;
   "priority_label": string;
+  "promotion"?: PromotionView | null;
   "role"?: string | null;
+  "runnable": boolean;
   "runs": Array<RunSummary>;
   "task": Task;
   "timers": Timers;
+  "waits": Array<TaskWait>;
   "worker_run_hint"?: string | null;
   "workspace_dir"?: string | null;
   "worktree"?: WorktreeView | null;
 };
 
 export type TaskExecutionView = {
-  "awaiting_children"?: Array<AwaitedChildView>;
   "gate"?: ExecutionGateDecision | null;
   "metrics": ExecutionMetrics;
   "phase"?: ExecutionPhase | null;
@@ -5541,6 +5475,7 @@ export type TaskExecutionView = {
   "plan_approval"?: PlanApprovalView | null;
   "route"?: RouteDecision | null;
   "runs": Array<RunSummary>;
+  "waits"?: Array<TaskWait>;
 };
 
 export type TaskFeatureHints = {
@@ -5599,7 +5534,6 @@ export type TaskMode = "prototype" | "production" | "research";
 
 export type TaskPatchBody = {
   "acceptance"?: Array<CriterionSpec> | null;
-  "adapter"?: string | null;
   "assignee"?: string | null;
   "category"?: TaskCategory | null;
   "depends_on"?: Array<TaskId> | null;
@@ -5638,6 +5572,20 @@ export type TaskRef = {
   "title": string;
 };
 
+export type TaskRepoIntegrationState = {
+  "actor": string;
+  "branch": string;
+  "checked_at": string;
+  "head_sha": string;
+  "reason"?: string | null;
+  "repo_id": RepoId;
+  "state": TaskRepoIntegrationStatus;
+  "task_id": TaskId;
+  "updated_at": string;
+};
+
+export type TaskRepoIntegrationStatus = "unintegrated" | "integrated" | "discarded" | "held" | "not_applicable";
+
 export type TaskRequirements = {
   "browser"?: BrowserRequirements | null;
 };
@@ -5672,7 +5620,6 @@ export type TaskStatusCounts = {
 
 export type TaskSummary = {
   "actions": Array<Action>;
-  "adapter"?: string | null;
   "assignee"?: string | null;
   "attempts": number;
   "backoff_until"?: string | null;
@@ -5682,7 +5629,9 @@ export type TaskSummary = {
   "created_at": string;
   "depends_on": Array<TaskId>;
   "genre"?: string | null;
+  "harness"?: string | null;
   "id": TaskId;
+  "integrations"?: Array<IntegrationView> | null;
   "is_root_task"?: boolean;
   "kind": TaskKind;
   "labels": Array<string>;
@@ -5691,16 +5640,18 @@ export type TaskSummary = {
   "milestone_id"?: MilestoneId | null;
   "parent_id"?: TaskId | null;
   "paused"?: boolean;
-  "pending_children": number;
   "priority": number;
   "priority_label": string;
   "project_id"?: ProjectId | null;
+  "promotion"?: PromotionView | null;
   "role"?: string | null;
+  "runnable": boolean;
   "status": Status;
   "support"?: string | null;
   "tier": Tier;
   "title": string;
   "updated_at": string;
+  "waits": Array<TaskWait>;
 };
 
 export type TaskTreeNode = {
@@ -5714,11 +5665,13 @@ export type TaskTreeNode = {
   "parent_unit_key"?: string | null;
   "phase"?: TreeNodePhase | null;
   "plan_version"?: number | null;
+  "stages"?: Array<TreeStageView>;
   "stall"?: TreeNodeStall | null;
   "status": Status;
   "subtree": RollupMetrics;
   "title": string;
   "units"?: Array<TreeUnitView>;
+  "waits"?: Array<TaskWait>;
 };
 
 export type TaskTreeView = {
@@ -5728,6 +5681,77 @@ export type TaskTreeView = {
   "subtree_root": TaskId;
   "totals": RollupMetrics;
   "tree_enabled": boolean;
+};
+
+export type TaskWait = {
+  "by": TaskId;
+  "kind": "paused";
+} | {
+  "kind": "ancestor_project_halted";
+  "project_id": ProjectId;
+  "task_id": TaskId;
+} | {
+  "kind": "project_halted";
+  "project_id": ProjectId;
+  "state": HaltState;
+} | {
+  "kind": "milestone_halted";
+  "milestone_id": MilestoneId;
+  "state": HaltState;
+} | {
+  "kind": "depends_on";
+  "task_ids": Array<TaskId>;
+} | {
+  "kind": "approval_parent";
+  "task_id": TaskId;
+} | {
+  "kind": "children";
+  "task_ids": Array<TaskId>;
+  "unit_keys": Array<string>;
+} | {
+  "kind": "work_units";
+  "units": Array<UnitWait>;
+} | {
+  "kind": "stage_halted";
+  "stage": string;
+  "unit_keys": Array<string>;
+} | {
+  "decision_keys": Array<string>;
+  "kind": "human_decision";
+} | {
+  "gate": HumanGateKind;
+  "kind": "human_gate";
+  "stage"?: string | null;
+} | {
+  "kind": "units_blocked";
+  "reason": WorkUnitBlockedReason;
+  "unit_keys": Array<string>;
+} | {
+  "id"?: string | null;
+  "kind": "capacity";
+  "scope": CapacityScope;
+} | {
+  "detail": string;
+  "kind": "unroutable";
+} | {
+  "cluster_id": string;
+  "detail": string;
+  "kind": "cluster";
+} | {
+  "blocking_task_ids": Array<TaskId>;
+  "kind": "write_set";
+} | {
+  "cause": BackoffCause;
+  "kind": "backoff";
+  "until": string;
+} | {
+  "kind": "disk_critical";
+  "path": string;
+} | {
+  "kind": "delegated_children";
+  "task_ids": Array<TaskId>;
+} | {
+  "kind": "review_awaiting_human";
 };
 
 export type Tier = "frontier" | "standard" | "cheap";
@@ -5851,7 +5875,7 @@ export type TreeLimitsUsage = {
   "tokens": number;
 };
 
-export type TreeNodePhase = "planning" | "executing" | "repairing" | "verifying" | "awaiting_human" | "awaiting_children" | "awaiting_plan_approval" | "held_on_decision" | "blocked_infra";
+export type TreeNodePhase = "planning" | "executing" | "repairing" | "verifying" | "awaiting_human" | "awaiting_plan_approval";
 
 export type TreeNodeStall = {
   "detail": string;
@@ -5867,14 +5891,25 @@ export type TreeRepoView = {
   "name": string;
 };
 
+export type TreeStageView = {
+  "integrate_key": string;
+  "key": string;
+  "order": number;
+  "state": StageState;
+};
+
 export type TreeUnitView = {
   "blocked_reason"?: WorkUnitBlockedReason | null;
   "child_task_id"?: TaskId | null;
+  "depends_on"?: Array<string>;
   "key": string;
   "kind": WorkUnitKind;
+  "seq": number;
   "stage"?: string | null;
   "status": WorkUnitStatus;
   "title": string;
+  "waiting_on"?: Array<string>;
+  "waiting_stage"?: string | null;
 };
 
 export type TreeView = {
@@ -5962,6 +5997,13 @@ export type UnitContext = {
 export type UnitDeclared = "leaf" | "task";
 
 export type UnitGateAction = "promoted" | "auto_leaf" | "decision" | "kept_task" | "demoted";
+
+export type UnitWait = {
+  "key": string;
+  "stage"?: string | null;
+  "waiting_on": Array<string>;
+  "waiting_stage"?: string | null;
+};
 
 export type UnreadCountView = {
   "by_kind": {
@@ -6079,7 +6121,6 @@ export type WorkUnitView = {
 };
 
 export type WorkerHint = {
-  "adapter"?: string | null;
   "tier": Tier;
 };
 

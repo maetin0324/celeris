@@ -117,10 +117,8 @@ fn default_min_domains() -> u32 {
     2
 }
 
-/// `[adapters.local_deep_research]`（config.toml, ADR-0029 D1）。`[[providers]] adapter =
-/// "local-deep-research"` の行ごとに `model`（= `settings` の `llm.model` を上書き）と `env` を上書きできる
-/// （`paperqa`/`acp` と同じ作り）。行の `settings` の上書きは無い（`ProviderConfig.settings` は `paperqa` 専用
-/// のフィールドで、LDR では再利用しない。celeris 側の実装判断）。
+/// `[adapters.local_deep_research]`（config.toml, ADR-0029 D1）。`model` は選ばれた route の model
+/// （`settings` の `llm.model` を上書き）。`settings` は route ごとには上書きしない。
 #[derive(Debug, Clone)]
 pub struct LdrConfig {
     /// 起動するコマンド（LDR を入れた venv の python）。
@@ -204,6 +202,13 @@ impl WorkerAdapter for LdrAdapter {
     fn with_env(&self, extra: &[(String, String)]) -> Option<Arc<dyn WorkerAdapter>> {
         let mut config = self.config.clone();
         config.env.extend(extra.iter().cloned());
+        Some(Arc::new(LdrAdapter::new(config)))
+    }
+
+    /// The selected route's model (ADR 2026-10-11 llm-source-harness-selection).
+    fn with_model(&self, model: &str) -> Option<Arc<dyn WorkerAdapter>> {
+        let mut config = self.config.clone();
+        config.model = Some(model.to_owned());
         Some(Arc::new(LdrAdapter::new(config)))
     }
 }

@@ -15,15 +15,13 @@ use futures_util::StreamExt;
 use serde_json::Value;
 use task_api::{
     AdminRequest, ApiConfigView, ApiSettings, ApiState, ClusterConfigView, ConfigView,
-    GenreConfigView, ProviderConfigView, ReviewerConfigView, RoleConfigView,
+    GenreConfigView, ReviewerConfigView, RoleConfigView,
 };
 use task_core::{
     Budget, Check, Criterion, Event, SqliteStore, Status, Task, TaskId, TaskKind, TaskStore, Tier,
     WorkerHint, WorkspaceSpec,
 };
-use task_ops::daemon::{
-    ClusterLive, CooldownView, DaemonSnapshot, InFlight, InFlightKind, ProviderLive,
-};
+use task_ops::daemon::{ClusterLive, CooldownView, DaemonSnapshot, InFlight, InFlightKind};
 use task_ops::view::ViewContext;
 use time::OffsetDateTime;
 use tokio::sync::{mpsc, watch};
@@ -46,18 +44,13 @@ pub struct EnvOptions {
     /// Phase 30（ADR-0033 D4 追記）: 対話は常にこの分野で走る。既定は `Default` impl で
     /// `task_core::CONVERSATION_GENRE`。
     pub conversation_genre: String,
-    /// ADR-0017 M1: `providers.d/` の書き込み先。`None` なら管理系の作成/変更/削除は使えない。
-    pub providers_dir: Option<PathBuf>,
-    pub openai_compatible_source_ids: std::collections::HashSet<String>,
-    /// ADR-0017 M2: `reload`/`check` を受け取るチャネルの送信側。`None` ならどちらも使えない。
+    /// ADR-0017 M2: `reload`/`check` を受け取るチャネルの送信側。`None` なら使えない。
     pub admin_tx: Option<mpsc::Sender<AdminRequest>>,
     /// ADR-0024 D1: `[accounts] claude_dir`。`None` なら claude-code のプールは無し。
     pub accounts_root: Option<PathBuf>,
     /// ADR-0025 D1: `[accounts] codex_dir`。`None` なら codex のプールは無し。
     pub codex_accounts_root: Option<PathBuf>,
     pub opencode_accounts_root: Option<PathBuf>,
-    /// `config_view.providers` の末尾に足す provider 行。
-    pub extra_providers: Vec<task_api::types::ProviderConfigView>,
     pub max_runs_per_account: usize,
     /// ADR-0030 D1: `[secrets] dir`。`None` なら秘密の管理系は 409 `secrets_unavailable`。
     pub secrets_dir: Option<PathBuf>,
@@ -67,14 +60,15 @@ pub struct EnvOptions {
     pub memory_dir: Option<PathBuf>,
     /// ADR-0037 D2（Phase 39）: `[notify] discord_webhook_secret`。
     pub notify_secret_id: String,
-    /// ADR-0037 D3: `[notify] gui_base_url`。
-    pub notify_gui_base_url: Option<String>,
+    /// ADR-0037 D3: `[notify] web_base_url`。
+    pub notify_web_base_url: Option<String>,
     pub notify_inbox_batch_secs: u64,
     pub notify_inbox_reminder_secs: u64,
     pub notify_digest_interval_secs: u64,
     pub notify_digest_max_lines: usize,
     /// ADR-0040 D6（Phase 48）: `GET /releases` / `POST /releases/{sha12}/promote` が読む係。
     pub releases: Option<task_api::SharedReleaseSource>,
+    pub integration_releases_dir: Option<PathBuf>,
     /// ADR-0040 D4（Phase 47）: `GET /health` の `release` / `mode` と、管理系の 503 に使う役割。
     pub release: String,
     pub mode: task_core::DaemonMode,
@@ -83,6 +77,7 @@ pub struct EnvOptions {
     pub github: task_api::GithubSettings,
     /// ADR-0053 D4（Phase 65）: `GET /llm/sources` が読む係。`None` なら 409 `llm_proxy_unavailable`。
     pub llm_sources: Option<task_api::SharedLlmSourcesReader>,
+    pub harnesses: Option<task_api::SharedHarnessesReader>,
     pub routing_catalog: Option<task_api::SharedRoutingCatalogReader>,
     pub model_discovery: Option<task_api::SharedModelDiscoveryHook>,
     /// ADR-0079 R4a: `[execution.tree]`（既定は無効）。
@@ -98,29 +93,28 @@ impl Default for EnvOptions {
             genres: Vec::new(),
             // Phase 30: 既定の対話用分野は他の既定値と同じく `task_core::CONVERSATION_GENRE`。
             conversation_genre: task_core::CONVERSATION_GENRE.to_string(),
-            providers_dir: None,
-            openai_compatible_source_ids: Default::default(),
             admin_tx: None,
             accounts_root: None,
             codex_accounts_root: None,
             opencode_accounts_root: None,
-            extra_providers: Vec::new(),
             max_runs_per_account: 0,
             secrets_dir: None,
             secret_usage: std::collections::HashMap::new(),
             memory_dir: None,
             notify_secret_id: task_core::DEFAULT_WEBHOOK_SECRET_ID.to_string(),
-            notify_gui_base_url: None,
+            notify_web_base_url: None,
             notify_inbox_batch_secs: 60,
             notify_inbox_reminder_secs: 86_400,
             notify_digest_interval_secs: 3_600,
             notify_digest_max_lines: 10,
             releases: None,
+            integration_releases_dir: None,
             release: "dev".to_string(),
             mode: task_core::DaemonMode::Normal,
             role: task_core::SharedRole::new(task_core::InstanceRole::Active),
             github: task_api::GithubSettings::default(),
             llm_sources: None,
+            harnesses: None,
             routing_catalog: None,
             model_discovery: None,
             tree_limits: task_core::TreeLimits::default(),
@@ -239,42 +233,6 @@ pub fn config_view() -> ConfigView {
             adapter: Some("claude-code".into()),
             tier: Some(Tier::Standard),
         },
-        providers: vec![
-            ProviderConfigView {
-                kind: Default::default(),
-                llm_source: Some(task_core::ResolvedLlmSource {
-                    source: task_core::LlmSourceRef::ClaudeOauth,
-                    origin: task_core::SourceOrigin::Derived,
-                }),
-                credential_refs: Default::default(),
-                tier_models: Default::default(),
-                account_id: None,
-                id: "claude-a".into(),
-                adapter: "claude-code".into(),
-                tiers: vec![Tier::Frontier, Tier::Standard],
-                concurrency: 2,
-                model: Some("claude-sonnet-5".into()),
-                env_keys: vec!["CLAUDE_CONFIG_DIR".into()],
-                account_pool: false,
-            },
-            ProviderConfigView {
-                kind: Default::default(),
-                llm_source: Some(task_core::ResolvedLlmSource {
-                    source: task_core::LlmSourceRef::ClaudeOauth,
-                    origin: task_core::SourceOrigin::Derived,
-                }),
-                credential_refs: Default::default(),
-                tier_models: Default::default(),
-                account_id: None,
-                id: "claude-b".into(),
-                adapter: "claude-code".into(),
-                tiers: vec![Tier::Frontier],
-                concurrency: 1,
-                model: None,
-                env_keys: vec!["CLAUDE_CONFIG_DIR".into()],
-                account_pool: false,
-            },
-        ],
         clusters: vec![ClusterConfigView {
             id: "pegasus".into(),
             host: "pegasus".into(),
@@ -291,7 +249,7 @@ pub fn config_view() -> ConfigView {
         roles: vec![RoleConfigView {
             id: "lead".into(),
             tier: Some(Tier::Frontier),
-            adapter: None,
+            harness: None,
             max_turns: Some(40),
             max_wall_secs: None,
             has_instructions: true,
@@ -329,19 +287,13 @@ pub fn settings(
         busy_timeout: Duration::from_millis(5000),
         background_checkpoint: false,
         view: view_context(workspace_root),
-        config_view: {
-            let mut view = config_view();
-            view.providers.extend(options.extra_providers);
-            view
-        },
+        config_view: config_view(),
         roles: options.roles,
         genres: options.genres,
         conversation_genre: options.conversation_genre,
         celeris_version: "0.9.0-test".into(),
         instance_id: "01J9ZX5T3K8Q7W6V5R4P3N2M1H".into(),
         started_at: "2026-09-14T00:00:00Z".into(),
-        providers_dir: options.providers_dir,
-        openai_compatible_source_ids: options.openai_compatible_source_ids,
         admin_tx: options.admin_tx,
         accounts_roots: {
             let mut roots = std::collections::HashMap::new();
@@ -361,12 +313,13 @@ pub fn settings(
         secret_usage: options.secret_usage,
         memory_dir: options.memory_dir,
         notify_secret_id: options.notify_secret_id,
-        notify_gui_base_url: options.notify_gui_base_url,
+        notify_web_base_url: options.notify_web_base_url,
         notify_inbox_batch_secs: options.notify_inbox_batch_secs,
         notify_inbox_reminder_secs: options.notify_inbox_reminder_secs,
         notify_digest_interval_secs: options.notify_digest_interval_secs,
         notify_digest_max_lines: options.notify_digest_max_lines,
         releases: options.releases,
+        integration_releases_dir: options.integration_releases_dir,
         release: options.release,
         mode: options.mode,
         role: options.role,
@@ -377,6 +330,7 @@ pub fn settings(
         // ADR-0047（Phase 61）: 知識ベースも tempdir の中。
         knowledge_root: Some(knowledge_root.to_path_buf()),
         llm_sources: options.llm_sources,
+        harnesses: options.harnesses,
         routing_catalog: options.routing_catalog,
         model_discovery: options.model_discovery,
         browser: Default::default(),
@@ -388,6 +342,7 @@ pub fn new_task(kind: TaskKind, status: Status) -> Task {
     let id = TaskId::new();
     let now = OffsetDateTime::now_utc();
     Task {
+        harness_id: None,
         requirements: Default::default(),
         tree: None,
         paused_at: None,
@@ -410,7 +365,6 @@ pub fn new_task(kind: TaskKind, status: Status) -> Task {
         priority: 0,
         worker_hint: WorkerHint {
             tier: Tier::Standard,
-            adapter: None,
         },
         workspace: WorkspaceSpec::Local {
             path: PathBuf::from(id.to_string()),
@@ -454,13 +408,12 @@ pub fn snapshot(ticks: u64) -> DaemonSnapshot {
             since: "2026-09-14T00:00:01Z".into(),
         }],
         cooldowns: vec![CooldownView {
-            provider: "claude-b".into(),
+            source: "claude-code".into(),
+            account_id: "acct-1".into(),
             until: "2026-09-14T00:05:00Z".into(),
             reason: "throttled".into(),
         }],
-        awaiting_human: vec![],
-        awaiting_children: vec![],
-        unroutable: vec![],
+        task_waits: vec![],
         reports: None,
         approvals_pending: 0,
         decisions_open: 0,
@@ -484,53 +437,6 @@ pub fn snapshot(ticks: u64) -> DaemonSnapshot {
             connection_stats: Default::default(),
             tunnel_forwards: vec![],
         }],
-        providers: vec![
-            ProviderLive {
-                kind: Default::default(),
-                llm_source: Some(task_core::ResolvedLlmSource {
-                    source: task_core::LlmSourceRef::ClaudeOauth,
-                    origin: task_core::SourceOrigin::Derived,
-                }),
-                credential_refs: Default::default(),
-                tier_models: Default::default(),
-                account_id: None,
-                id: "claude-a".into(),
-                adapter: "claude-code".into(),
-                tiers: vec![Tier::Frontier, Tier::Standard],
-                concurrency: 2,
-                model: Some("claude-sonnet-5".into()),
-                env_keys: vec!["CLAUDE_CONFIG_DIR".into()],
-                in_use: 1,
-                in_use_cos: 1,
-                // ADR-0022 D2: 一度 check した後のスナップショット（`GET /providers` の last_check に出る）。
-                last_check: Some(task_ops::daemon::ProviderCheckView {
-                    at: "2026-09-16T01:00:00Z".into(),
-                    result: "ok".into(),
-                    detail: Some("ready".into()),
-                }),
-                account_pool: false,
-            },
-            ProviderLive {
-                kind: Default::default(),
-                llm_source: Some(task_core::ResolvedLlmSource {
-                    source: task_core::LlmSourceRef::ClaudeOauth,
-                    origin: task_core::SourceOrigin::Derived,
-                }),
-                credential_refs: Default::default(),
-                tier_models: Default::default(),
-                account_id: None,
-                id: "claude-b".into(),
-                adapter: "claude-code".into(),
-                tiers: vec![Tier::Frontier],
-                concurrency: 1,
-                model: None,
-                env_keys: vec![],
-                in_use: 0,
-                in_use_cos: 0,
-                last_check: None,
-                account_pool: false,
-            },
-        ],
     }
 }
 

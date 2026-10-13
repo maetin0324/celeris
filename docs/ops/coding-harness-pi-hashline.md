@@ -47,12 +47,13 @@ tool 集合は read/edit（Hashline）+ bash/grep/find/ls 程度に絞る。suba
 
 ## 3. config の追記
 
-`~/.config/celeris/config.toml`（または providers.d）へ `config/celeris.pi-hashline.example.toml` の次を写す。
+`~/.config/celeris/config.toml` へ `config/celeris.pi-hashline.example.toml` の次を写す。
 先に `cp -a ~/.config/celeris/config.toml ~/.config/celeris/config.toml.bak-pi-YYYYMMDD`。
 
-- `[[providers]]` の `adapter = "pi"` 行: `model`（`provider/id`）、`extensions`（Hashline path）、`tools`（allowlist）、
-  必要なら `command`/`args`（B で入れた場合は `command = "~/.local/celeris/npm/bin/pi"`、A なら
+- `[llm_sources.opencode_go]`（供給元）と `[harnesses.pi]`（実行器。`extensions`（Hashline path）、`tools`（allowlist）、
+  必要なら `command`/`args`。B で入れた場合は `command = "~/.local/celeris/npm/bin/pi"`、A なら
   `command = "node"` と `args = ["<cli.js の path>"]`）。
+- `[route_defaults.pi]` の候補（`{ source = "opencode_go", model = "opencode-go/grok-4.6" }`）と `[harness_selection]` の規則。
 - `[[harnesses]] id = "coding"` に `adapter_policy = "model_family"`。
 
 反映後の確認（人が実行）:
@@ -63,7 +64,7 @@ extensions/tools の未指定・OAuth pool 指定は daemon 起動時の config 
 ## 4. 他のハーネスへ戻す・明示する
 
 - **既定ごと戻す**: `[[harnesses]] coding` の `adapter_policy` 行を消す（または `"provider_order"`）。設定の再読み込みだけで、データの移行は無い。
-- **Pi 行だけ止める**: `[[providers]]` の pi 行を消す。非 Claude の task は fallback で今の codex / acp 行に倒れる。
+- **Pi だけ止める**: `[harness_selection]` の pi の規則と `[route_defaults.pi]` を消す。pi を選ばなくなった task の扱いは harness 選択の規則（ADR 2026-10-11 llm-source-harness-selection）に従う。
 - **task ごとに明示する**: task の `adapter`（作成 API・PATCH・role・assignee の役割）に `claude-code` / `codex` / `acp` / `pi` を指定する。
   明示 adapter は既定解決より常に優先され、この仕組みは触らない。
 - Claude 系 model の判定は provider 名の文字列ではなく、LLM source・account pool・catalog の `family`
@@ -72,13 +73,13 @@ extensions/tools の未指定・OAuth pool 指定は daemon 起動時の config 
 
 ## 5. (model, harness) 別の metrics の見方
 
-- run 単位: `GET /api/v1/tasks/{id}/routing`（[gui-api](../api/v1/gui-api.md)）の run ごとの監査に `adapter`（`pi` / `claude-code` …）と
+- run 単位: `GET /api/v1/tasks/{id}/routing`（[HTTP API](../api/v1/api.md)）の run ごとの監査に `adapter`（`pi` / `claude-code` …）と
   `model` が別欄で出る。`harness` 欄は genre（`coding`）なので比較には `adapter` 欄を使う。
 - 選ばれ方: 監査の `adapter_choice`（explicit / preferred / fallback と理由 / provider_order）で、既定解決で選ばれたか
   fallback に倒れたかが分かる。fallback が多ければ Pi 行の枠・cooldown を疑う。
 - 記録の確認: `celerisctl routing export --db <backup の写し> --out <training.jsonl>`（読み取り専用。brief を含めない場合は `--text none`）。
   success・token・cache-hit・cost は run の usage（Pi は `message_end` の `usage` を合算）から (model, adapter) で集計する。
-- 注意: proxy 経由 run の `model` は lane 名（`celeris/<tier>`）で実 model ではないので別群に分ける。task 単位の
+- 注意: proxy 経由 run の `model` は lane 名（旧 tier alias）で実 model ではないので別群に分ける。task 単位の
   `GET /metrics/execution` は adapter で group しない（ADR「metrics 整合」）。
 
 ## 6. 確認の流れ

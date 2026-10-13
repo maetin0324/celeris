@@ -96,7 +96,7 @@ test.describe("P4-16 releases", () => {
 });
 
 // P4-12: 自己完結の describe（import は動的。/releases の describe と import を共有しない）。
-test.describe("P4-12 daemon/providers", () => {
+test.describe("P4-12 daemon", () => {
   type Stop = () => Promise<void>;
   let base = "";
   let stop: Stop = async () => {};
@@ -131,33 +131,6 @@ test.describe("P4-12 daemon/providers", () => {
     await page.getByRole("button", { name: "replay を実行" }).click();
     await expect(page.getByText("0 mismatches across 3 tasks")).toBeVisible();
     expect(seen.some((r) => r.path === "/api/v1/replay" && r.method === "POST")).toBe(true);
-  });
-
-  test("parity: /providers 追加・変更・削除・確認", async ({ page }) => {
-    await page.goto(`${base}/providers`);
-    await expect(page.getByRole("heading", { level: 1, name: "プロバイダ" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "claude-main" })).toBeVisible();
-    const qwenModel = page.getByRole("listitem", { name: "model qwen3-coder" });
-    await expect(qwenModel.getByText("不明（価格の情報なし。0 円ではありません）")).toBeVisible();
-    await expect(page.getByRole("listitem", { name: "deployment openai-compatible:qwen/qwen3-coder" })).toBeVisible();
-    await page.getByLabel("新規 id").fill("codex-2");
-    await page.getByLabel("adapter").selectOption("codex");
-    await page.getByRole("button", { name: "追加" }).click();
-    await expect(page.getByRole("heading", { name: "codex-2" })).toBeVisible();
-    const card = page.getByRole("listitem", { name: "プロバイダ codex-2" });
-    await expect(card.getByLabel(/concurrency|同時実行数/)).toHaveCount(0);
-    await card.getByLabel("モデル（model）").fill("gpt-5.5");
-    await card.getByRole("button", { name: "変更を保存" }).click();
-    await expect(card.getByText(/モデル gpt-5\.5/)).toBeVisible();
-    await card.getByRole("button", { name: "接続を確認" }).click();
-    await expect(card.getByText("確認結果: ok")).toBeVisible();
-    await card.getByRole("button", { name: "削除" }).click();
-    await page
-      .getByRole("alertdialog", { name: "実行枠を削除しますか" })
-      .getByRole("button", { name: "codex-2 を削除" })
-      .click();
-    await expect(page.getByRole("heading", { name: "codex-2" })).toHaveCount(0);
-    await expect.poll(() => seen.filter((r) => r.path === "/api/v1/reload").length).toBeGreaterThanOrEqual(3);
   });
 });
 
@@ -238,7 +211,11 @@ test.describe("P4-13..15 accounts/clusters", () => {
       .getByRole("button", { name: "sub を削除" })
       .click();
     await expect(page.getByRole("listitem", { name: "アカウント sub" })).toHaveCount(0);
-    expect(seen.some((r) => r.path.startsWith("/api/v1/accounts/sub/login/code") && r.method === "POST")).toBe(true);
+    expect(
+      seen.some(
+        (r) => r.path.startsWith("/api/v1/llm/sources/claude_oauth/accounts/sub/login/code") && r.method === "POST",
+      ),
+    ).toBe(true);
   });
 
   test("parity: mcp/clients/:id/calls 取得", async ({ page }) => {

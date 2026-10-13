@@ -71,6 +71,7 @@ fn project_with_primary(store: &SqliteStore, dir: &Path) -> (ProjectId, RepoId) 
 fn ready_task(store: &SqliteStore, dir: &Path, project: Option<ProjectId>) -> TaskId {
     let now = OffsetDateTime::now_utc();
     let task = Task {
+        harness_id: None,
         tree: None,
         requirements: Default::default(),
         paused_at: None,
@@ -96,7 +97,6 @@ fn ready_task(store: &SqliteStore, dir: &Path, project: Option<ProjectId>) -> Ta
         priority: 0,
         worker_hint: WorkerHint {
             tier: Tier::Standard,
-            adapter: None,
         },
         workspace: WorkspaceSpec::Local {
             path: dir.to_path_buf(),
@@ -209,11 +209,6 @@ retry_backoff_base_secs = 0
 command = "{stub}"
 extra_args = ["--approve-for-me"]
 
-[[providers]]
-id = "codex-local"
-adapter = "codex"
-tiers = ["frontier", "standard", "cheap"]
-concurrency = 1
 "#,
             stub = stub.display()
         ),
@@ -221,8 +216,10 @@ concurrency = 1
     .unwrap();
 
     let log = root.join("celeris.log");
+    // The stub invokes celerisctl too; do not pass the release host's config to it.
     let mut child = Command::new(bin("celeris"))
         .env_remove(WORKER_DB_GUARD_ENV)
+        .env_remove("CELERIS_CONFIG")
         .args([
             "--config",
             config.to_str().unwrap(),

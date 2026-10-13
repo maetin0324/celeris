@@ -57,7 +57,7 @@ async fn api_reads_do_not_see_database_locked_while_another_connection_writes() 
         format!("/api/v1/tasks/{}/events?limit=20", seed.id),
         "/api/v1/health".to_string(),
         format!("/api/v1/tasks/{}/artifacts", seed.id),
-        "/api/v1/providers".to_string(),
+        "/api/v1/llm/accounts".to_string(),
     ];
     let mut reads = 0;
     for i in 0..1_000 {

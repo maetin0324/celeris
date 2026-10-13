@@ -18,6 +18,7 @@ fn view_ctx() -> ViewContext {
 fn sample_task(kind: TaskKind, status: Status) -> Task {
     let now = OffsetDateTime::now_utc();
     Task {
+        harness_id: None,
         requirements: Default::default(),
         tree: None,
         paused_at: None,
@@ -43,7 +44,6 @@ fn sample_task(kind: TaskKind, status: Status) -> Task {
         priority: 0,
         worker_hint: task_core::WorkerHint {
             tier: Tier::Standard,
-            adapter: None,
         },
         workspace: WorkspaceSpec::Local {
             path: "workspace".into(),
@@ -70,8 +70,132 @@ fn sample_task(kind: TaskKind, status: Status) -> Task {
     }
 }
 
+#[test]
+fn stranded_identity_preserves_attention_item_id_and_at_until_head_changes() {
+    use task_core::{RepoId, TaskRepoIntegrationStatus};
+    let store = SqliteStore::open_in_memory().expect("store");
+    let task = sample_task(TaskKind::Execute, Status::Done);
+    let task_id = task.id;
+    let repo_id = RepoId::new();
+    store.create_task(&task, vec![]).expect("task");
+    let t1 = OffsetDateTime::from_unix_timestamp(1_800_000_000).expect("time");
+    let t2 = t1 + time::Duration::minutes(5);
+    let record = |head: &str| crate::stranded::BranchRecord {
+        task_id,
+        repo_id,
+        repo_path: None,
+        default_branch: Err(crate::changes::DefaultBranchError(
+            "repository unavailable".into(),
+        )),
+        branch: Some("topic".into()),
+        head: Some(head.into()),
+        done: true,
+        root: true,
+        changed_repo: true,
+        not_applicable: false,
+    };
+    crate::stranded::sweep(&store, &[record("head-1")], t1).expect("first sweep");
+    let read_item = |now| {
+        let result = inbox(&store, None, &view_ctx(), now, &|_, _| vec![]).expect("inbox");
+        result
+            .attention
+            .iter()
+            .find_map(|item| match item {
+                AttentionItem::Unintegrated { task, at, .. } => Some((task.id, at.clone())),
+                _ => None,
+            })
+            .expect("unintegrated item")
+    };
+    let first = read_item(t1);
+    crate::stranded::sweep(&store, &[record("head-1")], t2).expect("repeat sweep");
+    assert_eq!(read_item(t2), first);
+    crate::stranded::sweep(&store, &[record("head-2")], t2).expect("changed head");
+    assert_ne!(read_item(t2), first);
+    assert_eq!(
+        store
+            .task_integration_get(task_id, repo_id)
+            .expect("state")
+            .unwrap()
+            .state,
+        TaskRepoIntegrationStatus::Unintegrated
+    );
+}
+
 fn no_evidence(_task: &Task, _run_id: &str) -> Vec<EvidenceView> {
     Vec::new()
+}
+
+#[test]
+fn integration_api_unintegrated_state_creates_actionable_inbox_item() {
+    let store = SqliteStore::open_in_memory().expect("open store");
+    let task = sample_task(TaskKind::Execute, Status::Done);
+    store.insert(&task).expect("insert task");
+    let repo_id = task_core::RepoId::new();
+    let now = OffsetDateTime::now_utc();
+    store
+        .task_integration_upsert(&task_core::TaskRepoIntegrationState {
+            task_id: task.id,
+            repo_id,
+            branch: "task/stranded".into(),
+            head_sha: "abc123".into(),
+            state: task_core::TaskRepoIntegrationStatus::Unintegrated,
+            reason: Some("not merged".into()),
+            actor: "sweep".into(),
+            checked_at: now,
+            updated_at: now,
+        })
+        .expect("record unintegrated state");
+
+    let result = inbox(&store, None, &view_ctx(), now, &no_evidence).expect("inbox");
+    let matching = result
+        .attention
+        .iter()
+        .find(|item| matches!(item, AttentionItem::Unintegrated { task: t, .. } if t.id == task.id))
+        .expect("unintegrated inbox item");
+    let AttentionItem::Unintegrated {
+        state,
+        operation_path,
+        repo,
+        ..
+    } = matching
+    else {
+        unreachable!()
+    };
+    assert_eq!(*state, task_core::TaskRepoIntegrationStatus::Unintegrated);
+    assert_eq!(repo, &repo_id.to_string());
+    assert!(operation_path.contains("/integrations/"));
+}
+
+#[test]
+fn stranded_remote_not_applicable_state_is_hidden_from_inbox() {
+    let store = SqliteStore::open_in_memory().expect("open store");
+    let task = sample_task(TaskKind::Execute, Status::Done);
+    store.insert(&task).expect("insert task");
+    store
+        .task_integration_upsert(&task_core::TaskRepoIntegrationState {
+            task_id: task.id,
+            repo_id: task_core::RepoId::new(),
+            branch: "celeris/remote".into(),
+            head_sha: String::new(),
+            state: task_core::TaskRepoIntegrationStatus::NotApplicable,
+            reason: Some("remote repository: not checked by the sweep".into()),
+            actor: "sweep".into(),
+            checked_at: OffsetDateTime::now_utc(),
+            updated_at: OffsetDateTime::now_utc(),
+        })
+        .expect("record not applicable state");
+
+    let result = inbox(
+        &store,
+        None,
+        &view_ctx(),
+        OffsetDateTime::now_utc(),
+        &no_evidence,
+    )
+    .expect("inbox");
+    assert!(!result.attention.iter().any(
+        |item| matches!(item, AttentionItem::Unintegrated { task: t, .. } if t.id == task.id)
+    ));
 }
 
 #[test]
@@ -634,14 +758,16 @@ fn inbox_attention_unroutable_only_populated_with_snapshot() {
         tick_ms: 2000,
         in_flight: vec![],
         cooldowns: vec![],
-        awaiting_human: vec![],
-        awaiting_children: vec![],
-        unroutable: vec![stuck.id],
+        task_waits: vec![crate::daemon::SnapshotTaskWait {
+            task_id: stuck.id,
+            wait: task_core::TaskWait::Unroutable {
+                detail: "no provider".into(),
+            },
+        }],
         reports: None,
         approvals_pending: 0,
         decisions_open: 0,
         clusters: vec![],
-        providers: vec![],
         accounts_root: None,
         accounts_roots: std::collections::HashMap::new(),
         max_runs_per_account: None,
@@ -728,7 +854,7 @@ fn inbox_draft_count_is_tasks_not_groups_and_child_counts_are_filled() {
         .iter()
         .find(|s| s.id == parent.id)
         .expect("parent summary");
-    assert_eq!((summary.children, summary.pending_children), (2, 1));
+    assert_eq!(summary.children, 2);
 }
 
 /// Phase 9 監査: 一度も requeue していない ready タスクは、`max_requeues = 1` でも `requeue_limit_near` にならない。
@@ -908,9 +1034,7 @@ fn inbox_attention_cluster_unavailable_hidden_once_reconnected_and_host_filled_f
         tick_ms: 2000,
         in_flight: vec![],
         cooldowns: vec![],
-        awaiting_human: vec![],
-        awaiting_children: vec![],
-        unroutable: vec![],
+        task_waits: vec![],
         reports: None,
         approvals_pending: 0,
         decisions_open: 0,
@@ -927,7 +1051,6 @@ fn inbox_attention_cluster_unavailable_hidden_once_reconnected_and_host_filled_f
             connection_stats: Default::default(),
             tunnel_forwards: vec![],
         }],
-        providers: vec![],
         accounts_root: None,
         accounts_roots: std::collections::HashMap::new(),
         max_runs_per_account: None,
@@ -999,6 +1122,49 @@ fn inbox_cleanup_terminal_delivery_skip_is_suppressed() {
     assert!(result.attention.is_empty());
     assert_eq!(result.suppressed.get("r3_terminal_task"), Some(&1));
     assert!(!store.events_for(task.id).expect("events").is_empty());
+}
+
+/// 2026-10-11 付記: 取り込む commit が無い root の見送り（no_commits）は正常な no-op で注意事項に出さない。
+#[test]
+fn delivery_skip_no_commits_is_not_attention() {
+    let store = SqliteStore::open_in_memory().expect("store");
+    let attention_for = |reason: task_core::DeliverySkipReason| {
+        let mut task = sample_task(TaskKind::Execute, Status::Done);
+        task.project_id = Some(task_core::ProjectId::new());
+        store.insert(&task).expect("insert");
+        store
+            .append_event(
+                task.id,
+                &Event::DeliverySkipped {
+                    reason,
+                    detail: "skipped".into(),
+                    head: Some("abc123".into()),
+                },
+            )
+            .expect("event");
+        let all = store.list(None).expect("list");
+        let by_id: HashMap<TaskId, Task> = all.iter().map(|t| (t.id, t.clone())).collect();
+        build_attention(
+            &store,
+            &all,
+            &by_id,
+            None,
+            &view_ctx(),
+            OffsetDateTime::now_utc(),
+        )
+        .expect("attention")
+        .into_iter()
+        .filter(|item| {
+            matches!(item, AttentionItem::DeliverySkipped { task: t, .. } if t.id == task.id)
+        })
+        .count()
+    };
+    assert_eq!(attention_for(task_core::DeliverySkipReason::NoCommits), 0);
+    // 他の理由は従来どおり注意事項になる（対照）。
+    assert_eq!(
+        attention_for(task_core::DeliverySkipReason::DepartmentUnresolved),
+        1
+    );
 }
 
 #[test]
@@ -1153,14 +1319,16 @@ fn inbox_cleanup_r3_terminal_snapshot_unroutable_is_hidden() {
         tick_ms: 2000,
         in_flight: vec![],
         cooldowns: vec![],
-        awaiting_human: vec![],
-        awaiting_children: vec![],
-        unroutable: vec![done.id],
+        task_waits: vec![crate::daemon::SnapshotTaskWait {
+            task_id: done.id,
+            wait: task_core::TaskWait::Unroutable {
+                detail: "no provider".into(),
+            },
+        }],
         reports: None,
         approvals_pending: 0,
         decisions_open: 0,
         clusters: vec![],
-        providers: vec![],
         accounts_root: None,
         accounts_roots: std::collections::HashMap::new(),
         max_runs_per_account: None,

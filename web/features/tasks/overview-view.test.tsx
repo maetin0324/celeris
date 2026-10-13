@@ -1,8 +1,8 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import type { TaskDetail } from "../../api/generated/types";
-import { OverviewView } from "./overview-view";
+import type { TaskDetail, WorkUnitView } from "../../api/generated/types";
+import { OverviewView, taskWaitsFor } from "./overview-view";
 
 vi.mock("@tanstack/react-router", () => ({
   Link: ({ to, children, ...props }: { to: string; children: React.ReactNode }) => (
@@ -30,6 +30,7 @@ function render(stdout: boolean) {
         run_id: "RUN-123456789",
         adapter: "codex",
         model: "test-model",
+        selection: { status: "legacy_unresolved" },
         started_at: "2026-10-10T00:00:00Z",
         progress: 1,
         artifacts: 0,
@@ -66,5 +67,24 @@ describe("task overview run link", () => {
     const html = render(true);
     expect(html).toContain("RUN-123456789");
     expect(html).not.toContain("進捗を開く");
+  });
+});
+
+describe("task tree waits", () => {
+  it("uses server supplied unfinished keys and previous stage", () => {
+    const unit = { key: "integrate-edges" } as WorkUnitView;
+    expect(
+      taskWaitsFor(
+        [
+          {
+            kind: "work_units",
+            units: [
+              { key: "integrate-edges", stage: "close", waiting_on: ["edges", "remove"], waiting_stage: "edges" },
+            ],
+          },
+        ],
+        unit,
+      ),
+    ).toEqual(["edges", "remove", "段 edges"]);
   });
 });

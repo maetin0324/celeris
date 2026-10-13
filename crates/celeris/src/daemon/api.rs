@@ -6,8 +6,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use task_api::types::{
-    ApiConfigView, ClusterConfigView, ConfigView, GenreConfigView, ProviderConfigView,
-    ReviewerConfigView, RoleConfigView,
+    ApiConfigView, ClusterConfigView, ConfigView, GenreConfigView, ReviewerConfigView,
+    RoleConfigView,
 };
 use task_api::{ApiError, ApiSettings, ApiState};
 use task_core::{DaemonMode, SharedRole};
@@ -16,7 +16,7 @@ use task_ops::view::ViewContext;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
-use super::adapters::{effective_models, provider_lives, secret_usage};
+use super::adapters::secret_usage;
 use super::bootstrap::hostname;
 use crate::{Config, DaemonError, InstanceIdentity};
 
@@ -83,9 +83,8 @@ impl task_api::RoutingCatalogReader for RoutingCatalogAdapter {
     }
 }
 
-/// ADR-0013 / `docs/api/v1/gui-api.md` §3.21: `GET /api/v1/config` に出す設定の要約。env は**キー名だけ**、トークンとその場所は出さない。
+/// ADR-0013 / `docs/api/v1/api.md` §3.21: `GET /api/v1/config` に出す設定の要約。env は**キー名だけ**、トークンとその場所は出さない。
 pub fn config_view(config: &Config, listen: SocketAddr) -> ConfigView {
-    let models = effective_models(config);
     ConfigView {
         config_path: config
             .source_path
@@ -109,28 +108,6 @@ pub fn config_view(config: &Config, listen: SocketAddr) -> ConfigView {
             adapter: config.reviewer.adapter.clone(),
             tier: config.reviewer.tier,
         },
-        providers: config
-            .providers
-            .iter()
-            .map(|p| {
-                let mut env_keys: Vec<String> = p.env.keys().cloned().collect();
-                env_keys.sort();
-                ProviderConfigView {
-                    kind: config.provider_kind(&p.id).unwrap_or_default(),
-                    llm_source: config.provider_llm_source(&p.id),
-                    credential_refs: task_core::model_routing::credential_refs(&p.env_from_secrets),
-                    tier_models: p.tier_models.clone(),
-                    account_id: p.account_id.clone(),
-                    id: p.id.clone(),
-                    adapter: p.adapter.clone(),
-                    tiers: p.tiers.clone(),
-                    concurrency: p.concurrency.unwrap_or(1),
-                    model: models.get(&p.id).filter(|m| !m.is_empty()).cloned(),
-                    env_keys,
-                    account_pool: p.account_pool.is_on(),
-                }
-            })
-            .collect(),
         clusters: config
             .clusters
             .iter()
@@ -177,7 +154,7 @@ pub fn config_view(config: &Config, listen: SocketAddr) -> ConfigView {
             .map(|r| RoleConfigView {
                 id: r.id.clone(),
                 tier: r.tier,
-                adapter: r.adapter.clone(),
+                harness: r.harness.clone(),
                 max_turns: r.max_turns,
                 max_wall_secs: r.max_wall_secs,
                 has_instructions: r.instructions.as_ref().is_some_and(|s| !s.is_empty()),
@@ -209,6 +186,62 @@ pub fn config_view(config: &Config, listen: SocketAddr) -> ConfigView {
 /// ADR-0053 D4（Phase 65）: `task_api::LlmSourcesReader` を `llm_proxy::ProxyState` の薄い包みで実装する
 /// （task-api は `llm-proxy`/`task-dispatch`/`task-worker` を知らない。ADR-0017 M2 と同じ境界）。
 pub(crate) struct LlmSourcesAdapter(Arc<llm_proxy::ProxyState>);
+
+struct HarnessesAdapter(task_core::llm_route::Registry);
+
+impl task_api::HarnessesReader for HarnessesAdapter {
+    fn harnesses(&self) -> Vec<task_api::types::HarnessView> {
+        use task_api::types::{HarnessCandidateView, HarnessRuleView, HarnessView};
+        self.0
+            .harnesses
+            .iter()
+            .map(|(id, spec)| {
+                let rules = self
+                    .0
+                    .harness_selection
+                    .rules
+                    .iter()
+                    .filter(|r| r.harness == *id)
+                    .map(|r| HarnessRuleView {
+                        genre: r.genre.clone(),
+                        role: r.role.clone(),
+                        required_capabilities: r.required_capabilities.iter().cloned().collect(),
+                        requires_repo: r.requires_repo,
+                        execution_class: r.execution_class.as_ref().map(ToString::to_string),
+                    })
+                    .collect();
+                let execution_class_defaults = self
+                    .0
+                    .harness_selection
+                    .execution_class_defaults
+                    .iter()
+                    .filter(|(_, ids)| ids.contains(id))
+                    .map(|(class, _)| class.to_string())
+                    .collect();
+                HarnessView {
+                    id: id.to_string(),
+                    kind: spec.kind.clone(),
+                    api_formats: spec.api_formats.iter().map(ToString::to_string).collect(),
+                    source_kinds: spec.source_kinds.iter().map(ToString::to_string).collect(),
+                    capabilities: spec.capabilities.iter().cloned().collect(),
+                    rules,
+                    execution_class_defaults,
+                    route_defaults: self
+                        .0
+                        .route_defaults
+                        .get(id)
+                        .into_iter()
+                        .flatten()
+                        .map(|c| HarnessCandidateView {
+                            source_id: c.source.to_string(),
+                            model_id: c.model.to_string(),
+                        })
+                        .collect(),
+                }
+            })
+            .collect()
+    }
+}
 
 #[async_trait::async_trait]
 impl task_api::LlmSourcesReader for LlmSourcesAdapter {
@@ -244,14 +277,8 @@ impl task_api::LlmSourcesReader for LlmSourcesAdapter {
                     deployments: vec![],
                 })
                 .collect(),
-            celeris_tiers: view
-                .celeris_tiers
-                .into_iter()
-                .map(|t| task_api::LlmCelerisTierView {
-                    tier: t.tier,
-                    resolves_to: t.resolves_to,
-                })
-                .collect(),
+            // 要求は具体的な source/model だけを受け、tier の解決先は無い（欄は api-remove で消す）。
+            celeris_tiers: Vec::new(),
         }
     }
 }
@@ -296,14 +323,6 @@ pub fn api_settings(
         celeris_version: env!("CARGO_PKG_VERSION").to_string(),
         instance_id,
         started_at,
-        providers_dir: config.providers_dir.clone(),
-        openai_compatible_source_ids: config
-            .llm_proxy
-            .sources
-            .openai_compatible
-            .iter()
-            .map(|source| source.id.clone())
-            .collect(),
         admin_tx,
         accounts_roots: config
             .accounts
@@ -320,7 +339,7 @@ pub fn api_settings(
         secret_usage: secret_usage(config),
         memory_dir: config.memory.as_ref().map(|m| m.dir.clone()),
         notify_secret_id: config.notify.discord_webhook_secret.clone(),
-        notify_gui_base_url: config.notify.base_url().map(str::to_string),
+        notify_web_base_url: config.notify.base_url().map(str::to_string),
         notify_inbox_batch_secs: config.notify.inbox_batch_secs,
         notify_inbox_reminder_secs: config.notify.inbox_reminder_secs,
         notify_digest_interval_secs: config.notify.digest_interval_secs,
@@ -333,6 +352,7 @@ pub fn api_settings(
             config.selfdeploy.repo.clone(),
             config.selfdeploy.detach.clone(),
         ))),
+        integration_releases_dir: Some(config.selfdeploy.releases_dir.clone()),
         release,
         mode,
         role,
@@ -349,6 +369,9 @@ pub fn api_settings(
         knowledge_root: Some(config.knowledge.root.clone()),
         llm_sources: llm_proxy_state
             .map(|s| Arc::new(LlmSourcesAdapter(s)) as task_api::SharedLlmSourcesReader),
+        harnesses: config.llm_route_registry().ok().map(|registry| {
+            Arc::new(HarnessesAdapter(registry)) as task_api::SharedHarnessesReader
+        }),
         routing_catalog: config.routing_catalog_state.as_ref().map(|snapshot| {
             Arc::new(RoutingCatalogAdapter(Arc::clone(snapshot)))
                 as task_api::SharedRoutingCatalogReader
@@ -476,8 +499,6 @@ pub(crate) async fn start_api(
         hostname: hostname(),
         started_at: started_at.clone(),
         tick_ms: config.tick_ms,
-        providers: provider_lives(config),
-        provider_checks: std::collections::HashMap::new(),
     });
     // ADR-0017 M2: `reload`/`check` は API 側では実行できない（task-worker/task-dispatch に依存しない
     // 境界を守るため）。celeris の tick ループへ委譲するチャネルを作り、送信側だけ API に渡す。
@@ -654,10 +675,10 @@ mod routing_catalog_tests {
             config_order: 0,
         };
         let catalog = crate::config::RoutingCatalog {
-            mode: RoutingMode::Legacy,
+            mode: RoutingMode::Shadow,
             models: vec![model],
             deployments: vec![deployment],
-            policies: vec![RoutingPolicy::defaults(Tier::Cheap, RoutingMode::Legacy)],
+            policies: vec![RoutingPolicy::defaults(Tier::Cheap, RoutingMode::Shadow)],
             warnings: vec![],
         };
         let adapter = RoutingCatalogAdapter(Arc::new(std::sync::RwLock::new(Arc::new(catalog))));

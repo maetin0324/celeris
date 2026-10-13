@@ -57,10 +57,6 @@ db = "celeris.sqlite3"
 workspace_root = "ws"
 org_include = "org.toml"
 
-[[providers]]
-id = "x"
-adapter = "fake"
-
 [memory]
 dir = "memory"
 
@@ -140,6 +136,7 @@ fn seed(env: &Env) -> (Vec<OrgNode>, TaskId) {
     // `coding-poc` に割り当てられたタスク（合流の側）。
     let id = TaskId::new();
     let task = Task {
+        harness_id: None,
         requirements: Default::default(),
         tree: None,
         paused_at: None,
@@ -156,7 +153,6 @@ fn seed(env: &Env) -> (Vec<OrgNode>, TaskId) {
         priority: 10,
         worker_hint: WorkerHint {
             tier: Tier::Standard,
-            adapter: None,
         },
         workspace: WorkspaceSpec::local(env.root.join("ws")),
         repos: vec![],
@@ -352,10 +348,6 @@ fn config_to_harnesses_prints_the_new_shape_from_the_legacy_one() {
         r#"
 db = "celeris.sqlite3"
 workspace_root = "ws"
-
-[[providers]]
-id = "x"
-adapter = "fake"
 
 [[roles]]
 id = "implementer"

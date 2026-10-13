@@ -115,6 +115,7 @@ fn request(workspace: &Path, cos_chat: Option<CosChatContext>) -> RunRequest {
             ..RunContext::default()
         },
         cargo_target_dir: None,
+        llm_route: None,
     }
 }
 

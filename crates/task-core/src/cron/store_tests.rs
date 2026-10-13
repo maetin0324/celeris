@@ -300,9 +300,8 @@ fn cron_job_migration_applies_to_an_existing_schema_37_db() {
         // 版数 37 の DB に戻す。
         let conn = Connection::open(&path).unwrap();
         conn.execute_batch(
-            "DROP TABLE route_judgments; DROP TABLE route_outcomes; \
-             DROP INDEX idx_route_decisions_export; DROP TABLE route_decisions; \
-             DROP TABLE route_options; DROP TABLE route_features; \
+            "DROP TABLE task_integrations; \
+             ALTER TABLE task_change_integrations RENAME TO task_integrations; \
              DROP TABLE account_limits; \
              DROP TRIGGER chat_node_session_thread_insert; \
              DROP TRIGGER chat_node_session_thread_update; \
@@ -320,7 +319,6 @@ fn cron_job_migration_applies_to_an_existing_schema_37_db() {
              DROP TABLE cron_job_runs; DROP TABLE cron_jobs; \
              DROP TABLE feed_notices; DROP TABLE feed_sources; DROP TABLE feed_cursor; \
              DROP INDEX idx_events_integration_request; \
-             DROP TABLE model_role_scopes; DROP TABLE model_role_assignments; \
              DROP TABLE routing_shadow_reservations; \
              DROP INDEX idx_events_routing_decided; DROP INDEX idx_llm_proxy_requests_decision; \
              ALTER TABLE llm_proxy_requests DROP COLUMN model; ALTER TABLE llm_proxy_requests DROP COLUMN source_id; \
@@ -342,7 +340,13 @@ fn cron_job_migration_applies_to_an_existing_schema_37_db() {
              ALTER TABLE node_sessions DROP COLUMN task_id; \
              ALTER TABLE node_sessions DROP COLUMN work_unit_id; \
              ALTER TABLE node_sessions DROP COLUMN provider; \
-             ALTER TABLE node_sessions DROP COLUMN cwd;",
+             ALTER TABLE node_sessions DROP COLUMN cwd; \
+             ALTER TABLE tasks DROP COLUMN harness_id; \
+             ALTER TABLE runs DROP COLUMN selected_harness_id; \
+             ALTER TABLE runs DROP COLUMN selected_source_id; \
+             ALTER TABLE runs DROP COLUMN selected_model_id; \
+             ALTER TABLE runs DROP COLUMN selected_account_id; \
+             ALTER TABLE runs DROP COLUMN selection_metadata_json;",
         )
         .unwrap();
         conn.execute(
@@ -353,7 +357,7 @@ fn cron_job_migration_applies_to_an_existing_schema_37_db() {
     }
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 69);
+    assert_eq!(SCHEMA_VERSION, 72);
     assert_eq!(
         store
             .cluster_settings_get("pegasus")

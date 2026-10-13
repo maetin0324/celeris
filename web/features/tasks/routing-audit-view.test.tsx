@@ -40,6 +40,16 @@ describe("task の routing 監査（ADR 2026-10-04-multi-objective-model-routing
     expect(candidate(out, "openai-compatible:qwen/qwen3-coder")).toContain("（不明: shadow）");
   });
 
+  it("実行枠を harness・source・model・account の順に出す（harness が無ければ不明）", () => {
+    const out = html(routingAuditFixture);
+    expect(out).toContain("実行枠: harness 不明 / source openai-compatible:qwen / model qwen3-coder / 口座 不明");
+    const withHarness = html({
+      ...routingAuditFixture,
+      runs: routingAuditFixture.runs.map((run) => ({ ...run, harness: "opencode" })),
+    });
+    expect(withHarness).toContain("実行枠: harness opencode / source openai-compatible:qwen / model qwen3-coder");
+  });
+
   it("最終の source・model・account を trace から出す（欠測は不明）", () => {
     const out = html(routingAuditFixture);
     expect(out).toContain("最終: source openai-compatible:qwen / model Qwen/Qwen3-Coder / 口座 不明");
@@ -103,9 +113,9 @@ describe("task の routing shadow 監査（ADR 2026-10-04-multi-objective-model-
 
   it("shadow は primary とは別の節に出し、primary の実行枠は primary の値のまま", () => {
     const out = html(routingShadowFixture);
-    expect(out).toContain("実行枠: 供給元 claude-oauth / model claude-sonnet / 口座 main");
+    expect(out).toContain("実行枠: harness claude-code / source claude-oauth / model claude-sonnet / 口座 main");
     const section = out.indexOf('aria-label="shadow 監査"');
-    expect(section).toBeGreaterThan(out.indexOf("実行枠: 供給元 claude-oauth"));
+    expect(section).toBeGreaterThan(out.indexOf("実行枠: harness claude-code / source claude-oauth"));
     expect(out.match(/aria-label="shadow 監査"/g)).toHaveLength(1);
   });
 
@@ -147,7 +157,7 @@ describe("task の routing estimator shadow 監査（ADR 2026-10-04-multi-object
     const out = html(routingEstimatorShadowFixture);
     const section = out.indexOf('aria-label="estimator shadow 要約"');
     expect(section).toBeGreaterThanOrEqual(0);
-    expect(section).toBeLessThan(out.indexOf("実行枠: 供給元 claude-oauth"));
+    expect(section).toBeLessThan(out.indexOf("実行枠: harness 不明 / source claude-oauth"));
     expect(out).toContain("estimator shadow 要約（estimator: routellm-bert/0.2.2）");
     expect(out).toContain("対象 5 / 完了 2 / 失敗 0 / timeout 1 / 破棄 1 / 評価不能（prompt 必須） 1 / coverage 40.0%");
     expect(out).toContain("primary（実行した決定）と違った 1 件 / heuristic 首位と違った 1 件");

@@ -332,13 +332,71 @@ impl SqliteStore {
         }
         self.with_read_conn(|conn| {
             let halted_projects = Self::halted_projects_locked(conn)?;
-            if task
-                .project_id
-                .is_some_and(|p| halted_projects.contains(&p.to_string()))
-            {
-                return Ok(true);
+            let ancestors = Self::ancestors_locked(conn, task)?;
+            // 途中目標の停止はこの判定に入れない（ADR-0079 D13 の subtree の一時停止と案件の停止だけ）。
+            Ok(!crate::wait::halt_waits(
+                task,
+                &ancestors,
+                &halted_projects,
+                &crate::wait::HaltedSet::new(),
+            )
+            .is_empty())
+        })
+    }
+
+    /// ADR 2026-10-11-task-wait-reasons D3: `task` の DB の事実を読んで `wait::db_waits` を返す。
+    /// 対話は祖先を読まない（停止で止めないので要らない）。
+    pub(super) fn db_waits_locked(
+        conn: &Connection,
+        task: &Task,
+        halted_projects: &crate::wait::HaltedSet,
+        halted_milestones: &crate::wait::HaltedSet,
+    ) -> Result<Vec<crate::wait::TaskWait>, StoreError> {
+        let ancestors = if is_conversation(task) {
+            Vec::new()
+        } else {
+            Self::ancestors_locked(conn, task)?
+        };
+        let mut deps = Vec::with_capacity(task.depends_on.len());
+        for dep_id in &task.depends_on {
+            deps.push((*dep_id, Self::get_locked(conn, *dep_id)?.map(|d| d.status)));
+        }
+        let parent = match task.parent_id {
+            Some(id) => match ancestors.first().filter(|a| a.id == id) {
+                Some(a) => Some(a.clone()),
+                None => Self::get_locked(conn, id)?,
+            },
+            None => None,
+        };
+        Ok(crate::wait::db_waits(&crate::wait::WaitFacts {
+            task,
+            ancestors: &ancestors,
+            deps: &deps,
+            parent: parent.as_ref(),
+            halted_projects,
+            halted_milestones,
+        }))
+    }
+
+    /// ADR 2026-10-11-task-wait-reasons D3: 一覧・木の API 用。各 task の DB の待ち（`wait::db_waits`）を
+    /// `ready_tasks` と同じ読み方で返す（halted 集合は 1 回だけ読む）。終端の task は空。
+    pub(crate) fn db_waits_for_impl(
+        &self,
+        tasks: &[Task],
+    ) -> Result<std::collections::HashMap<TaskId, Vec<crate::wait::TaskWait>>, StoreError> {
+        self.with_read_conn(|conn| {
+            let halted_projects = Self::halted_projects_locked(conn)?;
+            let halted_milestones = Self::halted_milestones_locked(conn)?;
+            let mut out = std::collections::HashMap::new();
+            for task in tasks {
+                let waits = if task.status.is_terminal() {
+                    Vec::new()
+                } else {
+                    Self::db_waits_locked(conn, task, &halted_projects, &halted_milestones)?
+                };
+                out.insert(task.id, waits);
             }
-            Self::halted_by_ancestry_locked(conn, task, &halted_projects)
+            Ok(out)
         })
     }
 
@@ -368,47 +426,12 @@ impl SqliteStore {
             for row in rows {
                 let task = Self::row_to_task(row?)?;
 
-                // ADR-0044 D6（Phase 55）: 止まっている案件・途中目標のタスクは見送る（対話は除く）。
-                if !is_conversation(&task) {
-                    let halted = task
-                        .project_id
-                        .is_some_and(|p| halted_projects.contains(&p.to_string()))
-                        || task
-                            .milestone_id
-                            .is_some_and(|m| halted_milestones.contains(&m.to_string()));
-                    if halted {
-                        continue;
-                    }
-                    // ADR-0079 D13（Phase R5a）: subtree の一時停止。自分か祖先（`parent_id` /
-                    // `tree.parent_unit` の鎖）が `paused_at` を持つか、祖先が止まっている案件に属するなら見送る。
-                    if Self::halted_by_ancestry_locked(conn, &task, &halted_projects)? {
-                        continue;
-                    }
-                }
-
-                // P-78（ADR-0033 D4 / Phase 28）: 対話タスクの `depends_on` は返事を送った順に返すための
-                // 直列化だけが目的で、前の対話タスクの成否には意味が無い。前の対話タスクが終端に達していれば
-                // （`done` だけでなく `failed` / `cancelled` でも）次の対話タスクへ進めてよい。
-                let is_conv = is_conversation(&task);
-                let mut deps_done = true;
-                for dep_id in &task.depends_on {
-                    match Self::get_locked(conn, *dep_id)? {
-                        Some(dep) if dep.status == Status::Done => {}
-                        Some(dep) if is_conv && dep.status.is_terminal() => {}
-                        _ => {
-                            deps_done = false;
-                            break;
-                        }
-                    }
-                }
-                if !deps_done {
-                    continue;
-                }
-
-                if let Some(parent_id) = task.parent_id
-                    && let Some(parent) = Self::get_locked(conn, parent_id)?
-                    && parent.kind == TaskKind::Approval
-                    && parent.status != Status::Done
+                // ADR 2026-10-11-task-wait-reasons D3: 待ちの判定は `wait::db_waits` 1 か所（dispatcher・一覧の
+                // API と同じ関数）。ADR-0044 D6 の案件・途中目標の停止、ADR-0079 D13 の subtree の一時停止
+                // （自分か祖先が `paused_at`、祖先が止まった案件）、depends_on（P-78: 対話は前の対話が終端なら可）、
+                // 未完の Approval の親。対話は停止で止めない。
+                if !Self::db_waits_locked(conn, &task, &halted_projects, &halted_milestones)?
+                    .is_empty()
                 {
                     continue;
                 }
@@ -816,6 +839,7 @@ impl SqliteStore {
         // 古い `ready` / `lease: None` を持っている。そのまま書くと `json` と `status` 列が食い違い、
         // そのタスクは二度と dispatch されず run の結果も捨てられる（Phase 53 の監査で発見）。
         let merged = Task {
+            harness_id: None,
             status: current.status,
             attempts: current.attempts,
             lease: current.lease.clone(),

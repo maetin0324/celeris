@@ -35,7 +35,7 @@ completed: 2026-10-07
   `allow_cos` は `conversation_addressee == Secretary` の run だけ）。
 - schema 再生成: `docs/api/v1/{api-v1,event}.schema.json`、`docs/protocol/worker-protocol.schema.json`、
   `web/api/generated/{schema.json,types.ts}`、`gui/app/celeris/types.ts`。`web/api/realtime/{event-kinds,invalidation-map}.ts` に
-  `worker_policy_violation`。`docs/api/v1/gui-api.md` §3.6 と `docs/architecture-map.md` に追記。
+  `worker_policy_violation`。`docs/api/v1/api.md` §3.6 と `docs/architecture-map.md` に追記。
 
 ## 証拠（コマンドと結果）
 

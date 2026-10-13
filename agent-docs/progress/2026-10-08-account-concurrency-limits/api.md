@@ -25,8 +25,8 @@ updated: 2026-10-08
 - providers: `ProviderConfigFile.concurrency` は `Option`（`skip_serializing_if`）。`POST`/`PATCH` の本文の `concurrency` は型検査（0 は 400）と warn だけで保存しない。
   人が書いた旧値は PATCH の往復で残る。`ProviderView`/`ProviderConfigView` の `concurrency` は残し、schema で deprecated。
 - `DELETE /providers/{id}` は暗黙アカウントの保存値を即時には消さない（行は reload まで dispatcher に残るので、その間は保存値が効く方が一貫する）。
-  次の reload の prune（WU `implicit`）で消える。gui-api.md に明記した。
-- 文書: `docs/api/v1/gui-api.md`（改訂欄、エンドポイント表 113・216、§3.19・3.24・3.25、§3.29〜3.35 に上限と暗黙アカウント、新設 §3.29a、スナップショットの欄）。
+  次の reload の prune（WU `implicit`）で消える。api.md に明記した。
+- 文書: `docs/api/v1/api.md`（改訂欄、エンドポイント表 113・216、§3.19・3.24・3.25、§3.29〜3.35 に上限と暗黙アカウント、新設 §3.29a、スナップショットの欄）。
 - 生成物: `UPDATE_SCHEMA=1 cargo test -p task-api` で `docs/api/v1/api-v1.schema.json`、`corepack pnpm@12.6.0 -C web gen:types` で `web/api/generated/{schema.json,types.ts}`。
   新しい必須欄に合わせて `web/features/ops/accounts-screen.test.tsx` の fixture だけ直した（画面の変更は WU `web`）。
 

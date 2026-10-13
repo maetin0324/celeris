@@ -46,18 +46,6 @@ case "$1" in
 esac
 exit 0
 EOF2
-# gui の pnpm（corepack の shim 相当）。GUI_FAIL_STEP=typecheck なら gui の gate を落とす。
-cat >"$root/bin/pnpm" <<'EOF2'
-#!/usr/bin/env bash
-printf '%s\t%s\n' "$PWD" "$*" >>"$PNPM_LOG"
-[ "${GUI_FAIL_STEP:-}" = "$1" ] && { echo "gui $1 failed (fake)"; exit 1; }
-case "$1" in
-  --version) echo 11.27.0 ;;
-  install) mkdir -p node_modules && : >node_modules/.modules.yaml ;;
-  build) mkdir -p build && echo ok >build/index.html ;;
-esac
-exit 0
-EOF2
 # web の pnpm は `corepack pnpm@12.6.0 …` で呼ばれる。WEB_FAIL_STEP=test なら web-pnpm-test を落とす。
 cat >"$root/bin/corepack" <<'EOF2'
 #!/usr/bin/env bash
@@ -156,11 +144,7 @@ chmod +x "$root/bin/"*
 # ---- 元のリポジトリ（web/ は c1 で足す） --------------------------------------------
 
 repo="$root/repo"
-mkdir -p "$repo/gui" "$repo/crates/task-core/src" "$repo/crates/celeris" "$repo/crates/x/src" "$repo/scripts/selfdeploy"
-printf '{"name":"celeris-gui","version":"0.1.0","packageManager":"pnpm@11.27.0"}\n' >"$repo/gui/package.json"
-printf 'lockfileVersion: 9.0\n' >"$repo/gui/pnpm-lock.yaml"
-printf 'packages:\n  - "."\n' >"$repo/gui/pnpm-workspace.yaml"
-printf '// server\n' >"$repo/gui/server.js"
+mkdir -p "$repo/crates/task-core/src" "$repo/crates/celeris" "$repo/crates/x/src" "$repo/scripts/selfdeploy"
 printf 'pub const SCHEMA_VERSION: u32 = 7;\n' >"$repo/crates/task-core/src/store.rs"
 printf '[package]\nname = "celeris"\nversion = "0.1.0"\n' >"$repo/crates/celeris/Cargo.toml"
 printf '// v0\n' >"$repo/crates/x/src/lib.rs"
@@ -170,6 +154,7 @@ mkdir -p "$repo/scripts/dev" "$repo/tools/nextest"
 cp "$here/../dev/test-parallel.sh" "$repo/scripts/dev/"
 cp "$here/../dev/source-size-report.py" "$repo/scripts/dev/"
 cp "$here/../../tools/nextest/VERSION" "$repo/tools/nextest/"
+. "$here/tests/fixtures/web-release.sh"
 git init -q "$repo"
 gitc() { git -C "$repo" -c user.email=t@example.invalid -c user.name=t "$@"; }
 commit() { printf "// %s\n" "$1" >"$repo/crates/x/src/lib.rs"; gitc add -A && gitc commit -q -m "$1" && git -C "$repo" rev-parse HEAD; }
@@ -177,11 +162,7 @@ commit() { printf "// %s\n" "$1" >"$repo/crates/x/src/lib.rs"; gitc add -A && gi
 # ---- 元のリポジトリ（web/ は c1 で足す） --------------------------------------------
 
 repo="$root/repo"
-mkdir -p "$repo/gui" "$repo/crates/task-core/src" "$repo/crates/celeris" "$repo/crates/x/src" "$repo/scripts/selfdeploy"
-printf '{"name":"celeris-gui","version":"0.1.0","packageManager":"pnpm@11.27.0"}\n' >"$repo/gui/package.json"
-printf 'lockfileVersion: 9.0\n' >"$repo/gui/pnpm-lock.yaml"
-printf 'packages:\n  - "."\n' >"$repo/gui/pnpm-workspace.yaml"
-printf '// server\n' >"$repo/gui/server.js"
+mkdir -p "$repo/crates/task-core/src" "$repo/crates/celeris" "$repo/crates/x/src" "$repo/scripts/selfdeploy"
 printf 'pub const SCHEMA_VERSION: u32 = 7;\n' >"$repo/crates/task-core/src/store.rs"
 printf '[package]\nname = "celeris"\nversion = "0.1.0"\n' >"$repo/crates/celeris/Cargo.toml"
 printf '// v0\n' >"$repo/crates/x/src/lib.rs"
@@ -191,6 +172,7 @@ mkdir -p "$repo/scripts/dev" "$repo/tools/nextest"
 cp "$here/../dev/test-parallel.sh" "$repo/scripts/dev/"
 cp "$here/../dev/source-size-report.py" "$repo/scripts/dev/"
 cp "$here/../../tools/nextest/VERSION" "$repo/tools/nextest/"
+. "$here/tests/fixtures/web-release.sh"
 git init -q "$repo"
 gitc() { git -C "$repo" -c user.email=t@example.invalid -c user.name=t "$@"; }
 
@@ -199,7 +181,7 @@ run_release() {
   : >"$root/corepack.log"
   CELERIS_STATE_DIR="$root/state" CELERIS_CONFIG_DIR="$root/config" CELERIS_CONFIG="$root/config/config.toml" \
     SD_REPO="$repo" SD_CELERISCTL="$root/bin/celerisctl" SD_PNPM_SHIM_DIR="$root/bin" \
-    PNPM_LOG="$root/pnpm.log" COREPACK_LOG="$root/corepack.log" FAKE_SCRATCH="$root/scratch" SD_GATE_SKIP_WEB=1 SD_RELEASE_PRUNE=0 \
+    PNPM_LOG="$root/pnpm.log" COREPACK_LOG="$root/corepack.log" FAKE_SCRATCH="$root/scratch" SD_RELEASE_PRUNE=0 \
     FAKE_LOG="$root/fake.log" SD_BROWSER_LEDGER_RUNNER="$root/bin/fake-runner" \
     SD_BROWSER_LEDGER_CHECK_BIN="$root/bin/celerisctl" SD_BROWSER_LEDGER_TIMEOUT=120 \
     PATH="$root/bin:$PATH" bash "$here/release.sh" "$1" >"$root/release.out" 2>&1

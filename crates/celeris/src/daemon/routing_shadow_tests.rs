@@ -70,7 +70,7 @@ async fn fake_upstream() -> (String, Arc<AtomicU32>) {
 
 fn base(dir: &std::path::Path) -> String {
     format!(
-        "db = {:?}\nworkspace_root = {:?}\n[[providers]]\nid = \"x\"\nadapter = \"fake\"\n",
+        "db = {:?}\nworkspace_root = {:?}\n",
         dir.join("db.sqlite3"),
         dir.join("ws"),
     )
@@ -126,7 +126,7 @@ fn job(id: &str) -> ShadowJob {
         primary_resource_group: None,
         candidate_resource_group: None,
         request: ChatCompletionRequest {
-            model: "celeris/cheap".into(),
+            model: "qwen/qwen3.8-27b".into(),
             messages: vec![ChatMessage {
                 role: "user".into(),
                 content: Some(MessageContent::Text("hi".into())),
@@ -177,11 +177,11 @@ async fn routing_shadow_wiring_defaults_off_and_reloads() {
     let mut dispatcher = build_dispatcher(&config, Default::default()).unwrap();
     assert!(!dispatcher.routing_shadow_policy().execute);
     let dispatcher_deps = deps(&config, &dispatcher, &url, "instance-off");
-    let wiring = install_proxy_shadow(&mut dispatcher, dispatcher_deps).unwrap();
+    let wiring = install_proxy_shadow(&mut dispatcher, false, dispatcher_deps).unwrap();
     assert!(wiring.shadow.is_none());
     let off = Arc::clone(&wiring.control);
     assert!(!off.installed() && off.queue().is_none() && !off.decision_on());
-    // reload で有効にしても dispatcher は新しい policy を持ち、proxy は再起動まで送らない。
+    // 明示的な model_routing を reload すると dispatcher は更新されるが、未配線の proxy は無効のまま。
     reload_with(
         &path,
         format!("{base}{}", capped(2)),
@@ -193,7 +193,7 @@ async fn routing_shadow_wiring_defaults_off_and_reloads() {
         dispatcher.dispatch_routing().mode,
         task_core::model_router::policy::RoutingMode::Shadow
     );
-    assert!(off.decision_on() && off.queue().is_none());
+    assert!(!off.decision_on() && off.queue().is_none());
     assert_eq!(hits.load(Ordering::SeqCst), 0, "default must not send");
 
     // 2) instance A: execute = true（上限 2）で起動すると queue ができ、共有 DB に予約して送る。
@@ -202,7 +202,7 @@ async fn routing_shadow_wiring_defaults_off_and_reloads() {
     let mut config_a = Config::load(&path_a).unwrap();
     let mut dispatcher_a = build_dispatcher(&config_a, Default::default()).unwrap();
     let dispatcher_a_deps = deps(&config_a, &dispatcher_a, &url, "instance-a");
-    let wiring_a = install_proxy_shadow(&mut dispatcher_a, dispatcher_a_deps).unwrap();
+    let wiring_a = install_proxy_shadow(&mut dispatcher_a, true, dispatcher_a_deps).unwrap();
     let shadow_a = wiring_a.shadow.expect("execute policy installs shadow");
     assert!(shadow_a.decision.is_some());
     let queue_a = Arc::clone(shadow_a.execution.as_ref().expect("queue"));
@@ -237,7 +237,7 @@ async fn routing_shadow_wiring_defaults_off_and_reloads() {
     let config_b = Config::load(&path_b).unwrap();
     let mut dispatcher_b = build_dispatcher(&config_b, Default::default()).unwrap();
     let dispatcher_b_deps = deps(&config_b, &dispatcher_b, &url, "instance-b");
-    let wiring_b = install_proxy_shadow(&mut dispatcher_b, dispatcher_b_deps).unwrap();
+    let wiring_b = install_proxy_shadow(&mut dispatcher_b, true, dispatcher_b_deps).unwrap();
     let queue_b = Arc::clone(wiring_b.control.queue().expect("queue"));
     for id in ["b1", "b2"] {
         queue_b.submit(job(id));

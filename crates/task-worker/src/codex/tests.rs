@@ -84,6 +84,7 @@ fn stub_codex(dir: &std::path::Path, script: &str) -> CodexConfig {
 
 fn sample_req(workspace: std::path::PathBuf) -> RunRequest {
     RunRequest {
+        llm_route: None,
         cargo_target_dir: None,
         protocol: PROTOCOL_VERSION,
         task: crate::protocol::tests::sample_task(),
@@ -928,7 +929,6 @@ async fn command_line_has_exec_json_model_then_prompt_as_last_arg() {
         },
         extra_args: vec!["--sandbox".into(), "read-only".into()],
         model: Some("gpt-5-codex".into()),
-        reasoning_effort: None,
         env: vec![(
             "CODEX_HOME".into(),
             dir.path().join("codex-home").to_string_lossy().into_owned(),
@@ -1113,169 +1113,41 @@ async fn with_env_overrides_a_same_name_key_already_in_config_env() {
     let seen = std::fs::read_to_string(&out_file).unwrap();
     assert_eq!(seen, dir.path().join("new-account-dir").to_string_lossy());
 }
+/// ADR 2026-10-11 llm-source-harness-selection: the route's model (`with_model`) reaches the CLI's
+/// `--model` and survives the account environment layered on top (`with_env`).
 #[tokio::test]
-async fn tier_binding_reaches_cli_model_argument_and_preserves_account_env() {
-    use task_core::{Tier, model_routing::ModelBinding};
-    for tier in [Tier::Frontier, Tier::Standard, Tier::Cheap] {
-        let dir = tempfile::tempdir().unwrap();
-        let config = stub_codex(
-            dir.path(),
-            r#"
+async fn route_model_reaches_cli_model_argument_and_preserves_account_env() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = stub_codex(
+        dir.path(),
+        r#"
 for a in "$@"; do printf '%s\0' "$a" >> args.log; done
 printf '%s' "$ROUTING_ACCOUNT" > account.log
 mkdir -p artifacts
 printf '%s' '{"summary":"ok","evidence":[]}' > artifacts/result.json
 printf '%s\n' '{"type":"turn.completed"}'
 "#,
-        );
-        let expected = format!("explicit-{tier:?}");
-        let adapter = crate::tiered::TieredAdapter {
-            base: Arc::new(CodexAdapter::new(config)),
-            account_id: Some("account-a".into()),
-            credential_error: None,
-            models: [(
-                tier,
-                ModelBinding {
-                    name: "requested-name".into(),
-                    model_id: Some(expected.clone()),
-                    unavailable_reason: None,
-                    reasoning_effort: None,
-                },
-            )]
-            .into(),
-        };
-        let adapter = adapter
-            .with_env(&[("ROUTING_ACCOUNT".into(), "account-a".into())])
-            .unwrap();
-        assert_eq!(adapter.account_id(), Some("account-a"));
-        let mut req = sample_req(dir.path().to_path_buf());
-        req.task.worker_hint.tier = tier;
-        let _ = adapter
-            .run(req, "tier-run", default_limits(), &RecordingSink::default())
-            .await
-            .unwrap();
-        let args = std::fs::read_to_string(dir.path().join("args.log")).unwrap();
-        let args: Vec<_> = args.split('\0').collect();
-        let model = args.windows(2).find(|pair| pair[0] == "--model").unwrap()[1];
-        assert_eq!(model, expected);
-        assert_eq!(
-            std::fs::read_to_string(dir.path().join("account.log")).unwrap(),
-            "account-a"
-        );
-    }
-}
-
-/// ADR-0069 Phase 118 D1: tier ごとの `reasoning_effort` が実際に `-c
-/// model_reasoning_effort="<値>"` として（fresh 起動で）渡ること。`model_id` と両方を検証する。
-#[tokio::test]
-async fn tier_reasoning_effort_reaches_cli_as_a_dash_c_config_override() {
-    use task_core::{Tier, model_routing::ModelBinding};
-    let cases = [
-        (Tier::Frontier, "explicit-frontier", "high"),
-        (Tier::Standard, "explicit-standard", "medium"),
-        (Tier::Cheap, "explicit-cheap", "low"),
-    ];
-    for (tier, model_id, effort) in cases {
-        let dir = tempfile::tempdir().unwrap();
-        let config = stub_codex(dir.path(), args_log_script());
-        let adapter = crate::tiered::TieredAdapter {
-            base: Arc::new(CodexAdapter::new(config)),
-            account_id: None,
-            credential_error: None,
-            models: [(
-                tier,
-                ModelBinding {
-                    name: "requested-name".into(),
-                    model_id: Some(model_id.into()),
-                    unavailable_reason: None,
-                    reasoning_effort: Some(effort.into()),
-                },
-            )]
-            .into(),
-        };
-        let mut req = sample_req(dir.path().to_path_buf());
-        req.task.worker_hint.tier = tier;
-        let _ = adapter
-            .run(
-                req,
-                "effort-run",
-                default_limits(),
-                &RecordingSink::default(),
-            )
-            .await
-            .unwrap();
-        let args = captured_args(dir.path());
-        let model = args.windows(2).find(|pair| pair[0] == "--model").unwrap()[1].clone();
-        assert_eq!(model, model_id);
-        let expected_override = format!("model_reasoning_effort=\"{effort}\"");
-        assert!(
-            args.windows(2)
-                .any(|pair| pair[0] == "-c" && pair[1] == expected_override),
-            "expected -c {expected_override:?} in {args:?}"
-        );
-    }
-}
-
-/// ADR-0069 Phase 118 D1: `exec resume` の形でも同じ `-c model_reasoning_effort=…` が乗る
-/// （resume のホワイトリストは `-c key=value` を任意個数許す。Phase 68c）。
-#[tokio::test]
-async fn resume_run_also_carries_the_reasoning_effort_config_override() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut config = stub_codex(dir.path(), args_log_script());
-    config.model = Some("gpt-6-astra".into());
-    config.reasoning_effort = Some("high".into());
-    let adapter = CodexAdapter::new(config);
-    let mut req = sample_req(dir.path().to_path_buf());
-    req.context.session = Some(crate::protocol::SessionHandle {
-        adapter: CodexAdapter::ID.to_string(),
-        session_id: "thread-effort".to_string(),
-        resume: true,
-    });
+    );
+    let adapter = CodexAdapter::new(config)
+        .with_model("route-model")
+        .expect("codex takes a model")
+        .with_env(&[("ROUTING_ACCOUNT".into(), "account-a".into())])
+        .expect("codex takes an env");
     let _ = adapter
         .run(
-            req,
-            "run-resume-effort",
+            sample_req(dir.path().to_path_buf()),
+            "route-run",
             default_limits(),
             &RecordingSink::default(),
         )
         .await
         .unwrap();
     let args = captured_args(dir.path());
-    assert_eq!(args[0], "exec");
-    assert_eq!(args[1], "resume");
-    assert!(
-        args.windows(2)
-            .any(|pair| pair[0] == "-c" && pair[1] == "model_reasoning_effort=\"high\""),
-        "{args:?}"
-    );
-    assert!(
-        args.windows(2)
-            .any(|pair| pair[0] == "-c" && pair[1] == "model=\"gpt-6-astra\""),
-        "{args:?}"
-    );
-}
-
-/// ADR-0069 Phase 118 D1: effort が設定されていなければ `-c model_reasoning_effort=…` は現れない
-/// （既定の後方互換）。
-#[tokio::test]
-async fn without_reasoning_effort_no_config_override_is_added() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = stub_codex(dir.path(), args_log_script());
-    let adapter = CodexAdapter::new(config);
-    let req = sample_req(dir.path().to_path_buf());
-    let _ = adapter
-        .run(
-            req,
-            "run-no-effort",
-            default_limits(),
-            &RecordingSink::default(),
-        )
-        .await
-        .unwrap();
-    let args = captured_args(dir.path());
-    assert!(
-        !args.iter().any(|a| a.starts_with("model_reasoning_effort")),
-        "{args:?}"
+    let model = args.windows(2).find(|pair| pair[0] == "--model").unwrap()[1].clone();
+    assert_eq!(model, "route-model");
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("account.log")).unwrap(),
+        "account-a"
     );
 }
 

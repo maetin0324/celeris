@@ -26,6 +26,7 @@ fn dt(title: &str, deps: Vec<DelegateDep>) -> DelegateTask {
 fn parent() -> Task {
     let now = OffsetDateTime::now_utc();
     Task {
+        harness_id: Some(crate::llm_route::HarnessId::from("fake")),
         requirements: Default::default(),
         tree: None,
         paused_at: None,
@@ -45,7 +46,6 @@ fn parent() -> Task {
         priority: 3,
         worker_hint: WorkerHint {
             tier: Tier::Frontier,
-            adapter: Some("fake".into()),
         },
         workspace: WorkspaceSpec::Local {
             path: PathBuf::from("/tmp/ws"),
@@ -213,7 +213,7 @@ fn materialize_applies_role_defaults_and_maps_index_dependencies_of_accepted_onl
     let roles = vec![RoleSpec {
         id: "implementer".into(),
         tier: Some(Tier::Cheap),
-        adapter: Some("codex".into()),
+        harness: Some("codex".into()),
         max_turns: Some(3),
         max_wall_secs: None,
         instructions: Some("implement".into()),
@@ -240,7 +240,7 @@ fn materialize_applies_role_defaults_and_maps_index_dependencies_of_accepted_onl
     assert_eq!(out[0].status, Status::Draft);
     assert_eq!(out[0].role.as_deref(), Some("implementer"));
     assert_eq!(out[0].worker_hint.tier, Tier::Cheap);
-    assert_eq!(out[0].worker_hint.adapter.as_deref(), Some("codex"));
+    assert_eq!(out[0].harness_id.as_ref().map(AsRef::as_ref), Some("codex"));
     assert_eq!(out[0].budget.max_turns, 3);
     assert_eq!(out[0].budget.max_wall_secs, 600);
     assert_eq!(out[0].priority, 3);
@@ -250,7 +250,7 @@ fn materialize_applies_role_defaults_and_maps_index_dependencies_of_accepted_onl
     // b は a（採用）だけに依存し、c（不採用）への依存は落ちる。役割無しは親の tier / adapter。
     assert_eq!(out[1].depends_on, vec![out[0].id]);
     assert_eq!(out[1].worker_hint.tier, Tier::Frontier);
-    assert_eq!(out[1].worker_hint.adapter.as_deref(), Some("fake"));
+    assert_eq!(out[1].harness_id.as_ref().map(AsRef::as_ref), Some("fake"));
     // タスクの tier は役割の既定より優先。
     let out = materialize_delegated(
         &p,
@@ -355,7 +355,7 @@ fn materialize_applies_genre_default_role_when_task_has_no_role() {
     let roles = vec![RoleSpec {
         id: "literature-reader".into(),
         tier: Some(Tier::Standard),
-        adapter: Some("acp".into()),
+        harness: Some("acp".into()),
         max_turns: Some(5),
         max_wall_secs: Some(1200),
         instructions: None,
@@ -383,7 +383,7 @@ fn materialize_applies_genre_default_role_when_task_has_no_role() {
     );
     assert_eq!(out[0].genre.as_deref(), Some("literature"));
     assert_eq!(out[0].worker_hint.tier, Tier::Standard);
-    assert_eq!(out[0].worker_hint.adapter.as_deref(), Some("acp"));
+    assert_eq!(out[0].harness_id.as_ref().map(AsRef::as_ref), Some("acp"));
     assert_eq!(out[0].budget.max_turns, 5);
     assert_eq!(out[0].budget.max_wall_secs, 1200);
 }
@@ -397,7 +397,7 @@ fn materialize_role_default_wins_over_genre_default_which_wins_over_parent() {
         RoleSpec {
             id: "implementer".into(),
             tier: None, // 役割自身は tier を決めない -> 分野の既定に委ねる
-            adapter: Some("codex".into()),
+            harness: Some("codex".into()),
             max_turns: None,
             max_wall_secs: None,
             instructions: None,
@@ -405,7 +405,7 @@ fn materialize_role_default_wins_over_genre_default_which_wins_over_parent() {
         RoleSpec {
             id: "lead".into(),
             tier: Some(Tier::Cheap),
-            adapter: None,
+            harness: None,
             max_turns: Some(20),
             max_wall_secs: None,
             instructions: None,
@@ -426,7 +426,7 @@ fn materialize_role_default_wins_over_genre_default_which_wins_over_parent() {
         OffsetDateTime::now_utc(),
     );
     // adapter は role（implementer）の既定が優先（parent の "fake" にも分野の既定にも負けない）。
-    assert_eq!(out[0].worker_hint.adapter.as_deref(), Some("codex"));
+    assert_eq!(out[0].harness_id.as_ref().map(AsRef::as_ref), Some("codex"));
     // tier は role（implementer）に既定が無いので、分野の既定役割（lead）の tier を借りる
     // （親の tier = Frontier ではなく Cheap になる）。
     assert_eq!(out[0].worker_hint.tier, Tier::Cheap);
@@ -460,14 +460,14 @@ fn materialize_drops_the_delegated_assignee_and_records_it() {
         RoleSpec {
             id: "literature-reader".into(),
             tier: Some(Tier::Cheap),
-            adapter: Some("paperqa".into()),
+            harness: Some("paperqa".into()),
             max_turns: Some(5),
             ..RoleSpec::default()
         },
         RoleSpec {
             id: "writer".into(),
             tier: Some(Tier::Standard),
-            adapter: Some("claude-code".into()),
+            harness: Some("claude-code".into()),
             ..RoleSpec::default()
         },
     ];
@@ -523,7 +523,10 @@ fn materialize_drops_the_delegated_assignee_and_records_it() {
         now,
     );
     assert_eq!(out[0].assignee, None);
-    assert_eq!(out[0].worker_hint.adapter.as_deref(), Some("claude-code"));
+    assert_eq!(
+        out[0].harness_id.as_ref().map(AsRef::as_ref),
+        Some("claude-code")
+    );
     assert_eq!(out[0].worker_hint.tier, Tier::Standard);
 
     // 3. 分野を持たないノード・組織に無い id は既定を変えない（知らない id は担当にもしない）。

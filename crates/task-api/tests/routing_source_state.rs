@@ -108,6 +108,7 @@ async fn routing_source_api_reports_freshness_and_cost_components() {
     let env = TestEnv::with(EnvOptions {
         token: Some(TOKEN.into()),
         llm_sources: Some(Arc::new(StateReader)),
+        harnesses: None,
         ..Default::default()
     });
     let app = env.router();

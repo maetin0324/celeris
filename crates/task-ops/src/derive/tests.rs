@@ -384,6 +384,7 @@ fn last_run_id_none_without_worker_started() {
 fn sample_task(title: &str, attempts: u32) -> Task {
     let now = time::OffsetDateTime::now_utc();
     Task {
+        harness_id: None,
         requirements: Default::default(),
         tree: None,
         paused_at: None,
@@ -403,7 +404,6 @@ fn sample_task(title: &str, attempts: u32) -> Task {
         priority: 0,
         worker_hint: task_core::WorkerHint {
             tier: task_core::Tier::Standard,
-            adapter: None,
         },
         workspace: task_core::WorkspaceSpec::Local {
             path: "/tmp".into(),

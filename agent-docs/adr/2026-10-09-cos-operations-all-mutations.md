@@ -47,9 +47,9 @@ Live View の grant/check/read は owner attestation を入力するため除外
 
 | method | path | 理由コード | 理由 |
 |---|---|---|---|
-| DELETE | `/accounts/{id}/login` | `secret_operations` | 人の決定 secrets=exclude。秘密値を扱う系列を全て除外（取消・削除も含む）。 |
-| POST | `/accounts/{id}/login` | `secret_operations` | 人の決定 secrets=exclude。秘密値を扱う系列を全て除外（取消・削除も含む）。 |
-| POST | `/accounts/{id}/login/code` | `secret_operations` | 人の決定 secrets=exclude。秘密値を扱う系列を全て除外（取消・削除も含む）。 |
+| DELETE | `/llm/sources/{source_id}/accounts/{account_id}/login` | `secret_operations` | 人の決定 secrets=exclude。秘密値を扱う系列を全て除外（取消・削除も含む）。 |
+| POST | `/llm/sources/{source_id}/accounts/{account_id}/login` | `secret_operations` | 人の決定 secrets=exclude。秘密値を扱う系列を全て除外（取消・削除も含む）。 |
+| POST | `/llm/sources/{source_id}/accounts/{account_id}/login/code` | `secret_operations` | 人の決定 secrets=exclude。秘密値を扱う系列を全て除外（取消・削除も含む）。 |
 | DELETE | `/clusters/{id}/connect` | `secret_operations` | 人の決定 secrets=exclude。秘密値を扱う系列を全て除外（取消・削除も含む）。 |
 | POST | `/clusters/{id}/connect` | `secret_operations` | 人の決定 secrets=exclude。秘密値を扱う系列を全て除外（取消・削除も含む）。 |
 | POST | `/clusters/{id}/connect/code` | `secret_operations` | 人の決定 secrets=exclude。秘密値を扱う系列を全て除外（取消・削除も含む）。 |
@@ -85,6 +85,10 @@ Live View の grant/check/read は owner attestation を入力するため除外
 | POST | `/tasks/{id}/browser/waits/{wait_id}/registered` | `browser_credential_attestation` | 人の決定 secrets=exclude。credential・封緘 state・receipt・owner attestation／信頼端末を扱う系列。値を含まない失効・削除も除外。 |
 | POST | `/tasks/{id}/browser/waits/{wait_id}/revoke` | `browser_credential_attestation` | 人の決定 secrets=exclude。credential・封緘 state・receipt・owner attestation／信頼端末を扱う系列。値を含まない失効・削除も除外。 |
 | POST | `/plans` | `removed_by_adr_0079` | ADR-0079 D13/R5a で撤去済み。人にも変更できない 410 の互換入口を復活させない。 |
+| POST | `/tasks/{id}/integrations/{repo}/merge` | `integration_human_decision` | merge is a human-only filesystem git operation and cannot run as an agent CoS operation |
+| POST | `/tasks/{id}/integrations/{repo}/discard` | `integration_human_decision` | discard is an explicit human disposition and requires the admin credential |
+| POST | `/tasks/{id}/integrations/{repo}/hold` | `integration_human_decision` | hold is an explicit human disposition and requires the admin credential |
+| POST | `/tasks/{id}/integrations/{repo}/reopen` | `integration_human_decision` | reopen is an explicit human disposition and requires the admin credential |
 
 `/cos/*` は上の現存 4 route だけでなく subtree 全体を再帰対象として拒否する（method に依らない）。
 checkpoint・resolve は本来の CoS 制御 API として直接使う。人の override を操作 envelope に内包しない。
@@ -99,19 +103,19 @@ checkpoint・resolve は本来の CoS 制御 API として直接使う。人の 
 POST / PUT / PATCH / DELETE を method/path ごとに数えた。`put_route` 別名と browser control の BASE/format! を展開し、
 `{a}`/`{id}` 等の引数名の差は同じ route として照合した。query（docs/page の path/etag 等）は
 route key に含めず、共有処理の既存検査へ渡す。GET はこの変更表に含めない。
-**142 行、router と文書で共通 128 行、router のみ 14 行、文書のみ 0 行**。
+**146 行、router と文書で共通 132 行、router のみ 14 行、文書のみ 0 行**。
 文書にない route も落とさない（cron、notifications、inbox answer、role assignment、site policy 等）。
 実在しない project/milestone DELETE を人の回答の例示から新設しない。
 
 A は監査付き許可、R は書込みをしない POST だが method の網羅性のため監査付き許可、X は D2 の理由付き除外。
 foundation は A/R の既存登録を ALLOWED に、未実装行を PENDING に、X を EXCLUDED に置く。
-verify では PENDING を消し、全 142 行が ALLOWED/EXCLUDED の一方だけに入ることを検査する。
+verify では PENDING を消し、全 146 行が ALLOWED/EXCLUDED の一方だけに入ることを検査する。
 R の操作では領域 write は不要だが operation・event・card は同一 transaction に記録する。
 今後の route 追加では同時にこの範囲契約と registry・ctl・skill を更新する。
 
 | registry 領域 | 担当 unit | 境界 | 全行 | 許可 A/R | 除外 X |
 |---|---|---|---|---|---|
-| tasks | ops-tasks | task・comments・execution・tree adopt・task changes・旧 plans | 22 | 21 | 1 |
+| tasks | ops-tasks | task・comments・execution・tree adopt・task changes・integration dispositions・旧 plans | 26 | 21 | 5 |
 | decisions | ops-decisions | decision・approval・inbox・knowledge・notifications | 11 | 11 | 0 |
 | projects | ops-projects | project・milestone・旧 project plan・project docs・reports・standing rules | 23 | 15 | 8 |
 | admin | ops-admin | provider・account・cluster・secret・org 設定・repo・skill・LLM・cron・release・daemon | 45 | 37 | 8 |
@@ -134,6 +138,10 @@ R の操作では領域 write は不要だが operation・event・card は同一
 | POST | `/tasks/{id}/cancel` | A | `handlers.rs` | 共通 |
 | POST | `/tasks/{id}/changes/{repo}/integrate` | A | `changes.rs` | 共通 |
 | POST | `/tasks/{id}/changes/{repo}/pr/merge` | A | `changes.rs` | 共通 |
+| POST | `/tasks/{id}/integrations/{repo}/merge` | X: `integration_human_decision` | `integrations.rs` | 共通 |
+| POST | `/tasks/{id}/integrations/{repo}/discard` | X: `integration_human_decision` | `integrations.rs` | 共通 |
+| POST | `/tasks/{id}/integrations/{repo}/hold` | X: `integration_human_decision` | `integrations.rs` | 共通 |
+| POST | `/tasks/{id}/integrations/{repo}/reopen` | X: `integration_human_decision` | `integrations.rs` | 共通 |
 | POST | `/tasks/{id}/comments` | A | `handlers.rs` | 共通 |
 | POST | `/tasks/{id}/execution-plan` | A | `execution.rs` | 共通 |
 | PUT | `/tasks/{id}/execution-plan` | A | `execution.rs` | 共通 |
@@ -196,15 +204,14 @@ R の操作では領域 write は不要だが operation・event・card は同一
 
 | method | path | 判定 | 根拠となる router module | API 表 |
 |---|---|---|---|---|
-| POST | `/accounts` | A | `handlers.rs` | 共通 |
-| DELETE | `/accounts/{id}` | A | `handlers.rs` | 共通 |
-| POST | `/accounts/{id}/check` | A | `handlers.rs` | 共通 |
-| PATCH | `/accounts/{id}/{account}` | A | `handlers.rs` | 共通（ADR 2026-10-08-account-concurrency-limits §(d) の統合で追加。`{id}` は adapter） |
-| PATCH | `/accounts/{id}/check` | A | `handlers.rs` | 共通（同上。id が `check` のアカウント） |
-| PATCH | `/accounts/{id}/login` | A | `handlers.rs` | 共通（同上。id が `login` のアカウント） |
-| DELETE | `/accounts/{id}/login` | X: `secret_operations` | `handlers.rs` | 共通 |
-| POST | `/accounts/{id}/login` | X: `secret_operations` | `handlers.rs` | 共通 |
-| POST | `/accounts/{id}/login/code` | X: `secret_operations` | `handlers.rs` | 共通 |
+| GET | `/llm/accounts` | read | handlers.rs | 共通 |
+| POST | `/llm/sources/{source_id}/accounts` | A | handlers.rs | 共通 |
+| DELETE | `/llm/sources/{source_id}/accounts/{account_id}` | A | handlers.rs | 共通 |
+| POST | `/llm/sources/{source_id}/accounts/{account_id}/check` | A | handlers.rs | 共通 |
+| PATCH | `/llm/sources/{source_id}/accounts/{account_id}` | A | handlers.rs | 共通 |
+| DELETE | `/llm/sources/{source_id}/accounts/{account_id}/login` | X: `secret_operations` | handlers.rs | 共通 |
+| POST | `/llm/sources/{source_id}/accounts/{account_id}/login` | X: `secret_operations` | handlers.rs | 共通 |
+| POST | `/llm/sources/{source_id}/accounts/{account_id}/login/code` | X: `secret_operations` | handlers.rs | 共通 |
 | DELETE | `/clusters/{id}/connect` | X: `secret_operations` | `handlers.rs` | 共通 |
 | POST | `/clusters/{id}/connect` | X: `secret_operations` | `handlers.rs` | 共通 |
 | POST | `/clusters/{id}/connect/code` | X: `secret_operations` | `handlers.rs` | 共通 |
@@ -215,11 +222,6 @@ R の操作では領域 write は不要だが operation・event・card は同一
 | POST | `/cron-jobs/{id}/pause` | A | `cron_jobs.rs` | router のみ |
 | POST | `/cron-jobs/{id}/resume` | A | `cron_jobs.rs` | router のみ |
 | POST | `/cron-jobs/{id}/run` | A | `cron_jobs.rs` | router のみ |
-| POST | `/llm/models/assignments/preview` | R | `model_assignments.rs` | 共通 |
-| PUT | `/llm/models/assignments/roles/{tier}` | A | `model_assignments.rs` | router のみ |
-| POST | `/llm/models/assignments/roles/{tier}/preview` | R | `model_assignments.rs` | router のみ |
-| DELETE | `/llm/models/assignments/{source}/{tier}` | A | `model_assignments.rs` | 共通 |
-| PUT | `/llm/models/assignments/{source}/{tier}` | A | `model_assignments.rs` | 共通 |
 | POST | `/llm/models/discover` | A | `model_catalog.rs` | 共通 |
 | DELETE | `/llm/models/{source}/{model_id}/override` | A | `model_catalog.rs` | 共通 |
 | PUT | `/llm/models/{source}/{model_id}/override` | A | `model_catalog.rs` | 共通 |
@@ -231,10 +233,6 @@ R の操作では領域 write は不要だが operation・event・card は同一
 | POST | `/org/{id}/skills` | A | `skills.rs` | 共通 |
 | DELETE | `/org/{id}/skills/{skill}` | A | `skills.rs` | 共通 |
 | POST | `/projects/{id}/repos` | A | `repos.rs` | 共通 |
-| POST | `/providers` | A | `handlers.rs` | 共通 |
-| DELETE | `/providers/{id}` | A | `handlers.rs` | 共通 |
-| PATCH | `/providers/{id}` | A | `handlers.rs` | 共通 |
-| POST | `/providers/{id}/check` | A | `handlers.rs` | 共通 |
 | POST | `/releases/{sha12}/promote` | A | `releases.rs` | 共通 |
 | POST | `/reload` | A | `handlers.rs` | 共通 |
 | POST | `/replay` | R | `handlers.rs` | 共通 |
@@ -382,7 +380,6 @@ D6 の必須例を先に登録した。各操作は handler と CoS dispatch が
 | `task.retry` | POST `/tasks/{id}/retry` | ta `retry_op` → to `retry::plan_retry` → tc `retry_task_tx` | `execution` の明示（`finish_retry`） |
 | `task.pause` / `task.resume` | POST `/tasks/{id}/pause`・`resume` | ta `lifecycle::task_pause_op` → to `lifecycle::plan_set_paused` → tc `edit_task_tx` | なし |
 | `execution.put_plan` | PUT `/tasks/{id}/execution-plan` | ta `execution::put_plan_audited` → to `execution::plan_replan` → tc `execution_plan_replan_tx` | なし |
-| `model_assignment.put` / `.delete` | PUT・DELETE `/llm/models/assignments/{source}/{tier}` | ta `model_assignments::{put,delete}_assignment_audited` → tc `model_role_assignment_{set,delete}_tx` | なし |
 | `knowledge.accept` | POST `/knowledge/inbox/{id}/accept` | ta `knowledge::accept_op`（`reject_op` と同じく git の取り込みを tx の中で行い、失敗は rejected） | なし |
 
 - 領域 event の書き手は `cos`（`Edited.by`・`DecisionAnswered.by`・`DecisionWithdrawn.reason` の接頭辞・割り当ての
@@ -434,3 +431,7 @@ D6 の必須例を先に登録した。各操作は handler と CoS dispatch が
 ADR 2026-10-08-account-concurrency-limits の `PATCH /accounts/{adapter}/{id}`（`max_runs` の設定・解除）を main に統合したとき、
 D1 の「全変更を CoS の操作にする」に従い `account.limit_set`（外部効果 C: daemon の channel で表と DB を更新）として ALLOWED に加えた。
 `check` / `login` を id に持つアカウントは静的な路で受けるので、その 2 行も同じ action に割り当てる。除外の理由（D2）には当たらない（秘密値を扱わない）。
+
+## 付記: provider 管理 API と model assignment API の撤去（2026-10-11）
+
+`/providers` の CRUD・check と `/llm/models/assignments` の割り当て操作を撤去した。実行経路は `llm_route` と config 宣言で選ぶため、固定 provider の管理 API と model assignment API は提供しない。CoS operation registry、cos-operator の操作表、celerisctl の対応 command も合わせて削除した。`/reload` は config reload として維持する。

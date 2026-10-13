@@ -144,7 +144,11 @@ mod tests {
             .set_times(std::fs::FileTimes::new().set_modified(old_time))
             .unwrap();
         let config = tmp.path().join("config.toml");
-        std::fs::write(&config, format!("[workspace]\nbuild_cache_dir = \"{}\"\n[[providers]]\nid = \"x\"\nadapter = \"fake\"\n", cache.display())).unwrap();
+        std::fs::write(
+            &config,
+            format!("[workspace]\nbuild_cache_dir = \"{}\"\n", cache.display()),
+        )
+        .unwrap();
         let args = |dry_run| PruneArgs {
             config: config.clone(),
             older_than: 30,

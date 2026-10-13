@@ -6,8 +6,8 @@
 //!    ワーカーの `CLAUDE_SECURESTORAGE_CONFIG_DIR` が一致する
 //! 2. 片方が throttled で終わると、そのアカウントだけが cooldown になり、次の run はもう片方に行く。
 //!    プロバイダは cooldown にならない（`docs/api/v1/gui-api.md` の cooldown 一覧が空のまま）
-//! 3. `rate_limit_event` が run の途中で `AccountBook` と `GET /accounts` に反映され、celeris を再起動しても残る
-//! 4. `POST /accounts` → `login` → `login/code` → `logged_in: true` がスタブの `claude auth login` で通る。
+//! 3. `rate_limit_event` が run の途中で `AccountBook` と `GET /llm/accounts` に反映され、celeris を再起動しても残る
+//! 4. `POST /llm/sources/claude_oauth/accounts` → `login` → `login/code` → `logged_in: true` がスタブの `claude auth login` で通る。
 //!    管理系はトークン無しで 401
 
 use std::path::{Path, PathBuf};
@@ -40,7 +40,7 @@ fn reserve_port() -> e2e::PortReservation {
 /// 負荷次第で 20 秒を超えることがあった（統合後の検査で 3 本とも `API did not come up`）。
 /// 早く上がれば早く抜けるので、上限を広げても通常の所要時間は変わらない。
 const STARTUP_WAIT: Duration = Duration::from_secs(90);
-/// 起動後に 1 つの task が dispatch → 完了し、その観測値が `GET /accounts` に載るまでの上限。
+/// 起動後に 1 つの task が dispatch → 完了し、その観測値が `GET /llm/accounts` に載るまでの上限。
 const SETTLE_WAIT: Duration = Duration::from_secs(60);
 
 fn wait_until(timeout: Duration, mut cond: impl FnMut() -> bool) -> bool {
@@ -172,7 +172,7 @@ printf '{"type":"result","subtype":"success","is_error":false,"result":"ok"}\n'
         }
     }
 
-    fn write_config(&self, claude: &Path, token: Option<&str>, extra_provider: &str) -> PathBuf {
+    fn write_config(&self, claude: &Path, token: Option<&str>) -> PathBuf {
         let path = self.root.join("config.toml");
         // この台本は「ワーカー run がプールのどのアカウントに行くか」だけを見る。プールの消費者を
         // ワーカー run に限るため、次の 2 つを切る（どちらもホストや既定値に結果が左右されないように）。
@@ -219,13 +219,26 @@ listen = "127.0.0.1:{port}"
 [adapters.claude_code]
 command = "{claude}"
 
-[[providers]]
-id = "pool"
-adapter = "claude-code"
-tiers = ["frontier", "standard", "cheap"]
-concurrency = 1
-account_pool = true
-{extra_provider}
+[llm_sources.claude]
+kind = "claude_oauth"
+accounts = ["a", "b", "local"]
+models = ["haiku", "sonnet"]
+
+[harnesses.claude_code]
+kind = "claude_code"
+api_formats = ["claude_oauth"]
+source_kinds = ["claude_oauth"]
+
+[harness_selection]
+execution_class_defaults = {{}}
+
+[[harness_selection.rules]]
+harness = "claude_code"
+required_capabilities = []
+
+[route_defaults.claude_code]
+candidates = [{{ source = "claude", model = "haiku" }}]
+
 "#,
             port = self.port,
             claude = claude.display(),
@@ -242,6 +255,7 @@ account_pool = true
 
     fn celerisctl(&self, args: &[&str]) -> String {
         let out = Command::new(bin("celerisctl"))
+            .env_remove("CELERIS_CONFIG")
             .arg("--db")
             .arg(self.root.join("celeris.sqlite3"))
             .args(args)
@@ -307,7 +321,7 @@ account_pool = true
             self.request("GET", "/health", None, &[]).status == 200
         });
         assert!(healthy, "API did not become healthy\n{}", daemon.log_text());
-        // `GET /accounts` の観測値（`usage` / `score` / `in_use`）は**ディスパッチャのスナップショット**
+        // `GET /llm/accounts` の観測値（`usage` / `score` / `in_use`）は**ディスパッチャのスナップショット**
         // 由来なので、API が上がっただけでは空になりうる（最初の tick より前は `snapshot: null`）。
         // 起動にかかる時間は環境で動く（Phase 56 で起動時のコンテナ runtime 検出が入った）ため、
         // 「最初の tick がスナップショットを出すまで」を待ちに含める。
@@ -432,7 +446,7 @@ fn account_selection_follows_headroom_and_survives_restart_and_throttle_only_coo
     // a は残量が少ない（util 0.9）、b は多い（util 0.2）。
     env.account("a", Some(0.9));
     env.account("b", Some(0.2));
-    let config = env.write_config(&claude, None, "");
+    let config = env.write_config(&claude, None);
     let mut daemon = env.start_celeris(&config);
     let env_ref = &env;
     env_ref.wait_api(&mut daemon);
@@ -467,12 +481,12 @@ fn account_selection_follows_headroom_and_survives_restart_and_throttle_only_coo
     );
     assert_eq!(env.worker_started_account(&t3).as_deref(), Some("b"));
 
-    // GET /accounts に反映されている（受け入れ 3 前半）。
-    let accounts = env.get("/accounts").json();
+    // GET /llm/accounts に反映されている（受け入れ 3 前半）。
+    let accounts = env.get("/llm/accounts").json();
     let items = accounts["items"].as_array().unwrap();
-    let a = items.iter().find(|it| it["id"] == "a").unwrap();
+    let a = items.iter().find(|it| it["account_id"] == "a").unwrap();
     assert_eq!(a["usage"]["five_hour"]["utilization"], json!(0.9));
-    let b = items.iter().find(|it| it["id"] == "b").unwrap();
+    let b = items.iter().find(|it| it["account_id"] == "b").unwrap();
     assert_eq!(b["usage"]["five_hour"]["utilization"], json!(0.2));
 
     // プールを使う run の cooldown はプロバイダには付かない（daemon.cooldowns は空のまま）。
@@ -485,9 +499,9 @@ fn account_selection_follows_headroom_and_survives_restart_and_throttle_only_coo
     drop(daemon);
     let mut daemon = env.start_celeris(&config);
     env.wait_api(&mut daemon);
-    let accounts_after_restart = env.get("/accounts").json();
+    let accounts_after_restart = env.get("/llm/accounts").json();
     let items = accounts_after_restart["items"].as_array().unwrap();
-    let a = items.iter().find(|it| it["id"] == "a").unwrap();
+    let a = items.iter().find(|it| it["account_id"] == "a").unwrap();
     assert_eq!(a["usage"]["five_hour"]["utilization"], json!(0.9));
 
     env.replay_is_consistent();
@@ -526,7 +540,7 @@ exec "{claude}" "$@"
         std::fs::set_permissions(&claude_conditional, std::fs::Permissions::from_mode(0o755))
             .unwrap();
     }
-    let config = env.write_config(&claude_conditional, None, "");
+    let config = env.write_config(&claude_conditional, None);
     let mut daemon = env.start_celeris(&config);
     env.wait_api(&mut daemon);
 
@@ -538,20 +552,20 @@ exec "{claude}" "$@"
     );
     assert_eq!(env.worker_started_account(&t1).as_deref(), Some("a"));
 
-    // "a" が cooldown に入るまで待つ（GET /accounts の cooldown が埋まる）。
+    // "a" が cooldown に入るまで待つ（GET /llm/accounts の cooldown が埋まる）。
     let cooling = wait_until(SETTLE_WAIT, || {
-        env.get("/accounts").json()["items"]
+        env.get("/llm/accounts").json()["items"]
             .as_array()
             .is_some_and(|items| {
                 items
                     .iter()
-                    .any(|it| it["id"] == "a" && !it["cooldown"].is_null())
+                    .any(|it| it["account_id"] == "a" && !it["cooldown"].is_null())
             })
     });
     assert!(
         cooling,
         "account a never cooled down: {}",
-        env.get("/accounts").body
+        env.get("/llm/accounts").body
     );
     // プロバイダ自体は cooldown にならない。
     assert_eq!(
@@ -571,51 +585,54 @@ exec "{claude}" "$@"
     drop(daemon);
 }
 
-/// 受け入れ 4: `POST /accounts` → `login` → `login/code` → `logged_in: true`。管理系はトークン無しで 401。
+/// 受け入れ 4: `POST /llm/sources/claude_oauth/accounts` → `login` → `login/code` → `logged_in: true`。管理系はトークン無しで 401。
 #[test]
 fn http_login_flow_ends_with_logged_in_true_and_management_requires_a_token() {
     // token_file 未設定（loopback 限定構成）: 読み取りは通るが、管理系はトークン無しでは 401（ADR-0017 M3）。
     {
         let env = Env::new();
         let claude = env.write_claude_stub();
-        let config = env.write_config(&claude, None, "");
+        let config = env.write_config(&claude, None);
         let mut daemon = env.start_celeris(&config);
         env.wait_api(&mut daemon);
 
-        assert_eq!(env.get("/accounts").status, 200);
-        env.post("/accounts", json!({"id": "c"}))
+        assert_eq!(env.get("/llm/accounts").status, 200);
+        env.post("/llm/sources/claude_oauth/accounts", json!({"id": "c"}))
             .assert_problem(401, "unauthorized");
     }
 
-    // token_file 設定あり: 認証を通した後、POST /accounts → login → login/code → logged_in: true の一連が通る。
+    // token_file 設定あり: 認証を通した後、POST /llm/sources/claude_oauth/accounts → login → login/code → logged_in: true の一連が通る。
     let env = Env::new();
     let claude = env.write_claude_stub();
-    let config = env.write_config(&claude, Some("s3cret-admin-token"), "");
+    let config = env.write_config(&claude, Some("s3cret-admin-token"));
     let mut daemon = env.start_celeris(&config);
     let mut env = env;
     env.wait_api(&mut daemon);
     env.token = Some("s3cret-admin-token".into());
 
-    let created = env.post("/accounts", json!({"id": "c"}));
+    let created = env.post("/llm/sources/claude_oauth/accounts", json!({"id": "c"}));
     assert_eq!(created.status, 201, "{}", created.body);
     assert_eq!(created.json()["logged_in"], json!(false));
 
-    let started = env.post_empty("/accounts/c/login");
+    let started = env.post_empty("/llm/sources/claude_oauth/accounts/c/login");
     assert_eq!(started.status, 200, "{}", started.body);
     let url = started.json()["url"].as_str().unwrap().to_string();
     assert_eq!(url, "https://claude.com/cai/oauth/authorize?x=1");
     assert!(started.json()["expires_at"].is_string());
 
-    let coded = env.post("/accounts/c/login/code", json!({"code": "good-code"}));
+    let coded = env.post(
+        "/llm/sources/claude_oauth/accounts/c/login/code",
+        json!({"code": "good-code"}),
+    );
     assert_eq!(coded.status, 200, "{}", coded.body);
     assert_eq!(coded.json()["result"], "ok", "{}", coded.body);
 
-    let listed = env.get("/accounts").json();
+    let listed = env.get("/llm/accounts").json();
     let c = listed["items"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|it| it["id"] == "c")
+        .find(|it| it["account_id"] == "c")
         .unwrap();
     assert_eq!(c["logged_in"], json!(true));
 
@@ -625,7 +642,7 @@ fn http_login_flow_ends_with_logged_in_true_and_management_requires_a_token() {
     assert!(!log.contains("oauth/authorize"), "{log}");
 
     // 後片付け: DELETE は .removed へ移す。
-    let deleted = env.delete("/accounts/c");
+    let deleted = env.delete("/llm/sources/claude_oauth/accounts/c");
     assert_eq!(deleted.status, 200, "{}", deleted.body);
     assert!(!env.accounts_dir.join("c").exists());
 

@@ -43,6 +43,7 @@ tasks: [01M3VT5BJZX8JSME7ZQJGTVGEN]
 | `no_branch` | marker に branch が無い |
 | `branch_name_mismatch` | branch がこの task ID で終わらない |
 | `refs_unresolvable` | 既定ブランチまたは対象ブランチの ref を SHA に解決できない |
+| `no_commits` | 対象ブランチの head が既定ブランチの祖先（同一を含む）で、取り込む commit が無い（2026-10-11 付記。受信箱に出さない） |
 | `department_unresolved` | D1 の全候補で部が決まらない |
 
 複数条件が同時にある場合、上表の順に最初の理由を記録し、次回の再判定で別の理由が明らかになればその理由を記録する。部署が先に解決できなくても repo 側の具体的な不備を隠さない。`marker_repo_mismatch` は repo 行・path と照合できる時点で判定する。
@@ -64,3 +65,13 @@ tasks: [01M3VT5BJZX8JSME7ZQJGTVGEN]
 `latest_delivery_skipped_rows` は `events` からタスクごとの最新 `delivery_skipped` を引く。inbox 構築のたびに全 event を走査しないよう、migration `0037_events_delivery_skipped_index.sql` は部分 index `idx_events_delivery_skipped` を作る。index と問い合わせの predicate は SQLite が部分 index を選べるよう、字句まで `json_extract(json,'$.type')='delivery_skipped'` で一致させる。`latest_delivery_skipped_rows_uses_partial_index` は同じ SQL 定数に対する `EXPLAIN QUERY PLAN` がこの index を使い、結果が各 task の最新 1 件であることを確認する。
 
 この migration により schema version 37（`SCHEMA_VERSION = 37`）になる。昇格時は celeris を stop してから新バイナリで start する。DB migration は新バイナリの起動時に実行される。index は追加のみで、旧バイナリは未知の index が DB に残っていても動作するため、戻すときに index の DROP は不要である。必要なら `DROP INDEX idx_events_delivery_skipped;` で削除できるが、schema migration 履歴の版数は戻さない。**schema 37 を開いた旧バイナリは SchemaTooNew で起動できない**ので、バイナリを戻す運用でも migration 済み DB をそのまま使うことはできない。
+
+## 付記: 取り込む commit が無い root（2026-10-11）
+
+日次整理 task `01M4P733B9588PC6QZ9C2VH0NT` は repo を変えない（commit 0 件、branch head = 作成時の main `ca7025be`）。それでも `begin` は【部署内のマージ可否判定】criterion を足し、文言の「指定SHAの実際の差分」を reviewer が head 単体の親との差分（別 task の成果）と読んで 2 回不合格にした。
+
+- **見送り**: `prepare` は base（`refs/heads/<default>`）と head を解決した直後に `git merge-base --is-ancestor <head> <base>` を調べ、真なら delivery を作らず criterion も足さない。理由 `no_commits`（label「取り込む commit がありません」）の `DeliverySkipped` を (task, reason, head) ごとに 1 件積む（監査用。D3 の重複抑止のまま）。D2 の表では `refs_unresolvable` の次、`department_unresolved` の前に判定する。
+- **受信箱**: `no_commits` は正常な no-op なので `build_attention` は注意事項にしない。
+- **審査範囲**: head が base の祖先でないときの criterion は、審査対象を `git log {base}..{head}` の commit と `git diff {base}...{head}`（merge-base 起点）の差分だけと明示し、「コミット {head} 単体の親との差分や base 側の commit は審査対象ではない」と書く。旧い「指定SHAの実際の差分」の語は消した（互換分岐なし）。
+- **試験**: `crates/task-ops/src/delivery/tests.rs` の `delivery_skip_no_commits_when_head_equals_base`・`delivery_skip_no_commits_when_head_is_ancestor_of_base`・`merge_criterion_names_base_to_head_range`、`crates/task-ops/src/inbox/tests.rs` の `delivery_skip_no_commits_is_not_attention`。
+- **移行**: DB の変更なし（event の reason に値が 1 つ増えるだけ）。schema（`docs/api/v1`・`web/api/generated`）は再生成した。

@@ -7,13 +7,13 @@ use task_core::{
 fn write_config(dir: &std::path::Path, workspace_root: &std::path::Path) -> PathBuf {
     let path = dir.join("config.toml");
     std::fs::write(
-            &path,
-            format!(
-                "db = \"t.sqlite3\"\nworkspace_root = \"{}\"\n[workspace]\nprune_after_secs = 1\n[[providers]]\nid = \"x\"\nadapter = \"fake\"\n",
-                workspace_root.display()
-            ),
-        )
-        .unwrap();
+        &path,
+        format!(
+            "db = \"t.sqlite3\"\nworkspace_root = \"{}\"\n[workspace]\nprune_after_secs = 1\n",
+            workspace_root.display()
+        ),
+    )
+    .unwrap();
     path
 }
 
@@ -21,6 +21,7 @@ fn insert_done_task(store: &SqliteStore, updated_at: OffsetDateTime) -> TaskId {
     let id = TaskId::new();
     let now = OffsetDateTime::now_utc();
     let task = Task {
+        harness_id: None,
         requirements: Default::default(),
         tree: None,
         paused_at: None,
@@ -46,7 +47,6 @@ fn insert_done_task(store: &SqliteStore, updated_at: OffsetDateTime) -> TaskId {
         priority: 0,
         worker_hint: WorkerHint {
             tier: task_core::Tier::Standard,
-            adapter: None,
         },
         workspace: WorkspaceSpec::Local {
             path: PathBuf::from("/tmp/ws"),

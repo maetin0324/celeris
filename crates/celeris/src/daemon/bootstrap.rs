@@ -4,14 +4,14 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use task_core::{SqliteStore, StoreOptions, TaskStore};
-use task_dispatch::{Dispatcher, StaticPolicy};
+use task_dispatch::Dispatcher;
 use task_worker::db_guard::{
     DaemonPaths, DbGuard, GuardDecision, PRODUCTION_IN_WORKER_RUN, ProtectedSet, ResolvedPath,
     WorkerRunMarker,
 };
 use time::OffsetDateTime;
 
-use super::adapters::{build_adapters, effective_models};
+use super::adapters::build_harness_adapters;
 use super::clusters::{
     ClusterMasters, TunnelForwardChildren, TunnelForwardRegistry, cluster_connector,
     cluster_control_persist, cluster_keepalive_secs, master_launchers, tunnel_forward_ensurer,
@@ -539,6 +539,13 @@ pub fn build_dispatcher(
             ..StoreOptions::default()
         },
     )?);
+    let registered_harnesses = config
+        .harness_declarations
+        .keys()
+        .cloned()
+        .map(task_core::llm_route::HarnessId::from)
+        .collect();
+    sqlite.resolve_migrated_task_harnesses(&registered_harnesses)?;
     // External CoS mutations can outlive the process that initiated them. Never replay an
     // uncertain side effect: surface old pending receipts for human remediation on startup.
     const COS_EXTERNAL_PENDING_GRACE_SECS: i64 = 30 * 60;
@@ -550,22 +557,12 @@ pub fn build_dispatcher(
     let store: Arc<dyn TaskStore> = sqlite.clone();
     seed_org_if_empty(store.as_ref(), config)?;
     seed_cron_if_empty(store.as_ref(), config, OffsetDateTime::now_utc())?;
-    let policy = StaticPolicy::new(
-        config.provider_specs(),
-        std::time::Duration::from_secs(config.error_cooldown_secs),
-    );
-    let mut dispatcher = Dispatcher::new(
-        store.clone(),
-        Box::new(policy),
-        effective_models(config),
-        build_adapters(config),
-        config.account_pool_providers(),
-        config.dispatch_config(),
-    );
-    // ADR 2026-10-08 account-concurrency-limits §(e): implicit accounts are per LLM source, so the
-    // dispatcher needs the resolved source of every row before it can prune or limit them.
-    dispatcher.set_provider_llm_sources(config.provider_llm_sources());
-    // §(d): forget limits of implicit accounts whose LLM source no non-pool row uses any more.
+    let mut dispatcher = Dispatcher::new(store.clone(), config.dispatch_config());
+    // ADR 2026-10-11 llm-source-harness-selection: harness and source×model are chosen from these.
+    dispatcher.set_llm_route_registry(config.llm_route_registry()?);
+    dispatcher.set_harness_adapters(build_harness_adapters(config)?);
+    // ADR 2026-10-08 account-concurrency-limits §(d)(e): implicit accounts are the declared sources
+    // without an account pool; forget limits of implicit accounts no such source has any more.
     if let Err(error) = dispatcher.prune_implicit_account_limits() {
         tracing::warn!(%error, "cannot prune implicit account limits");
     }
@@ -580,17 +577,10 @@ pub fn build_dispatcher(
         super::cos_launch::build_cos_chat_launch(config, &config.db.path, config.api.listen),
     );
     // ADR 2026-10-06 model-role-assignments D2: DB の割り当てを同じ store から読む（run 起動のたびに解決）。
-    dispatcher.set_role_assignment_reader(sqlite);
     // 付記「モデルごとの複数役割」: shadow / enforce の役割メンバーの順位づけに routing catalog の品質を使う。
     if let Some(shared) = config.routing_catalog_state.as_ref() {
         dispatcher.set_routing_model_profiles(Arc::new(SharedCatalogProfiles(Arc::clone(shared))));
     }
-    // ADR 2026-10-06 D3: `account_pool = "opencode-go"` のように pool の adapter を明示した行。
-    dispatcher.set_account_pool_adapters(config.account_pool_adapters());
-    // ADR-0132 付記 L1/L2: cheap lane で先に試すローカルの行（`[execution] cheap_local_first = false` なら空）。
-    dispatcher.set_local_providers(config.local_cheap_providers());
-    // ADR 2026-10-07: coding の既定ハーネス解決（`adapter_policy = "model_family"` のハーネス）。
-    dispatcher.set_coding_harness_default(config.coding_harness_default());
     // ADR 2026-10-04 Phase 2: `[model_routing]` の mode・観測 TTL・窓の reserve_value（既定 legacy）。
     if let Some(runtime) = &config.model_routing.runtime {
         dispatcher.set_dispatch_routing(runtime.dispatch_settings());

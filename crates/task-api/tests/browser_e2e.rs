@@ -38,6 +38,9 @@ struct World {
     key: ring::signature::Ed25519KeyPair,
     supervisor: CredentialSupervisor,
     broker_root: PathBuf,
+    // Unix domain socket paths are limited to 108 bytes on Linux. Keep the
+    // broker runtime outside the potentially long per-run TMPDIR hierarchy.
+    _runtime_root: tempfile::TempDir,
     substrate: PathBuf,
     task: Task,
     /// 全 run の worker 出力（進捗・browser lifecycle・harness が見た shim の出力・最終結果）。
@@ -83,14 +86,20 @@ fn world(site: Value) -> World {
     let env = admin_env();
     let root = env.dir.path().to_path_buf();
     let broker_root = root.join("credentiald");
-    let runtime = broker_root.join("runtime");
+    let runtime_root = tempfile::Builder::new()
+        .prefix("ce-runtime-")
+        .tempdir_in("/tmp")
+        .expect("short runtime directory");
+    std::fs::set_permissions(runtime_root.path(), std::fs::Permissions::from_mode(0o700))
+        .expect("secure runtime directory");
+    let runtime = runtime_root.path().to_path_buf();
     let config = broker_root.join("config");
     let data = broker_root.join("data");
     std::fs::DirBuilder::new()
         .mode(0o700)
         .create(&broker_root)
         .unwrap();
-    for dir in [&runtime, &config, &data] {
+    for dir in [&config, &data] {
         std::fs::DirBuilder::new().mode(0o700).create(dir).unwrap();
     }
     let manual = ManualProvider::open(config.join("keys"), data.join("vault")).unwrap();
@@ -98,11 +107,19 @@ fn world(site: Value) -> World {
     let broker = Arc::new(Broker::new(manual, data.join("audit")).unwrap());
     let control = runtime.join("celeris-credentiald/control.sock");
     let serve_runtime = runtime.clone();
-    std::thread::spawn(move || ipc::serve(broker, &serve_runtime, vec![std::process::id()]));
+    let serve =
+        std::thread::spawn(move || ipc::serve(broker, &serve_runtime, vec![std::process::id()]));
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
     loop {
         if control.exists() && control.with_file_name("resolve.sock").exists() {
             break;
+        }
+        // serve が sockets を作る前に終わったなら、60 秒待たずにその結果で落とす。
+        if serve.is_finished() {
+            panic!(
+                "ipc::serve exited before fixture readiness: {:?}",
+                serve.join()
+            );
         }
         assert!(
             std::time::Instant::now() < deadline,
@@ -149,6 +166,7 @@ fn world(site: Value) -> World {
         app,
         key,
         broker_root,
+        _runtime_root: runtime_root,
         substrate,
         task,
         worker_output: Arc::default(),
@@ -162,6 +180,26 @@ fn site() -> Value {
         "https://login.example.com/": "Sign in",
         "https://login.example.com/dashboard": "Build dashboard",
     }})
+}
+
+#[test]
+fn credential_broker_runtime_sockets_fit_unix_path_limit_with_long_tmpdir() {
+    let world = world(site());
+    let runtime = world
+        .supervisor
+        .runtime_dir
+        .as_ref()
+        .expect("runtime directory");
+    for socket in ["control.sock", "resolve.sock", "injection.sock"] {
+        let path = runtime.join("celeris-credentiald").join(socket);
+        assert!(
+            path.as_os_str().as_encoded_bytes().len() < 108,
+            "socket path is too long: {} ({} bytes)",
+            path.display(),
+            path.as_os_str().as_encoded_bytes().len()
+        );
+        assert!(path.exists(), "broker did not bind {}", path.display());
+    }
 }
 
 fn task_policy() -> BrowserTaskPolicy {
@@ -210,6 +248,7 @@ fn run_request(w: &World) -> RunRequest {
             ..Default::default()
         },
         cargo_target_dir: None,
+        llm_route: None,
     }
 }
 

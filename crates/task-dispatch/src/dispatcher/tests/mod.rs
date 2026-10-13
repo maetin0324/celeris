@@ -1,7 +1,5 @@
 use super::*;
 
-use crate::policy::{ProviderSpec, StaticPolicy};
-
 use async_trait::async_trait;
 
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -41,6 +39,7 @@ impl WorkerAdapter for InstantAdapter {
 fn new_task(dir: &std::path::Path, check: Check, max_retries: u32) -> Task {
     let now = OffsetDateTime::now_utc();
     Task {
+        harness_id: None,
         requirements: Default::default(),
         tree: None,
         paused_at: None,
@@ -63,7 +62,6 @@ fn new_task(dir: &std::path::Path, check: Check, max_retries: u32) -> Task {
         priority: 0,
         worker_hint: WorkerHint {
             tier: Tier::Standard,
-            adapter: None,
         },
         workspace: WorkspaceSpec::Local {
             path: dir.to_path_buf(),
@@ -104,41 +102,11 @@ fn dispatcher_with_test_clock(
     max_concurrency: usize,
     use_test_clock: bool,
 ) -> Dispatcher {
-    dispatcher_with_adapter_id(store, adapter, max_concurrency, use_test_clock, "instant")
-}
-
-/// `dispatcher_with_test_clock` と同じだが、provider `p1` のアダプタ id を選べる
-/// （ADR-0140: continuation の resume は `claude-code` だけが対象）。
-fn dispatcher_with_adapter_id(
-    store: Arc<dyn TaskStore>,
-    adapter: Arc<dyn WorkerAdapter>,
-    max_concurrency: usize,
-    use_test_clock: bool,
-    adapter_id: &str,
-) -> Dispatcher {
-    let mut policy = StaticPolicy::new(
-        vec![ProviderSpec {
-            id: "p1".into(),
-            adapter: adapter_id.into(),
-            tiers: vec![Tier::Frontier, Tier::Standard, Tier::Cheap],
-            concurrency: Some(max_concurrency),
-            model: "m".into(),
-        }],
-        Duration::from_secs(1),
-    );
     let policy_clock = Arc::new(StdMutex::new(Instant::now()));
-    if use_test_clock {
-        policy.set_test_clock(policy_clock.clone());
-    }
-    let mut adapters: HashMap<ProviderId, Arc<dyn WorkerAdapter>> = HashMap::new();
-    adapters.insert("p1".into(), adapter);
     let mut dispatcher = Dispatcher::new(
         store,
-        Box::new(policy),
-        HashMap::from([("p1".to_string(), "m".to_string())]),
-        adapters,
-        std::collections::HashSet::new(),
         DispatchConfig {
+            source_error_cooldown: Duration::from_secs(1),
             delivery: Default::default(),
             max_concurrency,
             lease_grace: Duration::from_secs(60),
@@ -183,8 +151,101 @@ fn dispatcher_with_adapter_id(
             dispatcher.test_policy_clock = Some(policy_clock);
         }
     }
-
+    install_test_routes(&mut dispatcher, adapter, &[("p1", "test")], max_concurrency);
     dispatcher
+}
+
+/// ADR 2026-10-11 llm-source-harness-selection: the test dispatchers' declared routes. One
+/// harness `test` (every capability, catch-all selection rule) runs `adapter`; its
+/// `route_defaults` are `sources` in order, each `(source id, source kind)` offering model `m`.
+/// A non-OAuth source declares the account `default`; an OAuth source uses the logged-in
+/// accounts of its `[accounts]` root and up to `max_runs` runs each (CoS chat uses the same
+/// candidates).
+fn install_test_routes(
+    d: &mut Dispatcher,
+    adapter: Arc<dyn WorkerAdapter>,
+    sources: &[(&str, &str)],
+    max_runs: usize,
+) {
+    use task_core::llm_route::{CandidateKey, HarnessRule, HarnessSpec, Registry, SourceSpec};
+    let mut r = Registry::default();
+    let mut kinds = std::collections::BTreeSet::new();
+    for (id, kind) in sources {
+        let oauth =
+            crate::dispatcher::route_select::account_adapter_for_source_kind(kind).is_some();
+        r.sources.insert(
+            (*id).into(),
+            SourceSpec {
+                kind: (*kind).into(),
+                api_format: "test".into(),
+                accounts: if oauth {
+                    vec![]
+                } else {
+                    vec!["default".into()]
+                },
+                models: vec!["m".into()],
+                max_runs: None,
+                account_max_runs: Default::default(),
+                quota: None,
+                endpoint: None,
+                credential_ref: None,
+            },
+        );
+        kinds.insert((*kind).into());
+        r.route_defaults
+            .entry("test".into())
+            .or_default()
+            .push(CandidateKey {
+                source: (*id).into(),
+                model: "m".into(),
+            });
+    }
+    r.harnesses.insert(
+        "test".into(),
+        HarnessSpec {
+            kind: "cli".into(),
+            api_formats: ["test".into()].into(),
+            source_kinds: kinds,
+            capabilities: [
+                "tools",
+                "repo",
+                crate::dispatcher::route_select::BROWSER_CAPABILITY,
+            ]
+            .iter()
+            .map(|c| (*c).to_string())
+            .collect(),
+            command: None,
+            args: vec![],
+        },
+    );
+    r.harnesses.insert(
+        "claude_code".into(),
+        r.harnesses
+            .get(&"test".into())
+            .expect("test harness")
+            .clone(),
+    );
+    r.harness_selection.rules = vec![HarnessRule {
+        harness: "test".into(),
+        ..Default::default()
+    }];
+    r.cos_route_candidates = r
+        .route_defaults
+        .get(&"test".into())
+        .cloned()
+        .unwrap_or_default();
+    for (id, kind) in sources {
+        if crate::dispatcher::route_select::account_adapter_for_source_kind(kind).is_none()
+            && let Some(limits) = d.account_limits.as_mut()
+        {
+            limits.insert(((*id).into(), "default".into()), max_runs);
+        }
+    }
+    d.set_llm_route_registry(r);
+    d.set_harness_adapters(HashMap::from([
+        ("test".into(), Arc::clone(&adapter)),
+        ("claude_code".into(), adapter),
+    ]));
 }
 
 // For single-run tests: await the worker wrapper, not just the adapter. The wrapper
@@ -423,18 +484,6 @@ impl WorkerAdapter for ReviewerUsageAdapter {
     }
 }
 
-fn reviewer_routing_record(store: &dyn TaskStore, task_id: TaskId) -> task_core::RoutingRecord {
-    store
-        .events_for(task_id)
-        .unwrap()
-        .into_iter()
-        .find_map(|(_, e)| match e {
-            Event::RoutingDecided { record, .. } => Some(*record),
-            _ => None,
-        })
-        .expect("routing_decided for the reviewer run")
-}
-
 /// ADR-0054 D1 / Phase 67b 追記: `resume` を頼まれた Reviewer run では `session_resume_failed` を
 /// 報告する（実機の「resume が拒否された」を模す fake アダプタ）。それ以外の run は通常どおり
 /// `review.json` を書いて完了する。
@@ -577,78 +626,6 @@ fn done_outcome() -> RunOutcome {
     }
 }
 
-/// 1 回目は供給側失敗（Throttled）、2 回目以降は `touched` を作って done を返すアダプタ。
-struct FlakyProviderAdapter {
-    calls: AtomicUsize,
-}
-
-#[async_trait]
-impl WorkerAdapter for FlakyProviderAdapter {
-    fn id(&self) -> &str {
-        "instant"
-    }
-    async fn run(
-        &self,
-        req: RunRequest,
-        _run_id: &str,
-        _limits: RunLimits,
-        _sink: &dyn EventSink,
-    ) -> Result<RunOutcome, AdapterError> {
-        if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
-            return Err(AdapterError::Throttled {
-                retry_after: Duration::from_secs(3600),
-            });
-        }
-        std::fs::write(req.workspace.join("touched"), "1").unwrap();
-        Ok(done_outcome())
-    }
-}
-
-/// heartbeat を送りながら少し待ってから done を返すアダプタ。
-struct HeartbeatAdapter;
-
-#[async_trait]
-impl WorkerAdapter for HeartbeatAdapter {
-    fn id(&self) -> &str {
-        "instant"
-    }
-    async fn run(
-        &self,
-        req: RunRequest,
-        _run_id: &str,
-        _limits: RunLimits,
-        sink: &dyn EventSink,
-    ) -> Result<RunOutcome, AdapterError> {
-        for _ in 0..8 {
-            sink.heartbeat();
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-        std::fs::write(req.workspace.join("touched"), "1").unwrap();
-        Ok(done_outcome())
-    }
-}
-
-/// レビューが無く、`sink.heartbeat()` も呼ばない（テストが lease の自然な更新に邪魔されないよう
-/// に）、しばらく走り続けるだけのアダプタ。
-struct SlowNoHeartbeatAdapter;
-
-#[async_trait]
-impl WorkerAdapter for SlowNoHeartbeatAdapter {
-    fn id(&self) -> &str {
-        "instant"
-    }
-    async fn run(
-        &self,
-        _req: RunRequest,
-        _run_id: &str,
-        _limits: RunLimits,
-        _sink: &dyn EventSink,
-    ) -> Result<RunOutcome, AdapterError> {
-        tokio::time::sleep(Duration::from_millis(500)).await;
-        Ok(done_outcome())
-    }
-}
-
 /// 2 回目以降の run でだけ `second` を作るアダプタ。
 struct CountingAdapter {
     calls: AtomicUsize,
@@ -780,29 +757,6 @@ fn transition_reasons(store: &Arc<dyn TaskStore>, id: TaskId) -> Vec<String> {
         .collect()
 }
 
-/// 常に分類できない `Err`（`AdapterError::Other`）を返すワーカー run（ADR-0070 D3。resume 拒否や
-/// result.json 不在などが実機で取る経路のスタンド・イン）。
-struct AlwaysInfraFailingWorkerAdapter {
-    calls: AtomicUsize,
-}
-
-#[async_trait]
-impl WorkerAdapter for AlwaysInfraFailingWorkerAdapter {
-    fn id(&self) -> &str {
-        "instant"
-    }
-    async fn run(
-        &self,
-        _req: RunRequest,
-        _run_id: &str,
-        _limits: RunLimits,
-        _sink: &dyn EventSink,
-    ) -> Result<RunOutcome, AdapterError> {
-        self.calls.fetch_add(1, Ordering::SeqCst);
-        Err(AdapterError::Other("session resume rejected".into()))
-    }
-}
-
 /// 監査 M-1〜M-3（ADR-0034 D2）: 報告はタスクの終端状態に合わせて作るテスト向けの、最小の組織（秘書 → coding → coding-poc）。
 fn seed_org_for_reports(store: &Arc<dyn TaskStore>) {
     let now = OffsetDateTime::now_utc();
@@ -857,32 +811,6 @@ impl WorkerAdapter for AttemptGatedAdapter {
                 usage: None,
             },
             exit_code: Some(0),
-        })
-    }
-}
-
-/// worker が返す `retryable: true` の `error` を毎回返すアダプタ(供給側失敗ではなく、ワーカー自身の申告)。
-struct RetryableErrorAdapter;
-
-#[async_trait]
-impl WorkerAdapter for RetryableErrorAdapter {
-    fn id(&self) -> &str {
-        "instant"
-    }
-    async fn run(
-        &self,
-        _req: RunRequest,
-        _run_id: &str,
-        _limits: RunLimits,
-        sink: &dyn EventSink,
-    ) -> Result<RunOutcome, AdapterError> {
-        sink.progress("working");
-        Ok(RunOutcome {
-            terminal: Terminal::Error {
-                message: "flaky".into(),
-                retryable: true,
-            },
-            exit_code: Some(1),
         })
     }
 }
@@ -1165,44 +1093,6 @@ fn progress_msgs(store: &Arc<dyn TaskStore>, id: TaskId) -> Vec<String> {
         .collect()
 }
 
-/// ADR-0027 D1 / 受け入れ 3: 委譲できる run（lead, genre=coding）のプロンプト文脈に設定済みの
-/// 全分野（`available_genres`）が渡り、`DelegateTask.genre` で子を別分野（literature）に委譲できる。
-struct GenreDelegatingAdapter {
-    proposal: DelegateTask,
-    seen_available_genres: std::sync::Mutex<Option<Vec<task_worker::GenreContext>>>,
-}
-
-#[async_trait]
-impl WorkerAdapter for GenreDelegatingAdapter {
-    fn id(&self) -> &str {
-        "instant"
-    }
-    async fn run(
-        &self,
-        req: RunRequest,
-        _run_id: &str,
-        _limits: RunLimits,
-        sink: &dyn EventSink,
-    ) -> Result<RunOutcome, AdapterError> {
-        let done = |summary: &str| {
-            Ok(RunOutcome {
-                terminal: Terminal::Done {
-                    summary: summary.into(),
-                    evidence: vec![],
-                    usage: None,
-                },
-                exit_code: Some(0),
-            })
-        };
-        if req.task.role.as_deref() == Some("literature-reader") {
-            return done("child");
-        }
-        *self.seen_available_genres.lock().unwrap() = Some(req.context.available_genres.clone());
-        sink.delegate(std::slice::from_ref(&self.proposal));
-        done("delegated")
-    }
-}
-
 async fn wait_for_approval_child(
     d: &mut Dispatcher,
     store: &Arc<dyn TaskStore>,
@@ -1324,34 +1214,14 @@ fn pool_dispatcher_with_requeues(
     max_concurrency: usize,
     max_requeues: u32,
 ) -> Dispatcher {
-    let mut providers = vec![ProviderSpec {
-        id: "p1".into(),
-        adapter: "claude-code".into(),
-        tiers: vec![Tier::Frontier, Tier::Standard, Tier::Cheap],
-        concurrency: Some(max_concurrency),
-        model: "m".into(),
-    }];
-    let mut adapters: HashMap<ProviderId, Arc<dyn WorkerAdapter>> = HashMap::new();
-    adapters.insert("p1".into(), adapter);
-    if let Some((id, a)) = second_provider {
-        providers.push(ProviderSpec {
-            id: id.into(),
-            adapter: "instant".into(),
-            tiers: vec![Tier::Frontier, Tier::Standard, Tier::Cheap],
-            concurrency: Some(max_concurrency),
-            model: "m".into(),
-        });
-        adapters.insert(id.into(), a);
+    let mut route_sources = vec![(AccountAdapter::ClaudeCode.as_str(), "claude_oauth")];
+    if let Some((id, _)) = &second_provider {
+        route_sources.push((id, "test"));
     }
-    let policy = StaticPolicy::new(providers, Duration::from_secs(1));
-    let account_pool_providers: std::collections::HashSet<ProviderId> = ["p1".to_string()].into();
-    Dispatcher::new(
+    let mut d = Dispatcher::new(
         store,
-        Box::new(policy),
-        HashMap::from([("p1".to_string(), "m".to_string())]),
-        adapters,
-        account_pool_providers,
         DispatchConfig {
+            source_error_cooldown: Duration::from_secs(1),
             delivery: Default::default(),
             max_concurrency,
             lease_grace: Duration::from_secs(60),
@@ -1391,7 +1261,9 @@ fn pool_dispatcher_with_requeues(
             workspace_prune_after_secs: 0,
             execution: ExecutionConfig::default(),
         },
-    )
+    );
+    install_test_routes(&mut d, adapter, &route_sources, max_concurrency);
+    d
 }
 
 fn usage_window(utilization: f64, resets_at_secs_from_now: i64) -> RateLimitObservation {
@@ -1916,39 +1788,6 @@ fn project_with_repos(
     (project.id, out)
 }
 
-/// ADR-0069（Phase 114）テスト用: 3 lane の束縛を持つ TieredAdapter（cheap だけ reasoning effort 付き）。
-fn three_lane_adapter() -> Arc<dyn WorkerAdapter> {
-    use task_core::model_routing::ModelBinding;
-    Arc::new(task_worker::tiered::TieredAdapter {
-        base: Arc::new(InstantAdapter {
-            terminal: Terminal::Question {
-                text: "not needed".into(),
-            },
-            delay: Duration::ZERO,
-        }),
-        models: [
-            (Tier::Frontier, "frontier-id", None),
-            (Tier::Standard, "standard-id", None),
-            (Tier::Cheap, "cheap-id", Some("low")),
-        ]
-        .into_iter()
-        .map(|(tier, id, effort)| {
-            (
-                tier,
-                ModelBinding {
-                    name: id.into(),
-                    model_id: Some(id.into()),
-                    unavailable_reason: None,
-                    reasoning_effort: effort.map(str::to_string),
-                },
-            )
-        })
-        .collect(),
-        account_id: None,
-        credential_error: None,
-    })
-}
-
 fn routing_record(events: &[(u64, Event)]) -> Option<task_core::RoutingRecord> {
     events.iter().rev().find_map(|(_, e)| match e {
         Event::RoutingDecided { record, .. } => Some((**record).clone()),
@@ -1957,16 +1796,6 @@ fn routing_record(events: &[(u64, Event)]) -> Option<task_core::RoutingRecord> {
 }
 
 // ---- ADR-0056 D3（Phase 79）: mount された skills を run に届ける ----
-
-fn write_kb_skill(kb_root: &std::path::Path, name: &str, description: &str, body: &str) {
-    let dir = kb_root.join("skills").join(name);
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(
-        dir.join("SKILL.md"),
-        format!("---\nname: {name}\ndescription: {description}\n---\n\n{body}\n"),
-    )
-    .unwrap();
-}
 
 // ========== ADR-0072（Phase E1）: run lifecycle / checkpoint / continuation ==========
 
@@ -2571,16 +2400,6 @@ fn parallel_dispatcher(
     let mut d = dispatcher(store, adapter, max_concurrency);
     d.config.workspace_root = workspace_root.to_path_buf();
     d.config.execution.max_parallel_work_units = limit;
-    d.policy = Box::new(StaticPolicy::new(
-        vec![ProviderSpec {
-            id: "p1".into(),
-            adapter: "instant".into(),
-            tiers: vec![Tier::Frontier, Tier::Standard, Tier::Cheap],
-            concurrency: Some(provider_concurrency),
-            model: "m".into(),
-        }],
-        Duration::from_secs(1),
-    ));
     d.set_account_limit("implicit", "p1", Some(provider_concurrency))
         .unwrap();
     d
@@ -3044,7 +2863,13 @@ async fn run_scratch_env() -> (
     assert_eq!(runs.len(), 1, "{runs:?}");
     let owner = task_worker::scratch::Owner::task(task.id.to_string());
     let check = std::fs::read_to_string(&log).unwrap();
-    (settings, owner, runs[0].clone(), check)
+    // The route's model reaches the test adapter as `TEST_MODEL`; only the build env is compared.
+    let run_env = runs[0]
+        .iter()
+        .filter(|(k, _)| k != "TEST_MODEL")
+        .cloned()
+        .collect();
+    (settings, owner, run_env, check)
 }
 
 /// この process の env の sccache の族（`KEY=VALUE ` を辞書順に連ねたもの。checks の 2 行目と同じ形）。
@@ -3060,10 +2885,9 @@ fn parent_sccache_family() -> String {
 }
 
 mod build_cache;
-mod cheap_local_first;
+mod class_route;
 mod cleanup_and_disk;
 mod cluster_tunnel;
-mod coding_harness_default;
 mod conversation_cos;
 mod cos_chat_attach_handoff;
 mod cron_jobs;
@@ -3071,12 +2895,10 @@ mod git_workspace;
 mod integration_check_progress;
 mod integration_ready_race;
 mod planning_and_gate;
-mod provider_and_retry;
 mod review;
-mod role_assignments;
-mod routing_and_quota;
-mod routing_enforce;
-mod routing_shadow;
+mod review_route;
+mod route_launch;
+mod route_select;
 mod run_tmpdir;
 mod target_env;
 mod target_sync;
@@ -3123,9 +2945,6 @@ mod tree_approval;
 /// 木でない Task の生存確認（`src/dispatcher/tests/finished_plan.rs`）。
 mod finished_plan;
 
-/// ADR-0052（Phase 64）: 知識整理 run のフォールバック（`src/dispatcher/tests/knowledge_fallback.rs`）。
-mod knowledge_fallback;
-
 /// ADR-0079 R5b-fix2: remote workspace の run 後の push（`src/dispatcher/tests/remote_push_after_run.rs`）。
 mod remote_push_after_run;
 /// ADR-0067 付記 2026-10-07: remote の task と question / wait で終わった run の未申告成果物の登録。
@@ -3140,6 +2959,8 @@ mod cos_chat_rollover;
 mod cos_chat_triage;
 mod cos_live_fix_d4;
 mod human_gates;
+/// ADR 2026-10-11-task-wait-reasons: 見送りの理由（snapshot の task_waits と共有の待ち判定）。
+mod task_waits;
 
 /// ADR-0079 付記 R7-5: WU の checks の不合格の記録・次の run と replan への伝達・usage
 /// （`src/dispatcher/tests/work_unit_check_failures.rs`）。
@@ -3160,7 +2981,6 @@ mod write_set_record;
 /// ADR 2026-10-05-browser-department-web-live-view D2.0: run 時の task ∩ grant と grant 縮小の即時適用
 /// （`src/dispatcher/tests/browser_allowed_domains.rs`）。
 mod browser_allowed_domains;
-mod browser_fallback;
 mod browser_ledger_gate;
 /// ADR 2026-10-08-browser-prod-enablement D2 末尾・D4: 保存 policy の無い browser task は
 /// `browser_policy_missing` で止まり、PUT で戻る（`src/dispatcher/tests/browser_policy_missing.rs`）。

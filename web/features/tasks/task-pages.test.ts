@@ -22,8 +22,11 @@ describe("task list pagination", () => {
   });
 
   test("passes GET filters and cursor without changing their meaning", () => {
-    expect(taskListPath({ q: "GPU", status: ["ready", "blocked"], order: "dispatch", limit: "20" }, "next")).toBe(
-      "/api/tasks?q=GPU&status=ready&status=blocked&order=dispatch&limit=20&cursor=next",
-    );
+    expect(
+      taskListPath(
+        { q: "GPU", status: ["ready", "blocked"], order: "dispatch", limit: "20", run_state: "waiting" },
+        "next",
+      ),
+    ).toBe("/api/tasks?q=GPU&status=ready&status=blocked&order=dispatch&limit=20&run_state=waiting&cursor=next");
   });
 });

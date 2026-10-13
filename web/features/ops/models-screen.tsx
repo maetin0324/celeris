@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { useSearch } from "@tanstack/react-router";
 import { useId, useState } from "react";
 import { apiGet } from "../../api/client";
 import { modelKeys } from "../../api/queries/keys";
@@ -13,9 +14,8 @@ import { Section } from "../../components/ui/panel";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { formatAbsolute } from "../../lib/time";
 import { cn } from "../../lib/utils";
-import { ModelAssignmentsSection } from "./model-assignments";
+import { deniedMessage, isDenied } from "./denied";
 import { type LlmModel, type ModelOverride, type ModelTier, modelSourceLabel } from "./models-catalog";
-import { deniedMessage, isDenied } from "./providers-form";
 
 export type { LlmModel, ModelOverride, ModelTier };
 export { modelSourceLabel };
@@ -169,7 +169,6 @@ function ModelRow({ item, sender, blocked }: { item: LlmModel; sender: Sender; b
   const state = modelState(item);
   const muted = state.label !== "利用可";
   const tiers = item.routing.tiers;
-  const assigned = item.assigned_tiers ?? [];
   return (
     <TableRow data-model-state={state.label} className={cn(muted && "text-muted-foreground")}>
       <TableCell className="break-all font-medium">{item.model_id}</TableCell>
@@ -180,20 +179,11 @@ function ModelRow({ item, sender, blocked }: { item: LlmModel; sender: Sender; b
       <TableCell className="whitespace-nowrap tabular-nums">{formatAbsolute(item.last_seen)}</TableCell>
       <TableCell className="min-w-0">
         <div className="flex min-w-0 flex-col gap-1">
-          {assigned.length > 0 && (
-            <span className="flex flex-wrap gap-1" data-assigned-tiers>
-              {assigned.map((t) => (
-                <Badge key={t} tone="info">
-                  割り当て {t}
-                </Badge>
-              ))}
-            </span>
-          )}
           {tiers.length > 0 && <span>tier: {tiers.join(", ")}</span>}
           {item.routing.deployments.length > 0 && (
             <span className="break-all">deployment: {item.routing.deployments.join(", ")}</span>
           )}
-          {assigned.length === 0 && tiers.length === 0 && item.routing.deployments.length === 0 && <span>-</span>}
+          {tiers.length === 0 && item.routing.deployments.length === 0 && <span>-</span>}
         </div>
       </TableCell>
       <TableCell>
@@ -209,7 +199,14 @@ function SourceSection({ group, sender, blocked }: { group: SourceGroup; sender:
   const discoverId = `discover:${source}`;
   return (
     <Section
-      title={`${label}（${items.length}）`}
+      title={
+        <>
+          <a className="underline" href={`/sources/${encodeURIComponent(source)}`}>
+            {label}
+          </a>
+          （{items.length}）
+        </>
+      }
       level={2}
       data-source={source}
       actions={
@@ -277,6 +274,7 @@ export function ModelsView({ data, sender, blocked }: { data: LlmModelCatalog; s
 }
 
 export function ModelsScreen() {
+  const { source } = useSearch({ from: "/models" });
   const query = useQuery({
     queryKey: modelKeys.list(),
     queryFn: ({ signal }: { signal: AbortSignal }) => apiGet<LlmModelCatalog>("/api/llm/models", signal),
@@ -287,8 +285,8 @@ export function ModelsScreen() {
     <ScreenFrame
       title="モデル"
       route="/models"
-      breadcrumb={[{ label: "プロバイダ", link: { to: "/providers" } }, { label: "モデル" }]}
-      description="供給元（LLM source）が公開するモデルの一覧です。発見で最新にし、無効化・別名を上書きできます。役割への割り当ては先頭の「役割の割り当て」で決めます。"
+      breadcrumb={[{ label: "モデル" }]}
+      description="供給元（LLM source）が公開するモデルの一覧です。発見で最新にし、無効化・別名を上書きできます。source・model の利用可否は catalog の値で決まります。"
       actions={
         <Button
           variant="primary"
@@ -311,8 +309,19 @@ export function ModelsScreen() {
               </p>
             )}
             <ActionResultView result={sender.results["discover:all"]} />
-            <ModelAssignmentsSection models={query.data.items} />
-            <ModelsView data={query.data} sender={sender} blocked={denied} />
+            <ModelsView
+              data={
+                source
+                  ? {
+                      ...query.data,
+                      items: query.data.items.filter((item) => item.source === source),
+                      last_discovery: query.data.last_discovery.filter((item) => item.source === source),
+                    }
+                  : query.data
+              }
+              sender={sender}
+              blocked={denied}
+            />
           </div>
         )}
       </FetchFrame>

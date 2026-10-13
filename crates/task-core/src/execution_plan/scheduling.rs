@@ -5,19 +5,13 @@ use super::*;
 /// ADR-0074 D3.7（Phase F4b (f)）: `newly_ready` の一般化。`external_done` は満たされた外部の依存
 /// （`child:<key>` のうち子 Task が `done` のもの）。`child:` の依存は `external_done` にあれば満たす。
 pub fn newly_ready_with(units: &[WorkUnitRow], external_done: &BTreeSet<String>) -> Vec<String> {
-    let done: BTreeSet<&str> = units
-        .iter()
-        .filter(|u| u.status == WorkUnitStatus::Done)
-        .map(|u| u.key.as_str())
-        .chain(external_done.iter().map(String::as_str))
-        .collect();
-    let ranks = phase_ranks(units);
+    // ADR 2026-10-11-task-wait-reasons D3: 規則は `wait::unit_waits` と 1 か所（待ちが空の pending）。
+    let judge = crate::wait::UnitWaitJudge::new(units, external_done);
     units
         .iter()
         .filter(|u| u.status == WorkUnitStatus::Pending)
         .filter(|u| u.kind != WorkUnitKind::Integrate)
-        .filter(|u| u.depends_on.iter().all(|d| done.contains(d.as_str())))
-        .filter(|u| earlier_phases_done(units, &ranks, u))
+        .filter(|u| judge.wait_of(u).is_clear())
         .map(|u| u.id.clone())
         .collect()
 }
@@ -589,20 +583,7 @@ pub fn runnable_work_units(units: &[WorkUnitRow], in_flight: usize, limit: usize
 /// 統合 WU（`kind = integrate`）は `ready` にしない（scheduler が工程の完了を見て直接走らせる）。
 /// v1（`phase` が無い行）は従来と同じ。
 pub fn newly_ready(units: &[WorkUnitRow]) -> Vec<String> {
-    let done: BTreeSet<&str> = units
-        .iter()
-        .filter(|u| u.status == WorkUnitStatus::Done)
-        .map(|u| u.key.as_str())
-        .collect();
-    let ranks = phase_ranks(units);
-    units
-        .iter()
-        .filter(|u| u.status == WorkUnitStatus::Pending)
-        .filter(|u| u.kind != WorkUnitKind::Integrate)
-        .filter(|u| u.depends_on.iter().all(|d| done.contains(d.as_str())))
-        .filter(|u| earlier_phases_done(units, &ranks, u))
-        .map(|u| u.id.clone())
-        .collect()
+    newly_ready_with(units, &BTreeSet::new())
 }
 
 /// ADR-0074 D1.3（Phase F2b）: 工程の key → 順位（その工程の行の `seq` の最小値。`topo_sort` が
@@ -618,26 +599,6 @@ pub fn phase_ranks(units: &[WorkUnitRow]) -> BTreeMap<String, u32> {
         }
     }
     ranks
-}
-
-fn earlier_phases_done(
-    units: &[WorkUnitRow],
-    ranks: &BTreeMap<String, u32>,
-    u: &WorkUnitRow,
-) -> bool {
-    let Some(rank) = u.phase.as_ref().and_then(|p| ranks.get(p)) else {
-        return true;
-    };
-    units
-        .iter()
-        .filter(|o| o.status.is_active())
-        .filter(|o| {
-            o.phase
-                .as_ref()
-                .and_then(|p| ranks.get(p))
-                .is_some_and(|r| r < rank)
-        })
-        .all(|o| o.status == WorkUnitStatus::Done)
 }
 
 /// ADR-0074 D1.4（Phase F2b）: 統合 WU の key の接頭辞（`integrate-<phase>`）。

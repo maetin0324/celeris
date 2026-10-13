@@ -669,10 +669,7 @@ async fn create_task_returns_201_with_location_and_cli_defaults() {
         "既定の other は JSON に出さない"
     );
     assert_eq!(task.get("labels"), None, "空のラベルは JSON に出さない");
-    assert_eq!(
-        task["worker_hint"],
-        json!({"tier": "standard", "adapter": null})
-    );
+    assert_eq!(task["worker_hint"], json!({"tier": "standard"}));
     assert_eq!(
         task["budget"],
         json!({"max_turns": 10, "max_wall_secs": 600, "max_retries": 2})

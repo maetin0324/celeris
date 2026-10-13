@@ -305,6 +305,34 @@ pub(crate) fn delegated_request(
                 (Method::PATCH, format!("/api/v1/tasks/{id}"), payload)
             }
         }
+        InboxKind::Unintegrated => {
+            let base = base.ok_or_else(|| {
+                ApiProblem::new(
+                    StatusCode::CONFLICT,
+                    "native_action_required",
+                    "integration action is unavailable",
+                )
+            })?;
+            let action = match input.option.as_str() {
+                "merge" | "discard" | "hold" | "reopen" => input.option.as_str(),
+                _ => return Err(ApiProblem::bad_request("unsupported integration action")),
+            };
+            let path = base
+                .strip_suffix("merge")
+                .map(|prefix| format!("{prefix}{action}"))
+                .ok_or_else(|| {
+                    ApiProblem::new(
+                        StatusCode::CONFLICT,
+                        "native_action_required",
+                        "integration action path is invalid",
+                    )
+                })?;
+            (
+                Method::POST,
+                path,
+                serde_json::json!({"reason": input.note.as_deref().unwrap_or("")}),
+            )
+        }
         InboxKind::IntegrationRequest
         | InboxKind::DeliverySkipped
         | InboxKind::ClusterLogin
@@ -504,6 +532,7 @@ async fn answer(
             })?))
             .map_err(|_| ApiProblem::internal("answer request failed"))?;
         let response = crate::handlers::router(state.clone())
+            .merge(crate::integrations::routes().with_state(state.clone()))
             .oneshot(req)
             .await
             .map_err(|_| ApiProblem::internal("answer routing failed"))?;

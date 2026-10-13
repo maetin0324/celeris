@@ -5,9 +5,9 @@
 //! 受け入れ条件（ADR-0025）:
 //! 1. `[accounts] codex_dir` と `adapter = "codex"` の `account_pool` プロバイダで、残量の多い codex アカウントが
 //!    選ばれ、`CODEX_HOME` がその値になる
-//! 2. codex の `token_count` の `rate_limits` が観測値になり、`GET /accounts` に出る（短い枠/長い枠が
+//! 2. codex の `token_count` の `rate_limits` が観測値になり、`GET /llm/accounts` に出る（短い枠/長い枠が
 //!    `window_minutes` に従う）
-//! 3. `POST /accounts {"id":…,"adapter":"codex"}` → `login` が `kind: "device_code"` と `user_code` を返し、
+//! 3. `POST /llm/sources/codex_oauth/accounts {"id":…}` → `login` が `kind: "device_code"` と `user_code` を返し、
 //!    スタブの `codex login --device-auth` の完了後に `logged_in: true` になる。`login/code` は 409
 
 use std::path::{Path, PathBuf};
@@ -40,7 +40,7 @@ fn reserve_port() -> e2e::PortReservation {
 /// 負荷次第で 20 秒を超えることがあった（統合後の検査で 3 本とも `API did not come up`）。
 /// 早く上がれば早く抜けるので、上限を広げても通常の所要時間は変わらない。
 const STARTUP_WAIT: Duration = Duration::from_secs(90);
-/// 起動後に 1 つの task が dispatch → 完了し、その観測値が `GET /accounts` に載るまでの上限。
+/// 起動後に 1 つの task が dispatch → 完了し、その観測値が `GET /llm/accounts` に載るまでの上限。
 const SETTLE_WAIT: Duration = Duration::from_secs(60);
 
 fn wait_until(timeout: Duration, mut cond: impl FnMut() -> bool) -> bool {
@@ -212,12 +212,26 @@ listen = "127.0.0.1:{port}"
 [adapters.codex]
 command = "{codex}"
 
-[[providers]]
-id = "pool"
-adapter = "codex"
-tiers = ["frontier", "standard", "cheap"]
-concurrency = 1
-account_pool = true
+[llm_sources.codex]
+kind = "codex_oauth"
+accounts = []
+models = ["codex"]
+
+[harnesses.codex]
+kind = "codex"
+api_formats = ["codex_oauth"]
+source_kinds = ["codex_oauth"]
+
+[harness_selection]
+execution_class_defaults = {{}}
+
+[[harness_selection.rules]]
+harness = "codex"
+required_capabilities = []
+
+[route_defaults.codex]
+candidates = [{{ source = "codex", model = "codex" }}]
+
 "#,
             port = self.port,
             codex = codex.display(),
@@ -234,6 +248,7 @@ account_pool = true
 
     fn celerisctl(&self, args: &[&str]) -> String {
         let out = Command::new(bin("celerisctl"))
+            .env_remove("CELERIS_CONFIG")
             .arg("--db")
             .arg(self.root.join("celeris.sqlite3"))
             .args(args)
@@ -299,7 +314,7 @@ account_pool = true
             self.request("GET", "/health", None, &[]).status == 200
         });
         assert!(healthy, "API did not become healthy\n{}", daemon.log_text());
-        // `GET /accounts` の観測値（`usage` / `score` / `in_use`）は**ディスパッチャのスナップショット**
+        // `GET /llm/accounts` の観測値（`usage` / `score` / `in_use`）は**ディスパッチャのスナップショット**
         // 由来なので、API が上がっただけでは空になりうる（最初の tick より前は `snapshot: null`）。
         // 起動にかかる時間は環境で動く（Phase 56 で起動時のコンテナ runtime 検出が入った）ため、
         // 「最初の tick がスナップショットを出すまで」を待ちに含める。
@@ -418,7 +433,7 @@ account_pool = true
 }
 
 /// 受け入れ 1・2: 残量の高い codex アカウントが選ばれ、`CODEX_HOME` が一致する。`token_count` の
-/// `rate_limits` が `GET /accounts` に反映され（短い枠/長い枠が `window_minutes` に従う）、再起動しても残る。
+/// `rate_limits` が `GET /llm/accounts` に反映され（短い枠/長い枠が `window_minutes` に従う）、再起動しても残る。
 #[test]
 fn codex_account_selection_follows_headroom_and_sets_codex_home_and_records_rate_limits() {
     let env = Env::new();
@@ -433,7 +448,7 @@ fn codex_account_selection_follows_headroom_and_sets_codex_home_and_records_rate
     // ADR-0049: 起動時の推論不要な確認で、最初の仕事より前に残量が GUI に届く。
     assert!(
         wait_until(SETTLE_WAIT, || {
-            let accounts = env.get("/accounts").json();
+            let accounts = env.get("/llm/accounts").json();
             accounts["items"].as_array().is_some_and(|items| {
                 items.len() == 2
                     && items.iter().all(|item| {
@@ -468,22 +483,22 @@ fn codex_account_selection_follows_headroom_and_sets_codex_home_and_records_rate
         Some("b")
     );
 
-    // GET /accounts に反映されている: short window (300 min <= 1440) -> five_hour, long window (10080 min) -> seven_day。
-    let accounts = env.get("/accounts").json();
+    // GET /llm/accounts に反映されている: short window (300 min <= 1440) -> five_hour, long window (10080 min) -> seven_day。
+    let accounts = env.get("/llm/accounts").json();
     assert_eq!(
-        accounts["roots"]["codex"],
+        accounts["roots"]["codex_oauth"],
         json!(env.accounts_dir.display().to_string())
     );
     let items = accounts["items"].as_array().unwrap();
     let a = items
         .iter()
-        .find(|it| it["id"] == "a" && it["adapter"] == "codex")
+        .find(|it| it["source_id"] == "codex_oauth" && it["account_id"] == "a")
         .unwrap();
     assert_eq!(a["usage"]["five_hour"]["utilization"], json!(0.9));
     assert_eq!(a["usage"]["seven_day"]["utilization"], json!(0.1));
     let b = items
         .iter()
-        .find(|it| it["id"] == "b" && it["adapter"] == "codex")
+        .find(|it| it["source_id"] == "codex_oauth" && it["account_id"] == "b")
         .unwrap();
     assert_eq!(b["usage"]["five_hour"]["utilization"], json!(0.2));
 
@@ -497,15 +512,15 @@ fn codex_account_selection_follows_headroom_and_sets_codex_home_and_records_rate
     drop(daemon);
     let mut daemon = env.start_celeris(&config);
     env.wait_api(&mut daemon);
-    let accounts_after_restart = env.get("/accounts").json();
+    let accounts_after_restart = env.get("/llm/accounts").json();
     let items = accounts_after_restart["items"].as_array().unwrap();
-    let a = items.iter().find(|it| it["id"] == "a").unwrap();
+    let a = items.iter().find(|it| it["account_id"] == "a").unwrap();
     assert_eq!(a["usage"]["five_hour"]["utilization"], json!(0.9));
 
     env.replay_is_consistent();
 }
 
-/// 受け入れ 3: `POST /accounts {"adapter":"codex"}` → `login` は `kind: "device_code"` と `user_code` を返す。
+/// 受け入れ 3: `POST /llm/sources/codex_oauth/accounts` → `login` は `kind: "device_code"` と `user_code` を返す。
 /// スタブの `codex login --device-auth` の完了後（`auth.json` ができて exit 0）に `logged_in: true` になる。
 /// `login/code` は 409 `login_code_not_supported`。
 #[test]
@@ -518,12 +533,12 @@ fn codex_device_login_flow_completes_without_login_code_and_logs_no_secrets() {
     env.wait_api(&mut daemon);
     env.token = Some("s3cret-admin-token".into());
 
-    let created = env.post("/accounts", json!({"id": "c", "adapter": "codex"}));
+    let created = env.post("/llm/sources/codex_oauth/accounts", json!({"id": "c"}));
     assert_eq!(created.status, 201, "{}", created.body);
-    assert_eq!(created.json()["adapter"], json!("codex"));
+    assert_eq!(created.json()["source_id"], json!("codex_oauth"));
     assert_eq!(created.json()["logged_in"], json!(false));
 
-    let started = env.post_empty("/accounts/c/login?adapter=codex");
+    let started = env.post_empty("/llm/sources/codex_oauth/accounts/c/login");
     assert_eq!(started.status, 200, "{}", started.body);
     let body = started.json();
     assert_eq!(body["kind"], json!("device_code"));
@@ -532,24 +547,27 @@ fn codex_device_login_flow_completes_without_login_code_and_logs_no_secrets() {
     assert!(body["expires_at"].is_string());
 
     // codex は login/code を使わない: 409。
-    env.post("/accounts/c/login/code?adapter=codex", json!({"code": "x"}))
-        .assert_problem(409, "login_code_not_supported");
+    env.post(
+        "/llm/sources/codex_oauth/accounts/c/login/code",
+        json!({"code": "x"}),
+    )
+    .assert_problem(409, "login_code_not_supported");
 
     // celeris のポーリングが完了を検知するまで待つ（人が別デバイスで入力し終わった、のスタブ側の代わり:
     // スタブは待たずに自分で auth.json を書いて exit 0 する）。
     let logged_in = wait_until(SETTLE_WAIT, || {
-        env.get("/accounts").json()["items"]
+        env.get("/llm/accounts").json()["items"]
             .as_array()
             .is_some_and(|items| {
                 items
                     .iter()
-                    .any(|it| it["id"] == "c" && it["logged_in"] == true)
+                    .any(|it| it["account_id"] == "c" && it["logged_in"] == true)
             })
     });
     assert!(
         logged_in,
         "codex account never became logged_in: {}",
-        env.get("/accounts").body
+        env.get("/llm/accounts").body
     );
     assert!(env.accounts_dir.join("c").join("auth.json").is_file());
 
@@ -559,7 +577,7 @@ fn codex_device_login_flow_completes_without_login_code_and_logs_no_secrets() {
     assert!(!log.contains("codex/device"), "{log}");
 
     // 後片付け: DELETE は .removed へ移す。
-    let deleted = env.delete("/accounts/c?adapter=codex");
+    let deleted = env.delete("/llm/sources/codex_oauth/accounts/c");
     assert_eq!(deleted.status, 200, "{}", deleted.body);
     assert!(!env.accounts_dir.join("c").exists());
 

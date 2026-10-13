@@ -3,16 +3,16 @@
 # （ADR-0040 D1/D2、ADR-0045 D2）。単体では何もしない。`source` して使う。
 #
 # 置き場（ADR-0045 D2。XDG 流に設定と状態を分ける）:
-#   $CELERIS_CONFIG_DIR（既定 ~/.config/celeris） 設定と秘密: config.toml org.toml providers.d/ api.token
-#                                                 gui.password gui.session-secret secrets/
+#   $CELERIS_CONFIG_DIR（既定 ~/.config/celeris） 設定と秘密: config.toml org.toml api.token
+#                                                 web.password web.session-secret secrets/
 #   $CELERIS_STATE_DIR （既定 ~/.local/celeris）  hot state: releases/ staging/ tools/ current previous
 #   $CELERIS_BACKUPS_DIR（既定 $CELERIS_STATE_DIR/backups）新規 backup
 #   $CELERIS_LOGS_DIR（既定 $SD_BACKUPS）運用 log
 #
 # 触ってよい場所（ADR-0040 D1、安全規則）:
 #   $SD_RELEASES / $SD_STAGING / $SD_BACKUPS と、昇格のときだけ $SD_CURRENT / $SD_PREVIOUS の symlink。
-# 触ってはいけない場所: $SD_CONFIG（編集しない。`migrate-to-celeris.sh` だけが移行のときに 1 度書く）、
-#   $SD_DB（`sqlite3 .backup` と `mode=ro` で読むだけ）、本番のポート 127.0.0.1:7710 と 0.0.0.0:7700（bind しない）。
+# 触ってはいけない場所: $SD_CONFIG（編集は運用セッションのみ）、
+#   $SD_DB（`sqlite3 .backup` と `mode=ro` で読むだけ）、本番のポート 127.0.0.1:7710 と 127.0.0.1:7720（bind しない）。
 
 # shellcheck shell=bash
 
@@ -34,10 +34,6 @@ CELERIS_STATE_DIR="${CELERIS_STATE_DIR:-$HOME/.local/celeris}"
 # ADR-0040 D6（Phase 48）: `release.sh` がこの一式を `<release>/scripts/` に写すので、
 # `promote.sh` はリリースの中から（`POST /releases/{sha12}/promote` 経由で）起きることがある。
 # そのときも `lib.sh` は `dirname "${BASH_SOURCE[0]}"` で自分の隣を読むだけなので、場所に依らない。
-# Phase 83 / G36（ADR-0041 追記）: `verify.sh` の検査 4b（gui-e2e）だけ、`$SD_REPO/gui`（devDependencies
-# 込みで `pnpm install` 済みの方。release の `gui/` は `pnpm install --prod` で Playwright が無い）を
-# **あれば使う**。無くても検査 4b は「未インストール」で false になるだけでクラッシュしない
-# （＝この段落の「作業チェックアウトが無くても動く」は変わらない）。
 SD_REPO="${SD_REPO:-$HOME/workspace/agent-platform}"
 
 SD_RELEASES="$CELERIS_STATE_DIR/releases"
@@ -48,10 +44,6 @@ SD_BUILD_ROOT="$SD_RELEASES/.build"
 # `.build/<sha12>/` は gate が落ちたときの gate.json とログの置き場（ただのディレクトリ）として残る。
 SD_BUILD_TREE="$SD_BUILD_ROOT/tree"
 SD_CARGO_TARGET="$SD_RELEASES/.cargo-target"
-# Phase SD-1: リリースの gui の本番依存（`pnpm install --prod --frozen-lockfile` の node_modules）の置き場。
-# `<key>` = gui の package.json / pnpm-lock.yaml / pnpm-workspace.yaml と node / pnpm の版の sha256。
-# リリースの `gui/node_modules` はここへの相対 symlink（NFS 上で 4,000 余のファイルを毎回書かないため）。
-SD_PNPM_PROD_CACHE="$SD_RELEASES/.pnpm-prod-cache"
 SD_STAGING="$CELERIS_STATE_DIR/staging"
 SD_TOOLS="$CELERIS_STATE_DIR/tools"
 SD_BACKUPS="${CELERIS_BACKUPS_DIR:-$CELERIS_STATE_DIR/backups}"
@@ -88,16 +80,13 @@ SD_DB="${CELERIS_DB:-$(sd_db_from_config)}"
 
 # 本番のポート。ここに bind してはいけない（読むだけ）。
 SD_PROD_API="http://127.0.0.1:7710"
-SD_PROD_GUI_PORT=7700
 # staging のポート（D3）。
 # Phase SD-1: テスト（`scripts/selfdeploy/tests/`）が空いているポートで verify.sh を回せるよう env で変えられる。
-# 本番のポート（7710 / 7700）にはしないこと（verify.sh が起動前に拒む）。
+# 本番のポート（7710 / 7720）にはしないこと（verify.sh が起動前に拒む）。
 SD_STAGING_API_PORT="${SD_STAGING_API_PORT:-7711}"
-SD_STAGING_GUI_PORT="${SD_STAGING_GUI_PORT:-7701}"
 SD_STAGING_OLD_API_PORT="${SD_STAGING_OLD_API_PORT:-7712}"
 
 # corepack の pnpm（このホストでは PATH に無い）。
-SD_PNPM_SHIM_DIR="${SD_PNPM_SHIM_DIR:-/usr/lib/node_modules/corepack/shims}"
 
 # ---- ログ ------------------------------------------------------------------
 
@@ -639,15 +628,6 @@ sd_mkdirs() {
   mkdir -p "$SD_RELEASES" "$SD_BUILD_ROOT" "$SD_BACKUPS"
 }
 
-# pnpm（corepack の shim）を PATH に入れる。
-sd_use_pnpm() {
-  case ":$PATH:" in
-    *":$SD_PNPM_SHIM_DIR:"*) ;;
-    *) PATH="$SD_PNPM_SHIM_DIR:$PATH"; export PATH ;;
-  esac
-  command -v pnpm >/dev/null 2>&1 || sd_die "pnpm not found (looked in $SD_PNPM_SHIM_DIR)"
-}
-
 # ---- scratch pool の lease（ADR-0075 D7、Phase G1。Phase SD-1 で owner を共有に） ----
 
 # release ゲートの `CARGO_TARGET_DIR` は scratch pool の lease から取る。
@@ -895,7 +875,7 @@ sd_scratch_release() {
 
 # ---- 直列化（flock。ADR-0041 D2） -----------------------------------------
 
-# `verify.sh` は `$SD_STAGING` とポート 7711 / 7701 / 7712 を固定で使うので、2 本同時に走ると
+# `verify.sh` は `$SD_STAGING` とポート 7711 / 7712 を固定で使うので、2 本同時に走ると
 # 必ず壊れる（スナップショットを作り直す側が、もう一方の DB を消す）。`release.sh` は同じ sha の
 # worktree競合に加え、異なるshaでも共有Cargo成果物が競合するため全体を直列化する。
 # どちらも `flock` の**ファイル記述子**で直列化する
@@ -988,7 +968,6 @@ SD_SENSITIVE_PATTERNS=(
   "crates/task-api/src/releases.rs"
   "crates/task-core/migrations/"
   "CLAUDE.md"
-  "gui/CLAUDE.md"
   ".claude/"
   "config/"
   "agent-docs/adr/0040-"

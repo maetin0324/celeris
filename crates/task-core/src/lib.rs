@@ -65,10 +65,13 @@ pub mod instance;
 pub mod integration_request;
 /// ADR-0043 D5（Phase 54）: 変更の取り込みの記録（`task_integrations`）。
 pub mod integrations;
+pub use integrations::{TaskRepoIntegrationState, TaskRepoIntegrationStatus};
 /// ADR-0047（Phase 61）: 知識ベース（front matter・索引・検索・マウント。純粋関数だけ）。
 pub mod knowledge;
 /// ADR-0047 D4（Phase 62）: 知識整理 run の追跡（`knowledge_runs`）。
 pub mod knowledge_run;
+/// ADR 2026-10-11: harness 選択と source/model routing の純粋な境界。
+pub mod llm_route;
 /// ADR-0056 D1 / D4（Phase 78）: MCP サーバーの認証（`mcp_clients`）とログ（`mcp_calls`）。
 pub mod mcp;
 pub mod message;
@@ -101,6 +104,8 @@ pub mod transition;
 pub mod tree;
 /// ADR-0079 D11（Phase R4a）: 木の roll-up（純粋関数）。
 pub mod tree_metrics;
+// ADR 2026-10-11-task-wait-reasons: task の待ちの理由（dispatcher と画面が同じ関数を使う）。
+pub mod wait;
 /// ADR-0043 D4（Phase 52）: リポジトリの中の設定 `.config/celeris/workspace.toml`。
 pub mod workspace_config;
 pub mod write_set;
@@ -174,7 +179,7 @@ pub mod routing;
 /// ADR 2026-10-07-browser-trusted-devices: ブラウザの信頼できる端末（hash のみ・注入した時計）。
 pub mod trusted_device;
 pub use pricing::{estimate_cost_usd, output_input_ratio};
-pub use provider_source::{LlmSourceRef, ProviderKind, ResolvedLlmSource, SourceOrigin};
+pub use provider_source::LlmSourceRef;
 pub use routing::{RoutingDecision, RoutingPolicy, RoutingSignals, StaticRoutingPolicy};
 // ---- ADR-0043 D1 / D2（Phase 52）: 案件のリポジトリ ----
 // ---- ADR-0054 D1（Phase 67）: ノードごとの継続セッション ----
@@ -275,6 +280,10 @@ pub use tree::{
     UnitGate, UnitGateAction, UnitGateContext, UnitGateReport,
 };
 pub use tree_metrics::{DepthRollup, RollupMetrics, RollupNodeFacts, SubtreeMetrics};
+pub use wait::{
+    BackoffCause, CapacityScope, ChildFacts, ChildResolution, HaltState, HaltedSet, HumanGateKind,
+    TaskWait, UnitWait, WaitFacts, db_waits, halt_waits, plan_waits, resolve_children, unit_waits,
+};
 // ---- ADR-0072 D13（Phase E3）: Complexity Gate ----
 pub use direct_route::{
     DIRECT_ROUTE_POLICY_VERSION, DirectRouteInputs, Route, RouteDecision, RouteReason,

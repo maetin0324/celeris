@@ -154,7 +154,7 @@ celerisctl knowledge rerun  <task_id>                      # 管理系。**DB �
 
 - GUI の「知識」画面: scope 別のツリー、検索、ページの描画・編集・履歴、`_inbox` の一覧（accept / reject、出典へのリンク）
 - API: `GET /knowledge/tree`、`GET /knowledge/page`、`PUT /knowledge/page`（管理系）、`GET /knowledge/inbox`、
-  `POST /knowledge/inbox/{id}/{accept,reject}`（管理系）。仕様は `docs/api/v1/gui-api.md` §3.98〜3.103
+  `POST /knowledge/inbox/{id}/{accept,reject}`（管理系）。仕様は `docs/api/v1/api.md` §3.98〜3.103
 - エディタで直接書いてもよい（**正本は作業ツリーのファイル**なので、未コミットの編集もそのまま GUI に見える）。
   そのときは `celerisctl knowledge reindex` を 1 回呼ぶか、GUI をもう一度開けば索引が作り直される
 
@@ -254,22 +254,26 @@ command = "~/.local/celeris/tools/langmem/.venv/bin/python"
 enabled = true
 provider = "openai-compatible"
 # ADR-0053 D2（Phase 65）: celeris の LLM source プロキシに向ける（`[llm_proxy]`。既定
-# 127.0.0.1:18100）。celeris/cheap は利用可能な Qwen を優先し、届かなければ Claude/GPT に倒れる
-# （ADR-0052 のフォールバックはプロキシの中に吸収される）。
+# 127.0.0.1:18100）。proxy は具体的な `<source_id>/<model_id>` だけを受ける（tier alias は無い）。
 base_url = "http://127.0.0.1:18100/v1"
-model = "celeris/cheap"
+model = "qwen/qwen3.8-27b"
 api_key_secret = "celeris-api-token"    # [api] token_file と同じ値を secrets に登録
 
-[[providers]]
-id = "langmem-main"
-kind = "adapter"
-adapter = "langmem"
-llm_source = "celeris"
-tiers = ["cheap"]
+[harnesses.langmem]
+kind = "langmem"
+api_formats = ["openai_compatible"]
+source_kinds = ["openai_compatible", "claude_oauth", "codex_oauth"]
+capabilities = ["memory"]
+
+[route_defaults.langmem]
+candidates = [{ source = "qwen", model = "qwen3.8-27b" }, { source = "claude_oauth", model = "claude-sonnet-5-5" }]
 ```
 
-同時実行数はこの行の LLM source の暗黙アカウント `implicit/celeris` の上限で決まる（既定は `[accounts] max_runs_per_account`。同じ source `celeris` を使う他の非プール行と 1 件を共有する）。
-アカウント画面で変える（[providers ガイド](providers.md#同時実行数はアカウントで決める)）。`[[providers]].concurrency` は deprecated。
+`[llm_sources.qwen]` などの source 宣言と、proxy 経由の `[[llm_routes]]` は
+[移行手順](../ops/provider-llm-source-migration.md)の「移行後の TOML」を参照する。
+同時実行数は選ばれた route の LLM source のアカウントの上限で決まる（Qwen なら暗黙アカウント `qwen`。
+既定は `[accounts] max_runs_per_account`）。アカウント画面か
+`PATCH /api/v1/llm/sources/{source_id}/accounts/{account_id}`（[api.md](../api/v1/api.md) §3.29a）で変える。
 
 celeris を再起動（または `POST /reload` で読み直せない設定なので再起動）すれば、次の tick から
 知識整理 run が起き始める。
@@ -279,7 +283,7 @@ celeris を再起動（または `POST /reload` で読み直せない設定な�
 Phase 64 では旧 Qwen トンネルが落ちたときの知識整理 run の取りこぼしを防ぐため、
 接続先の到達性検査、cheap 汎用ハーネスへの fallback、失敗 run の再試行を導入した。
 現在の推奨接続先は celeris proxy。個別の Qwen トンネルではなく proxy の到達性を検査し、
-proxy 内部で cheap の Qwen または Claude/GPT を選ぶ。
+proxy は `model` に書いた具体的な source/model へ中継する。
 
 ### (1) dispatch の直前に到達性を見る（D1）
 

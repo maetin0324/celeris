@@ -6,7 +6,7 @@ updated: 2026-10-08
 ---
 # web: アカウント画面で上限を編集（暗黙アカウントを含む）、プロバイダ画面から concurrency を外す
 
-2026-10-08、WorkUnit `web`（run 01M4DTRN0S9KP504MFRSA3263X）。ADR 2026-10-08-account-concurrency-limits、gui-api.md §3.29・§3.29a。crates は変えていない。
+2026-10-08、WorkUnit `web`（run 01M4DTRN0S9KP504MFRSA3263X）。ADR 2026-10-08-account-concurrency-limits、api.md §3.29・§3.29a。crates は変えていない。
 
 ## 実装
 

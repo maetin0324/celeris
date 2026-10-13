@@ -18,14 +18,11 @@ test.beforeEach(async ({ page }) => {
   });
 });
 
-test("parity staging: release and gui are healthy together", async ({ page }) => {
+test("parity staging: release gateway is healthy", async ({ page }) => {
   const health = await page.request.get("/healthz");
   expect(health.ok()).toBe(true);
   const body = await health.json();
   expect(body).toMatchObject({ ok: true, name: "celeris-web", release: process.env.WEB_E2E_SHA12 });
-  const gui = await page.request.get("http://127.0.0.1:7701/healthz");
-  expect(gui.ok()).toBe(true);
-  expect(await gui.json()).toMatchObject({ release: process.env.WEB_E2E_SHA12 });
 });
 
 test("parity staging: real celeris serves read-only collections", async ({ page }) => {

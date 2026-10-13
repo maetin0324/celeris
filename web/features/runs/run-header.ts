@@ -1,4 +1,4 @@
-import type { RunSummary } from "../../api/generated/types";
+import type { RunSelectionView, RunSummary } from "../../api/generated/types";
 import type { RunLogEvent } from "./run-log";
 
 // run ログ画面の header と各 event の見出しに出す値（純粋関数。表示部品は run-log-view.tsx）。
@@ -38,9 +38,27 @@ export function runStatus(run: Pick<RunSummary, "finished_at" | "outcome">): str
   return run.outcome ?? undefined;
 }
 
-/** harness の表示（adapter と、あれば model）。 */
-export function runHarness(run: Pick<RunSummary, "adapter" | "model">): string {
-  return run.model ? `${run.adapter}（${run.model}）` : run.adapter;
+/** 旧 run（legacy_unresolved）の選択表示。harness・source・model・account は推測で埋めない。 */
+export const LEGACY_SELECTION_TEXT = "記録なし（旧 run）";
+
+export type RunSelectionParts = { harness: string; sourceId: string; model: string; account: string };
+
+/** run の選択（harness・source・model・account）。旧 run は undefined。 */
+export function runSelectionParts(selection: RunSelectionView): RunSelectionParts | undefined {
+  if (selection.status !== "selected") return undefined;
+  return {
+    harness: selection.harness_id,
+    sourceId: selection.source_id,
+    model: selection.model_id,
+    account: selection.account_id,
+  };
+}
+
+/** 選択を 1 行の文字にする（task 詳細の run 一覧用）。旧 run は LEGACY_SELECTION_TEXT。 */
+export function runSelectionText(selection: RunSelectionView): string {
+  const parts = runSelectionParts(selection);
+  if (!parts) return LEGACY_SELECTION_TEXT;
+  return `${parts.harness} / ${parts.sourceId} / ${parts.model} / 口座 ${parts.account}`;
 }
 
 /** event の種類の可視ラベル。色だけで区別しないため、どの event にもこの文字を出す。 */

@@ -39,6 +39,7 @@ fn request(dir: &Path) -> RunRequest {
         work_dir: None,
         context: RunContext::default(),
         cargo_target_dir: None,
+        llm_route: None,
     }
 }
 
@@ -253,7 +254,7 @@ async fn pi_adapter_custom_models_and_context_header_use_env_references() {
             "cp \"$PI_CODING_AGENT_DIR/models.json\" models.copy\nprintf '%s' \"$CELERIS_PI_ROUTING_CONTEXT\" > context.copy\n{SUCCESS}"
         ),
     );
-    cfg.model = Some("local/celeris/cheap".into());
+    cfg.model = Some("qwen/qwen3.8-27b".into());
     cfg.base_url = Some("http://127.0.0.1:18100/v1".into());
     cfg.env
         .push(("CELERIS_PI_API_KEY".into(), "test-secret".into()));
@@ -266,18 +267,35 @@ async fn pi_adapter_custom_models_and_context_header_use_env_references() {
     let body = std::fs::read_to_string(dir.path().join("models.copy")).unwrap();
     let models: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(
-        models["providers"]["local"]["models"][0]["id"],
-        "celeris/cheap"
+        models["providers"]["qwen"]["models"][0]["id"],
+        "qwen3.8-27b"
     );
-    assert_eq!(models["providers"]["local"]["apiKey"], "CELERIS_PI_API_KEY");
+    assert_eq!(models["providers"]["qwen"]["apiKey"], "CELERIS_PI_API_KEY");
     assert_eq!(
-        models["providers"]["local"]["headers"]["x-celeris-routing-context"],
+        models["providers"]["qwen"]["headers"]["x-celeris-routing-context"],
         "CELERIS_PI_ROUTING_CONTEXT"
     );
     assert!(!body.contains("test-secret") && !body.contains("opaque-ref"));
     assert_eq!(
         std::fs::read_to_string(dir.path().join("context.copy")).unwrap(),
         "opaque-ref"
+    );
+}
+
+#[tokio::test]
+async fn pi_adapter_without_proxy_base_url_does_not_transport_context_header() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut cfg = config(dir.path(), SUCCESS);
+    cfg.model = Some("qwen/qwen3.8-27b".into());
+    let mut req = request(dir.path());
+    req.context.routing_context_ref = Some("opaque-ref".into());
+    PiAdapter::new(cfg)
+        .run(req, "direct", limits(), &NullSink)
+        .await
+        .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("runs/direct/context-transport.json")).unwrap(),
+        "{\"context_transport\":\"unsupported\"}\n",
     );
 }
 

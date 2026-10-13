@@ -87,8 +87,7 @@ fn existing_reviewer_gets_a_pinned_merge_criterion_without_extra_tasks() {
             .into_iter()
             .collect(),
     };
-    // ADR-0079 D6（Phase R1c）: 同じ task が木の子なら、取り込みの判定も `deliveries` の行も作らない
-    // （成果は親の段階の統合で親のブランチへ）。root は下のとおり今までと同じ（回帰）。
+    // 木の子は親の統合工程で扱い、delivery は作らず除外理由を記録する。
     let mut as_child = task.clone();
     let parent_id = TaskId::new();
     as_child.tree = Some(TreeInfo {
@@ -114,6 +113,19 @@ fn existing_reviewer_gets_a_pinned_merge_criterion_without_extra_tasks() {
         "no merge criterion for a child"
     );
     assert!(store.delivery_get(task.id).unwrap().is_none());
+    assert!(
+        store
+            .events_for(task.id)
+            .unwrap()
+            .iter()
+            .any(|(_, event)| matches!(
+                event,
+                Event::DeliverySkipped {
+                    reason: DeliverySkipReason::TreeChild,
+                    ..
+                }
+            ))
+    );
     let d = begin(
         &store,
         &mut task,
@@ -158,6 +170,19 @@ fn existing_reviewer_gets_a_pinned_merge_criterion_without_extra_tasks() {
         begin(&store, &mut unrelated, &root, &policy, "w", "r")
             .unwrap()
             .is_none()
+    );
+    assert!(
+        store
+            .events_for(task.id)
+            .unwrap()
+            .iter()
+            .any(|(_, event)| matches!(
+                event,
+                Event::DeliverySkipped {
+                    reason: DeliverySkipReason::NoProject,
+                    ..
+                }
+            ))
     );
 }
 
@@ -670,13 +695,13 @@ fn delivery_skip_once_per_head() {
 }
 
 #[test]
-fn delivery_skip_tree_child_and_out_of_policy_emit_nothing() {
+fn delivery_skip_tree_child_and_out_of_policy_are_recorded() {
     let mut f = skip_fixture();
-    // 対象外の案件（marker も部署も無いが、何も積まない）。
+    // 対象外の案件（marker も部署も無いので project 除外理由を優先する）。
     f.policy.projects.clear();
     fs::remove_file(f.root.join(f.task.id.to_string()).join("worktree.json")).unwrap();
     assert!(f.begin().is_none());
-    assert!(f.skips().is_empty());
+    assert_eq!(f.skips()[0].0, DeliverySkipReason::ProjectNotEnabled);
     // 対象案件の木の子。
     f.policy
         .projects
@@ -695,6 +720,71 @@ fn delivery_skip_tree_child_and_out_of_policy_emit_nothing() {
         base_commit: None,
     });
     assert!(f.begin().is_none());
-    assert!(f.skips().is_empty());
+    assert_eq!(f.skips()[1].0, DeliverySkipReason::TreeChild);
     assert!(f.store.delivery_get(f.task.id).unwrap().is_none());
+}
+
+impl SkipFixture {
+    fn git(&self, args: &[&str]) -> String {
+        let out = crate::changes::git(&self.repo, args, Duration::from_secs(10)).unwrap();
+        assert!(out.ok, "{}", out.stderr);
+        out.stdout.trim().to_string()
+    }
+
+    fn with_department(mut self) -> Self {
+        let project = self.task.project_id.unwrap().to_string();
+        self.policy
+            .default_departments
+            .insert(project, "worker".into());
+        self
+    }
+
+    fn assert_no_commits_skip(&mut self) {
+        assert!(self.begin().is_none());
+        assert_eq!(self.task.acceptance.len(), 1, "no merge criterion");
+        assert!(self.store.delivery_get(self.task.id).unwrap().is_none());
+        let skips = self.skips();
+        assert_eq!(skips.len(), 1, "{skips:?}");
+        assert_eq!(skips[0].0, DeliverySkipReason::NoCommits);
+        assert_eq!(skips[0].0.code(), "no_commits");
+        assert_eq!(skips[0].2.as_deref(), Some(self.head().as_str()));
+    }
+}
+
+/// 2026-10-11 付記: task の commit が 0 件（head = base）の root は取り込み判定を作らない。
+#[test]
+fn delivery_skip_no_commits_when_head_equals_base() {
+    let mut f = skip_fixture().with_department();
+    f.git(&["reset", "--hard", "main"]);
+    assert_eq!(f.head(), f.git(&["rev-parse", "main"]));
+    f.assert_no_commits_skip();
+    // 同じ head では 1 件だけ。
+    assert!(f.begin().is_none());
+    assert_eq!(f.skips().len(), 1);
+}
+
+/// head が base の祖先（main が先に進んだ）でも取り込む commit は無い。
+#[test]
+fn delivery_skip_no_commits_when_head_is_ancestor_of_base() {
+    let mut f = skip_fixture().with_department();
+    f.git(&["reset", "--hard", "main"]);
+    f.git(&["checkout", "main"]);
+    f.git(&["commit", "--allow-empty", "-m", "another task"]);
+    assert_ne!(f.head(), f.git(&["rev-parse", "main"]));
+    f.assert_no_commits_skip();
+}
+
+/// head ≠ base の criterion は審査範囲を base..head と明示する。
+#[test]
+fn merge_criterion_names_base_to_head_range() {
+    let mut f = skip_fixture().with_department();
+    let d = f.begin().unwrap();
+    let base = f.git(&["rev-parse", "main"]);
+    assert_eq!(d.base, base);
+    assert!(f.skips().is_empty());
+    let text = &f.task.acceptance[d.criterion_idx].text;
+    assert!(text.contains(&format!("{base}..{}", d.head)), "{text}");
+    assert!(text.contains(&format!("{base}...{}", d.head)), "{text}");
+    assert!(text.contains("審査対象ではない"), "{text}");
+    assert!(!text.contains("指定SHA"), "{text}");
 }

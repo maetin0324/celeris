@@ -140,12 +140,26 @@ max_wall_secs = 120
 [adapters.fake]
 command = ["sh", "{script}"]
 
-[[providers]]
-id = "fake-local"
-adapter = "fake"
-tiers = ["frontier", "standard", "cheap"]
-concurrency = 3
-model = "fake"
+[llm_sources.fake]
+kind = "fake"
+accounts = ["local"]
+models = ["fake"]
+
+[harnesses.fake]
+kind = "fake"
+api_formats = ["fake"]
+source_kinds = ["fake"]
+
+[harness_selection]
+execution_class_defaults = {{}}
+
+[[harness_selection.rules]]
+harness = "fake"
+required_capabilities = []
+
+[route_defaults.fake]
+candidates = [{{ source = "fake", model = "fake" }}]
+
 "#,
             port = self.port,
             instructions = LEAD_INSTRUCTIONS,
@@ -158,6 +172,7 @@ model = "fake"
 
     fn celerisctl(&self, args: &[&str]) -> String {
         let out = Command::new(bin("celerisctl"))
+            .env_remove("CELERIS_CONFIG")
             .arg("--db")
             .arg(&self.db)
             .args(args)

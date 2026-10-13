@@ -189,14 +189,13 @@ fn ctx(origin: PlanOrigin) -> PlanContext {
 fn baseline_override_fixture() -> (WorkUnitSpec, ExecutionPlanSpec) {
     let mut done_spec = spec("baseline", &[]);
     done_spec.checks = vec![WorkUnitCheck {
-        cmd: "git diff --quiet 06e9a03cffe8 -- gui".to_string(),
+        cmd: "git diff --quiet 06e9a03cffe8 -- web".to_string(),
         expect_exit: 0,
         scope: false,
     }];
     let mut fixed = done_spec.clone();
     fixed.checks[0].cmd =
-        "git diff --quiet 06e9a03cffe8 -- gui \":!gui/docs/adr/0002-frontend-stack.md\""
-            .to_string();
+        "git diff --quiet 06e9a03cffe8 -- web \":!docs/frontend/DESIGN.md\"".to_string();
     (done_spec, plan(vec![fixed, spec("next", &["baseline"])]))
 }
 

@@ -6,7 +6,7 @@ use serde::Deserialize;
 use task_core::{Tier, WorkerHint};
 use task_dispatch::{AccountsRuntimeConfig, DispatchConfig};
 
-use super::{Config, ConfigError, ProviderConfig};
+use super::{Config, ConfigError};
 
 /// `[sessions]`（ADR-0054 D1。Phase 67）: CoS の対話・部門長のレビュー run の継続セッション
 /// （`node_sessions`）の逼迫判定。`approx_tokens`（run の usage の累計）がこれを超えたら、次の run は
@@ -124,44 +124,9 @@ pub struct PlanConfig {
 }
 
 impl Config {
-    /// ADR 2026-10-07（coding harness の既定）: dispatcher の既定解決の材料。`adapter_policy =
-    /// "model_family"` のハーネス、各 provider 行の実効 LLM source、routing catalog の model family。
-    /// catalog が組めない設定（`validate` で落ちる）では family を空にする（導出は source / pool で）。
-    pub fn coding_harness_default(&self) -> task_dispatch::CodingHarnessDefault {
-        task_dispatch::CodingHarnessDefault {
-            harnesses: self
-                .harness_registry()
-                .all()
-                .iter()
-                .filter(|h| h.adapter_policy == task_core::AdapterPolicy::ModelFamily)
-                .map(|h| h.id.clone())
-                .collect(),
-            sources: self
-                .providers
-                .iter()
-                .filter_map(|p| {
-                    self.provider_llm_source(&p.id)
-                        .map(|s| (p.id.clone(), s.source))
-                })
-                .collect(),
-            model_families: self
-                .routing_catalog()
-                .map(|c| {
-                    c.models
-                        .into_iter()
-                        // catalog に無い model の穴埋め（`unknown_model`）は family 不明として扱う。
-                        .filter(|m| {
-                            !m.family.trim().is_empty() && !m.family.eq_ignore_ascii_case("unknown")
-                        })
-                        .map(|m| (m.id, m.family))
-                        .collect()
-                })
-                .unwrap_or_default(),
-        }
-    }
-
     pub fn dispatch_config(&self) -> DispatchConfig {
         DispatchConfig {
+            source_error_cooldown: std::time::Duration::from_secs(self.error_cooldown_secs),
             delivery: task_ops::delivery::DeliveryPolicy {
                 projects: self.selfdeploy.delivery_projects.clone(),
                 repo: self.selfdeploy.repo.clone(),
@@ -185,7 +150,6 @@ impl Config {
                 // run の lane は `Dispatcher::pick_reviewer` が `reviewer_tier_override` /
                 // `profile.review_tier` / worker lane から動的に決める。
                 tier: self.reviewer.tier.unwrap_or_else(default_reviewer_tier),
-                adapter: self.reviewer.adapter.clone(),
             },
             // ADR-0069 Phase 118 D4: `[reviewer] tier` が明示されているときだけ `Some`。
             reviewer_tier_override: self.reviewer.tier,
@@ -210,7 +174,7 @@ impl Config {
                 // ADR-0052 D1（Phase 64）: dispatch の直前に `GET <base_url>/models` を当てる先。
                 langmem_base_url: self.knowledge.langmem.base_url.clone(),
                 // Phase 65b / ADR-0139 D2: probe の `Authorization: Bearer` に使う平文のトークン。
-                // `build_adapters` の langmem アダプタと同じ `Config::langmem_api_key`（proxy を指すなら
+                // `build_harness_adapters` の langmem アダプタと同じ `Config::langmem_api_key`（proxy を指すなら
                 // `[api]` のトークン）。**値はここにしか無い**（ログには出さない）。
                 langmem_api_key: self.langmem_api_key(),
                 // ADR-0052 D2: `knowledge` ハーネスの `fallback`（組み込みの既定は tier `cheap`）。
@@ -245,7 +209,6 @@ impl Config {
                 no_progress_limit: self.execution.no_progress_limit,
                 gate: task_core::GateMode::parse(&self.execution.gate).unwrap_or_default(),
                 planner: task_core::PlannerConfig {
-                    adapter: self.execution.planner.adapter.clone(),
                     permission_mode: self.execution.planner.permission_mode.clone(),
                     tier: self.execution.planner.tier,
                     max_turns: self.execution.planner.max_turns,
@@ -274,35 +237,26 @@ impl Config {
 }
 
 impl ReviewerConfig {
-    /// ADR-0010 D9: Reviewer run を満たせるプロバイダが無い設定は、Reviewer 条件のタスクが無音で待ち続ける原因になる。
-    /// ADR-0069 Phase 118 D4: `[reviewer] tier` が未設定なら lane はタスクごとに動的に決まる
-    /// （worker run の lane に一致・組織の天井で丸め）ので、特定の 1 tier だけを検査する意味が無い。
-    /// その場合は「（`adapter` 制約を満たす）プロバイダが 1 つ以上の tier を提供しているか」に緩める。
-    pub(super) fn validate(&self, providers: &[ProviderConfig]) -> Result<(), ConfigError> {
-        let reviewer = self;
-        let reviewer_ok = match reviewer.tier {
-            Some(explicit) => providers.iter().any(|p| {
-                p.tiers.contains(&explicit)
-                    && reviewer.adapter.as_deref().is_none_or(|a| p.adapter == a)
-            }),
-            None => providers.iter().any(|p| {
-                !p.tiers.is_empty() && reviewer.adapter.as_deref().is_none_or(|a| p.adapter == a)
-            }),
+    /// ADR-0010 D9: Reviewer run を満たせない設定は、Reviewer 条件のタスクが無音で待ち続ける原因になる。
+    /// ADR 2026-10-11-llm-source-harness-selection: reviewer run の source×model は route の候補で決まるので、
+    /// ここで見るのは `adapter` の指定が宣言された harness（`[harnesses.<id>]` の id か kind）を指すかだけ。
+    /// `tier` は lane のラベルで、source×model の適格性には関わらない。
+    pub(super) fn validate(
+        &self,
+        registry: &task_core::llm_route::Registry,
+    ) -> Result<(), ConfigError> {
+        let Some(adapter) = self.adapter.as_deref() else {
+            return Ok(());
         };
-        if !reviewer_ok {
-            let adapter_suffix = reviewer
-                .adapter
-                .as_deref()
-                .map(|a| format!(" with adapter {a:?}"))
-                .unwrap_or_default();
-            return Err(ConfigError::Invalid(match reviewer.tier {
-                Some(t) => format!(
-                    "[reviewer] no provider offers tier {t:?}{adapter_suffix} for reviewer runs"
-                ),
-                None => format!(
-                    "[reviewer] no provider offers any tier{adapter_suffix} for reviewer runs"
-                ),
-            }));
+        let wanted = adapter.replace('-', "_");
+        let declared = registry
+            .harnesses
+            .iter()
+            .any(|(id, h)| id.as_ref() == wanted || h.kind.replace('-', "_") == wanted);
+        if !declared {
+            return Err(ConfigError::Invalid(format!(
+                "[reviewer] adapter {adapter:?} is not a declared harness ([harnesses.<id>] id or kind)"
+            )));
         }
         Ok(())
     }

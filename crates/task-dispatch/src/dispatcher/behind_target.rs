@@ -33,22 +33,29 @@ impl Dispatcher {
     }
 
     /// ADR-0118 review sync target of one repo: the parent task branch for a tree child,
-    /// otherwise the repo's default branch.
+    /// otherwise the repo's default branch. `None` when the default branch cannot be resolved
+    /// (ADR 2026-10-11-stranded-done-branches F1): the repo is left out of the review sync.
     pub(super) fn review_target_ref(
         &self,
         task: &Task,
         repo_id: RepoId,
         source: &Path,
-    ) -> Result<String, DispatchError> {
+    ) -> Result<Option<String>, DispatchError> {
         let target = if let Some(parent) =
             task_core::tree::parent_branch(task, &self.config.worktree_branch_prefix)
         {
             parent
         } else {
             let configured = self.store.repo_get(repo_id)?.and_then(|r| r.default_branch);
-            task_ops::changes::default_branch(source, configured.as_deref())
+            match task_ops::changes::resolve_default_branch(source, configured.as_deref()) {
+                Ok(branch) => branch,
+                Err(error) => {
+                    tracing::warn!(task_id = %task.id, %error, "review sync target skipped");
+                    return Ok(None);
+                }
+            }
         };
-        Ok(format!("refs/heads/{target}"))
+        Ok(Some(format!("refs/heads/{target}")))
     }
 
     /// `(repo, worktree, target_ref)` of every local Git worktree the review sync of `task`
@@ -76,7 +83,10 @@ impl Dispatcher {
             let Some(reference) = task.repos.iter().find(|r| r.name == repo.name) else {
                 continue;
             };
-            let target_ref = self.review_target_ref(task, reference.repo_id, &repo.source)?;
+            let Some(target_ref) = self.review_target_ref(task, reference.repo_id, &repo.source)?
+            else {
+                continue;
+            };
             targets.push((reference.repo_id, worktree.dir.clone(), target_ref));
         }
         Ok(targets)

@@ -10,7 +10,6 @@ use crate::admin::{AccountAdminError, AdminRequest};
 use crate::cos::operations::{Effect, effect_result};
 use crate::middleware::{require_active, require_admin};
 use crate::problem::{ApiProblem, store_problem};
-use crate::query::QueryParams;
 use crate::state::ApiState;
 use crate::types::{
     AccountCheckResponse, AccountCreateBody, AccountList, AccountLoginCodeBody, AccountLoginResult,
@@ -27,6 +26,55 @@ const IMPLICIT_ADAPTER: &str = "implicit";
 /// §(d): `max_runs` の範囲（`account_limits` 表の CHECK と同じ）。
 const MAX_RUNS_RANGE: std::ops::RangeInclusive<usize> = 1..=32;
 
+pub(crate) fn pool_adapter(source_id: &str) -> Option<task_core::AccountAdapter> {
+    match source_id {
+        "claude_oauth" => Some(task_core::AccountAdapter::ClaudeCode),
+        "codex_oauth" => Some(task_core::AccountAdapter::Codex),
+        "opencode_go" => Some(task_core::AccountAdapter::OpencodeGo),
+        _ => None,
+    }
+}
+
+fn pool_source_id(adapter: task_core::AccountAdapter) -> &'static str {
+    match adapter {
+        task_core::AccountAdapter::ClaudeCode => "claude_oauth",
+        task_core::AccountAdapter::Codex => "codex_oauth",
+        task_core::AccountAdapter::OpencodeGo => "opencode_go",
+    }
+}
+
+pub(crate) fn is_implicit_source(state: &ApiState, source_id: &str) -> bool {
+    state
+        .snapshot()
+        .as_ref()
+        .is_some_and(|s| s.implicit_accounts.iter().any(|a| a.source == source_id))
+}
+
+pub(crate) fn resolve_pool_account(
+    state: &ApiState,
+    source_id: &str,
+    account_id: &str,
+    operation: &str,
+) -> Result<task_core::AccountAdapter, ApiProblem> {
+    if let Some(adapter) = pool_adapter(source_id) {
+        if !state.inner.accounts_roots.contains_key(&adapter) {
+            return Err(ApiProblem::account_not_found(source_id));
+        }
+        return Ok(adapter);
+    }
+    if is_implicit_source(state, source_id) {
+        if account_id != source_id {
+            return Err(ApiProblem::account_not_found(account_id));
+        }
+        return Err(ApiProblem::new(
+            StatusCode::CONFLICT,
+            "implicit_account",
+            format!("implicit account of source {source_id} cannot be {operation}"),
+        ));
+    }
+    Err(ApiProblem::account_not_found(source_id))
+}
+
 /// §(c): 保存値 → 既定、の順に実効上限を決める（旧 provider `concurrency` は使わない）。
 fn effective_max_runs(stored: Option<usize>, default: usize) -> (usize, &'static str) {
     match stored {
@@ -35,8 +83,8 @@ fn effective_max_runs(stored: Option<usize>, default: usize) -> (usize, &'static
     }
 }
 
-/// D3.29 `GET /accounts` の items: フィルタシステムのスキャン（`logged_in`・`dir`）+ スナップショットの観測値 + 集計 +
-/// DB の上限の保存値（`account_limits`。PATCH の直後から反映される）を merge する。実アカウントを `adapter` → `id` の順
+/// `GET /api/v1/llm/accounts` の items: フィルタシステムのスキャン（`logged_in`・`dir`）+ スナップショットの観測値 + 集計 +
+/// DB の上限の保存値（`account_limits`。PATCH の直後から反映される）を merge する。実アカウントを `source_id` → `account_id` の順
 /// （ADR-0025 D6）に並べ、その後ろに暗黙アカウントを行の設定順に並べる（`[accounts]` が無くても出る）。
 async fn account_items(state: &ApiState) -> Result<Vec<AccountView>, ApiProblem> {
     let snapshot = state.snapshot();
@@ -51,6 +99,11 @@ async fn account_items(state: &ApiState) -> Result<Vec<AccountView>, ApiProblem>
             );
         }
     }
+    real.sort_by(|(left_adapter, left), (right_adapter, right)| {
+        pool_source_id(*left_adapter)
+            .cmp(pool_source_id(*right_adapter))
+            .then_with(|| left.id.cmp(&right.id))
+    });
     let implicit: Vec<task_ops::daemon::ImplicitAccountLive> = snapshot
         .as_ref()
         .map(|s| s.implicit_accounts.clone())
@@ -60,7 +113,7 @@ async fn account_items(state: &ApiState) -> Result<Vec<AccountView>, ApiProblem>
         .map(|(a, d)| (a.as_str().to_string(), d.id.clone()))
         .collect();
     // §(e): 暗黙アカウントは LLM source 単位。同じ source を使う行の集計を足し合わせる。
-    let implicit_rows: Vec<Vec<String>> = implicit.iter().map(|i| i.providers.clone()).collect();
+    let implicit_rows: Vec<Vec<String>> = implicit.iter().map(|i| i.models.clone()).collect();
     let inner = Arc::clone(&state.inner);
     let today = time::OffsetDateTime::now_utc().date();
     let (limits, real_stats, implicit_stats) = state
@@ -69,7 +122,7 @@ async fn account_items(state: &ApiState) -> Result<Vec<AccountView>, ApiProblem>
                 .account_limits()
                 .map_err(store_problem)?
                 .into_iter()
-                .map(|l| ((l.adapter, l.account_id), l.max_runs))
+                .map(|l| ((l.source_id, l.account_id), l.max_runs))
                 .collect();
             let real_stats = {
                 let mut guard = inner
@@ -130,8 +183,8 @@ async fn account_items(state: &ApiState) -> Result<Vec<AccountView>, ApiProblem>
             .copied();
         let (effective, source) = effective_max_runs(stored, default);
         items.push(AccountView {
-            adapter: adapter.as_str().to_string(),
-            id: d.id.clone(),
+            source_id: pool_source_id(*adapter).to_string(),
+            account_id: d.id.clone(),
             dir: Some(d.dir.display().to_string()),
             logged_in: d.logged_in,
             in_use: live.map(|l| l.in_use).unwrap_or(0),
@@ -150,7 +203,7 @@ async fn account_items(state: &ApiState) -> Result<Vec<AccountView>, ApiProblem>
             effective_max_runs: effective,
             max_runs_source: source.to_string(),
             implicit: false,
-            providers: Vec::new(),
+            models: Vec::new(),
         });
     }
     for (live, stats) in implicit.iter().zip(implicit_stats) {
@@ -171,8 +224,8 @@ fn implicit_view(
 ) -> AccountView {
     let (effective, source) = effective_max_runs(stored, default);
     AccountView {
-        adapter: IMPLICIT_ADAPTER.to_string(),
-        id: live.source.clone(),
+        source_id: live.source.clone(),
+        account_id: live.source.clone(),
         dir: None,
         logged_in: true,
         in_use: live.in_use,
@@ -187,11 +240,11 @@ fn implicit_view(
         effective_max_runs: effective,
         max_runs_source: source.to_string(),
         implicit: true,
-        providers: live.providers.clone(),
+        models: live.models.clone(),
     }
 }
 
-/// D3.29 `GET /accounts`。読み取りなので認証は不要（管理系は 3.30 以降）。
+/// `GET /api/v1/llm/accounts`。読み取りなので認証は不要（管理系は作成以降）。
 pub(super) async fn accounts(State(state): State<ApiState>, RawQuery(raw): RawQuery) -> ApiResult {
     no_query(&raw)?;
     let items = account_items(&state).await?;
@@ -199,7 +252,7 @@ pub(super) async fn accounts(State(state): State<ApiState>, RawQuery(raw): RawQu
         .into_iter()
         .map(|a| {
             (
-                a.as_str().to_string(),
+                pool_source_id(a).to_string(),
                 state
                     .inner
                     .accounts_roots
@@ -211,10 +264,6 @@ pub(super) async fn accounts(State(state): State<ApiState>, RawQuery(raw): RawQu
     Ok(json_response(
         StatusCode::OK,
         &AccountList {
-            root: roots
-                .get(task_core::AccountAdapter::ClaudeCode.as_str())
-                .cloned()
-                .flatten(),
             roots: if state.inner.accounts_roots.is_empty() {
                 std::collections::HashMap::new()
             } else {
@@ -260,33 +309,24 @@ fn parse_limit_patch(value: serde_json::Value) -> Result<Option<usize>, ApiProbl
 pub(super) async fn patch_account_limit(
     State(state): State<ApiState>,
     headers: HeaderMap,
-    Params((adapter, id)): Params<(String, String)>,
+    Params((source_id, id)): Params<(String, String)>,
     RawQuery(raw): RawQuery,
     body: Body,
 ) -> ApiResult {
+    let adapter = if let Some(adapter) = pool_adapter(&source_id) {
+        if !state.inner.accounts_roots.contains_key(&adapter) {
+            return Err(ApiProblem::account_not_found(&source_id));
+        }
+        adapter.as_str().to_string()
+    } else if is_implicit_source(&state, &source_id) {
+        if id != source_id {
+            return Err(ApiProblem::account_not_found(&id));
+        }
+        IMPLICIT_ADAPTER.to_string()
+    } else {
+        return Err(ApiProblem::account_not_found(&source_id));
+    };
     patch_account_limit_inner(state, headers, adapter, id, raw, body).await
-}
-
-/// 路の衝突（§(d)）: `/accounts/{adapter}/check` と `/accounts/{adapter}/login` は静的な段が優先されるので、
-/// id が `check` / `login` のアカウントの PATCH はこの 2 つで受けて同じ処理へ渡す。
-pub(super) async fn patch_account_limit_check(
-    State(state): State<ApiState>,
-    headers: HeaderMap,
-    Params(adapter): Params<String>,
-    RawQuery(raw): RawQuery,
-    body: Body,
-) -> ApiResult {
-    patch_account_limit_inner(state, headers, adapter, "check".to_string(), raw, body).await
-}
-
-pub(super) async fn patch_account_limit_login(
-    State(state): State<ApiState>,
-    headers: HeaderMap,
-    Params(adapter): Params<String>,
-    RawQuery(raw): RawQuery,
-    body: Body,
-) -> ApiResult {
-    patch_account_limit_inner(state, headers, adapter, "login".to_string(), raw, body).await
 }
 
 async fn patch_account_limit_inner(
@@ -374,16 +414,24 @@ pub(crate) async fn set_account_limit_effect(
     }
     tracing::info!(who = "admin", op = "account_limit_set", account_id = %id, %adapter, ?max_runs, "admin: account limit updated");
     let items = account_items(state).await?;
+    let public_source = if implicit {
+        id
+    } else {
+        pool_source_id(
+            task_core::AccountAdapter::parse(adapter)
+                .unwrap_or(task_core::AccountAdapter::ClaudeCode),
+        )
+    };
     let view = match items
         .into_iter()
-        .find(|v| v.adapter == adapter && v.id == id)
+        .find(|v| v.source_id == public_source && v.account_id == id)
     {
         Some(view) => view,
         // スナップショットにまだ現れていない暗黙アカウント（最初の tick 前・reload 直後）。
         None if implicit => implicit_view(
             &task_ops::daemon::ImplicitAccountLive {
                 source: id.to_string(),
-                providers: Vec::new(),
+                models: Vec::new(),
                 in_use: 0,
             },
             max_runs,
@@ -395,32 +443,50 @@ pub(crate) async fn set_account_limit_effect(
     Ok(Ok(view))
 }
 
-/// 3.30 `POST /accounts`: ディレクトリを 0700 で作る。task-api 自身は `Dispatcher`/`AccountBook` に触れない
-/// （次の選択のタイミングで celeris がディレクトリを見つける。ADR-0024 D1）。`adapter`（既定 `claude-code`）が
-/// 指す根ディレクトリが設定されていなければ 409（ADR-0025 D6）。
+/// `POST /api/v1/llm/sources/{source_id}/accounts`: ディレクトリを 0700 で作る。task-api 自身は `Dispatcher`/`AccountBook` に触れない
+/// （次の選択のタイミングで celeris がディレクトリを見つける。ADR-0024 D1）。`source_id` が指す根ディレクトリが設定されていなければ 409（ADR-0025 D6）。
 pub(super) async fn create_account(
     State(state): State<ApiState>,
     headers: HeaderMap,
+    Params(source_id): Params<String>,
     RawQuery(raw): RawQuery,
     body: Body,
 ) -> ApiResult {
     no_query(&raw)?;
     require_admin(&state, &headers)?;
     let create: AccountCreateBody = read_json(body, false).await?;
-    let view = create_account_op(&state, &create)?;
+    let adapter = pool_adapter(&source_id).ok_or_else(|| {
+        if is_implicit_source(&state, &source_id) {
+            ApiProblem::new(
+                StatusCode::CONFLICT,
+                "implicit_account",
+                format!("implicit account of source {source_id} cannot be created"),
+            )
+        } else {
+            ApiProblem::account_not_found(&source_id)
+        }
+    })?;
+    if !state.inner.accounts_roots.contains_key(&adapter) {
+        return Err(ApiProblem::account_not_found(&source_id));
+    }
+    let view = create_account_op(&state, adapter, &create)?;
     // ADR 2026-10-08 account-concurrency-limits §(d): 同じ `(adapter, id)` の古い上限の保存値が残っていれば消す
     // （作り直しで古い上限を引き継がない）。celeris に届けばディスパッチャの表も同時に更新される。
-    clear_stale_limit(&state, &view.adapter, &view.id).await;
+    clear_stale_limit(&state, &view.source_id, &view.account_id).await;
     let mut response = json_response(StatusCode::CREATED, &view);
-    if let Ok(location) = HeaderValue::from_str(&format!("/api/v1/accounts/{}", create.id)) {
+    if let Ok(location) = HeaderValue::from_str(&format!(
+        "/api/v1/llm/sources/{source_id}/accounts/{}",
+        create.id
+    )) {
         response.headers_mut().insert(header::LOCATION, location);
     }
     Ok(response)
 }
 
-/// `POST /accounts`: create the account directory (shared with CoS `account.create`).
+/// `POST /api/v1/llm/sources/{source_id}/accounts`: create the account directory (shared with CoS `account.create`).
 pub(crate) fn create_account_op(
     state: &ApiState,
+    account_adapter: task_core::AccountAdapter,
     create: &AccountCreateBody,
 ) -> Result<AccountView, ApiProblem> {
     if !crate::accounts::valid_account_id(&create.id) {
@@ -428,11 +494,6 @@ pub(crate) fn create_account_op(
             "id must be 1-64 ASCII alphanumeric/-/_ characters",
         ));
     }
-    let Some(account_adapter) = task_core::AccountAdapter::parse(&create.adapter) else {
-        return Err(ApiProblem::bad_request(
-            "adapter must be claude-code, codex or opencode-go",
-        ));
-    };
     let Some(root) = state.inner.accounts_roots.get(&account_adapter).cloned() else {
         return Err(ApiProblem::accounts_unavailable());
     };
@@ -457,8 +518,8 @@ pub(crate) fn create_account_op(
     // ADR 2026-10-08 account-concurrency-limits §(d): 古い上限の保存値の掃除は呼び出し側
     // （`create_account` と CoS の `account.create`）が `clear_stale_limit` で行う（この関数は同期）。
     Ok(AccountView {
-        adapter: account_adapter.as_str().to_string(),
-        id: create.id.clone(),
+        source_id: pool_source_id(account_adapter).to_string(),
+        account_id: create.id.clone(),
         dir: Some(dir.display().to_string()),
         logged_in: false,
         in_use: 0,
@@ -473,7 +534,7 @@ pub(crate) fn create_account_op(
         effective_max_runs: state.inner.max_runs_per_account,
         max_runs_source: "default".to_string(),
         implicit: false,
-        providers: Vec::new(),
+        models: Vec::new(),
     })
 }
 
@@ -515,24 +576,24 @@ pub(crate) async fn clear_stale_limit(state: &ApiState, adapter: &str, id: &str)
     }
 }
 
-/// 3.31 `DELETE /accounts/{id}`: celeris 側へ委譲する（S2+S8）。`<root>/.removed/<id>-<unix秒>/` へ移す
-/// （認証ファイルは消さない）。task-api 自身はファイルを動かさない: スナップショットの `in_use` はポーリング
-/// 間隔だけ古くなりうる（レース）ので、`account_in_use`（running/reviewing を直接見る、ディスパッチャの
-/// 権威ある値）を持つ celeris 側でチェックしてから移動する。`?adapter=`（省略時 claude-code。ADR-0025 D6）。
+/// DELETE `/api/v1/llm/sources/{source_id}/accounts/{account_id}`: celeris 側へ委譲する（S2+S8）。
+/// `<root>/.removed/<id>-<unix秒>/` へ移す（認証ファイルは消さない）。task-api 自身はファイルを動かさない:
+/// スナップショットの `in_use` はポーリング間隔だけ古くなりうる（レース）ので、`account_in_use`
+///（running/reviewing を直接見る、ディスパッチャの権威ある値）を持つ celeris 側でチェックしてから移動する。
 pub(super) async fn delete_account(
     State(state): State<ApiState>,
     headers: HeaderMap,
-    Params(id): Params<String>,
+    Params((source_id, id)): Params<(String, String)>,
     RawQuery(raw): RawQuery,
 ) -> ApiResult {
-    let adapter = QueryParams::parse(raw.as_deref(), &["adapter"])?.account_adapter()?;
+    no_query(&raw)?;
     require_admin(&state, &headers)?;
+    let adapter = resolve_pool_account(&state, &source_id, &id, "deleted")?;
     effect_result(delete_account_effect(&state, adapter, &id).await)?;
     Ok(json_response(StatusCode::OK, &serde_json::json!({})))
 }
 
-/// The daemon side of `DELETE /accounts/{id}` (shared with CoS `account.delete`, an external
-/// effect: the daemon moves the directory).
+/// The daemon side of account deletion (shared with CoS `account.delete`; the daemon moves the directory).
 pub(crate) async fn delete_account_effect(
     state: &ApiState,
     adapter: task_core::AccountAdapter,
@@ -587,21 +648,22 @@ fn account_admin_error(id: &str, err: AccountAdminError) -> ApiProblem {
     }
 }
 
-/// 3.32 `POST /accounts/{id}/check`（ADR-0024 D6, ADR-0025 D4）: celeris 側で実行する（task-api はプロセスを
-/// 起動しない）。`?adapter=`（省略時 claude-code）。
+/// POST `/api/v1/llm/sources/{source_id}/accounts/{account_id}/check`（ADR-0024 D6, ADR-0025 D4）:
+/// celeris 側で実行する（task-api はプロセスを起動しない）。
 pub(super) async fn check_account(
     State(state): State<ApiState>,
     headers: HeaderMap,
-    Params(id): Params<String>,
+    Params((source_id, id)): Params<(String, String)>,
     RawQuery(raw): RawQuery,
 ) -> ApiResult {
-    let adapter = QueryParams::parse(raw.as_deref(), &["adapter"])?.account_adapter()?;
+    no_query(&raw)?;
     require_admin(&state, &headers)?;
+    let adapter = resolve_pool_account(&state, &source_id, &id, "checked")?;
     let response = effect_result(check_account_effect(&state, adapter, &id).await)?;
     Ok(json_response(StatusCode::OK, &response))
 }
 
-/// The daemon side of `POST /accounts/{id}/check` (shared with CoS `account.check`).
+/// The daemon side of account checking (shared with CoS `account.check`).
 pub(crate) async fn check_account_effect(
     state: &ApiState,
     adapter: task_core::AccountAdapter,
@@ -652,16 +714,17 @@ pub(crate) async fn check_account_effect(
     }
 }
 
-/// 3.33 `POST /accounts/{id}/login`（ADR-0024 D7, ADR-0025 D5）: ログインを開始する（claude-code は
-/// `claude auth login`、codex は `codex login --device-auth`）。`?adapter=`（省略時 claude-code）。
+/// `POST /api/v1/llm/sources/{source_id}/accounts/{account_id}/login`（ADR-0024 D7, ADR-0025 D5）: ログインを開始する（claude_oauth は
+/// `claude auth login`、codex_oauth は `codex login --device-auth`）。source_id から内部 adapter を解く。
 pub(super) async fn start_account_login(
     State(state): State<ApiState>,
     headers: HeaderMap,
-    Params(id): Params<String>,
+    Params((source_id, id)): Params<(String, String)>,
     RawQuery(raw): RawQuery,
 ) -> ApiResult {
-    let adapter = QueryParams::parse(raw.as_deref(), &["adapter"])?.account_adapter()?;
+    no_query(&raw)?;
     require_admin(&state, &headers)?;
+    let adapter = resolve_pool_account(&state, &source_id, &id, "logged in")?;
     require_active(&state)?;
     if state.inner.accounts_roots.is_empty() {
         return Err(ApiProblem::accounts_unavailable());
@@ -712,17 +775,18 @@ pub(super) async fn start_account_login(
     }
 }
 
-/// 3.34 `POST /accounts/{id}/login/code`（ADR-0024 D7）: コードは受け取ってもログにも応答にも出さない。
-/// claude-code のみ（ADR-0025 D5）。`?adapter=codex` は 409 `login_code_not_supported`。
+/// `POST /api/v1/llm/sources/{source_id}/accounts/{account_id}/login/code`（ADR-0024 D7）: コードは受け取ってもログにも応答にも出さない。
+/// claude_oauth のみ（ADR-0025 D5）。`codex_oauth` は 409 `login_code_not_supported`。
 pub(super) async fn submit_account_login_code(
     State(state): State<ApiState>,
     headers: HeaderMap,
-    Params(id): Params<String>,
+    Params((source_id, id)): Params<(String, String)>,
     RawQuery(raw): RawQuery,
     body: Body,
 ) -> ApiResult {
-    let adapter = QueryParams::parse(raw.as_deref(), &["adapter"])?.account_adapter()?;
+    no_query(&raw)?;
     require_admin(&state, &headers)?;
+    let adapter = resolve_pool_account(&state, &source_id, &id, "logged in")?;
     require_active(&state)?;
     if state.inner.accounts_roots.is_empty() {
         return Err(ApiProblem::accounts_unavailable());
@@ -778,16 +842,17 @@ pub(super) async fn submit_account_login_code(
     }
 }
 
-/// 3.35 `DELETE /accounts/{id}/login`: 進行中のログインを止める（無ければ何もしない）。`?adapter=`（省略時
-/// claude-code。ADR-0025 D5）。
+/// DELETE `/api/v1/llm/sources/{source_id}/accounts/{account_id}/login`: 進行中のログインを止める
+///（無ければ何もしない、ADR-0025 D5）。
 pub(super) async fn cancel_account_login(
     State(state): State<ApiState>,
     headers: HeaderMap,
-    Params(id): Params<String>,
+    Params((source_id, id)): Params<(String, String)>,
     RawQuery(raw): RawQuery,
 ) -> ApiResult {
-    let adapter = QueryParams::parse(raw.as_deref(), &["adapter"])?.account_adapter()?;
+    no_query(&raw)?;
     require_admin(&state, &headers)?;
+    let adapter = resolve_pool_account(&state, &source_id, &id, "logged in")?;
     require_active(&state)?;
     if state.inner.accounts_roots.is_empty() {
         return Err(ApiProblem::accounts_unavailable());

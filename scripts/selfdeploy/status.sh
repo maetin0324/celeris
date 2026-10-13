@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # scripts/selfdeploy/status.sh — ADR-0040 D2。いまの current / previous、リリース一覧（gate と verify の
-# 要約）、本番 celeris（127.0.0.1:7710）と GUI（127.0.0.1:7700）の health、`daemon_instances`（D4）を
+# 要約）、本番 celeris（127.0.0.1:7710）と web の healthの health、`daemon_instances`（D4）を
 # JSON 1 つで出す。**読むだけ**（誰が実行してもよい）。
 set -euo pipefail
 
@@ -15,7 +15,7 @@ usage: status.sh
 
   JSON を標準出力に出す。何も変えない。
     current / previous / releases[] (gate.json / verify.json / promoted.json / changes.json の要約と
-    on_main) / health / gui_health / daemon_instances / stale_instances（Phase 119 D3/D4: current/
+    on_main) / health / web_health / daemon_instances / stale_instances（Phase 119 D3/D4: current/
     previous 以外に active な celeris@* unit。drain したまま終了しなかった残骸）
 EOF
     exit 2
@@ -52,15 +52,17 @@ HEALTH_JSON='null'
 if [ "$(sd_http_status "$SD_PROD_API/api/v1/health")" = 200 ]; then
   HEALTH_JSON="$(sd_http_get "$SD_PROD_API/api/v1/health" || echo null)"
 fi
-GUI_HEALTH_JSON='null'
-if [ "$(sd_http_status "http://127.0.0.1:$SD_PROD_GUI_PORT/healthz")" = 200 ]; then
-  GUI_HEALTH_JSON="$(sd_http_get "http://127.0.0.1:$SD_PROD_GUI_PORT/healthz" || echo null)"
+sd_web_load_env
+WEB_HEALTH_BIND="${CELERIS_WEB_BIND:-127.0.0.1:7720}"
+WEB_HEALTH_JSON='null'
+if [ "$(sd_http_status "http://$WEB_HEALTH_BIND/healthz")" = 200 ]; then
+  WEB_HEALTH_JSON="$(sd_http_get "http://$WEB_HEALTH_BIND/healthz" || echo null)"
 fi
 
 export SD_RELEASES SD_CURRENT SD_PREVIOUS CELERIS_CONFIG_DIR CELERIS_STATE_DIR SD_BACKUPS
 export SD_STATUS_AT="$(sd_ts)"
 export SD_STATUS_HEALTH="$HEALTH_JSON"
-export SD_STATUS_GUI_HEALTH="$GUI_HEALTH_JSON"
+export SD_STATUS_WEB_HEALTH="$WEB_HEALTH_JSON"
 export SD_STATUS_DAEMON="$DAEMON_ROWS"
 export SD_STATUS_CURRENT="$(sd_current_sha)"
 export SD_STATUS_PREVIOUS="$(sd_previous_sha)"
@@ -178,7 +180,7 @@ out = {
     "current": current,
     "previous": previous,
     "health": parse_env_json("SD_STATUS_HEALTH"),
-    "gui_health": parse_env_json("SD_STATUS_GUI_HEALTH"),
+    "web_health": parse_env_json("SD_STATUS_WEB_HEALTH"),
     "daemon_instances": parse_env_json("SD_STATUS_DAEMON"),
     # Phase 119 D3/D4: current/previous 以外に active な celeris@* unit（drain したまま終了しなかった
     # 残骸）。空配列 = 正常。`promote.sh --stop-stale` で片付けられる。

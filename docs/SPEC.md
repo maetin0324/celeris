@@ -119,6 +119,10 @@ codingの場合はclaude codeやopencode, 今あるgenreはこれのイメージ
 
 ## 4. 画面（GUI が基本）
 
+画面の実装は `web/`（React / TanStack SPA と Node gateway）に一本化する。
+gateway は daemon API に直接接続し、認証・SSE・ファイル配信・Browser Live View を提供する。
+廃止の決定は [2026-10-11 の ADR](../agent-docs/adr/2026-10-11-retire-gui.md) を参照。
+
 見えるもの:
 
 1. **秘書との対話** — web のホームはチャットが中心。会話一覧・検索・新規会話・過去会話の再開、進行の stream、tool の折りたたみ、停止・キュー、画像・任意ファイルの添付から案件を投げ、状況を聞き、方針を変える。

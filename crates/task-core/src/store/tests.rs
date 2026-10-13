@@ -14,9 +14,10 @@ use crate::repos::{ProjectRepo, RepoId, RepoRun};
 
 use super::*;
 
-pub(super) fn sample_task(status: Status) -> Task {
+pub(crate) fn sample_task(status: Status) -> Task {
     let now = OffsetDateTime::now_utc();
     Task {
+        harness_id: None,
         requirements: Default::default(),
         tree: None,
         paused_at: None,
@@ -48,7 +49,6 @@ pub(super) fn sample_task(status: Status) -> Task {
         priority: 0,
         worker_hint: WorkerHint {
             tier: Tier::Standard,
-            adapter: None,
         },
         workspace: WorkspaceSpec::Local {
             path: "/tmp/workspace".into(),
@@ -2496,7 +2496,7 @@ fn migration_0008_adds_the_notifications_table_to_a_schema_7_db() {
 
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 69);
+    assert_eq!(SCHEMA_VERSION, 72);
     let now = OffsetDateTime::from_unix_timestamp(1_760_000_000).unwrap();
     assert!(
         store
@@ -3039,7 +3039,7 @@ fn migration_0010_adds_the_projects_workspace_column_to_a_schema_9_db() {
 
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 69);
+    assert_eq!(SCHEMA_VERSION, 72);
     // 導入前の案件は「作業場所なし」= 従来どおり。
     assert_eq!(store.project_get(legacy).unwrap().unwrap().workspace, None);
     let spec = WorkspaceSpec::Local {
@@ -3530,7 +3530,7 @@ fn migration_0015_adds_the_lifecycle_columns_to_a_schema_14_db() {
 
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 69);
+    assert_eq!(SCHEMA_VERSION, 72);
 
     let project = store.project_get(project_id).unwrap().expect("project");
     assert_eq!(project.status, ProjectStatus::Active);
@@ -3596,7 +3596,7 @@ fn migration_0017_adds_message_metadata_and_console_action_runs_to_a_schema_16_d
 
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 69);
+    assert_eq!(SCHEMA_VERSION, 72);
 
     // 導入前の行は `metadata = None` として読める。
     let messages = store.message_list("secretary", None, 10).unwrap();
@@ -3689,7 +3689,7 @@ fn migration_0013_adds_task_comments_and_the_label_columns_to_a_schema_11_db() {
 
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 69);
+    assert_eq!(SCHEMA_VERSION, 72);
     {
         let conn = store.lock().unwrap();
         let (labels, category): (String, String) = conn
@@ -4148,7 +4148,7 @@ fn migration_0026_adds_the_execution_tables_to_a_schema_25_db() {
     }
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 69);
+    assert_eq!(SCHEMA_VERSION, 72);
 
     // 新しい表が使える（round trip）。
     let task = sample_task(Status::Draft);
@@ -4394,7 +4394,7 @@ fn migration_31_adds_tree_columns_without_rewriting_rows() {
 
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 69);
+    assert_eq!(SCHEMA_VERSION, 72);
 
     let conn = Connection::open(&path).unwrap();
     // 既存の task の行は 1 バイトも変わらず、`root_id` は NULL のまま（埋め戻さない）。
@@ -4645,7 +4645,7 @@ fn migration_27_adds_work_unit_lease_columns() {
 
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 69);
+    assert_eq!(SCHEMA_VERSION, 72);
 
     let conn = Connection::open(&path).unwrap();
     let mut columns: Vec<String> = Vec::new();
@@ -5103,6 +5103,52 @@ fn run_index_round_trips_start_and_finish() {
             )
             .unwrap()
     );
+}
+
+#[test]
+fn run_selections_for_task_returns_only_complete_persisted_selections() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let task = sample_task(Status::Draft);
+    store.insert(&task).unwrap();
+    let base = RunRow {
+        run_id: "selected-run".into(),
+        task_id: task.id.to_string(),
+        work_unit_id: None,
+        role: RunIndexRole::Worker,
+        seq: 1,
+        status: RunIndexStatus::Running,
+        adapter: None,
+        model: None,
+        account: None,
+        session_id: None,
+        checkpoint: None,
+        usage: None,
+        metrics: None,
+        started_at: "2026-09-24T00:00:00Z".into(),
+        finished_at: None,
+    };
+    store.run_index_start(base.clone()).unwrap();
+    store
+        .run_index_start(RunRow {
+            run_id: "legacy-run".into(),
+            ..base
+        })
+        .unwrap();
+    let selection = crate::llm_route::RunSelection {
+        harness: "h".into(),
+        source: "s".into(),
+        model: "m".into(),
+        account: "a".into(),
+        metadata: serde_json::json!({"version": 1, "reason": "test"}),
+    };
+    assert!(
+        store
+            .run_record_selection("selected-run", &selection)
+            .unwrap()
+    );
+    let got = store.run_selections_for_task(task.id).unwrap();
+    assert_eq!(got.get("selected-run"), Some(&selection));
+    assert!(!got.contains_key("legacy-run"));
 }
 
 /// `runs_running` は `running` の行だけを `started_at` 昇順で返す（閉じた行は含めない）。

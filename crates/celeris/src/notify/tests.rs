@@ -85,6 +85,7 @@ fn notify_digest_phase_checkpoint_is_batched_as_inbox_new() {
     fn task(title: &str) -> Task {
         let now = OffsetDateTime::now_utc();
         Task {
+            harness_id: None,
             requirements: Default::default(),
             tree: None,
             paused_at: None,
@@ -107,7 +108,6 @@ fn notify_digest_phase_checkpoint_is_batched_as_inbox_new() {
             priority: 0,
             worker_hint: WorkerHint {
                 tier: Tier::Standard,
-                adapter: None,
             },
             workspace: WorkspaceSpec::Local {
                 path: "ws".into(),
@@ -236,20 +236,20 @@ fn excerpt_cuts_by_characters_and_flattens_newlines() {
 fn links_are_omitted_without_a_base_url() {
     assert_eq!(link(None, "/approvals"), "");
     assert_eq!(
-        link(Some("http://h:7700"), "/approvals"),
-        "\nhttp://h:7700/approvals"
+        link(Some("http://h:7720"), "/approvals"),
+        "\nhttp://h:7720/approvals"
     );
 }
 
 #[test]
 fn base_url_drops_the_trailing_slash_and_treats_empty_as_absent() {
     let config = NotifyConfig {
-        gui_base_url: Some("http://h:7700/".into()),
+        web_base_url: Some("http://h:7720/".into()),
         ..NotifyConfig::default()
     };
-    assert_eq!(config.base_url(), Some("http://h:7700"));
+    assert_eq!(config.base_url(), Some("http://h:7720"));
     let empty = NotifyConfig {
-        gui_base_url: Some(String::new()),
+        web_base_url: Some(String::new()),
         ..NotifyConfig::default()
     };
     assert_eq!(empty.base_url(), None);
@@ -265,7 +265,7 @@ fn defaults_match_the_adr() {
     assert_eq!(config.inbox_reminder_secs, 86_400);
     assert_eq!(config.digest_interval_secs, 3_600);
     assert_eq!(config.digest_max_lines, 10);
-    assert!(config.gui_base_url.is_none());
+    assert!(config.web_base_url.is_none());
 }
 
 #[test]
@@ -291,4 +291,12 @@ fn webhook_url_is_none_without_a_secrets_dir_or_file() {
     // 空の秘密は「無い」と同じ扱い。
     std::fs::write(dir.path().join("empty"), "\n").unwrap_or_else(|e| panic!("write: {e}"));
     assert_eq!(webhook_url(Some(dir.path()), "empty"), None);
+}
+
+#[test]
+fn notify_rejects_retired_link_config() {
+    let error = toml::from_str::<NotifyConfig>("gui_base_url = 'http://localhost:7700'")
+        .expect_err("retired setting must not be silently ignored");
+    assert!(error.to_string().contains("unknown field `gui_base_url`"));
+    assert!(error.to_string().contains("web_base_url"));
 }

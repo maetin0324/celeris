@@ -32,8 +32,8 @@ pub(super) struct RunAdapterPrep {
 
 /// ADR-0107（agent-docs/adr/0107-browser-fallback-candidate-preparation.md）D1: 主 adapter と browser
 /// fallback 候補の run ごとの準備を 1 か所にまとめる。順序は ADR-0075 の env 設定 →
-/// コンテナ（ADR-0043 D3）→ planner の permission mode（ADR-0072 D14）。tier ごとのモデルは
-/// 各 adapter（`TieredAdapter`）が同じ `req.task.worker_hint.tier` から run 時に解決する。
+/// コンテナ（ADR-0043 D3）→ planner の permission mode（ADR-0072 D14）。モデルは選んだ route の
+/// model を `route_adapter` が載せ済み（lane から model を引かない）。
 /// 戻り値の `bool` は env（`CARGO_TARGET_DIR`）が実際に適用されたかどうか。
 pub(super) fn prepare_run_adapter(
     adapter: Arc<dyn WorkerAdapter>,
@@ -155,7 +155,7 @@ pub(super) async fn run_worker(
     // ADR-0052 D2（Phase 64）: フォールバックした知識整理 run は、DB のタスクではなく**ワーカーに渡す
     // 写し**だけを書き換える（専用アダプタの固定を外し、予算を `max_turns = 8` / `max_wall_secs = 600` に）。
     if let Some(fallback) = &extras.knowledge_fallback {
-        task.worker_hint.adapter = None;
+        task.harness_id = None;
         task.budget = fallback.budget;
         tracing::debug!(task_id = %task_id, adapter = %fallback.adapter, "knowledge: running the fallback extraction");
     }
@@ -496,6 +496,7 @@ pub(super) async fn run_worker(
             // ADR 2026-10-05 cos-chat-home D4: task に pin された添付の入力 manifest。
             input_attachments,
         },
+        llm_route: extras.llm_route,
     };
     // ADR-0066 D1（Phase 110b）: ローカルの git worktree のホスト実行にだけ、共有ビルドキャッシュの
     // `CARGO_TARGET_DIR` を与える（コンテナ実行〈`container_plan.is_some()`〉と Remote は対象外）。

@@ -44,9 +44,25 @@ idle_timeout_secs = 120
 [adapters.fake]
 command = ["sh", "{}"]
 
-[[providers]]
-id = "local"
-adapter = "fake"
+[llm_sources.fake]
+kind = "fake"
+accounts = ["local"]
+models = ["fake"]
+
+[harnesses.fake]
+kind = "fake"
+api_formats = ["fake"]
+source_kinds = ["fake"]
+
+[harness_selection]
+execution_class_defaults = {{}}
+
+[[harness_selection.rules]]
+harness = "fake"
+required_capabilities = []
+
+[route_defaults.fake]
+candidates = [{{ source = "fake", model = "fake" }}]
 "#,
             script.display()
         ),
@@ -65,6 +81,7 @@ fn sigterm_kills_the_worker_process_and_exits_130() {
     let store = SqliteStore::open(&db).unwrap();
     let now = OffsetDateTime::now_utc();
     let task = Task {
+        harness_id: None,
         requirements: Default::default(),
         tree: None,
         paused_at: None,
@@ -90,7 +107,6 @@ fn sigterm_kills_the_worker_process_and_exits_130() {
         priority: 0,
         worker_hint: WorkerHint {
             tier: Tier::Standard,
-            adapter: None,
         },
         workspace: WorkspaceSpec::Local {
             path: ws.clone(),

@@ -1,4 +1,4 @@
-//! Phase 1 catalog adapter. It does not change the legacy execution selector.
+//! Phase 1 catalog adapter. Execution source and model selection is handled by `llm_route`.
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
@@ -273,6 +273,7 @@ impl ShadowEntry {
 /// 検証済みの Phase 2 実行時設定。dispatcher と proxy に配る（未知は None のまま）。
 #[derive(Debug, Clone, PartialEq)]
 pub struct RoutingRuntime {
+    pub configured: bool,
     pub mode: RoutingMode,
     pub enforce_routes: Vec<String>,
     pub freshness: FreshnessPolicy,
@@ -297,6 +298,7 @@ pub const ENFORCE_ROUTES: [&str; 2] = ["standalone", "server"];
 impl RoutingRuntime {
     pub fn dispatch_settings(&self) -> task_dispatch::DispatchRoutingSettings {
         task_dispatch::DispatchRoutingSettings {
+            configured: self.configured,
             mode: self.mode,
             constraints: Default::default(),
             freshness: self.freshness,
@@ -471,15 +473,6 @@ pub(crate) fn deployment(
     }
 }
 
-fn source_name(source: &task_core::LlmSourceRef) -> String {
-    match source {
-        task_core::LlmSourceRef::OpenaiCompatible(id) => format!("openai_compatible:{id}"),
-        // routing / llm-proxy の source 名はハイフン区切り（ADR 2026-10-06 D4。設定の文字列 `opencode_go` とは別）。
-        task_core::LlmSourceRef::OpencodeGo => "opencode-go".into(),
-        other => other.as_str().into(),
-    }
-}
-
 fn lane_name(lane: Tier) -> &'static str {
     match lane {
         Tier::Frontier => "frontier",
@@ -488,123 +481,15 @@ fn lane_name(lane: Tier) -> &'static str {
     }
 }
 
-use super::model_catalog::ProviderLaneSeed;
-
 impl Config {
-    /// ADR 2026-10-06 model-role-assignments D3: 割り当てから deployment を足せる provider 行（catalog source を
-    /// 持つもの）。`apply_role_assignments` の `seeds`。
-    pub fn provider_lane_seeds(&self) -> Vec<ProviderLaneSeed> {
-        self.provider_specs()
-            .into_iter()
-            .enumerate()
-            .filter_map(|(order, spec)| {
-                let resolved = self.provider_llm_source(&spec.id)?;
-                let source = task_core::model_catalog::assignments::source_name_for_llm_source(
-                    &resolved.source,
-                )?;
-                Some(ProviderLaneSeed {
-                    provider_id: spec.id,
-                    source,
-                    adapter: spec.adapter,
-                    lanes: spec.tiers,
-                    config_order: order,
-                })
-            })
-            .collect()
-    }
-
     /// Builds a complete, credential-free snapshot before it can replace a running one.
     pub fn routing_catalog(&self) -> Result<RoutingCatalog, ConfigError> {
-        let mode = self.model_routing.mode.unwrap_or(RoutingMode::Legacy);
+        let mode = self.model_routing.mode.unwrap_or_default();
         self.validate_enforce_opt_in(mode)?;
         let mut models = BTreeMap::<String, ModelProfile>::new();
         let mut deployments = BTreeMap::<String, DeploymentProfile>::new();
         let mut warnings = BTreeSet::<String>::new();
         let mut order = 0;
-        // Reuse the proxy adapter's identity and lane contract. In particular it keeps
-        // source-qualified model IDs so equal wire aliases do not imply shared identity.
-        let proxy_catalog = llm_proxy::legacy_catalog::normalize_legacy_config(&self.llm_proxy);
-        for model in proxy_catalog.models {
-            models.insert(model.id.clone(), model);
-        }
-        for dep in proxy_catalog.deployments {
-            let family = dep.model_profile_id.split(':').nth(1).unwrap_or("unknown");
-            let lane = dep.allowed_lanes[0];
-            warnings.insert(format!(
-                "llm_proxy.models.{family}.{} -> model_routing.models/deployments (legacy)",
-                lane_name(lane)
-            ));
-            order = order.max(dep.config_order + 1);
-            deployments.insert(dep.id.clone(), dep);
-        }
-        for provider in &self.providers {
-            let Some(resolved) = self.provider_llm_source(&provider.id) else {
-                continue;
-            };
-            let source = source_name(&resolved.source);
-            if !provider.model.is_empty()
-                && !provider.model.contains("celeris/")
-                && !matches!(
-                    resolved.source,
-                    task_core::LlmSourceRef::None | task_core::LlmSourceRef::Unknown
-                )
-            {
-                let wire = provider.model.clone();
-                models
-                    .entry(wire.clone())
-                    .or_insert_with(|| unknown_model(&wire, "providers.model"));
-                let dep_id = format!("provider:{}", provider.id);
-                let lanes = self
-                    .provider_specs()
-                    .into_iter()
-                    .find(|s| s.id == provider.id)
-                    .map(|s| s.tiers)
-                    .unwrap_or_default();
-                deployments.insert(
-                    dep_id.clone(),
-                    deployment(dep_id, source.clone(), wire.clone(), wire, lanes, order),
-                );
-                order += 1;
-            }
-            for lane in [Tier::Frontier, Tier::Standard, Tier::Cheap] {
-                if let Some(binding) = provider.tier_models.get(&lane) {
-                    if binding.unavailable_reason.is_some() {
-                        continue;
-                    }
-                    let wire = binding.model_id.as_deref().unwrap_or(&binding.name);
-                    if wire.is_empty() {
-                        continue;
-                    }
-                    models
-                        .entry(wire.into())
-                        .or_insert_with(|| unknown_model(wire, "providers.tier_models"));
-                    let dep_id = format!("provider:{}/{}", provider.id, lane_name(lane));
-                    deployments.insert(
-                        dep_id.clone(),
-                        deployment(
-                            dep_id,
-                            source.clone(),
-                            wire.into(),
-                            wire.into(),
-                            vec![lane],
-                            order,
-                        ),
-                    );
-                    order += 1;
-                    warnings.insert(format!(
-                        "providers.{}.tier_models.{} -> model_routing.deployments (legacy)",
-                        provider.id,
-                        lane_name(lane)
-                    ));
-                }
-            }
-            if provider.llm_source.is_some() {
-                warnings.insert(format!(
-                    "providers.{}.llm_source -> model_routing.deployments.source_ref (legacy)",
-                    provider.id
-                ));
-            }
-        }
         let mut seen = BTreeSet::new();
         for entry in &self.model_routing.models {
             if entry.id.trim().is_empty() || !seen.insert(entry.id.clone()) {
@@ -612,13 +497,7 @@ impl Config {
                     "model_routing.models: empty or duplicate id".into(),
                 ));
             }
-            if models.contains_key(&entry.id) {
-                warnings.insert(format!("model_routing.models.{} overrides llm_proxy.models/providers.tier_models -> model_routing.models", entry.id));
-            }
-            let mut model = models
-                .get(&entry.id)
-                .cloned()
-                .unwrap_or_else(|| unknown_model(&entry.id, "model_routing.models"));
+            let mut model = unknown_model(&entry.id, "model_routing.models");
             if let Some(v) = &entry.revision {
                 model.revision = v.clone();
             }
@@ -687,11 +566,10 @@ impl Config {
             let known_source = match entry.source_ref.as_str() {
                 "claude-oauth" | "claude_oauth" => self.llm_proxy.sources.claude_oauth.is_some(),
                 "codex-oauth" | "codex_oauth" => self.llm_proxy.sources.codex_oauth.is_some(),
-                // ADR 2026-10-06 D3: opencode go は llm-proxy を経由しない。source が opencode_go の行があれば既知。
-                "opencode-go" | "opencode_go" => self.providers.iter().any(|p| {
-                    self.provider_llm_source(&p.id)
-                        .is_some_and(|r| r.source == task_core::LlmSourceRef::OpencodeGo)
-                }),
+                // ADR 2026-10-06 D3: opencode go は llm-proxy を経由しない。`kind = "opencode_go"` の `[llm_sources.<id>]` があれば既知。
+                "opencode-go" | "opencode_go" => {
+                    self.declares_source_kind(task_core::LlmSourceRef::OpencodeGo)
+                }
                 s if s.starts_with("openai-compatible:") || s.starts_with("openai_compatible:") => {
                     self.llm_proxy
                         .sources
@@ -702,10 +580,6 @@ impl Config {
                                 || s == format!("openai_compatible:{}", source.id)
                         })
                 }
-                s if s.starts_with("provider:") => self
-                    .providers
-                    .iter()
-                    .any(|p| s == format!("provider:{}", p.id)),
                 _ => false,
             };
             if !known_source {
@@ -714,28 +588,14 @@ impl Config {
                     entry.id
                 )));
             }
-            if let Some(old) = deployments.get(&entry.id) {
-                if old.source_ref != entry.source_ref
-                    || old.model_profile_id != entry.model_profile_id
-                    || old.upstream_model != entry.upstream_model
-                {
-                    return Err(ConfigError::Invalid(format!(
-                        "model_routing.deployments.{}: legacy identity conflicts",
-                        entry.id
-                    )));
-                }
-                warnings.insert(format!("model_routing.deployments.{} overrides llm_proxy.models/providers.tier_models -> model_routing.deployments", entry.id));
-            }
-            let mut dep = deployments.get(&entry.id).cloned().unwrap_or_else(|| {
-                deployment(
-                    entry.id.clone(),
-                    entry.source_ref.clone(),
-                    entry.model_profile_id.clone(),
-                    entry.upstream_model.clone(),
-                    vec![Tier::Frontier, Tier::Standard, Tier::Cheap],
-                    order,
-                )
-            });
+            let mut dep = deployment(
+                entry.id.clone(),
+                entry.source_ref.clone(),
+                entry.model_profile_id.clone(),
+                entry.upstream_model.clone(),
+                vec![Tier::Frontier, Tier::Standard, Tier::Cheap],
+                order,
+            );
             if let Some(lanes) = &entry.allowed_lanes {
                 if lanes.is_empty() {
                     return Err(ConfigError::Invalid(format!(
@@ -811,7 +671,7 @@ impl Config {
                 if let Some(v) = row.prefer_free {
                     policy.prefer_free = v;
                 }
-                warnings.insert(format!("model_routing.policies.{lane:?} overrides llm_proxy.prefer_free -> model_routing.policies (legacy)"));
+                warnings.insert(format!("model_routing.policies.{lane:?} overrides llm_proxy.prefer_free -> model_routing.policies"));
             }
             policy.validate().map_err(|reason| {
                 ConfigError::Invalid(format!("model_routing.policies.{lane:?}: {reason}"))
@@ -929,7 +789,7 @@ impl Config {
             }
             escalation.max_total_attempts = value;
         }
-        let mode = mr.mode.unwrap_or(RoutingMode::Legacy);
+        let mode = mr.mode.unwrap_or_default();
         self.validate_enforce_opt_in(mode)?;
         let mut freshness = FreshnessPolicy::default();
         if let Some(ttl) = mr.observation_ttl_seconds {
@@ -1029,6 +889,7 @@ impl Config {
             ));
         }
         Ok(RoutingRuntime {
+            configured: mr.mode.is_some(),
             mode,
             enforce_routes: mr
                 .enforce_routes

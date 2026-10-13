@@ -5,6 +5,7 @@ use time::OffsetDateTime;
 fn sample_task(status: Status, parent_id: Option<TaskId>) -> Task {
     let now = OffsetDateTime::now_utc();
     Task {
+        harness_id: None,
         requirements: Default::default(),
         tree: None,
         paused_at: None,
@@ -24,7 +25,6 @@ fn sample_task(status: Status, parent_id: Option<TaskId>) -> Task {
         priority: 0,
         worker_hint: WorkerHint {
             tier: task_core::Tier::Standard,
-            adapter: None,
         },
         workspace: WorkspaceSpec::Local {
             path: "/tmp".into(),
@@ -204,9 +204,6 @@ fn task_detail_json_with_a_config_reports_the_worktree() {
         &config_path,
         r#"workspace_root = "ws"
 max_requeues = 3
-[[providers]]
-id = "p"
-adapter = "fake"
 [[clusters]]
 id = "pegasus"
 host = "pegasus"

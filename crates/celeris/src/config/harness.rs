@@ -1,14 +1,17 @@
 //! `[[harnesses]]`（ADR-0046 D3）と互換の `[[roles]]`・`[[genres]]`・`[conversation]`、検証の煙試験（ADR-0041 D5）。
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use serde::Deserialize;
 use task_core::{CONVERSATION_GENRE, HarnessBudget, HarnessRegistry, HarnessSpec, RoleSpec, Tier};
 
-use super::{Config, ConfigError, ProviderConfig};
+use super::{
+    Config, ConfigError, HarnessDeclarationConfig, LlmSourceConfig, RouteCandidateConfig,
+    RouteDefaultConfig,
+};
 
 /// ADR-0041 D5（Phase 51）: 検証（`--mode verify`）の煙試験が使う組み込みの id。
-/// 役割・分野・プロバイダで同じ名前を使う（`Config::apply_verify_smoke` が足す）。
+/// llm source・harness・役割・分野で同じ名前を使う（`Config::apply_verify_smoke` が足す）。
 pub const SMOKE_ID: &str = "smoke";
 /// 組み込みの分野 `smoke` の説明（ADR-0041 D5）。
 pub const SMOKE_DESCRIPTION: &str = "検証の煙試験";
@@ -133,7 +136,7 @@ pub struct RoleConfig {
     pub tier: Option<Tier>,
     /// 省略時は tier だけで選ぶ（fake / claude-code / codex）。
     #[serde(default)]
-    pub adapter: Option<String>,
+    pub harness: Option<String>,
     #[serde(default)]
     pub max_turns: Option<u32>,
     #[serde(default)]
@@ -190,51 +193,79 @@ impl Config {
     /// ADR-0041 D5（Phase 51）: `--mode verify` の煙試験に要るものを**組み込みで**足す。
     ///
     /// `Config::load` の後（`apply_overrides` の後）に、**verify モードのときだけ** celeris が呼ぶ。
-    /// 設定ファイルに同じ id があっても**上書きする**（本番の設定に `smoke` という名前の役割や分野が
-    /// あっても、検証の煙試験は必ず偽のアダプタで 1 往復するだけのものになる）。
+    /// 設定ファイルに同じ id があっても**上書きする**（本番の設定に `smoke` という名前の source・harness・
+    /// 役割・分野があっても、検証の煙試験は必ず偽のアダプタで 1 往復するだけのものになる）。
     ///
-    /// 足すもの:
-    /// - `[[providers]] id = "smoke" adapter = "fake" tiers = ["standard"]`
-    ///   （本番の設定には `fake` のプロバイダが無いので、これが無いと煙試験を起こせない）
-    /// - `[[roles]] id = "smoke" adapter = "fake" tier = "standard"`（小さい予算）
-    /// - `[[genres]] id = "smoke" description = "検証の煙試験" default_role = "smoke" roles = ["smoke"]`
-    /// - `[adapters.fake].command` を `FakeAdapter::default_command()` に固定し、`[reviewer]` も
-    ///   `fake` / `standard` にする（ADR-0041 §3「煙試験で本物の LLM を呼ばない。`fake` だけ」を、
-    ///   指示文ではなく設定の形で守る）
+    /// 足すもの（ADR 2026-10-11 llm-source-harness-selection の形）:
+    /// - `[llm_sources.smoke] kind = "fake" accounts = ["smoke"] models = ["fake"]`
+    /// - `[harnesses.smoke] kind = "fake"`（起動コマンドは `FakeAdapter::default_command()` に固定）
+    /// - `[route_defaults.smoke]` に `smoke` / `fake` だけ
+    /// - `[harness_selection]` は `genre = "smoke"` → `smoke` の規則 1 つだけにする。verify は `smoke` の
+    ///   タスクしか dispatch しないので、worker run も reviewer run も必ず偽の harness を選ぶ
+    ///   （ADR-0041 §3「煙試験で本物の LLM を呼ばない」を、指示文ではなく設定の形で守る）
+    /// - `[[roles]] id = "smoke"`（小さい予算）と `[[genres]] id = "smoke"`
     pub fn apply_verify_smoke(&mut self) {
+        use task_core::llm_route::{HarnessRule, HarnessSelection};
         use task_worker::FakeAdapter;
 
         // 偽のアダプタは既定のコマンドに固定する（設定の `[adapters.fake]` に左右されない）。
         self.adapters.fake.command = FakeAdapter::default_command();
-        // レビューも偽のアダプタだけ（`Check::Reviewer` を持つ煙試験を書いても LLM は呼ばれない）。
-        self.reviewer.adapter = Some(FakeAdapter::ID.to_string());
-        self.reviewer.tier = Some(Tier::Standard);
 
-        self.providers.retain(|p| p.id != SMOKE_ID);
-        self.providers.push(ProviderConfig {
-            kind: None,
-            llm_source: None,
-            tier_models: Default::default(),
-            account_id: None,
-            id: SMOKE_ID.to_string(),
-            adapter: FakeAdapter::ID.to_string(),
-            tiers: vec![Tier::Standard],
-            concurrency: None,
-            model: FakeAdapter::ID.to_string(),
-            env: HashMap::new(),
-            env_from_secrets: HashMap::new(),
-            account_pool: task_core::AccountPoolSetting::Off,
-            command: None,
-            args: None,
-            settings: None,
-            extensions: Vec::new(),
-            tools: Vec::new(),
-        });
+        let fake = FakeAdapter::ID.to_string();
+        self.llm_sources.insert(
+            SMOKE_ID.to_string(),
+            LlmSourceConfig {
+                kind: fake.clone(),
+                api_format: Some(fake.clone()),
+                endpoint: None,
+                credential_ref: None,
+                accounts: vec![SMOKE_ID.to_string()],
+                models: vec![fake.clone()],
+                max_runs: None,
+                quota: None,
+            },
+        );
+        self.harness_declarations.insert(
+            SMOKE_ID.to_string(),
+            HarnessDeclarationConfig {
+                kind: fake.clone(),
+                api_formats: [fake.clone()].into(),
+                source_kinds: [fake.clone()].into(),
+                capabilities: Default::default(),
+                command: None,
+                args: Vec::new(),
+            },
+        );
+        // 上書きした `smoke` の source・harness を指す本番の宣言は、上書き後の形と合わないので外す。
+        self.llm_routes
+            .retain(|r| r.harness != SMOKE_ID && r.source != SMOKE_ID);
+        for defaults in self.route_defaults.values_mut() {
+            defaults.candidates.retain(|c| c.source != SMOKE_ID);
+        }
+        self.cos.route_candidates.retain(|c| c.source != SMOKE_ID);
+        self.route_defaults.insert(
+            SMOKE_ID.to_string(),
+            RouteDefaultConfig {
+                candidates: vec![RouteCandidateConfig {
+                    source: SMOKE_ID.to_string(),
+                    model: fake,
+                }],
+            },
+        );
+        self.harness_selection = HarnessSelection {
+            rules: vec![HarnessRule {
+                genre: Some(SMOKE_ID.to_string()),
+                harness: SMOKE_ID.into(),
+                ..Default::default()
+            }],
+            execution_class_defaults: Default::default(),
+        };
+
         self.roles.retain(|r| r.id != SMOKE_ID);
         self.roles.push(RoleConfig {
             id: SMOKE_ID.to_string(),
             tier: Some(Tier::Standard),
-            adapter: Some(FakeAdapter::ID.to_string()),
+            harness: Some(SMOKE_ID.to_string()),
             max_turns: Some(SMOKE_MAX_TURNS),
             max_wall_secs: Some(SMOKE_MAX_WALL_SECS),
             instructions: Some(SMOKE_INSTRUCTIONS.to_string()),
@@ -258,7 +289,7 @@ impl Config {
             .map(|r| RoleSpec {
                 id: r.id.clone(),
                 tier: r.tier,
-                adapter: r.adapter.clone(),
+                harness: r.harness.clone(),
                 max_turns: r.max_turns,
                 max_wall_secs: r.max_wall_secs,
                 instructions: r.instructions.clone(),
@@ -356,7 +387,7 @@ impl Config {
                 RoleConfig {
                     id: r.id,
                     tier: r.tier,
-                    adapter: r.adapter,
+                    harness: r.harness,
                     max_turns: r.max_turns,
                     max_wall_secs: r.max_wall_secs,
                     instructions: r.instructions,
@@ -553,7 +584,7 @@ impl Config {
     }
 }
 
-/// ADR-0046 D3（Phase 59）: ハーネスの id は重複させない。adapter は providers と同じ判定。
+/// ADR-0046 D3（Phase 59）: ハーネスの id は重複させない。adapter は既知の種別だけを受け付ける。
 pub(super) fn validate_harnesses(harnesses: &[HarnessConfig]) -> Result<(), ConfigError> {
     let mut harness_ids = std::collections::HashSet::new();
     for h in harnesses {
@@ -609,7 +640,7 @@ pub(super) fn validate_harnesses(harnesses: &[HarnessConfig]) -> Result<(), Conf
     Ok(())
 }
 
-/// ADR-0016 D1: 役割の id は重複させない。adapter は providers と同じ判定。上限は 1 以上。
+/// ADR-0016 D1: 役割の id は重複させない。上限は 1 以上。
 /// 返り値は定義された役割の id（`[[genres]]` の検証が使う）。
 pub(super) fn validate_roles(roles: &[RoleConfig]) -> Result<HashSet<&String>, ConfigError> {
     let mut role_ids = std::collections::HashSet::new();
@@ -621,22 +652,6 @@ pub(super) fn validate_roles(roles: &[RoleConfig]) -> Result<HashSet<&String>, C
         }
         if !role_ids.insert(&r.id) {
             return Err(ConfigError::Invalid(format!("duplicate role id: {}", r.id)));
-        }
-        if let Some(adapter) = &r.adapter
-            && adapter != task_worker::FakeAdapter::ID
-            && adapter != task_worker::ClaudeCodeAdapter::ID
-            && adapter != task_worker::CodexAdapter::ID
-            && adapter != task_worker::PiAdapter::ID
-            && adapter != task_worker::AcpAdapter::ID
-            && adapter != task_worker::BrowserSpecialistAdapter::ID
-            && adapter != task_worker::PaperQaAdapter::ID
-            && adapter != task_worker::LdrAdapter::ID
-            && adapter != task_worker::LangMemAdapter::ID
-        {
-            return Err(ConfigError::Invalid(format!(
-                "[[roles]] {}: adapter {adapter:?} is not available in this build (fake, claude-code, codex, pi, acp, browser-specialist, paperqa, local-deep-research, langmem only)",
-                r.id
-            )));
         }
         if r.max_turns == Some(0) {
             return Err(ConfigError::Invalid(format!(

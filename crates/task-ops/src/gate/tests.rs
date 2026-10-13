@@ -7,6 +7,7 @@ use time::OffsetDateTime;
 fn sample_task(kind: TaskKind, status: Status) -> Task {
     let now = OffsetDateTime::now_utc();
     Task {
+        harness_id: None,
         requirements: Default::default(),
         tree: None,
         paused_at: None,
@@ -38,7 +39,6 @@ fn sample_task(kind: TaskKind, status: Status) -> Task {
         priority: 0,
         worker_hint: WorkerHint {
             tier: Tier::Standard,
-            adapter: None,
         },
         workspace: WorkspaceSpec::Local {
             path: "/tmp/workspace".into(),
@@ -433,7 +433,7 @@ fn cancel_with_mismatched_expected_returns_conflict_without_transitioning() {
     );
 }
 
-// ---- cascaded (docs/api/v1/gui-api.md §5.7) ----
+// ---- cascaded (docs/api/v1/api.md §5.7) ----
 
 #[test]
 fn reject_approval_cascades_cancel_to_its_own_children() {

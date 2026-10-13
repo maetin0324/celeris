@@ -213,7 +213,7 @@ fn cluster_job_wait_event_types_match_their_serde_names() {
     }
     let unique: std::collections::BTreeSet<&str> = EVENT_TYPES.iter().copied().collect();
     assert_eq!(unique.len(), EVENT_TYPES.len());
-    assert_eq!(EVENT_TYPES.len(), 76);
+    assert_eq!(EVENT_TYPES.len(), 82);
 }
 
 #[test]
@@ -287,6 +287,76 @@ fn integration_repair_event_types_match_their_serde_names() {
     }
 }
 
+/// ADR 2026-10-11 stranded branches: task の取り込み状態の Event の `type` 名が serde の名前・`event_type_name`・`EVENT_TYPES` で一致する。
+#[test]
+fn integration_state_event_types_match_their_serde_names() {
+    let repo_id = task_core::RepoId::new();
+    let events = [
+        Event::IntegrationDetected {
+            repo_id,
+            branch: "celeris/t1".into(),
+            head_sha: "head".into(),
+            reason: None,
+            actor: "daemon".into(),
+        },
+        Event::IntegrationMerged {
+            repo_id,
+            branch: "celeris/t1".into(),
+            head_sha: "head".into(),
+            actor: "human".into(),
+        },
+        Event::IntegrationDiscarded {
+            repo_id,
+            branch: "celeris/t1".into(),
+            head_sha: "head".into(),
+            reason: "superseded".into(),
+            actor: "human".into(),
+        },
+        Event::IntegrationHeld {
+            repo_id,
+            branch: "celeris/t1".into(),
+            head_sha: "head".into(),
+            reason: "wait".into(),
+            actor: "human".into(),
+        },
+        Event::IntegrationReopened {
+            repo_id,
+            branch: "celeris/t1".into(),
+            head_sha: "head".into(),
+            reason: None,
+            actor: "human".into(),
+        },
+        Event::IntegrationNotApplicable {
+            repo_id,
+            branch: "celeris/t1".into(),
+            head_sha: "head".into(),
+            reason: "remote repository: not checked by the sweep".into(),
+            actor: "sweep".into(),
+        },
+    ];
+    for event in events {
+        let value = serde_json::to_value(&event).unwrap();
+        let serde_name = value["type"].as_str().unwrap();
+        assert_eq!(serde_name, event_type_name(&event));
+        assert!(EVENT_TYPES.contains(&serde_name), "{serde_name}");
+    }
+}
+
+#[test]
+fn stranded_integration_status_serializes_for_api_clients() {
+    let value = serde_json::to_value(task_core::TaskRepoIntegrationStatus::Unintegrated)
+        .expect("serialize stranded integration status");
+    assert_eq!(value, "unintegrated");
+    assert_eq!(
+        serde_json::to_value(task_core::TaskRepoIntegrationStatus::NotApplicable).unwrap(),
+        "not_applicable"
+    );
+    assert_eq!(
+        task_core::TaskRepoIntegrationStatus::parse("not_applicable"),
+        Some(task_core::TaskRepoIntegrationStatus::NotApplicable)
+    );
+}
+
 /// 2026-10-04 多目的 routing ADR §6（Phase 3）: feature・request・outcome の Event の `type` 名が serde の名前・
 /// `event_type_name`・`EVENT_TYPES` で一致する（`EVENT_TYPES` は 65 語）。
 #[test]
@@ -344,7 +414,7 @@ fn routing_feedback_event_types_match_their_serde_names() {
         assert_eq!(serde_name, event_type_name(&event));
         assert!(EVENT_TYPES.contains(&serde_name), "{serde_name}");
     }
-    assert_eq!(EVENT_TYPES.len(), 76);
+    assert_eq!(EVENT_TYPES.len(), 82);
 }
 
 /// ADR 2026-10-07-worker-no-subagents-no-llm-cli D5: `WorkerPolicyViolation` の `type` 名が serde の名前・

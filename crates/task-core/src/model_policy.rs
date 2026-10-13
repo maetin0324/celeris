@@ -3,7 +3,7 @@
 //!
 //! - 単一スコアではなく**規則表**（上から評価し、最初に当たった規則の `rule_id` を記録する）。
 //! - 特徴量は `TaskFeatures::infer(&Task)` がタスクの列から決定的に作る（LLM は呼ばない。DESIGN 原則 1）。
-//! - lane → provider / model / reasoning effort は別の層（`model_routing`・`TieredAdapter`）。残量による
+//! - model は lane から引かず、dispatcher の LLM route（source×model）が決める。残量による
 //!   調整（`model_routing::select_tier`）はこの後に別の層として効く。
 //! - Phase 2 の shadow 分類器のための境界（`ShadowClassifier` / `LaneDecision.shadow`）だけを予約する。
 

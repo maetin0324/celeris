@@ -43,6 +43,7 @@ pub enum InboxKind {
     DiskFull,
     DeliverySkipped,
     IntegrationRequest,
+    Unintegrated,
     // 人の決定 2026-10-08: KB の取り込み待ち（旧 `knowledge_review`）は受信箱に出さない。知識画面で扱う。
 }
 
@@ -82,6 +83,7 @@ impl InboxKind {
             InboxKind::DiskFull => "disk_full",
             InboxKind::DeliverySkipped => "delivery_skipped",
             InboxKind::IntegrationRequest => "integration_request",
+            InboxKind::Unintegrated => "unintegrated",
         }
     }
 }
@@ -182,6 +184,7 @@ pub fn route_attention(item: &AttentionItem) -> Option<InboxKind> {
         AttentionItem::PlanApproval { .. } => Some(InboxKind::PlanGate),
         AttentionItem::DeliverySkipped { .. } => Some(InboxKind::DeliverySkipped),
         AttentionItem::IntegrationRequest { .. } => Some(InboxKind::IntegrationRequest),
+        AttentionItem::Unintegrated { .. } => Some(InboxKind::Unintegrated),
         // ADR 2026-10-08-browser-prod-enablement D2: browser の前提で止まった task。人の手は task 詳細の
         // browser 節（policy の編集）か release・台帳の作り直しなので、browser の人手の種類に入れる。
         AttentionItem::BrowserPrerequisite { .. } => Some(InboxKind::BrowserWait),
@@ -740,11 +743,7 @@ impl Builder<'_> {
                 id: format!("unroutable-{}", task.id),
                 kind: InboxKind::Unroutable,
                 title: format!("担当が決まらない: {}", task.title),
-                detail: clip(&format!(
-                    "tier={:?} adapter={}",
-                    hint.tier,
-                    hint.adapter.as_deref().unwrap_or("-")
-                )),
+                detail: clip(&format!("tier={:?} harness=route-selected", hint.tier)),
                 options: vec![
                     opt(
                         "reassign",
@@ -1020,6 +1019,55 @@ impl Builder<'_> {
                     links: Vec::new(),
                 })
             }
+            AttentionItem::Unintegrated {
+                task,
+                repo_id,
+                repo,
+                state,
+                operation_path,
+                branch,
+                head_sha,
+                reason,
+                at,
+            } => self.finish(Draft {
+                // 1 task に未取り込み repo が複数あるため、item は task×repo で一意にする。
+                id: format!("unintegrated-{}-{repo_id}", task.id),
+                kind: InboxKind::Unintegrated,
+                title: format!("未取り込み: {}", task.title),
+                detail: Some(format!(
+                    "repository `{repo}` / state `{state:?}` / branch `{branch}` / head `{head_sha}`\n{}",
+                    reason.as_deref().unwrap_or("default branch に未到達")
+                )),
+                options: vec![
+                    opt(
+                        "merge",
+                        "merge を依頼",
+                        false,
+                        "default branch に取り込む",
+                    ),
+                    opt(
+                        "discard",
+                        "破棄",
+                        true,
+                        "理由を付けて破棄する",
+                    ),
+                    opt(
+                        "hold",
+                        "保留",
+                        true,
+                        "理由を付けて保留する",
+                    ),
+                ],
+                recommended: None,
+                due_at: None,
+                blocking: self.only_task(task),
+                blocked_by: Vec::new(),
+                native: native("POST", format!("{operation_path}merge")),
+                project_id: self.project_of(task.id),
+                task: Some(task.clone()),
+                created_at: at.clone(),
+                links: vec![link("task 詳細", format!("/tasks/{}", task.id))],
+            }),
         })
     }
 

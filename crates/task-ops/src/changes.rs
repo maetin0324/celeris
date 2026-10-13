@@ -386,11 +386,27 @@ pub fn source_for(repo: &Path, worktree: Option<&Path>, branch: &str) -> Changes
     ChangesSource::Missing
 }
 
-/// ADR-0043 D1: git の既定のブランチ。設定（`project_repos.default_branch`）が無ければ
-/// `origin/HEAD` → `main` → `master` の順で検出する。何も無ければ `"main"`。
-pub fn default_branch(repo: &Path, configured: Option<&str>) -> String {
+/// default branch を解決できなかった理由（ADR 2026-10-11-stranded-done-branches F1）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DefaultBranchError(pub String);
+
+impl std::fmt::Display for DefaultBranchError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for DefaultBranchError {}
+
+/// ADR-0043 D1・ADR 2026-10-11-stranded-done-branches F1: git の既定のブランチを解決する唯一の経路。
+/// 設定（`project_repos.default_branch`）→ `origin/HEAD` → `main` → `master` の順。
+/// どれも無ければ理由つきの `Err`（`"main"` を盲目に返さない）。設定された名前は検証しない。
+pub fn resolve_default_branch(
+    repo: &Path,
+    configured: Option<&str>,
+) -> Result<String, DefaultBranchError> {
     if let Some(name) = configured.map(str::trim).filter(|n| !n.is_empty()) {
-        return name.to_string();
+        return Ok(name.to_string());
     }
     if let Some(head) = git_line(
         repo,
@@ -403,7 +419,7 @@ pub fn default_branch(repo: &Path, configured: Option<&str>) -> String {
     ) && let Some(name) = head.strip_prefix("origin/")
         && !name.is_empty()
     {
-        return name.to_string();
+        return Ok(name.to_string());
     }
     for name in ["main", "master"] {
         if git_ok(
@@ -415,10 +431,13 @@ pub fn default_branch(repo: &Path, configured: Option<&str>) -> String {
                 &format!("refs/heads/{name}"),
             ],
         ) {
-            return name.to_string();
+            return Ok(name.to_string());
         }
     }
-    "main".to_string()
+    Err(DefaultBranchError(
+        "default branch cannot be resolved: no configured branch, origin/HEAD, main or master"
+            .to_string(),
+    ))
 }
 
 /// リポジトリ 1 つ分の差分の要約（ADR-0043 D5）。

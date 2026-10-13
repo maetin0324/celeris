@@ -18,13 +18,22 @@ function limitSearch(value: unknown): number | undefined {
 export const Route = createFileRoute("/tasks/")({
   validateSearch: (
     search: Record<string, unknown>,
-  ): { q?: string; status?: string; order?: string; limit?: number; genre?: string; show_support?: boolean } => ({
+  ): {
+    q?: string;
+    status?: string;
+    order?: string;
+    limit?: number;
+    genre?: string;
+    show_support?: boolean;
+    run_state?: "runnable" | "waiting";
+  } => ({
     q: optionalString(search.q),
     status: statusSearch(search.status),
     order: optionalString(search.order),
     limit: limitSearch(search.limit),
     genre: optionalString(search.genre),
     show_support: optionalBoolean(search.show_support),
+    run_state: search.run_state === "runnable" || search.run_state === "waiting" ? search.run_state : undefined,
   }),
   component: Screen,
 });
@@ -39,6 +48,7 @@ function Screen() {
       status={validated.status?.split(",") ?? []}
       order={params.get("order") ?? undefined}
       limit={params.get("limit") ?? undefined}
+      runState={validated.run_state}
     />
   );
 }

@@ -54,13 +54,13 @@ main が `agent-docs/PROGRESS.md` の既存行（prompt-rule 節の引用）を�
 | `docs/gui/bootstrap/agents/implementer.md` | move-docs | 初期コピー元。現行は gui/.claude/agents/implementer.md。人の確認で削除 | `926e19c0` |
 | `docs/ops/adr-0079-r5b-runbook.md` | move-docs | ADR-0079 R5b の一度きりの作業手順。人の確認で削除（JSON フィクスチャは crates/task-api/tests/fixtures/ へ切り出し） | `243009c3` |
 | `docs/ops/home-nfs-migration-2026-09-25.md` | move-docs | 2026-09-25 の一度きりの移行手順。人の確認で削除 | `d0e78511` |
-| `docs/web/dogfood.md` | move-docs | 一度きりの作業文書（手順と未決定の記録が混在）。現行の運用は docs/ops/web-parallel-operation.md。人の確認で削除 | `c63d53c2` |
+| `docs/web/dogfood.md` | move-docs | 一度きりの作業文書（手順と未決定の記録が混在）。現行の運用は docs/ops/web-operation.md。人の確認で削除 | `c63d53c2` |
 | `docs/execution-architecture-2026-09-24.md`（移動後 `agent-docs/reports/execution-architecture-2026-09-24.md`） | cleanup-reports | ADR-0072 前の現状調査。Task:run 1:1・dispatcher.rs の行番号が今の実装と食い違う | `a42f9a54` |
 | `docs/execution-decomposition-report-2026-09-25.md`（移動後 `agent-docs/reports/…`） | cleanup-reports | E6 時点の分析。挙げた問題は Phase F で実装済み、gate 提案は ADR-0079 で置き換わった | `a42f9a54` |
 | `docs/execution-parallel-report-2026-09-28.md`（移動後 `agent-docs/reports/…`） | cleanup-reports | 案件計画（ADR-0074 D3）は ADR-0079 で廃止。決定は ADR-0074 本文にある | `a42f9a54` |
 | `docs/notes/build-cache-tiering-input-2026-09-28.md`（移動後 `agent-docs/notes/…`） | cleanup-reports | ADR-0075 の入力メモ。方針は ADR-0075 と実装に入り、現状の記述（sccache 未導入など）は食い違う | `a42f9a54` |
 
-統合（ファイルは残る）: `docs/celeris-api-v1.md` → `docs/api/v1/overview.md` の中身は cleanup-api で `docs/api/v1/gui-api.md` §3.125 へ統合した。
+統合（ファイルは残る）: `docs/celeris-api-v1.md` → `docs/api/v1/overview.md` の中身は cleanup-api で `docs/api/v1/api.md` §3.125 へ統合した。
 `overview.md` は gui/docs/celeris-api-v1.md（変更禁止）の参照を保つ転送ページとして残る（統合前の最後の commit `a42f9a54`）。
 guides・ops・api・protocol の各文書は節の削除・修正だけで、ファイルの削除は無い（cleanup・cleanup-ops・cleanup-api の記録）。
 
@@ -96,7 +96,7 @@ workspace 全体の `cargo test --workspace` は daemon の workspace check に�
   - `agent-docs/PROGRESS.md` と `agent-docs/progress/phase-F.md` の壊れたリンクを直し、`check-doc-links.sh` の対象外（`MIGRATION_EXCLUDE`）から外す。
     同時に `scripts/dev/check-adr-numbers.sh` も対象外から外し、旧ディレクトリの列挙を消す（refs-repo の提案）。
   - それまでに main に入った旧配置の ADR・進捗・PROGRESS.md 末尾の節は、land する task が本ファイルの「land-verify」節と同じ規則で移す。
-- `deploy/systemd/celeris-web@.service` のコメントを `docs/ops/web-parallel-operation.md` へ直す（昇格の sha12 確認が要る）。
+- `deploy/systemd/celeris-web@.service` のコメントを `docs/ops/web-operation.md` へ直す（昇格の sha12 確認が要る）。
 - `crates/task-worker/src/scratch/tests.rs:835` の ETXTBSY は `crate::test_support::write_executable` で書くよう直す（cleanup-ops の提案）。
 
 ## sync-main-2: main の取り込み（5d6df9f3）
@@ -128,7 +128,7 @@ build cache 判定: **残っている**。`crates/task-dispatch/src/dispatcher/t
 
 - `crates/task-dispatch/src/dispatcher/worker_task.rs`、`crates/task-worker/src/{adapter.rs,probe.rs,langmem_run.py}`、`scripts/selfdeploy/install-units.sh`: main の実装を基にし、移動後に必要な文書パスだけを保持した。`browser_launcher_ptrace.rs` と `browser_launcher/` は main と一致する。
 - main で撤去した `crates/scratch-cache/tests/sccache_webdav_e2e.rs`、`crates/task-worker/tests/scratch_sccache_e2e.rs` は削除した。
-- `docs/web/dogfood.md` は削除のまま。main の変更は `docs/web/parallel-operation.md` → `docs/ops/web-parallel-operation.md` と `docs/workspace.md` → `docs/guides/workspace.md` の移動先に反映し、旧パスは削除した。
+- `docs/web/dogfood.md` は削除のまま。main の変更は `docs/web/parallel-operation.md` → `docs/ops/web-operation.md` と `docs/workspace.md` → `docs/guides/workspace.md` の移動先に反映し、旧パスは削除した。
 - `docs/architecture-map.md` は新パスの参照を保ちつつ、main の ADR-0132/0133/0134 の参照・受信箱の行を反映し、撤去された cache server の行を削除した。`docs/ops/nextest.md` は両側の趣旨を保持し、撤去済み sccache への参照を除いた。
 - `agent-docs/PROGRESS.md` は既存行を残し、main が旧 `docs/PROGRESS.md` に加えた節を末尾へ移した。旧 `docs/PROGRESS.md` と `docs/DESIGN.md` は復活していない。新しい節の task 別文書への移動は後続の `migrate-docs` で行う。
 
@@ -154,7 +154,7 @@ build cache 判定: **残っている**。`crates/task-dispatch/src/dispatcher/t
   `2026-10-01-browser-prod-admission.md`（新）、`2026-10-02-deterministic-time-waits.md`（新）、`2026-10-02-host-sccache-reflink.md`（新）、`2026-10-02-provider-llm-source.md`（新）、
   `2026-10-02-web-follow-health-gate.md`（新）、`2026-10-02-blocked-repair-replan-loop.md`（新）、既存の `2026-10-02-browser-launcher.md`・`2026-10-02-skills-native-delivery.md`・`2026-10-02-inbox-notifications.md` の末尾。
   落としていないことの確認: main が足した空でない 661 行を 1 行ずつ `grep -qxF` で `agent-docs/progress/` の全ファイルに照合し、見つからない行 0。
-- 参照: 移した ADR・進捗・`docs/ops/*` の相対リンク、`scripts/host-sccache/*` のコメント（`agent-docs/adr/0129-…`）、`scripts/selfdeploy/install-units.sh` のコメント（`docs/ops/web-parallel-operation.md`）を新パスへ直した。
+- 参照: 移した ADR・進捗・`docs/ops/*` の相対リンク、`scripts/host-sccache/*` のコメント（`agent-docs/adr/0129-…`）、`scripts/selfdeploy/install-units.sh` のコメント（`docs/ops/web-operation.md`）を新パスへ直した。
   main に無い ADR-0136（`0136-local-hot-data-layout.md`）へのリンク 3 か所はリンクを外し「main 未取り込み」と書いた。移した本文中の当時のコマンド記録（`grep … docs/adr/0129-…` など）は記録なので変えていない。
 
 ### build cache 判定（取り込み後）: 残っている

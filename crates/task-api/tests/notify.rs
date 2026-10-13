@@ -59,7 +59,7 @@ fn env_with_webhook(
         token,
         secrets_dir: Some(dir),
         admin_tx,
-        notify_gui_base_url: Some("http://192.168.1.103:7700".into()),
+        notify_web_base_url: Some("http://192.168.1.103:7720".into()),
         ..Default::default()
     });
     (env, secrets_tmp)
@@ -209,7 +209,7 @@ async fn get_notify_shows_the_fingerprint_and_recent_sends_but_never_the_url() {
     let body = resp.json();
     assert_eq!(body["configured"], true);
     assert_eq!(body["secret_id"], "discord-webhook");
-    assert_eq!(body["gui_base_url"], "http://192.168.1.103:7700");
+    assert_eq!(body["web_base_url"], "http://192.168.1.103:7720");
     let fingerprint = body["fingerprint"].as_str().expect("fingerprint");
     assert_eq!(fingerprint.len(), 8);
     assert!(fingerprint.chars().all(|c| c.is_ascii_hexdigit()));

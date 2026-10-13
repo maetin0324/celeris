@@ -24,6 +24,7 @@ fn f(
 pub(crate) fn task(objective: &str, acceptance: Vec<Criterion>) -> Task {
     let now = time::OffsetDateTime::UNIX_EPOCH;
     Task {
+        harness_id: None,
         requirements: Default::default(),
         tree: None,
         paused_at: None,
@@ -39,7 +40,6 @@ pub(crate) fn task(objective: &str, acceptance: Vec<Criterion>) -> Task {
         priority: 10,
         worker_hint: WorkerHint {
             tier: Tier::Standard,
-            adapter: None,
         },
         workspace: WorkspaceSpec::local("/tmp/x"),
         repos: vec![],

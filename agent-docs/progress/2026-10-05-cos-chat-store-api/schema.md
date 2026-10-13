@@ -13,7 +13,7 @@ ADR 2026-10-05-cos-chat-home D2 の wire 型を `ApiV1Schema` に登録し、sch
 - `crates/task-api/src/schema.rs`: `task_core::chat` の `ChatThread`・`ChatMessage`・`ChatRun`・`ChatAttachment`・`ChatCard`・`ChatEvent` と、request 6 種・response 9 種（一覧・詳細・stop・events・添付・reference を含む）を `ApiV1Schema` の欄に追加。
 - `docs/api/v1/api-v1.schema.json`: `UPDATE_SCHEMA=1 cargo test -p task-api` で再生成。差分は追加のみ（`required` 末尾の `cron_run_result` のカンマ 1 行を除く）。
 - `gui/app/celeris/types.ts`・`web/api/generated/types.ts`・`web/api/generated/schema.json`: `gen:types` で再生成。
-- `docs/api/v1/gui-api.md`: §2 にチャットの endpoint 18 行（#178〜195）、§3.127 に REST の契約（冪等・上限・エラー・添付・停止）、§4 にチャット stream の event 表と再接続の規則を追記。
+- `docs/api/v1/api.md`: §2 にチャットの endpoint 18 行（#178〜195）、§3.127 に REST の契約（冪等・上限・エラー・添付・停止）、§4 にチャット stream の event 表と再接続の規則を追記。
 - `gui/docs/celeris-api-v1.md`: `scripts/sync-gui-docs.sh` で写した。
 
 pnpm は `corepack pnpm@11.27.0 -C gui install --offline` と `corepack pnpm@12.6.0 -C web install --offline` を先に実行した（どちらも exit 0）。

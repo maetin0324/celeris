@@ -4,6 +4,7 @@ use task_core::{Budget, Check, Criterion, SqliteStore, TaskKind, Tier, WorkerHin
 fn parent(repos: &[&str]) -> Task {
     let now = OffsetDateTime::now_utc();
     Task {
+        harness_id: None,
         requirements: Default::default(),
         tree: None,
         paused_at: None,
@@ -29,7 +30,6 @@ fn parent(repos: &[&str]) -> Task {
         priority: 2,
         worker_hint: WorkerHint {
             tier: Tier::Standard,
-            adapter: None,
         },
         workspace: WorkspaceSpec::Local {
             path: "/tmp/ws".into(),

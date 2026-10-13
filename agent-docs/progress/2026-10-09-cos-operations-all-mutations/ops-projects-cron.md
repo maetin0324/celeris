@@ -18,7 +18,7 @@ status: done
   needs_remediation になる（部分的な効果の有無が分からないため）。
 - `celerisctl cron create|update|pause|resume|run` は CoS credential のとき `cos_mapped` で同じ operation を送る
   （`commands/cron.rs` の `request_of` を共有）。
-- skill の操作表（`config/skills/cos-operator/operations.md`）、`docs/api/v1/gui-api.md`（と `scripts/sync-gui-docs.sh` の写し）、
+- skill の操作表（`config/skills/cos-operator/operations.md`）、`docs/api/v1/api.md`（と `scripts/sync-gui-docs.sh` の写し）、
   `docs/api/cron-jobs.md` を更新。gui 写しにだけあった plan_adopt/tree.adopt の段落は正本へ移した。
 
 検証:

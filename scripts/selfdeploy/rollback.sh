@@ -121,11 +121,6 @@ stop_unit_or_pid() {
 }
 
 stop_unit_or_pid "$CUR"
-if [ -n "$CUR" ] && systemctl --user is-active --quiet "celeris-gui@$CUR"; then
-  sd_log "systemctl --user stop celeris-gui@$CUR"
-  systemctl --user stop "celeris-gui@$CUR" || sd_log "warning: stop celeris-gui@$CUR failed"
-fi
-
 sd_log "restoring $SRC over $SD_DB (and dropping -wal / -shm)"
 cp -p "$SRC" "$SD_DB"
 rm -f "$SD_DB-wal" "$SD_DB-shm"
@@ -157,14 +152,7 @@ systemctl --user enable "celeris@$PREV" || sd_log "warning: enable celeris@$PREV
 if [ -n "$CUR" ]; then
   systemctl --user disable "celeris@$CUR" || sd_log "warning: disable celeris@$CUR failed"
 fi
-systemctl --user start "celeris-gui@$PREV" || sd_die "celeris is back on $PREV but celeris-gui@$PREV did not start"
-sd_wait_http_200 "http://127.0.0.1:$SD_PROD_GUI_PORT/healthz" 60 \
-  || sd_log "warning: the GUI did not answer /healthz within 60s"
-systemctl --user enable "celeris-gui@$PREV" || sd_log "warning: enable celeris-gui@$PREV failed"
-if [ -n "$CUR" ]; then
-  systemctl --user disable "celeris-gui@$CUR" || sd_log "warning: disable celeris-gui@$CUR failed"
-fi
-
+bash "$(dirname "${BASH_SOURCE[0]}")/web-follow.sh" "$PREV" "$CUR" || sd_die "web rollback failed; daemon restored but links unchanged"
 if [ -n "$CUR" ] && [ -d "$(sd_release_dir "$CUR")" ]; then
   sd_set_link "$SD_PREVIOUS" "$CUR"
 fi

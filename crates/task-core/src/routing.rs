@@ -282,6 +282,7 @@ mod tests {
 
         let now = OffsetDateTime::now_utc();
         let task = Task {
+            harness_id: None,
             requirements: Default::default(),
             tree: None,
             paused_at: None,
@@ -304,7 +305,6 @@ mod tests {
             priority: 0,
             worker_hint: WorkerHint {
                 tier: Tier::Standard,
-                adapter: None,
             },
             workspace: WorkspaceSpec::Local {
                 path: "/tmp/workspace".into(),

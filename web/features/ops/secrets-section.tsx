@@ -10,7 +10,7 @@ import { Button } from "../../components/ui/button";
 import { ConfirmDialog } from "../../components/ui/confirm-dialog";
 import { DataList } from "../../components/ui/data-list";
 import { formatAbsolute } from "../../lib/time";
-import { deniedMessage, isDenied } from "./providers-form";
+import { deniedMessage, isDenied } from "./denied";
 
 type Run = ReturnType<typeof useActionResult>["run"];
 // 枠の色は styles.css の @layer base（--color-input）に任せ、ここでは寸法だけを持つ。

@@ -33,7 +33,7 @@ completed: 2026-10-09
 - celerisctl（CoS credential）: `models discover|assign|unassign`（`models::request_of` を直接実行と共有）、
   `replay`（`--check/--apply` なし）、`approve|reject|accept|cancel|rereview` を `cos_mapped` で包む。`models list` は読み取り。
 - 文書: skill `operations.md` の表（lib 試験で ALLOWED と一致）・登録待ちの節（surface だけ）・`SKILL.md`・
-  `production.md`（promote は人の依頼と verify 確認の後だけ）。`docs/api/v1/gui-api.md` §3.129 の表を ALLOWED と
+  `production.md`（promote は人の依頼と verify 確認の後だけ）。`docs/api/v1/api.md` §3.129 の表を ALLOWED と
   一致させ（tasks の gate・通知の欠けも追記）、`scripts/sync-gui-docs.sh` で gui 写しを同期。
 
 ## 証拠

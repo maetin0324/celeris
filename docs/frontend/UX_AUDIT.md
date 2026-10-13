@@ -161,11 +161,14 @@ tasks: [01M3XTCNKMQBCHKSZ7Y1GF6ZM4]
 - 情報の優先度: 最後の tick がいつか（stale かどうか）、実行中・人の待ち・担当なしの件数、replay の結果。
 - friction: 360px の before は「dispatcher の状態はまだありません。」「取得: fixture」と replay の枠だけ。`web/features/ops/daemon-screen.tsx` の `Row` は `last_tick_at` を ISO の文字列で出すだけで、何秒前か・stale かを判定して示さない。実行中・人の待ち・担当なしは件数だけで、該当 task への導線が無い。replay の結果は英語の「mismatches across tasks」で、取得時刻「取得:」は状態の枠の外に小さく出る。
 
-### /providers — `/providers`
-- primary user task: provider の接続状態と同時実行数・model・tier を確かめて直し、新しい provider を足す。
-- 入口と次の操作: shell の「プロバイダ」から入り、カードで値を変えて「変更を保存」か「接続を確認」、不要なら削除する。下のフォームで追加する。
-- 情報の優先度: provider ごとの使用可否（cooldown・前回の確認）、tier と model、変更の結果。
-- friction: 1440px の before では `ProviderCard` の concurrency・model 欄が全幅の 2 列に伸び、tier の checkbox と 3 つのボタンが同じ重みで並ぶ unstyled admin の見た目。`web/features/ops/providers-screen.tsx` は状態（cooldown・前回の確認）を小さな文の行で出し、使えるかどうかが一目で分からない。保存・削除のたびに `/api/reload` を続けて呼び、reload の失敗は一覧の下に `role="alert"` で出るため、押したカードから離れる。削除は `window.confirm`。
+### /providers — 削除済み（ui-v2、2026-10-12）
+
+後継は `/sources`（LLM source の一覧と `/sources/$sourceId` の詳細）と `/harnesses`（harness の一覧）。どちらも読み取り専用で、編集は config で行う（編集 API は未実装）。以下は削除前の before 記録で、現行の記述ではない。
+
+- before の primary user task: provider の接続状態と同時実行数・model・tier を確かめて直し、新しい provider を足す。
+- before の入口と次の操作: shell の「プロバイダ」から入り、カードで値を変えて「変更を保存」か「接続を確認」、不要なら削除する。下のフォームで追加する。
+- before の情報の優先度: provider ごとの使用可否（cooldown・前回の確認）、tier と model、変更の結果。
+- before の friction（削除済み）: 1440px の before では `ProviderCard` の concurrency・model 欄が全幅の 2 列に伸び、tier の checkbox と 3 つのボタンが同じ重みで並ぶ unstyled admin の見た目。`web/features/ops/providers-screen.tsx` は状態（cooldown・前回の確認）を小さな文の行で出し、使えるかどうかが一目で分からない。保存・削除のたびに `/api/reload` を続けて呼び、reload の失敗は一覧の下に `role="alert"` で出るため、押したカードから離れる。削除は `window.confirm`。
 
 ### /accounts — `/accounts`
 - primary user task: account の認証状態を確かめてログインし、secret・LLM source・MCP クライアントを管理する。
@@ -219,8 +222,8 @@ __root.tsx（認証 gate）
 | page header | `web/components/shell/screen-frame.tsx` | h1 だけ。現在位置（パンくず）・状態・主操作の置き場が無く、`/tasks/T1` の tab（`features/tasks/task-detail-view.tsx` の `nav`）や絞り込みは各画面が自前で置く。 |
 | list/table | `features/tasks/task-list-view.tsx`（唯一の `<table>`、`min-w-112` で横 scroll）、他は `<ul>`/`<li className="rounded border p-3">` の直書き（`inbox-screen.tsx`, `approvals-screen.tsx`, `project-list-screen.tsx`, `reports-screen.tsx` 等） | 一覧の行の形が画面ごとに違い、列・密度・並びの共通の型が無い。`/board` は `board-screen.tsx` の横 scroll の列。 |
 | detail | `features/tasks/task-detail-view.tsx` + `overview-view.tsx`・`timeline-view.tsx`・`execution-panel.tsx`・`decision-panel.tsx`、`features/projects/project-detail-view.tsx`、`features/runs/run-log-view.tsx` | 詳細は縦に積んだ区画。list-detail の 2 列は `lg:grid-cols-[…]` の `knowledge-screen.tsx`・`skills-screen.tsx`・`org-screen.tsx`・`project-docs-screen.tsx` の 4 画面だけ。 |
-| form | 直書きの `<label className="flex flex-col">` + input（`create-screen.tsx`, `board-screen.tsx`, `providers-screen.tsx`, `accounts-screen.tsx`, `secrets-section.tsx` 等）。button は `web/components/ui/button.tsx` の 1 種類 | field・説明・検証の部品が無い。button は主・副・危険の区別が無く、「削除」も「追加」も同じ見た目。 |
-| dialog | `features/projects/project-ops.tsx` の `<dialog>`（showModal）だけ。他は `window.confirm`（`org-screen.tsx`, `project-docs-screen.tsx`, `providers-screen.tsx`, `accounts-screen.tsx`, `secrets-section.tsx`） | 確認の部品が共通化されていない。 |
+| form | 直書きの `<label className="flex flex-col">` + input（`create-screen.tsx`, `board-screen.tsx`, `providers-screen.tsx`（削除済み）, `accounts-screen.tsx`, `secrets-section.tsx` 等）。button は `web/components/ui/button.tsx` の 1 種類 | field・説明・検証の部品が無い。button は主・副・危険の区別が無く、「削除」も「追加」も同じ見た目。 |
+| dialog | `features/projects/project-ops.tsx` の `<dialog>`（showModal）だけ。他は `window.confirm`（`org-screen.tsx`, `project-docs-screen.tsx`, `providers-screen.tsx`（削除済み）, `accounts-screen.tsx`, `secrets-section.tsx`） | 確認の部品が共通化されていない。 |
 | Console | `features/console/console-view.tsx`（`routes/index.tsx` と `routes/org.$id.tsx` で使う） | 入力欄は `fixed inset-x-0`（md 以上は `md:left-56`）で画面下に固定。shell の `aside[data-console-slot]` は空のまま。 |
 
 `web/styles.css` は `@import "tailwindcss";` の 1 行だけで、色・余白・文字の token が無い。灰色は `neutral-*` を各 file で直接指定している。
@@ -231,15 +234,15 @@ __root.tsx（認証 gate）
 
 | 幅 | shell | 折り返す | 隠れる | 横 scroll（枠の中） |
 |---|---|---|---|---|
-| 360 | 上の header（「Celeris」と「メニュー」）だけ。nav は「メニュー」を押すと 2 列の grid で main に重なる | `/tasks` の状態 8 ボタンが 3 段（`_tasks-360.png`）。`/board` の絞り込み 9 項目が縦 1 列で 952px の縦長（`_board-360.png`）。`/providers` は既存の行の編集 form と追加 form が縦に積まれ 1158px（`_providers-360.png`）。`/help` の目次 6 リンクが 4 段・本文は 1800px（`_help-360.png`）。`/tasks/new` の受け入れ条件 1 件が 1 画面の半分を使う（`_tasks_new-360.png`） | 接続状態と最終受信（`shell.tsx` の `hidden md:block`）が全画面で見えない。badge 付きの nav（受信箱・承認・報告）もメニューを開くまで見えない | `/tasks` の表（`min-w-112`）、`/tasks/T1` の tab、`/tasks/T1/changes` の差分（`whitespace-pre`）、`/tasks/T1/runs/R1` の出力（`max-h-64`）、`/board` の列（`w-max`）、`/graph` の SVG、`/projects/P1` と `/projects/P1/docs/maintenance` の枠 |
-| 390・412 | 360 と同じ（md 未満） | 360 より 1 段減る程度。`/board` は 876px、`/providers` は 800px に収まる。`/help` は 1752px・1728px | 360 と同じ | 360 と同じ |
+| 360 | 上の header（「Celeris」と「メニュー」）だけ。nav は「メニュー」を押すと 2 列の grid で main に重なる | `/tasks` の状態 8 ボタンが 3 段（`_tasks-360.png`）。`/board` の絞り込み 9 項目が縦 1 列で 952px の縦長（`_board-360.png`）。`/providers`（削除済み） は既存の行の編集 form と追加 form が縦に積まれ 1158px（`_providers-360.png`）。`/help` の目次 6 リンクが 4 段・本文は 1800px（`_help-360.png`）。`/tasks/new` の受け入れ条件 1 件が 1 画面の半分を使う（`_tasks_new-360.png`） | 接続状態と最終受信（`shell.tsx` の `hidden md:block`）が全画面で見えない。badge 付きの nav（受信箱・承認・報告）もメニューを開くまで見えない | `/tasks` の表（`min-w-112`）、`/tasks/T1` の tab、`/tasks/T1/changes` の差分（`whitespace-pre`）、`/tasks/T1/runs/R1` の出力（`max-h-64`）、`/board` の列（`w-max`）、`/graph` の SVG、`/projects/P1` と `/projects/P1/docs/maintenance` の枠 |
+| 390・412 | 360 と同じ（md 未満） | 360 より 1 段減る程度。`/board` は 876px、`/providers`（削除済み） は 800px に収まる。`/help` は 1752px・1728px | 360 と同じ | 360 と同じ |
 | 1440 | 左 224px（`md:w-56`）の縦 nav に 17 項目。下端に「接続状態: 未確認」 | `/tasks` の絞り込みは 2 段（`_tasks-1440.png`）。`/help` の区画は `sm:grid-cols-` で並ぶ | なし | `/tasks/T1/changes` の差分と run の出力は枠の中だけ。main は `max-width` が無く、1440 では入力・ボタンが左に寄り右 1000px 以上が空く（`_tasks-1440.png`, `_tasks_T1-1440.png`） |
 
 画面ごとの要点:
 
 - md（768px）未満と以上で切り替わるのは shell だけ。画面の中で 2 列になるのは lg（1024px）以上の `/knowledge`・`/knowledge/skills`・`/org/cos`・`/projects/P1/docs` の 4 画面で、360〜412 では一覧の下に詳細が積まれ、選んだ項目の詳細が画面外に出る。
 - `/` と `/org/cos` の Console 入力欄は `fixed` で下端に固定し、本文は `pb-40` で逃がしている。ソフトキーボードが出たときの重なりは before 画像では確かめられない。
-- 360 でも main の余白は `p-4`（16px）で、`/board`・`/providers`・`/accounts` のように form の項目ごとに label を上に置く画面は 1 項目 76px 前後を使い、一覧の行が最初の画面に出ない。
+- 360 でも main の余白は `p-4`（16px）で、`/board`・`/providers`（削除済み）・`/accounts` のように form の項目ごとに label を上に置く画面は 1 項目 76px 前後を使い、一覧の行が最初の画面に出ない。
 - 1440 では `/tasks/T1` の tab・`/graph` の root/depth・`/tasks/new` の form が左上の狭い範囲に集まり、高密度の表示にも 2 列の配置にもなっていない。
 
 ## 状態の現状
@@ -263,7 +266,7 @@ __root.tsx（認証 gate）
 | `/board` | `FetchFrame` | 列ごとの 0 件 | `ErrorNotice` | 409 は再取得 | 帯のみ | — | 操作は優先度の編集だけ |
 | `/knowledge`・`/knowledge/inbox`・`/knowledge/skills` | `FetchFrame` | 0 件の文 | `ErrorNotice` | — | 帯のみ | — | 知識候補の却下・skill の削除は確認なし（`knowledge-screen.tsx`, `skills-screen.tsx`） |
 | `/org`・`/org/cos` | `FetchFrame` | 0 件の文（`org-skills.tsx`） | `ErrorNotice` | 409 の文言を直書き（`org-skills.tsx`） | 帯のみ | — | 課の削除は `window.confirm`（`org-screen.tsx`） |
-| `/providers`・`/accounts` | `FetchFrame` | 0 件の文 | `ErrorNotice` | — | 「接続を確認」の結果を行に出す | — | 削除は `window.confirm`。secret の削除も同じ（`secrets-section.tsx`） |
+| `/providers`（削除済み）・`/accounts` | `FetchFrame` | 0 件の文 | `ErrorNotice` | — | 「接続を確認」の結果を行に出す | — | 削除は `window.confirm`。secret の削除も同じ（`secrets-section.tsx`） |
 | `/clusters`・`/daemon` | `FetchFrame` | 0 件の文 | `ErrorNotice` | — | 帯のみ | — | 再計算は説明文のみ（`daemon-screen.tsx`） |
 | `/releases` | `FetchFrame` | 0 件の文 | `ErrorNotice` | 昇格の途中停止を `promote_stale` で表示（`releases-promotion.ts`） | 帯のみ | — | 昇格は確認なしで送信、結果は「昇格中」で追う（`releases-screen.tsx`） |
 | `/reports`・`/graph`・`/plans/new`・`/tasks/new`・`/help`・`/login` | `FetchFrame`（取得のある画面） | 0 件の文 | `ErrorNotice`。`/login` は「gateway に接続できません」「パスワードが違います」を自前で出す（`routes/login.tsx`） | — | 帯のみ | — | なし |
@@ -289,7 +292,7 @@ __root.tsx（認証 gate）
 | page header（`screen-frame.tsx`） | h1 の大きさ・余白 | パンくず・状態・主操作の置き場を持つ page header を作る。`/tasks/T1` の tab、`/projects/P1` の「文書」「ボード」、`/tasks/T1/files` の戻り先をここに寄せる |
 | 取得の枠（`fetch-frame.tsx` の `ErrorNotice`） | 灰色の棒・文言の調子 | error を理由別（未接続・権限・存在しない・server error）に分け、いつの値か（stale）と再試行の結果を出す。`/tasks/T1/runs/R1` の固有 error も同じ部品へ |
 | list/table（各 feature の `<ul>` 直書き） | 行の余白・区切り線の統一 | 一覧の行の型（題名・状態 badge・補助情報・行の操作）を 1 つ作る。`/inbox`・`/approvals`・`/projects`・`/reports`・`/knowledge` の行をそれに載せる |
-| form・button（`web/components/ui/button.tsx`） | label と入力の間隔、focus の輪郭 | button に主・副・危険の区別を足し、field（label・説明・検証の文）の部品を作る。`/board` の 9 欄・`/providers`・`/accounts` の縦長 form はこの部品と折りたたみで短くする |
+| form・button（`web/components/ui/button.tsx`） | label と入力の間隔、focus の輪郭 | button に主・副・危険の区別を足し、field（label・説明・検証の文）の部品を作る。`/board` の 9 欄・`/providers`（削除済み）・`/accounts` の縦長 form はこの部品と折りたたみで短くする |
 | 確認（`project-ops.tsx` の `<dialog>`, `window.confirm`） | なし（見た目を揃えるだけでは解決しない） | 破壊的操作の確認部品を 1 つにし、影響範囲を本文に書く。確認なしの `/inbox` の却下・`/approvals` の常設許可・`/knowledge/skills` の削除・`/releases` の昇格・`/projects/P1/docs/maintenance` の適用に入れる |
 | 状態の表示（生の status 文字列） | 色・badge の形 | status を人の言葉と badge に写す共通の表（`/projects/P1` の `Overview`・`PlanDag`、`/graph` のノード、`/reports` の level、`/clusters` の接続状態）を作る。色だけに頼らず文字も出す |
 | `web/styles.css` | — | 色・余白・文字の token を定義する（`neutral-*` 直書きの置き換え）。cosmetic の直しはすべてこの token 経由にする |
@@ -323,7 +326,7 @@ __root.tsx（認証 gate）
 | `/knowledge/skills` | 空の右枠 | 削除に確認と影響範囲（mount している課）を出す（IA + 確認部品） |
 | `/org` | 木の button の余白 | 追加フォームを木から出し、選んだ担当の詳細を先に（IA）。削除を共通の確認へ |
 | `/daemon` | 取得時刻の位置、英語の文 | `last_tick_at` を「N 秒前」と stale の判定で出し、件数から該当 task へ移る（IA） |
-| `/providers` | 1440 の 2 列の欄の伸び | 使えるかどうかを先頭の badge にし、編集を行の展開へ。reload の失敗を押したカードに出す（IA + form 部品） |
+| `/providers`（削除済み） | 1440 の 2 列の欄の伸び | 使えるかどうかを先頭の badge にし、編集を行の展開へ。reload の失敗を押したカードに出す（IA + form 部品） |
 | `/accounts` | 節の見出し | account・secret・MCP クライアントを別の区画か tab に分ける（IA） |
 | `/clusters` | 1 行の文を区切る | 接続状態を badge にし、作業ディレクトリの現在値を欄に入れる。disconnected と stale を分ける（component） |
 | `/releases` | 稼働中・current・previous の文の強調 | 昇格を確認付きにし、昇格の状態を該当の行に出す。current の disabled の理由を示す（IA + 確認部品） |
@@ -363,7 +366,9 @@ foundation は shell・login・home・help と、全画面が使う共通部品�
 | /knowledge/skills | `/knowledge/skills` | inbox・project 系 | skill の閲覧と編集 |
 | /org | `/org` | 管理系 | 組織の構成 |
 | /daemon | `/daemon` | 管理系 | dispatcher の状態 |
-| /providers | `/providers` | 管理系 | provider の設定 |
+| /sources | `/sources` | 管理系 | LLM source の一覧（読み取り専用。`/providers`（削除済み） の後継、2026-10-12） |
+| /sources/$sourceId | `/sources/$sourceId` | 管理系 | LLM source の詳細と account・model（読み取り専用） |
+| /harnesses | `/harnesses` | 管理系 | harness の一覧と適格条件（読み取り専用） |
 | /accounts | `/accounts` | 管理系 | account・secret・MCP |
 | /clusters | `/clusters` | 管理系 | cluster の接続 |
 | /releases | `/releases` | 管理系 | release の昇格 |
@@ -385,7 +390,7 @@ foundation は shell・login・home・help と、全画面が使う共通部品�
 - `/help` は目次と各節が同じ輪郭の枠で 1800px（360）続き、task の階層が無い card wall。
 - `/inbox` は 0 件の区画カードが縦に連続し（360）、今処理すべき判断が見えない。
 - `/board` の `BoardCard` は全カードに編集フォームを常に出し、カードが高く、列の一覧性が落ちる（「Table stuffed with complex configuration」の card 版）。
-- `/providers`・`/accounts`・`/clusters` は 1 件ずつのカードに状態・入力・操作を同じ重みで詰め、カードの違いが名前だけ。
+- `/providers`（削除済み）・`/accounts`・`/clusters` は 1 件ずつのカードに状態・入力・操作を同じ重みで詰め、カードの違いが名前だけ。
 - `/knowledge/skills` と `/knowledge` は一覧の枠と空の本文枠が同じ輪郭で並び、空の枠が主役に見える。
 
 ### 過剰余白
@@ -393,11 +398,11 @@ foundation は shell・login・home・help と、全画面が使う共通部品�
 - 1440 の main に `max-width` も 2 列の配置も無く、`/tasks`・`/tasks/T1`・`/tasks/new`・`/graph` は入力と button が左上に集まり右 1000px 以上が空く（`_tasks-1440.png`, `_tasks_T1-1440.png`）。高密度の ops workbench として幅を使えていない（「empty leftover space is intentional, not unfinished layout residue」に反する）。
 - `/knowledge` の 1440 は検索欄が全幅に伸びる一方、本文の枠は「知識を選択してください。」だけで右側が大きく空く。
 - `/` と `/org/cos` の 360 の空の初期画面は、入力欄まで大きな空白が続く。
-- 逆に 360〜412 では form の 1 項目が 76px 前後を使い、`/board`（952px）・`/providers`（1158px）の一覧が最初の画面に出ない（「Mechanical mobile stacking without task reordering」）。
+- 逆に 360〜412 では form の 1 項目が 76px 前後を使い、`/board`（952px）・`/providers`（削除済み）（1158px）の一覧が最初の画面に出ない（「Mechanical mobile stacking without task reordering」）。
 
 ### unstyled admin
 
-- `/providers` の 1440 は concurrency・model の欄が全幅の 2 列に伸び、tier の checkbox と 3 つの button が同じ重みで並ぶ。使えるかどうかの状態は小さな文の行。
+- `/providers`（削除済み） の 1440 は concurrency・model の欄が全幅の 2 列に伸び、tier の checkbox と 3 つの button が同じ重みで並ぶ。使えるかどうかの状態は小さな文の行。
 - `/accounts` は account・secret・MCP クライアントが `h2` だけを切れ目に縦に続き、「確認」「ログイン開始」「削除」が同じ見た目。
 - `/clusters` は「pegasus.example / auth totp / 未接続」が 1 行の文で、接続状態の badge が無い。
 - `/releases` は稼働中・current・previous が 1 行の小さな文で、本番を切り替える昇格の button が確認なしで他と同じ見た目（「Dangerous / destructive actions without confirmation or undo」）。

@@ -281,7 +281,7 @@ fn build_spec(mut args: AddArgs) -> Result<NewTaskSpec, CliError> {
         cluster: args.cluster,
         // ADR-0059 D1: `celerisctl add` は引数を増やさない（`workspace_mode` は GUI / API から）。
         workspace_mode: None,
-        adapter: None,
+        harness: None,
         // ADR-0044 D1/D3: `celerisctl add` は引数を増やさない（ラベル・種類・初期状態は GUI から）。
         labels: Vec::new(),
         category: None,

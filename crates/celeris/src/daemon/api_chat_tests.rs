@@ -15,9 +15,7 @@ fn load_config(dir: &Path, extra: &str) -> Config {
     let ws = dir.join("ws");
     std::fs::write(
         &path,
-        format!(
-            "db = {db:?}\nworkspace_root = {ws:?}\n{extra}\n[[providers]]\nid = \"x\"\nadapter = \"fake\"\n"
-        ),
+        format!("db = {db:?}\nworkspace_root = {ws:?}\n{extra}\n"),
     )
     .expect("write config");
     Config::load(&path).expect("config")

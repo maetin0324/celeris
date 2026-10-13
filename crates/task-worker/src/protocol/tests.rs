@@ -127,6 +127,7 @@ fn delegate_message_parses_and_is_not_terminal() {
 #[test]
 fn run_request_serializes_with_type_tag() {
     let req = RunRequest {
+        llm_route: None,
         cargo_target_dir: None,
         protocol: PROTOCOL_VERSION,
         task: sample_task(),
@@ -217,7 +218,7 @@ fn available_genres_round_trips_and_is_omitted_when_empty() {
 fn harness_and_subject_genre_are_optional_additions() {
     let roles = vec![task_core::RoleSpec {
         id: "literature-reader".into(),
-        adapter: Some("paperqa".into()),
+        harness: Some("paperqa".into()),
         ..task_core::RoleSpec::default()
     }];
     let spec = task_core::GenreSpec {
@@ -279,6 +280,7 @@ pub(crate) fn sample_task() -> Task {
     use task_core::*;
     let now = time::OffsetDateTime::now_utc();
     Task {
+        harness_id: None,
         requirements: Default::default(),
         tree: None,
         paused_at: None,
@@ -304,7 +306,6 @@ pub(crate) fn sample_task() -> Task {
         priority: 0,
         worker_hint: WorkerHint {
             tier: Tier::Standard,
-            adapter: None,
         },
         workspace: WorkspaceSpec::Local {
             path: PathBuf::from("/tmp/ws"),

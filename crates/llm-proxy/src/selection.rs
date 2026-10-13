@@ -1,9 +1,7 @@
-//! 決定的な選択（ADR-0053 D1 / ADR-0049 の規則の再利用）。
+//! 決定的な source account admission（ADR-0053 D1 / ADR-0049 の規則の再利用）。
 //!
-//! `celeris/cheap`: `prefer_free` なら到達可能な `openai-compatible` を最優先、失敗時は
-//! Claude / Codex の cheap に倒す。frontier / standard は Claude / Codex のみを選ぶ。
-//! アカウントプールでは両者を跨いで残量スコアを比較する（同点は claude が先）。
-//! `claude/<tier>` / `gpt/<tier>` はそのプールだけ、`qwen/cheap` は `openai-compatible` だけを見る。
+//! 要求は具体的な `<source_id>/<model_id>`（`crate::naming`）。`claude_oauth` / `codex_oauth` はその
+//! source 内の各 account を `(source_id, account_id)` 単位で順位付けし、openai-compatible はその id の relay だけを見る。
 //!
 //! 429/401 を受けて次の候補へやり直せるよう（ADR-0053 D1）、選択は**順位付きの列**を返す
 //! （1 位が failed candidate/account_book 更新を受けても、この列は要求の最初に決めたまま進む。
@@ -13,82 +11,12 @@
 //! （テストしやすくするため。DESIGN 原則「判断は 1 か所」をこのクレート内でも守る）。
 
 use std::cmp::Ordering;
-use std::collections::HashMap;
 use std::path::PathBuf;
 
-use task_core::Tier;
-use task_core::model_router::optimizer::{Candidate, legacy_rank};
-use task_core::model_router::profiles::DeploymentProfile;
 use task_dispatch::accounts::{AccountBook, AccountCandidate, AccountDir, evaluate};
 
 use crate::config::OpenAiCompatibleConfig;
-use crate::legacy_catalog::LegacyCatalog;
-use crate::naming::{SourceKind, SourceScope};
-
-/// Kernel legacy mode supplies the eligible deployment order. The existing
-/// `rank_*` functions still settle relay reachability and OAuth account order.
-pub fn legacy_deployments(
-    catalog: &LegacyCatalog,
-    scope: SourceScope,
-    lane: Tier,
-    prefer_free: bool,
-) -> Vec<&DeploymentProfile> {
-    let eligible = |d: &DeploymentProfile| {
-        if !d.allowed_lanes.contains(&lane) {
-            return false;
-        }
-        if d.source_ref.starts_with("openai-compatible:") {
-            return scope == SourceScope::Only(SourceKind::Qwen)
-                || (scope == SourceScope::Any && prefer_free);
-        }
-        match scope {
-            SourceScope::Any => true,
-            SourceScope::Only(SourceKind::Claude) => d.source_ref == "claude-oauth",
-            SourceScope::Only(SourceKind::Gpt) => d.source_ref == "codex-oauth",
-            SourceScope::Only(SourceKind::Qwen) => false,
-        }
-    };
-    let mut deployments: Vec<_> = catalog.deployments.iter().filter(|d| eligible(d)).collect();
-    deployments.sort_by_key(|d| {
-        (
-            if d.source_ref.starts_with("openai-compatible:") {
-                0
-            } else {
-                1
-            },
-            d.config_order,
-        )
-    });
-    let candidates: Vec<_> = deployments
-        .iter()
-        .filter_map(|deployment| {
-            catalog
-                .models
-                .iter()
-                .find(|model| model.id == deployment.model_profile_id)
-                .map(|model| Candidate {
-                    model,
-                    deployment,
-                    state: None,
-                    eligible_provider_ids: vec![deployment.source_ref.clone()],
-                    cost_usd: None,
-                    latency_ms: None,
-                    pressure: None,
-                })
-        })
-        .collect();
-    let ranked = legacy_rank(&candidates);
-    ranked
-        .ranked
-        .iter()
-        .filter_map(|r| {
-            deployments
-                .iter()
-                .copied()
-                .find(|d| d.id == r.deployment_id)
-        })
-        .collect()
-}
+use crate::naming::SourceKind;
 
 /// 1 プール分の入力（`scan_accounts` 済みの一覧・帳簿・使用中カウント）。
 pub struct PoolInput<'a> {
@@ -144,8 +72,12 @@ fn rank_in_pool(input: &PoolInput<'_>, now: i64) -> Vec<(String, f64, usize)> {
     scored
 }
 
-/// `claude/<tier>` / `gpt/<tier>` 用: 1 プールを順位付きで返す。
-pub fn rank_pool(source: SourceKind, input: &PoolInput<'_>, now: i64) -> Vec<SelectedAccount> {
+/// `claude_oauth/<model>` / `codex_oauth/<model>` 用: source の account 候補を順位付きで返す。
+pub fn rank_source_accounts(
+    source: SourceKind,
+    input: &PoolInput<'_>,
+    now: i64,
+) -> Vec<SelectedAccount> {
     rank_in_pool(input, now)
         .into_iter()
         .map(|(id, _, _)| SelectedAccount {
@@ -161,65 +93,10 @@ pub fn select_from_pool(
     input: &PoolInput<'_>,
     now: i64,
 ) -> Option<SelectedAccount> {
-    rank_pool(source, input, now).into_iter().next()
+    rank_source_accounts(source, input, now).into_iter().next()
 }
 
-/// `celeris/<tier>` の (b): Claude と Codex を跨いで残量スコアを比較し、順位付きの列にする。
-/// 同点は設定順（claude を先に見る）→ in_use 少ない方 → id 昇順。
-pub fn rank_across_pools(
-    claude: Option<&PoolInput<'_>>,
-    codex: Option<&PoolInput<'_>>,
-    now: i64,
-) -> Vec<SelectedAccount> {
-    let mut combined: Vec<(SourceKind, String, f64, usize)> = Vec::new();
-    if let Some(input) = claude {
-        combined.extend(
-            rank_in_pool(input, now)
-                .into_iter()
-                .map(|(id, score, in_use)| (SourceKind::Claude, id, score, in_use)),
-        );
-    }
-    if let Some(input) = codex {
-        combined.extend(
-            rank_in_pool(input, now)
-                .into_iter()
-                .map(|(id, score, in_use)| (SourceKind::Gpt, id, score, in_use)),
-        );
-    }
-    // claude(0) を codex(1) より先に見る（同点タイブレークの「設定順」）。
-    let source_priority = |s: SourceKind| if s == SourceKind::Claude { 0u8 } else { 1u8 };
-    combined.sort_by(|a, b| {
-        b.2.partial_cmp(&a.2)
-            .unwrap_or(Ordering::Equal)
-            .then(source_priority(a.0).cmp(&source_priority(b.0)))
-            .then(a.3.cmp(&b.3))
-            .then(a.1.cmp(&b.1))
-    });
-    combined
-        .into_iter()
-        .map(|(source, id, _, _)| {
-            let dirs = match source {
-                SourceKind::Claude => claude.map(|p| p.dirs).unwrap_or(&[]),
-                _ => codex.map(|p| p.dirs).unwrap_or(&[]),
-            };
-            SelectedAccount {
-                source,
-                account_id: id.clone(),
-                dir: dir_for(dirs, &id),
-            }
-        })
-        .collect()
-}
-
-pub fn select_across_pools(
-    claude: Option<&PoolInput<'_>>,
-    codex: Option<&PoolInput<'_>>,
-    now: i64,
-) -> Option<SelectedAccount> {
-    rank_across_pools(claude, codex, now).into_iter().next()
-}
-
-/// `qwen/<tier>` / `celeris/<tier>` の (a): 設定順で到達可能な relay を順位付きで返す。
+/// 設定順で到達可能な relay を順位付きで返す。
 /// `reachable` は呼び出し側が probe 済みの結果を返す（副作用なし。テストしやすくするため）。
 pub fn rank_relays(
     sources: &[OpenAiCompatibleConfig],
@@ -238,14 +115,7 @@ pub fn pick_relay(
     rank_relays(sources, reachable).into_iter().next()
 }
 
-/// 旧設定に frontier / standard の Qwen 写像が残っていても使わない（ADR-0132 D3）。
-pub fn qwen_tier_model(models: &HashMap<Tier, String>, tier: Tier) -> Option<&str> {
-    (tier == Tier::Cheap)
-        .then(|| models.get(&Tier::Cheap).map(String::as_str))
-        .flatten()
-}
-
-/// Phase 2 の state 選択（SourceState・制約・effective cost・予約の枠）。legacy の経路は上の関数のまま。
+/// Phase 2 の state 選択（SourceState・制約・effective cost・予約の枠）。
 #[path = "selection_state.rs"]
 pub mod state;
 

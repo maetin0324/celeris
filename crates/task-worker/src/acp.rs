@@ -63,7 +63,7 @@ pub enum AcpPermission {
     Deny,
 }
 
-/// `[adapters.acp]` / `[[providers]]` 行の上書き分（config.toml, ADR-0026 D2）。
+/// `[adapters.acp]` / `[harnesses.<id>]` 宣言の上書き分（config.toml, ADR-0026 D2）。
 #[derive(Debug, Clone)]
 pub struct AcpConfig {
     /// 起動する ACP エージェントの実行ファイル。既定 `"opencode"`。
@@ -139,8 +139,7 @@ impl WorkerAdapter for AcpAdapter {
         config.env.extend(extra.iter().cloned());
         Some(Arc::new(AcpAdapter::new(config)))
     }
-    /// tier から解決した model を `session/set_config_option` で渡す複製。無いと TieredAdapter が
-    /// 『adapter cannot apply tier model』で毎回 infra 失敗にしていた（opencode-qwen、2026-10-08 本番）。
+    /// route の model を `session/set_config_option` で渡す複製。
     fn with_model(&self, model: &str) -> Option<Arc<dyn WorkerAdapter>> {
         let mut config = self.config.clone();
         config.model = Some(model.to_owned());

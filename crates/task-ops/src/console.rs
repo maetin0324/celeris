@@ -339,7 +339,7 @@ pub struct ConsoleTaskLine {
     /// 担当（組織のノード id）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assignee: Option<String>,
-    /// ハーネス（`worker_hint.adapter`。未指定なら役割・分野から決まるので `null`）。
+    /// タスクに明示されたハーネス。未指定なら route selection に委ねる。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub harness: Option<String>,
     pub tier: task_core::Tier,
@@ -370,7 +370,7 @@ pub fn task_line(row: &EventRow, task: &Task) -> Option<ConsoleTaskLine> {
         to: *to,
         reason: reason.clone(),
         assignee: task.assignee.clone(),
-        harness: task.worker_hint.adapter.clone(),
+        harness: task.harness_id.as_ref().map(ToString::to_string),
         tier: task.worker_hint.tier,
         mode: workspace_mode(task),
         project_id: task.project_id,

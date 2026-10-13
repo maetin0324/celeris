@@ -308,6 +308,9 @@ fn conversation_task(
         .and_then(|r| RoleSpec::find(roles, r));
     let id = TaskId::new();
     Task {
+        harness_id: role
+            .and_then(|r| r.harness.as_deref())
+            .map(task_core::llm_route::HarnessId::from),
         requirements: Default::default(),
         tree: None,
         paused_at: None,
@@ -326,7 +329,6 @@ fn conversation_task(
         priority: CONVERSATION_PRIORITY,
         worker_hint: WorkerHint {
             tier: role.and_then(|r| r.tier).unwrap_or(Tier::Standard),
-            adapter: role.and_then(|r| r.adapter.clone()),
         },
         // ADR-0006 Phase 115 D3: 対話は diff を作らない（repos も常に空。上の `repos: Vec::new()`）ので
         // worktree を作らない。念のため `mode: Shared` を明示する（`resolve_repos` は経由しないが、

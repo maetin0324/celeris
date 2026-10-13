@@ -11,7 +11,7 @@ completed: 2026-10-06
 - **認証と checkpoint API (`crates/task-api/src/cos/auth.rs`, `checkpoint.rs`)**: bearer credential から `actor=cos`・thread・run を確定し、body/header の人間 identity claim を採用しない。credential 付きの既存領域への直接変更は `cos_audit_context_required` で 422。
 - **operations API (`crates/task-api/src/cos/operations.rs`)**: `POST /api/v1/cos/operations` と thread 範囲で読む `GET /api/v1/cos/operations/{o}`。最終 allowlist は task create、comment create、decision answer、approval decide、execution phase-gate、project title/request update、knowledge reject。任意 URL、未登録 path、再帰 `/cos` 等は拒否する。登録操作は既存 handler と共有する operation 関数へ監査 context を渡す。
 - **CLI (`crates/celerisctl`)**: `CELERIS_COS_RUN_CREDENTIAL` が設定された変更要求を `/cos/operations` 経由で送信し、未対応操作は送信前に拒否する。
-- **schema/docs**: `docs/api/v1/api-v1.schema.json`、web/gui の生成型、`docs/api/v1/gui-api.md` と同期文書に route・型を反映。
+- **schema/docs**: `docs/api/v1/api-v1.schema.json`、web/gui の生成型、`docs/api/v1/api.md` と同期文書に route・型を反映。
 
 ## 受け入れ条件と証拠
 

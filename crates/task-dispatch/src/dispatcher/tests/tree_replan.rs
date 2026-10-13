@@ -410,7 +410,6 @@ async fn child_failure_triggers_parent_replan() {
     let adapter = Arc::new(ReplanAdapter::new(vec![v1, v2]));
     let mut d = parallel_dispatcher(store.clone(), adapter.clone(), ws.path(), 3, 3, 3);
     d.config.execution.gate = task_core::GateMode::On;
-    d.config.execution.planner.adapter = "instant".to_string();
     d.config.execution.limits = super::tree::tree_limits();
     let report = run_until_idle(&mut d, 2500).await;
     assert!(report.idle, "{report:?}");

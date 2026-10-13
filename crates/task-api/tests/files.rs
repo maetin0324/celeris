@@ -613,8 +613,10 @@ async fn work_unit_check_log_reads_a_leaf_acceptance_check() {
     let env = TestEnv::new();
     let task = new_task(TaskKind::Execute, Status::Running);
     env.seed(&task);
-    let first = env.workspace(&task).join("work-unit-checks/gate/7-0.log");
-    let second = env.workspace(&task).join("work-unit-checks/gate/7-1.log");
+    // WU acceptance logs live in the task workspace, outside any repo worktree.
+    let log_root = env.workspace_root.join(task.id.to_string());
+    let first = log_root.join("work-unit-checks/gate/7-0.log");
+    let second = log_root.join("work-unit-checks/gate/7-1.log");
     write(&first, b"build ok\n");
     write(&second, b"Running 120 tests\n  ok 1 smoke\n");
     let started = |index: u32, cmd: &str, path: &std::path::Path| Event::WorkUnitCheckStarted {

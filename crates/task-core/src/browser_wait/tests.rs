@@ -7,6 +7,7 @@ const SENTINEL: &str = "SENTINEL-p4ssw0rd-9f3a";
 fn task(status: Status) -> Task {
     let now = OffsetDateTime::now_utc();
     Task {
+        harness_id: None,
         requirements: Default::default(),
         routing: None,
         mode: Default::default(),
@@ -24,7 +25,6 @@ fn task(status: Status) -> Task {
         priority: 0,
         worker_hint: WorkerHint {
             tier: Tier::Standard,
-            adapter: None,
         },
         workspace: WorkspaceSpec::Local {
             path: "ws".into(),

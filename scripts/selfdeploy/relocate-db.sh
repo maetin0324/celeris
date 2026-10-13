@@ -9,14 +9,14 @@
 #   手順:
 #     1. in-flight（running + reviewing）が 0 であることを API（GET /api/v1/tasks の
 #        counts_by_status）で確認する。0 でなければ何もせず止まる。
-#     2. celeris@* / celeris-gui@* を止める（`current` の sha。動いていなければ何もしない）。
+#     2. celeris@* / celeris-web@* を止める（`current` の sha。動いていなければ何もしない）。
 #     3. `sqlite3` があれば `VACUUM INTO`、無ければ現在のリリースの `celerisctl db backup` で
 #        <new-path> へコピーする。
 #     4. <new-path> に対して `PRAGMA integrity_check`（`sqlite3` か `celerisctl db integrity-check`）。
 #        `ok` でなければ、<new-path> を消して止まる（旧 DB とサービスは無傷のまま）。
 #     5. config.toml の `db =`（文字列 or `[db].path` テーブル）を書き換える。`.bak-<ts>` を残す。
 #     6. 旧ファイルを `<old>.moved-<ts>` にリネームする（**削除しない**）。
-#     7. celeris@ / celeris-gui@ を起こす。
+#     7. celeris@ / celeris-web@ を起こす。
 #     8. `GET /api/v1/config`（認証つき。`/health` は DB のパスを無認証で出さないので使わない。
 #        ADR-0064 D1）の `db` が <new-path> になっていることを確認する。
 #
@@ -131,7 +131,7 @@ CUR="$(sd_current_sha)"
 UNITS=()
 if [ -n "$CUR" ]; then
   if systemctl --user is-active --quiet "celeris@$CUR" 2>/dev/null; then UNITS+=("celeris@$CUR"); fi
-  if systemctl --user is-active --quiet "celeris-gui@$CUR" 2>/dev/null; then UNITS+=("celeris-gui@$CUR"); fi
+  if systemctl --user is-active --quiet "celeris-web@$CUR" 2>/dev/null; then UNITS+=("celeris-web@$CUR"); fi
 fi
 
 if [ "$DRY_RUN" = true ]; then
@@ -141,7 +141,7 @@ if [ "$DRY_RUN" = true ]; then
   sd_log "  3. integrity check $NEW"
   sd_log "  4. rewrite db in $SD_CONFIG (backup to $SD_CONFIG.bak-$TS)"
   sd_log "  5. rename $OLD -> $OLD.moved-$TS (not deleted)"
-  sd_log "  6. start: ${UNITS[*]:-（celeris@<current sha>・celeris-gui@<current sha>）}"
+  sd_log "  6. start: ${UNITS[*]:-（celeris@<current sha>・celeris-web@<current sha>）}"
   sd_log "  7. verify GET /api/v1/config db == $NEW"
   sd_log "dry-run: nothing was changed"
   exit 0
@@ -182,12 +182,12 @@ fail_with_recovery() {
     start-units)
       sd_log "  $SD_CONFIG points at $NEW and the old db was moved to $OLD.moved-$TS."
       sd_log "  the unit(s) failed to start; check: journalctl --user -u ${UNITS[*]:-celeris@} -n 100"
-      sd_log "  to fully revert: cp '$SD_CONFIG.bak-$TS' '$SD_CONFIG' && mv '$OLD.moved-$TS' '$OLD' && systemctl --user start ${UNITS[*]:-celeris@$CUR celeris-gui@$CUR}"
+      sd_log "  to fully revert: cp '$SD_CONFIG.bak-$TS' '$SD_CONFIG' && mv '$OLD.moved-$TS' '$OLD' && systemctl --user start ${UNITS[*]:-celeris@$CUR celeris-web@$CUR}"
       ;;
     verify)
       sd_log "  the units are running on $NEW, but GET /api/v1/config did not confirm it."
       sd_log "  check manually: curl -sS -H \"Authorization: Bearer \$(cat $SD_API_TOKEN_FILE)\" $SD_PROD_API/api/v1/config"
-      sd_log "  to revert: systemctl --user stop ${UNITS[*]:-celeris@$CUR celeris-gui@$CUR}; cp '$SD_CONFIG.bak-$TS' '$SD_CONFIG'; mv '$OLD.moved-$TS' '$OLD'; systemctl --user start ${UNITS[*]:-celeris@$CUR celeris-gui@$CUR}"
+      sd_log "  to revert: systemctl --user stop ${UNITS[*]:-celeris@$CUR celeris-web@$CUR}; cp '$SD_CONFIG.bak-$TS' '$SD_CONFIG'; mv '$OLD.moved-$TS' '$OLD'; systemctl --user start ${UNITS[*]:-celeris@$CUR celeris-web@$CUR}"
       ;;
   esac
   exit 1
@@ -199,7 +199,7 @@ if [ "${#UNITS[@]}" -gt 0 ]; then
   sd_log "systemctl --user stop ${UNITS[*]}"
   systemctl --user stop "${UNITS[@]}" || fail_with_recovery stop-units "systemctl stop failed"
 else
-  sd_log "no active celeris@/celeris-gui@ units found for current=$CUR; continuing (already stopped?)"
+  sd_log "no active celeris@/celeris-web@ units found for current=$CUR; continuing (already stopped?)"
 fi
 
 # ---- 3. コピー --------------------------------------------------------------

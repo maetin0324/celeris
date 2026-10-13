@@ -402,7 +402,7 @@ celeris 側の扱い（ADR-0016 D2, 実装メモ M2/M6/M7）:
 
 - **run は止まらない**（非終端）。状態機械も動かない。
 - **人を起こさない**（通知は ADR-0037 の 5 種のまま）。人が書いたコメントだけが
-  `POST /tasks/{id}/comments` 経由で担当を起こす（[gui-api.md](../api/v1/gui-api.md) の `POST /tasks/{id}/comments`）。
+  `POST /tasks/{id}/comments` 経由で担当を起こす（[api.md](../api/v1/api.md) の `POST /tasks/{id}/comments`）。
 - 空白だけの本文・20,000 文字超は捨てる（警告だけ。run は続く）。
 - 前置きには「短い進捗や判断の記録はコメントに書け」と書いてある（`context.comments_enabled`）。
   長い成果は成果物（`artifact`）に書くこと。
@@ -479,6 +479,9 @@ job の最終状態を渡す。`yielded` と違い、continuation の回数・�
 `CELERIS_WU_BASE`（先行 unit の未 commit の追跡済み成果を含む一時 commit）、
 `CELERIS_WU_BASE_UNTRACKED`（開始時の未追跡 path 一覧）、`CELERIS_WU_SCOPE_PATHS`（全 file の差分補助）を渡す。
 retry と daemon の検査引き継ぎでは初回の snapshot を再利用する。
+
+WU の受け入れ検査ログは `<workspace_root>/<task_id>/work-unit-checks/<wu_key>/` に保存し、repo の作業ツリー外に置く。
+scope check の説明はこのログ置き場を差分 path として数える想定ではない。
 
 ```sh
 paths=$(if [ -n "${CELERIS_WU_SCOPE_PATHS:-}" ]; then sh "$CELERIS_WU_SCOPE_PATHS"; else git diff --name-only "${CELERIS_WU_BASE:-HEAD}" && git ls-files --others --exclude-standard; fi) || exit 1

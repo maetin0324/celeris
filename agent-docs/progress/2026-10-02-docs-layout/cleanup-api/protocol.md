@@ -18,7 +18,7 @@ updated: 2026-10-02
   `PROTOCOL_VERSION = 4`、追加のみでは版を上げない運用、経緯の参照先 ADR の一覧に縮めた。
 - 壊れたリンク `../adr/` を `../../agent-docs/adr/` に直した。`docs/DESIGN.md`・`docs/PROGRESS.md`（P-24・P-53a）・
   「DESIGN 原則」「DESIGN §5.6/§6」への言及を削るか `docs/SPEC.md` に置き換えた。`docs/gui/api.md` §3.70 は
-  `../api/v1/gui-api.md` へのリンクにした（節番号は api-list WU の整理で変わるので書かない）。
+  `../api/v1/api.md` へのリンクにした（節番号は api-list WU の整理で変わるので書かない）。
 - §1: 終端に `yielded` / `budget_exhausted` / `wait` を追加。アダプタの一覧から実在しない `dsh` / `openai-compat` を削り、
   実在する `acp` / `aider` / `paperqa` / `local-deep-research` に直した。
 - §2: 版の行を `run.protocol = 1` → `4` に。未知 `type` は「JSON として妥当だが WorkerMessage に読めない行は

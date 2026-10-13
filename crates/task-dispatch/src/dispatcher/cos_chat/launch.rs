@@ -27,6 +27,7 @@ use task_worker::protocol::{CosChatInboxDecision, CosChatInboxItem, CosChatInbox
 use super::attachments::{stage_message_attachments, workspace_dir};
 use super::sink::{ChatClock, ChatRunSink, chat_finish_for};
 use crate::dispatcher::Dispatcher;
+use crate::dispatcher::route_select::RoutePick;
 
 /// `task-api::cos::COS_BEARER_PREFIX` wire form. The store issues only the
 /// random secret; the worker must present the prefixed bearer to the API.
@@ -120,14 +121,8 @@ pub(crate) fn inbox_context_item(item: CosTriageItemReport) -> CosChatInboxItem 
 #[derive(Debug, Clone)]
 pub struct CosChatLaunchConfig {
     pub enabled: bool,
-    pub fallbacks: Vec<CosChatRoute>,
     pub worker_reserve_five_hour: f64,
     pub harness: String,
-    pub llm_source: Option<String>,
-    pub provider: Option<String>,
-    pub account_id: Option<String>,
-    pub model: Option<String>,
-    pub tier: task_core::Tier,
     pub max_turns: u32,
     pub max_wall_secs: u64,
     pub unavailable_reason: Option<String>,
@@ -137,18 +132,6 @@ pub struct CosChatLaunchConfig {
     pub api_base_url: String,
     /// `[cos.triage]` as a whole (ADR 2026-10-05 D3/D6). Later triage leaves read it here.
     pub triage: super::triage::CosTriageSettings,
-}
-
-/// One resolved, explicitly configured route.
-#[derive(Debug, Clone)]
-pub struct CosChatRoute {
-    pub harness: String,
-    pub llm_source: Option<String>,
-    pub provider: Option<String>,
-    pub account_id: Option<String>,
-    pub model: Option<String>,
-    pub tier: task_core::Tier,
-    pub unavailable_reason: Option<String>,
 }
 
 pub(super) struct RouteRetry {
@@ -168,8 +151,13 @@ pub(crate) struct CosChatLaunch {
     pub(super) run_configs: HashMap<String, CosChatLaunchConfig>,
     pub(super) retries: RouteRetries,
     pub running: HashMap<String, tokio::task::JoinHandle<()>>,
-    pub(crate) accounts_in_flight: HashMap<String, (task_core::AccountAdapter, String)>,
-    pub(crate) providers_in_flight: HashMap<String, String>,
+    pub(crate) route_reservations: HashMap<
+        String,
+        (
+            task_core::llm_route::SourceId,
+            task_core::llm_route::AccountId,
+        ),
+    >,
     pub(crate) triage: super::triage::CosTriageState,
 }
 
@@ -191,8 +179,7 @@ impl Dispatcher {
             run_configs: HashMap::new(),
             retries: Arc::new(Mutex::new(Vec::new())),
             running: HashMap::new(),
-            accounts_in_flight: HashMap::new(),
-            providers_in_flight: HashMap::new(),
+            route_reservations: HashMap::new(),
             triage: super::triage::CosTriageState::default(),
         });
     }
@@ -222,10 +209,7 @@ impl Dispatcher {
             launch.triage.digest_due = true;
         }
         launch
-            .accounts_in_flight
-            .retain(|thread, _| launch.running.contains_key(thread));
-        launch
-            .providers_in_flight
+            .route_reservations
             .retain(|thread, _| launch.running.contains_key(thread));
         launch.retry_routes(self);
         // Reconcile stop and ownerless runs before a new claim, so an old
@@ -303,15 +287,9 @@ impl CosChatLaunch {
         source: ClaimSource,
     ) -> Result<(), String> {
         let now = dispatcher.now_utc();
-        let cfg = &self.config;
         let run_id = ulid::Ulid::new().to_string();
         let resolved = json!({
-            "harness": cfg.harness,
-            "llm_source": cfg.llm_source,
-            "provider": cfg.provider,
-            "account_id": cfg.account_id,
-            "model": cfg.model,
-            "tier": format!("{:?}", cfg.tier).to_lowercase(),
+            "harness": "claude_code",
         });
         let run = match source {
             ClaimSource::Queue => self
@@ -329,107 +307,6 @@ impl CosChatLaunch {
         Ok(())
     }
 
-    pub(super) fn select_route_account(
-        &self,
-        dispatcher: &mut Dispatcher,
-        thread_id: &str,
-        cfg: &CosChatLaunchConfig,
-    ) -> Result<Option<String>, String> {
-        let account = if let Some(provider) = cfg.provider.as_ref() {
-            if dispatcher.account_pool_providers.contains(provider) {
-                let Some(account_adapter) = dispatcher
-                    .adapters
-                    .get(provider)
-                    .and_then(|a| dispatcher.pool_adapter_of(provider, a.id()))
-                else {
-                    return Err(format!("CoS account pool does not support {}", cfg.harness));
-                };
-                let existing = self
-                    .store
-                    .chat_session_active(thread_id)
-                    .map_err(|e| e.to_string())?;
-                let sticky = existing
-                    .as_ref()
-                    .filter(|session| {
-                        session.key.provider.as_deref() == Some(provider)
-                            && session.key.harness == cfg.harness
-                    })
-                    .and_then(|session| session.key.account_id.as_deref());
-                let available = |dispatcher: &mut Dispatcher, id: &str| {
-                    let chat_count = self
-                        .accounts_in_flight
-                        .values()
-                        .filter(|(adapter, account)| *adapter == account_adapter && account == id)
-                        .count();
-                    let limit = dispatcher.account_run_limit(
-                        account_adapter,
-                        id,
-                        dispatcher.config.execution.max_cos_runs > 0,
-                    );
-                    dispatcher.account_in_use(account_adapter, id) + chat_count < limit
-                        && dispatcher.account_usable(
-                            account_adapter,
-                            id,
-                            dispatcher.config.execution.max_cos_runs > 0,
-                        )
-                };
-                if let Some(id) = cfg.account_id.as_deref() {
-                    if !available(dispatcher, id) {
-                        // A pinned account must not silently fall back to another one.
-                        return Ok(None);
-                    }
-                    Some(id.to_owned())
-                } else if let Some(id) = sticky.filter(|id| available(dispatcher, id)) {
-                    Some(id.to_owned())
-                } else {
-                    let dirs = dispatcher
-                        .config
-                        .accounts
-                        .as_ref()
-                        .and_then(|accounts| accounts.root_for(account_adapter))
-                        .map(|root| crate::accounts::scan_accounts(root, account_adapter))
-                        .unwrap_or_default();
-                    let candidates: Vec<_> = dirs
-                        .iter()
-                        .map(|dir| crate::accounts::AccountCandidate {
-                            id: &dir.id,
-                            logged_in: dir.logged_in,
-                            in_use: dispatcher.account_in_use(account_adapter, &dir.id)
-                                + self
-                                    .accounts_in_flight
-                                    .values()
-                                    .filter(|(adapter, account)| {
-                                        *adapter == account_adapter && account == &dir.id
-                                    })
-                                    .count(),
-                        })
-                        .collect();
-                    let limit = |id: &str| {
-                        dispatcher.account_run_limit(
-                            account_adapter,
-                            id,
-                            dispatcher.config.execution.max_cos_runs > 0,
-                        )
-                    };
-                    dispatcher.account_book(account_adapter).and_then(|book| {
-                        let book = book.lock().ok()?;
-                        crate::accounts::select_account_least_loaded_with_limits(
-                            &candidates,
-                            &book,
-                            limit,
-                            (dispatcher.now_unix_fn)(),
-                        )
-                    })
-                }
-            } else {
-                cfg.account_id.clone()
-            }
-        } else {
-            cfg.account_id.clone()
-        };
-        Ok(account)
-    }
-
     #[allow(clippy::too_many_arguments)]
     pub(super) fn launch_claimed(
         &mut self,
@@ -440,7 +317,8 @@ impl CosChatLaunch {
         thread_id: &str,
         run_id: &str,
         run: &task_core::chat::ChatRun,
-        account: Option<String>,
+        pick: RoutePick,
+        selection_metadata: serde_json::Value,
         now: OffsetDateTime,
     ) -> Result<(), String> {
         // ADR 2026-10-07-cos-inbox-thread-conversation D3: a run in the inbox thread (triage or
@@ -460,47 +338,12 @@ impl CosChatLaunch {
         if let Some(reason) = cfg.unavailable_reason.clone() {
             return Err(reason);
         }
-        let Some(provider) = cfg.provider.as_ref() else {
-            return Err("CoS unavailable: no provider candidate".into());
-        };
-        if dispatcher.account_pool_providers.contains(provider) && account.is_none() {
-            return Err(format!(
-                "CoS unavailable: no usable account for provider {provider} (quota, cooldown, or login)"
-            ));
-        }
-        let Some(adapter) = dispatcher.adapters.get(provider).cloned() else {
-            return Err(format!(
-                "CoS unavailable: provider {provider} has no adapter"
-            ));
-        };
-        if adapter.id() != cfg.harness {
-            return Err(format!(
-                "CoS unavailable: provider {provider} has harness {}, expected {}",
-                adapter.id(),
-                cfg.harness
-            ));
-        }
-        if dispatcher
-            .policy
-            .cooldowns(dispatcher.monotonic_now())
-            .iter()
-            .any(|cooldown| &cooldown.provider == provider)
-        {
-            return Err(format!(
-                "CoS unavailable: provider {provider} is cooling down"
-            ));
-        }
-        let chat_provider_count = self
-            .providers_in_flight
-            .values()
-            .filter(|active| *active == provider)
-            .count();
-        // ADR 2026-10-08 §(e): a non-pool row is limited by its implicit account, CoS included (no +1).
-        if dispatcher.implicit_account_full(provider, chat_provider_count) {
-            return Err(format!(
-                "CoS unavailable: provider {provider} is at capacity or cooling down"
-            ));
-        }
+        let provider = pick.candidate.source.to_string();
+        let account = Some(pick.account.to_string());
+        let selected_route = dispatcher
+            .route_launch_target(&pick)
+            .map_err(|e| e.to_string())?;
+        let adapter = dispatcher.route_adapter(&pick).map_err(|e| e.to_string())?;
         let input = self.find_input(thread_id, &run.input_message_id)?;
         let workspace = match workspace_dir(&cfg.data_dir, thread_id) {
             Ok(path) => path,
@@ -530,12 +373,12 @@ impl CosChatLaunch {
         };
         let session_key = ChatSessionKey {
             thread_id: thread_id.to_string(),
-            harness: cfg.harness.clone(),
+            harness: pick.harness.to_string(),
             provider: Some(provider.clone()),
-            llm_source: cfg.llm_source.clone(),
+            llm_source: Some(pick.candidate.source.to_string()),
+            model: Some(pick.candidate.model.to_string()),
             account_id: account.clone(),
             cwd: Some(workspace.to_string_lossy().into_owned()),
-            model: cfg.model.clone(),
         };
         let choice = if route_index > 0 {
             // Even two configured routes with the same session key must not reuse the failed
@@ -618,9 +461,12 @@ impl CosChatLaunch {
             attachments,
             // These two concrete CLI adapters implement native image input. ACP abilities
             // are negotiated by the agent at runtime, so they stay unconfirmed here.
-            harness_capabilities: match cfg.harness.as_str() {
+            harness_capabilities: match pick.harness.as_ref() {
+                "claude_code" => {
+                    task_worker::cos_chat::HarnessCapabilities::for_adapter("claude-code")
+                }
                 "claude-code" | "codex" => {
-                    task_worker::cos_chat::HarnessCapabilities::for_adapter(&cfg.harness)
+                    task_worker::cos_chat::HarnessCapabilities::for_adapter(pick.harness.as_ref())
                 }
                 _ => None,
             },
@@ -658,7 +504,7 @@ impl CosChatLaunch {
             cos_chat: Some(chat),
             skills,
             session: Some(SessionHandle {
-                adapter: cfg.harness.clone(),
+                adapter: "claude-code".to_owned(),
                 session_id: session.session_id.clone(),
                 resume: mode == ChatRunSessionMode::Resumed,
             }),
@@ -672,36 +518,8 @@ impl CosChatLaunch {
             artifacts_dir: artifacts_dir.clone(),
             context,
             cargo_target_dir: None,
-        };
-        let adapter = if let Some(account_id) = account.as_deref() {
-            if let Some(account_adapter) = dispatcher.pool_adapter_of(provider, adapter.id()) {
-                if dispatcher.account_pool_providers.contains(provider) {
-                    match dispatcher.adapter_for_account(&adapter, account_adapter, account_id) {
-                        Some(adapter) => adapter,
-                        None => {
-                            return Err(format!(
-                                "CoS unavailable: account {account_id} could not be mounted"
-                            ));
-                        }
-                    }
-                } else {
-                    adapter
-                }
-            } else {
-                adapter
-            }
-        } else {
-            adapter
-        };
-        let adapter = if let Some(model) = cfg.model.as_deref() {
-            adapter.with_model(model).ok_or_else(|| {
-                format!(
-                    "CoS unavailable: harness {} cannot select model {model}",
-                    cfg.harness
-                )
-            })?
-        } else {
-            adapter
+
+            llm_route: Some(selected_route),
         };
         let ttl_secs = i64::try_from(cfg.max_wall_secs)
             .ok()
@@ -718,7 +536,7 @@ impl CosChatLaunch {
             }
             return Err(format!(
                 "CoS unavailable: harness {} cannot receive a run credential",
-                cfg.harness
+                pick.harness
             ));
         };
         let store = Arc::clone(&self.store);
@@ -747,9 +565,9 @@ impl CosChatLaunch {
             .chat_run_route(
                 run_id,
                 &json!({
-                    "harness": cfg.harness, "llm_source": cfg.llm_source,
-                    "provider": cfg.provider, "account_id": account, "model": cfg.model,
-                    "tier": format!("{:?}", cfg.tier).to_lowercase(),
+                    "harness": pick.harness, "llm_source": pick.candidate.source,
+                    "account_id": account, "model": pick.candidate.model,
+                "selection_metadata": selection_metadata,
                 }),
                 now,
             )
@@ -761,10 +579,10 @@ impl CosChatLaunch {
             "started",
             &format!(
                 "CoS 実行経路: {} / {} / {} / {}",
-                cfg.harness,
-                cfg.llm_source.as_deref().unwrap_or("unknown"),
-                provider,
-                cfg.model.as_deref().unwrap_or("default")
+                pick.harness,
+                pick.candidate.source,
+                account.as_deref().unwrap_or("unknown"),
+                pick.candidate.model
             ),
             now,
         );
@@ -796,17 +614,8 @@ impl CosChatLaunch {
         if self.triage.inbox_thread.as_deref() == Some(thread_id) {
             self.triage.inbox_run_live = true;
         }
-        if let Some(account) = account
-            && let Some(account_adapter) = dispatcher
-                .adapters
-                .get(provider)
-                .and_then(|a| dispatcher.pool_adapter_of(provider, a.id()))
-        {
-            self.accounts_in_flight
-                .insert(thread_id.to_owned(), (account_adapter, account));
-        }
-        self.providers_in_flight
-            .insert(thread_id.to_owned(), provider.clone());
+        self.route_reservations
+            .insert(thread_id.to_owned(), (pick.candidate.source, pick.account));
         Ok(())
     }
 

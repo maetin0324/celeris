@@ -35,7 +35,7 @@ completed: 2026-10-07
   - `UPDATE_SCHEMA=1` で `docs/api/v1/{event,api-v1}.schema.json` を再生成した。
   - gui の `pnpm gen:types` と web の `gen-types.mjs` も流した。
   - web/api/realtime の event-kinds・invalidation-map は、この葉の範囲 check の外なので触らない（attempt 2 で戻した）。
-  - gui-api.md に説明を足した。
+  - api.md に説明を足した。
 
 ## 証拠
 

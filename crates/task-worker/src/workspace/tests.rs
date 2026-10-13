@@ -9,6 +9,7 @@ fn sample_task() -> Task {
     use task_core::*;
     let now = time::OffsetDateTime::now_utc();
     Task {
+        harness_id: None,
         requirements: Default::default(),
         tree: None,
         paused_at: None,
@@ -34,7 +35,6 @@ fn sample_task() -> Task {
         priority: 0,
         worker_hint: WorkerHint {
             tier: Tier::Standard,
-            adapter: None,
         },
         workspace: WorkspaceSpec::Local {
             path: PathBuf::from("/tmp/ws"),

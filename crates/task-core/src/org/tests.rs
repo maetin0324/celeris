@@ -209,6 +209,7 @@ fn plain_task(kind: crate::model::TaskKind) -> crate::model::Task {
     };
     let now = OffsetDateTime::now_utc();
     Task {
+        harness_id: None,
         requirements: Default::default(),
         tree: None,
         paused_at: None,
@@ -231,7 +232,6 @@ fn plain_task(kind: crate::model::TaskKind) -> crate::model::Task {
         priority: 0,
         worker_hint: WorkerHint {
             tier: Tier::Standard,
-            adapter: None,
         },
         workspace: WorkspaceSpec::Local {
             path: "ws".into(),

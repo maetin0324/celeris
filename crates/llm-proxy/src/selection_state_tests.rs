@@ -74,7 +74,7 @@ fn state(id: &str) -> SourceState {
 
 fn context() -> RoutingContext {
     let req = ChatCompletionRequest {
-        model: "celeris/cheap".into(),
+        model: "qwen/qwen3.8-27b".into(),
         messages: vec![ChatMessage {
             role: "user".into(),
             content: Some(MessageContent::Text("x".repeat(40))),
@@ -191,13 +191,6 @@ fn constraints_exclude_before_score_and_reasons_are_traced() {
     let corr = correlation(&t1);
     assert_eq!(corr.decision_id.as_deref(), Some("dec-1"));
     assert_eq!(corr.snapshot_id, Some(ids.snapshot_id.clone()));
-}
-
-#[test]
-fn legacy_mode_does_not_use_state_selection() {
-    let policy = RoutingPolicy::defaults(Tier::Cheap, RoutingMode::Legacy);
-    let ctx = context();
-    assert!(select_state(&input(&policy, &ctx), &[], NOW, None).is_err());
 }
 
 #[test]

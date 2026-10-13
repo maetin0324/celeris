@@ -1,14 +1,7 @@
-//! Provider rows describe an execution adapter and, separately, its LLM source.
+//! The kind of LLM source a route draws from (ADR 2026-10-11 llm-source-harness-selection).
 
 use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum ProviderKind {
-    #[default]
-    Adapter,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LlmSourceRef {
@@ -85,25 +78,12 @@ impl JsonSchema for LlmSourceRef {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum SourceOrigin {
-    Explicit,
-    Derived,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct ResolvedLlmSource {
-    pub source: LlmSourceRef,
-    pub origin: SourceOrigin,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn provider_kind_source_string_roundtrip_and_schema() {
+    fn llm_source_ref_string_roundtrip_and_schema() {
         for source in [
             LlmSourceRef::Celeris,
             LlmSourceRef::ClaudeOauth,

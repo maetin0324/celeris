@@ -453,7 +453,16 @@ async fn task_tree_rolls_up_a_three_level_tree_by_hand() {
     assert_eq!(c["parent_stage"], "s1");
     assert_eq!(c["plan_version"], 1);
     assert_eq!(c["open_decisions"], 1);
-    assert_eq!(c["phase"], "held_on_decision");
+    // ADR 2026-10-11-task-wait-reasons D6: 決定待ちは `phase` でなく `waits`。
+    assert!(c.get("phase").is_none(), "{c}");
+    assert!(
+        c["waits"]
+            .as_array()
+            .expect("waits")
+            .iter()
+            .any(|w| w["kind"] == "human_decision"),
+        "{c}"
+    );
     assert_eq!(c["children"], json!([f.grandchild.id.to_string()]));
     assert_eq!(c["own"]["runs"], 1);
     assert_eq!(c["own"]["leaves_done"], 1);
@@ -480,7 +489,9 @@ async fn task_tree_rolls_up_a_three_level_tree_by_hand() {
     let r = node_of(&view, f.root.id);
     assert_eq!(r["depth"], 1);
     assert!(r.get("parent_id").is_none());
-    assert_eq!(r["phase"], "awaiting_children");
+    assert!(r.get("phase").is_none(), "{r}");
+    assert_eq!(r["waits"][0]["kind"], "children", "{r}");
+    assert_eq!(r["waits"][0]["task_ids"], json!([f.child.id.to_string()]));
     assert_eq!(r["open_decisions"], 1);
     let units: Vec<(&str, &str)> = r["units"]
         .as_array()

@@ -354,6 +354,7 @@ impl SqliteStore {
                 original
             } else {
                 Task {
+                    harness_id: None,
                     id: remediation_id,
                     requirements: Default::default(),
                     parent_id: None,
@@ -370,7 +371,6 @@ impl SqliteStore {
                     priority: 0,
                     worker_hint: WorkerHint {
                         tier: Tier::Standard,
-                        adapter: None,
                     },
                     workspace: WorkspaceSpec::Local {
                         path: std::path::PathBuf::from(remediation_id.to_string()),

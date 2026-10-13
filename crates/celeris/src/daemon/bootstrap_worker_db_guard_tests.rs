@@ -240,8 +240,7 @@ fn worker_db_guard_refuses_production_state_dir_from_production_config() {
 // ADR-0126 A2（final review 指摘）: worker run の中で本番に当たる daemon は probe せずに拒否する。
 // ---------------------------------------------------------------------------
 
-const PROVIDER: &str =
-    "\n[adapters.fake]\ncommand = [\"true\"]\n\n[[providers]]\nid = \"p1\"\nadapter = \"fake\"\n";
+const PROVIDER: &str = "\n[adapters.fake]\ncommand = [\"true\"]\n\n";
 
 /// 試験 daemon の config（`db` だけを指定。worker_read_only は既定の true）。
 fn daemon_config(e: &Env, db: &Path) -> crate::Config {

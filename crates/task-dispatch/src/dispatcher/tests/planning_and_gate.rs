@@ -455,7 +455,6 @@ async fn gate_on_compound_task_runs_a_planner_then_the_planned_work_units_in_ord
     ));
     let mut d = dispatcher(store.clone(), adapter.clone(), 1);
     d.config.execution.gate = task_core::GateMode::On;
-    d.config.execution.planner.adapter = "instant".to_string();
     let report = run_until_idle(&mut d, 400).await;
     assert!(report.idle, "{report:?}");
 
@@ -571,7 +570,6 @@ async fn regate_of_an_atomic_task_starts_a_planner_run_and_yields_a_plan() {
     ));
     let mut d = dispatcher(store.clone(), adapter.clone(), 1);
     d.config.execution.gate = task_core::GateMode::Shadow;
-    d.config.execution.planner.adapter = "instant".to_string();
     let report = run_until_idle(&mut d, 400).await;
     assert!(report.idle, "{report:?}");
 
@@ -664,7 +662,6 @@ async fn regate_of_a_planned_task_is_a_replan_request() {
     ));
     let mut d = dispatcher(store.clone(), adapter.clone(), 1);
     d.config.execution.gate = task_core::GateMode::On;
-    d.config.execution.planner.adapter = "instant".to_string();
     let report = run_until_idle(&mut d, 400).await;
     assert!(report.idle, "{report:?}");
 
@@ -720,7 +717,6 @@ async fn retry_after_switching_gate_to_on_regates_the_copy() {
     ));
     let mut d = dispatcher(store.clone(), adapter.clone(), 1);
     d.config.execution.gate = task_core::GateMode::On;
-    d.config.execution.planner.adapter = "instant".to_string();
     let report = run_until_idle(&mut d, 400).await;
     assert!(report.idle, "{report:?}");
 
@@ -805,7 +801,6 @@ async fn planner_children_become_delegated_child_tasks() {
     ));
     let mut d = dispatcher(store.clone(), adapter.clone(), 2);
     d.config.execution.gate = task_core::GateMode::On;
-    d.config.execution.planner.adapter = "instant".to_string();
     let report = run_until_idle(&mut d, 600).await;
     assert!(report.idle, "{report:?}");
 
@@ -872,7 +867,6 @@ async fn shadow_gate_adopts_a_human_explicit_compound_decision() {
     ));
     let mut d = dispatcher(store.clone(), adapter.clone(), 1);
     d.config.execution.gate = task_core::GateMode::Shadow;
-    d.config.execution.planner.adapter = "instant".to_string();
     let report = run_until_idle(&mut d, 400).await;
     assert!(report.idle, "{report:?}");
 
@@ -944,7 +938,6 @@ async fn shadow_gate_does_not_adopt_a_rule_based_compound_decision() {
     let adapter = Arc::new(PlannerScriptAdapter::new(vec![None], HashMap::new()));
     let mut d = dispatcher(store.clone(), adapter.clone(), 1);
     d.config.execution.gate = task_core::GateMode::Shadow;
-    d.config.execution.planner.adapter = "instant".to_string();
     let report = run_until_idle(&mut d, 400).await;
     assert!(report.idle, "{report:?}");
 
@@ -1001,7 +994,6 @@ async fn invalid_planner_output_retries_once_then_falls_back_to_atomic() {
     ));
     let mut d = dispatcher(store.clone(), adapter.clone(), 1);
     d.config.execution.gate = task_core::GateMode::On;
-    d.config.execution.planner.adapter = "instant".to_string();
     let report = run_until_idle(&mut d, 400).await;
     assert!(report.idle, "{report:?}");
 
@@ -1076,7 +1068,6 @@ async fn the_retry_planner_run_receives_the_previous_validation_error_and_config
     ));
     let mut d = dispatcher(store.clone(), adapter.clone(), 1);
     d.config.execution.gate = task_core::GateMode::On;
-    d.config.execution.planner.adapter = "instant".to_string();
     // 既定（6）と違う上限。検証とプロンプトの両方がこの値を使う。
     d.config.execution.limits.max_checks = 3;
     d.config.execution.limits.max_title_chars = 77;
@@ -1201,7 +1192,6 @@ async fn plan_with_unreadable_features_retries_once_then_falls_back_to_atomic() 
     ));
     let mut d = dispatcher(store.clone(), adapter.clone(), 1);
     d.config.execution.gate = task_core::GateMode::On;
-    d.config.execution.planner.adapter = "instant".to_string();
     let report = run_until_idle(&mut d, 400).await;
     assert!(report.idle, "{report:?}");
 
@@ -1258,7 +1248,6 @@ async fn oversized_plan_retries_once_then_falls_back_to_atomic() {
     ));
     let mut d = dispatcher(store.clone(), adapter.clone(), 1);
     d.config.execution.gate = task_core::GateMode::On;
-    d.config.execution.planner.adapter = "instant".to_string();
     let report = run_until_idle(&mut d, 400).await;
     assert!(report.idle, "{report:?}");
 
@@ -1310,7 +1299,6 @@ async fn planner_run_uses_frontier_when_the_task_explicitly_sets_it() {
     ));
     let mut d = dispatcher(store.clone(), adapter.clone(), 1);
     d.config.execution.gate = task_core::GateMode::On;
-    d.config.execution.planner.adapter = "instant".to_string();
     let report = run_until_idle(&mut d, 400).await;
     assert!(report.idle, "{report:?}");
 

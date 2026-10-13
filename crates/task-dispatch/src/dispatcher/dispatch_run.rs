@@ -9,7 +9,6 @@ impl Dispatcher {
         &mut self,
         task: Task,
         forced_wu: Option<task_core::WorkUnitRow>,
-        full: &mut std::collections::HashSet<ProviderId>,
         now: Instant,
     ) -> Result<bool, DispatchError> {
         // ADR-0074 D1.3（Phase F2b）: 並列 WU の 2 本目以降（Task は既に Running。担当・gate・
@@ -21,6 +20,12 @@ impl Dispatcher {
         // ADR-0089（Phase R6-5）: CoS の対話 run は `max_concurrency` ではなく `max_cos_runs` で数える。
         let cos = !second_pass && self.is_cos_task(&task)?;
         if !self.run_load().admits(cos) {
+            let scope = if cos {
+                task_core::CapacityScope::Cos
+            } else {
+                task_core::CapacityScope::Global
+            };
+            self.note_dispatch_wait(task.id, task_core::TaskWait::Capacity { scope, id: None });
             return Ok(false);
         }
         // ADR-0044 D2: この tick で打ち切ったばかりの run と同じ worktree に、すぐ次の run を
@@ -35,6 +40,18 @@ impl Dispatcher {
         // ADR 2026-10-07-build-tmp-hygiene 付記 A4: 監視している path が `critical` のあいだは新しい coding run を
         // 起こさない（ready のまま。attempts を消費しない。並列 WU の 2 本目以降も同じ）。
         if self.held_by_disk_critical(&task) {
+            let path = self
+                .disk_watch
+                .as_ref()
+                .map(|r| {
+                    r.entries
+                        .iter()
+                        .map(|e| e.path.display().to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
+                .unwrap_or_default();
+            self.note_dispatch_wait(task.id, task_core::TaskWait::DiskCritical { path });
             return Ok(false);
         }
         // ADR-0046 D5（Phase 59）: 担当が決まっていないタスクは dispatch の前に matching で決める
@@ -146,7 +163,6 @@ impl Dispatcher {
             } else {
                 self.config.execution.planner.tier
             };
-            task.worker_hint.adapter = Some(self.config.execution.planner.adapter.clone());
             task.budget.max_turns = self.config.execution.planner.max_turns;
             task.budget.max_wall_secs = self.config.execution.planner.max_wall_secs;
         } else if let Some(wu) = &current_wu {
@@ -176,6 +192,13 @@ impl Dispatcher {
             );
             if self.now_utc() < task.updated_at + delay {
                 tracing::debug!(task_id = %task.id, attempts = task.attempts, delay_ms = delay.as_millis() as u64, "retry backoff; not dispatching yet");
+                self.note_dispatch_wait(
+                    task.id,
+                    task_core::TaskWait::Backoff {
+                        until: rfc3339(task.updated_at + delay),
+                        cause: task_core::BackoffCause::Retry,
+                    },
+                );
                 return Ok(false);
             }
         }
@@ -185,6 +208,13 @@ impl Dispatcher {
         if !second_pass && let Some(until) = self.infra_backoff.get(&task.id).copied() {
             if self.now_utc() < until {
                 tracing::debug!(task_id = %task.id, %until, "infra backoff; not dispatching yet");
+                self.note_dispatch_wait(
+                    task.id,
+                    task_core::TaskWait::Backoff {
+                        until: rfc3339(until),
+                        cause: task_core::BackoffCause::Infra,
+                    },
+                );
                 return Ok(false);
             }
             self.infra_backoff.remove(&task.id);
@@ -215,6 +245,12 @@ impl Dispatcher {
             && let Some(blocker) = self.write_set_blocker(&run_key, reservation)
         {
             self.note_write_set_hold(&run_key, &blocker, reservation);
+            self.note_dispatch_wait(
+                task.id,
+                task_core::TaskWait::WriteSet {
+                    blocking_task_ids: vec![blocker.task],
+                },
+            );
             return Ok(false);
         }
         // ADR-0018: リモート実行のタスクは、クラスタの設定・cooldown・並列度・多重接続を先に確かめる。
@@ -234,6 +270,12 @@ impl Dispatcher {
                     tracing::warn!(task_id = %task.id, cluster = %cluster_id, "no such cluster in the config; task left ready");
                 }
                 self.unroutable.insert(task.id);
+                self.note_dispatch_wait(
+                    task.id,
+                    task_core::TaskWait::Unroutable {
+                        detail: "no such cluster in the config".to_string(),
+                    },
+                );
                 return Ok(false);
             }
             ClusterResolution::AssigneeLacksTool { cluster } => {
@@ -249,9 +291,11 @@ impl Dispatcher {
             {
                 // ADR-0018 D2: 人がログインするまで進まないので、待ち対象には数えない（`--until-idle` を止めない）。
                 self.cluster_waiting.insert(task.id);
+                self.note_dispatch_wait(task.id, cluster_wait(&spec.id, "cooldown"));
                 return Ok(false);
             }
             if self.cluster_in_use(&spec.id) >= spec.concurrency {
+                self.note_dispatch_wait(task.id, cluster_wait(&spec.id, "concurrency full"));
                 return Ok(false);
             }
             // この tick の `refresh_cluster_liveness` の結果を使う（1 tick に 1 回だけ `ssh -O check` を呼ぶ）。
@@ -281,6 +325,10 @@ impl Dispatcher {
                             format!("auto-connect failed: {detail}"),
                         )?;
                         self.cluster_waiting.insert(task.id);
+                        self.note_dispatch_wait(
+                            task.id,
+                            cluster_wait(&spec.id, &format!("auto-connect failed: {detail}")),
+                        );
                         return Ok(false);
                     }
                     None => {
@@ -293,6 +341,10 @@ impl Dispatcher {
                             ),
                         )?;
                         self.cluster_waiting.insert(task.id);
+                        self.note_dispatch_wait(
+                            task.id,
+                            cluster_wait(&spec.id, "no ssh ControlMaster connection"),
+                        );
                         return Ok(false);
                     }
                 }
@@ -386,12 +438,12 @@ impl Dispatcher {
         }
         // ADR-0052 D1 / D2（Phase 64）: 知識整理 run は dispatch の直前に `langmem` の接続先へ
         // `GET /models` を当て、届かなければ tier `cheap` の**汎用**ハーネスへ倒す
-        // （`worker_hint.adapter` を外すだけ ＝ ADR-0049 の選び方にそのまま乗る）。LLM は呼ばない。
+        // （task harness の固定を外すだけで、通常の route 選択へ戻す）。LLM は呼ばない。
         let fallback_reason = self.knowledge_fallback_reason(&task, now);
         if let Some(reason) = &fallback_reason
             && let Some(tier) = self.config.knowledge.fallback_tier
         {
-            task.worker_hint.adapter = None;
+            task.harness_id = None;
             task.worker_hint.tier = tier;
             task.budget.max_turns = KNOWLEDGE_FALLBACK_MAX_TURNS;
             task.budget.max_wall_secs = KNOWLEDGE_FALLBACK_MAX_WALL_SECS;
@@ -417,14 +469,7 @@ impl Dispatcher {
             } else {
                 (
                     task_core::TierSource::System,
-                    format!(
-                        "planner/system-{}",
-                        match tier {
-                            task_core::Tier::Frontier => "frontier",
-                            task_core::Tier::Standard => "standard",
-                            task_core::Tier::Cheap => "cheap",
-                        }
-                    ),
+                    format!("planner/system-{}", tier_label(tier)),
                     "ADR-0074 D5.3: planner run runs at [execution.planner] tier, fixed by \
                      celeris code"
                         .to_string(),
@@ -457,196 +502,57 @@ impl Dispatcher {
         if let Some(decision) = &lane_decision {
             task.worker_hint.tier = decision.lane;
         }
-        // ADR-0054 Phase 67c: CoS の対話 run だけ、継続セッションの (adapter, account) に留まれるかを
-        // 先に試す（`run_extras` の `is_cos_conversation` と同じ判定を select_provider より前に
-        // 軽く行う。継続セッションを見つけてから選ぶのでないと、ADR-0049 ランキングが先に別の
-        // アダプタ・アカウントへ倒れてしまう）。
-        let sticky_session = self.cos_conversation_session(&task)?;
-        // multi-objective routing Phase 2: mode=enforce（opt-in）だけ候補 allowlist と source 状態で選ぶ。
-        // quota の枯渇・圧迫は lane を下げず、同じ lane の別 source を先に試し、無ければ defer する。
-        let mut enforce_round = self
-            .enforce_active()
-            .then(|| self.enforce_round(&task.worker_hint));
-        let mut enforce_full = full.clone();
-        // ADR 2026-10-07（coding harness の既定）: `adapter_policy = "model_family"` のハーネスで
-        // adapter の明示が無い worker run は、family の既定ハーネスの行を優先して選ぶ。
-        let coding_default_harness = !cos
-            && !is_planner_dispatch
-            && task
-                .genre
-                .as_deref()
-                .is_some_and(|g| self.coding_default.harnesses.iter().any(|h| h == g));
-        let coding_default_active = coding_default_harness && task.worker_hint.adapter.is_none();
-        let mut coding_default_outcome: Option<super::coding_default::CodingDefaultOutcome>;
-        let (
-            adapter_id,
-            provider_id,
-            selected_account,
-            provider_selection,
-            adapter,
-            tier,
-            routing_reason,
-        ) = loop {
-            // ADR-0132 付記 L2/L8: worker run だけ cheap lane のローカル優先を効かせ、選択の記録を残す。
-            let (picked, provider_selection, outcome) = match &enforce_round {
-                Some(round) => {
-                    // enforce の除外は満杯の集合へ混ぜない（他の task の判定を汚さない）。
-                    let excluded = round.excluded.clone();
-                    let result = self.select_provider_with_default(
-                        coding_default_active,
-                        &task.worker_hint,
-                        now,
-                        task.id,
-                        &mut enforce_full,
-                        sticky_session.as_ref(),
-                        cos,
-                        &excluded,
-                    );
-                    full.extend(enforce_full.iter().cloned());
-                    result
+        // ADR 2026-10-11 llm-source-harness-selection: harness → 宣言順の source×model →
+        // `(source, account)` の admission を `select_route` だけで決め、その route の adapter と
+        // worker に渡す `SelectedLlmRoute` を作る。選べなければ起動しない（別の source へ倒さない）。
+        let route_input = route_select::RouteInput {
+            task_id: task.id.to_string(),
+            harness: {
+                let mut request = route_select::harness_request_for(&task);
+                if is_planner_dispatch {
+                    request.execution_class = Some("planner".into());
                 }
-                None => self.select_provider_with_default(
-                    coding_default_active,
-                    &task.worker_hint,
-                    now,
-                    task.id,
-                    full,
-                    sticky_session.as_ref(),
-                    cos,
-                    &std::collections::HashSet::new(),
-                ),
-            };
-            coding_default_outcome = outcome;
-            let Some((adapter_id, provider_id, selected_account)) = picked else {
-                if let Some(round) = &enforce_round {
-                    tracing::info!(task_id = %task.id, tier = ?task.worker_hint.tier, excluded = %round.summary(),
-                        "routing enforce: no source in the requested lane; deferring (lane is not lowered)");
-                }
-                return Ok(false);
-            };
-            let Some(base_adapter) = self.adapters.get(&provider_id).cloned() else {
-                tracing::warn!(task_id = %task.id, provider = %provider_id, adapter = %adapter_id, "no adapter instance for provider");
-                return Ok(false);
-            };
-            // ADR-0024 D2 / ADR-0025 D2: プールで選んだアカウントの env を重ねる。`with_env` が `None` を返すのは
-            // アダプタの実装漏れ（設定検証で account_pool は claude-code/codex 限定にしているため通常は起きない）
-            // なので、このタスクは今回見送る。
-            let adapter = match &selected_account {
-                Some((account_adapter, account_id)) => {
-                    match self.adapter_for_account(&base_adapter, *account_adapter, account_id) {
-                        Some(a) => a,
-                        None => {
-                            tracing::warn!(task_id = %task.id, provider = %provider_id, account_id, "adapter does not support account pools (with_env returned None); skipping this tick");
-                            return Ok(false);
-                        }
-                    }
-                }
-                None => base_adapter,
-            };
-            // ADR 2026-10-06 model-role-assignments D2: DB の割り当てを重ねた実効 bindings で run を起こす。
-            let adapter = self.adapter_with_effective_models(
-                &provider_id,
-                adapter,
-                &self.current_assignment_view(),
-            );
-            if let Some(round) = enforce_round.as_mut() {
-                let state = self.source_state_of(&provider_id, selected_account.as_ref(), now);
-                match self.enforce_check_source(task.worker_hint.tier, &state) {
-                    Ok(reason) => {
-                        round.observed_at = state.observed_at.clone();
-                        // 付記「モデルごとの複数役割」: 役割のメンバーが複数なら kernel の選択を実行モデルにする。
-                        let profiles = self.legacy_provider_profiles(&task.worker_hint);
-                        let ranking = self.rank_role_members(
-                            task.worker_hint.tier,
-                            &provider_id,
-                            &profiles,
-                            Some(&state),
-                        );
-                        let adapter = match &ranking.chosen {
-                            Some(model) => self.rebind_lane_model(
-                                &provider_id,
-                                adapter,
-                                task.worker_hint.tier,
-                                model,
-                                &self.current_assignment_view(),
-                            ),
-                            None => adapter,
-                        };
-                        round.member_ranking = ranking;
-                        break (
-                            adapter_id,
-                            provider_id,
-                            selected_account,
-                            provider_selection,
-                            adapter,
-                            task.worker_hint.tier,
-                            reason,
-                        );
-                    }
-                    Err((codes, detail)) => {
-                        Self::enforce_exclude(round, &provider_id, &codes, detail);
-                        continue;
-                    }
-                }
-            }
-            let remaining = selected_account.as_ref().and_then(|(kind, id)| {
-                let book = self.account_book(*kind)?;
-                let book = book.lock().ok()?;
-                let observation = book.state(id)?.usage.as_ref()?;
-                crate::accounts::measured_remaining(observation, (self.now_unix_fn)())
-            });
-            let (tier, routing_reason) =
-                match task_core::model_routing::select_tier(task.worker_hint.tier, remaining) {
-                    Ok(decision) => decision,
-                    Err(_) => return Ok(false), // quota refresh will make this task eligible again
-                };
-            break (
-                adapter_id,
-                provider_id,
-                selected_account,
-                provider_selection,
-                adapter,
-                tier,
-                routing_reason,
-            );
+                request
+            },
+            model_hint: None,
+            lane: Some(tier_label(task.worker_hint.tier).to_string()),
+            cos,
         };
-        // 多目的 routing Phase 4: mode=shadow だけ、primary（legacy）を決めた直後の同じ候補行・source 状態で
-        // 候補 policy の判断を純粋に計算する（run の登録より前。追加の呼出し・状態の書換えはしない）。
-        let decision_shadow = self.shadow_active().then(|| {
-            self.decision_shadow_round(
-                &task.worker_hint,
-                cos,
-                &provider_id,
-                selected_account.as_ref(),
-                &provider_selection,
-                now,
-            )
-        });
-        // A legacy provider has no tier mapping: keep its historical behavior.
-        if adapter
-            .model_for_tier(task.worker_hint.tier)
-            .ok()
-            .flatten()
-            .is_some()
-        {
-            task.worker_hint.tier = tier;
-        }
-        let resolved_model = match adapter.model_for_tier(task.worker_hint.tier) {
-            Ok(model) => model,
-            Err(reason) => {
-                self.store.apply_transition_with_events(
+        let (route_outcome, route_trace) = self.select_route(&route_input);
+        let launch = match &route_outcome {
+            Ok(pick) => self
+                .route_adapter(pick)
+                .and_then(|adapter| Ok((adapter, self.route_launch_target(pick)?)))
+                .map(|(adapter, selected)| (pick.clone(), adapter, selected))
+                .map_err(Some),
+            Err(_) => Err(None),
+        };
+        let (pick, adapter, llm_route) = match launch {
+            Ok(launch) => {
+                self.warned_unroutable.remove(&task.id);
+                launch
+            }
+            Err(launch_error) => {
+                self.note_route_refusal(
                     task.id,
-                    Trigger::Unroutable,
-                    vec![Event::worker_progress(
-                        "routing",
-                        format!("model routing blocked: {reason}"),
-                    )],
+                    &route_input,
+                    &route_outcome,
+                    &route_trace,
+                    launch_error.as_ref(),
                 )?;
                 return Ok(false);
             }
         };
-        let account = selected_account.as_ref().map(|(_, id)| id.clone());
-        let account_adapter = selected_account.as_ref().map(|(a, _)| *a);
+        let adapter_id = adapter.id().to_string();
+        let source_id = pick.candidate.source.to_string();
+        let model = pick.candidate.model.to_string();
+        let account_adapter = self
+            .llm_route_registry
+            .sources
+            .get(&pick.candidate.source)
+            .and_then(|s| route_select::account_adapter_for_source_kind(s.kind.as_ref()));
+        // The pool account of an OAuth source (other sources book `(source, account)` on the route only).
+        let account = account_adapter.map(|_| pick.account.to_string());
 
         let run_id = ulid::Ulid::new().to_string();
         let wall = Duration::from_secs(task.budget.max_wall_secs);
@@ -681,9 +587,6 @@ impl Dispatcher {
         if !acquired {
             return Ok(false);
         }
-        let model = resolved_model
-            .or_else(|| self.models.get(&provider_id).cloned())
-            .unwrap_or_default();
         let event_started = Instant::now();
         self.store.append_event(
             task.id,
@@ -691,7 +594,7 @@ impl Dispatcher {
                 run_id: run_id.clone(),
                 adapter: adapter_id.clone(),
                 model: model.clone(),
-                provider: Some(provider_id.clone()),
+                provider: Some(source_id.clone()),
                 // ADR-0024 D4: `account_pool` のプロバイダで選んだアカウント（プールを使わなければ `None`）。
                 account: account.clone(),
                 // ADR-0072 D14（Phase E3）: planner run だけ `Some(Planner)`（ワーカー run は
@@ -705,18 +608,8 @@ impl Dispatcher {
             },
         )?;
         // ADR-0077 D1 の dispatch での途中目標の `in_progress` は ADR-0079 D13（Phase R5a）で廃止（途中目標は凍結）。
-        // ADR-0069 D5: この run の routing の監査記録（担当・harness・lane・model・features・規則）。
-        // 多目的 routing Phase 3: 同じ decision_id で `routing_features_recorded` を後で 1 回追記する。
         let mut routing_decision_id: Option<String> = None;
-        if let Some(mut decision) = lane_decision {
-            if task_core::model_policy::lane_rank(task.worker_hint.tier)
-                < task_core::model_policy::lane_rank(decision.lane)
-            {
-                decision.reasons.push(format!(
-                    "quota layer lowered lane {:?} -> {:?} (budget guard)",
-                    decision.lane, task.worker_hint.tier
-                ));
-            }
+        if let Some(decision) = lane_decision {
             let feature_ref = match self.store.record_route_features(
                 task_core::route_extract::Subject {
                     kind: if current_wu.is_some() {
@@ -756,56 +649,23 @@ impl Dispatcher {
                 resolution: task_core::model_routing::LaneResolution {
                     lane: Some(task.worker_hint.tier),
                     adapter: adapter_id.clone(),
-                    provider: Some(provider_id.clone()),
+                    provider: Some(source_id.clone()),
                     account: account.clone(),
                     model_id: model.clone(),
-                    // ADR-0069 Phase 118 D1: 監査記録は「設定した」値ではなく「実際に CLI へ
-                    // 渡った」値を残す（対応しないアダプタでは `None` になる）。
-                    reasoning_effort: adapter
-                        .reasoning_effort_for_tier(task.worker_hint.tier)
-                        .filter(|_| adapter.supports_reasoning_effort()),
-                    // ADR-0132 付記 L8: provider 選択の理由と見た候補。
-                    selection: Some(provider_selection),
-                    // ADR 2026-10-07: 既定解決をしたか・明示か・倒れたかと、選んだ行の family。
-                    coding_default: if coding_default_harness {
-                        coding_default_outcome
-                            .or_else(|| {
-                                self.explicit_coding_outcome(&task.worker_hint, &provider_id)
-                            })
-                            .map(|o| task_core::model_routing::CodingDefaultResolution {
-                                family: o.family.family,
-                                family_basis: o.family.basis,
-                                adapter_choice: o.choice,
-                            })
-                    } else {
-                        None
-                    },
+                    // The selected route carries no reasoning effort, so none reaches the harness.
+                    reasoning_effort: None,
+                    selection: None,
+                    coding_default: None,
                 },
-                quota_reason: Some(routing_reason.clone()),
+                quota_reason: None,
                 decision,
                 // ADR-0072 D21（Phase E3）: WU の run だけ `work_unit_id` を持つ。
                 work_unit_id: current_wu.as_ref().map(|wu| wu.id.clone()),
                 // Phase 3（ADR 2026-10-04 §5）: 上げた/上げなかった決定の構造化監査。task の run だけ。
                 escalation: escalation_audit,
-                optimizer: match &enforce_round {
-                    Some(round) => Some(self.enforce_optimizer_trace(
-                        &task.worker_hint,
-                        &run_id,
-                        round,
-                        &provider_id,
-                        &model,
-                        account.as_deref(),
-                    )),
-                    None => self.legacy_optimizer_trace(&task.worker_hint, &run_id, &provider_id),
-                },
+                optimizer: None,
             };
-            routing_decision_id = Some(
-                record
-                    .optimizer
-                    .as_ref()
-                    .map(|t| t.decision_id.clone())
-                    .unwrap_or_else(|| format!("run:{run_id}")),
-            );
+            routing_decision_id = Some(format!("run:{run_id}"));
             self.store.append_event(
                 task.id,
                 &Event::RoutingDecided {
@@ -813,27 +673,6 @@ impl Dispatcher {
                     record: Box::new(record),
                 },
             )?;
-            // Phase 4 decision shadow: primary と別欄の記録 1 件（primary の選択・結果は変えない）。
-            if let (Some(round), Some(decision_id)) = (&decision_shadow, &routing_decision_id) {
-                let shadow = Self::decision_shadow_record(
-                    round,
-                    decision_id,
-                    &run_id,
-                    &provider_id,
-                    &model,
-                    task.worker_hint.tier,
-                );
-                self.store.append_event(
-                    task.id,
-                    &Event::RoutingShadowRecorded {
-                        record: Box::new(shadow),
-                    },
-                )?;
-            }
-        }
-        if matches!(adapter_id.as_str(), "claude-code" | "codex") {
-            self.store.append_event(task.id, &Event::worker_progress(&run_id,
-                format!("model routing: {routing_reason}; execution tier={:?}; provider={provider_id}", task.worker_hint.tier)))?;
         }
         // ADR-0052 D1: 検査の結果を進行（`status`）として残す（run が始まってから 1 行だけ）。
         let knowledge_fallback = match &fallback_reason {
@@ -864,7 +703,7 @@ impl Dispatcher {
             idle_timeout: self.config.idle_timeout,
             kill_grace: self.config.kill_grace,
         };
-        tracing::info!(task_id = %task.id, %run_id, adapter = %adapter_id, provider = %provider_id, account = account.as_deref(), "dispatching");
+        tracing::info!(task_id = %task.id, %run_id, adapter = %adapter_id, source = %source_id, model = %model, account = account.as_deref(), "dispatching");
         let remote = cluster
             .as_ref()
             .map(|(spec, path, mode)| self.remote_ssh_settings(spec, path, task.id, *mode));
@@ -910,7 +749,7 @@ impl Dispatcher {
                 .to_string_lossy()
                 .into_owned();
             let surface = continuation_session::ContinuationSurface {
-                provider: Some(provider_id.as_str()),
+                provider: Some(source_id.as_str()),
                 cwd: Some(cwd.as_str()),
                 container: matches!(container, ContainerDecision::Container(_)),
             };
@@ -1086,6 +925,18 @@ impl Dispatcher {
                 });
             }
         }
+        // ADR 2026-10-11 llm-source-harness-selection: `runs` 索引の行（WU・planner・暗黙の WU）を書いた後に、
+        // 選んだ harness・source・model・account を events と run の行へ記録する。
+        if let Err(e) = self.record_route_selection(
+            task.id,
+            Some(&run_id),
+            &route_input,
+            &route_outcome,
+            &route_trace,
+        ) {
+            tracing::warn!(task_id = %task.id, %run_id, error = %e, "failed to record the llm route selection");
+        }
+        extras.llm_route = Some(llm_route);
         // ADR-0052 D2: フォールバックの前置き（LangMem に渡しているのと同じ抽出の指示 + 出力契約）を
         // 役割の指示文として載せる。依頼文（`maintenance_objective`）は `task.objective` のまま。
         if let Some(fallback) = &knowledge_fallback {
@@ -1143,7 +994,7 @@ impl Dispatcher {
             task.id,
             task.worker_hint.tier,
             run_id.clone(),
-            provider_id.clone(),
+            source_id.clone(),
             account.clone(),
             account_adapter,
             adapter,
@@ -1163,7 +1014,7 @@ impl Dispatcher {
             key,
             RunEntry {
                 run_id,
-                provider: provider_id,
+                provider: source_id,
                 handle,
                 since: OffsetDateTime::now_utc(),
                 cluster: cluster.map(|(spec, ..)| spec.id),
@@ -1171,6 +1022,7 @@ impl Dispatcher {
                 account_adapter,
                 container: container_stop,
                 cos,
+                route: Some((pick.candidate.source, pick.account)),
             },
         );
         Ok(true)
@@ -1216,17 +1068,15 @@ impl Dispatcher {
         }
     }
 
-    /// ADR-0107 D2: browser fallback candidates for one run. Only providers that are enabled
-    /// (configured in the policy table, not an account pool), healthy
-    /// (not in cooldown) and whose adapter id is conformant in the runner-recorded ledger are
-    /// offered, ordered specialist first and one per adapter id. A `CredentialUse` policy never
+    /// ADR-0107 D2: browser fallback candidates for one run. Only declared harnesses whose
+    /// adapter id is a browser backend conformant in the runner-recorded ledger are offered,
+    /// ordered specialist first and one per adapter id. A `CredentialUse` policy never
     /// falls back (credential waits and auth sections must not be replayed). When a browser task
     /// ends up without any candidate the refusal is recorded as a progress event.
     pub(super) fn browser_fallback_candidates(
         &self,
         task_id: TaskId,
         run_id: &str,
-        primary_provider: &ProviderId,
         primary_adapter: &str,
         record: Option<&std::path::Path>,
     ) -> Vec<Arc<dyn WorkerAdapter>> {
@@ -1258,41 +1108,20 @@ impl Dispatcher {
             Some(Ok(ids)) => Some(ids),
             Some(Err(_)) | None => None,
         };
-        let cooling: std::collections::HashSet<ProviderId> = self
-            .policy
-            .cooldowns(Instant::now())
-            .into_iter()
-            .map(|c| c.provider)
-            .collect();
         let mut excluded: Vec<String> = Vec::new();
-        let mut candidates: Vec<(String, ProviderId, Arc<dyn WorkerAdapter>)> = Vec::new();
-        let mut providers: Vec<(&ProviderId, &Arc<dyn WorkerAdapter>)> =
-            self.adapters.iter().collect();
-        providers.sort_by(|a, b| a.0.cmp(b.0));
-        for (provider, adapter) in providers {
+        let mut candidates: Vec<(String, String, Arc<dyn WorkerAdapter>)> = Vec::new();
+        let mut harnesses: Vec<(&task_core::llm_route::HarnessId, &Arc<dyn WorkerAdapter>)> =
+            self.harness_adapters.iter().collect();
+        harnesses.sort_by(|a, b| a.0.cmp(b.0));
+        for (harness, adapter) in harnesses {
             let id = adapter.id();
-            if provider == primary_provider
-                || id == primary_adapter
-                || !task_worker::browser::BROWSER_BACKEND_IDS.contains(&id)
-            {
+            if id == primary_adapter || !task_worker::browser::BROWSER_BACKEND_IDS.contains(&id) {
                 continue;
             }
-            let reason = if self.account_pool_providers.contains(provider)
-                || self
-                    .implicit_account_limit(&self.implicit_source_of(provider))
-                    .is_none_or(|(limit, _)| limit == 0)
-            {
-                Some("disabled")
-            } else if cooling.contains(provider) {
-                Some("unhealthy")
-            } else if !conformant.as_ref().is_some_and(|ids| ids.contains(id)) {
-                Some("not_conformant")
+            if conformant.as_ref().is_some_and(|ids| ids.contains(id)) {
+                candidates.push((id.to_string(), harness.to_string(), Arc::clone(adapter)));
             } else {
-                None
-            };
-            match reason {
-                Some(reason) => excluded.push(format!("{provider}={reason}")),
-                None => candidates.push((id.to_string(), provider.clone(), Arc::clone(adapter))),
+                excluded.push(format!("{harness}=not_conformant"));
             }
         }
         candidates.sort_by(|a, b| {
@@ -1313,7 +1142,7 @@ impl Dispatcher {
                 task_id,
                 run_id,
                 &format!(
-                    "browser fallback refused: no enabled, healthy, conformant alternate backend ({ledger}; excluded: [{}])",
+                    "browser fallback refused: no conformant alternate backend ({ledger}; excluded: [{}])",
                     excluded.join(", ")
                 ),
             );
@@ -1363,12 +1192,11 @@ impl Dispatcher {
             extras.input_attachment_source = self.input_attachment_source();
         }
         let store = self.store.clone();
-        // ADR-0107 D2: the dispatcher builds the browser fallback list from provider state and
-        // the runner-recorded ledger; the worker wraps each candidate like the primary (ADR-0107).
+        // ADR-0107 D2: the dispatcher builds the browser fallback list from the declared harnesses
+        // and the runner-recorded ledger; the worker wraps each candidate like the primary (ADR-0107).
         let browser_candidates = self.browser_fallback_candidates(
             task_id,
             &run_id,
-            &provider,
             adapter.id(),
             task_worker::browser::conformance_record_path().as_deref(),
         );
@@ -1628,6 +1456,50 @@ impl Dispatcher {
         Ok(())
     }
 
+    /// A refused route (no harness, no eligible declared candidate, or a pick that cannot be
+    /// launched) leaves the task ready and starts nothing. The refusal is recorded once per task
+    /// until a route is admitted again (`warned_unroutable`, which also widens the ready window),
+    /// so a deferred task does not append an event every tick. A refusal that only a config
+    /// change can lift (anything but "every declared candidate is busy or ineligible now") counts
+    /// the task as unroutable.
+    fn note_route_refusal(
+        &mut self,
+        task_id: TaskId,
+        input: &route_select::RouteInput,
+        outcome: &Result<route_select::RoutePick, route_select::RouteFailure>,
+        trace: &route_select::RouteTrace,
+        launch_error: Option<&RouteLaunchError>,
+    ) -> Result<(), DispatchError> {
+        if !matches!(outcome, Err(route_select::RouteFailure::NoEligible(_))) {
+            self.unroutable.insert(task_id);
+        }
+        if !self.warned_unroutable.insert(task_id) {
+            return Ok(());
+        }
+        match (outcome, launch_error) {
+            (Ok(pick), Some(error)) => {
+                tracing::info!(task_id = %task_id, harness = %pick.harness, source = %pick.candidate.source, %error, "llm route cannot be launched; deferring");
+                self.store.append_event(
+                    task_id,
+                    &Event::worker_progress(
+                        "routing",
+                        format!(
+                            "route refused: {error}; selection: {}",
+                            trace.metadata(input, Some(pick), None)
+                        ),
+                    ),
+                )?;
+                Ok(())
+            }
+            (outcome, _) => {
+                if let Err(failure) = outcome {
+                    tracing::info!(task_id = %task_id, reason = %failure.reason(), "no llm route; deferring");
+                }
+                self.record_route_selection(task_id, None, input, outcome, trace)
+            }
+        }
+    }
+
     pub(super) fn default_checks(&self, task: &Task) -> Vec<String> {
         let Some(ws) = self.task_workspaces_for(task) else {
             return Vec::new();
@@ -1682,5 +1554,22 @@ fn describe_escalation(audit: &task_core::EscalationAudit) -> String {
         )
     } else {
         format!("retry at {:?}: {}", audit.selected_lane, audit.reason)
+    }
+}
+
+/// ADR 2026-10-11-task-wait-reasons M3: クラスタ待ち。
+fn cluster_wait(cluster_id: &str, detail: &str) -> task_core::TaskWait {
+    task_core::TaskWait::Cluster {
+        cluster_id: cluster_id.to_string(),
+        detail: detail.to_string(),
+    }
+}
+
+/// The lane label kept on the routing request (the default route policy does not read it).
+fn tier_label(tier: task_core::Tier) -> &'static str {
+    match tier {
+        task_core::Tier::Frontier => "frontier",
+        task_core::Tier::Standard => "standard",
+        task_core::Tier::Cheap => "cheap",
     }
 }

@@ -22,7 +22,7 @@ import { Route as HarnessesRouteImport } from './routes/harnesses'
 import { Route as HelpRouteImport } from './routes/help'
 import { Route as InboxRouteImport } from './routes/inbox'
 import { Route as LoginRouteImport } from './routes/login'
-import { Route as ModelsRouteImport } from './routes/models'
+import { Route as RoutingRouteImport } from './routes/routing'
 import { Route as NotificationsRouteImport } from './routes/notifications'
 import { Route as ReleasesRouteImport } from './routes/releases'
 import { Route as ReportsRouteImport } from './routes/reports'
@@ -118,9 +118,9 @@ const LoginRoute = LoginRouteImport.update({
   path: '/login',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ModelsRoute = ModelsRouteImport.update({
-  id: '/models',
-  path: '/models',
+const RoutingRoute = RoutingRouteImport.update({
+  id: '/routing',
+  path: '/routing',
   getParentRoute: () => rootRouteImport,
 } as any)
 const NotificationsRoute = NotificationsRouteImport.update({
@@ -285,7 +285,7 @@ export interface FileRoutesByFullPath {
   '/help': typeof HelpRoute
   '/inbox': typeof InboxRoute
   '/login': typeof LoginRoute
-  '/models': typeof ModelsRoute
+  '/routing': typeof RoutingRoute
   '/notifications': typeof NotificationsRoute
   '/releases': typeof ReleasesRoute
   '/reports': typeof ReportsRoute
@@ -330,7 +330,7 @@ export interface FileRoutesByTo {
   '/help': typeof HelpRoute
   '/inbox': typeof InboxRoute
   '/login': typeof LoginRoute
-  '/models': typeof ModelsRoute
+  '/routing': typeof RoutingRoute
   '/notifications': typeof NotificationsRoute
   '/releases': typeof ReleasesRoute
   '/reports': typeof ReportsRoute
@@ -376,7 +376,7 @@ export interface FileRoutesById {
   '/help': typeof HelpRoute
   '/inbox': typeof InboxRoute
   '/login': typeof LoginRoute
-  '/models': typeof ModelsRoute
+  '/routing': typeof RoutingRoute
   '/notifications': typeof NotificationsRoute
   '/releases': typeof ReleasesRoute
   '/reports': typeof ReportsRoute
@@ -423,7 +423,7 @@ export interface FileRouteTypes {
     | '/help'
     | '/inbox'
     | '/login'
-    | '/models'
+    | '/routing'
     | '/notifications'
     | '/releases'
     | '/reports'
@@ -468,7 +468,7 @@ export interface FileRouteTypes {
     | '/help'
     | '/inbox'
     | '/login'
-    | '/models'
+    | '/routing'
     | '/notifications'
     | '/releases'
     | '/reports'
@@ -513,7 +513,7 @@ export interface FileRouteTypes {
     | '/help'
     | '/inbox'
     | '/login'
-    | '/models'
+    | '/routing'
     | '/notifications'
     | '/releases'
     | '/reports'
@@ -559,7 +559,7 @@ export interface RootRouteChildren {
   HelpRoute: typeof HelpRoute
   InboxRoute: typeof InboxRoute
   LoginRoute: typeof LoginRoute
-  ModelsRoute: typeof ModelsRoute
+  RoutingRoute: typeof RoutingRoute
   NotificationsRoute: typeof NotificationsRoute
   ReleasesRoute: typeof ReleasesRoute
   ReportsRoute: typeof ReportsRoute
@@ -684,11 +684,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LoginRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/models': {
-      id: '/models'
-      path: '/models'
-      fullPath: '/models'
-      preLoaderRoute: typeof ModelsRouteImport
+    '/routing': {
+      id: '/routing'
+      path: '/routing'
+      fullPath: '/routing'
+      preLoaderRoute: typeof RoutingRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/notifications': {
@@ -911,7 +911,7 @@ const rootRouteChildren: RootRouteChildren = {
   HelpRoute: HelpRoute,
   InboxRoute: InboxRoute,
   LoginRoute: LoginRoute,
-  ModelsRoute: ModelsRoute,
+  RoutingRoute: RoutingRoute,
   NotificationsRoute: NotificationsRoute,
   ReleasesRoute: ReleasesRoute,
   ReportsRoute: ReportsRoute,

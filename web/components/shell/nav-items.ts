@@ -23,7 +23,7 @@ export const navItems = [
   { to: "/accounts", label: "アカウント", group: "admin" },
   { to: "/sources", label: "LLM source", group: "admin" },
   { to: "/harnesses", label: "Harness", group: "admin" },
-  { to: "/models", label: "モデル", group: "admin" },
+  { to: "/routing", label: "Routing", group: "admin" },
   { to: "/clusters", label: "クラスタ", group: "admin" },
   { to: "/releases", label: "リリース", group: "admin" },
   { to: "/help", label: "ヘルプ", group: "admin" },

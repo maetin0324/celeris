@@ -5,7 +5,9 @@ import type {
   RunRoutingAudit,
   TaskRoutingView,
 } from "../../api/generated/types";
-import { UNKNOWN, usdLabel } from "../ops/routing-state";
+
+const UNKNOWN = "不明";
+const usdLabel = (value: number | null | undefined) => (value == null ? UNKNOWN : `$${value}`);
 
 // タスクの routing 監査（GET /tasks/:id/routing）。run ごとに、実行した枠（harness・source・model・口座）、
 // 選定理由、escalation、run の outcome（outcome_state で not_recorded・unreviewed・judged を区別。

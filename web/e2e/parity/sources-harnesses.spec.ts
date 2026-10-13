@@ -20,10 +20,7 @@ test("parity: /sources /harnesses 一覧・詳細を読み取り専用で表示�
     await page.getByRole("link", { name: "claude-oauth" }).click();
     await expect(page.getByRole("heading", { level: 1, name: "claude-oauth" })).toBeVisible();
     await expect(page.getByRole("region", { name: "accounts（1）" })).toContainText("main");
-    await expect(page.getByRole("link", { name: "claude-opus" })).toHaveAttribute(
-      "href",
-      "/models?source=claude-oauth",
-    );
+    await expect(page.getByRole("region", { name: /models/ })).toContainText("claude-opus");
     await page.goto(`${gateway.base}/harnesses`);
     const harness = page.getByRole("region", { name: "claude-code" });
     await expect(harness).toContainText("anthropic");

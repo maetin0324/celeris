@@ -310,7 +310,10 @@ from_api = "openai_compatible"
 to_api = "anthropic"
 
 [route_defaults.claude_code]
-candidates = [{ source = "claude_oauth", model = "claude-opus-5-5" }, { source = "claude_oauth", model = "claude-fable-5-1" }, { source = "claude_oauth", model = "claude-sonnet-5-5" }]
+candidates = [{ source = "claude_oauth", model = "claude-sonnet-5-5" }, { source = "claude_oauth", model = "claude-opus-5-5" }, { source = "claude_oauth", model = "claude-fable-5-1" }]
+
+[route_defaults.claude_code.classes.coding]
+candidates = [{ source = "claude_oauth", model = "claude-opus-5-5" }]
 
 [route_defaults.codex]
 candidates = [{ source = "codex_oauth", model = "gpt-6.1-sol" }, { source = "codex_oauth", model = "gpt-6-astra" }, { source = "codex_oauth", model = "gpt-6-luna" }]

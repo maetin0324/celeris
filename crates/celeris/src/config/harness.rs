@@ -246,6 +246,9 @@ impl Config {
             .retain(|r| r.harness != SMOKE_ID && r.source != SMOKE_ID);
         for defaults in self.route_defaults.values_mut() {
             defaults.candidates.retain(|c| c.source != SMOKE_ID);
+            for class in defaults.classes.values_mut() {
+                class.candidates.retain(|c| c.source != SMOKE_ID);
+            }
         }
         self.cos.route_candidates.retain(|c| c.source != SMOKE_ID);
         self.route_defaults.insert(
@@ -255,6 +258,7 @@ impl Config {
                     source: SMOKE_ID.to_string(),
                     model: fake,
                 }],
+                classes: Default::default(),
             },
         );
         self.harness_selection = HarnessSelection {

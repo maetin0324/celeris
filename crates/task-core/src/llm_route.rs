@@ -109,6 +109,10 @@ pub struct Registry {
     pub harnesses: BTreeMap<HarnessId, HarnessSpec>,
     pub llm_routes: Vec<LlmRoute>,
     pub route_defaults: BTreeMap<HarnessId, Vec<CandidateKey>>,
+    /// Per-harness, per-execution-class candidate lists. A class list replaces the harness
+    /// default for that class; it never falls back to `route_defaults`.
+    #[serde(default)]
+    pub route_class_defaults: BTreeMap<HarnessId, BTreeMap<ExecutionClass, Vec<CandidateKey>>>,
     pub cos_route_candidates: Vec<CandidateKey>,
     pub harness_selection: HarnessSelection,
 }
@@ -452,20 +456,31 @@ pub fn default_route_policy(
         .find_map(|key| eligible.iter().find(|c| c.key() == *key).cloned())
         .ok_or(NoEligibleCandidate)
 }
+/// Candidate priority for one harness. CoS always uses `cos_route_candidates`. Otherwise a
+/// declared `route_class_defaults` list for the execution class replaces `route_defaults`
+/// entirely; an absent class list falls back to the harness default.
 pub fn route_priority<'a>(
     registry: &'a Registry,
     harness: &HarnessId,
     cos: bool,
+    execution_class: Option<&ExecutionClass>,
 ) -> &'a [CandidateKey] {
     if cos {
-        &registry.cos_route_candidates
-    } else {
-        registry
-            .route_defaults
-            .get(harness)
-            .map(Vec::as_slice)
-            .unwrap_or(&[])
+        return &registry.cos_route_candidates;
     }
+    if let Some(class) = execution_class
+        && let Some(list) = registry
+            .route_class_defaults
+            .get(harness)
+            .and_then(|classes| classes.get(class))
+    {
+        return list.as_slice();
+    }
+    registry
+        .route_defaults
+        .get(harness)
+        .map(Vec::as_slice)
+        .unwrap_or(&[])
 }
 
 /// What the dispatcher persists on the run row once a route is admitted.
@@ -522,6 +537,67 @@ mod tests {
             wire_model_id(&registry, &harness, &key).as_ref(),
             "qwen/vendor/model"
         );
+    }
+    #[test]
+    fn route_priority_prefers_the_execution_class_list() {
+        let mut r = Registry::default();
+        let harness: HarnessId = "claude_code".into();
+        let sonnet = key("claude_oauth", "claude-sonnet-5-5");
+        let opus = key("claude_oauth", "claude-opus-5-5");
+        r.route_defaults
+            .insert(harness.clone(), vec![sonnet.clone()]);
+        let coding: ExecutionClass = "coding".into();
+        r.route_class_defaults
+            .entry(harness.clone())
+            .or_default()
+            .insert(coding.clone(), vec![opus.clone()]);
+        assert_eq!(
+            route_priority(&r, &harness, false, Some(&coding)),
+            std::slice::from_ref(&opus)
+        );
+        assert_eq!(
+            route_priority(&r, &harness, false, Some(&"planner".into())),
+            std::slice::from_ref(&sonnet)
+        );
+        assert_eq!(
+            route_priority(&r, &harness, false, None),
+            std::slice::from_ref(&sonnet)
+        );
+    }
+
+    #[test]
+    fn route_priority_ignores_the_class_for_cos() {
+        let mut r = Registry::default();
+        let harness: HarnessId = "claude_code".into();
+        let cos = key("claude_oauth", "claude-opus-5-5");
+        r.cos_route_candidates = vec![cos.clone()];
+        r.route_defaults.insert(
+            harness.clone(),
+            vec![key("claude_oauth", "claude-sonnet-5-5")],
+        );
+        r.route_class_defaults
+            .entry(harness.clone())
+            .or_default()
+            .insert(
+                "coding".into(),
+                vec![key("claude_oauth", "claude-haiku-5-5")],
+            );
+        let coding: ExecutionClass = "coding".into();
+        assert_eq!(
+            route_priority(&r, &harness, true, Some(&coding)),
+            std::slice::from_ref(&cos)
+        );
+        assert_eq!(
+            route_priority(&r, &harness, true, None),
+            std::slice::from_ref(&cos)
+        );
+    }
+
+    fn key(source: &str, model: &str) -> CandidateKey {
+        CandidateKey {
+            source: source.into(),
+            model: model.into(),
+        }
     }
     fn harness(id: &str) -> HarnessId {
         id.into()

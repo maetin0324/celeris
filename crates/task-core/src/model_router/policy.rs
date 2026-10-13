@@ -1,8 +1,9 @@
 use crate::Tier;
-use schemars::JsonSchema;
+use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RoutingMode {
     #[default]
@@ -11,8 +12,19 @@ pub enum RoutingMode {
     /// Read-only compatibility for durable traces written before legacy routing was removed.
     /// This mode must never be emitted by current configuration or dispatch code.
     #[serde(skip_serializing)]
-    #[schemars(skip)]
     Legacy,
+}
+
+/// API schema には書き込み可能な shadow・enforce だけを出す。Legacy は読むだけの variant なので載せない
+/// （derive で出すと schemars が oneOf に変え、legacy も API に現れる）。
+impl JsonSchema for RoutingMode {
+    fn schema_name() -> Cow<'static, str> {
+        Cow::Borrowed("RoutingMode")
+    }
+
+    fn json_schema(_: &mut SchemaGenerator) -> Schema {
+        schemars::json_schema!({ "type": "string", "enum": ["shadow", "enforce"] })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

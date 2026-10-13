@@ -6902,15 +6902,11 @@
       "type": "object"
     },
     "RoutingMode": {
-      "oneOf": [
-        {
-          "enum": [
-            "shadow",
-            "enforce"
-          ],
-          "type": "string"
-        }
-      ]
+      "enum": [
+        "shadow",
+        "enforce"
+      ],
+      "type": "string"
     },
     "RoutingRecord": {
       "description": "ADR-0069 D5: `Event::RoutingDecided` の中身。",

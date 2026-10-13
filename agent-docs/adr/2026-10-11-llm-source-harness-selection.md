@@ -444,3 +444,19 @@ LDR は proxy 経由のまま維持する。Claude/Codex source へ fallback し
 ### 残る別工程
 
 `claude_code` / `codex` harness 自体を llm-proxy 経由にする機能は今回の決定に含めない。Claude Code の endpoint/auth 注入と daemon 起動経路への適用、proxy bearer secret の引き渡しが揃うまで、該当 fallback は設定しない。必要になった場合は別の設計・実装 task とする。
+
+### 2026-10-13 付記（CoS の Codex fallback 撤去 — 決定 cos-codex）
+
+人の決定 `cos-codex`（2026-10-13）: **(a) CoS は Claude のみ**。CoS の候補に Codex OAuth（`codex_oauth` / `gpt-6-astra`）を fallback として置かない。CoS の候補は `claude_oauth / claude-opus-5-5` の 1 件とする。
+
+1. **置き換え**: 次の記述は本付記で置き換える。既存の文は書き換えず、この付記を優先する。
+   - 「## CoS の経路」の例（`[cos].route_candidates` に `codex_oauth` / `gpt-6-astra` を 2 件目として置く例）。
+   - 2026-10-12 付記（planner・reviewer の選択）と「実装突き合わせ付記（2026-10-12、本番移行 runbook）」が指す本番移行 runbook（`docs/ops/provider-llm-source-migration.md` の CoS 行の `codex_oauth / gpt-6-astra`、`[cos]` の `route_candidates`、および `[[llm_routes]]` の `harness = "claude_code"` / `source = "codex_oauth"` 宣言）。
+   - 「選択結果」の表の CoS 行と、確認手順の「次に `codex_oauth` / `gpt-6-astra`」。
+   - 2026-10-13 付記 §3「本番への移行」の「CoS は Claude source のみとする」は本決定と同じ内容で、そのまま有効。
+
+2. **揃える対象**: runbook、進捗 TOML（`agent-docs/progress/2026-10-11-provider-layer-redesign.md` の `[cos]` 区間）、試験 `celeris::config::tests::migration_runbook_toml_loads` の CoS 候補数 assert を Claude のみに揃える。試験は候補数 1 件と、その source / model を `assert` する。
+
+3. **戻す条件**: Codex OAuth を CoS の fallback に戻すには、`claude_code` harness を llm-proxy 経由にする接続が要る（Claude Code の endpoint・auth の注入、daemon 起動経路への適用、proxy bearer secret の引き渡し）。これは別 task の設計・実装とし、本付記の範囲外とする。それまで `claude_code` は proxy endpoint を宣言できないため、Codex の CoS 候補は宣言しない（宣言すると実行時に失敗する候補になる）。
+
+4. **変えないこと**: planner・reviewer・coding の Codex 候補、PaperQA・LDR の Codex 候補は本決定の対象外で、そのまま残る。コードの挙動は変えない（runbook・進捗 TOML・試験の宣言の一致のみ）。

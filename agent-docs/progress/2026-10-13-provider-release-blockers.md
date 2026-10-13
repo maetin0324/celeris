@@ -2,7 +2,7 @@
 title: provider 廃止リリースを本番に入れられる形にする — 不具合 5 件の修正と closeout
 tasks: [01M4T94XWN31GW9SENK41GAP8F]
 status: done
-completed: 2026-10-13（受け入れ条件 0・1 を満たす。未達は無し。未解決は下の事項 2（i）・3〜8）
+completed: 2026-10-13（closeout5 で USERNS 無し全体検査・clippy・文書検査 3 本を再確認。USERNS=1 の証拠は `/local/prb/tp-usns-fix5.log`。未解決は下の事項 2（i）・3〜8）
 updated: 2026-10-13
 ---
 
@@ -65,6 +65,14 @@ pi-process（Pi の宣言が process まで届く試験、2026-10-13。`TMPDIR=/
 - `TMPDIR=/local/prb/pp bash scripts/dev/test-parallel.sh`（USERNS 無し） — exit 0。nextest `Summary [108.172s] 5037 tests run: 5037 passed, 13 skipped`。`CELERIS_TEST_SUMMARY` は `passed: 5040`、`failed: 0`、`userns: null`（`passed` 欄の差は事項 8 の集計の不具合）。
 - `cargo clippy --workspace -- -D warnings` — exit 0（`Finished dev profile`、警告なし）。
 - 文書検査: `check-doc-layout.sh` ok、`check-doc-links.sh` ok、`check-adr-numbers.sh` ok (198 files)、`progress-index.sh --check` ok（すべて exit 0）。
+
+closeout5（2026-10-13、USERNS 無しの全体検査と clippy。コードは変えていない。TMPDIR は `/local/prb/t.*` の mktemp）:
+
+- `d=$(mktemp -d /local/prb/t.XXXX) && TMPDIR=$d bash scripts/dev/test-parallel.sh > /local/prb/tp-nouserns-fix5.log 2>&1` — exit 0。log は `/local/prb/tp-nouserns-fix5.log`。nextest 結果は `5040` passed（`CELERIS_TEST_SUMMARY` の `passed: 5040`）、`failed: 0`、`ignored: 14`、`nextest_exit: 0`、`doctest_exit: 0`、`userns: null`（USERNS 無しの実行なので想定どおり）。doc-test は全て ok。
+- 注記: 要約行の `tmp_leftovers: 6` は TMPDIR に残った 6 件の警告（`test-parallel: warning`）で、スクリプトが終了時に消した。exit code には影響しない。
+- `cargo clippy --workspace -- -D warnings` — exit 0（`Finished dev profile`、警告なし）。log は `/local/prb/clippy-closeout5.log`。
+- 文書検査: `sh scripts/dev/check-doc-links.sh`・`sh scripts/dev/check-adr-numbers.sh`・`sh scripts/dev/progress-index.sh --check` — 全て exit 0。
+- USERNS=1 の結果は上の「USERNS=1 全体検査の証拠」節（`/local/prb/tp-usns-fix5.log`、exit 0、`"userns": true`）のとおり。この節は書き換えていない。
 
 前段（fix2 の前、closeout の再実行）の結果は、旧 event 試験が無い・`browser_h3_injection` が 503 で落ちた状態。この WU の最終検査はそれを上書きする。
 

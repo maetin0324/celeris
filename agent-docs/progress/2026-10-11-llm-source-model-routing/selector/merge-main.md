@@ -15,6 +15,9 @@ tasks: [01M4Q53EHAF7BS9V3QMM1WY352]
 
 ## 検査
 
-- `git merge-base --is-ancestor main HEAD`: 実行予定（merge commit 作成後に記録）
-- `git diff --check`: merge 後に実行予定
-- workspace build: 実行予定
+- `git merge-base --is-ancestor main HEAD`: exit 0
+- `rg -n '^(<<<<<<<|=======|>>>>>>>)' --glob '!target/**' crates agent-docs docs web`: 衝突 marker なし
+- `git diff --check HEAD`: exit 0
+- `sh "$CELERIS_WU_SCOPE_PATHS"`: exit 0
+- `cargo check --workspace --all-targets`: exit 0（当初は main の routing_replay module file が merge tree に無く、restore 後に RoutingRecord.features の fixture 2 箇所を補って再実行）
+- 残課題: なし

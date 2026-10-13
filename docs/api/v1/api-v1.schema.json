@@ -1704,6 +1704,57 @@
             "at"
           ],
           "type": "object"
+        },
+        {
+          "description": "Completed task changes not yet reachable from the repository default branch.",
+          "properties": {
+            "at": {
+              "type": "string"
+            },
+            "branch": {
+              "type": "string"
+            },
+            "head_sha": {
+              "type": "string"
+            },
+            "operation_path": {
+              "type": "string"
+            },
+            "reason": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "repo": {
+              "type": "string"
+            },
+            "repo_id": {
+              "$ref": "#/$defs/RepoId"
+            },
+            "state": {
+              "$ref": "#/$defs/TaskRepoIntegrationStatus"
+            },
+            "task": {
+              "$ref": "#/$defs/TaskRef"
+            },
+            "type": {
+              "const": "unintegrated",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "task",
+            "repo_id",
+            "repo",
+            "state",
+            "operation_path",
+            "branch",
+            "head_sha",
+            "at"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -1757,44 +1808,13 @@
       ],
       "type": "object"
     },
-    "AwaitedChildView": {
-      "description": "ADR-0079 D5（Phase R1b）: 親が待っている子 task 1 件（`ExecutionPhase::AwaitingChildren` の理由）。",
-      "properties": {
-        "status": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Status"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "子の状態（作られていなければ `None`）。"
-        },
-        "task_id": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/TaskId"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "子 task（まだ作られていない unit〈`max_parallel_child_tasks` の空き待ち〉は `None`）。"
-        },
-        "title": {
-          "type": "string"
-        },
-        "unit_key": {
-          "description": "親の計画の unit の key。",
-          "type": "string"
-        }
-      },
-      "required": [
-        "unit_key",
-        "title"
+    "BackoffCause": {
+      "description": "バックオフの原因（M5）。",
+      "enum": [
+        "retry",
+        "infra"
       ],
-      "type": "object"
+      "type": "string"
     },
     "BehindTarget": {
       "description": "Task value: the repo with the largest behind commits (ADR-0130 D4), plus all repos.",
@@ -2807,6 +2827,31 @@
         "excluded_reasons"
       ],
       "type": "object"
+    },
+    "CapacityScope": {
+      "description": "枠が満杯の範囲（M1/M9）。",
+      "oneOf": [
+        {
+          "const": "global",
+          "description": "全体の `max_concurrency`（窓・容量で今 tick 照合されなかった M9 を含む）。",
+          "type": "string"
+        },
+        {
+          "const": "cos",
+          "description": "CoS の対話の枠（`max_cos_runs`）。",
+          "type": "string"
+        },
+        {
+          "const": "account",
+          "description": "account の上限（またはクラスタの並列度）。",
+          "type": "string"
+        },
+        {
+          "const": "source",
+          "description": "暗黙アカウント（LLM source）の上限・選べる source が全部満杯。",
+          "type": "string"
+        }
+      ]
     },
     "CatalogCapabilitiesView": {
       "description": "Capability support is nullable because legacy configuration may not specify it.",
@@ -6877,7 +6922,7 @@
       "type": "object"
     },
     "CriterionSpec": {
-      "description": "受け入れ条件 1 件の指定。現在の `celerisctl add` の `--accept`/`--check-cmd`/\n`--check-artifact`/`--check-reviewer` に対応する。API の `POST /tasks` の `acceptance[]` でもある（`docs/api/v1/gui-api.md` §3.4）。",
+      "description": "受け入れ条件 1 件の指定。現在の `celerisctl add` の `--accept`/`--check-cmd`/\n`--check-artifact`/`--check-reviewer` に対応する。API の `POST /tasks` の `acceptance[]` でもある（`docs/api/v1/api.md` §3.4）。",
       "oneOf": [
         {
           "additionalProperties": false,
@@ -7504,14 +7549,6 @@
           "minimum": 0,
           "type": "integer"
         },
-        "awaiting_children": {
-          "default": [],
-          "description": "ADR-0023 D3: 委譲した子が終わるのを待っている親（`reviewing` のまま。id 昇順）。\n「自分の判定待ち」と区別するための観測値。古いスナップショットには無いので既定は空。",
-          "items": {
-            "$ref": "#/$defs/TaskId"
-          },
-          "type": "array"
-        },
         "clusters": {
           "default": [],
           "description": "ADR-0018: `[[clusters]]` の稼働状況（`id` 昇順）。第 2 段階で追加したので、古いスナップショットには無い。",
@@ -7609,6 +7646,14 @@
         "started_at": {
           "type": "string"
         },
+        "task_waits": {
+          "default": [],
+          "description": "ADR 2026-10-11-task-wait-reasons D4: この tick に dispatcher のメモリだけで決まった見送りの理由（M1〜M9。\n枠満杯・経路なし・クラスタ・write-set・バックオフ・disk critical・委譲した子待ち・人の承認待ち）。task_id 順、\n1 task に 1 件。DB で決まる理由（`task_core::db_waits` / `plan_waits`）は入れない。",
+          "items": {
+            "$ref": "#/$defs/SnapshotTaskWait"
+          },
+          "type": "array"
+        },
         "tick_ms": {
           "format": "uint64",
           "minimum": 0,
@@ -7618,14 +7663,6 @@
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
-        },
-        "task_waits": {
-          "default": [],
-          "description": "ADR 2026-10-11-task-wait-reasons D4: dispatcher が見送った task と、その理由（メモリの理由）。",
-          "items": {
-            "$ref": "#/$defs/SnapshotTaskWait"
-          },
-          "type": "array"
         }
       },
       "required": [
@@ -7679,7 +7716,7 @@
           ]
         },
         "filesystem": {
-          "description": "ADR-0064 D1: `/proc/self/mountinfo` から引けたファイルシステム種別（`\"ext4\"` 等）。\n`GET /health` は無認証（`docs/api/v1/gui-api.md` §1.1 / auth_and_guards.rs のテスト）なので、DB の\n**絶対パス自体はここに出さない**（それは認証済みの `GET /api/v1/config` の `config.db` が\n既に返している）。判定できなければ `null`。",
+          "description": "ADR-0064 D1: `/proc/self/mountinfo` から引けたファイルシステム種別（`\"ext4\"` 等）。\n`GET /health` は無認証（`docs/api/v1/api.md` §1.1 / auth_and_guards.rs のテスト）なので、DB の\n**絶対パス自体はここに出さない**（それは認証済みの `GET /api/v1/config` の `config.db` が\n既に返している）。判定できなければ `null`。",
           "type": [
             "string",
             "null"
@@ -8611,20 +8648,33 @@
     },
     "DeliverySkipReason": {
       "description": "ADR-0121 D2: 対象案件の root で delivery を作れなかった理由（`Event::DeliverySkipped.reason`）。\n並びは判定の順（同時に複数あれば先のものを記録する）。",
-      "enum": [
-        "multiple_repos",
-        "no_marker",
-        "marker_repo_mismatch",
-        "repo_row_missing",
-        "repo_not_local",
-        "repo_path_mismatch",
-        "not_git",
-        "no_branch",
-        "branch_name_mismatch",
-        "refs_unresolvable",
-        "department_unresolved"
-      ],
-      "type": "string"
+      "oneOf": [
+        {
+          "enum": [
+            "no_project",
+            "project_not_enabled",
+            "support_task",
+            "tree_child",
+            "multiple_repos",
+            "no_marker",
+            "marker_repo_mismatch",
+            "repo_row_missing",
+            "repo_not_local",
+            "repo_path_mismatch",
+            "not_git",
+            "no_branch",
+            "branch_name_mismatch",
+            "refs_unresolvable",
+            "department_unresolved"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "no_commits",
+          "description": "作業ブランチの head が既定ブランチの祖先（同一を含む）で、取り込む commit が無い。正常な no-op で\n受信箱には出さない（2026-10-11 付記）。",
+          "type": "string"
+        }
+      ]
     },
     "DeliveryState": {
       "enum": [
@@ -9658,6 +9708,200 @@
     "Event": {
       "description": "DESIGN §4.3 の `Event`（追記専用）。ADR-0002 D2: `Transitioned` は遷移の\n*結果* を記録するものであり、`transition()` の入力（`Trigger`）とは別物。\n`JsonSchema` は ADR-0013 D8: `docs/api/v1/event.schema.json`（`EventRow` 経由）の契約に使う。",
       "oneOf": [
+        {
+          "description": "ADR 2026-10-11 stranded branches: durable integration state changed.",
+          "properties": {
+            "actor": {
+              "type": "string"
+            },
+            "branch": {
+              "type": "string"
+            },
+            "head_sha": {
+              "type": "string"
+            },
+            "reason": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "repo_id": {
+              "$ref": "#/$defs/RepoId"
+            },
+            "type": {
+              "const": "integration_detected",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "repo_id",
+            "branch",
+            "head_sha",
+            "actor"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "actor": {
+              "type": "string"
+            },
+            "branch": {
+              "type": "string"
+            },
+            "head_sha": {
+              "type": "string"
+            },
+            "repo_id": {
+              "$ref": "#/$defs/RepoId"
+            },
+            "type": {
+              "const": "integration_merged",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "repo_id",
+            "branch",
+            "head_sha",
+            "actor"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "actor": {
+              "type": "string"
+            },
+            "branch": {
+              "type": "string"
+            },
+            "head_sha": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "repo_id": {
+              "$ref": "#/$defs/RepoId"
+            },
+            "type": {
+              "const": "integration_discarded",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "repo_id",
+            "branch",
+            "head_sha",
+            "reason",
+            "actor"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "actor": {
+              "type": "string"
+            },
+            "branch": {
+              "type": "string"
+            },
+            "head_sha": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "repo_id": {
+              "$ref": "#/$defs/RepoId"
+            },
+            "type": {
+              "const": "integration_held",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "repo_id",
+            "branch",
+            "head_sha",
+            "reason",
+            "actor"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "actor": {
+              "type": "string"
+            },
+            "branch": {
+              "type": "string"
+            },
+            "head_sha": {
+              "type": "string"
+            },
+            "reason": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "repo_id": {
+              "$ref": "#/$defs/RepoId"
+            },
+            "type": {
+              "const": "integration_reopened",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "repo_id",
+            "branch",
+            "head_sha",
+            "actor"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "ADR 2026-10-11 stranded-done-branches F2: 遠隔 repo など sweep の対象外になった（`not_applicable`）。",
+          "properties": {
+            "actor": {
+              "type": "string"
+            },
+            "branch": {
+              "type": "string"
+            },
+            "head_sha": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "repo_id": {
+              "$ref": "#/$defs/RepoId"
+            },
+            "type": {
+              "const": "integration_not_applicable",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "repo_id",
+            "branch",
+            "head_sha",
+            "reason",
+            "actor"
+          ],
+          "type": "object"
+        },
         {
           "properties": {
             "harness_id": {
@@ -13594,11 +13838,6 @@
           "type": "string"
         },
         {
-          "const": "awaiting_children",
-          "description": "ADR-0079 D5（Phase R1b）: `ready` のまま、走れる自分の leaf が無く子 task（計画の kind task の\nunit）だけを待っている（dispatch されず lease も持たない。待っている子は\n`ExecutionView.awaiting_children`）。",
-          "type": "string"
-        },
-        {
           "const": "awaiting_plan_approval",
           "description": "ADR-0079 D8（Phase R3b）: root の計画が人の承認を待っている（`blocked` で、直前の遷移の reason が\n`awaiting_plan_approval`）。理由は `ExecutionView.plan_approval`。",
           "type": "string"
@@ -13906,13 +14145,6 @@
     "ExecutionView": {
       "description": "D19/D20: タスク詳細の Execution 節そのもの。",
       "properties": {
-        "awaiting_children": {
-          "description": "ADR-0079 D5（Phase R1b）: `awaiting_children` のときだけ。待っている子（unit の `seq` 順）。",
-          "items": {
-            "$ref": "#/$defs/AwaitedChildView"
-          },
-          "type": "array"
-        },
         "gate": {
           "anyOf": [
             {
@@ -14448,6 +14680,15 @@
       ],
       "type": "object"
     },
+    "HaltState": {
+      "description": "案件・途中目標が dispatch を止めている状態。",
+      "enum": [
+        "paused",
+        "cancelled",
+        "archived"
+      ],
+      "type": "string"
+    },
     "HarnessCandidateView": {
       "properties": {
         "model_id": {
@@ -14660,6 +14901,15 @@
         "signature"
       ],
       "type": "object"
+    },
+    "HumanGateKind": {
+      "description": "人の gate の種類（D12）。",
+      "enum": [
+        "plan_approval",
+        "stage_review",
+        "phase_checkpoint"
+      ],
+      "type": "string"
     },
     "HumanInboxCounts": {
       "description": "D5 `GET /inbox/items` の `counts`。",
@@ -15115,7 +15365,8 @@
         "cluster_login",
         "disk_full",
         "delivery_skipped",
-        "integration_request"
+        "integration_request",
+        "unintegrated"
       ],
       "type": "string"
     },
@@ -15268,6 +15519,28 @@
       ],
       "type": "object"
     },
+    "IntegrationActionResult": {
+      "properties": {
+        "integrated": {
+          "description": "`true` means the task head is an ancestor of the configured default branch.",
+          "type": "boolean"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "$ref": "#/$defs/TaskRepoIntegrationState"
+        }
+      },
+      "required": [
+        "state",
+        "integrated"
+      ],
+      "type": "object"
+    },
     "IntegrationCheckDone": {
       "description": "済んだ統合の検査 1 件。",
       "properties": {
@@ -15366,6 +15639,20 @@
     "IntegrationId": {
       "description": "取り込みの記録の一意識別子（ULID）。",
       "type": "string"
+    },
+    "IntegrationList": {
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/TaskRepoIntegrationState"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "type": "object"
     },
     "IntegrationMethod": {
       "description": "取り込みの方法（ADR-0043 D5）。",
@@ -15609,6 +15896,47 @@
           "type": "string"
         }
       ]
+    },
+    "IntegrationView": {
+      "properties": {
+        "actor": {
+          "type": "string"
+        },
+        "branch": {
+          "type": "string"
+        },
+        "checked_at": {
+          "type": "string"
+        },
+        "head": {
+          "type": "string"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "repo": {
+          "type": "string"
+        },
+        "repo_id": {
+          "$ref": "#/$defs/RepoId"
+        },
+        "state": {
+          "$ref": "#/$defs/TaskRepoIntegrationStatus"
+        }
+      },
+      "required": [
+        "repo_id",
+        "repo",
+        "state",
+        "actor",
+        "branch",
+        "head",
+        "checked_at"
+      ],
+      "type": "object"
     },
     "KnowledgeAcceptBody": {
       "additionalProperties": false,
@@ -17999,7 +18327,7 @@
     },
     "NewPlanSpec": {
       "additionalProperties": false,
-      "description": "`celerisctl plan` から組み立てる新規 Plan タスクの指定。API の `POST /plans` の本文でもある（`docs/api/v1/gui-api.md` §3.14）。",
+      "description": "`celerisctl plan` から組み立てる新規 Plan タスクの指定。API の `POST /plans` の本文でもある（`docs/api/v1/api.md` §3.14）。",
       "properties": {
         "goal": {
           "description": "大目標。1行目の先頭80文字が `title` になる。",
@@ -18773,13 +19101,6 @@
             "null"
           ]
         },
-        "gui_base_url": {
-          "description": "`[notify] gui_base_url`（文面のリンクの根）。",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
         "inbox_batch_secs": {
           "description": "`[notify]` outbound route configuration (ADR-0133 D6).",
           "format": "uint64",
@@ -18808,6 +19129,13 @@
         "secret_id": {
           "description": "`[notify] discord_webhook_secret`（GUI は「この id で API キー画面に登録して」と案内する）。",
           "type": "string"
+        },
+        "web_base_url": {
+          "description": "`[notify] web_base_url`（文面のリンクの根）。",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
@@ -21065,6 +21393,33 @@
       ],
       "type": "object"
     },
+    "PromotionStatus": {
+      "description": "Deployment status is independent of whether a task branch has reached the repository's main.",
+      "enum": [
+        "not_applicable",
+        "promotion_pending",
+        "promoted"
+      ],
+      "type": "string"
+    },
+    "PromotionView": {
+      "description": "Read-only promotion view for a task branch.",
+      "properties": {
+        "release_sha": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "$ref": "#/$defs/PromotionStatus"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "type": "object"
+    },
     "ProposedMilestone": {
       "description": "`Event::ProjectPlanProposed.milestones[]`（ADR-0074 D3.3）。",
       "properties": {
@@ -21537,6 +21892,18 @@
           ]
         }
       },
+      "type": "object"
+    },
+    "ReasonBody": {
+      "additionalProperties": false,
+      "properties": {
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "reason"
+      ],
       "type": "object"
     },
     "ReleaseChanges": {
@@ -26367,6 +26734,22 @@
       ],
       "type": "object"
     },
+    "SnapshotTaskWait": {
+      "description": "ADR 2026-10-11-task-wait-reasons D4: dispatcher が見送った task と、その理由（メモリの理由）。",
+      "properties": {
+        "task_id": {
+          "$ref": "#/$defs/TaskId"
+        },
+        "wait": {
+          "$ref": "#/$defs/TaskWait"
+        }
+      },
+      "required": [
+        "task_id",
+        "wait"
+      ],
+      "type": "object"
+    },
     "StageHint": {
       "additionalProperties": false,
       "description": "ADR-0079 D12（Phase R2b）: 人が名指しした段階（`Task.routing.stages_hint`）。planner への入力で、\n構造の強制ではない（段階の数・名前は planner が決める）。CoS の `create_task` から写すのは R5a。",
@@ -26415,6 +26798,26 @@
         "title"
       ],
       "type": "object"
+    },
+    "StageState": {
+      "description": "段の今（D5）。",
+      "oneOf": [
+        {
+          "const": "done",
+          "description": "段の有効な行（統合 WU を含む）が全部 done。",
+          "type": "string"
+        },
+        {
+          "const": "current",
+          "description": "done でない最初の段。",
+          "type": "string"
+        },
+        {
+          "const": "pending",
+          "description": "その後の段。",
+          "type": "string"
+        }
+      ]
     },
     "StandingRule": {
       "description": "永続の認可 1 行（`standing_rules` テーブル。ADR-0033 D5）。",
@@ -27066,6 +27469,15 @@
           ],
           "description": "ADR-0120 D5: review 前同期の衝突解消（IntegrationRepair）の現在の状況。履歴が無い task では\n省略する。`failure`（実装失敗・レビュー不合格）とは別の欄: review を妨げず成果を保って衝突を\n解消する試みであり、`exhausted` でも task を直接 `failed` にはしない（従来経路へ落ちるだけ）。"
         },
+        "integrations": {
+          "items": {
+            "$ref": "#/$defs/IntegrationView"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "is_root_task": {
           "default": false,
           "description": "ADR-0079 D13（Phase R5a）: 案件の root task か（`task_core::is_root_task`）。",
@@ -27098,12 +27510,26 @@
           "description": "ADR-0044 D3（Phase 53）: `task.priority` を P0〜P3 に丸めたもの（GUI の編集フォーム用）。",
           "type": "string"
         },
+        "promotion": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PromotionView"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "role": {
           "description": "ADR-0016 D1: `Task.role`（GUI の表示用に最上位にも出す）。",
           "type": [
             "string",
             "null"
           ]
+        },
+        "runnable": {
+          "description": "D5: `status == ready && waits が空`。",
+          "type": "boolean"
         },
         "runs": {
           "items": {
@@ -27116,6 +27542,13 @@
         },
         "timers": {
           "$ref": "#/$defs/Timers"
+        },
+        "waits": {
+          "description": "ADR 2026-10-11-task-wait-reasons D5: `TaskSummary.waits` と同じ（子待ちの子は `Children` の `task_ids`）。",
+          "items": {
+            "$ref": "#/$defs/TaskWait"
+          },
+          "type": "array"
         },
         "worker_run_hint": {
           "type": [
@@ -27158,20 +27591,15 @@
         "dependencies",
         "dependents",
         "children",
-        "actions"
+        "actions",
+        "waits",
+        "runnable"
       ],
       "type": "object"
     },
     "TaskExecutionView": {
       "description": "`GET /tasks/{id}/execution`: 計画・WU 一覧・run 一覧（checkpoint 込み）・metrics・\nExecutionPhase を 1 つにまとめた、Execution 節の専用の深掘りビュー\n（`TaskDetail.execution` は要約、こちらは全文）。",
       "properties": {
-        "awaiting_children": {
-          "description": "ADR-0079 D5（Phase R1b）: `phase = awaiting_children` のときだけ。待っている子 task。",
-          "items": {
-            "$ref": "#/$defs/AwaitedChildView"
-          },
-          "type": "array"
-        },
         "gate": {
           "anyOf": [
             {
@@ -27244,6 +27672,14 @@
           "description": "checkpoint はそれぞれの `RunSummary` からは見えない（run 詳細ルートで見る。D20）。",
           "items": {
             "$ref": "#/$defs/RunSummary"
+          },
+          "type": "array"
+        },
+        "waits": {
+          "default": [],
+          "description": "ADR 2026-10-11-task-wait-reasons D5/D6: なぜ今走らないか（`TaskDetail.waits` と同じ。子待ちは `children`）。",
+          "items": {
+            "$ref": "#/$defs/TaskWait"
           },
           "type": "array"
         }
@@ -27829,6 +28265,62 @@
       ],
       "type": "object"
     },
+    "TaskRepoIntegrationState": {
+      "description": "Current per-task, per-repository disposition of a completed branch.",
+      "properties": {
+        "actor": {
+          "type": "string"
+        },
+        "branch": {
+          "type": "string"
+        },
+        "checked_at": {
+          "type": "string"
+        },
+        "head_sha": {
+          "type": "string"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "repo_id": {
+          "$ref": "#/$defs/RepoId"
+        },
+        "state": {
+          "$ref": "#/$defs/TaskRepoIntegrationStatus"
+        },
+        "task_id": {
+          "$ref": "#/$defs/TaskId"
+        },
+        "updated_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "repo_id",
+        "branch",
+        "head_sha",
+        "state",
+        "actor",
+        "checked_at",
+        "updated_at"
+      ],
+      "type": "object"
+    },
+    "TaskRepoIntegrationStatus": {
+      "enum": [
+        "unintegrated",
+        "integrated",
+        "discarded",
+        "held",
+        "not_applicable"
+      ],
+      "type": "string"
+    },
     "TaskRequirements": {
       "additionalProperties": false,
       "properties": {
@@ -28063,6 +28555,15 @@
         "id": {
           "$ref": "#/$defs/TaskId"
         },
+        "integrations": {
+          "items": {
+            "$ref": "#/$defs/IntegrationView"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "is_root_task": {
           "default": false,
           "description": "ADR-0079 D13（Phase R5a）: 案件の root task か（`task_core::is_root_task`）。",
@@ -28115,11 +28616,6 @@
           "description": "ADR-0079 D13（Phase R5a）: この task 自身が subtree の一時停止中か（`Task.paused_at` がある。祖先の\n一時停止で止まっているかは `TaskDetail.paused_by`）。",
           "type": "boolean"
         },
-        "pending_children": {
-          "format": "uint32",
-          "minimum": 0,
-          "type": "integer"
-        },
         "priority": {
           "format": "int32",
           "type": "integer"
@@ -28139,12 +28635,26 @@
           ],
           "description": "ADR-0033 D2 の `Task.project_id`（ボードは案件で絞るので一覧にも出す）。"
         },
+        "promotion": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PromotionView"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "role": {
           "description": "ADR-0016 D1 の `Task.role`（GUI-R2: 一覧の各行に役割のラベルを出すため。`TaskDetail.role` と同じ値）。",
           "type": [
             "string",
             "null"
           ]
+        },
+        "runnable": {
+          "description": "D5: `status == ready && waits が空`（サーバで決める。web は再計算しない）。",
+          "type": "boolean"
         },
         "status": {
           "$ref": "#/$defs/Status"
@@ -28164,6 +28674,13 @@
         },
         "updated_at": {
           "type": "string"
+        },
+        "waits": {
+          "description": "ADR 2026-10-11-task-wait-reasons D5: なぜ今走らないか（DB → 計画 → 人の gate → dispatcher のメモリの順）。",
+          "items": {
+            "$ref": "#/$defs/TaskWait"
+          },
+          "type": "array"
         }
       },
       "required": [
@@ -28179,7 +28696,8 @@
         "created_at",
         "updated_at",
         "children",
-        "pending_children",
+        "waits",
+        "runnable",
         "conversation",
         "actions",
         "labels",
@@ -28251,7 +28769,7 @@
               "type": "null"
             }
           ],
-          "description": "表示用の導出値（終端・計画も待ちも無い task は無し）。"
+          "description": "進み具合の表示用の導出値（終端・計画の無い task は無し）。"
         },
         "plan_version": {
           "description": "今の計画の版（計画の無い task は無し）。",
@@ -28261,6 +28779,14 @@
             "integer",
             "null"
           ]
+        },
+        "stages": {
+          "default": [],
+          "description": "D5: 計画の段（`phase_ranks` の順。直列に進む）。段の無い計画は空。",
+          "items": {
+            "$ref": "#/$defs/TreeStageView"
+          },
+          "type": "array"
         },
         "stall": {
           "anyOf": [
@@ -28287,6 +28813,14 @@
           "default": [],
           "items": {
             "$ref": "#/$defs/TreeUnitView"
+          },
+          "type": "array"
+        },
+        "waits": {
+          "default": [],
+          "description": "ADR 2026-10-11-task-wait-reasons D5: なぜ今走らないか（`TaskSummary.waits` と同じ）。",
+          "items": {
+            "$ref": "#/$defs/TaskWait"
           },
           "type": "array"
         }
@@ -28347,6 +28881,418 @@
         "totals"
       ],
       "type": "object"
+    },
+    "TaskWait": {
+      "description": "task の待ちの理由 1 件。並びは宣言順（DB の理由 → メモリの理由）。",
+      "oneOf": [
+        {
+          "description": "D1/D2。`by` が自分なら自分の一時停止。",
+          "properties": {
+            "by": {
+              "$ref": "#/$defs/TaskId"
+            },
+            "kind": {
+              "const": "paused",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "by"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "D2: 祖先が止まった案件に属す。",
+          "properties": {
+            "kind": {
+              "const": "ancestor_project_halted",
+              "type": "string"
+            },
+            "project_id": {
+              "$ref": "#/$defs/ProjectId"
+            },
+            "task_id": {
+              "$ref": "#/$defs/TaskId"
+            }
+          },
+          "required": [
+            "kind",
+            "task_id",
+            "project_id"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "D3。",
+          "properties": {
+            "kind": {
+              "const": "project_halted",
+              "type": "string"
+            },
+            "project_id": {
+              "$ref": "#/$defs/ProjectId"
+            },
+            "state": {
+              "$ref": "#/$defs/HaltState"
+            }
+          },
+          "required": [
+            "kind",
+            "project_id",
+            "state"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "D4。",
+          "properties": {
+            "kind": {
+              "const": "milestone_halted",
+              "type": "string"
+            },
+            "milestone_id": {
+              "$ref": "#/$defs/MilestoneId"
+            },
+            "state": {
+              "$ref": "#/$defs/HaltState"
+            }
+          },
+          "required": [
+            "kind",
+            "milestone_id",
+            "state"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "D5: 未完の先行 task（id 順）。",
+          "properties": {
+            "kind": {
+              "const": "depends_on",
+              "type": "string"
+            },
+            "task_ids": {
+              "items": {
+                "$ref": "#/$defs/TaskId"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "task_ids"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "D6: 親が未完の Approval。",
+          "properties": {
+            "kind": {
+              "const": "approval_parent",
+              "type": "string"
+            },
+            "task_id": {
+              "$ref": "#/$defs/TaskId"
+            }
+          },
+          "required": [
+            "kind",
+            "task_id"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "D7: 未完の子と、その代理 unit の key。",
+          "properties": {
+            "kind": {
+              "const": "children",
+              "type": "string"
+            },
+            "task_ids": {
+              "items": {
+                "$ref": "#/$defs/TaskId"
+              },
+              "type": "array"
+            },
+            "unit_keys": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "task_ids",
+            "unit_keys"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "D8/D9: runnable な unit が無く、待っている unit がある。",
+          "properties": {
+            "kind": {
+              "const": "work_units",
+              "type": "string"
+            },
+            "units": {
+              "items": {
+                "$ref": "#/$defs/UnitWait"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "units"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "D10: 段に failed / blocked がある。",
+          "properties": {
+            "kind": {
+              "const": "stage_halted",
+              "type": "string"
+            },
+            "stage": {
+              "type": "string"
+            },
+            "unit_keys": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "stage",
+            "unit_keys"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "D11。",
+          "properties": {
+            "decision_keys": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "kind": {
+              "const": "human_decision",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "decision_keys"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "D12。",
+          "properties": {
+            "gate": {
+              "$ref": "#/$defs/HumanGateKind"
+            },
+            "kind": {
+              "const": "human_gate",
+              "type": "string"
+            },
+            "stage": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "gate"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "D13（infra / cluster_jobs）。",
+          "properties": {
+            "kind": {
+              "const": "units_blocked",
+              "type": "string"
+            },
+            "reason": {
+              "$ref": "#/$defs/WorkUnitBlockedReason"
+            },
+            "unit_keys": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "reason",
+            "unit_keys"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "M1/M9。",
+          "properties": {
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "const": "capacity",
+              "type": "string"
+            },
+            "scope": {
+              "$ref": "#/$defs/CapacityScope"
+            }
+          },
+          "required": [
+            "kind",
+            "scope"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "M2。",
+          "properties": {
+            "detail": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "unroutable",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "detail"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "M3。",
+          "properties": {
+            "cluster_id": {
+              "type": "string"
+            },
+            "detail": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "cluster",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "cluster_id",
+            "detail"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "M4。",
+          "properties": {
+            "blocking_task_ids": {
+              "items": {
+                "$ref": "#/$defs/TaskId"
+              },
+              "type": "array"
+            },
+            "kind": {
+              "const": "write_set",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "blocking_task_ids"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "M5。`until` は RFC 3339。",
+          "properties": {
+            "cause": {
+              "$ref": "#/$defs/BackoffCause"
+            },
+            "kind": {
+              "const": "backoff",
+              "type": "string"
+            },
+            "until": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "until",
+            "cause"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "M6。",
+          "properties": {
+            "kind": {
+              "const": "disk_critical",
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "path"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "M7。",
+          "properties": {
+            "kind": {
+              "const": "delegated_children",
+              "type": "string"
+            },
+            "task_ids": {
+              "items": {
+                "$ref": "#/$defs/TaskId"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "task_ids"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "M8。",
+          "properties": {
+            "kind": {
+              "const": "review_awaiting_human",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "Tier": {
       "description": "DESIGN §5.4 の `WorkerHint`。",
@@ -28769,7 +29715,7 @@
       "properties": {
         "cascaded": {
           "default": [],
-          "description": "この遷移の伝播で `cancelled` になった、対象タスク以外のタスク（`docs/api/v1/gui-api.md` §5.7）。",
+          "description": "この遷移の伝播で `cancelled` になった、対象タスク以外のタスク（`docs/api/v1/api.md` §5.7）。",
           "items": {
             "$ref": "#/$defs/TaskRef"
           },
@@ -28976,7 +29922,7 @@
       "type": "object"
     },
     "TreeNodePhase": {
-      "description": "木の節点の「今どこか」（ADR-0079 D5 / D10 の名指しの待ちを含む表示用の導出値。状態機械には足さない）。",
+      "description": "木の節点の進み具合（表示用の導出値。状態機械には足さない）。待ちの理由は `TaskTreeNode.waits`\n（ADR 2026-10-11-task-wait-reasons D6: 子待ち・決定待ち・基盤の失敗はここから外した）。",
       "oneOf": [
         {
           "enum": [
@@ -28993,23 +29939,8 @@
           "type": "string"
         },
         {
-          "const": "awaiting_children",
-          "description": "子 task だけを待っている（D5）。",
-          "type": "string"
-        },
-        {
           "const": "awaiting_plan_approval",
           "description": "root の計画の承認待ち（D8）。",
-          "type": "string"
-        },
-        {
-          "const": "held_on_decision",
-          "description": "答えの無い決定で止まっている（節点の `self` の決定、または `blocked(decision)` の unit だけが残る）。",
-          "type": "string"
-        },
-        {
-          "const": "blocked_infra",
-          "description": "子の基盤の失敗で unit が `blocked(infra)`（D9。人の再試行を待つ）。",
           "type": "string"
         }
       ]
@@ -29072,6 +30003,34 @@
       ],
       "type": "object"
     },
+    "TreeStageView": {
+      "description": "節点の計画の段 1 つ（`phase_ranks` の順。段は直列に進む）。",
+      "properties": {
+        "integrate_key": {
+          "description": "段の統合 WU の key（`integrate-<stage>`）。",
+          "type": "string"
+        },
+        "key": {
+          "type": "string"
+        },
+        "order": {
+          "description": "段の位置（0 から。`phase_ranks` の順）。",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "state": {
+          "$ref": "#/$defs/StageState"
+        }
+      },
+      "required": [
+        "key",
+        "order",
+        "state",
+        "integrate_key"
+      ],
+      "type": "object"
+    },
     "TreeUnitView": {
       "description": "節点の計画の unit 1 件（統合 WU を含む。superseded / cancelled も履歴として出す）。",
       "properties": {
@@ -29096,11 +30055,25 @@
           ],
           "description": "kind task の unit の子 task。"
         },
+        "depends_on": {
+          "default": [],
+          "description": "ADR 2026-10-11-task-wait-reasons D5: 宣言どおりの依存（`child:<key>` を含む）。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "key": {
           "type": "string"
         },
         "kind": {
           "$ref": "#/$defs/WorkUnitKind"
+        },
+        "seq": {
+          "description": "計画の中の順（`work_units.seq`）。",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
         },
         "stage": {
           "description": "段階（`work_units.phase`）。/1 の計画は無し。",
@@ -29114,13 +30087,29 @@
         },
         "title": {
           "type": "string"
+        },
+        "waiting_on": {
+          "default": [],
+          "description": "pending の unit の依存のうち done でない key（`task_core::unit_waits` の値。他の状態では空）。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "waiting_stage": {
+          "description": "pending の unit が前の段の終わりを待っているなら、その段。",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
         "key",
         "kind",
         "title",
-        "status"
+        "status",
+        "seq"
       ],
       "type": "object"
     },
@@ -29566,6 +30555,39 @@
           "type": "string"
         }
       ]
+    },
+    "UnitWait": {
+      "description": "待っている WorkUnit 1 件（D8/D9）。",
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "stage": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "waiting_on": {
+          "description": "depends_on のうち done でない key（宣言順）。`child:<key>` 依存もそのまま出す。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "waiting_stage": {
+          "description": "前の段が終わっていないなら、その段の key（D9）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "key",
+        "waiting_on"
+      ],
+      "type": "object"
     },
     "UnreadCountView": {
       "properties": {
@@ -30296,441 +31318,6 @@
         "branch"
       ],
       "type": "object"
-    },
-    "SlotOrigin": {
-      "enum": [
-        "assignment",
-        "config"
-      ],
-      "type": "string"
-    },
-    "SnapshotTaskWait": {
-      "description": "ADR 2026-10-11-task-wait-reasons D4: dispatcher が見送った task と、その理由（メモリの理由）。",
-      "properties": {
-        "task_id": {
-          "$ref": "#/$defs/TaskId"
-        },
-        "wait": {
-          "$ref": "#/$defs/TaskWait"
-        }
-      },
-      "required": [
-        "task_id",
-        "wait"
-      ],
-      "type": "object"
-    },
-    "TaskWait": {
-      "description": "task の待ちの理由 1 件。並びは宣言順（DB の理由 → メモリの理由）。",
-      "oneOf": [
-        {
-          "description": "D1/D2。`by` が自分なら自分の一時停止。",
-          "properties": {
-            "by": {
-              "$ref": "#/$defs/TaskId"
-            },
-            "kind": {
-              "const": "paused",
-              "type": "string"
-            }
-          },
-          "required": [
-            "kind",
-            "by"
-          ],
-          "type": "object"
-        },
-        {
-          "description": "D2: 祖先が止まった案件に属す。",
-          "properties": {
-            "kind": {
-              "const": "ancestor_project_halted",
-              "type": "string"
-            },
-            "project_id": {
-              "$ref": "#/$defs/ProjectId"
-            },
-            "task_id": {
-              "$ref": "#/$defs/TaskId"
-            }
-          },
-          "required": [
-            "kind",
-            "task_id",
-            "project_id"
-          ],
-          "type": "object"
-        },
-        {
-          "description": "D3。",
-          "properties": {
-            "kind": {
-              "const": "project_halted",
-              "type": "string"
-            },
-            "project_id": {
-              "$ref": "#/$defs/ProjectId"
-            },
-            "state": {
-              "$ref": "#/$defs/HaltState"
-            }
-          },
-          "required": [
-            "kind",
-            "project_id",
-            "state"
-          ],
-          "type": "object"
-        },
-        {
-          "description": "D4。",
-          "properties": {
-            "kind": {
-              "const": "milestone_halted",
-              "type": "string"
-            },
-            "milestone_id": {
-              "$ref": "#/$defs/MilestoneId"
-            },
-            "state": {
-              "$ref": "#/$defs/HaltState"
-            }
-          },
-          "required": [
-            "kind",
-            "milestone_id",
-            "state"
-          ],
-          "type": "object"
-        },
-        {
-          "description": "D5: 未完の先行 task（id 順）。",
-          "properties": {
-            "kind": {
-              "const": "depends_on",
-              "type": "string"
-            },
-            "task_ids": {
-              "items": {
-                "$ref": "#/$defs/TaskId"
-              },
-              "type": "array"
-            }
-          },
-          "required": [
-            "kind",
-            "task_ids"
-          ],
-          "type": "object"
-        },
-        {
-          "description": "D6: 親が未完の Approval。",
-          "properties": {
-            "kind": {
-              "const": "approval_parent",
-              "type": "string"
-            },
-            "task_id": {
-              "$ref": "#/$defs/TaskId"
-            }
-          },
-          "required": [
-            "kind",
-            "task_id"
-          ],
-          "type": "object"
-        },
-        {
-          "description": "D7: 未完の子と、その代理 unit の key。",
-          "properties": {
-            "kind": {
-              "const": "children",
-              "type": "string"
-            },
-            "task_ids": {
-              "items": {
-                "$ref": "#/$defs/TaskId"
-              },
-              "type": "array"
-            },
-            "unit_keys": {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            }
-          },
-          "required": [
-            "kind",
-            "task_ids",
-            "unit_keys"
-          ],
-          "type": "object"
-        },
-        {
-          "description": "D8/D9: runnable な unit が無く、待っている unit がある。",
-          "properties": {
-            "kind": {
-              "const": "work_units",
-              "type": "string"
-            },
-            "units": {
-              "items": {
-                "$ref": "#/$defs/UnitWait"
-              },
-              "type": "array"
-            }
-          },
-          "required": [
-            "kind",
-            "units"
-          ],
-          "type": "object"
-        },
-        {
-          "description": "D10: 段に failed / blocked がある。",
-          "properties": {
-            "kind": {
-              "const": "stage_halted",
-              "type": "string"
-            },
-            "stage": {
-              "type": "string"
-            },
-            "unit_keys": {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            }
-          },
-          "required": [
-            "kind",
-            "stage",
-            "unit_keys"
-          ],
-          "type": "object"
-        },
-        {
-          "description": "D11。",
-          "properties": {
-            "decision_keys": {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            },
-            "kind": {
-              "const": "human_decision",
-              "type": "string"
-            }
-          },
-          "required": [
-            "kind",
-            "decision_keys"
-          ],
-          "type": "object"
-        },
-        {
-          "description": "D12。",
-          "properties": {
-            "gate": {
-              "$ref": "#/$defs/HumanGateKind"
-            },
-            "kind": {
-              "const": "human_gate",
-              "type": "string"
-            },
-            "stage": {
-              "type": [
-                "string",
-                "null"
-              ]
-            }
-          },
-          "required": [
-            "kind",
-            "gate"
-          ],
-          "type": "object"
-        },
-        {
-          "description": "D13（infra / cluster_jobs）。",
-          "properties": {
-            "kind": {
-              "const": "units_blocked",
-              "type": "string"
-            },
-            "reason": {
-              "$ref": "#/$defs/WorkUnitBlockedReason"
-            },
-            "unit_keys": {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            }
-          },
-          "required": [
-            "kind",
-            "reason",
-            "unit_keys"
-          ],
-          "type": "object"
-        },
-        {
-          "description": "M1/M9。",
-          "properties": {
-            "id": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "kind": {
-              "const": "capacity",
-              "type": "string"
-            },
-            "scope": {
-              "$ref": "#/$defs/CapacityScope"
-            }
-          },
-          "required": [
-            "kind",
-            "scope"
-          ],
-          "type": "object"
-        },
-        {
-          "description": "M2。",
-          "properties": {
-            "detail": {
-              "type": "string"
-            },
-            "kind": {
-              "const": "unroutable",
-              "type": "string"
-            }
-          },
-          "required": [
-            "kind",
-            "detail"
-          ],
-          "type": "object"
-        },
-        {
-          "description": "M3。",
-          "properties": {
-            "cluster_id": {
-              "type": "string"
-            },
-            "detail": {
-              "type": "string"
-            },
-            "kind": {
-              "const": "cluster",
-              "type": "string"
-            }
-          },
-          "required": [
-            "kind",
-            "cluster_id",
-            "detail"
-          ],
-          "type": "object"
-        },
-        {
-          "description": "M4。",
-          "properties": {
-            "blocking_task_ids": {
-              "items": {
-                "$ref": "#/$defs/TaskId"
-              },
-              "type": "array"
-            },
-            "kind": {
-              "const": "write_set",
-              "type": "string"
-            }
-          },
-          "required": [
-            "kind",
-            "blocking_task_ids"
-          ],
-          "type": "object"
-        },
-        {
-          "description": "M5。`until` は RFC 3339。",
-          "properties": {
-            "cause": {
-              "$ref": "#/$defs/BackoffCause"
-            },
-            "kind": {
-              "const": "backoff",
-              "type": "string"
-            },
-            "until": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "kind",
-            "until",
-            "cause"
-          ],
-          "type": "object"
-        },
-        {
-          "description": "M6。",
-          "properties": {
-            "kind": {
-              "const": "disk_critical",
-              "type": "string"
-            },
-            "path": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "kind",
-            "path"
-          ],
-          "type": "object"
-        },
-        {
-          "description": "M7。",
-          "properties": {
-            "kind": {
-              "const": "delegated_children",
-              "type": "string"
-            },
-            "task_ids": {
-              "items": {
-                "$ref": "#/$defs/TaskId"
-              },
-              "type": "array"
-            }
-          },
-          "required": [
-            "kind",
-            "task_ids"
-          ],
-          "type": "object"
-        },
-        {
-          "description": "M8。",
-          "properties": {
-            "kind": {
-              "const": "review_awaiting_human",
-              "type": "string"
-            }
-          },
-          "required": [
-            "kind"
-          ],
-          "type": "object"
-        }
-      ]
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -31104,6 +31691,15 @@
     },
     "integrate_result": {
       "$ref": "#/$defs/IntegrateResult"
+    },
+    "integration_action_result": {
+      "$ref": "#/$defs/IntegrationActionResult"
+    },
+    "integration_list": {
+      "$ref": "#/$defs/IntegrationList"
+    },
+    "integration_reason": {
+      "$ref": "#/$defs/ReasonBody"
     },
     "knowledge_accept": {
       "$ref": "#/$defs/KnowledgeAcceptBody"
@@ -31485,6 +32081,9 @@
     "inbox_item",
     "inbox_answer",
     "inbox_answer_result",
+    "integration_list",
+    "integration_reason",
+    "integration_action_result",
     "notifications",
     "notifications_unread_count",
     "notification_read",

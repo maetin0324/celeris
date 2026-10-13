@@ -85,7 +85,7 @@ export function RoutingCatalogList({ data }: { data: RoutingCatalogView }) {
                     <Row label="課金" text={billingLabel(d.billing)} />
                     <Row
                       label="lane"
-                      text={d.allowed_lanes.length ? d.allowed_lanes.map((l) => `celeris/${l}`).join(", ") : "なし"}
+                      text={d.allowed_lanes.length ? d.allowed_lanes.join(", ") : "なし"}
                     />
                     <Row label="価格" text={deploymentPricingLabel(d, data.models)} />
                   </dl>

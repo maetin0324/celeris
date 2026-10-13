@@ -144,14 +144,7 @@ pub(crate) async fn tick_loop(
             {
                 let now = OffsetDateTime::now_utc().unix_timestamp();
                 if model_discovery_ticker.due(config.model_catalog.refresh_interval_seconds, now) {
-                    let after_store = dispatcher.store();
-                    let after_config = config.clone();
-                    model_discovery_ticker.tick(dispatcher.store(), config, now, move |_| {
-                        crate::model_discovery::refresh_routing_catalog(
-                            after_store.as_ref(),
-                            &after_config,
-                        );
-                    });
+                    model_discovery_ticker.tick(dispatcher.store(), config, now, |_| {});
                 }
             }
             // ADR-0024 D7 / B1: 10 分を超えたログイン中継を打ち切る（tick をブロックしない軽い処理）。

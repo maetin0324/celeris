@@ -167,8 +167,8 @@ impl ProxyEventSink for TaskProxyEventSink {
             .ok()?
             .into_iter()
             .find_map(|(_, event)| match event {
-                Event::RoutingDecided { run_id: id, record } if id == run_id => {
-                    record.optimizer.map(|trace| trace.decision_id)
+                Event::RoutingDecided { run_id: id, .. } if id == run_id => {
+                    Some(format!("run:{run_id}"))
                 }
                 _ => None,
             })
@@ -385,7 +385,6 @@ mod routing_tests {
                 decision_id: "d1".into(),
                 parent_decision_id: None,
                 run_id: Some("run-1".into()),
-                trace: None,
                 attempts: vec![],
                 fallback_reason: None,
             },

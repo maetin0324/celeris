@@ -309,8 +309,6 @@ async fn routing_context_is_registered_recorded_once_and_released_at_run_end() {
     d.tick().unwrap();
 
     let events = store.events_for(task.id).unwrap();
-    let record = routing_record(&events).expect("routing_decided");
-    assert!(record.optimizer.is_none());
     let run_id = events
         .iter()
         .find_map(|(_, e)| match e {

@@ -127,7 +127,7 @@ impl Default for EscalationThresholds {
     }
 }
 
-/// Run 間の lane 決定。selected_lane を次の optimizer の floor として使う。
+/// Run 間の lane 決定。selected_lane を後続の retry 判定に渡す。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct EscalationAudit {
     pub requested_lane: Tier,
@@ -402,7 +402,7 @@ pub fn attempt_history_with_interval(
     for (index, event) in events.iter().enumerate() {
         match event {
             Event::RoutingDecided { record, .. } => {
-                lane = Some(record.resolution.lane.unwrap_or(record.decision.lane));
+                lane = Some(record.decision.lane);
                 failed_checks.clear();
             }
             Event::WorkerFinished {

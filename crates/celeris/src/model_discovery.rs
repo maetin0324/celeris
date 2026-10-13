@@ -537,7 +537,7 @@ impl DiscoveryTicker {
     }
 
     /// 周期が来ていれば取得を `tokio::spawn` する（tick を止めない）。始めたら `JoinHandle` を返す。
-    /// 取得が終わるまで次は始めない。`after` は反映後に同期で呼ばれる（routing catalog の更新など）。
+    /// 取得が終わるまで次は始めない。`after` は反映後に同期で呼ばれる。
     pub fn tick(
         &mut self,
         store: Arc<dyn TaskStore>,
@@ -577,66 +577,8 @@ impl DiscoveryTicker {
     }
 }
 
-/// config から routing catalog を組み直し、catalog の `available` と上書きを当てて共有 snapshot
-/// （`routing_catalog_state`）を差し替える。共有 snapshot が無ければ何もしない。
-/// 発見の後・reload の後に呼ぶ（catalog は config を足さない・絞るだけ）。
-pub fn refresh_routing_catalog<S: ModelCatalogStore + ?Sized>(store: &S, config: &Config) {
-    let Some(shared) = config.routing_catalog_state.as_ref() else {
-        return;
-    };
-    let mut catalog = match config.routing_catalog() {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::warn!(error = %e, "model catalog: routing catalog could not be rebuilt");
-            return;
-        }
-    };
-    let (entries, overrides) = match (store.model_catalog_list(), store.model_catalog_overrides()) {
-        (Ok(e), Ok(o)) => (e, o),
-        (Err(e), _) | (_, Err(e)) => {
-            tracing::warn!(error = %e, "model catalog: could not read the catalog");
-            return;
-        }
-    };
-    let dropped = crate::config::apply_model_catalog(&mut catalog, &entries, &overrides);
-    if !dropped.is_empty() {
-        tracing::info!(
-            count = dropped.len(),
-            "model catalog: deployments excluded from routing"
-        );
-    }
-    *shared
-        .write()
-        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Arc::new(catalog);
-}
-
-/// reload で組み直した `routing_catalog_snapshot` に catalog を当てる。外す deployment があるときだけ、
-/// 当てた写しで snapshot と共有 snapshot の両方を差し替える（無ければ何も変えない）。
-pub fn apply_catalog_to_snapshot<S: ModelCatalogStore + ?Sized>(store: &S, config: &mut Config) {
-    let Some(snapshot) = config.routing_catalog_snapshot.as_ref() else {
-        return;
-    };
-    let (Ok(entries), Ok(overrides)) =
-        (store.model_catalog_list(), store.model_catalog_overrides())
-    else {
-        return;
-    };
-    let mut applied = (**snapshot).clone();
-    let dropped = crate::config::apply_model_catalog(&mut applied, &entries, &overrides);
-    if dropped.is_empty() {
-        return;
-    }
-    let applied = Arc::new(applied);
-    if let Some(shared) = config.routing_catalog_state.as_ref() {
-        *shared
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Arc::clone(&applied);
-    }
-    config.routing_catalog_snapshot = Some(applied);
-}
-
 /// `POST /api/v1/llm/models/discover` の実体（daemon が API の設定へ差す）。起動時の設定の写しで発見し、
-/// 反映後に routing catalog を更新する。
+/// 反映後に現在の routing 候補へ catalog の可用性と override を反映する。
 pub struct DaemonDiscoveryHook {
     pub store: Arc<dyn TaskStore>,
     pub config: Arc<Config>,
@@ -653,7 +595,6 @@ impl task_api::ModelDiscoveryHook for DaemonDiscoveryHook {
             let now = time::OffsetDateTime::now_utc().unix_timestamp();
             let summaries =
                 run_discovery(self.store.as_ref(), &self.config, source.as_deref(), now).await;
-            refresh_routing_catalog(self.store.as_ref(), &self.config);
             summaries
                 .into_iter()
                 .map(|s| task_api::DiscoverySummaryView {

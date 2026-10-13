@@ -383,7 +383,6 @@ fn routing_feedback_event_types_match_their_serde_names() {
                 decision_id: "d2".into(),
                 parent_decision_id: Some("d1".into()),
                 run_id: None,
-                trace: None,
                 attempts: vec![],
                 fallback_reason: None,
             }),

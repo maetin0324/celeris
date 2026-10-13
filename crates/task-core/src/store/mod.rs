@@ -122,10 +122,8 @@ mod repos;
 mod route_records;
 mod routing_evidence;
 mod routing_log;
-mod routing_shadow;
 mod site_policies;
 pub use account_limits::AccountLimit;
-pub use routing_shadow::ShadowReservationAudit;
 pub(crate) use site_policies::site_policy_tx;
 pub use site_policies::{
     BrowserSitePolicy, BrowserSitePolicyDelete, BrowserSitePolicyRecord,
@@ -949,7 +947,5 @@ impl SqliteStore {
 mod client_open_tests;
 #[cfg(test)]
 mod routing_log_tests;
-#[cfg(test)]
-mod routing_shadow_tests;
 #[cfg(test)]
 pub(crate) mod tests;

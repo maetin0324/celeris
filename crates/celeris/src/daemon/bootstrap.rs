@@ -559,7 +559,19 @@ pub fn build_dispatcher(
     seed_cron_if_empty(store.as_ref(), config, OffsetDateTime::now_utc())?;
     let mut dispatcher = Dispatcher::new(store.clone(), config.dispatch_config());
     // ADR 2026-10-11 llm-source-harness-selection: harness and source×model are chosen from these.
-    dispatcher.set_llm_route_registry(config.llm_route_registry()?);
+    let mut llm_routes = config.llm_route_registry()?;
+    if let (Ok(entries), Ok(overrides)) =
+        (store.model_catalog_list(), store.model_catalog_overrides())
+    {
+        let dropped = crate::config::apply_model_catalog(&mut llm_routes, &entries, &overrides);
+        if !dropped.is_empty() {
+            tracing::info!(
+                count = dropped.len(),
+                "model catalog filtered route candidates"
+            );
+        }
+    }
+    dispatcher.set_llm_route_registry(llm_routes);
     dispatcher.set_harness_adapters(build_harness_adapters(config)?);
     // ADR 2026-10-08 account-concurrency-limits §(d)(e): implicit accounts are the declared sources
     // without an account pool; forget limits of implicit accounts no such source has any more.

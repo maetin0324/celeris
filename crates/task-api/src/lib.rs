@@ -71,7 +71,6 @@ mod reports;
 pub mod repos;
 /// ADR-0069 D5: タスクの routing の監査（`GET /tasks/{id}/routing`）。
 pub mod routing;
-pub mod routing_catalog;
 /// ADR 2026-10-11-llm-source-model-routing-evaluation D3: 段階・根拠表の読み取りと人の段階変更。
 pub mod routing_stage;
 pub mod schema;
@@ -113,7 +112,6 @@ pub use releases::{
 pub use reports::{
     ReportDetail, ReportList, ReportsNotifiedResult, ReportsReadBody, ReportsReadResult,
 };
-pub use routing_catalog::{RoutingCatalogReader, RoutingCatalogView, SharedRoutingCatalogReader};
 pub use schema::{API_V1_SCHEMA_JSON, ApiV1Schema, api_v1_schema_json, api_v1_schema_value};
 pub use state::{ApiClock, ApiState, StreamTuning};
 pub use stats::classify_outcome;
@@ -263,8 +261,6 @@ pub struct ApiSettings {
     /// `llm_proxy_unavailable`。
     pub llm_sources: Option<llm_sources::SharedLlmSourcesReader>,
     pub harnesses: Option<harnesses::SharedHarnessesReader>,
-    /// Credential-free model routing catalog, refreshed atomically by the daemon.
-    pub routing_catalog: Option<routing_catalog::SharedRoutingCatalogReader>,
     /// ADR 2026-10-06 D5: `POST /llm/models/discover` が呼ぶ発見の実行（daemon が渡す）。`None` なら
     /// 202 で `results: []`・`unavailable: true`。
     pub model_discovery: Option<model_catalog::SharedModelDiscoveryHook>,
@@ -330,10 +326,6 @@ impl std::fmt::Debug for ApiSettings {
             .field(
                 "llm_sources",
                 &self.llm_sources.as_ref().map(|_| "<reader>"),
-            )
-            .field(
-                "routing_catalog",
-                &self.routing_catalog.as_ref().map(|_| "<reader>"),
             )
             .field(
                 "model_discovery",

@@ -67,9 +67,8 @@ extensions/tools の未指定・OAuth pool 指定は daemon 起動時の config 
 - **Pi だけ止める**: `[harness_selection]` の pi の規則と `[route_defaults.pi]` を消す。pi を選ばなくなった task の扱いは harness 選択の規則（ADR 2026-10-11 llm-source-harness-selection）に従う。
 - **task ごとに明示する**: task の `adapter`（作成 API・PATCH・role・assignee の役割）に `claude-code` / `codex` / `acp` / `pi` を指定する。
   明示 adapter は既定解決より常に優先され、この仕組みは触らない。
-- Claude 系 model の判定は provider 名の文字列ではなく、LLM source・account pool・catalog の `family`
-  （`[[model_routing.models]] family = …`）で決まる。proxy（`celeris` source）経由の行は family 不明＝非 Claude 扱いなので、
-  Claude を proxy 経由で使うなら catalog に family を書くか adapter を明示する。
+- Claude 系 model の判定は provider 名ではなく、model profile の family 情報で決まる。判定材料が
+  source/model から得られない proxy 経由の候補は unknown として扱われるため、必要なら adapter を明示する。
 
 ## 5. (model, harness) 別の metrics の見方
 

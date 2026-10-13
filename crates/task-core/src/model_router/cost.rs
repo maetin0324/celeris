@@ -1,13 +1,38 @@
 //! ADR §4: effective cost・pressure・score の純粋関数。
 //! 時計（now）と観測の鮮度は引数で注入する。未知は None のまま返し、0 で seed しない。
 //! 課金の実測値（tokens・wall_ms など）はここでは書き換えない。
-use super::{
-    policy::{FreshnessPolicy, RoutingPolicy, default_window_duration_seconds},
-    profiles::{Billing, QuotaWindow, SourceState, TokenPricing},
-};
+use super::profiles::{Billing, QuotaWindow, SourceState, TokenPricing};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FreshnessPolicy {
+    pub observation_ttl_seconds: u64,
+}
+impl Default for FreshnessPolicy {
+    fn default() -> Self {
+        Self {
+            observation_ttl_seconds: 900,
+        }
+    }
+}
+impl FreshnessPolicy {
+    fn validate(&self) -> Result<(), &'static str> {
+        if self.observation_ttl_seconds == 0 {
+            Err("invalid_freshness")
+        } else {
+            Ok(())
+        }
+    }
+}
+fn default_window_duration_seconds(id: &str) -> Option<f64> {
+    match id {
+        "five_hour" | "5h" => Some(18_000.0),
+        "seven_day" | "7d" => Some(604_800.0),
+        _ => None,
+    }
+}
 
 /// 1 呼出しの見積もり使用量。欠測は None。
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -103,64 +128,6 @@ pub fn exclusion_reasons(
         }
     }
     Ok(reasons)
-}
-
-/// 同じ入力は同じ出力。C = min(effective/ref,1)、L = min(latency/ref,1)、P = pressure。
-/// C/L/P の未知は順位用に 1 とし unknown flag を残す。品質の未知・不合格は Err。
-pub fn score(
-    policy: &RoutingPolicy,
-    quality: Option<f64>,
-    estimate: &CostEstimate,
-    latency_ms: Option<f64>,
-) -> Result<ScoreBreakdown, &'static str> {
-    policy.validate()?;
-    let q = quality.ok_or("quality_unknown")?;
-    if !q.is_finite() || !(0.0..=1.0).contains(&q) {
-        return Err("quality_invalid");
-    }
-    if q < policy.min_quality {
-        return Err("quality_below_min");
-    }
-    let mut unknown = Vec::new();
-    let cost_term = match estimate.effective_usd {
-        Some(v) => {
-            non_negative(v)?;
-            (v / policy.normalization.cost_reference_usd).min(1.0)
-        }
-        None => {
-            unknown.push("cost_unknown");
-            1.0
-        }
-    };
-    let latency_term = match latency_ms {
-        Some(v) => {
-            non_negative(v)?;
-            (v / policy.normalization.latency_reference_ms).min(1.0)
-        }
-        None => {
-            unknown.push("latency_unknown");
-            1.0
-        }
-    };
-    let pressure_term = match estimate.pressure {
-        Some(p) if p.is_finite() && (0.0..=1.0).contains(&p) => p,
-        Some(_) => return Err("invalid_estimate"),
-        None => {
-            unknown.push("pressure_unknown");
-            1.0
-        }
-    };
-    let w = &policy.weights;
-    let score =
-        w.quality * q - w.cost * cost_term - w.latency * latency_term - w.pressure * pressure_term;
-    Ok(ScoreBreakdown {
-        quality: q,
-        cost_term,
-        latency_term,
-        pressure_term,
-        unknown,
-        score,
-    })
 }
 
 fn cash_usd(
@@ -335,7 +302,7 @@ fn is_fresh(
         return Ok(false);
     };
     let age = (now - observed).as_seconds_f64();
-    if !(0.0..=freshness.observation_ttl_seconds).contains(&age) {
+    if !(0.0..=freshness.observation_ttl_seconds as f64).contains(&age) {
         return Ok(false);
     }
     Ok(parse_opt(w.reset_at.as_deref())?.is_none_or(|reset| reset > now))
@@ -378,8 +345,7 @@ fn parse_opt(raw: Option<&str>) -> Result<Option<OffsetDateTime>, &'static str> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Tier;
-    use crate::model_router::policy::{RoutingMode, WINDOW_5H_SECONDS};
+    const WINDOW_5H_SECONDS: f64 = 5.0 * 3600.0;
 
     const EPS: f64 = 1e-9;
 
@@ -696,42 +662,5 @@ mod tests {
         zero_queue.queue_depth = Some(1);
         zero_queue.queue_limit = Some(0);
         assert_eq!(pressure(&zero_queue, None).unwrap_err(), "zero_denominator");
-    }
-
-    #[test]
-    fn routing_score_unknown_terms_rank_as_worst_and_keep_flags() {
-        let policy = RoutingPolicy::defaults(Tier::Standard, RoutingMode::Shadow);
-        let known = CostEstimate {
-            cash_usd: Some(0.2),
-            subscription_shadow_usd: Some(0.0),
-            self_host_resource_usd: Some(0.0),
-            effective_usd: Some(0.2),
-            pressure: Some(0.5),
-            assumptions: vec![],
-        };
-        let unknown = CostEstimate {
-            effective_usd: None,
-            pressure: None,
-            ..known.clone()
-        };
-        let a = score(&policy, Some(0.9), &known, Some(1000.0)).unwrap();
-        let b = score(&policy, Some(0.9), &unknown, None).unwrap();
-        assert!(a.unknown.is_empty());
-        assert_eq!(
-            b.unknown,
-            vec!["cost_unknown", "latency_unknown", "pressure_unknown"]
-        );
-        assert!(
-            a.score > b.score,
-            "unknown terms must not look better than known ones"
-        );
-        assert_eq!(
-            score(&policy, None, &known, None).unwrap_err(),
-            "quality_unknown"
-        );
-        assert_eq!(
-            score(&policy, Some(0.1), &known, None).unwrap_err(),
-            "quality_below_min"
-        );
     }
 }

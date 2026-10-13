@@ -574,7 +574,7 @@ async fn routing_audit_links_run_request_and_actual_source() {
         conn.execute(
             "INSERT INTO llm_proxy_requests (id, ts, source, account, requested_model, \
              upstream_model, latency_ms, status) \
-             VALUES ('req-1', 1700000000, 'claude-oauth', 'acc-1', 'celeris/cheap', \
+             VALUES ('req-1', 1700000000, 'claude-oauth', 'acc-1', 'qwen/qwen3.8-27b', \
              'claude-sonnet-5', 120, 'ok')",
             [],
         )

@@ -98,6 +98,8 @@ pub mod repos;
 pub mod route_extract;
 /// ADR 2026-10-11 task-routing-features D1-D4: deterministic feature and option records.
 pub mod route_record;
+/// ADR 2026-10-11 D2/D3: pure evidence-based source/model selector and guardrails.
+pub mod route_select;
 pub mod store;
 pub mod transition;
 /// ADR-0079（Phase R1a）: 再帰的な task 分解の木（`Task.tree`・`[execution.tree]` の上限・深さ）。

@@ -164,6 +164,8 @@ runner は dispatcher・store に LLM 呼び出しを入れない（LLM を呼�
 `RoutePolicy` 実装を差し替えるだけにする。guardrail の判定は daemon の tick で決定的に行う（LLM を呼ばない）。
 D4 の削除は同じ unit で行う。
 
+**実装の付記（2026-10-13）。** 既存の `crates/task-core/src/routing.rs` は ADR-0061 の harness 骨格として使用中のため、選択器の配置先は名前の衝突を避けて `crates/task-core/src/route_select/` とする。D5 の `routing/` はこのモジュールへ読み替える。
+
 **判断 record と学習データ（build 段 `task-features`）。** task の記述（`celeris.task-features/1`、自然言語の brief が主・aux が補助）・選択肢・判断・結果の表、`celerisctl routing export` の JSONL、`RouteInput`／`RouteOutput` の境界は [2026-10-11-task-routing-features.md](2026-10-11-task-routing-features.md) に従う。評価 runner は manifest 作成時に各問題へ同じ template の features を付け、評価 run の割り当ても同じ判断 record（`stage="eval"`）で残す。
 
 **境界。** runner → selector は DB の `routing_evidence` だけで結ぶ（runner が selector の型に依存しない。selector が runner を呼ばない）。

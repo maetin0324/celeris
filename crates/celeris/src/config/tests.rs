@@ -68,7 +68,7 @@ fn migration_runbook_toml_loads() {
         ("pi", "opencode_go", "opencode-go/grok-4.6"),
         ("opencode", "qwen", "qwen3.8-27b"),
         ("local-deep-research", "qwen", "qwen3.8-27b"),
-        ("paperqa", "claude_oauth", "claude-opus-5-5"),
+        ("paperqa", "qwen", "qwen3.8-27b"),
         ("langmem", "qwen", "qwen3.8-27b"),
     ] {
         assert_eq!(
@@ -107,7 +107,7 @@ fn migration_runbook_toml_loads() {
     assert_eq!(registry.cos_route_candidates[1].source.0, "codex_oauth");
     assert_eq!(
         registry.route_defaults[&task_core::llm_route::HarnessId::from("paperqa")].len(),
-        2
+        3
     );
     assert_eq!(
         registry.route_defaults[&task_core::llm_route::HarnessId::from("local-deep-research")]

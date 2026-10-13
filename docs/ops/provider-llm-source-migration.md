@@ -18,7 +18,7 @@ compatibility、quota、cooldown、capacity を通った最初のものになる
 | coding worker | genre `coding` → coding execution class | `claude_code`, `codex` | `claude_oauth / claude-opus-5-5` を先頭、admission 不可なら Codex `gpt-6.1-sol` |
 | Pi coding | role `pi` または既存の Pi 指定 | `pi` | `opencode_go / opencode-go/grok-4.6` |
 | 軽い仕事 | role `local-qwen` | `opencode` (ACP) | `qwen / qwen3.8-27b` |
-| 文献調査 | literature harness | `paperqa` | `claude_oauth / claude-opus-5-5`、次に `codex_oauth / gpt-6.1-sol` |
+| 文献調査 | literature harness | `paperqa` | `qwen / qwen3.8-27b`、次に `claude_oauth / claude-opus-5-5`、`codex_oauth / gpt-6.1-sol`（今の proxy `celeris/standard` の「届けば Qwen、落ちていれば Claude/Codex」を明示の順にしたもの） |
 | 深掘り Web 調査 | research harness | `local-deep-research` | `qwen / qwen3.8-27b`、次に Claude/Codex cheap |
 | 知識整理 | LangMem の専用起動設定 | `langmem` | `qwen / qwen3.8-27b`、次に Claude/Codex cheap |
 | CoS | `[cos].route_candidates` の順 | `claude_code` | `claude_oauth / claude-opus-5-5` |
@@ -229,7 +229,7 @@ candidates = [{ source = "qwen", model = "qwen3.8-27b" }]
 candidates = [{ source = "qwen", model = "qwen3.8-27b" }, { source = "claude_oauth", model = "claude-sonnet-5-5" }, { source = "codex_oauth", model = "gpt-6-luna" }]
 
 [route_defaults.paperqa]
-candidates = [{ source = "claude_oauth", model = "claude-opus-5-5" }, { source = "codex_oauth", model = "gpt-6.1-sol" }]
+candidates = [{ source = "qwen", model = "qwen3.8-27b" }, { source = "claude_oauth", model = "claude-opus-5-5" }, { source = "codex_oauth", model = "gpt-6.1-sol" }]
 
 [route_defaults.langmem]
 candidates = [{ source = "qwen", model = "qwen3.8-27b" }, { source = "claude_oauth", model = "claude-sonnet-5-5" }, { source = "codex_oauth", model = "gpt-6-luna" }]

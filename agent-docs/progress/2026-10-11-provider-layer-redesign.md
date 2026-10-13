@@ -309,7 +309,7 @@ candidates = [{ source = "qwen", model = "qwen3.8-27b" }]
 candidates = [{ source = "qwen", model = "qwen3.8-27b" }, { source = "claude_oauth", model = "claude-sonnet-5-5" }, { source = "codex_oauth", model = "gpt-6-luna" }]
 
 [route_defaults.paperqa]
-candidates = [{ source = "claude_oauth", model = "claude-opus-5-5" }, { source = "codex_oauth", model = "gpt-6.1-sol" }]
+candidates = [{ source = "qwen", model = "qwen3.8-27b" }, { source = "claude_oauth", model = "claude-opus-5-5" }, { source = "codex_oauth", model = "gpt-6.1-sol" }]
 
 [route_defaults.langmem]
 candidates = [{ source = "qwen", model = "qwen3.8-27b" }, { source = "claude_oauth", model = "claude-sonnet-5-5" }, { source = "codex_oauth", model = "gpt-6-luna" }]

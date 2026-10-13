@@ -287,7 +287,7 @@ model = "qwen/qwen3.8-27b"
 api_key_secret = "<現在のsecret reference>"
 
 [adapters.local_deep_research]
-settings = { "llm.model" = "qwen3.8-27b", "llm.openai_endpoint.url" = "<現在のQwen endpoint>/v1", "llm.openai_endpoint.api_key" = "<現在のsecret reference>" }
+settings = { "llm.model" = "qwen/qwen3.8-27b", "llm.openai_endpoint.url" = "<現在のQwen endpoint>/v1", "llm.openai_endpoint.api_key" = "<現在のsecret reference>" }
 
 [adapters.paperqa]
 settings = "<現在のPaperQA settings path>"
@@ -296,14 +296,17 @@ settings = "<現在のPaperQA settings path>"
 
 `[adapters.paperqa].settings` が指す PaperQA settings では `llm`、`summary_llm`、
 `agent.agent_llm` を `qwen3.8-27b`、endpoint は現在の proxy URL、認証は既存 secret とする。
-opencode ACP の既存 `OPENCODE_CONFIG` と `CELERIS_API_TOKEN` secret injection は保持し、
-model を `qwen3.8-27b` にする。LangMem・LDR・PaperQA の本番 endpoint は backup の値を
-転記する。`providers.d` の eight IDs は新形式の宣言を確認した後に退避名へ移し、旧 include
+opencode ACP の既存 `OPENCODE_CONFIG` と `CELERIS_API_TOKEN` secret injection は保持する。
+`[harnesses.opencode].model_namespace = "qwen-local"` は OpenCode config の provider ID と
+一致させ、adapter は `qwen-local/qwen3.8-27b` を渡す（route の model は `qwen3.8-27b` のまま）。
+LangMem・LDR・PaperQA の本番 endpoint は backup の値を転記する。`providers.d` の eight IDs は新形式の宣言を確認した後に退避名へ移し、旧 include
 を外す。TOML の説明用 placeholder は実 config に残さない。
 
-`[knowledge.langmem].base_url` を Celeris の llm-proxy（`[llm_proxy]` の listen）に向ける場合、
-proxy は具体的な `<source_id>/<model_id>` だけを受けるため、`model` は `qwen/qwen3.8-27b` の形で書く。
-Qwen の endpoint を直接指す場合は `qwen3.8-27b` のままでよい（上の TOML 例は proxy を指すので `qwen/qwen3.8-27b`）。
+LDR・PaperQA・LangMem の route は `via = "llm_proxy"` で宣言するので、harness には
+`<source_id>/<model_id>`（例 `qwen/qwen3.8-27b`）が渡る。proxy は接頭辞なしの model を受けない。
+そのため `[knowledge.langmem].base_url` は llm-proxy（`[llm_proxy]` の listen）を指し、`model` と
+`llm.model` は `qwen/qwen3.8-27b` と書く。route の model が設定より優先されるので、設定の値は
+表示と照合のためのものである。
 
 ## 前提
 
@@ -346,7 +349,8 @@ PROXY=http://127.0.0.1:18100
 
    exit 0 で、source・harness・route candidate と `[cos] route_candidates` の表が「選択結果」の表と
    一致することを確かめる（CoS は `claude_oauth / claude-opus-5-5`、次に `codex_oauth / gpt-6-astra`。
-   CoS の候補は API に出ないので、ここで確かめる）。
+   CoS の候補は API に出ないので、ここで確かめる）。`claude_code:` の行の先頭が `claude-sonnet-5-5`、`claude_code class coding:` の行が
+   `claude-opus-5-5` だけであることも同じ出力で確かめる。
    `legacy provider configuration is no longer supported` などの読み込みエラーが出たら、その欄を
    直してからやり直す。続けて `CELERIS_CONFIG="<作業用コピーの config.toml>" scripts/selfdeploy/verify.sh <新リリース>`
    で新リリースを検証する。旧 binary は新 config を読めないので N-1 検査は落ち、`live_ok` は偽になる。
@@ -387,6 +391,9 @@ PROXY=http://127.0.0.1:18100
 7. proxy を経由する harness（LDR・PaperQA・LangMem）のために、proxy が具体的な source/model を
    中継することを確かめる。確認リクエストには機密データを入れず、token と応答本文をログへ残さない:
 
+   接頭辞なしの `qwen3.8-27b` を同じ経路に送ると 422 になることも確かめる（daemon が接頭辞を付け忘れた
+   場合の検出）。
+
    ```sh
    curl -sS -o /dev/null -D - -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
      -d '{"model":"qwen/qwen3.8-27b","messages":[{"role":"user","content":"hi"}]}' \
@@ -406,6 +413,9 @@ PROXY=http://127.0.0.1:18100
         from events where json_extract(json,'$.type')='routing_decided'
         order by id desc limit 20;"
    ```
+
+   移行後も DB の旧 `routing_decided` event（`record.optimizer.mode = "legacy"`）は読み取りだけで残る。
+   移行で event を書き換えず、新しい event は `shadow` / `enforce` のみになる。
 
    `resolution.provider` は選ばれた source ID、`resolution.model_id` はその model。task 1 件ずつなら
    `GET /api/v1/tasks/<task id>/routing` の `runs` でも同じ内容を見られる。Pi task は

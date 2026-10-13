@@ -17,4 +17,4 @@ provider 設定、provider catalog、adapter 設定、tier binding の削除は 
 
 `RoutingMode::Legacy` は deserialize のみに許可し、新規 serialize できないよう `skip_serializing` を付けた。`task_core::model_router::tests::legacy_routing_event_deserializes_without_becoming_writable` は legacy mode の event payload を deserialize し、Legacy mode の serialize が失敗することを固定する。
 
-`tasks_with_events_impl` が実際の永続 event 読み込み点であり、daemon bootstrap がこの API を呼ぶ。task-core の serde 境界試験は追加済み。`crates/celeris/tests/legacy_event_startup.rs` は一時 SQLite DB で dispatcher bootstrap と tick を通すが、現状は旧 `RoutingDecided` row を DB に挿入していないため、本番相当 payload を使う受け入れ条件は未達である。
+`tasks_with_events_impl` が実際の永続 event 読み込み点であり、daemon bootstrap がこの API を呼ぶ。task-core の serde 境界・store 読み込み試験と、旧 `RoutingDecided` row を含む DB で dispatcher bootstrap/tick を通す integration 試験を追加した。完了証拠は [legacy-db.md](legacy-db.md) を参照。

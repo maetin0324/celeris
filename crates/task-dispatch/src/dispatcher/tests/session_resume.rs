@@ -293,7 +293,7 @@ fn yielded() -> Terminal {
 }
 
 fn claude_dispatcher(store: &Arc<dyn TaskStore>, adapter: Arc<ClaudeScriptAdapter>) -> Dispatcher {
-    let mut d = dispatcher_with_adapter_id(store.clone(), adapter, 1, false, "claude-code");
+    let mut d = dispatcher_with_test_clock(store.clone(), adapter, 1, false);
     d.config.execution.max_continuations_per_work_unit = 10;
     d
 }
@@ -602,7 +602,6 @@ async fn session_resume_fresh_session_for_planner_and_independent_work_unit() {
     ));
     let mut d = claude_dispatcher(&store, adapter.clone());
     d.config.execution.gate = task_core::GateMode::On;
-    d.config.execution.planner.adapter = "claude-code".to_string();
     let report = run_until_idle(&mut d, 400).await;
     assert!(report.idle, "{report:?}");
     assert_eq!(store.get(task_id).unwrap().unwrap().status, Status::Done);
@@ -908,7 +907,6 @@ async fn session_resume_reviewer_stays_fresh() {
     ));
     let mut d = claude_dispatcher(&store, adapter.clone());
     d.config.execution.gate = task_core::GateMode::On;
-    d.config.execution.planner.adapter = "claude-code".to_string();
     let report = run_until_idle(&mut d, 400).await;
     assert!(report.idle, "{report:?}");
     assert_eq!(store.get(task_id).unwrap().unwrap().status, Status::Done);
@@ -1232,7 +1230,7 @@ fn session_jsonl(config: &std::path::Path, cwd: &std::path::Path, session_id: &s
 
 /// 再起動を挟む試験の dispatcher。時計は注入した試験用の時計（`test_now`）。
 fn restart_dispatcher(store: &Arc<dyn TaskStore>, adapter: Arc<ClaudeScriptAdapter>) -> Dispatcher {
-    let mut d = dispatcher_with_adapter_id(store.clone(), adapter, 1, true, "claude-code");
+    let mut d = dispatcher_with_test_clock(store.clone(), adapter, 1, true);
     d.config.execution.max_continuations_per_work_unit = 10;
     d
 }
@@ -1743,7 +1741,7 @@ async fn session_resume_comment_interrupt_resumes_phase_work_unit_session() {
         Vec::new(),
         vec![("a", vec![comment_interrupt(false)])],
     ));
-    let mut d = dispatcher_with_adapter_id(store.clone(), adapter.clone(), 2, false, "claude-code");
+    let mut d = dispatcher_with_test_clock(store.clone(), adapter.clone(), 2, false);
     d.config.workspace_root = root.path().to_path_buf();
     d.config.execution.max_parallel_work_units = 2;
     d.config.execution.max_continuations_per_work_unit = 10;

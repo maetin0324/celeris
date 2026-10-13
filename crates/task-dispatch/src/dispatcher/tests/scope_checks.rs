@@ -408,7 +408,7 @@ async fn wu_base_dispatch_case(shared: bool, bad: bool, retry: bool) {
         // Runtime bookkeeping must not count as WU source changes.
         std::fs::write(
             repo.path().join(".gitignore"),
-            ".taskd/\nruns/\ninputs/\nartifacts/\nwork-unit-checks/\n",
+            ".taskd/\nruns/\ninputs/\nartifacts/\n",
         )
         .unwrap();
         git_out(repo.path(), &["add", ".gitignore"]);
@@ -548,4 +548,225 @@ async fn wu_base_snapshot_prepare_failures_accumulate_and_never_start_worker() {
         row.blocked_reason,
         Some(task_core::WorkUnitBlockedReason::Question)
     );
+}
+
+/// 2026-10-11 WU 検査ログの置き場所: repo の `.gitignore` は run の置き場（`.taskd/` `runs/` `inputs/` `artifacts/`）
+/// だけを ignore し、検査ログの dir（`work-unit-checks/` `integration-checks/`）は ignore しない。
+fn ignore_runtime_but_not_check_logs(repo: &Path) {
+    std::fs::write(
+        repo.join(".gitignore"),
+        ".taskd/\nruns/\ninputs/\nartifacts/\n",
+    )
+    .unwrap();
+    git_out(repo, &["add", ".gitignore"]);
+    git_out(repo, &["commit", "-qm", "ignore runtime files"]);
+}
+
+fn work_unit_checks_failed(events: &[Event]) -> Vec<(String, Vec<task_core::FailedWorkUnitCheck>)> {
+    events
+        .iter()
+        .filter_map(|e| match e {
+            Event::WorkUnitChecksFailed { key, failed, .. } => Some((key.clone(), failed.clone())),
+            _ => None,
+        })
+        .collect()
+}
+
+/// shared mode（task_dir = repo の作業ツリー）: 範囲 check は自分の検査ログを範囲外と数えず、2 段目の WU も
+/// 1 段目の WU の検査ログを数えない。ログは `<workspace_root>/<task_id>/work-unit-checks/<key>` にあり、作業ツリーには無い。
+#[tokio::test]
+async fn wu_check_log_outside_tree_shared_mode_scope_check_ignores_check_logs() {
+    let repo = tempfile::tempdir().unwrap();
+    init_test_repo(repo.path());
+    let root = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let mut task = parallel_task(repo.path(), "true");
+    task.workspace = WorkspaceSpec::Local {
+        path: repo.path().to_path_buf(),
+        mode: Some(WorkspaceMode::Shared),
+    };
+    ignore_runtime_but_not_check_logs(repo.path());
+    store.insert(&task).unwrap();
+    let mut a = v2_wu("a", "build", &[]);
+    a.checks = vec![
+        check("test -f a/one.txt", false),
+        check(&scope_cmd("^a/"), true),
+    ];
+    let mut c = v2_wu("c", "next", &[]);
+    // Shared mode leaves the predecessor's `a/` uncommitted, so only the logs can be out of scope.
+    c.checks = vec![check(&scope_cmd("^(a|c)/"), true)];
+    adopt_v2_plan(&store, task.id, &["build", "next"], vec![a, c]);
+    let adapter = Arc::new(
+        ParallelWuAdapter::new(Duration::from_millis(5))
+            .with_action("a", write_files(&[("a/one.txt", "a\n")]))
+            .with_action("c", write_files(&[("c/one.txt", "c\n")])),
+    );
+    let mut d = parallel_dispatcher(store.clone(), adapter, root.path(), 3, 3, 3);
+    run_until_idle(&mut d, 800).await;
+    let events = events_of(&store, task.id);
+    let failed = work_unit_checks_failed(&events);
+    assert!(
+        failed.is_empty(),
+        "scope checks counted check logs: {failed:#?}"
+    );
+    assert!(
+        work_unit_check_cmds(&events, "a").contains(&(scope_cmd("^a/"), true)),
+        "{events:#?}"
+    );
+    assert!(
+        work_unit_check_cmds(&events, "c").contains(&(scope_cmd("^(a|c)/"), true)),
+        "{events:#?}"
+    );
+    assert_eq!(
+        store.get(task.id).unwrap().unwrap().status,
+        Status::Done,
+        "{events:#?}"
+    );
+    let logs = root
+        .path()
+        .join(task.id.to_string())
+        .join("work-unit-checks");
+    assert!(
+        logs.join("a").read_dir().unwrap().next().is_some(),
+        "{logs:?}"
+    );
+    assert!(
+        logs.join("c").read_dir().unwrap().next().is_some(),
+        "{logs:?}"
+    );
+    assert!(
+        !repo.path().join("work-unit-checks").exists(),
+        "WU check logs written inside the work tree"
+    );
+}
+
+/// 2026-10-11 統合ログの移動: shared mode（task_dir = repo の作業ツリー）で段 build の後に来る WU c の範囲 check は、
+/// 作業ツリーに未追跡の `integration-checks/` があれば必ず失敗する形（snapshot helper に頼らない）にして通ることを見る。
+/// shared mode の統合は並列 1 の no-op（ADR-0074 D1.2。`start_integration` は merge も検査もしない）なので
+/// `IntegrationCheckStarted` は出ず、統合ログはどこにも作られない。統合の検査が走る worktree mode のログの置き場所
+/// （`check_log_root` 基準）は `wu_check_log_outside_tree_second_stage_ignores_integration_check_logs` が見る。
+#[tokio::test]
+async fn wu_check_log_outside_tree_shared_mode_after_integration() {
+    let repo = tempfile::tempdir().unwrap();
+    init_test_repo(repo.path());
+    let root = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let mut task = parallel_task(repo.path(), "true");
+    task.workspace = WorkspaceSpec::Local {
+        path: repo.path().to_path_buf(),
+        mode: Some(WorkspaceMode::Shared),
+    };
+    ignore_runtime_but_not_check_logs(repo.path());
+    store.insert(&task).unwrap();
+    let mut a = v2_wu("a", "build", &[]);
+    // A non-scope check: the stage's integration re-runs it and writes its log.
+    a.checks = vec![check("test -f a/one.txt", false)];
+    let mut c = v2_wu("c", "next", &[]);
+    let no_integ_logs = "out=$(git ls-files --others --exclude-standard | grep '^integration-checks/'); \
+        [ -z \"$out\" ] || { echo \"integration logs in the work tree:\"; echo \"$out\"; exit 1; }";
+    c.checks = vec![check(no_integ_logs, true)];
+    adopt_v2_plan(&store, task.id, &["build", "next"], vec![a, c]);
+    let adapter = Arc::new(
+        ParallelWuAdapter::new(Duration::from_millis(5))
+            .with_action("a", write_files(&[("a/one.txt", "a\n")]))
+            .with_action("c", write_files(&[("c/one.txt", "c\n")])),
+    );
+    let mut d = parallel_dispatcher(store.clone(), adapter, root.path(), 3, 3, 3);
+    run_until_idle(&mut d, 800).await;
+    let events = events_of(&store, task.id);
+    assert!(
+        events.iter().any(|e| matches!(
+            e,
+            Event::WorkUnitTransitioned { key, reason, .. }
+                if key == "integrate-build" && reason == "integrated"
+        )),
+        "the first stage was integrated before c ran: {events:#?}"
+    );
+    assert!(
+        integration_check_cmds(&events, "integrate-build").is_empty(),
+        "shared mode integration is a no-op and runs no checks: {events:#?}"
+    );
+    let failed = work_unit_checks_failed(&events);
+    assert!(
+        failed.is_empty(),
+        "scope check counted integration logs: {failed:#?}"
+    );
+    assert!(
+        work_unit_check_cmds(&events, "c").contains(&(no_integ_logs.to_string(), true)),
+        "{events:#?}"
+    );
+    assert_eq!(
+        store.get(task.id).unwrap().unwrap().status,
+        Status::Done,
+        "{events:#?}"
+    );
+    assert!(
+        !repo.path().join("integration-checks").exists(),
+        "integration check logs written inside the work tree"
+    );
+}
+
+/// worktree mode: 2 段目の WU の範囲 check は 1 段目の統合の検査ログを数えない（統合の検査ログは
+/// `<workspace_root>/<task_id>/integration-checks/<key>` にあり、どの作業ツリーの中にも無い）。
+#[tokio::test]
+async fn wu_check_log_outside_tree_second_stage_ignores_integration_check_logs() {
+    let repo = tempfile::tempdir().unwrap();
+    init_test_repo(repo.path());
+    ignore_runtime_but_not_check_logs(repo.path());
+    let root = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let task = parallel_task(repo.path(), "true");
+    store.insert(&task).unwrap();
+    let mut a = v2_wu("a", "build", &[]);
+    a.checks = vec![
+        check("test -f a/one.txt", false),
+        check(&scope_cmd("^a/"), true),
+    ];
+    let mut c = v2_wu("c", "next", &[]);
+    c.checks = vec![check(&scope_cmd("^c/"), true)];
+    adopt_v2_plan(&store, task.id, &["build", "next"], vec![a, c]);
+    let adapter = Arc::new(
+        ParallelWuAdapter::new(Duration::from_millis(5))
+            .with_action("a", write_files(&[("a/one.txt", "a\n")]))
+            .with_action("c", write_files(&[("c/one.txt", "c\n")])),
+    );
+    let mut d = parallel_dispatcher(store.clone(), adapter, root.path(), 3, 3, 3);
+    run_until_idle(&mut d, 800).await;
+    let events = events_of(&store, task.id);
+    let failed = work_unit_checks_failed(&events);
+    assert!(
+        failed.is_empty(),
+        "scope checks counted check logs: {failed:#?}"
+    );
+    assert!(
+        integration_check_cmds(&events, "integrate-build")
+            .contains(&"test -f a/one.txt".to_string()),
+        "the first stage's integration check ran and logged: {events:#?}"
+    );
+    assert!(
+        work_unit_check_cmds(&events, "c").contains(&(scope_cmd("^c/"), true)),
+        "{events:#?}"
+    );
+    assert_eq!(
+        store.get(task.id).unwrap().unwrap().status,
+        Status::Done,
+        "{events:#?}"
+    );
+    let task_root = root.path().join(task.id.to_string());
+    let integ = task_root.join("integration-checks").join("integrate-build");
+    assert!(integ.read_dir().unwrap().next().is_some(), "{integ:?}");
+    // The log dirs are siblings of the work trees, never inside a git work tree.
+    for dir in ["integration-checks", "work-unit-checks"] {
+        let probe = std::process::Command::new("git")
+            .current_dir(task_root.join(dir))
+            .args(["rev-parse", "--show-toplevel"])
+            .output()
+            .unwrap();
+        // A TMPDIR under some unrelated repo is fine; a task work tree is not.
+        let top = String::from_utf8_lossy(&probe.stdout);
+        assert!(
+            !probe.status.success() || !Path::new(top.trim_end()).starts_with(&task_root),
+            "{dir} is inside a task work tree: {top}"
+        );
+    }
 }

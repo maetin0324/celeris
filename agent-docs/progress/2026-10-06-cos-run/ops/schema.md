@@ -11,7 +11,7 @@ status: running
 - `UPDATE_SCHEMA=1 cargo test -p task-api committed_schema` で `docs/api/v1/api-v1.schema.json` を再生成。
 - web の生成型・schema copy を更新し、CoS route 名を生成型 header に出すよう generator を更新。
 - `gui/app/celeris/types.ts` に CoS 操作/checkpoint 型と event variant を反映。gui の offline install と `gen:types` は pnpm store SQLite error、代替 store は `@codemirror/lang-json@6.0.2` 不足で完了できなかった。
-- `docs/api/v1/gui-api.md` に3 route・credential identity・422/409・監査制約を追記し、`gui/docs/celeris-api-v1.md` を同期。
+- `docs/api/v1/api.md` に3 route・credential identity・422/409・監査制約を追記し、`gui/docs/celeris-api-v1.md` を同期。
 
 ## 検証
 

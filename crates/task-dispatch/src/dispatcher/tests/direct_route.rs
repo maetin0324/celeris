@@ -162,7 +162,6 @@ fn route_dispatcher(
 ) -> Dispatcher {
     let mut d = worktree_dispatcher(store.clone(), adapter, &root.join("ws"), None);
     d.config.execution.gate = gate;
-    d.config.execution.planner.adapter = "instant".to_string();
     d
 }
 

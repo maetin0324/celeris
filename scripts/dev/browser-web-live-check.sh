@@ -78,7 +78,7 @@ if pathlib.Path(evidence).resolve() == pathlib.Path("/tmp"):
     raise SystemExit("use a dedicated evidence directory")
 if d.get("api", {}).get("listen", "").split(":")[0] != "127.0.0.1":
     raise SystemExit("test API must bind 127.0.0.1")
-if d["api"]["listen"].endswith(":7710") or d["api"]["listen"].endswith(":7700"):
+if any(d["api"]["listen"].endswith(":" + str(port)) for port in (7710, 7720, 7721)):
     raise SystemExit("production API ports are forbidden")
 if os.getuid() not in l.get("allowed_uids", []):
     raise SystemExit("launcher allowed_uids must include the test daemon UID")
@@ -107,7 +107,7 @@ DENIED_PORT=${CELERIS_BROWSER_TEST_DENIED_PORT:-17731}
 LIVE_PORT=${CELERIS_BROWSER_TEST_LIVE_PORT:-17732}
 for port in "$API_PORT" "$WEB_PORT" "$PAGE_PORT" "$DENIED_PORT" "$LIVE_PORT"; do
   [[ $port =~ ^[0-9]+$ ]] || { echo "invalid test port" >&2; exit 1; }
-  [[ $port != 7710 && $port != 7700 ]] || { echo "production ports are forbidden" >&2; exit 1; }
+  [[ $port != 7710 && $port != 7720 && $port != 7721 ]] || { echo "production ports are forbidden" >&2; exit 1; }
 done
 [[ $(printf '%s\n' "$API_PORT" "$WEB_PORT" "$PAGE_PORT" "$DENIED_PORT" "$LIVE_PORT" | sort -u | wc -l) = 5 ]] || {
   echo "test ports must differ" >&2; exit 1;

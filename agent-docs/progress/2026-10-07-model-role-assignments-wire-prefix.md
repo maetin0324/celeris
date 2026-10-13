@@ -13,7 +13,7 @@ completed: 2026-10-07
 ## 何を直したか
 
 - **規則の一般化**: `task_core::model_catalog::assignments::WireRule`（`new(source, adapter, row_model)` / `proxy(source)`、`prefix` / `model` / `catalog_model_id`、`configured_prefix` / `configured_wire` / `default_wire_prefix` / `adapter_takes_provider_prefix`）。行の config の wire（lane binding → 行の `model`）の `<prefix>/` を引き継ぎ、無ければ source × adapter の表（`opencode-go` × acp|pi → `opencode-go/`）、proxy は接頭辞なし。旧 `wire_prefix_for`（opencode-go × acp だけ）は廃止。
-- **3 か所 + API**: dispatcher `provider_select.rs`（`effective_tier_models`・役割メンバー候補）、routing catalog `celeris::config::model_catalog`（`assigned_upstream` が元の `upstream_model` の接頭辞を引き継ぐ。seed は表。`apply_model_catalog` の不在・無効の照合も `<prefix>/` を見通す）、llm-proxy `normalize_legacy_config_with`（`WireRule::proxy`）、task-api `model_assignments.rs`（`Participant.adapter`、preview の before / after を実行用の名前に。`docs/api/v1/gui-api.md` §3.127.4 を更新）。
+- **3 か所 + API**: dispatcher `provider_select.rs`（`effective_tier_models`・役割メンバー候補）、routing catalog `celeris::config::model_catalog`（`assigned_upstream` が元の `upstream_model` の接頭辞を引き継ぐ。seed は表。`apply_model_catalog` の不在・無効の照合も `<prefix>/` を見通す）、llm-proxy `normalize_legacy_config_with`（`WireRule::proxy`）、task-api `model_assignments.rs`（`Participant.adapter`、preview の before / after を実行用の名前に。`docs/api/v1/api.md` §3.127.4 を更新）。
 - **人のコメント（Pi 行）への対応**: `pi` を `provider/<id>` を要する adapter に含め、qwen の cheap 割り当て（ACP・Pi 行とも `qwen-local/qwen3.8-27b`）と opencode go の Pi 行（`opencode-go/grok-4.6` 行に `glm-5` → `opencode-go/glm-5`）の両方を dispatcher の実起動（`WorkerStarted.model`）・routing catalog・preview で固定した。
 
 ## 証拠

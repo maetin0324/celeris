@@ -51,7 +51,7 @@ ADR-0128（`agent-docs/adr/0128-docs-layout.md`）と `scripts/dev/docs-layout.t
 | 削除 | `docs/gui/bootstrap/agents/implementer.md` | - | 初期コピー元だが、現行の agent 定義は gui/.claude/agents/implementer.md に配置済みの重複。人の確認で削除。 | `926e19c0` |
 | 削除 | `docs/ops/adr-0079-r5b-runbook.md` | - | ADR-0079 R5b の一度きりの作業手順であり、現行の運用文書ではない。人の確認で削除（JSON フィクスチャは crates/task-api/tests/fixtures/ へ切り出し）。 | `243009c3` |
 | 削除 | `docs/ops/home-nfs-migration-2026-09-25.md` | - | 2026-09-25 の一度きりの移行手順であり、現行の運用文書ではない。人の確認で削除。 | `d0e78511` |
-| 削除 | `docs/web/dogfood.md` | - | 起動・確認手順と H6/H9 の未決定・問題記録が混在する一度きりの作業文書で、現行の運用文書は docs/ops/web-parallel-operation.md にある。人の確認で削除。 | `c63d53c2` |
+| 削除 | `docs/web/dogfood.md` | - | 起動・確認手順と H6/H9 の未決定・問題記録が混在する一度きりの作業文書で、現行の運用文書は docs/ops/web-operation.md にある。人の確認で削除。 | `c63d53c2` |
 
 ## move 行（172 件、git mv で rename として記録）
 | 処理 | 旧パス | 新パス | 理由 | 最後の commit（移動前） |
@@ -176,7 +176,7 @@ ADR-0128（`agent-docs/adr/0128-docs-layout.md`）と `scripts/dev/docs-layout.t
 | 移動 | `docs/gui/DESIGN-GUI.md` | `agent-docs/gui/design.md` | ADR-0128 D1 分類: agent（進捗・ADR・経緯の記録として agent-docs/ へ） | `926e19c0` |
 | 移動 | `docs/gui/adr/0001-architecture-boundary.md` | `agent-docs/gui/adr/0001-architecture-boundary.md` | ADR-0128 D1 分類: agent（進捗・ADR・経緯の記録として agent-docs/ へ） | `926e19c0` |
 | 移動 | `docs/gui/adr/0002-frontend-stack.md` | `agent-docs/gui/adr/0002-frontend-stack.md` | ADR-0128 D1 分類: agent（進捗・ADR・経緯の記録として agent-docs/ へ） | `cf5bdf1c` |
-| 移動 | `docs/gui/api.md` | `docs/api/v1/gui-api.md` | ADR-0128 D1 分類: human（現行の仕様・手順として docs/ に残す） | `0a822692` |
+| 移動 | `docs/gui/api.md` | `docs/api/v1/api.md` | ADR-0128 D1 分類: human（現行の仕様・手順として docs/ に残す） | `0a822692` |
 | 移動 | `docs/gui/celeris-proposals.md` | `agent-docs/gui/celeris-proposals.md` | ADR-0128 D1 分類: agent（進捗・ADR・経緯の記録として agent-docs/ へ） | `926e19c0` |
 | 移動 | `docs/gui/model-routing/accounts-1440.png` | `agent-docs/gui/model-routing/accounts-1440.png` | ADR-0128 D1 分類: agent（進捗・ADR・経緯の記録として agent-docs/ へ） | `e97f8072` |
 | 移動 | `docs/gui/model-routing/accounts-360.png` | `agent-docs/gui/model-routing/accounts-360.png` | ADR-0128 D1 分類: agent（進捗・ADR・経緯の記録として agent-docs/ へ） | `e97f8072` |
@@ -226,5 +226,5 @@ ADR-0128（`agent-docs/adr/0128-docs-layout.md`）と `scripts/dev/docs-layout.t
 | 移動 | `docs/web/gates/p5-02-security.md` | `agent-docs/web/gates/p5-02-security.md` | ADR-0128 D1 分類: agent（進捗・ADR・経緯の記録として agent-docs/ へ） | `e263ec4e` |
 | 移動 | `docs/web/gates/p5-03-mobile-a11y.md` | `agent-docs/web/gates/p5-03-mobile-a11y.md` | ADR-0128 D1 分類: agent（進捗・ADR・経緯の記録として agent-docs/ へ） | `ba629384` |
 | 移動 | `docs/web/implementation-plan.md` | `agent-docs/web/implementation-plan.md` | ADR-0128 D1 分類: agent（進捗・ADR・経緯の記録として agent-docs/ へ） | `3de38913` |
-| 移動 | `docs/web/parallel-operation.md` | `docs/ops/web-parallel-operation.md` | ADR-0128 D1 分類: human（現行の仕様・手順として docs/ に残す） | `8bb6a99b` |
+| 移動 | `docs/web/parallel-operation.md` | `docs/ops/web-operation.md` | ADR-0128 D1 分類: human（現行の仕様・手順として docs/ に残す） | `8bb6a99b` |
 | 移動 | `docs/workspace.md` | `docs/guides/workspace.md` | ADR-0128 D1 分類: human（現行の仕様・手順として docs/ に残す） | `5d80fa15` |

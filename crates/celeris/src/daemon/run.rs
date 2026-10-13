@@ -5,7 +5,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use task_core::{DaemonMode, InstanceRole, SharedRole};
-use task_worker::FakeAdapter;
 
 use super::api::{RunningApi, start_api};
 use super::bootstrap::{
@@ -51,8 +50,8 @@ pub async fn run(config: Config, opts: RunOptions) -> Result<Exit, DaemonError> 
     // 従来どおり再起動が要る。`reload_providers` がそれ以外のフィールドには触れない）。
     let mut config = config;
     let verify = opts.mode == DaemonMode::Verify;
-    // ADR-0041 D5（Phase 51）: verify の celeris は `genre = "smoke"` を 1 件だけ流せる。その役割・分野・
-    // プロバイダ（すべて偽のアダプタ）は**組み込みで**足す（設定ファイルに同じ id があっても上書きする）。
+    // ADR-0041 D5（Phase 51）: verify の celeris は `genre = "smoke"` を 1 件だけ流せる。その llm source・harness・
+    // 役割・分野（すべて偽のアダプタ）は**組み込みで**足す（設定ファイルに同じ id があっても上書きする）。
     if verify {
         config.apply_verify_smoke();
     }
@@ -190,13 +189,17 @@ pub async fn run(config: Config, opts: RunOptions) -> Result<Exit, DaemonError> 
     // ADR-0040 D4: `standby` は dispatch も裏方もしない（`tick` そのものを呼ばない）。`active` に
     // なったら `set_accepting_new_work(true)` で始める。
     dispatcher.set_accepting_new_work(verify || role.get() == InstanceRole::Active);
-    // ADR-0041 D5: verify が面倒を見てよいのは「組み込みの分野 `smoke` で、アダプタが `fake`」のタスクだけ。
-    // アダプタまで見るのは、本物の LLM を呼ぶ経路を**設定ではなく構造で**閉じるため（ADR-0041 §3）。
-    // それ以外は ready のまま置かれ、リースの回収もレビューの拾い上げも起きない。
+    // ADR-0041 D5: verify が面倒を見てよいのは「組み込みの分野 `smoke` で、harness が組み込みの `smoke`」の
+    // タスクだけ。verify の `smoke` harness は `apply_verify_smoke` が必ず偽のアダプタ（kind `fake`）で
+    // 上書きするので、harness まで見ることで本物の LLM を呼ぶ経路を**設定ではなく構造で**閉じる
+    // （ADR-0041 §3）。それ以外は ready のまま置かれ、リースの回収もレビューの拾い上げも起きない。
     if verify {
         dispatcher.set_eligible_tasks(Arc::new(|task: &task_core::Task| {
             task.genre.as_deref() == Some(config::SMOKE_ID)
-                && task.worker_hint.adapter.as_deref() == Some(FakeAdapter::ID)
+                && task
+                    .harness_id
+                    .as_ref()
+                    .is_some_and(|id| id.as_ref() == config::SMOKE_ID)
         }));
     }
     // ADR-0064 D3/D5（Phase 110a）: 背景チェックポイントと定期バックアップ。`verify` はデータのコピーに

@@ -51,16 +51,9 @@ pub struct ScratchConfig {
     pub adopt_max_distance: u64,
     #[serde(default = "default_scratch_measure_interval_secs")]
     pub measure_interval_secs: u64,
-    /// 廃止済みの節。古い config を読めるようにするためだけに保持し、値は使わない。
-    #[serde(default)]
-    sccache: Option<toml::Table>,
     /// ADR-0075 D4（Phase G2）: `[scratch.cargo]`。
     #[serde(default)]
     pub cargo: ScratchCargoConfig,
-    #[serde(default)]
-    l2: Option<toml::Table>,
-    #[serde(default)]
-    cache_server: Option<toml::Table>,
 }
 
 /// `[scratch.cargo]`（ADR-0075 D4、Phase G2）: scratch を使う経路の cargo の既定。
@@ -109,10 +102,7 @@ impl Default for ScratchConfig {
             adopt: default_scratch_enabled(),
             adopt_max_distance: default_scratch_adopt_max_distance(),
             measure_interval_secs: default_scratch_measure_interval_secs(),
-            sccache: None,
             cargo: ScratchCargoConfig::default(),
-            l2: None,
-            cache_server: None,
         }
     }
 }
@@ -226,18 +216,6 @@ impl Config {
 }
 
 impl ScratchConfig {
-    /// 警告すべき旧節を返す。節の中のキーは互換性のため検証しない。
-    pub(super) fn deprecated_sections(&self) -> Vec<&'static str> {
-        [
-            (self.sccache.is_some(), "scratch.sccache"),
-            (self.l2.is_some(), "scratch.l2"),
-            (self.cache_server.is_some(), "scratch.cache_server"),
-        ]
-        .into_iter()
-        .filter_map(|(present, name)| present.then_some(name))
-        .collect()
-    }
-
     /// ADR-0075 D7: `[scratch] dir`（書いたときだけ。既定は `scratch_dir()` が build_cache_dir の親から組む）。
     pub(super) fn resolve_paths(&mut self, base: &Path) {
         let resolve = |p: &PathBuf| {

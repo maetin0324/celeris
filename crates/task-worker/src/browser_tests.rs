@@ -116,6 +116,7 @@ fn request(workspace: &Path) -> RunRequest {
             ..Default::default()
         },
         cargo_target_dir: None,
+        llm_route: None,
     }
 }
 

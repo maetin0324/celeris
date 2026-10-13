@@ -11,6 +11,7 @@ export type TaskListFilters = {
   genre?: string;
   order?: string;
   limit?: string;
+  run_state?: "runnable" | "waiting";
 };
 
 export function taskListPath(filters: TaskListFilters, cursor?: string | null): string {
@@ -20,6 +21,7 @@ export function taskListPath(filters: TaskListFilters, cursor?: string | null): 
   if (filters.genre) params.set("genre", filters.genre);
   if (filters.order) params.set("order", filters.order);
   if (filters.limit) params.set("limit", filters.limit);
+  if (filters.run_state) params.set("run_state", filters.run_state);
   if (cursor) params.set("cursor", cursor);
   return params.toString() === "" ? "/api/tasks" : `/api/tasks?${params.toString()}`;
 }
@@ -31,6 +33,7 @@ export function taskListQueryKey(filters: TaskListFilters) {
     genre: filters.genre,
     order: filters.order,
     limit: filters.limit,
+    run_state: filters.run_state,
   });
 }
 

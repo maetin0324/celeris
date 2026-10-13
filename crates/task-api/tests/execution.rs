@@ -1071,7 +1071,7 @@ async fn put_with_an_active_plan_is_a_human_replan_that_may_override_a_done_spec
     let put = |body: &Value| put_json_with(&path, body, &[("authorization", auth.as_str())]);
 
     let mut v1 = plan_body();
-    v1["work_units"][0]["checks"] = json!([{"cmd": "git diff --quiet 06e9a03cffe8 -- gui"}]);
+    v1["work_units"][0]["checks"] = json!([{"cmd": "git diff --quiet 06e9a03cffe8 -- web"}]);
     let created = send(&app, put(&v1)).await;
     assert_eq!(created.status, 201, "{}", created.text());
     assert!(created.json().get("replan").is_none());
@@ -1113,7 +1113,7 @@ async fn put_with_an_active_plan_is_a_human_replan_that_may_override_a_done_spec
     assert!(resp.text().contains("done work unit a"), "{}", resp.text());
 
     // done の `a` の check を直す人の replan は 200。
-    let fixed = r#"git diff --quiet 06e9a03cffe8 -- gui ":!gui/docs/adr/0002-frontend-stack.md""#;
+    let fixed = r#"git diff --quiet 06e9a03cffe8 -- web ":!docs/frontend/DESIGN.md""#;
     let mut v2 = v1.clone();
     v2["work_units"][0]["checks"][0]["cmd"] = json!(fixed);
     let resp = send(&app, put(&v2)).await;

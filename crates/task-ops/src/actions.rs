@@ -377,7 +377,7 @@ fn create_task_action(
         workspace: ws_path,
         cluster: ws_cluster,
         workspace_mode: ws_mode,
-        adapter: None,
+        harness: None,
         repos: repos.to_vec(),
         labels: Vec::new(),
         skills: skills.to_vec(),

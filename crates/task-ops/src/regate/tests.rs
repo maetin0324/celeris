@@ -33,7 +33,7 @@ fn spec(title: &str) -> crate::add::NewTaskSpec {
         workspace: None,
         cluster: None,
         workspace_mode: None,
-        adapter: None,
+        harness: None,
         labels: Vec::new(),
         category: None,
         status: None,

@@ -307,7 +307,13 @@ async fn claude_non_stream_round_trip() {
     let (addr, _h2) = spawn(router(state)).await;
 
     let client = reqwest::Client::new();
-    let resp = post_chat(&client, addr, &chat_request("claude/standard", false), None).await;
+    let resp = post_chat(
+        &client,
+        addr,
+        &chat_request("claude_oauth/claude-opus-5-5", false),
+        None,
+    )
+    .await;
     assert_eq!(resp.status(), StatusCode::OK);
     assert_eq!(
         resp.headers()
@@ -324,12 +330,12 @@ async fn claude_non_stream_round_trip() {
     let body: Value = resp.json().await.expect("json");
     assert_eq!(body["choices"][0]["message"]["content"], "Hello world");
     assert_eq!(body["choices"][0]["finish_reason"], "stop");
-    assert_eq!(body["model"], "claude/standard");
+    assert_eq!(body["model"], "claude_oauth/claude-opus-5-5");
 
     // system メッセージが `system` フィールドに分離されていること。
     let captured = fake.captured.lock().expect("lock");
     assert_eq!(captured[0]["system"], "You are terse.");
-    // ADR-0069 Phase 118 D2: default_claude_models の standard は claude-opus-5-5（実測 ID）。
+    // 要求した model（claude_oauth/claude-opus-5-5 の model 部分）がそのまま上流へ渡る。
     assert_eq!(captured[0]["model"], "claude-opus-5-5");
 }
 
@@ -370,7 +376,13 @@ async fn claude_stream_round_trip() {
     let (addr, _h2) = spawn(router(state)).await;
 
     let client = reqwest::Client::new();
-    let resp = post_chat(&client, addr, &chat_request("claude/standard", true), None).await;
+    let resp = post_chat(
+        &client,
+        addr,
+        &chat_request("claude_oauth/claude-opus-5-5", true),
+        None,
+    )
+    .await;
     assert_eq!(resp.status(), StatusCode::OK);
     let text = resp.text().await.expect("text");
     assert!(text.contains("\"content\":\"Hello\""), "{text}");
@@ -422,7 +434,7 @@ async fn claude_tool_call_round_trip() {
         "function": {"name": "get_weather", "description": "look up weather", "parameters": {"type": "object", "properties": {"city": {"type": "string"}}}}
     }]);
     let first = json!({
-        "model": "claude/standard",
+        "model": "claude_oauth/claude-opus-5-5",
         "stream": false,
         "tools": tools,
         "messages": [{"role": "user", "content": "weather in Tsukuba?"}]
@@ -442,7 +454,7 @@ async fn claude_tool_call_round_trip() {
     let call_id = call["id"].as_str().expect("id").to_string();
 
     let second = json!({
-        "model": "claude/standard",
+        "model": "claude_oauth/claude-opus-5-5",
         "stream": false,
         "tools": tools,
         "messages": [
@@ -543,7 +555,13 @@ async fn claude_401_refreshes_and_retries_then_writes_back_the_credentials_file(
     );
     let (addr, _h2) = spawn(router(state)).await;
     let client = reqwest::Client::new();
-    let resp = post_chat(&client, addr, &chat_request("claude/standard", false), None).await;
+    let resp = post_chat(
+        &client,
+        addr,
+        &chat_request("claude_oauth/claude-opus-5-5", false),
+        None,
+    )
+    .await;
     assert_eq!(resp.status(), StatusCode::OK);
     let body: Value = resp.json().await.expect("json");
     assert_eq!(body["choices"][0]["message"]["content"], "ok after refresh");
@@ -643,7 +661,13 @@ async fn claude_429_falls_back_to_the_next_account_and_records_a_cooldown() {
     let (addr, _h4) = spawn(router(state)).await;
     let client = reqwest::Client::new();
 
-    let resp = post_chat(&client, addr, &chat_request("claude/standard", false), None).await;
+    let resp = post_chat(
+        &client,
+        addr,
+        &chat_request("claude_oauth/claude-opus-5-5", false),
+        None,
+    )
+    .await;
     assert_eq!(resp.status(), StatusCode::OK);
     assert_eq!(
         resp.headers()
@@ -829,7 +853,13 @@ async fn codex_non_stream_round_trip() {
     );
     let (addr, _h2) = spawn(router(state)).await;
     let client = reqwest::Client::new();
-    let resp = post_chat(&client, addr, &chat_request("gpt/standard", false), None).await;
+    let resp = post_chat(
+        &client,
+        addr,
+        &chat_request("codex_oauth/gpt-6-sol", false),
+        None,
+    )
+    .await;
     assert_eq!(resp.status(), StatusCode::OK);
     assert_eq!(
         resp.headers()
@@ -890,14 +920,14 @@ async fn codex_tool_call_round_trip() {
     let (addr, _h2) = spawn(router(state)).await;
     let client = reqwest::Client::new();
 
-    let first = json!({"model": "gpt/standard", "stream": false, "messages": [{"role": "user", "content": "weather?"}]});
+    let first = json!({"model": "codex_oauth/gpt-6-sol", "stream": false, "messages": [{"role": "user", "content": "weather?"}]});
     let resp = post_chat(&client, addr, &first, None).await;
     let body: Value = resp.json().await.expect("json");
     let call = body["choices"][0]["message"]["tool_calls"][0].clone();
     let call_id = call["id"].as_str().expect("id").to_string();
 
     let second = json!({
-        "model": "gpt/standard",
+        "model": "codex_oauth/gpt-6-sol",
         "stream": false,
         "messages": [
             {"role": "user", "content": "weather?"},
@@ -940,7 +970,13 @@ async fn codex_stream_round_trip() {
     );
     let (addr, _h2) = spawn(router(state)).await;
     let client = reqwest::Client::new();
-    let resp = post_chat(&client, addr, &chat_request("gpt/cheap", true), None).await;
+    let resp = post_chat(
+        &client,
+        addr,
+        &chat_request("codex_oauth/gpt-6-luna", true),
+        None,
+    )
+    .await;
     assert_eq!(resp.status(), StatusCode::OK);
     let text = resp.text().await.expect("text");
     assert!(text.contains("\"content\":\"Hi\""), "{text}");
@@ -989,7 +1025,13 @@ async fn codex_400_upstream_error_surfaces_the_detail_field() {
     );
     let (addr, _h2) = spawn(router(state)).await;
     let client = reqwest::Client::new();
-    let resp = post_chat(&client, addr, &chat_request("gpt/standard", false), None).await;
+    let resp = post_chat(
+        &client,
+        addr,
+        &chat_request("codex_oauth/gpt-6-sol", false),
+        None,
+    )
+    .await;
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     let body: Value = resp.json().await.expect("json");
     assert!(
@@ -1062,7 +1104,13 @@ async fn relay_non_stream_passes_through_and_rewrites_the_model_field() {
     );
     let (addr, _h2) = spawn(router(state)).await;
     let client = reqwest::Client::new();
-    let resp = post_chat(&client, addr, &chat_request("qwen/cheap", false), None).await;
+    let resp = post_chat(
+        &client,
+        addr,
+        &chat_request("qwen/qwen3.8-27b", false),
+        None,
+    )
+    .await;
     assert_eq!(resp.status(), StatusCode::OK);
     assert_eq!(
         resp.headers()
@@ -1072,7 +1120,7 @@ async fn relay_non_stream_passes_through_and_rewrites_the_model_field() {
     );
     let body: Value = resp.json().await.expect("json");
     assert_eq!(body["choices"][0]["message"]["content"], "relayed reply");
-    assert_eq!(body["model"], "qwen/cheap"); // 要求した抽象名に書き換わっている
+    assert_eq!(body["model"], "qwen/qwen3.8-27b"); // 要求した名前に書き換わっている
 }
 
 #[tokio::test]
@@ -1100,90 +1148,24 @@ async fn relay_stream_passes_through() {
     );
     let (addr, _h2) = spawn(router(state)).await;
     let client = reqwest::Client::new();
-    let resp = post_chat(&client, addr, &chat_request("qwen/cheap", true), None).await;
+    let resp = post_chat(&client, addr, &chat_request("qwen/qwen3.8-27b", true), None).await;
     let text = resp.text().await.expect("text");
     assert!(text.contains("\"content\":\"hi\""), "{text}");
-    assert!(text.contains("\"model\":\"qwen/cheap\""), "{text}");
+    assert!(text.contains("\"model\":\"qwen/qwen3.8-27b\""), "{text}");
     assert!(text.ends_with("data: [DONE]\n\n"));
 }
 
 // ---------------------------------------------------------------------------
-// 選択: free 優先、cooldown を経て次の候補
+// 具体的な source/model の要求（ADR 2026-10-11 llm-source-harness-selection）
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
-async fn cheap_only_celeris_cheap_prefers_the_reachable_relay_when_prefer_free() {
-    let (relay_addr, _h1) = spawn(relay_router()).await;
-    let (anthropic_addr, _h2) = spawn(anthropic_router(Arc::new(AnthropicFake::default()))).await;
-    let accounts_tmp = tempfile::tempdir().expect("tmp");
-    write_claude_credentials(
-        accounts_tmp.path(),
-        "acct-a",
-        "fake-access-a",
-        "fake-refresh-a",
-        far_future_ms(),
-    );
-
-    let mut config = LlmProxyConfig {
-        prefer_free: true,
-        ..LlmProxyConfig::default()
-    };
-    config.sources.claude_oauth = Some(claude_source(
-        anthropic_addr,
-        accounts_tmp.path().to_path_buf(),
-    ));
-    config
-        .sources
-        .openai_compatible
-        .push(OpenAiCompatibleConfig {
-            id: "qwen".into(),
-            base_url: format!("http://{relay_addr}/v1"),
-            api_key: None,
-            enabled: true,
-        });
-    let state = ProxyState::new(
-        config,
-        reqwest::Client::new(),
-        Some(Arc::new(StdMutex::new(AccountBook::new_in_memory()))),
-        None,
-        None,
-        SharedRole::default(),
-        None,
-        std::time::Duration::from_secs(5),
-    );
-    let (addr, _h3) = spawn(router(state)).await;
-    let client = reqwest::Client::new();
-    let resp = post_chat(&client, addr, &chat_request("celeris/cheap", false), None).await;
-    assert_eq!(resp.status(), StatusCode::OK);
-    assert_eq!(
-        resp.headers()
-            .get("x-celeris-source")
-            .and_then(|v| v.to_str().ok()),
-        Some("openai-compatible:qwen")
-    );
-}
-
-#[tokio::test]
-async fn cheap_only_celeris_cheap_falls_back_when_relay_connection_is_refused() {
-    let (anthropic_addr, _h2) = spawn(anthropic_router(Arc::new(AnthropicFake::default()))).await;
-    let accounts_tmp = tempfile::tempdir().expect("tmp");
-    write_claude_credentials(
-        accounts_tmp.path(),
-        "acct-a",
-        "fake-access-a",
-        "fake-refresh-a",
-        far_future_ms(),
-    );
-
-    let mut config = LlmProxyConfig {
-        prefer_free: true,
-        ..LlmProxyConfig::default()
-    };
-    config.sources.claude_oauth = Some(claude_source(
-        anthropic_addr,
-        accounts_tmp.path().to_path_buf(),
-    ));
-    // 到達しない relay（bind していないポート）を 1 つ入れておく。
+fn claude_and_refused_relay(
+    anthropic_addr: SocketAddr,
+    accounts_dir: std::path::PathBuf,
+) -> LlmProxyConfig {
+    let mut config = LlmProxyConfig::default();
+    config.sources.claude_oauth = Some(claude_source(anthropic_addr, accounts_dir));
+    // 到達しない relay（bind していないポート）。
     config
         .sources
         .openai_compatible
@@ -1193,8 +1175,23 @@ async fn cheap_only_celeris_cheap_falls_back_when_relay_connection_is_refused() 
             api_key: None,
             enabled: true,
         });
+    config
+}
+
+#[tokio::test]
+async fn proxy_route_tier_alias_and_unknown_source_names_are_rejected() {
+    let fake = Arc::new(AnthropicFake::default());
+    let (anthropic_addr, _h1) = spawn(anthropic_router(fake.clone())).await;
+    let accounts_tmp = tempfile::tempdir().expect("tmp");
+    write_claude_credentials(
+        accounts_tmp.path(),
+        "acct-a",
+        "fake-access-a",
+        "fake-refresh-a",
+        far_future_ms(),
+    );
     let state = ProxyState::new(
-        config,
+        claude_and_refused_relay(anthropic_addr, accounts_tmp.path().to_path_buf()),
         reqwest::Client::new(),
         Some(Arc::new(StdMutex::new(AccountBook::new_in_memory()))),
         None,
@@ -1203,9 +1200,66 @@ async fn cheap_only_celeris_cheap_falls_back_when_relay_connection_is_refused() 
         None,
         std::time::Duration::from_secs(5),
     );
-    let (addr, _h3) = spawn(router(state)).await;
+    let (addr, _h2) = spawn(router(state)).await;
     let client = reqwest::Client::new();
-    let resp = post_chat(&client, addr, &chat_request("celeris/cheap", false), None).await;
+    for (model, kind) in [
+        ("celeris/cheap", "unknown_source"),
+        ("claude/standard", "unknown_source"),
+        ("gpt/frontier", "unknown_source"),
+        ("codex_oauth/gpt-6-sol", "unknown_source"),
+        ("claude:claude-sonnet-5", "invalid_model"),
+        ("claude-sonnet-5", "invalid_model"),
+    ] {
+        let resp = post_chat(&client, addr, &chat_request(model, false), None).await;
+        assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY, "{model}");
+        let body: Value = resp.json().await.expect("json");
+        assert!(body.to_string().contains(kind), "{model}: {body}");
+    }
+    assert!(fake.captured.lock().expect("lock").is_empty());
+}
+
+#[tokio::test]
+async fn proxy_route_relay_request_never_falls_back_to_another_source() {
+    let fake = Arc::new(AnthropicFake::default());
+    let (anthropic_addr, _h1) = spawn(anthropic_router(fake.clone())).await;
+    let accounts_tmp = tempfile::tempdir().expect("tmp");
+    write_claude_credentials(
+        accounts_tmp.path(),
+        "acct-a",
+        "fake-access-a",
+        "fake-refresh-a",
+        far_future_ms(),
+    );
+    let state = ProxyState::new(
+        claude_and_refused_relay(anthropic_addr, accounts_tmp.path().to_path_buf()),
+        reqwest::Client::new(),
+        Some(Arc::new(StdMutex::new(AccountBook::new_in_memory()))),
+        None,
+        None,
+        SharedRole::default(),
+        None,
+        std::time::Duration::from_secs(5),
+    );
+    let (addr, _h2) = spawn(router(state)).await;
+    let client = reqwest::Client::new();
+    let resp = post_chat(
+        &client,
+        addr,
+        &chat_request("qwen/qwen3.8-27b", false),
+        None,
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert!(fake.captured.lock().expect("lock").is_empty());
+
+    // 同じ proxy で Claude を名指しすれば Claude に、要求どおりの model で届く。
+    let resp = post_chat(
+        &client,
+        addr,
+        &chat_request("claude_oauth/claude-sonnet-5", false),
+        None,
+    )
+    .await;
     assert_eq!(resp.status(), StatusCode::OK);
     assert_eq!(
         resp.headers()
@@ -1213,210 +1267,9 @@ async fn cheap_only_celeris_cheap_falls_back_when_relay_connection_is_refused() 
             .and_then(|v| v.to_str().ok()),
         Some("claude-oauth")
     );
-}
-
-#[tokio::test]
-async fn cheap_only_legacy_mappings_never_route_frontier_or_standard_to_qwen() {
-    let (relay_addr, _relay) = spawn(relay_router()).await;
-    let (anthropic_addr, _claude) =
-        spawn(anthropic_router(Arc::new(AnthropicFake::default()))).await;
-    let accounts = tempfile::tempdir().expect("tmp");
-    write_claude_credentials(
-        accounts.path(),
-        "acct-a",
-        "fake-access-a",
-        "fake-refresh-a",
-        far_future_ms(),
-    );
-    let mut config = LlmProxyConfig {
-        prefer_free: true,
-        ..LlmProxyConfig::default()
-    };
-    config.sources.claude_oauth = Some(claude_source(anthropic_addr, accounts.path().into()));
-    config
-        .sources
-        .openai_compatible
-        .push(OpenAiCompatibleConfig {
-            id: "qwen".into(),
-            base_url: format!("http://{relay_addr}/v1"),
-            api_key: None,
-            enabled: true,
-        });
-    // Even a caller that constructs the config directly must not bypass the tier boundary.
-    config
-        .models
-        .qwen
-        .insert(task_core::Tier::Frontier, "legacy-frontier".into());
-    config
-        .models
-        .qwen
-        .insert(task_core::Tier::Standard, "legacy-standard".into());
-    let state = ProxyState::new(
-        config,
-        reqwest::Client::new(),
-        Some(Arc::new(StdMutex::new(AccountBook::new_in_memory()))),
-        None,
-        None,
-        SharedRole::default(),
-        None,
-        std::time::Duration::from_secs(5),
-    );
-    let now = time::OffsetDateTime::now_utc().unix_timestamp();
-    let view = state.sources_view(now).await;
-    for tier in ["frontier", "standard"] {
-        assert_eq!(
-            view.celeris_tiers
-                .iter()
-                .find(|v| v.tier == tier)
-                .unwrap()
-                .resolves_to
-                .as_deref(),
-            Some("claude-oauth")
-        );
-    }
-    assert_eq!(
-        view.celeris_tiers
-            .iter()
-            .find(|v| v.tier == "cheap")
-            .unwrap()
-            .resolves_to
-            .as_deref(),
-        Some("openai-compatible:qwen")
-    );
-
-    let (addr, _proxy) = spawn(router(state)).await;
-    let client = reqwest::Client::new();
-    for tier in ["frontier", "standard", "cheap"] {
-        let resp = post_chat(
-            &client,
-            addr,
-            &chat_request(&format!("celeris/{tier}"), false),
-            None,
-        )
-        .await;
-        assert_eq!(resp.status(), StatusCode::OK);
-        let expected = if tier == "cheap" {
-            "openai-compatible:qwen"
-        } else {
-            "claude-oauth"
-        };
-        assert_eq!(resp.headers().get("x-celeris-source").unwrap(), expected);
-    }
-    for tier in ["frontier", "standard"] {
-        let resp = post_chat(
-            &client,
-            addr,
-            &chat_request(&format!("qwen/{tier}"), false),
-            None,
-        )
-        .await;
-        assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
-    }
-}
-
-#[tokio::test]
-async fn cheap_only_relay_send_failure_falls_back_to_claude_cheap() {
-    let broken_relay = Router::new().route("/v1/models", get(relay_models)).route(
-        "/v1/chat/completions",
-        post(|| async { StatusCode::SERVICE_UNAVAILABLE }),
-    );
-    let (relay_addr, _relay) = spawn(broken_relay).await;
-    let (anthropic_addr, _claude) =
-        spawn(anthropic_router(Arc::new(AnthropicFake::default()))).await;
-    let accounts = tempfile::tempdir().expect("tmp");
-    write_claude_credentials(
-        accounts.path(),
-        "acct-a",
-        "fake-access-a",
-        "fake-refresh-a",
-        far_future_ms(),
-    );
-    let mut config = LlmProxyConfig {
-        prefer_free: true,
-        ..LlmProxyConfig::default()
-    };
-    config.sources.claude_oauth = Some(claude_source(anthropic_addr, accounts.path().into()));
-    config
-        .sources
-        .openai_compatible
-        .push(OpenAiCompatibleConfig {
-            id: "qwen".into(),
-            base_url: format!("http://{relay_addr}/v1"),
-            api_key: None,
-            enabled: true,
-        });
-    let state = ProxyState::new(
-        config,
-        reqwest::Client::new(),
-        Some(Arc::new(StdMutex::new(AccountBook::new_in_memory()))),
-        None,
-        None,
-        SharedRole::default(),
-        None,
-        std::time::Duration::from_secs(5),
-    );
-    let (addr, _proxy) = spawn(router(state)).await;
-    let resp = post_chat(
-        &reqwest::Client::new(),
-        addr,
-        &chat_request("celeris/cheap", false),
-        None,
-    )
-    .await;
-    assert_eq!(resp.status(), StatusCode::OK);
-    assert_eq!(
-        resp.headers().get("x-celeris-source").unwrap(),
-        "claude-oauth"
-    );
-}
-
-#[tokio::test]
-async fn cheap_only_unreachable_qwen_falls_back_to_gpt_cheap() {
-    let (codex_addr, _codex) = spawn(codex_router(Arc::new(CodexFake::default()))).await;
-    let accounts = tempfile::tempdir().expect("tmp");
-    write_codex_credentials(
-        accounts.path(),
-        "acct-g",
-        "fake-gpt-access",
-        "fake-gpt-refresh",
-    );
-    let mut config = LlmProxyConfig {
-        prefer_free: true,
-        ..LlmProxyConfig::default()
-    };
-    config.sources.codex_oauth = Some(codex_source(codex_addr, accounts.path().into()));
-    config
-        .sources
-        .openai_compatible
-        .push(OpenAiCompatibleConfig {
-            id: "qwen".into(),
-            base_url: "http://127.0.0.1:1/v1".into(),
-            api_key: None,
-            enabled: true,
-        });
-    let state = ProxyState::new(
-        config,
-        reqwest::Client::new(),
-        None,
-        Some(Arc::new(StdMutex::new(AccountBook::new_in_memory()))),
-        None,
-        SharedRole::default(),
-        None,
-        std::time::Duration::from_secs(5),
-    );
-    let (addr, _proxy) = spawn(router(state)).await;
-    let resp = post_chat(
-        &reqwest::Client::new(),
-        addr,
-        &chat_request("celeris/cheap", false),
-        None,
-    )
-    .await;
-    assert_eq!(resp.status(), StatusCode::OK);
-    assert_eq!(
-        resp.headers().get("x-celeris-source").unwrap(),
-        "codex-oauth"
-    );
+    let captured = fake.captured.lock().expect("lock");
+    assert_eq!(captured.len(), 1);
+    assert_eq!(captured[0]["model"], "claude-sonnet-5");
 }
 
 // ---------------------------------------------------------------------------
@@ -1468,7 +1321,7 @@ async fn embeddings_are_not_implemented() {
     let client = reqwest::Client::new();
     let resp = client
         .post(format!("http://{addr}/v1/embeddings"))
-        .json(&json!({"model": "celeris/cheap", "input": "hi"}))
+        .json(&json!({"model": "qwen/qwen3.8-27b", "input": "hi"}))
         .send()
         .await
         .expect("send");
@@ -1476,7 +1329,7 @@ async fn embeddings_are_not_implemented() {
 }
 
 #[tokio::test]
-async fn cheap_only_models_lists_only_the_configured_sources() {
+async fn proxy_route_models_list_has_no_tier_alias() {
     let mut config = base_config();
     config
         .sources
@@ -1508,12 +1361,8 @@ async fn cheap_only_models_lists_only_the_configured_sources() {
         .iter()
         .map(|m| m["id"].as_str().unwrap_or_default().to_string())
         .collect();
-    assert!(ids.contains(&"celeris/cheap".to_string()));
-    assert!(ids.contains(&"qwen/cheap".to_string()));
-    assert!(!ids.contains(&"qwen/standard".to_string()));
-    assert!(!ids.contains(&"qwen/frontier".to_string()));
-    assert!(!ids.iter().any(|id| id.starts_with("claude/")));
-    assert!(!ids.iter().any(|id| id.starts_with("gpt/")));
+    // proxy は model の一覧を持たない（正本は celeris の `[llm_sources.*].models`）。
+    assert!(ids.is_empty(), "{ids:?}");
 }
 
 #[tokio::test]
@@ -1574,7 +1423,13 @@ async fn a_successful_request_is_recorded_with_tokens_and_no_body() {
     );
     let (addr, _h2) = spawn(router(state)).await;
     let client = reqwest::Client::new();
-    let resp = post_chat(&client, addr, &chat_request("claude/standard", false), None).await;
+    let resp = post_chat(
+        &client,
+        addr,
+        &chat_request("claude_oauth/claude-opus-5-5", false),
+        None,
+    )
+    .await;
     assert_eq!(resp.status(), StatusCode::OK);
 
     let conn = rusqlite::Connection::open(&db_path).expect("open");
@@ -1737,16 +1592,16 @@ async fn relay_probe_reports_the_reason_and_recovers_after_the_cache_expires() {
         .expect("qwen source");
     assert_eq!(qwen.reachable, Some(true));
     assert_eq!(qwen.unreachable_reason, None);
-    let cheap = view
-        .celeris_tiers
-        .iter()
-        .find(|t| t.tier == "cheap")
-        .expect("cheap tier");
-    assert_eq!(cheap.resolves_to.as_deref(), Some("openai-compatible:qwen"));
 
     let (addr, _h2) = spawn(router(state)).await;
     let client = reqwest::Client::new();
-    let resp = post_chat(&client, addr, &chat_request("celeris/cheap", false), None).await;
+    let resp = post_chat(
+        &client,
+        addr,
+        &chat_request("qwen/qwen3.8-27b", false),
+        None,
+    )
+    .await;
     assert_eq!(resp.status(), StatusCode::OK);
     assert_eq!(
         resp.headers()
@@ -1902,7 +1757,13 @@ async fn no_secret_value_appears_in_the_logs_even_across_a_token_refresh() {
 
     let (addr, _h2) = spawn(router(state)).await;
     let client = reqwest::Client::new();
-    let resp = post_chat(&client, addr, &chat_request("claude/standard", false), None).await;
+    let resp = post_chat(
+        &client,
+        addr,
+        &chat_request("claude_oauth/claude-opus-5-5", false),
+        None,
+    )
+    .await;
     assert_eq!(resp.status(), StatusCode::OK);
 
     // 少し待ってログの flush を確実にする（同一スレッドの current_thread ランタイムなので基本は同期的）。
@@ -1974,7 +1835,13 @@ async fn no_source_available_rescans_after_a_short_wait_and_then_succeeds() {
 
     let client = reqwest::Client::new();
     let started = std::time::Instant::now();
-    let resp = post_chat(&client, addr, &chat_request("claude/standard", false), None).await;
+    let resp = post_chat(
+        &client,
+        addr,
+        &chat_request("claude_oauth/claude-opus-5-5", false),
+        None,
+    )
+    .await;
     assert_eq!(resp.status(), StatusCode::OK);
     assert!(
         started.elapsed() >= std::time::Duration::from_millis(900),
@@ -2032,7 +1899,13 @@ async fn no_source_available_gives_up_with_retry_after_when_nothing_ever_recover
 
     let client = reqwest::Client::new();
     let started = std::time::Instant::now();
-    let resp = post_chat(&client, addr, &chat_request("claude/standard", false), None).await;
+    let resp = post_chat(
+        &client,
+        addr,
+        &chat_request("claude_oauth/claude-opus-5-5", false),
+        None,
+    )
+    .await;
     let elapsed = started.elapsed();
     assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(

@@ -80,9 +80,9 @@ pub struct NotifyConfig {
     /// 判定と送信を行う間隔（秒）。
     #[serde(default = "default_interval_secs")]
     pub interval_secs: u64,
-    /// 例: `"http://192.168.1.103:7700"`。無ければ文面にリンクを入れない。
+    /// 例: `"http://192.168.1.103:7720"`。無ければ文面にリンクを入れない。
     #[serde(default)]
-    pub gui_base_url: Option<String>,
+    pub web_base_url: Option<String>,
     /// 新しい受信箱項目を同じ一通に束ねる猶予。
     #[serde(default = "default_inbox_batch_secs")]
     pub inbox_batch_secs: u64,
@@ -123,7 +123,7 @@ impl Default for NotifyConfig {
         Self {
             discord_webhook_secret: default_webhook_secret(),
             interval_secs: default_interval_secs(),
-            gui_base_url: None,
+            web_base_url: None,
             inbox_batch_secs: default_inbox_batch_secs(),
             inbox_reminder_secs: default_inbox_reminder_secs(),
             digest_interval_secs: default_digest_interval_secs(),
@@ -135,7 +135,7 @@ impl Default for NotifyConfig {
 impl NotifyConfig {
     /// 末尾の `/` を落とした GUI の根（空文字列は「無い」とみなす）。
     pub fn base_url(&self) -> Option<&str> {
-        self.gui_base_url
+        self.web_base_url
             .as_deref()
             .map(|u| u.trim_end_matches('/'))
             .filter(|u| !u.is_empty())

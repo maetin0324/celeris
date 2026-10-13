@@ -29,15 +29,6 @@ pub struct AccountSourceView {
 // ADR-0074 D4.1（Phase F3）: `window_remaining` は `task_dispatch::accounts` に移した（dispatcher と
 // この画面が同じ関数で読む）。
 
-/// ADR-0053 D4: `celeris/<tier>` が今どこに解決するか（表示専用。副作用なし）。
-#[derive(Debug, Clone, Serialize, JsonSchema)]
-pub struct CelerisTierView {
-    /// `"frontier"` / `"standard"` / `"cheap"`。
-    pub tier: String,
-    /// 解決先の供給元 id（`sources[].id` と同じ形）。今選べる候補が無ければ `null`。
-    pub resolves_to: Option<String>,
-}
-
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub struct SourceView {
     /// `claude-oauth` / `codex-oauth` / `openai-compatible:<id>`。
@@ -57,8 +48,6 @@ pub struct SourceView {
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub struct SourcesView {
     pub sources: Vec<SourceView>,
-    /// ADR-0053 D4（Phase 66）: `celeris/<tier>` が今どこに解決するか（3 tier とも）。
-    pub celeris_tiers: Vec<CelerisTierView>,
 }
 
 impl ProxyState {
@@ -127,32 +116,7 @@ impl ProxyState {
                 last_hour_completion_tokens: counts.completion_tokens,
             });
         }
-        // ADR-0053 D4（Phase 66）: 3 tier とも同じ決定的な選択（`server.rs::attempts_for`）で解決先を見る。
-        // tier ごとにモデル写像が無ければ「選べない」= `None`（値を捏造しない）。
-        let mut celeris_tiers = Vec::new();
-        for tier in [
-            task_core::Tier::Frontier,
-            task_core::Tier::Standard,
-            task_core::Tier::Cheap,
-        ] {
-            let resolves_to = self.resolves_tier(tier, now).await;
-            celeris_tiers.push(CelerisTierView {
-                tier: tier_str(tier).to_string(),
-                resolves_to,
-            });
-        }
-        SourcesView {
-            sources,
-            celeris_tiers,
-        }
-    }
-}
-
-fn tier_str(tier: task_core::Tier) -> &'static str {
-    match tier {
-        task_core::Tier::Frontier => "frontier",
-        task_core::Tier::Standard => "standard",
-        task_core::Tier::Cheap => "cheap",
+        SourcesView { sources }
     }
 }
 

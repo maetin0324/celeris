@@ -66,18 +66,6 @@ fn cos_chat(dir: &std::path::Path) -> Task {
     t
 }
 
-fn started_account(store: &Arc<dyn TaskStore>, id: TaskId) -> Option<String> {
-    store
-        .events_for(id)
-        .unwrap()
-        .iter()
-        .find_map(|(_, e)| match e {
-            Event::WorkerStarted { account, .. } => Some(account.clone()),
-            _ => None,
-        })
-        .flatten()
-}
-
 fn status(store: &Arc<dyn TaskStore>, id: TaskId) -> Status {
     store.get(id).unwrap().unwrap().status
 }
@@ -125,108 +113,6 @@ async fn cos_run_bypasses_max_concurrency_but_leaves_do_not() {
     assert_eq!(status(&store, second.id), Status::Ready);
 }
 
-/// 受け入れ条件 2 / 3: プールのプロバイダの concurrency が埋まっていても CoS run は起き、走っている run の
-/// 最も少ないアカウントに載る（`max_runs_per_account` は +1 まで）。`max_cos_runs = 2` を超える 3 本目は待つ。
-/// `GET /providers` の元のスナップショットは CoS を `in_use_cos` に別に数える。
-#[tokio::test]
-async fn cos_run_bypasses_pool_concurrency_on_the_least_loaded_account_up_to_max_cos_runs() {
-    let accounts = accounts_fixture();
-    let ws = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
-    seed_org(&store);
-    // プロバイダの concurrency 3、全体の max_concurrency 6、1 アカウント 2 本まで。
-    let mut d = pool_dispatcher(
-        store.clone(),
-        slow_pool_adapter(),
-        None,
-        accounts.path().to_path_buf(),
-        2,
-        3,
-    );
-    d.config.max_concurrency = 6;
-    assert_eq!(d.config.execution.max_cos_runs, 2, "default max_cos_runs");
-    let (tx, rx) = tokio::sync::watch::channel(None);
-    d.set_snapshot_publisher(SnapshotPublisher {
-        tx,
-        instance_id: "inst-1".into(),
-        hostname: "host-1".into(),
-        started_at: "2026-09-29T00:00:00Z".into(),
-        tick_ms: 50,
-        providers: vec![ProviderLive {
-            kind: Default::default(),
-            llm_source: None,
-            credential_refs: Default::default(),
-            tier_models: Default::default(),
-            account_id: None,
-            id: "p1".into(),
-            adapter: "claude-code".into(),
-            tiers: vec![Tier::Standard],
-            concurrency: 3,
-            model: Some("m".into()),
-            env_keys: vec![],
-            in_use: 0,
-            in_use_cos: 0,
-            last_check: None,
-            account_pool: true,
-        }],
-        provider_checks: Default::default(),
-    });
-
-    // Individual overrides, rather than provider concurrency, admit a=2 and b=1.
-    d.set_account_limit("claude-code", "a", Some(2)).unwrap();
-    d.set_account_limit("claude-code", "b", Some(1)).unwrap();
-    let leaves: Vec<Task> = (0..4).map(|_| leaf(ws.path())).collect();
-    for t in &leaves {
-        store.insert(t).unwrap();
-    }
-    assert_eq!(d.tick().unwrap().dispatched, 3);
-    assert_eq!(d.provider_in_use(&"p1".to_string()), 3);
-    let on_a = leaves[..3]
-        .iter()
-        .filter(|t| started_account(&store, t.id).as_deref() == Some("a"))
-        .count();
-    assert_eq!(on_a, 2, "leaves fill a (2) then b (1)");
-    assert_eq!(status(&store, leaves[3].id), Status::Ready);
-
-    // CoS run はプールが満杯でも起き、走っている run の少ない b に載る。
-    let chat1 = cos_chat(ws.path());
-    store.insert(&chat1).unwrap();
-    assert_eq!(d.tick().unwrap().dispatched, 1);
-    assert_eq!(status(&store, chat1.id), Status::Running);
-    assert_eq!(started_account(&store, chat1.id).as_deref(), Some("b"));
-    assert_eq!(
-        status(&store, leaves[3].id),
-        Status::Ready,
-        "leaves still wait"
-    );
-
-    let snap = rx.borrow().clone().expect("snapshot");
-    assert_eq!(snap.providers[0].in_use, 3);
-    assert_eq!(snap.providers[0].in_use_cos, 1);
-
-    // 2 本目の CoS は、個別上限に達していても +1 の追加枠として載る。
-    let chat2 = cos_chat(ws.path());
-    store.insert(&chat2).unwrap();
-    assert_eq!(d.tick().unwrap().dispatched, 1);
-    assert_eq!(status(&store, chat2.id), Status::Running);
-    assert!(started_account(&store, chat2.id).is_some());
-    assert_eq!(d.cos_in_flight(), 2);
-
-    // 3 本目の CoS は max_cos_runs (2) を超えるので待つ。
-    let chat3 = cos_chat(ws.path());
-    store.insert(&chat3).unwrap();
-    for _ in 0..3 {
-        assert_eq!(d.tick().unwrap().dispatched, 0);
-    }
-    assert_eq!(status(&store, chat3.id), Status::Ready);
-    assert_eq!(status(&store, leaves[3].id), Status::Ready);
-    let snap = rx.borrow().clone().expect("snapshot");
-    assert_eq!(
-        (snap.providers[0].in_use, snap.providers[0].in_use_cos),
-        (3, 2)
-    );
-}
-
 /// `max_cos_runs = 0` は例外の無効化: CoS の対話 run も通常の run と同じく max_concurrency で待つ。
 #[tokio::test]
 async fn max_cos_runs_zero_disables_the_exemption() {
@@ -252,49 +138,6 @@ async fn max_cos_runs_zero_disables_the_exemption() {
     store.insert(&chat).unwrap();
     assert_eq!(d.tick().unwrap().dispatched, 0);
     assert_eq!(status(&store, chat.id), Status::Ready);
-}
-
-/// A pool can run four leaves despite legacy provider concurrency=1, and stops at
-/// the two accounts' limits. Clearing a live override immediately restores default.
-#[tokio::test]
-async fn pool_ignores_provider_concurrency_and_uses_account_overrides() {
-    let accounts = accounts_fixture();
-    let ws = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
-    seed_org(&store);
-    let mut d = pool_dispatcher(
-        store.clone(),
-        slow_pool_adapter(),
-        None,
-        accounts.path().to_path_buf(),
-        2,
-        1,
-    );
-    d.config.max_concurrency = 8;
-    d.set_account_limit("claude-code", "a", Some(1)).unwrap();
-    let leaves: Vec<_> = (0..5).map(|_| leaf(ws.path())).collect();
-    for task in &leaves {
-        store.insert(task).unwrap();
-    }
-    assert_eq!(d.tick().unwrap().dispatched, 3);
-    assert_eq!(d.account_in_use(AccountAdapter::ClaudeCode, "a"), 1);
-    assert_eq!(d.account_in_use(AccountAdapter::ClaudeCode, "b"), 2);
-    assert_eq!(d.tick().unwrap().dispatched, 0);
-    assert!(!d.account_usable(AccountAdapter::ClaudeCode, "a", false));
-    assert!(d.account_usable(AccountAdapter::ClaudeCode, "a", true));
-    assert_eq!(
-        d.peek_account(AccountAdapter::ClaudeCode, "p1", false),
-        None
-    );
-    assert!(
-        d.legacy_provider_profiles(&leaf(ws.path()).worker_hint)
-            .iter()
-            .all(|p| p.deployment.concurrency_limit.is_none())
-    );
-    d.set_account_limit("claude-code", "a", None).unwrap();
-    assert_eq!(d.tick().unwrap().dispatched, 1);
-    assert_eq!(d.account_in_use(AccountAdapter::ClaudeCode, "a"), 2);
-    assert_eq!(d.tick().unwrap().dispatched, 0);
 }
 
 #[test]
@@ -354,6 +197,83 @@ fn dispatcher_account_limits_load_on_start_and_reload() {
     );
 }
 
+#[test]
+fn account_limits_source_account_and_source_limits_are_independent() {
+    let accounts = accounts_fixture();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let mut d = pool_dispatcher(
+        store,
+        slow_pool_adapter(),
+        None,
+        accounts.path().to_path_buf(),
+        2,
+        1,
+    );
+
+    // Account overrides are indexed by the migrated (source_id, account_id) key.
+    d.set_account_limit("claude-code", "a", Some(3)).unwrap();
+    d.set_account_limit("claude-code", "b", Some(1)).unwrap();
+    assert_eq!(
+        d.account_run_limit(AccountAdapter::ClaudeCode, "a", false),
+        3
+    );
+    assert_eq!(
+        d.account_run_limit(AccountAdapter::ClaudeCode, "b", false),
+        1
+    );
+
+    // A source-owned limit has no fabricated shared unknown account: it uses the
+    // explicit source key and the source's stable implicit account identity.
+    d.set_account_limit("implicit", "shared-source", Some(4))
+        .unwrap();
+    assert_eq!(
+        d.account_limits
+            .as_ref()
+            .and_then(|limits| limits.get(&(
+                task_core::llm_route::SourceId::from("implicit"),
+                task_core::llm_route::AccountId::from("shared-source"),
+            )))
+            .copied(),
+        Some(4)
+    );
+    assert_eq!(d.account_max_runs("claude-code", "shared-source"), None);
+}
+
+#[test]
+fn account_limits_source_cooldown_excludes_only_the_cooled_account() {
+    let mut book = AccountBook::new_in_memory();
+    book.set_cooldown(
+        "a",
+        crate::accounts::AccountCooldown {
+            reason: crate::accounts::AccountCooldownReason::Throttled,
+            until: 2_000,
+        },
+        1_000,
+    );
+    let a = evaluate(
+        &AccountCandidate {
+            id: "a",
+            logged_in: true,
+            in_use: 0,
+        },
+        book.state("a"),
+        2,
+        1_500,
+    );
+    let b = evaluate(
+        &AccountCandidate {
+            id: "b",
+            logged_in: true,
+            in_use: 0,
+        },
+        book.state("b"),
+        2,
+        1_500,
+    );
+    assert_eq!(a.excluded, Some(ExcludedReason::Cooldown));
+    assert_eq!(b.excluded, None);
+}
+
 /// A CoS run using its extra slot does not consume the remaining leaf slot.
 #[tokio::test]
 async fn cos_account_usage_does_not_consume_leaf_capacity() {
@@ -381,116 +301,19 @@ async fn cos_account_usage_does_not_consume_leaf_capacity() {
     assert_eq!(d.tick().unwrap().dispatched, 0);
 }
 
-/// A non-pool row (`account_pool = false`) as in production Qwen: `p1` with the
-/// deprecated `concurrency` written as `legacy` (`None` = not written).
+/// A source without an account pool as in production Qwen: `p1` with a stored implicit
+/// limit `legacy` (`None` = not stored).
 fn non_pool_dispatcher(store: Arc<dyn TaskStore>, legacy: Option<usize>) -> Dispatcher {
     let mut d = dispatcher(store, slow_pool_adapter(), 8);
     // 旧 `concurrency` の値を暗黙アカウントの保存値として置く（None なら保存値に触らない）。
     if let Some(n) = legacy {
         d.set_account_limit("implicit", "p1", Some(n)).unwrap();
     }
-    d.policy = Box::new(StaticPolicy::new(
-        vec![ProviderSpec {
-            id: "p1".into(),
-            adapter: "instant".into(),
-            tiers: vec![Tier::Frontier, Tier::Standard, Tier::Cheap],
-            concurrency: legacy,
-            model: "m".into(),
-        }],
-        Duration::from_secs(1),
-    ));
     d
 }
 
-/// ADR 2026-10-08 §(e): a non-pool row's implicit account is limited by its own stored
-/// value (default `max_runs_per_account`). A row's written `concurrency = 1` does not limit
-/// it: with the default 2 the row admits two runs. A stored override of 1 holds it to one.
-#[tokio::test]
-async fn non_pool_row_is_limited_by_its_implicit_account() {
-    let ws = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
-    seed_org(&store);
-    let mut d = non_pool_dispatcher(store.clone(), None);
-    assert_eq!(d.implicit_account_ids(), vec!["p1".to_string()]);
-    assert_eq!(
-        d.implicit_account_limit("p1"),
-        Some((2, crate::capacity::MaxRunsSource::Default))
-    );
-    let leaves: Vec<_> = (0..4).map(|_| leaf(ws.path())).collect();
-    for task in &leaves {
-        store.insert(task).unwrap();
-    }
-    assert_eq!(d.tick().unwrap().dispatched, 2);
-    assert_eq!(d.tick().unwrap().dispatched, 0);
-    assert_eq!(d.implicit_account_in_use("p1"), 2);
-    // provider_select・routing の候補には暗黙アカウントの上限が渡る（旧 concurrency は渡らない）。
-    assert!(
-        d.legacy_provider_profiles(&leaf(ws.path()).worker_hint)
-            .iter()
-            .all(|p| p.deployment.concurrency_limit == Some(2))
-    );
-
-    d.set_account_limit("implicit", "p1", Some(1)).unwrap();
-    assert_eq!(
-        d.implicit_account_limit("p1"),
-        Some((1, crate::capacity::MaxRunsSource::Account))
-    );
-    assert_eq!(d.tick().unwrap().dispatched, 0);
-    assert_eq!(d.implicit_account_in_use("p1"), 2);
-
-    // 解除すると既定（2）に戻る。走っている 2 本は止めず、残りの run が待つ。
-    d.set_account_limit("implicit", "p1", None).unwrap();
-    assert_eq!(
-        d.implicit_account_limit("p1"),
-        Some((2, crate::capacity::MaxRunsSource::Default))
-    );
-    assert_eq!(d.tick().unwrap().dispatched, 0);
-    assert_eq!(d.implicit_account_in_use("p1"), 2);
-}
-
-/// Without a written `concurrency`, the implicit account falls back to
-/// `max_runs_per_account` (built-in 2 without `[accounts]`).
-#[tokio::test]
-async fn implicit_account_uses_the_default_without_accounts_section() {
-    let ws = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
-    seed_org(&store);
-    let mut d = non_pool_dispatcher(store.clone(), None);
-    assert!(d.config.accounts.is_none());
-    assert_eq!(
-        d.implicit_account_limit("p1"),
-        Some((
-            crate::dispatcher::DEFAULT_MAX_RUNS_PER_ACCOUNT,
-            crate::capacity::MaxRunsSource::Default
-        ))
-    );
-    for task in (0..3).map(|_| leaf(ws.path())) {
-        store.insert(&task).unwrap();
-    }
-    assert_eq!(d.tick().unwrap().dispatched, 2);
-    assert_eq!(d.tick().unwrap().dispatched, 0);
-}
-
-/// ADR 2026-10-08 §(e): CoS gets no +1 on an implicit account — a CoS run and a
-/// leaf share the single slot of a stored limit of 1 (GPU 1 枚の Qwen に 2 本目を載せない).
-#[tokio::test]
-async fn implicit_account_counts_cos_runs_without_an_extra_slot() {
-    let ws = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
-    seed_org(&store);
-    let mut d = non_pool_dispatcher(store.clone(), None);
-    d.set_account_limit("implicit", "p1", Some(1)).unwrap();
-    let chat = cos_chat(ws.path());
-    store.insert(&chat).unwrap();
-    assert_eq!(d.tick().unwrap().dispatched, 1);
-    store.insert(&leaf(ws.path())).unwrap();
-    store.insert(&cos_chat(ws.path())).unwrap();
-    assert_eq!(d.tick().unwrap().dispatched, 0);
-    assert_eq!(d.implicit_account_in_use("p1"), 1);
-}
-
-/// Overrides survive a reload that keeps the row; a reload that drops the row (or
-/// makes it a pool) prunes the implicit override. Real-account rows are never touched,
+/// Overrides survive a reload that keeps the source; a reload that drops the source (or
+/// gives it an account pool) prunes the implicit override. Real-account rows are never touched,
 /// even when a real account shares the provider id (`implicit` is a reserved adapter).
 #[test]
 fn implicit_account_overrides_survive_reload_and_are_pruned_with_their_row() {
@@ -516,26 +339,10 @@ fn implicit_account_overrides_survive_reload_and_are_pruned_with_their_row() {
     assert_eq!(d.prune_implicit_account_limits().unwrap(), vec!["gone"]);
     assert_eq!(d.account_max_runs("implicit", "gone"), None);
 
-    // 同じ行のままの reload（＋ daemon 再起動）を跨いで残る。
-    let same = |legacy| -> Box<dyn ProviderPolicy> {
-        Box::new(StaticPolicy::new(
-            vec![ProviderSpec {
-                id: "p1".into(),
-                adapter: "instant".into(),
-                tiers: vec![Tier::Standard],
-                concurrency: legacy,
-                model: "m".into(),
-            }],
-            Duration::from_secs(1),
-        ))
-    };
+    // 同じ宣言のままの reload（＋ daemon 再起動）を跨いで残る。
     d.reload_account_limits().unwrap();
-    d.reload_providers(
-        same(Some(1)),
-        HashMap::new(),
-        HashMap::new(),
-        Default::default(),
-    );
+    let declared = d.llm_route_registry().clone();
+    d.set_llm_route_registry(declared.clone());
     assert!(d.prune_implicit_account_limits().unwrap().is_empty());
     assert_eq!(d.implicit_account_limit("p1").unwrap().0, 2);
     drop(d);
@@ -546,105 +353,15 @@ fn implicit_account_overrides_survive_reload_and_are_pruned_with_their_row() {
         Some((2, crate::capacity::MaxRunsSource::Account))
     );
 
-    // 行がプールに変わると暗黙アカウントは無くなり、保存値も消える。実アカウントの値は残る。
-    d.reload_providers(
-        same(Some(1)),
-        HashMap::new(),
-        HashMap::new(),
-        std::collections::HashSet::from(["p1".to_string()]),
-    );
+    // source が account pool の種類に変わると暗黙アカウントは無くなり、保存値も消える。実アカウントの値は残る。
+    let mut pooled = declared;
+    if let Some(spec) = pooled.sources.get_mut(&"p1".into()) {
+        spec.kind = "claude_oauth".into();
+    }
+    d.set_llm_route_registry(pooled);
     assert!(d.implicit_account_ids().is_empty());
     assert_eq!(d.implicit_account_limit("p1"), None);
     assert_eq!(d.prune_implicit_account_limits().unwrap(), vec!["p1"]);
     assert_eq!(store.account_limits().unwrap().len(), 1);
     assert_eq!(d.account_max_runs("claude-code", "p1"), Some(5));
-}
-
-/// Two non-pool rows on one LLM source (`opencode-qwen` + `pi-qwen` → `openai_compatible:qwen`)
-/// share **one** implicit account: one stored limit and one in-use count for both rows. A stored
-/// `max_runs = 1` holds the pair to a single run; with no stored value the written
-/// `concurrency = 1` is not read and `[accounts] max_runs_per_account` (built-in 2) decides.
-/// Rows on another source keep their own implicit account.
-#[tokio::test]
-async fn implicit_account_is_per_llm_source() {
-    use crate::capacity::MaxRunsSource;
-    let ws = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
-    seed_org(&store);
-    let adapter = slow_pool_adapter();
-    let mut d = dispatcher(store.clone(), adapter.clone(), 8);
-    let row = |id: &str, legacy: Option<usize>| ProviderSpec {
-        id: id.into(),
-        adapter: "instant".into(),
-        tiers: vec![Tier::Standard],
-        concurrency: legacy,
-        model: "m".into(),
-    };
-    // Both Qwen rows write the deprecated `concurrency = 1`; it must not limit anything.
-    d.policy = Box::new(StaticPolicy::new(
-        vec![
-            row("opencode-qwen", Some(1)),
-            row("pi-qwen", Some(1)),
-            row("ldr-main", None),
-        ],
-        Duration::from_secs(1),
-    ));
-    for id in ["opencode-qwen", "pi-qwen", "ldr-main"] {
-        d.adapters.insert(id.to_string(), adapter.clone());
-        d.models.insert(id.to_string(), "m".to_string());
-    }
-    d.set_provider_llm_sources(HashMap::from([
-        (
-            "opencode-qwen".to_string(),
-            "openai_compatible:qwen".to_string(),
-        ),
-        ("pi-qwen".to_string(), "openai_compatible:qwen".to_string()),
-        ("ldr-main".to_string(), "celeris".to_string()),
-    ]));
-
-    // The key is the LLM source, not the row: two rows, one implicit account.
-    assert_eq!(
-        d.implicit_account_ids(),
-        vec!["openai_compatible:qwen".to_string(), "celeris".to_string()]
-    );
-    assert_eq!(
-        d.implicit_account_providers("openai_compatible:qwen"),
-        vec!["opencode-qwen".to_string(), "pi-qwen".to_string()]
-    );
-    assert_eq!(
-        d.implicit_account_providers("opencode-qwen"),
-        Vec::<String>::new()
-    );
-    // No stored value → the default, not the written `concurrency = 1`.
-    assert_eq!(
-        d.implicit_account_limit("openai_compatible:qwen"),
-        Some((2, MaxRunsSource::Default))
-    );
-
-    for task in (0..6).map(|_| leaf(ws.path())) {
-        store.insert(&task).unwrap();
-    }
-    // Two runs at most on the shared source (a per-row limit would have admitted four there),
-    // and two on the other source's own implicit account.
-    assert_eq!(d.tick().unwrap().dispatched, 4);
-    assert_eq!(d.tick().unwrap().dispatched, 0);
-    assert_eq!(d.implicit_account_in_use("openai_compatible:qwen"), 2);
-    assert_eq!(d.implicit_account_in_use("celeris"), 2);
-
-    // A stored 1 on the source holds both rows: nothing new is admitted.
-    d.set_account_limit("implicit", "openai_compatible:qwen", Some(1))
-        .unwrap();
-    assert_eq!(
-        d.implicit_account_limit("openai_compatible:qwen"),
-        Some((1, MaxRunsSource::Account))
-    );
-    assert!(d.implicit_account_full(&"opencode-qwen".to_string(), 0));
-    assert!(d.implicit_account_full(&"pi-qwen".to_string(), 0));
-    assert_eq!(d.tick().unwrap().dispatched, 0);
-    assert_eq!(d.implicit_account_in_use("openai_compatible:qwen"), 2);
-    // Raising the shared limit frees both rows again.
-    d.set_account_limit("implicit", "openai_compatible:qwen", Some(3))
-        .unwrap();
-    assert_eq!(d.tick().unwrap().dispatched, 1);
-    assert_eq!(d.implicit_account_in_use("openai_compatible:qwen"), 3);
 }

@@ -48,7 +48,7 @@ fn roles_and_genres() -> (Vec<RoleSpec>, Vec<GenreSpec>) {
         vec![RoleSpec {
             id: "secretary".into(),
             tier: Some(Tier::Standard),
-            adapter: Some("claude-code".into()),
+            harness: Some("claude-code".into()),
             ..RoleSpec::default()
         }],
         vec![GenreSpec {
@@ -65,6 +65,7 @@ fn roles_and_genres() -> (Vec<RoleSpec>, Vec<GenreSpec>) {
 fn sample_task(kind: TaskKind, status: Status) -> Task {
     let now = OffsetDateTime::now_utc();
     Task {
+        harness_id: None,
         requirements: Default::default(),
         tree: None,
         paused_at: None,
@@ -96,7 +97,6 @@ fn sample_task(kind: TaskKind, status: Status) -> Task {
         priority: 0,
         worker_hint: WorkerHint {
             tier: Tier::Standard,
-            adapter: None,
         },
         workspace: WorkspaceSpec::Local {
             path: "/tmp/workspace".into(),

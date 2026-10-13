@@ -355,6 +355,7 @@ impl Dispatcher {
     ) -> Result<Task, DispatchError> {
         let now = OffsetDateTime::now_utc();
         let approval = Task {
+            harness_id: None,
             requirements: Default::default(),
             tree: None,
             paused_at: None,

@@ -1,4 +1,5 @@
 use super::*;
+use crate::naming::SourceRef;
 use time::macros::datetime;
 
 const T0: OffsetDateTime = datetime!(2026-10-05 00:00:00 UTC);
@@ -178,22 +179,17 @@ fn breaker_threshold_zero_never_opens() {
 }
 
 #[test]
-fn constraints_follow_the_requested_scope() {
-    let only_qwen = RequestConstraints::from_request(&ModelRequest::Tiered {
-        scope: SourceScope::Only(SourceKind::Qwen),
-        tier: task_core::Tier::Cheap,
+fn constraints_follow_the_requested_source() {
+    let only_qwen = RequestConstraints::from_request(&ModelRequest {
+        source: SourceRef::OpenAiCompatible("qwen".into()),
+        model: "m".into(),
     });
     assert!(only_qwen.admits(SourceKind::Qwen));
     assert!(!only_qwen.admits(SourceKind::Claude));
-    let explicit = RequestConstraints::from_request(&ModelRequest::Explicit {
-        source: SourceKind::Claude,
+    let claude = RequestConstraints::from_request(&ModelRequest {
+        source: SourceRef::ClaudeOauth,
         model: "m".into(),
     });
-    assert!(explicit.admits(SourceKind::Claude));
-    assert!(!explicit.admits(SourceKind::Gpt));
-    let any = RequestConstraints::from_request(&ModelRequest::Tiered {
-        scope: SourceScope::Any,
-        tier: task_core::Tier::Cheap,
-    });
-    assert!(any.admits(SourceKind::Gpt));
+    assert!(claude.admits(SourceKind::Claude));
+    assert!(!claude.admits(SourceKind::Gpt));
 }

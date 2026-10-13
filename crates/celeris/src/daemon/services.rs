@@ -149,11 +149,10 @@ pub(crate) fn build_llm_proxy_state(
     };
     let sink: Arc<dyn ProxyEventSink> = Arc::new(TaskProxyEventSink::new(dispatcher.store()));
     let state = state.with_routing_context(Some(registry), Some(sink));
-    // ADR 2026-10-06 model-role-assignments D2: dispatcher と同じ reader（store）で lane の割り当てを読む。
-    let state = state.with_role_assignments(dispatcher.role_assignment_reader());
-    // ADR 2026-10-04 §7.1・Phase 4: `[model_routing.shadow]`。既定（legacy・execute = false）は差し込まない。
+    // ADR 2026-10-04 §7.1・Phase 4: `[model_routing.shadow]`。設定が無い場合や execute = false の場合は差し込まない。
     let wiring = super::routing_shadow::install_proxy_shadow(
         dispatcher,
+        config.model_routing.mode.is_some(),
         super::routing_shadow::ShadowDeps {
             db_path: config.db.path.clone(),
             busy_timeout: config.db.busy_timeout(),
@@ -329,7 +328,7 @@ mod routing_tests {
             &path,
             format!(
                 "db = {:?}\nworkspace_root = {:?}\n[api]\ntoken_file = {token:?}\n\
-                 [llm_proxy]\nenabled = true\n[[providers]]\nid = \"x\"\nadapter = \"fake\"\n",
+                 [llm_proxy]\nenabled = true\n",
                 dir.path().join("db.sqlite3"),
                 dir.path().join("ws"),
             ),
@@ -358,6 +357,7 @@ mod routing_tests {
         let store = task_core::SqliteStore::open_in_memory().unwrap();
         let now = time::OffsetDateTime::now_utc();
         let task = Task {
+            harness_id: None,
             id: TaskId::new(),
             parent_id: None,
             kind: TaskKind::Execute,
@@ -370,7 +370,6 @@ mod routing_tests {
             priority: 0,
             worker_hint: WorkerHint {
                 tier: Tier::Standard,
-                adapter: None,
             },
             workspace: WorkspaceSpec::local("/tmp/routing-test"),
             repos: vec![],

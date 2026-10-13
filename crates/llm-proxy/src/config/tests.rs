@@ -34,20 +34,17 @@ fn explicit_enabled_overrides_auto_detection() {
 }
 
 #[test]
-fn cheap_only_default_and_legacy_qwen_config() {
-    assert_eq!(
-        ModelsConfig::default().qwen,
-        HashMap::from([(Tier::Cheap, "qwen3.8-27b".to_string())])
-    );
-    let legacy: LlmProxyConfig = serde_json::from_value(serde_json::json!({
-        "models": {
-            "qwen": {
-                "frontier": "qwen3.8-27b",
-                "standard": "qwen3.8-27b",
-                "cheap": "qwen3.8-27b"
-            }
-        }
-    }))
-    .expect("legacy config parses");
-    assert_eq!(legacy.models.qwen, ModelsConfig::default().qwen);
+fn proxy_tier_alias_rejected_models_table_is_a_load_error_with_the_new_form() {
+    for models in [
+        serde_json::json!({ "qwen": { "cheap": "qwen3.8-27b" } }),
+        serde_json::json!({ "claude": { "standard": "claude-opus-5-5" } }),
+        serde_json::json!({}),
+    ] {
+        let err = serde_json::from_value::<LlmProxyConfig>(serde_json::json!({ "models": models }))
+            .expect_err("[llm_proxy.models] must be rejected");
+        let msg = err.to_string();
+        assert!(msg.contains("[llm_proxy.models]"), "{msg}");
+        assert!(msg.contains("<source_id>/<model_id>"), "{msg}");
+        assert!(msg.contains("qwen/qwen3.8-27b"), "{msg}");
+    }
 }

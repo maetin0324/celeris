@@ -1135,6 +1135,47 @@
       ],
       "type": "object"
     },
+    "CredentialReference": {
+      "oneOf": [
+        {
+          "properties": {
+            "kind": {
+              "const": "environment",
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "name"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "An OAuth account's login directory and the environment variable the harness reads it from.",
+          "properties": {
+            "env": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "account_directory",
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "path",
+            "env"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "Criterion": {
       "description": "DESIGN §4.1 の `Criterion`。",
       "properties": {
@@ -2023,6 +2064,23 @@
         "high"
       ],
       "type": "string"
+    },
+    "LlmEndpointReference": {
+      "properties": {
+        "api_format": {
+          "type": "string"
+        },
+        "base_url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "api_format"
+      ],
+      "type": "object"
     },
     "MemoryContext": {
       "description": "`context.memory`（ADR-0033 D6 / Phase 24）: 案件をまたぐ記憶と、この案件の引き出し。\nどちらも `<memory_dir>/<node_id>/…` のファイルの中身（字数で切ったもの）。",
@@ -3207,6 +3265,50 @@
       },
       "type": "object"
     },
+    "SelectedLlmRoute": {
+      "description": "Concrete route selected for a worker run.",
+      "properties": {
+        "account_id": {
+          "type": "string"
+        },
+        "credential": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CredentialReference"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "endpoint": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LlmEndpointReference"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "harness_id": {
+          "type": "string"
+        },
+        "model_id": {
+          "type": "string"
+        },
+        "source_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "harness_id",
+        "source_id",
+        "model_id",
+        "account_id"
+      ],
+      "type": "object"
+    },
     "SessionHandle": {
       "description": "`context.session`（ADR-0054 D1。Phase 67）: 継続セッションの手がかり。\nディスパッチャが `node_sessions`（`task_core::NodeSession`）から決定的に組む。",
       "properties": {
@@ -3336,6 +3438,12 @@
         },
         "genre": {
           "description": "ADR-0027 D1: 分野名（自由記述。`[[genres]] id` と一致すれば既定の役割・プロンプトの説明が効く）。\n状態機械は見ない。導入前のタスクには無いので任意。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "harness_id": {
           "type": [
             "string",
             "null"
@@ -4104,12 +4212,6 @@
     },
     "WorkerHint": {
       "properties": {
-        "adapter": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
         "tier": {
           "$ref": "#/$defs/Tier"
         }
@@ -4542,6 +4644,17 @@
         },
         "context": {
           "$ref": "#/$defs/RunContext"
+        },
+        "llm_route": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SelectedLlmRoute"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Dispatcher-selected execution route. Credentials are references only; secrets never travel\nin the protocol payload."
         },
         "protocol": {
           "format": "uint32",

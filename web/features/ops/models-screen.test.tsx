@@ -27,7 +27,6 @@ const catalog: LlmModelCatalog = {
     model({
       model_id: "glm-5",
       routing: { tiers: ["standard"], deployments: ["opencode-go/glm-5"] },
-      assigned_tiers: ["standard", "cheap"],
     }),
     model({ model_id: "old-model", available: false, display_name: null }),
     model({ source: "claude-oauth", model_id: "claude-opus" }),
@@ -86,18 +85,16 @@ describe("ModelsView", () => {
 
   it("source ごとの節と発見の結果・件数・失敗理由を出す", () => {
     expect(out.match(/data-source="/g)).toHaveLength(3);
-    expect(out).toContain("OpenCode Go（subscription）（2）");
+    expect(out).toContain('href="/sources/opencode-go">OpenCode Go（subscription）</a>（2）');
     expect(out).toContain("self-host qwen");
     expect(out).toContain("成功 / 2 件");
     expect(out).toContain("失敗 / 0 件（401 unauthorized）");
     expect(out.match(/発見を実行/g)?.length).toBeGreaterThanOrEqual(3);
   });
 
-  it("消失した行は語で示し、割り当て済みの役割と routing を出す", () => {
+  it("消失した行は語で示し、routing を出す", () => {
     expect(out).toContain('data-model-state="消失"');
     expect(out).toContain("text-muted-foreground");
-    expect(out).toContain("割り当て standard");
-    expect(out).toContain("割り当て cheap");
     expect(out).not.toContain("tier を固定");
     expect(out).toContain("tier: standard");
     expect(out).toContain("deployment: opencode-go/glm-5");

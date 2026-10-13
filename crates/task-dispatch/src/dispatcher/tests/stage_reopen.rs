@@ -87,7 +87,6 @@ async fn blocked_repair_replan_loop_runs_the_new_leaf_once() {
             .with_planner_output(delta),
     );
     let mut d = parallel_dispatcher(store.clone(), adapter.clone(), root.path(), 3, 3, 3);
-    d.config.execution.planner.adapter = "instant".to_string();
     let id = task.id;
     assert!(
         run_until(&mut d, 700, || {
@@ -184,7 +183,6 @@ async fn a_replan_adding_a_unit_to_an_integrated_stage_reintegrates_that_stage()
             .with_planner_output(delta),
     );
     let mut d = parallel_dispatcher(store.clone(), adapter.clone(), root.path(), 3, 3, 3);
-    d.config.execution.planner.adapter = "instant".to_string();
     run_until_idle(&mut d, 1500).await;
 
     let t = store.get(task.id).unwrap().unwrap();

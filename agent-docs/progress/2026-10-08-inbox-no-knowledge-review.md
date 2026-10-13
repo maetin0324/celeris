@@ -22,7 +22,7 @@ ADR-0133 末尾の付記「KB の取り込み待ちを受信箱に出さない�
 - web: `INBOX_KINDS`・`KIND_LABELS` から削除、`inbox-model.test.ts` に `isInboxKind("knowledge_review") === false`、
   fake daemon の 5 件目を `cluster_login-pegasus` に置換（件数 5 を前提とする e2e を保つ）、`fake-daemon.test.ts` の期待を更新。
 - 文書: ADR-0133（D1.2 行・D2 の kind 欄・並び・未解決を閉じる・付記）、ADR 2026-10-04-web-inbox-notifications-screens D6、
-  `docs/api/v1/inbox-notifications.md`、`docs/api/v1/gui-api.md` §5.1。`docs/ops/inbox-notifications.md` には該当記述なし。
+  `docs/api/v1/inbox-notifications.md`、`docs/api/v1/api.md` §5.1。`docs/ops/inbox-notifications.md` には該当記述なし。
 
 ## 証拠
 

@@ -37,7 +37,7 @@ cosmetic（文字・余白・色・境界）は本書の token で揃える。IA
 | foundation（5 route / 4 fixture） | shell・login・home・help・人との Console。ナビを日々の仕事と管理に分け、page header・取得状態・確認・入力・一覧を共通化する |
 | task・run 系（8 route） | タスク・計画作成・詳細・files・changes・run・graph。現在状態と要判断を先頭にし、破棄を取り込みから分離、ログ追記と復旧を見せる |
 | inbox・project 系（12 route） | 受信箱・認可・報告・成果物・案件・文書・ボード・知識。閲覧と判断を先に、設定と編集は展開。選択後の本文への移動を保つ |
-| 管理系（6 route） | 組織・daemon・providers・accounts・clusters・releases。稼働可否と鮮度を先に、設定と影響範囲を後に示す |
+| 管理系（8 route） | 組織・daemon・sources（一覧・詳細）・harnesses・accounts・clusters・releases。稼働可否と鮮度を先に、設定と影響範囲を後に示す |
 
 画面台帳と割り当ての正本は UX_AUDIT。実装の受け入れでは同じ fixture を 360/390/412/1440px で比較し、正常データ・長文・状態別・操作後も確認する。監査の before は取得失敗が多く、画像枚数だけで正常系や操作性の合格としない。本書の色の計算もブラウザでの検証の代わりにはしない。
 

@@ -5,11 +5,7 @@ use task_worker::browser::SUPPORTED_VERSION;
 
 fn fixture(dir: &std::path::Path) -> (DoctorConfig, SqliteStore) {
     let config_file = dir.join("config.toml");
-    std::fs::write(
-        &config_file,
-        "[db]\npath = 'test.db'\n[[providers]]\nid = 'fake-local'\nadapter = 'fake'\n",
-    )
-    .unwrap();
+    std::fs::write(&config_file, "[db]\npath = 'test.db'\n").unwrap();
     let config = Config::load(&config_file).unwrap();
     let store = SqliteStore::open(&config.db.path).unwrap();
     let doctor = DoctorConfig {

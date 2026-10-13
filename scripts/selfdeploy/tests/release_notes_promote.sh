@@ -68,7 +68,7 @@ mk_release() { # sha schema [notes-base]
   d="$REL_ROOT/$s12"; mkdir -p "$d"
   printf '{"sha":"%s","sha12":"%s","built_at":"%s","schema_version":%s}\n' "$sha" "$s12" "$3" "$schema" >"$d/manifest.json"
   if [ -n "${4:-}" ]; then
-    printf '{"steps":[{"step":"pnpm-test","skipped":true,"reason":"gui unchanged"}]}\n' >"$d/gate.json"
+    printf '{"steps":[{"step":"cargo-workspace-clean","skipped":true,"reason":"shared build tree"}]}\n' >"$d/gate.json"
     "$CTL" release notes --repo "$REPO" --sha "$sha" --base "$4" --schema-from 1 --schema-to "$schema" \
       --gate-json "$d/gate.json" --out-dir "$d" >"$WORK/notes.out"
   fi

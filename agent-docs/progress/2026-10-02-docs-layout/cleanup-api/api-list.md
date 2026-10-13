@@ -1,21 +1,21 @@
 ---
-title: docs 再構成 — gui-api.md §1・§2 を router に合わせ、overview.md を統合して削除（cleanup-api / api-list）
+title: docs 再構成 — api.md §1・§2 を router に合わせ、overview.md を統合して削除（cleanup-api / api-list）
 tasks: [01M3YNFVFZG5AFFM0RS05X22ZT]
 status: done
 updated: 2026-10-02
 ---
-# docs 再構成 — gui-api.md §1・§2 を router に合わせ、overview.md を統合して削除（cleanup-api / api-list）
+# docs 再構成 — api.md §1・§2 を router に合わせ、overview.md を統合して削除（cleanup-api / api-list）
 
-完了日: 2026-10-02。`docs/api/v1/gui-api.md` を API の説明の唯一の文書にした。crates/・web/・gui/・scripts/・CLAUDE.md・.claude/・
+完了日: 2026-10-02。`docs/api/v1/api.md` を API の説明の唯一の文書にした。crates/・web/・gui/・scripts/・CLAUDE.md・.claude/・
 `scripts/dev/docs-layout.tsv`・`*.schema.json` は読んだだけで変えていない。
 
 ## 処理した文書
 
 | 処理(削除/統合/移動/修正) | 旧パス | 新パス or - | 理由 | 最後の commit |
 |---|---|---|---|---|
-| 統合 | `docs/api/v1/overview.md` | `docs/api/v1/gui-api.md` §3.125 | 同じ API（実行・計画・木・決定・撤去した入口）を 2 つ目の文書で説明していた。§3.125.1〜15 に移して `git rm` | `a42f9a54` |
-| 修正 | `docs/api/v1/gui-api.md` | - | §2 を router の全 route に合わせ、§1 を middleware・problem と照らして直した。冒頭の overview.md へのリンクを §3.125 への案内に変えた | `01fd1f91` |
-| 修正 | `docs/README.md` | - | `api/` の行から `overview.md` を外し、説明は gui-api.md の 1 本と書いた | `01fd1f91` |
+| 統合 | `docs/api/v1/overview.md` | `docs/api/v1/api.md` §3.125 | 同じ API（実行・計画・木・決定・撤去した入口）を 2 つ目の文書で説明していた。§3.125.1〜15 に移して `git rm` | `a42f9a54` |
+| 修正 | `docs/api/v1/api.md` | - | §2 を router の全 route に合わせ、§1 を middleware・problem と照らして直した。冒頭の overview.md へのリンクを §3.125 への案内に変えた | `01fd1f91` |
+| 修正 | `docs/README.md` | - | `api/` の行から `overview.md` を外し、説明は api.md の 1 本と書いた | `01fd1f91` |
 | 処理なし | `docs/gui/` | - | move-docs で `agent-docs/gui/` へ移動済み（`docs/gui/` はもう無い。記録は `agent-docs/progress/2026-10-02-docs-layout/move-docs.md`） | - |
 
 ## 直した点
@@ -37,7 +37,7 @@ updated: 2026-10-02
 - （2 回目の run）browser 制御の 6 本（旧 #169〜174）は番号付きの表から外し、表の直後の別表（番号なし）に置いた。
   route が定数 `BASE` と `format!` で登録されていて、計画の check（`.route( "…"` の文字列リテラルだけを拾う）からは見えず
   `stale` と判定されたため。行は残っているので、全 route が §2 にあることは変わらない。
-- （2 回目の run）gui-api.md の冒頭と §3.125 の見出しにあった「旧 `overview.md` を統合した」の文言を消した（経緯はこの記録にある）。
+- （2 回目の run）api.md の冒頭と §3.125 の見出しにあった「旧 `overview.md` を統合した」の文言を消した（経緯はこの記録にある）。
 - （2 回目の run）`docs/protocol/worker-protocol.md` 3〜4 行目の ADR へのリンク 2 件を `../../agent-docs/adr/` に直した（パスだけ。
   protocol WU と同じ行に触れるので、統合で衝突したら protocol 側の版を採ればよい）。
 
@@ -70,7 +70,7 @@ updated: 2026-10-02
 | §2 の表の（メソッド, パス）と上の 174 組の `diff` | 差分ゼロ（`MATCH`）。番号 1〜174 は重複・欠番なし |
 | `sh scripts/dev/check-doc-links.sh docs/api docs/README.md` | `check-doc-links: ok`、exit 0 |
 | `sh scripts/dev/check-doc-links.sh`（全体） | exit 1、45 件。うち本 WU 由来は `gui/docs/celeris-api-v1.md:3: ../../docs/api/v1/overview.md` の 1 件（下の未解決）。残り 44 件は docs/guides・docs/ops・docs/protocol の既存の壊れたリンクで本 WU の範囲外 |
-| `git diff --stat HEAD` | `docs/README.md`・`docs/api/v1/gui-api.md`・`docs/api/v1/overview.md`（削除）・この記録だけ |
+| `git diff --stat HEAD` | `docs/README.md`・`docs/api/v1/api.md`・`docs/api/v1/overview.md`（削除）・この記録だけ |
 
 | 計画の check 1（route ⇔ §2 表、`missing`/`stale`） | 2 回目の run で exit 0 |
 | 計画の check 2（overview.md 無し・参照無し・`check-doc-links.sh docs/api docs/protocol docs/README.md`） | 2 回目の run で `check-doc-links: ok`、exit 0 |
@@ -78,7 +78,7 @@ updated: 2026-10-02
 ## 未解決
 
 - `gui/docs/celeris-api-v1.md:3` が `docs/api/v1/overview.md` を指したまま壊れる。gui/ はこの task では変えられない。
-  このファイルは gui-api.md の古い写し（同じ見出し・改訂履歴）で、「同じ API を説明する文書は 1 つ」に反する。
+  このファイルは api.md の古い写し（同じ見出し・改訂履歴）で、「同じ API を説明する文書は 1 つ」に反する。
 - §3 の既存の節（§3.47・§3.48・§3.49・§3.61・§3.63・§3.84〜3.91）は 410 になった入口や旧い挙動をまだ現役のように書いている。
   §3.125.8・§3.125.14 が現行。直すのは api-s3a / api-s3b の範囲。
 - browser の Live View（#165〜168）と制御（#169〜174）は §3 に節が無く、`docs/guides/browser-capability.md` にも説明が無い（表の行だけ）。
@@ -88,7 +88,7 @@ updated: 2026-10-02
 
 ## 提案
 
-- `gui/docs/celeris-api-v1.md` を消すか、1 行目以降を `docs/api/v1/gui-api.md` への案内だけにする（gui/ を触れる task で）。
+- `gui/docs/celeris-api-v1.md` を消すか、1 行目以降を `docs/api/v1/api.md` への案内だけにする（gui/ を触れる task で）。
 - `crates/task-api/src/lib.rs` の冒頭のコメント「`/api/v1` 配下の 26 エンドポイント」は古い（今は 146 パス）。crates を触れる task で直す。
 - §2 の表と router の一致を決定的な検査にする（このとき使った `routes.py` 相当を `scripts/dev/` に置き、CI か leaf の check で回す）。
-- browser の Live View・制御の API の説明を `docs/guides/browser-capability.md` か gui-api.md §3 に足す。
+- browser の Live View・制御の API の説明を `docs/guides/browser-capability.md` か api.md §3 に足す。

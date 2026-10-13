@@ -132,6 +132,7 @@ impl SqliteStore {
                 )));
             }
             let merged = Task {
+                harness_id: None,
                 status: current.status,
                 attempts: current.attempts,
                 lease: current.lease.clone(),

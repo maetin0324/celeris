@@ -64,8 +64,6 @@ pub struct CodexConfig {
     pub extra_args: Vec<String>,
     /// モデル指定（`--model`。省略時は codex の既定モデル）。
     pub model: Option<String>,
-    /// ADR-0069 Phase 118 D1: `-c model_reasoning_effort="<値>"`（例 `"high"`）。省略時は付けない。
-    pub reasoning_effort: Option<String>,
     /// 追加の環境変数。
     pub env: Vec<(String, String)>,
     /// ADR-0043 D3（Phase 56）: `Some` なら `codex` をコンテナの中で起こす（`container::wrap`）。
@@ -85,7 +83,6 @@ impl Default for CodexConfig {
             command: "codex".to_string(),
             extra_args: Vec::new(),
             model: None,
-            reasoning_effort: None,
             env: Vec::new(),
             container: None,
             resume_mode: CodexResumeMode::default(),
@@ -221,15 +218,6 @@ impl WorkerAdapter for CodexAdapter {
     fn with_model(&self, model: &str) -> Option<Arc<dyn WorkerAdapter>> {
         let mut config = self.config.clone();
         config.model = Some(model.to_owned());
-        Some(Arc::new(Self::new(config)))
-    }
-    /// ADR-0069 Phase 118 D1: codex は `-c model_reasoning_effort="<値>"` に対応する。
-    fn supports_reasoning_effort(&self) -> bool {
-        true
-    }
-    fn with_reasoning_effort(&self, effort: &str) -> Option<Arc<dyn WorkerAdapter>> {
-        let mut config = self.config.clone();
-        config.reasoning_effort = Some(effort.to_owned());
         Some(Arc::new(Self::new(config)))
     }
     fn with_env(&self, extra: &[(String, String)]) -> Option<Arc<dyn WorkerAdapter>> {
@@ -536,13 +524,6 @@ async fn run_codex_once(
         } else {
             command.arg("--model").arg(model);
         }
-    }
-    // ADR-0069 Phase 118 D1: `-c key=value` is on the `exec resume` whitelist (Phase 68c) the same
-    // way `sandbox_mode`/`model` are above, so this applies identically to fresh and resume forms.
-    if let Some(effort) = &config.reasoning_effort {
-        command
-            .arg("-c")
-            .arg(format!("model_reasoning_effort=\"{effort}\""));
     }
     // Worktrees and shared workspaces keep results outside cwd. Grant only the
     // dispatcher-selected artifact directory, not its parent or other tasks (plus, since Phase

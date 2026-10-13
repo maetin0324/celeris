@@ -355,7 +355,7 @@ fn routing_trace_fields_are_additive() {
     ];
     // Phase 1 の形の JSON（新欄なし）が読め、新欄は None。
     let old_json = r#"{"decision_id":"d","parent_decision_id":null,"task_id":null,
-        "work_unit_id":null,"run_id":"r","request_id":null,"stage":"dispatcher","mode":"legacy",
+        "work_unit_id":null,"run_id":"r","request_id":null,"stage":"dispatcher","mode":"shadow",
         "policy_version":"p","catalog_version":"c","feature_version":"f","estimator_version":"e",
         "snapshot_id":"s","observed_at":null,"requested_lane":"cheap","selected_lane":"cheap",
         "candidates":[{"model_profile_id":"m","deployment_id":"dep","eligible_provider_ids":["p"],

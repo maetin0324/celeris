@@ -29,6 +29,7 @@ fn env_with_role(
     let env = TestEnv::with(EnvOptions {
         token: Some(TOKEN.into()),
         admin_tx: Some(tx),
+        accounts_root: Some(std::env::temp_dir()),
         release: "sha12sha12ab".into(),
         mode: DaemonMode::Normal,
         role: shared.clone(),
@@ -91,12 +92,15 @@ async fn draining_refuses_the_same_endpoints_and_plain_endpoints_keep_working() 
 
     for (method, path, body) in [
         ("POST", "/api/v1/reload", Some(json!({}))),
-        ("POST", "/api/v1/providers/p1/check", Some(json!({}))),
         ("POST", "/api/v1/notify/test", Some(json!({}))),
-        ("POST", "/api/v1/accounts/a/login", Some(json!({}))),
         (
             "POST",
-            "/api/v1/accounts/a/login/code",
+            "/api/v1/llm/sources/claude_oauth/accounts/a/login",
+            Some(json!({})),
+        ),
+        (
+            "POST",
+            "/api/v1/llm/sources/claude_oauth/accounts/a/login/code",
             Some(json!({"code": "x"})),
         ),
         ("POST", "/api/v1/clusters/c1/connect", Some(json!({}))),
@@ -122,7 +126,7 @@ async fn draining_refuses_the_same_endpoints_and_plain_endpoints_keep_working() 
     let resp = send(
         &app,
         patch_json_with(
-            "/api/v1/accounts/implicit/qwen",
+            "/api/v1/llm/sources/claude_oauth/accounts/a",
             &json!({"max_runs": 2}),
             &[("authorization", &auth)],
         ),

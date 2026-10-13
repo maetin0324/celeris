@@ -73,12 +73,26 @@ review_timeout_secs = 30
 [adapters.fake]
 command = ["sh", "{script}"]
 
-[[providers]]
-id = "fake-local"
-adapter = "fake"
-tiers = ["frontier", "standard", "cheap"]
-concurrency = {max_concurrency}
-model = "fake"
+[llm_sources.fake]
+kind = "fake"
+accounts = ["local"]
+models = ["fake"]
+
+[harnesses.fake]
+kind = "fake"
+api_formats = ["fake"]
+source_kinds = ["fake"]
+
+[harness_selection]
+execution_class_defaults = {{}}
+
+[[harness_selection.rules]]
+harness = "fake"
+required_capabilities = []
+
+[route_defaults.fake]
+candidates = [{{ source = "fake", model = "fake" }}]
+
 "#,
             script = script.display()
         );
@@ -103,6 +117,7 @@ model = "fake"
     ) -> TaskId {
         let now = OffsetDateTime::now_utc();
         let task = Task {
+            harness_id: None,
             tree: None,
             requirements: Default::default(),
             paused_at: None,
@@ -128,7 +143,6 @@ model = "fake"
             priority: 0,
             worker_hint: WorkerHint {
                 tier: Tier::Standard,
-                adapter: None,
             },
             workspace: WorkspaceSpec::Local {
                 path: dir.to_path_buf(),
@@ -204,6 +218,7 @@ model = "fake"
 
     fn replay_is_consistent(&self) {
         let out = Command::new(bin("celerisctl"))
+            .env_remove("CELERIS_CONFIG")
             .args(["--db", self.db.to_str().unwrap(), "replay"])
             .output()
             .unwrap();
@@ -437,6 +452,7 @@ fn expired_lease_is_reclaimed_and_task_completes() {
     // 前世代の celeris が落ちた状態を再現: running + 期限切れリース。
     let now = OffsetDateTime::now_utc();
     let task = Task {
+        harness_id: None,
         tree: None,
         requirements: Default::default(),
         paused_at: None,
@@ -462,7 +478,6 @@ fn expired_lease_is_reclaimed_and_task_completes() {
         priority: 0,
         worker_hint: WorkerHint {
             tier: Tier::Standard,
-            adapter: None,
         },
         workspace: WorkspaceSpec::Local {
             path: dir.clone(),

@@ -21,6 +21,7 @@ pub(crate) fn insert_task(
     let id = TaskId::new();
     let now = OffsetDateTime::now_utc();
     let task = Task {
+        harness_id: None,
         requirements: Default::default(),
         tree: None,
         paused_at: None,
@@ -46,7 +47,6 @@ pub(crate) fn insert_task(
         priority: 0,
         worker_hint: WorkerHint {
             tier: task_core::Tier::Standard,
-            adapter: None,
         },
         workspace: WorkspaceSpec::Local {
             path: PathBuf::from("/tmp/ws"),
@@ -119,7 +119,7 @@ fn prunable_paths_finds_target_under_repos_and_ignores_symlinks() {
     let task_dir = dir.path();
     let repo_dir = task_dir.join("repos").join("benchfs");
     std::fs::create_dir_all(repo_dir.join("target")).unwrap();
-    std::fs::create_dir_all(repo_dir.join("gui").join("node_modules")).unwrap();
+    std::fs::create_dir_all(repo_dir.join("web").join("node_modules")).unwrap();
     std::fs::create_dir_all(repo_dir.join("src")).unwrap();
     // シンボリックリンクのリポジトリ（`dir` 種別）は対象外。
     let real = dir.path().join("real-elsewhere");
@@ -131,7 +131,7 @@ fn prunable_paths_finds_target_under_repos_and_ignores_symlinks() {
     found.sort();
     let mut expected = vec![
         repo_dir.join("target"),
-        repo_dir.join("gui").join("node_modules"),
+        repo_dir.join("web").join("node_modules"),
     ];
     expected.sort();
     assert_eq!(found, expected);

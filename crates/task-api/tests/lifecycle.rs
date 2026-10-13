@@ -295,7 +295,7 @@ fn task_ids(list: &Value) -> Vec<String> {
 
 /// ADR-0044 D6（Phase 55）: `paused` / `cancelled` は**専用のエンドポイントでしか入れない**。
 /// `PATCH` で入れると `paused_from`（`resume` の戻り先）が空のままになり、中止の連鎖も起きないので 422。
-/// GUI の「状態を直接変える」プルダウンからもこの 2 つは外してある（`gui/app/routes/projects.$id.tsx`）。
+/// web からもこの 2 つを直接指定できない。
 #[tokio::test]
 async fn patch_cannot_set_paused_or_cancelled_on_a_project_and_milestones_are_gone() {
     let env = admin_env();

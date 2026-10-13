@@ -18,7 +18,6 @@ function fixture(file: string, source: string) {
 }
 
 it.each([
-  ["gui import", "main.tsx", 'import x from "../gui/app/root";', "gui import"],
   ["server import", "main.tsx", 'import x from "./server/token";', "client imports server"],
   [
     "blocking loader",

@@ -40,4 +40,4 @@ ADR [2026-10-05-cos-chat-home](../../../adr/2026-10-05-cos-chat-home.md) の D2�
 - `check:secrets` は `web/dist` を要するため build 後の統合段で確認する。
 
 ## 提案
-- `docs/ops/web-parallel-operation.md` §2.3 の web.env の例に `CELERIS_WEB_CHAT_UPLOAD_LIMIT_BYTES`（既定 104857600、daemon の `[cos.attachments] max_message_bytes` に合わせる）を 1 行足す。この WU の範囲（web/server）外なので close 段で扱うのがよい。
+- `docs/ops/web-operation.md` §2.3 の web.env の例に `CELERIS_WEB_CHAT_UPLOAD_LIMIT_BYTES`（既定 104857600、daemon の `[cos.attachments] max_message_bytes` に合わせる）を 1 行足す。この WU の範囲（web/server）外なので close 段で扱うのがよい。

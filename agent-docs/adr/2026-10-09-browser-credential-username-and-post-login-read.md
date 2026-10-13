@@ -665,3 +665,17 @@ main 898929d9 の release gate（他の task の負荷が高い時）で `browse
 5. **版。** protocol は 9 のまま（launcher と controller の中の変更。daemon・shim は変わらない）。
 
 ログイン前（read の開いていない session）の download は従来どおり click。
+
+## 付記 2026-10-11: CDP relay の WebSocket keepalive
+
+credentiald UID 一本化の release gate が、実 Chrome の MouseDown PDF 試験で
+`CDP connection closed` として失敗した。user namespace 有効の全体試験で再現し、
+relay が受けた masked Ping（header `0x89 0x80`）を text 以外として拒否していることを確認した。
+UID 設定や download の認可失敗ではなく、WebSocket 制御 frame の未処理だった。
+
+relay は Ping に同じ payload の Pong を返し、Pong は消費して通常の CDP 処理へ戻る。
+制御 frame は FIN 必須・RSV なし・masked・payload 125 bytes 以下に限定する。
+CDP command の認可と event の秘匿処理はそのまま適用し、制御 frame を Chrome に転送しない。
+待ち時間の延長・download の再試行・試験の除外で回避しない。
+決定的な socket-pair 試験で空／非空／上限 payload の Pong、続く CDP 応答と認可拒否、
+不正 frame の拒否を検査する。protocol は 9 のまま。反映には launcher の再 build も必要。

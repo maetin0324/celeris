@@ -83,15 +83,25 @@ review_timeout_secs = 60
 retry_backoff_base_secs = 0
 error_cooldown_secs = 1
 
-[adapters.fake]
-command = ["sh", "{script}"]
+[llm_sources.fake_local]
+kind = "fake"
+api_format = "fake"
+accounts = ["default"]
+models = ["fake"]
 
-[[providers]]
-id = "fake-local"
-adapter = "fake"
-tiers = ["frontier", "standard", "cheap"]
-concurrency = 2
-model = "fake"
+[harnesses.fake]
+kind = "fake"
+api_formats = ["fake"]
+source_kinds = ["fake"]
+command = "sh"
+args = ["{script}"]
+
+[route_defaults.fake]
+candidates = [{{ source = "fake_local", model = "fake" }}]
+
+[harness_selection]
+rules = [{{ required_capabilities = [], harness = "fake" }}]
+execution_class_defaults = {{}}
 
 {clusters}
 "#,
@@ -104,6 +114,7 @@ model = "fake"
 
     fn celerisctl(&self, args: &[&str]) -> String {
         let out = Command::new(bin("celerisctl"))
+            .env_remove("CELERIS_CONFIG")
             .arg("--db")
             .arg(&self.db)
             .args(args)
@@ -309,6 +320,7 @@ fn worker_run_cluster_executes_one_run_against_the_cluster_dir() {
     let events_before = env.events(id);
 
     let out = Command::new(bin("celerisctl"))
+        .env_remove("CELERIS_CONFIG")
         .arg("--db")
         .arg(&env.db)
         .args([
@@ -370,6 +382,7 @@ fn worker_run_cluster_without_control_master_exits_4() {
     let id = env.add_remote("offline worker run", "offline", &remote, "true");
 
     let out = Command::new(bin("celerisctl"))
+        .env_remove("CELERIS_CONFIG")
         .arg("--db")
         .arg(&env.db)
         .args([

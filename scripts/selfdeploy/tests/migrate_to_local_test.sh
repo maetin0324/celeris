@@ -101,14 +101,13 @@ setup() {
   write_stubs "$d/bin"
   st="$d/home/.local/celeris"
   var="$d/var-lib-celeris"
-  mkdir -p "$st/releases/$SHA/bin" "$st/releases/$SHA/gui" "$st/releases/$SHA/web/app" "$st/releases/$PREV/bin" \
-    "$st/releases/.pnpm-prod-cache/k1/node_modules" "$st/releases/.build/tree" \
+  mkdir -p "$st/releases/$SHA/bin" "$st/releases/$SHA/web/app" "$st/releases/$PREV/bin" \
+    "$st/releases/$SHA/web/app/node_modules" "$st/releases/.build/tree" \
     "$st/tools/ldr/bin" "$st/staging" "$st/logs" "$st/credentiald" "$st/claude-accounts" "$st/codex-accounts" \
     "$st/backups" "$st/build-cache-nfs" "$st/cache/sccache-l2" \
     "$var/workspaces/T1/repos/r" "$var/scratch/pool" "$var/build-cache" "$var/web" "$var/memory" "$var/release-build" \
     "$d/local" "$d/home/.config/celeris" "$d/home/.config/systemd/user"
-  echo x >"$st/releases/.pnpm-prod-cache/k1/node_modules/x.js"
-  ln -s ../../.pnpm-prod-cache/k1/node_modules "$st/releases/$SHA/gui/node_modules"
+  echo x >"$st/releases/$SHA/web/app/node_modules/x.js"
   echo app >"$st/releases/$SHA/web/app/index.html"
   echo tree >"$st/releases/.build/tree/README"
   cat >"$st/releases/$SHA/bin/celerisctl" <<'EOF'
@@ -157,13 +156,19 @@ build_cache_dir = "$var/build-cache"
 [memory]
 dir = "$var/memory"
 
-[[providers]]
-id = "x"
-adapter = "fake"
+[llm_sources.x]
+kind = "fake"
+api_format = "fake"
+models = ["fake"]
+
+[harnesses.x]
+kind = "fake"
+api_formats = ["fake"]
+source_kinds = ["fake"]
 EOF
   echo token >"$d/home/.config/celeris/api.token"
   printf '[Service]\nExecStart=%%h/.local/celeris/releases/%%i/bin/celeris\n' >"$d/home/.config/systemd/user/celeris@.service"
-  printf 'celeris@%s\nceleris-gui@%s\n' "$SHA" "$SHA" >"$d/stub-state/active"
+  printf 'celeris@%s\nceleris-web@%s\n' "$SHA" "$SHA" >"$d/stub-state/active"
 }
 
 # mig <dir> <args...>: 一時環境で台本を走らせる（本番の env は持ち込まない）。
@@ -229,9 +234,8 @@ V="$B/var-lib-celeris"
   && ok "var hot data copied" || ng "var hot data missing"
 [ -x "$L/state/tools/ldr/bin/ldr" ] && [ -f "$L/state/releases/.build/tree/README" ] && ok "tools and build tree copied" || ng "tools/build tree missing"
 [ "$(readlink "$L/state/current")" = "releases/$SHA" ] && [ -d "$L/state/current/" ] && ok "current kept relative and resolves in /local" || ng "current wrong"
-[ "$(readlink -f "$L/state/current/gui/node_modules")" = "$(readlink -f "$L/state/releases/.pnpm-prod-cache/k1/node_modules")" ] \
-  && ok "gui deps resolve inside /local" || ng "gui deps resolve elsewhere"
-[ ! -e "$L/state/releases/$SHA/web/app" ] && ok "web/app not copied" || ng "web/app copied"
+[ -f "$L/state/current/web/app/node_modules/x.js" ] && ok "web dependencies copied" || ng "web dependencies missing"
+[ -f "$L/state/releases/$SHA/web/app/index.html" ] && ok "web/app copied" || ng "web/app not copied"
 for n in claude-accounts codex-accounts build-cache-nfs cache backups; do
   if [ -e "$L/state/$n" ] && [ "$n" != backups ]; then ng "$n copied to /local"; fi
 done

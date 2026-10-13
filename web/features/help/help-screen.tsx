@@ -94,6 +94,32 @@ export function HelpScreen() {
               </li>
             </ul>
           </Section>
+          <Section level={3} title="LLM source と harness を確認する">
+            <ul className="list-disc space-y-2 pl-5">
+              <li>
+                <Link className={linkClass} to="/sources">
+                  LLM source
+                </Link>{" "}
+                では接続先・状態・accounts・deployments を確認できます。
+              </li>
+              <li>
+                <Link className={linkClass} to="/harnesses">
+                  Harness
+                </Link>{" "}
+                では実行環境の能力と適格性を確認できます。
+              </li>
+              <li>
+                <Link className={linkClass} to="/accounts">
+                  アカウント
+                </Link>{" "}
+                と{" "}
+                <Link className={linkClass} to="/models" search={() => ({ source: undefined })}>
+                  モデル
+                </Link>{" "}
+                を含め、これらの設定変更は config で行います。
+              </li>
+            </ul>
+          </Section>
         </HelpSection>
         <HelpSection id="acceptance" title="受け入れ条件">
           <p>タスクの完了条件を先に書き、結果と証拠を見て受け入れます。承認が必要なときは受信箱に表示されます。</p>

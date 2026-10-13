@@ -9,7 +9,7 @@ fn at() -> OffsetDateTime {
 
 fn config() -> NotifyConfig {
     NotifyConfig {
-        gui_base_url: Some("http://127.0.0.1:7700/".into()),
+        web_base_url: Some("http://127.0.0.1:7720/".into()),
         ..Default::default()
     }
 }
@@ -47,7 +47,7 @@ fn cos_chat_triage_escalation_packet_has_bounded_text_and_absolute_link() {
         "保留",
         "公開先が未確認",
         "案件 A の公開",
-        "http://127.0.0.1:7700/tasks/task-id",
+        "http://127.0.0.1:7720/tasks/task-id",
         "回答はリンク先で",
     ] {
         assert!(body.contains(required), "missing {required}: {body}");
@@ -55,7 +55,7 @@ fn cos_chat_triage_escalation_packet_has_bounded_text_and_absolute_link() {
     assert!(body.chars().count() <= 1900);
     assert_eq!(
         notify::triage::render(&row, &NotifyConfig::default()),
-        Err(notify::triage::NO_GUI_URL)
+        Err(notify::triage::NO_WEB_URL)
     );
 }
 
@@ -79,7 +79,7 @@ fn cos_chat_triage_long_packet_keeps_link_within_1900_characters() {
         .expect("new");
     let body = notify::triage::render(&row, &config()).expect("render");
     assert!(body.starts_with("CoS 不在のため直接通知"));
-    assert!(body.ends_with("http://127.0.0.1:7700/inbox\n回答はリンク先で"));
+    assert!(body.ends_with("http://127.0.0.1:7720/inbox\n回答はリンク先で"));
     assert!(body.chars().count() <= 1900);
     assert!(!body.contains("PRIVATE_TOKEN_DO_NOT_SEND"));
     assert!(!body.contains("PRIVATE_ATTACHMENT_DO_NOT_SEND"));

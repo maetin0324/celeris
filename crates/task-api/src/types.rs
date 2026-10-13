@@ -1,4 +1,4 @@
-//! task-api の要求・応答の型（`docs/api/v1/gui-api.md` §6.2）。task-core / task-ops の型はそのまま使う。
+//! task-api の要求・応答の型（`docs/api/v1/api.md` §6.2）。task-core / task-ops の型はそのまま使う。
 
 use std::collections::BTreeMap;
 
@@ -8,7 +8,7 @@ use task_core::{
     ArtifactRef, EventRow, Milestone, MilestoneId, MilestoneStatus, OrgKind, OrgNode, Project,
     ProjectStatus, Status, TaskId, Tier,
 };
-use task_ops::daemon::{CooldownView, DaemonSnapshot};
+use task_ops::daemon::DaemonSnapshot;
 use task_ops::view::{ExecutionPhase, RunSummary};
 
 /// `GET /health`（無認証）。
@@ -37,7 +37,7 @@ pub struct DbInfo {
     pub journal_mode: String,
     pub busy_timeout_ms: u64,
     /// ADR-0064 D1: `/proc/self/mountinfo` から引けたファイルシステム種別（`"ext4"` 等）。
-    /// `GET /health` は無認証（`docs/api/v1/gui-api.md` §1.1 / auth_and_guards.rs のテスト）なので、DB の
+    /// `GET /health` は無認証（`docs/api/v1/api.md` §1.1 / auth_and_guards.rs のテスト）なので、DB の
     /// **絶対パス自体はここに出さない**（それは認証済みの `GET /api/v1/config` の `config.db` が
     /// 既に返している）。判定できなければ `null`。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -321,91 +321,10 @@ pub struct ArtifactView {
     pub sha256_matches: Option<bool>,
 }
 
-/// `GET /providers`。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct Providers {
-    pub items: Vec<ProviderView>,
-}
-
 /// `POST /api/v1/reload` の応答（ADR-0017 D1）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ReloadResult {
     pub reloaded: bool,
-}
-
-/// `POST /api/v1/providers/{id}/check` の応答（ADR-0017 D2）。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct ProviderCheckResponse {
-    pub result: crate::admin::ProviderCheckResult,
-    pub checked_at: String,
-    /// ADR-0022 M1: 人が読むための一行の手がかり（ワーカーの返答、失敗の理由）。無ければ `null`。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub detail: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct ProviderView {
-    #[serde(default)]
-    pub kind: task_core::ProviderKind,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub llm_source: Option<task_core::ResolvedLlmSource>,
-    #[serde(default)]
-    pub credential_refs: std::collections::HashMap<String, String>,
-    #[serde(default)]
-    pub tier_models: task_core::model_routing::TierModels,
-    #[serde(default)]
-    pub account_id: Option<String>,
-    pub id: String,
-    pub adapter: String,
-    pub tiers: Vec<Tier>,
-    /// Deprecated（ADR 2026-10-08 account-concurrency-limits §(a)）: config / `providers.d` に書かれた旧値（無ければ 1）。
-    /// dispatch では使わず、何とも比べない。同時実行数はアカウント（暗黙アカウントを含む）の `max_runs` で決まる。
-    #[schemars(extend("deprecated" = true))]
-    pub concurrency: usize,
-    pub model: Option<String>,
-    /// `env` のキー名だけ（値は出さない）。
-    pub env_keys: Vec<String>,
-    /// この行で走っている CoS 以外の run（プロバイダを使うレビュー run を含む）の数。観測値で、上限とは比べない。
-    /// スナップショットが無ければ `null`。ADR-0089（Phase R6-5）: CoS の対話 run は含めない（`in_use_cos`）。
-    pub in_use: Option<u32>,
-    /// ADR-0089（Phase R6-5）: このプロバイダで走っている CoS の対話 run の数（`in_use` とは別に数える観測値）。
-    /// スナップショットが無ければ `null`。
-    pub in_use_cos: Option<u32>,
-    /// スナップショットが無い、または cooldown 中でなければ `null`。
-    pub cooldown: Option<CooldownView>,
-    /// ADR-0022 D2: 直近の `POST /providers/{id}/check` の結果（`{at, result}`）。まだ確認していない、
-    /// または celeris を再起動した後は `null`（メモリだけに持つ観測値）。
-    pub last_check: Option<task_ops::daemon::ProviderCheckView>,
-    pub stats: ProviderStats,
-    /// ADR-0024 D2: `[accounts]` のプールから選ぶか（既定 `false`）。
-    #[serde(default)]
-    pub account_pool: bool,
-}
-
-/// プロバイダ別の run 集計（task-api のメモリ内の観測値。再起動で再計算）。
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct ProviderStats {
-    /// `WorkerStarted` の数（実行中を含む）。
-    pub runs: u64,
-    pub done: u64,
-    pub question: u64,
-    pub error: u64,
-    pub requeue: u64,
-    pub lease_expired: u64,
-    pub input_tokens: u64,
-    pub output_tokens: u64,
-    /// `WorkerFinished.ts` の UTC 日付で直近 30 日（昇順。run の無い日は現れない）。
-    pub by_day: Vec<DailyUsage>,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct DailyUsage {
-    /// `YYYY-MM-DD`（UTC）。
-    pub day: String,
-    /// その日に終わった run の数。
-    pub runs: u64,
-    pub input_tokens: u64,
-    pub output_tokens: u64,
 }
 
 /// `GET /daemon`。
@@ -435,7 +354,6 @@ pub struct ConfigView {
     pub max_requeues: u32,
     pub plan_auto_accept: bool,
     pub reviewer: ReviewerConfigView,
-    pub providers: Vec<ProviderConfigView>,
     /// ADR-0018: `[[clusters]]` の要約（`env` はキー名だけ、`setup` は有無だけ）。
     #[serde(default)]
     pub clusters: Vec<ClusterConfigView>,
@@ -456,7 +374,7 @@ pub struct ConfigView {
 pub struct RoleConfigView {
     pub id: String,
     pub tier: Option<Tier>,
-    pub adapter: Option<String>,
+    pub harness: Option<String>,
     pub max_turns: Option<u32>,
     pub max_wall_secs: Option<u64>,
     /// 指示文が 1 文字以上あるか（中身は出さない）。
@@ -489,33 +407,6 @@ pub struct ReviewerConfigView {
     /// lane に一致させ組織の天井で丸める（`Dispatcher::pick_reviewer` が動的に決める）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tier: Option<Tier>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct ProviderConfigView {
-    #[serde(default)]
-    pub kind: task_core::ProviderKind,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub llm_source: Option<task_core::ResolvedLlmSource>,
-    #[serde(default)]
-    pub credential_refs: std::collections::HashMap<String, String>,
-    #[serde(default)]
-    pub tier_models: task_core::model_routing::TierModels,
-    #[serde(default)]
-    pub account_id: Option<String>,
-    pub id: String,
-    pub adapter: String,
-    pub tiers: Vec<Tier>,
-    /// Deprecated（ADR 2026-10-08 account-concurrency-limits §(a)）: 書かれた旧値（無ければ 1）。意味を持たない。
-    #[schemars(extend("deprecated" = true))]
-    pub concurrency: usize,
-    /// 実効モデル（空なら `null`）。
-    pub model: Option<String>,
-    /// `[[providers]].env` のキー名だけ。
-    pub env_keys: Vec<String>,
-    /// ADR-0024 D2: `[accounts]` のプールから選ぶか（既定 `false`）。
-    #[serde(default)]
-    pub account_pool: bool,
 }
 
 /// `[[clusters]]` 1 行の要約（ADR-0018 D7: `env` の値は出さない）。
@@ -687,29 +578,24 @@ pub struct StreamReset {
 
 // ---- Phase 13（ADR-0024）: Claude アカウントのプール ----
 
-/// `GET /accounts`。
+/// `GET /api/v1/llm/accounts`。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct AccountList {
-    /// `[accounts] claude_dir` の絶対パス。`[accounts]` が無ければ `null`。ADR-0025 D6: `roots["claude-code"]`
-    /// の別名として残す（後方互換）。
-    pub root: Option<String>,
-    /// ADR-0025 D6: `"claude-code"` / `"codex"` → 設定されていればその絶対パス、無ければ `null`。
+    /// source_id → 設定されていれば account pool の絶対パス。
     #[serde(default)]
     pub roots: std::collections::HashMap<String, Option<String>>,
     /// ADR 2026-10-08 account-concurrency-limits §(c): 保存値（`max_runs`）の無いアカウントの既定の上限
     /// （`[accounts] max_runs_per_account`。`[accounts]` が無い構成では組み込みの既定 2）。
     pub max_runs_per_account: usize,
-    /// 実アカウントを `adapter` → `id` の順に並べ、その後ろに暗黙アカウント（`implicit = true`）を行の設定順に並べる。
+    /// 実アカウントを source_id → account_id の順に並べ、その後ろに暗黙アカウントを設定順に並べる。
     pub items: Vec<AccountView>,
 }
 
-/// 1 アカウント（`GET /accounts` の要素、`POST /accounts` の応答）。
+/// 1 アカウント（`GET /api/v1/llm/accounts` の要素、accounts API の応答）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct AccountView {
-    /// ADR-0025 D1: `"claude-code"` | `"codex"`。
-    #[serde(default = "default_account_adapter")]
-    pub adapter: String,
-    pub id: String,
+    pub source_id: String,
+    pub account_id: String,
     /// アカウントディレクトリの絶対パス（ログイン手順に要る。秘密の中身は含まない）。暗黙アカウントは `null`。
     pub dir: Option<String>,
     /// ログイン済みを示すファイル（claude-code は `.credentials.json`、codex は `auth.json`）の有無
@@ -723,7 +609,7 @@ pub struct AccountView {
     /// `"not_logged_in" | "at_capacity" | "cooldown" | "five_hour_exhausted" | "seven_day_exhausted" | "one_month_exhausted" | "rejected"`。
     pub excluded_reason: Option<String>,
     pub cooldown: Option<AccountCooldownView>,
-    pub last_check: Option<task_ops::daemon::ProviderCheckView>,
+    pub last_check: Option<task_ops::daemon::AccountCheckView>,
     /// ADR-0024 D7: 進行中のログイン中継があるか。
     pub login_pending: bool,
     pub stats: AccountStats,
@@ -735,12 +621,12 @@ pub struct AccountView {
     pub max_runs_source: String,
     /// §(e): 暗黙アカウント（`adapter = "implicit"`、非プール行の LLM source ごとに 1 件）か。
     pub implicit: bool,
-    /// 暗黙アカウントの LLM source（= `id`）を使う非プール行の id（設定順）。実アカウントは空。
+    /// 暗黙アカウントの source に紐付く model id（設定順）。実アカウントは空。
     #[serde(default)]
-    pub providers: Vec<String>,
+    pub models: Vec<String>,
 }
 
-/// `PATCH /accounts/{adapter}/{id}` の要求本文（ADR 2026-10-08 account-concurrency-limits §(d)）。
+/// `PATCH /api/v1/llm/sources/{source_id}/accounts/{account_id}` の要求本文（ADR 2026-10-08 account-concurrency-limits §(d)）。
 /// `max_runs` は必須（`null` で保存値を消して既定に戻す）。値は 1..=32 の整数。未知の欄は 400。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct AccountLimitPatchBody {
@@ -784,24 +670,17 @@ pub struct AccountStats {
     pub output_tokens: u64,
 }
 
-fn default_account_adapter() -> String {
-    "claude-code".to_string()
-}
-
-/// `POST /accounts` の要求本文。
+/// `POST /api/v1/llm/sources/{source_id}/accounts` の要求本文。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct AccountCreateBody {
     pub id: String,
-    /// ADR-0025 D6: `"claude-code"`（既定）| `"codex"`。
-    #[serde(default = "default_account_adapter")]
-    pub adapter: String,
 }
 
-/// `POST /accounts/{id}/check` の応答（ADR-0024 D6）。
+/// `POST /api/v1/llm/sources/{source_id}/accounts/{account_id}/check` の応答（ADR-0024 D6）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct AccountCheckResponse {
-    pub result: crate::admin::ProviderCheckResult,
+    pub result: crate::admin::AccountCheckResult,
     pub checked_at: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
@@ -809,7 +688,7 @@ pub struct AccountCheckResponse {
     pub usage: Option<AccountUsageView>,
 }
 
-/// `POST /accounts/{id}/login` の応答（ADR-0024 D7、ADR-0025 D5）。
+/// `POST /api/v1/llm/sources/{source_id}/accounts/{account_id}/login` の応答（ADR-0024 D7、ADR-0025 D5）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct AccountLoginStart {
     /// `"paste_code"`（claude-code: URL を開いて認可し、表示されたコードを `login/code` に貼る）|
@@ -828,14 +707,14 @@ fn default_login_kind() -> String {
     "paste_code".to_string()
 }
 
-/// `POST /accounts/{id}/login/code` の要求本文。
+/// `POST /api/v1/llm/sources/{source_id}/accounts/{account_id}/login/code` の要求本文。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct AccountLoginCodeBody {
     pub code: String,
 }
 
-/// `POST /accounts/{id}/login/code` の応答。
+/// `POST /api/v1/llm/sources/{source_id}/accounts/{account_id}/login/code` の応答。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct AccountLoginResult {
     /// `"ok" | "failed"`。
@@ -870,9 +749,9 @@ pub struct SecretView {
 /// `SecretView.used_by` の 1 要素。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct SecretUse {
-    /// `"adapter" | "provider"`。
+    /// `"adapter" | "source"`。
     pub scope: String,
-    /// `scope = "adapter"` ならアダプタ種別（`"claude-code"` 等）、`"provider"` ならプロバイダ id。
+    /// `scope = "adapter"` ならアダプタ種別（`"claude-code"` 等）、`"source"` なら LLM source id。
     pub name: String,
     /// 流し込む環境変数名。
     pub env: String,
@@ -2291,6 +2170,34 @@ pub struct LlmSourcesView {
     #[serde(default)]
     pub celeris_tiers: Vec<LlmCelerisTierView>,
 }
+
+/// Public declaration and eligibility metadata for one configured LLM harness.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct HarnessView {
+    pub id: String,
+    pub kind: String,
+    pub api_formats: Vec<String>,
+    pub source_kinds: Vec<String>,
+    pub capabilities: Vec<String>,
+    pub rules: Vec<HarnessRuleView>,
+    pub execution_class_defaults: Vec<String>,
+    pub route_defaults: Vec<HarnessCandidateView>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct HarnessRuleView {
+    pub genre: Option<String>,
+    pub role: Option<String>,
+    pub required_capabilities: Vec<String>,
+    pub requires_repo: Option<bool>,
+    pub execution_class: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct HarnessCandidateView {
+    pub source_id: String,
+    pub model_id: String,
+}
 // ========== ADR-0053（Phase 65）: ここまで ==========
 
 // ============================================================================
@@ -2320,9 +2227,9 @@ pub struct TaskExecutionView {
     /// ADR-0074 D2.4（Phase F3 途中確認）: 工程の後の途中確認で止まっているときだけ。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub phase_checkpoint: Option<task_ops::view::PhaseCheckpointView>,
-    /// ADR-0079 D5（Phase R1b）: `phase = awaiting_children` のときだけ。待っている子 task。
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub awaiting_children: Vec<task_ops::view::AwaitedChildView>,
+    /// ADR 2026-10-11-task-wait-reasons D5/D6: なぜ今走らないか（`TaskDetail.waits` と同じ。子待ちは `children`）。
+    #[serde(default)]
+    pub waits: Vec<task_core::TaskWait>,
     /// ADR-0079 D8（Phase R3b）: `phase = awaiting_plan_approval` のときだけ。承認を待つ計画と理由。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan_approval: Option<task_ops::view::PlanApprovalView>,

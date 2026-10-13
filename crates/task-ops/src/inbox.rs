@@ -1,4 +1,4 @@
-//! 受信箱（`docs/api/v1/gui-api.md` §3.2 / §5.1 / §6.2）。原則 5「人間は承認待ちキューだけを見ればよい」の画面の元データ。
+//! 受信箱（`docs/api/v1/api.md` §3.2 / §5.1 / §6.2）。原則 5「人間は承認待ちキューだけを見ればよい」の画面の元データ。
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -228,6 +228,18 @@ pub enum AttentionItem {
         request: Box<task_core::integration_request::IntegrationRequest>,
         at: String,
     },
+    /// Completed task changes not yet reachable from the repository default branch.
+    Unintegrated {
+        task: TaskRef,
+        repo_id: task_core::RepoId,
+        repo: String,
+        state: task_core::TaskRepoIntegrationStatus,
+        operation_path: String,
+        branch: String,
+        head_sha: String,
+        reason: Option<String>,
+        at: String,
+    },
 }
 
 /// `AttentionItem::PlanApproval.stages[]`（計画の見取り図の 1 段階）。
@@ -316,7 +328,9 @@ fn attention_task(item: &AttentionItem) -> Option<TaskId> {
         | AttentionItem::DeliverySkipped { task, .. }
         | AttentionItem::BrowserPrerequisite { task, .. } => Some(task.id),
         // 統合依頼は Done task にも届くため、終端 task の attention 整理規則で隠さない。
-        AttentionItem::ClusterUnavailable { .. } | AttentionItem::IntegrationRequest { .. } => None,
+        AttentionItem::ClusterUnavailable { .. }
+        | AttentionItem::IntegrationRequest { .. }
+        | AttentionItem::Unintegrated { .. } => None,
     }
 }
 
@@ -331,6 +345,7 @@ fn attention_at(item: &AttentionItem) -> &str {
         AttentionItem::DeliverySkipped { at, .. } => at,
         AttentionItem::IntegrationRequest { at, .. } => at,
         AttentionItem::BrowserPrerequisite { at, .. } => at,
+        AttentionItem::Unintegrated { at, .. } => at,
     }
 }
 
@@ -644,6 +659,18 @@ fn build_drafts(
     keys.sort_by_key(|k| sort_key_for_draft_group(&Some(*k), by_id));
     // 子の件数は全件から 1 回だけ集計する（draft ごとに全件を読むと件数の二乗になる。Phase 9 監査）。
     let counts = view::child_counts(all_tasks);
+    // ADR 2026-10-11-task-wait-reasons D5: draft の `waits`（DB と計画の分。draft は dispatcher が見ないのでメモリの分は無い）。
+    let draft_tasks: Vec<Task> = all_tasks
+        .iter()
+        .filter(|t| t.status == task_core::Status::Draft)
+        .cloned()
+        .collect();
+    let draft_waits = crate::wait::task_waits(
+        store,
+        &draft_tasks,
+        all_tasks,
+        &crate::wait::MemoryWaits::default(),
+    )?;
 
     let mut out = Vec::with_capacity(keys.len() + project_plan_drafts.len() + 1);
     for key in keys {
@@ -668,8 +695,9 @@ fn build_drafts(
         let drafts: Vec<TaskSummary> = members
             .iter()
             .map(|t| {
-                let (children, pending) = counts.get(&t.id).copied().unwrap_or((0, 0));
-                view::build_task_summary(t, children, pending, ctx, now)
+                let children = counts.get(&t.id).copied().unwrap_or(0);
+                let waits = draft_waits.get(&t.id).cloned().unwrap_or_default();
+                view::build_task_summary(t, children, waits, ctx, now)
             })
             .collect();
 
@@ -701,8 +729,9 @@ fn build_drafts(
         let drafts: Vec<TaskSummary> = members
             .iter()
             .map(|t| {
-                let (children, pending) = counts.get(&t.id).copied().unwrap_or((0, 0));
-                view::build_task_summary(t, children, pending, ctx, now)
+                let children = counts.get(&t.id).copied().unwrap_or(0);
+                let waits = draft_waits.get(&t.id).cloned().unwrap_or_default();
+                view::build_task_summary(t, children, waits, ctx, now)
             })
             .collect();
         out.push(DraftGroup {
@@ -723,8 +752,9 @@ fn build_drafts(
         let drafts: Vec<TaskSummary> = root_drafts
             .iter()
             .map(|t| {
-                let (children, pending) = counts.get(&t.id).copied().unwrap_or((0, 0));
-                view::build_task_summary(t, children, pending, ctx, now)
+                let children = counts.get(&t.id).copied().unwrap_or(0);
+                let waits = draft_waits.get(&t.id).cloned().unwrap_or_default();
+                view::build_task_summary(t, children, waits, ctx, now)
             })
             .collect();
         out.push(DraftGroup {
@@ -1000,6 +1030,10 @@ fn build_attention(
         else {
             continue;
         };
+        // 取り込む commit が無い root は正常な no-op（監査用に event だけ残る）。
+        if reason == task_core::DeliverySkipReason::NoCommits {
+            continue;
+        }
         let delivered = store
             .delivery_get(t.id)?
             .is_some_and(|d| head.as_ref().is_none_or(|h| *h == d.head));
@@ -1040,6 +1074,37 @@ fn build_attention(
         });
     }
 
+    for state in
+        store.task_integration_list(Some(task_core::TaskRepoIntegrationStatus::Unintegrated))?
+    {
+        let Some(task) = by_id.get(&state.task_id) else {
+            continue;
+        };
+        // An open integration request already gives this task a more actionable inbox entry.
+        if store
+            .open_integration_requests()?
+            .iter()
+            .any(|row| row.task_id == state.task_id)
+        {
+            continue;
+        }
+        let repo_name = store
+            .repo_get(state.repo_id)?
+            .map(|repo| repo.name)
+            .unwrap_or_else(|| state.repo_id.to_string());
+        items.push(AttentionItem::Unintegrated {
+            task: view::task_ref(task),
+            repo_id: state.repo_id,
+            repo: repo_name.clone(),
+            state: state.state,
+            operation_path: format!("/api/v1/tasks/{}/integrations/{repo_name}/", state.task_id),
+            branch: state.branch,
+            head_sha: state.head_sha,
+            reason: state.reason,
+            at: view::to_rfc3339(state.checked_at),
+        });
+    }
+
     if ctx.max_requeues > 0 {
         for t in all_tasks.iter().filter(|t| t.status == Status::Ready) {
             let rows = store.event_rows_for(t.id, None, view::ALL_EVENTS)?;
@@ -1058,8 +1123,12 @@ fn build_attention(
     }
 
     if let Some(snap) = snapshot {
-        for tid in &snap.unroutable {
-            if let Some(t) = by_id.get(tid) {
+        // ADR 2026-10-11-task-wait-reasons D4: 経路なしは `task_waits` の `Unroutable`（task_id 順）。
+        for w in &snap.task_waits {
+            if !matches!(w.wait, task_core::TaskWait::Unroutable { .. }) {
+                continue;
+            }
+            if let Some(t) = by_id.get(&w.task_id) {
                 items.push(AttentionItem::Unroutable {
                     task: view::task_ref(t),
                     hint: t.worker_hint.clone(),
@@ -1141,7 +1210,7 @@ fn build_attention(
     Ok(items)
 }
 
-/// `docs/api/v1/gui-api.md` §5.1。`evidence` は `(親タスク, run_id)` から `runs/<run_id>/result.json` の `evidence[]` を読む
+/// `docs/api/v1/api.md` §5.1。`evidence` は `(親タスク, run_id)` から `runs/<run_id>/result.json` の `evidence[]` を読む
 /// 呼び出し側の関数（ファイル I/O は task-api が行う）。
 pub fn inbox(
     store: &dyn TaskStore,

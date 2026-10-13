@@ -12,7 +12,7 @@
 #               その 2 つを実際に回す（running/reviewing と lease の保護は celerisctl 側。ADR-0129 の所有を
 #               重複実装しない）。
 #     stop      in-flight（running + reviewing）が 0 で release.sh / verify.sh が走っていないことを確かめ、
-#               celeris@ / celeris-gui@ / celeris-credentiald@ <current> を止める。旧 DB を
+#               celeris@ / celeris-web@ / celeris-credentiald@ <current> を止める。旧 DB を
 #               `wal_checkpoint(TRUNCATE)` と `integrity_check` で検査する。
 #     delta     停止中に差分を rsync --delete で写し直し、DB は SQLite backup API で `+C` の DB ディレクトリへ
 #               写して `integrity_check`。`current`・`previous` が新しい tree の中で解決することを確かめる。
@@ -21,7 +21,7 @@
 #               退けて /local への symlink に替え（git worktree の gitdir や DB に残る旧い絶対 path を
 #               解決させるため）、install-units.sh で unit を新しい根で設置する（旧 unit は記録に控える）。
 #     start     /local の mount を確かめて daemon-reload し、stop で止めた unit を起こす。
-#     verify    health・認証つき /api/v1/config の db・新 DB の integrity_check・current と gui の依存の
+#     verify    health・認証つき /api/v1/config の db・新 DB の integrity_check・current と web の依存の
 #               解決先・DB ディレクトリの `C`・空き容量・旧 path を指す symlink の残りを確かめる。
 #     rollback  切り替え前の config・paths.env・unit・symlink（.bak の実体）に戻して旧 unit を起こす。
 #               start 後（新 DB に書込みがあり得る）は `--restore-db-from-new`（新 DB を backup API で旧側へ
@@ -190,10 +190,9 @@ planned_bytes() {
   echo "$total"
 }
 
-# rsync 1 組。releases は停止中の web 配布物（<sha>/web/app）を除く（ADR-0136、人の方針 5）。
+# rsync 1 組。稼働する web/app と依存を release と一緒に移す。
 sync_pair() {
   local src="$1" dst="$2" args=(-aHA --numeric-ids --delete)
-  case "$src" in "$OLD_STATE/releases") args+=(--exclude '/*/web/app/') ;; esac
   if [ -L "$src" ]; then
     # current・previous は相対 symlink（releases/<sha>）のまま張り直す（rsync は dst の symlink を辿る）。
     run ln -sfn "$(readlink "$src")" "$dst"
@@ -267,7 +266,7 @@ celerisctl_bin() {
 
 service_units() {
   local cur="$1"
-  printf '%s\n' "celeris@$cur" "celeris-gui@$cur" "celeris-credentiald@$cur"
+  printf '%s\n' "celeris@$cur" "celeris-web@$cur" "celeris-credentiald@$cur"
 }
 
 # 旧い設定の hot path（解決済み）を `key<TAB>path` で出す。
@@ -659,9 +658,10 @@ stage_switch() {
   done
 
   if [ "$DRY_RUN" = true ]; then
-    sd_log "dry-run: would run CELERIS_STATE_DIR=$NEW_STATE $SD_DIR/install-units.sh"
+    sd_log "dry-run: would run CELERIS_STATE_DIR=$NEW_STATE $SD_DIR/install-units.sh --replace-existing"
   else
-    CELERIS_STATE_DIR="$NEW_STATE" SD_UNIT_DIR="$UNIT_DIR" bash "$SD_DIR/install-units.sh" \
+    # この root 移行は上の units-before に全 unit/drop-in を退避し、失敗時は trap で戻す。
+    CELERIS_STATE_DIR="$NEW_STATE" SD_UNIT_DIR="$UNIT_DIR" bash "$SD_DIR/install-units.sh" --replace-existing \
       || sd_die "install-units.sh failed; run 'migrate-to-local.sh rollback'"
   fi
   mark switched
@@ -684,7 +684,7 @@ stage_start() {
 }
 
 stage_verify() {
-  local bad=0 got cfg cur avail stale gui
+  local bad=0 got cfg cur avail stale web
   sd_log "verify (read-only)"
   if [ "$DRY_RUN" = true ]; then
     sd_log "dry-run: verify only reads; running the same checks"
@@ -711,11 +711,11 @@ stage_verify() {
     "$(readlink -f "$NEW_STATE")"/releases/*) sd_log "ok: current -> $cur" ;;
     *) sd_log "NG: $NEW_STATE/current resolves to '$cur'"; bad=1 ;;
   esac
-  if [ -e "$NEW_STATE/current/gui/node_modules" ] || [ -L "$NEW_STATE/current/gui/node_modules" ]; then
-    gui="$(readlink -f "$NEW_STATE/current/gui/node_modules" 2>/dev/null || true)"
-    case "$gui" in
-      "$(readlink -f "$LOCAL_ROOT")"/*) sd_log "ok: gui/node_modules -> $gui" ;;
-      *) sd_log "NG: gui/node_modules resolves to '$gui' (outside $LOCAL_ROOT)"; bad=1 ;;
+  if [ -e "$NEW_STATE/current/web/app/node_modules" ] || [ -L "$NEW_STATE/current/web/app/node_modules" ]; then
+    web="$(readlink -f "$NEW_STATE/current/web/app/node_modules" 2>/dev/null || true)"
+    case "$web" in
+      "$(readlink -f "$LOCAL_ROOT")"/*) sd_log "ok: web/app/node_modules -> $web" ;;
+      *) sd_log "NG: web/app/node_modules resolves to '$web' (outside $LOCAL_ROOT)"; bad=1 ;;
     esac
   fi
   avail="$(local_avail "$LOCAL_ROOT" || echo 0)"

@@ -1,49 +1,16 @@
 ---
 tasks: [01M3MS2JRDJ4GM0D9VN9PJCB6B]
 ---
-# web/ の feature parity matrix（gui/ の全 route）
+# Web の機能と検査の台帳
 
-ADR-0081（`docs/adr/0081-web-spa-frontend.md`）の移行 gate。`gui/app/routes.ts`（main `06e9a03cffe8`）の
-**全 42 route を 1 行ずつ**並べ、その route の主要操作・認証・通知・SSE・file viewer・mobile 要件・既存の検査と、
-新 `web/` でそれを閉じる Phase・slice・確認方法・状態を書く。**すべての行が「完了」になるまで gui/ から web/ への
-配信切替をしない**（ADR-0081 D8）。gui/ の削除は別タスクで人の承認が要る。
-
-## 使い方
-
-- 各 Phase のタスクは、担当 slice の行の「状態」を `未着手` → `実装中` → `完了（<commit>）` に書き換える。
-  `完了` にしてよいのは「確認方法」のテストが web/ にあり、通ったときだけ。未検査のまま完了にしない。
-- 「確認方法」のテスト名は **これから web/ に作るテストの名前を先に決めたもの**。ファイルは
-  `web/e2e/parity/<slice>.spec.ts`、テストの題は `parity: <route>` で始める。実行は
-  `pnpm -C web e2e parity/<slice>.spec.ts -g "parity: <route>"`。mobile の行は、これに加えて
-  `pnpm -C web mobile-audit`（幅 360/390/412 と 1440、ADR-0081 D7）の対象一覧にその path が入っていること。
-- search param で切り替わる画面（tab など）は、その route の行の「主要操作」に書き、確認方法で全値を開く。
-- 表の行数の検査: `grep -c '^| R[0-9][0-9] |' docs/web/feature-parity.md` が `gui/app/routes.ts` の
-  `index(` + `route(` の数（42）と一致すること。path の集合の一致も確かめる（Phase 0 の証跡は
-  run の artifacts の `check-parity-rows.py`）。
-
-### Phase と slice（タスクへの分割は `docs/web/implementation-plan.md`）
-
-| Phase | 内容 | slice |
-|---|---|---|
-| 1 | `web/server/` の gateway（Express 5）: 静的配信、auth/session、Host、CSRF、security headers、`/api/*`・`/events`・file の relay | `gateway`、`gateway-auth`、`gateway-relay` |
-| 2 | shell（ナビ・バナー・Console の置き場）、TanStack Router/Query、SSE → invalidate の対応表、404 | `shell`、`realtime` |
-| 3 | 中核の画面: Console、受信箱と認可、タスク、run とファイル、報告 | `console`、`inbox`、`tasks`、`task-detail`、`runs-files`、`reports` |
-| 4 | 管理の画面: 案件とボード、組織、知識、運用設定 | `projects`、`org`、`knowledge`、`ops`、`help` |
-| 5 | 横断 gate（遅延・security・mobile/a11y の全画面検査）| `latency-gate`、`security-gate`、`mobile-gate` |
-| 6 | 並行運用と配信切替（人の判断） | `cutover` |
-| 7 | gui/ の削除（別タスク・人の承認が要る） | `gui-removal` |
-
-凡例: **認証** = `要`（未認証は画面なら 302 `/login?next=`、resource なら 401。`gui/app/auth.server.ts:157-203`）/
-`不要`（`PUBLIC_PATHS` = `/login` `/logout` `/healthz`）。**SSE** = `全再検証` は root の `useCelerisStream`
-（`task.event`/`daemon`/`reset` のどれでも表示中の全 loader を 250 ms スロットルで再実行）に依存するという意味。
-web/ ではこれを「その行の domain の key だけ invalidate」に置き換える（ADR-0081 D6）。**mobile** の `audit` は
-現行 `pnpm mobile-audit`（393×851 のみ、`gui/scripts/lib/celeris-fixture.mjs:56-110`）の対象、`未 audit` は対象外
-（11 本。web/ では mobile-gate で必ず対象に入れる）。全画面に共通の要件（44×44 のタップ領域、ページ全体の横溢れ
-なし、360〜412 と 1440 の幅）は横断要件 X10 に書き、行には画面固有のものだけ書く。
+初期移行で揃えた42経路と横断要件の実装・試験を記録する。現在の画面台帳は
+`web/e2e/support/screens.ts`、配信経路は `web/server/spa-routes.js`。
+`corepack pnpm@12.6.0 -C web check:parity` が台帳と試験の対応を検査する。
+定期実行と検査ログの追加は [廃止の進捗](../progress/2026-10-11-retire-gui.md) に記録する。
 
 ## route の表（42 行）
 
-| # | route | 種類 | 主要操作（mutation / form action、URL state） | 認証 | 通知 | SSE | file viewer | mobile 要件 | 既存の検査 | 閉じる Phase / slice | 確認方法 | 状態 |
+| # | route | 種類 | 主要操作（mutation / form action、URL state） | 認証 | 通知 | SSE | file viewer | mobile 要件 | 閉じる Phase / slice | 確認方法 | 状態 |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
 | R01 | `/` | 画面 | **D5 移行後は `/` が CoS chat、旧 Console と詳細入口は `/console`。** Console（CoS）への送信 = `POST` instruct（202）、新しい会話（R39）、返事の block の積み上げ。Console の上に「受信箱 判断待ち N 件」（`/inbox`）・「通知 未読 N 件」（`/notifications`）の 2 つの入口（件数は shell の常駐 query の cache を読むだけで request を足さない） | 要 | 共通（X9） | 全再検証 + `/console/stream`（R38）の block 差分。入口の件数は `inbox_changed`・`notifications_changed` | なし | audit。**下端 fixed の composer**（safe-area、キーボード表示時に隠れない）、IME 変換中に送信しない。入口は 44px | unit `home.route.test` `console*.test` `useConsoleStream.test`、e2e `g0` `g13`、mobile-audit `home` | 3 / `console` | `parity: / Console の送信・返事・IME`、`parity: /console の受信箱・通知の入口と件数`（`notifications.spec.ts`） | 完了（d7e08ee0） |
 | R02 | `/inbox` | 画面 | **判断待ちだけ**（ADR-0133 の `GET /inbox/items`）を 1 行 1 項目の list で出す: 種類・何を決めるか・選択肢・推奨・期限・止めている範囲（root/task/葉）・先に答える項目・案件。答えは `POST /inbox/items/{id}/answer`（`option`・`note`）でその場で返し、答えた項目は一覧と件数から消える。破壊的な選択は確認（`ConfirmDialog`）、`needs_note` は note 必須。409 `native_action_required` と専用操作の種類（`cluster_login` 等）は専用画面へ誘導、他の 409・404・`invalid_option` は再取得。絞り込みは URL の `?project=` `?kind=`。旧区画の approve/reject/answer/cancel は答え API に寄せた（知らせは R17 `/notifications`） | 要 | 共通（X9）、nav の受信箱件数（`/inbox/items` の `counts.total`） | `inbox_changed` → `['inbox']` invalidate | 承認の成果物 preview（`ApprovalArtifactPreview` → R41）、Markdown | audit。行の操作・結果が縦に並んでも横溢れしない | unit `inbox-model.test`、e2e `shell/inbox-badge.spec.ts`、mobile-audit `inbox` | 3 / `inbox` | `parity: /inbox 区画表示と承認・409 再取得`（ほか `破壊的な選択は確認を経て消える`・`案件・種類の絞り込みは URL の search param`） | 完了（191bd6e3） |
@@ -74,7 +41,7 @@ web/ ではこれを「その行の domain の key だけ invalidate」に置き
 | R27 | `/tasks/:id/runs/:runId/events` | resource | GET: Console の progress の「すべて見る」 | 要 | なし | なし | なし | — | unit `tasks.runs.events.route.test` | 3 / `console` | `parity: runs/:runId/events 全行の取得` | 完了（cd421e3d） |
 | R28 | `/plans/new` | 画面 | 計画の作成（ADR-0079 で `POST /plans` は 410。`POST /tasks` で root task を作り、成功は `/tasks/:id` へ）。画面は route に置き、入力欄の枠は `--color-input`、説明は `aria-describedby`、422 は `aria-invalid` と欄の下の alert | 要 | なし | 全再検証 | なし | **未 audit** | unit `plans.new.test`、e2e `g2` | 3 / `tasks` | `parity: /plans/new 作成と失敗表示` | 完了（5e14c81e） |
 | R29 | `/daemon` | 画面 | `replay`（結果は fetcher） | 要 | なし | 全再検証（SSE `daemon` の生 snapshot と `GET /daemon` の差 → ADR-0081 D5） | なし | audit（360/390/412/1440、2026-10-04） | unit `daemon.test`、e2e `g2`（replay 0 mismatch）`g4`、e2e `g5-a11y` | 4 / `ops` | `parity: /daemon 状態・replay` | 完了（50d5f354） |
-| R30 | `/providers` | 画面 | provider の `create` / `patch` / `delete` / `check` | 要 | なし | 全再検証（dispatcher tick ごとの snapshot） | なし | audit（360/390/412/1440、2026-10-04） | unit `providers.test` `providers-admin.test`、e2e `g4` `g8` `g9`、e2e `g5-a11y` | 4 / `ops` | `parity: /providers 追加・変更・削除・確認` | 完了（50d5f354） |
+| R30 | `/providers`（2026-10-12 削除。後継 `/sources`・`/harnesses`） | 画面 | 旧: provider の `create` / `patch` / `delete` / `check`。後継は LLM source と harness の読み取り専用の一覧・詳細（編集は config。編集 API は未実装） | 要 | なし | 全再検証（後継の `/sources`・`/harnesses` は source と harness の一覧を読む） | なし | audit（360/390/412/1440、2026-10-04、before 記録。削除済み） | 旧 unit `providers.test` `providers-admin.test` は削除済み。後継 e2e `parity/sources-harnesses.spec.ts`（db516146） | 4 / `ops` | `parity: /sources /harnesses 一覧・詳細を読み取り専用で表示する` | 完了（db516146） |
 | R31 | `/accounts` | 画面 | account の `create` / `delete` / `check`、ログイン `login_start` / `login_code` / `login_cancel`（デバイス認証）、`secret_put` / `secret_delete`。LLM source・MCP クライアントの表示（R32 を開く） | 要 | なし | 全再検証 | なし | audit。**秘密値の入力欄**（表示しない・自動補完しない） | unit `accounts*.test` `secrets-admin.test` `llm-sources.test` `mcp.test`、e2e `g8` `g9`、mobile-audit `accounts` | 4 / `ops` | `parity: /accounts 追加・ログイン・secret・削除` | 完了（50d5f354） |
 | R32 | `/mcp/clients/:id/calls` | resource | GET: MCP クライアントの直近の呼び出し（カードを開いたとき） | 要 | なし | なし | なし | — | unit `mcp.test` | 4 / `ops` | `parity: mcp/clients/:id/calls 取得` | 完了（352bd32a） |
 | R33 | `/clusters` | 画面 | `cluster_connect` / `cluster_connect_code` / `cluster_connect_cancel`、`cluster_work_dir_save` / `cluster_work_dir_clear` | 要 | なし | 全再検証 | なし | audit | unit `clusters.test`、e2e `g7`、mobile-audit `clusters` | 4 / `ops` | `parity: /clusters 接続・作業ディレクトリ` | 完了（50d5f354） |
@@ -96,26 +63,25 @@ web/ ではこれを「その行の domain の key だけ invalidate」に置き
 
 ## 横断要件の表
 
-| # | 要件 | 現行の実装と検査（gui/） | web/ での要件 | 閉じる Phase / slice | 確認方法 | 状態 |
+| # | 要件 | web/ での要件 | 閉じる Phase / slice | 確認方法 | 状態 |
 |---|---|---|---|---|---|---|
-| X1 | 認証・session | `gui/app/auth.server.ts`: パスワード SHA-256 を `timingSafeEqual`、失敗 1 s、HMAC 署名 cookie `__celeris_gui_session`（httpOnly・SameSite=Strict・https で Secure・24 h）。`PUBLIC_PATHS` 以外は画面 302、`/events` `/files/*` は 401。非 loopback bind でパスワード無しなら起動拒否（`gui/server.js:49-55`）。unit `auth.test`、e2e `g5` | 同じ cookie 属性と公開パス。`/api/*`・`/events`・`/files/*` はすべて 401（SPA は 401 を受けて `/login?next=` へ）。`next` は同一オリジンの絶対パスだけ。非 loopback + パスワード無しは起動しない。daemon 停止中も login できる | 1 / `gateway-auth` | `parity-x: auth cookie 属性・401・next・非 loopback` | 完了（8eae18e） |
-| X2 | CSRF | Origin 一致 / `Sec-Fetch-Site`（`security.server.ts:202-268`）。Express 層で 403（`server/app.ts:164`）+ root middleware。unit `security.csrf.test` | 変更系（POST/PATCH/PUT/DELETE）の `/api/*`・`/logout`・`/login` を gateway で検査して 403。GET に副作用を持たせない | 1 / `gateway` | `parity-x: CSRF 別 origin の変更は 403` | 完了（96717f8） |
-| X3 | Host 検査 | Express 層（`server.js:74-109`、静的配信にも効く）+ root middleware。e2e `g5`（`Host: evil.example` → 400） | asset・HTML・API・file・stream・404 の全経路で許可外の Host を 400 | 1 / `gateway` | `parity-x: Host 全経路で 400` | 完了（96717f8） |
-| X4 | CSP・security headers | HTML は nonce 付き CSP・nosniff・no-referrer・`X-Frame-Options: DENY`・既定 no-store（`security.server.ts:285-296`）、静的・302/401 は `default-src 'none'`（`server.js:91-102`）。e2e `g5` `g5-a11y`（全ページに CSP） | SPA の HTML に CSP（inline script なし、`connect-src 'self'`）、全応答に nosniff・no-referrer・frame 拒否。API と HTML は no-store、hash 付き asset だけ長期 cache | 1 / `gateway` | `parity-x: 全応答の security header` | 完了（96717f8） |
-| X5 | daemon token の秘匿 | token は `client.server.ts` の `#token` だけ、root loader は URL だけ返す（未認証なら返さない）。e2e `g5.spec.ts:253-` | token は gateway の process だけが持つ。HTML・bundle・`/api/*` の応答・エラー文・ログに出さない。client は daemon に直接つながない | 1 / `gateway-relay` | `parity-x: token が HTML・bundle・エラーに出ない` | 完了（77d10ac） |
-| X6 | file path の安全 | `files.runs.ts:54-100`・`files.artifacts.ts`: 中継ヘッダの許可リスト、`nosniff` の付け直し、Range / offset / length / download の転送。path の解釈は daemon | `:name` `:idx` を gateway で検査（`..`・区切り文字・NUL を拒否）、daemon の応答ヘッダは許可リストだけ転送、`Content-Disposition` は daemon の指定か attachment。HTML の成果物は同一オリジンで実行させない（`nosniff` と CSP sandbox） | 1 / `gateway-relay` | `parity-x: file 不正 path・header 許可リスト・HTML を実行しない` | 完了（3bc52d5） |
-| X7 | timezone | `app/lib/time-zone.ts`（表示の時刻帯）、unit `time-zone.test` `clock.test` `time-delta.test` | SSR が無くなるので client の時刻帯で表示し、相対時刻は同じ規則。hydration の差分が無くなる分、サーバ時刻との差（`hello.now`）で相対表示を補正 | 2 / `shell` | `parity-x: timezone 表示と相対時刻` | 完了（89416a54） |
-| X8 | 秘密・機密を永続化しない | SSR なので client の保存は無い | TanStack Query の persist を使わない。localStorage / IndexedDB に server state・secret・token・報告本文を書かない（UI の好みだけ可） | 2 / `shell` | `parity-x: storage に機密が無い`（全画面を開いた後の storage を検査） | 完了（89416a54） |
-| X9 | ブラウザ通知 | `components/NotificationsWatcher.tsx`（root loader の `reportsLive` → Notification API、判定 `lib/reports.ts`）、`NotificationsEnable`、R17 の `notify_test`。unit `notify.test` `reports.test` | 報告の到着を shell で見張る。値の元は `GET /daemon`（補完済み）で、SSE の生 snapshot の `reports: None` で「無い」と判断しない。同じ報告を二度通知しない（タブ間も含む） | 3 / `reports` | `parity-x: 通知 1 回だけ・生 snapshot で消えない` | 完了（44cf8508） |
-| X10 | mobile・a11y | mobile-audit（393×851、ADR-0055 D1 の規則: 44×44、横溢れ、`a11y-name`、`a11y-structure`、`focus-order`）、e2e `g5-a11y`（axe の critical/serious 0）、`check-*.mjs` の 360/390/412/1440 撮影 | 全 42 行の画面（resource を除く）を 360/390/412/1440 で監査（未 audit の 11 本も含む）。タップ領域 44×44、ページの横溢れなし、axe critical/serious 0、ダイアログの focus trap、遷移時の見出し focus | 5 / `mobile-gate` | `pnpm -C web mobile-audit`（全画面・4 幅）と `parity-x: axe 全画面` | 完了（ba629384） |
-| X11 | 遅延の表示と遷移の独立 | loader は全部 blocking、root は `/health` → `/inbox` → `/daemon` を直列、client の timeout 15 s | 遷移（URL と枠）は daemon を待たない。1 s 超で待機表示、5 s 超で「時間がかかっています」と再試行、失敗を 0 件に置き換えない（ADR-0081 D7）。daemon に 5/10 s の遅延を入れて測る | 5 / `latency-gate` | `parity-x: 遅延 10 s で遷移が止まらない`（baseline と同じ手順） | 完了（46b3275f） |
-| X12 | SSE の再接続・再同期 | `useCelerisStream`（CLOSED なら 5 s 後に張り直し）、`useResumeRevalidate`・`recovery.ts`（visibilitychange / pageshow / online / focus）。`check-resume-recovery.mjs` | `Last-Event-ID` で続きから、`reset` で全 invalidate、復帰時は表示中の key だけ再取得。イベントの burst で request が増え続けない | 2 / `realtime` | `parity-x: SSE 再接続・reset・復帰・burst` | 完了（c353ac0b） |
-| X13 | celeris 断の表示 | root の `health`・`unavailable` バナー、5 s ごとに root だけ再確認。e2e `g0`（停止中のバナーと復旧） | shell にバナー。daemon 断でも shell・ナビ・login は出る。復旧したら表示中の key を取り直す | 2 / `shell` | `parity-x: daemon 停止中のバナーと復旧` | 完了（bcfe6276） |
-| X14 | 409 / 422 の扱い | `revalidateAfterActionErrors`（4xx の後も再検証）、操作の結果は fetcher に載せて SSE の再検証で消さない（監査 H1） | mutation の 409 は該当 key を invalidate して「状態が変わりました」、422 は celeris の文言を欄の横に。結果の表示は再取得で消えない。確定まで同じ操作を二重送信しない | 3 / `inbox`（共通部品） | `parity-x: 409 再取得・422 表示・二重送信なし` | 完了（6a0bbbc7） |
-| X15 | 配布・起動 | `pnpm release`（`e2e g5-release`: 展開して `pnpm install --prod --offline` だけで動く）、`/healthz` による新旧切替 | web/ も同じ形で配布でき、`/healthz` で切替できる。gui/ と並行して動かせる | 6 / `cutover` | `parity-x: web の配布物が offline install で動く` | 完了（f349c315） |
-| X16 | 型と境界 | `gui/scripts/gen-types.mjs`（`docs/api/v1/api-v1.schema.json` → `types.ts`） | 型は同じ schema から生成し差分ゼロ。`web/` は `gui/` を import しない。client に server・token の処理が入らない | 1 / `gateway` | `parity-x: 型の再生成差分ゼロ・gui import なし` | 完了（8ab4362） |
+| X1 | 認証・session | 同じ cookie 属性と公開パス。`/api/*`・`/events`・`/files/*` はすべて 401（SPA は 401 を受けて `/login?next=` へ）。`next` は同一オリジンの絶対パスだけ。非 loopback + パスワード無しは起動しない。daemon 停止中も login できる | 1 / `gateway-auth` | `parity-x: auth cookie 属性・401・next・非 loopback` | 完了（8eae18e） |
+| X2 | CSRF | 変更系（POST/PATCH/PUT/DELETE）の `/api/*`・`/logout`・`/login` を gateway で検査して 403。GET に副作用を持たせない | 1 / `gateway` | `parity-x: CSRF 別 origin の変更は 403` | 完了（96717f8） |
+| X3 | Host 検査 | asset・HTML・API・file・stream・404 の全経路で許可外の Host を 400 | 1 / `gateway` | `parity-x: Host 全経路で 400` | 完了（96717f8） |
+| X4 | CSP・security headers | SPA の HTML に CSP（inline script なし、`connect-src 'self'`）、全応答に nosniff・no-referrer・frame 拒否。API と HTML は no-store、hash 付き asset だけ長期 cache | 1 / `gateway` | `parity-x: 全応答の security header` | 完了（96717f8） |
+| X5 | daemon token の秘匿 | token は gateway の process だけが持つ。HTML・bundle・`/api/*` の応答・エラー文・ログに出さない。client は daemon に直接つながない | 1 / `gateway-relay` | `parity-x: token が HTML・bundle・エラーに出ない` | 完了（77d10ac） |
+| X6 | file path の安全 | `:name` `:idx` を gateway で検査（`..`・区切り文字・NUL を拒否）、daemon の応答ヘッダは許可リストだけ転送、`Content-Disposition` は daemon の指定か attachment。HTML の成果物は同一オリジンで実行させない（`nosniff` と CSP sandbox） | 1 / `gateway-relay` | `parity-x: file 不正 path・header 許可リスト・HTML を実行しない` | 完了（3bc52d5） |
+| X7 | timezone | SSR が無くなるので client の時刻帯で表示し、相対時刻は同じ規則。hydration の差分が無くなる分、サーバ時刻との差（`hello.now`）で相対表示を補正 | 2 / `shell` | `parity-x: timezone 表示と相対時刻` | 完了（89416a54） |
+| X8 | 秘密・機密を永続化しない | TanStack Query の persist を使わない。localStorage / IndexedDB に server state・secret・token・報告本文を書かない（UI の好みだけ可） | 2 / `shell` | `parity-x: storage に機密が無い`（全画面を開いた後の storage を検査） | 完了（89416a54） |
+| X9 | ブラウザ通知 | 報告の到着を shell で見張る。値の元は `GET /daemon`（補完済み）で、SSE の生 snapshot の `reports: None` で「無い」と判断しない。同じ報告を二度通知しない（タブ間も含む） | 3 / `reports` | `parity-x: 通知 1 回だけ・生 snapshot で消えない` | 完了（44cf8508） |
+| X10 | mobile・a11y | 全 42 行の画面（resource を除く）を 360/390/412/1440 で監査（未 audit の 11 本も含む）。タップ領域 44×44、ページの横溢れなし、axe critical/serious 0、ダイアログの focus trap、遷移時の見出し focus | 5 / `mobile-gate` | `pnpm -C web mobile-audit`（全画面・4 幅）と `parity-x: axe 全画面` | 完了（ba629384） |
+| X11 | 遅延の表示と遷移の独立 | 遷移（URL と枠）は daemon を待たない。1 s 超で待機表示、5 s 超で「時間がかかっています」と再試行、失敗を 0 件に置き換えない（ADR-0081 D7）。daemon に 5/10 s の遅延を入れて測る | 5 / `latency-gate` | `parity-x: 遅延 10 s で遷移が止まらない`（baseline と同じ手順） | 完了（46b3275f） |
+| X12 | SSE の再接続・再同期 | `Last-Event-ID` で続きから、`reset` で全 invalidate、復帰時は表示中の key だけ再取得。イベントの burst で request が増え続けない | 2 / `realtime` | `parity-x: SSE 再接続・reset・復帰・burst` | 完了（c353ac0b） |
+| X13 | celeris 断の表示 | shell にバナー。daemon 断でも shell・ナビ・login は出る。復旧したら表示中の key を取り直す | 2 / `shell` | `parity-x: daemon 停止中のバナーと復旧` | 完了（bcfe6276） |
+| X14 | 409 / 422 の扱い | mutation の 409 は該当 key を invalidate して「状態が変わりました」、422 は celeris の文言を欄の横に。結果の表示は再取得で消えない。確定まで同じ操作を二重送信しない | 3 / `inbox`（共通部品） | `parity-x: 409 再取得・422 表示・二重送信なし` | 完了（6a0bbbc7） |
+| X15 | 配布・起動 | web/ も同じ形で配布でき、`/healthz` で切替できる | 6 / `cutover` | `parity-x: web の配布物が offline install で動く` | 完了（f349c315） |
+| X16 | 型と境界 | 型は同じ schema から生成し差分ゼロ。client に server・token の処理が入らない | 1 / `gateway` | `parity-x: 型の再生成差分ゼロ` | 完了（8ab4362） |
 
 ## この表の範囲外
 
-- gui/ の削除・rename（Phase 7、別タスクで人の承認が要る）。
 - celeris の API の変更（`EventRow.project_id` の追加など）。必要なら実装計画の「人の判断点」に置く。

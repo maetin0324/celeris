@@ -502,6 +502,8 @@ impl Dispatcher {
     ///   replan を求め、次の版がまだ採用・承認されていない）。
     /// - task が人の gate で止まっている（段階の `review: human`〈`awaiting_human`〉・計画の承認待ち）。
     ///
+    /// どれも `task_ops::wait::human_gate_waits` の結果から決める（API の `waits` と同じ判定）。
+    ///
     /// 止めている間は、leaf の run・子 task の生成・段階の統合・次の段階の unit の `ready` への引き上げをしない
     /// （走っている run・子はそのまま走らせる）。
     pub(super) fn human_gate_hold(
@@ -510,13 +512,21 @@ impl Dispatcher {
         plan: &task_core::ExecutionPlanRow,
         events: &[(u64, Event)],
     ) -> Option<&'static str> {
-        if !task_ops::plan_gate::plan_gate_state(plan, events).allows_dispatch() {
-            return Some("plan_gate_pending");
-        }
-        if task_ops::plan_gate::is_human_gate(task, events) {
-            return Some("human_gate");
-        }
-        None
+        // 判定は API の `waits` と同じ関数（ADR 2026-10-11-task-wait-reasons D12、葉 stage-gate）。
+        task_ops::wait::human_gate_waits(task, Some(plan), events)
+            .iter()
+            .find_map(|w| match w {
+                task_core::TaskWait::HumanGate {
+                    gate: task_core::HumanGateKind::PlanApproval,
+                    ..
+                } => Some("plan_gate_pending"),
+                task_core::TaskWait::HumanGate {
+                    gate: task_core::HumanGateKind::StageReview,
+                    ..
+                } => Some("stage_review"),
+                task_core::TaskWait::HumanGate { .. } => Some("human_gate"),
+                _ => None,
+            })
     }
 
     /// ADR-0079 D7（Phase R3a）: 節点の replan の上限（`[execution] max_replans`）に、`limit:max_replans` への

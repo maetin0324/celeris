@@ -44,4 +44,4 @@ completed: 2026-10-06
 - 範囲: 共有操作関数の切り出しのため task-core（store の `_tx`）と task-ops（plan/finish）にも触れた。
 
 提案:
-- O の JSON 形（`OperationView`）と problem code `cos_operation_not_allowed` の schema・gui-api.md 追記は schema 葉で行う。
+- O の JSON 形（`OperationView`）と problem code `cos_operation_not_allowed` の schema・api.md 追記は schema 葉で行う。

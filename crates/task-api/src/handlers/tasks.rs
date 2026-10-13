@@ -6,8 +6,9 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::Response;
 use schemars::JsonSchema;
 use serde::Deserialize;
+use std::collections::HashMap;
 use task_core::{
-    ListFilter, ListOrder, MilestoneId, ProjectId, Status, StoreError, Task, TaskKind,
+    ListFilter, ListOrder, MilestoneId, ProjectId, Status, StoreError, Task, TaskKind, TaskStore,
 };
 use task_ops::OpsError;
 use task_ops::add::NewTaskSpec;
@@ -23,6 +24,66 @@ use crate::state::ApiState;
 use super::{ApiResult, Params, json_response, no_query, read_json};
 
 const TITLE_QUERY_MAX_CHARS: usize = 200;
+
+fn attach_task_integrations(
+    store: &dyn TaskStore,
+    id: task_core::TaskId,
+    integrations: &mut Option<Vec<task_ops::view::IntegrationView>>,
+    promotion: &mut Option<task_ops::stranded::PromotionView>,
+    releases_dir: Option<&std::path::Path>,
+) -> Result<(), ApiProblem> {
+    let Some(task) = store.get(id).map_err(crate::problem::store_problem)? else {
+        return Ok(());
+    };
+    let mut repos = match task.project_id {
+        Some(project_id) => store
+            .repo_list(project_id)
+            .map_err(crate::problem::store_problem)?,
+        None => Vec::new(),
+    };
+    // ADR 2026-10-11 D3: a task without a project names its repositories through the integration
+    // rows the sweep resolved from registered `celeris/<task id>` branches.
+    for state in store
+        .task_integration_list(None)
+        .map_err(crate::problem::store_problem)?
+    {
+        if state.task_id == id
+            && !repos.iter().any(|repo| repo.id == state.repo_id)
+            && let Some(repo) = store
+                .repo_get(state.repo_id)
+                .map_err(crate::problem::store_problem)?
+        {
+            repos.push(repo);
+        }
+    }
+    let mut repositories = HashMap::new();
+    for repo in repos {
+        if let task_core::WorkspaceSpec::Local { path, .. } = repo.location {
+            // ADR 2026-10-11-stranded-done-branches F1: 解決できない repo は context に入れない。
+            match task_ops::changes::resolve_default_branch(&path, repo.default_branch.as_deref()) {
+                Ok(default_branch) => {
+                    repositories.insert(
+                        repo.id,
+                        task_ops::stranded::IntegrationRepoContext {
+                            name: repo.name,
+                            path,
+                            default_branch,
+                        },
+                    );
+                }
+                Err(error) => {
+                    tracing::warn!(repo = %repo.name, %error, "integration context skips repository");
+                }
+            }
+        }
+    }
+    let context = task_ops::stranded::IntegrationContext {
+        repositories,
+        releases_dir: releases_dir.map(std::path::Path::to_path_buf),
+    };
+    task_ops::view::attach_integrations(store, id, integrations, promotion, Some(&context))
+        .map_err(|e| crate::problem::ops_problem(store, e, None))
+}
 
 /// POST /tasks accepts the task specification and an optional write path hint.
 #[derive(Deserialize, JsonSchema)]
@@ -90,6 +151,8 @@ pub(super) async fn list_tasks(
             "priority",
             // ADR-0044 D6（Phase 55）: アーカイブされた案件のタスクは既定で隠す。
             "archived",
+            // ADR 2026-10-11-task-wait-reasons D5: 走れる／待ち。
+            "run_state",
         ],
     )?;
     let mut filter = ListFilter::default();
@@ -175,21 +238,35 @@ pub(super) async fn list_tasks(
         Some("created_desc") => ListOrder::CreatedDesc,
         Some(other) => return Err(ApiProblem::bad_request(format!("unknown order `{other}`"))),
     };
+    let run_state = match query.single("run_state")? {
+        None | Some("") => None,
+        Some("runnable") => Some(task_ops::view::RunState::Runnable),
+        Some("waiting") => Some(task_ops::view::RunState::Waiting),
+        Some(other) => {
+            return Err(ApiProblem::bad_request(format!(
+                "unknown run_state `{other}` (runnable | waiting)"
+            )));
+        }
+    };
     let limit = query.limit("limit", 100, 500)?;
     let cursor = query
         .single("cursor")?
         .filter(|c| !c.is_empty())
         .map(str::to_string);
     let ctx = state.inner.view.clone();
+    let releases_dir = state.inner.integration_releases_dir.clone();
+    let memory = state.memory_waits();
     let list = state
         .blocking(move |store| {
-            task_ops::view::task_list(
+            let mut list = task_ops::view::task_list(
                 store,
                 &filter,
                 order,
                 cursor.as_deref(),
                 limit,
+                run_state,
                 &ctx,
+                &memory,
                 OffsetDateTime::now_utc(),
             )
             .map_err(|e| match e {
@@ -199,7 +276,17 @@ pub(super) async fn list_tasks(
                     ApiProblem::bad_request("invalid cursor")
                 }
                 other => ops_problem(store, other, None),
-            })
+            })?;
+            for item in &mut list.items {
+                attach_task_integrations(
+                    store,
+                    item.id,
+                    &mut item.integrations,
+                    &mut item.promotion,
+                    releases_dir.as_deref(),
+                )?;
+            }
+            Ok(list)
         })
         .await?;
     Ok(json_response(StatusCode::OK, &list))
@@ -374,11 +461,20 @@ pub(super) async fn task_detail(
     no_query(&raw)?;
     let id = parse_task_id(&id)?;
     let ctx = state.inner.view.clone();
+    let releases_dir = state.inner.integration_releases_dir.clone();
+    let memory = state.memory_waits();
     let detail = state
         .blocking(move |store| {
             let mut detail =
-                task_ops::view::task_detail(store, id, &ctx, OffsetDateTime::now_utc())
+                task_ops::view::task_detail(store, id, &ctx, &memory, OffsetDateTime::now_utc())
                     .map_err(|e| ops_problem(store, e, None))?;
+            attach_task_integrations(
+                store,
+                id,
+                &mut detail.integrations,
+                &mut detail.promotion,
+                releases_dir.as_deref(),
+            )?;
             let task = &detail.task;
             for run in &mut detail.runs {
                 run.files = Some(files::run_files(task, &ctx.workspace_root, &run.run_id));

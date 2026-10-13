@@ -298,7 +298,6 @@ async fn a_work_unit_whose_check_keeps_failing_replans_with_the_failed_check_as_
         HashMap::new(),
     ));
     let mut d = dispatcher(store.clone(), adapter.clone(), 1);
-    d.config.execution.planner.adapter = "instant".to_string();
     d.config.execution.max_replans = 1;
     let report = run_until_idle(&mut d, 400).await;
     assert!(report.idle, "{report:?}");

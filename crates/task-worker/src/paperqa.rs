@@ -110,7 +110,7 @@ pub struct AcquireConfig {
     /// 壊れていれば決定的な抽出に落ちる（ランナーが `progress:` に出す）。
     #[serde(default = "default_query_llm")]
     pub query_llm: bool,
-    /// 検索語を立てる LLM のモデル名。未指定なら `[[providers]] model`（`--llm`）→ PaperQA の
+    /// 検索語を立てる LLM のモデル名。未指定なら run の route が選んだ model（`--llm`）→ PaperQA の
     /// `settings` の `llm` の順に使う（**PaperQA2 と同じ LLM 先**。ADR-0035 D5）。
     /// LiteLLM の `provider/model` 形式の接頭辞（`openai/`）は落として渡す。
     #[serde(default)]
@@ -216,7 +216,7 @@ fn default_min_cited() -> u32 {
     2
 }
 
-/// `[adapters.paperqa]`（config.toml, ADR-0027 D3）。`[[providers]] adapter = "paperqa"` の行ごとに
+/// `[adapters.paperqa]`（config.toml, ADR-0027 D3）。`[harnesses.<id>]` の宣言ごとに
 /// `settings` / `env` / `model` を上書きできる（ADR-0026 D2 と同じ作り）。
 #[derive(Debug, Clone)]
 pub struct PaperQaConfig {
@@ -319,6 +319,13 @@ impl WorkerAdapter for PaperQaAdapter {
     fn with_env(&self, extra: &[(String, String)]) -> Option<Arc<dyn WorkerAdapter>> {
         let mut config = self.config.clone();
         config.env.extend(extra.iter().cloned());
+        Some(Arc::new(PaperQaAdapter::new(config)))
+    }
+
+    /// The selected route's model (ADR 2026-10-11 llm-source-harness-selection).
+    fn with_model(&self, model: &str) -> Option<Arc<dyn WorkerAdapter>> {
+        let mut config = self.config.clone();
+        config.model = Some(model.to_owned());
         Some(Arc::new(PaperQaAdapter::new(config)))
     }
 }
@@ -657,15 +664,13 @@ pub fn build_search_queries(objective: &str) -> Vec<String> {
 
 /// LiteLLM の `provider/model` 形式から供給者の接頭辞を落とす（ADR-0035 D5）。
 /// `chat/completions` を直接叩くときに必要なのは、その口が出しているモデル名
-/// （例: settings の `llm` が `openai/celeris/standard` なら要求モデルは `celeris/standard`）。
+/// （例: settings の `llm` が `openai/qwen/qwen3.8-27b` なら要求モデルは `qwen/qwen3.8-27b`）。
 /// 接頭辞と見なすのは小文字・数字・`_` だけの最初の 1 区画（`openai/` / `hosted_vllm/`）。
-/// ただし `celeris/<tier>` は proxy のモデル名そのものなので残す。
 fn strip_provider_prefix(model: &str) -> String {
     let model = model.trim();
     match model.split_once('/') {
         Some((prefix, rest))
-            if prefix != "celeris"
-                && !rest.is_empty()
+            if !rest.is_empty()
                 && !prefix.is_empty()
                 && prefix
                     .chars()
@@ -695,7 +700,7 @@ async fn settings_llm(settings: &str) -> Option<String> {
     }
 }
 
-/// 検索語を立てる LLM のモデル名（ADR-0035 D5）。`acquire.query_model` → `[[providers]] model`
+/// 検索語を立てる LLM のモデル名（ADR-0035 D5）。`acquire.query_model` → run の route が選んだ model
 /// （`--llm`）→ PaperQA の `settings` の `llm` の順。**PaperQA2 と同じ LLM 先**を使うため。
 async fn query_llm_model(config: &PaperQaConfig) -> Option<String> {
     for candidate in [config.acquire.query_model.clone(), config.model.clone()]

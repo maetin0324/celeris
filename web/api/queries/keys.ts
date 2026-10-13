@@ -80,9 +80,10 @@ export const daemonKeys = {
 
 export const healthKeys = { all: ["health"] as const };
 
-export const providerKeys = listDomain("providers");
 export const accountKeys = listDomain("accounts");
 export const modelKeys = listDomain("llm-models");
+export const sourceKeys = listDomain("llm-sources");
+export const harnessKeys = listDomain("harnesses");
 export const clusterKeys = listDomain("clusters");
 export const releaseKeys = listDomain("releases");
 export const metricKeys = listDomain("metrics");
@@ -121,8 +122,10 @@ export const queryKeys = {
   approvals: approvalKeys,
   daemon: daemonKeys,
   health: healthKeys,
-  providers: providerKeys,
   accounts: accountKeys,
+  models: modelKeys,
+  sources: sourceKeys,
+  harnesses: harnessKeys,
   clusters: clusterKeys,
   releases: releaseKeys,
   metrics: metricKeys,

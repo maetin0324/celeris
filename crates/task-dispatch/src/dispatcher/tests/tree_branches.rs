@@ -185,7 +185,6 @@ fn git_tree_dispatcher(
 ) -> Dispatcher {
     let mut d = parallel_dispatcher(store.clone(), adapter, workspace_root, 3, 3, 3);
     d.config.execution.gate = task_core::GateMode::On;
-    d.config.execution.planner.adapter = "instant".to_string();
     let mut limits = task_core::ExecutionLimits::default();
     limits.tree.enabled = true;
     d.config.execution.limits = limits;

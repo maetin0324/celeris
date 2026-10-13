@@ -15,7 +15,7 @@ fn env_with_lead_role() -> TestEnv {
             RoleSpec {
                 id: "lead".into(),
                 tier: Some(Tier::Frontier),
-                adapter: None,
+                harness: None,
                 max_turns: Some(40),
                 max_wall_secs: None,
                 instructions: Some("You lead the work. Delegate implementation.".into()),
@@ -23,7 +23,7 @@ fn env_with_lead_role() -> TestEnv {
             RoleSpec {
                 id: "implementer".into(),
                 tier: Some(Tier::Cheap),
-                adapter: Some("fake".into()),
+                harness: Some("fake".into()),
                 max_turns: None,
                 max_wall_secs: Some(900),
                 instructions: None,
@@ -92,11 +92,9 @@ async fn task_values_win_over_role_defaults_and_aggregate_is_stored() {
     let task = resp.json();
     assert_eq!(task["role"], "implementer");
     assert_eq!(task["aggregate"], true);
-    // タスクの tier が勝ち、adapter と max_wall_secs は役割の既定。
-    assert_eq!(
-        task["worker_hint"],
-        json!({"tier": "standard", "adapter": "fake"})
-    );
+    // タスクの tier が勝ち、harness と max_wall_secs は役割の既定。
+    assert_eq!(task["harness_id"], "fake");
+    assert_eq!(task["worker_hint"], json!({"tier": "standard"}));
     assert_eq!(
         task["budget"],
         json!({"max_turns": 10, "max_wall_secs": 900, "max_retries": 2})
@@ -119,10 +117,7 @@ async fn unknown_role_is_stored_without_defaults() {
     assert_eq!(resp.status, 201, "{}", resp.text());
     let task = resp.json();
     assert_eq!(task["role"], "researcher");
-    assert_eq!(
-        task["worker_hint"],
-        json!({"tier": "standard", "adapter": null})
-    );
+    assert_eq!(task["worker_hint"], json!({"tier": "standard"}));
     assert_eq!(
         task["budget"],
         json!({"max_turns": 10, "max_wall_secs": 600, "max_retries": 2})
@@ -143,7 +138,7 @@ async fn config_shows_roles_without_instruction_text_and_delegation_limits() {
         json!([{
             "id": "lead",
             "tier": "frontier",
-            "adapter": null,
+            "harness": null,
             "max_turns": 40,
             "max_wall_secs": null,
             "has_instructions": true,

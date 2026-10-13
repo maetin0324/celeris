@@ -41,30 +41,6 @@ fn quantize(v: f64) -> i64 {
     (v * 1_000_000.0).round() as i64
 }
 
-/// Caller supplied order is the existing selector's order. No estimator or score runs in legacy.
-pub fn legacy_rank(candidates: &[Candidate<'_>]) -> OptimizationResult {
-    let ranked: Vec<_> = candidates
-        .iter()
-        .map(|c| RankedCandidate {
-            model_profile_id: c.model.id.clone(),
-            deployment_id: c.deployment.id.clone(),
-            eligible_provider_ids: c.eligible_provider_ids.clone(),
-            score: None,
-            config_order: c.deployment.config_order,
-        })
-        .collect();
-    let allowlist = ranked
-        .iter()
-        .flat_map(|c| c.eligible_provider_ids.iter().cloned())
-        .collect();
-    OptimizationResult {
-        ranked,
-        allowlist,
-        traces: vec![],
-        outcome: "ranked",
-    }
-}
-
 pub fn optimize(
     policy: &RoutingPolicy,
     context: &RoutingContext,
@@ -74,9 +50,6 @@ pub fn optimize(
     policy.validate()?;
     if candidates.len() > 128 {
         return Err("too many candidates");
-    }
-    if policy.mode == RoutingMode::Legacy {
-        return Ok(legacy_rank(candidates));
     }
     let mut ranked = Vec::new();
     let mut traces = Vec::new();

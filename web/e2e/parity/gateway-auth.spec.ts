@@ -99,10 +99,10 @@ test("parity-x: auth cookie 属性・401・next・非 loopback", async ({ page }
   const [cookie] = await page.context().cookies();
   expect(cookie).toMatchObject({ name: "__celeris_web_session", httpOnly: true, sameSite: "Strict", secure: false });
   expect(cookie?.expires ?? 0).toBeGreaterThan(Date.now() / 1000 + 24 * 3600 - 120);
-  // gui/ の cookie では入れない。shell の 401 遷移と競らないよう先に画面を離れる。
+  // 異なるアプリの cookie では入れない。shell の 401 遷移と競らないよう先に画面を離れる。
   await page.goto("about:blank");
   await page.context().clearCookies();
-  await page.context().addCookies([{ name: "__celeris_gui_session", value: "e30%3D.abc", url: base }]);
+  await page.context().addCookies([{ name: "__foreign_session", value: "e30%3D.abc", url: base }]);
   await page.goto(`${base}/`);
   await page.waitForURL(/\/login\?next=/);
   // 非 loopback の bind でパスワードのファイルが無ければ起動しない。

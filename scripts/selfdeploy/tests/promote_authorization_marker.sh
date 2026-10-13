@@ -8,7 +8,7 @@
 #
 # 本番には触れない: HOME / CELERIS_CONFIG_DIR / CELERIS_STATE_DIR / CELERIS_DB は一時ディレクトリ。
 # `systemctl` / `curl` / `sqlite3` / `ss` は PATH の先頭に置いた偽物（`ss` を偽にしないと promote.sh の
-# stop-start が本物の :7700 の GUI を見つけて SIGTERM する）。偽 `systemctl start celeris@X` が、
+# stop-start が本物の :7720 の web を見つけて SIGTERM する）。偽 `systemctl start celeris@X` が、
 # その瞬間の印と `current` のリンク先を書き留める。
 #
 # 実行: sh scripts/selfdeploy/tests/promote_authorization_marker.sh
@@ -29,6 +29,16 @@ json_get() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))[sys
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
+mkdir -p "$WORK/scripts"
+cp "$SD"/*.sh "$WORK/scripts/"
+SD="$WORK/scripts"
+cat >"$SD/web-follow.sh" <<'WEB_FOLLOW'
+#!/bin/sh
+# The separate web_follow_health_gate test exercises startup and restoration.
+exit "${FAKE_WEB_FOLLOW_EXIT:-0}"
+WEB_FOLLOW
+chmod +x "$SD/web-follow.sh"
+
 
 OLD=aaaaaaaaaaaa
 NEW=bbbbbbbbbbbb
@@ -94,10 +104,10 @@ case "$url" in
     if [ -e "$FAKE_STATE/started-celeris@$FAKE_NEW" ]; then
       body="{\"instances\":[{\"release\":\"$FAKE_NEW\",\"role\":\"active\"},{\"release\":\"$FAKE_OLD\",\"role\":\"draining\"}]}"; code=200
     fi ;;
-  *:7700/healthz)
+  *:7720/healthz)
     for sha in $FAKE_NEW $FAKE_OLD; do
-      if [ -e "$FAKE_STATE/started-celeris-gui@$sha" ]; then
-        body="{\"release\":\"$sha\",\"name\":\"celeris-gui\"}"; code=200; break
+      if [ -e "$FAKE_STATE/started-celeris-web@$sha" ]; then
+        body="{\"release\":\"$sha\",\"name\":\"celeris-web\"}"; code=200; break
       fi
     done ;;
 esac
@@ -118,7 +128,7 @@ done
 echo 36
 EOF
 
-# ss: 何も LISTEN していない（本物の :7700 の GUI を見つけさせない）。
+# ss: 何も LISTEN していない（本物の :7720 の web を見つけさせない）。
 cat >"$FAKE_BIN/ss" <<'EOF'
 #!/usr/bin/env bash
 echo "State Recv-Q Send-Q Local Address:Port Peer Address:Port Process"
@@ -191,7 +201,7 @@ dump_on_fail() { if [ "$FAIL" -ne 0 ]; then echo "---- $CASE/out.log" >&2; cat "
 
 # ---- ケース 1: promote.sh live ------------------------------------------------
 setup live true
-touch "$FAKE_STATE/started-celeris@$OLD" "$FAKE_STATE/started-celeris-gui@$OLD"
+touch "$FAKE_STATE/started-celeris@$OLD" "$FAKE_STATE/started-celeris-web@$OLD"
 # 偽 curl は new が start 済みなら new を答える（実機では handoff で旧が listener を閉じる）。
 run_script promote.sh "$NEW"
 assert_eq "live: promote.sh exit" 0 "$RC"
@@ -247,6 +257,23 @@ check_marker_at_start rollback "$OLD" rollback.sh restore-db
 check_no_marker_left rollback
 assert_eq "rollback: current -> old" "releases/$OLD" "$(readlink "$CELERIS_STATE_DIR/current")"
 dump_on_fail
+
+# A required web failure must not publish successful promotion or advance links.
+for live in true false; do
+  setup "web-fail-$live" "$live"
+  touch "$FAKE_STATE/started-celeris@$OLD"
+  export FAKE_WEB_FOLLOW_EXIT=1
+  run_script promote.sh "$NEW"
+  [ "$RC" -ne 0 ] && ok "web-fail-$live: failed" || ng "web failure ignored"
+  assert_eq "web-fail-$live: current unchanged" "releases/$OLD" "$(readlink "$CELERIS_STATE_DIR/current")"
+  [ ! -f "$CELERIS_STATE_DIR/releases/$NEW/promoted.json" ] || ng "failed web marked promoted"
+  [ -f "$CELERIS_STATE_DIR/releases/$NEW/promote_failed.json" ] || ng "web failure not recorded"
+  unset FAKE_WEB_FOLLOW_EXIT
+  run_script promote.sh "$NEW"
+  assert_eq "web-retry-$live: exit" 0 "$RC"
+  assert_eq "web-retry-$live: current new" "releases/$NEW" "$(readlink "$CELERIS_STATE_DIR/current")"
+  dump_on_fail
+done
 
 # 偽の systemctl だけが呼ばれたこと（本番 host の systemctl は使わない）の念押し: 記録があること。
 [ -s "$WORK/live/fake/systemctl.log" ] && ok "fake systemctl recorded the calls" || ng "fake systemctl was not used"

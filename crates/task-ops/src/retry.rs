@@ -119,6 +119,7 @@ pub fn plan_retry(
         r
     });
     let new_task = Task {
+        harness_id: None,
         requirements: original.requirements.clone(),
         tree: None,
         paused_at: None,

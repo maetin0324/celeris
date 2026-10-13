@@ -39,6 +39,7 @@ fn spec() -> ExecutionPlanSpec {
 fn sample_task() -> Task {
     let now = OffsetDateTime::now_utc();
     Task {
+        harness_id: None,
         requirements: Default::default(),
         tree: None,
         paused_at: None,
@@ -67,7 +68,6 @@ fn sample_task() -> Task {
         priority: 0,
         worker_hint: WorkerHint {
             tier: Tier::Standard,
-            adapter: None,
         },
         workspace: WorkspaceSpec::Local {
             path: PathBuf::from("/tmp/ws"),
@@ -468,7 +468,7 @@ fn human_replan_overrides_the_spec_of_a_done_work_unit() {
     store.insert(&task).unwrap();
     let mut v1_spec = spec_v2_two_phases();
     v1_spec.work_units[0].checks = vec![task_core::WorkUnitCheck {
-        cmd: "git diff --quiet 06e9a03cffe8 -- gui".to_string(),
+        cmd: "git diff --quiet 06e9a03cffe8 -- web".to_string(),
         expect_exit: 0,
         scope: false,
     }];
@@ -491,8 +491,7 @@ fn human_replan_overrides_the_spec_of_a_done_work_unit() {
         .unwrap();
 
     let mut v2_spec = v1_spec.clone();
-    let fixed_cmd =
-        "git diff --quiet 06e9a03cffe8 -- gui \":!gui/docs/adr/0002-frontend-stack.md\"";
+    let fixed_cmd = "git diff --quiet 06e9a03cffe8 -- web \":!docs/frontend/DESIGN.md\"";
     v2_spec.work_units[0].checks[0].cmd = fixed_cmd.to_string();
 
     // repair の計画は従来どおり拒む（何も書かない）。planner は ADR-0079 R7-3 D1 から `checks` だけなら書き換え

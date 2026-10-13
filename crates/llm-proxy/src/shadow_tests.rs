@@ -162,7 +162,7 @@ fn job(id: &str) -> ShadowJob {
         primary_resource_group: None,
         candidate_resource_group: None,
         request: ChatCompletionRequest {
-            model: "celeris/cheap".to_string(),
+            model: "qwen/qwen3.8-27b".to_string(),
             messages: vec![ChatMessage {
                 role: "user".to_string(),
                 content: Some(MessageContent::Text("hi".to_string())),

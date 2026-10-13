@@ -8,6 +8,7 @@ use task_worker::{AdapterError, ExecResult, LocalWorkspace, RunOutcome, Workspac
 fn task_with(checks: Vec<Check>, dir: &Path) -> Task {
     let now = time::OffsetDateTime::now_utc();
     Task {
+        harness_id: None,
         requirements: Default::default(),
         tree: None,
         paused_at: None,
@@ -33,7 +34,6 @@ fn task_with(checks: Vec<Check>, dir: &Path) -> Task {
         priority: 0,
         worker_hint: WorkerHint {
             tier: Tier::Standard,
-            adapter: None,
         },
         workspace: WorkspaceSpec::Local {
             path: PathBuf::from(dir),
@@ -70,7 +70,6 @@ fn synthetic_review_task_inherits_the_subjects_project_milestone_and_assignee() 
     subject.assignee = Some("research-survey".into());
     let hint = WorkerHint {
         tier: Tier::Standard,
-        adapter: None,
     };
     let review = synthetic_review_task(&subject, "run-1", &hint);
     assert_eq!(review.project_id, subject.project_id);
@@ -701,6 +700,17 @@ impl EventSink for RecordingSink {
     fn artifact(&self, _artifact: &ArtifactRef) {}
 }
 
+fn test_llm_route() -> task_worker::protocol::SelectedLlmRoute {
+    task_worker::protocol::SelectedLlmRoute {
+        harness_id: "h1".into(),
+        source_id: "s1".into(),
+        model_id: "m".into(),
+        account_id: "a1".into(),
+        endpoint: None,
+        credential: None,
+    }
+}
+
 fn reviewer_run(adapter: Arc<StubReviewer>) -> ReviewerRun {
     ReviewerRun {
         cargo_target_dir: None,
@@ -708,6 +718,7 @@ fn reviewer_run(adapter: Arc<StubReviewer>) -> ReviewerRun {
         profile: None,
         skills: Vec::new(),
         adapter,
+        llm_route: test_llm_route(),
         run_id: "rev-1".into(),
         limits: RunLimits {
             wall_clock: Duration::from_secs(5),
@@ -821,6 +832,7 @@ async fn reviewer_provider_failure_is_reported_instead_of_failing_criteria() {
         profile: None,
         skills: Vec::new(),
         adapter: Arc::new(ThrottledReviewer),
+        llm_route: test_llm_route(),
         run_id: "rev-x".into(),
         limits: RunLimits {
             wall_clock: Duration::from_secs(5),

@@ -57,7 +57,7 @@ fn env_with_token() -> TestEnv {
             RoleSpec {
                 id: "literature-reader".into(),
                 tier: Some(Tier::Cheap),
-                adapter: Some("paperqa".into()),
+                harness: Some("paperqa".into()),
                 max_turns: Some(5),
                 ..RoleSpec::default()
             },
@@ -1052,7 +1052,7 @@ async fn project_detail_returns_the_milestones_and_the_work_tree() {
     // assignee のノードの分野 → default_role → 役割の既定が効く（解決は決定的）。
     assert_eq!(parent["genre"], "literature");
     assert_eq!(parent["worker_hint"]["tier"], "cheap");
-    assert_eq!(parent["worker_hint"]["adapter"], "paperqa");
+    assert_eq!(parent["harness_id"], "paperqa");
     assert_eq!(parent["budget"]["max_turns"], 5);
 
     let child: Value = send(

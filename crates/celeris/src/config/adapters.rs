@@ -24,7 +24,7 @@ pub struct AdaptersConfig {
     #[serde(default)]
     pub local_deep_research: LdrAdapterConfig,
     /// ADR-0047 D4（Phase 62）: 知識整理 run を起こす python（venv の python）と無出力タイムアウト。
-    /// LLM の接続先（provider/base_url/model/api_key_secret）は `[knowledge.langmem]` の方（`build_adapters`
+    /// LLM の接続先（provider/base_url/model/api_key_secret）は `[knowledge.langmem]` の方（`build_harness_adapters`
     /// が両方を合わせて `task_worker::LangMemConfig` を作る）。
     #[serde(default)]
     pub langmem: LangMemAdapterConfig,
@@ -259,11 +259,10 @@ fn default_aider_command() -> String {
     "aider".to_string()
 }
 
-/// `acp` アダプタの設定（ADR-0026 D2）。最初の実装は `opencode acp`。`command`/`args`/`env`/`model` は
-/// `[[providers]]` の行ごとに上書きできる（別の ACP エージェントを同居させるため。行の値は `ProviderConfig`
-/// の `command`/`args`/`env`/`model` にある）。ここには `model` は無い（ACP はモデルを CLI フラグではなく
-/// `session/set_config_option` で渡すので、行の `model` が空なら `None` になるだけで、この節に既定値を置く
-/// 意味が無い。ADR-0026 D3）。
+/// `acp` アダプタの設定（ADR-0026 D2）。最初の実装は `opencode acp`。`command`/`args` は
+/// `[harnesses.<id>]` の宣言ごとに上書きできる（別の ACP エージェントを同居させるため）。model は選ばれた
+/// route の model が run ごとに渡るので、ここには `model` は無い（ACP はモデルを CLI フラグではなく
+/// `session/set_config_option` で渡す。ADR-0026 D3・ADR 2026-10-11-llm-source-harness-selection）。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AcpAdapterConfig {
@@ -334,10 +333,9 @@ fn default_acp_startup_timeout_secs() -> u64 {
 }
 
 /// `paperqa` アダプタの設定（ADR-0027 D3）。フィールドの意味は `task_worker::PaperQaConfig`
-/// （`crates/task-worker/src/paperqa.rs`）と同じ。`[[providers]] adapter = "paperqa"` の行ごとの
-/// 上書きは `model`/`env` だけ（`ProviderConfig` の既存フィールドを再利用。ADR-0026 D2 と同じ作り）。
-/// `settings`/`paper_directory`/`index_directory` は行では上書きしない
-/// （調査タスクごとの `[[genres]]`/`[[roles]]` で使い分ける前提。必要になれば別 ADR で足す）。
+/// （`crates/task-worker/src/paperqa.rs`）と同じ。model は選ばれた route の model が run ごとに渡る
+/// （ADR 2026-10-11-llm-source-harness-selection）。`settings`/`paper_directory`/`index_directory` は run ごとには
+/// 変えない（調査タスクごとの `[[genres]]`/`[[roles]]` で使い分ける前提。必要になれば別 ADR で足す）。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PaperQaAdapterConfig {
@@ -415,10 +413,8 @@ fn default_paperqa_max_asks() -> u32 {
 
 /// `local-deep-research` アダプタの設定（ADR-0029 D1）。フィールドの意味は
 /// `task_worker::LdrConfig`（`crates/task-worker/src/local_deep_research.rs`）と同じ。
-/// `[[providers]] adapter = "local-deep-research"` の行ごとの上書きは `model`/`env` だけ
-/// （`ProviderConfig` の既存フィールドを再利用。`paperqa`/`acp` と同じ作り）。`settings` は行では
-/// 上書きしない（`ProviderConfig.settings` は `paperqa` 専用のフィールドで、LDR では再利用しない。
-/// 必要になれば別 ADR で行ごとの上書きを足す）。
+/// model は選ばれた route の model が run ごとに渡る（`paperqa`/`acp` と同じ作り。
+/// ADR 2026-10-11-llm-source-harness-selection）。`settings` は run ごとには変えない。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LdrAdapterConfig {

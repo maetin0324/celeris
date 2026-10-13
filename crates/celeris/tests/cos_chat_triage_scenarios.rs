@@ -21,7 +21,7 @@ fn at() -> OffsetDateTime {
 
 fn config() -> NotifyConfig {
     NotifyConfig {
-        gui_base_url: Some("http://127.0.0.1:7700/".into()),
+        web_base_url: Some("http://127.0.0.1:7720/".into()),
         ..Default::default()
     }
 }
@@ -149,6 +149,7 @@ fn question_task(store: &SqliteStore, title: &str) -> Task {
     let id = TaskId::new();
     let now = OffsetDateTime::now_utc();
     let task = Task {
+        harness_id: None,
         requirements: Default::default(),
         tree: None,
         paused_at: None,
@@ -171,7 +172,6 @@ fn question_task(store: &SqliteStore, title: &str) -> Task {
         priority: 0,
         worker_hint: WorkerHint {
             tier: Tier::Standard,
-            adapter: None,
         },
         workspace: WorkspaceSpec::Local {
             path: std::path::PathBuf::from(id.to_string()),
@@ -328,7 +328,7 @@ async fn cos_chat_triage_b_webhook_packet_and_stop_after_human_answer() {
         "web で回答",
         "外部への push は人の認可が要る",
         "push の確認",
-        &format!("http://127.0.0.1:7700/tasks/{}", first.id),
+        &format!("http://127.0.0.1:7720/tasks/{}", first.id),
         "回答はリンク先で",
     ] {
         assert!(content.contains(required), "missing {required}: {content}");

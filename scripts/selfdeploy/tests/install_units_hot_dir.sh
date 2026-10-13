@@ -2,9 +2,9 @@
 # scripts/selfdeploy/tests/install_units_hot_dir.sh — ADR-0136「path の契約」:
 #
 #   install-units.sh が hot の根（CELERIS_STATE_DIR、または ~/.config/celeris/paths.env）を指定されると、
-#   celeris@・celeris-gui@・celeris-credentiald@ の unit に
+#   celeris@・celeris-web@・celeris-credentiald@ の unit に
 #   `%h/.local/celeris` を残さず根の絶対 path から読むこと、`~/.config/celeris` の参照は home のまま、
-#   celeris-web@ はテンプレートのまま、未指定なら従来と同一（テンプレートと byte 一致）であることを確かめる。
+#   未指定なら従来と同一（テンプレートと byte 一致）であることを確かめる。
 #
 # 本番には触れない: HOME・CELERIS_CONFIG_DIR・SD_UNIT_DIR は一時ディレクトリ、`systemctl` は PATH 先頭の偽物。
 # 実行: bash scripts/selfdeploy/tests/install_units_hot_dir.sh（引数なし）
@@ -38,18 +38,17 @@ run_install() {
   env -u CELERIS_STATE_DIR -u CELERIS_CONFIG_DIR -u CELERIS_CONFIG -u SD_UNIT_DIR \
     HOME="$home" PATH="$FAKE_BIN:$PATH" FAKE_LOG="$WORK/$name/systemctl.log" \
     SD_UNIT_DIR="$WORK/$name/units" "$@" \
-    bash "$SD/install-units.sh" >"$WORK/$name/out.log" 2>&1
+    bash "$SD/install-units.sh" ${INSTALL_ARGS:-} >"$WORK/$name/out.log" 2>&1
 }
 
-TEMPLATED="celeris@.service celeris-gui@.service celeris-web@.service celeris-web-lan.socket celeris-web-lan.service"
-HOT_UNITS="celeris@.service celeris-gui@.service celeris-credentiald@.service"
+TEMPLATED="celeris-credentiald@.service celeris@.service celeris-web@.service celeris-web-lan.socket celeris-web-lan.service"
+HOT_UNITS="celeris@.service celeris-web@.service celeris-credentiald@.service"
 
 # ---- 1. 未指定: 従来と同一 ---------------------------------------------------
 if run_install default; then ok "default: install-units.sh exit 0"; else ng "default: exit non-zero: $(cat "$WORK/default/out.log")"; fi
 for u in $TEMPLATED; do
   if cmp -s "$SRC/$u" "$WORK/default/units/$u"; then ok "default: $u identical to the template"; else ng "default: $u differs from the template"; fi
 done
-if [ -e "$WORK/default/units/celeris-credentiald@.service" ]; then ng "default: credentiald unit installed (was not before)"; else ok "default: install set unchanged"; fi
 for u in celeris-sccache.service celeris-scratch-cache.service; do
   if [ -e "$WORK/default/units/$u" ]; then ng "default: obsolete $u installed"; else ok "default: obsolete $u absent"; fi
 done
@@ -84,17 +83,13 @@ check_hot() {
   grep -qx "WorkingDirectory=$root" "$f" || ng "$name: celeris@ WorkingDirectory is not $root"
   grep -q "^ExecStart=$root/releases/%i/bin/celeris --config %h/.config/celeris/config.toml " "$f" ||
     ng "$name: celeris@ ExecStart does not read $root/releases"
-  grep -qx "WorkingDirectory=$root/releases/%i/gui" "$WORK/$name/units/celeris-gui@.service" ||
-    ng "$name: celeris-gui@ WorkingDirectory is not under $root/releases"
   grep -q "exec $root/releases/%i/bin/celeris-credentiald serve" "$WORK/$name/units/celeris-credentiald@.service" ||
     ng "$name: credentiald ExecStart does not read $root/releases"
   grep -qx "Environment=CELERIS_CREDENTIALD_DATA_DIR=$root/credentiald" "$WORK/$name/units/celeris-credentiald@.service" ||
     ng "$name: credentiald data dir is not $root/credentiald"
-  if cmp -s "$SRC/celeris-web@.service" "$WORK/$name/units/celeris-web@.service"; then
-    ok "$name: celeris-web@ left as the template"
-  else
-    ng "$name: celeris-web@ changed"
-  fi
+  grep -qx "WorkingDirectory=$root/releases/%i/web/app" "$WORK/$name/units/celeris-web@.service" ||
+    ng "$name: web WorkingDirectory does not read the hot release"
+
 }
 
 ROOT=/local/celeris/"state"
@@ -110,8 +105,31 @@ check_hot pathsenv "$ROOT"
 if ls "$WORK/pathsenv/units/" | grep -q '\.bak-'; then ng "pathsenv: unexpected .bak on a fresh dir"; fi
 mkdir -p "$WORK/upgrade/units"
 cp "$SRC/celeris@.service" "$WORK/upgrade/units/celeris@.service"
-run_install upgrade CELERIS_STATE_DIR="$ROOT" || ng "upgrade: exit non-zero"
+# 最後の credentiald unit だけの違いでも他 unit を書き換えず、reload もしない。
+cp "$SRC/celeris-credentiald@.service" "$WORK/upgrade/units/celeris-credentiald@.service"
+sed -i 's/serve --config %h\/.config\/celeris\/config.toml/serve --launcher-uid=995/' "$WORK/upgrade/units/celeris-credentiald@.service"
+cp "$WORK/upgrade/units/celeris-credentiald@.service" "$WORK/upgrade/credentiald-before"
+if run_install upgrade CELERIS_STATE_DIR="$ROOT"; then ng "upgrade: unreviewed replacement accepted"; else ok "upgrade: diff requires review"; fi
+cmp -s "$SRC/celeris@.service" "$WORK/upgrade/units/celeris@.service" || ng "upgrade: partial write before refusal"
+cmp -s "$WORK/upgrade/credentiald-before" "$WORK/upgrade/units/celeris-credentiald@.service" || ng "upgrade: lost manual launcher UID"
+[ ! -e "$WORK/upgrade/systemctl.log" ] || ng "upgrade: systemctl called before review"
+[ ! -e "$WORK/upgrade/units/celeris-web@.service" ] || ng "upgrade: new unit written before review"
+if ls "$WORK/upgrade/units/" | grep -q '\.bak-'; then ng "upgrade: backup written before review"; fi
+grep -q -- '--launcher-uid=995' "$WORK/upgrade/out.log" || ng "upgrade: missing removed argument in diff"
+INSTALL_ARGS=--replace-existing run_install upgrade CELERIS_STATE_DIR="$ROOT" || ng "upgrade: reviewed replacement failed"
+grep -q 'serve --config %h/.config/celeris/config.toml' "$WORK/upgrade/units/celeris-credentiald@.service" || ng "upgrade: broker does not read daemon config"
+if grep -q -- '--launcher-uid' "$WORK/upgrade/units/celeris-credentiald@.service"; then ng "upgrade: old UID argument survived"; fi
+cmp -s "$WORK/upgrade/credentiald-before" "$(echo "$WORK/upgrade/units/"celeris-credentiald@.service.bak-*)" || ng "upgrade: old broker unit backup differs"
+run_install upgrade CELERIS_STATE_DIR="$ROOT" || ng "upgrade: identical units require review again"
 if ls "$WORK/upgrade/units/" | grep -q '^celeris@\.service\.bak-'; then ok "upgrade: kept the old celeris@ as .bak"; else ng "upgrade: no .bak for the old celeris@"; fi
+
+# mask/symlink は通常の雛形との差分として扱わず、明示的な置換でも止める。
+mkdir -p "$WORK/masked/units"
+ln -s /dev/null "$WORK/masked/units/celeris-credentiald@.service"
+if INSTALL_ARGS=--replace-existing run_install masked; then ng "masked unit overwritten"; else ok "masked unit requires manual review"; fi
+[ "$(readlink "$WORK/masked/units/celeris-credentiald@.service")" = /dev/null ] || ng "mask lost"
+[ ! -e "$WORK/masked/units/celeris@.service" ] || ng "masked: partial install"
+[ ! -e "$WORK/masked/systemctl.log" ] || ng "masked: systemctl called"
 
 # ---- 3. 受け付けない根 ---------------------------------------------------------
 if run_install relative CELERIS_STATE_DIR=local/celeris; then ng "relative root accepted"; else ok "relative root rejected"; fi

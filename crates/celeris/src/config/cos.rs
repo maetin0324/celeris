@@ -5,7 +5,6 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 use task_core::chat::attachments::ChatAttachmentLimits;
-use task_core::{LlmSourceRef, Tier};
 use task_worker::cos_chat::{HarnessCapabilities, MissingCapability, capability_reason};
 
 use super::{Config, ConfigError};
@@ -19,21 +18,11 @@ pub struct CosConfig {
     #[serde(default = "default_enabled")]
     pub enabled: bool,
     #[serde(default)]
-    pub fallbacks: Vec<CosRouteConfig>,
+    pub route_candidates: Vec<super::RouteCandidateConfig>,
     #[serde(default = "default_worker_reserve")]
     pub worker_reserve_five_hour: f64,
     #[serde(default)]
     pub harness: CosHarness,
-    #[serde(default)]
-    pub llm_source: Option<LlmSourceRef>,
-    #[serde(default)]
-    pub provider: Option<String>,
-    #[serde(default)]
-    pub account_id: Option<String>,
-    #[serde(default)]
-    pub model: Option<String>,
-    #[serde(default = "default_tier")]
-    pub tier: Tier,
     #[serde(default = "default_max_turns")]
     pub max_turns: u32,
     #[serde(default = "default_max_wall_secs")]
@@ -51,49 +40,15 @@ impl Default for CosConfig {
     fn default() -> Self {
         Self {
             enabled: default_enabled(),
-            fallbacks: Vec::new(),
+            route_candidates: Vec::new(),
             worker_reserve_five_hour: default_worker_reserve(),
             harness: CosHarness::default(),
-            llm_source: None,
-            provider: None,
-            account_id: None,
-            model: None,
-            tier: default_tier(),
             max_turns: default_max_turns(),
             max_wall_secs: default_max_wall_secs(),
             triage: CosTriageConfig::default(),
             stream_retention_days: default_retention_days(),
             attachments: CosAttachmentsConfig::default(),
         }
-    }
-}
-
-/// An explicitly authorized alternative; never inherits the primary account or model.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct CosRouteConfig {
-    pub harness: CosHarness,
-    #[serde(default)]
-    pub llm_source: Option<LlmSourceRef>,
-    #[serde(default)]
-    pub provider: Option<String>,
-    #[serde(default)]
-    pub account_id: Option<String>,
-    #[serde(default)]
-    pub model: Option<String>,
-    #[serde(default = "default_tier")]
-    pub tier: Tier,
-}
-
-impl CosRouteConfig {
-    fn apply(&self, cos: &mut CosConfig) {
-        cos.harness = self.harness;
-        cos.llm_source = self.llm_source.clone();
-        cos.provider = self.provider.clone();
-        cos.account_id = self.account_id.clone();
-        cos.model = self.model.clone();
-        cos.tier = self.tier;
-        cos.fallbacks.clear();
     }
 }
 
@@ -170,26 +125,8 @@ impl Default for CosTriageConfig {
     }
 }
 
-/// A candidate is selected deterministically here; runtime quota and account availability remain
-/// the worker's responsibility.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ResolvedCosProvider {
-    pub provider: String,
-    pub harness: CosHarness,
-    pub llm_source: LlmSourceRef,
-    pub account_id: Option<String>,
-    pub model: Option<String>,
-    pub tier: Tier,
-    /// D2 harness capability table (非致命): この harness の adapter がまだ確認していない能力の
-    /// 理由。CoS の harness/provider 選択には使わない（警告のみ）。
-    pub capability_warnings: Vec<String>,
-}
-
 fn default_enabled() -> bool {
     true
-}
-fn default_tier() -> Tier {
-    Tier::Frontier
 }
 fn default_max_turns() -> u32 {
     70
@@ -311,39 +248,10 @@ impl CosConfig {
                 "[cos] worker_reserve_five_hour must be > 0 and <= 0.97".into(),
             ));
         }
-        if self.fallbacks.len() > 8 {
-            return Err(ConfigError::Invalid(
-                "[cos] at most 8 fallbacks are allowed".into(),
-            ));
-        }
-        for route in &self.fallbacks {
-            let mut cos = self.clone();
-            route.apply(&mut cos);
-            cos.validate()?;
-        }
         if self.max_turns == 0 || self.max_wall_secs == 0 {
             return Err(ConfigError::Invalid(
                 "[cos] max_turns and max_wall_secs must be >= 1".into(),
             ));
-        }
-        if matches!(
-            self.llm_source,
-            Some(LlmSourceRef::None | LlmSourceRef::Unknown)
-        ) {
-            return Err(ConfigError::Invalid(
-                "[cos] llm_source cannot be none or unknown".into(),
-            ));
-        }
-        for (name, value) in [
-            ("provider", &self.provider),
-            ("account_id", &self.account_id),
-            ("model", &self.model),
-        ] {
-            if value.as_ref().is_some_and(|v| v.trim().is_empty()) {
-                return Err(ConfigError::Invalid(format!(
-                    "[cos] {name} must not be empty"
-                )));
-            }
         }
         if self.triage.policy_skill.trim().is_empty()
             || self.triage.policy_version.trim().is_empty()
@@ -402,197 +310,21 @@ impl CosConfig {
 }
 
 impl Config {
-    /// Reject contradictions written explicitly, while allowing a valid configuration to have
-    /// no currently usable provider. Runtime availability is reported by `resolve_cos_provider`.
+    /// CoS always uses the declared Claude Code harness; source/model/account are selected at dispatch.
     pub(super) fn validate_cos_mapping(&self) -> Result<(), ConfigError> {
-        for route in &self.cos.fallbacks {
-            let mut config = self.clone();
-            route.apply(&mut config.cos);
-            config.validate_cos_mapping()?;
-        }
-        let cos = &self.cos;
-        if let Some(source) = &cos.llm_source {
-            let compatible = match cos.harness {
-                CosHarness::ClaudeCode => *source == LlmSourceRef::ClaudeOauth,
-                CosHarness::Codex => *source == LlmSourceRef::CodexOauth,
-                CosHarness::Opencode => matches!(
-                    source,
-                    LlmSourceRef::Celeris
-                        | LlmSourceRef::OpencodeGo
-                        | LlmSourceRef::OpenaiCompatible(_)
-                ),
-            };
-            if !compatible {
-                return Err(ConfigError::Invalid(
-                    "[cos] llm_source conflicts with harness".into(),
-                ));
-            }
-        }
-        let proxy_model = cos.model.as_ref().is_some_and(|model| {
-            model.starts_with("celeris/") || model.starts_with("openai/celeris/")
-        });
-        if proxy_model && cos.harness != CosHarness::Opencode {
+        if self.cos.harness != CosHarness::ClaudeCode {
             return Err(ConfigError::Invalid(
-                "[cos] model conflicts with harness".into(),
+                "[cos] harness is fixed to claude_code".into(),
             ));
-        }
-        if proxy_model
-            && cos
-                .llm_source
-                .as_ref()
-                .is_some_and(|s| *s != LlmSourceRef::Celeris)
-        {
-            return Err(ConfigError::Invalid(
-                "[cos] model conflicts with llm_source".into(),
-            ));
-        }
-        if let Some(id) = &cos.provider {
-            let p = self.providers.iter().find(|p| &p.id == id).ok_or_else(|| {
-                ConfigError::Invalid(format!("[cos] provider {id:?} does not exist"))
-            })?;
-            if p.adapter != cos.harness.adapter() {
-                return Err(ConfigError::Invalid(format!(
-                    "[cos] provider {id:?} conflicts with harness"
-                )));
-            }
-            if !p.tiers.contains(&cos.tier) {
-                return Err(ConfigError::Invalid(format!(
-                    "[cos] provider {id:?} does not support tier"
-                )));
-            }
-            if let Some(source) = &cos.llm_source {
-                let actual = self.provider_llm_source(id).expect("provider found").source;
-                if &actual != source {
-                    return Err(ConfigError::Invalid(format!(
-                        "[cos] provider {id:?} conflicts with llm_source"
-                    )));
-                }
-            }
-            if proxy_model
-                && self.provider_llm_source(id).expect("provider found").source
-                    != LlmSourceRef::Celeris
-            {
-                return Err(ConfigError::Invalid(format!(
-                    "[cos] provider {id:?} conflicts with model"
-                )));
-            }
-            if let Some(account) = &cos.account_id
-                && (!p.account_pool.is_on()
-                    || p.account_id.as_ref().is_some_and(|fixed| fixed != account))
-            {
-                return Err(ConfigError::Invalid(format!(
-                    "[cos] provider {id:?} conflicts with account_id"
-                )));
-            }
         }
         Ok(())
     }
 
-    pub fn resolve_cos_fallbacks(&self) -> Vec<Result<ResolvedCosProvider, String>> {
-        self.cos
-            .fallbacks
-            .iter()
-            .map(|route| {
-                let mut config = self.clone();
-                route.apply(&mut config.cos);
-                config.resolve_cos_provider()
-            })
-            .collect()
-    }
-
-    /// D2 harness capability table: non-fatal reasons for abilities the configured harness's
-    /// adapter does not confirm yet (e.g. no native image input, no image-reading tool). This
-    /// never changes `[cos] harness`/`provider`; it is informational only.
+    /// D2 harness capability table: non-fatal reasons for abilities the fixed adapter does not confirm.
     pub fn cos_harness_capability_warnings(&self) -> Vec<String> {
-        harness_capability_warnings(self.cos.harness)
+        harness_capability_warnings(CosHarness::ClaudeCode)
     }
 
-    /// Pure candidate selection. A missing candidate is an explicit unavailable reason, never
-    /// a silent fallback to another harness or source.
-    pub fn resolve_cos_provider(&self) -> Result<ResolvedCosProvider, String> {
-        let cos = &self.cos;
-        let capability_warnings = harness_capability_warnings(cos.harness);
-        let with_capability_notes = |reason: String| -> String {
-            if capability_warnings.is_empty() {
-                reason
-            } else {
-                format!(
-                    "{reason} (harness capability notes: {})",
-                    capability_warnings.join("; ")
-                )
-            }
-        };
-        if !cos.enabled {
-            return Err("CoS is disabled by [cos] enabled=false".into());
-        }
-        let candidates: Vec<_> = self
-            .providers
-            .iter()
-            .filter(|p| {
-                (cos.provider.as_ref().is_none_or(|id| &p.id == id))
-                    && p.adapter == cos.harness.adapter()
-                    && p.tiers.contains(&cos.tier)
-                    && p.tier_models
-                        .get(&cos.tier)
-                        .is_none_or(|binding| binding.unavailable_reason.is_none())
-                    && cos.account_id.as_ref().is_none_or(|id| {
-                        p.account_pool.is_on()
-                            && p.account_id.as_ref().is_none_or(|fixed| fixed == id)
-                    })
-                    && self.provider_llm_source(&p.id).is_some_and(|source| {
-                        !matches!(source.source, LlmSourceRef::None | LlmSourceRef::Unknown)
-                            && (!cos.model.as_ref().is_some_and(|model| {
-                                model.starts_with("celeris/")
-                                    || model.starts_with("openai/celeris/")
-                            }) || source.source == LlmSourceRef::Celeris)
-                            && cos
-                                .llm_source
-                                .as_ref()
-                                .is_none_or(|wanted| *wanted == source.source)
-                    })
-            })
-            .collect();
-        let Some(p) = candidates.first() else {
-            if let Some(id) = &cos.provider
-                && let Some(reason) = self
-                    .providers
-                    .iter()
-                    .find(|p| &p.id == id)
-                    .and_then(|p| p.tier_models.get(&cos.tier))
-                    .and_then(|binding| binding.unavailable_reason.as_ref())
-            {
-                return Err(with_capability_notes(format!(
-                    "CoS unavailable: provider {id:?} tier {:?}: {reason}",
-                    cos.tier
-                )));
-            }
-            return Err(with_capability_notes(format!(
-                "CoS unavailable: no provider for harness={}, tier={:?}, source={:?}, provider={:?}, account={:?}",
-                cos.harness.adapter(),
-                cos.tier,
-                cos.llm_source,
-                cos.provider,
-                cos.account_id
-            )));
-        };
-        Ok(ResolvedCosProvider {
-            provider: p.id.clone(),
-            harness: cos.harness,
-            llm_source: self
-                .provider_llm_source(&p.id)
-                .expect("provider found")
-                .source,
-            account_id: cos.account_id.clone().or_else(|| p.account_id.clone()),
-            model: cos.model.clone().or_else(|| {
-                p.tier_models
-                    .get(&cos.tier)
-                    .and_then(|binding| binding.model_id.clone())
-                    .or_else(|| self.effective_model(p).map(str::to_owned))
-            }),
-            tier: cos.tier,
-            capability_warnings,
-        })
-    }
     /// 添付上限の `[cos.attachments]` を task-core の型で返す。
     pub fn chat_attachment_limits(&self) -> ChatAttachmentLimits {
         self.cos.attachments.limits()

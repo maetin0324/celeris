@@ -98,7 +98,7 @@ async fn management_routes_all_require_a_token() {
 }
 
 /// ADR-0017 M3: `token_file` が**無くても**（loopback だけの構成でも）管理系は 401。`GET /clusters` は
-/// 読み取りなので token 不要（`accounts_admin.rs`/`secrets_admin.rs` と同じ形の回帰テスト）。
+/// 読み取りなので token 不要（`llm_accounts_admin.rs`/`secrets_admin.rs` と同じ形の回帰テスト）。
 #[tokio::test]
 async fn management_routes_require_a_token_even_when_token_file_is_not_configured() {
     let env = TestEnv::with(EnvOptions {
@@ -445,7 +445,7 @@ async fn disconnect_maps_failed_to_502() {
 }
 
 /// `admin_tx` が配線されていない構成（`[api]` はあるが celeris への経路が無い）では、既知の id でも
-/// 内部エラーとして扱う（accounts/providers の `reload`/`check` と同じ、celeris が受け取れない場合の扱い）。
+/// 内部エラーとして扱う（`POST /reload` と同じ、celeris が受け取れない場合の扱い）。
 #[tokio::test]
 async fn connect_without_admin_tx_does_not_panic() {
     let env = TestEnv::with(EnvOptions {

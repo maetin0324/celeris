@@ -46,6 +46,25 @@ impl TaskStore for SqliteStore {
         Ok(features)
     }
 
+    fn task_integration_upsert(
+        &self,
+        s: &crate::TaskRepoIntegrationState,
+    ) -> Result<(), StoreError> {
+        self.task_integration_upsert_impl(s)
+    }
+    fn task_integration_get(
+        &self,
+        t: crate::model::TaskId,
+        r: crate::repos::RepoId,
+    ) -> Result<Option<crate::TaskRepoIntegrationState>, StoreError> {
+        self.task_integration_get_impl(t, r)
+    }
+    fn task_integration_list(
+        &self,
+        s: Option<crate::TaskRepoIntegrationStatus>,
+    ) -> Result<Vec<crate::TaskRepoIntegrationState>, StoreError> {
+        self.task_integration_list_impl(s)
+    }
     fn account_limits(&self) -> Result<Vec<super::AccountLimit>, StoreError> {
         self.account_limits_impl()
     }
@@ -160,6 +179,12 @@ impl TaskStore for SqliteStore {
 
     fn halted_by_pause(&self, task: &Task) -> Result<bool, StoreError> {
         self.halted_by_pause_impl(task)
+    }
+    fn db_waits_for(
+        &self,
+        tasks: &[Task],
+    ) -> Result<std::collections::HashMap<TaskId, Vec<crate::wait::TaskWait>>, StoreError> {
+        self.db_waits_for_impl(tasks)
     }
 
     fn ready_tasks(&self, limit: usize) -> Result<Vec<Task>, StoreError> {
@@ -902,6 +927,21 @@ impl TaskStore for SqliteStore {
 
     fn run_index_start(&self, row: RunRow) -> Result<(), StoreError> {
         self.run_index_start_impl(row)
+    }
+
+    fn run_record_selection(
+        &self,
+        run_id: &str,
+        selection: &crate::llm_route::RunSelection,
+    ) -> Result<bool, StoreError> {
+        self.run_record_selection_impl(run_id, selection)
+    }
+
+    fn run_selections_for_task(
+        &self,
+        task_id: TaskId,
+    ) -> Result<std::collections::HashMap<String, crate::llm_route::RunSelection>, StoreError> {
+        self.run_selections_for_task_impl(task_id)
     }
 
     fn run_index_finish(

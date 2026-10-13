@@ -25,6 +25,7 @@ fn node(id: &str, parent: Option<&str>, kind: OK) -> OrgNode {
 fn task(assignee: Option<&str>, project: Option<ProjectId>) -> Task {
     let now = OffsetDateTime::now_utc();
     Task {
+        harness_id: None,
         requirements: Default::default(),
         tree: None,
         paused_at: None,
@@ -42,10 +43,7 @@ fn task(assignee: Option<&str>, project: Option<ProjectId>) -> Task {
         depends_on: vec![],
         status: Status::Running,
         priority: 0,
-        worker_hint: WorkerHint {
-            tier: Tier::Cheap,
-            adapter: None,
-        },
+        worker_hint: WorkerHint { tier: Tier::Cheap },
         workspace: WorkspaceSpec::Local {
             path: PathBuf::from("."),
             mode: None,

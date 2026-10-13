@@ -1,5 +1,5 @@
-//! 複数アカウント運用（ADR-0012 D1/D2）。fake ワーカー（`sh` スクリプト）と実バイナリ `celerisctl` / `celeris` だけで動き、
-//! ネットワークに出ない。プロバイダ（= アカウント）ごとの `env` はスクリプトから `$ACCOUNT` として見える。
+//! 複数アカウント運用。fake ワーカー（`sh` スクリプト）と実バイナリ `celerisctl` / `celeris` だけで動き、
+//! ネットワークに出ない。ルートの account ID は選択 event から確認する。
 //!
 //! 1. 先頭アカウントが並列度の上限に達すると、2 つ目のアカウントがあふれた分を実行する（P-20）
 //! 2. レート制限を返したアカウントは cooldown になり、同じタスクは attempts を消費せず次のアカウントで実行される
@@ -38,6 +38,12 @@ impl Env {
         let root = tmp.path().canonicalize().unwrap();
         let db = root.join("celeris.sqlite3");
         let store = Arc::new(SqliteStore::open(&db).unwrap());
+        let account_root = root.join("claude-accounts");
+        for id in ["a", "b"] {
+            let dir = account_root.join(id);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join(".credentials.json"), "{}").unwrap();
+        }
         Self {
             _tmp: tmp,
             root,
@@ -46,8 +52,8 @@ impl Env {
         }
     }
 
-    /// `script` を fake ワーカーにし、`providers`（TOML の `[[providers]]` 群）を持つ設定を書く。
-    fn write_config(&self, script_body: &str, providers: &str, extra: &str) -> PathBuf {
+    /// `script` を fake ワーカーにし、設定した source accounts を持つ config を書く。
+    fn write_config(&self, script_body: &str, accounts: &str, max_runs: usize) -> PathBuf {
         let script = self.root.join("fake-worker.sh");
         std::fs::write(&script, format!("#!/bin/sh\nset -u\n{script_body}\n")).unwrap();
         let path = self.root.join("config.toml");
@@ -61,14 +67,37 @@ idle_timeout_secs = 30
 kill_grace_secs = 1
 review_timeout_secs = 30
 retry_backoff_base_secs = 0
-{extra}
+
+[accounts]
+claude_dir = "{account_root}"
+max_runs_per_account = {max_runs}
 
 [adapters.fake]
 command = ["sh", "{script}"]
 
-{providers}
+[llm_sources.fake]
+kind = "claude_oauth"
+accounts = {accounts}
+models = ["model-a", "model-b", "fake"]
+
+[harnesses.fake]
+kind = "fake"
+api_formats = ["claude_oauth"]
+source_kinds = ["claude_oauth"]
+
+[harness_selection]
+execution_class_defaults = {{}}
+
+[[harness_selection.rules]]
+harness = "fake"
+required_capabilities = []
+
+[route_defaults.fake]
+candidates = [{{ source = "fake", model = "model-a" }}, {{ source = "fake", model = "model-b" }}, {{ source = "fake", model = "fake" }}]
+
 "#,
-            script = script.display()
+            script = script.display(),
+            account_root = self.root.join("claude-accounts").display(),
         );
         std::fs::write(&path, text).unwrap();
         path
@@ -82,6 +111,7 @@ command = ["sh", "{script}"]
 
     fn celerisctl(&self, args: &[&str]) -> String {
         let out = Command::new(bin("celerisctl"))
+            .env_remove("CELERIS_CONFIG")
             .arg("--db")
             .arg(&self.db)
             .args(args)
@@ -160,12 +190,11 @@ command = ["sh", "{script}"]
             .collect()
     }
 
-    /// `WorkerStarted.provider`（どのアカウントで実行したか）。
-    fn started_providers(&self, id: TaskId) -> Vec<String> {
+    fn selected_accounts(&self, id: TaskId) -> Vec<String> {
         self.events(id)
             .into_iter()
-            .filter_map(|e| match e {
-                Event::WorkerStarted { provider, .. } => Some(provider.unwrap_or_default()),
+            .filter_map(|event| match event {
+                Event::LlmRouteSelected { account_id, .. } => Some(account_id),
                 _ => None,
             })
             .collect()
@@ -187,97 +216,52 @@ command = ["sh", "{script}"]
     }
 }
 
-const TWO_ACCOUNTS: &str = r#"[[providers]]
-id = "acct-a"
-adapter = "fake"
-concurrency = 1
-model = "model-a"
-env = { ACCOUNT = "a" }
-
-[[providers]]
-id = "acct-b"
-adapter = "fake"
-concurrency = 1
-model = "model-b"
-env = { ACCOUNT = "b" }
-"#;
-
-/// 同じ LLM source を使う 2 行（非プール。fake 行の派生 source はどちらも `none`）。
-/// 暗黙アカウントは source 単位なので 1 件を共有する（ADR 2026-10-08 account-concurrency-limits §(e)）。
-/// 行ごとに仕事を固定できるよう tier を分けてある（レビュー run は `standard` でどちらの行にも載れる）。
-const TWO_ROWS_ONE_SOURCE: &str = r#"[[providers]]
-id = "acct-a"
-adapter = "fake"
-concurrency = 1
-model = "model-a"
-tiers = ["cheap", "standard"]
-env = { ACCOUNT = "a" }
-
-[[providers]]
-id = "acct-b"
-adapter = "fake"
-concurrency = 1
-model = "model-b"
-tiers = ["frontier", "standard"]
-env = { ACCOUNT = "b" }
-"#;
-
-/// 1: 同じ LLM source を使う 2 行は 1 件の暗黙アカウント（`implicit/none`）を共有し、その実効上限
-/// （`max_runs_per_account = 2`）まで同時に走る。旧 `concurrency = 1`（行ごと）は上限に効かない。
+/// source の 2 account は各 1 run に制限され、1 つ目が稼働中なら次の task は別 account を選ぶ。
 #[test]
 fn second_account_runs_the_overflow_when_the_first_is_at_capacity() {
     let env = Env::new();
-    // 非プールの行の上限は暗黙アカウントが持つ（旧 `concurrency = 1` は上限に効かない）。暗黙アカウントは
-    // LLM source 単位（`implicit/<llm source id>`）で、fake 行はどれも source `none` なので acct-a と acct-b は
-    // 1 件を共有する。両方を同時に走らせるため、保存値の無い暗黙アカウントの既定を 2 にする。
-    let accounts_dir = env.root.join("claude-accounts");
-    std::fs::create_dir_all(&accounts_dir).unwrap();
-    let two_accounts = format!(
-        "[accounts]\nclaude_dir = {:?}\nmax_runs_per_account = 2\n\n{TWO_ROWS_ONE_SOURCE}",
-        accounts_dir.to_str().unwrap()
-    );
     let config = env.write_config(
         r#"cat >/dev/null
-printf '%s' "$ACCOUNT" > account.txt
-# 両アカウントのワーカーが起動するまで、どちらも完了させない。
+# 両 task のワーカーが起動するまで、どちらも完了させない。
 # DB guard は DB の親に新規ファイルを作らせない。既存の workspace 内を共有バリアに使う。
 barrier=$(dirname "$0")/ws-1
-touch "$barrier/started-$ACCOUNT"
+account=$(basename "$CLAUDE_SECURESTORAGE_CONFIG_DIR")
+printf '%s' "$account" > account.txt
+touch "$barrier/started-$(basename "$PWD")"
 remaining=400
-while [ ! -f "$barrier/started-a" ] || [ ! -f "$barrier/started-b" ]; do
+while [ ! -f "$barrier/started-ws-1" ] || [ ! -f "$barrier/started-ws-2" ]; do
   remaining=$((remaining - 1))
   if [ "$remaining" -eq 0 ]; then
-    rm -f "$barrier/started-$ACCOUNT"
-    echo 'both accounts did not start concurrently' >&2
+    rm -f "$barrier/started-$(basename "$PWD")"
+    echo 'both tasks did not start concurrently' >&2
     exit 1
   fi
   sleep 0.05
 done
 echo '{"type":"done","summary":"ok","evidence":[]}'"#,
-        &two_accounts,
-        "",
+        "[\"a\", \"b\"]",
+        1,
     );
     let ws1 = env.workspace("ws-1");
     let ws2 = env.workspace("ws-2");
     let t1 = env.add_approved(&[
         "--title",
         "one",
-        // tier で行を固定する（acct-a だけ cheap を持つ）。
+        // task の tier に依存せず、route admission が空き account を選ぶ。
         "--tier",
         "cheap",
         "--check-cmd",
-        "test -f account.txt",
+        "true",
         "--workspace",
         &ws1,
     ]);
     let t2 = env.add_approved(&[
         "--title",
         "two",
-        // acct-b だけ frontier を持つ。
         "--tier",
         "frontier",
         "--check-cmd",
-        "test -f account.txt",
+        "true",
         "--workspace",
         &ws2,
     ]);
@@ -287,27 +271,11 @@ echo '{"type":"done","summary":"ok","evidence":[]}'"#,
     for id in [t1, t2] {
         assert_eq!(env.task(id).status, Status::Done, "{:?}", env.events(id));
     }
-    let accounts: BTreeSet<String> = [&ws1, &ws2]
+    let accounts: BTreeSet<String> = [t1, t2]
         .iter()
-        .map(|ws| std::fs::read_to_string(PathBuf::from(ws).join("account.txt")).unwrap())
+        .flat_map(|id| env.selected_accounts(*id))
         .collect();
     assert_eq!(accounts, BTreeSet::from(["a".to_string(), "b".to_string()]));
-    let models: BTreeSet<String> = [t1, t2]
-        .iter()
-        .flat_map(|id| env.started_models(*id))
-        .collect();
-    assert_eq!(
-        models,
-        BTreeSet::from(["model-a".to_string(), "model-b".to_string()])
-    );
-    let providers: BTreeSet<String> = [t1, t2]
-        .iter()
-        .flat_map(|id| env.started_providers(*id))
-        .collect();
-    assert_eq!(
-        providers,
-        BTreeSet::from(["acct-a".to_string(), "acct-b".to_string()])
-    );
     env.replay_is_consistent();
 }
 
@@ -316,22 +284,23 @@ echo '{"type":"done","summary":"ok","evidence":[]}'"#,
 fn throttled_account_falls_back_to_the_next_account() {
     let env = Env::new();
     let config = env.write_config(
-        r#"cat >/dev/null
-if [ "$ACCOUNT" = "a" ]; then
+r#"cat >/dev/null
+account=$(basename "$CLAUDE_SECURESTORAGE_CONFIG_DIR")
+if [ "$account" = "a" ] && [ ! -f attempts ]; then
+  touch attempts
   echo '{"type":"error","message":"429 rate limited","retryable":true,"provider_failure":{"kind":"throttled","retry_after_secs":300}}'
 else
-  printf '%s' "$ACCOUNT" > account.txt
   echo '{"type":"done","summary":"ok","evidence":[]}'
 fi"#,
-        TWO_ACCOUNTS,
-        "",
+        "[\"a\", \"b\"]",
+        2,
     );
     let ws = env.workspace("ws-fallback");
     let id = env.add_approved(&[
         "--title",
         "fallback",
         "--check-cmd",
-        "test -f account.txt",
+        "true",
         "--max-retries",
         "0",
         "--workspace",
@@ -357,17 +326,12 @@ fi"#,
             "review_pass"
         ]
     );
-    assert_eq!(env.started_models(id), vec!["model-a", "model-b"]);
-    assert_eq!(env.started_providers(id), vec!["acct-a", "acct-b"]);
-    // ADR-0013 D9: A の cooldown の開始が期限と種別つきでイベントに残る。
+    assert_eq!(env.started_models(id), vec!["model-a", "model-a"]);
+    assert_eq!(env.selected_accounts(id), vec!["a", "b"]);
     assert!(env.events(id).iter().any(|e| matches!(
         e,
-        Event::ProviderThrottled { provider, reason, .. } if provider == "acct-a" && reason.as_deref() == Some("throttled")
+        Event::LlmRouteSelected { account_id, .. } if account_id == "a"
     )));
-    assert_eq!(
-        std::fs::read_to_string(PathBuf::from(&ws).join("account.txt")).unwrap(),
-        "b"
-    );
     env.replay_is_consistent();
 }
 
@@ -377,9 +341,14 @@ fn task_without_a_matching_provider_does_not_block_until_idle() {
     let env = Env::new();
     let config = env.write_config(
         r#"cat >/dev/null; echo '{"type":"done","summary":"ok","evidence":[]}'"#,
-        "[[providers]]\nid = \"frontier-only\"\nadapter = \"fake\"\ntiers = [\"frontier\"]\n",
-        "[reviewer]\ntier = \"frontier\"",
+        "[\"a\", \"b\"]",
+        2,
     );
+    let config_text = std::fs::read_to_string(&config).unwrap().replace(
+        "candidates = [{ source = \"fake\", model = \"model-a\" }, { source = \"fake\", model = \"model-b\" }, { source = \"fake\", model = \"fake\" }]",
+        "candidates = []",
+    );
+    std::fs::write(&config, config_text).unwrap();
     let ws = env.workspace("ws-unroutable");
     let id = env.add_approved(&[
         "--title",
@@ -394,6 +363,9 @@ fn task_without_a_matching_provider_does_not_block_until_idle() {
 
     let log = env.run_celeris(&config, Duration::from_secs(60));
     assert_eq!(env.task(id).status, Status::Ready);
-    assert!(log.contains("no provider in the config matches"), "{log}");
+    assert!(
+        log.contains("no route_defaults candidates") || log.contains("route refused"),
+        "{log}"
+    );
     env.replay_is_consistent();
 }

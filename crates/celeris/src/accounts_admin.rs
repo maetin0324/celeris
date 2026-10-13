@@ -186,7 +186,7 @@ fn account_dir(
     Ok(dir)
 }
 
-/// S2+S8 (ADR-0024 D5 / ADR-0025 D5): `DELETE /accounts/{id}`。celeris 側で行う（スナップショットではなく、
+/// S2+S8 (ADR-0024 D5 / ADR-0025 D5): `DELETE /llm/sources/{source_id}/accounts/{account_id}`。celeris 側で行う（スナップショットではなく、
 /// ディスパッチャの権威ある `account_in_use`（running/reviewing を直接見る）でレースなく判定できるため）。
 /// cheap な fs 操作なので `tick_loop` からは spawn せずそのまま呼ぶ。進行中のログインがあれば止め、
 /// `.removed/<id>-<unix>` へ移し、`AccountBook` からもこのアカウントの記録を消す。
@@ -252,8 +252,8 @@ pub async fn remove_account(
     Ok(())
 }
 
-/// ADR 2026-10-08 account-concurrency-limits §(d): `PATCH /accounts/{adapter}/{id}`。存在を確かめ（実アカウントは
-/// 根の下のディレクトリ、暗黙アカウントは今の設定の非プール行）、DB に書いてからディスパッチャの表を更新する
+/// ADR 2026-10-08 account-concurrency-limits §(d): `PATCH /llm/sources/{source_id}/accounts/{account_id}`。存在を確かめ（実アカウントは
+/// 根の下のディレクトリ、暗黙アカウントは account pool を持たない宣言済み source）、DB に書いてからディスパッチャの表を更新する
 /// （次の tick から効く。走っている run は止めない）。`max_runs` の範囲は task-api が検査済み（DB の CHECK でも弾く）。
 pub fn set_account_limit(
     config: &Config,
@@ -324,7 +324,7 @@ impl UsageChecks {
     }
 }
 
-/// D6 / ADR-0025 D4: `POST /accounts/{id}/check`。設定は呼び出しごとに読み直さない（`config` は tick_loop が
+/// D6 / ADR-0025 D4: `POST /llm/sources/{source_id}/accounts/{account_id}/check`。設定は呼び出しごとに読み直さない（`config` は tick_loop が
 /// 持つ最新の写し）。claude-code は `[accounts].check_model` を使い、codex はモデルを指定しない。
 pub fn spawn_check(
     config: &Config,
@@ -428,7 +428,7 @@ async fn finish_check(
     let _ = reply.send(Ok(outcome));
 }
 
-/// D7 / ADR-0025 D5: `POST /accounts/{id}/login`。既に進行中のセッションがあれば止めてから新しく始める。
+/// D7 / ADR-0025 D5: `POST /llm/sources/{source_id}/accounts/{account_id}/login`。既に進行中のセッションがあれば止めてから新しく始める。
 /// claude-code は `claude auth login`（コード貼り付け式）、codex は `codex login --device-auth`
 /// （デバイス認証。`user_code` を返す）。
 #[allow(clippy::too_many_arguments)]
@@ -556,7 +556,7 @@ pub fn spawn_login_start(
     }
 }
 
-/// D7: `POST /accounts/{id}/login/code`。claude-code のみ（task-api が codex を 409 で弾く）。進行中の
+/// D7: `POST /llm/sources/{source_id}/accounts/{account_id}/login/code`。claude-code のみ（task-api が codex を 409 で弾く）。進行中の
 /// セッションが無ければ `LoginNotStarted`。
 pub fn spawn_login_code(
     sessions: LoginSessions,
@@ -586,7 +586,7 @@ pub fn spawn_login_code(
     });
 }
 
-/// D7 / 3.35 / ADR-0025 D5: `DELETE /accounts/{id}/login`。進行中でなければ何もしない（エラーにしない）。
+/// D7 / 3.35 / ADR-0025 D5: `DELETE /llm/sources/{source_id}/accounts/{account_id}/login`。進行中でなければ何もしない（エラーにしない）。
 pub fn spawn_login_cancel(
     sessions: LoginSessions,
     codex_sessions: CodexLoginSessions,
@@ -633,12 +633,12 @@ fn account_check_result_name(result: &AccountCheckResult) -> &'static str {
     }
 }
 
-fn map_check_result(result: AccountCheckResult) -> task_api::ProviderCheckResult {
+fn map_check_result(result: AccountCheckResult) -> task_api::AccountCheckResult {
     match result {
-        AccountCheckResult::Ok => task_api::ProviderCheckResult::Ok,
-        AccountCheckResult::AuthFailed => task_api::ProviderCheckResult::AuthFailed,
-        AccountCheckResult::Throttled => task_api::ProviderCheckResult::Throttled,
-        AccountCheckResult::SpawnFailed => task_api::ProviderCheckResult::SpawnFailed,
+        AccountCheckResult::Ok => task_api::AccountCheckResult::Ok,
+        AccountCheckResult::AuthFailed => task_api::AccountCheckResult::AuthFailed,
+        AccountCheckResult::Throttled => task_api::AccountCheckResult::Throttled,
+        AccountCheckResult::SpawnFailed => task_api::AccountCheckResult::SpawnFailed,
     }
 }
 

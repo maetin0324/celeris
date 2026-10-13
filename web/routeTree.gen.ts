@@ -18,17 +18,19 @@ import { Route as ClustersRouteImport } from './routes/clusters'
 import { Route as ConsoleRouteImport } from './routes/console'
 import { Route as DaemonRouteImport } from './routes/daemon'
 import { Route as GraphRouteImport } from './routes/graph'
+import { Route as HarnessesRouteImport } from './routes/harnesses'
 import { Route as HelpRouteImport } from './routes/help'
 import { Route as InboxRouteImport } from './routes/inbox'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as ModelsRouteImport } from './routes/models'
 import { Route as NotificationsRouteImport } from './routes/notifications'
-import { Route as ProvidersRouteImport } from './routes/providers'
 import { Route as ReleasesRouteImport } from './routes/releases'
 import { Route as ReportsRouteImport } from './routes/reports'
 import { Route as BrowserIndexRouteImport } from './routes/browser.index'
 import { Route as BrowserDevicesRouteImport } from './routes/browser.devices'
 import { Route as BrowserSettingsRouteImport } from './routes/browser.settings'
+import { Route as CronIndexRouteImport } from './routes/cron.index'
+import { Route as CronIdRouteImport } from './routes/cron.$id'
 import { Route as KnowledgeIndexRouteImport } from './routes/knowledge.index'
 import { Route as KnowledgeInboxRouteImport } from './routes/knowledge.inbox'
 import { Route as KnowledgeSkillsRouteImport } from './routes/knowledge.skills'
@@ -37,6 +39,8 @@ import { Route as OrgIdRouteImport } from './routes/org.$id'
 import { Route as OrgSecretaryRouteImport } from './routes/org.secretary'
 import { Route as PlansNewRouteImport } from './routes/plans.new'
 import { Route as ProjectsIndexRouteImport } from './routes/projects.index'
+import { Route as SourcesIndexRouteImport } from './routes/sources.index'
+import { Route as SourcesSourceIdRouteImport } from './routes/sources.$sourceId'
 import { Route as TasksIndexRouteImport } from './routes/tasks.index'
 import { Route as TasksNewRouteImport } from './routes/tasks.new'
 import { Route as ProjectsIdIndexRouteImport } from './routes/projects.$id.index'
@@ -94,6 +98,11 @@ const GraphRoute = GraphRouteImport.update({
   path: '/graph',
   getParentRoute: () => rootRouteImport,
 } as any)
+const HarnessesRoute = HarnessesRouteImport.update({
+  id: '/harnesses',
+  path: '/harnesses',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const HelpRoute = HelpRouteImport.update({
   id: '/help',
   path: '/help',
@@ -119,11 +128,6 @@ const NotificationsRoute = NotificationsRouteImport.update({
   path: '/notifications',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ProvidersRoute = ProvidersRouteImport.update({
-  id: '/providers',
-  path: '/providers',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const ReleasesRoute = ReleasesRouteImport.update({
   id: '/releases',
   path: '/releases',
@@ -147,6 +151,16 @@ const BrowserDevicesRoute = BrowserDevicesRouteImport.update({
 const BrowserSettingsRoute = BrowserSettingsRouteImport.update({
   id: '/browser/settings',
   path: '/browser/settings',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const CronIndexRoute = CronIndexRouteImport.update({
+  id: '/cron/',
+  path: '/cron/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const CronIdRoute = CronIdRouteImport.update({
+  id: '/cron/$id',
+  path: '/cron/$id',
   getParentRoute: () => rootRouteImport,
 } as any)
 const KnowledgeIndexRoute = KnowledgeIndexRouteImport.update({
@@ -187,6 +201,16 @@ const PlansNewRoute = PlansNewRouteImport.update({
 const ProjectsIndexRoute = ProjectsIndexRouteImport.update({
   id: '/projects/',
   path: '/projects/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SourcesIndexRoute = SourcesIndexRouteImport.update({
+  id: '/sources/',
+  path: '/sources/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SourcesSourceIdRoute = SourcesSourceIdRouteImport.update({
+  id: '/sources/$sourceId',
+  path: '/sources/$sourceId',
   getParentRoute: () => rootRouteImport,
 } as any)
 const TasksIndexRoute = TasksIndexRouteImport.update({
@@ -257,26 +281,30 @@ export interface FileRoutesByFullPath {
   '/console': typeof ConsoleRoute
   '/daemon': typeof DaemonRoute
   '/graph': typeof GraphRoute
+  '/harnesses': typeof HarnessesRoute
   '/help': typeof HelpRoute
   '/inbox': typeof InboxRoute
   '/login': typeof LoginRoute
   '/models': typeof ModelsRoute
   '/notifications': typeof NotificationsRoute
-  '/providers': typeof ProvidersRoute
   '/releases': typeof ReleasesRoute
   '/reports': typeof ReportsRoute
   '/browser/devices': typeof BrowserDevicesRoute
   '/browser/settings': typeof BrowserSettingsRoute
+  '/cron/$id': typeof CronIdRoute
   '/knowledge/inbox': typeof KnowledgeInboxRoute
   '/knowledge/skills': typeof KnowledgeSkillsRoute
   '/org/$id': typeof OrgIdRoute
   '/org/secretary': typeof OrgSecretaryRoute
   '/plans/new': typeof PlansNewRoute
+  '/sources/$sourceId': typeof SourcesSourceIdRoute
   '/tasks/new': typeof TasksNewRoute
   '/browser/': typeof BrowserIndexRoute
+  '/cron/': typeof CronIndexRoute
   '/knowledge/': typeof KnowledgeIndexRoute
   '/org/': typeof OrgIndexRoute
   '/projects/': typeof ProjectsIndexRoute
+  '/sources/': typeof SourcesIndexRoute
   '/tasks/': typeof TasksIndexRoute
   '/projects/$id/browser-identities': typeof ProjectsIdBrowserIdentitiesRoute
   '/tasks/$id/changes': typeof TasksIdChangesRoute
@@ -298,26 +326,30 @@ export interface FileRoutesByTo {
   '/console': typeof ConsoleRoute
   '/daemon': typeof DaemonRoute
   '/graph': typeof GraphRoute
+  '/harnesses': typeof HarnessesRoute
   '/help': typeof HelpRoute
   '/inbox': typeof InboxRoute
   '/login': typeof LoginRoute
   '/models': typeof ModelsRoute
   '/notifications': typeof NotificationsRoute
-  '/providers': typeof ProvidersRoute
   '/releases': typeof ReleasesRoute
   '/reports': typeof ReportsRoute
   '/browser/devices': typeof BrowserDevicesRoute
   '/browser/settings': typeof BrowserSettingsRoute
+  '/cron/$id': typeof CronIdRoute
   '/knowledge/inbox': typeof KnowledgeInboxRoute
   '/knowledge/skills': typeof KnowledgeSkillsRoute
   '/org/$id': typeof OrgIdRoute
   '/org/secretary': typeof OrgSecretaryRoute
   '/plans/new': typeof PlansNewRoute
+  '/sources/$sourceId': typeof SourcesSourceIdRoute
   '/tasks/new': typeof TasksNewRoute
   '/browser': typeof BrowserIndexRoute
+  '/cron': typeof CronIndexRoute
   '/knowledge': typeof KnowledgeIndexRoute
   '/org': typeof OrgIndexRoute
   '/projects': typeof ProjectsIndexRoute
+  '/sources': typeof SourcesIndexRoute
   '/tasks': typeof TasksIndexRoute
   '/projects/$id/browser-identities': typeof ProjectsIdBrowserIdentitiesRoute
   '/tasks/$id/changes': typeof TasksIdChangesRoute
@@ -340,26 +372,30 @@ export interface FileRoutesById {
   '/console': typeof ConsoleRoute
   '/daemon': typeof DaemonRoute
   '/graph': typeof GraphRoute
+  '/harnesses': typeof HarnessesRoute
   '/help': typeof HelpRoute
   '/inbox': typeof InboxRoute
   '/login': typeof LoginRoute
   '/models': typeof ModelsRoute
   '/notifications': typeof NotificationsRoute
-  '/providers': typeof ProvidersRoute
   '/releases': typeof ReleasesRoute
   '/reports': typeof ReportsRoute
   '/browser/devices': typeof BrowserDevicesRoute
   '/browser/settings': typeof BrowserSettingsRoute
+  '/cron/$id': typeof CronIdRoute
   '/knowledge/inbox': typeof KnowledgeInboxRoute
   '/knowledge/skills': typeof KnowledgeSkillsRoute
   '/org/$id': typeof OrgIdRoute
   '/org/secretary': typeof OrgSecretaryRoute
   '/plans/new': typeof PlansNewRoute
+  '/sources/$sourceId': typeof SourcesSourceIdRoute
   '/tasks/new': typeof TasksNewRoute
   '/browser/': typeof BrowserIndexRoute
+  '/cron/': typeof CronIndexRoute
   '/knowledge/': typeof KnowledgeIndexRoute
   '/org/': typeof OrgIndexRoute
   '/projects/': typeof ProjectsIndexRoute
+  '/sources/': typeof SourcesIndexRoute
   '/tasks/': typeof TasksIndexRoute
   '/projects/$id/browser-identities': typeof ProjectsIdBrowserIdentitiesRoute
   '/tasks/$id/changes': typeof TasksIdChangesRoute
@@ -383,26 +419,30 @@ export interface FileRouteTypes {
     | '/console'
     | '/daemon'
     | '/graph'
+    | '/harnesses'
     | '/help'
     | '/inbox'
     | '/login'
     | '/models'
     | '/notifications'
-    | '/providers'
     | '/releases'
     | '/reports'
     | '/browser/devices'
     | '/browser/settings'
+    | '/cron/$id'
     | '/knowledge/inbox'
     | '/knowledge/skills'
     | '/org/$id'
     | '/org/secretary'
     | '/plans/new'
+    | '/sources/$sourceId'
     | '/tasks/new'
     | '/browser/'
+    | '/cron/'
     | '/knowledge/'
     | '/org/'
     | '/projects/'
+    | '/sources/'
     | '/tasks/'
     | '/projects/$id/browser-identities'
     | '/tasks/$id/changes'
@@ -424,26 +464,30 @@ export interface FileRouteTypes {
     | '/console'
     | '/daemon'
     | '/graph'
+    | '/harnesses'
     | '/help'
     | '/inbox'
     | '/login'
     | '/models'
     | '/notifications'
-    | '/providers'
     | '/releases'
     | '/reports'
     | '/browser/devices'
     | '/browser/settings'
+    | '/cron/$id'
     | '/knowledge/inbox'
     | '/knowledge/skills'
     | '/org/$id'
     | '/org/secretary'
     | '/plans/new'
+    | '/sources/$sourceId'
     | '/tasks/new'
     | '/browser'
+    | '/cron'
     | '/knowledge'
     | '/org'
     | '/projects'
+    | '/sources'
     | '/tasks'
     | '/projects/$id/browser-identities'
     | '/tasks/$id/changes'
@@ -465,26 +509,30 @@ export interface FileRouteTypes {
     | '/console'
     | '/daemon'
     | '/graph'
+    | '/harnesses'
     | '/help'
     | '/inbox'
     | '/login'
     | '/models'
     | '/notifications'
-    | '/providers'
     | '/releases'
     | '/reports'
     | '/browser/devices'
     | '/browser/settings'
+    | '/cron/$id'
     | '/knowledge/inbox'
     | '/knowledge/skills'
     | '/org/$id'
     | '/org/secretary'
     | '/plans/new'
+    | '/sources/$sourceId'
     | '/tasks/new'
     | '/browser/'
+    | '/cron/'
     | '/knowledge/'
     | '/org/'
     | '/projects/'
+    | '/sources/'
     | '/tasks/'
     | '/projects/$id/browser-identities'
     | '/tasks/$id/changes'
@@ -507,26 +555,30 @@ export interface RootRouteChildren {
   ConsoleRoute: typeof ConsoleRoute
   DaemonRoute: typeof DaemonRoute
   GraphRoute: typeof GraphRoute
+  HarnessesRoute: typeof HarnessesRoute
   HelpRoute: typeof HelpRoute
   InboxRoute: typeof InboxRoute
   LoginRoute: typeof LoginRoute
   ModelsRoute: typeof ModelsRoute
   NotificationsRoute: typeof NotificationsRoute
-  ProvidersRoute: typeof ProvidersRoute
   ReleasesRoute: typeof ReleasesRoute
   ReportsRoute: typeof ReportsRoute
   BrowserDevicesRoute: typeof BrowserDevicesRoute
   BrowserSettingsRoute: typeof BrowserSettingsRoute
+  CronIdRoute: typeof CronIdRoute
   KnowledgeInboxRoute: typeof KnowledgeInboxRoute
   KnowledgeSkillsRoute: typeof KnowledgeSkillsRoute
   OrgIdRoute: typeof OrgIdRoute
   OrgSecretaryRoute: typeof OrgSecretaryRoute
   PlansNewRoute: typeof PlansNewRoute
+  SourcesSourceIdRoute: typeof SourcesSourceIdRoute
   TasksNewRoute: typeof TasksNewRoute
   BrowserIndexRoute: typeof BrowserIndexRoute
+  CronIndexRoute: typeof CronIndexRoute
   KnowledgeIndexRoute: typeof KnowledgeIndexRoute
   OrgIndexRoute: typeof OrgIndexRoute
   ProjectsIndexRoute: typeof ProjectsIndexRoute
+  SourcesIndexRoute: typeof SourcesIndexRoute
   TasksIndexRoute: typeof TasksIndexRoute
   ProjectsIdBrowserIdentitiesRoute: typeof ProjectsIdBrowserIdentitiesRoute
   TasksIdChangesRoute: typeof TasksIdChangesRoute
@@ -604,6 +656,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof GraphRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/harnesses': {
+      id: '/harnesses'
+      path: '/harnesses'
+      fullPath: '/harnesses'
+      preLoaderRoute: typeof HarnessesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/help': {
       id: '/help'
       path: '/help'
@@ -639,13 +698,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof NotificationsRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/providers': {
-      id: '/providers'
-      path: '/providers'
-      fullPath: '/providers'
-      preLoaderRoute: typeof ProvidersRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/releases': {
       id: '/releases'
       path: '/releases'
@@ -679,6 +731,20 @@ declare module '@tanstack/react-router' {
       path: '/browser/settings'
       fullPath: '/browser/settings'
       preLoaderRoute: typeof BrowserSettingsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/cron/': {
+      id: '/cron/'
+      path: '/cron'
+      fullPath: '/cron/'
+      preLoaderRoute: typeof CronIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/cron/$id': {
+      id: '/cron/$id'
+      path: '/cron/$id'
+      fullPath: '/cron/$id'
+      preLoaderRoute: typeof CronIdRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/knowledge/': {
@@ -735,6 +801,20 @@ declare module '@tanstack/react-router' {
       path: '/projects'
       fullPath: '/projects/'
       preLoaderRoute: typeof ProjectsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/sources/': {
+      id: '/sources/'
+      path: '/sources'
+      fullPath: '/sources/'
+      preLoaderRoute: typeof SourcesIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/sources/$sourceId': {
+      id: '/sources/$sourceId'
+      path: '/sources/$sourceId'
+      fullPath: '/sources/$sourceId'
+      preLoaderRoute: typeof SourcesSourceIdRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/tasks/': {
@@ -827,26 +907,30 @@ const rootRouteChildren: RootRouteChildren = {
   ConsoleRoute: ConsoleRoute,
   DaemonRoute: DaemonRoute,
   GraphRoute: GraphRoute,
+  HarnessesRoute: HarnessesRoute,
   HelpRoute: HelpRoute,
   InboxRoute: InboxRoute,
   LoginRoute: LoginRoute,
   ModelsRoute: ModelsRoute,
   NotificationsRoute: NotificationsRoute,
-  ProvidersRoute: ProvidersRoute,
   ReleasesRoute: ReleasesRoute,
   ReportsRoute: ReportsRoute,
   BrowserDevicesRoute: BrowserDevicesRoute,
   BrowserSettingsRoute: BrowserSettingsRoute,
+  CronIdRoute: CronIdRoute,
   KnowledgeInboxRoute: KnowledgeInboxRoute,
   KnowledgeSkillsRoute: KnowledgeSkillsRoute,
   OrgIdRoute: OrgIdRoute,
   OrgSecretaryRoute: OrgSecretaryRoute,
   PlansNewRoute: PlansNewRoute,
+  SourcesSourceIdRoute: SourcesSourceIdRoute,
   TasksNewRoute: TasksNewRoute,
   BrowserIndexRoute: BrowserIndexRoute,
+  CronIndexRoute: CronIndexRoute,
   KnowledgeIndexRoute: KnowledgeIndexRoute,
   OrgIndexRoute: OrgIndexRoute,
   ProjectsIndexRoute: ProjectsIndexRoute,
+  SourcesIndexRoute: SourcesIndexRoute,
   TasksIndexRoute: TasksIndexRoute,
   ProjectsIdBrowserIdentitiesRoute: ProjectsIdBrowserIdentitiesRoute,
   TasksIdChangesRoute: TasksIdChangesRoute,

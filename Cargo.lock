@@ -298,6 +298,7 @@ dependencies = [
  "sha2",
  "task-core",
  "tempfile",
+ "toml",
  "zeroize",
 ]
 

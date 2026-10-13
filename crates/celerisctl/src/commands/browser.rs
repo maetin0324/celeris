@@ -18,8 +18,8 @@ use clap::{Args, Subcommand};
 
 use crate::error::CliError;
 
-/// GUI と同じ環境変数（`gui/app/browser-owner.server.ts` の `OWNER_SOCKET_ENV`）。
-pub const OWNER_SOCKET_ENV: &str = "CELERIS_GUI_OWNER_SOCKET";
+/// web gateway と同じ環境変数（`web/server/app.js`）。
+pub const OWNER_SOCKET_ENV: &str = "CELERIS_WEB_OWNER_SOCKET";
 
 #[derive(Subcommand, Debug)]
 pub enum BrowserCommand {
@@ -72,7 +72,7 @@ pub enum OwnerSessionCommand {
 pub struct ApproveArgs {
     /// GUI が表示した challenge（12 桁の hex）。
     pub challenge: String,
-    /// GUI の control socket。既定は `$CELERIS_GUI_OWNER_SOCKET`。
+    /// web の control socket。既定は `$CELERIS_WEB_OWNER_SOCKET`。
     #[arg(long)]
     pub socket: Option<PathBuf>,
 }

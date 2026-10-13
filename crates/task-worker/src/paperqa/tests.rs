@@ -213,6 +213,7 @@ fn read_ask_input(dir: &Path, run_id: &str) -> serde_json::Value {
 
 fn sample_req(workspace: std::path::PathBuf) -> RunRequest {
     RunRequest {
+        llm_route: None,
         cargo_target_dir: None,
         protocol: PROTOCOL_VERSION,
         task: crate::protocol::tests::sample_task(),
@@ -593,7 +594,7 @@ async fn ask_input_carries_model_only_when_set() {
 
     let dir2 = tempfile::tempdir().unwrap();
     let mut config_with = stub_pqa(dir2.path(), &ask_stub_script("ok", ""));
-    config_with.model = Some("openai/celeris/standard".to_string());
+    config_with.model = Some("openai/qwen/qwen3.8-27b".to_string());
     let adapter2 = PaperQaAdapter::new(config_with);
     let req2 = sample_req(dir2.path().to_path_buf());
     let sink2 = RecordingSink::default();
@@ -603,7 +604,7 @@ async fn ask_input_carries_model_only_when_set() {
         .unwrap();
     assert_eq!(
         read_ask_input(dir2.path(), "run-7b")["model"],
-        "openai/celeris/standard"
+        "openai/qwen/qwen3.8-27b"
     );
 }
 
@@ -2452,26 +2453,25 @@ fn runner_falls_back_to_the_abstract_and_finds_an_oa_pdf_via_unpaywall() {
 #[test]
 fn strip_provider_prefix_drops_only_a_litellm_style_prefix() {
     assert_eq!(
-        strip_provider_prefix("openai/celeris/standard"),
-        "celeris/standard"
+        strip_provider_prefix("openai/qwen/qwen3.8-27b"),
+        "qwen/qwen3.8-27b"
     );
     assert_eq!(strip_provider_prefix("hosted_vllm/model"), "model");
     assert_eq!(strip_provider_prefix(" openai/gpt-4o "), "gpt-4o");
-    assert_eq!(strip_provider_prefix("celeris/cheap"), "celeris/cheap");
     // 接頭辞に見えないもの（大文字を含む組織名など）はそのまま残す。
     assert_eq!(strip_provider_prefix("Acme/Model-FP8"), "Acme/Model-FP8");
     assert_eq!(strip_provider_prefix("openai/"), "openai/");
 }
 
-/// 検索語を立てるモデルは `acquire.query_model` → `[[providers]] model` → settings の `llm` の順
+/// 検索語を立てるモデルは `acquire.query_model` → run の route が選んだ model → settings の `llm` の順
 /// （PaperQA2 と同じ LLM 先。ADR-0035 D5）。
 #[tokio::test]
-async fn provider_kind_paperqa_query_model_uses_proxy_tier_from_settings() {
+async fn provider_kind_paperqa_query_model_uses_model_from_settings() {
     let dir = tempfile::tempdir().unwrap();
     let settings = dir.path().join("celeris-proxy");
     std::fs::write(
         dir.path().join("celeris-proxy.json"),
-        r#"{"llm": "openai/celeris/standard", "embedding": "sparse"}"#,
+        r#"{"llm": "openai/qwen/qwen3.8-27b", "embedding": "sparse"}"#,
     )
     .unwrap();
 
@@ -2482,19 +2482,19 @@ async fn provider_kind_paperqa_query_model_uses_proxy_tier_from_settings() {
     // settings の `llm`（`.json` は付けずに渡す実機の仕様）。
     assert_eq!(
         query_llm_model(&config).await.as_deref(),
-        Some("celeris/standard")
+        Some("qwen/qwen3.8-27b")
     );
-    // `[[providers]] model`（`--llm`）が勝つ。
+    // run の route が選んだ model（`--llm`）が勝つ。
     config.model = Some("openai/other-model".to_string());
     assert_eq!(
         query_llm_model(&config).await.as_deref(),
         Some("other-model")
     );
-    // proxy の抽象名を `[[providers]] model` に直書きしても tier を落とさない。
-    config.model = Some("celeris/cheap".to_string());
+    // run の route が選んだ model（LiteLLM 形の `openai/<source>/<model>`）も接頭辞だけ落とす。
+    config.model = Some("openai/qwen/qwen3.8-27b".to_string());
     assert_eq!(
         query_llm_model(&config).await.as_deref(),
-        Some("celeris/cheap")
+        Some("qwen/qwen3.8-27b")
     );
     // `acquire.query_model` が最も強い。
     config.acquire.query_model = Some("explicit-model".to_string());
@@ -2519,7 +2519,7 @@ async fn the_acquire_input_carries_the_query_llm_and_the_request() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(
         dir.path().join("celeris-proxy.json"),
-        r#"{"llm": "openai/celeris/standard"}"#,
+        r#"{"llm": "openai/qwen/qwen3.8-27b"}"#,
     )
     .unwrap();
     let mut config = stub_pqa_with_acquire(
@@ -2561,7 +2561,7 @@ async fn the_acquire_input_carries_the_query_llm_and_the_request() {
     let llm = &input["query_llm"];
     assert_eq!(llm["enabled"], true, "{input}");
     assert_eq!(
-        llm["model"], "celeris/standard",
+        llm["model"], "qwen/qwen3.8-27b",
         "settings の llm から供給者の接頭辞を落として渡す: {input}"
     );
     assert_eq!(llm["base_url"], "http://127.0.0.1:18000/v1");
@@ -2586,7 +2586,7 @@ async fn the_acquire_input_carries_the_query_llm_and_the_request() {
     // 進捗に「誰が検索語を立てるか」が出る。
     let progress = sink.progress.lock().unwrap().join("\n");
     assert!(
-        progress.contains("the search terms are written by celeris/standard"),
+        progress.contains("the search terms are written by qwen/qwen3.8-27b"),
         "{progress}"
     );
 
@@ -3043,7 +3043,7 @@ class FakeFetcher:
         return json.dumps({"choices": [{"message": {"content": "{}"}}]})
 fetcher = FakeFetcher()
 mod.plan_queries({"queries": ["systems"], "query_llm": {
-    "enabled": True, "model": "celeris/standard",
+    "enabled": True, "model": "qwen/qwen3.8-27b",
     "base_url": "http://127.0.0.1:18000/v1"}}, fetcher, lambda _: None)
 print(json.dumps(fetcher.calls))
 "#;
@@ -3065,7 +3065,7 @@ print(json.dumps(fetcher.calls))
         calls[0]["url"],
         "http://127.0.0.1:18000/v1/chat/completions"
     );
-    assert_eq!(calls[0]["body"]["model"], "celeris/standard");
+    assert_eq!(calls[0]["body"]["model"], "qwen/qwen3.8-27b");
     assert!(calls[0]["body"].get("chat_template_kwargs").is_none());
 }
 
@@ -3586,7 +3586,7 @@ fn paperqa_ask_main_reads_the_settings_file_directly_when_it_exists() {
     let settings_path = settings_dir.join("celeris-proxy.json");
     std::fs::write(
         &settings_path,
-        r#"{"llm": "openai/celeris/standard", "marker": "from-disk"}"#,
+        r#"{"llm": "openai/qwen/qwen3.8-27b", "marker": "from-disk"}"#,
     )
     .unwrap();
 
@@ -3705,7 +3705,7 @@ print(json.dumps(calls))
     assert_eq!(v["settings_marker_seen_by_ask"], "from-disk", "{v}");
     assert_eq!(
         v["validated_raw"],
-        serde_json::json!({"llm": "openai/celeris/standard", "marker": "from-disk"}),
+        serde_json::json!({"llm": "openai/qwen/qwen3.8-27b", "marker": "from-disk"}),
         "{v}"
     );
 

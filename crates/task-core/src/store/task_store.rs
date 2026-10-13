@@ -145,6 +145,11 @@ pub trait TaskStore:
     /// 停止（paused / cancelled / archived）で止まっているか。`ready_tasks` と同じ判定を、既に `running` の
     /// task の並列 WU の 2 本目以降（`dispatch_parallel_work_units`）にも当てるために出す。対話は常に `false`。
     fn halted_by_pause(&self, task: &Task) -> Result<bool, StoreError>;
+    /// ADR 2026-10-11-task-wait-reasons D3: `ready_tasks` と同じ読み方の DB の待ち（D1〜D6）。終端の task は空。
+    fn db_waits_for(
+        &self,
+        tasks: &[Task],
+    ) -> Result<std::collections::HashMap<TaskId, Vec<crate::wait::TaskWait>>, StoreError>;
     /// `transition::transition()` で検証した任意のトリガーを適用する汎用の書き込み口
     /// （ADR-0004 D1）。タスクの取得・`transition()` の呼び出し・`tasks` 行の更新・
     /// `Event::Transitioned` の追記（と任意の `extra_event`）を単一トランザクションで行う。
@@ -397,6 +402,21 @@ pub trait TaskStore:
         project_id: ProjectId,
         limit: usize,
     ) -> Result<Vec<TaskIntegration>, StoreError>;
+
+    /// Idempotently upsert current done-task integration state; append an event only on state change.
+    fn task_integration_upsert(
+        &self,
+        state: &crate::TaskRepoIntegrationState,
+    ) -> Result<(), StoreError>;
+    fn task_integration_get(
+        &self,
+        task_id: TaskId,
+        repo_id: RepoId,
+    ) -> Result<Option<crate::TaskRepoIntegrationState>, StoreError>;
+    fn task_integration_list(
+        &self,
+        state: Option<crate::TaskRepoIntegrationStatus>,
+    ) -> Result<Vec<crate::TaskRepoIntegrationState>, StoreError>;
 
     /// 途中目標を作る。`seq` はその案件の最大 + 1 をストアが採番し、確定した行を返す。
     /// 案件が無ければ `StoreError::Invalid`。
@@ -824,6 +844,18 @@ pub trait TaskStore:
     /// トランザクションでは**ない**（既存コードの慣習に合わせ、`append_event` の直後に呼ぶ。監査上の
     /// 実害は無い: 再起動時の照合は `work_units.status` を正とする）。
     fn run_index_start(&self, row: RunRow) -> Result<(), StoreError>;
+    /// ADR 2026-10-11 llm-source-harness-selection: dispatcher が選んだ harness・source・model・account と
+    /// 選択の versioned metadata を run の行に書く。行が無ければ `Ok(false)`。
+    fn run_record_selection(
+        &self,
+        run_id: &str,
+        selection: &crate::llm_route::RunSelection,
+    ) -> Result<bool, StoreError>;
+    /// Persisted complete route selections for a task, keyed by run id. Legacy partial rows are omitted.
+    fn run_selections_for_task(
+        &self,
+        task_id: TaskId,
+    ) -> Result<std::collections::HashMap<String, crate::llm_route::RunSelection>, StoreError>;
     /// D5: run 終了時に `runs` の行を更新する。無ければ `Ok(false)`。
     #[allow(clippy::too_many_arguments)]
     fn run_index_finish(

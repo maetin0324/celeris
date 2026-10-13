@@ -1,21 +1,7 @@
-//! 秘密の解決と env の合成（ADR-0030）。アダプタ設定の組み立てが使う。
+//! 秘密の解決と env の合成（ADR-0030）。ハーネス設定の組み立てが使う。
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
-
-/// `[adapters.<種別>].env` にプロバイダの `env` を重ねる（同名キーはプロバイダが優先。順序は決定的）。
-/// ADR-0030 以降、本体（`build_adapters`）は `merged_env_with_secrets` を使う。これはテストが期待値を
-/// 組み立てるのに使う（`env_from_secrets` が空なら `merged_env_with_secrets` と同じ結果になる）。
-#[cfg(test)]
-pub(crate) fn merged_env(
-    base: &HashMap<String, String>,
-    provider: &HashMap<String, String>,
-) -> Vec<(String, String)> {
-    let mut merged: BTreeMap<String, String> =
-        base.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-    merged.extend(provider.iter().map(|(k, v)| (k.clone(), v.clone())));
-    merged.into_iter().collect()
-}
 
 /// ADR-0030 D1: `[secrets] dir` の下の `<id>` ファイルを読み、末尾の改行を落とした値を返す。無い・読めない
 /// ときは設定エラーにせず `warn!` を出して `None`（値はログに出さない。id だけ記録する。ADR-0024 D5 と同じ規律）。
@@ -53,7 +39,7 @@ pub(crate) fn apply_env_from_secrets(
 }
 
 /// ADR-0030 D2: 優先順は celeris の環境（プロセス継承。ここでは扱わない）< `[adapters.*].env` <
-/// `[adapters.*].env_from_secrets` < 行の `env` < 行の `env_from_secrets`。
+/// `[adapters.*].env_from_secrets`。
 pub(crate) fn merged_env_with_secrets(
     base_env: &HashMap<String, String>,
     base_env_from_secrets: &HashMap<String, String>,
@@ -69,16 +55,4 @@ pub(crate) fn merged_env_with_secrets(
     merged.extend(row_env.iter().map(|(k, v)| (k.clone(), v.clone())));
     apply_env_from_secrets(&mut merged, row_env_from_secrets, secrets_dir);
     merged.into_iter().collect()
-}
-
-/// プロバイダの `model` が空でなければそれ、空なら `[adapters.<種別>].model`（ADR-0012 D1）。
-pub(crate) fn effective_model(
-    provider_model: &str,
-    adapter_model: &Option<String>,
-) -> Option<String> {
-    if provider_model.is_empty() {
-        adapter_model.clone()
-    } else {
-        Some(provider_model.to_string())
-    }
 }

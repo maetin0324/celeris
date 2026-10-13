@@ -173,6 +173,7 @@ fn f7_task(status: Status, kind: crate::model::TaskKind) -> crate::model::Task {
     use crate::model::{Budget, Tier, WorkerHint, WorkspaceSpec};
     let now = OffsetDateTime::now_utc();
     crate::model::Task {
+        harness_id: None,
         requirements: Default::default(),
         tree: None,
         paused_at: None,
@@ -192,7 +193,6 @@ fn f7_task(status: Status, kind: crate::model::TaskKind) -> crate::model::Task {
         priority: 0,
         worker_hint: WorkerHint {
             tier: Tier::Standard,
-            adapter: None,
         },
         workspace: WorkspaceSpec::Local {
             path: "ws".into(),
@@ -302,10 +302,17 @@ fn cancelling_a_task_withdraws_its_pending_approvals_in_the_same_transition() {
     let kept = store.approval_get(decided.id).expect("get").expect("some");
     assert_eq!(kept.decision, Some(Decision::Once));
     assert_eq!(kept.answer.as_deref(), Some("はい"));
+    // 同じ created_at の 2 件は id（ULID の乱数部）順に並ぶので、作った順ではなく集合で比べる。
+    let mut expected_ids = vec![a.id, b.id];
+    expected_ids.sort();
+    let mut events = withdrawn_events(&store, task.id);
+    for (ids, _, _) in &mut events {
+        ids.sort();
+    }
     assert_eq!(
-        withdrawn_events(&store, task.id),
+        events,
         vec![(
-            vec![a.id, b.id],
+            expected_ids,
             Status::Cancelled,
             WITHDRAWN_BY_TRANSITION.to_string()
         )]

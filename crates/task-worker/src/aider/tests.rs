@@ -39,6 +39,7 @@ fn stub_aider(dir: &std::path::Path, script: &str) -> AiderConfig {
 
 fn sample_req(workspace: std::path::PathBuf) -> RunRequest {
     RunRequest {
+        llm_route: None,
         cargo_target_dir: None,
         protocol: PROTOCOL_VERSION,
         task: crate::protocol::tests::sample_task(),
@@ -71,7 +72,7 @@ mkdir -p artifacts
 printf '%s' '{"summary":"ok","evidence":[]}' > artifacts/result.json
 "#,
     );
-    config.model = Some("openai/celeris/cheap".into());
+    config.model = Some("openai/qwen/qwen3.8-27b".into());
     config
         .env
         .push(("OPENAI_API_BASE".into(), "http://127.0.0.1:18100/v1".into()));

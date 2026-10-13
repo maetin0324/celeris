@@ -431,7 +431,8 @@ async fn unroutable_tasks_do_not_starve_or_hide_routable_tasks_outside_the_windo
             0,
         );
         t.priority = 10;
-        t.worker_hint.adapter = Some("nonexistent".into());
+        // An undeclared harness has no route: the task stays ready and starts nothing.
+        t.harness_id = Some("nonexistent".into());
         store.insert(&t).unwrap();
         unroutable.push(t.id);
     }
@@ -499,30 +500,11 @@ async fn tick_publishes_daemon_snapshot_to_watch() {
         hostname: "host-1".into(),
         started_at: "2026-09-14T00:00:00Z".into(),
         tick_ms: 50,
-        providers: vec![ProviderLive {
-            kind: Default::default(),
-            llm_source: None,
-            credential_refs: Default::default(),
-            tier_models: Default::default(),
-            account_id: None,
-            id: "p1".into(),
-            adapter: "instant".into(),
-            tiers: vec![Tier::Standard],
-            concurrency: 1,
-            model: Some("m".into()),
-            env_keys: vec![],
-            in_use: 0,
-            in_use_cos: 0,
-            last_check: None,
-            account_pool: false,
-        }],
-        provider_checks: Default::default(),
     });
     assert!(
         rx.borrow().is_none(),
         "nothing is published before the first tick"
     );
-
     d.tick().unwrap();
     let snap = rx.borrow().clone().expect("snapshot after the first tick");
     assert_eq!(
@@ -533,12 +515,10 @@ async fn tick_publishes_daemon_snapshot_to_watch() {
     assert_eq!(snap.in_flight.len(), 1);
     assert_eq!(snap.in_flight[0].task_id, task.id);
     assert_eq!(snap.in_flight[0].kind, InFlightKind::Worker);
-    assert_eq!(snap.in_flight[0].provider, "p1");
-    assert_eq!(snap.providers[0].in_use, 1);
     assert!(snap.cooldowns.is_empty());
-
-    d.policy.report(
-        "p1".into(),
+    d.record_source_failure(
+        "p1",
+        "throttled",
         &ProviderOutcome::Throttled {
             retry_after: Duration::from_secs(60),
         },
@@ -548,117 +528,8 @@ async fn tick_publishes_daemon_snapshot_to_watch() {
     let snap = rx.borrow().clone().unwrap();
     assert!(snap.ticks > 1);
     assert!(snap.in_flight.is_empty());
-    assert_eq!(snap.providers[0].in_use, 0);
     assert_eq!(snap.cooldowns.len(), 1);
-    assert_eq!(
-        (
-            snap.cooldowns[0].provider.as_str(),
-            snap.cooldowns[0].reason.as_str()
-        ),
-        ("p1", "throttled")
-    );
-    assert!(
-        snap.cooldowns[0].until > snap.last_tick_at,
-        "until is in the future"
-    );
-
-    // ADR-0022 D2: 疎通確認の結果はスナップショットにだけ載る（DB には書かない）。
-    assert!(snap.providers[0].last_check.is_none(), "確認する前は空");
-    d.set_provider_check(
-        "p1",
-        ProviderCheckView {
-            at: "2026-09-16T02:00:00Z".into(),
-            result: "ok".into(),
-            detail: None,
-        },
-    );
-    d.tick().unwrap();
-    let snap = rx.borrow().clone().unwrap();
-    assert_eq!(
-        snap.providers[0].last_check,
-        Some(ProviderCheckView {
-            at: "2026-09-16T02:00:00Z".into(),
-            result: "ok".into(),
-            detail: None
-        })
-    );
-
-    // reload でプロバイダ表を差し替えても、残った id の記録は保つ。消えた id の記録は落とす。
-    d.set_snapshot_providers(vec![
-        ProviderLive {
-            kind: Default::default(),
-            llm_source: None,
-            credential_refs: Default::default(),
-            tier_models: Default::default(),
-            account_id: None,
-            id: "p1".into(),
-            adapter: "instant".into(),
-            tiers: vec![Tier::Standard],
-            concurrency: 2,
-            model: Some("m2".into()),
-            env_keys: vec![],
-            in_use: 0,
-            in_use_cos: 0,
-            last_check: None,
-            account_pool: false,
-        },
-        ProviderLive {
-            kind: Default::default(),
-            llm_source: None,
-            credential_refs: Default::default(),
-            tier_models: Default::default(),
-            account_id: None,
-            id: "p2".into(),
-            adapter: "instant".into(),
-            tiers: vec![Tier::Standard],
-            concurrency: 1,
-            model: None,
-            env_keys: vec![],
-            in_use: 0,
-            in_use_cos: 0,
-            last_check: None,
-            account_pool: false,
-        },
-    ]);
-    d.tick().unwrap();
-    let snap = rx.borrow().clone().unwrap();
-    assert_eq!(
-        snap.providers[0]
-            .last_check
-            .as_ref()
-            .map(|c| c.result.as_str()),
-        Some("ok"),
-        "p1 の記録は残る"
-    );
-    assert!(
-        snap.providers[1].last_check.is_none(),
-        "p2 はまだ確認していない"
-    );
-
-    d.set_snapshot_providers(vec![ProviderLive {
-        kind: Default::default(),
-        llm_source: None,
-        credential_refs: Default::default(),
-        tier_models: Default::default(),
-        account_id: None,
-        id: "p2".into(),
-        adapter: "instant".into(),
-        tiers: vec![Tier::Standard],
-        concurrency: 1,
-        model: None,
-        env_keys: vec![],
-        in_use: 0,
-        in_use_cos: 0,
-        last_check: None,
-        account_pool: false,
-    }]);
-    d.tick().unwrap();
-    let snap = rx.borrow().clone().unwrap();
-    assert_eq!(snap.providers.len(), 1);
-    assert!(
-        snap.providers[0].last_check.is_none(),
-        "消えた p1 の記録は残さない"
-    );
+    assert_eq!(snap.cooldowns[0].reason, "throttled");
 }
 
 /// (d) run の途中で受け取った `rate_limit_event` の観測値が `AccountBook` とスナップショットに反映される。
@@ -698,8 +569,6 @@ async fn mid_run_rate_limit_observation_lands_in_the_book_and_the_snapshot() {
         hostname: "h".into(),
         started_at: "t".into(),
         tick_ms: 1,
-        providers: Vec::new(),
-        provider_checks: HashMap::new(),
     });
     let report = run_until_idle(&mut d, 200).await;
     assert!(report.idle);

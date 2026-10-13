@@ -5,6 +5,7 @@ use task_core::{Budget, SqliteStore, Status, TaskId, TaskKind, WorkerHint, Works
 fn sample_task() -> task_core::Task {
     let now = OffsetDateTime::now_utc();
     task_core::Task {
+        harness_id: None,
         requirements: Default::default(),
         tree: None,
         paused_at: None,
@@ -24,7 +25,6 @@ fn sample_task() -> task_core::Task {
         priority: 0,
         worker_hint: WorkerHint {
             tier: task_core::Tier::Standard,
-            adapter: None,
         },
         workspace: WorkspaceSpec::Local {
             path: "/tmp".into(),
@@ -183,12 +183,10 @@ fn v3_plan_json(adopt: TaskId) -> String {
 fn config_file(dir: &std::path::Path, tree_enabled: bool) -> PathBuf {
     let path = dir.join("config.toml");
     std::fs::write(
-            &path,
-            format!(
-                "[[providers]]\nid = \"fake-local\"\nadapter = \"fake\"\n\n[execution.tree]\nenabled = {tree_enabled}\n"
-            ),
-        )
-        .unwrap();
+        &path,
+        format!("\n[execution.tree]\nenabled = {tree_enabled}\n"),
+    )
+    .unwrap();
     path
 }
 

@@ -1,4 +1,4 @@
-//! 通知の設定とテスト送信（ADR-0037 D4。Phase 39。`docs/api/v1/gui-api.md` §3.33）。
+//! 通知の設定とテスト送信（ADR-0037 D4。Phase 39。`docs/api/v1/api.md` §3.33）。
 //!
 //! - `GET /notify` — 設定済みか、直近の送信 10 件（読み取り）。
 //! - `POST /notify/test` — その場でテスト送信（**管理系**。トークン必須）。
@@ -35,9 +35,9 @@ pub struct NotifyView {
     /// 登録済みのときだけ。値の sha256 の先頭 8 桁（値は復元できない）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fingerprint: Option<String>,
-    /// `[notify] gui_base_url`（文面のリンクの根）。
+    /// `[notify] web_base_url`（文面のリンクの根）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub gui_base_url: Option<String>,
+    pub web_base_url: Option<String>,
     /// 直近の送信（新しい順、最大 10 件）。
     pub recent: Vec<NotifyRecent>,
     /// `[notify]` outbound route configuration (ADR-0133 D6).
@@ -141,7 +141,7 @@ pub(crate) async fn view(State(state): State<ApiState>, RawQuery(raw): RawQuery)
             configured: fingerprint.is_some(),
             secret_id: state.inner.notify_secret_id.clone(),
             fingerprint,
-            gui_base_url: state.inner.notify_gui_base_url.clone(),
+            web_base_url: state.inner.notify_web_base_url.clone(),
             recent: recent.0,
             inbox_batch_secs: state.inner.notify_inbox_batch_secs,
             inbox_reminder_secs: state.inner.notify_inbox_reminder_secs,

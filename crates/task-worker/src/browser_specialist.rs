@@ -32,35 +32,19 @@ impl WorkerAdapter for BrowserSpecialistAdapter {
         self.inner.account_id()
     }
 
-    fn model_for_tier(&self, tier: task_core::Tier) -> Result<Option<String>, String> {
-        self.inner.model_for_tier(tier)
-    }
-
-    fn reasoning_effort_for_tier(&self, tier: task_core::Tier) -> Option<String> {
-        self.inner.reasoning_effort_for_tier(tier)
-    }
-
     fn with_model(&self, model: &str) -> Option<Arc<dyn WorkerAdapter>> {
         Self::wrap(self.inner.with_model(model))
+    }
+    fn with_llm_endpoint(
+        &self,
+        base_url: &str,
+        api_key: Option<&str>,
+    ) -> Option<Arc<dyn WorkerAdapter>> {
+        Self::wrap(self.inner.with_llm_endpoint(base_url, api_key))
     }
 
     fn with_permission_mode(&self, mode: &str) -> Option<Arc<dyn WorkerAdapter>> {
         Self::wrap(self.inner.with_permission_mode(mode))
-    }
-
-    fn supports_reasoning_effort(&self) -> bool {
-        self.inner.supports_reasoning_effort()
-    }
-
-    fn with_reasoning_effort(&self, effort: &str) -> Option<Arc<dyn WorkerAdapter>> {
-        Self::wrap(self.inner.with_reasoning_effort(effort))
-    }
-
-    fn with_tier_models(
-        &self,
-        models: task_core::model_routing::TierModels,
-    ) -> Option<Arc<dyn WorkerAdapter>> {
-        Self::wrap(self.inner.with_tier_models(models))
     }
 
     fn with_env(&self, extra: &[(String, String)]) -> Option<Arc<dyn WorkerAdapter>> {

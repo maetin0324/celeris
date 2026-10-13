@@ -3,11 +3,12 @@ import { readFileSync } from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { cronFixtures } from "./cron-fixtures.mjs";
 
 const schema = JSON.parse(
   readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../api/generated/schema.json"), "utf8"),
 );
-const reservedPorts = new Set([7700, 7701, 7710, 7711, 7712]);
+const reservedPorts = new Set([7710, 7711, 7712, 7720, 7721]);
 const delayValues = new Set([0, 5000, 10000]);
 
 function resolve(node) {
@@ -16,6 +17,8 @@ function resolve(node) {
 
 export function fixtureFor(node, seen = new Set()) {
   node = resolve(node);
+  // `unknown`（serde_json::Value 等）は JSON Schema の true。任意の値でよいので null を返す。
+  if (node === true) return null;
   if (Object.hasOwn(node, "const")) return node.const;
   if (node.enum) return node.enum[0];
   if (node.anyOf || node.oneOf) return fixtureFor((node.anyOf ?? node.oneOf)[0], seen);
@@ -97,8 +100,8 @@ export const defaultFixtures = Object.fromEntries(
 // ADR 2026-10-04-multi-objective-model-routing §9/§10 Phase 1: GET /llm/routing/catalog。
 // 旧設定から導いた形を模す。品質・価格・能力・context の欠測は null（画面は「不明」と出す）。
 export const routingCatalogFixture = {
-  catalog_version: "legacy-fixture-1",
-  mode: "legacy",
+  catalog_version: "fixture-1",
+  mode: "shadow",
   models: [
     {
       id: "claude-opus",
@@ -353,6 +356,7 @@ export const routingShadowFixture = {
       task_id: "T3",
       org_node: "software-engineering",
       lane: "standard",
+      harness: "claude-code",
       provider: "claude-oauth",
       model: "claude-sonnet",
       account: "main",
@@ -620,77 +624,6 @@ export const routingEstimatorShadowFixture = {
   ],
   unbound_requests: [],
 };
-
-// ADR 2026-10-06-model-role-assignments D4: 割り当て（人が決めた source × 役割 → model）。config 由来の値は configSlots で足す。
-export const modelAssignmentsFixture = [
-  {
-    source: "claude-oauth",
-    tier: "frontier",
-    model_id: "claude-opus-4",
-    state: "assigned",
-    excluded_reason: null,
-    note: "最上位は opus",
-    updated_at: "2026-10-06T00:00:00Z",
-    updated_by: "web",
-  },
-  {
-    source: "claude-oauth",
-    tier: "cheap",
-    model_id: "claude-haiku-3",
-    state: "excluded",
-    excluded_reason: "catalog:unavailable",
-    note: null,
-    updated_at: "2026-10-05T00:00:00Z",
-    updated_by: "web",
-  },
-];
-const ASSIGNMENT_CONFIG_SLOTS = {
-  "claude-oauth": { standard: "claude-sonnet-4" },
-  "openai-compatible:qwen": { cheap: "qwen3-coder" },
-};
-const ASSIGNMENT_SOURCES = ["claude-oauth", "opencode-go", "openai-compatible:qwen"];
-const ASSIGNMENT_TIERS = ["frontier", "standard", "cheap"];
-
-function assignmentTiersFor(ac, source, modelId) {
-  return ac.assignments
-    .filter((a) => a.source === source && a.model_id === modelId && a.state === "assigned")
-    .map((a) => a.tier);
-}
-
-function assignmentsView(ac) {
-  const effective = [];
-  for (const source of ASSIGNMENT_SOURCES)
-    for (const tier of ASSIGNMENT_TIERS) {
-      const members = ac.assignments.filter((x) => x.source === source && x.tier === tier);
-      const configured = ac.managedRoles?.includes(tier) ? null : ASSIGNMENT_CONFIG_SLOTS[source]?.[tier];
-      const values = members.length ? members : [{ model_id: configured ?? null, priority: 0 }];
-      for (const a of values) {
-        const row = ac.models.items.find((m) => m.source === source && m.model_id === a.model_id);
-        effective.push({
-          source,
-          tier,
-          model_id: a.model_id,
-          priority: a.priority ?? 0,
-          origin: members.length ? "assignment" : configured ? "config" : null,
-          excluded_reason: a.excluded_reason ?? null,
-          providers: a.model_id && source !== "openai-compatible:qwen" ? [`${source}-main`] : [],
-          proxy: source === "openai-compatible:qwen" && tier === "cheap",
-          available: row?.available ?? null,
-          last_seen: row?.last_seen ?? null,
-        });
-      }
-    }
-  return { items: ac.assignments.map((a) => ({ priority: 0, ...a })), effective };
-}
-
-function assignmentImpact(ac, source, tier, modelId) {
-  const current = assignmentsView(ac).effective.find((s) => s.source === source && s.tier === tier);
-  const before = current?.model_id ?? null;
-  const changes = [{ kind: "provider", id: `${source}-main`, tier, before, after: modelId, excluded_reason: null }];
-  if (source === "claude-oauth")
-    changes.push({ kind: "proxy", id: "claude", tier, before, after: modelId, excluded_reason: null });
-  return { changes };
-}
 
 // ADR 2026-10-06-opencode-go-and-model-catalog D1/D2/D5: GET /llm/models。source ごとの model・発見の結果・人の上書き。
 export const modelCatalogFixture = {
@@ -2460,6 +2393,18 @@ export function createBrowserBackend({
     model: "sonnet",
     started_at: "2026-10-04T08:30:00Z",
     finished_at: r.finished_at,
+    // R0 は解決済みの選択、R1 と T2 の R2 は旧 run（記録なし）。
+    selection:
+      r.run_id === "R0"
+        ? {
+            status: "selected",
+            harness_id: "claude-code",
+            source_id: "claude-oauth",
+            model_id: "claude-opus",
+            account_id: "main",
+            basis: null,
+          }
+        : { status: "legacy_unresolved" },
     outcome: r.outcome,
     progress: 0,
     artifacts: 0,
@@ -2865,6 +2810,7 @@ export function createFakeDaemon({
   if (!new Set(["default", "rich"]).has(profile)) throw new Error(`unknown fixture profile: ${profile}`);
   fixtures = {
     ...knowledgeFixtures,
+    ...cronFixtures,
     ...defaultFixtures,
     "/api/v1/llm/routing/catalog": routingCatalogFixture,
     "/api/v1/tasks/T1/routing": routingAuditFixture,
@@ -3056,76 +3002,15 @@ export function createFakeDaemon({
       });
       return;
     }
-    // ops: daemon/providers (P4-12)
-    if (pathname === "/api/v1/replay" || pathname.startsWith("/api/v1/providers") || pathname === "/api/v1/reload") {
-      if (!server.opsProviders)
-        server.opsProviders = {
-          items: [
-            {
-              id: "claude-main",
-              adapter: "claude-code",
-              concurrency: 2,
-              env_keys: [],
-              tiers: ["standard"],
-              model: "sonnet",
-              stats: {
-                by_day: [],
-                done: 0,
-                error: 0,
-                input_tokens: 0,
-                lease_expired: 0,
-                output_tokens: 0,
-                question: 0,
-                requeue: 0,
-                runs: 0,
-              },
-            },
-          ],
-        };
-      const ops = server.opsProviders;
-      const chunks = [];
-      req.on("data", (chunk) => chunks.push(chunk));
+    // ops: replay（P4-12）
+    if (pathname === "/api/v1/replay" && req.method === "POST") {
+      req.resume();
       req.on("end", () => {
-        const text = Buffer.concat(chunks).toString("utf8");
-        record.body = text;
-        const json = (status, body) => {
-          res.writeHead(status, { "content-type": "application/json" });
-          res.end(JSON.stringify(body));
-        };
-        let input = {};
-        try {
-          input = text ? JSON.parse(text) : {};
-        } catch {
-          return json(400, { error: "bad json" });
-        }
-        const parts = pathname.replace("/api/v1/", "").split("/");
-        if (pathname === "/api/v1/replay" && req.method === "POST") return json(200, { mismatches: [], tasks: 3 });
-        if (pathname === "/api/v1/reload" && req.method === "POST") return json(200, { reloaded: true });
-        if (parts[0] !== "providers") return json(404, { error: "not found" });
-        const found = ops.items.find((item) => item.id === parts[1]);
-        if (parts.length === 1 && req.method === "GET") return json(200, { items: ops.items });
-        if (parts.length === 1 && req.method === "POST") {
-          if (!input.id || ops.items.some((item) => item.id === input.id))
-            return json(422, { detail: "id が不正か重複しています" });
-          const created = { concurrency: 1, env_keys: [], tiers: [], stats: ops.items[0]?.stats, ...input };
-          ops.items.push(created);
-          return json(200, created);
-        }
-        if (!found) return json(404, { error: "not found" });
-        if (parts.length === 2 && req.method === "PATCH") return json(200, Object.assign(found, input));
-        if (parts.length === 2 && req.method === "DELETE") {
-          ops.items.splice(ops.items.indexOf(found), 1);
-          return json(200, {});
-        }
-        if (parts[2] === "check" && req.method === "POST") {
-          found.last_check = { at: "2026-09-30T00:00:00Z", result: "ok", detail: null };
-          return json(200, { checked_at: "2026-09-30T00:00:00Z", result: "ok", detail: null });
-        }
-        return json(404, { error: "not found" });
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ mismatches: [], tasks: 3 }));
       });
       return;
     }
-    // end ops: daemon/providers (P4-12)
     if (pathname === "/events" || pathname === "/api/v1/events" || pathname === "/api/v1/stream") {
       record.query = new URL(req.url ?? "/", "http://x").search;
       record.lastEventId = req.headers["last-event-id"] ?? null;
@@ -3244,13 +3129,17 @@ export function createFakeDaemon({
     // accounts/clusters (P4-13..15)
     // accounts・secrets・llm sources・mcp clients・clusters を状態付きで返す。ログイン・接続の途中状態（login_pending /
     // connect_pending）はサーバが持ち、GET で返す。secret の値は保存せず fingerprint だけ持つ。
-    if (/^\/api\/v1\/(accounts|secrets|llm\/sources|llm\/models|mcp\/clients|clusters)(\/|$)/.test(pathname)) {
+    if (
+      /^\/api\/v1\/(llm\/accounts|secrets|llm\/sources|llm\/models|harnesses|mcp\/clients|clusters)(\/|$)/.test(
+        pathname,
+      )
+    ) {
       if (!server.fakeAc) {
         server.fakeAc = {
           accounts: [
             {
-              id: "main",
-              adapter: "claude-code",
+              source_id: "claude_oauth",
+              account_id: "main",
               logged_in: true,
               login_pending: false,
               usage: {
@@ -3263,8 +3152,8 @@ export function createFakeDaemon({
               },
             },
             {
-              id: "go-main",
-              adapter: "opencode-go",
+              source_id: "opencode_go",
+              account_id: "go-main",
               logged_in: true,
               login_pending: false,
               usage: {
@@ -3278,10 +3167,9 @@ export function createFakeDaemon({
             },
           ],
           // アカウントを持たない行の暗黙アカウント（LLM source 単位。ADR 2026-10-08-account-concurrency-limits §(e)）。
-          implicit: [{ id: "openai_compatible:qwen", providers: ["qwen-local"] }],
+          implicit: [{ id: "openai_compatible:qwen" }],
           limits: {},
           models: structuredClone(modelCatalogFixture),
-          assignments: structuredClone(modelAssignmentsFixture),
           secrets: [],
           clusters: [
             {
@@ -3312,8 +3200,8 @@ export function createFakeDaemon({
         }
         const parts = pathname.replace("/api/v1/", "").split("/");
         const defaultMax = 1;
-        const limitView = (adapter, id) => {
-          const saved = ac.limits[`${adapter}/${id}`] ?? null;
+        const limitView = (source, account) => {
+          const saved = ac.limits[`${source}/${account}`] ?? null;
           return {
             max_runs: saved,
             effective_max_runs: saved ?? defaultMax,
@@ -3321,22 +3209,21 @@ export function createFakeDaemon({
           };
         };
         const implicitView = (a) => ({
-          adapter: "implicit",
-          id: a.id,
+          source_id: a.id,
+          account_id: a.id,
           dir: null,
           logged_in: true,
           login_pending: false,
           in_use: 0,
           implicit: true,
-          providers: a.providers ?? [],
           stats: { done: 0, error: 0, input_tokens: 0, output_tokens: 0, runs: 0 },
-          ...limitView("implicit", a.id),
+          ...limitView(a.id, a.id),
         });
         const view = (a) => ({
-          dir: `/accounts/${a.id}`,
+          dir: `/accounts/${a.account_id}`,
           in_use: 0,
           implicit: false,
-          ...limitView(a.adapter ?? "claude-code", a.id),
+          ...limitView(a.source_id, a.account_id),
           stats: {
             done: 0,
             error: 0,
@@ -3350,47 +3237,47 @@ export function createFakeDaemon({
           },
           ...a,
         });
-        if (parts[0] === "accounts") {
-          // PATCH /accounts/{adapter}/{id}: {max_runs: 1..=32 | null}（gui-api.md §3.29a）。
-          if (parts.length === 3 && req.method === "PATCH") {
-            const [, adapter, id] = parts;
-            const real = ac.accounts.find((a) => (a.adapter ?? "claude-code") === adapter && a.id === id);
-            const implicit = adapter === "implicit" ? ac.implicit.find((a) => a.id === id) : undefined;
+        // 新路（ADR 2026-10-11 llm-source-harness-selection）: GET /llm/accounts・
+        // /llm/sources/{source_id}/accounts[/{account_id}[/check|/login|/login/code]]。暗黙アカウントの account_id は source_id。
+        if (parts[0] === "llm" && parts[1] === "accounts" && parts.length === 2 && req.method === "GET")
+          return json(200, {
+            items: [...ac.accounts.map(view), ...ac.implicit.map(implicitView)],
+            max_runs_per_account: defaultMax,
+            roots: {},
+          });
+        if (parts[0] === "llm" && parts[1] === "sources" && parts[3] === "accounts") {
+          const sourceId = parts[2];
+          const accountId = parts[4];
+          const sub = parts.slice(5).join("/");
+          if (parts.length === 4 && req.method === "POST") {
+            if (!input.id || ac.accounts.some((a) => a.source_id === sourceId && a.account_id === input.id))
+              return json(422, { detail: "id が不正か重複しています" });
+            const created = { source_id: sourceId, account_id: input.id, logged_in: false, login_pending: false };
+            ac.accounts.push(created);
+            return json(200, view(created));
+          }
+          const real = ac.accounts.find((a) => a.source_id === sourceId && a.account_id === accountId);
+          const implicit = ac.implicit.find((a) => a.id === sourceId && accountId === sourceId);
+          if (parts.length === 5 && req.method === "PATCH") {
+            // PATCH /llm/sources/{s}/accounts/{a}: {max_runs: 1..=32 | null}（gui-api.md §3.29a）。
             if (!real && !implicit) return json(404, { error: "account_not_found", message: "account not found" });
             const m = input.max_runs;
             if (!("max_runs" in input) || (m !== null && !(Number.isInteger(m) && m >= 1 && m <= 32)))
               return json(400, { error: "bad_request", message: "max_runs は 1..=32 の整数か null" });
-            if (m === null) delete ac.limits[`${adapter}/${id}`];
-            else ac.limits[`${adapter}/${id}`] = m;
+            if (m === null) delete ac.limits[`${sourceId}/${accountId}`];
+            else ac.limits[`${sourceId}/${accountId}`] = m;
             return json(200, real ? view(real) : implicitView(implicit));
           }
-          const acc = ac.accounts.find((a) => a.id === parts[1]);
-          if (parts.length === 1 && req.method === "GET")
-            return json(200, {
-              items: [...ac.accounts.map(view), ...ac.implicit.map(implicitView)],
-              max_runs_per_account: defaultMax,
-            });
-          if (parts.length === 1 && req.method === "POST") {
-            if (!input.id || ac.accounts.some((a) => a.id === input.id))
-              return json(422, { detail: "id が不正か重複しています" });
-            const created = {
-              id: input.id,
-              adapter: input.adapter ?? "claude-code",
-              logged_in: false,
-              login_pending: false,
-            };
-            ac.accounts.push(created);
-            return json(200, view(created));
-          }
-          if (!acc) return json(404, { error: "not found" });
-          if (parts.length === 2 && req.method === "DELETE") {
-            ac.accounts.splice(ac.accounts.indexOf(acc), 1);
+          if (!real && !implicit) return json(404, { error: "not found" });
+          if (implicit) return json(409, { detail: `implicit account of source ${sourceId} cannot be changed` });
+          if (parts.length === 5 && req.method === "DELETE") {
+            ac.accounts.splice(ac.accounts.indexOf(real), 1);
             return json(200, {});
           }
-          if (parts[2] === "check" && req.method === "POST")
+          if (sub === "check" && req.method === "POST")
             return json(200, { checked_at: "2026-09-30T00:00:00Z", result: "ok" });
-          if (parts[2] === "login" && parts.length === 3 && req.method === "POST") {
-            acc.login_pending = true;
+          if (sub === "login" && req.method === "POST") {
+            real.login_pending = true;
             return json(200, {
               kind: "paste_code",
               url: "https://login.example/auth",
@@ -3398,14 +3285,14 @@ export function createFakeDaemon({
               user_code: "ABCD-1234",
             });
           }
-          if (parts[2] === "login" && parts.length === 3 && req.method === "DELETE") {
-            acc.login_pending = false;
+          if (sub === "login" && req.method === "DELETE") {
+            real.login_pending = false;
             return json(200, {});
           }
-          if (parts[2] === "login" && parts[3] === "code" && req.method === "POST") {
+          if (sub === "login/code" && req.method === "POST") {
             if (!input.code) return json(422, { detail: "code が空です" });
-            acc.login_pending = false;
-            acc.logged_in = true;
+            real.login_pending = false;
+            real.logged_in = true;
             return json(200, { result: "ok" });
           }
         }
@@ -3430,92 +3317,7 @@ export function createFakeDaemon({
         }
         if (parts[0] === "llm" && parts[1] === "models") {
           const nowIso = new Date().toISOString();
-          if (parts.length === 2 && req.method === "GET")
-            return json(200, {
-              ...ac.models,
-              items: ac.models.items.map((m) => ({
-                ...m,
-                assigned_tiers: assignmentTiersFor(ac, m.source, m.model_id),
-              })),
-            });
-          if (parts[2] === "assignments") {
-            const asg = ac.assignments;
-            if (parts.length === 3 && req.method === "GET") return json(200, assignmentsView(ac));
-            if (parts.length === 4 && parts[3] === "preview" && req.method === "POST")
-              return json(200, { impact: assignmentImpact(ac, input.source, input.tier, input.model_id ?? null) });
-            if (parts[3] === "roles" && ["PUT", "POST"].includes(req.method)) {
-              const tier = parts[4];
-              const before = assignmentsView(ac)
-                .effective.filter((s) => s.tier === tier && s.model_id)
-                .map(({ source, model_id, priority }) => ({ source, model_id, priority }));
-              const after = input.members;
-              const impact = {
-                changes: ASSIGNMENT_SOURCES.map((source) => ({
-                  kind: "provider",
-                  id: `${source}-main`,
-                  tier,
-                  before:
-                    before
-                      .filter((m) => m.source === source)
-                      .map((m) => m.model_id)
-                      .join(", ") || null,
-                  after:
-                    after
-                      .filter((m) => m.source === source)
-                      .map((m) => m.model_id)
-                      .join(", ") || null,
-                  excluded_reason: null,
-                })),
-              };
-              if (req.method === "PUT") {
-                ac.assignments = ac.assignments.filter((a) => a.tier !== tier);
-                ac.assignments.push(
-                  ...after.map((m) => ({
-                    ...m,
-                    tier,
-                    state: "assigned",
-                    excluded_reason: null,
-                    note: null,
-                    updated_at: nowIso,
-                    updated_by: "web",
-                  })),
-                );
-                ac.managedRoles = [...new Set([...(ac.managedRoles ?? []), tier])];
-              }
-              return json(200, { before, after, impact });
-            }
-            if (parts.length === 5) {
-              const source = decodeURIComponent(parts[3]);
-              const tier = decodeURIComponent(parts[4]);
-              if (!["frontier", "standard", "cheap"].includes(tier)) return json(400, { error: "bad tier" });
-              const at = asg.findIndex((a) => a.source === source && a.tier === tier);
-              if (req.method === "PUT") {
-                if (!ac.models.items.some((m) => m.source === source && m.model_id === input.model_id))
-                  return json(400, { error: `model ${input.model_id} is not in the catalog` });
-                const impact = assignmentImpact(ac, source, tier, input.model_id);
-                const item = {
-                  source,
-                  tier,
-                  model_id: input.model_id,
-                  state: "assigned",
-                  excluded_reason: null,
-                  note: input.note ?? null,
-                  updated_at: nowIso,
-                  updated_by: "web",
-                };
-                if (at >= 0) asg[at] = item;
-                else asg.push(item);
-                return json(200, { item, impact });
-              }
-              if (req.method === "DELETE") {
-                if (at < 0) return json(404, { error: "not found" });
-                asg.splice(at, 1);
-                res.writeHead(204);
-                return res.end();
-              }
-            }
-            return json(404, { error: "not found" });
-          }
+          if (parts.length === 2 && req.method === "GET") return json(200, ac.models);
           if (parts.length === 3 && parts[2] === "discover" && req.method === "POST") {
             const sources = input.source ? [input.source] : ac.models.last_discovery.map((d) => d.source);
             const results = sources.map((source) => {
@@ -3548,7 +3350,42 @@ export function createFakeDaemon({
           }
           return json(404, { error: "not found" });
         }
+        if (parts[0] === "llm" && parts[1] === "sources" && parts.length === 3 && req.method === "GET") {
+          const found = llmSourcesFixture.sources.find((source) => source.id === decodeURIComponent(parts[2]));
+          return found ? json(200, found) : json(404, { error: "not found" });
+        }
         if (parts[0] === "llm" && req.method === "GET") return json(200, llmSourcesFixture);
+        if (parts[0] === "harnesses" && req.method === "GET")
+          return json(200, [
+            {
+              id: "claude-code",
+              kind: "cli",
+              api_formats: ["anthropic"],
+              source_kinds: ["claude-oauth"],
+              capabilities: ["coding", "repo"],
+              execution_class_defaults: ["coding"],
+              route_defaults: [{ source_id: "claude_oauth", model_id: "claude-opus" }],
+              rules: [
+                {
+                  genre: "coding",
+                  role: null,
+                  execution_class: "coding",
+                  required_capabilities: ["repo"],
+                  requires_repo: true,
+                },
+              ],
+            },
+            {
+              id: "codex",
+              kind: "cli",
+              api_formats: ["openai"],
+              source_kinds: ["codex-oauth"],
+              capabilities: ["coding"],
+              execution_class_defaults: [],
+              route_defaults: [],
+              rules: [],
+            },
+          ]);
         if (parts[0] === "mcp" && parts.length === 2 && req.method === "GET")
           return json(200, {
             items: [{ id: "c1", name: "editor", created_at: "2026-09-01T00:00:00Z", scopes: ["tasks:read"] }],

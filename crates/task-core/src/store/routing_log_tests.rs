@@ -34,7 +34,7 @@ fn routing_log_correlation_migration_is_additive() {
         conn.execute(
             "INSERT INTO llm_proxy_requests (id, ts, source, account, requested_model, \
              upstream_model, latency_ms, status) \
-             VALUES ('req-old', 1700000000, 'claude-oauth', 'acc-1', 'celeris/cheap', 'qwen', 120, 'ok')",
+             VALUES ('req-old', 1700000000, 'qwen', 'acc-1', 'qwen/qwen3.8-27b', 'qwen3.8-27b', 120, 'ok')",
             [],
         )
         .unwrap();
@@ -43,7 +43,7 @@ fn routing_log_correlation_migration_is_additive() {
     // 旧版 DB を開く（ここで 0048 が当たる）。
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 69);
+    assert_eq!(SCHEMA_VERSION, 72);
 
     // 既存の行と既存の欄は残る。
     {
@@ -76,11 +76,11 @@ fn routing_log_correlation_migration_is_additive() {
             .unwrap();
         assert_eq!(
             (ts, source.as_str(), account.as_str(), requested.as_str()),
-            (1700000000, "claude-oauth", "acc-1", "celeris/cheap")
+            (1700000000, "qwen", "acc-1", "qwen/qwen3.8-27b")
         );
         assert_eq!(
             (upstream.as_str(), latency, status.as_str()),
-            ("qwen", 120, "ok")
+            ("qwen3.8-27b", 120, "ok")
         );
 
         // 新欄は NULL のまま。

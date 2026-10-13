@@ -16,6 +16,7 @@ const HOST: &str = "celeris-localhost";
 fn task(dir: &std::path::Path) -> Task {
     let now = OffsetDateTime::now_utc();
     Task {
+        harness_id: None,
         requirements: Default::default(),
         tree: None,
         paused_at: None,
@@ -41,7 +42,6 @@ fn task(dir: &std::path::Path) -> Task {
         priority: 0,
         worker_hint: WorkerHint {
             tier: Tier::Standard,
-            adapter: None,
         },
         workspace: WorkspaceSpec::Local {
             path: dir.to_path_buf(),

@@ -52,7 +52,7 @@ tasks: [01M3XTCNKMQBCHKSZ7Y1GF6ZM4]
 | 型 | `corepack pnpm@12.6.0 -C web typecheck` | `tsc -b` |
 | lint / format | `corepack pnpm@12.6.0 -C web lint` | `biome check .` |
 | 単体テスト | `corepack pnpm@12.6.0 -C web test` | vitest と `server/*.test.mjs` |
-| 境界 | `corepack pnpm@12.6.0 -C web check:boundaries` | `gui/` の import 禁止、route の行数上限など |
+| 境界 | `corepack pnpm@12.6.0 -C web check:boundaries` | server の client import 禁止、route の行数上限など |
 | parity | `corepack pnpm@12.6.0 -C web check:parity` | parity 台帳の完了行と commit の対応 |
 | secret | `corepack pnpm@12.6.0 -C web check:secrets` | daemon の token が build 出力・HTML・応答・ログに出ないこと（先に `build`） |
 | build | `corepack pnpm@12.6.0 -C web build` | `vite build` |

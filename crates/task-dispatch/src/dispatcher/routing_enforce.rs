@@ -5,24 +5,23 @@
 //! - `mode = enforce`（heuristic のみ・既定 off）の dispatcher 経路: 候補 allowlist を作り、task/組織固有の
 //!   制約を proxy に渡せない経路は除外理由を残して外す。quota の枯渇・圧迫は lane を下げず、同じ lane の
 //!   別 source を先に試し、無ければ defer する（ADR §7 の「暗黙降格の廃止」）。
-//! - legacy は従来どおり `select_tier` の結果。cheap-local-first（`prefer_local`）の前段は変えない。
+//! - `route_select` が source と model を選ぶ。cheap-local-first（`prefer_local`）の前段は変えない。
 
 use super::*;
 use crate::accounts::AccountState;
 use task_core::accounts::{RateLimitObservation, RateWindow};
 use task_core::model_router::{
-    cost::exclusion_reasons,
     policy::{Constraints, FreshnessPolicy, RoutingMode},
     profiles::{QuotaWindow, SourceState},
-    trace::{CandidateTrace, ExcludedReason as TraceExcludedReason, RoutingTraceV1},
 };
 
 /// 観測の鮮度（`accounts::measured_remaining` と同じ 300 秒）。
 const OBSERVATION_TTL_SECS: i64 = 300;
 
-/// dispatcher 側の model routing 設定。既定は legacy（enforce は人の opt-in）。
+/// dispatcher 側の model routing 設定（enforce は人の opt-in）。
 #[derive(Debug, Clone, PartialEq)]
 pub struct DispatchRoutingSettings {
+    pub configured: bool,
     pub mode: RoutingMode,
     /// task/組織固有の追加制約。既定（空）なら制約なし。
     pub constraints: Constraints,
@@ -39,7 +38,8 @@ pub struct DispatchRoutingSettings {
 impl Default for DispatchRoutingSettings {
     fn default() -> Self {
         Self {
-            mode: RoutingMode::Legacy,
+            configured: false,
+            mode: RoutingMode::Shadow,
             constraints: Constraints::default(),
             freshness: FreshnessPolicy::default(),
             window_reserves: std::collections::BTreeMap::new(),
@@ -266,61 +266,8 @@ pub fn constraint_exclusions(c: &Constraints, src: &EnforceSource<'_>) -> Vec<&'
     reasons
 }
 
-fn trace_reason(code: &str) -> TraceExcludedReason {
-    match code {
-        "context_transport_unsupported" => TraceExcludedReason::Constraint {
-            name: "context_transport".into(),
-        },
-        "quota_low_for_lane" => TraceExcludedReason::QuotaExhausted,
-        other => TraceExcludedReason::from_code(other),
-    }
-}
-
-/// 1 回の enforce 選択の作業状態（dispatch の 1 回で捨てる。真実は events に残す trace）。
-#[derive(Debug, Clone, Default)]
-pub(super) struct EnforceRound {
-    /// 選択から外す provider（制約・quota）。
-    pub excluded: std::collections::HashSet<ProviderId>,
-    /// 設定順の候補 trace（除外理由つき）。
-    pub candidates: Vec<CandidateTrace>,
-    /// 選んだ source の観測時刻。
-    pub observed_at: Option<String>,
-    /// 付記「モデルごとの複数役割」: 選んだ provider の役割メンバーの順位づけ（メンバーが無ければ既定）。
-    pub member_ranking: super::routing_members::MemberRanking,
-}
-
-impl EnforceRound {
-    fn exclude(&mut self, provider: &str, codes: &[&str], detail: Option<String>) {
-        self.excluded.insert(provider.to_string());
-        // 候補の identity はモデルごと（`<provider>/model:<id>`）なので、provider で引く。
-        for c in self
-            .candidates
-            .iter_mut()
-            .filter(|c| c.eligible_provider_ids.iter().any(|p| p == provider))
-        {
-            c.excluded_reasons
-                .extend(codes.iter().map(|s| (*s).to_string()));
-            if let Some(d) = &detail {
-                c.excluded_reasons.push(format!("detail:{d}"));
-            }
-            c.excluded_reason = codes.first().map(|code| trace_reason(code));
-            c.normalize();
-        }
-    }
-
-    /// 人と log に出す除外理由の要約（defer の理由）。
-    pub fn summary(&self) -> String {
-        self.candidates
-            .iter()
-            .filter(|c| !c.excluded_reasons.is_empty())
-            .map(|c| format!("{}: {}", c.deployment_id, c.excluded_reasons.join(",")))
-            .collect::<Vec<_>>()
-            .join("; ")
-    }
-}
-
 impl Dispatcher {
-    /// dispatcher の model routing 設定（既定 legacy）。
+    /// dispatcher の model routing 設定。
     pub fn set_dispatch_routing(&mut self, settings: DispatchRoutingSettings) {
         self.dispatch_routing = settings;
     }
@@ -332,204 +279,6 @@ impl Dispatcher {
     /// self-host の queue / GPU load の取り込み口（観測は揮発。保存しない）。
     pub fn set_self_host_load(&mut self, provider: impl Into<ProviderId>, load: SelfHostLoad) {
         self.self_host_loads.insert(provider.into(), load);
-    }
-
-    pub(super) fn enforce_active(&self) -> bool {
-        self.dispatch_routing.mode == RoutingMode::Enforce
-    }
-
-    /// provider（pool なら選んだアカウント）の `SourceState` を既存の状態から組む。
-    pub(super) fn source_state_of(
-        &self,
-        provider: &str,
-        account: Option<&(AccountAdapter, String)>,
-        now: Instant,
-    ) -> SourceState {
-        let now_unix = (self.now_unix_fn)();
-        match account {
-            Some((adapter, id)) => {
-                let in_use = u32::try_from(self.account_in_use(*adapter, id)).ok();
-                let book = self.account_book(*adapter);
-                let guard = book
-                    .as_ref()
-                    .map(|b| b.lock().unwrap_or_else(|e| e.into_inner()));
-                let state = guard.as_ref().and_then(|g| g.state(id));
-                let mut s = source_state_from_account(provider, id, state, in_use, now_unix);
-                for w in &mut s.quota_windows {
-                    w.reserve_value_usd = self
-                        .dispatch_routing
-                        .window_reserves
-                        .get(&w.window_id)
-                        .copied();
-                }
-                s
-            }
-            None => {
-                let cooldown_until = self
-                    .policy
-                    .cooldowns(now)
-                    .into_iter()
-                    .find(|c| c.provider == provider)
-                    .map(|c| {
-                        now_unix
-                            + i64::try_from(c.until.saturating_duration_since(now).as_secs())
-                                .unwrap_or(i64::MAX / 2)
-                    });
-                let provider_id: ProviderId = provider.to_string();
-                let in_use =
-                    self.provider_in_use(&provider_id) + self.provider_in_use_cos(&provider_id);
-                // reachability は local の health probe（前段）が持つ。ここでは Unknown のまま。
-                source_state_for_provider(
-                    provider,
-                    cooldown_until,
-                    u32::try_from(in_use).ok(),
-                    self.self_host_loads.get(provider),
-                    now_unix,
-                )
-            }
-        }
-    }
-
-    /// enforce の候補 allowlist: 設定順の候補から、制約を満たさない（proxy に渡せない経路を含む）行を
-    /// 除外理由つきで外す。
-    pub(super) fn enforce_round(&self, hint: &task_core::WorkerHint) -> EnforceRound {
-        let mut round = EnforceRound::default();
-        for p in self.legacy_provider_profiles(hint) {
-            let d = &p.deployment;
-            round.candidates.push(CandidateTrace {
-                model_profile_id: p.model.id.clone(),
-                deployment_id: d.id.clone(),
-                eligible_provider_ids: vec![p.provider_id.clone()],
-                config_order: Some(d.config_order),
-                ..Default::default()
-            });
-            let codes = constraint_exclusions(
-                &self.dispatch_routing.constraints,
-                &EnforceSource {
-                    provider: &d.id,
-                    source_ref: &d.source_ref,
-                    proxy_routed: p.proxy_routed,
-                    external_network: d.external_network,
-                    retains_data: d.retains_data,
-                    region: d.region.as_deref(),
-                },
-            );
-            if !codes.is_empty() {
-                round.exclude(&d.id, &codes, None);
-            }
-        }
-        round
-    }
-
-    /// 選んだ source の状態での除外（cooldown・rate limit・新鮮な枯渇、lane を保てない残量）。
-    /// Ok は lane を保った理由、Err は除外の理由コードと詳細。
-    pub(super) fn enforce_check_source(
-        &self,
-        lane: Tier,
-        state: &SourceState,
-    ) -> Result<String, (Vec<&'static str>, Option<String>)> {
-        let now = OffsetDateTime::from_unix_timestamp((self.now_unix_fn)())
-            .unwrap_or(OffsetDateTime::UNIX_EPOCH);
-        let codes = exclusion_reasons(state, now, self.dispatch_routing.freshness)
-            .map_err(|e| (vec!["invalid_estimate"], Some(e.to_string())))?;
-        if !codes.is_empty() {
-            return Err((codes, None));
-        }
-        enforce_quota_verdict(lane, state.quota_remaining)
-            .map_err(|reason| (vec!["quota_low_for_lane"], Some(reason)))
-    }
-
-    pub(super) fn enforce_exclude(
-        round: &mut EnforceRound,
-        provider: &str,
-        codes: &[&str],
-        detail: Option<String>,
-    ) {
-        round.exclude(provider, codes, detail);
-    }
-
-    /// enforce で選んだ run の optimizer trace（mode=enforce・候補の除外理由・最終 source/account）。
-    pub(super) fn enforce_optimizer_trace(
-        &self,
-        hint: &task_core::WorkerHint,
-        run_id: &str,
-        round: &EnforceRound,
-        selected: &str,
-        model: &str,
-        account: Option<&str>,
-    ) -> RoutingTraceV1 {
-        let ranking = &round.member_ranking;
-        // 選んだ provider のメンバーは kernel の順、その他は設定順（除外は外す）。
-        let mut fallback_order: Vec<String> = ranking
-            .order
-            .iter()
-            .filter(|id| {
-                round
-                    .candidates
-                    .iter()
-                    .any(|c| c.deployment_id == **id && c.excluded_reasons.is_empty())
-            })
-            .cloned()
-            .collect();
-        fallback_order.extend(
-            round
-                .candidates
-                .iter()
-                .filter(|c| {
-                    c.excluded_reasons.is_empty() && !ranking.order.contains(&c.deployment_id)
-                })
-                .map(|c| c.deployment_id.clone()),
-        );
-        let mut candidates = round.candidates.clone();
-        for c in &mut candidates {
-            if let Some(t) = ranking.trace_for(&c.deployment_id) {
-                c.score = t.score;
-                c.quality = t.quality.clone();
-                c.score_breakdown = t.score_breakdown.clone();
-            }
-        }
-        let mut reasons = vec![
-            "enforce: allowlist by constraints; quota excludes the source, never the lane"
-                .to_string(),
-        ];
-        if ranking.chosen.is_some() {
-            reasons.push(format!(
-                "role members: {} ranked by {}; priority order when quality is unknown",
-                ranking.order.len(),
-                ranking.ranked_by
-            ));
-        }
-        RoutingTraceV1 {
-            decision_id: run_id.into(),
-            parent_decision_id: None,
-            task_id: None,
-            work_unit_id: None,
-            run_id: Some(run_id.into()),
-            request_id: None,
-            stage: "dispatcher".into(),
-            mode: RoutingMode::Enforce,
-            policy_version: "dispatch-enforce-heuristic-v1".into(),
-            catalog_version: "providers.tier_models".into(),
-            feature_version: "legacy".into(),
-            estimator_version: if ranking.ranked_by
-                == super::routing_members::MEMBER_RANKING_ESTIMATOR
-            {
-                super::routing_members::MEMBER_RANKING_ESTIMATOR.into()
-            } else {
-                "heuristic".into()
-            },
-            snapshot_id: "account-book+provider-state".into(),
-            observed_at: round.observed_at.clone(),
-            requested_lane: hint.tier,
-            selected_lane: Some(hint.tier),
-            candidates,
-            selected: Some(selected.into()),
-            fallback_order,
-            reasons,
-            source_id: Some(selected.into()),
-            model: Some(model.into()),
-            account_id: account.map(str::to_owned),
-        }
     }
 }
 

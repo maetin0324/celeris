@@ -1,11 +1,11 @@
 //! llm-proxy: celeris が張るローカルの OpenAI 互換プロキシ（ADR-0053 D1/D2。Phase 65）。
 mod auth;
+pub mod catalog;
 pub mod config;
 pub mod credentials;
 pub mod estimator_shadow;
 pub mod estimator_sidecar;
 pub mod fallback;
-pub mod legacy_catalog;
 pub mod log;
 pub mod naming;
 mod neterr;

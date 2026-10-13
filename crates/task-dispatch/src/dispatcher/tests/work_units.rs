@@ -208,7 +208,6 @@ async fn a_failed_work_unit_triggers_a_replan_instead_of_failing_the_task() {
     ]);
     let adapter = Arc::new(PlannerScriptAdapter::new(vec![Some(replanned)], wu_script));
     let mut d = dispatcher(store.clone(), adapter.clone(), 1);
-    d.config.execution.planner.adapter = "instant".to_string();
     let report = run_until_idle(&mut d, 400).await;
     assert!(report.idle, "{report:?}");
 
@@ -342,7 +341,6 @@ async fn replan_delta_carries_done_units_without_restating_them() {
     .to_string();
     let adapter = Arc::new(PlannerScriptAdapter::new(vec![Some(delta)], wu_script));
     let mut d = dispatcher(store.clone(), adapter.clone(), 1);
-    d.config.execution.planner.adapter = "instant".to_string();
     let report = run_until_idle(&mut d, 400).await;
     assert!(report.idle, "{report:?}");
 
@@ -439,7 +437,6 @@ async fn a_plan_issue_checkpoint_triggers_a_replan_and_v2_is_adopted() {
     ]);
     let adapter = Arc::new(PlannerScriptAdapter::new(vec![Some(replanned)], wu_script));
     let mut d = dispatcher(store.clone(), adapter.clone(), 1);
-    d.config.execution.planner.adapter = "instant".to_string();
     let report = run_until_idle(&mut d, 400).await;
     assert!(report.idle, "{report:?}");
 
@@ -557,7 +554,6 @@ async fn exceeding_the_replan_limit_blocks_with_a_question_that_a_human_can_answ
     ]);
     let adapter = Arc::new(PlannerScriptAdapter::new(vec![Some(replanned)], wu_script));
     let mut d = dispatcher(store.clone(), adapter.clone(), 1);
-    d.config.execution.planner.adapter = "instant".to_string();
     d.config.execution.max_continuations_per_work_unit = 100; // "limit" は進捗なしだけで起こす
     d.config.execution.no_progress_limit = 2;
     d.config.execution.max_replans = 1;
@@ -1387,7 +1383,6 @@ async fn phase_gate_continue_resumes_the_next_phase() {
 #[tokio::test]
 async fn phase_gate_replan_requires_a_note() {
     let (store, mut d, _adapter, task, _repo, _root) = paused_after_design().await;
-    d.config.execution.planner.adapter = "instant".to_string();
     for note in [None, Some(String::new()), Some("  ".to_string())] {
         let err = task_ops::phase_gate::phase_gate(
             store.as_ref(),
@@ -1801,7 +1796,6 @@ async fn a_pending_human_replan_runs_the_planner_before_retrying_the_integration
     );
     let mut d = parallel_dispatcher(store.clone(), adapter.clone(), root.path(), 3, 3, 3);
     d.config.execution.max_replans = 0;
-    d.config.execution.planner.adapter = "instant".to_string();
     let s = store.clone();
     let id = task.id;
     assert!(
@@ -1940,7 +1934,6 @@ async fn a_replan_reusing_a_removed_stage_key_is_rejected_as_an_invalid_plan() {
             .with_planner_output(json),
     );
     let mut d = parallel_dispatcher(store.clone(), adapter.clone(), root.path(), 3, 3, 3);
-    d.config.execution.planner.adapter = "instant".to_string();
     task_ops::regate::set_execution_mode(
         store.as_ref(),
         task.id,
@@ -2017,7 +2010,6 @@ async fn replan_delta_after_an_integrated_phase_keeps_the_daemon_integration_uni
             .with_planner_output(delta),
     );
     let mut d = parallel_dispatcher(store.clone(), adapter.clone(), root.path(), 3, 3, 3);
-    d.config.execution.planner.adapter = "instant".to_string();
     let s = store.clone();
     let id = task.id;
     assert!(
@@ -3098,7 +3090,6 @@ async fn replan_exhaustion_on_a_non_tree_task_asks_a_human_and_the_answer_replan
     ]);
     let adapter = Arc::new(PlannerScriptAdapter::new(vec![Some(replanned)], wu_script));
     let mut d = dispatcher(store.clone(), adapter.clone(), 1);
-    d.config.execution.planner.adapter = "instant".to_string();
     d.config.execution.max_replans = 0;
     let report = run_until_idle(&mut d, 400).await;
     assert!(report.idle, "{report:?}");

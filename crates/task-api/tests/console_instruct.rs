@@ -32,7 +32,7 @@ fn env_with_token() -> TestEnv {
         roles: vec![RoleSpec {
             id: "secretary".into(),
             tier: Some(Tier::Standard),
-            adapter: Some("claude-code".into()),
+            harness: Some("claude-code".into()),
             ..RoleSpec::default()
         }],
         genres: vec![GenreSpec {

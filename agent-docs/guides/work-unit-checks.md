@@ -31,6 +31,10 @@ repair に渡す「範囲外差分の check」（`repair_scope_from_units`・`re
 
 ## 環境変数
 
+WU 検査の stdout/stderr ログは `<workspace_root>/<task_id>/work-unit-checks/<wu_key>/` に保存する。task の repo 作業木の
+外に置くため、`.gitignore` の設定に依存せず scope check の未追跡 path に混ざらない。検査開始 event の絶対 `log_path` を
+API が読む。統合検査ログは `<workspace_root>/<task_id>/integration-checks/<wu_key>/` に保存する。
+
 WU の checks と WU の run の環境に、daemon が次を入れる（定数は `task_core::execution_plan::{WU_BASE_ENV, WU_TARGET_ENV}`）。
 
 - `CELERIS_WU_BASE` — 初回 run 開始時の追跡済み作業木を記録した一時 commit。先行 WU の未 commit 変更も含む。
@@ -62,7 +66,7 @@ out=$(printf '%s\n' "$paths" | sort -u | grep -vE '^(<許可 path の正規表�
 
 - 許可 path の正規表現には、Objective の範囲に加えて次を必ず入れる: WU 自身の記録（`agent-docs/progress/`、その WU の
   ADR `agent-docs/adr/`）、計画がその WU に書いてよいと言った path、その変更で再生成される file（`docs/protocol/` と
-  `docs/api/v1/` の schema、`gui/`・`web/` の生成された型）。
+  `docs/api/v1/` の schema、`web/` の生成された型）。
 
 ## 落ちるときは path を出す
 

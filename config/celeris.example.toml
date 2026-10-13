@@ -186,7 +186,7 @@ dir = "../memory"
 # Research・LangMem のような「adapter を選ばない」ハーネスから Claude / GPT / Qwen を
 # OpenAI 互換 API 越しに使えるようにする。モデル名は `<source_id>/<model_id>`（供給元と model を具体的に書く。
 # tier alias の `celeris/<tier>` や `claude/<tier>` は廃止された。ADR 2026-10-11 llm-source-harness-selection）。
-# 例: `claude_oauth/claude-sonnet-5`、`codex_oauth/gpt-6-sol`、`qwen/qwen3.8-27b`。
+# 例: `claude_oauth/claude-sonnet-5-5`、`codex_oauth/gpt-6.1-sol`、`qwen/qwen3.8-27b`。
 # GPT は **ChatGPT アカウントの Codex backend が受ける slug だけ**が使える（2026-09-21 実機確認）。
 # CLI を上げたら `strings $(which codex) | grep '"slug"'` で確かめる。
 # 供給元と model の宣言は `[llm_sources.<id>]`（上の `[llm_proxy.sources.*]` の接続とは別の宣言）。

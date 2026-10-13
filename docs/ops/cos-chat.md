@@ -17,7 +17,7 @@ harness = "claude-code" # 既定。ほかに codex / opencode（ACP）
 # 候補は優先順。供給元と model は具体的に書く（tier は使わない）。
 route_candidates = [
   { source = "claude_oauth", model = "claude-opus-5-5" },
-  { source = "codex_oauth", model = "gpt-6-sol" },
+  { source = "codex_oauth", model = "gpt-6.1-sol" },
 ]
 max_turns = 70
 max_wall_secs = 900

@@ -10,8 +10,7 @@
   `GET /llm/accounts` はアカウントを持たない行の **LLM source ごとの暗黙アカウント**（`implicit: true`、`source_id` と `account_id` が <llm source id>。
   同じ source を使う行は 1 件を共有する）も返す。`max_runs_per_account` は
   「保存値の無いアカウントの既定」になり、`[accounts]` が無い構成でも組み込みの既定 2 を返す。`DaemonSnapshot.implicit_accounts` を追加。
-  `ProviderView` / `ProviderConfigView` / `ProviderLive` の `concurrency` は **deprecated**（schema に `deprecated: true`。値は残るが
-  意味を持たない）。`POST`/`PATCH /providers` の本文の concurrency は受け付けるが保存しない（§3.24・3.25）。この API は後に削除（§3.19）。
+  provider の concurrency 欄はこの改訂で意味を失い、provider の API・型は 2026-10-11 の provider 廃止で削除した（§3.19）。
   DB の migration 0062（`account_limits`）。
 - 改訂: 2026-10-06（ADR 2026-10-06-cos-inbox-triage / 2026-10-05-cos-chat-home D3・D6）— **追加のみ。v1 のまま**。
   エンドポイント 199〜201: `GET /cos/inbox`・`POST /cos/inbox/{i}/resolve`・

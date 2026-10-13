@@ -1,11 +1,11 @@
 {
-  "llm": "openai/claude_oauth/claude-sonnet-5",
+  "llm": "openai/claude_oauth/claude-sonnet-5-5",
   "llm_config": {
     "model_list": [
       {
-        "model_name": "openai/claude_oauth/claude-sonnet-5",
+        "model_name": "openai/claude_oauth/claude-sonnet-5-5",
         "litellm_params": {
-          "model": "openai/claude_oauth/claude-sonnet-5",
+          "model": "openai/claude_oauth/claude-sonnet-5-5",
           "api_base": "http://127.0.0.1:18100/v1",
           "api_key": "<API token from [api] token_file>",
           "timeout": 900,
@@ -14,13 +14,13 @@
       }
     ]
   },
-  "summary_llm": "openai/claude_oauth/claude-sonnet-5",
+  "summary_llm": "openai/claude_oauth/claude-sonnet-5-5",
   "summary_llm_config": {
     "model_list": [
       {
-        "model_name": "openai/claude_oauth/claude-sonnet-5",
+        "model_name": "openai/claude_oauth/claude-sonnet-5-5",
         "litellm_params": {
-          "model": "openai/claude_oauth/claude-sonnet-5",
+          "model": "openai/claude_oauth/claude-sonnet-5-5",
           "api_base": "http://127.0.0.1:18100/v1",
           "api_key": "<API token from [api] token_file>",
           "timeout": 900,
@@ -41,13 +41,13 @@
     "multimodal": false
   },
   "agent": {
-    "agent_llm": "openai/claude_oauth/claude-sonnet-5",
+    "agent_llm": "openai/claude_oauth/claude-sonnet-5-5",
     "agent_llm_config": {
       "model_list": [
         {
-          "model_name": "openai/claude_oauth/claude-sonnet-5",
+          "model_name": "openai/claude_oauth/claude-sonnet-5-5",
           "litellm_params": {
-            "model": "openai/claude_oauth/claude-sonnet-5",
+            "model": "openai/claude_oauth/claude-sonnet-5-5",
             "api_base": "http://127.0.0.1:18100/v1",
             "api_key": "<API token from [api] token_file>",
             "timeout": 900,

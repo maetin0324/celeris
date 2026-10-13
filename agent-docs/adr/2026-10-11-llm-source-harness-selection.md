@@ -35,7 +35,7 @@ kind = "claude_oauth"
 accounts = ["claude-a", "claude-b"]
 max_runs = 4
 quota = { five_hour = 0.8, seven_day = 0.9 }
-models = ["claude-sonnet-5", "claude-opus-5-5"]
+models = ["claude-sonnet-5-5", "claude-opus-5-5"]
 
 [llm_sources.qwen]
 kind = "openai_compatible"
@@ -43,7 +43,7 @@ endpoint = "http://127.0.0.1:17942/v1"
 credential_ref = "qwen-api-key"
 accounts = ["shared-qwen"]
 max_runs = 2
-models = ["qwen3.9-32b"]
+models = ["qwen3.8-27b"]
 ```
 
 既存 account CRUD と `account_limits` 永続化は活かす。現行 `crates/task-core/src/store/account_limits.rs` の adapter key は、source ID と account ID の組に移行し、`max_runs` の読み書きを維持する。source に複数 account がある場合、各 account の明示上限と source 全体の上限の両方を満たすよう admission を行う。quota・cooldown・利用中数は account/source の状態として扱い、harness や task lane に所属させない。暗黙 account を必要とする source は source ID を安定した所有者として明示的に作成し、`unknown` の共有枠は認めない。
@@ -95,19 +95,19 @@ Harness 決定後、適格性・quota・cooldown・同時実行数を確認し�
 ```toml
 [route_defaults.claude_code]
 candidates = [
-  { source = "claude_oauth", model = "claude-sonnet-5" },
-  { source = "codex_oauth", model = "gpt-6-sol" },
+  { source = "claude_oauth", model = "claude-sonnet-5-5" },
+  { source = "codex_oauth", model = "gpt-6.1-sol" },
 ]
 
 [route_defaults.codex]
 candidates = [
-  { source = "codex_oauth", model = "gpt-6-sol" },
-  { source = "claude_oauth", model = "claude-sonnet-5" },
+  { source = "codex_oauth", model = "gpt-6.1-sol" },
+  { source = "claude_oauth", model = "claude-sonnet-5-5" },
 ]
 
 [route_defaults.opencode]
 candidates = [
-  { source = "qwen", model = "qwen3.9-32b" },
+  { source = "qwen", model = "qwen3.8-27b" },
 ]
 ```
 
@@ -123,7 +123,7 @@ Harness 宣言が受け付ける source kind と API format を source 宣言と
 [[llm_routes]]
 harness = "local_deep_research"
 source = "qwen"
-model = "qwen3.9-32b"
+model = "qwen3.8-27b"
 via = "llm_proxy"
 from_api = "openai_compatible"
 to_api = "openai_compatible"
@@ -299,7 +299,7 @@ rules = [
 execution_class_defaults = { planner = ["claude_code", "pi"], review = ["claude_code"] }
 
 [route_defaults.claude_code]
-candidates = [{ source = "claude_oauth", model = "claude-sonnet-5" }]
+candidates = [{ source = "claude_oauth", model = "claude-sonnet-5-5" }]
 
 [route_defaults.pi]
 candidates = [{ source = "opencode_go", model = "opencode-go/kimi-k3" }]

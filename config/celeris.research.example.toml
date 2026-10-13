@@ -74,7 +74,7 @@ index_directory = "/home/u/celeris/paperqa/index"
 # `research.json`/`report.md` に「max_asks の制限で問えなかった」対象として残る）。
 # max_asks = 10
 # LiteLLM 経由で OpenAI 互換の口に向ける。ADR-0053 D2（Phase 65）: celeris の LLM source プロキシ
-# （`[llm_proxy]`。既定 `127.0.0.1:18100`）に向ける。供給元と model は `<source_id>/<model_id>` で具体的に書く（例 `claude_oauth/claude-sonnet-5`。tier alias は廃止）。`OPENAI_API_KEY` は**プロキシの Bearer**
+# （`[llm_proxy]`。既定 `127.0.0.1:18100`）に向ける。供給元と model は `<source_id>/<model_id>` で具体的に書く（例 `claude_oauth/claude-sonnet-5-5`。tier alias は廃止）。`OPENAI_API_KEY` は**プロキシの Bearer**
 # （`[api] token_file` の中身と同じ値。ダミーでは通らない — 直接上流を叩く構成と違う点）。
 # `RES_OPTIONS` は、このホストで見つかった glibc の A/AAAA 並行送信の取りこぼし対策（ADR-0031 の実機記録。
 # 取得ランナーの名前解決が 5 秒待たされる症状が出たら効く）。

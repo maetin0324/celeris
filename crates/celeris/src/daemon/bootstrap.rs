@@ -581,12 +581,6 @@ pub fn build_dispatcher(
     if let Some(shared) = config.routing_catalog_state.as_ref() {
         dispatcher.set_routing_model_profiles(Arc::new(SharedCatalogProfiles(Arc::clone(shared))));
     }
-    // ADR 2026-10-04 Phase 2: `[model_routing]` の mode・観測 TTL・窓の reserve_value（既定 legacy）。
-    if let Some(runtime) = &config.model_routing.runtime {
-        dispatcher.set_dispatch_routing(runtime.dispatch_settings());
-        // Phase 4: `[model_routing.shadow]`（既定 off）。listener は後で llm-proxy が足す。
-        dispatcher.set_routing_shadow(runtime.shadow.clone());
-    }
     dispatcher.set_cluster_connector(cluster_connector(
         masters.clone(),
         master_launchers(config),

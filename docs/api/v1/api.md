@@ -11,7 +11,7 @@
   同じ source を使う行は 1 件を共有する）も返す。`max_runs_per_account` は
   「保存値の無いアカウントの既定」になり、`[accounts]` が無い構成でも組み込みの既定 2 を返す。`DaemonSnapshot.implicit_accounts` を追加。
   `ProviderView` / `ProviderConfigView` / `ProviderLive` の `concurrency` は **deprecated**（schema に `deprecated: true`。値は残るが
-  意味を持たない）。`POST`/`PATCH /providers` の本文の `concurrency` は受け付けるが保存しない（§3.24・3.25）。
+  意味を持たない）。`POST`/`PATCH /providers` の本文の concurrency は受け付けるが保存しない（§3.24・3.25）。この API は後に削除（§3.19）。
   DB の migration 0062（`account_limits`）。
 - 改訂: 2026-10-06（ADR 2026-10-06-cos-inbox-triage / 2026-10-05-cos-chat-home D3・D6）— **追加のみ。v1 のまま**。
   エンドポイント 199〜201: `GET /cos/inbox`・`POST /cos/inbox/{i}/resolve`・
@@ -2833,10 +2833,9 @@ LLM source のローカル OpenAI 互換プロキシ（`crates/llm-proxy`。`127
   Codex の週内相当）・長期枠（7 日）それぞれ単独の残り。`remaining` と同じ「測れないときは省略」の規律。
 - `last_hour_*`: `llm_proxy_requests`（migration 0022）の直近 1 時間の集計。本文は記録しないので
   ここにも出ない。
-- `celeris_tiers[]`（ADR-0053 D4）: `celeris/<tier>` が**今**どこに解決するか（`server.rs` の
-  実際の選択と同じ決定的な計算を、副作用なしでなぞるだけ）。`resolves_to` は `sources[].id` と同じ形。
-  選べる候補が無ければ `null`（`no_source_available` になる状態）。古いスナップショットには無いので
-  省略時は空配列として扱う。
+- `celeris_tiers[]`（ADR-0053 D4）: 旧 tier alias の解決先。今の daemon は常に空配列を返す（alias は廃止済み）。
+  形（`tier` / `resolves_to`）は古いスナップショットとの互換のために残すだけで、新しい読み手は使わない。
+  古いスナップショットには無いので省略時は空配列として扱う。
 
 ### 3.109 `POST /console/new-conversation` → 204（管理系。CoS chat D6）
 

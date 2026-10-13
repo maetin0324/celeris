@@ -139,3 +139,141 @@ fn an_ineligible_harness_wins_over_a_later_undeclared_default() {
 
 #[allow(dead_code)]
 fn _type_check_reservation_ids(_: (SourceId, AccountId)) {}
+
+/// claude_code on claude_oauth: the harness default is sonnet; the coding class list is opus.
+fn override_registry() -> Registry {
+    let mut r = Registry::default();
+    r.sources.insert(
+        "claude_oauth".into(),
+        SourceSpec {
+            kind: "claude_oauth".into(),
+            api_format: "claude_cli".into(),
+            accounts: vec!["ca".into()],
+            models: vec!["claude-sonnet-5-5".into(), "claude-opus-5-5".into()],
+            max_runs: None,
+            account_max_runs: BTreeMap::new(),
+            quota: None,
+            endpoint: None,
+            credential_ref: None,
+        },
+    );
+    r.harnesses.insert(
+        "claude_code".into(),
+        HarnessSpec {
+            kind: "claude_code".into(),
+            api_formats: ["claude_cli".into()].into(),
+            source_kinds: ["claude_oauth".into()].into(),
+            capabilities: Default::default(),
+            command: None,
+            args: vec![],
+        },
+    );
+    r.route_defaults.insert(
+        "claude_code".into(),
+        vec![CandidateKey {
+            source: "claude_oauth".into(),
+            model: "claude-sonnet-5-5".into(),
+        }],
+    );
+    r.route_class_defaults.insert(
+        "claude_code".into(),
+        BTreeMap::from([(
+            "coding".into(),
+            vec![CandidateKey {
+                source: "claude_oauth".into(),
+                model: "claude-opus-5-5".into(),
+            }],
+        )]),
+    );
+    r.harness_selection.rules.push(HarnessRule {
+        genre: Some("coding".into()),
+        harness: "claude_code".into(),
+        ..Default::default()
+    });
+    r
+}
+
+fn override_state(r: &Registry) -> RouteState {
+    let mut s = RouteState::default();
+    for (id, spec) in &r.sources {
+        s.accounts
+            .available
+            .insert(id.clone(), spec.accounts.clone());
+    }
+    s
+}
+
+fn override_input(class: Option<&str>) -> RouteInput {
+    RouteInput {
+        task_id: "class-route-override".into(),
+        harness: HarnessRequest {
+            genre: Some("coding".into()),
+            execution_class: class.map(Into::into),
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
+fn picked_model(r: &Registry, class: Option<&str>) -> String {
+    let (pick, _) = route_select(&override_input(class), r, &override_state(r));
+    pick.unwrap().candidate.model.as_ref().to_string()
+}
+
+#[test]
+fn class_route_override_selects_opus_for_coding_and_sonnet_for_other_classes() {
+    let r = override_registry();
+    assert_eq!(picked_model(&r, Some("coding")), "claude-opus-5-5");
+    assert_eq!(picked_model(&r, Some("planner")), "claude-sonnet-5-5");
+    assert_eq!(picked_model(&r, Some("review")), "claude-sonnet-5-5");
+    assert_eq!(picked_model(&r, None), "claude-sonnet-5-5");
+}
+
+#[test]
+fn coding_class_picks_the_class_candidate_first() {
+    let mut r = override_registry();
+    r.route_class_defaults
+        .get_mut(&HarnessId::from("claude_code"))
+        .unwrap()
+        .insert(
+            "coding".into(),
+            vec![
+                CandidateKey {
+                    source: "claude_oauth".into(),
+                    model: "claude-opus-5-5".into(),
+                },
+                CandidateKey {
+                    source: "claude_oauth".into(),
+                    model: "claude-sonnet-5-5".into(),
+                },
+            ],
+        );
+    assert_eq!(picked_model(&r, Some("coding")), "claude-opus-5-5");
+    // The opus candidate is ineligible (explicit model hint excludes it); the next class candidate is used.
+    let mut input = override_input(Some("coding"));
+    input.model_hint = Some("claude-sonnet-5-5".into());
+    let (pick, _) = route_select(&input, &r, &override_state(&r));
+    assert_eq!(pick.unwrap().candidate.model.as_ref(), "claude-sonnet-5-5");
+}
+
+#[test]
+fn class_list_does_not_fall_back_to_the_harness_defaults() {
+    let r = override_registry();
+    let mut state = override_state(&r);
+    // Every account is cooling down: the opus class candidate is ineligible. The sonnet harness
+    // default is also on this account, so it must not be picked as a substitute either.
+    state
+        .quota
+        .cooling_down
+        .insert(("claude_oauth".into(), "ca".into()));
+    let (pick, trace) = route_select(&override_input(Some("coding")), &r, &state);
+    assert_eq!(pick, Err(RouteFailure::NoEligible("claude_code".into())));
+    // Only the class candidate was considered and rejected; the harness default never entered.
+    assert!(!trace.rejections.is_empty());
+    assert!(
+        trace
+            .rejections
+            .iter()
+            .all(|x| x.candidate.model.as_ref() == "claude-opus-5-5")
+    );
+}

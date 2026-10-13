@@ -2,8 +2,10 @@
 //! (ADR 2026-10-11 llm-source-harness-selection).
 //!
 //! The order is fixed: the task's `harness` field (a human's explicit choice), otherwise the
-//! declared `[harness_selection]` rules; then the `route_defaults.<harness>` candidates in their
-//! declared order, narrowed by an explicit task model; harness/source compatibility (direct API
+//! declared `[harness_selection]` rules; then the candidates in their declared order, which are the
+//! `route_class_defaults.<harness>.<class>` list when one is declared for the execution class (it
+//! replaces, and never falls back to) otherwise `route_defaults.<harness>`, narrowed by an explicit
+//! task model; harness/source compatibility (direct API
 //! format or a registered `[[llm_routes]]` entry); `(source, account)` admission; and finally the
 //! route policy. Every step fails closed: nothing falls back to an undeclared source.
 
@@ -157,7 +159,6 @@ pub fn route_select(
     for harness in harnesses {
         let mut one = input.clone();
         one.harness.harness = Some(harness.clone());
-        one.harness.execution_class = None;
         let (result, current_trace) = route_select_one(&one, registry, state);
         match result {
             Ok(pick) => {
@@ -205,7 +206,13 @@ fn route_select_one(
         Err(e) => return (Err(RouteFailure::Harness(e)), trace),
     };
     trace.harness = Some(harness.clone());
-    let priority = route_priority(registry, &harness, input.cos).to_vec();
+    let priority = route_priority(
+        registry,
+        &harness,
+        input.cos,
+        input.harness.execution_class.as_ref(),
+    )
+    .to_vec();
     if priority.is_empty() {
         return (Err(RouteFailure::NoDeclaredDefault(harness)), trace);
     }

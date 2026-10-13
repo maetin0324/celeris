@@ -4840,6 +4840,32 @@ export type RoutingCatalogView = {
   "warnings": Array<string>;
 };
 
+export type RoutingEvidenceGroup = {
+  "evidence_version"?: string | null;
+  "genre": string;
+  "harness_id": string;
+  "rows": Array<RoutingEvidenceRowView>;
+};
+
+export type RoutingEvidenceList = {
+  "groups": Array<RoutingEvidenceGroup>;
+};
+
+export type RoutingEvidenceRowView = {
+  "harness_version": string;
+  "model_id": string;
+  "n": number;
+  "pass": number;
+  "pass_lower": number;
+  "pass_upper": number;
+  "qualifies": boolean;
+  "quota_per_run": Array<Array<unknown>>;
+  "source_id": string;
+  "timeout_rate": number;
+  "usd_list_median": number;
+  "wall_median_s": number;
+};
+
 export type RoutingFeaturesRecord = {
   "context_version": string;
   "decision_id": string;
@@ -4915,6 +4941,38 @@ export type RoutingShadowAudit = {
   "reservation"?: ShadowReservationAudit | null;
   "shadow_id": string;
   "status": ShadowStatus;
+};
+
+export type RoutingStageChangeBody = {
+  "genre": string;
+  "harness_id": string;
+  "reason": string;
+  "stage": StageName;
+  "task_id": TaskId;
+};
+
+export type RoutingStageChangeView = {
+  "actor": string;
+  "from"?: string | null;
+  "reason": string;
+  "task_id": string;
+  "to": string;
+  "ts": string;
+  "window": unknown;
+};
+
+export type RoutingStageList = {
+  "stages": Array<RoutingStageView>;
+};
+
+export type RoutingStageView = {
+  "evidence_version"?: string | null;
+  "genre": string;
+  "harness_id": string;
+  "last_change"?: RoutingStageChangeView | null;
+  "latest_evidence_version"?: string | null;
+  "since"?: string | null;
+  "stage": string;
 };
 
 export type RoutingTraceV1 = {
@@ -5327,6 +5385,8 @@ export type StageHint = {
   "scope"?: string;
   "title": string;
 };
+
+export type StageName = "shadow" | "enforce";
 
 export type StageReview = "none" | "human";
 

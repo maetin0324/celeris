@@ -60,9 +60,11 @@ pub mod repo_requirement;
 pub mod retry;
 /// ADR-0069 D5（Phase 114）: run ごとの routing の監査（担当・harness・lane・model・メトリクス・レビュー）。
 pub mod routing_audit;
-pub mod routing_outcome;
 /// Deterministic, read-only export of routing decisions as training JSONL.
 pub mod routing_export;
+pub mod routing_outcome;
+/// ADR 2026-10-11-llm-source-model-routing-evaluation D3: 段階・根拠表の読み取りと人の段階変更。
+pub mod routing_stage;
 /// Deterministic scan of completed task branches against their repository default branch.
 pub mod stranded;
 pub mod tree;

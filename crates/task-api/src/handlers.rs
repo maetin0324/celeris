@@ -184,6 +184,8 @@ pub(crate) fn router(state: ApiState) -> Router {
         .merge(crate::timeline::routes())
         // ADR-0069 D5: タスクの routing の監査。実装は `crate::routing`。
         .merge(crate::routing::routes())
+        // ADR 2026-10-11 D3: genre×harness の段階・根拠表と人の段階変更。
+        .merge(crate::routing_stage::routes())
         // ADR-0080 D5: browser の人待ち（登録依頼・承認）。
         .merge(crate::browser::routes())
         .merge(crate::browser_readiness::routes())

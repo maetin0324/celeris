@@ -58,6 +58,7 @@ Live View の grant/check/read は owner attestation を入力するため除外
 | PATCH | `/milestones/{id}` | `removed_by_adr_0079` | ADR-0079 D13/R5a で撤去済み。人にも変更できない 410 の互換入口を復活させない。 |
 | POST | `/milestones/{id}/cancel` | `removed_by_adr_0079` | ADR-0079 D13/R5a で撤去済み。人にも変更できない 410 の互換入口を復活させない。 |
 | POST | `/milestones/{id}/decide` | `removed_by_adr_0079` | ADR-0079 D13/R5a で撤去済み。人にも変更できない 410 の互換入口を復活させない。 |
+| POST | `/routing/stages` | `human_only` | ADR 2026-10-11-llm-source-model-routing-evaluation D3。enforce へ進めるのは人の承認だけ（戻すのは daemon）。 |
 | POST | `/milestones/{id}/pause` | `removed_by_adr_0079` | ADR-0079 D13/R5a で撤去済み。人にも変更できない 410 の互換入口を復活させない。 |
 | POST | `/milestones/{id}/resume` | `removed_by_adr_0079` | ADR-0079 D13/R5a で撤去済み。人にも変更できない 410 の互換入口を復活させない。 |
 | POST | `/projects/{id}/milestones` | `removed_by_adr_0079` | ADR-0079 D13/R5a で撤去済み。人にも変更できない 410 の互換入口を復活させない。 |
@@ -238,6 +239,7 @@ R の操作では領域 write は不要だが operation・event・card は同一
 | POST | `/replay` | R | `handlers.rs` | 共通 |
 | DELETE | `/repos/{id}` | A | `repos.rs` | 共通 |
 | PATCH | `/repos/{id}` | A | `repos.rs` | 共通 |
+| POST | `/routing/stages` | X: `human_only` | `routing_stage.rs` | 共通 |
 | DELETE | `/secrets/{id}` | X: `secret_operations` | `handlers.rs` | 共通 |
 | PUT | `/secrets/{id}` | X: `secret_operations` | `handlers.rs` | 共通 |
 | DELETE | `/skills/{name}` | A | `skills.rs` | 共通 |
@@ -435,3 +437,8 @@ D1 の「全変更を CoS の操作にする」に従い `account.limit_set`（�
 ## 付記: provider 管理 API と model assignment API の撤去（2026-10-11）
 
 `/providers` の CRUD・check と `/llm/models/assignments` の割り当て操作を撤去した。実行経路は `llm_route` と config 宣言で選ぶため、固定 provider の管理 API と model assignment API は提供しない。CoS operation registry、cos-operator の操作表、celerisctl の対応 command も合わせて削除した。`/reload` は config reload として維持する。
+
+## 付記: routing の段階変更は人だけ（2026-10-13）
+
+ADR 2026-10-11-llm-source-model-routing-evaluation D3 の `POST /routing/stages`（genre×harness の段階を人が変える）を
+`human_only` で除外した。`enforce` へ進めるのは人の承認だけで、CoS の operation からは変えられない（戻すのは daemon の guardrail）。

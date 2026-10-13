@@ -89,6 +89,11 @@ pub(crate) const ALLOWED: &[(&str, &str, &str)] = &[
 /// ADR D2 exclusions: `(method, path, reason code and detail)`.
 pub(crate) const EXCLUDED: &[(&str, &str, &str)] = &[
     (
+        "POST",
+        "/api/v1/routing/stages",
+        "human_only: ADR 2026-10-11-llm-source-model-routing-evaluation D3。enforce へ進めるのは人の承認だけ（戻すのは daemon）。",
+    ),
+    (
         "DELETE",
         "/api/v1/llm/sources/{source_id}/accounts/{account_id}/login",
         "secret_operations: 人の決定 secrets=exclude。秘密値を扱う系列を全て除外（取消・削除も含む）。",

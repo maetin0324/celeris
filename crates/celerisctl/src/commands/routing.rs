@@ -1,4 +1,5 @@
-//! `celerisctl routing show` and versioned routing training export.
+//! `celerisctl routing show`, versioned routing training export, and the selector stage/evidence
+//! views with the human stage change (ADR 2026-10-11-llm-source-model-routing-evaluation D3).
 use std::io::BufWriter;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -7,13 +8,67 @@ use crate::error::CliError;
 use crate::outln;
 use celeris::config::Config;
 use clap::Subcommand;
+use task_core::{SqliteStore, TaskId};
 use task_ops::routing_export::{self, ExportOptions, ExportText};
+use task_ops::routing_stage::{self, HumanStageChange, RoutingEvidenceList, RoutingStageList};
 
 #[derive(Subcommand, Debug)]
 pub enum RoutingCommand {
     Show(RoutingShowArgs),
     /// Export recorded routing decisions as deterministic training JSONL.
     Export(RoutingExportArgs),
+    /// genre×harness ごとの段階（shadow / enforce）を見る・人が変える（ADR 2026-10-11 D3）。
+    #[command(subcommand)]
+    Stage(StageCommand),
+    /// 組ごとの最新版の根拠表（区間と D1 を満たすか）を見る。
+    Evidence(StageFilterArgs),
+}
+
+#[derive(Subcommand, Debug)]
+pub enum StageCommand {
+    /// 段階の一覧（直近の routing_stage_changed つき）。
+    List(StageFilterArgs),
+    /// 人の段階変更（actor human）。enforce は D1 の根拠が立たなければ拒否する。
+    Set(StageSetArgs),
+}
+
+#[derive(clap::Args, Debug)]
+pub struct StageFilterArgs {
+    /// Explicit read-only database path.
+    #[arg(long)]
+    pub db: Option<PathBuf>,
+    #[arg(long)]
+    pub genre: Option<String>,
+    #[arg(long)]
+    pub harness: Option<String>,
+    /// JSON（API と同じ形）で出す。
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct StageSetArgs {
+    /// Explicit database path.
+    #[arg(long)]
+    pub db: Option<PathBuf>,
+    /// routing_stage_changed を記録する task。
+    #[arg(long)]
+    pub task: String,
+    #[arg(long)]
+    pub genre: String,
+    #[arg(long)]
+    pub harness: String,
+    #[arg(long, value_enum)]
+    pub stage: StageName,
+    #[arg(long)]
+    pub reason: String,
+}
+
+#[derive(clap::ValueEnum, Clone, Copy, Debug)]
+#[value(rename_all = "snake_case")]
+pub enum StageName {
+    Shadow,
+    Enforce,
 }
 
 #[derive(clap::Args, Debug)]
@@ -98,6 +153,68 @@ pub fn run(_db: Option<&Path>, command: RoutingCommand) -> Result<ExitCode, CliE
             outln!("exported {count} rows to {}", args.out.display());
             Ok(ExitCode::SUCCESS)
         }
+        RoutingCommand::Stage(StageCommand::List(args)) => {
+            let db = explicit_db("routing stage list", args.db.as_deref())?;
+            let list =
+                routing_stage::list_stages(db, args.genre.as_deref(), args.harness.as_deref())
+                    .map_err(|e| CliError::msg(format!("routing stage list: {e}")))?;
+            if args.json {
+                outln!("{}", to_json(&list)?);
+            } else {
+                outln!("{}", render_stages(&list).trim_end());
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+        RoutingCommand::Stage(StageCommand::Set(args)) => {
+            let db = explicit_db("routing stage set", args.db.as_deref())?;
+            let task_id: TaskId = args.task.parse().map_err(|_| {
+                CliError::msg(format!("routing stage set: invalid task id {}", args.task))
+            })?;
+            let store = SqliteStore::open(db)
+                .map_err(|e| CliError::msg(format!("routing stage set: {e}")))?;
+            let since = time::OffsetDateTime::now_utc()
+                .format(&time::format_description::well_known::Rfc3339)
+                .map_err(|e| CliError::msg(format!("clock format: {e}")))?;
+            let view = routing_stage::set_stage_by_human(
+                &store,
+                db,
+                &HumanStageChange {
+                    task_id,
+                    genre: args.genre,
+                    harness_id: args.harness,
+                    stage: match args.stage {
+                        StageName::Shadow => task_core::route_select::RoutingStage::Shadow,
+                        StageName::Enforce => task_core::route_select::RoutingStage::Enforce,
+                    },
+                    reason: args.reason,
+                },
+                &since,
+            )
+            .map_err(|e| CliError::msg(format!("routing stage set: {e}")))?;
+            outln!(
+                "{}",
+                render_stages(&RoutingStageList { stages: vec![view] }).trim_end()
+            );
+            Ok(ExitCode::SUCCESS)
+        }
+        RoutingCommand::Evidence(args) => {
+            let db = explicit_db("routing evidence", args.db.as_deref())?;
+            let store = SqliteStore::open(db)
+                .map_err(|e| CliError::msg(format!("routing evidence: {e}")))?;
+            let list = routing_stage::list_evidence(
+                &store,
+                db,
+                args.genre.as_deref(),
+                args.harness.as_deref(),
+            )
+            .map_err(|e| CliError::msg(format!("routing evidence: {e}")))?;
+            if args.json {
+                outln!("{}", to_json(&list)?);
+            } else {
+                outln!("{}", render_evidence(&list).trim_end());
+            }
+            Ok(ExitCode::SUCCESS)
+        }
         RoutingCommand::Show(args) => {
             let config = Config::load(&args.config)
                 .map_err(|e| CliError::msg(format!("config {}: {e}", args.config.display())))?;
@@ -105,6 +222,89 @@ pub fn run(_db: Option<&Path>, command: RoutingCommand) -> Result<ExitCode, CliE
             Ok(ExitCode::SUCCESS)
         }
     }
+}
+
+fn explicit_db<'a>(what: &str, db: Option<&'a Path>) -> Result<&'a Path, CliError> {
+    let db = db.ok_or_else(|| {
+        CliError::msg(format!(
+            "{what}: --db <path> is required (the daemon DB is never opened by default)"
+        ))
+    })?;
+    if !db.is_file() {
+        return Err(CliError::msg(format!(
+            "{what}: no database at {}",
+            db.display()
+        )));
+    }
+    Ok(db)
+}
+
+fn to_json(value: &impl serde::Serialize) -> Result<String, CliError> {
+    serde_json::to_string_pretty(value).map_err(|e| CliError::msg(format!("json: {e}")))
+}
+
+/// `routing stage list|set` の表（1 組 1 行）。
+pub fn render_stages(list: &RoutingStageList) -> String {
+    if list.stages.is_empty() {
+        return "(no routing stages)\n".into();
+    }
+    let mut out = String::new();
+    for s in &list.stages {
+        out.push_str(&format!(
+            "{}/{}: {} since={} evidence={} latest={}",
+            s.genre,
+            s.harness_id,
+            s.stage,
+            s.since.as_deref().unwrap_or("-"),
+            s.evidence_version.as_deref().unwrap_or("-"),
+            s.latest_evidence_version.as_deref().unwrap_or("-"),
+        ));
+        if let Some(c) = &s.last_change {
+            out.push_str(&format!(
+                " last={}->{} by {} at {} ({})",
+                c.from.as_deref().unwrap_or("-"),
+                c.to,
+                c.actor,
+                c.ts,
+                c.reason
+            ));
+        }
+        out.push('\n');
+    }
+    out
+}
+
+/// `routing evidence` の表（組ごとに見出し、行ごとに区間）。
+pub fn render_evidence(list: &RoutingEvidenceList) -> String {
+    if list.groups.is_empty() {
+        return "(no routing evidence)\n".into();
+    }
+    let mut out = String::new();
+    for g in &list.groups {
+        out.push_str(&format!(
+            "=== {}/{} ({}) ===\n",
+            g.genre,
+            g.harness_id,
+            g.evidence_version.as_deref().unwrap_or("-")
+        ));
+        for r in &g.rows {
+            out.push_str(&format!(
+                "{}/{} harness={} n={} pass={} [{:.3}, {:.3}] wall={:.1}s usd={:.3} timeout={:.3}{}\n",
+                r.source_id,
+                r.model_id,
+                r.harness_version,
+                r.n,
+                r.pass,
+                r.pass_lower,
+                r.pass_upper,
+                r.wall_median_s,
+                r.usd_list_median,
+                r.timeout_rate,
+                if r.qualifies { " qualifies" } else { "" }
+            ));
+        }
+    }
+    out
 }
 
 /// `celerisctl routing show` の本体（純粋関数。テストしやすいよう `run` から分離）。

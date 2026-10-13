@@ -643,8 +643,9 @@ fn main() -> ExitCode {
         };
     }
     // ADR-0069 Phase 118 D3: `routing show` も設定ファイルしか読まない（DB を開かない）。
-    // `routing export` は明示の `--db` だけを task-ops の読み取り専用接続で開く
-    // （`CELERIS_DB` 等の既定は解決しない。store も開かない＝migration しない）。
+    // `routing export`・`routing stage list` は明示の `--db` だけを task-ops の読み取り専用接続で開く
+    // （`CELERIS_DB` 等の既定は解決しない。store も開かない＝migration しない）。人の段階変更
+    // `routing stage set` と `routing evidence` も明示の `--db` だけを store で開く（ADR 2026-10-11 D3）。
     if let Command::Routing { command } = cli.command {
         return match routing_cmd::run(cli.db.as_deref(), command) {
             Ok(code) => code,

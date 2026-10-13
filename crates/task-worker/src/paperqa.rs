@@ -664,15 +664,13 @@ pub fn build_search_queries(objective: &str) -> Vec<String> {
 
 /// LiteLLM の `provider/model` 形式から供給者の接頭辞を落とす（ADR-0035 D5）。
 /// `chat/completions` を直接叩くときに必要なのは、その口が出しているモデル名
-/// （例: settings の `llm` が `openai/celeris/standard` なら要求モデルは `celeris/standard`）。
+/// （例: settings の `llm` が `openai/qwen/qwen3.8-27b` なら要求モデルは `qwen/qwen3.8-27b`）。
 /// 接頭辞と見なすのは小文字・数字・`_` だけの最初の 1 区画（`openai/` / `hosted_vllm/`）。
-/// ただし `celeris/<tier>` は proxy のモデル名そのものなので残す。
 fn strip_provider_prefix(model: &str) -> String {
     let model = model.trim();
     match model.split_once('/') {
         Some((prefix, rest))
-            if prefix != "celeris"
-                && !rest.is_empty()
+            if !rest.is_empty()
                 && !prefix.is_empty()
                 && prefix
                     .chars()

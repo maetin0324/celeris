@@ -6,7 +6,7 @@ tasks: [01M4Q53EHAF7BS9V3QMM1WY352]
 ## 状況
 
 - 対象: integrate-carry（f0be6f5b）の test-parallel で落ちた 12 件（ログ: integration-checks/integrate-carry/1791879496675-6.log）。
-- 11 件は直した（下の「直した理由」）。`celerisctl routing_cli` の 1 件は**範囲外の配線の食い違い**で、人の決定待ち（「未解決」）。
+- 11 件は直した（下の「直した理由」）。commit 722642df で入っており、今回の run で再検査して通ることを確かめた。`celerisctl routing_cli` の 1 件は**範囲外の配線の食い違い**で、export-rewire へ移した（「未解決」）。
 
 ## 直した理由（11 件）
 
@@ -16,11 +16,17 @@ tasks: [01M4Q53EHAF7BS9V3QMM1WY352]
 
 ## 検査
 
+- 今回の run（検査のみ、コード変更なし）: `cargo test -p task-core --lib` exit 0、`935 passed; 0 failed`。`cargo test -p celerisctl --test no_migrate` exit 0、`4 passed; 0 failed`。migration 番号の重複は無し。
+
 - `cargo test -p task-core --lib`: exit 0。`935 passed; 0 failed`（11 件を含む）。
 - `cargo test -p celerisctl --test no_migrate`: exit 0。`4 passed; 0 failed`。
 - `cargo test -p celerisctl --test routing_cli`: exit 101。`routing_export_emits_one_training_row_and_supports_text_omission` が `routing export: sqlite: no such table: events` で落ちる（修正前と同じ）。
+- 再検査（前回 check 不合格の確認）: `cargo test -p celerisctl --test routing_cli --test no_migrate` exit 101。no_migrate は 4 passed、routing_cli は同じ 1 件が落ちる。fixture に events 表を足しても、試験は `--out` を JSONL の**ファイル**として読み、`--text` を渡すが、現在の `routing export` は `--out` をディレクトリとして作り、`--text` を受け付けない。fixture だけでは通らない。
+- 再検査: `cargo test -p task-core --lib`: exit 0、`935 passed; 0 failed`。migration 番号の重複は無し（`ls crates/task-core/migrations | cut -c1-4 | sort | uniq -d` が空）。
 
-## 未解決: routing_cli は fixture では直らない（人の決定が要る）
+## 未解決: routing_cli は export-rewire へ移した（この unit では直さない）
+
+この unit の範囲外（task-ops/src と celerisctl/src の配線）。直す unit は export-rewire（merge で戻った旧 routing export・evaluate と routing_replay を消し、新 routing_export へ配線し直す）。人の決定（A/B）は export-rewire の前提として残る。以下は経緯。
 
 試験は branch 側の新 export（`celeris.route-training/1` の JSONL を `--out` の 1 ファイルへ書き、`--text none` で brief を落とす）を前提にしている。現在の celerisctl は main 側の旧 `routing export`（`routing_replay::export`。events を読み、`--out` をディレクトリにして `dataset.jsonl`・`manifest.json` を書く）を呼んでいる。fixture を作り直しても、出力の形が試験と違うため通らない。
 

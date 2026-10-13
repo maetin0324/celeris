@@ -2,7 +2,7 @@
 title: provider 廃止リリースを本番に入れられる形にする — 不具合 5 件の修正と closeout
 tasks: [01M4T94XWN31GW9SENK41GAP8F]
 status: done
-completed: 2026-10-13（closeout5 で USERNS 無し全体検査・clippy・文書検査 3 本を再確認。USERNS=1 の証拠は `/local/prb/tp-usns-fix5.log`。未解決は下の事項 2（i）・3〜8）
+completed: 2026-10-13（closeout5 で USERNS 無し全体検査・clippy・文書検査 3 本を再確認。USERNS=1 の証拠は `/local/prb/tp-usns-fix5.log`。配送修復（cargo fmt --check）は fmt-gate で整形のみ当て直した。未解決は下の事項 2（i）・3〜8）
 updated: 2026-10-13
 ---
 
@@ -141,3 +141,16 @@ final review の sandbox では `unshare -Ur` が Operation not permitted にな
    - proxy: 接頭辞付き `qwen/qwen3.8-27b` が 200（`x-celeris-source: openai-compatible:qwen`）、裸の `qwen3.8-27b` が 422。
    - 低リスクな coding task・Pi task・`local-qwen` task・CoS を 1 件ずつ流し、`routing_decided` の harness・source・model を選択結果の表と照合する。
 3. **戻し方**: runbook の rollback に従い、release と config を対で戻す。旧 event は読み取りのみなので、戻しても書き換えは発生しない。
+
+## 配送修復（cargo fmt --check）
+
+- 失敗: release prepare の `prepare.log`（`/local/celeris/state/releases/.deliveries/01M4T94XWN31GW9SENK41GAP8F/d79c061091298eb37b68e6e38a40321a039d078d/prepare.log`）で step `cargo-fmt-check`（`cargo fmt --all -- --check`）が exit 1 になり、`gate failed at step 'cargo-fmt-check'; no release directory created` で止まった。log に出た差分は 3 箇所だけで、どれも整形（rustfmt）の差分。原因は fmt のみ。
+  - `crates/celeris/src/daemon/adapters.rs:374`: `pi_harness_declaration_reaches_pi_process` の `use task_worker::protocol::{...}` の折り返し。
+  - `crates/task-core/src/model_router/tests.rs:55`: legacy `routing_decided` の `serde_json::to_value(...)` 呼び出しの `.unwrap()` の位置。
+  - `crates/task-core/src/model_router/tests.rs:62`: `from_value(event).expect(...)` の行折り返し。
+- 直し: 人が task branch（`celeris/01M4T94XWN31GW9SENK41GAP8F`）に commit `5283bcef`（cargo fmt の結果のみ）を足して直した。この WU の作業ツリーは別ブランチで、`5283bcef` を含まない `d3da072e` から始まっていた。そこで同じ整形を `cargo fmt --all` で当て直した。変更は上の 2 file の整形だけで、コードの意味は変えていない。整形後の `crates/` は `5283bcef` と一致する（`git diff 5283bcef -- crates/` が空）。
+- 検査（この WU、整形後）:
+  - `cargo fmt --all -- --check` — exit 0（整形前は exit 1、上の 3 箇所）。
+  - `cargo clippy --workspace -- -D warnings` — exit 0（`Finished dev profile`、警告なし）。log は `artifacts/clippy-fmt-gate.log`。
+  - 文書検査 3 本（すべて exit 0）: `sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv` → `check-doc-layout: ok`、`sh scripts/dev/check-doc-links.sh` → `check-doc-links: ok`、`sh scripts/dev/check-adr-numbers.sh` → `check-adr-numbers: ok (198 files)`。
+- 注記: この WU では test-parallel は流していない（本節の対象は fmt と clippy。全体検査の証拠は上の closeout5・USERNS=1 の節のまま）。

@@ -20,4 +20,6 @@ tasks: [01M4Q53EHAF7BS9V3QMM1WY352]
 - `git diff --check HEAD`: exit 0
 - `sh "$CELERIS_WU_SCOPE_PATHS"`: exit 0
 - `cargo check --workspace --all-targets`: exit 0（当初は main の routing_replay module file が merge tree に無く、restore 後に RoutingRecord.features の fixture 2 箇所を補って再実行）
+- 前回 run 後 check の修復: `route_store_schema_is_pinned_and_has_all_tables` が旧 SCHEMA_VERSION `69` を pin していた。main の migration 追加に合わせて `73` に更新。
+- `cargo test -p task-core --lib route_ && cargo test -p task-dispatch --lib route_select`: exit 0（task-core 43 件、task-dispatch 19 件）
 - 残課題: なし

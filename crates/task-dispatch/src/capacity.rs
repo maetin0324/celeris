@@ -113,6 +113,68 @@ pub fn account_run_limit(effective_max_runs: usize, cos: bool) -> usize {
     }
 }
 
+/// `[routing_eval]`（ADR 2026-10-11-llm-source-model-routing-evaluation 付記「評価 run の受け口」）:
+/// 評価 run（routing-eval の試行）専用の予約枠。`Config::dispatch_config` が組み立てて
+/// [`DispatchConfig`](crate::DispatchConfig)`.eval` に入る。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct EvalRuntimeConfig {
+    /// 同時に走らせてよい評価 run の数。既定 0 = 評価 run を起こさない。
+    pub reserved_runs: usize,
+}
+
+/// 評価 run を今起こさない理由（[`eval_admission`] の `Err`）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EvalDefer {
+    /// `[routing_eval] reserved_runs = 0`（既定）。評価の受け口は無効。
+    Disabled,
+    /// 評価の予約枠が満杯（`eval_in_flight >= reserved_runs`）。本番の並列度とは別の枠。
+    ReservedFull,
+    /// account の同時実行が上限（`account_in_use >= account_limit`。本番と同じ規則）。
+    AccountFull,
+    /// quota 上限（quota_book の見積り）を超える。
+    QuotaCap,
+}
+
+impl EvalDefer {
+    /// 記録・ログ用の短い名前（`route_decisions` の input/output には書かない。defer の理由だけ）。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Disabled => "disabled",
+            Self::ReservedFull => "reserved_full",
+            Self::AccountFull => "account_full",
+            Self::QuotaCap => "quota_cap",
+        }
+    }
+}
+
+/// 評価 run を今起こしてよいか（純関数。ADR 2026-10-11-llm-source-model-routing-evaluation 付記 D3）。
+///
+/// 評価 run は本番の全体並列度（`max_concurrency`）に数えず、専用枠 `reserved_runs` の中だけで走る。
+/// account の admission は本番と同じ: account の同時実行（[`effective_account_limit`]・
+/// [`implicit_account_full`] と同じ形）と quota 上限（quota_book の見積り）を越えるなら起こさない。
+/// 呼び出し側は `Err` のとき試行を `queued` のまま残す（次の tick で再び見る）。
+pub fn eval_admission(
+    reserved_runs: usize,
+    eval_in_flight: usize,
+    account_in_use: usize,
+    account_limit: usize,
+    quota_ok: bool,
+) -> Result<(), EvalDefer> {
+    if reserved_runs == 0 {
+        return Err(EvalDefer::Disabled);
+    }
+    if eval_in_flight >= reserved_runs {
+        return Err(EvalDefer::ReservedFull);
+    }
+    if account_in_use >= account_limit {
+        return Err(EvalDefer::AccountFull);
+    }
+    if !quota_ok {
+        return Err(EvalDefer::QuotaCap);
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -205,5 +267,161 @@ mod tests {
     fn account_limit_is_relaxed_by_one_for_cos() {
         assert_eq!(account_run_limit(2, false), 2);
         assert_eq!(account_run_limit(2, true), 3);
+    }
+
+    /// 評価 run の admission（表駆動）: 枠 0・枠満杯・account 満杯・quota 超過・通る場合と、
+    /// 理由の優先順（reserved_runs = 0 が最も強い）と境目（上限ちょうどで満杯）。
+    #[test]
+    fn eval_admission_table() {
+        use EvalDefer::*;
+        /// 表の 1 行（入力 5 欄と期待する判定）。
+        #[derive(Debug)]
+        struct Case {
+            name: &'static str,
+            reserved_runs: usize,
+            eval_in_flight: usize,
+            account_in_use: usize,
+            account_limit: usize,
+            quota_ok: bool,
+            want: Result<(), EvalDefer>,
+        }
+        let table = [
+            // 枠 0（既定）は何があっても起こさない。account 満杯・quota 超過より先に無効として返る。
+            Case {
+                name: "disabled",
+                reserved_runs: 0,
+                eval_in_flight: 0,
+                account_in_use: 0,
+                account_limit: 4,
+                quota_ok: true,
+                want: Err(Disabled),
+            },
+            Case {
+                name: "disabled-wins",
+                reserved_runs: 0,
+                eval_in_flight: 3,
+                account_in_use: 9,
+                account_limit: 1,
+                quota_ok: false,
+                want: Err(Disabled),
+            },
+            // 予約枠が満杯（eval_in_flight >= reserved_runs）。本番の account・quota が空いていても起こさない。
+            Case {
+                name: "reserved-full-1of1",
+                reserved_runs: 1,
+                eval_in_flight: 1,
+                account_in_use: 0,
+                account_limit: 4,
+                quota_ok: true,
+                want: Err(ReservedFull),
+            },
+            Case {
+                name: "reserved-full-2of2",
+                reserved_runs: 2,
+                eval_in_flight: 2,
+                account_in_use: 0,
+                account_limit: 4,
+                quota_ok: true,
+                want: Err(ReservedFull),
+            },
+            // account の同時実行が上限（本番と同じ規則）。quota より先に見る。
+            Case {
+                name: "account-full",
+                reserved_runs: 2,
+                eval_in_flight: 0,
+                account_in_use: 2,
+                account_limit: 2,
+                quota_ok: true,
+                want: Err(AccountFull),
+            },
+            Case {
+                name: "account-full-before-quota",
+                reserved_runs: 2,
+                eval_in_flight: 0,
+                account_in_use: 3,
+                account_limit: 3,
+                quota_ok: false,
+                want: Err(AccountFull),
+            },
+            // account_limit = 0（account を閉じた）なら通らない。
+            Case {
+                name: "account-limit-zero",
+                reserved_runs: 2,
+                eval_in_flight: 0,
+                account_in_use: 0,
+                account_limit: 0,
+                quota_ok: true,
+                want: Err(AccountFull),
+            },
+            // quota 上限。評価が 1 本も走っていなくても起こさない。
+            Case {
+                name: "quota-cap",
+                reserved_runs: 2,
+                eval_in_flight: 0,
+                account_in_use: 0,
+                account_limit: 4,
+                quota_ok: false,
+                want: Err(QuotaCap),
+            },
+            Case {
+                name: "quota-cap-in-flight",
+                reserved_runs: 4,
+                eval_in_flight: 2,
+                account_in_use: 1,
+                account_limit: 4,
+                quota_ok: false,
+                want: Err(QuotaCap),
+            },
+            // 境目: 枠・account とも上限の 1 つ下なら通る。
+            Case {
+                name: "admit",
+                reserved_runs: 2,
+                eval_in_flight: 1,
+                account_in_use: 1,
+                account_limit: 2,
+                quota_ok: true,
+                want: Ok(()),
+            },
+            Case {
+                name: "admit-first",
+                reserved_runs: 1,
+                eval_in_flight: 0,
+                account_in_use: 0,
+                account_limit: 1,
+                quota_ok: true,
+                want: Ok(()),
+            },
+        ];
+        for case in &table {
+            let got = eval_admission(
+                case.reserved_runs,
+                case.eval_in_flight,
+                case.account_in_use,
+                case.account_limit,
+                case.quota_ok,
+            );
+            assert_eq!(got, case.want, "{}", case.name);
+        }
+        assert_eq!(table.len(), 11);
+    }
+
+    /// defer の理由は記録・ログに出せる短い名前を持つ（未知の理由を足したらここも増える）。
+    #[test]
+    fn eval_defer_reasons_have_stable_names() {
+        assert_eq!(EvalDefer::Disabled.as_str(), "disabled");
+        assert_eq!(EvalDefer::ReservedFull.as_str(), "reserved_full");
+        assert_eq!(EvalDefer::AccountFull.as_str(), "account_full");
+        assert_eq!(EvalDefer::QuotaCap.as_str(), "quota_cap");
+    }
+
+    /// 評価の予約枠の既定は 0（評価 run を起こさない）。
+    #[test]
+    fn eval_runtime_config_defaults_to_no_reserved_runs() {
+        let cfg = EvalRuntimeConfig::default();
+        assert_eq!(cfg.reserved_runs, 0);
+        assert_eq!(
+            eval_admission(cfg.reserved_runs, 0, 0, 4, true),
+            Err(EvalDefer::Disabled)
+        );
     }
 }

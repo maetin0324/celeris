@@ -108,6 +108,7 @@ mod cluster;
 mod continuation_session;
 pub mod cos_chat;
 mod dispatch_run;
+mod eval_trials;
 /// ADR-0098（Phase R7-10）: worker の run が宣言した後続 task（`followups.json`）。
 mod followups;
 mod housekeeping;
@@ -534,6 +535,10 @@ pub struct DispatchConfig {
     pub workspace_prune_after_secs: u64,
     /// ADR-0072 D18（Phase E1）: `[execution]`。continuation の可否と上限。
     pub execution: ExecutionConfig,
+    /// `[routing_eval]`（ADR 2026-10-11-llm-source-model-routing-evaluation 付記「評価 run の受け口」）:
+    /// 評価 run 専用の予約枠。評価 run は `max_concurrency` に数えず、この枠の中だけで走る
+    /// （`crate::capacity::eval_admission`）。既定 0 = 評価 run を起こさない。
+    pub eval: crate::capacity::EvalRuntimeConfig,
 }
 
 /// ADR-0072 D18（Phase E1）: `[execution]`。continuation（予算切れ・yield の続き）の可否と上限。
@@ -682,6 +687,9 @@ pub struct TickReport {
     pub in_flight: usize,
     /// 実行中／判定中が無く、`ready_tasks` も空で、DB に `running`/`reviewing` が無い。
     pub idle: bool,
+    /// ADR 2026-10-11-llm-source-model-routing-evaluation 付記 2026-10-12（eval-dispatch）D4:
+    /// この tick で起こした評価 run（`eval_trials`）の本数。本番の `dispatched` には数えない。
+    pub eval_started: usize,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -726,6 +734,13 @@ enum Completion {
         task_id: TaskId,
         work_unit_id: String,
         result: Box<Result<IntegrationRun, String>>,
+    },
+    /// ADR 2026-10-11-llm-source-model-routing-evaluation 付記 2026-10-12（eval-dispatch）D4/D5:
+    /// 評価 run（`eval_trials`）の adapter が終わった。tasks 行を持たないので `task_id` は持たない
+    /// （run id から `eval_trials` の行を引く）。採点（hidden check）は次の段が行う。
+    EvalWorker {
+        run_id: String,
+        result: Result<RunOutcome, AdapterError>,
     },
 }
 
@@ -1112,6 +1127,8 @@ struct ReviewEntry {
     account_adapter: Option<AccountAdapter>,
 }
 
+type EvalVersionProbe = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
+
 pub struct Dispatcher {
     store: Arc<dyn TaskStore>,
     cos_chat_launch: Option<cos_chat::launch::CosChatLaunch>,
@@ -1150,6 +1167,12 @@ pub struct Dispatcher {
     test_sync_conflict_as_review_fail: bool,
     /// ADR-0074 D1.5（Phase F2）: 鍵は (task, WU)。Task 単位の問いは `running_for_task`。
     running: HashMap<RunKey, RunEntry>,
+    /// ADR 2026-10-11-llm-source-model-routing-evaluation 付記 2026-10-12（eval-dispatch）D4:
+    /// 起動した評価 run（run id → 試行）。`running` に入れないので本番の全体並列度に数えない
+    /// （予約枠は `config.eval.reserved_runs`）。真実は `eval_trials` の行。
+    eval_runs: HashMap<String, eval_trials::EvalRunEntry>,
+    /// 評価 run の harness の版の測り方（試験用差し替え。`None` なら `probe_harness_version`）。
+    eval_version_probe: Option<EvalVersionProbe>,
     reviewing: HashMap<TaskId, ReviewEntry>,
     /// レビューを開始できなかった（`Reviewer` run の枠が無い）タスクの `done` 内容。次 tick で使う。
     pending_subjects: HashMap<TaskId, ReviewSubject>,
@@ -1524,6 +1547,8 @@ impl Dispatcher {
             #[cfg(test)]
             test_sync_conflict_as_review_fail: false,
             running: HashMap::new(),
+            eval_runs: HashMap::new(),
+            eval_version_probe: None,
             reviewing: HashMap::new(),
             pending_subjects: HashMap::new(),
             infra_backoff: HashMap::new(),
@@ -2370,6 +2395,11 @@ impl Dispatcher {
         } else {
             0
         };
+        // ADR 2026-10-11-llm-source-model-routing-evaluation 付記 2026-10-12（eval-dispatch）D3:
+        // 評価 run は本番を先に配った後の予約枠（`[routing_eval] reserved_runs`）の中だけで起こす。
+        if self.accepting_new_work && self.disk_ready {
+            report.eval_started = self.tick_eval_trials();
+        }
         self.tick_cos_chat_launch();
         let dispatch_ms = lap(&mut at);
         report.in_flight = self.in_flight();
@@ -2470,6 +2500,11 @@ impl Dispatcher {
                 } => {
                     self.on_integration_finished(task_id, &work_unit_id, *result)?;
                     self.record_routing_outcomes(task_id);
+                }
+                // 評価 run（tasks 行を持たない）: run を閉じて試行を `scoring` へ。本番の
+                // `finished` には数えない（ADR 付記 eval-dispatch D4/D5）。
+                Completion::EvalWorker { run_id, result } => {
+                    self.on_eval_worker_finished(run_id, result);
                 }
             }
         }

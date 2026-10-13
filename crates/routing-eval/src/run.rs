@@ -1,0 +1,330 @@
+//! Submit frozen manifest problems as Celeris evaluation trials.
+use std::{fs, path::PathBuf, thread, time::Duration};
+
+use reqwest::blocking::Client;
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+
+use crate::{
+    candidates::{CANDIDATES, Candidate},
+    manifest::{Manifest, Problem},
+};
+
+#[derive(Debug, Serialize)]
+struct TrialRequest {
+    problem_id: String,
+    trial_no: u32,
+    source_id: String,
+    model_id: String,
+    harness_id: String,
+    repo: String,
+    base_commit: String,
+    objective: String,
+    check: Check,
+}
+#[derive(Debug, Serialize)]
+struct Check {
+    cmd: String,
+    timeout_secs: u32,
+}
+#[derive(Debug, Deserialize)]
+struct TrialRef {
+    trial_id: String,
+    problem_id: String,
+    trial_no: u32,
+    status: String,
+}
+#[derive(Debug, Deserialize)]
+struct BatchResponse {
+    batch_id: String,
+    trials: Vec<TrialRef>,
+}
+
+pub fn run() -> Result<(), String> {
+    run_args(std::env::args().skip(2).collect())
+}
+
+pub fn run_args(raw_args: Vec<String>) -> Result<(), String> {
+    let mut args = raw_args.into_iter();
+    let mut api = None;
+    let mut manifest = None;
+    let mut candidates = None;
+    let mut token_file = None;
+    let mut repo = None;
+    let mut out = None;
+    let mut wait = false;
+    let mut poll_ms = 1000u64;
+    while let Some(arg) = args.next() {
+        let value = |args: &mut std::vec::IntoIter<String>, flag: &str| {
+            args.next()
+                .ok_or_else(|| format!("missing value for {flag}"))
+        };
+        match arg.as_str() {
+            "--api" => api = Some(value(&mut args, "--api")?),
+            "--manifest" => manifest = Some(value(&mut args, "--manifest")?),
+            "--candidates" => candidates = Some(value(&mut args, "--candidates")?),
+            "--token-file" => token_file = Some(value(&mut args, "--token-file")?),
+            "--repo" => repo = Some(value(&mut args, "--repo")?),
+            "--out" => out = Some(value(&mut args, "--out")?),
+            "--poll-interval-ms" => {
+                poll_ms = value(&mut args, "--poll-interval-ms")?
+                    .parse()
+                    .map_err(|_| "invalid --poll-interval-ms".to_string())?
+            }
+            "--wait" => wait = true,
+            _ => return Err(format!("unknown option: {arg}")),
+        }
+    }
+    let api = api.ok_or("missing required option --api")?;
+    let manifest_path = PathBuf::from(manifest.ok_or("missing required option --manifest")?);
+    let ids = candidates.ok_or("missing required option --candidates")?;
+    let manifest: Manifest =
+        serde_json::from_slice(&fs::read(manifest_path).map_err(|e| e.to_string())?)
+            .map_err(|e| format!("invalid manifest: {e}"))?;
+    let repo = repo.unwrap_or_else(|| ".".into());
+    let repo = fs::canonicalize(repo)
+        .map_err(|e| format!("invalid --repo: {e}"))?
+        .to_string_lossy()
+        .into_owned();
+    let token = token_file
+        .map(|p| {
+            fs::read_to_string(p)
+                .map(|s| s.trim().to_owned())
+                .map_err(|e| e.to_string())
+        })
+        .transpose()?;
+    let selected = parse_candidates(&ids)?;
+    let trials = make_trials(&manifest, &selected, &repo)?;
+    let client = Client::builder().build().map_err(|e| e.to_string())?;
+    let endpoint = format!("{}/api/v1/routing-eval/trials", api.trim_end_matches('/'));
+    let mut request = client
+        .post(&endpoint)
+        .json(&json!({"manifest_sha": manifest.sha256, "trials": trials}));
+    if let Some(token) = &token {
+        request = request.bearer_auth(token);
+    }
+    let response = request.send().map_err(|e| format!("POST trials: {e}"))?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "POST trials returned {}: {}",
+            response.status(),
+            response.text().unwrap_or_default()
+        ));
+    }
+    let batch: BatchResponse = response
+        .json()
+        .map_err(|e| format!("invalid POST response: {e}"))?;
+    let mut states: Vec<Value> = batch.trials.iter().map(|t| json!({"trial_id":t.trial_id,"problem_id":t.problem_id,"trial_no":t.trial_no,"status":t.status})).collect();
+    if wait {
+        loop {
+            let mut request = client.get(format!("{endpoint}?batch_id={}", batch.batch_id));
+            if let Some(token) = &token {
+                request = request.bearer_auth(token);
+            }
+            let response = request.send().map_err(|e| format!("GET trials: {e}"))?;
+            if !response.status().is_success() {
+                return Err(format!(
+                    "GET trials returned {}: {}",
+                    response.status(),
+                    response.text().unwrap_or_default()
+                ));
+            }
+            let body: Value = response
+                .json()
+                .map_err(|e| format!("invalid GET response: {e}"))?;
+            let current = body
+                .get("trials")
+                .and_then(Value::as_array)
+                .ok_or("GET response has no trials array")?;
+            states = current.iter().map(|v| json!({"trial_id":v.get("trial_id"),"problem_id":v.get("problem_id"),"trial_no":v.get("trial_no"),"status":v.get("status")})).collect();
+            if current.iter().all(|v| {
+                v.get("status")
+                    .and_then(Value::as_str)
+                    .is_some_and(is_terminal)
+            }) {
+                break;
+            }
+            thread::sleep(Duration::from_millis(poll_ms));
+        }
+    }
+    let summary = json!({"schema":"celeris.routing-eval-run/1","batch_id":batch.batch_id,"manifest_sha":manifest.sha256,"trial_count":states.len(),"trials":states});
+    let rendered = serde_json::to_string_pretty(&summary).map_err(|e| e.to_string())?;
+    if let Some(path) = out {
+        fs::write(path, format!("{rendered}\n")).map_err(|e| e.to_string())?;
+    } else {
+        println!("{rendered}");
+    }
+    Ok(())
+}
+
+fn parse_candidates(ids: &str) -> Result<Vec<&'static Candidate>, String> {
+    let mut result = Vec::new();
+    for id in ids.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+        let candidate = CANDIDATES
+            .iter()
+            .find(|c| c.model_id == id || format!("{}:{}", c.source_id, c.model_id) == id)
+            .ok_or_else(|| format!("unknown candidate: {id}"))?;
+        if result.iter().any(|c: &&Candidate| {
+            c.model_id == candidate.model_id && c.source_id == candidate.source_id
+        }) {
+            return Err(format!("duplicate candidate: {id}"));
+        }
+        result.push(candidate);
+    }
+    if result.is_empty() {
+        return Err("--candidates must name at least one candidate".into());
+    }
+    Ok(result)
+}
+
+fn make_trials(
+    manifest: &Manifest,
+    candidates: &[&Candidate],
+    repo: &str,
+) -> Result<Vec<TrialRequest>, String> {
+    let mut result = Vec::new();
+    for c in candidates {
+        let problems: Vec<&Problem> = manifest
+            .problems
+            .iter()
+            .filter(|p| c.problem_count != 12 || p.subset_12)
+            .collect();
+        if problems.is_empty() {
+            return Err(format!(
+                "manifest has no eligible problems for {}",
+                c.model_id
+            ));
+        }
+        for p in problems {
+            let base_commit = p
+                .base_commit
+                .as_deref()
+                .ok_or_else(|| format!("problem {} has no base_commit", p.id))?;
+            for trial_no in 1..=c.k {
+                result.push(TrialRequest { problem_id:p.id.clone(),trial_no:trial_no as u32,source_id:c.source_id.into(),model_id:c.model_id.into(),harness_id:c.harness_id.into(),repo:repo.into(),base_commit:base_commit.into(),objective:format!("Complete evaluation problem {} (source task {}). Make the required repository change and do not run or request evaluation checks.",p.id,p.task_id),check:Check{cmd:p.command.clone(),timeout_secs:600} });
+            }
+        }
+    }
+    Ok(result)
+}
+fn is_terminal(s: &str) -> bool {
+    matches!(s, "passed" | "failed" | "error" | "cancelled")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{
+        io::{Read, Write},
+        net::TcpListener,
+    };
+    #[test]
+    fn candidates_expand_k_and_subset_and_keep_checks_out_of_objective() {
+        let mut manifest: Manifest = serde_json::from_value(json!({"schema":"x","version":"1","cutoff":"x","seed":0,"sha256":"abc","problems":[
+            {"id":"p1","task_id":"t1","work_unit_id":"w1","created_at":"","genre":"coding","kind":"leaf","command":"SECRET_CHECK","split":"dev","stratum":"x","subset_12":false,"head_commit":null,"base_commit":"abc","features_sha256":"","features":{},"sha256":""},
+            {"id":"p2","task_id":"t2","work_unit_id":"w2","created_at":"","genre":"coding","kind":"leaf","command":"SECRET_CHECK2","split":"dev","stratum":"x","subset_12":true,"head_commit":null,"base_commit":"def","features_sha256":"","features":{},"sha256":""}] })).expect("fixture");
+        manifest.problems.sort_by(|a, b| a.id.cmp(&b.id));
+        let trials =
+            make_trials(&manifest, &[&CANDIDATES[0], &CANDIDATES[3]], "/repo").expect("trials");
+        assert_eq!(trials.len(), 5); // 2 problems × k=2, plus subset problem × k=1
+        assert!(!trials[0].objective.contains("SECRET_CHECK"));
+        assert_eq!(trials[4].problem_id, "p2");
+        assert_eq!(trials[4].check.cmd, "SECRET_CHECK2");
+        assert_eq!(trials[0].harness_id, "claude-code");
+        assert_eq!(trials[4].harness_id, "claude-code");
+        let codex = make_trials(&manifest, &[&CANDIDATES[4]], "/repo").expect("codex");
+        assert!(codex.iter().all(|trial| trial.harness_id == "codex"));
+        assert!(
+            CANDIDATES
+                .iter()
+                .all(|candidate| !candidate.harness_id.is_empty())
+        );
+    }
+
+    #[test]
+    fn run_posts_manifest_trials_to_local_api_without_leaking_check_to_stdout() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("local listener");
+        let address = listener.local_addr().expect("address");
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("request");
+            let mut data = Vec::new();
+            let mut buf = [0u8; 4096];
+            loop {
+                let n = stream.read(&mut buf).expect("read request");
+                if n == 0 {
+                    break;
+                }
+                data.extend_from_slice(&buf[..n]);
+                let text = String::from_utf8_lossy(&data);
+                if let Some(end) = text.find("\r\n\r\n") {
+                    let length = text[..end]
+                        .lines()
+                        .find_map(|l| {
+                            l.to_ascii_lowercase()
+                                .strip_prefix("content-length: ")
+                                .and_then(|s| s.parse::<usize>().ok())
+                        })
+                        .unwrap_or(0);
+                    if data.len() >= end + 4 + length {
+                        break;
+                    }
+                }
+            }
+            let body_start = data
+                .windows(4)
+                .position(|w| w == b"\r\n\r\n")
+                .expect("headers")
+                + 4;
+            let body: Value = serde_json::from_slice(&data[body_start..]).expect("json body");
+            let wire = body.to_string();
+            assert!(wire.contains("PRIVATE_CHECK_TOKEN"));
+            let objective = body["trials"][0]["objective"].as_str().expect("objective");
+            assert!(!objective.contains("PRIVATE_CHECK_TOKEN"));
+            let response = json!({"batch_id":"b1","trials":[{"trial_id":"t1","problem_id":"p1","trial_no":1,"status":"queued"}]}).to_string();
+            write!(stream, "HTTP/1.1 201 Created\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", response.len(), response).expect("write response");
+            drop(stream);
+
+            let (mut stream, _) = listener.accept().expect("poll request");
+            let mut request = Vec::new();
+            loop {
+                let n = stream.read(&mut buf).expect("read poll");
+                if n == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buf[..n]);
+                if request.windows(4).any(|w| w == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let request = String::from_utf8_lossy(&request);
+            assert!(request.starts_with("GET /api/v1/routing-eval/trials?batch_id=b1 "));
+            let response = json!({"trials":[{"trial_id":"t1","problem_id":"p1","trial_no":1,"status":"passed"}]}).to_string();
+            write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", response.len(), response).expect("write poll response");
+        });
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("manifest.json");
+        let output = dir.path().join("summary.json");
+        let manifest = json!({"schema":"x","version":"1","cutoff":"x","seed":0,"sha256":"abc","problems":[{"id":"p1","task_id":"t1","work_unit_id":"w1","created_at":"","genre":"coding","kind":"leaf","command":"PRIVATE_CHECK_TOKEN","split":"dev","stratum":"x","subset_12":true,"head_commit":null,"base_commit":"abc","features_sha256":"","features":{},"sha256":""}]});
+        fs::write(&path, manifest.to_string()).expect("write manifest");
+        run_args(vec![
+            "--api".into(),
+            format!("http://{address}"),
+            "--manifest".into(),
+            path.to_string_lossy().into_owned(),
+            "--candidates".into(),
+            "claude-opus-5-5".into(),
+            "--repo".into(),
+            dir.path().to_string_lossy().into_owned(),
+            "--wait".into(),
+            "--poll-interval-ms".into(),
+            "1".into(),
+            "--out".into(),
+            output.to_string_lossy().into_owned(),
+        ])
+        .expect("run command");
+        server.join().expect("server");
+        let summary = fs::read_to_string(output).expect("summary");
+        assert!(summary.contains("passed"));
+        assert!(!summary.contains("PRIVATE_CHECK_TOKEN"));
+    }
+}

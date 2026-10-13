@@ -189,6 +189,7 @@ fn knowledge_dispatcher_with(
             scratch: task_worker::scratch::ScratchSettings::disabled(),
             workspace_prune_after_secs: 0,
             execution: ExecutionConfig::default(),
+            eval: crate::capacity::EvalRuntimeConfig::default(),
         },
     )
 }

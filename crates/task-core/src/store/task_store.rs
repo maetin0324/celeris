@@ -879,6 +879,62 @@ pub trait TaskStore:
     -> Result<(), StoreError>;
     /// 同上。`task_id` の `runs` 行を渡した集合でまるごと置き換える。
     fn runs_replace(&self, task_id: TaskId, rows: Vec<RunRow>) -> Result<(), StoreError>;
+
+    // ADR 2026-10-11-llm-source-model-routing-evaluation 付記 2026-10-12（eval-dispatch）:
+    // 評価 run の受け口。実体は `store/eval_trials.rs` と `store/route_records.rs`（`SqliteStore` の
+    // 固有 method）で、ここは dispatcher（`Arc<dyn TaskStore>`）から届くようにするための宣言。
+    fn eval_trials_list(
+        &self,
+        batch_id: Option<&str>,
+        status: Option<crate::routing_eval_trial::EvalTrialStatus>,
+    ) -> Result<Vec<crate::routing_eval_trial::EvalTrial>, StoreError>;
+    fn eval_trial_get(
+        &self,
+        trial_id: &str,
+    ) -> Result<Option<crate::routing_eval_trial::EvalTrial>, StoreError>;
+    fn eval_trial_claim_next(
+        &self,
+    ) -> Result<Option<crate::routing_eval_trial::EvalTrial>, StoreError>;
+    fn eval_trial_unclaim(&self, trial_id: &str) -> Result<(), StoreError>;
+    fn eval_trial_mark_started(
+        &self,
+        trial_id: &str,
+        run_id: &str,
+        decision_id: &str,
+        harness_version: &str,
+        worktree_path: &str,
+    ) -> Result<(), StoreError>;
+    fn eval_trial_mark_scoring(&self, trial_id: &str) -> Result<(), StoreError>;
+    fn eval_trial_finish(
+        &self,
+        trial_id: &str,
+        status: crate::routing_eval_trial::EvalTrialStatus,
+        check_exit: Option<i32>,
+        timed_out: bool,
+        error: Option<&str>,
+    ) -> Result<(), StoreError>;
+    fn insert_route_features(
+        &self,
+        hash: &str,
+        subject_kind: &str,
+        subject_id: &str,
+        features: &crate::route_record::TaskFeatures,
+        created_at: &str,
+    ) -> Result<(), StoreError>;
+    fn insert_route_options(
+        &self,
+        hash: &str,
+        options: &crate::route_record::RouteOptions,
+        created_at: &str,
+    ) -> Result<(), StoreError>;
+    fn insert_route_decision(
+        &self,
+        decision: &crate::store::route_records::StoredRouteDecision,
+    ) -> Result<(), StoreError>;
+    fn insert_route_outcome(
+        &self,
+        outcome: &crate::store::route_records::StoredRouteOutcome,
+    ) -> Result<(), StoreError>;
     /// ADR-0072 D5/D17（Phase E4b 項目5）: 同上。`task_id` の `execution_plans` 行（版の履歴）を
     /// 渡した集合でまるごと置き換える。`task_ops::replay::check_and_apply_execution` が
     /// `rebuild_execution_plans`（`Event::ExecutionPlanned` からの再構築。replan で複数版になった

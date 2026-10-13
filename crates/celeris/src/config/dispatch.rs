@@ -269,6 +269,11 @@ impl Config {
                     ..task_core::ExecutionLimits::default()
                 },
             },
+            // ADR 2026-10-11-llm-source-model-routing-evaluation 付記（eval-dispatch）: `[routing_eval]`
+            // の予約枠。評価 run は本番の `max_concurrency` に数えない。
+            eval: task_dispatch::capacity::EvalRuntimeConfig {
+                reserved_runs: self.routing_eval.reserved_runs,
+            },
         }
     }
 }

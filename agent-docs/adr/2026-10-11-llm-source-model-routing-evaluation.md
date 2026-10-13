@@ -193,11 +193,92 @@ D4 の削除は同じ unit で行う。
 - `enforce` へ進むのは人、戻すのは daemon。人の承認なしに本番の経路が変わることはない。
 - events は消さない。旧 payload の `routing_decided` と `routing_shadow_recorded` は読み取り API で `legacy` として表示する。
 
+## 付記 2026-10-12: 評価 run の受け口（eval-dispatch）
+
+D1 の評価 run を Celeris の run 経路で起こす受け口の形を固定する（task 01M4Q7C4X2QR3HYPTTQAG5GXQ9）。後続の実装が食い違えばこの節に具体的に追記する。
+
+1. **表 `eval_trials`（migration 0072）**: 1 行 = 1 試行（harness 固定・source×model 固定・新 session・新 worktree の評価 run 1 本）。
+   列は trial_id（ULID）・batch_id（1 回の投入 = 1 batch）・manifest_sha・problem_id・trial_no・source_id・model_id・harness_id・
+   harness_version（起動時に埋める）・repo・base_commit・objective（worker に見せる本文）・check_cmd（採点専用、worker に渡さない）・
+   check_timeout_secs・status・run_id・decision_id・worktree_path・check_exit・timed_out・error・created_at・started_at・finished_at。
+   UNIQUE(manifest_sha, problem_id, trial_no, source_id, model_id, harness_id) で、同じ試行の再投入は既存行を返す（冪等）。
+   型は `task_core::routing_eval_trial`（`EvalTrialSpec`・`EvalTrial`・`EvalTrialStatus`）、store は `SqliteStore::{insert_eval_trials,
+   eval_trials_list, eval_trial_get, eval_trial_claim_next, eval_trial_unclaim, eval_trial_mark_started, eval_trial_mark_scoring,
+   eval_trial_finish, eval_trial_cancel}`。
+   状態遷移: `queued → running`（claim。条件付き UPDATE で二重 claim しない）、`running → queued`（unclaim。admission で起こせず run 未記録のときだけ）、
+   `running` のまま run を記録（mark_started。1 回だけ）、`running → scoring`（run 記録後）、`scoring → passed|failed`、`running|scoring → error`、
+   `queued|running → cancelled`。それ以外は `StoreError::Invalid`。
+2. **API**（task-api `routing_eval`）: `POST /api/v1/routing-eval/trials`（本体 `{manifest_sha, trials:[{problem_id, trial_no, source_id, model_id,
+   harness_id, repo, base_commit, objective, check:{cmd, timeout_secs}}]}` → 201 `{batch_id, trials:[{trial_id, problem_id, trial_no, status}]}`。
+   空 trials・catalog に無い source/model/harness・repo 不在は 400）、`GET /api/v1/routing-eval/trials?batch_id=&status=`（check_cmd は返さない）、
+   `POST /api/v1/routing-eval/trials/{trial_id}/cancel`（200 / 409）。認可は既存の書き込み API と同じ。
+   実装（`crates/task-api/src/routing_eval.rs`、2026-10-12 trial-api）の細目: 400 は code `eval_trial_invalid`（`detail` に全理由を `; ` 区切りで並べる）で、
+   空 trials・256 件超・空欄（manifest_sha / problem_id / base_commit / objective / check.cmd）・未知の source/model/harness・repo のディレクトリ不在・
+   `timeout_secs` が 0 または 86400 超・同じ batch 内の重複試行。id の照合先は daemon の設定（`[[providers]]` の adapter・model・lane 束縛・解決した LLM source）・
+   routing catalog・`[[genres]]`＋組み込み harness で、source は `-`/`_` と大文字小文字を区別しない（`claude-oauth` = `claude_oauth`）。
+   照合先が空の欄（最小構成の daemon）は検査しない。cancel の 409 は `eval_trial_not_cancellable`、無い id は 404 `eval_trial_not_found`。
+   `check.timeout_secs` の既定は 900。GET・cancel の応答の型（`EvalTrialView`）には `check_cmd` だけでなく `objective` の欄も無い（`docs/api/v1/gui-api.md` §3.133）。
+3. **評価予約枠**: config `[routing_eval] reserved_runs = <n>`（既定 0 = 評価 run を起こさない）。評価 run は本番の全体並列度に数えず、
+   専用枠の中だけで走り、tick では本番の dispatch の後に配る。account の同時実行と quota 上限は本番と同じ判定に従う。
+   純関数 `eval_admission(reserved_runs, eval_in_flight, account_in_use, account_limit, quota_ok) -> Result<(), EvalDefer>`
+   （`EvalDefer = Disabled | ReservedFull | AccountFull | QuotaCap`）を task-dispatch の capacity に置く。
+4. **起動**（dispatcher の tick 段 `eval_trials`）: claim → admission（不可なら unclaim）→ harness の版（実行 file の `--version`。
+   `harness_version_major` の major と生の出力を両方記録）→ 新 worktree（`git worktree add --detach <data>/eval/<trial_id>/repo <base_commit>`）→
+   RunRequest は harness 固定・source×model 固定・新 session（resume・checkpoint なし）・objective だけで acceptance・checks は空 →
+   runs 1 行（role="eval"、task_id=batch_id、work_unit_id NULL）→ route_features（template "eval"、subject_kind "eval_problem"）・route_options（候補 1 件）・
+   route_decisions 1 行（stage="eval"、subject_id=problem_id、input_json `{manifest_sha, trial_no, candidate}`、
+   output_json `{selected:{source_id, model_id, harness_id, harness_version}}`）。role="eval" の run は task 行が無くても回収・統計・受信箱の経路を壊さない。
+5. **採点**: worker 終了 → scoring → worktree で check_cmd を `sh -c`（timeout check_timeout_secs、WU check と同じ環境の絞り方）→
+   route_outcomes 1 行（labels に passed・check_exit・timed_out・wall_secs・usage・usd_list・run の終了状態）→ passed/failed（異常は error）→ worktree 削除。
+   daemon 再起動で running/scoring のまま run が消えた試行は理由つきで error にする。
+6. **CLI**: `celeris-routing-eval run --api <url> --manifest <file> --candidates <id,...> [--token-file <path>] [--repo <path>] [--wait] [--out <file>]`。
+   check の command は POST にだけ載せ、標準出力・要約に出さない。`--wait` は GET の間隔 poll で全試行の終端を待つ。
+7. **通し試験**: `crates/celeris/tests/routing_eval_run.rs` が一時 DB・一時 git repo・stub harness・reserved_runs=1 で 1 問 × 2 試行を回し、
+   runs(role=eval)・route_decisions(stage=eval、harness_version あり)・route_outcomes が各 2、worktree・session が試行ごとに別、
+   stub の prompt に check_cmd が無い、同時に 2 本走らないことを確かめる。
+
+## 付記 2026-10-12: 評価 runner の実装（eval-harness）
+
+D5 の評価 runner（crate `routing-eval`、bin `celeris-routing-eval`）と根拠表の型・表を実装した（task 01M4Q53E9WQEKMAS448GZMWTFB）。後続の変更が食い違えばこの節に具体的に追記する。
+
+1. **harness_version の major（D1 の未解決を確定）**: `task_core::routing_evidence::harness_version_major(harness_id, version_output)`。
+   `claude-code`・`codex` は version 出力の中の最初の `X.Y.Z` 形の語の major（`v` 接頭辞は外す。例 `Claude Code 1.8.2` → `1`）。
+   それ以外（acp・pi など）は version 出力を trim した全体。major が取れないときも全体を使う。根拠表の鍵は major、生の出力は `eval_trials`（付記 2026-10-12 の 1）側に残す。
+   試験は `task-core` の routing_evidence 単体試験が固定する。
+2. **評価集合 manifest（`celeris.routing-eval-manifest/1`）**: `manifest.json` の欄は `schema`・`version`（既定 `1`）・`cutoff`（既定 `2026-10-05`。作成時期で dev < cutoff ≤ held-out）・`seed`・`problems[]`・`sha256`（全体）。
+   問題の欄は `id`・`task_id`・`work_unit_id`・`created_at`・`genre`・`kind`・`command`（採点用の check。manifest 以外には出さない）・`split`・`stratum`・`subset_12`・`base_commit`・`head_commit`・`features`（`celeris.task-features/1`、作成時点 as_of）・`features_sha256`・問題ごとの `sha256`。
+   `recheck` は各問題の check を base で失敗・head で成功と再実行で検め、結果を manifest の `recheck` 欄に書く（除外理由つき）。同じ `version` で sha256 が違う上書きは拒否し、`--version` を上げさせる。
+   集合の内訳は ADR D1 の表どおり: 通常 5 model は 30 問（k=2）、fable・astra は 30 問の層を保つ 12 問（k=1）。候補の表は `candidates.rs` の `CANDIDATES` 定数 7 件だけ。
+3. **根拠表 `routing_evidence`（migration 0071 + 付記 migration 0073）**: 列は `genre`・`harness_id`・`harness_version`（major）・`source_id`・`model_id`・`evidence_version`・`n`・`pass`・`pass_lower`・`pass_upper`（Wilson 95%）・`pass_boot_lower`・`pass_boot_upper`（問題単位 bootstrap 95%、seed 42、2000 resamples）・`wall_median_s`・`usd_list_median`・`quota_per_run_json`（窓→率の JSON）・`timeout_rate`・`low_confidence`（k=1・部分集合）。根拠表 Markdown、aggregate JSON、特徴量つき trial export にも Wilson と bootstrap を併記する。
+   主キーは鍵 + `evidence_version`。`evidence_version` は `<manifest sha256>-<集計日 UTC>`。同じ版は丸ごと置換し、別の版は追記する（store の `insert_routing_evidence` / `list_routing_evidence`）。
+   書くのは `aggregate --write-evidence` だけ。API と GUI に編集経路は作らない（ADR D2 の「手で編集しない」）。
+4. **評価 run の DB 契約（付記 2026-10-12 の 4 と同じ。aggregate が読む側）**: 1 試行 = `route_decisions` 1 行（stage `eval`、subject_kind `eval_problem`、input `{manifest_sha, trial_no, candidate}`、output `{selected:{source_id, model_id, harness_id, harness_version}}`）＋ `runs` 1 行（role `eval`、run_id で結合）＋ `route_outcomes`（passed・check_exit・timed_out・wall_secs・usage・usd_list）。aggregate は決定的 check の判定・timeout・token・quota を集め、同じ鍵の試行を問題単位で束ねて `stats` に渡す。
+5. **dry-run の見積り**: 呼び出し数は問題数 × k、account ごとに合算する。定価換算 USD は本番 runs の model 別の token 中央値に単価表（`dryrun.rs` の定数。claude 4 model のみ）を掛ける。codex の 2 model は単価が無いので USD を出さず「未算定」と書く。quota は `quota_estimated` のうち `method=measured` の行だけを率にする（無ければ「未測定」）。`--measured` は 10 run 実測の JSON（`runs` = 10 が必須）で率を置き換える。週窓の率が 15% を越える account は縮小案を出す。
+6. **統計（`stats`）**: Wilson 95%・問題単位の seed 固定 bootstrap・exact McNemar・paired 差の区間・Pareto・根拠成立（30×2 は有効 24 問以上、12×1 は全問）・同等集合（区間の重なり）・`may_claim_superiority`（k=1 は常に偽）・held-out で選択の符号が反転したら不成立。CLI の `stats` は単独入力を持たず、`aggregate` が呼ぶ（CLI から呼ぶと説明つきの失敗を返す）。
+7. **本番で評価を走らせる手順は人の決定待ち**: LLM を呼ぶ評価（`run` の本番実行）は、eval-budget の人の回答と dry-run の受信箱決定（呼び出し数・費用・quota の見積り）の後にだけ行う。今回の run では実行せず、試験は stub harness と一時 DB だけで行った（`crates/routing-eval/tests/pipeline_stub.rs`）。
+
+## 付記 2026-10-12（v4）: 候補ごとの harness 固定と cell bootstrap 区間
+
+差し戻し（final review v3）への対応。D1 の候補表に harness 列を足し、評価 run の起動と根拠行の区間を揃えた。
+
+1. **候補表の harness 列**（`crates/routing-eval/src/candidates.rs` の `CANDIDATES`、run の `make_trials` はこの欄を読む）:
+
+   | source / account | harness_id | model |
+   |---|---|---|
+   | claude-oauth / claude | claude-code | claude-opus-5-5、claude-sonnet-5-5、claude-haiku-5-5、claude-fable-5-1（k=1・12 問） |
+   | codex-oauth / codex | codex | gpt-6.1-sol、gpt-6-luna、gpt-6-astra（k=1・12 問） |
+
+   評価 run の trial は候補ごとに固定の harness で起こす（claude 4 候補は claude-code、codex 3 候補は codex）。`eval_trials` の UNIQUE 鍵と `route_decisions` の output に harness_id を残す。
+   比較は harness の中だけで行う（`aggregate` の paired 比較は harness が違う組を作らない）。試験は `run::tests::candidates_expand_k_and_subset_and_keep_checks_out_of_objective` と `aggregate::tests::paired_comparisons_never_cross_harnesses` が固定する。
+2. **cell の区間は Wilson と問題単位 bootstrap の 2 本**: 根拠行（`EvidenceRow`）の `pass_lower`・`pass_upper`（Wilson 95%）と並べて `pass_boot_lower`・`pass_boot_upper`（問題単位の bootstrap 95%、seed 42・2,000 resamples、各問題の最初の試行を 1 標本とする）を持つ。`routing_evidence`（migration 0073）・aggregate の JSON と Markdown 根拠表・JSONL export に同じ欄で出す。bootstrap は cell 単位の区間であり、paired 差の区間（比較用）の代わりにはしない。
+3. **dry-run の扱いは変えない**: 呼び出し数・定価換算・quota の見積りは dry-run（`celeris-routing-eval dry-run`）の出力のままで、LLM を呼ぶ評価 run は本 ADR の付記 2026-10-12（eval-dispatch）の 7 と同じく人の決定待ち。
+
 ## 改訂履歴
 
 - 2026-10-11: 人の確認を反映。評価対象を 7 model に限定し、fable-5-1 / gpt-6-astra を k=1・層別部分集合、通常 5 model を k=2・30 問に縮小。Codex の quota は実測前に率を仮定せず、10-run dry-run と週 15% gate を必須化。opencode-go は根拠表対象外、qwen はローカル既定候補として明記。辞書順 fallback と `[routing.defaults.<genre>]` を除き、lane ごとの人の既定を harness×lane `route_defaults` に統合。
 
 - 2026-10-11: 人の補足（decision model は自然言語の入力・選択肢・確率）と人の補足 2（Input/Output の形）を受け、判断の記録と学習データの export を [2026-10-11-task-routing-features.md](2026-10-11-task-routing-features.md) に分けて決め、D2・D5 から参照した。
+- 2026-10-12: aggregate の根拠行にも問題単位 bootstrap 95% 区間を Wilson と並べ、routing_evidence および Markdown / JSON / JSONL export に保存する（migration 0073、seed 42・2000 resamples）。
 
 ## 未解決（evaluate・land 段で決める）
 

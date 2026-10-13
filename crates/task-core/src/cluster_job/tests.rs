@@ -390,6 +390,8 @@ fn migration_0034_adds_cluster_job_waits_to_a_schema_33_db() {
              DROP INDEX idx_route_decisions_export; DROP TABLE route_decisions; \
              DROP TABLE route_options; DROP TABLE route_features; \
              DROP TABLE account_limits; \
+             DROP INDEX idx_routing_evidence_lookup; DROP TABLE routing_evidence; \
+             DROP INDEX idx_eval_trials_status; DROP INDEX idx_eval_trials_batch; DROP TABLE eval_trials; \
              DROP TRIGGER chat_node_session_thread_insert; \
              DROP TRIGGER chat_node_session_thread_update; \
              DROP INDEX idx_node_sessions_cos_chat_active; \
@@ -439,7 +441,7 @@ fn migration_0034_adds_cluster_job_waits_to_a_schema_33_db() {
     }
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), crate::SCHEMA_VERSION);
-    assert_eq!(crate::SCHEMA_VERSION, 69);
+    assert_eq!(crate::SCHEMA_VERSION, 73);
     assert!(store.cluster_job_waits_waiting().unwrap().is_empty());
     assert!(store.get(t.id).unwrap().is_some());
 }

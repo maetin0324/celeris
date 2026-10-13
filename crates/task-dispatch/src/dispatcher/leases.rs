@@ -80,6 +80,7 @@ impl Dispatcher {
         if let Err(e) = self.drain_completions() {
             tracing::warn!(error = %e, "failed to record the completions received before the shutdown");
         }
+        self.abort_eval_runs();
         let entries: Vec<(RunKey, RunEntry)> = self.running.drain().collect();
         let mut recorded = 0;
         for (key, entry) in entries {

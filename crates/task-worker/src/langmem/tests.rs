@@ -167,11 +167,11 @@ async fn happy_path_writes_candidates_and_result_files() {
 }
 
 #[tokio::test]
-async fn provider_kind_langmem_passes_proxy_cheap_model_to_stub() {
+async fn provider_kind_langmem_passes_proxy_model_to_stub() {
     let dir = tempfile::tempdir().unwrap();
     let mut config = stub_langmem(dir.path(), &fake_extractor_script());
     config.base_url = Some("http://127.0.0.1:18000/v1".to_string());
-    config.model = Some("celeris/cheap".to_string());
+    config.model = Some("qwen/qwen3.8-27b".to_string());
     let adapter = LangMemAdapter::new(config);
     let req = sample_req(dir.path().to_path_buf());
     let sink = RecordingSink::default();
@@ -184,7 +184,7 @@ async fn provider_kind_langmem_passes_proxy_cheap_model_to_stub() {
         &std::fs::read_to_string(dir.path().join("runs/run-proxy/langmem_input.json")).unwrap(),
     )
     .unwrap();
-    assert_eq!(input["llm"]["model"], "celeris/cheap");
+    assert_eq!(input["llm"]["model"], "qwen/qwen3.8-27b");
     assert_eq!(input["llm"]["base_url"], "http://127.0.0.1:18000/v1");
 }
 
@@ -405,7 +405,7 @@ async fn langmem_api_key_reaches_runner_env_with_and_without_a_stale_env() {
         let dir = tempfile::tempdir().unwrap();
         let mut config = stub_langmem(dir.path(), &env_recording_script());
         config.base_url = Some("http://127.0.0.1:18100/v1".to_string());
-        config.model = Some("celeris/cheap".to_string());
+        config.model = Some("qwen/qwen3.8-27b".to_string());
         config.api_key = Some("proxy-bearer".to_string());
         if provider_env {
             // `[adapters.langmem].env` / provider 行の env に残った古い値。

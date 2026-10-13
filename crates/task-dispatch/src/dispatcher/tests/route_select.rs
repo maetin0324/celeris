@@ -416,7 +416,7 @@ fn route_select_records_events_and_run_row() {
             _ => None,
         })
         .expect("llm_route_selected");
-    assert_eq!(metadata["version"], 1);
+    assert_eq!(metadata["version"], 2);
     assert_eq!(metadata["candidates"].as_array().map(Vec::len), Some(1));
     assert_eq!(metadata["decision"]["account"], "shared");
     let conn = rusqlite::Connection::open(&db).unwrap();
@@ -519,6 +519,11 @@ async fn route_select_dispatch_run_launches_the_selected_harness_model_and_accou
         0,
     );
     task.genre = Some("light".into());
+    task.objective = "crates/task-core/src/model.rs の小さな変更".into();
+    task.routing = Some(task_core::TaskRouting {
+        tier_source: task_core::TierSource::Hint,
+        ..Default::default()
+    });
     store.insert(&task).unwrap();
 
     assert_eq!(d.tick().unwrap().dispatched, 1);
@@ -556,7 +561,44 @@ async fn route_select_dispatch_run_launches_the_selected_harness_model_and_accou
     assert!(events.iter().any(|e| matches!(e,
         Event::LlmRouteSelected { source_id, model_id, account_id, .. }
             if source_id == "qwen" && model_id == "qwen3" && account_id == "shared")));
+    let routing = events
+        .iter()
+        .find_map(|e| match e {
+            Event::RoutingDecided {
+                run_id: event_run,
+                record,
+            } if event_run == &run_id => Some(record),
+            _ => None,
+        })
+        .expect("routing_decided");
+    let decision = routing
+        .features
+        .as_ref()
+        .and_then(|features| features.decision.as_deref())
+        .expect("route decision in the feature snapshot reference");
+    assert_eq!(
+        decision.stage,
+        task_core::route_select::RoutingStage::Shadow
+    );
+    assert_eq!(
+        decision.features_hash.as_deref(),
+        routing.features.as_ref().map(|f| f.hash.as_str())
+    );
+    assert_eq!(
+        decision.features_schema.as_deref(),
+        Some("celeris.task-features/1")
+    );
+    assert!(!decision.decision_id.is_empty());
+    assert!(decision.options_hash.is_some());
     let conn = rusqlite::Connection::open(&db).unwrap();
+    let decision_rows: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM route_decisions WHERE decision_id = ?1",
+            [&decision.decision_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(decision_rows, 1);
     let row: (String, String, String, String) = conn
         .query_row(
             "SELECT selected_harness_id, selected_source_id, selected_model_id, \

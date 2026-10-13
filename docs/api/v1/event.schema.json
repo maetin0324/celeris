@@ -413,6 +413,21 @@
       ],
       "type": "string"
     },
+    "CandidateKey": {
+      "properties": {
+        "model": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "model"
+      ],
+      "type": "object"
+    },
     "CandidateTrace": {
       "properties": {
         "cash_usd": {
@@ -4882,6 +4897,63 @@
         }
       ]
     },
+    "EvidenceSnapshot": {
+      "description": "The evidence row values a candidate was judged on (ADR D5 `candidates[].evidence`).",
+      "properties": {
+        "evidence_version": {
+          "type": "string"
+        },
+        "n": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "pass": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "pass_lower": {
+          "format": "double",
+          "type": "number"
+        },
+        "pass_upper": {
+          "format": "double",
+          "type": "number"
+        },
+        "quota_per_run": {
+          "additionalProperties": {
+            "format": "double",
+            "type": "number"
+          },
+          "type": "object"
+        },
+        "timeout_rate": {
+          "format": "double",
+          "type": "number"
+        },
+        "usd_list_median": {
+          "format": "double",
+          "type": "number"
+        },
+        "wall_median_s": {
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "evidence_version",
+        "n",
+        "pass",
+        "pass_lower",
+        "pass_upper",
+        "wall_median_s",
+        "usd_list_median",
+        "quota_per_run",
+        "timeout_rate"
+      ],
+      "type": "object"
+    },
     "ExcludedReason": {
       "description": "ADR §9（Phase 2）: 候補が落ちた理由の型。旧 event には無い（None）。\n既知の理由コード（optimizer・cost の `&'static str`）は [`ExcludedReason::from_code`] で写す。",
       "oneOf": [
@@ -5057,6 +5129,22 @@
           "type": "object"
         }
       ]
+    },
+    "ExclusionReason": {
+      "enum": [
+        "UnknownSource",
+        "ModelNotDeclared",
+        "ModelHintMismatch",
+        "NoCompatibleRoute",
+        "AccountUnavailable",
+        "SourceQuota",
+        "AccountQuota",
+        "Cooldown",
+        "SourceConcurrency",
+        "AccountConcurrency",
+        "NoDeclaredDefault"
+      ],
+      "type": "string"
     },
     "ExecutionChildSpec": {
       "additionalProperties": false,
@@ -6889,6 +6977,80 @@
       ],
       "type": "string"
     },
+    "RouteAction": {
+      "description": "How the selection was made: which rule the stage armed.",
+      "oneOf": [
+        {
+          "const": "shadow",
+          "description": "`shadow`: `route_defaults` decided; the evidence pick is recorded but not executed.",
+          "type": "string"
+        },
+        {
+          "const": "enforce",
+          "description": "`enforce`: the evidence table decided (with ε exploration).",
+          "type": "string"
+        },
+        {
+          "const": "explicit",
+          "description": "The task named the model explicitly; neither table decided.",
+          "type": "string"
+        }
+      ]
+    },
+    "RouteCandidate": {
+      "description": "One considered candidate with the evidence values the decision read.",
+      "properties": {
+        "evidence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EvidenceSnapshot"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "excluded": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExclusionReason"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Why the candidate never reached the selection rule."
+        },
+        "harness_id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "model_id": {
+          "type": "string"
+        },
+        "route_default_rank": {
+          "description": "1-based rank in the harness×lane `route_defaults` list; `None` when not declared.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "source_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_id",
+        "model_id",
+        "harness_id",
+        "label"
+      ],
+      "type": "object"
+    },
     "RouteDecision": {
       "properties": {
         "gate_rule_id": {
@@ -6923,9 +7085,193 @@
       ],
       "type": "object"
     },
-    "RouteFeaturesRef": {
-      "description": "Content-addressed reference to a stored task feature snapshot.",
+    "RouteDecision2": {
+      "description": "One routing decision: the record written to `route_decisions` and carried on `routing_decided`.",
       "properties": {
+        "action": {
+          "$ref": "#/$defs/RouteAction"
+        },
+        "candidates": {
+          "items": {
+            "$ref": "#/$defs/RouteCandidate"
+          },
+          "type": "array"
+        },
+        "decision_id": {
+          "type": "string"
+        },
+        "equivalent": {
+          "description": "Candidates the evidence table could not separate (ADR D2 同等集合).",
+          "items": {
+            "$ref": "#/$defs/CandidateKey"
+          },
+          "type": "array"
+        },
+        "evidence_version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "exclusions": {
+          "items": {
+            "$ref": "#/$defs/RouteExclusion"
+          },
+          "type": "array"
+        },
+        "features_hash": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "features_schema": {
+          "description": "Identity of the content-addressed task features snapshot (`celeris.task-features/1`) this\ndecision was made on. Flat (not a `RouteFeaturesRef`) so the ref can carry the decision.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "features_template": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "genre": {
+          "type": "string"
+        },
+        "harness_id": {
+          "type": "string"
+        },
+        "harness_version": {
+          "type": "string"
+        },
+        "judge": {
+          "$ref": "#/$defs/RouteJudge"
+        },
+        "lane": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "model_pin": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "options_hash": {
+          "description": "Content address of the `celeris.route-options/1` record of this decision.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "propensity": {
+          "description": "Probability that the selected candidate was chosen (includes ε exploration; 1.0 without it).",
+          "format": "double",
+          "type": "number"
+        },
+        "quota_remaining": {
+          "additionalProperties": {
+            "format": "double",
+            "type": "number"
+          },
+          "description": "Remaining quota per source at the decision point (absolute units; `0` = exhausted).",
+          "type": "object"
+        },
+        "rule": {
+          "$ref": "#/$defs/RouteRule"
+        },
+        "run_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "schema": {
+          "type": "string"
+        },
+        "scores": {
+          "items": {
+            "$ref": "#/$defs/RouteScore"
+          },
+          "type": "array"
+        },
+        "selected": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CandidateKey"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "`None` when every candidate was refused (fail closed)."
+        },
+        "stage": {
+          "$ref": "#/$defs/RoutingStage"
+        },
+        "subject_id": {
+          "type": "string"
+        },
+        "subject_kind": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema",
+        "decision_id",
+        "subject_kind",
+        "subject_id",
+        "genre",
+        "harness_id",
+        "harness_version",
+        "stage",
+        "quota_remaining",
+        "candidates",
+        "equivalent",
+        "exclusions",
+        "action",
+        "rule",
+        "propensity",
+        "scores",
+        "judge"
+      ],
+      "type": "object"
+    },
+    "RouteExclusion": {
+      "description": "A candidate the evidence rule dropped, with the reason (ADR D2 trace).",
+      "properties": {
+        "candidate": {
+          "$ref": "#/$defs/CandidateKey"
+        },
+        "reason": {
+          "$ref": "#/$defs/ExclusionReason"
+        }
+      },
+      "required": [
+        "candidate",
+        "reason"
+      ],
+      "type": "object"
+    },
+    "RouteFeaturesRef": {
+      "description": "Content-addressed reference to a stored task feature snapshot, plus the one routing decision\nthat used it (ADR 2026-10-11-task-routing-features D6: `routing_decided` carries `decision_id`,\nthe features schema version and hash, and `options_hash`; the routing ADR D4 adds the stage,\nevidence version, propensity, equivalent set and exclusion reasons).",
+      "properties": {
+        "decision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RouteDecision2"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The `celeris.route-decision/1` record of this dispatch (the same row as `route_decisions`).\nIts own `features_*` fields repeat this ref; older events omit it."
+        },
         "hash": {
           "type": "string"
         },
@@ -6940,6 +7286,30 @@
         "schema",
         "template",
         "hash"
+      ],
+      "type": "object"
+    },
+    "RouteJudge": {
+      "description": "ADR D5 `judge`: the rule selector is deterministic and has no model of its own.",
+      "properties": {
+        "deterministic": {
+          "type": "boolean"
+        },
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "id",
+        "version",
+        "deterministic"
       ],
       "type": "object"
     },
@@ -6959,6 +7329,44 @@
         "rule_id",
         "ok",
         "detail"
+      ],
+      "type": "object"
+    },
+    "RouteRule": {
+      "description": "ADR D5 `output.rule`.",
+      "enum": [
+        "evidence",
+        "explore",
+        "route_defaults",
+        "model_pin"
+      ],
+      "type": "string"
+    },
+    "RouteScore": {
+      "description": "ADR D5 `output.scores[]`.",
+      "properties": {
+        "expected_cost_usd": {
+          "format": "double",
+          "type": "number"
+        },
+        "option_id": {
+          "type": "string"
+        },
+        "p_success": {
+          "format": "double",
+          "type": "number"
+        },
+        "rank": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "option_id",
+        "p_success",
+        "expected_cost_usd",
+        "rank"
       ],
       "type": "object"
     },
@@ -7047,6 +7455,13 @@
         "resolution"
       ],
       "type": "object"
+    },
+    "RoutingStage": {
+      "enum": [
+        "shadow",
+        "enforce"
+      ],
+      "type": "string"
     },
     "RoutingTraceV1": {
       "properties": {

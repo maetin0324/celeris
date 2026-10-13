@@ -551,6 +551,11 @@ export type CancelBody = {
   "expected_status"?: Status | null;
 };
 
+export type CandidateKey = {
+  "model": string;
+  "source": string;
+};
+
 export type CandidateTrace = {
   "cash_usd"?: number | null;
   "config_order"?: number | null;
@@ -2634,6 +2639,20 @@ export type EventsPage = {
   "items": Array<EventRow>;
 };
 
+export type EvidenceSnapshot = {
+  "evidence_version": string;
+  "n": number;
+  "pass": number;
+  "pass_lower": number;
+  "pass_upper": number;
+  "quota_per_run": {
+  [key: string]: number;
+};
+  "timeout_rate": number;
+  "usd_list_median": number;
+  "wall_median_s": number;
+};
+
 export type EvidenceView = {
   "command"?: string | null;
   "criterion": number;
@@ -2671,6 +2690,8 @@ export type ExcludedReason = {
   "code": string;
   "kind": "other";
 };
+
+export type ExclusionReason = "UnknownSource" | "ModelNotDeclared" | "ModelHintMismatch" | "NoCompatibleRoute" | "AccountUnavailable" | "SourceQuota" | "AccountQuota" | "Cooldown" | "SourceConcurrency" | "AccountConcurrency" | "NoDeclaredDefault";
 
 export type ExecutionChildSpec = {
   "acceptance": Array<Criterion>;
@@ -4810,6 +4831,18 @@ export type RollupMetrics = {
 
 export type Route = "direct" | "planned";
 
+export type RouteAction = "shadow" | "enforce" | "explicit";
+
+export type RouteCandidate = {
+  "evidence"?: EvidenceSnapshot | null;
+  "excluded"?: ExclusionReason | null;
+  "harness_id": string;
+  "label": string;
+  "model_id": string;
+  "route_default_rank"?: number | null;
+  "source_id": string;
+};
+
 export type RouteDecision = {
   "gate_rule_id": string;
   "overrode_gate": boolean;
@@ -4819,16 +4852,69 @@ export type RouteDecision = {
   "shadow": boolean;
 };
 
+export type RouteDecision2 = {
+  "action": RouteAction;
+  "candidates": Array<RouteCandidate>;
+  "decision_id": string;
+  "equivalent": Array<CandidateKey>;
+  "evidence_version"?: string | null;
+  "exclusions": Array<RouteExclusion>;
+  "features_hash"?: string | null;
+  "features_schema"?: string | null;
+  "features_template"?: string | null;
+  "genre": string;
+  "harness_id": string;
+  "harness_version": string;
+  "judge": RouteJudge;
+  "lane"?: string | null;
+  "model_pin"?: string | null;
+  "options_hash"?: string | null;
+  "propensity": number;
+  "quota_remaining": {
+  [key: string]: number;
+};
+  "rule": RouteRule;
+  "run_id"?: string | null;
+  "schema": string;
+  "scores": Array<RouteScore>;
+  "selected"?: CandidateKey | null;
+  "stage": RoutingStage;
+  "subject_id": string;
+  "subject_kind": string;
+};
+
+export type RouteExclusion = {
+  "candidate": CandidateKey;
+  "reason": ExclusionReason;
+};
+
 export type RouteFeaturesRef = {
+  "decision"?: RouteDecision2 | null;
   "hash": string;
   "schema": string;
   "template": string;
+};
+
+export type RouteJudge = {
+  "deterministic": boolean;
+  "id": string;
+  "kind": string;
+  "version": string;
 };
 
 export type RouteReason = {
   "detail": string;
   "ok": boolean;
   "rule_id": string;
+};
+
+export type RouteRule = "evidence" | "explore" | "route_defaults" | "model_pin";
+
+export type RouteScore = {
+  "expected_cost_usd": number;
+  "option_id": string;
+  "p_success": number;
+  "rank": number;
 };
 
 export type RoutingCatalogView = {
@@ -4916,6 +5002,8 @@ export type RoutingShadowAudit = {
   "shadow_id": string;
   "status": ShadowStatus;
 };
+
+export type RoutingStage = "shadow" | "enforce";
 
 export type RoutingTraceV1 = {
   "account_id"?: string | null;

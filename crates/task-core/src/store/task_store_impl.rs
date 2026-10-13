@@ -73,6 +73,12 @@ impl TaskStore for SqliteStore {
         )?;
         Ok(features)
     }
+    fn record_route_decision(
+        &self,
+        decision: &crate::route_select::RouteDecision,
+    ) -> Result<(), StoreError> {
+        self.record_route_decision_impl(decision)
+    }
 
     fn task_integration_upsert(
         &self,

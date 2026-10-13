@@ -1,11 +1,27 @@
 use super::evidence::wilson_interval;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum RoutingStage {
     Shadow,
     Enforce,
+}
+
+impl RoutingStage {
+    /// The `routing_stage.stage` / `route_decisions.stage` label.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            RoutingStage::Shadow => "shadow",
+            RoutingStage::Enforce => "enforce",
+        }
+    }
+}
+
+impl std::fmt::Display for RoutingStage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -90,6 +90,7 @@ fn cluster_config(clusters: Vec<celeris::config::ClusterConfig>) -> Config {
         harness_declarations: Default::default(),
         llm_routes: Vec::new(),
         route_defaults: Default::default(),
+        route_selection: Default::default(),
         browser: Default::default(),
         harnesses: Vec::new(),
         db: celeris::config::DbConfig {

@@ -91,3 +91,107 @@ fn routing_export_emits_one_training_row_and_supports_text_omission() {
     assert!(!no_db.status.success());
     assert!(String::from_utf8_lossy(&no_db.stderr).contains("--db"));
 }
+
+fn stage_fixture(path: &std::path::Path) -> String {
+    use task_core::TaskStore;
+    use task_core::route_select::{EvidenceKey, EvidenceRow};
+    let store = task_core::SqliteStore::open(path).unwrap();
+    let spec: task_ops::add::NewTaskSpec = serde_json::from_value(serde_json::json!({
+        "title": "t", "objective": "o",
+        "acceptance": [{"type": "command", "cmd": "true", "expect_exit": 0}]
+    }))
+    .unwrap();
+    let task = task_ops::add::create_task(&store, spec, time::OffsetDateTime::now_utc()).unwrap();
+    let row = |n, pass_lower| EvidenceRow {
+        key: EvidenceKey {
+            genre: "coding".into(),
+            harness_id: "codex".into(),
+            harness_version: "1.4.0".into(),
+            source_id: "openai".into(),
+            model_id: "gpt-5".into(),
+        },
+        evidence_version: String::new(),
+        n,
+        pass: n,
+        pass_lower,
+        pass_upper: 0.9,
+        wall_median_s: 30.0,
+        usd_list_median: 0.2,
+        quota_per_run: vec![],
+        timeout_rate: 0.0,
+    };
+    store
+        .replace_routing_evidence("v1", &[row(10, 0.3)])
+        .unwrap();
+    task.id.to_string()
+}
+
+#[test]
+fn routing_stage_set_refuses_enforce_without_evidence_then_lists_the_human_change() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("celeris.db");
+    let task = stage_fixture(&db);
+    let db = db.to_str().unwrap();
+    let set = |stage: &str| {
+        ctl(&[
+            "routing",
+            "stage",
+            "set",
+            "--db",
+            db,
+            "--task",
+            &task,
+            "--genre",
+            "coding",
+            "--harness",
+            "codex",
+            "--stage",
+            stage,
+            "--reason",
+            "reviewed",
+        ])
+    };
+    let refused = set("enforce");
+    assert!(!refused.status.success());
+    assert!(
+        String::from_utf8_lossy(&refused.stderr).contains("enforce requires qualifying evidence"),
+        "{}",
+        String::from_utf8_lossy(&refused.stderr)
+    );
+    let shadow = set("shadow");
+    assert!(
+        shadow.status.success(),
+        "{}",
+        String::from_utf8_lossy(&shadow.stderr)
+    );
+    let list = ctl(&["routing", "stage", "list", "--db", db]);
+    assert!(
+        list.status.success(),
+        "{}",
+        String::from_utf8_lossy(&list.stderr)
+    );
+    let text = String::from_utf8_lossy(&list.stdout);
+    assert!(text.starts_with("coding/codex: shadow since="), "{text}");
+    assert!(
+        text.contains("evidence=v1 latest=v1 last=-->shadow by human"),
+        "{text}"
+    );
+    let json = ctl(&["routing", "stage", "list", "--db", db, "--json"]);
+    let value: Value = serde_json::from_slice(&json.stdout).unwrap();
+    assert_eq!(value["stages"][0]["last_change"]["task_id"], task);
+    let evidence = ctl(&["routing", "evidence", "--db", db, "--genre", "coding"]);
+    assert!(
+        evidence.status.success(),
+        "{}",
+        String::from_utf8_lossy(&evidence.stderr)
+    );
+    let text = String::from_utf8_lossy(&evidence.stdout);
+    assert!(text.contains("=== coding/codex (v1) ==="), "{text}");
+    assert!(
+        text.contains("openai/gpt-5 harness=1.4.0 n=10 pass=10 [0.300, 0.900]"),
+        "{text}"
+    );
+    assert!(!text.contains("qualifies"), "{text}");
+    let missing = ctl(&["routing", "stage", "list"]);
+    assert!(!missing.status.success());
+}

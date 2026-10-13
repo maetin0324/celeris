@@ -512,6 +512,9 @@ listen = "127.0.0.1:7710"      # これを書いたときだけ API が動く（
 | 214 | DELETE | `/browser/trusted-devices/{id}` | 信頼端末を失効させる（actor 付き event。§3.131.4）（**管理系** + header の assertion） | `TrustedDeviceRevokeResult` | store `trusted_device_revoke` |
 | 215 | GET | `/chat/threads/{t}/runs` | run 一覧（`before` / `limit`）と usage telemetry | `ChatRunListResponse` | `crate::chat` |
 | 216 | PATCH | `/llm/sources/{source_id}/accounts/{account_id}` | アカウント（暗黙アカウントを含む）の上限 `max_runs` を設定・解除する（§3.29a）（**管理系**） | `AccountView` | celeris（`AdminRequest::AccountLimitSet`） |
+| 217 | GET | `/routing/stages` | genre×harness ごとの routing の段階（`shadow`/`enforce`・since・根拠表の版・直近の `routing_stage_changed`。`?genre` / `?harness_id`。§3.126.20） | `RoutingStageList` | `task_ops::routing_stage` |
+| 218 | POST | `/routing/stages` | 人の段階変更（actor `human`。`enforce` は D1 の根拠が立たなければ 409 `routing_evidence_insufficient`。§3.126.21） | `RoutingStageView` | `task_ops::routing_stage` |
+| 219 | GET | `/routing/evidence` | 組ごとの最新版の根拠表（区間・D1 を満たすか。`?genre` / `?harness_id`。§3.126.22） | `RoutingEvidenceList` | `task_ops::routing_stage` |
 
 browser の制御（`crate::browser_control`）の 6 本は、route を定数 `BASE`（`/api/v1/tasks/{id}/browser/control/{run}/{session}`）と `format!` で組み立てて登録している（`browser_control.rs` の `routes()`）。詳細は `docs/guides/browser-capability.md`。
 
@@ -3260,6 +3263,30 @@ path は event の `log_path` から引き、要求からは受け取らない�
   `exit?`・`duration_ms?`・`size`（ログの大きさ。まだ無ければ 0）・`truncated`（前を切った）・`tail`（UTF-8 の境界で切る）。
 - その WU に検査の開始が無ければ 404 `file_not_found`、不明な task は 404 `task_not_found`。
 - GUI は task 詳細の WU の行で `check_progress.current` があるときにこれを数秒おきに読む。
+
+#### 3.126.20 `GET /routing/stages` → 200 `RoutingStageList`
+
+ADR 2026-10-11-llm-source-model-routing-evaluation D3。段階表（`routing_stage`）と根拠表（`routing_evidence`）に現れる
+genre×harness の組を `(genre, harness_id)` 順に返す。段階表に行が無い組は `stage = "shadow"`・`since` 無し。
+`evidence_version` は段階を決めたときの版、`latest_evidence_version` は根拠表の最新版、`last_change` は直近の
+`routing_stage_changed`（記録した `task_id`・`ts`・`from`・`to`・`reason`・`window`・`actor`）。クエリは `genre` と
+`harness_id`（どちらも任意の完全一致）だけで、他のキーは 400。DB は読み取り専用の別接続で読む。
+
+#### 3.126.21 `POST /routing/stages` → 200 `RoutingStageView`
+
+人の段階変更。本文は `RoutingStageChangeBody`（`task_id`・`genre`・`harness_id`・`stage`（`shadow` | `enforce`）・`reason`。
+未知の欄は 400）。`task_id` は `routing_stage_changed` を記録する task（受信箱の承認の対象の task など）で、不明なら 404。
+`reason` が空白だけなら 422。`enforce` は根拠表の最新版に D1 の「根拠が立つ」行（`n >= 24` かつ Wilson 下限
+`pass_lower >= 0.5`）が 1 行以上要り、無ければ 409 `routing_evidence_insufficient`。actor は常に `human`
+（`enforce` から `shadow` へ自動で戻すのは daemon の guardrail）。CoS の operation からは呼べない（人だけ）。
+クエリは受け付けない。
+
+#### 3.126.22 `GET /routing/evidence` → 200 `RoutingEvidenceList`
+
+組ごとの最新版の根拠表（`groups[]`: `genre`・`harness_id`・`evidence_version`・`rows[]`）。行は
+`harness_version`・`source_id`・`model_id`・`n`・`pass`・`pass_lower`・`pass_upper`（Wilson 95% 区間）・`wall_median_s`・
+`usd_list_median`・`quota_per_run`・`timeout_rate` と、D1 を満たすかの `qualifies`。行の無い組は出さない。
+クエリは `genre` と `harness_id` だけ。
 
 ### 3.127 モデル catalog（ADR 2026-10-06 D4 / D5）
 

@@ -24661,6 +24661,130 @@
       ],
       "type": "object"
     },
+    "RoutingEvidenceGroup": {
+      "description": "genre×harness 1 組の最新版の根拠表。",
+      "properties": {
+        "evidence_version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "genre": {
+          "type": "string"
+        },
+        "harness_id": {
+          "type": "string"
+        },
+        "rows": {
+          "items": {
+            "$ref": "#/$defs/RoutingEvidenceRowView"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "genre",
+        "harness_id",
+        "rows"
+      ],
+      "type": "object"
+    },
+    "RoutingEvidenceList": {
+      "properties": {
+        "groups": {
+          "items": {
+            "$ref": "#/$defs/RoutingEvidenceGroup"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "groups"
+      ],
+      "type": "object"
+    },
+    "RoutingEvidenceRowView": {
+      "description": "根拠表 1 行（区間つき）。",
+      "properties": {
+        "harness_version": {
+          "type": "string"
+        },
+        "model_id": {
+          "type": "string"
+        },
+        "n": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "pass": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "pass_lower": {
+          "format": "double",
+          "type": "number"
+        },
+        "pass_upper": {
+          "format": "double",
+          "type": "number"
+        },
+        "qualifies": {
+          "description": "D1 の「根拠が立つ」（有効な結果 24 以上かつ Wilson 下限 0.5 以上）を満たすか。",
+          "type": "boolean"
+        },
+        "quota_per_run": {
+          "description": "`[quota 窓, 1 run あたりの消費率]`。",
+          "items": {
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "type": "string"
+              },
+              {
+                "format": "double",
+                "type": "number"
+              }
+            ],
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "source_id": {
+          "type": "string"
+        },
+        "timeout_rate": {
+          "format": "double",
+          "type": "number"
+        },
+        "usd_list_median": {
+          "format": "double",
+          "type": "number"
+        },
+        "wall_median_s": {
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "harness_version",
+        "source_id",
+        "model_id",
+        "n",
+        "pass",
+        "pass_lower",
+        "pass_upper",
+        "wall_median_s",
+        "usd_list_median",
+        "quota_per_run",
+        "timeout_rate",
+        "qualifies"
+      ],
+      "type": "object"
+    },
     "RoutingFeaturesRecord": {
       "description": "`Event::RoutingFeaturesRecorded` の中身（wire では event の欄に平たく並ぶ）。",
       "properties": {
@@ -25078,6 +25202,142 @@
         "enforce"
       ],
       "type": "string"
+    },
+    "RoutingStageChangeBody": {
+      "additionalProperties": false,
+      "description": "`POST /routing/stages` の本文。",
+      "properties": {
+        "genre": {
+          "type": "string"
+        },
+        "harness_id": {
+          "type": "string"
+        },
+        "reason": {
+          "description": "人の理由（空白だけは 422）。",
+          "type": "string"
+        },
+        "stage": {
+          "$ref": "#/$defs/StageName",
+          "description": "`shadow` | `enforce`。"
+        },
+        "task_id": {
+          "$ref": "#/$defs/TaskId",
+          "description": "event を記録する task（受信箱の承認の対象の task など）。"
+        }
+      },
+      "required": [
+        "task_id",
+        "genre",
+        "harness_id",
+        "stage",
+        "reason"
+      ],
+      "type": "object"
+    },
+    "RoutingStageChangeView": {
+      "properties": {
+        "actor": {
+          "description": "`human` | `daemon`。",
+          "type": "string"
+        },
+        "from": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "task_id": {
+          "description": "event を記録した task。",
+          "type": "string"
+        },
+        "to": {
+          "type": "string"
+        },
+        "ts": {
+          "type": "string"
+        },
+        "window": true
+      },
+      "required": [
+        "task_id",
+        "ts",
+        "to",
+        "reason",
+        "window",
+        "actor"
+      ],
+      "type": "object"
+    },
+    "RoutingStageList": {
+      "properties": {
+        "stages": {
+          "items": {
+            "$ref": "#/$defs/RoutingStageView"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "stages"
+      ],
+      "type": "object"
+    },
+    "RoutingStageView": {
+      "description": "genre×harness 1 組の段階。表に行が無い組（根拠表だけある組）は `shadow`・`since` 無し。",
+      "properties": {
+        "evidence_version": {
+          "description": "段階を決めたときの根拠表の版。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "genre": {
+          "type": "string"
+        },
+        "harness_id": {
+          "type": "string"
+        },
+        "last_change": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RoutingStageChangeView"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "直近の `routing_stage_changed`。"
+        },
+        "latest_evidence_version": {
+          "description": "根拠表の最新版（段階を決めた版より新しいことがある）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "since": {
+          "description": "今の段階に入った時刻（RFC 3339）。段階表に行が無ければ無い。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "stage": {
+          "description": "`shadow` | `enforce`。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "genre",
+        "harness_id",
+        "stage"
+      ],
+      "type": "object"
     },
     "RoutingTraceV1": {
       "properties": {
@@ -27252,6 +27512,14 @@
         "title"
       ],
       "type": "object"
+    },
+    "StageName": {
+      "description": "schema 用の段階名（`task_core::route_select::RoutingStage` と同じ wire）。",
+      "enum": [
+        "shadow",
+        "enforce"
+      ],
+      "type": "string"
     },
     "StageReview": {
       "description": "ADR-0079 D2 / D5: 段階の後の人の確認（`review: human` は ADR-0074 D2 の `pause_after` をその段階に\n指定したのと同じ意味。既定 none）。",
@@ -32423,6 +32691,19 @@
       "$ref": "#/$defs/RoutingCatalogView",
       "description": "Phase 1: credential-free model and deployment catalog."
     },
+    "routing_evidence": {
+      "$ref": "#/$defs/RoutingEvidenceList"
+    },
+    "routing_stage": {
+      "$ref": "#/$defs/RoutingStageView"
+    },
+    "routing_stage_change": {
+      "$ref": "#/$defs/RoutingStageChangeBody"
+    },
+    "routing_stages": {
+      "$ref": "#/$defs/RoutingStageList",
+      "description": "ADR 2026-10-11-llm-source-model-routing-evaluation D3: `GET`/`POST /routing/stages` と `GET /routing/evidence`。"
+    },
     "run_list": {
       "$ref": "#/$defs/RunList"
     },
@@ -32699,6 +32980,10 @@
     "harness_rule",
     "harness_candidate",
     "routing_catalog",
+    "routing_stages",
+    "routing_stage",
+    "routing_stage_change",
+    "routing_evidence",
     "mcp_clients",
     "mcp_calls",
     "skill_list",

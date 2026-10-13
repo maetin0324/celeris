@@ -72,6 +72,8 @@ pub mod repos;
 /// ADR-0069 D5: タスクの routing の監査（`GET /tasks/{id}/routing`）。
 pub mod routing;
 pub mod routing_catalog;
+/// ADR 2026-10-11-llm-source-model-routing-evaluation D3: 段階・根拠表の読み取りと人の段階変更。
+pub mod routing_stage;
 pub mod schema;
 pub mod secrets;
 /// Phase 82（ADR-0056 D3 続き）: skills を GUI から見る・作る・mount する（`GET/PUT/DELETE /skills…`、

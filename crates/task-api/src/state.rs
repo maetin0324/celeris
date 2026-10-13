@@ -79,6 +79,8 @@ pub(crate) struct Inner {
     /// `None`。DB の絶対パス自体は `/health` に出さない（無認証のため。認証済みの `/config` が既に
     /// 返している）。
     pub(crate) db_mount: Option<task_core::mountinfo::MountInfo>,
+    /// 読み取り専用の view（`task_ops::routing_stage`）が別接続で開く DB の path。
+    pub(crate) db_path: std::path::PathBuf,
     pub(crate) view: ViewContext,
     pub(crate) config_view: ConfigView,
     /// ADR-0016 M3: `POST /tasks` の省略値を埋める `[[roles]]`。
@@ -170,6 +172,7 @@ impl ApiState {
             journal_mode,
             busy_timeout_ms: u64::try_from(settings.busy_timeout.as_millis()).unwrap_or(u64::MAX),
             db_mount,
+            db_path: settings.db_path.clone(),
             view: settings.view,
             config_view: settings.config_view,
             roles: settings.roles,

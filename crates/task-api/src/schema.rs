@@ -226,6 +226,11 @@ pub struct ApiV1Schema {
     pub harness_candidate: crate::types::HarnessCandidateView,
     /// Phase 1: credential-free model and deployment catalog.
     pub routing_catalog: crate::routing_catalog::RoutingCatalogView,
+    /// ADR 2026-10-11-llm-source-model-routing-evaluation D3: `GET`/`POST /routing/stages` と `GET /routing/evidence`。
+    pub routing_stages: task_ops::routing_stage::RoutingStageList,
+    pub routing_stage: task_ops::routing_stage::RoutingStageView,
+    pub routing_stage_change: crate::routing_stage::RoutingStageChangeBody,
+    pub routing_evidence: task_ops::routing_stage::RoutingEvidenceList,
     /// Phase 78（ADR-0056 D4）: `GET /mcp/clients` と `GET /mcp/calls?client=`。
     pub mcp_clients: crate::mcp_admin::McpClientsView,
     pub mcp_calls: crate::mcp_admin::McpCallsView,

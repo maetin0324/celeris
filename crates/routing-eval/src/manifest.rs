@@ -34,6 +34,8 @@ pub struct Problem {
     pub genre: String,
     pub kind: String,
     pub command: String,
+    /// Worker-visible task description; required in frozen manifests.
+    pub prompt: String,
     pub split: String,
     pub stratum: String,
     pub subset_12: bool,
@@ -52,6 +54,7 @@ struct RawProblem {
     genre: String,
     kind: String,
     command: String,
+    prompt: String,
     head: Option<String>,
     base: Option<String>,
 }
@@ -97,6 +100,7 @@ pub fn create(
             .flatten()
             .find_map(|c| c["cmd"].as_str().map(str::to_owned));
         let Some(command) = command else { continue };
+        let prompt = worker_prompt(&w, &t, &command);
         let genre = t["genre"].as_str().unwrap_or("coding").to_owned();
         if genre != "coding" {
             continue;
@@ -108,6 +112,7 @@ pub fn create(
             genre,
             kind,
             command,
+            prompt,
             head,
             base,
         });
@@ -176,6 +181,7 @@ pub fn create(
             genre: p.genre.clone(),
             kind: p.kind.clone(),
             command: p.command,
+            prompt: p.prompt,
             split,
             stratum: format!("{}:{}", p.genre, p.kind),
             subset_12: subset_ids.contains(&p.id),
@@ -215,6 +221,35 @@ pub fn create(
     )
     .map_err(|e| e.to_string())?;
     Ok(manifest)
+}
+
+fn worker_prompt(work_unit: &Value, task: &Value, check_command: &str) -> String {
+    let mut sections = Vec::new();
+    for (label, value) in [
+        ("Parent task", task.get("title").and_then(Value::as_str)),
+        (
+            "Task objective",
+            task.get("objective").and_then(Value::as_str),
+        ),
+        (
+            "Work unit objective",
+            work_unit.get("objective").and_then(Value::as_str),
+        ),
+        (
+            "Definition of done",
+            work_unit.get("done_when").and_then(Value::as_str),
+        ),
+    ] {
+        if let Some(value) = value.map(str::trim).filter(|s| !s.is_empty()) {
+            let safe = if check_command.is_empty() {
+                value.to_owned()
+            } else {
+                value.replace(check_command, "[check command redacted]")
+            };
+            sections.push(format!("{label}: {safe}"));
+        }
+    }
+    sections.join("\n\n")
 }
 
 fn round_robin(map: &BTreeMap<String, Vec<RawProblem>>, n: usize) -> Vec<RawProblem> {
@@ -280,9 +315,9 @@ mod tests {
             } else {
                 format!("2026-10-{:02}T00:00:00Z", ((i - 15) % 26) + 5)
             };
-            let task_json=serde_json::json!({"title":task,"objective":"fixture objective","genre":"coding","acceptance":[]}).to_string();
+            let task_json=serde_json::json!({"title":task,"objective":"fixture objective","genre":"coding","acceptance":[{"text":"must not leak"}]}).to_string();
             conn.execute("INSERT INTO tasks(id,status,kind,parent_id,priority,created_at,json) VALUES(?1,'done','task',NULL,0,?2,?3)",rusqlite::params![task,created,task_json]).expect("insert task");
-            let wu_json=serde_json::json!({"objective":"fixture work","kind":if i%2==0{"implement"}else{"test"},"checks":[{"cmd":"true","expect_exit":0}]}).to_string();
+            let wu_json=serde_json::json!({"objective":"fixture work","done_when":"true command is mentioned here","kind":if i%2==0{"implement"}else{"test"},"checks":[{"cmd":"true","expect_exit":0}]}).to_string();
             conn.execute("INSERT INTO work_units(id,task_id,plan_id,key,seq,kind,status,depends_on_json,json,created_at,updated_at,head_commit,base_commit) VALUES(?1,?2,'plan',?1,0,?3,'done','[]',?4,?5,?5,'head','base')",rusqlite::params![wu,task,if i%2==0{"implement"}else{"test"},wu_json,created]).expect("insert work unit");
         }
         drop(conn);
@@ -295,6 +330,13 @@ mod tests {
         let out = tempdir().expect("output dir");
         let first = create(&db, out.path(), "2026-10-05", 77, "v1").expect("manifest");
         assert_eq!(first.problems.len(), 30);
+        assert!(
+            first
+                .problems
+                .iter()
+                .all(|p| p.prompt.contains("fixture objective"))
+        );
+        assert!(first.problems.iter().all(|p| !p.prompt.contains("true")));
         assert_eq!(first.problems.iter().filter(|p| p.subset_12).count(), 12);
         assert_eq!(
             first.problems.iter().filter(|p| p.split == "dev").count(),
@@ -328,5 +370,11 @@ mod tests {
                 .unwrap_err()
                 .contains("choose a new --version")
         );
+    }
+
+    #[test]
+    fn old_manifest_without_prompt_is_rejected() {
+        let old = r#"{"id":"p","task_id":"t","work_unit_id":"w","created_at":"","genre":"coding","kind":"task","command":"check","split":"dev","stratum":"coding:task","subset_12":false,"head_commit":null,"base_commit":null,"features_sha256":"","features":{},"sha256":""}"#;
+        assert!(serde_json::from_str::<Problem>(old).is_err());
     }
 }

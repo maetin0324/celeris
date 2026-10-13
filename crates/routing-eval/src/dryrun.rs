@@ -397,6 +397,7 @@ mod tests {
                 genre: "coding".into(),
                 kind: "test".into(),
                 command: "true".into(),
+                prompt: "Fixture problem description".into(),
                 split: "dev".into(),
                 stratum: "coding:test".into(),
                 subset_12: i < 12,

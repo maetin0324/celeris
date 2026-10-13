@@ -112,6 +112,10 @@ pub struct Registry {
     /// Lane-specific human priorities override the harness-wide priority when present.
     pub lane_route_defaults: BTreeMap<(HarnessId, String), Vec<CandidateKey>>,
     pub route_selection: RouteSelectionSettings,
+    /// Per-harness, per-execution-class candidate lists. A class list replaces the harness
+    /// default for that class; it never falls back to `route_defaults`.
+    #[serde(default)]
+    pub route_class_defaults: BTreeMap<HarnessId, BTreeMap<ExecutionClass, Vec<CandidateKey>>>,
     pub cos_route_candidates: Vec<CandidateKey>,
     pub harness_selection: HarnessSelection,
 }
@@ -141,6 +145,28 @@ impl Registry {
             .or_else(|| self.route_defaults.get(harness))
             .map(Vec::as_slice)
             .unwrap_or(&[])
+    }
+}
+
+/// Model name sent over the harness wire. Only explicitly proxied routes need a
+/// source namespace; direct connections keep the canonical model id.
+pub fn route_via<'a>(
+    registry: &'a Registry,
+    harness: &HarnessId,
+    key: &CandidateKey,
+) -> Option<&'a str> {
+    registry
+        .llm_routes
+        .iter()
+        .find(|route| route.harness == *harness && route.key == *key)
+        .and_then(|route| route.via.as_deref())
+}
+
+pub fn wire_model_id(registry: &Registry, harness: &HarnessId, key: &CandidateKey) -> ModelId {
+    if route_via(registry, harness, key) == Some("llm_proxy") {
+        format!("{}/{}", key.source, key.model).into()
+    } else {
+        key.model.clone()
     }
 }
 
@@ -438,19 +464,29 @@ pub fn admit_source(
     )
 }
 /// The one default priority path (ADR 2026-10-11-llm-source-model-routing-evaluation D2):
-/// CoS chat uses `cos.route_candidates`; everything else uses the harness×lane `route_defaults`
+/// CoS chat uses `cos.route_candidates`. Otherwise a declared `route_class_defaults` list for the
+/// execution class replaces every other column (ADR 2026-10-11-llm-source-harness-selection 付記
+/// 2026-10-13 §5: no fallback from a class list); without one, the harness×lane `route_defaults`
 /// column, falling back to the harness-wide column. There is no lexicographic fallback.
 pub fn route_priority<'a>(
     registry: &'a Registry,
     harness: &HarnessId,
     lane: Option<&str>,
     cos: bool,
+    execution_class: Option<&ExecutionClass>,
 ) -> &'a [CandidateKey] {
     if cos {
-        &registry.cos_route_candidates
-    } else {
-        registry.route_defaults_for(harness, lane.unwrap_or_default())
+        return &registry.cos_route_candidates;
     }
+    if let Some(class) = execution_class
+        && let Some(list) = registry
+            .route_class_defaults
+            .get(harness)
+            .and_then(|classes| classes.get(class))
+    {
+        return list.as_slice();
+    }
+    registry.route_defaults_for(harness, lane.unwrap_or_default())
 }
 
 /// What the dispatcher persists on the run row once a route is admitted.
@@ -467,6 +503,108 @@ pub struct RunSelection {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wire_model_id_qualifies_only_routes_declared_via_llm_proxy() {
+        let mut registry = Registry::default();
+        let harness: HarnessId = "h".into();
+        let key = CandidateKey {
+            source: "qwen".into(),
+            model: "m".into(),
+        };
+        registry.llm_routes.push(LlmRoute {
+            harness: harness.clone(),
+            key: key.clone(),
+            via: Some("llm_proxy".into()),
+            from_api: None,
+            to_api: None,
+        });
+        assert_eq!(wire_model_id(&registry, &harness, &key).as_ref(), "qwen/m");
+        registry.llm_routes[0].via = Some("other".into());
+        assert_eq!(wire_model_id(&registry, &harness, &key).as_ref(), "m");
+    }
+
+    #[test]
+    fn wire_model_id_keeps_a_model_that_already_contains_a_slash() {
+        let mut registry = Registry::default();
+        let harness: HarnessId = "h".into();
+        let key = CandidateKey {
+            source: "qwen".into(),
+            model: "vendor/model".into(),
+        };
+        registry.llm_routes.push(LlmRoute {
+            harness: harness.clone(),
+            key: key.clone(),
+            via: Some("llm_proxy".into()),
+            from_api: None,
+            to_api: None,
+        });
+        assert_eq!(
+            wire_model_id(&registry, &harness, &key).as_ref(),
+            "qwen/vendor/model"
+        );
+    }
+    #[test]
+    fn route_priority_prefers_the_execution_class_list() {
+        let mut r = Registry::default();
+        let harness: HarnessId = "claude_code".into();
+        let sonnet = key("claude_oauth", "claude-sonnet-5-5");
+        let opus = key("claude_oauth", "claude-opus-5-5");
+        r.route_defaults
+            .insert(harness.clone(), vec![sonnet.clone()]);
+        let coding: ExecutionClass = "coding".into();
+        r.route_class_defaults
+            .entry(harness.clone())
+            .or_default()
+            .insert(coding.clone(), vec![opus.clone()]);
+        assert_eq!(
+            route_priority(&r, &harness, None, false, Some(&coding)),
+            std::slice::from_ref(&opus)
+        );
+        assert_eq!(
+            route_priority(&r, &harness, None, false, Some(&"planner".into())),
+            std::slice::from_ref(&sonnet)
+        );
+        assert_eq!(
+            route_priority(&r, &harness, None, false, None),
+            std::slice::from_ref(&sonnet)
+        );
+    }
+
+    #[test]
+    fn route_priority_ignores_the_class_for_cos() {
+        let mut r = Registry::default();
+        let harness: HarnessId = "claude_code".into();
+        let cos = key("claude_oauth", "claude-opus-5-5");
+        r.cos_route_candidates = vec![cos.clone()];
+        r.route_defaults.insert(
+            harness.clone(),
+            vec![key("claude_oauth", "claude-sonnet-5-5")],
+        );
+        r.route_class_defaults
+            .entry(harness.clone())
+            .or_default()
+            .insert(
+                "coding".into(),
+                vec![key("claude_oauth", "claude-haiku-5-5")],
+            );
+        let coding: ExecutionClass = "coding".into();
+        assert_eq!(
+            route_priority(&r, &harness, None, true, Some(&coding)),
+            std::slice::from_ref(&cos)
+        );
+        assert_eq!(
+            route_priority(&r, &harness, None, true, None),
+            std::slice::from_ref(&cos)
+        );
+    }
+
+    fn key(source: &str, model: &str) -> CandidateKey {
+        CandidateKey {
+            source: source.into(),
+            model: model.into(),
+        }
+    }
     fn harness(id: &str) -> HarnessId {
         id.into()
     }
@@ -626,23 +764,71 @@ mod tests {
         r.cos_route_candidates = vec![cos.clone()];
         // A lane column wins over the harness-wide column; an unknown lane falls back to it.
         assert_eq!(
-            route_priority(&r, &harness("h"), Some("cheap"), false).to_vec(),
+            route_priority(&r, &harness("h"), Some("cheap"), false, None).to_vec(),
             vec![cheap]
         );
         assert_eq!(
-            route_priority(&r, &harness("h"), Some("frontier"), false).to_vec(),
+            route_priority(&r, &harness("h"), Some("frontier"), false, None).to_vec(),
             vec![harness_wide.clone()]
         );
         assert_eq!(
-            route_priority(&r, &harness("h"), None, false).to_vec(),
+            route_priority(&r, &harness("h"), None, false, None).to_vec(),
             vec![harness_wide]
         );
         // CoS chat keeps its own declared list, and an undeclared harness has no default at all
         // (the caller fails closed; there is no lexicographic fallback).
         assert_eq!(
-            route_priority(&r, &harness("h"), Some("cheap"), true).to_vec(),
+            route_priority(&r, &harness("h"), Some("cheap"), true, None).to_vec(),
             vec![cos]
         );
-        assert!(route_priority(&r, &harness("missing"), None, false).is_empty());
+        assert!(route_priority(&r, &harness("missing"), None, false, None).is_empty());
+    }
+
+    /// An execution-class list replaces every other column, the lane column included (no fallback
+    /// from a declared class list); a class without a list leaves the lane column in charge.
+    #[test]
+    fn route_priority_class_list_wins_over_the_lane_column() {
+        let mut r = fixture();
+        let harness_wide = CandidateKey {
+            source: "s".into(),
+            model: "m".into(),
+        };
+        let cheap = CandidateKey {
+            source: "backup".into(),
+            model: "m2".into(),
+        };
+        let coding = CandidateKey {
+            source: "s".into(),
+            model: "opus".into(),
+        };
+        r.route_defaults.insert(harness("h"), vec![harness_wide]);
+        r.lane_route_defaults
+            .insert((harness("h"), "cheap".into()), vec![cheap.clone()]);
+        r.route_class_defaults
+            .entry(harness("h"))
+            .or_default()
+            .insert(ExecutionClass::from("coding"), vec![coding.clone()]);
+        assert_eq!(
+            route_priority(
+                &r,
+                &harness("h"),
+                Some("cheap"),
+                false,
+                Some(&ExecutionClass::from("coding"))
+            )
+            .to_vec(),
+            vec![coding]
+        );
+        assert_eq!(
+            route_priority(
+                &r,
+                &harness("h"),
+                Some("cheap"),
+                false,
+                Some(&ExecutionClass::from("planner"))
+            )
+            .to_vec(),
+            vec![cheap]
+        );
     }
 }

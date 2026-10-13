@@ -14,7 +14,7 @@ use super::*;
 use sha2::{Digest, Sha256};
 use task_core::llm_route::{
     AccountId, Admission, Candidate, ExclusionReason, HarnessId, ModelId, SourceId, admit_source,
-    constrain_for_harness,
+    constrain_for_harness, wire_model_id,
 };
 use task_core::route_record::{
     FeaturesAux, ROUTE_OPTIONS_SCHEMA, RouteOption, RouteOptionBinds, RouteOptions,
@@ -382,6 +382,7 @@ impl Dispatcher {
             &limited,
         ) {
             Admission::Admitted(owner) => Ok(RoutePick {
+                wire_model_id: wire_model_id(&registry, &harness, &candidate.key()),
                 harness,
                 candidate,
                 account: owner.account_id,

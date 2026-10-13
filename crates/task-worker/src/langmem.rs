@@ -184,6 +184,12 @@ impl WorkerAdapter for LangMemAdapter {
         config.env.extend(extra.iter().cloned());
         Some(Arc::new(LangMemAdapter::new(config)))
     }
+
+    fn with_model(&self, model: &str) -> Option<Arc<dyn WorkerAdapter>> {
+        let mut config = self.config.clone();
+        config.model = Some(model.to_owned());
+        Some(Arc::new(LangMemAdapter::new(config)))
+    }
 }
 
 /// ADR-0139 D4: ランナーの起動 env に入れる鍵（`provider` に応じた 1 つの変数）。鍵が無ければ空。

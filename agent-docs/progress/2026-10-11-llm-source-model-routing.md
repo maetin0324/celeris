@@ -66,13 +66,21 @@ ADR `2026-10-11-llm-source-harness-selection.md`〈branch `celeris/01M4M8D4AP4YY
 
 **provider 層の撤去への追従（評価 run）**: eval-dispatch は `[[providers]]`・adapter 表・`source_state_of`・`routing_enforce` を使っていたが、selector／main で消えた。評価 run の経路は宣言（`[harnesses]`・`[llm_sources]`）から引き（id は `-`／`_`・大文字小文字を区別しない）、account は本番と同じ `admit_source`（手元の評価 run を合算）で選び、worker に `SelectedLlmRoute` と `Task.harness_id` を渡す。宣言に無い経路の試行は `error`。投入 API（`POST /routing-eval/trials`）の照合先は `HarnessesReader::source_models` と harness 一覧・`[[genres]]` に替えた（routing catalog は無い）。ADR に付記 2026-10-13 を足した。
 
+**main（5283bcef）の取り込み**: selector が取り込んだ 101aced5 以降の main（class 別の route 候補 `classes`・proxy route の wire model・旧 routing event の読み取り試験）と競合した 6 file を解いた。
+- 旧 `model_router/policy.rs`・`model_router/tests.rs`（main が `RoutingMode::Legacy` を足した）は selector が消したので消したまま。旧 `routing_decided` event（`optimizer.mode = "legacy"`）は `RoutingRecord` に `optimizer` 欄が無く未知欄として読み飛ばされるので読める。main の試験 `store::tests::legacy_routing_decided_event_loads_from_store` は `RoutingDecided` として読めることを見る形に直し、`celeris` の `legacy_event_startup` はそのまま通す。
+- 優先列は CoS → class の列 → harness×lane の列 → harness 全体の列（ADR 付記 2026-10-13 の 6、試験 `route_priority_class_list_wins_over_the_lane_column`）。`RoutePick.wire_model_id` は selector の選択と評価 run の経路の両方で作る。
+- main 側に残っていた `DefaultRoutePolicy`／`RoutePolicy` は selector の根拠表選択に置き換わっているので持ち込まない。
+- 評価 run の結合試験（`celeris/tests/routing_eval_run.rs`）は main の db_guard（worker run から DB のディレクトリに新しい項目を作れない）に合わせ、stub の記録を別ディレクトリに置いた。
+
 ## 証拠
 
+- 統合（2026-10-13、`CARGO_TARGET_DIR` はローカル）: `cargo fmt --all -- --check` exit 0、`cargo clippy --workspace -- -D warnings` exit 0、`TMPDIR=/tmp bash scripts/dev/test-parallel.sh` exit 0（nextest 5079 passed・12 skipped、doctest 含め passed 5082・failed 0）、`sh scripts/dev/check-adr-numbers.sh` exit 0、`sh scripts/dev/check-doc-links.sh` exit 0、web `pnpm typecheck` exit 0・`vitest run features/ops/routing-screen.test.tsx` 1 passed。migration 番号は 0001〜0077 で重複なし（欠番は `RESERVED_VERSIONS` の 38・39・40・68・69）。
 - `sh scripts/dev/progress-index.sh --check`: exit 0（本 file を含む）
 - `git diff --quiet "$CELERIS_WU_BASE" -- crates/ web/ gui/`: exit 0（adr unit はコードを変えていない）
 
 ## 未解決
 
+- class の列と lane の列の優先（class が勝つ）は ADR の文面から導いた統合時の判断。本番の runbook は class の列（coding = Opus）だけを使うので現状の挙動は変わらないが、class×lane の組を持ちたくなったら人の決定が要る。
 - 評価の候補表（`crates/routing-eval/src/candidates.rs`）の id は `claude-oauth`／`claude-code` 形。dispatcher と API は `_` と同一視するので動くが、manifest・根拠表の鍵は候補表の綴りのまま入り、本番の選択器は宣言の綴り（`claude_code`）で根拠表を引く。evaluate 段の前に候補表を宣言の綴りへ揃えるか、根拠表の書き込みで正規化するかを決める。
 
 - fable/astra は k=1・12問の層別部分集合。週 quota 15% に収まる実行可能数は eval-run 直前の見積りで確定する。

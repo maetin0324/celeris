@@ -1,6 +1,7 @@
 use super::ConfigError;
 use serde::Deserialize;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -26,6 +27,8 @@ pub struct LlmSourceConfig {
 pub struct HarnessDeclarationConfig {
     pub kind: String,
     #[serde(default)]
+    pub model_namespace: Option<String>,
+    #[serde(default)]
     pub api_formats: BTreeSet<String>,
     #[serde(default)]
     pub source_kinds: BTreeSet<String>,
@@ -35,6 +38,14 @@ pub struct HarnessDeclarationConfig {
     pub command: Option<String>,
     #[serde(default)]
     pub args: Vec<String>,
+    #[serde(default)]
+    pub extensions: Vec<PathBuf>,
+    #[serde(default)]
+    pub tools: Vec<String>,
+    #[serde(default)]
+    pub env: HashMap<String, String>,
+    #[serde(default)]
+    pub env_from_secrets: HashMap<String, String>,
 }
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -62,6 +73,10 @@ pub struct RouteDefaultConfig {
     pub candidates: Vec<RouteCandidateConfig>,
     #[serde(default)]
     pub lanes: BTreeMap<String, RouteLaneDefaultConfig>,
+    /// execution class（`coding` / `planner` / `review`）ごとの候補。宣言した class は
+    /// `candidates` の代わりに使い、宣言の無い class は `candidates` に戻る。
+    #[serde(default)]
+    pub classes: BTreeMap<String, RouteClassConfig>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -102,6 +117,15 @@ impl Default for RouteSelectionConfig {
         }
     }
 }
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RouteClassConfig {
+    pub candidates: Vec<RouteCandidateConfig>,
+}
+/// `[route_defaults.<harness>].classes` で宣言してよい execution class の名前。
+const ROUTE_CLASSES: [&str; 3] = ["coding", "planner", "review"];
+/// proxy 経由が必要な harness。候補はすべて `via = "llm_proxy"` の route を要する。
+const PROXY_BOUND_HARNESSES: [&str; 3] = ["local-deep-research", "paperqa", "langmem"];
 
 impl super::Config {
     /// `[llm_sources.<id>]` に `kind` がこの source の行があるか。
@@ -192,6 +216,31 @@ impl super::Config {
                         .collect(),
                 );
             }
+            for (class, c) in &d.classes {
+                if !ROUTE_CLASSES.contains(&class.as_str()) {
+                    return Err(ConfigError::Invalid(format!(
+                        "route_defaults.{h}.classes has unknown execution class {class} (expected coding, planner, or review)"
+                    )));
+                }
+                if c.candidates.is_empty() {
+                    return Err(ConfigError::Invalid(format!(
+                        "route_defaults.{h}.classes.{class} has no candidates"
+                    )));
+                }
+                r.route_class_defaults
+                    .entry(h.as_str().into())
+                    .or_default()
+                    .insert(
+                        class.as_str().into(),
+                        c.candidates
+                            .iter()
+                            .map(|c| CandidateKey {
+                                source: c.source.as_str().into(),
+                                model: c.model.as_str().into(),
+                            })
+                            .collect(),
+                    );
+            }
         }
         r.cos_route_candidates = self
             .cos
@@ -257,25 +306,6 @@ fn validate_registry(r: &task_core::llm_route::Registry) -> Result<(), ConfigErr
             }
         }
     }
-    for (h, spec) in &r.harnesses {
-        let columns = r.route_defaults.get(h).into_iter().chain(
-            r.lane_route_defaults
-                .iter()
-                .filter(|((id, _), _)| id == h)
-                .map(|(_, candidates)| candidates),
-        );
-        for column in columns {
-            let mut seen = BTreeSet::new();
-            for candidate in column {
-                if !seen.insert((candidate.source.clone(), candidate.model.clone())) {
-                    return Err(ConfigError::Invalid(format!(
-                        "duplicate route candidate for harness {h}"
-                    )));
-                }
-            }
-        }
-        let _ = spec;
-    }
     for route in &r.llm_routes {
         let h = r.harnesses.get(&route.harness).ok_or_else(|| {
             ConfigError::Invalid(format!(
@@ -307,36 +337,17 @@ fn validate_registry(r: &task_core::llm_route::Registry) -> Result<(), ConfigErr
             )));
         }
     }
-    for (h, defaults) in r
-        .route_defaults
-        .iter()
-        .chain(r.lane_route_defaults.iter().map(|((h, _), d)| (h, d)))
-    {
-        let hs = r.harnesses.get(h).ok_or_else(|| {
-            ConfigError::Invalid(format!("route_defaults references undeclared harness {h}"))
-        })?;
-        for c in defaults {
-            let s = r.sources.get(&c.source).ok_or_else(|| {
-                ConfigError::Invalid(format!(
-                    "route_defaults references undeclared source {}",
-                    c.source
-                ))
-            })?;
-            if !s.models.contains(&c.model) {
-                return Err(ConfigError::Invalid(format!(
-                    "route_defaults references undeclared model {}",
-                    c.model
-                )));
-            }
-            let compatible = hs.source_kinds.contains(&s.kind)
-                && hs.api_formats.contains(&s.api_format)
-                || r.llm_routes.iter().any(|x| x.harness == *h && x.key == *c);
-            if !compatible {
-                return Err(ConfigError::Invalid(format!(
-                    "route_defaults candidate {}/{} has no compatible llm_routes entry",
-                    c.source, c.model
-                )));
-            }
+    for (h, defaults) in &r.route_defaults {
+        validate_route_candidates(r, h, defaults, None)?;
+    }
+    // ADR 2026-10-11-llm-source-model-routing-evaluation D2: the harness×lane columns are checked
+    // like the harness-wide column.
+    for ((h, _lane), defaults) in &r.lane_route_defaults {
+        validate_route_candidates(r, h, defaults, None)?;
+    }
+    for (h, classes) in &r.route_class_defaults {
+        for (class, candidates) in classes {
+            validate_route_candidates(r, h, candidates, Some(class))?;
         }
     }
     let cos_harness = task_core::llm_route::HarnessId::from("claude_code");
@@ -362,6 +373,60 @@ fn validate_registry(r: &task_core::llm_route::Registry) -> Result<(), ConfigErr
         if !compatible {
             return Err(ConfigError::Invalid(format!(
                 "cos.route_candidates candidate {}/{} is incompatible with claude_code",
+                c.source, c.model
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// harness 既定（`class` が None）と class 候補（`class` が Some）を同じ規則で検査する:
+/// source・model の宣言、harness の kind・API format（または明示の `[[llm_routes]]`）、proxy 経由の要件。
+fn validate_route_candidates(
+    r: &task_core::llm_route::Registry,
+    h: &task_core::llm_route::HarnessId,
+    candidates: &[task_core::llm_route::CandidateKey],
+    class: Option<&task_core::llm_route::ExecutionClass>,
+) -> Result<(), ConfigError> {
+    let scope = match class {
+        Some(class) => format!("route_defaults.{h}.classes.{class}"),
+        None => format!("route_defaults.{h}"),
+    };
+    let hs = r.harnesses.get(h).ok_or_else(|| {
+        ConfigError::Invalid(format!("route_defaults references undeclared harness {h}"))
+    })?;
+    let mut seen = BTreeSet::new();
+    for c in candidates {
+        if !seen.insert((c.source.clone(), c.model.clone())) {
+            return Err(ConfigError::Invalid(format!(
+                "duplicate route candidate in {scope}"
+            )));
+        }
+        let s = r.sources.get(&c.source).ok_or_else(|| {
+            ConfigError::Invalid(format!("{scope} references undeclared source {}", c.source))
+        })?;
+        if !s.models.contains(&c.model) {
+            return Err(ConfigError::Invalid(format!(
+                "{scope} references undeclared model {}",
+                c.model
+            )));
+        }
+        let compatible = hs.source_kinds.contains(&s.kind)
+            && hs.api_formats.contains(&s.api_format)
+            || r.llm_routes.iter().any(|x| x.harness == *h && x.key == *c);
+        if !compatible {
+            return Err(ConfigError::Invalid(format!(
+                "{scope} candidate {}/{} has no compatible llm_routes entry",
+                c.source, c.model
+            )));
+        }
+        if PROXY_BOUND_HARNESSES.contains(&h.0.as_str())
+            && !r.llm_routes.iter().any(|route| {
+                route.harness == *h && route.key == *c && route.via.as_deref() == Some("llm_proxy")
+            })
+        {
+            return Err(ConfigError::Invalid(format!(
+                "proxy-bound harness {h} candidate {}/{} requires via = llm_proxy",
                 c.source, c.model
             )));
         }
@@ -483,5 +548,16 @@ candidates = [{ source = "main", model = "m1" }]
                 .to_string()
                 .contains("without route_defaults")
         );
+    }
+
+    #[test]
+    fn proxy_bound_harness_candidates_all_need_a_via_llm_proxy_route() {
+        let text = DECLS
+            .replace("[harnesses.cli]", "[harnesses.paperqa]")
+            .replace("[route_defaults.cli]", "[route_defaults.paperqa]")
+            + "\n[[llm_routes]]\nharness = 'paperqa'\nsource = 'main'\nmodel = 'm1'\nvia = 'direct'\n";
+        let cfg = Config::parse_with_delivery(&text).unwrap();
+        let err = cfg.llm_route_registry().unwrap_err().to_string();
+        assert!(err.contains("requires via = llm_proxy"), "{err}");
     }
 }

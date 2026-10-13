@@ -1307,5 +1307,63 @@ pub use cos_chat::{
     CosChatInboxOption, CosChatInput, is_cos_chat_run,
 };
 
+/// 試験用の最小の `Task`。他 crate の試験が `RunRequest` を組むために公開している（製品の経路では使わない）。
+#[doc(hidden)]
+pub fn sample_task_for_tests() -> Task {
+    use task_core::*;
+    let now = time::OffsetDateTime::now_utc();
+    Task {
+        harness_id: None,
+        requirements: Default::default(),
+        tree: None,
+        paused_at: None,
+        routing: None,
+        mode: Default::default(),
+        skills: Vec::new(),
+        repos: Vec::new(),
+        id: TaskId::new(),
+        parent_id: None,
+        kind: TaskKind::Execute,
+        title: "t".into(),
+        objective: "o".into(),
+        acceptance: vec![Criterion {
+            text: "c".into(),
+            check: Check::Command {
+                cmd: "true".into(),
+                expect_exit: 0,
+            },
+        }],
+        inputs: vec![],
+        depends_on: vec![],
+        status: Status::Running,
+        priority: 0,
+        worker_hint: WorkerHint {
+            tier: Tier::Standard,
+        },
+        workspace: WorkspaceSpec::Local {
+            path: PathBuf::from("/tmp/ws"),
+            mode: None,
+        },
+        budget: Budget {
+            max_turns: 10,
+            max_wall_secs: 60,
+            max_retries: 1,
+        },
+        attempts: 0,
+        lease: None,
+        created_at: now,
+        updated_at: now,
+        role: None,
+        genre: None,
+        aggregate: false,
+        project_id: None,
+        milestone_id: None,
+        assignee: None,
+        conversation: None,
+        labels: Vec::new(),
+        category: Default::default(),
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod tests;

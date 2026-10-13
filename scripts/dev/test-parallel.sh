@@ -68,7 +68,11 @@ EOF
 }
 [ "$userns_ok" = false ] && userns_note
 
-logdir="$(mktemp -d "${TMPDIR:-/tmp}/celeris-test-parallel.XXXXXX")"
+# Use a short path: Unix-domain sockets have a small fixed sun_path limit, and
+# many integration fixtures put socket names below tempfile::tempdir(). A
+# caller-provided TMPDIR can already be deep, so nesting another test directory
+# there makes otherwise valid credential/browser IPC sockets unbindable.
+logdir="$(mktemp -d "/tmp/celeris-test-parallel.XXXXXX")"
 # 読み取り専用にした試験の残骸でも消せるよう権限を戻してから消す。後片付けの失敗は警告だけで exit code を変えない。
 cleanup_logdir() {
   chmod -R u+w "$logdir" 2>/dev/null || true

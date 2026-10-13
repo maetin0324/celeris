@@ -73,16 +73,7 @@ pub fn build_harness_adapters(
                     container: None,
                 }))
             }
-            PiAdapter::ID => Arc::new(PiAdapter::new(PiConfig {
-                command: command("pi"),
-                args: h.args.clone(),
-                model: None,
-                extensions: Vec::new(),
-                tools: Vec::new(),
-                base_url: None,
-                env: Vec::new(),
-                container: None,
-            })),
+            PiAdapter::ID => Arc::new(PiAdapter::new(pi_config(config, h))),
             AcpAdapter::ID | BrowserSpecialistAdapter::ID => {
                 let base = &config.adapters.acp;
                 let inner: Arc<dyn WorkerAdapter> = Arc::new(AcpAdapter::new(AcpConfig {
@@ -91,6 +82,11 @@ pub fn build_harness_adapters(
                     env: env(&base.env, &base.env_from_secrets),
                     permission: base.permission,
                     model: None,
+                    model_namespace: if id == "opencode" {
+                        h.model_namespace.clone()
+                    } else {
+                        None
+                    },
                     model_option_id: base.model_option_id.clone(),
                     startup_timeout: Duration::from_secs(base.startup_timeout_secs),
                     container: None,
@@ -181,6 +177,27 @@ pub fn build_harness_adapters(
     Ok(out)
 }
 
+fn pi_config(config: &Config, harness: &config::HarnessDeclarationConfig) -> PiConfig {
+    let secrets_dir = config.secrets.as_ref().map(|s| s.dir.as_path());
+    let none = HashMap::new();
+    PiConfig {
+        command: harness.command.clone().unwrap_or_else(|| "pi".into()),
+        args: harness.args.clone(),
+        model: None,
+        extensions: harness.extensions.clone(),
+        tools: harness.tools.clone(),
+        base_url: None,
+        env: merged_env_with_secrets(
+            &harness.env,
+            &harness.env_from_secrets,
+            &none,
+            &none,
+            secrets_dir,
+        ),
+        container: None,
+    }
+}
+
 /// ADR-0030 D3: `GET /secrets` の `used_by` を設定から導く（秘密 id → それを使っている adapter の
 /// env_from_secrets・LangMem の api_key_secret・LLM source の credential_ref の一覧）。設定順・キー順で決定的に並べる。
 pub fn secret_usage(config: &Config) -> HashMap<String, Vec<task_api::types::SecretUse>> {
@@ -244,7 +261,7 @@ pub fn secret_usage(config: &Config) -> HashMap<String, Vec<task_api::types::Sec
 
 #[cfg(test)]
 mod harness_adapter_tests {
-    use super::build_harness_adapters;
+    use super::{build_harness_adapters, pi_config};
     use crate::Config;
 
     fn load(text: &str) -> Config {
@@ -288,6 +305,16 @@ kind = "fake"
     }
 
     #[test]
+    fn opencode_harness_passes_model_namespace() {
+        let cfg = load("[harnesses.opencode]\nkind='acp'\nmodel_namespace='qwen-local'\n");
+        let adapters = build_harness_adapters(&cfg).unwrap();
+        assert_eq!(
+            adapters[&"opencode".into()].model_namespace(),
+            Some("qwen-local")
+        );
+    }
+
+    #[test]
     fn route_select_dispatch_adapter_daemon_rejects_unknown_harness_kind() {
         let cfg = load(
             r#"
@@ -301,5 +328,135 @@ kind = "no_such_runner"
                 .is_some_and(|e| e.contains("harnesses.odd") && e.contains("no_such_runner")),
             "{err:?}"
         );
+    }
+
+    #[test]
+    fn pi_harness_declaration_reaches_pi_config() {
+        let cfg = load(
+            r#"
+[harnesses.pi]
+kind = "pi"
+extensions = ["/tmp/hashline.ts"]
+tools = ["hashline_read", "hashline_edit", "bash"]
+env = { OPENAI_BASE_URL = "http://proxy" }
+"#,
+        );
+        let pi = pi_config(&cfg, &cfg.harness_declarations["pi"]);
+        assert_eq!(
+            pi.extensions,
+            [std::path::PathBuf::from("/tmp/hashline.ts")]
+        );
+        assert_eq!(pi.tools, ["hashline_read", "hashline_edit", "bash"]);
+        assert_eq!(pi.env, [("OPENAI_BASE_URL".into(), "http://proxy".into())]);
+    }
+
+    /// ADR 2026-10-11 付記 §2: the declaration must reach the process `PiAdapter` starts. A stub `pi`
+    /// records its argv (one per line) and its environment; no real pi or network is used.
+    /// The same executable writer as `model_discovery/tests.rs` (ETXTBSY-safe).
+    fn write_executable(path: &std::path::Path, script: &str) {
+        use std::io::Write;
+        let mut child = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(r#"cat > "$1" && chmod 755 "$1""#)
+            .arg("sh")
+            .arg(path)
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut stdin = child.stdin.take().unwrap();
+        stdin
+            .write_all(format!("#!/bin/sh\n{script}\n").as_bytes())
+            .unwrap();
+        drop(stdin);
+        assert!(child.wait().unwrap().success());
+    }
+
+    #[tokio::test]
+    async fn pi_harness_declaration_reaches_pi_process() {
+        use task_worker::adapter::NullSink;
+        use task_worker::protocol::{
+            PROTOCOL_VERSION, RunContext, RunRequest, sample_task_for_tests,
+        };
+        use task_worker::{RunLimits, Terminal};
+
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let stub = root.join("pi-stub");
+        let extension = root.join("hashline.ts");
+        std::fs::write(&extension, "// stub Hashline extension").unwrap();
+        let secrets = root.join("secrets");
+        std::fs::create_dir_all(&secrets).unwrap();
+        std::fs::write(secrets.join("pi-test-key"), "secret-value\n").unwrap();
+        let argv_out = root.join("argv.copy");
+        let env_out = root.join("env.copy");
+        let artifacts = root.join("artifacts");
+        write_executable(
+            &stub,
+            &format!(
+                "cat > /dev/null\n\
+                 printf '%s\\n' \"$@\" > '{argv}'\n\
+                 env > '{env}'\n\
+                 mkdir -p '{artifacts}'\n\
+                 printf '%s' '{{\"summary\":\"ok\",\"evidence\":[]}}' > '{artifacts}/result.json'\n\
+                 printf '%s\\n' '{{\"type\":\"agent_end\",\"messages\":[]}}'",
+                argv = argv_out.display(),
+                env = env_out.display(),
+                artifacts = artifacts.display(),
+            ),
+        );
+        let toml = format!(
+            "[secrets]\n\
+             dir = '{secrets}'\n\
+             [harnesses.pi]\n\
+             kind = \"pi\"\n\
+             command = '{stub}'\n\
+             extensions = ['{extension}']\n\
+             tools = [\"hashline_read\", \"hashline_edit\", \"bash\"]\n\
+             env = {{ PI_TEST_PLAIN = \"plain-value\" }}\n\
+             env_from_secrets = {{ PI_TEST_SECRET = \"pi-test-key\" }}\n",
+            secrets = secrets.display(),
+            stub = stub.display(),
+            extension = extension.display(),
+        );
+        let cfg = load(&toml);
+        let adapters = build_harness_adapters(&cfg).unwrap();
+        // The dispatcher applies the selected route's `provider/model` at launch (as here).
+        let pi = adapters[&"pi".into()]
+            .with_model("opencode-go/deepseek-v4-pro")
+            .unwrap();
+        let req = RunRequest {
+            protocol: PROTOCOL_VERSION,
+            task: sample_task_for_tests(),
+            workspace: root.to_path_buf(),
+            artifacts_dir: artifacts.clone(),
+            work_dir: None,
+            context: RunContext::default(),
+            cargo_target_dir: None,
+            llm_route: None,
+        };
+        let limits = RunLimits {
+            wall_clock: std::time::Duration::from_secs(60),
+            idle_timeout: std::time::Duration::from_secs(60),
+            kill_grace: std::time::Duration::from_millis(200),
+        };
+        let outcome = pi.run(req, "declared", limits, &NullSink).await.unwrap();
+        assert!(matches!(outcome.terminal, Terminal::Done { .. }));
+
+        let argv = std::fs::read_to_string(&argv_out).unwrap();
+        let argv: Vec<&str> = argv.lines().collect();
+        assert!(
+            argv.windows(2)
+                .any(|w| w == ["--tools", "hashline_read,hashline_edit,bash"]),
+            "{argv:?}"
+        );
+        let extension = extension.to_string_lossy();
+        assert!(
+            argv.windows(2).any(|w| w == ["-e", extension.as_ref()]),
+            "{argv:?}"
+        );
+        let env = std::fs::read_to_string(&env_out).unwrap();
+        let env: Vec<&str> = env.lines().collect();
+        assert!(env.contains(&"PI_TEST_PLAIN=plain-value"), "{env:?}");
+        assert!(env.contains(&"PI_TEST_SECRET=secret-value"), "{env:?}");
     }
 }

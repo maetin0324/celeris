@@ -15,22 +15,23 @@ compatibility、quota、cooldown、capacity を通った最初のものになる
 
 | 現在の用途 | 選択規則 | harness | 先頭候補 |
 |---|---|---|---|
-| coding worker | genre `coding` → coding execution class | `claude_code`, `codex` | `claude_oauth / claude-opus-5-5` を先頭、admission 不可なら Codex `gpt-6.1-sol` |
+| coding worker | genre `coding` → coding execution class | `claude_code`, `codex` | `claude_oauth / claude-opus-5-5`（coding class の唯一の候補。admission 不可なら claude_code は飛ばされ、Codex `gpt-6.1-sol`） |
 | Pi coding | role `pi` または既存の Pi 指定 | `pi` | `opencode_go / opencode-go/grok-4.6` |
 | 軽い仕事 | role `local-qwen` | `opencode` (ACP) | `qwen / qwen3.8-27b` |
 | 文献調査 | literature harness | `paperqa` | `qwen / qwen3.8-27b`、次に `claude_oauth / claude-opus-5-5`、`codex_oauth / gpt-6.1-sol`（今の proxy `celeris/standard` の「届けば Qwen、落ちていれば Claude/Codex」を明示の順にしたもの） |
 | 深掘り Web 調査 | research harness | `local-deep-research` | `qwen / qwen3.8-27b`、次に Claude/Codex cheap |
 | 知識整理 | LangMem の専用起動設定 | `langmem` | `qwen / qwen3.8-27b`、次に Claude/Codex cheap |
-| CoS | `[cos].route_candidates` の順 | `claude_code` | `claude_oauth / claude-opus-5-5` |
-| planner | execution class の順。満杯なら次へ | `claude_code`, `codex` | 上記 coding 候補の順 |
-| reviewer | execution class の順 | `claude_code`, `codex` | 上記 coding 候補の順 |
+| CoS | `[cos].route_candidates` の順（execution class に依らない） | `claude_code` | `claude_oauth / claude-opus-5-5` のみ（Codex へは落とさない。候補が不適格なら fail closed） |
+| planner | execution class の順。満杯なら次へ | `claude_code`, `codex` | `claude_oauth / claude-sonnet-5-5`（`claude_code` 既定）、次に Codex `gpt-6.1-sol` |
+| reviewer | execution class の順 | `claude_code`, `codex` | `claude_oauth / claude-sonnet-5-5`（`claude_code` 既定）、次に Codex `gpt-6.1-sol` |
+| その他の claude_code 仕事 | harness 既定（class 宣言なし） | `claude_code` | `claude_oauth / claude-sonnet-5-5`、次に `claude-opus-5-5`、`claude-fable-5-1` |
 
 `qwen` は本番 proxy の source ID として宣言する。tier alias（`[llm_proxy.models]`）は廃止され、
 新しい binary では読み込みエラーになる（[ADR 2026-10-11 llm-source-harness-selection](../../agent-docs/adr/2026-10-11-llm-source-harness-selection.md)）。
 旧 alias が暗黙に行っていた選び方（cheap は利用可能なら Qwen、次に Claude/Codex の cheap な model。
 standard は Claude/Codex の standard な model）は、上表のとおり `route_defaults` の具体的な source/model
-候補として宣言する。Pi は OpenCode Go を先頭にし、Qwen を予備にする。CoS は Claude（Opus）を先頭にし、
-Codex を fallback として後ろに置く。
+候補として宣言する。Pi は OpenCode Go を先頭にし、Qwen を予備にする。CoS は Claude（Opus）の 1 件だけを候補にし、
+Codex へは落とさない（不適格なら fail closed）。
 
 ## 切替前の退避と確認
 
@@ -116,9 +117,17 @@ kind = "pi"
 api_formats = ["openai_compatible"]
 source_kinds = ["opencode_go", "openai_compatible"]
 capabilities = ["tools", "repo", "skills"]
+# Pi-* provider 宣言から、稼働中 backup の Hashline extension path を転記する。
+extensions = ["<backup の Hashline extension path>"]
+# Hashline の実際の read/edit tool 名を backup と extension README で照合して転記する。
+tools = ["<Hashline read tool>", "<Hashline edit tool>", "bash", "grep", "find", "ls"]
+# env は旧 Pi provider の値を転記し、秘密値は env_from_secrets に secret id を指定する。
+# env = { OPENAI_BASE_URL = "<backup の値>" }
+# env_from_secrets = { CELERIS_PI_API_KEY = "<secret id>" }
 
 [harnesses.opencode]
 kind = "acp"
+model_namespace = "qwen-local"
 api_formats = ["openai_compatible"]
 source_kinds = ["openai_compatible"]
 capabilities = ["tools", "repo", "skills"]
@@ -151,6 +160,14 @@ to_api = "openai_compatible"
 
 [[llm_routes]]
 harness = "paperqa"
+source = "qwen"
+model = "qwen3.8-27b"
+via = "llm_proxy"
+from_api = "openai_compatible"
+to_api = "openai_compatible"
+
+[[llm_routes]]
+harness = "langmem"
 source = "qwen"
 model = "qwen3.8-27b"
 via = "llm_proxy"
@@ -205,16 +222,11 @@ via = "llm_proxy"
 from_api = "openai_compatible"
 to_api = "openai_compatible"
 
-[[llm_routes]]
-harness = "claude_code"
-source = "codex_oauth"
-model = "gpt-6-astra"
-via = "llm_proxy"
-from_api = "openai_compatible"
-to_api = "anthropic"
-
 [route_defaults.claude_code]
-candidates = [{ source = "claude_oauth", model = "claude-opus-5-5" }, { source = "claude_oauth", model = "claude-fable-5-1" }, { source = "claude_oauth", model = "claude-sonnet-5-5" }]
+candidates = [{ source = "claude_oauth", model = "claude-sonnet-5-5" }, { source = "claude_oauth", model = "claude-opus-5-5" }, { source = "claude_oauth", model = "claude-fable-5-1" }]
+
+[route_defaults.claude_code.classes.coding]
+candidates = [{ source = "claude_oauth", model = "claude-opus-5-5" }]
 
 [route_defaults.codex]
 candidates = [{ source = "codex_oauth", model = "gpt-6.1-sol" }, { source = "codex_oauth", model = "gpt-6-astra" }, { source = "codex_oauth", model = "gpt-6-luna" }]
@@ -254,7 +266,6 @@ harness = "claude-code"
 # tier / llm_source は削除し、具体的な候補順を route_candidates に置く。
 route_candidates = [
   { source = "claude_oauth", model = "claude-opus-5-5" },
-  { source = "codex_oauth", model = "gpt-6-astra" },
 ]
 max_turns = 70
 max_wall_secs = 900
@@ -267,7 +278,7 @@ model = "qwen/qwen3.8-27b"
 api_key_secret = "<現在のsecret reference>"
 
 [adapters.local_deep_research]
-settings = { "llm.model" = "qwen3.8-27b", "llm.openai_endpoint.url" = "<現在のQwen endpoint>/v1", "llm.openai_endpoint.api_key" = "<現在のsecret reference>" }
+settings = { "llm.model" = "qwen/qwen3.8-27b", "llm.openai_endpoint.url" = "<現在のQwen endpoint>/v1", "llm.openai_endpoint.api_key" = "<現在のsecret reference>" }
 
 [adapters.paperqa]
 settings = "<現在のPaperQA settings path>"
@@ -276,14 +287,17 @@ settings = "<現在のPaperQA settings path>"
 
 `[adapters.paperqa].settings` が指す PaperQA settings では `llm`、`summary_llm`、
 `agent.agent_llm` を `qwen3.8-27b`、endpoint は現在の proxy URL、認証は既存 secret とする。
-opencode ACP の既存 `OPENCODE_CONFIG` と `CELERIS_API_TOKEN` secret injection は保持し、
-model を `qwen3.8-27b` にする。LangMem・LDR・PaperQA の本番 endpoint は backup の値を
-転記する。`providers.d` の eight IDs は新形式の宣言を確認した後に退避名へ移し、旧 include
+opencode ACP の既存 `OPENCODE_CONFIG` と `CELERIS_API_TOKEN` secret injection は保持する。
+`[harnesses.opencode].model_namespace = "qwen-local"` は OpenCode config の provider ID と
+一致させ、adapter は `qwen-local/qwen3.8-27b` を渡す（route の model は `qwen3.8-27b` のまま）。
+LangMem・LDR・PaperQA の本番 endpoint は backup の値を転記する。`providers.d` の eight IDs は新形式の宣言を確認した後に退避名へ移し、旧 include
 を外す。TOML の説明用 placeholder は実 config に残さない。
 
-`[knowledge.langmem].base_url` を Celeris の llm-proxy（`[llm_proxy]` の listen）に向ける場合、
-proxy は具体的な `<source_id>/<model_id>` だけを受けるため、`model` は `qwen/qwen3.8-27b` の形で書く。
-Qwen の endpoint を直接指す場合は `qwen3.8-27b` のままでよい（上の TOML 例は proxy を指すので `qwen/qwen3.8-27b`）。
+LDR・PaperQA・LangMem の route は `via = "llm_proxy"` で宣言するので、harness には
+`<source_id>/<model_id>`（例 `qwen/qwen3.8-27b`）が渡る。proxy は接頭辞なしの model を受けない。
+そのため `[knowledge.langmem].base_url` は llm-proxy（`[llm_proxy]` の listen）を指し、`model` と
+`llm.model` は `qwen/qwen3.8-27b` と書く。route の model が設定より優先されるので、設定の値は
+表示と照合のためのものである。
 
 ## 前提
 
@@ -325,8 +339,9 @@ PROXY=http://127.0.0.1:18100
    ```
 
    exit 0 で、source・harness・route candidate と `[cos] route_candidates` の表が「選択結果」の表と
-   一致することを確かめる（CoS は `claude_oauth / claude-opus-5-5`、次に `codex_oauth / gpt-6-astra`。
-   CoS の候補は API に出ないので、ここで確かめる）。
+   一致することを確かめる（CoS は `claude_oauth / claude-opus-5-5` の 1 件だけ。Codex の候補は無い。
+   CoS の候補は API に出ないので、ここで確かめる）。`claude_code:` の行の先頭が `claude-sonnet-5-5`、`claude_code class coding:` の行が
+   `claude-opus-5-5` だけであることも同じ出力で確かめる。
    `legacy provider configuration is no longer supported` などの読み込みエラーが出たら、その欄を
    直してからやり直す。続けて `CELERIS_CONFIG="<作業用コピーの config.toml>" scripts/selfdeploy/verify.sh <新リリース>`
    で新リリースを検証する。旧 binary は新 config を読めないので N-1 検査は落ち、`live_ok` は偽になる。
@@ -363,9 +378,12 @@ PROXY=http://127.0.0.1:18100
    ```
 
    期待: `pi` の候補が `opencode_go/opencode-go/grok-4.6 > qwen/qwen3.8-27b`、`claude_code` の先頭が
-   `claude_oauth/claude-opus-5-5`、`local-deep-research` と `langmem` の先頭が `qwen/qwen3.8-27b`。
+   `claude_oauth/claude-sonnet-5-5`（coding class の先頭は `claude_oauth/claude-opus-5-5`）、`local-deep-research` と `langmem` の先頭が `qwen/qwen3.8-27b`。
 7. proxy を経由する harness（LDR・PaperQA・LangMem）のために、proxy が具体的な source/model を
    中継することを確かめる。確認リクエストには機密データを入れず、token と応答本文をログへ残さない:
+
+   接頭辞なしの `qwen3.8-27b` を同じ経路に送ると 422 になることも確かめる（daemon が接頭辞を付け忘れた
+   場合の検出）。
 
    ```sh
    curl -sS -o /dev/null -D - -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
@@ -386,6 +404,9 @@ PROXY=http://127.0.0.1:18100
         from events where json_extract(json,'$.type')='routing_decided'
         order by id desc limit 20;"
    ```
+
+   移行後も DB の旧 `routing_decided` event（`record.optimizer.mode = "legacy"`）は読み取りだけで残る。
+   移行で event を書き換えず、新しい event は `shadow` / `enforce` のみになる。
 
    `resolution.provider` は選ばれた source ID、`resolution.model_id` はその model。task 1 件ずつなら
    `GET /api/v1/tasks/<task id>/routing` の `runs` でも同じ内容を見られる。Pi task は

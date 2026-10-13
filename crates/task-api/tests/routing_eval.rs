@@ -403,7 +403,11 @@ async fn cancel_moves_a_queued_trial_and_conflicts_afterwards() {
 
 #[tokio::test]
 async fn writes_need_the_bearer_token_when_the_daemon_has_one() {
-    let env = admin_env();
+    let env = TestEnv::with(EnvOptions {
+        token: Some(TOKEN.to_string()),
+        harnesses: Some(std::sync::Arc::new(DeclaredRoutes)),
+        ..Default::default()
+    });
     let app = env.router();
     let repo = env.dir.path().to_str().expect("utf-8 path").to_string();
 

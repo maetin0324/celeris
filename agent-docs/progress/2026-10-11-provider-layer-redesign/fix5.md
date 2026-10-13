@@ -29,6 +29,57 @@ updated: 2026-10-13
 
 `test-parallel` の sandbox 既知失敗（browser・launcher・credentiald・CDP 系）は今回 0 件。
 
+## 最終レビュー補完: web の検査出力（2026-10-13、repair-1）
+
+検査対象は HEAD `184c15f6bddad2202b73ad8ee0b73d9cd7e5a82c`。
+reviewer `01M4T6PVEZ7VRB0BFFGPE0FBD4` が指摘した受け入れ条件 4 の
+web typecheck・test の成功出力不足を補う。変更はこの進捗記録だけ。
+同 reviewer が確認済みの制御プレーン試験（4998 passed / 0 failed）と
+`cargo clippy --workspace -- -D warnings`（exit 0）は今回再実行していない。
+
+Node `v24.14.1`、pnpm `12.6.0` を使用。依存が未導入で offline cache が不足していたため、
+`pnpm -C web install --frozen-lockfile --store-dir "$TMPDIR/pnpm-store"`（exit 0）で
+既存 lockfile の依存を導入した。package.json・lockfile の変更はない。
+
+| コマンド | 結果 |
+|---|---|
+| `pnpm -C web typecheck` | exit 0、`tsc -b` 完了（診断なし） |
+| `pnpm -C web test` | exit 0、Vitest: 94 files / 671 tests passed、gateway: 93 passed / 0 failed |
+
+成功出力の抜粋（typecheck）:
+
+```text
+$ tsc -b
+```
+
+成功出力の抜粋（test）:
+
+```text
+ Test Files  94 passed (94)
+      Tests  671 passed (671)
+   Duration  8.21s (tests 37%, transform 35%, import 27%, worker 1%)
+ℹ tests 93
+ℹ suites 0
+ℹ pass 93
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+```
+
+生ログはリポジトリ外の
+`/local/celeris/data/workspaces/01M4M8D4AP4YY4F9TV09HG30SJ/artifacts/` に保存:
+`repair-1-web-install.log`、`repair-1-web-typecheck.log`、`repair-1-web-test.log`。
+
+指定の追加検査も exit 0:
+
+- `cargo test -p task-api --lib schema:: && node web/scripts/gen-types.mjs && git diff --exit-code -- web/api/generated docs/api/v1`: 2 passed / 0 failed、生成物の差分なし。
+- `git diff --quiet $(git merge-base HEAD main) -- crates/ web/ gui/ config/`: 差分なし。
+- `CELERIS_WU_SCOPE_PATHS` を使う指定の範囲検査 5 本: すべて範囲内。
+- `git diff --check`、`sh scripts/dev/check-doc-links.sh`、`sh scripts/dev/progress-index.sh --check`: すべて成功。
+
+範囲検査のコマンド全文と exit は同じログディレクトリの `repair-1-checks.json` に保存した。
+
 ## 消したもの（段ごと）
 
 - **crates-residue**（task-worker・task-core・task-api）: tier alias 判定（OpenCode・Aider・Pi の routing context）、paperqa の `celeris` tier 例外、tier 語の入った試験名と fixture（具体的な `qwen/qwen3.8-27b`・`opencode-go/grok-4.6` に替えた）、`/providers` 注釈。acp fixture は proxy の base URL を足した（試験側の誤り）。

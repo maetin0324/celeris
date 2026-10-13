@@ -139,12 +139,13 @@ completed: 2026-10-12
 | literature genre | `paperqa` | `claude_oauth / claude-opus-5-5` | 旧 `celeris/standard` の候補; Codex `gpt-6.1-sol` が次 |
 | research genre | `local-deep-research` | `qwen / qwen3.8-27b` | 旧 `celeris/cheap`; 次に Claude/Codex cheap |
 | LangMem 専用起動 | `langmem` | `qwen / qwen3.8-27b` | 旧 `celeris/cheap`; 次に Claude/Codex cheap |
-| CoS | `claude_code` | `claude_oauth / claude-opus-5-5` | `codex_oauth / gpt-6-astra` を fallback |
+| CoS | `claude_code` | `claude_oauth / claude-opus-5-5` | fallback なし（候補は Claude の 1 件。不適格なら fail closed。Codex へは落とさない） |
 | planner / reviewer execution class | `claude_code`, `codex` | Claude Opus、次に Codex 6.1 | admission 不可なら次候補、全候補不可なら defer |
 
 本番に反映する設定全文（既存の無関係な項目は保持し、placeholder は現在値に置換する）は次のとおり。秘密値は含めず、backup から endpoint/secret reference/path を転記する。
 
 ```toml
+
 [llm_proxy]
 enabled = true
 
@@ -196,9 +197,17 @@ kind = "pi"
 api_formats = ["openai_compatible"]
 source_kinds = ["opencode_go", "openai_compatible"]
 capabilities = ["tools", "repo", "skills"]
+# Pi-* provider 宣言から、稼働中 backup の Hashline extension path を転記する。
+extensions = ["<backup の Hashline extension path>"]
+# Hashline の実際の read/edit tool 名を backup と extension README で照合して転記する。
+tools = ["<Hashline read tool>", "<Hashline edit tool>", "bash", "grep", "find", "ls"]
+# env は旧 Pi provider の値を転記し、秘密値は env_from_secrets に secret id を指定する。
+# env = { OPENAI_BASE_URL = "<backup の値>" }
+# env_from_secrets = { CELERIS_PI_API_KEY = "<secret id>" }
 
 [harnesses.opencode]
 kind = "acp"
+model_namespace = "qwen-local"
 api_formats = ["openai_compatible"]
 source_kinds = ["openai_compatible"]
 capabilities = ["tools", "repo", "skills"]
@@ -231,6 +240,14 @@ to_api = "openai_compatible"
 
 [[llm_routes]]
 harness = "paperqa"
+source = "qwen"
+model = "qwen3.8-27b"
+via = "llm_proxy"
+from_api = "openai_compatible"
+to_api = "openai_compatible"
+
+[[llm_routes]]
+harness = "langmem"
 source = "qwen"
 model = "qwen3.8-27b"
 via = "llm_proxy"
@@ -285,16 +302,11 @@ via = "llm_proxy"
 from_api = "openai_compatible"
 to_api = "openai_compatible"
 
-[[llm_routes]]
-harness = "claude_code"
-source = "codex_oauth"
-model = "gpt-6-astra"
-via = "llm_proxy"
-from_api = "openai_compatible"
-to_api = "anthropic"
-
 [route_defaults.claude_code]
-candidates = [{ source = "claude_oauth", model = "claude-opus-5-5" }, { source = "claude_oauth", model = "claude-fable-5-1" }, { source = "claude_oauth", model = "claude-sonnet-5-5" }]
+candidates = [{ source = "claude_oauth", model = "claude-sonnet-5-5" }, { source = "claude_oauth", model = "claude-opus-5-5" }, { source = "claude_oauth", model = "claude-fable-5-1" }]
+
+[route_defaults.claude_code.classes.coding]
+candidates = [{ source = "claude_oauth", model = "claude-opus-5-5" }]
 
 [route_defaults.codex]
 candidates = [{ source = "codex_oauth", model = "gpt-6.1-sol" }, { source = "codex_oauth", model = "gpt-6-astra" }, { source = "codex_oauth", model = "gpt-6-luna" }]
@@ -334,7 +346,6 @@ harness = "claude-code"
 # tier / llm_source は削除し、具体的な候補順を route_candidates に置く。
 route_candidates = [
   { source = "claude_oauth", model = "claude-opus-5-5" },
-  { source = "codex_oauth", model = "gpt-6-astra" },
 ]
 max_turns = 70
 max_wall_secs = 900
@@ -347,10 +358,11 @@ model = "qwen/qwen3.8-27b"
 api_key_secret = "<現在のsecret reference>"
 
 [adapters.local_deep_research]
-settings = { "llm.model" = "qwen3.8-27b", "llm.openai_endpoint.url" = "<現在のQwen endpoint>/v1", "llm.openai_endpoint.api_key" = "<現在のsecret reference>" }
+settings = { "llm.model" = "qwen/qwen3.8-27b", "llm.openai_endpoint.url" = "<現在のQwen endpoint>/v1", "llm.openai_endpoint.api_key" = "<現在のsecret reference>" }
 
 [adapters.paperqa]
 settings = "<現在のPaperQA settings path>"
+
 ```
 
 本番では作業前に config と `providers.d` を権限付きで backup し、daemon 停止中に8行を source/harness/route 設定へ移して include と旧行を除く。DB path、events、credential files、account directories は保持する。新 binary の config validation が成功してから同一 release の binary を切替・起動し、API の source status と run audit の harness/source/model を coding、Pi、local-qwen、CoS の順に確認する。失敗時は daemon を停止し config/include と旧 binary を backup/release から戻す。DB migration 後は DB を旧版へ安易に戻さず、release の migration rollback 規則を適用する。詳細な人向けコマンドと確認事項は [移行手順](../../docs/ops/provider-llm-source-migration.md) にある。

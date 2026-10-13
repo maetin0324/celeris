@@ -2,8 +2,10 @@
 //! (ADR 2026-10-11 llm-source-harness-selection).
 //!
 //! The order is fixed: the task's `harness` field (a human's explicit choice), otherwise the
-//! declared `[harness_selection]` rules; then the `route_defaults.<harness>` candidates in their
-//! declared order, narrowed by an explicit task model; harness/source compatibility (direct API
+//! declared `[harness_selection]` rules; then the candidates in their declared order, which are the
+//! `route_class_defaults.<harness>.<class>` list when one is declared for the execution class (it
+//! replaces, and never falls back to) otherwise `route_defaults.<harness>`, narrowed by an explicit
+//! task model; harness/source compatibility (direct API
 //! format or a registered `[[llm_routes]]` entry); `(source, account)` admission; and finally the
 //! route policy. Every step fails closed: nothing falls back to an undeclared source.
 
@@ -14,7 +16,7 @@ use task_core::llm_route::{
     ExclusionReason, HarnessId, HarnessRequest, HarnessSelectionError, ModelId, QuotaSnapshot,
     Registry, ReservationSnapshot, RouteRequest, RunSelection, SourceId, admit_source,
     constrain_for_harness, enumerate_candidates, harness_candidates, route_priority,
-    select_harness,
+    select_harness, wire_model_id,
 };
 use task_core::model_policy::RouteFeaturesRef;
 use task_core::route_select::{
@@ -79,6 +81,8 @@ pub struct RouteContext {
 pub struct RoutePick {
     pub harness: HarnessId,
     pub candidate: Candidate,
+    /// Model identifier passed to the harness adapter; candidate.model stays canonical.
+    pub wire_model_id: ModelId,
     pub account: AccountId,
 }
 
@@ -203,7 +207,6 @@ pub fn route_select(
     for harness in harnesses {
         let mut one = input.clone();
         one.harness.harness = Some(harness.clone());
-        one.harness.execution_class = None;
         let (result, current_trace) = route_select_one(&one, registry, state);
         match result {
             Ok(pick) => {
@@ -242,7 +245,8 @@ pub fn route_select(
     (Err(failure), aggregate)
 }
 
-/// Decide one harness: the declared priority column (harness×lane `route_defaults`, or the CoS
+/// Decide one harness: the declared priority column (the execution-class list, else harness×lane
+/// `route_defaults`, or the CoS
 /// list) narrowed by an explicit task model and by harness/source compatibility; then the stage's
 /// rule (ADR 2026-10-11 D2: the evidence table in `enforce`, the same declared column in `shadow`);
 /// then `(source, account)` admission walking the rule's fallback order. Every step fails closed.
@@ -257,7 +261,14 @@ fn route_select_one(
         Err(e) => return (Err(RouteFailure::Harness(e)), trace),
     };
     trace.harness = Some(harness.clone());
-    let priority = route_priority(registry, &harness, input.lane.as_deref(), input.cos).to_vec();
+    let priority = route_priority(
+        registry,
+        &harness,
+        input.lane.as_deref(),
+        input.cos,
+        input.harness.execution_class.as_ref(),
+    )
+    .to_vec();
     if priority.is_empty() {
         return (Err(RouteFailure::NoDeclaredDefault(harness)), trace);
     }
@@ -378,6 +389,7 @@ fn route_select_one(
             }
             match admitted {
                 Some((candidate, account)) => Ok(RoutePick {
+                    wire_model_id: wire_model_id(registry, &harness, &candidate.key()),
                     harness: harness.clone(),
                     candidate,
                     account,
@@ -501,7 +513,7 @@ fn quota_pressure(
         else {
             continue;
         };
-        for (window, _) in &row.quota_per_run {
+        for window in row.quota_per_run.keys() {
             out.insert(
                 (
                     row.key.source_id.clone(),

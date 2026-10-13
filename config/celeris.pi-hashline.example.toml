@@ -32,6 +32,9 @@ kind = "pi"
 api_formats = ["openai_compatible"]
 source_kinds = ["opencode_go"]
 capabilities = ["tools", "repo", "skills"]
+# 本番設定では backup と Hashline の README で path/tool 名を照合して転記する。
+extensions = ["extensions/hashline/index.ts"]
+tools = ["hashline_read", "hashline_edit", "bash", "grep", "find", "ls"]
 
 # 候補は優先順。先頭から適格なものを選ぶ（適格性・quota・cooldown・同時実行数）。
 [route_defaults.claude_code]

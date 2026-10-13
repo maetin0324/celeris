@@ -1,6 +1,6 @@
 //! ADR-0095（Phase R7-6）: worker の run から本番 DB は読み取り専用。本番 2026-09-30 22:37:52Z の事故
 //! （codex の run が `celerisctl add --db <本番 DB>` を escalation で sandbox の外で走らせ、DB を migrate した）を、
-//! 実バイナリ `celeris` + `adapter = "codex"`（スタブの `codex` は `sh` スクリプト）+ 実バイナリ `celerisctl` で再現する。
+//! 実バイナリ `celeris` + harness `codex`・source `codex_oauth`（スタブの `codex` は `sh` スクリプト）+ 実バイナリ `celerisctl` で再現する。
 //! スタブはエージェントの代わりに、daemon が開いている WAL の DB に対して `celerisctl ls` / `celerisctl add` /
 //! 生の書き込みを試み、結果を artifacts に書く。外部ネットワークに出ない。
 //!
@@ -169,6 +169,20 @@ fn a_codex_worker_run_cannot_write_the_daemon_db_but_can_read_it_with_celerisctl
         format!(
             r#"#!/bin/sh
 set -u
+# daemon は account pool の確認に `codex app-server` を namespace の外で起動する。探りは worker の run
+# （`codex exec`）でだけ行い、確認には成功の handshake だけを返す。
+if [ "${{1:-}}" = "app-server" ]; then
+  read -r init
+  echo '{{"id":1,"result":{{}}}}'
+  read -r initialized
+  read -r account
+  echo '{{"id":2,"result":{{"account":{{"type":"chatgpt"}}}}}}'
+  read -r limits
+  reset=$(date +%s)
+  printf '{{"id":3,"result":{{"rateLimits":{{"primary":{{"usedPercent":0,"windowDurationMins":300,"resetsAt":%s}},"secondary":{{"usedPercent":0,"windowDurationMins":10080,"resetsAt":%s}}}}}}}}\n' "$((reset + 3600))" "$((reset + 432000))"
+  exit 0
+fi
+[ "${{1:-}}" = "exec" ] || exit 2
 CTL='{ctl}'
 DB='{db}'
 mkdir -p artifacts
@@ -191,6 +205,11 @@ echo '{{"type":"turn.completed"}}'
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
+    // `codex_oauth` は account pool の source なので、ログイン済み（`auth.json` がある）account が
+    // 1 つ無いと admission が通らない（ADR 2026-10-11 llm-source-harness-selection）。
+    let account = root.join("codex-accounts").join("a");
+    std::fs::create_dir_all(&account).unwrap();
+    std::fs::write(account.join("auth.json"), "{}").unwrap();
     let config = root.join("config.toml");
     std::fs::write(
         &config,
@@ -205,9 +224,32 @@ kill_grace_secs = 1
 review_timeout_secs = 30
 retry_backoff_base_secs = 0
 
+[accounts]
+codex_dir = "codex-accounts"
+
 [adapters.codex]
 command = "{stub}"
 extra_args = ["--approve-for-me"]
+
+[llm_sources.codex]
+kind = "codex_oauth"
+accounts = []
+models = ["codex"]
+
+[harnesses.codex]
+kind = "codex"
+api_formats = ["codex_oauth"]
+source_kinds = ["codex_oauth"]
+
+[harness_selection]
+execution_class_defaults = {{}}
+
+[[harness_selection.rules]]
+harness = "codex"
+required_capabilities = []
+
+[route_defaults.codex]
+candidates = [{{ source = "codex", model = "codex" }}]
 
 "#,
             stub = stub.display()
@@ -220,6 +262,10 @@ extra_args = ["--approve-for-me"]
     let mut child = Command::new(bin("celeris"))
         .env_remove(WORKER_DB_GUARD_ENV)
         .env_remove("CELERIS_CONFIG")
+        .env_remove("CELERIS_RUN_DB")
+        .env_remove("CELERIS_FOLLOWUPS_FILE")
+        .env_remove("CELERIS_TASK_ID")
+        .env_remove("CELERIS_RUN_ID")
         .args([
             "--config",
             config.to_str().unwrap(),
@@ -284,7 +330,12 @@ extra_args = ["--approve-for-me"]
     // worker は DB に直接書けていない（`direct` は無い・schema はそのまま・壊れていない）。宣言した後続だけを
     // daemon が元の task の案件・primary で `draft` として作り、出自を `worker_run` で残している（ADR-0098）。
     let tasks = store.list(None).unwrap();
-    assert_eq!(tasks.len(), tasks_before + 1, "only the declared follow-up");
+    assert_eq!(
+        tasks.len(),
+        tasks_before + 1,
+        "only the declared follow-up: {:?}",
+        tasks.iter().map(|t| &t.title).collect::<Vec<_>>()
+    );
     assert!(tasks.iter().all(|t| t.title != "direct"));
     let followup = tasks
         .iter()

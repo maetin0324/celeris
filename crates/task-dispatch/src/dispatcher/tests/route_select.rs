@@ -150,6 +150,27 @@ fn harness_select_rules_are_deterministic() {
 }
 
 #[test]
+fn proxy_route_pick_carries_the_qualified_wire_model() {
+    let mut r = registry();
+    r.route_defaults
+        .insert("claude_code".into(), vec![key("codex_oauth", "gpt")]);
+    let pick = route_select(&input("coding"), &r, &all_available(&r))
+        .0
+        .unwrap();
+    assert_eq!(pick.candidate.model.as_ref(), "gpt");
+    assert_eq!(pick.wire_model_id.as_ref(), "codex_oauth/gpt");
+}
+
+#[test]
+fn direct_route_pick_keeps_the_bare_model() {
+    let pick = route_select(&input("coding"), &registry(), &all_available(&registry()))
+        .0
+        .unwrap();
+    assert_eq!(pick.candidate.model.as_ref(), "sonnet");
+    assert_eq!(pick.wire_model_id.as_ref(), "sonnet");
+}
+
+#[test]
 fn harness_select_explicit_task_field_wins_over_rules() {
     let r = registry();
     let mut req = input("coding");
@@ -685,4 +706,45 @@ async fn route_select_dispatch_run_without_a_route_starts_nothing() {
             .any(|m| m.contains("route refused: no adapter for harness claude_code"))
     );
     assert!(capture.seen.lock().unwrap().is_empty());
+}
+
+#[test]
+fn class_candidates_survive_the_harness_loop() {
+    let mut r = registry();
+    r.harness_selection.execution_class_defaults.insert(
+        "coding".into(),
+        vec!["claude_code".into(), "opencode".into()],
+    );
+    r.route_class_defaults.insert(
+        "claude_code".into(),
+        BTreeMap::from([("coding".into(), vec![key("claude_oauth", "opus")])]),
+    );
+    let coding = RouteInput {
+        harness: task_core::llm_route::HarnessRequest {
+            genre: Some("coding".into()),
+            execution_class: Some("coding".into()),
+            ..Default::default()
+        },
+        ..input("coding")
+    };
+    // The class list is used inside the first harness: opus, not the harness default sonnet.
+    let state = all_available(&r);
+    let (pick, trace) = route_select(&coding, &r, &state);
+    assert_eq!(pick.unwrap().candidate.key(), key("claude_oauth", "opus"));
+    assert_eq!(trace.candidates, vec![key("claude_oauth", "opus")]);
+    // With the claude accounts cooling down, the rejection is for the class candidate only and
+    // the loop moves on to the next harness with its own default.
+    let mut cooled = all_available(&r);
+    cooled.quota.cooling_down.insert(pair("claude_oauth", "ca"));
+    cooled.quota.cooling_down.insert(pair("claude_oauth", "cb"));
+    let (pick, trace) = route_select(&coding, &r, &cooled);
+    assert_eq!(pick.unwrap().harness, "opencode".into());
+    let first = &trace.harness_rejections[0];
+    assert_eq!(first.harness, "claude_code".into());
+    assert!(
+        first
+            .rejections
+            .iter()
+            .all(|x| x.candidate.key() == key("claude_oauth", "opus"))
+    );
 }

@@ -366,6 +366,8 @@ command = "claude-declared"
 
 [harnesses.pi]
 kind = "pi"
+extensions = ["extensions/hashline.ts"]
+tools = ["hashline_read", "hashline_edit", "bash"]
 api_formats = ["openai_compatible"]
 source_kinds = ["openai_compatible"]
 

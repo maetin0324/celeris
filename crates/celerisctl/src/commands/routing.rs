@@ -353,6 +353,12 @@ pub fn render_routing_table(config: &Config) -> String {
     out.push_str("=== route_defaults ===\n");
     for (harness, d) in &config.route_defaults {
         out.push_str(&format!("{harness}: {}\n", candidates_cell(&d.candidates)));
+        for (class, c) in &d.classes {
+            out.push_str(&format!(
+                "{harness} class {class}: {}\n",
+                candidates_cell(&c.candidates)
+            ));
+        }
     }
     out.push_str(&format!(
         "cos: {}\n",
@@ -417,6 +423,36 @@ candidates = [{ source = "claude", model = "claude-sonnet-5" }]
         assert!(table.contains("claude_code -> claude/claude-sonnet-5\n"));
         assert!(table.contains("claude_code: claude/claude-sonnet-5\n"));
         assert!(table.contains("cos: (none)"));
+    }
+
+    #[test]
+    fn show_prints_class_candidates() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_config(
+            dir.path(),
+            r#"
+[llm_sources.claude]
+kind = "claude_oauth"
+api_format = "anthropic_messages"
+accounts = ["a1"]
+models = ["claude-sonnet-5-5", "claude-opus-5-5"]
+
+[harnesses.claude_code]
+kind = "claude_code"
+api_formats = ["anthropic_messages"]
+source_kinds = ["claude_oauth"]
+
+[route_defaults.claude_code]
+candidates = [{ source = "claude", model = "claude-sonnet-5-5" }]
+
+[route_defaults.claude_code.classes.coding]
+candidates = [{ source = "claude", model = "claude-opus-5-5" }]
+"#,
+        );
+        let config = Config::load(&path).unwrap();
+        let table = render_routing_table(&config);
+        assert!(table.contains("claude_code: claude/claude-sonnet-5-5\n"));
+        assert!(table.contains("claude_code class coding: claude/claude-opus-5-5\n"));
     }
 
     #[test]

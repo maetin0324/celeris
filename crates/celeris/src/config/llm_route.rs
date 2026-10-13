@@ -1,6 +1,7 @@
 use super::ConfigError;
 use serde::Deserialize;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -35,6 +36,14 @@ pub struct HarnessDeclarationConfig {
     pub command: Option<String>,
     #[serde(default)]
     pub args: Vec<String>,
+    #[serde(default)]
+    pub extensions: Vec<PathBuf>,
+    #[serde(default)]
+    pub tools: Vec<String>,
+    #[serde(default)]
+    pub env: HashMap<String, String>,
+    #[serde(default)]
+    pub env_from_secrets: HashMap<String, String>,
 }
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]

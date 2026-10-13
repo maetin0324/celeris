@@ -510,6 +510,15 @@ impl Config {
         cfg.selfdeploy.resolve_paths(&base);
         cfg.storage.resolve_paths();
         cfg.adapters.paperqa.resolve_paths(&base);
+        for harness in cfg.harness_declarations.values_mut() {
+            if harness.kind.replace('_', "-") == task_worker::PiAdapter::ID {
+                for extension in &mut harness.extensions {
+                    if extension.is_relative() {
+                        *extension = base.join(&*extension);
+                    }
+                }
+            }
+        }
 
         // 2. 旧い `[[genres]]` + `[[roles]]` と `[[harnesses]]` の合流（ADR-0046 D3）。
         cfg.merge_harnesses();
@@ -537,6 +546,23 @@ impl Config {
 
     pub fn validate(&self) -> Result<(), ConfigError> {
         let registry = self.llm_route_registry()?;
+        for (id, harness) in &self.harness_declarations {
+            if harness.kind.replace('_', "-") == task_worker::PiAdapter::ID {
+                if harness.extensions.is_empty() || harness.tools.is_empty() {
+                    return Err(ConfigError::Invalid(format!(
+                        "[harnesses.{id}] Pi requires non-empty extensions and tools"
+                    )));
+                }
+            } else if !harness.extensions.is_empty()
+                || !harness.tools.is_empty()
+                || !harness.env.is_empty()
+                || !harness.env_from_secrets.is_empty()
+            {
+                return Err(ConfigError::Invalid(format!(
+                    "[harnesses.{id}] extensions, tools, and env are only supported for Pi"
+                )));
+            }
+        }
         self.selfdeploy.validate()?;
         self.selfdeploy.delivery.validate()?;
         self.browser.validate()?;

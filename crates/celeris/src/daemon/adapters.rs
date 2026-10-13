@@ -73,16 +73,7 @@ pub fn build_harness_adapters(
                     container: None,
                 }))
             }
-            PiAdapter::ID => Arc::new(PiAdapter::new(PiConfig {
-                command: command("pi"),
-                args: h.args.clone(),
-                model: None,
-                extensions: Vec::new(),
-                tools: Vec::new(),
-                base_url: None,
-                env: Vec::new(),
-                container: None,
-            })),
+            PiAdapter::ID => Arc::new(PiAdapter::new(pi_config(config, h))),
             AcpAdapter::ID | BrowserSpecialistAdapter::ID => {
                 let base = &config.adapters.acp;
                 let inner: Arc<dyn WorkerAdapter> = Arc::new(AcpAdapter::new(AcpConfig {
@@ -181,6 +172,27 @@ pub fn build_harness_adapters(
     Ok(out)
 }
 
+fn pi_config(config: &Config, harness: &config::HarnessDeclarationConfig) -> PiConfig {
+    let secrets_dir = config.secrets.as_ref().map(|s| s.dir.as_path());
+    let none = HashMap::new();
+    PiConfig {
+        command: harness.command.clone().unwrap_or_else(|| "pi".into()),
+        args: harness.args.clone(),
+        model: None,
+        extensions: harness.extensions.clone(),
+        tools: harness.tools.clone(),
+        base_url: None,
+        env: merged_env_with_secrets(
+            &harness.env,
+            &harness.env_from_secrets,
+            &none,
+            &none,
+            secrets_dir,
+        ),
+        container: None,
+    }
+}
+
 /// ADR-0030 D3: `GET /secrets` の `used_by` を設定から導く（秘密 id → それを使っている adapter の
 /// env_from_secrets・LangMem の api_key_secret・LLM source の credential_ref の一覧）。設定順・キー順で決定的に並べる。
 pub fn secret_usage(config: &Config) -> HashMap<String, Vec<task_api::types::SecretUse>> {
@@ -244,7 +256,7 @@ pub fn secret_usage(config: &Config) -> HashMap<String, Vec<task_api::types::Sec
 
 #[cfg(test)]
 mod harness_adapter_tests {
-    use super::build_harness_adapters;
+    use super::{build_harness_adapters, pi_config};
     use crate::Config;
 
     fn load(text: &str) -> Config {
@@ -301,5 +313,22 @@ kind = "no_such_runner"
                 .is_some_and(|e| e.contains("harnesses.odd") && e.contains("no_such_runner")),
             "{err:?}"
         );
+    }
+
+    #[test]
+    fn pi_harness_declaration_reaches_pi_config() {
+        let cfg = load(
+            r#"
+[harnesses.pi]
+kind = "pi"
+extensions = ["/tmp/hashline.ts"]
+tools = ["hashline_read", "hashline_edit", "bash"]
+env = { OPENAI_BASE_URL = "http://proxy" }
+"#,
+        );
+        let pi = pi_config(&cfg, &cfg.harness_declarations["pi"]);
+        assert_eq!(pi.extensions, [std::path::PathBuf::from("/tmp/hashline.ts")]);
+        assert_eq!(pi.tools, ["hashline_read", "hashline_edit", "bash"]);
+        assert_eq!(pi.env, [("OPENAI_BASE_URL".into(), "http://proxy".into())]);
     }
 }

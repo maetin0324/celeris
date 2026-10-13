@@ -116,6 +116,13 @@ kind = "pi"
 api_formats = ["openai_compatible"]
 source_kinds = ["opencode_go", "openai_compatible"]
 capabilities = ["tools", "repo", "skills"]
+# Pi-* provider 宣言から、稼働中 backup の Hashline extension path を転記する。
+extensions = ["<backup の Hashline extension path>"]
+# Hashline の実際の read/edit tool 名を backup と extension README で照合して転記する。
+tools = ["<Hashline read tool>", "<Hashline edit tool>", "bash", "grep", "find", "ls"]
+# env は旧 Pi provider の値を転記し、秘密値は env_from_secrets に secret id を指定する。
+# env = { OPENAI_BASE_URL = "<backup の値>" }
+# env_from_secrets = { CELERIS_PI_API_KEY = "<secret id>" }
 
 [harnesses.opencode]
 kind = "acp"

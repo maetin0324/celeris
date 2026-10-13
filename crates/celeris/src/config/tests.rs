@@ -121,6 +121,26 @@ fn migration_runbook_toml_loads() {
 }
 
 #[test]
+fn pi_harness_declaration_deserializes_extensions_tools_and_env() {
+    let cfg = Config::parse_with_delivery(
+        r#"
+[harnesses.pi]
+kind = "pi"
+extensions = ["extensions/hashline.ts"]
+tools = ["hashline_read", "hashline_edit", "bash"]
+env = { OPENAI_BASE_URL = "http://proxy" }
+env_from_secrets = { CELERIS_PI_API_KEY = "pi-key" }
+"#,
+    )
+    .unwrap();
+    let pi = &cfg.harness_declarations["pi"];
+    assert_eq!(pi.extensions, [std::path::PathBuf::from("extensions/hashline.ts")]);
+    assert_eq!(pi.tools, ["hashline_read", "hashline_edit", "bash"]);
+    assert_eq!(pi.env["OPENAI_BASE_URL"], "http://proxy");
+    assert_eq!(pi.env_from_secrets["CELERIS_PI_API_KEY"], "pi-key");
+}
+
+#[test]
 fn browser_settings_default_to_unconfigured_and_site_policy_validates() {
     let cfg: Config = toml::from_str("").unwrap();
     assert!(cfg.browser.egress.resolver.is_none());

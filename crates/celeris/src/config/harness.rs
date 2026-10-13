@@ -234,6 +234,10 @@ impl Config {
                 capabilities: Default::default(),
                 command: None,
                 args: Vec::new(),
+                extensions: Vec::new(),
+                tools: Vec::new(),
+                env: Default::default(),
+                env_from_secrets: Default::default(),
             },
         );
         // 上書きした `smoke` の source・harness を指す本番の宣言は、上書き後の形と合わないので外す。

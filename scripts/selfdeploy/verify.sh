@@ -9,7 +9,7 @@
 #        tasks / projects / milestones / org_nodes / approvals / reports / messages の件数と
 #        tasks の {id,status} のダイジェスト。**本番 API は読まない**（本番は検証の間も動いているので、
 #        本番と比べると当たり前にずれて偽陰性になる。ADR-0041 §1-2）
-#     3. 主要 GET が 200 かつ JSON（inbox / org/<node>/memory / notify / clusters / providers / config）
+#     3. 主要 GET が 200 かつ JSON（inbox / org/<node>/memory / notify / clusters / llm/sources / harnesses / config）
 #     5. N-1 互換: `current` の旧デーモンを、**新バイナリがマイグレーションした後の**同じスナップショットに
 #        対して 127.0.0.1:7712 に起こし、1〜3 と同じ検査（件数はスナップショットと比べる。
 #        落ちたら live_ok = false）
@@ -240,7 +240,7 @@ production API    : 叩かない（ADR-0041 D2。件数は同じスナップシ�
 
 --- dry run: 実行するはずのコマンド ---
 [1/6] ${NEW_CMD[*]}
-[3/6] curl http://127.0.0.1:$SD_STAGING_API_PORT/api/v1/{health,tasks,projects,org,approvals,reports,inbox,notify,clusters,providers,config}
+[3/6] curl http://127.0.0.1:$SD_STAGING_API_PORT/api/v1/{health,tasks,projects,org,approvals,reports,inbox,notify,clusters,llm/sources,harnesses,config}
 [5/6] $( [ ${#OLD_CMD[@]} -gt 0 ] && echo "${OLD_CMD[*]}" || echo "（current が無いので N-1 検査は行わない。live_ok=false）" )
 [6/6] curl -X POST http://127.0.0.1:$SD_STAGING_API_PORT/api/v1/tasks -d '{"title":"smoke","genre":"smoke","role":"smoke",...}'
       → approve → GET /tasks/<id> を 60 秒まで待って done → events → reports（ADR-0041 D5）
@@ -624,7 +624,7 @@ if [ "$OK1" = true ]; then
   BAD3="$(probe_api "$NEW_BASE" "$ST_TOKEN")"
   if [ -z "$BAD3" ]; then
     OK3=true
-    record 3 main-gets true "inbox, org/$FIRST_ORG/memory, notify, clusters, providers, config all 200 + JSON"
+    record 3 main-gets true "inbox, org/$FIRST_ORG/memory, notify, clusters, llm/sources, harnesses, config all 200 + JSON"
   else
     record 3 main-gets false "failing:$BAD3"
   fi

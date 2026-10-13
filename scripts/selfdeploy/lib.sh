@@ -3,7 +3,7 @@
 # （ADR-0040 D1/D2、ADR-0045 D2）。単体では何もしない。`source` して使う。
 #
 # 置き場（ADR-0045 D2。XDG 流に設定と状態を分ける）:
-#   $CELERIS_CONFIG_DIR（既定 ~/.config/celeris） 設定と秘密: config.toml org.toml providers.d/ api.token
+#   $CELERIS_CONFIG_DIR（既定 ~/.config/celeris） 設定と秘密: config.toml org.toml api.token
 #                                                 web.password web.session-secret secrets/
 #   $CELERIS_STATE_DIR （既定 ~/.local/celeris）  hot state: releases/ staging/ tools/ current previous
 #   $CELERIS_BACKUPS_DIR（既定 $CELERIS_STATE_DIR/backups）新規 backup

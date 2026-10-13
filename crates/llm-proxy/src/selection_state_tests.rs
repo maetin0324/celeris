@@ -74,7 +74,7 @@ fn state(id: &str) -> SourceState {
 
 fn context() -> RoutingContext {
     let req = ChatCompletionRequest {
-        model: "celeris/cheap".into(),
+        model: "qwen/qwen3.8-27b".into(),
         messages: vec![ChatMessage {
             role: "user".into(),
             content: Some(MessageContent::Text("x".repeat(40))),

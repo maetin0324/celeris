@@ -55,7 +55,7 @@ candidates = [{ source = "opencode_go", model = "opencode-go/<model>" }]
 - `[accounts] opencode_dir` に既定は無い。書かなければ opencode go の pool は使われない。
 - `[model_catalog]` は省略してよい（括弧内が既定）。`refresh_interval_seconds = 0` で自動発見を止める（手動は使える）。
 - 同時実行数は opencode go のアカウントごとの上限（アカウント画面。既定は `[accounts] max_runs_per_account`）で決まる。
-  供給元の同時実行数は `[llm_sources.<id>] max_runs` で書く（アカウントごとの上限は [provider-llm-source-migration.md](provider-llm-source-migration.md#プロバイダの-concurrency-を外し同時実行数をアカウントで管理する)）。
+  供給元の同時実行数は `[llm_sources.<id>] max_runs` で書く（アカウントごとの上限は [api.md](../api/v1/api.md) §3.29a の `PATCH /llm/sources/{source_id}/accounts/{account_id}`）。
 - 発見で見えたモデルは routing に自動では入らない。使いたいモデルは `[llm_sources.opencode_go] models` と `[route_defaults.<harness>]` の候補に書く。
 
 ## 3. 配送後の確認

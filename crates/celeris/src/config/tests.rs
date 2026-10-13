@@ -2419,7 +2419,7 @@ dir = "{secrets}"
 enabled = true
 provider = "openai-compatible"
 base_url = "http://127.0.0.1:18100/v1"
-model = "celeris/cheap"
+model = "qwen3.8-27b"
 api_key_secret = "langmem-key"
 
 "#,
@@ -3208,7 +3208,7 @@ listen = "127.0.0.1:18100"
 enabled = true
 provider = "openai-compatible"
 base_url = "{base_url}"
-model = "celeris/cheap"
+model = "qwen3.8-27b"
 {secret_line}
 
 "#,

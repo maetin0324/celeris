@@ -51,4 +51,3 @@ Run #4・#5 で確認した事実（後続の WU への引き継ぎ）: 現状�
 - `sh "$CELERIS_WU_SCOPE_PATHS"` — 成功。許可範囲内の変更。
 - `dispatch_run.rs` の選択後は adapter model、provider quota、legacy audit、RunEntry が同じ provider ID に依存し、`review_spawn.rs` も旧選択後に同じ形で run を作ることを確認。selector のみ置換する実装は具体 model の適用と selection 記録を満たさないため、後段の route 伝播も含む実装が必要。
 - この run では dispatcher 実装・追加検証に未着手。
-

@@ -1,6 +1,8 @@
-//! プロバイダ別の run 集計（`docs/api/v1/api.md` §5.8）。task-api のメモリ内の観測値で、真実ではない（再起動で再計算）。
+//! LLM source 別の run 集計（`docs/api/v1/api.md` §5.8）。task-api のメモリ内の観測値で、真実ではない（再起動で再計算）。
+//! キーは `WorkerStarted.provider`（dispatch が選んだ route の source ID）で、`GET /llm/accounts` の暗黙アカウントの
+//! `stats` に使う（§3.29）。
 //!
-//! 最初の `GET /providers` で `events_since(0, 5000)` を繰り返して全イベントを 1 回走査し、以後は同じ要求の時点で
+//! 最初の `GET /llm/accounts` で `events_since(0, 5000)` を繰り返して全イベントを 1 回走査し、以後は同じ要求の時点で
 //! 前回の続きから増分だけを読む。
 
 use std::collections::{BTreeMap, HashMap};
@@ -42,7 +44,7 @@ const UNKNOWN_SOURCE: &str = "unknown";
 #[derive(Debug, Default)]
 pub(crate) struct StatsState {
     cursor: u64,
-    /// `WorkerStarted` 済みで `WorkerFinished` がまだの run → provider。
+    /// `WorkerStarted` 済みで `WorkerFinished` がまだの run → source ID（`WorkerStarted.provider`）。
     open_runs: HashMap<String, String>,
     sources: HashMap<String, Totals>,
 }
@@ -164,7 +166,7 @@ impl StatsState {
         }
     }
 
-    /// `provider` の集計。`by_day` は `today` を含む直近 30 日（UTC）。
+    /// source ID `provider`（`WorkerStarted.provider` の値）の集計。`by_day` は `today` を含む直近 30 日（UTC）。
     pub(crate) fn view(&self, provider: &str, today: Date) -> RunStats {
         let Some(totals) = self.sources.get(provider) else {
             return RunStats::default();
@@ -212,7 +214,7 @@ fn format_day(day: Date) -> String {
 }
 
 /// ADR-0024/0025: `WorkerStarted.account` と対応する `WorkerFinished` から集計する（`docs/api/v1/api.md` §3.29 の
-/// `stats`）。`StatsState` とは別のカーソルを持つ（アカウント別の集計は `GET /accounts` からしか使わないため）。
+/// `stats`）。`StatsState` とは別のカーソルを持つ（実アカウント別の集計で、キーが違うため）。
 /// キーは `"<adapter>:<account id>"`（同じ id でもアダプタが違えば別のアカウントとして集計する。ADR-0025 D1）。
 #[derive(Debug, Default)]
 pub(crate) struct AccountStatsState {

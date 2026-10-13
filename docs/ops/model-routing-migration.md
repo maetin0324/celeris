@@ -31,8 +31,6 @@ Phase 1 で変わること:
 
    ```sh
    cp -a ~/.config/celeris/config.toml ~/.config/celeris/config.toml.bak-model-routing-YYYYMMDD
-   # providers.d を使っている場合
-   cp -a ~/.config/celeris/providers.d ~/.config/celeris/providers.d.bak-model-routing-YYYYMMDD
    ```
 
 3. 控えと稼働中 release の組（release 名・sha）を記録しておく。rollback は**旧 binary と旧 config を組で戻す**（§7）。
@@ -142,15 +140,15 @@ min_quality = 0.55
 実行の選択は route_select だけなので、`[model_routing]` を足しても移行前後で次が変わらないことを確かめる。API は `Authorization: Bearer $TOKEN` を付ける
 （token は安全に読み込み、ログに残さない。listen が違えば URL を替える）。
 
-- `GET http://127.0.0.1:7710/api/v1/tasks/<task id>/routing`: 最近の task の `runs`（run ごとの lane・provider）が
-  移行前と同じ傾向であること。元の event `routing_decided` の `record.resolution.selection.reason` は
-  `local_preferred`・`local_full`・`local_down`・`pool`・`fallback`・`sticky` の従来の語彙のまま。
+- `GET http://127.0.0.1:7710/api/v1/tasks/<task id>/routing`: 最近の task の `runs`（run ごとの lane・source・model）が
+  移行前と同じ傾向であること。元の event `routing_decided` の `record.resolution` には、選ばれた route の
+  source ID（`provider`）・`model_id`・harness の adapter が残る。
   dispatcher 経由の決定には optional な `record.optimizer`（候補順位の出自の trace）が付くことがある。無くても異常ではない。
-- `GET http://127.0.0.1:7710/api/v1/llm/sources`: 各 source の状態。Qwen が cheap だけに対応していること。
+- `GET http://127.0.0.1:7710/api/v1/llm/sources`: 各 source の状態（到達性・残量・cooldown）。
 - `GET http://127.0.0.1:7710/api/v1/llm/routing/catalog`（Phase 1 で追加する読取専用 API。版にあれば）:
   `mode` と、§2 のとおりの models・deployments・policies が出ていること。secret は出ない。
-- proxy に `model = "celeris/cheap"` を送ったときの応答 header `x-celeris-source` が、移行前と同じ source であること
-  （Qwen が利用可能なら `openai-compatible:<id>`）。確認リクエストに機密データを入れない。
+- proxy に具体的な `model = "qwen/qwen3.8-27b"`（`<source_id>/<model_id>`）を送ったときの応答 header
+  `x-celeris-source` が `openai-compatible:qwen` であること。確認リクエストに機密データを入れない。
 
 ## 7. rollback
 
@@ -175,7 +173,7 @@ Phase 2 の release で変わること:
 - `mode = "enforce"` は `[model_routing.estimator] kind = "heuristic"` を明示したときだけ受け付ける。`mode` に既定値は無く、書かなければ読み込みエラー（§3）。
 - enforce が選択を変えるのは **dispatcher（run の provider 選択）だけ**。source の状態（残量・cooldown・in-use）で候補を外し、
   同じ lane の別 source を選ぶ。無ければ run を始めずに待つ（defer）。**残量のために lane を下げない**（従来の `select_tier` 降格は enforce では起きない）。
-- proxy（`celeris/<lane>` の要求）の候補順は enforce でも従来の順位のまま。`enforce_routes` は検証されて保持されるだけで、この版の proxy は使わない。
+- proxy は要求された `<source_id>/<model_id>` だけを中継し、lane の候補順を持たない。`enforce_routes` は検証されて保持されるだけで、proxy は使わない。
 - proxy の同一要求内 fallback は **mode によらず** 次の規則になる: 失敗の分類ごとの上限、総回数、deadline、stream は最初の byte の前だけ次へ倒す、
   5xx・network が続いた deployment は一時的に外す（breaker）。**401/429 以外の 4xx は次の候補へ倒さない**（従来は倒していた）。
 - DB に migration 0048（`llm_proxy_requests` に NULL 可の相関欄と部分索引）が入る。この版では相関欄に値は書かれない。
@@ -239,7 +237,7 @@ client = 0                                  # 0 以外はエラー
      journalctl --user -u 'celeris@<release>.service' -n 500 --no-pager | grep -iE 'enforce|defer'
      ```
 
-   - cheap の Qwen 優先が変わっていないこと: §6 の `celeris/cheap` の `x-celeris-source` 確認を繰り返す。
+   - Qwen へ中継できていること: §6 の `qwen/qwen3.8-27b` の `x-celeris-source` 確認を繰り返す。
 4. この版の制限（異常ではない）: `GET /api/v1/llm/sources` の `deployments` は空、routing の `requests` は空・`audit_incomplete` は false。
    proxy の状態と要求単位の決定はまだ API に流れていない。
 
@@ -674,7 +672,7 @@ Phase 3（p3-context-esc）の release で変わること:
 
 | 操作 | 手順 | 反映 | 戻し方 |
 | --- | --- | --- | --- |
-| config の控え | §1（`config.toml.bak-model-routing-YYYYMMDD`、providers.d も） | - | - |
+| config の控え | §1（`config.toml.bak-model-routing-YYYYMMDD`） | - | - |
 | 新 release の config 検証 | §4 の 1（`celerisctl config to-harnesses --config …` が exit 0） | - | - |
 | `[model_routing]` の新形を書く / 旧形のまま残す | §2（旧形はそのまま読める。実行経路は Phase 1 では変わらない） | §4 の 2（起動ログの警告で確認） | - |
 | `mode = "shadow"`（decision shadow の有効化） | §5・§9.1 | `POST /api/v1/reload`。llm-proxy 側の decision shadow は daemon 再起動で効く（daemon ログに warning） | `[model_routing]` の表を消して reload（§9.3） |

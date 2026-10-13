@@ -749,9 +749,9 @@ pub struct SecretView {
 /// `SecretView.used_by` の 1 要素。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct SecretUse {
-    /// `"adapter" | "provider"`。
+    /// `"adapter" | "source"`。
     pub scope: String,
-    /// `scope = "adapter"` ならアダプタ種別（`"claude-code"` 等）、`"provider"` ならプロバイダ id。
+    /// `scope = "adapter"` ならアダプタ種別（`"claude-code"` 等）、`"source"` なら LLM source id。
     pub name: String,
     /// 流し込む環境変数名。
     pub env: String,

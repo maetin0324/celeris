@@ -1,5 +1,5 @@
-//! api.md §8.9（daemon の watch）、`GET /providers`（設定 + スナップショット + 集計）、`GET /clusters`（ADR-0018
-//! 受け入れ条件8）、`GET /config`、api.md §8.10（`GET /schema`）。
+//! api.md §8.9（daemon の watch）、`GET /clusters`（ADR-0018 受け入れ条件8）、`GET /config`、
+//! api.md §8.10（`GET /schema`）。
 
 mod common;
 

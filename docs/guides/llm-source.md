@@ -110,16 +110,15 @@ ChatGPT の Codex backend（`https://chatgpt.com/backend-api/codex/responses`）
 
 ## 3. 選択（決定的。ADR-0053 D1 / ADR-0049 の再利用）
 
-`celeris/<tier>`:
-1. `prefer_free = true`（既定）なら、設定順で最初に到達可能な `openai-compatible` を使う
-   （`GET <base_url>/models` の probe。`probe_cache_secs` 秒キャッシュ、既定 60）。
-2. 到達可能な `openai-compatible` が無ければ、Claude と Codex のアカウントプールを跨いで
-   残量スコアを比較する（ADR-0024 D3 の `evaluate`/スコア式そのもの。除外: 未ログイン・cooldown・
-   5 時間枠/週次枠の枯渇）。同点は設定順（Claude を先に見る）→ 使用中の少ない方 → id 昇順。
-3. どちらも無ければ 503 `no_source_available`。
+要求の `model` は具体的な `<source_id>/<model_id>` だけを受ける（最初の `/` までが source ID。
+`crates/llm-proxy/src/naming.rs`）。source ID は `claude_oauth`・`codex_oauth`・
+`[[llm_proxy.sources.openai_compatible]]` の `id`。どの source/model を使うかは要求側（harness の
+route 設定）が決め、proxy は source を跨いで選び直さない。
 
-`claude/<tier>` / `gpt/<tier>` はそのプールだけを見る。`qwen/<tier>` は `openai-compatible` だけを見る
-（`prefer_free` は関係ない。明示されているため）。
+- `claude_oauth` / `codex_oauth`: その source のアカウントを残量スコアで順位付けする（ADR-0024 D3 の
+  `evaluate`/スコア式。除外: 未ログイン・cooldown・5 時間枠/週次枠の枯渇）。同点は使用中の少ない方 → id 昇順。
+- `openai_compatible`（例 `qwen`）: その id の中継先だけを使う。
+- 使えるアカウント・中継先が無ければ 503 `no_source_available`。
 
 **429/401 を受けたら**、そのアカウントに cooldown を付け（既存の帳簘。401 は `AuthFailed`、429 は
 `Throttled`）、**まだバイトを送っていなければ**同じ要求を次の候補でやり直す。stream 開始後
@@ -158,9 +157,6 @@ prefer_free = true
 id = "qwen"
 base_url = "http://127.0.0.1:18000/v1"
 
-[llm_proxy.models.claude]
-standard = "claude-sonnet-5"
-# ... 運用前に確認・上書きすること（§1 参照）
 ```
 
 ## 6. 廃止済みの tier alias 設定
@@ -176,23 +172,23 @@ standard = "claude-sonnet-5"
    反映されない設定なので celeris を再起動する。
 2. `curl -s -H "Authorization: Bearer $(cat ~/.config/celeris/api.token)" http://127.0.0.1:18100/healthz`
    → `{"status":"ok"}`。
-3. `curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:18100/v1/models` → `celeris/*` 等が並ぶ。
-4. `curl -s -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
-     -d '{"model":"celeris/cheap","messages":[{"role":"user","content":"hi"}]}' \
-     http://127.0.0.1:18100/v1/chat/completions` → 200 と応答本文。`x-celeris-source` ヘッダで
-   選ばれた供給元を確認する。
-4b. **codex-oauth（Phase 65b で修正）**を明示的に確認する:
+3. `curl -s -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+     -d '{"model":"qwen/qwen3.8-27b","messages":[{"role":"user","content":"hi"}]}' \
+     http://127.0.0.1:18100/v1/chat/completions` → 200 と応答本文。`x-celeris-source` ヘッダが
+   `openai-compatible:qwen` であることを確認する（`GET /v1/models` は空の一覧を返す。model の正本は
+   celeris の `[llm_sources.*].models`）。
+4. **codex_oauth** を明示的に確認する:
    `curl -s -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
-     -d '{"model":"gpt/cheap","messages":[{"role":"user","content":"hi"}]}' \
+     -d '{"model":"codex_oauth/gpt-6-luna","messages":[{"role":"user","content":"hi"}]}' \
      http://127.0.0.1:18100/v1/chat/completions` → 200 と応答本文、`x-celeris-source: codex-oauth`。
    400 等が返ったら、celeris のログの `llm-proxy: codex-oauth upstream returned a non-success status`
    の `summary` フィールドに上流が言っている理由が出る（§「上流エラーの読み方」参照）。
-5. 4 つのプロバイダ（`paperqa-qwen` / `ldr-qwen` / `opencode-qwen` / `langmem-main`）を**1 つずつ**
-   プロキシへ向け、そのつど 1 タスクを流して結果を確認する（同時に全部変えない）。`langmem-main` を
-   プロキシへ向けるときは、`[knowledge.langmem].api_key_secret` を必ず設定すること（Phase 65b:
-   到達性 probe の `GET /v1/models` がこのトークンで `Authorization: Bearer` を送る。無いと 401 が
-   返るが、401/403 は「落ちている」と誤認せず `Unknown`（＝従来どおり `langmem` で走らせる）として
-   扱うので、フォールバックし続けることはない）。
+5. proxy を使う harness（PaperQA・Local Deep Research・LangMem・opencode）の設定を**1 つずつ**
+   proxy と具体的な `<source_id>/<model_id>` へ向け、そのつど 1 タスクを流して結果を確認する
+   （同時に全部変えない）。LangMem を proxy へ向けるときは、`[knowledge.langmem].api_key_secret` を
+   必ず設定すること（到達性 probe の `GET /v1/models` がこのトークンで `Authorization: Bearer` を送る。
+   無いと 401 が返るが、401/403 は「落ちている」と誤認せず `Unknown`（＝そのまま `langmem` で走らせる）
+   として扱うので、フォールバックし続けることはない）。
 
 ## 9. 明示した既知の制約（Phase 65 の範囲）
 

@@ -181,8 +181,8 @@ pub fn build_harness_adapters(
     Ok(out)
 }
 
-/// ADR-0030 D3: `GET /secrets` の `used_by` を設定から導く（秘密 id → それを使っている adapter/provider の
-/// env_from_secrets の一覧）。設定順・キー順で決定的に並べる。
+/// ADR-0030 D3: `GET /secrets` の `used_by` を設定から導く（秘密 id → それを使っている adapter の
+/// env_from_secrets・LangMem の api_key_secret・LLM source の credential_ref の一覧）。設定順・キー順で決定的に並べる。
 pub fn secret_usage(config: &Config) -> HashMap<String, Vec<task_api::types::SecretUse>> {
     fn push(
         map: &mut HashMap<String, Vec<task_api::types::SecretUse>>,

@@ -1111,7 +1111,7 @@ codex は `CODEX_HOME`）で起動する（選び方は ADR-0024 D3。アダプ�
   `usage` と `cooldown` はそのアダプタの根ディレクトリの `.celeris-usage.json` にも保存され、再起動後も残る（`last_check` も同じ）。
 - `excluded_reason`（選ばれない理由）: `not_logged_in` / `at_capacity` / `cooldown` / `five_hour_exhausted` / `seven_day_exhausted` / `rejected`。選べるなら `null` で `score` が入る。
 - `cooldown` は `{until, reason}`。`reason`: `auth_failed`（再ログインが必要）/ `throttled` / `exhausted`。
-- `stats` は `WorkerStarted.account` と対応する `WorkerFinished` から、同じ `WorkerStarted.adapter` のものだけ集計する（§5.8 のプロバイダ集計と同じ規則。同じ id でも source が違えば別集計）。
+- `stats` は `WorkerStarted.account` と対応する `WorkerFinished` から、同じ `WorkerStarted.adapter` のものだけ集計する（§5.8 の source 別集計と同じ規則。同じ id でも source が違えば別集計）。
 - 時刻はすべて RFC 3339。
 - **上限**（ADR 2026-10-08-account-concurrency-limits §(c)）: `max_runs` はそのアカウントに保存された上限（3.29a で設定。無ければ `null`）。
   `effective_max_runs` は実効上限で、`max_runs` → `max_runs_per_account` の順に決まる（旧 `[[providers]].concurrency` は使わない）。
@@ -1233,13 +1233,13 @@ LLM 認証用キーは 3.24 の `credential_refs` からも書ける）。値は
    {"id": "tavily", "updated_at": "2026-09-17T01:00:00Z", "fingerprint": "a1b2c3d4",
     "used_by": [
       {"scope": "adapter", "name": "local-deep-research", "env": "LDR_SEARCH_ENGINE_WEB_TAVILY_API_KEY"},
-      {"scope": "llm_source", "name": "claude_oauth", "env": "LDR_SEARCH_ENGINE_WEB_TAVILY_API_KEY"}
+      {"scope": "source", "name": "claude_oauth", "env": "credential"}
     ]}]}
 ```
 
 **値は返さない**。`fingerprint` は値（末尾の改行を除く）の sha256 の先頭 8 桁（16 進。人が「入れ替えた鍵が届いているか」を確かめる
 ためで、値そのものは復元できない）。`updated_at` はファイルの mtime。`used_by` は celeris の**起動時の設定から導いた**もの
-（`[adapters.*].env_from_secrets` と `[[providers]].env_from_secrets` を走査する。`POST /reload` では更新されない。
+（`[adapters.*].env_from_secrets`、`[knowledge.langmem].api_key_secret`、`[llm_sources.<id>].credential_ref` を走査する。`POST /reload` では更新されない。
 GUI は再計算しない）。**設定が参照している id は、まだ鍵を入れていなくても `items[]` に載る**
 （`updated_at` と `fingerprint` が `null`。GUI が「鍵を入れる場所」を一覧に出せるようにするため）。したがって
 `items[]` = ファイルとして存在する秘密 ∪ どこかの `env_from_secrets` が指している id。ファイルがある id を
@@ -3725,10 +3725,10 @@ events を後ろから見て最初に見つかった質問。次の 2 つを同�
 
 `apply_transition` の前の最新 event id を控え、後で増分を読んで、遷移対象以外の `task_id` に付いた `Transitioned{to: cancelled}` のうち `reason` が `cancel` / `dependency_failed` / `parent_cancelled` のものを `TaskRef` にして返す（同時に他の書き込みが挟まっても過剰には含まれない）。
 
-### 5.8 プロバイダの集計（`task_api::stats`。task-ops ではなく task-api のメモリ）
+### 5.8 LLM source 別の集計（`task_api::stats`。task-ops ではなく task-api のメモリ）
 
 - `GET /llm/accounts`で `events_since(0, 5000)` を繰り返して全イベントを走査し、以後は要求のたびに増分だけ読む。**メモリ内の観測値**で、真実ではない（再起動で再計算）。
-- `WorkerStarted{run_id, provider}` で run 表に `provider`（`null` なら `"unknown"`）を登録し、`WorkerFinished{run_id, outcome, usage}` で閉じる。分類は §5.2（`continued` / `interrupted` はどの区分にも数えない）。`input_tokens` / `output_tokens` は `usage` の和（`null` は 0）。
+- `WorkerStarted{run_id, provider}` で run 表に `provider`（dispatch が選んだ route の source ID。`null` なら `"unknown"`）を登録し、`WorkerFinished{run_id, outcome, usage}` で閉じる。分類は §5.2（`continued` / `interrupted` はどの区分にも数えない）。`input_tokens` / `output_tokens` は `usage` の和（`null` は 0）。
 - `runs` は `WorkerStarted` の数（実行中を含む）。`by_day` は `WorkerFinished.ts` の UTC 日付で今日を含む直近 30 日、`by_day[].runs` はその日に終わった run の数。
 - Reviewer run（`role: reviewer`）も同じ規則で集計に**含める**（ADR-0014 D1）。
 - アカウント別（`GET /llm/accounts` の `stats`）は `WorkerStarted.account` と `adapter` の組で同じ規則。

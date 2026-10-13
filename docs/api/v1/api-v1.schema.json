@@ -26298,11 +26298,11 @@
           "type": "string"
         },
         "name": {
-          "description": "`scope = \"adapter\"` ならアダプタ種別（`\"claude-code\"` 等）、`\"provider\"` ならプロバイダ id。",
+          "description": "`scope = \"adapter\"` ならアダプタ種別（`\"claude-code\"` 等）、`\"source\"` なら LLM source id。",
           "type": "string"
         },
         "scope": {
-          "description": "`\"adapter\" | \"provider\"`。",
+          "description": "`\"adapter\" | \"source\"`。",
           "type": "string"
         }
       },

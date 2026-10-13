@@ -18,7 +18,7 @@ release.sh <ref>  →  verify.sh <sha12>  →  promote.sh <sha12>        （戻�
 ```
 ~/.config/celeris/       （0700。設定と秘密）
   config.toml            本番の設定（**誰も書き換えない**。例外は人が実行する `relocate-db.sh` の `db =` の書き換えだけ。§5b）
-  org.toml  providers.d/ 組織の種とプロバイダ（GUI が書く）
+  org.toml               組織の種
   api.token              本番 API のトークン
   web.password  web.session-secret  web の認証
   secrets/               ADR-0030 の秘密（1 秘密 = 1 ファイル）

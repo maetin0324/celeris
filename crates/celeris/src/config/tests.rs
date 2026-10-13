@@ -231,9 +231,9 @@ fn migration_runbook_toml_loads() {
             .0,
         "claude-opus-5-5"
     );
+    assert_eq!(registry.cos_route_candidates.len(), 1);
+    assert_eq!(registry.cos_route_candidates[0].source.0, "claude_oauth");
     assert_eq!(registry.cos_route_candidates[0].model.0, "claude-opus-5-5");
-    assert_eq!(registry.cos_route_candidates[1].model.0, "gpt-6-astra");
-    assert_eq!(registry.cos_route_candidates[1].source.0, "codex_oauth");
     assert_eq!(
         registry.route_defaults[&task_core::llm_route::HarnessId::from("paperqa")].len(),
         3

@@ -302,14 +302,6 @@ via = "llm_proxy"
 from_api = "openai_compatible"
 to_api = "openai_compatible"
 
-[[llm_routes]]
-harness = "claude_code"
-source = "codex_oauth"
-model = "gpt-6-astra"
-via = "llm_proxy"
-from_api = "openai_compatible"
-to_api = "anthropic"
-
 [route_defaults.claude_code]
 candidates = [{ source = "claude_oauth", model = "claude-sonnet-5-5" }, { source = "claude_oauth", model = "claude-opus-5-5" }, { source = "claude_oauth", model = "claude-fable-5-1" }]
 
@@ -354,7 +346,6 @@ harness = "claude-code"
 # tier / llm_source は削除し、具体的な候補順を route_candidates に置く。
 route_candidates = [
   { source = "claude_oauth", model = "claude-opus-5-5" },
-  { source = "codex_oauth", model = "gpt-6-astra" },
 ]
 max_turns = 70
 max_wall_secs = 900

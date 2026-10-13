@@ -792,6 +792,8 @@ def main():
     model = payload.get("model") or None
     if model:
         settings.llm = model
+        settings.summary_llm = model
+        settings.agent.agent_llm = model
 
     # ADR-0063 Phase 109g A: resolve the comparison design-conditions text once, before the
     # loop -- if a comparison summary question is in play (last question, id "summary") and a

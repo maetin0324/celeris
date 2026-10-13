@@ -2466,7 +2466,7 @@ fn strip_provider_prefix_drops_only_a_litellm_style_prefix() {
 /// 検索語を立てるモデルは `acquire.query_model` → run の route が選んだ model → settings の `llm` の順
 /// （PaperQA2 と同じ LLM 先。ADR-0035 D5）。
 #[tokio::test]
-async fn provider_kind_paperqa_query_model_uses_model_from_settings() {
+async fn query_llm_model_keeps_the_source_qualified_name() {
     let dir = tempfile::tempdir().unwrap();
     let settings = dir.path().join("celeris-proxy");
     std::fs::write(
@@ -2488,13 +2488,23 @@ async fn provider_kind_paperqa_query_model_uses_model_from_settings() {
     config.model = Some("openai/other-model".to_string());
     assert_eq!(
         query_llm_model(&config).await.as_deref(),
-        Some("other-model")
+        Some("openai/other-model")
     );
-    // run の route が選んだ model（LiteLLM 形の `openai/<source>/<model>`）も接頭辞だけ落とす。
+    // route model は wire 名をそのまま使う。
     config.model = Some("openai/qwen/qwen3.8-27b".to_string());
     assert_eq!(
         query_llm_model(&config).await.as_deref(),
+        Some("openai/qwen/qwen3.8-27b")
+    );
+    config.model = Some("qwen/qwen3.8-27b".to_string());
+    assert_eq!(
+        query_llm_model(&config).await.as_deref(),
         Some("qwen/qwen3.8-27b")
+    );
+    config.model = Some("claude_oauth/claude-sonnet-5-5".to_string());
+    assert_eq!(
+        query_llm_model(&config).await.as_deref(),
+        Some("claude_oauth/claude-sonnet-5-5")
     );
     // `acquire.query_model` が最も強い。
     config.acquire.query_model = Some("explicit-model".to_string());
@@ -2511,6 +2521,30 @@ async fn provider_kind_paperqa_query_model_uses_model_from_settings() {
         ..PaperQaConfig::default()
     };
     assert_eq!(query_llm_model(&missing).await, None);
+}
+
+#[tokio::test]
+async fn paperqa_proxy_model_name_preserves_qwen_source() {
+    let config = PaperQaConfig {
+        model: Some("qwen/qwen3.8-27b".into()),
+        ..PaperQaConfig::default()
+    };
+    assert_eq!(
+        query_llm_model(&config).await.as_deref(),
+        Some("qwen/qwen3.8-27b")
+    );
+}
+
+#[tokio::test]
+async fn paperqa_proxy_model_name_preserves_claude_source() {
+    let config = PaperQaConfig {
+        model: Some("claude_oauth/claude-sonnet-5-5".into()),
+        ..PaperQaConfig::default()
+    };
+    assert_eq!(
+        query_llm_model(&config).await.as_deref(),
+        Some("claude_oauth/claude-sonnet-5-5")
+    );
 }
 
 /// ADR-0035 D5: 取得ランナーに渡す入力に、LLM の段の設定（PaperQA2 と同じ LLM 先）と依頼文が載る。
@@ -3572,7 +3606,7 @@ print(json.dumps(out, ensure_ascii=False))
 /// （本番で観測した `Settings.from_name` が `PQA_SETTINGS_DIR` を見ない不具合の直し）。
 /// 偽の `paperqa`（`sys.modules` に差し込む最小スタブ）を使い、ネットワークには出ない。
 #[test]
-fn paperqa_ask_main_reads_the_settings_file_directly_when_it_exists() {
+fn route_model_overrides_llm_summary_llm_and_agent_llm() {
     if !python3_available() {
         eprintln!("skipping: python3 not available");
         return;
@@ -3598,7 +3632,7 @@ fn paperqa_ask_main_reads_the_settings_file_directly_when_it_exists() {
         "paper_directory": dir.path().join("papers").to_string_lossy(),
         "index_directory": dir.path().join("index").to_string_lossy(),
         "index_name": "proj",
-        "model": null,
+        "model": "claude_oauth/claude-sonnet-5-5",
         "targets": [],
         "aspects": [],
         "comparison_target": null,
@@ -3613,7 +3647,7 @@ fn paperqa_ask_main_reads_the_settings_file_directly_when_it_exists() {
 import importlib.util, json, sys, types
 
 script_path, input_path = sys.argv[1], sys.argv[2]
-calls = {"from_name_called": False, "validated_raw": None, "settings_marker_seen_by_ask": None}
+calls = {"from_name_called": False, "validated_raw": None, "settings_marker_seen_by_ask": None, "models": None}
 
 
 class FakeIndex:
@@ -3626,12 +3660,14 @@ class FakeIndex:
 class FakeAgent:
     def __init__(self):
         self.index = FakeIndex()
+        self.agent_llm = "configured-agent-model"
 
 
 class FakeSettings:
     def __init__(self, **kw):
         self.agent = FakeAgent()
         self.llm = kw.get("llm")
+        self.summary_llm = kw.get("summary_llm", "configured-summary-model")
         self.marker = kw.get("marker")
 
     @classmethod
@@ -3654,6 +3690,7 @@ class FakeSettings:
 
 def fake_ask(question_text, settings=None):
     calls["settings_marker_seen_by_ask"] = getattr(settings, "marker", None)
+    calls["models"] = [settings.llm, settings.summary_llm, settings.agent.agent_llm]
     session = types.SimpleNamespace(
         formatted_answer="the answer",
         answer="the answer",
@@ -3703,6 +3740,15 @@ print(json.dumps(calls))
         "settings_path が実在するので from_name は呼ばれない: {v}"
     );
     assert_eq!(v["settings_marker_seen_by_ask"], "from-disk", "{v}");
+    assert_eq!(
+        v["models"],
+        serde_json::json!([
+            "claude_oauth/claude-sonnet-5-5",
+            "claude_oauth/claude-sonnet-5-5",
+            "claude_oauth/claude-sonnet-5-5"
+        ]),
+        "{v}"
+    );
     assert_eq!(
         v["validated_raw"],
         serde_json::json!({"llm": "openai/qwen/qwen3.8-27b", "marker": "from-disk"}),

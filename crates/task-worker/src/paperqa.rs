@@ -707,7 +707,12 @@ async fn query_llm_model(config: &PaperQaConfig) -> Option<String> {
         .into_iter()
         .flatten()
     {
-        let model = strip_provider_prefix(&candidate);
+        // Route models are already proxy wire names (`<source>/<model>`).
+        let model = if config.model.as_deref() == Some(candidate.as_str()) {
+            candidate.trim().to_string()
+        } else {
+            strip_provider_prefix(&candidate)
+        };
         if !model.is_empty() {
             return Some(model);
         }

@@ -241,20 +241,11 @@ async fn run_pi(
         b"{\"retry\":{\"enabled\":false},\"enableInstallTelemetry\":false}",
     )
     .await?;
-    let (selected_model, provider, model) = config
+    let (provider, model) = config
         .model
         .as_deref()
-        .and_then(|m| m.split_once('/').map(|(p, id)| (m, p, id)))
+        .and_then(|m| m.split_once('/'))
         .ok_or_else(|| AdapterError::Other("pi model must be provider/model".into()))?;
-    // Legacy Celeris wire names contain the tier, not a Pi provider prefix.
-    let model = if matches!(
-        selected_model,
-        "celeris/frontier" | "celeris/standard" | "celeris/cheap"
-    ) {
-        selected_model
-    } else {
-        model
-    };
     let cli_model = format!("{provider}/{model}");
     let mut command = Command::new(&config.command);
     command
@@ -315,11 +306,7 @@ async fn run_pi(
                 .unwrap_or("local");
             command.env("CELERIS_PI_API_KEY", key);
         }
-        if matches!(
-            model,
-            "celeris/frontier" | "celeris/standard" | "celeris/cheap"
-        ) && let Some(reference) = &req.context.routing_context_ref
-        {
+        if let Some(reference) = &req.context.routing_context_ref {
             custom["headers"] =
                 serde_json::json!({"x-celeris-routing-context": "CELERIS_PI_ROUTING_CONTEXT"});
             command.env("CELERIS_PI_ROUTING_CONTEXT", reference);

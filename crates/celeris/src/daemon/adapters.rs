@@ -82,6 +82,11 @@ pub fn build_harness_adapters(
                     env: env(&base.env, &base.env_from_secrets),
                     permission: base.permission,
                     model: None,
+                    model_namespace: if id == "opencode" {
+                        h.model_namespace.clone()
+                    } else {
+                        None
+                    },
                     model_option_id: base.model_option_id.clone(),
                     startup_timeout: Duration::from_secs(base.startup_timeout_secs),
                     container: None,
@@ -300,6 +305,16 @@ kind = "fake"
     }
 
     #[test]
+    fn opencode_harness_passes_model_namespace() {
+        let cfg = load("[harnesses.opencode]\nkind='acp'\nmodel_namespace='qwen-local'\n");
+        let adapters = build_harness_adapters(&cfg).unwrap();
+        assert_eq!(
+            adapters[&"opencode".into()].model_namespace(),
+            Some("qwen-local")
+        );
+    }
+
+    #[test]
     fn route_select_dispatch_adapter_daemon_rejects_unknown_harness_kind() {
         let cfg = load(
             r#"
@@ -327,7 +342,10 @@ env = { OPENAI_BASE_URL = "http://proxy" }
 "#,
         );
         let pi = pi_config(&cfg, &cfg.harness_declarations["pi"]);
-        assert_eq!(pi.extensions, [std::path::PathBuf::from("/tmp/hashline.ts")]);
+        assert_eq!(
+            pi.extensions,
+            [std::path::PathBuf::from("/tmp/hashline.ts")]
+        );
         assert_eq!(pi.tools, ["hashline_read", "hashline_edit", "bash"]);
         assert_eq!(pi.env, [("OPENAI_BASE_URL".into(), "http://proxy".into())]);
     }

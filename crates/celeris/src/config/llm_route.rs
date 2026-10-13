@@ -27,6 +27,8 @@ pub struct LlmSourceConfig {
 pub struct HarnessDeclarationConfig {
     pub kind: String,
     #[serde(default)]
+    pub model_namespace: Option<String>,
+    #[serde(default)]
     pub api_formats: BTreeSet<String>,
     #[serde(default)]
     pub source_kinds: BTreeSet<String>,

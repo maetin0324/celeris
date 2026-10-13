@@ -229,6 +229,7 @@ impl Config {
             SMOKE_ID.to_string(),
             HarnessDeclarationConfig {
                 kind: fake.clone(),
+                model_namespace: None,
                 api_formats: [fake.clone()].into(),
                 source_kinds: [fake.clone()].into(),
                 capabilities: Default::default(),

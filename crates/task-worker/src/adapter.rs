@@ -267,6 +267,9 @@ impl EventSink for NullSink {
 pub trait WorkerAdapter: Send + Sync {
     /// アダプタ識別子（設定の `adapter` と一致。例: `"fake"`）。
     fn id(&self) -> &str;
+    fn model_namespace(&self) -> Option<&str> {
+        None
+    }
     fn account_id(&self) -> Option<&str> {
         None
     }

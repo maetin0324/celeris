@@ -14,7 +14,7 @@ updated: 2026-10-14
 | 葉 | 中身 | 状態 |
 |---|---|---|
 | adr-audit | ADR と、verify の daemon が本番資源に触れる経路の表（この文書） | 済 |
-| verify-iso | ADR D1・D2（評価試行は instance id を持つ dispatcher だけ、試行ファイルの削除は root 配下だけ）と試験 | 未 |
+| verify-iso | ADR D1・D2（評価試行は instance id を持つ dispatcher だけ、試行ファイルの削除は root 配下だけ）と試験 | 済（2026-10-14、`a6a645d7` root-guard・`2a00af24` verify-gate、全体検査は下の証拠） |
 | handoff-eval | ADR D3（`eval_trials.instance_id` migration 0078、`in_flight` に評価 run、持ち主の生死を見る回復、`runs` 行の照合、drain 打ち切りで `abort_eval_runs`）と試験 | 未 |
 | closeout | 全体検査・この文書の完了・本番への移行 | 未 |
 
@@ -59,7 +59,12 @@ credentiald・KB の path は本番の値を読む。verify の dispatcher は `
 ## 未解決事項
 
 - #10 の `control_hook` が本番の CoS process を止めうるか（process の特定が thread id か pid か）は確かめていない。後続 task で確かめる。
-- verify-iso・handoff-eval・closeout は未着手。
+- handoff-eval（ADR D3）は未着手。live 昇格で走行中の評価試行が error になる経路（表の #4）は残っている。
+- `celeris::routing_eval_run daemon_runs_two_stub_trials_with_hidden_checks_and_eval_records` が全体検査の 1 回目で
+  1 度落ちた（`routing_eval_run.rs:200` の `!owner.join("target").exists()`）。単独の再実行と全体検査の 2 回目は通った。
+  原因は時間依存: `score_eval_trial` は `eval_trial_finish`（`passed`）を書いてから `remove_eval_trial_files`
+  （`git worktree remove`→target 削除）を走らせ、試験は終端を見た直後に target の不在を確かめる。順序は
+  この task の前（`938e01cc`）から同じで、この task が持ち込んだ退行ではない。直し方は後続（下の提案）。
 
 ## 提案
 
@@ -67,8 +72,25 @@ credentiald・KB の path は本番の値を読む。verify の dispatcher は `
   （scratch pool・build cache・`[mcp]`・cron・CoS）を staging の値に差し替えるか、裏方の段を `orphan_takeover`
   の有無で一括して止めるかを決める。
 
+- 試験 `daemon_runs_two_stub_trials_with_hidden_checks_and_eval_records` の target 不在の確かめは、終端を見た後の
+  出来事待ち（target が消え lease に `released_at` が入るまで待つ、長い保険つき）にする（ADR-0125 の型）。
+  あるいは本体で target・作業ツリーを消してから終端を書く（回復の段が `scoring` を拾い直すので後始末は冪等）。
+
+## 証拠（verify-iso、closeout 2026-10-14、HEAD `c9074812`）
+
+- `bash scripts/dev/test-parallel.sh` 1 回目: exit 100、passed 5098 / failed 1 / ignored 13（失敗は上の
+  `routing_eval_run` の時間依存）。単独 `cargo test -p celeris --test routing_eval_run`: 1 passed。
+- `bash scripts/dev/test-parallel.sh` 2 回目: exit 0、`CELERIS_TEST_SUMMARY` passed 5099 / failed 0 / ignored 13、
+  nextest_exit 0・doctest_exit 0（userns: null）。
+- `cargo clippy --workspace -- -D warnings`: exit 0。`cargo clippy -p task-dispatch -p celeris --all-targets -- -D warnings`: exit 0。
+- `cargo test -p task-dispatch verify_daemon_leaves_foreign_eval_trial_files`: 1 passed。
+- `cargo test -p task-dispatch eval_cleanup_refuses_paths_outside_roots`: 1 passed。
+- `cargo test -p task-dispatch eval_trial`: 15 passed / 0 failed。
+
 ## 本番への移行
 
+- verify-iso（D1・D2）は release の昇格だけで効く。config の変更・DB の書き換えは無い。昇格後の verify は評価試行に
+  触れず、本番 active の評価試行の後始末は workspace root・scratch pool の配下（実 path）だけを消す。
 - migration `0078`（`eval_trials.instance_id`）は昇格で当たる。config の変更・手での DB の書き換えは無い。
 - 本番 DB に running のまま残る評価の `runs` 行（08:53Z の 3 行）は、handoff-eval の release が active になった
   最初の照合で `cancelled` になる（ADR D3.5）。

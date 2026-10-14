@@ -114,7 +114,8 @@ schema 77 は main からの通常の release で入った。2026-10-14 に読�
 ## 検査
 
 - `cargo test -p routing-eval`: unit 28 passed、pipeline_stub 1 passed。
-- 全体検査（`test-parallel.sh`）と clippy の結果は下の「全体検査」に書く。
+- `TMPDIR=/local/x bash scripts/dev/test-parallel.sh`: exit 0。nextest `5084 tests run: 5084 passed, 12 skipped`。`CELERIS_TEST_SUMMARY` は passed 5087・failed 0・ignored 13・doctest_exit 0・tmp_leftovers 2。log は `/local/x/tp-dryrun.log`。
+- `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --check`: exit 0。
 
 ## 未解決
 

@@ -31,6 +31,10 @@ pub struct CandidateEstimate {
     pub k: usize,
     pub calls: usize,
     pub list_usd: Option<f64>,
+    /// Window -> quota percent for all calls of this candidate (measured per-run mean × calls).
+    pub quota_percent: BTreeMap<String, Option<f64>>,
+    /// Window -> number of measured production runs behind the per-run mean.
+    pub quota_samples: BTreeMap<String, usize>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -128,6 +132,14 @@ pub fn estimate(
     for c in CANDIDATES {
         let problems = if c.problem_count == 12 { 12 } else { 30 };
         let calls = problems * c.k;
+        let rates = measured_db.get(&(c.account.to_owned(), c.model_id.to_owned()));
+        let mut quota_percent = BTreeMap::new();
+        let mut quota_samples = BTreeMap::new();
+        for window in WINDOWS {
+            let rate = rates.and_then(|r| r.get(window));
+            quota_percent.insert(window.into(), rate.map(|r| r.mean * calls as f64));
+            quota_samples.insert(window.into(), rate.map_or(0, |r| r.samples));
+        }
         estimates.push(CandidateEstimate {
             source_id: c.source_id.into(),
             account: c.account.into(),
@@ -137,47 +149,36 @@ pub fn estimate(
             k: c.k,
             calls,
             list_usd: list_cost(&conn, &c, problems, c.k)?,
+            quota_percent,
+            quota_samples,
         });
     }
     let mut accounts = Vec::new();
     for account in ["claude", "codex"] {
-        let calls: usize = estimates
-            .iter()
-            .filter(|e| e.account == account)
-            .map(|e| e.calls)
-            .sum();
-        let rates = measured
-            .and_then(|u| u.accounts.get(account))
-            .map(|v| {
-                v.iter()
-                    .map(|(k, total)| (k.clone(), total / 10.0))
-                    .collect()
-            })
-            .or_else(|| measured_db.get(account).cloned());
+        let mine: Vec<&CandidateEstimate> =
+            estimates.iter().filter(|e| e.account == account).collect();
+        let calls: usize = mine.iter().map(|e| e.calls).sum();
+        let override_rates = measured.and_then(|u| u.accounts.get(account));
         let mut quota_percent = BTreeMap::new();
-        for window in ["5h", "7d", "monthly"] {
-            quota_percent.insert(
-                window.into(),
-                rates
-                    .as_ref()
-                    .and_then(|r| r.get(window))
-                    .map(|per_call| per_call * calls as f64),
-            );
+        for window in WINDOWS {
+            let total = match override_rates {
+                // A 10-run measurement gives one per-call rate for the whole account.
+                Some(r) => r.get(window).map(|total| total / 10.0 * calls as f64),
+                // Production measurements are per model; every model needs one.
+                None => mine
+                    .iter()
+                    .map(|e| e.quota_percent.get(window).copied().flatten())
+                    .sum::<Option<f64>>(),
+            };
+            quota_percent.insert(window.into(), total);
         }
-        let weekly = quota_percent.get("7d").copied().flatten().map(|v| v > 15.0);
-        let reductions = if weekly == Some(true) {
-            shrink(
-                account,
-                calls,
-                rates
-                    .as_ref()
-                    .and_then(|r| r.get("7d"))
-                    .copied()
-                    .unwrap_or(0.0),
-                &estimates,
-            )
-        } else {
-            vec![]
+        let weekly_total = quota_percent.get("7d").copied().flatten();
+        let weekly = weekly_total.map(|v| v > 15.0);
+        let reductions = match weekly_total {
+            Some(total) if total > 15.0 && calls > 0 => {
+                shrink(account, calls, total / calls as f64, &estimates)
+            }
+            _ => vec![],
         };
         accounts.push(AccountEstimate {
             account: account.into(),
@@ -204,47 +205,99 @@ fn open_ro(db: &Path) -> Result<Connection, String> {
     .map_err(|e| e.to_string())
 }
 
-// Only event rows explicitly marked method=measured contribute a quota rate.
-fn quota_rates(conn: &Connection) -> Result<BTreeMap<String, BTreeMap<String, f64>>, String> {
-    let mut result = BTreeMap::new();
-    let mut stmt = conn.prepare("SELECT json FROM events WHERE json_extract(json,'$.type')='quota_estimated' ORDER BY seq DESC").map_err(|e| e.to_string())?;
+const WINDOWS: [&str; 3] = ["5h", "7d", "monthly"];
+
+/// Measured production runs averaged per (account, model, window).
+const QUOTA_SAMPLE_LIMIT: usize = 100;
+
+#[derive(Clone, Copy, Debug, Default)]
+struct QuotaRate {
+    mean: f64,
+    samples: usize,
+}
+
+/// `celeris.routing-eval` account names by the source that wrote the quota event.
+fn eval_account(source: &str) -> Option<&'static str> {
+    match source {
+        "claude-oauth" => Some("claude"),
+        "codex-oauth" => Some("codex"),
+        _ => None,
+    }
+}
+
+// Only windows explicitly marked method=measured contribute. Each event is one run's
+// before/after difference (`used_pct`); the rate is the mean over the latest
+// QUOTA_SAMPLE_LIMIT runs of the same model on the same source.
+type RateKey = (String, String);
+
+fn quota_rates(
+    conn: &Connection,
+) -> Result<BTreeMap<RateKey, BTreeMap<String, QuotaRate>>, String> {
+    let mut sums: BTreeMap<RateKey, BTreeMap<String, (f64, usize)>> = BTreeMap::new();
+    let mut stmt = conn
+        .prepare(
+            "SELECT e.json, r.model FROM events e \
+             LEFT JOIN runs r ON r.run_id = json_extract(e.json,'$.run_id') \
+             WHERE json_extract(e.json,'$.type')='quota_estimated' ORDER BY e.id DESC",
+        )
+        .map_err(|e| e.to_string())?;
     let rows = stmt
-        .query_map([], |r| r.get::<_, String>(0))
+        .query_map([], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
+        })
         .map_err(|e| e.to_string())?;
     for row in rows {
-        let raw = row.map_err(|e| e.to_string())?;
+        let (raw, model) = row.map_err(|e| e.to_string())?;
+        let Some(model) = model else { continue };
         let v: Value = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
-        if v["method"].as_str() != Some("measured") {
+        let Some(account) = v["source"].as_str().and_then(eval_account) else {
             continue;
-        }
-        let account = v["account"].as_str().unwrap_or("");
-        if account.is_empty() {
-            continue;
-        }
-        let rates = result
-            .entry(account.to_owned())
-            .or_insert_with(BTreeMap::new);
+        };
+        let windows = sums.entry((account.to_owned(), model)).or_default();
         for window in v["windows"].as_array().into_iter().flatten() {
-            let Some(pct) = window["per_run_pct"]
-                .as_f64()
-                .or_else(|| window["quota_per_run_pct"].as_f64())
-            else {
+            if window["method"].as_str() != Some("measured") {
+                continue;
+            }
+            let Some(pct) = window["used_pct"].as_f64() else {
                 continue;
             };
             let key = normalize_window(window["window"].as_str().unwrap_or(""));
-            if !key.is_empty() {
-                rates.entry(key).or_insert(pct);
+            if key.is_empty() {
+                continue;
+            }
+            let slot = windows.entry(key).or_insert((0.0, 0));
+            if slot.1 < QUOTA_SAMPLE_LIMIT {
+                slot.0 += pct;
+                slot.1 += 1;
             }
         }
     }
-    Ok(result)
+    Ok(sums
+        .into_iter()
+        .map(|(k, windows)| {
+            let rates = windows
+                .into_iter()
+                .filter(|(_, (_, n))| *n > 0)
+                .map(|(w, (sum, n))| {
+                    (
+                        w,
+                        QuotaRate {
+                            mean: sum / n as f64,
+                            samples: n,
+                        },
+                    )
+                })
+                .collect();
+            (k, rates)
+        })
+        .collect())
 }
 
 fn normalize_window(s: &str) -> String {
     match s {
         "five_hour" | "5h" => "5h",
         "seven_day" | "7d" => "7d",
-        "monthly" | "month" => "monthly",
+        "monthly" | "month" | "one_month" => "monthly",
         _ => "",
     }
     .into()
@@ -262,7 +315,10 @@ fn list_cost(
             Ok((r.get::<_, Option<String>>(0)?, r.get::<_, String>(1)?))
         })
         .map_err(|e| e.to_string())?;
-    let mut tokens = Vec::new();
+    let Some((in_rate, out_rate)) = list_rates(candidate.model_id) else {
+        return Ok(None);
+    };
+    let mut per_run = Vec::new();
     for row in rows {
         let (run_model, raw) = row.map_err(|e| e.to_string())?;
         let v: Value = match serde_json::from_str(&raw) {
@@ -276,28 +332,38 @@ fn list_cost(
         if model != Some(candidate.model_id) {
             continue;
         }
-        let input = v["input_tokens"].as_f64().unwrap_or(0.0);
-        let output = v["output_tokens"].as_f64().unwrap_or(0.0);
-        if input + output > 0.0 {
-            tokens.push((input, output));
+        // The harness-reported list price covers cache reads and writes; the token
+        // fallback prices them as 0.1× (read) and 1.25× (write) of the input rate.
+        let usd = match v["cost_usd"].as_f64() {
+            Some(usd) => usd,
+            None => {
+                let tokens = |k: &str| v[k].as_f64().unwrap_or(0.0) / 1_000_000.0;
+                tokens("input_tokens") * in_rate
+                    + tokens("output_tokens") * out_rate
+                    + tokens("cache_read_tokens") * in_rate * 0.1
+                    + tokens("cache_creation_tokens") * in_rate * 1.25
+            }
+        };
+        if usd > 0.0 {
+            per_run.push(usd);
         }
     }
-    if tokens.is_empty() {
+    if per_run.is_empty() {
         return Ok(None);
     }
-    tokens.sort_by(|a, b| (a.0 + a.1).total_cmp(&(b.0 + b.1)));
-    let (input, output) = tokens[tokens.len() / 2];
-    let (in_rate, out_rate) = match candidate.model_id {
-        "claude-opus-5-5" => (4.0, 20.0),
-        "claude-sonnet-5-5" => (2.0, 10.0),
-        "claude-haiku-5-5" => (1.0, 5.0),
-        "claude-fable-5-1" => (10.0, 50.0),
-        _ => return Ok(None),
-    };
-    Ok(Some(
-        ((input / 1_000_000.0) * in_rate + (output / 1_000_000.0) * out_rate)
-            * (problems * k) as f64,
-    ))
+    per_run.sort_by(f64::total_cmp);
+    Ok(Some(per_run[per_run.len() / 2] * (problems * k) as f64))
+}
+
+/// List prices (USD per million input / output tokens). Codex models have none.
+fn list_rates(model_id: &str) -> Option<(f64, f64)> {
+    match model_id {
+        "claude-opus-5-5" => Some((4.0, 20.0)),
+        "claude-sonnet-5-5" => Some((2.0, 10.0)),
+        "claude-haiku-5-5" => Some((1.0, 5.0)),
+        "claude-fable-5-1" => Some((10.0, 50.0)),
+        _ => None,
+    }
 }
 
 fn shrink(
@@ -328,12 +394,21 @@ fn shrink(
 
 fn to_markdown(report: &DryRunReport) -> String {
     let mut out = format!(
-        "# Evaluation dry-run\n\nManifest `{}`\n\n| Account | Harness | Model | Problems × k | Calls | List USD |\n|---|---|---|---:|---:|---:|\n",
+        "# Evaluation dry-run\n\nManifest `{}`\n\n| Account | Harness | Model | Problems × k | Calls | List USD | 5h | 7d | measured runs (5h/7d) |\n|---|---|---|---:|---:|---:|---:|---:|---:|\n",
         report.manifest_sha256
     );
     for e in &report.candidates {
+        let pct = |k: &str| {
+            e.quota_percent
+                .get(k)
+                .copied()
+                .flatten()
+                .map(|x| format!("{x:.2}%"))
+                .unwrap_or_else(|| "未測定".into())
+        };
+        let n = |k: &str| e.quota_samples.get(k).copied().unwrap_or(0);
         out.push_str(&format!(
-            "| {} | {} | {} | {} × {} | {} | {} |\n",
+            "| {} | {} | {} | {} × {} | {} | {} | {} | {} | {}/{} |\n",
             e.account,
             e.harness_id,
             e.model_id,
@@ -342,7 +417,11 @@ fn to_markdown(report: &DryRunReport) -> String {
             e.calls,
             e.list_usd
                 .map(|v| format!("${v:.2}"))
-                .unwrap_or_else(|| "未測定".into())
+                .unwrap_or_else(|| "未測定".into()),
+            pct("5h"),
+            pct("7d"),
+            n("5h"),
+            n("7d")
         ));
     }
     out.push_str(
@@ -425,7 +504,7 @@ mod tests {
         let d = tempdir().expect("temp");
         let db = d.path().join("db");
         let c = Connection::open(&db).expect("db");
-        c.execute_batch("CREATE TABLE events(seq INTEGER,json TEXT); CREATE TABLE runs(started_at TEXT,model TEXT,usage_json TEXT);").expect("schema");
+        c.execute_batch("CREATE TABLE events(id INTEGER PRIMARY KEY,json TEXT); CREATE TABLE runs(run_id TEXT,started_at TEXT,model TEXT,usage_json TEXT);").expect("schema");
         let r = estimate(&manifest(), &db, None).expect("estimate");
         assert_eq!(r.accounts[0].calls, 192);
         assert_eq!(r.accounts[1].calls, 132);
@@ -438,7 +517,7 @@ mod tests {
         let d = tempdir().expect("temp");
         let db = d.path().join("db");
         let c = Connection::open(&db).expect("db");
-        c.execute_batch("CREATE TABLE events(seq INTEGER,json TEXT); CREATE TABLE runs(started_at TEXT,model TEXT,usage_json TEXT);").expect("schema");
+        c.execute_batch("CREATE TABLE events(id INTEGER PRIMARY KEY,json TEXT); CREATE TABLE runs(run_id TEXT,started_at TEXT,model TEXT,usage_json TEXT);").expect("schema");
         let usage = MeasuredUsage {
             runs: 10,
             accounts: BTreeMap::from([("claude".into(), BTreeMap::from([("7d".into(), 20.0)]))]),
@@ -459,12 +538,91 @@ mod tests {
         let d = tempdir().expect("temp");
         let db = d.path().join("db");
         let c = Connection::open(&db).expect("db");
-        c.execute_batch("CREATE TABLE events(seq INTEGER,json TEXT); CREATE TABLE runs(started_at TEXT,model TEXT,usage_json TEXT);").expect("schema");
+        c.execute_batch("CREATE TABLE events(id INTEGER PRIMARY KEY,json TEXT); CREATE TABLE runs(run_id TEXT,started_at TEXT,model TEXT,usage_json TEXT);").expect("schema");
         let r = estimate(&manifest(), &db, None).expect("estimate");
         let json = serde_json::to_string(&r).expect("json");
         let md = to_markdown(&r);
         assert!(json.contains("gpt-6-astra"));
         assert!(md.contains("未測定"));
         assert!(md.contains("192"));
+    }
+
+    #[test]
+    fn production_measured_quota_is_averaged_per_model_and_mapped_from_source() {
+        let d = tempdir().expect("temp");
+        let db = d.path().join("db");
+        let c = Connection::open(&db).expect("db");
+        c.execute_batch("CREATE TABLE events(id INTEGER PRIMARY KEY,json TEXT); CREATE TABLE runs(run_id TEXT,started_at TEXT,model TEXT,usage_json TEXT);").expect("schema");
+        let models = [
+            "claude-opus-5-5",
+            "claude-sonnet-5-5",
+            "claude-haiku-5-5",
+            "claude-fable-5-1",
+        ];
+        for (i, model) in models.iter().enumerate() {
+            for (j, pct) in [0.0, 1.0].iter().enumerate() {
+                let run = format!("r{i}{j}");
+                c.execute(
+                    "INSERT INTO runs(run_id,started_at,model) VALUES (?1,'t',?2)",
+                    [&run, *model],
+                )
+                .expect("run");
+                let ev = serde_json::json!({
+                    "type": "quota_estimated", "run_id": run, "source": "claude-oauth",
+                    "account": "claude_max_personal", "method": "measured",
+                    "windows": [
+                        {"window": "seven_day", "used_pct": pct, "method": "measured"},
+                        {"window": "five_hour", "used_pct": 50.0, "method": "unknown"}
+                    ]
+                });
+                c.execute("INSERT INTO events(json) VALUES (?1)", [ev.to_string()])
+                    .expect("event");
+            }
+        }
+        // A codex event without a measured window stays unmeasured.
+        c.execute(
+            "INSERT INTO runs(run_id,started_at,model) VALUES ('x','t','gpt-6-luna')",
+            [],
+        )
+        .expect("run");
+        c.execute(
+            "INSERT INTO events(json) VALUES (?1)",
+            [serde_json::json!({"type":"quota_estimated","run_id":"x","source":"codex-oauth","account":"chatgpt_plus_personal","method":"unknown","windows":[{"window":"seven_day","method":"unknown"}]}).to_string()],
+        )
+        .expect("event");
+        let r = estimate(&manifest(), &db, None).expect("estimate");
+        let opus = &r.candidates[0];
+        assert_eq!(opus.quota_percent["7d"], Some(30.0));
+        assert_eq!(opus.quota_samples["7d"], 2);
+        assert_eq!(opus.quota_percent["5h"], None);
+        // 192 calls × 0.5% per run.
+        assert_eq!(r.accounts[0].quota_percent["7d"], Some(96.0));
+        assert_eq!(r.accounts[0].weekly_over_budget, Some(true));
+        assert!(!r.accounts[0].reductions.is_empty());
+        assert_eq!(r.accounts[1].quota_percent["7d"], None);
+    }
+
+    #[test]
+    fn list_cost_prefers_reported_cost_and_prices_cache_tokens() {
+        let d = tempdir().expect("temp");
+        let db = d.path().join("db");
+        let c = Connection::open(&db).expect("db");
+        c.execute_batch("CREATE TABLE events(id INTEGER PRIMARY KEY,json TEXT); CREATE TABLE runs(run_id TEXT,started_at TEXT,model TEXT,usage_json TEXT);").expect("schema");
+        c.execute(
+            "INSERT INTO runs VALUES ('a','1','claude-opus-5-5',?1)",
+            [r#"{"input_tokens":10,"output_tokens":10,"cost_usd":0.5}"#],
+        )
+        .expect("run");
+        c.execute(
+            "INSERT INTO runs VALUES ('b','2','claude-haiku-5-5',?1)",
+            [r#"{"input_tokens":0,"output_tokens":0,"cache_read_tokens":10000000,"cache_creation_tokens":0}"#],
+        )
+        .expect("run");
+        let r = estimate(&manifest(), &db, None).expect("estimate");
+        assert_eq!(r.candidates[0].list_usd, Some(30.0));
+        // 10M cache reads × $1/M × 0.1 = $1 per run, 60 calls.
+        let haiku = r.candidates[2].list_usd.expect("haiku usd");
+        assert!((haiku - 60.0).abs() < 1e-9);
+        assert_eq!(r.candidates[4].list_usd, None);
     }
 }

@@ -15,11 +15,14 @@ completed: 2026-10-14
 |---|---|---|
 | owner-record | migration 0078 `eval_trials.instance_id`、claim で持ち主を記録、`reconcile_eval_trials` の持ち主判定（`eval_running_recovery`）、回復 error の `runs` 行を cancelled | `383f6f41` |
 | drain-run | `in_flight` に評価 run、draining は採点しない、`reconcile_ownerless_eval_run`、`abort_all_runs` が `abort_eval_runs`、名前固定の試験 2 件 | `95ef97d3` |
-| closeout | 全体検査、ADR 付記、architecture-map の行（migration 0078・ADR D3） | この commit |
+| closeout | 全体検査、ADR 付記（architecture-map は範囲外のため変えず「提案」へ） | この commit |
 
 ## 証拠（closeout、HEAD `eb463ffe` + 文書のみ）
 
 - `bash scripts/dev/test-parallel.sh`: exit 0。`passed 5103, failed 0, ignored 13`（nextest 170 binaries、doctest exit 0、userns null）
+  - 前回 run の check（同じ command）は `passed 5102, failed 1`（`celeris::routing_eval_run daemon_runs_two_stub_trials_with_hidden_checks_and_eval_records`）で exit 100。
+    単独 `cargo nextest run -p celeris --test routing_eval_run daemon_runs_…` は 0.8 秒で pass、全体の再実行も pass。
+    試行 2 件の終端待ちが壁時計 8 秒の上限で、全体並走の負荷で上限を越えたと見る（コードは不変、`crates/` は範囲外）
 - `cargo clippy --workspace -- -D warnings`: exit 0
 - `cargo clippy --workspace --all-targets -- -D warnings`: exit 0
 - `cargo test -p task-dispatch live_handoff_keeps_running_eval_trial`: `test result: ok. 1 passed`
@@ -34,8 +37,10 @@ completed: 2026-10-14
 
 ## 未解決事項
 
-- なし。08:52Z に error になった試行の再実行は評価の運用（batch の再投入）で行い、この task の範囲外。
+- `daemon_runs_two_stub_trials_with_hidden_checks_and_eval_records`（`crates/celeris/tests/routing_eval_run.rs`）が全体並走で 1 回落ちた（上記）。08:52Z に error になった試行の再実行は評価の運用（batch の再投入）で行い、この task の範囲外。
 
 ## 提案
 
-- なし。
+- 上の試験の終端待ち（`tokio::time::timeout(Duration::from_secs(8), …)`）を出来事待ち＋長い保険（ADR-0125 の形、例 60 秒）に直す別 task。
+- `docs/architecture-map.md` の「評価 run の試行」行に migration `0078_eval_trials_instance_id.sql`（試行の持ち主 instance）と
+  ADR 2026-10-14 eval-verify-isolation D3 を足す（この葉の範囲は `agent-docs/` だけなので未反映）。

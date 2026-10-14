@@ -43,7 +43,10 @@ sys.exit(mode.get('exit', 0))
 
 class BrowserCliTest(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory()
+        # AF_UNIX の path は 108 byte まで。run の $TMPDIR が深いと `<root>.action.sock` が収まらないので、
+        # そのときだけ短い /tmp に置く（socket と小さな fixture だけ）。
+        base = None if len(tempfile.gettempdir()) < 60 else '/tmp'
+        self.temp = tempfile.TemporaryDirectory(dir=base)
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.output = self.root / 'artifacts'

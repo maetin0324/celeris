@@ -32,7 +32,8 @@ fn stub_pipeline_freezes_estimates_runs_aggregates_and_exports_features() {
     }
     drop(conn);
 
-    let manifest = manifest::create(&db, dir.path(), "2026-10-05", 7, "v1").expect("manifest");
+    let manifest =
+        manifest::create(&db, dir.path(), "2026-10-05", 7, "v1", None).expect("manifest");
     assert_eq!(manifest.problems.len(), 30);
     assert_eq!(manifest.problems.iter().filter(|p| p.subset_12).count(), 12);
     let estimates = dryrun::estimate(&manifest, &db, None).expect("dry-run");

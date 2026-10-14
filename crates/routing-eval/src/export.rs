@@ -91,6 +91,7 @@ mod tests {
             subset_12: false,
             head_commit: None,
             base_commit: None,
+            base_commit_from_parent: false,
             features_sha256: "fh".into(),
             features: json!({"brief":{"len":3},"aux":{"x":1}}),
             sha256: "ph".into(),
@@ -101,6 +102,7 @@ mod tests {
             cutoff: "".into(),
             seed: 0,
             problems: vec![p.clone()],
+            refill_rejected: Vec::new(),
             sha256: "mh".into(),
         };
         let t = aggregate::Trial {

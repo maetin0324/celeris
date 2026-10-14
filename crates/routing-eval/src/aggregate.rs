@@ -529,6 +529,7 @@ mod tests {
             subset_12: true,
             head_commit: None,
             base_commit: None,
+            base_commit_from_parent: false,
             features_sha256: "".into(),
             features: json!({}),
             sha256: "".into(),
@@ -539,6 +540,7 @@ mod tests {
             cutoff: "".into(),
             seed: 0,
             problems: vec![problem],
+            refill_rejected: Vec::new(),
             sha256: "x".into(),
         };
         let make_trial = |harness: &str, source: &str| Trial {
@@ -586,6 +588,7 @@ mod tests {
             subset_12: true,
             head_commit: None,
             base_commit: None,
+            base_commit_from_parent: false,
             features_sha256: "".into(),
             features: json!({}),
             sha256: "".into(),
@@ -596,6 +599,7 @@ mod tests {
             cutoff: "".into(),
             seed: 0,
             problems: vec![p],
+            refill_rejected: Vec::new(),
             sha256: "manifest-hash".into(),
         };
         let trial = Trial {
@@ -656,6 +660,7 @@ mod tests {
             subset_12: false,
             head_commit: None,
             base_commit: None,
+            base_commit_from_parent: false,
             features_sha256: "".into(),
             features: json!({}),
             sha256: "".into(),
@@ -666,6 +671,7 @@ mod tests {
             cutoff: "".into(),
             seed: 0,
             problems: vec![problem],
+            refill_rejected: Vec::new(),
             sha256: "mh".into(),
         };
         let rows = collect(db.to_str().expect("path"), &manifest).expect("collect");

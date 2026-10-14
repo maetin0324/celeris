@@ -1,8 +1,8 @@
 ---
 tasks: [01M4VAAKFJHRSVKZ3996NFKSKS]
-title: eval-run manifest-prod — 本番 DB から manifest-v1 を凍結し recheck（有効 16 問で ADR D1 の 24 問に届かず、人の決定待ち）
-status: blocked
-completed:
+title: eval-run manifest-prod — 本番 DB から manifest-v2（refill、recheck 採用 30 問）を凍結
+status: done
+completed: 2026-10-14
 ---
 # manifest-prod: 本番 DB からの manifest 凍結と recheck
 
@@ -47,3 +47,37 @@ completed:
 
 - runner の `manifest` に「層ごとに多めに引き、recheck の採用だけで 30 問を埋める」経路を足す（例: 前版の recheck 記録を入力に取り、除外した問題を同じ層の次の候補で置き換えた新版を凍結する）。repair 層は base_commit を親 commit 等から補うか、層から外すかを決める。
 - recheck は `--limit` だけでなく再開（済んだ問題を飛ばす）を持つと、run の時間上限で切れても続けられる。
+
+## manifest-v2（人の決定 manifest-refill を受けて）
+
+runner に refill を足した: `manifest --repo <repo>` を付けると、層ごとに seed 順で候補を引き（1 層 `--max-draws` 件まで）、recheck で採用（base 失敗・head 成功）したものだけを層の round robin で 30 問まで埋める。落とした候補は manifest の `refill_rejected`（id・層・理由）に凍結し、採用 30 問の recheck 記録は manifest の `recheck` 欄に入る。repair WU で base が無いものは head の第 1 親を base にし、`base_commit_from_parent: true` の印を付ける。済んだ recheck は `--recheck-cache`（JSON Lines）で再利用する（v1 の 30 行を種にした）。新しい欄は既定値なら書き出さないので、v1 の sha256 は変わらない。v1 は書き換えていない。
+
+- command: `celeris-routing-eval manifest --db /local/celeris/data/db/celeris.sqlite3 --out …/eval/manifest-v2 --version 2 --repo …/eval/recheck-repo --timeout 600 --max-draws 10 --worktree-root $TMPDIR/refill-wt --recheck-cache …/manifest-v2/recheck-cache.jsonl`（cutoff・seed は既定）。逐次実行。`--max-draws 8` では採用 28 で止まった（exit 1、1,489 秒）。同じ cache で 10 にして exit 0（491 秒）。
+- **manifest sha256（runner の凍結値）: `118b413ebba94d51a0ee6d6703c9dd7b726d84ade3bbd4009c137f903d21e7e7`**。file の sha256（recheck 欄込み）: `80dce7dc391e23fed7b34b53cb2e85944cfd51ed5618101128a89f2587d4dd2a`。
+- 問題数 30（全問に空でない prompt、全問に採用の recheck 行。recheck の manifest_sha256 は凍結値と一致）。
+- genre: coding 30
+- kind / stratum: design 8・investigate 7・implement 5・test 4・other 3・repair 3・release 0
+- split: dev 16・held-out 14
+- subset_12: 12 問（design・implement・investigate・other・repair・test 各 2。dev 5・held-out 7）
+- base を親 commit で補った問題: 3（全部 repair。subset_12 に 2）
+- recheck で落とした候補（`refill_rejected`）: 36 件。理由: `check_fails_at_head_commit` 15・`noop_check_passes_at_base` 14・`no_base_commit` 6（repair 5〈head も親も無い／補えない〉・release 1）・`check_timed_out` 1。層別: release 10（head 失敗 6・noop 2・base 無し 1・時間切れ 1）、other 7、test 6、repair 7、implement 5、investigate 1、design 0。
+- 元の repo に書いていない: `/home/rmaeda/workspace/agent-platform/.git/worktrees` の一覧が前後で同じ（diff 空）。worktree は bare clone `…/eval/recheck-repo` の中だけ。`$TMPDIR/refill-wt` は終了時に消えた。
+
+### ADR D1 との照合
+
+有効 30 問（最低 24 以上）・subset 12 問で条件を満たす。ただし **release 層は 10 候補を引いて採用 0**（release WU の check は head でも落ちるか base でも通るものが多い）で、層は 6。基準は下げていない。release を評価に入れたいなら `--max-draws` を上げて引き直す（候補 1 件約 50 秒）。
+
+## 未解決（v2）
+
+- refill 経路の unit 試験は未追加（この run の時間切れ）。次の unit で fixture repo を使った試験（refill_rejected・base_commit_from_parent・cache 再利用）を足す。
+- release 層 0 を受け入れるか（下の提案）。
+
+## 提案（v2）
+
+- release 層は評価集合から外れた。release の check を集合に入れたいなら、release WU の check を head で通るように記録する仕組みを別に考える。
+
+## 検査（v2）
+
+- `cargo test -p routing-eval`: exit 0、lib 24 passed・pipeline_stub 1 passed。
+- `cargo clippy -p routing-eval --all-targets -- -D warnings`: exit 0。
+- workspace 全体の `bash scripts/dev/test-parallel.sh` と `cargo clippy --workspace` はこの run の時間内に回せていない（変更は crates/routing-eval だけ）。closeout の全体検査で見る。

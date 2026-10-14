@@ -96,6 +96,9 @@ pub struct EvalTrial {
     pub created_at: String,
     pub started_at: Option<String>,
     pub finished_at: Option<String>,
+    /// 試行を claim（`running` に）した daemon instance（`daemon_instances.instance_id`）。終端・`queued`
+    /// に戻しても消さない。migration 0078 より前に起動した行は `None`（ADR 2026-10-14-eval-verify-isolation D3.1）。
+    pub instance_id: Option<String>,
 }
 
 #[cfg(test)]

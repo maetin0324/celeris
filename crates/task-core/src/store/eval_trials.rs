@@ -9,7 +9,7 @@ use crate::routing_eval_trial::{EvalTrial, EvalTrialSpec, EvalTrialStatus};
 
 const COLUMNS: &str = "trial_id,batch_id,manifest_sha,problem_id,trial_no,source_id,model_id,\
 harness_id,harness_version,repo,base_commit,objective,check_cmd,check_timeout_secs,status,run_id,\
-decision_id,worktree_path,check_exit,timed_out,error,created_at,started_at,finished_at";
+decision_id,worktree_path,check_exit,timed_out,error,created_at,started_at,finished_at,instance_id";
 
 fn now() -> Result<String, StoreError> {
     format_rfc3339(OffsetDateTime::now_utc())
@@ -49,6 +49,7 @@ fn read_row(row: &Row<'_>) -> rusqlite::Result<EvalTrial> {
         created_at: row.get(21)?,
         started_at: row.get(22)?,
         finished_at: row.get(23)?,
+        instance_id: row.get(24)?,
     })
 }
 
@@ -159,7 +160,8 @@ impl SqliteStore {
     }
 
     /// `source_id` が `skip_sources` に無い `queued` の最古を `running` にして返す。条件付き UPDATE
-    /// なので、並行して呼んでも同じ行を 2 回返さない。無ければ `None`。
+    /// なので、並行して呼んでも同じ行を 2 回返さない。無ければ `None`。同じ更新で持ち主の
+    /// `instance_id` を書く（ADR 2026-10-14-eval-verify-isolation D3.1。`unclaim`・終端では消さない）。
     ///
     /// `skip_sources` は tick の中で起こせなかった（account・quota が埋まった）source。同じ tick で
     /// その source の試行を見直さずに、後ろの別 source の試行へ進む（先頭詰まりを避ける）。source の
@@ -167,6 +169,7 @@ impl SqliteStore {
     /// 多くても全件は読まない（飛ばすのは埋まった source の行だけ）。
     pub fn eval_trial_claim_next(
         &self,
+        instance_id: &str,
         skip_sources: &[String],
     ) -> Result<Option<EvalTrial>, StoreError> {
         let skip = serde_json::to_string(skip_sources)?;
@@ -185,8 +188,9 @@ impl SqliteStore {
             return Ok(None);
         };
         let changed = tx.execute(
-            "UPDATE eval_trials SET status = 'running' WHERE trial_id = ?1 AND status = 'queued'",
-            [&trial_id],
+            "UPDATE eval_trials SET status = 'running', instance_id = ?2 \
+             WHERE trial_id = ?1 AND status = 'queued'",
+            params![trial_id, instance_id],
         )?;
         if changed == 0 {
             return Ok(None);
@@ -369,15 +373,40 @@ mod tests {
         let rows = s
             .insert_eval_trials("b1", &[spec("p1", 0), spec("p1", 1)])
             .expect("insert");
-        let a = s.eval_trial_claim_next(&[]).expect("claim").expect("some");
+        assert_eq!(rows[0].instance_id, None);
+        let a = s
+            .eval_trial_claim_next("test-instance", &[])
+            .expect("claim")
+            .expect("some");
         assert_eq!(a.trial_id, rows[0].trial_id);
         assert_eq!(a.status, EvalTrialStatus::Running);
-        let b = s.eval_trial_claim_next(&[]).expect("claim").expect("some");
+        // The claim records its owner instance (ADR 2026-10-14-eval-verify-isolation D3.1).
+        assert_eq!(a.instance_id.as_deref(), Some("test-instance"));
+        let b = s
+            .eval_trial_claim_next("test-instance", &[])
+            .expect("claim")
+            .expect("some");
         assert_eq!(b.trial_id, rows[1].trial_id);
-        assert!(s.eval_trial_claim_next(&[]).expect("claim").is_none());
+        assert!(
+            s.eval_trial_claim_next("test-instance", &[])
+                .expect("claim")
+                .is_none()
+        );
         s.eval_trial_unclaim(&a.trial_id).expect("unclaim");
         assert!(s.eval_trial_unclaim(&a.trial_id).is_err(), "already queued");
-        let again = s.eval_trial_claim_next(&[]).expect("claim").expect("some");
+        // Unclaiming keeps the record of the last owner.
+        assert_eq!(
+            s.eval_trial_get(&a.trial_id)
+                .expect("get")
+                .expect("row")
+                .instance_id
+                .as_deref(),
+            Some("test-instance")
+        );
+        let again = s
+            .eval_trial_claim_next("test-instance", &[])
+            .expect("claim")
+            .expect("some");
         assert_eq!(again.trial_id, a.trial_id);
     }
 
@@ -393,15 +422,22 @@ mod tests {
             .expect("insert");
         let skip = vec!["claude-oauth".to_string()];
         let codex = s
-            .eval_trial_claim_next(&skip)
+            .eval_trial_claim_next("test-instance", &skip)
             .expect("claim")
             .expect("some");
         assert_eq!(
             codex.trial_id, rows[2].trial_id,
             "the trial behind the skipped source"
         );
-        assert!(s.eval_trial_claim_next(&skip).expect("claim").is_none());
-        let first = s.eval_trial_claim_next(&[]).expect("claim").expect("some");
+        assert!(
+            s.eval_trial_claim_next("test-instance", &skip)
+                .expect("claim")
+                .is_none()
+        );
+        let first = s
+            .eval_trial_claim_next("test-instance", &[])
+            .expect("claim")
+            .expect("some");
         assert_eq!(
             first.trial_id, rows[0].trial_id,
             "the skipped source keeps its order"
@@ -418,7 +454,10 @@ mod tests {
                 let s = s.clone();
                 std::thread::spawn(move || {
                     let mut got = Vec::new();
-                    while let Some(t) = s.eval_trial_claim_next(&[]).expect("claim") {
+                    while let Some(t) = s
+                        .eval_trial_claim_next("test-instance", &[])
+                        .expect("claim")
+                    {
                         got.push(t.trial_id);
                     }
                     got
@@ -448,7 +487,8 @@ mod tests {
             s.eval_trial_mark_scoring(&id).is_err(),
             "queued cannot score"
         );
-        s.eval_trial_claim_next(&[]).expect("claim");
+        s.eval_trial_claim_next("test-instance", &[])
+            .expect("claim");
         assert!(s.eval_trial_mark_scoring(&id).is_err(), "no run yet");
         s.eval_trial_mark_started(&id, "run-1", "dec-1", "2", "/data/eval/x/repo")
             .expect("started");
@@ -488,7 +528,8 @@ mod tests {
         let rows = s
             .insert_eval_trials("b1", &[spec("p1", 0), spec("p1", 1), spec("p1", 2)])
             .expect("insert");
-        s.eval_trial_claim_next(&[]).expect("claim");
+        s.eval_trial_claim_next("test-instance", &[])
+            .expect("claim");
         s.eval_trial_finish(
             &rows[0].trial_id,
             EvalTrialStatus::Error,
@@ -519,10 +560,15 @@ mod tests {
             .eval_trial_cancel(&rows[1].trial_id)
             .expect("cancel queued");
         assert_eq!(c.status, EvalTrialStatus::Cancelled);
-        s.eval_trial_claim_next(&[]).expect("claim");
+        s.eval_trial_claim_next("test-instance", &[])
+            .expect("claim");
         s.eval_trial_cancel(&rows[2].trial_id)
             .expect("cancel running");
-        assert!(s.eval_trial_claim_next(&[]).expect("claim").is_none());
+        assert!(
+            s.eval_trial_claim_next("test-instance", &[])
+                .expect("claim")
+                .is_none()
+        );
         assert!(s.eval_trial_cancel("missing").is_err());
     }
 }

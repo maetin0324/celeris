@@ -662,6 +662,170 @@ async fn eval_trial_target_removed_on_recovery() {
     assert!(released(&lease));
 }
 
+/// A `daemon_instances` row for an evaluation-trial owner: `heartbeat_at` and `pid` decide whether
+/// recovery treats it as alive (ADR 2026-10-14-eval-verify-isolation D3.4).
+fn eval_owner_row(
+    instance_id: &str,
+    role: task_core::InstanceRole,
+    pid: u32,
+    heartbeat_at: time::OffsetDateTime,
+) -> task_core::DaemonInstance {
+    task_core::DaemonInstance {
+        instance_id: instance_id.into(),
+        release: "old".into(),
+        pid,
+        role,
+        started_at: heartbeat_at,
+        heartbeat_at,
+        handoff_requested_at: None,
+        drained_at: None,
+    }
+}
+
+/// The old instance (`owner`) starts a trial whose run hangs; returns it with the trial's work tree.
+fn start_hung_eval_trial(
+    temp: &std::path::Path,
+    store: &Arc<dyn TaskStore>,
+    batch_id: &str,
+    owner: &str,
+) -> (Dispatcher, task_core::routing_eval_trial::EvalTrial) {
+    let hung: Arc<dyn WorkerAdapter> = Arc::new(EvalStubAdapter {
+        seen: Arc::new(StdMutex::new(Vec::new())),
+        started: Arc::new(tokio::sync::Notify::new()),
+        env: Vec::new(),
+        hang: true,
+    });
+    let mut old = dispatcher(store.clone(), hung, 2);
+    own_instance(&mut old, owner);
+    old.config.workspace_root = temp.join("data");
+    scratch_on(&mut old, &temp.join("scratch"));
+    old.config.eval.reserved_runs = 1;
+    old.set_eval_version_probe(|_| Some("eval-stub 1.0.0".into()));
+    assert_eq!(old.tick_eval_trials(), 1);
+    let trial = only_trial(store, batch_id);
+    assert_eq!(trial.instance_id.as_deref(), Some(owner));
+    (old, trial)
+}
+
+/// The new instance after a live promotion: owns its instance id, starts nothing, only recovers.
+fn recovering_dispatcher(temp: &std::path::Path, store: &Arc<dyn TaskStore>) -> Dispatcher {
+    let mut next = eval_dispatcher(
+        store,
+        ScriptedEvalWorker {
+            fail_with: None,
+            seen: Arc::new(StdMutex::new(Vec::new())),
+            env: Vec::new(),
+        },
+        temp,
+    );
+    next.config.eval.reserved_runs = 0;
+    next
+}
+
+/// ADR 2026-10-14-eval-verify-isolation D3.1・D3.4: the claim records the owner instance, and the new
+/// instance's recovery leaves a `running` trial of a live owner (the draining old instance, fresh
+/// heartbeat, live pid) alone: the trial stays `running`, its work tree and target stay, and its
+/// `runs` row stays `running`.
+#[tokio::test]
+async fn eval_recovery_keeps_running_trial_of_live_owner() {
+    let (temp, store, _sqlite, batch_id, _repo) = eval_fixture("true");
+    let owner = "01OLDDAEMON000000000000000";
+    store
+        .instance_register(&eval_owner_row(
+            owner,
+            task_core::InstanceRole::Draining,
+            std::process::id(),
+            time::OffsetDateTime::now_utc(),
+        ))
+        .unwrap();
+    let (mut old, trial) = start_hung_eval_trial(temp.path(), &store, &batch_id, owner);
+    let worktree = std::path::PathBuf::from(trial.worktree_path.clone().unwrap());
+    let run_id = trial.run_id.clone().unwrap();
+    let (target, _lease) = trial_target(temp.path(), &trial.trial_id);
+    assert!(worktree.is_dir() && target.is_dir());
+
+    let mut next = recovering_dispatcher(temp.path(), &store);
+    next.tick_eval_trials();
+    next.tick_eval_trials();
+
+    let after = only_trial(&store, &batch_id);
+    assert_eq!(
+        after.status,
+        task_core::routing_eval_trial::EvalTrialStatus::Running
+    );
+    assert_eq!(after.error, None);
+    assert_eq!(after.instance_id.as_deref(), Some(owner));
+    assert!(worktree.is_dir(), "{}", worktree.display());
+    assert!(target.is_dir(), "{}", target.display());
+    assert_eq!(
+        store.run_index_get(&run_id).unwrap().unwrap().status,
+        task_core::RunIndexStatus::Running
+    );
+    for (_, entry) in old.eval_runs.drain() {
+        entry.handle.abort();
+    }
+}
+
+/// ADR 2026-10-14-eval-verify-isolation D3.4・D3.5: when the recorded owner is dead (stale heartbeat, or
+/// a pid that is gone), the new instance's recovery ends the trial as `error`
+/// (`interrupted: eval recovery: …`), removes its work tree and target, and closes its `runs` row as
+/// `cancelled`.
+#[tokio::test]
+async fn eval_recovery_errors_trial_of_dead_owner_and_cancels_run_row() {
+    let now = time::OffsetDateTime::now_utc();
+    let dead_owners = [
+        (
+            "stale-heartbeat",
+            std::process::id(),
+            now - time::Duration::hours(1),
+        ),
+        ("no-pid", u32::MAX, now),
+    ];
+    for (label, pid, heartbeat_at) in dead_owners {
+        let (temp, store, _sqlite, batch_id, _repo) = eval_fixture("true");
+        let owner = "01OLDDAEMON000000000000000";
+        store
+            .instance_register(&eval_owner_row(
+                owner,
+                task_core::InstanceRole::Draining,
+                pid,
+                heartbeat_at,
+            ))
+            .unwrap();
+        let (mut old, trial) = start_hung_eval_trial(temp.path(), &store, &batch_id, owner);
+        // The old instance died: nothing holds its run any more.
+        for (_, entry) in old.eval_runs.drain() {
+            entry.handle.abort();
+        }
+        let worktree = std::path::PathBuf::from(trial.worktree_path.clone().unwrap());
+        let run_id = trial.run_id.clone().unwrap();
+        let (target, lease) = trial_target(temp.path(), &trial.trial_id);
+
+        let mut next = recovering_dispatcher(temp.path(), &store);
+        next.tick_eval_trials();
+
+        let after = only_trial(&store, &batch_id);
+        assert_eq!(
+            after.status,
+            task_core::routing_eval_trial::EvalTrialStatus::Error,
+            "{label}"
+        );
+        assert_eq!(
+            after.error.as_deref(),
+            Some("interrupted: eval recovery: the instance that started the run is gone"),
+            "{label}"
+        );
+        assert!(!worktree.exists(), "{label}: {}", worktree.display());
+        assert!(!target.exists(), "{label}: {}", target.display());
+        assert!(released(&lease), "{label}");
+        assert_eq!(
+            store.run_index_get(&run_id).unwrap().unwrap().status,
+            task_core::RunIndexStatus::Cancelled,
+            "{label}"
+        );
+    }
+}
+
 /// With scratch disabled the trial fails before a work tree or target is made (no root-fs target).
 #[tokio::test]
 async fn eval_trial_fails_without_scratch() {
@@ -854,7 +1018,7 @@ async fn eval_trial_tick_claims_each_trial_at_most_once() {
         // With `p1` skipped there is nothing left to claim, so the tick stopped there.
         assert!(
             sqlite
-                .eval_trial_claim_next(&["p1".into()])
+                .eval_trial_claim_next("test-instance", &["p1".into()])
                 .unwrap()
                 .is_none()
         );
@@ -880,7 +1044,7 @@ async fn eval_cleanup_refuses_paths_outside_roots() {
     let outside = tempfile::tempdir().unwrap();
     let data = temp.path().join("data");
     let mut ids = Vec::new();
-    while let Some(trial) = store.eval_trial_claim_next(&[]).unwrap() {
+    while let Some(trial) = store.eval_trial_claim_next("test-instance", &[]).unwrap() {
         ids.push(trial.trial_id);
     }
     assert_eq!(ids.len(), 4);
@@ -941,7 +1105,7 @@ async fn eval_cleanup_refuses_paths_outside_roots() {
         );
         assert_eq!(
             trial.error.as_deref(),
-            Some("daemon recovery: run disappeared while trial was running")
+            Some("interrupted: eval recovery: the instance that started the run is gone")
         );
     }
     assert!(!inside.exists(), "{}", inside.display());
@@ -967,7 +1131,13 @@ async fn verify_daemon_leaves_foreign_eval_trial_files() {
     let prod_scratch = prod.path().join("scratch");
     let mut ids = Vec::new();
     for _ in 0..2 {
-        ids.push(store.eval_trial_claim_next(&[]).unwrap().unwrap().trial_id);
+        ids.push(
+            store
+                .eval_trial_claim_next("test-instance", &[])
+                .unwrap()
+                .unwrap()
+                .trial_id,
+        );
     }
     let pool = task_worker::scratch::Pool::new(&prod_scratch);
     let mut files = Vec::new();

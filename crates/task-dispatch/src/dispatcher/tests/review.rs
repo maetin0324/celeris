@@ -531,7 +531,7 @@ async fn department_reviewer_runs_share_and_continue_one_lead_session() {
         DispatchConfig {
             source_error_cooldown: Duration::from_secs(1),
             delivery: Default::default(),
-            max_concurrency: 2,
+            config_max_concurrency: 2,
             lease_grace: Duration::from_secs(60),
             idle_timeout: Duration::from_secs(5),
             kill_grace: Duration::from_millis(100),
@@ -648,7 +648,7 @@ async fn a_rejected_lead_session_resume_retires_it_and_the_next_review_starts_fr
         DispatchConfig {
             source_error_cooldown: Duration::from_secs(1),
             delivery: Default::default(),
-            max_concurrency: 2,
+            config_max_concurrency: 2,
             lease_grace: Duration::from_secs(60),
             idle_timeout: Duration::from_secs(5),
             kill_grace: Duration::from_millis(100),
@@ -768,7 +768,7 @@ async fn a_resume_rejection_that_still_produced_a_result_self_heals_and_the_retr
         DispatchConfig {
             source_error_cooldown: Duration::from_secs(1),
             delivery: Default::default(),
-            max_concurrency: 2,
+            config_max_concurrency: 2,
             lease_grace: Duration::from_secs(60),
             idle_timeout: Duration::from_secs(5),
             kill_grace: Duration::from_millis(100),

@@ -132,7 +132,7 @@ impl Config {
                 repo: self.selfdeploy.repo.clone(),
                 default_departments: self.selfdeploy.delivery_default_departments.clone(),
             },
-            max_concurrency: self.max_concurrency,
+            config_max_concurrency: self.max_concurrency,
             lease_grace: Duration::from_secs(self.lease_grace_secs),
             idle_timeout: Duration::from_secs(self.idle_timeout_secs),
             kill_grace: Duration::from_secs(self.kill_grace_secs),

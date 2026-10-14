@@ -136,16 +136,23 @@ pub(crate) async fn handle_admin_request(
                 let _ = reply.send(notify_test_outcome(result));
             });
         }
-        // ADR 2026-10-14-local-machine-settings D4: store の上書きが変わった知らせ。`max_concurrency` を
-        // dispatcher に読み直させる結線は WU wire（この口は API から届くところまで）。
-        task_api::AdminRequest::LocalSettingsChanged => {
-            tracing::info!(
-                who = "admin",
-                op = "local_settings_changed",
-                "admin: local settings changed"
-            );
-        }
+        // ADR 2026-10-14-local-machine-settings D4: store の上書きが変わった知らせ。実効の `max_concurrency`
+        // を store から解き直し、次の tick から効かせる（走行中の run は止めない）。`workspace_root` は
+        // 新しい task の足回りを用意するときに store から読むので、ここでは何もしない。
+        task_api::AdminRequest::LocalSettingsChanged => local_settings_changed(dispatcher),
     }
+}
+
+/// ADR 2026-10-14-local-machine-settings D4: `AdminRequest::LocalSettingsChanged` の処理。実効の
+/// `max_concurrency` を store から解き直し、次の tick から効かせる（走行中の run は止めない）。
+pub fn local_settings_changed(dispatcher: &mut Dispatcher) {
+    dispatcher.refresh_max_concurrency();
+    tracing::info!(
+        who = "admin",
+        op = "local_settings_changed",
+        max_concurrency = dispatcher.max_concurrency(),
+        "admin: local settings changed"
+    );
 }
 
 /// ADR-0037 D4: `notify::send_test` の結果を API の型へ写す（秘密が無ければ 409 になる `Unavailable`）。
@@ -178,10 +185,8 @@ pub(crate) fn notify_test_outcome(
 /// 反映されない値のまま動き続けるより、エラーにしてタスクを止めずに知らせる（400。再起動が必要と伝える）。
 /// `[cos.attachments]` / `[cos] stream_retention_days` も API / GC に固定されるため変更を拒否する。
 /// `[[clusters]]` / `[api]` / `db` / `workspace_root` も同様に再起動が要る（reload では触れない。従来どおり）。
-pub(crate) fn reload_providers(
-    dispatcher: &mut Dispatcher,
-    config: &mut Config,
-) -> Result<(), String> {
+/// `max_concurrency` は読み直すが、実効値は store の上書きが勝つ（ADR 2026-10-14-local-machine-settings D3）。
+pub fn reload_providers(dispatcher: &mut Dispatcher, config: &mut Config) -> Result<(), String> {
     let path = config
         .source_path
         .clone()
@@ -257,6 +262,10 @@ pub(crate) fn reload_providers(
     });
     // ADR 2026-10-07-build-tmp-hygiene D1.4: 掃除の roots と上限も reload で入れ替える。
     config.maintenance = new_config.maintenance;
+    // ADR 2026-10-14-local-machine-settings D3: 設定ファイルの `max_concurrency` を入れ直す。store に上書きが
+    // あれば reload 後も store が勝つ（実効値は dispatcher が store と合わせて解く）。
+    config.max_concurrency = new_config.max_concurrency;
+    dispatcher.set_config_max_concurrency(config.max_concurrency);
     dispatcher.set_target_sweep(config.target_sweep_params());
     dispatcher.set_target_sweep_scope(config.target_sweep_scope());
     // ADR 2026-10-07-build-tmp-hygiene D4: ディスク使用率の監視（tick の段 `disk_watch`）。

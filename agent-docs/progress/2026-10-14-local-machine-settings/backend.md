@@ -1,8 +1,9 @@
 ---
 tasks: [01M4X23K84B46SCAHRWVXRS8ZK]
 wu: backend
-status: running
+status: done
 updated: 2026-10-14
+completed: 2026-10-14
 ---
 # backend: ローカル設定の store・管理 API・config 優先順位・dispatcher 反映
 
@@ -145,3 +146,56 @@ updated: 2026-10-14
 
 ### 提案
 - なし。
+
+## wire（WU wire、完了 2026-10-14）
+
+### 変更
+- `crates/task-dispatch`: `DispatchConfig.max_concurrency` を `config_max_concurrency`（設定ファイル値）に改名し、dispatcher は
+  直接読まない。`Dispatcher` に実効値 `max_concurrency`（store > 設定ファイル、`resolve_max_concurrency`）を持たせ、
+  `Dispatcher::new`・tick の頭・`refresh_max_concurrency`（admin 通知）・`set_config_max_concurrency`（reload）で解き直す。
+  枠の判定（`run_load`・work_units・review_spawn・cos_chat launch・取得窓）は全て `self.max_concurrency` を見る。
+  下げても走行中の run は止めない。store が読めなければ直前の値のまま（warn）。
+- `crates/celeris`:
+  - `daemon/admin.rs`: `AdminRequest::LocalSettingsChanged` → `local_settings_changed(dispatcher)`（store から解き直し）。
+    `reload_providers` は設定ファイルの `max_concurrency` を `config` と dispatcher に入れ直す（store があれば store が勝つ）。
+    両関数を `celeris::{local_settings_changed, reload_providers}` として公開（結線試験が daemon と同じ関数を通すため）。
+  - `config/cluster.rs`: `[[clusters]] id = "local"`（`task_core::local_machine::LOCAL_CLUSTER_ID`）は読み込みエラー。
+  - `daemon/tick_loop.rs`: 起動ログの `max_concurrency` は実効値。
+- 旧い直参照: `git grep -n 'config\.max_concurrency' -- crates/task-dispatch crates/celeris/src` → 0 件
+  （残る `config.max_concurrency` は celeris の `Config` の設定ファイル値で、`dispatch_config`・`ConfigView`・reload・検証だけ）。
+- 試験（名前固定）:
+  - `crates/celeris/tests/local_settings_wire.rs`（daemon と同じ組み立て: `Config::load` → `build_dispatcher` / `api_settings` → loopback HTTP）
+    - `effective_max_concurrency_store_beats_config`: config 2 → `PUT /clusters/local/settings {"max_concurrency":5}` の応答
+      （value 5・source settings・config_value 2・apply next_tick）→ admin チャネルの `LocalSettingsChanged` を `local_settings_changed` に渡すと 5。
+      config を 3 に書き換えて `reload_providers` → `config.max_concurrency == 3` でも実効 5、tick 後も 5。`PUT {}` で 3 に戻る。
+      store を直接 7 にすると次の tick で 7、`build_dispatcher` し直しても 7。
+    - `cli_workspace_root_ignores_store_and_pins`: `--workspace-root`（`Overrides`）があると store の root と既存の固定を無視して
+      `effective_root_in`（source Cli）・`task_root` が CLI の root、新 task の `pin_task_root` は CLI の root を返し固定を書かない、
+      既存の固定行は変えない。`GET /clusters` の `local.workspace_root` も CLI の値・source `cli`。
+    - `cluster_id_local_is_reserved_config_error`: `id = "local"` は `Config::load` がエラー（"reserved"）、`local2` は読める。
+  - `crates/task-dispatch/src/dispatcher/tests/cos_capacity.rs`:
+    `store_max_concurrency_applies_next_tick_without_stopping_running_runs`（config 1 → store 3 で次の tick に +2、store 1 に下げても
+    3 本は `Running` のまま・新規 0、上書きを消して reload 値 4 に戻ると +1）。
+  - 既存試験の `d.config.max_concurrency = N` は `d.set_config_max_concurrency(N)` に置き換えた。
+
+### 証拠
+- `cargo test -p celeris --test local_settings_wire -- --exact <名前>` → 3 件とも `test result: ok. 1 passed`。
+- `cargo test -p task-dispatch --lib -- --exact dispatcher::tests::cos_capacity::store_max_concurrency_applies_next_tick_without_stopping_running_runs` → `ok. 1 passed`。
+- 既存 workspace・走行中 run 不変: `cargo test -p celeris --test workspace_roots` → `ok. 3 passed`。
+- task の受け入れ条件: `cargo test -p task-api --test local_machine_settings` → `ok. 4 passed`、`cargo test -p task-core local_machine` → `ok. 4 passed`、
+  `git grep -q 'clusters/local' -- docs/api/v1/api.md` → exit 0、`cargo test -p task-api --lib committed_schema` → `ok. 1 passed`（API の型は変えていないので schema 再生成なし）。
+- `cargo clippy --workspace -- -D warnings` → exit 0。
+- `bash scripts/dev/test-parallel.sh` → exit 0、`passed: 5125, failed: 0, ignored: 13`（userns: null。CELERIS_USERNS_TESTS=1 は不要の指示）。
+- doc 検査: `sh scripts/dev/check-adr-numbers.sh` → ok（204 files）、`sh scripts/dev/check-doc-links.sh` → ok、
+  `python3 scripts/dev/check-architecture-map.py` → OK（363 件）、`sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv` → ok。
+
+### 未解決事項
+- `GET /clusters` の `max_concurrency.config_value` は API 起動時の `ConfigView` の値で、reload で設定ファイルの値を変えても API 側は再起動まで
+  古い値を出す（dispatcher の実効値は reload 後の値で正しい）。`ConfigView` は reload で差し替わらない既存の仕組み。
+- web の画面（`local` 行の描画・PUT）は web の葉。
+
+### 提案
+- `ConfigView`（`GET /config` と clusters の `config_value`）を reload で差し替える仕組み（watch チャネル）を別 task で。
+
+### 本番への移行
+- 本番 config に `[[clusters]] id = "local"` があれば起動できない。現行本番 config の clusters は pegasus・sirius・fern03 のみ（記憶による。昇格前に人が `grep -n 'id = "local"' ~/.config/celeris/config.toml` で 0 件を確かめる）。

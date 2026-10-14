@@ -1269,7 +1269,7 @@ impl Dispatcher {
     /// `ready_tasks` の取得件数。経路なしと分かっているタスク（`warned_unroutable`）の分だけ広げ、それらが窓を埋めて
     /// 後ろの実行可能なタスクが dispatch されない・`is_idle` が誤って真になることを防ぐ（ADR-0012 監査）。
     pub(super) fn ready_window(&self) -> usize {
-        self.config.max_concurrency * 4 + 16 + self.warned_unroutable.len()
+        self.max_concurrency * 4 + 16 + self.warned_unroutable.len()
     }
 
     /// ADR-0043 D4: レビュー担当の `Check::Command` の既定になる検査コマンド

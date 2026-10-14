@@ -450,8 +450,9 @@ pub struct DispatchConfig {
     /// `error_cooldown_secs`: how long an auth/exhausted failure cools down a source without an
     /// account pool (a throttle uses its `retry_after` when it has one).
     pub source_error_cooldown: Duration,
-    /// 全体の並列度上限。
-    pub max_concurrency: usize,
+    /// 全体の並列度上限の設定ファイル値（ADR 2026-10-14-local-machine-settings D3）。dispatcher は直接読まず、
+    /// store の上書きと合わせた実効値（`Dispatcher::max_concurrency`）を tick ごとに解決して使う。
+    pub config_max_concurrency: usize,
     /// ADR-0002 D7: リース ttl = `max_wall_secs` + この猶予。
     pub lease_grace: Duration,
     /// ADR-0003 D4。
@@ -1148,6 +1149,10 @@ pub struct Dispatcher {
     store: Arc<dyn TaskStore>,
     cos_chat_launch: Option<cos_chat::launch::CosChatLaunch>,
     config: DispatchConfig,
+    /// 実効の全体並列度（ADR 2026-10-14-local-machine-settings D3・D4: store の `local_settings.max_concurrency`
+    /// があれば store、無ければ `config.config_max_concurrency`）。tick の頭と admin の
+    /// `LocalSettingsChanged` で `refresh_max_concurrency` が読み直す。走行中の run は止めない。
+    max_concurrency: usize,
     /// ADR 2026-10-07-build-tmp-hygiene D1.4: cron の保守 executor（`target_sweep`）の roots と上限。
     /// `None` は既定（`dispatcher::maintenance` を参照）。
     target_sweep: Option<task_worker::target_sweep::SweepParams>,
@@ -1504,10 +1509,24 @@ impl Dispatcher {
         } else if config.scratch.enabled && config.shared_build_cache {
             tracing::info!(dir = %config.scratch.dir.display(), "scratch pool enabled (ADR-0075)");
         }
+        let max_concurrency = match store.local_settings_get() {
+            Ok(settings) => {
+                task_core::local_machine::resolve_max_concurrency(
+                    config.config_max_concurrency,
+                    settings.as_ref(),
+                )
+                .value
+            }
+            Err(error) => {
+                tracing::warn!(%error, "cannot read local settings; using max_concurrency from the config file");
+                config.config_max_concurrency
+            }
+        };
         Self {
             store,
             cos_chat_launch: None,
             config,
+            max_concurrency,
             target_sweep: None,
             disk_watch: None,
             target_sweep_scope: crate::target_sweep::SweepScope::default(),
@@ -1774,6 +1793,36 @@ impl Dispatcher {
         self.config.roles = roles;
         self.config.genres = genres;
         self.config.delegation = delegation;
+    }
+
+    /// reload で読み直した設定ファイルの `max_concurrency` を入れ、実効値を解き直す
+    /// （ADR 2026-10-14-local-machine-settings D3: store に値があれば reload 後も store が勝つ）。
+    pub fn set_config_max_concurrency(&mut self, value: usize) {
+        self.config.config_max_concurrency = value;
+        self.refresh_max_concurrency();
+    }
+
+    /// 実効の全体並列度を store から解き直す（store > 設定ファイル）。tick の頭と、API が admin チャネルで
+    /// `LocalSettingsChanged` を知らせたときに呼ぶ。下げても走行中の run は止めず、超過分は終わるのを待つ。
+    /// store が読めなければ直前の値のまま動く。
+    pub fn refresh_max_concurrency(&mut self) {
+        match self.store.local_settings_get() {
+            Ok(settings) => {
+                self.max_concurrency = task_core::local_machine::resolve_max_concurrency(
+                    self.config.config_max_concurrency,
+                    settings.as_ref(),
+                )
+                .value;
+            }
+            Err(error) => {
+                tracing::warn!(%error, kept = self.max_concurrency, "cannot read local settings; keeping max_concurrency");
+            }
+        }
+    }
+
+    /// 実効の全体並列度（`refresh_max_concurrency` が最後に解いた値）。
+    pub fn max_concurrency(&self) -> usize {
+        self.max_concurrency
     }
 
     /// Reload authoritative account settings. On failure keep account dispatch blocked.
@@ -2095,6 +2144,8 @@ impl Dispatcher {
         }
         // ADR-0024 D1: 選択のたびに読み直さないよう、スキャンは tick ごとに高々 1 回（このキャッシュを毎 tick 捨てる）。
         self.accounts_scan_cache.clear();
+        // ADR 2026-10-14-local-machine-settings D4: `max_concurrency` は次の tick から効く（store を 1 行読む）。
+        self.refresh_max_concurrency();
         let now = (self.now_unix_fn)();
         for book in self.account_books.values() {
             if let Ok(mut book) = book.lock() {
@@ -2391,7 +2442,7 @@ impl Dispatcher {
     fn run_load(&self) -> crate::capacity::RunLoad {
         crate::capacity::RunLoad {
             workers_in_flight: self.workers_in_flight(),
-            max_concurrency: self.config.max_concurrency,
+            max_concurrency: self.max_concurrency,
             cos_in_flight: self.cos_in_flight(),
             max_cos_runs: self.config.execution.max_cos_runs,
         }

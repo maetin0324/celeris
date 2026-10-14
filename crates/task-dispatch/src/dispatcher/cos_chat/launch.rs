@@ -274,7 +274,7 @@ impl CosChatLaunch {
         let in_flight =
             self.running.len() + dispatcher.running.values().filter(|run| run.cos).count();
         if dispatcher.config.execution.max_cos_runs == 0 {
-            dispatcher.workers_in_flight() + in_flight < dispatcher.config.max_concurrency
+            dispatcher.workers_in_flight() + in_flight < dispatcher.max_concurrency
         } else {
             in_flight < dispatcher.config.execution.max_cos_runs
         }

@@ -810,7 +810,7 @@ async fn cos_chat_run_launch_two_threads_start_in_one_tick() {
 #[tokio::test]
 async fn cos_chat_run_launch_max_cos_zero_disables_global_exception() {
     let (_dir, store, mut d) = fixture(FakeAdapter::default_command(), 0);
-    d.config.max_concurrency = 0;
+    d.set_config_max_concurrency(0);
     let t = thread(&store, "global-limit");
     post(&store, &t, "one");
     d.tick_cos_chat_launch();

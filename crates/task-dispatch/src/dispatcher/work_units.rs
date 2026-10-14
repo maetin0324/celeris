@@ -1864,7 +1864,7 @@ impl Dispatcher {
         &mut self,
         now: Instant,
     ) -> Result<(usize, bool), DispatchError> {
-        if self.workers_in_flight() >= self.config.max_concurrency {
+        if self.workers_in_flight() >= self.max_concurrency {
             return Ok((0, true));
         }
         let mut dispatched = 0;
@@ -1885,7 +1885,7 @@ impl Dispatcher {
             let mode = self.parallel_mode(&task)?;
             let mut tried: std::collections::HashSet<String> = std::collections::HashSet::new();
             loop {
-                if self.workers_in_flight() >= self.config.max_concurrency {
+                if self.workers_in_flight() >= self.max_concurrency {
                     return Ok((dispatched, true));
                 }
                 let units = self.store.work_units_for(task.id)?;

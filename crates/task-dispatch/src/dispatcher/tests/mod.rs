@@ -108,7 +108,7 @@ fn dispatcher_with_test_clock(
         DispatchConfig {
             source_error_cooldown: Duration::from_secs(1),
             delivery: Default::default(),
-            max_concurrency,
+            config_max_concurrency: max_concurrency,
             lease_grace: Duration::from_secs(60),
             idle_timeout: Duration::from_secs(5),
             kill_grace: Duration::from_millis(100),
@@ -1227,7 +1227,7 @@ fn pool_dispatcher_with_requeues(
         DispatchConfig {
             source_error_cooldown: Duration::from_secs(1),
             delivery: Default::default(),
-            max_concurrency,
+            config_max_concurrency: max_concurrency,
             lease_grace: Duration::from_secs(60),
             idle_timeout: Duration::from_secs(5),
             kill_grace: Duration::from_millis(100),

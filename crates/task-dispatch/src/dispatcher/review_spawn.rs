@@ -1032,7 +1032,7 @@ impl Dispatcher {
         task: &Task,
         subject_run_id: &str,
     ) -> Option<ReviewerPick> {
-        if self.workers_in_flight() >= self.config.max_concurrency {
+        if self.workers_in_flight() >= self.max_concurrency {
             return None;
         }
         let org = self.store.org_list().ok()?;

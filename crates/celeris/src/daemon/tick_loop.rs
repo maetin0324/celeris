@@ -84,7 +84,7 @@ pub(crate) async fn tick_loop(
     let mut ticks: u64 = 0;
     // ADR-0040 D4: 手元の run とレビューの数（drain の判定に使う。最後の tick の値）。
     let mut in_flight: usize = 0;
-    tracing::info!(db = %config.db.path.display(), workspace_root = %workspace_roots.unpinned_root().display(), max_concurrency = config.max_concurrency, tick_ms = config.tick_ms, role = %roles.role.get(), "celeris started");
+    tracing::info!(db = %config.db.path.display(), workspace_root = %workspace_roots.unpinned_root().display(), max_concurrency = dispatcher.max_concurrency(), tick_ms = config.tick_ms, role = %roles.role.get(), "celeris started");
 
     let mut sigterm =
         tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).ok();

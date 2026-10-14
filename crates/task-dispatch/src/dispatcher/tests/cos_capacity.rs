@@ -87,7 +87,7 @@ async fn cos_run_bypasses_max_concurrency_but_leaves_do_not() {
         2,
         4,
     );
-    d.config.max_concurrency = 1;
+    d.set_config_max_concurrency(1);
 
     let first = leaf(ws.path());
     store.insert(&first).unwrap();
@@ -128,7 +128,7 @@ async fn max_cos_runs_zero_disables_the_exemption() {
         2,
         4,
     );
-    d.config.max_concurrency = 1;
+    d.set_config_max_concurrency(1);
     d.config.execution.max_cos_runs = 0;
 
     let first = leaf(ws.path());
@@ -289,7 +289,7 @@ async fn cos_account_usage_does_not_consume_leaf_capacity() {
         1,
         1,
     );
-    d.config.max_concurrency = 8;
+    d.set_config_max_concurrency(8);
     let chat = cos_chat(ws.path());
     store.insert(&chat).unwrap();
     assert_eq!(d.tick().unwrap().dispatched, 1);
@@ -364,4 +364,78 @@ fn implicit_account_overrides_survive_reload_and_are_pruned_with_their_row() {
     assert_eq!(d.prune_implicit_account_limits().unwrap(), vec!["p1"]);
     assert_eq!(store.account_limits().unwrap().len(), 1);
     assert_eq!(d.account_max_runs("claude-code", "p1"), Some(5));
+}
+
+/// ADR 2026-10-14-local-machine-settings D3・D4: store の `max_concurrency` は設定ファイルの値に勝ち、次の tick
+/// から効く。上げれば次の tick で枠が増え、下げても走行中の run は止めず（`Running` のまま）、超過が解けるまで
+/// 新しい run を起こさない。
+#[tokio::test]
+async fn store_max_concurrency_applies_next_tick_without_stopping_running_runs() {
+    let accounts = accounts_fixture();
+    let ws = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    seed_org(&store);
+    let mut d = pool_dispatcher(
+        store.clone(),
+        slow_pool_adapter(),
+        None,
+        accounts.path().to_path_buf(),
+        8,
+        8,
+    );
+    d.set_config_max_concurrency(1);
+    let set_store_max = |n: Option<u32>| {
+        store
+            .local_settings_set(
+                &task_core::LocalSettingsOverrides {
+                    workspace_root: None,
+                    max_concurrency: n,
+                },
+                "admin",
+                OffsetDateTime::now_utc(),
+            )
+            .unwrap();
+    };
+
+    let leaves: Vec<Task> = (0..4).map(|_| leaf(ws.path())).collect();
+    for t in &leaves {
+        store.insert(t).unwrap();
+    }
+    assert_eq!(d.tick().unwrap().dispatched, 1, "config value 1");
+    assert_eq!(d.max_concurrency(), 1);
+
+    set_store_max(Some(3));
+    assert_eq!(d.max_concurrency(), 1, "not before the next tick");
+    assert_eq!(
+        d.tick().unwrap().dispatched,
+        2,
+        "store value 3 from the next tick"
+    );
+    assert_eq!(d.max_concurrency(), 3);
+    assert_eq!(d.workers_in_flight(), 3);
+
+    set_store_max(Some(1));
+    for _ in 0..3 {
+        assert_eq!(d.tick().unwrap().dispatched, 0, "over the new limit");
+    }
+    assert_eq!(d.max_concurrency(), 1);
+    assert_eq!(d.workers_in_flight(), 3, "running runs are not stopped");
+    let running = leaves
+        .iter()
+        .filter(|t| status(&store, t.id) == Status::Running)
+        .count();
+    assert_eq!(running, 3);
+    assert_eq!(
+        leaves
+            .iter()
+            .filter(|t| status(&store, t.id) == Status::Ready)
+            .count(),
+        1
+    );
+
+    // 上書きを消すと設定ファイルの値（reload で入れ直した値）に戻る。
+    set_store_max(None);
+    d.set_config_max_concurrency(4);
+    assert_eq!(d.max_concurrency(), 4);
+    assert_eq!(d.tick().unwrap().dispatched, 1);
 }

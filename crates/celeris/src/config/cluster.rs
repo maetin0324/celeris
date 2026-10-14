@@ -271,6 +271,14 @@ pub(super) fn validate_clusters(clusters: &[ClusterConfig]) -> Result<(), Config
                 "[[clusters]] id must not be empty".to_string(),
             ));
         }
+        // ADR 2026-10-14-local-machine-settings D4: `local` はローカルマシンの行の予約 id
+        // （`PUT /clusters/local/settings` が `/clusters/{id}/settings` と衝突する）。
+        if c.id == task_core::local_machine::LOCAL_CLUSTER_ID {
+            return Err(ConfigError::Invalid(format!(
+                "[[clusters]] id {:?} is reserved for the local machine; choose another id",
+                c.id
+            )));
+        }
         if !cluster_ids.insert(&c.id) {
             return Err(ConfigError::Invalid(format!(
                 "duplicate cluster id: {}",

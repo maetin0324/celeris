@@ -44,3 +44,9 @@ eval_trials 全体: passed 52・failed 4・error 13・queued 217。running・sco
 - `artifacts/eval/resubmit_errors.py` をこの規則に書き直した（旧版は `resubmit_errors.v1.py`）: `python3 -I resubmit_errors.py <E> 1` は batches.json の仕組み側 error を `retry-batches-1.json` へ（trial_no +100）、`… 2` は retry-batches-1 の仕組み側 error を `retry-batches-2.json` へ（trial_no +200）。どちらも対象群の全試行が終端でなければ投入しない。`--dry` で数だけ出す。
 - 08:55Z 時点の本評価 batch の error 11 件の内訳: dispatcher stopped 4・daemon recovery 3・worktree 消失の question 3・yielded 1。11 件とも仕組み側で、再投入の対象。旧 pilot の error 10 件（run ended as error）は集計除外のまま対象外。
 - 状態の推移（本番 DB 読み取り）: 09:05Z passed 96・failed 4・error 21・queued 160・running 5 → 09:21Z passed 102・queued 155 → 09:37Z passed 114・failed 6・error 21・queued 141・running 4。新しい error は無い。消化は 0.6〜1.2 試行/分で、残り 141 件の終端まで 2〜4 時間。この run の壁時計では終わらないので yield した（集計・再投入はまだしない）。
+
+## 再確認（2026-10-14 09:38Z〜10:25Z、run 01M4WWDN6F）
+- 本評価 batch（batches.json、276 試行）: 09:38Z passed 114・failed 6・error 11・queued 140・running 5 → 10:03Z passed 132・failed 8・error 11・queued 120 → 10:25Z passed 140・failed 8・error 12・queued 112・running 4。pilot やり直し batch は passed 6・failed 4 で終端。
+- 新しい error 1 件（10:17Z、codex 群）は `run ended as yielded` で仕組み側。再投入 1 回目の対象に入る。
+- account の 7d 使用率（`GET /api/v1/llm/accounts`）: claude_max_lab 0.09→0.14、claude_max_personal 0.09→0.15、chatgpt_plus_personal 0.02→0.06（投入前 04:07Z → 10:20Z）。承認の上限（claude 15%・codex 13.2%）の範囲内で、見積りより速い増え方ではない。
+- 消化は約 0.8 試行/分、残り 116 件で約 2.5 時間。この run の壁時計では終わらないので yield した。

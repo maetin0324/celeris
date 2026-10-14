@@ -186,7 +186,7 @@ impl SqliteStore {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::store::TaskStore;
 
@@ -195,7 +195,7 @@ mod tests {
     }
 
     #[test]
-    fn local_settings_store_roundtrip() {
+    pub(crate) fn local_settings_store_roundtrip() {
         let store = SqliteStore::open_in_memory().unwrap();
         assert_eq!(store.local_settings_get().unwrap(), None);
 
@@ -252,7 +252,7 @@ mod tests {
     }
 
     #[test]
-    fn local_settings_audit_event_appended() {
+    pub(crate) fn local_settings_audit_event_appended() {
         let store = SqliteStore::open_in_memory().unwrap();
         let t1 = at(1);
         let t2 = at(2);
@@ -296,7 +296,7 @@ mod tests {
     }
 
     #[test]
-    fn task_workspace_root_pin_once() {
+    pub(crate) fn task_workspace_root_pin_once() {
         let store = SqliteStore::open_in_memory().unwrap();
         let task = TaskId::new();
         assert_eq!(store.task_workspace_root_get(&task).unwrap(), None);

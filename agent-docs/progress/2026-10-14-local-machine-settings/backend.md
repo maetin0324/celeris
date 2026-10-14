@@ -43,3 +43,8 @@ updated: 2026-10-14
 
 ### 提案
 - なし。
+
+### store 葉 attempt 2（check の --exact 対応）
+- 原因: 計画の check は `cargo test -p task-core --lib -- --exact <名前>` で、--exact は module path 込みの完全名と比べる。試験が `store::local_machine::tests::…` / `local_machine::tests::…` にしか無く 0 件一致で落ちた。
+- 対処: 4 試験を crate 直下（`crates/task-core/src/lib.rs`）にも同名で置き、本体は各 module の tests を呼ぶ。
+- 証拠: 4 件それぞれ `out=$(cargo test -p task-core --lib -- --exact <名前> 2>&1); printf '%s\n' "$out" | grep -q 'test result: ok. 1 passed'` → exit 0。`cargo clippy -p task-core --all-targets -- -D warnings` exit 0、`cargo fmt -p task-core -- --check` exit 0。

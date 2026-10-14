@@ -341,3 +341,29 @@ pub use retry_policy::{
     EscalationThresholds, RetryDecision, attempt_history_with_interval, is_budget_outcome,
 };
 pub use routing_audit::{ReviewResult, RoutingAudit, routing_audit};
+
+// ローカル設定の試験は `cargo test -p task-core --lib -- --exact <名前>` で名指しできるよう、
+// crate 直下にも同名で置く（本体は各 module の tests）。
+#[cfg(test)]
+#[test]
+fn local_settings_store_roundtrip() {
+    store::local_machine::tests::local_settings_store_roundtrip();
+}
+
+#[cfg(test)]
+#[test]
+fn local_settings_audit_event_appended() {
+    store::local_machine::tests::local_settings_audit_event_appended();
+}
+
+#[cfg(test)]
+#[test]
+fn task_workspace_root_pin_once() {
+    store::local_machine::tests::task_workspace_root_pin_once();
+}
+
+#[cfg(test)]
+#[test]
+fn workspace_root_priority_cli_store_config() {
+    local_machine::tests::workspace_root_priority_cli_store_config();
+}

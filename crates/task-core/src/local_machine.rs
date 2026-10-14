@@ -170,7 +170,7 @@ pub fn resolve_max_concurrency(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::store::{LocalSettingsOverrides, SqliteStore};
 
@@ -192,7 +192,7 @@ mod tests {
     }
 
     #[test]
-    fn workspace_root_priority_cli_store_config() {
+    pub(crate) fn workspace_root_priority_cli_store_config() {
         let store = SqliteStore::open_in_memory().unwrap();
         let config = WorkspaceRoots::new(PathBuf::from("/cfg/ws"), None);
         let cli = WorkspaceRoots::new(PathBuf::from("/cfg/ws"), Some(PathBuf::from("/cli/ws")));

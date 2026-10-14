@@ -1,8 +1,9 @@
 ---
 title: "verify の daemon が本番の評価試行を消す／live 昇格で走行中の評価試行が error になる"
 tasks: [01M4WSXTXWQEJVJFT1JF1VQ19K]
-status: running
+status: done
 updated: 2026-10-14
+completed: 2026-10-14
 ---
 # verify の隔離と live 昇格での評価試行
 
@@ -15,8 +16,8 @@ updated: 2026-10-14
 |---|---|---|
 | adr-audit | ADR と、verify の daemon が本番資源に触れる経路の表（この文書） | 済 |
 | verify-iso | ADR D1・D2（評価試行は instance id を持つ dispatcher だけ、試行ファイルの削除は root 配下だけ）と試験 | 済（2026-10-14、`a6a645d7` root-guard・`2a00af24` verify-gate、全体検査は下の証拠） |
-| handoff-eval | ADR D3（`eval_trials.instance_id` migration 0078、`in_flight` に評価 run、持ち主の生死を見る回復、`runs` 行の照合、drain 打ち切りで `abort_eval_runs`）と試験 | 未 |
-| closeout | 全体検査・この文書の完了・本番への移行 | 未 |
+| handoff-eval | ADR D3（`eval_trials.instance_id` migration 0078、`in_flight` に評価 run、持ち主の生死を見る回復、`runs` 行の照合、drain 打ち切りで `abort_eval_runs`）と試験 | 済（子 task 01M4WYKAQT、`383f6f41` owner-record・`95ef97d3` drain-run、記録は [2026-10-14-eval-handoff](2026-10-14-eval-handoff.md)） |
+| closeout | 全体検査・この文書の完了・本番への移行・architecture-map | 済（2026-10-14、下の「証拠（closeout）」） |
 
 ## verify の daemon が本番の資源に触れる経路（2026-10-14 時点の main `de94e591`）
 
@@ -59,7 +60,9 @@ credentiald・KB の path は本番の値を読む。verify の dispatcher は `
 ## 未解決事項
 
 - #10 の `control_hook` が本番の CoS process を止めうるか（process の特定が thread id か pid か）は確かめていない。後続 task で確かめる。
-- handoff-eval（ADR D3）は未着手。live 昇格で走行中の評価試行が error になる経路（表の #4）は残っている。
+- 表の #5〜#11（本番の MCP の port 18200 への `SO_REUSEPORT` 相乗り、scratch GC・seed・build cache・cron の target_sweep、
+  CoS の会話 launch、cluster job の poll）は閉じていない。後続 task（followups「verify の daemon が本番の資源に触れる残りの経路を閉じる」）で扱う。
+- 08:52Z・08:53Z に error になった評価試行 6 件の再実行（batch の再投入）は評価の運用セッションで行う。この task では投入しない。
 - `celeris::routing_eval_run daemon_runs_two_stub_trials_with_hidden_checks_and_eval_records` が全体検査の 1 回目で
   1 度落ちた（`routing_eval_run.rs:200` の `!owner.join("target").exists()`）。単独の再実行と全体検査の 2 回目は通った。
   原因は時間依存: `score_eval_trial` は `eval_trial_finish`（`passed`）を書いてから `remove_eval_trial_files`
@@ -87,6 +90,16 @@ credentiald・KB の path は本番の値を読む。verify の dispatcher は `
 - `cargo test -p task-dispatch eval_cleanup_refuses_paths_outside_roots`: 1 passed。
 - `cargo test -p task-dispatch eval_trial`: 15 passed / 0 failed。
 
+## 証拠（closeout、2026-10-14、HEAD `0937e4a6` = verify-iso・handoff-eval の統合後）
+
+- `bash scripts/dev/test-parallel.sh`: exit 0。`CELERIS_TEST_SUMMARY` passed 5103 / failed 0 / ignored 13、
+  nextest_exit 0・doctest_exit 0（binaries 181、userns: null）。前回まで時々落ちた `routing_eval_run` の試験もこの回は通った。
+- `cargo clippy --workspace -- -D warnings`: exit 0。
+- 受け入れ条件の試験（`cargo test -p task-dispatch <name>`、いずれも `test result: ok. 1 passed`）:
+  `verify_daemon_leaves_foreign_eval_trial_files`・`eval_cleanup_refuses_paths_outside_roots`（条件 0）、
+  `live_handoff_keeps_running_eval_trial`・`eval_run_row_not_left_running_after_handoff`（条件 1）。
+- `docs/architecture-map.md` の「評価 run の試行」行に migration 0078 と ADR eval-verify-isolation D1〜D3 を追記（文書のみ、コード不変）。
+
 ## 本番への移行
 
 - verify-iso（D1・D2）は release の昇格だけで効く。config の変更・DB の書き換えは無い。昇格後の verify は評価試行に
@@ -94,3 +107,7 @@ credentiald・KB の path は本番の値を読む。verify の dispatcher は `
 - migration `0078`（`eval_trials.instance_id`）は昇格で当たる。config の変更・手での DB の書き換えは無い。
 - 本番 DB に running のまま残る評価の `runs` 行（08:53Z の 3 行）は、handoff-eval の release が active になった
   最初の照合で `cancelled` になる（ADR D3.5）。
+- まとめ: **release の昇格だけ**。config の変更・手での DB 書き換え・systemd の変更は無い（DB の変更は migration `0078` の自動適用だけ）。
+- 昇格の時に評価試行が走っていても、新 instance は旧 instance の試行を error にしない（旧 instance が drain の間に終端まで走らせ、
+  新 instance が採点する。ADR D3）。昇格前に評価を止める必要は無い。
+- 評価の再投入（08:52Z・08:53Z に error になった試行）は昇格の後に評価の運用セッションで行う（この task の範囲外）。

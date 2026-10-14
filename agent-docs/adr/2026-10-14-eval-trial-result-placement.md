@@ -42,8 +42,18 @@ codex との整合: cwd は `req.cwd()` = repo。fresh `exec`（評価 run は�
 
 `runs.usage` は終端が usage を持てば（Done・Yielded・BudgetExhausted・Waiting）書く。Error・Question は protocol 上 usage を持たないので空のまま。
 
+### D4. 同じ manifest のやり直しは trial_no をずらして新しい行で投入する
+
+`eval_trials` は `UNIQUE(manifest_sha, problem_id, trial_no, source_id, model_id, harness_id)` で、同じ試行を投入し直すと既存行が返る（冪等）。error で終わった試行のある manifest をそのまま投入し直しても、新しい run は始まらない。
+
+`celeris-routing-eval run` に `--trial-offset <n>`（既定 0）を足す。各候補の trial_no を `n+1..=n+k` にして POST する。旧い行・`route_decisions`・`runs` は消さず、そのまま残す。DB の制約・API・dispatcher は変えない。
+
+- n は、やり直す候補のその manifest での既存 trial_no の最大値以上にする（既存の batch を `GET /api/v1/routing-eval/trials?batch_id=<旧 batch>` で読んで決める）。足りないと一部の試行が既存行として返り、新しい run にならない。
+- aggregate は error・cancelled の試行を合否から除き（同じ task の aggregate 変更）、残った試行のうち問題ごとに最小の trial_no を使う。旧い error 行は除外数に出るだけで、やり直した試行が数えられる。
+- 削除で空ける方法、別の manifest_sha を作る方法は採らない（記録を消さない・manifest は凍結のまま）。
+
 ## Consequences
 
-- 2026-10-14 の pilot 10 試行は記録を消さずに残る。やり直しは別 unit（trial_no をずらす正規手順）で行う。
+- 2026-10-14 の pilot 10 試行は記録を消さずに残る。やり直しは D4 の `--trial-offset` で新しい batch として投入する（手順は `agent-docs/progress/2026-10-14-eval-trial-error-fix.md` の「本番への移行」）。
 - 集計から error・cancelled の試行を除くのは aggregate 側の変更（同じ task の別 WorkUnit）。
-- 試験: `crates/task-dispatch/src/dispatcher/tests/eval_trial_dispatch.rs` の `eval_trial_result_at_artifacts_rel`（`eval_run_request` が作った RunRequest をそのまま使い、`artifacts_rel()` の位置へ result.json を書く scripted worker で trial が scoring を経て passed まで進む。run_dir が repo の外）と `eval_trial_error_keeps_reason`（`Terminal::Error` の message が `eval_trials.error` に残り、`runs.status` が failed）。
+- 試験: `crates/task-dispatch/src/dispatcher/tests/eval_trial_dispatch.rs` の `eval_trial_result_at_artifacts_rel`（`eval_run_request` が作った RunRequest をそのまま使い、`artifacts_rel()` の位置へ result.json を書く scripted worker で trial が scoring を経て passed まで進む。run_dir が repo の外）と `eval_trial_error_keeps_reason`（`Terminal::Error` の message が `eval_trials.error` に残り、`runs.status` が failed）。`crates/routing-eval/src/run.rs` の `run_trial_offset_shifts_trial_no`（`run_args` に `--trial-offset 2` を渡すと、k=2 の候補の POST が trial_no 3, 4 になる）。

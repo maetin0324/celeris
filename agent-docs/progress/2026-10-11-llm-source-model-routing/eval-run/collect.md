@@ -50,3 +50,9 @@ eval_trials 全体: passed 52・failed 4・error 13・queued 217。running・sco
 - 新しい error 1 件（10:17Z、codex 群）は `run ended as yielded` で仕組み側。再投入 1 回目の対象に入る。
 - account の 7d 使用率（`GET /api/v1/llm/accounts`）: claude_max_lab 0.09→0.14、claude_max_personal 0.09→0.15、chatgpt_plus_personal 0.02→0.06（投入前 04:07Z → 10:20Z）。承認の上限（claude 15%・codex 13.2%）の範囲内で、見積りより速い増え方ではない。
 - 消化は約 0.8 試行/分、残り 116 件で約 2.5 時間。この run の壁時計では終わらないので yield した。
+
+## codex の投入停止（2026-10-14 10:26Z、run 01M4WZ414W）
+- 人の承認の条件「7d 使用率が見積りより速く増えたら止めて受信箱で報告」に当たった。chatgpt_plus_personal の 7d は投入前 0.02（04:07Z）→ 0.07（10:25Z）。この間にこの account を使った run は評価の gpt-6.1-sol 29 run だけ（`runs` を account と started_at で数えた）。値は 1 点刻みなので増分は 4〜5 点、1 run あたり 0.14〜0.17%。見積りは sol 0.0625%/run・codex 全体 13.2%。残り 93 試行をこの速さで走らせると codex は計 17〜21% になり、承認の 13.2%（予算の 15%）を超える。
+- `POST /api/v1/routing-eval/trials/{id}/cancel` で queued の codex 試行 93 件（gpt-6.1-sol 31・gpt-6-luna 50・gpt-6-astra 12）を cancel した（全部 200）。一覧は `E/codex-cancel.json`。走行中の sol 2 件と claude の試行はそのまま。cancel した試行は新しい batch（trial_no をずらす）で再投入できる。
+- claude の 2 account は 0.09 → 0.14・0.15 で、上限 15% の内。
+- 続きは受信箱の決定 `codex-overrun` を待つ。

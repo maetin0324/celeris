@@ -79,6 +79,10 @@ pub enum AdminRequest {
     NotifyTest {
         reply: oneshot::Sender<Result<NotifyTestOutcome, NotifyAdminError>>,
     },
+    /// ADR 2026-10-14-local-machine-settings D4: `PUT /clusters/local/settings`（と CoS の
+    /// `local.settings_put`）が store の上書きを書いた後の知らせ。dispatcher は store から読み直し、
+    /// `max_concurrency` を次の tick から効かせる（返事は待たない）。
+    LocalSettingsChanged,
 }
 
 /// ADR-0037 D4: `POST /notify/test` の結果。**URL・ホスト名は含まない**。

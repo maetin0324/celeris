@@ -136,6 +136,15 @@ pub(crate) async fn handle_admin_request(
                 let _ = reply.send(notify_test_outcome(result));
             });
         }
+        // ADR 2026-10-14-local-machine-settings D4: store の上書きが変わった知らせ。`max_concurrency` を
+        // dispatcher に読み直させる結線は WU wire（この口は API から届くところまで）。
+        task_api::AdminRequest::LocalSettingsChanged => {
+            tracing::info!(
+                who = "admin",
+                op = "local_settings_changed",
+                "admin: local settings changed"
+            );
+        }
     }
 }
 

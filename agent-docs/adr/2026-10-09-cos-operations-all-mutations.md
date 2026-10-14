@@ -218,6 +218,7 @@ R の操作では領域 write は不要だが operation・event・card は同一
 | DELETE | `/clusters/{id}/connect` | X: `secret_operations` | `handlers.rs` | 共通 |
 | POST | `/clusters/{id}/connect` | X: `secret_operations` | `handlers.rs` | 共通 |
 | POST | `/clusters/{id}/connect/code` | X: `secret_operations` | `handlers.rs` | 共通 |
+| PUT | `/clusters/local/settings` | A | `handlers.rs` | 共通 |
 | PUT | `/clusters/{id}/settings` | A | `handlers.rs` | 共通 |
 | POST | `/cron-jobs` | A | `cron_jobs.rs` | router のみ |
 | DELETE | `/cron-jobs/{id}` | A | `cron_jobs.rs` | router のみ |

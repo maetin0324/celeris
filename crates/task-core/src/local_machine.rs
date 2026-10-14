@@ -169,6 +169,166 @@ pub fn resolve_max_concurrency(
     }
 }
 
+/// ローカルマシンの行の予約 id（`GET /clusters` の `local.id`、`PUT /clusters/local/settings`）。
+pub const LOCAL_CLUSTER_ID: &str = "local";
+
+/// `max_concurrency` の許す範囲（ADR 2026-10-14-local-machine-settings D5 の 4）。API の検証と store が共有する。
+pub const MAX_CONCURRENCY_RANGE: std::ops::RangeInclusive<u32> = 1..=256;
+
+/// ADR-0095 付記 D-a の 3 / ADR-0126: `$HOME` 下の host の設定。db_guard が worker の namespace で読み取り専用に
+/// し、`workspace_root` の検証（D5 の 3）が重なりを拒否する。両者はこの 1 つの定義を使う。
+pub const HOST_PROTECTED_HOME_DIRS: [&str; 3] = [
+    ".config/systemd",
+    ".local/celeris/releases",
+    ".config/celeris",
+];
+
+/// ADR-0136: host の release の置き場（`$HOME` の外の固定 path）。
+pub const HOST_PROTECTED_ABS_DIRS: [&str; 1] = ["/local/celeris/state/releases"];
+
+/// D5 の 3: `workspace_root` が指してはいけない場所。`overlap` は「同じ・その中・それを含む」を、`exact`
+/// （`/` と `$HOME`）は「同じ」だけを拒否する。照合は canonicalize（末尾が未作成なら最も近い祖先）後の path。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ProtectedPaths {
+    overlap: Vec<PathBuf>,
+    exact: Vec<PathBuf>,
+}
+
+impl ProtectedPaths {
+    /// daemon の保護 path 一式: DB の file とその dir、`[selfdeploy] releases_dir`、`HOST_PROTECTED_HOME_DIRS`、
+    /// `HOST_PROTECTED_ABS_DIRS`、設定ファイルのある dir。`/` と `$HOME` は同じ path だけ拒否する。
+    pub fn for_daemon(
+        home: Option<&Path>,
+        db: &Path,
+        config_path: Option<&Path>,
+        releases_dir: Option<&Path>,
+    ) -> Self {
+        let mut overlap = vec![db.to_path_buf()];
+        overlap.extend(db.parent().map(Path::to_path_buf));
+        overlap.extend(releases_dir.map(Path::to_path_buf));
+        if let Some(home) = home {
+            overlap.extend(HOST_PROTECTED_HOME_DIRS.iter().map(|rel| home.join(rel)));
+        }
+        overlap.extend(HOST_PROTECTED_ABS_DIRS.iter().map(PathBuf::from));
+        overlap.extend(config_path.and_then(Path::parent).map(Path::to_path_buf));
+        let mut exact = vec![PathBuf::from("/")];
+        exact.extend(home.map(Path::to_path_buf));
+        Self {
+            overlap: overlap.iter().map(|p| resolve_lenient(p)).collect(),
+            exact: exact.iter().map(|p| resolve_lenient(p)).collect(),
+        }
+    }
+
+    /// 「同じ・中・含む」で拒否する path（canonicalize 済み）。
+    pub fn overlap(&self) -> &[PathBuf] {
+        &self.overlap
+    }
+
+    /// `path`（canonicalize 済み）が保護 path に当たれば、その保護 path を返す。
+    fn hit(&self, path: &Path) -> Option<&Path> {
+        self.exact
+            .iter()
+            .find(|p| p.as_path() == path)
+            .or_else(|| {
+                self.overlap
+                    .iter()
+                    .find(|p| path.starts_with(p) || p.starts_with(path))
+            })
+            .map(PathBuf::as_path)
+    }
+}
+
+/// 存在する最も近い祖先を canonicalize し、残りの名前を足す（symlink 経由のすり抜けを防ぐ）。
+/// 読めなければ字面のまま返す（検証側は字面でも重なりを見る）。
+fn resolve_lenient(path: &Path) -> PathBuf {
+    if let Ok(canonical) = std::fs::canonicalize(path) {
+        return canonical;
+    }
+    match (path.parent(), path.file_name()) {
+        (Some(parent), Some(name)) if !parent.as_os_str().is_empty() => {
+            resolve_lenient(parent).join(name)
+        }
+        _ => path.to_path_buf(),
+    }
+}
+
+/// D5 の 1〜3: PUT された `workspace_root` を検証し、保存する正規化済みの絶対 path を返す。
+/// 1. `~` / `~/…` を `home` で展開し、絶対 path で `..` を含まないこと。
+/// 2. 保護 path（`protected`）と重ならないこと（作る前と、作った後の canonicalize の両方で見る）。
+/// 3. `create_dir_all` でき、一時 file を作って消せること。
+///
+/// 失敗は人が読む 1 行（API が 422 `validation`・`field: "workspace_root"` に写す）。
+pub fn validate_workspace_root(
+    input: &str,
+    home: Option<&Path>,
+    protected: &ProtectedPaths,
+) -> Result<PathBuf, String> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Err("workspace_root must not be empty".into());
+    }
+    let expanded = if trimmed == "~" || trimmed.starts_with("~/") {
+        let home = home.ok_or("workspace_root uses ~ but the daemon has no $HOME")?;
+        home.join(trimmed.trim_start_matches('~').trim_start_matches('/'))
+    } else {
+        PathBuf::from(trimmed)
+    };
+    if !expanded.is_absolute() {
+        return Err("workspace_root must be an absolute path or ~ / ~/…".into());
+    }
+    let mut normalized = PathBuf::new();
+    for component in expanded.components() {
+        match component {
+            std::path::Component::ParentDir => {
+                return Err("workspace_root must not contain `..`".into());
+            }
+            std::path::Component::CurDir => {}
+            other => normalized.push(other),
+        }
+    }
+    let reject = |hit: &Path| {
+        format!(
+            "workspace_root must not be, contain or be inside a protected path ({})",
+            hit.display()
+        )
+    };
+    if let Some(hit) = protected.hit(&resolve_lenient(&normalized)) {
+        return Err(reject(hit));
+    }
+    std::fs::create_dir_all(&normalized).map_err(|e| {
+        format!(
+            "workspace_root {} cannot be created: {e}",
+            normalized.display()
+        )
+    })?;
+    let canonical = std::fs::canonicalize(&normalized).map_err(|e| {
+        format!(
+            "workspace_root {} cannot be resolved: {e}",
+            normalized.display()
+        )
+    })?;
+    if let Some(hit) = protected.hit(&canonical) {
+        return Err(reject(hit));
+    }
+    let nanos = OffsetDateTime::now_utc().unix_timestamp_nanos();
+    let probe = canonical.join(format!(
+        ".celeris-write-probe-{}-{nanos}",
+        std::process::id()
+    ));
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&probe)
+        .and_then(|_| std::fs::remove_file(&probe))
+        .map_err(|e| {
+            format!(
+                "workspace_root {} is not writable: {e}",
+                normalized.display()
+            )
+        })?;
+    Ok(normalized)
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;

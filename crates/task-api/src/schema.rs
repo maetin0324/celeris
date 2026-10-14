@@ -35,10 +35,11 @@ use crate::types::{
     AccountCheckResponse, AccountList, AccountLoginResult, AccountLoginStart, AccountView,
     AnswerBody, ArtifactList, CancelBody, ClusterConnectResult, ClusterConnectStart,
     ClusterSettingsPutBody, ClusterSettingsView, Clusters, CommentBody, CommentList, ConfigView,
-    DaemonView, DecisionBody, EventsPage, Health, MilestoneCreateBody, MilestonePatchBody,
-    OrgCreateBody, OrgList, OrgPatchBody, Problem, ProjectCreateBody, ProjectDetail, ProjectList,
-    ProjectPatchBody, ReleasePromoteAccepted, Releases, ReloadResult, ReopenBody, RetryBody,
-    RunList, SecretList, SecretPutResult, StreamHeartbeat, StreamHello, StreamReset, Timeline,
+    DaemonView, DecisionBody, EventsPage, Health, LocalSettingsPutBody, MilestoneCreateBody,
+    MilestonePatchBody, OrgCreateBody, OrgList, OrgPatchBody, Problem, ProjectCreateBody,
+    ProjectDetail, ProjectList, ProjectPatchBody, ReleasePromoteAccepted, Releases, ReloadResult,
+    ReopenBody, RetryBody, RunList, SecretList, SecretPutResult, StreamHeartbeat, StreamHello,
+    StreamReset, Timeline,
 };
 
 /// コミット済みのスキーマ（`GET /schema` の本体）。
@@ -94,6 +95,8 @@ pub struct ApiV1Schema {
     /// ADR-0059 D6: `PUT /clusters/{id}/settings` の要求本文と応答。
     pub cluster_settings_put: ClusterSettingsPutBody,
     pub cluster_settings: ClusterSettingsView,
+    /// ADR 2026-10-14-local-machine-settings D4: `PUT /clusters/local/settings` の要求本文（応答は `LocalMachineView`）。
+    pub local_settings_put: LocalSettingsPutBody,
     /// Phase 20（ADR-0030）: GUI から預かる秘密（API キー等）。`GET /secrets` と `PUT /secrets/{id}` の応答。
     pub secrets: SecretList,
     pub secret_put: SecretPutResult,

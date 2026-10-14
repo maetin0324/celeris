@@ -5006,9 +5006,14 @@
             "$ref": "#/$defs/ClusterView"
           },
           "type": "array"
+        },
+        "local": {
+          "$ref": "#/$defs/LocalMachineView",
+          "description": "ADR 2026-10-14-local-machine-settings D4: celeris 自身が動くローカルマシンの行（常に 1 つ）。"
         }
       },
       "required": [
+        "local",
         "items"
       ],
       "type": "object"
@@ -16522,6 +16527,152 @@
       ],
       "type": "object"
     },
+    "LocalMachineView": {
+      "description": "ADR 2026-10-14-local-machine-settings D4: `GET /clusters` の `local` と `PUT /clusters/local/settings`\nの応答。リモートの `ClusterView` とは欄が違うので型を分ける。",
+      "properties": {
+        "hostname": {
+          "description": "daemon の host 名（`gethostname`。取れなければ `null`）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "description": "予約 id（常に `\"local\"`）。",
+          "type": "string"
+        },
+        "in_use": {
+          "description": "ローカルで走行中の run の数（daemon のスナップショット。まだ無ければ `null`）。",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "max_concurrency": {
+          "$ref": "#/$defs/LocalSetting2",
+          "description": "ローカルの同時実行数。`apply` は `\"next_tick\"`。"
+        },
+        "scratch_root": {
+          "description": "`[scratch]` の root（表示のみ。無効なら `null`）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "updated_at": {
+          "description": "store の上書きの最終更新（上書きが無ければ `null`）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "workspace_root": {
+          "$ref": "#/$defs/LocalSetting",
+          "description": "新しい task の足回りを作る root。`apply` は `\"new_tasks\"`（既存 task と走行中 run は動かない）。"
+        }
+      },
+      "required": [
+        "id",
+        "workspace_root",
+        "max_concurrency"
+      ],
+      "type": "object"
+    },
+    "LocalSetting": {
+      "description": "ローカル設定の 1 欄: 実効値・出所・設定ファイルの値・反映の時期。",
+      "properties": {
+        "apply": {
+          "$ref": "#/$defs/LocalSettingApply"
+        },
+        "config_value": {
+          "description": "上書きを消したときに戻る設定ファイルの値。",
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/SettingSource",
+          "description": "`cli`（`--workspace-root`）/ `settings`（store の上書き）/ `config`（設定ファイル）。"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "value",
+        "source",
+        "config_value",
+        "apply"
+      ],
+      "type": "object"
+    },
+    "LocalSetting2": {
+      "description": "ローカル設定の 1 欄: 実効値・出所・設定ファイルの値・反映の時期。",
+      "properties": {
+        "apply": {
+          "$ref": "#/$defs/LocalSettingApply"
+        },
+        "config_value": {
+          "description": "上書きを消したときに戻る設定ファイルの値。",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "source": {
+          "$ref": "#/$defs/SettingSource",
+          "description": "`cli`（`--workspace-root`）/ `settings`（store の上書き）/ `config`（設定ファイル）。"
+        },
+        "value": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "value",
+        "source",
+        "config_value",
+        "apply"
+      ],
+      "type": "object"
+    },
+    "LocalSettingApply": {
+      "description": "変更が効く時期（ADR 2026-10-14-local-machine-settings D4）。",
+      "oneOf": [
+        {
+          "const": "new_tasks",
+          "description": "この後に足回りを初めて用意する task から（daemon の再起動は要らない）。",
+          "type": "string"
+        },
+        {
+          "const": "next_tick",
+          "description": "dispatcher の次の tick から。",
+          "type": "string"
+        }
+      ]
+    },
+    "LocalSettingsPutBody": {
+      "additionalProperties": false,
+      "description": "`PUT /clusters/local/settings` の要求本文（全置換）。`null` または省略の欄は上書きを消す（設定ファイルの\n値に戻る）。`workspace_root` は絶対 path か `~`/`~/…`、`max_concurrency` は 1..=256（範囲外は 422 `validation`）。",
+      "properties": {
+        "max_concurrency": {
+          "default": null,
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "workspace_root": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "McpCall": {
       "description": "`mcp_calls` の 1 行（ADR-0056 D4: 引数と結果の本文は持たない）。",
       "properties": {
@@ -25685,6 +25836,15 @@
       ],
       "type": "object"
     },
+    "SettingSource": {
+      "description": "実効値がどこから来たか（応答の `source`。`work_dir_source` の語彙に `cli` を足したもの）。",
+      "enum": [
+        "cli",
+        "settings",
+        "config"
+      ],
+      "type": "string"
+    },
     "ShadowKind": {
       "enum": [
         "decision",
@@ -30933,6 +31093,10 @@
       "$ref": "#/$defs/LlmSourcesView",
       "description": "Phase 65（ADR-0053 D4）: `GET /llm/sources`（API と型のみ。GUI 表示は Phase 66）。"
     },
+    "local_settings_put": {
+      "$ref": "#/$defs/LocalSettingsPutBody",
+      "description": "ADR 2026-10-14-local-machine-settings D4: `PUT /clusters/local/settings` の要求本文（応答は `LocalMachineView`）。"
+    },
     "mcp_calls": {
       "$ref": "#/$defs/McpCallsView"
     },
@@ -31321,6 +31485,7 @@
     "cluster_connect_result",
     "cluster_settings_put",
     "cluster_settings",
+    "local_settings_put",
     "secrets",
     "secret_put",
     "account_list",

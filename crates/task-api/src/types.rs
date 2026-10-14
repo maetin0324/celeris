@@ -458,7 +458,61 @@ pub struct ClusterForwardView {
 /// `GET /clusters`（ADR-0018 受け入れ条件8）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Clusters {
+    /// ADR 2026-10-14-local-machine-settings D4: celeris 自身が動くローカルマシンの行（常に 1 つ）。
+    pub local: LocalMachineView,
     pub items: Vec<ClusterView>,
+}
+
+/// ADR 2026-10-14-local-machine-settings D4: `GET /clusters` の `local` と `PUT /clusters/local/settings`
+/// の応答。リモートの `ClusterView` とは欄が違うので型を分ける。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct LocalMachineView {
+    /// 予約 id（常に `"local"`）。
+    pub id: String,
+    /// daemon の host 名（`gethostname`。取れなければ `null`）。
+    pub hostname: Option<String>,
+    /// ローカルで走行中の run の数（daemon のスナップショット。まだ無ければ `null`）。
+    pub in_use: Option<usize>,
+    /// 新しい task の足回りを作る root。`apply` は `"new_tasks"`（既存 task と走行中 run は動かない）。
+    pub workspace_root: LocalSetting<String>,
+    /// ローカルの同時実行数。`apply` は `"next_tick"`。
+    pub max_concurrency: LocalSetting<usize>,
+    /// `[scratch]` の root（表示のみ。無効なら `null`）。
+    pub scratch_root: Option<String>,
+    /// store の上書きの最終更新（上書きが無ければ `null`）。
+    pub updated_at: Option<String>,
+}
+
+/// ローカル設定の 1 欄: 実効値・出所・設定ファイルの値・反映の時期。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct LocalSetting<T> {
+    pub value: T,
+    /// `cli`（`--workspace-root`）/ `settings`（store の上書き）/ `config`（設定ファイル）。
+    pub source: task_core::local_machine::SettingSource,
+    /// 上書きを消したときに戻る設定ファイルの値。
+    pub config_value: T,
+    pub apply: LocalSettingApply,
+}
+
+/// 変更が効く時期（ADR 2026-10-14-local-machine-settings D4）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum LocalSettingApply {
+    /// この後に足回りを初めて用意する task から（daemon の再起動は要らない）。
+    NewTasks,
+    /// dispatcher の次の tick から。
+    NextTick,
+}
+
+/// `PUT /clusters/local/settings` の要求本文（全置換）。`null` または省略の欄は上書きを消す（設定ファイルの
+/// 値に戻る）。`workspace_root` は絶対 path か `~`/`~/…`、`max_concurrency` は 1..=256（範囲外は 422 `validation`）。
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct LocalSettingsPutBody {
+    #[serde(default)]
+    pub workspace_root: Option<String>,
+    #[serde(default)]
+    pub max_concurrency: Option<i64>,
 }
 
 /// `PUT /clusters/{id}/settings`（ADR-0059 D6）の要求本文。絶対パスか `~`/`~/…` だけ許す

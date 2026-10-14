@@ -26,11 +26,8 @@ use nix::libc;
 const SSH_CONFIG_D: &str = "/etc/ssh/ssh_config.d";
 
 /// 付記 D-a の 3: namespace の中で読み取り専用にする `$HOME` 下の host の設定（存在するものだけ）。
-const HOST_CONFIG_DIRS: [&str; 3] = [
-    ".config/systemd",
-    ".local/celeris/releases",
-    ".config/celeris",
-];
+/// 定義は ADR 2026-10-14-local-machine-settings D5 の path 検証と共有する。
+use task_core::local_machine::HOST_PROTECTED_HOME_DIRS;
 
 #[derive(Debug, thiserror::Error)]
 pub enum DbGuardError {
@@ -118,7 +115,7 @@ impl DbGuard {
     pub fn host_config_read_only_paths(&self) -> io::Result<Vec<PathBuf>> {
         let mut out = Vec::new();
         if let Some(home) = &self.home {
-            for rel in HOST_CONFIG_DIRS {
+            for rel in HOST_PROTECTED_HOME_DIRS {
                 let path = home.join(rel);
                 if path.try_exists()? {
                     out.push(std::fs::canonicalize(&path)?);

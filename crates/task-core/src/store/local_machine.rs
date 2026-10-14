@@ -15,7 +15,7 @@ use super::{
 };
 
 /// `max_concurrency` の許す範囲（D5 の 4）。API が先に 422 で弾くが、store も範囲外を書かない。
-pub(crate) const MAX_CONCURRENCY_RANGE: std::ops::RangeInclusive<u32> = 1..=256;
+use crate::local_machine::MAX_CONCURRENCY_RANGE;
 
 impl SqliteStore {
     pub(super) fn local_settings_get_impl(&self) -> Result<Option<LocalSettings>, StoreError> {

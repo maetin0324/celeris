@@ -129,6 +129,8 @@ pub(crate) struct Inner {
     pub(crate) account_stats: Mutex<crate::stats::AccountStatsState>,
     /// ADR-0079 D3 / D11（Phase R4a）: `[execution.tree]`（木の view の上限の使用率）。
     pub(crate) tree_limits: task_core::TreeLimits,
+    /// ADR 2026-10-14-local-machine-settings: ローカルマシンの行の表示値と path 検証の保護 path。
+    pub(crate) local_machine: crate::LocalMachineSettings,
     pub(crate) instance_id: String,
     pub(crate) started_at: String,
     pub(crate) daemon: watch::Receiver<Option<DaemonSnapshot>>,
@@ -205,6 +207,7 @@ impl ApiState {
             harnesses: settings.harnesses,
             model_discovery: settings.model_discovery,
             tree_limits: settings.tree_limits,
+            local_machine: settings.local_machine,
             account_stats: Mutex::new(crate::stats::AccountStatsState::default()),
             instance_id: settings.instance_id,
             started_at: settings.started_at,

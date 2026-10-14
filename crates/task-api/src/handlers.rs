@@ -36,8 +36,8 @@ use accounts::{
     patch_account_limit, start_account_login, submit_account_login_code,
 };
 use clusters::{
-    cancel_cluster_connect, clusters, put_cluster_settings, start_cluster_connect,
-    submit_cluster_connect_code,
+    cancel_cluster_connect, clusters, put_cluster_settings, put_local_settings,
+    start_cluster_connect, submit_cluster_connect_code,
 };
 use org::{create_org_node, delete_org_node, org_list, patch_browser_settings, patch_org_node};
 use projects::{
@@ -124,6 +124,8 @@ pub(crate) fn router(state: ApiState) -> Router {
             post(submit_account_login_code),
         )
         .route("/api/v1/clusters", get(clusters))
+        // ADR 2026-10-14-local-machine-settings D4: 静的な route が `{id}` より優先される。
+        .route("/api/v1/clusters/local/settings", put(put_local_settings))
         .route("/api/v1/clusters/{id}/settings", put(put_cluster_settings))
         .route(
             "/api/v1/clusters/{id}/connect",

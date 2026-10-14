@@ -159,7 +159,10 @@ fn host_config_read_only_inside_namespace() {
     }
     let f = fixture();
     let home = f._tmp.path().join("home");
-    let dirs: Vec<PathBuf> = HOST_CONFIG_DIRS.iter().map(|rel| home.join(rel)).collect();
+    let dirs: Vec<PathBuf> = HOST_PROTECTED_HOME_DIRS
+        .iter()
+        .map(|rel| home.join(rel))
+        .collect();
     for dir in &dirs {
         std::fs::create_dir_all(dir).unwrap();
     }
@@ -223,7 +226,7 @@ fn host_config_read_only_skips_missing_paths() {
 fn worker_db_guard_protected_set_includes_configured_hot_paths_and_legacy_home() {
     let f = fixture();
     let home = f._tmp.path().join("home");
-    for rel in HOST_CONFIG_DIRS {
+    for rel in HOST_PROTECTED_HOME_DIRS {
         std::fs::create_dir_all(home.join(rel)).unwrap();
     }
     let hot = f._tmp.path().join("local");
@@ -237,12 +240,12 @@ fn worker_db_guard_protected_set_includes_configured_hot_paths_and_legacy_home()
         .with_releases_dir(alias);
 
     let protected = guard.host_config_read_only_paths().unwrap();
-    for rel in HOST_CONFIG_DIRS {
+    for rel in HOST_PROTECTED_HOME_DIRS {
         assert!(protected.contains(&std::fs::canonicalize(home.join(rel)).unwrap()));
     }
     assert!(protected.contains(&std::fs::canonicalize(hot).unwrap()));
     assert!(protected.contains(&std::fs::canonicalize(releases).unwrap()));
-    assert_eq!(protected.len(), HOST_CONFIG_DIRS.len() + 2);
+    assert_eq!(protected.len(), HOST_PROTECTED_HOME_DIRS.len() + 2);
 }
 
 #[test]

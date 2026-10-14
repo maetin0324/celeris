@@ -273,6 +273,21 @@ pub struct ApiSettings {
     /// ADR-0079 D3 / D11（Phase R4a）: `[execution.tree]` の上限（`GET /tasks/{id}/task-tree` の
     /// `tree_enabled` と上限の使用率に使う。挙動は変えない）。
     pub tree_limits: task_core::TreeLimits,
+    /// ADR 2026-10-14-local-machine-settings D4/D5: ローカルマシンの行と `PUT /clusters/local/settings` の検証に
+    /// 使う host の値（celeris が設定から渡す）。
+    pub local_machine: LocalMachineSettings,
+}
+
+/// ADR 2026-10-14-local-machine-settings: `GET /clusters` の `local` の表示値と、`workspace_root` の検証
+/// （D5）に使う保護 path。
+#[derive(Debug, Clone, Default)]
+pub struct LocalMachineSettings {
+    /// `[scratch]` の root（無効なら `None`。表示のみ）。
+    pub scratch_root: Option<PathBuf>,
+    /// `~` の展開に使う daemon の `$HOME`。
+    pub home: Option<PathBuf>,
+    /// D5 の 3: 重なりを拒否する保護 path（db_guard と同じ定義。`ProtectedPaths::for_daemon`）。
+    pub protected: task_core::local_machine::ProtectedPaths,
 }
 
 /// ADR-0043 D5（Phase 54）: `[github]` の写し。celeris が設定から渡す（task-api は TOML を読まない）。

@@ -40,6 +40,12 @@ pub(crate) const ALLOWED: &[(&str, &str, &str)] = &[
     ("POST", "/api/v1/projects/{id}/repos", "repo.create"),
     ("PATCH", "/api/v1/repos/{id}", "repo.update"),
     ("DELETE", "/api/v1/repos/{id}", "repo.delete"),
+    // ADR 2026-10-14-local-machine-settings D4: 先に一致させる（`{id}` の行より前）。
+    (
+        "PUT",
+        "/api/v1/clusters/local/settings",
+        "local.settings_put",
+    ),
     (
         "PUT",
         "/api/v1/clusters/{id}/settings",
@@ -319,6 +325,15 @@ pub(crate) fn dispatch(
                 .and_then(|()| crate::repos::repo_id_of(&id))
                 .map_err(|p| audit.reject(store, "repo", &id, p))?;
             audited(crate::repos::delete_repo_op(store, repo_id, Some(audit))?)
+        }
+        "local.settings_put" => {
+            let input = serde_json::from_value(body).map_err(decode)?;
+            audited(crate::handlers::clusters::put_local_settings_op(
+                &env.api,
+                store,
+                input,
+                Some(audit),
+            )?)
         }
         "cluster.settings_put" => {
             let id = matched.id.unwrap_or_default();

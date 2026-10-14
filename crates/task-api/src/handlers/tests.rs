@@ -94,6 +94,7 @@ fn state_rx(
         harnesses: None,
         model_discovery: None,
         tree_limits: task_core::TreeLimits::default(),
+        local_machine: crate::LocalMachineSettings::default(),
     };
     ApiState::new(settings, rx).unwrap_or_else(|e| panic!("{e}"))
 }

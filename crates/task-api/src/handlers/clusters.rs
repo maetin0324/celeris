@@ -14,7 +14,7 @@ use crate::state::ApiState;
 use crate::types::{
     ClusterConnectCodeBody, ClusterConnectResult, ClusterConnectStart, ClusterForwardView,
     ClusterSettingsPutBody, ClusterSettingsView, ClusterStatsView, ClusterView, Clusters,
-    ValidationError,
+    LocalMachineView, LocalSetting, LocalSettingApply, LocalSettingsPutBody, ValidationError,
 };
 
 use super::{ApiResult, Params, json_response, no_query, read_json, rfc3339};
@@ -119,7 +119,202 @@ pub(super) async fn clusters(State(state): State<ApiState>, RawQuery(raw): RawQu
             }
         })
         .collect();
-    Ok(json_response(StatusCode::OK, &Clusters { items }))
+    let local = state
+        .blocking({
+            let state = state.clone();
+            move |store| local_machine_view(&state, store)
+        })
+        .await?;
+    Ok(json_response(StatusCode::OK, &Clusters { local, items }))
+}
+
+// ---- ADR 2026-10-14-local-machine-settings D4: ローカルマシンの行と設定 ----
+
+/// `GET /clusters` の `local`（と `PUT /clusters/local/settings` の応答）を store の今の上書きで組む。
+pub(crate) fn local_machine_view(
+    state: &ApiState,
+    store: &task_core::store::SqliteStore,
+) -> Result<LocalMachineView, ApiProblem> {
+    use task_core::local_machine::resolve_max_concurrency;
+    let settings = store.local_settings_get().map_err(store_problem)?;
+    let roots = &state.inner.view.workspace_roots;
+    let root = roots.effective_root(settings.as_ref());
+    let config_max = state.inner.config_view.max_concurrency;
+    let max = resolve_max_concurrency(config_max, settings.as_ref());
+    let snapshot = state.snapshot();
+    let hostname = snapshot
+        .as_ref()
+        .map(|s| s.hostname.clone())
+        .filter(|h| !h.is_empty())
+        .or_else(|| {
+            std::fs::read_to_string("/proc/sys/kernel/hostname")
+                .ok()
+                .map(|h| h.trim().to_string())
+                .filter(|h| !h.is_empty())
+        });
+    Ok(LocalMachineView {
+        id: task_core::local_machine::LOCAL_CLUSTER_ID.to_string(),
+        hostname,
+        in_use: snapshot.as_ref().map(|s| s.in_flight.len()),
+        workspace_root: LocalSetting {
+            value: root.value.display().to_string(),
+            source: root.source,
+            config_value: roots.config_root().display().to_string(),
+            apply: LocalSettingApply::NewTasks,
+        },
+        max_concurrency: LocalSetting {
+            value: max.value,
+            source: max.source,
+            config_value: config_max,
+            apply: LocalSettingApply::NextTick,
+        },
+        scratch_root: state
+            .inner
+            .local_machine
+            .scratch_root
+            .as_ref()
+            .map(|p| p.display().to_string()),
+        updated_at: settings.map(|s| rfc3339(s.updated_at)),
+    })
+}
+
+/// `PUT /clusters/local/settings`（ADR 2026-10-14-local-machine-settings D4/D5）: ローカルの `workspace_root`
+/// と `max_concurrency` の store の上書きを全置換する（管理系。`token_file` 未設定でも 401）。`null`・省略の欄は
+/// 上書きを消す。検証の失敗は 422 `validation`（`field` 付き）。書いた後に admin チャネルで dispatcher に知らせる。
+pub(super) async fn put_local_settings(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    RawQuery(raw): RawQuery,
+    body: Body,
+) -> ApiResult {
+    no_query(&raw)?;
+    require_admin(&state, &headers)?;
+    let put: LocalSettingsPutBody = read_json(body, false).await?;
+    let view = state
+        .blocking({
+            let state = state.clone();
+            move |store| put_local_settings_op(&state, store, put, None)?.direct()
+        })
+        .await?;
+    Ok(json_response(StatusCode::OK, &view))
+}
+
+/// D5 の検証。通れば store に書く上書き（`workspace_root` は `~` 展開・正規化済み）を返す。
+fn check_local_settings(
+    state: &ApiState,
+    put: &LocalSettingsPutBody,
+) -> Result<task_core::LocalSettingsOverrides, ApiProblem> {
+    use task_core::local_machine::{MAX_CONCURRENCY_RANGE, validate_workspace_root};
+    let mut errors = Vec::new();
+    let max_concurrency = match put.max_concurrency {
+        None => None,
+        Some(n) => match u32::try_from(n)
+            .ok()
+            .filter(|n| MAX_CONCURRENCY_RANGE.contains(n))
+        {
+            Some(n) => Some(n),
+            None => {
+                errors.push(ValidationError {
+                    field: Some("max_concurrency".into()),
+                    message: format!("max_concurrency must be within 1..=256 (got {n})"),
+                });
+                None
+            }
+        },
+    };
+    let local = &state.inner.local_machine;
+    let workspace_root = match put.workspace_root.as_deref() {
+        None => None,
+        Some(input) => {
+            match validate_workspace_root(input, local.home.as_deref(), &local.protected) {
+                Ok(path) => match path.to_str() {
+                    Some(path) => Some(path.to_string()),
+                    None => {
+                        errors.push(ValidationError {
+                            field: Some("workspace_root".into()),
+                            message: "workspace_root must be valid UTF-8".into(),
+                        });
+                        None
+                    }
+                },
+                Err(message) => {
+                    errors.push(ValidationError {
+                        field: Some("workspace_root".into()),
+                        message,
+                    });
+                    None
+                }
+            }
+        }
+    };
+    if !errors.is_empty() {
+        return Err(ApiProblem::validation(errors));
+    }
+    Ok(task_core::LocalSettingsOverrides {
+        workspace_root,
+        max_concurrency,
+    })
+}
+
+/// `PUT /clusters/local/settings`, shared by the handler and CoS (`local.settings_put`). The direct
+/// route audits as `admin` in `local_settings_events`; CoS writes the same row (actor
+/// `cos:<operation id>`) inside the `cos_operations` transaction.
+pub(crate) fn put_local_settings_op(
+    state: &ApiState,
+    store: &task_core::store::SqliteStore,
+    put: LocalSettingsPutBody,
+    audit: Option<&crate::cos::operations::OperationAudit>,
+) -> Result<crate::cos::operations::Applied<LocalMachineView>, ApiProblem> {
+    use crate::cos::operations::Applied;
+    let checked = check_local_settings(state, &put);
+    let now = OffsetDateTime::now_utc();
+    let Some(audit) = audit else {
+        let overrides = checked?;
+        store
+            .local_settings_set(&overrides, "admin", now)
+            .map_err(store_problem)?;
+        tracing::info!(
+            who = "admin",
+            op = "local_settings_put",
+            has_workspace_root = overrides.workspace_root.is_some(),
+            max_concurrency = ?overrides.max_concurrency,
+            "admin: local settings updated"
+        );
+        notify_local_settings_changed(state);
+        return Ok(Applied::Direct(local_machine_view(state, store)?));
+    };
+    let overrides = checked.map_err(|p| {
+        audit.reject(
+            store,
+            "local",
+            task_core::local_machine::LOCAL_CLUSTER_ID,
+            p,
+        )
+    })?;
+    let actor = format!("cos:{}", audit.ctx.operation_id);
+    let operation = audit.apply_checked(
+        store,
+        "local",
+        task_core::local_machine::LOCAL_CLUSTER_ID,
+        "local.settings_put",
+        |tx| {
+            task_core::store::SqliteStore::local_settings_set_tx(tx, &overrides, &actor, now)
+                .map_err(store_problem)?;
+            serde_json::to_value(&overrides).map_err(|e| ApiProblem::internal(e.to_string()))
+        },
+    )?;
+    notify_local_settings_changed(state);
+    Ok(Applied::Audited(Box::new(operation)))
+}
+
+/// D4 `apply = next_tick`: dispatcher に store の読み直しを知らせる（返事は待たない。admin チャネルが
+/// 無い・満杯なら次の reload／起動で読まれる）。
+fn notify_local_settings_changed(state: &ApiState) {
+    if let Some(tx) = &state.inner.admin_tx
+        && let Err(error) = tx.try_send(crate::admin::AdminRequest::LocalSettingsChanged)
+    {
+        tracing::warn!(%error, "admin: could not notify the dispatcher of local settings");
+    }
 }
 
 /// `PUT /clusters/{id}/settings`（ADR-0059 D6）: クラスタの実効の作業ディレクトリを DB で上書きする

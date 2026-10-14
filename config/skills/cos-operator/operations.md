@@ -104,6 +104,7 @@ curl -sS -X POST "$API/api/v1/cos/operations" -H "Authorization: Bearer $CELERIS
 | 案件へのリポジトリの追加 | `POST /api/v1/projects/<id>/repos` | repo.create | `{"location":{"kind":"local","path":"…"},"name"?,"kind"?,"default_branch"?,"is_primary"?}`。最初の 1 件は primary |
 | リポジトリの更新 | `PATCH /api/v1/repos/<id>` | repo.update | 変える欄だけ（1 つ以上） |
 | リポジトリの削除 | `DELETE /api/v1/repos/<id>` | repo.delete | body なし。未終了の task が使っていれば 409 |
+| ローカルマシンの設定 | `PUT /api/v1/clusters/local/settings` | local.settings_put | `{"workspace_root":"/abs/path","max_concurrency":4}`（全置換。`null`・省略の欄は設定ファイルの値に戻す。`workspace_root` は新しい task から、`max_concurrency` は次の tick から効く） |
 | クラスタの作業ディレクトリ | `PUT /api/v1/clusters/<id>/settings` | cluster.settings_put | `{"work_dir":"/abs/path"}`。`null` で設定ファイルの値に戻す |
 | アカウントの作成 | `POST /api/v1/llm/sources/<source_id>/accounts` | account.create | body `{"id"}`。source が account pool を持つ場合だけ作成可能 |
 | アカウントの退避 | `DELETE /api/v1/llm/sources/<source_id>/accounts/<account_id>` | account.delete | body なし。daemon が移す外部効果。使用中は 409 |

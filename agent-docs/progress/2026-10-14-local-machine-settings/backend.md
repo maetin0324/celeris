@@ -93,3 +93,55 @@ updated: 2026-10-14
 
 ### 提案
 - followups.rs の試験 module を末尾へ移す小さな修正 task（`--all-targets` の clippy を通すため）。
+
+## api（WU api、完了 2026-10-14）
+
+### 変更
+- `crates/task-core/src/local_machine.rs`: 予約 id `LOCAL_CLUSTER_ID = "local"`、`MAX_CONCURRENCY_RANGE`（1..=256。store も共有）、
+  保護 path の定義 `HOST_PROTECTED_HOME_DIRS`（`.config/systemd`・`.local/celeris/releases`・`.config/celeris`）と
+  `HOST_PROTECTED_ABS_DIRS`（`/local/celeris/state/releases`）、`ProtectedPaths::for_daemon(home, db, config_path, releases_dir)`、
+  ADR D5 の検証 `validate_workspace_root`（`~` 展開・絶対 path・`..` 拒否・作る前と後の canonicalize で保護 path と
+  同じ／中／含むを拒否、`/` と `$HOME` は同じだけ拒否・`create_dir_all`・一時 file の作成と削除）。
+- `crates/task-worker/src/db_guard.rs`: 自前の `HOST_CONFIG_DIRS` を消し、`task_core::local_machine::HOST_PROTECTED_HOME_DIRS` を使う
+  （db_guard と path 検証が同じ定義を共有）。
+- `crates/task-api`:
+  - `Clusters.local: LocalMachineView`（`id`・`hostname`・`in_use`・`workspace_root`/`max_concurrency` = `LocalSetting{value, source, config_value, apply}`・
+    `scratch_root`・`updated_at`）。`apply` は `new_tasks` / `next_tick`、`source` は `cli|settings|config`。
+  - `PUT /api/v1/clusters/local/settings`（`require_admin`、`LocalSettingsPutBody` の全置換、`deny_unknown_fields`）。検証失敗は 422 `validation`
+    と `errors[].field`（`workspace_root` / `max_concurrency`、両方なら 2 件）。直の経路は `local_settings_set(actor = "admin")`。
+  - CoS `local.settings_put`: `cluster.settings_put` と同じ `OperationAudit::apply_checked` の中で `local_settings_set_tx`（actor `cos:<operation id>`）、
+    target は `local`/`local`。登録は `{id}` の行より前。
+  - 書いた後に `AdminRequest::LocalSettingsChanged` を admin チャネルへ `try_send`（返事は待たない）。
+  - `ApiSettings.local_machine: LocalMachineSettings { scratch_root, home, protected }`。
+- `crates/celeris`: `api_settings` が `[scratch]`（有効時の `scratch_dir()`）・`$HOME`・`ProtectedPaths::for_daemon`（`[db] path`・設定ファイル・
+  `[selfdeploy] releases_dir`）を渡す。`daemon/admin.rs` は `LocalSettingsChanged` を受けて log するだけ（dispatcher への反映は WU wire）。
+- 文書: `docs/api/v1/api.md`（route 表 223、§3.23 の `local`、§3.126.3 の予約 id、§3.126.23、CoS 表）、
+  `agent-docs/adr/2026-10-09-cos-operations-all-mutations.md` と `config/skills/cos-operator/operations.md` の CoS 操作表
+  （registry と一致させる既存試験 2 件が要求する）。
+- schema: `UPDATE_SCHEMA=1 cargo test -p task-api --lib schema` で `docs/api/v1/api-v1.schema.json`、`node web/scripts/gen-types.mjs` で
+  `web/api/generated/{schema.json,types.ts}`。web の画面は `Clusters` を読むだけ（`local` の描画は web の葉）。
+- 試験 `crates/task-api/tests/local_settings_admin.rs`（名前固定 4 件）。task の受け入れ条件の名前 `--test local_machine_settings` でも
+  走るよう、`tests/local_machine_settings.rs` が `#[path]` で同じ file を module として読む（Cargo の `[[test]]` 2 重定義は manifest 警告が出るので不採用）。
+  - `local_settings_get_shows_local_row`: スナップショット無し（in_use null・config の値・apply）と有り（hostname・in_use）、`items` に混ざらない。
+  - `local_settings_put_validation_errors`: 401、相対・空・`..`・`/`・`~`・`$HOME`・DB dir/file・releases・`~/.config/celeris`・保護 path を含む dir・
+    symlink 経由・file の下・書けない dir（root 以外）、`max_concurrency` 0/257/-1、2 欄同時、未知欄。拒否は store・監査・admin 通知なし。
+  - `local_settings_put_audit_and_apply`: `~/ws` 展開・dir 作成・監査 actor `admin`・通知 1 回、全置換（省略で消える、全 null で行削除）、
+    CoS 経由（直の CoS 呼び出しは 422、封筒で applied、監査 actor `cos:<op id>`、`cos_operations` の target）、CoS の検証失敗 422。
+  - `local_settings_store_beats_config_in_response`: store の欄ごとの上書きが応答で config に勝つ（`source`・`config_value`）。
+
+### 証拠
+- `cargo test -p task-api --test local_settings_admin -- --exact <名前>` → 4 件とも `test result: ok. 1 passed`。
+- `cargo test -p task-api --test local_machine_settings` → `test result: ok. 4 passed`。
+- `cargo test -p task-core local_machine` → `test result: ok. 4 passed`。
+- `git grep -q 'clusters/local' -- docs/api/v1/api.md` → exit 0。`cargo test -p task-api --lib committed_schema`（UPDATE_SCHEMA なし）→ 1 passed。
+- `cargo clippy --workspace -- -D warnings` → exit 0。
+- `bash scripts/dev/test-parallel.sh` → exit 0、`passed: 5121, failed: 0, ignored: 13`（userns: null）。初回は CoS 操作表の試験 2 件
+  （`cos_operator_skill_table_matches_allowed`・`cos_ops_registry_matches_adr_domain_assignment_and_exclusions`）が落ち、表に行を足して直した。
+
+### 未解決事項
+- dispatcher が `LocalSettingsChanged` で store の `max_concurrency` を読み直す結線・`[[clusters]] id = "local"` の読み込みエラーは WU wire。
+- web の型検査（`pnpm -C web typecheck`）は node_modules が無いので走らせていない。生成型で `Clusters.local` が必須になったが、
+  web の TS は `Clusters` を組み立てない（読むだけ）。
+
+### 提案
+- なし。

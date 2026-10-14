@@ -328,6 +328,18 @@ pub fn api_settings(
         }),
         // ADR 2026-10-06 D5: `POST /llm/models/discover` の実行は `wire_model_discovery` が差す（store と config を持つ側）。
         model_discovery: None,
+        // ADR 2026-10-14-local-machine-settings D4/D5: ローカルマシンの行の表示値と path 検証の保護 path
+        // （db_guard と同じ `HOST_PROTECTED_HOME_DIRS` を含む）。
+        local_machine: task_api::LocalMachineSettings {
+            scratch_root: config.scratch.enabled.then(|| config.scratch_dir()),
+            home: task_core::home_dir(),
+            protected: task_core::local_machine::ProtectedPaths::for_daemon(
+                task_core::home_dir().as_deref(),
+                &config.db.path,
+                config.source_path.as_deref(),
+                Some(&config.selfdeploy.releases_dir),
+            ),
+        },
         // ADR-0079 R4a: 木の view の上限の使用率（`GET /tasks/{id}/task-tree`）。
         tree_limits: config.execution.tree.limits(),
     }

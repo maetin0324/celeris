@@ -1064,6 +1064,7 @@ export type ClusterView = {
 
 export type Clusters = {
   "items": Array<ClusterView>;
+  "local": LocalMachineView;
 };
 
 export type CommentAuthorKind = "human" | "node" | "system";
@@ -3355,6 +3356,37 @@ export type LlmSourcesView = {
   "sources": Array<LlmSourceView>;
 };
 
+export type LocalMachineView = {
+  "hostname"?: string | null;
+  "id": string;
+  "in_use"?: number | null;
+  "max_concurrency": LocalSetting2;
+  "scratch_root"?: string | null;
+  "updated_at"?: string | null;
+  "workspace_root": LocalSetting;
+};
+
+export type LocalSetting = {
+  "apply": LocalSettingApply;
+  "config_value": string;
+  "source": SettingSource;
+  "value": string;
+};
+
+export type LocalSetting2 = {
+  "apply": LocalSettingApply;
+  "config_value": number;
+  "source": SettingSource;
+  "value": number;
+};
+
+export type LocalSettingApply = "new_tasks" | "next_tick";
+
+export type LocalSettingsPutBody = {
+  "max_concurrency"?: number | null;
+  "workspace_root"?: string | null;
+};
+
 export type McpCall = {
   "at": string;
   "client_id": string;
@@ -5134,6 +5166,8 @@ export type SecretView = {
   "updated_at"?: string | null;
   "used_by": Array<SecretUse>;
 };
+
+export type SettingSource = "cli" | "settings" | "config";
 
 export type ShadowKind = "decision" | "execution" | "estimator";
 

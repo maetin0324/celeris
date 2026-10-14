@@ -516,6 +516,7 @@ listen = "127.0.0.1:7710"      # これを書いたときだけ API が動く（
 | 220 | POST | `/routing-eval/trials` | 評価 run の試行をまとめて投入する（1 回の POST = 1 batch。同じ試行の再投入は既存行を返す＝冪等。§3.133.1） | 201 `EvalTrialsCreated` | store `insert_eval_trials` |
 | 221 | GET | `/routing-eval/trials` | 評価試行の一覧（`?batch_id=` / `?status=`。`check_cmd` は返さない。§3.133.2） | `EvalTrialList` | store `eval_trials_list` |
 | 222 | POST | `/routing-eval/trials/{trial_id}/cancel` | 評価試行の取り消し（`queued` / `running` だけ。終端は 409。§3.133.3） | `EvalTrialView` | store `eval_trial_cancel` |
+| 223 | PUT | `/clusters/local/settings` | ローカルマシンの `workspace_root`・`max_concurrency` の上書きを全置換する（ADR 2026-10-14-local-machine-settings。§3.126.23）（**管理系**） | `LocalMachineView` | store `local_settings_set` + celeris（`AdminRequest::LocalSettingsChanged`） |
 
 browser の制御（`crate::browser_control`）の 6 本は、route を定数 `BASE`（`/api/v1/tasks/{id}/browser/control/{run}/{session}`）と `format!` で組み立てて登録している（`browser_control.rs` の `routes()`）。詳細は `docs/guides/browser-capability.md`。
 
@@ -1010,6 +1011,17 @@ source 環境変数の**値**、`[adapters.*].env` の値、`[[clusters]].env` �
 `tunnel_forwards` / `tunnel_login_needed` は スナップショットから（無ければ `in_use`・`connected` は `null`、`connect_pending`・`tunnel_login_needed` は `false`）。`env` の値と `setup` の中身は出さない（ADR-0018 D7）。
 `cooldown_until` が過ぎていれば `cooldown_until`・`cooldown_remaining_secs` とも `null`。無認証の読み取り。
 
+`local`（`LocalMachineView`、常に 1 つ。ADR 2026-10-14-local-machine-settings D4）は celeris 自身が動くローカルマシンの行で、
+`items` には混ぜない（リモート専用の欄を持たないため型を分ける）。画面は `local` を先頭の行として描く。
+
+- `id` は予約 id `"local"`。`hostname` はスナップショットの host 名（無ければ `/proc/sys/kernel/hostname`、どちらも無ければ `null`）。
+  `in_use` は走行中の run の数（スナップショットの `in_flight` の数。無ければ `null`）。
+- `workspace_root` / `max_concurrency` は `LocalSetting`: `value`（実効値）、`source`（`"cli"` = `--workspace-root` /
+  `"settings"` = store の上書き / `"config"` = 設定ファイル。優先順位は cli > settings > config、`max_concurrency` に cli は無い）、
+  `config_value`（上書きを消したときに戻る設定ファイルの値）、`apply`（`workspace_root` は `"new_tasks"` = この後に足回りを
+  初めて用意する task から効き、既存 task と走行中 run の作業場所は動かない。`max_concurrency` は `"next_tick"` = dispatcher の次の tick から）。
+- `scratch_root` は `[scratch]` の root（表示のみ。無効なら `null`）。`updated_at` は store の上書きの最終更新（上書きが無ければ `null`）。
+
 - `auth`: `"manual"`（既定）/ `"publickey"` / `"totp"`（ADR-0032 D1）。GUI はこれで「クラスタ」画面の案内を出し分ける
   （3.39〜3.41、§9）。
 - `connect_pending`: GUI 発の接続（`POST /clusters/{id}/connect`）が celeris 側で進行中か（ADR-0032 D5）。
@@ -1045,7 +1057,12 @@ source 環境変数の**値**、`[adapters.*].env` の値、`[[clusters]].env` �
   どちらも無ければ両方とも欄ごと省略。
 
 ```json
-{"items": [
+{"local": {"id": "local", "hostname": "lab-01", "in_use": 3,
+   "workspace_root": {"value": "/local/celeris/data/workspaces", "source": "settings",
+                      "config_value": "/home/u/.local/celeris/workspaces", "apply": "new_tasks"},
+   "max_concurrency": {"value": 6, "source": "settings", "config_value": 4, "apply": "next_tick"},
+   "scratch_root": "/local/celeris/data/scratch", "updated_at": "2026-10-14T00:00:00Z"},
+ "items": [
   {"id": "pegasus", "host": "pegasus", "concurrency": 2, "sync": "rsync", "delete_on_push": false,
    "has_setup": false, "env_keys": [], "rsync_excludes": [], "auth": "totp",
    "in_use": 0, "connected": true, "cooldown_until": null, "cooldown_remaining_secs": null,
@@ -3143,6 +3160,8 @@ continuation が各設定閾値（既定はともに 2、超過は 3 回目）�
 `null` または省略で DB の上書きを消す。応答は `cluster_id`、`work_dir`、`updated_at`。
 不明な cluster は 404、不正な path は 422。クエリは受け付けない。
 
+`local` は予約 id で、`PUT /clusters/local/settings`（§3.126.23）に当たる（静的な route が優先される）。
+
 #### 3.126.4 `GET /projects/{id}/docs/maintenance` → 200 JSON
 
 案件の文書リポジトリの `audit`、`proposal`、`policy`、`saved_report` を返す。
@@ -3281,6 +3300,29 @@ genre×harness の組を `(genre, harness_id)` 順に返す。段階表に行が
 `harness_version`・`source_id`・`model_id`・`n`・`pass`・`pass_lower`・`pass_upper`（Wilson 95% 区間）・`wall_median_s`・
 `usd_list_median`・`quota_per_run`・`timeout_rate` と、D1 を満たすかの `qualifies`。行の無い組は出さない。
 クエリは `genre` と `harness_id` だけ。
+
+#### 3.126.23 `PUT /clusters/local/settings` → 200 `LocalMachineView`（管理系）
+
+ADR 2026-10-14-local-machine-settings D4/D5。ローカルマシンの store の上書き（`local_settings`）を**全置換**する。
+`token_file` 未設定でも 401（`require_admin`）。本文 `LocalSettingsPutBody`: `workspace_root`（絶対 path か `~`/`~/…`）と
+`max_concurrency`（1..=256）。`null` または省略の欄は上書きを消し、設定ファイルの値に戻る（全欄が消えれば行を削除）。
+未知の欄は 400。設定ファイルは書き換えない。応答は変更後の `LocalMachineView`（§3.23 の `local` と同じ）。
+
+検証（失敗は 422 `validation`。`errors[].field` は `"workspace_root"` / `"max_concurrency"`、両方が悪ければ 2 件）:
+
+1. `~` / `~/…` は daemon の `$HOME` で展開し、展開後が絶対 path であること。`..` を含まないこと。
+2. 保護 path と**同じか、その中か、それを含む**なら拒否: DB の file とその dir、`[selfdeploy] releases_dir`、
+   `~/.config/systemd`・`~/.local/celeris/releases`・`~/.config/celeris`（db_guard と同じ定義
+   `task_core::local_machine::HOST_PROTECTED_HOME_DIRS`）、`/local/celeris/state/releases`、設定ファイルのある dir。
+   `/` と `$HOME` そのものも拒否。照合は canonicalize 後の path（symlink 経由のすり抜けを防ぐ）で、dir を作る前と後の両方で見る。
+3. `create_dir_all` でき、一時 file を作って消せること。
+4. `max_concurrency` は 1..=256 の整数。
+
+監査: 書き込みと同じ transaction で `local_settings_events`（追記専用）に before/after を 1 行（actor `admin`）。
+CoS の `local.settings_put` は `cluster.settings_put` と同じ `OperationAudit` の経路で、`cos_operations` にも残る
+（target は `local` / `local`）。書いた後に `AdminRequest::LocalSettingsChanged` を admin チャネルに送る（返事は待たない）。
+`workspace_root` の変更は新しい task の足回りだけに効き（`apply = "new_tasks"`）、`max_concurrency` は次の tick から
+（`apply = "next_tick"`）。クエリは受け付けない。
 
 ### 3.127 モデル catalog（ADR 2026-10-06 D4 / D5）
 
@@ -3452,6 +3494,7 @@ registry は `crates/task-api/src/cos/ops/{tasks,decisions,projects,admin,surfac
 | admin | `POST /projects/{id}/repos` | `repo.create` |
 | admin | `PATCH /repos/{id}` | `repo.update` |
 | admin | `DELETE /repos/{id}` | `repo.delete`（未終了 task が使っていれば 409） |
+| admin | `PUT /clusters/local/settings` | `local.settings_put`（store の監査 `local_settings_events` の actor は `cos:<operation id>`。書いた後に dispatcher へ知らせる） |
 | admin | `PUT /clusters/{id}/settings` | `cluster.settings_put` |
 | admin | `POST /llm/sources/{source_id}/accounts` | `account.create`（ディレクトリ作成を監査 transaction の最後に行う） |
 | admin | `DELETE /llm/sources/{source_id}/accounts/{account_id}` | `account.delete`（外部効果: daemon が退避する。body は空） |

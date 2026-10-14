@@ -1016,7 +1016,9 @@ impl Dispatcher {
     }
 
     /// 評価 run の完了（`Completion::EvalWorker`）。run を閉じて試行を `scoring` にする。
-    /// 採点（hidden check・`route_outcomes`・worktree の削除）は `trial-score` の段が拾う。
+    /// active の instance はそのまま採点（hidden check・`route_outcomes`・worktree の削除）する。draining の
+    /// instance は採点せず `scoring` で残し、新しい active の `reconcile_eval_trials` が採点する
+    /// （ADR 2026-10-14-eval-verify-isolation D3.3）。
     pub(super) fn on_eval_worker_finished(
         &mut self,
         run_id: String,
@@ -1073,6 +1075,8 @@ impl Dispatcher {
                         &trial,
                         &format!("could not mark scoring: {e}"),
                     );
+                } else if !self.accepting_new_work {
+                    tracing::info!(trial_id = %entry.trial_id, %run_id, "draining: the evaluation run finished; leaving the scoring to the active instance");
                 } else {
                     let wall_secs = trial
                         .started_at
@@ -1098,7 +1102,7 @@ impl Dispatcher {
         }
     }
 
-    /// 手元の評価 run を止める（draining・shutdown）。instance id の無い dispatcher は止めるだけで
+    /// 手元の評価 run を止める（SIGTERM の shutdown と drain の打ち切り。live 昇格の drain は止めずに完了を待つ）。instance id の無い dispatcher は止めるだけで
     /// 試行・target・`runs` に書かない（ADR 2026-10-14-eval-verify-isolation D1）。
     pub(super) fn abort_eval_runs(&mut self) {
         let runs: Vec<_> = self.eval_runs.drain().collect();
@@ -1129,6 +1133,64 @@ impl Dispatcher {
             ) {
                 tracing::warn!(%run_id, error = %e, "eval trials: could not close the runs index row");
             }
+        }
+    }
+
+    /// 手元に無い `running` の評価 run の `runs` 行の照合（`reconcile_ownerless_runs` から。ADR
+    /// 2026-10-14-eval-verify-isolation D3.5）。対応する試行（`eval_trials.run_id`）が無い・`running` でない
+    /// （終端・`scoring`）、または試行の持ち主が生きていない（[`eval_run_row_orphaned`]）なら `cancelled` で閉じる。
+    /// 持ち主が生きている試行（live 昇格の draining の旧 instance・自分）の行は残す（自分の試行の行は
+    /// `reconcile_eval_trials` の回復が試行ごと閉じる）。
+    pub(super) fn reconcile_ownerless_eval_run(
+        &self,
+        row: &task_core::RunRow,
+        now: OffsetDateTime,
+    ) {
+        let Some(takeover) = self.orphan_takeover.as_ref() else {
+            return;
+        };
+        let trial = match self.store.eval_trials_list(Some(&row.task_id), None) {
+            Ok(trials) => trials
+                .into_iter()
+                .find(|t| t.run_id.as_deref() == Some(row.run_id.as_str())),
+            Err(e) => {
+                tracing::warn!(run_id = %row.run_id, error = %e, "eval trials: could not read the trial of a running eval runs row");
+                return;
+            }
+        };
+        let instances = match trial.as_ref().map(|t| t.status) {
+            Some(EvalTrialStatus::Running) => match self.store.instance_list() {
+                Ok(rows) => rows,
+                Err(e) => {
+                    tracing::warn!(run_id = %row.run_id, error = %e, "eval trials: could not read daemon_instances; leaving the eval runs row alone");
+                    return;
+                }
+            },
+            _ => Vec::new(),
+        };
+        let Some(why) = eval_run_row_orphaned(
+            trial.as_ref(),
+            &EvalOwnerFacts {
+                owner: trial.as_ref().and_then(|t| t.instance_id.as_deref()),
+                self_id: &takeover.instance_id,
+                instances: &instances,
+                freshness: takeover.freshness,
+                alive: takeover.pid_alive.as_ref(),
+            },
+            now,
+        ) else {
+            return;
+        };
+        tracing::warn!(run_id = %row.run_id, batch_id = %row.task_id, why, "closing an eval runs index row left running without an owner");
+        if let Err(e) = self.store.run_index_finish(
+            &row.run_id,
+            task_core::RunIndexStatus::Cancelled,
+            None,
+            None,
+            None,
+            now,
+        ) {
+            tracing::warn!(run_id = %row.run_id, error = %e, "eval trials: could not close an ownerless eval runs row");
         }
     }
 
@@ -1218,6 +1280,39 @@ fn eval_running_recovery(
     let started_at = started_at?;
     let limit = time::Duration::try_from(deadline).unwrap_or(time::Duration::MAX);
     (now - started_at >= limit).then_some(EVAL_RECOVERY_DEADLINE)
+}
+
+/// 手元に無い `running` の評価 run の `runs` 行を閉じるか（`Some(why)`）、残すか（`None`）。
+/// 試行が無い・`running` でない → 閉じる。`running` の試行は持ち主が生きていなければ閉じる
+/// （記録された持ち主は [`crate::orphan::instance_alive`]、記録が無い行は [`crate::orphan::holder_gone`]）。
+fn eval_run_row_orphaned(
+    trial: Option<&EvalTrial>,
+    facts: &EvalOwnerFacts<'_>,
+    now: OffsetDateTime,
+) -> Option<&'static str> {
+    let Some(trial) = trial else {
+        return Some("no evaluation trial holds the run");
+    };
+    if trial.status != EvalTrialStatus::Running {
+        return Some("the evaluation trial is no longer running");
+    }
+    let gone = match facts.owner {
+        Some(owner) => !crate::orphan::instance_alive(
+            facts.instances,
+            owner,
+            now,
+            facts.freshness,
+            facts.alive,
+        ),
+        None => crate::orphan::holder_gone(
+            facts.instances,
+            facts.self_id,
+            now,
+            facts.freshness,
+            facts.alive,
+        ),
+    };
+    gone.then_some(EVAL_RECOVERY_OWNER_GONE)
 }
 
 fn parse_rfc3339(s: Option<&str>) -> Option<OffsetDateTime> {

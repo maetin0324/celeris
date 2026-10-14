@@ -5,12 +5,15 @@ use super::*;
 impl Dispatcher {
     /// ADR-0040 D4: `[handoff] drain_timeout_secs` を超えたときに、残っている run とレビューを
     /// 打ち切る。DB の状態は変えない（リースが切れて新しい active が従来の「リース切れ」の経路で拾う）。
+    /// 評価 run だけは `abort_eval_runs` で止め、試行を `error`・`runs` 行を `cancelled` に閉じる（評価 run は
+    /// lease を持たず、閉じないと誰も閉じない。ADR 2026-10-14-eval-verify-isolation D3.6）。
     /// 打ち切った数を返す。
     pub fn abort_all_runs(&mut self) -> usize {
         // ADR-0044 §5 Phase 53 追記（Phase 55）: drain も他の 4 つと同じ止め方
         // （プロセスグループへ SIGTERM → `kill_grace_secs` → SIGKILL）。
         let kill_grace = self.config.kill_grace;
-        let mut aborted = 0;
+        let mut aborted = self.eval_runs.len();
+        self.abort_eval_runs();
         for (key, entry) in self.running.drain() {
             let task_id = key.task;
             tracing::warn!(task_id = %task_id, run_id = %entry.run_id, "drain timeout; aborting the run (the lease will expire and the new active will reclaim it)");

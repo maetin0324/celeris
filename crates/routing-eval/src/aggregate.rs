@@ -699,6 +699,7 @@ mod tests {
             subset_12: false,
             head_commit: None,
             base_commit: None,
+            base_commit_from_parent: false,
             features_sha256: "".into(),
             features: json!({}),
             sha256: "".into(),
@@ -709,6 +710,7 @@ mod tests {
             cutoff: "".into(),
             seed: 0,
             problems: ["p1", "p2", "p3", "p4"].map(problem).to_vec(),
+            refill_rejected: Vec::new(),
             sha256: "mh".into(),
         };
         // eval_trials を持つ実 DB の形で collect から通す: done（passed / failed）2 件、

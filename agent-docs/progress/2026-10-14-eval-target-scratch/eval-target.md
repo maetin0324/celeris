@@ -43,3 +43,8 @@ completed: 2026-10-14
 
 ## 提案
 - なし。
+
+## 2026-10-14 retry: 範囲 check の不合格（plan_issue）
+- 範囲 check が `crates/celeris/tests/routing_eval_run.rs` を範囲外として落とした。
+- この試験の config は `[scratch]` を書かず、既定の scratch dir が `~/.local/celeris/scratch`（NFS）になるため起動時に scratch が無効化される。目的どおり「scratch 無効なら試行を失敗にする」ので、試験に `[scratch] dir = "scratch"` を足さないと `daemon_runs_two_stub_trials_with_hidden_checks_and_eval_records` が落ちる（変更を戻して実行し確認: `cargo test -p celeris --test routing_eval_run` → FAILED、error "cargo target: scratch is disabled; …"）。
+- 計画の範囲に `crates/celeris/tests/routing_eval_run.rs` を加える必要がある（plan_issue で申告）。

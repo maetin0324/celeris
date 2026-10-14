@@ -70,6 +70,19 @@ pub struct TargetSnapshot {
     pub symlink: bool,
 }
 
+/// 人の worktree の target の置き場（scratch の下。`scripts/dev/worktree-target-dir.sh` と同じ。
+/// ADR 2026-10-14-eval-trial-scratch-target D2・D3）。
+pub const DEV_TARGETS_SUBDIR: &str = "dev-targets";
+
+/// `roots` を書かないときの既定の 2 つ: `<build_cache_dir>/cargo` と `<scratch_dir>/dev-targets`（D1.1、
+/// ADR 2026-10-14-eval-trial-scratch-target D3）。
+pub fn default_roots(build_cache_dir: &Path, scratch_dir: &Path) -> Vec<PathBuf> {
+    vec![
+        build_cache_dir.join("cargo"),
+        scratch_dir.join(DEV_TARGETS_SUBDIR),
+    ]
+}
+
 /// 規則の既定値（D1.3）。`roots` は呼び出し側（config）が渡す。
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct SweepParams {

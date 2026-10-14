@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use task_worker::target_sweep::SweepParams;
 
-use crate::config::{Config, DEFAULT_DEV_BUILD_CACHE, TargetSweepConfig};
+use crate::config::{Config, TargetSweepConfig};
 
 const BASE: &str = r#"
 db = "t.sqlite3"
@@ -20,7 +20,8 @@ fn load(extra: &str) -> Result<Config, crate::config::ConfigError> {
     Config::load(&path)
 }
 
-/// 省略時は `SweepParams::default()` の上限と、既定の 2 つの roots。
+/// 省略時は `SweepParams::default()` の上限と、既定の 2 つの roots（build cache と scratch の `dev-targets`。
+/// ルート fs の `/var/tmp` は含まない。ADR 2026-10-14-eval-trial-scratch-target D3）。
 #[test]
 fn target_sweep_config_defaults_match_sweep_params_default() {
     let cfg = load("").unwrap();
@@ -35,7 +36,17 @@ fn target_sweep_config_defaults_match_sweep_params_default() {
         params.roots,
         vec![
             PathBuf::from("/srv/build-cache/cargo"),
-            PathBuf::from(DEFAULT_DEV_BUILD_CACHE)
+            PathBuf::from("/srv/scratch/dev-targets")
+        ]
+    );
+    assert!(params.roots.iter().all(|r| !r.starts_with("/var/tmp")));
+    // `[scratch] dir` を書けばその下の `dev-targets`。
+    let cfg = load("\n[scratch]\ndir = \"/local/s\"\n").unwrap();
+    assert_eq!(
+        cfg.target_sweep_params().roots,
+        vec![
+            PathBuf::from("/srv/build-cache/cargo"),
+            PathBuf::from("/local/s/dev-targets")
         ]
     );
     // `[maintenance]` だけ書いても同じ。

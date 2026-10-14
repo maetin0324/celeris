@@ -64,6 +64,21 @@ fn target_sweep_params_default_values() {
     assert_eq!(p.cap_target_bytes(), 96 * GIB);
 }
 
+/// 既定 roots は build cache と scratch の `dev-targets`。ルート fs の `/var/tmp` を含まない
+/// （ADR 2026-10-14-eval-trial-scratch-target D3）。
+#[test]
+fn target_sweep_default_roots_are_build_cache_and_scratch_dev_targets() {
+    let roots = default_roots(Path::new("/x/build-cache"), Path::new("/local/s"));
+    assert_eq!(
+        roots,
+        vec![
+            PathBuf::from("/x/build-cache/cargo"),
+            PathBuf::from("/local/s/dev-targets")
+        ]
+    );
+    assert!(roots.iter().all(|r| !r.starts_with("/var/tmp")));
+}
+
 #[test]
 fn target_sweep_deletes_items_older_than_max_age() {
     let snap = vec![

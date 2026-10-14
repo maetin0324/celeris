@@ -248,4 +248,29 @@ test.describe("P4-13..15 accounts/clusters", () => {
     await expect(again.getByText("/work/me（db）")).toHaveCount(0);
     expect(seen.some((r) => r.path === "/api/v1/clusters/pegasus/settings" && r.method === "PUT")).toBe(true);
   });
+
+  test("parity: /clusters ローカルマシンの作業ディレクトリと同時実行数", async ({ page }) => {
+    await page.goto(`${base}/clusters`);
+    await expect(page.getByTestId("cluster-row-local").first()).toBeAttached();
+    const card = page.getByRole("listitem", { name: "ローカルマシン local" });
+    await expect(card.getByText("/home/fixture/.local/celeris/workspaces（設定ファイル）")).toBeVisible();
+    await card.getByLabel("同時実行数（max_concurrency）").fill("999");
+    await card.getByRole("button", { name: "ローカルの設定を保存" }).click();
+    await expect(card.getByRole("alert")).toHaveText("同時実行数は 1〜256 の整数で入力してください。");
+    await card.getByLabel("作業ディレクトリ（workspace_root）").fill("relative/dir");
+    await card.getByLabel("同時実行数（max_concurrency）").fill("8");
+    await card.getByRole("button", { name: "ローカルの設定を保存" }).click();
+    await expect(card.getByRole("alert")).toContainText("workspace_root must be an absolute path");
+    await card.getByLabel("作業ディレクトリ（workspace_root）").fill("/local/celeris/data/workspaces");
+    await card.getByRole("button", { name: "ローカルの設定を保存" }).click();
+    const applied = card.getByTestId("local-settings-applied");
+    await expect(applied).toContainText("新しい task から反映");
+    await expect(applied).toContainText("次の tick から反映");
+    await expect(card.getByText("/local/celeris/data/workspaces（画面で保存した値）")).toBeVisible();
+    await expect(card.getByText("8（画面で保存した値）")).toBeVisible();
+    await card.getByRole("button", { name: "上書きを消す" }).click();
+    await expect(card.getByText("/home/fixture/.local/celeris/workspaces（設定ファイル）")).toBeVisible();
+    const put = seen.filter((r) => r.path === "/api/v1/clusters/local/settings" && r.method === "PUT");
+    expect(put.length).toBe(3);
+  });
 });

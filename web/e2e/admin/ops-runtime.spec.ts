@@ -1,5 +1,12 @@
 import { expect, type Page, test } from "@playwright/test";
-import type { ClusterView, DaemonSnapshot, DaemonView, ReleaseItem, Releases } from "../../api/generated/types";
+import type {
+  ClusterView,
+  DaemonSnapshot,
+  DaemonView,
+  LocalMachineView,
+  ReleaseItem,
+  Releases,
+} from "../../api/generated/types";
 import { startFixtureGateway } from "../support/fixture-gateway";
 
 // beforeAll の一時 dir・server をこの file の試験で共有するので、file 内は 1 worker で順に流す（2026-10-04 の並列化と同じ扱い）。
@@ -46,9 +53,24 @@ const clusters: ClusterView[] = [
   }),
 ];
 
+const local: LocalMachineView = {
+  id: "local",
+  hostname: "celeris-host",
+  in_use: 1,
+  workspace_root: {
+    value: "/home/u/.local/celeris/workspaces",
+    source: "config",
+    config_value: "/home/u/.local/celeris/workspaces",
+    apply: "new_tasks",
+  },
+  max_concurrency: { value: 4, source: "config", config_value: 4, apply: "next_tick" },
+  scratch_root: null,
+  updated_at: null,
+};
+
 async function routeClusters(page: Page) {
   await page.route("**/api/clusters", (route) =>
-    route.request().method() === "GET" ? route.fulfill({ json: { items: clusters } }) : route.fallback(),
+    route.request().method() === "GET" ? route.fulfill({ json: { local, items: clusters } }) : route.fallback(),
   );
 }
 
@@ -82,6 +104,7 @@ test.describe("clusters", () => {
     await expect(page.getByRole("heading", { level: 1, name: "クラスタ" })).toBeVisible();
     const table = page.getByRole("region", { name: "クラスタの状態" });
     await expect(table.getByRole("columnheader", { name: "最終確認" })).toBeVisible();
+    await expect(table.getByTestId("cluster-row-local")).toContainText("このマシン");
     const ok = table.getByTestId("cluster-row-pegasus");
     await expect(ok).toContainText("接続中");
     await expect(ok).toContainText("なし");
@@ -106,6 +129,8 @@ test.describe("clusters", () => {
     await expect(card.getByRole("button", { name: "上書きを消す" })).toBeDisabled();
     const other = page.getByRole("listitem", { name: "クラスタ sirius-with-a-very-long-cluster-identifier" });
     await expect(other.getByRole("button", { name: "接続" })).toBeDisabled();
+    const localCard = page.getByRole("listitem", { name: "ローカルマシン local" });
+    await expect(localCard.getByRole("button", { name: "ローカルの設定を保存" })).toBeDisabled();
   });
 
   test("360px で横に溢れない", async ({ page }) => {
@@ -114,7 +139,7 @@ test.describe("clusters", () => {
     await page.goto(`${base}/clusters`);
     const status = page.getByRole("list", { name: "クラスタの状態" });
     await expect(status.getByText("切断: keepalive timeout", { exact: false })).toBeVisible();
-    await expect(status.getByText("失敗理由:")).toHaveCount(2);
+    await expect(status.getByText("失敗理由:")).toHaveCount(3);
     expect(await overflow(page)).toBe(0);
   });
 });

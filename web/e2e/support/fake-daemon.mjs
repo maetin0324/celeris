@@ -2889,6 +2889,8 @@ export function createFakeDaemon({
               work_dir: null,
             },
           ],
+          // ローカルマシンの行（ADR 2026-10-14-local-machine-settings D4）。上書きは null = 設定ファイルの値。
+          local: { workspace_root: null, max_concurrency: null, updated_at: null },
         };
       }
       const ac = server.fakeAc;
@@ -3112,6 +3114,46 @@ export function createFakeDaemon({
             ],
           });
         if (parts[0] === "clusters") {
+          const localView = () => {
+            const o = ac.local;
+            const configRoot = "/home/fixture/.local/celeris/workspaces";
+            return {
+              id: "local",
+              hostname: "celeris-fixture",
+              in_use: 1,
+              workspace_root: {
+                value: o.workspace_root ?? configRoot,
+                source: o.workspace_root ? "settings" : "config",
+                config_value: configRoot,
+                apply: "new_tasks",
+              },
+              max_concurrency: {
+                value: o.max_concurrency ?? 4,
+                source: o.max_concurrency ? "settings" : "config",
+                config_value: 4,
+                apply: "next_tick",
+              },
+              scratch_root: "/local/celeris/data/scratch",
+              updated_at: o.updated_at,
+            };
+          };
+          if (parts[1] === "local" && parts[2] === "settings" && req.method === "PUT") {
+            const errors = [];
+            const root = input.workspace_root ?? null;
+            const max = input.max_concurrency ?? null;
+            if (root !== null && !(root.startsWith("/") || root.startsWith("~")))
+              errors.push({ field: "workspace_root", message: "workspace_root must be an absolute path" });
+            if (max !== null && !(Number.isInteger(max) && max >= 1 && max <= 256))
+              errors.push({ field: "max_concurrency", message: `max_concurrency must be within 1..=256 (got ${max})` });
+            if (errors.length)
+              return json(422, { type: "validation", detail: errors.map((e) => e.message).join("; "), errors });
+            ac.local = {
+              workspace_root: root,
+              max_concurrency: max,
+              updated_at: root === null && max === null ? null : "2026-10-14T00:00:00Z",
+            };
+            return json(200, localView());
+          }
           const cl = ac.clusters.find((c) => c.id === parts[1]);
           const row = (c) => ({
             concurrency: 1,
@@ -3122,7 +3164,8 @@ export function createFakeDaemon({
             sync: "rsync",
             ...c,
           });
-          if (parts.length === 1 && req.method === "GET") return json(200, { items: ac.clusters.map(row) });
+          if (parts.length === 1 && req.method === "GET")
+            return json(200, { local: localView(), items: ac.clusters.map(row) });
           if (!cl) return json(404, { error: "not found" });
           if (parts[2] === "connect" && parts.length === 3 && req.method === "POST") {
             cl.connect_pending = true;

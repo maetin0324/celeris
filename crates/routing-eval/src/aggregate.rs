@@ -645,9 +645,6 @@ mod tests {
         conn.execute("INSERT INTO route_decisions VALUES('d','p1','eval_problem','r1',?1,?2,'eval')", rusqlite::params![r#"{"manifest_sha":"mh","trial_no":2}"#,r#"{"selected":{"source_id":"s","model_id":"m","harness_id":"codex","harness_version":"v2.3.1"}}"#]).expect("decision");
         conn.execute("INSERT INTO route_outcomes VALUES('d',?1)", [r#"{"passed":true,"timed_out":false,"wall_secs":4.0,"usd_list":0.3,"quota":{"7d":0.01}}"#]).expect("outcome");
         conn.execute("INSERT INTO runs VALUES('r1','passed','2026-10-01T00:00:00Z','2026-10-01T00:00:05Z',NULL,NULL)", []).expect("run");
-        // An errored trial: decision and run, but no outcome. Not a valid result.
-        conn.execute("INSERT INTO route_decisions VALUES('e','p1','eval_problem','r2',?1,?2,'eval')", rusqlite::params![r#"{"manifest_sha":"mh","trial_no":1}"#,r#"{"selected":{"source_id":"s","model_id":"m","harness_id":"codex","harness_version":"v2.3.1"}}"#]).expect("error decision");
-        conn.execute("INSERT INTO runs VALUES('r2','yielded','2026-10-01T00:00:00Z','2026-10-01T00:00:05Z',NULL,NULL)", []).expect("error run");
         drop(conn);
         let problem = Problem {
             id: "p1".into(),

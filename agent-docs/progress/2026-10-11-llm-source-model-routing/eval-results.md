@@ -60,7 +60,7 @@ error・cancelled は n・pass・区間に数えない（除外）。除外数�
 
 ### runner の集計の修正（この collect で実施）
 
-- `celeris-routing-eval aggregate`・`export` は評価の route_decisions を route_outcomes と LEFT JOIN して読み、outcome の無い試行（error・cancelled。run は yielded・cancelled・question・旧 pilot の completed）を **不合格として n に数えていた**。ADR D1 の『有効な結果』に反するので、outcome のある試行（passed/failed）だけを読むよう `crates/routing-eval/src/aggregate.rs` を直し（JOIN に変更、試験 `collect_reads_eval_decision_outcome_and_run_from_fixture_db` に outcome の無い error 試行を足して除外を固定）、aggregate・export をやり直した。
+- `celeris-routing-eval aggregate`・`export` は評価の route_decisions を route_outcomes と LEFT JOIN して読み、outcome の無い試行（error・cancelled。run は yielded・cancelled・question・旧 pilot の completed）を **不合格として n に数えていた**。ADR D1 の『有効な結果』に反するので、outcome のある試行（passed/failed）だけを読むよう `crates/routing-eval/src/aggregate.rs` を直した runner（LEFT JOIN → JOIN、試験 `collect_reads_eval_decision_outcome_and_run_from_fixture_db` に outcome の無い error 試行を追加）を手元で build して aggregate・export をやり直した。この collect の範囲は agent-docs/progress/ だけなので、修正はリポジトリに入れず差分を `E/aggregate-error-exclude.patch` に残し、取り込みは follow-up task に出した。取り込まれるまで main の runner で aggregate を流すと error 試行が不合格に数えられる（人の手順の `--write-evidence` は修正の取り込み後に流すこと）。
 - 直す前の値（error を不合格に数えた。参考、根拠には使わない）: haiku 22/24・opus 23/24・sonnet 20/24・astra 11/12・luna 18/30・sol 25/30、export 307 行。中間物は `aggregate.with-errors/`・`export.with-errors.jsonl`。
 
 ### 承認上限の変更と再投入
@@ -135,7 +135,7 @@ export 件数: 271
 
 ## 本番の根拠表に書く人の手順
 
-本番 DB への書き込みは人が行う（worker は読み取りのみ）。daemon が動いたままでよい（runner は 1 transaction で同じ evidence_version を丸ごと置換する）。
+本番 DB への書き込みは人が行う（worker は読み取りのみ）。**前提: error 試行を除外する runner の修正（`E/aggregate-error-exclude.patch`、follow-up task）が main に入っていること**。入っていなければ `git apply` してから build する。daemon が動いたままでよい（runner は 1 transaction で同じ evidence_version を丸ごと置換する）。
 ```sh
 cd ~/workspace/agent-platform && cargo build -p routing-eval
 $CARGO_TARGET_DIR/debug/celeris-routing-eval aggregate --db /local/celeris/data/db/celeris.sqlite3 \

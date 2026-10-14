@@ -49,7 +49,10 @@ pub fn collect(db: &str, manifest: &Manifest) -> Result<Vec<Trial>, String> {
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
     )
     .map_err(|e| e.to_string())?;
-    let mut stmt = conn.prepare("SELECT d.decision_id,d.subject_id,d.input_json,d.output_json,o.labels_json,r.status,r.started_at,r.finished_at,r.usage_json,r.metrics_json FROM route_decisions d LEFT JOIN route_outcomes o ON o.decision_id=d.decision_id LEFT JOIN runs r ON r.run_id=d.run_id WHERE d.stage='eval' AND d.subject_kind='eval_problem' ORDER BY d.subject_id,d.decision_id").map_err(|e| e.to_string())?;
+    // Only scored trials (passed/failed) have a route_outcomes row; error and
+    // cancelled trials have none and are not valid results (ADR D1), so they
+    // must not count as failures.
+    let mut stmt = conn.prepare("SELECT d.decision_id,d.subject_id,d.input_json,d.output_json,o.labels_json,r.status,r.started_at,r.finished_at,r.usage_json,r.metrics_json FROM route_decisions d JOIN route_outcomes o ON o.decision_id=d.decision_id LEFT JOIN runs r ON r.run_id=d.run_id WHERE d.stage='eval' AND d.subject_kind='eval_problem' ORDER BY d.subject_id,d.decision_id").map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map([], |r| {
             Ok((
@@ -546,6 +549,9 @@ mod tests {
         conn.execute("INSERT INTO route_decisions VALUES('d','p1','eval_problem','r1',?1,?2,'eval')", rusqlite::params![r#"{"manifest_sha":"mh","trial_no":2}"#,r#"{"selected":{"source_id":"s","model_id":"m","harness_id":"codex","harness_version":"v2.3.1"}}"#]).expect("decision");
         conn.execute("INSERT INTO route_outcomes VALUES('d',?1)", [r#"{"passed":true,"timed_out":false,"wall_secs":4.0,"usd_list":0.3,"quota":{"7d":0.01}}"#]).expect("outcome");
         conn.execute("INSERT INTO runs VALUES('r1','passed','2026-10-01T00:00:00Z','2026-10-01T00:00:05Z',NULL,NULL)", []).expect("run");
+        // An errored trial: decision and run, but no outcome. Not a valid result.
+        conn.execute("INSERT INTO route_decisions VALUES('e','p1','eval_problem','r2',?1,?2,'eval')", rusqlite::params![r#"{"manifest_sha":"mh","trial_no":1}"#,r#"{"selected":{"source_id":"s","model_id":"m","harness_id":"codex","harness_version":"v2.3.1"}}"#]).expect("error decision");
+        conn.execute("INSERT INTO runs VALUES('r2','yielded','2026-10-01T00:00:00Z','2026-10-01T00:00:05Z',NULL,NULL)", []).expect("error run");
         drop(conn);
         let problem = Problem {
             id: "p1".into(),

@@ -56,3 +56,8 @@ eval_trials 全体: passed 52・failed 4・error 13・queued 217。running・sco
 - `POST /api/v1/routing-eval/trials/{id}/cancel` で queued の codex 試行 93 件（gpt-6.1-sol 31・gpt-6-luna 50・gpt-6-astra 12）を cancel した（全部 200）。一覧は `E/codex-cancel.json`。走行中の sol 2 件と claude の試行はそのまま。cancel した試行は新しい batch（trial_no をずらす）で再投入できる。
 - claude の 2 account は 0.09 → 0.14・0.15 で、上限 15% の内。
 - 続きは受信箱の決定 `codex-overrun` を待つ。
+
+## 受信箱の決定 codex-overrun（2026-10-14 10:30Z、run 01M4WZ7225）
+- 前回の run（01M4WZ414W）は cancel の後に result.json を書かずに終わり、決定が受信箱に出ていなかった。この run で決定 `codex-overrun`（needed_before self）を出し直した。
+- 10:28Z の状態（batches.json の 276 試行）: passed 142・failed 8・error 12・cancelled 93（codex）・queued 16・running 5（haiku 3・sol 2）。7d: claude_max_lab 0.14・claude_max_personal 0.15・chatgpt_plus_personal 0.07。
+- 選択肢: luna・astra の 62 件だけ新 batch で再投入（sol 31 件は見送り、承認の 13.2% の残り約 8 点の内）／cancel 分を除いて集計／次の 7d 窓（2026-10-20T04:58Z 以降）に 93 件を再投入／codex の上限を約 21% に上げて 93 件を再投入。

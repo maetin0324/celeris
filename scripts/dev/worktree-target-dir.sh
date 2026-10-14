@@ -1,11 +1,18 @@
 #!/bin/bash
-# cargo の target-dir を NFS の worktree に置かず、ローカル LVM（/var/lib/celeris/build-cache/cargo/<worktree 名>）に固定する。
+# cargo の target-dir を NFS の worktree・ルート fs に置かず、/local の scratch（ADR-0136）に固定する。
 # - 手で: `bash scripts/dev/worktree-target-dir.sh [dir]` → <dir>（既定 cwd）の worktree 直下に .cargo/config.toml を書く（冪等）。
 # - Claude Code の PreToolUse(Bash) hook から: `--hook` で stdin の JSON（cwd / tool_input.command）を読み、cargo 系の
 #   コマンドのときだけ同じことをする。常に exit 0（ブロックしない）。
-# 家訓: ~/.cargo/config.toml「ビルドごとに CARGO_TARGET_DIR を明示（ローカル LVM）」。CARGO_TARGET_DIR 環境変数があればそれが優先される。
+# 規則（ADR 2026-10-14-eval-trial-scratch-target）:
+# - CARGO_TARGET_DIR が env にあれば何も書かない（Celeris の run・評価試行は scratch の target を env で受ける）。
+# - 置き場は CELERIS_BUILD_CACHE、無ければ <CELERIS_SCRATCH_DIR（既定 /local/celeris/data/scratch）>/dev-targets。
+#   CELERIS_BUILD_CACHE が存在しない・scratch が無い・置き場がルート fs 上なら書かずに止める。
+# - 名前は <worktree の basename>-<worktree の絶対 path の sha256 先頭 12 桁>（同じ basename の worktree で target を共有しない）。
+# - 書かずに止めるとき、この script が前に書いた .cargo/config.toml は消す（古い置き場へ書き続けない）。
+# WORKTREE_TARGET_DIR_ROOTFS は試験用: ルート fs と見なす path（既定 /）。
 set -u
-BASE_DIR="${CELERIS_BUILD_CACHE:-/var/tmp/agent-platform-build}"
+SCRATCH_DIR="${CELERIS_SCRATCH_DIR:-/local/celeris/data/scratch}"
+ROOTFS="${WORKTREE_TARGET_DIR_ROOTFS:-/}"
 log(){ [ -n "${WORKTREE_TARGET_DIR_QUIET:-}" ] || echo "[worktree-target-dir] $*" >&2; }
 
 dir="${PWD}"
@@ -30,21 +37,42 @@ fi
 
 root="$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null)" || exit 0
 [ -f "$root/Cargo.toml" ] || exit 0
-# 本番リリースの build tree（/var/lib/celeris/release-build 配下）はローカルなので触らない。
+# 本番リリースの build tree（/var/lib/celeris/release-build 配下）は release.sh が target を渡すので触らない。
 case "$root" in /var/lib/celeris/*) exit 0;; esac
-
-name="$(basename "$root")"
-# 本体の checkout は「<repo 名>-main」、worktree は basename（agent-<id> など）
-if [ "$(git -C "$root" rev-parse --git-dir 2>/dev/null)" = "$(git -C "$root" rev-parse --git-common-dir 2>/dev/null)" ]; then
-  name="${name}-main"
-fi
-target="$BASE_DIR/$name"
 cfg="$root/.cargo/config.toml"
-want="# 生成: scripts/dev/worktree-target-dir.sh（NFS の worktree に target を書かない。~/.cargo/config.toml の家訓）
+
+# 書かずに止める。前にこの script が書いた config は消す。
+stop(){
+  log "$*; not writing $cfg"
+  if [ -f "$cfg" ] && grep -q "worktree-target-dir.sh" "$cfg"; then
+    rm -f "$cfg" && log "removed stale $cfg"
+  fi
+  exit 0
+}
+
+if [ -n "${CARGO_TARGET_DIR:-}" ]; then
+  stop "CARGO_TARGET_DIR is set ($CARGO_TARGET_DIR)"
+fi
+
+if [ -n "${CELERIS_BUILD_CACHE:-}" ]; then
+  BASE_DIR="$CELERIS_BUILD_CACHE"
+  [ -d "$BASE_DIR" ] || stop "CELERIS_BUILD_CACHE=$BASE_DIR does not exist"
+else
+  [ -d "$SCRATCH_DIR" ] || stop "scratch $SCRATCH_DIR does not exist (set CELERIS_BUILD_CACHE to a local non-root dir)"
+  BASE_DIR="$SCRATCH_DIR/dev-targets"
+  mkdir -p "$BASE_DIR" 2>/dev/null || stop "cannot create $BASE_DIR"
+fi
+base_dev="$(stat -c %d "$BASE_DIR" 2>/dev/null)" || stop "cannot stat $BASE_DIR"
+root_dev="$(stat -c %d "$ROOTFS" 2>/dev/null)" || stop "cannot stat $ROOTFS"
+[ "$base_dev" != "$root_dev" ] || stop "$BASE_DIR is on the root fs"
+
+hash="$(printf '%s' "$root" | sha256sum | cut -c1-12)"
+target="$BASE_DIR/$(basename "$root")-$hash"
+want="# 生成: scripts/dev/worktree-target-dir.sh（NFS の worktree・ルート fs に target を書かない。ADR 2026-10-14-eval-trial-scratch-target）
 [build]
 target-dir = \"$target\"
 "
-mkdir -p "$target" 2>/dev/null || { log "cannot create $target"; exit 0; }
+mkdir -p "$target" 2>/dev/null || stop "cannot create $target"
 if [ -f "$cfg" ] && [ "$(cat "$cfg")" = "$(printf '%s' "$want")" ]; then
   exit 0
 fi

@@ -4,7 +4,7 @@
 //! ADR-0043 D2 はそれを「案件が持つ複数のリポジトリ」へ広げる:
 //!
 //! ```text
-//! <workspace_root>/<task_id>/
+//! <root>/<task_id>/        # <root> は WorkspaceRoots::task_root（ADR 2026-10-14-local-machine-settings D5）
 //!   repos/<name>/     # git: worktree（ブランチ <prefix><task_id>）。dir: 実体へのシンボリックリンク
 //!   artifacts/ inputs/ runs/ worktree.json
 //! ```
@@ -76,7 +76,7 @@ impl TaskRepo {
 /// 1 タスク分の作業場所（ADR-0043 D2）。ディスパッチャが dispatch のたびに組み立てる純粋なデータ。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaskWorkspaces {
-    /// celeris が持つタスクのディレクトリ（`<workspace_root>/<task_id>`）。`runs/` `inputs/` `artifacts/` はここ。
+    /// celeris が持つタスクのディレクトリ（`<root>/<task_id>`。呼び出し側が `WorkspaceRoots` で解く）。`runs/` `inputs/` `artifacts/` はここ。
     pub task_dir: PathBuf,
     /// 使うリポジトリ。**先頭がワーカーのカレントディレクトリ**になる。
     pub repos: Vec<TaskRepo>,

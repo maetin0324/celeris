@@ -10,6 +10,7 @@
 
 use std::path::{Path, PathBuf};
 
+use task_core::local_machine::WorkspaceRoots;
 use task_core::{Status, StoreError, TaskId, TaskStore};
 use time::OffsetDateTime;
 
@@ -95,9 +96,10 @@ pub fn prunable_paths(task_dir: &Path) -> Vec<PathBuf> {
 
 /// 終端（done / failed / cancelled）になってから `after_secs` 以上経ち、まだ刈れる生成物が残っている
 /// 作業場所を、決定的な順（task id の文字列順）ですべて集める。`after_secs == 0` は「無効」（常に空）。
+/// 作業場所 `<root>/<task_id>` は `WorkspaceRoots::task_dir` で解く（ADR 2026-10-14-local-machine-settings D5）。
 pub fn find_prune_candidates(
     store: &dyn TaskStore,
-    workspace_root: &Path,
+    roots: &WorkspaceRoots,
     now: OffsetDateTime,
     after_secs: u64,
 ) -> Result<Vec<PruneCandidate>, StoreError> {
@@ -122,7 +124,7 @@ pub fn find_prune_candidates(
         {
             continue;
         }
-        let task_dir = workspace_root.join(task.id.to_string());
+        let task_dir = roots.task_dir(store, &task.id)?;
         let paths = prunable_paths(&task_dir);
         // ADR 2026-10-10-local-disk-growth-paths D2: 子孫が親の checkout を使っている間は刈らない。
         if !paths.is_empty()
@@ -142,15 +144,13 @@ pub fn find_prune_candidates(
 /// `find_prune_candidates` の最初の 1 件（dispatcher の tick が「1 tick に最大 1 か所」で使う）。
 pub fn find_prune_candidate(
     store: &dyn TaskStore,
-    workspace_root: &Path,
+    roots: &WorkspaceRoots,
     now: OffsetDateTime,
     after_secs: u64,
 ) -> Result<Option<PruneCandidate>, StoreError> {
-    Ok(
-        find_prune_candidates(store, workspace_root, now, after_secs)?
-            .into_iter()
-            .next(),
-    )
+    Ok(find_prune_candidates(store, roots, now, after_secs)?
+        .into_iter()
+        .next())
 }
 
 /// 実際に消す。消せなかったパスは無視して残りを続ける（途中で 1 つ失敗しても他は消す）。

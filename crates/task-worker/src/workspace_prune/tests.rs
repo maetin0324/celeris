@@ -4,6 +4,11 @@ use task_core::{
     WorkspaceSpec,
 };
 
+/// 固定の無い task が設定ファイルの root（`root`）に解かれる resolver（ADR 2026-10-14-local-machine-settings D5）。
+pub(crate) fn roots(root: &Path) -> WorkspaceRoots {
+    WorkspaceRoots::new(root.to_path_buf(), None)
+}
+
 fn store_with_task(status: Status, updated_at: OffsetDateTime) -> (SqliteStore, TaskId) {
     let store = SqliteStore::open_in_memory().expect("open store");
     let id = insert_task(&store, status, updated_at);
@@ -192,7 +197,7 @@ fn find_prune_candidates_only_returns_terminal_tasks_old_enough_with_leftovers()
     // 終端ではない（`ready`）ので候補に入らない。
     let ready_id = TaskId::new();
 
-    let candidates = find_prune_candidates(&store, workspace_root, now, 86400).unwrap();
+    let candidates = find_prune_candidates(&store, &roots(workspace_root), now, 86400).unwrap();
     assert_eq!(candidates.len(), 1, "{candidates:?}");
     assert_eq!(candidates[0].task_id, done_id);
     assert_eq!(candidates[0].paths.len(), 1);
@@ -213,7 +218,7 @@ fn after_secs_zero_disables_pruning() {
             .join("target"),
     )
     .unwrap();
-    let candidates = find_prune_candidates(&store, workspace_root, now, 0).unwrap();
+    let candidates = find_prune_candidates(&store, &roots(workspace_root), now, 0).unwrap();
     assert!(candidates.is_empty());
 }
 
@@ -236,4 +241,41 @@ fn prune_removes_the_candidate_paths_and_keeps_the_source_tree() {
     assert!(repo_dir.join("src").join("main.rs").exists());
     let rel = relative_removed(&task_dir, &removed);
     assert_eq!(rel, vec!["repos/benchfs/target".to_string()]);
+}
+
+/// ADR 2026-10-14-local-machine-settings D5: root を固定した task は、設定ファイルの root ではなく固定した
+/// root の作業場所を刈り候補にする（設定ファイルの root に同じ名前の dir があっても見ない）。
+#[test]
+fn find_prune_candidates_uses_pinned_task_root() {
+    let config_dir = tempfile::tempdir().unwrap();
+    let pinned_dir = tempfile::tempdir().unwrap();
+    let now = OffsetDateTime::now_utc();
+    let (store, done_id) = store_with_task(Status::Done, now - time::Duration::days(2));
+    store
+        .task_workspace_root_pin(&done_id, pinned_dir.path().to_str().unwrap(), now)
+        .unwrap();
+    let pinned_target = pinned_dir
+        .path()
+        .join(done_id.to_string())
+        .join("repos")
+        .join("r")
+        .join("target");
+    std::fs::create_dir_all(&pinned_target).unwrap();
+    std::fs::create_dir_all(
+        config_dir
+            .path()
+            .join(done_id.to_string())
+            .join("repos")
+            .join("r")
+            .join("node_modules"),
+    )
+    .unwrap();
+
+    let candidates = find_prune_candidates(&store, &roots(config_dir.path()), now, 86400).unwrap();
+    assert_eq!(candidates.len(), 1, "{candidates:?}");
+    assert_eq!(
+        candidates[0].task_dir,
+        pinned_dir.path().join(done_id.to_string())
+    );
+    assert_eq!(candidates[0].paths, vec![pinned_target]);
 }

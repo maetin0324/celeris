@@ -19,7 +19,7 @@ use std::process::Command;
 
 use crate::workspace::WorkspaceError;
 
-/// worktree の親（`<workspace_root>/<task_id>`）の下に切る作業ツリーの名前。
+/// worktree の親（`<root>/<task_id>`。`<root>` は `WorkspaceRoots::task_root`）の下に切る作業ツリーの名前。
 pub const WORKTREE_DIR_NAME: &str = "tree";
 
 /// ローカルの worktree のブランチ接頭辞の既定（ADR-0042 D3 でこの基盤の名前 Celeris に合わせた。
@@ -28,7 +28,7 @@ pub const WORKTREE_DIR_NAME: &str = "tree";
 /// 揃えた。クラスタに残っている旧名のブランチと worktree ディレクトリは使われなくなるだけで、celeris は消さない。
 pub const DEFAULT_BRANCH_PREFIX: &str = "celeris/";
 
-/// `git worktree add` の直列化に使う錠（`workspace_root` 直下。元のリポジトリには置かない）。
+/// `git worktree add` の直列化に使う錠（task の `<root>` 直下。元のリポジトリには置かない）。
 const LOCK_FILE: &str = ".celeris-worktree.lock";
 
 /// base をどこから取ったか（前置きに書く。ADR-0041 D1）。
@@ -75,7 +75,7 @@ impl BaseRef {
 pub struct LocalWorktree {
     /// 元のリポジトリ（`WorkspaceSpec::Local.path`）。ここには書かない。
     pub repo: PathBuf,
-    /// celeris が持つタスクのディレクトリ（`<workspace_root>/<task_id>`）。`runs/` `inputs/` `artifacts/` はここ。
+    /// celeris が持つタスクのディレクトリ（`<root>/<task_id>`。呼び出し側が `WorkspaceRoots` で解く）。`runs/` `inputs/` `artifacts/` はここ。
     pub task_dir: PathBuf,
     /// 作業ツリー（`<task_dir>/tree`）。ワーカーのカレントディレクトリになる。
     pub dir: PathBuf,
@@ -507,7 +507,7 @@ fn git(dir: &Path, args: &[&str]) -> Option<GitOutput> {
     })
 }
 
-/// `workspace_root/.celeris-worktree.lock` の flock（取れなければ錠なしで進む。止めない）。
+/// `<root>/.celeris-worktree.lock` の flock（取れなければ錠なしで進む。止めない）。
 struct WorktreeLock(#[allow(dead_code)] Option<nix::fcntl::Flock<std::fs::File>>);
 
 impl WorktreeLock {

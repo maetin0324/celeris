@@ -1,5 +1,5 @@
 use super::*;
-use crate::workspace_prune::tests::insert_task;
+use crate::workspace_prune::tests::{insert_task, roots};
 use task_core::SqliteStore;
 use time::Duration;
 
@@ -70,7 +70,7 @@ fn workspace_targets_only_finished_tasks_past_the_grace_are_listed() {
     for id in [done_old, cancelled_old, failed_old, done_fresh, running] {
         make_target(&tmp.path().join(id.to_string()), "agent-platform", true);
     }
-    let found = finished_task_targets(&store, tmp.path(), now, 6 * 3600).unwrap();
+    let found = finished_task_targets(&store, &roots(tmp.path()), now, 6 * 3600).unwrap();
     let mut ids: Vec<TaskId> = found.iter().map(|f| f.task_id).collect();
     ids.sort_by_key(|i| i.to_string());
     let mut expected = vec![done_old, cancelled_old, failed_old];
@@ -195,7 +195,7 @@ fn repo_target_gc_finished_task_target_is_removed() {
     let child = insert_task(&store, Status::Done, now - Duration::hours(7));
     set_parent(&store, child, parent);
     let target = make_target(&tmp.path().join(parent.to_string()), "agent-platform", true);
-    let scan = scan_finished_task_targets(&store, tmp.path(), now, 6 * 3600).unwrap();
+    let scan = scan_finished_task_targets(&store, &roots(tmp.path()), now, 6 * 3600).unwrap();
     assert!(scan.held.is_empty(), "{:?}", scan.held);
     assert_eq!(scan.found.len(), 1);
     assert_eq!(scan.found[0].task_id, parent);
@@ -227,14 +227,14 @@ fn repo_target_gc_running_descendant_keeps_the_parent_target() {
     set_parent(&store, child, parent);
     set_parent(&store, grandchild, child);
     let target = make_target(&tmp.path().join(parent.to_string()), "agent-platform", true);
-    let scan = scan_finished_task_targets(&store, tmp.path(), now, 6 * 3600).unwrap();
+    let scan = scan_finished_task_targets(&store, &roots(tmp.path()), now, 6 * 3600).unwrap();
     assert!(scan.found.is_empty(), "{:?}", scan.found);
     assert_eq!(scan.held.len(), 1);
     assert_eq!(scan.held[0].reason, "active_descendant");
     assert_eq!(scan.held[0].targets, vec![target.clone()]);
     // workspace prune（target/ 等を刈る別経路）も同じ木の判定で残す。
     assert!(
-        crate::workspace_prune::find_prune_candidates(&store, tmp.path(), now, 3600)
+        crate::workspace_prune::find_prune_candidates(&store, &roots(tmp.path()), now, 3600)
             .unwrap()
             .is_empty()
     );
@@ -246,7 +246,7 @@ fn repo_target_gc_running_descendant_keeps_the_parent_target() {
     store
         .update_task(&gc, task_core::Event::worker_progress("test", "detach"))
         .unwrap();
-    let scan = scan_finished_task_targets(&store, tmp.path(), now, 6 * 3600).unwrap();
+    let scan = scan_finished_task_targets(&store, &roots(tmp.path()), now, 6 * 3600).unwrap();
     assert_eq!(scan.held.len(), 1);
     assert_eq!(scan.held[0].reason, "grace");
     assert!(target.is_dir());
@@ -264,7 +264,7 @@ fn repo_target_gc_cargo_lock_keeps_the_target() {
         FlockArg::LockExclusiveNonblock,
     )
     .unwrap();
-    let scan = scan_finished_task_targets(&store, tmp.path(), now, 6 * 3600).unwrap();
+    let scan = scan_finished_task_targets(&store, &roots(tmp.path()), now, 6 * 3600).unwrap();
     assert_eq!(scan.found.len(), 1);
     assert_eq!(
         remove_target(&target, "gc", true).unwrap(),

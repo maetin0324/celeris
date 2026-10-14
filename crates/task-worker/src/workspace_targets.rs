@@ -1,4 +1,4 @@
-//! ADR 2026-10-07-build-tmp-hygiene 付記 A3（2026-10-09）: 作業場所（`<workspace_root>/<task>/repos/<repo>`）の中に
+//! ADR 2026-10-07-build-tmp-hygiene 付記 A3（2026-10-09）: 作業場所（`<root>/<task>/repos/<repo>`）の中に
 //! できた cargo の target を見つけ、build 中でなければ消す。
 //!
 //! - **cargo の target** = `CACHEDIR.TAG` を持つか、`<profile>/.cargo-lock`（`<target>/<profile>` または
@@ -15,6 +15,7 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 use nix::fcntl::{Flock, FlockArg};
+use task_core::local_machine::WorkspaceRoots;
 use task_core::{Status, StoreError, TaskId, TaskStore};
 use time::OffsetDateTime;
 
@@ -136,7 +137,7 @@ pub fn tree_bytes(path: &Path) -> u64 {
     bytes
 }
 
-/// 作業場所 1 つ（`<workspace_root>/<task>`）の worktree の直下にある cargo の target と、前回の残り
+/// 作業場所 1 つ（`<root>/<task>`）の worktree の直下にある cargo の target と、前回の残り
 /// （`<repo>/.deleting-*`）。
 pub fn task_targets(task_dir: &Path) -> (Vec<PathBuf>, Vec<PathBuf>) {
     let mut targets = Vec::new();
@@ -221,9 +222,10 @@ pub fn tree_hold(
 
 /// 終端（done・cancelled・failed）の task の作業場所に残る cargo の target を、消してよいもの（`found`）と
 /// 残すもの（`held`。[`tree_hold`] の理由付き）に分ける（task id の順）。終端でない task は見ない。
+/// 作業場所 `<root>/<task_id>` は `WorkspaceRoots::task_dir` で解く（ADR 2026-10-14-local-machine-settings D5）。
 pub fn scan_finished_task_targets(
     store: &dyn TaskStore,
-    workspace_root: &Path,
+    roots: &WorkspaceRoots,
     now: OffsetDateTime,
     after_secs: u64,
 ) -> Result<FinishedScan, StoreError> {
@@ -242,7 +244,7 @@ pub fn scan_finished_task_targets(
     }
     terminal.sort_by_key(|t| t.id.to_string());
     for task in terminal {
-        let (targets, leftovers) = task_targets(&workspace_root.join(task.id.to_string()));
+        let (targets, leftovers) = task_targets(&roots.task_dir(store, &task.id)?);
         if targets.is_empty() && leftovers.is_empty() {
             continue;
         }
@@ -269,11 +271,11 @@ pub fn scan_finished_task_targets(
 /// task の作業場所に残る cargo の target（task id の順）。終端でない task は見ない。
 pub fn finished_task_targets(
     store: &dyn TaskStore,
-    workspace_root: &Path,
+    roots: &WorkspaceRoots,
     now: OffsetDateTime,
     after_secs: u64,
 ) -> Result<Vec<FinishedTaskTargets>, StoreError> {
-    Ok(scan_finished_task_targets(store, workspace_root, now, after_secs)?.found)
+    Ok(scan_finished_task_targets(store, roots, now, after_secs)?.found)
 }
 
 /// [`remove_target`] の結果。

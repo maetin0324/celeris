@@ -359,7 +359,7 @@ pub struct ContainerPlan {
     /// 実行ファイル（既定は `runtime.as_str()`。試験では偽物の絶対パスを差す）。
     pub program: String,
     pub image: String,
-    /// `<workspace_root>/<task_id>`。**同じパス**で読み書きできるようにマウントする。
+    /// `<root>/<task_id>`（`<root>` は `WorkspaceRoots::task_root`）。**同じパス**で読み書きできるようにマウントする。
     pub task_dir: PathBuf,
     /// `dir` リポジトリの実体（シンボリックリンクの先）。同じパスでマウントする。
     pub dir_repos: Vec<PathBuf>,

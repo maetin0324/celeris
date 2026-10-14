@@ -13,7 +13,10 @@ use task_core::{
     store::SqliteStore,
 };
 
-use crate::MANIFEST_SCHEMA;
+use crate::{
+    MANIFEST_SCHEMA,
+    recheck::{Checker, ProblemRecheck, RECHECK_SCHEMA, Recheck, write_into_manifest},
+};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Manifest {
@@ -22,7 +25,29 @@ pub struct Manifest {
     pub cutoff: String,
     pub seed: u64,
     pub problems: Vec<Problem>,
+    /// refill（`--repo`）で引いて recheck で落とした候補（理由つき・凍結に含む）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub refill_rejected: Vec<RefillRejected>,
     pub sha256: String,
+}
+
+/// refill で recheck に落ちた候補 1 件。
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct RefillRejected {
+    pub id: String,
+    pub stratum: String,
+    pub reason: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub base_commit_from_parent: bool,
+}
+
+/// refill の指定: 層ごとに seed 順で候補を引き、recheck で採用したものだけで埋める。
+pub struct Refill<'a> {
+    pub checker: &'a mut Checker,
+    /// 1 層から引く候補の上限（尽きた層は抜ける）。
+    pub max_draws_per_stratum: usize,
+    /// 済んだ recheck の行（JSON Lines）。読んで再利用し、新しい行を足す（中断から再開できる）。
+    pub cache: Option<&'a Path>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -41,6 +66,9 @@ pub struct Problem {
     pub subset_12: bool,
     pub head_commit: Option<String>,
     pub base_commit: Option<String>,
+    /// base_commit を head の親 commit で補った（repair WU は base を記録しない）。
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub base_commit_from_parent: bool,
     pub features_sha256: String,
     pub features: Value,
     pub sha256: String,
@@ -65,6 +93,7 @@ pub fn create(
     cutoff: &str,
     seed: u64,
     version: &str,
+    refill: Option<Refill<'_>>,
 ) -> Result<Manifest, String> {
     let uri = format!("file:{}?mode=ro", db.display());
     let conn = Connection::open_with_flags(
@@ -130,69 +159,212 @@ pub fn create(
     for ps in strata.values_mut() {
         ps.sort_by_key(|p| seeded(seed, &p.id));
     }
-    let selected = round_robin(&strata, 30);
-    if selected.len() < 30 {
+    let (store, _) = SqliteStore::open_client(db).map_err(|e| e.to_string())?;
+    let Some(refill) = refill else {
+        let selected = round_robin(&strata, 30);
+        if selected.len() < 30 {
+            return Err(format!(
+                "only {} eligible problems; 30 required",
+                selected.len()
+            ));
+        }
+        let mut problems = Vec::new();
+        for p in selected {
+            problems.push(to_problem(&store, p, cutoff, false)?);
+        }
+        let manifest = freeze(problems, Vec::new(), cutoff, seed, version)?;
+        write_manifest(out, &manifest)?;
+        return Ok(manifest);
+    };
+    let mut cache = load_cache(refill.cache)?;
+    let mut drawn: BTreeMap<String, usize> = BTreeMap::new();
+    let mut problems = Vec::new();
+    let mut rows = Vec::new();
+    let mut rejected = Vec::new();
+    while problems.len() < 30 {
+        let mut any = false;
+        for (stratum, pool) in &strata {
+            if problems.len() == 30 {
+                break;
+            }
+            let cursor = drawn.entry(stratum.clone()).or_default();
+            while *cursor < pool.len().min(refill.max_draws_per_stratum) {
+                let mut raw = pool[*cursor].clone();
+                *cursor += 1;
+                let mut from_parent = false;
+                let needs_parent =
+                    raw.kind == "repair" && raw.base.as_deref().is_none_or(|b| b.trim().is_empty());
+                let parent = raw
+                    .head
+                    .as_deref()
+                    .filter(|_| needs_parent)
+                    .and_then(|h| refill.checker.parent_of(h));
+                if let Some(parent) = parent {
+                    raw.base = Some(parent);
+                    from_parent = true;
+                }
+                let problem = to_problem(&store, raw, cutoff, from_parent)?;
+                let row = match cache.iter().find(|r| same_check(r, &problem)) {
+                    Some(r) => r.clone(),
+                    None => {
+                        let r = refill.checker.check(&problem);
+                        append_cache(refill.cache, &r)?;
+                        cache.push(r.clone());
+                        r
+                    }
+                };
+                if row.adopted {
+                    problems.push(problem);
+                    rows.push(row);
+                    any = true;
+                    break;
+                }
+                rejected.push(RefillRejected {
+                    id: problem.id,
+                    stratum: problem.stratum,
+                    reason: row.reason.unwrap_or_default(),
+                    base_commit_from_parent: from_parent,
+                });
+            }
+        }
+        if !any {
+            break;
+        }
+    }
+    if problems.len() < 30 {
         return Err(format!(
-            "only {} eligible problems; 30 required",
-            selected.len()
+            "refill adopted only {} problems after {} rejections (max {} draws per stratum); 30 required",
+            problems.len(),
+            rejected.len(),
+            refill.max_draws_per_stratum
         ));
     }
-    let subset_ids: BTreeSet<String> = round_robin(
-        &selected
-            .iter()
-            .cloned()
-            .fold(BTreeMap::<String, Vec<RawProblem>>::new(), |mut m, p| {
-                m.entry(format!("{}:{}", p.genre, p.kind))
-                    .or_default()
-                    .push(p);
-                m
-            }),
-        12,
-    )
-    .into_iter()
-    .map(|p| p.id)
-    .collect();
-    let (store, _) = SqliteStore::open_client(db).map_err(|e| e.to_string())?;
-    let mut problems = Vec::new();
-    for p in selected {
-        let split = if p.created_at.as_str() < cutoff {
-            "dev"
-        } else {
-            "held-out"
-        }
-        .to_owned();
-        let feat = features_for_subject(
-            &store,
-            Subject {
-                kind: "work_unit".into(),
-                id: p.id.clone(),
-            },
-            Some(AsOf::Timestamp(p.created_at.clone())),
-            None,
-        )
-        .map_err(|e| e.to_string())?;
-        let features = serde_json::to_value(feat).map_err(|e| e.to_string())?;
-        let feature_hash = hash_value(&features)?;
-        let mut problem = Problem {
+    rejected.sort_by(|a, b| a.id.cmp(&b.id));
+    let manifest = freeze(problems, rejected, cutoff, seed, version)?;
+    let path = write_manifest(out, &manifest)?;
+    let mut rows: Vec<ProblemRecheck> = rows
+        .into_iter()
+        .map(|mut r| {
+            r.subset_12 = manifest
+                .problems
+                .iter()
+                .any(|p| p.id == r.id && p.subset_12);
+            r
+        })
+        .collect();
+    rows.sort_by(|a, b| a.id.cmp(&b.id));
+    let record = Recheck {
+        schema: RECHECK_SCHEMA.into(),
+        manifest_sha256: manifest.sha256.clone(),
+        repo: refill.checker.repo().display().to_string(),
+        checked_at: time::OffsetDateTime::now_utc()
+            .format(&time::format_description::well_known::Rfc3339)
+            .map_err(|e| e.to_string())?,
+        timeout_s: refill.checker.timeout().as_secs(),
+        adopted: rows.len(),
+        excluded: 0,
+        excluded_by_reason: BTreeMap::new(),
+        problems: rows,
+    };
+    write_into_manifest(&path, &record)?;
+    Ok(manifest)
+}
+
+fn same_check(row: &ProblemRecheck, p: &Problem) -> bool {
+    row.id == p.id
+        && row.command == p.command
+        && row.base_commit.as_deref() == p.base_commit.as_deref().filter(|b| !b.trim().is_empty())
+        && row.head_commit.as_deref() == p.head_commit.as_deref().filter(|h| !h.trim().is_empty())
+}
+
+fn load_cache(path: Option<&Path>) -> Result<Vec<ProblemRecheck>, String> {
+    let Some(path) = path.filter(|p| p.exists()) else {
+        return Ok(Vec::new());
+    };
+    fs::read_to_string(path)
+        .map_err(|e| format!("{}: {e}", path.display()))?
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| serde_json::from_str(l).map_err(|e| format!("{}: {e}", path.display())))
+        .collect()
+}
+
+fn append_cache(path: Option<&Path>, row: &ProblemRecheck) -> Result<(), String> {
+    use std::io::Write;
+    let Some(path) = path else { return Ok(()) };
+    let mut f = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    let line = serde_json::to_string(row).map_err(|e| e.to_string())?;
+    writeln!(f, "{line}").map_err(|e| e.to_string())
+}
+
+fn to_problem(
+    store: &SqliteStore,
+    p: RawProblem,
+    cutoff: &str,
+    base_commit_from_parent: bool,
+) -> Result<Problem, String> {
+    let split = if p.created_at.as_str() < cutoff {
+        "dev"
+    } else {
+        "held-out"
+    }
+    .to_owned();
+    let feat = features_for_subject(
+        store,
+        Subject {
+            kind: "work_unit".into(),
             id: p.id.clone(),
-            task_id: p.task_id,
-            work_unit_id: p.id.clone(),
-            created_at: p.created_at,
-            genre: p.genre.clone(),
-            kind: p.kind.clone(),
-            command: p.command,
-            prompt: p.prompt,
-            split,
-            stratum: format!("{}:{}", p.genre, p.kind),
-            subset_12: subset_ids.contains(&p.id),
-            head_commit: p.head,
-            base_commit: p.base,
-            features_sha256: feature_hash,
-            features,
-            sha256: String::new(),
-        };
-        problem.sha256 = hash_serializable(&problem)?;
-        problems.push(problem);
+        },
+        Some(AsOf::Timestamp(p.created_at.clone())),
+        None,
+    )
+    .map_err(|e| e.to_string())?;
+    let features = serde_json::to_value(feat).map_err(|e| e.to_string())?;
+    let feature_hash = hash_value(&features)?;
+    Ok(Problem {
+        id: p.id.clone(),
+        task_id: p.task_id,
+        work_unit_id: p.id.clone(),
+        created_at: p.created_at,
+        genre: p.genre.clone(),
+        kind: p.kind.clone(),
+        command: p.command,
+        prompt: p.prompt,
+        split,
+        stratum: format!("{}:{}", p.genre, p.kind),
+        subset_12: false,
+        head_commit: p.head,
+        base_commit: p.base,
+        base_commit_from_parent,
+        features_sha256: feature_hash,
+        features,
+        sha256: String::new(),
+    })
+}
+
+/// 選んだ問題に subset_12 と sha256 を付けて凍結する（選んだ順に層の round robin）。
+fn freeze(
+    mut problems: Vec<Problem>,
+    refill_rejected: Vec<RefillRejected>,
+    cutoff: &str,
+    seed: u64,
+    version: &str,
+) -> Result<Manifest, String> {
+    let mut by_stratum: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for p in &problems {
+        by_stratum
+            .entry(p.stratum.clone())
+            .or_default()
+            .push(p.id.clone());
+    }
+    let subset_ids: BTreeSet<String> = round_robin(&by_stratum, 12).into_iter().collect();
+    for problem in &mut problems {
+        problem.subset_12 = subset_ids.contains(&problem.id);
+        problem.sha256 = hash_serializable(&*problem)?;
     }
     problems.sort_by(|a, b| a.id.cmp(&b.id));
     let mut manifest = Manifest {
@@ -201,26 +373,32 @@ pub fn create(
         cutoff: cutoff.into(),
         seed,
         problems,
+        refill_rejected,
         sha256: String::new(),
     };
     manifest.sha256 = manifest_hash(&manifest)?;
+    Ok(manifest)
+}
+
+fn write_manifest(out: &Path, manifest: &Manifest) -> Result<std::path::PathBuf, String> {
     fs::create_dir_all(out).map_err(|e| e.to_string())?;
     let path = out.join("manifest.json");
     if path.exists() {
         let prior: Manifest = serde_json::from_slice(&fs::read(&path).map_err(|e| e.to_string())?)
             .map_err(|e| e.to_string())?;
-        if prior.version == version && prior.sha256 != manifest.sha256 {
+        if prior.version == manifest.version && prior.sha256 != manifest.sha256 {
             return Err(format!(
-                "manifest version {version} already exists with different sha256; choose a new --version"
+                "manifest version {} already exists with different sha256; choose a new --version",
+                manifest.version
             ));
         }
     }
     fs::write(
-        path,
-        serde_json::to_vec_pretty(&manifest).map_err(|e| e.to_string())?,
+        &path,
+        serde_json::to_vec_pretty(manifest).map_err(|e| e.to_string())?,
     )
     .map_err(|e| e.to_string())?;
-    Ok(manifest)
+    Ok(path)
 }
 
 fn worker_prompt(work_unit: &Value, task: &Value, check_command: &str) -> String {
@@ -252,7 +430,7 @@ fn worker_prompt(work_unit: &Value, task: &Value, check_command: &str) -> String
     sections.join("\n\n")
 }
 
-fn round_robin(map: &BTreeMap<String, Vec<RawProblem>>, n: usize) -> Vec<RawProblem> {
+fn round_robin<T: Clone>(map: &BTreeMap<String, Vec<T>>, n: usize) -> Vec<T> {
     let mut out = Vec::new();
     let mut i = 0;
     while out.len() < n {
@@ -328,7 +506,7 @@ mod tests {
     fn manifest_freezes_stratified_30_and_12_with_features_and_rejects_changed_sha() {
         let (_dir, db) = fixture();
         let out = tempdir().expect("output dir");
-        let first = create(&db, out.path(), "2026-10-05", 77, "v1").expect("manifest");
+        let first = create(&db, out.path(), "2026-10-05", 77, "v1", None).expect("manifest");
         assert_eq!(first.problems.len(), 30);
         assert!(
             first
@@ -360,13 +538,13 @@ mod tests {
                 == 2
         );
         assert_eq!(
-            create(&db, out.path(), "2026-10-05", 77, "v1")
+            create(&db, out.path(), "2026-10-05", 77, "v1", None)
                 .expect("stable rerun")
                 .sha256,
             first.sha256
         );
         assert!(
-            create(&db, out.path(), "2026-10-05", 78, "v1")
+            create(&db, out.path(), "2026-10-05", 78, "v1", None)
                 .unwrap_err()
                 .contains("choose a new --version")
         );

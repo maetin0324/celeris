@@ -25,10 +25,22 @@
 
 ### D1. 評価試行は試行ごとの scratch target を `CARGO_TARGET_DIR` で受け、試行の終端で消す
 
+- 確認: 変更前の `eval_run_request` は `cargo_target_dir: None` で、adapter にも scratch の env を重ねていなかった。
 - 評価試行の RunRequest に、試行ごとの `CARGO_TARGET_DIR` を ADR-0075 の scratch pool（`/local/celeris/data/scratch`、ADR-0136）から渡す。
-  同時に走る試行どうしで target を共有しない（owner は試行の id）。
-- hidden check（`check_cmd`）も同じ target を使う。採点の後、試行の終端で target を消す（lease を返し、中身を消す）。
-- 実装と決定的な試験（RunRequest に試行ごとの `CARGO_TARGET_DIR` が入り、終端で消える）は葉 eval-target。
+  同時に走る試行どうしで target を共有しない。owner は `agent-eval-<trial_id>`（`<scratch>/targets/agent-eval-<trial_id>/target`）。
+  試行は tasks 行を持たないので task / work_unit の owner にはしない（`scratch_gc` が「task not in db」として走行中に回収してしまう）。
+  外部 owner の形なので GC は lease の `released_at` か TTL で決める。TTL は run の壁時計（1800 秒）+ hidden check の上限 + 600 秒で、
+  daemon が落ちて後始末できなかった target はこの TTL の後に `scratch_gc` が回収する。
+- env は通常の run と同じ `scratch_cargo_env`（`CARGO_TARGET_DIR` と `[scratch.cargo]`）を adapter の `with_env` で重ね、
+  `RunRequest.cargo_target_dir` にも同じ path を入れる。lease は作業ツリーを作った後に作る（adopt しない。seed は通常の run と同じ条件）。
+- hidden check（`check_cmd`）も同じ env で走らせる（lease を touch してから）。
+- 試行の終端で target を消し、lease に `released_at` を書く: 採点の後、`fail_and_cleanup_eval_trial` を通る全経路
+  （adapter の失敗・done 以外の終端・daemon 再起動後の回復）、起動途中の失敗、dispatcher の停止（`abort_eval_runs`）。
+- scratch が無効（設定・NFS・`shared_build_cache = false`）なら作業ツリーも作らずに試行を `error` にする。`with_env` を持たない
+  adapter も `error`（ルート fs・作業ツリーの直下に target を置かない）。
+- 試験: `crates/task-dispatch/src/dispatcher/tests/eval_trial_dispatch.rs`（`eval_run_request_sets_per_trial_cargo_target_dir`・
+  `eval_trial_target_removed_after_scoring`・`eval_trial_check_uses_trial_target_dir`・`eval_trial_target_removed_on_recovery`・
+  `eval_trial_fails_without_scratch`）と daemon の e2e `crates/celeris/tests/routing_eval_run.rs`。
 
 ### D2. `scripts/dev/worktree-target-dir.sh` は env を優先し、ルート fs を既定にしない
 

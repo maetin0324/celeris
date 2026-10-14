@@ -69,7 +69,6 @@ runner に refill を足した: `manifest --repo <repo>` を付けると、層�
 
 ## 未解決（v2）
 
-- refill 経路の unit 試験は未追加（この run の時間切れ）。次の unit で fixture repo を使った試験（refill_rejected・base_commit_from_parent・cache 再利用）を足す。
 - release 層 0 を受け入れるか（下の提案）。
 
 ## 提案（v2）
@@ -78,6 +77,9 @@ runner に refill を足した: `manifest --repo <repo>` を付けると、層�
 
 ## 検査（v2）
 
-- `cargo test -p routing-eval`: exit 0、lib 24 passed・pipeline_stub 1 passed。
-- `cargo clippy -p routing-eval --all-targets -- -D warnings`: exit 0。
-- workspace 全体の `bash scripts/dev/test-parallel.sh` と `cargo clippy --workspace` はこの run の時間内に回せていない（変更は crates/routing-eval だけ）。closeout の全体検査で見る。
+- refill 経路の試験を `crates/routing-eval/src/manifest.rs` に足した（一時 git repo と一時 DB）: `refill_fills_30_from_adopted_records_rejections_and_marks_parent_bases`（採用 30・`refill_rejected` 6 件の理由・repair の `base_commit_from_parent` と親 commit・manifest の `recheck` 欄・cache 再利用で同じ凍結値）と `refill_reports_a_shortfall_instead_of_lowering_the_bar`（30 に届かなければ error、manifest を書かない）。
+- `cargo test -p routing-eval`: exit 0、lib 26 passed・pipeline_stub 1 passed。
+- `cargo clippy -p routing-eval --all-targets -- -D warnings`・`cargo fmt --all --check`: exit 0。
+- `cargo clippy --workspace -- -D warnings`: exit 0。
+- `bash scripts/dev/test-parallel.sh`: exit 0（passed 5085・failed 0・ignored 13、userns null）。
+- 本番 DB の schema（この run で再確認）: `sqlite3 'file:…/celeris.sqlite3?mode=ro' 'SELECT MAX(version) FROM schema_migrations;'` → 77。

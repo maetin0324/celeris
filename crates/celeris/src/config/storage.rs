@@ -100,7 +100,10 @@ impl Config {
                     .map(Path::to_path_buf)
                     .unwrap_or_else(|| self.db.path.clone()),
             ),
-            ("workspace_root", self.workspace_root.clone()),
+            (
+                "workspace_root",
+                self.workspace_roots().unpinned_root().to_path_buf(),
+            ),
             (
                 "[workspace].build_cache_dir",
                 self.workspace.build_cache_dir.clone(),

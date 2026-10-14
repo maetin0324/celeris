@@ -98,7 +98,7 @@ async fn hook() -> Hook {
 
 fn view(dir: &std::path::Path) -> task_ops::view::ViewContext {
     task_ops::view::ViewContext {
-        workspace_root: dir.into(),
+        workspace_roots: task_core::local_machine::WorkspaceRoots::new(dir.into(), None),
         retry_backoff_base: std::time::Duration::from_secs(1),
         retry_backoff_max: std::time::Duration::from_secs(60),
         max_requeues: 3,

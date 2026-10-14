@@ -267,6 +267,11 @@ pub struct Config {
     /// `Config::load` で読んだファイルの絶対パス（`GET /api/v1/config` の `config_path`。TOML には書かない）。
     #[serde(skip)]
     pub source_path: Option<PathBuf>,
+    /// CLI の `--workspace-root`（`apply_overrides` が絶対化して入れる。TOML には書かない）。
+    /// `workspace_root`（設定ファイルの値）と一緒に `workspace_roots` の resolver の中だけで使う
+    /// （ADR 2026-10-14-local-machine-settings D5）。
+    #[serde(skip)]
+    pub workspace_root_cli: Option<PathBuf>,
 }
 
 /// ADR-0116 D5: `[browser]`。`runtime` で isolated browser の runtime を誰が持つかを切り替える。
@@ -629,6 +634,15 @@ impl Config {
         Duration::from_secs(self.handoff.drain_timeout_secs)
     }
 
+    /// ADR 2026-10-14-local-machine-settings D5: task ごとの足回りの root の resolver（設定ファイルの
+    /// `workspace_root` と CLI の `--workspace-root`）。dispatcher・API の view・各 loop はこれで解く。
+    pub fn workspace_roots(&self) -> task_core::local_machine::WorkspaceRoots {
+        task_core::local_machine::WorkspaceRoots::new(
+            self.workspace_root.clone(),
+            self.workspace_root_cli.clone(),
+        )
+    }
+
     /// ADR-0040 D3: CLI の上書きを設定に重ねる（`Config::load` の**後に**呼ぶ）。相対パスは
     /// `Config::load` と同じく**設定ファイルのディレクトリ基準**で絶対化する（設定に書いた場合と
     /// CLI で渡した場合で同じ場所を指すようにするため）。設定をファイルから読んでいないときは
@@ -655,7 +669,7 @@ impl Config {
             self.api.listen = Some(listen);
         }
         if let Some(root) = &overrides.workspace_root {
-            self.workspace_root = resolve(root);
+            self.workspace_root_cli = Some(resolve(root));
         }
         if let Some(token_file) = &overrides.token_file {
             self.api.token_file = Some(resolve(token_file));

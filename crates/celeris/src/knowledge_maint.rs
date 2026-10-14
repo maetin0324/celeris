@@ -256,7 +256,7 @@ struct CandidatesFile {
 pub fn apply_finished(
     store: &dyn TaskStore,
     knowledge_root: &Path,
-    workspace_root: &Path,
+    workspace_roots: &task_core::local_machine::WorkspaceRoots,
     now: OffsetDateTime,
 ) -> Result<usize, StoreError> {
     if !task_ops::knowledge::exists(knowledge_root) {
@@ -287,7 +287,7 @@ pub fn apply_finished(
             )?;
             continue;
         }
-        let workspace_dir = workspace_root.join(run_task.id.to_string());
+        let workspace_dir = workspace_roots.task_dir(store, &run_task.id)?;
         let artifacts_dir = task_core::artifacts::artifacts_dir_for(&run_task, &workspace_dir);
         let candidates_path = artifacts_dir.join("knowledge-candidates.json");
         let candidates = std::fs::read_to_string(&candidates_path)

@@ -2,7 +2,10 @@ use super::*;
 
 fn notify_digest_view() -> task_ops::view::ViewContext {
     task_ops::view::ViewContext {
-        workspace_root: std::path::PathBuf::from("/tmp"),
+        workspace_roots: task_core::local_machine::WorkspaceRoots::new(
+            std::path::PathBuf::from("/tmp"),
+            None,
+        ),
         retry_backoff_base: Duration::from_secs(1),
         retry_backoff_max: Duration::from_secs(60),
         max_requeues: 3,

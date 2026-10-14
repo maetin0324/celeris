@@ -7,7 +7,7 @@ fn disabled_and_interval_boundaries() {
         tick(
             &store,
             &GardenerConfig::default(),
-            tmp.path(),
+            &WorkspaceRoots::new(tmp.path().to_path_buf(), None),
             &[],
             &[],
             OffsetDateTime::now_utc()
@@ -88,10 +88,11 @@ fn managed_scan_schedules_bounded_review_and_survives_state_loss() {
     };
     let state = tmp.path().join("state");
     let ws = tmp.path().join("workspaces");
+    let roots = WorkspaceRoots::new(ws.clone(), None);
     let id = schedule_repo(
         &store,
         &config,
-        &ws,
+        &roots,
         &[],
         &[],
         now,
@@ -119,12 +120,17 @@ fn managed_scan_schedules_bounded_review_and_survives_state_loss() {
             .join("artifacts/docs-audit.json")
             .is_file()
     );
+    // 足回りを用意したときに root を固定する（ADR 2026-10-14-local-machine-settings D5）。
+    assert_eq!(
+        store.task_workspace_root_get(&id).unwrap().as_deref(),
+        ws.to_str()
+    );
     assert!(task.objective.contains("Do not edit repository files"));
     assert!(
         schedule_repo(
             &store,
             &config,
-            &ws,
+            &roots,
             &[],
             &[],
             now,
@@ -142,7 +148,7 @@ fn managed_scan_schedules_bounded_review_and_survives_state_loss() {
         schedule_repo(
             &store,
             &config,
-            &ws,
+            &roots,
             &[],
             &[],
             now + time::Duration::days(30),

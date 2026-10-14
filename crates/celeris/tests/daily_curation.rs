@@ -114,13 +114,13 @@ acceptance = [{{ type = "artifact_exists", name = "curation-plan.json" }}]
 
     fn tick(&self, now: OffsetDateTime) -> knowledge_curation::TickOutcome {
         let view = ViewContext {
-            workspace_root: self.ws.clone(),
+            workspace_roots: task_core::local_machine::WorkspaceRoots::new(self.ws.clone(), None),
             retry_backoff_base: std::time::Duration::from_secs(1),
             retry_backoff_max: std::time::Duration::from_secs(1),
             max_requeues: 3,
             clusters: Default::default(),
         };
-        knowledge_curation::tick(&self.store, &self.kb, &self.ws, &self.state, &view, now)
+        knowledge_curation::tick(&self.store, &self.kb, &self.state, &view, now)
             .expect("curation tick")
     }
 

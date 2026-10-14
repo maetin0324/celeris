@@ -173,7 +173,10 @@ fn stranded_detects_inbox_merge_discard_hold_and_promotion_independently() {
         &store,
         None,
         &task_ops::view::ViewContext {
-            workspace_root: std::env::temp_dir(),
+            workspace_roots: task_core::local_machine::WorkspaceRoots::new(
+                std::env::temp_dir(),
+                None,
+            ),
             retry_backoff_base: std::time::Duration::from_secs(1),
             retry_backoff_max: std::time::Duration::from_secs(30),
             max_requeues: 2,

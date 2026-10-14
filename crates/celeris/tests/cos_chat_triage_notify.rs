@@ -127,7 +127,7 @@ fn cos_chat_triage_cutover_supersedes_legacy_pending_and_is_idempotent() {
         .notification_upsert_pending(NotificationKind::BadNews, "old", "old notice", None, at())
         .expect("insert");
     let view = task_ops::view::ViewContext {
-        workspace_root: dir.path().into(),
+        workspace_roots: task_core::local_machine::WorkspaceRoots::new(dir.path().into(), None),
         retry_backoff_base: std::time::Duration::from_secs(1),
         retry_backoff_max: std::time::Duration::from_secs(60),
         max_requeues: 3,
@@ -168,7 +168,7 @@ fn cos_chat_triage_resolved_source_is_withdrawn_before_post() {
         .expect("claim");
     let row = store.notification_pending().expect("pending").remove(0);
     let view = task_ops::view::ViewContext {
-        workspace_root: dir.path().into(),
+        workspace_roots: task_core::local_machine::WorkspaceRoots::new(dir.path().into(), None),
         retry_backoff_base: std::time::Duration::from_secs(1),
         retry_backoff_max: std::time::Duration::from_secs(60),
         max_requeues: 3,
@@ -269,7 +269,7 @@ fn cos_chat_triage_notice_revision_is_checked_before_post() {
         .expect("outbox");
     let row = store.notification_pending().expect("pending").remove(0);
     let view = task_ops::view::ViewContext {
-        workspace_root: dir.path().into(),
+        workspace_roots: task_core::local_machine::WorkspaceRoots::new(dir.path().into(), None),
         retry_backoff_base: std::time::Duration::from_secs(1),
         retry_backoff_max: std::time::Duration::from_secs(60),
         max_requeues: 3,

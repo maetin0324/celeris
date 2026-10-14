@@ -31,6 +31,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use task_core::local_machine::WorkspaceRoots;
 use task_core::report::{self, Report, ReportKind};
 use task_core::{
     CronJob, CronJobRun, CronRunOutcome, CronTz, DecisionStatus, Event, Status, StoreError, Task,
@@ -175,16 +176,42 @@ fn truncate_chars(s: &str, max: usize) -> String {
     out
 }
 
-/// worker の作業場所（`Local` の相対 path は `workspace_root` 基準）。remote は扱わない。
-fn workspace_dir(task: &Task, workspace_root: &Path) -> Option<PathBuf> {
-    match &task.workspace {
+/// worker の作業場所（`Local` の相対 path は task の root 基準。root は `WorkspaceRoots::task_root`、
+/// ADR 2026-10-14-local-machine-settings D5）。remote は扱わない（`Ok(None)`）。
+fn workspace_dir(
+    store: &dyn TaskStore,
+    roots: &WorkspaceRoots,
+    task: &Task,
+) -> Result<Option<PathBuf>, String> {
+    let root = || roots.task_root(store, &task.id).map_err(|e| e.to_string());
+    Ok(match &task.workspace {
         WorkspaceSpec::Local { path, .. } if path.is_absolute() => Some(path.clone()),
         WorkspaceSpec::Local { path, .. } if !path.as_os_str().is_empty() => {
-            Some(workspace_root.join(path))
+            Some(root()?.join(path))
         }
-        WorkspaceSpec::Local { .. } => Some(workspace_root.join(task.id.to_string())),
+        WorkspaceSpec::Local { .. } => Some(root()?.join(task.id.to_string())),
         _ => None,
+    })
+}
+
+/// 入力を初めて用意する前に task の root を固定する（dispatcher の `pin_task_root` と同じ規則: 既に固定が
+/// あるか、固定の無い root に足回りが既にある既存 task は固定しない）。
+fn pin_task_root(
+    store: &dyn TaskStore,
+    roots: &WorkspaceRoots,
+    task: &Task,
+    now: OffsetDateTime,
+) -> Result<(), String> {
+    if store
+        .task_workspace_root_get(&task.id)
+        .map_err(|e| e.to_string())?
+        .is_some()
+        || roots.unpinned_root().join(task.id.to_string()).exists()
+    {
+        return Ok(());
     }
+    task_ops::workspace::prepare_task_dir(store, roots, task, now).map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 /// tick ごとに 1 回呼ぶ。cron の日次整理 job が作った task を見て、入力の準備・終端処理（apply の反映・
@@ -193,7 +220,6 @@ fn workspace_dir(task: &Task, workspace_root: &Path) -> Option<PathBuf> {
 pub fn tick(
     store: &dyn TaskStore,
     knowledge_root: &Path,
-    workspace_root: &Path,
     state_file: &Path,
     view: &ViewContext,
     now: OffsetDateTime,
@@ -207,6 +233,7 @@ pub fn tick(
     if jobs.is_empty() {
         return Ok(out);
     }
+    let roots = &view.workspace_roots;
     let mut state = load_state(state_file);
     let before = state.clone();
     for job in &jobs {
@@ -232,17 +259,7 @@ pub fn tick(
                     let previous = runs[i + 1..]
                         .iter()
                         .find(|r| r.outcome == CronRunOutcome::Created && r.task_id.is_some());
-                    match prepare(
-                        store,
-                        knowledge_root,
-                        workspace_root,
-                        view,
-                        job,
-                        run,
-                        previous,
-                        &task,
-                        now,
-                    ) {
+                    match prepare(store, knowledge_root, view, job, run, previous, &task, now) {
                         Ok(entry) => {
                             state.tasks.insert(key, entry);
                             out.prepared.push(task_id);
@@ -267,15 +284,7 @@ pub fn tick(
                         push: None,
                         updated_at: rfc3339(now),
                     });
-                    match finish(
-                        store,
-                        knowledge_root,
-                        workspace_root,
-                        job,
-                        &task,
-                        &mut entry,
-                        now,
-                    ) {
+                    match finish(store, knowledge_root, roots, job, &task, &mut entry, now) {
                         Ok(applied) => {
                             state.tasks.insert(key, entry);
                             out.reported.push(task_id);
@@ -290,15 +299,7 @@ pub fn tick(
                 }
                 (Some(Phase::AwaitingApproval), _) => {
                     let Some(mut entry) = entry else { continue };
-                    match apply_pending(
-                        store,
-                        knowledge_root,
-                        workspace_root,
-                        job,
-                        &task,
-                        &mut entry,
-                        now,
-                    ) {
+                    match apply_pending(store, knowledge_root, roots, job, &task, &mut entry, now) {
                         Ok(applied) => {
                             if applied {
                                 out.applied.push(task_id);
@@ -338,7 +339,6 @@ struct Candidate {
 fn prepare(
     store: &dyn TaskStore,
     knowledge_root: &Path,
-    workspace_root: &Path,
     view: &ViewContext,
     job: &CronJob,
     run: &CronJobRun,
@@ -346,7 +346,11 @@ fn prepare(
     task: &Task,
     now: OffsetDateTime,
 ) -> Result<Entry, String> {
-    let dir = workspace_dir(task, workspace_root)
+    let roots = &view.workspace_roots;
+    if matches!(task.workspace, WorkspaceSpec::Local { .. }) {
+        pin_task_root(store, roots, task, now)?;
+    }
+    let dir = workspace_dir(store, roots, task)?
         .ok_or_else(|| "日次整理は local の作業場所だけを扱う".to_string())?;
     let inputs = dir.join("inputs");
     std::fs::create_dir_all(&inputs).map_err(|e| format!("{}: {e}", inputs.display()))?;
@@ -556,9 +560,13 @@ struct Checked {
     hash: String,
 }
 
-fn artifacts_dir(task: &Task, workspace_root: &Path) -> Option<PathBuf> {
-    let dir = workspace_dir(task, workspace_root)?;
-    Some(task_core::artifacts::artifacts_dir_for(task, &dir))
+fn artifacts_dir(
+    store: &dyn TaskStore,
+    roots: &WorkspaceRoots,
+    task: &Task,
+) -> Result<Option<PathBuf>, String> {
+    Ok(workspace_dir(store, roots, task)?
+        .map(|dir| task_core::artifacts::artifacts_dir_for(task, &dir)))
 }
 
 /// 計画を読み、本番 KB に対して検証し、差分（daemon が作る決定的な diff）とハッシュを求める。
@@ -634,7 +642,7 @@ fn local_date(job: &CronJob, now: OffsetDateTime) -> String {
 fn finish(
     store: &dyn TaskStore,
     knowledge_root: &Path,
-    workspace_root: &Path,
+    roots: &WorkspaceRoots,
     job: &CronJob,
     task: &Task,
     entry: &mut Entry,
@@ -647,13 +655,13 @@ fn finish(
         entry.detail = Some(format!("task が {:?} で終わった", task.status));
         return Ok(false);
     }
-    let artifacts = artifacts_dir(task, workspace_root)
+    let artifacts = artifacts_dir(store, roots, task)?
         .ok_or_else(|| "日次整理は local の作業場所だけを扱う".to_string())?;
     let date = local_date(job, now);
     // worker の差分は照合にだけ使い、curation.worker.diff へ移す。curation.diff は daemon の正本だけ。
     let diff_path = artifacts.join("curation.diff");
     let worker_diff = std::fs::read_to_string(&diff_path).ok();
-    let inputs = workspace_dir(task, workspace_root)
+    let inputs = workspace_dir(store, roots, task)?
         .ok_or("入力の作業場所がありません")?
         .join("inputs");
     let checked = check_plan(
@@ -989,7 +997,7 @@ fn open_or_answered(
 fn apply_pending(
     store: &dyn TaskStore,
     knowledge_root: &Path,
-    workspace_root: &Path,
+    roots: &WorkspaceRoots,
     job: &CronJob,
     task: &Task,
     entry: &mut Entry,
@@ -1015,9 +1023,9 @@ fn apply_pending(
         entry.detail = Some("報告時の計画のハッシュが無いので反映しない".into());
         return Ok(false);
     };
-    let artifacts = artifacts_dir(task, workspace_root)
+    let artifacts = artifacts_dir(store, roots, task)?
         .ok_or_else(|| "日次整理は local の作業場所だけを扱う".to_string())?;
-    let inputs = workspace_dir(task, workspace_root)
+    let inputs = workspace_dir(store, roots, task)?
         .ok_or("入力の作業場所がありません")?
         .join("inputs");
     apply_validated(

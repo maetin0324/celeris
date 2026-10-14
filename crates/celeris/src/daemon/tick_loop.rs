@@ -52,10 +52,12 @@ pub(crate) async fn tick_loop(
     let mut notify_last: Option<std::time::Instant> = None;
     // ADR-0037 D5: 429 が返っている間は次の送信を控える（`Retry-After` 秒）。
     let mut notify_blocked_until: Option<std::time::Instant> = None;
+    // ADR 2026-10-14-local-machine-settings D5: 足回りの resolver は dispatcher と同じものを使う。
+    let workspace_roots = dispatcher.config().workspace_roots.clone();
     let triage_store = task_core::SqliteStore::open_client(&config.db.path).map(|(store, _)| store);
     let triage_ready = if let Ok(store) = &triage_store {
         let view = task_ops::view::ViewContext {
-            workspace_root: config.workspace_root.clone(),
+            workspace_roots: workspace_roots.clone(),
             retry_backoff_base: Duration::from_secs(config.retry_backoff_base_secs),
             retry_backoff_max: Duration::from_secs(config.retry_backoff_max_secs),
             max_requeues: config.max_requeues,
@@ -82,7 +84,7 @@ pub(crate) async fn tick_loop(
     let mut ticks: u64 = 0;
     // ADR-0040 D4: 手元の run とレビューの数（drain の判定に使う。最後の tick の値）。
     let mut in_flight: usize = 0;
-    tracing::info!(db = %config.db.path.display(), workspace_root = %config.workspace_root.display(), max_concurrency = config.max_concurrency, tick_ms = config.tick_ms, role = %roles.role.get(), "celeris started");
+    tracing::info!(db = %config.db.path.display(), workspace_root = %workspace_roots.unpinned_root().display(), max_concurrency = config.max_concurrency, tick_ms = config.tick_ms, role = %roles.role.get(), "celeris started");
 
     let mut sigterm =
         tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).ok();
@@ -247,7 +249,7 @@ pub(crate) async fn tick_loop(
                 if let Err(e) = doc_gardener::tick(
                     store.as_ref(),
                     &config.docs_maintenance,
-                    &config.workspace_root,
+                    &workspace_roots,
                     &config.role_specs(),
                     &config.genre_specs(),
                     now,
@@ -259,7 +261,7 @@ pub(crate) async fn tick_loop(
                     store.as_ref(),
                     &config.knowledge.root,
                     &gc_state,
-                    &config.workspace_root,
+                    &workspace_roots,
                     &config.knowledge.gc,
                     &config.role_specs(),
                     &config.genre_specs(),
@@ -294,7 +296,7 @@ pub(crate) async fn tick_loop(
                 // ADR-0131 付記 D10 (2)(5)(6): 日次整理 job の task の入力準備・終端の検証・承認後の反映・
                 // 1 日 1 件の報告（決定的。LLM は呼ばない）。
                 let curation_view = task_ops::view::ViewContext {
-                    workspace_root: config.workspace_root.clone(),
+                    workspace_roots: workspace_roots.clone(),
                     retry_backoff_base: Duration::from_secs(config.retry_backoff_base_secs),
                     retry_backoff_max: Duration::from_secs(config.retry_backoff_max_secs),
                     max_requeues: config.max_requeues,
@@ -303,7 +305,6 @@ pub(crate) async fn tick_loop(
                 match knowledge_curation::tick(
                     store.as_ref(),
                     &config.knowledge.root,
-                    &config.workspace_root,
                     &knowledge_curation::state_path(&config.db.path),
                     &curation_view,
                     now,
@@ -329,7 +330,7 @@ pub(crate) async fn tick_loop(
                     match knowledge_maint::apply_finished(
                         store.as_ref(),
                         &config.knowledge.root,
-                        &config.workspace_root,
+                        &workspace_roots,
                         now,
                     ) {
                         Ok(applied) if applied > 0 => {
@@ -370,7 +371,7 @@ pub(crate) async fn tick_loop(
                 if due {
                     notify_last = Some(std::time::Instant::now());
                     let view = task_ops::view::ViewContext {
-                        workspace_root: config.workspace_root.clone(),
+                        workspace_roots: workspace_roots.clone(),
                         retry_backoff_base: Duration::from_secs(config.retry_backoff_base_secs),
                         retry_backoff_max: Duration::from_secs(config.retry_backoff_max_secs),
                         max_requeues: config.max_requeues,

@@ -171,7 +171,16 @@ fn terminal_tasks_do_not_get_a_knowledge_task_any_more() {
         0
     );
     assert_eq!(
-        apply_finished(&store, &root, workspace_root.path(), now).expect("apply"),
+        apply_finished(
+            &store,
+            &root,
+            &task_core::local_machine::WorkspaceRoots::new(
+                workspace_root.path().to_path_buf(),
+                None
+            ),
+            now
+        )
+        .expect("apply"),
         0
     );
 
@@ -248,7 +257,13 @@ fn apply_finished_applies_a_done_run_and_fails_a_failed_run() {
         .expect("create run");
 
     let now = OffsetDateTime::now_utc();
-    let applied = apply_finished(&store, &root, workspace_root.path(), now).expect("apply");
+    let applied = apply_finished(
+        &store,
+        &root,
+        &task_core::local_machine::WorkspaceRoots::new(workspace_root.path().to_path_buf(), None),
+        now,
+    )
+    .expect("apply");
     assert_eq!(applied, 1, "done の run だけ数える");
 
     let done = store
@@ -283,7 +298,16 @@ fn apply_finished_applies_a_done_run_and_fails_a_failed_run() {
         .knowledge_run_create(source3.id, running_run_task.id, OffsetDateTime::now_utc())
         .expect("create run");
     assert_eq!(
-        apply_finished(&store, &root, workspace_root.path(), now).expect("apply"),
+        apply_finished(
+            &store,
+            &root,
+            &task_core::local_machine::WorkspaceRoots::new(
+                workspace_root.path().to_path_buf(),
+                None
+            ),
+            now
+        )
+        .expect("apply"),
         0
     );
     assert_eq!(
@@ -344,7 +368,13 @@ fn a_failed_run_is_retried_exactly_once() {
     started_with(&store, &first_run, LANGMEM_ADAPTER);
 
     let now = OffsetDateTime::now_utc();
-    apply_finished(&store, &root, workspace_root.path(), now).expect("apply");
+    apply_finished(
+        &store,
+        &root,
+        &task_core::local_machine::WorkspaceRoots::new(workspace_root.path().to_path_buf(), None),
+        now,
+    )
+    .expect("apply");
     let run = store
         .knowledge_run_get(source.id)
         .expect("get")
@@ -413,7 +443,13 @@ fn retry_noops_when_disabled_or_the_kb_is_missing() {
     let (_source, run_task) = failed_run(&store);
     started_with(&store, &run_task, LANGMEM_ADAPTER);
     let now = OffsetDateTime::now_utc();
-    apply_finished(&store, &root, root.as_path(), now).expect("apply");
+    apply_finished(
+        &store,
+        &root,
+        &task_core::local_machine::WorkspaceRoots::new(root.clone(), None),
+        now,
+    )
+    .expect("apply");
     assert!(
         retry_failed(&store, &root, false, 10, None, &[], &[], now)
             .expect("disabled")
@@ -474,7 +510,16 @@ fn a_fallback_run_is_applied_the_same_way_and_records_its_via() {
 
     let now = OffsetDateTime::now_utc();
     assert_eq!(
-        apply_finished(&store, &root, workspace_root.path(), now).expect("apply"),
+        apply_finished(
+            &store,
+            &root,
+            &task_core::local_machine::WorkspaceRoots::new(
+                workspace_root.path().to_path_buf(),
+                None
+            ),
+            now
+        )
+        .expect("apply"),
         1
     );
     let run = store

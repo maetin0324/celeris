@@ -144,6 +144,10 @@ fn store() -> task_core::SqliteStore {
         .unwrap();
     store
 }
+/// 足回りの resolver（固定の無い task は `tmp` 直下。ADR 2026-10-14-local-machine-settings D5）。
+fn roots(tmp: &tempfile::TempDir) -> task_core::local_machine::WorkspaceRoots {
+    task_core::local_machine::WorkspaceRoots::new(tmp.path().to_path_buf(), None)
+}
 #[test]
 fn schedules_once_across_restarts_disabled_and_inflight_do_not_schedule() {
     let root = fixture();
@@ -152,10 +156,30 @@ fn schedules_once_across_restarts_disabled_and_inflight_do_not_schedule() {
     let store = store();
     let now = OffsetDateTime::now_utc();
     let mut cfg = GcConfig::default();
-    tick(&store, root.path(), &path, tmp.path(), &cfg, &[], &[], now).unwrap();
+    tick(
+        &store,
+        root.path(),
+        &path,
+        &roots(&tmp),
+        &cfg,
+        &[],
+        &[],
+        now,
+    )
+    .unwrap();
     assert!(!path.exists());
     cfg.enabled = true;
-    tick(&store, root.path(), &path, tmp.path(), &cfg, &[], &[], now).unwrap();
+    tick(
+        &store,
+        root.path(),
+        &path,
+        &roots(&tmp),
+        &cfg,
+        &[],
+        &[],
+        now,
+    )
+    .unwrap();
     let initial = std::fs::read(&path).unwrap();
     let state: State = serde_json::from_slice(&initial).unwrap();
     let task = store.get(state.pending.unwrap().task).unwrap().unwrap();
@@ -165,7 +189,7 @@ fn schedules_once_across_restarts_disabled_and_inflight_do_not_schedule() {
         &store,
         root.path(),
         &path,
-        tmp.path(),
+        &roots(&tmp),
         &cfg,
         &[],
         &[],
@@ -200,7 +224,17 @@ fn failed_or_missing_output_is_not_reviewed_and_interval_is_consumed() {
         ..Default::default()
     };
     save(&path, &state).unwrap();
-    tick(&store, root.path(), &path, tmp.path(), &cfg, &[], &[], now).unwrap();
+    tick(
+        &store,
+        root.path(),
+        &path,
+        &roots(&tmp),
+        &cfg,
+        &[],
+        &[],
+        now,
+    )
+    .unwrap();
     let after: State = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
     assert!(after.pending.is_none());
     assert!(after.reviewed.is_empty());
@@ -222,7 +256,17 @@ fn successful_noop_preserves_canonical_and_excluded_pages_never_enter_batch() {
         ..Default::default()
     };
     let before = std::fs::read(root.path().join("projects/demo/a.md")).unwrap();
-    tick(&store, root.path(), &path, tmp.path(), &cfg, &[], &[], now).unwrap();
+    tick(
+        &store,
+        root.path(),
+        &path,
+        &roots(&tmp),
+        &cfg,
+        &[],
+        &[],
+        now,
+    )
+    .unwrap();
     let mut initial: State = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     let mut pending = initial.pending.take().unwrap();
     assert!(pending.pages.iter().all(|p| !p.path.contains("excluded")));
@@ -242,7 +286,17 @@ fn successful_noop_preserves_canonical_and_excluded_pages_never_enter_batch() {
         "{\"candidates\":[]}",
     )
     .unwrap();
-    tick(&store, root.path(), &path, tmp.path(), &cfg, &[], &[], now).unwrap();
+    tick(
+        &store,
+        root.path(),
+        &path,
+        &roots(&tmp),
+        &cfg,
+        &[],
+        &[],
+        now,
+    )
+    .unwrap();
     let reviewed: State = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     assert_eq!(reviewed.reviewed.len(), reviewed_count);
     assert_eq!(
@@ -262,13 +316,23 @@ fn lost_derived_state_still_does_not_duplicate_active_support_task() {
         enabled: true,
         ..Default::default()
     };
-    tick(&store, root.path(), &path, tmp.path(), &cfg, &[], &[], now).unwrap();
+    tick(
+        &store,
+        root.path(),
+        &path,
+        &roots(&tmp),
+        &cfg,
+        &[],
+        &[],
+        now,
+    )
+    .unwrap();
     std::fs::remove_file(&path).unwrap();
     tick(
         &store,
         root.path(),
         &path,
-        tmp.path(),
+        &roots(&tmp),
         &cfg,
         &[],
         &[],
@@ -290,7 +354,17 @@ fn missing_and_malformed_success_output_are_not_reviews() {
             enabled: true,
             ..Default::default()
         };
-        tick(&store, root.path(), &path, tmp.path(), &cfg, &[], &[], now).unwrap();
+        tick(
+            &store,
+            root.path(),
+            &path,
+            &roots(&tmp),
+            &cfg,
+            &[],
+            &[],
+            now,
+        )
+        .unwrap();
         let mut state: State = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         let pending = state.pending.as_mut().unwrap();
         let mut task = store.get(pending.task).unwrap().unwrap();
@@ -307,7 +381,17 @@ fn missing_and_malformed_success_output_are_not_reviews() {
             std::fs::create_dir_all(&artifacts).unwrap();
             std::fs::write(artifacts.join("knowledge-candidates.json"), output).unwrap();
         }
-        tick(&store, root.path(), &path, tmp.path(), &cfg, &[], &[], now).unwrap();
+        tick(
+            &store,
+            root.path(),
+            &path,
+            &roots(&tmp),
+            &cfg,
+            &[],
+            &[],
+            now,
+        )
+        .unwrap();
         let after: State = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert!(after.reviewed.is_empty());
         assert!(after.pending.is_none());

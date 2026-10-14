@@ -1,6 +1,7 @@
 //! Managed repository documentation scans. No LLM runs in the daemon.
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+use task_core::local_machine::WorkspaceRoots;
 use task_core::{GenreSpec, ListFilter, ListOrder, RoleSpec, TaskId, TaskStore, WorkspaceSpec};
 use task_ops::docs_maintenance as docs;
 use time::OffsetDateTime;
@@ -39,7 +40,7 @@ fn due(last: i64, now: i64, hours: u64) -> bool {
 pub fn tick(
     store: &dyn TaskStore,
     config: &GardenerConfig,
-    workspace_root: &Path,
+    workspace_roots: &WorkspaceRoots,
     roles: &[RoleSpec],
     genres: &[GenreSpec],
     now: OffsetDateTime,
@@ -70,7 +71,7 @@ pub fn tick(
             let result = schedule_repo(
                 store,
                 config,
-                workspace_root,
+                workspace_roots,
                 roles,
                 genres,
                 now,
@@ -94,7 +95,7 @@ pub fn tick(
 fn schedule_repo(
     store: &dyn TaskStore,
     config: &GardenerConfig,
-    workspace_root: &Path,
+    workspace_roots: &WorkspaceRoots,
     roles: &[RoleSpec],
     genres: &[GenreSpec],
     now: OffsetDateTime,
@@ -193,7 +194,10 @@ is eligible for explicit docs publication.\n\n{}",
         })).map_err(|e| e.to_string())?;
         let task = task_ops::add::create_support_task(store, spec, roles, genres, now)
             .map_err(|e| e.to_string())?;
-        let artifacts = workspace_root.join(task.id.to_string()).join("artifacts");
+        // 足回りを初めて用意するので root を固定する（ADR 2026-10-14-local-machine-settings D5）。
+        let artifacts = task_ops::workspace::prepare_task_dir(store, workspace_roots, &task, now)
+            .map_err(|e| e.to_string())?
+            .join("artifacts");
         std::fs::create_dir_all(&artifacts).map_err(|e| e.to_string())?;
         std::fs::write(
             artifacts.join("docs-audit.json"),

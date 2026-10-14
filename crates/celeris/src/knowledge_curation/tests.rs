@@ -25,7 +25,7 @@ const PAGE_B: &str = "---\ntitle: B\n---\nA と同じ趣旨\n";
 
 fn view(ws: &Path) -> ViewContext {
     ViewContext {
-        workspace_root: ws.to_path_buf(),
+        workspace_roots: WorkspaceRoots::new(ws.to_path_buf(), None),
         retry_backoff_base: std::time::Duration::from_secs(1),
         retry_backoff_max: std::time::Duration::from_secs(1),
         max_requeues: 3,
@@ -100,11 +100,14 @@ impl Env {
         self.t0 + time::Duration::hours(hours)
     }
 
+    fn roots(&self) -> WorkspaceRoots {
+        view(self.ws.path()).workspace_roots
+    }
+
     fn tick(&self, now: OffsetDateTime) -> TickOutcome {
         tick(
             &self.store,
             self.kb.path(),
-            self.ws.path(),
             &self.state.path().join("state.json"),
             &view(self.ws.path()),
             now,
@@ -124,11 +127,15 @@ impl Env {
     }
 
     fn dir(&self, task: &Task) -> PathBuf {
-        workspace_dir(task, self.ws.path()).expect("local")
+        workspace_dir(&self.store, &self.roots(), task)
+            .expect("resolve")
+            .expect("local")
     }
 
     fn artifacts(&self, task: &Task) -> PathBuf {
-        let dir = artifacts_dir(task, self.ws.path()).expect("local");
+        let dir = artifacts_dir(&self.store, &self.roots(), task)
+            .expect("resolve")
+            .expect("local");
         std::fs::create_dir_all(&dir).expect("artifacts");
         dir
     }

@@ -143,6 +143,7 @@ fn cluster_config(clusters: Vec<celeris::config::ClusterConfig>) -> Config {
         sessions: Default::default(),
         mcp: Default::default(),
         source_path: None,
+        workspace_root_cli: None,
         execution: Default::default(),
         routing_eval: Default::default(),
     }
@@ -219,6 +220,10 @@ fn task_fixture(status: Status, workspace: WorkspaceSpec) -> Task {
     }
 }
 
+fn store() -> task_core::SqliteStore {
+    task_core::SqliteStore::open_in_memory().unwrap()
+}
+
 #[test]
 fn resolve_cluster_target_errors_when_cluster_missing() {
     let config = cluster_config(vec![]);
@@ -229,7 +234,7 @@ fn resolve_cluster_target_errors_when_cluster_missing() {
             mode: None,
         },
     );
-    let err = resolve_cluster_target(&config, &task, "local", None).unwrap_err();
+    let err = resolve_cluster_target(&store(), &config, &task, "local", None).unwrap_err();
     assert!(
         err.to_string()
             .contains("cluster not found in config: local"),
@@ -247,7 +252,7 @@ fn resolve_cluster_target_requires_workspace_arg_for_local_task() {
             mode: None,
         },
     );
-    let err = resolve_cluster_target(&config, &task, "local", None).unwrap_err();
+    let err = resolve_cluster_target(&store(), &config, &task, "local", None).unwrap_err();
     assert!(err.to_string().contains("has a local workspace"), "{err}");
 }
 
@@ -262,8 +267,9 @@ fn resolve_cluster_target_uses_task_remote_path_without_workspace_arg() {
             mode: None,
         },
     );
-    let target = resolve_cluster_target(&config, &task, "local", None).unwrap();
+    let target = resolve_cluster_target(&store(), &config, &task, "local", None).unwrap();
     assert_eq!(target.remote_path, PathBuf::from("/remote/proj"));
+    // 固定の無い task の写しは設定ファイルの root（ADR 2026-10-14-local-machine-settings D5）。
     assert_eq!(
         target.mirror_dir,
         config.workspace_root.join(task.id.to_string())
@@ -282,8 +288,14 @@ fn resolve_cluster_target_workspace_arg_overrides_task_path() {
             mode: None,
         },
     );
-    let target =
-        resolve_cluster_target(&config, &task, "local", Some(Path::new("/remote/other"))).unwrap();
+    let target = resolve_cluster_target(
+        &store(),
+        &config,
+        &task,
+        "local",
+        Some(Path::new("/remote/other")),
+    )
+    .unwrap();
     assert_eq!(target.remote_path, PathBuf::from("/remote/other"));
     assert!(target.warning.is_none());
 }
@@ -299,7 +311,7 @@ fn resolve_cluster_target_warns_when_task_targets_a_different_cluster() {
             mode: None,
         },
     );
-    let target = resolve_cluster_target(&config, &task, "local", None).unwrap();
+    let target = resolve_cluster_target(&store(), &config, &task, "local", None).unwrap();
     assert_eq!(target.remote_path, PathBuf::from("/remote/proj"));
     assert!(target.warning.as_deref().unwrap().contains("other"));
 }
@@ -315,8 +327,14 @@ fn resolve_cluster_target_rejects_running_or_reviewing_task_even_with_workspace_
                 mode: None,
             },
         );
-        let err = resolve_cluster_target(&config, &task, "local", Some(Path::new("/remote/x")))
-            .unwrap_err();
+        let err = resolve_cluster_target(
+            &store(),
+            &config,
+            &task,
+            "local",
+            Some(Path::new("/remote/x")),
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("stop celeris or wait"), "{err}");
     }
 }

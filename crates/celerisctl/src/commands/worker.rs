@@ -13,7 +13,7 @@
 //! 走査から組み、実行中の数・cooldown は見ない（読むだけ）。実行器は `[harnesses.<id>]` の宣言から
 //! 組んだアダプタに route を当てたもの（`task_worker::route::route_adapter`）。
 //! 作業ディレクトリは `--workspace` があればそれ、無ければタスクの `WorkspaceSpec::Local`
-//! （相対なら `workspace_root` 基準）。タスクが `running`/`reviewing` のときは、デーモンの
+//! （相対なら task の root 基準。root は `Config::workspace_roots` の resolver が解く）。タスクが `running`/`reviewing` のときは、デーモンの
 //! run と作業ディレクトリを取り合うため `--workspace` 指定なしでは拒否する。
 //!
 //! `--cluster <id>`（ADR-0018 受け入れ 10）: `[[clusters]] id` を指定すると、そのクラスタ側の
@@ -70,7 +70,7 @@ pub struct WorkerRunArgs {
     #[arg(long)]
     pub model: Option<String>,
 
-    /// 作業ディレクトリ。省略時はタスクの workspace（相対なら `workspace_root` 基準）。
+    /// 作業ディレクトリ。省略時はタスクの workspace（相対なら task の root 基準）。
     /// `--cluster` と併用時は「クラスタ側」のパス（`celerisctl add --cluster` と同じ意味）。
     #[arg(long)]
     pub workspace: Option<PathBuf>,
@@ -93,7 +93,7 @@ struct ClusterTarget {
     spec: ClusterSpec,
     /// クラスタ側の作業ディレクトリ。
     remote_path: PathBuf,
-    /// 手元の写し（デーモンと同じ `workspace_root/<task_id>`）。
+    /// 手元の写し（デーモンと同じ `<task の root>/<task_id>`）。
     mirror_dir: PathBuf,
     /// タスクの `WorkspaceSpec::Remote{cluster}` と `--cluster` が食い違うときの警告（呼び出し側が stderr に出す）。
     warning: Option<String>,
@@ -104,6 +104,7 @@ struct ClusterTarget {
 /// 無ければエラー。手元の写しはデーモンと共有するため、タスクが `running`/`reviewing` なら
 /// `--workspace` の有無に関係なく拒否する。
 fn resolve_cluster_target(
+    store: &dyn TaskStore,
     config: &Config,
     task: &Task,
     cluster_id: &str,
@@ -152,7 +153,7 @@ fn resolve_cluster_target(
         }
     };
 
-    let mirror_dir = config.workspace_root.join(task.id.to_string());
+    let mirror_dir = config.workspace_roots().task_dir(store, &task.id)?;
     Ok(ClusterTarget {
         spec,
         remote_path,
@@ -322,7 +323,8 @@ pub fn run_run(store: &dyn TaskStore, args: WorkerRunArgs) -> Result<ExitCode, C
         .map_err(|e| CliError::msg(format!("failed to start tokio runtime: {e}")))?;
 
     if let Some(cluster_id) = &args.cluster {
-        let target = resolve_cluster_target(&config, &task, cluster_id, args.workspace.as_deref())?;
+        let target =
+            resolve_cluster_target(store, &config, &task, cluster_id, args.workspace.as_deref())?;
         if let Some(warning) = &target.warning {
             eprintln!("warning: {warning}");
         }
@@ -341,9 +343,10 @@ pub fn run_run(store: &dyn TaskStore, args: WorkerRunArgs) -> Result<ExitCode, C
     let workspace_dir = match &args.workspace {
         Some(dir) => dir.clone(),
         None => match &task.workspace {
-            WorkspaceSpec::Local { path, .. } if path.is_relative() => {
-                config.workspace_root.join(path)
-            }
+            WorkspaceSpec::Local { path, .. } if path.is_relative() => config
+                .workspace_roots()
+                .task_root(store, &task.id)?
+                .join(path),
             WorkspaceSpec::Local { path, .. } => path.clone(),
             WorkspaceSpec::Remote { .. } => {
                 return Err(CliError::msg(
@@ -482,7 +485,7 @@ async fn execute_on_cluster(
         .push_str(&remote_exec_instructions(&settings));
 
     let run_id = TaskId::new().to_string();
-    // ADR-0036 D1: Remote の写しは `workspace_root/<task_id>` でタスクごとなので `<写し>/artifacts`。
+    // ADR-0036 D1: Remote の写しは `<root>/<task_id>` でタスクごとなので `<写し>/artifacts`。
     let artifacts_dir = task_core::artifacts::artifacts_dir_for(&run_task, &prepared);
     let req = RunRequest {
         llm_route: Some(route.clone()),

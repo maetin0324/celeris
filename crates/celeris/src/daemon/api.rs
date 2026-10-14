@@ -29,7 +29,11 @@ pub fn config_view(config: &Config, listen: SocketAddr) -> ConfigView {
             .map(|p| p.display().to_string())
             .unwrap_or_default(),
         db: config.db.path.display().to_string(),
-        workspace_root: config.workspace_root.display().to_string(),
+        workspace_root: config
+            .workspace_roots()
+            .unpinned_root()
+            .display()
+            .to_string(),
         tick_ms: config.tick_ms,
         max_concurrency: config.max_concurrency,
         lease_grace_secs: config.lease_grace_secs,
@@ -260,7 +264,7 @@ pub fn api_settings(
         // ADR-0064 D5: API もデーモン内の接続なので背景チェックポイント側に回す。
         background_checkpoint: true,
         view: ViewContext {
-            workspace_root: config.workspace_root.clone(),
+            workspace_roots: config.workspace_roots(),
             retry_backoff_base: Duration::from_secs(config.retry_backoff_base_secs),
             retry_backoff_max: Duration::from_secs(config.retry_backoff_max_secs),
             max_requeues: config.max_requeues,

@@ -233,7 +233,7 @@ pub fn tick(
     store: &dyn TaskStore,
     root: &Path,
     state_path: &Path,
-    workspaces: &Path,
+    workspace_roots: &task_core::local_machine::WorkspaceRoots,
     cfg: &GcConfig,
     roles: &[RoleSpec],
     genres: &[GenreSpec],
@@ -257,11 +257,11 @@ pub fn tick(
             struct Output {
                 candidates: Vec<kb::Candidate>,
             }
-            let path = task_core::artifacts::artifacts_dir_for(
-                &task,
-                &workspaces.join(task.id.to_string()),
-            )
-            .join("knowledge-candidates.json");
+            let task_dir = workspace_roots
+                .task_dir(store, &task.id)
+                .map_err(|e| e.to_string())?;
+            let path = task_core::artifacts::artifacts_dir_for(&task, &task_dir)
+                .join("knowledge-candidates.json");
             // Missing or malformed output is a failure, never a successful no-op review.
             if let Ok(output) = std::fs::read(path)
                 .map_err(|e| e.to_string())

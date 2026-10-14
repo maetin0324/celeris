@@ -12,6 +12,7 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use clap::{Args, ValueEnum};
+use task_core::local_machine::WorkspaceRoots;
 use task_core::{Check, Status, Task, TaskId, TaskStore};
 use task_ops::view::{self, ViewContext};
 use time::OffsetDateTime;
@@ -36,8 +37,8 @@ pub struct ShowArgs {
     #[arg(long)]
     pub json: bool,
 
-    /// `--json` のときの `ViewContext.workspace_root`。省略時は `--config` の値、それも無ければ `./workspaces`
-    /// （`task_detail_json` の doc を参照）。
+    /// `--json` のときの足回りの root の CLI 上書き（`celeris --workspace-root` と同じく task の固定より優先）。
+    /// 省略時は `--config` の値と task の固定、それも無ければ `./workspaces`（`task_detail_json` の doc を参照）。
     #[arg(long)]
     pub workspace_root: Option<PathBuf>,
 
@@ -203,7 +204,7 @@ pub fn run_show(store: &dyn TaskStore, args: ShowArgs) -> Result<ExitCode, CliEr
 /// （= API と同じ値。`[[clusters]]` も分かるので `worktree` が出る）。無ければ次の既定値で作る
 /// （`config.toml` の対応する既定値と同じ。`celeris::config` の `default_workspace_root` /
 /// `default_retry_backoff_base_secs` / `default_retry_backoff_max_secs` / `default_max_requeues`）:
-/// - `workspace_root`: `./workspaces`（`--workspace-root` で上書き可）
+/// - 足回りの root: `./workspaces`（`--workspace-root` で上書き可。`--config` があっても CLI の root が優先）
 /// - `retry_backoff`: base 10 秒 / max 300 秒
 /// - `max_requeues`: 5
 /// - `clusters`: 空（`worktree` は `null` になる）
@@ -221,14 +222,14 @@ fn task_detail_json(
     };
     let ctx = match &config {
         Some(c) => ViewContext {
-            workspace_root: workspace_root.unwrap_or_else(|| c.workspace_root.clone()),
+            workspace_roots: WorkspaceRoots::new(c.workspace_root.clone(), workspace_root),
             retry_backoff_base: Duration::from_secs(c.retry_backoff_base_secs),
             retry_backoff_max: Duration::from_secs(c.retry_backoff_max_secs),
             max_requeues: c.max_requeues,
             clusters: c.cluster_view_infos(),
         },
         None => ViewContext {
-            workspace_root: workspace_root.unwrap_or_else(|| PathBuf::from("./workspaces")),
+            workspace_roots: WorkspaceRoots::new(PathBuf::from("./workspaces"), workspace_root),
             retry_backoff_base: Duration::from_secs(10),
             retry_backoff_max: Duration::from_secs(300),
             max_requeues: 5,

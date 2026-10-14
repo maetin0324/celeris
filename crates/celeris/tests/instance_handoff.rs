@@ -795,7 +795,12 @@ fn the_cli_overrides_replace_the_config_values() {
         token_file: Some(PathBuf::from("api.token")),
     });
     assert_eq!(config.db.path, env.root.join("staging.sqlite3"));
-    assert_eq!(config.workspace_root, env.root.join("staging-ws"));
+    // `workspace_root` は設定ファイルの値のまま、CLI の root は resolver が優先する。
+    assert_eq!(config.workspace_root_cli, Some(env.root.join("staging-ws")));
+    assert_eq!(
+        config.workspace_roots().unpinned_root(),
+        env.root.join("staging-ws")
+    );
     assert_eq!(
         config.api.listen.map(|a| a.to_string()).as_deref(),
         Some("127.0.0.1:7711")

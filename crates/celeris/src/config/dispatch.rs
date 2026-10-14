@@ -137,7 +137,7 @@ impl Config {
             idle_timeout: Duration::from_secs(self.idle_timeout_secs),
             kill_grace: Duration::from_secs(self.kill_grace_secs),
             review_timeout: Duration::from_secs(self.review_timeout_secs),
-            workspace_root: self.workspace_root.clone(),
+            workspace_roots: self.workspace_roots(),
             plan_auto_accept: self.plan.auto_accept,
             retry_backoff_base: Duration::from_secs(self.retry_backoff_base_secs),
             retry_backoff_max: Duration::from_secs(self.retry_backoff_max_secs),

@@ -531,12 +531,12 @@ fn advance(
             // 委譲した子や集約待ちを含め、元の仕事のdoneを待つ。
             return Ok(());
         }
-        if let Some(marker) =
-            task_ops::workspace::read_marker(&config.workspace_root.join(old.task_id.to_string()))
-            && marker
-                .repos
-                .iter()
-                .any(|r| task_ops::changes::is_dirty(Path::new(&r.dir)) != Some(false))
+        if let Some(marker) = task_ops::workspace::read_marker(
+            &config.workspace_roots().task_dir(store, &old.task_id)?,
+        ) && marker
+            .repos
+            .iter()
+            .any(|r| task_ops::changes::is_dirty(Path::new(&r.dir)) != Some(false))
         {
             d.state = State::Blocked;
             d.detail = format!(

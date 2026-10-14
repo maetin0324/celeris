@@ -73,9 +73,10 @@ pub fn run_backfill_artifacts(
         }
         None => backfill::default_targets(store)?,
     };
+    let roots = config.workspace_roots();
     let mut total = 0usize;
     for task in &targets {
-        let report = backfill::backfill_task(store, task, &config.workspace_root, args.dry_run)?;
+        let report = backfill::backfill_task(store, task, &roots, args.dry_run)?;
         if report.artifacts.is_empty() {
             continue;
         }
@@ -91,7 +92,7 @@ pub fn run_backfill_artifacts(
                 },
                 artifact.path,
                 artifact_size(
-                    &task_ops::workspace::local_dir(task, &config.workspace_root),
+                    &task_ops::workspace::local_dir(store, &roots, task)?,
                     artifact
                 ),
                 &artifact.sha256[..12.min(artifact.sha256.len())]
@@ -144,7 +145,7 @@ pub fn run_prune(store: &dyn TaskStore, args: PruneArgs) -> Result<ExitCode, Cli
     let now = OffsetDateTime::now_utc();
     let candidates = task_worker::workspace_prune::find_prune_candidates(
         store,
-        &config.workspace_root,
+        &config.workspace_roots(),
         now,
         after_secs,
     )?;

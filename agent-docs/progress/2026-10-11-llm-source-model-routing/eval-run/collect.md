@@ -73,3 +73,8 @@ eval_trials 全体: passed 52・failed 4・error 13・queued 217。running・sco
 - 本番 DB 読み取り（`python3 -I count_states.py <E>`）: batches.json 276 = passed 159・failed 9・error 13・cancelled 93・running 2。retry-batches-codex.json 93 = passed 33・failed 2・queued 56・running 2。未終端 60。集計はまだしない。
 - 7d 使用率（11:24Z）: claude_max_lab 0.15・claude_max_personal 0.16・chatgpt_plus_personal 0.07。
 - error 13 件は全部仕組み側（dispatcher stopped 4・daemon recovery 3・worktree 消失の question 3・yielded 3）。うち claude 12 件の再投入は claude の承認上限 15% を超えるので、受信箱の決定 `claude-resubmit`（needed_before self）で人に聞いた。codex（sol）1 件は上限 21% の内なので、終端後に再投入する。
+
+## 決定 claude-resubmit の出し直し（2026-10-14 11:26Z、run 01M4X2JAFV）
+- 本番 DB の decisions に `claude-resubmit` の行が無く、前回の run（01M4X2GN7S）は決定を出し損ねていた。この run で出し直した（needed_before self）。
+- 11:25Z の状態（`count_states.py`）: batches.json 276 = passed 159・failed 9・error 13・cancelled 93・running 2。retry-batches-codex.json 93 = passed 33・failed 2・queued 56・running 2。未終端 60。集計はまだしない。
+- 7d: claude_max_lab 0.15・claude_max_personal 0.16・chatgpt_plus_personal 0.07。

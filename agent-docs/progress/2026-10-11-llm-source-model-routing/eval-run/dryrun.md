@@ -17,28 +17,25 @@ $CARGO_TARGET_DIR/debug/celeris-routing-eval dry-run \
   --db /local/celeris/data/db/celeris.sqlite3 --out E/dryrun-0.json
 ```
 
-- exit 0。`E/dryrun-0.json`（sha256 `95a3ed27…f82ac3beb`）と、標準出力の写し `E/dryrun-0.stdout`。
+- exit 0。`E/dryrun-0.json`（sha256 `090b2383…a3688`）と、標準出力の写し `E/dryrun-0.stdout`。runner は repo のまま（この unit ではコードを変えない）。
 - manifest sha256 `118b413e…7e7`（manifest-v2: 30 問、subset 12）。
 
-### 初回に出た不具合と修正（runner）
+### runner の出力の欠け（runner の修正は別 unit に回す）
 
-修正前の初回出力では claude の quota がすべて「未測定」だった。USD は過小（opus 60 呼び出しで $7.87）。原因は 3 つ。
+今の runner の出力では claude・codex の quota がすべて「未測定」で、USD は過小になる（opus 60 呼び出しで $7.87、fable 12 で $17.37）。原因は 3 つ。
 
-1. account の名前が合っていなかった。runner は `quota_estimated.account` を `claude`／`codex` として引いていたが、本番の値は `claude_max_personal`・`claude_max_lab`・`chatgpt_plus_personal`。
-2. 窓の欄の名前が違っていた。runner は `per_run_pct` を読んでいたが、本番の event は窓ごとに `used_pct`（その run の前後差、単位は百分率の点）を持つ。
-3. 定価換算に cache token が入っていなかった。`input_tokens`・`output_tokens` だけで計算していたが、本番の claude run は cache read が大半を占める。
+1. account の名前が合っていない。runner は `quota_estimated.account` を `claude`／`codex` として引くが、本番の値は `claude_max_personal`・`claude_max_lab`・`chatgpt_plus_personal`。
+2. 窓の欄の名前が違う。runner は `per_run_pct` を読むが、本番の event は窓ごとに `used_pct`（その run の前後差、単位は百分率の点）を持つ。
+3. 定価換算に cache token が入っていない。`input_tokens`・`output_tokens` だけで計算するが、本番の claude run は cache read が大半を占める。
 
-`crates/routing-eval/src/dryrun.rs` を次のように直した。
+この unit の範囲は進捗ファイルだけなので、runner は直さない。下の表の quota と USD は、本番 DB を読み取りだけで開く script `E/measured_quota.py` で計算した（出力 `E/measured-quota-0.json`）。
 
-- account を event の `source` で決める（`claude-oauth`→claude、`codex-oauth`→codex）。
-- 率は (account, model, 窓) ごとに、窓の `method=measured` の `used_pct` を平均する。対象は直近 100 run で、run の model は `runs.model` から引く。
-- 候補ごとの窓 % と標本数を出力に足した。account の合計は、全 model に率があるときだけ出す。
-- `one_month` を monthly に読む。
-- USD は `usage_json.cost_usd`（harness が報告する定価）の model 別中央値を使う。無い run は cache read 0.1 倍・cache write 1.25 倍で計算する。
+- quota: event の `source`（`claude-oauth`→claude、`codex-oauth`→codex）と `runs.model` で (account, model, 窓) に分ける。窓のうち `method=measured` の `used_pct` を、直近 100 run について平均する。この率に呼び出し数を掛ける。
+- USD: model ごとに、`runs.usage_json.cost_usd`（harness が報告する定価、cache 込み）の中央値を取り、呼び出し数を掛ける。
 
-試験も足した: `production_measured_quota_is_averaged_per_model_and_mapped_from_source`、`list_cost_prefers_reported_cost_and_prices_cache_tokens`。
+runner に同じ計算を入れる差分は `E/dryrun-runner-fix.patch` に置いた（試験 2 本を含む）。その差分を当てた runner の出力 `E/patched-dryrun-0.json` は、下の表の値と一致する。取り込み先は提案に書いた。
 
-## 見積り（dryrun-0.json）
+## 見積り（runner の呼び出し数 + 読み取り script の quota・USD）
 
 ### 候補ごと
 
@@ -66,7 +63,7 @@ $CARGO_TARGET_DIR/debug/celeris-routing-eval dry-run \
 
 ### 縮小案（claude、週 15%／account）
 
-runner が自動で出した縮小案（opus 30・sonnet 17・haiku 0・fable 0）は、前から順に枠を埋める方式なので、ADR D1 の最低条件（30×2 は有効 24 問以上、12×1 は 12 問全部）を破る。採らない。D1 を守る案を手で出した。1 呼び出しあたりの 7d 率は opus 0.140・sonnet 0.129・haiku 0.050・fable 0.950。
+修正版 runner（`E/patched-dryrun-0.json`）が自動で出す縮小案（opus 30・sonnet 17・haiku 0・fable 0）は、前から順に枠を埋める方式なので、ADR D1 の最低条件（30×2 は有効 24 問以上、12×1 は 12 問全部）を破る。採らない。D1 を守る案を手で出した。1 呼び出しあたりの 7d 率は opus 0.140・sonnet 0.129・haiku 0.050・fable 0.950。
 
 | 案 | opus／sonnet／haiku | fable | 呼び出し | 7d 合計 | 2 account に均等割り | 1 account あたり 15% 以下 |
 |---|---|---|---:|---:|---:|---|
@@ -113,17 +110,18 @@ schema 77 は main からの通常の release で入った。2026-10-14 に読�
 
 ## 検査
 
-- `cargo test -p routing-eval`: unit 28 passed、pipeline_stub 1 passed。
-- `TMPDIR=/local/x bash scripts/dev/test-parallel.sh`: exit 0。nextest `5084 tests run: 5084 passed, 12 skipped`。`CELERIS_TEST_SUMMARY` は passed 5087・failed 0・ignored 13・doctest_exit 0・tmp_leftovers 2。log は `/local/x/tp-dryrun.log`。
-- `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --check`: exit 0。
+CHECKS_PLACEHOLDER
 
 ## 未解決
 
 1. claude を週 15% に収めるには 2 account への配分が要る（案 B・C）。eval の admission が 2 account に分けるか、分けを固定できるかは、estimate の unit で確かめる。
 2. codex の pilot は luna だけを測るので、sol と astra の率は本番の参考値の比で外挿するしかない。比の粒度は粗い（1 点刻み）。
 3. `run` に `--problems` が無い（pilot の unit で足す）。
+4. runner の dry-run が本番の quota・USD を読めない（上の 3 点）。estimate の unit が runner で引き直す前に直す必要がある。
 
 ## 提案
+
+- runner の dry-run 修正（`E/dryrun-runner-fix.patch`：source→account の対応、窓ごとの measured `used_pct` の model 別平均、`one_month`、`cost_usd` 優先と cache 単価）を、`crates/routing-eval` を範囲に持つ unit で取り込む。pilot の unit で `--problems` を足すときに一緒に入れるのが近い。ADR 付記 2026-10-12 の 5（dry-run の見積り）の本文も同じ変更で書き換える。
 
 - runner の自動の縮小案を、前から順に埋める方式から、model ごとの比例縮小に変え、ADR D1 の最低条件（24 問／12 問）を下限にして、2 account への配分を出力に含める。
 - 評価の試行は WU より短い可能性がある。pilot の claude 版（定価・quota の実測）で USD の上振れを確かめる。

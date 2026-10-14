@@ -286,6 +286,28 @@ D5 の評価 runner（crate `routing-eval`、bin `celeris-routing-eval`）と根
 5. **評価 run の経路**: provider 層の撤去に合わせ、評価 run の harness・source・model は宣言（`[harnesses]`・`[llm_sources]`）から引き（`-` と `_`・大文字小文字を区別しない）、account は本番と同じ `admit_source`（手元の評価 run の `(source, account)` も合算）で選ぶ。worker には `SelectedLlmRoute` を渡す。宣言に無い経路の試行は `error`。投入 API の照合先も宣言（`HarnessesReader::source_models` と harness 一覧・`[[genres]]`）に替えた（routing catalog・`[[providers]]` は無い）。
 6. **execution class の候補列と lane の候補列**: main の `[route_defaults.<h>].classes.<class>`（ADR 2026-10-11-llm-source-harness-selection 付記 2026-10-13 §5。宣言した class の列は他の列に戻らない）と本 ADR の `[route_defaults.<h>].lanes.<lane>` を一緒に持つ。優先列の決め方は CoS → class の列（宣言があれば、それだけ）→ harness×lane の列 → harness 全体の列（`task_core::llm_route::route_priority`）。lane 列も harness 全体の列と同じ検証（重複・未宣言・互換・proxy 必須）を通す。class×lane の組の列は作らない。class の列を宣言した execution class では lane による既定の切り替えは効かない（根拠表による選択はその列の中で行う）。
 
+## 付記 2026-10-13: 評価 trial の問題文（eval-prompt）
+
+凍結 manifest の各 `problems[]` は必須の `prompt` を持つ。本文は WU の `objective`・`done_when` と親 task の `title`・`objective` から作り、acceptance と checks は含めない。問題文に check command の文字列が含まれる場合は `[check command redacted]` に置換する。`prompt` は問題 SHA と manifest SHA の双方に含める。旧 manifest は `prompt` が無いため読み込みエラーとし、互換分岐は設けない。
+
+`make_trials` は「評価問題であること」「評価 checks を実行・要求しないこと」を伝える短い前置きに `prompt` を続けて worker objective にする。採点 command は引き続き別欄で runner に渡し、worker 本文やログへ含めない。
+
+## 付記 2026-10-13: 評価の実施（eval-run）
+
+実施日: 2026-10-14（pilot やり直し・本評価の投入・再投入・集計。計画は 2026-10-13）。task 01M4VAAKFJHRSVKZ3996NFKSKS。結果の本文は [eval-results.md](../progress/2026-10-11-llm-source-model-routing/eval-results.md)、経過は [eval-run/](../progress/2026-10-11-llm-source-model-routing/eval-run/)。
+
+- manifest: manifest-v2（問題 30 件、cutoff 2026-10-05）、sha256 `118b413ebba94d51a0ee6d6703c9dd7b726d84ade3bbd4009c137f903d21e7e7`。evidence_version `118b413ebba94d51a0ee6d6703c9dd7b726d84ade3bbd4009c137f903d21e7e7-2026-10-14`。
+- 人の承認: 見積り（estimate.md）を受信箱で承認（2026-10-14）してから投入した。claude 144 試行・7d 15%、codex 132 試行・7d 13.2%（pilot 10 を含む 276 試行）。fable は 0（次の週窓で別承認）、opencode-go は対象外、qwen は評価せず route_defaults のまま。codex は 7d が見積りより速く増えたため queued 93 試行を cancel し、人の指示で codex の上限を 21% に上げて 93 試行を新しい batch で再投入した。claude の上限 15% は投入前の使用率に足す分（9% + 15% = 24%）と人が示した。
+- 試行数と状態（旧 pilot を含む全 batch、全部終端）: passed 251・failed 20・error 36・cancelled 93。error は仕組み側（worktree 消失・dispatcher stopped・daemon recovery・yielded）に限り試行ごと最大 2 回再投入した（1 回目 18、2 回目 3）。error・cancelled は n に数えない。学習データ export は 271 行（passed 251・failed 20）。
+- cell（genre coding、n・pass・Wilson 95%）: claude-opus-5-5 24/24 0.862–1.000、claude-sonnet-5-5 24/24 0.862–1.000、claude-haiku-5-5 22/23 0.790–0.992（有効問題数 23/24 で根拠が立たない）、gpt-6.1-sol 27/30 0.744–0.965、gpt-6-astra 11/12 0.646–0.985（k=1 部分集合）、gpt-6-luna 21/29 0.543–0.853。全 cell が low_confidence。
+- 費用と quota の実績: claude-code の定価換算 USD 合計は opus 41.42・sonnet 20.46・haiku 17.46（codex は USD を報告しない）。7d 使用率は投入前（04:07Z）→ 集計時で claude_max_lab 0.09→0.18、claude_max_personal 0.09→0.19、chatgpt_plus_personal 0.02→0.20（同じ account の評価以外の run を含む上限値）。どれも人の示した上限（claude 24%・codex 21%）の内。
+- 集計の runner は outcome の無い試行（error・cancelled）を不合格に数える不具合があり、JOIN に直した手元の runner で集計した。修正は follow-up task（差分は task の artifacts `eval/aggregate-error-exclude.patch`）。
+
+未解決:
+- 本番の `routing_evidence` への書き込み（`aggregate --write-evidence`）は人の手順で、上の runner 修正が main に入った後に流す（eval-results.md の手順）。
+- haiku の 1 問は yielded が 3 回続き有効な結果が無い。予算を上げた 1 試行か、yielded を不合格に数える人の判断で根拠が立つ。
+- fable（12 問×1）は次の週窓で別承認。run ごとの quota（quota_per_run）は試行の run に quota 実測 event が無く空（{}）。
+
 ## 改訂履歴
 
 - 2026-10-11: 人の確認を反映。評価対象を 7 model に限定し、fable-5-1 / gpt-6-astra を k=1・層別部分集合、通常 5 model を k=2・30 問に縮小。Codex の quota は実測前に率を仮定せず、10-run dry-run と週 15% gate を必須化。opencode-go は根拠表対象外、qwen はローカル既定候補として明記。辞書順 fallback と `[routing.defaults.<genre>]` を除き、lane ごとの人の既定を harness×lane `route_defaults` に統合。

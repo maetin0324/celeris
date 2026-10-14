@@ -397,11 +397,13 @@ mod tests {
                 genre: "coding".into(),
                 kind: "test".into(),
                 command: "true".into(),
+                prompt: "Fixture problem description".into(),
                 split: "dev".into(),
                 stratum: "coding:test".into(),
                 subset_12: i < 12,
                 head_commit: None,
                 base_commit: None,
+                base_commit_from_parent: false,
                 features_sha256: "x".into(),
                 features: Value::Null,
                 sha256: "x".into(),
@@ -413,6 +415,7 @@ mod tests {
             cutoff: "2026-10-05".into(),
             seed: 1,
             problems,
+            refill_rejected: Vec::new(),
             sha256: "msha".into(),
         }
     }

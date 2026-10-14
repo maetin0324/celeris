@@ -165,6 +165,53 @@ pub fn recheck(opts: &Options) -> Result<Recheck, String> {
     Ok(record)
 }
 
+/// 候補を 1 問ずつ検める（`manifest --repo` の refill が引くたびに使う）。
+pub struct Checker {
+    worktrees: Worktrees,
+    timeout: Duration,
+}
+
+impl Checker {
+    pub fn new(
+        repo: &Path,
+        worktree_root: Option<&Path>,
+        timeout: Duration,
+    ) -> Result<Self, String> {
+        let is_repo = git(repo, &["rev-parse", "--git-dir"]).is_some_and(|o| o.ok);
+        if !is_repo {
+            return Err(format!("{} is not a git repository", repo.display()));
+        }
+        Ok(Self {
+            worktrees: Worktrees::new(repo, worktree_root)?,
+            timeout,
+        })
+    }
+
+    pub fn repo(&self) -> &Path {
+        self.worktrees.repo()
+    }
+
+    pub fn timeout(&self) -> Duration {
+        self.timeout
+    }
+
+    pub fn check(&mut self, problem: &crate::manifest::Problem) -> ProblemRecheck {
+        check_problem(&mut self.worktrees, problem, self.timeout)
+    }
+
+    /// `commit` の第 1 親（repair WU の base を補う）。無ければ `None`。
+    pub fn parent_of(&self, commit: &str) -> Option<String> {
+        let spec = format!("{commit}^1^{{commit}}");
+        git(
+            self.worktrees.repo(),
+            &["rev-parse", "--verify", "--quiet", &spec],
+        )
+        .filter(|out| out.ok)
+        .map(|out| out.stdout.trim().to_owned())
+        .filter(|s| !s.is_empty())
+    }
+}
+
 /// manifest の JSON に `recheck` 鍵を足して書き戻す（他の鍵はそのまま）。
 pub fn write_into_manifest(path: &Path, record: &Recheck) -> Result<(), String> {
     let mut raw: Value = serde_json::from_slice(&fs::read(path).map_err(|e| e.to_string())?)
@@ -652,11 +699,13 @@ mod tests {
             genre: "coding".into(),
             kind: "implement".into(),
             command: command.into(),
+            prompt: "Fixture problem description".into(),
             split: "dev".into(),
             stratum: "coding:implement".into(),
             subset_12: false,
             head_commit: head.map(str::to_owned),
             base_commit: base.map(str::to_owned),
+            base_commit_from_parent: false,
             features_sha256: "features-sha".into(),
             features: json!({"schema": "celeris.task-features/1"}),
             sha256: format!("sha-{id}"),
@@ -670,6 +719,7 @@ mod tests {
             cutoff: "2026-10-05".into(),
             seed: 7,
             problems,
+            refill_rejected: Vec::new(),
             sha256: "manifest-sha".into(),
         };
         let path = dir.join("manifest.json");

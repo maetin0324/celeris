@@ -12,7 +12,7 @@ completed: 2026-10-14
 ## 進み具合
 
 - [x] adr: 範囲・store の表・優先順位・API・既存 task／run への影響を ADR に決めた（コードは未変更）
-- [x] backend: migration 0078、store、`GET /clusters` の `local`、`PUT /clusters/local/settings`、resolver、dispatcher 反映
+- [x] backend: migration 0079、store、`GET /clusters` の `local`、`PUT /clusters/local/settings`、resolver、dispatcher 反映
   （詳細と証拠は [backend.md](2026-10-14-local-machine-settings/backend.md)）
 - [x] web: クラスタ画面のローカルマシン行と設定フォーム（[web.md](2026-10-14-local-machine-settings/web.md)）
 - [x] closeout: 全体検査・本節と実装の突き合わせ
@@ -57,7 +57,7 @@ completed: 2026-10-14
 
 ## 本番への移行
 
-- migration 0078（`local_settings`・`task_workspace_roots`・`local_settings_events`）は起動時に走る。既存行の変換は無い
+- migration 0079（`local_settings`・`task_workspace_roots`・`local_settings_events`）は起動時に走る。既存行の変換は無い
   （既存 task は固定なし = 設定ファイルの root で従来どおり）。
 - 本番の config ファイルは**書き換えない**。ただし `[[clusters]] id = "local"` は読み込みエラーになる（予約 id）。
   本番 config に `id = "local"` のクラスタがあれば、昇格前に人が別の id へ書き換える（確認:

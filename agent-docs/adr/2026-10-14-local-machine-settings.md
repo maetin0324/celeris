@@ -42,9 +42,9 @@
 画面の行に出す読み取り専用の値は `scratch_root`（`[scratch]` の root、未設定なら `null`）と、
 `workspace_root`・`max_concurrency` の設定ファイル値（上書きを消したときに戻る値）。それ以外は出さない。
 
-### D2. store の表（migration 0078）
+### D2. store の表（migration 0079）
 
-`crates/task-core/migrations/0078_local_settings.sql`（全ブランチで 0078 以降が空いていることを確認済み）:
+`crates/task-core/migrations/0079_local_settings.sql`（main の 0078 は eval_trials.instance_id。main 取り込み時に 0079 へ振り直した）:
 
 ```sql
 -- ローカルマシンの上書き（1 行だけ。id = 1）。NULL の欄は設定ファイルの値を使う。

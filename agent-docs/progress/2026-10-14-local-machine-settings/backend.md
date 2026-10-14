@@ -12,8 +12,8 @@ completed: 2026-10-14
 ## store（WU store、完了 2026-10-14）
 
 ### 変更
-- `crates/task-core/migrations/0078_local_settings.sql`: ADR D2 の SQL そのまま（`local_settings`・`task_workspace_roots`・`local_settings_events`）。
-  `SCHEMA_VERSION` を 78 に上げ、版数を固定している試験（`assert_eq!(SCHEMA_VERSION, 78)`、`delivery::tests::migration_0042_fills_gaps_in_main_schema_41_database` の版数列）を直した。
+- `crates/task-core/migrations/0079_local_settings.sql`: ADR D2 の SQL そのまま（`local_settings`・`task_workspace_roots`・`local_settings_events`）。
+  `SCHEMA_VERSION` を 79 に上げ（main 取り込み時に 0078 から振り直し）、版数を固定している試験（`assert_eq!(SCHEMA_VERSION, 79)`、`delivery::tests::migration_0042_fills_gaps_in_main_schema_41_database` の版数列）を直した。
   `celerisctl/tests/no_migrate.rs` は `SCHEMA_VERSION` から版数を計算するので変更なし（4 passed）。
 - `crates/task-core/src/store/local_machine.rs`（新規）と `TaskStore` の 5 method:
   - `local_settings_get` / `local_settings_set(overrides, actor, now)`（全置換。全欄 `None` で行を削除。同じ transaction で

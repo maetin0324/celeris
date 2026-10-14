@@ -1,6 +1,8 @@
 ---
-task: 01M4W3PTCHJD4XQPZGT81WBTRM
+title: "評価試行（eval trial）が全部 error になる件の修正"
+tasks: [01M4W3PTCHJD4XQPZGT81WBTRM]
 status: done
+updated: 2026-10-14
 completed: 2026-10-14
 ---
 # 評価試行（eval trial）が全部 error になる件の修正
@@ -55,6 +57,9 @@ WorkUnit ごとの記録は `2026-10-14-eval-trial-error-fix/<wu-key>.md`（fix-
 - 受け入れ条件の試験 4 本を名前で絞って再実行:
   `cargo nextest run --workspace -E 'test(/eval_trial_result_at_artifacts_rel|eval_trial_error_keeps_reason|aggregate_excludes_error_trials|run_trial_offset_shifts_trial_no/)'`
   → `4 tests run: 4 passed`。
+- 再実行（closeout attempt 2、front matter を progress-index 形式 title・tasks・status・updated に直した後）:
+  test-parallel exit 0（passed 5087、failed 0、ignored 13）、clippy exit 0、
+  `sh scripts/dev/check-doc-links.sh && sh scripts/dev/check-adr-numbers.sh && sh scripts/dev/progress-index.sh --check` → exit 0。
 
 ## 未解決事項
 

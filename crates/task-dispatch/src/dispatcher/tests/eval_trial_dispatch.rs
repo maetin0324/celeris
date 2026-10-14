@@ -850,3 +850,88 @@ async fn eval_trial_tick_claims_each_trial_at_most_once() {
         "the tick's store work must not grow with the number of queued trials"
     );
 }
+
+/// ADR 2026-10-14-eval-verify-isolation D2: a normal-mode dispatcher that ends `running` trials
+/// as `error` removes only the work trees under `<workspace_root>/eval/<trial_id>/` (real paths) and
+/// only the targets under its scratch pool. A work tree in another temp dir, one reached through a
+/// symlink out of the root, or one under another trial's dir is left alone with its files; the
+/// trial still ends as `error` with the recovery reason.
+#[tokio::test]
+async fn eval_cleanup_refuses_paths_outside_roots() {
+    let (temp, store, _sqlite, batch_id) =
+        eval_queue(&[("p1", 0), ("p1", 1), ("p1", 2), ("p1", 3)]);
+    let outside = tempfile::tempdir().unwrap();
+    let data = temp.path().join("data");
+    let mut ids = Vec::new();
+    while let Some(trial) = store.eval_trial_claim_next(&[]).unwrap() {
+        ids.push(trial.trial_id);
+    }
+    assert_eq!(ids.len(), 4);
+    let seed = |dir: &std::path::Path| {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(dir.join("keep.txt"), "x").unwrap();
+    };
+    // 0: inside its own trial dir (removed). 1: an absolute path in another temp dir (kept).
+    // 2: its own trial dir, but `repo` is a symlink out of the root (kept). 3: another trial's dir (kept).
+    let inside = data.join("eval").join(&ids[0]).join("repo");
+    seed(&inside);
+    let foreign = outside.path().join("prod-worktree");
+    seed(&foreign);
+    let linked_to = outside.path().join("linked-worktree");
+    seed(&linked_to);
+    let linked = data.join("eval").join(&ids[2]).join("repo");
+    std::fs::create_dir_all(linked.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(&linked_to, &linked).unwrap();
+    let other_trial = data.join("eval").join("not-this-trial").join("repo");
+    seed(&other_trial);
+    for (id, path) in ids.iter().zip([&inside, &foreign, &linked, &other_trial]) {
+        store
+            .eval_trial_mark_started(id, &format!("run-{id}"), "d", "v", &path.to_string_lossy())
+            .unwrap();
+    }
+    // Targets: the pool's own (removed), a look-alike outside the pool (kept), and trial 2's owner
+    // dir in the pool being a symlink out of the pool (kept).
+    let (pool_target, _) = trial_target(temp.path(), &ids[0]);
+    seed(&pool_target);
+    let lookalike = outside
+        .path()
+        .join("targets")
+        .join(format!("agent-eval-{}", ids[0]))
+        .join("target");
+    seed(&lookalike);
+    let (linked_target, _) = trial_target(temp.path(), &ids[2]);
+    let linked_owner_to = outside.path().join("linked-owner");
+    seed(&linked_owner_to.join("target"));
+    std::fs::create_dir_all(linked_target.parent().unwrap().parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(&linked_owner_to, linked_target.parent().unwrap()).unwrap();
+
+    let mut d = eval_dispatcher(
+        &store,
+        ScriptedEvalWorker {
+            fail_with: None,
+            seen: Arc::new(StdMutex::new(Vec::new())),
+            env: Vec::new(),
+        },
+        temp.path(),
+    );
+    d.config.eval.reserved_runs = 0;
+    d.tick_eval_trials();
+
+    for trial in store.eval_trials_list(Some(&batch_id), None).unwrap() {
+        assert_eq!(
+            trial.status,
+            task_core::routing_eval_trial::EvalTrialStatus::Error
+        );
+        assert_eq!(
+            trial.error.as_deref(),
+            Some("daemon recovery: run disappeared while trial was running")
+        );
+    }
+    assert!(!inside.exists(), "{}", inside.display());
+    assert!(foreign.join("keep.txt").is_file());
+    assert!(linked_to.join("keep.txt").is_file());
+    assert!(other_trial.join("keep.txt").is_file());
+    assert!(!pool_target.exists(), "{}", pool_target.display());
+    assert!(lookalike.join("keep.txt").is_file());
+    assert!(linked_owner_to.join("target/keep.txt").is_file());
+}

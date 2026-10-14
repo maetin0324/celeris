@@ -8,6 +8,11 @@
 //!
 //! 完了側（採点・`route_outcomes`・worktree の削除）は別の段（`trial-score`）。ここは run が
 //! 終わったら `eval_trials.status = scoring` にして handing off するだけ。
+//!
+//! cargo の target は試行ごとの scratch（ADR 2026-10-14-eval-trial-scratch-target D1）: owner は
+//! `agent-eval-<trial_id>`（試行どうしで共有しない）、run と hidden check の両方に同じ `CARGO_TARGET_DIR` を
+//! 渡し、試行の終端（採点の後・失敗・回復・停止）で target を消して lease を解放する。scratch が無効なら
+//! ルート fs に置かず試行を `error` にする。
 
 use super::*;
 
@@ -43,6 +48,9 @@ const EVAL_MAX_WALL_SECS: u64 = 1800;
 const VERSION_TIMEOUT: Duration = Duration::from_secs(10);
 /// `--version` の出力の記録上限（生の出力をそのまま `harness_version` にはしない）。
 const VERSION_MAX_CHARS: usize = 200;
+/// 試行の target の lease の TTL の余裕（run の壁時計 + hidden check の上限に足す）。daemon が落ちて
+/// 後始末できなかった target は、この TTL が切れると `scratch_gc` が回収する（ADR-0075 D2 の外部 owner）。
+const EVAL_TARGET_LEASE_MARGIN_SECS: u64 = 600;
 
 /// 評価 run の経路（harness 固定・source×model 固定。account だけ本番と同じ admission で決める）。
 struct EvalRoute {
@@ -64,7 +72,7 @@ pub(super) struct EvalRunEntry {
     trial_id: String,
     /// この run が押さえている `(source, account)`（評価の admission で本番の run と合算する）。
     route: (SourceId, AccountId),
-    handle: JoinHandle<()>,
+    pub(super) handle: JoinHandle<()>,
 }
 
 /// id の比べ方（`claude-oauth` と `claude_oauth`、`claude-code` と `claude_code` は同じ。
@@ -198,16 +206,92 @@ impl Dispatcher {
             false,
             Some(reason),
         );
-        self.remove_eval_worktree(trial);
+        self.remove_eval_trial_files(trial);
     }
 
-    fn remove_eval_worktree(&self, trial: &EvalTrial) {
+    /// 試行の終端の後始末: 作業ツリーと scratch の target を消す（lease は解放する）。
+    fn remove_eval_trial_files(&self, trial: &EvalTrial) {
         if let Some(path) = trial.worktree_path.as_deref() {
             let _ = std::process::Command::new("git")
                 .args(["-C", &trial.repo, "worktree", "remove", "--force", path])
                 .output();
             let _ = std::fs::remove_dir_all(path);
         }
+        self.remove_eval_target(&trial.trial_id);
+    }
+
+    /// 試行の scratch target を消し、lease に `released_at` を書く（lease の記録は `scratch_gc` が後で片付ける）。
+    /// scratch が今は無効でも、設定の pool の下に残っていれば消す。
+    fn remove_eval_target(&self, trial_id: &str) {
+        let Ok(owner) = eval_target_owner(trial_id) else {
+            return;
+        };
+        let pool = self.config.scratch.pool();
+        if pool.root().as_os_str().is_empty() {
+            return;
+        }
+        if let Err(e) = task_worker::scratch::release(&pool, &owner) {
+            tracing::warn!(%trial_id, %owner, error = %e, "eval trials: could not release the scratch lease");
+        }
+        let target = pool.target_dir(&owner);
+        match std::fs::remove_dir_all(&target) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                tracing::warn!(%trial_id, target = %target.display(), error = %e, "eval trials: could not remove the scratch target");
+            }
+        }
+    }
+
+    /// 試行の cargo の env（`CARGO_TARGET_DIR` = `<scratch>/targets/agent-eval-<trial_id>/target` と
+    /// `[scratch.cargo]`）。scratch が無効なら `Err`（ルート fs・作業ツリーの直下に target を置かない）。
+    fn eval_cargo_env(&self, trial_id: &str) -> Result<task_worker::scratch::CargoEnv, String> {
+        if !self.scratch_active() {
+            return Err(
+                "scratch is disabled; an evaluation trial needs a per-trial scratch CARGO_TARGET_DIR \
+                 (ADR 2026-10-14-eval-trial-scratch-target D1)"
+                    .to_owned(),
+            );
+        }
+        let owner = eval_target_owner(trial_id)?;
+        Ok(super::worker_task::scratch_cargo_env(
+            &self.config.scratch,
+            &owner,
+        ))
+    }
+
+    /// 試行の target の lease を作る（adopt しない。seed は通常の run と同じ条件）。TTL は run の壁時計と
+    /// hidden check の上限に余裕を足した値。`CARGO_TARGET_DIR` に渡す path を返す。
+    fn eval_allocate_target(&self, trial: &EvalTrial, worktree: &Path) -> Result<PathBuf, String> {
+        let owner = eval_target_owner(&trial.trial_id)?;
+        let settings = &self.config.scratch;
+        let pool = settings.pool();
+        let no_distance = |_: &task_worker::scratch::AdoptCandidate| None;
+        let req = task_worker::scratch::AllocateRequest {
+            owner: &owner,
+            repo_path: Path::new(&trial.repo),
+            base_commit: Some(trial.base_commit.clone()),
+            work_unit_key: None,
+            checkout: None,
+            candidates: &[],
+            distance: &no_distance,
+            adopt: false,
+            max_distance: 0,
+        };
+        let rustc = || rustc_version(worktree);
+        let seed = task_worker::scratch::SeedPolicy {
+            enabled: settings.seed_reflink,
+            cargo: Some(settings.cargo.clone()),
+            rustc: Some(&rustc),
+        };
+        let ops = task_worker::scratch::SeedCopyOps::real();
+        let allocation = task_worker::scratch::allocate_with_seed(&pool, &req, &seed, &ops)
+            .map_err(|e| format!("scratch lease for {owner}: {e}"))?;
+        let ttl =
+            EVAL_MAX_WALL_SECS + trial.check_timeout_secs as u64 + EVAL_TARGET_LEASE_MARGIN_SECS;
+        task_worker::scratch::set_ttl(&pool, &owner, Some(ttl))
+            .map_err(|e| format!("scratch lease ttl for {owner}: {e}"))?;
+        Ok(allocation.target_dir)
     }
 
     fn score_eval_trial(
@@ -224,9 +308,21 @@ impl Dispatcher {
             self.fail_and_cleanup_eval_trial(trial, "scoring trial has no worktree");
             return;
         };
+        // hidden check も run と同じ試行の target を使う（ADR 2026-10-14-eval-trial-scratch-target D1）。
+        let env = match self.eval_cargo_env(&trial.trial_id) {
+            Ok(env) => env,
+            Err(why) => {
+                self.fail_and_cleanup_eval_trial(trial, &format!("hidden check: {why}"));
+                return;
+            }
+        };
+        if let Ok(owner) = eval_target_owner(&trial.trial_id) {
+            let _ = task_worker::scratch::touch(&self.config.scratch.pool(), &owner);
+        }
         let scored = run_eval_check(
             cwd,
             &trial.check_cmd,
+            &env.set,
             Duration::from_secs(trial.check_timeout_secs as u64),
         );
         if scored.exit.is_none() && !scored.timed_out {
@@ -270,7 +366,7 @@ impl Dispatcher {
         ) {
             tracing::warn!(trial_id = %trial.trial_id, error = %e, "eval trials: could not finish scoring");
         }
-        self.remove_eval_worktree(trial);
+        self.remove_eval_trial_files(trial);
     }
 
     /// 動いている評価 run の本数（`running` と `scoring`。daemon 再起動をまたいで `eval_trials` から数える）。
@@ -424,23 +520,45 @@ impl Dispatcher {
             .join(trial.trial_id.as_str());
         let worktree = base.join(EVAL_WORKTREE_DIR);
         let artifacts = base.join(EVAL_ARTIFACTS_DIR);
+        // scratch が無効なら作業ツリーも作らずに `error`（target をルート fs に置かない）。
+        let cargo_env = self.eval_cargo_env(&trial.trial_id).map_err(|e| {
+            self.fail_eval_trial(&trial, &format!("cargo target: {e}"));
+            e
+        })?;
         self.eval_prepare_worktree(&trial, &worktree, &artifacts)
             .map_err(|e| {
                 self.fail_eval_trial(&trial, &format!("worktree: {e}"));
                 e
             })?;
+        // ここから先の起動の失敗は作業ツリーと target を消す（`fail_eval_trial` だけでは残る）。
+        let started_trial = EvalTrial {
+            worktree_path: Some(worktree.to_string_lossy().into_owned()),
+            ..trial.clone()
+        };
+        let target_dir = self.eval_allocate_target(&trial, &worktree).map_err(|e| {
+            self.fail_and_cleanup_eval_trial(&started_trial, &format!("cargo target: {e}"));
+            e
+        })?;
+        let Some(adapter) = route.adapter.with_env(&cargo_env.set) else {
+            let why = format!(
+                "cargo target: adapter {} cannot take CARGO_TARGET_DIR",
+                route.adapter.id()
+            );
+            self.fail_and_cleanup_eval_trial(&started_trial, &why);
+            return Err(why);
+        };
         // 記録（route_features / route_options / route_decisions / runs）。失敗したら run を起こさない。
         let decision_id =
             match self.record_eval_decision(&trial, &run_id, harness_version.as_deref()) {
                 Ok(id) => id,
                 Err(e) => {
-                    self.fail_eval_trial(&trial, &format!("route record: {e}"));
+                    self.fail_and_cleanup_eval_trial(&started_trial, &format!("route record: {e}"));
                     return Err(e.to_string());
                 }
             };
         let session_id = ulid::Ulid::new().to_string();
         if let Err(e) = self.record_eval_run_row(&trial, &run_id, &session_id, &route) {
-            self.fail_eval_trial(&trial, &format!("runs index: {e}"));
+            self.fail_and_cleanup_eval_trial(&started_trial, &format!("runs index: {e}"));
             return Err(e.to_string());
         }
         let req = self.eval_run_request(
@@ -449,6 +567,7 @@ impl Dispatcher {
             &session_id,
             &route.pick.harness,
             route.llm_route.clone(),
+            target_dir,
         );
         if let Err(e) = self.store.eval_trial_mark_started(
             &trial.trial_id,
@@ -457,7 +576,7 @@ impl Dispatcher {
             harness_version.as_deref().unwrap_or("unknown"),
             &worktree.to_string_lossy(),
         ) {
-            self.fail_eval_trial(&trial, &format!("mark started: {e}"));
+            self.fail_and_cleanup_eval_trial(&started_trial, &format!("mark started: {e}"));
             return Err(e.to_string());
         }
         let limits = RunLimits {
@@ -465,7 +584,6 @@ impl Dispatcher {
             idle_timeout: self.config.idle_timeout,
             kill_grace: self.config.kill_grace,
         };
-        let adapter = Arc::clone(&route.adapter);
         let tx = self.tx.clone();
         let completion_run_id = run_id.clone();
         let handle = tokio::spawn(async move {
@@ -560,6 +678,8 @@ impl Dispatcher {
     /// `workspace` = 試行の dir（`<data>/eval/<trial_id>`）、`work_dir` = その下の作業ツリー（cwd）、
     /// `artifacts_dir` = その下の `artifacts`。`artifacts_rel()` は絶対パスになり、prompt の示す
     /// result.json と adapter が読む場所が一致する。adapter の `run_dir` も作業ツリーの外にできる。
+    /// `cargo_target_dir` は試行の scratch target（`eval_allocate_target`。adapter の env の
+    /// `CARGO_TARGET_DIR` と同じ path。ADR 2026-10-14-eval-trial-scratch-target D1）。
     pub(super) fn eval_run_request(
         &self,
         trial: &EvalTrial,
@@ -567,6 +687,7 @@ impl Dispatcher {
         session_id: &str,
         harness: &HarnessId,
         llm_route: SelectedLlmRoute,
+        cargo_target_dir: PathBuf,
     ) -> RunRequest {
         let worktree = trial_dir.join(EVAL_WORKTREE_DIR);
         let artifacts = trial_dir.join(EVAL_ARTIFACTS_DIR);
@@ -638,7 +759,7 @@ impl Dispatcher {
                 ..RunContext::default()
             },
             llm_route: Some(llm_route),
-            cargo_target_dir: None,
+            cargo_target_dir: Some(cargo_target_dir),
         }
     }
 
@@ -867,7 +988,8 @@ impl Dispatcher {
 
     /// 手元の評価 run を止める（draining・shutdown）。
     pub(super) fn abort_eval_runs(&mut self) {
-        for (run_id, entry) in self.eval_runs.drain() {
+        let runs: Vec<_> = self.eval_runs.drain().collect();
+        for (run_id, entry) in runs {
             tracing::info!(%run_id, trial_id = %entry.trial_id, "aborting an evaluation run");
             entry.handle.abort();
             self.store
@@ -879,6 +1001,8 @@ impl Dispatcher {
                     Some("dispatcher stopped the run"),
                 )
                 .ok();
+            // 停止で `error` にした試行は回復の段が拾わないので、ここで target を消す。
+            self.remove_eval_target(&entry.trial_id);
             if let Err(e) = self.store.run_index_finish(
                 &run_id,
                 task_core::RunIndexStatus::Cancelled,
@@ -926,10 +1050,22 @@ fn eval_recovery_action(status: EvalTrialStatus, tracked: bool) -> EvalRecoveryA
     }
 }
 
-fn run_eval_check(cwd: &str, command: &str, timeout: Duration) -> EvalCheckResult {
+/// 試行の scratch target の owner（`agent-eval-<trial_id>`。試行どうしで共有しない）。外部 owner の形なので
+/// `scratch_gc` は lease の `released_at` か TTL で回収する（DB の tasks 行を引かない）。
+fn eval_target_owner(trial_id: &str) -> Result<task_worker::scratch::Owner, String> {
+    task_worker::scratch::Owner::parse(&format!("agent-eval-{trial_id}"))
+}
+
+fn run_eval_check(
+    cwd: &str,
+    command: &str,
+    env: &[(String, String)],
+    timeout: Duration,
+) -> EvalCheckResult {
     let mut child = match std::process::Command::new("sh")
         .arg("-c")
         .arg(command)
+        .envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
         .current_dir(cwd)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
@@ -1079,11 +1215,11 @@ mod score_tests {
             .to_str()
             .expect("manifest path");
         assert_eq!(
-            run_eval_check(cwd, "exit 0", Duration::from_secs(1)).exit,
+            run_eval_check(cwd, "exit 0", &[], Duration::from_secs(1)).exit,
             Some(0)
         );
         assert_eq!(
-            run_eval_check(cwd, "exit 7", Duration::from_secs(1)).exit,
+            run_eval_check(cwd, "exit 7", &[], Duration::from_secs(1)).exit,
             Some(7)
         );
     }
@@ -1093,7 +1229,7 @@ mod score_tests {
         let cwd = Path::new(env!("CARGO_MANIFEST_DIR"))
             .to_str()
             .expect("manifest path");
-        let result = run_eval_check(cwd, "exec sleep 5", Duration::from_millis(30));
+        let result = run_eval_check(cwd, "exec sleep 5", &[], Duration::from_millis(30));
         assert!(result.timed_out);
         assert_eq!(result.exit, None);
     }

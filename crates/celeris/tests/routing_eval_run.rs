@@ -89,6 +89,10 @@ token_file = "api.token"
 [routing_eval]
 reserved_runs = 1
 
+# Evaluation trials need a per-trial scratch target (ADR 2026-10-14-eval-trial-scratch-target D1).
+[scratch]
+dir = "scratch"
+
 [adapters.fake]
 command = ["{}"]
 
@@ -179,7 +183,8 @@ candidates = [{{ source = "local", model = "model-1" }}]
     assert!(
         terminal
             .iter()
-            .all(|t| t.status == task_core::routing_eval_trial::EvalTrialStatus::Passed)
+            .all(|t| t.status == task_core::routing_eval_trial::EvalTrialStatus::Passed),
+        "{terminal:?}"
     );
     assert!(terminal.iter().all(|t| {
         t.harness_version
@@ -187,6 +192,15 @@ candidates = [{{ source = "local", model = "model-1" }}]
             .is_some_and(|v| v.contains("1.2.3"))
     }));
     assert_ne!(terminal[0].worktree_path, terminal[1].worktree_path);
+    // Each trial had its own scratch target, gone after scoring (the released lease stays).
+    for t in &terminal {
+        let owner = root
+            .join("scratch/targets")
+            .join(format!("agent-eval-{}", t.trial_id));
+        assert!(!owner.join("target").exists(), "{}", owner.display());
+        let lease = std::fs::read_to_string(owner.join("lease.json")).expect("trial lease");
+        assert!(lease.contains("released_at"), "{lease}");
+    }
     let prompts = std::fs::read_to_string(&prompt_log).expect("prompt log");
     assert!(
         !prompts.contains("hidden-check-marker"),

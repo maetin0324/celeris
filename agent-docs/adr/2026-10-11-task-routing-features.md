@@ -5,7 +5,7 @@ title: routing の判断を「自然言語の task 記述・自然言語の選�
 # ADR: routing の判断を「自然言語の task 記述・自然言語の選択肢・確率」の版つき record で残し、結果と結合して export する
 
 - Date: 2026-10-11
-- Status: Accepted（redesign 段。実装は build 段 `task-features`、判断 record の書き込みは `selector`）
+- Status: 実装済み（2026-10-14。record・export は task-features、判断 record の書き込みは selector、評価の判断は eval-run。本番 run の outcome 記録は未実装で follow-up task、下の「未解決」）
 - 決定者: 人（2026-10-11 の design 段確認の指示 3、同日の「人の補足」「人の補足 2」による訂正）
 - 関係: [2026-10-11-llm-source-model-routing-evaluation.md](2026-10-11-llm-source-model-routing-evaluation.md)（主 ADR。D2 の選択規則・D5 の実装の分け方がこの ADR の record を使う）、
   [2026-10-11-breaking-changes-by-default.md](2026-10-11-breaking-changes-by-default.md)、先行 task 01M4M8D4AP の ADR `2026-10-11-llm-source-harness-selection.md`（`RoutePolicy` 境界。main 取り込み前のためリンクにしない）
@@ -245,7 +245,7 @@ RouteInput {
 - 本番の DB に task の目的文の写し（上限つき）が増える。容量は 1 判断あたり最大数 KB（brief は hash で重複しない）。
 - 過去の run は backfill しないので、学習データは記録開始後から貯まる。評価集合（約 30 問×7 model）が最初のまとまった行になる。
 
-## 未解決（build 段で決める）
+## 未解決（build 段で決める。2026-10-14 時点の残りは末尾）
 
 - secret 置換の規則をどの既存実装から取るか（task-worker の redact 系は worker 側にある。`task-core` へ移すか写すか）。
 - brief の各節の字数上限の具体値（要求 4,000 字は仮。評価集合の問題で文の長さの分布を見て決める）。
@@ -272,3 +272,7 @@ RouteInput {
 - **字数上限の具体値**: objective 4,000 字（D2 の仮値を維持）、title・check・各 list 項目 1,000 字。評価集合の問題で文の長さの分布を見て調整する場合は `task-brief/3` の版を上げて固定試験を更新する。
 - **`changed_lines` の git 操作の置き場所**: 決着 — export／label 抽出時に task-ops が遅延計算し、task-core の `outcome_labels_for_run` は `ChangeCount` 数値だけを受け取る。算定規則と欠測条件は上記 D3(b) 抽出元表のとおり。
 - **selector へ残す未実装**: `route_decisions`・`route_outcomes` の書き手（dispatch は features snapshot の記録まで。判断 1 回の `celeris.route-decision/1` 行と run 終わりの `celeris.route-outcome/1` 行を書くのは selector 段）、`POST /api/v1/routing/judgments` の API と判定器本体・sidecar・`JudgePolicy`（D9。この task では `route_judgments` 表と store API（`insert_route_judgment` / `route_judgment_get` / `route_judgments_for_hashes`）のみ）。
+
+### 2026-10-14 land 段での残り
+
+- 本番（shadow・enforce）の判断に outcome が付かない: `route_outcomes` に書くのは評価 trial（`dispatcher/eval_trials.rs`）だけ。2026-10-14 時点で本番の shadow 判断 124 件の outcome は 0 件（guardrail は `routing_outcome_recorded` event を使うので影響しない）。D6 の「WU／run の終わりに outcome」を本番経路に入れる follow-up task を出した。それまで結果つきの学習データは評価の 271 行だけ。

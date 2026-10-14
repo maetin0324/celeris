@@ -687,3 +687,166 @@ async fn eval_trial_fails_without_scratch() {
             .exists()
     );
 }
+
+/// Trials on a fresh git repo, one per `(source_id, trial_no)` in the given (creation) order.
+fn eval_queue(
+    sources: &[(&str, u32)],
+) -> (
+    tempfile::TempDir,
+    Arc<dyn TaskStore>,
+    Arc<SqliteStore>,
+    String,
+) {
+    let temp = tempfile::tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    git(&repo, &["init", "-q"]);
+    git(
+        &repo,
+        &[
+            "-c",
+            "user.name=Eval Test",
+            "-c",
+            "user.email=eval@example.invalid",
+            "commit",
+            "--allow-empty",
+            "-qm",
+            "base",
+        ],
+    );
+    let base_commit = git(&repo, &["rev-parse", "HEAD"]);
+    let sqlite = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<dyn TaskStore> = sqlite.clone();
+    let batch_id = ulid::Ulid::new().to_string();
+    let specs = sources
+        .iter()
+        .map(
+            |(source, trial_no)| task_core::routing_eval_trial::EvalTrialSpec {
+                manifest_sha: "sha256:manifest".into(),
+                problem_id: "problem-1".into(),
+                trial_no: *trial_no,
+                source_id: (*source).into(),
+                model_id: "m".into(),
+                harness_id: "test".into(),
+                repo: repo.to_string_lossy().into_owned(),
+                base_commit: base_commit.clone(),
+                objective: "Create solved.txt.".into(),
+                check_cmd: "true".into(),
+                check_timeout_secs: 5,
+            },
+        )
+        .collect::<Vec<_>>();
+    sqlite.insert_eval_trials(&batch_id, &specs).unwrap();
+    (temp, store, sqlite, batch_id)
+}
+
+/// Sources `p1` and `p2`, each with one account `default` that runs one run at a time; the
+/// runs never finish, so a started trial keeps its account for the whole test.
+fn two_source_eval_dispatcher(
+    store: &Arc<dyn TaskStore>,
+    root: &std::path::Path,
+    reserved_runs: usize,
+) -> Dispatcher {
+    let adapter: Arc<dyn WorkerAdapter> = Arc::new(EvalStubAdapter {
+        seen: Arc::new(StdMutex::new(Vec::new())),
+        started: Arc::new(tokio::sync::Notify::new()),
+        env: Vec::new(),
+        hang: true,
+    });
+    let mut d = dispatcher(store.clone(), Arc::clone(&adapter), 1);
+    install_test_routes(&mut d, adapter, &[("p1", "test"), ("p2", "test")], 1);
+    d.config.workspace_root = root.join("data");
+    scratch_on(&mut d, &root.join("scratch"));
+    d.config.eval.reserved_runs = reserved_runs;
+    d.set_eval_version_probe(|_| Some("eval-stub 1.0.0".into()));
+    d
+}
+
+fn trial_statuses(
+    store: &Arc<dyn TaskStore>,
+    batch_id: &str,
+) -> Vec<(String, u32, task_core::routing_eval_trial::EvalTrialStatus)> {
+    store
+        .eval_trials_list(Some(batch_id), None)
+        .unwrap()
+        .into_iter()
+        .map(|t| (t.source_id, t.trial_no, t.status))
+        .collect()
+}
+
+/// Head-of-line blocking: the queue starts with `p1` trials and `p1`'s only account fills up on
+/// the first one. The `p2` trial behind them still starts in the same tick, and the deferred
+/// `p1` trials stay `queued` in their order.
+#[tokio::test]
+async fn eval_trial_full_account_does_not_block_other_source_in_same_tick() {
+    use task_core::routing_eval_trial::EvalTrialStatus as S;
+    let (temp, store, _sqlite, batch_id) =
+        eval_queue(&[("p1", 0), ("p1", 1), ("p1", 2), ("p2", 0)]);
+    let mut d = two_source_eval_dispatcher(&store, temp.path(), 4);
+
+    assert_eq!(
+        d.tick_eval_trials(),
+        2,
+        "p1's first trial and the p2 trial behind the deferred p1 trials start in one tick"
+    );
+    assert_eq!(
+        trial_statuses(&store, &batch_id),
+        vec![
+            ("p1".into(), 0, S::Running),
+            ("p1".into(), 1, S::Queued),
+            ("p1".into(), 2, S::Queued),
+            ("p2".into(), 0, S::Running),
+        ]
+    );
+    assert_eq!(d.eval_runs.len(), 2);
+    // Both accounts are full now: the next tick starts nothing and leaves the queue as it is.
+    assert_eq!(d.tick_eval_trials(), 0);
+    assert_eq!(
+        trial_statuses(&store, &batch_id)
+            .iter()
+            .filter(|(_, _, s)| *s == S::Queued)
+            .count(),
+        2
+    );
+    for entry in d.eval_runs.values() {
+        entry.handle.abort();
+    }
+}
+
+/// A tick claims each trial at most once and does not walk the queue: once `p1` is full, the
+/// store skips `p1` for the rest of the tick, so the tick ends after one deferral. The store work
+/// of the tick (connections taken) is the same for 3 and for 300 queued `p1` trials.
+#[tokio::test]
+async fn eval_trial_tick_claims_each_trial_at_most_once() {
+    use task_core::routing_eval_trial::EvalTrialStatus as S;
+    let mut costs = Vec::new();
+    for size in [3u32, 300] {
+        let queue = (0..size).map(|n| ("p1", n)).collect::<Vec<_>>();
+        let (temp, store, sqlite, batch_id) = eval_queue(&queue);
+        let mut d = two_source_eval_dispatcher(&store, temp.path(), 4);
+
+        let before = sqlite.lock_counts();
+        assert_eq!(d.tick_eval_trials(), 1);
+        costs.push(sqlite.lock_counts().since(before));
+
+        let trials = store.eval_trials_list(Some(&batch_id), None).unwrap();
+        assert_eq!(trials[0].status, S::Running);
+        assert!(trials[1..].iter().all(|t| t.status == S::Queued));
+        // The deferred trial went back to `queued` once; a second unclaim in the tick would fail.
+        assert!(sqlite.eval_trial_unclaim(&trials[1].trial_id).is_err());
+        // With `p1` skipped there is nothing left to claim, so the tick stopped there.
+        assert!(
+            sqlite
+                .eval_trial_claim_next(&["p1".into()])
+                .unwrap()
+                .is_none()
+        );
+        for entry in d.eval_runs.values() {
+            entry.handle.abort();
+        }
+    }
+    assert_eq!(
+        costs[0], costs[1],
+        "the tick's store work must not grow with the number of queued trials"
+    );
+}

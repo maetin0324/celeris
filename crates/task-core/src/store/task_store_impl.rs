@@ -1099,8 +1099,9 @@ impl TaskStore for SqliteStore {
 
     fn eval_trial_claim_next(
         &self,
+        skip_sources: &[String],
     ) -> Result<Option<crate::routing_eval_trial::EvalTrial>, StoreError> {
-        SqliteStore::eval_trial_claim_next(self)
+        SqliteStore::eval_trial_claim_next(self, skip_sources)
     }
 
     fn eval_trial_unclaim(&self, trial_id: &str) -> Result<(), StoreError> {

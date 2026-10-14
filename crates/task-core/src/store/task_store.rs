@@ -952,6 +952,7 @@ pub trait TaskStore:
     ) -> Result<Option<crate::routing_eval_trial::EvalTrial>, StoreError>;
     fn eval_trial_claim_next(
         &self,
+        skip_sources: &[String],
     ) -> Result<Option<crate::routing_eval_trial::EvalTrial>, StoreError>;
     fn eval_trial_unclaim(&self, trial_id: &str) -> Result<(), StoreError>;
     fn eval_trial_mark_started(

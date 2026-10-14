@@ -158,16 +158,26 @@ impl SqliteStore {
         get_on(&conn, trial_id)
     }
 
-    /// `queued` の最古を `running` にして返す。条件付き UPDATE なので、並行して呼んでも同じ行を
-    /// 2 回返さない。無ければ `None`。
-    pub fn eval_trial_claim_next(&self) -> Result<Option<EvalTrial>, StoreError> {
+    /// `source_id` が `skip_sources` に無い `queued` の最古を `running` にして返す。条件付き UPDATE
+    /// なので、並行して呼んでも同じ行を 2 回返さない。無ければ `None`。
+    ///
+    /// `skip_sources` は tick の中で起こせなかった（account・quota が埋まった）source。同じ tick で
+    /// その source の試行を見直さずに、後ろの別 source の試行へ進む（先頭詰まりを避ける）。source の
+    /// 中の順（作成順）は保つ。`idx_eval_trials_status` を順に辿り最初の 1 行で止まるので、queued が
+    /// 多くても全件は読まない（飛ばすのは埋まった source の行だけ）。
+    pub fn eval_trial_claim_next(
+        &self,
+        skip_sources: &[String],
+    ) -> Result<Option<EvalTrial>, StoreError> {
+        let skip = serde_json::to_string(skip_sources)?;
         let mut conn = self.lock()?;
         let tx = conn.transaction()?;
         let candidate: Option<String> = tx
             .query_row(
                 "SELECT trial_id FROM eval_trials WHERE status = 'queued' \
+                 AND source_id NOT IN (SELECT value FROM json_each(?1)) \
                  ORDER BY created_at, rowid LIMIT 1",
-                [],
+                [&skip],
                 |r| r.get(0),
             )
             .optional()?;
@@ -359,16 +369,43 @@ mod tests {
         let rows = s
             .insert_eval_trials("b1", &[spec("p1", 0), spec("p1", 1)])
             .expect("insert");
-        let a = s.eval_trial_claim_next().expect("claim").expect("some");
+        let a = s.eval_trial_claim_next(&[]).expect("claim").expect("some");
         assert_eq!(a.trial_id, rows[0].trial_id);
         assert_eq!(a.status, EvalTrialStatus::Running);
-        let b = s.eval_trial_claim_next().expect("claim").expect("some");
+        let b = s.eval_trial_claim_next(&[]).expect("claim").expect("some");
         assert_eq!(b.trial_id, rows[1].trial_id);
-        assert!(s.eval_trial_claim_next().expect("claim").is_none());
+        assert!(s.eval_trial_claim_next(&[]).expect("claim").is_none());
         s.eval_trial_unclaim(&a.trial_id).expect("unclaim");
         assert!(s.eval_trial_unclaim(&a.trial_id).is_err(), "already queued");
-        let again = s.eval_trial_claim_next().expect("claim").expect("some");
+        let again = s.eval_trial_claim_next(&[]).expect("claim").expect("some");
         assert_eq!(again.trial_id, a.trial_id);
+    }
+
+    #[test]
+    fn claim_skips_the_given_sources_and_keeps_their_order() {
+        let s = store();
+        let claude = |n| EvalTrialSpec {
+            source_id: "claude-oauth".into(),
+            ..spec("p1", n)
+        };
+        let rows = s
+            .insert_eval_trials("b1", &[claude(0), claude(1), spec("p1", 0)])
+            .expect("insert");
+        let skip = vec!["claude-oauth".to_string()];
+        let codex = s
+            .eval_trial_claim_next(&skip)
+            .expect("claim")
+            .expect("some");
+        assert_eq!(
+            codex.trial_id, rows[2].trial_id,
+            "the trial behind the skipped source"
+        );
+        assert!(s.eval_trial_claim_next(&skip).expect("claim").is_none());
+        let first = s.eval_trial_claim_next(&[]).expect("claim").expect("some");
+        assert_eq!(
+            first.trial_id, rows[0].trial_id,
+            "the skipped source keeps its order"
+        );
     }
 
     #[test]
@@ -381,7 +418,7 @@ mod tests {
                 let s = s.clone();
                 std::thread::spawn(move || {
                     let mut got = Vec::new();
-                    while let Some(t) = s.eval_trial_claim_next().expect("claim") {
+                    while let Some(t) = s.eval_trial_claim_next(&[]).expect("claim") {
                         got.push(t.trial_id);
                     }
                     got
@@ -411,7 +448,7 @@ mod tests {
             s.eval_trial_mark_scoring(&id).is_err(),
             "queued cannot score"
         );
-        s.eval_trial_claim_next().expect("claim");
+        s.eval_trial_claim_next(&[]).expect("claim");
         assert!(s.eval_trial_mark_scoring(&id).is_err(), "no run yet");
         s.eval_trial_mark_started(&id, "run-1", "dec-1", "2", "/data/eval/x/repo")
             .expect("started");
@@ -451,7 +488,7 @@ mod tests {
         let rows = s
             .insert_eval_trials("b1", &[spec("p1", 0), spec("p1", 1), spec("p1", 2)])
             .expect("insert");
-        s.eval_trial_claim_next().expect("claim");
+        s.eval_trial_claim_next(&[]).expect("claim");
         s.eval_trial_finish(
             &rows[0].trial_id,
             EvalTrialStatus::Error,
@@ -482,10 +519,10 @@ mod tests {
             .eval_trial_cancel(&rows[1].trial_id)
             .expect("cancel queued");
         assert_eq!(c.status, EvalTrialStatus::Cancelled);
-        s.eval_trial_claim_next().expect("claim");
+        s.eval_trial_claim_next(&[]).expect("claim");
         s.eval_trial_cancel(&rows[2].trial_id)
             .expect("cancel running");
-        assert!(s.eval_trial_claim_next().expect("claim").is_none());
+        assert!(s.eval_trial_claim_next(&[]).expect("claim").is_none());
         assert!(s.eval_trial_cancel("missing").is_err());
     }
 }

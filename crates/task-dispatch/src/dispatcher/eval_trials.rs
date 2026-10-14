@@ -99,12 +99,18 @@ impl Dispatcher {
     /// tick の段 `eval_trials`: 予約枠の中で `queued` の試行を起動する。起動した本数を返す。
     ///
     /// 本番の `dispatch_ready` の**後**に呼ぶ（本番を先に配る。付記 D3）。
+    ///
+    /// account・quota で起こせない試行に当たっても tick を終えない。その試行の source を
+    /// `full_sources` に入れて `queued` に戻し、同じ tick で後ろの別 source の試行を見る（先頭詰まりを
+    /// 避ける。source の中の作成順は保つ）。tick の中で埋まった source が空くことは無いので、同じ試行を
+    /// 2 度 claim しない。終わりは「見る queued が尽きた」か「`reserved_runs` に達した」。
     pub(super) fn tick_eval_trials(&mut self) -> usize {
         self.reconcile_eval_trials();
         if self.config.eval.reserved_runs == 0 {
             return 0;
         }
         let mut started = 0usize;
+        let mut full_sources: Vec<String> = Vec::new();
         loop {
             let reserved = self.config.eval.reserved_runs;
             let in_flight = match self.eval_in_flight() {
@@ -117,7 +123,7 @@ impl Dispatcher {
             if in_flight >= reserved {
                 return started;
             }
-            let trial = match self.store.eval_trial_claim_next() {
+            let trial = match self.store.eval_trial_claim_next(&full_sources) {
                 Ok(Some(t)) => t,
                 Ok(None) => return started,
                 Err(e) => {
@@ -125,8 +131,8 @@ impl Dispatcher {
                     return started;
                 }
             };
-            // 枠・account・quota のどれかで起こせないなら `queued` に戻して次の tick へ（attempts を消費しない）。
-            // 宣言に無い経路は待っても起こせないので `error` にして次の試行を見る。
+            // account・quota で起こせないなら `queued` に戻し（attempts を消費しない）、この tick ではその
+            // source を飛ばして次の試行を見る。宣言に無い経路は待っても起こせないので `error` にして次の試行を見る。
             let admitted = match self.eval_admit(&trial, in_flight) {
                 Ok(admitted) => admitted,
                 Err(why) => {
@@ -139,7 +145,11 @@ impl Dispatcher {
                     tracing::warn!(trial_id = %trial.trial_id, error = %e, "eval trials: unclaim failed");
                 }
                 tracing::debug!(trial_id = %trial.trial_id, reason = why.as_str(), "eval trial deferred");
-                return started;
+                if matches!(why, EvalDefer::Disabled | EvalDefer::ReservedFull) {
+                    return started;
+                }
+                full_sources.push(trial.source_id.clone());
+                continue;
             }
             match self.start_eval_trial(trial) {
                 Ok(()) => started += 1,

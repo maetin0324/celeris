@@ -288,7 +288,7 @@ async fn list_filters_by_batch_and_status() {
     // 1 本だけ running にする（dispatcher の claim と同じ store 経路）。
     let running_id = env
         .store
-        .eval_trial_claim_next()
+        .eval_trial_claim_next(&[])
         .expect("claim")
         .expect("a queued trial")
         .trial_id;
@@ -351,7 +351,7 @@ async fn cancel_moves_a_queued_trial_and_conflicts_afterwards() {
     assert_problem(&missing, 404, "eval_trial_not_found");
 
     // running は取り消せる（run を止めるのは dispatcher 側）。
-    let claimed = env.store.eval_trial_claim_next().expect("claim");
+    let claimed = env.store.eval_trial_claim_next(&[]).expect("claim");
     assert_eq!(claimed.expect("queued trial").trial_id, other);
     let running = send(&app, cancel(&other)).await;
     assert_eq!(running.status.as_u16(), 200, "{}", running.text());
@@ -363,7 +363,7 @@ async fn cancel_moves_a_queued_trial_and_conflicts_afterwards() {
         .as_str()
         .expect("id")
         .to_string();
-    let claimed = env.store.eval_trial_claim_next().expect("claim");
+    let claimed = env.store.eval_trial_claim_next(&[]).expect("claim");
     assert_eq!(claimed.expect("queued trial").trial_id, done_id);
     env.store
         .eval_trial_mark_started(

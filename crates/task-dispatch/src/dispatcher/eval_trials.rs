@@ -104,7 +104,14 @@ impl Dispatcher {
     /// `full_sources` に入れて `queued` に戻し、同じ tick で後ろの別 source の試行を見る（先頭詰まりを
     /// 避ける。source の中の作成順は保つ）。tick の中で埋まった source が空くことは無いので、同じ試行を
     /// 2 度 claim しない。終わりは「見る queued が尽きた」か「`reserved_runs` に達した」。
+    ///
+    /// 自分の instance id（`set_orphan_takeover`）を持たない dispatcher（`--mode verify`・設定を渡さない
+    /// 組み立て）は回復も claim もせず 0 を返す。写しの DB の試行・lease・`runs` にも、DB に書かれた
+    /// 本番の絶対パスにも触れない（ADR 2026-10-14-eval-verify-isolation D1）。
     pub(super) fn tick_eval_trials(&mut self) -> usize {
+        if !self.owns_eval_trials() {
+            return 0;
+        }
         self.reconcile_eval_trials();
         if self.config.eval.reserved_runs == 0 {
             return 0;
@@ -224,6 +231,9 @@ impl Dispatcher {
     /// `git -C <repo>` も同じときだけ走らせる。外なら消さずに warn だけ（`eval_trials.error` は
     /// 書き換えない。ADR 2026-10-14-eval-verify-isolation D2）。
     fn remove_eval_trial_files(&self, trial: &EvalTrial) {
+        if !self.owns_eval_trials() {
+            return;
+        }
         if let Some(path) = trial.worktree_path.as_deref() {
             let trial_dir = self
                 .config
@@ -258,6 +268,9 @@ impl Dispatcher {
     /// scratch が今は無効でも、設定の pool の下に残っていれば消す。消すのは `pool.target_dir(owner)`
     /// （`targets/` の直下）だけ。pool の root が空・相対なら何もしない（ADR 2026-10-14-eval-verify-isolation D2）。
     fn remove_eval_target(&self, trial_id: &str) {
+        if !self.owns_eval_trials() {
+            return;
+        }
         let Ok(owner) = eval_target_owner(trial_id) else {
             return;
         };
@@ -962,6 +975,10 @@ impl Dispatcher {
             tracing::warn!(%run_id, "eval run finished but is not tracked here");
             return;
         };
+        if !self.owns_eval_trials() {
+            tracing::warn!(%run_id, "eval run finished on a dispatcher without an instance id; not recording it");
+            return;
+        }
         // runs 行は終端どおりの状態にし、usage は取れれば残す（ADR 2026-10-14-eval-trial-result-placement D3）。
         let (index_status, usage) = match &result {
             Ok(outcome) => eval_run_index_end(&outcome.terminal),
@@ -1030,12 +1047,16 @@ impl Dispatcher {
         }
     }
 
-    /// 手元の評価 run を止める（draining・shutdown）。
+    /// 手元の評価 run を止める（draining・shutdown）。instance id の無い dispatcher は止めるだけで
+    /// 試行・target・`runs` に書かない（ADR 2026-10-14-eval-verify-isolation D1）。
     pub(super) fn abort_eval_runs(&mut self) {
         let runs: Vec<_> = self.eval_runs.drain().collect();
         for (run_id, entry) in runs {
             tracing::info!(%run_id, trial_id = %entry.trial_id, "aborting an evaluation run");
             entry.handle.abort();
+            if !self.owns_eval_trials() {
+                continue;
+            }
             self.store
                 .eval_trial_finish(
                     &entry.trial_id,
@@ -1058,6 +1079,13 @@ impl Dispatcher {
                 tracing::warn!(%run_id, error = %e, "eval trials: could not close the runs index row");
             }
         }
+    }
+
+    /// 評価試行の起動・回復・後始末・書き込みをしてよいか: 自分の `daemon_instances` の行
+    /// （`set_orphan_takeover` 済みの instance id）を持つときだけ。`DaemonMode` や config では判定しない
+    /// （ADR 2026-10-14-eval-verify-isolation D1）。
+    fn owns_eval_trials(&self) -> bool {
+        self.orphan_takeover.is_some()
     }
 
     /// このインスタンスが評価 run（run id）を手元に持っているか。

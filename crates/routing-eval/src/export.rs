@@ -111,9 +111,9 @@ mod tests {
             trial_no: 1,
             key: EvidenceKey {
                 genre: "coding".into(),
-                harness_id: "claude-code".into(),
+                harness_id: "claude_code".into(),
                 harness_version: "1".into(),
-                source_id: "claude-oauth".into(),
+                source_id: "claude_oauth".into(),
                 model_id: "m".into(),
             },
             passed: true,

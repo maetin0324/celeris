@@ -82,7 +82,7 @@ fn stub_pipeline_freezes_estimates_runs_aggregates_and_exports_features() {
     conn.execute("INSERT INTO runs(run_id,task_id,role,seq,status,started_at,finished_at,model,usage_json,metrics_json) VALUES('r1',?1,'eval',0,'passed','2026-10-12T00:00:00Z','2026-10-12T00:00:03Z','claude-opus-5-5','{\"input_tokens\":100,\"output_tokens\":20,\"usd_list\":0.01}','{\"wall_secs\":3}')", [&problem.task_id]).expect("run row");
     conn.execute("INSERT INTO route_features(hash,schema,template,subject_kind,subject_id,brief,aux_json,created_at) VALUES('f','schema','template','eval_problem',?1,'{}','{}','now')", [&problem.id]).expect("feature row");
     conn.execute("INSERT INTO route_options(hash,schema,builder,question,options_json,created_at) VALUES('o','schema','builder','question','[]','now')", []).expect("options row");
-    conn.execute("INSERT INTO route_decisions(decision_id,subject_kind,subject_id,run_id,features_hash,options_hash,input_json,output_json,judge_json,stage,created_at) VALUES('d','eval_problem',?1,'r1','f','o',?2,?3,'{}','eval','now')", params![problem.id,json!({"trial_no":1}).to_string(),json!({"selected":{"source_id":"claude-oauth","model_id":"claude-opus-5-5","harness_id":"claude-code","harness_version":"2.1.0"}}).to_string()]).expect("decision row");
+    conn.execute("INSERT INTO route_decisions(decision_id,subject_kind,subject_id,run_id,features_hash,options_hash,input_json,output_json,judge_json,stage,created_at) VALUES('d','eval_problem',?1,'r1','f','o',?2,?3,'{}','eval','now')", params![problem.id,json!({"trial_no":1}).to_string(),json!({"selected":{"source_id":"claude_oauth","model_id":"claude-opus-5-5","harness_id":"claude_code","harness_version":"2.1.0"}}).to_string()]).expect("decision row");
     conn.execute("INSERT INTO route_outcomes(decision_id,schema,labels_json,recorded_at) VALUES('d','schema',?1,'now')", [json!({"passed":true,"wall_secs":3.0,"usd_list":0.01}).to_string()]).expect("outcome row");
     drop(conn);
 
@@ -98,7 +98,7 @@ fn stub_pipeline_freezes_estimates_runs_aggregates_and_exports_features() {
     ])
     .expect("aggregate --write-evidence");
     let (store, _) = SqliteStore::open_client(&db).expect("store");
-    let evidence = task_core::TaskStore::latest_routing_evidence(&store, "coding", "claude-code")
+    let evidence = task_core::TaskStore::latest_routing_evidence(&store, "coding", "claude_code")
         .expect("read evidence");
     assert_eq!(evidence.len(), 1);
     assert_eq!(evidence[0].n, 1);

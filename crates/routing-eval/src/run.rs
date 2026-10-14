@@ -243,8 +243,8 @@ mod tests {
         assert!(!trials[0].objective.contains("SECRET_CHECK"));
         assert_eq!(trials[4].problem_id, "p2");
         assert_eq!(trials[4].check.cmd, "SECRET_CHECK2");
-        assert_eq!(trials[0].harness_id, "claude-code");
-        assert_eq!(trials[4].harness_id, "claude-code");
+        assert_eq!(trials[0].harness_id, "claude_code");
+        assert_eq!(trials[4].harness_id, "claude_code");
         let codex = make_trials(&manifest, &[&CANDIDATES[4]], "/repo", 0).expect("codex");
         assert!(codex.iter().all(|trial| trial.harness_id == "codex"));
         assert!(

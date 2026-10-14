@@ -116,6 +116,9 @@ impl Dispatcher {
         if self.config.eval.reserved_runs == 0 {
             return 0;
         }
+        let Some(instance_id) = self.orphan_takeover.as_ref().map(|t| t.instance_id.clone()) else {
+            return 0;
+        };
         let mut started = 0usize;
         let mut full_sources: Vec<String> = Vec::new();
         loop {
@@ -130,7 +133,10 @@ impl Dispatcher {
             if in_flight >= reserved {
                 return started;
             }
-            let trial = match self.store.eval_trial_claim_next(&full_sources) {
+            let trial = match self
+                .store
+                .eval_trial_claim_next(&instance_id, &full_sources)
+            {
                 Ok(Some(t)) => t,
                 Ok(None) => return started,
                 Err(e) => {
@@ -169,7 +175,13 @@ impl Dispatcher {
         }
     }
 
-    /// Recover rows left behind by a daemon restart and finish any durable scoring work.
+    /// 再起動・live 昇格の後に残った行の回復と、採点の続き（ADR 2026-10-14-eval-verify-isolation D3.3・D3.4）。
+    ///
+    /// `scoring` は採点する。`running` で手元の `eval_runs` に無い行は、記録された持ち主（`instance_id`）が
+    /// 生きていないときだけ `error` にする（[`eval_running_recovery`]）。生きている他の instance（live 昇格の
+    /// draining の旧 instance）が走らせている試行は、作業ツリーも target も残してそのまま待つ。`error` に
+    /// した試行の `runs` 行は同じ処理で `cancelled` に閉じる。`daemon_instances` が読めない tick は
+    /// `running` の行に触れない。
     fn reconcile_eval_trials(&mut self) {
         let rows = match self.store.eval_trials_list(None, None) {
             Ok(rows) => rows,
@@ -178,40 +190,79 @@ impl Dispatcher {
                 return;
             }
         };
+        let now = self.now_utc();
+        let mut instances: Option<Option<Vec<task_core::DaemonInstance>>> = None;
         for trial in rows {
-            match eval_recovery_action(
-                trial.status,
-                trial
-                    .run_id
-                    .as_deref()
-                    .is_some_and(|id| self.eval_runs.contains_key(id)),
-            ) {
-                EvalRecoveryAction::Score => {
+            match trial.status {
+                EvalTrialStatus::Scoring => {
                     let run = trial
                         .run_id
                         .as_deref()
                         .and_then(|id| self.store.run_index_get(id).ok().flatten());
-                    let wall_secs = trial
-                        .started_at
-                        .as_deref()
-                        .and_then(|s| {
-                            time::OffsetDateTime::parse(
-                                s,
-                                &time::format_description::well_known::Rfc3339,
-                            )
-                            .ok()
-                        })
+                    let wall_secs = parse_rfc3339(trial.started_at.as_deref())
                         .map(|start| (OffsetDateTime::now_utc() - start).as_seconds_f64());
                     self.score_eval_trial(&trial, run.and_then(|r| r.usage), wall_secs);
                 }
-                EvalRecoveryAction::Error => {
-                    self.fail_and_cleanup_eval_trial(
-                        &trial,
-                        "daemon recovery: run disappeared while trial was running",
-                    );
+                EvalTrialStatus::Running
+                    if !trial
+                        .run_id
+                        .as_deref()
+                        .is_some_and(|id| self.eval_runs.contains_key(id)) =>
+                {
+                    let Some(takeover) = self.orphan_takeover.clone() else {
+                        return;
+                    };
+                    let rows = instances.get_or_insert_with(|| match self.store.instance_list() {
+                        Ok(rows) => Some(rows),
+                        Err(e) => {
+                            tracing::warn!(error = %e, "eval trials: could not read daemon_instances; leaving running trials alone");
+                            None
+                        }
+                    });
+                    let Some(rows) = rows.as_deref() else {
+                        continue;
+                    };
+                    let deadline = Duration::from_secs(
+                        EVAL_MAX_WALL_SECS + u64::from(trial.check_timeout_secs),
+                    ) + self.config.lease_grace;
+                    let Some(why) = eval_running_recovery(
+                        &EvalOwnerFacts {
+                            owner: trial.instance_id.as_deref(),
+                            self_id: &takeover.instance_id,
+                            instances: rows,
+                            freshness: takeover.freshness,
+                            alive: takeover.pid_alive.as_ref(),
+                        },
+                        parse_rfc3339(trial.started_at.as_deref()),
+                        deadline,
+                        now,
+                    ) else {
+                        continue;
+                    };
+                    tracing::warn!(trial_id = %trial.trial_id, owner = ?trial.instance_id, why, "eval trials: recovering a running trial as error");
+                    self.recover_eval_trial_as_error(&trial, why);
                 }
-                EvalRecoveryAction::None => {}
+                _ => {}
             }
+        }
+    }
+
+    /// 回復で `running` の試行を `error`（`interrupted: eval recovery: <why>`）にし、作業ツリーと target を消し、
+    /// `run_id` の `runs` 行を `cancelled` で閉じる（ADR 2026-10-14-eval-verify-isolation D3.5）。
+    fn recover_eval_trial_as_error(&self, trial: &EvalTrial, why: &str) {
+        self.fail_and_cleanup_eval_trial(trial, &format!("interrupted: eval recovery: {why}"));
+        let Some(run_id) = trial.run_id.as_deref() else {
+            return;
+        };
+        if let Err(e) = self.store.run_index_finish(
+            run_id,
+            task_core::RunIndexStatus::Cancelled,
+            None,
+            None,
+            None,
+            self.now_utc(),
+        ) {
+            tracing::warn!(%run_id, error = %e, "eval trials: could not close the runs index row of a recovered trial");
         }
     }
 
@@ -1107,19 +1158,70 @@ struct EvalCheckResult {
     timed_out: bool,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum EvalRecoveryAction {
-    None,
-    Score,
-    Error,
+/// 回復の持ち主判定の材料（`daemon_instances` の行と自分の instance id）。
+struct EvalOwnerFacts<'a> {
+    /// 試行の `instance_id`（migration 0078 より前に起動した行は `None`）。
+    owner: Option<&'a str>,
+    self_id: &'a str,
+    instances: &'a [task_core::DaemonInstance],
+    freshness: Duration,
+    alive: &'a dyn Fn(u32) -> bool,
 }
 
-fn eval_recovery_action(status: EvalTrialStatus, tracked: bool) -> EvalRecoveryAction {
-    match status {
-        EvalTrialStatus::Scoring => EvalRecoveryAction::Score,
-        EvalTrialStatus::Running if !tracked => EvalRecoveryAction::Error,
-        _ => EvalRecoveryAction::None,
+/// 回復で `error` にする理由（`interrupted: eval recovery: <why>`）。
+const EVAL_RECOVERY_LOST_HERE: &str = "this instance started the run but no longer holds it";
+const EVAL_RECOVERY_OWNER_GONE: &str = "the instance that started the run is gone";
+const EVAL_RECOVERY_NO_LIVE_INSTANCE: &str = "no live daemon instance can hold the run";
+const EVAL_RECOVERY_DEADLINE: &str = "the run outlived its deadline";
+
+/// 手元に無い `running` の試行を回復で `error` にするか（`Some(why)`）、持ち主に任せて待つか（`None`）。
+/// ADR 2026-10-14-eval-verify-isolation D3.4:
+///
+/// - 持ち主が自分 → 手元に無い＝失われた run なので `error`。
+/// - 持ち主が他の instance → その 1 instance が生きていなければ（[`crate::orphan::instance_alive`]）`error`。
+/// - 持ち主の記録が無い（migration 前の行）→ 他に生きている instance が 1 つも無ければ
+///   （[`crate::orphan::holder_gone`]）`error`。
+/// - 持ち主が生きている（または記録が無く他に生きている instance がある）行も、`started_at + deadline`
+///   （`EVAL_MAX_WALL_SECS + check_timeout_secs + lease_grace`）を過ぎたら `error`（閉じ忘れの上限）。
+///   `started_at` が無い・読めない行は期限では閉じない。
+fn eval_running_recovery(
+    facts: &EvalOwnerFacts<'_>,
+    started_at: Option<OffsetDateTime>,
+    deadline: Duration,
+    now: OffsetDateTime,
+) -> Option<&'static str> {
+    match facts.owner {
+        Some(owner) if owner == facts.self_id => return Some(EVAL_RECOVERY_LOST_HERE),
+        Some(owner) => {
+            if !crate::orphan::instance_alive(
+                facts.instances,
+                owner,
+                now,
+                facts.freshness,
+                facts.alive,
+            ) {
+                return Some(EVAL_RECOVERY_OWNER_GONE);
+            }
+        }
+        None => {
+            if crate::orphan::holder_gone(
+                facts.instances,
+                facts.self_id,
+                now,
+                facts.freshness,
+                facts.alive,
+            ) {
+                return Some(EVAL_RECOVERY_NO_LIVE_INSTANCE);
+            }
+        }
     }
+    let started_at = started_at?;
+    let limit = time::Duration::try_from(deadline).unwrap_or(time::Duration::MAX);
+    (now - started_at >= limit).then_some(EVAL_RECOVERY_DEADLINE)
+}
+
+fn parse_rfc3339(s: Option<&str>) -> Option<OffsetDateTime> {
+    s.and_then(|s| OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339).ok())
 }
 
 /// `path` の実 path（`..`・symlink を解く。対象が無ければ親の実 path + 名前）が `root` の実 path の
@@ -1328,9 +1430,13 @@ fn run_version(program: &str) -> Option<String> {
 
 #[cfg(test)]
 mod score_tests {
-    use super::{EvalRecoveryAction, eval_recovery_action, run_eval_check};
+    use super::{
+        EVAL_RECOVERY_DEADLINE, EVAL_RECOVERY_LOST_HERE, EVAL_RECOVERY_NO_LIVE_INSTANCE,
+        EVAL_RECOVERY_OWNER_GONE, EvalOwnerFacts, eval_running_recovery, run_eval_check,
+    };
     use std::{path::Path, time::Duration};
-    use task_core::routing_eval_trial::EvalTrialStatus;
+    use task_core::{DaemonInstance, InstanceRole};
+    use time::OffsetDateTime;
 
     #[test]
     fn eval_trial_check_passes_and_fails_by_exit_code() {
@@ -1357,19 +1463,90 @@ mod score_tests {
         assert_eq!(result.exit, None);
     }
 
+    fn instance(
+        id: &str,
+        pid: u32,
+        role: InstanceRole,
+        heartbeat: OffsetDateTime,
+    ) -> DaemonInstance {
+        DaemonInstance {
+            instance_id: id.into(),
+            release: "dev".into(),
+            pid,
+            role,
+            started_at: heartbeat,
+            heartbeat_at: heartbeat,
+            handoff_requested_at: None,
+            drained_at: None,
+        }
+    }
+
     #[test]
-    fn eval_trial_recovery_marks_untracked_running_as_error_and_rescores() {
+    fn eval_running_recovery_errors_only_when_the_owner_is_gone() {
+        let now = OffsetDateTime::now_utc();
+        let fresh = Duration::from_secs(60);
+        let deadline = Duration::from_secs(3600);
+        let alive = |pid: u32| pid != 99;
+        let rows = vec![
+            instance("new", 1, InstanceRole::Active, now),
+            instance("old", 2, InstanceRole::Draining, now),
+            instance(
+                "stale",
+                3,
+                InstanceRole::Draining,
+                now - time::Duration::minutes(10),
+            ),
+            instance("dead", 99, InstanceRole::Draining, now),
+        ];
+        let decide =
+            |owner: Option<&str>, rows: &[DaemonInstance], started: Option<OffsetDateTime>| {
+                eval_running_recovery(
+                    &EvalOwnerFacts {
+                        owner,
+                        self_id: "new",
+                        instances: rows,
+                        freshness: fresh,
+                        alive: &alive,
+                    },
+                    started,
+                    deadline,
+                    now,
+                )
+            };
+        let recent = Some(now - time::Duration::minutes(5));
+        // 生きている他の持ち主（live 昇格の draining の旧 instance）の試行は待つ。
+        assert_eq!(decide(Some("old"), &rows, recent), None);
+        // 持ち主が自分なら、手元に無い＝失われた run。
         assert_eq!(
-            eval_recovery_action(EvalTrialStatus::Running, false),
-            EvalRecoveryAction::Error
+            decide(Some("new"), &rows, recent),
+            Some(EVAL_RECOVERY_LOST_HERE)
+        );
+        // heartbeat が古い・pid が無い・行が無い持ち主は死んでいる。
+        assert_eq!(
+            decide(Some("stale"), &rows, recent),
+            Some(EVAL_RECOVERY_OWNER_GONE)
         );
         assert_eq!(
-            eval_recovery_action(EvalTrialStatus::Scoring, false),
-            EvalRecoveryAction::Score
+            decide(Some("dead"), &rows, recent),
+            Some(EVAL_RECOVERY_OWNER_GONE)
         );
         assert_eq!(
-            eval_recovery_action(EvalTrialStatus::Running, true),
-            EvalRecoveryAction::None
+            decide(Some("missing"), &rows, recent),
+            Some(EVAL_RECOVERY_OWNER_GONE)
         );
+        // 記録の無い行は、他に生きている instance があれば待ち、無ければ error。
+        assert_eq!(decide(None, &rows, recent), None);
+        assert_eq!(
+            decide(None, &rows[..1], recent),
+            Some(EVAL_RECOVERY_NO_LIVE_INSTANCE)
+        );
+        // 生きている持ち主でも期限を過ぎたら error。started_at が無ければ期限では閉じない。
+        let long_ago = Some(now - time::Duration::hours(2));
+        assert_eq!(
+            decide(Some("old"), &rows, long_ago),
+            Some(EVAL_RECOVERY_DEADLINE)
+        );
+        assert_eq!(decide(None, &rows, long_ago), Some(EVAL_RECOVERY_DEADLINE));
+        assert_eq!(decide(Some("old"), &rows, None), None);
     }
 }

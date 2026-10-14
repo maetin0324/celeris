@@ -30,3 +30,6 @@ eval_trials 全体: passed 52・failed 4・error 13・queued 217。running・sco
 
 ## 未解決事項
 - queued 217 試行が終端になるまで collect は再実行できない。投入再開（reserved_runs を 2 に戻す）後、全試行の終端を待ってからこの unit をやり直す。
+
+## 再確認（2026-10-14 06:37Z、attempt run 01M4WJ2B5Y）
+本番 DB 読み取り: passed 52・failed 4・error 13・queued 217（変化なし）。本番 config は reserved_runs = 0 のまま。人の回答（修正 task 01M4WHYHVZ の本番反映 → reserved_runs = 2 で再開 → queued 全終端、error 13 は新 batch で 1 回だけ再投入可）に従い、何もせず待つ。

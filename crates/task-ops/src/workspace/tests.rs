@@ -53,15 +53,21 @@ fn task(path: &str, mode: Option<WorkspaceMode>) -> Task {
     }
 }
 
+/// 固定の無い（この ADR 以前の）task として、設定ファイルの root `root` で解く。
+fn dir_of(t: &Task, root: &std::path::Path) -> PathBuf {
+    let store = task_core::SqliteStore::open_in_memory().expect("store");
+    local_dir(&store, &WorkspaceRoots::new(root.to_path_buf(), None), t).expect("local_dir")
+}
+
 /// 目印が無ければ従来どおり `path`（`mode` の既定が `worktree` でも変わらない）。
 #[test]
 fn without_the_marker_the_local_dir_is_the_path() {
     let root = tempfile::tempdir().expect("tempdir");
     let t = task("/srv/repo", None);
-    assert_eq!(local_dir(&t, root.path()), PathBuf::from("/srv/repo"));
+    assert_eq!(dir_of(&t, root.path()), PathBuf::from("/srv/repo"));
 }
 
-/// 目印があれば `<workspace_root>/<task_id>`（worktree を消した後も同じ）。
+/// 目印があれば `<root>/<task_id>`（worktree を消した後も同じ）。
 #[test]
 fn with_the_marker_the_local_dir_is_the_per_task_directory() {
     let root = tempfile::tempdir().expect("tempdir");
@@ -69,7 +75,7 @@ fn with_the_marker_the_local_dir_is_the_per_task_directory() {
     let per_task = root.path().join(t.id.to_string());
     std::fs::create_dir_all(&per_task).expect("mkdir");
     std::fs::write(per_task.join(WORKTREE_MARKER), "{}").expect("write");
-    assert_eq!(local_dir(&t, root.path()), per_task);
+    assert_eq!(dir_of(&t, root.path()), per_task);
 }
 
 /// ADR-0043 D2: 複数リポジトリのタスクは、`mode = shared` のリポジトリでも足回りが per-task にある
@@ -97,7 +103,7 @@ fn a_multi_repo_marker_wins_over_the_shared_mode() {
         }],
     };
     write_marker(&per_task, &marker).expect("write");
-    assert_eq!(local_dir(&t, root.path()), per_task);
+    assert_eq!(dir_of(&t, root.path()), per_task);
     // Phase 49 までの目印（`repos` 無し）も読める。
     let old = read_marker(&per_task).expect("marker");
     assert_eq!(old.repos.len(), 1);
@@ -117,5 +123,49 @@ fn shared_mode_ignores_the_marker() {
     let per_task = root.path().join(t.id.to_string());
     std::fs::create_dir_all(&per_task).expect("mkdir");
     std::fs::write(per_task.join(WORKTREE_MARKER), "{}").expect("write");
-    assert_eq!(local_dir(&t, root.path()), PathBuf::from("/srv/repo"));
+    assert_eq!(dir_of(&t, root.path()), PathBuf::from("/srv/repo"));
+}
+
+/// ADR 2026-10-14-local-machine-settings D5: 足回りを初めて用意するときに root が固定され、以後の
+/// `local_dir` は store の上書きが変わっても固定の root で解く。子は親の固定を継ぐ。
+#[test]
+fn prepare_task_dir_pins_the_root_and_local_dir_follows_the_pin() {
+    use task_core::store::LocalSettingsOverrides;
+    let store = task_core::SqliteStore::open_in_memory().expect("store");
+    let cfg = tempfile::tempdir().expect("tempdir");
+    let pinned = tempfile::tempdir().expect("tempdir");
+    let later = tempfile::tempdir().expect("tempdir");
+    let roots = WorkspaceRoots::new(cfg.path().to_path_buf(), None);
+    let now = time::OffsetDateTime::now_utc();
+    let set = |root: &std::path::Path| {
+        store
+            .local_settings_set(
+                &LocalSettingsOverrides {
+                    workspace_root: Some(root.to_string_lossy().into_owned()),
+                    max_concurrency: None,
+                },
+                "admin",
+                now,
+            )
+            .expect("set");
+    };
+    set(pinned.path());
+    let parent = task("rel", None);
+    let mut child = task("rel", None);
+    child.parent_id = Some(parent.id);
+    let parent_dir = prepare_task_dir(&store, &roots, &parent, now).expect("prepare");
+    assert_eq!(parent_dir, pinned.path().join(parent.id.to_string()));
+    write_marker(&parent_dir, &WorktreeMarker::default()).expect("write");
+
+    set(later.path());
+    assert_eq!(local_dir(&store, &roots, &parent).expect("dir"), parent_dir);
+    assert_eq!(
+        prepare_task_dir(&store, &roots, &child, now).expect("prepare"),
+        pinned.path().join(child.id.to_string())
+    );
+    // 目印の無い相対 path も固定の root 基準。
+    assert_eq!(
+        local_dir(&store, &roots, &child).expect("dir"),
+        pinned.path().join("rel")
+    );
 }

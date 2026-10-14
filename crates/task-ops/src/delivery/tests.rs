@@ -103,7 +103,7 @@ fn existing_reviewer_gets_a_pinned_merge_criterion_without_extra_tasks() {
         base_commit: None,
     });
     assert!(
-        begin(&store, &mut as_child, &root, &policy, "w", "r")
+        begin(&store, &mut as_child, &roots(&root), &policy, "w", "r")
             .unwrap()
             .is_none()
     );
@@ -129,7 +129,7 @@ fn existing_reviewer_gets_a_pinned_merge_criterion_without_extra_tasks() {
     let d = begin(
         &store,
         &mut task,
-        &root,
+        &roots(&root),
         &policy,
         "worker-run",
         "review-run",
@@ -167,7 +167,7 @@ fn existing_reviewer_gets_a_pinned_merge_criterion_without_extra_tasks() {
     let mut unrelated = task.clone();
     unrelated.project_id = None;
     assert!(
-        begin(&store, &mut unrelated, &root, &policy, "w", "r")
+        begin(&store, &mut unrelated, &roots(&root), &policy, "w", "r")
             .unwrap()
             .is_none()
     );
@@ -434,7 +434,7 @@ fn department_fallback_tree_child_and_outside_project_create_no_delivery() {
     task.assignee = Some("software".into());
     let root = tempfile::tempdir().unwrap();
     assert!(
-        begin(&store, &mut task, root.path(), &policy, "w", "r")
+        begin(&store, &mut task, &roots(root.path()), &policy, "w", "r")
             .unwrap()
             .is_none()
     );
@@ -452,7 +452,7 @@ fn department_fallback_tree_child_and_outside_project_create_no_delivery() {
         base_commit: None,
     });
     assert!(
-        begin(&store, &mut task, root.path(), &policy, "w", "r")
+        begin(&store, &mut task, &roots(root.path()), &policy, "w", "r")
             .unwrap()
             .is_none()
     );
@@ -574,7 +574,7 @@ impl SkipFixture {
         begin(
             &self.store,
             &mut self.task,
-            &self.root,
+            &roots(&self.root),
             &self.policy,
             "w",
             "r",
@@ -785,4 +785,9 @@ fn merge_criterion_names_base_to_head_range() {
     assert!(text.contains(&format!("{base}...{}", d.head)), "{text}");
     assert!(text.contains("審査対象ではない"), "{text}");
     assert!(!text.contains("指定SHA"), "{text}");
+}
+
+/// 固定の無い task の resolver（設定ファイルの root が `root`）。
+fn roots(root: &std::path::Path) -> task_core::local_machine::WorkspaceRoots {
+    task_core::local_machine::WorkspaceRoots::new(root.to_path_buf(), None)
 }

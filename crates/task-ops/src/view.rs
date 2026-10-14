@@ -26,8 +26,8 @@ pub(crate) const ALL_EVENTS: usize = usize::MAX;
 /// ビューの組み立てに必要な設定値（celeris の設定から呼び出し側が詰める）。
 #[derive(Debug, Clone, PartialEq)]
 pub struct ViewContext {
-    /// `WorkspaceSpec::Local` の相対パスの基準。
-    pub workspace_root: PathBuf,
+    /// task ごとの足回りの root の resolver（ADR 2026-10-14-local-machine-settings D5）。
+    pub workspace_roots: task_core::local_machine::WorkspaceRoots,
     pub retry_backoff_base: Duration,
     pub retry_backoff_max: Duration,
     pub max_requeues: u32,
@@ -175,7 +175,7 @@ pub struct TaskDetail {
     pub actual_work_unit_write_sets: Vec<ActualWriteSetView>,
     /// Last observed target snapshot; reading the detail does not run Git.
     pub behind_target: task_core::behind_target::BehindTarget,
-    /// 手元の作業ディレクトリ（絶対パス）。`WorkspaceSpec::Remote` では写し `workspace_root/<task_id>`（run のログはここ。ADR-0018 D1）。
+    /// 手元の作業ディレクトリ（絶対パス）。`WorkspaceSpec::Remote` では写し `<root>/<task_id>`（run のログはここ。ADR-0018 D1）。
     pub workspace_dir: Option<String>,
     /// ADR-0018: `WorkspaceSpec::Remote` のクラスタ（`[[clusters]] id`）。ローカルのタスクは `null`。
     pub cluster: Option<String>,
@@ -1452,9 +1452,9 @@ pub fn task_detail(
     };
 
     // ADR-0041 D1: worktree を切ったタスクでは、run のログ・成果物は作業ツリーの外
-    // （`<workspace_root>/<task_id>/`）にある。判定は `workspace::local_dir`（目印ファイルを見るだけ）。
+    // （`<root>/<task_id>/`）にある。判定は `workspace::local_dir`（目印ファイルを見るだけ）。
     let workspace_dir = Some(
-        crate::workspace::local_dir(&task, &ctx.workspace_root)
+        crate::workspace::local_dir(store, &ctx.workspace_roots, &task)?
             .to_string_lossy()
             .into_owned(),
     );
@@ -1483,19 +1483,18 @@ pub fn task_detail(
                 }
             }),
         // ADR-0041 D1: ローカルも worktree を切る。目印（`worktree.json`）があればそれを出す。
-        WorkspaceSpec::Local { path, .. } => {
-            crate::workspace::read_marker(&ctx.workspace_root.join(task.id.to_string())).map(|m| {
-                WorktreeView {
-                    project: if m.repo.is_empty() {
-                        path.to_string_lossy().into_owned()
-                    } else {
-                        m.repo
-                    },
-                    dir: m.dir,
-                    branch: m.branch,
-                }
-            })
-        }
+        WorkspaceSpec::Local { path, .. } => crate::workspace::read_marker(
+            &ctx.workspace_roots.task_dir(store, &task.id)?,
+        )
+        .map(|m| WorktreeView {
+            project: if m.repo.is_empty() {
+                path.to_string_lossy().into_owned()
+            } else {
+                m.repo
+            },
+            dir: m.dir,
+            branch: m.branch,
+        }),
     };
 
     let task_actions = actions_with_events(&task, &events);

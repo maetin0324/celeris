@@ -4,6 +4,7 @@ use std::{
     path::{Path, PathBuf},
     time::Duration,
 };
+use task_core::local_machine::WorkspaceRoots;
 use task_core::{
     Check, Criterion, Delivery, DeliverySkipReason, DeliveryState, Event, OrgNode, PlanOrigin,
     RepoId, RunIndexRole, StoreError, Task, TaskId, TaskStore,
@@ -165,7 +166,7 @@ struct Prepared {
 fn prepare(
     store: &dyn TaskStore,
     task: &Task,
-    workspace_root: &Path,
+    roots: &WorkspaceRoots,
     policy: &DeliveryPolicy,
 ) -> Result<Result<Prepared, Skip>, StoreError> {
     let Some(project_id) = task.project_id else {
@@ -200,7 +201,7 @@ fn prepare(
             format!("task の repo が {} 件", task.repos.len()),
         )));
     }
-    let task_dir = workspace_root.join(task.id.to_string());
+    let task_dir = roots.task_dir(store, &task.id)?;
     let Some(marker) = crate::workspace::read_marker(&task_dir) else {
         return Ok(Err(report(
             DeliverySkipReason::NoMarker,
@@ -390,7 +391,7 @@ fn record_skip(
 pub fn begin(
     store: &dyn TaskStore,
     task: &mut Task,
-    workspace_root: &Path,
+    roots: &WorkspaceRoots,
     policy: &DeliveryPolicy,
     worker_run: &str,
     review_run: &str,
@@ -405,7 +406,7 @@ pub fn begin(
         head,
         department,
         old,
-    } = match prepare(store, task, workspace_root, policy)? {
+    } = match prepare(store, task, roots, policy)? {
         Ok(p) => p,
         Err(Skip::Report {
             reason,

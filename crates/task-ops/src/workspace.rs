@@ -2,9 +2,10 @@
 //!
 //! `WorkspaceSpec::Local` の `mode = worktree`（既定）で、`path` が git リポジトリのときだけ、
 //! celeris はタスクごとに `git worktree` を切る。そのとき **run の足回り**（`runs/`, `inputs/`,
-//! `artifacts/`）は worktree の外、`<workspace_root>/<task_id>/` に置き、作業ツリーそのものは
-//! `<workspace_root>/<task_id>/tree` になる。作業ツリーの中に `runs/` を作ると
-//! `git status --porcelain` が常に汚れ、終端で worktree を消せなくなるため。
+//! `artifacts/`）は worktree の外、`<root>/<task_id>/` に置き、作業ツリーそのものは
+//! `<root>/<task_id>/tree` になる。作業ツリーの中に `runs/` を作ると
+//! `git status --porcelain` が常に汚れ、終端で worktree を消せなくなるため。`<root>` は task ごとに
+//! `WorkspaceRoots`（task-core）が解く（ADR 2026-10-14-local-machine-settings D5）。
 //!
 //! ここは「どこを見ればよいか」を 1 か所に決める純粋な関数（+ 目印ファイルの有無だけを見る）。
 //! ディスパッチャは dispatch の時点で `git rev-parse` まで見て決め、その結果を目印
@@ -13,37 +14,59 @@
 
 use std::path::{Path, PathBuf};
 
-use task_core::{Task, WorkspaceMode, WorkspaceSpec};
+use task_core::local_machine::WorkspaceRoots;
+use task_core::{StoreError, Task, TaskStore, WorkspaceMode, WorkspaceSpec};
+use time::OffsetDateTime;
 
-/// worktree を切ったタスクの目印（`<workspace_root>/<task_id>/worktree.json`）。
+/// worktree を切ったタスクの目印（`<root>/<task_id>/worktree.json`）。
 pub const WORKTREE_MARKER: &str = "worktree.json";
 
-/// 作業ツリーのディレクトリ名（`<workspace_root>/<task_id>/tree`）。
+/// 作業ツリーのディレクトリ名（`<root>/<task_id>/tree`）。
 pub const WORKTREE_DIR_NAME: &str = "tree";
 
 /// そのタスクの**足回りのディレクトリ**（`runs/`, `inputs/`, `artifacts/` があるところ）。
 ///
-/// - `Local` で worktree を切った（目印がある）→ `<workspace_root>/<task_id>`
-/// - `Local`（従来）→ `path`（相対なら `workspace_root` 基準）
-/// - `Remote` → 手元の写し `<workspace_root>/<task_id>`（ADR-0018 D1。従来どおり）
-pub fn local_dir(task: &Task, workspace_root: &Path) -> PathBuf {
-    match &task.workspace {
+/// `<root>` は `WorkspaceRoots::task_root`（ADR 2026-10-14-local-machine-settings D5。固定があればそれ、
+/// 無い既存 task は設定ファイルの root）。
+/// - `Local` で worktree を切った（目印がある）→ `<root>/<task_id>`
+/// - `Local`（従来）→ `path`（相対なら `<root>` 基準）
+/// - `Remote` → 手元の写し `<root>/<task_id>`（ADR-0018 D1。従来どおり）
+pub fn local_dir<S: TaskStore + ?Sized>(
+    store: &S,
+    roots: &WorkspaceRoots,
+    task: &Task,
+) -> Result<PathBuf, StoreError> {
+    let root = roots.task_root(store, &task.id)?;
+    let per_task = root.join(task.id.to_string());
+    Ok(match &task.workspace {
         WorkspaceSpec::Local { path, .. } => {
-            let per_task = workspace_root.join(task.id.to_string());
             if !per_task.join(WORKTREE_MARKER).is_file() {
-                return workspace_root.join(path);
+                return Ok(root.join(path));
             }
             // ADR-0043 D2（Phase 52）: 複数リポジトリのタスクは、リポジトリごとの `mode` に関わらず
-            // 足回りが `<workspace_root>/<task_id>/` にある（目印の `repos` が空でないのが印）。
+            // 足回りが `<root>/<task_id>/` にある（目印の `repos` が空でないのが印）。
             let multi = read_marker(&per_task).is_some_and(|m| !m.repos.is_empty());
             if multi || task.workspace.local_mode() == WorkspaceMode::Worktree {
                 per_task
             } else {
-                workspace_root.join(path)
+                root.join(path)
             }
         }
-        WorkspaceSpec::Remote { .. } => workspace_root.join(task.id.to_string()),
-    }
+        WorkspaceSpec::Remote { .. } => per_task,
+    })
+}
+
+/// 足回り `<root>/<task_id>` を初めて用意するときの場所（ADR 2026-10-14-local-machine-settings D5）。
+/// root を `task_workspace_roots` に固定してから返す（root task は実効の root、子 task は親の root を継ぐ。
+/// 既に固定があればそのまま）。足回りを作る経路（worktree・写し・目印）はここで場所を決める。
+pub fn prepare_task_dir<S: TaskStore + ?Sized>(
+    store: &S,
+    roots: &WorkspaceRoots,
+    task: &Task,
+    now: OffsetDateTime,
+) -> Result<PathBuf, StoreError> {
+    let root = roots.pin_task_root(store, &task.id, task.parent_id.as_ref(), now)?;
+    Ok(root.join(task.id.to_string()))
 }
 
 /// 目印に書く内容（ADR-0041 D1 / ADR-0043 D2。人が読む・API が読む）。
@@ -55,7 +78,7 @@ pub fn local_dir(task: &Task, workspace_root: &Path) -> PathBuf {
 pub struct WorktreeMarker {
     /// 元のリポジトリ（`WorkspaceSpec::Local.path`、または `repos[0]` の実体）。
     pub repo: String,
-    /// 作業ツリー（`<workspace_root>/<task_id>/tree` か `.../repos/<name>`）。
+    /// 作業ツリー（`<root>/<task_id>/tree` か `.../repos/<name>`）。
     pub dir: String,
     /// ブランチ（`<branch_prefix><task_id>`）。git でなければ空。
     pub branch: String,
@@ -78,7 +101,7 @@ pub struct WorktreeMarkerRepo {
     pub kind: String,
     /// 実体（案件のリポジトリの場所）。
     pub source: String,
-    /// タスクの中での場所（`<workspace_root>/<task_id>/repos/<name>`）。
+    /// タスクの中での場所（`<root>/<task_id>/repos/<name>`）。
     pub dir: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,

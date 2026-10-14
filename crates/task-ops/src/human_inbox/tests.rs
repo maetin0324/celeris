@@ -8,7 +8,10 @@ use crate::inbox::{ApprovalItem, InboxCounts, PlanApprovalStage, ProjectPlanRef,
 
 fn view_ctx() -> ViewContext {
     ViewContext {
-        workspace_root: std::path::PathBuf::from("/tmp/workspaces"),
+        workspace_roots: task_core::local_machine::WorkspaceRoots::new(
+            std::path::PathBuf::from("/tmp/workspaces"),
+            None,
+        ),
         retry_backoff_base: StdDuration::from_secs(10),
         retry_backoff_max: StdDuration::from_secs(300),
         max_requeues: 5,

@@ -102,7 +102,10 @@ impl Env {
     fn inbox_disk_full(&self) -> Vec<task_ops::human_inbox::InboxItem> {
         let dir = tempfile::tempdir().unwrap();
         let ctx = task_ops::view::ViewContext {
-            workspace_root: dir.path().to_path_buf(),
+            workspace_roots: task_core::local_machine::WorkspaceRoots::new(
+                dir.path().to_path_buf(),
+                None,
+            ),
             retry_backoff_base: std::time::Duration::ZERO,
             retry_backoff_max: std::time::Duration::ZERO,
             max_requeues: 5,

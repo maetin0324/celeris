@@ -627,7 +627,8 @@ async fn low_disk_runs_emergency_gc_before_pausing_dispatch() {
     store.insert(&task).unwrap();
     let scratch_dir = tempfile::tempdir().unwrap();
     let mut d = dispatcher(store.clone(), done_adapter(), 1);
-    d.config.workspace_root = dir.path().to_path_buf();
+    d.config.workspace_roots =
+        task_core::local_machine::WorkspaceRoots::new(dir.path().to_path_buf(), None);
     let settings = scratch_on(&mut d, scratch_dir.path());
     let pool = settings.pool();
     let live = lease(&pool, "agent-live");
@@ -670,7 +671,8 @@ async fn low_disk_runs_emergency_gc_before_pausing_dispatch() {
     let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let scratch_dir = tempfile::tempdir().unwrap();
     let mut d = dispatcher(store.clone(), done_adapter(), 1);
-    d.config.workspace_root = dir.path().to_path_buf();
+    d.config.workspace_roots =
+        task_core::local_machine::WorkspaceRoots::new(dir.path().to_path_buf(), None);
     let settings = scratch_on(&mut d, scratch_dir.path());
     let live = lease(&settings.pool(), "agent-live");
     d.config.min_free_disk_mb = u64::MAX;

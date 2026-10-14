@@ -138,7 +138,8 @@ async fn eval_trial_reserved_slot_hides_checks_and_records_selected_version() {
     });
     let mut dispatcher = dispatcher(store.clone(), adapter, 2);
     own_instance(&mut dispatcher, "01EVALDAEMON00000000000000");
-    dispatcher.config.workspace_root = temp.path().join("data");
+    dispatcher.config.workspace_roots =
+        task_core::local_machine::WorkspaceRoots::new(temp.path().join("data"), None);
     scratch_on(&mut dispatcher, &temp.path().join("scratch"));
     dispatcher.config.eval.reserved_runs = 1;
     dispatcher.set_eval_version_probe(|_| Some("eval-stub 3.4.1".into()));
@@ -333,7 +334,8 @@ fn eval_dispatcher(
 ) -> Dispatcher {
     let mut dispatcher = dispatcher(store.clone(), Arc::new(worker), 2);
     own_instance(&mut dispatcher, "01EVALDAEMON00000000000000");
-    dispatcher.config.workspace_root = root.join("data");
+    dispatcher.config.workspace_roots =
+        task_core::local_machine::WorkspaceRoots::new(root.join("data"), None);
     scratch_on(&mut dispatcher, &root.join("scratch"));
     dispatcher.config.eval.reserved_runs = 1;
     dispatcher.set_eval_version_probe(|_| Some("eval-scripted 1.0.0".into()));
@@ -500,7 +502,8 @@ async fn eval_run_request_sets_per_trial_cargo_target_dir() {
     });
     let mut d = dispatcher(store.clone(), adapter, 2);
     own_instance(&mut d, "01EVALDAEMON00000000000000");
-    d.config.workspace_root = temp.path().join("data");
+    d.config.workspace_roots =
+        task_core::local_machine::WorkspaceRoots::new(temp.path().join("data"), None);
     let scratch = scratch_on(&mut d, &temp.path().join("scratch"));
     d.config.eval.reserved_runs = 2;
     d.set_eval_version_probe(|_| Some("eval-stub 1.0.0".into()));
@@ -633,7 +636,8 @@ async fn eval_trial_target_removed_on_recovery() {
     });
     let mut dead = dispatcher(store.clone(), hung.clone(), 2);
     own_instance(&mut dead, "01DEADDAEMON00000000000000");
-    dead.config.workspace_root = temp.path().join("data");
+    dead.config.workspace_roots =
+        task_core::local_machine::WorkspaceRoots::new(temp.path().join("data"), None);
     scratch_on(&mut dead, &temp.path().join("scratch"));
     dead.config.eval.reserved_runs = 1;
     dead.set_eval_version_probe(|_| Some("eval-stub 1.0.0".into()));
@@ -648,7 +652,8 @@ async fn eval_trial_target_removed_on_recovery() {
 
     let mut next = dispatcher(store.clone(), hung, 2);
     own_instance(&mut next, "01NEXTDAEMON00000000000000");
-    next.config.workspace_root = temp.path().join("data");
+    next.config.workspace_roots =
+        task_core::local_machine::WorkspaceRoots::new(temp.path().join("data"), None);
     scratch_on(&mut next, &temp.path().join("scratch"));
     next.config.eval.reserved_runs = 0;
     next.tick_eval_trials();
@@ -697,7 +702,8 @@ fn start_hung_eval_trial(
     });
     let mut old = dispatcher(store.clone(), hung, 2);
     own_instance(&mut old, owner);
-    old.config.workspace_root = temp.join("data");
+    old.config.workspace_roots =
+        task_core::local_machine::WorkspaceRoots::new(temp.join("data"), None);
     scratch_on(&mut old, &temp.join("scratch"));
     old.config.eval.reserved_runs = 1;
     old.set_eval_version_probe(|_| Some("eval-stub 1.0.0".into()));
@@ -903,7 +909,8 @@ async fn live_handoff_keeps_running_eval_trial() {
         2,
     );
     own_instance(&mut old, owner);
-    old.config.workspace_root = temp.path().join("data");
+    old.config.workspace_roots =
+        task_core::local_machine::WorkspaceRoots::new(temp.path().join("data"), None);
     scratch_on(&mut old, &temp.path().join("scratch"));
     old.config.eval.reserved_runs = 1;
     old.set_eval_version_probe(|_| Some("eval-gated 1.0.0".into()));
@@ -1222,7 +1229,8 @@ fn two_source_eval_dispatcher(
     let mut d = dispatcher(store.clone(), Arc::clone(&adapter), 1);
     own_instance(&mut d, "01EVALDAEMON00000000000000");
     install_test_routes(&mut d, adapter, &[("p1", "test"), ("p2", "test")], 1);
-    d.config.workspace_root = root.join("data");
+    d.config.workspace_roots =
+        task_core::local_machine::WorkspaceRoots::new(root.join("data"), None);
     scratch_on(&mut d, &root.join("scratch"));
     d.config.eval.reserved_runs = reserved_runs;
     d.set_eval_version_probe(|_| Some("eval-stub 1.0.0".into()));
@@ -1521,7 +1529,8 @@ async fn verify_daemon_leaves_foreign_eval_trial_files() {
         hang: true,
     });
     let mut d = dispatcher(store.clone(), adapter, 2);
-    d.config.workspace_root = temp.path().join("staging");
+    d.config.workspace_roots =
+        task_core::local_machine::WorkspaceRoots::new(temp.path().join("staging"), None);
     scratch_on(&mut d, &prod_scratch);
     d.config.eval.reserved_runs = 2;
     d.set_eval_version_probe(|_| Some("eval-stub 1.0.0".into()));

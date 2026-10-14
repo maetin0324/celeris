@@ -460,8 +460,9 @@ pub struct DispatchConfig {
     pub kill_grace: Duration,
     /// `Command` チェック 1 件あたりの上限。
     pub review_timeout: Duration,
-    /// `WorkspaceSpec::Local` の相対パスの基準。
-    pub workspace_root: PathBuf,
+    /// task ごとの足回りの root と `WorkspaceSpec::Local` の相対パスの基準の resolver
+    /// （ADR 2026-10-14-local-machine-settings D5。設定ファイル・CLI の root は resolver の中だけで使う）。
+    pub workspace_roots: task_core::local_machine::WorkspaceRoots,
     /// DESIGN §4.2 `plan.auto_accept`: Plan の子を `draft` のまま置く（false）か、親 `done` と同一トランザクションで
     /// `ready` にする（true）か（ADR-0002 D6, ADR-0007 D3）。
     pub plan_auto_accept: bool,

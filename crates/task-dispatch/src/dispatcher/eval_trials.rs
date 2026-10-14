@@ -286,12 +286,25 @@ impl Dispatcher {
             return;
         }
         if let Some(path) = trial.worktree_path.as_deref() {
-            let trial_dir = self
-                .config
-                .workspace_root
-                .join("eval")
-                .join(trial.trial_id.as_str());
-            match eval_path_within(&trial_dir, &trial.trial_id, Path::new(path)) {
+            // ADR 2026-10-14-local-machine-settings D5: 試行は用意した時点の実効の root に置かれる。
+            // 今の実効の root と固定なしの root（CLI か設定ファイル）の `eval/<trial_id>/` を順に見る。
+            let roots = &self.config.workspace_roots;
+            let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+            if let Ok(effective) = roots.effective_root_in(self.store.as_ref()) {
+                candidates.push(effective.value);
+            }
+            if !candidates.iter().any(|r| r == roots.unpinned_root()) {
+                candidates.push(roots.unpinned_root().to_path_buf());
+            }
+            let mut within = Err(String::from("no workspace root"));
+            for root in &candidates {
+                let trial_dir = root.join("eval").join(trial.trial_id.as_str());
+                within = eval_path_within(&trial_dir, &trial.trial_id, Path::new(path));
+                if within.is_ok() {
+                    break;
+                }
+            }
+            match within {
                 Ok(real) => {
                     let _ = std::process::Command::new("git")
                         .arg("-C")
@@ -621,11 +634,19 @@ impl Dispatcher {
         })?;
         let harness_version = self.eval_harness_version(&trial.harness_id);
         let run_id = ulid::Ulid::new().to_string();
-        let base = self
+        // ADR 2026-10-14-local-machine-settings D5: 新しい試行は実効の root に置く（場所は
+        // `worktree_path` に記録し、以後はそれを読む）。
+        let root = self
             .config
-            .workspace_root
-            .join("eval")
-            .join(trial.trial_id.as_str());
+            .workspace_roots
+            .effective_root_in(self.store.as_ref())
+            .map_err(|e| {
+                let e = format!("workspace root: {e}");
+                self.fail_eval_trial(&trial, &e);
+                e
+            })?
+            .value;
+        let base = root.join("eval").join(trial.trial_id.as_str());
         let worktree = base.join(EVAL_WORKTREE_DIR);
         let artifacts = base.join(EVAL_ARTIFACTS_DIR);
         // scratch が無効なら作業ツリーも作らずに `error`（target をルート fs に置かない）。

@@ -111,13 +111,53 @@ pub trait TargetCensus: Send {
     fn largest(&self, limit: usize) -> Vec<(PathBuf, u64)>;
 }
 
-/// 本物の測り方: 作業場所の cargo target（`<workspace_root>/<task>/repos/<repo>/target`）、scratch の owner
+/// 本物の測り方: 作業場所の cargo target（`<root>/<task>/repos/<repo>/target`）、scratch の owner
 /// （`<scratch>/targets/<owner>`）、`<build_cache_dir>/cargo` の直下を `st_blocks × 512` で測る。
-/// 測るのは通知を作るときだけ（24 時間に 1 回程度）。
+/// 測るのは通知を作るときだけ（24 時間に 1 回程度）。`<root>` は [`task_workspace_roots`] の全部
+/// （ADR 2026-10-14-local-machine-settings D5）。
 pub struct FsTargetCensus {
-    pub workspace_root: PathBuf,
+    pub store: std::sync::Arc<dyn task_core::TaskStore>,
+    pub workspace_roots: task_core::local_machine::WorkspaceRoots,
     pub scratch_targets: Option<PathBuf>,
     pub build_cache_cargo: PathBuf,
+}
+
+/// ADR 2026-10-14-local-machine-settings D5: task の足回りがありうる root の全部（重複なし、出た順）。
+/// 設定ファイル・CLI の基底の root、今の実効の root、ローカル設定の監査の流れに出た `workspace_root` の値。
+/// task の固定はどれも固定した時点の実効の root（子は親の root）なので、この集合に入る。store が読めなければ
+/// 基底の root だけ。
+pub fn task_workspace_roots(
+    store: &dyn task_core::TaskStore,
+    roots: &task_core::local_machine::WorkspaceRoots,
+) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = Vec::new();
+    let mut push = |p: PathBuf| {
+        if !out.contains(&p) {
+            out.push(p);
+        }
+    };
+    push(roots.config_root().to_path_buf());
+    if let Some(cli) = roots.cli_root() {
+        push(cli.to_path_buf());
+    }
+    match roots.effective_root_in(store) {
+        Ok(r) => push(r.value),
+        Err(e) => tracing::warn!(error = %e, "disk watch: cannot read the local settings"),
+    }
+    match store.local_settings_events() {
+        Ok(events) => {
+            for ev in events {
+                for root in [ev.before.workspace_root, ev.after.workspace_root]
+                    .into_iter()
+                    .flatten()
+                {
+                    push(PathBuf::from(root));
+                }
+            }
+        }
+        Err(e) => tracing::warn!(error = %e, "disk watch: cannot read the local settings history"),
+    }
+    out
 }
 
 fn child_dirs(dir: &Path) -> Vec<PathBuf> {
@@ -138,8 +178,10 @@ fn child_dirs(dir: &Path) -> Vec<PathBuf> {
 impl TargetCensus for FsTargetCensus {
     fn largest(&self, limit: usize) -> Vec<(PathBuf, u64)> {
         let mut dirs: Vec<PathBuf> = Vec::new();
-        for task in child_dirs(&self.workspace_root) {
-            dirs.extend(task_worker::workspace_targets::task_targets(&task).0);
+        for root in task_workspace_roots(self.store.as_ref(), &self.workspace_roots) {
+            for task in child_dirs(&root) {
+                dirs.extend(task_worker::workspace_targets::task_targets(&task).0);
+            }
         }
         if let Some(scratch) = &self.scratch_targets {
             dirs.extend(child_dirs(scratch));

@@ -22,8 +22,9 @@ async fn disk_gate_notifies_once_and_recovers_without_a_run() {
         delay: Duration::ZERO,
     });
     let mut d = dispatcher(store.clone(), adapter, 1);
-    d.config.workspace_root = dir.path().join("not-created");
-    assert!(free_disk_mb(&d.config.workspace_root).is_ok());
+    d.config.workspace_roots =
+        task_core::local_machine::WorkspaceRoots::new(dir.path().join("not-created"), None);
+    assert!(free_disk_mb(d.config.workspace_roots.config_root()).is_ok());
     d.config.min_free_disk_mb = u64::MAX;
     assert_eq!(d.tick().unwrap().dispatched, 0);
     assert_eq!(d.tick().unwrap().dispatched, 0);
@@ -96,7 +97,8 @@ async fn tick_prunes_the_oldest_terminal_workspace_and_records_an_event() {
     let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let root = tempfile::tempdir().unwrap();
     let mut d = dispatcher(store.clone(), done_adapter(), 1);
-    d.config.workspace_root = root.path().to_path_buf();
+    d.config.workspace_roots =
+        task_core::local_machine::WorkspaceRoots::new(root.path().to_path_buf(), None);
     d.config.workspace_prune_after_secs = 1;
 
     let task = new_task(
@@ -154,7 +156,8 @@ async fn workspace_prune_after_secs_zero_disables_pruning() {
     let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let root = tempfile::tempdir().unwrap();
     let mut d = dispatcher(store.clone(), done_adapter(), 1);
-    d.config.workspace_root = root.path().to_path_buf();
+    d.config.workspace_roots =
+        task_core::local_machine::WorkspaceRoots::new(root.path().to_path_buf(), None);
     d.config.workspace_prune_after_secs = 0;
 
     let task = new_task(
@@ -263,7 +266,10 @@ async fn disk_watch_tick_phase_holds_coding_until_pressure_recovers() {
         task_core::DiskLevel::Critical
     );
     let ctx = task_ops::view::ViewContext {
-        workspace_root: dir.path().to_path_buf(),
+        workspace_roots: task_core::local_machine::WorkspaceRoots::new(
+            dir.path().to_path_buf(),
+            None,
+        ),
         retry_backoff_base: Duration::ZERO,
         retry_backoff_max: Duration::ZERO,
         max_requeues: 5,
@@ -342,7 +348,8 @@ async fn repo_target_gc_tick_removes_a_finished_task_target_without_cron() {
     let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let root = tempfile::tempdir().unwrap();
     let mut d = dispatcher(store.clone(), done_adapter(), 1);
-    d.config.workspace_root = root.path().to_path_buf();
+    d.config.workspace_roots =
+        task_core::local_machine::WorkspaceRoots::new(root.path().to_path_buf(), None);
     d.config.workspace_prune_after_secs = 0;
 
     let task = new_task(

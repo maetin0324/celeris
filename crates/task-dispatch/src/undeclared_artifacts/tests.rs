@@ -405,7 +405,13 @@ mod backfill_tests {
             "{}",
         );
 
-        let dry = backfill_task(&store, &t, root.path(), true).unwrap();
+        let dry = backfill_task(
+            &store,
+            &t,
+            &task_core::local_machine::WorkspaceRoots::new(root.path().to_path_buf(), None),
+            true,
+        )
+        .unwrap();
         assert_eq!(dry.run_id, "run-new");
         let paths: Vec<&str> = dry.artifacts.iter().map(|a| a.path.as_str()).collect();
         assert_eq!(
@@ -422,7 +428,13 @@ mod backfill_tests {
             "dry-run must not register"
         );
 
-        let first = backfill_task(&store, &t, root.path(), false).unwrap();
+        let first = backfill_task(
+            &store,
+            &t,
+            &task_core::local_machine::WorkspaceRoots::new(root.path().to_path_buf(), None),
+            false,
+        )
+        .unwrap();
         assert_eq!(first.artifacts.len(), 3);
         let got = produced(&store, t.id);
         assert_eq!(got.len(), 3, "{got:?}");
@@ -431,12 +443,24 @@ mod backfill_tests {
                 .all(|(run_id, a)| run_id == "run-new" && !a.declared)
         );
 
-        let again = backfill_task(&store, &t, root.path(), false).unwrap();
+        let again = backfill_task(
+            &store,
+            &t,
+            &task_core::local_machine::WorkspaceRoots::new(root.path().to_path_buf(), None),
+            false,
+        )
+        .unwrap();
         assert!(again.artifacts.is_empty(), "{again:?}");
         assert_eq!(produced(&store, t.id).len(), 3);
 
         write(&mirror, "artifacts/cmp4/final/report.md", "# report v2\n");
-        let changed = backfill_task(&store, &t, root.path(), false).unwrap();
+        let changed = backfill_task(
+            &store,
+            &t,
+            &task_core::local_machine::WorkspaceRoots::new(root.path().to_path_buf(), None),
+            false,
+        )
+        .unwrap();
         let paths: Vec<&str> = changed.artifacts.iter().map(|a| a.path.as_str()).collect();
         assert_eq!(paths, vec!["artifacts/cmp4/final/report.md"]);
         assert_eq!(produced(&store, t.id).len(), 4);
@@ -449,7 +473,13 @@ mod backfill_tests {
         let root = tempfile::tempdir().unwrap();
         let t = task(remote());
         store.insert(&t).unwrap();
-        let report = backfill_task(&store, &t, root.path(), false).unwrap();
+        let report = backfill_task(
+            &store,
+            &t,
+            &task_core::local_machine::WorkspaceRoots::new(root.path().to_path_buf(), None),
+            false,
+        )
+        .unwrap();
         assert!(report.artifacts.is_empty());
         assert_eq!(report.run_id, "");
 

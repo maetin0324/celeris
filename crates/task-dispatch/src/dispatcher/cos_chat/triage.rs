@@ -334,7 +334,7 @@ impl CosChatLaunch {
         now: OffsetDateTime,
     ) -> Result<HumanInbox, String> {
         let ctx = task_ops::view::ViewContext {
-            workspace_root: dispatcher.config.workspace_root.clone(),
+            workspace_roots: dispatcher.config.workspace_roots.clone(),
             retry_backoff_base: dispatcher.config.retry_backoff_base,
             retry_backoff_max: dispatcher.config.retry_backoff_max,
             max_requeues: dispatcher.config.max_requeues,

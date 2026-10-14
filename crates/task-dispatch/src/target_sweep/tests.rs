@@ -574,11 +574,23 @@ fn repo_target_gc_removes_the_target_of_a_finished_task() {
         repo_target(root.path(), cancelled),
     ];
     // dry run は木を変えない。
-    let dry = repo_target_gc_move_aside(&store, root.path(), 6 * 3600, now, false);
+    let dry = repo_target_gc_move_aside(
+        &store,
+        &task_core::local_machine::WorkspaceRoots::new(root.path().to_path_buf(), None),
+        6 * 3600,
+        now,
+        false,
+    );
     assert_eq!(dry.moved.len(), 2);
     assert!(dry.to_remove.is_empty());
     assert!(targets.iter().all(|t| t.is_dir()));
-    let gc = repo_target_gc_move_aside(&store, root.path(), 6 * 3600, now, true);
+    let gc = repo_target_gc_move_aside(
+        &store,
+        &task_core::local_machine::WorkspaceRoots::new(root.path().to_path_buf(), None),
+        6 * 3600,
+        now,
+        true,
+    );
     assert!(gc.held.is_empty(), "{:?}", gc.held);
     assert_eq!(gc.moved.len(), 2);
     assert!(gc.moved.iter().all(|m| m.bytes >= 8192), "{:?}", gc.moved);
@@ -604,7 +616,13 @@ fn repo_target_gc_keeps_the_target_while_a_descendant_runs() {
     let parent = gc_task(&store, task_core::Status::Cancelled, 10, None, now);
     let child = gc_task(&store, task_core::Status::Running, 10, Some(parent), now);
     let target = repo_target(root.path(), parent);
-    let gc = repo_target_gc_move_aside(&store, root.path(), 6 * 3600, now, true);
+    let gc = repo_target_gc_move_aside(
+        &store,
+        &task_core::local_machine::WorkspaceRoots::new(root.path().to_path_buf(), None),
+        6 * 3600,
+        now,
+        true,
+    );
     assert!(gc.moved.is_empty(), "{:?}", gc.moved);
     assert_eq!(
         gc.held,
@@ -621,11 +639,23 @@ fn repo_target_gc_keeps_the_target_while_a_descendant_runs() {
     store
         .apply_transition_with_events(child, Trigger::ReviewPass, vec![])
         .unwrap();
-    let gc = repo_target_gc_move_aside(&store, root.path(), 6 * 3600, now, true);
+    let gc = repo_target_gc_move_aside(
+        &store,
+        &task_core::local_machine::WorkspaceRoots::new(root.path().to_path_buf(), None),
+        6 * 3600,
+        now,
+        true,
+    );
     assert_eq!(gc.held.len(), 1);
     assert_eq!(gc.held[0].reason, "grace");
     let later = now + time::Duration::hours(7);
-    let gc = repo_target_gc_move_aside(&store, root.path(), 6 * 3600, later, true);
+    let gc = repo_target_gc_move_aside(
+        &store,
+        &task_core::local_machine::WorkspaceRoots::new(root.path().to_path_buf(), None),
+        6 * 3600,
+        later,
+        true,
+    );
     assert_eq!(gc.moved.len(), 1, "{:?}", gc.held);
     assert!(!target.exists());
 }
@@ -642,12 +672,24 @@ fn repo_target_gc_keeps_the_target_while_cargo_holds_the_lock() {
         FlockArg::LockExclusiveNonblock,
     )
     .unwrap();
-    let gc = repo_target_gc_move_aside(&store, root.path(), 6 * 3600, now, true);
+    let gc = repo_target_gc_move_aside(
+        &store,
+        &task_core::local_machine::WorkspaceRoots::new(root.path().to_path_buf(), None),
+        6 * 3600,
+        now,
+        true,
+    );
     assert!(gc.moved.is_empty());
     assert_eq!(gc.held[0].reason, "build_in_progress");
     assert!(target.is_dir());
     drop(held);
-    let gc = repo_target_gc_move_aside(&store, root.path(), 6 * 3600, now, true);
+    let gc = repo_target_gc_move_aside(
+        &store,
+        &task_core::local_machine::WorkspaceRoots::new(root.path().to_path_buf(), None),
+        6 * 3600,
+        now,
+        true,
+    );
     assert_eq!(gc.moved.len(), 1);
     assert!(!target.exists());
 }

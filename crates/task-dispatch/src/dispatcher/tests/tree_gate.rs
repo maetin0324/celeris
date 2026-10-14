@@ -1000,7 +1000,10 @@ async fn auto_leaf_excess_compaction_interrupts_live_run_and_resume_resets_windo
         store.as_ref(),
         None,
         &task_ops::view::ViewContext {
-            workspace_root: dir.path().to_path_buf(),
+            workspace_roots: task_core::local_machine::WorkspaceRoots::new(
+                dir.path().to_path_buf(),
+                None,
+            ),
             retry_backoff_base: Duration::ZERO,
             retry_backoff_max: Duration::ZERO,
             max_requeues: 5,

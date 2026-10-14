@@ -78,18 +78,25 @@ pub(super) fn integration_checks_for_phase(
 }
 
 /// 2026-10-04 統合の検査の進み具合 D2: 統合の検査のログの置き場所
-/// （`<workspace_root>/<task_id>/integration-checks/<wu_key>`。葉の WU のログと同じく `check_log_root` を見よ）。
+/// （`<root>/<task_id>/integration-checks/<wu_key>`。葉の WU のログと同じく `check_log_root` を見よ）。
 pub(crate) const INTEGRATION_CHECK_LOG_DIR: &str = "integration-checks";
 /// 2026-10-04 WU 検査の引き継ぎ D3: 葉の WU の受け入れ検査のログの置き場所
-/// （`<workspace_root>/<task_id>/work-unit-checks/<wu_key>`。`check_log_root` を見よ）。
+/// （`<root>/<task_id>/work-unit-checks/<wu_key>`。`check_log_root` を見よ）。
 pub(crate) const WORK_UNIT_CHECK_LOG_DIR: &str = "work-unit-checks";
 
 impl Dispatcher {
-    /// 2026-10-11 WU 検査ログの置き場所: 検査ログは repo の作業ツリーの外の `<workspace_root>/<task_id>` に置く
+    /// 2026-10-11 WU 検査ログの置き場所: 検査ログは repo の作業ツリーの外の `<root>/<task_id>` に置く
     /// （shared mode では task_dir が作業ツリーそのもので、範囲 check の `git ls-files --others` がログを数えるため）。
-    /// worktree mode ではこれは task_dir と同じ場所。
+    /// worktree mode ではこれは task_dir と同じ場所。`<root>` は task の固定された root
+    /// （ADR 2026-10-14-local-machine-settings D5。store が読めなければ固定の無い task と同じ root）。
     pub(crate) fn check_log_root(&self, task_id: TaskId) -> PathBuf {
-        self.config.workspace_root.join(task_id.to_string())
+        let roots = &self.config.workspace_roots;
+        roots
+            .task_dir(self.store.as_ref(), &task_id)
+            .unwrap_or_else(|e| {
+                tracing::error!(%task_id, error = %e, "cannot read the pinned workspace root; using the unpinned root");
+                roots.unpinned_root().join(task_id.to_string())
+            })
     }
 }
 

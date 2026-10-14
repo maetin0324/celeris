@@ -277,9 +277,21 @@ impl Dispatcher {
             self.disk_low = false;
             return true;
         }
+        // ADR 2026-10-14-local-machine-settings D5: 新しい task の足回りを用意する実効の root を見る。
+        let workspace_root = match self
+            .config
+            .workspace_roots
+            .effective_root_in(self.store.as_ref())
+        {
+            Ok(r) => r.value,
+            Err(e) => {
+                tracing::warn!(error = %e, "disk space: cannot read the workspace root settings; checking the unpinned root");
+                self.config.workspace_roots.unpinned_root().to_path_buf()
+            }
+        };
         let mut paths: Vec<PathBuf> = vec![
             PathBuf::from("/"),
-            self.config.workspace_root.clone(),
+            workspace_root,
             self.config.build_cache_dir.clone(),
         ];
         // ADR-0075 D3: scratch pool の filesystem も見る。
@@ -541,9 +553,18 @@ impl Dispatcher {
                     self.task_workspaces.remove(&id);
                 }
                 Some(Status::Cancelled) => {
-                    let (targets, _) = task_worker::workspace_targets::task_targets(
-                        &self.config.workspace_root.join(id.to_string()),
-                    );
+                    let task_dir = match self
+                        .config
+                        .workspace_roots
+                        .task_dir(self.store.as_ref(), &id)
+                    {
+                        Ok(d) => d,
+                        Err(e) => {
+                            tracing::warn!(task_id = %id, error = %e, "cancelled: cannot resolve the workspace root; keeping the worktree");
+                            continue;
+                        }
+                    };
+                    let (targets, _) = task_worker::workspace_targets::task_targets(&task_dir);
                     let locks: Option<Vec<_>> = targets
                         .iter()
                         .map(|p| task_worker::workspace_targets::try_lock_target(p))
@@ -613,7 +634,7 @@ impl Dispatcher {
         let now = OffsetDateTime::now_utc();
         let candidate = match task_worker::workspace_prune::find_prune_candidate(
             self.store.as_ref(),
-            &self.config.workspace_root,
+            &self.config.workspace_roots,
             now,
             self.config.workspace_prune_after_secs,
         ) {
@@ -668,10 +689,11 @@ impl Dispatcher {
             return;
         }
         self.repo_target_gc_at = Some(now);
-        let root = self.config.workspace_root.clone();
+        let roots = &self.config.workspace_roots;
+        let probe = roots.unpinned_root().to_path_buf();
         let gc = crate::target_sweep::repo_target_gc_move_aside(
             self.store.as_ref(),
-            &root,
+            roots,
             after_secs,
             now,
             true,
@@ -684,7 +706,13 @@ impl Dispatcher {
         }
         for m in &gc.moved {
             tracing::info!(task_id = %m.task_id, path = %m.target.display(), bytes = m.bytes, "repo target gc: removing the target of a finished task tree");
-            let task_dir = root.join(m.task_id.to_string());
+            let task_dir = match roots.task_dir(self.store.as_ref(), &m.task_id) {
+                Ok(d) => d,
+                Err(e) => {
+                    tracing::warn!(task_id = %m.task_id, error = %e, "repo target gc: cannot resolve the workspace root");
+                    probe.join(m.task_id.to_string())
+                }
+            };
             let removed = task_worker::workspace_prune::relative_removed(
                 &task_dir,
                 std::slice::from_ref(&m.target),
@@ -708,7 +736,7 @@ impl Dispatcher {
                 let busy = busy.clone();
                 let paths = gc.to_remove;
                 move || {
-                    let out = crate::target_sweep::remove_moved_targets(&paths, &root);
+                    let out = crate::target_sweep::remove_moved_targets(&paths, &probe);
                     for e in &out.errors {
                         tracing::warn!(error = %e, "repo target gc");
                     }

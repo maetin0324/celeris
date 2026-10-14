@@ -366,7 +366,7 @@ async fn target_sweep_executor_cleans_finished_workspaces_and_scratch_at_critica
         delay: Duration::ZERO,
     });
     let mut d = dispatcher(store.clone(), adapter, 1);
-    d.config.workspace_root = ws.clone();
+    d.config.workspace_roots = task_core::local_machine::WorkspaceRoots::new(ws.clone(), None);
     scratch_on(&mut d, &scratch);
     d.test_now = Some(Arc::new(StdMutex::new(now)));
     d.set_target_sweep(task_worker::target_sweep::SweepParams {

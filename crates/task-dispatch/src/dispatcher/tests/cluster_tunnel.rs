@@ -46,7 +46,8 @@ async fn cluster_and_provider_concurrency_are_both_enforced() {
     });
     let mut d = dispatcher(store.clone(), adapter, 3);
     // Remote のタスクの写しは `workspace_root/<task_id>`（ADR-0018 D1）。テストでは実体のある場所にする。
-    d.config.workspace_root = dir.path().to_path_buf();
+    d.config.workspace_roots =
+        task_core::local_machine::WorkspaceRoots::new(dir.path().to_path_buf(), None);
     d.config.clusters.insert(
         "slow".into(),
         ClusterSpec {

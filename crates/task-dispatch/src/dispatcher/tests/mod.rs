@@ -113,7 +113,10 @@ fn dispatcher_with_test_clock(
             idle_timeout: Duration::from_secs(5),
             kill_grace: Duration::from_millis(100),
             review_timeout: Duration::from_secs(5),
-            workspace_root: PathBuf::from("/nonexistent"),
+            workspace_roots: task_core::local_machine::WorkspaceRoots::new(
+                PathBuf::from("/nonexistent"),
+                None,
+            ),
             plan_auto_accept: false,
             retry_backoff_base: Duration::ZERO,
             retry_backoff_max: Duration::ZERO,
@@ -1229,7 +1232,10 @@ fn pool_dispatcher_with_requeues(
             idle_timeout: Duration::from_secs(5),
             kill_grace: Duration::from_millis(100),
             review_timeout: Duration::from_secs(5),
-            workspace_root: PathBuf::from("/nonexistent"),
+            workspace_roots: task_core::local_machine::WorkspaceRoots::new(
+                PathBuf::from("/nonexistent"),
+                None,
+            ),
             plan_auto_accept: false,
             retry_backoff_base: Duration::ZERO,
             retry_backoff_max: Duration::ZERO,
@@ -1366,7 +1372,7 @@ fn person_dispatcher(
     memory_dir: Option<PathBuf>,
 ) -> Dispatcher {
     let mut d = dispatcher(store, adapter, 2);
-    d.config.workspace_root = workspace_root;
+    d.config.workspace_roots = task_core::local_machine::WorkspaceRoots::new(workspace_root, None);
     d.config.memory_dir = memory_dir;
     d.config.genres = vec![GenreSpec {
         id: "secretary".into(),
@@ -1673,7 +1679,8 @@ fn worktree_dispatcher(
     releases_dir: Option<PathBuf>,
 ) -> Dispatcher {
     let mut d = dispatcher(store, adapter, 1);
-    d.config.workspace_root = workspace_root.to_path_buf();
+    d.config.workspace_roots =
+        task_core::local_machine::WorkspaceRoots::new(workspace_root.to_path_buf(), None);
     d.config.releases_dir = releases_dir;
     d
 }
@@ -2393,7 +2400,8 @@ fn parallel_dispatcher(
     limit: usize,
 ) -> Dispatcher {
     let mut d = dispatcher(store, adapter, max_concurrency);
-    d.config.workspace_root = workspace_root.to_path_buf();
+    d.config.workspace_roots =
+        task_core::local_machine::WorkspaceRoots::new(workspace_root.to_path_buf(), None);
     d.config.execution.max_parallel_work_units = limit;
     d.set_account_limit("implicit", "p1", Some(provider_concurrency))
         .unwrap();
@@ -2900,6 +2908,7 @@ mod target_sync;
 mod tick_and_dispatch;
 mod ui_ux_skills;
 mod work_units;
+mod workspace_roots;
 
 /// Phase F5-fix6: 再起動直後の孤児 run の回収（`src/dispatcher/tests/orphan_takeover.rs`）。
 mod orphan_takeover;

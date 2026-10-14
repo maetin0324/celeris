@@ -352,7 +352,9 @@ impl Dispatcher {
         }
         let dir_started = Instant::now();
         // ADR-0041 D1 / ADR-0043 D2: ローカルの作業場所（1 つ以上のリポジトリ）を用意する
-        // （`dir` はその親 = `runs/` `artifacts/` の置き場）。
+        // （`dir` はその親 = `runs/` `artifacts/` の置き場）。足回りの root はここで初めて固定する
+        // （ADR 2026-10-14-local-machine-settings D5。以後の解決は固定された root を見る）。
+        self.pin_task_root(&task)?;
         let worktree = self.task_workspaces_for(&task);
         let dir = match &worktree {
             Some(ws) => ws.task_dir.clone(),

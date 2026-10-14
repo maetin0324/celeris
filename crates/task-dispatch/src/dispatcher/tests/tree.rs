@@ -162,7 +162,10 @@ pub(super) fn unit_reasons(events: &[(u64, Event)], key: &str) -> Vec<String> {
 
 fn view_ctx() -> task_ops::view::ViewContext {
     task_ops::view::ViewContext {
-        workspace_root: PathBuf::from("/nonexistent"),
+        workspace_roots: task_core::local_machine::WorkspaceRoots::new(
+            PathBuf::from("/nonexistent"),
+            None,
+        ),
         retry_backoff_base: Duration::ZERO,
         retry_backoff_max: Duration::ZERO,
         max_requeues: 5,

@@ -529,7 +529,10 @@ async fn a_wait_on_an_unknown_cluster_is_a_retryable_failure() {
 
 fn inbox_questions(store: &Arc<dyn TaskStore>) -> Vec<TaskId> {
     let ctx = task_ops::view::ViewContext {
-        workspace_root: PathBuf::from("/nonexistent"),
+        workspace_roots: task_core::local_machine::WorkspaceRoots::new(
+            PathBuf::from("/nonexistent"),
+            None,
+        ),
         retry_backoff_base: Duration::ZERO,
         retry_backoff_max: Duration::ZERO,
         max_requeues: 5,

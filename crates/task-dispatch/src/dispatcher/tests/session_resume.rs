@@ -822,7 +822,8 @@ async fn session_resume_container_no_session() {
         )],
     ));
     let mut d = claude_dispatcher(&store, adapter.clone());
-    d.config.workspace_root = root.path().join("ws");
+    d.config.workspace_roots =
+        task_core::local_machine::WorkspaceRoots::new(root.path().join("ws"), None);
     d.set_container_probe(task_worker::container::detect_with(
         task_worker::RuntimePreference::Auto,
         |_| Ok(()),
@@ -989,7 +990,8 @@ fn remote_three_step(
     store.insert(&task).unwrap();
     adopt_three_step_plan(store, task_id);
     let mut d = claude_dispatcher(store, adapter);
-    d.config.workspace_root = dir.to_path_buf();
+    d.config.workspace_roots =
+        task_core::local_machine::WorkspaceRoots::new(dir.to_path_buf(), None);
     d.config.clusters.insert(
         "sirius".into(),
         cluster_spec_with_auth("sirius", "sirius", "manual"),
@@ -1742,7 +1744,8 @@ async fn session_resume_comment_interrupt_resumes_phase_work_unit_session() {
         vec![("a", vec![comment_interrupt(false)])],
     ));
     let mut d = dispatcher_with_test_clock(store.clone(), adapter.clone(), 2, false);
-    d.config.workspace_root = root.path().to_path_buf();
+    d.config.workspace_roots =
+        task_core::local_machine::WorkspaceRoots::new(root.path().to_path_buf(), None);
     d.config.execution.max_parallel_work_units = 2;
     d.config.execution.max_continuations_per_work_unit = 10;
     let report = run_until_idle(&mut d, 700).await;

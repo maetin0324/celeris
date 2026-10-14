@@ -153,7 +153,7 @@ impl Dispatcher {
         let dir = if path.is_absolute() {
             path.clone()
         } else {
-            self.config.workspace_root.join(path)
+            self.task_root(task).join(path)
         };
         if let Some(repo) = self
             .task_workspaces_for(task)
@@ -207,22 +207,52 @@ impl Dispatcher {
 }
 
 impl Dispatcher {
-    /// ADR-0005 D3: `Local{path}` がそのタスクの作業ディレクトリ。相対なら `workspace_root` 基準。
+    /// ADR 2026-10-14-local-machine-settings D5: task の足回りの root（`WorkspaceRoots::task_root`。固定が
+    /// あればそれ、無い既存 task は設定ファイル（CLI があれば CLI）の root）。store が読めなければ固定の無い
+    /// task と同じ root に倒す（この ADR 以前と同じ場所）。
+    pub(super) fn task_root(&self, task: &Task) -> PathBuf {
+        let roots = &self.config.workspace_roots;
+        roots
+            .task_root(self.store.as_ref(), &task.id)
+            .unwrap_or_else(|e| {
+                tracing::error!(task_id = %task.id, error = %e, "cannot read the pinned workspace root; using the unpinned root");
+                roots.unpinned_root().to_path_buf()
+            })
+    }
+
+    /// ADR 2026-10-14-local-machine-settings D5: 足回り `<root>/<task_id>` を初めて用意する前に root を
+    /// `task_workspace_roots` に固定する（root task は実効の root、子 task は親の root を継ぐ。既に固定が
+    /// あればそのまま）。固定の無い既存 task で、固定の無い root に足回りが既にあるもの（この ADR 以前に
+    /// 用意したもの）は固定しない（resolver が同じ root を返し続けるので、既存の作業場所・走行中の run は
+    /// 動かない）。
+    pub(super) fn pin_task_root(&self, task: &Task) -> Result<(), StoreError> {
+        let roots = &self.config.workspace_roots;
+        let store = self.store.as_ref();
+        if store.task_workspace_root_get(&task.id)?.is_some() {
+            return Ok(());
+        }
+        if roots.unpinned_root().join(task.id.to_string()).exists() {
+            return Ok(());
+        }
+        task_ops::workspace::prepare_task_dir(store, roots, task, self.now_utc())?;
+        Ok(())
+    }
+
+    /// ADR-0005 D3: `Local{path}` がそのタスクの作業ディレクトリ。相対なら task の root 基準。
     ///
     /// ADR-0041 D1: ただし worktree を切るタスク（`mode = worktree` かつ `path` が git リポジトリ）では、
-    /// **`runs/` `inputs/` `artifacts/` を置く場所**は `workspace_root/<task_id>` になる
+    /// **`runs/` `inputs/` `artifacts/` を置く場所**は `<root>/<task_id>` になる
     /// （作業ツリーそのものは `<そこ>/tree`。`git status --porcelain` を汚さないため外に出す）。
+    /// `<root>` は `task_root`（ADR 2026-10-14-local-machine-settings D5）。
     pub(super) fn task_dir(&self, task: &Task) -> Option<PathBuf> {
         match &task.workspace {
             WorkspaceSpec::Local { path, .. } => Some(match self.task_workspaces_for(task) {
                 Some(ws) => ws.task_dir,
                 None if path.is_absolute() => path.clone(),
-                None => self.config.workspace_root.join(path),
+                None => self.task_root(task).join(path),
             }),
-            // ADR-0018 D1: クラスタ側が正で、手元は写し（`workspace_root/<task_id>`）。
-            WorkspaceSpec::Remote { .. } => {
-                Some(self.config.workspace_root.join(task.id.to_string()))
-            }
+            // ADR-0018 D1: クラスタ側が正で、手元は写し（`<root>/<task_id>`）。
+            WorkspaceSpec::Remote { .. } => Some(self.task_root(task).join(task.id.to_string())),
         }
     }
 
@@ -240,7 +270,8 @@ impl Dispatcher {
     ///
     /// base の決め方は `task_worker::resolve_base`（`main` / 本番の `current` / `HEAD`。ADR-0041 D1）。
     pub(super) fn task_workspaces_for(&self, task: &Task) -> Option<task_worker::TaskWorkspaces> {
-        let task_dir = self.config.workspace_root.join(task.id.to_string());
+        let root = self.task_root(task);
+        let task_dir = root.join(task.id.to_string());
         if task.repos.is_empty() {
             let worktree = self.legacy_worktree_for(task, &task_dir)?;
             let name = task_worker::task_repos::repo_display_name(&worktree.repo);
@@ -269,7 +300,7 @@ impl Dispatcher {
             let source = if path.is_absolute() {
                 path.clone()
             } else {
-                self.config.workspace_root.join(path)
+                root.join(path)
             };
             let dir = task_dir.join(task_worker::REPOS_DIR_NAME).join(&row.name);
             let wants_worktree = row.kind == task_core::RepoKind::Git
@@ -438,7 +469,7 @@ impl Dispatcher {
         let repo = if path.is_absolute() {
             path.clone()
         } else {
-            self.config.workspace_root.join(path)
+            self.task_root(task).join(path)
         };
         if !task_worker::is_git_repo(&repo) {
             return None;

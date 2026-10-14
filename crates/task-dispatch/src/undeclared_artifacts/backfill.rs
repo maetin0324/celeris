@@ -6,8 +6,7 @@
 //! その作業場所（`task_ops::workspace::local_dir`）から D3-b / D3-c と同じ走査で未登録のものを拾い、
 //! `declared: false` で登録する。何度流しても同じ結果（`(path, sha256)` の重複規則）。LLM も daemon も使わない。
 
-use std::path::Path;
-
+use task_core::local_machine::WorkspaceRoots;
 use task_core::{ArtifactRef, Event, StoreError, Task, TaskId, TaskStore, WorkspaceSpec};
 
 use super::{registered_keys, scan_undeclared_artifacts_in_dir};
@@ -54,15 +53,16 @@ pub fn latest_run_id(store: &dyn TaskStore, task_id: TaskId, events: &[Event]) -
         .unwrap_or_default()
 }
 
-/// 1 task を補完する。`workspace_root` は `[workspace] root`（daemon と同じ）。`dry_run` なら登録しない。
+/// 1 task を補完する。作業場所は `roots`（daemon と同じ resolver。ADR 2026-10-14-local-machine-settings D5）で
+/// 解く。`dry_run` なら登録しない。
 /// 作業場所の写しが無ければ空（エラーにしない。写しが消えた task は補完できない）。
 pub fn backfill_task(
     store: &dyn TaskStore,
     task: &Task,
-    workspace_root: &Path,
+    roots: &WorkspaceRoots,
     dry_run: bool,
 ) -> Result<BackfillReport, StoreError> {
-    let workspace = task_ops::workspace::local_dir(task, workspace_root);
+    let workspace = task_ops::workspace::local_dir(store, roots, task)?;
     let workspace = workspace.canonicalize().unwrap_or(workspace);
     let artifacts_dir = task_core::artifacts::artifacts_dir_for(task, &workspace);
     let events: Vec<Event> = store

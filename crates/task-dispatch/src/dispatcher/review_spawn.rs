@@ -644,7 +644,7 @@ impl Dispatcher {
         task_ops::delivery::begin(
             self.store.as_ref(),
             &mut task,
-            &self.config.workspace_root,
+            &self.config.workspace_roots,
             &self.config.delivery,
             &run_id,
             reviewer_run

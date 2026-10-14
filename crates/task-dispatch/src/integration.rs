@@ -44,7 +44,7 @@ pub fn commit_message(key: &str, title: &str) -> String {
 }
 
 /// `repo`（元のリポジトリ）の上に WU の worktree を表す値を作る（純粋なデータ。作るのは `ensure`）。
-/// `task_dir` は Task のディレクトリ（worktree の錠は `task_dir` の親 = workspace_root に置かれる）。
+/// `task_dir` は Task のディレクトリ（worktree の錠は `task_dir` の親 = task の root に置かれる）。
 pub fn wu_worktree(
     task_dir: &Path,
     task_id: &str,

@@ -1519,7 +1519,10 @@ async fn phase_integration_request_is_the_only_inbox_item() {
         "段の統合依頼は approval を作らない"
     );
     let ctx = task_ops::view::ViewContext {
-        workspace_root: PathBuf::from("/nonexistent"),
+        workspace_roots: task_core::local_machine::WorkspaceRoots::new(
+            PathBuf::from("/nonexistent"),
+            None,
+        ),
         retry_backoff_base: Duration::ZERO,
         retry_backoff_max: Duration::ZERO,
         max_requeues: 5,
@@ -3175,7 +3178,10 @@ async fn integration_check_failure_without_replans_asks_with_the_failed_checks()
         "{question:?}"
     );
     let ctx = task_ops::view::ViewContext {
-        workspace_root: PathBuf::from("/nonexistent"),
+        workspace_roots: task_core::local_machine::WorkspaceRoots::new(
+            PathBuf::from("/nonexistent"),
+            None,
+        ),
         retry_backoff_base: Duration::ZERO,
         retry_backoff_max: Duration::ZERO,
         max_requeues: 5,
@@ -3239,7 +3245,10 @@ fn open_requests_of(store: &Arc<dyn TaskStore>, task_id: TaskId) -> Vec<task_cor
 
 fn inbox_integration_requests(store: &Arc<dyn TaskStore>, task_id: TaskId) -> usize {
     let ctx = task_ops::view::ViewContext {
-        workspace_root: PathBuf::from("/nonexistent"),
+        workspace_roots: task_core::local_machine::WorkspaceRoots::new(
+            PathBuf::from("/nonexistent"),
+            None,
+        ),
         retry_backoff_base: Duration::ZERO,
         retry_backoff_max: Duration::ZERO,
         max_requeues: 5,

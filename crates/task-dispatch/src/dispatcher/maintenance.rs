@@ -45,7 +45,8 @@ impl Dispatcher {
     pub fn set_disk_watch(&mut self, entries: Vec<crate::disk_watch::DiskWatchEntry>) {
         // 付記 A4: warn の通知に載せる大きい target は、作業場所・scratch・共有 target から測る。
         let census = crate::disk_watch::FsTargetCensus {
-            workspace_root: self.config.workspace_root.clone(),
+            store: self.store.clone(),
+            workspace_roots: self.config.workspace_roots.clone(),
             scratch_targets: self
                 .scratch_active()
                 .then(|| self.config.scratch.pool().targets_dir()),
@@ -190,7 +191,7 @@ impl Dispatcher {
             sweep_workspace_targets(
                 &mut report,
                 self.store.as_ref(),
-                &self.config.workspace_root,
+                &self.config.workspace_roots,
                 scope.workspace_target_after_secs,
                 self.now_utc(),
             );

@@ -21,6 +21,7 @@ use std::time::{Instant, SystemTime};
 use nix::fcntl::{Flock, FlockArg};
 use serde::{Deserialize, Serialize};
 use task_core::Event;
+use task_core::local_machine::WorkspaceRoots;
 use task_core::model::{
     TargetSweepByReason, TargetSweepMode, TargetSweepRootReport, TargetSweepSkip,
 };
@@ -678,16 +679,17 @@ pub struct RepoTargetGc {
 /// `after_secs` 経った task の repo 直下 target を、cargo の lock を全 profile で持ったまま
 /// `.deleting-cargo-target-*` へ rename する（`apply = false` は測るだけ）。削除そのものは呼び出し側
 /// （[`remove_moved_targets`]。dispatcher の tick では別スレッド）。
+/// task の作業場所 `<root>/<task_id>` は `roots`（ADR 2026-10-14-local-machine-settings D5）で解く。
 pub fn repo_target_gc_move_aside(
     store: &dyn task_core::TaskStore,
-    workspace_root: &Path,
+    roots: &WorkspaceRoots,
     after_secs: u64,
     now: time::OffsetDateTime,
     apply: bool,
 ) -> RepoTargetGc {
     use task_worker::workspace_targets::{RemoveTarget, remove_target, scan_finished_task_targets};
     let mut gc = RepoTargetGc::default();
-    let scan = match scan_finished_task_targets(store, workspace_root, now, after_secs) {
+    let scan = match scan_finished_task_targets(store, roots, now, after_secs) {
         Ok(scan) => scan,
         Err(e) => {
             gc.errors
@@ -751,7 +753,7 @@ pub struct RemovedRepoTargets {
     pub errors: Vec<String>,
 }
 
-/// rename 済みの target を消し、前後の `statvfs` 空きの差を返す（`probe` は workspace root）。
+/// rename 済みの target を消し、前後の `statvfs` 空きの差を返す（`probe` は固定の無い task の workspace root）。
 pub fn remove_moved_targets(paths: &[PathBuf], probe: &Path) -> RemovedRepoTargets {
     let before = crate::scratch_gc::fs_stats(probe).map(|(_, avail)| avail);
     let mut out = RemovedRepoTargets::default();
@@ -769,30 +771,44 @@ pub fn remove_moved_targets(paths: &[PathBuf], probe: &Path) -> RemovedRepoTarge
 }
 
 /// 付記 A3: 終端（done・cancelled・failed）になってから `after_secs` 経った task の作業場所に残る cargo の target を
-/// 消し、`report` に root = `workspace_root` の 1 行（`by_reason.stale_target` に件数）として足す。
+/// 消し、`report` に task の root（`WorkspaceRoots::task_root`。ADR 2026-10-14-local-machine-settings D5）ごとの
+/// 1 行（`by_reason.stale_target` に件数）として足す。
 /// ADR 2026-10-10-local-disk-growth-paths D2: 子孫が動いている・猶予内の木は理由付きで `skipped` に残す。
 /// build 中（どれかの profile の lock が取れない）は `build_in_progress` で残す。`dry_run` は木を変えない。
 pub fn sweep_workspace_targets(
     report: &mut SweepReport,
     store: &dyn task_core::TaskStore,
-    workspace_root: &Path,
+    roots: &WorkspaceRoots,
     after_secs: u64,
     now: time::OffsetDateTime,
 ) {
     let started = Instant::now();
     let apply = report.mode == TargetSweepMode::Apply;
-    let gc = repo_target_gc_move_aside(store, workspace_root, after_secs, now, apply);
-    let mut root = RootReport {
-        root: workspace_root.to_path_buf(),
-        ..RootReport::default()
-    };
+    let gc = repo_target_gc_move_aside(store, roots, after_secs, now, apply);
+    let mut by_root: BTreeMap<PathBuf, RootReport> = BTreeMap::new();
     for m in gc.moved {
+        let task_root = match roots.task_root(store, &m.task_id) {
+            Ok(r) => r,
+            Err(e) => {
+                report.errors.push(format!(
+                    "workspace targets: task root of {}: {e}",
+                    m.task_id
+                ));
+                roots.unpinned_root().to_path_buf()
+            }
+        };
+        let root = by_root
+            .entry(task_root.clone())
+            .or_insert_with(|| RootReport {
+                root: task_root.clone(),
+                ..RootReport::default()
+            });
         root.before_bytes = root.before_bytes.saturating_add(m.bytes);
         root.deleted_bytes = root.deleted_bytes.saturating_add(m.bytes);
         root.deleted_items += 1;
         root.by_reason.stale_target += 1;
         report.deleted.push(DeletedItem {
-            root: workspace_root.to_path_buf(),
+            root: task_root,
             path: m.target,
             bytes: m.bytes,
             reason: "stale_target".to_string(),
@@ -803,9 +819,9 @@ pub fn sweep_workspace_targets(
     report.errors.extend(gc.errors);
     report
         .errors
-        .extend(remove_moved_targets(&gc.to_remove, workspace_root).errors);
-    root.after_bytes = root.before_bytes.saturating_sub(root.deleted_bytes);
-    if root.before_bytes > 0 || root.deleted_items > 0 {
+        .extend(remove_moved_targets(&gc.to_remove, roots.unpinned_root()).errors);
+    for (_, mut root) in by_root {
+        root.after_bytes = root.before_bytes.saturating_sub(root.deleted_bytes);
         report.roots.push(root);
     }
     report.duration_ms = report

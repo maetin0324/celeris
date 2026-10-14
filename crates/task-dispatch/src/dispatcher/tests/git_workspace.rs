@@ -186,7 +186,12 @@ async fn a_local_git_workspace_runs_in_a_per_task_worktree_on_its_own_branch() {
     assert_eq!(marker.base, main_sha);
     assert_eq!(marker.base_kind, "main");
     assert_eq!(
-        task_ops::workspace::local_dir(&store.get(task.id).unwrap().unwrap(), root.path()),
+        task_ops::workspace::local_dir(
+            store.as_ref(),
+            &task_core::local_machine::WorkspaceRoots::new(root.path().to_path_buf(), None),
+            &store.get(task.id).unwrap().unwrap(),
+        )
+        .unwrap(),
         task_dir
     );
 }
@@ -725,7 +730,12 @@ async fn a_task_with_several_repos_gets_one_worktree_per_git_repo_and_a_link_for
         "先頭の写しが Phase 49 の目印になる"
     );
     assert_eq!(
-        task_ops::workspace::local_dir(&store.get(task.id).unwrap().unwrap(), ws_root.path()),
+        task_ops::workspace::local_dir(
+            store.as_ref(),
+            &task_core::local_machine::WorkspaceRoots::new(ws_root.path().to_path_buf(), None),
+            &store.get(task.id).unwrap().unwrap(),
+        )
+        .unwrap(),
         task_dir
     );
 }

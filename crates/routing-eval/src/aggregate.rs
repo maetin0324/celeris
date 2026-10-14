@@ -30,6 +30,38 @@ pub struct Trial {
     pub usd_list: Option<f64>,
     pub quota: BTreeMap<String, f64>,
     pub status: String,
+    /// `eval_trials.status`（評価 run の試行の行が無ければ None）。
+    #[serde(default)]
+    pub eval_status: Option<String>,
+}
+
+/// error・cancelled の試行は評価の仕組みの失敗で、問題を解けたかの証拠ではない。
+/// 合否（母数・Wilson 区間・paired 比較）に数えず、除外数だけを出す。
+pub fn excluded_status(trial: &Trial) -> Option<&str> {
+    match trial.eval_status.as_deref() {
+        Some(s @ ("error" | "cancelled")) => Some(s),
+        _ => None,
+    }
+}
+
+/// 根拠表の 1 cell で合否から除いた試行の数。
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExcludedCount {
+    pub error: u64,
+    pub cancelled: u64,
+}
+
+impl ExcludedCount {
+    pub fn total(&self) -> u64 {
+        self.error + self.cancelled
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ExcludedCell {
+    pub key: EvidenceKey,
+    #[serde(flatten)]
+    pub count: ExcludedCount,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -40,6 +72,22 @@ pub struct Aggregate {
     pub rows: Vec<EvidenceRow>,
     pub pareto: Vec<String>,
     pub paired: Vec<Value>,
+    /// cell ごとの除外数（error・cancelled）。除外が無い cell は載せない。
+    pub excluded: Vec<ExcludedCell>,
+}
+
+impl Aggregate {
+    pub fn excluded_total(&self) -> u64 {
+        self.excluded.iter().map(|cell| cell.count.total()).sum()
+    }
+
+    pub fn excluded_for(&self, key: &EvidenceKey) -> ExcludedCount {
+        self.excluded
+            .iter()
+            .find(|cell| &cell.key == key)
+            .map(|cell| cell.count.clone())
+            .unwrap_or_default()
+    }
 }
 
 pub fn collect(db: &str, manifest: &Manifest) -> Result<Vec<Trial>, String> {
@@ -49,7 +97,7 @@ pub fn collect(db: &str, manifest: &Manifest) -> Result<Vec<Trial>, String> {
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
     )
     .map_err(|e| e.to_string())?;
-    let mut stmt = conn.prepare("SELECT d.decision_id,d.subject_id,d.input_json,d.output_json,o.labels_json,r.status,r.started_at,r.finished_at,r.usage_json,r.metrics_json FROM route_decisions d LEFT JOIN route_outcomes o ON o.decision_id=d.decision_id LEFT JOIN runs r ON r.run_id=d.run_id WHERE d.stage='eval' AND d.subject_kind='eval_problem' ORDER BY d.subject_id,d.decision_id").map_err(|e| e.to_string())?;
+    let mut stmt = conn.prepare("SELECT d.decision_id,d.subject_id,d.input_json,d.output_json,o.labels_json,r.status,r.started_at,r.finished_at,r.usage_json,r.metrics_json,t.status FROM route_decisions d LEFT JOIN route_outcomes o ON o.decision_id=d.decision_id LEFT JOIN runs r ON r.run_id=d.run_id LEFT JOIN eval_trials t ON t.decision_id=d.decision_id WHERE d.stage='eval' AND d.subject_kind='eval_problem' ORDER BY d.subject_id,d.decision_id").map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map([], |r| {
             Ok((
@@ -63,6 +111,7 @@ pub fn collect(db: &str, manifest: &Manifest) -> Result<Vec<Trial>, String> {
                 r.get::<_, Option<String>>(7)?,
                 r.get::<_, Option<String>>(8)?,
                 r.get::<_, Option<String>>(9)?,
+                r.get::<_, Option<String>>(10)?,
             ))
         })
         .map_err(|e| e.to_string())?;
@@ -84,6 +133,7 @@ pub fn collect(db: &str, manifest: &Manifest) -> Result<Vec<Trial>, String> {
             finished,
             usage,
             metrics,
+            eval_status,
         ) = row.map_err(|e| e.to_string())?;
         let Some(problem) = problems.get(problem_id.as_str()) else {
             continue;
@@ -167,6 +217,7 @@ pub fn collect(db: &str, manifest: &Manifest) -> Result<Vec<Trial>, String> {
             usd_list,
             quota,
             status: status.unwrap_or_else(|| "missing".into()),
+            eval_status,
         });
     }
     Ok(out)
@@ -174,8 +225,17 @@ pub fn collect(db: &str, manifest: &Manifest) -> Result<Vec<Trial>, String> {
 
 pub fn build(manifest: &Manifest, trials: &[Trial]) -> (Aggregate, Vec<Value>) {
     let mut groups: BTreeMap<EvidenceKey, Vec<&Trial>> = BTreeMap::new();
+    let mut excluded: BTreeMap<EvidenceKey, ExcludedCount> = BTreeMap::new();
+    let mut counted = Vec::new();
     for t in trials {
-        groups.entry(t.key.clone()).or_default().push(t);
+        match excluded_status(t) {
+            Some("error") => excluded.entry(t.key.clone()).or_default().error += 1,
+            Some(_) => excluded.entry(t.key.clone()).or_default().cancelled += 1,
+            None => {
+                groups.entry(t.key.clone()).or_default().push(t);
+                counted.push(t.clone());
+            }
+        }
     }
     let version = format!(
         "{}-{}",
@@ -248,7 +308,8 @@ pub fn build(manifest: &Manifest, trials: &[Trial]) -> (Aggregate, Vec<Value>) {
                 / values.len().max(1) as f64,
             low_confidence,
         };
-        detail.push(json!({"key":key,"metrics":{"pass_rate":if row.n==0 {0.0}else{row.pass as f64/row.n as f64},"usd":row.usd_list_median,"wall_seconds":row.wall_median_s,"quota":row.quota_per_run},"evidence":row}));
+        let excluded_here = excluded.get(&key).cloned().unwrap_or_default();
+        detail.push(json!({"key":key,"excluded":excluded_here,"metrics":{"pass_rate":if row.n==0 {0.0}else{row.pass as f64/row.n as f64},"usd":row.usd_list_median,"wall_seconds":row.wall_median_s,"quota":row.quota_per_run},"evidence":row}));
         rows.push(row);
     }
     let metrics: Vec<stats::CandidateMetrics> = rows
@@ -269,7 +330,11 @@ pub fn build(manifest: &Manifest, trials: &[Trial]) -> (Aggregate, Vec<Value>) {
         })
         .collect();
     let pareto = stats::pareto_frontier(&metrics);
-    let paired = paired_comparisons(manifest, trials);
+    let paired = paired_comparisons(manifest, &counted);
+    let excluded = excluded
+        .into_iter()
+        .map(|(key, count)| ExcludedCell { key, count })
+        .collect();
     (
         Aggregate {
             schema: "celeris.routing-evidence/1".into(),
@@ -278,6 +343,7 @@ pub fn build(manifest: &Manifest, trials: &[Trial]) -> (Aggregate, Vec<Value>) {
             rows,
             pareto,
             paired,
+            excluded,
         },
         detail,
     )
@@ -359,14 +425,14 @@ pub fn run_args(args: Vec<String>) -> Result<(), String> {
     )
     .map_err(|e| e.to_string())?;
     let md = format!(
-        "# Routing evaluation evidence\n\nManifest: `{}`  \nEvidence version: `{}`\n\n| Genre | Harness | Version | Source | Model | n | Pass | Wilson 95% | Bootstrap 95% | Timeout | USD median | Wall median (s) | Low confidence |\n|---|---|---|---|---|---:|---:|---|---|---:|---:|---:|---|\n{}\n\nPareto set: {}\n\nPaired comparisons: {}\n",
+        "# Routing evaluation evidence\n\nManifest: `{}`  \nEvidence version: `{}`\n\n| Genre | Harness | Version | Source | Model | n | Pass | Wilson 95% | Bootstrap 95% | Timeout | USD median | Wall median (s) | Low confidence | Excluded (error/cancelled) |\n|---|---|---|---|---|---:|---:|---|---|---:|---:|---:|---|---:|\n{}\n\nExcluded trials (error/cancelled; not counted in n, Pass or intervals): {}\n\n{}\n\nPareto set: {}\n\nPaired comparisons: {}\n",
         result.manifest_sha256,
         result.evidence_version,
         result
             .rows
             .iter()
             .map(|r| format!(
-                "| {} | {} | {} | {} | {} | {} | {} | {:.3}–{:.3} | {:.3}–{:.3} | {:.3} | {} | {} | {} |",
+                "| {} | {} | {} | {} | {} | {} | {} | {:.3}–{:.3} | {:.3}–{:.3} | {:.3} | {} | {} | {} | {}/{} |",
                 r.key.genre,
                 r.key.harness_id,
                 r.key.harness_version,
@@ -381,10 +447,14 @@ pub fn run_args(args: Vec<String>) -> Result<(), String> {
                 r.timeout_rate,
                 r.usd_list_median.map_or("—".into(), |v| format!("{v:.4}")),
                 r.wall_median_s.map_or("—".into(), |v| format!("{v:.2}")),
-                r.low_confidence
+                r.low_confidence,
+                result.excluded_for(&r.key).error,
+                result.excluded_for(&r.key).cancelled
             ))
             .collect::<Vec<_>>()
             .join("\n"),
+        result.excluded_total(),
+        excluded_table(&result.excluded),
         result.pareto.join(", "),
         serde_json::to_string(&result.paired).map_err(|e| e.to_string())?
     );
@@ -405,12 +475,39 @@ pub fn run_args(args: Vec<String>) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     }
     println!(
-        "trials={} cells={} evidence_version={}",
+        "trials={} excluded={} cells={} evidence_version={}",
         trials.len(),
+        result.excluded_total(),
         result.rows.len(),
         result.evidence_version
     );
     Ok(())
+}
+
+/// 除外のあった cell の表（合否の行が無い、全試行が除外された cell も載る）。
+fn excluded_table(excluded: &[ExcludedCell]) -> String {
+    if excluded.is_empty() {
+        return "No excluded trials.".into();
+    }
+    let rows = excluded
+        .iter()
+        .map(|cell| {
+            format!(
+                "| {} | {} | {} | {} | {} | {} | {} |",
+                cell.key.genre,
+                cell.key.harness_id,
+                cell.key.harness_version,
+                cell.key.source_id,
+                cell.key.model_id,
+                cell.count.error,
+                cell.count.cancelled
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!(
+        "| Genre | Harness | Version | Source | Model | Error | Cancelled |\n|---|---|---|---|---|---:|---:|\n{rows}"
+    )
 }
 
 #[cfg(test)]
@@ -461,6 +558,7 @@ mod tests {
             usd_list: None,
             quota: BTreeMap::new(),
             status: "passed".into(),
+            eval_status: None,
         };
         let comparisons = paired_comparisons(
             &manifest,
@@ -517,6 +615,7 @@ mod tests {
             usd_list: Some(0.4),
             quota: BTreeMap::from([("7d".into(), 0.02)]),
             status: "passed".into(),
+            eval_status: None,
         };
         let (agg, detail) = build(&m, &[trial]);
         assert_eq!(agg.rows.len(), 1);
@@ -537,7 +636,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         let db = dir.path().join("eval.sqlite");
         let conn = Connection::open(&db).expect("db");
-        conn.execute_batch("CREATE TABLE route_decisions(decision_id TEXT,subject_id TEXT,subject_kind TEXT,run_id TEXT,input_json TEXT,output_json TEXT,stage TEXT); CREATE TABLE route_outcomes(decision_id TEXT,labels_json TEXT); CREATE TABLE runs(run_id TEXT,status TEXT,started_at TEXT,finished_at TEXT,usage_json TEXT,metrics_json TEXT);")
+        conn.execute_batch("CREATE TABLE route_decisions(decision_id TEXT,subject_id TEXT,subject_kind TEXT,run_id TEXT,input_json TEXT,output_json TEXT,stage TEXT); CREATE TABLE route_outcomes(decision_id TEXT,labels_json TEXT); CREATE TABLE runs(run_id TEXT,status TEXT,started_at TEXT,finished_at TEXT,usage_json TEXT,metrics_json TEXT); CREATE TABLE eval_trials(decision_id TEXT,status TEXT);")
             .expect("fixture schema");
         conn.execute("INSERT INTO route_decisions VALUES('d','p1','eval_problem','r1',?1,?2,'eval')", rusqlite::params![r#"{"manifest_sha":"mh","trial_no":2}"#,r#"{"selected":{"source_id":"s","model_id":"m","harness_id":"codex","harness_version":"v2.3.1"}}"#]).expect("decision");
         conn.execute("INSERT INTO route_outcomes VALUES('d',?1)", [r#"{"passed":true,"timed_out":false,"wall_secs":4.0,"usd_list":0.3,"quota":{"7d":0.01}}"#]).expect("outcome");
@@ -576,5 +675,158 @@ mod tests {
         assert!(rows[0].passed);
         assert_eq!(rows[0].wall_secs, Some(4.0));
         assert_eq!(rows[0].quota["7d"], 0.01);
+    }
+
+    #[test]
+    fn aggregate_excludes_error_trials() {
+        let problem = |id: &str| Problem {
+            id: id.into(),
+            task_id: "t".into(),
+            work_unit_id: "w".into(),
+            created_at: "".into(),
+            genre: "coding".into(),
+            kind: "task".into(),
+            command: "check".into(),
+            prompt: "Fixture problem description".into(),
+            split: "dev".into(),
+            stratum: "coding:task".into(),
+            subset_12: false,
+            head_commit: None,
+            base_commit: None,
+            features_sha256: "".into(),
+            features: json!({}),
+            sha256: "".into(),
+        };
+        let manifest = Manifest {
+            schema: "manifest".into(),
+            version: "1".into(),
+            cutoff: "".into(),
+            seed: 0,
+            problems: ["p1", "p2", "p3", "p4"].map(problem).to_vec(),
+            sha256: "mh".into(),
+        };
+        // eval_trials を持つ実 DB の形で collect から通す: done（passed / failed）2 件、
+        // error 2 件（route_outcomes なし・runs は error）、cancelled 1 件。
+        let dir = tempfile::tempdir().expect("temp dir");
+        let db = dir.path().join("eval.sqlite");
+        let conn = Connection::open(&db).expect("db");
+        conn.execute_batch("CREATE TABLE route_decisions(decision_id TEXT,subject_id TEXT,subject_kind TEXT,run_id TEXT,input_json TEXT,output_json TEXT,stage TEXT); CREATE TABLE route_outcomes(decision_id TEXT,labels_json TEXT); CREATE TABLE runs(run_id TEXT,status TEXT,started_at TEXT,finished_at TEXT,usage_json TEXT,metrics_json TEXT); CREATE TABLE eval_trials(trial_id TEXT,decision_id TEXT,status TEXT,error TEXT);")
+            .expect("fixture schema");
+        let selected = r#"{"selected":{"source_id":"codex-oauth","model_id":"m","harness_id":"codex","harness_version":"1.0"}}"#;
+        let trials = [
+            ("d1", "p1", "passed", Some(true)),
+            ("d2", "p2", "failed", Some(false)),
+            ("d3", "p3", "error", None),
+            ("d4", "p4", "error", None),
+            ("d5", "p4", "cancelled", None),
+        ];
+        for (n, (decision, problem_id, status, passed)) in trials.iter().enumerate() {
+            let run = format!("r{n}");
+            conn.execute(
+                "INSERT INTO route_decisions VALUES(?1,?2,'eval_problem',?3,?4,?5,'eval')",
+                rusqlite::params![
+                    decision,
+                    problem_id,
+                    run,
+                    json!({"trial_no": n + 1}).to_string(),
+                    selected
+                ],
+            )
+            .expect("decision");
+            let run_status = if passed.is_some() {
+                "completed"
+            } else {
+                "error"
+            };
+            conn.execute(
+                "INSERT INTO runs VALUES(?1,?2,NULL,NULL,NULL,NULL)",
+                rusqlite::params![run, run_status],
+            )
+            .expect("run");
+            if let Some(passed) = passed {
+                conn.execute(
+                    "INSERT INTO route_outcomes VALUES(?1,?2)",
+                    rusqlite::params![decision, json!({"passed": passed}).to_string()],
+                )
+                .expect("outcome");
+            }
+            conn.execute(
+                "INSERT INTO eval_trials VALUES(?1,?2,?3,?4)",
+                rusqlite::params![
+                    format!("t{n}"),
+                    decision,
+                    status,
+                    (passed.is_none()).then_some("run ended as error")
+                ],
+            )
+            .expect("trial");
+        }
+        drop(conn);
+
+        let collected = collect(db.to_str().expect("path"), &manifest).expect("collect");
+        // 古い error 行は消さずに読む（除外は集計の側で行う）。
+        assert_eq!(collected.len(), 5);
+        let (agg, detail) = build(&manifest, &collected);
+        assert_eq!(agg.rows.len(), 1);
+        let row = &agg.rows[0];
+        // 母数と Wilson 区間は done の 2 件（1 合格・1 不合格）だけから出る。
+        assert_eq!((row.n, row.pass), (2, 1));
+        let done_only = stats::wilson_95(1, 2);
+        assert_eq!(
+            (row.pass_lower, row.pass_upper),
+            (done_only.lower, done_only.upper)
+        );
+        let with_errors = stats::wilson_95(1, 4);
+        assert_ne!(row.pass_lower, with_errors.lower);
+        assert_eq!(
+            agg.excluded_for(&row.key),
+            ExcludedCount {
+                error: 2,
+                cancelled: 1
+            }
+        );
+        assert_eq!(detail[0]["excluded"]["error"], 2);
+        assert_eq!(detail[0]["excluded"]["cancelled"], 1);
+
+        // 根拠表（evidence.md / evidence.json）に除外数が出る。
+        let manifest_path = dir.path().join("manifest.json");
+        fs::write(
+            &manifest_path,
+            serde_json::to_vec(&manifest).expect("manifest json"),
+        )
+        .expect("manifest");
+        let out = dir.path().join("out");
+        run_args(vec![
+            "--db".into(),
+            db.display().to_string(),
+            "--manifest".into(),
+            manifest_path.display().to_string(),
+            "--out".into(),
+            out.display().to_string(),
+        ])
+        .expect("aggregate");
+        let md = fs::read_to_string(out.join("evidence.md")).expect("evidence.md");
+        assert!(md.contains("| Excluded (error/cancelled) |"), "{md}");
+        assert!(
+            md.contains("| 2 | 1 | 0.") && md.contains("| 2/1 |"),
+            "{md}"
+        );
+        assert!(
+            md.contains(
+                "Excluded trials (error/cancelled; not counted in n, Pass or intervals): 3"
+            ),
+            "{md}"
+        );
+        assert!(
+            md.lines()
+                .any(|line| line == "| coding | codex | 1.0 | codex-oauth | m | 2 | 1 |"),
+            "{md}"
+        );
+        let evidence: Value =
+            serde_json::from_slice(&fs::read(out.join("evidence.json")).expect("evidence.json"))
+                .expect("evidence json");
+        assert_eq!(evidence["excluded"][0]["error"], 2);
+        assert_eq!(evidence["excluded"][0]["cancelled"], 1);
+        assert_eq!(evidence["rows"][0]["n"], 2);
     }
 }

@@ -46,7 +46,13 @@ pub fn run_args(args: Vec<String>) -> Result<(), String> {
         .map(|p| (p.id.as_str(), p))
         .collect();
     let mut file = fs::File::create(output).map_err(|e| e.to_string())?;
-    for t in &trials {
+    let mut exported = 0usize;
+    // error・cancelled の試行は合否の cell を持たない（aggregate::build が除外する）。
+    for t in trials
+        .iter()
+        .filter(|t| aggregate::excluded_status(t).is_none())
+    {
+        exported += 1;
         let problem = problems
             .get(t.problem_id.as_str())
             .ok_or_else(|| format!("unknown problem {}", t.problem_id))?;
@@ -57,7 +63,10 @@ pub fn run_args(args: Vec<String>) -> Result<(), String> {
         serde_json::to_writer(&mut file, &row).map_err(|e| e.to_string())?;
         file.write_all(b"\n").map_err(|e| e.to_string())?;
     }
-    println!("exported_trials={}", trials.len());
+    println!(
+        "exported_trials={exported} excluded_trials={}",
+        trials.len() - exported
+    );
     Ok(())
 }
 
@@ -111,6 +120,7 @@ mod tests {
             usd_list: Some(0.2),
             quota: BTreeMap::new(),
             status: "passed".into(),
+            eval_status: None,
         };
         let cell = task_core::routing_evidence::EvidenceRow {
             key: t.key.clone(),

@@ -78,3 +78,8 @@ eval_trials 全体: passed 52・failed 4・error 13・queued 217。running・sco
 - 本番 DB の decisions に `claude-resubmit` の行が無く、前回の run（01M4X2GN7S）は決定を出し損ねていた。この run で出し直した（needed_before self）。
 - 11:25Z の状態（`count_states.py`）: batches.json 276 = passed 159・failed 9・error 13・cancelled 93・running 2。retry-batches-codex.json 93 = passed 33・failed 2・queued 56・running 2。未終端 60。集計はまだしない。
 - 7d: claude_max_lab 0.15・claude_max_personal 0.16・chatgpt_plus_personal 0.07。
+
+## 再確認と質問への切り替え（2026-10-14 11:27Z、run 01M4X2M19B）
+- 前 2 回の run（01M4X2GN7S・01M4X2JAFV）が result.json に書いた決定 `claude-resubmit` は、run が done 扱いになって check（eval-results.md・aggregate の実在）で落ちたため本番 DB の decisions に入らなかった（events に記録なし）。この run は result.json の `question` で人に聞く。
+- 11:26Z 本番 DB 読み取り（`count_states.py`）: batches.json 276 = passed 159・failed 9・error 13・cancelled 93・running 2。retry-batches-codex.json 93 = passed 33・failed 3・queued 55・running 2。未終端 59。受け入れ条件 0 を満たさないので aggregate・export・eval-results.md は作っていない。
+- 質問: 全終端の後、claude の仕組み側 error 12 件を再投入してよいか（claude の 7d は lab 15%・personal 16% で承認上限 15% に到達済み）、それとも claude 分は再投入せず除外して集計するか。codex（sol）1 件は上限 21% の内なので終端後に再投入する。

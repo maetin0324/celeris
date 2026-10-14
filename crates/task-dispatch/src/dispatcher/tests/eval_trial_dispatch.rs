@@ -662,6 +662,456 @@ async fn eval_trial_target_removed_on_recovery() {
     assert!(released(&lease));
 }
 
+/// A `daemon_instances` row for an evaluation-trial owner: `heartbeat_at` and `pid` decide whether
+/// recovery treats it as alive (ADR 2026-10-14-eval-verify-isolation D3.4).
+fn eval_owner_row(
+    instance_id: &str,
+    role: task_core::InstanceRole,
+    pid: u32,
+    heartbeat_at: time::OffsetDateTime,
+) -> task_core::DaemonInstance {
+    task_core::DaemonInstance {
+        instance_id: instance_id.into(),
+        release: "old".into(),
+        pid,
+        role,
+        started_at: heartbeat_at,
+        heartbeat_at,
+        handoff_requested_at: None,
+        drained_at: None,
+    }
+}
+
+/// The old instance (`owner`) starts a trial whose run hangs; returns it with the trial's work tree.
+fn start_hung_eval_trial(
+    temp: &std::path::Path,
+    store: &Arc<dyn TaskStore>,
+    batch_id: &str,
+    owner: &str,
+) -> (Dispatcher, task_core::routing_eval_trial::EvalTrial) {
+    let hung: Arc<dyn WorkerAdapter> = Arc::new(EvalStubAdapter {
+        seen: Arc::new(StdMutex::new(Vec::new())),
+        started: Arc::new(tokio::sync::Notify::new()),
+        env: Vec::new(),
+        hang: true,
+    });
+    let mut old = dispatcher(store.clone(), hung, 2);
+    own_instance(&mut old, owner);
+    old.config.workspace_root = temp.join("data");
+    scratch_on(&mut old, &temp.join("scratch"));
+    old.config.eval.reserved_runs = 1;
+    old.set_eval_version_probe(|_| Some("eval-stub 1.0.0".into()));
+    assert_eq!(old.tick_eval_trials(), 1);
+    let trial = only_trial(store, batch_id);
+    assert_eq!(trial.instance_id.as_deref(), Some(owner));
+    (old, trial)
+}
+
+/// The new instance after a live promotion: owns its instance id, starts nothing, only recovers.
+fn recovering_dispatcher(temp: &std::path::Path, store: &Arc<dyn TaskStore>) -> Dispatcher {
+    let mut next = eval_dispatcher(
+        store,
+        ScriptedEvalWorker {
+            fail_with: None,
+            seen: Arc::new(StdMutex::new(Vec::new())),
+            env: Vec::new(),
+        },
+        temp,
+    );
+    next.config.eval.reserved_runs = 0;
+    next
+}
+
+/// ADR 2026-10-14-eval-verify-isolation D3.1・D3.4: the claim records the owner instance, and the new
+/// instance's recovery leaves a `running` trial of a live owner (the draining old instance, fresh
+/// heartbeat, live pid) alone: the trial stays `running`, its work tree and target stay, and its
+/// `runs` row stays `running`.
+#[tokio::test]
+async fn eval_recovery_keeps_running_trial_of_live_owner() {
+    let (temp, store, _sqlite, batch_id, _repo) = eval_fixture("true");
+    let owner = "01OLDDAEMON000000000000000";
+    store
+        .instance_register(&eval_owner_row(
+            owner,
+            task_core::InstanceRole::Draining,
+            std::process::id(),
+            time::OffsetDateTime::now_utc(),
+        ))
+        .unwrap();
+    let (mut old, trial) = start_hung_eval_trial(temp.path(), &store, &batch_id, owner);
+    let worktree = std::path::PathBuf::from(trial.worktree_path.clone().unwrap());
+    let run_id = trial.run_id.clone().unwrap();
+    let (target, _lease) = trial_target(temp.path(), &trial.trial_id);
+    assert!(worktree.is_dir() && target.is_dir());
+
+    let mut next = recovering_dispatcher(temp.path(), &store);
+    next.tick_eval_trials();
+    next.tick_eval_trials();
+
+    let after = only_trial(&store, &batch_id);
+    assert_eq!(
+        after.status,
+        task_core::routing_eval_trial::EvalTrialStatus::Running
+    );
+    assert_eq!(after.error, None);
+    assert_eq!(after.instance_id.as_deref(), Some(owner));
+    assert!(worktree.is_dir(), "{}", worktree.display());
+    assert!(target.is_dir(), "{}", target.display());
+    assert_eq!(
+        store.run_index_get(&run_id).unwrap().unwrap().status,
+        task_core::RunIndexStatus::Running
+    );
+    for (_, entry) in old.eval_runs.drain() {
+        entry.handle.abort();
+    }
+}
+
+/// ADR 2026-10-14-eval-verify-isolation D3.4・D3.5: when the recorded owner is dead (stale heartbeat, or
+/// a pid that is gone), the new instance's recovery ends the trial as `error`
+/// (`interrupted: eval recovery: …`), removes its work tree and target, and closes its `runs` row as
+/// `cancelled`.
+#[tokio::test]
+async fn eval_recovery_errors_trial_of_dead_owner_and_cancels_run_row() {
+    let now = time::OffsetDateTime::now_utc();
+    let dead_owners = [
+        (
+            "stale-heartbeat",
+            std::process::id(),
+            now - time::Duration::hours(1),
+        ),
+        ("no-pid", u32::MAX, now),
+    ];
+    for (label, pid, heartbeat_at) in dead_owners {
+        let (temp, store, _sqlite, batch_id, _repo) = eval_fixture("true");
+        let owner = "01OLDDAEMON000000000000000";
+        store
+            .instance_register(&eval_owner_row(
+                owner,
+                task_core::InstanceRole::Draining,
+                pid,
+                heartbeat_at,
+            ))
+            .unwrap();
+        let (mut old, trial) = start_hung_eval_trial(temp.path(), &store, &batch_id, owner);
+        // The old instance died: nothing holds its run any more.
+        for (_, entry) in old.eval_runs.drain() {
+            entry.handle.abort();
+        }
+        let worktree = std::path::PathBuf::from(trial.worktree_path.clone().unwrap());
+        let run_id = trial.run_id.clone().unwrap();
+        let (target, lease) = trial_target(temp.path(), &trial.trial_id);
+
+        let mut next = recovering_dispatcher(temp.path(), &store);
+        next.tick_eval_trials();
+
+        let after = only_trial(&store, &batch_id);
+        assert_eq!(
+            after.status,
+            task_core::routing_eval_trial::EvalTrialStatus::Error,
+            "{label}"
+        );
+        assert_eq!(
+            after.error.as_deref(),
+            Some("interrupted: eval recovery: the instance that started the run is gone"),
+            "{label}"
+        );
+        assert!(!worktree.exists(), "{label}: {}", worktree.display());
+        assert!(!target.exists(), "{label}: {}", target.display());
+        assert!(released(&lease), "{label}");
+        assert_eq!(
+            store.run_index_get(&run_id).unwrap().unwrap().status,
+            task_core::RunIndexStatus::Cancelled,
+            "{label}"
+        );
+    }
+}
+
+/// An evaluation run that finishes as done only when the test releases it (the old instance's run that
+/// is still going when the live promotion starts).
+#[derive(Clone)]
+struct GatedEvalAdapter {
+    release: Arc<tokio::sync::Notify>,
+}
+
+#[async_trait]
+impl WorkerAdapter for GatedEvalAdapter {
+    fn id(&self) -> &str {
+        "eval-gated"
+    }
+
+    fn with_model(&self, _model: &str) -> Option<Arc<dyn WorkerAdapter>> {
+        Some(Arc::new(self.clone()))
+    }
+
+    fn with_env(&self, _extra: &[(String, String)]) -> Option<Arc<dyn WorkerAdapter>> {
+        Some(Arc::new(self.clone()))
+    }
+
+    async fn run(
+        &self,
+        _req: RunRequest,
+        _run_id: &str,
+        _limits: RunLimits,
+        _sink: &dyn EventSink,
+    ) -> Result<RunOutcome, AdapterError> {
+        self.release.notified().await;
+        Ok(RunOutcome {
+            terminal: Terminal::Done {
+                summary: "gated complete".into(),
+                evidence: Vec::new(),
+                usage: None,
+            },
+            exit_code: Some(0),
+        })
+    }
+}
+
+/// The new instance's ownerless-runs reconciliation, run now (not waiting for its interval).
+fn reconcile_ownerless_now(d: &mut Dispatcher) {
+    d.ownerless_reconciled_at = None;
+    d.reconcile_ownerless_runs();
+}
+
+fn run_row_status(store: &Arc<dyn TaskStore>, run_id: &str) -> task_core::RunIndexStatus {
+    store.run_index_get(run_id).unwrap().unwrap().status
+}
+
+/// ADR 2026-10-14-eval-verify-isolation D3.2・D3.3・D3.4: a live promotion while the old instance runs a
+/// trial. The old instance (draining) counts the evaluation run in `in_flight` and stays draining; the
+/// new instance's recovery and ownerless reconciliation leave the trial and its `runs` row `running`.
+/// When the run ends, the old instance closes the `runs` row and leaves the trial in `scoring` without
+/// scoring it (its drain then ends); the new instance scores it.
+#[tokio::test]
+async fn live_handoff_keeps_running_eval_trial() {
+    use task_core::routing_eval_trial::EvalTrialStatus as S;
+    let (temp, store, _sqlite, batch_id, _repo) = eval_fixture("true");
+    let owner = "01OLDDAEMON000000000000000";
+    store
+        .instance_register(&eval_owner_row(
+            owner,
+            task_core::InstanceRole::Active,
+            std::process::id(),
+            time::OffsetDateTime::now_utc(),
+        ))
+        .unwrap();
+    let release = Arc::new(tokio::sync::Notify::new());
+    let mut old = dispatcher(
+        store.clone(),
+        Arc::new(GatedEvalAdapter {
+            release: release.clone(),
+        }),
+        2,
+    );
+    own_instance(&mut old, owner);
+    old.config.workspace_root = temp.path().join("data");
+    scratch_on(&mut old, &temp.path().join("scratch"));
+    old.config.eval.reserved_runs = 1;
+    old.set_eval_version_probe(|_| Some("eval-gated 1.0.0".into()));
+    assert_eq!(old.tick_eval_trials(), 1);
+    let trial = only_trial(&store, &batch_id);
+    assert_eq!(trial.status, S::Running);
+    let run_id = trial.run_id.clone().unwrap();
+    let worktree = std::path::PathBuf::from(trial.worktree_path.clone().unwrap());
+
+    // The live promotion: the old instance drains, the evaluation run keeps it in flight.
+    old.set_accepting_new_work(false);
+    assert_eq!(old.in_flight(), 1);
+    store
+        .instance_register(&eval_owner_row(
+            owner,
+            task_core::InstanceRole::Draining,
+            std::process::id(),
+            time::OffsetDateTime::now_utc(),
+        ))
+        .unwrap();
+
+    // The new instance becomes active, recovers and reconciles: the trial is the old instance's.
+    let mut next = recovering_dispatcher(temp.path(), &store);
+    next.tick_eval_trials();
+    reconcile_ownerless_now(&mut next);
+    next.tick_eval_trials();
+    let during = only_trial(&store, &batch_id);
+    assert_eq!(during.status, S::Running);
+    assert_eq!(during.error, None);
+    assert!(worktree.is_dir(), "{}", worktree.display());
+    assert_eq!(
+        run_row_status(&store, &run_id),
+        task_core::RunIndexStatus::Running
+    );
+    // A draining tick starts nothing and does not end the drain while the run is going.
+    old.tick().unwrap();
+    assert_eq!(old.in_flight(), 1);
+
+    // The old instance's run ends: it closes the runs row and leaves the trial for the new instance.
+    release.notify_one();
+    assert!(
+        run_until_state(&mut old, || run_row_status(&store, &run_id)
+            != task_core::RunIndexStatus::Running)
+        .await
+    );
+    assert_eq!(old.in_flight(), 0, "the drain ends with the evaluation run");
+    assert_eq!(
+        run_row_status(&store, &run_id),
+        task_core::RunIndexStatus::Completed
+    );
+    assert_eq!(
+        only_trial(&store, &batch_id).status,
+        S::Scoring,
+        "a draining instance does not score"
+    );
+    assert!(worktree.is_dir(), "{}", worktree.display());
+
+    // The new instance scores it.
+    next.tick_eval_trials();
+    let scored = only_trial(&store, &batch_id);
+    assert_eq!(scored.status, S::Passed, "error: {:?}", scored.error);
+    assert_eq!(scored.check_exit, Some(0));
+    assert!(!worktree.exists(), "{}", worktree.display());
+    reconcile_ownerless_now(&mut next);
+    assert_eq!(
+        run_row_status(&store, &run_id),
+        task_core::RunIndexStatus::Completed
+    );
+}
+
+/// ADR 2026-10-14-eval-verify-isolation D3.5・D3.6: no `eval` runs row is left `running` after a handoff.
+/// The active instance's ownerless reconciliation closes as `cancelled` a running `eval` row whose trial
+/// is already terminal (the 08:53Z rows), whose trial is gone, and whose trial's owner is dead; the row
+/// of a live owner's running trial stays. A drain timeout (`abort_all_runs`) closes the old instance's
+/// own evaluation runs.
+#[tokio::test]
+async fn eval_run_row_not_left_running_after_handoff() {
+    use task_core::routing_eval_trial::EvalTrialStatus as S;
+    let now = time::OffsetDateTime::now_utc();
+    let owner = "01OLDDAEMON000000000000000";
+
+    // (a) The trial is already terminal (`error`), its runs row is still running.
+    {
+        let (temp, store, _sqlite, batch_id, _repo) = eval_fixture("true");
+        store
+            .instance_register(&eval_owner_row(
+                owner,
+                task_core::InstanceRole::Draining,
+                std::process::id(),
+                now,
+            ))
+            .unwrap();
+        let (mut old, trial) = start_hung_eval_trial(temp.path(), &store, &batch_id, owner);
+        for (_, entry) in old.eval_runs.drain() {
+            entry.handle.abort();
+        }
+        let run_id = trial.run_id.clone().unwrap();
+        store
+            .eval_trial_finish(
+                &trial.trial_id,
+                S::Error,
+                None,
+                false,
+                Some("daemon recovery: run disappeared while trial was running"),
+            )
+            .unwrap();
+        assert_eq!(
+            run_row_status(&store, &run_id),
+            task_core::RunIndexStatus::Running
+        );
+        let mut next = recovering_dispatcher(temp.path(), &store);
+        reconcile_ownerless_now(&mut next);
+        assert_eq!(
+            run_row_status(&store, &run_id),
+            task_core::RunIndexStatus::Cancelled,
+            "terminal trial"
+        );
+    }
+
+    // (b) The trial's recorded owner is dead (a pid that is gone); (c) its owner is alive.
+    for (label, pid, closed) in [
+        ("dead owner", u32::MAX, true),
+        ("live owner", std::process::id(), false),
+    ] {
+        let (temp, store, _sqlite, batch_id, _repo) = eval_fixture("true");
+        store
+            .instance_register(&eval_owner_row(
+                owner,
+                task_core::InstanceRole::Draining,
+                pid,
+                now,
+            ))
+            .unwrap();
+        let (mut old, trial) = start_hung_eval_trial(temp.path(), &store, &batch_id, owner);
+        let run_id = trial.run_id.clone().unwrap();
+        let mut next = recovering_dispatcher(temp.path(), &store);
+        reconcile_ownerless_now(&mut next);
+        let expected = if closed {
+            task_core::RunIndexStatus::Cancelled
+        } else {
+            task_core::RunIndexStatus::Running
+        };
+        assert_eq!(run_row_status(&store, &run_id), expected, "{label}");
+        for (_, entry) in old.eval_runs.drain() {
+            entry.handle.abort();
+        }
+    }
+
+    // (d) No trial holds the running eval row at all.
+    {
+        let (temp, store, _sqlite, batch_id, _repo) = eval_fixture("true");
+        let run_id = ulid::Ulid::new().to_string();
+        store
+            .run_index_start(task_core::RunRow {
+                run_id: run_id.clone(),
+                task_id: batch_id.clone(),
+                work_unit_id: None,
+                role: task_core::RunIndexRole::Eval,
+                seq: 0,
+                status: task_core::RunIndexStatus::Running,
+                adapter: None,
+                model: None,
+                account: None,
+                session_id: None,
+                checkpoint: None,
+                usage: None,
+                metrics: None,
+                started_at: now
+                    .format(&time::format_description::well_known::Rfc3339)
+                    .unwrap(),
+                finished_at: None,
+            })
+            .unwrap();
+        let mut next = recovering_dispatcher(temp.path(), &store);
+        reconcile_ownerless_now(&mut next);
+        assert_eq!(
+            run_row_status(&store, &run_id),
+            task_core::RunIndexStatus::Cancelled,
+            "no trial"
+        );
+    }
+
+    // (e) The old instance's drain times out: its evaluation run is stopped and its row closed.
+    {
+        let (temp, store, _sqlite, batch_id, _repo) = eval_fixture("true");
+        store
+            .instance_register(&eval_owner_row(
+                owner,
+                task_core::InstanceRole::Draining,
+                std::process::id(),
+                now,
+            ))
+            .unwrap();
+        let (mut old, trial) = start_hung_eval_trial(temp.path(), &store, &batch_id, owner);
+        let run_id = trial.run_id.clone().unwrap();
+        old.set_accepting_new_work(false);
+        assert_eq!(old.in_flight(), 1);
+        assert_eq!(old.abort_all_runs(), 1);
+        assert_eq!(old.in_flight(), 0);
+        assert_eq!(
+            run_row_status(&store, &run_id),
+            task_core::RunIndexStatus::Cancelled,
+            "drain timeout"
+        );
+        assert_eq!(only_trial(&store, &batch_id).status, S::Error);
+    }
+}
+
 /// With scratch disabled the trial fails before a work tree or target is made (no root-fs target).
 #[tokio::test]
 async fn eval_trial_fails_without_scratch() {
@@ -854,7 +1304,7 @@ async fn eval_trial_tick_claims_each_trial_at_most_once() {
         // With `p1` skipped there is nothing left to claim, so the tick stopped there.
         assert!(
             sqlite
-                .eval_trial_claim_next(&["p1".into()])
+                .eval_trial_claim_next("test-instance", &["p1".into()])
                 .unwrap()
                 .is_none()
         );
@@ -880,7 +1330,7 @@ async fn eval_cleanup_refuses_paths_outside_roots() {
     let outside = tempfile::tempdir().unwrap();
     let data = temp.path().join("data");
     let mut ids = Vec::new();
-    while let Some(trial) = store.eval_trial_claim_next(&[]).unwrap() {
+    while let Some(trial) = store.eval_trial_claim_next("test-instance", &[]).unwrap() {
         ids.push(trial.trial_id);
     }
     assert_eq!(ids.len(), 4);
@@ -941,7 +1391,7 @@ async fn eval_cleanup_refuses_paths_outside_roots() {
         );
         assert_eq!(
             trial.error.as_deref(),
-            Some("daemon recovery: run disappeared while trial was running")
+            Some("interrupted: eval recovery: the instance that started the run is gone")
         );
     }
     assert!(!inside.exists(), "{}", inside.display());
@@ -967,7 +1417,13 @@ async fn verify_daemon_leaves_foreign_eval_trial_files() {
     let prod_scratch = prod.path().join("scratch");
     let mut ids = Vec::new();
     for _ in 0..2 {
-        ids.push(store.eval_trial_claim_next(&[]).unwrap().unwrap().trial_id);
+        ids.push(
+            store
+                .eval_trial_claim_next("test-instance", &[])
+                .unwrap()
+                .unwrap()
+                .trial_id,
+        );
     }
     let pool = task_worker::scratch::Pool::new(&prod_scratch);
     let mut files = Vec::new();

@@ -118,10 +118,10 @@ impl Dispatcher {
             if self.holds_run_in_hand(&row.run_id) {
                 continue;
             }
-            // ADR 2026-10-11-llm-source-model-routing-evaluation 付記 2026-10-12（eval-dispatch）D4:
-            // 評価 run（role="eval"）は tasks 行を持たない（`task_id` は batch_id）ので、Task の状態に
-            // 依る照合の対象外。生死は `eval_trials` の行が持つ（daemon 再起動後の照合は採点側）。
+            // 評価 run（role="eval"）は tasks 行を持たない（`task_id` は batch_id）ので、Task ではなく
+            // `eval_trials` の行と持ち主の instance で照合する（ADR 2026-10-14-eval-verify-isolation D3.5）。
             if row.role == task_core::RunIndexRole::Eval {
+                self.reconcile_ownerless_eval_run(&row, now);
                 continue;
             }
             let Ok(task_id) = row.task_id.parse::<TaskId>() else {
@@ -161,7 +161,7 @@ impl Dispatcher {
                 task_core::RunIndexRole::Reviewer => Some(RunRole::Reviewer),
                 task_core::RunIndexRole::Planner => Some(RunRole::Planner),
                 task_core::RunIndexRole::WrapUp => None,
-                // eval run は上で飛ばす（tasks 行が無いので `RunRole` の事件も書けない）。
+                // eval run は上の照合で閉じる（tasks 行が無いので `RunRole` の事件も書けない）。
                 task_core::RunIndexRole::Eval => None,
             };
             tracing::warn!(

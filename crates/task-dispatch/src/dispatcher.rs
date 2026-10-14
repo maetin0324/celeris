@@ -1721,11 +1721,15 @@ impl Dispatcher {
     ///
     /// ADR-0040 付記（2026-10-04、WU 検査の引き継ぎ）: draining の instance は検査を始めず、手元の検査も最初の tick で
     /// 手放す（`hand_off_checks_in_hand`）ので、draining 中の `checking` は空になり、drain は run の終わりで完了する。
+    ///
+    /// 評価 run（`eval_runs`）も数える。live 昇格の旧 instance は評価 run の完了（`on_eval_worker_finished` が
+    /// `runs` 行を閉じて試行を `scoring` にする）まで draining に留まる（ADR 2026-10-14-eval-verify-isolation D3.2）。
     pub fn in_flight(&self) -> usize {
         self.running.len()
             + self.reviewing.len()
             + self.checking.len()
             + self.integrating.len()
+            + self.eval_runs.len()
             + self
                 .cos_chat_launch
                 .as_ref()

@@ -65,13 +65,35 @@ pub fn holder_gone(
     freshness: Duration,
     alive: &dyn Fn(u32) -> bool,
 ) -> bool {
-    !rows.iter().any(|r| {
-        r.instance_id != self_id
-            && matches!(r.role, InstanceRole::Active | InstanceRole::Draining)
-            && r.drained_at.is_none()
-            && r.is_fresh(now, freshness)
-            && alive(r.pid)
-    })
+    !rows
+        .iter()
+        .any(|r| r.instance_id != self_id && row_alive(r, now, freshness, alive))
+}
+
+/// `instance_id` の 1 instance が run を抱えうる形で生きているか（[`holder_gone`] と同じ定義をその行に当てる:
+/// role が active / draining、`drained_at` が無い、heartbeat が新しい、pid が生きている）。行が無ければ `false`。
+/// 評価試行の持ち主の生死に使う（ADR 2026-10-14-eval-verify-isolation D3.4）。
+pub fn instance_alive(
+    rows: &[DaemonInstance],
+    instance_id: &str,
+    now: OffsetDateTime,
+    freshness: Duration,
+    alive: &dyn Fn(u32) -> bool,
+) -> bool {
+    rows.iter()
+        .any(|r| r.instance_id == instance_id && row_alive(r, now, freshness, alive))
+}
+
+fn row_alive(
+    r: &DaemonInstance,
+    now: OffsetDateTime,
+    freshness: Duration,
+    alive: &dyn Fn(u32) -> bool,
+) -> bool {
+    matches!(r.role, InstanceRole::Active | InstanceRole::Draining)
+        && r.drained_at.is_none()
+        && r.is_fresh(now, freshness)
+        && alive(r.pid)
 }
 
 /// lease を持たない `running` の `runs` 行（reviewer run 等）を閉じる理由（`WorkerFinished` の

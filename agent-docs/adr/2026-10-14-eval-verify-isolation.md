@@ -136,3 +136,23 @@ D1 があれば verify はそもそもこの経路に来ない。D2 は D1 の�
   消さない。旧が完了を記録すると新が採点する。`in_flight` が評価 run を数え、drain は評価 run の完了で終わる。
 - 持ち主が死んだ（heartbeat が古い・pid が無い）試行は `error` になり、その `runs` 行が `cancelled` になる。
   試行が終端なのに running の `eval` 行が、active の照合で閉じる。
+
+## 5. 付記 2026-10-14（D3 の実装突き合わせ — handoff-eval）
+
+D3 は実装済み（commit `383f6f41` owner-record、`95ef97d3` drain-run。全体検査は
+[進捗 2026-10-14-eval-handoff](../progress/2026-10-14-eval-handoff.md)）。
+
+| D3 | 実装 |
+|---|---|
+| 1 所有の記録 | migration `0078_eval_trials_instance_id.sql`（`ALTER TABLE eval_trials ADD COLUMN instance_id TEXT`）。`TaskStore::eval_trial_claim_next(instance_id, skip_sources)`（`crates/task-core/src/store/eval_trials.rs`）が `UPDATE eval_trials SET status = 'running', instance_id = ?2 WHERE trial_id = ?1 AND status = 'queued'` で claim と同じ更新に書く。`EvalTrial::instance_id`（`routing_eval_trial.rs`）。終端・`queued` 戻しでは消さない |
+| 2 drain は評価 run を待つ | `Dispatcher::in_flight`（`dispatcher.rs`）に `+ self.eval_runs.len()`。`tick_eval_trials` は `accepting_new_work` のときだけ新しい試行を起動 |
+| 3 採点は新 instance | `on_eval_worker_finished`（`dispatcher/eval_trials.rs`）は `!self.accepting_new_work`（draining）なら `runs` 行を `run_index_finish` で閉じ試行を `scoring` にするだけで採点しない。採点は active の `reconcile_eval_trials` |
+| 4 回復の条件 | `reconcile_eval_trials` → `eval_running_recovery`（持ち主が自分＝`EVAL_RECOVERY_LOST_HERE`、他 instance は `orphan::instance_alive` が偽で `EVAL_RECOVERY_OWNER_GONE`、NULL は `orphan::holder_gone` で `EVAL_RECOVERY_NO_LIVE_INSTANCE`、`started_at + EVAL_MAX_WALL_SECS + check_timeout_secs + lease_grace` 超過で `EVAL_RECOVERY_DEADLINE`）。`instance_alive` は `orphan.rs` に足し、`holder_gone` と共通の `row_alive` で判定 |
+| 5 `runs` 行を残さない | 回復の error は `recover_eval_trial_as_error`（`fail_and_cleanup_eval_trial` の後 `run_index_finish` で `cancelled`、理由 `interrupted: eval recovery: …`）。`reconcile_ownerless_runs`（`dispatcher/ownerless_runs.rs`）の role `eval` 除外は `reconcile_ownerless_eval_run` と `eval_run_row_orphaned` に置換 |
+| 6 停止と drain 打ち切り | `interrupt_runs_on_shutdown` の `abort_eval_runs` は不変。`abort_all_runs`（`dispatcher/leases.rs`、`DrainTimedOut`）が `abort_eval_runs` を呼び、`aborted` に評価 run を数える |
+
+試験（`crates/task-dispatch/src/dispatcher/tests/eval_trial_dispatch.rs`）: `live_handoff_keeps_running_eval_trial`、
+`eval_run_row_not_left_running_after_handoff`、`eval_recovery_keeps_running_trial_of_live_owner`、
+`eval_recovery_errors_trial_of_dead_owner_and_cancels_run_row`。判定表の単体試験は
+`eval_running_recovery_errors_only_when_the_owner_is_gone`。旧い無条件 error の試験
+`eval_trial_recovery_marks_untracked_running_as_error_and_rescores` と `eval_recovery_action` は撤去。

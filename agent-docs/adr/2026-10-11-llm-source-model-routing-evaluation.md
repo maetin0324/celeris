@@ -226,12 +226,13 @@ D1 の評価 run を Celeris の run 経路で起こす受け口の形を固定�
    （`EvalDefer = Disabled | ReservedFull | AccountFull | QuotaCap`）を task-dispatch の capacity に置く。
 4. **起動**（dispatcher の tick 段 `eval_trials`）: claim → admission（不可なら unclaim）→ harness の版（実行 file の `--version`。
    `harness_version_major` の major と生の出力を両方記録）→ 新 worktree（`git worktree add --detach <data>/eval/<trial_id>/repo <base_commit>`）→
-   RunRequest は harness 固定・source×model 固定・新 session（resume・checkpoint なし）・objective だけで acceptance・checks は空 →
+   RunRequest は harness 固定・source×model 固定・新 session（resume・checkpoint なし）・objective だけで acceptance・checks は空、
+   置き場は workspace = `<data>/eval/<trial_id>`・work_dir = その `repo`・artifacts_dir = その `artifacts`（run_dir は repo の外。ADR 2026-10-14-eval-trial-result-placement D1） →
    runs 1 行（role="eval"、task_id=batch_id、work_unit_id NULL）→ route_features（template "eval"、subject_kind "eval_problem"）・route_options（候補 1 件）・
    route_decisions 1 行（stage="eval"、subject_id=problem_id、input_json `{manifest_sha, trial_no, candidate}`、
    output_json `{selected:{source_id, model_id, harness_id, harness_version}}`）。role="eval" の run は task 行が無くても回収・統計・受信箱の経路を壊さない。
 5. **採点**: worker 終了 → scoring → worktree で check_cmd を `sh -c`（timeout check_timeout_secs、WU check と同じ環境の絞り方）→
-   route_outcomes 1 行（labels に passed・check_exit・timed_out・wall_secs・usage・usd_list・run の終了状態）→ passed/failed（異常は error）→ worktree 削除。
+   route_outcomes 1 行（labels に passed・check_exit・timed_out・wall_secs・usage・usd_list・run の終了状態）→ passed/failed（異常は error。終了理由の本文を error に残し、runs 行は終端どおりの状態にする。ADR 2026-10-14-eval-trial-result-placement D2/D3）→ worktree 削除。
    daemon 再起動で running/scoring のまま run が消えた試行は理由つきで error にする。
 6. **CLI**: `celeris-routing-eval run --api <url> --manifest <file> --candidates <id,...> [--token-file <path>] [--repo <path>] [--wait] [--out <file>]`。
    check の command は POST にだけ載せ、標準出力・要約に出さない。`--wait` は GET の間隔 poll で全試行の終端を待つ。

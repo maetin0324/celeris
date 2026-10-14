@@ -422,8 +422,8 @@ impl Dispatcher {
             .workspace_root
             .join("eval")
             .join(trial.trial_id.as_str());
-        let worktree = base.join("repo");
-        let artifacts = base.join("artifacts");
+        let worktree = base.join(EVAL_WORKTREE_DIR);
+        let artifacts = base.join(EVAL_ARTIFACTS_DIR);
         self.eval_prepare_worktree(&trial, &worktree, &artifacts)
             .map_err(|e| {
                 self.fail_eval_trial(&trial, &format!("worktree: {e}"));
@@ -445,8 +445,7 @@ impl Dispatcher {
         }
         let req = self.eval_run_request(
             &trial,
-            &worktree,
-            &artifacts,
+            &base,
             &session_id,
             &route.pick.harness,
             route.llm_route.clone(),
@@ -556,15 +555,21 @@ impl Dispatcher {
     }
 
     /// worker に渡す `RunRequest`（objective だけ。acceptance は空 = 採点の command が見えない）。
-    fn eval_run_request(
+    ///
+    /// 置き場は通常の worker run と同じ形（ADR 2026-10-14-eval-trial-result-placement D1）:
+    /// `workspace` = 試行の dir（`<data>/eval/<trial_id>`）、`work_dir` = その下の作業ツリー（cwd）、
+    /// `artifacts_dir` = その下の `artifacts`。`artifacts_rel()` は絶対パスになり、prompt の示す
+    /// result.json と adapter が読む場所が一致する。adapter の `run_dir` も作業ツリーの外にできる。
+    pub(super) fn eval_run_request(
         &self,
         trial: &EvalTrial,
-        worktree: &Path,
-        artifacts: &Path,
+        trial_dir: &Path,
         session_id: &str,
         harness: &HarnessId,
         llm_route: SelectedLlmRoute,
     ) -> RunRequest {
+        let worktree = trial_dir.join(EVAL_WORKTREE_DIR);
+        let artifacts = trial_dir.join(EVAL_ARTIFACTS_DIR);
         let now = OffsetDateTime::now_utc();
         let task_id = trial
             .batch_id
@@ -594,7 +599,7 @@ impl Dispatcher {
                 tier: Tier::Standard,
             },
             workspace: WorkspaceSpec::Local {
-                path: worktree.to_path_buf(),
+                path: trial_dir.to_path_buf(),
                 mode: None,
             },
             budget: Budget {
@@ -619,9 +624,9 @@ impl Dispatcher {
         RunRequest {
             protocol: task_worker::protocol::PROTOCOL_VERSION,
             task,
-            workspace: worktree.to_path_buf(),
-            work_dir: None,
-            artifacts_dir: artifacts.to_path_buf(),
+            workspace: trial_dir.to_path_buf(),
+            work_dir: Some(worktree),
+            artifacts_dir: artifacts,
             context: RunContext {
                 // 新 session（resume しない・checkpoint なし）。
                 session: Some(task_worker::protocol::SessionHandle {
@@ -792,16 +797,10 @@ impl Dispatcher {
             tracing::warn!(%run_id, "eval run finished but is not tracked here");
             return;
         };
+        // runs 行は終端どおりの状態にし、usage は取れれば残す（ADR 2026-10-14-eval-trial-result-placement D3）。
         let (index_status, usage) = match &result {
-            Ok(outcome) => match &outcome.terminal {
-                Terminal::Done { usage, .. } => (task_core::RunIndexStatus::Completed, *usage),
-                Terminal::Yielded { usage, .. } => (task_core::RunIndexStatus::Yielded, *usage),
-                Terminal::BudgetExhausted { usage, .. } => {
-                    (task_core::RunIndexStatus::BudgetExhausted, *usage)
-                }
-                _ => (task_core::RunIndexStatus::Completed, None),
-            },
-            Err(_) => (task_core::RunIndexStatus::Completed, None),
+            Ok(outcome) => eval_run_index_end(&outcome.terminal),
+            Err(_) => (task_core::RunIndexStatus::HarnessError, None),
         };
         if let Err(e) = self.store.run_index_finish(
             &run_id,
@@ -817,8 +816,10 @@ impl Dispatcher {
         let outcome = match result {
             Ok(outcome) => outcome,
             Err(e) => {
+                let reason = format!("adapter: {e}");
+                tracing::warn!(trial_id = %entry.trial_id, %run_id, kind = "adapter", %reason, "evaluation run failed");
                 if let Ok(Some(trial)) = self.store.eval_trial_get(&entry.trial_id) {
-                    self.fail_and_cleanup_eval_trial(&trial, &format!("adapter: {e}"));
+                    self.fail_and_cleanup_eval_trial(&trial, &reason);
                 }
                 return;
             }
@@ -855,10 +856,11 @@ impl Dispatcher {
                 }
             }
             other => {
-                self.fail_and_cleanup_eval_trial(
-                    &trial,
-                    &format!("run ended as {}", terminal_kind(other)),
-                );
+                // 終了理由の本文を残す（ADR 2026-10-14-eval-trial-result-placement D2）。
+                let kind = terminal_kind(other);
+                let reason = format!("run ended as {kind}: {}", terminal_reason(other));
+                tracing::warn!(trial_id = %entry.trial_id, %run_id, kind, %reason, "evaluation run did not finish as done");
+                self.fail_and_cleanup_eval_trial(&trial, &reason);
             }
         }
     }
@@ -879,7 +881,7 @@ impl Dispatcher {
                 .ok();
             if let Err(e) = self.store.run_index_finish(
                 &run_id,
-                task_core::RunIndexStatus::Completed,
+                task_core::RunIndexStatus::Cancelled,
                 None,
                 None,
                 None,
@@ -973,6 +975,40 @@ fn terminal_kind(terminal: &Terminal) -> &'static str {
         Terminal::Yielded { .. } => "yielded",
         Terminal::BudgetExhausted { .. } => "budget_exhausted",
         Terminal::Waiting { .. } => "waiting",
+    }
+}
+
+/// 試行の dir（`<data>/eval/<trial_id>`）の下の作業ツリー（worker の cwd・採点の場所）。
+const EVAL_WORKTREE_DIR: &str = "repo";
+/// 試行の dir の下の成果物 dir（作業ツリーの外。ADR 2026-10-14-eval-trial-result-placement D1）。
+const EVAL_ARTIFACTS_DIR: &str = "artifacts";
+
+/// 終端の本文（`eval_trials.error` の `run ended as <kind>: <本文>` の後半）。
+fn terminal_reason(terminal: &Terminal) -> String {
+    match terminal {
+        Terminal::Done { summary, .. } => summary.clone(),
+        Terminal::Error { message, .. } | Terminal::BudgetExhausted { message, .. } => {
+            message.clone()
+        }
+        Terminal::Question { text } => text.clone(),
+        Terminal::Yielded { checkpoint, .. } => checkpoint.to_string(),
+        Terminal::Waiting { request, .. } if !request.summary.is_empty() => request.summary.clone(),
+        Terminal::Waiting { request, .. } => format!("cluster jobs {}", request.jobs.join(",")),
+    }
+}
+
+/// 評価 run の `runs` 行の終了状態と usage（Error を completed にしない。usage は終端が持てば残す）。
+fn eval_run_index_end(
+    terminal: &Terminal,
+) -> (task_core::RunIndexStatus, Option<task_core::Usage>) {
+    use task_core::RunIndexStatus as S;
+    match terminal {
+        Terminal::Done { usage, .. } => (S::Completed, *usage),
+        Terminal::Yielded { usage, .. } => (S::Yielded, *usage),
+        Terminal::BudgetExhausted { usage, .. } => (S::BudgetExhausted, *usage),
+        Terminal::Waiting { usage, .. } => (S::Waiting, *usage),
+        Terminal::Question { .. } => (S::Question, None),
+        Terminal::Error { .. } => (S::Failed, None),
     }
 }
 

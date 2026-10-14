@@ -98,3 +98,14 @@ eval_trials 全体: passed 52・failed 4・error 13・queued 217。running・sco
 - 状態（`count_states.py`）: 12:41Z 未終端 22（sol queued 20・running 2）→ 13:22Z 9（retry-batches-codex.json 93 = passed 71・failed 9・error 4・queued 7・running 2）。batches.json 276 は終端（passed 160・failed 9・error 14・cancelled 93）。
 - 7d（13:23Z）: claude_max_lab 0.17・claude_max_personal 0.17・chatgpt_plus_personal 0.17。claude は上限 24%、codex は 21%（止め線 19%・20.5%）の内。codex の round 1 は 5 件（sol 3・luna 2）で、sol は 1 run あたり約 0.15 点なので約 +1 点の見込み。
 - 消化は約 0.3 試行/分で、残り 9 件の終端まで約 30 分。この run の壁時計では再投入と集計まで届かないので yield した。
+
+## 集計（2026-10-14 15:02Z〜、run 01M4XEZWCQ）
+- 全試行の終端（`python3 -I count_states.py <E>`、本番 DB 読み取り）: batches.json 276 = passed 160・failed 9・error 14・cancelled 93、retry-batches-codex.json 93 = passed 78・failed 11・error 4、retry-batches-1.json 18 = passed 13・error 5、retry-batches-2.json 3 = error 3、pilot-batch.json（旧 pilot）10 = error 10。未終端の合計 0。pilot2-batch.json の 10 件は batches.json の pilot 群と同じ試行（passed 6・failed 4）。
+- `cargo build -p routing-eval` → `celeris-routing-eval aggregate --db /local/celeris/data/db/celeris.sqlite3 --manifest E/manifest-v2/manifest.json --out E/aggregate`（exit 0、`--write-evidence` なし）、`export … --out E/export.jsonl`（exit 0）。
+- **runner の不具合を見つけて直した**: aggregate・export は route_decisions と route_outcomes を LEFT JOIN して読み、outcome の無い error・cancelled 試行（run は yielded・cancelled・question、旧 pilot は completed）を不合格に数えていた（最初の集計: sonnet 20/24 など、export 307 行 = 有効 271 + error 36）。ADR D1 の『有効な結果』に合わせ `crates/routing-eval/src/aggregate.rs` の読みを JOIN にし、既存試験 `collect_reads_eval_decision_outcome_and_run_from_fixture_db` に outcome の無い error 試行を足して除外を固定した。`cargo test -p routing-eval`（26+1 passed）、`cargo test -p celerisctl --test routing_cli`（2 passed）、`cargo clippy -p routing-eval --all-targets -- -D warnings`（exit 0）、`cargo fmt -p routing-eval --check`（exit 0）。直す前の出力は `E/aggregate.with-errors/`・`E/export.with-errors.jsonl` に残した。
+- 直した runner での結果: export 271 行（passed 251・failed 20）。cell（n・pass・Wilson 95%）: opus 24/24 0.862–1.000、sonnet 24/24 0.862–1.000、haiku 22/23 0.790–0.992、sol 27/30 0.744–0.965、astra 11/12 0.646–0.985、luna 21/29 0.543–0.853。根拠が立たないのは haiku（有効問題数 23/24。足りない 1 問は 3 回続けて yielded）。
+- held-out 反転の判定は、両 cell に結果のある問題（共通集合）で比べるようにした（k=1 部分集合の astra と全問の sol を非対応の率で比べると dev +0.075・held-out −0.071 の見かけの反転になる。共通集合では dev +0.200・held-out 0.000 で反転なし）。
+- 2 回以上続けて yielded の試行は人の回答どおり除外とせず cell ごとに数えた（haiku 2・opus 1・luna 2、全部同じ 1 問）。
+- 7d 使用率（集計時、`E/accounts-after.json`）: claude_max_lab 0.18・claude_max_personal 0.19・chatgpt_plus_personal 0.20。上限（claude 24%・codex 21%）の内。
+- 生成: `python3 -I E/gen_results.py E E/aggregate E/export.jsonl E/accounts-after.json agent-docs/progress/2026-10-11-llm-source-model-routing/eval-results.md`（旧版は gen_results.v1.py）。
+- 計画の check 2 本を同じ cwd で実行して exit 0（eval-results.md の語と『export 件数: 271』、aggregate/ の実在）。

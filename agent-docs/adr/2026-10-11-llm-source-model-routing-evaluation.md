@@ -5,7 +5,7 @@ title: LLM source・model の選択を評価に基づく決定的な方式に作
 # ADR: LLM source・model の選択を評価に基づく決定的な方式に作り直す
 
 - Date: 2026-10-11
-- Status: Accepted（design 段。selector 段は実装済み 2026-10-13: 根拠表・route_select・段階・guardrail・legacy 撤去。eval-harness・evaluate・land 段は未）
+- Status: 実装済み（2026-10-14。selector 2026-10-13、評価 runner 2026-10-12、評価の実施 2026-10-14。本番の enforce は運用セッションの人の決定で、手順は [進捗](../progress/2026-10-11-llm-source-model-routing.md) の「本番への移行」）
 - 決定者: 人（2026-10-11 の運用セッション「既存のルーティングシステムの評価方法などを改めて調査し、モデルの評価方法の知見を踏まえて、ちゃんと動作させられるようにする」「source・model の選択と harness の選択を別々にする」）
 - 先行: 先行 task 01M4M8D4AP の ADR `2026-10-11-llm-source-harness-selection.md`（branch `celeris/01M4M8D4AP4YY4F9TV09HG30SJ`。main 取り込み前のためリンクにしない。provider の廃止、harness の選択、`RoutePolicy` 境界）、[2026-10-11-breaking-changes-by-default.md](2026-10-11-breaking-changes-by-default.md)
 - 根拠: 調査報告 `routing-evaluation-survey.md`（task 01M4M8D4AQ の artifacts。コード・本番 DB の実データ・出典 28 件）
@@ -316,11 +316,13 @@ D5 の評価 runner（crate `routing-eval`、bin `celeris-routing-eval`）と根
 - 2026-10-11: 人の補足（decision model は自然言語の入力・選択肢・確率）と人の補足 2（Input/Output の形）を受け、判断の記録と学習データの export を [2026-10-11-task-routing-features.md](2026-10-11-task-routing-features.md) に分けて決め、D2・D5 から参照した。
 - 2026-10-12: aggregate の根拠行にも問題単位 bootstrap 95% 区間を Wilson と並べ、routing_evidence および Markdown / JSON / JSONL export に保存する（migration 0073、seed 42・2000 resamples）。
 
-## 未解決（evaluate・land 段で決める）
+## 未解決（2026-10-14 land 段で整理）
 
-- k=1 の fable/astra は区間が広く、単独の優越判定ができない場合に同等集合として扱う。週 15% を満たす実行可能数は実行直前の実測見積りで確定する。
-- Codex account の 1 run quota 消費は dry-run で測るまで不明。opencode-go は今回の評価対象外。
-- harness_version の major の決め方（claude-code・codex は semver、acp・pi は command の version 文字列）は eval-harness で確定する。
+- k=1 の高価 model と harness_version の major（claude-code `2`・codex `0`）は評価の実施で決着した（付記 eval-run）。Codex の 1 run の quota は 7d 率でしか測れず、`quota_per_run` は空。
+- 根拠表の鍵の綴り: 評価 runner は `claude-code`／`claude-oauth` の綴りで書き、選択器・段階 API は宣言の綴り（`claude_code`）で完全一致に引く。候補表を宣言の綴りに揃えるまで enforce できない（follow-up task）。
+- 同等集合の順位: `quota_per_run` が空だと D2 の 3 は定価 USD → 壁時計で決まり、coding×codex では合格率の低い luna が選ばれる。quota の実測が入るまで coding×codex は shadow に置く（進捗の「本番への移行」§1・§8）。
+- 本番 run の outcome（`route_outcomes`）は評価 trial にしか書かれていない（task-routing-features ADR D6 の本番経路が未実装。follow-up task）。
+
 ### 2026-10-13 selector lane defaults implementation
 
 選択器の設定は `[route_defaults.<harness>]` に harness 共通 `candidates`、lane ごとに `[route_defaults.<harness>.lanes.<lane>]` の `candidates` を置く。lane 列があれば優先し、なければ harness 共通列へ戻る。`[route_selection]` は `exploration_epsilon`（0.1）、`guardrail_window`（50）、`guardrail_quota_floor`（0.1）、source ごとの `evaluation_reservations`（同時 run 数）を持つ。guardrail の品質閾値は D3 の固定条件（pass Wilson 下限対 pass_lower、失敗率 2 倍、wall median 2 倍、quota 10%）であり、設定可能なのは窓と quota floor のみ。

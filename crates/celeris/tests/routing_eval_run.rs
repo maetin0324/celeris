@@ -193,13 +193,29 @@ candidates = [{{ source = "local", model = "model-1" }}]
     }));
     assert_ne!(terminal[0].worktree_path, terminal[1].worktree_path);
     // Each trial had its own scratch target, gone after scoring (the released lease stays).
+    // The daemon writes the terminal status before it removes the files, so wait for the
+    // cleanup instead of reading it right after the status turns terminal.
     for t in &terminal {
         let owner = root
             .join("scratch/targets")
             .join(format!("agent-eval-{}", t.trial_id));
-        assert!(!owner.join("target").exists(), "{}", owner.display());
-        let lease = std::fs::read_to_string(owner.join("lease.json")).expect("trial lease");
-        assert!(lease.contains("released_at"), "{lease}");
+        let cleaned = tokio::time::timeout(Duration::from_secs(8), async {
+            loop {
+                let released = std::fs::read_to_string(owner.join("lease.json"))
+                    .is_ok_and(|lease| lease.contains("released_at"));
+                if released && !owner.join("target").exists() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+        })
+        .await;
+        assert!(
+            cleaned.is_ok(),
+            "trial target not cleaned up: {} (lease: {:?})",
+            owner.display(),
+            std::fs::read_to_string(owner.join("lease.json"))
+        );
     }
     let prompts = std::fs::read_to_string(&prompt_log).expect("prompt log");
     assert!(

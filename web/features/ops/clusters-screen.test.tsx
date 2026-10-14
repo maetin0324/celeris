@@ -112,12 +112,11 @@ describe("保存", () => {
     expect(html).toContain("workspace_root must not be inside the releases dir");
   });
 
-  it("restart_required: CLI の上書きがある欄は再起動が必要と出す", () => {
-    expect(localApplyState({ apply: "restart_required", source: "settings" })).toEqual({
+  it("CLI の上書きがある欄は再起動が必要と出す", () => {
+    expect(localApplyState({ apply: "new_tasks", source: "cli" })).toEqual({
       tone: "warning",
       label: "daemon の再起動が必要",
     });
-    expect(localApplyState({ apply: "new_tasks", source: "cli" }).label).toBe("daemon の再起動が必要");
     expect(localApplyState({ apply: "new_tasks", source: "config" }).tone).toBe("info");
     const cli = local({
       workspace_root: {

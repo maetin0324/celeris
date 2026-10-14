@@ -87,10 +87,10 @@ export function localSourceLabel(source: SettingSource): string {
 
 /**
  * 反映の時期（応答の `apply`）。CLI の上書きがある欄は store の値が効かないので、保存しても
- * CLI の上書きを外して daemon を再起動するまで効かない（ADR D3）。`restart_required` も同じ表示にする。
+ * CLI の上書きを外して daemon を再起動するまで効かない（ADR D3）。
  */
 export function localApplyState(setting: { apply: string; source: SettingSource }): { tone: BadgeTone; label: string } {
-  if (setting.source === "cli" || setting.apply === "restart_required")
+  if (setting.source === "cli")
     return { tone: "warning", label: "daemon の再起動が必要" };
   switch (setting.apply) {
     case "new_tasks":

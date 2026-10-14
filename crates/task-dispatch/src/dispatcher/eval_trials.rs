@@ -220,35 +220,69 @@ impl Dispatcher {
     }
 
     /// 試行の終端の後始末: 作業ツリーと scratch の target を消す（lease は解放する）。
+    /// 作業ツリーは `<workspace_root>/eval/<trial_id>/` の配下（実 path で比較）のときだけ消し、
+    /// `git -C <repo>` も同じときだけ走らせる。外なら消さずに warn だけ（`eval_trials.error` は
+    /// 書き換えない。ADR 2026-10-14-eval-verify-isolation D2）。
     fn remove_eval_trial_files(&self, trial: &EvalTrial) {
         if let Some(path) = trial.worktree_path.as_deref() {
-            let _ = std::process::Command::new("git")
-                .args(["-C", &trial.repo, "worktree", "remove", "--force", path])
-                .output();
-            let _ = std::fs::remove_dir_all(path);
+            let trial_dir = self
+                .config
+                .workspace_root
+                .join("eval")
+                .join(trial.trial_id.as_str());
+            match eval_path_within(&trial_dir, &trial.trial_id, Path::new(path)) {
+                Ok(real) => {
+                    let _ = std::process::Command::new("git")
+                        .arg("-C")
+                        .arg(&trial.repo)
+                        .args(["worktree", "remove", "--force"])
+                        .arg(&real)
+                        .output();
+                    match std::fs::remove_dir_all(&real) {
+                        Ok(()) => {}
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                        Err(e) => {
+                            tracing::warn!(trial_id = %trial.trial_id, worktree = %real.display(), error = %e, "eval trials: could not remove the work tree");
+                        }
+                    }
+                }
+                Err(why) => {
+                    tracing::warn!(trial_id = %trial.trial_id, worktree = %path, %why, "eval trials: refused to remove a work tree outside the trial's root");
+                }
+            }
         }
         self.remove_eval_target(&trial.trial_id);
     }
 
     /// 試行の scratch target を消し、lease に `released_at` を書く（lease の記録は `scratch_gc` が後で片付ける）。
-    /// scratch が今は無効でも、設定の pool の下に残っていれば消す。
+    /// scratch が今は無効でも、設定の pool の下に残っていれば消す。消すのは `pool.target_dir(owner)`
+    /// （`targets/` の直下）だけ。pool の root が空・相対なら何もしない（ADR 2026-10-14-eval-verify-isolation D2）。
     fn remove_eval_target(&self, trial_id: &str) {
         let Ok(owner) = eval_target_owner(trial_id) else {
             return;
         };
         let pool = self.config.scratch.pool();
-        if pool.root().as_os_str().is_empty() {
+        if pool.root().as_os_str().is_empty() || !pool.root().is_absolute() {
             return;
         }
         if let Err(e) = task_worker::scratch::release(&pool, &owner) {
             tracing::warn!(%trial_id, %owner, error = %e, "eval trials: could not release the scratch lease");
         }
         let target = pool.target_dir(&owner);
-        match std::fs::remove_dir_all(&target) {
+        let real = match eval_path_within(&pool.targets_dir(), "", &target) {
+            Ok(real) => real,
+            Err(why) => {
+                if target.symlink_metadata().is_ok() {
+                    tracing::warn!(%trial_id, target = %target.display(), %why, "eval trials: refused to remove a scratch target outside the pool");
+                }
+                return;
+            }
+        };
+        match std::fs::remove_dir_all(&real) {
             Ok(()) => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => {
-                tracing::warn!(%trial_id, target = %target.display(), error = %e, "eval trials: could not remove the scratch target");
+                tracing::warn!(%trial_id, target = %real.display(), error = %e, "eval trials: could not remove the scratch target");
             }
         }
     }
@@ -1058,6 +1092,57 @@ fn eval_recovery_action(status: EvalTrialStatus, tracked: bool) -> EvalRecoveryA
         EvalTrialStatus::Running if !tracked => EvalRecoveryAction::Error,
         _ => EvalRecoveryAction::None,
     }
+}
+
+/// `path` の実 path（`..`・symlink を解く。対象が無ければ親の実 path + 名前）が `root` の実 path の
+/// 真下より深いところにあれば、その実 path を返す（ADR 2026-10-14-eval-verify-isolation D2）。
+/// `leaf` が空でなければ `root` の最後の名前が `leaf` と一致しなければ拒む（`eval/<trial_id>` の dir 名）。
+/// `root` が相対・無い・解けないときも拒む（消さない側に倒す）。
+fn eval_path_within(root: &Path, leaf: &str, path: &Path) -> Result<PathBuf, String> {
+    use std::path::Component;
+    if !root.is_absolute() {
+        return Err(format!("root {} is not absolute", root.display()));
+    }
+    if !leaf.is_empty() {
+        let mut parts = Path::new(leaf).components();
+        let single = matches!(parts.next(), Some(Component::Normal(_))) && parts.next().is_none();
+        if !single || root.file_name() != Some(std::ffi::OsStr::new(leaf)) {
+            return Err(format!(
+                "trial dir name {leaf:?} does not match {}",
+                root.display()
+            ));
+        }
+    }
+    if !path.is_absolute() {
+        return Err(format!("{} is not absolute", path.display()));
+    }
+    let real_root = root
+        .canonicalize()
+        .map_err(|e| format!("root {}: {e}", root.display()))?;
+    let real = match path.canonicalize() {
+        Ok(real) => real,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            let (Some(parent), Some(Component::Normal(name))) =
+                (path.parent(), path.components().next_back())
+            else {
+                return Err(format!("{} has no parent", path.display()));
+            };
+            parent
+                .canonicalize()
+                .map_err(|e| format!("parent of {}: {e}", path.display()))?
+                .join(name)
+        }
+        Err(e) => return Err(format!("{}: {e}", path.display())),
+    };
+    if real == real_root || !real.starts_with(&real_root) {
+        return Err(format!(
+            "{} (real {}) is not under {}",
+            path.display(),
+            real.display(),
+            real_root.display()
+        ));
+    }
+    Ok(real)
 }
 
 /// 試行の scratch target の owner（`agent-eval-<trial_id>`。試行どうしで共有しない）。外部 owner の形なので

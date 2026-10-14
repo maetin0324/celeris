@@ -83,3 +83,11 @@ eval_trials 全体: passed 52・failed 4・error 13・queued 217。running・sco
 - 前 2 回の run（01M4X2GN7S・01M4X2JAFV）が result.json に書いた決定 `claude-resubmit` は、run が done 扱いになって check（eval-results.md・aggregate の実在）で落ちたため本番 DB の decisions に入らなかった（events に記録なし）。この run は result.json の `question` で人に聞く。
 - 11:26Z 本番 DB 読み取り（`count_states.py`）: batches.json 276 = passed 159・failed 9・error 13・cancelled 93・running 2。retry-batches-codex.json 93 = passed 33・failed 3・queued 55・running 2。未終端 59。受け入れ条件 0 を満たさないので aggregate・export・eval-results.md は作っていない。
 - 質問: 全終端の後、claude の仕組み側 error 12 件を再投入してよいか（claude の 7d は lab 15%・personal 16% で承認上限 15% に到達済み）、それとも claude 分は再投入せず除外して集計するか。codex（sol）1 件は上限 21% の内なので終端後に再投入する。
+
+## 人の回答 claude-resubmit と待ち（2026-10-14 11:28Z〜12:10Z、run 01M4X2Q4AF）
+- 人の回答: (a) claude 12 件も再投入する。承認上限 15% は評価で消費する分で、投入前の使用率に足した値が上限（claude は 9% + 15% = 24%）。仕組み側 error は試行ごとに最大 2 回の規則どおり。sol 1 件も再投入する。順序は全終端の確認 → 再投入 → 終端 → aggregate・export・eval-results.md。
+- 状態（`count_states.py`）: 11:28Z 未終端 58 → 11:43Z 44 → 12:08Z 33。12:08Z の batches.json 276 = passed 160・failed 9・error 14・cancelled 93（終端）。retry-batches-codex.json 93 = passed 49・failed 9・error 2・queued 31・running 2。
+- batches.json の error 14 件は全部仕組み側（haiku 2 yielded・opus 1 yielded と 1 dispatcher stopped・sonnet 3 dispatcher stopped と 3 worktree 消失と 3 daemon recovery・sol 1 yielded）。再投入 1 回目の対象は 14 件（claude 13・sol 1）。
+- retry-batches-codex.json の error 2 件（gpt-6-luna、`run ended as yielded`）も仕組み側の規則に当たる。`resubmit_errors.py` は batches.json と retry-batches-1.json しか見ないので、全終端の後にこの 2 件も同じ規則（試行ごと最大 2 回）で再投入する。
+- 7d 使用率（12:09Z）: claude_max_lab 0.16・claude_max_personal 0.16・chatgpt_plus_personal 0.12。どれも人の示した上限（claude 24%・codex 21%）の内。
+- 消化は約 0.45 試行/分で残り 33 件の終端まで約 75 分。この run の壁時計では終わらないので yield した（再投入・集計はまだしない）。

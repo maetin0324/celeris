@@ -1,6 +1,7 @@
 ---
 task: 01M4W3PTCHJD4XQPZGT81WBTRM
-status: running
+status: done
+completed: 2026-10-14
 ---
 # 評価試行（eval trial）が全部 error になる件の修正
 
@@ -42,6 +43,20 @@ WorkUnit ごとの記録は `2026-10-14-eval-trial-error-fix/<wu-key>.md`（fix-
 
 戻し方: 新しい batch の行は残したまま、旧 release に戻せばよい（`--trial-offset` は CLI だけの変更で、DB の形は変えていない）。
 
+## closeout（WorkUnit）: 全体検査（2026-10-14、HEAD 1d6c76c5）
+
+実装は足していない。
+
+- `bash scripts/dev/test-parallel.sh` → exit 0、`test-parallel: ok`。
+  `CELERIS_TEST_SUMMARY`: nextest 0.9.146、jobs 8、binaries 181、passed 5087、failed 0、ignored 13、
+  nextest_exit 0、doctest_exit 0、tmp_leftovers 0、userns null（CELERIS_USERNS_TESTS は付けていない。受け入れ条件に USERNS=1 は無い）。
+- `cargo clippy --workspace -- -D warnings` → exit 0、warning・error 0 件。
+- `cargo fmt --all --check` → exit 0。
+- 受け入れ条件の試験 4 本を名前で絞って再実行:
+  `cargo nextest run --workspace -E 'test(/eval_trial_result_at_artifacts_rel|eval_trial_error_keeps_reason|aggregate_excludes_error_trials|run_trial_offset_shifts_trial_no/)'`
+  → `4 tests run: 4 passed`。
+
 ## 未解決事項
 
-- 全体検査（test-parallel・clippy）と完了日の記入は closeout の WorkUnit が行う。
+- 本番での pilot やり直し（上の「本番への移行」）は人が行う。修正を含む release の昇格が先。
+- aggregate は queued・running・scoring の試行を除外せず数える（aggregate.md の提案参照）。

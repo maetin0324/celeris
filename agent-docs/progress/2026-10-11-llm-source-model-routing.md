@@ -1,7 +1,8 @@
 ---
 title: "LLM source・model の routing を評価に基づく選択に作り直す"
 tasks: [01M4M8D4AQHBC2KG3H1BPJ7Z0J]
-status: running
+status: done
+completed: 2026-10-14
 updated: 2026-10-14
 ---
 
@@ -26,7 +27,7 @@ ADR `2026-10-11-llm-source-harness-selection.md`〈branch `celeris/01M4M8D4AP4YY
 | build | eval-harness / selector | eval-harness done（2026-10-12）、selector done（2026-10-13）、親 branch への統合 done（2026-10-13、下の「統合」） |
 | evaluate | eval-run | done（2026-10-14、人の承認の後に投入。結果は [eval-results.md](2026-10-11-llm-source-model-routing/eval-results.md)） |
 | land | rollout | done（2026-10-14、下の「本番への移行」。コードは変えていない） |
-| land | verify | 並行して実施 |
+| land | verify | done（2026-10-14、下の「証拠」の最終検証） |
 
 ## 設計の要約
 
@@ -75,6 +76,7 @@ ADR `2026-10-11-llm-source-harness-selection.md`〈branch `celeris/01M4M8D4AP4YY
 
 ## 証拠
 
+- 最終検証（2026-10-14、verify unit、base b285a5a3、`CARGO_TARGET_DIR` はローカル）: `bash scripts/dev/test-parallel.sh` exit 0（nextest 0.9.146・jobs 8、passed 5085・failed 0・ignored 13、nextest_exit 0・doctest_exit 0）、`cargo clippy --workspace -- -D warnings` exit 0、`cargo fmt --all -- --check` exit 0。
 - 統合（2026-10-13、`CARGO_TARGET_DIR` はローカル）: `cargo fmt --all -- --check` exit 0、`cargo clippy --workspace -- -D warnings` exit 0、`TMPDIR=/tmp bash scripts/dev/test-parallel.sh` exit 0（nextest 5079 passed・12 skipped、doctest 含め passed 5082・failed 0）、`sh scripts/dev/check-adr-numbers.sh` exit 0、`sh scripts/dev/check-doc-links.sh` exit 0、web `pnpm typecheck` exit 0・`vitest run features/ops/routing-screen.test.tsx` 1 passed。migration 番号は 0001〜0077 で重複なし（欠番は `RESERVED_VERSIONS` の 38・39・40・68・69）。
 - `sh scripts/dev/progress-index.sh --check`: exit 0（本 file を含む）
 - `git diff --quiet "$CELERIS_WU_BASE" -- crates/ web/ gui/`: exit 0（adr unit はコードを変えていない）

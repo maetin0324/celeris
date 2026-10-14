@@ -1,58 +1,55 @@
 ---
 tasks: [01M4VAAKFJHRSVKZ3996NFKSKS]
 title: eval-run pilot — codex quota 実測 pilot（gpt-6-luna 10 試行）
-status: blocked
+status: done
+completed: 2026-10-14
 ---
-# pilot: 投入せず止めた（config の予約枠待ち）
+# pilot: gpt-6-luna 10 試行を本番に投入した
 
-**人が見る要点**: 本番の `~/.config/celeris/config.toml` に `[routing_eval] reserved_runs = 2` がまだ無い。人の決定 eval-deploy の順序 (3)「config に reserved_runs = 2 を足した後まで評価 run は待つ」に従い、10 試行は投入していない。batch_id はまだ無い。下の手順 1〜3 を行い、受信箱の決定 `eval-reserved-runs` に答えると、次の run が投入する。
-
-## 2026-10-14 02:13 UTC 再確認（run 01M4W2XFKC33K70C0SJ1WQN3MH）
-
-`GET /api/v1/routing-eval/trials` は 200、本番 DB は 77、`~/.config/celeris/config.toml`（00:33 UTC 更新のまま）に `routing_eval` は依然無い。前の 2 run が出したつもりの決定 `eval-reserved-runs` は本番 DB の decisions に作られていなかった（done を返し check 不合格で retry に回ったため）。この run は done を返さず、result.json の `decisions`（needed_before: self）で決定 `eval-reserved-runs` を出して止める。投入はしていない（batch_id なし）。
-
-## 2026-10-14 再確認（attempt 2 の run）
-
-`GET /api/v1/routing-eval/trials` は 200（`{"trials":[]}`）、本番 DB の `MAX(version)` は 77。`~/.config/celeris/config.toml`（00:33 UTC 更新、`[model_routing]` 撤去後）にも `routing_eval`・`reserved_runs` は無い。`crates/task-dispatch/src/capacity.rs` の判定では `reserved_runs == 0` で評価 run は一切起こさないため、投入しても 10 試行は終端にならない。引き続き投入せず、決定 `eval-reserved-runs`（この unit を止める）を受信箱に出した。
-
-## 2026-10-14 に読み取りで確かめたこと
-
-| 項目 | 結果 | 要件 |
-|---|---|---|
-| `GET /api/v1/routing-eval/trials` | 200 | 200（○） |
-| 本番 DB `SELECT MAX(version) FROM schema_migrations`（mode=ro） | 77 | 77 以上（○） |
-| `grep -n routing_eval ~/.config/celeris/config.toml` | 該当なし（既定 `reserved_runs = 0`） | `reserved_runs = 2`（×） |
-
-`reserved_runs = 0` のままでは評価 run は dispatch されず、試行は queued のまま残る。その間に一般の codex run が週 quota を動かすので、pilot の前値（`pilot-before.json`）と後値の差が評価以外の消費で汚れる。このため前値の取得も投入もしていない。
-
-## 人の手順（dryrun.md「本番導入の人の手順」と同じ）
-
-1. `~/.config/celeris/config.toml` に足す:
-   ```toml
-   [routing_eval]
-   reserved_runs = 2
-   ```
-2. `systemctl --user list-units 'celeris@*'` で稼働中の unit を確かめ、`systemctl --user restart celeris@<sha12>.service`。journal に config の読み込みエラーが無いことを見る。
-3. 確認: `grep -n -A1 '^\[routing_eval\]' ~/.config/celeris/config.toml` が `reserved_runs = 2` を返す。`curl -sf -H "Authorization: Bearer $(cat $HOME/.config/celeris/api.token)" http://127.0.0.1:7710/api/v1/routing-eval/trials` が exit 0。
-
-## 投入後に人が確かめる command（次の run が batch_id を書き込む）
+- **batch_id: `01M4W35QEMQGVV5ZSD0JJ61ZDD`**（10 試行、投入時はすべて `queued`）
+- 全試行が終端（passed / failed / error / cancelled）になったかを人が確かめる command:
 
 ```
 curl -sf -H "Authorization: Bearer $(cat $HOME/.config/celeris/api.token)" \
-  'http://127.0.0.1:7710/api/v1/routing-eval/trials?batch_id=<batch_id>' \
-  | python3 -c 'import json,sys;d=json.load(sys.stdin);it=d.get("items",d);print(len(it),sorted({t["status"] for t in it}))'
+  'http://127.0.0.1:7710/api/v1/routing-eval/trials?batch_id=01M4W35QEMQGVV5ZSD0JJ61ZDD' \
+  | python3 -c 'import json,sys;t=json.load(sys.stdin)["trials"];print(len(t),sorted({x["status"] for x in t}))'
 ```
 
-10 件すべての status が passed / failed / error / cancelled のどれかになったら continue する。
+10 件で、status がすべて passed / failed / error / cancelled のどれかになったら continue する。
 
-## 次の run の手順
+## 前提の確認（2026-10-14 02:16 UTC、読み取りのみ）
 
-1. `GET /api/v1/llm/accounts` の `chatgpt_plus_personal` の `usage.seven_day`（utilization・observed_at）を `E/pilot-before.json` に保存。
-2. `E/pilot-plan.json` の 5 問 × k=2 を `make_trials` と同じ欄（harness codex・source codex-oauth・model gpt-6-luna・objective は make_trials の組み立て・check は manifest の command と timeout 600）で `POST /api/v1/routing-eval/trials` に投入し、応答を `E/pilot-batch.json` に保存（command は標準出力に出さない）。
-3. この file の先頭に batch_id を書く。
+| 項目 | 結果 |
+|---|---|
+| `grep -n -A1 '^\[routing_eval\]' ~/.config/celeris/config.toml` | `reserved_runs = 2`（決定 eval-reserved-runs、人が 02:15Z に追記・再起動） |
+| `GET /api/v1/routing-eval/trials` | 200、`{"trials":[]}`（投入前は 0 件） |
+| 本番 DB `SELECT MAX(version) FROM schema_migrations`（mode=ro） | 77 |
+
+## やったこと
+
+1. quota の前値: `GET /api/v1/llm/accounts` の `chatgpt_plus_personal` を `E/pilot-before.json` に保存。`usage.seven_day.utilization = 0.02`、`observed_at = 2026-10-14T02:15:43Z`、`resets_at = 2026-10-20T04:58:23Z`、`five_hour: null`。
+2. 試行の投入: runner の `run` に問題を絞る option が無いので、コードは変えず、`E/manifest-v2/manifest.json` から `E/pilot-plan.json` の 5 問だけを残した `E/pilot-manifest.json` を作った（`sha256` は元の manifest の値 `118b413e…21e7e7` のまま。後の本投入でも `eval_trials` の UNIQUE が同じ試行の重複を防ぐ）。
+   ```
+   $CARGO_TARGET_DIR/debug/celeris-routing-eval run --api http://127.0.0.1:7710 \
+     --manifest E/pilot-manifest.json --candidates codex-oauth:gpt-6-luna \
+     --token-file $HOME/.config/celeris/api.token \
+     --repo /home/rmaeda/workspace/agent-platform --out E/pilot-batch.json
+   ```
+   exit 0。欄は `make_trials` のまま（harness codex・source codex-oauth・model gpt-6-luna・objective は問題文入り・check は manifest の command と timeout 600）。標準出力は捨て、応答は `E/pilot-batch.json` にだけ書いた。5 問の base_commit はすべて `/home/rmaeda/workspace/agent-platform` にあることを `git cat-file -e` で確かめた。
+3. 投入直後の `GET ?batch_id=01M4W35QEMQGVV5ZSD0JJ61ZDD` は 10 件（`queued`・`running`）。
 
 （E = `/local/celeris/data/workspaces/01M4VAAKFJHRSVKZ3996NFKSKS/artifacts/eval/`）
 
+## 次の unit（estimate）へ
+
+- 後値は全試行が終端になった後に同じ `GET /api/v1/llm/accounts` で取り、`observed_at` が最後の試行の `finished_at` より後であることを確かめる（dryrun.md「quota の取り方」）。
+- 前値の `utilization` は 0〜1 の割合で返っている（0.02 = 2%）。Δ は同じ単位で引く。
+- 試行中に評価以外の codex run が同じ account で走れば Δ から除く（dryrun.md「混入を除く」）。
+
+## 提案
+
+- runner の `run` に `--problems <id,...>` を足すと、部分集合 manifest を作らずに済む（dryrun.md 未解決 3）。この unit ではコードを変えていない。
+
 ## 検査
 
-この run は進捗ファイルだけを変えた（コード不変）。全体検査は投入する run で行う。
+この run はコードを変えていない（進捗ファイルのみ）。WU の check 2 本（pilot-batch.json の batch_id と 10 試行、`GET ?batch_id=` で 10 件）はどちらも exit 0。

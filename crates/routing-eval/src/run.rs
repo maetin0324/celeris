@@ -54,6 +54,7 @@ pub fn run_args(raw_args: Vec<String>) -> Result<(), String> {
     let mut out = None;
     let mut wait = false;
     let mut poll_ms = 1000u64;
+    let mut trial_offset = 0u32;
     while let Some(arg) = args.next() {
         let value = |args: &mut std::vec::IntoIter<String>, flag: &str| {
             args.next()
@@ -70,6 +71,11 @@ pub fn run_args(raw_args: Vec<String>) -> Result<(), String> {
                 poll_ms = value(&mut args, "--poll-interval-ms")?
                     .parse()
                     .map_err(|_| "invalid --poll-interval-ms".to_string())?
+            }
+            "--trial-offset" => {
+                trial_offset = value(&mut args, "--trial-offset")?
+                    .parse()
+                    .map_err(|_| "invalid --trial-offset".to_string())?
             }
             "--wait" => wait = true,
             _ => return Err(format!("unknown option: {arg}")),
@@ -94,7 +100,7 @@ pub fn run_args(raw_args: Vec<String>) -> Result<(), String> {
         })
         .transpose()?;
     let selected = parse_candidates(&ids)?;
-    let trials = make_trials(&manifest, &selected, &repo)?;
+    let trials = make_trials(&manifest, &selected, &repo, trial_offset)?;
     let client = Client::builder().build().map_err(|e| e.to_string())?;
     let endpoint = format!("{}/api/v1/routing-eval/trials", api.trim_end_matches('/'));
     let mut request = client
@@ -181,6 +187,7 @@ fn make_trials(
     manifest: &Manifest,
     candidates: &[&Candidate],
     repo: &str,
+    trial_offset: u32,
 ) -> Result<Vec<TrialRequest>, String> {
     let mut result = Vec::new();
     for c in candidates {
@@ -200,8 +207,13 @@ fn make_trials(
                 .base_commit
                 .as_deref()
                 .ok_or_else(|| format!("problem {} has no base_commit", p.id))?;
-            for trial_no in 1..=c.k {
-                result.push(TrialRequest { problem_id:p.id.clone(),trial_no:trial_no as u32,source_id:c.source_id.into(),model_id:c.model_id.into(),harness_id:c.harness_id.into(),repo:repo.into(),base_commit:base_commit.into(),objective:format!("This is an evaluation problem. Make the requested repository change. Do not run or request evaluation checks.\n\n{}",p.prompt),check:Check{cmd:p.command.clone(),timeout_secs:600} });
+            for n in 1..=c.k {
+                // 同じ manifest のやり直しは trial_no をずらして新しい行にする（旧い行は消さない）。
+                let trial_no = u32::try_from(n)
+                    .ok()
+                    .and_then(|n| n.checked_add(trial_offset))
+                    .ok_or("--trial-offset is too large")?;
+                result.push(TrialRequest { problem_id:p.id.clone(),trial_no,source_id:c.source_id.into(),model_id:c.model_id.into(),harness_id:c.harness_id.into(),repo:repo.into(),base_commit:base_commit.into(),objective:format!("This is an evaluation problem. Make the requested repository change. Do not run or request evaluation checks.\n\n{}",p.prompt),check:Check{cmd:p.command.clone(),timeout_secs:600} });
             }
         }
     }
@@ -225,7 +237,7 @@ mod tests {
             {"id":"p2","task_id":"t2","work_unit_id":"w2","created_at":"","genre":"coding","kind":"leaf","command":"SECRET_CHECK2","prompt":"Fix the parser","split":"dev","stratum":"x","subset_12":true,"head_commit":null,"base_commit":"def","features_sha256":"","features":{},"sha256":""}] })).expect("fixture");
         manifest.problems.sort_by(|a, b| a.id.cmp(&b.id));
         let trials =
-            make_trials(&manifest, &[&CANDIDATES[0], &CANDIDATES[3]], "/repo").expect("trials");
+            make_trials(&manifest, &[&CANDIDATES[0], &CANDIDATES[3]], "/repo", 0).expect("trials");
         assert_eq!(trials.len(), 5); // 2 problems × k=2, plus subset problem × k=1
         assert!(trials[0].objective.contains("Implement the widget"));
         assert!(!trials[0].objective.contains("SECRET_CHECK"));
@@ -233,7 +245,7 @@ mod tests {
         assert_eq!(trials[4].check.cmd, "SECRET_CHECK2");
         assert_eq!(trials[0].harness_id, "claude-code");
         assert_eq!(trials[4].harness_id, "claude-code");
-        let codex = make_trials(&manifest, &[&CANDIDATES[4]], "/repo").expect("codex");
+        let codex = make_trials(&manifest, &[&CANDIDATES[4]], "/repo", 0).expect("codex");
         assert!(codex.iter().all(|trial| trial.harness_id == "codex"));
         assert!(
             CANDIDATES
@@ -327,5 +339,73 @@ mod tests {
         let summary = fs::read_to_string(output).expect("summary");
         assert!(summary.contains("passed"));
         assert!(!summary.contains("PRIVATE_CHECK_TOKEN"));
+    }
+    #[test]
+    fn run_trial_offset_shifts_trial_no() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("local listener");
+        let address = listener.local_addr().expect("address");
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("request");
+            let mut data = Vec::new();
+            let mut buf = [0u8; 4096];
+            let body_start = loop {
+                let n = stream.read(&mut buf).expect("read request");
+                assert!(n > 0, "request ended before body");
+                data.extend_from_slice(&buf[..n]);
+                let Some(end) = data.windows(4).position(|w| w == b"\r\n\r\n") else {
+                    continue;
+                };
+                let length = String::from_utf8_lossy(&data[..end])
+                    .lines()
+                    .find_map(|l| {
+                        l.to_ascii_lowercase()
+                            .strip_prefix("content-length: ")
+                            .and_then(|s| s.parse::<usize>().ok())
+                    })
+                    .unwrap_or(0);
+                if data.len() >= end + 4 + length {
+                    break end + 4;
+                }
+            };
+            let body: Value = serde_json::from_slice(&data[body_start..]).expect("json body");
+            let trials = body["trials"].as_array().expect("trials").clone();
+            let refs: Vec<Value> = trials.iter().enumerate().map(|(i, t)| json!({"trial_id":format!("t{i}"),"problem_id":t["problem_id"],"trial_no":t["trial_no"],"status":"queued"})).collect();
+            let response = json!({"batch_id":"b2","trials":refs}).to_string();
+            write!(stream, "HTTP/1.1 201 Created\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", response.len(), response).expect("write response");
+            trials
+        });
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("manifest.json");
+        let output = dir.path().join("summary.json");
+        let manifest = json!({"schema":"x","version":"1","cutoff":"x","seed":0,"sha256":"abc","problems":[{"id":"p1","task_id":"t1","work_unit_id":"w1","created_at":"","genre":"coding","kind":"leaf","command":"CHECK","prompt":"Fix it","split":"dev","stratum":"x","subset_12":true,"head_commit":null,"base_commit":"abc","features_sha256":"","features":{},"sha256":""}]});
+        fs::write(&path, manifest.to_string()).expect("write manifest");
+        run_args(vec![
+            "--api".into(),
+            format!("http://{address}"),
+            "--manifest".into(),
+            path.to_string_lossy().into_owned(),
+            "--candidates".into(),
+            "claude-opus-5-5".into(),
+            "--repo".into(),
+            dir.path().to_string_lossy().into_owned(),
+            "--trial-offset".into(),
+            "2".into(),
+            "--out".into(),
+            output.to_string_lossy().into_owned(),
+        ])
+        .expect("run command");
+        let posted = server.join().expect("server");
+        let numbers: Vec<u64> = posted
+            .iter()
+            .map(|t| t["trial_no"].as_u64().expect("trial_no"))
+            .collect();
+        // claude-opus-5-5 は k=2: offset 2 で 3, 4（既定の 1, 2 と重ならない）。
+        assert_eq!(numbers, vec![3, 4]);
+        let summary: Value =
+            serde_json::from_str(&fs::read_to_string(output).expect("summary")).expect("json");
+        assert_eq!(summary["trials"][0]["trial_no"], 3);
+        assert_eq!(summary["trials"][1]["trial_no"], 4);
+        let err = run_args(vec!["--trial-offset".into(), "-1".into()]).expect_err("negative");
+        assert_eq!(err, "invalid --trial-offset");
     }
 }

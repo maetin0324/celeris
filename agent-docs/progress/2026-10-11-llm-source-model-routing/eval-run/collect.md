@@ -91,3 +91,10 @@ eval_trials 全体: passed 52・failed 4・error 13・queued 217。running・sco
 - retry-batches-codex.json の error 2 件（gpt-6-luna、`run ended as yielded`）も仕組み側の規則に当たる。`resubmit_errors.py` は batches.json と retry-batches-1.json しか見ないので、全終端の後にこの 2 件も同じ規則（試行ごと最大 2 回）で再投入する。
 - 7d 使用率（12:09Z）: claude_max_lab 0.16・claude_max_personal 0.16・chatgpt_plus_personal 0.12。どれも人の示した上限（claude 24%・codex 21%）の内。
 - 消化は約 0.45 試行/分で残り 33 件の終端まで約 75 分。この run の壁時計では終わらないので yield した（再投入・集計はまだしない）。
+
+## 12:42Z コメントへの対応と待ち（2026-10-14 12:41Z〜13:23Z、run 01M4X6XQCZ）
+- 運用セッションのコメント: release 64158056af89（migration 0078）の stop-start 昇格で、走行中だった sol 2 件（retry-batches-codex.json の batch 01M4X08HKH）が 12:41:16Z に `dispatcher stopped the run` で error。仕組み側なので、再投入の規則（試行ごと最大 2 回、codex 上限 21% の内）で再投入してよい。
+- `resubmit_errors.py <E> 1` は batches.json と retry-batches-codex.json の両方の仕組み側 error を対象にしているので、この 2 件は round 1 に入る（trial_no は元 +100）。retry-batches-codex.json の error 4 件 = gpt-6-luna yielded 2・gpt-6.1-sol dispatcher stopped 2。round 1 の対象は計 18 件（batches.json 14 = claude 13・sol 1、retry-codex 4）。
+- 状態（`count_states.py`）: 12:41Z 未終端 22（sol queued 20・running 2）→ 13:22Z 9（retry-batches-codex.json 93 = passed 71・failed 9・error 4・queued 7・running 2）。batches.json 276 は終端（passed 160・failed 9・error 14・cancelled 93）。
+- 7d（13:23Z）: claude_max_lab 0.17・claude_max_personal 0.17・chatgpt_plus_personal 0.17。claude は上限 24%、codex は 21%（止め線 19%・20.5%）の内。codex の round 1 は 5 件（sol 3・luna 2）で、sol は 1 run あたり約 0.15 点なので約 +1 点の見込み。
+- 消化は約 0.3 試行/分で、残り 9 件の終端まで約 30 分。この run の壁時計では再投入と集計まで届かないので yield した。

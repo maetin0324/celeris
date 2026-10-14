@@ -550,6 +550,177 @@ mod tests {
         );
     }
 
+    fn git_ok(dir: &Path, args: &[&str]) -> String {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .output()
+            .expect("git is available");
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).trim().to_owned()
+    }
+
+    /// base（`flag.txt` が無い）と head（ある）の 2 commit を持つ一時リポジトリ。
+    fn refill_repo(root: &Path) -> (std::path::PathBuf, String, String) {
+        let repo = root.join("repo");
+        let hooks = root.join("hooks");
+        fs::create_dir_all(&repo).expect("mkdir repo");
+        fs::create_dir_all(&hooks).expect("mkdir hooks");
+        git_ok(&repo, &["init", "-q", "-b", "main"]);
+        git_ok(&repo, &["config", "user.email", "eval@example.com"]);
+        git_ok(&repo, &["config", "user.name", "eval"]);
+        git_ok(&repo, &["config", "commit.gpgsign", "false"]);
+        git_ok(
+            &repo,
+            &["config", "core.hooksPath", hooks.to_str().expect("utf-8")],
+        );
+        fs::write(repo.join("readme.md"), b"base\n").expect("write");
+        git_ok(&repo, &["add", "-A"]);
+        git_ok(&repo, &["commit", "-q", "-m", "base"]);
+        let base = git_ok(&repo, &["rev-parse", "HEAD"]);
+        fs::write(repo.join("flag.txt"), b"head\n").expect("write");
+        git_ok(&repo, &["add", "-A"]);
+        git_ok(&repo, &["commit", "-q", "-m", "head"]);
+        let head = git_ok(&repo, &["rev-parse", "HEAD"]);
+        (repo, base, head)
+    }
+
+    /// 36 候補: implement 12（判別できる）・repair 12（base 無し、親で補えば判別できる）・
+    /// test 12（6 は base でも通る noop、6 は判別できる）。
+    fn refill_fixture(dir: &Path, base: &str, head: &str) -> std::path::PathBuf {
+        let db = dir.join("refill.sqlite3");
+        let _store = SqliteStore::open(&db).expect("migrate fixture database");
+        let conn = Connection::open(&db).expect("fixture connection");
+        for i in 0..36 {
+            let task = format!("task-{i:02}");
+            let wu = format!("wu-{i:02}");
+            let created = format!("2026-09-{:02}T00:00:00Z", (i % 28) + 1);
+            let kind = ["implement", "repair", "test"][i % 3];
+            let cmd = if kind == "test" && i < 18 {
+                "true"
+            } else {
+                "test -f flag.txt"
+            };
+            let base_col = (kind != "repair").then_some(base);
+            let task_json = serde_json::json!({"title": task, "objective": "fixture objective", "genre": "coding"}).to_string();
+            conn.execute("INSERT INTO tasks(id,status,kind,parent_id,priority,created_at,json) VALUES(?1,'done','task',NULL,0,?2,?3)", rusqlite::params![task, created, task_json]).expect("insert task");
+            let wu_json = serde_json::json!({"objective": "fixture work", "kind": kind, "checks": [{"cmd": cmd, "expect_exit": 0}]}).to_string();
+            conn.execute("INSERT INTO work_units(id,task_id,plan_id,key,seq,kind,status,depends_on_json,json,created_at,updated_at,head_commit,base_commit) VALUES(?1,?2,'plan',?1,0,?3,'done','[]',?4,?5,?5,?6,?7)", rusqlite::params![wu, task, kind, wu_json, created, head, base_col]).expect("insert work unit");
+        }
+        drop(conn);
+        db
+    }
+
+    #[test]
+    fn refill_fills_30_from_adopted_records_rejections_and_marks_parent_bases() {
+        let dir = tempdir().expect("tempdir");
+        let (repo, base, head) = refill_repo(dir.path());
+        let db = refill_fixture(dir.path(), &base, &head);
+        let out = dir.path().join("out");
+        let cache = dir.path().join("cache.jsonl");
+        let mut checker = crate::recheck::Checker::new(
+            &repo,
+            Some(&dir.path().join("wt")),
+            std::time::Duration::from_secs(60),
+        )
+        .expect("checker");
+        let refill = Refill {
+            checker: &mut checker,
+            max_draws_per_stratum: 12,
+            cache: Some(&cache),
+        };
+        let m = create(&db, &out, "2026-10-05", 0, "v2", Some(refill)).expect("refill manifest");
+        assert_eq!(m.problems.len(), 30);
+        assert_eq!(m.problems.iter().filter(|p| p.subset_12).count(), 12);
+        assert_eq!(m.refill_rejected.len(), 6);
+        assert!(m.refill_rejected.iter().all(|r| r.stratum == "coding:test"
+            && r.reason == crate::recheck::REASON_NOOP_BASE_PASSES
+            && !r.base_commit_from_parent));
+        let repairs: Vec<_> = m.problems.iter().filter(|p| p.kind == "repair").collect();
+        assert_eq!(repairs.len(), 12);
+        assert!(
+            repairs
+                .iter()
+                .all(|p| p.base_commit_from_parent
+                    && p.base_commit.as_deref() == Some(base.as_str()))
+        );
+        assert!(
+            m.problems
+                .iter()
+                .filter(|p| p.kind != "repair")
+                .all(|p| !p.base_commit_from_parent)
+        );
+        let written: Value =
+            serde_json::from_slice(&fs::read(out.join("manifest.json")).expect("read manifest"))
+                .expect("manifest json");
+        assert_eq!(written["recheck"]["adopted"], 30);
+        assert_eq!(written["recheck"]["manifest_sha256"], m.sha256.as_str());
+        let cached = fs::read_to_string(&cache).expect("read cache");
+        assert_eq!(cached.lines().count(), 36);
+
+        // 同じ cache で引き直すと git を走らせず同じ凍結値になる（中断からの再開）。
+        let mut again = crate::recheck::Checker::new(
+            &repo,
+            Some(&dir.path().join("wt2")),
+            std::time::Duration::from_secs(60),
+        )
+        .expect("checker");
+        let rerun = create(
+            &db,
+            &out,
+            "2026-10-05",
+            0,
+            "v2",
+            Some(Refill {
+                checker: &mut again,
+                max_draws_per_stratum: 12,
+                cache: Some(&cache),
+            }),
+        )
+        .expect("rerun from cache");
+        assert_eq!(rerun.sha256, m.sha256);
+        assert_eq!(
+            fs::read_to_string(&cache)
+                .expect("read cache")
+                .lines()
+                .count(),
+            36
+        );
+    }
+
+    #[test]
+    fn refill_reports_a_shortfall_instead_of_lowering_the_bar() {
+        let dir = tempdir().expect("tempdir");
+        let (repo, base, head) = refill_repo(dir.path());
+        let db = refill_fixture(dir.path(), &base, &head);
+        let mut checker = crate::recheck::Checker::new(
+            &repo,
+            Some(&dir.path().join("wt")),
+            std::time::Duration::from_secs(60),
+        )
+        .expect("checker");
+        let err = create(
+            &db,
+            &dir.path().join("out"),
+            "2026-10-05",
+            0,
+            "v2",
+            Some(Refill {
+                checker: &mut checker,
+                max_draws_per_stratum: 8,
+                cache: None,
+            }),
+        )
+        .unwrap_err();
+        assert!(err.contains("30 required"), "{err}");
+        assert!(!dir.path().join("out/manifest.json").exists());
+    }
+
     #[test]
     fn old_manifest_without_prompt_is_rejected() {
         let old = r#"{"id":"p","task_id":"t","work_unit_id":"w","created_at":"","genre":"coding","kind":"task","command":"check","split":"dev","stratum":"coding:task","subset_12":false,"head_commit":null,"base_commit":null,"features_sha256":"","features":{},"sha256":""}"#;

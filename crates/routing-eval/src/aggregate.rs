@@ -565,8 +565,8 @@ mod tests {
         let comparisons = paired_comparisons(
             &manifest,
             &[
-                make_trial("claude-code", "claude-oauth"),
-                make_trial("codex", "codex-oauth"),
+                make_trial("claude_code", "claude_oauth"),
+                make_trial("codex", "codex_oauth"),
             ],
         );
         assert!(comparisons.is_empty());
@@ -608,9 +608,9 @@ mod tests {
             trial_no: 1,
             key: EvidenceKey {
                 genre: "coding".into(),
-                harness_id: "claude-code".into(),
+                harness_id: "claude_code".into(),
                 harness_version: "1".into(),
-                source_id: "claude-oauth".into(),
+                source_id: "claude_oauth".into(),
                 model_id: "m".into(),
             },
             passed: true,
@@ -720,7 +720,7 @@ mod tests {
         let conn = Connection::open(&db).expect("db");
         conn.execute_batch("CREATE TABLE route_decisions(decision_id TEXT,subject_id TEXT,subject_kind TEXT,run_id TEXT,input_json TEXT,output_json TEXT,stage TEXT); CREATE TABLE route_outcomes(decision_id TEXT,labels_json TEXT); CREATE TABLE runs(run_id TEXT,status TEXT,started_at TEXT,finished_at TEXT,usage_json TEXT,metrics_json TEXT); CREATE TABLE eval_trials(trial_id TEXT,decision_id TEXT,status TEXT,error TEXT);")
             .expect("fixture schema");
-        let selected = r#"{"selected":{"source_id":"codex-oauth","model_id":"m","harness_id":"codex","harness_version":"1.0"}}"#;
+        let selected = r#"{"selected":{"source_id":"codex_oauth","model_id":"m","harness_id":"codex","harness_version":"1.0"}}"#;
         let trials = [
             ("d1", "p1", "passed", Some(true)),
             ("d2", "p2", "failed", Some(false)),
@@ -827,7 +827,7 @@ mod tests {
         );
         assert!(
             md.lines()
-                .any(|line| line == "| coding | codex | 1.0 | codex-oauth | m | 2 | 1 |"),
+                .any(|line| line == "| coding | codex | 1.0 | codex_oauth | m | 2 | 1 |"),
             "{md}"
         );
         let evidence: Value =

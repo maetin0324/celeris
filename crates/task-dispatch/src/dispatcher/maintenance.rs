@@ -6,7 +6,6 @@
 //! 状態は既存の遷移だけで進める: `ready -(dispatch)-> running -(worker_done)-> reviewing -(review_pass)-> done`、
 //! 失敗は `running -(worker_error{retryable:false})-> failed`。どの段も lease・worktree・run を作らない。
 
-use std::path::PathBuf;
 use std::time::SystemTime;
 
 use task_core::model::TargetSweepMode;
@@ -15,9 +14,6 @@ use task_worker::target_sweep::SweepParams;
 
 use super::{DispatchError, Dispatcher};
 use crate::target_sweep::{SweepEnv, run_sweep_with_scratch, sweep_workspace_targets};
-
-/// `[maintenance.target_sweep]` を渡されなかったときの 2 つ目の既定 root（D1.1）。
-const DEFAULT_DEV_BUILD_CACHE: &str = "/var/tmp/agent-platform-build";
 
 /// 付記 A4: disk_watch の `critical` で止める run の genre。
 const CODING_GENRE: &str = "coding";
@@ -33,7 +29,7 @@ impl SweepEnv for DispatcherClock {
 
 impl Dispatcher {
     /// ADR 2026-10-07-build-tmp-hygiene D1.4: 掃除の roots と上限（celeris が `[maintenance.target_sweep]` から渡す）。
-    /// 渡されなければ `SweepParams::default()` と `<build_cache_dir>/cargo`・`/var/tmp/agent-platform-build`。
+    /// 渡されなければ `SweepParams::default()` と `<build_cache_dir>/cargo`・（scratch が有効なら）`<scratch>/dev-targets`。
     pub fn set_target_sweep(&mut self, params: SweepParams) {
         self.target_sweep = Some(params);
     }
@@ -108,10 +104,7 @@ impl Dispatcher {
 
     fn target_sweep_params(&self) -> SweepParams {
         self.target_sweep.clone().unwrap_or_else(|| SweepParams {
-            roots: vec![
-                self.config.build_cache_dir.join("cargo"),
-                PathBuf::from(DEFAULT_DEV_BUILD_CACHE),
-            ],
+            roots: fallback_sweep_roots(&self.config.build_cache_dir, &self.config.scratch),
             ..SweepParams::default()
         })
     }
@@ -248,5 +241,44 @@ impl Dispatcher {
             );
         }
         Ok(())
+    }
+}
+
+/// `[maintenance.target_sweep]` を渡されなかったときの roots: `<build_cache_dir>/cargo` と、scratch が有効なら
+/// `<scratch>/dev-targets`（ADR 2026-10-14-eval-trial-scratch-target D3。ルート fs の `/var/tmp` は使わない）。
+fn fallback_sweep_roots(
+    build_cache_dir: &std::path::Path,
+    scratch: &task_worker::scratch::ScratchSettings,
+) -> Vec<std::path::PathBuf> {
+    let mut roots = task_worker::target_sweep::default_roots(build_cache_dir, &scratch.dir);
+    if !scratch.enabled || scratch.dir.as_os_str().is_empty() {
+        roots.truncate(1);
+    }
+    roots
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::{Path, PathBuf};
+
+    use task_worker::scratch::ScratchSettings;
+
+    use super::fallback_sweep_roots;
+
+    #[test]
+    fn target_sweep_fallback_roots_use_scratch_dev_targets_not_var_tmp() {
+        let on = ScratchSettings::with_dir(PathBuf::from("/local/s"));
+        assert!(on.enabled);
+        assert_eq!(
+            fallback_sweep_roots(Path::new("/x/bc"), &on),
+            vec![
+                PathBuf::from("/x/bc/cargo"),
+                PathBuf::from("/local/s/dev-targets")
+            ]
+        );
+        assert_eq!(
+            fallback_sweep_roots(Path::new("/x/bc"), &ScratchSettings::disabled()),
+            vec![PathBuf::from("/x/bc/cargo")]
+        );
     }
 }

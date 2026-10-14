@@ -687,10 +687,11 @@ objective = "共有 cargo target の定期掃除（ADR 2026-10-07-build-tmp-hygi
 
 # ADR 2026-10-07-build-tmp-hygiene D1.1・D1.2: 共有 cargo target の掃除の対象と上限（cron の target-sweep と
 # daemon の保守 executor が読む）。値は既定値。`roots` を省略すると
-# `<[workspace].build_cache_dir>/cargo` と `/var/tmp/agent-platform-build` の 2 つ。scratch pool の
+# `<[workspace].build_cache_dir>/cargo` と `<[scratch] dir>/dev-targets`（scripts/dev/worktree-target-dir.sh が
+# 人の worktree の target を置く所。ADR 2026-10-14-eval-trial-scratch-target D3）の 2 つ。scratch pool の
 # task target は scratch_targets = true で自動追加（外部 lease は対象外）。
 [maintenance.target_sweep]
-# roots = ["~/.local/celeris/build-cache/cargo", "/var/tmp/agent-platform-build"]
+# roots = ["~/.local/celeris/build-cache/cargo", "/local/celeris/data/scratch/dev-targets"]
 max_age_days = 7                     # 最後に使ってからこの日数を過ぎた項目を消す
 max_bytes_per_root = 128849018880    # 120 GiB。超えたら古い順に target_ratio まで下げる
 target_ratio = 0.8

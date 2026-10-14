@@ -61,6 +61,16 @@
 
 - ふだんの task run・release・保守（例: ADR 2026-10-07-build-tmp-hygiene D1.1 の `target_sweep` の既定 roots）に
   `/var/tmp/agent-platform-build` を既定に持つ経路が残っていれば同じく撤去する（葉 var-tmp-audit）。
+- 洗った結果、残っていたのは `target_sweep` の既定 roots の 2 つ目だけだった（`[maintenance.target_sweep]` の省略時、
+  dispatcher の保守 executor の fallback、`celerisctl target sweep` の `--root` 省略時）。ふだんの task run は
+  ADR-0075 の scratch target を `CARGO_TARGET_DIR` で受け、release は `release.sh` が target を渡すので、この置き場を使わない。
+- 既定 roots の 2 つ目を D2 の置き場 `<scratch>/dev-targets` に置き換える（`task_worker::target_sweep::DEV_TARGETS_SUBDIR`）。
+  - daemon（`[maintenance.target_sweep]` の省略時）: `<[scratch] dir>/dev-targets`。dispatcher の fallback は scratch が
+    有効なときだけ足す。
+  - `celerisctl target sweep`（config を読まない）: `<CELERIS_SCRATCH_DIR（既定 /local/celeris/data/scratch）>/dev-targets`。
+    D2 の script と同じ決め方。
+- config 欄は消さない（`roots` は残る。既定値が変わるだけ）。本番 config に `roots` で `/var/tmp/agent-platform-build` を
+  明示していれば人が外す（task の進捗の「本番への移行」）。
 
 ## 3. 帰結
 

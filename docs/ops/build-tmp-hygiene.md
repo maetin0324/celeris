@@ -1,5 +1,5 @@
 ---
-tasks: [01M4B4J92KBR73EQA5S7FWB21G, 01M4HWZMWSTH3HYPCRRPE6PXB0]
+tasks: [01M4B4J92KBR73EQA5S7FWB21G, 01M4HWZMWSTH3HYPCRRPE6PXB0, 01M4WHYHVZTYNBRGM5C3PWHMZE]
 ---
 # ビルド成果物と /tmp の衛生 — 運用手順（人が実行する）
 
@@ -26,10 +26,13 @@ export CELERIS_CONFIG="$HOME/.config/celeris/config.toml"
 
 ```bash
 $CTL target sweep --json | head -c 4000                 # 既定の roots
-$CTL target sweep --root /var/tmp/agent-platform-build --root ~/.local/celeris/build-cache/cargo
+$CTL target sweep --root /local/celeris/data/scratch/dev-targets --root ~/.local/celeris/build-cache/cargo
 ```
 
-注意: `celerisctl target sweep` は config を読まず、`--root` 省略時は既定の 2 root、規則は既定値（7 日・120 GiB）で計画する。
+注意: `celerisctl target sweep` は config を読まず、`--root` 省略時は既定の 2 root（`~/.local/celeris/build-cache/cargo` と
+`<CELERIS_SCRATCH_DIR（既定 /local/celeris/data/scratch）>/dev-targets`）、規則は既定値（7 日・120 GiB）で計画する。
+ルート fs の `/var/tmp` の下の旧い置き場はもう既定の root ではない（ADR 2026-10-14-eval-trial-scratch-target D3）。
+残っていれば古い置き場の残骸なので、`du -sh` で確かめて丸ごと消す（`agent-docs/ops/dev-builds-local-target-dir.md`）。
 config で値や roots を変えた場合、dry-run は同じ root を `--root` で渡して近似する（cron の executor は daemon が読んだ config を使う）。
 
 見るところ（JSON）: root ごとの `before_bytes` / `after_bytes` / `deleted_bytes` / `by_reason`（`age`・`cap`・`stale_target`）、
@@ -43,12 +46,12 @@ config で値や roots を変えた場合、dry-run は同じ root を `--root` 
 
 ```toml
 [maintenance.target_sweep]
-# roots を省略すると <[workspace].build_cache_dir>/cargo と /var/tmp/agent-platform-build の 2 つ。
+# roots を省略すると <[workspace].build_cache_dir>/cargo と <[scratch] dir>/dev-targets の 2 つ。
 # scratch pool の lease（release-build）の target は入れない。release.sh が前回 build の marker
 # (.celeris-release-build-start) より古い test binary を刈り、共有を数えない大きさ（btrfs du の
 # Exclusive + Set shared、非 btrfs は inode ごと st_blocks）が SD_RELEASE_TARGET_MAX_BYTES
 # （既定 64 GiB）を越えたら target を作り直す。詳細は [local-disk-growth.md](local-disk-growth.md#3-release-build-target-の初回刈り込み)。
-# roots = ["/home/<user>/.local/celeris/build-cache/cargo", "/var/tmp/agent-platform-build"]
+# roots = ["/home/<user>/.local/celeris/build-cache/cargo", "/local/celeris/data/scratch/dev-targets"]
 max_age_days = 7                     # 最後に使ってからこの日数を過ぎた項目を消す
 max_bytes_per_root = 128849018880    # 120 GiB。超えたら古い順に target_ratio まで下げる
 target_ratio = 0.8
@@ -104,7 +107,7 @@ $CTL cron --config "$CELERIS_CONFIG" resume target-sweep
 $CTL cron --config "$CELERIS_CONFIG" list                    # target-sweep が enabled、next_run が翌 04:15
 $CTL cron --config "$CELERIS_CONFIG" history target-sweep    # 発火ごとの task id・結果
 $CTL show <history の task id>                               # event を見る
-du -sh /var/tmp/agent-platform-build ~/.local/celeris/build-cache/cargo   # 実測
+du -sh /local/celeris/data/scratch/dev-targets ~/.local/celeris/build-cache/cargo   # 実測
 ```
 
 - 記録は task の event **`target_sweep_ran`**: `mode`、root ごとの `before_bytes` / `after_bytes` / `deleted_bytes` /

@@ -2013,7 +2013,7 @@ mod tests {
         let ev = Event::TargetSweepRan {
             mode: TargetSweepMode::DryRun,
             roots: vec![TargetSweepRootReport {
-                root: "/var/tmp/agent-platform-build".into(),
+                root: "/local/celeris/data/scratch/dev-targets".into(),
                 before_bytes: 200,
                 after_bytes: 80,
                 deleted_bytes: 120,

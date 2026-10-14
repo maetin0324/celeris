@@ -65,12 +65,19 @@ fn target_sweep_cli_apply_with_root() {
 
 #[test]
 fn target_sweep_cli_default_roots() {
-    let roots = default_roots(Path::new("/x/build-cache"));
+    // 既定は build cache と /local の scratch の dev-targets。ルート fs の /var/tmp は含まない。
+    let roots = target_sweep_roots(Some(Path::new("/home/u")), None);
     assert_eq!(
         roots,
         vec![
-            PathBuf::from("/x/build-cache/cargo"),
-            PathBuf::from("/var/tmp/agent-platform-build")
+            PathBuf::from("/home/u/.local/celeris/build-cache/cargo"),
+            PathBuf::from("/local/celeris/data/scratch/dev-targets")
         ]
+    );
+    assert!(roots.iter().all(|r| !r.starts_with("/var/tmp")));
+    // CELERIS_SCRATCH_DIR を渡せばその下。HOME が無ければ build cache の root は足さない。
+    assert_eq!(
+        target_sweep_roots(None, Some(Path::new("/local/s"))),
+        vec![PathBuf::from("/local/s/dev-targets")]
     );
 }

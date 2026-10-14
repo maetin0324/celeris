@@ -3,7 +3,7 @@
 //!
 //! cron の決定的な保守 executor（雛形の `extra.action = "target_sweep"`）と `celerisctl target sweep` の
 //! `--root` 省略時が読む。欄を省略したら `SweepParams::default()` と既定の roots
-//! （`<[workspace].build_cache_dir>/cargo` と `/var/tmp/agent-platform-build`）。
+//! （`<[workspace].build_cache_dir>/cargo` と `<[scratch] dir>/dev-targets`。ADR 2026-10-14-eval-trial-scratch-target D3）。
 
 use std::path::{Path, PathBuf};
 
@@ -11,9 +11,6 @@ use serde::Deserialize;
 use task_worker::target_sweep::SweepParams;
 
 use super::ConfigError;
-
-/// `worktree-target-dir.sh` の `CELERIS_BUILD_CACHE` の既定（D1.1 の既定 root の 2 つ目）。
-pub const DEFAULT_DEV_BUILD_CACHE: &str = "/var/tmp/agent-platform-build";
 
 /// `[maintenance]`。
 #[derive(Debug, Clone, Deserialize)]
@@ -162,21 +159,19 @@ fn default_stale_target_days() -> u64 {
 }
 
 impl TargetSweepConfig {
-    /// 実際に掃除する roots。書いていなければ `<build_cache_dir>/cargo` と [`DEFAULT_DEV_BUILD_CACHE`]。
-    pub fn resolved_roots(&self, build_cache_dir: &Path) -> Vec<PathBuf> {
+    /// 実際に掃除する roots。書いていなければ [`task_worker::target_sweep::default_roots`]
+    /// （`<build_cache_dir>/cargo` と `<scratch_dir>/dev-targets`）。
+    pub fn resolved_roots(&self, build_cache_dir: &Path, scratch_dir: &Path) -> Vec<PathBuf> {
         match &self.roots {
             Some(roots) => roots.clone(),
-            None => vec![
-                build_cache_dir.join("cargo"),
-                PathBuf::from(DEFAULT_DEV_BUILD_CACHE),
-            ],
+            None => task_worker::target_sweep::default_roots(build_cache_dir, scratch_dir),
         }
     }
 
     /// 計画関数・I/O 層に渡す値（roots は [`Self::resolved_roots`]）。
-    pub fn params(&self, build_cache_dir: &Path) -> SweepParams {
+    pub fn params(&self, build_cache_dir: &Path, scratch_dir: &Path) -> SweepParams {
         SweepParams {
-            roots: self.resolved_roots(build_cache_dir),
+            roots: self.resolved_roots(build_cache_dir, scratch_dir),
             max_age_days: self.max_age_days,
             max_bytes_per_root: self.max_bytes_per_root,
             target_ratio: self.target_ratio,
@@ -248,7 +243,7 @@ impl super::Config {
     pub fn target_sweep_params(&self) -> SweepParams {
         self.maintenance
             .target_sweep
-            .params(&self.workspace.build_cache_dir)
+            .params(&self.workspace.build_cache_dir, &self.scratch_dir())
     }
 }
 

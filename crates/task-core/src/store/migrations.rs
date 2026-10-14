@@ -134,6 +134,8 @@ pub(crate) const MIGRATION_0077: &str =
     include_str!("../../migrations/0077_routing_evidence_eval_columns.sql");
 pub(crate) const MIGRATION_0078: &str =
     include_str!("../../migrations/0078_eval_trials_instance_id.sql");
+/// ADR 2026-10-14-local-machine-settings D2: `local_settings`・`task_workspace_roots`・`local_settings_events`。
+pub(crate) const MIGRATION_0079: &str = include_str!("../../migrations/0079_local_settings.sql");
 
 /// 他の celeris/* ブランチが使っていて、このブランチにはまだ無い版数（0038 work_unit_sessions、
 /// 0039 write_sets、0040 behind_targets、0067/0068 の並行 migration）。`migrate` は飛ばし、
@@ -143,7 +145,7 @@ pub(crate) const RESERVED_VERSIONS: &[u32] = &[38, 39, 40, 68, 69];
 
 /// このバイナリが知っている最新のスキーマ版数（ADR-0013 D5）。DB の版数がこれより大きければ
 /// `SqliteStore::open`/`open_with` は `StoreError::SchemaTooNew` で失敗する。
-pub const SCHEMA_VERSION: u32 = 78;
+pub const SCHEMA_VERSION: u32 = 79;
 
 impl SqliteStore {
     fn migration_sql(version: u32) -> Result<&'static str, StoreError> {
@@ -254,6 +256,8 @@ impl SqliteStore {
             77 => Ok(MIGRATION_0077),
             // ADR 2026-10-14-eval-verify-isolation D3.1: 評価試行の持ち主の instance。
             78 => Ok(MIGRATION_0078),
+            // ADR 2026-10-14-local-machine-settings D2: ローカルマシン設定と task ごとの root 固定。
+            79 => Ok(MIGRATION_0079),
             other => Err(StoreError::Invalid(format!(
                 "unknown migration version: {other}"
             ))),

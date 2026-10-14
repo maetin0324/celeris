@@ -105,6 +105,7 @@ mod execution;
 mod instances;
 mod integrations;
 mod legacy;
+mod local_machine;
 mod task_integration_state;
 pub use legacy::chat_legacy_new_conversation_tx;
 mod messages;
@@ -365,6 +366,43 @@ pub struct ClusterSettings {
     #[serde(with = "time::serde::rfc3339")]
     #[schemars(with = "String")]
     pub updated_at: OffsetDateTime,
+}
+
+/// ADR 2026-10-14-local-machine-settings D2: `local_settings` の上書き（1 行だけ）。`None` の欄は
+/// 設定ファイルの値を使う（解決は `crate::local_machine`）。全欄 `None` の行は持たない（行ごと消す）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct LocalSettings {
+    pub workspace_root: Option<String>,
+    pub max_concurrency: Option<u32>,
+    #[serde(with = "time::serde::rfc3339")]
+    #[schemars(with = "String")]
+    pub updated_at: OffsetDateTime,
+}
+
+/// `local_settings` への書き込み（PUT の全置換）。`None` の欄は上書きを消す。
+/// 監査の `before_json` / `after_json` もこの形で書く。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct LocalSettingsOverrides {
+    pub workspace_root: Option<String>,
+    pub max_concurrency: Option<u32>,
+}
+
+impl LocalSettingsOverrides {
+    pub fn is_empty(&self) -> bool {
+        self.workspace_root.is_none() && self.max_concurrency.is_none()
+    }
+}
+
+/// `local_settings_events` の 1 行（追記専用の監査）。`actor` は `"admin"` か `"cos:<operation id>"`。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct LocalSettingsEvent {
+    pub id: i64,
+    #[serde(with = "time::serde::rfc3339")]
+    #[schemars(with = "String")]
+    pub ts: OffsetDateTime,
+    pub actor: String,
+    pub before: LocalSettingsOverrides,
+    pub after: LocalSettingsOverrides,
 }
 
 /// ADR-0078 D5: `cluster_connection_log` の 1 行。`kind` / `method` / `cause` の値は

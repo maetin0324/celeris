@@ -20,8 +20,9 @@ use crate::write_set::WriteSetRecord;
 
 use super::query::{ListFilter, ListOrder, Page};
 use super::{
-    ClusterConnectionRecord, ClusterSettings, EventRow, ExecutionMetricsTaskRow, ProjectPlanApply,
-    StoreError, TaskWithEvents, TreeAdoption,
+    ClusterConnectionRecord, ClusterSettings, EventRow, ExecutionMetricsTaskRow, LocalSettings,
+    LocalSettingsEvent, LocalSettingsOverrides, ProjectPlanApply, StoreError, TaskWithEvents,
+    TreeAdoption,
 };
 
 /// ADR-0033 D3: 報告（`reports`）の読み書きは `crate::report::ReportStore` にあり、`TaskStore` はそれを
@@ -629,6 +630,30 @@ pub trait TaskStore:
         work_dir: Option<&str>,
         now: OffsetDateTime,
     ) -> Result<(), StoreError>;
+    // ---- ADR 2026-10-14-local-machine-settings D2/D5: ローカル設定の上書きと task ごとの root の固定 ----
+
+    /// ローカルマシンの上書き。行が無ければ `Ok(None)`（全欄を設定ファイルの値で解決する）。
+    fn local_settings_get(&self) -> Result<Option<LocalSettings>, StoreError>;
+    /// 上書きを全置換する（PUT）。全欄 `None` なら行を消す。同じ transaction で
+    /// `local_settings_events` に before/after を 1 行追記する。変更後の上書きを返す。
+    fn local_settings_set(
+        &self,
+        overrides: &LocalSettingsOverrides,
+        actor: &str,
+        now: OffsetDateTime,
+    ) -> Result<Option<LocalSettings>, StoreError>;
+    /// 監査の流れ（古い順）。
+    fn local_settings_events(&self) -> Result<Vec<LocalSettingsEvent>, StoreError>;
+    /// task の足回りの root を固定する（`INSERT OR IGNORE`、1 回だけ）。既に固定があれば
+    /// それを変えない。固定された root（既存なら既存の値）を返す。
+    fn task_workspace_root_pin(
+        &self,
+        task_id: &TaskId,
+        root: &str,
+        now: OffsetDateTime,
+    ) -> Result<String, StoreError>;
+    /// task の固定された root。無ければ `Ok(None)`（この ADR 以前の task、またはまだ足回りが無い）。
+    fn task_workspace_root_get(&self, task_id: &TaskId) -> Result<Option<String>, StoreError>;
     /// ADR-0078 D5: クラスタの接続・切断・鍵認証の試みを 1 行追記する。
     fn cluster_connection_record(&self, record: &ClusterConnectionRecord)
     -> Result<(), StoreError>;

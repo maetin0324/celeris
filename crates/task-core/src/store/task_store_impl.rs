@@ -21,8 +21,8 @@ use crate::write_set::WriteSetRecord;
 
 use super::{
     ClusterConnectionRecord, ClusterSettings, EventRow, ExecutionMetricsTaskRow, ListFilter,
-    ListOrder, Page, ProjectPlanApply, SqliteStore, StoreError, TaskStore, TaskWithEvents,
-    TreeAdoption,
+    ListOrder, LocalSettings, LocalSettingsEvent, LocalSettingsOverrides, Page, ProjectPlanApply,
+    SqliteStore, StoreError, TaskStore, TaskWithEvents, TreeAdoption,
 };
 
 impl TaskStore for SqliteStore {
@@ -691,6 +691,36 @@ impl TaskStore for SqliteStore {
         cluster_id: &str,
     ) -> Result<Option<ClusterSettings>, StoreError> {
         self.cluster_settings_get_impl(cluster_id)
+    }
+
+    fn local_settings_get(&self) -> Result<Option<LocalSettings>, StoreError> {
+        self.local_settings_get_impl()
+    }
+
+    fn local_settings_set(
+        &self,
+        overrides: &LocalSettingsOverrides,
+        actor: &str,
+        now: OffsetDateTime,
+    ) -> Result<Option<LocalSettings>, StoreError> {
+        self.local_settings_set_impl(overrides, actor, now)
+    }
+
+    fn local_settings_events(&self) -> Result<Vec<LocalSettingsEvent>, StoreError> {
+        self.local_settings_events_impl()
+    }
+
+    fn task_workspace_root_pin(
+        &self,
+        task_id: &TaskId,
+        root: &str,
+        now: OffsetDateTime,
+    ) -> Result<String, StoreError> {
+        self.task_workspace_root_pin_impl(task_id, root, now)
+    }
+
+    fn task_workspace_root_get(&self, task_id: &TaskId) -> Result<Option<String>, StoreError> {
+        self.task_workspace_root_get_impl(task_id)
     }
 
     fn cluster_settings_list(&self) -> Result<Vec<ClusterSettings>, StoreError> {

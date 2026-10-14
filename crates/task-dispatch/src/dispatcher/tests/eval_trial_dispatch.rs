@@ -61,6 +61,17 @@ impl WorkerAdapter for EvalStubAdapter {
     }
 }
 
+/// The dispatcher holds its own instance id (`daemon_instances` row), as an active daemon does:
+/// only then does it start, recover and clean up evaluation trials
+/// (ADR 2026-10-14-eval-verify-isolation D1).
+fn own_instance(d: &mut Dispatcher, instance_id: &str) {
+    d.set_orphan_takeover(crate::orphan::OrphanTakeover {
+        instance_id: instance_id.into(),
+        freshness: Duration::from_secs(60),
+        pid_alive: Arc::new(crate::orphan::proc_pid_alive),
+    });
+}
+
 fn git(repo: &std::path::Path, args: &[&str]) -> String {
     let output = Command::new("git")
         .args(args)
@@ -126,6 +137,7 @@ async fn eval_trial_reserved_slot_hides_checks_and_records_selected_version() {
         hang: false,
     });
     let mut dispatcher = dispatcher(store.clone(), adapter, 2);
+    own_instance(&mut dispatcher, "01EVALDAEMON00000000000000");
     dispatcher.config.workspace_root = temp.path().join("data");
     scratch_on(&mut dispatcher, &temp.path().join("scratch"));
     dispatcher.config.eval.reserved_runs = 1;
@@ -320,6 +332,7 @@ fn eval_dispatcher(
     root: &std::path::Path,
 ) -> Dispatcher {
     let mut dispatcher = dispatcher(store.clone(), Arc::new(worker), 2);
+    own_instance(&mut dispatcher, "01EVALDAEMON00000000000000");
     dispatcher.config.workspace_root = root.join("data");
     scratch_on(&mut dispatcher, &root.join("scratch"));
     dispatcher.config.eval.reserved_runs = 1;
@@ -486,6 +499,7 @@ async fn eval_run_request_sets_per_trial_cargo_target_dir() {
         hang: true,
     });
     let mut d = dispatcher(store.clone(), adapter, 2);
+    own_instance(&mut d, "01EVALDAEMON00000000000000");
     d.config.workspace_root = temp.path().join("data");
     let scratch = scratch_on(&mut d, &temp.path().join("scratch"));
     d.config.eval.reserved_runs = 2;
@@ -618,6 +632,7 @@ async fn eval_trial_target_removed_on_recovery() {
         hang: true,
     });
     let mut dead = dispatcher(store.clone(), hung.clone(), 2);
+    own_instance(&mut dead, "01DEADDAEMON00000000000000");
     dead.config.workspace_root = temp.path().join("data");
     scratch_on(&mut dead, &temp.path().join("scratch"));
     dead.config.eval.reserved_runs = 1;
@@ -632,6 +647,7 @@ async fn eval_trial_target_removed_on_recovery() {
     }
 
     let mut next = dispatcher(store.clone(), hung, 2);
+    own_instance(&mut next, "01NEXTDAEMON00000000000000");
     next.config.workspace_root = temp.path().join("data");
     scratch_on(&mut next, &temp.path().join("scratch"));
     next.config.eval.reserved_runs = 0;
@@ -754,6 +770,7 @@ fn two_source_eval_dispatcher(
         hang: true,
     });
     let mut d = dispatcher(store.clone(), Arc::clone(&adapter), 1);
+    own_instance(&mut d, "01EVALDAEMON00000000000000");
     install_test_routes(&mut d, adapter, &[("p1", "test"), ("p2", "test")], 1);
     d.config.workspace_root = root.join("data");
     scratch_on(&mut d, &root.join("scratch"));
@@ -849,4 +866,222 @@ async fn eval_trial_tick_claims_each_trial_at_most_once() {
         costs[0], costs[1],
         "the tick's store work must not grow with the number of queued trials"
     );
+}
+
+/// ADR 2026-10-14-eval-verify-isolation D2: a normal-mode dispatcher that ends `running` trials
+/// as `error` removes only the work trees under `<workspace_root>/eval/<trial_id>/` (real paths) and
+/// only the targets under its scratch pool. A work tree in another temp dir, one reached through a
+/// symlink out of the root, or one under another trial's dir is left alone with its files; the
+/// trial still ends as `error` with the recovery reason.
+#[tokio::test]
+async fn eval_cleanup_refuses_paths_outside_roots() {
+    let (temp, store, _sqlite, batch_id) =
+        eval_queue(&[("p1", 0), ("p1", 1), ("p1", 2), ("p1", 3)]);
+    let outside = tempfile::tempdir().unwrap();
+    let data = temp.path().join("data");
+    let mut ids = Vec::new();
+    while let Some(trial) = store.eval_trial_claim_next(&[]).unwrap() {
+        ids.push(trial.trial_id);
+    }
+    assert_eq!(ids.len(), 4);
+    let seed = |dir: &std::path::Path| {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(dir.join("keep.txt"), "x").unwrap();
+    };
+    // 0: inside its own trial dir (removed). 1: an absolute path in another temp dir (kept).
+    // 2: its own trial dir, but `repo` is a symlink out of the root (kept). 3: another trial's dir (kept).
+    let inside = data.join("eval").join(&ids[0]).join("repo");
+    seed(&inside);
+    let foreign = outside.path().join("prod-worktree");
+    seed(&foreign);
+    let linked_to = outside.path().join("linked-worktree");
+    seed(&linked_to);
+    let linked = data.join("eval").join(&ids[2]).join("repo");
+    std::fs::create_dir_all(linked.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(&linked_to, &linked).unwrap();
+    let other_trial = data.join("eval").join("not-this-trial").join("repo");
+    seed(&other_trial);
+    for (id, path) in ids.iter().zip([&inside, &foreign, &linked, &other_trial]) {
+        store
+            .eval_trial_mark_started(id, &format!("run-{id}"), "d", "v", &path.to_string_lossy())
+            .unwrap();
+    }
+    // Targets: the pool's own (removed), a look-alike outside the pool (kept), and trial 2's owner
+    // dir in the pool being a symlink out of the pool (kept).
+    let (pool_target, _) = trial_target(temp.path(), &ids[0]);
+    seed(&pool_target);
+    let lookalike = outside
+        .path()
+        .join("targets")
+        .join(format!("agent-eval-{}", ids[0]))
+        .join("target");
+    seed(&lookalike);
+    let (linked_target, _) = trial_target(temp.path(), &ids[2]);
+    let linked_owner_to = outside.path().join("linked-owner");
+    seed(&linked_owner_to.join("target"));
+    std::fs::create_dir_all(linked_target.parent().unwrap().parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(&linked_owner_to, linked_target.parent().unwrap()).unwrap();
+
+    let mut d = eval_dispatcher(
+        &store,
+        ScriptedEvalWorker {
+            fail_with: None,
+            seen: Arc::new(StdMutex::new(Vec::new())),
+            env: Vec::new(),
+        },
+        temp.path(),
+    );
+    d.config.eval.reserved_runs = 0;
+    d.tick_eval_trials();
+
+    for trial in store.eval_trials_list(Some(&batch_id), None).unwrap() {
+        assert_eq!(
+            trial.status,
+            task_core::routing_eval_trial::EvalTrialStatus::Error
+        );
+        assert_eq!(
+            trial.error.as_deref(),
+            Some("daemon recovery: run disappeared while trial was running")
+        );
+    }
+    assert!(!inside.exists(), "{}", inside.display());
+    assert!(foreign.join("keep.txt").is_file());
+    assert!(linked_to.join("keep.txt").is_file());
+    assert!(other_trial.join("keep.txt").is_file());
+    assert!(!pool_target.exists(), "{}", pool_target.display());
+    assert!(lookalike.join("keep.txt").is_file());
+    assert!(linked_owner_to.join("target/keep.txt").is_file());
+}
+
+/// ADR 2026-10-14-eval-verify-isolation D1: a dispatcher without its own instance id (the
+/// `--mode verify` daemon on the copy of the production DB, with the production config) does not
+/// touch evaluation trials. Production-like `running` / `scoring` / `queued` trials whose work
+/// trees and scratch target sit at absolute paths outside the verify workspace root stay exactly as
+/// they were after full ticks: files, trial rows, `runs` rows (role `eval`) and the scratch lease.
+#[tokio::test]
+async fn verify_daemon_leaves_foreign_eval_trial_files() {
+    use task_core::routing_eval_trial::EvalTrialStatus as S;
+    let (temp, store, _sqlite, batch_id) = eval_queue(&[("p1", 0), ("p1", 1), ("p1", 2)]);
+    // The production side: its work trees and its scratch pool, outside the verify root.
+    let prod = tempfile::tempdir().unwrap();
+    let prod_scratch = prod.path().join("scratch");
+    let mut ids = Vec::new();
+    for _ in 0..2 {
+        ids.push(store.eval_trial_claim_next(&[]).unwrap().unwrap().trial_id);
+    }
+    let pool = task_worker::scratch::Pool::new(&prod_scratch);
+    let mut files = Vec::new();
+    let mut leases = Vec::new();
+    for id in &ids {
+        let worktree = prod.path().join("workspaces/eval").join(id).join("repo");
+        std::fs::create_dir_all(&worktree).unwrap();
+        std::fs::write(worktree.join("keep.txt"), "x").unwrap();
+        let run_id = format!("run-{id}");
+        store
+            .eval_trial_mark_started(id, &run_id, "d", "v", &worktree.to_string_lossy())
+            .unwrap();
+        store
+            .run_index_start(task_core::RunRow {
+                run_id: run_id.clone(),
+                task_id: batch_id.clone(),
+                work_unit_id: None,
+                role: task_core::RunIndexRole::Eval,
+                seq: 1,
+                status: task_core::RunIndexStatus::Running,
+                adapter: Some("test".into()),
+                model: Some("m".into()),
+                account: Some("default".into()),
+                session_id: Some(format!("session-{id}")),
+                checkpoint: None,
+                usage: None,
+                metrics: None,
+                started_at: rfc3339(OffsetDateTime::now_utc()),
+                finished_at: None,
+            })
+            .unwrap();
+        let owner = task_worker::scratch::Owner::parse(&format!("agent-eval-{id}")).expect("owner");
+        let no_distance = |_: &task_worker::scratch::AdoptCandidate| None;
+        let repo = temp.path().join("repo");
+        let allocation = task_worker::scratch::allocate(
+            &pool,
+            &task_worker::scratch::AllocateRequest {
+                owner: &owner,
+                repo_path: &repo,
+                base_commit: None,
+                work_unit_key: None,
+                checkout: None,
+                candidates: &[],
+                distance: &no_distance,
+                adopt: false,
+                max_distance: 0,
+            },
+        )
+        .unwrap();
+        std::fs::write(allocation.target_dir.join("keep.txt"), "x").unwrap();
+        files.push(worktree.join("keep.txt"));
+        files.push(allocation.target_dir.join("keep.txt"));
+        leases.push(pool.lease_path(&owner));
+    }
+    // One `running` (its run is not held by anyone here), one `scoring`, one still `queued`.
+    store.eval_trial_mark_scoring(&ids[1]).unwrap();
+
+    let snapshot = |store: &Arc<dyn TaskStore>| {
+        let trials = store.eval_trials_list(Some(&batch_id), None).unwrap();
+        let runs = ids
+            .iter()
+            .map(|id| store.run_index_get(&format!("run-{id}")).unwrap())
+            .collect::<Vec<_>>();
+        // The size measurement is `scratch_gc`'s (path #6 of the risk table, a later task), not
+        // an eval write; everything else of the lease (release included) must stay as it was.
+        let leases = leases
+            .iter()
+            .map(|l| {
+                task_worker::scratch::read_lease(l)
+                    .unwrap()
+                    .map(|mut lease| {
+                        lease.size_bytes = None;
+                        lease.measured_at = None;
+                        lease
+                    })
+            })
+            .collect::<Vec<_>>();
+        (trials, runs, leases)
+    };
+    let before = snapshot(&store);
+    assert_eq!(
+        before.0.iter().map(|t| t.status).collect::<Vec<_>>(),
+        vec![S::Running, S::Scoring, S::Queued]
+    );
+    assert!(before.1.iter().all(|r| r.is_some()));
+    assert!(before.2.iter().all(|l| l.is_some()));
+
+    // verify: the production config (scratch pool, reserved runs), a staging workspace root, and
+    // no `set_orphan_takeover`. It accepts new work, so the full tick reaches the eval step.
+    let seen = Arc::new(StdMutex::new(Vec::new()));
+    let adapter: Arc<dyn WorkerAdapter> = Arc::new(EvalStubAdapter {
+        seen: seen.clone(),
+        started: Arc::new(tokio::sync::Notify::new()),
+        env: Vec::new(),
+        hang: true,
+    });
+    let mut d = dispatcher(store.clone(), adapter, 2);
+    d.config.workspace_root = temp.path().join("staging");
+    scratch_on(&mut d, &prod_scratch);
+    d.config.eval.reserved_runs = 2;
+    d.set_eval_version_probe(|_| Some("eval-stub 1.0.0".into()));
+    d.set_accepting_new_work(true);
+    for _ in 0..2 {
+        d.tick().unwrap();
+    }
+    assert_eq!(d.tick_eval_trials(), 0);
+    d.abort_eval_runs();
+    d.interrupt_runs_on_shutdown();
+
+    assert!(d.eval_runs.is_empty());
+    assert!(seen.lock().unwrap().is_empty(), "no eval run started");
+    assert_eq!(snapshot(&store), before);
+    for file in &files {
+        assert!(file.is_file(), "{}", file.display());
+    }
+    assert!(!temp.path().join("staging/eval").exists());
 }

@@ -43,22 +43,6 @@ pub(super) fn followups_env(
     env
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn inherited_run_db_is_cleared_when_db_guard_is_unavailable() {
-        let env = followups_env(TaskId::new(), "run", Path::new("artifacts"), None);
-        assert_eq!(
-            env.iter()
-                .find(|(key, _)| key == ENV_RUN_DB)
-                .map(|(_, value)| value.as_str()),
-            Some("")
-        );
-    }
-}
-
 /// ADR-0098 D1: 前の run（lease を失った・daemon ごと落ちた）が残した宣言を今回のものと誤読しない。
 pub(super) async fn clear_stale_followups(artifacts_dir: &Path) {
     let _ = tokio::fs::remove_file(artifacts_dir.join(FOLLOWUPS_FILE_NAME)).await;
@@ -138,5 +122,21 @@ pub(super) fn absorb_run_followups(
             tracing::warn!(%task_id, %run_id, error = %e, "follow-ups: failed to absorb (ADR-0098)");
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inherited_run_db_is_cleared_when_db_guard_is_unavailable() {
+        let env = followups_env(TaskId::new(), "run", Path::new("artifacts"), None);
+        assert_eq!(
+            env.iter()
+                .find(|(key, _)| key == ENV_RUN_DB)
+                .map(|(_, value)| value.as_str()),
+            Some("")
+        );
     }
 }

@@ -260,7 +260,11 @@ fn remote_task_artifacts_resolve_under_the_local_mirror() {
             },
         },
     }];
-    let views = artifact_views(&task, root.path(), &rows);
+    let store = task_core::SqliteStore::open_in_memory().unwrap();
+    let roots = task_core::local_machine::WorkspaceRoots::new(root.path().to_path_buf(), None);
+    let dir = task_local_dir(&store, &roots, &task).unwrap();
+    assert_eq!(dir, mirror);
+    let views = artifact_views(&dir, &rows);
     assert_eq!(views.len(), 1);
     assert!(views[0].exists, "{:?}", views[0]);
     assert_eq!(views[0].sha256_matches, Some(true));

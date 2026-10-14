@@ -519,12 +519,9 @@ async fn get_task_execution(
             )
             .map_err(|e| ops_problem(store, e, Some("task_execution_get")))?;
             let task = detail.task.clone();
+            let dir = crate::files::task_local_dir(store, &ctx.workspace_roots, &task)?;
             for run in &mut detail.runs {
-                run.files = Some(crate::files::run_files(
-                    &task,
-                    &ctx.workspace_root,
-                    &run.run_id,
-                ));
+                run.files = Some(crate::files::run_files(&dir, &run.run_id));
             }
             let plan = match task_ops::execution::active_plan(store, task_id)
                 .map_err(|e| ops_problem(store, e, Some("task_execution_get")))?

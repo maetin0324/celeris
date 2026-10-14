@@ -69,13 +69,17 @@ pub(crate) async fn human_feed(state: &ApiState) -> Result<HumanInbox, ApiProble
     // 人の決定 2026-10-08: KB の取り込み待ちは受信箱に出さない（知識画面の候補で扱う）。
     state
         .blocking(move |store| {
-            let root = ctx.workspace_root.clone();
+            let evidence = |task: &task_core::Task, run: &str| {
+                crate::files::task_local_dir(store, &ctx.workspace_roots, task)
+                    .map(|dir| crate::files::read_evidence(&dir, run))
+                    .unwrap_or_default()
+            };
             task_ops::human_inbox::human_inbox(
                 store,
                 snapshot.as_ref(),
                 &ctx,
                 OffsetDateTime::now_utc(),
-                &|task, run| crate::files::read_evidence(task, &root, run),
+                &evidence,
             )
             .map_err(|e| ops_problem(store, e, None))
         })

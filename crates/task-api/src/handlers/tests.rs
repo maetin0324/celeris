@@ -29,7 +29,7 @@ fn state_rx(
         busy_timeout: Duration::from_millis(5000),
         background_checkpoint: false,
         view: ViewContext {
-            workspace_root: dir.join("ws"),
+            workspace_roots: task_core::local_machine::WorkspaceRoots::new(dir.join("ws"), None),
             retry_backoff_base: Duration::from_secs(0),
             retry_backoff_max: Duration::from_secs(0),
             max_requeues: 5,

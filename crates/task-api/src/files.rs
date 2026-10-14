@@ -13,13 +13,14 @@ use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header};
 use axum::response::Response;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
-use task_core::{ArtifactRef, Event, EventRow, Task};
+use task_core::local_machine::WorkspaceRoots;
+use task_core::{ArtifactRef, Event, EventRow, Task, TaskStore};
 use task_ops::inbox::EvidenceView;
 use task_ops::view::RunFiles;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
 use crate::SHA256_MAX_BYTES;
-use crate::problem::{ApiProblem, X_CELERIS_SIZE};
+use crate::problem::{ApiProblem, X_CELERIS_SIZE, store_problem};
 use crate::query::QueryParams;
 use crate::types::ArtifactView;
 
@@ -60,11 +61,20 @@ pub(crate) fn is_ulid_text(value: &str) -> bool {
             .all(|b| matches!(b, b'0'..=b'9' | b'A'..=b'H' | b'J' | b'K' | b'M' | b'N' | b'P'..=b'T' | b'V'..=b'Z'))
 }
 
+/// task の足回り（`task_ops::workspace::local_dir`。root は `WorkspaceRoots` が task ごとに解く。
+/// ADR 2026-10-14-local-machine-settings D5）。
+pub(crate) fn task_local_dir(
+    store: &dyn TaskStore,
+    roots: &WorkspaceRoots,
+    task: &Task,
+) -> Result<PathBuf, ApiProblem> {
+    task_ops::workspace::local_dir(store, roots, task).map_err(store_problem)
+}
+
 /// ワークスペースの canonical パス。存在しなければ 404 `file_not_found`。
-/// `Remote` は手元の写し `root/<task_id>`（run のログと成果物はそこにある。ADR-0018 D1）。
-/// ADR-0041 D1: worktree を切った `Local` も `root/<task_id>`（作業ツリーの外に `runs/` と `artifacts/` がある）。
-pub(crate) fn canonical_workspace(task: &Task, root: &Path) -> Result<PathBuf, ApiProblem> {
-    let dir = task_ops::workspace::local_dir(task, root);
+/// `dir` は `task_local_dir` で解いた足回り（`Remote` は手元の写し `<root>/<task_id>`。ADR-0018 D1。
+/// ADR-0041 D1: worktree を切った `Local` も `<root>/<task_id>`。作業ツリーの外に `runs/` と `artifacts/` がある）。
+pub(crate) fn canonical_workspace(dir: &Path) -> Result<PathBuf, ApiProblem> {
     dir.canonicalize()
         .map_err(|_| ApiProblem::file_not_found("workspace directory does not exist"))
 }
@@ -91,15 +101,14 @@ fn contained_file(
 
 /// `<ws>/runs/<run_id>/<file>`。`run_id` が ULID でなければ（ファイルシステムに触る前に）403。
 pub(crate) fn resolve_run_file(
-    task: &Task,
-    root: &Path,
+    dir: &Path,
     run_id: &str,
     file: RunFile,
 ) -> Result<PathBuf, ApiProblem> {
     if !is_ulid_text(run_id) {
         return Err(ApiProblem::path_forbidden("run_id must be a ULID"));
     }
-    let ws = canonical_workspace(task, root)?;
+    let ws = canonical_workspace(dir)?;
     let run_dir = ws
         .join("runs")
         .join(run_id)
@@ -146,8 +155,8 @@ pub(crate) fn file_size(path: &Path) -> Result<u64, ApiProblem> {
 }
 
 /// `GET /tasks/{id}/runs` の `files`: ファイル系エンドポイントで取得できるものを `true` にする。
-pub(crate) fn run_files(task: &Task, root: &Path, run_id: &str) -> RunFiles {
-    let has = |file| resolve_run_file(task, root, run_id, file).is_ok();
+pub(crate) fn run_files(dir: &Path, run_id: &str) -> RunFiles {
+    let has = |file| resolve_run_file(dir, run_id, file).is_ok();
     RunFiles {
         stdout: has(RunFile::Stdout),
         stderr: has(RunFile::Stderr),
@@ -170,8 +179,8 @@ struct EvidenceLine {
 
 /// 受信箱の `evidence`: `<ws>/runs/<run_id>/result.json` が `done` なら `evidence[]`（読めなければ空）。
 /// 形の合わない要素は読み飛ばす。
-pub(crate) fn read_evidence(task: &Task, root: &Path, run_id: &str) -> Vec<EvidenceView> {
-    let Ok(path) = resolve_run_file(task, root, run_id, RunFile::Result) else {
+pub(crate) fn read_evidence(dir: &Path, run_id: &str) -> Vec<EvidenceView> {
+    let Ok(path) = resolve_run_file(dir, run_id, RunFile::Result) else {
         return Vec::new();
     };
     if file_size(&path).map_or(true, |size| size > RESULT_JSON_MAX_BYTES) {
@@ -243,8 +252,8 @@ pub(crate) fn nth_artifact(rows: &[EventRow], idx: usize) -> Option<&ArtifactRef
 }
 
 /// `GET /tasks/{id}/artifacts`（api.md §3.9）。
-pub(crate) fn artifact_views(task: &Task, root: &Path, rows: &[EventRow]) -> Vec<ArtifactView> {
-    let ws = canonical_workspace(task, root);
+pub(crate) fn artifact_views(dir: &Path, rows: &[EventRow]) -> Vec<ArtifactView> {
+    let ws = canonical_workspace(dir);
     produced(rows)
         .enumerate()
         .map(|(idx, (row, run_id, artifact))| {

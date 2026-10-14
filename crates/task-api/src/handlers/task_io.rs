@@ -146,10 +146,11 @@ pub(super) async fn task_runs(
 ) -> ApiResult {
     no_query(&raw)?;
     let id = parse_task_id(&id)?;
-    let root = state.inner.view.workspace_root.clone();
+    let roots = state.inner.view.workspace_roots.clone();
     let list = state
         .blocking(move |store| {
             let task = load_task(store, id)?;
+            let dir = files::task_local_dir(store, &roots, &task)?;
             let rows = store
                 .event_rows_for(id, None, usize::MAX)
                 .map_err(store_problem)?;
@@ -157,7 +158,7 @@ pub(super) async fn task_runs(
             let selections = task_ops::view::run_selections(store, id)
                 .map_err(|e| ops_problem(store, e, None))?;
             for run in &mut runs {
-                run.files = Some(files::run_files(&task, &root, &run.run_id));
+                run.files = Some(files::run_files(&dir, &run.run_id));
                 if let Some(selection) = selections.get(&run.run_id) {
                     run.selection = selection.clone();
                 }
@@ -226,11 +227,12 @@ async fn run_file(
 ) -> ApiResult {
     let request = FileRequest::parse(raw.as_deref(), &headers)?;
     let id = parse_task_id(&id)?;
-    let root = state.inner.view.workspace_root.clone();
+    let roots = state.inner.view.workspace_roots.clone();
     let target = state
         .blocking(move |store| {
             let task = load_task(store, id)?;
-            let path = files::resolve_run_file(&task, &root, &run_id, file)?;
+            let dir = files::task_local_dir(store, &roots, &task)?;
+            let path = files::resolve_run_file(&dir, &run_id, file)?;
             let size = files::file_size(&path)?;
             Ok(FileTarget {
                 path,
@@ -252,15 +254,16 @@ pub(super) async fn artifact_list(
 ) -> ApiResult {
     no_query(&raw)?;
     let id = parse_task_id(&id)?;
-    let root = state.inner.view.workspace_root.clone();
+    let roots = state.inner.view.workspace_roots.clone();
     let list = state
         .blocking(move |store| {
             let task = load_task(store, id)?;
+            let dir = files::task_local_dir(store, &roots, &task)?;
             let rows = store
                 .event_rows_for(id, None, usize::MAX)
                 .map_err(store_problem)?;
             Ok(ArtifactList {
-                items: files::artifact_views(&task, &root, &rows),
+                items: files::artifact_views(&dir, &rows),
             })
         })
         .await?;
@@ -278,16 +281,17 @@ pub(super) async fn artifact_body(
     let idx: usize = idx
         .parse()
         .map_err(|_| ApiProblem::bad_request("artifact index must be a non-negative integer"))?;
-    let root = state.inner.view.workspace_root.clone();
+    let roots = state.inner.view.workspace_roots.clone();
     let target = state
         .blocking(move |store| {
             let task = load_task(store, id)?;
+            let dir = files::task_local_dir(store, &roots, &task)?;
             let rows = store
                 .event_rows_for(id, None, usize::MAX)
                 .map_err(store_problem)?;
             let artifact = files::nth_artifact(&rows, idx)
                 .ok_or_else(|| ApiProblem::artifact_not_found(idx))?;
-            let ws = files::canonical_workspace(&task, &root)?;
+            let ws = files::canonical_workspace(&dir)?;
             let path = files::resolve_artifact(&ws, &artifact.path)?;
             let size = files::file_size(&path)?;
             let current_sha256 = files::current_sha256(&path, size);

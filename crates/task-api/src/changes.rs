@@ -20,6 +20,7 @@ use std::path::{Path, PathBuf};
 use axum::body::Body;
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{get, post};
+use task_core::local_machine::WorkspaceRoots;
 use task_core::{
     DeliveryStore, IntegrationMethod, IntegrationState, ProjectId, RepoId, ReportFilter,
     ReportStore, Task, TaskId, TaskIntegration, TaskStore,
@@ -99,9 +100,9 @@ impl RepoTarget {
 fn targets_for(
     store: &dyn TaskStore,
     task: &Task,
-    workspace_root: &Path,
+    roots: &WorkspaceRoots,
 ) -> Result<Vec<RepoTarget>, ApiProblem> {
-    let marker = crate::tree::marker_of(task, workspace_root)?;
+    let marker = crate::tree::marker_of(store, roots, task)?;
     let repos = crate::tree::marker_repos(&marker);
     // その案件のリポジトリの行（`default_branch` と `repo_id` を引くため）。
     let rows = match task.project_id {
@@ -220,12 +221,12 @@ async fn changes(
 ) -> ApiResult {
     no_query(&raw)?;
     let task_id = parse_task_id(&id)?;
-    let workspace_root = state.inner.view.workspace_root.clone();
+    let roots = state.inner.view.workspace_roots.clone();
     let github = state.inner.github.clone();
     let view = state
         .blocking(move |store| {
             let task = load_task(store, task_id)?;
-            let targets = targets_for(store, &task, &workspace_root)?;
+            let targets = targets_for(store, &task, &roots)?;
             let now = OffsetDateTime::now_utc();
             let mut repos = Vec::with_capacity(targets.len());
             for target in &targets {
@@ -308,11 +309,11 @@ async fn diff(
             "path must be relative and must not contain `..`",
         ));
     }
-    let workspace_root = state.inner.view.workspace_root.clone();
+    let roots = state.inner.view.workspace_roots.clone();
     let view = state
         .blocking(move |store| {
             let task = load_task(store, task_id)?;
-            let targets = targets_for(store, &task, &workspace_root)?;
+            let targets = targets_for(store, &task, &roots)?;
             let target = pick_target(&targets, &repo)?;
             let diff = ops_changes::file_diff(
                 &target.source,
@@ -366,7 +367,7 @@ fn pr_unavailable(detail: impl Into<String>) -> ApiProblem {
 /// What the integrate / PR merge operations need from the API state.
 #[derive(Clone)]
 pub(crate) struct ChangesEnv {
-    pub(crate) workspace_root: std::path::PathBuf,
+    pub(crate) workspace_roots: WorkspaceRoots,
     pub(crate) github: crate::GithubSettings,
     pub(crate) web_base_url: Option<String>,
 }
@@ -374,7 +375,7 @@ pub(crate) struct ChangesEnv {
 impl ChangesEnv {
     pub(crate) fn of(state: &ApiState) -> Self {
         Self {
-            workspace_root: state.inner.view.workspace_root.clone(),
+            workspace_roots: state.inner.view.workspace_roots.clone(),
             github: state.inner.github.clone(),
             web_base_url: state.inner.notify_web_base_url.clone(),
         }
@@ -400,7 +401,7 @@ fn prepare_integrate(
     if let Some(parent) = task_core::tree::tree_parent(&task) {
         return Err(tree_child_integration(parent));
     }
-    let targets = targets_for(store, &task, &env.workspace_root)?;
+    let targets = targets_for(store, &task, &env.workspace_roots)?;
     let target = pick_target(&targets, repo)?;
     if request.method != IntegrationMethod::Discard {
         target.default_branch()?;
@@ -470,8 +471,11 @@ fn run_integrate(
         }
         IntegrationMethod::Merge => {
             let default_branch = target.default_branch()?;
+            // 一時の作業ツリーは task の足回りと同じ root に置く（ADR 2026-10-14-local-machine-settings D5）。
             let temp = env
-                .workspace_root
+                .workspace_roots
+                .task_root(store, &task_id)
+                .map_err(store_problem)?
                 .join(".integrate")
                 .join(ulid::Ulid::new().to_string());
             match ops_changes::merge_into_default_branch(
@@ -680,7 +684,7 @@ pub(crate) fn pr_merge_op(
 ) -> Result<Applied<IntegrateResult>, ApiProblem> {
     let prepare = || -> Result<(RepoTarget, TaskIntegration, i64), ApiProblem> {
         let task = load_task(store, task_id)?;
-        let targets = targets_for(store, &task, &env.workspace_root)?;
+        let targets = targets_for(store, &task, &env.workspace_roots)?;
         let target = pick_target(&targets, repo)?;
         let integration = store
             .integration_latest(task_id, &target.name)
@@ -763,7 +767,7 @@ async fn project_integrations(
 ) -> ApiResult {
     no_query(&raw)?;
     let project_id: ProjectId = parse_project_id(&id)?;
-    let workspace_root = state.inner.view.workspace_root.clone();
+    let roots = state.inner.view.workspace_roots.clone();
     let github = state.inner.github.clone();
     let view = state
         .blocking(move |store| {
@@ -787,7 +791,7 @@ async fn project_integrations(
                 // ADR-0043 D5: 1 回の呼び出しで同期する PR は 20 件まで。
                 let integration = if row.state.needs_refresh() && refreshed < MAX_REFRESH_PER_CALL {
                     refreshed += 1;
-                    let target = targets_for(store, &task, &workspace_root)
+                    let target = targets_for(store, &task, &roots)
                         .unwrap_or_default()
                         .into_iter()
                         .find(|t| t.name == row.repo);

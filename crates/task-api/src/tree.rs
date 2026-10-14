@@ -15,6 +15,7 @@ use std::path::{Component, Path, PathBuf};
 
 use axum::http::StatusCode;
 use axum::routing::get;
+use task_core::local_machine::WorkspaceRoots;
 use task_core::{Task, TaskStore};
 use task_ops::workspace::{WorktreeMarker, WorktreeMarkerRepo};
 
@@ -35,8 +36,13 @@ pub(crate) fn routes() -> axum::Router<ApiState> {
 }
 
 /// そのタスクの目印（`worktree.json`）。作業ツリーを持たないタスクは 404。
-pub(crate) fn marker_of(task: &Task, workspace_root: &Path) -> Result<WorktreeMarker, ApiProblem> {
-    let task_dir = workspace_root.join(task.id.to_string());
+/// 足回りの場所は `WorkspaceRoots` が task ごとに解く（ADR 2026-10-14-local-machine-settings D5）。
+pub(crate) fn marker_of(
+    store: &dyn TaskStore,
+    roots: &WorkspaceRoots,
+    task: &Task,
+) -> Result<WorktreeMarker, ApiProblem> {
+    let task_dir = roots.task_dir(store, &task.id).map_err(store_problem)?;
     task_ops::workspace::read_marker(&task_dir)
         .filter(|m| !m.repos.is_empty() || !m.dir.is_empty())
         .ok_or_else(|| ApiProblem::file_not_found("this task has no working tree"))
@@ -153,13 +159,13 @@ async fn tree(
     let query = QueryParams::parse(raw.as_deref(), &["repo", "path"])?;
     let repo_name = query.single("repo")?.map(str::to_string);
     let rel = relative_path(query.single("path")?)?;
-    let workspace_root = state.inner.view.workspace_root.clone();
+    let roots = state.inner.view.workspace_roots.clone();
     let view = state
         .blocking(move |store| {
             let Some(task) = store.get(task_id).map_err(store_problem)? else {
                 return Err(ApiProblem::task_not_found(task_id));
             };
-            let marker = marker_of(&task, &workspace_root)?;
+            let marker = marker_of(store, &roots, &task)?;
             let repos = marker_repos(&marker);
             let repo = pick_repo(&repos, repo_name.as_deref())?;
             let root = repo_root(&repo)?;
@@ -215,13 +221,13 @@ async fn tree_file(
     if rel.as_os_str().is_empty() {
         return Err(ApiProblem::bad_request("path is required"));
     }
-    let workspace_root = state.inner.view.workspace_root.clone();
+    let roots = state.inner.view.workspace_roots.clone();
     let view = state
         .blocking(move |store| {
             let Some(task) = store.get(task_id).map_err(store_problem)? else {
                 return Err(ApiProblem::task_not_found(task_id));
             };
-            let marker = marker_of(&task, &workspace_root)?;
+            let marker = marker_of(store, &roots, &task)?;
             let repos = marker_repos(&marker);
             let repo = pick_repo(&repos, repo_name.as_deref())?;
             let root = repo_root(&repo)?;

@@ -49,7 +49,8 @@ pub(crate) async fn timeline(
             let (task, mut items) = store_items(store, id)?;
             // リリースはファイルを読む（ストアには無い）。読めなければ何も足さない。
             if let Some(source) = releases {
-                items.extend(release_items(&task, &ctx.workspace_root, source.as_ref()));
+                let task_dir = crate::files::task_local_dir(store, &ctx.workspace_roots, &task)?;
+                items.extend(release_items(&task_dir, source.as_ref()));
             }
             // ADR-0044 D7（Phase 57）: 逆リンク（front matter の `tasks:` にこのタスクを持つページ）。
             // 文書の根が無い案件・読めないリポジトリでは何も足さない。
@@ -236,13 +237,12 @@ fn doc_items(
 ///
 /// ブランチ名は `worktree.json`（ADR-0041 D1 の目印。`celeris/<task_id>` / `celeris/<task_id>`）から取る。
 /// 目印が無い・git が動かない・`changes.json` が無いリリースしかない、のどれでも**何も足さない**。
+/// `task_dir` はそのタスクの足回り（`files::task_local_dir`）。
 fn release_items(
-    task: &Task,
-    workspace_root: &std::path::Path,
+    task_dir: &std::path::Path,
     source: &dyn crate::releases::ReleaseSource,
 ) -> Vec<TimelineItem> {
-    let task_dir = task_ops::workspace::local_dir(task, workspace_root);
-    let Some(marker) = task_ops::workspace::read_marker(&task_dir) else {
+    let Some(marker) = task_ops::workspace::read_marker(task_dir) else {
         return Vec::new();
     };
     // base が分からなければ**何も足さない**。`rev-list <branch>` はそのブランチの歴史すべて

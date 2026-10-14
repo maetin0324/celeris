@@ -180,7 +180,7 @@ enum Action {
 async fn mutate_simple(state: ApiState, raw_id: String, repo: String, action: Action) -> ApiResult {
     let id = parse_task_id(&raw_id)?;
     let now = time::OffsetDateTime::now_utc();
-    let workspace_root = state.inner.view.workspace_root.clone();
+    let roots = state.inner.view.workspace_roots.clone();
     let result = state
         .blocking(move |store| {
             let repo_id = resolve_repo(store, id, &repo)?;
@@ -195,7 +195,7 @@ async fn mutate_simple(state: ApiState, raw_id: String, repo: String, action: Ac
                         .get(id)
                         .map_err(store_problem)?
                         .ok_or_else(|| ApiProblem::task_not_found(id))?;
-                    let marker = crate::tree::marker_of(&task, &workspace_root)?;
+                    let marker = crate::tree::marker_of(store, &roots, &task)?;
                     let marker_repo = crate::tree::marker_repos(&marker)
                         .into_iter()
                         .find(|r| r.name == repo)

@@ -475,9 +475,9 @@ pub(super) async fn task_detail(
                 &mut detail.promotion,
                 releases_dir.as_deref(),
             )?;
-            let task = &detail.task;
+            let dir = files::task_local_dir(store, &ctx.workspace_roots, &detail.task)?;
             for run in &mut detail.runs {
-                run.files = Some(files::run_files(task, &ctx.workspace_root, &run.run_id));
+                run.files = Some(files::run_files(&dir, &run.run_id));
             }
             Ok(detail)
         })

@@ -203,7 +203,10 @@ impl TestEnv {
 
 pub fn view_context(workspace_root: &std::path::Path) -> ViewContext {
     ViewContext {
-        workspace_root: workspace_root.to_path_buf(),
+        workspace_roots: task_core::local_machine::WorkspaceRoots::new(
+            workspace_root.to_path_buf(),
+            None,
+        ),
         retry_backoff_base: Duration::from_secs(30),
         retry_backoff_max: Duration::from_secs(600),
         max_requeues: 5,

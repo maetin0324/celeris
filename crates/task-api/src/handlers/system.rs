@@ -59,13 +59,18 @@ pub(super) async fn inbox(State(state): State<ApiState>, RawQuery(raw): RawQuery
     let ctx = state.inner.view.clone();
     let inbox = state
         .blocking(move |store| {
-            let root = ctx.workspace_root.clone();
+            let roots = &ctx.workspace_roots;
+            let evidence = |task: &Task, run_id: &str| {
+                files::task_local_dir(store, roots, task)
+                    .map(|dir| files::read_evidence(&dir, run_id))
+                    .unwrap_or_default()
+            };
             let mut inbox = task_ops::inbox::inbox(
                 store,
                 snapshot.as_ref(),
                 &ctx,
                 OffsetDateTime::now_utc(),
-                &|task: &Task, run_id: &str| files::read_evidence(task, &root, run_id),
+                &evidence,
             )
             .map_err(|e| ops_problem(store, e, None))?;
             for item in &mut inbox.approvals {
@@ -76,7 +81,8 @@ pub(super) async fn inbox(State(state): State<ApiState>, RawQuery(raw): RawQuery
                 if run.files.is_none()
                     && let Some(task) = store.get(parent.id).map_err(store_problem)?
                 {
-                    run.files = Some(files::run_files(&task, &root, &run.run_id));
+                    let dir = files::task_local_dir(store, roots, &task)?;
+                    run.files = Some(files::run_files(&dir, &run.run_id));
                 }
             }
             Ok(inbox)

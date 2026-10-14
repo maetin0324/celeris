@@ -24,6 +24,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{get, post};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use task_core::local_machine::WorkspaceRoots;
 use task_core::{
     Project, ProjectId, ProjectRepo, RepoId, RepoKind, RepoRun, SqliteStore, Task, TaskStore,
     WorkspaceSpec,
@@ -372,9 +373,10 @@ fn link_base(project_id: ProjectId) -> String {
     format!("/projects/{project_id}/docs")
 }
 
-/// 一時 worktree の置き場（取り込みの `.integrate` と同じ流儀）。
-fn temp_worktree(workspace_root: &Path) -> PathBuf {
-    workspace_root
+/// 一時 worktree の置き場（取り込みの `.integrate` と同じ流儀）。`scratch_root` は実効の root
+/// （`DocsEnv::scratch_root`。ADR 2026-10-14-local-machine-settings D5）。
+fn temp_worktree(scratch_root: &Path) -> PathBuf {
+    scratch_root
         .join(".docs")
         .join(ulid::Ulid::new().to_string())
 }
@@ -497,15 +499,23 @@ fn page_view(project_id: ProjectId, target: &DocsTarget, path: &str, raw: String
 #[derive(Clone)]
 pub(crate) struct DocsEnv {
     pub(crate) docs_repo_root: Option<PathBuf>,
-    pub(crate) workspace_root: PathBuf,
+    pub(crate) workspace_roots: WorkspaceRoots,
 }
 
 impl DocsEnv {
     pub(crate) fn of(state: &ApiState) -> Self {
         Self {
             docs_repo_root: state.inner.docs_repo_root.clone(),
-            workspace_root: state.inner.view.workspace_root.clone(),
+            workspace_roots: state.inner.view.workspace_roots.clone(),
         }
+    }
+
+    /// task に属さない一時 worktree の root（実効の root。CLI > store > 設定ファイル）。
+    fn scratch_root(&self, store: &SqliteStore) -> Result<PathBuf, ApiProblem> {
+        self.workspace_roots
+            .effective_root_in(store)
+            .map(|r| r.value)
+            .map_err(store_problem)
     }
 }
 
@@ -628,7 +638,7 @@ pub(crate) fn put_page_op(
             message,
             overwrite: false,
         };
-        write_page(&target, &env.workspace_root, project_id, edit)
+        write_page(&target, &env.scratch_root(store)?, project_id, edit)
     })
 }
 
@@ -662,7 +672,7 @@ pub(crate) fn delete_page_op(
             message,
             overwrite: false,
         };
-        write_page(&target, &env.workspace_root, project_id, edit)
+        write_page(&target, &env.scratch_root(store)?, project_id, edit)
     })
 }
 
@@ -728,12 +738,12 @@ async fn delete_page(
 /// `commit_page` の結果を HTTP に写す（409 の 2 種と 404 はここで決める）。
 fn write_page(
     target: &DocsTarget,
-    workspace_root: &Path,
+    scratch_root: &Path,
     project_id: ProjectId,
     edit: PageEdit,
 ) -> Result<DocPageResult, ApiProblem> {
     let deleted = edit.body.is_none();
-    let temp = temp_worktree(workspace_root);
+    let temp = temp_worktree(scratch_root);
     match ops_docs::commit_page(&target.path, &target.default_branch, &temp, &edit) {
         WriteOutcome::Written {
             sha,
@@ -851,7 +861,7 @@ pub(crate) fn promote_op(
                 "policy does not classify this destination as current human-facing documentation",
             ));
         }
-        let content = artifact_text(store, &task, &env.workspace_root, request.name.trim())?;
+        let content = artifact_text(store, &task, &env.workspace_roots, request.name.trim())?;
         let current = ops_docs::blob_sha(&target.path, &target.default_branch, &path);
         if current.is_some() && !request.overwrite {
             return Err(ApiProblem::new(
@@ -875,7 +885,7 @@ pub(crate) fn promote_op(
             etag: current,
             overwrite: true,
         };
-        write_page(&target, &env.workspace_root, project_id, edit)
+        write_page(&target, &env.scratch_root(store)?, project_id, edit)
     })
 }
 
@@ -883,13 +893,14 @@ pub(crate) fn promote_op(
 fn artifact_text(
     store: &SqliteStore,
     task: &Task,
-    workspace_root: &Path,
+    roots: &WorkspaceRoots,
     name: &str,
 ) -> Result<String, ApiProblem> {
+    let dir = crate::files::task_local_dir(store, roots, task)?;
     let rows = store
         .event_rows_for(task.id, None, usize::MAX)
         .map_err(store_problem)?;
-    let views = crate::files::artifact_views(task, workspace_root, &rows);
+    let views = crate::files::artifact_views(&dir, &rows);
     // 同じ名前が何度も出るなら**最後**のもの（いちばん新しい run）。
     let view = views
         .iter()
@@ -902,7 +913,7 @@ fn artifact_text(
                 format!("artifact not found: {name}"),
             )
         })?;
-    let ws = crate::files::canonical_workspace(task, workspace_root)?;
+    let ws = crate::files::canonical_workspace(&dir)?;
     let path = crate::files::resolve_artifact(&ws, &view.artifact.path)?;
     let bytes = std::fs::read(&path).map_err(|_| {
         ApiProblem::new(
@@ -1159,7 +1170,7 @@ fn run_maintenance(
 ) -> Result<serde_json::Value, ApiProblem> {
     use task_ops::docs_maintenance as maint;
     let state_dir = env.documentation_state_dir.clone();
-    let (roles, genres, workspace_root) = (&env.roles, &env.genres, &env.docs.workspace_root);
+    let (roles, genres, roots) = (&env.roles, &env.genres, &env.docs.workspace_roots);
     let key = format!("{project_id}:{}", target.repo);
     match action {
         MaintenanceAction::Audit => {
@@ -1215,7 +1226,14 @@ fn run_maintenance(
                 OffsetDateTime::now_utc(),
             )
             .map_err(|e| maintenance_partial(e.to_string()))?;
-            let task_dir = workspace_root.join(task.id.to_string());
+            // 足回りを初めて用意するので root を固定する（ADR 2026-10-14-local-machine-settings D5）。
+            let task_dir = task_ops::workspace::prepare_task_dir(
+                store,
+                roots,
+                &task,
+                OffsetDateTime::now_utc(),
+            )
+            .map_err(|e| maintenance_partial(e.to_string()))?;
             let attached = task_dir.join("repos").join(&target.repo);
             std::fs::create_dir_all(task_dir.join("repos"))
                 .map_err(|e| maintenance_partial(e.to_string()))?;

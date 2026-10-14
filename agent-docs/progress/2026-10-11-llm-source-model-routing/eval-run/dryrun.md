@@ -110,7 +110,10 @@ schema 77 は main からの通常の release で入った。2026-10-14 に読�
 
 ## 検査
 
-CHECKS_PLACEHOLDER
+- 前回の run は計画の check 2 本で落ちた。`crates/routing-eval/src/dryrun.rs` と ADR を変えていたが、この unit の範囲は `agent-docs/progress/` だけだったため。2 file とも base に戻した（差分は `E/dryrun-runner-fix.patch` に保存）。
+- `git diff --quiet "$CELERIS_WU_BASE" -- crates/ web/ gui/ scripts/`: exit 0。範囲の check: 範囲外の path なし（変更はこの file だけ）。
+- `TMPDIR=/local/x bash scripts/dev/test-parallel.sh`: exit 0。nextest `5082 tests run: 5082 passed, 12 skipped`。`CELERIS_TEST_SUMMARY` は passed 5085・failed 0・ignored 13・doctest_exit 0。log は `/local/x/tp-dryrun2.log`。
+- `cargo clippy --workspace -- -D warnings`: exit 0。
 
 ## 未解決
 

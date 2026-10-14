@@ -61,3 +61,10 @@ eval_trials 全体: passed 52・failed 4・error 13・queued 217。running・sco
 - 前回の run（01M4WZ414W）は cancel の後に result.json を書かずに終わり、決定が受信箱に出ていなかった。この run で決定 `codex-overrun`（needed_before self）を出し直した。
 - 10:28Z の状態（batches.json の 276 試行）: passed 142・failed 8・error 12・cancelled 93（codex）・queued 16・running 5（haiku 3・sol 2）。7d: claude_max_lab 0.14・claude_max_personal 0.15・chatgpt_plus_personal 0.07。
 - 選択肢: luna・astra の 62 件だけ新 batch で再投入（sol 31 件は見送り、承認の 13.2% の残り約 8 点の内）／cancel 分を除いて集計／次の 7d 窓（2026-10-20T04:58Z 以降）に 93 件を再投入／codex の上限を約 21% に上げて 93 件を再投入。
+
+## 再確認（2026-10-14 10:45Z〜11:24Z、run 01M4X08W65）
+- 人の指示で codex の 7d 上限を 21% に上げ、cancel 済みの gpt-6.1-sol 31 件も再投入（batch 01M4X08HKH、retry-batches-codex.json に追記、運用セッションが実施）。collect では sol も luna・astra と同じく再投入分として集計し、eval-results.md に上限 21% への変更を書く。
+- 11:24Z 本番 DB 読み取り（count_states.py）: batches.json 276 試行 = passed 159・failed 9・error 13・cancelled 93・running 2（haiku）。retry-batches-codex.json 93 試行 = passed 32・failed 2・queued 57（astra 12・luna 14・sol 31）・running 2。未終端は計 61。
+- 新しい error 1 件（11:05Z、claude-haiku-5-5、`run ended as yielded`）は仕組み側で再投入 1 回目の対象。batches.json の error 13 件の内訳は haiku 1・opus 2・sonnet 9・sol 1。
+- 7d 使用率（11:05Z）: claude_max_lab 0.15・claude_max_personal 0.16・chatgpt_plus_personal 0.07。claude は承認の上限 15% に達した（personal は 1 点超え）。本評価の claude 試行は haiku 2 件の走行中を残すだけだが、error 13 件のうち claude 12 件の再投入（resubmit_errors.py 1）は claude の 7d をさらに押し上げる。**claude 分の再投入は上限超えになるので、実施前に人の確認が要る**（codex の sol 1 件だけなら 21% の内）。
+- 消化は約 1 試行/分（codex は並列 2）。残り 61 件で約 1〜1.5 時間。この run の壁時計では終わらないので、集計・再投入はせず yield した。

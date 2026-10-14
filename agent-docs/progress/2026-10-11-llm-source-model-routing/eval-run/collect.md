@@ -43,3 +43,4 @@ eval_trials 全体: passed 52・failed 4・error 13・queued 217。running・sco
 - 運用セッションの指示: 再投入は仕組み側の error（worktree 消失・dispatcher stopped・daemon recovery・yielded）に限り、試行ごとに最大 2 回。failed とそれ以外の error は再投入しない。
 - `artifacts/eval/resubmit_errors.py` をこの規則に書き直した（旧版は `resubmit_errors.v1.py`）: `python3 -I resubmit_errors.py <E> 1` は batches.json の仕組み側 error を `retry-batches-1.json` へ（trial_no +100）、`… 2` は retry-batches-1 の仕組み側 error を `retry-batches-2.json` へ（trial_no +200）。どちらも対象群の全試行が終端でなければ投入しない。`--dry` で数だけ出す。
 - 08:55Z 時点の本評価 batch の error 11 件の内訳: dispatcher stopped 4・daemon recovery 3・worktree 消失の question 3・yielded 1。11 件とも仕組み側で、再投入の対象。旧 pilot の error 10 件（run ended as error）は集計除外のまま対象外。
+- 状態の推移（本番 DB 読み取り）: 09:05Z passed 96・failed 4・error 21・queued 160・running 5 → 09:21Z passed 102・queued 155 → 09:37Z passed 114・failed 6・error 21・queued 141・running 4。新しい error は無い。消化は 0.6〜1.2 試行/分で、残り 141 件の終端まで 2〜4 時間。この run の壁時計では終わらないので yield した（集計・再投入はまだしない）。

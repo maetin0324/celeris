@@ -1881,7 +1881,6 @@ dependencies = [
  "task-core",
  "tempfile",
  "time",
- "toml",
 ]
 
 [[package]]

@@ -21,7 +21,7 @@ routing-eval の候補表がハイフン綴り（`claude-oauth`・`claude-code`�
 - 試験 `candidates::tests::candidate_ids_match_declared_spelling`: `config/*.example.toml` をすべて
   読み、各候補の `source_id` が `[llm_sources.<id>]` に宣言され `kind` も同じ綴りで
   `task_core::LlmSourceRef` として読めること、`harness_id` が `[harnesses.<id>]` に宣言され `kind` が同じで
-  `source_kinds` にその source を含むことを確かめる。dev-dependency に `toml = "0.9"`（workspace で既に使用）。
+  `source_kinds` にその source を含むことを確かめる。節見出しと `kind`・`source_kinds` の行を試験内で行単位に拾う（Cargo.toml・Cargo.lock は変えない。attempt 2 で `toml` の dev-dependency を外した）。
 
 ## 証拠
 
@@ -85,6 +85,9 @@ routing-eval の候補表がハイフン綴り（`claude-oauth`・`claude-code`�
 5. 戻すときは 2 の backup を daemon 停止中に戻す（`events` には触れていない）。
 
 ## 未解決事項
+
+- 計画の check `cargo test … | grep -E 'FAILED|failed'; test $? -ne 0` は `test result: ok. N passed; 0 failed` の行と名前に failed を含む試験の行に必ず当たるので、試験が全部通っても exit 1 になる（plan_issue で申告）。`grep -E 'FAILED|[1-9][0-9]* failed'` などに直す必要がある。
+- `task-api --test browser_live_cross` は run の `$TMPDIR` が長いと unix socket の path が SUN_LEN を超えて落ちる（短い TMPDIR では 3 passed）。環境依存で、この WU の変更とは無関係。
 
 - `crates/task-dispatch/src/dispatcher/eval_trials.rs` の `normalize_id`（`-` → `_`、小文字化）で宣言を引く分岐が残っている。
   書き込みが宣言の綴りになったので不要だが、task-dispatch はこの WU の範囲外。

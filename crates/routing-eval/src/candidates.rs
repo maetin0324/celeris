@@ -85,9 +85,8 @@ mod tests {
     /// 綴りそのもの。選択器は宣言の綴りで根拠表を引くので、綴りが違うと評価結果が選択に効かない。
     #[test]
     fn candidate_ids_match_declared_spelling() {
+        // 例の config から `[llm_sources.<id>]`・`[harnesses.<id>]` の節ごとに `kind` と `source_kinds` の行を拾う。
         let manifest_dir = env!("CARGO_MANIFEST_DIR");
-        let mut sources = toml::Table::new();
-        let mut harnesses = toml::Table::new();
         let config_dir = format!("{manifest_dir}/../../config");
         let mut paths: Vec<_> = std::fs::read_dir(&config_dir)
             .expect("config dir")
@@ -95,39 +94,54 @@ mod tests {
             .filter(|path| path.to_string_lossy().ends_with(".example.toml"))
             .collect();
         paths.sort();
+        let mut declared: std::collections::BTreeMap<String, Vec<(String, String)>> =
+            std::collections::BTreeMap::new();
         for path in paths {
             let text = std::fs::read_to_string(&path).expect("example config");
-            let config: toml::Table = text.parse().expect("example config parses");
-            for (table, into) in [("llm_sources", &mut sources), ("harnesses", &mut harnesses)] {
-                if let Some(toml::Value::Table(declared)) = config.get(table) {
-                    into.extend(declared.clone());
+            let mut section = String::new();
+            for line in text.lines().map(str::trim) {
+                if let Some(header) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
+                    section = header.to_string();
+                    continue;
+                }
+                if let Some((key, value)) = line.split_once('=') {
+                    declared
+                        .entry(section.clone())
+                        .or_default()
+                        .push((key.trim().to_string(), value.trim().to_string()));
                 }
             }
         }
+        let field = |section: &str, key: &str| -> Option<String> {
+            declared
+                .get(section)?
+                .iter()
+                .find(|(k, _)| k == key)
+                .map(|(_, v)| v.clone())
+        };
         for c in CANDIDATES {
-            let source = sources
-                .get(c.source_id)
-                .unwrap_or_else(|| panic!("source {} is not declared", c.source_id));
+            let source_section = format!("llm_sources.{}", c.source_id);
             assert_eq!(
-                source.get("kind").and_then(|k| k.as_str()),
-                Some(c.source_id)
+                field(&source_section, "kind"),
+                Some(format!("\"{}\"", c.source_id)),
+                "source {} is not declared with kind {}",
+                c.source_id,
+                c.source_id
             );
             let parsed: task_core::LlmSourceRef =
                 serde_json::from_value(serde_json::json!(c.source_id)).expect("source kind");
             assert_eq!(parsed.as_str(), c.source_id);
-            let harness = harnesses
-                .get(c.harness_id)
-                .unwrap_or_else(|| panic!("harness {} is not declared", c.harness_id));
+            let harness_section = format!("harnesses.{}", c.harness_id);
             assert_eq!(
-                harness.get("kind").and_then(|k| k.as_str()),
-                Some(c.harness_id)
+                field(&harness_section, "kind"),
+                Some(format!("\"{}\"", c.harness_id)),
+                "harness {} is not declared with kind {}",
+                c.harness_id,
+                c.harness_id
             );
-            let source_kinds = harness
-                .get("source_kinds")
-                .and_then(|k| k.as_array())
-                .expect("source_kinds");
+            let source_kinds = field(&harness_section, "source_kinds").expect("source_kinds");
             assert!(
-                source_kinds.iter().any(|k| k.as_str() == Some(c.source_id)),
+                source_kinds.contains(&format!("\"{}\"", c.source_id)),
                 "harness {} cannot use source {}",
                 c.harness_id,
                 c.source_id

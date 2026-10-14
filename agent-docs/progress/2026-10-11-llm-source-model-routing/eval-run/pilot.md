@@ -7,6 +7,10 @@ status: blocked
 
 **人が見る要点**: 本番の `~/.config/celeris/config.toml` に `[routing_eval] reserved_runs = 2` がまだ無い。人の決定 eval-deploy の順序 (3)「config に reserved_runs = 2 を足した後まで評価 run は待つ」に従い、10 試行は投入していない。batch_id はまだ無い。下の手順 1〜3 を行い、受信箱の決定 `eval-reserved-runs` に答えると、次の run が投入する。
 
+## 2026-10-14 再確認（attempt 2 の run）
+
+`GET /api/v1/routing-eval/trials` は 200（`{"trials":[]}`）、本番 DB の `MAX(version)` は 77。`~/.config/celeris/config.toml`（00:33 UTC 更新、`[model_routing]` 撤去後）にも `routing_eval`・`reserved_runs` は無い。`crates/task-dispatch/src/capacity.rs` の判定では `reserved_runs == 0` で評価 run は一切起こさないため、投入しても 10 試行は終端にならない。引き続き投入せず、決定 `eval-reserved-runs`（この unit を止める）を受信箱に出した。
+
 ## 2026-10-14 に読み取りで確かめたこと
 
 | 項目 | 結果 | 要件 |

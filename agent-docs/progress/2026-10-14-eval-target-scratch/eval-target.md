@@ -48,3 +48,11 @@ completed: 2026-10-14
 - 範囲 check が `crates/celeris/tests/routing_eval_run.rs` を範囲外として落とした。
 - この試験の config は `[scratch]` を書かず、既定の scratch dir が `~/.local/celeris/scratch`（NFS）になるため起動時に scratch が無効化される。目的どおり「scratch 無効なら試行を失敗にする」ので、試験に `[scratch] dir = "scratch"` を足さないと `daemon_runs_two_stub_trials_with_hidden_checks_and_eval_records` が落ちる（変更を戻して実行し確認: `cargo test -p celeris --test routing_eval_run` → FAILED、error "cargo target: scratch is disabled; …"）。
 - 計画の範囲に `crates/celeris/tests/routing_eval_run.rs` を加える必要がある（plan_issue で申告）。
+
+## 2026-10-14 retry 2: 範囲拡大後の確認（完了）
+- replan で範囲に `crates/celeris/tests/routing_eval_run.rs` が入った。試験 config の `[scratch] dir = "scratch"`（一時 dir 配下）と、試行 target の削除・lease の `released_at` の assert は d564bddd のまま。
+- `cargo test -p celeris --test routing_eval_run` → 1 passed
+- task-dispatch: `eval_run_request_sets_per_trial_cargo_target_dir` / `eval_trial_target_removed_after_scoring` / `eval_trial_check_uses_trial_target_dir` 各 1 passed、`eval_trial` 絞り込み 11 passed（`eval_trial_target_removed_on_recovery`・`eval_trial_fails_without_scratch` を含む）
+- `bash scripts/dev/test-parallel.sh` → exit 0（passed 5092, failed 0, ignored 13）
+- `cargo clippy --workspace -- -D warnings` → exit 0、`cargo fmt --check` → exit 0
+- 範囲 check（許可 crates/task-dispatch/・agent-docs/progress/・agent-docs/adr/・crates/celeris/tests/routing_eval_run.rs）→ 範囲外なし

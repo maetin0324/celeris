@@ -38,3 +38,8 @@ eval_trials 全体: passed 52・failed 4・error 13・queued 217。running・sco
 - 08:18Z: passed 60・failed 4・error 15・queued 204・running 3。08:28Z: passed 71・queued 194。08:53Z: passed 83・failed 4・error 18・queued 178・running 3。
 - 消化は約 1 試行/分。残り約 180 試行で終端まで約 3 時間。この run の壁時計では終わらないので yield した（集計はまだしない）。
 - 08:52Z ごろ、走行中の claude-sonnet-5-5 の 3 試行（`01M4W9H8WQ1H…`・`01M4W9H8WQ80…`・`01M4W9H8WQ6P…`）が、run の途中で作業 worktree と CARGO_TARGET_DIR を外から消され、question で終わって error になった。3 件が同時刻に消えたので、仕組み側の掃除が走行中の試行の作業場所を消したと見ている（運用セッションに確認を依頼）。これらは人の回答どおり 1 回の再投入の対象（`resubmit_errors.py`）。
+
+## 再投入の方針の変更（2026-10-14 08:57Z コメントへの対応、run 01M4WSY725）
+- 運用セッションの指示: 再投入は仕組み側の error（worktree 消失・dispatcher stopped・daemon recovery・yielded）に限り、試行ごとに最大 2 回。failed とそれ以外の error は再投入しない。
+- `artifacts/eval/resubmit_errors.py` をこの規則に書き直した（旧版は `resubmit_errors.v1.py`）: `python3 -I resubmit_errors.py <E> 1` は batches.json の仕組み側 error を `retry-batches-1.json` へ（trial_no +100）、`… 2` は retry-batches-1 の仕組み側 error を `retry-batches-2.json` へ（trial_no +200）。どちらも対象群の全試行が終端でなければ投入しない。`--dry` で数だけ出す。
+- 08:55Z 時点の本評価 batch の error 11 件の内訳: dispatcher stopped 4・daemon recovery 3・worktree 消失の question 3・yielded 1。11 件とも仕組み側で、再投入の対象。旧 pilot の error 10 件（run ended as error）は集計除外のまま対象外。

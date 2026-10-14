@@ -198,4 +198,4 @@ completed: 2026-10-14
 - `ConfigView`（`GET /config` と clusters の `config_value`）を reload で差し替える仕組み（watch チャネル）を別 task で。
 
 ### 本番への移行
-- 本番 config に `[[clusters]] id = "local"` があれば起動できない。現行本番 config の clusters は pegasus・sirius・fern03 のみ（記憶による。昇格前に人が `grep -n 'id = "local"' ~/.config/celeris/config.toml` で 0 件を確かめる）。
+- 本番 config に `[[clusters]] id = "local"` があると起動できない。昇格前に人が `grep -n 'id = "local"' ~/.config/celeris/config.toml` で 0 件であることを確かめる（あれば別の id に書き換える）。

@@ -164,7 +164,9 @@ completed: 2026-10-14
 - 旧い直参照: `git grep -n 'config\.max_concurrency' -- crates/task-dispatch crates/celeris/src` → 0 件
   （残る `config.max_concurrency` は celeris の `Config` の設定ファイル値で、`dispatch_config`・`ConfigView`・reload・検証だけ）。
 - 試験（名前固定）:
-  - `crates/celeris/tests/local_settings_wire.rs`（daemon と同じ組み立て: `Config::load` → `build_dispatcher` / `api_settings` → loopback HTTP）
+  - `crates/celeris/src/local_settings_wire.rs`（本体。daemon と同じ組み立て: `Config::load` → `build_dispatcher` / `api_settings` → loopback HTTP）。
+    試験の入口は `crates/celeris/src/main.rs` の crate 直下（check の `cargo test -p celeris --bins -- --exact <名前>` は module path 込みの
+    完全名と比べるので、入口を module の下や `tests/` の結合試験に置くと当たらない。初回 run は `tests/` に置いて check が落ちた）
     - `effective_max_concurrency_store_beats_config`: config 2 → `PUT /clusters/local/settings {"max_concurrency":5}` の応答
       （value 5・source settings・config_value 2・apply next_tick）→ admin チャネルの `LocalSettingsChanged` を `local_settings_changed` に渡すと 5。
       config を 3 に書き換えて `reload_providers` → `config.max_concurrency == 3` でも実効 5、tick 後も 5。`PUT {}` で 3 に戻る。
@@ -179,7 +181,7 @@ completed: 2026-10-14
   - 既存試験の `d.config.max_concurrency = N` は `d.set_config_max_concurrency(N)` に置き換えた。
 
 ### 証拠
-- `cargo test -p celeris --test local_settings_wire -- --exact <名前>` → 3 件とも `test result: ok. 1 passed`。
+- `out=$(cargo test -p celeris --bins -- --exact <名前> 2>&1); printf '%s\n' "$out" | grep -q 'test result: ok. 1 passed'` → 3 件とも exit 0（`ok. 1 passed; 3 filtered out`）。
 - `cargo test -p task-dispatch --lib -- --exact dispatcher::tests::cos_capacity::store_max_concurrency_applies_next_tick_without_stopping_running_runs` → `ok. 1 passed`。
 - 既存 workspace・走行中 run 不変: `cargo test -p celeris --test workspace_roots` → `ok. 3 passed`。
 - task の受け入れ条件: `cargo test -p task-api --test local_machine_settings` → `ok. 4 passed`、`cargo test -p task-core local_machine` → `ok. 4 passed`、

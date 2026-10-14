@@ -253,3 +253,27 @@ mod tests {
         );
     }
 }
+
+// ADR 2026-10-14-local-machine-settings D3・D4 の結線試験。check が `--bins -- --exact <名前>` で引くので、
+// 入口は crate 直下に置く（module の下だと試験名に path が付き `--exact` で当たらない）。本体は
+// `local_settings_wire.rs`。
+#[cfg(test)]
+mod local_settings_wire;
+
+#[cfg(test)]
+#[tokio::test]
+async fn effective_max_concurrency_store_beats_config() {
+    local_settings_wire::effective_max_concurrency_store_beats_config().await;
+}
+
+#[cfg(test)]
+#[tokio::test]
+async fn cli_workspace_root_ignores_store_and_pins() {
+    local_settings_wire::cli_workspace_root_ignores_store_and_pins().await;
+}
+
+#[cfg(test)]
+#[test]
+fn cluster_id_local_is_reserved_config_error() {
+    local_settings_wire::cluster_id_local_is_reserved_config_error();
+}

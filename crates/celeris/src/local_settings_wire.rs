@@ -2,7 +2,8 @@
 //! store が勝つ）が `PUT /clusters/local/settings` → admin チャネル → dispatcher に届くこと、CLI の
 //! `--workspace-root` が store と task ごとの固定を無視すること、`[[clusters]] id = "local"` が読み込みエラーで
 //! あることを、daemon と同じ組み立て（`Config::load` → `build_dispatcher` / `api_settings` → loopback の HTTP）で
-//! 確かめる。外部ネットワーク・userns・本番の `~/.local/celeris` には触れない。
+//! 確かめる。check が `cargo test -p celeris --bins -- --exact <名前>` で引くので、試験の入口は `main.rs` の
+//! crate 直下に置き、本体はこの module に置く。外部ネットワーク・userns・本番の `~/.local/celeris` には触れない。
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -170,8 +171,7 @@ async fn deliver_local_settings_changed(
 /// D3・D4: 実効の `max_concurrency` は store > 設定ファイル。PUT の admin 通知で dispatcher が読み直し、
 /// reload で設定ファイルの値が変わっても store の値が勝つ。上書きを消すと（reload 後の）設定ファイルの値に戻る。
 /// store を直接書いた場合も次の tick の頭で読み直す。
-#[tokio::test]
-async fn effective_max_concurrency_store_beats_config() {
+pub(crate) async fn effective_max_concurrency_store_beats_config() {
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("tempdir: {e}"));
     let config_path = write_home(dir.path(), 2);
     let mut config = Config::load(&config_path).unwrap_or_else(|e| panic!("load: {e}"));
@@ -257,8 +257,7 @@ async fn effective_max_concurrency_store_beats_config() {
 
 /// D3 の 1: CLI の `--workspace-root` があるときは store の `workspace_root` と task ごとの固定をどちらも無視し、
 /// 全 task を CLI の root で解く。新しい task にも固定を書かない（staging が本番の作業場所に書かない）。
-#[tokio::test]
-async fn cli_workspace_root_ignores_store_and_pins() {
+pub(crate) async fn cli_workspace_root_ignores_store_and_pins() {
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("tempdir: {e}"));
     let home = dir.path();
     let config_path = write_home(home, 2);
@@ -338,8 +337,7 @@ async fn cli_workspace_root_ignores_store_and_pins() {
 }
 
 /// D4: `local` はローカルマシンの行の予約 id。`[[clusters]] id = "local"` は設定の読み込みエラー。
-#[test]
-fn cluster_id_local_is_reserved_config_error() {
+pub(crate) fn cluster_id_local_is_reserved_config_error() {
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("tempdir: {e}"));
     let home = dir.path();
     write_home(home, 2);

@@ -569,7 +569,8 @@ impl Dispatcher {
                 work_unit_id: current_wu.as_ref().map(|wu| wu.id.clone()),
             },
         );
-        if let (Some(record), Some(decision)) = (lane_assist_record, route_trace.decision.as_mut()) {
+        if let (Some(record), Some(decision)) = (lane_assist_record, route_trace.decision.as_mut())
+        {
             decision.lane_assist = Some(record);
         }
         let launch = match &route_outcome {

@@ -55,7 +55,11 @@ fn question_adapter() -> Arc<dyn WorkerAdapter> {
     })
 }
 
-fn dispatch_once(mode: Option<RoutingMode>, board_entry: Option<BoardItem>, source: task_core::TierSource) -> (task_core::RoutingRecord, Task) {
+fn dispatch_once(
+    mode: Option<RoutingMode>,
+    board_entry: Option<BoardItem>,
+    source: task_core::TierSource,
+) -> (task_core::RoutingRecord, Task) {
     let ws = tempfile::tempdir().unwrap();
     let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = hinted_task(ws.path(), source);
@@ -173,7 +177,10 @@ async fn classification_only_raises_and_never_lowers_below_fixed() {
             task_core::Tier::Standard => 1,
             task_core::Tier::Frontier => 2,
         };
-        assert!(rank(rec.decision.lane) >= rank(fixed.decision.lane), "{s:?}");
+        assert!(
+            rank(rec.decision.lane) >= rank(fixed.decision.lane),
+            "{s:?}"
+        );
         let assist = lane_assist_of(&rec).unwrap();
         assert_eq!(assist.classifier_status, ClassifierStatus::JevOk);
         assert!(!assist.real_api_verified);
@@ -262,8 +269,7 @@ fn dispatcher_and_store_never_reference_the_jev_classifier() {
         scan(&root.join(sub), &mut hits);
     }
     assert!(hits.is_empty(), "{hits:?}");
-    let manifests = ["task-dispatch", "task-core"].map(|c| {
-        std::fs::read_to_string(root.join(c).join("Cargo.toml")).unwrap()
-    });
+    let manifests = ["task-dispatch", "task-core"]
+        .map(|c| std::fs::read_to_string(root.join(c).join("Cargo.toml")).unwrap());
     assert!(manifests.iter().all(|m| !m.contains("jev-classifier")));
 }

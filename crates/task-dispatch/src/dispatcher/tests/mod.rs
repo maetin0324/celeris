@@ -2997,12 +2997,12 @@ mod browser_ledger_gate;
 mod browser_policy_missing;
 /// 判断・実行・成果ログの配線（`src/dispatcher/tests/decision_log.rs`）。
 mod decision_log;
-mod lane_assist;
 /// ADR-0124: atomic coding task の planner なし直行経路（`src/dispatcher/tests/direct_route.rs`）。
 mod direct_route;
 /// ADR-0040 付記（2026-10-04、WU 検査の引き継ぎ）: draining の旧 instance は run の終わりで手を離す
 /// （`src/dispatcher/tests/drain_hand_off.rs`）。
 mod drain_hand_off;
+mod lane_assist;
 /// 工程の効き目の A/B 試験（off/on の `ab-metric` 行と効き目の assert）
 /// （`src/dispatcher/tests/phase_effect_ab.rs`）。
 mod phase_effect_ab;

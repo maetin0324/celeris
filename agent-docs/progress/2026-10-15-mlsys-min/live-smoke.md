@@ -28,3 +28,25 @@ updated: 2026-10-15
 ## 再実行 5（2026-10-15）
 - 運用セッションの調査: 分類段は本番 daemon に配線されていない（crates/celeris/src/daemon.rs:22 のコメントのまま、Config に Jev 欄なし）。人は配線の unit 追加を承認済み。この unit のブランチには配線が無く、実経路のスモークは起こせない。
 - Jev 実 API 統合は **未検証**（キー値は扱っていない）。配線・release・昇格・config 投入・鍵登録の後に再実行する。
+
+## 再実行 6（2026-10-15 22:15Z、jev-wire 昇格・鍵登録後）
+読み取りのみ（本番 DB・config は変えていない。キー値は扱っていない）。
+- 鍵: `GET /api/v1/secrets` → `jev_api_key` updated_at 2026-10-15T22:12:39Z、fingerprint あり（値は見ていない）。登録済みなので credential 待ちは起きない想定。
+- 本番 config: `[routing] mode = "decision_assisted"` と `[jev] enabled = true` が入っている。稼働 release 2c07df44ebef（jev-wire 込み。`/local/celeris/state/releases/2c07df44ebef` が存在）。
+- 実経路の観測（この live-smoke 自身の dispatch、`GET /api/v1/tasks/<root>/events` の `routing_decided`、22:14:16Z）:
+  `lane_assist = {mode: decision_assisted, classifier_status: {status: not_attempted}, real_api_verified: false, base_lane: standard, final_lane: standard, basis: fixed_fallback}`。
+- 解釈: この unit は decision_answered（22:14:14Z）で blocked→ready になり 2 秒後に dispatch された。分類は tick の直前に走る（`classify_tick`）ので、ready になった同じ tick で dispatch されると board が空のまま = 分類は試みられていない。reload 後に分類が走ったことの証拠ではない。ほかに reload 後に dispatch された WU はまだ無い（観測時点で 1 分）。
+- 待ち→通知→登録→一度だけ再開の実経路: 鍵を先に登録したため**起きていない**（試験でのみ示されている: cw-e2e / jev-e2e の fake server）。実経路としては**未検証**。
+
+### 検証済み / 未検証
+| 項目 | 状態 | 根拠 |
+|---|---|---|
+| 鍵が登録済み（fingerprint あり） | 検証済み | secrets API |
+| 本番 config が decision_assisted + jev enabled | 検証済み | config.toml の該当節（読み取り） |
+| 本番 release が jev-wire 込み | 検証済み | releases/2c07df44ebef の存在、運用セッションの回答 |
+| 実 Jev API への分類 1〜数件の成功 | **未検証** | 観測できた routing_decided は not_attempted のみ |
+| fell_back_to_fixed の有無と理由 | **未検証** | 分類が試みられた記録がまだ無い |
+| credential 待ち→通知→登録→再開（実経路） | **未検証** | 鍵先行登録のため発生せず |
+
+## 次の一手（人 / 運用セッション）
+分類を試みる dispatch が 1 件要る。最小は、ready になってから 1 tick 以上おいて dispatch される安い task（または既存 WU）を 1 件走らせ、その `routing_decided.lane_assist` を読む。`classifier_status` が `succeeded` なら実 API 検証済み、`fell_back_to_fixed{reason}` なら理由を記録。本 unit を再実行するとき、pilot など後続 WU が ready になる前に確認できる。有料の本測定は始めない。

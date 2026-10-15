@@ -30,3 +30,7 @@ ADR: `agent-docs/adr/2026-10-15-decision-log-export.md`（付記に実装との�
 - campaign 実装時に `campaign_id` の書き手を一本化し、root task id を使うなら log-wire で入れる。
 - reviewer run の判断 record と CoS/planner の消費行を追加して、役割別集計を実運用で埋める。
 - 実 LLM での小規模測定は人の承認後に別 task で行う。
+
+## live-smoke の検証状況（2026-10-15 22:15Z）
+検証済み: 鍵登録（fingerprint）、本番 config（decision_assisted + jev enabled）、jev-wire 込み release 稼働。
+未検証: 実 Jev API での分類成功、fell_back_to_fixed の有無と理由、credential 待ち→再開の実経路。観測できた `routing_decided.lane_assist` は `not_attempted`（`real_api_verified: false`）のみ。詳細は live-smoke.md。

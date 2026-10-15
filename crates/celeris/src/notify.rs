@@ -23,7 +23,7 @@
 //! GUI で成果物を読んで自分で次を考えなければならなかった）。条件の判定そのものは
 //! `crate::milestone_review::ready_milestones` に移した（レビューの run を起こす側と同じ 1 か所）。
 //! **ADR-0079 D13（Phase R5a）: `milestone_ready` と途中目標の判定 run は廃止**（途中目標は凍結。root の完了は
-//! `task_ready`、人の判断は決定の要求・計画の承認で鳴る）。`NotificationKind::MilestoneReady` は既存の行を読むためだけに残る。
+//! `root_done_summary`、人の判断は決定の要求・計画の承認で鳴る）。`NotificationKind::MilestoneReady` は既存の行を読むためだけに残る。
 //!
 //! (2) `bad_news`/`approval_pending`/`question_blocked`/`secretary_reply` は celeris の起動時刻より
 //! 後にできたものだけを対象にする（backfill 禁止）。(3) 送信は 1 tick に最大 1 通、`bad_news` は
@@ -230,12 +230,11 @@ fn scan_at(
 ) -> Result<Vec<Candidate>, StoreError> {
     let org = store.org_list()?;
     let mut out = Vec::new();
-    // ADR-0079 D13（Phase R5a）: `milestone_ready`（途中目標の判定の通知）は廃止。root の完了は `task_ready` で鳴る。
+    // ADR-0079 D13（Phase R5a）: `milestone_ready`（途中目標の判定の通知）は廃止。root の完了は `root_done_summary`（dispatcher が CoS run を起こしてまとめる）で鳴る。
     out.extend(scan_approval_pending(store, &org, started_at, base_url)?);
     out.extend(scan_question_blocked(store, &org, started_at, base_url)?);
     out.extend(scan_bad_news(store, started_at, base_url)?);
     out.extend(scan_secretary_reply(store, &org, started_at, base_url)?);
-    out.extend(scan_task_ready(store, started_at, base_url)?);
     out.extend(scan_task_failed(store, started_at, base_url)?);
     out.extend(scan_phase_checkpoint(store, base_url)?);
     out.extend(scan_cluster_login_needed(store, started_at, base_url)?);
@@ -244,10 +243,10 @@ fn scan_at(
     // リリースの引き渡しは最新の対話・途中目標・走査時刻に隠されない。
     for delivery in store.delivery_list()? {
         if let Some(id) = delivery.notification {
-            let ready = delivery.state == task_core::DeliveryState::Ready;
-            if !ready
-                && (delivery.state != task_core::DeliveryState::Blocked
-                    || !delivery.detail.trim_start().starts_with("[needs-human]"))
+            // ADR 2026-10-15-root-done-cos-summary D7: 「デプロイ準備完了」（Ready）の候補は消えた。
+            // root の完了は `root_done_summary` が 1 回だけ知らせる。残るのは CoS の確認が要る Blocked だけ。
+            if delivery.state != task_core::DeliveryState::Blocked
+                || !delivery.detail.trim_start().starts_with("[needs-human]")
             {
                 continue;
             }
@@ -255,21 +254,9 @@ fn scan_at(
                 kind: NotificationKind::SecretaryReply,
                 key: format!("message:{id}"),
                 body: format!(
-                    "{}: {}{}",
-                    if ready {
-                        "デプロイ準備完了"
-                    } else {
-                        "CoSから確認が必要です"
-                    },
+                    "CoSから確認が必要です: {}{}",
                     excerpt(&delivery.detail, REVIEW_EXCERPT_CHARS),
-                    link(
-                        base_url,
-                        &if ready {
-                            "/releases".into()
-                        } else {
-                            format!("/tasks/{}?tab=changes", delivery.task_id)
-                        }
-                    )
+                    link(base_url, &format!("/tasks/{}?tab=changes", delivery.task_id))
                 ),
                 project_id: Some(delivery.project_id),
             });
@@ -532,63 +519,6 @@ fn transition_key(task: &task_core::Task, events: &[(u64, task_core::Event)]) ->
         Some((seq, _)) => format!("{}:{seq}", task.id),
         None => task.id.to_string(),
     }
-}
-
-fn scan_task_ready(
-    store: &dyn TaskStore,
-    since: OffsetDateTime,
-    base_url: Option<&str>,
-) -> Result<Vec<Candidate>, StoreError> {
-    let tasks = store.list_page(
-        &ListFilter {
-            statuses: vec![Status::Done],
-            ..Default::default()
-        },
-        ListOrder::UpdatedDesc,
-        None,
-        TASK_SCAN,
-    )?;
-    let mut out = Vec::new();
-    // ADR-0079 D6 / D11（Phase R1c）: 木の子 task の done は「親の段階で取り込まれる準備ができた」だけで、
-    // 人に確認を求めない（鳴るのは root の done だけ）。
-    for task in tasks.items.into_iter().filter(|t| {
-        t.updated_at >= since
-            && t.milestone_id.is_none()
-            && task_core::support_kind(t).is_none()
-            && !task_core::tree::is_tree_child(t)
-    }) {
-        let events = store.events_for(task.id)?;
-        let summary = events
-            .iter()
-            .rev()
-            .find_map(|(_, e)| match e {
-                task_core::Event::WorkerFinished {
-                    outcome,
-                    role: None,
-                    ..
-                } => outcome.strip_prefix("done: "),
-                _ => None,
-            })
-            .unwrap_or("");
-        // 部署内の取り込み中には人の判断を求めない。検証後のdelivery通知にまとめる。
-        if store.delivery_get(task.id)?.is_some() {
-            continue;
-        }
-        out.push(Candidate {
-            kind: NotificationKind::TaskReady,
-            key: transition_key(&task, &events),
-            body: format!(
-                "仕事『{}』{}{}{}",
-                excerpt(&task.title, EXCERPT_CHARS),
-                "が完了しました。成果を確認してください。",
-                excerpt(summary, REVIEW_EXCERPT_CHARS),
-                link(base_url, &format!("/tasks/{}", task.id))
-            ),
-            project_id: task.project_id,
-        });
-    }
-    out.sort_by(|a, b| a.key.cmp(&b.key));
-    Ok(out)
 }
 
 /// ADR-0070 D1（Phase 116）: タスクが `failed` になった。**celeris の起動時刻より後**（backfill 禁止。
@@ -1154,14 +1084,16 @@ pub fn schedule_routes(
     Ok(created)
 }
 
-/// Only the two CoS outbox kinds may reach the webhook.
+/// Only the two CoS outbox kinds and the root-done summary may reach the webhook.
 pub fn select_routes_batch(pending: &[Notification]) -> Option<SendBatch> {
     pending
         .iter()
         .find(|n| {
             matches!(
                 n.kind,
-                NotificationKind::CosEscalation | NotificationKind::CosFallback
+                NotificationKind::CosEscalation
+                    | NotificationKind::CosFallback
+                    | NotificationKind::RootDoneSummary
             )
         })
         .map(|n| SendBatch {

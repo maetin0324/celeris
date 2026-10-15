@@ -130,6 +130,8 @@ pub struct CosChatLaunchConfig {
     pub db_path: PathBuf,
     pub attachment_limits: task_core::chat::attachments::ChatAttachmentLimits,
     pub api_base_url: String,
+    /// `[notify] web_base_url`: the links of the root-done summary (ADR 2026-10-15-root-done-cos-summary D5).
+    pub web_base_url: Option<String>,
     /// `[cos.triage]` as a whole (ADR 2026-10-05 D3/D6). Later triage leaves read it here.
     pub triage: super::triage::CosTriageSettings,
 }
@@ -218,6 +220,8 @@ impl Dispatcher {
         // Intake is DB-only and runs even when CoS is disabled, so the
         // unavailable fallback can still see every new wait.
         launch.triage_ingest(self);
+        // ADR 2026-10-15-root-done-cos-summary: root task done → a summary thread and one CoS run.
+        launch.root_done_tick(self);
         if self.accepting_new_work && self.disk_ready && launch.config.enabled {
             if let Err(error) = launch.claim_queued(self) {
                 tracing::warn!(%error, "CoS chat launch tick failed");

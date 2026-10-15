@@ -58,6 +58,7 @@ fn fixture_script(enabled: bool, script: &str) -> Fixture {
             db_path: db_path.clone(),
             attachment_limits: Default::default(),
             api_base_url: "http://127.0.0.1:7700/api/v1".into(),
+            web_base_url: Some("http://celeris.test".into()),
             triage: Default::default(),
         },
     );
@@ -80,6 +81,11 @@ impl Fixture {
     fn count(&self, sql: &str) -> i64 {
         let conn = rusqlite::Connection::open(&self.db_path).expect("db");
         conn.query_row(sql, [], |r| r.get(0)).expect("count")
+    }
+
+    fn count_text(&self, sql: &str) -> String {
+        let conn = rusqlite::Connection::open(&self.db_path).expect("db");
+        conn.query_row(sql, [], |r| r.get(0)).expect("text")
     }
 
     fn items(&self) -> i64 {
@@ -449,3 +455,5 @@ async fn cos_chat_triage_ingest_places_reference_card_in_origin_thread() {
 mod fallback;
 #[path = "cos_chat_triage_inbox_thread.rs"]
 mod inbox_thread;
+#[path = "cos_chat_root_done.rs"]
+mod root_done;

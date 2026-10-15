@@ -93,6 +93,8 @@ pub(crate) struct CosTriageState {
     pub(crate) digest_due: bool,
     /// A run of the inbox thread was started by this process and may have ended since.
     pub(crate) inbox_run_live: bool,
+    /// Root-done steps that already logged a failure in this process (log once, retry every tick).
+    pub(crate) root_done_warned: HashSet<String>,
 }
 
 impl Dispatcher {

@@ -5,7 +5,7 @@ tasks: [01M4YETK5J7Q554ATEB4DSHJP6]
 ---
 
 - 日付: 2026-10-15
-- 状態: 提案
+- 状態: 採用（配線まで実装。試験・closeout は別 WU）
 - 関連: ADR-0133（notice store）、2026-10-05-cos-chat-home、2026-10-06-cos-chat-run-dispatch、2026-10-06-cos-inbox-triage-fallback、
   2026-10-07-cos-inbox-thread-conversation、2026-10-11-breaking-changes-by-default、ADR-0079 D6/D11（木の子は通知しない）
 - 事実の出所と証拠コマンド: `agent-docs/progress/2026-10-15-root-done-cos-summary.md`（『## 事実』）
@@ -44,30 +44,36 @@ tasks: [01M4YETK5J7Q554ATEB4DSHJP6]
 | 受信箱スレッド | 既存の経路だけで済む | 一次対応の digest・人の発言と混ざり、root の文脈が流れる。1 本に全 root が積まれる |
 | home | 追加なし | 人の会話と混ざる。task への辿りが弱い |
 
-**推奨・決定: root task ごとの専用スレッド。** migration で `chat_threads.kind` に `root_summary` を足し、`task_id`（nullable、
-`kind='root_summary'` で部分 UNIQUE）を足す。スレッドは root の done 遷移でまとめを書く時に作る（`task_id` で ensure、冪等）。
-専用スレッドは人が書き込める（受信箱スレッドと同じ）。
+**推奨・決定: root task ごとの専用スレッド。** スレッドは通常の `human` 種（`chat_threads.kind` の CHECK は変えない。
+表の作り直しと API・画面の型の変更を避ける）で、`client_thread_id = root-done:<task_id>:<seq>` により root の done 遷移ごとに
+冪等に作る（題名は「完了: <task の題名>」）。task との対応は新しい表 `root_done_summaries`
+（migration 0080。`task_id`・`done_seq`・`state`・`thread_id`・`input_message_id`）が持つ。人は書き込める
+（通常のスレッドと同じ）。
 
 ## D2 重複排除 key と再起動耐性
 
 新しい `NotificationKind::RootDoneSummary`（`root_done_summary`）を足す。key = `<task_id>:<done 遷移の seq>`
 （`transition_key` と同じ）。reopen 後の再 done は別 key でもう一度まとまる。
-`notification_upsert_pending`（`INSERT OR IGNORE`）が重複排除を担い、行を作る契機は dispatcher tick が events の
-`Transitioned{to: Done}`（parent なし・木の子でない・support でない）を cursor（`feed_cursor`、同じ IMMEDIATE transaction）で読むこと。
-行・スレッド・run が DB に残るので、再起動後は未完の行（pending）から続きを再開する。スレッドの system message は
-`chat_system_message_add_once`（key `root-done:<task_id>:<seq>`）で冪等にする。
+dispatcher の tick が events の `Transitioned{to: Done}` を cursor（`feed_cursor` `root_done_summary`）で読み、
+`task_ops::root_done::is_root_done`（parent なし・木の子でない・support でない）を満たす task だけを
+`root_done_summaries` に 1 行入れる（`INSERT OR IGNORE`）。cursor が無い初回は現在の末尾から始め、過去の done を遡って
+鳴らさない。行は `new → queued → notified | fallback` と一方向にだけ進み（条件付き UPDATE）、DB に残るので再起動後は
+未確定の行から続きを再開する。通知の行は最終文の確定後に作り（`notification_upsert_pending` = `INSERT OR IGNORE`、
+`UNIQUE(kind, key)`）、2 通目は作られない。
 
 ## D3 CoS run の起動経路
 
-既存の CoS run dispatch に乗せる。dispatcher が `RootDoneSummary` の行を見て D1 のスレッドに system message（D4 の事実）を置き、
-スレッドに生きた run が無ければ `start_thread(ClaimSource::RootSummary)` で CoS run を起こす（`max_cos_runs` の枠・account 選択は
-ADR-0089 のまま）。CoS には事実を渡して「何をして何が出たか」を数文にまとめさせ、最終文はそのスレッドの assistant 発言になる。
-**dispatcher・store は LLM を呼ばない**（事実の組み立てと状態遷移だけが決定的な仕事）。run の状態は `chat_runs` が正本で、
-task の events・lease は作らない。
+既存の CoS chat の queue に乗せる。専用スレッドに事実（D4）と「何をして何が出たかを数行にまとめて、このスレッドに書く」
+指示を 1 件の user message として置く（`client_message_id` も同じ key で冪等）。通常の `claim_queued` →
+`start_thread(ClaimSource::Queue)` が CoS run を起こすので、`max_cos_runs` の枠・account 選択・session・sink は
+ADR-0089 のまま。run の最終文はそのスレッドの assistant 発言になる。**dispatcher・store は LLM を呼ばない**（事実の
+組み立てと状態遷移だけが決定的な仕事）。run の状態は `chat_runs` が正本で、task の events・lease は作らない。
+取り込み・release 準備が動いている間（delivery が reviewing / merge_queued / merging / preparing）は、統合 commit と
+release が出るのを最大 1 時間待ってからスレッドを作る。
 
 ## D4 決定的な事実収集
 
-dispatcher（store）が DB と進捗ファイルだけから「事実ブロック」を作り、system message として保存する。CoS の自己申告は使わない。
+dispatcher が `task_ops::root_done::collect`（純粋関数）で DB と進捗ファイルだけから「事実ブロック」を作り、system message として保存する。CoS の自己申告は使わない。
 項目と出所（詳細な表は進捗ファイル『事実』(f)）:
 
 - 題名・目的（`tasks`）。
@@ -76,7 +82,7 @@ dispatcher（store）が DB と進捗ファイルだけから「事実ブロッ�
 - release（`deliveries.json.release`。delivery が無ければ「取り込みなし」と書く）。
 - 成果物 path（events `artifact_produced`）。
 - 受け入れ結果（events `review_verdict`・check の終了 event）。
-- 本番への移行節の有無・未解決事項・提案節の有無（統合 commit の tree から `agent-docs/progress/*.md` を `tasks:` で引いて `git show`）。
+- 本番への移行節の有無・未解決事項・提案節の有無（delivery の head の tree から `agent-docs/progress/*.md` を `tasks:` で引いて `git show`。読めなければ「不明」）。
 - 未統合・配送の止まり（`delivery_skipped`、派生 inbox の `unintegrated`）。
 worker の `worker_finished.outcome`（自己申告）は参考として添えるだけで、単独の根拠にしない。事実ブロックは CoS 入力にもなる。
 
@@ -86,21 +92,29 @@ CoS run の最終文が**スレッドに書き込めた後**に、同じ行の�
 本文は題名・まとめの先頭数文・リンク 2 本: スレッド `<web_base_url>/?thread=<thread_id>` と task `<web_base_url>/tasks/<id>`。
 `web_base_url` が無ければ `NO_WEB_URL` と同じくエラーにする（リンク無しで成功扱いにしない）。スレッドの先頭 message（事実ブロック）に
 task へのリンクを入れ、通知→スレッド→task を辿れるようにする。`select_routes_batch`（Discord に出す kind の選別）に `RootDoneSummary` を足す。
+notifier は本文をそのまま送る（`notify::triage::render`）。CoS の待ち（`cos_inbox_items`）の再確認 `withdraw_if_resolved` は
+この kind には無い（再確認する元の待ちが無い）。旧 `legacy` の行の畳み込み（`discard_pending`）の対象からも外す。
 
 ## D6 CoS 失敗時の fallback
 
 `cos.enabled=false`・run が failed／stopped／interrupted、run 行なし、`unavailable_after_secs` 超過のとき、`CosFallback` と同じ考え方で
 D4 の事実から**決定的な短文**（題名・統合 commit（無ければ「取り込みなし」）・成果物の有無・本番への移行節の有無・リンク）を作り、
-同じ行の本文にして送る。arbitration は `cos_notification_routes` の UNIQUE と同じ仕組みで、まとめと fallback が両方出ないようにする。
+同じ行の本文にして送る。まとめと fallback が両方出ないことは、`root_done_summaries` の状態が一方向（`queued` から
+`notified` か `fallback` のどちらか 1 つへ）であることと、通知の `UNIQUE(kind, key)` が保証する。CoS が無効・`[api] listen` が
+無い（`unavailable_reason`）ときはスレッドを作らず、スレッドへのリンクの無い短文にする。未着手のまま待った場合は、
+スレッドの入力 message を取り下げてから fallback にする（後から run が起きない）。
 スレッドにも fallback の system message（key `root-done-fallback:<task_id>:<seq>`）を残す。LLM は呼ばない。
 
 ## D7 TaskReady の root 完了経路を置き換えて消す
 
 root 完了の通知はこの `RootDoneSummary` だけにする。同じ変更で消す:
 
-- `scan_task_ready` と「delivery があれば skip」の分岐、delivery の `SecretaryReply`「デプロイ準備完了」候補、`NotificationKind::TaskReady`
-  （読み取り用の旧行は migration で別 kind へ移すか、既存の `milestone_ready` と同様の方針で扱う。DB の行は失わない）。
-- 呼ばれていない `notify::scan`／`schedule`／`schedule_routes` のうち、残った通知経路が使わない部分、それを固定する旧試験。
+- `scan_task_ready` と「delivery があれば skip」の分岐、`scan` が作っていた delivery の `SecretaryReply`「デプロイ準備完了」
+  候補（Ready の分岐。CoS の確認が要る Blocked `[needs-human]` の候補は別の通知なので残す）、`NotificationKind::TaskReady`、
+  それを固定していた旧試験。`notifications` の旧 `task_ready` 行は migration 0080 で `root_done_summary` へ種別を移す
+  （行は失わない。未送信のまま残っていた行は `ok=0` で畳む）。
+- 範囲外として残すもの: 呼ばれていない `notify::scan`／`schedule`／`schedule_routes` のうち他の kind（`task_failed`・
+  `bad_news` など）が使う部分。これらの整理は D8 と合わせた別の仕事（進捗ファイルの『提案』）。
 delivery 通知との関係: 本番では既に Discord に出ていないので「二重」は起きていない。新経路は delivery の有無によらず root の done で 1 回鳴り、
 release があれば事実ブロックの release 項目に入る。notice の `task_done`・`delivery`・`release` は受信箱の観測用として変えない。
 
@@ -117,4 +131,4 @@ release があれば事実ブロックの release 項目に入る。notice の `
 ## 帰結
 
 - 既に鳴っていなかった root 完了が、CoS のまとめ付きで 1 root 1 通、スレッドと task へのリンク付きで届く。
-- migration が 1 本要る（`chat_threads` の kind と task_id、`TaskReady` 旧行の扱い）。
+- migration が 1 本（0080: `root_done_summaries` と旧 `task_ready` 行の移行）。`chat_threads` は変えない。

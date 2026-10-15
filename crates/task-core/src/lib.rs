@@ -236,7 +236,7 @@ pub use store::{
     BrowserSitePolicy, BrowserSitePolicyDelete, BrowserSitePolicyRecord,
     BrowserSitePolicyReferences, BrowserSitePolicySource, ClientAccess, ClusterConnectionRecord,
     ClusterConnectionStats, ClusterSettings, EventRow, ListFilter, ListOrder, LocalSettings,
-    LocalSettingsEvent, LocalSettingsOverrides, LockCounts, ModelCatalogStore, Page,
+    LocalSettingsEvent, LocalSettingsOverrides, LockCounts, ModelCatalogStore, Page, RootDoneState, RootDoneSummary,
     ProjectPlanApply, ProjectPlanMilestoneChange, SCHEMA_VERSION, SqliteStore, StoreError,
     StoreOptions, TaskStore, TreeAdoption, backup_database, event_row_schema_value,
     integrity_check, is_busy_error, is_readonly_error,

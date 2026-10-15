@@ -1199,68 +1199,23 @@ async fn send_test_posts_one_message_to_the_url_in_the_secrets_dir() {
     }
 }
 
+/// ADR 2026-10-15-root-done-cos-summary D7: root の done は走査（`scan` / `schedule`）では鳴らない
+/// （旧 `task_ready` の経路は消えた。鳴るのは dispatcher が起こす `root_done_summary` だけ）。
 #[test]
-fn task_completion_survives_a_restart_between_completion_and_the_next_scan() {
+fn a_done_task_is_not_announced_by_the_scan() {
     let env = Env::new();
     let config = NotifyConfig::default();
     notify::schedule(env.as_store(), &config, at(0), at(10)).unwrap();
     let mut done = task(Status::Done);
     done.updated_at = at(15);
     env.store.insert(&done).unwrap();
-    let mut support = task(Status::Done);
-    support.updated_at = at(15);
-    support.conversation = Some(MessageId::new());
-    env.store.insert(&support).unwrap();
-    let mut historic = task(Status::Done);
-    historic.updated_at = at(5);
-    env.store.insert(&historic).unwrap();
     let created = notify::schedule(env.as_store(), &config, at(20), at(21)).unwrap();
-    let completed: Vec<_> = created
-        .iter()
-        .filter(|n| n.kind == NotificationKind::TaskReady)
-        .collect();
-    assert_eq!(completed.len(), 1);
-    assert_eq!(completed[0].key, done.id.to_string());
     assert!(
-        notify::schedule(env.as_store(), &config, at(22), at(23))
-            .unwrap()
-            .is_empty()
+        created
+            .iter()
+            .all(|n| n.kind != NotificationKind::RootDoneSummary),
+        "{created:?}"
     );
-    assert_eq!(env.store.notification_scan_at().unwrap(), Some(at(23)));
-}
-
-/// ADR-0079 D6 / D11（Phase R1c）: 木の子 task の done は `TaskReady` を鳴らさない（親の段階で取り込まれる
-/// 準備ができただけ）。root の done は今どおり鳴る。
-#[test]
-fn a_tree_child_done_does_not_notify_task_ready_but_the_root_does() {
-    let env = Env::new();
-    let config = NotifyConfig::default();
-    notify::schedule(env.as_store(), &config, at(0), at(10)).unwrap();
-    let mut root = task(Status::Done);
-    root.updated_at = at(15);
-    env.store.insert(&root).unwrap();
-    let mut child = task(Status::Done);
-    child.updated_at = at(15);
-    child.parent_id = Some(root.id);
-    child.tree = Some(task_core::TreeInfo::child_of(
-        &root,
-        task_core::ParentUnit {
-            task_id: root.id,
-            plan_id: "plan".into(),
-            unit_key: "c".into(),
-            stage: "s1".into(),
-            attempt: 1,
-        },
-        None,
-    ));
-    env.store.insert(&child).unwrap();
-    let created = notify::schedule(env.as_store(), &config, at(20), at(21)).unwrap();
-    let completed: Vec<String> = created
-        .iter()
-        .filter(|n| n.kind == NotificationKind::TaskReady)
-        .map(|n| n.key.clone())
-        .collect();
-    assert_eq!(completed, vec![root.id.to_string()]);
 }
 
 /// 木の子（`tree.parent_unit` を持つ task）を作る。
@@ -1331,8 +1286,8 @@ fn child_events_do_not_notify() {
     assert!(
         created
             .iter()
-            .all(|n| n.kind != NotificationKind::TaskReady),
-        "the tree child's done does not notify: {created:?}"
+            .all(|n| n.kind != NotificationKind::RootDoneSummary),
+        "the scan never announces a done task: {created:?}"
     );
 }
 
@@ -2132,7 +2087,7 @@ fn milestone_without_cos_reply_no_longer_notifies() {
     done.milestone_id = Some(milestone.id);
     done.updated_at = env.started_at - time::Duration::minutes(6);
     env.store.insert(&done).unwrap();
-    // ADR-0079 D13（Phase R5a）: 途中目標の通知は廃止（root の完了は `task_ready` で鳴る）。
+    // ADR-0079 D13（Phase R5a）: 途中目標の通知は廃止（root の完了は `root_done_summary` で鳴る）。
     assert_eq!(env.schedule(NotificationKind::MilestoneReady), 0);
 }
 

@@ -83,8 +83,6 @@ pub enum NotificationKind {
     BadNews,
     /// 全体対話・継続中の案件に返事が付いた。`key` = message:message id。
     SecretaryReply,
-    /// 途中目標のない通常仕事の成果を引き渡す。key = task id:完了遷移。
-    TaskReady,
     /// ADR-0053 D3（Phase 66）: クラスタの ssh master が落ち、鍵認証も失敗した（人の TOTP が要る）。
     /// `key` = クラスタ id（Dispatcher が outage ごとに 1 回だけ報告を作るので、同じ key の再送は
     /// 起きない。復旧して再び落ちれば `celeris::reports::record_cluster_login_needed_report` が
@@ -122,7 +120,6 @@ impl NotificationKind {
             NotificationKind::QuestionBlocked => "question_blocked",
             NotificationKind::BadNews => "bad_news",
             NotificationKind::SecretaryReply => "secretary_reply",
-            NotificationKind::TaskReady => "task_ready",
             NotificationKind::ClusterLoginNeeded => "cluster_login_needed",
             NotificationKind::TaskFailed => "task_failed",
             NotificationKind::PhaseCheckpoint => "phase_checkpoint",
@@ -143,7 +140,6 @@ impl NotificationKind {
             "question_blocked" => Some(NotificationKind::QuestionBlocked),
             "bad_news" => Some(NotificationKind::BadNews),
             "secretary_reply" => Some(NotificationKind::SecretaryReply),
-            "task_ready" => Some(NotificationKind::TaskReady),
             "cluster_login_needed" => Some(NotificationKind::ClusterLoginNeeded),
             "task_failed" => Some(NotificationKind::TaskFailed),
             "phase_checkpoint" => Some(NotificationKind::PhaseCheckpoint),
@@ -155,7 +151,7 @@ impl NotificationKind {
     }
 
     /// 判定の順（GUI と再送の順を決定的にするため）。
-    pub const ALL: [NotificationKind; 16] = [
+    pub const ALL: [NotificationKind; 15] = [
         NotificationKind::CosEscalation,
         NotificationKind::CosFallback,
         NotificationKind::InboxNew,
@@ -165,7 +161,6 @@ impl NotificationKind {
         NotificationKind::QuestionBlocked,
         NotificationKind::BadNews,
         NotificationKind::SecretaryReply,
-        NotificationKind::TaskReady,
         NotificationKind::ClusterLoginNeeded,
         NotificationKind::TaskFailed,
         NotificationKind::PhaseCheckpoint,

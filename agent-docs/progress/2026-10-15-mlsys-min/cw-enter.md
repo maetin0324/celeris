@@ -28,3 +28,8 @@ ADR 2026-10-15-mlsys-min-decision-assisted D4 の名前をそのまま使う（`
 - 計画なし task は登録後、検証を待たず gate を通る（cw-resume で検証と claim を足す際に atomic 側も揃える）。
 - web/gui の生成型は未再生成（cw-web 担当。`InboxKind` に `credential_wait`、blocked reason に `waiting_for_auth`）。
 - Jev 用の source 宣言（`wait_for_credential`）は Jev adapter 側の設定で行う。本番 config の変更は無し。
+
+## 最終検証（再実行）
+- `bash scripts/dev/test-parallel.sh`: exit 0、5170 pass / 0 fail / 13 ignored。
+- `cargo clippy --workspace -- -D warnings`: exit 0。
+- 範囲 check（`CELERIS_WU_SCOPE_PATHS`）: 変更 path は task-core/task-dispatch/task-ops/task-api/celeris config・daemon/schema/進捗のみ。

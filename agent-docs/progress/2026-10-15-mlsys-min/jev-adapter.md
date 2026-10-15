@@ -42,3 +42,30 @@ Decisions API 固有の別 header の記載は見つかっていない。実装�
 ## 提案
 
 - 分類段が `ApiKeyProvider` を secrets_dir から実装し、`JevError::Auth/KeyMissing` を credential-wait（`waiting_for_auth`）へ接続する。
+
+## fake server 結合試験（WU fake-server, 2026-10-15）
+
+`crates/jev-classifier/tests/jev_fake_server.rs`（11 試験）。127.0.0.1 の tokio `TcpListener` の fake server のみ。実 API・外部ネットワークなし。dev-dependency の tokio に `test-util` を追加（時計 pause 用）。実装側の変更なし（不具合は見つからなかった）。
+
+- 成功: 型付き分類・要求 1 回・Bearer 付与。
+- 不正 schema／未知分類: 3 要求（1+max_retries）後に `FallbackToFixed{InvalidResponse|UnknownClassification}`。途中で正常応答なら成功。
+- timeout: server 側の遅延フック（`Reply::Delay`、3600s）＋ `start_paused = true`。`Timeout` → fixed。待ちは仮想時間で CPU 負荷なし。
+- 401/403: `JevError::Auth{status, secret_id}`、retry なし・sleep なし、閾値超えの 4 回呼んでも breaker が開かず毎回 server へ届く。
+- 429/500/503: server 受信数 = 1+max_retries（max_retries=3 で 4）、sleep 3 回、その後 fixed。
+- breaker: 2 回連続失敗で開き、開いている間は受信数が増えない。cooldown 前（59s）は BreakerOpen、後（61s）は半開で 1 試行が届き、失敗なら直ちに再 open、成功なら閉じる。
+- 秘密: 入力に混ぜた key が要求 body に出ない。応答本文に key が反射されても error / Debug / fallback 理由に出ない（secret id のみ）。genre 等の構造化欄が body に無い。長大入力は body < 40KB に切り詰め。
+
+### 証拠
+
+- `cargo test -p jev-classifier --test jev_fake_server`（3 回繰り返し）: 11 passed / 0 failed、各 0.18s。
+- `cargo clippy --workspace --all-targets -- -D warnings`: exit 0。
+- `bash scripts/dev/test-parallel.sh`: nextest 5184 passed / 0 failed / 13 ignored、doctest 正常、`test-parallel: ok`（exit 0）。
+
+### 未解決事項
+
+- 実 API の応答形・認証 header は未確認のまま（上記）。live smoke は未実施。
+
+### 提案
+
+- credential-wait 接続点: 分類段が `ApiKeyProvider`（secrets_dir 読み出し）を実装し、`JevError::Auth` / `KeyMissing` を `waiting_for_auth`（ADR D4）へ渡す。その間の通常作業は `FallbackToFixed` 相当の fixed 方策で進める。
+- live smoke は別 unit で（有料測定のため人の承認の下で。1 件の最小要求で 401 時の header 形と応答形を確認）。

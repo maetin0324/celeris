@@ -175,3 +175,11 @@ run 終了・WU 検証・campaign 合否は**別の欄**で、互いの代用に
 - `RoutingOutcome.reward` など既存欄に新欄の意味を混ぜない。変える場合は新しい ADR。
 - 本番 config の変更は無い（`routing.mode` は親 ADR D1）。
 - 範囲外: 独自ルータ学習、反実仮想評価（`propensity` は記録するが off-policy 評価はしない）。
+
+## 付記（実装との突き合わせ, 2026-10-15）
+
+- 実装済み: D1〜D4 の欄と冪等記録は `crates/task-core/migrations/0081_decision_log.sql`・`decision_log.rs`・`store/decision_log.rs`（run_id 主キーの置換。再処理・retry で行数も合計も増えない）。dispatcher からの書き込みは `task-dispatch/src/dispatcher/decision_log_wire.rs`（events から決定的に投影、LLM 呼び出しなし）。D5〜D8 の集計と export は `task-core/src/decision_log_export.rs`、CLI は `celerisctl campaign export <campaign-id> --out <dir>`（`records.jsonl` + `summary.json`、秘密は `[redacted]`、同一 DB から byte 一致）。
+- 提案（`proposed_*`）と実行（`exec_*`）は別欄で、結果・消費は実行側のみに付く。run 終了・WU 検証・campaign 合否は別ラベル。この配線は campaign 合否を書かない（既存値を保持）。
+- 本文からの差: `export_cursor` は None のまま。cost は定価換算（estimated）で、実支出 `cash_cost_usd` は欠測のまま（定価で代用しない）。
+- 未実装（後続）: `campaign_id`・`arm`・`routing_mode`・Jev classifier 欄の書き手（欄と保持は実装済み、書く側は campaign／Jev adapter unit）。CoS・cluster 待機・介入の消費行の自動書き込み。reviewer run の判断 record。この間 `campaign_id` が None の run は export 対象外。
+- 未検証: 実 LLM を使った測定は行っていない（試験は決定的な fixture のみ）。

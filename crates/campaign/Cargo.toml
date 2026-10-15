@@ -1,0 +1,21 @@
+[package]
+name = "celeris-campaign"
+version = "0.1.0"
+edition.workspace = true
+
+[lib]
+name = "celeris_campaign"
+path = "src/lib.rs"
+
+[[bin]]
+name = "celeris-campaign"
+path = "src/main.rs"
+
+[dependencies]
+routing-eval = { path = "../routing-eval" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+
+[dev-dependencies]
+tempfile = "3"

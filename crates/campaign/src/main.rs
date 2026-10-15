@@ -1,6 +1,12 @@
 use std::{path::PathBuf, process::ExitCode};
 
-use celeris_campaign::manifest::CampaignManifest;
+use celeris_campaign::{
+    checker, executor::MockExecutor, export, manifest::CampaignManifest, runner,
+};
+
+const USAGE: &str = "usage: celeris-campaign <dry-run|validate|run|check|export> --manifest <path> \
+[--input-manifest <path>] [--out <dir>] [--executor mock] [--dest <dir>] \
+[--repo-src <dir>] [--materials-src <dir>] [--kb-src <dir>]";
 
 fn arg(args: &[String], name: &str) -> Option<PathBuf> {
     args.iter()
@@ -13,6 +19,7 @@ fn run(args: Vec<String>) -> Result<String, String> {
     let cmd = args.first().map(String::as_str).unwrap_or("");
     let manifest_path = arg(&args, "--manifest").ok_or("--manifest <path> is required")?;
     let m = CampaignManifest::load(&manifest_path)?;
+    let out = || arg(&args, "--out").ok_or("--out <dir> is required".to_string());
     match cmd {
         "dry-run" => {
             let input = m.load_input(&manifest_path, arg(&args, "--input-manifest").as_deref())?;
@@ -23,7 +30,43 @@ fn run(args: Vec<String>) -> Result<String, String> {
             m.validate()?;
             Ok(m.compute_sha256()?)
         }
-        _ => Err("usage: celeris-campaign <dry-run|validate> --manifest <path> [--input-manifest <path>]".into()),
+        "run" => {
+            // 実 LLM・外部 network を呼ぶ実行器はこの crate にない。mock のみ。
+            let which = arg(&args, "--executor").ok_or("--executor mock is required")?;
+            if which.to_string_lossy() != "mock" {
+                return Err(format!(
+                    "unknown executor {which:?}: only `mock` is available"
+                ));
+            }
+            let input = m.load_input(&manifest_path, arg(&args, "--input-manifest").as_deref())?;
+            let opts = runner::RunOptions {
+                out: out()?,
+                repo_src: arg(&args, "--repo-src"),
+                materials_src: arg(&args, "--materials-src"),
+                kb_src: arg(&args, "--kb-src"),
+            };
+            let rep = runner::run(&m, &input, &MockExecutor::seeded(), &opts)?;
+            Ok(format!(
+                "{{\"executed\":{},\"resumed_skipped\":{},\"budget_cancelled\":{},\"tokens_total\":{},\"budget_stopped\":{}}}",
+                rep.executed,
+                rep.resumed_skipped,
+                rep.budget_cancelled,
+                rep.tokens_total,
+                rep.budget_stopped
+            ))
+        }
+        "check" => {
+            let rep = checker::check(&m, &out()?);
+            let s = serde_json::to_string_pretty(&rep).map_err(|e| e.to_string())?;
+            if rep.ok { Ok(s) } else { Err(s) }
+        }
+        "export" => {
+            let out = out()?;
+            let dest = arg(&args, "--dest").unwrap_or_else(|| out.join("export"));
+            let t = export::export(&m, &out, &dest)?;
+            serde_json::to_string_pretty(&t).map_err(|e| e.to_string())
+        }
+        _ => Err(USAGE.into()),
     }
 }
 

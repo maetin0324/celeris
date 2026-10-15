@@ -9,6 +9,7 @@ members = [
     "crates/task-dispatch",
     "crates/routing-eval",
     "crates/llm-proxy",
+    "crates/jev-classifier",
     "crates/celeris-mcp",
     "crates/celeris",
     "crates/celerisctl",

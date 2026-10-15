@@ -5,7 +5,7 @@ completed: 2026-10-15
 ---
 # wire-mode
 
-ADR `agent-docs/adr/2026-10-15-mlsys-min-routing-mode-wiring.md`。
+ADR `agent-docs/adr/2026-10-15-mlsys-min-routing-policy.md` の付記（wire-mode）。
 
 ## 変更
 - `[routing] mode`（既定 fixed、未知は読み込みエラー）: `crates/celeris/src/config/routing_mode.rs`、bootstrap/reload で `Dispatcher::set_routing_mode`。

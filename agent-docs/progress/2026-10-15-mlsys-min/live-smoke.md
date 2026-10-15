@@ -58,3 +58,32 @@ updated: 2026-10-15
 - 作業ツリーの base に jev-wire が無かったため、親ブランチ celeris/01M4Z1QJX5FYBXTPSEF0WKB1CK を merge してから修正した。
 - 検証: `cargo fmt --all -- --check` exit 0 / `cargo clippy --workspace -- -D warnings` exit 0 / `bash scripts/dev/test-parallel.sh` exit 0（passed 5366, failed 0）/ 対象試験 24 passed。
 - 実経路（実 Jev 分類の成否・fell_back_to_fixed の理由・待ち→通知→登録→再開）はこの run では観測していない = **未検証**のまま（上の表を維持）。release・昇格は運用セッション。昇格後、ready から 1 tick 以上おいて dispatch された WU の `routing_decided.lane_assist.classifier_status` と、daemon ログの `jev: classification ...` 行を確認する。
+
+## 再実行 8（2026-10-15 22:40Z、daemon 再起動 22:21:36Z 後の実経路観測）
+読み取りのみ（`GET /api/v1/tasks/<root>/events` の `routing_decided.lane_assist`、`journalctl --user -u 'celeris@*'`）。キー値は扱っていない。本番 DB・config・release は変えていない。有料測定なし。
+
+| ts (UTC) | classifier_status | 備考 |
+|---|---|---|
+| 22:14:16 | not_attempted | reload が config.jev を書き戻さない不具合（reload-fix で修正済みだが未昇格） |
+| 22:21:59 | not_attempted | 再起動の直後（22:21:36Z）の dispatch。ready と同 tick の可能性 |
+| 22:30:16 | not_attempted | 同上 |
+| 22:31:30 | **fell_back_to_fixed {reason: client_error}** | 再起動後で**初めて分類が試みられた**。cheap lane のまま fixed に戻った（`real_api_verified: false`, `basis: fixed_fallback`） |
+| 22:39:34 | not_attempted | この unit 自身。ready と同 tick で dispatch |
+
+- 解釈: 実経路で分類段は動き、実 Jev endpoint へ送って**非 2xx・非 401/403/429・非 5xx の応答**（`client.rs:222` の `_` 枝、4xx 系）を受けた。鍵は 401/403 にならなかったので認証自体は通った可能性があるが、これは推測。HTTP status は event に残らない。
+- 既定値: endpoint `https://openrouter.ai/api/alpha/decisions`、model_id `typesafe/jev-1.14`（`crates/jev-classifier/src/config.rs:7-8`）。本番 config の `[jev]` は `enabled = true` のみ = 既定値のまま。endpoint か model_id か要求 schema が実 API と合っていない疑い。**原因は未確定**。
+- 本番 daemon は reload-fix 昇格前の release のため、分類結果の info ログ（`jev: classification ...`）は無く、journal からは status を取れなかった。
+
+### 検証済み / 未検証（更新）
+| 項目 | 状態 | 根拠 |
+|---|---|---|
+| 鍵登録済み・本番 config・jev-wire 込み release | 検証済み | 再実行 6 |
+| 分類段が実経路で起動し、実 endpoint へ試行する | 検証済み | 22:31:30 の routing_decided（client_error は実 HTTP 応答を受けた結果） |
+| fell_back_to_fixed で固定方策に戻る（故障時 fixed） | 検証済み | 同 event: final_lane = base_lane = cheap |
+| 実 Jev API での分類**成功** | **未検証** | 唯一の試行が client_error。succeeded は 0 件 |
+| client_error の原因（HTTP status、endpoint/model/schema の不一致） | **未検証** | status が event に出ない。昇格後の info ログで確認 |
+| credential 待ち→通知→登録→一度だけ再開（実経路） | **未検証** | 鍵先行登録のため発生せず。試験（cw-e2e / jev-e2e fake server）のみ |
+
+## 次の一手（人 / 運用セッション）
+1. reload-fix（ログ付き）を release・昇格し、ready から 1 tick 以上おいた WU を 1 件 dispatch させて daemon ログの `jev: classification ...` で reason と HTTP status を確認する。
+2. `client_error` が続くなら、Jev の公式 API 仕様（endpoint・model_id・要求 schema）を確認し、`[jev] endpoint` / `model_id` を本番 config で直す（人の手順）。コード側の schema 不一致なら別 unit で修正。

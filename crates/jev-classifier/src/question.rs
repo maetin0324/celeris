@@ -76,12 +76,61 @@ pub const Q_SPECIFICITY: &str = "specificity";
 pub const Q_WORK_NATURE: &str = "work_nature";
 pub const Q_FAILURE_KIND: &str = "failure_kind";
 
-fn choice<T: Copy>(instructions: &str, all: &[T], name: impl Fn(T) -> &'static str) -> Value {
+/// choice の質問。公式 schema では `criteria` は必須の object（ラベル → 説明）。
+fn choice<T: Copy>(
+    instructions: &str,
+    all: &[T],
+    name: impl Fn(T) -> &'static str,
+    describe: impl Fn(T) -> &'static str,
+) -> Value {
+    let criteria: serde_json::Map<String, Value> = all
+        .iter()
+        .map(|t| {
+            (
+                name(*t).to_string(),
+                Value::String(describe(*t).to_string()),
+            )
+        })
+        .collect();
     json!({
         "type": "choice",
         "instructions": instructions,
-        "criteria": all.iter().map(|t| name(*t)).collect::<Vec<_>>(),
+        "criteria": criteria,
     })
+}
+
+fn describe_specificity(s: Specificity) -> &'static str {
+    match s {
+        Specificity::Specified => "The steps are given; the work only follows them.",
+        Specificity::NeedsImplementation => {
+            "The goal is clear; code or content must be written to reach it."
+        }
+        Specificity::NeedsInvestigationDesign => {
+            "Investigation or design decisions are needed before the work can start."
+        }
+        Specificity::InsufficientInfo => "The request cannot be acted on as written.",
+    }
+}
+
+fn describe_work_nature(w: WorkNature) -> &'static str {
+    match w {
+        WorkNature::Implementation => "Writing or changing code or content.",
+        WorkNature::Investigation => "Finding out facts or causes.",
+        WorkNature::Design => "Deciding structure, interfaces or approach.",
+        WorkNature::Documentation => "Writing or updating documents.",
+        WorkNature::Verification => "Checking that something works or is correct.",
+        WorkNature::Operation => "Running, deploying or maintaining systems.",
+    }
+}
+
+fn describe_failure_kind(f: FailureKind) -> &'static str {
+    match f {
+        FailureKind::Environment => "The environment, tools or machines failed.",
+        FailureKind::TestFailure => "Tests or checks failed on the produced work.",
+        FailureKind::SpecAmbiguity => "The request was ambiguous or contradictory.",
+        FailureKind::MissingDependency => "A required dependency, input or access was missing.",
+        FailureKind::Other => "None of the other kinds.",
+    }
 }
 
 /// 型付きの狭い質問。model ごとの成功率は聞かない。
@@ -90,12 +139,10 @@ pub fn questions(with_failure: bool) -> Value {
     q.insert(
         Q_SPECIFICITY.into(),
         choice(
-            "How completely does the instruction determine the procedure? specified: steps are given; \
-             needs_implementation: goal is clear, code or content must be written; \
-             needs_investigation_design: investigation or design decisions are needed first; \
-             insufficient_info: the request cannot be acted on.",
+            "How completely does the instruction determine the procedure?",
             Specificity::ALL,
             Specificity::as_str,
+            describe_specificity,
         ),
     );
     q.insert(
@@ -104,6 +151,7 @@ pub fn questions(with_failure: bool) -> Value {
             "What is the main nature of the work?",
             WorkNature::ALL,
             WorkNature::as_str,
+            describe_work_nature,
         ),
     );
     if with_failure {
@@ -113,6 +161,7 @@ pub fn questions(with_failure: bool) -> Value {
                 "What kind of failure is the recent_failure?",
                 FailureKind::ALL,
                 FailureKind::as_str,
+                describe_failure_kind,
             ),
         );
     }

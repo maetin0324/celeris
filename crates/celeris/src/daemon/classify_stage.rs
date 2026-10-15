@@ -39,17 +39,28 @@ impl RequestClassifier for JevClassifier {
     }
 }
 
-fn reason_name(r: FallbackReason) -> &'static str {
-    match r {
+fn reason_name(r: &FallbackReason) -> String {
+    let name = match r {
         FallbackReason::BreakerOpen => "breaker_open",
         FallbackReason::Timeout => "timeout",
         FallbackReason::Transport => "transport",
         FallbackReason::RateLimited => "rate_limited",
         FallbackReason::ServerError(_) => "server_error",
-        FallbackReason::ClientError(_) => "client_error",
+        FallbackReason::ClientError(d) => {
+            // status と応答の error.code・error.message だけ（鍵・入力本文は持たない）。
+            let mut s = format!("client_error:{}", d.status);
+            if let Some(c) = &d.code {
+                s.push_str(&format!(" code={c}"));
+            }
+            if let Some(m) = &d.message {
+                s.push_str(&format!(" message={m}"));
+            }
+            return s;
+        }
         FallbackReason::InvalidResponse => "invalid_response",
         FallbackReason::UnknownClassification => "unknown_classification",
-    }
+    };
+    name.to_string()
 }
 
 fn hint_of(s: Specificity) -> SpecificityHint {
@@ -120,7 +131,7 @@ impl ClassificationStage {
                 credential: None,
             },
             Ok(ClassifyOutcome::FallbackToFixed { reason }) => BoardItem {
-                entry: ClassificationEntry::fell_back(reason_name(reason)),
+                entry: ClassificationEntry::fell_back(reason_name(&reason)),
                 credential: None,
             },
             Err(JevError::KeyMissing { .. }) => self.credential_item("key_missing"),
@@ -404,6 +415,28 @@ mod tests {
                     reason: FallbackReason::Timeout,
                 }),
                 "timeout",
+                false,
+            ),
+            (
+                Ok(ClassifyOutcome::FallbackToFixed {
+                    reason: FallbackReason::ClientError(jev_classifier::ClientErrorDetail {
+                        status: 400,
+                        code: Some("invalid_request".into()),
+                        message: Some("criteria must be an object".into()),
+                    }),
+                }),
+                "client_error:400 code=invalid_request message=criteria must be an object",
+                false,
+            ),
+            (
+                Ok(ClassifyOutcome::FallbackToFixed {
+                    reason: FallbackReason::ClientError(jev_classifier::ClientErrorDetail {
+                        status: 402,
+                        code: Some("402".into()),
+                        message: Some("insufficient credits".into()),
+                    }),
+                }),
+                "client_error:402 code=402 message=insufficient credits",
                 false,
             ),
             (

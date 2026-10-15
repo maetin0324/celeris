@@ -27,11 +27,7 @@ impl JevVerifier {
         let Ok(client) = reqwest::Client::builder().timeout(self.timeout).build() else {
             return VerifyOutcome::Transient;
         };
-        let body = serde_json::json!({
-            "model": self.model,
-            "state": "ping",
-            "questions": {"ok": {"type": "noul", "instructions": "Is this a ping?", "criteria": "yes"}},
-        });
+        let body = ping_body(&self.model);
         match client
             .post(&self.endpoint)
             .bearer_auth(value)
@@ -42,6 +38,27 @@ impl JevVerifier {
             Ok(resp) => classify_http_status(resp.status().as_u16()),
             Err(_) => VerifyOutcome::Transient,
         }
+    }
+}
+
+/// 最小費用の検証要求。noul の criteria は省く（公式 schema: 渡すなら {"true":…,"false":…}）。
+fn ping_body(model: &str) -> serde_json::Value {
+    serde_json::json!({
+        "model": model,
+        "state": "ping",
+        "questions": {"ok": {"type": "noul", "instructions": "Is this a ping?"}},
+    })
+}
+
+#[cfg(test)]
+mod ping_body_tests {
+    #[test]
+    fn noul_ping_has_no_string_criteria() {
+        let b = super::ping_body("typesafe/jev-1.14");
+        let q = &b["questions"]["ok"];
+        assert_eq!(q["type"], "noul");
+        assert!(q.get("criteria").is_none());
+        assert!(q["instructions"].is_string());
     }
 }
 

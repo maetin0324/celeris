@@ -37,15 +37,47 @@ pub trait ApiKeyProvider: Send + Sync {
     fn api_key(&self) -> Option<ApiKey>;
 }
 
+/// 4xx 応答の記録。鍵・入力本文は含めない（応答の `error.code`・`error.message` のみ。
+/// message は 200 文字で切る）。400（schema 不備）と 402（残高不足）を区別するために status を残す。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClientErrorDetail {
+    pub status: u16,
+    pub code: Option<String>,
+    pub message: Option<String>,
+}
+
+impl ClientErrorDetail {
+    /// OpenRouter 形式 `{"error":{"code":…,"message":…}}` を読む。読めなければ status のみ。
+    pub fn from_body(status: u16, body: &str) -> Self {
+        let v: Option<serde_json::Value> = serde_json::from_str(body).ok();
+        let err = v.as_ref().and_then(|v| v.get("error"));
+        let code = err.and_then(|e| e.get("code")).and_then(|c| match c {
+            serde_json::Value::String(s) => Some(s.clone()),
+            serde_json::Value::Number(n) => Some(n.to_string()),
+            _ => None,
+        });
+        let message = err
+            .and_then(|e| e.get("message"))
+            .and_then(|m| m.as_str())
+            .map(|m| m.chars().take(200).collect());
+        Self {
+            status,
+            code,
+            message,
+        }
+    }
+}
+
 /// fixed 方策へ戻した理由。値・応答本文は含めない。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FallbackReason {
     BreakerOpen,
     Timeout,
     Transport,
     RateLimited,
     ServerError(u16),
-    ClientError(u16),
+    /// 4xx（401/403/429 以外）。status と応答の `error.code`・`error.message` だけを持つ。
+    ClientError(ClientErrorDetail),
     InvalidResponse,
     UnknownClassification,
 }
@@ -219,7 +251,12 @@ impl JevClassifier {
             429 => return Attempt::Retry(FallbackReason::RateLimited),
             500..=599 => return Attempt::Retry(FallbackReason::ServerError(status)),
             200..=299 => {}
-            _ => return Attempt::Fail(FallbackReason::ClientError(status)),
+            _ => {
+                let body = resp.text().await.unwrap_or_default();
+                return Attempt::Fail(FallbackReason::ClientError(ClientErrorDetail::from_body(
+                    status, &body,
+                )));
+            }
         }
         let body = match resp.text().await {
             Ok(b) => b,

@@ -420,4 +420,6 @@ fn http_status_classification_never_asks_for_reregistration_on_429_or_budget() {
     for s in [402, 429, 500, 503] {
         assert_eq!(classify_http_status(s), VerifyOutcome::Transient, "{s}");
     }
+    // 400 は要求の schema 不備: 再試行しても直らない。402（残高不足）とは区別する。
+    assert_eq!(classify_http_status(400), VerifyOutcome::RequestRejected);
 }

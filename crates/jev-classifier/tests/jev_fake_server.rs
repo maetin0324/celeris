@@ -9,8 +9,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use jev_classifier::{
-    ApiKey, ApiKeyProvider, ClassifyInput, ClassifyOutcome, Clock, FallbackReason, JevClassifier,
-    JevConfig, JevError, Sleeper,
+    ApiKey, ApiKeyProvider, ClassifyInput, ClassifyOutcome, ClientErrorDetail, Clock,
+    FallbackReason, JevClassifier, JevConfig, JevError, Sleeper,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -96,7 +96,19 @@ async fn serve(script: Vec<Reply>) -> Fake {
                     .unwrap_or_else(|e| e.into_inner())
                     .push(String::from_utf8_lossy(&buf[..n]).to_string());
                 c3.fetch_add(1, Ordering::SeqCst);
-                let mut reply = reply;
+                // 公式 schema の形でない要求は台本に関わらず 400 で拒否する（実 API と同じく）。
+                let raw = String::from_utf8_lossy(&buf[..n]).to_string();
+                let rejected = serde_json::from_str::<serde_json::Value>(body_of(&raw))
+                    .ok()
+                    .and_then(|v| schema_error(&v));
+                let mut reply = match rejected {
+                    Some(why) => json(
+                        400,
+                        &serde_json::json!({"error": {"code": "invalid_request", "message": why}})
+                            .to_string(),
+                    ),
+                    None => reply,
+                };
                 while let Reply::Delay(d, next) = reply {
                     tokio::time::sleep(d).await;
                     reply = *next;
@@ -421,4 +433,102 @@ async fn long_input_is_truncated_before_sending() {
         body_of(&f.requests()[0]).len() < 40_000,
         "payload is bounded"
     );
+}
+
+/// 公式 schema の形を検査する（choice の criteria は object、noul の criteria は true/false の object か省略）。
+fn schema_error(body: &serde_json::Value) -> Option<&'static str> {
+    let qs = body.get("questions")?.as_object()?;
+    for q in qs.values() {
+        match q.get("type").and_then(|t| t.as_str()) {
+            Some("choice") => {
+                let c = q.get("criteria").and_then(|c| c.as_object());
+                if c.is_none_or(|c| c.is_empty() || c.values().any(|v| !v.is_string())) {
+                    return Some("choice criteria must be an object of label to description");
+                }
+            }
+            Some("noul") => {
+                if let Some(c) = q.get("criteria") {
+                    let ok = c.as_object().is_some_and(|o| {
+                        o.len() == 2 && o.contains_key("true") && o.contains_key("false")
+                    });
+                    if !ok {
+                        return Some("noul criteria must be {true, false}");
+                    }
+                }
+            }
+            _ => return Some("unknown question type"),
+        }
+        if q.get("instructions").and_then(|i| i.as_str()).is_none() {
+            return Some("instructions is required");
+        }
+    }
+    if body.get("model").and_then(|m| m.as_str()).is_none() || body.get("state").is_none() {
+        return Some("model and state are required");
+    }
+    None
+}
+
+#[test]
+fn classifier_questions_match_official_schema_and_array_criteria_is_rejected() {
+    for with_failure in [false, true] {
+        let body = serde_json::json!({
+            "model": "typesafe/jev-1.14",
+            "state": "x",
+            "questions": jev_classifier::questions(with_failure),
+        });
+        assert_eq!(schema_error(&body), None);
+    }
+    let old = serde_json::json!({
+        "model": "m", "state": "x",
+        "questions": {"q": {"type": "choice", "instructions": "i", "criteria": ["a", "b"]}},
+    });
+    assert!(schema_error(&old).is_some());
+    let old_noul = serde_json::json!({
+        "model": "m", "state": "x",
+        "questions": {"q": {"type": "noul", "instructions": "i", "criteria": "yes"}},
+    });
+    assert!(schema_error(&old_noul).is_some());
+}
+
+#[tokio::test]
+async fn client_error_keeps_status_code_and_message_and_separates_400_from_402() {
+    for (status, code, msg) in [
+        (400u16, "invalid_request", "criteria must be an object"),
+        (402u16, "insufficient_credits", "add credits"),
+    ] {
+        let err = format!(r#"{{"error":{{"code":"{code}","message":"{msg}"}}}}"#);
+        let fake = serve(vec![json(status, &err)]).await;
+        let rig = rig(&fake.url, |_| {});
+        let out = rig
+            .c
+            .classify(&input("do the thing"), &Key(Some(SECRET)))
+            .await;
+        assert_eq!(
+            out,
+            fixed(FallbackReason::ClientError(ClientErrorDetail {
+                status,
+                code: Some(code.into()),
+                message: Some(msg.into()),
+            }))
+        );
+        assert_eq!(fake.count(), 1, "4xx is not retried");
+    }
+}
+
+#[tokio::test]
+async fn fake_server_rejects_array_criteria_with_400() {
+    let f = serve(vec![json(200, OK)]).await;
+    let old = serde_json::json!({
+        "model": "typesafe/jev-1.14", "state": "x",
+        "questions": {"q": {"type": "choice", "instructions": "i", "criteria": ["a", "b"]}},
+    });
+    let resp = reqwest::Client::new()
+        .post(&f.url)
+        .json(&old)
+        .send()
+        .await
+        .expect("send");
+    assert_eq!(resp.status().as_u16(), 400);
+    let body: serde_json::Value = resp.json().await.expect("json");
+    assert_eq!(body["error"]["code"], "invalid_request");
 }

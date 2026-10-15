@@ -14,9 +14,11 @@ mod question;
 mod time;
 
 pub use breaker::CircuitBreaker;
-pub use client::{ApiKey, ApiKeyProvider, ClassifyOutcome, FallbackReason, JevClassifier};
+pub use client::{
+    ApiKey, ApiKeyProvider, ClassifyOutcome, ClientErrorDetail, FallbackReason, JevClassifier,
+};
 pub use config::JevConfig;
 pub use error::JevError;
 pub use input::{ClassifyInput, redact_secrets};
-pub use question::{Answer, Classification, FailureKind, Specificity, WorkNature};
+pub use question::{Answer, Classification, FailureKind, Specificity, WorkNature, questions};
 pub use time::{Clock, Sleeper, SystemClock, TokioSleeper};

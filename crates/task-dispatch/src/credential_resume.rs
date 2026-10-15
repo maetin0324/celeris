@@ -28,6 +28,9 @@ pub enum VerifyOutcome {
     InvalidKey,
     InsufficientPermission,
     Transient,
+    /// 400: 検証要求そのものが API の schema に合わない。再試行しても直らないので Transient にしない
+    /// （再試行の backoff に入れず、同じ鍵では再検証しない）。鍵の不備ではないので再登録も求めない。
+    RequestRejected,
 }
 
 /// provider adapter 境界。`value` は秘密の値（保持・出力しない）。実装は最小費用の 1 呼び出しだけを行う。
@@ -84,6 +87,7 @@ pub struct ResumeReport {
     pub resumed: usize,
     pub rejected: usize,
     pub transient: usize,
+    pub request_rejected: usize,
     pub cancelled: usize,
 }
 
@@ -234,6 +238,7 @@ impl CredentialResumer {
         for w in open {
             match outcome {
                 VerifyOutcome::Transient => report.transient += 1,
+                VerifyOutcome::RequestRejected => report.request_rejected += 1,
                 VerifyOutcome::Valid => {
                     if self.store.credential_wait_mark_verified(
                         &w.work_unit_id,
@@ -347,6 +352,7 @@ pub fn classify_http_status(status: u16) -> VerifyOutcome {
         200..=299 => VerifyOutcome::Valid,
         401 => VerifyOutcome::InvalidKey,
         403 => VerifyOutcome::InsufficientPermission,
+        400 => VerifyOutcome::RequestRejected,
         _ => VerifyOutcome::Transient,
     }
 }

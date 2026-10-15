@@ -30,6 +30,7 @@ import {
   browserWaitBadge,
   INBOX_KINDS,
   isDestructive,
+  isReregistration,
   KIND_LABELS,
   nativeTarget,
   needsNativeScreen,
@@ -327,7 +328,8 @@ function InboxRow({
       <div className="flex min-w-0 flex-1 flex-col gap-2">
         <div className="flex min-w-0 flex-wrap items-center gap-2">
           <Badge tone={item.kind === "failed" ? "danger" : "warning"}>
-            {browserWaitBadge(item, waits) ?? KIND_LABELS[item.kind] ?? item.kind}
+            {browserWaitBadge(item, waits) ??
+              (isReregistration(item) ? "再登録待ち" : (KIND_LABELS[item.kind] ?? item.kind))}
           </Badge>
           <h3 id={headingId} className="min-w-0 break-words text-body font-semibold">
             {item.title}

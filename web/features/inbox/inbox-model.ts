@@ -17,6 +17,7 @@ export const INBOX_KINDS: readonly InboxKind[] = [
   "unroutable",
   "browser_wait",
   "cluster_login",
+  "credential_wait",
   "disk_full",
   "delivery_skipped",
   "integration_request",
@@ -36,6 +37,7 @@ export const KIND_LABELS: Record<InboxKind, string> = {
   unroutable: "担当が決まらない",
   browser_wait: "ブラウザ操作",
   cluster_login: "クラスタ接続",
+  credential_wait: "API キーの登録",
   disk_full: "ディスクの逼迫",
   delivery_skipped: "配送の見送り",
   integration_request: "統合の依頼",
@@ -66,6 +68,7 @@ export function isDestructive(option: InboxOption): boolean {
 /** 画面から答えられず、専用画面で操作する種類（answer が 409 native_action_required を返す）。 */
 const NATIVE_KINDS = new Set<InboxKind>([
   "cluster_login",
+  "credential_wait",
   "disk_full",
   "delivery_skipped",
   "integration_request",
@@ -101,8 +104,35 @@ export function browserWaitBadge(item: InboxItem, waits: readonly BrowserWait[] 
   return item.title.includes("credential") || item.title.includes("認証") ? "credential 待ち" : "ブラウザの承認待ち";
 }
 
+/**
+ * credential 待ち item（ADR 2026-10-15-mlsys-min-decision-assisted D4）が待つ secret id。
+ * answer.native.path（`/api/v1/secrets/{id}`）の最後の区切りで、値ではなく id だけ。
+ */
+export function credentialSecretId(item: InboxItem): string | null {
+  if (item.kind !== "credential_wait") return null;
+  const last = item.answer.native?.path.split("/").at(-1);
+  if (!last) return null;
+  try {
+    return decodeURIComponent(last) || null;
+  } catch {
+    return null;
+  }
+}
+
+/** アカウント画面の secrets section で該当 secret にフォーカスする行き先。 */
+export function accountsSecretHref(secretId: string): string {
+  return `/accounts?secret=${encodeURIComponent(secretId)}`;
+}
+
+/** 誤キー・権限不足で再登録待ちになった item（item の文面が「更新してください」に変わる）。 */
+export function isReregistration(item: InboxItem): boolean {
+  return item.kind === "credential_wait" && item.title.includes("更新してください");
+}
+
 export function nativeTarget(item: InboxItem, waits: readonly BrowserWait[] = []): { href: string; label: string } {
   if (item.kind === "browser_wait") return browserWaitTarget(item, waits);
+  const secretId = credentialSecretId(item);
+  if (secretId) return { href: accountsSecretHref(secretId), label: "アカウント画面の秘密の登録" };
   const link = item.links.find((row) => row.href.startsWith("/") && !row.href.startsWith("//"));
   if (link) return { href: link.href, label: link.label };
   if (item.kind === "cluster_login") return { href: "/clusters", label: "クラスタの画面" };

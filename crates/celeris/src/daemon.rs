@@ -27,6 +27,8 @@ pub(crate) mod browser_ledger_path;
 pub(crate) mod classify_stage;
 pub(crate) mod clusters;
 mod cos_launch;
+#[allow(dead_code)]
+pub(crate) mod jev_key;
 pub(crate) mod routing_guardrail;
 pub(crate) mod run;
 pub(crate) mod secrets;

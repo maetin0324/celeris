@@ -323,10 +323,34 @@ pub(crate) fn last_notified_at(state: &ApiState) -> Option<OffsetDateTime> {
         .and_then(|cell| *cell)
 }
 
+/// ADR 2026-10-15-verify-counts-without-page-limit D1: 全行数だけを返す応答（上限なし）。
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct RowCount {
+    pub count: u64,
+}
+
+/// `GET /api/v1/reports/count`: `reports` の全行数（release verify の件数照合用）。
+pub(crate) async fn count_reports(State(state): State<ApiState>) -> ApiResult {
+    let count = state
+        .blocking(|store| store.report_count_all().map_err(store_problem))
+        .await?;
+    Ok(json_response(StatusCode::OK, &RowCount { count }))
+}
+
+/// `GET /api/v1/messages/count`: `messages` の全行数（release verify の件数照合用）。
+pub(crate) async fn count_messages(State(state): State<ApiState>) -> ApiResult {
+    let count = state
+        .blocking(|store| store.message_count_all().map_err(store_problem))
+        .await?;
+    Ok(json_response(StatusCode::OK, &RowCount { count }))
+}
+
 pub(crate) fn routes() -> axum::Router<ApiState> {
     use axum::routing::{get, post};
     axum::Router::new()
         .route("/api/v1/reports", get(list))
+        .route("/api/v1/reports/count", get(count_reports))
+        .route("/api/v1/messages/count", get(count_messages))
         .route("/api/v1/reports/read", post(mark_read))
         .route("/api/v1/reports/notified", post(notified))
         .route("/api/v1/reports/{id}", get(detail))

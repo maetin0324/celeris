@@ -760,6 +760,25 @@ fn insert_report_tx(conn: &Connection, report: &Report) -> Result<(), StoreError
     Ok(())
 }
 
+impl SqliteStore {
+    /// ADR 2026-10-15-verify-counts-without-page-limit D1: `reports` の全行数（`COUNT(*)`）。
+    /// 一覧と違い上限が無いので、release verify の件数照合が 1 応答の上限に当たらない。
+    pub fn report_count_all(&self) -> Result<u64, StoreError> {
+        self.with_read_conn(|conn| {
+            let n: i64 = conn.query_row("SELECT COUNT(*) FROM reports", [], |r| r.get(0))?;
+            Ok(u64::try_from(n).unwrap_or(0))
+        })
+    }
+
+    /// 同 D1: `messages` の全行数（`COUNT(*)`、node・案件の有無を問わない）。
+    pub fn message_count_all(&self) -> Result<u64, StoreError> {
+        self.with_read_conn(|conn| {
+            let n: i64 = conn.query_row("SELECT COUNT(*) FROM messages", [], |r| r.get(0))?;
+            Ok(u64::try_from(n).unwrap_or(0))
+        })
+    }
+}
+
 impl ReportStore for SqliteStore {
     fn report_append(&self, report: &Report) -> Result<(), StoreError> {
         self.report_append_all(std::slice::from_ref(report))

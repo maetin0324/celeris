@@ -19,3 +19,8 @@ updated: 2026-10-15
 - 人が許可した「Jev を要求する task を先に走らせて credential 待ちを起こす」は、現状では起こせない: 待機の入口は `[llm_sources.<id>] wait_for_credential = true` + `credential_ref`（cw-enter）で、本番 config に Jev の source 宣言が無い（本番 config は worker が変更不可）。
 - 本番への移行（人が実施）: `~/.config/celeris/config.toml` に Jev の `[llm_sources.jev]`（`wait_for_credential = true`、`credential_ref = "jev_api_key"`）を追加し reload。その後、decision-assisted の task を 1 件走らせると、その work unit だけが待機→受信箱/Discord 通知（/accounts リンク付き）。人が GUI『アカウント』で登録→自動再開→この unit を再実行して分類 1〜数件のスモーク。
 - decision-log への「検証済み/未検証」の記録は、スモーク実施後に行う（現時点は未検証）。
+
+## 再実行 4（2026-10-15）
+- `GET /api/v1/secrets`（読み取りのみ）: `jev_api_key` は依然 `updated_at: null`・`fingerprint: null` = 未登録。本番 config（~/.config/celeris/config.toml）に `[llm_sources.jev]` も無い（grep で 0 件）。
+- Jev 実 API 統合は **未検証**（キー値は扱っていない、検証済み扱いしていない）。credential 待ち→通知→自動再開の実経路は、本番 config に Jev source を人が追加するまで起こせない（手順は「再実行 3」）。
+- decision-log への検証済み/未検証の記録は、スモーク実施後。

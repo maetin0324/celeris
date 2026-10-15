@@ -235,8 +235,9 @@ pub use repos::{
 pub use store::{
     BrowserSitePolicy, BrowserSitePolicyDelete, BrowserSitePolicyRecord,
     BrowserSitePolicyReferences, BrowserSitePolicySource, ClientAccess, ClusterConnectionRecord,
-    ClusterConnectionStats, ClusterSettings, EventRow, ListFilter, ListOrder, LocalSettings,
-    LocalSettingsEvent, LocalSettingsOverrides, LockCounts, ModelCatalogStore, Page,
+    ClusterConnectionStats, ClusterSettings, CredentialVerifyKind, CredentialWait,
+    CredentialWaitEnter, CredentialWaitState, EnterWaitOutcome, EventRow, ListFilter, ListOrder,
+    LocalSettings, LocalSettingsEvent, LocalSettingsOverrides, LockCounts, ModelCatalogStore, Page,
     ProjectPlanApply, ProjectPlanMilestoneChange, RootDoneState, RootDoneSummary, SCHEMA_VERSION,
     SqliteStore, StoreError, StoreOptions, TaskStore, TreeAdoption, backup_database,
     event_row_schema_value, integrity_check, is_busy_error, is_readonly_error,

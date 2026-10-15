@@ -31,6 +31,7 @@ pub(super) fn build_cos_chat_launch(
         db_path: db_path.to_path_buf(),
         attachment_limits: config.cos.attachments.limits(),
         api_base_url: api_base_url.unwrap_or_default(),
+        web_base_url: config.notify.base_url().map(str::to_owned),
         triage: task_dispatch::dispatcher::cos_chat::triage::CosTriageSettings {
             policy_skill: config.cos.triage.policy_skill.clone(),
             policy_version: config.cos.triage.policy_version.clone(),

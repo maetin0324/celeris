@@ -1807,7 +1807,7 @@ SPEC §3.6「少しでも聞くべきだとエージェントが判断したら�
 読むだけで、送信は celeris に委譲する。
 
 知らせるのは「人の判断が要る」出来事だけ（ADR-0037 D1）: `milestone_ready` / `approval_pending` /
-`question_blocked` / `bad_news` / `secretary_reply` / `task_ready` / `cluster_login_needed`
+`question_blocked` / `bad_news` / `secretary_reply` / `cluster_login_needed`
 （`cluster_login_needed` は ADR-0053 D3。クラスタの ssh master が落ち、鍵認証も失敗して
 人の TOTP 入力が要る状態。`key` = クラスタ id。celeris が outage ごとに 1 回だけ台帳へ書くので、
 同じ outage で 2 通目が来ることはない）/ `root_done_summary`（ADR 2026-10-15-root-done-cos-summary。

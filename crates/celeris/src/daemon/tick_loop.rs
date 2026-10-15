@@ -387,6 +387,7 @@ pub(crate) async fn tick_loop(
                                         n.kind,
                                         task_core::NotificationKind::CosEscalation
                                             | task_core::NotificationKind::CosFallback
+                                            | task_core::NotificationKind::RootDoneSummary
                                     )
                                 })
                                 .cloned()
@@ -409,13 +410,22 @@ pub(crate) async fn tick_loop(
                             {
                                 match &triage_store {
                                     Ok(outbox) => {
-                                        match notify::triage::withdraw_if_resolved(
-                                            outbox,
-                                            &config.db.path,
-                                            &view,
-                                            row,
-                                            now,
-                                        ) {
+                                        // The root-done summary has no source wait to re-check: its body
+                                        // was fixed when the row was created (ADR 2026-10-15 D5).
+                                        let sendable = if row.kind
+                                            == task_core::NotificationKind::RootDoneSummary
+                                        {
+                                            Ok(true)
+                                        } else {
+                                            notify::triage::withdraw_if_resolved(
+                                                outbox,
+                                                &config.db.path,
+                                                &view,
+                                                row,
+                                                now,
+                                            )
+                                        };
+                                        match sendable {
                                             Ok(true) => {
                                                 match notify::triage::render(row, &config.notify) {
                                                     Ok(content) => {

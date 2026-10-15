@@ -4,6 +4,7 @@ pub(crate) mod digest;
 pub(crate) mod fallback;
 pub mod launch;
 pub(crate) mod rollover;
+pub(crate) mod root_done;
 pub(crate) mod sink;
 pub mod triage;
 pub(crate) mod workspace_files;

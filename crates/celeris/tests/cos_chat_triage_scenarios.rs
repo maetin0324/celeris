@@ -27,7 +27,7 @@ fn config() -> NotifyConfig {
 }
 
 /// Every non-CoS kind of ADR-0037 / ADR-0050 / ADR-0133 that used to reach Discord directly.
-const LEGACY: [NotificationKind; 13] = [
+const LEGACY: [NotificationKind; 12] = [
     NotificationKind::InboxNew,
     NotificationKind::Digest,
     NotificationKind::MilestoneReady,
@@ -35,7 +35,6 @@ const LEGACY: [NotificationKind; 13] = [
     NotificationKind::QuestionBlocked,
     NotificationKind::BadNews,
     NotificationKind::SecretaryReply,
-    NotificationKind::TaskReady,
     NotificationKind::ClusterLoginNeeded,
     NotificationKind::TaskFailed,
     NotificationKind::PhaseCheckpoint,

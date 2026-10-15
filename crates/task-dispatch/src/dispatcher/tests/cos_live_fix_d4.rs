@@ -61,6 +61,7 @@ fn fixture(script: &str) -> Fixture {
             db_path: db_path.clone(),
             attachment_limits: Default::default(),
             api_base_url: "http://127.0.0.1:7700/api/v1".into(),
+            web_base_url: None,
             triage: Default::default(),
         },
     );

@@ -20,6 +20,11 @@ fn field<'a>(value: &'a Value, name: &str) -> &'a str {
 /// Only the structured packet's public summary and options enter Discord. The URL is
 /// supplied by the daemon; the worker cannot provide an external host.
 pub fn render(row: &Notification, config: &NotifyConfig) -> Result<String, &'static str> {
+    if row.kind == NotificationKind::RootDoneSummary {
+        // The dispatcher fixed the whole text (CoS summary or the deterministic fallback) together with
+        // the thread and task links, after checking `web_base_url` (ADR 2026-10-15 D5).
+        return Ok(super::clamp_content(&row.body));
+    }
     let base = config.base_url().ok_or(NO_WEB_URL)?;
     let parsed = reqwest::Url::parse(base).map_err(|_| NO_WEB_URL)?;
     if !matches!(parsed.scheme(), "http" | "https")

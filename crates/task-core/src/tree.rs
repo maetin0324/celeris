@@ -138,7 +138,7 @@ pub fn root_id_of(task: &Task) -> TaskId {
 
 /// ADR-0079 D6（Phase R1c）: 親の計画の unit から作られた木の子 task か（`tree.parent_unit` を持つ）。
 /// 子の成果は親のブランチに取り込まれ、main への取り込み（ADR-0051 の `deliveries`・ADR-0043 D5 の
-/// 取り込み）と `TaskReady` の通知は持たない。root（`tree` を持たない task）は `false`。
+/// 取り込み）と `RootDoneSummary` の通知は持たない。root（`tree` を持たない task）は `false`。
 pub fn is_tree_child(task: &Task) -> bool {
     tree_parent(task).is_some()
 }

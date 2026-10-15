@@ -70,7 +70,7 @@ fn notify_digest_waits_for_interval_and_never_sends_notice_kind_immediately() {
         .is_empty()
     );
     let legacy = store
-        .notification_upsert_pending(NotificationKind::TaskReady, "old", "old", None, at)
+        .notification_upsert_pending(NotificationKind::SecretaryReply, "old", "old", None, at)
         .unwrap()
         .unwrap();
     assert!(select_routes_batch(&[legacy, rows[0].clone()]).is_none());
@@ -302,4 +302,34 @@ fn notify_rejects_retired_link_config() {
         .expect_err("retired setting must not be silently ignored");
     assert!(error.to_string().contains("unknown field `gui_base_url`"));
     assert!(error.to_string().contains("web_base_url"));
+}
+
+/// ADR 2026-10-15-root-done-cos-summary D5: the root-done summary is sent as the text the dispatcher fixed
+/// (CoS summary + links); no source wait is re-checked, and only that kind plus the two CoS kinds are selected.
+#[test]
+fn root_done_summary_is_selected_and_rendered_as_is() {
+    use task_core::NotificationStore;
+    let store = task_core::SqliteStore::open_in_memory().unwrap();
+    let at = OffsetDateTime::from_unix_timestamp(1_800_000_000).unwrap();
+    let row = store
+        .notification_upsert_pending(
+            NotificationKind::RootDoneSummary,
+            "t:1",
+            "完了: x\nまとめ\nスレッド: http://web/?thread=a",
+            None,
+            at,
+        )
+        .unwrap()
+        .unwrap();
+    let batch = select_routes_batch(std::slice::from_ref(&row)).expect("selected");
+    assert_eq!(batch.ids, vec![row.id]);
+    let text = triage::render(&row, &NotifyConfig::default()).unwrap();
+    assert_eq!(text, row.body);
+    // The same (kind, key) is never created twice.
+    assert!(
+        store
+            .notification_upsert_pending(NotificationKind::RootDoneSummary, "t:1", "again", None, at)
+            .unwrap()
+            .is_none()
+    );
 }

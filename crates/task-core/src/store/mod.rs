@@ -121,11 +121,13 @@ mod org;
 mod projects;
 mod query;
 mod repos;
+mod root_done;
 mod route_records;
 mod routing_evidence;
 mod routing_log;
 mod site_policies;
 pub use account_limits::AccountLimit;
+pub use root_done::{RootDoneState, RootDoneSummary};
 pub(crate) use site_policies::site_policy_tx;
 pub use site_policies::{
     BrowserSitePolicy, BrowserSitePolicyDelete, BrowserSitePolicyRecord,

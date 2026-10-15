@@ -147,6 +147,7 @@ fn cluster_config(clusters: Vec<celeris::config::ClusterConfig>) -> Config {
         workspace_root_cli: None,
         execution: Default::default(),
         routing_eval: Default::default(),
+        jev: Default::default(),
     }
 }
 

@@ -81,6 +81,9 @@ pub(crate) async fn tick_loop(
         crate::daemon::stranded_sweep::spawn(dispatcher.store(), roles.role.clone());
     // ADR 2026-10-11 D3: enforce の guardrail 判定（間隔は `INTERVAL`。判定は決定的で LLM を呼ばない）。
     let mut guardrail_ticker = crate::daemon::routing_guardrail::Ticker::default();
+    // ADR 2026-10-15-jev-wire D3: `[jev] enabled` のときだけ作る分類段（reload で設定が変われば作り直す）。
+    let mut classify_tick: Option<crate::daemon::classify_tick::ClassifyTick> = None;
+    let mut classify_built_for: Option<crate::config::JevSectionConfig> = None;
     let mut ticks: u64 = 0;
     // ADR-0040 D4: 手元の run とレビューの数（drain の判定に使う。最後の tick の値）。
     let mut in_flight: usize = 0;
@@ -511,6 +514,27 @@ pub(crate) async fn tick_loop(
         // 後処理だけを行う）。`standby` はディスパッチャを一切回さない（＝ ready なタスクを拾わない、
         // ワーカーを起こさない、リースを奪わない）。ADR-0041 D5: `verify` は回すが、面倒を見るのは
         // `genre = "smoke"` かつアダプタが `fake` のタスクだけ（`set_eligible_tasks`）。
+        if role == InstanceRole::Active {
+            let secrets_dir = config.secrets.as_ref().map(|s| s.dir.clone());
+            if classify_built_for.as_ref() != Some(&config.jev) {
+                classify_built_for = Some(config.jev.clone());
+                classify_tick = match crate::daemon::classify_tick::ClassifyTick::build(
+                    &config.jev,
+                    secrets_dir,
+                    dispatcher.classification_board(),
+                ) {
+                    Ok(c) => c,
+                    Err(error) => {
+                        tracing::warn!(%error, "jev: could not build the classifier; classification is off");
+                        None
+                    }
+                };
+            }
+            if let Some(c) = &classify_tick {
+                let store = dispatcher.store();
+                c.run(store.as_ref(), dispatcher.routing_mode()).await;
+            }
+        }
         let tick_started = std::time::Instant::now();
         let report: TickReport = match role {
             // ADR-0041 D5: `verify` も tick を回すが、`set_eligible_tasks` で `smoke` の煙試験だけに

@@ -530,3 +530,19 @@ impl SqliteStore {
         Ok(out)
     }
 }
+
+impl SqliteStore {
+    /// campaign 単位の export（records + summary）。読み出しのみ。
+    pub fn decision_log_export_campaign(
+        &self,
+        params: &crate::decision_log_export::ExportParams,
+    ) -> Result<crate::decision_log_export::CampaignExport, StoreError> {
+        let c = Some(params.campaign_id.as_str());
+        let runs = self.decision_log_runs_list(c)?;
+        let usage = self.decision_log_usage_list(c)?;
+        let ivs = self.decision_log_interventions_list(c)?;
+        Ok(crate::decision_log_export::build_campaign_export(
+            params, &runs, &usage, &ivs,
+        ))
+    }
+}

@@ -96,6 +96,7 @@ use crate::policy::{ProviderId, ProviderOutcome};
 mod browser_prereq;
 mod cluster_job_wait;
 mod credential_gate;
+mod lane_assist;
 pub use cluster_job_wait::{ClusterJobPollRequest, ClusterJobPoller, ssh_cluster_job_poller};
 pub use credential_gate::{CredentialGate, CredentialGates};
 mod auto_leaf;
@@ -160,6 +161,7 @@ pub use route_select::{
 pub struct DispatchRoutingSettings {
     pub escalation: task_core::EscalationThresholds,
 }
+pub use lane_assist::{BoardItem, ClassificationBoard, lane_facts};
 pub use snapshot::SnapshotPublisher;
 
 #[cfg(test)]
@@ -1240,6 +1242,10 @@ pub struct Dispatcher {
     credential_gates: credential_gate::CredentialGates,
     /// credential 待ちに入れた計画なしの task（tick ごとに同じ wait を書き直さない。再起動で `restore_credential_waits` が戻す）。
     credential_held: std::collections::HashSet<TaskId>,
+    /// `routing.mode`（既定 fixed）。decision_assisted のとき lane 層が分類結果を読む（`lane_assist`）。
+    routing_mode: task_core::route_select::RoutingMode,
+    /// 分類段が書く結果の置き場（dispatcher は読むだけ。Jev は呼ばない）。
+    classification_board: lane_assist::ClassificationBoard,
     /// ADR-0062 B1（Phase 107）: 「担当が cluster:<id> を持たない」警告を出した（連続 tick で
     /// 繰り返さない）タスク。担当・道具が変わって使えるようになれば `task_may_use_cluster` が消す。
     warned_cluster_tool: std::collections::HashSet<TaskId>,
@@ -1577,6 +1583,8 @@ impl Dispatcher {
             warned_unroutable: std::collections::HashSet::new(),
             credential_gates: credential_gate::CredentialGates::default(),
             credential_held: std::collections::HashSet::new(),
+            routing_mode: task_core::route_select::RoutingMode::default(),
+            classification_board: lane_assist::ClassificationBoard::default(),
             warned_cluster_tool: std::collections::HashSet::new(),
             just_aborted: std::collections::HashSet::new(),
             write_reservations: HashMap::new(),

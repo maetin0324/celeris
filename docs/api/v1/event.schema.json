@@ -699,6 +699,51 @@
       ],
       "type": "object"
     },
+    "ClassifierStatus": {
+      "description": "分類段の結果。`fell_back_to_fixed` の `reason` は理由名だけ（値・応答本文は含めない）。",
+      "oneOf": [
+        {
+          "properties": {
+            "status": {
+              "const": "jev_ok",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "reason": {
+              "type": "string"
+            },
+            "status": {
+              "const": "fell_back_to_fixed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "reason"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "status": {
+              "const": "not_attempted",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "ClusterJobState": {
       "description": "1 つの job の状態（scheduler の文字を正規化したもの）。",
       "oneOf": [
@@ -5162,6 +5207,56 @@
       ],
       "type": "object"
     },
+    "LaneAssistRecord": {
+      "description": "`celeris.route-decision/1` に載せる lane 層の記録（`decision_assisted` のときだけ）。",
+      "properties": {
+        "base_lane": {
+          "description": "既存方策（assist 前）の lane。",
+          "type": "string"
+        },
+        "basis": {
+          "description": "`fixed_rule` | `classification_raise` | `fixed_fallback`。",
+          "type": "string"
+        },
+        "classifier_status": {
+          "$ref": "#/$defs/ClassifierStatus"
+        },
+        "final_lane": {
+          "description": "実際に使う lane。",
+          "type": "string"
+        },
+        "mode": {
+          "type": "string"
+        },
+        "overridden_by": {
+          "description": "提案を採らなかった理由: `explicit`（人・System の lane）| `ceiling` | `availability`。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "proposed_lane": {
+          "description": "分類・fixed 規則が提案した lane（`replan` を含む）。無ければ None。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "real_api_verified": {
+          "description": "Jev 実 API 統合の検証済みフラグ。`classifier_status` とは独立（既定 false）。",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "mode",
+        "classifier_status",
+        "real_api_verified",
+        "base_lane",
+        "final_lane",
+        "basis"
+      ],
+      "type": "object"
+    },
     "LaneDecision": {
       "properties": {
         "clamped_by": {
@@ -6501,6 +6596,17 @@
             "string",
             "null"
           ]
+        },
+        "lane_assist": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LaneAssistRecord"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "decision-assisted の lane 層の記録（ADR 2026-10-15-mlsys-min-routing-policy。`fixed` では書かない）。"
         },
         "model_pin": {
           "type": [

@@ -77,7 +77,7 @@ impl Dispatcher {
         Ok(true)
     }
 
-    fn enter_credential_wait(
+    pub(super) fn enter_credential_wait(
         &mut self,
         task: &Task,
         wu: Option<&WorkUnitRow>,

@@ -915,6 +915,15 @@ export type CheckpointTestRun = {
   "summary"?: string | null;
 };
 
+export type ClassifierStatus = {
+  "status": "jev_ok";
+} | {
+  "reason": string;
+  "status": "fell_back_to_fixed";
+} | {
+  "status": "not_attempted";
+};
+
 export type ClusterConfigView = {
   "auth"?: string;
   "concurrency": number;
@@ -3268,6 +3277,17 @@ export type KnowledgeTree = {
   "truncated": boolean;
 };
 
+export type LaneAssistRecord = {
+  "base_lane": string;
+  "basis": string;
+  "classifier_status": ClassifierStatus;
+  "final_lane": string;
+  "mode": string;
+  "overridden_by"?: string | null;
+  "proposed_lane"?: string | null;
+  "real_api_verified": boolean;
+};
+
 export type LaneDecision = {
   "clamped_by"?: string | null;
   "escalation"?: string | null;
@@ -4728,6 +4748,7 @@ export type RouteDecision2 = {
   "harness_version": string;
   "judge": RouteJudge;
   "lane"?: string | null;
+  "lane_assist"?: LaneAssistRecord | null;
   "model_pin"?: string | null;
   "options_hash"?: string | null;
   "propensity": number;

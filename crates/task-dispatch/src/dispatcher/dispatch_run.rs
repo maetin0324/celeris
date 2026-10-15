@@ -458,7 +458,7 @@ impl Dispatcher {
         // tier`（既定 standard。E3〜E6 は frontier 固定だった）。人が Task に `tier:frontier` を
         // 明示していれば `TierSource::Human` として記録する。D21: WU の run は WU の view
         // （objective/acceptance/budget/genre/features を差し替えたもの）で lane を決める。
-        let (lane_decision, escalation_audit) = if is_planner_dispatch {
+        let (mut lane_decision, escalation_audit) = if is_planner_dispatch {
             let tier = task.worker_hint.tier;
             let (source, rule_id, reason) = if planner_human_frontier {
                 (
@@ -500,6 +500,15 @@ impl Dispatcher {
             self.decide_lane(&task)?
                 .map_or((None, None), |(decision, audit)| (Some(decision), audit))
         };
+        // `routing.mode = decision_assisted`（既定 fixed では何もしない）: 分類段の結果で lane を引き上げ得る。
+        let mut lane_assist_record = None;
+        if !is_planner_dispatch && let Some(decision) = lane_decision.as_mut() {
+            let (record, held) = self.apply_lane_assist(&task, current_wu.as_ref(), decision)?;
+            if held {
+                return Ok(false);
+            }
+            lane_assist_record = record;
+        }
         if let Some(decision) = &lane_decision {
             task.worker_hint.tier = decision.lane;
         }
@@ -560,6 +569,9 @@ impl Dispatcher {
                 work_unit_id: current_wu.as_ref().map(|wu| wu.id.clone()),
             },
         );
+        if let (Some(record), Some(decision)) = (lane_assist_record, route_trace.decision.as_mut()) {
+            decision.lane_assist = Some(record);
+        }
         let launch = match &route_outcome {
             Ok(pick) => self
                 .route_adapter(pick)
@@ -1583,7 +1595,7 @@ fn cluster_wait(cluster_id: &str, detail: &str) -> task_core::TaskWait {
 }
 
 /// The lane label kept on the routing request (the default route policy does not read it).
-fn tier_label(tier: task_core::Tier) -> &'static str {
+pub(super) fn tier_label(tier: task_core::Tier) -> &'static str {
     match tier {
         task_core::Tier::Frontier => "frontier",
         task_core::Tier::Standard => "standard",

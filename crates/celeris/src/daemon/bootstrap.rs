@@ -593,6 +593,7 @@ pub fn build_dispatcher(
     dispatcher.set_harness_adapters(build_harness_adapters(config)?);
     // ADR 2026-10-15-mlsys-min D4: 登録が要る credential の宣言と、再起動後の待機の復元（DB が正）。
     dispatcher.set_credential_gates(config.credential_gates()?);
+    dispatcher.set_routing_mode(config.routing.mode);
     match dispatcher.restore_credential_waits() {
         Ok(waits) if !waits.is_empty() => {
             tracing::info!(

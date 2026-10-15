@@ -2893,6 +2893,8 @@ mod cleanup_and_disk;
 mod cluster_tunnel;
 mod conversation_cos;
 mod cos_chat_attach_handoff;
+mod credential_e2e;
+mod credential_gate;
 mod cron_jobs;
 mod git_workspace;
 mod integration_check_progress;

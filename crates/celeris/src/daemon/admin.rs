@@ -231,6 +231,7 @@ pub fn reload_providers(dispatcher: &mut Dispatcher, config: &mut Config) -> Res
     // ADR 2026-10-11 llm-source-harness-selection: harness and source×model are chosen from these.
     dispatcher.set_llm_route_registry(llm_route_registry);
     dispatcher.set_harness_adapters(harness_adapters);
+    dispatcher.set_credential_gates(new_config.credential_gates().map_err(|e| e.to_string())?);
     // ADR 2026-10-08 account-concurrency-limits §(d)(e): a stored implicit limit goes away when its
     // source is no longer declared without an account pool. Other stored limits survive.
     if let Err(error) = dispatcher.prune_implicit_account_limits() {

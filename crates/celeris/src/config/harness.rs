@@ -223,6 +223,8 @@ impl Config {
                 models: vec![fake.clone()],
                 max_runs: None,
                 quota: None,
+                wait_for_credential: false,
+                credential_purpose: None,
             },
         );
         self.harness_declarations.insert(

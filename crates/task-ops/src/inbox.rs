@@ -36,6 +36,11 @@ pub struct Inbox {
     #[serde(skip)]
     #[schemars(skip)]
     pub disk_full: Vec<task_core::DiskWatchState>,
+    /// ADR 2026-10-15-mlsys-min-decision-assisted D4: credential の登録（または再登録）を待つ work unit
+    /// （`credential_waits` の `waiting` / `rejected`）。`human_inbox` が集約キーごとに 1 件へ束ねる。
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub credential_waits: Vec<task_core::CredentialWait>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
@@ -1258,6 +1263,18 @@ pub fn inbox(
         .filter(|s| s.level == task_core::DiskLevel::Critical)
         .collect();
 
+    // 1 回の短い読み（`credential_waits` は開いている行だけの小さな表。events は走査しない）。
+    let credential_waits = store
+        .credential_waits_list_waiting()?
+        .into_iter()
+        .filter(|w| {
+            matches!(
+                w.state,
+                task_core::CredentialWaitState::Waiting | task_core::CredentialWaitState::Rejected
+            )
+        })
+        .collect();
+
     let counts = InboxCounts {
         approvals: approvals.len() as u32,
         questions: questions.len() as u32,
@@ -1279,6 +1296,7 @@ pub fn inbox(
         decisions,
         counts,
         disk_full,
+        credential_waits,
     })
 }
 

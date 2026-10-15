@@ -6,7 +6,7 @@
 
 use std::time::Duration;
 
-use task_dispatch::credential_resume::{classify_http_status, CredentialVerifier, VerifyOutcome};
+use task_dispatch::credential_resume::{CredentialVerifier, VerifyOutcome, classify_http_status};
 
 pub struct JevVerifier {
     pub endpoint: String,

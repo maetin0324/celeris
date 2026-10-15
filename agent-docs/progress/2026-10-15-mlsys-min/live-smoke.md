@@ -24,3 +24,7 @@ updated: 2026-10-15
 - `GET /api/v1/secrets`（読み取りのみ）: `jev_api_key` は依然 `updated_at: null`・`fingerprint: null` = 未登録。本番 config（~/.config/celeris/config.toml）に `[llm_sources.jev]` も無い（grep で 0 件）。
 - Jev 実 API 統合は **未検証**（キー値は扱っていない、検証済み扱いしていない）。credential 待ち→通知→自動再開の実経路は、本番 config に Jev source を人が追加するまで起こせない（手順は「再実行 3」）。
 - decision-log への検証済み/未検証の記録は、スモーク実施後。
+
+## 再実行 5（2026-10-15）
+- 運用セッションの調査: 分類段は本番 daemon に配線されていない（crates/celeris/src/daemon.rs:22 のコメントのまま、Config に Jev 欄なし）。人は配線の unit 追加を承認済み。この unit のブランチには配線が無く、実経路のスモークは起こせない。
+- Jev 実 API 統合は **未検証**（キー値は扱っていない）。配線・release・昇格・config 投入・鍵登録の後に再実行する。

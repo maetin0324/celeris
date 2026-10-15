@@ -5,7 +5,7 @@ tasks: [01M4YETK5J7Q554ATEB4DSHJP6]
 ---
 
 - 日付: 2026-10-15
-- 状態: 採用（配線まで実装。試験・closeout は別 WU）
+- 状態: 採用・実装済み（done の root のみ。failed／cancelled は D8 の提案）
 - 関連: ADR-0133（notice store）、2026-10-05-cos-chat-home、2026-10-06-cos-chat-run-dispatch、2026-10-06-cos-inbox-triage-fallback、
   2026-10-07-cos-inbox-thread-conversation、2026-10-11-breaking-changes-by-default、ADR-0079 D6/D11（木の子は通知しない）
 - 事実の出所と証拠コマンド: `agent-docs/progress/2026-10-15-root-done-cos-summary.md`（『## 事実』）
@@ -120,8 +120,10 @@ release があれば事実ブロックの release 項目に入る。notice の `
 
 ## D8 failed／cancelled root
 
-範囲: 本 ADR は done だけを実装の範囲とし、failed／cancelled の扱いは決めきらない。`scan_task_failed`／`TaskFailed` も死んだ経路で、
-置き換えて消すか新経路に含めるかが論点。推奨は進捗ファイルの『## 提案』節に書く。
+この変更の範囲は done だけ。`scan_task_failed`／`TaskFailed` も daemon から呼ばれない死んだ経路として残してある（`notify::scan` の他 kind と合わせた整理を別の仕事にする）。提案（未決定・別 task で実装）:
+
+- failed は同じ仕組み（専用スレッド・事実ブロック・CoS・fallback）に含める。事実ブロックに失敗の分類と理由（`classify_task_failure`）と main 取り込み済みの有無を足し、`RootDoneSummary` を outcome 欄を持つ `RootSummary` に改める。`TaskFailed` と `scan_task_failed` は同じ変更で消す（通知の空白期間を作らない）。
+- cancelled は人が自分で止めたものなので通知しない（スレッドも作らない）。
 
 ## D9 config 欄
 

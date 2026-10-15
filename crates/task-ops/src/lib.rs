@@ -58,6 +58,8 @@ pub mod regate;
 pub mod replay;
 pub mod repo_requirement;
 pub mod retry;
+/// ADR 2026-10-15-root-done-cos-summary: root 完了まとめの対象判定・事実収集・fallback 短文（決定的）。
+pub mod root_done;
 /// ADR-0069 D5（Phase 114）: run ごとの routing の監査（担当・harness・lane・model・メトリクス・レビュー）。
 pub mod routing_audit;
 /// Deterministic, read-only export of routing decisions as training JSONL.

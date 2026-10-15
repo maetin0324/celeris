@@ -1810,7 +1810,8 @@ SPEC §3.6「少しでも聞くべきだとエージェントが判断したら�
 `question_blocked` / `bad_news` / `secretary_reply` / `task_ready` / `cluster_login_needed`
 （`cluster_login_needed` は ADR-0053 D3。クラスタの ssh master が落ち、鍵認証も失敗して
 人の TOTP 入力が要る状態。`key` = クラスタ id。celeris が outage ごとに 1 回だけ台帳へ書くので、
-同じ outage で 2 通目が来ることはない）。`result` / `progress` は**知らせない**（SPEC §3.5 の
+同じ outage で 2 通目が来ることはない）/ `root_done_summary`（ADR 2026-10-15-root-done-cos-summary。
+root task の done に 1 回、CoS のまとめか決定的な fallback の短文で、`key` = `<task_id>:<done 遷移の seq>`）。`result` / `progress` は**知らせない**（SPEC §3.5 の
 数時間単位の流れは GUI の報告の仕事）。同じ `(kind, key)` は 1 回だけ送り、失敗したら次の tick で
 再送する（最大 3 回。429 はここに数えない）。
 

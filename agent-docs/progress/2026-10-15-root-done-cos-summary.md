@@ -1,7 +1,7 @@
 ---
 title: "root 完了時の CoS まとめ通知の設計（ADR 2026-10-15-root-done-cos-summary）"
 tasks: [01M4YES0YP2F68ZG10RYANHYHB]
-status: running
+status: done
 updated: 2026-10-15
 ---
 # root 完了時の CoS まとめ通知の設計
@@ -165,3 +165,38 @@ events の最大 id 555195）。
   failed/cancelled root の扱いは新経路に含めるか、TaskFailed を同じ撤去で消すかを決める。
 - 重複排除は既存の `notifications UNIQUE(kind,key)` に乗せられる（例 kind=`root_done_summary`、key=`<task_id>:<done 遷移 seq>`。
   reopen 後の再 done も別 key になる）。
+- 通知の kind は `root_done_summary`（key `<task_id>:<done 遷移の seq>`）を ADR D2 に採用した。
+
+### D8 の推奨（failed／cancelled root）
+
+- failed は新経路に含める: 同じ `RootDoneSummary` の仕組み（スレッド・事実ブロック・CoS・fallback）を再利用し、事実ブロックに
+  失敗の分類と理由（`classify_task_failure`）・main 取り込み済みの有無を足す。kind は別（`root_failed_summary`）にせず、行の本文で
+  区別するか `RootDoneSummary` を `RootSummary` に改名して outcome 欄を持たせる。`TaskFailed` と `scan_task_failed` は同じ変更で消す
+  （どちらも死んだ経路）。
+- cancelled は人が自分で止めたものなので通知しない（スレッドも作らない）。人が見たければ task 画面で足りる。
+- 初回の実装は done だけ、failed は次の葉で足してよい。ただし `TaskFailed` を消すのは failed 対応と同じ葉にして、通知の空白期間を作らない。
+
+### 実装の葉の分け方（提案）
+
+1. store 葉: migration（`chat_threads` の kind `root_summary`・`task_id`、`TaskReady` 旧行の扱い、SCHEMA_VERSION）・`RootDoneSummary` kind・
+   事実ブロックの組み立て（D4）と試験。
+2. dispatch 葉: events cursor からの行作成・スレッド ensure・`ClaimSource::RootSummary` の run 起動・fallback（D6）。試験は stub の CoS run で、
+   スレッド書込み後にだけ pending になること、再起動後の再開、重複排除。
+3. notify 葉: `select_routes_batch` への追加・本文とリンク（D5）・`scan_task_ready` 等の旧経路と旧試験の撤去（D7）。
+4. web 葉（必要なら）: 専用スレッドの表示（`/?thread=<id>`）が既存の一覧で出るかの確認。
+5. close-out 葉: `bash scripts/dev/test-parallel.sh`、`cargo clippy --workspace -- -D warnings`、architecture-map の更新。
+   起動試験は旧 `task_ready` 行を DB に実際に入れて migration を通す（grep で確かめる check を置く）。
+
+## 本番への移行
+
+- config 欄: 変更なし（ADR D9）。消す欄も無いので本番 config の書き換えは不要。`[notify] web_base_url`・`[cos] enabled = true` が本番に既にあることは確認済み（事実 (d)）。
+- DB: 実装の release が migration（`chat_threads` の kind・task_id、`task_ready` 旧行）を持つ。migration は daemon 起動時に走り、データは失わない。
+- release 昇格（人が実行する）: 実装の task が done になり delivery の release ができたら、`scripts/selfdeploy` の手順（verify → promote）で昇格する。
+  この task は ADR だけで本番に変更は無い。
+- 昇格後の確認: 次に root が done になった時、専用スレッドが作られ、Discord にスレッドと task へのリンク付きの通知が 1 通出ること。
+
+## 証拠コマンド
+
+- `grep -c '^## D[1-9] ' agent-docs/adr/2026-10-15-root-done-cos-summary.md` → 9
+- `sh scripts/dev/check-doc-links.sh && sh scripts/dev/check-adr-numbers.sh && sh scripts/dev/progress-index.sh --check` → 下記の run で exit 0 を確認
+- `git diff --stat $CELERIS_WU_BASE -- crates/` → 差分なし

@@ -472,6 +472,7 @@ pub fn plan_waits(
                                 WorkUnitBlockedReason::Decision
                                     | WorkUnitBlockedReason::Infra
                                     | WorkUnitBlockedReason::ClusterJobs
+                                    | WorkUnitBlockedReason::WaitingForAuth
                             )
                         ))
             })
@@ -506,6 +507,7 @@ pub fn plan_waits(
     for reason in [
         WorkUnitBlockedReason::Infra,
         WorkUnitBlockedReason::ClusterJobs,
+        WorkUnitBlockedReason::WaitingForAuth,
     ] {
         let mut blocked: Vec<&WorkUnitRow> = live
             .iter()

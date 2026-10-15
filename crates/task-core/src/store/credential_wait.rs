@@ -439,15 +439,17 @@ impl SqliteStore {
 
     /// 開いている wait（`waiting`/`rejected`/`verified`）を古い順に返す。再起動復元・reconcile 用。
     pub fn credential_waits_list_waiting(&self) -> Result<Vec<CredentialWait>, StoreError> {
-        let conn = self.lock()?;
-        query_waits(
-            &conn,
-            &format!(
-                "SELECT {COLS} FROM credential_waits \
-                 WHERE state IN ('waiting', 'rejected', 'verified') ORDER BY id"
-            ),
-            &[],
-        )
+        // 受信箱の hot path から呼ばれる: 読み取り接続だけを使う（writer の lock を取らない）。
+        self.with_read_conn(|conn| {
+            query_waits(
+                conn,
+                &format!(
+                    "SELECT {COLS} FROM credential_waits \
+                     WHERE state IN ('waiting', 'rejected', 'verified') ORDER BY id"
+                ),
+                &[],
+            )
+        })
     }
 
     /// 1 つの wait（work unit と secret で、開いているものを優先して最新）。
@@ -467,6 +469,57 @@ impl SqliteStore {
         )?
         .into_iter()
         .next())
+    }
+}
+
+/// dispatcher・inbox が `dyn TaskStore` 越しに使う credential 待ちの読み書き（実装は `SqliteStore` のみ。
+/// 遷移の本体は上の inherent method）。
+pub trait CredentialWaitStore: Send + Sync {
+    fn credential_wait_enter(
+        &self,
+        input: &CredentialWaitEnter<'_>,
+        now: OffsetDateTime,
+    ) -> Result<EnterWaitOutcome, StoreError>;
+    /// 開いている wait（古い順）。再起動復元・受信箱・reconcile 用。
+    fn credential_waits_list_waiting(&self) -> Result<Vec<CredentialWait>, StoreError>;
+    fn credential_wait_cancel(
+        &self,
+        task_id: TaskId,
+        now: OffsetDateTime,
+    ) -> Result<usize, StoreError>;
+    fn credential_wait_set_notice_item(
+        &self,
+        aggregation_key: &str,
+        item_id: &str,
+        now: OffsetDateTime,
+    ) -> Result<usize, StoreError>;
+}
+
+impl CredentialWaitStore for SqliteStore {
+    fn credential_wait_enter(
+        &self,
+        input: &CredentialWaitEnter<'_>,
+        now: OffsetDateTime,
+    ) -> Result<EnterWaitOutcome, StoreError> {
+        SqliteStore::credential_wait_enter(self, input, now)
+    }
+    fn credential_waits_list_waiting(&self) -> Result<Vec<CredentialWait>, StoreError> {
+        SqliteStore::credential_waits_list_waiting(self)
+    }
+    fn credential_wait_cancel(
+        &self,
+        task_id: TaskId,
+        now: OffsetDateTime,
+    ) -> Result<usize, StoreError> {
+        SqliteStore::credential_wait_cancel(self, task_id, now)
+    }
+    fn credential_wait_set_notice_item(
+        &self,
+        aggregation_key: &str,
+        item_id: &str,
+        now: OffsetDateTime,
+    ) -> Result<usize, StoreError> {
+        SqliteStore::credential_wait_set_notice_item(self, aggregation_key, item_id, now)
     }
 }
 

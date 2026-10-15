@@ -340,7 +340,8 @@ pub(crate) fn delegated_request(
         InboxKind::IntegrationRequest
         | InboxKind::DeliverySkipped
         | InboxKind::ClusterLogin
-        | InboxKind::DiskFull => {
+        | InboxKind::DiskFull
+        | InboxKind::CredentialWait => {
             return Err(ApiProblem::new(
                 StatusCode::CONFLICT,
                 "native_action_required",

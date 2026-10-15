@@ -101,6 +101,10 @@ pub enum WorkUnitBlockedReason {
     /// すべての job の終了を見たら `needs_continuation` に戻す。`Decision` と同じく工程の失敗にも質問にも数えず、
     /// 同じ段階の他の unit・兄弟は止めない（段階は完了しない）。
     ClusterJobs,
+    /// ADR 2026-10-15-mlsys-min-decision-assisted D4: 外部 provider の credential が未登録で、登録・検証を待つ
+    /// （`credential_waits`。task の Status は増やさない）。`Infra`・`ClusterJobs` と同じく工程の失敗に数えず、
+    /// 同じ段階の他の unit・兄弟は止めない。
+    WaitingForAuth,
 }
 
 impl WorkUnitBlockedReason {
@@ -113,6 +117,7 @@ impl WorkUnitBlockedReason {
             WorkUnitBlockedReason::Decision => "decision",
             WorkUnitBlockedReason::Infra => "infra",
             WorkUnitBlockedReason::ClusterJobs => "cluster_jobs",
+            WorkUnitBlockedReason::WaitingForAuth => "waiting_for_auth",
         }
     }
 
@@ -125,6 +130,7 @@ impl WorkUnitBlockedReason {
             "decision" => Some(WorkUnitBlockedReason::Decision),
             "infra" => Some(WorkUnitBlockedReason::Infra),
             "cluster_jobs" => Some(WorkUnitBlockedReason::ClusterJobs),
+            "waiting_for_auth" => Some(WorkUnitBlockedReason::WaitingForAuth),
             _ => None,
         }
     }
@@ -552,6 +558,7 @@ pub fn runnable_work_units(units: &[WorkUnitRow], in_flight: usize, limit: usize
                         WorkUnitBlockedReason::Decision
                             | WorkUnitBlockedReason::Infra
                             | WorkUnitBlockedReason::ClusterJobs
+                            | WorkUnitBlockedReason::WaitingForAuth
                     )
                 ))
     });

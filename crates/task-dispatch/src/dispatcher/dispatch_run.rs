@@ -584,6 +584,10 @@ impl Dispatcher {
                 return Ok(false);
             }
         };
+        // ADR 2026-10-15-mlsys-min D4: 未登録の credential を要する経路は、この unit だけを待機へ移す。
+        if self.credential_gate_hold(&task, current_wu.as_ref(), &pick)? {
+            return Ok(false);
+        }
         let adapter_id = adapter.id().to_string();
         let source_id = pick.candidate.source.to_string();
         let model = pick.candidate.model.to_string();

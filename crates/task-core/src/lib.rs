@@ -236,10 +236,10 @@ pub use store::{
     BrowserSitePolicy, BrowserSitePolicyDelete, BrowserSitePolicyRecord,
     BrowserSitePolicyReferences, BrowserSitePolicySource, ClientAccess, ClusterConnectionRecord,
     ClusterConnectionStats, ClusterSettings, EventRow, ListFilter, ListOrder, LocalSettings,
-    LocalSettingsEvent, LocalSettingsOverrides, LockCounts, ModelCatalogStore, Page, RootDoneState, RootDoneSummary,
-    ProjectPlanApply, ProjectPlanMilestoneChange, SCHEMA_VERSION, SqliteStore, StoreError,
-    StoreOptions, TaskStore, TreeAdoption, backup_database, event_row_schema_value,
-    integrity_check, is_busy_error, is_readonly_error,
+    LocalSettingsEvent, LocalSettingsOverrides, LockCounts, ModelCatalogStore, Page,
+    ProjectPlanApply, ProjectPlanMilestoneChange, RootDoneState, RootDoneSummary, SCHEMA_VERSION,
+    SqliteStore, StoreError, StoreOptions, TaskStore, TreeAdoption, backup_database,
+    event_row_schema_value, integrity_check, is_busy_error, is_readonly_error,
 };
 pub use transition::{InvalidTransition, Outcome, StateView, Trigger, transition};
 // ---- ADR-0072（Phase E1）: Run lifecycle / checkpoint / continuation ----

@@ -23,8 +23,7 @@ use task_core::chat::{
 };
 use task_core::{
     DeliveryState, DeliveryStore, Event, NoticeStore, NotificationKind, NotificationStore,
-    RootDoneState, RootDoneSummary,
-    TaskId, TaskStore, WorkspaceSpec,
+    RootDoneState, RootDoneSummary, TaskId, TaskStore, WorkspaceSpec,
 };
 use task_ops::root_done::{self, ChildFact, RootDoneFacts, RootDoneInputs};
 use time::OffsetDateTime;
@@ -77,7 +76,14 @@ fn progress_markdown(repo: &std::path::Path, head: &str, task_id: TaskId) -> Opt
             .success()
             .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
     };
-    let listing = git(&["ls-tree", "-r", "--name-only", head, "--", "agent-docs/progress"])?;
+    let listing = git(&[
+        "ls-tree",
+        "-r",
+        "--name-only",
+        head,
+        "--",
+        "agent-docs/progress",
+    ])?;
     for path in listing.lines().filter(|p| p.ends_with(".md")) {
         let Some(text) = git(&["show", &format!("{head}:{path}")]) else {
             continue;
@@ -302,12 +308,7 @@ impl CosChatLaunch {
                         };
                         let facts = self.root_done_facts(row.task_id)?;
                         if text.trim().is_empty() {
-                            return self.root_done_fallback(
-                                row,
-                                &facts,
-                                Some(thread_id),
-                                now,
-                            );
+                            return self.root_done_fallback(row, &facts, Some(thread_id), now);
                         }
                         self.root_done_notify_summary(row, &facts, thread_id, &text, now)
                     }
@@ -392,7 +393,13 @@ impl CosChatLaunch {
                 )
                 .map_err(|e| e.to_string())?;
         }
-        self.root_done_finish(row, truncate(&body, TEXT_MAX_CHARS), RootDoneState::Fallback, facts, now)
+        self.root_done_finish(
+            row,
+            truncate(&body, TEXT_MAX_CHARS),
+            RootDoneState::Fallback,
+            facts,
+            now,
+        )
     }
 
     /// 通知の行（`UNIQUE(kind,key)` が重複排除）を作ってから状態を確定する。途中で落ちても次の tick で同じ分岐に

@@ -93,7 +93,10 @@ async fn root_done_starts_one_run_in_a_dedicated_thread_and_notifies_once() {
     assert_eq!(f.count("SELECT COUNT(*) FROM chat_runs WHERE thread_id IN (SELECT thread_id FROM root_done_summaries)"), 1);
     // 再起動相当（cursor を巻き戻して同じ done を読み直す）でも行・run・通知は増えない。
     f.store
-        .feed_cursor_set(crate::dispatcher::cos_chat::root_done::ROOT_DONE_CURSOR, "0")
+        .feed_cursor_set(
+            crate::dispatcher::cos_chat::root_done::ROOT_DONE_CURSOR,
+            "0",
+        )
         .expect("rewind");
     for _ in 0..3 {
         f.tick();
@@ -117,7 +120,10 @@ async fn a_child_done_neither_starts_a_run_nor_notifies() {
     }
     assert_eq!(f.summary_rows(), 0);
     assert!(f.summary_notifications().is_empty());
-    assert_eq!(f.count("SELECT COUNT(*) FROM chat_threads WHERE title LIKE '完了: %'"), 0);
+    assert_eq!(
+        f.count("SELECT COUNT(*) FROM chat_threads WHERE title LIKE '完了: %'"),
+        0
+    );
 }
 
 #[tokio::test]

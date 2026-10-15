@@ -328,7 +328,13 @@ fn root_done_summary_is_selected_and_rendered_as_is() {
     // The same (kind, key) is never created twice.
     assert!(
         store
-            .notification_upsert_pending(NotificationKind::RootDoneSummary, "t:1", "again", None, at)
+            .notification_upsert_pending(
+                NotificationKind::RootDoneSummary,
+                "t:1",
+                "again",
+                None,
+                at
+            )
             .unwrap()
             .is_none()
     );

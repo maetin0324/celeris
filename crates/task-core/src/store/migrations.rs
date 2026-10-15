@@ -136,7 +136,8 @@ pub(crate) const MIGRATION_0078: &str =
     include_str!("../../migrations/0078_eval_trials_instance_id.sql");
 /// ADR 2026-10-14-local-machine-settings D2: `local_settings`・`task_workspace_roots`・`local_settings_events`。
 pub(crate) const MIGRATION_0079: &str = include_str!("../../migrations/0079_local_settings.sql");
-pub(crate) const MIGRATION_0080: &str = include_str!("../../migrations/0080_root_done_summaries.sql");
+pub(crate) const MIGRATION_0080: &str =
+    include_str!("../../migrations/0080_root_done_summaries.sql");
 
 /// 他の celeris/* ブランチが使っていて、このブランチにはまだ無い版数（0038 work_unit_sessions、
 /// 0039 write_sets、0040 behind_targets、0067/0068 の並行 migration）。`migrate` は飛ばし、

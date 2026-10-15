@@ -256,7 +256,10 @@ fn scan_at(
                 body: format!(
                     "CoSから確認が必要です: {}{}",
                     excerpt(&delivery.detail, REVIEW_EXCERPT_CHARS),
-                    link(base_url, &format!("/tasks/{}?tab=changes", delivery.task_id))
+                    link(
+                        base_url,
+                        &format!("/tasks/{}?tab=changes", delivery.task_id)
+                    )
                 ),
                 project_id: Some(delivery.project_id),
             });

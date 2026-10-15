@@ -103,6 +103,7 @@ mod child_tasks;
 mod cluster;
 mod continuation_session;
 pub mod cos_chat;
+mod decision_log_wire;
 mod dispatch_run;
 mod eval_trials;
 /// ADR-0098（Phase R7-10）: worker の run が宣言した後続 task（`followups.json`）。

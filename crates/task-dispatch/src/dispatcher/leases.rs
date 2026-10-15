@@ -198,6 +198,7 @@ impl Dispatcher {
                 &finished(format!("interrupted: {SHUTDOWN_WHY} (run_id={run_id})")),
             )?;
         }
+        self.record_decision_log(task.id);
         self.reconcile_work_unit_run(task.id, run_id, "shutdown")
     }
 
@@ -405,6 +406,7 @@ impl Dispatcher {
                     {
                         tracing::warn!(task_id = %task.id, error = %e, "failed to reconcile the phase integration for a reclaimed lease");
                     }
+                    self.record_decision_log(task.id);
                     count += 1;
                 }
                 Err(StoreError::InvalidTransition(e)) => {
@@ -502,6 +504,7 @@ impl Dispatcher {
         if let Err(e) = recovered {
             tracing::warn!(%task_id, %run_id, error = %e, "failed to reconcile the work unit of a closed run");
         }
+        self.record_decision_log(task_id);
     }
 
     /// ADR-0079 付記「R6-1」D4: 終端（done / failed / cancelled）の task なのに `runs` 索引で `running` のままの行を

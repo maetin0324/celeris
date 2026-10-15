@@ -1,0 +1,7 @@
+[
+ {"id":"impl-benchfs-chunk-index","genre":"coding","stratum":"implementation","command":"cargo test --test chunk_index","prompt":"repo/src/chunk_index.rs の chunk_of を実装せよ。offset を chunk_size で割った chunk 番号を返す。受入は tests/chunk_index.rs の 3 件。Benchfs の chunk 規約（chunk_size 既定 4096）に従う。"},
+ {"id":"exp-benchfs-smallrun","genre":"experiment","stratum":"short-experiment","command":"test -s out/benchfs-smallrun.csv","prompt":"materials/benchfs-smallrun-raw.csv と同じ列で、1 node・4 client の短い実験（3 run）の結果表を out/benchfs-smallrun.csv に出力する手順を実行せよ。外部 network・有料 API は使わない。"},
+ {"id":"analysis-benchfs-scaling","genre":"analysis","stratum":"analysis","command":"test -s out/scaling.md","prompt":"materials/benchfs-smallrun-raw.csv から nodes=1 と nodes=2 の write/read 平均 MiB/s と scale 比を生データから再計算し out/scaling.md に表で出せ。数値は丸め前の値から計算すること。"},
+ {"id":"report-pluvio-summary","genre":"report","stratum":"report","command":"test -s out/report.md","prompt":"materials/pluvio-survey-raw.json の 3 件を topic 別に要約する報告 out/report.md を書け。本文の数値（件数・平均 speedup）は生データと一致させ、分母（全 3 件）を明記する。"},
+ {"id":"review-numeric-consistency","genre":"review","stratum":"review","command":"test -s out/review.md","prompt":"out/report.md と materials/pluvio-survey-raw.json を突き合わせ、数値不一致・分母欠落・split 混在を指摘する review を out/review.md に書け。誤りが無ければ無いと根拠付きで書く。"}
+]

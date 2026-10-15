@@ -1,0 +1,8 @@
+{"description":"制御用の mock 台本。(config, problem) ごとの振る舞い。台本に無い試行は Pass。",
+ "steps":[
+  {"config":"A","problem":"exp-benchfs-smallrun","step":"fail"},
+  {"config":"A","problem":"analysis-benchfs-scaling","step":"timeout"},
+  {"config":"B","problem":"report-pluvio-summary","step":"error"},
+  {"config":"B","problem":"analysis-benchfs-scaling","step":"unmetered"},
+  {"config":"C","problem":"review-numeric-consistency","step":"fail"}
+ ]}

@@ -7,6 +7,7 @@ pub mod executor;
 pub mod export;
 pub mod manifest;
 pub mod record;
+pub mod report;
 pub mod runner;
 pub mod snapshot;
 

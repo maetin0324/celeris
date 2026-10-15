@@ -92,3 +92,32 @@ account/source の互換・同時実行・cooldown・quota・予算をコード�
 ## Consequences
 - 追加のみ。`route_select` の根拠表ルータ（`routing_evidence`・`feedback`・`model_router`）は無変更で、この経路は依存しない。
 - 型の追加により `docs/api/v1/*.schema.json` と `web/api/generated/*` を再生成した。
+
+## 付記（policy-close）: 実装との突き合わせと投稿用 policy_version
+
+- 日付: 2026-10-15
+- 状態: 採用（統合・突き合わせのみ。方策・優先順位・権限は不変）
+
+### 実装との突き合わせ
+
+| ADR | 実装（型・関数） | 試験 |
+|---|---|---|
+| D1 優先順位 | `assist_lane`（`AssistInput.explicit`・`LaneLimits`・利用可否 closure）。`LaneAssistRecord.overridden_by` = `explicit`/`ceiling`/`availability` | `explicit_lane_and_ceiling_beat_the_classification`（`crates/task-dispatch/tests/policy_close.rs`）、`dispatcher/tests/lane_assist.rs` |
+| D2 切替・既定 fixed | `RoutingMode`（`Default` = `Fixed`）、`Dispatcher::set_routing_mode`、config `[routing] mode`（`config/routing_mode.rs`） | `default_mode_is_fixed_and_fixed_ignores_any_classification`、`default_mode_is_fixed_and_writes_no_lane_assist` |
+| D2/D4 fallback と実 API 検証の別記録 | `ClassifierStatus::{JevOk, FellBackToFixed{reason}, NotAttempted}` と別欄 `LaneAssistRecord.real_api_verified`（定数 `REAL_API_VERIFIED = false`）、`basis = fixed_fallback` | `fallback_and_real_api_verified_are_recorded_separately`、`fallback_records_fell_back_while_real_api_verified_stays_false` |
+| D3 fixed 方策 | `fixed_lane`、`lane_facts`（Medium は `Unknown`） | `mlsys_policy_tests`（task-core） |
+| D4 分類は引き上げのみ | `decide_lane`・`DEFAULT_MIN_CONFIDENCE` | `decision_assisted_never_goes_below_the_fixed_result` |
+| D6 利用可否 | `availability`・`Remaining::pessimistic_cost`・`admit_by_availability`（`LaunchAdmission::Hold`） | `unknown_quota_or_cost_is_not_treated_as_zero_or_available` |
+| D7 限定エスカレーション | `classify_failure`（`FailureOrigin`）、`escalation_decision`、`Dispatcher::decide_route_failure`（明示 model の内容失敗は `FailureAction::ReportFailure`） | `infra_failures_wait_and_never_escalate_while_content_escalates_once`、`dispatcher/tests/route_failure_escalation.rs` |
+| 根拠表ルータ非依存 | 方策の経路は `routing_evidence`・`model_router`・`feedback` を参照しない（それらは無変更で残る） | `policy_version_is_pinned_and_policy_path_does_not_use_evidence_router` |
+
+統合試験が使う型の公開のため `task_dispatch` に `classify_failure`・`FailureOrigin`・`FailureAction`・`admit_by_availability`・`LaunchAdmission` を再 export した（挙動変更なし）。
+`Dispatcher::decide_route_failure` 自体（明示 model の分岐）は Dispatcher の構築が要るため crate 内試験で固定する。
+
+### lane → model/source 対応表の版（投稿用）
+
+- **`policy_version = "mlsys-min-1"`**（`DEFAULT_POLICY_VERSION`。試験で固定）。
+- 対応表 `LanePolicyTable::from_registry` は、その時点の設定（`[route_defaults.<harness>]` の候補列。例は `config/celeris.model-tiers.example.toml`）の lane 対応の写しで、版は表の**中身ではなく規則の版**。
+  投稿では「版 `mlsys-min-1` ＝ この付記時点の設定の lane 対応」と記し、投稿に載せる具体的な model/source は、投稿時の本番設定から写して併記する（本 ADR は値を固定しない）。
+- 表の内容または lane 規則（D3・D4・D7 の閾値）を変えるときは版を上げる。
+- 未検証: Jev 実 API 統合（`real_api_verified = false`）。fixed に戻った記録とは別。

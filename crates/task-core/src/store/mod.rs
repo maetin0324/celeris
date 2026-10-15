@@ -100,6 +100,7 @@ mod approvals;
 mod behind_targets;
 mod browser_policy_auto;
 mod cluster;
+mod decision_log;
 mod events;
 mod execution;
 mod instances;
@@ -986,6 +987,8 @@ impl SqliteStore {
 
 #[cfg(test)]
 mod client_open_tests;
+#[cfg(test)]
+mod decision_log_tests;
 #[cfg(test)]
 mod routing_log_tests;
 #[cfg(test)]

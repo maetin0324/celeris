@@ -38,6 +38,7 @@ mod model_catalog;
 mod org;
 mod proxy;
 mod routing_eval;
+mod routing_mode;
 mod scratch;
 mod selfdeploy;
 mod storage;
@@ -62,6 +63,7 @@ pub use maintenance::*;
 pub use model_catalog::*;
 pub use org::*;
 pub use routing_eval::*;
+pub use routing_mode::*;
 pub use scratch::*;
 pub use selfdeploy::*;
 pub use storage::*;
@@ -97,6 +99,9 @@ pub struct Config {
     pub route_defaults: std::collections::BTreeMap<String, RouteDefaultConfig>,
     #[serde(default)]
     pub route_selection: RouteSelectionConfig,
+    /// `[routing] mode = "fixed" | "decision_assisted"`（既定 fixed）。
+    #[serde(default)]
+    pub routing: RoutingConfig,
     /// Isolated browser runtime is disabled unless its API and provider are configured.
     #[serde(default)]
     pub browser: BrowserRuntimeConfig,

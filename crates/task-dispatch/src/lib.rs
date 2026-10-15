@@ -50,6 +50,12 @@ pub use dispatcher::{
     RouteState, RouteTrace, SnapshotPublisher, TaskFilter, TickReport, harness_request_for,
     route_select,
 };
+/// wire-mode: 分類段（daemon）が書き、dispatcher の lane 層が読む board。
+pub use dispatcher::{BoardItem, ClassificationBoard, CredentialGate, lane_facts};
+/// policy-close: 失敗の分類・限定エスカレーションの行動・利用可否による起動の可否（統合試験が公開 API から使う）。
+pub use dispatcher::{
+    FailureAction, FailureOrigin, LaunchAdmission, admit_by_availability, classify_failure,
+};
 /// ADR 2026-10-11 llm-source-harness-selection: launch inputs of an admitted route.
 pub use dispatcher::{RouteLaunchError, account_adapter_for_source_kind, selected_llm_route};
 pub use policy::{AdapterId, ProviderId, ProviderOutcome};

@@ -232,6 +232,7 @@ pub fn reload_providers(dispatcher: &mut Dispatcher, config: &mut Config) -> Res
     dispatcher.set_llm_route_registry(llm_route_registry);
     dispatcher.set_harness_adapters(harness_adapters);
     dispatcher.set_credential_gates(new_config.credential_gates().map_err(|e| e.to_string())?);
+    dispatcher.set_routing_mode(new_config.routing.mode);
     // ADR 2026-10-08 account-concurrency-limits §(d)(e): a stored implicit limit goes away when its
     // source is no longer declared without an account pool. Other stored limits survive.
     if let Err(error) = dispatcher.prune_implicit_account_limits() {
@@ -323,5 +324,40 @@ mod cos_chat_config_tests {
         write_config("max_turns = 99");
         reload_providers(&mut dispatcher, &mut config).unwrap();
         assert_eq!(config.cos.max_turns, 99);
+    }
+}
+
+#[cfg(test)]
+mod routing_mode_wire_tests {
+    use super::*;
+    use task_core::route_select::RoutingMode;
+
+    /// `[routing] mode` は build_dispatcher（起動）と reload_providers（reload）の両方で Dispatcher に届く。
+    /// 欄が無ければ fixed のまま。
+    #[test]
+    fn routing_mode_reaches_the_dispatcher_through_bootstrap_and_reload() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let db = dir.path().join("celeris.db");
+        let ws = dir.path().join("ws");
+        let write_config = |routing: &str| {
+            std::fs::write(
+                &path,
+                format!("db = {db:?}\nworkspace_root = {ws:?}\n{routing}"),
+            )
+            .unwrap();
+        };
+        write_config("");
+        let mut config = Config::load(&path).unwrap();
+        let mut dispatcher = crate::build_dispatcher(&config, Default::default()).unwrap();
+        assert_eq!(dispatcher.routing_mode(), RoutingMode::Fixed);
+
+        write_config("[routing]\nmode = \"decision_assisted\"\n");
+        reload_providers(&mut dispatcher, &mut config).unwrap();
+        assert_eq!(dispatcher.routing_mode(), RoutingMode::DecisionAssisted);
+
+        let restarted = Config::load(&path).unwrap();
+        let started = crate::build_dispatcher(&restarted, Default::default()).unwrap();
+        assert_eq!(started.routing_mode(), RoutingMode::DecisionAssisted);
     }
 }

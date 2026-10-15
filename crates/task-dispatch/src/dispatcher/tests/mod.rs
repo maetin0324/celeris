@@ -2903,6 +2903,7 @@ mod integration_ready_race;
 mod planning_and_gate;
 mod review;
 mod review_route;
+mod route_failure_escalation;
 mod route_launch;
 mod route_select;
 mod run_tmpdir;
@@ -3001,6 +3002,7 @@ mod direct_route;
 /// ADR-0040 付記（2026-10-04、WU 検査の引き継ぎ）: draining の旧 instance は run の終わりで手を離す
 /// （`src/dispatcher/tests/drain_hand_off.rs`）。
 mod drain_hand_off;
+mod lane_assist;
 /// 工程の効き目の A/B 試験（off/on の `ab-metric` 行と効き目の assert）
 /// （`src/dispatcher/tests/phase_effect_ab.rs`）。
 mod phase_effect_ab;

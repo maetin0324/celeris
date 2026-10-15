@@ -175,6 +175,9 @@ pub struct RouteDecision {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub options_hash: Option<String>,
     pub judge: RouteJudge,
+    /// decision-assisted の lane 層の記録（ADR 2026-10-15-mlsys-min-routing-policy。`fixed` では書かない）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lane_assist: Option<super::assist::LaneAssistRecord>,
 }
 
 impl RouteDecision {
@@ -415,6 +418,7 @@ pub fn build_route_decision(input: &RouteDecisionInput<'_>) -> RouteDecision {
         evidence_version,
         options_hash: None,
         judge: RouteJudge::default(),
+        lane_assist: None,
     };
     decision.options_hash = Some(options_hash(&decision.route_options()));
     decision

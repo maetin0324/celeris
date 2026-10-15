@@ -164,3 +164,112 @@ impl Dispatcher {
         )])
     }
 }
+
+// ---- ADR 2026-10-15-mlsys-min-routing-policy D7: 失敗の分類と限定エスカレーション ----
+
+use task_core::Tier;
+use task_core::route_select::{
+    EscalationAttempts, EscalationDecision, EscalationLimits, FailureClass, ReplanReason,
+    escalation_decision,
+};
+
+/// 失敗の出どころ。分類はコード側が決める（LLM に聞かない）。
+#[derive(Debug, Clone, Copy)]
+pub enum FailureOrigin<'a> {
+    /// adapter / 供給側の失敗（`AdapterError`）。
+    Adapter(&'a AdapterError),
+    /// worker が返した `Terminal::Error` の文面。
+    WorkerError { message: &'a str, retryable: bool },
+    /// WU の check 失敗・review 差し戻し（内容面）。
+    ContentRejected,
+}
+
+/// 文面が一時障害（timeout・429・5xx・接続断・quota 窓待ち）を示すか。
+fn text_is_transient_infra(message: &str) -> bool {
+    let m = message.to_ascii_lowercase();
+    [
+        "timed out",
+        "timeout",
+        "429",
+        "rate limit",
+        "temporarily",
+        "connection reset",
+        "connection refused",
+        "unavailable",
+        "overloaded",
+        "quota window",
+    ]
+    .iter()
+    .any(|k| m.contains(k))
+        || [" 500", " 502", " 503", " 504", "5xx"]
+            .iter()
+            .any(|k| m.contains(k))
+}
+
+/// 失敗を一時インフラ障害か内容面かに分ける。adapter の失敗はすべて供給側（高い model へ送らない）。
+/// 文面で一時障害と読めない worker の error は、`retryable` でも内容面ではなく待機側に倒す
+/// （高い model へ送って費用を増やすより待つ方を保守側とする）。`retryable=false` だけ内容面。
+pub fn classify_failure(origin: FailureOrigin<'_>) -> FailureClass {
+    match origin {
+        // 起動・I/O・供給側のどの失敗も内容の失敗ではない（昇格しても直らず費用だけ増える）。
+        FailureOrigin::Adapter(
+            AdapterError::Spawn(_)
+            | AdapterError::Io(_)
+            | AdapterError::Serde(_)
+            | AdapterError::Throttled { .. }
+            | AdapterError::AuthFailed(_)
+            | AdapterError::Exhausted(_)
+            | AdapterError::Other(_),
+        ) => FailureClass::TransientInfra,
+        FailureOrigin::WorkerError { message, retryable } => {
+            if retryable || text_is_transient_infra(message) {
+                FailureClass::TransientInfra
+            } else {
+                FailureClass::Content
+            }
+        }
+        FailureOrigin::ContentRejected => FailureClass::Content,
+    }
+}
+
+/// 失敗後にディスパッチャがとる行動。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FailureAction {
+    /// 同じ lane のまま `not_before`（unix 秒）まで待ってから再試行する。
+    WaitRetry { lane: Tier, not_before: i64 },
+    /// 許可内の 1 段上の lane で再試行する。
+    Escalate { to: Tier },
+    /// 昇格せず replan を要求する。
+    Replan(ReplanReason),
+    /// 明示 model 指定は昇格で上書きせず、失敗をそのまま報告する。
+    ReportFailure,
+}
+
+impl Dispatcher {
+    /// 失敗経路の判断。`explicit_model` は人（task）が model を明示指定していること。
+    /// 一時障害は待機（backoff は `infra_backoff_delay`、時刻は注入時計 `now_unix_fn`）、
+    /// 内容面は `limits` の範囲（既定 1 段、許可・天井内）の昇格か replan。許可・予算は拡張しない。
+    pub fn decide_route_failure(
+        &self,
+        origin: FailureOrigin<'_>,
+        attempts: &EscalationAttempts,
+        limits: &EscalationLimits,
+        explicit_model: bool,
+    ) -> FailureAction {
+        let class = classify_failure(origin);
+        if class == FailureClass::Content && explicit_model {
+            return FailureAction::ReportFailure;
+        }
+        match escalation_decision(class, attempts, limits) {
+            EscalationDecision::WaitRetry { lane } => {
+                let delay = task_ops::derive::infra_backoff_delay(attempts.infra_retries + 1);
+                FailureAction::WaitRetry {
+                    lane,
+                    not_before: (self.now_unix_fn)().saturating_add(delay.as_secs() as i64),
+                }
+            }
+            EscalationDecision::Escalate { to } => FailureAction::Escalate { to },
+            EscalationDecision::Replan(r) => FailureAction::Replan(r),
+        }
+    }
+}

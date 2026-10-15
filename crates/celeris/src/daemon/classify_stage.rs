@@ -130,6 +130,13 @@ impl ClassificationStage {
                 credential: None,
             },
         };
+        // 鍵の値・入力本文は出さない（subject の id と結果だけ）。
+        match &item.entry.status {
+            ClassifierStatus::FellBackToFixed { reason } => {
+                tracing::info!(subject, reason = %reason, "jev: classification fell_back_to_fixed")
+            }
+            status => tracing::info!(subject, ?status, "jev: classification result"),
+        }
         self.board.put(subject, item.clone());
         item
     }

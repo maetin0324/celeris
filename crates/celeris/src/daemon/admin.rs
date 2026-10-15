@@ -254,6 +254,8 @@ pub fn reload_providers(dispatcher: &mut Dispatcher, config: &mut Config) -> Res
     config.notify = new_config.notify;
     config.cos = new_config.cos;
     config.conversation = new_config.conversation;
+    // tick_loop は `config.jev` が変わると分類段を作り直す。ここで書き戻さないと reload が効かない。
+    config.jev = new_config.jev;
     config.selfdeploy.delivery_projects = new_config.selfdeploy.delivery_projects;
     config.selfdeploy.delivery_default_departments =
         new_config.selfdeploy.delivery_default_departments;
@@ -359,5 +361,41 @@ mod routing_mode_wire_tests {
         let restarted = Config::load(&path).unwrap();
         let started = crate::build_dispatcher(&restarted, Default::default()).unwrap();
         assert_eq!(started.routing_mode(), RoutingMode::DecisionAssisted);
+    }
+
+    /// `[jev]` は reload で `config.jev` に書き戻り、tick_loop が次の tick で分類段を作れる。
+    #[test]
+    fn reload_writes_back_the_jev_section_so_the_next_tick_builds_the_stage() {
+        use crate::daemon::classify_tick::ClassifyTick;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let db = dir.path().join("celeris.db");
+        let ws = dir.path().join("ws");
+        let write_config = |jev: &str| {
+            std::fs::write(
+                &path,
+                format!("db = {db:?}\nworkspace_root = {ws:?}\n{jev}"),
+            )
+            .unwrap();
+        };
+        write_config("[jev]\nenabled = false\n");
+        let mut config = Config::load(&path).unwrap();
+        let mut dispatcher = crate::build_dispatcher(&config, Default::default()).unwrap();
+        let board = dispatcher.classification_board();
+        assert!(!config.jev.enabled);
+        assert!(
+            ClassifyTick::build(&config.jev, None, board.clone())
+                .unwrap()
+                .is_none()
+        );
+
+        write_config("[jev]\nenabled = true\n");
+        reload_providers(&mut dispatcher, &mut config).unwrap();
+        assert!(config.jev.enabled);
+        assert!(
+            ClassifyTick::build(&config.jev, None, board)
+                .unwrap()
+                .is_some()
+        );
     }
 }

@@ -187,6 +187,29 @@ fn inbox_source(item: &InboxItem, policy_version: &str) -> CosTriageSource {
     }
 }
 
+/// 決定的に outbox へ直送する種別（CoS の判断・LLM run を要さない。ADR 2026-10-15-credential-wait-skip-triage）。
+fn is_direct(item: &InboxItem) -> bool {
+    item.kind == InboxKind::CredentialWait
+}
+
+/// 直送する item の escalation outbox の本文。値は載せない（用途・待ち task・登録リンクだけ）。
+fn direct_body(item: &InboxItem) -> String {
+    let mut summary = item.title.clone();
+    if let Some(detail) = item.detail.as_deref().filter(|d| !d.is_empty()) {
+        summary.push_str(" — ");
+        summary.push_str(detail);
+    }
+    serde_json::json!({
+        "route": "escalation",
+        "headline": "API キーの登録のお願い（自動通知）",
+        "summary": summary,
+        "blocking": item.blocking.summary,
+        "web_path": "/accounts",
+        "options": [],
+    })
+    .to_string()
+}
+
 fn item_tasks(item: &InboxItem) -> impl Iterator<Item = TaskId> + '_ {
     item.task
         .iter()
@@ -203,7 +226,7 @@ pub(crate) fn sources_for_touched(
     policy_version: &str,
 ) -> Vec<(CosTriageSource, Vec<TaskId>)> {
     let mut out = Vec::new();
-    for item in &inbox.items {
+    for item in inbox.items.iter().filter(|i| !is_direct(i)) {
         let hits: Vec<&Option<String>> = item_tasks(item)
             .filter_map(|id| touched.tasks.get(&id))
             .collect();
@@ -369,6 +392,10 @@ impl CosChatLaunch {
                 .or_default()
                 .push(inbox_source(item, &policy));
         }
+        for item in inbox.items.iter().filter(|i| is_direct(i)) {
+            self.direct_escalate(item, &policy, now)?;
+        }
+        by_kind.retain(|kind, _| *kind != InboxKind::CredentialWait.as_str());
         let mut inserted = 0;
         for (kind, current) in &by_kind {
             inserted += self
@@ -420,6 +447,24 @@ impl CosChatLaunch {
         Ok(())
     }
 
+    /// 直送: triage の待ちを作らず escalation outbox へ（既にあれば何もしない）。
+    fn direct_escalate(
+        &mut self,
+        item: &InboxItem,
+        policy: &str,
+        now: OffsetDateTime,
+    ) -> Result<(), String> {
+        let source = inbox_source(item, policy);
+        let queued = self
+            .store
+            .cos_triage_direct_escalate(&source, &direct_body(item), now)
+            .map_err(|e| e.to_string())?;
+        if queued.is_some() {
+            tracing::info!(item = %item.id, "credential wait queued for direct notification");
+        }
+        Ok(())
+    }
+
     fn triage_events(
         &mut self,
         dispatcher: &Dispatcher,
@@ -446,6 +491,18 @@ impl CosChatLaunch {
                 break;
             };
             let touched = touched_tasks(&rows);
+            if !touched.tasks.is_empty() {
+                if inbox.is_none() {
+                    inbox = Some(self.human_inbox(dispatcher, now)?);
+                }
+                if let Some(inbox) = &inbox {
+                    for item in inbox.items.iter().filter(|i| is_direct(i)) {
+                        if item_tasks(item).any(|id| touched.tasks.contains_key(&id)) {
+                            self.direct_escalate(item, &policy, now)?;
+                        }
+                    }
+                }
+            }
             let sources = if touched.tasks.is_empty() {
                 Vec::new()
             } else {

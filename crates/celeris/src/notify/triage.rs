@@ -42,6 +42,9 @@ pub fn render(row: &Notification, config: &NotifyConfig) -> Result<String, &'sta
         return Err("invalid CoS web path");
     }
     let heading = match row.kind {
+        NotificationKind::CosEscalation if !field(&packet, "headline").is_empty() => {
+            field(&packet, "headline")
+        }
         NotificationKind::CosEscalation => "CoS から判断のお願い",
         NotificationKind::CosFallback => "CoS 不在のため直接通知",
         _ => return Err("unsupported outbound route"),

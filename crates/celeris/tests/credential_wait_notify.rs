@@ -1,6 +1,6 @@
-//! ADR 2026-10-15-mlsys-min-decision-assisted D4: credential 待ちの受信箱 item が既存の通知経路（CoS triage → outbox → Discord webhook）
-//! で 1 件だけ送られ、登録されて解決したら送る前に取り下げられる。送信先は偽の HTTP サーバ（外部ネットワークに出ない）。
-//! CoS の判断（LLM）の代わりに、triage の escalation outbox をそのまま積む（既存 cos_chat_triage_notify と同じ流儀）。
+//! ADR 2026-10-15-credential-wait-skip-triage: credential 待ちの受信箱 item は CoS triage（LLM run）を経ず、決定的に escalation outbox へ
+//! 入り（`cos_triage_direct_escalate`）、既存の通知経路（outbox → Discord webhook）で 1 件だけ送られる。登録されて解決したら送る前に取り下げられる。
+//! 送信先は偽の HTTP サーバ（外部ネットワークに出ない）。
 
 use celeris::notify::{self, SendResult};
 use task_core::NotificationStore;
@@ -141,7 +141,7 @@ async fn one_credential_wait_item_is_sent_to_discord_once_and_resolved_before_a_
     assert_eq!(items.len(), 1);
     let item = items[0];
 
-    // triage の入力は item の (kind, id, created_at)。2 回目以降・task の増加では増えない。
+    // 直経路: triage の待ち（pending）を作らず outbox に 1 件。2 回目以降・task の増加では増えない。
     let source = CosTriageSource {
         source_kind: item.kind.as_str().into(),
         source_key: item.id.clone(),
@@ -151,32 +151,33 @@ async fn one_credential_wait_item_is_sent_to_discord_once_and_resolved_before_a_
         summary: item.title.clone(),
         policy_version: "1".into(),
     };
-    assert_eq!(
-        store
-            .cos_triage_ingest_batch("inbox", "0", std::slice::from_ref(&source), at(2))
-            .expect("ingest"),
-        1
-    );
-    assert_eq!(
-        store
-            .cos_triage_ingest_batch("inbox", "1", std::slice::from_ref(&source), at(3))
-            .expect("again"),
-        0
-    );
-
-    // CoS の escalation（既存経路）。リンクはアカウント画面。
-    let conn = rusqlite::Connection::open(&db).expect("conn");
-    let id: String = conn
-        .query_row("SELECT id FROM cos_inbox_items", [], |r| r.get(0))
-        .expect("item id");
     let payload = serde_json::json!({
+        "headline": "API キーの登録のお願い（自動通知）",
         "summary": "Jev の API キーの登録をお願いします（登録すれば自動で続行されます）",
         "blocking": "分類 A・分類 B", "web_path": "/accounts", "options": [],
     })
     .to_string();
-    store
-        .cos_triage_outbox_claim(&id, "escalation", &payload, at(4))
-        .expect("claim");
+    assert!(
+        store
+            .cos_triage_direct_escalate(&source, &payload, at(2))
+            .expect("direct")
+            .is_some()
+    );
+    assert!(
+        store
+            .cos_triage_direct_escalate(&source, &payload, at(3))
+            .expect("again")
+            .is_none()
+    );
+    let conn = rusqlite::Connection::open(&db).expect("conn");
+    let pending_items: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM cos_inbox_items WHERE state IN ('pending','running')",
+            [],
+            |r| r.get(0),
+        )
+        .expect("count");
+    assert_eq!(pending_items, 0, "CoS triage の対象にならない");
     let row = store.notification_pending().expect("pending").remove(0);
     // まだ解決していないので取り下げない。
     assert!(notify::triage::withdraw_if_resolved(&store, &db, &view, &row, at(5)).expect("live"));
@@ -218,10 +219,8 @@ fn a_registered_and_resumed_wait_withdraws_its_pending_notification_before_the_p
         .find(|i| i.kind == task_ops::human_inbox::InboxKind::CredentialWait)
         .expect("item");
     store
-        .cos_triage_ingest_batch(
-            "inbox",
-            "0",
-            &[CosTriageSource {
+        .cos_triage_direct_escalate(
+            &CosTriageSource {
                 source_kind: item.kind.as_str().into(),
                 source_key: item.id.clone(),
                 source_revision: item.created_at.clone(),
@@ -229,17 +228,11 @@ fn a_registered_and_resumed_wait_withdraws_its_pending_notification_before_the_p
                 operation_id: None,
                 summary: item.title.clone(),
                 policy_version: "1".into(),
-            }],
-            at(2),
+            },
+            "{\"web_path\":\"/accounts\"}",
+            at(3),
         )
-        .expect("ingest");
-    let conn = rusqlite::Connection::open(&db).expect("conn");
-    let id: String = conn
-        .query_row("SELECT id FROM cos_inbox_items", [], |r| r.get(0))
-        .expect("item id");
-    store
-        .cos_triage_outbox_claim(&id, "escalation", "{\"web_path\":\"/accounts\"}", at(3))
-        .expect("claim");
+        .expect("direct");
     let row = store.notification_pending().expect("pending").remove(0);
 
     // 登録 → 検証済み → 再開（待ちが閉じる）。送る前に取り下げられ、未送信の通知は残らない。

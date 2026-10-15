@@ -330,11 +330,14 @@ async fn get_lists_items_with_used_by_and_never_the_value() {
     let body = resp.json();
     assert_eq!(body["dir"], json!(dir.display().to_string()));
     let items = body["items"].as_array().expect("items array");
-    assert_eq!(items.len(), 1, "{items:?}");
-    assert_eq!(items[0]["id"], json!("tavily"));
-    assert!(items[0]["updated_at"].is_null(), "{items:?}");
+    // 既知の連携の id（jev_api_key。設定に現れなくても出る）も id 順に並ぶ。
+    assert_eq!(items.len(), 2, "{items:?}");
+    assert_eq!(items[0]["id"], json!("jev_api_key"));
     assert!(items[0]["fingerprint"].is_null(), "{items:?}");
-    assert_eq!(items[0]["used_by"].as_array().expect("used_by").len(), 2);
+    assert_eq!(items[1]["id"], json!("tavily"));
+    assert!(items[1]["updated_at"].is_null(), "{items:?}");
+    assert!(items[1]["fingerprint"].is_null(), "{items:?}");
+    assert_eq!(items[1]["used_by"].as_array().expect("used_by").len(), 2);
 
     // `tavily` は secret_usage に設定されている（adapter と provider の両方から使われる）。
     // `exa` は使われていない秘密として書く。
@@ -349,7 +352,7 @@ async fn get_lists_items_with_used_by_and_never_the_value() {
     assert_eq!(resp.status, 200, "{}", resp.text());
     let body = resp.json();
     let items = body["items"].as_array().expect("items array");
-    assert_eq!(items.len(), 2);
+    assert_eq!(items.len(), 3);
     let tavily = items
         .iter()
         .find(|i| i["id"] == "tavily")
@@ -423,4 +426,59 @@ async fn secret_values_never_appear_in_config_or_secrets_responses() {
     .await;
     assert_eq!(resp.status, 200, "{}", resp.text());
     assert!(!resp.text().contains("tvly-should-never-leak"));
+}
+
+/// ADR 2026-10-15 D4: 保存完了は durable event（`secret_stored`。id と fingerprint のみ）になり、重複 PUT は増えない。
+#[tokio::test]
+async fn put_records_a_secret_stored_event_without_the_value() {
+    let (env, _tmp, _dir) = env_with_secrets_dir();
+    let app = env.router();
+    let auth = auth();
+    let task = task_core::TaskId::new();
+    env.store
+        .credential_wait_enter(
+            &task_core::CredentialWaitEnter {
+                work_unit_id: "wu-1",
+                task_id: task,
+                secret_id: "jev_api_key",
+                provider: "jev",
+                purpose: "request classification",
+            },
+            time::OffsetDateTime::now_utc(),
+        )
+        .expect("enter");
+    let mut fingerprint = String::new();
+    for _ in 0..2 {
+        let resp = send(
+            &app,
+            put_json_with(
+                "/api/v1/secrets/jev_api_key",
+                &json!({"value": "sk-dummy-jev-value"}),
+                &[("authorization", &auth)],
+            ),
+        )
+        .await;
+        assert_eq!(resp.status, 200, "{}", resp.text());
+        fingerprint = resp.json()["fingerprint"].as_str().expect("fp").to_string();
+    }
+    let wait = env
+        .store
+        .credential_wait_get("wu-1", "jev_api_key")
+        .expect("get")
+        .expect("wait");
+    assert_eq!(wait.seen_fingerprint.as_deref(), Some(fingerprint.as_str()));
+
+    let conn = rusqlite::Connection::open(&env.db_path).expect("open");
+    let rows: Vec<(String, String, String)> = conn
+        .prepare("SELECT kind, secret_id, fingerprint FROM credential_wait_events")
+        .expect("prepare")
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .expect("query")
+        .map(|r| r.expect("row"))
+        .collect();
+    assert_eq!(
+        rows,
+        vec![("secret_stored".into(), "jev_api_key".into(), fingerprint)],
+        "one event for duplicate PUTs, id and fingerprint only"
+    );
 }

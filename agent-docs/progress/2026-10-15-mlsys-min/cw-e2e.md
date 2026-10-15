@@ -21,7 +21,7 @@ base（85a13e20）には cw-enter が入っていなかった（integrate-build-
   - 重複 event 5 回 + 3 resumer 並行: 再開ちょうど 1 回。
   - cancel 済み task: 再開しない（wait は cancelled）、同じ鍵を待つ生きた task は再開。
   - 値が出ない: 誤キー・権限不足・一時障害・有効の 4 値を順に登録し、wait 行・受信箱・event・work unit・report の Debug、および一時ディレクトリの SQLite ファイル（-wal 含む）のバイト列に値が無いことを検査。
-- `crates/celeris/tests/credential_wait_notify.rs` 2 件（偽 webhook = loopback TcpListener）: 2 task が同じ鍵を待つ→受信箱 item 1 件→escalation outbox（直経路。cw-direct で triage を経ない形に差し替え）→Discord へ 1 通だけ送信（/accounts リンク・「自動で続行」、値なし）。登録→検証→再開した後は未送信の通知が送る前に取り下げられる。
+- （旧・cw-notify-e2e で `credential_wait_e2e.rs` に置換）`credential_wait_notify.rs` 2 件（偽 webhook = loopback TcpListener）: 2 task が同じ鍵を待つ→受信箱 item 1 件→escalation outbox（直経路。cw-direct で triage を経ない形に差し替え）→Discord へ 1 通だけ送信（/accounts リンク・「自動で続行」、値なし）。登録→検証→再開した後は未送信の通知が送る前に取り下げられる。
 
 ## 証拠
 - `cargo test -p task-dispatch credential_e2e`: 8 pass。`cargo test -p celeris --test credential_wait_notify`: 2 pass。

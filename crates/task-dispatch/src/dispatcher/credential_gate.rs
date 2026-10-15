@@ -108,6 +108,9 @@ impl Dispatcher {
                 &format!("credential_wait-{}", gate.secret_id),
                 now,
             )?;
+            // 計画の無い task の待機は WorkUnit の遷移 event を出さず、triage の event 取り込みが拾えない。
+            // 次の tick の reconcile で受信箱 item を直送の通知に載せる（冪等。登録済みの item は増えない）。
+            self.request_cos_triage_reconcile();
         }
         if let Some(wu) = wu {
             self.block_unit_waiting_for_auth(task, wu, now)?;

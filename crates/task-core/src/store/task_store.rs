@@ -82,6 +82,31 @@ pub trait TaskStore:
         &self,
         decision: &crate::route_select::RouteDecision,
     ) -> Result<(), StoreError>;
+    /// 判断・実行・成果ログ（ADR 2026-10-15-decision-log-export）の書込み。群ごとに別欄で、`run_id` 主キーの置換（合算しない）。
+    fn decision_log_record_proposal(
+        &self,
+        p: &crate::decision_log::DecisionLogProposal,
+        now: OffsetDateTime,
+    ) -> Result<(), StoreError>;
+    fn decision_log_record_execution(
+        &self,
+        e: &crate::decision_log::DecisionLogExecution,
+        now: OffsetDateTime,
+    ) -> Result<(), StoreError>;
+    fn decision_log_record_outcome(
+        &self,
+        o: &crate::decision_log::DecisionLogOutcome,
+        now: OffsetDateTime,
+    ) -> Result<(), StoreError>;
+    fn decision_log_record_usage(
+        &self,
+        usage: &crate::decision_log::DecisionLogUsage,
+        now: OffsetDateTime,
+    ) -> Result<(), StoreError>;
+    fn decision_log_run_get(
+        &self,
+        run_id: &str,
+    ) -> Result<Option<crate::decision_log::DecisionLogRun>, StoreError>;
     /// Authoritative per-account concurrency overrides (not event projections).
     fn account_limits(&self) -> Result<Vec<super::AccountLimit>, StoreError>;
     /// `None` clears an override; values must be in 1..=32.

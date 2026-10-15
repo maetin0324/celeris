@@ -1,0 +1,1 @@
+{"source":"pluvio survey (縮小版)","papers":[{"id":"s1","topic":"IO scheduling","claims_speedup":1.8},{"id":"s2","topic":"IO scheduling","claims_speedup":2.1},{"id":"s3","topic":"caching","claims_speedup":1.3}]}

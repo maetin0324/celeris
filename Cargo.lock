@@ -285,6 +285,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "celeris-campaign"
+version = "0.1.0"
+dependencies = [
+ "routing-eval",
+ "serde",
+ "serde_json",
+ "sha2",
+ "task-core",
+ "tempfile",
+]
+
+[[package]]
 name = "celeris-credentiald"
 version = "0.1.0"
 dependencies = [

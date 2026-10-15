@@ -210,3 +210,8 @@ events の最大 id 555195）。
 - `docs/architecture-map.md` に root_done の行を追加。
 - 未解決: `scan_task_failed`／`TaskFailed` ほか `notify::scan`／`schedule` は daemon から呼ばれない死んだ経路のまま（D8 の提案の別 task）。notices cursor の同時刻 tie の疑いも未検証。
 - 本番への移行: config 変更なし。release 昇格後、次の root done で専用スレッド＋Discord 通知 1 通を確認（wire.md 参照）。
+
+### closeout 再実行（fixture path 修正後の HEAD 4eedf3f9、attempt 2）
+
+- `bash scripts/dev/test-parallel.sh` → exit 0。nextest passed 5148 / failed 0 / ignored 13、doctest exit 0。
+- `cargo clippy --workspace -- -D warnings` → exit 0。

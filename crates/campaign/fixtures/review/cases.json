@@ -1,0 +1,9 @@
+{"description":"既知の誤りを入れたレビュー fixture。pilot の mock run の記録/報告に誤りを注入し、独立 checker が検出する。expect は違反メッセージの部分文字列。",
+ "cases":[
+  {"name":"passed-flag-number-mismatch","kind":"flip_passed_flag","expect":"passed flag contradicts outcome"},
+  {"name":"dropped-failure-denominator","kind":"drop_failed_record","expect":"records"},
+  {"name":"split-mixed-record","kind":"mix_split_record","expect":"mixed into"},
+  {"name":"report-number-mismatch","kind":"report_inflate_passed","expect":"passed"},
+  {"name":"report-denominator-missing","kind":"report_drop_denominator","expect":"denominator"},
+  {"name":"report-split-mixed","kind":"report_split_mixed","expect":"split"}
+ ]}

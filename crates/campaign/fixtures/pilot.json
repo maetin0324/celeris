@@ -1,0 +1,74 @@
+{
+  "schema": "celeris.campaign-manifest/1",
+  "campaign_id": "pilot-dev-1",
+  "version": "1",
+  "split": "dev",
+  "input": {
+    "path": "input-manifest.json",
+    "sha256": "52dd6e1b3544b47a0987a4ac331dee4b041d2ee5ba41ab32e772e1b588479dd5"
+  },
+  "problems": [
+    "impl-benchfs-chunk-index",
+    "exp-benchfs-smallrun",
+    "analysis-benchfs-scaling",
+    "report-pluvio-summary",
+    "review-numeric-consistency"
+  ],
+  "configs": [
+    {
+      "id": "A",
+      "harness": "claude-code",
+      "harness_version": "baseline-1",
+      "model": "mock-model",
+      "model_version": "mock-1",
+      "policy_version": "ops-baseline"
+    },
+    {
+      "id": "B",
+      "harness": "celeris",
+      "harness_version": "1",
+      "model": "mock-model",
+      "model_version": "mock-1",
+      "policy_version": "fixed"
+    },
+    {
+      "id": "C",
+      "harness": "celeris",
+      "harness_version": "1",
+      "model": "mock-model",
+      "model_version": "mock-1",
+      "policy_version": "jev-1"
+    }
+  ],
+  "primary": [
+    "A",
+    "B"
+  ],
+  "secondary": {
+    "pair": [
+      "B",
+      "C"
+    ],
+    "subset": [
+      "impl-benchfs-chunk-index",
+      "review-numeric-consistency"
+    ]
+  },
+  "budget": {
+    "max_tokens": 1000000,
+    "max_wall_secs": 36000,
+    "max_disk_bytes": 137438953472,
+    "max_parallel": 2
+  },
+  "termination": {
+    "trial_timeout_secs": 1800,
+    "max_attempts_per_trial": 1,
+    "stop_on_budget": true
+  },
+  "snapshot": {
+    "repo_commit": "fixture-repo-1",
+    "materials_sha256": "692578958726ad328d611f04b3028aeae3b509bc7c0e962cb32bcfe08bff9581",
+    "kb_snapshot": "kb-fixture-1"
+  },
+  "sha256": "c7ccacb8654967f3b26c517b6a86d9f87d024af7ed793b7716b18f15200ea6be"
+}

@@ -4,9 +4,9 @@ use celeris_campaign::{
     checker, executor::MockExecutor, export, manifest::CampaignManifest, runner,
 };
 
-const USAGE: &str = "usage: celeris-campaign <dry-run|validate|run|check|export> --manifest <path> \
+const USAGE: &str = "usage: celeris-campaign <dry-run|validate|run|check|check-report|export> --manifest <path> \
 [--input-manifest <path>] [--out <dir>] [--executor mock] [--dest <dir>] \
-[--repo-src <dir>] [--materials-src <dir>] [--kb-src <dir>]";
+[--report <file>] [--repo-src <dir>] [--materials-src <dir>] [--kb-src <dir>]";
 
 fn arg(args: &[String], name: &str) -> Option<PathBuf> {
     args.iter()
@@ -59,6 +59,16 @@ fn run(args: Vec<String>) -> Result<String, String> {
             let rep = checker::check(&m, &out()?);
             let s = serde_json::to_string_pretty(&rep).map_err(|e| e.to_string())?;
             if rep.ok { Ok(s) } else { Err(s) }
+        }
+        "check-report" => {
+            let rp = arg(&args, "--report").ok_or("--report <file> is required")?;
+            let text = std::fs::read_to_string(&rp).map_err(|e| format!("{}: {e}", rp.display()))?;
+            let v = celeris_campaign::report::check_report(&m, &out()?, &text);
+            if v.is_empty() {
+                Ok("{\"ok\":true}".into())
+            } else {
+                Err(v.join("\n"))
+            }
         }
         "export" => {
             let out = out()?;

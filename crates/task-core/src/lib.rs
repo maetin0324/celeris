@@ -328,6 +328,7 @@ pub use coding_harness::{
 };
 pub use model_family::{FamilyBasis, FamilyDecision, ModelFamily, derive_family};
 // ---- ADR-0069（Phase 114）: routing の 4 層（lane policy・retry/escalation・監査）----
+pub mod decision_log;
 pub mod model_policy;
 pub mod retry_policy;
 pub mod routing_audit;

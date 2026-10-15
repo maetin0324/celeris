@@ -12,4 +12,4 @@ ADR 2026-10-15-mlsys-min-decision-assisted D4 は「待機中に worker/CoS/LLM 
 - 他の種別の policy は変えない。旧い「credential_wait も triage に載る」経路・試験の代用（triage ingest + outbox claim）は消した。
 
 ## 試験
-`credential_e2e::credential_wait_notifies_through_the_outbox_without_any_run_over_full_ticks`: `Dispatcher::tick` を注入時計で回し、待機 item 作成〜通知 enqueue の後に runs・chat_runs・system message・pending な triage item が 0 本、outbox は 1 件。偽 webhook への送信は `crates/celeris/tests/credential_wait_notify.rs`。
+`credential_e2e::credential_wait_notifies_through_the_outbox_without_any_run_over_full_ticks`: `Dispatcher::tick` を注入時計で回し、待機 item 作成〜通知 enqueue の後に runs・chat_runs・system message・pending な triage item が 0 本、outbox は 1 件。偽 webhook への送信まで通す試験は `crates/celeris/tests/credential_wait_notify.rs`（`build_dispatcher` の tick → outbox → notifier → 偽 webhook → 登録 → 検証 → 一度だけ再開）。

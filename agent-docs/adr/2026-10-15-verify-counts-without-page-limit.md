@@ -30,5 +30,6 @@ release 5c651a490521 の verify が counts-match・n-1-compat で不合格にな
   読めることは `probe_api` の一覧 GET 200 で見る。旧版が口を持つようになった後も同じ扱い
   （版で分岐しない）。
 - 試験: `crates/task-api/tests/reports.rs::count_endpoints_count_every_row_beyond_the_page_limit`
-  （reports 1723 件・1 node 650 件、messages 1 node 650 件。一覧は 500 で打ち切られ、口は全数を返す）と
-  `scripts/selfdeploy/tests` の verify 件数照合試験。
+  （reports 1723 件・1 node 650 件、messages 1 node 650 件。一覧は 500 で打ち切られ、口は全数を返す）。
+  verify.sh の collect は口の `count` をそのまま出すだけなので、全数を返すことはこの試験で固定する。
+  `scripts/selfdeploy/tests/verify_web_app_start.sh` の fake API も口を返す。

@@ -37,8 +37,7 @@ completed: 2026-10-15
 - 前回 attempt の全体 gate: `bash scripts/dev/test-parallel.sh` exit 0（5192 passed / 0 failed / 13 ignored）、`cargo clippy --workspace -- -D warnings` exit 0。この WU はコードを変えていないので結果は同じ。最終の再実行結果は完了報告に記す。
 
 ## 未解決事項
-- 通知は既存 policy どおり CoS triage（LLM run）を 1 回経由して Discord に出る。試験は CoS の判断を escalation outbox の直接投入で代用している。待機中に CoS を起こさないことを厳密にするなら、triage から `credential_wait` を外す決定が要る。
-- 「待機中に worker run なし」は gate の直呼びで確認した。dispatch の tick 全体は通していない。
+- （解消済み: cw-direct）`credential_wait` は CoS triage を経ず決定的に escalation outbox へ入る。`Dispatcher::tick` 全体を通す試験で runs・chat run・CoS triage message が 0 本。
 - tracing ログへの値の不出現は構造上（値を log に渡す経路が無い）の確認で、ログ捕捉の試験は無い。
 - 判定済み fingerprint と backoff はメモリ内。再起動後は最大 1 回再検証する。claim 後・再キュー前の crash は WU が blocked のまま残りうる（極小の窓）。
 - 検証中 / 再登録待ちを API が持たないため、web は「保存から 60 秒は検証中」と近似している。Playwright e2e と実ブラウザでの目視は未実施。
@@ -46,7 +45,6 @@ completed: 2026-10-15
 
 ## 提案
 - wait の state（waiting / verifying / rejected）を inbox item に出す欄を足す（web の近似を外せる）。
-- `credential_wait` を CoS triage から外すか決める（人の決定）。
 - 計画なし task が登録後、検証を待たず gate を通る点を、検証と claim の経路に揃える。
 - `resumed` で WU がまだ blocked の行を reconcile する。
 - 登録は連携の有効化であり、本測定や無制限課金の承認ではない（item 文言に入っている）。

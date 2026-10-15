@@ -6,7 +6,6 @@ use std::collections::VecDeque;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use task_core::chat::triage::CosTriageSource;
 use task_core::{CredentialVerifyKind, CredentialWaitState};
 
 use super::credential_gate::{SECRET, jev_pick, unit};
@@ -186,26 +185,6 @@ impl E2e {
         .collect()
     }
 
-    /// 通知（CoS triage → webhook）の入力。受信箱 item の (kind, id, created_at) を既存の写像でそのまま渡す。
-    fn offer_to_triage(&self, item: &task_ops::human_inbox::InboxItem) -> usize {
-        self.sqlite
-            .cos_triage_ingest_batch(
-                "inbox",
-                "c",
-                &[CosTriageSource {
-                    source_kind: item.kind.as_str().to_owned(),
-                    source_key: item.id.clone(),
-                    source_revision: item.created_at.clone(),
-                    source_event_id: None,
-                    operation_id: None,
-                    summary: item.title.clone(),
-                    policy_version: "v".into(),
-                }],
-                *self.clock.lock().unwrap(),
-            )
-            .unwrap()
-    }
-
     fn resumed_events(&self, task: &Task) -> usize {
         self.sqlite
             .events_for(task.id)
@@ -266,8 +245,6 @@ fn unregistered_to_wait_one_item_for_many_tasks_to_a_single_resume() {
         assert!(detail.contains(needle), "{needle}: {detail}");
     }
     assert!(item.links.iter().any(|l| l.href == "/accounts"));
-    assert_eq!(e.offer_to_triage(&item), 1);
-    assert_eq!(e.offer_to_triage(&item), 0);
     let (t3, a3, _) = e.task();
     hold(&mut d, &t3, &a3);
     let again = e.inbox();
@@ -277,7 +254,6 @@ fn unregistered_to_wait_one_item_for_many_tasks_to_a_single_resume() {
         (&item.id, &item.created_at)
     );
     assert_eq!(again[0].blocking.tasks.len(), 3);
-    assert_eq!(e.offer_to_triage(&again[0]), 0);
 
     // 登録 → mock 検証成功（秘密 1 つ・fingerprint 1 つにつき 1 回）→ 3 つの unit が一度だけ再開。
     e.put_secret(DUMMY);
@@ -314,7 +290,6 @@ fn wrong_key_updates_the_same_item_keeps_waiting_and_an_update_resumes() {
     let (t, a, _b) = e.task();
     hold(&mut d, &t, &a);
     let before = e.inbox().remove(0);
-    assert_eq!(e.offer_to_triage(&before), 1);
 
     e.put_secret(WRONG);
     let v = Scripted::new(&[VerifyOutcome::InvalidKey, VerifyOutcome::Valid]);
@@ -343,7 +318,6 @@ fn wrong_key_updates_the_same_item_keeps_waiting_and_an_update_resumes() {
             .unwrap()
             .contains("更新してください")
     );
-    assert_eq!(e.offer_to_triage(&after[0]), 0);
 
     // 同じ誤キーのまま何度 tick しても再検証しない（無限再試行しない）。
     for _ in 0..3 {
@@ -512,8 +486,6 @@ fn secret_values_never_appear_in_db_inbox_events_reports_or_errors() {
     let mut d = e.dispatcher();
     let (t, a, _b) = e.task();
     hold(&mut d, &t, &a);
-    let item0 = e.inbox().remove(0);
-    e.offer_to_triage(&item0);
     let v = Scripted::new(&[
         VerifyOutcome::InvalidKey,
         VerifyOutcome::InsufficientPermission,
@@ -563,4 +535,91 @@ fn secret_values_never_appear_in_db_inbox_events_reports_or_errors() {
             }
         }
     }
+}
+
+/// 待機は CoS triage（LLM run）を経ない: 本物の `Dispatcher::tick` を回し、待機 item の作成〜通知 enqueue の後でも
+/// runs 行・CoS triage の chat run・worker の spawn が 0 本で、escalation outbox が 1 件（task が増えても 1 件）。
+#[tokio::test]
+async fn credential_wait_notifies_through_the_outbox_without_any_run_over_full_ticks() {
+    let e = E2e::new();
+    let mut d = e.dispatcher();
+    let clock = Arc::new(StdMutex::new(*e.clock.lock().unwrap()));
+    d.test_now = Some(clock.clone());
+    d.config.min_free_disk_mb = 0;
+    d.set_cos_chat_launch(
+        e.sqlite.clone(),
+        crate::dispatcher::cos_chat::launch::CosChatLaunchConfig {
+            worker_reserve_five_hour: 0.90,
+            enabled: true,
+            harness: "fake".into(),
+            max_turns: 2,
+            max_wall_secs: 30,
+            unavailable_reason: None,
+            data_dir: e.dir.path().to_path_buf(),
+            db_path: e.dir.path().join("db.sqlite"),
+            attachment_limits: Default::default(),
+            api_base_url: "http://127.0.0.1:7700/api/v1".into(),
+            web_base_url: Some("http://celeris.test".into()),
+            triage: Default::default(),
+        },
+    );
+    let tick = |d: &mut Dispatcher| {
+        *clock.lock().unwrap() += time::Duration::seconds(1);
+        d.tick().unwrap();
+    };
+    let count = |sql: &str| -> i64 {
+        rusqlite::Connection::open(e.dir.path().join("db.sqlite"))
+            .unwrap()
+            .query_row(sql, [], |r| r.get(0))
+            .unwrap()
+    };
+    let single_unit_task = || {
+        let task = new_task(e.dir.path(), Check::Reviewer, 1);
+        e.sqlite.insert(&task).unwrap();
+        let a = unit(&task, "a", 0);
+        e.sqlite
+            .work_units_apply(task.id, vec![a.clone()], Vec::new(), Vec::new())
+            .unwrap();
+        (task, a)
+    };
+
+    tick(&mut d); // 導入: 空の受信箱
+    let (t1, a1) = single_unit_task();
+    hold(&mut d, &t1, &a1);
+    for _ in 0..4 {
+        tick(&mut d);
+    }
+    let pending = e.sqlite.notification_pending().unwrap();
+    assert_eq!(pending.len(), 1, "{pending:?}");
+    assert_eq!(pending[0].kind, task_core::NotificationKind::CosEscalation);
+    assert!(pending[0].body.contains("/accounts"), "{}", pending[0].body);
+    assert!(pending[0].body.contains("自動で続行"), "{}", pending[0].body);
+    assert!(!pending[0].body.contains(DUMMY));
+
+    // 同じ秘密を待つ 2 つ目の task は通知を増やさない（再 tick・restart 相当の reconcile でも 1 件）。
+    let (t2, a2) = single_unit_task();
+    hold(&mut d, &t2, &a2);
+    d.request_cos_triage_reconcile();
+    for _ in 0..4 {
+        tick(&mut d);
+    }
+    assert_eq!(e.sqlite.notification_pending().unwrap().len(), 1);
+
+    // LLM run・worker run なし: runs 行・chat run・triage の system message・pending な triage item が 0。
+    assert_eq!(e.runs(&t1) + e.runs(&t2), 0);
+    assert_eq!(count("SELECT COUNT(*) FROM runs"), 0);
+    assert_eq!(count("SELECT COUNT(*) FROM chat_runs"), 0);
+    assert_eq!(
+        count("SELECT COUNT(*) FROM chat_messages WHERE role='system'"),
+        0
+    );
+    assert_eq!(
+        count("SELECT COUNT(*) FROM cos_inbox_items WHERE state IN ('pending','running')"),
+        0
+    );
+    assert_eq!(
+        count("SELECT COUNT(*) FROM cos_inbox_items WHERE source_kind='credential_wait'"),
+        1
+    );
+    assert_eq!(e.unit(&t1, "a").0, WorkUnitStatus::Blocked);
 }

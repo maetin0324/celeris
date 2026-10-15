@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { apiGet } from "../../api/client";
 import type { LlmSourcesView, SecretList, SecretView } from "../../api/generated/types";
 import { accountKeys } from "../../api/queries/keys";
@@ -10,6 +10,7 @@ import { Button } from "../../components/ui/button";
 import { ConfirmDialog } from "../../components/ui/confirm-dialog";
 import { DataList } from "../../components/ui/data-list";
 import { formatAbsolute } from "../../lib/time";
+import { CredentialWaitsPanel } from "./credential-waits";
 import { deniedMessage, isDenied } from "./denied";
 
 type Run = ReturnType<typeof useActionResult>["run"];
@@ -50,15 +51,20 @@ function ReplaceForm({
   run,
   disabled,
   deniedId,
+  autoFocus,
 }: {
   item: SecretView;
   run: Run;
   disabled: boolean;
   deniedId: string | undefined;
+  autoFocus?: boolean;
 }) {
   const [value, setValue] = useState("");
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (autoFocus) inputRef.current?.focus();
+  }, [autoFocus]);
   const errorId = useId();
   return (
     <div className="min-w-0 space-y-2">
@@ -130,18 +136,31 @@ function SecretItem({
   results,
   disabled,
   deniedId,
+  focused,
 }: {
   item: SecretView;
   run: Run;
   results: Record<string, ActionResult>;
   disabled: boolean;
   deniedId: string | undefined;
+  focused: boolean;
 }) {
-  const [replacing, setReplacing] = useState(false);
+  // 受信箱の credential 待ち item から来たとき（?secret=<id>）は置き換え欄を開いて入力欄へフォーカスする。
+  const [replacing, setReplacing] = useState(focused);
+  const cardRef = useRef<HTMLLIElement>(null);
+  useEffect(() => {
+    if (focused) cardRef.current?.scrollIntoView?.({ block: "center" });
+  }, [focused]);
   const removed = results[`del:${item.id}`];
   const put = results[`put:${item.id}`];
   return (
-    <li className={cardClass} aria-label={`secret ${item.id}`}>
+    <li
+      ref={cardRef}
+      id={`secret-${item.id}`}
+      className={`${cardClass}${focused ? " outline-2 outline-ring" : ""}`}
+      aria-label={`secret ${item.id}`}
+      data-focused={focused ? "true" : undefined}
+    >
       <div className="flex min-w-0 flex-wrap items-center gap-2">
         <h3 className="min-w-0 break-words text-body font-semibold text-foreground">{item.id}</h3>
         <Badge tone={item.fingerprint ? "success" : "warning"}>{item.fingerprint ? "保存あり" : "未設定"}</Badge>
@@ -176,7 +195,7 @@ function SecretItem({
           }}
         />
       </div>
-      {replacing && <ReplaceForm item={item} run={run} disabled={disabled} deniedId={deniedId} />}
+      {replacing && <ReplaceForm item={item} run={run} disabled={disabled} deniedId={deniedId} autoFocus={focused} />}
       {put?.ok && <ActionResultView result={put} />}
       {removed && !removed.ok && !denied(removed) && <ActionResultView result={removed} />}
     </li>
@@ -287,7 +306,7 @@ function SecretForm({
   );
 }
 
-export function SecretsSection() {
+export function SecretsSection({ focusSecret }: { focusSecret?: string } = {}) {
   const secrets = useQuery({
     queryKey: accountKeys.list({ section: "secrets" }),
     queryFn: ({ signal }: { signal: AbortSignal }) => apiGet<SecretList>("/api/secrets", signal),
@@ -302,6 +321,9 @@ export function SecretsSection() {
   const deniedId = blocked ? deniedNoticeId : undefined;
   const disabled = sender.pending || blocked;
   const items = secrets.data?.items ?? [];
+  const saved = Object.entries(sender.results)
+    .filter(([key, result]) => key.startsWith("put:") && result.ok)
+    .map(([key, result]) => ({ id: key.slice("put:".length), result }));
   return (
     <section className="min-w-0 space-y-3" aria-label="secret と LLM source">
       <h2 className={sectionTitleClass}>秘密の値（secret）</h2>
@@ -317,6 +339,7 @@ export function SecretsSection() {
           {deniedMessage("secret の保存・置き換え・削除")}
         </p>
       )}
+      <CredentialWaitsPanel secrets={items} saved={saved} focusSecret={focusSecret} />
       <FetchFrame query={secrets} subject="secret">
         {secrets.data &&
           (items.length === 0 ? (
@@ -331,6 +354,7 @@ export function SecretsSection() {
                   results={sender.results}
                   disabled={disabled}
                   deniedId={deniedId}
+                  focused={item.id === focusSecret}
                 />
               ))}
             </ul>

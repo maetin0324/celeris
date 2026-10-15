@@ -21,6 +21,13 @@ pub struct LlmSourceConfig {
     pub max_runs: Option<u32>,
     #[serde(default)]
     pub quota: Option<f64>,
+    /// ADR 2026-10-15-mlsys-min-decision-assisted D4: `true` なら、`credential_ref` の秘密が未登録の間、
+    /// この source へ向かう work unit だけを `waiting_for_auth` で待たせる（受信箱に登録の要求を出す）。
+    #[serde(default)]
+    pub wait_for_credential: bool,
+    /// 受信箱に出す用途の 1 行（既定は「source <id> の API キー」）。
+    #[serde(default)]
+    pub credential_purpose: Option<String>,
 }
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -128,6 +135,39 @@ const ROUTE_CLASSES: [&str; 3] = ["coding", "planner", "review"];
 const PROXY_BOUND_HARNESSES: [&str; 3] = ["local-deep-research", "paperqa", "langmem"];
 
 impl super::Config {
+    /// `wait_for_credential = true` の source を credential 待ちの宣言（dispatcher の gate）へ。
+    /// `credential_ref` が無い宣言は設定エラー（待つ先の秘密 id が無い）。
+    pub fn credential_gates(
+        &self,
+    ) -> Result<task_dispatch::dispatcher::CredentialGates, ConfigError> {
+        let mut gates = task_dispatch::dispatcher::CredentialGates {
+            secrets_dir: self.secrets.as_ref().map(|s| s.dir.clone()),
+            by_source: Default::default(),
+        };
+        for (id, s) in &self.llm_sources {
+            if !s.wait_for_credential {
+                continue;
+            }
+            let Some(secret_id) = s.credential_ref.clone().filter(|v| !v.is_empty()) else {
+                return Err(ConfigError::Invalid(format!(
+                    "[llm_sources.{id}] wait_for_credential = true requires credential_ref"
+                )));
+            };
+            gates.by_source.insert(
+                id.as_str().into(),
+                task_dispatch::dispatcher::CredentialGate {
+                    secret_id,
+                    provider: id.clone(),
+                    purpose: s
+                        .credential_purpose
+                        .clone()
+                        .unwrap_or_else(|| format!("source {id} の API キー")),
+                },
+            );
+        }
+        Ok(gates)
+    }
+
     /// `[llm_sources.<id>]` に `kind` がこの source の行があるか。
     pub fn declares_source_kind(&self, kind: task_core::LlmSourceRef) -> bool {
         self.llm_sources.values().any(|s| s.kind == kind.as_str())
@@ -451,6 +491,38 @@ args = ["acp"]
 [route_defaults.cli]
 candidates = [{ source = "main", model = "m1" }]
 "#;
+
+    #[test]
+    fn wait_for_credential_builds_a_gate_and_requires_a_credential_ref() {
+        let text = DECLS.replace(
+            "models = [\"m1\"]",
+            "models = [\"m1\"]\ncredential_ref = \"jev_api_key\"\nwait_for_credential = true\ncredential_purpose = \"Jev\"",
+        );
+        let cfg = Config::parse_with_delivery(&text).unwrap();
+        let gates = cfg.credential_gates().unwrap();
+        let gate = &gates.by_source[&"main".into()];
+        assert_eq!(gate.secret_id, "jev_api_key");
+        assert_eq!(gate.purpose, "Jev");
+        // 既定（false）なら gate は空。待つ先の秘密が無い宣言は設定エラー。
+        assert!(
+            Config::parse_with_delivery(DECLS)
+                .unwrap()
+                .credential_gates()
+                .unwrap()
+                .by_source
+                .is_empty()
+        );
+        let bad = DECLS.replace(
+            "models = [\"m1\"]",
+            "models = [\"m1\"]\nwait_for_credential = true",
+        );
+        assert!(
+            Config::parse_with_delivery(&bad)
+                .unwrap()
+                .credential_gates()
+                .is_err()
+        );
+    }
 
     #[test]
     fn llm_sources_harness_decl_builds_registry_from_adr_tables() {

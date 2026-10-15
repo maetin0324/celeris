@@ -90,8 +90,7 @@ export function localSourceLabel(source: SettingSource): string {
  * CLI の上書きを外して daemon を再起動するまで効かない（ADR D3）。
  */
 export function localApplyState(setting: { apply: string; source: SettingSource }): { tone: BadgeTone; label: string } {
-  if (setting.source === "cli")
-    return { tone: "warning", label: "daemon の再起動が必要" };
+  if (setting.source === "cli") return { tone: "warning", label: "daemon の再起動が必要" };
   switch (setting.apply) {
     case "new_tasks":
       return { tone: "info", label: "新しい task から反映（既存 task・走行中 run の作業場所は動かさない）" };

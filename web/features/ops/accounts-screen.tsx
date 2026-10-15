@@ -719,7 +719,7 @@ function CreateForm({ sender, blocked, deniedId }: { sender: Sender; blocked: bo
   );
 }
 
-export function AccountsScreen() {
+export function AccountsScreen({ focusSecret }: { focusSecret?: string } = {}) {
   const query = useQuery({
     queryKey: accountKeys.list({ section: "accounts" }),
     queryFn: ({ signal }: { signal: AbortSignal }) => apiGet<AccountList>("/api/llm/accounts", signal),
@@ -781,7 +781,7 @@ export function AccountsScreen() {
             </div>
           )}
         </FetchFrame>
-        <SecretsSection />
+        <SecretsSection focusSecret={focusSecret} />
         <McpClientsSection />
       </div>
     </ScreenFrame>

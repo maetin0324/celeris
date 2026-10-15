@@ -270,6 +270,13 @@ fn classify_node(n: &NodeLivenessFacts) -> NodeLiveness {
                         format!("unit {} はクラスタ job の終了を待っている", u.key),
                     ));
                 }
+                // ADR 2026-10-15-mlsys-min D4: credential の登録・検証を待っている（名指しの待ち）。
+                Some(WorkUnitBlockedReason::WaitingForAuth) => {
+                    waiting.get_or_insert((
+                        "waiting_for_auth",
+                        format!("unit {} は credential の登録を待っている", u.key),
+                    ));
+                }
                 Some(
                     WorkUnitBlockedReason::DependencyFailed
                     | WorkUnitBlockedReason::Limit

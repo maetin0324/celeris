@@ -1,5 +1,8 @@
 //! 起動時の組み立て: DB の置き場所の検査、`Dispatcher` の構築、組織図と定期実行 job の種まき。
 
+#[path = "jev_verifier.rs"]
+mod jev_verifier;
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -572,7 +575,34 @@ pub fn build_dispatcher(
         }
     }
     dispatcher.set_llm_route_registry(llm_routes);
+    if let Some(secrets) = config.secrets.as_ref() {
+        // ADR 2026-10-15-mlsys-min-decision-assisted D4: 秘密の登録で credential 待ちを検証し、同じ WU を再開する。
+        let resumer = task_dispatch::credential_resume::CredentialResumer::new(
+            sqlite.clone(),
+            Arc::new(task_dispatch::credential_resume::FileSecretSource {
+                dir: secrets.dir.clone(),
+            }),
+            Arc::new(OffsetDateTime::now_utc),
+        )
+        .with_verifier(
+            "jev",
+            Arc::new(jev_verifier::JevVerifier::openrouter_default()),
+        );
+        dispatcher.set_credential_resumer(Arc::new(resumer));
+    }
     dispatcher.set_harness_adapters(build_harness_adapters(config)?);
+    // ADR 2026-10-15-mlsys-min D4: 登録が要る credential の宣言と、再起動後の待機の復元（DB が正）。
+    dispatcher.set_credential_gates(config.credential_gates()?);
+    match dispatcher.restore_credential_waits() {
+        Ok(waits) if !waits.is_empty() => {
+            tracing::info!(
+                count = waits.len(),
+                "restored credential waits (waiting_for_auth)"
+            );
+        }
+        Ok(_) => {}
+        Err(error) => tracing::warn!(%error, "cannot restore credential waits"),
+    }
     // ADR 2026-10-08 account-concurrency-limits §(d)(e): implicit accounts are the declared sources
     // without an account pool; forget limits of implicit accounts no such source has any more.
     if let Err(error) = dispatcher.prune_implicit_account_limits() {

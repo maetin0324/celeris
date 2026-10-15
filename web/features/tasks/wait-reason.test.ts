@@ -24,3 +24,12 @@ describe("task wait reasons", () => {
     expect(waitReason({ kind: "human_gate", gate: "phase_checkpoint", stage: null })).toBe("途中確認待ち");
   });
 });
+
+describe("credential wait", () => {
+  test("API キー待ちの unit を WU 停止中と区別する", () => {
+    expect(waitReason({ kind: "units_blocked", reason: "waiting_for_auth", unit_keys: ["u1"] })).toBe(
+      "API キーの登録待ち（登録で自動再開）",
+    );
+    expect(waitReason({ kind: "units_blocked", reason: "infra", unit_keys: ["u1"] })).toBe("WU 停止中");
+  });
+});

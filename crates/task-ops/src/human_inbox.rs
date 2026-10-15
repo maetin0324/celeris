@@ -39,6 +39,8 @@ pub enum InboxKind {
     Failed,
     Unroutable,
     ClusterLogin,
+    // ADR 2026-10-15-mlsys-min-decision-assisted D4: 外部 provider の API キーの登録待ち（秘密 id ごとに 1 件）。
+    CredentialWait,
     // ADR 2026-10-07-build-tmp-hygiene D4.3: ディスク使用率が `critical` を超えた path。
     DiskFull,
     DeliverySkipped,
@@ -48,7 +50,7 @@ pub enum InboxKind {
 }
 
 impl InboxKind {
-    pub const ALL: [InboxKind; 15] = [
+    pub const ALL: [InboxKind; 16] = [
         InboxKind::Decision,
         InboxKind::PlanGate,
         InboxKind::PhaseGate,
@@ -61,6 +63,7 @@ impl InboxKind {
         InboxKind::Failed,
         InboxKind::Unroutable,
         InboxKind::ClusterLogin,
+        InboxKind::CredentialWait,
         InboxKind::DiskFull,
         InboxKind::DeliverySkipped,
         InboxKind::IntegrationRequest,
@@ -80,6 +83,7 @@ impl InboxKind {
             InboxKind::Failed => "failed",
             InboxKind::Unroutable => "unroutable",
             InboxKind::ClusterLogin => "cluster_login",
+            InboxKind::CredentialWait => "credential_wait",
             InboxKind::DiskFull => "disk_full",
             InboxKind::DeliverySkipped => "delivery_skipped",
             InboxKind::IntegrationRequest => "integration_request",
@@ -239,6 +243,17 @@ pub fn from_inbox(inbox: &Inbox, by_id: &HashMap<TaskId, Task>, now: OffsetDateT
     }
     for d in &inbox.disk_full {
         items.push(b.disk_full(d));
+    }
+    // 同じ秘密を待つ wait は 1 件に束ねる（集約キー = `credential:<secret_id>`）。
+    let mut groups: BTreeMap<&str, Vec<&task_core::CredentialWait>> = BTreeMap::new();
+    for w in &inbox.credential_waits {
+        groups
+            .entry(w.aggregation_key.as_str())
+            .or_default()
+            .push(w);
+    }
+    for waits in groups.values() {
+        items.push(b.credential_wait(waits));
     }
 
     sort_items(&mut items);
@@ -1138,6 +1153,89 @@ impl Builder<'_> {
                 .format(&Rfc3339)
                 .unwrap_or_else(|_| self.now_str()),
             links: Vec::new(),
+        })
+    }
+
+    /// 1 つの秘密（集約キー）を待つ wait 全部の要対応 item。`created_at` は最初の wait の時刻で固定し、
+    /// 待つ task が増減しても・誤キーで更新されても同じ item（通知の revision が変わらない）。値は載せない。
+    fn credential_wait(&self, waits: &[&task_core::CredentialWait]) -> InboxItem {
+        let first = waits[0];
+        let created_at = waits
+            .iter()
+            .map(|w| w.created_at)
+            .min()
+            .unwrap_or(first.created_at);
+        let rejected = waits.iter().find_map(|w| {
+            w.last_verify_kind
+                .filter(|_| w.state == task_core::CredentialWaitState::Rejected)
+        });
+        let mut tasks: Vec<TaskRef> = Vec::new();
+        let mut units: Vec<String> = Vec::new();
+        for w in waits {
+            if let Some(t) = self.ref_of(w.task_id)
+                && !tasks.iter().any(|x| x.id == t.id)
+            {
+                tasks.push(t);
+            }
+            if !units.contains(&w.work_unit_id) {
+                units.push(w.work_unit_id.clone());
+            }
+        }
+        let names: Vec<String> = tasks
+            .iter()
+            .map(|t| format!("{}（{}）", t.title, t.id))
+            .collect();
+        let problem = match rejected {
+            Some(task_core::CredentialVerifyKind::InsufficientPermission) => {
+                "登録されたキーは権限が足りません。権限のあるキーで更新してください。\n"
+            }
+            Some(_) => "登録されたキーは無効でした。正しいキーで更新してください。\n",
+            None => "",
+        };
+        let detail = format!(
+            "{problem}用途: {}\n待っている task: {}\nアカウント画面（/accounts）の「秘密」で {} を登録すると、\
+             検証のあと待っている work unit が自動で続行されます。登録は連携の有効化だけで、\
+             測定の予算の承認ではありません。",
+            first.purpose,
+            names.join("、"),
+            first.secret_id
+        );
+        let title = if rejected.is_some() {
+            format!("API キーを更新してください: {}", first.provider)
+        } else {
+            format!("API キーの登録が必要: {}", first.provider)
+        };
+        self.finish(Draft {
+            id: format!("credential_wait-{}", id_part(&first.secret_id)),
+            kind: InboxKind::CredentialWait,
+            title,
+            detail: clip(&detail),
+            options: vec![opt(
+                "register",
+                "アカウント画面でキーを登録する",
+                false,
+                "登録すると検証のあと、待っている work unit が自動で続行される",
+            )],
+            recommended: Some("register".to_string()),
+            due_at: None,
+            blocking: InboxBlocking {
+                root: tasks.first().and_then(|t| self.root_of(t.id)),
+                summary: format!(
+                    "{} 件の work unit だけ（他の unit・兄弟は止めない）",
+                    units.len()
+                ),
+                tasks,
+                units,
+            },
+            blocked_by: Vec::new(),
+            native: native("PUT", format!("/api/v1/secrets/{}", first.secret_id)),
+            project_id: self.project_of(first.task_id),
+            task: self.ref_of(first.task_id),
+            created_at: view::to_rfc3339(created_at),
+            links: vec![link(
+                "アカウント画面（秘密の登録）",
+                "/accounts".to_string(),
+            )],
         })
     }
 

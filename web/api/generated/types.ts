@@ -3020,7 +3020,7 @@ export type InboxItem = {
   "title": string;
 };
 
-export type InboxKind = "decision" | "plan_gate" | "phase_gate" | "authorization" | "browser_wait" | "question" | "acceptance_check" | "draft_accept" | "project_plan" | "failed" | "unroutable" | "cluster_login" | "disk_full" | "delivery_skipped" | "integration_request" | "unintegrated";
+export type InboxKind = "decision" | "plan_gate" | "phase_gate" | "authorization" | "browser_wait" | "question" | "acceptance_check" | "draft_accept" | "project_plan" | "failed" | "unroutable" | "cluster_login" | "credential_wait" | "disk_full" | "delivery_skipped" | "integration_request" | "unintegrated";
 
 export type InboxLink = {
   "href": string;
@@ -5960,7 +5960,7 @@ export type VerdictView = {
   "ts": string;
 };
 
-export type WorkUnitBlockedReason = "question" | "dependency_failed" | "limit" | "plan_issue" | "decision" | "infra" | "cluster_jobs";
+export type WorkUnitBlockedReason = "question" | "dependency_failed" | "limit" | "plan_issue" | "decision" | "infra" | "cluster_jobs" | "waiting_for_auth";
 
 export type WorkUnitBudget = {
   "max_turns"?: number | null;

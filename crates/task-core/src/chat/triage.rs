@@ -310,6 +310,49 @@ impl SqliteStore {
         Ok(Some(notification_id))
     }
 
+    /// 決定的な直経路（ADR 2026-10-15-credential-wait-skip-triage）: CoS の判断（LLM run）を要さない待ちを、
+    /// triage の `pending` を経ずに最初から `escalated` の item として積み、escalation outbox を同じ transaction で作る。
+    /// 同じ (kind, key, revision) は 1 回だけ（既にあれば何もしない）。`cos_triage_claim` は `pending` だけを取るので
+    /// この item では CoS run が起きない。
+    pub fn cos_triage_direct_escalate(
+        &self,
+        source: &CosTriageSource,
+        body: &str,
+        now: OffsetDateTime,
+    ) -> Result<Option<String>, ChatError> {
+        if source.source_kind.is_empty()
+            || source.source_key.is_empty()
+            || source.source_revision.is_empty()
+        {
+            return Err(ChatError::Invalid("empty triage source triple".into()));
+        }
+        let at = chat_ts(now);
+        let mut conn = writer(self)?;
+        let tx = immediate(&mut conn)?;
+        let thread_id = ensure_inbox(&tx, &at)?;
+        let item_id = Ulid::new().to_string();
+        let inserted = tx.execute(
+            "INSERT INTO cos_inbox_items(id,source_kind,source_key,source_revision,source_event_id,thread_id,message_id,state,policy_version,summary,created_at,updated_at) \
+             VALUES(?1,?2,?3,?4,NULL,?5,'','escalated',?6,?7,?8,?8) \
+             ON CONFLICT(source_kind,source_key,source_revision) DO NOTHING",
+            params![item_id, source.source_kind, source.source_key, source.source_revision, thread_id, source.policy_version, source.summary, at],
+        )?;
+        if inserted == 0 {
+            return Ok(None);
+        }
+        let notification_id = Ulid::new().to_string();
+        tx.execute(
+            "INSERT INTO cos_notification_routes(item_id,notification_id,route,source_kind,source_key,source_revision,created_at,updated_at) VALUES(?1,?2,'escalation',?3,?4,?5,?6,?6)",
+            params![item_id, notification_id, source.source_kind, source.source_key, source.source_revision, at],
+        )?;
+        tx.execute(
+            "INSERT INTO notifications(id,kind,key,body,created_at) VALUES(?1,'cos_escalation',?2,?3,?4)",
+            params![notification_id, item_id, body, at],
+        )?;
+        tx.commit()?;
+        Ok(Some(notification_id))
+    }
+
     /// The notifier calls this after rechecking the source immediately before POST.
     /// Returns true only while the item and notification still represent an unresolved wait.
     pub fn cos_triage_outbox_sendable(

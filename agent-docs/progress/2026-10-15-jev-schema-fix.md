@@ -14,7 +14,10 @@ completed: 2026-10-15
 - fake server が公式 schema を検査し旧形を 400 で拒否
 
 ## 証拠
-- `cargo fmt --all -- --check` / `bash scripts/dev/test-parallel.sh` / `cargo clippy --workspace -- -D warnings`（結果は task の完了報告に記載）
+- `cargo fmt --all -- --check` → exit 0
+- `cargo clippy --workspace -- -D warnings` → exit 0
+- `bash scripts/dev/test-parallel.sh` → exit 0（nextest 5370 passed / 0 failed / 13 ignored、doctest exit 0）
+- 追加試験: `jev_fake_server.rs` の `classifier_questions_match_official_schema_and_array_criteria_is_rejected`・`fake_server_rejects_array_criteria_with_400`・`client_error_keeps_status_code_and_message_and_separates_400_from_402`、`classify_stage.rs` の 400/402 reason 文字列、`jev_verifier.rs` の `noul_ping_has_no_string_criteria`、`credential_resume_tests.rs` の 400 → RequestRejected
 
 ## 未解決事項
 - 認証つき実呼び出しでの status は未確認（運用セッションで確認）。

@@ -259,7 +259,11 @@ impl Env {
     }
 
     fn cos_runs(&self) -> i64 {
-        self.count("SELECT COUNT(*) FROM chat_runs")
+        // root 完了のスレッド（題名 `完了: …`）の run だけ。受信箱 triage の run（別経路）は数えない。
+        self.count(
+            "SELECT COUNT(*) FROM chat_runs WHERE thread_id IN \
+             (SELECT id FROM chat_threads WHERE title LIKE '完了: %')",
+        )
     }
 
     fn summary_rows(&self) -> i64 {
@@ -293,7 +297,15 @@ impl Env {
 
     /// daemon の notifier tick（1 通まで）。POST したかを返す。
     async fn notifier_tick(&mut self) -> bool {
-        let pending = self.store.notification_pending().expect("pending");
+        // この試験が見るのは root_done_summary だけ。既存の受信箱 triage の通知（cos_fallback 等）は別経路で、
+        // 再起動後の triage の待ち時間次第で現れるので数えない。
+        let pending: Vec<_> = self
+            .store
+            .notification_pending()
+            .expect("pending")
+            .into_iter()
+            .filter(|n| n.kind == task_core::NotificationKind::RootDoneSummary)
+            .collect();
         let Some(mut batch) = notify::select_routes_batch(&pending) else {
             return false;
         };

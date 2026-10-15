@@ -31,3 +31,5 @@ ADR: [2026-10-15-root-done-cos-summary](../../adr/2026-10-15-root-done-cos-summa
 ## 未解決事項
 
 - 進捗ファイルを統合 commit の tree から引く（`git show`）部分と子 task の読み出しは呼び出し側（wire）に残る。
+
+- 範囲 check（docs/architecture-map.md は許可外）のため、architecture-map への root_done 行は closeout 葉で足す。

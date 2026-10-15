@@ -10,10 +10,10 @@ use task_core::execution_plan::{
 };
 use task_core::llm_route::Candidate;
 
-const SECRET: &str = "jev_api_key";
+pub(super) const SECRET: &str = "jev_api_key";
 const SECRET_VALUE: &str = "sk-dummy-credential-value-123";
 
-fn unit(task: &Task, key: &str, seq: u32) -> WorkUnitRow {
+pub(super) fn unit(task: &Task, key: &str, seq: u32) -> WorkUnitRow {
     let spec = WorkUnitSpec {
         key: key.to_string(),
         kind: WorkUnitKind::Implement,
@@ -40,7 +40,7 @@ fn unit(task: &Task, key: &str, seq: u32) -> WorkUnitRow {
     )
 }
 
-fn jev_pick() -> RoutePick {
+pub(super) fn jev_pick() -> RoutePick {
     RoutePick {
         harness: "h".into(),
         candidate: Candidate {

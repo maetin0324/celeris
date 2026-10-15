@@ -140,6 +140,8 @@ pub(crate) const MIGRATION_0080: &str =
     include_str!("../../migrations/0080_root_done_summaries.sql");
 /// ADR 2026-10-15-mlsys-min-decision-assisted D4: credential 待ち（`credential_waits`・追記専用の `credential_wait_events`）。
 pub(crate) const MIGRATION_0081: &str = include_str!("../../migrations/0081_credential_waits.sql");
+/// ADR 2026-10-15-decision-log-export: 判断・実行・成果・消費の最小一貫ログ。
+pub(crate) const MIGRATION_0082: &str = include_str!("../../migrations/0082_decision_log.sql");
 
 /// 他の celeris/* ブランチが使っていて、このブランチにはまだ無い版数（0038 work_unit_sessions、
 /// 0039 write_sets、0040 behind_targets、0067/0068 の並行 migration）。`migrate` は飛ばし、
@@ -149,7 +151,7 @@ pub(crate) const RESERVED_VERSIONS: &[u32] = &[38, 39, 40, 68, 69];
 
 /// このバイナリが知っている最新のスキーマ版数（ADR-0013 D5）。DB の版数がこれより大きければ
 /// `SqliteStore::open`/`open_with` は `StoreError::SchemaTooNew` で失敗する。
-pub const SCHEMA_VERSION: u32 = 81;
+pub const SCHEMA_VERSION: u32 = 82;
 
 impl SqliteStore {
     fn migration_sql(version: u32) -> Result<&'static str, StoreError> {
@@ -264,6 +266,7 @@ impl SqliteStore {
             79 => Ok(MIGRATION_0079),
             80 => Ok(MIGRATION_0080),
             81 => Ok(MIGRATION_0081),
+            82 => Ok(MIGRATION_0082),
             other => Err(StoreError::Invalid(format!(
                 "unknown migration version: {other}"
             ))),

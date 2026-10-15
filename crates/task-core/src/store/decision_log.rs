@@ -1,0 +1,548 @@
+//! 判断・実行・成果・消費の最小一貫ログの読み書き（ADR 2026-10-15-decision-log-export D1〜D7）。
+//!
+//! 書込みは主キー（`run_id` / `dedup_key` / `intervention_id`）の upsert で、最後の値で置換する。
+//! 合算（`+=`）はしない。提案・実行・成果は欄の群が別で、1 つの群の upsert は他の群の列に触れない。
+//! 結果と消費は実行（`exec_*`）の側にだけ付く。LLM 呼び出しは無い。
+use rusqlite::{OptionalExtension, Row, params};
+use time::OffsetDateTime;
+
+use super::{SqliteStore, StoreError, format_rfc3339};
+use crate::decision_log::{
+    CampaignVerdict, CandidateRef, ClassifierRecord, DecisionLogExecution, DecisionLogIntervention,
+    DecisionLogOutcome, DecisionLogProposal, DecisionLogRun, DecisionLogUsage, ExclusionRef,
+    InterventionKind, RunEndLabel, UsageKey, UsageRole, WuVerdict,
+};
+
+fn json_opt<T: serde::Serialize>(v: &T, empty: bool) -> Result<Option<String>, StoreError> {
+    if empty {
+        Ok(None)
+    } else {
+        Ok(Some(serde_json::to_string(v)?))
+    }
+}
+
+fn u(v: Option<u64>) -> Option<i64> {
+    v.map(|n| n.min(i64::MAX as u64) as i64)
+}
+
+fn from_u(v: Option<i64>) -> Option<u64> {
+    v.and_then(|n| u64::try_from(n).ok())
+}
+
+const RUN_COLUMNS: &str = "run_id, decision_id, campaign_id, arm, project_id, task_id, work_unit_id, \
+    parent_run_id, attempt_no, request_class, routing_mode, classifier_kind, classifier_model, \
+    classifier_snapshot, classifier_confidence, classifier_probs_json, propensity, proposed_lane, \
+    decided_lane, proposed_candidates_json, proposed_first_source_id, proposed_first_model, \
+    proposed_first_harness, exclusions_json, policy_version, prompt_version, question_schema_version, \
+    provider_model_version, features_hash, options_hash, exec_source_id, exec_model, exec_account, \
+    exec_harness, exec_adapter, fallback_reason, classifier_fallback, attempts_json, run_end, \
+    run_end_raw, run_retryable, wu_verdict, wu_failure_class, campaign_verdict, wall_ms";
+
+fn parse_json<T: serde::de::DeserializeOwned>(s: Option<String>) -> Result<Option<T>, StoreError> {
+    match s {
+        Some(s) => Ok(Some(serde_json::from_str(&s)?)),
+        None => Ok(None),
+    }
+}
+
+fn read_run(row: &Row<'_>) -> Result<DecisionLogRun, StoreError> {
+    let run_id: String = row.get(0)?;
+    let kind: Option<String> = row.get(11)?;
+    let classifier = match kind {
+        Some(kind) => Some(ClassifierRecord {
+            kind,
+            model: row.get(12)?,
+            snapshot: row.get(13)?,
+            confidence: row.get(14)?,
+            probs: parse_json(row.get(15)?)?,
+            fallback: row.get(36)?,
+        }),
+        None => None,
+    };
+    let first_source: Option<String> = row.get(20)?;
+    let first_model: Option<String> = row.get(21)?;
+    let first_harness: Option<String> = row.get(22)?;
+    let proposed_first = match (first_source, first_model) {
+        (Some(source_id), Some(model_id)) => Some(CandidateRef {
+            source_id,
+            model_id,
+            harness_id: first_harness.unwrap_or_default(),
+        }),
+        _ => None,
+    };
+    let proposed_candidates: Vec<CandidateRef> = parse_json(row.get(19)?)?.unwrap_or_default();
+    let exclusions: Vec<ExclusionRef> = parse_json(row.get(23)?)?.unwrap_or_default();
+    let attempt_no: Option<i64> = row.get(8)?;
+    let run_end: Option<String> = row.get(38)?;
+    let retryable: Option<i64> = row.get(40)?;
+    let wu: Option<String> = row.get(41)?;
+    let cv: Option<String> = row.get(43)?;
+    Ok(DecisionLogRun {
+        proposal: DecisionLogProposal {
+            run_id: run_id.clone(),
+            decision_id: row.get(1)?,
+            campaign_id: row.get(2)?,
+            arm: row.get(3)?,
+            project_id: row.get(4)?,
+            task_id: row.get(5)?,
+            work_unit_id: row.get(6)?,
+            parent_run_id: row.get(7)?,
+            attempt_no: attempt_no.and_then(|n| u32::try_from(n).ok()),
+            request_class: row.get(9)?,
+            routing_mode: row.get(10)?,
+            classifier,
+            propensity: row.get(16)?,
+            proposed_lane: row.get(17)?,
+            decided_lane: row.get(18)?,
+            proposed_candidates,
+            proposed_first,
+            exclusions,
+            policy_version: row.get(24)?,
+            prompt_version: row.get(25)?,
+            question_schema_version: row.get(26)?,
+            provider_model_version: row.get(27)?,
+            features_hash: row.get(28)?,
+            options_hash: row.get(29)?,
+        },
+        execution: DecisionLogExecution {
+            run_id: run_id.clone(),
+            exec_source_id: row.get(30)?,
+            exec_model: row.get(31)?,
+            exec_account: row.get(32)?,
+            exec_harness: row.get(33)?,
+            exec_adapter: row.get(34)?,
+            fallback_reason: row.get(35)?,
+            attempts: parse_json(row.get(37)?)?,
+        },
+        outcome: DecisionLogOutcome {
+            run_id,
+            run_end: run_end.as_deref().and_then(RunEndLabel::parse),
+            run_end_raw: row.get(39)?,
+            run_retryable: retryable.map(|n| n != 0),
+            wu_verdict: wu.as_deref().and_then(WuVerdict::parse),
+            wu_failure_class: row.get(42)?,
+            campaign_verdict: cv.as_deref().and_then(CampaignVerdict::parse),
+            wall_ms: from_u(row.get(44)?),
+        },
+    })
+}
+
+impl SqliteStore {
+    /// 提案の群を書く（同じ `run_id` の 2 回目は置換。実行・成果の列は変えない）。
+    pub fn decision_log_record_proposal(
+        &self,
+        p: &DecisionLogProposal,
+        now: OffsetDateTime,
+    ) -> Result<(), StoreError> {
+        if p.run_id.is_empty() {
+            return Err(StoreError::Invalid("decision log run_id is empty".into()));
+        }
+        if let Some(c) = p.classifier.as_ref().and_then(|c| c.confidence)
+            && !(0.0..=1.0).contains(&c)
+        {
+            return Err(StoreError::Invalid(
+                "classifier_confidence must be within 0..=1".into(),
+            ));
+        }
+        let c = p.classifier.as_ref();
+        let first = p.proposed_first.as_ref();
+        let candidates = json_opt(&p.proposed_candidates, p.proposed_candidates.is_empty())?;
+        let exclusions = json_opt(&p.exclusions, p.exclusions.is_empty())?;
+        let probs = match c.and_then(|c| c.probs.as_ref()) {
+            Some(v) => Some(serde_json::to_string(v)?),
+            None => None,
+        };
+        let conn = self.lock()?;
+        conn.execute(
+            "INSERT INTO decision_log_runs (run_id, decision_id, campaign_id, arm, project_id, task_id, \
+             work_unit_id, parent_run_id, attempt_no, request_class, routing_mode, classifier_kind, \
+             classifier_model, classifier_snapshot, classifier_confidence, classifier_probs_json, \
+             classifier_fallback, propensity, proposed_lane, decided_lane, proposed_candidates_json, \
+             proposed_first_source_id, proposed_first_model, proposed_first_harness, exclusions_json, \
+             policy_version, prompt_version, question_schema_version, provider_model_version, \
+             features_hash, options_hash, updated_at) \
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25,?26,?27,?28,?29,?30,?31,?32) \
+             ON CONFLICT(run_id) DO UPDATE SET decision_id=excluded.decision_id, campaign_id=excluded.campaign_id, \
+             arm=excluded.arm, project_id=excluded.project_id, task_id=excluded.task_id, \
+             work_unit_id=excluded.work_unit_id, parent_run_id=excluded.parent_run_id, \
+             attempt_no=excluded.attempt_no, request_class=excluded.request_class, \
+             routing_mode=excluded.routing_mode, classifier_kind=excluded.classifier_kind, \
+             classifier_model=excluded.classifier_model, classifier_snapshot=excluded.classifier_snapshot, \
+             classifier_confidence=excluded.classifier_confidence, classifier_probs_json=excluded.classifier_probs_json, \
+             classifier_fallback=excluded.classifier_fallback, propensity=excluded.propensity, \
+             proposed_lane=excluded.proposed_lane, decided_lane=excluded.decided_lane, \
+             proposed_candidates_json=excluded.proposed_candidates_json, \
+             proposed_first_source_id=excluded.proposed_first_source_id, \
+             proposed_first_model=excluded.proposed_first_model, proposed_first_harness=excluded.proposed_first_harness, \
+             exclusions_json=excluded.exclusions_json, policy_version=excluded.policy_version, \
+             prompt_version=excluded.prompt_version, question_schema_version=excluded.question_schema_version, \
+             provider_model_version=excluded.provider_model_version, features_hash=excluded.features_hash, \
+             options_hash=excluded.options_hash, updated_at=excluded.updated_at",
+            params![
+                p.run_id,
+                p.decision_id,
+                p.campaign_id,
+                p.arm,
+                p.project_id,
+                p.task_id,
+                p.work_unit_id,
+                p.parent_run_id,
+                p.attempt_no.map(i64::from),
+                p.request_class,
+                p.routing_mode,
+                c.map(|c| c.kind.clone()),
+                c.and_then(|c| c.model.clone()),
+                c.and_then(|c| c.snapshot.clone()),
+                c.and_then(|c| c.confidence),
+                probs,
+                c.and_then(|c| c.fallback.clone()),
+                p.propensity,
+                p.proposed_lane,
+                p.decided_lane,
+                candidates,
+                first.map(|f| f.source_id.clone()),
+                first.map(|f| f.model_id.clone()),
+                first.map(|f| f.harness_id.clone()),
+                exclusions,
+                p.policy_version,
+                p.prompt_version,
+                p.question_schema_version,
+                p.provider_model_version,
+                p.features_hash,
+                p.options_hash,
+                format_rfc3339(now)?,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// 実行の群を書く（提案・成果の列は変えない）。
+    pub fn decision_log_record_execution(
+        &self,
+        e: &DecisionLogExecution,
+        now: OffsetDateTime,
+    ) -> Result<(), StoreError> {
+        if e.run_id.is_empty() {
+            return Err(StoreError::Invalid("decision log run_id is empty".into()));
+        }
+        let attempts = match &e.attempts {
+            Some(v) => Some(serde_json::to_string(v)?),
+            None => None,
+        };
+        self.lock()?.execute(
+            "INSERT INTO decision_log_runs (run_id, exec_source_id, exec_model, exec_account, exec_harness, \
+             exec_adapter, fallback_reason, attempts_json, updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9) \
+             ON CONFLICT(run_id) DO UPDATE SET exec_source_id=excluded.exec_source_id, exec_model=excluded.exec_model, \
+             exec_account=excluded.exec_account, exec_harness=excluded.exec_harness, exec_adapter=excluded.exec_adapter, \
+             fallback_reason=excluded.fallback_reason, attempts_json=excluded.attempts_json, updated_at=excluded.updated_at",
+            params![
+                e.run_id,
+                e.exec_source_id,
+                e.exec_model,
+                e.exec_account,
+                e.exec_harness,
+                e.exec_adapter,
+                e.fallback_reason,
+                attempts,
+                format_rfc3339(now)?,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// 成果の群を書く（提案・実行の列は変えない）。run 終了・WU 検証・campaign 合否は別の欄。
+    pub fn decision_log_record_outcome(
+        &self,
+        o: &DecisionLogOutcome,
+        now: OffsetDateTime,
+    ) -> Result<(), StoreError> {
+        if o.run_id.is_empty() {
+            return Err(StoreError::Invalid("decision log run_id is empty".into()));
+        }
+        self.lock()?.execute(
+            "INSERT INTO decision_log_runs (run_id, run_end, run_end_raw, run_retryable, wu_verdict, \
+             wu_failure_class, campaign_verdict, wall_ms, updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9) \
+             ON CONFLICT(run_id) DO UPDATE SET run_end=excluded.run_end, run_end_raw=excluded.run_end_raw, \
+             run_retryable=excluded.run_retryable, wu_verdict=excluded.wu_verdict, \
+             wu_failure_class=excluded.wu_failure_class, campaign_verdict=excluded.campaign_verdict, \
+             wall_ms=excluded.wall_ms, updated_at=excluded.updated_at",
+            params![
+                o.run_id,
+                o.run_end.map(RunEndLabel::as_str),
+                o.run_end_raw,
+                o.run_retryable.map(i64::from),
+                o.wu_verdict.map(WuVerdict::as_str),
+                o.wu_failure_class,
+                o.campaign_verdict.map(CampaignVerdict::as_str),
+                u(o.wall_ms),
+                format_rfc3339(now)?,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn decision_log_run_get(&self, run_id: &str) -> Result<Option<DecisionLogRun>, StoreError> {
+        let conn = self.lock()?;
+        let sql = format!("SELECT {RUN_COLUMNS} FROM decision_log_runs WHERE run_id = ?1");
+        let row = conn
+            .query_row(&sql, [run_id], |r| Ok(read_run(r)))
+            .optional()?;
+        row.transpose()
+    }
+
+    /// campaign の run 全部（`None` なら campaign 外を含む全部）。`run_id` 順。
+    pub fn decision_log_runs_list(
+        &self,
+        campaign_id: Option<&str>,
+    ) -> Result<Vec<DecisionLogRun>, StoreError> {
+        let conn = self.lock()?;
+        let sql = format!(
+            "SELECT {RUN_COLUMNS} FROM decision_log_runs \
+             WHERE (?1 IS NULL OR campaign_id = ?1) ORDER BY run_id"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map([campaign_id], |r| Ok(read_run(r)))?;
+        rows.map(|r| r?).collect()
+    }
+
+    /// 実行した候補（`exec_*`）に帰属する run。提案先頭（`proposed_first_*`）では引かない。
+    pub fn decision_log_runs_by_exec(
+        &self,
+        source_id: &str,
+        model: &str,
+    ) -> Result<Vec<DecisionLogRun>, StoreError> {
+        let conn = self.lock()?;
+        let sql = format!(
+            "SELECT {RUN_COLUMNS} FROM decision_log_runs \
+             WHERE exec_source_id = ?1 AND exec_model = ?2 ORDER BY run_id"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map([source_id, model], |r| Ok(read_run(r)))?;
+        rows.map(|r| r?).collect()
+    }
+
+    /// 消費 1 行を書く（`dedup_key` の置換。合算しない）。
+    pub fn decision_log_record_usage(
+        &self,
+        usage: &DecisionLogUsage,
+        now: OffsetDateTime,
+    ) -> Result<(), StoreError> {
+        let (run_id, decision_id) = match &usage.key {
+            UsageKey::Run { run_id, .. } => (Some(run_id.clone()), usage.decision_id.clone()),
+            UsageKey::Call { decision_id, .. } => (usage.run_id.clone(), Some(decision_id.clone())),
+        };
+        self.lock()?.execute(
+            "INSERT INTO decision_log_usage (dedup_key, run_id, decision_id, campaign_id, task_id, role, is_retry, \
+             input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, list_cost_usd, \
+             list_cost_usd_estimated, cash_cost_usd, wall_ms, cluster_wait_ms, cluster_run_ms, \
+             cluster_node_hours, cluster_queue_ms, updated_at) \
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,1,?13,?14,?15,?16,?17,?18,?19) \
+             ON CONFLICT(dedup_key) DO UPDATE SET run_id=excluded.run_id, decision_id=excluded.decision_id, \
+             campaign_id=excluded.campaign_id, task_id=excluded.task_id, role=excluded.role, is_retry=excluded.is_retry, \
+             input_tokens=excluded.input_tokens, output_tokens=excluded.output_tokens, \
+             cache_read_tokens=excluded.cache_read_tokens, cache_creation_tokens=excluded.cache_creation_tokens, \
+             list_cost_usd=excluded.list_cost_usd, cash_cost_usd=excluded.cash_cost_usd, wall_ms=excluded.wall_ms, \
+             cluster_wait_ms=excluded.cluster_wait_ms, cluster_run_ms=excluded.cluster_run_ms, \
+             cluster_node_hours=excluded.cluster_node_hours, cluster_queue_ms=excluded.cluster_queue_ms, \
+             updated_at=excluded.updated_at",
+            params![
+                usage.key.dedup_key(),
+                run_id,
+                decision_id,
+                usage.campaign_id,
+                usage.task_id,
+                usage.role.as_str(),
+                i64::from(usage.is_retry),
+                u(usage.input_tokens),
+                u(usage.output_tokens),
+                u(usage.cache_read_tokens),
+                u(usage.cache_creation_tokens),
+                usage.list_cost_usd,
+                usage.cash_cost_usd,
+                u(usage.wall_ms),
+                u(usage.cluster_wait_ms),
+                u(usage.cluster_run_ms),
+                usage.cluster_node_hours,
+                u(usage.cluster_queue_ms),
+                format_rfc3339(now)?,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// campaign の消費行（`None` なら全部）。`dedup_key` 順。
+    pub fn decision_log_usage_list(
+        &self,
+        campaign_id: Option<&str>,
+    ) -> Result<Vec<DecisionLogUsage>, StoreError> {
+        let conn = self.lock()?;
+        let mut stmt = conn.prepare(
+            "SELECT dedup_key, run_id, decision_id, campaign_id, task_id, role, is_retry, input_tokens, \
+             output_tokens, cache_read_tokens, cache_creation_tokens, list_cost_usd, cash_cost_usd, wall_ms, \
+             cluster_wait_ms, cluster_run_ms, cluster_node_hours, cluster_queue_ms \
+             FROM decision_log_usage WHERE (?1 IS NULL OR campaign_id = ?1) ORDER BY dedup_key",
+        )?;
+        let rows = stmt.query_map([campaign_id], |r| {
+            let dedup: String = r.get(0)?;
+            let run_id: Option<String> = r.get(1)?;
+            let decision_id: Option<String> = r.get(2)?;
+            let role: String = r.get(5)?;
+            Ok((
+                dedup,
+                run_id,
+                decision_id,
+                r.get::<_, Option<String>>(3)?,
+                r.get::<_, Option<String>>(4)?,
+                role,
+                r.get::<_, i64>(6)?,
+                [
+                    r.get::<_, Option<i64>>(7)?,
+                    r.get(8)?,
+                    r.get(9)?,
+                    r.get(10)?,
+                ],
+                [r.get::<_, Option<f64>>(11)?, r.get(12)?],
+                [
+                    r.get::<_, Option<i64>>(13)?,
+                    r.get(14)?,
+                    r.get(15)?,
+                    r.get(17)?,
+                ],
+                r.get::<_, Option<f64>>(16)?,
+            ))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (
+                dedup,
+                run_id,
+                decision_id,
+                campaign_id,
+                task_id,
+                role,
+                is_retry,
+                tok,
+                cost,
+                ms,
+                nh,
+            ) = row?;
+            let role = UsageRole::parse(&role)
+                .ok_or_else(|| StoreError::Invalid(format!("unknown usage role: {role}")))?;
+            let key = match (dedup.strip_prefix("run:"), dedup.strip_prefix("decision:")) {
+                (Some(rest), _) => {
+                    let run = run_id.clone().unwrap_or_default();
+                    let source = rest
+                        .strip_prefix(&format!("{run}:"))
+                        .unwrap_or(rest)
+                        .to_string();
+                    UsageKey::Run {
+                        run_id: run,
+                        usage_source: source,
+                    }
+                }
+                (_, Some(rest)) => {
+                    let attempt = rest
+                        .rsplit(':')
+                        .next()
+                        .and_then(|a| a.parse::<u32>().ok())
+                        .ok_or_else(|| StoreError::Invalid(format!("bad dedup_key: {dedup}")))?;
+                    UsageKey::Call {
+                        decision_id: decision_id.clone().unwrap_or_default(),
+                        call_attempt: attempt,
+                    }
+                }
+                _ => return Err(StoreError::Invalid(format!("bad dedup_key: {dedup}"))),
+            };
+            out.push(DecisionLogUsage {
+                key,
+                role,
+                is_retry: is_retry != 0,
+                decision_id,
+                run_id,
+                campaign_id,
+                task_id,
+                input_tokens: from_u(tok[0]),
+                output_tokens: from_u(tok[1]),
+                cache_read_tokens: from_u(tok[2]),
+                cache_creation_tokens: from_u(tok[3]),
+                list_cost_usd: cost[0],
+                cash_cost_usd: cost[1],
+                wall_ms: from_u(ms[0]),
+                cluster_wait_ms: from_u(ms[1]),
+                cluster_run_ms: from_u(ms[2]),
+                cluster_node_hours: nh,
+                cluster_queue_ms: from_u(ms[3]),
+            });
+        }
+        Ok(out)
+    }
+
+    /// 介入 1 件を書く（`intervention_id` の置換。二重に数えない）。
+    pub fn decision_log_record_intervention(
+        &self,
+        i: &DecisionLogIntervention,
+    ) -> Result<(), StoreError> {
+        self.lock()?.execute(
+            "INSERT INTO decision_log_interventions (intervention_id, kind, task_id, campaign_id, at, wall_ms, source_event) \
+             VALUES (?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(intervention_id) DO UPDATE SET kind=excluded.kind, \
+             task_id=excluded.task_id, campaign_id=excluded.campaign_id, at=excluded.at, wall_ms=excluded.wall_ms, \
+             source_event=excluded.source_event",
+            params![i.intervention_id, i.kind.as_str(), i.task_id, i.campaign_id, i.at, u(i.wall_ms), i.source_event],
+        )?;
+        Ok(())
+    }
+
+    pub fn decision_log_interventions_list(
+        &self,
+        campaign_id: Option<&str>,
+    ) -> Result<Vec<DecisionLogIntervention>, StoreError> {
+        let conn = self.lock()?;
+        let mut stmt = conn.prepare(
+            "SELECT intervention_id, kind, task_id, campaign_id, at, wall_ms, source_event \
+             FROM decision_log_interventions WHERE (?1 IS NULL OR campaign_id = ?1) ORDER BY intervention_id",
+        )?;
+        let rows = stmt.query_map([campaign_id], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, Option<String>>(2)?,
+                r.get::<_, Option<String>>(3)?,
+                r.get::<_, String>(4)?,
+                r.get::<_, Option<i64>>(5)?,
+                r.get::<_, Option<String>>(6)?,
+            ))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (intervention_id, kind, task_id, campaign_id, at, wall_ms, source_event) = row?;
+            out.push(DecisionLogIntervention {
+                intervention_id,
+                kind: InterventionKind::parse(&kind).ok_or_else(|| {
+                    StoreError::Invalid(format!("unknown intervention kind: {kind}"))
+                })?,
+                task_id,
+                campaign_id,
+                at,
+                wall_ms: from_u(wall_ms),
+                source_event,
+            });
+        }
+        Ok(out)
+    }
+}
+
+impl SqliteStore {
+    /// campaign 単位の export（records + summary）。読み出しのみ。
+    pub fn decision_log_export_campaign(
+        &self,
+        params: &crate::decision_log_export::ExportParams,
+    ) -> Result<crate::decision_log_export::CampaignExport, StoreError> {
+        let c = Some(params.campaign_id.as_str());
+        let runs = self.decision_log_runs_list(c)?;
+        let usage = self.decision_log_usage_list(c)?;
+        let ivs = self.decision_log_interventions_list(c)?;
+        Ok(crate::decision_log_export::build_campaign_export(
+            params, &runs, &usage, &ivs,
+        ))
+    }
+}

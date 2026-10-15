@@ -593,7 +593,11 @@ async fn credential_wait_notifies_through_the_outbox_without_any_run_over_full_t
     assert_eq!(pending.len(), 1, "{pending:?}");
     assert_eq!(pending[0].kind, task_core::NotificationKind::CosEscalation);
     assert!(pending[0].body.contains("/accounts"), "{}", pending[0].body);
-    assert!(pending[0].body.contains("自動で続行"), "{}", pending[0].body);
+    assert!(
+        pending[0].body.contains("自動で続行"),
+        "{}",
+        pending[0].body
+    );
     assert!(!pending[0].body.contains(DUMMY));
 
     // 同じ秘密を待つ 2 つ目の task は通知を増やさない（再 tick・restart 相当の reconcile でも 1 件）。

@@ -15,6 +15,7 @@ use commands::accept::{self, AcceptArgs};
 use commands::add::{self, AddArgs};
 use commands::browser::{self as browser_cmd, BrowserCommand};
 use commands::build_cache::{self, BuildCacheCommand};
+use commands::campaign::{self as campaign_cmd, CampaignCommand};
 use commands::cancel::{self, CancelArgs};
 use commands::config::{self as config_cmd, ConfigCommand};
 use commands::cos_ops::{self, ApiRequestArgs};
@@ -205,6 +206,11 @@ enum Command {
         #[command(subcommand)]
         command: ProjectsCommand,
     },
+    /// 2026-10-15 decision-log-export: `campaign export <id> --out <dir>`。
+    Campaign {
+        #[command(subcommand)]
+        command: CampaignCommand,
+    },
     /// ADR-0066 D2（Phase 110b）: `workspace prune`。
     Workspace {
         #[command(subcommand)]
@@ -291,6 +297,7 @@ fn dispatch(store: &SqliteStore, db_path: &Path, command: Command) -> Result<Exi
         Command::Scratch { .. } => unreachable!("handled before store open"),
         Command::Target { .. } => unreachable!("handled before store open"),
         Command::Release { .. } => unreachable!("handled before store open"),
+        Command::Campaign { command } => campaign_cmd::run(store, command),
         Command::Org { command } => org_cmd::run(store, db_path, command),
         // `Config` は DB を開く前に処理される（`main` を見よ）。
         Command::Config { command } => config_cmd::run(command),

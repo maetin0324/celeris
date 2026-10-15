@@ -120,7 +120,10 @@ fn run_flow(outcome: VerifyOutcome, value: &str) -> Vec<String> {
         sqlite
             .work_units_apply(task.id, vec![a.clone()], Vec::new(), Vec::new())
             .unwrap();
-        assert!(d.credential_gate_hold(&task, Some(&a), &jev_pick()).unwrap());
+        assert!(
+            d.credential_gate_hold(&task, Some(&a), &jev_pick())
+                .unwrap()
+        );
 
         std::fs::write(secrets.join(SECRET), format!("{value}\n")).unwrap();
         sqlite
@@ -145,7 +148,10 @@ fn run_flow(outcome: VerifyOutcome, value: &str) -> Vec<String> {
 fn secret_values_never_appear_in_captured_logs_for_every_verify_outcome() {
     let cases = [
         (VerifyOutcome::Valid, "sk-logcap-valid-AAAA1111BBBB2222"),
-        (VerifyOutcome::InvalidKey, "sk-logcap-wrong-CCCC3333DDDD4444"),
+        (
+            VerifyOutcome::InvalidKey,
+            "sk-logcap-wrong-CCCC3333DDDD4444",
+        ),
         (
             VerifyOutcome::InsufficientPermission,
             "sk-logcap-noperm-EEEE5555FFFF6666",

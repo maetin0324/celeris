@@ -282,6 +282,8 @@ impl Dispatcher {
         {
             tracing::warn!(%task_id, error = %e, "failed to record routing outcomes");
         }
+        // 決定ログ（判断・実行・成果）も同じ契機で、同じ events から冪等に書く。
+        self.record_decision_log(task_id);
     }
 
     /// run が `running` から外れたとき（完了・打ち切り）に、その run の context ref を外す。

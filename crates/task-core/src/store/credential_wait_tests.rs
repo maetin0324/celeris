@@ -53,7 +53,7 @@ fn verified_wait(store: &SqliteStore, wu: &str, task: TaskId) {
 fn migration_creates_tables_and_version_is_81() {
     let store = SqliteStore::open_in_memory().expect("open");
     assert_eq!(store.schema_version().expect("v"), crate::SCHEMA_VERSION);
-    assert_eq!(crate::SCHEMA_VERSION, 81);
+    assert_eq!(crate::SCHEMA_VERSION, 82);
     let conn = store.lock().expect("lock");
     for table in ["credential_waits", "credential_wait_events"] {
         let n: i64 = conn
@@ -81,7 +81,7 @@ fn existing_db_at_version_80_migrates_to_81() {
         .expect("rewind");
     }
     let store = SqliteStore::open(&path).expect("reopen migrates");
-    assert_eq!(store.schema_version().expect("v"), 81);
+    assert_eq!(store.schema_version().expect("v"), crate::SCHEMA_VERSION);
     assert!(
         store
             .credential_waits_list_waiting()

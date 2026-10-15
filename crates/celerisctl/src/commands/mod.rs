@@ -4,6 +4,8 @@ pub mod add;
 /// ADR-0080 D6: `celerisctl browser owner-session approve <challenge>`（GUI の Unix control socket。DB を開かない）。
 pub mod browser;
 pub mod build_cache;
+/// 2026-10-15 decision-log-export: `celerisctl campaign export`（campaign 単位の判断・消費ログ。DB は読むだけ）。
+pub mod campaign;
 pub mod cancel;
 /// ADR-0046 D3（Phase 59）: `celerisctl config to-harnesses`。
 pub mod config;

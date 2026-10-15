@@ -80,6 +80,41 @@ impl TaskStore for SqliteStore {
         self.record_route_decision_impl(decision)
     }
 
+    fn decision_log_record_proposal(
+        &self,
+        p: &crate::decision_log::DecisionLogProposal,
+        now: OffsetDateTime,
+    ) -> Result<(), StoreError> {
+        SqliteStore::decision_log_record_proposal(self, p, now)
+    }
+    fn decision_log_record_execution(
+        &self,
+        e: &crate::decision_log::DecisionLogExecution,
+        now: OffsetDateTime,
+    ) -> Result<(), StoreError> {
+        SqliteStore::decision_log_record_execution(self, e, now)
+    }
+    fn decision_log_record_outcome(
+        &self,
+        o: &crate::decision_log::DecisionLogOutcome,
+        now: OffsetDateTime,
+    ) -> Result<(), StoreError> {
+        SqliteStore::decision_log_record_outcome(self, o, now)
+    }
+    fn decision_log_record_usage(
+        &self,
+        usage: &crate::decision_log::DecisionLogUsage,
+        now: OffsetDateTime,
+    ) -> Result<(), StoreError> {
+        SqliteStore::decision_log_record_usage(self, usage, now)
+    }
+    fn decision_log_run_get(
+        &self,
+        run_id: &str,
+    ) -> Result<Option<crate::decision_log::DecisionLogRun>, StoreError> {
+        SqliteStore::decision_log_run_get(self, run_id)
+    }
+
     fn task_integration_upsert(
         &self,
         s: &crate::TaskRepoIntegrationState,

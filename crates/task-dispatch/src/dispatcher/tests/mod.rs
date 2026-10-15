@@ -2903,6 +2903,7 @@ mod integration_ready_race;
 mod planning_and_gate;
 mod review;
 mod review_route;
+mod route_failure_escalation;
 mod route_launch;
 mod route_select;
 mod run_tmpdir;

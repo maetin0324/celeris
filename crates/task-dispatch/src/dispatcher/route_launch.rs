@@ -139,3 +139,28 @@ impl Dispatcher {
         selected_llm_route(&self.llm_route_registry, pick, root.as_deref())
     }
 }
+
+// ---- ADR 2026-10-15-mlsys-min-routing-policy D6: 利用可否による起動の可否 ----
+
+use task_core::route_select::{Availability, split_by_availability};
+
+/// 候補（既存の選定順）を利用可否で絞った結果。`Unknown`（quota/cost/予算が未確認）は 0 扱いで
+/// 可にせず、`Available` が 1 つも無ければ起動せず待機（保守側）にする。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LaunchAdmission<T> {
+    Launch(T),
+    /// 起動しない。`unconfirmed` が非空なら未確認のため、空なら全て不可（待機・再試行）。
+    Hold {
+        unconfirmed: usize,
+    },
+}
+
+/// 先頭の `Available` を選ぶ。`Unavailable` は落とし、`Unknown` だけが残るなら `Hold`。
+pub fn admit_by_availability<T>(candidates: Vec<(T, Availability)>) -> LaunchAdmission<T> {
+    let split = split_by_availability(candidates);
+    let unconfirmed = split.unconfirmed.len();
+    match split.available.into_iter().next() {
+        Some(t) => LaunchAdmission::Launch(t),
+        None => LaunchAdmission::Hold { unconfirmed },
+    }
+}

@@ -1,5 +1,8 @@
 //! 起動時の組み立て: DB の置き場所の検査、`Dispatcher` の構築、組織図と定期実行 job の種まき。
 
+#[path = "jev_verifier.rs"]
+mod jev_verifier;
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -583,7 +586,7 @@ pub fn build_dispatcher(
         )
         .with_verifier(
             "jev",
-            Arc::new(task_dispatch::credential_resume::JevVerifier::openrouter_default()),
+            Arc::new(jev_verifier::JevVerifier::openrouter_default()),
         );
         dispatcher.set_credential_resumer(Arc::new(resumer));
     }

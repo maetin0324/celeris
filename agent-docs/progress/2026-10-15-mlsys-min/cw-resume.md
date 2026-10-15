@@ -28,3 +28,7 @@ ADR 2026-10-15-mlsys-min-decision-assisted D4 の名前（`waiting_for_auth`・`
 - claim 後・再キュー前の crash は、release_claim が走らないため WU が blocked のまま残りうる（極小の窓）。必要なら `resumed` で WU がまだ `blocked` の行を reconcile する。
 - 判定済み fingerprint と backoff 状態はメモリ内（再起動後は最大 1 回再検証する）。
 - Jev の header 名・body は ADR の「実装 unit が確認する」点で、実ネットワークでは未確認（Bearer 認証を使用。live 検証は鍵の登録後に人が行う）。登録は連携の有効化で、本測定や無制限課金の承認ではない（item 文言は cw-enter / cw-web で入れる）。
+
+## 追記（範囲 check の修正）
+- 範囲 check が Cargo.lock を範囲外とした。Jev の実 HTTP 検証（`JevVerifier`）を task-dispatch から `crates/celeris/src/daemon/jev_verifier.rs` へ移し（celeris の既存 reqwest・async を使い、専用 thread の current-thread runtime で 1 回送る）、task-dispatch の reqwest 依存を外した。Cargo.lock は base と差分なし。trait `CredentialVerifier` と分類 `classify_http_status` は task-dispatch に残す。
+- 証拠: 範囲 check の出力なし（exit 0）、`cargo clippy --workspace -- -D warnings` exit 0、`bash scripts/dev/test-parallel.sh` passed 5173 / failed 0。

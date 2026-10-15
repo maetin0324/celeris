@@ -341,24 +341,6 @@ fn requeue_work_unit(
     store.work_unit_transition(w.task_id, row, event)
 }
 
-/// Jev（OpenRouter の Decisions API）の最小費用の検証。`state` 1 語・`noul` 質問 1 つだけを送る。
-/// 401 → 誤キー、403 → 権限不足、200 → 有効、それ以外（402・429・5xx・通信失敗）は一時障害。
-pub struct JevVerifier {
-    pub endpoint: String,
-    pub model: String,
-    pub timeout: Duration,
-}
-
-impl JevVerifier {
-    pub fn openrouter_default() -> Self {
-        Self {
-            endpoint: "https://openrouter.ai/api/alpha/decisions".to_string(),
-            model: "typesafe/jev-1.14".to_string(),
-            timeout: Duration::from_secs(20),
-        }
-    }
-}
-
 /// HTTP status の分類（実ネットワーク無しで試験できるよう分けてある）。
 pub fn classify_http_status(status: u16) -> VerifyOutcome {
     match status {
@@ -366,32 +348,6 @@ pub fn classify_http_status(status: u16) -> VerifyOutcome {
         401 => VerifyOutcome::InvalidKey,
         403 => VerifyOutcome::InsufficientPermission,
         _ => VerifyOutcome::Transient,
-    }
-}
-
-impl CredentialVerifier for JevVerifier {
-    fn verify(&self, _secret_id: &str, value: &str) -> VerifyOutcome {
-        let Ok(client) = reqwest::blocking::Client::builder()
-            .timeout(self.timeout)
-            .build()
-        else {
-            return VerifyOutcome::Transient;
-        };
-        let body = serde_json::json!({
-            "model": self.model,
-            "state": "ping",
-            "questions": {"ok": {"type": "noul", "instructions": "Is this a ping?", "criteria": "yes"}},
-        });
-        match client
-            .post(&self.endpoint)
-            .bearer_auth(value)
-            .json(&body)
-            .send()
-        {
-            Ok(resp) => classify_http_status(resp.status().as_u16()),
-            // reqwest の Error は URL を含むので文面は使わない。
-            Err(_) => VerifyOutcome::Transient,
-        }
     }
 }
 

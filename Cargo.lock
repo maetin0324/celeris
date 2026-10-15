@@ -2388,7 +2388,6 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "nix",
- "reqwest",
  "rusqlite",
  "serde",
  "serde_json",

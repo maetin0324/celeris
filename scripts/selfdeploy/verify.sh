@@ -156,10 +156,6 @@ out["approvals"] = scalar("SELECT COUNT(*) FROM approvals")
 out["approvals_decided"] = scalar("SELECT COUNT(*) FROM approvals WHERE decision IS NOT NULL")
 out["reports"] = scalar("SELECT COUNT(*) FROM reports")
 out["messages"] = scalar("SELECT COUNT(*) FROM messages")
-# API 側は「組織のノードごと」に数える（reports / messages には全件を返す入口が無い）。
-# ノードが消えた後に残っている行はそこから漏れるので、数が合わなかったときの説明に使う。
-out["orphan_reports"] = scalar("SELECT COUNT(*) FROM reports WHERE node_id NOT IN (SELECT id FROM org_nodes)")
-out["orphan_messages"] = scalar("SELECT COUNT(*) FROM messages WHERE node_id NOT IN (SELECT id FROM org_nodes)")
 out["schema_version"] = scalar("SELECT COALESCE(MAX(version), 0) FROM schema_migrations")
 out["errors"] = errors
 conn.close()
@@ -274,9 +270,10 @@ record() {
 # `collect <base-url> <token-file>` → JSON（件数と tasks の {id,status} のダイジェスト）。
 # 出す形は `collect_snapshot`（生の行数）と**同じキー**。API から「表の全行」を数えるために:
 #   - tasks は `next_cursor` で最後まで辿る
-#   - reports / messages は 1 回の応答の上限が 500 なので、**組織のノードごと**（messages は
-#     さらに案件ごと + 案件なし）に分けて数えて足す。どれかが 500 に達したら `capped` に入れて
-#     検査 2 を落とす（黙って少なく数えない）
+#   - reports / messages は件数だけを返す口（`GET /reports/count`・`GET /messages/count`、
+#     SQL の COUNT(*)）で表の全行を数える。一覧の 1 応答の上限（500）には当たらない
+#     （ADR 2026-10-15-verify-counts-without-page-limit）。口が失敗したら errors に入り検査 2 を落とす
+#     （黙って 0 にしない）
 #   - approvals は `pending` を書かなければ全件
 collect() {
   python3 - "$1" "$2" <<'PY'
@@ -339,37 +336,12 @@ out["first_org"] = org[0].get("id") if org else ""
 out["approvals"] = len((safe("/api/v1/approvals", {"items": []}) or {}).get("items") or [])
 out["approvals_decided"] = len((safe("/api/v1/approvals?pending=false", {"items": []}) or {}).get("items") or [])
 
-# 1 応答の上限は 500（`GET /reports` / `GET /org/{id}/messages`）。表の全行を数えるために、
-# 行が必ず持つ `node_id`（と messages は `project_id`）で分けて数える。
-LIMIT = 500
-capped = []
+# ADR 2026-10-15-verify-counts-without-page-limit D1/D3: 一覧を数えず、件数の口で全行を数える。
+# 口が失敗したら `safe` が errors に積み、件数は None（snapshot と食い違って検査 2 が落ちる）。
+out["reports"] = (safe("/api/v1/reports/count", {}) or {}).get("count")
+out["messages"] = (safe("/api/v1/messages/count", {}) or {}).get("count")
 
-
-def counted(path, what):
-    page = safe(path, {"items": []}) or {}
-    n = len(page.get("items") or [])
-    if n >= LIMIT:
-        capped.append(f"{what} hit the {LIMIT}-row page limit")
-    return n
-
-
-reports = 0
-messages = 0
-for n in org:
-    node = urllib.parse.quote(str(n.get("id")), safe="")
-    reports += counted(f"/api/v1/reports?node={node}&limit={LIMIT}", f"reports of {node}")
-    messages += counted(f"/api/v1/org/{node}/messages?limit={LIMIT}", f"messages of {node} (no project)")
-    for p in projects:
-        pid = urllib.parse.quote(str(p.get("id")), safe="")
-        messages += counted(
-            f"/api/v1/org/{node}/messages?project={pid}&limit={LIMIT}",
-            f"messages of {node} in {pid}",
-        )
-out["reports"] = reports
-out["messages"] = messages
-out["capped"] = capped
-
-out["errors"] = errors + capped
+out["errors"] = errors
 json.dump(out, sys.stdout, ensure_ascii=False)
 PY
 }
@@ -519,6 +491,9 @@ PY
 }
 
 COUNT_KEYS="tasks tasks_total projects milestones org approvals approvals_decided reports messages tasks_digest"
+# 検査 5（N-1 互換）で旧版に数えさせる鍵。reports / messages は件数の口（ADR 2026-10-15-verify-counts-
+# without-page-limit D4）で数えるので、口を持たない旧版では数えない（一覧 GET の 200 は probe_api が見る）。
+N1_COUNT_KEYS="tasks tasks_total projects milestones org approvals approvals_decided tasks_digest"
 
 # ---- 1. 新リリースを verify モードで起こす ---------------------------------
 
@@ -577,14 +552,7 @@ if [ "$OK1" = true ]; then
     if [ "$OK2" = true ]; then
       record 2 counts-match true "snapshot (pre-migration, sqlite3) == staging API (post-migration): $COUNT_KEYS"
     else
-      hint=""
-      orphans="$(sd_json_get "$SNAP_JSON" orphan_reports || echo 0)/$(sd_json_get "$SNAP_JSON" orphan_messages || echo 0)"
-      case "$COUNT_DIFF" in
-        *reports* | *messages*)
-          hint=" (orphan reports/messages whose node_id is no longer in org_nodes: $orphans — the API counts per node, so those rows cannot be reached)"
-          ;;
-      esac
-      record 2 counts-match false "migration changed the data:$COUNT_DIFF$hint"
+      record 2 counts-match false "migration changed the data:$COUNT_DIFF"
     fi
   else
     record 2 counts-match false "could not collect counts (see $SNAP_JSON / $STG_JSON)"
@@ -671,7 +639,7 @@ else
     # 比べる相手は**スナップショット**（マイグレーション前の生の行数。ADR-0041 D2）。
     # 本番 API はここでも読まない。
     if sd_json_valid "$OLD_COUNTS" && sd_json_valid "$SNAP_JSON"; then
-      for key in $COUNT_KEYS; do
+      for key in $N1_COUNT_KEYS; do
         a="$(sd_json_get "$SNAP_JSON" "$key" || echo "?")"
         b="$(sd_json_get "$OLD_COUNTS" "$key" || echo "??")"
         [ "$a" = "$b" ] || DIFF5="$DIFF5 $key(snapshot=$a old=$b)"

@@ -53,6 +53,7 @@ class H(BaseHTTPRequestHandler):
         if p=='/api/v1/tasks': return self.send({'items':[],'next_cursor':None,'total':0})
         if p=='/api/v1/tasks/t1': return self.send({'task':{'status':'done'}})
         if p=='/api/v1/tasks/t1/events': return self.send({'items':[{'event':{'type':'worker_started'}},{'event':{'type':'worker_finished','outcome':'done: fake'}}]})
+        if p in ('/api/v1/reports/count','/api/v1/messages/count'): return self.send({'count':0})
         if p=='/api/v1/reports': return self.send({'items':[{'id':'r1','task_id':'t1'}]})
         if p in ('/api/v1/projects','/api/v1/org','/api/v1/approvals'): return self.send({'items':[]})
         return self.send({})

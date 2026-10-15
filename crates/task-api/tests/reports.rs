@@ -295,3 +295,62 @@ async fn the_daemon_snapshot_carries_the_unread_counts_and_the_notification_deci
     assert_eq!(good.level, 0);
     assert_eq!(unread.level, 0);
 }
+
+/// ADR 2026-10-15-verify-counts-without-page-limit: 本番規模（reports 1723 件・1 node 600 件超、
+/// messages 1 node 600 件超）でも件数の口は一覧の上限（500）に当たらず、生の行数と一致する。
+#[tokio::test]
+async fn count_endpoints_count_every_row_beyond_the_page_limit() {
+    use task_core::TaskStore;
+    let env = env_with_token();
+    let app = env.router();
+    let now = OffsetDateTime::now_utc();
+    let project = ProjectId::new();
+    for i in 0..1723u32 {
+        let node = if i < 650 {
+            "software-engineering"
+        } else {
+            "secretary"
+        };
+        let p = if i % 3 == 0 { Some(project) } else { None };
+        report(
+            &env.store,
+            node,
+            i % 3,
+            ReportKind::Result,
+            p,
+            "r",
+            now,
+            vec![],
+        );
+    }
+    for i in 0..650u32 {
+        env.store
+            .message_append(&task_core::Message {
+                id: task_core::MessageId::new(),
+                node_id: "software-engineering".into(),
+                project_id: if i % 2 == 0 { Some(project) } else { None },
+                role: task_core::MessageRole::User,
+                text: format!("m{i}"),
+                run_id: None,
+                task_id: None,
+                metadata: None,
+                created_at: now,
+            })
+            .expect("append message");
+    }
+
+    // 一覧は上限で打ち切られる（これが旧 verify の数え漏れ）。
+    let resp = send(
+        &app,
+        g("/api/v1/reports?node=software-engineering&limit=500"),
+    )
+    .await;
+    assert_eq!(resp.json()["items"].as_array().map(Vec::len), Some(500));
+
+    let resp = send(&app, g("/api/v1/reports/count")).await;
+    assert_eq!(resp.status.as_u16(), 200, "{}", resp.text());
+    assert_eq!(resp.json()["count"], 1723);
+    let resp = send(&app, g("/api/v1/messages/count")).await;
+    assert_eq!(resp.status.as_u16(), 200, "{}", resp.text());
+    assert_eq!(resp.json()["count"], 650);
+}

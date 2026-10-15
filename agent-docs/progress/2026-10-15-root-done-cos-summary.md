@@ -215,3 +215,9 @@ events の最大 id 555195）。
 
 - `bash scripts/dev/test-parallel.sh` → exit 0。nextest passed 5148 / failed 0 / ignored 13、doctest exit 0。
 - `cargo clippy --workspace -- -D warnings` → exit 0。
+
+### closeout 再実行（attempt 3、HEAD 9f9074a4）
+
+- `bash scripts/dev/test-parallel.sh` → exit 0。nextest passed 5148 / failed 0 / ignored 13、doctest exit 0。
+- `cargo clippy --workspace -- -D warnings` → exit 0。
+- `sh scripts/dev/check-doc-links.sh` → exit 0（fixture path は `out/x.md`）。

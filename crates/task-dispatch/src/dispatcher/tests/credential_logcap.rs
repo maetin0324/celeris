@@ -112,6 +112,10 @@ fn run_flow(outcome: VerifyOutcome, value: &str) -> Vec<String> {
         });
         let task = new_task(dir.path(), Check::Reviewer, 1);
         sqlite.insert(&task).unwrap();
+        // callsite の interest は process 全体で cache される。並走する他の試験の thread が Sink の登録と
+        // 同時に同じ callsite（待機入口の log）を初登録すると、古い「購読者なし（never）」が残り捕捉から
+        // 漏れる。Sink 登録後の ここで作り直し、全 callsite が Sink を見た interest で決まるようにする。
+        tracing::callsite::rebuild_interest_cache();
         let a = unit(&task, "a", 0);
         sqlite
             .work_units_apply(task.id, vec![a.clone()], Vec::new(), Vec::new())

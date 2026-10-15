@@ -17,18 +17,43 @@ pub struct ClassifyInput {
 }
 
 const SECRET_PREFIXES: &[&str] = &[
-    "sk-", "sk_", "ghp_", "gho_", "ghs_", "github_pat_", "xoxb-", "xoxp-", "xapp-", "AKIA", "glpat-", "or-v1-",
+    "sk-",
+    "sk_",
+    "ghp_",
+    "gho_",
+    "ghs_",
+    "github_pat_",
+    "xoxb-",
+    "xoxp-",
+    "xapp-",
+    "AKIA",
+    "glpat-",
+    "or-v1-",
 ];
-const SECRET_KEY_WORDS: &[&str] = &["key", "token", "secret", "password", "passwd", "credential", "auth"];
+const SECRET_KEY_WORDS: &[&str] = &[
+    "key",
+    "token",
+    "secret",
+    "password",
+    "passwd",
+    "credential",
+    "auth",
+];
 const REDACTED: &str = "[redacted]";
 
 fn trim_punct(w: &str) -> &str {
-    w.trim_matches(|c: char| matches!(c, ',' | ';' | '"' | '\'' | '`' | ')' | '(' | '<' | '>' | '.'))
+    w.trim_matches(|c: char| {
+        matches!(
+            c,
+            ',' | ';' | '"' | '\'' | '`' | ')' | '(' | '<' | '>' | '.'
+        )
+    })
 }
 
 fn looks_like_blob(w: &str) -> bool {
     w.len() >= 32
-        && w.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '+' | '/' | '='))
+        && w.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '+' | '/' | '='))
         && w.chars().any(|c| c.is_ascii_digit())
         && w.chars().any(|c| c.is_ascii_alphabetic())
         && !w.contains('/')
@@ -36,7 +61,9 @@ fn looks_like_blob(w: &str) -> bool {
 
 fn is_email(w: &str) -> bool {
     match w.split_once('@') {
-        Some((l, r)) => !l.is_empty() && r.contains('.') && !r.starts_with('.') && !r.ends_with('.'),
+        Some((l, r)) => {
+            !l.is_empty() && r.contains('.') && !r.starts_with('.') && !r.ends_with('.')
+        }
         None => false,
     }
 }
@@ -46,7 +73,11 @@ fn redact_word(w: &str, prev_bearer: bool) -> Option<String> {
     if t.is_empty() {
         return None;
     }
-    if prev_bearer || SECRET_PREFIXES.iter().any(|p| t.starts_with(p)) || looks_like_blob(t) || is_email(t) {
+    if prev_bearer
+        || SECRET_PREFIXES.iter().any(|p| t.starts_with(p))
+        || looks_like_blob(t)
+        || is_email(t)
+    {
         return Some(w.replacen(t, REDACTED, 1));
     }
     // KEY=value / token: value 形式（同じ語内）
@@ -90,7 +121,11 @@ fn clip(s: &str, max: usize) -> String {
 }
 
 fn clip_list(v: &[String]) -> Vec<String> {
-    v.iter().take(MAX_ITEMS).map(|s| clip(s, MAX_ITEM_CHARS)).filter(|s| !s.is_empty()).collect()
+    v.iter()
+        .take(MAX_ITEMS)
+        .map(|s| clip(s, MAX_ITEM_CHARS))
+        .filter(|s| !s.is_empty())
+        .collect()
 }
 
 impl ClassifyInput {
@@ -114,8 +149,16 @@ impl ClassifyInput {
         let s = self.sanitized();
         let mut state = vec![format!("instruction: {}", s.instruction)];
         state.extend(s.acceptance.iter().map(|a| format!("acceptance: {a}")));
-        state.extend(s.required_artifacts.iter().map(|a| format!("required_artifact: {a}")));
-        state.extend(s.dependency_summaries.iter().map(|a| format!("dependency_result: {a}")));
+        state.extend(
+            s.required_artifacts
+                .iter()
+                .map(|a| format!("required_artifact: {a}")),
+        );
+        state.extend(
+            s.dependency_summaries
+                .iter()
+                .map(|a| format!("dependency_result: {a}")),
+        );
         if let Some(f) = &s.recent_failure {
             state.push(format!("recent_failure: {f}"));
         }
@@ -132,7 +175,13 @@ mod tests {
         let t = "use sk-abcdef123456 and Authorization: Bearer abc.def mail me@example.com API_KEY=hunter2 \
                  blob 0123456789abcdef0123456789abcdef0123";
         let r = redact_secrets(t);
-        for leak in ["sk-abcdef", "abc.def", "me@example.com", "hunter2", "0123456789abcdef0123"] {
+        for leak in [
+            "sk-abcdef",
+            "abc.def",
+            "me@example.com",
+            "hunter2",
+            "0123456789abcdef0123",
+        ] {
             assert!(!r.contains(leak), "{leak} leaked: {r}");
         }
         assert!(r.contains("API_KEY=[redacted]"));
@@ -160,7 +209,10 @@ mod tests {
 
     #[test]
     fn state_has_only_given_fields() {
-        let input = ClassifyInput { instruction: "do it".into(), ..Default::default() };
+        let input = ClassifyInput {
+            instruction: "do it".into(),
+            ..Default::default()
+        };
         assert_eq!(input.to_state(), vec!["instruction: do it".to_string()]);
     }
 }

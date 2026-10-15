@@ -52,8 +52,13 @@ pub enum FallbackReason {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ClassifyOutcome {
-    Classified { classification: Box<Classification>, cached: bool },
-    FallbackToFixed { reason: FallbackReason },
+    Classified {
+        classification: Box<Classification>,
+        cached: bool,
+    },
+    FallbackToFixed {
+        reason: FallbackReason,
+    },
 }
 
 enum Attempt {
@@ -74,7 +79,9 @@ pub struct JevClassifier {
 
 impl fmt::Debug for JevClassifier {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("JevClassifier").field("config", &self.config).finish_non_exhaustive()
+        f.debug_struct("JevClassifier")
+            .field("config", &self.config)
+            .finish_non_exhaustive()
     }
 }
 
@@ -84,15 +91,27 @@ impl JevClassifier {
     }
 
     /// sleep と時計を注入する（試験用に実時間を使わない）。
-    pub fn with_parts(config: JevConfig, sleeper: Arc<dyn Sleeper>, clock: Arc<dyn Clock>) -> Result<Self, JevError> {
+    pub fn with_parts(
+        config: JevConfig,
+        sleeper: Arc<dyn Sleeper>,
+        clock: Arc<dyn Clock>,
+    ) -> Result<Self, JevError> {
         config.validate()?;
         let http = reqwest::Client::builder()
             .timeout(config.timeout())
             .build()
             .map_err(|_| JevError::Config("http client build failed".into()))?;
-        let breaker = CircuitBreaker::new(config.breaker_failure_threshold, config.breaker_cooldown());
+        let breaker =
+            CircuitBreaker::new(config.breaker_failure_threshold, config.breaker_cooldown());
         let cache = BoundedCache::new(config.cache_max_entries);
-        Ok(Self { config, http, sleeper, clock, breaker, cache })
+        Ok(Self {
+            config,
+            http,
+            sleeper,
+            clock,
+            breaker,
+            cache,
+        })
     }
 
     pub fn config(&self) -> &JevConfig {
@@ -129,13 +148,20 @@ impl JevClassifier {
         let payload = self.payload(&input);
         let key_hash = self.cache_key(&payload);
         if let Some(c) = self.cache.get(&key_hash) {
-            return Ok(ClassifyOutcome::Classified { classification: Box::new(c), cached: true });
+            return Ok(ClassifyOutcome::Classified {
+                classification: Box::new(c),
+                cached: true,
+            });
         }
         let Some(key) = keys.api_key() else {
-            return Err(JevError::KeyMissing { secret_id: self.config.secret_id.clone() });
+            return Err(JevError::KeyMissing {
+                secret_id: self.config.secret_id.clone(),
+            });
         };
         if !self.breaker.allow(self.clock.now()) {
-            return Ok(ClassifyOutcome::FallbackToFixed { reason: FallbackReason::BreakerOpen });
+            return Ok(ClassifyOutcome::FallbackToFixed {
+                reason: FallbackReason::BreakerOpen,
+            });
         }
         let with_failure = input.recent_failure.is_some();
         let mut last = FallbackReason::Transport;
@@ -147,10 +173,16 @@ impl JevClassifier {
                 Attempt::Done(c) => {
                     self.breaker.record_success();
                     self.cache.put(key_hash, (*c).clone());
-                    return Ok(ClassifyOutcome::Classified { classification: c, cached: false });
+                    return Ok(ClassifyOutcome::Classified {
+                        classification: c,
+                        cached: false,
+                    });
                 }
                 Attempt::Auth(status) => {
-                    return Err(JevError::Auth { status, secret_id: self.config.secret_id.clone() });
+                    return Err(JevError::Auth {
+                        status,
+                        secret_id: self.config.secret_id.clone(),
+                    });
                 }
                 Attempt::Fail(r) => {
                     last = r;
@@ -163,7 +195,12 @@ impl JevClassifier {
         Ok(ClassifyOutcome::FallbackToFixed { reason: last })
     }
 
-    async fn attempt(&self, payload: &serde_json::Value, key: &ApiKey, with_failure: bool) -> Attempt {
+    async fn attempt(
+        &self,
+        payload: &serde_json::Value,
+        key: &ApiKey,
+        with_failure: bool,
+    ) -> Attempt {
         let resp = self
             .http
             .post(&self.config.endpoint)
@@ -242,8 +279,12 @@ mod tests {
     }
 
     /// 応答を順に返す最小の HTTP server。受信 request を記録する。
-    async fn serve(responses: Vec<(u16, String)>) -> (String, Arc<Mutex<Vec<String>>>, Arc<AtomicUsize>) {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap_or_else(|_| unreachable!());
+    async fn serve(
+        responses: Vec<(u16, String)>,
+    ) -> (String, Arc<Mutex<Vec<String>>>, Arc<AtomicUsize>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .unwrap_or_else(|_| unreachable!());
         let addr = listener.local_addr().unwrap_or_else(|_| unreachable!());
         let seen = Arc::new(Mutex::new(Vec::new()));
         let count = Arc::new(AtomicUsize::new(0));
@@ -253,7 +294,7 @@ mod tests {
             while let Ok((mut sock, _)) = listener.accept().await {
                 let mut buf = vec![0u8; 65536];
                 let mut n = 0;
-                    while let Ok(k) = sock.read(&mut buf[n..]).await {
+                while let Ok(k) = sock.read(&mut buf[n..]).await {
                     if k == 0 {
                         break;
                     }
@@ -262,14 +303,20 @@ mod tests {
                     if let Some((head, body)) = text.split_once("\r\n\r\n") {
                         let len = head
                             .lines()
-                            .find_map(|l| l.to_ascii_lowercase().strip_prefix("content-length:").map(|v| v.trim().parse::<usize>().unwrap_or(0)))
+                            .find_map(|l| {
+                                l.to_ascii_lowercase()
+                                    .strip_prefix("content-length:")
+                                    .map(|v| v.trim().parse::<usize>().unwrap_or(0))
+                            })
                             .unwrap_or(0);
                         if body.len() >= len {
                             break;
                         }
                     }
                 }
-                s2.lock().unwrap_or_else(|e| e.into_inner()).push(String::from_utf8_lossy(&buf[..n]).to_string());
+                s2.lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push(String::from_utf8_lossy(&buf[..n]).to_string());
                 c2.fetch_add(1, Ordering::SeqCst);
                 let (status, body) = q.pop_front().unwrap_or((500, String::new()));
                 let resp = format!(
@@ -284,13 +331,25 @@ mod tests {
 
     const OK: &str = r#"{"answers":{"specificity":{"choice":"specified"},"work_nature":{"choice":"implementation"}}}"#;
 
-    fn classifier(endpoint: String, sleeper: Arc<RecSleeper>, clock: Arc<FakeClock>) -> JevClassifier {
-        let cfg = JevConfig { endpoint, max_retries: 2, breaker_failure_threshold: 2, ..Default::default() };
+    fn classifier(
+        endpoint: String,
+        sleeper: Arc<RecSleeper>,
+        clock: Arc<FakeClock>,
+    ) -> JevClassifier {
+        let cfg = JevConfig {
+            endpoint,
+            max_retries: 2,
+            breaker_failure_threshold: 2,
+            ..Default::default()
+        };
         JevClassifier::with_parts(cfg, sleeper, clock).unwrap_or_else(|_| unreachable!())
     }
 
     fn input(text: &str) -> ClassifyInput {
-        ClassifyInput { instruction: text.into(), ..Default::default() }
+        ClassifyInput {
+            instruction: text.into(),
+            ..Default::default()
+        }
     }
 
     #[tokio::test]
@@ -302,14 +361,23 @@ mod tests {
             ..Default::default()
         };
         let out = c.classify(&i, &Key(Some(SECRET))).await;
-        assert!(matches!(out, Ok(ClassifyOutcome::Classified { cached: false, .. })));
+        assert!(matches!(
+            out,
+            Ok(ClassifyOutcome::Classified { cached: false, .. })
+        ));
         let req = seen.lock().unwrap_or_else(|e| e.into_inner())[0].clone();
-        assert!(req.to_ascii_lowercase().contains(&format!("authorization: bearer {SECRET}").to_ascii_lowercase()));
+        assert!(
+            req.to_ascii_lowercase()
+                .contains(&format!("authorization: bearer {SECRET}").to_ascii_lowercase())
+        );
         let body = req.split_once("\r\n\r\n").map(|x| x.1).unwrap_or("");
         assert!(!body.contains(SECRET), "secret leaked into payload");
         assert!(body.contains("typesafe/jev-1.14"));
         let again = c.classify(&i, &Key(None)).await;
-        assert!(matches!(again, Ok(ClassifyOutcome::Classified { cached: true, .. })));
+        assert!(matches!(
+            again,
+            Ok(ClassifyOutcome::Classified { cached: true, .. })
+        ));
         assert_eq!(count.load(Ordering::SeqCst), 1);
     }
 
@@ -321,28 +389,59 @@ mod tests {
             let c = classifier(url, sleeper.clone(), Arc::new(FakeClock(AtomicU64::new(0))));
             for _ in 0..3 {
                 let r = c.classify(&input("x"), &Key(Some(SECRET))).await;
-                assert_eq!(r, Err(JevError::Auth { status, secret_id: "jev_api_key".into() }));
+                assert_eq!(
+                    r,
+                    Err(JevError::Auth {
+                        status,
+                        secret_id: "jev_api_key".into()
+                    })
+                );
             }
             assert_eq!(count.load(Ordering::SeqCst), 3);
-            assert!(sleeper.0.lock().unwrap_or_else(|e| e.into_inner()).is_empty());
+            assert!(
+                sleeper
+                    .0
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .is_empty()
+            );
         }
     }
 
     #[tokio::test]
     async fn missing_key_is_typed() {
-        let c = classifier("http://127.0.0.1:1/x".into(), Arc::default(), Arc::new(FakeClock(AtomicU64::new(0))));
+        let c = classifier(
+            "http://127.0.0.1:1/x".into(),
+            Arc::default(),
+            Arc::new(FakeClock(AtomicU64::new(0))),
+        );
         let r = c.classify(&input("x"), &Key(None)).await;
-        assert_eq!(r, Err(JevError::KeyMissing { secret_id: "jev_api_key".into() }));
+        assert_eq!(
+            r,
+            Err(JevError::KeyMissing {
+                secret_id: "jev_api_key".into()
+            })
+        );
     }
 
     #[tokio::test]
     async fn retries_with_backoff_then_falls_back_and_breaker_opens() {
-        let (url, _, count) = serve(vec![(429, "{}".into()), (503, "{}".into()), (500, "{}".into())]).await;
+        let (url, _, count) = serve(vec![
+            (429, "{}".into()),
+            (503, "{}".into()),
+            (500, "{}".into()),
+        ])
+        .await;
         let sleeper = Arc::new(RecSleeper::default());
         let clock = Arc::new(FakeClock(AtomicU64::new(0)));
         let c = classifier(url, sleeper.clone(), clock.clone());
         let out = c.classify(&input("a"), &Key(Some(SECRET))).await;
-        assert_eq!(out, Ok(ClassifyOutcome::FallbackToFixed { reason: FallbackReason::ServerError(500) }));
+        assert_eq!(
+            out,
+            Ok(ClassifyOutcome::FallbackToFixed {
+                reason: FallbackReason::ServerError(500)
+            })
+        );
         assert_eq!(count.load(Ordering::SeqCst), 3);
         assert_eq!(
             *sleeper.0.lock().unwrap_or_else(|e| e.into_inner()),
@@ -352,7 +451,12 @@ mod tests {
         let _ = c.classify(&input("b"), &Key(Some(SECRET))).await;
         let before = count.load(Ordering::SeqCst);
         let out = c.classify(&input("c"), &Key(Some(SECRET))).await;
-        assert_eq!(out, Ok(ClassifyOutcome::FallbackToFixed { reason: FallbackReason::BreakerOpen }));
+        assert_eq!(
+            out,
+            Ok(ClassifyOutcome::FallbackToFixed {
+                reason: FallbackReason::BreakerOpen
+            })
+        );
         assert_eq!(count.load(Ordering::SeqCst), before);
         clock.0.store(3600, Ordering::SeqCst);
         assert!(c.breaker.allow(clock.now()));
@@ -360,8 +464,14 @@ mod tests {
 
     #[tokio::test]
     async fn invalid_schema_and_unknown_label_fall_back() {
-        let bad = r#"{"answers":{"specificity":{"choice":"weird"},"work_nature":{"choice":"design"}}}"#;
-        let (url, _, count) = serve(vec![(200, "garbage".into()), (200, bad.into()), (200, OK.into())]).await;
+        let bad =
+            r#"{"answers":{"specificity":{"choice":"weird"},"work_nature":{"choice":"design"}}}"#;
+        let (url, _, count) = serve(vec![
+            (200, "garbage".into()),
+            (200, bad.into()),
+            (200, OK.into()),
+        ])
+        .await;
         let c = classifier(url, Arc::default(), Arc::new(FakeClock(AtomicU64::new(0))));
         // 2 回の無効応答のあと 3 回目で成功（bounded retry 内）
         let out = c.classify(&input("a"), &Key(Some(SECRET))).await;
@@ -371,7 +481,9 @@ mod tests {
 
     #[tokio::test]
     async fn timeout_falls_back() {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap_or_else(|_| unreachable!());
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .unwrap_or_else(|_| unreachable!());
         let addr = listener.local_addr().unwrap_or_else(|_| unreachable!());
         tokio::spawn(async move {
             let mut held = Vec::new();
@@ -385,19 +497,35 @@ mod tests {
             max_retries: 1,
             ..Default::default()
         };
-        let c = JevClassifier::with_parts(cfg, Arc::new(RecSleeper::default()), Arc::new(FakeClock(AtomicU64::new(0))))
-            .unwrap_or_else(|_| unreachable!());
+        let c = JevClassifier::with_parts(
+            cfg,
+            Arc::new(RecSleeper::default()),
+            Arc::new(FakeClock(AtomicU64::new(0))),
+        )
+        .unwrap_or_else(|_| unreachable!());
         let out = c.classify(&input("a"), &Key(Some(SECRET))).await;
-        assert_eq!(out, Ok(ClassifyOutcome::FallbackToFixed { reason: FallbackReason::Timeout }));
+        assert_eq!(
+            out,
+            Ok(ClassifyOutcome::FallbackToFixed {
+                reason: FallbackReason::Timeout
+            })
+        );
     }
 
     #[test]
     fn key_never_appears_in_debug_or_errors() {
         let k = ApiKey::new(SECRET);
         assert!(!format!("{k:?}").contains(SECRET));
-        let e = JevError::Auth { status: 401, secret_id: "jev_api_key".into() };
+        let e = JevError::Auth {
+            status: 401,
+            secret_id: "jev_api_key".into(),
+        };
         assert!(!format!("{e} {e:?}").contains(SECRET));
-        let c = classifier("http://127.0.0.1:1/x".into(), Arc::default(), Arc::new(FakeClock(AtomicU64::new(0))));
+        let c = classifier(
+            "http://127.0.0.1:1/x".into(),
+            Arc::default(),
+            Arc::new(FakeClock(AtomicU64::new(0))),
+        );
         assert!(!format!("{c:?}").contains(SECRET));
     }
 }

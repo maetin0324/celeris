@@ -13,10 +13,10 @@ use jev_classifier::{
     ApiKeyProvider, ClassifyInput, ClassifyOutcome, FallbackReason, JevClassifier, JevError,
     Specificity,
 };
-use task_dispatch::{BoardItem, ClassificationBoard, CredentialGate};
 use task_core::route_select::{
     ClassificationEntry, ClassificationHint, ClassifierStatus, RoutingMode, SpecificityHint,
 };
+use task_dispatch::{BoardItem, ClassificationBoard, CredentialGate};
 
 /// 分類器の差し込み口。本番は `JevClassifier`、試験は fake。
 #[async_trait]
@@ -145,7 +145,7 @@ impl ClassificationStage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use jev_classifier::{ApiKey, Answer, Classification, WorkNature};
+    use jev_classifier::{Answer, ApiKey, Classification, WorkNature};
     use std::sync::Mutex;
 
     struct Fake(Mutex<Vec<Result<ClassifyOutcome, JevError>>>);
@@ -168,7 +168,9 @@ mod tests {
         }
     }
 
-    fn stage(results: Vec<Result<ClassifyOutcome, JevError>>) -> (ClassificationStage, ClassificationBoard) {
+    fn stage(
+        results: Vec<Result<ClassifyOutcome, JevError>>,
+    ) -> (ClassificationStage, ClassificationBoard) {
         let board = ClassificationBoard::default();
         let s = ClassificationStage::new(
             Arc::new(Fake(Mutex::new(results))),
@@ -219,7 +221,10 @@ mod tests {
 
     #[tokio::test]
     async fn success_is_jev_ok_with_a_hint_and_never_marks_the_real_api_verified() {
-        let (s, board) = stage(vec![Ok(classified(Specificity::NeedsInvestigationDesign, 0.9))]);
+        let (s, board) = stage(vec![Ok(classified(
+            Specificity::NeedsInvestigationDesign,
+            0.9,
+        ))]);
         let item = s.classify_subject("wu-1", &input()).await;
         assert_eq!(item.entry.status, ClassifierStatus::JevOk);
         assert_eq!(
@@ -230,8 +235,8 @@ mod tests {
     }
 
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use task_core::route_select::{AssistInput, LaneFacts, LaneLimits, assist_lane};
     use task_core::model::Tier;
+    use task_core::route_select::{AssistInput, LaneFacts, LaneLimits, assist_lane};
     use task_core::route_select::{Fact, WorkClass};
 
     struct Counting(AtomicUsize);
@@ -286,11 +291,14 @@ mod tests {
             },
             board.clone(),
         );
-        let item = s.classify_for_mode(RoutingMode::Fixed, "wu-1", &input()).await;
+        let item = s
+            .classify_for_mode(RoutingMode::Fixed, "wu-1", &input())
+            .await;
         assert_eq!(item.entry.status, ClassifierStatus::NotAttempted);
         assert_eq!(counting.0.load(Ordering::SeqCst), 0);
         assert!(board.get("wu-1").is_none());
-        s.classify_for_mode(RoutingMode::DecisionAssisted, "wu-1", &input()).await;
+        s.classify_for_mode(RoutingMode::DecisionAssisted, "wu-1", &input())
+            .await;
         assert_eq!(counting.0.load(Ordering::SeqCst), 1);
         assert!(board.get("wu-1").is_some());
     }
@@ -298,10 +306,19 @@ mod tests {
     #[tokio::test]
     async fn fallback_records_fell_back_while_real_api_verified_stays_false() {
         for res in [
-            Ok(ClassifyOutcome::FallbackToFixed { reason: FallbackReason::Timeout }),
-            Ok(ClassifyOutcome::FallbackToFixed { reason: FallbackReason::BreakerOpen }),
-            Err(JevError::KeyMissing { secret_id: "jev_api_key".into() }),
-            Err(JevError::Auth { status: 401, secret_id: "jev_api_key".into() }),
+            Ok(ClassifyOutcome::FallbackToFixed {
+                reason: FallbackReason::Timeout,
+            }),
+            Ok(ClassifyOutcome::FallbackToFixed {
+                reason: FallbackReason::BreakerOpen,
+            }),
+            Err(JevError::KeyMissing {
+                secret_id: "jev_api_key".into(),
+            }),
+            Err(JevError::Auth {
+                status: 401,
+                secret_id: "jev_api_key".into(),
+            }),
         ] {
             let (s, _) = stage(vec![res]);
             let item = s
@@ -311,13 +328,21 @@ mod tests {
             let rec = out.record.expect("record");
             // fixed へ戻る: lane は既存方策のまま。
             assert_eq!(out.lane, Tier::Standard);
-            assert!(matches!(rec.classifier_status, ClassifierStatus::FellBackToFixed { .. }));
+            assert!(matches!(
+                rec.classifier_status,
+                ClassifierStatus::FellBackToFixed { .. }
+            ));
             assert!(!rec.real_api_verified);
         }
         // 成功でも検証済みにはならない。
         let (s, _) = stage(vec![Ok(classified(Specificity::Specified, 0.99))]);
         let item = s.classify_subject("wu", &input()).await;
-        assert!(!assist(Tier::Standard, &item.entry).record.expect("record").real_api_verified);
+        assert!(
+            !assist(Tier::Standard, &item.entry)
+                .record
+                .expect("record")
+                .real_api_verified
+        );
     }
 
     #[tokio::test]
@@ -327,7 +352,10 @@ mod tests {
         let item = s.classify_subject("wu", &input()).await;
         assert_eq!(assist(Tier::Standard, &item.entry).lane, Tier::Standard);
         // 難しい分類は引き上げのみ。
-        let (s, _) = stage(vec![Ok(classified(Specificity::NeedsInvestigationDesign, 0.99))]);
+        let (s, _) = stage(vec![Ok(classified(
+            Specificity::NeedsInvestigationDesign,
+            0.99,
+        ))]);
         let item = s.classify_subject("wu", &input()).await;
         assert_ne!(assist(Tier::Standard, &item.entry).lane, Tier::Cheap);
         // board の項目は分類の確信（confidence）だけで、成功率の欄を持たない。
@@ -337,13 +365,18 @@ mod tests {
 
     #[tokio::test]
     async fn missing_key_hands_the_gate_to_the_existing_credential_wait() {
-        let (s, board) = stage(vec![Err(JevError::KeyMissing { secret_id: "jev_api_key".into() })]);
-        s.classify_for_mode(RoutingMode::DecisionAssisted, "wu-9", &input()).await;
+        let (s, board) = stage(vec![Err(JevError::KeyMissing {
+            secret_id: "jev_api_key".into(),
+        })]);
+        s.classify_for_mode(RoutingMode::DecisionAssisted, "wu-9", &input())
+            .await;
         // dispatcher の apply_lane_assist（既存の credential_gate 経路）が読む形で board に載る。
         let item = board.get("wu-9").expect("board item");
         assert_eq!(
             item.entry.status,
-            ClassifierStatus::FellBackToFixed { reason: "key_missing".into() }
+            ClassifierStatus::FellBackToFixed {
+                reason: "key_missing".into()
+            }
         );
         let gate = item.credential.expect("credential gate");
         assert_eq!(gate.secret_id, "jev_api_key");
@@ -352,16 +385,43 @@ mod tests {
     #[tokio::test]
     async fn failures_become_fell_back_to_fixed_with_a_reason_name() {
         for (res, reason, wants_credential) in [
-            (Ok(ClassifyOutcome::FallbackToFixed { reason: FallbackReason::BreakerOpen }), "breaker_open", false),
-            (Ok(ClassifyOutcome::FallbackToFixed { reason: FallbackReason::Timeout }), "timeout", false),
-            (Err(JevError::KeyMissing { secret_id: "jev_api_key".into() }), "key_missing", true),
-            (Err(JevError::Auth { status: 401, secret_id: "jev_api_key".into() }), "auth", true),
+            (
+                Ok(ClassifyOutcome::FallbackToFixed {
+                    reason: FallbackReason::BreakerOpen,
+                }),
+                "breaker_open",
+                false,
+            ),
+            (
+                Ok(ClassifyOutcome::FallbackToFixed {
+                    reason: FallbackReason::Timeout,
+                }),
+                "timeout",
+                false,
+            ),
+            (
+                Err(JevError::KeyMissing {
+                    secret_id: "jev_api_key".into(),
+                }),
+                "key_missing",
+                true,
+            ),
+            (
+                Err(JevError::Auth {
+                    status: 401,
+                    secret_id: "jev_api_key".into(),
+                }),
+                "auth",
+                true,
+            ),
         ] {
             let (s, _) = stage(vec![res]);
             let item = s.classify_subject("t", &input()).await;
             assert_eq!(
                 item.entry.status,
-                ClassifierStatus::FellBackToFixed { reason: reason.into() }
+                ClassifierStatus::FellBackToFixed {
+                    reason: reason.into()
+                }
             );
             assert!(item.entry.hint.is_none());
             assert_eq!(item.credential.is_some(), wants_credential);

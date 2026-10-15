@@ -83,7 +83,10 @@ impl JevConfig {
     /// attempt（0 起点の失敗回数）に対する指数 backoff。上限で飽和する。
     pub fn backoff(&self, attempt: u32) -> Duration {
         let factor = 1u64.checked_shl(attempt.min(32)).unwrap_or(u64::MAX);
-        let ms = self.backoff_base_ms.saturating_mul(factor).min(self.backoff_max_ms);
+        let ms = self
+            .backoff_base_ms
+            .saturating_mul(factor)
+            .min(self.backoff_max_ms);
         Duration::from_millis(ms)
     }
 }
@@ -101,7 +104,10 @@ mod tests {
 
     #[test]
     fn latest_alias_is_rejected() {
-        let c = JevConfig { model_id: "~typesafe/jev-latest".into(), ..Default::default() };
+        let c = JevConfig {
+            model_id: "~typesafe/jev-latest".into(),
+            ..Default::default()
+        };
         assert!(matches!(c.validate(), Err(JevError::Config(_))));
     }
 
@@ -113,7 +119,11 @@ mod tests {
 
     #[test]
     fn backoff_is_exponential_and_capped() {
-        let c = JevConfig { backoff_base_ms: 100, backoff_max_ms: 500, ..Default::default() };
+        let c = JevConfig {
+            backoff_base_ms: 100,
+            backoff_max_ms: 500,
+            ..Default::default()
+        };
         assert_eq!(c.backoff(0), Duration::from_millis(100));
         assert_eq!(c.backoff(1), Duration::from_millis(200));
         assert_eq!(c.backoff(2), Duration::from_millis(400));

@@ -16,11 +16,22 @@ struct Inner<V> {
 
 impl<V: Clone> BoundedCache<V> {
     pub fn new(max: usize) -> Self {
-        Self { max, inner: Mutex::new(Inner { map: HashMap::new(), order: VecDeque::new() }) }
+        Self {
+            max,
+            inner: Mutex::new(Inner {
+                map: HashMap::new(),
+                order: VecDeque::new(),
+            }),
+        }
     }
 
     pub fn get(&self, key: &str) -> Option<V> {
-        self.inner.lock().unwrap_or_else(|e| e.into_inner()).map.get(key).cloned()
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .map
+            .get(key)
+            .cloned()
     }
 
     pub fn put(&self, key: String, value: V) {
@@ -43,7 +54,11 @@ impl<V: Clone> BoundedCache<V> {
 
     #[cfg(test)]
     pub fn len(&self) -> usize {
-        self.inner.lock().unwrap_or_else(|e| e.into_inner()).map.len()
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .map
+            .len()
     }
 
     #[cfg(test)]

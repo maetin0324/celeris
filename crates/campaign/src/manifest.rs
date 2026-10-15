@@ -99,6 +99,10 @@ pub struct CampaignManifest {
     pub budget: Budget,
     pub termination: Termination,
     pub snapshot: SnapshotRef,
+    /// problem id -> 前提 problem id の配列。前提の全 config の trial が passed になるまで依存先は実行しない。
+    /// 空なら直列化しない（依存の無い manifest の hash を変えない）。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub dependencies: BTreeMap<String, Vec<String>>,
     #[serde(default)]
     pub sha256: String,
 }
@@ -129,7 +133,59 @@ impl CampaignManifest {
         m.problems.sort();
         m.secondary.subset.sort();
         m.configs.sort_by_key(|c| c.id);
+        for v in m.dependencies.values_mut() {
+            v.sort();
+            v.dedup();
+        }
+        m.dependencies.retain(|_, v| !v.is_empty());
         m
+    }
+
+    /// 問題の実行順（前提が先。依存が無ければ id 昇順）。未知 id・自己依存・循環は Err。
+    pub fn problem_order(&self) -> Result<Vec<String>, String> {
+        let known: BTreeSet<&str> = self.problems.iter().map(String::as_str).collect();
+        let mut pending: BTreeMap<&str, BTreeSet<&str>> =
+            known.iter().map(|p| (*p, BTreeSet::new())).collect();
+        for (p, qs) in &self.dependencies {
+            if !known.contains(p.as_str()) {
+                return Err(format!("dependencies: unknown problem id {p}"));
+            }
+            for q in qs {
+                if !known.contains(q.as_str()) {
+                    return Err(format!(
+                        "dependencies: {p} depends on unknown problem id {q}"
+                    ));
+                }
+                if q == p {
+                    return Err(format!("dependencies: {p} depends on itself"));
+                }
+                if let Some(s) = pending.get_mut(p.as_str()) {
+                    s.insert(q.as_str());
+                }
+            }
+        }
+        let mut order = Vec::new();
+        while !pending.is_empty() {
+            let Some(next) = pending.iter().find(|(_, d)| d.is_empty()).map(|(p, _)| *p) else {
+                let rest: Vec<&str> = pending.keys().copied().collect();
+                return Err(format!("dependencies contain a cycle among {rest:?}"));
+            };
+            pending.remove(next);
+            for d in pending.values_mut() {
+                d.remove(next);
+            }
+            order.push(next.to_string());
+        }
+        Ok(order)
+    }
+
+    /// problem を実行する config（A/B は全問題、C は事前登録 subset のみ）。
+    pub fn planned_configs(&self, problem: &str) -> Vec<ConfigId> {
+        let mut v = vec![ConfigId::A, ConfigId::B];
+        if self.secondary.subset.iter().any(|s| s == problem) {
+            v.push(ConfigId::C);
+        }
+        v
     }
 
     /// 正規化後の canonical JSON（キー順固定）の sha256。`sha256` 欄は空として数える。
@@ -204,6 +260,7 @@ impl CampaignManifest {
         if sub.len() != self.secondary.subset.len() || !sub.is_subset(&set) {
             return Err("secondary.subset must be unique and contained in problems".into());
         }
+        self.problem_order()?;
         if !self.sha256.is_empty() && self.sha256 != self.compute_sha256()? {
             return Err("sha256 does not match manifest content".into());
         }
@@ -318,6 +375,7 @@ pub(crate) mod fixtures {
                 materials_sha256: "def".into(),
                 kb_snapshot: "kb@1".into(),
             },
+            dependencies: BTreeMap::new(),
             sha256: String::new(),
         }
     }

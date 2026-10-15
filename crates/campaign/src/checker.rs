@@ -10,6 +10,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::{
+    aggregate::Outcome,
     manifest::{CampaignManifest, ConfigId},
     record::*,
 };
@@ -22,6 +23,7 @@ pub struct Totals {
     pub error: u64,
     pub timeout: u64,
     pub cancelled: u64,
+    pub blocked: u64,
     pub missing: u64,
     /// 実行した全試行（再試行を含む）の token。欠測の試行は sum に入れず `*_missing_trials` に数える。
     pub tokens_sum: u64,
@@ -74,6 +76,33 @@ fn expected(m: &CampaignManifest) -> BTreeMap<ConfigId, BTreeSet<String>> {
     ])
 }
 
+enum Dep {
+    Met,
+    Failed(String),
+    Waiting,
+}
+
+/// `recs`（それ以前の記録）から problem の前提の成否を再計算する。runner の判定コードは使わない。
+fn dep_state(m: &CampaignManifest, recs: &[TrialRecord], problem: &str) -> Dep {
+    let mut waiting = false;
+    for q in m.dependencies.get(problem).into_iter().flatten() {
+        for c in m.planned_configs(q) {
+            let mut best: Option<&TrialRecord> = None;
+            for r in recs.iter().filter(|r| r.config == c && r.problem_id == *q) {
+                if best.is_none_or(|b| r.trial_no < b.trial_no) {
+                    best = Some(r);
+                }
+            }
+            match best {
+                Some(r) if r.outcome == Outcome::Passed => {}
+                Some(_) => return Dep::Failed(q.clone()),
+                None => waiting = true,
+            }
+        }
+    }
+    if waiting { Dep::Waiting } else { Dep::Met }
+}
+
 pub fn check(m: &CampaignManifest, out: &Path) -> CheckReport {
     let mut v: Vec<String> = Vec::new();
     let mut recs: Vec<TrialRecord> = Vec::new();
@@ -111,7 +140,8 @@ pub fn check(m: &CampaignManifest, out: &Path) -> CheckReport {
         let mut cum_wall = 0u64;
         let cfg_by_id: BTreeMap<ConfigId, &crate::manifest::Config> =
             m.configs.iter().map(|c| (c.id, c)).collect();
-        for r in &recs {
+        for (idx, r) in recs.iter().enumerate() {
+            let earlier = &recs[..idx];
             let tag = format!("{:?}/{}#{}", r.config, r.problem_id, r.trial_no);
             if r.schema != TRIAL_SCHEMA {
                 v.push(format!("{tag}: unknown schema {}", r.schema));
@@ -172,7 +202,38 @@ pub fn check(m: &CampaignManifest, out: &Path) -> CheckReport {
                     r.wall_secs
                 ));
             }
-            if r.ran() {
+            if r.outcome == Outcome::Blocked && r.reason.as_deref() != Some(REASON_BLOCKED) {
+                v.push(format!(
+                    "{tag}: blocked outcome without the dependency_blocked reason"
+                ));
+            }
+            if r.reason.as_deref() == Some(REASON_BLOCKED) {
+                // blocked の前提不成立を、それ以前の記録から再計算して確かめる。
+                if r.outcome != Outcome::Blocked
+                    || r.tokens.is_some()
+                    || r.cost_micro_usd.is_some()
+                    || r.wall_secs != 0
+                    || !r.workspace.is_empty()
+                {
+                    v.push(format!(
+                        "{tag}: blocked trial must be outcome blocked with no usage or workspace"
+                    ));
+                }
+                if !matches!(dep_state(m, earlier, &r.problem_id), Dep::Failed(_)) {
+                    v.push(format!(
+                        "{tag}: blocked although no prerequisite had failed"
+                    ));
+                }
+            } else if r.ran() {
+                match dep_state(m, earlier, &r.problem_id) {
+                    Dep::Met => {}
+                    Dep::Failed(q) => v.push(format!(
+                        "{tag}: executed although prerequisite {q} did not pass (should be blocked)"
+                    )),
+                    Dep::Waiting => v.push(format!(
+                        "{tag}: executed before its prerequisites had finished"
+                    )),
+                }
                 if r.workspace.is_empty() || !ws_dirs.insert(r.workspace.clone()) {
                     v.push(format!(
                         "{tag}: workspace is missing or shared with another trial"
@@ -235,6 +296,7 @@ pub fn check(m: &CampaignManifest, out: &Path) -> CheckReport {
                     t.error,
                     t.timeout,
                     t.cancelled,
+                    t.blocked,
                     t.missing,
                 ];
                 let key = [
@@ -244,6 +306,7 @@ pub fn check(m: &CampaignManifest, out: &Path) -> CheckReport {
                     "error",
                     "timeout",
                     "cancelled",
+                    "blocked",
                     "missing",
                 ];
                 for (k, g) in key.iter().zip(got) {
@@ -290,6 +353,7 @@ pub fn recompute(m: &CampaignManifest, recs: &[TrialRecord]) -> Recomputed {
                     crate::aggregate::Outcome::Error => t.error += 1,
                     crate::aggregate::Outcome::Timeout => t.timeout += 1,
                     crate::aggregate::Outcome::Cancelled => t.cancelled += 1,
+                    crate::aggregate::Outcome::Blocked => t.blocked += 1,
                 },
             }
         }

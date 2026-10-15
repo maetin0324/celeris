@@ -32,7 +32,7 @@ fn row(m: &CampaignManifest, c: crate::manifest::ConfigId, t: &Totals) -> Value 
         "model_version": cfg.map(|x| x.model_version.as_str()),
         "policy_version": cfg.map(|x| x.policy_version.as_str()),
         "n": t.n, "passed": t.passed, "failed": t.failed, "error": t.error,
-        "timeout": t.timeout, "cancelled": t.cancelled, "missing": t.missing,
+        "timeout": t.timeout, "cancelled": t.cancelled, "blocked": t.blocked, "missing": t.missing,
         "failures": t.n - t.passed,
         "pass_rate": if t.n == 0 { Value::Null } else { json!(t.passed as f64 / t.n as f64) },
         "ran_trials": t.ran_trials,
@@ -45,7 +45,7 @@ fn row(m: &CampaignManifest, c: crate::manifest::ConfigId, t: &Totals) -> Value 
     })
 }
 
-const COLUMNS: [&str; 20] = [
+const COLUMNS: [&str; 21] = [
     "config",
     "harness",
     "model",
@@ -57,6 +57,7 @@ const COLUMNS: [&str; 20] = [
     "error",
     "timeout",
     "cancelled",
+    "blocked",
     "missing",
     "failures",
     "pass_rate",

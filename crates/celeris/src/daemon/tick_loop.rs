@@ -523,7 +523,18 @@ pub(crate) async fn tick_loop(
                     secrets_dir,
                     dispatcher.classification_board(),
                 ) {
-                    Ok(c) => c,
+                    Ok(c) => {
+                        if c.is_some() {
+                            tracing::info!(
+                                endpoint = %config.jev.endpoint,
+                                model_id = %config.jev.model_id,
+                                "jev: classification stage (re)built"
+                            );
+                        } else {
+                            tracing::info!("jev: classification stage disabled");
+                        }
+                        c
+                    }
                     Err(error) => {
                         tracing::warn!(%error, "jev: could not build the classifier; classification is off");
                         None

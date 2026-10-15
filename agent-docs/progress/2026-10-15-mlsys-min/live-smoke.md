@@ -50,3 +50,11 @@ updated: 2026-10-15
 
 ## 次の一手（人 / 運用セッション）
 分類を試みる dispatch が 1 件要る。最小は、ready になってから 1 tick 以上おいて dispatch される安い task（または既存 WU）を 1 件走らせ、その `routing_decided.lane_assist` を読む。`classifier_status` が `succeeded` なら実 API 検証済み、`fell_back_to_fixed{reason}` なら理由を記録。本 unit を再実行するとき、pilot など後続 WU が ready になる前に確認できる。有料の本測定は始めない。
+
+## 再実行 7（reload が config.jev を書き戻さない不具合の修正）
+- 原因（運用セッション調査）: `reload_providers`（crates/celeris/src/daemon/admin.rs）が `config.jev` を書き戻さず、tick_loop の `classify_built_for != Some(&config.jev)` が一致したまま分類段が作り直されなかった。
+- 修正: admin.rs に `config.jev = new_config.jev;`。試験 `reload_writes_back_the_jev_section_so_the_next_tick_builds_the_stage`（[jev] enabled=false で起動→true に書き換え→reload→`ClassifyTick::build` が Some）。
+- ログ: tick_loop.rs が分類段の（再）作成・無効化を info 1 行、classify_stage.rs が分類ごとの結果（`jev_ok` 等 / `fell_back_to_fixed` と reason）を info 1 行出す。鍵の値・入力本文は出さない。
+- 作業ツリーの base に jev-wire が無かったため、親ブランチ celeris/01M4Z1QJX5FYBXTPSEF0WKB1CK を merge してから修正した。
+- 検証: `cargo fmt --all -- --check` exit 0 / `cargo clippy --workspace -- -D warnings` exit 0 / `bash scripts/dev/test-parallel.sh` exit 0（passed 5366, failed 0）/ 対象試験 24 passed。
+- 実経路（実 Jev 分類の成否・fell_back_to_fixed の理由・待ち→通知→登録→再開）はこの run では観測していない = **未検証**のまま（上の表を維持）。release・昇格は運用セッション。昇格後、ready から 1 tick 以上おいて dispatch された WU の `routing_decided.lane_assist.classifier_status` と、daemon ログの `jev: classification ...` 行を確認する。

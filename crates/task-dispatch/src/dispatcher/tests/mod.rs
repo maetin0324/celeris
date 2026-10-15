@@ -2900,6 +2900,7 @@ mod cron_jobs;
 mod git_workspace;
 mod integration_check_progress;
 mod integration_ready_race;
+mod mlsys_mock_e2e;
 mod planning_and_gate;
 mod review;
 mod review_route;

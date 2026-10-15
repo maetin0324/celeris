@@ -1353,6 +1353,10 @@ pub struct Dispatcher {
     /// ADR-0032 D4/D5: GUI 発の接続（`POST /clusters/{id}/connect`）が進行中のクラスタ id
     /// （celeris が `set_cluster_connect_pending` で反映する。D3 の自動接続とは別物）。
     connect_pending_clusters: std::collections::HashSet<String>,
+    /// ADR 2026-10-15-mlsys-min-decision-assisted D4: credential 待ちの検証・再開（`credential_resume`）。
+    /// 未設定なら何もしない。検証は別 thread（tick は DB を見るだけ）。
+    credential_resumer: Option<Arc<crate::credential_resume::CredentialResumer>>,
+    credential_busy: Arc<std::sync::atomic::AtomicBool>,
     /// 壁時計の Unix 秒（テストで差し替えられるようにした関数。既定は実時刻）。
     now_unix_fn: Arc<dyn Fn() -> i64 + Send + Sync>,
     /// ADR-0040 D4（Phase 47）: 新しい仕事を始めてよいか。`false`（= draining）のときは
@@ -1611,6 +1615,8 @@ impl Dispatcher {
             cluster_disconnect_info: HashMap::new(),
             cluster_master_watcher: None,
             connect_pending_clusters: std::collections::HashSet::new(),
+            credential_resumer: None,
+            credential_busy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             now_unix_fn: Arc::new(real_now_unix),
             accepting_new_work: true,
             task_workspaces: HashMap::new(),
@@ -1768,6 +1774,45 @@ impl Dispatcher {
     /// 判断には使わない（ここから LLM を呼ぶこともない）。
     pub fn store(&self) -> Arc<dyn TaskStore> {
         Arc::clone(&self.store)
+    }
+
+    /// credential 待ちの検証・再開を有効にする（daemon の起動時に 1 回。無ければ待ちは人が戻すまで動かない）。
+    pub fn set_credential_resumer(
+        &mut self,
+        resumer: Arc<crate::credential_resume::CredentialResumer>,
+    ) {
+        self.credential_resumer = Some(resumer);
+    }
+
+    /// tick ごと: 開いている credential 待ちがあるときだけ、別 thread で reconcile・検証・再開を 1 回回す
+    /// （同時に 1 つまで。tick は DB の一覧を 1 回読むだけで、ネットワークも LLM も使わない）。
+    fn tick_credential_waits(&mut self) {
+        use std::sync::atomic::Ordering;
+        let Some(resumer) = self.credential_resumer.clone() else {
+            return;
+        };
+        if !self.accepting_new_work || !resumer.has_open_waits() {
+            return;
+        }
+        if self.credential_busy.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let busy = Arc::clone(&self.credential_busy);
+        std::thread::spawn(move || {
+            match resumer.process() {
+                Ok(report) if report.resumed + report.rejected + report.cancelled > 0 => {
+                    tracing::info!(
+                        resumed = report.resumed,
+                        rejected = report.rejected,
+                        cancelled = report.cancelled,
+                        "credential waits processed"
+                    );
+                }
+                Ok(_) => {}
+                Err(e) => tracing::warn!(error = %e, "credential wait processing failed"),
+            }
+            busy.store(false, Ordering::SeqCst);
+        });
     }
 
     /// テスト用: 壁時計の Unix 秒を差し替える（ADR-0024 D3 のスコア計算・cooldown の期限に使う）。
@@ -2203,6 +2248,7 @@ impl Dispatcher {
             }
             Err(e) => tracing::warn!(error = %e, "failed to expire browser waits"),
         }
+        self.tick_credential_waits();
         report.reclaimed = self.reclaim_expired_leases()?;
         // ADR-0040 付記（2026-10-04、WU 検査の引き継ぎ）D2: draining の旧 instance が手を離した WU の検査を拾う
         // （照合より前。照合が「持ち主の居ない run」として requeue しないように）。

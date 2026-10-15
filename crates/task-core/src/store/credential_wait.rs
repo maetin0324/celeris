@@ -394,6 +394,22 @@ impl SqliteStore {
         Ok(n > 0)
     }
 
+    /// 再開の claim を取り消す（`resumed → verified`）。claim の後の再キューが失敗したときだけ使い、
+    /// 次の tick で再び claim できるようにする。
+    pub fn credential_wait_release_claim(
+        &self,
+        work_unit_id: &str,
+        secret_id: &str,
+        now: OffsetDateTime,
+    ) -> Result<bool, StoreError> {
+        let n = self.lock()?.execute(
+            "UPDATE credential_waits SET state = 'verified', resumed_at = NULL, updated_at = ?3 \
+             WHERE work_unit_id = ?1 AND secret_id = ?2 AND state = 'resumed'",
+            params![work_unit_id, secret_id, format_rfc3339(now)?],
+        )?;
+        Ok(n > 0)
+    }
+
     /// task の cancel。開いている wait を `cancelled` にする（以後 claim_resume は成功しない）。件数を返す。
     pub fn credential_wait_cancel(
         &self,

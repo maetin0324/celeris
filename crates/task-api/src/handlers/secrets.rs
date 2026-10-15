@@ -7,9 +7,13 @@ use axum::http::{HeaderMap, StatusCode};
 use crate::middleware::require_admin;
 use crate::problem::ApiProblem;
 use crate::state::ApiState;
-use crate::types::{SecretList, SecretPutBody, SecretPutResult, SecretView};
+use crate::types::{SecretList, SecretPutBody, SecretPutResult, SecretUse, SecretView};
 
 use super::{ApiResult, Params, json_response, no_query, now_rfc3339, read_json};
+
+/// 設定の `env_from_secrets` に現れなくても一覧に出す既知の秘密 id と用途。
+/// 登録は連携の有効化で、測定の予算や無制限の課金の承認ではない。
+const KNOWN_SECRETS: &[(&str, &str)] = &[("jev_api_key", "jev")];
 
 // ---- 秘密（API キー等）の管理（ADR-0030、Phase 20。すべて管理系: `token_file` 未設定でも 401） ----
 
@@ -54,6 +58,21 @@ pub(super) async fn secrets_list(
             used_by: used_by.clone(),
         })
         .collect();
+    // 連携が決め打ちで使う id（設定に現れなくても「鍵を入れる場所」を出す。ADR 2026-10-15 D4）。
+    for (known, used_by) in KNOWN_SECRETS {
+        if !present.contains(known) && !state.inner.secret_usage.contains_key(*known) {
+            missing.push(SecretView {
+                id: (*known).to_string(),
+                updated_at: None,
+                fingerprint: None,
+                used_by: vec![SecretUse {
+                    scope: "provider".to_string(),
+                    name: (*used_by).to_string(),
+                    env: String::new(),
+                }],
+            });
+        }
+    }
     missing.sort_by(|a, b| a.id.cmp(&b.id));
     items.extend(missing);
     Ok(json_response(
@@ -101,6 +120,15 @@ pub(super) async fn put_secret(
     // trim（末尾改行を落とす）を経た値から計算する。
     let fingerprint = crate::secrets::fingerprint(crate::secrets::trim_secret_value(&put.value));
     let updated_at = now_rfc3339();
+    // ADR 2026-10-15 D4: 保存完了を durable event（`secret_stored`。id と fingerprint のみ）にする。記録に失敗しても
+    // 保存は成功のまま（dispatcher の reconcile が fingerprint の食い違いから拾う）。
+    if let Err(e) = state.inner.store.credential_record_secret_saved(
+        &id,
+        &fingerprint,
+        time::OffsetDateTime::now_utc(),
+    ) {
+        tracing::warn!(secret_id = %id, error = %e, "could not record secret_stored; reconcile will recover");
+    }
     tracing::info!(who = "admin", op = "secret_put", secret_id = %id, "admin: secret stored");
     Ok(json_response(
         StatusCode::OK,

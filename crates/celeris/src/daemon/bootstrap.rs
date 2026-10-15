@@ -572,6 +572,21 @@ pub fn build_dispatcher(
         }
     }
     dispatcher.set_llm_route_registry(llm_routes);
+    if let Some(secrets) = config.secrets.as_ref() {
+        // ADR 2026-10-15-mlsys-min-decision-assisted D4: 秘密の登録で credential 待ちを検証し、同じ WU を再開する。
+        let resumer = task_dispatch::credential_resume::CredentialResumer::new(
+            sqlite.clone(),
+            Arc::new(task_dispatch::credential_resume::FileSecretSource {
+                dir: secrets.dir.clone(),
+            }),
+            Arc::new(OffsetDateTime::now_utc),
+        )
+        .with_verifier(
+            "jev",
+            Arc::new(task_dispatch::credential_resume::JevVerifier::openrouter_default()),
+        );
+        dispatcher.set_credential_resumer(Arc::new(resumer));
+    }
     dispatcher.set_harness_adapters(build_harness_adapters(config)?);
     // ADR 2026-10-08 account-concurrency-limits §(d)(e): implicit accounts are the declared sources
     // without an account pool; forget limits of implicit accounts no such source has any more.

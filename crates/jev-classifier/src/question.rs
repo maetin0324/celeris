@@ -1,4 +1,3 @@
-
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -101,12 +100,20 @@ pub fn questions(with_failure: bool) -> Value {
     );
     q.insert(
         Q_WORK_NATURE.into(),
-        choice("What is the main nature of the work?", WorkNature::ALL, WorkNature::as_str),
+        choice(
+            "What is the main nature of the work?",
+            WorkNature::ALL,
+            WorkNature::as_str,
+        ),
     );
     if with_failure {
         q.insert(
             Q_FAILURE_KIND.into(),
-            choice("What kind of failure is the recent_failure?", FailureKind::ALL, FailureKind::as_str),
+            choice(
+                "What kind of failure is the recent_failure?",
+                FailureKind::ALL,
+                FailureKind::as_str,
+            ),
         );
     }
     Value::Object(q)
@@ -128,14 +135,20 @@ struct RawAnswer {
 fn raw_answer(v: &Value) -> Option<RawAnswer> {
     let label = match v {
         Value::String(s) => s.clone(),
-        Value::Object(o) => ["choice", "answer", "selected"].iter().find_map(|k| o.get(*k)?.as_str().map(String::from))?,
+        Value::Object(o) => ["choice", "answer", "selected"]
+            .iter()
+            .find_map(|k| o.get(*k)?.as_str().map(String::from))?,
         _ => return None,
     };
     let probability = v
         .get("probabilities")
         .and_then(|p| p.get(&label))
         .and_then(Value::as_f64);
-    Some(RawAnswer { label, probability, confidence: v.get("confidence").and_then(Value::as_f64) })
+    Some(RawAnswer {
+        label,
+        probability,
+        confidence: v.get("confidence").and_then(Value::as_f64),
+    })
 }
 
 fn typed<T>(
@@ -143,9 +156,16 @@ fn typed<T>(
     name: &str,
     parse: fn(&str) -> Option<T>,
 ) -> Result<Answer<T>, ParseError> {
-    let raw = answers.get(name).and_then(raw_answer).ok_or(ParseError::Invalid)?;
+    let raw = answers
+        .get(name)
+        .and_then(raw_answer)
+        .ok_or(ParseError::Invalid)?;
     let value = parse(&raw.label).ok_or(ParseError::UnknownLabel)?;
-    Ok(Answer { value, probability: raw.probability, classification_confidence: raw.confidence })
+    Ok(Answer {
+        value,
+        probability: raw.probability,
+        classification_confidence: raw.confidence,
+    })
 }
 
 pub struct Meta<'a> {
@@ -156,9 +176,16 @@ pub struct Meta<'a> {
 
 /// 応答 body を `Classification` にする。想定形: `{model, answers:{name:{choice,probabilities,confidence}}, usage:{cost}}`
 /// （live 呼び出し前に公式の形を再確認する。進捗の未解決事項）。
-pub fn parse_response(body: &str, with_failure: bool, meta: Meta<'_>) -> Result<Classification, ParseError> {
+pub fn parse_response(
+    body: &str,
+    with_failure: bool,
+    meta: Meta<'_>,
+) -> Result<Classification, ParseError> {
     let v: Value = serde_json::from_str(body).map_err(|_| ParseError::Invalid)?;
-    let answers = v.get("answers").and_then(Value::as_object).ok_or(ParseError::Invalid)?;
+    let answers = v
+        .get("answers")
+        .and_then(Value::as_object)
+        .ok_or(ParseError::Invalid)?;
     let failure_kind = if with_failure {
         Some(typed(answers, Q_FAILURE_KIND, FailureKind::parse)?)
     } else {
@@ -169,20 +196,26 @@ pub fn parse_response(body: &str, with_failure: bool, meta: Meta<'_>) -> Result<
         work_nature: typed(answers, Q_WORK_NATURE, WorkNature::parse)?,
         failure_kind,
         model_snapshot: v.get("model").and_then(Value::as_str).map(String::from),
-        cost_usd: v.get("usage").and_then(|u| u.get("cost")).and_then(Value::as_f64),
+        cost_usd: v
+            .get("usage")
+            .and_then(|u| u.get("cost"))
+            .and_then(Value::as_f64),
         model_id: meta.model_id.to_string(),
         schema_version: meta.schema_version.to_string(),
         prompt_version: meta.prompt_version.to_string(),
     })
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn meta() -> Meta<'static> {
-        Meta { model_id: "typesafe/jev-1.14", schema_version: "s", prompt_version: "p" }
+        Meta {
+            model_id: "typesafe/jev-1.14",
+            schema_version: "s",
+            prompt_version: "p",
+        }
     }
 
     const OK: &str = r#"{"model":"typesafe/jev-1.14-20261001","answers":{
@@ -196,7 +229,10 @@ mod tests {
         assert_eq!(c.specificity.probability, Some(0.8));
         assert_eq!(c.work_nature.value, WorkNature::Design);
         assert_eq!(c.cost_usd, Some(0.0002));
-        assert_eq!(c.model_snapshot.as_deref(), Some("typesafe/jev-1.14-20261001"));
+        assert_eq!(
+            c.model_snapshot.as_deref(),
+            Some("typesafe/jev-1.14-20261001")
+        );
     }
 
     #[test]
@@ -208,17 +244,29 @@ mod tests {
 
     #[test]
     fn invalid_and_unknown_are_distinguished() {
-        assert_eq!(parse_response("not json", false, meta()).err(), Some(ParseError::Invalid));
-        assert_eq!(parse_response(r#"{"answers":{}}"#, false, meta()).err(), Some(ParseError::Invalid));
+        assert_eq!(
+            parse_response("not json", false, meta()).err(),
+            Some(ParseError::Invalid)
+        );
+        assert_eq!(
+            parse_response(r#"{"answers":{}}"#, false, meta()).err(),
+            Some(ParseError::Invalid)
+        );
         let unk = OK.replace("\"specified\",\"prob", "\"weird\",\"prob");
-        assert_eq!(parse_response(&unk, false, meta()).err(), Some(ParseError::UnknownLabel));
+        assert_eq!(
+            parse_response(&unk, false, meta()).err(),
+            Some(ParseError::UnknownLabel)
+        );
     }
 
     #[test]
     fn failure_question_only_when_asked() {
         assert!(questions(false).get(Q_FAILURE_KIND).is_none());
         assert!(questions(true).get(Q_FAILURE_KIND).is_some());
-        assert_eq!(parse_response(OK, true, meta()).err(), Some(ParseError::Invalid));
+        assert_eq!(
+            parse_response(OK, true, meta()).err(),
+            Some(ParseError::Invalid)
+        );
     }
 
     #[test]

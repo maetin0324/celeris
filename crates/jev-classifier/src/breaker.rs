@@ -18,7 +18,11 @@ struct State {
 
 impl CircuitBreaker {
     pub fn new(threshold: u32, cooldown: Duration) -> Self {
-        Self { threshold, cooldown, state: Mutex::new(State::default()) }
+        Self {
+            threshold,
+            cooldown,
+            state: Mutex::new(State::default()),
+        }
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, State> {

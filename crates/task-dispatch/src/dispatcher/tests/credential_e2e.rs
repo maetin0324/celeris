@@ -15,10 +15,10 @@ use crate::credential_resume::{
 };
 use crate::dispatcher::{CredentialGate, CredentialGates};
 
-const DUMMY: &str = "sk-dummy-e2e-never-leak-7731";
+pub(super) const DUMMY: &str = "sk-dummy-e2e-never-leak-7731";
 const WRONG: &str = "sk-wrong-e2e-never-leak-0042";
 
-struct Scripted {
+pub(super) struct Scripted {
     outcomes: Mutex<VecDeque<VerifyOutcome>>,
     calls: AtomicUsize,
     /// 検証 adapter が受け取った値（mock の内側にだけ残る。外へは出ない）。
@@ -26,14 +26,14 @@ struct Scripted {
 }
 
 impl Scripted {
-    fn new(outcomes: &[VerifyOutcome]) -> Arc<Self> {
+    pub(super) fn new(outcomes: &[VerifyOutcome]) -> Arc<Self> {
         Arc::new(Self {
             outcomes: Mutex::new(outcomes.iter().copied().collect()),
             calls: AtomicUsize::new(0),
             seen: Mutex::new(Vec::new()),
         })
     }
-    fn calls(&self) -> usize {
+    pub(super) fn calls(&self) -> usize {
         self.calls.load(Ordering::SeqCst)
     }
 }
@@ -50,15 +50,15 @@ impl CredentialVerifier for Scripted {
     }
 }
 
-struct E2e {
-    dir: tempfile::TempDir,
-    secrets: PathBuf,
-    sqlite: Arc<SqliteStore>,
-    clock: Arc<Mutex<OffsetDateTime>>,
+pub(super) struct E2e {
+    pub(super) dir: tempfile::TempDir,
+    pub(super) secrets: PathBuf,
+    pub(super) sqlite: Arc<SqliteStore>,
+    pub(super) clock: Arc<Mutex<OffsetDateTime>>,
 }
 
 impl E2e {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         let dir = tempfile::tempdir().unwrap();
         let secrets = dir.path().join("secrets");
         std::fs::create_dir_all(&secrets).unwrap();
@@ -76,12 +76,12 @@ impl E2e {
         }
     }
 
-    fn store(&self) -> Arc<dyn TaskStore> {
+    pub(super) fn store(&self) -> Arc<dyn TaskStore> {
         self.sqlite.clone()
     }
 
     /// daemon の（再）起動: 新しい Dispatcher（gate 配線）と新しい resumer を作る。
-    fn dispatcher(&self) -> Dispatcher {
+    pub(super) fn dispatcher(&self) -> Dispatcher {
         let mut d = pool_dispatcher(
             self.store(),
             done_adapter(),
@@ -104,7 +104,7 @@ impl E2e {
         d
     }
 
-    fn resumer(&self, v: &Arc<Scripted>) -> CredentialResumer {
+    pub(super) fn resumer(&self, v: &Arc<Scripted>) -> CredentialResumer {
         let clock = self.clock.clone();
         CredentialResumer::new(
             self.sqlite.clone(),
@@ -116,12 +116,12 @@ impl E2e {
         .with_verifier("jev", v.clone())
     }
 
-    fn advance(&self, secs: i64) {
+    pub(super) fn advance(&self, secs: i64) {
         *self.clock.lock().unwrap() += time::Duration::seconds(secs);
     }
 
     /// 計画つき task（unit `a`: 待つ・`b`: 独立した兄弟）。
-    fn task(&self) -> (Task, WorkUnitRow, WorkUnitRow) {
+    pub(super) fn task(&self) -> (Task, WorkUnitRow, WorkUnitRow) {
         let task = new_task(self.dir.path(), Check::Reviewer, 1);
         self.sqlite.insert(&task).unwrap();
         let a = unit(&task, "a", 0);
@@ -132,7 +132,11 @@ impl E2e {
         (task, a, b)
     }
 
-    fn unit(&self, task: &Task, key: &str) -> (WorkUnitStatus, Option<WorkUnitBlockedReason>) {
+    pub(super) fn unit(
+        &self,
+        task: &Task,
+        key: &str,
+    ) -> (WorkUnitStatus, Option<WorkUnitBlockedReason>) {
         let u = self
             .sqlite
             .work_units_for(task.id)
@@ -144,7 +148,7 @@ impl E2e {
     }
 
     /// PUT /api/v1/secrets/{id} の効果: 値を secrets_dir に置き、`secret_stored`（id と fingerprint のみ）を記録する。
-    fn put_secret(&self, value: &str) {
+    pub(super) fn put_secret(&self, value: &str) {
         std::fs::write(self.secrets.join(SECRET), format!("{value}\n")).unwrap();
         self.sqlite
             .credential_record_secret_saved(
@@ -160,7 +164,7 @@ impl E2e {
         std::fs::write(self.secrets.join(SECRET), format!("{value}\n")).unwrap();
     }
 
-    fn inbox(&self) -> Vec<task_ops::human_inbox::InboxItem> {
+    pub(super) fn inbox(&self) -> Vec<task_ops::human_inbox::InboxItem> {
         let ctx = task_ops::view::ViewContext {
             workspace_roots: task_core::local_machine::WorkspaceRoots::new(
                 self.dir.path().to_path_buf(),
@@ -185,7 +189,7 @@ impl E2e {
         .collect()
     }
 
-    fn resumed_events(&self, task: &Task) -> usize {
+    pub(super) fn resumed_events(&self, task: &Task) -> usize {
         self.sqlite
             .events_for(task.id)
             .unwrap()

@@ -9,8 +9,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use jev_classifier::{
-    ApiKey, ApiKeyProvider, ClassifyInput, ClassifyOutcome, Clock, FallbackReason, JevClassifier, JevConfig, JevError,
-    Sleeper,
+    ApiKey, ApiKeyProvider, ClassifyInput, ClassifyOutcome, Clock, FallbackReason, JevClassifier,
+    JevConfig, JevError, Sleeper,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -18,7 +18,8 @@ use tokio::net::TcpListener;
 const SECRET: &str = "sk-or-v1-FAKE-SECRET-0123456789abcdef";
 const OK: &str = r#"{"model":"typesafe/jev-1.14","answers":{"specificity":{"choice":"specified"},"work_nature":{"choice":"implementation"}}}"#;
 const SCHEMA_BAD: &str = r#"{"answers":{"specificity":"specified"}}"#;
-const UNKNOWN_LABEL: &str = r#"{"answers":{"specificity":{"choice":"weird"},"work_nature":{"choice":"implementation"}}}"#;
+const UNKNOWN_LABEL: &str =
+    r#"{"answers":{"specificity":{"choice":"weird"},"work_nature":{"choice":"implementation"}}}"#;
 
 /// fake server の応答。`Delay` は server 側の注入フック（遅延してから応答する）。
 #[derive(Clone)]
@@ -42,7 +43,10 @@ impl Fake {
         self.count.load(Ordering::SeqCst)
     }
     fn requests(&self) -> Vec<String> {
-        self.requests.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.requests
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 }
 
@@ -88,7 +92,9 @@ async fn serve(script: Vec<Reply>) -> Fake {
                         }
                     }
                 }
-                r3.lock().unwrap_or_else(|e| e.into_inner()).push(String::from_utf8_lossy(&buf[..n]).to_string());
+                r3.lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push(String::from_utf8_lossy(&buf[..n]).to_string());
                 c3.fetch_add(1, Ordering::SeqCst);
                 let mut reply = reply;
                 while let Reply::Delay(d, next) = reply {
@@ -105,7 +111,11 @@ async fn serve(script: Vec<Reply>) -> Fake {
             });
         }
     });
-    Fake { url: format!("http://{addr}/decisions"), requests, count }
+    Fake {
+        url: format!("http://{addr}/decisions"),
+        requests,
+        count,
+    }
 }
 
 struct Key(Option<&'static str>);
@@ -158,7 +168,10 @@ fn rig(url: &str, tweak: impl FnOnce(&mut JevConfig)) -> Rig {
 }
 
 fn input(text: &str) -> ClassifyInput {
-    ClassifyInput { instruction: text.into(), ..Default::default() }
+    ClassifyInput {
+        instruction: text.into(),
+        ..Default::default()
+    }
 }
 
 fn body_of(req: &str) -> &str {
@@ -173,18 +186,35 @@ fn fixed(reason: FallbackReason) -> Result<ClassifyOutcome, JevError> {
 async fn success_returns_typed_classification_with_one_request() {
     let f = serve(vec![json(200, OK)]).await;
     let r = rig(&f.url, |_| {});
-    let out = r.c.classify(&input("add a cli flag"), &Key(Some(SECRET))).await.expect("ok");
-    let ClassifyOutcome::Classified { classification, cached } = out else { panic!("expected Classified") };
+    let out =
+        r.c.classify(&input("add a cli flag"), &Key(Some(SECRET)))
+            .await
+            .expect("ok");
+    let ClassifyOutcome::Classified {
+        classification,
+        cached,
+    } = out
+    else {
+        panic!("expected Classified")
+    };
     assert!(!cached);
     assert_eq!(classification.model_id, "typesafe/jev-1.14");
     assert_eq!(f.count(), 1);
     let req = &f.requests()[0];
-    assert!(req.to_ascii_lowercase().contains(&format!("authorization: bearer {SECRET}").to_ascii_lowercase()));
+    assert!(
+        req.to_ascii_lowercase()
+            .contains(&format!("authorization: bearer {SECRET}").to_ascii_lowercase())
+    );
 }
 
 #[tokio::test]
 async fn invalid_schema_retries_then_falls_back_to_fixed() {
-    let f = serve(vec![json(200, "not json"), json(200, SCHEMA_BAD), json(200, SCHEMA_BAD)]).await;
+    let f = serve(vec![
+        json(200, "not json"),
+        json(200, SCHEMA_BAD),
+        json(200, SCHEMA_BAD),
+    ])
+    .await;
     let r = rig(&f.url, |_| {});
     let out = r.c.classify(&input("a"), &Key(Some(SECRET))).await;
     assert_eq!(out, fixed(FallbackReason::InvalidResponse));
@@ -203,10 +233,18 @@ async fn unknown_classification_retries_then_falls_back_to_fixed() {
 
 #[tokio::test]
 async fn invalid_then_valid_recovers_within_retry_bound() {
-    let f = serve(vec![json(200, SCHEMA_BAD), json(200, UNKNOWN_LABEL), json(200, OK)]).await;
+    let f = serve(vec![
+        json(200, SCHEMA_BAD),
+        json(200, UNKNOWN_LABEL),
+        json(200, OK),
+    ])
+    .await;
     let r = rig(&f.url, |_| {});
     let out = r.c.classify(&input("a"), &Key(Some(SECRET))).await;
-    assert!(matches!(out, Ok(ClassifyOutcome::Classified { cached: false, .. })));
+    assert!(matches!(
+        out,
+        Ok(ClassifyOutcome::Classified { cached: false, .. })
+    ));
     assert_eq!(f.count(), 3);
 }
 
@@ -232,9 +270,19 @@ async fn auth_errors_are_typed_without_retry_or_breaker_count() {
         // breaker 閾値 2 を超える回数を呼んでも開かない（計数されない）。
         for _ in 0..4 {
             let out = r.c.classify(&input("a"), &Key(Some(SECRET))).await;
-            assert_eq!(out, Err(JevError::Auth { status, secret_id: "jev_api_key".into() }));
+            assert_eq!(
+                out,
+                Err(JevError::Auth {
+                    status,
+                    secret_id: "jev_api_key".into()
+                })
+            );
         }
-        assert_eq!(f.count(), 4, "every call reached the server: no retry, breaker never opened");
+        assert_eq!(
+            f.count(),
+            4,
+            "every call reached the server: no retry, breaker never opened"
+        );
         assert_eq!(r.sleeper.calls(), 0);
     }
 }
@@ -261,22 +309,44 @@ async fn breaker_opens_stops_requests_then_half_open_after_cooldown() {
     let f = serve(vec![json(503, "{}")]).await;
     let r = rig(&f.url, |_| {});
     // 閾値 2: classify 2 回の連続失敗で開く（1 回 = 3 要求）。
-    assert_eq!(r.c.classify(&input("a"), &Key(Some(SECRET))).await, fixed(FallbackReason::ServerError(503)));
-    assert_eq!(r.c.classify(&input("b"), &Key(Some(SECRET))).await, fixed(FallbackReason::ServerError(503)));
+    assert_eq!(
+        r.c.classify(&input("a"), &Key(Some(SECRET))).await,
+        fixed(FallbackReason::ServerError(503))
+    );
+    assert_eq!(
+        r.c.classify(&input("b"), &Key(Some(SECRET))).await,
+        fixed(FallbackReason::ServerError(503))
+    );
     assert_eq!(f.count(), 6);
     // 開いている間は server へ要求が飛ばない。
     for t in ["c", "d", "e"] {
-        assert_eq!(r.c.classify(&input(t), &Key(Some(SECRET))).await, fixed(FallbackReason::BreakerOpen));
+        assert_eq!(
+            r.c.classify(&input(t), &Key(Some(SECRET))).await,
+            fixed(FallbackReason::BreakerOpen)
+        );
     }
     assert_eq!(f.count(), 6, "no requests while open");
     r.clock.0.store(59, Ordering::SeqCst);
-    assert_eq!(r.c.classify(&input("f"), &Key(Some(SECRET))).await, fixed(FallbackReason::BreakerOpen));
+    assert_eq!(
+        r.c.classify(&input("f"), &Key(Some(SECRET))).await,
+        fixed(FallbackReason::BreakerOpen)
+    );
     assert_eq!(f.count(), 6);
     // cooldown 後の半開: 試行が server へ届く。失敗すれば直ちに再び開く。
     r.clock.0.store(61, Ordering::SeqCst);
-    assert_eq!(r.c.classify(&input("g"), &Key(Some(SECRET))).await, fixed(FallbackReason::ServerError(503)));
-    assert_eq!(f.count(), 9, "half-open probe (1 + retries) reached the server");
-    assert_eq!(r.c.classify(&input("h"), &Key(Some(SECRET))).await, fixed(FallbackReason::BreakerOpen));
+    assert_eq!(
+        r.c.classify(&input("g"), &Key(Some(SECRET))).await,
+        fixed(FallbackReason::ServerError(503))
+    );
+    assert_eq!(
+        f.count(),
+        9,
+        "half-open probe (1 + retries) reached the server"
+    );
+    assert_eq!(
+        r.c.classify(&input("h"), &Key(Some(SECRET))).await,
+        fixed(FallbackReason::BreakerOpen)
+    );
     assert_eq!(f.count(), 9);
 }
 
@@ -288,7 +358,10 @@ async fn half_open_success_closes_breaker() {
     let r = rig(&f.url, |_| {});
     let _ = r.c.classify(&input("a"), &Key(Some(SECRET))).await;
     let _ = r.c.classify(&input("b"), &Key(Some(SECRET))).await;
-    assert_eq!(r.c.classify(&input("c"), &Key(Some(SECRET))).await, fixed(FallbackReason::BreakerOpen));
+    assert_eq!(
+        r.c.classify(&input("c"), &Key(Some(SECRET))).await,
+        fixed(FallbackReason::BreakerOpen)
+    );
     r.clock.0.store(61, Ordering::SeqCst);
     let out = r.c.classify(&input("d"), &Key(Some(SECRET))).await;
     assert!(matches!(out, Ok(ClassifyOutcome::Classified { .. })));
@@ -317,7 +390,10 @@ async fn api_key_never_appears_in_errors_logs_or_request_body() {
     for status in [401u16, 403] {
         let f = serve(vec![json(status, &echo)]).await;
         let r = rig(&f.url, |_| {});
-        let err = r.c.classify(&input("a"), &Key(Some(SECRET))).await.expect_err("auth");
+        let err =
+            r.c.classify(&input("a"), &Key(Some(SECRET)))
+                .await
+                .expect_err("auth");
         let shown = format!("{err} {err:?} {:?}", r.c);
         assert!(!shown.contains(SECRET), "secret in error output: {shown}");
         assert!(shown.contains("jev_api_key"), "secret id is reported");
@@ -341,5 +417,8 @@ async fn long_input_is_truncated_before_sending() {
         ..Default::default()
     };
     let _ = r.c.classify(&i, &Key(Some(SECRET))).await;
-    assert!(body_of(&f.requests()[0]).len() < 40_000, "payload is bounded");
+    assert!(
+        body_of(&f.requests()[0]).len() < 40_000,
+        "payload is bounded"
+    );
 }

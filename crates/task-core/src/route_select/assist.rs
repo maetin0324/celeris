@@ -154,7 +154,12 @@ pub fn assist_lane(input: &AssistInput<'_>, available: impl Fn(Tier) -> bool) ->
             if available(t) {
                 make(t, Some(choice), decided.basis, None)
             } else {
-                make(input.base, Some(choice), decided.basis, Some("availability"))
+                make(
+                    input.base,
+                    Some(choice),
+                    decided.basis,
+                    Some("availability"),
+                )
             }
         }
         _ => make(input.base, Some(choice), decided.basis, Some("ceiling")),

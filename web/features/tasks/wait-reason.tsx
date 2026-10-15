@@ -39,7 +39,7 @@ export function waitReason(wait: TaskWait): string {
     case "human_gate":
       return humanGateReason(wait.gate, wait.stage);
     case "units_blocked":
-      return "WU 停止中";
+      return wait.reason === "waiting_for_auth" ? "API キーの登録待ち（登録で自動再開）" : "WU 停止中";
     case "capacity":
       return "枠満杯";
     case "unroutable":

@@ -61,6 +61,8 @@ describe("inbox model", () => {
     const task = { id: "T 1", title: "x", kind: "task", status: "failed", actions: [] } as unknown as InboxItem["task"];
     expect(nativeTarget(item({ kind: "integration_request", task })).href).toBe("/tasks/T%201");
     expect(needsNativeScreen(item({ kind: "cluster_login" }))).toBe(true);
+    expect(needsNativeScreen(item({ kind: "credential_wait" }))).toBe(true);
+    expect(isInboxKind("credential_wait")).toBe(true);
     expect(needsNativeScreen(item({ options: [] }))).toBe(true);
     expect(needsNativeScreen(item({}))).toBe(false);
   });

@@ -1,4 +1,5 @@
 //! Pure source/model selection rules (ADR 2026-10-11 D2/D3).
+pub mod assist;
 pub mod availability;
 pub mod escalation;
 pub mod evidence;
@@ -7,6 +8,10 @@ pub mod policy;
 pub mod stage;
 pub mod trace;
 
+pub use assist::{
+    AssistInput, AssistOutcome, ClassificationEntry, ClassifierStatus, LaneAssistRecord,
+    REAL_API_VERIFIED, assist_lane,
+};
 pub use availability::{
     Availability, AvailabilityInput, AvailabilitySplit, Remaining, UnavailableReason, availability,
     split_by_availability,
@@ -33,3 +38,6 @@ pub use trace::{
 
 #[cfg(test)]
 mod mlsys_policy_tests;
+
+#[cfg(test)]
+mod assist_tests;

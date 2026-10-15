@@ -52,6 +52,8 @@ pub use dispatcher::{
 };
 /// ADR 2026-10-11 llm-source-harness-selection: launch inputs of an admitted route.
 pub use dispatcher::{RouteLaunchError, account_adapter_for_source_kind, selected_llm_route};
+/// wire-mode: 分類段（daemon）が書き、dispatcher の lane 層が読む board。
+pub use dispatcher::{BoardItem, ClassificationBoard, CredentialGate, lane_facts};
 pub use policy::{AdapterId, ProviderId, ProviderOutcome};
 pub use review::{
     PLAN_FILE_NAME, PlanCheck, REVIEW_FILE_NAME, ReviewExtras, ReviewOutcome, ReviewSubject,

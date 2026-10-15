@@ -19,6 +19,9 @@
 
 pub(crate) mod adapters;
 pub(crate) mod admin;
+// 分類段。JevClassifier の構築と起動は live smoke の承認後の unit で配線する（進捗 classify-stage.md）。
+#[allow(dead_code)]
+pub(crate) mod classify_stage;
 pub(crate) mod api;
 pub(crate) mod bootstrap;
 pub(crate) mod browser_ledger_path;

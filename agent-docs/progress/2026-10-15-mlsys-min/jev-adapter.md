@@ -69,3 +69,22 @@ Decisions API 固有の別 header の記載は見つかっていない。実装�
 
 - credential-wait 接続点: 分類段が `ApiKeyProvider`（secrets_dir 読み出し）を実装し、`JevError::Auth` / `KeyMissing` を `waiting_for_auth`（ADR D4）へ渡す。その間の通常作業は `FallbackToFixed` 相当の fixed 方策で進める。
 - live smoke は別 unit で（有料測定のため人の承認の下で。1 件の最小要求で 401 時の header 形と応答形を確認）。
+
+## mock 結合試験のまとめと最終証拠（WU record, 2026-10-15）
+
+mock は 127.0.0.1 の fake server（実 API・外部ネットワークなし）。覆う場面: 成功／不正 schema／未知分類／timeout（遅延フック＋仮想時間）／auth error 401・403（型付き `Auth`、retry なし）／rate limit 429／5xx（bounded retry 後 fixed）／breaker（open・cooldown・half-open）。失敗時は `FallbackToFixed` か `BreakerOpen` を返し、通常作業は fixed 方策で止まらない。送信 payload に秘密・genre 等の構造化欄・全履歴が入らないことも同ファイルの試験で確認済み。
+
+実行した証拠（すべて本 WU で実行）:
+
+- `cargo test -p jev-classifier`: exit 0。unit 25 passed + `jev_fake_server` 11 passed、0 failed。
+- `bash scripts/dev/test-parallel.sh`: exit 0。nextest 5184 passed / 0 failed / 13 ignored、doctest ok、`test-parallel: ok`。
+- `cargo clippy --workspace -- -D warnings`: exit 0。
+
+### 未解決事項（再掲）
+
+- credential-wait 接続点: `JevError::Auth` / `KeyMissing` を `waiting_for_auth` へ渡す配線は未実装（分類段の unit で）。
+- live smoke は別 unit（実 API の応答形・認証 header は未確認）。
+
+### 提案（再掲）
+
+- 分類段で `ApiKeyProvider` を実装し credential-wait に接続する。live smoke は人の承認の下で最小 1 件。

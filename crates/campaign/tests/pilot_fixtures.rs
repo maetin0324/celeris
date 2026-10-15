@@ -99,6 +99,7 @@ fn build_pilot(input: &Input) -> CampaignManifest {
             materials_sha256: hash_tree(&fx().join("materials")).expect("materials hash"),
             kb_snapshot: "kb-fixture-1".into(),
         },
+        dependencies: Default::default(),
         sha256: String::new(),
     };
     m.sha256 = m.compute_sha256().expect("sha");
@@ -199,7 +200,11 @@ fn pilot_dry_run_exits_zero_with_estimate() {
         .arg(fx().join("pilot.json"))
         .output()
         .expect("run");
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let v: Value = serde_json::from_slice(&out.stdout).expect("json");
     assert_eq!(v["llm_calls_made"], 0);
     assert_eq!(v["resources"]["total_trials"], 5 + 5 + 2);
@@ -215,7 +220,11 @@ fn pilot_mock_run_check_export_and_report_via_cli() {
     let pilot = fx().join("pilot.json");
     let ok = |args: Vec<String>| {
         let o = bin().args(&args).output().expect("run");
-        assert!(o.status.success(), "{args:?}: {}", String::from_utf8_lossy(&o.stderr));
+        assert!(
+            o.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
         String::from_utf8_lossy(&o.stdout).into_owned()
     };
     let s = |p: &Path| p.to_string_lossy().into_owned();
@@ -237,8 +246,20 @@ fn pilot_mock_run_check_export_and_report_via_cli() {
     let r: Value = serde_json::from_str(&run_out).expect("run json");
     assert_eq!(r["executed"], 12);
     assert_eq!(r["budget_stopped"], false);
-    ok(vec!["check".into(), "--manifest".into(), s(&pilot), "--out".into(), s(&out)]);
-    ok(vec!["export".into(), "--manifest".into(), s(&pilot), "--out".into(), s(&out)]);
+    ok(vec![
+        "check".into(),
+        "--manifest".into(),
+        s(&pilot),
+        "--out".into(),
+        s(&out),
+    ]);
+    ok(vec![
+        "export".into(),
+        "--manifest".into(),
+        s(&pilot),
+        "--out".into(),
+        s(&out),
+    ]);
     ok(vec![
         "check-report".into(),
         "--manifest".into(),
@@ -268,7 +289,10 @@ fn control_script() -> MockExecutor {
             "unmetered" => MockStep::PassUnmetered,
             o => panic!("unknown step {o}"),
         };
-        s.insert((cfg, st["problem"].as_str().expect("problem").to_string()), step);
+        s.insert(
+            (cfg, st["problem"].as_str().expect("problem").to_string()),
+            step,
+        );
     }
     MockExecutor::scripted(s)
 }
@@ -298,8 +322,13 @@ fn budget_stop_on_pilot_cancels_rest_but_keeps_denominator() {
     let mut m = build_pilot(&input);
     m.budget.max_tokens = 25_000; // mock は 1 試行 ≥10k token なので 3 試行目の前で止まる
     m.sha256 = m.compute_sha256().expect("sha");
-    let rep = run(&m, &input, &MockExecutor::scripted(BTreeMap::new()), &run_opts(dir.path()))
-        .expect("run");
+    let rep = run(
+        &m,
+        &input,
+        &MockExecutor::scripted(BTreeMap::new()),
+        &run_opts(dir.path()),
+    )
+    .expect("run");
     assert!(rep.budget_stopped && rep.budget_cancelled > 0);
     let c = check(&m, dir.path());
     assert!(c.ok, "{:?}", c.violations);
@@ -358,7 +387,10 @@ fn checker_detects_every_known_error_in_the_review_fixtures() {
         let dir = tempfile::tempdir().expect("dir");
         let (m, _, rc) = pilot_run(dir.path());
         // 誤りを入れる前の組は合格する（偽陽性でないこと）。
-        assert!(check_report(&m, dir.path(), &good).is_empty(), "{name}: control must pass");
+        assert!(
+            check_report(&m, dir.path(), &good).is_empty(),
+            "{name}: control must pass"
+        );
         let mut report = good.clone();
         match kind {
             "flip_passed_flag" => mutate_trials(dir.path(), |r| {
@@ -366,11 +398,16 @@ fn checker_detects_every_known_error_in_the_review_fixtures() {
                 r[0]["passed"] = json!(!p);
             }),
             "drop_failed_record" => mutate_trials(dir.path(), |r| {
-                let i = r.iter().position(|x| x["outcome"] != "passed").expect("a non-pass record");
+                let i = r
+                    .iter()
+                    .position(|x| x["outcome"] != "passed")
+                    .expect("a non-pass record");
                 r.remove(i);
             }),
             "mix_split_record" => mutate_trials(dir.path(), |r| r[0]["split"] = json!("final")),
-            "report_inflate_passed" => report = edit_row(&good, "A", "passed", |x| (x + 1).to_string()),
+            "report_inflate_passed" => {
+                report = edit_row(&good, "A", "passed", |x| (x + 1).to_string())
+            }
             "report_drop_denominator" => {
                 report = edit_row(&good, "B", "n", |x| (x - 1).to_string())
             }
@@ -396,7 +433,11 @@ fn check_report_cli_fails_on_bad_report() {
     let (_m, _, _) = pilot_run(&dir.path().join("out"));
     let good = fs::read_to_string(fx().join("review/report-good.md")).expect("good");
     let bad = dir.path().join("bad.md");
-    fs::write(&bad, edit_row(&good, "A", "passed", |x| (x + 1).to_string())).expect("write");
+    fs::write(
+        &bad,
+        edit_row(&good, "A", "passed", |x| (x + 1).to_string()),
+    )
+    .expect("write");
     let o = bin()
         .args(["check-report", "--manifest"])
         .arg(fx().join("pilot.json"))

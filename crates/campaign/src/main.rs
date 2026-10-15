@@ -47,10 +47,12 @@ fn run(args: Vec<String>) -> Result<String, String> {
             };
             let rep = runner::run(&m, &input, &MockExecutor::seeded(), &opts)?;
             Ok(format!(
-                "{{\"executed\":{},\"resumed_skipped\":{},\"budget_cancelled\":{},\"tokens_total\":{},\"budget_stopped\":{}}}",
+                "{{\"executed\":{},\"resumed_skipped\":{},\"budget_cancelled\":{},\"blocked\":{},\"waiting\":{},\"tokens_total\":{},\"budget_stopped\":{}}}",
                 rep.executed,
                 rep.resumed_skipped,
                 rep.budget_cancelled,
+                rep.blocked,
+                rep.waiting,
                 rep.tokens_total,
                 rep.budget_stopped
             ))
@@ -62,7 +64,8 @@ fn run(args: Vec<String>) -> Result<String, String> {
         }
         "check-report" => {
             let rp = arg(&args, "--report").ok_or("--report <file> is required")?;
-            let text = std::fs::read_to_string(&rp).map_err(|e| format!("{}: {e}", rp.display()))?;
+            let text =
+                std::fs::read_to_string(&rp).map_err(|e| format!("{}: {e}", rp.display()))?;
             let v = celeris_campaign::report::check_report(&m, &out()?, &text);
             if v.is_empty() {
                 Ok("{\"ok\":true}".into())

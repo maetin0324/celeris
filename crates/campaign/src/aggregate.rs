@@ -13,6 +13,8 @@ pub enum Outcome {
     Error,
     Timeout,
     Cancelled,
+    /// 前提 problem が成立せず実行しなかった（失敗扱いで分母に残る）。
+    Blocked,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -34,6 +36,7 @@ pub struct Cell {
     pub error: u64,
     pub timeout: u64,
     pub cancelled: u64,
+    pub blocked: u64,
     pub missing: u64,
 }
 
@@ -79,6 +82,7 @@ pub fn aggregate(
                 Some(Outcome::Error) => cell.error += 1,
                 Some(Outcome::Timeout) => cell.timeout += 1,
                 Some(Outcome::Cancelled) => cell.cancelled += 1,
+                Some(Outcome::Blocked) => cell.blocked += 1,
                 None => cell.missing += 1,
             }
         }

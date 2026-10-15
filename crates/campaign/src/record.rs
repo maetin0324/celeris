@@ -15,6 +15,8 @@ pub const INPUT_FILE: &str = "input-manifest.json";
 pub const SNAPSHOT_FILE: &str = "snapshot/snapshot.json";
 /// 予算停止で実行しなかった試行の reason。分母には残す（outcome = cancelled）。
 pub const REASON_BUDGET_STOP: &str = "budget_stop";
+/// 前提 problem が passed にならなかったため実行しなかった試行の reason。分母には残す（outcome = blocked）。
+pub const REASON_BLOCKED: &str = "dependency_blocked";
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct TrialRecord {
@@ -49,6 +51,9 @@ pub struct TrialRecord {
 
 impl TrialRecord {
     pub fn ran(&self) -> bool {
-        self.reason.as_deref() != Some(REASON_BUDGET_STOP)
+        !matches!(
+            self.reason.as_deref(),
+            Some(REASON_BUDGET_STOP | REASON_BLOCKED)
+        )
     }
 }

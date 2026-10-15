@@ -30,9 +30,16 @@ pub struct ExecResult {
     pub wall_secs: u64,
 }
 
+/// 実行器の返事。`Wait` は外部待ち（まだ結果が出ない）で、記録は残さず後の再実行（resume）に回る。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ExecStatus {
+    Done(ExecResult),
+    Wait,
+}
+
 pub trait Executor {
     fn name(&self) -> &'static str;
-    fn execute(&self, req: &TrialRequest) -> Result<ExecResult, String>;
+    fn execute(&self, req: &TrialRequest) -> Result<ExecStatus, String>;
 }
 
 /// mock の 1 試行の振る舞い。
@@ -46,6 +53,8 @@ pub enum MockStep {
     Spend(u64),
     /// token/cost を報告しない（欠測）。
     PassUnmetered,
+    /// 外部待ち（結果がまだ出ない）。
+    Wait,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -97,7 +106,7 @@ impl Executor for MockExecutor {
         "mock"
     }
 
-    fn execute(&self, req: &TrialRequest) -> Result<ExecResult, String> {
+    fn execute(&self, req: &TrialRequest) -> Result<ExecStatus, String> {
         // 試行専用の作業ツリーと KB を実際に書き換える（隔離の検証用）。
         fs::write(
             req.workspace.join("mock-result.txt"),
@@ -111,7 +120,8 @@ impl Executor for MockExecutor {
             cost_micro_usd: Some(tokens * 10),
             wall_secs: wall,
         };
-        Ok(match self.step(req) {
+        let done = match self.step(req) {
+            MockStep::Wait => return Ok(ExecStatus::Wait),
             MockStep::Pass => metered(Outcome::Passed, 10_000, 60),
             MockStep::Fail => metered(Outcome::Failed, 12_000, 90),
             MockStep::Error => metered(Outcome::Error, 1_000, 5),
@@ -123,6 +133,7 @@ impl Executor for MockExecutor {
                 cost_micro_usd: None,
                 wall_secs: 60,
             },
-        })
+        };
+        Ok(ExecStatus::Done(done))
     }
 }

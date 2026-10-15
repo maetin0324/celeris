@@ -69,6 +69,7 @@ fn campaign(i: &Input, split: Split, n: usize, max_tokens: u64, attempts: u32) -
             materials_sha256: "d".into(),
             kb_snapshot: "kb@1".into(),
         },
+        dependencies: Default::default(),
         sha256: String::new(),
     }
 }

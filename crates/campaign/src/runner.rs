@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 
 use crate::{
     aggregate::Outcome,
-    executor::{Executor, TrialRequest},
+    executor::{ExecStatus, Executor, TrialRequest},
     manifest::{CampaignManifest, ConfigId},
     record::*,
     snapshot::{copy_tree, hash_tree},
@@ -32,6 +32,10 @@ pub struct RunReport {
     pub executed: u64,
     pub resumed_skipped: u64,
     pub budget_cancelled: u64,
+    /// 前提が成立せず blocked として記録した試行数。
+    pub blocked: u64,
+    /// 前提が外部待ちで今回は実行も記録もしなかった試行数（再実行で続きを実行する）。
+    pub waiting: u64,
     pub tokens_total: u64,
     pub wall_secs_total: u64,
     pub budget_stopped: bool,
@@ -150,8 +154,10 @@ fn append(path: &Path, r: &TrialRecord) -> Result<(), String> {
 pub fn plan(m: &CampaignManifest) -> Vec<(ConfigId, String, u32)> {
     let n = m.normalized();
     let subset: BTreeSet<&str> = n.secondary.subset.iter().map(String::as_str).collect();
+    // 前提が先。依存が無ければ id 昇順（validate 済みの manifest では Err にならない）。
+    let order = n.problem_order().unwrap_or_else(|_| n.problems.clone());
     let mut v = Vec::new();
-    for p in &n.problems {
+    for p in &order {
         for c in [ConfigId::A, ConfigId::B, ConfigId::C] {
             if c == ConfigId::C && !subset.contains(p.as_str()) {
                 continue;
@@ -162,6 +168,36 @@ pub fn plan(m: &CampaignManifest) -> Vec<(ConfigId, String, u32)> {
         }
     }
     v
+}
+
+enum Prereq {
+    Met,
+    Blocked(String),
+    Waiting,
+}
+
+/// 前提 problem の全 config（計画された分）の最初の試行が passed かを記録から判定する。
+/// 失敗側（failed/timeout/error/cancelled/blocked）が 1 つでもあれば Blocked、未記録があれば Waiting。
+fn prereq_state(m: &CampaignManifest, records: &[TrialRecord], problem: &str) -> Prereq {
+    let mut waiting = false;
+    for q in m.dependencies.get(problem).into_iter().flatten() {
+        for c in m.planned_configs(q) {
+            let first = records
+                .iter()
+                .filter(|r| r.config == c && r.problem_id == *q)
+                .min_by_key(|r| r.trial_no);
+            match first.map(|r| r.outcome) {
+                Some(Outcome::Passed) => {}
+                Some(_) => return Prereq::Blocked(q.clone()),
+                None => waiting = true,
+            }
+        }
+    }
+    if waiting {
+        Prereq::Waiting
+    } else {
+        Prereq::Met
+    }
 }
 
 pub fn run(
@@ -271,7 +307,19 @@ pub fn run(
             workspace_sha256_final: String::new(),
             kb_sha256_final: String::new(),
         };
-        if rep.budget_stopped {
+        let blocked_by = match prereq_state(m, &records, &pid) {
+            Prereq::Met => None,
+            Prereq::Blocked(q) => Some(q),
+            Prereq::Waiting => {
+                rep.waiting += 1;
+                continue;
+            }
+        };
+        if blocked_by.is_some() {
+            rec.outcome = Outcome::Blocked;
+            rec.reason = Some(REASON_BLOCKED.into());
+            rep.blocked += 1;
+        } else if rep.budget_stopped {
             rec.reason = Some(REASON_BUDGET_STOP.into());
             rep.budget_cancelled += 1;
         } else {
@@ -300,7 +348,15 @@ pub fn run(
                 kb: &kbd,
                 timeout_secs: timeout,
             };
-            let mut res = exec.execute(&req)?;
+            let mut res = match exec.execute(&req)? {
+                ExecStatus::Done(r) => r,
+                ExecStatus::Wait => {
+                    // 外部待ち: 記録を残さず、残骸も消して、再実行（resume）で改めて実行する。
+                    let _ = fs::remove_dir_all(out.join(&rel));
+                    rep.waiting += 1;
+                    continue;
+                }
+            };
             if res.wall_secs > timeout && res.outcome != Outcome::Timeout {
                 res.outcome = Outcome::Timeout;
                 rec.reason = Some("runner_timeout".into());
@@ -339,7 +395,7 @@ fn write_summary(
             .iter()
             .filter(|(k, _, t)| *k == c && *t == 1)
             .count();
-        let mut counts = [0u64; 5]; // passed failed error timeout cancelled
+        let mut counts = [0u64; 6]; // passed failed error timeout cancelled blocked
         let mut seen = 0u64;
         for r in records.iter().filter(|r| r.config == c && r.trial_no == 1) {
             seen += 1;
@@ -349,12 +405,13 @@ fn write_summary(
                 Outcome::Error => 2,
                 Outcome::Timeout => 3,
                 Outcome::Cancelled => 4,
+                Outcome::Blocked => 5,
             }] += 1;
         }
         cells.insert(
             format!("{c:?}"),
             json!({"n": n, "passed": counts[0], "failed": counts[1], "error": counts[2],
-                   "timeout": counts[3], "cancelled": counts[4], "missing": (n as u64).saturating_sub(seen)}),
+                   "timeout": counts[3], "cancelled": counts[4], "blocked": counts[5], "missing": (n as u64).saturating_sub(seen)}),
         );
     }
     write_json(

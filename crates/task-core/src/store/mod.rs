@@ -112,6 +112,7 @@ mod messages;
 mod model_catalog;
 pub use model_catalog::ModelCatalogStore;
 mod account_limits;
+mod credential_wait;
 mod eval_trials;
 mod migrated_harness;
 #[cfg(test)]
@@ -127,6 +128,10 @@ mod routing_evidence;
 mod routing_log;
 mod site_policies;
 pub use account_limits::AccountLimit;
+pub use credential_wait::{
+    CredentialVerifyKind, CredentialWait, CredentialWaitEnter, CredentialWaitState,
+    EnterWaitOutcome,
+};
 pub use root_done::{RootDoneState, RootDoneSummary};
 pub(crate) use site_policies::site_policy_tx;
 pub use site_policies::{

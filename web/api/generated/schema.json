@@ -18494,6 +18494,11 @@
           "const": "plan_approval",
           "description": "ADR-0079 D8（Phase R3b）: root の計画が人の承認を待っている（`blocked(awaiting_plan_approval)`）。\nその計画の決定の要求は同じ 1 通に束ねる（`DecisionRequested` の `plan:<plan_id>:decisions` は鳴らさない）。\n`key` = `plan:<plan_id>:approval`。",
           "type": "string"
+        },
+        {
+          "const": "root_done_summary",
+          "description": "ADR 2026-10-15-root-done-cos-summary D2: root task（parent なし・木の子でない・support でない）が done に\n遷移した。CoS がまとめを root ごとの専用スレッドに書いた後（使えなければ決定的な短文の fallback で）1 回だけ\n知らせる。`key` = `<task_id>:<done 遷移の seq>`（reopen 後の再 done は別 key）。",
+          "type": "string"
         }
       ]
     },

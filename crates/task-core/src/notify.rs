@@ -104,6 +104,10 @@ pub enum NotificationKind {
     /// その計画の決定の要求は同じ 1 通に束ねる（`DecisionRequested` の `plan:<plan_id>:decisions` は鳴らさない）。
     /// `key` = `plan:<plan_id>:approval`。
     PlanApproval,
+    /// ADR 2026-10-15-root-done-cos-summary D2: root task（parent なし・木の子でない・support でない）が done に
+    /// 遷移した。CoS がまとめを root ごとの専用スレッドに書いた後（使えなければ決定的な短文の fallback で）1 回だけ
+    /// 知らせる。`key` = `<task_id>:<done 遷移の seq>`（reopen 後の再 done は別 key）。
+    RootDoneSummary,
 }
 
 impl NotificationKind {
@@ -124,6 +128,7 @@ impl NotificationKind {
             NotificationKind::PhaseCheckpoint => "phase_checkpoint",
             NotificationKind::DecisionRequested => "decision_requested",
             NotificationKind::PlanApproval => "plan_approval",
+            NotificationKind::RootDoneSummary => "root_done_summary",
         }
     }
 
@@ -144,12 +149,13 @@ impl NotificationKind {
             "phase_checkpoint" => Some(NotificationKind::PhaseCheckpoint),
             "decision_requested" => Some(NotificationKind::DecisionRequested),
             "plan_approval" => Some(NotificationKind::PlanApproval),
+            "root_done_summary" => Some(NotificationKind::RootDoneSummary),
             _ => None,
         }
     }
 
     /// 判定の順（GUI と再送の順を決定的にするため）。
-    pub const ALL: [NotificationKind; 15] = [
+    pub const ALL: [NotificationKind; 16] = [
         NotificationKind::CosEscalation,
         NotificationKind::CosFallback,
         NotificationKind::InboxNew,
@@ -165,6 +171,7 @@ impl NotificationKind {
         NotificationKind::PhaseCheckpoint,
         NotificationKind::DecisionRequested,
         NotificationKind::PlanApproval,
+        NotificationKind::RootDoneSummary,
     ];
 }
 

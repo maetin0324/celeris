@@ -12,6 +12,7 @@
 //! | `run` | `run`: 起動順と停止順（interrupt → api → llm_proxy → mcp → checkpoint → backup → deregister） |
 //! | `tick_loop` | tick ループ本体（シグナル・役割の変化・裏方の定期処理） |
 //! | `admin` | API から委譲された reload / provider check / notify test |
+//! | `classify_stage` / `classify_tick` | Jev 分類段と、tick の直前に ready の WU を分類して `ClassificationBoard` に置く連携（ADR 2026-10-15-jev-wire D3） |
 //! | `browser_ledger_path` | 適合台帳の path 解決と `configure_conformance`（ADR 2026-10-08-browser-prod-enablement D1.4） |
 //!
 //! 依存は `run` → {`bootstrap`, `api`, `services`, `clusters`, `tick_loop`} → `tick_loop` → `admin` の一方向。
@@ -19,15 +20,13 @@
 
 pub(crate) mod adapters;
 pub(crate) mod admin;
-// 分類段。JevClassifier の構築と起動は live smoke の承認後の unit で配線する（進捗 classify-stage.md）。
 pub(crate) mod api;
 pub(crate) mod bootstrap;
 pub(crate) mod browser_ledger_path;
-#[allow(dead_code)]
 pub(crate) mod classify_stage;
+pub(crate) mod classify_tick;
 pub(crate) mod clusters;
 mod cos_launch;
-#[allow(dead_code)]
 pub(crate) mod jev_key;
 pub(crate) mod routing_guardrail;
 pub(crate) mod run;

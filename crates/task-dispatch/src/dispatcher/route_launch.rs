@@ -146,6 +146,8 @@ use task_core::route_select::{Availability, split_by_availability};
 
 /// 候補（既存の選定順）を利用可否で絞った結果。`Unknown`（quota/cost/予算が未確認）は 0 扱いで
 /// 可にせず、`Available` が 1 つも無ければ起動せず待機（保守側）にする。
+// 起動経路への接続は後続の統合葉が行う（dispatcher.rs は本 unit の範囲外）。それまで試験のみが使う。
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LaunchAdmission<T> {
     Launch(T),
@@ -156,6 +158,7 @@ pub enum LaunchAdmission<T> {
 }
 
 /// 先頭の `Available` を選ぶ。`Unavailable` は落とし、`Unknown` だけが残るなら `Hold`。
+#[allow(dead_code)]
 pub fn admit_by_availability<T>(candidates: Vec<(T, Availability)>) -> LaunchAdmission<T> {
     let split = split_by_availability(candidates);
     let unconfirmed = split.unconfirmed.len();

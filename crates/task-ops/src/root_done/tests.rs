@@ -176,7 +176,7 @@ fn collect_reads_integration_release_artifacts_and_verdicts() {
         ),
         (2, artifact("artifacts/report.md")),
         (3, artifact("artifacts/report.md")),
-        (4, artifact("docs/x.md")),
+        (4, artifact("out/x.md")),
         (
             5,
             Event::ReviewVerdict {
@@ -242,7 +242,7 @@ fn collect_reads_integration_release_artifacts_and_verdicts() {
     );
     assert_eq!(facts.release.as_deref(), Some("333333333333"));
     assert_eq!(facts.delivery_state, Some(DeliveryState::Ready));
-    assert_eq!(facts.artifacts, vec!["artifacts/report.md", "docs/x.md"]);
+    assert_eq!(facts.artifacts, vec!["artifacts/report.md", "out/x.md"]);
     assert_eq!(facts.acceptance, vec![(0, true), (1, true)]);
     assert_eq!(
         facts.phases,

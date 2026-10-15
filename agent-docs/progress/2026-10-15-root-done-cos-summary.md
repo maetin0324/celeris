@@ -200,3 +200,24 @@ events の最大 id 555195）。
 - `grep -c '^## D[1-9] ' agent-docs/adr/2026-10-15-root-done-cos-summary.md` → 9
 - `sh scripts/dev/check-doc-links.sh && sh scripts/dev/check-adr-numbers.sh && sh scripts/dev/progress-index.sh --check` → 下記の run で exit 0 を確認
 - `git diff --stat $CELERIS_WU_BASE -- crates/` → 差分なし
+
+## closeout（WU closeout、2026-10-15）
+
+- `bash scripts/dev/test-parallel.sh` → exit 0。nextest passed 5148 / failed 0 / ignored 13、doctest exit 0（`userns: null`）。
+- `cargo clippy --workspace -- -D warnings` → exit 0。
+- ADR を実装に突合: 状態を「採用・実装済み」に、D8 を本文で提案（failed は新経路に含め TaskFailed を同時に消す、cancelled は通知しない）へ書き直した。
+- 旧経路: `git grep -i 'scan_task_ready\|TaskReady\|task_ready' -- crates web gui` は migration 0080 と「旧経路は黙る」試験だけ。生成コードは残っていない。
+- `docs/architecture-map.md` に root_done の行を追加。
+- 未解決: `scan_task_failed`／`TaskFailed` ほか `notify::scan`／`schedule` は daemon から呼ばれない死んだ経路のまま（D8 の提案の別 task）。notices cursor の同時刻 tie の疑いも未検証。
+- 本番への移行: config 変更なし。release 昇格後、次の root done で専用スレッド＋Discord 通知 1 通を確認（wire.md 参照）。
+
+### closeout 再実行（fixture path 修正後の HEAD 4eedf3f9、attempt 2）
+
+- `bash scripts/dev/test-parallel.sh` → exit 0。nextest passed 5148 / failed 0 / ignored 13、doctest exit 0。
+- `cargo clippy --workspace -- -D warnings` → exit 0。
+
+### closeout 再実行（attempt 3、HEAD 9f9074a4）
+
+- `bash scripts/dev/test-parallel.sh` → exit 0。nextest passed 5148 / failed 0 / ignored 13、doctest exit 0。
+- `cargo clippy --workspace -- -D warnings` → exit 0。
+- `sh scripts/dev/check-doc-links.sh` → exit 0（fixture path は `out/x.md`）。

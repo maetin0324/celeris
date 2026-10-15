@@ -31,6 +31,7 @@ mod dispatch;
 mod execution;
 mod github;
 mod harness;
+mod jev;
 mod knowledge;
 mod llm_route;
 mod maintenance;
@@ -57,6 +58,7 @@ pub use dispatch::*;
 pub use execution::*;
 pub use github::*;
 pub use harness::*;
+pub use jev::*;
 pub use knowledge::*;
 pub use llm_route::*;
 pub use maintenance::*;
@@ -102,6 +104,9 @@ pub struct Config {
     /// `[routing] mode = "fixed" | "decision_assisted"`（既定 fixed）。
     #[serde(default)]
     pub routing: RoutingConfig,
+    /// ADR 2026-10-15-jev-wire D1: `[jev]`（Jev 分類段。既定 `enabled = false`）。
+    #[serde(default)]
+    pub jev: JevSectionConfig,
     /// Isolated browser runtime is disabled unless its API and provider are configured.
     #[serde(default)]
     pub browser: BrowserRuntimeConfig,
@@ -574,6 +579,7 @@ impl Config {
         self.selfdeploy.validate()?;
         self.selfdeploy.delivery.validate()?;
         self.browser.validate()?;
+        self.jev.validate()?;
         if self.max_concurrency == 0 {
             return Err(ConfigError::Invalid("max_concurrency must be >= 1".into()));
         }

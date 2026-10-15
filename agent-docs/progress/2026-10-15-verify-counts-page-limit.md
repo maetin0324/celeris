@@ -15,7 +15,8 @@ completed: 2026-10-15
 - `cargo test -p task-api --test reports`: 5 passed（`count_endpoints_count_every_row_beyond_the_page_limit`: reports 1723・1 node 650、messages 650）
 - `bash scripts/selfdeploy/tests/verify_web_app_start.sh`: exit 0
 - `cargo fmt --all -- --check`: exit 0
-- test-parallel / clippy: 完了報告に記載
+- `bash scripts/dev/test-parallel.sh`: exit 0（passed 5367, failed 0, ignored 13）
+- `cargo clippy --workspace -- -D warnings`: exit 0
 
 ## 本番への移行
 無し（config 欄の変更なし）。

@@ -11,7 +11,7 @@ ADR: `agent-docs/adr/2026-10-15-mlsys-min-campaign.md`。
 
 ## 実装済み
 - `crates/campaign`: manifest（検証・正規化・sha256・入力 manifest 照合・split 混在拒否）、dry-run（JSON 見積り）、集計（失敗を分母に残す・hash/split 混在拒否）、CLI `celeris-campaign dry-run|validate --manifest`。
-- routing-eval: `manifest_hash` を pub に。`aggregate::build` を dev 問題のみ集計に修正（D6）。`tests/aggregate_identity.rs` 3 件。
+- routing-eval 本体は無変更。campaign 側に `manifest_hash` と `aggregate::dev_trials`（別 manifest・held-out の trial を絞る）。`crates/campaign/tests/routing_eval_identity.rs` 3 件。
 
 ## 未検証・未実装
 - runner・独立 checker・export・fixture・pilot 手順は後続 WU。

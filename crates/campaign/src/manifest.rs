@@ -5,7 +5,7 @@ use std::{
     path::Path,
 };
 
-use routing_eval::manifest::{Manifest as InputManifest, manifest_hash};
+use routing_eval::manifest::Manifest as InputManifest;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -321,6 +321,18 @@ pub(crate) mod fixtures {
             sha256: String::new(),
         }
     }
+}
+
+/// routing-eval manifest の content hash（sha256 欄を空にして正規化 JSON を hash。routing-eval と同じ方式）。
+pub fn manifest_hash(m: &InputManifest) -> Result<String, String> {
+    let mut v = serde_json::to_value(m).map_err(|e| e.to_string())?;
+    v.as_object_mut()
+        .ok_or("manifest serialization is not an object")?
+        .insert("sha256".into(), serde_json::Value::String(String::new()));
+    Ok(format!(
+        "{:x}",
+        Sha256::digest(serde_json::to_vec(&v).map_err(|e| e.to_string())?)
+    ))
 }
 
 #[cfg(test)]

@@ -2,6 +2,7 @@
 //! 失敗（error）は合否の分母から外れるが、数は必ず出る（campaign 側は分母に残す: celeris-campaign）。
 use std::collections::BTreeMap;
 
+use celeris_campaign::aggregate::dev_trials;
 use routing_eval::{
     aggregate::{Trial, build},
     manifest::{Manifest, Problem},
@@ -68,7 +69,9 @@ fn trial(problem_id: &str, passed: bool, eval_status: Option<&str>) -> Trial {
 #[test]
 fn held_out_trials_do_not_join_the_dev_cell() {
     let m = manifest(vec![problem("d1", "dev"), problem("h1", "held-out")], "m1");
-    let (agg, _) = build(&m, &[trial("d1", true, None), trial("h1", false, None)]);
+    let all = [trial("d1", true, None), trial("h1", false, None)];
+    let kept: Vec<Trial> = dev_trials(&m, &all).into_iter().cloned().collect();
+    let (agg, _) = build(&m, &kept);
     assert_eq!(agg.rows.len(), 1);
     assert_eq!((agg.rows[0].n, agg.rows[0].pass), (1, 1));
     assert_eq!(agg.excluded_total(), 0);
@@ -78,11 +81,15 @@ fn held_out_trials_do_not_join_the_dev_cell() {
 fn trials_of_another_manifest_are_not_aggregated() {
     let other = manifest(vec![problem("x1", "dev")], "m2");
     let m = manifest(vec![problem("d1", "dev")], "m1");
-    let (agg, _) = build(&m, &[trial("d1", true, None), trial("x1", true, None)]);
+    let all = [trial("d1", true, None), trial("x1", true, None)];
+    let kept: Vec<Trial> = dev_trials(&m, &all).into_iter().cloned().collect();
+    let (agg, _) = build(&m, &kept);
     assert_eq!(agg.manifest_sha256, "m1");
     assert_ne!(agg.manifest_sha256, other.sha256);
     assert_eq!(agg.rows[0].n, 1);
-    let (empty, _) = build(&m, &[trial("x1", true, None)]);
+    let only_x = [trial("x1", true, None)];
+    let kept: Vec<Trial> = dev_trials(&m, &only_x).into_iter().cloned().collect();
+    let (empty, _) = build(&m, &kept);
     assert!(empty.rows.is_empty());
 }
 

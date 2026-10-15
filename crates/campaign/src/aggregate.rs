@@ -87,6 +87,24 @@ pub fn aggregate(
     Ok(out)
 }
 
+/// routing-eval の根拠表集計へ渡す trial を、その manifest の dev 問題のものだけに絞る。
+/// routing-eval の `build` は問題の所属を見ないので、別 manifest・held-out の trial が同じ cell に混ざらないよう呼び出し側で絞る。
+pub fn dev_trials<'a>(
+    manifest: &routing_eval::manifest::Manifest,
+    trials: &'a [routing_eval::aggregate::Trial],
+) -> Vec<&'a routing_eval::aggregate::Trial> {
+    let dev: BTreeSet<&str> = manifest
+        .problems
+        .iter()
+        .filter(|p| p.split == "dev")
+        .map(|p| p.id.as_str())
+        .collect();
+    trials
+        .iter()
+        .filter(|t| dev.contains(t.problem_id.as_str()))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

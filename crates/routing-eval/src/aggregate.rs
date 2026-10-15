@@ -227,18 +227,7 @@ pub fn build(manifest: &Manifest, trials: &[Trial]) -> (Aggregate, Vec<Value>) {
     let mut groups: BTreeMap<EvidenceKey, Vec<&Trial>> = BTreeMap::new();
     let mut excluded: BTreeMap<EvidenceKey, ExcludedCount> = BTreeMap::new();
     let mut counted = Vec::new();
-    // 根拠表は manifest の dev 問題だけを集計する。別 manifest の問題・held-out の trial は
-    // 同じ cell に混ぜない（除外数にも数えない: 評価の失敗ではなく対象外）。
-    let dev_ids: BTreeSet<&str> = manifest
-        .problems
-        .iter()
-        .filter(|p| p.split == "dev")
-        .map(|p| p.id.as_str())
-        .collect();
-    for t in trials
-        .iter()
-        .filter(|t| dev_ids.contains(t.problem_id.as_str()))
-    {
+    for t in trials {
         match excluded_status(t) {
             Some("error") => excluded.entry(t.key.clone()).or_default().error += 1,
             Some(_) => excluded.entry(t.key.clone()).or_default().cancelled += 1,

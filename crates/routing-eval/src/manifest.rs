@@ -466,7 +466,7 @@ fn hash_value(v: &Value) -> Result<String, String> {
 fn hash_serializable<T: Serialize>(v: &T) -> Result<String, String> {
     hash_value(&serde_json::to_value(v).map_err(|e| e.to_string())?)
 }
-pub fn manifest_hash(m: &Manifest) -> Result<String, String> {
+fn manifest_hash(m: &Manifest) -> Result<String, String> {
     let mut v = serde_json::to_value(m).map_err(|e| e.to_string())?;
     v.as_object_mut()
         .ok_or("manifest serialization is not an object")?

@@ -7,7 +7,7 @@ fn write_fixture(dir: &std::path::Path, campaign_split: &str) -> std::path::Path
         .map(|i| json!({"id":format!("p{i}"),"task_id":"t","work_unit_id":"w","created_at":"","genre":"coding","kind":"leaf","command":"true","prompt":"fix the bug","split":"dev","stratum":"s","subset_12":false,"head_commit":null,"base_commit":null,"features_sha256":"","features":{},"sha256":""}))
         .collect();
     let mut input: routing_eval::manifest::Manifest = serde_json::from_value(json!({"schema":routing_eval::MANIFEST_SCHEMA,"version":"v","cutoff":"c","seed":1,"problems":problems,"sha256":""})).expect("input");
-    input.sha256 = routing_eval::manifest::manifest_hash(&input).expect("hash");
+    input.sha256 = celeris_campaign::manifest::manifest_hash(&input).expect("hash");
     std::fs::write(
         dir.join("input.json"),
         serde_json::to_vec(&input).expect("ser"),

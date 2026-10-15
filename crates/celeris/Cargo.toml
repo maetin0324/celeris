@@ -16,7 +16,6 @@ task-core = { path = "../task-core" }
 task-worker = { path = "../task-worker" }
 task-dispatch = { path = "../task-dispatch" }
 task-ops = { path = "../task-ops" }
-jev-classifier = { path = "../jev-classifier" }
 task-api = { path = "../task-api" }
 llm-proxy = { path = "../llm-proxy" }
 celeris-mcp = { path = "../celeris-mcp" }

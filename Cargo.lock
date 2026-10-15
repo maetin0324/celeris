@@ -263,7 +263,6 @@ dependencies = [
  "celeris-credentiald",
  "celeris-mcp",
  "clap",
- "jev-classifier",
  "llm-proxy",
  "reqwest",
  "rusqlite",

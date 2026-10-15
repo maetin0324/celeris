@@ -326,3 +326,38 @@ mod cos_chat_config_tests {
         assert_eq!(config.cos.max_turns, 99);
     }
 }
+
+#[cfg(test)]
+mod routing_mode_wire_tests {
+    use super::*;
+    use task_core::route_select::RoutingMode;
+
+    /// `[routing] mode` は build_dispatcher（起動）と reload_providers（reload）の両方で Dispatcher に届く。
+    /// 欄が無ければ fixed のまま。
+    #[test]
+    fn routing_mode_reaches_the_dispatcher_through_bootstrap_and_reload() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let db = dir.path().join("celeris.db");
+        let ws = dir.path().join("ws");
+        let write_config = |routing: &str| {
+            std::fs::write(
+                &path,
+                format!("db = {db:?}\nworkspace_root = {ws:?}\n{routing}"),
+            )
+            .unwrap();
+        };
+        write_config("");
+        let mut config = Config::load(&path).unwrap();
+        let mut dispatcher = crate::build_dispatcher(&config, Default::default()).unwrap();
+        assert_eq!(dispatcher.routing_mode(), RoutingMode::Fixed);
+
+        write_config("[routing]\nmode = \"decision_assisted\"\n");
+        reload_providers(&mut dispatcher, &mut config).unwrap();
+        assert_eq!(dispatcher.routing_mode(), RoutingMode::DecisionAssisted);
+
+        let restarted = Config::load(&path).unwrap();
+        let started = crate::build_dispatcher(&restarted, Default::default()).unwrap();
+        assert_eq!(started.routing_mode(), RoutingMode::DecisionAssisted);
+    }
+}

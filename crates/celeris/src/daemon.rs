@@ -24,9 +24,6 @@ pub(crate) mod bootstrap;
 pub(crate) mod browser_ledger_path;
 pub(crate) mod clusters;
 mod cos_launch;
-// 分類段。JevClassifier の構築（JevConfig の欄）と起動は live smoke の承認後の unit で配線する（進捗 wire-mode.md）。
-#[allow(dead_code)]
-pub(crate) mod classify_stage;
 pub(crate) mod routing_guardrail;
 pub(crate) mod run;
 pub(crate) mod secrets;

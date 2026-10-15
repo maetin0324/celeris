@@ -1,8 +1,8 @@
 ---
 tasks: [01M4ZFZC0SGYE9M92CYDKST0CR]
-title: MLSys 最小実装 — routing.mode の配線と分類段（wire-mode）
+title: MLSys 最小実装 — routing.mode の配線（wire-mode）
 ---
-# ADR 2026-10-15: `routing.mode` と decision-assisted の分類段の配線
+# ADR 2026-10-15: `routing.mode` の配線と lane 層
 
 - 日付: 2026-10-15
 - 状態: 採用
@@ -17,11 +17,10 @@ title: MLSys 最小実装 — routing.mode の配線と分類段（wire-mode）
    （分類も `fixed_lane` も既存を下げない。cheap への引き下げ権限なし）。replan 提案は frontier を要求する（計画の直し自体は wire-escalation の範囲）。
    優先順位の実装: ①明示 lane（`TierSource::Human/System`）→ 提案を採らない（`overridden_by=explicit`）②許可・天井（`clamp_to_limits`）→ 外なら採らない（`ceiling`）
    ③利用可否（引き上げ先 lane で `select_route` が通らなければ採らない。`availability`）④分類 ⑤fixed。planner run には適用しない。
-4. **分類は別段**: `crates/celeris/src/daemon/classify_stage.rs` が `RequestClassifier`（本番は `JevClassifier`、試験は fake）を呼び、結果を `ClassificationBoard` に置く。
-   dispatcher は board を読むだけで、dispatcher・task-core・store は jev-classifier に依存しない（試験で固定）。
+4. **分類は別段（次の unit classify-stage）**: dispatcher は `ClassificationBoard` を読むだけで、dispatcher・task-core・store は jev-classifier に依存しない（試験で固定）。この unit は board・型・欄まで。Jev 呼び出しの分類段は classify-stage が書く。
 5. **記録**: `RouteDecision.lane_assist`（`LaneAssistRecord`）に `mode`・`classifier_status`（`jev_ok` / `fell_back_to_fixed{reason}` / `not_attempted`）・`real_api_verified`・`base_lane`・`proposed_lane`・`final_lane`・`basis`・`overridden_by`。
    `real_api_verified` は定数 `REAL_API_VERIFIED = false`。fixed に戻ったこととは別欄で、live smoke を人が承認して通すまで true にしない。
-6. **credential**: `KeyMissing`・`Auth` は `fell_back_to_fixed{key_missing|auth}` と、secret id・用途を添えた board 項目になる。dispatcher は未登録なら既存の `enter_credential_wait`
+6. **credential**（board 項目の形と dispatcher 側の接続のみ。生成は classify-stage）: `KeyMissing`・`Auth` は `fell_back_to_fixed{key_missing|auth}` と、secret id・用途を添えた board 項目になる。dispatcher は未登録なら既存の `enter_credential_wait`
    （credential_gate.rs）でその unit だけを `waiting_for_auth` にする。登録済みなら待たず fixed で進む。新しい待ち機構は作らない。
 7. **構造化事実**: `lane_facts(TaskFeatures)`。Medium は `Unknown`（cheap の根拠にしない）。
 

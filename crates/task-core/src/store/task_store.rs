@@ -40,6 +40,7 @@ pub trait TaskStore:
     + crate::notify::NotificationStore
     + crate::feed::NoticeStore
     + crate::disk_watch::DiskWatchStore
+    + crate::store::CredentialWaitStore
     + crate::knowledge_run::KnowledgeRunStore
     + crate::delivery::DeliveryStore
     + crate::node_session::NodeSessionStore

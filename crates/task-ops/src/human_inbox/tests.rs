@@ -101,6 +101,7 @@ fn empty_inbox() -> Inbox {
             by_status: Default::default(),
         },
         disk_full: Vec::new(),
+        credential_waits: Vec::new(),
     }
 }
 
@@ -316,6 +317,12 @@ fn fixture() -> Fixture {
         last_notified_at: Some(now() - time::Duration::minutes(10)),
         updated_at: now(),
     });
+    // ADR 2026-10-15-mlsys-min D4: 同じ秘密を待つ 2 つの wait は 1 件の item になる。
+    for (i, work_unit) in ["wu-a", "wu-b"].into_iter().enumerate() {
+        inbox
+            .credential_waits
+            .push(credential_wait(&task, work_unit, i as i64));
+    }
 
     let by_id: HashMap<TaskId, Task> = [task.clone(), draft, approval_task, authz_task]
         .into_iter()
@@ -327,6 +334,50 @@ fn fixture() -> Fixture {
         task,
         approval_id,
     }
+}
+
+fn credential_wait(task: &Task, work_unit: &str, minutes: i64) -> task_core::CredentialWait {
+    task_core::CredentialWait {
+        id: minutes + 1,
+        work_unit_id: work_unit.to_string(),
+        task_id: task.id,
+        secret_id: "jev_api_key".to_string(),
+        provider: "jev".to_string(),
+        purpose: "Jev で依頼を分類する".to_string(),
+        state: task_core::CredentialWaitState::Waiting,
+        aggregation_key: "credential:jev_api_key".to_string(),
+        notice_item_id: None,
+        seen_fingerprint: None,
+        last_verify_kind: None,
+        resumed_at: None,
+        created_at: now() - time::Duration::minutes(30 - minutes),
+    }
+}
+
+#[test]
+fn human_inbox_credential_wait_is_one_item_per_secret_and_updates_in_place() {
+    let (f, out) = build();
+    let item = one(&out, InboxKind::CredentialWait);
+    assert_eq!(item.id, "credential_wait-jev_api_key");
+    assert_eq!(item.blocking.units, ["wu-a", "wu-b"]);
+    assert!(item.links.iter().any(|l| l.href == "/accounts"));
+    let detail = item.detail.clone().unwrap();
+    assert!(detail.contains("Jev で依頼を分類する") && detail.contains("自動で続行"));
+    // created_at は最初の wait の時刻で固定（通知の revision が待つ task の増減で変わらない）。
+    let first_created = item.created_at.clone();
+
+    // 誤キーで rejected になっても同じ item（id・created_at）で、文面だけが「更新して」に変わる。
+    let mut rejected = f.inbox.clone();
+    for w in &mut rejected.credential_waits {
+        w.state = task_core::CredentialWaitState::Rejected;
+        w.last_verify_kind = Some(task_core::CredentialVerifyKind::InvalidKey);
+    }
+    let out2 = from_inbox(&rejected, &f.by_id, now());
+    let item2 = one(&out2, InboxKind::CredentialWait);
+    assert_eq!(item2.id, item.id);
+    assert_eq!(item2.created_at, first_created);
+    assert!(item2.title.contains("更新"), "{}", item2.title);
+    assert!(item2.detail.clone().unwrap().contains("無効"));
 }
 
 fn build() -> (Fixture, HumanInbox) {

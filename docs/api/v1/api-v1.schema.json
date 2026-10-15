@@ -14888,6 +14888,7 @@
         "failed",
         "unroutable",
         "cluster_login",
+        "credential_wait",
         "disk_full",
         "delivery_skipped",
         "integration_request",
@@ -30119,6 +30120,11 @@
         {
           "const": "cluster_jobs",
           "description": "ADR-0090 D2: この unit の run が `result.json` の `wait` でクラスタ job の終了を待っている。daemon の poll が\nすべての job の終了を見たら `needs_continuation` に戻す。`Decision` と同じく工程の失敗にも質問にも数えず、\n同じ段階の他の unit・兄弟は止めない（段階は完了しない）。",
+          "type": "string"
+        },
+        {
+          "const": "waiting_for_auth",
+          "description": "ADR 2026-10-15-mlsys-min-decision-assisted D4: 外部 provider の credential が未登録で、登録・検証を待つ\n（`credential_waits`。task の Status は増やさない）。`Infra`・`ClusterJobs` と同じく工程の失敗に数えず、\n同じ段階の他の unit・兄弟は止めない。",
           "type": "string"
         }
       ]

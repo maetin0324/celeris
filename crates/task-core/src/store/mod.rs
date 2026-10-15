@@ -130,7 +130,7 @@ mod site_policies;
 pub use account_limits::AccountLimit;
 pub use credential_wait::{
     CredentialVerifyKind, CredentialWait, CredentialWaitEnter, CredentialWaitState,
-    EnterWaitOutcome,
+    CredentialWaitStore, EnterWaitOutcome,
 };
 pub use root_done::{RootDoneState, RootDoneSummary};
 pub(crate) use site_policies::site_policy_tx;

@@ -76,6 +76,7 @@ fn run(fx: &Fx, runner: &dyn CommandRunner) -> GradeReport {
         case_dir: fx.grade_dir.clone(),
         work_root: fx.work.parent().unwrap().join("scratch"),
         runner,
+        observed_jobs: None,
     };
     fs::create_dir_all(&opts.work_root).unwrap();
     grade(&fx.case, &fx.work, &opts)

@@ -316,6 +316,7 @@ fn grade_tree(id: &str, tree: &Path, rules: &[Rule]) -> celeris_campaign::grader
         case_dir: dir,
         work_root: scratch,
         runner: &stub,
+        observed_jobs: None,
     };
     grade(&g, &artifact, &opts)
 }
@@ -546,6 +547,7 @@ fn recompute_status(id: &str, tgz: &Path, corrupt: Option<f64>) -> Status {
         case_dir: dir,
         work_root: t.path().join("scratch"),
         runner: &celeris_campaign::grader::NoRunner,
+        observed_jobs: None,
     };
     let r = grade(&g, &artifact, &opts);
     r.checks.recompute.status

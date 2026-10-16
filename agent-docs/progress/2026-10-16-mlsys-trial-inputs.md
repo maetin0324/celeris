@@ -22,6 +22,6 @@ ADR: `agent-docs/adr/2026-10-16-mlsys-trial-inputs-and-observed-evidence.md`。
 - プロンプトは workspace の `kb/` の存在を明示しない。必要なら case の prompt 側で書く。
 
 ## 証拠
-- `bash scripts/dev/test-parallel.sh` → ok（passed 5527, failed 0, ignored 14, nextest_exit 0）
+- `bash scripts/dev/test-parallel.sh` → ok（passed 5560, failed 0, ignored 15, nextest_exit 0、doctest_exit 0。前回は k_cases_grade.rs と grade_case_gen.rs の GradeOptions に observed_jobs が欠けて compile 失敗していたのを修正）
 - `cargo clippy --workspace -- -D warnings` → exit 0
 - `cargo fmt --all -- --check` → exit 0

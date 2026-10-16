@@ -122,19 +122,24 @@ fn safe_component(id: &str) -> Result<(), String> {
 }
 
 /// 試行の初期木（repo + `materials/`）。ADR 2026-10-16-mlsys-pilot-wiring-fixes D5。
-fn build_seed(repo: &Path, mat: &Path, seed: &Path) -> Result<(), String> {
-    if repo.join("materials").exists() {
-        return Err(
-            "repo snapshot already has materials/; it would collide with --materials-src".into(),
-        );
+/// 試行の初期 KB も `kb/` として同じ木に入れる。A（harness）も B/C（Celeris task）も、この workspace の中の
+/// `materials/` と `kb/` だけを初期資料として見る（通常運用 KB の path は試行に渡さない）。
+fn build_seed(repo: &Path, mat: &Path, kb: &Path, seed: &Path) -> Result<(), String> {
+    for (d, opt) in [("materials", "--materials-src"), ("kb", "--kb-src")] {
+        if repo.join(d).exists() {
+            return Err(format!(
+                "repo snapshot already has {d}/; it would collide with {opt}"
+            ));
+        }
     }
     let _ = fs::remove_dir_all(seed);
     copy_tree(repo, seed)?;
-    copy_tree(mat, &seed.join("materials"))
+    copy_tree(mat, &seed.join("materials"))?;
+    copy_tree(kb, &seed.join("kb"))
 }
 
 /// 初回は snapshot を保存し、再開時は保存済み snapshot が壊れていないことを確かめる。
-/// 戻り値は (試行の初期木（repo + materials/）, kb_dir, 初期木の sha256, kb_sha256)。
+/// 戻り値は (試行の初期木（repo + materials/ + kb/）, kb_dir, 初期木の sha256, kb_sha256)。
 fn prepare_snapshot(
     m: &CampaignManifest,
     opts: &RunOptions,
@@ -169,7 +174,7 @@ fn prepare_snapshot(
             None => fs::create_dir_all(dst).map_err(|e| e.to_string())?,
         }
     }
-    build_seed(&repo, &mat, &seed)?;
+    build_seed(&repo, &mat, &kb, &seed)?;
     let (rs, ms, ks) = (hash_tree(&repo)?, hash_tree(&mat)?, hash_tree(&kb)?);
     let ss = hash_tree(&seed)?;
     let verified = opts.materials_src.is_some();
@@ -382,7 +387,6 @@ fn drive_async(
     out: &Path,
     rel: &str,
     repo: &Path,
-    kb: &Path,
     budget: &Budget,
     arm: (u64, u64),
 ) -> Result<Option<Driven>, DriveErr> {
@@ -401,10 +405,8 @@ fn drive_async(
             // 外部に何も無いので、workspace は初期 snapshot から作り直してよい。
             let _ = fs::remove_dir_all(out.join(rel));
             copy_tree(repo, req.workspace)?;
-            copy_tree(kb, req.kb)?;
         } else if !req.workspace.exists() {
             copy_tree(repo, req.workspace)?;
-            copy_tree(kb, req.kb)?;
         }
         let t = match existing {
             Some(t) => t,
@@ -469,7 +471,7 @@ pub fn run(
             return Err("out dir belongs to a different campaign hash; use an empty dir".into());
         }
     }
-    let (repo, kb, repo_sha, kb_sha) = prepare_snapshot(m, opts)?;
+    let (repo, _kb, repo_sha, kb_sha) = prepare_snapshot(m, opts)?;
     write_json(
         &out.join(CAMPAIGN_FILE),
         &serde_json::to_value(m.normalized()).map_err(|e| e.to_string())?,
@@ -602,13 +604,14 @@ pub fn run(
             let arm = arm_use.get(&cid).copied().unwrap_or_default();
             let cap = effective_cap(&m.budget, arm.0, arm.1);
             let rel = format!("trials/{cid:?}/{pid}/rep{rep_no}");
-            let (ws, kbd) = (out.join(&rel).join("workspace"), out.join(&rel).join("kb"));
+            let ws = out.join(&rel).join("workspace");
+            // 試行の KB は workspace の中（初期 snapshot の複製）。別 dir に置くと実行器が参照できない。
+            let kbd = ws.join("kb");
             let is_async = exec.is_async();
             if !is_async {
                 // 中断した試行の残骸があれば捨て、必ず初期 snapshot から作り直す。
                 let _ = fs::remove_dir_all(out.join(&rel));
                 copy_tree(&repo, &ws)?;
-                copy_tree(&kb, &kbd)?;
                 rec.workspace_sha256_initial = hash_tree(&ws)?;
                 rec.kb_sha256_initial = hash_tree(&kbd)?;
                 if rec.workspace_sha256_initial != repo_sha || rec.kb_sha256_initial != kb_sha {
@@ -622,7 +625,7 @@ pub fn run(
                 rec.kb_sha256_initial = kb_sha.clone();
             }
             rec.workspace = format!("{rel}/workspace");
-            rec.kb = format!("{rel}/kb");
+            rec.kb = format!("{rel}/workspace/kb");
             let timeout = m.termination.trial_timeout_secs;
             let req = TrialRequest {
                 campaign_id: &m.campaign_id,
@@ -657,7 +660,6 @@ pub fn run(
                 // 投入しない。記録の hash 検査のため、初期 snapshot のままの作業場所だけ用意する。
                 if is_async {
                     copy_tree(&repo, &ws)?;
-                    copy_tree(&kb, &kbd)?;
                 }
                 errored = Some(e);
                 failed_result()
@@ -676,7 +678,6 @@ pub fn run(
                     out,
                     &rel,
                     &repo,
-                    &kb,
                     &m.budget,
                     arm,
                 ) {
@@ -724,9 +725,6 @@ pub fn run(
                 // 投入前に失敗して作業場所が無いときも初期 snapshot から作る（hash の失敗で本当の原因を隠さない）。
                 if !ws.exists() {
                     copy_tree(&repo, &ws)?;
-                }
-                if !kbd.exists() {
-                    copy_tree(&kb, &kbd)?;
                 }
             }
             if res.wall_secs > timeout && res.outcome != Outcome::Timeout {

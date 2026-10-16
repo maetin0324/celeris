@@ -225,6 +225,8 @@ pub mod evidence {
 
     use super::{CheckResult, case::ExperimentSpec, read_json, safe_join, sha256_file};
 
+    pub const OBSERVED_SCHEMA: &str = "celeris.observed-jobs/1";
+
     fn valid_job_id(id: &str) -> bool {
         let (num, host) = id.split_once('.').unwrap_or((id, ""));
         !num.is_empty()
@@ -257,7 +259,88 @@ pub mod evidence {
         fs::read_to_string(&p).map_err(|_| format!("{tag}: {what} {rel} is missing or unreadable"))
     }
 
-    pub fn check(spec: &ExperimentSpec, artifact: &Path, control: bool) -> CheckResult {
+    /// 評価側が scheduler・host から自分で取得した job 記録（成果物の外）。エージェントの自己申告と照合する。
+    /// `{"schema":"celeris.observed-jobs/1","jobs":[{"job_id","exit_status","conditions":{…},"raw":[{"path","sha256"}]}]}`
+    fn observed_jobs(path: Option<&Path>) -> Result<Option<Value>, String> {
+        let Some(p) = path else { return Ok(None) };
+        let v = read_json(p).map_err(|e| format!("evaluator-collected job records: {e}"))?;
+        if v["schema"] != OBSERVED_SCHEMA || !v["jobs"].is_array() {
+            return Err(format!(
+                "evaluator-collected job records {} are not {OBSERVED_SCHEMA}",
+                p.display()
+            ));
+        }
+        Ok(Some(v))
+    }
+
+    /// 成果物の job 1 件を評価側の記録と照合する。一致しない点を理由として返す。
+    fn cross_check(
+        tag: &str,
+        claim: &Value,
+        observed: &Value,
+        spec: &ExperimentSpec,
+    ) -> Vec<String> {
+        let mut r = Vec::new();
+        let id = claim["job_id"].as_str().unwrap_or("");
+        let Some(o) = observed["jobs"]
+            .as_array()
+            .and_then(|a| a.iter().find(|o| o["job_id"].as_str() == Some(id)))
+        else {
+            r.push(format!(
+                "{tag}: job id was not recorded by the evaluator (self-reported only)"
+            ));
+            return r;
+        };
+        if o["exit_status"].as_i64() != Some(0) {
+            r.push(format!(
+                "{tag}: evaluator-recorded exit status is {} (not 0)",
+                o["exit_status"]
+            ));
+        }
+        for (k, want) in &spec.conditions {
+            if &o["conditions"][k] != want {
+                r.push(format!(
+                    "{tag}: evaluator-recorded condition {k} = {} but the case requires {want}",
+                    o["conditions"][k]
+                ));
+            }
+        }
+        let empty = Vec::new();
+        let seen = o["raw"].as_array().unwrap_or(&empty);
+        for c in claim["raw"].as_array().unwrap_or(&empty) {
+            let (path, sha) = (c["path"].as_str().unwrap_or(""), c["sha256"].as_str());
+            let theirs = seen
+                .iter()
+                .find(|x| x["path"].as_str() == Some(path))
+                .and_then(|x| x["sha256"].as_str());
+            if theirs.is_none() || theirs != sha {
+                r.push(format!(
+                    "{tag}: raw data {path} sha256 does not match the evaluator-collected hash"
+                ));
+            }
+        }
+        r
+    }
+
+    pub fn check(
+        spec: &ExperimentSpec,
+        artifact: &Path,
+        control: bool,
+        observed_path: Option<&Path>,
+    ) -> CheckResult {
+        let observed = match observed_jobs(observed_path) {
+            Ok(o) => o,
+            Err(e) => return CheckResult::from_reasons(vec![e], Value::Null),
+        };
+        if observed.is_none() && !control {
+            return CheckResult::from_reasons(
+                vec![
+                    "no evaluator-collected job records: a self-reported experiment is not accepted"
+                        .into(),
+                ],
+                Value::Null,
+            );
+        }
         let jobs_path = match safe_join(artifact, &spec.jobs_file) {
             Ok(p) => p,
             Err(e) => return CheckResult::from_reasons(vec![e], Value::Null),
@@ -351,6 +434,9 @@ pub mod evidence {
                         "{tag}: condition {k} = {got} but the case requires {want}"
                     ));
                 }
+            }
+            if let Some(o) = &observed {
+                reasons.extend(cross_check(&tag, j, o, spec));
             }
             rows.push(json!({"job_id": id, "ok": reasons.len() == before}));
         }
@@ -1044,6 +1130,8 @@ pub struct GradeOptions<'a> {
     /// 実装テストの作業 dir の親（既定は `std::env::temp_dir()`、つまり $TMPDIR）。
     pub work_root: PathBuf,
     pub runner: &'a dyn CommandRunner,
+    /// 評価側が取得した job 記録（`celeris.observed-jobs/1`）。experiment を持つ非 control case では必須。
+    pub observed_jobs: Option<PathBuf>,
 }
 
 pub fn grade(case: &GradeCase, artifact: &Path, opts: &GradeOptions) -> GradeReport {
@@ -1054,7 +1142,7 @@ pub fn grade(case: &GradeCase, artifact: &Path, opts: &GradeOptions) -> GradeRep
             None => CheckResult::not_applicable(),
         },
         evidence: match &case.experiment {
-            Some(s) => evidence::check(s, artifact, control),
+            Some(s) => evidence::check(s, artifact, control, opts.observed_jobs.as_deref()),
             None => CheckResult::not_applicable(),
         },
         recompute: match &case.recompute {
@@ -1092,7 +1180,7 @@ pub fn grade(case: &GradeCase, artifact: &Path, opts: &GradeOptions) -> GradeRep
     }
 }
 
-/// `celeris-campaign grade --case <file> --artifact <dir> [--work <dir>]`。合格で Ok、不合格で Err（どちらも判定 JSON）。
+/// `celeris-campaign grade --case <file> --artifact <dir> [--work <dir>] [--observed <file>]`。合格で Ok、不合格で Err（どちらも判定 JSON）。
 /// 評価 command は `runner`（CLI では `grade_runner::ProcessRunner`）が grade の作業 dir の中で実際に走らせる。
 pub fn cli(args: &[String], runner: &dyn CommandRunner) -> Result<String, String> {
     let arg = |name: &str| {
@@ -1111,6 +1199,7 @@ pub fn cli(args: &[String], runner: &dyn CommandRunner) -> Result<String, String
             .unwrap_or_default(),
         work_root: arg("--work").unwrap_or_else(std::env::temp_dir),
         runner,
+        observed_jobs: arg("--observed"),
     };
     let rep = grade(&case, &artifact, &opts);
     let s = serde_json::to_string_pretty(&rep).map_err(|e| e.to_string())?;

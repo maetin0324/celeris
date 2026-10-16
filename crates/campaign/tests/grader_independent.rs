@@ -81,6 +81,8 @@ struct Fx {
     case_dir: PathBuf,
     art: PathBuf,
     work: PathBuf,
+    /// 評価側が取得した job 記録（成果物の外）。
+    observed: PathBuf,
 }
 
 const RAW: [(&str, f64); 3] = [("r1", 100.0), ("r2", 110.0), ("r3", 120.0)];
@@ -101,6 +103,7 @@ fn fixture(split: CaseSplit) -> (Fx, GradeCase) {
     write(&art.join("repo/tests/add.rs"), PRISTINE_TEST);
     // 実行証拠と生データ
     let mut raw = Vec::new();
+    let mut seen = Vec::new();
     for (i, (name, bw)) in RAW.iter().enumerate() {
         let rel = format!("raw/{name}/ior_result.json");
         let body = json!({"tests":[{"Results":[{"access":"write","bwMiB": bw}]}]}).to_string();
@@ -111,6 +114,10 @@ fn fixture(split: CaseSplit) -> (Fx, GradeCase) {
             &format!("Job Id: {job}\n    job_state = F\n    Exit_status = 0\n"),
         );
         write(&art.join(format!("evidence/{job}.log")), "IOR finished\n");
+        seen.push(json!({
+            "job_id": job, "exit_status": 0, "conditions": {"nodes": 3, "transport": "ucx"},
+            "raw": [{"path": rel, "sha256": sha(body.as_bytes())}],
+        }));
         raw.push(json!({
             "job_id": job,
             "scheduler_record": format!("evidence/{job}.qstat.txt"),
@@ -123,6 +130,11 @@ fn fixture(split: CaseSplit) -> (Fx, GradeCase) {
     write(
         &art.join("evidence/jobs.json"),
         &json!({"jobs": raw}).to_string(),
+    );
+    let observed = tmp.path().join("observed.json");
+    write(
+        &observed,
+        &json!({"schema": "celeris.observed-jobs/1", "jobs": seen}).to_string(),
     );
     write(
         &art.join("raw/baseline.csv"),
@@ -195,6 +207,7 @@ metric base_bw_median = 55\nmetric speedup = 2.0\n",
             case_dir,
             art,
             work,
+            observed,
         },
         case,
     )
@@ -205,6 +218,7 @@ fn run(fx: &Fx, case: &GradeCase, stub: &Stub) -> GradeReport {
         case_dir: fx.case_dir.clone(),
         work_root: fx.work.clone(),
         runner: stub,
+        observed_jobs: Some(fx.observed.clone()),
     };
     grade(case, &fx.art, &opts)
 }
@@ -260,6 +274,7 @@ fn success_claim_only_fails() {
         case_dir: fx.case_dir.clone(),
         work_root: fx.work.clone(),
         runner: &stub,
+        observed_jobs: None,
     };
     let r = grade(&case, &art, &opts);
     assert_eq!(r.verdict, Verdict::Fail);
@@ -579,6 +594,8 @@ fn cli_grade_outputs_json_and_exit_code() {
         .arg(&fx.art)
         .arg("--work")
         .arg(&fx.work)
+        .arg("--observed")
+        .arg(&fx.observed)
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(1));
@@ -610,6 +627,8 @@ fn cli_grade_outputs_json_and_exit_code() {
         .arg(&fx.art)
         .arg("--work")
         .arg(&fx.work)
+        .arg("--observed")
+        .arg(&fx.observed)
         .output()
         .unwrap();
     let so = String::from_utf8_lossy(&ok.stdout);
@@ -640,4 +659,83 @@ fn cli_grade_outputs_json_and_exit_code() {
     for k in ["implementation", "evidence", "recompute", "review"] {
         assert_eq!(v["checks"][k]["status"], "fail", "{k}");
     }
+}
+
+fn observed_doc(fx: &Fx) -> Value {
+    serde_json::from_str(&fs::read_to_string(&fx.observed).unwrap()).unwrap()
+}
+
+fn run_with(fx: &Fx, case: &GradeCase, observed: Option<PathBuf>) -> GradeReport {
+    let stub = Stub::ok();
+    grade(
+        case,
+        &fx.art,
+        &GradeOptions {
+            case_dir: fx.case_dir.clone(),
+            work_root: fx.work.clone(),
+            runner: &stub,
+            observed_jobs: observed,
+        },
+    )
+}
+
+/// エージェントが書いた整合的な自己申告（job id・終了記録・hash・ログが互いに辻褄が合う）だけでは通らない。
+#[test]
+fn self_reported_experiment_without_evaluator_records_fails() {
+    let (fx, case) = fixture(CaseSplit::Dev);
+    assert!(run_with(&fx, &case, Some(fx.observed.clone())).final_pass);
+    let r = run_with(&fx, &case, None);
+    assert_eq!(r.checks.evidence.status, Status::Fail);
+    assert!(reasons(&r).contains("no evaluator-collected job records"));
+    assert!(!r.final_pass);
+}
+
+#[test]
+fn job_ids_absent_from_the_evaluator_records_fail() {
+    let (fx, case) = fixture(CaseSplit::Dev);
+    let mut o = observed_doc(&fx);
+    o["jobs"].as_array_mut().unwrap().remove(1);
+    write(&fx.observed, &o.to_string());
+    let r = run_with(&fx, &case, Some(fx.observed.clone()));
+    assert_eq!(r.checks.evidence.status, Status::Fail);
+    assert!(reasons(&r).contains("42589.sirius: job id was not recorded by the evaluator"));
+    assert!(!r.final_pass);
+}
+
+#[test]
+fn evaluator_exit_condition_and_raw_hash_mismatch_fail() {
+    let (fx, case) = fixture(CaseSplit::Dev);
+    let mut o = observed_doc(&fx);
+    o["jobs"][0]["exit_status"] = json!(271);
+    o["jobs"][1]["conditions"]["nodes"] = json!(1);
+    o["jobs"][2]["raw"][0]["sha256"] = json!("0".repeat(64));
+    write(&fx.observed, &o.to_string());
+    let r = run_with(&fx, &case, Some(fx.observed.clone()));
+    assert_eq!(r.checks.evidence.status, Status::Fail);
+    let s = reasons(&r);
+    assert!(s.contains("evaluator-recorded exit status is 271"), "{s}");
+    assert!(
+        s.contains("evaluator-recorded condition nodes = 1 but the case requires 3"),
+        "{s}"
+    );
+    assert!(
+        s.contains("does not match the evaluator-collected hash"),
+        "{s}"
+    );
+}
+
+/// 成果物と生データを自己申告どおりに作り直して hash を合わせても、評価側が取得した hash とは一致しない。
+#[test]
+fn consistently_rewritten_raw_data_does_not_match_collected_hash() {
+    let (fx, case) = fixture(CaseSplit::Dev);
+    let rel = "raw/r1/ior_result.json";
+    let body = json!({"tests":[{"Results":[{"access":"write","bwMiB": 400.0}]}]}).to_string();
+    write(&fx.art.join(rel), &body);
+    let p = fx.art.join("evidence/jobs.json");
+    let mut doc: Value = serde_json::from_str(&fs::read_to_string(&p).unwrap()).unwrap();
+    doc["jobs"][0]["raw"][0]["sha256"] = json!(sha(body.as_bytes()));
+    write(&p, &doc.to_string());
+    let r = run_with(&fx, &case, Some(fx.observed.clone()));
+    assert_eq!(r.checks.evidence.status, Status::Fail);
+    assert!(reasons(&r).contains("does not match the evaluator-collected hash"));
 }

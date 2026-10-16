@@ -80,6 +80,13 @@ pub fn grade_out(
                 .unwrap_or_default(),
             work_root: std::env::temp_dir(),
             runner,
+            // 評価側の取得記録は out/observed/<problem>/<config>-rep<N>.json（成果物の外）。
+            observed_jobs: Some(
+                out.join("observed")
+                    .join(&r.problem_id)
+                    .join(format!("{:?}-rep{}.json", r.config, r.rep)),
+            )
+            .filter(|p| p.is_file()),
         };
         let rep = grade(&case, &artifact, &opts);
         graded += 1;

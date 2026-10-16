@@ -97,6 +97,7 @@ struct Fx {
     case_dir: PathBuf,
     art: PathBuf,
     work: PathBuf,
+    observed: PathBuf,
 }
 
 /// 制御用 mock 実行器の成果。kind は証拠の種別（real / mock）、Passed の自己申告つき。
@@ -115,6 +116,7 @@ fn mock_artifact(c: &LoadedCase, kind: &str) -> Fx {
     );
     write(&art.join("repo/tests/hidden.rs"), PRISTINE);
     let mut jobs = vec![];
+    let mut seen = vec![];
     for (i, (n, bw)) in [("a", 100.0), ("b", 120.0)].iter().enumerate() {
         let body = json!({"bw": bw}).to_string();
         write(&art.join(format!("raw/{n}.json")), &body);
@@ -124,6 +126,10 @@ fn mock_artifact(c: &LoadedCase, kind: &str) -> Fx {
             &format!("Job Id: {job}\n Exit_status = 0\n"),
         );
         write(&art.join(format!("evidence/{job}.log")), "done\n");
+        seen.push(
+            json!({"job_id": job, "exit_status": 0, "conditions": {"nodes": 3},
+            "raw": [{"path": format!("raw/{n}.json"), "sha256": sha(body.as_bytes())}]}),
+        );
         jobs.push(
             json!({"job_id": job, "scheduler_record": format!("evidence/{job}.qstat"),
             "log": format!("evidence/{job}.log"),
@@ -134,6 +140,11 @@ fn mock_artifact(c: &LoadedCase, kind: &str) -> Fx {
     write(
         &art.join("evidence/jobs.json"),
         &json!({"jobs": jobs}).to_string(),
+    );
+    let observed = t.path().join("observed.json");
+    write(
+        &observed,
+        &json!({"schema": "celeris.observed-jobs/1", "jobs": seen}).to_string(),
     );
     write(&art.join("report.md"), "metric bw_mean = 110.0\n");
     let findings: Vec<Value> = c
@@ -155,6 +166,7 @@ fn mock_artifact(c: &LoadedCase, kind: &str) -> Fx {
         case_dir,
         art,
         work,
+        observed,
     }
 }
 
@@ -166,6 +178,7 @@ fn run(fx: &Fx, gc: &GradeCase) -> GradeReport {
             case_dir: fx.case_dir.clone(),
             work_root: fx.work.clone(),
             runner: &Stub,
+            observed_jobs: Some(fx.observed.clone()),
         },
     )
 }

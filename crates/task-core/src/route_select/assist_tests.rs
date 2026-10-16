@@ -224,3 +224,58 @@ fn low_confidence_classification_is_ignored() {
     assert_eq!(o.lane, Tier::Standard);
     assert_eq!(o.record.unwrap().basis, "fixed_fallback");
 }
+
+fn hard_facts() -> LaneFacts {
+    LaneFacts {
+        class: WorkClass::HardInvestigation,
+        ..facts(Fact::Yes)
+    }
+}
+
+fn basis_of(base: Tier, f: LaneFacts, s: SpecificityHint) -> (Tier, String) {
+    let e = ok_entry(s, 0.9);
+    let o = run(
+        RoutingMode::DecisionAssisted,
+        false,
+        base,
+        f,
+        Some(&e),
+        &LaneLimits::default(),
+        |_| true,
+    );
+    (o.lane, o.record.unwrap().basis)
+}
+
+#[test]
+fn lane_raised_by_fixed_rule_is_fixed_rule_even_if_classification_agrees() {
+    let (lane, basis) = basis_of(
+        Tier::Standard,
+        hard_facts(),
+        SpecificityHint::NeedsInvestigationDesign,
+    );
+    assert_eq!(lane, Tier::Frontier);
+    assert_eq!(basis, "fixed_rule");
+}
+
+#[test]
+fn lane_raised_by_classification_over_fixed_rule_is_classification_raise() {
+    let (lane, basis) = basis_of(
+        Tier::Standard,
+        facts(Fact::Yes),
+        SpecificityHint::NeedsInvestigationDesign,
+    );
+    assert_eq!(lane, Tier::Frontier);
+    assert_eq!(basis, "classification_raise");
+}
+
+#[test]
+fn classification_proposal_already_covered_by_base_lane_is_not_a_raise() {
+    // fixed 規則は cheap、既存 lane は standard。分類は standard を提案するが lane は変わらない。
+    let (lane, basis) = basis_of(
+        Tier::Standard,
+        facts(Fact::Yes),
+        SpecificityHint::NeedsImplementation,
+    );
+    assert_eq!(lane, Tier::Standard);
+    assert_eq!(basis, "fixed_rule");
+}

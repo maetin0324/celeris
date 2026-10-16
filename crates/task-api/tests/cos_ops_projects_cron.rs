@@ -204,6 +204,7 @@ fn seed_project(env: &TestEnv, status: task_core::ProjectStatus) -> task_core::P
     let now = time::OffsetDateTime::now_utc();
     let project = task_core::Project {
         auto_advance: false,
+        auto_integrate: false,
         slug: None,
         id: task_core::ProjectId::new(),
         title: "lifecycle".into(),

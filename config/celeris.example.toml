@@ -455,10 +455,10 @@ interval_secs = 30                                # 判定と送信の間隔（�
 #
 # `repo` は**人の作業チェックアウト**。`GET /releases` の `on_main`
 # （`git -C <repo> merge-base --is-ancestor <sha> main`）の判定に使う。
-# delivery_projectsを有効化した案件だけ、レビュー済みSHAをこのrepoへfast-forwardする。
+# 自動取り込みは案件の属性（PATCH /api/v1/projects/{id} {"auto_integrate": true}、案件画面の切替。ADR 2026-10-16-project-auto-integrate）。
+# このrepoの案件は取り込み後にrelease準備へ進み、他のrepoの案件は既定ブランチへ取り込んで終わる。
 # `~` は celeris の $HOME で展開する。無ければ `on_main` が null になるだけ。
 # [selfdeploy]
-# delivery_projects = [] # 許可した自己改善案件ID。部署レビュー合格後にmerge・release・verify（本番デプロイは人）
 # releases_dir = "~/.local/celeris/releases"   # 既定
 # repo = "~/workspace/agent-platform"  # 既定。on_mainと自動取り込みの対象
 # ADR-0051 Phase 106追記: mergeが成功した直後、release.sh を起こす前に origin へ push する。

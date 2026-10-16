@@ -53,16 +53,13 @@ pub struct SelfdeployConfig {
     /// Runtime settings parsed from the top-level `[delivery]` table by `Config::load`.
     #[serde(skip)]
     pub delivery: DeliveryConfig,
-    /// ADR-0051: 自動取り込みを許可する自己改善案件。空なら無効。
-    #[serde(default)]
-    pub delivery_projects: Vec<String>,
     /// ADR-0121 D1: project ID to fallback department ID.
     #[serde(default)]
     pub delivery_default_departments: BTreeMap<String, String>,
     #[serde(default = "default_releases_dir")]
     pub releases_dir: PathBuf,
     /// ADR-0041 D3: **作業チェックアウト**の場所（`~/workspace/agent-platform`）。
-    /// `GET /releases` の `on_main` 判定と、delivery_projects有効時のレビュー済みSHAの取り込みに使う。
+    /// `GET /releases` の `on_main` 判定と、自己リポジトリ案件のレビュー済みSHAの取り込みに使う。
     /// `~` は celeris の `$HOME` で展開する。無くても構わない（その場合 `on_main` は `null`）。
     #[serde(default = "default_selfdeploy_repo")]
     pub repo: PathBuf,
@@ -86,7 +83,6 @@ impl Default for SelfdeployConfig {
         Self {
             delivery: DeliveryConfig::default(),
             releases_dir: default_releases_dir(),
-            delivery_projects: Vec::new(),
             delivery_default_departments: BTreeMap::new(),
             repo: default_selfdeploy_repo(),
             push: default_selfdeploy_push(),
@@ -144,15 +140,6 @@ impl SelfdeployConfig {
             return Err(ConfigError::Invalid(
                 "delivery_default_departments keys must be project IDs".into(),
             ));
-        }
-        if !self.delivery_projects.is_empty()
-            && (self
-                .delivery_projects
-                .iter()
-                .any(|p| p.parse::<task_core::ProjectId>().is_err())
-                || self.releases_dir.file_name().and_then(|v| v.to_str()) != Some("releases"))
-        {
-            return Err(ConfigError::Invalid("delivery_projects requires project IDs and the standard <state>/releases directory".into()));
         }
         // ADR-0051 Phase 106追記: 空のリモート名でpushしようとして分かりにくいgitエラーになるのを防ぐ。
         if self.push_remote.trim().is_empty() {

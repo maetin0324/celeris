@@ -128,8 +128,6 @@ impl Config {
         DispatchConfig {
             source_error_cooldown: std::time::Duration::from_secs(self.error_cooldown_secs),
             delivery: task_ops::delivery::DeliveryPolicy {
-                projects: self.selfdeploy.delivery_projects.clone(),
-                repo: self.selfdeploy.repo.clone(),
                 default_departments: self.selfdeploy.delivery_default_departments.clone(),
             },
             config_max_concurrency: self.max_concurrency,

@@ -593,11 +593,15 @@ draining のまま run の面倒を見る上限（§4b）。
 
 ## 9. 部署レビューから自動で候補を準備する（ADR-0051）
 
-`[selfdeploy] delivery_projects = ["案件ID"]` を指定してreloadすると、
-その案件の登録済み自己リポジトリに対する次のReviewer runでマージ可否も判定する。
+自動取り込みは**案件の属性**（`auto_integrate`。既定は無効＝手動取り込み。ADR 2026-10-16-project-auto-integrate）。
+`PATCH /api/v1/projects/{id}` に `{"auto_integrate": true}` を送るか、Web の案件画面の「自動取り込み」で切り替える
+（reload・再起動は要らない）。有効な案件の root task は、次のReviewer runでマージ可否も判定する。
 部署長の別runが既存レビューを担当するため、CoSに技術的な再承認は求めない。
-合格した固定SHAだけをfast-forwardし、release/verify成功後にCoSからデプロイ候補を通知する。
-本番昇格は引き続きリリース画面から行う。空配列が既定（手動取り込み）。
+合格した固定SHAを task の repo（案件のローカルリポジトリ）の既定ブランチへfast-forwardする。
+取り込み先が `[selfdeploy] repo`（自己リポジトリ）なら、そのあとrelease/verifyを準備し、成功後にCoSからデプロイ候補を通知する
+（本番昇格は引き続きリリース画面から行う）。**それ以外のリポジトリは取り込みで止まり**、release・promoteには進まない
+（CoSには「取り込み完了」を通知する）。push は `[selfdeploy] push` が有効で、取り込み先に `push_remote` が実在するときだけ行う。
+旧 `[selfdeploy] delivery_projects` は廃止（書くと config の読み込みエラー）。
 
 完了済みの仕事を引き渡すには、管理API `POST /tasks/{id}/rereview` に
 `{"expected_status":"done"}` を送る。実装をやり直さず、現在のコミットを再判定する。

@@ -84,6 +84,7 @@ pub(crate) fn create_project_op(
     let now = OffsetDateTime::now_utc();
     let project = Project {
         auto_advance: false,
+        auto_integrate: false,
         slug: None,
         archived_at: None,
         paused_from: None,
@@ -280,14 +281,16 @@ pub(super) async fn patch_project(
         && patch.slug.is_none()
         && patch.title.is_none()
         && patch.request.is_none()
+        && patch.auto_integrate.is_none()
     {
         return Err(ApiProblem::validation(vec![ValidationError {
             field: None,
-            message: "specify at least one of `status`, `workspace`, `slug`, `title` or `request`"
+            message: "specify at least one of `status`, `workspace`, `slug`, `title`, `request` or `auto_integrate`"
                 .into(),
         }]));
     }
     let (title, request) = project_text_input(patch.title.as_deref(), patch.request.as_deref())?;
+    let auto_integrate = patch.auto_integrate;
     // Phase K-1: slug の綴りは先に見る（422）。重複は store が 409 で返す。
     if let Some(slug) = patch.slug.as_deref()
         && !task_core::knowledge::is_valid_project_slug(slug.trim())
@@ -345,6 +348,13 @@ pub(super) async fn patch_project(
             {
                 return Err(ApiProblem::project_not_found(&project_id.to_string()));
             }
+            if let Some(enabled) = patch.auto_integrate
+                && !store
+                    .project_set_auto_integrate(project_id, enabled)
+                    .map_err(store_problem)?
+            {
+                return Err(ApiProblem::project_not_found(&project_id.to_string()));
+            }
             // ADR-0072「Phase F6 実装時の決定」: 変わった欄だけを書き、監査用に名前を返す。
             let (text_fields, old_title) = set_project_text_op(
                 store,
@@ -362,6 +372,9 @@ pub(super) async fn patch_project(
         })
         .await?;
     let (project, text_fields, old_title) = project;
+    if let Some(enabled) = auto_integrate {
+        tracing::info!(who = "admin", op = "project_updated", project_id = %project_id, fields = ?["auto_integrate"], auto_integrate = enabled, "admin: project updated");
+    }
     if !text_fields.is_empty() {
         // 案件には events の列が無い（events は Task ごと）ので、監査は管理系の構造化ログに残す
         // （ADR-0072「Phase F6 実装時の決定」P4）。

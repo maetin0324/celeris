@@ -388,6 +388,10 @@ pub struct Project {
     /// [`Project::kb_slug`] が同じ規則で補う）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub slug: Option<String>,
+    /// ADR 2026-10-16-project-auto-integrate D1: `true` なら、この案件のレビュー合格した root task を
+    /// 既定ブランチへ自動で取り込む（delivery）。既定 `false`。
+    #[serde(default)]
+    pub auto_integrate: bool,
     #[serde(with = "time::serde::rfc3339")]
     #[schemars(with = "String")]
     pub created_at: OffsetDateTime,

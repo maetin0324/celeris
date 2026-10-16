@@ -9,6 +9,7 @@ fn a_project_without_plan_versions_has_no_dag() {
     let now = OffsetDateTime::now_utc();
     let project = Project {
         auto_advance: false,
+        auto_integrate: false,
         slug: None,
         archived_at: None,
         paused_from: None,

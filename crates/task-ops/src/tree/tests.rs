@@ -394,6 +394,7 @@ fn repository_required_child_task_inherits_the_parent_project_and_repos() {
     let now = OffsetDateTime::now_utc();
     let project = Project {
         auto_advance: false,
+        auto_integrate: false,
         slug: None,
         archived_at: None,
         paused_from: None,

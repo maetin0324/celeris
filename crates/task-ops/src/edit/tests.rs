@@ -441,6 +441,7 @@ fn repos_are_resolved_by_name_within_the_tasks_project() {
     let now = OffsetDateTime::now_utc();
     let project = Project {
         auto_advance: false,
+        auto_integrate: false,
         slug: None,
         archived_at: None,
         paused_from: None,
@@ -800,6 +801,7 @@ fn project_id_can_be_attached_once_to_a_project_less_task_that_never_ran() {
     let mk_project = |title: &str| {
         let project = Project {
             auto_advance: false,
+            auto_integrate: false,
             slug: None,
             archived_at: None,
             paused_from: None,
@@ -928,6 +930,7 @@ fn repository_required_attach_project_to_blocked_child_inherits_parent_repos() {
     let now = OffsetDateTime::now_utc();
     let project = Project {
         auto_advance: false,
+        auto_integrate: false,
         slug: None,
         archived_at: None,
         paused_from: None,

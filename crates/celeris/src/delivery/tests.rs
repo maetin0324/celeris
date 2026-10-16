@@ -114,6 +114,7 @@ fn stored_delivery() -> (task_core::SqliteStore, Delivery) {
     }
     let p = Project {
         auto_advance: false,
+        auto_integrate: true,
         slug: None,
         id: ProjectId::new(),
         title: "test".into(),
@@ -520,6 +521,120 @@ fn cfg_for(repo: &Path, releases_dir: &Path) -> Config {
     cfg.selfdeploy.repo = repo.to_path_buf();
     cfg.selfdeploy.releases_dir = releases_dir.to_path_buf();
     cfg
+}
+
+/// 案件のリポジトリ行（`delivery_repo` が取り込み先を引く）を `dir` で登録する。
+fn register_repo(store: &task_core::SqliteStore, d: &Delivery, dir: &Path) {
+    use task_core::TaskStore;
+    store
+        .repo_create(&task_core::ProjectRepo {
+            id: d.repo_id,
+            project_id: d.project_id,
+            name: "asmr".into(),
+            kind: task_core::RepoKind::Git,
+            location: task_core::WorkspaceSpec::Local {
+                path: dir.to_path_buf(),
+                mode: None,
+            },
+            default_branch: Some("main".into()),
+            sync: None,
+            run: Default::default(),
+            is_primary: true,
+            created_at: OffsetDateTime::now_utc(),
+        })
+        .unwrap();
+}
+
+/// ADR 2026-10-16-project-auto-integrate D2/D3: 自己リポジトリ以外（remote なし）は既定ブランチへ ff で
+/// 取り込んで止まる。release 準備・push は起こさない。
+#[test]
+fn non_self_repo_is_merged_without_release_or_push() {
+    use task_core::{DeliveryStore, IntegrationState, TaskStore};
+    let (store, dir, d) = merge_queued_delivery();
+    register_repo(&store, &d, dir.path());
+    let self_repo = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let releases = tmp.path().join("releases");
+    let cfg = cfg_for(self_repo.path(), &releases);
+    advance(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
+    let after = store.delivery_get(d.task_id).unwrap().unwrap();
+    assert_eq!(after.state, State::Ready);
+    assert!(after.release.is_none());
+    assert!(after.prepare_pid.is_none());
+    assert!(after.pushed_at.is_none() && after.push_error.is_none());
+    assert!(after.detail.contains("release なし"), "{}", after.detail);
+    assert_eq!(sha(dir.path(), "refs/heads/main").unwrap(), after.head);
+    assert!(!releases.exists(), "release 準備の作業場所を作らない");
+    let integrations = store
+        .integration_list_for_project(d.project_id, 10)
+        .unwrap();
+    assert!(
+        integrations
+            .iter()
+            .any(|i| i.state == IntegrationState::Done)
+    );
+    // 次の tick で取り込み完了を人（秘書）に 1 度だけ知らせる。release のリンクは付かない。
+    let ready = store.delivery_get(d.task_id).unwrap().unwrap();
+    advance(&store, &cfg, &ready, OffsetDateTime::now_utc()).unwrap();
+    let notified = store.delivery_get(d.task_id).unwrap().unwrap();
+    assert!(notified.notification.is_some());
+    let messages = store.message_list("cos", Some(d.project_id), 10).unwrap();
+    assert!(messages.iter().any(|m| m.text.contains("取り込み完了")));
+    assert!(messages.iter().all(|m| !m.text.contains("/releases")));
+}
+
+/// remote が実在する自己リポジトリ以外は push する（remote が無ければ上の試験のとおり push しない）。
+#[test]
+fn non_self_repo_with_a_remote_is_pushed_but_still_has_no_release() {
+    use task_core::DeliveryStore;
+    let (store, dir, d) = merge_queued_delivery();
+    register_repo(&store, &d, dir.path());
+    let bare = bare_remote();
+    git_text(
+        dir.path(),
+        &["remote", "add", "origin", bare.path().to_str().unwrap()],
+    )
+    .unwrap();
+    let self_repo = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let cfg = cfg_for(self_repo.path(), &tmp.path().join("releases"));
+    advance(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
+    let after = store.delivery_get(d.task_id).unwrap().unwrap();
+    assert_eq!(after.state, State::Ready);
+    assert!(after.release.is_none() && after.prepare_pid.is_none());
+    assert!(after.pushed_at.is_some());
+    assert_eq!(sha(bare.path(), "refs/heads/main").unwrap(), after.head);
+}
+
+/// `tick` は案件の `auto_integrate`（DB）が有効な配送だけを進める。無効なら従来どおり取り込まない。
+#[test]
+fn tick_advances_only_projects_with_auto_integrate() {
+    use task_core::{DeliveryStore, TaskStore};
+    let (store, dir, d) = merge_queued_delivery();
+    register_repo(&store, &d, dir.path());
+    let self_repo = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let cfg = cfg_for(self_repo.path(), &tmp.path().join("releases"));
+    let before = sha(dir.path(), "refs/heads/main").unwrap();
+    assert!(
+        store
+            .project_set_auto_integrate(d.project_id, false)
+            .unwrap()
+    );
+    tick(&store, &cfg, OffsetDateTime::now_utc()).unwrap();
+    let off = store.delivery_get(d.task_id).unwrap().unwrap();
+    assert_eq!(off.state, State::MergeQueued);
+    assert_eq!(sha(dir.path(), "refs/heads/main").unwrap(), before);
+    assert!(
+        store
+            .project_set_auto_integrate(d.project_id, true)
+            .unwrap()
+    );
+    tick(&store, &cfg, OffsetDateTime::now_utc()).unwrap();
+    let on = store.delivery_get(d.task_id).unwrap().unwrap();
+    assert_eq!(on.state, State::Ready);
+    assert_eq!(sha(dir.path(), "refs/heads/main").unwrap(), on.head);
+    assert!(on.release.is_none());
 }
 
 #[test]

@@ -24,6 +24,7 @@ fn project(env: &TestEnv) -> Project {
     let now = OffsetDateTime::now_utc();
     let project = Project {
         auto_advance: false,
+        auto_integrate: false,
         slug: None,
         id: ProjectId::new(),
         title: "browser".to_string(),

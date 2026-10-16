@@ -19,6 +19,7 @@ fn project(store: &SqliteStore, title: &str) -> ProjectId {
     let now = OffsetDateTime::now_utc();
     let project = Project {
         auto_advance: false,
+        auto_integrate: false,
         slug: None,
         archived_at: None,
         paused_from: None,

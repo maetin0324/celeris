@@ -4066,6 +4066,7 @@ export type ProgressKind = "tool_use" | "tool_result" | "text" | "thinking" | "s
 export type Project = {
   "archived_at"?: string | null;
   "auto_advance"?: boolean;
+  "auto_integrate"?: boolean;
   "created_at": string;
   "id": ProjectId;
   "paused_from"?: ProjectStatus | null;
@@ -4119,6 +4120,7 @@ export type ProjectList = {
 
 export type ProjectPatchBody = {
   "auto_advance"?: boolean | null;
+  "auto_integrate"?: boolean | null;
   "request"?: string | null;
   "slug"?: string | null;
   "status"?: ProjectStatus | null;

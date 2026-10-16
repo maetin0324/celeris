@@ -1530,7 +1530,7 @@ ULID でない id・無い案件は 404 `project_not_found`。知らないクエ
 
 #### 3.48 `PATCH /projects/{id}` → 200 `Project`（**管理系**）
 
-`{"status":…, "workspace":…, "slug":…, "title":…, "request":…}` のうち**書いたものだけ**を変える。
+`{"status":…, "workspace":…, "slug":…, "title":…, "request":…, "auto_integrate":…}` のうち**書いたものだけ**を変える。
 知らない欄・知らない `status` の値は 400 `bad_request`（本文の解析で落ちる）。
 
 - `status`: `"proposed"` / `"active"` / `"done"`。**`paused` / `cancelled` は入れられない**
@@ -1543,6 +1543,8 @@ ULID でない id・無い案件は 404 `project_not_found`。知らないクエ
   （ADR-0044 D7）。
 - `title`（前後の空白を除いて 1〜200 文字）/ `request`（同じく 1〜20,000 文字）。空・長すぎるものは 422。
   `request` を書き換えても run は起きない（ADR-0072）。
+- `auto_integrate`（boolean）: レビュー合格した root task を既定ブランチへ自動で取り込むか（既定 `false`。
+  ADR 2026-10-16-project-auto-integrate）。reload は要らない。自己リポジトリ以外の案件は取り込みで止まり、release・promote には進まない。
 - `auto_advance` は廃止（書けば 422 `validation`、`errors[0].field = "auto_advance"`。ADR-0079 D13）。
 - どれも書かない（`{}`）は 422 `validation`。
 - ULID でない id・無い案件は 404 `project_not_found`。

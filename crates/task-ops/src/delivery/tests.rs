@@ -28,6 +28,7 @@ fn existing_reviewer_gets_a_pinned_merge_criterion_without_extra_tasks() {
     }
     let project = Project {
         auto_advance: false,
+        auto_integrate: true,
         slug: None,
         id: ProjectId::new(),
         title: "test".into(),
@@ -81,8 +82,6 @@ fn existing_reviewer_gets_a_pinned_merge_criterion_without_extra_tasks() {
     fs::create_dir_all(&taskdir).unwrap();
     fs::write(taskdir.join("worktree.json"),serde_json::json!({"repo":p,"dir":p,"branch":branch,"base":"","base_kind":"main","repos":[{"name":"repo","kind":"git","source":p,"dir":p,"branch":branch}]}).to_string()).unwrap();
     let policy = DeliveryPolicy {
-        projects: vec![project.id.to_string()],
-        repo: p,
         default_departments: [(project.id.to_string(), "engineering".into())]
             .into_iter()
             .collect(),
@@ -219,6 +218,27 @@ fn target_advanced_count_resets_only_on_explicit_restart() {
     events.push(transitioned("rereview"));
     events.push(advanced(repo));
     assert_eq!(target_restale_count(&events, repo), 1);
+}
+
+fn enable_project(store: &SqliteStore, id: ProjectId) {
+    let now = time::OffsetDateTime::now_utc();
+    store
+        .project_create(&Project {
+            id,
+            title: "p".into(),
+            request: "r".into(),
+            status: ProjectStatus::Active,
+            secretary_summary: None,
+            workspace: None,
+            archived_at: None,
+            paused_from: None,
+            auto_advance: false,
+            slug: None,
+            auto_integrate: true,
+            created_at: now,
+            updated_at: now,
+        })
+        .unwrap();
 }
 
 fn fallback_fixture() -> (SqliteStore, Task, DeliveryPolicy) {
@@ -428,7 +448,7 @@ fn department_fallback_unresolved_returns_none() {
 
 #[test]
 fn department_fallback_tree_child_and_outside_project_create_no_delivery() {
-    let (store, mut task, mut policy) = fallback_fixture();
+    let (store, mut task, policy) = fallback_fixture();
     let project_id = ProjectId::new();
     task.project_id = Some(project_id);
     task.assignee = Some("software".into());
@@ -438,7 +458,7 @@ fn department_fallback_tree_child_and_outside_project_create_no_delivery() {
             .unwrap()
             .is_none()
     );
-    policy.projects.push(project_id.to_string());
+    enable_project(&store, project_id);
     task.tree = Some(TreeInfo {
         root_id: TaskId::new(),
         depth: 2,
@@ -495,6 +515,7 @@ fn skip_fixture() -> SkipFixture {
     }
     let project = Project {
         auto_advance: false,
+        auto_integrate: true,
         slug: None,
         id: ProjectId::new(),
         title: "test".into(),
@@ -546,8 +567,6 @@ fn skip_fixture() -> SkipFixture {
         store,
         task,
         policy: DeliveryPolicy {
-            projects: vec![project.id.to_string()],
-            repo: p.clone(),
             default_departments: Default::default(),
         },
         root,
@@ -696,14 +715,16 @@ fn delivery_skip_once_per_head() {
 fn delivery_skip_tree_child_and_out_of_policy_are_recorded() {
     let mut f = skip_fixture();
     // 対象外の案件（marker も部署も無いので project 除外理由を優先する）。
-    f.policy.projects.clear();
+    f.store
+        .project_set_auto_integrate(f.task.project_id.unwrap(), false)
+        .unwrap();
     fs::remove_file(f.root.join(f.task.id.to_string()).join("worktree.json")).unwrap();
     assert!(f.begin().is_none());
     assert_eq!(f.skips()[0].0, DeliverySkipReason::ProjectNotEnabled);
     // 対象案件の木の子。
-    f.policy
-        .projects
-        .push(f.task.project_id.unwrap().to_string());
+    f.store
+        .project_set_auto_integrate(f.task.project_id.unwrap(), true)
+        .unwrap();
     let parent = TaskId::new();
     f.task.tree = Some(TreeInfo {
         root_id: parent,

@@ -344,10 +344,11 @@ impl Dispatcher {
         };
 
         let delivery_requires_reviewer_run = task.project_id.is_some_and(|project_id| {
-            self.config
-                .delivery
-                .projects
-                .contains(&project_id.to_string())
+            self.store
+                .project_get(project_id)
+                .ok()
+                .flatten()
+                .is_some_and(|p| p.auto_integrate)
                 && task_core::support_kind(&task).is_none()
                 && !task_core::tree::is_tree_child(&task)
         });

@@ -1444,6 +1444,7 @@ fn titled_project(title: &str) -> Project {
     let now = OffsetDateTime::now_utc();
     Project {
         auto_advance: false,
+        auto_integrate: false,
         slug: None,
         archived_at: None,
         paused_from: None,
@@ -1764,6 +1765,7 @@ fn project_with_repos(
     let now = OffsetDateTime::now_utc();
     let project = task_core::Project {
         auto_advance: false,
+        auto_integrate: false,
         slug: None,
         archived_at: None,
         paused_from: None,

@@ -2,7 +2,7 @@
 //! 判断は既存の独立したReviewer run。ここは永続状態を決定的に進めるだけで promote は呼ばない。
 use crate::config::Config;
 use std::{
-    path::Path,
+    path::{Path, PathBuf},
     process::{Command, Stdio},
     time::Duration,
 };
@@ -127,7 +127,7 @@ fn maybe_retry_push(
     old: &Delivery,
     now: OffsetDateTime,
 ) -> Result<Delivery, StoreError> {
-    if !config.selfdeploy.push || old.release.is_none() || old.pushed_at.is_some() {
+    if !config.selfdeploy.push || old.pushed_at.is_some() {
         return Ok(old.clone());
     }
     let Some(err) = &old.push_error else {
@@ -138,7 +138,7 @@ fn maybe_retry_push(
     }
     let mut next = old.clone();
     match push_merged(
-        &config.selfdeploy.repo,
+        &delivery_repo(store, config, old),
         &config.selfdeploy.push_remote,
         &old.default_branch,
         PUSH_TIMEOUT,
@@ -155,6 +155,34 @@ fn maybe_retry_push(
         old.clone()
     })
 }
+/// この配送の取り込み先（task の repo 行のローカル path）。行が読めなければ自己リポジトリ。
+fn delivery_repo(store: &dyn TaskStore, config: &Config, d: &Delivery) -> PathBuf {
+    store
+        .repo_list(d.project_id)
+        .ok()
+        .and_then(|repos| repos.into_iter().find(|r| r.id == d.repo_id))
+        .and_then(|r| match r.location {
+            task_core::WorkspaceSpec::Local { path, .. } => Some(path),
+            _ => None,
+        })
+        .unwrap_or_else(|| config.selfdeploy.repo.clone())
+}
+
+/// ADR 2026-10-16-project-auto-integrate D3: 取り込み先が自己リポジトリなら release 準備へ進む。
+fn is_self_repo(config: &Config, repo: &Path) -> bool {
+    match (repo.canonicalize(), config.selfdeploy.repo.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
+}
+
+/// push は取り込み先に `remote` が実在するときだけ（remote の無い repo は push しない）。
+fn has_remote(repo: &Path, remote: &str) -> bool {
+    git_text(repo, &["remote"])
+        .map(|s| s.lines().any(|l| l.trim() == remote))
+        .unwrap_or(false)
+}
+
 pub fn tick(store: &dyn TaskStore, config: &Config, now: OffsetDateTime) -> Result<(), StoreError> {
     for delivery in store.delivery_list()? {
         // ADR-0079 D6（Phase R1c）: 木の子 task は main に取り込まない（`task_ops::delivery::begin` が行を
@@ -165,10 +193,10 @@ pub fn tick(store: &dyn TaskStore, config: &Config, now: OffsetDateTime) -> Resu
         {
             continue;
         }
-        if config
-            .selfdeploy
-            .delivery_projects
-            .contains(&delivery.project_id.to_string())
+        // ADR 2026-10-16-project-auto-integrate D1: 自動取り込みは案件の属性（DB）。
+        if store
+            .project_get(delivery.project_id)?
+            .is_some_and(|p| p.auto_integrate)
         {
             advance(store, config, &delivery, now)?;
         }
@@ -370,13 +398,11 @@ fn make_repair(
     {
         return Ok(None);
     }
-    let branch_head = sha(&config.selfdeploy.repo, &format!("refs/heads/{}", d.branch))
-        .unwrap_or_else(|_| d.head.clone());
-    let main_head = sha(
-        &config.selfdeploy.repo,
-        &format!("refs/heads/{}", d.default_branch),
-    )
-    .unwrap_or_else(|_| d.base.clone());
+    let repo = delivery_repo(store, config, d);
+    let branch_head =
+        sha(&repo, &format!("refs/heads/{}", d.branch)).unwrap_or_else(|_| d.head.clone());
+    let main_head =
+        sha(&repo, &format!("refs/heads/{}", d.default_branch)).unwrap_or_else(|_| d.base.clone());
     let output = if class == RepairClass::Format {
         let log = config
             .selfdeploy
@@ -522,7 +548,9 @@ fn advance(
     let retried = maybe_retry_push(store, config, old, now)?;
     let old = &retried;
     let mut d = old.clone();
-    let repo = &config.selfdeploy.repo;
+    let repo_buf = delivery_repo(store, config, old);
+    let repo = &repo_buf;
+    let self_repo = is_self_repo(config, repo);
     if old.state == State::MergeQueued {
         if !store
             .get(old.task_id)?
@@ -581,13 +609,24 @@ fn advance(
                             d.default_branch, d.head
                         )),
                     )?;
-                    d.state = State::Preparing;
-                    d.release = Some(d.head[..12].into());
-                    d.detail =
-                        "部署内レビュー合格・マージ済み。ビルドとリリース検証を実行中です".into();
+                    if self_repo {
+                        d.state = State::Preparing;
+                        d.release = Some(d.head[..12].into());
+                        d.detail =
+                            "部署内レビュー合格・マージ済み。ビルドとリリース検証を実行中です"
+                                .into();
+                    } else {
+                        // ADR 2026-10-16-project-auto-integrate D3: 自己リポジトリ以外は取り込みで止める
+                        // （release 準備・promote には進まない）。
+                        d.state = State::Ready;
+                        d.detail = format!(
+                            "部署内レビュー合格・{} へ取り込み済み（release なし）",
+                            d.default_branch
+                        );
+                    }
                     // ADR-0051 Phase 106: release.sh（start_prepare）を起こす前にoriginへpush。
                     // 失敗してもrelease準備は止めない（下のstart_prepareはこの結果を待たない）。
-                    if config.selfdeploy.push {
+                    if config.selfdeploy.push && has_remote(repo, &config.selfdeploy.push_remote) {
                         match push_merged(
                             repo,
                             &config.selfdeploy.push_remote,
@@ -607,7 +646,7 @@ fn advance(
             if !store.delivery_save(Some(&claimed), &d)? {
                 return Ok(());
             }
-            if d.state == State::Preparing {
+            if matches!(d.state, State::Preparing | State::Ready) {
                 let mut integration = task_core::TaskIntegration::new(
                     d.task_id,
                     Some(d.repo_id),
@@ -622,7 +661,9 @@ fn advance(
                 ));
                 integration.merged_at = Some(now);
                 store.integration_put(&integration)?;
-                start_prepare(store, config, &d)?;
+                if d.state == State::Preparing {
+                    start_prepare(store, config, &d)?;
+                }
             }
         }
         State::Merging => {
@@ -792,6 +833,7 @@ fn advance(
                             })
                             .count();
                         let request = auto_resolve::limit_request(
+                            store,
                             config,
                             old,
                             format!(
@@ -833,7 +875,9 @@ fn advance(
                 .any(|m| m.id == id)
             {
                 let title = store.get(d.task_id)?.map(|t| t.title).unwrap_or_default();
-                let label = if d.state == State::Ready {
+                let label = if d.state == State::Ready && d.release.is_none() {
+                    "取り込み完了"
+                } else if d.state == State::Ready {
                     "デプロイ準備完了"
                 } else {
                     "取り込み・リリース準備の確認が必要"

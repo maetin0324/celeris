@@ -12,6 +12,7 @@ fn a_project(store: &dyn TaskStore, status: ProjectStatus) -> Project {
     let now = OffsetDateTime::now_utc();
     let project = Project {
         auto_advance: false,
+        auto_integrate: false,
         slug: None,
         id: ProjectId::new(),
         title: "案件".to_string(),

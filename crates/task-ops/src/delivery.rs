@@ -38,8 +38,6 @@ pub fn target_restale_count(events: &[Event], repo: RepoId) -> u32 {
 
 #[derive(Debug, Clone, Default)]
 pub struct DeliveryPolicy {
-    pub projects: Vec<String>,
-    pub repo: PathBuf,
     pub default_departments: BTreeMap<String, String>,
 }
 
@@ -177,10 +175,14 @@ fn prepare(
     };
     // ADR-0079 D6（Phase R1c）: 木の子 task は main に取り込まない（成果は親の段階末尾の統合で親の
     // ブランチに入る）。部署の取り込み判定・`deliveries` の行・release は root だけ。
-    if !policy.projects.contains(&project_id.to_string()) {
+    // ADR 2026-10-16-project-auto-integrate D1: 自動取り込みは案件の属性（DB）。
+    if !store
+        .project_get(project_id)?
+        .is_some_and(|p| p.auto_integrate)
+    {
         return Ok(Err(report(
             DeliverySkipReason::ProjectNotEnabled,
-            format!("project {project_id} は selfdeploy.delivery_projects の対象外です"),
+            format!("project {project_id} は自動取り込み（auto_integrate）が無効です"),
         )));
     }
     if task_core::support_kind(task).is_some() {
@@ -241,15 +243,15 @@ fn prepare(
             format!("repo {} はローカルではない", row.name),
         )));
     };
+    // ADR 2026-10-16-project-auto-integrate D2: 取り込み先は task の repo 行の path（自己リポジトリとは限らない）。
     let canonical = path.canonicalize().ok();
-    if !path.is_dir() || canonical != policy.repo.canonicalize().ok() {
+    if !path.is_dir() || canonical.is_none() {
         return Ok(Err(report(
             DeliverySkipReason::RepoPathMismatch,
             format!(
-                "repo {} の path {} / 取り込み先 {}",
+                "repo {} の path {} がディレクトリではない",
                 row.name,
-                path.display(),
-                policy.repo.display()
+                path.display()
             ),
         )));
     }

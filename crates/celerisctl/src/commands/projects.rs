@@ -104,6 +104,7 @@ mod tests {
         let now = OffsetDateTime::now_utc();
         Project {
             auto_advance: false,
+            auto_integrate: false,
             slug: None,
             id: ProjectId::new(),
             title: "Pluvio".into(),

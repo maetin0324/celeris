@@ -470,6 +470,10 @@ impl TaskStore for SqliteStore {
         self.project_set_archived_at_impl(id, at)
     }
 
+    fn project_set_auto_integrate(&self, id: ProjectId, enabled: bool) -> Result<bool, StoreError> {
+        self.project_set_auto_integrate_impl(id, enabled)
+    }
+
     fn project_set_slug(&self, id: ProjectId, slug: &str) -> Result<bool, StoreError> {
         self.project_set_slug_impl(id, slug)
     }

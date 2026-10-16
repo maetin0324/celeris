@@ -976,6 +976,18 @@ client = "chatgpt"
     assert!(matches!(bad.validate(), Err(ConfigError::Invalid(_))));
 }
 
+/// ADR 2026-10-16-project-auto-integrate D5: 自動取り込みは案件の属性になり、config 欄は読み込みエラー。
+#[test]
+fn selfdeploy_delivery_projects_is_removed_and_rejected() {
+    let err = toml::from_str::<Config>(
+        "[selfdeploy]\ndelivery_projects = [\"01M2WTS3DKNZBSZ2JMVB4CZMBW\"]\n",
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("delivery_projects"), "{err}");
+    assert!(toml::from_str::<Config>("[selfdeploy]\ndelivery_projects = []\n").is_err());
+}
+
 /// ADR-0051 Phase 106追記: `[selfdeploy] push` / `push_remote` の既定と検査。
 #[test]
 fn selfdeploy_push_defaults_to_true_and_origin_and_rejects_blank_remote() {

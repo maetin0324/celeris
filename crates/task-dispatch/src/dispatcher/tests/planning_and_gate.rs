@@ -105,6 +105,7 @@ async fn frozen_milestones_do_not_gate_or_advance_root_tasks() {
     let now = OffsetDateTime::now_utc();
     let project = task_core::Project {
         auto_advance: false,
+        auto_integrate: false,
         slug: None,
         id: task_core::ProjectId::new(),
         title: "案件".into(),

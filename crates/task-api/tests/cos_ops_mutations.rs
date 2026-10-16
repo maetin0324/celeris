@@ -297,6 +297,7 @@ async fn cos_ops_mutations_tree_adopt_is_audited_atomically() {
     let now = time::OffsetDateTime::now_utc();
     let project = task_core::Project {
         auto_advance: false,
+        auto_integrate: false,
         slug: None,
         id: task_core::ProjectId::new(),
         title: "tree adoption".into(),

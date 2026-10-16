@@ -10,6 +10,7 @@ import {
 import { Button } from "../../components/ui/button";
 import { ConfirmDialog } from "../../components/ui/confirm-dialog";
 import { StatusBadge } from "../../components/ui/status-badge";
+import { AUTO_INTEGRATE_ACTION_ID, AutoIntegrateToggle, autoIntegrateAction } from "./auto-integrate";
 import { MilestoneBadge, ProjectSection } from "./project-detail-view";
 import { inputClass } from "./project-list-screen";
 
@@ -117,6 +118,11 @@ export function ProjectOps({ detail }: { detail: ProjectDetail }) {
           名前と依頼を保存
         </Button>
       </form>
+      <AutoIntegrateToggle
+        enabled={project.auto_integrate ?? false}
+        pending={pending}
+        onToggle={(next) => act(autoIntegrateAction(id, next))}
+      />
       <div className="flex flex-wrap items-end gap-2">
         <label className="text-label font-medium">
           状態
@@ -245,6 +251,7 @@ export function ProjectOps({ detail }: { detail: ProjectDetail }) {
         results={results}
         ids={[
           "project_edit",
+          AUTO_INTEGRATE_ACTION_ID,
           "project_status",
           "project_pause",
           "project_resume",

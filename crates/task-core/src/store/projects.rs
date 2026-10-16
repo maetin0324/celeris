@@ -66,6 +66,8 @@ impl SqliteStore {
                 auto_advance: row.get::<_, i64>(10)? != 0,
                 // Phase K-1: 12 列目 `slug`。
                 slug: row.get(11)?,
+                // ADR 2026-10-16-project-auto-integrate D1: 13 列目 `auto_integrate`。
+                auto_integrate: row.get::<_, i64>(12)? != 0,
                 created_at: parse_rfc3339(&created_at)?,
                 updated_at: parse_rfc3339(&updated_at)?,
             })
@@ -296,8 +298,8 @@ impl SqliteStore {
         };
         tx.execute(
             "INSERT INTO projects (id, title, request, status, secretary_summary, created_at, updated_at, workspace, \
-             archived_at, paused_from, auto_advance, slug) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+             archived_at, paused_from, auto_advance, slug, auto_integrate) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
                 project.id.to_string(),
                 project.title,
@@ -311,6 +313,7 @@ impl SqliteStore {
                 project.paused_from.map(|s| s.as_str()),
                 i64::from(project.auto_advance),
                 slug,
+                i64::from(project.auto_integrate),
             ],
         )?;
         // ADR-0043 D1: 案件の作業場所は `is_primary = 1` のリポジトリ 1 件として持つ
@@ -343,7 +346,7 @@ impl SqliteStore {
                      COALESCE((SELECT r.location_json FROM project_repos r \
                                WHERE r.project_id = p.id AND r.is_primary = 1 \
                                ORDER BY r.created_at ASC, r.id ASC LIMIT 1), p.workspace), \
-                     p.archived_at, p.paused_from, p.auto_advance, p.slug \
+                     p.archived_at, p.paused_from, p.auto_advance, p.slug, p.auto_integrate \
                      FROM projects p WHERE p.id = ?1",
                     params![id.to_string()],
                     Self::project_row,
@@ -360,7 +363,7 @@ impl SqliteStore {
                      COALESCE((SELECT r.location_json FROM project_repos r \
                                WHERE r.project_id = p.id AND r.is_primary = 1 \
                                ORDER BY r.created_at ASC, r.id ASC LIMIT 1), p.workspace), \
-                     p.archived_at, p.paused_from, p.auto_advance, p.slug \
+                     p.archived_at, p.paused_from, p.auto_advance, p.slug, p.auto_integrate \
                  FROM projects p ORDER BY p.created_at DESC, p.id DESC",
             )?;
             let rows = stmt.query_map([], Self::project_row)?;
@@ -446,6 +449,23 @@ impl SqliteStore {
             "UPDATE projects SET archived_at = ?1, updated_at = ?2 WHERE id = ?3",
             params![
                 at.map(format_rfc3339).transpose()?,
+                format_rfc3339(OffsetDateTime::now_utc())?,
+                id.to_string()
+            ],
+        )?;
+        Ok(affected == 1)
+    }
+
+    pub(super) fn project_set_auto_integrate_impl(
+        &self,
+        id: ProjectId,
+        enabled: bool,
+    ) -> Result<bool, StoreError> {
+        let conn = self.lock()?;
+        let affected = conn.execute(
+            "UPDATE projects SET auto_integrate = ?1, updated_at = ?2 WHERE id = ?3",
+            params![
+                i64::from(enabled),
                 format_rfc3339(OffsetDateTime::now_utc())?,
                 id.to_string()
             ],

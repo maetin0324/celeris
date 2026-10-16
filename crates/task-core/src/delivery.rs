@@ -70,7 +70,7 @@ impl DeliverySkipReason {
     pub fn label(self) -> &'static str {
         match self {
             Self::NoProject => "案件が設定されていません",
-            Self::ProjectNotEnabled => "案件が delivery 対象に設定されていません",
+            Self::ProjectNotEnabled => "案件の自動取り込み（auto_integrate）が有効ではありません",
             Self::SupportTask => "support task は delivery 対象外です",
             Self::TreeChild => "木の子 task は親の統合工程で扱います",
             Self::MultipleRepos => "リポジトリがちょうど 1 つではありません",
@@ -286,7 +286,7 @@ mod tests {
 
         let store = SqliteStore::open(&path).unwrap();
         assert_eq!(store.schema_version().unwrap(), crate::SCHEMA_VERSION);
-        assert_eq!(crate::SCHEMA_VERSION, 82);
+        assert_eq!(crate::SCHEMA_VERSION, 83);
         let conn = Connection::open(&path).unwrap();
         let mut stmt = conn
             .prepare("SELECT version FROM schema_migrations ORDER BY version")
@@ -301,7 +301,8 @@ mod tests {
             (1..=37)
                 .chain([
                     41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60,
-                    61, 62, 63, 64, 65, 66, 67, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82
+                    61, 62, 63, 64, 65, 66, 67, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82,
+                    83
                 ])
                 .collect::<Vec<u32>>()
         );

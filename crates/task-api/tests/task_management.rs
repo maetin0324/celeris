@@ -968,6 +968,7 @@ async fn patch_task_attaches_a_project_to_a_project_less_task_once() {
     let mk_project = |title: &str| {
         let project = Project {
             auto_advance: false,
+            auto_integrate: false,
             slug: None,
             archived_at: None,
             paused_from: None,

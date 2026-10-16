@@ -143,7 +143,7 @@ pub(super) fn attempt(
     }
     Ok(
         match merge_in_scratch(
-            &config.selfdeploy.repo,
+            &super::delivery_repo(store, config, d),
             d,
             settings.generated.command(),
             &scratch_root(config),
@@ -211,8 +211,12 @@ pub(super) fn fall_back(
             Ok(true)
         }
         Fallback::LimitReached { attempts } => {
-            let request =
-                limit_request(config, d, format!("main 追従の再試行上限 ({attempts} 回)"));
+            let request = limit_request(
+                store,
+                config,
+                d,
+                format!("main 追従の再試行上限 ({attempts} 回)"),
+            );
             record_request(store, d, &request)?;
             Ok(true)
         }
@@ -240,8 +244,13 @@ pub(super) fn record_request(
 }
 
 /// 上限時は merge を試さず、既存の固定 SHA と git の履歴から依頼を作る。
-pub(super) fn limit_request(config: &Config, d: &Delivery, reason: String) -> IntegrationRequest {
-    let repo = &config.selfdeploy.repo;
+pub(super) fn limit_request(
+    store: &dyn TaskStore,
+    config: &Config,
+    d: &Delivery,
+    reason: String,
+) -> IntegrationRequest {
+    let repo = &super::delivery_repo(store, config, d);
     let target_sha =
         sha(repo, &format!("refs/heads/{}", d.default_branch)).unwrap_or_else(|_| d.base.clone());
     let source_sha =

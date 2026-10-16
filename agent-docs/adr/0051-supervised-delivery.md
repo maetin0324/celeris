@@ -1,5 +1,7 @@
 # ADR-0051: 部署のレビューからマージ・デプロイ準備へつなぐ
 
+- **Superseded in part by [2026-10-16-project-auto-integrate](2026-10-16-project-auto-integrate.md)**: `[selfdeploy] delivery_projects` は廃止され、自動取り込みは案件の属性（`projects.auto_integrate`）になった。自己リポジトリ以外の案件は取り込みまで（release なし）。
+
 2026-09-20。ユーザーの方針: レビューはその部署をまとめる担当が行い、同じレビューでマージ可否まで判断する。上司・CoSの重複レビューは設けない。ADR-0040/0041/0043 の「マージは人だけ」を明示的に有効化した自己改善案件について更新する。
 
 - 既存の独立したReviewer runへ担当部署のノード、継承profile、review.tierを渡す。実装者の会話や自己申告だけで判断せず、成果物・条件・証拠を検証する。部署がない仕事は従来の独立レビュアーを使う。

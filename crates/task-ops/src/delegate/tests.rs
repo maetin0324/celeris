@@ -566,6 +566,7 @@ fn delegated_children_inherit_the_projects_workspace() {
     let now_ts = now();
     let project = task_core::Project {
         auto_advance: false,
+        auto_integrate: false,
         slug: None,
         archived_at: None,
         paused_from: None,

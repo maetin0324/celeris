@@ -47,6 +47,7 @@ fn managed_scan_schedules_bounded_review_and_survives_state_loss() {
     let now = OffsetDateTime::now_utc();
     let project = Project {
         auto_advance: false,
+        auto_integrate: false,
         slug: None,
         id: ProjectId::new(),
         title: "fixture".into(),

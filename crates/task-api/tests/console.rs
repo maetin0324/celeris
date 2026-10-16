@@ -45,6 +45,7 @@ fn project(env: &TestEnv, title: &str) -> Project {
     let now = OffsetDateTime::now_utc();
     let project = Project {
         auto_advance: false,
+        auto_integrate: false,
         slug: None,
         id: ProjectId::new(),
         title: title.to_string(),

@@ -256,12 +256,9 @@ pub fn reload_providers(dispatcher: &mut Dispatcher, config: &mut Config) -> Res
     config.conversation = new_config.conversation;
     // tick_loop は `config.jev` が変わると分類段を作り直す。ここで書き戻さないと reload が効かない。
     config.jev = new_config.jev;
-    config.selfdeploy.delivery_projects = new_config.selfdeploy.delivery_projects;
     config.selfdeploy.delivery_default_departments =
         new_config.selfdeploy.delivery_default_departments;
     dispatcher.set_delivery_policy(task_ops::delivery::DeliveryPolicy {
-        projects: config.selfdeploy.delivery_projects.clone(),
-        repo: config.selfdeploy.repo.clone(),
         default_departments: config.selfdeploy.delivery_default_departments.clone(),
     });
     // ADR 2026-10-07-build-tmp-hygiene D1.4: 掃除の roots と上限も reload で入れ替える。

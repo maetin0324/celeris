@@ -197,6 +197,7 @@ fn set_adopts_a_v3_plan_with_the_configured_tree_limits() {
     let store = SqliteStore::open_in_memory().unwrap();
     let project = task_core::Project {
         auto_advance: false,
+        auto_integrate: false,
         slug: None,
         id: task_core::ProjectId::new(),
         title: "p".into(),

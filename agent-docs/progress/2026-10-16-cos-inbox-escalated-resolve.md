@@ -24,3 +24,10 @@ migration は不要。新しい release の daemon 起動時の `request_cos_tri
 - `cargo fmt --all -- --check` exit 0
 - `cargo clippy --workspace -- -D warnings` exit 0
 - `bash scripts/dev/test-parallel.sh` exit 0（5373 passed / 0 failed）
+
+## 追加: event 取り込みでの解消（付記 2026-10-16b）
+- `cos_triage_resolve_stale_touched`（task-core）を追加。`resolve_stale` を共有し、`source_key` が触れた task id を含む item に限る。
+- `triage_events`（dispatcher）が触れた task があるとき、構築済み inbox から種別ごとの現在 snapshot を作って呼ぶ。
+- 試験: `cos_chat_triage_events_resolve_escalated_only_for_touched_tasks`（触れた task の閉じた escalated → resolved、触れていない task・開いたままは不変）。
+- 限界: key に task id を持たない種別（decision・authorization 等）は startup reconcile が片付ける。
+- 本番への移行: migration 不要。

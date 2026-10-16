@@ -148,7 +148,7 @@ impl SqliteStore {
         let mut conn = writer(self)?;
         let tx = immediate(&mut conn)?;
         let inserted = insert_items(&tx, current, &at)?;
-        resolve_stale(&tx, source_kind, current, &at)?;
+        resolve_stale(&tx, source_kind, current, None, &at)?;
         tx.commit()?;
         Ok(inserted)
     }
@@ -163,7 +163,29 @@ impl SqliteStore {
     ) -> Result<usize, ChatError> {
         let mut conn = writer(self)?;
         let tx = immediate(&mut conn)?;
-        let n = resolve_stale(&tx, source_kind, current, &chat_ts(now))?;
+        let n = resolve_stale(&tx, source_kind, current, None, &chat_ts(now))?;
+        tx.commit()?;
+        Ok(n)
+    }
+
+    /// event 取り込み用: `task_ids` を `source_key` に含む item だけを対象に、`current_by_kind` に無い
+    /// 未解決 item を resolved にする（`resolve_stale` を共有。触れていない task の item は変えない）。
+    pub fn cos_triage_resolve_stale_touched(
+        &self,
+        current_by_kind: &[(&str, Vec<CosTriageSource>)],
+        task_ids: &[String],
+        now: OffsetDateTime,
+    ) -> Result<usize, ChatError> {
+        if task_ids.is_empty() {
+            return Ok(0);
+        }
+        let mut conn = writer(self)?;
+        let tx = immediate(&mut conn)?;
+        let at = chat_ts(now);
+        let mut n = 0;
+        for (kind, current) in current_by_kind {
+            n += resolve_stale(&tx, kind, current, Some(task_ids), &at)?;
+        }
         tx.commit()?;
         Ok(n)
     }
@@ -597,6 +619,7 @@ fn resolve_stale(
     tx: &Transaction<'_>,
     source_kind: &str,
     current: &[CosTriageSource],
+    touched: Option<&[String]>,
     at: &str,
 ) -> Result<usize, ChatError> {
     let live: HashSet<(&str, &str)> = current
@@ -616,6 +639,7 @@ fn resolve_stale(
         rows.collect::<Result<Vec<_>, _>>()?
             .into_iter()
             .filter(|(_, k, r)| !live.contains(&(k.as_str(), r.as_str())))
+            .filter(|(_, k, _)| touched.is_none_or(|ts| ts.iter().any(|t| k.contains(t.as_str()))))
             .map(|(id, _, _)| id)
             .collect()
     };

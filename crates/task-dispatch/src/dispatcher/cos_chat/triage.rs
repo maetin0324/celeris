@@ -508,6 +508,25 @@ impl CosChatLaunch {
                     }
                 }
             }
+            if !touched.tasks.is_empty()
+                && let Some(inbox) = &inbox
+            {
+                let mut by_kind: BTreeMap<&'static str, Vec<CosTriageSource>> = InboxKind::ALL
+                    .iter()
+                    .map(|k| (k.as_str(), Vec::new()))
+                    .collect();
+                for item in &inbox.items {
+                    by_kind
+                        .entry(item.kind.as_str())
+                        .or_default()
+                        .push(inbox_source(item, &policy));
+                }
+                let current: Vec<_> = by_kind.into_iter().collect();
+                let ids: Vec<String> = touched.tasks.keys().map(|id| id.to_string()).collect();
+                self.store
+                    .cos_triage_resolve_stale_touched(&current, &ids, now)
+                    .map_err(|e| e.to_string())?;
+            }
             let sources = if touched.tasks.is_empty() {
                 Vec::new()
             } else {

@@ -491,3 +491,70 @@ async fn cos_chat_triage_reconcile_resolves_closed_escalated_unintegrated_with_z
         0
     );
 }
+
+fn stale_source(kind: &str, key: String) -> task_core::chat::triage::CosTriageSource {
+    task_core::chat::triage::CosTriageSource {
+        source_kind: kind.into(),
+        source_key: key,
+        source_revision: "1".into(),
+        source_event_id: None,
+        operation_id: None,
+        summary: "stale".into(),
+        policy_version: "v1".into(),
+    }
+}
+
+#[tokio::test]
+async fn cos_chat_triage_events_resolve_escalated_only_for_touched_tasks() {
+    let mut f = fixture(true);
+    f.tick();
+    let a = f.question("a", Vec::new());
+    let b = f.question("b", Vec::new());
+    f.tick();
+    f.tick();
+    // 起動後に escalated になり、元の待ちは既に閉じた item（a と b の task）。
+    for t in [a, b] {
+        f.store
+            .cos_triage_reconcile(
+                "unintegrated",
+                &[stale_source(
+                    "unintegrated",
+                    format!("unintegrated-{t}-repo"),
+                )],
+                f.d.now_utc(),
+            )
+            .expect("seed");
+    }
+    rusqlite::Connection::open(&f.db_path)
+        .expect("db")
+        .execute("UPDATE cos_inbox_items SET state='escalated'", [])
+        .expect("escalate");
+    let state = |f: &Fixture, key: String| {
+        f.count_text(&format!(
+            "SELECT state FROM cos_inbox_items WHERE source_key='{key}'"
+        ))
+    };
+    // a にだけ event が入る。
+    f.advance(60);
+    f.store
+        .append_event(
+            a,
+            &Event::QuestionRaised {
+                run_id: "r1".into(),
+                text: "again?".into(),
+            },
+        )
+        .expect("touch a");
+    f.tick();
+    f.tick();
+    assert_eq!(state(&f, format!("unintegrated-{a}-repo")), "resolved");
+    // 触れていない task の item は escalated のまま。
+    assert_eq!(state(&f, format!("unintegrated-{b}-repo")), "escalated");
+    // 触れた task でも、元の待ちが開いたままの item（新 revision）は resolved にならない。
+    assert_eq!(
+        f.count(&format!(
+            "SELECT COUNT(*) FROM cos_inbox_items WHERE source_key='question-{a}' AND state!='resolved'"
+        )),
+        1
+    );
+}

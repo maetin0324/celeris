@@ -38,3 +38,15 @@ unintegrated が現在 0 件だと by_kind に空の枠が無く、`cos_triage_r
   `human_inbox_every_inbox_kind_appears_in_common_form` は ALL を回すので、fixture の unintegrated 1 件が検証対象に入る。
 - 試験: dispatcher の triage 試験に、閉じた escalated unintegrated item が reconcile で resolved になるものを足す。
 - 本番への移行: migration 不要。昇格後の startup reconcile が既存の 46 件を resolved にする。
+
+## 付記 2026-10-16b: event 取り込みでも、触れた task の stale item を resolved にする
+上の 2 つの修正後も、daemon 起動後に escalated になり同時刻に人が取り込んで閉じた unintegrated 2 件が 45 分後も残った。
+`resolve_stale` は `triage_reconcile`（起動時と credential_gate の `request_cos_triage_reconcile`）でしか走らず、
+`triage_events`（events_since → touched_tasks → sources_for_touched → cos_triage_ingest_batch）は挿入しかしないため。
+- 決定: `triage_events` で触れた task があるとき、構築済みの現在の派生 inbox を使い、`cos_triage_resolve_stale_touched` を呼ぶ。
+  判定は `resolve_stale`（reconcile と同じ関数）を共有する。二重の規則は作らない。
+- 範囲: cos_inbox_items に task 列は無いので、触れた task の id を `source_key` が含む item に限る
+  （failed-/unintegrated-/question-/phase_gate- など key に task id を持つ種別）。触れていない task の item と、現在の inbox に残っている item は変えない。
+  key に task id を持たない種別（decision・authorization 等）は次の startup reconcile が片付ける。
+- 対象 state は reconcile と同じ pending／running／escalated。events は書き換えない。migration 不要。
+- 試験: dispatcher の triage 試験に、(a) reconcile 後に閉じた escalated item が次の tick で resolved、(b) 触れていない task の item と開いたままの item は変わらない、を足す。

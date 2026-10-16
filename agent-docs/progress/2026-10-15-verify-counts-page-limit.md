@@ -1,8 +1,6 @@
 ---
-title: verify の件数照合が 1 node 500 件超の reports で落ちる問題
-tasks: [01M50Y0B625RX15CXYY3S17YQ6]
+task: 01M50Y0B625RX15CXYY3S17YQ6
 status: done
-updated: 2026-10-15
 completed: 2026-10-15
 ---
 # verify の件数照合が 1 node 500 件超の reports で落ちる問題

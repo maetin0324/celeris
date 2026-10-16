@@ -1,7 +1,7 @@
 ---
-task: 01M530Y2MNRW5K6E4ERMSZNVHV
+tasks: [01M530Y2MNRW5K6E4ERMSZNVHV]
 status: done
-completed: 2026-10-16
+updated: 2026-10-16
 title: "[監査修正1] grader の結果を最終成功率・export に結合する"
 ---
 

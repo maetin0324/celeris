@@ -900,6 +900,19 @@ SD_VERIFY_LOCK_WAIT="${SD_VERIFY_LOCK_WAIT:-1800}"
 #      ロックファイルを `<file>.leaked-<日時>` に退け、新しい inode で取り直す（`sd_lock_leaked_holders`）。
 #      生きている release.sh / verify.sh が 1 つでも fd を持っていれば退けない（本物の直列化はそのまま）。
 
+# `sd_cmd_is_selfdeploy_script <cmdline>`: lock を取る selfdeploy の script か。リポジトリからの起動は
+# `…/scripts/selfdeploy/<name>.sh`、release に同梱した scripts は平らで `<release>/scripts/<name>.sh`
+# （delivery の prepare.sh が `current/scripts/release.sh` を起こす）。どちらも本物の持ち主として数える。
+# 後者を数えないと、実行中の release.sh の lock が「漏れ」と誤判定されて退けられ、同じ sha の 2 本目が
+# 同時に走って `<sha12>.partial` を壊す（ADR 2026-10-16-release-lock-bundled-scripts）。
+sd_cmd_is_selfdeploy_script() {
+  case "$1" in
+    *selfdeploy/*.sh*) return 0 ;;
+    */scripts/release.sh*|*/scripts/verify.sh*|*/scripts/promote.sh*|*/scripts/browser-ledger.sh*) return 0 ;;
+  esac
+  return 1
+}
+
 # `sd_lock_leaked_holders <lockfile>`: そのファイルを開いている全プロセスの `pid cmd` を 1 行ずつ出す。
 # 1 つでも selfdeploy のスクリプト（bash …/selfdeploy/*.sh）が含まれていれば何も出さない（＝本物の持ち主がいる）。
 sd_lock_leaked_holders() {
@@ -912,8 +925,10 @@ sd_lock_leaked_holders() {
     [ "$ppid" = "$$" ] || [ "$ppid" = "$BASHPID" ] && continue
     for target in /proc/"$pid"/fd/*; do
       [ "$(readlink "$target" 2>/dev/null)" = "$abs" ] || continue
-      cmd="$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null | cut -c1-120)"
-      case "$cmd" in *selfdeploy/*.sh*) script_alive=true ;; esac
+      # 判定は切り詰める前の全文で行う（`timeout … bash <長い path>` は 120 文字を超え、script 名が欠ける）。
+      cmd="$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null)"
+      sd_cmd_is_selfdeploy_script "$cmd" && script_alive=true
+      cmd="$(printf '%s' "$cmd" | cut -c1-120)"
       holders="${holders}${pid} ${cmd}
 "
       break

@@ -13,14 +13,11 @@
 index.db は SQLite）を `cp -a` で配布物へ丸写ししていた。この store は host 全体で共有され、worker・reviewer の
 `pnpm install --frozen-lockfile` が同時に書く。tarball の約 1.7 万 entry のうち 1.68 万が store だった。
 
-## 原因（証拠）
-- 共有 store は host の全 pnpm が書く可変物。2 回目の失敗時刻 05:42 と store ディレクトリの mtime（10/16 05:42）が一致する。
-  つまり丸写しの最中（または直前）に別の pnpm が store を更新していた。
-- 丸写しは SQLite の index.db と files/ を別々の時点で読むので、壊れた/不整合な写しが配布物に入る。
-  tar はその巨大な tarball（entry の 99% が store）を展開するため、壊れた入力に当たる確率が配布物の大きさに比例する。
-- 失敗の log そのものは gate-logs に残っておらず（失敗時の log は FAILED_DIR にあるが回収されていない）、
-  同時書き込みの瞬間を事後に再生はできない。CPU を焼く再現は禁止なので行っていない。
-  根拠は上記の構造（共有・可変・丸写し・mtime の一致）である。丸写しを無くせば同じ競合は構造上起こらない。
+## 原因
+**失敗の根本原因ではない**。web-bundle 段の失敗（04:17Z・05:42Z）は、同じ sha の release.sh が 2 本同時に走り
+`<sha12>.partial` を壊し合ったことによる。証拠と修正は ADR 2026-10-16-release-lock-bundled-scripts。
+この ADR は、その調査で見えた副次的な弱点を直す: 共有 store は host の全 pnpm が書く可変物で、配布物 tarball の約 99% を
+占め、release.sh の梱包・展開（数万 file）を長引かせる。配布物に不要な物を入れない。
 
 ## 決定
 - D1: `web/scripts/release.sh` は共有 store を写さない。`$STAGE/.pnpm-store`（`pnpm-workspace.yaml` の
@@ -29,7 +26,7 @@ index.db は SQLite）を `cp -a` で配布物へ丸写ししていた。この 
 - D2: 旧い共有 store の `cp -a` は消した。互換 flag は無い。
 - D3: `bundle_web`（selfdeploy/release.sh）は変えない。展開・offline install・server import の検査は従来どおり。
 
-## 効果
+## 効果（副次）
 tarball は約 1.7 万 entry から約 7.6 千 entry（11MB）。共有 store を読まないので他の pnpm と競合しない。
 fetch は network を使う（release の web 段は既に `pnpm install` で network を使う）。
 

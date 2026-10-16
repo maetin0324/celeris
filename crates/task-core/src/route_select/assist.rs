@@ -29,6 +29,8 @@ pub struct ClassificationEntry {
     pub status: ClassifierStatus,
     pub hint: Option<ClassificationHint>,
     pub model_snapshot: Option<String>,
+    /// Jev の応答が返した費用（USD）。返らなければ `None`（0 扱いしない）。
+    pub cost_usd: Option<f64>,
 }
 
 impl ClassificationEntry {
@@ -39,6 +41,7 @@ impl ClassificationEntry {
             },
             hint: None,
             model_snapshot: None,
+            cost_usd: None,
         }
     }
 }

@@ -56,17 +56,17 @@
     ]
   },
   "budget": {
-    "token_basis": "<人の決定: input_output | input_output_cache_read | all>",
-    "max_tokens": 1000000,
+    "token_basis": "all",
+    "max_tokens": 3000000,
     "max_wall_secs": 36000,
     "max_disk_bytes": 137438953472,
     "max_parallel": 1,
     "per_case": {
-      "max_tokens": 120000,
+      "max_tokens": 300000,
       "max_wall_secs": 1800
     },
     "per_arm": {
-      "max_tokens": 360000,
+      "max_tokens": 1300000,
       "max_wall_secs": 20000
     }
   },

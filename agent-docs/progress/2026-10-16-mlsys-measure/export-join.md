@@ -1,7 +1,9 @@
 ---
-unit: export-join
-task: 01M51X7MZPYQXVWV2WDG2N70C1
+title: export-join — export の結合と接続確認
+tasks: [01M51X7MZPYQXVWV2WDG2N70C1]
 status: done
+updated: 2026-10-16
+unit: export-join
 completed: 2026-10-16
 ---
 # export-join — export の結合と接続確認

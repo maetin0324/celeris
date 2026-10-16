@@ -12,9 +12,10 @@ use serde_json::{Value, json};
 
 use crate::{
     aggregate::Outcome,
+    budget::{self, Gate, effective_cap},
     executor::{ErrKind, ExecError, ExecResult, ExecStatus, Executor, TrialRequest, Usage},
     ledger::{Ledger, LedgerRow, LedgerState, ObservedUsage, TrialKey},
-    manifest::{Budget, CampaignManifest, Cap, ConfigId},
+    manifest::{Budget, CampaignManifest, ConfigId},
     record::*,
     snapshot::{copy_tree, hash_tree},
 };
@@ -56,26 +57,14 @@ pub struct RunReport {
     pub max_overshoot_wall_secs: u64,
     /// `budget.max_parallel` の in-flight 上限に達したため今回は投入しなかった試行数（`waiting` にも数える）。
     pub parallel_deferred: u64,
+    /// 残予算が予約を下回り、先行の予約が解けるまで投入を見送った試行数（`waiting` にも数える）。
+    pub reserve_deferred: u64,
     /// A の試行で exit 0 だが成果物（workspace の変化）が無く failed にした数。
     pub no_artifact: u64,
 }
 
 /// 最大超過の粒度（summary にも書く）。ADR 2026-10-16-campaign-budget-cap D4。
 pub const OVERSHOOT_GRANULARITY: &str = "async executor: up to one poll interval of usage (one runner pass); sync executor: up to one whole trial unless the executor stops itself via TrialRequest.budget; arm cap: up to the last trial";
-
-/// 試行の実効上限 = min(per_case, per_arm の残り)。
-fn effective_cap(b: &Budget, arm_tokens: u64, arm_wall: u64) -> Cap {
-    Cap {
-        max_tokens: b
-            .per_case
-            .max_tokens
-            .min(b.per_arm.max_tokens.saturating_sub(arm_tokens)),
-        max_wall_secs: b
-            .per_case
-            .max_wall_secs
-            .min(b.per_arm.max_wall_secs.saturating_sub(arm_wall)),
-    }
-}
 
 /// 使用量が上限を超えていればその reason。tokens 欠測は tokens 側を判定しない（終了後に保守的に課金する）。
 fn breach_reason(
@@ -700,6 +689,18 @@ pub fn run(
                 continue;
             }
         };
+        // 新規投入の前に『残予算 = 上限 − 確定消費 − in-flight の予約』が予約額以上かを見る（追跡中の行は予約済み）。
+        let gate = if exec.is_async()
+            && m.termination.stop_on_budget
+            && blocked_by.is_none()
+            && !rep.budget_stopped
+            && ledger.get(&key).is_none_or(|r| r.reserved.is_none())
+        {
+            let s = budget::spend(&records, &ledger, &m.budget, &hash, Some(&key));
+            Some(budget::admit(&m.budget, &s, cid))
+        } else {
+            None
+        };
         if blocked_by.is_some() {
             rec.outcome = Outcome::Blocked;
             rec.reason = Some(REASON_BLOCKED.into());
@@ -715,9 +716,22 @@ pub fn run(
             // この arm の累積上限が尽きた。実行せず cancelled として分母に残す（他 arm は止めない）。
             rec.reason = Some(REASON_ARM_BUDGET.into());
             rep.arm_budget_cancelled += 1;
+        } else if gate == Some(Gate::Exhausted) {
+            // 何も in-flight でないのに残予算が予約を下回る: 投入せず打ち切る（有料実行 0 件）。
+            rep.budget_stopped = true;
+            rec.reason = Some(REASON_BUDGET_STOP.into());
+            rep.budget_cancelled += 1;
+        } else if gate == Some(Gate::Defer) {
+            // 先行の予約（in-flight・停止未確認）が解けるまで投入しない。次の run が回収してから再判定する。
+            rep.waiting += 1;
+            rep.reserve_deferred += 1;
+            continue;
         } else {
             let arm = arm_use.get(&cid).copied().unwrap_or_default();
-            let cap = effective_cap(&m.budget, arm.0, arm.1);
+            let cap = match gate {
+                Some(Gate::Admit(c)) => c,
+                _ => effective_cap(&m.budget, arm.0, arm.1),
+            };
             let rel = format!("trials/{cid:?}/{pid}/rep{rep_no}");
             let ws = out.join(&rel).join("workspace");
             // 試行の KB は workspace の中（初期 snapshot の複製）。別 dir に置くと実行器が参照できない。
@@ -941,7 +955,7 @@ pub fn run(
             records.push(rec);
         }
     }
-    write_summary(m, &hash, &records, &rep, out, exec.simulated())?;
+    write_summary(m, &hash, &records, &rep, &ledger, out, exec.simulated())?;
     Ok(rep)
 }
 
@@ -951,9 +965,11 @@ fn write_summary(
     hash: &str,
     records: &[TrialRecord],
     rep: &RunReport,
+    ledger: &Ledger,
     out: &Path,
     simulated: bool,
 ) -> Result<(), String> {
+    let held = budget::spend(records, ledger, &m.budget, hash, None);
     let mut cells = serde_json::Map::new();
     for c in [ConfigId::A, ConfigId::B, ConfigId::C] {
         // 分母 = 計画された試行総数（problems × repeats、C は subset × repeats）。
@@ -1008,6 +1024,10 @@ fn write_summary(
                 "token_basis": m.budget.token_basis,
                 "max_parallel": m.budget.max_parallel,
                 "parallel_deferred": rep.parallel_deferred,
+                "reserve_deferred": rep.reserve_deferred,
+                "reserved_in_flight": {"tokens": held.held_tokens, "wall_secs": held.held_wall_secs, "rows": held.in_flight},
+                "remaining_tokens": m.budget.max_tokens.saturating_sub(held.tokens),
+                "overshoot_formula": budget::OVERSHOOT_FORMULA,
                 "no_artifact": rep.no_artifact,
                 "per_case": m.budget.per_case,
                 "per_arm": m.budget.per_arm,

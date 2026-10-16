@@ -67,7 +67,7 @@ fn campaign(i: &Input, n: usize, split: Split, max_tokens: u64) -> CampaignManif
             max_parallel: 64,
             per_case: Cap {
                 max_tokens: 100_000,
-                max_wall_secs: 1_000_000,
+                max_wall_secs: 1_800,
             },
             per_arm: Cap {
                 max_tokens: 10_000_000_000,

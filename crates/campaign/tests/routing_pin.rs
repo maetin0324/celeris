@@ -233,7 +233,7 @@ fn campaign(i: &Input, n: usize, b: Option<ArmRouting>, c: Option<ArmRouting>) -
             max_parallel: 1,
             per_case: Cap {
                 max_tokens: 5_000,
-                max_wall_secs: 1_000_000,
+                max_wall_secs: 1_800,
             },
             per_arm: Cap {
                 max_tokens: 10_000_000,

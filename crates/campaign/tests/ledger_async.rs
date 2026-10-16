@@ -65,7 +65,7 @@ fn campaign(i: &Input) -> CampaignManifest {
             max_parallel: 64,
             per_case: celeris_campaign::manifest::Cap {
                 max_tokens: 100_000,
-                max_wall_secs: 1_000_000,
+                max_wall_secs: 1_800,
             },
             per_arm: celeris_campaign::manifest::Cap {
                 max_tokens: 10_000_000_000,
@@ -445,18 +445,19 @@ fn wait_keeps_workspace_and_resume_follows_same_task() {
 
 #[test]
 fn budget_stop_cancels_unfinished_with_children_and_jobs() {
-    let e = env(10_000);
-    let x = MockAsyncExecutor::new(1);
+    // 予約（ADR 2026-10-16-campaign-budget-reservation）で global を超える投入はしないので、
+    // in-flight の試行が打ち切られるのは実行中の使用量が上限を超えたとき。子 task・cluster job ごと cancel する。
+    let e = env(10_000_000);
+    let x = MockAsyncExecutor::new(100);
     run(&e.m, &e.i, &x, &e.opts).expect("first");
     assert!(x.cancelled().is_empty());
-    // 2 回目: A が 10000 token で完了して予算に達し、B/C は未完了のまま打ち切られる。
+    x.set_usage(Some(TokenUsage::full(200_000, 0, 0, 0)), 5);
     let rep = run(&e.m, &e.i, &x, &e.opts).expect("second");
-    assert!(rep.budget_stopped);
-    assert_eq!((rep.executed, rep.budget_cancelled), (1, 2));
+    assert_eq!(rep.case_budget_cancelled, 3);
     let c = x.cancelled();
-    assert_eq!(c.len(), 2);
+    assert_eq!(c.len(), 3);
     for (t, reason) in &c {
-        assert_eq!(reason, "budget_stop");
+        assert_eq!(reason, "case_budget");
         assert_eq!(t.child_task_ids.len(), 1, "children are cancel targets");
         assert_eq!(
             t.cluster_job_ids.len(),
@@ -465,11 +466,7 @@ fn budget_stop_cancels_unfinished_with_children_and_jobs() {
         );
     }
     let lg = Ledger::open(&e.opts.out).expect("ledger");
-    assert_eq!(
-        lg.get(&key(&e, ConfigId::A)).expect("A").state,
-        LedgerState::Done
-    );
-    for c in [ConfigId::B, ConfigId::C] {
+    for c in [ConfigId::A, ConfigId::B, ConfigId::C] {
         assert_eq!(
             lg.get(&key(&e, c)).expect("row").state,
             LedgerState::Cancelled
@@ -477,7 +474,7 @@ fn budget_stop_cancels_unfinished_with_children_and_jobs() {
     }
     assert!(lg.unfinished().is_empty());
     let tl = fs::read_to_string(e.opts.out.join(TRIALS_FILE)).expect("trials");
-    assert_eq!(tl.matches("\"outcome\":\"cancelled\"").count(), 2);
+    assert_eq!(tl.matches("\"outcome\":\"cancelled\"").count(), 3);
 }
 
 #[test]

@@ -5,6 +5,7 @@ pub mod checker;
 pub mod dryrun;
 pub mod executor;
 pub mod export;
+pub mod isolation;
 pub mod manifest;
 pub mod record;
 pub mod report;

@@ -41,3 +41,7 @@ completed: 2026-10-16
 - `bash scripts/dev/test-parallel.sh` → exit 0、5405 passed / 0 failed / 13 ignored
 - `cargo clippy --workspace -- -D warnings` → exit 0（`--all-targets` では範囲外の `crates/celeris/src/daemon/jev_verifier.rs:54` items-after-test-module が既存で出る。campaign は `--all-targets` でも clean）
 - `cargo fmt --all -- --check` → exit 0
+
+## 再実行（attempt 2 相当, 2026-10-16）
+- 前回の範囲 check が `Cargo.lock`（campaign に `time` 依存を足した差分）で不合格。`time` 依存を外し、RFC 3339 の最小読み取り（`parse_ts`、unit 試験 `ts_tests`）を celeris_exec.rs 内に置いた。Cargo.lock は base と差分ゼロ。
+- 証拠: `cargo test -p celeris-campaign` 全合格 / `bash scripts/dev/test-parallel.sh` passed 5406 failed 0 exit 0 / `cargo clippy --workspace -- -D warnings` exit 0 / `cargo fmt --all -- --check` exit 0 / 範囲 check exit 0。

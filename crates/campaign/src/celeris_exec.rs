@@ -16,7 +16,6 @@ use std::{
 };
 
 use serde_json::{Map, Value, json};
-use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 use crate::{
     aggregate::Outcome,
@@ -104,13 +103,48 @@ fn ok(r: &HttpResponse) -> bool {
     (200..300).contains(&r.status)
 }
 
-fn parse_ts(v: &Value) -> Option<OffsetDateTime> {
-    OffsetDateTime::parse(v.as_str()?, &Rfc3339).ok()
+/// RFC 3339 の時刻（`YYYY-MM-DDTHH:MM:SS[.frac](Z|±HH:MM)`）を unix 秒にする。
+/// 新しい依存（time crate）を足さないための最小の読み取り（端数秒は切り捨て）。
+fn parse_ts(v: &Value) -> Option<i64> {
+    let s = v.as_str()?;
+    let b = s.as_bytes();
+    if b.len() < 20 || b[4] != b'-' || b[7] != b'-' || !matches!(b[10], b'T' | b't' | b' ') {
+        return None;
+    }
+    let num = |r: std::ops::Range<usize>| -> Option<i64> { s.get(r)?.parse::<i64>().ok() };
+    let (y, mo, d) = (num(0..4)?, num(5..7)?, num(8..10)?);
+    let (h, mi, se) = (num(11..13)?, num(14..16)?, num(17..19)?);
+    if !(1..=12).contains(&mo) || !(1..=31).contains(&d) || h > 23 || mi > 59 || se > 60 {
+        return None;
+    }
+    let mut i = 19;
+    if b.get(i) == Some(&b'.') {
+        i += 1;
+        while b.get(i).is_some_and(u8::is_ascii_digit) {
+            i += 1;
+        }
+    }
+    let offset = match b.get(i)? {
+        b'Z' | b'z' if i + 1 == b.len() => 0,
+        sign @ (b'+' | b'-') if i + 6 == b.len() && b[i + 3] == b':' => {
+            let o = num(i + 1..i + 3)? * 3600 + num(i + 4..i + 6)? * 60;
+            if *sign == b'-' { -o } else { o }
+        }
+        _ => return None,
+    };
+    // days from civil（proleptic Gregorian）
+    let yy = if mo <= 2 { y - 1 } else { y };
+    let era = yy.div_euclid(400);
+    let yoe = yy - era * 400;
+    let mp = (mo + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    Some(days * 86_400 + h * 3600 + mi * 60 + se - offset)
 }
 
-fn secs_between(a: Option<OffsetDateTime>, b: Option<OffsetDateTime>) -> Option<u64> {
-    let d = (b? - a?).whole_seconds();
-    Some(d.max(0) as u64)
+fn secs_between(a: Option<i64>, b: Option<i64>) -> Option<u64> {
+    Some((b? - a?).max(0) as u64)
 }
 
 /// `scheduler:cluster:job_id` の形の cluster job 参照。
@@ -470,5 +504,30 @@ impl<T: Transport> Executor for CelerisExecutor<T> {
         } else {
             Err(errors.join("; "))
         }
+    }
+}
+
+#[cfg(test)]
+mod ts_tests {
+    use super::parse_ts;
+    use serde_json::json;
+
+    #[test]
+    fn parses_rfc3339_to_unix_secs() {
+        assert_eq!(parse_ts(&json!("1970-01-01T00:00:00Z")), Some(0));
+        assert_eq!(
+            parse_ts(&json!("2026-10-16T00:00:00Z")),
+            Some(1_792_108_800)
+        );
+        assert_eq!(
+            parse_ts(&json!("2026-10-16T09:00:00.123+09:00")),
+            Some(1_792_108_800)
+        );
+        assert_eq!(
+            parse_ts(&json!("2000-02-29T12:00:00-01:30")),
+            Some(951_831_000)
+        );
+        assert_eq!(parse_ts(&json!("not a time")), None);
+        assert_eq!(parse_ts(&json!(5)), None);
     }
 }

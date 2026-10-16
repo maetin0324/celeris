@@ -417,23 +417,38 @@ fn run_refuses_split_mix_and_unknown_executor_path_has_no_network_code() {
     let m = campaign(&i, Split::Final, 4, 1_000, 1);
     let err = run(&m, &i, &script(), &seeded_src(d.path())).unwrap_err();
     assert!(err.contains("must not be mixed"), "{err}");
-    // 実 LLM・network・子 process を使う語が src に無い。
+    // 実 LLM・network・子 process を使う語が src に無い。例外は grader の評価 command 実行器
+    // （ADR 2026-10-16-mlsys-independent-grader D3）だけで、そこも network の語は禁止。
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    for f in fs::read_dir(src).expect("src") {
-        let p = f.expect("e").path();
-        let t = fs::read_to_string(&p).expect("r");
-        for bad in [
-            "reqwest",
-            "std::net",
-            "TcpStream",
-            "process::Command",
-            "tokio::net",
-            "api.anthropic",
-            "api.openai",
-        ] {
-            assert!(!t.contains(bad), "{} uses {bad}", p.display());
+    let mut stack = vec![src.clone()];
+    let mut seen = 0;
+    while let Some(dir) = stack.pop() {
+        for f in fs::read_dir(dir).expect("src") {
+            let p = f.expect("e").path();
+            if p.is_dir() {
+                stack.push(p);
+                continue;
+            }
+            seen += 1;
+            let t = fs::read_to_string(&p).expect("r");
+            let runner_file = p == src.join("grader/implementation.rs");
+            for bad in [
+                "reqwest",
+                "std::net",
+                "TcpStream",
+                "process::Command",
+                "tokio::net",
+                "api.anthropic",
+                "api.openai",
+            ] {
+                if runner_file && bad == "process::Command" {
+                    continue;
+                }
+                assert!(!t.contains(bad), "{} uses {bad}", p.display());
+            }
         }
     }
+    assert!(seen > 12, "walked only {seen} files");
 }
 
 #[test]

@@ -22,8 +22,10 @@ D=$P/data                                # 出力置き場（final-out / final-e
 
 ## 1. 置換（H1 後に 1 回だけ。置換したら hash が変わるので 2 で控え直す）
 `$P/final.json` の次を編集する（それ以外は変えない）:
-- B・C の `harness_version` の `<release sha12 at H1>` → 昇格した sha12。
-- C に `routing.evidence_table_id` を足す場合は `$CT routing evidence` の版（pilot と同じ版）。`lower_policy`/`online_update` は変えない。
+- B・C の `harness_version` の `<release sha12 at H1>` → 昇格した sha12（12 桁 hex）。
+- A の `harness_version` の `claude-code@<claude-code version at H1>` → 実際の版（`installed` 等の alias は不可）。
+- C の `routing.evidence_table_id` の `<routing evidence table id at H1>` → `$CT routing evidence` の版（pilot と同じ版）。`lower_policy`/`online_update` は変えない。
+- 未解決の `<…>`・alias・routing 欠落があると `validate`（final split）が失敗し、起動前に止まる。
 - `$P/task-template.json` の `project_id` `<案件 id>` → 案件 id。acceptance は API の形 `{"type": "reviewer", "text": …}`（入れ子の `check` は起動時に拒否）。
 - `final.json` の `budget.token_basis` は人の決定（2026-10-16）で `all` に固定済み。**既定は無い**ので、別 campaign で変えるときも明示する。埋めないと manifest が読めず run は始まらない。試行記録・summary・export には基準に関係なく input / output / cache_read / cache_creation が全部残る。
 `harness_version` の置換後の `final.json` の sha256 が実条件。以後 manifest・入力・snapshot を変えない（変えるなら新 campaign_id）。
@@ -33,6 +35,18 @@ D=$P/data                                # 出力置き場（final-out / final-e
 $B validate --manifest $P/final.json         # sha256 を控える（freeze-final.md の置換前 hash と別物になる）
 $B dry-run  --manifest $P/final.json         # within_budget true、total_trials 6 を確認
 ```
+
+## 2.5 preflight（run の前に必ず通す。4 の `run` も内部で同じ検査を通ってから始まる）
+```sh
+export CELERIS_CAMPAIGN_TOKEN=...      # 人の shell で。値は preflight の出力・ログに出ない（名前の有無だけ見る）
+$B preflight --manifest $P/final.json --api-url http://127.0.0.1:<task-api port> --token-env CELERIS_CAMPAIGN_TOKEN \
+   --task-template $P/task-template.json --materials-src $M --kb-src $K [--repo-src $R] \
+   --cases-root crates/campaign/cases --grader-root crates/campaign/fixtures/grader-private \
+   --grade-case-root crates/campaign/fixtures/grade-cases      # 既定値と同じ。A の実行ファイルは --a-program（既定 claude）
+echo $?       # 0 = 全件 OK。非 0 = stderr の JSON の `missing`（check 名 + 不足の内容）を直してやり直す
+```
+検査: manifest／版（placeholder・alias・routing）／入力 manifest／全 case 入力（control・split・材料 hash）／grade-case/1 全件（固定 hash・公開／隠しテストの実体）／候補構成／認証・環境（A の実行ファイル、API origin、token 環境変数の有無）／予算・時間（承認枠 300 万・30 万・130 万・並列 1・token_basis all、K2/K4 の時間 ≦ trial timeout ≦ per_case、dry-run 見積り）。
+一件でも不足なら A を含め有料実行・task 作成・台帳作成を 0 件で非 0 終了する。preflight 自体は有料実行をしない（`paid_calls_made` 0）。**本番昇格（H1）と実測は人が行う。** preflight が見られないもの: claude-code の実際の版が manifest の値と一致するか、token が API に受理されるか（実経路は本測定の初回で確認）。
 
 ## 3. 入力の配送（試行へ渡す公開部だけ。grader-private は渡さない）
 ```sh

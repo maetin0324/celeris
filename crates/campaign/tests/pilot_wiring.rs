@@ -350,7 +350,7 @@ fn all_token_kinds_are_kept_in_records_summary_and_export_and_basis_decides_the_
         assert_eq!(row["cache_creation_tokens_sum"], 3_000);
         assert_eq!(row["input_tokens_sum"], 100);
         assert_eq!(row["tokens_sum"], want);
-        let csv = fs::read_to_string(out.join("export/table.csv")).expect("csv");
+        let csv = fs::read_to_string(out.join("export/table.incomplete.csv")).expect("csv");
         assert!(
             csv.lines()
                 .next()

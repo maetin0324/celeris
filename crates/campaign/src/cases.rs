@@ -97,6 +97,10 @@ pub struct Case {
     pub budget: Budget,
     /// grader root からの相対 path と hash。
     pub private_ref: InputRef,
+    /// 実行可能な `celeris.grade-case/1`（`fixtures/grade-cases` からの相対 path と hash）。real case は必須。
+    /// `campaign-case-private/1`（期待値・欠陥 list）とは別物で、評価 command・テスト hash・実験/再計算の条件を持つ。
+    #[serde(default)]
+    pub grade_case_ref: Option<InputRef>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -250,12 +254,36 @@ impl Case {
         if self.initial.is_none() && self.inputs.is_empty() {
             return Err(format!("{id}: real case needs initial or inputs"));
         }
+        let Some(g) = &self.grade_case_ref else {
+            return Err(format!(
+                "{id}: real case needs grade_case_ref (celeris.grade-case/1)"
+            ));
+        };
+        if !is_hex(&g.sha256, 64) {
+            return Err(format!("{id}: grade_case_ref.sha256 must be sha256 hex"));
+        }
+        safe_rel(&g.path).map_err(|e| format!("{id}: grade_case_ref: {e}"))?;
+        let expect_grade = format!("{}/{id}/{id}.json", split_dir(self.split));
+        if g.path != expect_grade {
+            return Err(format!("{id}: grade_case_ref.path must be {expect_grade}"));
+        }
         if let Some(i) = &self.initial {
             if !is_hex(&i.commit, 40) || !is_hex(&i.tree, 40) || !is_hex(&i.archive_sha256, 64) {
                 return Err(format!("{id}: initial commit/tree/archive hash malformed"));
             }
             if i.repo.trim().is_empty() || i.fetch.is_empty() {
                 return Err(format!("{id}: initial.repo and initial.fetch are required"));
+            }
+            // submodule は `<path>@<40 桁 commit>` で固定する（短縮 hash や未固定は許さない）。
+            for m in &i.submodules {
+                let ok = m
+                    .split_once('@')
+                    .is_some_and(|(path, c)| !path.is_empty() && is_hex(c, 40));
+                if !ok {
+                    return Err(format!(
+                        "{id}: submodule must be <path>@<40-hex commit>: {m}"
+                    ));
+                }
             }
             if self.snapshot.repo_commit != i.commit {
                 return Err(format!(
@@ -403,6 +431,29 @@ impl CaseSet {
         let set = CaseSet { cases };
         check_isolation(&set, &cr, &gr)?;
         Ok(set)
+    }
+
+    /// 選んだ case の時間・token が manifest の per_case 上限に収まるか（収まらなければ起動前に Err）。
+    pub fn check_within_budget(&self, ids: &[String], b: &Budget) -> Result<(), String> {
+        for id in ids {
+            let c = self.get(id).ok_or_else(|| format!("unknown case {id}"))?;
+            let (cb, pc) = (&c.case.budget.per_case, &b.per_case);
+            if cb.max_wall_secs > pc.max_wall_secs || cb.max_tokens > pc.max_tokens {
+                return Err(format!(
+                    "{id}: case budget (wall {}s, tokens {}) exceeds manifest per_case (wall {}s, tokens {})",
+                    cb.max_wall_secs, cb.max_tokens, pc.max_wall_secs, pc.max_tokens
+                ));
+            }
+            if let Some(e) = &c.case.experiment
+                && e.walltime_secs > pc.max_wall_secs
+            {
+                return Err(format!(
+                    "{id}: experiment walltime {}s exceeds manifest per_case wall {}s",
+                    e.walltime_secs, pc.max_wall_secs
+                ));
+            }
+        }
+        Ok(())
     }
 
     pub fn get(&self, id: &str) -> Option<&LoadedCase> {

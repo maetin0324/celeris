@@ -15,7 +15,7 @@
     {
       "id": "A",
       "harness": "claude-code",
-      "harness_version": "claude-code@installed",
+      "harness_version": "claude-code@<claude-code version at H1>",
       "model": "claude-sonnet-5-5",
       "model_version": "claude-sonnet-5-5",
       "policy_version": "ops-baseline"
@@ -38,7 +38,12 @@
       "harness_version": "<release sha12 at H1>",
       "model": "claude-sonnet-5-5",
       "model_version": "claude-sonnet-5-5",
-      "policy_version": "jev-1"
+      "policy_version": "jev-1",
+      "routing": {
+        "lower_policy": "mlsys-min-1",
+        "evidence_table_id": "<routing evidence table id at H1>",
+        "online_update": false
+      }
     }
   ],
   "primary": [

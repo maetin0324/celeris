@@ -24,6 +24,11 @@ pub fn check_report(m: &CampaignManifest, out: &Path, text: &str) -> Vec<String>
     let Some(rc) = rep.recomputed else {
         return v;
     };
+    for r in &rep.incomplete_reasons {
+        v.push(format!(
+            "report: campaign is incomplete, not a final result: {r}"
+        ));
+    }
     v.extend(compare(m, &rc, text));
     v
 }
@@ -65,10 +70,10 @@ pub fn compare(m: &CampaignManifest, rc: &Recomputed, text: &str) -> Vec<String>
                         t.n
                     ));
                 }
-                if *p != t.passed {
+                if *p != t.final_passed {
                     v.push(format!(
-                        "report: {c:?} passed={p} but recomputed from raw records {}",
-                        t.passed
+                        "report: {c:?} passed={p} but recomputed from raw records and independent grades {}",
+                        t.final_passed
                     ));
                 }
                 if s != split {

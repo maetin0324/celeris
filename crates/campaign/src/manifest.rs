@@ -442,8 +442,84 @@ impl CampaignManifest {
             return Err("secondary.subset must be unique and contained in problems".into());
         }
         self.problem_order()?;
+        if self.split == Split::Final {
+            self.check_resolved()?;
+        }
         if !self.sha256.is_empty() && self.sha256 != self.compute_sha256()? {
             return Err("sha256 does not match manifest content".into());
+        }
+        Ok(())
+    }
+
+    /// 本測定（final）の版・routing の解決検査。未解決の placeholder（`<…>`）・installed alias・
+    /// B/C の routing 欠落（C は根拠表の版も）は起動前に落とす（preflight が同じ検査を使う）。
+    pub fn check_resolved(&self) -> Result<(), String> {
+        for c in &self.configs {
+            for (n, v) in [
+                ("harness", &c.harness),
+                ("harness_version", &c.harness_version),
+                ("model", &c.model),
+                ("model_version", &c.model_version),
+                ("policy_version", &c.policy_version),
+            ] {
+                if v.contains('<') || v.contains('>') {
+                    return Err(format!(
+                        "config {:?}: {n} is an unresolved placeholder: {v}",
+                        c.id
+                    ));
+                }
+            }
+            let hv = c.harness_version.to_ascii_lowercase();
+            if ["installed", "latest", "current", "head"]
+                .iter()
+                .any(|a| hv.contains(a))
+            {
+                return Err(format!(
+                    "config {:?}: harness_version {:?} is an alias; pin the actual version",
+                    c.id, c.harness_version
+                ));
+            }
+            if c.harness == "celeris"
+                && !(c.harness_version.len() == 12
+                    && c.harness_version.bytes().all(|b| b.is_ascii_hexdigit()))
+            {
+                return Err(format!(
+                    "config {:?}: celeris harness_version must be a 12-hex release sha",
+                    c.id
+                ));
+            }
+            if c.id == ConfigId::A {
+                continue;
+            }
+            let Some(r) = &c.routing else {
+                return Err(format!("config {:?}: routing must be pinned", c.id));
+            };
+            if r.lower_policy
+                .as_deref()
+                .is_none_or(|v| v.trim().is_empty())
+            {
+                return Err(format!(
+                    "config {:?}: routing.lower_policy must be pinned",
+                    c.id
+                ));
+            }
+            if r.online_update != Some(false) {
+                return Err(format!(
+                    "config {:?}: routing.online_update must be false",
+                    c.id
+                ));
+            }
+            let ev = r.evidence_table_id.as_deref().unwrap_or("").trim();
+            if c.id == ConfigId::C {
+                if ev.is_empty() {
+                    return Err("config C: routing.evidence_table_id must be pinned".into());
+                }
+                if ev.contains(['<', '>']) {
+                    return Err(format!(
+                        "config C: evidence_table_id is an unresolved placeholder: {ev}"
+                    ));
+                }
+            }
         }
         Ok(())
     }
@@ -701,11 +777,19 @@ mod tests {
                 .is_err()
         );
         let held = input(4, "held-out");
-        assert!(
-            campaign(&held, Split::Final, 4)
-                .check_against_input(&held)
-                .is_ok()
-        );
+        let mut fin = campaign(&held, Split::Final, 4);
+        for c in &mut fin.configs {
+            if c.id != ConfigId::A {
+                c.harness = "celeris".into();
+                c.harness_version = "0123456789ab".into();
+                c.routing = Some(ArmRouting {
+                    lower_policy: Some("p".into()),
+                    evidence_table_id: Some("e".into()),
+                    online_update: Some(false),
+                });
+            }
+        }
+        assert!(fin.check_against_input(&held).is_ok());
     }
 
     #[test]

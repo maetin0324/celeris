@@ -1,0 +1,507 @@
+{
+  "schema": "celeris.grade-case/1",
+  "id": "k3-locusta-ab-analysis",
+  "split": "dev",
+  "recompute": {
+    "report": "report.md",
+    "pinned_raw": {
+      "inputs/main-43223.pbs/main/rep1/L_base_t4k_p1_sep/2026.10.06-02.41.10-43223-4n/ior_results/ior_result_0.json": "b5e88826223a5f22515f194c03fdb2aa7f6dcfee8a01fa47eac8b3e35fb8c08d",
+      "inputs/main-43223.pbs/main/rep2/L_base_t4k_p1_sep/2026.10.06-02.49.32-43223-4n/ior_results/ior_result_0.json": "de7d407454892863560d264635d5ba9a1f5a8bf315bc0592e148cfbac8eb1b8e",
+      "inputs/main-43223.pbs/main/rep3/L_base_t4k_p1_sep/2026.10.06-02.56.15-43223-4n/ior_results/ior_result_0.json": "4125ad04562f767a47e4fb70063ac001b04732691fb7a8a598298e4a42c04f1d",
+      "inputs/main-43223.pbs/main/rep1/L_base_t1m_p1_sep/2026.10.06-02.38.41-43223-4n/ior_results/ior_result_0.json": "205ab3295e4b8160296642664d2a7d66a40c122fc5cf0a2bd63360753a7b1821",
+      "inputs/main-43223.pbs/main/rep2/L_base_t1m_p1_sep/2026.10.06-02.47.05-43223-4n/ior_results/ior_result_0.json": "bddbc4245f6e8b36d0d2a680bcc199a5207c0c4fff00e4b45075ebcf3178e5b3",
+      "inputs/main-43223.pbs/main/rep3/L_base_t1m_p1_sep/2026.10.06-02.53.48-43223-4n/ior_results/ior_result_0.json": "c933ee783d27194c94ae3fc28e77728a155773928461a138c573d1e1bf352fa0",
+      "inputs/main-43223.pbs/main/rep1/L_base_t4m_p1_sep/2026.10.06-02.36.06-43223-4n/ior_results/ior_result_0.json": "781b8cde0478d632b1ce2f6636ea92c5840f11dce8096ab58d14b4da88064aac",
+      "inputs/main-43223.pbs/main/rep2/L_base_t4m_p1_sep/2026.10.06-02.44.38-43223-4n/ior_results/ior_result_0.json": "d201c30668ae06ce8609a3989decad9eaae34cd42c80c62a1686cac1a4f2d354",
+      "inputs/main-43223.pbs/main/rep3/L_base_t4m_p1_sep/2026.10.06-02.51.24-43223-4n/ior_results/ior_result_0.json": "2f0df31a58413f5ce534dfde9d3d59bac47641620596469dd60696e1535673ad",
+      "inputs/main-43223.pbs/main/rep1/L_A_t4k_p1_sep/2026.10.06-02.41.42-43223-4n/ior_results/ior_result_0.json": "dc1692e61ffcf9471de4f89dc27867c759257821b44c43214cb365465eca538d",
+      "inputs/main-43223.pbs/main/rep2/L_A_t4k_p1_sep/2026.10.06-02.49.00-43223-4n/ior_results/ior_result_0.json": "49c61d2a383e4a44730e2ce00d5957981db8e518f21e8bebe8c58d63df507ed5",
+      "inputs/main-43223.pbs/main/rep3/L_A_t4k_p1_sep/2026.10.06-02.56.47-43223-4n/ior_results/ior_result_0.json": "cb686408c39c0832282713bb62079706583d774e0be6c5f1e04bd7b5169ac6b3",
+      "inputs/main-43223.pbs/main/rep1/L_A_t1m_p1_sep/2026.10.06-02.39.12-43223-4n/ior_results/ior_result_0.json": "ed491aa4687ee0aaf9e31fe39789db3577ce7200ea275b8a167951e3d8d24ace",
+      "inputs/main-43223.pbs/main/rep2/L_A_t1m_p1_sep/2026.10.06-02.46.33-43223-4n/ior_results/ior_result_0.json": "a0e4a0292b33c83809a9e1bf6530ed8956b77eef51943ee9355f3d1075d01543",
+      "inputs/main-43223.pbs/main/rep3/L_A_t1m_p1_sep/2026.10.06-02.54.20-43223-4n/ior_results/ior_result_0.json": "9e03d947a613f027c57f234a01cf20397864671f284911de1469ce56b461bcb7",
+      "inputs/main-43223.pbs/main/rep1/L_A_t4m_p1_sep/2026.10.06-02.36.44-43223-4n/ior_results/ior_result_0.json": "e828eb91dca1c58b622da0a35c5237e88530fee1fae6cd2e6f2402cad468edeb",
+      "inputs/main-43223.pbs/main/rep2/L_A_t4m_p1_sep/2026.10.06-02.44.10-43223-4n/ior_results/ior_result_0.json": "4e7845f4fa239a33b941591cad86a55c15337bff1dd74f8ecc7440f2a8984673",
+      "inputs/main-43223.pbs/main/rep3/L_A_t4m_p1_sep/2026.10.06-02.51.54-43223-4n/ior_results/ior_result_0.json": "cc6f37d2c29ec1a5a3296096d25120c3fe99bfcaa45686c5475db6822c0ec7f0",
+      "inputs/main-43223.pbs/main/rep1/L_B_t4k_p1_sep/2026.10.06-02.42.15-43223-4n/ior_results/ior_result_0.json": "a6df6ffb6f60b91aa524491e88920da7f9dca338eabcdb62532026d7cbaa4e64",
+      "inputs/main-43223.pbs/main/rep2/L_B_t4k_p1_sep/2026.10.06-02.48.30-43223-4n/ior_results/ior_result_0.json": "203d25be475a97d6a27800a58b9925d7d762b269c8b230ce70c4ab6152fe4cde",
+      "inputs/main-43223.pbs/main/rep3/L_B_t4k_p1_sep/2026.10.06-02.57.19-43223-4n/ior_results/ior_result_0.json": "81788ed62a5c3211bb919f506e60dbca320f2aff8a41eae67aa61061c559e4e3",
+      "inputs/main-43223.pbs/main/rep1/L_B_t1m_p1_sep/2026.10.06-02.39.42-43223-4n/ior_results/ior_result_0.json": "30de91a8bec458a14b713d69c7c319e3812a86ff286f9c3f7b2c637ef83120c4",
+      "inputs/main-43223.pbs/main/rep2/L_B_t1m_p1_sep/2026.10.06-02.46.02-43223-4n/ior_results/ior_result_0.json": "94c7a46d8df7c213ea7f139a5cacd2b9cf4ee14ede40cca48c4697b29ad2a6da",
+      "inputs/main-43223.pbs/main/rep3/L_B_t1m_p1_sep/2026.10.06-02.54.50-43223-4n/ior_results/ior_result_0.json": "623edc378149d6a3a6ea2d48f22955f78ce39de77edc88424ad3e5a543383262",
+      "inputs/main-43223.pbs/main/rep1/L_B_t4m_p1_sep/2026.10.06-02.37.14-43223-4n/ior_results/ior_result_0.json": "b932944532ebc3e3f2eb5b54d7a3fa6a8899efc28311596713a49590175fc9f7",
+      "inputs/main-43223.pbs/main/rep2/L_B_t4m_p1_sep/2026.10.06-02.43.40-43223-4n/ior_results/ior_result_0.json": "820c773ca729a468851c2dc3b932904ca6fe049126912fabf50bf0e48eda9a17",
+      "inputs/main-43223.pbs/main/rep3/L_B_t4m_p1_sep/2026.10.06-02.52.24-43223-4n/ior_results/ior_result_0.json": "80eb153e241bbd8dc2cdfa448f136093a0fda480a1c83b2d973ac06a2f39be43",
+      "inputs/main-43223.pbs/main/rep1/L_AB_t4k_p1_sep/2026.10.06-02.42.45-43223-4n/ior_results/ior_result_0.json": "129403ce06f205656452d53184538ec38c06141d59873e25330c791e23abf473",
+      "inputs/main-43223.pbs/main/rep2/L_AB_t4k_p1_sep/2026.10.06-02.50.29-43223-4n/ior_results/ior_result_0.json": "44a203e2fa167c8c1af935cb74f810d7b0b4277f2af42169e36679a89fc3a98d",
+      "inputs/main-43223.pbs/main/rep3/L_AB_t4k_p1_sep/2026.10.06-02.57.49-43223-4n/ior_results/ior_result_0.json": "8b0895aa98899e4bc6db4f699d6bbd48467c65d4a7eae956c6217de2347e0ab6",
+      "inputs/main-43223.pbs/main/rep1/L_AB_t1m_p1_sep/2026.10.06-02.40.13-43223-4n/ior_results/ior_result_0.json": "0a736077d52baa5574574dab9f77b09297d0fa330fca39d7438e51abb158227b",
+      "inputs/main-43223.pbs/main/rep2/L_AB_t1m_p1_sep/2026.10.06-02.48.00-43223-4n/ior_results/ior_result_0.json": "3acac8fa2e44ec74152641a332a2e453337fab1e5c49991d94c147471f095b5d",
+      "inputs/main-43223.pbs/main/rep3/L_AB_t1m_p1_sep/2026.10.06-02.55.21-43223-4n/ior_results/ior_result_0.json": "40772615f5e05d6a1f44036dbe7312275bba97fc7bef326dd5b23fff0b1d960e",
+      "inputs/main-43223.pbs/main/rep1/L_AB_t4m_p1_sep/2026.10.06-02.37.43-43223-4n/ior_results/ior_result_0.json": "34b8b4b75a2bf83d88907c101d9946f6205d1ed1fec9a1b6828182248d54c51c",
+      "inputs/main-43223.pbs/main/rep2/L_AB_t4m_p1_sep/2026.10.06-02.45.33-43223-4n/ior_results/ior_result_0.json": "984af7d6b8daed8318a4b0d64832b8a087ad43881fe677de9cba48fb99090470",
+      "inputs/main-43223.pbs/main/rep3/L_AB_t4m_p1_sep/2026.10.06-02.52.53-43223-4n/ior_results/ior_result_0.json": "6b1b29a6c1f1b1a8ee987986f064a6a75816efaa59fa4cfca0796d7114ced6bc",
+      "inputs/main-43223.pbs/main/rep1/U_t4k_p1_sep/2026.10.06-02.43.15-43223-4n/ior_results/ior_result_0.json": "5ff81f68ef123582000a2f5c9f7c169bb655fc96584c88b7c328fe555b1fafe8",
+      "inputs/main-43223.pbs/main/rep2/U_t4k_p1_sep/2026.10.06-02.50.04-43223-4n/ior_results/ior_result_0.json": "ad1a12da65c541dd1b0c9cd5f880e7774c988d45172fb6884f14e15d35b20009",
+      "inputs/main-43223.pbs/main/rep3/U_t4k_p1_sep/2026.10.06-02.55.51-43223-4n/ior_results/ior_result_0.json": "af592a04407a5828733415e98d7398638747cf58e2218ba70056c38c1ca1345f",
+      "inputs/main-43223.pbs/main/rep1/U_t1m_p1_sep/2026.10.06-02.40.44-43223-4n/ior_results/ior_result_0.json": "57880c175976a03d17820c62f15500198721cd85fbd8573ab4f69c9f6cd6b715",
+      "inputs/main-43223.pbs/main/rep2/U_t1m_p1_sep/2026.10.06-02.47.36-43223-4n/ior_results/ior_result_0.json": "7f37c9b7b34de82735a78624ef62a5f664911b896084cf246dfb51cb3ee24858",
+      "inputs/main-43223.pbs/main/rep3/U_t1m_p1_sep/2026.10.06-02.53.23-43223-4n/ior_results/ior_result_0.json": "89fd3de230c6558d3155398047cb20e58e6e4d0ac763cf84b574b3d3d1bfae54",
+      "inputs/main-43223.pbs/main/rep1/U_t4m_p1_sep/2026.10.06-02.38.17-43223-4n/ior_results/ior_result_0.json": "69487bbcc0e509e453d96088165312fc5ed492fa5213f36d79ce1cb314f131ee",
+      "inputs/main-43223.pbs/main/rep2/U_t4m_p1_sep/2026.10.06-02.45.08-43223-4n/ior_results/ior_result_0.json": "57d24a254c17e9f23257d9a011204a31142026b7b3f78e0e071e291bc42b88dc",
+      "inputs/main-43223.pbs/main/rep3/U_t4m_p1_sep/2026.10.06-02.51.00-43223-4n/ior_results/ior_result_0.json": "a8b4c225cbf8fa4d80a0325876c30b35f8a4dc3932c5bddc47d56029dbc0242b"
+    },
+    "metrics": [
+      {
+        "name": "bw_L_base_4k_write_mean_mib",
+        "source": {
+          "json": {
+            "files": [
+              "inputs/main-43223.pbs/main/rep1/L_base_t4k_p1_sep/2026.10.06-02.41.10-43223-4n/ior_results/ior_result_0.json",
+              "inputs/main-43223.pbs/main/rep2/L_base_t4k_p1_sep/2026.10.06-02.49.32-43223-4n/ior_results/ior_result_0.json",
+              "inputs/main-43223.pbs/main/rep3/L_base_t4k_p1_sep/2026.10.06-02.56.15-43223-4n/ior_results/ior_result_0.json"
+            ],
+            "pointer": "/summary/0/bwMeanMIB"
+          }
+        },
+        "agg": "mean",
+        "tolerance_rel": 0.001
+      },
+      {
+        "name": "bw_L_base_4k_read_mean_mib",
+        "source": {
+          "json": {
+            "files": [
+              "inputs/main-43223.pbs/main/rep1/L_base_t4k_p1_sep/2026.10.06-02.41.10-43223-4n/ior_results/ior_result_0.json",
+              "inputs/main-43223.pbs/main/rep2/L_base_t4k_p1_sep/2026.10.06-02.49.32-43223-4n/ior_results/ior_result_0.json",
+              "inputs/main-43223.pbs/main/rep3/L_base_t4k_p1_sep/2026.10.06-02.56.15-43223-4n/ior_results/ior_result_0.json"
+            ],
+            "pointer": "/summary/1/bwMeanMIB"
+          }
+        },
+        "agg": "mean",
+        "tolerance_rel": 0.001
+      },
+      {
+        "name": "bw_L_base_1m_write_mean_mib",
+        "source": {
+          "json": {
+            "files": [
+              "inputs/main-43223.pbs/main/rep1/L_base_t1m_p1_sep/2026.10.06-02.38.41-43223-4n/ior_results/ior_result_0.json",
+              "inputs/main-43223.pbs/main/rep2/L_base_t1m_p1_sep/2026.10.06-02.47.05-43223-4n/ior_results/ior_result_0.json",
+              "inputs/main-43223.pbs/main/rep3/L_base_t1m_p1_sep/2026.10.06-02.53.48-43223-4n/ior_results/ior_result_0.json"
+            ],
+            "pointer": "/summary/0/bwMeanMIB"
+          }
+        },
+        "agg": "mean",
+        "tolerance_rel": 0.001
+      },
+      {
+        "name": "bw_L_base_1m_read_mean_mib",
+        "source": {
+          "json": {
+            "files": [
+              "inputs/main-43223.pbs/main/rep1/L_base_t1m_p1_sep/2026.10.06-02.38.41-43223-4n/ior_results/ior_result_0.json",
+              "inputs/main-43223.pbs/main/rep2/L_base_t1m_p1_sep/2026.10.06-02.47.05-43223-4n/ior_results/ior_result_0.json",
+              "inputs/main-43223.pbs/main/rep3/L_base_t1m_p1_sep/2026.10.06-02.53.48-43223-4n/ior_results/ior_result_0.json"
+            ],
+            "pointer": "/summary/1/bwMeanMIB"
+          }
+        },
+        "agg": "mean",
+        "tolerance_rel": 0.001
+      },
+      {
+        "name": "bw_L_base_4m_write_mean_mib",
+        "source": {
+          "json": {
+            "files": [
+              "inputs/main-43223.pbs/main/rep1/L_base_t4m_p1_sep/2026.10.06-02.36.06-43223-4n/ior_results/ior_result_0.json",
+              "inputs/main-43223.pbs/main/rep2/L_base_t4m_p1_sep/2026.10.06-02.44.38-43223-4n/ior_results/ior_result_0.json",
+              "inputs/main-43223.pbs/main/rep3/L_base_t4m_p1_sep/2026.10.06-02.51.24-43223-4n/ior_results/ior_result_0.json"
+            ],
+            "pointer": "/summary/0/bwMeanMIB"
+          }
+        },
+        "agg": "mean",
+        "tolerance_rel": 0.001
+      },
+      {
+        "name": "bw_L_base_4m_read_mean_mib",
+        "source": {
+          "json": {
+            "files": [
+              "inputs/main-43223.pbs/main/rep1/L_base_t4m_p1_sep/2026.10.06-02.36.06-43223-4n/ior_results/ior_result_0.json",
+              "inputs/main-43223.pbs/main/rep2/L_base_t4m_p1_sep/2026.10.06-02.44.38-43223-4n/ior_results/ior_result_0.json",
+              "inputs/main-43223.pbs/main/rep3/L_base_t4m_p1_sep/2026.10.06-02.51.24-43223-4n/ior_results/ior_result_0.json"
+            ],
+            "pointer": "/summary/1/bwMeanMIB"
+          }
+        },
+        "agg": "mean",
+        "tolerance_rel": 0.001
+      },
+      {
+        "name": "bw_L_A_4k_write_mean_mib",
+        "source": {
+          "json": {
+            "files": [
+              "inputs/main-43223.pbs/main/rep1/L_A_t4k_p1_sep/2026.10.06-02.41.42-43223-4n/ior_results/ior_result_0.json",
+              "inputs/main-43223.pbs/main/rep2/L_A_t4k_p1_sep/2026.10.06-02.49.00-43223-4n/ior_results/ior_result_0.json",
+              "inputs/main-43223.pbs/main/rep3/L_A_t4k_p1_sep/2026.10.06-02.56.47-43223-4n/ior_results/ior_result_0.json"
+            ],
+            "pointer": "/summary/0/bwMeanMIB"
+          }
+        },
+        "agg": "mean",
+        "tolerance_rel": 0.001
+      },
+      {
+        "name": "bw_L_A_4k_read_mean_mib",
+        "source": {
+          "json": {
+            "files": [
+              "inputs/main-43223.pbs/main/rep1/L_A_t4k_p1_sep/2026.10.06-02.41.42-43223-4n/ior_results/ior_result_0.json",
+              "inputs/main-43223.pbs/main/rep2/L_A_t4k_p1_sep/2026.10.06-02.49.00-43223-4n/ior_results/ior_result_0.json",
+              "inputs/main-43223.pbs/main/rep3/L_A_t4k_p1_sep/2026.10.06-02.56.47-43223-4n/ior_results/ior_result_0.json"
+            ],
+            "pointer": "/summary/1/bwMeanMIB"
+          }
+        },
+        "agg": "mean",
+        "tolerance_rel": 0.001
+      },
+      {
+        "name": "bw_L_A_1m_write_mean_mib",
+        "source": {
+          "json": {
+            "files": [
+              "inputs/main-43223.pbs/main/rep1/L_A_t1m_p1_sep/2026.10.06-02.39.12-43223-4n/ior_results/ior_result_0.json",
+              "inputs/main-43223.pbs/main/rep2/L_A_t1m_p1_sep/2026.10.06-02.46.33-43223-4n/ior_results/ior_result_0.json",
+              "inputs/main-43223.pbs/main/rep3/L_A_t1m_p1_sep/2026.10.06-02.54.20-43223-4n/ior_results/ior_result_0.json"
+            ],
+            "pointer": "/summary/0/bwMeanMIB"
+          }
+        },
+        "agg": "mean",
+        "tolerance_rel": 0.001
+      },
+      {
+        "name": "bw_L_A_1m_read_mean_mib",
+        "source": {
+          "json": {
+            "files": [
+              "inputs/main-43223.pbs/main/rep1/L_A_t1m_p1_sep/2026.10.06-02.39.12-43223-4n/ior_results/ior_result_0.json",
+              "inputs/main-43223.pbs/main/rep2/L_A_t1m_p1_sep/2026.10.06-02.46.33-43223-4n/ior_results/ior_result_0.json",
+              "inputs/main-43223.pbs/main/rep3/L_A_t1m_p1_sep/2026.10.06-02.54.20-43223-4n/ior_results/ior_result_0.json"
+            ],
+            "pointer": "/summary/1/bwMeanMIB"
+          }
+        },
+        "agg": "mean",
+        "tolerance_rel": 0.001
+      },
+      {
+        "name": "bw_L_A_4m_write_mean_mib",
+        "source": {
+          "json": {
+            "files": [
+              "inputs/main-43223.pbs/main/rep1/L_A_t4m_p1_sep/2026.10.06-02.36.44-43223-4n/ior_results/ior_result_0.json",
+              "inputs/main-43223.pbs/main/rep2/L_A_t4m_p1_sep/2026.10.06-02.44.10-43223-4n/ior_results/ior_result_0.json",
+              "inputs/main-43223.pbs/main/rep3/L_A_t4m_p1_sep/2026.10.06-02.51.54-43223-4n/ior_results/ior_result_0.json"
+            ],
+            "pointer": "/summary/0/bwMeanMIB"
+          }
+        },
+        "agg": "mean",
+        "tolerance_rel": 0.001
+      },
+      {
+        "name": "bw_L_A_4m_read_mean_mib",
+        "source": {
+          "json": {
+            "files": [
+              "inputs/main-43223.pbs/main/rep1/L_A_t4m_p1_sep/2026.10.06-02.36.44-43223-4n/ior_results/ior_result_0.json",
+              "inputs/main-43223.pbs/main/rep2/L_A_t4m_p1_sep/2026.10.06-02.44.10-43223-4n/ior_results/ior_result_0.json",
+              "inputs/main-43223.pbs/main/rep3/L_A_t4m_p1_sep/2026.10.06-02.51.54-43223-4n/ior_results/ior_result_0.json"
+            ],
+            "pointer": "/summary/1/bwMeanMIB"
+          }
+        },
+        "agg": "mean",
+        "tolerance_rel": 0.001
+      },
+      {
+        "name": "bw_L_B_4k_write_mean_mib",
+        "source": {
+          "json": {
+            "files": [
+              "inputs/main-43223.pbs/main/rep1/L_B_t4k_p1_sep/2026.10.06-02.42.15-43223-4n/ior_results/ior_result_0.json",
+              "inputs/main-43223.pbs/main/rep2/L_B_t4k_p1_sep/2026.10.06-02.48.30-43223-4n/ior_results/ior_result_0.json",
+              "inputs/main-43223.pbs/main/rep3/L_B_t4k_p1_sep/2026.10.06-02.57.19-43223-4n/ior_results/ior_result_0.json"
+            ],
+            "pointer": "/summary/0/bwMeanMIB"
+          }
+        },
+        "agg": "mean",
+        "tolerance_rel": 0.001
+      },
+      {
+        "name": "bw_L_B_4k_read_mean_mib",
+        "source": {
+          "json": {
+            "files": [
+              "inputs/main-43223.pbs/main/rep1/L_B_t4k_p1_sep/2026.10.06-02.42.15-43223-4n/ior_results/ior_result_0.json",
+              "inputs/main-43223.pbs/main/rep2/L_B_t4k_p1_sep/2026.10.06-02.48.30-43223-4n/ior_results/ior_result_0.json",
+              "inputs/main-43223.pbs/main/rep3/L_B_t4k_p1_sep/2026.10.06-02.57.19-43223-4n/ior_results/ior_result_0.json"
+            ],
+            "pointer": "/summary/1/bwMeanMIB"
+          }
+        },
+        "agg": "mean",
+        "tolerance_rel": 0.001
+      },
+      {
+        "name": "bw_L_B_1m_write_mean_mib",
+        "source": {
+          "json": {
+            "files": [
+              "inputs/main-43223.pbs/main/rep1/L_B_t1m_p1_sep/2026.10.06-02.39.42-43223-4n/ior_results/ior_result_0.json",
+              "inputs/main-43223.pbs/main/rep2/L_B_t1m_p1_sep/2026.10.06-02.46.02-43223-4n/ior_results/ior_result_0.json",
+              "inputs/main-43223.pbs/main/rep3/L_B_t1m_p1_sep/2026.10.06-02.54.50-43223-4n/ior_results/ior_result_0.json"
+            ],
+            "pointer": "/summary/0/bwMeanMIB"
+          }
+        },
+        "agg": "mean",
+        "tolerance_rel": 0.001
+      },
+      {
+        "name": "bw_L_B_1m_read_mean_mib",
+        "source": {
+          "json": {
+            "files": [
+              "inputs/main-43223.pbs/main/rep1/L_B_t1m_p1_sep/2026.10.06-02.39.42-43223-4n/ior_results/ior_result_0.json",
+              "inputs/main-43223.pbs/main/rep2/L_B_t1m_p1_sep/2026.10.06-02.46.02-43223-4n/ior_results/ior_result_0.json",
+              "inputs/main-43223.pbs/main/rep3/L_B_t1m_p1_sep/2026.10.06-02.54.50-43223-4n/ior_results/ior_result_0.json"
+            ],
+            "pointer": "/summary/1/bwMeanMIB"
+          }
+        },
+        "agg": "mean",
+        "tolerance_rel": 0.001
+      },
+      {
+        "name": "bw_L_B_4m_write_mean_mib",
+        "source": {
+          "json": {
+            "files": [
+              "inputs/main-43223.pbs/main/rep1/L_B_t4m_p1_sep/2026.10.06-02.37.14-43223-4n/ior_results/ior_result_0.json",
+              "inputs/main-43223.pbs/main/rep2/L_B_t4m_p1_sep/2026.10.06-02.43.40-43223-4n/ior_results/ior_result_0.json",
+              "inputs/main-43223.pbs/main/rep3/L_B_t4m_p1_sep/2026.10.06-02.52.24-43223-4n/ior_results/ior_result_0.json"
+            ],
+            "pointer": "/summary/0/bwMeanMIB"
+          }
+        },
+        "agg": "mean",
+        "tolerance_rel": 0.001
+      },
+      {
+        "name": "bw_L_B_4m_read_mean_mib",
+        "source": {
+          "json": {
+            "files": [
+              "inputs/main-43223.pbs/main/rep1/L_B_t4m_p1_sep/2026.10.06-02.37.14-43223-4n/ior_results/ior_result_0.json",
+              "inputs/main-43223.pbs/main/rep2/L_B_t4m_p1_sep/2026.10.06-02.43.40-43223-4n/ior_results/ior_result_0.json",
+              "inputs/main-43223.pbs/main/rep3/L_B_t4m_p1_sep/2026.10.06-02.52.24-43223-4n/ior_results/ior_result_0.json"
+            ],
+            "pointer": "/summary/1/bwMeanMIB"
+          }
+        },
+        "agg": "mean",
+        "tolerance_rel": 0.001
+      },
+      {
+        "name": "bw_L_AB_4k_write_mean_mib",
+        "source": {
+          "json": {
+            "files": [
+              "inputs/main-43223.pbs/main/rep1/L_AB_t4k_p1_sep/2026.10.06-02.42.45-43223-4n/ior_results/ior_result_0.json",
+              "inputs/main-43223.pbs/main/rep2/L_AB_t4k_p1_sep/2026.10.06-02.50.29-43223-4n/ior_results/ior_result_0.json",
+              "inputs/main-43223.pbs/main/rep3/L_AB_t4k_p1_sep/2026.10.06-02.57.49-43223-4n/ior_results/ior_result_0.json"
+            ],
+            "pointer": "/summary/0/bwMeanMIB"
+          }
+        },
+        "agg": "mean",
+        "tolerance_rel": 0.001
+      },
+      {
+        "name": "bw_L_AB_4k_read_mean_mib",
+        "source": {
+          "json": {
+            "files": [
+              "inputs/main-43223.pbs/main/rep1/L_AB_t4k_p1_sep/2026.10.06-02.42.45-43223-4n/ior_results/ior_result_0.json",
+              "inputs/main-43223.pbs/main/rep2/L_AB_t4k_p1_sep/2026.10.06-02.50.29-43223-4n/ior_results/ior_result_0.json",
+              "inputs/main-43223.pbs/main/rep3/L_AB_t4k_p1_sep/2026.10.06-02.57.49-43223-4n/ior_results/ior_result_0.json"
+            ],
+            "pointer": "/summary/1/bwMeanMIB"
+          }
+        },
+        "agg": "mean",
+        "tolerance_rel": 0.001
+      },
+      {
+        "name": "bw_L_AB_1m_write_mean_mib",
+        "source": {
+          "json": {
+            "files": [
+              "inputs/main-43223.pbs/main/rep1/L_AB_t1m_p1_sep/2026.10.06-02.40.13-43223-4n/ior_results/ior_result_0.json",
+              "inputs/main-43223.pbs/main/rep2/L_AB_t1m_p1_sep/2026.10.06-02.48.00-43223-4n/ior_results/ior_result_0.json",
+              "inputs/main-43223.pbs/main/rep3/L_AB_t1m_p1_sep/2026.10.06-02.55.21-43223-4n/ior_results/ior_result_0.json"
+            ],
+            "pointer": "/summary/0/bwMeanMIB"
+          }
+        },
+        "agg": "mean",
+        "tolerance_rel": 0.001
+      },
+      {
+        "name": "bw_L_AB_1m_read_mean_mib",
+        "source": {
+          "json": {
+            "files": [
+              "inputs/main-43223.pbs/main/rep1/L_AB_t1m_p1_sep/2026.10.06-02.40.13-43223-4n/ior_results/ior_result_0.json",
+              "inputs/main-43223.pbs/main/rep2/L_AB_t1m_p1_sep/2026.10.06-02.48.00-43223-4n/ior_results/ior_result_0.json",
+              "inputs/main-43223.pbs/main/rep3/L_AB_t1m_p1_sep/2026.10.06-02.55.21-43223-4n/ior_results/ior_result_0.json"
+            ],
+            "pointer": "/summary/1/bwMeanMIB"
+          }
+        },
+        "agg": "mean",
+        "tolerance_rel": 0.001
+      },
+      {
+        "name": "bw_L_AB_4m_write_mean_mib",
+        "source": {
+          "json": {
+            "files": [
+              "inputs/main-43223.pbs/main/rep1/L_AB_t4m_p1_sep/2026.10.06-02.37.43-43223-4n/ior_results/ior_result_0.json",
+              "inputs/main-43223.pbs/main/rep2/L_AB_t4m_p1_sep/2026.10.06-02.45.33-43223-4n/ior_results/ior_result_0.json",
+              "inputs/main-43223.pbs/main/rep3/L_AB_t4m_p1_sep/2026.10.06-02.52.53-43223-4n/ior_results/ior_result_0.json"
+            ],
+            "pointer": "/summary/0/bwMeanMIB"
+          }
+        },
+        "agg": "mean",
+        "tolerance_rel": 0.001
+      },
+      {
+        "name": "bw_L_AB_4m_read_mean_mib",
+        "source": {
+          "json": {
+            "files": [
+              "inputs/main-43223.pbs/main/rep1/L_AB_t4m_p1_sep/2026.10.06-02.37.43-43223-4n/ior_results/ior_result_0.json",
+              "inputs/main-43223.pbs/main/rep2/L_AB_t4m_p1_sep/2026.10.06-02.45.33-43223-4n/ior_results/ior_result_0.json",
+              "inputs/main-43223.pbs/main/rep3/L_AB_t4m_p1_sep/2026.10.06-02.52.53-43223-4n/ior_results/ior_result_0.json"
+            ],
+            "pointer": "/summary/1/bwMeanMIB"
+          }
+        },
+        "agg": "mean",
+        "tolerance_rel": 0.001
+      },
+      {
+        "name": "bw_U_4k_write_mean_mib",
+        "source": {
+          "json": {
+            "files": [
+              "inputs/main-43223.pbs/main/rep1/U_t4k_p1_sep/2026.10.06-02.43.15-43223-4n/ior_results/ior_result_0.json",
+              "inputs/main-43223.pbs/main/rep2/U_t4k_p1_sep/2026.10.06-02.50.04-43223-4n/ior_results/ior_result_0.json",
+              "inputs/main-43223.pbs/main/rep3/U_t4k_p1_sep/2026.10.06-02.55.51-43223-4n/ior_results/ior_result_0.json"
+            ],
+            "pointer": "/summary/0/bwMeanMIB"
+          }
+        },
+        "agg": "mean",
+        "tolerance_rel": 0.001
+      },
+      {
+        "name": "bw_U_4k_read_mean_mib",
+        "source": {
+          "json": {
+            "files": [
+              "inputs/main-43223.pbs/main/rep1/U_t4k_p1_sep/2026.10.06-02.43.15-43223-4n/ior_results/ior_result_0.json",
+              "inputs/main-43223.pbs/main/rep2/U_t4k_p1_sep/2026.10.06-02.50.04-43223-4n/ior_results/ior_result_0.json",
+              "inputs/main-43223.pbs/main/rep3/U_t4k_p1_sep/2026.10.06-02.55.51-43223-4n/ior_results/ior_result_0.json"
+            ],
+            "pointer": "/summary/1/bwMeanMIB"
+          }
+        },
+        "agg": "mean",
+        "tolerance_rel": 0.001
+      },
+      {
+        "name": "bw_U_1m_write_mean_mib",
+        "source": {
+          "json": {
+            "files": [
+              "inputs/main-43223.pbs/main/rep1/U_t1m_p1_sep/2026.10.06-02.40.44-43223-4n/ior_results/ior_result_0.json",
+              "inputs/main-43223.pbs/main/rep2/U_t1m_p1_sep/2026.10.06-02.47.36-43223-4n/ior_results/ior_result_0.json",
+              "inputs/main-43223.pbs/main/rep3/U_t1m_p1_sep/2026.10.06-02.53.23-43223-4n/ior_results/ior_result_0.json"
+            ],
+            "pointer": "/summary/0/bwMeanMIB"
+          }
+        },
+        "agg": "mean",
+        "tolerance_rel": 0.001
+      },
+      {
+        "name": "bw_U_1m_read_mean_mib",
+        "source": {
+          "json": {
+            "files": [
+              "inputs/main-43223.pbs/main/rep1/U_t1m_p1_sep/2026.10.06-02.40.44-43223-4n/ior_results/ior_result_0.json",
+              "inputs/main-43223.pbs/main/rep2/U_t1m_p1_sep/2026.10.06-02.47.36-43223-4n/ior_results/ior_result_0.json",
+              "inputs/main-43223.pbs/main/rep3/U_t1m_p1_sep/2026.10.06-02.53.23-43223-4n/ior_results/ior_result_0.json"
+            ],
+            "pointer": "/summary/1/bwMeanMIB"
+          }
+        },
+        "agg": "mean",
+        "tolerance_rel": 0.001
+      },
+      {
+        "name": "bw_U_4m_write_mean_mib",
+        "source": {
+          "json": {
+            "files": [
+              "inputs/main-43223.pbs/main/rep1/U_t4m_p1_sep/2026.10.06-02.38.17-43223-4n/ior_results/ior_result_0.json",
+              "inputs/main-43223.pbs/main/rep2/U_t4m_p1_sep/2026.10.06-02.45.08-43223-4n/ior_results/ior_result_0.json",
+              "inputs/main-43223.pbs/main/rep3/U_t4m_p1_sep/2026.10.06-02.51.00-43223-4n/ior_results/ior_result_0.json"
+            ],
+            "pointer": "/summary/0/bwMeanMIB"
+          }
+        },
+        "agg": "mean",
+        "tolerance_rel": 0.001
+      },
+      {
+        "name": "bw_U_4m_read_mean_mib",
+        "source": {
+          "json": {
+            "files": [
+              "inputs/main-43223.pbs/main/rep1/U_t4m_p1_sep/2026.10.06-02.38.17-43223-4n/ior_results/ior_result_0.json",
+              "inputs/main-43223.pbs/main/rep2/U_t4m_p1_sep/2026.10.06-02.45.08-43223-4n/ior_results/ior_result_0.json",
+              "inputs/main-43223.pbs/main/rep3/U_t4m_p1_sep/2026.10.06-02.51.00-43223-4n/ior_results/ior_result_0.json"
+            ],
+            "pointer": "/summary/1/bwMeanMIB"
+          }
+        },
+        "agg": "mean",
+        "tolerance_rel": 0.001
+      }
+    ]
+  }
+}

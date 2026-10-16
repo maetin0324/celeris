@@ -87,6 +87,14 @@ mock の出力は `run-meta.json` / `summary.json` / export に `evidence_kind: 
    $B grade  --case <grade-case.json> --artifact $O/pilot-out/trials/<A|B|C>/<case>/rep1/workspace   # 評価 command を実際に走らせる
    $B grade-out --manifest $O/pilot.json --out $O/pilot-out --cases crates/campaign/fixtures/grade-cases/pilot   # 全試行 → grades.jsonl
    ```
+   **合否と処理成功を混同しない**（2026-10-16 監査修正 1）:
+   - `grade`（単件）: exit 0 = その成果物の **final_pass（合格）**、exit 1 = 不合格。JSON の `verdict` / `checks` で内訳を見る。
+   - `grade-out`（一括）: exit 0 = **処理が完了**（全 case を採点し、成果物 hash・case id の拒否が無い）。個々の合否は `grades.jsonl` の `grade.final_pass` で、exit 0 でも不合格は混じる。exit 1 = grade-case 欠け・case id 不一致・成果物 hash 不一致（`missing_cases` / `rejected`）。
+   - 論文用の成功 = 実行器 outcome が `passed` **かつ** 結合検査を通った grade が `final_pass`。`task=done`（実行器 passed）だけでは成功にならない。
+   - 結合キー: campaign hash・case id・split・config（arm）・problem・rep・trial_no。固定: `grader_sha256`（grade-case file の hash）・`artifact_sha256`（採点した workspace の hash。実行終了時に記録した値と一致しなければ採点しない）。
+   - `check` は grades.jsonl の別 campaign・別 case/split・古い成果物（hash 不一致）・重複・未知 trial を違反にして export を拒否する。拒否された grade は未採点扱い。
+   - 未採点（実行器 passed だが有効な grade なし）・採点不合格・failed / timeout / cancelled / blocked / 記録なしは、成功にも分母除外にもならない（分母 n は全 cell）。
+   - 未完了（記録欠落・未採点が 1 つでもある）の `export` は `table.incomplete.json/csv`（`complete:false`、`incomplete_reasons`）だけを書き、最終版 `table.json/csv` は書かず古い最終版も消す。`check-report` も未完了の campaign を最終報告として通さない。本測定の結果は `complete:true` の `table.json/csv` だけを使う。
 6. **実測の読み取り**（次節の式に入れる）: `summary.json` の試行あたり tokens（A/B 別、`tokens_missing` を除外して数える。`cells.<arm>.tokens` に input / output / cache_read / cache_creation の和、`budget.token_basis` に基準）、wall、`max_overshoot_*`、外部 task の子 task 数・再試行数、Jev / CoS の共有オーバーヘッド。
 7. 結果は進捗ファイル（WU pilot）に書く。**pilot の結果は較正にだけ使い、本測定の主張に混ぜない**（split・campaign_id・hash を分ける）。
 

@@ -1,0 +1,162 @@
+{
+  "schema": "celeris.grade-case/1",
+  "id": "k4-cmp4-validity-analysis",
+  "split": "final",
+  "recompute": {
+    "report": "report.md",
+    "pinned_raw": {
+      "inputs/runs/43706-20261008T045834Z/cells/benchfs/rep1/w1a/cell.json": "6fa1a9d94d6e794632aad66f608e0f30670cdc38dea7f1fb168e069619e21c19",
+      "inputs/runs/43706-20261008T045834Z/cells/benchfs/rep1/w1b/cell.json": "e52762d2730727d6045f65320a4a94d5e2a19a41f650e498a780af53de8bb4e8",
+      "inputs/runs/43706-20261008T045834Z/cells/benchfs/rep1/w3/cell.json": "02954e3b614dd45b8089b4b47e74efb6cfcd2732d1894d60baee353d4b2a3956",
+      "inputs/runs/43706-20261008T045834Z/cells/benchfs/rep2/w1a/cell.json": "4c32c8e45e8b92cca3d5d1d7c36b523791d43426a15d0c18296e65e09cf827c1",
+      "inputs/runs/43706-20261008T045834Z/cells/benchfs/rep2/w1b/cell.json": "11bf29034537d0b2d8acebf12acfe86177631ee5607dff5628f060730f5a0af7",
+      "inputs/runs/43706-20261008T045834Z/cells/benchfs/rep2/w3/cell.json": "f1cb4e1022d99c3e0d6f480d77f31f3da1598840e5e18617b34493503f43597f",
+      "inputs/runs/43706-20261008T045834Z/cells/chfs/rep1/w1a/cell.json": "295cd801c5d83ce304f56552b0dbd6da5e668f7c90e50b8e58a3af718d69196a",
+      "inputs/runs/43706-20261008T045834Z/cells/chfs/rep1/w1b/cell.json": "7dc218040170839ed4cb92b03dae1c67d64aa3388a712c2e2b7b2c3168f7a293",
+      "inputs/runs/43706-20261008T045834Z/cells/chfs/rep1/w2/cell.json": "d484aeb7ac05558aba8e717f5223a6c00bd4264fbe36fb3a0062e6e3d4ae2fd1",
+      "inputs/runs/43706-20261008T045834Z/cells/chfs/rep1/w3/cell.json": "c94401dd9cf040fbc5880f5a8cf93b58cc144372c58e1a18977ded28d1a37fd6",
+      "inputs/runs/43706-20261008T045834Z/cells/chfs/rep2/w1a/cell.json": "c5fc965e4c36999c912f0998521277731c56ef80f3d6c4409eb59879000483ee",
+      "inputs/runs/43706-20261008T045834Z/cells/chfs/rep2/w1b/cell.json": "b8365fcdabb3101791826669c8df3beb62987b70b1f15d0d322db1af3eb96176",
+      "inputs/runs/43706-20261008T045834Z/cells/chfs/rep2/w2/cell.json": "5d5cf2f1bd5fdf30abe3aba08d45173d94df3dc95065d9e893d96b1bf09cae62",
+      "inputs/runs/43706-20261008T045834Z/cells/chfs/rep2/w3/cell.json": "109b010e06a9977957c129ef4f467a4b0b70b9402fdfa77c3940e7d03b5effcf",
+      "inputs/runs/43706-20261008T045834Z/cells/gekkofs/rep1/w1a/cell.json": "c5082d5f5255cbd736b41bebbced34f36a17c1acb7625d9da12cefc6194c4aba",
+      "inputs/runs/43706-20261008T045834Z/cells/gekkofs/rep1/w1b/cell.json": "76e1a4d436d218ff9519b17036c92f216e0421fa5286ead6db0f816bacedc129",
+      "inputs/runs/43706-20261008T045834Z/cells/gekkofs/rep1/w2/cell.json": "db7347a73e501a45c8c8a24d7eb01366cf74230287d01770db466b09874ca435",
+      "inputs/runs/43706-20261008T045834Z/cells/gekkofs/rep1/w3/cell.json": "83a75bcf582beeb06d7138752c9f3345a1893238b42145d984ca133184f99af6",
+      "inputs/runs/43706-20261008T045834Z/cells/gekkofs/rep2/w1a/cell.json": "ed69ed1787e8cae37aa311cf0f755f38dbecb341c67899a425aa4941f8cc55ef",
+      "inputs/runs/43706-20261008T045834Z/cells/gekkofs/rep2/w1b/cell.json": "2e67a2cadbade03392f4db9b963bb66ae2bd77ab9305c9881eaca1a7677e6db5",
+      "inputs/runs/43706-20261008T045834Z/cells/gekkofs/rep2/w2/cell.json": "2e361372696a802a050b53db7fd0eb4867c758368c10ae78f527881a79e0341f",
+      "inputs/runs/43706-20261008T045834Z/cells/gekkofs/rep2/w3/cell.json": "7293f580b0a201cba6c7a3237444a0ee4a3c6c1da91c71171e1d699726c18b72",
+      "inputs/runs/43706-20261008T045834Z/cells/unifyfs/rep1/w1a/cell.json": "8290bf2587522b24e3aaf5a48e075e99b22eb66e6733f0d7209f66e6108e239d",
+      "inputs/runs/43706-20261008T045834Z/cells/unifyfs/rep1/w1b/cell.json": "f311f67c4bd1b649e53023b831079b38057aa64cd4f84a0ca0f4277c65b8824b",
+      "inputs/runs/43706-20261008T045834Z/cells/unifyfs/rep1/w2/cell.json": "f9e08b7844281266e201085b99d9dea8bd172dd63484d739194113a51f67a396",
+      "inputs/runs/43706-20261008T045834Z/cells/unifyfs/rep1/w3/cell.json": "b3b522e4c524a4de5ca9d32199053e7e914314912617cc36081105096c6eeef9",
+      "inputs/runs/43706-20261008T045834Z/cells/unifyfs/rep2/w1a/cell.json": "bc57e6943165e627e16003179758959cbf753727f317f422de0a21b6edaa721c",
+      "inputs/runs/43706-20261008T045834Z/cells/unifyfs/rep2/w1b/cell.json": "d3855aa94d95f57bfe49717bea4ca4c2c872fb723622bddd1ec6da8348e63069",
+      "inputs/runs/43706-20261008T045834Z/cells/unifyfs/rep2/w2/cell.json": "52012e627c5c9d21cf0e0708a13d55fe5a6b348165a2a35dbb8b81a6f0642f81",
+      "inputs/runs/43706-20261008T045834Z/cells/unifyfs/rep2/w3/cell.json": "1d5cbbe0b8dfdc010792b08520642de473c2d6f17e96d8c1c90990412d84732e"
+    },
+    "metrics": [
+      {
+        "name": "cells_with_cell_json",
+        "source": {
+          "json": {
+            "files": [
+              "inputs/runs/43706-20261008T045834Z/cells/benchfs/rep1/w1a/cell.json",
+              "inputs/runs/43706-20261008T045834Z/cells/benchfs/rep1/w1b/cell.json",
+              "inputs/runs/43706-20261008T045834Z/cells/benchfs/rep1/w3/cell.json",
+              "inputs/runs/43706-20261008T045834Z/cells/benchfs/rep2/w1a/cell.json",
+              "inputs/runs/43706-20261008T045834Z/cells/benchfs/rep2/w1b/cell.json",
+              "inputs/runs/43706-20261008T045834Z/cells/benchfs/rep2/w3/cell.json",
+              "inputs/runs/43706-20261008T045834Z/cells/chfs/rep1/w1a/cell.json",
+              "inputs/runs/43706-20261008T045834Z/cells/chfs/rep1/w1b/cell.json",
+              "inputs/runs/43706-20261008T045834Z/cells/chfs/rep1/w2/cell.json",
+              "inputs/runs/43706-20261008T045834Z/cells/chfs/rep1/w3/cell.json",
+              "inputs/runs/43706-20261008T045834Z/cells/chfs/rep2/w1a/cell.json",
+              "inputs/runs/43706-20261008T045834Z/cells/chfs/rep2/w1b/cell.json",
+              "inputs/runs/43706-20261008T045834Z/cells/chfs/rep2/w2/cell.json",
+              "inputs/runs/43706-20261008T045834Z/cells/chfs/rep2/w3/cell.json",
+              "inputs/runs/43706-20261008T045834Z/cells/gekkofs/rep1/w1a/cell.json",
+              "inputs/runs/43706-20261008T045834Z/cells/gekkofs/rep1/w1b/cell.json",
+              "inputs/runs/43706-20261008T045834Z/cells/gekkofs/rep1/w2/cell.json",
+              "inputs/runs/43706-20261008T045834Z/cells/gekkofs/rep1/w3/cell.json",
+              "inputs/runs/43706-20261008T045834Z/cells/gekkofs/rep2/w1a/cell.json",
+              "inputs/runs/43706-20261008T045834Z/cells/gekkofs/rep2/w1b/cell.json",
+              "inputs/runs/43706-20261008T045834Z/cells/gekkofs/rep2/w2/cell.json",
+              "inputs/runs/43706-20261008T045834Z/cells/gekkofs/rep2/w3/cell.json",
+              "inputs/runs/43706-20261008T045834Z/cells/unifyfs/rep1/w1a/cell.json",
+              "inputs/runs/43706-20261008T045834Z/cells/unifyfs/rep1/w1b/cell.json",
+              "inputs/runs/43706-20261008T045834Z/cells/unifyfs/rep1/w2/cell.json",
+              "inputs/runs/43706-20261008T045834Z/cells/unifyfs/rep1/w3/cell.json",
+              "inputs/runs/43706-20261008T045834Z/cells/unifyfs/rep2/w1a/cell.json",
+              "inputs/runs/43706-20261008T045834Z/cells/unifyfs/rep2/w1b/cell.json",
+              "inputs/runs/43706-20261008T045834Z/cells/unifyfs/rep2/w2/cell.json",
+              "inputs/runs/43706-20261008T045834Z/cells/unifyfs/rep2/w3/cell.json"
+            ],
+            "pointer": "/nhosts"
+          }
+        },
+        "agg": "count",
+        "tolerance_rel": 0.0
+      },
+      {
+        "name": "cells_benchfs",
+        "source": {
+          "json": {
+            "files": [
+              "inputs/runs/43706-20261008T045834Z/cells/benchfs/rep1/w1a/cell.json",
+              "inputs/runs/43706-20261008T045834Z/cells/benchfs/rep1/w1b/cell.json",
+              "inputs/runs/43706-20261008T045834Z/cells/benchfs/rep1/w3/cell.json",
+              "inputs/runs/43706-20261008T045834Z/cells/benchfs/rep2/w1a/cell.json",
+              "inputs/runs/43706-20261008T045834Z/cells/benchfs/rep2/w1b/cell.json",
+              "inputs/runs/43706-20261008T045834Z/cells/benchfs/rep2/w3/cell.json"
+            ],
+            "pointer": "/nhosts"
+          }
+        },
+        "agg": "count",
+        "tolerance_rel": 0.0
+      },
+      {
+        "name": "cells_chfs",
+        "source": {
+          "json": {
+            "files": [
+              "inputs/runs/43706-20261008T045834Z/cells/chfs/rep1/w1a/cell.json",
+              "inputs/runs/43706-20261008T045834Z/cells/chfs/rep1/w1b/cell.json",
+              "inputs/runs/43706-20261008T045834Z/cells/chfs/rep1/w2/cell.json",
+              "inputs/runs/43706-20261008T045834Z/cells/chfs/rep1/w3/cell.json",
+              "inputs/runs/43706-20261008T045834Z/cells/chfs/rep2/w1a/cell.json",
+              "inputs/runs/43706-20261008T045834Z/cells/chfs/rep2/w1b/cell.json",
+              "inputs/runs/43706-20261008T045834Z/cells/chfs/rep2/w2/cell.json",
+              "inputs/runs/43706-20261008T045834Z/cells/chfs/rep2/w3/cell.json"
+            ],
+            "pointer": "/nhosts"
+          }
+        },
+        "agg": "count",
+        "tolerance_rel": 0.0
+      },
+      {
+        "name": "cells_gekkofs",
+        "source": {
+          "json": {
+            "files": [
+              "inputs/runs/43706-20261008T045834Z/cells/gekkofs/rep1/w1a/cell.json",
+              "inputs/runs/43706-20261008T045834Z/cells/gekkofs/rep1/w1b/cell.json",
+              "inputs/runs/43706-20261008T045834Z/cells/gekkofs/rep1/w2/cell.json",
+              "inputs/runs/43706-20261008T045834Z/cells/gekkofs/rep1/w3/cell.json",
+              "inputs/runs/43706-20261008T045834Z/cells/gekkofs/rep2/w1a/cell.json",
+              "inputs/runs/43706-20261008T045834Z/cells/gekkofs/rep2/w1b/cell.json",
+              "inputs/runs/43706-20261008T045834Z/cells/gekkofs/rep2/w2/cell.json",
+              "inputs/runs/43706-20261008T045834Z/cells/gekkofs/rep2/w3/cell.json"
+            ],
+            "pointer": "/nhosts"
+          }
+        },
+        "agg": "count",
+        "tolerance_rel": 0.0
+      },
+      {
+        "name": "cells_unifyfs",
+        "source": {
+          "json": {
+            "files": [
+              "inputs/runs/43706-20261008T045834Z/cells/unifyfs/rep1/w1a/cell.json",
+              "inputs/runs/43706-20261008T045834Z/cells/unifyfs/rep1/w1b/cell.json",
+              "inputs/runs/43706-20261008T045834Z/cells/unifyfs/rep1/w2/cell.json",
+              "inputs/runs/43706-20261008T045834Z/cells/unifyfs/rep1/w3/cell.json",
+              "inputs/runs/43706-20261008T045834Z/cells/unifyfs/rep2/w1a/cell.json",
+              "inputs/runs/43706-20261008T045834Z/cells/unifyfs/rep2/w1b/cell.json",
+              "inputs/runs/43706-20261008T045834Z/cells/unifyfs/rep2/w2/cell.json",
+              "inputs/runs/43706-20261008T045834Z/cells/unifyfs/rep2/w3/cell.json"
+            ],
+            "pointer": "/nhosts"
+          }
+        },
+        "agg": "count",
+        "tolerance_rel": 0.0
+      }
+    ]
+  }
+}

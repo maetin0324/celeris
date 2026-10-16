@@ -54,3 +54,6 @@ completed: 2026-10-16
 
 ## 6. 成果物
 `final.json`・`final-input-manifest.json`・`task-template.json`・`run-final.md`・`data/`（出力置き場、空）。`crates/` は変更していない。
+
+## 追記（監査修正5 final-fix）
+- 上の sha256 `9ab21360…` は置換前の旧定義。final.json は C の routing（`lower_policy`・`evidence_table_id`・`online_update=false`）を明記し、A の alias `claude-code@installed` を placeholder `claude-code@<claude-code version at H1>` に変えたため hash は変わった。placeholder が残る間 `validate` は失敗する（意図どおり。H1 の置換後に通り、その sha256 が実条件）。

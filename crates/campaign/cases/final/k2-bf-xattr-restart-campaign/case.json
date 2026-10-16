@@ -1,18 +1,18 @@
 {
   "budget": {
-    "token_basis": "all",
     "max_disk_bytes": 4294967296,
     "max_parallel": 1,
     "max_tokens": 80000,
-    "max_wall_secs": 7200,
+    "max_wall_secs": 1800,
     "per_arm": {
       "max_tokens": 80000,
-      "max_wall_secs": 7200
+      "max_wall_secs": 1800
     },
     "per_case": {
       "max_tokens": 80000,
-      "max_wall_secs": 7200
-    }
+      "max_wall_secs": 1800
+    },
+    "token_basis": "all"
   },
   "evidence": [
     "job_id",
@@ -42,14 +42,17 @@
         "restart_read"
       ],
       "storage": [
-        "io_uring",
         "posix"
       ],
       "transport": [
         "ucx"
       ]
     },
-    "walltime_secs": 7200
+    "walltime_secs": 1800
+  },
+  "grade_case_ref": {
+    "path": "final/k2-bf-xattr-restart-campaign/k2-bf-xattr-restart-campaign.json",
+    "sha256": "bbaca17a0b6aa8b7fbc9934da498b85b9d0f95ab434ede1e25b8ca21b1f0fb54"
   },
   "id": "k2-bf-xattr-restart-campaign",
   "initial": {
@@ -59,13 +62,13 @@
       "campaign asset store から k2-initial.tar を取得する（provenance は grader 側。試行には tar だけを渡す）",
       "sha256sum で archive_sha256 と一致を確かめる",
       "mkdir src && tar -xf k2-initial.tar -C src",
-      "submodule（lib/pluvio・lib/locusta・ior_integration/ior）は別途固定した snapshot を同じ手順で取得する（未固定、progress 参照）"
+      "submodule 3 件は initial.submodules の 40 桁 commit に固定済み（gitlink は初期 commit の tree が持つ）。実体は campaign asset store の submodule snapshot から同じ手順で取得する（snapshot の配置は承認待ち／未実施）"
     ],
     "repo": "benchfs",
     "submodules": [
-      "lib/pluvio@9ecd51ee",
-      "lib/locusta@68f8b210",
-      "ior_integration/ior@7054224d"
+      "lib/pluvio@9ecd51ee9b5fe62831f8e46c3d98a371359664c0",
+      "lib/locusta@68f8b2104d33a98fe047e7e24f2394cebaee1c9c",
+      "ior_integration/ior@7054224dd8abe64bc466d8a12391710c7d86132e"
     ],
     "tree": "56d2f021530c8f55c78e740a4823e53e01975965"
   },

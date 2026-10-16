@@ -1,7 +1,9 @@
 ---
-task: 01M51B9AFERE4NH2XXQG8B4WRM
+title: cargo fmt --check の必須化と operator script WU の拒否
+tasks: [01M51B9AFERE4NH2XXQG8B4WRM]
 status: done
 completed: 2026-10-16
+updated: 2026-10-16
 ---
 # cargo fmt --check の必須化と operator script WU の拒否
 

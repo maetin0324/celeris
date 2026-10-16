@@ -1,7 +1,9 @@
 ---
-task: web-bundle-private-store
+title: release の web-bundle 段が落ちる: 原因は同じ sha の release.sh の並走（lock の誤判定）
+tasks: [web-bundle-private-store]
 status: done
 completed: 2026-10-16
+updated: 2026-10-16
 ---
 # release の web-bundle 段が落ちる: 原因は同じ sha の release.sh の並走（lock の誤判定）
 

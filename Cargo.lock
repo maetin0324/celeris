@@ -2364,7 +2364,6 @@ dependencies = [
  "async-trait",
  "axum",
  "base64 0.22.1",
- "celeris-campaign",
  "celeris-credentiald",
  "form_urlencoded",
  "futures-util",

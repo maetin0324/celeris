@@ -32,7 +32,6 @@ zeroize = "1"
 base64 = "0.22"
 
 [dev-dependencies]
-celeris-campaign = { path = "../campaign" }
 task-worker = { path = "../task-worker", features = ["h3-e2e-insecure-cert", "same-uid-harness", "attack-test-hooks", "live-cross-test-support"] }
 celeris-credentiald = { path = "../celeris-credentiald", features = ["same-uid-harness"] }
 async-trait = "0.1"

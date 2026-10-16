@@ -263,7 +263,10 @@ fn honest_real_evidence_passes_but_mock_passed_does_not_outside_control() {
     // control case は制御試験としてのみ合格扱いで最終合格にならない
     let k0 = set.get("k0-fixture-control").unwrap();
     assert_eq!(k0.case.kind, CaseKind::Control);
-    assert!(set.select_for_measurement(&[k0.case.id.clone()]).is_err());
+    assert!(
+        set.select_for_measurement(std::slice::from_ref(&k0.case.id))
+            .is_err()
+    );
     let r = run(
         &mock_artifact(k0, "mock"),
         &grade_case(k0, CaseSplit::Control),

@@ -9,6 +9,7 @@ pub mod dispatch;
 pub mod dryrun;
 pub mod executor;
 pub mod export;
+pub mod grade_case_gen;
 pub mod grade_out;
 pub mod grade_runner;
 pub mod grader;

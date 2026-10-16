@@ -50,7 +50,15 @@ pub mod case {
         pub pristine_dir: String,
         /// 成果物 dir 内の repo の相対 path。
         pub repo: String,
+        /// 公開テスト。成果物 repo に在るはずのもので、削除・改変（sha256 不一致）は失格。
+        #[serde(default)]
         pub tests: Vec<PristineTest>,
+        /// 評価側だけが持つ隠しテスト（`hidden_dir/<path>`）。成果物 repo には元から無く、作業 dir に挿入するだけ。
+        /// 成果物側に無いことは削除判定にしない（在っても上書きし、改変判定もしない）。
+        #[serde(default)]
+        pub hidden_dir: Option<String>,
+        #[serde(default)]
+        pub hidden_tests: Vec<PristineTest>,
         pub command: Vec<String>,
         /// 出力に `test <name> ... ok` が現れねばならない試験名。
         #[serde(default)]
@@ -173,10 +181,23 @@ pub mod case {
             if self.id.is_empty() {
                 return Err("case id is empty".into());
             }
-            if let Some(i) = &self.implementation
-                && (i.tests.is_empty() || i.command.is_empty())
-            {
-                return Err("implementation needs tests and a command".into());
+            if let Some(i) = &self.implementation {
+                if (i.tests.is_empty() && i.hidden_tests.is_empty()) || i.command.is_empty() {
+                    return Err("implementation needs tests and a command".into());
+                }
+                if !i.hidden_tests.is_empty() && i.hidden_dir.is_none() {
+                    return Err("hidden_tests need hidden_dir".into());
+                }
+                if let Some(t) = i
+                    .hidden_tests
+                    .iter()
+                    .find(|h| i.tests.iter().any(|t| t.path == h.path))
+                {
+                    return Err(format!(
+                        "hidden test {} is also a public test (tamper and insertion must stay separate)",
+                        t.path
+                    ));
+                }
             }
             if let Some(r) = &self.recompute
                 && r.metrics
@@ -372,6 +393,15 @@ pub mod implementation {
         fn run(&self, argv: &[String], cwd: &Path) -> Result<CommandOutput, String>;
     }
 
+    /// 実行器が無いときの既定。評価 command を走らせず、必ず不合格（fail-closed）にする。
+    pub struct NoRunner;
+
+    impl CommandRunner for NoRunner {
+        fn run(&self, _argv: &[String], _cwd: &Path) -> Result<CommandOutput, String> {
+            Err("no command runner configured (fail-closed)".into())
+        }
+    }
+
     /// 試験 file の弱体化の印。
     #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
     pub struct TestMarks {
@@ -524,6 +554,28 @@ pub mod implementation {
             files.push(entry);
             pristine.push((t.path.clone(), pp));
         }
+        // 隠しテスト: grader 側の写しの完全性だけ見る。成果物側の有無・内容は見ない。
+        let mut hidden = Vec::new();
+        if let Some(hd) = &spec.hidden_dir {
+            let hroot = opts.case_dir.join(hd);
+            for t in &spec.hidden_tests {
+                let hp = match safe_join(&hroot, &t.path) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        reasons.push(e);
+                        continue;
+                    }
+                };
+                match sha256_file(&hp) {
+                    Ok(s) if s == t.sha256 => hidden.push((t.path.clone(), hp)),
+                    Ok(_) => reasons.push(format!(
+                        "grader hidden test {} does not match the case sha256 (grader-side copy altered)",
+                        t.path
+                    )),
+                    Err(e) => reasons.push(format!("grader hidden test unreadable: {e}")),
+                }
+            }
+        }
         if !reasons.is_empty() {
             // 改変・削除があれば失格。評価 command は走らせない。
             return CheckResult::from_reasons(reasons, json!({"tests": files, "ran": false}));
@@ -531,7 +583,7 @@ pub mod implementation {
         let wd = work_dir(&opts.work_root);
         let result = (|| -> Result<CommandOutput, String> {
             copy_tree(&repo, &wd)?;
-            for (rel, pp) in &pristine {
+            for (rel, pp) in pristine.iter().chain(&hidden) {
                 let to = wd.join(rel);
                 if let Some(d) = to.parent() {
                     fs::create_dir_all(d).map_err(|e| e.to_string())?;
@@ -577,6 +629,7 @@ pub mod implementation {
             json!({
                 "tests": files,
                 "ran": true,
+                "hidden_inserted": hidden.iter().map(|(p, _)| p).collect::<Vec<_>>(),
                 "exit": out.exit,
                 "missing_ok": missing,
                 "stdout_tail": tail(&out.stdout, 2048),
@@ -916,7 +969,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 pub use case::{CaseSplit, GradeCase};
-pub use implementation::{CommandOutput, CommandRunner};
+pub use implementation::{CommandOutput, CommandRunner, NoRunner};
 
 pub const GRADE_SCHEMA: &str = "celeris.grade/1";
 

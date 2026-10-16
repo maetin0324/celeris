@@ -32,3 +32,8 @@ tasks: [01M536XRNEV0FXK7D4SVSNKY03]
 
 - `submit_unknown` が照会で永遠に見つからない場合の人の解消手順（CLI）は未実装。watch-driver / closeout で runbook 化を提案。
 - 予算の予約解除条件と想定最大超過の runbook は budget-reserve / closeout WU。
+
+## 最終 gate（再確認）
+
+- `bash scripts/dev/test-parallel.sh`: exit 0（passed 5554 / failed 0）。`cargo clippy --workspace -- -D warnings` exit 0。`cargo fmt --all -- --check` exit 0。
+- 未使用だった試験 helper `ledger_lines` を削除（`--all-targets` の dead_code 回避）。

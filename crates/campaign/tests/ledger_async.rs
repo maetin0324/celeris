@@ -119,14 +119,6 @@ fn key(e: &Env, arm: ConfigId) -> TrialKey {
     }
 }
 
-fn ledger_lines(e: &Env) -> Vec<Value> {
-    fs::read_to_string(e.opts.out.join(LEDGER_FILE))
-        .unwrap_or_default()
-        .lines()
-        .map(|l| serde_json::from_str(l).expect("json"))
-        .collect()
-}
-
 #[test]
 fn lost_submit_response_is_unknown_not_error_and_never_resubmitted() {
     let e = env(10_000_000);

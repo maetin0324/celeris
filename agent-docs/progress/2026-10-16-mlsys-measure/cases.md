@@ -19,8 +19,8 @@ completed: 2026-10-16
 
 ## 配置（acceptance 0・2）
 - `crates/campaign/cases/{dev,final}/<id>/{case.json,materials/,kb/}` — 試行に渡してよい公開部。
-- `crates/campaign/grader/{dev,final}/<id>/private.json` — 隠し受入 command・既知欠陥・誤指摘 trap・参照値。`cases/` の外。
-  final の private は `grader/final/` にだけあり、dev 側の木（`cases/dev`・`grader/dev`）から参照しない。ローダがこれを検査する
+- `crates/campaign/fixtures/grader-private/{dev,final}/<id>/private.json` — 隠し受入 command・既知欠陥・誤指摘 trap・参照値。`cases/` の外。
+  final の private は `fixtures/grader-private/final/` にだけあり、dev 側の木（`cases/dev`・`fixtures/grader-private/dev`）から参照しない。ローダがこれを検査する
   （final の case id・欠陥 id・private hash・初期 commit が dev 側 file に現れたら拒否）。
 - case.json の `private_ref` が private の hash を固定する。
 

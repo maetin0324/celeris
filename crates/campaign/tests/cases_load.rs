@@ -50,7 +50,7 @@ fn update_hashes(base: &Path) {
             .as_str()
             .unwrap()
             .to_string();
-        let ph = sha(&base.join("grader").join(rel));
+        let ph = sha(&base.join("fixtures").join("grader-private").join(rel));
         rw(&cj, |v| {
             v["snapshot"]["materials_sha256"] = json!(mat);
             v["snapshot"]["kb_snapshot"] = json!(kb);
@@ -63,8 +63,15 @@ fn update_hashes(base: &Path) {
 fn copy() -> (tempfile::TempDir, PathBuf, PathBuf) {
     let t = tempfile::tempdir().unwrap();
     copy_tree(&root().join("cases"), &t.path().join("cases")).unwrap();
-    copy_tree(&root().join("grader"), &t.path().join("grader")).unwrap();
-    let (c, g) = (t.path().join("cases"), t.path().join("grader"));
+    copy_tree(
+        &root().join("fixtures").join("grader-private"),
+        &t.path().join("fixtures").join("grader-private"),
+    )
+    .unwrap();
+    let (c, g) = (
+        t.path().join("cases"),
+        t.path().join("fixtures").join("grader-private"),
+    );
     (t, c, g)
 }
 fn load(c: &Path, g: &Path) -> Result<CaseSet, String> {
@@ -85,7 +92,11 @@ fn update_pins() {
 
 #[test]
 fn shipped_cases_are_pinned_and_load() {
-    let set = load(&root().join("cases"), &root().join("grader")).unwrap();
+    let set = load(
+        &root().join("cases"),
+        &root().join("fixtures").join("grader-private"),
+    )
+    .unwrap();
     let real: Vec<_> = set
         .cases
         .iter()
@@ -108,9 +119,12 @@ fn shipped_cases_are_pinned_and_load() {
 
 #[test]
 fn final_expectations_are_not_reachable_from_dev_layout() {
-    let (r, g) = (root().join("cases"), root().join("grader"));
+    let (r, g) = (
+        root().join("cases"),
+        root().join("fixtures").join("grader-private"),
+    );
     let set = load(&r, &g).unwrap();
-    // final の private は grader/final にだけあり、cases/ の下に private.json は無い。
+    // final の private は fixtures/grader-private/final にだけあり、cases/ の下に private.json は無い。
     assert!(
         !case_dirs(&root())
             .iter()
@@ -154,7 +168,7 @@ fn rejects_hash_mismatch_in_materials_kb_and_private() {
             "kb snapshot hash mismatch",
         ),
         (
-            "grader/dev/k3-locusta-ab-analysis/private.json",
+            "fixtures/grader-private/dev/k3-locusta-ab-analysis/private.json",
             "private file hash mismatch",
         ),
     ] {
@@ -223,14 +237,22 @@ fn rejects_dev_file_that_names_a_final_value() {
 #[test]
 fn rejects_grader_root_inside_cases_root() {
     let (t, c, _g) = copy();
-    copy_tree(&t.path().join("grader"), &c.join("grader")).unwrap();
-    let e = err(load(&c, &c.join("grader")));
+    copy_tree(
+        &t.path().join("fixtures").join("grader-private"),
+        &c.join("fixtures").join("grader-private"),
+    )
+    .unwrap();
+    let e = err(load(&c, &c.join("fixtures").join("grader-private")));
     assert!(e.contains("isolated"), "{e}");
 }
 
 #[test]
 fn control_cannot_enter_measurement_or_final() {
-    let set = load(&root().join("cases"), &root().join("grader")).unwrap();
+    let set = load(
+        &root().join("cases"),
+        &root().join("fixtures").join("grader-private"),
+    )
+    .unwrap();
     let ids = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
     let e = set
         .select_for_measurement(&ids(&["k0-fixture-control"]))
@@ -253,7 +275,11 @@ fn control_cannot_enter_measurement_or_final() {
 
 #[test]
 fn measurement_selection_rejects_mixed_unknown_duplicate_empty() {
-    let set = load(&root().join("cases"), &root().join("grader")).unwrap();
+    let set = load(
+        &root().join("cases"),
+        &root().join("fixtures").join("grader-private"),
+    )
+    .unwrap();
     let ids = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
     let ok = set
         .select_for_measurement(&ids(&["k1-bf-fsync-campaign", "k3-locusta-ab-analysis"]))
@@ -353,7 +379,11 @@ fn external_input_hash_is_verified() {
 
 #[test]
 fn real_cases_pin_distinct_inputs_between_splits() {
-    let set = load(&root().join("cases"), &root().join("grader")).unwrap();
+    let set = load(
+        &root().join("cases"),
+        &root().join("fixtures").join("grader-private"),
+    )
+    .unwrap();
     let key = |c: &celeris_campaign::cases::LoadedCase| {
         let mut k: Vec<String> = c.case.inputs.iter().map(|i| i.sha256.clone()).collect();
         if let Some(i) = &c.case.initial {

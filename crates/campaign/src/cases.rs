@@ -3,7 +3,7 @@
 //! 配置:
 //! - `cases/<dev|final>/<id>/case.json` — 試行に見せてよい公開部（初期 commit の固定・資料と KB の snapshot・実験条件）。
 //!   `materials/` と `kb/` は同じ directory にあり、内容 hash を `snapshot` に固定する。
-//! - `grader/<dev|final>/<id>/private.json` — 期待値・既知欠陥・誤指摘 trap・隠し受入 command。
+//! - `fixtures/grader-private/<dev|final>/<id>/private.json` — 期待値・既知欠陥・誤指摘 trap・隠し受入 command。
 //!   `cases/` の外の隔離 directory で、final の中身は dev 側のどの file からも参照されない。
 //!
 //! manifest 型（`Split`・`InputRef`・`Budget`・`SnapshotRef`）は `manifest.rs` のものを再利用する。
@@ -446,7 +446,7 @@ fn check_snapshot(case: &Case, dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// dev 側（case.json・materials・kb と grader/dev）に final の case id・期待値・欠陥 id・private hash が現れない。
+/// dev 側（case.json・materials・kb と fixtures/grader-private/dev）に final の case id・期待値・欠陥 id・private hash が現れない。
 fn check_isolation(set: &CaseSet, cases_root: &Path, grader_root: &Path) -> Result<(), String> {
     let mut needles: Vec<String> = Vec::new();
     for c in set.cases.iter().filter(|c| c.case.split == Split::Final) {

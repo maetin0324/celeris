@@ -567,11 +567,19 @@ impl Dispatcher {
                 run_id: Some(run_id.clone()),
                 features: route_features.clone(),
                 work_unit_id: current_wu.as_ref().map(|wu| wu.id.clone()),
+                evidence_version: lane_assist::task_routing_override(&task)
+                    .and_then(|o| o.evidence_table_id.clone()),
             },
         );
         if let (Some(record), Some(decision)) = (lane_assist_record, route_trace.decision.as_mut())
         {
             decision.lane_assist = Some(record);
+        }
+        // task 欄で routing を固定した task だけ、解決結果（mode・出自・下段・根拠表・online 更新）を判断 record に残す。
+        if lane_assist::task_routing_override(&task).is_some()
+            && let Some(decision) = route_trace.decision.as_mut()
+        {
+            decision.routing_resolved = Some(self.routing_for(&task));
         }
         let launch = match &route_outcome {
             Ok(pick) => self

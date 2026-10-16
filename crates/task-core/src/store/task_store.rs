@@ -61,6 +61,13 @@ pub trait TaskStore:
         genre: &str,
         harness_id: &str,
     ) -> Result<Vec<crate::routing_evidence::EvidenceRow>, StoreError>;
+    /// 指定版（`evidence_version`）の根拠表。task 欄 `routing_override.evidence_table_id` の固定読み。
+    fn routing_evidence_at(
+        &self,
+        genre: &str,
+        harness_id: &str,
+        version: &str,
+    ) -> Result<Vec<crate::routing_evidence::EvidenceRow>, StoreError>;
     fn routing_stage(
         &self,
         genre: &str,

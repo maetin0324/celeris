@@ -630,6 +630,11 @@ pub struct TaskRouting {
     /// `create_task.stages_hint`）は R5a。空なら出力しない（既存の JSON は 1 バイトも変わらない）。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub stages_hint: Vec<crate::tree::StageHint>,
+    /// ADR 2026-10-16-mlsys-measure-task-routing: 試行ごとの routing 設定（mode・下段・根拠表・
+    /// オンライン更新）の task 単位の固定。あれば config の `[routing] mode` より優先、無ければ従来。
+    /// `pause_after` と同じ理由でここに置く（tasks.json の中なので migration は要らない）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub routing_override: Option<crate::route_select::RoutingOverride>,
 }
 
 fn is_default_pause_source(source: &crate::pause::PauseSource) -> bool {

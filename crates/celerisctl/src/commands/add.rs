@@ -294,6 +294,7 @@ fn build_spec(mut args: AddArgs) -> Result<NewTaskSpec, CliError> {
         // ADR-0074 D2.1（Phase F3 途中確認）: GUI・API から（`celerisctl add` は引数を増やさない）。
         pause_after: None,
         stages_hint: Vec::new(),
+        routing_override: None,
         provenance: task_ops::add::SpecProvenance::default(),
     };
     Ok(spec)

@@ -93,6 +93,7 @@ fn base_spec() -> NewTaskSpec {
         execution: None,
         pause_after: None,
         stages_hint: Vec::new(),
+        routing_override: None,
         provenance: SpecProvenance::default(),
     }
 }

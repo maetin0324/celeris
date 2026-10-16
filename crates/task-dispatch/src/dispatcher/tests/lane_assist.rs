@@ -273,3 +273,87 @@ fn dispatcher_and_store_never_reference_the_jev_classifier() {
         .map(|c| std::fs::read_to_string(root.join(c).join("Cargo.toml")).unwrap());
     assert!(manifests.iter().all(|m| !m.contains("jev-classifier")));
 }
+
+/// ADR 2026-10-16-mlsys-measure-task-routing: task 欄 `routing_override` の task を、config の mode `config` の dispatcher で 1 回 dispatch する。
+fn dispatch_with_override(
+    config: RoutingMode,
+    task_mode: Option<RoutingMode>,
+    board: Option<BoardItem>,
+) -> (task_core::RoutingRecord, Task) {
+    let ws = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let mut task = hinted_task(ws.path(), task_core::TierSource::Hint);
+    if let Some(mode) = task_mode {
+        task.routing.as_mut().expect("routing").routing_override =
+            Some(task_core::route_select::RoutingOverride {
+                mode,
+                lower_policy: None,
+                evidence_table_id: Some("ev-2026-10-16".into()),
+                online_update: false,
+            });
+    }
+    store.insert(&task).unwrap();
+    let mut d = dispatcher(store.clone(), question_adapter(), 1);
+    d.set_routing_mode(config);
+    if let Some(item) = board {
+        d.classification_board().put(&task.id.to_string(), item);
+    }
+    d.tick().unwrap();
+    (routing_decided(&store, &task), task)
+}
+
+fn resolved_of(rec: &task_core::RoutingRecord) -> Option<task_core::route_select::ResolvedRouting> {
+    rec.features
+        .as_ref()
+        .and_then(|f| f.decision.as_ref())
+        .and_then(|d| d.routing_resolved.clone())
+}
+
+#[tokio::test]
+async fn task_fixed_beats_config_decision_assisted_and_no_assist_runs() {
+    let (plain, _) = dispatch_once(None, None, task_core::TierSource::Hint);
+    let (rec, _) = dispatch_with_override(
+        RoutingMode::DecisionAssisted,
+        Some(RoutingMode::Fixed),
+        Some(jev_ok(SpecificityHint::NeedsInvestigationDesign)),
+    );
+    assert!(
+        lane_assist_of(&rec).is_none(),
+        "fixed の task では補助が走らない"
+    );
+    assert_eq!(rec.decision.lane, plain.decision.lane);
+    let resolved = resolved_of(&rec).expect("解決結果が判断 record に残る");
+    assert_eq!(resolved.mode, RoutingMode::Fixed);
+    assert_eq!(resolved.source, task_core::route_select::ModeSource::Task);
+    assert_eq!(resolved.evidence_table_id.as_deref(), Some("ev-2026-10-16"));
+    assert!(!resolved.online_update);
+    assert_eq!(
+        resolved.lower_policy,
+        task_core::route_select::DEFAULT_POLICY_VERSION
+    );
+}
+
+#[tokio::test]
+async fn task_decision_assisted_beats_config_fixed_and_assist_runs() {
+    let (rec, _) = dispatch_with_override(
+        RoutingMode::Fixed,
+        Some(RoutingMode::DecisionAssisted),
+        Some(jev_ok(SpecificityHint::Specified)),
+    );
+    let assist = lane_assist_of(&rec).expect("decision_assisted の task では補助が走る");
+    assert_eq!(assist.mode, "decision_assisted");
+    assert_eq!(assist.classifier_status, ClassifierStatus::JevOk);
+    let resolved = resolved_of(&rec).expect("resolved");
+    assert_eq!(resolved.mode, RoutingMode::DecisionAssisted);
+    assert_eq!(resolved.source, task_core::route_select::ModeSource::Task);
+}
+
+#[tokio::test]
+async fn without_the_task_field_the_config_mode_decides_and_no_resolution_is_written() {
+    let (rec, _) = dispatch_with_override(RoutingMode::DecisionAssisted, None, None);
+    assert!(lane_assist_of(&rec).is_some(), "従来どおり config の mode");
+    assert!(
+        resolved_of(&rec).is_none(),
+        "task 欄の無い task の record は従来と同一"
+    );
+}

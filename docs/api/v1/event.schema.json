@@ -5550,6 +5550,14 @@
       ],
       "type": "object"
     },
+    "ModeSource": {
+      "description": "解決の出自。",
+      "enum": [
+        "task",
+        "config"
+      ],
+      "type": "string"
+    },
     "OperationIntent": {
       "additionalProperties": false,
       "description": "承認を求める操作 intent（内部 action 名と、非秘密の引数 digest）。",
@@ -6411,6 +6419,37 @@
       ],
       "type": "object"
     },
+    "ResolvedRouting": {
+      "description": "解決結果（`celeris.route-decision/1` の `routing_resolved` に載る）。",
+      "properties": {
+        "evidence_table_id": {
+          "description": "`None` は「最新版を読む」（従来）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lower_policy": {
+          "type": "string"
+        },
+        "mode": {
+          "$ref": "#/$defs/RoutingMode"
+        },
+        "online_update": {
+          "type": "boolean"
+        },
+        "source": {
+          "$ref": "#/$defs/ModeSource"
+        }
+      },
+      "required": [
+        "mode",
+        "source",
+        "lower_policy",
+        "online_update"
+      ],
+      "type": "object"
+    },
     "Route": {
       "enum": [
         "direct",
@@ -6634,6 +6673,17 @@
           "description": "Remaining quota per source at the decision point (absolute units; `0` = exhausted).",
           "type": "object"
         },
+        "routing_resolved": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ResolvedRouting"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "task 欄（`routing_override`）で固定した routing の解決結果。task 欄の無い task には書かない（従来と同一）。"
+        },
         "rule": {
           "$ref": "#/$defs/RouteRule"
         },
@@ -6822,6 +6872,46 @@
         "option_id",
         "p_success",
         "rank"
+      ],
+      "type": "object"
+    },
+    "RoutingMode": {
+      "enum": [
+        "fixed",
+        "decision_assisted"
+      ],
+      "type": "string"
+    },
+    "RoutingOverride": {
+      "additionalProperties": false,
+      "description": "`Task.routing.routing_override`（作成時に固定。`POST /tasks` の `routing_override`）。",
+      "properties": {
+        "evidence_table_id": {
+          "description": "根拠表 `routing_evidence` の版（`evidence_version`）。指定すると最新版ではなくこの版だけを読む。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lower_policy": {
+          "description": "下段（fixed 方策・lane→model 対応表）の版。省略時は `DEFAULT_POLICY_VERSION`。現行の版以外は受理しない。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mode": {
+          "$ref": "#/$defs/RoutingMode",
+          "description": "この task の lane 層の mode（config の `[routing] mode` より優先）。"
+        },
+        "online_update": {
+          "default": true,
+          "description": "run の結果を `routing_outcome_recorded`（オンライン更新の根拠）へ追記するか。既定 true（従来）。",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "mode"
       ],
       "type": "object"
     },
@@ -7793,6 +7883,17 @@
             }
           ],
           "description": "ADR-0124: planner を省く直行経路か、既存の経路を維持するかの判定。"
+        },
+        "routing_override": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RoutingOverride"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR 2026-10-16-mlsys-measure-task-routing: 試行ごとの routing 設定（mode・下段・根拠表・\nオンライン更新）の task 単位の固定。あれば config の `[routing] mode` より優先、無ければ従来。\n`pause_after` と同じ理由でここに置く（tasks.json の中なので migration は要らない）。"
         },
         "stages_hint": {
           "description": "ADR-0079 D12（Phase R2b）: 人が名指しした段階（`[{\"title\": \"Phase 1\", \"scope\": \"…\"}]`）。/3 の planner\nrun の入力（構造の強制ではない）。`pause_after` と同じ理由でここに置く。書く入口（CoS の\n`create_task.stages_hint`）は R5a。空なら出力しない（既存の JSON は 1 バイトも変わらない）。",

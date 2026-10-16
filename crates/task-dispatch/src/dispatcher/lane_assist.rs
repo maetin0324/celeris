@@ -12,7 +12,7 @@ use task_core::model::Tier;
 use task_core::model_policy::{Level, TaskFeatures};
 use task_core::route_select::{
     AssistInput, ClassificationEntry, ClassifierStatus, Fact, LaneAssistRecord, LaneFacts,
-    LaneLimits, RoutingMode, WorkClass, assist_lane,
+    LaneLimits, ResolvedRouting, RoutingMode, WorkClass, assist_lane, resolve_routing,
 };
 use task_core::{LaneDecision, WorkUnitRow};
 
@@ -75,6 +75,11 @@ pub fn lane_facts(f: &TaskFeatures) -> LaneFacts {
     }
 }
 
+/// task 欄の routing 固定（無ければ `None` = 従来どおり config に従う）。
+pub fn task_routing_override(task: &Task) -> Option<&task_core::route_select::RoutingOverride> {
+    task.routing.as_ref()?.routing_override.as_ref()
+}
+
 fn is_credential_failure(status: &ClassifierStatus) -> bool {
     matches!(status, ClassifierStatus::FellBackToFixed { reason } if reason == "key_missing" || reason == "auth")
 }
@@ -87,6 +92,12 @@ impl Dispatcher {
 
     pub fn routing_mode(&self) -> RoutingMode {
         self.routing_mode
+    }
+
+    /// task 単位の routing の解決（ADR 2026-10-16-mlsys-measure-task-routing）:
+    /// task 欄 `routing_override` があれば config の `routing.mode` より優先、無ければ従来。
+    pub fn routing_for(&self, task: &Task) -> ResolvedRouting {
+        resolve_routing(self.routing_mode, task_routing_override(task))
     }
 
     /// 分類段が書き込む board（dispatcher 側は読むだけ）。
@@ -116,7 +127,8 @@ impl Dispatcher {
         wu: Option<&WorkUnitRow>,
         decision: &mut LaneDecision,
     ) -> Result<(Option<LaneAssistRecord>, bool), DispatchError> {
-        if self.routing_mode == RoutingMode::Fixed {
+        let mode = self.routing_for(task).mode;
+        if mode == RoutingMode::Fixed {
             return Ok((None, false));
         }
         let subject = wu.map_or_else(|| task.id.to_string(), |w| w.id.clone());
@@ -136,7 +148,7 @@ impl Dispatcher {
         }
         let outcome = assist_lane(
             &AssistInput {
-                mode: self.routing_mode,
+                mode,
                 explicit: !decision.source.policy_decides(),
                 base: decision.lane,
                 facts: lane_facts(&decision.features),

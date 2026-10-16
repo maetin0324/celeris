@@ -40,6 +40,14 @@ impl TaskStore for SqliteStore {
     ) -> Result<Vec<crate::routing_evidence::EvidenceRow>, StoreError> {
         self.latest_routing_evidence_impl(genre, harness_id)
     }
+    fn routing_evidence_at(
+        &self,
+        genre: &str,
+        harness_id: &str,
+        version: &str,
+    ) -> Result<Vec<crate::routing_evidence::EvidenceRow>, StoreError> {
+        self.routing_evidence_at_impl(genre, harness_id, version)
+    }
     fn routing_stage(
         &self,
         genre: &str,

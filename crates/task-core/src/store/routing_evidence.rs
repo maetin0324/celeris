@@ -40,6 +40,20 @@ fn evidence_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<EvidenceRow> {
     })
 }
 
+fn evidence_rows_at(
+    conn: &rusqlite::Connection,
+    genre: &str,
+    harness_id: &str,
+    version: &str,
+) -> Result<Vec<EvidenceRow>, StoreError> {
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {EVIDENCE_COLUMNS} FROM routing_evidence WHERE genre=?1 AND harness_id=?2 AND evidence_version=?3 ORDER BY source_id,model_id"
+    ))?;
+    let rows = stmt.query_map(params![genre, harness_id, version], evidence_row)?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(StoreError::from)
+}
+
 impl SqliteStore {
     /// 同じ版は丸ごと置き換え、別の版は残す（評価 runner の `aggregate --write-evidence` が書く）。
     /// 行の版は引数 `version` で決まる（行の `evidence_version` は読まない）。
@@ -98,12 +112,17 @@ impl SqliteStore {
         let Some(version) = version else {
             return Ok(Vec::new());
         };
-        let mut stmt = conn.prepare(&format!(
-            "SELECT {EVIDENCE_COLUMNS} FROM routing_evidence WHERE genre=?1 AND harness_id=?2 AND evidence_version=?3 ORDER BY source_id,model_id"
-        ))?;
-        let rows = stmt.query_map(params![genre, harness_id, version], evidence_row)?;
-        rows.collect::<Result<Vec<_>, _>>()
-            .map_err(StoreError::from)
+        evidence_rows_at(&conn, genre, harness_id, &version)
+    }
+
+    pub(super) fn routing_evidence_at_impl(
+        &self,
+        genre: &str,
+        harness_id: &str,
+        version: &str,
+    ) -> Result<Vec<EvidenceRow>, StoreError> {
+        let conn = self.lock()?;
+        evidence_rows_at(&conn, genre, harness_id, version)
     }
 
     pub(super) fn routing_stage_impl(
@@ -232,6 +251,19 @@ mod tests {
         assert!(latest[0].low_confidence);
         assert_eq!(latest[0].usd_list_median, None);
         assert_eq!(latest[0].quota_per_run.get("7d"), Some(&0.01));
+        // task 欄 `evidence_table_id` の固定読み: 新しい版があっても指定版だけ（無い版は空）。
+        let pinned = store.routing_evidence_at("coding", "codex", "v1").unwrap();
+        assert_eq!(pinned.len(), 1);
+        assert_eq!(
+            (pinned[0].evidence_version.as_str(), pinned[0].pass),
+            ("v1", 9)
+        );
+        assert!(
+            store
+                .routing_evidence_at("coding", "codex", "v9")
+                .unwrap()
+                .is_empty()
+        );
         let task = crate::store::tests::sample_task(crate::model::Status::Draft);
         store.insert(&task).unwrap();
         store

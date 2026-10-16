@@ -390,6 +390,8 @@ fn create_task_action(
         pause_after,
         // ADR-0079 D12（Phase R5a）: 人が名指しした段階をそのまま `Task.routing.stages_hint` へ。
         stages_hint: stages_hint.to_vec(),
+        // CoS（Agent）の経路は routing を固定しない（試行の固定は人・campaign の API 経路だけ）。
+        routing_override: None,
         provenance: crate::add::SpecProvenance {
             origin: crate::add::SpecOrigin::Agent,
             human_explicit_tier,

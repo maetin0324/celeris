@@ -1,0 +1,40 @@
+{
+  "schema": "celeris.campaign-case-private/1",
+  "case_id": "k4-cmp4-validity-analysis",
+  "split": "final",
+  "hidden_command": "grader が inputs の IOR/mdtest JSON・stdout・実効設定・qstat から fs×workload×nhosts の有効性を再計算し、報告の表と照合する",
+  "known_defects": [
+    {
+      "id": "k4-chfs-fsync-zero",
+      "description": "CHFS の fsync 許可リストにより実効 fsync=0 のセルを有効に数えている"
+    },
+    {
+      "id": "k4-job-failed",
+      "description": "qstat -x の Unknown Job Id／F／Exit≠0 の job のセルを有効に数えている"
+    },
+    {
+      "id": "k4-w2-denominator",
+      "description": "BenchFS W2 の欠測を分母から落としている"
+    }
+  ],
+  "false_claim_traps": [
+    {
+      "id": "k4-claim-all-valid",
+      "claim": "全セル有効と書く",
+      "why_wrong": "無効セルが存在する"
+    },
+    {
+      "id": "k4-claim-no-denominator",
+      "claim": "分母なしの帯域表",
+      "why_wrong": "有効数／全数が無ければ不合格"
+    }
+  ],
+  "expected": {
+    "input": "main-v3-n2-43706.tgz",
+    "jobs": [
+      43706
+    ],
+    "rule": "実効設定が要求を満たし job 正常終了のセルだけ有効。欠測は分母に残す",
+    "tolerance_relative": 0.001
+  }
+}

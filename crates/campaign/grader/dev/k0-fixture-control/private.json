@@ -1,0 +1,11 @@
+{
+  "schema": "celeris.campaign-case-private/1",
+  "case_id": "k0-fixture-control",
+  "split": "dev",
+  "hidden_command": "cargo test -p celeris-campaign --test pilot_fixtures",
+  "known_defects": [],
+  "false_claim_traps": [],
+  "expected": {
+    "note": "control: 最終合格にしない"
+  }
+}

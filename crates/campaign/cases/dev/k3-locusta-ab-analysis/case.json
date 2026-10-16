@@ -1,6 +1,5 @@
 {
   "budget": {
-    "token_basis": "all",
     "max_disk_bytes": 1073741824,
     "max_parallel": 1,
     "max_tokens": 60000,
@@ -12,12 +11,17 @@
     "per_case": {
       "max_tokens": 60000,
       "max_wall_secs": 3600
-    }
+    },
+    "token_basis": "all"
   },
   "evidence": [
     "raw_data",
     "log"
   ],
+  "grade_case_ref": {
+    "path": "dev/k3-locusta-ab-analysis/k3-locusta-ab-analysis.json",
+    "sha256": "3216c548ce8b14aef16293f4d96899c7eb67e3e9c68ad77706dad0b9794004a9"
+  },
   "id": "k3-locusta-ab-analysis",
   "inputs": [
     {

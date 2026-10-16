@@ -52,6 +52,7 @@ fn fixture() -> Fx {
         repo: ".".into(),
         public_tests: vec!["tests/run.sh".into()],
         hidden_tests: vec!["tests/hidden.txt".into()],
+        wrapper: None,
         files_dir: files,
     };
     let g = generate(case, &private, &src, &grade_dir).expect("generate");
@@ -210,6 +211,7 @@ fn shell_command_is_rejected_by_the_converter() {
         repo: ".".into(),
         public_tests: vec![],
         hidden_tests: vec![],
+        wrapper: None,
         files_dir: d.path().to_path_buf(),
     };
     assert!(generate(&l.case, &p, &src, &d.path().join("o")).is_err());

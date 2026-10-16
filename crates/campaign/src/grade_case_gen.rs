@@ -30,6 +30,10 @@ pub struct GenSource {
     pub repo: String,
     pub public_tests: Vec<String>,
     pub hidden_tests: Vec<String>,
+    /// 隠しテストを挿入する grader 側の script（`hidden_tests` にも含める）。あれば評価 command は
+    /// `sh <wrapper> <private の command>` になる（script が挿入後に `exec "$@"` する）。
+    /// 実装内の単体テスト（`#[cfg(test)] mod`）は file 単位で重ねられないので、これで子 module として足す。
+    pub wrapper: Option<String>,
     pub files_dir: PathBuf,
 }
 
@@ -126,13 +130,21 @@ pub fn generate(
             &src.hidden_tests,
             "hidden",
         )?;
+        let must_pass = must_pass_names(&command);
+        let command = match &src.wrapper {
+            Some(w) => ["sh".to_string(), w.clone()]
+                .into_iter()
+                .chain(command)
+                .collect(),
+            None => command,
+        };
         Some(ImplementationSpec {
             pristine_dir: PUBLIC_DIR.into(),
             repo: src.repo.clone(),
             tests,
             hidden_dir: (!hidden_tests.is_empty()).then(|| HIDDEN_DIR.to_string()),
             hidden_tests,
-            must_pass: must_pass_names(&command),
+            must_pass,
             command,
         })
     } else {

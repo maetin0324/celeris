@@ -32,6 +32,9 @@ pub struct CampaignExportArgs {
     /// 版情報として summary に載せる manifest の hash。
     #[arg(long)]
     pub manifest_hash: Option<String>,
+    /// 接続確認: export が空、試行の必須欄が欠測、消費が未計上のいずれかなら非 0 で終わる（出力は書く）。
+    #[arg(long)]
+    pub verify_connected: bool,
 }
 
 pub fn run(store: &SqliteStore, command: CampaignCommand) -> Result<ExitCode, CliError> {
@@ -108,6 +111,7 @@ fn export(store: &SqliteStore, args: CampaignExportArgs) -> Result<ExitCode, Cli
     };
     let mut result = store.decision_log_export_campaign(&params)?;
     result.records.iter_mut().for_each(scrub_value);
+    result.trials.iter_mut().for_each(scrub_value);
     let mut summary = serde_json::to_value(&result.summary)
         .map_err(|e| CliError::msg(format!("summary: {e}")))?;
     scrub_value(&mut summary);
@@ -126,9 +130,19 @@ fn export(store: &SqliteStore, args: CampaignExportArgs) -> Result<ExitCode, Cli
     outln!(
         "exported campaign {}: {} records -> {}",
         args.campaign_id,
-        result.records.len(),
+        result.records.len() + result.trials.len(),
         args.out.display()
     );
+    if args.verify_connected {
+        let problems = task_core::decision_log_export::verify_connected(&result);
+        if !problems.is_empty() {
+            for p in &problems {
+                eprintln!("not connected: {p}");
+            }
+            return Ok(ExitCode::FAILURE);
+        }
+        outln!("connected: every run has the required fields and recorded consumption");
+    }
     Ok(ExitCode::SUCCESS)
 }
 

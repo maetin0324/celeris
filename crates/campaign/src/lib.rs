@@ -3,6 +3,8 @@
 pub mod aggregate;
 pub mod celeris_exec;
 pub mod checker;
+pub mod curl_transport;
+pub mod dispatch;
 pub mod dryrun;
 pub mod executor;
 pub mod export;

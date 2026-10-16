@@ -1,0 +1,42 @@
+{
+  "budget": {
+    "max_disk_bytes": 1073741824,
+    "max_parallel": 1,
+    "max_tokens": 60000,
+    "max_wall_secs": 3600
+  },
+  "evidence": [
+    "raw_data",
+    "log"
+  ],
+  "id": "k3-locusta-ab-analysis",
+  "inputs": [
+    {
+      "fetch": [
+        "campaign asset store から main-43223.tgz を取得する",
+        "sha256sum で sha256 と一致を確かめる",
+        "tar -xzf main-43223.tgz -C inputs/（集計済み analysis-*/ は含まれない）"
+      ],
+      "name": "main-43223.tgz",
+      "sha256": "bdb155d4c1690ae5743621d129c270fcc53c919751d62c56d0c4395b74d2e90f"
+    }
+  ],
+  "kind": "real",
+  "private_ref": {
+    "path": "dev/k3-locusta-ab-analysis/private.json",
+    "sha256": "2c0bf7ac5d953db8cbbc18524f75cff73bebdb16dbc414eae37b9f80193f73fc"
+  },
+  "schema": "celeris.campaign-case/1",
+  "snapshot": {
+    "kb_snapshot": "741f24146f5c02f44acf5291e23806416b9956809e55a1474488ecbcc9fe0702",
+    "materials_sha256": "429b0bd0349fd77dd0e0f95808bcb75ec008b47761c55047404d7b19d2fa25e1",
+    "repo_commit": "none (control or input-only case)"
+  },
+  "split": "dev",
+  "stages": [
+    "analysis",
+    "review"
+  ],
+  "title": "Locusta 低並列 A/B 原票の再分析→報告→レビュー",
+  "visible_command": "test -s report.md && test -s results/table.csv"
+}

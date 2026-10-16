@@ -26,6 +26,9 @@ fn arg(args: &[String], name: &str) -> Option<PathBuf> {
 
 fn run(args: Vec<String>) -> Result<String, String> {
     let cmd = args.first().map(String::as_str).unwrap_or("");
+    if cmd == "grade" {
+        return celeris_campaign::grader::cli(&args);
+    }
     let manifest_path = arg(&args, "--manifest").ok_or("--manifest <path> is required")?;
     let m = CampaignManifest::load(&manifest_path)?;
     let out = || arg(&args, "--out").ok_or("--out <dir> is required".to_string());

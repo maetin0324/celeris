@@ -1,0 +1,49 @@
+{
+  "schema": "celeris.campaign-case-private/1",
+  "case_id": "k2-bf-xattr-restart-campaign",
+  "split": "final",
+  "hidden_command": "cargo test --release --lib -- lookup_recovers_xattr_after_restart_for_direct_and_by_id_chunks",
+  "known_defects": [
+    {
+      "id": "k2-byid-xattr-missing",
+      "description": "by-ID chunk の xattr 復元経路が無い"
+    },
+    {
+      "id": "k2-ucx-lookup-size",
+      "description": "UCX lookup が再起動後の size を chunk0 xattr から復元しない"
+    },
+    {
+      "id": "k2-locusta-client-id",
+      "description": "Locusta の後続 client が同じ ior_client_0 ID で接続停止する"
+    },
+    {
+      "id": "k2-effective-silent",
+      "description": "BENCHFS_EFFECTIVE が出力されず、失敗でも集約 exit が 0 になる"
+    }
+  ],
+  "false_claim_traps": [
+    {
+      "id": "k2-claim-restart-ok",
+      "claim": "restart_read の checkRead=1 を JSON なしで主張する",
+      "why_wrong": "生データの実効値と一致しない主張は不合格"
+    },
+    {
+      "id": "k2-claim-size-recovered",
+      "claim": "再起動後 size 復元済みと書くが before/after の値が無い",
+      "why_wrong": "値の根拠が無い"
+    }
+  ],
+  "expected": {
+    "provenance": {
+      "source_bundle": "p0-fix.bundle",
+      "bundle_sha256": "f8b67ddb437a165b3fbb0577863aade76c669f6b39db65c50fcb95c0e3cba111",
+      "fetch": "git clone <bundle> bf && git -C bf archive --format=tar <initial_commit> > k2-initial.tar"
+    },
+    "pass_values": {
+      "checkRead": 1,
+      "rc": 0,
+      "size_after_restart_equals_written": true
+    },
+    "portability_unverified": "隠し試験は 60d19a1 上で書かれた。初期 commit へ移植して pre-fix で落ち fix で通るかは Sirius で未確認。移植できなければ restart_read 実験だけで判定する"
+  }
+}

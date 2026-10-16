@@ -1,0 +1,55 @@
+{
+  "schema": "celeris.campaign-case-private/1",
+  "case_id": "k3-locusta-ab-analysis",
+  "split": "dev",
+  "hidden_command": "grader が inputs の ior_result_0.json から L_A/L_base・L_B/L_base・L_AB/U を独立に再計算して報告の表と照合する",
+  "known_defects": [
+    {
+      "id": "k3-b-effect-1m-read",
+      "description": "1 MiB read の B 効果が 1 未満なのに「改善」と書かれている"
+    },
+    {
+      "id": "k3-base-commit",
+      "description": "Locusta の基点を base 0b5b83db と書いている（正は 68f8b210＋patch）"
+    },
+    {
+      "id": "k3-mib-column",
+      "description": "bwMeanMIB／bwMiB の欄の取り違え"
+    }
+  ],
+  "false_claim_traps": [
+    {
+      "id": "k3-claim-improved-094",
+      "claim": "B 効果 0.94 を改善と主張する",
+      "why_wrong": "比 < 1 は悪化。分母（反復数）も示す必要がある"
+    },
+    {
+      "id": "k3-claim-copied-number",
+      "claim": "原票から再計算していない数値（過去報告の写し）を載せる",
+      "why_wrong": "再計算値と許容誤差内で一致しなければ不合格"
+    }
+  ],
+  "expected": {
+    "input": "main-43223.tgz",
+    "statistic": "mean_of_per_repetition_ratios",
+    "statistic_status": "provisional: 人の確認待ち（median of ratios は別値）",
+    "conditions": [
+      "L_base",
+      "L_A",
+      "L_B",
+      "L_AB",
+      "U"
+    ],
+    "xfer": [
+      "4k",
+      "1m",
+      "4m"
+    ],
+    "repetitions": 3,
+    "tolerance_relative": 0.001,
+    "published_values_not_for_copying": {
+      "4k_write_B_mean_of_ratios": 1.333,
+      "4k_write_B_ratio_of_medians": 1.309
+    }
+  }
+}

@@ -1516,6 +1516,55 @@ fn rejects_leaf_without_checks() {
     assert!(errs.iter().any(|e| e.to_string().contains("task")));
 }
 
+/// ADR 2026-10-16: operator script（release/verify/promote）を実行する check は計画ごと差し戻す。
+#[test]
+fn rejects_leaf_check_running_operator_scripts() {
+    for (cmd, script) in [
+        ("bash scripts/selfdeploy/release.sh --dry-run", "release.sh"),
+        (
+            "CELERIS_X=1 sh ./scripts/selfdeploy/verify.sh abc",
+            "verify.sh",
+        ),
+        ("cargo build && scripts/selfdeploy/promote.sh", "promote.sh"),
+    ] {
+        let mut p = v3_fixture();
+        p.units[1].checks[0].cmd = cmd.to_string();
+        assert!(
+            v3_errors(&p).contains(&PlanValidationError::OperatorScriptCheck {
+                key: "p1-note".into(),
+                script
+            }),
+            "{cmd}"
+        );
+    }
+    // パスを引数として渡すだけの check は通す。
+    for cmd in [
+        "test -f scripts/selfdeploy/release.sh",
+        "git diff --quiet HEAD -- scripts/selfdeploy/release.sh",
+        "grep -q release.sh docs/ops/x.md",
+    ] {
+        let mut p = v3_fixture();
+        p.units[1].checks[0].cmd = cmd.to_string();
+        assert!(validate(&p, tree_on(), &[]).is_ok(), "{cmd}");
+    }
+}
+
+/// ADR 2026-10-16: v1/v2 の work_units の check でも同じ。
+#[test]
+fn rejects_work_unit_check_running_operator_scripts() {
+    let mut wu = spec("a", &[]);
+    wu.checks = vec![WorkUnitCheck {
+        cmd: "bash scripts/selfdeploy/release.sh".into(),
+        expect_exit: 0,
+        scope: false,
+    }];
+    let errs = validate(&plan(vec![wu]), ExecutionLimits::default(), &[]).unwrap_err();
+    assert!(errs.contains(&PlanValidationError::OperatorScriptCheck {
+        key: "a".into(),
+        script: "release.sh"
+    }));
+}
+
 /// R1a (b): leaf の `context.repo` が 2 つ。
 #[test]
 fn rejects_leaf_with_two_repos() {

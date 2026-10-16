@@ -1,6 +1,7 @@
 docs/DESIGN.md の Phase __N__ の受け入れ条件が全て満たされ、次の証拠が会話に示されている:
 - `cargo test --workspace` が exit 0（テスト数を報告）
 - `cargo clippy --workspace -- -D warnings` が exit 0
+- `cargo fmt --all -- --check` が exit 0
 - auditor サブエージェントの監査報告が「可」または「条件付き可」で、「不可」の項目がゼロ
 - docs/PROGRESS.md に「## Phase __N__ — DONE」という見出しの節があり、受け入れ条件ごとの証拠、監査結果、未解決事項、提案が書かれている
 - `git status` がクリーンで、直近のコミットメッセージが "phase __N__:" で始まる

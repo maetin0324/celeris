@@ -346,6 +346,12 @@ pub enum PlanValidationError {
     LeafWithoutChecks {
         key: String,
     },
+    /// ADR 2026-10-16: WU の check が `release.sh` / `verify.sh` / `promote.sh` を実行する。worker の sandbox では
+    /// 実行できず必ず失敗する（release/verify/promote は operator の手順）。
+    OperatorScriptCheck {
+        key: String,
+        script: &'static str,
+    },
     /// D4 (2) (b): leaf の `context.repo` が 2 つ以上。
     LeafMultipleRepos {
         key: String,
@@ -667,6 +673,10 @@ impl std::fmt::Display for PlanValidationError {
                 f,
                 "unit {key}: a leaf must have at least one mechanical check (make it a unit with kind \"task\" or add checks)"
             ),
+            PlanValidationError::OperatorScriptCheck { key, script } => write!(
+                f,
+                "unit {key}: a check must not run {script} (release/verify/promote are operator procedures and a worker sandbox cannot run them; check the code, tests and docs instead, and write the release steps for the human in the progress file)"
+            ),
             PlanValidationError::LeafMultipleRepos { key, count } => write!(
                 f,
                 "unit {key}: a leaf works in at most one repository, found {count} in context.repo (make it a unit with kind \"task\" or split it)"
@@ -701,6 +711,39 @@ impl std::fmt::Display for PlanValidationError {
 }
 
 impl std::error::Error for PlanValidationError {}
+
+/// operator だけが実行する selfdeploy script（ADR 2026-10-16）。
+const OPERATOR_SCRIPTS: [&str; 3] = ["release.sh", "verify.sh", "promote.sh"];
+
+/// check の cmd が operator script を**実行**するなら、その script 名。`test -f scripts/selfdeploy/release.sh` や
+/// `git diff -- .../release.sh` のようにパスを引数として渡すだけの check は対象外（コマンド位置の語だけを見る）。
+fn operator_script_in_checks(checks: &[WorkUnitCheck]) -> Option<&'static str> {
+    checks.iter().find_map(|c| operator_script_in_cmd(&c.cmd))
+}
+
+fn operator_script_in_cmd(cmd: &str) -> Option<&'static str> {
+    // 区切り（; & | 改行 ( ) ` $( ）で節に分け、各節の先頭から env 代入と sh/bash/sudo/env/exec/time を飛ばした語を見る。
+    cmd.split([';', '&', '|', '\n', '(', ')', '`'])
+        .find_map(|clause| {
+            let mut words = clause.split_whitespace().peekable();
+            while let Some(w) = words.peek().copied() {
+                let w = w.trim_matches(['"', '\'']);
+                let is_assign = w.contains('=') && !w.starts_with('-') && !w.contains('/');
+                let is_wrapper = matches!(
+                    w,
+                    "sh" | "bash" | "dash" | "sudo" | "env" | "exec" | "time" | "nohup" | "timeout"
+                ) || w.starts_with('-');
+                if is_assign || is_wrapper {
+                    words.next();
+                } else {
+                    break;
+                }
+            }
+            let first = words.next()?.trim_matches(['"', '\'']);
+            let base = first.rsplit('/').next().unwrap_or(first);
+            OPERATOR_SCRIPTS.iter().copied().find(|s| *s == base)
+        })
+}
 
 fn valid_key(key: &str) -> bool {
     !key.is_empty()
@@ -1121,6 +1164,12 @@ pub fn validate_with(
         });
     }
     for wu in &spec.work_units {
+        if let Some(script) = operator_script_in_checks(&wu.checks) {
+            errors.push(PlanValidationError::OperatorScriptCheck {
+                key: wu.key.clone(),
+                script,
+            });
+        }
         if wu.checks.len() > limits.max_checks {
             errors.push(PlanValidationError::TooManyChecks {
                 key: wu.key.clone(),
@@ -1513,6 +1562,12 @@ fn validate_v3(
             }
             if u.checks.is_empty() {
                 errors.push(PlanValidationError::LeafWithoutChecks { key: key.clone() });
+            }
+            if let Some(script) = operator_script_in_checks(&u.checks) {
+                errors.push(PlanValidationError::OperatorScriptCheck {
+                    key: key.clone(),
+                    script,
+                });
             }
             let repo_count = u
                 .context

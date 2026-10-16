@@ -1797,6 +1797,11 @@ pub const PLANNER_CHECK_GUIDANCE: &str = "### check の書き方 (how to write `
      check that `crates/` has no diff (for example `git diff --quiet $(git merge-base HEAD main) -- crates/`); \
      leave Cargo checks to the daemon's workspace check.\n\
      - Include the planned ADR and recording locations from the start in acceptance criteria and diff-check path scopes.\n\
+     - Never make a unit or check run `release.sh`, `verify.sh` or `promote.sh`: they are operator procedures and a \
+     worker sandbox cannot run them, so the unit always fails (the plan is rejected). Check the code, tests and \
+     docs instead; write the release steps as a human procedure in the progress file.\n\
+     - Every unit that changes Rust code must also keep `cargo fmt --all -- --check` passing (the release gate \
+     runs it); put it next to `bash scripts/dev/test-parallel.sh` and `cargo clippy --workspace -- -D warnings`.\n\
      - Do not run CPU-burning load scripts (busy loops, stress-ng, parallel cargo load) in checks or \
      acceptance; reproduce timing bugs deterministically (paused or injected clock, event waits, \
      SIGSTOP/SIGCONT, test-only delay hooks; see agent-docs/guides/testing.md).\n\n";

@@ -24,7 +24,7 @@ fn input(n: usize, split: &str) -> Input {
     m
 }
 
-fn campaign(i: &Input, split: Split, n: usize, max_tokens: u64, attempts: u32) -> CampaignManifest {
+fn campaign(i: &Input, split: Split, n: usize, max_tokens: u64, repeats: u32) -> CampaignManifest {
     let cfg = |id, h: &str| Config {
         id,
         harness: h.into(),
@@ -70,7 +70,7 @@ fn campaign(i: &Input, split: Split, n: usize, max_tokens: u64, attempts: u32) -
         },
         termination: Termination {
             trial_timeout_secs: 300,
-            max_attempts_per_trial: attempts,
+            max_attempts_per_trial: 1,
             stop_on_budget: true,
         },
         snapshot: SnapshotRef {
@@ -80,6 +80,7 @@ fn campaign(i: &Input, split: Split, n: usize, max_tokens: u64, attempts: u32) -
         },
         order: Default::default(),
         seed: 0,
+        repeats,
         dependencies: Default::default(),
         sha256: String::new(),
     }
@@ -114,10 +115,10 @@ struct Env {
     opts: RunOptions,
 }
 
-fn ran(max_tokens: u64, attempts: u32) -> Env {
+fn ran(max_tokens: u64, repeats: u32) -> Env {
     let d = tempfile::tempdir().expect("dir");
     let i = input(4, "dev");
-    let m = campaign(&i, Split::Dev, 4, max_tokens, attempts);
+    let m = campaign(&i, Split::Dev, 4, max_tokens, repeats);
     let opts = seeded_src(d.path());
     run(&m, &i, &script(), &opts).expect("run");
     Env { _d: d, m, opts }
@@ -226,7 +227,7 @@ fn workspaces_and_kbs_are_isolated_and_snapshot_is_saved() {
     assert_eq!(
         recs.len(),
         10 * 2,
-        "A,B x4 + C x2 problems, 2 attempts each"
+        "A,B x4 + C x2 problems, 2 repetitions each"
     );
     let mut dirs = std::collections::BTreeSet::new();
     for r in &recs {

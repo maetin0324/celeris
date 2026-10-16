@@ -40,15 +40,27 @@ pub struct TrialKey {
     pub problem_id: String,
     pub arm: ConfigId,
     pub trial_no: u32,
+    /// 独立反復の番号（1 始まり）。
+    #[serde(default = "one")]
+    pub rep: u32,
+}
+
+fn one() -> u32 {
+    1
 }
 
 impl TrialKey {
     /// 外部（Celeris の task 投入 API 等）に渡す冪等キー。同じ試行は常に同じ文字列になる。
     pub fn idempotency_key(&self) -> String {
-        let d = Sha256::digest(format!(
+        let mut s = format!(
             "{}\n{}\n{:?}\n{}",
             self.manifest_sha256, self.problem_id, self.arm, self.trial_no
-        ));
+        );
+        // rep 1 は従来と同じ文字列（既存の投入との冪等性を保つ）。
+        if self.rep != 1 {
+            s.push_str(&format!("\nrep{}", self.rep));
+        }
+        let d = Sha256::digest(s);
         let hex: String = d.iter().map(|b| format!("{b:02x}")).collect();
         format!("campaign-{hex}")
     }

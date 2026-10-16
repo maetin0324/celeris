@@ -204,8 +204,8 @@ impl<T: Transport> CelerisExecutor<T> {
         b.insert(
             "title".into(),
             json!(format!(
-                "campaign {:?} {} #{}",
-                req.config.id, req.problem_id, req.trial_no
+                "campaign {:?} {} rep{} #{}",
+                req.config.id, req.problem_id, req.rep, req.trial_no
             )),
         );
         b.insert(

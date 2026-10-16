@@ -251,6 +251,7 @@ fn req<'a>(c: &'a Config, dir: &'a Path) -> TrialRequest<'a> {
         problem_id: "p0",
         prompt: "fix the bug",
         trial_no: 1,
+        rep: 1,
         workspace: dir,
         kb: dir,
         timeout_secs: 1800,
@@ -604,6 +605,7 @@ fn campaign(i: &Input) -> CampaignManifest {
         },
         order: Default::default(),
         seed: 0,
+        repeats: 1,
         dependencies: BTreeMap::new(),
         sha256: String::new(),
     }
@@ -632,6 +634,7 @@ fn runner_waits_keeps_workspace_and_resumes_same_celeris_tasks() {
         problem_id: "p0".into(),
         arm,
         trial_no: 1,
+        rep: 1,
     };
     let lg = Ledger::open(&opts.out).expect("ledger");
     let (rb, rc) = (

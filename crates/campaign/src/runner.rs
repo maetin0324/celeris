@@ -211,7 +211,8 @@ fn append(path: &Path, r: &TrialRecord) -> Result<(), String> {
     f.flush().map_err(|e| e.to_string())
 }
 
-/// 実行すべき試行の一覧（problem 依存順 → problem 内の arm 順（manifest の order/seed）→ 試行番号）。C は事前登録 subset だけ。
+/// 実行すべき試行の一覧（problem 依存順 → problem 内の arm 順（manifest の order/seed）→ 反復 rep）。C は事前登録 subset だけ。
+/// 3 番目は独立反復 rep（1..=repeats）。内部再試行は無い（trial_no は常に 1）。
 pub fn plan(m: &CampaignManifest) -> Vec<(ConfigId, String, u32)> {
     let n = m.normalized();
     let subset: BTreeSet<&str> = n.secondary.subset.iter().map(String::as_str).collect();
@@ -224,8 +225,8 @@ pub fn plan(m: &CampaignManifest) -> Vec<(ConfigId, String, u32)> {
             .filter(|c| *c != ConfigId::C || subset.contains(p.as_str()))
             .collect();
         for c in n.arm_sequence(p, pos, arms) {
-            for t in 1..=m.termination.max_attempts_per_trial {
-                v.push((c, p.clone(), t));
+            for rep in 1..=m.repeats {
+                v.push((c, p.clone(), rep));
             }
         }
     }
@@ -240,13 +241,13 @@ enum Prereq {
 
 /// 前提 problem の全 config（計画された分）の最初の試行が passed かを記録から判定する。
 /// 失敗側（failed/timeout/error/cancelled/blocked）が 1 つでもあれば Blocked、未記録があれば Waiting。
-fn prereq_state(m: &CampaignManifest, records: &[TrialRecord], problem: &str) -> Prereq {
+fn prereq_state(m: &CampaignManifest, records: &[TrialRecord], problem: &str, rep: u32) -> Prereq {
     let mut waiting = false;
     for q in m.dependencies.get(problem).into_iter().flatten() {
         for c in m.planned_configs(q) {
             let first = records
                 .iter()
-                .filter(|r| r.config == c && r.problem_id == *q)
+                .filter(|r| r.config == c && r.problem_id == *q && r.rep == rep)
                 .min_by_key(|r| r.trial_no);
             match first.map(|r| r.outcome) {
                 Some(Outcome::Passed) => {}
@@ -270,7 +271,7 @@ fn new_record(
     m: &CampaignManifest,
     problem_id: String,
     config: ConfigId,
-    trial_no: u32,
+    rep: u32,
     arm_rank: u32,
 ) -> TrialRecord {
     TrialRecord {
@@ -280,7 +281,8 @@ fn new_record(
         split: m.split,
         config,
         problem_id,
-        trial_no,
+        trial_no: 1,
+        rep,
         arm_rank,
         outcome: Outcome::Cancelled,
         passed: false,
@@ -461,7 +463,7 @@ pub fn run(
     }
     let done: BTreeSet<(ConfigId, String, u32)> = records
         .iter()
-        .map(|r| (r.config, r.problem_id.clone(), r.trial_no))
+        .map(|r| (r.config, r.problem_id.clone(), r.rep))
         .collect();
     let mut ledger = Ledger::open(out)?;
     // trials.jsonl に記録済みなのに台帳が未完了のまま（記録直後の crash）は done に直す。
@@ -469,7 +471,7 @@ pub fn run(
         .unfinished()
         .into_iter()
         .filter(|r| r.key.manifest_sha256 == hash)
-        .filter(|r| done.contains(&(r.key.arm, r.key.problem_id.clone(), r.key.trial_no)))
+        .filter(|r| done.contains(&(r.key.arm, r.key.problem_id.clone(), r.key.rep)))
         .map(|r| r.key.clone())
         .collect();
     for k in stale {
@@ -513,21 +515,22 @@ pub fn run(
         let next = ranks.keys().filter(|(q, _)| q == p).count() as u32 + 1;
         ranks.entry((p.clone(), *c)).or_insert(next);
     }
-    for (cid, pid, trial_no) in planned {
-        if done.contains(&(cid, pid.clone(), trial_no)) {
+    for (cid, pid, rep_no) in planned {
+        if done.contains(&(cid, pid.clone(), rep_no)) {
             continue;
         }
         safe_component(&pid)?;
         let cfg = cfgs.get(&cid).ok_or("config missing")?;
         let arm_rank = ranks.get(&(pid.clone(), cid)).copied().unwrap_or(0);
-        let mut rec = new_record(cfg, &hash, input, m, pid.clone(), cid, trial_no, arm_rank);
+        let mut rec = new_record(cfg, &hash, input, m, pid.clone(), cid, rep_no, arm_rank);
         let key = TrialKey {
             manifest_sha256: hash.clone(),
             problem_id: pid.clone(),
             arm: cid,
-            trial_no,
+            trial_no: 1,
+            rep: rep_no,
         };
-        let blocked_by = match prereq_state(m, &records, &pid) {
+        let blocked_by = match prereq_state(m, &records, &pid, rep_no) {
             Prereq::Met => None,
             Prereq::Blocked(q) => Some(q),
             Prereq::Waiting => {
@@ -553,7 +556,7 @@ pub fn run(
         } else {
             let arm = arm_use.get(&cid).copied().unwrap_or_default();
             let cap = effective_cap(&m.budget, arm.0, arm.1);
-            let rel = format!("trials/{cid:?}/{pid}/{trial_no}");
+            let rel = format!("trials/{cid:?}/{pid}/rep{rep_no}");
             let (ws, kbd) = (out.join(&rel).join("workspace"), out.join(&rel).join("kb"));
             let is_async = exec.is_async();
             if !is_async {
@@ -580,7 +583,8 @@ pub fn run(
                 config: cfg,
                 problem_id: &pid,
                 prompt: prompts.get(pid.as_str()).copied().unwrap_or(""),
-                trial_no,
+                trial_no: 1,
+                rep: rep_no,
                 workspace: &ws,
                 kb: &kbd,
                 timeout_secs: timeout,
@@ -719,7 +723,7 @@ pub fn run(
                 m,
                 row.key.problem_id.clone(),
                 row.key.arm,
-                row.key.trial_no,
+                row.key.rep,
                 ranks
                     .get(&(row.key.problem_id.clone(), row.key.arm))
                     .copied()
@@ -746,13 +750,11 @@ fn write_summary(
 ) -> Result<(), String> {
     let mut cells = serde_json::Map::new();
     for c in [ConfigId::A, ConfigId::B, ConfigId::C] {
-        let n = plan(m)
-            .iter()
-            .filter(|(k, _, t)| *k == c && *t == 1)
-            .count();
+        // 分母 = 計画された試行総数（problems × repeats、C は subset × repeats）。
+        let n = plan(m).iter().filter(|(k, _, _)| *k == c).count();
         let mut counts = [0u64; 6]; // passed failed error timeout cancelled blocked
         let mut seen = 0u64;
-        for r in records.iter().filter(|r| r.config == c && r.trial_no == 1) {
+        for r in records.iter().filter(|r| r.config == c) {
             seen += 1;
             counts[match r.outcome {
                 Outcome::Passed => 0,

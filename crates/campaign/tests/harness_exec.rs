@@ -81,6 +81,7 @@ fn campaign(i: &Input) -> CampaignManifest {
         },
         order: Default::default(),
         seed: 0,
+        repeats: 1,
         dependencies: BTreeMap::new(),
         sha256: String::new(),
     }
@@ -175,6 +176,7 @@ impl H {
             problem_id: "p0",
             prompt: "fix it",
             trial_no: 1,
+            rep: 1,
             workspace: &self.ws,
             kb: &self.kb,
             timeout_secs,
@@ -377,6 +379,7 @@ echo '{\"usage\":{\"input_tokens\":5,\"output_tokens\":5}}'
                 problem_id: "p0".into(),
                 arm: c,
                 trial_no: 1,
+                rep: 1,
             })
             .expect("row");
         assert_eq!(r.state, LedgerState::Done);

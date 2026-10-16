@@ -28,7 +28,7 @@ ALWAYS_EXCLUDE="scripts/dev/testdata/ scripts/dev/docs-layout.tsv scripts/dev/re
 FOREIGN_DOCS="crates/task-api/src/docs.rs crates/task-api/tests/docs.rs crates/task-ops/src/docs.rs
 crates/task-ops/src/docs/ crates/task-ops/src/docs_maintenance/ crates/celeris/src/doc_gardener/tests.rs
 crates/task-dispatch/src/undeclared_artifacts/tests.rs crates/task-worker/src/preamble/tests.rs
-crates/task-core/src/execution/tests.rs scripts/tests/test_source_size_report.py
+crates/task-core/src/execution/tests.rs crates/task-core/src/execution_plan/tests.rs scripts/tests/test_source_size_report.py
 crates/celeris/src/delivery/tests.rs crates/task-dispatch/src/auto_resolve/classify.rs
 crates/task-dispatch/src/dispatcher/cos_chat/sink_tests.rs
 crates/task-dispatch/src/auto_resolve/tests.rs

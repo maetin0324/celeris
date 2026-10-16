@@ -1,7 +1,9 @@
 ---
+title: "Jev 実 API の schema 不一致の修正"
 tasks: [01M50XES8WJQ3MRVPEVQQQZHSK]
 status: done
 completed: 2026-10-15
+updated: 2026-10-15
 ---
 # Jev 実 API の schema 不一致の修正
 

@@ -47,6 +47,10 @@ pub struct TrialRecord {
     pub cost_micro_usd: Option<u64>,
     pub wall_secs: u64,
     pub reason: Option<String>,
+    /// 試行の task に固定した実効 routing（mode・lower_policy・evidence_table_id・online_update）。
+    /// Celeris 経路（B/C）の試行だけが持つ。A・投入前に拒否された試行は無い。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub routing: Option<serde_json::Value>,
     pub harness: String,
     pub harness_version: String,
     pub model: String,

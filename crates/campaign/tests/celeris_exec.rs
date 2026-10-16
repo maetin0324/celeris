@@ -217,7 +217,8 @@ fn cfg(id: ConfigId, routing: Option<ArmRouting>) -> Config {
         model: "m".into(),
         model_version: "1".into(),
         policy_version: "p1".into(),
-        routing,
+        // B は routing を必ず固定する（欠落は投入前に Err。routing_pin.rs で固定）。
+        routing: routing.or_else(|| (id == ConfigId::B).then(ArmRouting::default)),
     }
 }
 
@@ -480,8 +481,8 @@ fn b_and_c_pin_different_routing_overrides() {
     );
     assert_ne!(ob, oc);
     // 台帳に投入前に記録する値と、投入する値は同じ。
-    assert_eq!(x.routing(&req(&b, d.path())), ob);
-    assert_eq!(x.routing(&req(&c, d.path())), oc);
+    assert_eq!(x.routing(&req(&b, d.path())), Ok(ob));
+    assert_eq!(x.routing(&req(&c, d.path())), Ok(oc));
     // A は Celeris に投入しない。C の根拠表は固定必須（最新版への暗黙追従を許さない）。
     assert!(routing_override(&cfg(ConfigId::A, None)).is_err());
     assert!(routing_override(&cfg(ConfigId::C, None)).is_err());
@@ -528,7 +529,7 @@ impl Executor for ByArm<'_> {
     fn is_async(&self) -> bool {
         true
     }
-    fn routing(&self, r: &TrialRequest) -> Value {
+    fn routing(&self, r: &TrialRequest) -> Result<Value, String> {
         self.by_req(r).routing(r)
     }
     fn lookup(&self, key: &str) -> Result<Option<TaskRef>, String> {

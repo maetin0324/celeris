@@ -290,6 +290,7 @@ fn new_record(
         cost_micro_usd: None,
         wall_secs: 0,
         reason: None,
+        routing: None,
         harness: cfg.harness.clone(),
         harness_version: cfg.harness_version.clone(),
         model: cfg.model.clone(),
@@ -354,7 +355,7 @@ fn drive_async(
     let mut task = known.as_ref().and_then(LedgerRow::task_ref);
     if known.is_none() {
         // 投入『前』に planned を fsync する。ここで落ちても冪等キーで再開できる。
-        ledger.plan(key, &ws_rel, exec.routing(req))?;
+        ledger.plan(key, &ws_rel, exec.routing(req).map_err(DriveErr::Exec)?)?;
     }
     if task.is_none() {
         // planned のまま（task_id 無し）: 同一冪等キーで照会し、無ければ投入する。
@@ -598,7 +599,23 @@ pub fn run(
                 cost_micro_usd: None,
                 wall_secs: 0,
             };
-            let mut res = if is_async {
+            // routing は投入前に決める。Err ならその試行だけ error（task は作らない）。
+            let pinned = exec.routing(&req);
+            if let Ok(v) = &pinned
+                && cid != ConfigId::A
+                && !v.is_null()
+            {
+                rec.routing = Some(v.clone());
+            }
+            let mut res = if let Err(e) = pinned {
+                // 投入しない。記録の hash 検査のため、初期 snapshot のままの作業場所だけ用意する。
+                if is_async {
+                    copy_tree(&repo, &ws)?;
+                    copy_tree(&kb, &kbd)?;
+                }
+                errored = Some(e);
+                failed_result()
+            } else if is_async {
                 match drive_async(
                     exec,
                     &mut ledger,

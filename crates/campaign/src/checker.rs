@@ -136,6 +136,8 @@ pub fn check(m: &CampaignManifest, out: &Path) -> CheckReport {
                 Err(e) => v.push(format!("trials.jsonl line {}: unparsable: {e}", i + 1)),
             }
         }
+        // Celeris 経路（B/C が task-api 経由）で走った campaign は、実行した B/C 試行すべてに routing がある。
+        let celeris_run = matches!(meta["executor"].as_str(), Some("celeris" | "arm-dispatch"));
         let exp = expected(m);
         let mut seen: BTreeSet<(ConfigId, String, u32, u32)> = BTreeSet::new();
         let mut ws_dirs: BTreeSet<String> = BTreeSet::new();
@@ -197,6 +199,32 @@ pub fn check(m: &CampaignManifest, out: &Path) -> CheckReport {
                 v.push(format!(
                     "{tag}: harness/model/policy version differs from the manifest"
                 ));
+            }
+            // 実効 routing: 記録した値は manifest の arm 設定から導いた値と一致する（A は持たない）。
+            if r.config == ConfigId::A {
+                if r.routing.is_some() {
+                    v.push(format!("{tag}: arm A must not carry a Celeris routing"));
+                }
+            } else if let Some(c) = cfg_by_id.get(&r.config) {
+                let want = crate::celeris_exec::routing_override(c);
+                match (&r.routing, &want) {
+                    (Some(got), Ok(w)) if got != w => v.push(format!(
+                        "{tag}: recorded routing {got} differs from the manifest arm setting {w}"
+                    )),
+                    (Some(_), Err(e)) => {
+                        v.push(format!(
+                            "{tag}: routing recorded but manifest is invalid: {e}"
+                        ));
+                    }
+                    (None, Ok(_))
+                        if celeris_run
+                            && r.ran()
+                            && r.reason.as_deref() != Some(REASON_EXECUTOR_ERROR) =>
+                    {
+                        v.push(format!("{tag}: ran without a recorded routing"));
+                    }
+                    _ => {}
+                }
             }
             let timeout = m.termination.trial_timeout_secs;
             let is_to = r.outcome == crate::aggregate::Outcome::Timeout;

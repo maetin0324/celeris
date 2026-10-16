@@ -34,3 +34,6 @@ completed: 2026-10-16
 ## 全体検査
 - `bash scripts/dev/test-parallel.sh`: passed 5418, failed 0, ignored 14、exit 0。
 - `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
+
+## 範囲外の既知不備（要別 task）
+- `scripts/dev/check-doc-links.sh` の FOREIGN_DOCS に `crates/task-core/src/execution_plan/tests.rs` が無く、base 時点で `check-doc-links` が 1 件落ちる（`execution_plan/tests.rs:1544: docs/ops/x.md`）。この WU の範囲外のため直していない。別 task で 1 語追加する提案。

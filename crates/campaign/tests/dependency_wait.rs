@@ -80,6 +80,8 @@ fn campaign(i: &Input) -> CampaignManifest {
             materials_sha256: "d".into(),
             kb_snapshot: "kb@1".into(),
         },
+        order: Default::default(),
+        seed: 0,
         dependencies: BTreeMap::from([("p1".to_string(), vec!["p0".to_string()])]),
         sha256: String::new(),
     }

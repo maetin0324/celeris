@@ -82,6 +82,8 @@ fn campaign(i: &Input, n: usize, arm_tokens: u64) -> CampaignManifest {
             materials_sha256: "d".into(),
             kb_snapshot: "kb@1".into(),
         },
+        order: Default::default(),
+        seed: 0,
         dependencies: Default::default(),
         sha256: String::new(),
     }

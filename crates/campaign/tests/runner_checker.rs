@@ -55,6 +55,7 @@ fn campaign(i: &Input, split: Split, n: usize, max_tokens: u64, repeats: u32) ->
             subset: vec!["p0".into(), "p1".into()],
         },
         budget: Budget {
+            token_basis: celeris_campaign::manifest::TokenBasis::InputOutput,
             max_tokens,
             max_wall_secs: 1_000_000,
             max_disk_bytes: 1 << 40,
@@ -231,7 +232,8 @@ fn workspaces_and_kbs_are_isolated_and_snapshot_is_saved() {
     );
     let mut dirs = std::collections::BTreeSet::new();
     for r in &recs {
-        assert_eq!(r["workspace_sha256_initial"], snap["repo_sha256"]);
+        // 試行の初期木は repo + materials/（workspace-seed）。
+        assert_eq!(r["workspace_sha256_initial"], snap["workspace_seed_sha256"]);
         assert_eq!(r["kb_sha256_initial"], snap["kb_sha256"]);
         assert_ne!(
             r["workspace_sha256_final"], snap["repo_sha256"],
@@ -434,8 +436,11 @@ fn run_refuses_split_mix_and_unknown_executor_path_has_no_network_code() {
     for f in fs::read_dir(src).expect("src") {
         let p = f.expect("e").path();
         let t = fs::read_to_string(&p).expect("r");
-        // 子 process は A arm の harness_exec.rs だけが起動する（command は注入、実 LLM は呼ばない）。
-        let spawns = p.file_name().is_some_and(|n| n == "harness_exec.rs");
+        // 子 process は A arm の harness_exec.rs と grade の評価 command の grade_runner.rs だけが起動する
+        // （command は注入、実 LLM は呼ばない）。
+        let spawns = p
+            .file_name()
+            .is_some_and(|n| n == "harness_exec.rs" || n == "grade_runner.rs");
         for bad in [
             "reqwest",
             "std::net",

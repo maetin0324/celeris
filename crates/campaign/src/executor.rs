@@ -28,18 +28,20 @@ pub struct TrialRequest<'a> {
     pub budget: Cap,
 }
 
+pub use crate::manifest::TokenUsage;
+
 /// 実行中の試行（子 task・job を含む）の累積使用量。tokens が None なら欠測（0 ではない）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Usage {
-    pub tokens: Option<u64>,
+    pub tokens: Option<TokenUsage>,
     pub wall_secs: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ExecResult {
     pub outcome: Outcome,
-    /// 欠測は None。
-    pub tokens: Option<u64>,
+    /// 内訳（input/output/cache）。欠測は None。予算に数える量は runner が manifest の token_basis で決める。
+    pub tokens: Option<TokenUsage>,
     pub cost_micro_usd: Option<u64>,
     pub wall_secs: u64,
 }
@@ -192,7 +194,7 @@ impl Executor for MockExecutor {
         fs::write(req.kb.join("mock-note.md"), req.problem_id).map_err(|e| e.to_string())?;
         let metered = |outcome, tokens: u64, wall| ExecResult {
             outcome,
-            tokens: Some(tokens),
+            tokens: Some(TokenUsage::full(tokens, 0, 0, 0)),
             cost_micro_usd: Some(tokens * 10),
             wall_secs: wall,
         };
@@ -333,7 +335,7 @@ impl Executor for MockAsyncExecutor {
         }
         Ok(ExecStatus::Done(ExecResult {
             outcome: Outcome::Passed,
-            tokens: Some(10_000),
+            tokens: Some(TokenUsage::full(10_000, 0, 0, 0)),
             cost_micro_usd: Some(100_000),
             wall_secs: 60,
         }))

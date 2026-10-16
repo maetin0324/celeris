@@ -56,6 +56,7 @@ fn campaign(i: &Input, n: usize, order: ArmOrder, seed: u64) -> CampaignManifest
             subset: (0..n).map(|k| format!("p{k}")).collect(),
         },
         budget: Budget {
+            token_basis: celeris_campaign::manifest::TokenBasis::InputOutput,
             max_tokens: 100_000_000,
             max_wall_secs: 100_000_000,
             max_disk_bytes: 1 << 40,

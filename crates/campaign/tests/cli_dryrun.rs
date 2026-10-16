@@ -18,7 +18,7 @@ fn write_fixture(dir: &std::path::Path, campaign_split: &str) -> std::path::Path
         "input":{"path":"input.json","sha256":input.sha256},"problems":["p0","p1","p2"],
         "configs":[cfg("A"),cfg("B"),cfg("C")],"primary":["A","B"],
         "secondary":{"pair":["B","C"],"subset":["p0"]},
-        "budget":{"max_tokens":100000000u64,"max_wall_secs":86400,"max_disk_bytes":1u64<<40,"max_parallel":2,"per_case":{"max_tokens":100000000u64,"max_wall_secs":86400},"per_arm":{"max_tokens":100000000u64,"max_wall_secs":86400}},
+        "budget":{"token_basis":"input_output","max_tokens":100000000u64,"max_wall_secs":86400,"max_disk_bytes":1u64<<40,"max_parallel":2,"per_case":{"max_tokens":100000000u64,"max_wall_secs":86400},"per_arm":{"max_tokens":100000000u64,"max_wall_secs":86400}},
         "termination":{"trial_timeout_secs":600,"max_attempts_per_trial":1,"stop_on_budget":true},
         "snapshot":{"repo_commit":"abc","materials_sha256":"d","kb_snapshot":"kb@1"}});
     let p = dir.join("campaign.json");

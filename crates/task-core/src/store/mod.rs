@@ -633,21 +633,38 @@ pub(crate) fn parse_rfc3339(s: &str) -> Result<OffsetDateTime, StoreError> {
     Ok(OffsetDateTime::parse(s, &Rfc3339)?)
 }
 
-/// ADR-0064 D2/D3: `src` を `dest` へ rusqlite の backup API でコピーする。既存のストア接続の
-/// `Mutex` は取らない**専用の接続**を新たに開くので、進行中の書き込み・読み取りを長く待たせない
-/// （WAL のバックアップはページ単位で進み、途中でも一貫したスナップショットになる）。呼び出し側
-/// （`celeris` の背景バックアップ tick、`celerisctl db backup`、`relocate-db.sh`）が使う。
+/// ADR-0064 D2/D3（ADR 2026-10-16-mlsys-pilot-wiring-fixes D8 で方式を変更）: `src` を `dest` へ
+/// **読み取り専用の専用接続の `VACUUM INTO`** で写す。1 つの読み取り snapshot を保ったまま写すので、
+/// 稼働中の daemon が書き込み続けても有限時間で終わる（旧い online backup API は他の接続の書き込みの
+/// たびに最初からやり直し、稼働中の本番 DB では終わらなかった）。`<dest>.partial-<pid>` に書いてから
+/// rename するので、途中で止まっても `<dest>` に半端な file は残らない。既存の `<dest>` は置き換える。
+/// 呼び出し側は `celerisctl db backup`（`relocate-db.sh` も使う）。
 pub fn backup_database(
     src: &Path,
     dest: &Path,
     busy_timeout: StdDuration,
 ) -> Result<(), StoreError> {
-    let src_conn = Connection::open(src)?;
+    let src_conn = Connection::open_with_flags(src, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     src_conn.busy_timeout(busy_timeout)?;
-    let mut dest_conn = Connection::open(dest)?;
-    let backup = rusqlite::backup::Backup::new(&src_conn, &mut dest_conn)?;
-    backup.run_to_completion(100, StdDuration::from_millis(250), None)?;
-    Ok(())
+    let mut partial = dest.as_os_str().to_owned();
+    partial.push(format!(".partial-{}", std::process::id()));
+    let partial = std::path::PathBuf::from(partial);
+    let io = |what: &str, p: &Path, e: std::io::Error| {
+        StoreError::Invalid(format!("{what} {}: {e}", p.display()))
+    };
+    match std::fs::remove_file(&partial) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(io("remove stale", &partial, e)),
+    }
+    let result = src_conn
+        .execute("VACUUM INTO ?1", [partial.to_string_lossy().as_ref()])
+        .map_err(StoreError::from)
+        .and_then(|_| std::fs::rename(&partial, dest).map_err(|e| io("rename to", dest, e)));
+    if result.is_err() {
+        let _ = std::fs::remove_file(&partial);
+    }
+    result
 }
 
 /// ADR-0064 D2: `path` の DB に対して `PRAGMA integrity_check` を実行し、`"ok"` だけが返れば

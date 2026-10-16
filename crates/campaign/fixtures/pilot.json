@@ -5,7 +5,7 @@
   "split": "dev",
   "input": {
     "path": "input-manifest.json",
-    "sha256": "52dd6e1b3544b47a0987a4ac331dee4b041d2ee5ba41ab32e772e1b588479dd5"
+    "sha256": "acff2c9007c5d8454fd628f0beb868fa26a9ed65ae26a4e1924c6fa7ee3b5b52"
   },
   "problems": [
     "impl-benchfs-chunk-index",
@@ -55,6 +55,7 @@
     ]
   },
   "budget": {
+    "token_basis": "input_output",
     "max_tokens": 1000000,
     "max_wall_secs": 36000,
     "max_disk_bytes": 137438953472,
@@ -75,8 +76,8 @@
   },
   "snapshot": {
     "repo_commit": "fixture-repo-1",
-    "materials_sha256": "692578958726ad328d611f04b3028aeae3b509bc7c0e962cb32bcfe08bff9581",
+    "materials_sha256": "8699b9d79e852b274493092f6b2d2fbf45cfee18adef485e3332ec517c59835a",
     "kb_snapshot": "kb-fixture-1"
   },
-  "sha256": "2088a891c71956fdec66c69231fbadc6372b00f5710322147bdf1aff63aad916"
+  "sha256": "7af33ae7e5dac4e7ad7faabc366f1c50c6b4624e523e8530295e5d60b36837c0"
 }

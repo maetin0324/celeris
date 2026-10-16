@@ -24,8 +24,18 @@ impl CurlTransport {
         {
             return Err("--token-env must be an environment variable name".into());
         }
-        if !(base_url.starts_with("http://") || base_url.starts_with("https://")) {
+        let Some(rest) = base_url
+            .strip_prefix("http://")
+            .or_else(|| base_url.strip_prefix("https://"))
+        else {
             return Err("--api-url must start with http:// or https://".into());
+        };
+        // 実行器は `/api/v1/...` を自分で足す。path 付き（`.../api/v1` など）は二重になるので受けない。
+        if rest.trim_end_matches('/').contains('/') || rest.contains(['?', '#']) {
+            return Err(format!(
+                "--api-url must be the server origin without a path (e.g. http://127.0.0.1:8080); \
+                 the executor adds /api/v1 itself, got {base_url}"
+            ));
         }
         if std::env::var_os(token_env).is_none() {
             return Err(format!("environment variable {token_env} is not set"));
@@ -110,6 +120,12 @@ mod tests {
     fn rejects_bad_names_and_urls_without_leaking() {
         assert!(CurlTransport::new("http://x", "A B").is_err());
         assert!(CurlTransport::new("ftp://x", "PATH").is_err());
+        // path 付きは拒否（executor が /api/v1 を足すので二重になる）。origin と末尾 / は受ける。
+        let e = CurlTransport::new("http://127.0.0.1:8080/api/v1", "PATH").err();
+        assert!(e.is_some_and(|e| e.contains("without a path")));
+        assert!(CurlTransport::new("http://127.0.0.1:8080/api/v1/", "PATH").is_err());
+        let t = CurlTransport::new("http://127.0.0.1:8080/", "PATH").expect("origin");
+        assert_eq!(t.base_url, "http://127.0.0.1:8080");
         let e = CurlTransport::new("http://x", "CELERIS_NO_SUCH_TOKEN_VAR").err();
         assert!(e.is_some_and(|e| e.contains("CELERIS_NO_SUCH_TOKEN_VAR")));
     }

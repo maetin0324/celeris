@@ -1,0 +1,16 @@
+{
+  "schema": "celeris.grade-case/1",
+  "id": "review-numeric-consistency",
+  "split": "dev",
+  "review": {
+    "findings": "review/findings.json",
+    "known_defects": [
+      {"id": "io-mean", "file": "materials/pluvio-report-draft.md", "lines": [4, 4], "keywords": ["1.95", "不一致", "mismatch", "誤り"]},
+      {"id": "denominator", "file": "materials/pluvio-report-draft.md", "lines": [5, 5], "keywords": ["分母", "denominator", "3 件", "3件"]},
+      {"id": "split-mix", "file": "materials/pluvio-report-draft.md", "lines": [6, 6], "keywords": ["split", "held-out", "混在"]}
+    ],
+    "also_valid": [],
+    "min_detection_rate": 0.66,
+    "max_false_positives": 1
+  }
+}

@@ -25,6 +25,7 @@ fn sources(root: &std::path::Path) -> InitialSources {
         materials: mat,
         kb,
         budget: Budget {
+            token_basis: celeris_campaign::manifest::TokenBasis::InputOutput,
             max_tokens: 1000,
             max_wall_secs: 60,
             max_disk_bytes: 1 << 20,

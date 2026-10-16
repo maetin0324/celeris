@@ -57,6 +57,7 @@ fn campaign(i: &Input) -> CampaignManifest {
             subset: vec!["p0".into(), "p1".into()],
         },
         budget: Budget {
+            token_basis: celeris_campaign::manifest::TokenBasis::InputOutput,
             max_tokens: 10_000_000,
             max_wall_secs: 1_000_000,
             max_disk_bytes: 1 << 40,

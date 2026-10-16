@@ -14,9 +14,9 @@ use crate::outln;
 
 #[derive(Subcommand, Debug)]
 pub enum DbCommand {
-    /// rusqlite の backup API で DB ファイルを丸ごと `<dest>` へコピーする。デーモン（他の接続）が
-    /// 開いていても安全（WAL のスナップショットとして進む）。`scripts/selfdeploy/relocate-db.sh` が
-    /// `sqlite3` コマンドの無い環境でこれを使う。
+    /// 読み取り専用接続の `VACUUM INTO` で DB を `<dest>` へ写す。稼働中のデーモンが書き込んでいても
+    /// 1 つの読み取り snapshot として有限時間で終わる（ADR 2026-10-16-mlsys-pilot-wiring-fixes D8）。
+    /// `scripts/selfdeploy/relocate-db.sh` が `sqlite3` コマンドの無い環境でこれを使う。
     Backup(DbBackupArgs),
     /// `<path>` に対して `PRAGMA integrity_check` を実行する。`ok` だけが返れば exit 0、
     /// 開けない・破損していれば exit 1（理由を stderr に出す）。
@@ -25,7 +25,7 @@ pub enum DbCommand {
 
 #[derive(Args, Debug)]
 pub struct DbBackupArgs {
-    /// コピー先のファイルパス（既存ならエラーにせず上書きする。rusqlite の backup API の挙動）。
+    /// コピー先のファイルパス（既存なら置き換える。`<dest>.partial-<pid>` に書いてから rename）。
     pub dest: PathBuf,
     /// コピー元。省略時は `--db` / `CELERIS_DB` / `./celeris.sqlite3`（他のコマンドと同じ解決規則）。
     #[arg(long)]

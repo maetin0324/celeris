@@ -1,0 +1,12 @@
+{
+  "schema": "celeris.grade-case/1",
+  "id": "impl-benchfs-chunk-index",
+  "split": "dev",
+  "implementation": {
+    "pristine_dir": "pristine",
+    "repo": ".",
+    "tests": [{"path": "tests/chunk_index.rs", "sha256": "2a66ca37a31793ed447912b60d377932ef59fc861901f704907587b87fa87969"}],
+    "command": ["cargo", "test", "--offline", "--test", "chunk_index", "--target-dir", "target-grade"],
+    "must_pass": ["chunk_zero", "chunk_last_in_first", "chunk_second"]
+  }
+}

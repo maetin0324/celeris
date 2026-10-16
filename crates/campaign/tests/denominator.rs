@@ -57,10 +57,12 @@ fn campaign(i: &Input, n: usize, repeats: u32) -> CampaignManifest {
             subset: vec!["p0".into()],
         },
         budget: Budget {
+            token_basis: celeris_campaign::manifest::TokenBasis::InputOutput,
             max_tokens: 10_000_000,
             max_wall_secs: 1_000_000,
             max_disk_bytes: 1 << 40,
-            max_parallel: 1,
+            // in-flight 上限はこの試験の対象ではない（max_parallel は parallel_cap.rs）。
+            max_parallel: 64,
             per_case: Cap {
                 max_tokens: CASE_TOKENS,
                 max_wall_secs: 600,
@@ -111,6 +113,8 @@ impl Executor for ByRep {
             req.rep,
             req.workspace.display().to_string(),
         ));
+        // 成果物を残す（A は workspace が変わらないと no_artifact で failed になる）。
+        std::fs::write(req.workspace.join("out.txt"), "x").map_err(|e| e.to_string())?;
         let outcome = match (req.config.id, req.rep) {
             (ConfigId::A, 2) => Outcome::Failed,
             (ConfigId::B, 3) => Outcome::Timeout,
@@ -124,7 +128,7 @@ impl Executor for ByRep {
         };
         Ok(ExecStatus::Done(ExecResult {
             outcome,
-            tokens: Some(10),
+            tokens: Some(celeris_campaign::manifest::TokenUsage::full(10, 0, 0, 0)),
             cost_micro_usd: None,
             wall_secs,
         }))

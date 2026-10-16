@@ -85,6 +85,7 @@ fn build_pilot(input: &Input) -> CampaignManifest {
             ],
         },
         budget: Budget {
+            token_basis: celeris_campaign::manifest::TokenBasis::InputOutput,
             max_tokens: 1_000_000,
             max_wall_secs: 36_000,
             max_disk_bytes: 1 << 37,

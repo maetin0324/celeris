@@ -12,7 +12,7 @@
       "genre": "coding",
       "kind": "leaf",
       "command": "cargo test --test chunk_index",
-      "prompt": "repo/src/chunk_index.rs の chunk_of を実装せよ。offset を chunk_size で割った chunk 番号を返す。受入は tests/chunk_index.rs の 3 件。Benchfs の chunk 規約（chunk_size 既定 4096）に従う。",
+      "prompt": "src/chunk_index.rs の chunk_of を実装せよ。offset を chunk_size で割った chunk 番号を返す。受入は tests/chunk_index.rs の 3 件（cargo test --test chunk_index）。Benchfs の chunk 規約（chunk_size 既定 4096）に従う。",
       "split": "dev",
       "stratum": "implementation",
       "subset_12": false,
@@ -83,8 +83,8 @@
       "created_at": "2026-10-15T00:00:00Z",
       "genre": "review",
       "kind": "leaf",
-      "command": "test -s out/review.md",
-      "prompt": "out/report.md と materials/pluvio-survey-raw.json を突き合わせ、数値不一致・分母欠落・split 混在を指摘する review を out/review.md に書け。誤りが無ければ無いと根拠付きで書く。",
+      "command": "test -s review/findings.json && test -s out/review.md",
+      "prompt": "materials/pluvio-report-draft.md（報告の草稿）と materials/pluvio-survey-raw.json を突き合わせ、数値不一致・分母欠落・split 混在を指摘する review を書け。指摘は review/findings.json に {\"findings\":[{\"file\":\"materials/pluvio-report-draft.md\",\"line\":<行番号>,\"summary\":\"…\",\"detail\":\"…\"}]} の形で、人向けの要約を out/review.md に書く。誤りが無ければ findings を空の配列にし、根拠を out/review.md に書く。",
       "split": "dev",
       "stratum": "review",
       "subset_12": false,
@@ -95,5 +95,5 @@
       "sha256": ""
     }
   ],
-  "sha256": "52dd6e1b3544b47a0987a4ac331dee4b041d2ee5ba41ab32e772e1b588479dd5"
+  "sha256": "acff2c9007c5d8454fd628f0beb868fa26a9ed65ae26a4e1924c6fa7ee3b5b52"
 }

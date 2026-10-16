@@ -1,5 +1,6 @@
 {
   "budget": {
+    "token_basis": "all",
     "max_disk_bytes": 2147483648,
     "max_parallel": 1,
     "max_tokens": 60000,

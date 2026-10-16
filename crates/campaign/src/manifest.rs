@@ -81,8 +81,66 @@ pub struct SnapshotRef {
     pub kb_snapshot: String,
 }
 
+/// 予算判定に数える tokens の基準（ADR 2026-10-16-mlsys-pilot-wiring-fixes D7）。manifest で必須（既定なし）。
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TokenBasis {
+    /// input + output（cache を数えない）。
+    InputOutput,
+    /// input + output + cache_read。
+    InputOutputCacheRead,
+    /// input + output + cache_read + cache_creation。
+    All,
+}
+
+/// 1 試行（または実行中の累積）の tokens の内訳。cache が取れない harness は None（欠測。0 にしない）。
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TokenUsage {
+    pub input: u64,
+    pub output: u64,
+    pub cache_read: Option<u64>,
+    pub cache_creation: Option<u64>,
+}
+
+impl TokenUsage {
+    /// cache の内訳まで分かっている使用量。
+    pub fn full(input: u64, output: u64, cache_read: u64, cache_creation: u64) -> Self {
+        Self {
+            input,
+            output,
+            cache_read: Some(cache_read),
+            cache_creation: Some(cache_creation),
+        }
+    }
+
+    /// 基準で数えた tokens。基準に要る量が欠けていれば None（欠測）。
+    pub fn count(&self, basis: TokenBasis) -> Option<u64> {
+        let io = self.input + self.output;
+        match basis {
+            TokenBasis::InputOutput => Some(io),
+            TokenBasis::InputOutputCacheRead => Some(io + self.cache_read?),
+            TokenBasis::All => Some(io + self.cache_read? + self.cache_creation?),
+        }
+    }
+
+    /// 内訳ごとの和（どちらかが欠測なら欠測）。
+    pub fn add(&self, o: &TokenUsage) -> TokenUsage {
+        TokenUsage {
+            input: self.input + o.input,
+            output: self.output + o.output,
+            cache_read: self.cache_read.zip(o.cache_read).map(|(a, b)| a + b),
+            cache_creation: self
+                .cache_creation
+                .zip(o.cache_creation)
+                .map(|(a, b)| a + b),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Budget {
+    /// 予算判定に数える tokens の基準。必須（暗黙の既定を置かない）。
+    pub token_basis: TokenBasis,
     /// campaign 全体（全 arm の総量）の上限。
     pub max_tokens: u64,
     pub max_wall_secs: u64,
@@ -420,6 +478,33 @@ impl CampaignManifest {
                 _ => {}
             }
         }
+        self.check_self_contained(input)
+    }
+
+    /// case 間依存の拒否（ADR 2026-10-16-mlsys-pilot-wiring-fixes D6）。試行の workspace は分離されているので、
+    /// prompt が**他の** problem の `command` が作る `out/…` を読む case は満たせない。
+    pub fn check_self_contained(&self, input: &InputManifest) -> Result<(), String> {
+        for id in &self.problems {
+            let Some(p) = input.problems.iter().find(|p| &p.id == id) else {
+                continue;
+            };
+            for path in out_paths(&p.prompt) {
+                if out_paths(&p.command).contains(&path) {
+                    continue;
+                }
+                if let Some(q) = input
+                    .problems
+                    .iter()
+                    .find(|q| q.id != p.id && out_paths(&q.command).contains(&path))
+                {
+                    return Err(format!(
+                        "problem {id} reads {path}, which only problem {} produces; trial workspaces are isolated, \
+                         so make the case self-contained (ship the input under materials/)",
+                        q.id
+                    ));
+                }
+            }
+        }
         Ok(())
     }
 
@@ -484,6 +569,7 @@ pub(crate) mod fixtures {
                 subset: vec!["p1".into(), "p0".into()],
             },
             budget: Budget {
+                token_basis: TokenBasis::InputOutput,
                 max_tokens: 10_000_000,
                 max_wall_secs: 86_400,
                 max_disk_bytes: 1 << 40,
@@ -514,6 +600,24 @@ pub(crate) mod fixtures {
             sha256: String::new(),
         }
     }
+}
+
+/// 文中の `out/<path>` 参照（`out/` に続く path 文字の並び）。
+fn out_paths(text: &str) -> BTreeSet<String> {
+    let mut v = BTreeSet::new();
+    let ok = |c: char| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '/');
+    let mut rest = text;
+    while let Some(i) = rest.find("out/") {
+        let before_ok = rest[..i].chars().next_back().is_none_or(|c| !ok(c));
+        let tail = &rest[i + 4..];
+        let end = tail.find(|c: char| !ok(c)).unwrap_or(tail.len());
+        let path = tail[..end].trim_end_matches('.');
+        if before_ok && !path.is_empty() {
+            v.insert(format!("out/{path}"));
+        }
+        rest = &rest[i + 4..];
+    }
+    v
 }
 
 /// routing-eval manifest の content hash（sha256 欄を空にして正規化 JSON を hash。routing-eval と同じ方式）。
@@ -563,6 +667,11 @@ mod tests {
         let mut v = serde_json::to_value(&m).unwrap();
         v["budget"].as_object_mut().unwrap().remove("max_tokens");
         assert!(serde_json::from_value::<CampaignManifest>(v).is_err());
+        // token_basis も必須（暗黙の既定なし）。
+        let mut v = serde_json::to_value(&m).unwrap();
+        v["budget"].as_object_mut().unwrap().remove("token_basis");
+        let e = serde_json::from_value::<CampaignManifest>(v).unwrap_err();
+        assert!(e.to_string().contains("token_basis"), "{e}");
         let mut z = m.clone();
         z.budget.max_wall_secs = 0;
         assert!(z.validate().unwrap_err().contains("budget"));
@@ -615,6 +724,31 @@ mod tests {
             campaign(&i, Split::Dev, 4)
                 .check_against_input(&tampered)
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn case_reading_another_cases_output_is_rejected() {
+        // pilot 2026-10-16: review case が含まれない case の出力 out/report.md を読んでいた。
+        let mut i = input(4, "dev");
+        i.problems[0].command = "test -s out/report.md".into();
+        i.problems[1].prompt =
+            "out/report.md と materials/raw.json を突き合わせ out/review.md に書け".into();
+        i.problems[1].command = "test -s out/review.md".into();
+        i.sha256 = manifest_hash(&i).unwrap();
+        let m = campaign(&i, Split::Dev, 4);
+        let e = m.check_against_input(&i).unwrap_err();
+        assert!(
+            e.contains("p1 reads out/report.md") && e.contains("p0"),
+            "{e}"
+        );
+        // 自分の出力だけを読む／書く case は通る。
+        i.problems[1].prompt = "materials/report-draft.md を読み out/review.md に書け".into();
+        i.sha256 = manifest_hash(&i).unwrap();
+        assert!(campaign(&i, Split::Dev, 4).check_against_input(&i).is_ok());
+        assert_eq!(
+            out_paths("see out/a.md, and out/b/c.csv。 not_out/x"),
+            ["out/a.md", "out/b/c.csv"].map(String::from).into()
         );
     }
 

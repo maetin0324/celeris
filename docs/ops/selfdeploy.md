@@ -499,8 +499,8 @@ scripts/selfdeploy/relocate-db.sh <新パス>             # 実行
 1. `GET /api/v1/tasks` の `counts_by_status`（`running` + `reviewing`）が 0 であることを確認する。
    0 でなければ何もせず止まる（待つか、`--dry-run` で様子を見てから改めて実行する）。
 2. `current` の sha の `celeris@<sha>` / `celeris-web@<sha>` を止める。
-3. `sqlite3` があれば `VACUUM INTO`、無ければ現在のリリースの `celerisctl db backup`（rusqlite の
-   backup API。ADR-0064 D2/D3 の新規サブコマンド）で新しい場所へコピーする。
+3. `sqlite3` があれば `VACUUM INTO`、無ければ現在のリリースの `celerisctl db backup`（読み取り専用接続の
+   `VACUUM INTO`。ADR-0064 D2/D3、方式は ADR 2026-10-16-mlsys-pilot-wiring-fixes D8）で新しい場所へコピーする。
 4. 新しいファイルに `PRAGMA integrity_check`。`ok` でなければコピーを消して止まる
    （**旧 DB とサービスには触れない**）。
 5. `config.toml` の `db =`（または `[db].path`）を書き換える。`config.toml.bak-<ts>` を残す。

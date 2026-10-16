@@ -56,6 +56,7 @@ fn campaign(i: &Input) -> CampaignManifest {
             subset: vec!["p0".into()],
         },
         budget: Budget {
+            token_basis: celeris_campaign::manifest::TokenBasis::InputOutput,
             max_tokens: 10_000_000,
             max_wall_secs: 1_000_000,
             max_disk_bytes: 1 << 40,
@@ -239,7 +240,8 @@ fn stub_runs_to_completion_with_usage_and_wait_keeps_workspace() {
     fs::write(t.ws.join("go"), "").expect("go");
     let res = wait_done(&x, &r);
     assert_eq!(res.outcome, celeris_campaign::aggregate::Outcome::Passed);
-    assert_eq!(res.tokens, Some(123));
+    let u = res.tokens.expect("usage");
+    assert_eq!(u.input + u.output, 123);
     assert_eq!(res.cost_micro_usd, Some(12_300));
 }
 

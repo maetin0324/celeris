@@ -28,6 +28,15 @@ pub struct Totals {
     /// 実行した全試行（再試行を含む）の token。欠測の試行は sum に入れず `*_missing_trials` に数える。
     pub tokens_sum: u64,
     pub tokens_missing_trials: u64,
+    /// tokens の内訳の和（`token_usage` を持つ試行だけ）。cache は欠測の試行を足さず、件数を別に数える。
+    pub input_tokens_sum: u64,
+    pub output_tokens_sum: u64,
+    pub cache_read_tokens_sum: u64,
+    pub cache_creation_tokens_sum: u64,
+    /// `token_usage` が無い（内訳ごと欠測の）試行数。
+    pub token_usage_missing_trials: u64,
+    /// cache_read / cache_creation が欠測の試行数（内訳はあるが cache が取れなかった）。
+    pub cache_missing_trials: u64,
     pub cost_micro_usd_sum: u64,
     pub cost_missing_trials: u64,
     pub ran_trials: u64,
@@ -226,6 +235,35 @@ pub fn check(m: &CampaignManifest, out: &Path) -> CheckReport {
                     _ => {}
                 }
             }
+            // 予算に数えた tokens は内訳を manifest の基準で数えた値と一致する。
+            if let Some(u) = &r.token_usage
+                && r.tokens != u.count(m.budget.token_basis)
+            {
+                v.push(format!(
+                    "{tag}: tokens {:?} differ from token_usage counted by {:?}",
+                    r.tokens, m.budget.token_basis
+                ));
+            }
+            if r.token_usage.is_none() && r.tokens.is_some() {
+                v.push(format!("{tag}: tokens recorded without token_usage"));
+            }
+            if r.reason.as_deref() == Some(REASON_NO_ARTIFACT)
+                && (r.config != ConfigId::A
+                    || r.outcome != Outcome::Failed
+                    || r.workspace_sha256_final != r.workspace_sha256_initial)
+            {
+                v.push(format!(
+                    "{tag}: no_artifact must be an A trial, outcome failed, with an unchanged workspace"
+                ));
+            }
+            if r.config == ConfigId::A
+                && r.outcome == Outcome::Passed
+                && r.workspace_sha256_final == r.workspace_sha256_initial
+            {
+                v.push(format!(
+                    "{tag}: A passed without any artifact (workspace unchanged)"
+                ));
+            }
             let timeout = m.termination.trial_timeout_secs;
             let is_to = r.outcome == crate::aggregate::Outcome::Timeout;
             if r.wall_secs > timeout {
@@ -277,7 +315,7 @@ pub fn check(m: &CampaignManifest, out: &Path) -> CheckReport {
                         "{tag}: workspace is missing or shared with another trial"
                     ));
                 }
-                if r.workspace_sha256_initial != snap["repo_sha256"]
+                if r.workspace_sha256_initial != snap["workspace_seed_sha256"]
                     || r.kb_sha256_initial != snap["kb_sha256"]
                 {
                     v.push(format!(
@@ -448,6 +486,17 @@ pub fn recompute(m: &CampaignManifest, recs: &[TrialRecord]) -> Recomputed {
             match r.tokens {
                 Some(x) => t.tokens_sum += x,
                 None => t.tokens_missing_trials += 1,
+            }
+            match r.token_usage {
+                Some(u) => {
+                    t.input_tokens_sum += u.input;
+                    t.output_tokens_sum += u.output;
+                    t.cache_read_tokens_sum += u.cache_read.unwrap_or(0);
+                    t.cache_creation_tokens_sum += u.cache_creation.unwrap_or(0);
+                    t.cache_missing_trials +=
+                        u64::from(u.cache_read.is_none() || u.cache_creation.is_none());
+                }
+                None => t.token_usage_missing_trials += 1,
             }
             match r.cost_micro_usd {
                 Some(x) => t.cost_micro_usd_sum += x,

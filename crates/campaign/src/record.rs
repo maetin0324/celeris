@@ -21,6 +21,10 @@ pub const REASON_CASE_BUDGET: &str = "case_budget";
 pub const REASON_ARM_BUDGET: &str = "arm_budget";
 /// executor が `Err` を返したため、その試行だけ error として記録した（run は続行）。使用量は観測できないので課金しない。
 pub const REASON_EXECUTOR_ERROR: &str = "executor_error";
+/// A（harness）が exit 0 でも試行の workspace が初期 snapshot から変わらなかった（成果物なし）。outcome = failed。
+pub const REASON_NO_ARTIFACT: &str = "no_artifact";
+/// 試行記録の `error` 欄に残す executor の失敗本文の上限（byte）。
+pub const ERROR_MAX_BYTES: usize = 2048;
 /// 前提 problem が passed にならなかったため実行しなかった試行の reason。分母には残す（outcome = blocked）。
 pub const REASON_BLOCKED: &str = "dependency_blocked";
 
@@ -42,11 +46,15 @@ pub struct TrialRecord {
     pub outcome: Outcome,
     /// outcome == passed の冗長コピー。改ざん検出に使う。
     pub passed: bool,
-    /// 欠測は null（0 にしない）。
+    /// manifest の `budget.token_basis` で数えた tokens（予算判定に使う量）。欠測は null（0 にしない）。
     pub tokens: Option<u64>,
+    /// tokens の内訳（input / output / cache_read / cache_creation）。欠測は null。
+    pub token_usage: Option<crate::manifest::TokenUsage>,
     pub cost_micro_usd: Option<u64>,
     pub wall_secs: u64,
     pub reason: Option<String>,
+    /// executor の失敗本文（HTTP status と本文など。秘密値は含まない）。`ERROR_MAX_BYTES` で切る。
+    pub error: Option<String>,
     /// 試行の task に固定した実効 routing（mode・lower_policy・evidence_table_id・online_update）。
     /// Celeris 経路（B/C）の試行だけが持つ。A・投入前に拒否された試行は無い。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -87,6 +95,18 @@ impl TrialRecord {
             _ => true,
         }
     }
+}
+
+/// 失敗本文を `ERROR_MAX_BYTES` 以内に切る（char 境界を守る）。
+pub fn clip_error(e: &str) -> String {
+    if e.len() <= ERROR_MAX_BYTES {
+        return e.to_string();
+    }
+    let mut i = ERROR_MAX_BYTES;
+    while !e.is_char_boundary(i) {
+        i -= 1;
+    }
+    format!("{}…", &e[..i])
 }
 
 /// 出力に残す証拠の種別。mock 実行器の数値は実性能として扱えない。

@@ -313,7 +313,8 @@ fn submit_poll_and_requery_after_lost_response() {
     f.finish(&t.task_id, "done", 1234);
     let r = done(x2.poll(&t).expect("poll"));
     assert_eq!(r.outcome, Outcome::Passed);
-    assert_eq!(r.tokens, Some(1234));
+    let u = r.tokens.expect("usage");
+    assert_eq!(u.input + u.output, 1234);
     assert_eq!(r.cost_micro_usd, Some(500_000));
     assert_eq!(r.wall_secs, 600);
     assert_eq!(
@@ -377,7 +378,8 @@ fn children_and_cluster_jobs_keep_waiting_until_all_terminal() {
     });
     let r = done(x.poll(&tracked).expect("poll"));
     assert_eq!(r.outcome, Outcome::Passed);
-    assert_eq!(r.tokens, Some(60), "usage summed over the whole tree");
+    let u = r.tokens.expect("usage");
+    assert_eq!(u.input + u.output, 60, "usage summed over the whole tree");
     // 子 task の失敗は根の結果に従う（根が done なら passed、採点は独立 checker が行う）。
     assert!(f.st().cancels.is_empty());
 }
@@ -581,10 +583,12 @@ fn campaign(i: &Input) -> CampaignManifest {
             subset: vec!["p0".into()],
         },
         budget: Budget {
+            token_basis: celeris_campaign::manifest::TokenBasis::InputOutput,
             max_tokens: 10_000_000,
             max_wall_secs: 1_000_000,
             max_disk_bytes: 1 << 40,
-            max_parallel: 1,
+            // in-flight 上限はこの試験の対象ではない（max_parallel は parallel_cap.rs）。
+            max_parallel: 64,
             per_case: celeris_campaign::manifest::Cap {
                 max_tokens: 100_000,
                 max_wall_secs: 1_000_000,

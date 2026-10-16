@@ -8,6 +8,11 @@ completed: 2026-10-16
 ---
 # MLSys 本測定 実行手順書
 
+> **2026-10-16 改訂（pilot の配線修正、ADR 2026-10-16-mlsys-pilot-wiring-fixes、task 01M52KQ1FV24YAATBA5ZM0E48K）**: `--api-url` は origin だけ、
+> task-template の acceptance は `{"type","text"}`、`budget.token_basis` 必須、`max_parallel` は in-flight 上限（`waiting=0` まで再実行）、
+> A は `--permission-mode bypassPermissions` で起動し成果物なしは failed、materials は試行 workspace の `materials/` に配る、
+> `grade` は評価 command を実際に走らせ、`grade-out` で一括採点、`db backup` は VACUUM INTO。下の手順はこれに合わせてある。
+
 人が実行する手順書。**ここに書いたコマンドは、この repo の build（`$CARGO_TARGET_DIR/debug/`）で `--help` または mock の通し実行により実在を確かめたものだけ**（「確認」節）。
 本番 host の操作（昇格・config 変更・secret 登録・本番 DB の写し取り）は **Part H（人だけが行う）** に分けた。worker・agent は Part H を実行しない。
 
@@ -31,10 +36,10 @@ completed: 2026-10-16
 | 本測定 | 手順のみ（Part M） | mock の通しのみ | なし | **未実施**（`final-measure-budget` の人の承認待ち） |
 
 **未接続（この手順書を書いた時点の欠け。後続 WU か人が埋める）**
-1. `grade` CLI は評価 command を実行しない（`NoRunner`、fail-closed）。実 case の実装テストを走らせる runner を CLI に接続する必要がある。それまで `grade` の `implementation` は fail になり得る（成果物が正直でも）。
-2. `cases/` の `case.json`（公開部）と `grade --case` が読む `celeris.grade-case/1` は別 schema。K1〜K4 用の grade-case ファイルは未作成（`grade --case cases/dev/k0-…/case.json` は `unknown field budget` で拒否される）。
+1. ~~`grade` CLI は評価 command を実行しない~~ → 解消（2026-10-16）: `grade` / `grade-out` は評価 command を grade の作業 dir で実際に走らせる（`grade_runner::ProcessRunner`、既定 1800 秒で打ち切り）。
+2. `cases/` の `case.json`（公開部）と `grade --case` が読む `celeris.grade-case/1` は別 schema。pilot の 2 case の grade-case は `crates/campaign/fixtures/grade-cases/pilot/` にある。K1〜K4 用の grade-case は未作成（本測定の grade-case は run-final.md 手順 5 の `$P/grade-case/`）。
 3. 実 case を `run` に載せる manifest（`problems` が入力 manifest の problem を指す）の生成 CLI は無い。Part P の manifest は手で書き、`validate` で hash を得る。
-4. 実 Celeris 実行器の消費は完了後判定が主（`CelerisExecutor::usage` は未実装）。実行中の per_case 打ち切りは A 側 または 同期判定のみ。実 B/C は完了後に超過が分かる（`max_overshoot_*` に出る）。pilot で必ず実測する。
+4. 実 Celeris 実行器も `usage`（子 task を含む全 run の usage の内訳と server 時計の経過）を返すので、poll のたびに per_case/per_arm を判定する。粒度は 1 回の `run`（poll 間隔）。`max_overshoot_*` に出る。
 5. `run` の arm 選択（C だけ除外）の option は無い。
 
 ## Part V. mock 確認（無課金・何度でも）
@@ -58,7 +63,7 @@ mock の出力は `run-meta.json` / `summary.json` / export に `evidence_kind: 
 承認済み予算の中の最小実測。目的は性能比較ではなく、**消費係数の実測・配線確認・上限の決定**。C と Jev smoke は WU jev-live、本 pilot は A/B のみ。
 
 1. **前提（人）**: Part H の H1（昇格）と H2（secret 確認・未登録なら登録）が済んでいること。
-2. **条件固定**: `$O/pilot.json`（下のサンプル）を作る。`repeats: 1`、problems 2 件。CLI に C だけを除外する option は無い（下の「未接続」に追記: 5）。pilot で C を走らせたくなければ `secondary.subset` を 1 件にして C の 1 試行を許容する（承認範囲内。Jev smoke を兼ねる）。
+2. **条件固定**: `$O/pilot.json`（下のサンプル）を作る。`repeats: 1`、problems 2 件。`budget.token_basis` は人の決定（`input_output` / `input_output_cache_read` / `all`。既定なし）。problems は自己完結の case だけ（他 case の `out/…` を読む case は `validate` が拒否する）。CLI に C だけを除外する option は無い（下の「未接続」に追記: 5）。pilot で C を走らせたくなければ `secondary.subset` を 1 件にして C の 1 試行を許容する（承認範囲内。Jev smoke を兼ねる）。
 3. 事前確認:
    ```sh
    $B validate --manifest $O/pilot.json           # hash を控える（以後これが条件の固定）
@@ -68,17 +73,21 @@ mock の出力は `run-meta.json` / `summary.json` / export に `evidence_kind: 
    ```sh
    export CELERIS_CAMPAIGN_TOKEN=...   # 人が自分の shell で設定（admin/API token）
    $B run --executor celeris --manifest $O/pilot.json --out $O/pilot-out \
-      --api-url http://127.0.0.1:<port>/api/v1 --token-env CELERIS_CAMPAIGN_TOKEN \
+      --api-url http://127.0.0.1:<port> --token-env CELERIS_CAMPAIGN_TOKEN \
       --task-template $O/task-template.json \
       --repo-src <repo の checkout> --materials-src <materials> --kb-src <kb snapshot>
    ```
-   stdout の JSON（`executed / waiting / blocked / budget_cancelled / tokens_total / tokens_missing / max_overshoot_*`）を控える。`waiting>0` は完了待ち（再実行で再開、Part R）。
+   `--api-url` は origin だけ（`/api/v1` は実行器が足す。付けると起動時に拒否）。`--out` は起動時に絶対 path にする。
+   materials は各試行の workspace の `materials/` に配られる（repo に `materials/` があると拒否）。A は `claude -p … --permission-mode bypassPermissions` で試行の workspace（複製）の中で動き、exit 0 でも workspace が無変更なら `failed`（`reason: no_artifact`）。
+   stdout の JSON（`executed / waiting / parallel_deferred / no_artifact / executor_errors / blocked / budget_cancelled / tokens_total / tokens_missing / max_overshoot_*`）を控える。
+   `max_parallel` は in-flight の上限: 1 回の run は上限まで投入して戻る。**`waiting=0` になるまで同じコマンドを繰り返す**（前の試行を回収して予算・使用量を記録してから次を出す）。`executor_errors>0` なら `trials.jsonl` の `error` 欄（HTTP status と本文、2 KiB まで）を見る。
 5. 採点と検査:
    ```sh
    $B check  --manifest $O/pilot.json --out $O/pilot-out
-   $B grade  --case <grade-case.json> --artifact <trial の成果物 dir>   # 未接続 1・2 参照
+   $B grade  --case <grade-case.json> --artifact $O/pilot-out/trials/<A|B|C>/<case>/rep1/workspace   # 評価 command を実際に走らせる
+   $B grade-out --manifest $O/pilot.json --out $O/pilot-out --cases crates/campaign/fixtures/grade-cases/pilot   # 全試行 → grades.jsonl
    ```
-6. **実測の読み取り**（次節の式に入れる）: `summary.json` の試行あたり tokens（A/B 別、`tokens_missing` を除外して数える）、wall、`max_overshoot_*`、外部 task の子 task 数・再試行数、Jev / CoS の共有オーバーヘッド。
+6. **実測の読み取り**（次節の式に入れる）: `summary.json` の試行あたり tokens（A/B 別、`tokens_missing` を除外して数える。`cells.<arm>.tokens` に input / output / cache_read / cache_creation の和、`budget.token_basis` に基準）、wall、`max_overshoot_*`、外部 task の子 task 数・再試行数、Jev / CoS の共有オーバーヘッド。
 7. 結果は進捗ファイル（WU pilot）に書く。**pilot の結果は較正にだけ使い、本測定の主張に混ぜない**（split・campaign_id・hash を分ける）。
 
 ## 本測定の件数・反復・上限の提案式（pilot 実測から）
@@ -131,7 +140,7 @@ H3. **config**（本番 `~/.config/celeris/config.toml`）: `[routing] mode = de
 H4. **API token**: `--token-env` に渡す環境変数は人が自分の shell で設定する（値を argv・ファイルに残さない）。
 H5. **export の接続確認**（本番 DB は読むだけ。写しを作る）:
 ```sh
-$CT db backup <dest>.sqlite3 --src <本番 DB path>               # 本番 DB の写し（`db backup --help` で確認。--src で元を指定）
+$CT db backup <dest>.sqlite3 --src <本番 DB path>               # 本番 DB の写し（読み取り専用接続の VACUUM INTO。稼働中でも 1 snapshot で終わる）
 $CT --db <dest>.sqlite3 campaign export <campaign-id> --out $O/exp-db --verify-connected --manifest-hash <sha256>
 echo $?                                                         # 0 なら接続 OK。非 0 は stderr の `not connected:` 行を見る
 ```
@@ -159,6 +168,7 @@ H6. **cluster job**: cancel された試行の job は自動では消えない�
   "primary": ["A", "B"],
   "secondary": {"pair": ["B", "C"], "subset": ["<case-1>"]},
   "budget": {
+    "token_basis": "<人の決定: input_output | input_output_cache_read | all>",
     "max_tokens": 1000000, "max_wall_secs": 36000, "max_disk_bytes": 137438953472, "max_parallel": 1,
     "per_case": {"max_tokens": 100000, "max_wall_secs": 1800},
     "per_arm": {"max_tokens": 400000, "max_wall_secs": 20000}
@@ -170,8 +180,14 @@ H6. **cluster job**: cancel された試行の job は自動では消えない�
 ```
 `$O/task-template.json`（`POST /api/v1/tasks` の雛形。title・objective・labels・workspace・max_wall_secs・routing_override は実行器が埋める。assignee と tier は書かない）:
 ```json
-{"project_id": "<案件 id>", "repos": ["agent-platform"], "acceptance": [{"text": "campaign trial: 独立 grader が判定する", "check": {"type": "reviewer"}}]}
+{"project_id": "<案件 id>", "repos": ["agent-platform"], "acceptance": [{"type": "reviewer", "text": "campaign trial: 独立 grader が判定する"}]}
 ```
+acceptance は task-api の形（`{"type", "text"}`）だけ。入れ子の `{"text", "check": {…}}` は起動時に拒否する（API が 400 を返すため）。`title`・`objective`・`workspace`・`max_wall_secs`・`routing_override`・`assignee`・`tier` を書くと拒否する。
+
+## 確認（2026-10-16 改訂分）
+- `--api-url http://127.0.0.1:9/api/v1` → `--api-url must be the server origin without a path`、入れ子の template → `nested` で拒否（`crates/campaign/tests/pilot_wiring.rs` の `cli_rejects_api_url_with_path_and_nested_template_before_any_request`）。
+- `run --executor mock --manifest $F/pilot.json`（token_basis 入りに作り直した fixture）: executed 12、tokens_total 113000、check ok（この改訂の worktree build で実行）。
+- `grade-out` と pilot の grade-case（`pilot_impl_grade_case_really_runs_cargo_test_in_the_grade_work_dir` は fixture repo で実際に `cargo test --offline` を走らせる）。
 
 ## 確認（コマンドの実在）
 2026-10-16、この worktree の build で次を実行して確認した。

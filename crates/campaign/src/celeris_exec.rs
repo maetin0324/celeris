@@ -19,7 +19,7 @@ use serde_json::{Map, Value, json};
 
 use crate::{
     aggregate::Outcome,
-    executor::{ExecResult, ExecStatus, Executor, TaskRef, TrialRequest},
+    executor::{ExecResult, ExecStatus, Executor, TaskRef, TokenUsage, TrialRequest, Usage},
     manifest::{Config, ConfigId},
 };
 
@@ -82,6 +82,52 @@ pub fn routing_override(cfg: &Config) -> Result<Value, String> {
         o["evidence_table_id"] = json!(e);
     }
     Ok(o)
+}
+
+/// `--task-template` の検査。`acceptance` は task-api の形（`{"type": …, "text": …}`）だけを受ける。
+/// 旧い入れ子（`{"text", "check": {"type": …}}`）は API が 400 を返すので、投入前に拒否する。
+/// 実行器が埋める欄（title・objective・labels 以外の上書き不可欄）を template に書くことも拒否する。
+pub fn check_template(t: &Map<String, Value>) -> Result<(), String> {
+    for k in [
+        "title",
+        "objective",
+        "workspace",
+        "max_wall_secs",
+        "routing_override",
+    ] {
+        if t.contains_key(k) {
+            return Err(format!(
+                "--task-template must not set {k:?} (the executor fills it per trial)"
+            ));
+        }
+    }
+    for k in ["assignee", "tier"] {
+        if t.contains_key(k) {
+            return Err(format!(
+                "--task-template must not set {k:?} (Celeris chooses it)"
+            ));
+        }
+    }
+    let Some(acc) = t.get("acceptance") else {
+        return Ok(());
+    };
+    let items = acc
+        .as_array()
+        .ok_or("--task-template: acceptance must be an array")?;
+    for (i, a) in items.iter().enumerate() {
+        if a.get("check").is_some() {
+            return Err(format!(
+                "--task-template: acceptance[{i}] uses the nested {{\"text\", \"check\": {{…}}}} form; \
+                 write {{\"type\": \"reviewer\", \"text\": \"…\"}} (the task-api shape)"
+            ));
+        }
+        if !a.get("type").is_some_and(Value::is_string) {
+            return Err(format!(
+                "--task-template: acceptance[{i}] needs a string \"type\" (e.g. \"reviewer\")"
+            ));
+        }
+    }
+    Ok(())
 }
 
 pub struct CelerisExecutor<T: Transport> {
@@ -298,19 +344,25 @@ impl<T: Transport> CelerisExecutor<T> {
         }
     }
 
-    /// 木の全 run の usage の合計。usage の無い run が 1 つでもあれば欠測（None）。
-    fn usage(tree: &[TreeNode]) -> (Option<u64>, Option<u64>) {
-        let (mut tokens, mut cost) = (Some(0u64), Some(0u64));
+    /// 木の全 run の usage の内訳ごとの合計。input/output の無い run が 1 つでもあれば欠測（None）、
+    /// cache の内訳が無い run があればその内訳だけ欠測。
+    fn usage(tree: &[TreeNode]) -> (Option<TokenUsage>, Option<u64>) {
+        let (mut tokens, mut cost) = (Some(TokenUsage::full(0, 0, 0, 0)), Some(0u64));
         for r in tree
             .iter()
             .flat_map(|n| n.detail["runs"].as_array().into_iter().flatten())
         {
             let u = &r["usage"];
             let t = match (u["input_tokens"].as_u64(), u["output_tokens"].as_u64()) {
-                (Some(i), Some(o)) => Some(i + o),
+                (Some(input), Some(output)) => Some(TokenUsage {
+                    input,
+                    output,
+                    cache_read: u["cache_read_tokens"].as_u64(),
+                    cache_creation: u["cache_creation_tokens"].as_u64(),
+                }),
                 _ => None,
             };
-            tokens = tokens.zip(t).map(|(a, b)| a + b);
+            tokens = tokens.zip(t).map(|(a, b)| a.add(&b));
             let c = u["cost_usd"].as_f64().map(|x| (x * 1e6).round() as u64);
             cost = cost.zip(c).map(|(a, b)| a + b);
         }
@@ -421,6 +473,20 @@ impl<T: Transport> Executor for CelerisExecutor<T> {
     fn track(&self, t: &TaskRef) -> Result<TaskRef, String> {
         let tree = self.walk(&t.task_id)?;
         Ok(Self::task_ref(t, &tree))
+    }
+
+    /// 実行中の累積（子 task を含む全 run の usage の内訳と、task 作成からの server 時計の経過）。
+    fn usage(&self, t: &TaskRef) -> Result<Option<Usage>, String> {
+        let tree = self.walk(&t.task_id)?;
+        let root = tree.first().ok_or("empty task tree")?;
+        let elapsed = secs_between(
+            parse_ts(&root.detail["task"]["created_at"]),
+            parse_ts(&root.detail["timers"]["now"]),
+        );
+        Ok(Some(Usage {
+            tokens: Self::usage(&tree).0,
+            wall_secs: elapsed.unwrap_or(0),
+        }))
     }
 
     fn poll(&self, t: &TaskRef) -> Result<ExecStatus, String> {

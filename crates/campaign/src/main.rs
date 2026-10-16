@@ -1,19 +1,21 @@
 use std::{path::PathBuf, process::ExitCode};
 
 use celeris_campaign::{
-    celeris_exec::CelerisExecutor,
+    celeris_exec::{CelerisExecutor, check_template},
     checker,
     curl_transport::CurlTransport,
     dispatch::ArmDispatch,
     executor::MockExecutor,
     export,
+    grade_runner::ProcessRunner,
     harness_exec::{ClaudeCodeBuilder, HarnessExecutor},
     ledger::Ledger,
     manifest::CampaignManifest,
     runner,
 };
 
-const USAGE: &str = "usage: celeris-campaign <dry-run|validate|run|check|check-report|export> --manifest <path> \
+const USAGE: &str = "usage: celeris-campaign <dry-run|validate|run|check|check-report|export|grade-out> --manifest <path> \
+[--cases <grade-case dir>] \
 [--input-manifest <path>] [--out <dir>] [--executor mock|harness|celeris] [--api-url <url> --token-env <ENV_NAME> [--task-template <json>]] [--dest <dir>] \
 [--report <file>] [--repo-src <dir>] [--materials-src <dir>] [--kb-src <dir>]";
 
@@ -27,11 +29,15 @@ fn arg(args: &[String], name: &str) -> Option<PathBuf> {
 fn run(args: Vec<String>) -> Result<String, String> {
     let cmd = args.first().map(String::as_str).unwrap_or("");
     if cmd == "grade" {
-        return celeris_campaign::grader::cli(&args);
+        return celeris_campaign::grader::cli(&args, &ProcessRunner::default());
     }
     let manifest_path = arg(&args, "--manifest").ok_or("--manifest <path> is required")?;
     let m = CampaignManifest::load(&manifest_path)?;
-    let out = || arg(&args, "--out").ok_or("--out <dir> is required".to_string());
+    // 絶対 path にする: A の harness は試行の workspace を cwd にして動くので、相対 path の状態 dir は壊れる。
+    let out = || -> Result<PathBuf, String> {
+        let p = arg(&args, "--out").ok_or("--out <dir> is required")?;
+        std::path::absolute(&p).map_err(|e| format!("--out {}: {e}", p.display()))
+    };
     match cmd {
         "dry-run" => {
             let input = m.load_input(&manifest_path, arg(&args, "--input-manifest").as_deref())?;
@@ -76,9 +82,12 @@ fn run(args: Vec<String>) -> Result<String, String> {
                                 &std::fs::read(&p).map_err(|e| format!("{}: {e}", p.display()))?,
                             )
                             .map_err(|e| format!("{}: {e}", p.display()))?;
-                            v.as_object()
+                            let t = v
+                                .as_object()
                                 .cloned()
-                                .ok_or("--task-template must be a JSON object")?
+                                .ok_or("--task-template must be a JSON object")?;
+                            check_template(&t)?;
+                            t
                         }
                         None => serde_json::Map::new(),
                     };
@@ -114,7 +123,7 @@ fn run(args: Vec<String>) -> Result<String, String> {
                 *by_state.entry(st).or_default() += 1;
             }
             Ok(format!(
-                "{{\"executed\":{},\"resumed_skipped\":{},\"budget_cancelled\":{},\"blocked\":{},\"waiting\":{},\"tokens_total\":{},\"tokens_missing\":{},\"case_budget_cancelled\":{},\"arm_budget_cancelled\":{},\"max_overshoot_tokens\":{},\"max_overshoot_wall_secs\":{},\"budget_stopped\":{},\"ledger\":{{\"rows\":{},\"by_state\":{}}}}}",
+                "{{\"executed\":{},\"resumed_skipped\":{},\"budget_cancelled\":{},\"blocked\":{},\"waiting\":{},\"tokens_total\":{},\"tokens_missing\":{},\"case_budget_cancelled\":{},\"arm_budget_cancelled\":{},\"max_overshoot_tokens\":{},\"max_overshoot_wall_secs\":{},\"parallel_deferred\":{},\"no_artifact\":{},\"executor_errors\":{},\"budget_stopped\":{},\"ledger\":{{\"rows\":{},\"by_state\":{}}}}}",
                 rep.executed,
                 rep.resumed_skipped,
                 rep.budget_cancelled,
@@ -126,6 +135,9 @@ fn run(args: Vec<String>) -> Result<String, String> {
                 rep.arm_budget_cancelled,
                 rep.max_overshoot_tokens,
                 rep.max_overshoot_wall_secs,
+                rep.parallel_deferred,
+                rep.no_artifact,
+                rep.executor_errors,
                 rep.budget_stopped,
                 rows,
                 serde_json::to_string(&by_state).map_err(|e| e.to_string())?
@@ -146,6 +158,17 @@ fn run(args: Vec<String>) -> Result<String, String> {
             } else {
                 Err(v.join("\n"))
             }
+        }
+        "grade-out" => {
+            let cases = arg(&args, "--cases").ok_or("--cases <grade-case dir> is required")?;
+            let v = celeris_campaign::grade_out::grade_out(
+                &m,
+                &out()?,
+                &cases,
+                &ProcessRunner::default(),
+            )?;
+            let s = serde_json::to_string_pretty(&v).map_err(|e| e.to_string())?;
+            if v["ok"] == true { Ok(s) } else { Err(s) }
         }
         "export" => {
             let out = out()?;

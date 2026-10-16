@@ -5,7 +5,7 @@ use std::{collections::BTreeMap, fs, path::Path, sync::Mutex};
 use celeris_campaign::{
     aggregate::Outcome,
     checker::check,
-    executor::{ExecResult, ExecStatus, Executor, TaskRef, TrialRequest, Usage},
+    executor::{ExecResult, ExecStatus, Executor, TaskRef, TokenUsage, TrialRequest, Usage},
     ledger::Ledger,
     manifest::{
         Budget, CampaignManifest, Cap, Config, ConfigId, InputRef, Secondary, SnapshotRef, Split,
@@ -59,10 +59,12 @@ fn campaign(i: &Input, n: usize, arm_tokens: u64) -> CampaignManifest {
             subset: vec!["p0".into()],
         },
         budget: Budget {
+            token_basis: celeris_campaign::manifest::TokenBasis::InputOutput,
             max_tokens: 10_000_000,
             max_wall_secs: 1_000_000,
             max_disk_bytes: 1 << 40,
-            max_parallel: 1,
+            // in-flight 上限はこの試験の対象ではない（max_parallel は parallel_cap.rs）。
+            max_parallel: 64,
             per_case: Cap {
                 max_tokens: CASE_TOKENS,
                 max_wall_secs: 600,
@@ -107,7 +109,7 @@ struct Script {
 fn ok(tokens: Option<u64>, wall: u64) -> ExecResult {
     ExecResult {
         outcome: Outcome::Passed,
-        tokens,
+        tokens: tokens.map(|t| TokenUsage::full(t, 0, 0, 0)),
         cost_micro_usd: None,
         wall_secs: wall,
     }
@@ -258,7 +260,10 @@ fn summary(out: &Path) -> Value {
 }
 
 fn usage(tokens: Option<u64>, wall_secs: u64) -> Usage {
-    Usage { tokens, wall_secs }
+    Usage {
+        tokens: tokens.map(|t| TokenUsage::full(t, 0, 0, 0)),
+        wall_secs,
+    }
 }
 
 #[test]

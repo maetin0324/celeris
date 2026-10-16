@@ -9,6 +9,8 @@ pub mod dispatch;
 pub mod dryrun;
 pub mod executor;
 pub mod export;
+pub mod grade_out;
+pub mod grade_runner;
 pub mod grader;
 pub mod harness_exec;
 pub mod isolation;

@@ -59,3 +59,8 @@ mock の `Passed` で合格にならない、成果物から独立に判定す�
   pristine テスト・欠陥一覧は試行の作業場所・KB snapshot に入れない（WU `isolation`）。
 - 実 cargo の実行（BenchFS は UCX 必須で login node が要る）での受入 command の実経路検証は未実施。
   grader の試験は stub runner と合成成果物で行う。
+
+## 付記 2026-10-16: `NoRunner` を消し、CLI は評価 command を実際に走らせる
+pilot（2026-10-16）で `grade` が評価 command を走らせず実 case を採点できなかった。ADR 2026-10-16-mlsys-pilot-wiring-fixes D9 で
+`NoRunner` を消し、CLI（`grade` / `grade-out`）は `grade_runner::ProcessRunner` を注入する。判定の library（grader.rs）が子 process を
+起こさない guard はそのまま（process を起こすのは `grade_runner.rs` だけで、runner_checker.rs の src 走査の許可に足した）。

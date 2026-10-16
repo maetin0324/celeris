@@ -1,0 +1,7 @@
+[package]
+name = "chunk-index-fixture"
+version = "0.1.0"
+edition = "2021"
+
+# この fixture は Celeris の workspace の member ではない（試行の workspace・grade の作業 dir で単独に build する）。
+[workspace]

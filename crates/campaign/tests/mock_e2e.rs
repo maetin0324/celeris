@@ -58,10 +58,12 @@ fn campaign(i: &Input, n: usize, split: Split, max_tokens: u64) -> CampaignManif
             subset: vec!["p0".into()],
         },
         budget: Budget {
+            token_basis: celeris_campaign::manifest::TokenBasis::InputOutput,
             max_tokens,
             max_wall_secs: 1_000_000,
             max_disk_bytes: 1 << 40,
-            max_parallel: 1,
+            // in-flight 上限はこの試験の対象ではない（max_parallel は parallel_cap.rs）。
+            max_parallel: 64,
             per_case: Cap {
                 max_tokens: 100_000,
                 max_wall_secs: 1_000_000,

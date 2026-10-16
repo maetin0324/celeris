@@ -1584,6 +1584,54 @@ fn backup_database_round_trips_and_integrity_check_detects_a_good_copy() {
     assert!(integrity_check(&garbage_path).is_err());
 }
 
+/// ADR 2026-10-16-mlsys-pilot-wiring-fixes D8: 稼働中（別接続が WAL に書き込み中・未 commit の書き込み
+/// transaction を保持中）でも backup は 1 つの snapshot として終わり、commit 済みの行だけを含む。
+/// 既存の dest は置き換え、partial file を残さない。
+#[test]
+fn backup_database_finishes_while_another_connection_is_writing() {
+    let dir = tempfile::tempdir().unwrap();
+    let src_path = dir.path().join("live.sqlite3");
+    let store = SqliteStore::open(&src_path).unwrap();
+    let committed = sample_task(Status::Ready);
+    store.insert(&committed).unwrap();
+
+    // 別の接続が書き込み transaction を開いたまま（daemon の書き込み中を模す）。
+    let writer = Connection::open(&src_path).unwrap();
+    writer.execute_batch("BEGIN IMMEDIATE").unwrap();
+    writer
+        .execute_batch("CREATE TABLE in_flight(x INTEGER); INSERT INTO in_flight VALUES (1);")
+        .unwrap();
+
+    let dest_path = dir.path().join("copy.sqlite3");
+    std::fs::write(&dest_path, b"old contents").unwrap();
+    backup_database(&src_path, &dest_path, StdDuration::from_millis(5000)).unwrap();
+    writer.execute_batch("COMMIT").unwrap();
+
+    assert!(integrity_check(&dest_path).unwrap());
+    let copy = Connection::open(&dest_path).unwrap();
+    let in_flight: i64 = copy
+        .query_row(
+            "SELECT count(*) FROM sqlite_master WHERE name = 'in_flight'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(in_flight, 0, "uncommitted writes must not be in the copy");
+    drop(copy);
+    let restored = SqliteStore::open(&dest_path).unwrap();
+    assert_eq!(
+        restored.get(committed.id).unwrap().map(|t| t.id),
+        Some(committed.id)
+    );
+    let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_name().to_string_lossy().contains(".partial-"))
+        .collect();
+    assert!(leftovers.is_empty());
+    drop(store);
+}
+
 /// ADR-0064 D4: `read_pool_size = 0` なら読み取りプールを作らず、書き込み接続にフォールバック
 /// する（挙動は変わらない）。
 #[test]

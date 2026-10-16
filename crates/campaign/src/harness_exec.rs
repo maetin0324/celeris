@@ -24,7 +24,7 @@ use serde_json::Value;
 
 use crate::{
     aggregate::Outcome,
-    executor::{ExecResult, ExecStatus, Executor, TaskRef, TrialRequest},
+    executor::{ExecResult, ExecStatus, Executor, TaskRef, TokenUsage, TrialRequest},
 };
 
 /// 起動する command（注入点）。
@@ -39,13 +39,15 @@ pub struct HarnessCommand {
 pub trait CommandBuilder: Send + Sync {
     fn build(&self, req: &TrialRequest) -> HarnessCommand;
 
-    /// stdout から (tokens, cost_micro_usd) を取る。取れなければ None（欠測。推定で埋めない）。
-    fn parse_usage(&self, stdout: &str) -> (Option<u64>, Option<u64>) {
+    /// stdout から (tokens の内訳, cost_micro_usd) を取る。取れなければ None（欠測。推定で埋めない）。
+    fn parse_usage(&self, stdout: &str) -> (Option<TokenUsage>, Option<u64>) {
         parse_claude_json_usage(stdout)
     }
 }
 
-/// 既定: `claude -p <prompt> --model <model> --output-format json`。許可・turn の制限は足さない。
+/// 既定: `claude -p <prompt> --model <model> --output-format json --permission-mode bypassPermissions`。
+/// headless では承認者がいないので、permission mode が無いと書き込み・Bash が全て拒否されて何も作れない
+/// （pilot 2026-10-16）。試行は専用の複製 workspace の中で走る。許可リスト・turn の後付け制限は足さない。
 pub struct ClaudeCodeBuilder {
     pub program: PathBuf,
 }
@@ -69,14 +71,17 @@ impl CommandBuilder for ClaudeCodeBuilder {
                 req.config.model.clone(),
                 "--output-format".into(),
                 "json".into(),
+                "--permission-mode".into(),
+                "bypassPermissions".into(),
             ],
             env: Vec::new(),
         }
     }
 }
 
-/// 最後に JSON object として読める行の `usage`（input+output token）と `total_cost_usd` を取る。
-pub fn parse_claude_json_usage(stdout: &str) -> (Option<u64>, Option<u64>) {
+/// 最後に JSON object として読める行の `usage`（input / output / cache_read / cache_creation）と
+/// `total_cost_usd` を取る。input・output が無ければ欠測、cache が無ければその内訳だけ欠測。
+pub fn parse_claude_json_usage(stdout: &str) -> (Option<TokenUsage>, Option<u64>) {
     let Some(v) = stdout
         .lines()
         .rev()
@@ -87,7 +92,12 @@ pub fn parse_claude_json_usage(stdout: &str) -> (Option<u64>, Option<u64>) {
     };
     let u = &v["usage"];
     let tokens = match (u["input_tokens"].as_u64(), u["output_tokens"].as_u64()) {
-        (Some(i), Some(o)) => Some(i + o),
+        (Some(input), Some(output)) => Some(TokenUsage {
+            input,
+            output,
+            cache_read: u["cache_read_input_tokens"].as_u64(),
+            cache_creation: u["cache_creation_input_tokens"].as_u64(),
+        }),
         _ => None,
     };
     let cost = v["total_cost_usd"]
@@ -209,7 +219,7 @@ impl HarnessExecutor {
         }
     }
 
-    fn usage(&self, key: &str) -> Result<(Option<u64>, Option<u64>), String> {
+    fn usage(&self, key: &str) -> Result<(Option<TokenUsage>, Option<u64>), String> {
         let out = fs::read(self.dir(key)?.join("stdout.log")).unwrap_or_default();
         Ok(self.builder.parse_usage(&String::from_utf8_lossy(&out)))
     }

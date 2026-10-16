@@ -366,23 +366,10 @@ pub mod implementation {
         pub stderr: String,
     }
 
-    /// 評価 command の実行器。grader の library は子 process を起こさない（runner_checker.rs の
-    /// src 走査が禁じる）。評価 command を実際に走らせる実行器は呼び出し側が注入し、試験は stub を使う。
+    /// 評価 command の実行器。判定の library（この module）は子 process を起こさず、実際に走らせる実行器
+    /// （`grade_runner::ProcessRunner`）を CLI が注入する。試験は stub も使う。
     pub trait CommandRunner {
         fn run(&self, argv: &[String], cwd: &Path) -> Result<CommandOutput, String>;
-    }
-
-    /// 実行器が注入されていないときの既定。評価 command を走らせず常に Err を返すので、
-    /// 実装テスト検査は fail になる（未実行を合格にしない fail-closed。ADR D3）。
-    pub struct NoRunner;
-
-    impl CommandRunner for NoRunner {
-        fn run(&self, argv: &[String], _cwd: &Path) -> Result<CommandOutput, String> {
-            Err(format!(
-                "no evaluation runner injected: `{}` was not executed (grade CLI does not spawn processes)",
-                argv.join(" ")
-            ))
-        }
     }
 
     /// 試験 file の弱体化の印。
@@ -929,7 +916,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 pub use case::{CaseSplit, GradeCase};
-pub use implementation::{CommandOutput, CommandRunner, NoRunner};
+pub use implementation::{CommandOutput, CommandRunner};
 
 pub const GRADE_SCHEMA: &str = "celeris.grade/1";
 
@@ -1053,7 +1040,8 @@ pub fn grade(case: &GradeCase, artifact: &Path, opts: &GradeOptions) -> GradeRep
 }
 
 /// `celeris-campaign grade --case <file> --artifact <dir> [--work <dir>]`。合格で Ok、不合格で Err（どちらも判定 JSON）。
-pub fn cli(args: &[String]) -> Result<String, String> {
+/// 評価 command は `runner`（CLI では `grade_runner::ProcessRunner`）が grade の作業 dir の中で実際に走らせる。
+pub fn cli(args: &[String], runner: &dyn CommandRunner) -> Result<String, String> {
     let arg = |name: &str| {
         args.iter()
             .position(|a| a == name)
@@ -1069,7 +1057,7 @@ pub fn cli(args: &[String]) -> Result<String, String> {
             .map(Path::to_path_buf)
             .unwrap_or_default(),
         work_root: arg("--work").unwrap_or_else(std::env::temp_dir),
-        runner: &NoRunner,
+        runner,
     };
     let rep = grade(&case, &artifact, &opts);
     let s = serde_json::to_string_pretty(&rep).map_err(|e| e.to_string())?;

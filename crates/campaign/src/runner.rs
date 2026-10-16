@@ -54,6 +54,10 @@ pub struct RunReport {
     /// 実効上限に対する最大超過量。粒度は `OVERSHOOT_GRANULARITY`。
     pub max_overshoot_tokens: u64,
     pub max_overshoot_wall_secs: u64,
+    /// `budget.max_parallel` の in-flight 上限に達したため今回は投入しなかった試行数（`waiting` にも数える）。
+    pub parallel_deferred: u64,
+    /// A の試行で exit 0 だが成果物（workspace の変化）が無く failed にした数。
+    pub no_artifact: u64,
 }
 
 /// 最大超過の粒度（summary にも書く）。ADR 2026-10-16-campaign-budget-cap D4。
@@ -117,29 +121,43 @@ fn safe_component(id: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// 試行の初期木（repo + `materials/`）。ADR 2026-10-16-mlsys-pilot-wiring-fixes D5。
+fn build_seed(repo: &Path, mat: &Path, seed: &Path) -> Result<(), String> {
+    if repo.join("materials").exists() {
+        return Err(
+            "repo snapshot already has materials/; it would collide with --materials-src".into(),
+        );
+    }
+    let _ = fs::remove_dir_all(seed);
+    copy_tree(repo, seed)?;
+    copy_tree(mat, &seed.join("materials"))
+}
+
 /// 初回は snapshot を保存し、再開時は保存済み snapshot が壊れていないことを確かめる。
-/// 戻り値は (repo_dir, kb_dir, repo_sha256, kb_sha256)。
+/// 戻り値は (試行の初期木（repo + materials/）, kb_dir, 初期木の sha256, kb_sha256)。
 fn prepare_snapshot(
     m: &CampaignManifest,
     opts: &RunOptions,
 ) -> Result<(PathBuf, PathBuf, String, String), String> {
     let snap = opts.out.join("snapshot");
     let (repo, mat, kb) = (snap.join("repo"), snap.join("materials"), snap.join("kb"));
+    let seed = snap.join("workspace-seed");
     let meta_path = opts.out.join(SNAPSHOT_FILE);
     if meta_path.exists() {
         let v: Value = serde_json::from_slice(
             &fs::read(&meta_path).map_err(|e| format!("{}: {e}", meta_path.display()))?,
         )
         .map_err(|e| format!("snapshot.json: {e}"))?;
-        let rs = hash_tree(&repo)?;
         let ks = hash_tree(&kb)?;
-        if v["repo_sha256"] != rs
+        let ss = hash_tree(&seed)?;
+        if v["repo_sha256"] != hash_tree(&repo)?
             || v["kb_sha256"] != ks
             || v["materials_sha256"] != hash_tree(&mat)?
+            || v["workspace_seed_sha256"] != ss
         {
             return Err("saved snapshot no longer matches its recorded hash".into());
         }
-        return Ok((repo, kb, rs, ks));
+        return Ok((seed, kb, ss, ks));
     }
     for (src, dst) in [
         (&opts.repo_src, &repo),
@@ -151,7 +169,9 @@ fn prepare_snapshot(
             None => fs::create_dir_all(dst).map_err(|e| e.to_string())?,
         }
     }
+    build_seed(&repo, &mat, &seed)?;
     let (rs, ms, ks) = (hash_tree(&repo)?, hash_tree(&mat)?, hash_tree(&kb)?);
+    let ss = hash_tree(&seed)?;
     let verified = opts.materials_src.is_some();
     if verified && ms != m.snapshot.materials_sha256 {
         return Err(format!(
@@ -167,10 +187,11 @@ fn prepare_snapshot(
             "repo_sha256": rs,
             "materials_sha256": ms,
             "kb_sha256": ks,
+            "workspace_seed_sha256": ss,
             "materials_pin_verified": verified,
         }),
     )?;
-    Ok((repo, kb, rs, ks))
+    Ok((seed, kb, ss, ks))
 }
 
 /// 既存の trials.jsonl を読む。crash による末尾の不完全な行は切り落とす。
@@ -287,9 +308,11 @@ fn new_record(
         outcome: Outcome::Cancelled,
         passed: false,
         tokens: None,
+        token_usage: None,
         cost_micro_usd: None,
         wall_secs: 0,
         reason: None,
+        error: None,
         routing: None,
         harness: cfg.harness.clone(),
         harness_version: cfg.harness_version.clone(),
@@ -321,6 +344,20 @@ fn cancel_row(
         exec.cancel(&t, reason)?;
     }
     ledger.mark_cancelled(&row.key, reason)
+}
+
+/// 非同期 executor の in-flight（この campaign の未完了の台帳行のうち自分以外）が `max_parallel` に達しているか。
+/// 既に台帳に行がある試行（投入済み・追跡中）は上限に関係なく追跡を続ける。
+fn at_parallel_cap(ledger: &Ledger, key: &TrialKey, hash: &str, max_parallel: u32) -> bool {
+    if ledger.get(key).is_some_and(|r| !r.state.is_terminal()) {
+        return false;
+    }
+    let in_flight = ledger
+        .unfinished()
+        .into_iter()
+        .filter(|r| r.key.manifest_sha256 == hash && r.key != *key)
+        .count();
+    in_flight >= max_parallel as usize
 }
 
 /// drive_async の失敗。executor の Err はその試行だけ error にし、台帳・fs の失敗は run の失敗にする。
@@ -386,7 +423,12 @@ fn drive_async(
         ExecStatus::Wait => {
             // poll ごとに子 task・job を含む累積使用量を見て、上限超過なら cancel する。
             if let Some(Usage { tokens, wall_secs }) = exec.usage(&fresh).map_err(DriveErr::Exec)?
-                && let Some(reason) = breach_reason(budget, arm, tokens, wall_secs)
+                && let Some(reason) = breach_reason(
+                    budget,
+                    arm,
+                    tokens.and_then(|u| u.count(budget.token_basis)),
+                    wall_secs,
+                )
             {
                 if let Some(row) = ledger.get(key).cloned() {
                     cancel_row(exec, ledger, &row, reason)?;
@@ -617,6 +659,12 @@ pub fn run(
                 }
                 errored = Some(e);
                 failed_result()
+            } else if is_async && at_parallel_cap(&ledger, &key, &hash, m.budget.max_parallel) {
+                // in-flight が max_parallel に達している: 投入しない。次の run が先の試行を回収し、
+                // 予算・使用量を見てから出す（ADR 2026-10-16-mlsys-pilot-wiring-fixes D3）。
+                rep.waiting += 1;
+                rep.parallel_deferred += 1;
+                continue;
             } else if is_async {
                 match drive_async(
                     exec,
@@ -667,18 +715,34 @@ pub fn run(
                     }
                 }
             };
-            if errored.is_some() {
+            if let Some(e) = &errored {
                 rec.reason = Some(REASON_EXECUTOR_ERROR.into());
+                rec.error = Some(clip_error(e));
                 rep.executor_errors += 1;
+                // 投入前に失敗して作業場所が無いときも初期 snapshot から作る（hash の失敗で本当の原因を隠さない）。
+                if !ws.exists() {
+                    copy_tree(&repo, &ws)?;
+                }
+                if !kbd.exists() {
+                    copy_tree(&kb, &kbd)?;
+                }
             }
             if res.wall_secs > timeout && res.outcome != Outcome::Timeout {
                 res.outcome = Outcome::Timeout;
                 rec.reason = Some("runner_timeout".into());
             }
             res.wall_secs = res.wall_secs.min(timeout);
+            let ws_final = hash_tree(&ws)?;
+            // A の成果物は試行の workspace にしか出ない。exit 0 でも何も変わっていなければ合格にしない（fail-closed）。
+            if cid == ConfigId::A && res.outcome == Outcome::Passed && ws_final == repo_sha {
+                res.outcome = Outcome::Failed;
+                rec.reason = Some(REASON_NO_ARTIFACT.into());
+                rep.no_artifact += 1;
+            }
+            let counted = res.tokens.and_then(|u| u.count(m.budget.token_basis));
             // 同期 executor（と実行中に観測できなかった async）は完了後に上限を判定する。Timeout が優先。
             if cancelled_by.is_none() && errored.is_none() && res.outcome != Outcome::Timeout {
-                cancelled_by = breach_reason(&m.budget, arm, res.tokens, res.wall_secs);
+                cancelled_by = breach_reason(&m.budget, arm, counted, res.wall_secs);
             }
             if let Some(why) = cancelled_by {
                 res.outcome = Outcome::Cancelled;
@@ -694,7 +758,7 @@ pub fn run(
                     .max_overshoot_wall_secs
                     .max(res.wall_secs.saturating_sub(cap.max_wall_secs));
             }
-            if let Some(t) = res.tokens {
+            if let Some(t) = counted {
                 rep.max_overshoot_tokens = rep
                     .max_overshoot_tokens
                     .max(t.saturating_sub(cap.max_tokens));
@@ -702,22 +766,23 @@ pub fn run(
             let charged = if errored.is_some() {
                 0
             } else {
-                m.budget.charged_tokens(res.tokens)
+                m.budget.charged_tokens(counted)
             };
             let e = arm_use.entry(cid).or_default();
             e.0 += charged;
             e.1 += res.wall_secs;
             rep.tokens_charged_total += charged;
-            rep.tokens_missing += u64::from(res.tokens.is_none() && errored.is_none());
+            rep.tokens_missing += u64::from(counted.is_none() && errored.is_none());
             rec.outcome = res.outcome;
             rec.passed = res.outcome == Outcome::Passed;
-            rec.tokens = res.tokens;
+            rec.tokens = counted;
+            rec.token_usage = res.tokens;
             rec.cost_micro_usd = res.cost_micro_usd;
             rec.wall_secs = res.wall_secs;
-            rec.workspace_sha256_final = hash_tree(&ws)?;
+            rec.workspace_sha256_final = ws_final;
             rec.kb_sha256_final = hash_tree(&kbd)?;
             rep.executed += 1;
-            rep.tokens_total += res.tokens.unwrap_or(0);
+            rep.tokens_total += counted.unwrap_or(0);
             rep.wall_secs_total += res.wall_secs;
             rep.budget_stopped = over(&rep);
         }
@@ -774,6 +839,22 @@ fn write_summary(
         let n = plan(m).iter().filter(|(k, _, _)| *k == c).count();
         let mut counts = [0u64; 6]; // passed failed error timeout cancelled blocked
         let mut seen = 0u64;
+        // tokens の内訳の和（cache が欠測の試行は件数を別に数える）。
+        let (mut tin, mut tout, mut tcr, mut tcc, mut usage_missing, mut cache_missing) =
+            (0u64, 0u64, 0u64, 0u64, 0u64, 0u64);
+        for r in records.iter().filter(|r| r.config == c && r.ran()) {
+            match r.token_usage {
+                Some(u) => {
+                    tin += u.input;
+                    tout += u.output;
+                    tcr += u.cache_read.unwrap_or(0);
+                    tcc += u.cache_creation.unwrap_or(0);
+                    cache_missing +=
+                        u64::from(u.cache_read.is_none() || u.cache_creation.is_none());
+                }
+                None => usage_missing += 1,
+            }
+        }
         for r in records.iter().filter(|r| r.config == c) {
             seen += 1;
             counts[match r.outcome {
@@ -788,7 +869,9 @@ fn write_summary(
         cells.insert(
             format!("{c:?}"),
             json!({"n": n, "passed": counts[0], "failed": counts[1], "error": counts[2],
-                   "timeout": counts[3], "cancelled": counts[4], "blocked": counts[5], "missing": (n as u64).saturating_sub(seen)}),
+                   "timeout": counts[3], "cancelled": counts[4], "blocked": counts[5], "missing": (n as u64).saturating_sub(seen),
+                   "tokens": {"input": tin, "output": tout, "cache_read": tcr, "cache_creation": tcc,
+                              "usage_missing_trials": usage_missing, "cache_missing_trials": cache_missing}}),
         );
     }
     write_json(
@@ -801,6 +884,10 @@ fn write_summary(
             "records": records.len(),
             "budget_stopped": rep.budget_stopped,
             "budget": {
+                "token_basis": m.budget.token_basis,
+                "max_parallel": m.budget.max_parallel,
+                "parallel_deferred": rep.parallel_deferred,
+                "no_artifact": rep.no_artifact,
                 "per_case": m.budget.per_case,
                 "per_arm": m.budget.per_arm,
                 "case_budget_cancelled": rep.case_budget_cancelled,

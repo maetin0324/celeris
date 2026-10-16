@@ -39,13 +39,20 @@ fn row(m: &CampaignManifest, c: crate::manifest::ConfigId, t: &Totals) -> Value 
         "tokens_status": ts,
         "tokens_sum": if ts == "missing" { Value::Null } else { json!(t.tokens_sum) },
         "tokens_missing_trials": t.tokens_missing_trials,
+        "token_basis": m.budget.token_basis,
+        "input_tokens_sum": t.input_tokens_sum,
+        "output_tokens_sum": t.output_tokens_sum,
+        "cache_read_tokens_sum": t.cache_read_tokens_sum,
+        "cache_creation_tokens_sum": t.cache_creation_tokens_sum,
+        "token_usage_missing_trials": t.token_usage_missing_trials,
+        "cache_missing_trials": t.cache_missing_trials,
         "cost_status": cs,
         "cost_micro_usd_sum": if cs == "missing" { Value::Null } else { json!(t.cost_micro_usd_sum) },
         "cost_missing_trials": t.cost_missing_trials,
     })
 }
 
-const COLUMNS: [&str; 21] = [
+const COLUMNS: [&str; 28] = [
     "config",
     "harness",
     "model",
@@ -65,6 +72,13 @@ const COLUMNS: [&str; 21] = [
     "tokens_status",
     "tokens_sum",
     "tokens_missing_trials",
+    "token_basis",
+    "input_tokens_sum",
+    "output_tokens_sum",
+    "cache_read_tokens_sum",
+    "cache_creation_tokens_sum",
+    "token_usage_missing_trials",
+    "cache_missing_trials",
     "cost_micro_usd_sum",
     "cost_status",
 ];

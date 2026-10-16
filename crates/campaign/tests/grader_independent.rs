@@ -560,11 +560,18 @@ fn bin() -> Command {
 
 #[test]
 fn cli_grade_outputs_json_and_exit_code() {
-    let (fx, case) = fixture(CaseSplit::Dev);
+    let (fx, mut case) = fixture(CaseSplit::Dev);
     let case_path = fx.case_dir.join("case.json");
+    // CLI は評価 command を実際に走らせる（ProcessRunner）。ここでは cargo の代わりに失敗する command。
+    case.implementation.as_mut().unwrap().command = [
+        "sh",
+        "-c",
+        "echo 'test adds_small_numbers ... FAILED'; exit 101",
+    ]
+    .map(String::from)
+    .to_vec();
     fs::write(&case_path, serde_json::to_string(&case).unwrap()).unwrap();
-    // CLI は評価 command を走らせない（実行器未注入）: 実装テストは未実行として fail、
-    // 他の 3 検査は成果物から独立に pass し、最終判定は fail（exit 1）。
+    // 実装テストは exit 101 で fail、他の 3 検査は成果物から独立に pass し、最終判定は fail（exit 1）。
     let out = bin()
         .args(["grade", "--case"])
         .arg(&case_path)
@@ -581,13 +588,40 @@ fn cli_grade_outputs_json_and_exit_code() {
     assert_eq!(v["final_pass"], false);
     assert_eq!(v["checks"]["implementation"]["status"], "fail");
     let reasons = v["checks"]["implementation"]["reasons"].to_string();
-    assert!(
-        reasons.contains("no evaluation runner injected"),
-        "{reasons}"
-    );
+    assert!(reasons.contains("exited with Some(101)"), "{reasons}");
+    assert_eq!(v["checks"]["implementation"]["details"]["ran"], true);
     for k in ["evidence", "recompute", "review"] {
         assert_eq!(v["checks"][k]["status"], "pass", "{k}: {}", v["checks"][k]);
     }
+
+    // 評価 command が作業 dir（pristine を重ねた複製）で実際に走り、必要な試験が ok なら合格（exit 0）。
+    case.implementation.as_mut().unwrap().command = [
+        "sh",
+        "-c",
+        "test -f tests/add.rs && printf 'test adds_small_numbers ... ok\\ntest adds_large_numbers ... ok\\n'",
+    ]
+    .map(String::from)
+    .to_vec();
+    fs::write(&case_path, serde_json::to_string(&case).unwrap()).unwrap();
+    let ok = bin()
+        .args(["grade", "--case"])
+        .arg(&case_path)
+        .arg("--artifact")
+        .arg(&fx.art)
+        .arg("--work")
+        .arg(&fx.work)
+        .output()
+        .unwrap();
+    let so = String::from_utf8_lossy(&ok.stdout);
+    assert_eq!(
+        ok.status.code(),
+        Some(0),
+        "{so} {}",
+        String::from_utf8_lossy(&ok.stderr)
+    );
+    let v: Value = serde_json::from_str(&so).unwrap();
+    assert_eq!(v["final_pass"], true);
+    assert_eq!(v["checks"]["implementation"]["status"], "pass");
 
     // 成功宣言だけの成果物は exit 1、判定 JSON は stderr に出る
     let claim = fx.work.join("claim");

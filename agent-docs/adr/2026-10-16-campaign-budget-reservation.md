@@ -39,3 +39,12 @@
 ## 範囲外
 
 - task への token 上限の送出、継続監視 driver、cluster job の終了確認は別 WU。
+
+## 付記（通し受け入れ試験での実装突き合わせ、監査修正 6b）
+
+- 実 HTTP の通し試験（`crates/celeris/tests/campaign_acceptance_e2e.rs` の budget 停止）で、runner の gate
+  `budget::admit` が `Exhausted`（in-flight 無しで残り < 予約）を `budget_stop` として記録する一方、`checker` の
+  budget-stop 検査は「確定消費 >= max_tokens」を要求していたため、正当な予約停止の記録を
+  「cancelled for budget although budget remained」として export が拒否することが分かった。
+- 修正: `checker::budget_gate_closed`（残り < `per_case`、wall も同様）を閉じた gate の条件にする。残りが 0 になるまで
+  待つ必要は無い。`per_case` は実効上限（`min(per_case, per_arm の残り)`）以上なので、runner が止めた記録を誤って拒否しない。

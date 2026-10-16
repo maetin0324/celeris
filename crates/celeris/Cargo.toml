@@ -38,6 +38,9 @@ serde_json = "1"
 rusqlite = { version = "0.32", features = ["bundled", "hooks"] }
 
 [dev-dependencies]
+celeris-campaign = { path = "../campaign" }
+routing-eval = { path = "../routing-eval" }
+sha2 = "0.10"
 serde_json = "1"
 tempfile = "3"
 tokio = { version = "1", features = ["test-util"] }

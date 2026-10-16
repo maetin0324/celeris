@@ -1,5 +1,6 @@
 ---
-task: 01M530Y2NDFDSJ1PB3N9MHF1K8
+tasks: [01M530Y2NDFDSJ1PB3N9MHF1K8]
+updated: 2026-10-16
 status: done
 completed: 2026-10-16
 title: "[監査修正3] 比較条件の継承と実行構成の照合"

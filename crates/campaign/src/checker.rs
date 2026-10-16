@@ -227,6 +227,13 @@ fn reconcile_observed(
     }
 }
 
+/// 新規投入の gate（`budget::admit`）が閉じる条件: 確定消費の残りが 1 試行の予約（per_case）を下回る。
+/// 残りが 0 になるまで待たない（予約を下回った時点で、in-flight が無ければ打ち切る）。
+fn budget_gate_closed(b: &crate::manifest::Budget, tokens: u64, wall_secs: u64) -> bool {
+    b.max_tokens.saturating_sub(tokens) < b.per_case.max_tokens
+        || b.max_wall_secs.saturating_sub(wall_secs) < b.per_case.max_wall_secs
+}
+
 pub fn check(m: &CampaignManifest, out: &Path) -> CheckReport {
     let mut v: Vec<String> = Vec::new();
     let mut recs: Vec<TrialRecord> = Vec::new();
@@ -487,7 +494,7 @@ pub fn check(m: &CampaignManifest, out: &Path) -> CheckReport {
                         "{tag}: cancelled for arm budget although the arm budget remained"
                     ));
                 }
-            } else if !(cum_tokens >= m.budget.max_tokens || cum_wall >= m.budget.max_wall_secs) {
+            } else if !budget_gate_closed(&m.budget, cum_tokens, cum_wall) {
                 v.push(format!(
                     "{tag}: cancelled for budget although budget remained"
                 ));

@@ -23,6 +23,13 @@ pub fn record_routing_outcomes<S: TaskStore + ?Sized>(
     store: &S,
     task_id: TaskId,
 ) -> Result<usize, OpsError> {
+    // 固定は campaign root から子孫へ継承される。online_update=false なら子でも追記しない。
+    if store
+        .task_routing_override(task_id)?
+        .is_some_and(|o| !o.online_update)
+    {
+        return Ok(0);
+    }
     let events: Vec<Event> = store
         .events_for(task_id)?
         .into_iter()

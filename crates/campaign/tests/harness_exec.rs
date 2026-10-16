@@ -405,3 +405,29 @@ echo '{\"usage\":{\"input_tokens\":5,\"output_tokens\":5}}'
         .sum();
     assert_eq!(started, 3);
 }
+
+/// 実測: 実際に渡した `--model` と実行ファイル名を残す（manifest の宣言名ではない）。
+#[test]
+fn observed_run_comes_from_the_launched_command_not_the_manifest() {
+    struct WithModel(PathBuf);
+    impl CommandBuilder for WithModel {
+        fn build(&self, _req: &TrialRequest) -> HarnessCommand {
+            HarnessCommand {
+                program: self.0.clone(),
+                args: vec!["--model".into(), "actually-run".into()],
+                env: vec![],
+            }
+        }
+    }
+    let t = h("#!/bin/sh
+echo hello
+");
+    let x = HarnessExecutor::new(t.state.clone(), Box::new(WithModel(t.stub.clone())));
+    let r = x.submit(&t.req(600), "campaign-obs").expect("submit");
+    let _ = wait_done(&x, &r);
+    let seen = x.observed(&r).expect("observed");
+    assert_eq!(seen.len(), 1);
+    assert_eq!(seen[0].model.as_deref(), Some("actually-run"));
+    assert_ne!(seen[0].model.as_deref(), Some(t.cfg.model.as_str()));
+    assert_eq!(seen[0].harness.as_deref(), Some("stub.sh"));
+}

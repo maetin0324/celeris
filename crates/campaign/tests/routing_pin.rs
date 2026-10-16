@@ -33,6 +33,8 @@ struct Fake(Arc<Mutex<State>>);
 struct State {
     /// (id, 投入本文)
     posts: Vec<(String, Value)>,
+    /// 実測を宣言から外す（"model" / "harness" / "online_update" / "global"）。
+    deviate: Option<&'static str>,
 }
 
 impl Fake {
@@ -105,10 +107,27 @@ impl Transport for Fake {
                     });
                 };
                 let t = tokens_of(b);
+                // 実測: run の選択と、判断 record の実効 routing（task 欄から解決された値）。
+                let pin = &b["routing_override"];
+                let dv = s.deviate;
+                let global = dv == Some("global");
+                let resolved = json!({
+                    "mode": if global { json!("fixed") } else { pin["mode"].clone() },
+                    "source": if global { "config" } else { "task" },
+                    "lower_policy": pin["lower_policy"],
+                    "evidence_table_id": pin["evidence_table_id"],
+                    "online_update": if dv == Some("online_update") { json!(true) } else { pin["online_update"].clone() },
+                });
+                let selection = json!({"status": "selected",
+                    "harness_id": if dv == Some("harness") { "codex" } else { "claude-code" },
+                    "source_id": "src", "account_id": "acc",
+                    "model_id": if dv == Some("model") { "m-other" } else { "m-x" },
+                    "basis": {"route_decision": {"routing_resolved": resolved}}});
                 ok(
                     json!({"task": {"id": id, "status": "done", "created_at": "2026-10-16T00:00:00Z"},
                     "children": [],
-                    "runs": [{"run_id": format!("run-{id}"), "finished_at": "2026-10-16T00:01:00Z",
+                    "runs": [{"run_id": format!("run-{id}"), "role": "worker", "selection": selection,
+                        "finished_at": "2026-10-16T00:01:00Z",
                         "usage": {"input_tokens": t, "output_tokens": 0, "cost_usd": 0.1}}],
                     "timers": {"now": "2026-10-16T00:02:00Z"}, "cluster_job_wait": null}),
                 )
@@ -159,6 +178,9 @@ fn b_routing() -> ArmRouting {
         lower_policy: Some("lp-b-7".into()),
         evidence_table_id: None,
         online_update: Some(false),
+        models: Some(vec!["m-x".into()]),
+        run_harnesses: Some(vec!["claude-code".into()]),
+        ..Default::default()
     }
 }
 
@@ -167,6 +189,9 @@ fn c_routing() -> ArmRouting {
         lower_policy: Some("lp-c-9".into()),
         evidence_table_id: Some("ev-2026-10-15".into()),
         online_update: Some(true),
+        models: Some(vec!["m-x".into()]),
+        run_harnesses: Some(vec!["claude-code".into()]),
+        ..Default::default()
     }
 }
 
@@ -484,4 +509,114 @@ fn e2e_budget_isolation_order_repeats_and_routing_hold_together() {
     assert_eq!(totals[&ConfigId::B].n, 6);
     assert_eq!(totals[&ConfigId::B].cancelled, 2);
     assert_eq!(totals[&ConfigId::C].n, 4);
+}
+
+fn run_with(
+    deviate: Option<&'static str>,
+) -> (CampaignManifest, std::path::PathBuf, tempfile::TempDir) {
+    let d = tempfile::tempdir().expect("dir");
+    let (i, f) = (input(2), Fake::default());
+    f.st().deviate = deviate;
+    let mut b = b_routing();
+    let mut c = c_routing();
+    // online_update は arm の宣言どおりに走らせる試験。B・C とも false を宣言する。
+    b.online_update = Some(false);
+    c.online_update = Some(false);
+    let m = campaign(&i, 2, Some(b), Some(c));
+    let opts = RunOptions {
+        out: d.path().join("out"),
+        ..RunOptions::default()
+    };
+    run(&m, &i, &dispatch(&f, d.path()), &opts).expect("run");
+    let out = opts.out;
+    (m, out, d)
+}
+
+/// 実測を記録し、照合が通り、export の表は宣言名でなく実測の model/harness/routing を出す。
+#[test]
+fn export_shows_observed_model_harness_and_routing_not_declared_names() {
+    let (m, out, d) = run_with(None);
+    let recs = records(&out);
+    for r in recs.iter().filter(|r| r.config != ConfigId::A) {
+        assert_eq!(r.observed.len(), 1, "{:?}", r.config);
+        assert_eq!(r.observed[0].model.as_deref(), Some("m-x"));
+        assert_eq!(r.observed[0].routing_source.as_deref(), Some("task"));
+    }
+    let rep = check(&m, &out);
+    assert!(rep.ok, "{:?}", rep.violations);
+    let table = celeris_campaign::export::export(&m, &out, &d.path().join("exp")).expect("export");
+    let rows = table["configs"].as_array().expect("rows");
+    let row = |c: &str| rows.iter().find(|r| r["config"] == c).expect("row").clone();
+    for (c, mode) in [("B", "fixed"), ("C", "decision_assisted")] {
+        let r = row(c);
+        assert_eq!(r["model"], "m-x", "実測の model（宣言の \"m\" ではない）");
+        assert_eq!(r["harness"], "claude-code");
+        assert_eq!(r["declared_model"], "m");
+        assert_eq!(r["declared_harness"], "celeris");
+        assert_eq!(r["routing"], format!("{mode}/task/online_update=false"));
+    }
+    // A は観測されていない（A の executor がこの試験では動かない）: 宣言名を実測として出さず欠測。
+    assert_eq!(row("A")["model"], Value::Null);
+}
+
+/// 禁止された構成（別 model・別 harness・online_update=true・全体 config への fallback）は照合で検出する。
+#[test]
+fn reconciliation_flags_forbidden_deviations_and_export_refuses() {
+    for (dev, needle) in [
+        ("model", "outside the arm's models set"),
+        ("harness", "outside the arm's run_harnesses set"),
+        ("online_update", "online_update true differs"),
+        ("global", "not the pinned task field"),
+    ] {
+        let (m, out, d) = run_with(Some(dev));
+        let rep = check(&m, &out);
+        assert!(!rep.ok, "{dev}");
+        assert!(
+            rep.violations.iter().any(|v| v.contains(needle)),
+            "{dev}: {:?}",
+            rep.violations
+        );
+        assert!(
+            celeris_campaign::export::export(&m, &out, &d.path().join("exp")).is_err(),
+            "{dev}"
+        );
+    }
+}
+
+/// B/C は同じ利用可能モデル集合・下段で比べる。C の根拠表は明示すれば要らない。
+#[test]
+fn b_and_c_must_share_models_and_c_may_declare_no_evidence_table() {
+    let i = input(2);
+    let mut m = campaign(&i, 2, Some(b_routing()), Some(c_routing()));
+    m.split = Split::Final;
+    for c in &mut m.configs {
+        c.harness_version = if c.harness == "celeris" {
+            "0123456789ab"
+        } else {
+            "1"
+        }
+        .into();
+        if let Some(r) = &mut c.routing {
+            r.online_update = Some(false);
+            r.lower_policy = Some("lp".into());
+        }
+    }
+    m.configs[0].model = "m-x".into();
+    // C は根拠表を使わないと明示（根拠表 id 無しで通る）。
+    if let Some(r) = &mut m.configs[2].routing {
+        r.evidence_table_id = None;
+        r.no_evidence_table = Some(true);
+    }
+    m.check_resolved().expect("no-evidence C is valid");
+    assert!(
+        routing_override(&m.configs[2])
+            .expect("override")
+            .get("evidence_table_id")
+            .is_none()
+    );
+    // C だけ別のモデル集合へ逸れる構成は起動前に拒否する。
+    if let Some(r) = &mut m.configs[2].routing {
+        r.models = Some(vec!["m-y".into()]);
+    }
+    assert!(m.check_resolved().unwrap_err().contains("same models set"));
 }

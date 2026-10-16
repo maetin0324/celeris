@@ -25,10 +25,24 @@ fn row(m: &CampaignManifest, c: crate::manifest::ConfigId, t: &Totals) -> Value 
     let cfg = m.configs.iter().find(|x| x.id == c);
     let ts = status(t.tokens_missing_trials, t.ran_trials);
     let cs = status(t.cost_missing_trials, t.ran_trials);
+    // 表の harness / model は実測（全 run の記録）。宣言名は declared_* に分けて残し、実測の代わりに使わない。
+    let seen = |s: &std::collections::BTreeSet<String>| {
+        if s.is_empty() {
+            Value::Null
+        } else {
+            json!(s.iter().cloned().collect::<Vec<_>>().join("|"))
+        }
+    };
     json!({
         "config": format!("{c:?}"),
-        "harness": cfg.map(|x| x.harness.as_str()),
-        "model": cfg.map(|x| x.model.as_str()),
+        "harness": seen(&t.observed_harnesses),
+        "model": seen(&t.observed_models),
+        "source": seen(&t.observed_sources),
+        "routing": seen(&t.observed_routing),
+        "observed_runs": t.observed_runs,
+        "unobserved_trials": t.unobserved_trials,
+        "declared_harness": cfg.map(|x| x.harness.as_str()),
+        "declared_model": cfg.map(|x| x.model.as_str()),
         "model_version": cfg.map(|x| x.model_version.as_str()),
         "policy_version": cfg.map(|x| x.policy_version.as_str()),
         "n": t.n, "passed": t.passed, "final_passed": t.final_passed,
@@ -53,10 +67,16 @@ fn row(m: &CampaignManifest, c: crate::manifest::ConfigId, t: &Totals) -> Value 
     })
 }
 
-const COLUMNS: [&str; 31] = [
+const COLUMNS: [&str; 37] = [
     "config",
     "harness",
     "model",
+    "source",
+    "routing",
+    "observed_runs",
+    "unobserved_trials",
+    "declared_harness",
+    "declared_model",
     "model_version",
     "policy_version",
     "n",

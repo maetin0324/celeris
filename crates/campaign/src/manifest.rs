@@ -65,6 +65,17 @@ pub struct ArmRouting {
     /// run の結果をオンライン更新の根拠へ追記するか。省略時は false（試行が根拠表を動かさない）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub online_update: Option<bool>,
+    /// この arm で使ってよい実行モデル（`model_id`）の集合。宣言すると全 run の実測がこの内側かを照合する。
+    /// B と C は同じ集合・同じ tier 対応表（`lower_policy`）で方策だけを変える（両方が宣言したら一致が必要）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub models: Option<Vec<String>>,
+    /// この arm の run が使ってよい harness（`harness_id`）の集合。`models` と同じく実測と照合する。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_harnesses: Option<Vec<String>>,
+    /// C が実測の根拠表を使わないことの明示。true のとき `evidence_table_id` は要らず（書いてもいけない）、
+    /// decision_assisted のためだけに根拠表作成や全モデル能力評価を要求しない。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub no_evidence_table: Option<bool>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -510,7 +521,13 @@ impl CampaignManifest {
                 ));
             }
             let ev = r.evidence_table_id.as_deref().unwrap_or("").trim();
-            if c.id == ConfigId::C {
+            if r.no_evidence_table == Some(true) && (c.id != ConfigId::C || !ev.is_empty()) {
+                return Err(format!(
+                    "config {:?}: routing.no_evidence_table is for C only and excludes evidence_table_id",
+                    c.id
+                ));
+            }
+            if c.id == ConfigId::C && r.no_evidence_table != Some(true) {
                 if ev.is_empty() {
                     return Err("config C: routing.evidence_table_id must be pinned".into());
                 }
@@ -519,6 +536,52 @@ impl CampaignManifest {
                         "config C: evidence_table_id is an unresolved placeholder: {ev}"
                     ));
                 }
+            }
+        }
+        self.check_comparison_conditions()
+    }
+
+    /// 比較条件の整合: B/C は同じ利用可能モデル集合・harness 集合・tier 対応表で方策だけを変える。
+    /// A は B と同じ実行モデル/ハーネス構成の内側にいる（宣言があるとき）。
+    fn check_comparison_conditions(&self) -> Result<(), String> {
+        let routing = |id: ConfigId| {
+            self.configs
+                .iter()
+                .find(|c| c.id == id)
+                .and_then(|c| c.routing.as_ref())
+        };
+        let set = |v: &Option<Vec<String>>| {
+            v.as_ref()
+                .map(|v| v.iter().cloned().collect::<BTreeSet<String>>())
+        };
+        let (Some(b), Some(c)) = (routing(ConfigId::B), routing(ConfigId::C)) else {
+            return Ok(());
+        };
+        if b.lower_policy != c.lower_policy {
+            return Err("B and C must share the same lower_policy (tier mapping)".into());
+        }
+        if set(&b.models) != set(&c.models) {
+            return Err("B and C must share the same models set".into());
+        }
+        if set(&b.run_harnesses) != set(&c.run_harnesses) {
+            return Err("B and C must share the same run_harnesses set".into());
+        }
+        if let Some(a) = self.configs.iter().find(|c| c.id == ConfigId::A) {
+            if let Some(ms) = set(&b.models)
+                && !ms.contains(&a.model)
+            {
+                return Err(format!(
+                    "A model {:?} is outside the B/C models set (A/B must share the execution model)",
+                    a.model
+                ));
+            }
+            if let Some(hs) = set(&b.run_harnesses)
+                && !hs.contains(&a.harness)
+            {
+                return Err(format!(
+                    "A harness {:?} is outside the B/C run_harnesses set",
+                    a.harness
+                ));
             }
         }
         Ok(())
@@ -786,6 +849,7 @@ mod tests {
                     lower_policy: Some("p".into()),
                     evidence_table_id: Some("e".into()),
                     online_update: Some(false),
+                    ..Default::default()
                 });
             }
         }

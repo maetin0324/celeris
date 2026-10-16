@@ -24,7 +24,7 @@ use serde_json::Value;
 
 use crate::{
     aggregate::Outcome,
-    executor::{ExecResult, ExecStatus, Executor, TaskRef, TokenUsage, TrialRequest},
+    executor::{ExecResult, ExecStatus, Executor, ObservedRun, TaskRef, TokenUsage, TrialRequest},
 };
 
 /// 起動する command（注入点）。
@@ -280,6 +280,25 @@ impl Executor for HarnessExecutor {
             .map_err(|e| e.to_string())?;
 
         let c = self.builder.build(req);
+        // 実際に渡す引数から実測を残す（manifest の宣言名は使わない）。
+        let model = c
+            .args
+            .iter()
+            .position(|a| a == "--model")
+            .and_then(|i| c.args.get(i + 1))
+            .cloned();
+        let seen = ObservedRun {
+            run_id: key.to_string(),
+            role: "worker".into(),
+            harness: c
+                .program
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned()),
+            model,
+            ..ObservedRun::default()
+        };
+        let b = serde_json::to_vec(&seen).map_err(|e| e.to_string())?;
+        write_synced(&dir.join("observed.json"), &b)?;
         let open = |n: &str| File::create(dir.join(n)).map_err(|e| e.to_string());
         // wrapper: command の終了コードを exit.code に原子的に書く（親 process が死んでも残る）。
         let mut cmd = Command::new("sh");
@@ -356,6 +375,17 @@ impl Executor for HarnessExecutor {
             return done(Outcome::Timeout, m.timeout_secs);
         }
         Ok(ExecStatus::Wait)
+    }
+
+    fn observed(&self, t: &TaskRef) -> Result<Vec<ObservedRun>, String> {
+        let p = self.dir(&t.task_id)?.join("observed.json");
+        match fs::read(&p) {
+            Ok(b) => serde_json::from_slice(&b)
+                .map(|o| vec![o])
+                .map_err(|e| format!("{}: {e}", p.display())),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+            Err(e) => Err(format!("{}: {e}", p.display())),
+        }
     }
 
     fn cancel(&self, t: &TaskRef, reason: &str) -> Result<(), String> {

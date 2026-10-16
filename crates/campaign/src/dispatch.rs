@@ -64,6 +64,9 @@ impl<A: Executor, BC: Executor> Executor for ArmDispatch<A, BC> {
     fn track(&self, t: &TaskRef) -> Result<TaskRef, String> {
         self.by_task(t).track(t)
     }
+    fn observed(&self, t: &TaskRef) -> Result<Vec<crate::record::ObservedRun>, String> {
+        self.by_task(t).observed(t)
+    }
     fn poll(&self, t: &TaskRef) -> Result<ExecStatus, String> {
         self.by_task(t).poll(t)
     }

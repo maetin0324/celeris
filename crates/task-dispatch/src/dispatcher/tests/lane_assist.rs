@@ -470,3 +470,52 @@ async fn jev_calls_are_kept_per_call_and_missing_cost_stays_null() {
             .is_some_and(|d| d.contains(":fallback:timeout:"))
     }));
 }
+
+/// 修正 3: campaign root の routing 固定は子・孫・再試行（root の別の子）へ継承され、
+/// 全体 config を逆の mode にしても各 arm の routing（mode・online_update・根拠表）が保たれる。
+#[tokio::test]
+async fn root_routing_pin_is_inherited_by_child_grandchild_and_retry_whatever_the_config() {
+    for (config, pinned) in [
+        (RoutingMode::DecisionAssisted, RoutingMode::Fixed),
+        (RoutingMode::Fixed, RoutingMode::DecisionAssisted),
+    ] {
+        let ws = tempfile::tempdir().unwrap();
+        let sqlite = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let store: Arc<dyn TaskStore> = sqlite.clone();
+        let root = hinted_task(ws.path(), task_core::TierSource::Hint);
+        store.insert(&root).unwrap();
+        let mut child = hinted_task(ws.path(), task_core::TierSource::Hint);
+        child.parent_id = Some(root.id);
+        store.insert(&child).unwrap();
+        let mut grand = hinted_task(ws.path(), task_core::TierSource::Hint);
+        grand.parent_id = Some(child.id);
+        store.insert(&grand).unwrap();
+        let mut retry = hinted_task(ws.path(), task_core::TierSource::Hint);
+        retry.parent_id = Some(root.id);
+        store.insert(&retry).unwrap();
+        let outsider = hinted_task(ws.path(), task_core::TierSource::Hint);
+        store.insert(&outsider).unwrap();
+        let o = task_core::route_select::RoutingOverride {
+            mode: pinned,
+            lower_policy: None,
+            evidence_table_id: Some("ev-arm".into()),
+            online_update: false,
+        };
+        sqlite
+            .set_task_routing_override(root.id, &o, "2026-10-16")
+            .unwrap();
+        let mut d = dispatcher(store.clone(), question_adapter(), 1);
+        d.set_routing_mode(config);
+        for t in [&root, &child, &grand, &retry] {
+            let r = d.routing_for(t);
+            assert_eq!(r.mode, pinned, "{config:?} config must not leak");
+            assert_eq!(r.source, task_core::route_select::ModeSource::Task);
+            assert_eq!(r.evidence_table_id.as_deref(), Some("ev-arm"));
+            assert!(!r.online_update);
+        }
+        // campaign に属さない task は従来どおり config に従う。
+        let r = d.routing_for(&outsider);
+        assert_eq!(r.mode, config);
+        assert_eq!(r.source, task_core::route_select::ModeSource::Config);
+    }
+}

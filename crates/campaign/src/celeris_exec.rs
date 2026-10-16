@@ -19,7 +19,9 @@ use serde_json::{Map, Value, json};
 
 use crate::{
     aggregate::Outcome,
-    executor::{ExecResult, ExecStatus, Executor, TaskRef, TokenUsage, TrialRequest, Usage},
+    executor::{
+        ExecResult, ExecStatus, Executor, ObservedRun, TaskRef, TokenUsage, TrialRequest, Usage,
+    },
     manifest::{Config, ConfigId},
 };
 
@@ -70,7 +72,7 @@ pub fn routing_override(cfg: &Config) -> Result<Value, String> {
             cfg.id
         )
     })?;
-    if cfg.id == ConfigId::C && r.evidence_table_id.is_none() {
+    if cfg.id == ConfigId::C && r.evidence_table_id.is_none() && r.no_evidence_table != Some(true) {
         return Err("config C: routing.evidence_table_id must be pinned".into());
     }
     let mut o = json!({
@@ -419,6 +421,34 @@ impl<T: Transport> CelerisExecutor<T> {
         f.sync_all().map_err(|e| e.to_string())
     }
 
+    /// 木の全 run（根・子・孫・再試行）の実測。選択済み（`selection.status = selected`）の run だけが
+    /// harness/source/model を持つ。選択前の run は欠測のまま（宣言で埋めない）。
+    fn observed_runs(tree: &[TreeNode]) -> Vec<ObservedRun> {
+        let text = |v: &Value| v.as_str().map(String::from);
+        let mut out = Vec::new();
+        for r in tree
+            .iter()
+            .flat_map(|n| n.detail["runs"].as_array().into_iter().flatten())
+        {
+            let sel = &r["selection"];
+            let chosen = sel["status"] == "selected";
+            let rr = &sel["basis"]["route_decision"]["routing_resolved"];
+            out.push(ObservedRun {
+                run_id: text(&r["run_id"]).unwrap_or_default(),
+                role: text(&r["role"]).unwrap_or_else(|| "worker".into()),
+                harness: chosen.then(|| text(&sel["harness_id"])).flatten(),
+                source: chosen.then(|| text(&sel["source_id"])).flatten(),
+                model: chosen.then(|| text(&sel["model_id"])).flatten(),
+                routing_mode: text(&rr["mode"]),
+                routing_source: text(&rr["source"]),
+                lower_policy: text(&rr["lower_policy"]),
+                evidence_table_id: text(&rr["evidence_table_id"]),
+                online_update: rr["online_update"].as_bool(),
+            });
+        }
+        out
+    }
+
     fn cancel_task(&self, id: &str) -> Result<(), String> {
         let path = format!("/api/v1/tasks/{id}/cancel");
         let r = self.transport.request("POST", &path, Some(&json!({})))?;
@@ -503,6 +533,10 @@ impl<T: Transport> Executor for CelerisExecutor<T> {
             tokens: Self::usage(&tree).0,
             wall_secs: elapsed.unwrap_or(0),
         }))
+    }
+
+    fn observed(&self, t: &TaskRef) -> Result<Vec<ObservedRun>, String> {
+        Ok(Self::observed_runs(&self.walk(&t.task_id)?))
     }
 
     fn poll(&self, t: &TaskRef) -> Result<ExecStatus, String> {

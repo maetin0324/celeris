@@ -5,6 +5,7 @@ use std::{collections::BTreeMap, fs, path::Path};
 use sha2::{Digest, Sha256};
 
 pub use crate::ledger::TaskRef;
+pub use crate::record::ObservedRun;
 use crate::{
     aggregate::Outcome,
     manifest::{Cap, Config, ConfigId},
@@ -106,6 +107,12 @@ pub trait Executor {
 
     fn poll(&self, _t: &TaskRef) -> Result<ExecStatus, String> {
         Err(format!("executor {} does not support poll", self.name()))
+    }
+
+    /// 試行で実際に走った全 run（子・孫・再試行を含む）の実測。観測できない executor は空。
+    /// 宣言（manifest）の名前を返してはならない。
+    fn observed(&self, _t: &TaskRef) -> Result<Vec<ObservedRun>, String> {
+        Ok(Vec::new())
     }
 
     /// 打ち切り時のキャンセル。task 本体・子 task・クラスタ job のすべてを対象にする。

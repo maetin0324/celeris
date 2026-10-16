@@ -101,9 +101,9 @@ fn arm_exhausted(b: &Budget, arm: (u64, u64)) -> bool {
 
 /// drive_async の結果。
 enum Driven {
-    Done(ExecResult),
+    Done(ExecResult, Vec<ObservedRun>),
     /// 実行中に上限を超えたので cancel した（観測した使用量と reason）。
-    Cancelled(ExecResult, &'static str),
+    Cancelled(ExecResult, &'static str, Vec<ObservedRun>),
 }
 
 fn write_json(path: &Path, v: &Value) -> Result<(), String> {
@@ -319,6 +319,7 @@ fn new_record(
         reason: None,
         error: None,
         routing: None,
+        observed: Vec::new(),
         harness: cfg.harness.clone(),
         harness_version: cfg.harness_version.clone(),
         model: cfg.model.clone(),
@@ -421,7 +422,10 @@ fn drive_async(
         ledger.mark_waiting(key, &fresh)?;
     }
     match exec.poll(&fresh).map_err(DriveErr::Exec)? {
-        ExecStatus::Done(r) => Ok(Some(Driven::Done(r))),
+        ExecStatus::Done(r) => {
+            let seen = exec.observed(&fresh).map_err(DriveErr::Exec)?;
+            Ok(Some(Driven::Done(r, seen)))
+        }
         ExecStatus::Wait => {
             // poll ごとに子 task・job を含む累積使用量を見て、上限超過なら cancel する。
             if let Some(Usage { tokens, wall_secs }) = exec.usage(&fresh).map_err(DriveErr::Exec)?
@@ -435,6 +439,7 @@ fn drive_async(
                 if let Some(row) = ledger.get(key).cloned() {
                     cancel_row(exec, ledger, &row, reason)?;
                 }
+                let seen = exec.observed(&fresh).unwrap_or_default();
                 return Ok(Some(Driven::Cancelled(
                     ExecResult {
                         outcome: Outcome::Cancelled,
@@ -443,6 +448,7 @@ fn drive_async(
                         wall_secs,
                     },
                     reason,
+                    seen,
                 )));
             }
             if ledger.get(key).map(|r| r.state) != Some(LedgerState::Waiting) {
@@ -692,9 +698,13 @@ pub fn run(
                         errored = Some(e);
                         failed_result()
                     }
-                    Ok(Some(Driven::Done(r))) => r,
-                    Ok(Some(Driven::Cancelled(r, why))) => {
+                    Ok(Some(Driven::Done(r, seen))) => {
+                        rec.observed = seen;
+                        r
+                    }
+                    Ok(Some(Driven::Cancelled(r, why, seen))) => {
                         cancelled_by = Some(why);
+                        rec.observed = seen;
                         r
                     }
                     Ok(None) => {

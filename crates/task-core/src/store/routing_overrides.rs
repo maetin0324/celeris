@@ -42,19 +42,40 @@ impl SqliteStore {
         &self,
         task_id: TaskId,
     ) -> Result<Option<RoutingOverride>, StoreError> {
+        // 自身の行が無ければ `parent_id` の鎖を辿り、最も近い祖先の固定を継承する
+        // （campaign root の B/C 固定が子・孫・再試行でも保たれる。全体 config へは落ちない）。
         self.with_read_conn(|conn| {
-            let json: Option<String> = conn
-                .query_row(
-                    "SELECT override_json FROM task_routing_overrides WHERE task_id = ?1",
-                    params![task_id.to_string()],
-                    |r| r.get(0),
-                )
-                .optional()?;
-            json.map(|j| serde_json::from_str(&j).map_err(StoreError::from))
-                .transpose()
+            let mut current = task_id.to_string();
+            for _ in 0..ROUTING_ANCESTOR_LIMIT {
+                let json: Option<String> = conn
+                    .query_row(
+                        "SELECT override_json FROM task_routing_overrides WHERE task_id = ?1",
+                        params![current],
+                        |r| r.get(0),
+                    )
+                    .optional()?;
+                if let Some(j) = json {
+                    return Ok(Some(serde_json::from_str(&j)?));
+                }
+                let parent: Option<String> = conn
+                    .query_row(
+                        "SELECT parent_id FROM tasks WHERE id = ?1",
+                        params![current],
+                        |r| r.get(0),
+                    )
+                    .optional()?
+                    .flatten();
+                match parent {
+                    Some(p) => current = p,
+                    None => return Ok(None),
+                }
+            }
+            Ok(None)
         })
     }
 }
+
+const ROUTING_ANCESTOR_LIMIT: usize = 32;
 
 #[cfg(test)]
 mod tests {
@@ -84,5 +105,40 @@ mod tests {
             );
         }
         assert_eq!(store.task_routing_override(task.id).unwrap(), Some(o));
+    }
+
+    #[test]
+    fn routing_override_is_inherited_by_descendants_and_nearest_wins() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        let root = crate::store::tests::sample_task(crate::model::Status::Ready);
+        store.insert(&root).unwrap();
+        let mut child = crate::store::tests::sample_task(crate::model::Status::Ready);
+        child.parent_id = Some(root.id);
+        store.insert(&child).unwrap();
+        let mut grand = crate::store::tests::sample_task(crate::model::Status::Ready);
+        grand.parent_id = Some(child.id);
+        store.insert(&grand).unwrap();
+        let o = RoutingOverride {
+            mode: RoutingMode::Fixed,
+            lower_policy: None,
+            evidence_table_id: None,
+            online_update: false,
+        };
+        store
+            .set_task_routing_override(root.id, &o, "2026-10-16")
+            .unwrap();
+        assert_eq!(
+            store.task_routing_override(grand.id).unwrap(),
+            Some(o.clone())
+        );
+        let nearer = RoutingOverride {
+            mode: RoutingMode::DecisionAssisted,
+            ..o.clone()
+        };
+        store
+            .set_task_routing_override(child.id, &nearer, "2026-10-16")
+            .unwrap();
+        assert_eq!(store.task_routing_override(grand.id).unwrap(), Some(nearer));
+        assert_eq!(store.task_routing_override(root.id).unwrap(), Some(o));
     }
 }

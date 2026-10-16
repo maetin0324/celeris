@@ -28,6 +28,24 @@ pub const ERROR_MAX_BYTES: usize = 2048;
 /// 前提 problem が passed にならなかったため実行しなかった試行の reason。分母には残す（outcome = blocked）。
 pub const REASON_BLOCKED: &str = "dependency_blocked";
 
+/// 実際に走った run 1 件の実測（宣言ではなく Celeris の run 記録・harness の起動引数から読んだ値）。
+/// 欠測の欄は `None`（宣言名で埋めない）。
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct ObservedRun {
+    pub run_id: String,
+    /// `worker` / `reviewer`（A は常に `worker`）。
+    pub role: String,
+    pub harness: Option<String>,
+    pub source: Option<String>,
+    pub model: Option<String>,
+    /// run の判断 record にあった実効 routing（mode・出自・下段・根拠表・online 更新）。A・固定の無い run は None。
+    pub routing_mode: Option<String>,
+    pub routing_source: Option<String>,
+    pub lower_policy: Option<String>,
+    pub evidence_table_id: Option<String>,
+    pub online_update: Option<bool>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct TrialRecord {
     pub schema: String,
@@ -59,6 +77,9 @@ pub struct TrialRecord {
     /// Celeris 経路（B/C）の試行だけが持つ。A・投入前に拒否された試行は無い。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub routing: Option<serde_json::Value>,
+    /// 試行で実際に走った全 run の実測（子・孫・再試行を含む）。executor が観測できた分だけ。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub observed: Vec<ObservedRun>,
     pub harness: String,
     pub harness_version: String,
     pub model: String,

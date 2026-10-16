@@ -166,6 +166,8 @@ impl RouteTrace {
                 "features_hash": d.features_hash,
                 "features_schema": d.features_schema,
                 "equivalent": d.equivalent,
+                // task 欄で固定した routing の解決結果（無ければ null）。campaign の照合が読む。
+                "routing_resolved": d.routing_resolved,
             })),
             "candidates": self.candidates,
             "rejections": self.rejections.iter().map(|r| serde_json::json!({

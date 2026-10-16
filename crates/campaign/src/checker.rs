@@ -47,6 +47,15 @@ pub struct Totals {
     pub cost_missing_trials: u64,
     pub ran_trials: u64,
     pub wall_secs_sum: u64,
+    /// 実測（全 run の記録）から集めた値。宣言ではない。executor が観測できなかった試行は
+    /// `unobserved_trials` に数え、集合には入れない。
+    pub observed_runs: u64,
+    pub unobserved_trials: u64,
+    pub observed_harnesses: BTreeSet<String>,
+    pub observed_sources: BTreeSet<String>,
+    pub observed_models: BTreeSet<String>,
+    /// `mode/source/online_update=…`（run の判断 record に残った実効 routing）。
+    pub observed_routing: BTreeSet<String>,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
@@ -122,6 +131,100 @@ fn dep_state(m: &CampaignManifest, recs: &[TrialRecord], problem: &str, rep: u32
         }
     }
     if waiting { Dep::Waiting } else { Dep::Met }
+}
+
+/// 宣言した構成（manifest）と、実際に走った全 run の実測（`TrialRecord.observed`）の照合。
+/// 宣言から導いた値は実測として扱わない。違反は文言に理由を残す。
+/// - A: 実際に渡した `--model` は宣言した model と一致する（harness の実行ファイル名は表示するだけ）。
+/// - B/C: worker run の model/harness は arm の `models` / `run_harnesses` の内側、判断 record の routing は
+///   arm の mode・出自 task・online_update・下段・根拠表と一致する（全体 config へ落ちた run を検出する）。
+fn reconcile_observed(
+    m: &CampaignManifest,
+    r: &TrialRecord,
+    tag: &str,
+    celeris_run: bool,
+    v: &mut Vec<String>,
+) {
+    let Some(cfg) = m.configs.iter().find(|c| c.id == r.config) else {
+        return;
+    };
+    for o in &r.observed {
+        let who = format!("{tag}: run {} ({})", o.run_id, o.role);
+        if r.config == ConfigId::A {
+            if let Some(model) = &o.model
+                && *model != cfg.model
+            {
+                v.push(format!(
+                    "{who}: ran model {model:?} but the manifest declares {:?}",
+                    cfg.model
+                ));
+            }
+            continue;
+        }
+        let Some(rt) = &cfg.routing else { continue };
+        let mode = if r.config == ConfigId::B {
+            "fixed"
+        } else {
+            "decision_assisted"
+        };
+        // routing は reviewer run を含む全 run が、task 欄の固定から解決されていなければならない。
+        if celeris_run && o.harness.is_some() {
+            match (&o.routing_mode, &o.routing_source) {
+                (Some(got), Some(src)) => {
+                    if got != mode {
+                        v.push(format!(
+                            "{who}: routing mode {got} but arm {:?} requires {mode}",
+                            r.config
+                        ));
+                    }
+                    if src != "task" {
+                        v.push(format!(
+                            "{who}: routing resolved from {src}, not the pinned task field"
+                        ));
+                    }
+                }
+                _ => v.push(format!(
+                    "{who}: no resolved routing recorded (fell back to the global config?)"
+                )),
+            }
+        }
+        if let Some(got) = o.online_update
+            && got != rt.online_update.unwrap_or(false)
+        {
+            v.push(format!(
+                "{who}: online_update {got} differs from the manifest"
+            ));
+        }
+        if let (Some(got), Some(want)) = (&o.lower_policy, &rt.lower_policy)
+            && got != want
+        {
+            v.push(format!(
+                "{who}: lower_policy {got} differs from the manifest {want}"
+            ));
+        }
+        if o.routing_mode.is_some() && o.evidence_table_id != rt.evidence_table_id {
+            v.push(format!(
+                "{who}: evidence_table_id {:?} differs from the manifest {:?}",
+                o.evidence_table_id, rt.evidence_table_id
+            ));
+        }
+        if o.role == "worker" {
+            if let (Some(model), Some(allowed)) = (&o.model, &rt.models)
+                && !allowed.contains(model)
+            {
+                v.push(format!(
+                    "{who}: model {model:?} is outside the arm's models set"
+                ));
+            }
+            if let (Some(h), Some(allowed)) = (&o.harness, &rt.run_harnesses)
+                && !allowed.contains(h)
+            {
+                v.push(format!(
+                    "{who}: harness {h:?} is outside the arm's run_harnesses set"
+                ));
+            }
+        }
+    }
 }
 
 pub fn check(m: &CampaignManifest, out: &Path) -> CheckReport {
@@ -244,6 +347,7 @@ pub fn check(m: &CampaignManifest, out: &Path) -> CheckReport {
                     _ => {}
                 }
             }
+            reconcile_observed(m, r, &tag, celeris_run, &mut v);
             // 予算に数えた tokens は内訳を manifest の基準で数えた値と一致する。
             if let Some(u) = &r.token_usage
                 && r.tokens != u.count(m.budget.token_basis)
@@ -527,6 +631,21 @@ pub fn recompute_graded(
         if let Some(t) = totals.get_mut(&r.config) {
             t.ran_trials += 1;
             t.wall_secs_sum += r.wall_secs;
+            if r.observed.is_empty() {
+                t.unobserved_trials += 1;
+            }
+            for o in &r.observed {
+                t.observed_runs += 1;
+                t.observed_harnesses.extend(o.harness.clone());
+                t.observed_sources.extend(o.source.clone());
+                t.observed_models.extend(o.model.clone());
+                if let (Some(mode), Some(src)) = (&o.routing_mode, &o.routing_source) {
+                    t.observed_routing.insert(format!(
+                        "{mode}/{src}/online_update={}",
+                        o.online_update.map_or("欠測".into(), |b| b.to_string())
+                    ));
+                }
+            }
             match r.tokens {
                 Some(x) => t.tokens_sum += x,
                 None => t.tokens_missing_trials += 1,

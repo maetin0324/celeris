@@ -42,6 +42,7 @@ fn campaign(i: &Input, split: Split, n: usize, max_tokens: u64, repeats: u32) ->
             lower_policy: Some("lp".into()),
             evidence_table_id: Some("ev".into()),
             online_update: Some(false),
+            ..Default::default()
         }),
     };
     CampaignManifest {

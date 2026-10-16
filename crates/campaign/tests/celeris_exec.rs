@@ -227,6 +227,7 @@ fn c_routing() -> ArmRouting {
         lower_policy: Some("mlsys-min-1".into()),
         evidence_table_id: Some("ev-2026-10-15".into()),
         online_update: Some(true),
+        ..Default::default()
     }
 }
 

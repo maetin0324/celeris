@@ -241,6 +241,46 @@ fn finished(run_id: &str, outcome: &str) -> Event {
 
 // ---- runs ----
 
+/// 同じ run の複数の `WorkerFinished`（待機からの再開）は置換でなく合算する。決定ログの消費行と同じ規則で、
+/// 片方が欠測ならもう片方を採る（0 にしない）。
+#[test]
+fn runs_usage_accumulates_repeated_worker_finished() {
+    let task_id = TaskId::new();
+    let u = |i: Option<u64>, c: Option<f64>| Usage {
+        input_tokens: i,
+        output_tokens: None,
+        cache_read_tokens: None,
+        cache_creation_tokens: None,
+        cost_usd: c,
+        duplicate_reads: None,
+        session_resumed: None,
+        context_tokens: None,
+    };
+    let fin = |usage| Event::WorkerFinished {
+        run_id: "run-1".into(),
+        outcome: "done: x".into(),
+        usage,
+        role: None,
+        metrics: None,
+        end: None,
+    };
+    let events = vec![
+        started("run-1", None),
+        fin(Some(u(Some(10), Some(0.5)))),
+        fin(Some(u(Some(5), None))),
+        fin(None),
+    ];
+    let rows: Vec<EventRow> = events
+        .into_iter()
+        .enumerate()
+        .map(|(i, e)| row(i as u64, &format!("2026-09-14T00:00:0{i}Z"), task_id, e))
+        .collect();
+    let usage = runs(&rows)[0].usage.expect("usage");
+    assert_eq!(usage.input_tokens, Some(15));
+    assert_eq!(usage.cost_usd, Some(0.5));
+    assert_eq!(usage.output_tokens, None, "欠測は 0 にしない");
+}
+
 /// ADR-0014 D1: Reviewer run も一覧に現れ、`role` で区別される（イベントに `role` が無ければ worker）。
 #[test]
 fn runs_include_reviewer_runs_with_role() {

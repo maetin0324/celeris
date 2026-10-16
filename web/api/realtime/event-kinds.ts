@@ -45,6 +45,7 @@ export const EVENT_KINDS = [
   "workspace_pruned",
   "target_sweep_ran",
   "routing_decided",
+  "routing_override_pinned",
   "routing_features_recorded",
   "routing_request_decided",
   "routing_outcome_recorded",

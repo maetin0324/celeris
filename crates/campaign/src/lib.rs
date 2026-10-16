@@ -5,6 +5,7 @@ pub mod checker;
 pub mod dryrun;
 pub mod executor;
 pub mod export;
+pub mod harness_exec;
 pub mod ledger;
 pub mod manifest;
 pub mod record;

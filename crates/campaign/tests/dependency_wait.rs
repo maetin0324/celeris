@@ -34,6 +34,7 @@ fn campaign(i: &Input) -> CampaignManifest {
         model: "m".into(),
         model_version: "1".into(),
         policy_version: "p1".into(),
+        routing: None,
     };
     CampaignManifest {
         schema: celeris_campaign::CAMPAIGN_SCHEMA.into(),

@@ -108,6 +108,11 @@ pub trait TaskStore:
         &self,
         run_id: &str,
     ) -> Result<Option<crate::decision_log::DecisionLogRun>, StoreError>;
+    /// campaign 識別（自身または最も近い祖先のもの。無ければ `None`）。
+    fn task_campaign_resolve(
+        &self,
+        task_id: &str,
+    ) -> Result<Option<crate::decision_log::CampaignIdentity>, StoreError>;
     /// Authoritative per-account concurrency overrides (not event projections).
     fn account_limits(&self) -> Result<Vec<super::AccountLimit>, StoreError>;
     /// `None` clears an override; values must be in 1..=32.

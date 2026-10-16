@@ -43,6 +43,40 @@ pub struct ClassifierRecord {
     pub fallback: Option<String>,
 }
 
+/// campaign 識別（ADR 2026-10-16-campaign-identity-propagation）。campaign の root task に 1 つ付き、
+/// 子孫 task・全 run（再試行・continuation・repair・reviewer・planner）が祖先の鎖から継ぐ。
+/// `routing_setting` は試行単位で固定した routing 設定（全体 config の `[routing] mode` とは別）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CampaignIdentity {
+    pub campaign_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub case_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arm: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repetition: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manifest_hash: Option<String>,
+    /// `fixed` | `decision_assisted`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub routing_setting: Option<String>,
+}
+
+impl CampaignIdentity {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.campaign_id.trim().is_empty() {
+            return Err("campaign_id must not be empty".into());
+        }
+        if let Some(m) = &self.routing_setting
+            && !matches!(m.as_str(), "fixed" | "decision_assisted")
+        {
+            return Err("campaign.routing_setting must be `fixed` or `decision_assisted`".into());
+        }
+        Ok(())
+    }
+}
+
 /// 提案の群（判断時点）。`run_id` が主キー。
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct DecisionLogProposal {
@@ -53,6 +87,15 @@ pub struct DecisionLogProposal {
     pub campaign_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub arm: Option<String>,
+    /// campaign 識別の残り（`campaign_id` / `arm` は上の欄）。campaign 無しは全て `None`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub case_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repetition: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manifest_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub routing_setting: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -103,6 +146,16 @@ pub struct DecisionLogProposal {
 }
 
 impl DecisionLogProposal {
+    /// campaign 識別を欄へ写す（識別が `None` なら何も変えない）。
+    pub fn apply_campaign(&mut self, id: &CampaignIdentity) {
+        self.campaign_id = Some(id.campaign_id.clone());
+        self.case_id = id.case_id.clone();
+        self.arm = id.arm.clone();
+        self.repetition = id.repetition;
+        self.manifest_hash = id.manifest_hash.clone();
+        self.routing_setting = id.routing_setting.clone();
+    }
+
     /// 旧い `routing_decided` event（新欄なし）からも作れる。無い欄は `None` のまま。
     pub fn from_routing_record(run_id: &str, task_id: &str, record: &RoutingRecord) -> Self {
         let lane = |t: crate::model::Tier| match t {

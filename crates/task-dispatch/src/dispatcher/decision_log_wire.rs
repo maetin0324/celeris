@@ -70,14 +70,9 @@ fn reason_str(reason: &task_core::llm_route::ExclusionReason) -> String {
 }
 
 fn sum_usage(a: Option<Usage>, b: &Usage) -> Usage {
-    let Some(a) = a else { return *b };
-    Usage {
-        input_tokens: add_opt(a.input_tokens, b.input_tokens),
-        output_tokens: add_opt(a.output_tokens, b.output_tokens),
-        cache_read_tokens: add_opt(a.cache_read_tokens, b.cache_read_tokens),
-        cache_creation_tokens: add_opt(a.cache_creation_tokens, b.cache_creation_tokens),
-        cost_usd: add_opt(a.cost_usd, b.cost_usd),
-        ..a
+    match a {
+        Some(a) => a.accumulate(b),
+        None => *b,
     }
 }
 
@@ -1016,5 +1011,64 @@ mod tests {
         let none = store.decision_log_campaign_metering("camp-none").unwrap();
         assert_eq!(none.elapsed_ms, None);
         assert_eq!(none.run_wall_sum_ms.sum, None);
+    }
+
+    /// 木（root・子・孫）の全 run（再試行・reviewer・同じ run の 2 回目の終了を含む）で、外側が読む
+    /// runs[].usage の合計と、決定ログの campaign 消費行の合計が同じ。再投影しても増えない。
+    #[test]
+    fn runs_usage_and_decision_log_usage_agree_per_campaign() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        let root = campaign_root(&store);
+        let child = store_task(&store, Some(root));
+        let grandchild = store_task(&store, Some(child));
+        let tree = |p: &str| {
+            vec![
+                started(&format!("{p}-a"), "s", "m"),
+                finished(
+                    &format!("{p}-a"),
+                    RunEnd::Failed { retryable: true },
+                    1,
+                    0,
+                    10,
+                ),
+                started(&format!("{p}-b"), "s", "m"),
+                finished(&format!("{p}-b"), RunEnd::Waiting, 1, 1, 20),
+                // 待機からの再開: 同じ run が 2 度目に終わる。
+                finished(&format!("{p}-b"), RunEnd::Completed, 1, 1, 30),
+                reviewer_started(&format!("{p}-rev")),
+                finished(&format!("{p}-rev"), RunEnd::Completed, 1, 0, 40),
+            ]
+        };
+        let mut outer_input = 0u64;
+        let mut outer_cost = 0.0f64;
+        for (i, task) in [root, child, grandchild].into_iter().enumerate() {
+            let events = tree(&format!("t{i}"));
+            let rows: Vec<task_core::EventRow> = events
+                .iter()
+                .enumerate()
+                .map(|(n, e)| task_core::EventRow {
+                    id: n as u64,
+                    task_id: task,
+                    seq: n as u64,
+                    ts: "2026-10-16T00:00:00Z".into(),
+                    event: e.clone(),
+                })
+                .collect();
+            for r in task_ops::view::runs(&rows) {
+                let u = r.usage.expect("usage");
+                outer_input += u.input_tokens.unwrap();
+                outer_cost += u.cost_usd.unwrap();
+            }
+            for _ in 0..3 {
+                write_for(&store, task, &events);
+            }
+        }
+        let usage = store.decision_log_usage_list(Some("camp-1")).unwrap();
+        assert_eq!(usage.len(), 9);
+        let inner_input: u64 = usage.iter().filter_map(|u| u.input_tokens).sum();
+        let inner_cost: f64 = usage.iter().filter_map(|u| u.list_cost_usd).sum();
+        assert_eq!(inner_input, outer_input);
+        assert!((inner_cost - outer_cost).abs() < 1e-9);
+        assert_eq!(inner_input, 3 * (10 + 20 + 30 + 40));
     }
 }

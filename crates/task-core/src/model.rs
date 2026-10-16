@@ -788,6 +788,27 @@ pub struct Usage {
     pub context_tokens: Option<u64>,
 }
 
+impl Usage {
+    /// 同じ run の複数の `WorkerFinished`（待機からの再開など）の消費を合算する。runs[].usage と決定ログの
+    /// 消費行が同じ規則で数えるための唯一の合算（片方が欠測なら、もう片方を採る。0 は足さない）。
+    pub fn accumulate(self, other: &Usage) -> Usage {
+        fn add<T: std::ops::Add<Output = T>>(a: Option<T>, b: Option<T>) -> Option<T> {
+            match (a, b) {
+                (Some(a), Some(b)) => Some(a + b),
+                (a, b) => a.or(b),
+            }
+        }
+        Usage {
+            input_tokens: add(self.input_tokens, other.input_tokens),
+            output_tokens: add(self.output_tokens, other.output_tokens),
+            cache_read_tokens: add(self.cache_read_tokens, other.cache_read_tokens),
+            cache_creation_tokens: add(self.cache_creation_tokens, other.cache_creation_tokens),
+            cost_usd: add(self.cost_usd, other.cost_usd),
+            ..self
+        }
+    }
+}
+
 /// ADR-0061（Phase 104）: `Event::WorkerFinished` に添える run 単位のメトリクス。
 /// harness・model・account は同じ `run_id` の `Event::WorkerStarted` に既にあるのでここには持たない
 /// （二重管理をしない）。success/failure は `WorkerFinished.outcome` の文字列を

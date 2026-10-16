@@ -607,9 +607,12 @@ impl SqliteStore {
         let runs = self.decision_log_runs_list(c)?;
         let usage = self.decision_log_usage_list(c)?;
         let ivs = self.decision_log_interventions_list(c)?;
-        Ok(crate::decision_log_export::build_campaign_export(
-            params, &runs, &usage, &ivs,
-        ))
+        let mut export =
+            crate::decision_log_export::build_campaign_export(params, &runs, &usage, &ivs);
+        export.summary.elapsed_ms = self
+            .decision_log_campaign_metering(&params.campaign_id)?
+            .elapsed_ms;
+        Ok(export)
     }
 }
 

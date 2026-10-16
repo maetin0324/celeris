@@ -32,6 +32,9 @@ pub struct CampaignExportArgs {
     /// 版情報として summary に載せる manifest の hash。
     #[arg(long)]
     pub manifest_hash: Option<String>,
+    /// 接続確認: export が空、試行の必須欄が欠測、消費が未計上のいずれかなら非 0 で終わる（出力は書く）。
+    #[arg(long)]
+    pub verify_connected: bool,
 }
 
 pub fn run(store: &SqliteStore, command: CampaignCommand) -> Result<ExitCode, CliError> {
@@ -129,6 +132,16 @@ fn export(store: &SqliteStore, args: CampaignExportArgs) -> Result<ExitCode, Cli
         result.records.len(),
         args.out.display()
     );
+    if args.verify_connected {
+        let problems = task_core::decision_log_export::verify_connected(&result);
+        if !problems.is_empty() {
+            for p in &problems {
+                eprintln!("not connected: {p}");
+            }
+            return Ok(ExitCode::FAILURE);
+        }
+        outln!("connected: every run has the required fields and recorded consumption");
+    }
     Ok(ExitCode::SUCCESS)
 }
 

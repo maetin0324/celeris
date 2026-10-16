@@ -249,8 +249,8 @@ async fn no_key_wait_register_resume_once_then_classify_run_log_export() {
     kinds.sort();
     assert_eq!(
         kinds,
-        ["decision", "outcome", "run"],
-        "判断・実行・成果が 1 run 分"
+        ["decision", "outcome", "run", "trial"],
+        "判断・実行・成果・結合済み試行が 1 run 分"
     );
     let jsonl = export.records_jsonl();
     assert!(jsonl.contains(&run_id));

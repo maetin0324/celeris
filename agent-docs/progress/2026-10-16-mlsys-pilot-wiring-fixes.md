@@ -37,7 +37,11 @@ C は jev_ok・lane standard・basis fixed_rule だが、`real_api_verified=fals
 - 全体試験・clippy・fmt の結果は下の「最終検査」。
 
 ## 最終検査
-（下に追記）
+tested_sha: 64784351f13e（以降の差分は agent-docs/progress/ のこのファイルだけ）
+- `TMPDIR=/tmp bash scripts/dev/test-parallel.sh`: exit 0、nextest 5517 passed / 0 failed / 14 ignored、doctest exit 0。
+  1 回目（9e76d14f）は `harness_exec::runner_drives_three_arms_with_stub_and_resumes_without_restart` が落ちた（1 回の run で 3 試行が終わる前提。max_parallel=1 では成り立たない）→ 記録済みで数えるよう直して再実行。
+- `cargo clippy --workspace -- -D warnings`: exit 0。
+- `cargo fmt --all -- --check`: exit 0。
 
 ## 本番への移行（人が行う）
 - 新しい release を昇格するまで、運用セッションは旧い `celeris-campaign` を使わない（manifest に `budget.token_basis` が要り、`--api-url` は origin だけ）。

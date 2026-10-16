@@ -445,6 +445,8 @@ pub fn run(
             "input_sha256": input.sha256,
             "split": m.split,
             "executor": exec.name(),
+            "evidence_kind": evidence_kind(exec.simulated()),
+            "real_performance": !exec.simulated(),
             "configs": m.normalized().configs,
             "budget": m.budget,
             "termination": m.termination,
@@ -753,7 +755,7 @@ pub fn run(
             records.push(rec);
         }
     }
-    write_summary(m, &hash, &records, &rep, out)?;
+    write_summary(m, &hash, &records, &rep, out, exec.simulated())?;
     Ok(rep)
 }
 
@@ -764,6 +766,7 @@ fn write_summary(
     records: &[TrialRecord],
     rep: &RunReport,
     out: &Path,
+    simulated: bool,
 ) -> Result<(), String> {
     let mut cells = serde_json::Map::new();
     for c in [ConfigId::A, ConfigId::B, ConfigId::C] {
@@ -793,6 +796,8 @@ fn write_summary(
         &json!({
             "schema": "celeris.campaign-summary/1",
             "campaign_sha256": hash,
+            "evidence_kind": evidence_kind(simulated),
+            "real_performance": !simulated,
             "records": records.len(),
             "budget_stopped": rep.budget_stopped,
             "budget": {

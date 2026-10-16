@@ -53,6 +53,10 @@ pub enum ExecStatus {
 
 pub trait Executor {
     fn name(&self) -> &'static str;
+    /// true なら結果は模擬（mock）で、実性能・実費用として扱えない。出力（run-meta・summary・export）に印として残る。
+    fn simulated(&self) -> bool {
+        false
+    }
     /// 同期実行（mock など）。台帳を使わない実行器はこれだけを実装する。
     fn execute(&self, req: &TrialRequest) -> Result<ExecStatus, String>;
 
@@ -171,6 +175,10 @@ impl Executor for MockExecutor {
         "mock"
     }
 
+    fn simulated(&self) -> bool {
+        true
+    }
+
     fn execute(&self, req: &TrialRequest) -> Result<ExecStatus, String> {
         // 試行専用の作業ツリーと KB を実際に書き換える（隔離の検証用）。
         fs::write(
@@ -259,6 +267,10 @@ impl MockAsyncExecutor {
 impl Executor for MockAsyncExecutor {
     fn name(&self) -> &'static str {
         "mock-async"
+    }
+
+    fn simulated(&self) -> bool {
+        true
     }
 
     fn execute(&self, _req: &TrialRequest) -> Result<ExecStatus, String> {

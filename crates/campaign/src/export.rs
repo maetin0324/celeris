@@ -93,10 +93,21 @@ pub fn export(m: &CampaignManifest, out: &Path, dest: &Path) -> Result<Value, St
         }
     };
     let rows: Vec<Value> = rc.totals.iter().map(|(c, t)| row(m, *c, t)).collect();
+    // 印は run-meta（runner が書く）から引く。無い・読めないときは実測とみなさず mock 扱いにする。
+    let kind = fs::read(out.join(crate::record::META_FILE))
+        .ok()
+        .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+        .and_then(|v| v["evidence_kind"].as_str().map(String::from))
+        .unwrap_or_else(|| "unknown".into());
+    let real = kind == "real";
     let table = json!({
         "schema": "celeris.campaign-table/1",
         "campaign_sha256": m.compute_sha256()?,
         "split": m.split,
+        "evidence_kind": kind,
+        "real_performance": real,
+        "notice": if real { Value::Null } else {
+            json!("mock/unknown evidence: these numbers are not real performance and must not be reported as measurements") },
         "configs": rows,
         "comparisons": rc.pairs,
     });
@@ -104,10 +115,10 @@ pub fn export(m: &CampaignManifest, out: &Path, dest: &Path) -> Result<Value, St
     let mut s = serde_json::to_string_pretty(&table).map_err(|e| e.to_string())?;
     s.push('\n');
     fs::write(dest.join("table.json"), s).map_err(|e| e.to_string())?;
-    let mut csv = COLUMNS.join(",") + "\n";
+    let mut csv = COLUMNS.join(",") + ",evidence_kind\n";
     for r in &rows {
         let line: Vec<String> = COLUMNS.iter().map(|c| cell(r, c)).collect();
-        csv += &(line.join(",") + "\n");
+        csv += &(line.join(",") + &format!(",{kind}\n"));
     }
     fs::write(dest.join("table.csv"), csv).map_err(|e| e.to_string())?;
     Ok(table)

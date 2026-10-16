@@ -29,3 +29,9 @@ completed: 2026-10-16
 
 ## 提案
 - 手動の復旧・merge は event に出ないので、評価者が最小入力ログで `decision_log_record_intervention` を呼ぶ CLI（`celerisctl campaign intervention`）を足すと本測定で漏れない。
+
+## 再実行の検証（再計画後・許可に crates/celeris/tests/ を追加）
+- 範囲 check: 許可 prefix に `crates/celeris/tests/` を加えた集合で範囲外 path なし。
+- `cargo test -p celeris --test campaign_wiring_e2e`: 1 passed（POST /tasks→export、識別の直挿入なし）。
+- `bash scripts/dev/test-parallel.sh`: 5523 passed / 0 failed、exit 0。`cargo clippy --workspace -- -D warnings` exit 0、`cargo fmt --all -- --check` exit 0。
+- 実経路検証・承認待ち: 実 LLM・本番 DB での検証は未実施（本測定は人の承認待ち）。

@@ -3,14 +3,14 @@
     "max_disk_bytes": 4294967296,
     "max_parallel": 1,
     "max_tokens": 80000,
-    "max_wall_secs": 7200,
+    "max_wall_secs": 1800,
     "per_arm": {
       "max_tokens": 80000,
-      "max_wall_secs": 7200
+      "max_wall_secs": 1800
     },
     "per_case": {
       "max_tokens": 80000,
-      "max_wall_secs": 7200
+      "max_wall_secs": 1800
     },
     "token_basis": "all"
   },
@@ -42,14 +42,13 @@
         "restart_read"
       ],
       "storage": [
-        "io_uring",
         "posix"
       ],
       "transport": [
         "ucx"
       ]
     },
-    "walltime_secs": 7200
+    "walltime_secs": 1800
   },
   "grade_case_ref": {
     "path": "final/k2-bf-xattr-restart-campaign/k2-bf-xattr-restart-campaign.json",

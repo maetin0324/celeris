@@ -433,6 +433,29 @@ impl CaseSet {
         Ok(set)
     }
 
+    /// 選んだ case の時間・token が manifest の per_case 上限に収まるか（収まらなければ起動前に Err）。
+    pub fn check_within_budget(&self, ids: &[String], b: &Budget) -> Result<(), String> {
+        for id in ids {
+            let c = self.get(id).ok_or_else(|| format!("unknown case {id}"))?;
+            let (cb, pc) = (&c.case.budget.per_case, &b.per_case);
+            if cb.max_wall_secs > pc.max_wall_secs || cb.max_tokens > pc.max_tokens {
+                return Err(format!(
+                    "{id}: case budget (wall {}s, tokens {}) exceeds manifest per_case (wall {}s, tokens {})",
+                    cb.max_wall_secs, cb.max_tokens, pc.max_wall_secs, pc.max_tokens
+                ));
+            }
+            if let Some(e) = &c.case.experiment
+                && e.walltime_secs > pc.max_wall_secs
+            {
+                return Err(format!(
+                    "{id}: experiment walltime {}s exceeds manifest per_case wall {}s",
+                    e.walltime_secs, pc.max_wall_secs
+                ));
+            }
+        }
+        Ok(())
+    }
+
     pub fn get(&self, id: &str) -> Option<&LoadedCase> {
         self.cases.iter().find(|c| c.case.id == id)
     }

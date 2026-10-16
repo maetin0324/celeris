@@ -28,11 +28,20 @@ fn campaign(i: &Input, split: Split, n: usize, max_tokens: u64, repeats: u32) ->
     let cfg = |id, h: &str| Config {
         id,
         harness: h.into(),
-        harness_version: "1".into(),
+        harness_version: if h == "celeris" {
+            "0123456789ab".into()
+        } else {
+            "1".into()
+        },
         model: "m".into(),
         model_version: "1".into(),
         policy_version: "p1".into(),
-        routing: None,
+        // final では B/C の routing 固定が要る（C は根拠表の版も）。
+        routing: (id != ConfigId::A).then(|| celeris_campaign::manifest::ArmRouting {
+            lower_policy: Some("lp".into()),
+            evidence_table_id: Some("ev".into()),
+            online_update: Some(false),
+        }),
     };
     CampaignManifest {
         schema: celeris_campaign::CAMPAIGN_SCHEMA.into(),

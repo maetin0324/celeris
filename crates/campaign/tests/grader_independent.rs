@@ -560,19 +560,11 @@ fn bin() -> Command {
 
 #[test]
 fn cli_grade_outputs_json_and_exit_code() {
-    let (fx, mut case) = fixture(CaseSplit::Dev);
-    // 実 process runner: 外部 network を使わない sh だけで試験出力を模す
-    let imp = case.implementation.as_mut().unwrap();
-    imp.command = vec![
-        "sh".into(),
-        "-c".into(),
-        format!(
-            "test -f tests/add.rs && printf '{}'",
-            OK_STDOUT.replace('\n', "\\n")
-        ),
-    ];
+    let (fx, case) = fixture(CaseSplit::Dev);
     let case_path = fx.case_dir.join("case.json");
     fs::write(&case_path, serde_json::to_string(&case).unwrap()).unwrap();
+    // CLI は評価 command を走らせない（実行器未注入）: 実装テストは未実行として fail、
+    // 他の 3 検査は成果物から独立に pass し、最終判定は fail（exit 1）。
     let out = bin()
         .args(["grade", "--case"])
         .arg(&case_path)
@@ -582,14 +574,20 @@ fn cli_grade_outputs_json_and_exit_code() {
         .arg(&fx.work)
         .output()
         .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let err = String::from_utf8_lossy(&out.stderr);
+    let v: Value = serde_json::from_str(err.trim_start_matches("error: ")).unwrap();
+    assert_eq!(v["verdict"], "fail");
+    assert_eq!(v["final_pass"], false);
+    assert_eq!(v["checks"]["implementation"]["status"], "fail");
+    let reasons = v["checks"]["implementation"]["reasons"].to_string();
     assert!(
-        out.status.success(),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
+        reasons.contains("no evaluation runner injected"),
+        "{reasons}"
     );
-    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(v["verdict"], "pass");
-    assert_eq!(v["final_pass"], true);
+    for k in ["evidence", "recompute", "review"] {
+        assert_eq!(v["checks"][k]["status"], "pass", "{k}: {}", v["checks"][k]);
+    }
 
     // 成功宣言だけの成果物は exit 1、判定 JSON は stderr に出る
     let claim = fx.work.join("claim");

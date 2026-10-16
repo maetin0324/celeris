@@ -15,7 +15,9 @@ tasks: [01M51QRH7TD3FHER7HVF9W3TAH]
 mock の `Passed` で合格にならない、成果物から独立に判定する grader が要る。
 
 ## 決定
-- D1: `crates/campaign/src/grader/` に grader を置く。入力は **trial の成果物 directory と grader 側の case 定義
+- D1: `crates/campaign/src/grader.rs`（単一 file。内部は `case`・`implementation`・`evidence`・`recompute`・`review` の
+  inline mod）に grader を置く。`src/` 直下にディレクトリを作らない（既存試験 `runner_checker.rs` が `src/` の全 entry を
+  file として読み、子 process・network の語を禁じているため）。入力は **trial の成果物 directory と grader 側の case 定義
   （`celeris.grade-case/1` の JSON）だけ**。成果物中の自己申告（`result.json` の summary、trial 記録の outcome、
   報告の「成功」の文言）は読まない。`lib.rs` に `pub mod grader;`、`main.rs` に `grade` サブコマンド 1 行だけ足す
   （`celeris-campaign grade --case <file> --artifact <dir> [--work <dir>]`、合格で exit 0、不合格で exit 1、
@@ -29,8 +31,11 @@ mock の `Passed` で合格にならない、成果物から独立に判定す�
   (a) pristine 自体の sha256 を case の記録と照合（grader 側の改変を検出）。(b) 成果物 repo の同じ path の file を
   pristine と比べ、削除・sha256 不一致を**失格**にする。不一致のときは `#[ignore]`・skip 印（`#[cfg(any())]` 等）の
   増加、`assert` の減少、`#[test]` の減少を詳細に出す。(c) 成果物 repo を作業 dir に写し（`.git`・`target` は除く）、
-  pristine を重ねてから case の command を**注入可能な runner**（`CommandRunner` trait、本番は `std::process`、
-  試験は stub）で実行する。exit 0 かつ `must_pass` の各試験名が出力に `test <name> ... ok` として現れることを要求
+  pristine を重ねてから case の command を**注入可能な runner**（`CommandRunner` trait、試験は stub）で実行する。
+  grader の library と CLI は子 process を起こさない（`runner_checker.rs` の src 走査が `process::Command` を禁じる。
+  この guard は弱めない）。CLI の既定 runner `NoRunner` は常に Err を返すので、実行器を注入しない採点では実装テストが
+  「未実行」で fail になる（fail-closed）。評価 command を実際に走らせる実行器は呼び出し側（e2e／campaign 計測の
+  外側）が `CommandRunner` を実装して注入する。exit 0 かつ `must_pass` の各試験名が出力に `test <name> ... ok` として現れることを要求
   （0 件実行で通る抜け道を塞ぐ）。
 - D4（実験条件と実行証拠）: 成果物の `evidence/jobs.json` の各 job に job ID・scheduler 記録・ログ・生データ
   （path と sha256）・実行条件・`evidence_kind` を要求する。scheduler 記録は job ID を含み、終了状態

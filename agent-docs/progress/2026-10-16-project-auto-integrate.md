@@ -34,8 +34,8 @@ tasks: [01M51M4CB94RD39Z20QPM0KGQD]
 
 ## 本番への移行
 
-人が実行する（この task は本番に触っていない）。順序が重要で、**新 release を昇格する前に config から `delivery_projects` を消す**
-（残っていると新 binary は config の読み込みエラーで起動しない）。
+人が実行する（この task は本番に触っていない）。順序が重要で、**新 release を verify・昇格する前に config から `delivery_projects` を消す**
+（残っていると新 binary は config の読み込みエラーで起動しない）。release.sh の verify 段（staging）も本番 config を読むため、行が残っていると check 1（start-and-migrate）が `unknown field delivery_projects` で落ちる（2026-10-16 の配送で実際に起きた）。旧 binary は欠けた欄を既定で読むので、先に消しても N-1 は動く。
 
 1. `~/.config/celeris/config.toml` をバックアップし、`[selfdeploy]` の `delivery_projects = [...]` の行を削除する。
    `cp ~/.config/celeris/config.toml ~/.config/celeris/config.toml.before-auto-integrate` →

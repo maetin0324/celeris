@@ -170,6 +170,8 @@ pub struct CampaignSummary {
 #[derive(Debug, Clone, PartialEq)]
 pub struct CampaignExport {
     pub records: Vec<Value>,
+    /// 結合済みの試行 record（run ごとに 1 件。`records_jsonl` では records の後ろに出る）。
+    pub trials: Vec<Value>,
     pub summary: CampaignSummary,
 }
 
@@ -177,7 +179,7 @@ impl CampaignExport {
     /// `records.jsonl`（1 行 1 record、末尾改行つき）。
     pub fn records_jsonl(&self) -> String {
         let mut out = String::new();
-        for r in &self.records {
+        for r in self.records.iter().chain(&self.trials) {
             out.push_str(&r.to_string());
             out.push('\n');
         }
@@ -327,6 +329,7 @@ pub fn build_campaign_export(
     let mut by_rule: BTreeMap<String, u64> = BTreeMap::new();
     let mut run_wall_sum = Stat::default();
     let mut records: Vec<Value> = Vec::new();
+    let mut trials: Vec<Value> = Vec::new();
 
     for (key, u) in &usage_map {
         count(
@@ -500,7 +503,7 @@ pub fn build_campaign_export(
         });
         merge(&mut out_rec, identity_fields(Some(p)));
         records.push(out_rec);
-        records.push(trial_record(campaign, r, &usage_map, &run_map));
+        trials.push(trial_record(campaign, r, &usage_map, &run_map));
     }
 
     let mut interventions_by_kind: BTreeMap<String, InterventionStats> = [
@@ -575,7 +578,11 @@ pub fn build_campaign_export(
         quota: None,
         excluded_rows: excluded,
     };
-    CampaignExport { records, summary }
+    CampaignExport {
+        records,
+        trials,
+        summary,
+    }
 }
 
 /// 試行（run）1 行に全欄を結合した record。campaign_id・case・arm・repetition・manifest hash・routing 設定、
@@ -660,11 +667,7 @@ fn trial_record(
 /// 欠測は 0 や既定値で埋めない。`unscored` の grader 判定は「未採点」として欠測に数える。
 pub fn verify_connected(export: &CampaignExport) -> Vec<String> {
     let mut problems = Vec::new();
-    let trials: Vec<&Value> = export
-        .records
-        .iter()
-        .filter(|r| r["record_type"] == "trial")
-        .collect();
+    let trials: Vec<&Value> = export.trials.iter().collect();
     if trials.is_empty() {
         problems.push("export is empty: no runs for this campaign".to_string());
         return problems;

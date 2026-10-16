@@ -111,6 +111,7 @@ fn export(store: &SqliteStore, args: CampaignExportArgs) -> Result<ExitCode, Cli
     };
     let mut result = store.decision_log_export_campaign(&params)?;
     result.records.iter_mut().for_each(scrub_value);
+    result.trials.iter_mut().for_each(scrub_value);
     let mut summary = serde_json::to_value(&result.summary)
         .map_err(|e| CliError::msg(format!("summary: {e}")))?;
     scrub_value(&mut summary);
@@ -129,7 +130,7 @@ fn export(store: &SqliteStore, args: CampaignExportArgs) -> Result<ExitCode, Cli
     outln!(
         "exported campaign {}: {} records -> {}",
         args.campaign_id,
-        result.records.len(),
+        result.records.len() + result.trials.len(),
         args.out.display()
     );
     if args.verify_connected {

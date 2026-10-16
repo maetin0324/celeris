@@ -28,3 +28,8 @@ completed: 2026-10-16
 
 ## 提案
 - 本測定 runner は campaign 終了時に `--verify-connected` を必ず走らせ、非 0 なら結果を採用しない。
+
+## 再 run の修正（check 不合格への対応）
+- 試行 record は `CampaignExport.trials`（`records` と別の Vec。`records_jsonl` は records の後ろに出す）へ移し、範囲外の task-dispatch 試験（mlsys_mock_e2e）を変えずに済ませた。
+- `execution_plan/tests.rs` の例示パス `docs/ops/x.md`（存在せず check-doc-links が落ちる）を `docs/SPEC.md` に変更。
+- `progress-index.sh --check` は範囲外の既存 5 file（2026-10-15/16 の front matter 欠落）で落ちる。この WU の変更ではなく範囲外のため未修正（提案: 別 unit で front matter を補う）。

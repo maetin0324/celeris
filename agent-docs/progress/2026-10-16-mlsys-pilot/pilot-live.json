@@ -1,0 +1,82 @@
+{
+  "schema": "celeris.campaign-manifest/1",
+  "campaign_id": "mlsys-pilot-1",
+  "version": "1",
+  "split": "dev",
+  "input": {
+    "path": "../../../crates/campaign/fixtures/input-manifest.json",
+    "sha256": "52dd6e1b3544b47a0987a4ac331dee4b041d2ee5ba41ab32e772e1b588479dd5"
+  },
+  "problems": [
+    "impl-benchfs-chunk-index",
+    "review-numeric-consistency"
+  ],
+  "configs": [
+    {
+      "id": "A",
+      "harness": "claude-code",
+      "harness_version": "claude-code@installed",
+      "model": "claude-sonnet-5-5",
+      "model_version": "claude-sonnet-5-5",
+      "policy_version": "ops-baseline"
+    },
+    {
+      "id": "B",
+      "harness": "celeris",
+      "harness_version": "<release sha12 at H1>",
+      "model": "claude-sonnet-5-5",
+      "model_version": "claude-sonnet-5-5",
+      "policy_version": "fixed",
+      "routing": {
+        "lower_policy": "mlsys-min-1",
+        "online_update": false
+      }
+    },
+    {
+      "id": "C",
+      "harness": "celeris",
+      "harness_version": "<release sha12 at H1>",
+      "model": "claude-sonnet-5-5",
+      "model_version": "claude-sonnet-5-5",
+      "policy_version": "jev-1"
+    }
+  ],
+  "primary": [
+    "A",
+    "B"
+  ],
+  "secondary": {
+    "pair": [
+      "B",
+      "C"
+    ],
+    "subset": [
+      "impl-benchfs-chunk-index"
+    ]
+  },
+  "budget": {
+    "max_tokens": 1000000,
+    "max_wall_secs": 36000,
+    "max_disk_bytes": 137438953472,
+    "max_parallel": 1,
+    "per_case": {
+      "max_tokens": 100000,
+      "max_wall_secs": 1800
+    },
+    "per_arm": {
+      "max_tokens": 400000,
+      "max_wall_secs": 20000
+    }
+  },
+  "termination": {
+    "trial_timeout_secs": 1800,
+    "max_attempts_per_trial": 1,
+    "stop_on_budget": true
+  },
+  "snapshot": {
+    "repo_commit": "fixture-repo-1",
+    "materials_sha256": "692578958726ad328d611f04b3028aeae3b509bc7c0e962cb32bcfe08bff9581",
+    "kb_snapshot": "kb-fixture-1"
+  },
+  "repeats": 1
+}

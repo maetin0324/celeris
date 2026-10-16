@@ -17,6 +17,20 @@ pub struct CurlTransport {
 impl CurlTransport {
     /// token の値はここで読んで保持せず、要求のたびに環境から読む。値が無ければ Err（値は含めない）。
     pub fn new(base_url: &str, token_env: &str) -> Result<Self, String> {
+        validate_target(base_url, token_env)?;
+        if std::env::var_os(token_env).is_none() {
+            return Err(format!("environment variable {token_env} is not set"));
+        }
+        Ok(Self {
+            base_url: base_url.trim_end_matches('/').to_string(),
+            token_env: token_env.into(),
+        })
+    }
+}
+
+/// URL と環境変数「名」の形だけを検査する（値は読まない。preflight も同じ検査を使う）。
+pub fn validate_target(base_url: &str, token_env: &str) -> Result<(), String> {
+    {
         if token_env.is_empty()
             || !token_env
                 .chars()
@@ -37,13 +51,7 @@ impl CurlTransport {
                  the executor adds /api/v1 itself, got {base_url}"
             ));
         }
-        if std::env::var_os(token_env).is_none() {
-            return Err(format!("environment variable {token_env} is not set"));
-        }
-        Ok(Self {
-            base_url: base_url.trim_end_matches('/').to_string(),
-            token_env: token_env.into(),
-        })
+        Ok(())
     }
 }
 

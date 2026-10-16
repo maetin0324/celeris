@@ -36,6 +36,18 @@ $B validate --manifest $P/final.json         # sha256 を控える（freeze-fina
 $B dry-run  --manifest $P/final.json         # within_budget true、total_trials 6 を確認
 ```
 
+## 2.5 preflight（run の前に必ず通す。4 の `run` も内部で同じ検査を通ってから始まる）
+```sh
+export CELERIS_CAMPAIGN_TOKEN=...      # 人の shell で。値は preflight の出力・ログに出ない（名前の有無だけ見る）
+$B preflight --manifest $P/final.json --api-url http://127.0.0.1:<task-api port> --token-env CELERIS_CAMPAIGN_TOKEN \
+   --task-template $P/task-template.json --materials-src $M --kb-src $K [--repo-src $R] \
+   --cases-root crates/campaign/cases --grader-root crates/campaign/fixtures/grader-private \
+   --grade-case-root crates/campaign/fixtures/grade-cases      # 既定値と同じ。A の実行ファイルは --a-program（既定 claude）
+echo $?       # 0 = 全件 OK。非 0 = stderr の JSON の `missing`（check 名 + 不足の内容）を直してやり直す
+```
+検査: manifest／版（placeholder・alias・routing）／入力 manifest／全 case 入力（control・split・材料 hash）／grade-case/1 全件（固定 hash・公開／隠しテストの実体）／候補構成／認証・環境（A の実行ファイル、API origin、token 環境変数の有無）／予算・時間（承認枠 300 万・30 万・130 万・並列 1・token_basis all、K2/K4 の時間 ≦ trial timeout ≦ per_case、dry-run 見積り）。
+一件でも不足なら A を含め有料実行・task 作成・台帳作成を 0 件で非 0 終了する。preflight 自体は有料実行をしない（`paid_calls_made` 0）。**本番昇格（H1）と実測は人が行う。** preflight が見られないもの: claude-code の実際の版が manifest の値と一致するか、token が API に受理されるか（実経路は本測定の初回で確認）。
+
 ## 3. 入力の配送（試行へ渡す公開部だけ。grader-private は渡さない）
 ```sh
 M=$TMPDIR/final-materials; K=$TMPDIR/final-kb; R=$TMPDIR/final-repo   # NFS 外

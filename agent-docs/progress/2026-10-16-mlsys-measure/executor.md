@@ -39,3 +39,6 @@ completed: 2026-10-16
 - `bash scripts/dev/test-parallel.sh` → exit 0、passed 5419 / failed 0 / ignored 13
 - `cargo clippy --workspace -- -D warnings` → exit 0
 - `cargo fmt --all -- --check` → exit 0
+
+## 範囲外の既知事項
+- `scripts/dev/check-doc-links.sh` は `crates/task-core/src/execution_plan/tests.rs:1544` の `docs/ops/x.md` を壊れ参照として報告する（この WU の base 由来）。FOREIGN_DOCS への 1 語追加で直るが scripts/ は本 WU の範囲外なので触らない。integrate-wire で直すこと。

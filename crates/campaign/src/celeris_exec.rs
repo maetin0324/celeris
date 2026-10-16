@@ -20,8 +20,8 @@ use serde_json::{Map, Value, json};
 use crate::{
     aggregate::Outcome,
     executor::{
-        ExecError, ExecResult, ExecStatus, Executor, ObservedRun, TaskRef, TokenUsage, TrialRequest,
-        Usage,
+        ExecError, ExecResult, ExecStatus, Executor, ObservedRun, TaskRef, TokenUsage,
+        TrialRequest, Usage,
     },
     manifest::{Config, ConfigId},
 };

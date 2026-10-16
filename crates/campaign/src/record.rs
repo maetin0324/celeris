@@ -19,6 +19,8 @@ pub const REASON_BUDGET_STOP: &str = "budget_stop";
 pub const REASON_CASE_BUDGET: &str = "case_budget";
 /// arm の累積上限（per_arm）が尽きたため止めた／実行しなかった。他 arm は止めない。outcome = cancelled。
 pub const REASON_ARM_BUDGET: &str = "arm_budget";
+/// executor が `Err` を返したため、その試行だけ error として記録した（run は続行）。使用量は観測できないので課金しない。
+pub const REASON_EXECUTOR_ERROR: &str = "executor_error";
 /// 前提 problem が passed にならなかったため実行しなかった試行の reason。分母には残す（outcome = blocked）。
 pub const REASON_BLOCKED: &str = "dependency_blocked";
 
@@ -31,6 +33,9 @@ pub struct TrialRecord {
     pub config: ConfigId,
     pub problem_id: String,
     pub trial_no: u32,
+    /// problem 内の arm 実行位置（1 始まり）。順序交絡の監査用。
+    #[serde(default)]
+    pub arm_rank: u32,
     pub outcome: Outcome,
     /// outcome == passed の冗長コピー。改ざん検出に使う。
     pub passed: bool,
@@ -54,6 +59,15 @@ pub struct TrialRecord {
 }
 
 impl TrialRecord {
+    /// 予算に課金する tokens。欠測は per_case 上限、executor_error は観測が無いので 0。
+    pub fn charged_tokens(&self, b: &crate::manifest::Budget) -> u64 {
+        if self.reason.as_deref() == Some(REASON_EXECUTOR_ERROR) {
+            0
+        } else {
+            b.charged_tokens(self.tokens)
+        }
+    }
+
     pub fn ran(&self) -> bool {
         match self.reason.as_deref() {
             Some(REASON_BUDGET_STOP | REASON_BLOCKED) => false,

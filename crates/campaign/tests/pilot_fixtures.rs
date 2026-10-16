@@ -108,6 +108,8 @@ fn build_pilot(input: &Input) -> CampaignManifest {
             materials_sha256: hash_tree(&fx().join("materials")).expect("materials hash"),
             kb_snapshot: "kb-fixture-1".into(),
         },
+        order: Default::default(),
+        seed: 0,
         dependencies: Default::default(),
         sha256: String::new(),
     };

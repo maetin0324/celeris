@@ -116,6 +116,8 @@ pub enum MockStep {
     PassUnmetered,
     /// 外部待ち（結果がまだ出ない）。
     Wait,
+    /// executor 自体が Err を返す（接続失敗など）。その試行だけ error になり run は続く。
+    Err,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -183,6 +185,7 @@ impl Executor for MockExecutor {
         };
         let done = match self.step(req) {
             MockStep::Wait => return Ok(ExecStatus::Wait),
+            MockStep::Err => return Err("mock executor failure".into()),
             MockStep::Pass => metered(Outcome::Passed, 10_000, 60),
             MockStep::Fail => metered(Outcome::Failed, 12_000, 90),
             MockStep::Error => metered(Outcome::Error, 1_000, 5),

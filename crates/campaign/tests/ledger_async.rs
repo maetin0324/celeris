@@ -80,6 +80,8 @@ fn campaign(i: &Input) -> CampaignManifest {
             materials_sha256: "d".into(),
             kb_snapshot: "kb@1".into(),
         },
+        order: Default::default(),
+        seed: 0,
         dependencies: BTreeMap::new(),
         sha256: String::new(),
     }
@@ -122,32 +124,32 @@ fn ledger_lines(e: &Env) -> Vec<Value> {
 }
 
 #[test]
-fn lost_submit_response_then_rerun_submits_once() {
+fn lost_submit_response_is_recorded_as_error_and_the_orphan_task_cancelled() {
     let e = env(10_000_000);
     let x = MockAsyncExecutor::new(0);
     x.lose_next_submit_responses(1);
-    let err = run(&e.m, &e.i, &x, &e.opts).expect_err("response lost");
-    assert!(err.contains("response lost"), "{err}");
-    // 投入『前』に planned 行が永続化されており、task_id はまだ無い。
-    let l = ledger_lines(&e);
-    assert_eq!(l.len(), 1);
-    assert_eq!(l[0]["state"], "planned");
-    assert!(l[0].get("task_id").is_none());
-    assert_eq!(l[0]["routing"]["mode"], "mock");
-    assert_eq!(x.remote_task_count(), 1);
-
-    // 再実行: 冪等キーで照会して既存 task を拾う。A の再投入は起きない。
-    let rep = run(&e.m, &e.i, &x, &e.opts).expect("rerun");
-    assert_eq!(rep.executed, 3);
+    // submit の Err はその試行（A）だけを error にし、B/C は続行する（ADR 2026-10-16-campaign-arm-order-isolation D3）。
+    let rep = run(&e.m, &e.i, &x, &e.opts).expect("run continues");
+    assert_eq!((rep.executed, rep.executor_errors), (3, 1));
+    // 外部に出来た task は冪等キーで照会して cancel され、台帳は閉じる。再投入は起きない。
     assert_eq!(x.remote_task_count(), 3);
-    assert_eq!(x.submit_calls(), 3, "A's lost submit is not repeated");
+    assert_eq!(x.submit_calls(), 3);
+    assert_eq!(x.cancelled().len(), 1, "the orphaned A task is cancelled");
+    // 投入『前』に planned された行（routing 固定記録つき）が残っている。
+    assert!(
+        ledger_lines(&e)
+            .iter()
+            .any(|l| l["routing"]["mode"] == "mock")
+    );
     let lg = Ledger::open(&e.opts.out).expect("ledger");
-    for c in [ConfigId::A, ConfigId::B, ConfigId::C] {
-        let r = lg.get(&key(&e, c)).expect("row");
-        assert_eq!(r.state, LedgerState::Done);
-        assert!(r.task_id.is_some() && r.submitted_at.is_some());
+    assert_eq!(
+        lg.get(&key(&e, ConfigId::A)).expect("row").state,
+        LedgerState::Cancelled
+    );
+    for c in [ConfigId::B, ConfigId::C] {
+        assert_eq!(lg.get(&key(&e, c)).expect("row").state, LedgerState::Done);
     }
-    // 3 度目の実行は何も足さない。
+    // 再実行は何も足さない。
     let rep3 = run(&e.m, &e.i, &x, &e.opts).expect("again");
     assert_eq!((rep3.executed, rep3.resumed_skipped), (0, 3));
     assert_eq!(x.submit_calls(), 3);

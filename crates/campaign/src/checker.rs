@@ -284,9 +284,9 @@ pub fn check(m: &CampaignManifest, out: &Path) -> CheckReport {
                     ));
                 }
                 let e = arm_use.entry(r.config).or_default();
-                e.0 += m.budget.charged_tokens(r.tokens);
+                e.0 += r.charged_tokens(&m.budget);
                 e.1 += r.wall_secs;
-                cum_tokens += m.budget.charged_tokens(r.tokens);
+                cum_tokens += r.charged_tokens(&m.budget);
                 cum_wall += r.wall_secs;
             } else if r.outcome != crate::aggregate::Outcome::Cancelled || r.tokens.is_some() {
                 v.push(format!(

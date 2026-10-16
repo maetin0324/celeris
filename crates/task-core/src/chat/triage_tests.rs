@@ -367,3 +367,55 @@ fn cos_chat_triage_store_report_open_items_and_digest_bookkeeping() {
         "digest"
     );
 }
+
+fn state_of(s: &SqliteStore, key: &str) -> String {
+    s.lock()
+        .expect("lock")
+        .query_row(
+            "SELECT state FROM cos_inbox_items WHERE source_key=?1",
+            [key],
+            |r| r.get(0),
+        )
+        .expect("state")
+}
+
+#[test]
+fn cos_chat_triage_reconcile_resolves_escalated_when_source_closed() {
+    let s = SqliteStore::open_in_memory().expect("store");
+    s.cos_triage_reconcile("decision", &[item("open", "1"), item("closed", "1")], at(0))
+        .expect("reconcile");
+    for k in ["open", "closed"] {
+        s.lock()
+            .expect("lock")
+            .execute(
+                "UPDATE cos_inbox_items SET state='escalated' WHERE source_key=?1",
+                [k],
+            )
+            .expect("escalate");
+    }
+    s.cos_triage_reconcile("decision", &[item("open", "1")], at(1))
+        .expect("reconcile");
+    assert_eq!(state_of(&s, "closed"), "resolved");
+    // 元の待ちが開いたままなら escalated のまま。
+    assert_eq!(state_of(&s, "open"), "escalated");
+}
+
+#[test]
+fn cos_chat_triage_resolve_stale_does_not_insert() {
+    let s = SqliteStore::open_in_memory().expect("store");
+    let src = item("cw", "1");
+    s.cos_triage_direct_escalate(&src, "body", at(0))
+        .expect("direct");
+    assert_eq!(
+        s.cos_triage_resolve_stale("decision", &[], at(1))
+            .expect("stale"),
+        1
+    );
+    assert_eq!(state_of(&s, "cw"), "resolved");
+    assert_eq!(
+        s.cos_triage_resolve_stale("decision", &[item("new", "1")], at(2))
+            .expect("stale"),
+        0
+    );
+    assert_eq!(count(&s, "cos_inbox_items"), 1);
+}

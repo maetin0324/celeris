@@ -395,7 +395,12 @@ impl CosChatLaunch {
         for item in inbox.items.iter().filter(|i| is_direct(i)) {
             self.direct_escalate(item, &policy, now)?;
         }
-        by_kind.retain(|kind, _| *kind != InboxKind::CredentialWait.as_str());
+        if let Some(current) = by_kind.remove(InboxKind::CredentialWait.as_str()) {
+            // 挿入は direct_escalate が行う。閉じた待ちの escalated item だけここで resolved にする。
+            self.store
+                .cos_triage_resolve_stale(InboxKind::CredentialWait.as_str(), &current, now)
+                .map_err(|e| e.to_string())?;
+        }
         let mut inserted = 0;
         for (kind, current) in &by_kind {
             inserted += self

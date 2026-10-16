@@ -148,34 +148,24 @@ impl SqliteStore {
         let mut conn = writer(self)?;
         let tx = immediate(&mut conn)?;
         let inserted = insert_items(&tx, current, &at)?;
-        let live: HashSet<(&str, &str)> = current
-            .iter()
-            .filter(|i| i.operation_id.is_none())
-            .map(|i| (i.source_key.as_str(), i.source_revision.as_str()))
-            .collect();
-        let stale: Vec<String> = {
-            let mut stmt = tx.prepare("SELECT id,source_key,source_revision FROM cos_inbox_items WHERE source_kind=?1 AND state IN ('pending','running')")?;
-            let rows = stmt.query_map([source_kind], |r| {
-                Ok((
-                    r.get::<_, String>(0)?,
-                    r.get::<_, String>(1)?,
-                    r.get::<_, String>(2)?,
-                ))
-            })?;
-            rows.collect::<Result<Vec<_>, _>>()?
-                .into_iter()
-                .filter(|(_, k, r)| !live.contains(&(k.as_str(), r.as_str())))
-                .map(|(id, _, _)| id)
-                .collect()
-        };
-        for id in stale {
-            tx.execute(
-                "UPDATE cos_inbox_items SET state='resolved',updated_at=?2 WHERE id=?1",
-                params![id, at],
-            )?;
-        }
+        resolve_stale(&tx, source_kind, current, &at)?;
         tx.commit()?;
         Ok(inserted)
+    }
+
+    /// 元の待ちが閉じた item だけを resolved にする（挿入はしない）。`cos_triage_reconcile` から外れている
+    /// 直送種別（credential_wait）用。ADR 2026-10-16-cos-inbox-escalated-resolve-on-source-close。
+    pub fn cos_triage_resolve_stale(
+        &self,
+        source_kind: &str,
+        current: &[CosTriageSource],
+        now: OffsetDateTime,
+    ) -> Result<usize, ChatError> {
+        let mut conn = writer(self)?;
+        let tx = immediate(&mut conn)?;
+        let n = resolve_stale(&tx, source_kind, current, &chat_ts(now))?;
+        tx.commit()?;
+        Ok(n)
     }
 
     /// Claim at most twenty pending items and bind one system message to one chat run.
@@ -599,4 +589,41 @@ impl SqliteStore {
         )?;
         Ok(rows.collect::<Result<_, _>>()?)
     }
+}
+
+/// 現在の未解決 snapshot に無い `pending`／`running`／`escalated` の item を resolved にする。
+/// `escalated` は人に渡した後も元の待ちが閉じれば処理済みである（events には触れない）。
+fn resolve_stale(
+    tx: &Transaction<'_>,
+    source_kind: &str,
+    current: &[CosTriageSource],
+    at: &str,
+) -> Result<usize, ChatError> {
+    let live: HashSet<(&str, &str)> = current
+        .iter()
+        .filter(|i| i.operation_id.is_none())
+        .map(|i| (i.source_key.as_str(), i.source_revision.as_str()))
+        .collect();
+    let stale: Vec<String> = {
+        let mut stmt = tx.prepare("SELECT id,source_key,source_revision FROM cos_inbox_items WHERE source_kind=?1 AND state IN ('pending','running','escalated')")?;
+        let rows = stmt.query_map([source_kind], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+            ))
+        })?;
+        rows.collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .filter(|(_, k, r)| !live.contains(&(k.as_str(), r.as_str())))
+            .map(|(id, _, _)| id)
+            .collect()
+    };
+    for id in &stale {
+        tx.execute(
+            "UPDATE cos_inbox_items SET state='resolved',updated_at=?2 WHERE id=?1",
+            params![id, at],
+        )?;
+    }
+    Ok(stale.len())
 }

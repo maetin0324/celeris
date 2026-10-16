@@ -18,7 +18,7 @@ completed: 2026-10-16
 - `crates/campaign/tests/celeris_exec.rs::body_carries_campaign_identity_and_idempotency_key`。
 - executor body を実 task-api router へ POST する越境試験は、WU のスコープ（crates/campaign 等）外の task-api/Cargo.lock を変えるため置かない。
   受け口側は task-api の campaign_ident（api-ident）が HTTP 経由で保存・冪等・409 を検証済み。通し試験は cos-record / 統合工程で行う。
-- `bash scripts/dev/test-parallel.sh` exit 0（5521 passed, 0 failed）、`cargo clippy --workspace -- -D warnings` exit 0、`cargo fmt --all -- --check` exit 0。
+- `bash scripts/dev/test-parallel.sh` exit 0（5520 passed, 0 failed（最終 commit 後に再実行））、`cargo clippy --workspace -- -D warnings` exit 0、`cargo fmt --all -- --check` exit 0。
 
 ## 実経路検証済み
 - なし（一時 DB の in-process 試験まで。本番は触っていない）。

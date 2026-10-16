@@ -59,6 +59,7 @@ fn build_pilot(input: &Input) -> CampaignManifest {
         model: "mock-model".into(),
         model_version: "mock-1".into(),
         policy_version: pol.into(),
+        routing: None,
     };
     let mut m = CampaignManifest {
         schema: celeris_campaign::CAMPAIGN_SCHEMA.into(),

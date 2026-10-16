@@ -32,6 +32,7 @@ fn campaign(i: &Input, split: Split, n: usize, max_tokens: u64, attempts: u32) -
         model: "m".into(),
         model_version: "1".into(),
         policy_version: "p1".into(),
+        routing: None,
     };
     CampaignManifest {
         schema: celeris_campaign::CAMPAIGN_SCHEMA.into(),

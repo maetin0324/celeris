@@ -46,6 +46,25 @@ pub struct Config {
     pub model_version: String,
     /// 方策の版（A は baseline の運用版、B は fixed、C は Jev prompt/model 版を含む）。
     pub policy_version: String,
+    /// B/C の task 単位 routing 固定（下段・根拠表・オンライン更新）。mode は arm で決まる（B=fixed、
+    /// C=decision_assisted）。A には書かない。省略時は直列化しない（既存 manifest の hash を変えない）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub routing: Option<ArmRouting>,
+}
+
+/// 試行ごとに task へ固定する routing 設定（`POST /tasks` の `routing_override` の mode 以外）。
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ArmRouting {
+    /// 下段（fixed 方策・lane→model 対応表）の版。省略時は Celeris の既定版を明示して固定する。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lower_policy: Option<String>,
+    /// 根拠表 `routing_evidence` の版。C（decision_assisted）では必須（最新版への暗黙の追従を許さない）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence_table_id: Option<String>,
+    /// run の結果をオンライン更新の根拠へ追記するか。省略時は false（試行が根拠表を動かさない）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub online_update: Option<bool>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -230,6 +249,9 @@ impl CampaignManifest {
                     return Err(format!("config {:?}: {n} is empty", c.id));
                 }
             }
+            if c.id == ConfigId::A && c.routing.is_some() {
+                return Err("config A: routing is for Celeris arms (B/C) only".into());
+            }
         }
         if self.primary != (ConfigId::A, ConfigId::B) {
             return Err("primary comparison must be (A, B)".into());
@@ -338,6 +360,7 @@ pub(crate) mod fixtures {
             model: "m".into(),
             model_version: "1".into(),
             policy_version: "p1".into(),
+            routing: None,
         };
         CampaignManifest {
             schema: CAMPAIGN_SCHEMA.into(),

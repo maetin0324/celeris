@@ -104,6 +104,16 @@ pub struct NewTaskBody {
     /// `[routing] mode` より優先する。省略時は従来（config に従う）。未知の値は 400。
     #[serde(default)]
     pub routing_override: Option<task_core::route_select::RoutingOverride>,
+    /// ADR 2026-10-16-campaign-identity-propagation: campaign の root task に付ける識別
+    /// （campaign_id / case_id / arm / repetition / manifest_hash / routing_setting）。task 作成と
+    /// 同じ transaction で保存する。子孫・再試行・review は祖先の鎖から継ぐ。省略時は campaign 無し。
+    #[serde(default)]
+    pub campaign: Option<task_core::decision_log::CampaignIdentity>,
+    /// `campaign` の再送判定に使う冪等キー（task の label として照合する）。同じ識別の再送は
+    /// 既存 task を 200 で返し、同じキーで識別が違う、または同じ試行で識別の欄が違えば 409
+    /// `campaign_identity_conflict`。`campaign` が無ければ 400。
+    #[serde(default)]
+    pub campaign_idempotency_key: Option<String>,
 }
 
 fn created_task(task: &Task) -> Response {
@@ -310,9 +320,21 @@ pub(super) async fn create_task(
     let body: NewTaskBody = read_json(body, false).await?;
     let roles = state.inner.roles.clone();
     let genres = state.inner.genres.clone();
-    let task = state
-        .blocking(move |store| create_task_op(store, &roles, &genres, body, None)?.direct())
+    let (task, resent) = state
+        .blocking(move |store| {
+            if let Some(task) = campaign_resend(store, &body)? {
+                return Ok((task, true));
+            }
+            Ok((
+                create_task_op(store, &roles, &genres, body, None)?.direct()?,
+                false,
+            ))
+        })
         .await?;
+    if resent {
+        // 同じ識別の再送: 既存 task をそのまま返す（作り直さない）。
+        return Ok(json_response(StatusCode::OK, &task));
+    }
     let mut response = created_task(&task);
     // ADR 2026-10-09-cos-task-repository-required D2: 人の起票は拒否せず、header で警告する
     // （後から `PATCH /tasks/{id}` の `project_id`・`repos` で付けられる）。
@@ -323,6 +345,50 @@ pub(super) async fn create_task(
         );
     }
     Ok(response)
+}
+
+/// campaign 識別付きの再送なら既存 task を返す。識別が食い違えば 409（別の試行を上書きしない）。
+fn campaign_resend(
+    store: &task_core::store::SqliteStore,
+    body: &NewTaskBody,
+) -> Result<Option<Task>, ApiProblem> {
+    let Some(identity) = &body.campaign else {
+        if body.campaign_idempotency_key.is_some() {
+            return Err(ApiProblem::bad_request(
+                "campaign_idempotency_key requires campaign",
+            ));
+        }
+        return Ok(None);
+    };
+    identity.validate().map_err(ApiProblem::bad_request)?;
+    let internal = |e: StoreError| ApiProblem::internal(e.to_string());
+    match store
+        .task_campaign_resend(identity, body.campaign_idempotency_key.as_deref())
+        .map_err(internal)?
+    {
+        task_core::store::CampaignResend::New => Ok(None),
+        task_core::store::CampaignResend::Same(id) => {
+            let id = id
+                .parse()
+                .map_err(|_| ApiProblem::internal("bad task id"))?;
+            store
+                .get(id)
+                .map_err(internal)?
+                .map(Some)
+                .ok_or_else(|| ApiProblem::internal("task vanished"))
+        }
+        task_core::store::CampaignResend::Conflict(id) => Err(campaign_conflict(&id)),
+    }
+}
+
+fn campaign_conflict(existing: &str) -> ApiProblem {
+    ApiProblem::new(
+        StatusCode::CONFLICT,
+        "campaign_identity_conflict",
+        format!(
+            "task {existing} already holds this idempotency key or trial with a different campaign identity"
+        ),
+    )
 }
 
 /// ADR 2026-10-09-cos-task-repository-required D2: 人の `POST /tasks` への警告の header。
@@ -344,6 +410,8 @@ pub(crate) fn create_task_op(
         expected_write_paths,
         attachment_ids,
         routing_override,
+        campaign,
+        campaign_idempotency_key,
     } = body;
     let reject = |problem: ApiProblem| match audit {
         Some(audit) => audit.reject(store, "task", "new", problem),
@@ -366,6 +434,12 @@ pub(crate) fn create_task_op(
     // ここを通らないので変わらない。
     if task.status.is_none() {
         task.status = Some(task_core::Status::Ready);
+    }
+    // 冪等キーは label として照合するので、呼び出し側が付け忘れても必ず残す。
+    if let Some(key) = &campaign_idempotency_key
+        && !task.labels.contains(key)
+    {
+        task.labels.push(key.clone());
     }
     // ADR-0016 M3 / ADR-0027 D1: 省略された tier / adapter / 予算は `[[roles]]` の既定 → `[[genres]]` の
     // `default_role` の既定 → 全体の既定で埋める。API は常に完全な設定を持つので、`genres` が設定されて
@@ -408,6 +482,26 @@ pub(crate) fn create_task_op(
                 built.id,
                 o,
                 &OffsetDateTime::now_utc().to_string(),
+            )?;
+        }
+        if let Some(identity) = &campaign {
+            // 同じ transaction で再確認する（先の確認と保存の間に同じ試行が入った競合も 409 にする）。
+            if !matches!(
+                task_core::store::SqliteStore::task_campaign_resend_tx(
+                    tx,
+                    identity,
+                    campaign_idempotency_key.as_deref()
+                )?,
+                task_core::store::CampaignResend::New
+            ) {
+                failure = Some(campaign_conflict("(concurrent)"));
+                return Err(StoreError::Invalid("campaign identity conflict".into()));
+            }
+            task_core::store::SqliteStore::task_campaign_set_tx(
+                tx,
+                &built.id.to_string(),
+                identity,
+                OffsetDateTime::now_utc(),
             )?;
         }
         if paths.is_some() {

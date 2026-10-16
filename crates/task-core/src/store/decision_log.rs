@@ -621,6 +621,14 @@ impl SqliteStore {
 /// 祖先を辿る上限（task 木の最大深さ 3 より十分大きい。循環の保険）。
 const CAMPAIGN_ANCESTOR_LIMIT: usize = 32;
 
+/// `task_campaign_resend` の結果。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CampaignResend {
+    New,
+    Same(String),
+    Conflict(String),
+}
+
 impl SqliteStore {
     /// campaign の root task に識別を付ける（同じ task への再設定は置換）。
     pub fn task_campaign_set(
@@ -659,6 +667,100 @@ impl SqliteStore {
             ],
         )?;
         Ok(())
+    }
+
+    /// 再送の判定。同じ冪等キー、または同じ試行（campaign / case / arm / repetition）の task が
+    /// 既にあれば、識別が全欄一致なら `Same`、違えば `Conflict`（別の試行を黙って上書きしない）。
+    pub fn task_campaign_resend_tx(
+        conn: &rusqlite::Connection,
+        id: &CampaignIdentity,
+        key: Option<&str>,
+    ) -> Result<CampaignResend, StoreError> {
+        let mut found = None;
+        if let Some(key) = key {
+            found = Self::task_campaign_by_key_tx(conn, key)?;
+        }
+        if found.is_none() {
+            found = Self::task_campaign_by_trial_tx(conn, id)?;
+        }
+        let Some(task_id) = found else {
+            return Ok(CampaignResend::New);
+        };
+        Ok(match Self::task_campaign_own_tx(conn, &task_id)? {
+            Some(own) if &own == id => CampaignResend::Same(task_id),
+            _ => CampaignResend::Conflict(task_id),
+        })
+    }
+
+    pub fn task_campaign_resend(
+        &self,
+        id: &CampaignIdentity,
+        key: Option<&str>,
+    ) -> Result<CampaignResend, StoreError> {
+        let conn = self.lock()?;
+        Self::task_campaign_resend_tx(&conn, id, key)
+    }
+
+    /// 同じ試行（campaign / case / arm / repetition が全て一致）の識別を持つ task。最古を返す。
+    pub fn task_campaign_by_trial_tx(
+        conn: &rusqlite::Connection,
+        id: &CampaignIdentity,
+    ) -> Result<Option<String>, StoreError> {
+        Ok(conn
+            .query_row(
+                "SELECT task_id FROM task_campaigns WHERE campaign_id = ?1 AND case_id IS ?2 \
+                 AND arm IS ?3 AND repetition IS ?4 ORDER BY task_id LIMIT 1",
+                params![
+                    id.campaign_id,
+                    id.case_id,
+                    id.arm,
+                    id.repetition.map(i64::from)
+                ],
+                |r| r.get(0),
+            )
+            .optional()?)
+    }
+
+    /// 冪等キー（label）を持ち、識別も持つ task。最古を返す。
+    pub fn task_campaign_by_key_tx(
+        conn: &rusqlite::Connection,
+        key: &str,
+    ) -> Result<Option<String>, StoreError> {
+        Ok(conn
+            .query_row(
+                "SELECT c.task_id FROM task_campaigns c JOIN tasks t ON t.id = c.task_id \
+                 WHERE EXISTS (SELECT 1 FROM json_each(COALESCE(t.labels_json, '[]')) \
+                 WHERE json_each.value = ?1) ORDER BY c.task_id LIMIT 1",
+                [key],
+                |r| r.get(0),
+            )
+            .optional()?)
+    }
+
+    /// 呼び出し側の transaction の中で、task 自身に付いた識別を読む。
+    pub fn task_campaign_own_tx(
+        conn: &rusqlite::Connection,
+        task_id: &str,
+    ) -> Result<Option<CampaignIdentity>, StoreError> {
+        Ok(conn
+            .query_row(
+                "SELECT campaign_id, case_id, arm, repetition, manifest_hash, routing_setting \
+                 FROM task_campaigns WHERE task_id = ?1",
+                [task_id],
+                |r| {
+                    Ok(CampaignIdentity {
+                        campaign_id: r.get(0)?,
+                        case_id: r.get(1)?,
+                        arm: r.get(2)?,
+                        repetition: r
+                            .get::<_, Option<i64>>(3)?
+                            .and_then(|n| u32::try_from(n).ok()),
+                        manifest_hash: r.get(4)?,
+                        routing_setting: r.get(5)?,
+                    })
+                },
+            )
+            .optional()?)
     }
 
     /// task 自身に付いた識別（継承しない）。

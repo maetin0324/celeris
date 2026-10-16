@@ -83,10 +83,39 @@ pub struct SnapshotRef {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Budget {
+    /// campaign 全体（全 arm の総量）の上限。
     pub max_tokens: u64,
     pub max_wall_secs: u64,
     pub max_disk_bytes: u64,
     pub max_parallel: u32,
+    /// 1 試行の上限。実行中に適用する（ADR 2026-10-16-campaign-budget-cap）。
+    pub per_case: Cap,
+    /// 1 arm の累積上限。超えた arm の残りの試行だけを止める（他 arm は止めない）。
+    pub per_arm: Cap,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Cap {
+    pub max_tokens: u64,
+    pub max_wall_secs: u64,
+}
+
+impl Budget {
+    /// 欠測 tokens を保守的に「1 試行の上限を使い切った」とみなした課金値。
+    pub fn charged_tokens(&self, tokens: Option<u64>) -> u64 {
+        tokens.unwrap_or(self.per_case.max_tokens)
+    }
+}
+
+/// problem 内の arm 実行順（順序交絡の対策）。ADR 2026-10-16-campaign-arm-order-isolation D1。
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ArmOrder {
+    /// problem の実行位置で計画 arm 列を巡回させる（A,B,C → B,C,A → C,A,B …）。
+    #[default]
+    AbcRotation,
+    /// problem id と seed から決定的に並べ替える。
+    SeededShuffle,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -117,6 +146,17 @@ pub struct CampaignManifest {
     pub secondary: Secondary,
     pub budget: Budget,
     pub termination: Termination,
+    /// problem 内の arm 順。依存順 `problem_order` は常に守る。
+    /// 既定（abc_rotation）は直列化しない（既存 manifest の hash を変えない）。
+    #[serde(default, skip_serializing_if = "is_default_order")]
+    pub order: ArmOrder,
+    /// `seeded_shuffle` の種。`abc_rotation` では使わないが記録する。
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub seed: u64,
+    /// 独立反復の回数（別 ID・別 out の `rep` 1..=repeats）。内部再試行（attempt）とは別。
+    /// 1 は直列化しない（既存 manifest の hash を変えない）。ADR 2026-10-16-campaign-repeats-denominator。
+    #[serde(default = "one", skip_serializing_if = "is_one")]
+    pub repeats: u32,
     pub snapshot: SnapshotRef,
     /// problem id -> 前提 problem id の配列。前提の全 config の trial が passed になるまで依存先は実行しない。
     /// 空なら直列化しない（依存の無い manifest の hash を変えない）。
@@ -124,6 +164,22 @@ pub struct CampaignManifest {
     pub dependencies: BTreeMap<String, Vec<String>>,
     #[serde(default)]
     pub sha256: String,
+}
+
+fn is_default_order(o: &ArmOrder) -> bool {
+    *o == ArmOrder::default()
+}
+
+fn one() -> u32 {
+    1
+}
+
+fn is_one(n: &u32) -> bool {
+    *n == 1
+}
+
+fn is_zero(n: &u64) -> bool {
+    *n == 0
 }
 
 fn canonical(v: &Value) -> Value {
@@ -158,6 +214,35 @@ impl CampaignManifest {
         }
         m.dependencies.retain(|_, v| !v.is_empty());
         m
+    }
+
+    /// problem 内の arm 順。`pos` は problem_order 後の添字。決定的（seed と id のみに依存）。
+    pub fn arm_sequence(&self, problem: &str, pos: usize, arms: Vec<ConfigId>) -> Vec<ConfigId> {
+        let mut v = arms;
+        let n = v.len();
+        if n < 2 {
+            return v;
+        }
+        match self.order {
+            ArmOrder::AbcRotation => v.rotate_left(pos % n),
+            ArmOrder::SeededShuffle => {
+                let mut h = Sha256::new();
+                h.update(self.seed.to_le_bytes());
+                h.update(problem.as_bytes());
+                let d = h.finalize();
+                let mut state = u64::from_le_bytes(d[..8].try_into().unwrap_or([0; 8]));
+                for i in (1..n).rev() {
+                    // splitmix64
+                    state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+                    let mut z = state;
+                    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+                    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+                    z ^= z >> 31;
+                    v.swap(i, (z % (i as u64 + 1)) as usize);
+                }
+            }
+        }
+        v
     }
 
     /// 問題の実行順（前提が先。依存が無ければ id 昇順）。未知 id・自己依存・循環は Err。
@@ -264,9 +349,25 @@ impl CampaignManifest {
         {
             return Err("budget fields must all be > 0".into());
         }
+        let (c, a) = (b.per_case, b.per_arm);
+        if c.max_tokens == 0 || c.max_wall_secs == 0 || a.max_tokens == 0 || a.max_wall_secs == 0 {
+            return Err("budget per_case/per_arm fields must all be > 0".into());
+        }
+        if a.max_tokens < c.max_tokens || a.max_wall_secs < c.max_wall_secs {
+            return Err("budget per_arm must be >= per_case".into());
+        }
         let t = &self.termination;
         if t.trial_timeout_secs == 0 || t.max_attempts_per_trial == 0 {
             return Err("termination fields must be > 0".into());
+        }
+        if t.max_attempts_per_trial != 1 {
+            return Err(
+                "termination.max_attempts_per_trial must be 1 (use repeats for independent repetitions)"
+                    .into(),
+            );
+        }
+        if self.repeats == 0 {
+            return Err("repeats must be >= 1".into());
         }
         if self.problems.is_empty() {
             return Err("problems is empty".into());
@@ -387,6 +488,14 @@ pub(crate) mod fixtures {
                 max_wall_secs: 86_400,
                 max_disk_bytes: 1 << 40,
                 max_parallel: 4,
+                per_case: Cap {
+                    max_tokens: 1_000_000,
+                    max_wall_secs: 3_600,
+                },
+                per_arm: Cap {
+                    max_tokens: 5_000_000,
+                    max_wall_secs: 43_200,
+                },
             },
             termination: Termination {
                 trial_timeout_secs: 1800,
@@ -398,6 +507,9 @@ pub(crate) mod fixtures {
                 materials_sha256: "def".into(),
                 kb_snapshot: "kb@1".into(),
             },
+            order: Default::default(),
+            seed: 0,
+            repeats: 1,
             dependencies: BTreeMap::new(),
             sha256: String::new(),
         }

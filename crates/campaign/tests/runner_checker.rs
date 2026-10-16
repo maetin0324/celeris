@@ -24,7 +24,7 @@ fn input(n: usize, split: &str) -> Input {
     m
 }
 
-fn campaign(i: &Input, split: Split, n: usize, max_tokens: u64, attempts: u32) -> CampaignManifest {
+fn campaign(i: &Input, split: Split, n: usize, max_tokens: u64, repeats: u32) -> CampaignManifest {
     let cfg = |id, h: &str| Config {
         id,
         harness: h.into(),
@@ -59,10 +59,18 @@ fn campaign(i: &Input, split: Split, n: usize, max_tokens: u64, attempts: u32) -
             max_wall_secs: 1_000_000,
             max_disk_bytes: 1 << 40,
             max_parallel: 1,
+            per_case: celeris_campaign::manifest::Cap {
+                max_tokens: 100_000,
+                max_wall_secs: 1_000_000,
+            },
+            per_arm: celeris_campaign::manifest::Cap {
+                max_tokens: 10_000_000_000,
+                max_wall_secs: 1_000_000,
+            },
         },
         termination: Termination {
             trial_timeout_secs: 300,
-            max_attempts_per_trial: attempts,
+            max_attempts_per_trial: 1,
             stop_on_budget: true,
         },
         snapshot: SnapshotRef {
@@ -70,6 +78,9 @@ fn campaign(i: &Input, split: Split, n: usize, max_tokens: u64, attempts: u32) -
             materials_sha256: "d".into(),
             kb_snapshot: "kb@1".into(),
         },
+        order: Default::default(),
+        seed: 0,
+        repeats,
         dependencies: Default::default(),
         sha256: String::new(),
     }
@@ -104,10 +115,10 @@ struct Env {
     opts: RunOptions,
 }
 
-fn ran(max_tokens: u64, attempts: u32) -> Env {
+fn ran(max_tokens: u64, repeats: u32) -> Env {
     let d = tempfile::tempdir().expect("dir");
     let i = input(4, "dev");
-    let m = campaign(&i, Split::Dev, 4, max_tokens, attempts);
+    let m = campaign(&i, Split::Dev, 4, max_tokens, repeats);
     let opts = seeded_src(d.path());
     run(&m, &i, &script(), &opts).expect("run");
     Env { _d: d, m, opts }
@@ -216,7 +227,7 @@ fn workspaces_and_kbs_are_isolated_and_snapshot_is_saved() {
     assert_eq!(
         recs.len(),
         10 * 2,
-        "A,B x4 + C x2 problems, 2 attempts each"
+        "A,B x4 + C x2 problems, 2 repetitions each"
     );
     let mut dirs = std::collections::BTreeSet::new();
     for r in &recs {

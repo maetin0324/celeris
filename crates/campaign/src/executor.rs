@@ -7,7 +7,7 @@ use sha2::{Digest, Sha256};
 pub use crate::ledger::TaskRef;
 use crate::{
     aggregate::Outcome,
-    manifest::{Config, ConfigId},
+    manifest::{Cap, Config, ConfigId},
 };
 use serde_json::Value;
 use std::sync::Mutex;
@@ -17,11 +17,22 @@ pub struct TrialRequest<'a> {
     pub problem_id: &'a str,
     pub prompt: &'a str,
     pub trial_no: u32,
+    pub rep: u32,
     /// この試行専用の作業ツリー（初期 repo の複製）。
     pub workspace: &'a Path,
     /// この試行専用の KB（初期 KB snapshot の複製）。
     pub kb: &'a Path,
     pub timeout_secs: u64,
+    /// この試行の実効上限（`min(per_case, per_arm の残り)`）。同期 executor は自分で止めてよい。
+    /// 止めずに超えた分は runner が結果の受け取り時に case_budget として cancelled に直す。
+    pub budget: Cap,
+}
+
+/// 実行中の試行（子 task・job を含む）の累積使用量。tokens が None なら欠測（0 ではない）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Usage {
+    pub tokens: Option<u64>,
+    pub wall_secs: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -51,8 +62,9 @@ pub trait Executor {
     }
 
     /// 試行ごとに task 単位で固定する routing 設定（台帳に投入前に記録する）。
-    fn routing(&self, _req: &TrialRequest) -> Value {
-        Value::Null
+    /// Err は投入前の拒否（B/C の routing 欠落・C の根拠表 id 無し）で、その試行は executor_error になる。
+    fn routing(&self, _req: &TrialRequest) -> Result<Value, String> {
+        Ok(Value::Null)
     }
 
     /// 冪等キーで既に投入済みの task を照会する。応答喪失・再起動後の再開手順の第 1 段。
@@ -78,6 +90,11 @@ pub trait Executor {
         Ok(t.clone())
     }
 
+    /// 実行中の累積使用量。観測できない executor は None（runner は上限の実行中判定をせず、完了後に判定する）。
+    fn usage(&self, _t: &TaskRef) -> Result<Option<Usage>, String> {
+        Ok(None)
+    }
+
     fn poll(&self, _t: &TaskRef) -> Result<ExecStatus, String> {
         Err(format!("executor {} does not support poll", self.name()))
     }
@@ -101,6 +118,8 @@ pub enum MockStep {
     PassUnmetered,
     /// 外部待ち（結果がまだ出ない）。
     Wait,
+    /// executor 自体が Err を返す（接続失敗など）。その試行だけ error になり run は続く。
+    Err,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -156,7 +175,10 @@ impl Executor for MockExecutor {
         // 試行専用の作業ツリーと KB を実際に書き換える（隔離の検証用）。
         fs::write(
             req.workspace.join("mock-result.txt"),
-            format!("{:?}/{}/{}", req.config.id, req.problem_id, req.trial_no),
+            format!(
+                "{:?}/{}/rep{}/{}",
+                req.config.id, req.problem_id, req.rep, req.trial_no
+            ),
         )
         .map_err(|e| e.to_string())?;
         fs::write(req.kb.join("mock-note.md"), req.problem_id).map_err(|e| e.to_string())?;
@@ -168,6 +190,7 @@ impl Executor for MockExecutor {
         };
         let done = match self.step(req) {
             MockStep::Wait => return Ok(ExecStatus::Wait),
+            MockStep::Err => return Err("mock executor failure".into()),
             MockStep::Pass => metered(Outcome::Passed, 10_000, 60),
             MockStep::Fail => metered(Outcome::Failed, 12_000, 90),
             MockStep::Error => metered(Outcome::Error, 1_000, 5),
@@ -246,8 +269,8 @@ impl Executor for MockAsyncExecutor {
         true
     }
 
-    fn routing(&self, req: &TrialRequest) -> Value {
-        serde_json::json!({"mode": "mock", "arm": format!("{:?}", req.config.id)})
+    fn routing(&self, req: &TrialRequest) -> Result<Value, String> {
+        Ok(serde_json::json!({"mode": "mock", "arm": format!("{:?}", req.config.id)}))
     }
 
     fn lookup(&self, key: &str) -> Result<Option<TaskRef>, String> {

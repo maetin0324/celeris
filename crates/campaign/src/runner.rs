@@ -12,9 +12,9 @@ use serde_json::{Value, json};
 
 use crate::{
     aggregate::Outcome,
-    executor::{ExecResult, ExecStatus, Executor, TrialRequest},
+    executor::{ExecResult, ExecStatus, Executor, TrialRequest, Usage},
     ledger::{Ledger, LedgerRow, LedgerState, TrialKey},
-    manifest::{CampaignManifest, ConfigId},
+    manifest::{Budget, CampaignManifest, Cap, ConfigId},
     record::*,
     snapshot::{copy_tree, hash_tree},
 };
@@ -37,9 +37,69 @@ pub struct RunReport {
     pub blocked: u64,
     /// 前提が外部待ちで今回は実行も記録もしなかった試行数（再実行で続きを実行する）。
     pub waiting: u64,
+    /// 観測できた tokens の和（欠測は含めない）。
     pub tokens_total: u64,
+    /// 上限判定に使う tokens の和。欠測の試行は per_case.max_tokens を消費したものとして加算する。
+    pub tokens_charged_total: u64,
+    /// tokens が欠測（None）のまま終わった試行数（0 として無料扱いしない）。
+    pub tokens_missing: u64,
+    /// executor が Err を返し、その試行だけ error として記録した件数（run は続行）。
+    pub executor_errors: u64,
     pub wall_secs_total: u64,
     pub budget_stopped: bool,
+    /// per_case 超過で止めた試行数（reason = case_budget）。
+    pub case_budget_cancelled: u64,
+    /// per_arm の残りが尽きて止めた／実行しなかった試行数（reason = arm_budget）。
+    pub arm_budget_cancelled: u64,
+    /// 実効上限に対する最大超過量。粒度は `OVERSHOOT_GRANULARITY`。
+    pub max_overshoot_tokens: u64,
+    pub max_overshoot_wall_secs: u64,
+}
+
+/// 最大超過の粒度（summary にも書く）。ADR 2026-10-16-campaign-budget-cap D4。
+pub const OVERSHOOT_GRANULARITY: &str = "async executor: up to one poll interval of usage (one runner pass); sync executor: up to one whole trial unless the executor stops itself via TrialRequest.budget; arm cap: up to the last trial";
+
+/// 試行の実効上限 = min(per_case, per_arm の残り)。
+fn effective_cap(b: &Budget, arm_tokens: u64, arm_wall: u64) -> Cap {
+    Cap {
+        max_tokens: b
+            .per_case
+            .max_tokens
+            .min(b.per_arm.max_tokens.saturating_sub(arm_tokens)),
+        max_wall_secs: b
+            .per_case
+            .max_wall_secs
+            .min(b.per_arm.max_wall_secs.saturating_sub(arm_wall)),
+    }
+}
+
+/// 使用量が上限を超えていればその reason。tokens 欠測は tokens 側を判定しない（終了後に保守的に課金する）。
+fn breach_reason(
+    b: &Budget,
+    arm: (u64, u64),
+    tokens: Option<u64>,
+    wall: u64,
+) -> Option<&'static str> {
+    if tokens.is_some_and(|t| t > b.per_case.max_tokens) || wall > b.per_case.max_wall_secs {
+        Some(REASON_CASE_BUDGET)
+    } else if tokens.is_some_and(|t| arm.0.saturating_add(t) > b.per_arm.max_tokens)
+        || arm.1.saturating_add(wall) > b.per_arm.max_wall_secs
+    {
+        Some(REASON_ARM_BUDGET)
+    } else {
+        None
+    }
+}
+
+fn arm_exhausted(b: &Budget, arm: (u64, u64)) -> bool {
+    arm.0 >= b.per_arm.max_tokens || arm.1 >= b.per_arm.max_wall_secs
+}
+
+/// drive_async の結果。
+enum Driven {
+    Done(ExecResult),
+    /// 実行中に上限を超えたので cancel した（観測した使用量と reason）。
+    Cancelled(ExecResult, &'static str),
 }
 
 fn write_json(path: &Path, v: &Value) -> Result<(), String> {
@@ -151,20 +211,22 @@ fn append(path: &Path, r: &TrialRecord) -> Result<(), String> {
     f.flush().map_err(|e| e.to_string())
 }
 
-/// 実行すべき試行の一覧（problem 昇順 → A,B,C → 試行番号）。C は事前登録 subset だけ。
+/// 実行すべき試行の一覧（problem 依存順 → problem 内の arm 順（manifest の order/seed）→ 反復 rep）。C は事前登録 subset だけ。
+/// 3 番目は独立反復 rep（1..=repeats）。内部再試行は無い（trial_no は常に 1）。
 pub fn plan(m: &CampaignManifest) -> Vec<(ConfigId, String, u32)> {
     let n = m.normalized();
     let subset: BTreeSet<&str> = n.secondary.subset.iter().map(String::as_str).collect();
     // 前提が先。依存が無ければ id 昇順（validate 済みの manifest では Err にならない）。
     let order = n.problem_order().unwrap_or_else(|_| n.problems.clone());
     let mut v = Vec::new();
-    for p in &order {
-        for c in [ConfigId::A, ConfigId::B, ConfigId::C] {
-            if c == ConfigId::C && !subset.contains(p.as_str()) {
-                continue;
-            }
-            for t in 1..=m.termination.max_attempts_per_trial {
-                v.push((c, p.clone(), t));
+    for (pos, p) in order.iter().enumerate() {
+        let arms: Vec<ConfigId> = [ConfigId::A, ConfigId::B, ConfigId::C]
+            .into_iter()
+            .filter(|c| *c != ConfigId::C || subset.contains(p.as_str()))
+            .collect();
+        for c in n.arm_sequence(p, pos, arms) {
+            for rep in 1..=m.repeats {
+                v.push((c, p.clone(), rep));
             }
         }
     }
@@ -179,13 +241,13 @@ enum Prereq {
 
 /// 前提 problem の全 config（計画された分）の最初の試行が passed かを記録から判定する。
 /// 失敗側（failed/timeout/error/cancelled/blocked）が 1 つでもあれば Blocked、未記録があれば Waiting。
-fn prereq_state(m: &CampaignManifest, records: &[TrialRecord], problem: &str) -> Prereq {
+fn prereq_state(m: &CampaignManifest, records: &[TrialRecord], problem: &str, rep: u32) -> Prereq {
     let mut waiting = false;
     for q in m.dependencies.get(problem).into_iter().flatten() {
         for c in m.planned_configs(q) {
             let first = records
                 .iter()
-                .filter(|r| r.config == c && r.problem_id == *q)
+                .filter(|r| r.config == c && r.problem_id == *q && r.rep == rep)
                 .min_by_key(|r| r.trial_no);
             match first.map(|r| r.outcome) {
                 Some(Outcome::Passed) => {}
@@ -201,6 +263,7 @@ fn prereq_state(m: &CampaignManifest, records: &[TrialRecord], problem: &str) ->
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn new_record(
     cfg: &crate::manifest::Config,
     hash: &str,
@@ -208,7 +271,8 @@ fn new_record(
     m: &CampaignManifest,
     problem_id: String,
     config: ConfigId,
-    trial_no: u32,
+    rep: u32,
+    arm_rank: u32,
 ) -> TrialRecord {
     TrialRecord {
         schema: TRIAL_SCHEMA.into(),
@@ -217,13 +281,16 @@ fn new_record(
         split: m.split,
         config,
         problem_id,
-        trial_no,
+        trial_no: 1,
+        rep,
+        arm_rank,
         outcome: Outcome::Cancelled,
         passed: false,
         tokens: None,
         cost_micro_usd: None,
         wall_secs: 0,
         reason: None,
+        routing: None,
         harness: cfg.harness.clone(),
         harness_version: cfg.harness_version.clone(),
         model: cfg.model.clone(),
@@ -256,6 +323,18 @@ fn cancel_row(
     ledger.mark_cancelled(&row.key, reason)
 }
 
+/// drive_async の失敗。executor の Err はその試行だけ error にし、台帳・fs の失敗は run の失敗にする。
+enum DriveErr {
+    Exec(String),
+    Fatal(String),
+}
+
+impl From<String> for DriveErr {
+    fn from(e: String) -> Self {
+        DriveErr::Fatal(e)
+    }
+}
+
 /// 非同期実行器の 1 試行を台帳経由で進める。Wait なら None（workspace は消さない）。
 #[allow(clippy::too_many_arguments)]
 fn drive_async(
@@ -267,18 +346,20 @@ fn drive_async(
     rel: &str,
     repo: &Path,
     kb: &Path,
-) -> Result<Option<ExecResult>, String> {
+    budget: &Budget,
+    arm: (u64, u64),
+) -> Result<Option<Driven>, DriveErr> {
     let ws_rel = format!("{rel}/workspace");
     let idem = key.idempotency_key();
     let known = ledger.get(key).cloned();
     let mut task = known.as_ref().and_then(LedgerRow::task_ref);
     if known.is_none() {
         // 投入『前』に planned を fsync する。ここで落ちても冪等キーで再開できる。
-        ledger.plan(key, &ws_rel, exec.routing(req))?;
+        ledger.plan(key, &ws_rel, exec.routing(req).map_err(DriveErr::Exec)?)?;
     }
     if task.is_none() {
         // planned のまま（task_id 無し）: 同一冪等キーで照会し、無ければ投入する。
-        let existing = exec.lookup(&idem)?;
+        let existing = exec.lookup(&idem).map_err(DriveErr::Exec)?;
         if existing.is_none() {
             // 外部に何も無いので、workspace は初期 snapshot から作り直してよい。
             let _ = fs::remove_dir_all(out.join(rel));
@@ -290,19 +371,36 @@ fn drive_async(
         }
         let t = match existing {
             Some(t) => t,
-            None => exec.submit(req, &idem)?,
+            None => exec.submit(req, &idem).map_err(DriveErr::Exec)?,
         };
         ledger.mark_submitted(key, &t)?;
         task = Some(t);
     }
-    let t = task.ok_or("task ref missing")?;
-    let fresh = exec.track(&t)?;
+    let t = task.ok_or_else(|| String::from("task ref missing"))?;
+    let fresh = exec.track(&t).map_err(DriveErr::Exec)?;
     if fresh != t {
         ledger.mark_waiting(key, &fresh)?;
     }
-    match exec.poll(&fresh)? {
-        ExecStatus::Done(r) => Ok(Some(r)),
+    match exec.poll(&fresh).map_err(DriveErr::Exec)? {
+        ExecStatus::Done(r) => Ok(Some(Driven::Done(r))),
         ExecStatus::Wait => {
+            // poll ごとに子 task・job を含む累積使用量を見て、上限超過なら cancel する。
+            if let Some(Usage { tokens, wall_secs }) = exec.usage(&fresh).map_err(DriveErr::Exec)?
+                && let Some(reason) = breach_reason(budget, arm, tokens, wall_secs)
+            {
+                if let Some(row) = ledger.get(key).cloned() {
+                    cancel_row(exec, ledger, &row, reason)?;
+                }
+                return Ok(Some(Driven::Cancelled(
+                    ExecResult {
+                        outcome: Outcome::Cancelled,
+                        tokens,
+                        cost_micro_usd: None,
+                        wall_secs,
+                    },
+                    reason,
+                )));
+            }
             if ledger.get(key).map(|r| r.state) != Some(LedgerState::Waiting) {
                 ledger.mark_waiting(key, &fresh)?;
             }
@@ -352,6 +450,8 @@ pub fn run(
             "termination": m.termination,
             "snapshot": m.snapshot,
             "expected_trials": plan(m).len(),
+            "order": m.order,
+            "seed": m.seed,
         }),
     )?;
 
@@ -364,7 +464,7 @@ pub fn run(
     }
     let done: BTreeSet<(ConfigId, String, u32)> = records
         .iter()
-        .map(|r| (r.config, r.problem_id.clone(), r.trial_no))
+        .map(|r| (r.config, r.problem_id.clone(), r.rep))
         .collect();
     let mut ledger = Ledger::open(out)?;
     // trials.jsonl に記録済みなのに台帳が未完了のまま（記録直後の crash）は done に直す。
@@ -372,7 +472,7 @@ pub fn run(
         .unfinished()
         .into_iter()
         .filter(|r| r.key.manifest_sha256 == hash)
-        .filter(|r| done.contains(&(r.key.arm, r.key.problem_id.clone(), r.key.trial_no)))
+        .filter(|r| done.contains(&(r.key.arm, r.key.problem_id.clone(), r.key.rep)))
         .map(|r| r.key.clone())
         .collect();
     for k in stale {
@@ -384,9 +484,20 @@ pub fn run(
         wall_secs_total: records.iter().map(|r| r.wall_secs).sum(),
         ..RunReport::default()
     };
+    // arm ごとの累積（欠測 tokens は保守的に課金する）。再開時は記録から作り直す。
+    let mut arm_use: BTreeMap<ConfigId, (u64, u64)> = BTreeMap::new();
+    for r in records.iter().filter(|r| r.ran()) {
+        let e = arm_use.entry(r.config).or_default();
+        e.0 += r.charged_tokens(&m.budget);
+        e.1 += r.wall_secs;
+        rep.tokens_charged_total += r.charged_tokens(&m.budget);
+        rep.tokens_missing +=
+            u64::from(r.tokens.is_none() && r.reason.as_deref() != Some(REASON_EXECUTOR_ERROR));
+        rep.executor_errors += u64::from(r.reason.as_deref() == Some(REASON_EXECUTOR_ERROR));
+    }
     let over = |rep: &RunReport| {
         m.termination.stop_on_budget
-            && (rep.tokens_total >= m.budget.max_tokens
+            && (rep.tokens_charged_total >= m.budget.max_tokens
                 || rep.wall_secs_total >= m.budget.max_wall_secs)
     };
     rep.budget_stopped = over(&rep);
@@ -398,20 +509,29 @@ pub fn run(
     let cfgs: BTreeMap<ConfigId, &crate::manifest::Config> =
         m.configs.iter().map(|c| (c.id, c)).collect();
 
-    for (cid, pid, trial_no) in plan(m) {
-        if done.contains(&(cid, pid.clone(), trial_no)) {
+    let planned = plan(m);
+    // problem 内の arm 実行位置（1 始まり）。
+    let mut ranks: BTreeMap<(String, ConfigId), u32> = BTreeMap::new();
+    for (c, p, _) in &planned {
+        let next = ranks.keys().filter(|(q, _)| q == p).count() as u32 + 1;
+        ranks.entry((p.clone(), *c)).or_insert(next);
+    }
+    for (cid, pid, rep_no) in planned {
+        if done.contains(&(cid, pid.clone(), rep_no)) {
             continue;
         }
         safe_component(&pid)?;
         let cfg = cfgs.get(&cid).ok_or("config missing")?;
-        let mut rec = new_record(cfg, &hash, input, m, pid.clone(), cid, trial_no);
+        let arm_rank = ranks.get(&(pid.clone(), cid)).copied().unwrap_or(0);
+        let mut rec = new_record(cfg, &hash, input, m, pid.clone(), cid, rep_no, arm_rank);
         let key = TrialKey {
             manifest_sha256: hash.clone(),
             problem_id: pid.clone(),
             arm: cid,
-            trial_no,
+            trial_no: 1,
+            rep: rep_no,
         };
-        let blocked_by = match prereq_state(m, &records, &pid) {
+        let blocked_by = match prereq_state(m, &records, &pid, rep_no) {
             Prereq::Met => None,
             Prereq::Blocked(q) => Some(q),
             Prereq::Waiting => {
@@ -430,8 +550,14 @@ pub fn run(
             if let Some(row) = ledger.get(&key).filter(|r| !r.state.is_terminal()).cloned() {
                 cancel_row(exec, &mut ledger, &row, REASON_BUDGET_STOP)?;
             }
+        } else if arm_exhausted(&m.budget, arm_use.get(&cid).copied().unwrap_or_default()) {
+            // この arm の累積上限が尽きた。実行せず cancelled として分母に残す（他 arm は止めない）。
+            rec.reason = Some(REASON_ARM_BUDGET.into());
+            rep.arm_budget_cancelled += 1;
         } else {
-            let rel = format!("trials/{cid:?}/{pid}/{trial_no}");
+            let arm = arm_use.get(&cid).copied().unwrap_or_default();
+            let cap = effective_cap(&m.budget, arm.0, arm.1);
+            let rel = format!("trials/{cid:?}/{pid}/rep{rep_no}");
             let (ws, kbd) = (out.join(&rel).join("workspace"), out.join(&rel).join("kb"));
             let is_async = exec.is_async();
             if !is_async {
@@ -458,24 +584,80 @@ pub fn run(
                 config: cfg,
                 problem_id: &pid,
                 prompt: prompts.get(pid.as_str()).copied().unwrap_or(""),
-                trial_no,
+                trial_no: 1,
+                rep: rep_no,
                 workspace: &ws,
                 kb: &kbd,
                 timeout_secs: timeout,
+                budget: cap,
             };
-            let mut res = if is_async {
-                match drive_async(exec, &mut ledger, &key, &req, out, &rel, &repo, &kb)? {
-                    Some(r) => r,
-                    None => {
+            let mut cancelled_by: Option<&'static str> = None;
+            let mut errored: Option<String> = None;
+            let failed_result = || ExecResult {
+                outcome: Outcome::Error,
+                tokens: None,
+                cost_micro_usd: None,
+                wall_secs: 0,
+            };
+            // routing は投入前に決める。Err ならその試行だけ error（task は作らない）。
+            let pinned = exec.routing(&req);
+            if let Ok(v) = &pinned
+                && cid != ConfigId::A
+                && !v.is_null()
+            {
+                rec.routing = Some(v.clone());
+            }
+            let mut res = if let Err(e) = pinned {
+                // 投入しない。記録の hash 検査のため、初期 snapshot のままの作業場所だけ用意する。
+                if is_async {
+                    copy_tree(&repo, &ws)?;
+                    copy_tree(&kb, &kbd)?;
+                }
+                errored = Some(e);
+                failed_result()
+            } else if is_async {
+                match drive_async(
+                    exec,
+                    &mut ledger,
+                    &key,
+                    &req,
+                    out,
+                    &rel,
+                    &repo,
+                    &kb,
+                    &m.budget,
+                    arm,
+                ) {
+                    Err(DriveErr::Fatal(e)) => return Err(e),
+                    Err(DriveErr::Exec(e)) => {
+                        // 外部 task があれば best-effort で cancel して台帳を閉じる。run は続行する。
+                        if let Some(row) =
+                            ledger.get(&key).filter(|r| !r.state.is_terminal()).cloned()
+                        {
+                            let _ = cancel_row(exec, &mut ledger, &row, REASON_EXECUTOR_ERROR);
+                        }
+                        errored = Some(e);
+                        failed_result()
+                    }
+                    Ok(Some(Driven::Done(r))) => r,
+                    Ok(Some(Driven::Cancelled(r, why))) => {
+                        cancelled_by = Some(why);
+                        r
+                    }
+                    Ok(None) => {
                         // 外部待ち: 台帳が参照中なので workspace は消さず、再実行で同じ task を追う。
                         rep.waiting += 1;
                         continue;
                     }
                 }
             } else {
-                match exec.execute(&req)? {
-                    ExecStatus::Done(r) => r,
-                    ExecStatus::Wait => {
+                match exec.execute(&req) {
+                    Err(e) => {
+                        errored = Some(e);
+                        failed_result()
+                    }
+                    Ok(ExecStatus::Done(r)) => r,
+                    Ok(ExecStatus::Wait) => {
                         // 外部待ち: 記録を残さず、残骸も消して、再実行（resume）で改めて実行する。
                         let _ = fs::remove_dir_all(out.join(&rel));
                         rep.waiting += 1;
@@ -483,11 +665,48 @@ pub fn run(
                     }
                 }
             };
+            if errored.is_some() {
+                rec.reason = Some(REASON_EXECUTOR_ERROR.into());
+                rep.executor_errors += 1;
+            }
             if res.wall_secs > timeout && res.outcome != Outcome::Timeout {
                 res.outcome = Outcome::Timeout;
                 rec.reason = Some("runner_timeout".into());
             }
             res.wall_secs = res.wall_secs.min(timeout);
+            // 同期 executor（と実行中に観測できなかった async）は完了後に上限を判定する。Timeout が優先。
+            if cancelled_by.is_none() && errored.is_none() && res.outcome != Outcome::Timeout {
+                cancelled_by = breach_reason(&m.budget, arm, res.tokens, res.wall_secs);
+            }
+            if let Some(why) = cancelled_by {
+                res.outcome = Outcome::Cancelled;
+                rec.reason = Some(why.into());
+                if why == REASON_CASE_BUDGET {
+                    rep.case_budget_cancelled += 1;
+                } else {
+                    rep.arm_budget_cancelled += 1;
+                }
+            }
+            if cancelled_by.is_some() || res.wall_secs > cap.max_wall_secs {
+                rep.max_overshoot_wall_secs = rep
+                    .max_overshoot_wall_secs
+                    .max(res.wall_secs.saturating_sub(cap.max_wall_secs));
+            }
+            if let Some(t) = res.tokens {
+                rep.max_overshoot_tokens = rep
+                    .max_overshoot_tokens
+                    .max(t.saturating_sub(cap.max_tokens));
+            }
+            let charged = if errored.is_some() {
+                0
+            } else {
+                m.budget.charged_tokens(res.tokens)
+            };
+            let e = arm_use.entry(cid).or_default();
+            e.0 += charged;
+            e.1 += res.wall_secs;
+            rep.tokens_charged_total += charged;
+            rep.tokens_missing += u64::from(res.tokens.is_none() && errored.is_none());
             rec.outcome = res.outcome;
             rec.passed = res.outcome == Outcome::Passed;
             rec.tokens = res.tokens;
@@ -501,9 +720,7 @@ pub fn run(
             rep.budget_stopped = over(&rep);
         }
         append(&trials_path, &rec)?;
-        if ledger.get(&key).is_some_and(|r| !r.state.is_terminal())
-            && rec.outcome != Outcome::Cancelled
-        {
+        if ledger.get(&key).is_some_and(|r| !r.state.is_terminal()) {
             ledger.mark_done(&key)?;
         }
         records.push(rec);
@@ -523,7 +740,11 @@ pub fn run(
                 m,
                 row.key.problem_id.clone(),
                 row.key.arm,
-                row.key.trial_no,
+                row.key.rep,
+                ranks
+                    .get(&(row.key.problem_id.clone(), row.key.arm))
+                    .copied()
+                    .unwrap_or(0),
             );
             rec.reason = Some(REASON_BUDGET_STOP.into());
             rec.workspace = row.workspace.clone();
@@ -546,13 +767,11 @@ fn write_summary(
 ) -> Result<(), String> {
     let mut cells = serde_json::Map::new();
     for c in [ConfigId::A, ConfigId::B, ConfigId::C] {
-        let n = plan(m)
-            .iter()
-            .filter(|(k, _, t)| *k == c && *t == 1)
-            .count();
+        // 分母 = 計画された試行総数（problems × repeats、C は subset × repeats）。
+        let n = plan(m).iter().filter(|(k, _, _)| *k == c).count();
         let mut counts = [0u64; 6]; // passed failed error timeout cancelled blocked
         let mut seen = 0u64;
-        for r in records.iter().filter(|r| r.config == c && r.trial_no == 1) {
+        for r in records.iter().filter(|r| r.config == c) {
             seen += 1;
             counts[match r.outcome {
                 Outcome::Passed => 0,
@@ -576,6 +795,19 @@ fn write_summary(
             "campaign_sha256": hash,
             "records": records.len(),
             "budget_stopped": rep.budget_stopped,
+            "budget": {
+                "per_case": m.budget.per_case,
+                "per_arm": m.budget.per_arm,
+                "case_budget_cancelled": rep.case_budget_cancelled,
+                "arm_budget_cancelled": rep.arm_budget_cancelled,
+                "tokens_missing": rep.tokens_missing,
+                "executor_errors": rep.executor_errors,
+                "tokens_charged_total": rep.tokens_charged_total,
+                "missing_tokens_policy": "charged as per_case.max_tokens for cap decisions; never counted as zero",
+                "max_overshoot_tokens": rep.max_overshoot_tokens,
+                "max_overshoot_wall_secs": rep.max_overshoot_wall_secs,
+                "overshoot_granularity": OVERSHOOT_GRANULARITY,
+            },
             "cells": Value::Object(cells),
         }),
     )

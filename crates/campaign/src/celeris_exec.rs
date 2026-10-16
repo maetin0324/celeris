@@ -63,7 +63,13 @@ pub fn routing_override(cfg: &Config) -> Result<Value, String> {
         ConfigId::B => "fixed",
         ConfigId::C => "decision_assisted",
     };
-    let r = cfg.routing.clone().unwrap_or_default();
+    // 全体 config の既定に頼らず、manifest の arm 設定を必ず task 単位で固定する。
+    let r = cfg.routing.clone().ok_or_else(|| {
+        format!(
+            "config {:?}: routing must be pinned in the manifest",
+            cfg.id
+        )
+    })?;
     if cfg.id == ConfigId::C && r.evidence_table_id.is_none() {
         return Err("config C: routing.evidence_table_id must be pinned".into());
     }
@@ -204,8 +210,8 @@ impl<T: Transport> CelerisExecutor<T> {
         b.insert(
             "title".into(),
             json!(format!(
-                "campaign {:?} {} #{}",
-                req.config.id, req.problem_id, req.trial_no
+                "campaign {:?} {} rep{} #{}",
+                req.config.id, req.problem_id, req.rep, req.trial_no
             )),
         );
         b.insert(
@@ -216,7 +222,10 @@ impl<T: Transport> CelerisExecutor<T> {
             "workspace".into(),
             json!(req.workspace.to_string_lossy().into_owned()),
         );
-        b.insert("max_wall_secs".into(), json!(req.timeout_secs));
+        b.insert(
+            "max_wall_secs".into(),
+            json!(req.timeout_secs.min(req.budget.max_wall_secs)),
+        );
         b.insert("routing_override".into(), routing_override(req.config)?);
         Ok(Value::Object(b))
     }
@@ -366,8 +375,8 @@ impl<T: Transport> Executor for CelerisExecutor<T> {
         true
     }
 
-    fn routing(&self, req: &TrialRequest) -> Value {
-        routing_override(req.config).unwrap_or_else(|e| json!({ "error": e }))
+    fn routing(&self, req: &TrialRequest) -> Result<Value, String> {
+        routing_override(req.config)
     }
 
     fn lookup(&self, key: &str) -> Result<Option<TaskRef>, String> {

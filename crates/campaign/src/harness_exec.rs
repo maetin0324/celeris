@@ -228,13 +228,13 @@ impl Executor for HarnessExecutor {
         true
     }
 
-    fn routing(&self, req: &TrialRequest) -> Value {
-        serde_json::json!({
+    fn routing(&self, req: &TrialRequest) -> Result<Value, String> {
+        Ok(serde_json::json!({
             "mode": "none",
             "note": "A arm bypasses Celeris routing and limits",
             "harness": req.config.harness,
             "model": req.config.model,
-        })
+        }))
     }
 
     fn lookup(&self, key: &str) -> Result<Option<TaskRef>, String> {

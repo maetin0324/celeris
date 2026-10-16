@@ -61,6 +61,14 @@ fn campaign(i: &Input) -> CampaignManifest {
             max_wall_secs: 1_000_000,
             max_disk_bytes: 1 << 40,
             max_parallel: 1,
+            per_case: celeris_campaign::manifest::Cap {
+                max_tokens: 100_000,
+                max_wall_secs: 1_000_000,
+            },
+            per_arm: celeris_campaign::manifest::Cap {
+                max_tokens: 10_000_000_000,
+                max_wall_secs: 1_000_000,
+            },
         },
         termination: Termination {
             trial_timeout_secs: 1800,
@@ -72,6 +80,9 @@ fn campaign(i: &Input) -> CampaignManifest {
             materials_sha256: "d".into(),
             kb_snapshot: "kb@1".into(),
         },
+        order: Default::default(),
+        seed: 0,
+        repeats: 1,
         dependencies: BTreeMap::from([("p1".to_string(), vec!["p0".to_string()])]),
         sha256: String::new(),
     }
@@ -211,7 +222,7 @@ fn external_wait_stops_waiting_and_resume_completes() {
     assert_eq!(l.len(), 4);
     assert!(l.iter().all(|r| r["problem_id"] != "p1"));
     assert!(
-        !e.opts.out.join("trials/B/p0/1").exists(),
+        !e.opts.out.join("trials/B/p0/rep1").exists(),
         "no leftovers of the waiting trial"
     );
     let mid = check(&e.m, &e.opts.out);

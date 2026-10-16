@@ -217,7 +217,8 @@ fn cfg(id: ConfigId, routing: Option<ArmRouting>) -> Config {
         model: "m".into(),
         model_version: "1".into(),
         policy_version: "p1".into(),
-        routing,
+        // B は routing を必ず固定する（欠落は投入前に Err。routing_pin.rs で固定）。
+        routing: routing.or_else(|| (id == ConfigId::B).then(ArmRouting::default)),
     }
 }
 
@@ -251,9 +252,14 @@ fn req<'a>(c: &'a Config, dir: &'a Path) -> TrialRequest<'a> {
         problem_id: "p0",
         prompt: "fix the bug",
         trial_no: 1,
+        rep: 1,
         workspace: dir,
         kb: dir,
         timeout_secs: 1800,
+        budget: celeris_campaign::manifest::Cap {
+            max_tokens: u64::MAX,
+            max_wall_secs: u64::MAX,
+        },
     }
 }
 
@@ -475,8 +481,8 @@ fn b_and_c_pin_different_routing_overrides() {
     );
     assert_ne!(ob, oc);
     // 台帳に投入前に記録する値と、投入する値は同じ。
-    assert_eq!(x.routing(&req(&b, d.path())), ob);
-    assert_eq!(x.routing(&req(&c, d.path())), oc);
+    assert_eq!(x.routing(&req(&b, d.path())), Ok(ob));
+    assert_eq!(x.routing(&req(&c, d.path())), Ok(oc));
     // A は Celeris に投入しない。C の根拠表は固定必須（最新版への暗黙追従を許さない）。
     assert!(routing_override(&cfg(ConfigId::A, None)).is_err());
     assert!(routing_override(&cfg(ConfigId::C, None)).is_err());
@@ -523,7 +529,7 @@ impl Executor for ByArm<'_> {
     fn is_async(&self) -> bool {
         true
     }
-    fn routing(&self, r: &TrialRequest) -> Value {
+    fn routing(&self, r: &TrialRequest) -> Result<Value, String> {
         self.by_req(r).routing(r)
     }
     fn lookup(&self, key: &str) -> Result<Option<TaskRef>, String> {
@@ -579,6 +585,14 @@ fn campaign(i: &Input) -> CampaignManifest {
             max_wall_secs: 1_000_000,
             max_disk_bytes: 1 << 40,
             max_parallel: 1,
+            per_case: celeris_campaign::manifest::Cap {
+                max_tokens: 100_000,
+                max_wall_secs: 1_000_000,
+            },
+            per_arm: celeris_campaign::manifest::Cap {
+                max_tokens: 10_000_000_000,
+                max_wall_secs: 1_000_000,
+            },
         },
         termination: Termination {
             trial_timeout_secs: 1800,
@@ -590,6 +604,9 @@ fn campaign(i: &Input) -> CampaignManifest {
             materials_sha256: "d".into(),
             kb_snapshot: "kb@1".into(),
         },
+        order: Default::default(),
+        seed: 0,
+        repeats: 1,
         dependencies: BTreeMap::new(),
         sha256: String::new(),
     }
@@ -618,6 +635,7 @@ fn runner_waits_keeps_workspace_and_resumes_same_celeris_tasks() {
         problem_id: "p0".into(),
         arm,
         trial_no: 1,
+        rep: 1,
     };
     let lg = Ledger::open(&opts.out).expect("ledger");
     let (rb, rc) = (

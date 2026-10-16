@@ -83,12 +83,15 @@ enum Dep {
 }
 
 /// `recs`（それ以前の記録）から problem の前提の成否を再計算する。runner の判定コードは使わない。
-fn dep_state(m: &CampaignManifest, recs: &[TrialRecord], problem: &str) -> Dep {
+fn dep_state(m: &CampaignManifest, recs: &[TrialRecord], problem: &str, rep: u32) -> Dep {
     let mut waiting = false;
     for q in m.dependencies.get(problem).into_iter().flatten() {
         for c in m.planned_configs(q) {
             let mut best: Option<&TrialRecord> = None;
-            for r in recs.iter().filter(|r| r.config == c && r.problem_id == *q) {
+            for r in recs
+                .iter()
+                .filter(|r| r.config == c && r.problem_id == *q && r.rep == rep)
+            {
                 if best.is_none_or(|b| r.trial_no < b.trial_no) {
                     best = Some(r);
                 }
@@ -133,16 +136,22 @@ pub fn check(m: &CampaignManifest, out: &Path) -> CheckReport {
                 Err(e) => v.push(format!("trials.jsonl line {}: unparsable: {e}", i + 1)),
             }
         }
+        // Celeris 経路（B/C が task-api 経由）で走った campaign は、実行した B/C 試行すべてに routing がある。
+        let celeris_run = matches!(meta["executor"].as_str(), Some("celeris" | "arm-dispatch"));
         let exp = expected(m);
-        let mut seen: BTreeSet<(ConfigId, String, u32)> = BTreeSet::new();
+        let mut seen: BTreeSet<(ConfigId, String, u32, u32)> = BTreeSet::new();
         let mut ws_dirs: BTreeSet<String> = BTreeSet::new();
         let mut cum_tokens = 0u64;
         let mut cum_wall = 0u64;
+        let mut arm_use: BTreeMap<ConfigId, (u64, u64)> = BTreeMap::new();
         let cfg_by_id: BTreeMap<ConfigId, &crate::manifest::Config> =
             m.configs.iter().map(|c| (c.id, c)).collect();
         for (idx, r) in recs.iter().enumerate() {
             let earlier = &recs[..idx];
-            let tag = format!("{:?}/{}#{}", r.config, r.problem_id, r.trial_no);
+            let tag = format!(
+                "{:?}/{}/rep{}#{}",
+                r.config, r.problem_id, r.rep, r.trial_no
+            );
             if r.schema != TRIAL_SCHEMA {
                 v.push(format!("{tag}: unknown schema {}", r.schema));
             }
@@ -168,7 +177,10 @@ pub fn check(m: &CampaignManifest, out: &Path) -> CheckReport {
                     m.termination.max_attempts_per_trial
                 ));
             }
-            if !seen.insert((r.config, r.problem_id.clone(), r.trial_no)) {
+            if r.rep == 0 || r.rep > m.repeats {
+                v.push(format!("{tag}: rep outside 1..={}", m.repeats));
+            }
+            if !seen.insert((r.config, r.problem_id.clone(), r.rep, r.trial_no)) {
                 v.push(format!("{tag}: duplicate record"));
             }
             if r.passed != (r.outcome == crate::aggregate::Outcome::Passed) {
@@ -187,6 +199,32 @@ pub fn check(m: &CampaignManifest, out: &Path) -> CheckReport {
                 v.push(format!(
                     "{tag}: harness/model/policy version differs from the manifest"
                 ));
+            }
+            // 実効 routing: 記録した値は manifest の arm 設定から導いた値と一致する（A は持たない）。
+            if r.config == ConfigId::A {
+                if r.routing.is_some() {
+                    v.push(format!("{tag}: arm A must not carry a Celeris routing"));
+                }
+            } else if let Some(c) = cfg_by_id.get(&r.config) {
+                let want = crate::celeris_exec::routing_override(c);
+                match (&r.routing, &want) {
+                    (Some(got), Ok(w)) if got != w => v.push(format!(
+                        "{tag}: recorded routing {got} differs from the manifest arm setting {w}"
+                    )),
+                    (Some(_), Err(e)) => {
+                        v.push(format!(
+                            "{tag}: routing recorded but manifest is invalid: {e}"
+                        ));
+                    }
+                    (None, Ok(_))
+                        if celeris_run
+                            && r.ran()
+                            && r.reason.as_deref() != Some(REASON_EXECUTOR_ERROR) =>
+                    {
+                        v.push(format!("{tag}: ran without a recorded routing"));
+                    }
+                    _ => {}
+                }
             }
             let timeout = m.termination.trial_timeout_secs;
             let is_to = r.outcome == crate::aggregate::Outcome::Timeout;
@@ -219,13 +257,13 @@ pub fn check(m: &CampaignManifest, out: &Path) -> CheckReport {
                         "{tag}: blocked trial must be outcome blocked with no usage or workspace"
                     ));
                 }
-                if !matches!(dep_state(m, earlier, &r.problem_id), Dep::Failed(_)) {
+                if !matches!(dep_state(m, earlier, &r.problem_id, r.rep), Dep::Failed(_)) {
                     v.push(format!(
                         "{tag}: blocked although no prerequisite had failed"
                     ));
                 }
             } else if r.ran() {
-                match dep_state(m, earlier, &r.problem_id) {
+                match dep_state(m, earlier, &r.problem_id, r.rep) {
                     Dep::Met => {}
                     Dep::Failed(q) => v.push(format!(
                         "{tag}: executed although prerequisite {q} did not pass (should be blocked)"
@@ -253,12 +291,51 @@ pub fn check(m: &CampaignManifest, out: &Path) -> CheckReport {
                         "{tag}: executed after the budget was already exhausted"
                     ));
                 }
-                cum_tokens += r.tokens.unwrap_or(0);
+                let arm = arm_use.get(&r.config).copied().unwrap_or_default();
+                let case = m.budget.per_case;
+                let over_case = r.tokens.is_some_and(|t| t > case.max_tokens)
+                    || r.wall_secs > case.max_wall_secs;
+                if over_case
+                    && r.outcome != crate::aggregate::Outcome::Timeout
+                    && r.reason.as_deref() != Some(REASON_CASE_BUDGET)
+                {
+                    v.push(format!(
+                        "{tag}: exceeded the per-case budget but was not cancelled as case_budget"
+                    ));
+                }
+                if matches!(
+                    r.reason.as_deref(),
+                    Some(REASON_CASE_BUDGET | REASON_ARM_BUDGET)
+                ) && r.outcome != crate::aggregate::Outcome::Cancelled
+                {
+                    v.push(format!("{tag}: budget reason requires outcome cancelled"));
+                }
+                if r.reason.as_deref() == Some(REASON_CASE_BUDGET) && !over_case {
+                    v.push(format!(
+                        "{tag}: case_budget although within the per-case cap"
+                    ));
+                }
+                if arm.0 >= m.budget.per_arm.max_tokens || arm.1 >= m.budget.per_arm.max_wall_secs {
+                    v.push(format!(
+                        "{tag}: executed after its arm budget was already exhausted"
+                    ));
+                }
+                let e = arm_use.entry(r.config).or_default();
+                e.0 += r.charged_tokens(&m.budget);
+                e.1 += r.wall_secs;
+                cum_tokens += r.charged_tokens(&m.budget);
                 cum_wall += r.wall_secs;
             } else if r.outcome != crate::aggregate::Outcome::Cancelled || r.tokens.is_some() {
                 v.push(format!(
                     "{tag}: budget-stopped trial must be cancelled with no usage"
                 ));
+            } else if r.reason.as_deref() == Some(REASON_ARM_BUDGET) {
+                let (t, w) = arm_use.get(&r.config).copied().unwrap_or_default();
+                if t < m.budget.per_arm.max_tokens && w < m.budget.per_arm.max_wall_secs {
+                    v.push(format!(
+                        "{tag}: cancelled for arm budget although the arm budget remained"
+                    ));
+                }
             } else if !(cum_tokens >= m.budget.max_tokens || cum_wall >= m.budget.max_wall_secs) {
                 v.push(format!(
                     "{tag}: cancelled for budget although budget remained"
@@ -334,18 +411,24 @@ pub fn check(m: &CampaignManifest, out: &Path) -> CheckReport {
 pub fn recompute(m: &CampaignManifest, recs: &[TrialRecord]) -> Recomputed {
     let exp = expected(m);
     let mut totals: BTreeMap<ConfigId, Totals> = BTreeMap::new();
-    let mut first: BTreeMap<(ConfigId, &str), &TrialRecord> = BTreeMap::new();
+    let mut first: BTreeMap<(ConfigId, &str, u32), &TrialRecord> = BTreeMap::new();
     for r in recs {
-        let e = first.entry((r.config, r.problem_id.as_str())).or_insert(r);
+        let e = first
+            .entry((r.config, r.problem_id.as_str(), r.rep))
+            .or_insert(r);
         if r.trial_no < e.trial_no {
             *e = r;
         }
     }
     for (c, probs) in &exp {
         let t = totals.entry(*c).or_default();
-        t.n = probs.len() as u64;
-        for p in probs {
-            match first.get(&(*c, p.as_str())).map(|r| r.outcome) {
+        // 分母 = 計画された試行総数（問題数 × repeats）。
+        t.n = (probs.len() as u64) * u64::from(m.repeats);
+        for (p, rep) in probs
+            .iter()
+            .flat_map(|p| (1..=m.repeats).map(move |k| (p, k)))
+        {
+            match first.get(&(*c, p.as_str(), rep)).map(|r| r.outcome) {
                 None => t.missing += 1,
                 Some(o) => match o {
                     crate::aggregate::Outcome::Passed => t.passed += 1,
@@ -372,9 +455,9 @@ pub fn recompute(m: &CampaignManifest, recs: &[TrialRecord]) -> Recomputed {
             }
         }
     }
-    let pass = |c: ConfigId, p: &str| {
+    let pass = |c: ConfigId, p: &str, rep: u32| {
         first
-            .get(&(c, p))
+            .get(&(c, p, rep))
             .is_some_and(|r| r.outcome == crate::aggregate::Outcome::Passed)
     };
     let mut pairs = Vec::new();
@@ -392,9 +475,12 @@ pub fn recompute(m: &CampaignManifest, recs: &[TrialRecord]) -> Recomputed {
             only_second: 0,
             neither: 0,
         };
-        for p in exp[&a].intersection(&exp[&b]) {
+        for (p, rep) in exp[&a]
+            .intersection(&exp[&b])
+            .flat_map(|p| (1..=m.repeats).map(move |k| (p, k)))
+        {
             pr.problems += 1;
-            match (pass(a, p), pass(b, p)) {
+            match (pass(a, p, rep), pass(b, p, rep)) {
                 (true, true) => pr.both_pass += 1,
                 (true, false) => pr.only_first += 1,
                 (false, true) => pr.only_second += 1,

@@ -89,6 +89,14 @@ fn build_pilot(input: &Input) -> CampaignManifest {
             max_wall_secs: 36_000,
             max_disk_bytes: 1 << 37,
             max_parallel: 2,
+            per_case: celeris_campaign::manifest::Cap {
+                max_tokens: 100_000,
+                max_wall_secs: 1_800,
+            },
+            per_arm: celeris_campaign::manifest::Cap {
+                max_tokens: 10_000_000_000,
+                max_wall_secs: 1_000_000,
+            },
         },
         termination: Termination {
             trial_timeout_secs: 1800,
@@ -100,6 +108,9 @@ fn build_pilot(input: &Input) -> CampaignManifest {
             materials_sha256: hash_tree(&fx().join("materials")).expect("materials hash"),
             kb_snapshot: "kb-fixture-1".into(),
         },
+        order: Default::default(),
+        seed: 0,
+        repeats: 1,
         dependencies: Default::default(),
         sha256: String::new(),
     };

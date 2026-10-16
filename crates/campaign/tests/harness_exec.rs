@@ -60,6 +60,14 @@ fn campaign(i: &Input) -> CampaignManifest {
             max_wall_secs: 1_000_000,
             max_disk_bytes: 1 << 40,
             max_parallel: 1,
+            per_case: celeris_campaign::manifest::Cap {
+                max_tokens: 100_000,
+                max_wall_secs: 1_000_000,
+            },
+            per_arm: celeris_campaign::manifest::Cap {
+                max_tokens: 10_000_000_000,
+                max_wall_secs: 1_000_000,
+            },
         },
         termination: Termination {
             trial_timeout_secs: 1800,
@@ -71,6 +79,9 @@ fn campaign(i: &Input) -> CampaignManifest {
             materials_sha256: "d".into(),
             kb_snapshot: "kb@1".into(),
         },
+        order: Default::default(),
+        seed: 0,
+        repeats: 1,
         dependencies: BTreeMap::new(),
         sha256: String::new(),
     }
@@ -165,9 +176,14 @@ impl H {
             problem_id: "p0",
             prompt: "fix it",
             trial_no: 1,
+            rep: 1,
             workspace: &self.ws,
             kb: &self.kb,
             timeout_secs,
+            budget: celeris_campaign::manifest::Cap {
+                max_tokens: u64::MAX,
+                max_wall_secs: u64::MAX,
+            },
         }
     }
     fn started_lines(&self) -> usize {
@@ -363,6 +379,7 @@ echo '{\"usage\":{\"input_tokens\":5,\"output_tokens\":5}}'
                 problem_id: "p0".into(),
                 arm: c,
                 trial_no: 1,
+                rep: 1,
             })
             .expect("row");
         assert_eq!(r.state, LedgerState::Done);

@@ -99,11 +99,6 @@ pub struct NewTaskBody {
     /// another thread) is 422 `invalid_attachment` and creates nothing.
     #[serde(default)]
     pub attachment_ids: Vec<String>,
-    /// ADR 2026-10-16-campaign-identity-propagation: campaign の root task に付ける識別（campaign_id /
-    /// case / arm / repetition / manifest hash / routing 設定）。task 作成と同じ transaction で書く。
-    /// 子孫 task と全 run は祖先の鎖から継ぐ。**人（API/CLI）だけが付けられる**（CoS の起票は 422）。
-    #[serde(default)]
-    pub campaign: Option<task_core::decision_log::CampaignIdentity>,
 }
 
 fn created_task(task: &Task) -> Response {
@@ -343,7 +338,6 @@ pub(crate) fn create_task_op(
         mut task,
         expected_write_paths,
         attachment_ids,
-        campaign,
     } = body;
     let reject = |problem: ApiProblem| match audit {
         Some(audit) => audit.reject(store, "task", "new", problem),
@@ -356,18 +350,6 @@ pub(crate) fn create_task_op(
             task_ops::repo_requirement::REPOSITORY_REQUIRED_CODE,
             task_ops::repo_requirement::REPOSITORY_REQUIRED,
         )));
-    }
-    if let Some(identity) = &campaign {
-        if audit.is_some() {
-            return Err(reject(ApiProblem::new(
-                StatusCode::UNPROCESSABLE_ENTITY,
-                "campaign_forbidden",
-                "campaign identity can only be set by a human, not by a CoS action",
-            )));
-        }
-        identity
-            .validate()
-            .map_err(|e| reject(ApiProblem::bad_request(e)))?;
     }
     let paths = expected_write_paths
         .map(|paths| task_core::write_set::normalize_write_paths(&paths))
@@ -409,14 +391,6 @@ pub(crate) fn create_task_op(
                 built.id,
                 paths.clone(),
                 &OffsetDateTime::now_utc().to_string(),
-            )?;
-        }
-        if let Some(identity) = &campaign {
-            task_core::store::SqliteStore::task_campaign_set_tx(
-                tx,
-                &built.id.to_string(),
-                identity,
-                OffsetDateTime::now_utc(),
             )?;
         }
         if let Err(problem) = pin_attachments_tx(tx, &attachment_ids, built.id, thread.as_deref()) {

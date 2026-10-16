@@ -2580,52 +2580,6 @@
       },
       "type": "object"
     },
-    "CampaignIdentity": {
-      "additionalProperties": false,
-      "description": "campaign 識別（ADR 2026-10-16-campaign-identity-propagation）。campaign の root task に 1 つ付き、\n子孫 task・全 run（再試行・continuation・repair・reviewer・planner）が祖先の鎖から継ぐ。\n`routing_setting` は試行単位で固定した routing 設定（全体 config の `[routing] mode` とは別）。",
-      "properties": {
-        "arm": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "campaign_id": {
-          "type": "string"
-        },
-        "case_id": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "manifest_hash": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "repetition": {
-          "format": "uint32",
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "routing_setting": {
-          "description": "`fixed` | `decision_assisted`。",
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "required": [
-        "campaign_id"
-      ],
-      "type": "object"
-    },
     "CancelBody": {
       "additionalProperties": false,
       "description": "`POST /tasks/{id}/cancel` の本文。",
@@ -18091,18 +18045,6 @@
             "type": "string"
           },
           "type": "array"
-        },
-        "campaign": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/CampaignIdentity"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "ADR 2026-10-16-campaign-identity-propagation: campaign の root task に付ける識別（campaign_id /\ncase / arm / repetition / manifest hash / routing 設定）。task 作成と同じ transaction で書く。\n子孫 task と全 run は祖先の鎖から継ぐ。**人（API/CLI）だけが付けられる**（CoS の起票は 422）。"
         },
         "category": {
           "anyOf": [

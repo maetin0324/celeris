@@ -1,6 +1,5 @@
 {
   "budget": {
-    "token_basis": "all",
     "max_disk_bytes": 2147483648,
     "max_parallel": 1,
     "max_tokens": 60000,
@@ -12,12 +11,17 @@
     "per_case": {
       "max_tokens": 60000,
       "max_wall_secs": 3600
-    }
+    },
+    "token_basis": "all"
   },
   "evidence": [
     "raw_data",
     "log"
   ],
+  "grade_case_ref": {
+    "path": "final/k4-cmp4-validity-analysis/k4-cmp4-validity-analysis.json",
+    "sha256": "723c68ff87737e71d8f28c377c11d7a76fad16f3ec795fbfbfad05b8e8509074"
+  },
   "id": "k4-cmp4-validity-analysis",
   "inputs": [
     {

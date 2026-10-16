@@ -1,0 +1,51 @@
+{
+  "schema": "celeris.grade-case/1",
+  "id": "k1-bf-fsync-campaign",
+  "split": "dev",
+  "implementation": {
+    "pristine_dir": "pristine",
+    "repo": "src",
+    "tests": [],
+    "hidden_dir": "hidden",
+    "hidden_tests": [
+      {
+        "path": ".grader/run.sh",
+        "sha256": "6544fbf22f704d7aaee5d876a9a51e945718b1db28634a636d616d0978ae0d61"
+      },
+      {
+        "path": ".grader/k1_data_ops_hidden.rs",
+        "sha256": "fd3fd42a431b3d4c211f024d6352bd859fce3ce78e97b7539b8b8138aa95f3a1"
+      },
+      {
+        "path": ".grader/k1_chunk_store_hidden.rs",
+        "sha256": "7a8cc1bce72913ca444970b90d25be28e79130f3b9ed1a7e88ecde7f46943b57"
+      }
+    ],
+    "command": [
+      "sh",
+      ".grader/run.sh",
+      "cargo",
+      "test",
+      "--release",
+      "--lib",
+      "--",
+      "fsync_reply_uses_registered_reply_stream",
+      "test_posix_explicit_fsync_reads_back",
+      "test_posix_size_xattr_survives_store_reopen"
+    ],
+    "must_pass": [
+      "fsync_reply_uses_registered_reply_stream",
+      "test_posix_explicit_fsync_reads_back",
+      "test_posix_size_xattr_survives_store_reopen"
+    ]
+  },
+  "experiment": {
+    "jobs_file": "evidence/jobs.json",
+    "min_jobs": 4,
+    "conditions": {
+      "nodes": 3
+    }
+  },
+  "recompute": null,
+  "review": null
+}

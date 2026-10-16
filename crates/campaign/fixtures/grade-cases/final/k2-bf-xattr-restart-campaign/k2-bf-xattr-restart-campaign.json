@@ -1,0 +1,43 @@
+{
+  "schema": "celeris.grade-case/1",
+  "id": "k2-bf-xattr-restart-campaign",
+  "split": "final",
+  "implementation": {
+    "pristine_dir": "pristine",
+    "repo": "src",
+    "tests": [],
+    "hidden_dir": "hidden",
+    "hidden_tests": [
+      {
+        "path": ".grader/run.sh",
+        "sha256": "03a6077bae15c0d7d3c08156edefff2a9c1f64b7760d0ab2b635ee280c21724c"
+      },
+      {
+        "path": ".grader/k2_metadata_ops_hidden.rs",
+        "sha256": "fbd995ac1db145ce43fa67cc42d75c1b016fa3308289ce08400ad97c3ff54aa5"
+      }
+    ],
+    "command": [
+      "sh",
+      ".grader/run.sh",
+      "cargo",
+      "test",
+      "--release",
+      "--lib",
+      "--",
+      "lookup_recovers_xattr_after_restart_for_direct_and_by_id_chunks"
+    ],
+    "must_pass": [
+      "lookup_recovers_xattr_after_restart_for_direct_and_by_id_chunks"
+    ]
+  },
+  "experiment": {
+    "jobs_file": "evidence/jobs.json",
+    "min_jobs": 1,
+    "conditions": {
+      "nodes": 3
+    }
+  },
+  "recompute": null,
+  "review": null
+}

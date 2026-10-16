@@ -3,7 +3,15 @@
     "max_disk_bytes": 2147483648,
     "max_parallel": 1,
     "max_tokens": 60000,
-    "max_wall_secs": 3600
+    "max_wall_secs": 3600,
+    "per_arm": {
+      "max_tokens": 60000,
+      "max_wall_secs": 3600
+    },
+    "per_case": {
+      "max_tokens": 60000,
+      "max_wall_secs": 3600
+    }
   },
   "evidence": [
     "raw_data",

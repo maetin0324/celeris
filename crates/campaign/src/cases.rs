@@ -231,6 +231,16 @@ impl Case {
         if b.max_tokens == 0 || b.max_wall_secs == 0 || b.max_parallel == 0 {
             return Err(format!("{id}: budget fields must be positive"));
         }
+        let (c, a) = (b.per_case, b.per_arm);
+        if c.max_tokens == 0
+            || c.max_wall_secs == 0
+            || a.max_tokens < c.max_tokens
+            || a.max_wall_secs < c.max_wall_secs
+        {
+            return Err(format!(
+                "{id}: budget per_case must be positive and per_arm >= per_case"
+            ));
+        }
         if self.kind == CaseKind::Control {
             if self.split != Split::Dev {
                 return Err(format!("{id}: a control case must be split=dev"));

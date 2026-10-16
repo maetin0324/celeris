@@ -61,6 +61,14 @@ fn campaign(i: &Input) -> CampaignManifest {
             max_wall_secs: 1_000_000,
             max_disk_bytes: 1 << 40,
             max_parallel: 1,
+            per_case: celeris_campaign::manifest::Cap {
+                max_tokens: 100_000,
+                max_wall_secs: 1_000_000,
+            },
+            per_arm: celeris_campaign::manifest::Cap {
+                max_tokens: 10_000_000_000,
+                max_wall_secs: 1_000_000,
+            },
         },
         termination: Termination {
             trial_timeout_secs: 1800,

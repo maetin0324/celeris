@@ -12,9 +12,9 @@ use serde_json::{Value, json};
 
 use crate::{
     aggregate::Outcome,
-    executor::{ExecResult, ExecStatus, Executor, TrialRequest},
+    executor::{ExecResult, ExecStatus, Executor, TrialRequest, Usage},
     ledger::{Ledger, LedgerRow, LedgerState, TrialKey},
-    manifest::{CampaignManifest, ConfigId},
+    manifest::{Budget, CampaignManifest, Cap, ConfigId},
     record::*,
     snapshot::{copy_tree, hash_tree},
 };
@@ -37,9 +37,67 @@ pub struct RunReport {
     pub blocked: u64,
     /// 前提が外部待ちで今回は実行も記録もしなかった試行数（再実行で続きを実行する）。
     pub waiting: u64,
+    /// 観測できた tokens の和（欠測は含めない）。
     pub tokens_total: u64,
+    /// 上限判定に使う tokens の和。欠測の試行は per_case.max_tokens を消費したものとして加算する。
+    pub tokens_charged_total: u64,
+    /// tokens が欠測（None）のまま終わった試行数（0 として無料扱いしない）。
+    pub tokens_missing: u64,
     pub wall_secs_total: u64,
     pub budget_stopped: bool,
+    /// per_case 超過で止めた試行数（reason = case_budget）。
+    pub case_budget_cancelled: u64,
+    /// per_arm の残りが尽きて止めた／実行しなかった試行数（reason = arm_budget）。
+    pub arm_budget_cancelled: u64,
+    /// 実効上限に対する最大超過量。粒度は `OVERSHOOT_GRANULARITY`。
+    pub max_overshoot_tokens: u64,
+    pub max_overshoot_wall_secs: u64,
+}
+
+/// 最大超過の粒度（summary にも書く）。ADR 2026-10-16-campaign-budget-cap D4。
+pub const OVERSHOOT_GRANULARITY: &str = "async executor: up to one poll interval of usage (one runner pass); sync executor: up to one whole trial unless the executor stops itself via TrialRequest.budget; arm cap: up to the last trial";
+
+/// 試行の実効上限 = min(per_case, per_arm の残り)。
+fn effective_cap(b: &Budget, arm_tokens: u64, arm_wall: u64) -> Cap {
+    Cap {
+        max_tokens: b
+            .per_case
+            .max_tokens
+            .min(b.per_arm.max_tokens.saturating_sub(arm_tokens)),
+        max_wall_secs: b
+            .per_case
+            .max_wall_secs
+            .min(b.per_arm.max_wall_secs.saturating_sub(arm_wall)),
+    }
+}
+
+/// 使用量が上限を超えていればその reason。tokens 欠測は tokens 側を判定しない（終了後に保守的に課金する）。
+fn breach_reason(
+    b: &Budget,
+    arm: (u64, u64),
+    tokens: Option<u64>,
+    wall: u64,
+) -> Option<&'static str> {
+    if tokens.is_some_and(|t| t > b.per_case.max_tokens) || wall > b.per_case.max_wall_secs {
+        Some(REASON_CASE_BUDGET)
+    } else if tokens.is_some_and(|t| arm.0.saturating_add(t) > b.per_arm.max_tokens)
+        || arm.1.saturating_add(wall) > b.per_arm.max_wall_secs
+    {
+        Some(REASON_ARM_BUDGET)
+    } else {
+        None
+    }
+}
+
+fn arm_exhausted(b: &Budget, arm: (u64, u64)) -> bool {
+    arm.0 >= b.per_arm.max_tokens || arm.1 >= b.per_arm.max_wall_secs
+}
+
+/// drive_async の結果。
+enum Driven {
+    Done(ExecResult),
+    /// 実行中に上限を超えたので cancel した（観測した使用量と reason）。
+    Cancelled(ExecResult, &'static str),
 }
 
 fn write_json(path: &Path, v: &Value) -> Result<(), String> {
@@ -267,7 +325,9 @@ fn drive_async(
     rel: &str,
     repo: &Path,
     kb: &Path,
-) -> Result<Option<ExecResult>, String> {
+    budget: &Budget,
+    arm: (u64, u64),
+) -> Result<Option<Driven>, String> {
     let ws_rel = format!("{rel}/workspace");
     let idem = key.idempotency_key();
     let known = ledger.get(key).cloned();
@@ -301,8 +361,25 @@ fn drive_async(
         ledger.mark_waiting(key, &fresh)?;
     }
     match exec.poll(&fresh)? {
-        ExecStatus::Done(r) => Ok(Some(r)),
+        ExecStatus::Done(r) => Ok(Some(Driven::Done(r))),
         ExecStatus::Wait => {
+            // poll ごとに子 task・job を含む累積使用量を見て、上限超過なら cancel する。
+            if let Some(Usage { tokens, wall_secs }) = exec.usage(&fresh)?
+                && let Some(reason) = breach_reason(budget, arm, tokens, wall_secs)
+            {
+                if let Some(row) = ledger.get(key).cloned() {
+                    cancel_row(exec, ledger, &row, reason)?;
+                }
+                return Ok(Some(Driven::Cancelled(
+                    ExecResult {
+                        outcome: Outcome::Cancelled,
+                        tokens,
+                        cost_micro_usd: None,
+                        wall_secs,
+                    },
+                    reason,
+                )));
+            }
             if ledger.get(key).map(|r| r.state) != Some(LedgerState::Waiting) {
                 ledger.mark_waiting(key, &fresh)?;
             }
@@ -384,9 +461,18 @@ pub fn run(
         wall_secs_total: records.iter().map(|r| r.wall_secs).sum(),
         ..RunReport::default()
     };
+    // arm ごとの累積（欠測 tokens は保守的に課金する）。再開時は記録から作り直す。
+    let mut arm_use: BTreeMap<ConfigId, (u64, u64)> = BTreeMap::new();
+    for r in records.iter().filter(|r| r.ran()) {
+        let e = arm_use.entry(r.config).or_default();
+        e.0 += m.budget.charged_tokens(r.tokens);
+        e.1 += r.wall_secs;
+        rep.tokens_charged_total += m.budget.charged_tokens(r.tokens);
+        rep.tokens_missing += u64::from(r.tokens.is_none());
+    }
     let over = |rep: &RunReport| {
         m.termination.stop_on_budget
-            && (rep.tokens_total >= m.budget.max_tokens
+            && (rep.tokens_charged_total >= m.budget.max_tokens
                 || rep.wall_secs_total >= m.budget.max_wall_secs)
     };
     rep.budget_stopped = over(&rep);
@@ -430,7 +516,13 @@ pub fn run(
             if let Some(row) = ledger.get(&key).filter(|r| !r.state.is_terminal()).cloned() {
                 cancel_row(exec, &mut ledger, &row, REASON_BUDGET_STOP)?;
             }
+        } else if arm_exhausted(&m.budget, arm_use.get(&cid).copied().unwrap_or_default()) {
+            // この arm の累積上限が尽きた。実行せず cancelled として分母に残す（他 arm は止めない）。
+            rec.reason = Some(REASON_ARM_BUDGET.into());
+            rep.arm_budget_cancelled += 1;
         } else {
+            let arm = arm_use.get(&cid).copied().unwrap_or_default();
+            let cap = effective_cap(&m.budget, arm.0, arm.1);
             let rel = format!("trials/{cid:?}/{pid}/{trial_no}");
             let (ws, kbd) = (out.join(&rel).join("workspace"), out.join(&rel).join("kb"));
             let is_async = exec.is_async();
@@ -462,10 +554,27 @@ pub fn run(
                 workspace: &ws,
                 kb: &kbd,
                 timeout_secs: timeout,
+                budget: cap,
             };
+            let mut cancelled_by: Option<&'static str> = None;
             let mut res = if is_async {
-                match drive_async(exec, &mut ledger, &key, &req, out, &rel, &repo, &kb)? {
-                    Some(r) => r,
+                match drive_async(
+                    exec,
+                    &mut ledger,
+                    &key,
+                    &req,
+                    out,
+                    &rel,
+                    &repo,
+                    &kb,
+                    &m.budget,
+                    arm,
+                )? {
+                    Some(Driven::Done(r)) => r,
+                    Some(Driven::Cancelled(r, why)) => {
+                        cancelled_by = Some(why);
+                        r
+                    }
                     None => {
                         // 外部待ち: 台帳が参照中なので workspace は消さず、再実行で同じ task を追う。
                         rep.waiting += 1;
@@ -488,6 +597,35 @@ pub fn run(
                 rec.reason = Some("runner_timeout".into());
             }
             res.wall_secs = res.wall_secs.min(timeout);
+            // 同期 executor（と実行中に観測できなかった async）は完了後に上限を判定する。Timeout が優先。
+            if cancelled_by.is_none() && res.outcome != Outcome::Timeout {
+                cancelled_by = breach_reason(&m.budget, arm, res.tokens, res.wall_secs);
+            }
+            if let Some(why) = cancelled_by {
+                res.outcome = Outcome::Cancelled;
+                rec.reason = Some(why.into());
+                if why == REASON_CASE_BUDGET {
+                    rep.case_budget_cancelled += 1;
+                } else {
+                    rep.arm_budget_cancelled += 1;
+                }
+            }
+            if cancelled_by.is_some() || res.wall_secs > cap.max_wall_secs {
+                rep.max_overshoot_wall_secs = rep
+                    .max_overshoot_wall_secs
+                    .max(res.wall_secs.saturating_sub(cap.max_wall_secs));
+            }
+            if let Some(t) = res.tokens {
+                rep.max_overshoot_tokens = rep
+                    .max_overshoot_tokens
+                    .max(t.saturating_sub(cap.max_tokens));
+            }
+            let charged = m.budget.charged_tokens(res.tokens);
+            let e = arm_use.entry(cid).or_default();
+            e.0 += charged;
+            e.1 += res.wall_secs;
+            rep.tokens_charged_total += charged;
+            rep.tokens_missing += u64::from(res.tokens.is_none());
             rec.outcome = res.outcome;
             rec.passed = res.outcome == Outcome::Passed;
             rec.tokens = res.tokens;
@@ -501,9 +639,7 @@ pub fn run(
             rep.budget_stopped = over(&rep);
         }
         append(&trials_path, &rec)?;
-        if ledger.get(&key).is_some_and(|r| !r.state.is_terminal())
-            && rec.outcome != Outcome::Cancelled
-        {
+        if ledger.get(&key).is_some_and(|r| !r.state.is_terminal()) {
             ledger.mark_done(&key)?;
         }
         records.push(rec);
@@ -576,6 +712,18 @@ fn write_summary(
             "campaign_sha256": hash,
             "records": records.len(),
             "budget_stopped": rep.budget_stopped,
+            "budget": {
+                "per_case": m.budget.per_case,
+                "per_arm": m.budget.per_arm,
+                "case_budget_cancelled": rep.case_budget_cancelled,
+                "arm_budget_cancelled": rep.arm_budget_cancelled,
+                "tokens_missing": rep.tokens_missing,
+                "tokens_charged_total": rep.tokens_charged_total,
+                "missing_tokens_policy": "charged as per_case.max_tokens for cap decisions; never counted as zero",
+                "max_overshoot_tokens": rep.max_overshoot_tokens,
+                "max_overshoot_wall_secs": rep.max_overshoot_wall_secs,
+                "overshoot_granularity": OVERSHOOT_GRANULARITY,
+            },
             "cells": Value::Object(cells),
         }),
     )

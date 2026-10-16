@@ -58,7 +58,15 @@
     "max_tokens": 1000000,
     "max_wall_secs": 36000,
     "max_disk_bytes": 137438953472,
-    "max_parallel": 2
+    "max_parallel": 2,
+    "per_case": {
+      "max_tokens": 100000,
+      "max_wall_secs": 1800
+    },
+    "per_arm": {
+      "max_tokens": 10000000000,
+      "max_wall_secs": 1000000
+    }
   },
   "termination": {
     "trial_timeout_secs": 1800,
@@ -70,5 +78,5 @@
     "materials_sha256": "692578958726ad328d611f04b3028aeae3b509bc7c0e962cb32bcfe08bff9581",
     "kb_snapshot": "kb-fixture-1"
   },
-  "sha256": "c7ccacb8654967f3b26c517b6a86d9f87d024af7ed793b7716b18f15200ea6be"
+  "sha256": "2088a891c71956fdec66c69231fbadc6372b00f5710322147bdf1aff63aad916"
 }

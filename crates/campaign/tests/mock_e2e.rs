@@ -1,5 +1,6 @@
 //! mock 実行器で A/B/C を通す一続きの統合試験（外部 network・LLM は使わない）。
 //! 実行 → checker → export（mock の印・空/欠測は成功にしない）→ 予算停止 → 再開（重複投入なし）→ dev/final 混在拒否。
+mod common;
 use std::{collections::BTreeMap, fs, path::Path};
 
 use celeris_campaign::{
@@ -127,6 +128,9 @@ fn mock_run_flows_through_check_and_export_with_a_mock_mark() {
         (&sm["evidence_kind"], &sm["real_performance"]),
         (&json!("mock"), &json!(false))
     );
+    // 未採点（採点が無い）の集計は最終版にしない。
+    assert_eq!(t["complete"], false);
+    assert!(!d.path().join("ex/table.json").exists());
     assert_eq!(t["evidence_kind"], "mock");
     assert_eq!(t["real_performance"], false);
     assert!(
@@ -134,13 +138,13 @@ fn mock_run_flows_through_check_and_export_with_a_mock_mark() {
             .as_str()
             .is_some_and(|n| n.contains("not real performance"))
     );
-    let csv = fs::read_to_string(d.path().join("ex/table.csv")).expect("csv");
+    let csv = fs::read_to_string(d.path().join("ex/table.incomplete.csv")).expect("csv");
     assert!(
         csv.lines()
             .next()
-            .is_some_and(|h| h.ends_with(",evidence_kind"))
+            .is_some_and(|h| h.ends_with(",evidence_kind,complete"))
     );
-    assert!(csv.lines().skip(1).all(|l| l.ends_with(",mock")));
+    assert!(csv.lines().skip(1).all(|l| l.ends_with(",mock,false")));
     // 失敗・error は分母に残る（A: 2 試行中 1 通過）。
     let a = &t["configs"][0];
     assert_eq!(
@@ -150,6 +154,9 @@ fn mock_run_flows_through_check_and_export_with_a_mock_mark() {
     assert_eq!(t["configs"][1]["error"], 1);
     // 報告本文の数値は生記録からの再計算と一致しなければ通らない。
     let ok = "result A passed=1 n=2 split=dev\nresult B passed=1 n=2 split=dev\nresult C passed=1 n=1 split=dev\n";
+    // 未採点の間は、数値が合っていても最終報告にならない。
+    assert!(!check_report(&m, &o.out, ok).is_empty());
+    common::write_grades(&m, &o.out, |_| true);
     assert!(check_report(&m, &o.out, ok).is_empty());
     let forged = ok.replace("A passed=1", "A passed=2");
     assert!(!check_report(&m, &o.out, &forged).is_empty());

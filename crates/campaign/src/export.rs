@@ -31,10 +31,11 @@ fn row(m: &CampaignManifest, c: crate::manifest::ConfigId, t: &Totals) -> Value 
         "model": cfg.map(|x| x.model.as_str()),
         "model_version": cfg.map(|x| x.model_version.as_str()),
         "policy_version": cfg.map(|x| x.policy_version.as_str()),
-        "n": t.n, "passed": t.passed, "failed": t.failed, "error": t.error,
+        "n": t.n, "passed": t.passed, "final_passed": t.final_passed,
+        "ungraded": t.ungraded, "grader_failed": t.grader_failed, "failed": t.failed, "error": t.error,
         "timeout": t.timeout, "cancelled": t.cancelled, "blocked": t.blocked, "missing": t.missing,
-        "failures": t.n - t.passed,
-        "pass_rate": if t.n == 0 { Value::Null } else { json!(t.passed as f64 / t.n as f64) },
+        "failures": t.n - t.final_passed,
+        "pass_rate": if t.n == 0 { Value::Null } else { json!(t.final_passed as f64 / t.n as f64) },
         "ran_trials": t.ran_trials,
         "tokens_status": ts,
         "tokens_sum": if ts == "missing" { Value::Null } else { json!(t.tokens_sum) },
@@ -52,7 +53,7 @@ fn row(m: &CampaignManifest, c: crate::manifest::ConfigId, t: &Totals) -> Value 
     })
 }
 
-const COLUMNS: [&str; 28] = [
+const COLUMNS: [&str; 31] = [
     "config",
     "harness",
     "model",
@@ -60,6 +61,9 @@ const COLUMNS: [&str; 28] = [
     "policy_version",
     "n",
     "passed",
+    "final_passed",
+    "ungraded",
+    "grader_failed",
     "failed",
     "error",
     "timeout",
@@ -94,9 +98,12 @@ fn cell(v: &Value, col: &str) -> String {
     }
 }
 
-/// 表を `dest` に書く。戻り値は table.json の内容。
+/// 表を `dest` に書く。戻り値は table の内容。
+/// 成功 = 実行器 passed かつ独立採点 final_pass。未完了（記録欠落・未採点）の集計は `table.incomplete.*` に
+/// `complete: false` を付けて書き、最終版の `table.json` / `table.csv` は書かない（古い最終版も消す）。
 pub fn export(m: &CampaignManifest, out: &Path, dest: &Path) -> Result<Value, String> {
     let rep = check(m, out);
+    let (complete, reasons) = (rep.complete, rep.incomplete_reasons.clone());
     let rc = match (rep.ok, rep.recomputed) {
         (true, Some(rc)) => rc,
         _ => {
@@ -119,21 +126,40 @@ pub fn export(m: &CampaignManifest, out: &Path, dest: &Path) -> Result<Value, St
         "campaign_sha256": m.compute_sha256()?,
         "split": m.split,
         "evidence_kind": kind,
-        "real_performance": real,
+        "complete": complete,
+        "incomplete_reasons": reasons,
+        "success_definition": "executor outcome passed AND independent grade final_pass (bound by campaign hash, case id, split, grader hash, artifact hash)",
+        "real_performance": real && complete,
         "notice": if real { Value::Null } else {
             json!("mock/unknown evidence: these numbers are not real performance and must not be reported as measurements") },
         "configs": rows,
         "comparisons": rc.pairs,
     });
     fs::create_dir_all(dest).map_err(|e| e.to_string())?;
+    let stem = if complete {
+        "table"
+    } else {
+        "table.incomplete"
+    };
+    let stale = if complete {
+        "table.incomplete"
+    } else {
+        "table"
+    };
+    for ext in ["json", "csv"] {
+        let p = dest.join(format!("{stale}.{ext}"));
+        if p.exists() {
+            fs::remove_file(&p).map_err(|e| format!("{}: {e}", p.display()))?;
+        }
+    }
     let mut s = serde_json::to_string_pretty(&table).map_err(|e| e.to_string())?;
     s.push('\n');
-    fs::write(dest.join("table.json"), s).map_err(|e| e.to_string())?;
-    let mut csv = COLUMNS.join(",") + ",evidence_kind\n";
+    fs::write(dest.join(format!("{stem}.json")), s).map_err(|e| e.to_string())?;
+    let mut csv = COLUMNS.join(",") + ",evidence_kind,complete\n";
     for r in &rows {
         let line: Vec<String> = COLUMNS.iter().map(|c| cell(r, c)).collect();
-        csv += &(line.join(",") + &format!(",{kind}\n"));
+        csv += &(line.join(",") + &format!(",{kind},{complete}\n"));
     }
-    fs::write(dest.join("table.csv"), csv).map_err(|e| e.to_string())?;
+    fs::write(dest.join(format!("{stem}.csv")), csv).map_err(|e| e.to_string())?;
     Ok(table)
 }

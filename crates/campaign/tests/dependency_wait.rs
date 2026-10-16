@@ -1,5 +1,6 @@
 //! 依存待ち: 前提 problem が全 config で passed になるまで依存先を実行しない。
 //! 前提が失敗側なら blocked を分母に残し、外部待ちなら waiting で止めて再開で完走する。
+mod common;
 use std::{collections::BTreeMap, fs, path::Path};
 
 use celeris_campaign::{
@@ -193,6 +194,7 @@ fn prerequisite_failure_blocks_dependents_and_keeps_denominator() {
         assert!(r["tokens"].is_null() && r["workspace"] == "");
     }
     // runner の summary と export にも blocked が分母込みで現れる。
+    common::write_grades(&e.m, &e.opts.out, |_| true);
     let tab = export(&e.m, &e.opts.out, &e.opts.out.join("ex")).expect("export");
     let row = &tab["configs"][0];
     assert_eq!(

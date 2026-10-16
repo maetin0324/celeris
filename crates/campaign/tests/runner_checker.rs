@@ -1,4 +1,5 @@
 //! mock 実行器で A/B/C を回し、checker の再計算・export・改ざん検出・隔離・再開・予算停止を確かめる。
+mod common;
 use std::{collections::BTreeMap, fs, path::Path};
 
 use celeris_campaign::{
@@ -170,6 +171,7 @@ fn abc_run_is_rechecked_and_exported_consistently() {
     );
     assert_eq!(a.tokens_missing_trials, 1);
 
+    common::write_grades(&e.m, out, |_| true);
     let t = export(&e.m, out, &out.join("export")).expect("export");
     // export は runner の summary.json と一致する。
     let summary: Value =
@@ -212,7 +214,7 @@ fn missing_usage_is_labelled_not_zero() {
     let t = export(&m, &opts.out, &d.path().join("x")).expect("export");
     assert_eq!(t["configs"][0]["tokens_status"], "missing");
     assert!(t["configs"][0]["tokens_sum"].is_null());
-    let csv = fs::read_to_string(d.path().join("x/table.csv")).expect("csv");
+    let csv = fs::read_to_string(d.path().join("x/table.incomplete.csv")).expect("csv");
     assert!(csv.lines().nth(1).expect("row").contains("欠測"));
 }
 
@@ -499,7 +501,7 @@ fn cli_run_check_export_end_to_end() {
     assert!(go(&["check"]).status.success());
     let e = go(&["export"]);
     assert!(e.status.success());
-    assert!(d.path().join("o/export/table.csv").exists());
+    assert!(d.path().join("o/export/table.incomplete.csv").exists());
     assert!(!go(&["run", "--executor", "claude"]).status.success());
     let mut v = lines(&d.path().join("o"));
     v[0]["passed"] = json!(!v[0]["passed"].as_bool().expect("b"));

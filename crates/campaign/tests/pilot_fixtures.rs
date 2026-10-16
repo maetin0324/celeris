@@ -2,6 +2,7 @@
 //! fixture の生成物（input-manifest.json・pilot.json・review/report-good.md）は
 //! `CAMPAIGN_UPDATE_FIXTURES=1 cargo test -p celeris-campaign --test pilot_fixtures` で作り直す。
 //! 通常は「置いてある fixture が現行の生成結果と一致する」ことだけを確かめる。
+mod common;
 use std::{
     collections::BTreeMap,
     fs,
@@ -150,6 +151,7 @@ fn pilot_run(out: &Path) -> (CampaignManifest, Input, Recomputed) {
     let input = build_input();
     let m = build_pilot(&input);
     run(&m, &input, &MockExecutor::seeded(), &run_opts(out)).expect("run");
+    common::write_grades(&m, out, |_| true);
     let rep = check(&m, out);
     assert!(rep.ok, "{:?}", rep.violations);
     (m, input, rep.recomputed.expect("recomputed"))
@@ -259,6 +261,7 @@ fn pilot_mock_run_check_export_and_report_via_cli() {
     let r: Value = serde_json::from_str(&run_out).expect("run json");
     assert_eq!(r["executed"], 12);
     assert_eq!(r["budget_stopped"], false);
+    common::write_grades(&CampaignManifest::load(&pilot).expect("m"), &out, |_| true);
     ok(vec![
         "check".into(),
         "--manifest".into(),

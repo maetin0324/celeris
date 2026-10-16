@@ -30,9 +30,10 @@ completed: 2026-10-16
 - mock 出力は `evidence_kind: mock`。実性能ではない。
 
 ## 3. pilot manifest と task-template（条件固定）
-- 置き場: `crates/campaign/fixtures/pilot-live.json`、`pilot-task-template.json`（input manifest の相対参照のため fixtures に置く）。
+- 置き場: `agent-docs/progress/2026-10-16-mlsys-pilot/pilot-live.json`、`pilot-task-template.json`（input は `../../../crates/campaign/fixtures/input-manifest.json` を相対参照。範囲外の crates 配下には置かない）。
 - 内容: campaign_id `mlsys-pilot-1`、split dev、problems 2 件（`impl-benchfs-chunk-index`、`review-numeric-consistency`）、primary A/B、C は subset 1 件（Jev smoke 兼用）、repeats 1、max_tokens 1,000,000、per_case 100,000、per_arm 400,000、max_parallel 1、試行 5（承認の 12 以内）。model は `claude-sonnet-5-5`。fable は不使用（`grep fable` ゼロ）。
-- **validate sha256: `55f6a383f8b3833f220a2d41a3880013b25721b743dc8f063c334a3ca6283758`**
+- **validate sha256: `a3b3ec43e56dab511f18e0d06bae3603d0d3590e4ba121c3ffb70b5cf773840e`**
+- 検証コマンド: `celeris-campaign validate|dry-run --manifest agent-docs/progress/2026-10-16-mlsys-pilot/pilot-live.json`（exit 0）。
 - **dry-run: within_budget true**（total_trials 5、推定 251,673 tokens、llm_calls_made 0。推定は仮置き係数）。
 - 注意: B/C の `harness_version` はプレースホルダ（`<release sha12 at H1>`）、C の `evidence_table_id` 未設定。昇格後の release sha12 と `celerisctl routing evidence` の版で埋め、**埋めたら hash が変わる**ので再 validate して控え直す（これが実条件の固定）。
 - 入力は fixture の問題（課金前の配線確認用）。実 K1〜K4 case を使う場合は未接続 3（manifest 生成 CLI なし）により手書きが要る。

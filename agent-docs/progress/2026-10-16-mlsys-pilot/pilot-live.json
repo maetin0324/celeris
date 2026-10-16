@@ -4,7 +4,7 @@
   "version": "1",
   "split": "dev",
   "input": {
-    "path": "input-manifest.json",
+    "path": "../../../crates/campaign/fixtures/input-manifest.json",
     "sha256": "52dd6e1b3544b47a0987a4ac331dee4b041d2ee5ba41ab32e772e1b588479dd5"
   },
   "problems": [

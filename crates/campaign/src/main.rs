@@ -5,7 +5,7 @@ use celeris_campaign::{
     checker,
     curl_transport::CurlTransport,
     dispatch::ArmDispatch,
-    executor::MockExecutor,
+    executor::{Executor, MockExecutor},
     export,
     grade_runner::ProcessRunner,
     harness_exec::{ClaudeCodeBuilder, HarnessExecutor},
@@ -13,10 +13,11 @@ use celeris_campaign::{
     manifest::CampaignManifest,
     preflight::{self, Inputs, RealHost},
     runner,
+    watch::{self, SystemClock, WatchOptions},
 };
 
-const USAGE: &str = "usage: celeris-campaign <dry-run|validate|preflight|run|check|check-report|export|grade-out> --manifest <path> \
-[--cases <grade-case dir>] \
+const USAGE: &str = "usage: celeris-campaign <dry-run|validate|preflight|run|watch|check|check-report|export|grade-out> --manifest <path> \
+[--interval-secs N] [--max-iterations M] [--cases <grade-case dir>] \
 [--input-manifest <path>] [--out <dir>] [--executor mock|harness|celeris] [--api-url <url> --token-env <ENV_NAME> [--task-template <json>]] [--dest <dir>] \
 [--cases-root <dir>] [--grader-root <dir>] [--grade-case-root <dir>] [--a-program <path>] [--report <file>] [--repo-src <dir>] [--materials-src <dir>] [--kb-src <dir>]";
 
@@ -73,7 +74,7 @@ fn run(args: Vec<String>) -> Result<String, String> {
             let s = serde_json::to_string_pretty(&rep).map_err(|e| e.to_string())?;
             if rep.ok { Ok(s) } else { Err(s) }
         }
-        "run" => {
+        "run" | "watch" => {
             let which =
                 arg(&args, "--executor").ok_or("--executor mock|harness|celeris is required")?;
             let which = which.to_string_lossy().into_owned();
@@ -89,17 +90,42 @@ fn run(args: Vec<String>) -> Result<String, String> {
                 materials_src: arg(&args, "--materials-src"),
                 kb_src: arg(&args, "--kb-src"),
             };
+            // watch は同じ走査を台帳が閉じるまで繰り返す（再起動しても台帳から再開する）。
+            let wopts = (cmd == "watch")
+                .then(|| -> Result<WatchOptions, String> {
+                    let n = |name: &str, d: u64| -> Result<u64, String> {
+                        match arg(&args, name) {
+                            None => Ok(d),
+                            Some(v) => v
+                                .to_string_lossy()
+                                .parse::<u64>()
+                                .map_err(|e| format!("{name}: {e}")),
+                        }
+                    };
+                    Ok(WatchOptions {
+                        interval_secs: n("--interval-secs", 60)?,
+                        max_iterations: u32::try_from(n("--max-iterations", 1440)?)
+                            .map_err(|e| format!("--max-iterations: {e}"))?,
+                    })
+                })
+                .transpose()?;
+            let watched = std::cell::Cell::new(None);
+            let drive = |e: &dyn Executor| -> Result<runner::RunReport, String> {
+                match wopts {
+                    None => runner::run(&m, &input, e, &opts),
+                    Some(w) => {
+                        let r = watch::watch(&m, &input, e, &opts, w, &SystemClock)?;
+                        watched.set(Some((r.iterations, r.end)));
+                        Ok(r.last)
+                    }
+                }
+            };
             let rep = match which.as_str() {
-                "mock" => runner::run(&m, &input, &MockExecutor::seeded(), &opts)?,
-                "harness" => runner::run(
-                    &m,
-                    &input,
-                    &HarnessExecutor::new(
-                        out_dir.join("harness-state"),
-                        Box::new(ClaudeCodeBuilder::default()),
-                    ),
-                    &opts,
-                )?,
+                "mock" => drive(&MockExecutor::seeded())?,
+                "harness" => drive(&HarnessExecutor::new(
+                    out_dir.join("harness-state"),
+                    Box::new(ClaudeCodeBuilder::default()),
+                ))?,
                 "celeris" => {
                     // 秘密の値は受け取らない: token は環境変数の「名前」だけ。
                     let url = arg(&args, "--api-url").ok_or("--api-url is required for celeris")?;
@@ -133,7 +159,7 @@ fn run(args: Vec<String>) -> Result<String, String> {
                         out_dir.join("harness-state"),
                         Box::new(ClaudeCodeBuilder::default()),
                     );
-                    runner::run(&m, &input, &ArmDispatch { a, bc }, &opts)?
+                    drive(&ArmDispatch { a, bc })?
                 }
                 other => {
                     return Err(format!(
@@ -152,7 +178,7 @@ fn run(args: Vec<String>) -> Result<String, String> {
                 *by_state.entry(st).or_default() += 1;
             }
             Ok(format!(
-                "{{\"executed\":{},\"resumed_skipped\":{},\"budget_cancelled\":{},\"blocked\":{},\"waiting\":{},\"tokens_total\":{},\"tokens_missing\":{},\"case_budget_cancelled\":{},\"arm_budget_cancelled\":{},\"max_overshoot_tokens\":{},\"max_overshoot_wall_secs\":{},\"parallel_deferred\":{},\"no_artifact\":{},\"executor_errors\":{},\"budget_stopped\":{},\"ledger\":{{\"rows\":{},\"by_state\":{}}}}}",
+                "{{\"executed\":{},\"resumed_skipped\":{},\"budget_cancelled\":{},\"blocked\":{},\"waiting\":{},\"tokens_total\":{},\"tokens_missing\":{},\"case_budget_cancelled\":{},\"arm_budget_cancelled\":{},\"max_overshoot_tokens\":{},\"max_overshoot_wall_secs\":{},\"parallel_deferred\":{},\"no_artifact\":{},\"executor_errors\":{},\"budget_stopped\":{},{}\"ledger\":{{\"rows\":{},\"by_state\":{}}}}}",
                 rep.executed,
                 rep.resumed_skipped,
                 rep.budget_cancelled,
@@ -168,6 +194,13 @@ fn run(args: Vec<String>) -> Result<String, String> {
                 rep.no_artifact,
                 rep.executor_errors,
                 rep.budget_stopped,
+                match watched.get() {
+                    Some((n, end)) => format!(
+                        "\"watch\":{{\"iterations\":{n},\"end\":\"{}\"}},",
+                        end.as_str()
+                    ),
+                    None => String::new(),
+                },
                 rows,
                 serde_json::to_string(&by_state).map_err(|e| e.to_string())?
             ))

@@ -154,6 +154,43 @@ fn is_terminal(status: &str) -> bool {
     matches!(status, "done" | "failed" | "cancelled")
 }
 
+/// 木の cluster job（参照と、まだ終わっていないか）。
+fn tree_jobs(tree: &[TreeNode]) -> Vec<(String, bool)> {
+    let mut v = Vec::new();
+    for n in tree {
+        let w = &n.detail["cluster_job_wait"];
+        let (Some(s), Some(c)) = (w["scheduler"].as_str(), w["cluster"].as_str()) else {
+            continue;
+        };
+        for j in w["jobs"].as_array().into_iter().flatten() {
+            if let Some(id) = j["job_id"].as_str() {
+                let live = !matches!(j["state"].as_str(), Some("finished" | "gone"));
+                v.push((job_ref(s, c, id), live));
+            }
+        }
+    }
+    v
+}
+
+/// 木の全 task が終端で、cluster job もすべて終わった（PBS `F` / Slurm の終端 / scheduler が「知らない」）か。
+/// task が cancelled でも、job が live なら停止とみなさない（task cancel と job 停止は別の事実）。
+fn all_stopped(tree: &[TreeNode]) -> bool {
+    tree.iter().all(|n| is_terminal(&n.status)) && !tree_jobs(tree).iter().any(|(_, live)| *live)
+}
+
+/// 根 task がこの campaign の投入物か（冪等キー由来の label `campaign-…` を持つ）。
+/// 台帳の task id が他の task を指していても、無関係な task・job を止めないための所有判定。
+fn owned_by_campaign(root: &TreeNode) -> bool {
+    root.detail["task"]["labels"]
+        .as_array()
+        .is_some_and(|ls| ls.iter().any(|l| l.as_str().is_some_and(is_campaign_label)))
+}
+
+fn is_campaign_label(l: &str) -> bool {
+    l.strip_prefix("campaign-")
+        .is_some_and(|h| h.len() >= 16 && h.bytes().all(|b| b.is_ascii_hexdigit()))
+}
+
 fn ok(r: &HttpResponse) -> bool {
     (200..300).contains(&r.status)
 }
@@ -266,7 +303,11 @@ impl<T: Transport> CelerisExecutor<T> {
         );
         b.insert(
             "objective".into(),
-            json!(format!("{}\n\ncampaign-idempotency-key: {key}", req.prompt)),
+            json!(format!(
+                "{}\n\ncampaign-idempotency-key: {key}\ncluster-job-walltime-secs: {}",
+                req.prompt,
+                req.timeout_secs.min(req.budget.max_wall_secs)
+            )),
         );
         b.insert(
             "workspace".into(),
@@ -319,22 +360,8 @@ impl<T: Transport> CelerisExecutor<T> {
         Ok(out)
     }
 
-    /// 木の cluster job（参照と、まだ終わっていないか）。
     fn jobs(tree: &[TreeNode]) -> Vec<(String, bool)> {
-        let mut v = Vec::new();
-        for n in tree {
-            let w = &n.detail["cluster_job_wait"];
-            let (Some(s), Some(c)) = (w["scheduler"].as_str(), w["cluster"].as_str()) else {
-                continue;
-            };
-            for j in w["jobs"].as_array().into_iter().flatten() {
-                if let Some(id) = j["job_id"].as_str() {
-                    let live = !matches!(j["state"].as_str(), Some("finished" | "gone"));
-                    v.push((job_ref(s, c, id), live));
-                }
-            }
-        }
-        v
+        tree_jobs(tree)
     }
 
     fn task_ref(t: &TaskRef, tree: &[TreeNode]) -> TaskRef {
@@ -405,6 +432,8 @@ impl<T: Transport> CelerisExecutor<T> {
             "schema": CLUSTER_CANCEL_SCHEMA, "task_id": task_id, "job": job,
             "cluster": c, "scheduler": s, "job_id": id, "command": command,
             "reason": reason, "executed": false,
+            // 試行の実行時間の上限。job の scheduler 側 walltime はこれを超えて取らない（job は終端確認まで予約を解かない）。
+            "walltime_secs": self.trial_timeout_secs,
         });
         // 同じ job・理由の行は一度だけ（cancel の再試行で手順を重ねない）。
         if existing.lines().any(|l| {
@@ -573,6 +602,12 @@ impl<T: Transport> Executor for CelerisExecutor<T> {
         if pending {
             if elapsed.is_some_and(|e| e > self.trial_timeout_secs) {
                 self.cancel(&Self::task_ref(t, &tree), "trial_timeout")?;
+                // cancel の受理は停止ではない。task と job の終端を読み直して確かめるまで Wait（予約も解かない）。
+                let after = self.walk(&t.task_id).map_err(ExecError::interrupted)?;
+                if !all_stopped(&after) {
+                    return Ok(ExecStatus::Wait);
+                }
+                let (tokens, cost_micro_usd) = Self::usage(&after);
                 return Ok(ExecStatus::Done(ExecResult {
                     outcome: Outcome::Timeout,
                     tokens,
@@ -581,6 +616,15 @@ impl<T: Transport> Executor for CelerisExecutor<T> {
                 }));
             }
             return Ok(ExecStatus::Wait);
+        }
+        // 前回の poll が timeout で cancel した後、job の終了を待って終端に至った場合。
+        if root.status == "cancelled" && elapsed.is_some_and(|e| e > self.trial_timeout_secs) {
+            return Ok(ExecStatus::Done(ExecResult {
+                outcome: Outcome::Timeout,
+                tokens,
+                cost_micro_usd,
+                wall_secs: self.trial_timeout_secs,
+            }));
         }
         let outcome = match root.status.as_str() {
             "done" => Outcome::Passed,
@@ -602,12 +646,25 @@ impl<T: Transport> Executor for CelerisExecutor<T> {
         }))
     }
 
+    /// task 木がすべて終端で、cluster job も終了（F / 終端 / gone）するまで false。
+    fn stopped(&self, t: &TaskRef) -> Result<bool, ExecError> {
+        let tree = self.walk(&t.task_id).map_err(ExecError::interrupted)?;
+        Ok(all_stopped(&tree))
+    }
+
     /// 子孫（深い順）→ 根の順に終端でない task を cancel API で閉じ、cluster job は人手手順を記録する。
     /// 失敗があっても全対象を試してから Err を返す。
     fn cancel(&self, t: &TaskRef, reason: &str) -> Result<(), ExecError> {
         let mut errors = Vec::new();
         let (tree, mut jobs) = match self.walk(&t.task_id) {
             Ok(tree) => {
+                // 所有判定: 根が本 campaign の label を持たない task は止めない（job も記録しない）。
+                if !tree.first().is_some_and(owned_by_campaign) {
+                    return Err(ExecError::refused(format!(
+                        "task {} is not owned by this campaign (no campaign-… label); not cancelled",
+                        t.task_id
+                    )));
+                }
                 let jobs: Vec<String> = Self::jobs(&tree)
                     .into_iter()
                     .filter(|(_, live)| *live)

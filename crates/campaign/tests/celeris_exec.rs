@@ -182,7 +182,8 @@ impl Transport for Fake {
                 let children: Vec<Value> = t.children.iter().map(|c| json!({"id": c})).collect();
                 resp(
                     200,
-                    json!({"task": {"id": id, "status": t.status, "created_at": t.created_at},
+                    json!({"task": {"id": id, "status": t.status, "created_at": t.created_at,
+                        "labels": t.labels},
                         "children": children, "runs": t.runs, "timers": {"now": s.now},
                         "cluster_job_wait": t.cluster_job_wait}),
                 )
@@ -449,6 +450,15 @@ fn trial_timeout_cancels_tree_and_reports_timeout() {
     f.st().now = "2026-10-16T00:09:59Z".into();
     assert_eq!(x.poll(&t).expect("poll"), ExecStatus::Wait);
     f.st().now = "2026-10-16T00:10:01Z".into();
+    // task は cancel で閉じても、cluster job が終わるまでは完了扱いにしない（task cancelled ≠ job 停止）。
+    assert_eq!(x.poll(&t).expect("poll"), ExecStatus::Wait);
+    assert!(!x.stopped(&t).expect("stopped"));
+    assert_eq!(x.poll(&t).expect("again"), ExecStatus::Wait);
+    f.set(&c1, |c| {
+        c.cluster_job_wait = json!({"cluster": "pegasus", "scheduler": "slurm",
+            "jobs": [{"job_id": "9", "state": "finished"}]});
+    });
+    assert!(x.stopped(&t).expect("stopped"));
     let r = done(x.poll(&t).expect("poll"));
     assert_eq!((r.outcome, r.wall_secs), (Outcome::Timeout, 600));
     assert_eq!(f.status(&c1), "cancelled");
@@ -707,4 +717,87 @@ fn body_carries_campaign_identity_and_idempotency_key() {
             .expect("labels")
             .contains(&json!(idempotency_label(KEY)))
     );
+}
+
+// ---- job 終了確認と所有判定 ----
+
+#[test]
+fn cancelled_task_with_live_job_is_not_complete_until_job_finishes() {
+    let d = tempfile::tempdir().expect("dir");
+    let f = Fake::new();
+    let c = cfg(ConfigId::C, Some(c_routing()));
+    let x = exec(&f, d.path(), 1800);
+    let t = x.submit(&req(&c, d.path()), KEY).expect("submit");
+    let job = |state: &str| json!({"cluster": "sirius", "scheduler": "pbs", "jobs": [{"job_id": "5", "state": state}]});
+    f.set(&t.task_id, |t| t.cluster_job_wait = job("running"));
+    x.cancel(&t, "budget_stop").expect("cancel");
+    assert_eq!(f.status(&t.task_id), "cancelled");
+    // 状態が読めない（unknown）job も終わったとは扱わない。
+    for state in ["running", "exiting", "unknown"] {
+        f.set(&t.task_id, |t| t.cluster_job_wait = job(state));
+        assert!(!x.stopped(&t).expect("stopped"), "{state}");
+        assert_eq!(x.poll(&t).expect("poll"), ExecStatus::Wait, "{state}");
+    }
+    for state in ["finished", "gone"] {
+        f.set(&t.task_id, |t| t.cluster_job_wait = job(state));
+        assert!(x.stopped(&t).expect("stopped"), "{state}");
+        assert_eq!(
+            done(x.poll(&t).expect("poll")).outcome,
+            Outcome::Cancelled,
+            "{state}"
+        );
+    }
+    // 台帳の row は stopped を確認できるまで cancel_pending のまま（runner 側は budget_reserve.rs で固定）。
+}
+
+#[test]
+fn cancel_never_touches_tasks_or_jobs_not_owned_by_the_campaign() {
+    let d = tempfile::tempdir().expect("dir");
+    let f = Fake::new();
+    let c = cfg(ConfigId::B, None);
+    let x = exec(&f, d.path(), 1800);
+    let mine = x.submit(&req(&c, d.path()), KEY).expect("submit");
+    // 無関係な task（campaign の label が無い）とその cluster job。
+    let other = f.create(json!({"labels": ["unrelated"]}), None);
+    f.set(&other, |t| {
+        t.cluster_job_wait = json!({"cluster": "sirius", "scheduler": "pbs",
+            "jobs": [{"job_id": "999", "state": "running"}]});
+    });
+    // 台帳の記録が誤って無関係な task を指していても、止めない・job の手順も記録しない。
+    let wrong = TaskRef {
+        task_id: other.clone(),
+        ..TaskRef::default()
+    };
+    let e = x.cancel(&wrong, "budget_stop").expect_err("not owned");
+    assert_eq!(e.kind, celeris_campaign::executor::ErrKind::Refused);
+    assert_eq!(f.status(&other), "running");
+    assert!(f.st().cancels.is_empty());
+    assert!(!d.path().join(CLUSTER_CANCEL_FILE).exists());
+    // 自分の task は止まり、無関係な task は走り続ける。
+    x.cancel(&mine, "budget_stop").expect("cancel mine");
+    assert_eq!(f.status(&mine.task_id), "cancelled");
+    assert_eq!(f.status(&other), "running");
+    assert!(!d.path().join(CLUSTER_CANCEL_FILE).exists());
+}
+
+#[test]
+fn objective_and_cancel_log_carry_cluster_walltime() {
+    let d = tempfile::tempdir().expect("dir");
+    let f = Fake::new();
+    let c = cfg(ConfigId::B, None);
+    let x = exec(&f, d.path(), 900);
+    let t = x.submit(&req(&c, d.path()), KEY).expect("submit");
+    assert!(
+        f.body(&t.task_id)["objective"]
+            .as_str()
+            .expect("obj")
+            .contains("cluster-job-walltime-secs: 1800")
+    );
+    f.set(&t.task_id, |t| {
+        t.cluster_job_wait = json!({"cluster": "sirius", "scheduler": "pbs",
+            "jobs": [{"job_id": "5", "state": "running"}]});
+    });
+    x.cancel(&t, "trial_timeout").expect("cancel");
+    let log = fs::read_to_string(d.path().join(CLUSTER_CANCEL_FILE)).expect("log");
+    assert!(log.contains("\"walltime_secs\":900"), "{log}");
 }

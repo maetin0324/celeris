@@ -25,5 +25,6 @@ pub mod record;
 pub mod report;
 pub mod runner;
 pub mod snapshot;
+pub mod watch;
 
 pub const CAMPAIGN_SCHEMA: &str = "celeris.campaign-manifest/1";

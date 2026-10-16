@@ -8,8 +8,12 @@ fn fx() -> std::path::PathBuf {
 }
 
 fn run(extra: &[&str], out: &Path, envs: &[(&str, &str)]) -> std::process::Output {
+    cmd("run", extra, out, envs)
+}
+
+fn cmd(sub: &str, extra: &[&str], out: &Path, envs: &[(&str, &str)]) -> std::process::Output {
     let mut c = Command::new(std::env::var("CARGO_BIN_EXE_celeris-campaign").expect("bin"));
-    c.args(["run", "--manifest"])
+    c.args([sub, "--manifest"])
         .arg(fx().join("pilot.json"))
         .arg("--out")
         .arg(out)
@@ -75,4 +79,53 @@ fn celeris_requires_url_and_token_env_and_never_prints_the_secret() {
     for out in [&o.stdout, &o.stderr] {
         assert!(!String::from_utf8_lossy(out).contains(secret));
     }
+}
+
+#[test]
+fn watch_with_mock_settles_and_reports_iterations() {
+    let d = tempfile::tempdir().expect("dir");
+    let o = cmd(
+        "watch",
+        &[
+            "--executor",
+            "mock",
+            "--interval-secs",
+            "1",
+            "--max-iterations",
+            "3",
+        ],
+        &d.path().join("o"),
+        &[],
+    );
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let v: Value = serde_json::from_slice(&o.stdout).expect("json");
+    assert_eq!(v["executed"], 12);
+    assert_eq!(v["watch"]["end"], "settled");
+    assert_eq!(v["watch"]["iterations"], 1);
+    // 再起動（同じ out）: 台帳から再開し、再実行しない。
+    let o = cmd(
+        "watch",
+        &[
+            "--executor",
+            "mock",
+            "--interval-secs",
+            "1",
+            "--max-iterations",
+            "3",
+        ],
+        &d.path().join("o"),
+        &[],
+    );
+    let v: Value = serde_json::from_slice(&o.stdout).expect("json");
+    assert_eq!(
+        (v["executed"].as_u64(), v["resumed_skipped"].as_u64()),
+        (Some(0), Some(12))
+    );
+    let o = cmd(
+        "watch",
+        &["--executor", "mock", "--interval-secs", "0"],
+        &d.path().join("o"),
+        &[],
+    );
+    assert!(!o.status.success());
 }

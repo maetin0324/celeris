@@ -36,6 +36,9 @@ impl<A: Executor, BC: Executor> Executor for ArmDispatch<A, BC> {
     fn name(&self) -> &'static str {
         "arm-dispatch"
     }
+    fn simulated(&self) -> bool {
+        self.a.simulated() || self.bc.simulated()
+    }
     fn execute(&self, _: &TrialRequest) -> Result<ExecStatus, String> {
         Err("async only (use submit/poll via the ledger)".into())
     }

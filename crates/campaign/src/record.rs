@@ -88,3 +88,8 @@ impl TrialRecord {
         }
     }
 }
+
+/// 出力に残す証拠の種別。mock 実行器の数値は実性能として扱えない。
+pub fn evidence_kind(simulated: bool) -> &'static str {
+    if simulated { "mock" } else { "real" }
+}

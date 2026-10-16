@@ -1,6 +1,8 @@
 ---
-task: 01M51B9AFNAQ8FVXM8WAJ5B3H4
+title: CoS 受信箱: 元の待ちが閉じた escalated 項目を resolved にする
+tasks: [01M51B9AFNAQ8FVXM8WAJ5B3H4]
 status: done
+updated: 2026-10-16
 completed: 2026-10-16
 ---
 # CoS 受信箱: 元の待ちが閉じた escalated 項目を resolved にする

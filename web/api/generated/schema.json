@@ -2580,6 +2580,52 @@
       },
       "type": "object"
     },
+    "CampaignIdentity": {
+      "additionalProperties": false,
+      "description": "campaign 識別（ADR 2026-10-16-campaign-identity-propagation）。campaign の root task に 1 つ付き、\n子孫 task・全 run（再試行・continuation・repair・reviewer・planner）が祖先の鎖から継ぐ。\n`routing_setting` は試行単位で固定した routing 設定（全体 config の `[routing] mode` とは別）。",
+      "properties": {
+        "arm": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "campaign_id": {
+          "type": "string"
+        },
+        "case_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "manifest_hash": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "repetition": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "routing_setting": {
+          "description": "`fixed` | `decision_assisted`。",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "campaign_id"
+      ],
+      "type": "object"
+    },
     "CancelBody": {
       "additionalProperties": false,
       "description": "`POST /tasks/{id}/cancel` の本文。",
@@ -18070,6 +18116,26 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "campaign": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CampaignIdentity"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "ADR 2026-10-16-campaign-identity-propagation: campaign の root task に付ける識別\n（campaign_id / case_id / arm / repetition / manifest_hash / routing_setting）。task 作成と\n同じ transaction で保存する。子孫・再試行・review は祖先の鎖から継ぐ。省略時は campaign 無し。"
+        },
+        "campaign_idempotency_key": {
+          "default": null,
+          "description": "`campaign` の再送判定に使う冪等キー（task の label として照合する）。同じ識別の再送は\n既存 task を 200 で返し、同じキーで識別が違う、または同じ試行で識別の欄が違えば 409\n`campaign_identity_conflict`。`campaign` が無ければ 400。",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "category": {
           "anyOf": [

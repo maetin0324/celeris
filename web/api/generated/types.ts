@@ -527,6 +527,15 @@ export type BudgetPrefs = {
   "max_lane"?: Tier | null;
 };
 
+export type CampaignIdentity = {
+  "arm"?: string | null;
+  "campaign_id": string;
+  "case_id"?: string | null;
+  "manifest_hash"?: string | null;
+  "repetition"?: number | null;
+  "routing_setting"?: string | null;
+};
+
 export type CancelBody = {
   "expected_status"?: Status | null;
 };
@@ -3660,6 +3669,8 @@ export type NewTaskBody = {
   "aggregate"?: boolean;
   "assignee"?: string | null;
   "attachment_ids"?: Array<string>;
+  "campaign"?: CampaignIdentity | null;
+  "campaign_idempotency_key"?: string | null;
   "category"?: TaskCategory | null;
   "cluster"?: string | null;
   "depends_on"?: Array<TaskId>;

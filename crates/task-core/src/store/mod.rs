@@ -134,6 +134,7 @@ pub use credential_wait::{
     CredentialVerifyKind, CredentialWait, CredentialWaitEnter, CredentialWaitState,
     CredentialWaitStore, EnterWaitOutcome,
 };
+pub use decision_log::CampaignResend;
 pub use root_done::{RootDoneState, RootDoneSummary};
 pub(crate) use site_policies::site_policy_tx;
 pub use site_policies::{

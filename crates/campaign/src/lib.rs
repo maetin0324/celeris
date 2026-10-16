@@ -6,6 +6,7 @@ pub mod checker;
 pub mod dryrun;
 pub mod executor;
 pub mod export;
+pub mod grader;
 pub mod manifest;
 pub mod record;
 pub mod report;

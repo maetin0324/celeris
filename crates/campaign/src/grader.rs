@@ -1,0 +1,1119 @@
+//! 独立 grader（ADR 2026-10-16-mlsys-independent-grader）。
+//! 入力は trial の成果物 directory と grader 側の case 定義だけ。成果物中の成功宣言・trial 記録の
+//! outcome・mock の Passed は読まない。4 検査（実装テスト・実行証拠・独立再計算・レビュー）を独立に行う。
+pub mod case {
+    //! grader 側の case 定義（`celeris.grade-case/1`）。試行の作業場所には渡さない。
+    use std::{collections::BTreeMap, fs, path::Path};
+
+    use serde::{Deserialize, Serialize};
+    use serde_json::Value;
+
+    pub const GRADE_CASE_SCHEMA: &str = "celeris.grade-case/1";
+
+    #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+    #[serde(rename_all = "lowercase")]
+    pub enum CaseSplit {
+        Dev,
+        Final,
+        /// fixture/mock の制御試験。全検査が通っても最終合格にしない。
+        Control,
+    }
+
+    #[derive(Clone, Debug, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    pub struct GradeCase {
+        pub schema: String,
+        pub id: String,
+        pub split: CaseSplit,
+        #[serde(default)]
+        pub implementation: Option<ImplementationSpec>,
+        #[serde(default)]
+        pub experiment: Option<ExperimentSpec>,
+        #[serde(default)]
+        pub recompute: Option<RecomputeSpec>,
+        #[serde(default)]
+        pub review: Option<ReviewSpec>,
+    }
+
+    #[derive(Clone, Debug, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    pub struct PristineTest {
+        /// 成果物 repo 内の path（重ねる先）。pristine の実体は `pristine_dir/<path>`。
+        pub path: String,
+        pub sha256: String,
+    }
+
+    #[derive(Clone, Debug, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    pub struct ImplementationSpec {
+        /// case file の dir からの相対 path。
+        pub pristine_dir: String,
+        /// 成果物 dir 内の repo の相対 path。
+        pub repo: String,
+        pub tests: Vec<PristineTest>,
+        pub command: Vec<String>,
+        /// 出力に `test <name> ... ok` が現れねばならない試験名。
+        #[serde(default)]
+        pub must_pass: Vec<String>,
+    }
+
+    #[derive(Clone, Debug, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    pub struct ExperimentSpec {
+        /// 成果物 dir 内の証拠一覧（既定 `evidence/jobs.json`）。
+        #[serde(default = "default_jobs_file")]
+        pub jobs_file: String,
+        pub min_jobs: usize,
+        /// 各 job の `conditions` に要求する値（node 数等）。
+        pub conditions: BTreeMap<String, Value>,
+    }
+
+    fn default_jobs_file() -> String {
+        "evidence/jobs.json".into()
+    }
+
+    #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+    #[serde(rename_all = "lowercase")]
+    pub enum Agg {
+        Mean,
+        Median,
+        Sum,
+        Min,
+        Max,
+        Count,
+    }
+
+    #[derive(Clone, Debug, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields, rename_all = "snake_case")]
+    pub enum Source {
+        /// 各 file の JSON pointer の値。
+        Json { files: Vec<String>, pointer: String },
+        /// 各 file の CSV 列（header 行あり）。`filter` の列＝値の行だけ。
+        Csv {
+            files: Vec<String>,
+            column: String,
+            #[serde(default)]
+            filter: BTreeMap<String, String>,
+        },
+        /// 他の指標の比。
+        Ratio {
+            numerator: String,
+            denominator: String,
+        },
+    }
+
+    #[derive(Clone, Debug, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    pub struct MetricSpec {
+        pub name: String,
+        pub source: Source,
+        #[serde(default = "default_agg")]
+        pub agg: Agg,
+        /// 相対許容差（|reported - recomputed| <= tol * max(|recomputed|, 1e-12)）。
+        pub tolerance_rel: f64,
+    }
+
+    fn default_agg() -> Agg {
+        Agg::Mean
+    }
+
+    #[derive(Clone, Debug, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    pub struct RecomputeSpec {
+        /// 成果物 dir 内の報告（`metric <name> = <value>` 行）。
+        pub report: String,
+        /// 固定入力の sha256（成果物 dir 内の path → sha256）。
+        #[serde(default)]
+        pub pinned_raw: BTreeMap<String, String>,
+        pub metrics: Vec<MetricSpec>,
+    }
+
+    #[derive(Clone, Debug, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    pub struct DefectSpec {
+        pub id: String,
+        pub file: String,
+        /// 含む行範囲 [start, end]。無ければ file 全体。
+        #[serde(default)]
+        pub lines: Option<(u64, u64)>,
+        /// 指摘本文に 1 つ以上含まれるべき語（大文字小文字を区別しない）。
+        pub keywords: Vec<String>,
+    }
+
+    #[derive(Clone, Debug, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    pub struct ReviewSpec {
+        #[serde(default = "default_findings_file")]
+        pub findings: String,
+        pub known_defects: Vec<DefectSpec>,
+        /// list 外だが実在が確認済みの指摘（検出にも誤指摘にも数えない）。
+        #[serde(default)]
+        pub also_valid: Vec<DefectSpec>,
+        pub min_detection_rate: f64,
+        pub max_false_positives: usize,
+    }
+
+    fn default_findings_file() -> String {
+        "review/findings.json".into()
+    }
+
+    impl GradeCase {
+        pub fn load(path: &Path) -> Result<Self, String> {
+            let b = fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+            let c: GradeCase =
+                serde_json::from_slice(&b).map_err(|e| format!("{}: {e}", path.display()))?;
+            c.validate()?;
+            Ok(c)
+        }
+
+        pub fn validate(&self) -> Result<(), String> {
+            if self.schema != GRADE_CASE_SCHEMA {
+                return Err(format!("unknown case schema {}", self.schema));
+            }
+            if self.id.is_empty() {
+                return Err("case id is empty".into());
+            }
+            if let Some(i) = &self.implementation
+                && (i.tests.is_empty() || i.command.is_empty())
+            {
+                return Err("implementation needs tests and a command".into());
+            }
+            if let Some(r) = &self.recompute
+                && r.metrics
+                    .iter()
+                    .any(|m| m.tolerance_rel.is_nan() || m.tolerance_rel < 0.0)
+            {
+                return Err("metric tolerance_rel must be >= 0".into());
+            }
+            if let Some(r) = &self.review
+                && (r.known_defects.is_empty() || !(0.0..=1.0).contains(&r.min_detection_rate))
+            {
+                return Err("review needs known_defects and min_detection_rate in 0..=1".into());
+            }
+            Ok(())
+        }
+    }
+}
+
+pub mod evidence {
+    //! 検査 (2) 実験条件と実行証拠: job ID・scheduler 記録・ログ・生データの存在と、case の条件との一致。
+    //! `evidence_kind=mock` は control case 以外で不合格。
+    use std::{collections::BTreeSet, fs, path::Path};
+
+    use serde_json::{Value, json};
+
+    use super::{CheckResult, case::ExperimentSpec, read_json, safe_join, sha256_file};
+
+    fn valid_job_id(id: &str) -> bool {
+        let (num, host) = id.split_once('.').unwrap_or((id, ""));
+        !num.is_empty()
+            && num.bytes().all(|b| b.is_ascii_digit())
+            && host
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-')
+    }
+
+    /// scheduler 記録が正常終了を示すか（PBS `qstat -x -f` / Slurm `sacct` / 汎用 `exit_status=0`）。
+    fn scheduler_exit_ok(text: &str) -> bool {
+        if text.contains("Unknown Job Id") {
+            return false;
+        }
+        text.lines().any(|l| {
+            let n: String = l.chars().filter(|c| !c.is_whitespace()).collect();
+            let n = n.to_ascii_lowercase();
+            n == "exit_status=0" || n.ends_with(":exit_status=0") || n.contains("exitcode=0:0")
+        })
+    }
+
+    fn file_text(
+        artifact: &Path,
+        rel: Option<&str>,
+        what: &str,
+        tag: &str,
+    ) -> Result<String, String> {
+        let rel = rel.ok_or(format!("{tag}: {what} path is missing"))?;
+        let p = safe_join(artifact, rel).map_err(|e| format!("{tag}: {e}"))?;
+        fs::read_to_string(&p).map_err(|_| format!("{tag}: {what} {rel} is missing or unreadable"))
+    }
+
+    pub fn check(spec: &ExperimentSpec, artifact: &Path, control: bool) -> CheckResult {
+        let jobs_path = match safe_join(artifact, &spec.jobs_file) {
+            Ok(p) => p,
+            Err(e) => return CheckResult::from_reasons(vec![e], Value::Null),
+        };
+        let doc = match read_json(&jobs_path) {
+            Ok(v) => v,
+            Err(_) => {
+                return CheckResult::from_reasons(
+                    vec![format!("execution evidence {} is missing", spec.jobs_file)],
+                    Value::Null,
+                );
+            }
+        };
+        let empty = Vec::new();
+        let jobs = doc["jobs"].as_array().unwrap_or(&empty);
+        let mut reasons = Vec::new();
+        let mut ids = BTreeSet::new();
+        let mut seen_raw = BTreeSet::new();
+        let mut rows = Vec::new();
+        for (i, j) in jobs.iter().enumerate() {
+            let id = j["job_id"].as_str().unwrap_or("");
+            let tag = format!("job[{i}] {id}");
+            let before = reasons.len();
+            match j["evidence_kind"].as_str() {
+                Some("real") => {}
+                Some("mock") if control => {}
+                Some("mock") => reasons.push(format!(
+                    "{tag}: evidence_kind=mock is not accepted outside control cases"
+                )),
+                other => reasons.push(format!("{tag}: unknown evidence_kind {other:?}")),
+            }
+            if !valid_job_id(id) {
+                reasons.push(format!(
+                    "{tag}: job_id is missing or not a scheduler job id"
+                ));
+            } else if !ids.insert(id.to_string()) {
+                reasons.push(format!("{tag}: job_id recorded twice"));
+            }
+            let num = id.split('.').next().unwrap_or("");
+            match file_text(
+                artifact,
+                j["scheduler_record"].as_str(),
+                "scheduler record",
+                &tag,
+            ) {
+                Ok(t) => {
+                    if num.is_empty() || !t.contains(num) {
+                        reasons.push(format!(
+                            "{tag}: scheduler record does not mention the job id"
+                        ));
+                    }
+                    if !scheduler_exit_ok(&t) {
+                        reasons.push(format!(
+                            "{tag}: scheduler record does not show a successful exit status"
+                        ));
+                    }
+                }
+                Err(e) => reasons.push(e),
+            }
+            match file_text(artifact, j["log"].as_str(), "log", &tag) {
+                Ok(t) if t.trim().is_empty() => reasons.push(format!("{tag}: log is empty")),
+                Ok(_) => {}
+                Err(e) => reasons.push(e),
+            }
+            let raw = j["raw"].as_array().unwrap_or(&empty);
+            if raw.is_empty() {
+                reasons.push(format!("{tag}: no raw data recorded"));
+            }
+            for r in raw {
+                let rel = r["path"].as_str().unwrap_or("");
+                match safe_join(artifact, rel) {
+                    Ok(p) if p.is_file() => {
+                        let got = sha256_file(&p).unwrap_or_default();
+                        if r["sha256"].as_str() != Some(got.as_str()) {
+                            reasons.push(format!(
+                                "{tag}: raw data {rel} sha256 differs from the recorded value"
+                            ));
+                        }
+                        if !seen_raw.insert(rel.to_string()) {
+                            reasons.push(format!("{tag}: raw data {rel} is claimed by two jobs"));
+                        }
+                    }
+                    Ok(_) => reasons.push(format!("{tag}: raw data {rel} is missing")),
+                    Err(e) => reasons.push(format!("{tag}: {e}")),
+                }
+            }
+            for (k, want) in &spec.conditions {
+                let got = &j["conditions"][k];
+                if got != want {
+                    reasons.push(format!(
+                        "{tag}: condition {k} = {got} but the case requires {want}"
+                    ));
+                }
+            }
+            rows.push(json!({"job_id": id, "ok": reasons.len() == before}));
+        }
+        if jobs.len() < spec.min_jobs {
+            reasons.push(format!(
+                "{} job(s) recorded but the case requires at least {}",
+                jobs.len(),
+                spec.min_jobs
+            ));
+        }
+        CheckResult::from_reasons(reasons, json!({"jobs": rows, "required": spec.min_jobs}))
+    }
+}
+
+pub mod implementation {
+    //! 検査 (1) 実装テスト: pristine な評価側テストを成果物 repo に重ねて実行する。
+    //! 成果物側の評価テストの削除・改変（sha256 不一致）は失格。改変時は弱体化の印も数える。
+    use std::{
+        fs,
+        path::{Path, PathBuf},
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    use serde_json::{Value, json};
+
+    use super::{
+        CheckResult, GradeOptions, case::ImplementationSpec, safe_join, sha256_file, tail,
+    };
+
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub struct CommandOutput {
+        pub exit: Option<i32>,
+        pub stdout: String,
+        pub stderr: String,
+    }
+
+    /// 評価 command の実行器。grader の library は子 process を起こさない（runner_checker.rs の
+    /// src 走査が禁じる）。評価 command を実際に走らせる実行器は呼び出し側が注入し、試験は stub を使う。
+    pub trait CommandRunner {
+        fn run(&self, argv: &[String], cwd: &Path) -> Result<CommandOutput, String>;
+    }
+
+    /// 実行器が注入されていないときの既定。評価 command を走らせず常に Err を返すので、
+    /// 実装テスト検査は fail になる（未実行を合格にしない fail-closed。ADR D3）。
+    pub struct NoRunner;
+
+    impl CommandRunner for NoRunner {
+        fn run(&self, argv: &[String], _cwd: &Path) -> Result<CommandOutput, String> {
+            Err(format!(
+                "no evaluation runner injected: `{}` was not executed (grade CLI does not spawn processes)",
+                argv.join(" ")
+            ))
+        }
+    }
+
+    /// 試験 file の弱体化の印。
+    #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+    pub struct TestMarks {
+        pub tests: usize,
+        pub asserts: usize,
+        pub ignores: usize,
+        pub skips: usize,
+    }
+
+    pub fn marks(text: &str) -> TestMarks {
+        let mut m = TestMarks::default();
+        for line in text.lines() {
+            let t = line.trim_start();
+            if t.starts_with("//") {
+                continue;
+            }
+            m.tests += t.matches("#[test]").count() + t.matches("#[tokio::test").count();
+            m.asserts += t.matches("assert").count();
+            m.ignores += t.matches("#[ignore").count();
+            m.skips += [
+                "#[cfg(any())]",
+                "#[cfg(FALSE)]",
+                "#![cfg(any())]",
+                "@pytest.mark.skip",
+                "pytest.skip(",
+            ]
+            .iter()
+            .map(|k| t.matches(k).count())
+            .sum::<usize>();
+        }
+        m
+    }
+
+    fn marks_json(m: TestMarks) -> Value {
+        json!({"tests": m.tests, "asserts": m.asserts, "ignores": m.ignores, "skips": m.skips})
+    }
+
+    fn copy_tree(src: &Path, dst: &Path) -> Result<(), String> {
+        fs::create_dir_all(dst).map_err(|e| format!("{}: {e}", dst.display()))?;
+        for e in fs::read_dir(src).map_err(|e| format!("{}: {e}", src.display()))? {
+            let e = e.map_err(|e| e.to_string())?;
+            let name = e.file_name();
+            if name == ".git" || name == "target" {
+                continue;
+            }
+            let ft = e.file_type().map_err(|e| e.to_string())?;
+            let to = dst.join(&name);
+            if ft.is_dir() {
+                copy_tree(&e.path(), &to)?;
+            } else if ft.is_file() {
+                fs::copy(e.path(), &to).map_err(|e| format!("{}: {e}", to.display()))?;
+            }
+            // symlink は写さない（成果物外の参照を作業 dir に持ち込まない）。
+        }
+        Ok(())
+    }
+
+    fn work_dir(root: &Path) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        root.join(format!("celeris-grade-{}-{nanos}", std::process::id()))
+    }
+
+    pub fn check(spec: &ImplementationSpec, artifact: &Path, opts: &GradeOptions) -> CheckResult {
+        let mut reasons = Vec::new();
+        let mut files = Vec::new();
+        let repo = match safe_join(artifact, &spec.repo) {
+            Ok(p) if p.is_dir() => p,
+            Ok(p) => {
+                return CheckResult::from_reasons(
+                    vec![format!("artifact repo {} is missing", p.display())],
+                    Value::Null,
+                );
+            }
+            Err(e) => return CheckResult::from_reasons(vec![e], Value::Null),
+        };
+        let pristine_root = opts.case_dir.join(&spec.pristine_dir);
+        let mut pristine = Vec::new();
+        for t in &spec.tests {
+            let pp = pristine_root.join(&t.path);
+            let psha = match sha256_file(&pp) {
+                Ok(s) => s,
+                Err(e) => {
+                    reasons.push(format!("grader pristine test unreadable: {e}"));
+                    continue;
+                }
+            };
+            if psha != t.sha256 {
+                reasons.push(format!(
+                    "grader pristine test {} does not match the case sha256 (grader-side copy altered)",
+                    t.path
+                ));
+                continue;
+            }
+            let ptext = fs::read_to_string(&pp).unwrap_or_default();
+            let pm = marks(&ptext);
+            let ap = match safe_join(&repo, &t.path) {
+                Ok(p) => p,
+                Err(e) => {
+                    reasons.push(e);
+                    continue;
+                }
+            };
+            let mut entry = json!({"path": t.path, "pristine": marks_json(pm)});
+            if !ap.is_file() {
+                reasons.push(format!(
+                    "evaluation test {} was deleted from the artifact repo",
+                    t.path
+                ));
+                entry["state"] = json!("deleted");
+            } else {
+                let asha = sha256_file(&ap).unwrap_or_default();
+                if asha == t.sha256 {
+                    entry["state"] = json!("pristine");
+                } else {
+                    let am = marks(&fs::read_to_string(&ap).unwrap_or_default());
+                    let mut weak = Vec::new();
+                    if am.tests < pm.tests {
+                        weak.push(format!("#[test] {} -> {}", pm.tests, am.tests));
+                    }
+                    if am.asserts < pm.asserts {
+                        weak.push(format!("assert {} -> {}", pm.asserts, am.asserts));
+                    }
+                    if am.ignores > pm.ignores {
+                        weak.push(format!("#[ignore] {} -> {}", pm.ignores, am.ignores));
+                    }
+                    if am.skips > pm.skips {
+                        weak.push(format!("skip markers {} -> {}", pm.skips, am.skips));
+                    }
+                    reasons.push(format!(
+                        "evaluation test {} differs from pristine (sha256 mismatch){}",
+                        t.path,
+                        if weak.is_empty() {
+                            String::new()
+                        } else {
+                            format!("; weakened: {}", weak.join(", "))
+                        }
+                    ));
+                    entry["state"] = json!(if weak.is_empty() {
+                        "modified"
+                    } else {
+                        "weakened"
+                    });
+                    entry["artifact"] = marks_json(am);
+                    entry["weakened"] = json!(weak);
+                }
+            }
+            files.push(entry);
+            pristine.push((t.path.clone(), pp));
+        }
+        if !reasons.is_empty() {
+            // 改変・削除があれば失格。評価 command は走らせない。
+            return CheckResult::from_reasons(reasons, json!({"tests": files, "ran": false}));
+        }
+        let wd = work_dir(&opts.work_root);
+        let result = (|| -> Result<CommandOutput, String> {
+            copy_tree(&repo, &wd)?;
+            for (rel, pp) in &pristine {
+                let to = wd.join(rel);
+                if let Some(d) = to.parent() {
+                    fs::create_dir_all(d).map_err(|e| e.to_string())?;
+                }
+                fs::copy(pp, &to).map_err(|e| format!("{}: {e}", to.display()))?;
+            }
+            opts.runner.run(&spec.command, &wd)
+        })();
+        let _ = fs::remove_dir_all(&wd);
+        let out = match result {
+            Ok(o) => o,
+            Err(e) => {
+                return CheckResult::from_reasons(
+                    vec![format!("evaluation command could not run: {e}")],
+                    json!({"tests": files, "ran": false}),
+                );
+            }
+        };
+        if out.exit != Some(0) {
+            reasons.push(format!("evaluation command exited with {:?}", out.exit));
+        }
+        let mut missing = Vec::new();
+        for name in &spec.must_pass {
+            let ok = out.stdout.lines().any(|l| {
+                l.trim()
+                    .strip_prefix("test ")
+                    .and_then(|r| r.strip_suffix("... ok"))
+                    .map(str::trim)
+                    .is_some_and(|t| t == name || t.ends_with(&format!("::{name}")))
+            });
+            if !ok {
+                missing.push(name.clone());
+            }
+        }
+        if !missing.is_empty() {
+            reasons.push(format!(
+                "required tests did not report ok: {}",
+                missing.join(", ")
+            ));
+        }
+        CheckResult::from_reasons(
+            reasons,
+            json!({
+                "tests": files,
+                "ran": true,
+                "exit": out.exit,
+                "missing_ok": missing,
+                "stdout_tail": tail(&out.stdout, 2048),
+                "stderr_tail": tail(&out.stderr, 2048),
+            }),
+        )
+    }
+}
+
+pub mod recompute {
+    //! 検査 (3) 生データから指標を独立に再計算し、報告値と許容差で照合する。
+    //! 報告は `metric <name> = <value>` 行（report.rs の `result` 行と同じく、行で宣言した数値だけを照合する）。
+    use std::{collections::BTreeMap, fs, path::Path};
+
+    use serde_json::{Value, json};
+
+    use super::{
+        CheckResult,
+        case::{Agg, MetricSpec, RecomputeSpec, Source},
+        read_json, safe_join, sha256_file,
+    };
+
+    fn number(v: &Value) -> Option<f64> {
+        match v {
+            Value::Number(n) => n.as_f64(),
+            Value::String(s) => s.trim().parse().ok(),
+            _ => None,
+        }
+    }
+
+    fn split_csv(line: &str) -> Vec<String> {
+        line.split(',')
+            .map(|c| c.trim().trim_matches('"').to_string())
+            .collect()
+    }
+
+    fn samples(artifact: &Path, src: &Source) -> Result<Vec<f64>, String> {
+        let mut out = Vec::new();
+        match src {
+            Source::Json { files, pointer } => {
+                for f in files {
+                    let v = read_json(&safe_join(artifact, f)?)?;
+                    let x = v
+                        .pointer(pointer)
+                        .and_then(number)
+                        .ok_or(format!("{f}: {pointer} is missing or not a number"))?;
+                    out.push(x);
+                }
+            }
+            Source::Csv {
+                files,
+                column,
+                filter,
+            } => {
+                for f in files {
+                    let p = safe_join(artifact, f)?;
+                    let text = fs::read_to_string(&p).map_err(|e| format!("{f}: {e}"))?;
+                    let mut lines = text.lines().filter(|l| !l.trim().is_empty());
+                    let header = split_csv(lines.next().ok_or(format!("{f}: empty csv"))?);
+                    let col = |name: &str| {
+                        header
+                            .iter()
+                            .position(|h| h == name)
+                            .ok_or(format!("{f}: no column {name}"))
+                    };
+                    let ci = col(column)?;
+                    let fi: Vec<(usize, &String)> = filter
+                        .iter()
+                        .map(|(k, v)| col(k).map(|i| (i, v)))
+                        .collect::<Result<_, _>>()?;
+                    for (n, line) in lines.enumerate() {
+                        let row = split_csv(line);
+                        if fi.iter().all(|(i, v)| row.get(*i) == Some(*v)) {
+                            let cell = row.get(ci).map(String::as_str).unwrap_or("");
+                            out.push(cell.parse().map_err(|_| {
+                                format!("{f} row {}: {column} = `{cell}` is not a number", n + 2)
+                            })?);
+                        }
+                    }
+                }
+            }
+            Source::Ratio { .. } => return Err("ratio has no raw samples".into()),
+        }
+        Ok(out)
+    }
+
+    pub fn aggregate(agg: Agg, xs: &[f64]) -> Option<f64> {
+        if agg == Agg::Count {
+            return Some(xs.len() as f64);
+        }
+        if xs.is_empty() {
+            return None;
+        }
+        let mut s = xs.to_vec();
+        s.sort_by(f64::total_cmp);
+        Some(match agg {
+            Agg::Mean => s.iter().sum::<f64>() / s.len() as f64,
+            Agg::Median => {
+                let m = s.len() / 2;
+                if s.len() % 2 == 1 {
+                    s[m]
+                } else {
+                    (s[m - 1] + s[m]) / 2.0
+                }
+            }
+            Agg::Sum => s.iter().sum(),
+            Agg::Min => s[0],
+            Agg::Max => s[s.len() - 1],
+            Agg::Count => s.len() as f64,
+        })
+    }
+
+    fn recompute_one(
+        artifact: &Path,
+        m: &MetricSpec,
+        done: &BTreeMap<String, f64>,
+    ) -> Result<f64, String> {
+        match &m.source {
+            Source::Ratio {
+                numerator,
+                denominator,
+            } => {
+                let n = done
+                    .get(numerator)
+                    .ok_or(format!("ratio needs {numerator} defined earlier"))?;
+                let d = done
+                    .get(denominator)
+                    .ok_or(format!("ratio needs {denominator} defined earlier"))?;
+                if *d == 0.0 {
+                    return Err("ratio denominator is zero".into());
+                }
+                Ok(n / d)
+            }
+            src => aggregate(m.agg, &samples(artifact, src)?).ok_or("no samples".into()),
+        }
+    }
+
+    /// 報告の `metric <name> = <value>`（`=` の前後の空白は任意）。同名が 2 度あれば誤り。
+    pub fn parse_report(text: &str) -> (BTreeMap<String, String>, Vec<String>) {
+        let mut vals = BTreeMap::new();
+        let mut errs = Vec::new();
+        for line in text.lines() {
+            let Some(rest) = line.trim().strip_prefix("metric ") else {
+                continue;
+            };
+            match rest.split_once('=') {
+                Some((k, v)) => {
+                    let k = k.trim().to_string();
+                    if vals.insert(k.clone(), v.trim().to_string()).is_some() {
+                        errs.push(format!("report: metric {k} reported twice"));
+                    }
+                }
+                None => errs.push(format!("report: malformed metric line `{line}`")),
+            }
+        }
+        (vals, errs)
+    }
+
+    pub fn check(spec: &RecomputeSpec, artifact: &Path) -> CheckResult {
+        let mut reasons = Vec::new();
+        for (rel, want) in &spec.pinned_raw {
+            match safe_join(artifact, rel).and_then(|p| sha256_file(&p)) {
+                Ok(got) if &got == want => {}
+                Ok(_) => reasons.push(format!(
+                    "raw input {rel} differs from the pinned snapshot (sha256 mismatch)"
+                )),
+                Err(_) => reasons.push(format!("raw input {rel} is missing")),
+            }
+        }
+        let text = match safe_join(artifact, &spec.report).and_then(|p| {
+            fs::read_to_string(&p).map_err(|_| format!("report {} is missing", spec.report))
+        }) {
+            Ok(t) => t,
+            Err(e) => {
+                reasons.push(e);
+                String::new()
+            }
+        };
+        let (reported, errs) = parse_report(&text);
+        reasons.extend(errs);
+        let mut done = BTreeMap::new();
+        let mut rows = Vec::new();
+        for m in &spec.metrics {
+            let rc = recompute_one(artifact, m, &done);
+            let rep = reported.get(&m.name);
+            let mut row = json!({"name": m.name, "tolerance_rel": m.tolerance_rel});
+            match &rc {
+                Ok(x) => {
+                    done.insert(m.name.clone(), *x);
+                    row["recomputed"] = json!(x);
+                }
+                Err(e) => {
+                    row["recompute_error"] = json!(e);
+                    reasons.push(format!(
+                        "metric {}: cannot recompute from raw data: {e}",
+                        m.name
+                    ));
+                }
+            }
+            match rep.map(|s| s.parse::<f64>()) {
+                None => reasons.push(format!("metric {}: not reported", m.name)),
+                Some(Err(_)) => {
+                    reasons.push(format!("metric {}: reported value is not a number", m.name))
+                }
+                Some(Ok(r)) => {
+                    row["reported"] = json!(r);
+                    if let Ok(x) = rc {
+                        let tol = m.tolerance_rel * x.abs().max(1e-12);
+                        let ok = (r - x).abs() <= tol;
+                        row["within_tolerance"] = json!(ok);
+                        if !ok {
+                            reasons.push(format!(
+                                "metric {}: reported {r} but recomputed {x} from raw data (tolerance {})",
+                                m.name, m.tolerance_rel
+                            ));
+                        }
+                    }
+                }
+            }
+            rows.push(row);
+        }
+        CheckResult::from_reasons(reasons, json!({"metrics": rows}))
+    }
+}
+
+pub mod review {
+    //! 検査 (4) review case: 既知欠陥 list に対する検出率と誤指摘を数える。
+    //! 指摘は file・行・keyword で決定的に照合する（指摘側の defect id の自己申告は使わない）。
+    use std::path::Path;
+
+    use serde_json::{Value, json};
+
+    use super::{
+        CheckResult,
+        case::{DefectSpec, ReviewSpec},
+        read_json, safe_join,
+    };
+
+    fn norm_path(p: &str) -> &str {
+        p.trim().trim_start_matches("./")
+    }
+
+    fn matches(d: &DefectSpec, f: &Value) -> bool {
+        let file = f["file"].as_str().unwrap_or("");
+        if norm_path(file) != norm_path(&d.file) {
+            return false;
+        }
+        if let Some((a, b)) = d.lines {
+            match f["line"].as_u64() {
+                Some(l) if (a..=b).contains(&l) => {}
+                _ => return false,
+            }
+        }
+        let body = format!(
+            "{} {}",
+            f["summary"].as_str().unwrap_or(""),
+            f["detail"].as_str().unwrap_or("")
+        )
+        .to_lowercase();
+        d.keywords.iter().any(|k| body.contains(&k.to_lowercase()))
+    }
+
+    pub fn check(spec: &ReviewSpec, artifact: &Path) -> CheckResult {
+        let doc = match safe_join(artifact, &spec.findings).and_then(|p| read_json(&p)) {
+            Ok(v) => v,
+            Err(_) => {
+                return CheckResult::from_reasons(
+                    vec![format!("review findings {} are missing", spec.findings)],
+                    Value::Null,
+                );
+            }
+        };
+        let empty = Vec::new();
+        let findings = doc["findings"].as_array().unwrap_or(&empty);
+        let mut detected = Vec::new();
+        let mut missed = Vec::new();
+        for d in &spec.known_defects {
+            if findings.iter().any(|f| matches(d, f)) {
+                detected.push(d.id.clone());
+            } else {
+                missed.push(d.id.clone());
+            }
+        }
+        let mut false_pos = Vec::new();
+        for (i, f) in findings.iter().enumerate() {
+            let hit = spec
+                .known_defects
+                .iter()
+                .chain(&spec.also_valid)
+                .any(|d| matches(d, f));
+            if !hit {
+                false_pos.push(json!({
+                    "index": i,
+                    "file": f["file"],
+                    "line": f["line"],
+                }));
+            }
+        }
+        let rate = detected.len() as f64 / spec.known_defects.len() as f64;
+        let mut reasons = Vec::new();
+        if rate < spec.min_detection_rate {
+            reasons.push(format!(
+                "detected {}/{} known defects (rate {rate:.3} < required {})",
+                detected.len(),
+                spec.known_defects.len(),
+                spec.min_detection_rate
+            ));
+        }
+        if false_pos.len() > spec.max_false_positives {
+            reasons.push(format!(
+                "{} false finding(s) (neither a known defect nor a confirmed real issue) > allowed {}",
+                false_pos.len(),
+                spec.max_false_positives
+            ));
+        }
+        CheckResult::from_reasons(
+            reasons,
+            json!({
+                "known": spec.known_defects.len(),
+                "detected": detected,
+                "missed": missed,
+                "detection_rate": rate,
+                "findings": findings.len(),
+                "false_positives": false_pos,
+            }),
+        )
+    }
+}
+
+use std::{
+    fs,
+    path::{Component, Path, PathBuf},
+};
+
+use serde::Serialize;
+use serde_json::Value;
+use sha2::{Digest, Sha256};
+
+pub use case::{CaseSplit, GradeCase};
+pub use implementation::{CommandOutput, CommandRunner, NoRunner};
+
+pub const GRADE_SCHEMA: &str = "celeris.grade/1";
+
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Status {
+    Pass,
+    Fail,
+    NotApplicable,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct CheckResult {
+    pub status: Status,
+    pub reasons: Vec<String>,
+    pub details: Value,
+}
+
+impl CheckResult {
+    pub fn not_applicable() -> Self {
+        CheckResult {
+            status: Status::NotApplicable,
+            reasons: vec!["case does not define this check".into()],
+            details: Value::Null,
+        }
+    }
+
+    /// 理由が空なら pass、あれば fail。
+    pub fn from_reasons(reasons: Vec<String>, details: Value) -> Self {
+        CheckResult {
+            status: if reasons.is_empty() {
+                Status::Pass
+            } else {
+                Status::Fail
+            },
+            reasons,
+            details,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Verdict {
+    Pass,
+    Fail,
+    /// control（fixture/mock）case。検査が通っても最終合格ではない。
+    ControlOnly,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct Checks {
+    pub implementation: CheckResult,
+    pub evidence: CheckResult,
+    pub recompute: CheckResult,
+    pub review: CheckResult,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct GradeReport {
+    pub schema: &'static str,
+    pub case_id: String,
+    pub split: CaseSplit,
+    pub verdict: Verdict,
+    pub final_pass: bool,
+    pub checks: Checks,
+}
+
+pub struct GradeOptions<'a> {
+    /// case file の dir（pristine の基点）。
+    pub case_dir: PathBuf,
+    /// 実装テストの作業 dir の親（既定は `std::env::temp_dir()`、つまり $TMPDIR）。
+    pub work_root: PathBuf,
+    pub runner: &'a dyn CommandRunner,
+}
+
+pub fn grade(case: &GradeCase, artifact: &Path, opts: &GradeOptions) -> GradeReport {
+    let control = case.split == CaseSplit::Control;
+    let checks = Checks {
+        implementation: match &case.implementation {
+            Some(s) => implementation::check(s, artifact, opts),
+            None => CheckResult::not_applicable(),
+        },
+        evidence: match &case.experiment {
+            Some(s) => evidence::check(s, artifact, control),
+            None => CheckResult::not_applicable(),
+        },
+        recompute: match &case.recompute {
+            Some(s) => recompute::check(s, artifact),
+            None => CheckResult::not_applicable(),
+        },
+        review: match &case.review {
+            Some(s) => review::check(s, artifact),
+            None => CheckResult::not_applicable(),
+        },
+    };
+    let all = [
+        &checks.implementation,
+        &checks.evidence,
+        &checks.recompute,
+        &checks.review,
+    ];
+    let applicable = all
+        .iter()
+        .filter(|c| c.status != Status::NotApplicable)
+        .count();
+    let passed = applicable > 0 && all.iter().all(|c| c.status != Status::Fail);
+    let verdict = match (passed, control) {
+        (false, _) => Verdict::Fail,
+        (true, true) => Verdict::ControlOnly,
+        (true, false) => Verdict::Pass,
+    };
+    GradeReport {
+        schema: GRADE_SCHEMA,
+        case_id: case.id.clone(),
+        split: case.split,
+        verdict,
+        final_pass: verdict == Verdict::Pass,
+        checks,
+    }
+}
+
+/// `celeris-campaign grade --case <file> --artifact <dir> [--work <dir>]`。合格で Ok、不合格で Err（どちらも判定 JSON）。
+pub fn cli(args: &[String]) -> Result<String, String> {
+    let arg = |name: &str| {
+        args.iter()
+            .position(|a| a == name)
+            .and_then(|i| args.get(i + 1))
+            .map(PathBuf::from)
+    };
+    let case_path = arg("--case").ok_or("--case <file> is required")?;
+    let artifact = arg("--artifact").ok_or("--artifact <dir> is required")?;
+    let case = GradeCase::load(&case_path)?;
+    let opts = GradeOptions {
+        case_dir: case_path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_default(),
+        work_root: arg("--work").unwrap_or_else(std::env::temp_dir),
+        runner: &NoRunner,
+    };
+    let rep = grade(&case, &artifact, &opts);
+    let s = serde_json::to_string_pretty(&rep).map_err(|e| e.to_string())?;
+    if rep.final_pass { Ok(s) } else { Err(s) }
+}
+
+pub(crate) fn sha256_file(p: &Path) -> Result<String, String> {
+    let b = fs::read(p).map_err(|e| format!("{}: {e}", p.display()))?;
+    Ok(format!("{:x}", Sha256::digest(&b)))
+}
+
+/// 成果物 dir 内の相対 path を解決する。絶対 path・`..`・成果物外を指す symlink を拒否する。
+pub(crate) fn safe_join(root: &Path, rel: &str) -> Result<PathBuf, String> {
+    let p = Path::new(rel);
+    if rel.is_empty()
+        || p.components()
+            .any(|c| !matches!(c, Component::Normal(_) | Component::CurDir))
+    {
+        return Err(format!(
+            "path `{rel}` must be relative and stay inside the artifact"
+        ));
+    }
+    let joined = root.join(p);
+    if let (Ok(r), Ok(j)) = (root.canonicalize(), joined.canonicalize())
+        && !j.starts_with(&r)
+    {
+        return Err(format!("path `{rel}` resolves outside the artifact"));
+    }
+    Ok(joined)
+}
+
+pub(crate) fn read_json(p: &Path) -> Result<Value, String> {
+    let b = fs::read(p).map_err(|e| format!("{}: {e}", p.display()))?;
+    serde_json::from_slice(&b).map_err(|e| format!("{}: {e}", p.display()))
+}
+
+/// 出力の末尾だけを残す（秘密値の大量流出と判定 JSON の肥大を避ける）。
+pub(crate) fn tail(s: &str, max: usize) -> String {
+    if s.len() <= max {
+        return s.to_string();
+    }
+    let mut i = s.len() - max;
+    while !s.is_char_boundary(i) {
+        i += 1;
+    }
+    s[i..].to_string()
+}

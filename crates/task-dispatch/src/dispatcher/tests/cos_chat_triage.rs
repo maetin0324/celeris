@@ -457,3 +457,37 @@ mod fallback;
 mod inbox_thread;
 #[path = "cos_chat_root_done.rs"]
 mod root_done;
+
+#[tokio::test]
+async fn cos_chat_triage_reconcile_resolves_closed_escalated_unintegrated_with_zero_current() {
+    let mut f = fixture(true);
+    f.tick();
+    // 元の task は統合済みで、人の inbox に unintegrated は 0 件。escalated の行だけが残っている。
+    let src = task_core::chat::triage::CosTriageSource {
+        source_kind: "unintegrated".into(),
+        source_key: "unintegrated:T1".into(),
+        source_revision: "1".into(),
+        source_event_id: Some(1),
+        operation_id: None,
+        summary: "unintegrated".into(),
+        policy_version: "v1".into(),
+    };
+    f.store
+        .cos_triage_reconcile("unintegrated", &[src], f.d.now_utc())
+        .expect("seed");
+    rusqlite::Connection::open(&f.db_path)
+        .expect("db")
+        .execute("UPDATE cos_inbox_items SET state='escalated'", [])
+        .expect("escalate");
+    f.d.request_cos_triage_reconcile();
+    f.tick();
+    f.tick();
+    assert_eq!(
+        f.count("SELECT COUNT(*) FROM cos_inbox_items WHERE state='resolved'"),
+        1
+    );
+    assert_eq!(
+        f.count("SELECT COUNT(*) FROM cos_inbox_items WHERE state='escalated'"),
+        0
+    );
+}

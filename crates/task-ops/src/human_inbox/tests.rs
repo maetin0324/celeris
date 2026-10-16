@@ -304,6 +304,17 @@ fn fixture() -> Fixture {
             }),
             at: AT.to_string(),
         },
+        AttentionItem::Unintegrated {
+            task: tref.clone(),
+            repo_id: task_core::RepoId::new(),
+            repo: "agent-platform".into(),
+            state: task_core::TaskRepoIntegrationStatus::Unintegrated,
+            operation_path: "/tmp/op".into(),
+            branch: "celeris/x".into(),
+            head_sha: "ccc333".into(),
+            reason: None,
+            at: AT.to_string(),
+        },
     ];
     inbox
         .browser_waits
@@ -434,6 +445,40 @@ fn human_inbox_every_inbox_kind_appears_in_common_form() {
     assert_eq!(out.counts.total as usize, out.items.len());
     assert_eq!(out.counts.total as usize, InboxKind::ALL.len());
     assert!(out.counts.by_kind.values().all(|n| *n == 1));
+}
+
+/// 新しい variant を足すとこの match がコンパイルできず、ALL への追加漏れに気づく。
+fn variant_index(kind: InboxKind) -> usize {
+    match kind {
+        InboxKind::Decision => 0,
+        InboxKind::PlanGate => 1,
+        InboxKind::PhaseGate => 2,
+        InboxKind::Authorization => 3,
+        InboxKind::BrowserWait => 4,
+        InboxKind::Question => 5,
+        InboxKind::AcceptanceCheck => 6,
+        InboxKind::DraftAccept => 7,
+        InboxKind::ProjectPlan => 8,
+        InboxKind::Failed => 9,
+        InboxKind::Unroutable => 10,
+        InboxKind::ClusterLogin => 11,
+        InboxKind::CredentialWait => 12,
+        InboxKind::DiskFull => 13,
+        InboxKind::DeliverySkipped => 14,
+        InboxKind::IntegrationRequest => 15,
+        InboxKind::Unintegrated => 16,
+    }
+}
+
+#[test]
+fn human_inbox_all_contains_every_variant_once() {
+    let mut seen: Vec<usize> = InboxKind::ALL.iter().map(|k| variant_index(*k)).collect();
+    seen.sort_unstable();
+    assert_eq!(
+        seen,
+        (0..=16).collect::<Vec<_>>(),
+        "ALL must list every variant once"
+    );
 }
 
 #[test]

@@ -27,3 +27,14 @@ item が残り、受信箱 thread と digest に未処理として出続けた�
 ## 試験
 `task-core chat::triage_tests`: `cos_chat_triage_reconcile_resolves_escalated_when_source_closed`（閉じた待ち→resolved、
 開いたまま→escalated）、`cos_chat_triage_resolve_stale_does_not_insert`。
+
+## 付記 2026-10-16: `InboxKind::ALL` の取りこぼし（unintegrated）
+本番で上の修正後も、escalated のうち unintegrated 46 件が残った（元 task は全て done で integration_merged／discarded 済み）。
+原因: `InboxKind::ALL: [InboxKind; 16]` に `Unintegrated` が無く（enum は 17 種）、`triage_reconcile` は ALL から `by_kind` を作る。
+unintegrated が現在 0 件だと by_kind に空の枠が無く、`cos_triage_reconcile("unintegrated", [])` が呼ばれず resolve_stale が働かない。
+- 決定: ALL を 17 要素にして `Unintegrated` を加える。
+- 再発防止: `task-ops human_inbox` の試験で、全 variant を網羅する `match`（新 variant を足すとコンパイルが落ちる）から作った一覧と ALL を突き合わせる。
+- 影響: `task-api inbox_notifications` の kind 検証は ALL を使うので、`kind=unintegrated` が有効な絞り込みになる（これまで 400 だった。不具合の解消）。
+  `human_inbox_every_inbox_kind_appears_in_common_form` は ALL を回すので、fixture の unintegrated 1 件が検証対象に入る。
+- 試験: dispatcher の triage 試験に、閉じた escalated unintegrated item が reconcile で resolved になるものを足す。
+- 本番への移行: migration 不要。昇格後の startup reconcile が既存の 46 件を resolved にする。

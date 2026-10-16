@@ -50,7 +50,7 @@ pub enum InboxKind {
 }
 
 impl InboxKind {
-    pub const ALL: [InboxKind; 16] = [
+    pub const ALL: [InboxKind; 17] = [
         InboxKind::Decision,
         InboxKind::PlanGate,
         InboxKind::PhaseGate,
@@ -67,6 +67,7 @@ impl InboxKind {
         InboxKind::DiskFull,
         InboxKind::DeliverySkipped,
         InboxKind::IntegrationRequest,
+        InboxKind::Unintegrated,
     ];
 
     pub fn as_str(self) -> &'static str {

@@ -4,10 +4,13 @@ use std::{collections::BTreeMap, fs, path::Path};
 
 use sha2::{Digest, Sha256};
 
+pub use crate::ledger::TaskRef;
 use crate::{
     aggregate::Outcome,
     manifest::{Config, ConfigId},
 };
+use serde_json::Value;
+use std::sync::Mutex;
 
 pub struct TrialRequest<'a> {
     pub config: &'a Config,
@@ -39,7 +42,50 @@ pub enum ExecStatus {
 
 pub trait Executor {
     fn name(&self) -> &'static str;
+    /// 同期実行（mock など）。台帳を使わない実行器はこれだけを実装する。
     fn execute(&self, req: &TrialRequest) -> Result<ExecStatus, String>;
+
+    /// true なら runner は `execute` でなく台帳を引いて `submit`/`poll` で追跡する。
+    fn is_async(&self) -> bool {
+        false
+    }
+
+    /// 試行ごとに task 単位で固定する routing 設定（台帳に投入前に記録する）。
+    fn routing(&self, _req: &TrialRequest) -> Value {
+        Value::Null
+    }
+
+    /// 冪等キーで既に投入済みの task を照会する。応答喪失・再起動後の再開手順の第 1 段。
+    fn lookup(&self, _key: &str) -> Result<Option<TaskRef>, String> {
+        Ok(None)
+    }
+
+    /// 冪等キー付きで task を投入する。同じ key の再投入は新しい task を作ってはならない。
+    fn submit(&self, _req: &TrialRequest, _key: &str) -> Result<TaskRef, String> {
+        Err(format!("executor {} does not support submit", self.name()))
+    }
+
+    /// 再開手順: 同一冪等キーで照会し、無ければ投入する（planned のまま task_id 無しのとき）。
+    fn resolve(&self, req: &TrialRequest, key: &str) -> Result<TaskRef, String> {
+        match self.lookup(key)? {
+            Some(t) => Ok(t),
+            None => self.submit(req, key),
+        }
+    }
+
+    /// 子 task・クラスタ job を含む最新の参照を返す（台帳へ追記される）。
+    fn track(&self, t: &TaskRef) -> Result<TaskRef, String> {
+        Ok(t.clone())
+    }
+
+    fn poll(&self, _t: &TaskRef) -> Result<ExecStatus, String> {
+        Err(format!("executor {} does not support poll", self.name()))
+    }
+
+    /// 打ち切り時のキャンセル。task 本体・子 task・クラスタ job のすべてを対象にする。
+    fn cancel(&self, _t: &TaskRef, _reason: &str) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 /// mock の 1 試行の振る舞い。
@@ -135,5 +181,131 @@ impl Executor for MockExecutor {
             },
         };
         Ok(ExecStatus::Done(done))
+    }
+}
+
+/// 非同期実行の mock。「外部サービス」の状態（投入済み task・cancel 履歴）をこの object が持つので、
+/// 同じ object を複数回の `run` に渡すと「アダプタ再起動後も外部は残る」を再現できる。
+#[derive(Default)]
+pub struct MockAsyncExecutor {
+    remote: Mutex<MockRemote>,
+    /// task を Done にするまでに Wait を返す poll 回数。
+    pub wait_polls: u32,
+}
+
+#[derive(Default)]
+struct MockRemote {
+    tasks: BTreeMap<String, (TaskRef, u32)>,
+    submit_calls: u32,
+    /// 投入は成功させるが応答だけ失う回数（残り）。
+    lose_responses: u32,
+    cancelled: Vec<(TaskRef, String)>,
+}
+
+impl MockAsyncExecutor {
+    pub fn new(wait_polls: u32) -> Self {
+        Self {
+            remote: Mutex::default(),
+            wait_polls,
+        }
+    }
+
+    fn remote(&self) -> std::sync::MutexGuard<'_, MockRemote> {
+        self.remote.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// 次の `lose` 回の submit は task を作るが応答を返さない。
+    pub fn lose_next_submit_responses(&self, lose: u32) {
+        self.remote().lose_responses = lose;
+    }
+
+    /// 外部に作られた task 数（重複投入の検査用）。
+    pub fn remote_task_count(&self) -> usize {
+        self.remote().tasks.len()
+    }
+
+    pub fn submit_calls(&self) -> u32 {
+        self.remote().submit_calls
+    }
+
+    pub fn cancelled(&self) -> Vec<(TaskRef, String)> {
+        self.remote().cancelled.clone()
+    }
+}
+
+impl Executor for MockAsyncExecutor {
+    fn name(&self) -> &'static str {
+        "mock-async"
+    }
+
+    fn execute(&self, _req: &TrialRequest) -> Result<ExecStatus, String> {
+        Err("mock-async is driven via submit/poll".into())
+    }
+
+    fn is_async(&self) -> bool {
+        true
+    }
+
+    fn routing(&self, req: &TrialRequest) -> Value {
+        serde_json::json!({"mode": "mock", "arm": format!("{:?}", req.config.id)})
+    }
+
+    fn lookup(&self, key: &str) -> Result<Option<TaskRef>, String> {
+        Ok(self.remote().tasks.get(key).map(|(t, _)| t.clone()))
+    }
+
+    fn submit(&self, _req: &TrialRequest, key: &str) -> Result<TaskRef, String> {
+        let mut r = self.remote();
+        r.submit_calls += 1;
+        // 外部側の冪等性: 同じ key は新しい task を作らない。
+        let n = r.tasks.len() + 1;
+        let t = r
+            .tasks
+            .entry(key.to_string())
+            .or_insert_with(|| {
+                (
+                    TaskRef {
+                        task_id: format!("task-{n}"),
+                        run_id: Some(format!("run-{n}")),
+                        child_task_ids: vec![format!("task-{n}-c1")],
+                        cluster_job_ids: vec![format!("job-{n}")],
+                    },
+                    0,
+                )
+            })
+            .0
+            .clone();
+        if r.lose_responses > 0 {
+            r.lose_responses -= 1;
+            return Err("response lost".into());
+        }
+        Ok(t)
+    }
+
+    fn poll(&self, t: &TaskRef) -> Result<ExecStatus, String> {
+        let mut r = self.remote();
+        let polls = r
+            .tasks
+            .values_mut()
+            .find(|(x, _)| x.task_id == t.task_id)
+            .map(|(_, n)| {
+                *n += 1;
+                *n
+            })
+            .ok_or_else(|| format!("unknown task {}", t.task_id))?;
+        if polls <= self.wait_polls {
+            return Ok(ExecStatus::Wait);
+        }
+        Ok(ExecStatus::Done(ExecResult {
+            outcome: Outcome::Passed,
+            tokens: Some(10_000),
+            cost_micro_usd: Some(100_000),
+            wall_secs: 60,
+        }))
+    }
+
+    fn cancel(&self, t: &TaskRef, reason: &str) -> Result<(), String> {
+        self.remote().cancelled.push((t.clone(), reason.into()));
+        Ok(())
     }
 }

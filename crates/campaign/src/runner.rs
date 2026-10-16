@@ -12,7 +12,8 @@ use serde_json::{Value, json};
 
 use crate::{
     aggregate::Outcome,
-    executor::{ExecStatus, Executor, TrialRequest},
+    executor::{ExecResult, ExecStatus, Executor, TrialRequest},
+    ledger::{Ledger, LedgerRow, LedgerState, TrialKey},
     manifest::{CampaignManifest, ConfigId},
     record::*,
     snapshot::{copy_tree, hash_tree},
@@ -200,6 +201,116 @@ fn prereq_state(m: &CampaignManifest, records: &[TrialRecord], problem: &str) ->
     }
 }
 
+fn new_record(
+    cfg: &crate::manifest::Config,
+    hash: &str,
+    input: &InputManifest,
+    m: &CampaignManifest,
+    problem_id: String,
+    config: ConfigId,
+    trial_no: u32,
+) -> TrialRecord {
+    TrialRecord {
+        schema: TRIAL_SCHEMA.into(),
+        campaign_sha256: hash.to_string(),
+        input_sha256: input.sha256.clone(),
+        split: m.split,
+        config,
+        problem_id,
+        trial_no,
+        outcome: Outcome::Cancelled,
+        passed: false,
+        tokens: None,
+        cost_micro_usd: None,
+        wall_secs: 0,
+        reason: None,
+        harness: cfg.harness.clone(),
+        harness_version: cfg.harness_version.clone(),
+        model: cfg.model.clone(),
+        model_version: cfg.model_version.clone(),
+        policy_version: cfg.policy_version.clone(),
+        workspace: String::new(),
+        kb: String::new(),
+        workspace_sha256_initial: String::new(),
+        kb_sha256_initial: String::new(),
+        workspace_sha256_final: String::new(),
+        kb_sha256_final: String::new(),
+    }
+}
+
+/// 未完了の台帳行を cancel（外部の task・子 task・クラスタ job ごと）して台帳を閉じる。
+/// task_id がまだ無い planned 行は冪等キーで照会し、投入済みなら同様に cancel する。
+fn cancel_row(
+    exec: &dyn Executor,
+    ledger: &mut Ledger,
+    row: &LedgerRow,
+    reason: &str,
+) -> Result<(), String> {
+    let t = match row.task_ref() {
+        Some(t) => Some(t),
+        None => exec.lookup(&row.idempotency_key)?,
+    };
+    if let Some(t) = t {
+        exec.cancel(&t, reason)?;
+    }
+    ledger.mark_cancelled(&row.key, reason)
+}
+
+/// 非同期実行器の 1 試行を台帳経由で進める。Wait なら None（workspace は消さない）。
+#[allow(clippy::too_many_arguments)]
+fn drive_async(
+    exec: &dyn Executor,
+    ledger: &mut Ledger,
+    key: &TrialKey,
+    req: &TrialRequest,
+    out: &Path,
+    rel: &str,
+    repo: &Path,
+    kb: &Path,
+) -> Result<Option<ExecResult>, String> {
+    let ws_rel = format!("{rel}/workspace");
+    let idem = key.idempotency_key();
+    let known = ledger.get(key).cloned();
+    let mut task = known.as_ref().and_then(LedgerRow::task_ref);
+    if known.is_none() {
+        // 投入『前』に planned を fsync する。ここで落ちても冪等キーで再開できる。
+        ledger.plan(key, &ws_rel, exec.routing(req))?;
+    }
+    if task.is_none() {
+        // planned のまま（task_id 無し）: 同一冪等キーで照会し、無ければ投入する。
+        let existing = exec.lookup(&idem)?;
+        if existing.is_none() {
+            // 外部に何も無いので、workspace は初期 snapshot から作り直してよい。
+            let _ = fs::remove_dir_all(out.join(rel));
+            copy_tree(repo, req.workspace)?;
+            copy_tree(kb, req.kb)?;
+        } else if !req.workspace.exists() {
+            copy_tree(repo, req.workspace)?;
+            copy_tree(kb, req.kb)?;
+        }
+        let t = match existing {
+            Some(t) => t,
+            None => exec.submit(req, &idem)?,
+        };
+        ledger.mark_submitted(key, &t)?;
+        task = Some(t);
+    }
+    let t = task.ok_or("task ref missing")?;
+    let fresh = exec.track(&t)?;
+    if fresh != t {
+        ledger.mark_waiting(key, &fresh)?;
+    }
+    match exec.poll(&fresh)? {
+        ExecStatus::Done(r) => Ok(Some(r)),
+        ExecStatus::Wait => {
+            if ledger.get(key).map(|r| r.state) != Some(LedgerState::Waiting) {
+                ledger.mark_waiting(key, &fresh)?;
+            }
+            Ok(None)
+        }
+    }
+}
+
 pub fn run(
     m: &CampaignManifest,
     input: &InputManifest,
@@ -255,6 +366,18 @@ pub fn run(
         .iter()
         .map(|r| (r.config, r.problem_id.clone(), r.trial_no))
         .collect();
+    let mut ledger = Ledger::open(out)?;
+    // trials.jsonl に記録済みなのに台帳が未完了のまま（記録直後の crash）は done に直す。
+    let stale: Vec<TrialKey> = ledger
+        .unfinished()
+        .into_iter()
+        .filter(|r| r.key.manifest_sha256 == hash)
+        .filter(|r| done.contains(&(r.key.arm, r.key.problem_id.clone(), r.key.trial_no)))
+        .map(|r| r.key.clone())
+        .collect();
+    for k in stale {
+        ledger.mark_done(&k)?;
+    }
     let mut rep = RunReport {
         resumed_skipped: records.len() as u64,
         tokens_total: records.iter().filter_map(|r| r.tokens).sum(),
@@ -281,31 +404,12 @@ pub fn run(
         }
         safe_component(&pid)?;
         let cfg = cfgs.get(&cid).ok_or("config missing")?;
-        let mut rec = TrialRecord {
-            schema: TRIAL_SCHEMA.into(),
-            campaign_sha256: hash.clone(),
-            input_sha256: input.sha256.clone(),
-            split: m.split,
-            config: cid,
+        let mut rec = new_record(cfg, &hash, input, m, pid.clone(), cid, trial_no);
+        let key = TrialKey {
+            manifest_sha256: hash.clone(),
             problem_id: pid.clone(),
+            arm: cid,
             trial_no,
-            outcome: Outcome::Cancelled,
-            passed: false,
-            tokens: None,
-            cost_micro_usd: None,
-            wall_secs: 0,
-            reason: None,
-            harness: cfg.harness.clone(),
-            harness_version: cfg.harness_version.clone(),
-            model: cfg.model.clone(),
-            model_version: cfg.model_version.clone(),
-            policy_version: cfg.policy_version.clone(),
-            workspace: String::new(),
-            kb: String::new(),
-            workspace_sha256_initial: String::new(),
-            kb_sha256_initial: String::new(),
-            workspace_sha256_final: String::new(),
-            kb_sha256_final: String::new(),
         };
         let blocked_by = match prereq_state(m, &records, &pid) {
             Prereq::Met => None,
@@ -322,22 +426,33 @@ pub fn run(
         } else if rep.budget_stopped {
             rec.reason = Some(REASON_BUDGET_STOP.into());
             rep.budget_cancelled += 1;
+            // 打ち切り: 既に外部へ投入済みの試行は、子 task・job ごと cancel して台帳を閉じる。
+            if let Some(row) = ledger.get(&key).filter(|r| !r.state.is_terminal()).cloned() {
+                cancel_row(exec, &mut ledger, &row, REASON_BUDGET_STOP)?;
+            }
         } else {
             let rel = format!("trials/{cid:?}/{pid}/{trial_no}");
             let (ws, kbd) = (out.join(&rel).join("workspace"), out.join(&rel).join("kb"));
-            // 中断した試行の残骸があれば捨て、必ず初期 snapshot から作り直す。
-            let _ = fs::remove_dir_all(out.join(&rel));
-            copy_tree(&repo, &ws)?;
-            copy_tree(&kb, &kbd)?;
+            let is_async = exec.is_async();
+            if !is_async {
+                // 中断した試行の残骸があれば捨て、必ず初期 snapshot から作り直す。
+                let _ = fs::remove_dir_all(out.join(&rel));
+                copy_tree(&repo, &ws)?;
+                copy_tree(&kb, &kbd)?;
+                rec.workspace_sha256_initial = hash_tree(&ws)?;
+                rec.kb_sha256_initial = hash_tree(&kbd)?;
+                if rec.workspace_sha256_initial != repo_sha || rec.kb_sha256_initial != kb_sha {
+                    return Err(format!(
+                        "trial dir {rel} does not start from the saved snapshot"
+                    ));
+                }
+            } else {
+                // 非同期: 作成・再利用は drive_async が台帳を見て決める（参照中は消さない）。
+                rec.workspace_sha256_initial = repo_sha.clone();
+                rec.kb_sha256_initial = kb_sha.clone();
+            }
             rec.workspace = format!("{rel}/workspace");
             rec.kb = format!("{rel}/kb");
-            rec.workspace_sha256_initial = hash_tree(&ws)?;
-            rec.kb_sha256_initial = hash_tree(&kbd)?;
-            if rec.workspace_sha256_initial != repo_sha || rec.kb_sha256_initial != kb_sha {
-                return Err(format!(
-                    "trial dir {rel} does not start from the saved snapshot"
-                ));
-            }
             let timeout = m.termination.trial_timeout_secs;
             let req = TrialRequest {
                 config: cfg,
@@ -348,13 +463,24 @@ pub fn run(
                 kb: &kbd,
                 timeout_secs: timeout,
             };
-            let mut res = match exec.execute(&req)? {
-                ExecStatus::Done(r) => r,
-                ExecStatus::Wait => {
-                    // 外部待ち: 記録を残さず、残骸も消して、再実行（resume）で改めて実行する。
-                    let _ = fs::remove_dir_all(out.join(&rel));
-                    rep.waiting += 1;
-                    continue;
+            let mut res = if is_async {
+                match drive_async(exec, &mut ledger, &key, &req, out, &rel, &repo, &kb)? {
+                    Some(r) => r,
+                    None => {
+                        // 外部待ち: 台帳が参照中なので workspace は消さず、再実行で同じ task を追う。
+                        rep.waiting += 1;
+                        continue;
+                    }
+                }
+            } else {
+                match exec.execute(&req)? {
+                    ExecStatus::Done(r) => r,
+                    ExecStatus::Wait => {
+                        // 外部待ち: 記録を残さず、残骸も消して、再実行（resume）で改めて実行する。
+                        let _ = fs::remove_dir_all(out.join(&rel));
+                        rep.waiting += 1;
+                        continue;
+                    }
                 }
             };
             if res.wall_secs > timeout && res.outcome != Outcome::Timeout {
@@ -375,7 +501,36 @@ pub fn run(
             rep.budget_stopped = over(&rep);
         }
         append(&trials_path, &rec)?;
+        if ledger.get(&key).is_some_and(|r| !r.state.is_terminal())
+            && rec.outcome != Outcome::Cancelled
+        {
+            ledger.mark_done(&key)?;
+        }
         records.push(rec);
+    }
+    // 打ち切り後に残った未完了の台帳行（前提待ちで今回の走査に来なかったもの）も cancel する。
+    if rep.budget_stopped {
+        for row in ledger.unfinished().into_iter().cloned().collect::<Vec<_>>() {
+            if row.key.manifest_sha256 != hash {
+                continue;
+            }
+            cancel_row(exec, &mut ledger, &row, REASON_BUDGET_STOP)?;
+            let cfg = cfgs.get(&row.key.arm).ok_or("config missing")?;
+            let mut rec = new_record(
+                cfg,
+                &hash,
+                input,
+                m,
+                row.key.problem_id.clone(),
+                row.key.arm,
+                row.key.trial_no,
+            );
+            rec.reason = Some(REASON_BUDGET_STOP.into());
+            rec.workspace = row.workspace.clone();
+            rep.budget_cancelled += 1;
+            append(&trials_path, &rec)?;
+            records.push(rec);
+        }
     }
     write_summary(m, &hash, &records, &rep, out)?;
     Ok(rep)

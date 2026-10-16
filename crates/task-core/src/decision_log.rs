@@ -43,6 +43,40 @@ pub struct ClassifierRecord {
     pub fallback: Option<String>,
 }
 
+/// campaign 識別（ADR 2026-10-16-campaign-identity-propagation）。campaign の root task に 1 つ付き、
+/// 子孫 task・全 run（再試行・continuation・repair・reviewer・planner）が祖先の鎖から継ぐ。
+/// `routing_setting` は試行単位で固定した routing 設定（全体 config の `[routing] mode` とは別）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CampaignIdentity {
+    pub campaign_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub case_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arm: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repetition: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manifest_hash: Option<String>,
+    /// `fixed` | `decision_assisted`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub routing_setting: Option<String>,
+}
+
+impl CampaignIdentity {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.campaign_id.trim().is_empty() {
+            return Err("campaign_id must not be empty".into());
+        }
+        if let Some(m) = &self.routing_setting
+            && !matches!(m.as_str(), "fixed" | "decision_assisted")
+        {
+            return Err("campaign.routing_setting must be `fixed` or `decision_assisted`".into());
+        }
+        Ok(())
+    }
+}
+
 /// 提案の群（判断時点）。`run_id` が主キー。
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct DecisionLogProposal {
@@ -53,6 +87,15 @@ pub struct DecisionLogProposal {
     pub campaign_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub arm: Option<String>,
+    /// campaign 識別の残り（`campaign_id` / `arm` は上の欄）。campaign 無しは全て `None`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub case_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repetition: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manifest_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub routing_setting: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -103,6 +146,16 @@ pub struct DecisionLogProposal {
 }
 
 impl DecisionLogProposal {
+    /// campaign 識別を欄へ写す（識別が `None` なら何も変えない）。
+    pub fn apply_campaign(&mut self, id: &CampaignIdentity) {
+        self.campaign_id = Some(id.campaign_id.clone());
+        self.case_id = id.case_id.clone();
+        self.arm = id.arm.clone();
+        self.repetition = id.repetition;
+        self.manifest_hash = id.manifest_hash.clone();
+        self.routing_setting = id.routing_setting.clone();
+    }
+
     /// 旧い `routing_decided` event（新欄なし）からも作れる。無い欄は `None` のまま。
     pub fn from_routing_record(run_id: &str, task_id: &str, record: &RoutingRecord) -> Self {
         let lane = |t: crate::model::Tier| match t {
@@ -461,9 +514,58 @@ pub struct DecisionLogUsage {
     pub cluster_node_hours: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cluster_queue_ms: Option<u64>,
+    /// 帰属規則の名前。`None` は campaign に直接帰属する行（規則を使っていない）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attribution_rule: Option<String>,
+    /// 特定の run・case に割れない共有処理。run 単位の合計に混ぜず別に数える。
+    #[serde(default)]
+    pub shared_overhead: bool,
 }
 
+/// CoS の対話 1 turn の消費行（task の run ではないので proxy 外の呼び出し鍵）。
+/// 常に共有オーバーヘッド。数値は全て欠測から始める（観測した欄だけ呼び出し側が埋める）。
+pub const ATTRIBUTION_COS_SHARED: &str = "cos_turn_shared_overhead";
+/// Jev の分類 1 回の消費行。分類した work unit（無ければ task）の campaign に直接帰属する。
+pub const ATTRIBUTION_JEV_SUBJECT: &str = "jev_classification_subject";
+
 impl DecisionLogUsage {
+    /// CoS の `turn` 番目の消費（`session_id` は CoS session）。campaign に割れないので共有オーバーヘッド。
+    pub fn cos_turn(session_id: &str, turn: u32, campaign_id: Option<&str>) -> Self {
+        let mut u = Self::new(
+            UsageKey::Call {
+                decision_id: format!("cos:{session_id}"),
+                call_attempt: turn,
+            },
+            UsageRole::Cos,
+        );
+        u.campaign_id = campaign_id.map(str::to_string);
+        u.attribution_rule = Some(ATTRIBUTION_COS_SHARED.to_string());
+        u.shared_overhead = true;
+        u
+    }
+
+    /// Jev の分類 1 回の消費（`subject` = work unit id、無ければ task id）。費用が返らなければ欠測のまま。
+    pub fn jev_call(
+        subject: &str,
+        call_attempt: u32,
+        task_id: &str,
+        campaign_id: Option<&str>,
+        list_cost_usd: Option<f64>,
+    ) -> Self {
+        let mut u = Self::new(
+            UsageKey::Call {
+                decision_id: format!("jev:{subject}"),
+                call_attempt,
+            },
+            UsageRole::Jev,
+        );
+        u.task_id = Some(task_id.to_string());
+        u.campaign_id = campaign_id.map(str::to_string);
+        u.list_cost_usd = list_cost_usd;
+        u.attribution_rule = Some(ATTRIBUTION_JEV_SUBJECT.to_string());
+        u
+    }
+
     /// 空の消費行（全欄が欠測）。
     pub fn new(key: UsageKey, role: UsageRole) -> Self {
         Self {
@@ -485,7 +587,92 @@ impl DecisionLogUsage {
             cluster_run_ms: None,
             cluster_node_hours: None,
             cluster_queue_ms: None,
+            attribution_rule: None,
+            shared_overhead: false,
         }
+    }
+}
+
+/// campaign の計測の別欄まとめ。区分（定価換算・実支出・run 時間・計算資源・壁時計）は混ぜない。
+/// `sum` が `None` は 1 件も観測できなかったこと（0 ではない）、`n_missing` は欠測の行数。
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct MeteredSum {
+    pub sum: Option<f64>,
+    pub n_observed: u64,
+    pub n_missing: u64,
+}
+
+impl MeteredSum {
+    pub fn add(&mut self, v: Option<f64>) {
+        match v {
+            Some(x) => {
+                self.sum = Some(self.sum.unwrap_or(0.0) + x);
+                self.n_observed += 1;
+            }
+            None => self.n_missing += 1,
+        }
+    }
+}
+
+/// 直接帰属の行と共有オーバーヘッドの行を分けた消費。
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct MeteredUsage {
+    pub n_rows: u64,
+    pub input_tokens: MeteredSum,
+    pub output_tokens: MeteredSum,
+    /// 定価換算（推定）。
+    pub list_cost_usd: MeteredSum,
+    /// 実支出（取れなければ欠測。定価換算で代用しない）。
+    pub cash_cost_usd: MeteredSum,
+    /// 計算資源（クラスタ）の node-hours。token・費用とは別。
+    pub cluster_node_hours: MeteredSum,
+}
+
+impl MeteredUsage {
+    fn add(&mut self, u: &DecisionLogUsage) {
+        self.n_rows += 1;
+        self.input_tokens.add(u.input_tokens.map(|x| x as f64));
+        self.output_tokens.add(u.output_tokens.map(|x| x as f64));
+        self.list_cost_usd.add(u.list_cost_usd);
+        self.cash_cost_usd.add(u.cash_cost_usd);
+        self.cluster_node_hours.add(u.cluster_node_hours);
+    }
+}
+
+/// campaign の計測（`decision_log_campaign_metering`）。elapsed（壁時計）と run 時間の総和は別欄。
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct CampaignMetering {
+    pub campaign_id: String,
+    pub direct: MeteredUsage,
+    pub shared_overhead: MeteredUsage,
+    /// 帰属規則の名前ごとの行数（`direct` に規則なしの行は `none`）。
+    pub by_attribution_rule: std::collections::BTreeMap<String, u64>,
+    /// campaign 開始（root の識別を付けた時刻）から最後の活動までの壁時計。開始・終了が無ければ `None`。
+    pub elapsed_ms: Option<u64>,
+    /// run 由来の消費行の `wall_ms` の総和（並列 run は重なるので elapsed 以上になり得る）。
+    pub run_wall_sum_ms: MeteredSum,
+}
+
+impl CampaignMetering {
+    pub fn from_usage(campaign_id: &str, usage: &[DecisionLogUsage]) -> Self {
+        let mut m = Self {
+            campaign_id: campaign_id.to_string(),
+            ..Default::default()
+        };
+        for u in usage {
+            if u.shared_overhead {
+                m.shared_overhead.add(u);
+            } else {
+                m.direct.add(u);
+            }
+            *m.by_attribution_rule
+                .entry(u.attribution_rule.clone().unwrap_or_else(|| "none".into()))
+                .or_insert(0) += 1;
+            if matches!(u.key, UsageKey::Run { .. }) {
+                m.run_wall_sum_ms.add(u.wall_ms.map(|x| x as f64));
+            }
+        }
+        m
     }
 }
 

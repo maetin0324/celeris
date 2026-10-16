@@ -108,6 +108,7 @@ impl ClassificationStage {
                     status: ClassifierStatus::NotAttempted,
                     hint: None,
                     model_snapshot: None,
+                    cost_usd: None,
                 },
                 credential: None,
             };
@@ -127,6 +128,7 @@ impl ClassificationStage {
                         confidence: classification.specificity.classification_confidence,
                     }),
                     model_snapshot: classification.model_snapshot.clone(),
+                    cost_usd: classification.cost_usd,
                 },
                 credential: None,
             },

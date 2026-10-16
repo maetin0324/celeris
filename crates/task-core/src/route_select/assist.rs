@@ -29,6 +29,8 @@ pub struct ClassificationEntry {
     pub status: ClassifierStatus,
     pub hint: Option<ClassificationHint>,
     pub model_snapshot: Option<String>,
+    /// Jev の応答が返した費用（USD）。返らなければ `None`（0 扱いしない）。
+    pub cost_usd: Option<f64>,
 }
 
 impl ClassificationEntry {
@@ -39,6 +41,7 @@ impl ClassificationEntry {
             },
             hint: None,
             model_snapshot: None,
+            cost_usd: None,
         }
     }
 }
@@ -147,7 +150,12 @@ pub fn assist_lane(input: &AssistInput<'_>, available: impl Fn(Tier) -> bool) ->
         LaneChoice::Replan => Tier::Frontier,
     };
     if tier_rank(want) <= tier_rank(input.base) {
-        return make(input.base, Some(choice), decided.basis, None);
+        // lane は既存 lane のまま。分類が fixed 規則を上回っても、結果を動かしていないので引き上げの帰属にしない。
+        let basis = match decided.basis {
+            LaneBasis::ClassificationRaise => LaneBasis::FixedRule,
+            b => b,
+        };
+        return make(input.base, Some(choice), basis, None);
     }
     match clamp_to_limits(LaneChoice::Lane(want), input.limits) {
         LaneChoice::Lane(t) if tier_rank(t) > tier_rank(input.base) => {

@@ -129,6 +129,33 @@ impl Dispatcher {
         })
     }
 
+    /// Jev の分類 1 回の消費を決定ログへ書く（`decision:jev:<subject>:1` の置換なので、同じ分類を何度
+    /// 読んでも二重計上しない）。分類が返った（`JevOk`）ときだけ。費用が返らなければ欠測のまま。
+    /// 記録の失敗で dispatch は止めない。
+    fn record_jev_usage(&self, task: &Task, subject: &str, entry: &ClassificationEntry) {
+        if entry.status != ClassifierStatus::JevOk {
+            return;
+        }
+        let task_id = task.id.to_string();
+        let result = (|| -> Result<(), task_core::StoreError> {
+            let campaign = self
+                .store
+                .task_campaign_resolve(&task_id)?
+                .map(|c| c.campaign_id);
+            let usage = task_core::decision_log::DecisionLogUsage::jev_call(
+                subject,
+                1,
+                &task_id,
+                campaign.as_deref(),
+                entry.cost_usd,
+            );
+            self.store.decision_log_record_usage(&usage, self.now_utc())
+        })();
+        if let Err(e) = result {
+            tracing::warn!(task_id = %task.id, error = %e, "failed to record the jev usage");
+        }
+    }
+
     /// decision-assisted のとき、`decision.lane`（既存方策の結果）を分類で**引き上げ**得る。
     /// 返り値は (判断 record に載せる記録, credential 待ちに入れたか)。`Fixed` は何も変えず `(None, false)`。
     pub(super) fn apply_lane_assist(
@@ -143,6 +170,9 @@ impl Dispatcher {
         }
         let subject = wu.map_or_else(|| task.id.to_string(), |w| w.id.clone());
         let item = self.classification_board.get(&subject);
+        if let Some(item) = &item {
+            self.record_jev_usage(task, &subject, &item.entry);
+        }
         let limits = self.lane_limits_for(task)?;
         // 利用可否はコード側（route_select の admission）。引き上げ先の lane だけ事前に調べる。
         let mut open = HashMap::new();

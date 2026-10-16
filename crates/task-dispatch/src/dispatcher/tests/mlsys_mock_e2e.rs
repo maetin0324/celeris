@@ -37,6 +37,7 @@ fn jev_ok(s: SpecificityHint) -> BoardItem {
                 confidence: Some(0.9),
             }),
             model_snapshot: Some("mock-jev-snapshot".into()),
+            cost_usd: None,
         },
         credential: None,
     }

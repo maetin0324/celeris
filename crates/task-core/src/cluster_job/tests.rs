@@ -433,6 +433,10 @@ fn migration_0034_adds_cluster_job_waits_to_a_schema_33_db() {
              ALTER TABLE llm_proxy_requests DROP COLUMN task_id; ALTER TABLE llm_proxy_requests DROP COLUMN run_id; \
              ALTER TABLE llm_proxy_requests DROP COLUMN snapshot_id; ALTER TABLE llm_proxy_requests DROP COLUMN decision_id; \
              ALTER TABLE projects DROP COLUMN auto_integrate; \
+             DROP TABLE task_campaigns; \
+             DROP TABLE decision_log_campaign_activity; ALTER TABLE decision_log_usage DROP COLUMN attribution_rule; ALTER TABLE decision_log_usage DROP COLUMN shared_overhead; \
+             ALTER TABLE decision_log_runs DROP COLUMN case_id; ALTER TABLE decision_log_runs DROP COLUMN repetition; \
+             ALTER TABLE decision_log_runs DROP COLUMN manifest_hash; ALTER TABLE decision_log_runs DROP COLUMN routing_setting; \
              DROP TABLE task_routing_overrides; \
              ALTER TABLE tasks DROP COLUMN harness_id; \
              ALTER TABLE runs DROP COLUMN selected_harness_id; \
@@ -447,7 +451,7 @@ fn migration_0034_adds_cluster_job_waits_to_a_schema_33_db() {
     }
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), crate::SCHEMA_VERSION);
-    assert_eq!(crate::SCHEMA_VERSION, 84);
+    assert_eq!(crate::SCHEMA_VERSION, 86);
     assert!(store.cluster_job_waits_waiting().unwrap().is_empty());
     assert!(store.get(t.id).unwrap().is_some());
 }

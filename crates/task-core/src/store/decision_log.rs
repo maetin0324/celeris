@@ -8,9 +8,9 @@ use time::OffsetDateTime;
 
 use super::{SqliteStore, StoreError, format_rfc3339};
 use crate::decision_log::{
-    CampaignVerdict, CandidateRef, ClassifierRecord, DecisionLogExecution, DecisionLogIntervention,
-    DecisionLogOutcome, DecisionLogProposal, DecisionLogRun, DecisionLogUsage, ExclusionRef,
-    InterventionKind, RunEndLabel, UsageKey, UsageRole, WuVerdict,
+    CampaignIdentity, CampaignVerdict, CandidateRef, ClassifierRecord, DecisionLogExecution,
+    DecisionLogIntervention, DecisionLogOutcome, DecisionLogProposal, DecisionLogRun,
+    DecisionLogUsage, ExclusionRef, InterventionKind, RunEndLabel, UsageKey, UsageRole, WuVerdict,
 };
 
 fn json_opt<T: serde::Serialize>(v: &T, empty: bool) -> Result<Option<String>, StoreError> {
@@ -36,7 +36,8 @@ const RUN_COLUMNS: &str = "run_id, decision_id, campaign_id, arm, project_id, ta
     proposed_first_harness, exclusions_json, policy_version, prompt_version, question_schema_version, \
     provider_model_version, features_hash, options_hash, exec_source_id, exec_model, exec_account, \
     exec_harness, exec_adapter, fallback_reason, classifier_fallback, attempts_json, run_end, \
-    run_end_raw, run_retryable, wu_verdict, wu_failure_class, campaign_verdict, wall_ms";
+    run_end_raw, run_retryable, wu_verdict, wu_failure_class, campaign_verdict, wall_ms, \
+    case_id, repetition, manifest_hash, routing_setting";
 
 fn parse_json<T: serde::de::DeserializeOwned>(s: Option<String>) -> Result<Option<T>, StoreError> {
     match s {
@@ -83,6 +84,12 @@ fn read_run(row: &Row<'_>) -> Result<DecisionLogRun, StoreError> {
             decision_id: row.get(1)?,
             campaign_id: row.get(2)?,
             arm: row.get(3)?,
+            case_id: row.get(45)?,
+            repetition: row
+                .get::<_, Option<i64>>(46)?
+                .and_then(|n| u32::try_from(n).ok()),
+            manifest_hash: row.get(47)?,
+            routing_setting: row.get(48)?,
             project_id: row.get(4)?,
             task_id: row.get(5)?,
             work_unit_id: row.get(6)?,
@@ -160,8 +167,8 @@ impl SqliteStore {
              classifier_fallback, propensity, proposed_lane, decided_lane, proposed_candidates_json, \
              proposed_first_source_id, proposed_first_model, proposed_first_harness, exclusions_json, \
              policy_version, prompt_version, question_schema_version, provider_model_version, \
-             features_hash, options_hash, updated_at) \
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25,?26,?27,?28,?29,?30,?31,?32) \
+             features_hash, options_hash, updated_at, case_id, repetition, manifest_hash, routing_setting) \
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25,?26,?27,?28,?29,?30,?31,?32,?33,?34,?35,?36) \
              ON CONFLICT(run_id) DO UPDATE SET decision_id=excluded.decision_id, campaign_id=excluded.campaign_id, \
              arm=excluded.arm, project_id=excluded.project_id, task_id=excluded.task_id, \
              work_unit_id=excluded.work_unit_id, parent_run_id=excluded.parent_run_id, \
@@ -177,7 +184,9 @@ impl SqliteStore {
              exclusions_json=excluded.exclusions_json, policy_version=excluded.policy_version, \
              prompt_version=excluded.prompt_version, question_schema_version=excluded.question_schema_version, \
              provider_model_version=excluded.provider_model_version, features_hash=excluded.features_hash, \
-             options_hash=excluded.options_hash, updated_at=excluded.updated_at",
+             options_hash=excluded.options_hash, updated_at=excluded.updated_at, \
+             case_id=excluded.case_id, repetition=excluded.repetition, manifest_hash=excluded.manifest_hash, \
+             routing_setting=excluded.routing_setting",
             params![
                 p.run_id,
                 p.decision_id,
@@ -211,6 +220,10 @@ impl SqliteStore {
                 p.features_hash,
                 p.options_hash,
                 format_rfc3339(now)?,
+                p.case_id,
+                p.repetition.map(i64::from),
+                p.manifest_hash,
+                p.routing_setting,
             ],
         )?;
         Ok(())
@@ -335,8 +348,8 @@ impl SqliteStore {
             "INSERT INTO decision_log_usage (dedup_key, run_id, decision_id, campaign_id, task_id, role, is_retry, \
              input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, list_cost_usd, \
              list_cost_usd_estimated, cash_cost_usd, wall_ms, cluster_wait_ms, cluster_run_ms, \
-             cluster_node_hours, cluster_queue_ms, updated_at) \
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,1,?13,?14,?15,?16,?17,?18,?19) \
+             cluster_node_hours, cluster_queue_ms, updated_at, attribution_rule, shared_overhead) \
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,1,?13,?14,?15,?16,?17,?18,?19,?20,?21) \
              ON CONFLICT(dedup_key) DO UPDATE SET run_id=excluded.run_id, decision_id=excluded.decision_id, \
              campaign_id=excluded.campaign_id, task_id=excluded.task_id, role=excluded.role, is_retry=excluded.is_retry, \
              input_tokens=excluded.input_tokens, output_tokens=excluded.output_tokens, \
@@ -344,7 +357,8 @@ impl SqliteStore {
              list_cost_usd=excluded.list_cost_usd, cash_cost_usd=excluded.cash_cost_usd, wall_ms=excluded.wall_ms, \
              cluster_wait_ms=excluded.cluster_wait_ms, cluster_run_ms=excluded.cluster_run_ms, \
              cluster_node_hours=excluded.cluster_node_hours, cluster_queue_ms=excluded.cluster_queue_ms, \
-             updated_at=excluded.updated_at",
+             updated_at=excluded.updated_at, attribution_rule=excluded.attribution_rule, \
+             shared_overhead=excluded.shared_overhead",
             params![
                 usage.key.dedup_key(),
                 run_id,
@@ -365,6 +379,8 @@ impl SqliteStore {
                 usage.cluster_node_hours,
                 u(usage.cluster_queue_ms),
                 format_rfc3339(now)?,
+                usage.attribution_rule,
+                i64::from(usage.shared_overhead),
             ],
         )?;
         Ok(())
@@ -379,7 +395,7 @@ impl SqliteStore {
         let mut stmt = conn.prepare(
             "SELECT dedup_key, run_id, decision_id, campaign_id, task_id, role, is_retry, input_tokens, \
              output_tokens, cache_read_tokens, cache_creation_tokens, list_cost_usd, cash_cost_usd, wall_ms, \
-             cluster_wait_ms, cluster_run_ms, cluster_node_hours, cluster_queue_ms \
+             cluster_wait_ms, cluster_run_ms, cluster_node_hours, cluster_queue_ms, attribution_rule, shared_overhead \
              FROM decision_log_usage WHERE (?1 IS NULL OR campaign_id = ?1) ORDER BY dedup_key",
         )?;
         let rows = stmt.query_map([campaign_id], |r| {
@@ -409,6 +425,7 @@ impl SqliteStore {
                     r.get(17)?,
                 ],
                 r.get::<_, Option<f64>>(16)?,
+                (r.get::<_, Option<String>>(18)?, r.get::<_, i64>(19)?),
             ))
         })?;
         let mut out = Vec::new();
@@ -425,6 +442,7 @@ impl SqliteStore {
                 cost,
                 ms,
                 nh,
+                (attribution_rule, shared_overhead),
             ) = row?;
             let role = UsageRole::parse(&role)
                 .ok_or_else(|| StoreError::Invalid(format!("unknown usage role: {role}")))?;
@@ -472,6 +490,8 @@ impl SqliteStore {
                 cluster_run_ms: from_u(ms[2]),
                 cluster_node_hours: nh,
                 cluster_queue_ms: from_u(ms[3]),
+                attribution_rule,
+                shared_overhead: shared_overhead != 0,
             });
         }
         Ok(out)
@@ -532,6 +552,52 @@ impl SqliteStore {
 }
 
 impl SqliteStore {
+    /// campaign の最後の活動時刻を進める（`MAX` で畳むので同じ入力の再処理・逆順でも変わらない）。
+    pub fn decision_log_campaign_touch(
+        &self,
+        campaign_id: &str,
+        at: OffsetDateTime,
+    ) -> Result<(), StoreError> {
+        let at = format_rfc3339(at)?;
+        self.lock()?.execute(
+            "INSERT INTO decision_log_campaign_activity (campaign_id, last_activity_at) VALUES (?1, ?2) \
+             ON CONFLICT(campaign_id) DO UPDATE SET last_activity_at = MAX(last_activity_at, excluded.last_activity_at)",
+            params![campaign_id, at],
+        )?;
+        Ok(())
+    }
+
+    /// campaign の計測。直接帰属と共有オーバーヘッドは別、elapsed（壁時計）と run 時間の総和も別欄。
+    pub fn decision_log_campaign_metering(
+        &self,
+        campaign_id: &str,
+    ) -> Result<crate::decision_log::CampaignMetering, StoreError> {
+        let usage = self.decision_log_usage_list(Some(campaign_id))?;
+        let mut m = crate::decision_log::CampaignMetering::from_usage(campaign_id, &usage);
+        let conn = self.lock()?;
+        let started: Option<String> = conn.query_row(
+            "SELECT MIN(created_at) FROM task_campaigns WHERE campaign_id = ?1",
+            [campaign_id],
+            |r| r.get(0),
+        )?;
+        let last: Option<String> = conn
+            .query_row(
+                "SELECT last_activity_at FROM decision_log_campaign_activity WHERE campaign_id = ?1",
+                [campaign_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if let (Some(a), Some(b)) = (started, last) {
+            let parse = |s: &str| {
+                OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339)
+                    .map_err(|e| StoreError::Invalid(format!("bad timestamp {s}: {e}")))
+            };
+            let ms = (parse(&b)? - parse(&a)?).whole_milliseconds();
+            m.elapsed_ms = u64::try_from(ms.max(0)).ok();
+        }
+        Ok(m)
+    }
+
     /// campaign 単位の export（records + summary）。読み出しのみ。
     pub fn decision_log_export_campaign(
         &self,
@@ -541,8 +607,111 @@ impl SqliteStore {
         let runs = self.decision_log_runs_list(c)?;
         let usage = self.decision_log_usage_list(c)?;
         let ivs = self.decision_log_interventions_list(c)?;
-        Ok(crate::decision_log_export::build_campaign_export(
-            params, &runs, &usage, &ivs,
-        ))
+        let mut export =
+            crate::decision_log_export::build_campaign_export(params, &runs, &usage, &ivs);
+        export.summary.elapsed_ms = self
+            .decision_log_campaign_metering(&params.campaign_id)?
+            .elapsed_ms;
+        Ok(export)
+    }
+}
+
+// ---- campaign 識別（ADR 2026-10-16-campaign-identity-propagation）----
+
+/// 祖先を辿る上限（task 木の最大深さ 3 より十分大きい。循環の保険）。
+const CAMPAIGN_ANCESTOR_LIMIT: usize = 32;
+
+impl SqliteStore {
+    /// campaign の root task に識別を付ける（同じ task への再設定は置換）。
+    pub fn task_campaign_set(
+        &self,
+        task_id: &str,
+        id: &CampaignIdentity,
+        now: OffsetDateTime,
+    ) -> Result<(), StoreError> {
+        let conn = self.lock()?;
+        Self::task_campaign_set_tx(&conn, task_id, id, now)
+    }
+
+    /// 呼び出し側の transaction の中で付ける（task 作成と同じ transaction に入れるため）。
+    pub fn task_campaign_set_tx(
+        conn: &rusqlite::Connection,
+        task_id: &str,
+        id: &CampaignIdentity,
+        now: OffsetDateTime,
+    ) -> Result<(), StoreError> {
+        id.validate().map_err(StoreError::Invalid)?;
+        conn.execute(
+            "INSERT INTO task_campaigns (task_id, campaign_id, case_id, arm, repetition, manifest_hash, \
+             routing_setting, created_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8) \
+             ON CONFLICT(task_id) DO UPDATE SET campaign_id=excluded.campaign_id, case_id=excluded.case_id, \
+             arm=excluded.arm, repetition=excluded.repetition, manifest_hash=excluded.manifest_hash, \
+             routing_setting=excluded.routing_setting",
+            params![
+                task_id,
+                id.campaign_id,
+                id.case_id,
+                id.arm,
+                id.repetition.map(i64::from),
+                id.manifest_hash,
+                id.routing_setting,
+                format_rfc3339(now)?,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// task 自身に付いた識別（継承しない）。
+    pub fn task_campaign_own(&self, task_id: &str) -> Result<Option<CampaignIdentity>, StoreError> {
+        let conn = self.lock()?;
+        let row = conn
+            .query_row(
+                "SELECT campaign_id, case_id, arm, repetition, manifest_hash, routing_setting \
+                 FROM task_campaigns WHERE task_id = ?1",
+                [task_id],
+                |r| {
+                    Ok(CampaignIdentity {
+                        campaign_id: r.get(0)?,
+                        case_id: r.get(1)?,
+                        arm: r.get(2)?,
+                        repetition: r
+                            .get::<_, Option<i64>>(3)?
+                            .and_then(|n| u32::try_from(n).ok()),
+                        manifest_hash: r.get(4)?,
+                        routing_setting: r.get(5)?,
+                    })
+                },
+            )
+            .optional()?;
+        Ok(row)
+    }
+
+    /// task の識別。自身に無ければ `parent_id` の鎖を辿って最も近い祖先のものを返す。
+    /// campaign に属さない task は `None`（従来どおり識別 NULL）。
+    pub fn task_campaign_resolve(
+        &self,
+        task_id: &str,
+    ) -> Result<Option<CampaignIdentity>, StoreError> {
+        let mut current = task_id.to_string();
+        for _ in 0..CAMPAIGN_ANCESTOR_LIMIT {
+            if let Some(id) = self.task_campaign_own(&current)? {
+                return Ok(Some(id));
+            }
+            let parent: Option<String> = {
+                let conn = self.lock()?;
+                conn.query_row(
+                    "SELECT parent_id FROM tasks WHERE id = ?1",
+                    [&current],
+                    |r| r.get(0),
+                )
+                .optional()?
+                .flatten()
+            };
+            match parent {
+                Some(p) => current = p,
+                None => return Ok(None),
+            }
+        }
+        Ok(None)
     }
 }

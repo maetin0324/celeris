@@ -148,6 +148,10 @@ pub(crate) const MIGRATION_0083: &str =
 /// ADR 2026-10-16-mlsys-measure-task-routing D2: task 単位の routing 固定（`task_routing_overrides`）。
 pub(crate) const MIGRATION_0084: &str =
     include_str!("../../migrations/0084_task_routing_overrides.sql");
+/// ADR 2026-10-16-campaign-identity-propagation: `task_campaigns` と決定ログ run 行の識別列。
+pub(crate) const MIGRATION_0085: &str = include_str!("../../migrations/0085_task_campaigns.sql");
+/// ADR 2026-10-16-metering-attribution: 消費行の帰属規則・共有オーバーヘッド。
+pub(crate) const MIGRATION_0086: &str = include_str!("../../migrations/0086_metering.sql");
 
 /// 他の celeris/* ブランチが使っていて、このブランチにはまだ無い版数（0038 work_unit_sessions、
 /// 0039 write_sets、0040 behind_targets、0067/0068 の並行 migration）。`migrate` は飛ばし、
@@ -157,7 +161,7 @@ pub(crate) const RESERVED_VERSIONS: &[u32] = &[38, 39, 40, 68, 69];
 
 /// このバイナリが知っている最新のスキーマ版数（ADR-0013 D5）。DB の版数がこれより大きければ
 /// `SqliteStore::open`/`open_with` は `StoreError::SchemaTooNew` で失敗する。
-pub const SCHEMA_VERSION: u32 = 84;
+pub const SCHEMA_VERSION: u32 = 86;
 
 impl SqliteStore {
     fn migration_sql(version: u32) -> Result<&'static str, StoreError> {
@@ -275,6 +279,8 @@ impl SqliteStore {
             82 => Ok(MIGRATION_0082),
             83 => Ok(MIGRATION_0083),
             84 => Ok(MIGRATION_0084),
+            85 => Ok(MIGRATION_0085),
+            86 => Ok(MIGRATION_0086),
             other => Err(StoreError::Invalid(format!(
                 "unknown migration version: {other}"
             ))),

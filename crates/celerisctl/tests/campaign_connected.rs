@@ -1,0 +1,221 @@
+//! `campaign export --verify-connected`: mock 実行の campaign を一時 DB に作り、結合済み export が
+//! 全欄を持てば成功、空・必須欄の欠測・消費未計上なら非 0 で失敗することを確かめる（実 API・実クラスタなし）。
+use serde_json::Value;
+use std::process::{Command, Output};
+use task_core::SqliteStore;
+use task_core::decision_log::{
+    CampaignVerdict, CandidateRef, ClassifierRecord, DecisionLogExecution, DecisionLogOutcome,
+    DecisionLogProposal, DecisionLogUsage, RunEndLabel, UsageKey, UsageRole,
+};
+use time::OffsetDateTime;
+
+const CAMPAIGN: &str = "camp-1";
+
+fn cand(m: &str) -> CandidateRef {
+    CandidateRef {
+        source_id: "s".into(),
+        model_id: m.into(),
+        harness_id: "h".into(),
+    }
+}
+
+fn verify(db: &std::path::Path, campaign: &str, out: &std::path::Path) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_celerisctl"))
+        .args(["--db", db.to_str().unwrap(), "campaign", "export", campaign])
+        .args(["--out", out.to_str().unwrap(), "--verify-connected"])
+        .env_remove("CELERIS_DB")
+        .env_remove("CELERIS_CONFIG")
+        .env_remove("CELERIS_RUN_DB")
+        .output()
+        .expect("spawn celerisctl")
+}
+
+#[derive(Clone, Copy, Default)]
+struct Gap {
+    no_case: bool,
+    no_grader: bool,
+    no_usage: bool,
+}
+
+fn seed(store: &SqliteStore, gap: Gap) {
+    let now = OffsetDateTime::UNIX_EPOCH;
+    let p = DecisionLogProposal {
+        run_id: "r1".into(),
+        decision_id: Some("d1".into()),
+        campaign_id: Some(CAMPAIGN.into()),
+        arm: Some("assisted".into()),
+        case_id: (!gap.no_case).then(|| "case-7".into()),
+        repetition: Some(2),
+        manifest_hash: Some("mh-abc".into()),
+        routing_setting: Some("decision_assisted".into()),
+        task_id: Some("t1".into()),
+        proposed_first: Some(cand("first")),
+        proposed_candidates: vec![cand("first"), cand("second")],
+        classifier: Some(ClassifierRecord {
+            kind: "jev".into(),
+            model: Some("jev-m".into()),
+            snapshot: Some("snap-1".into()),
+            confidence: Some(0.8),
+            probs: None,
+            fallback: None,
+        }),
+        prompt_version: Some("pv1".into()),
+        question_schema_version: Some("qs1".into()),
+        provider_model_version: Some("pm-2026".into()),
+        ..Default::default()
+    };
+    store.decision_log_record_proposal(&p, now).unwrap();
+    let e = DecisionLogExecution {
+        run_id: "r1".into(),
+        exec_source_id: Some("s".into()),
+        exec_model: Some("second".into()),
+        fallback_reason: Some("rate_limit".into()),
+        ..Default::default()
+    };
+    store.decision_log_record_execution(&e, now).unwrap();
+    let o = DecisionLogOutcome {
+        run_id: "r1".into(),
+        run_end: Some(RunEndLabel::Completed),
+        campaign_verdict: (!gap.no_grader).then_some(CampaignVerdict::Pass),
+        wall_ms: Some(1000),
+        ..Default::default()
+    };
+    store.decision_log_record_outcome(&o, now).unwrap();
+    if gap.no_usage {
+        // 行はあるが何も観測できていない（全欄が欠測）。
+        let mut u = DecisionLogUsage::new(
+            UsageKey::Run {
+                run_id: "r1".into(),
+                usage_source: "proxy".into(),
+            },
+            UsageRole::Worker,
+        );
+        u.run_id = Some("r1".into());
+        u.campaign_id = Some(CAMPAIGN.into());
+        store.decision_log_record_usage(&u, now).unwrap();
+        return;
+    }
+    let mut u = DecisionLogUsage::new(
+        UsageKey::Run {
+            run_id: "r1".into(),
+            usage_source: "proxy".into(),
+        },
+        UsageRole::Worker,
+    );
+    u.run_id = Some("r1".into());
+    u.campaign_id = Some(CAMPAIGN.into());
+    u.input_tokens = Some(100);
+    u.list_cost_usd = Some(0.5);
+    u.wall_ms = Some(1000);
+    store.decision_log_record_usage(&u, now).unwrap();
+    let mut jev = DecisionLogUsage::jev_call("wu-1", 1, "t1", Some(CAMPAIGN), Some(0.01));
+    jev.task_id = Some("t1".into());
+    store.decision_log_record_usage(&jev, now).unwrap();
+    let mut cos = DecisionLogUsage::cos_turn("sess", 1, Some(CAMPAIGN));
+    cos.list_cost_usd = Some(0.25);
+    store.decision_log_record_usage(&cos, now).unwrap();
+}
+
+fn db_with(gap: Option<Gap>) -> (tempfile::TempDir, std::path::PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("fixture.db");
+    let store = SqliteStore::open(&db).unwrap();
+    if let Some(g) = gap {
+        seed(&store, g);
+    }
+    (dir, db)
+}
+
+#[test]
+fn connected_campaign_exports_every_joined_field_and_passes() {
+    let (dir, db) = db_with(Some(Gap::default()));
+    let out = dir.path().join("o");
+    let r = verify(&db, CAMPAIGN, &out);
+    assert!(r.status.success(), "{}", String::from_utf8_lossy(&r.stderr));
+    let rows = std::fs::read_to_string(out.join("records.jsonl")).unwrap();
+    let trial: Value = rows
+        .lines()
+        .map(|l| serde_json::from_str::<Value>(l).unwrap())
+        .find(|v| v["record_type"] == "trial")
+        .expect("trial record");
+    for (k, v) in [
+        ("campaign_id", "camp-1"),
+        ("case_id", "case-7"),
+        ("arm", "assisted"),
+        ("manifest_hash", "mh-abc"),
+        ("routing_setting", "decision_assisted"),
+        ("exec_model", "second"),
+        ("fallback_reason", "rate_limit"),
+        ("classifier_kind", "jev"),
+        ("classifier_snapshot", "snap-1"),
+        ("prompt_version", "pv1"),
+        ("question_schema_version", "qs1"),
+        ("provider_model_version", "pm-2026"),
+        ("grader_verdict", "pass"),
+    ] {
+        assert_eq!(trial[k], v, "{k}");
+    }
+    assert_eq!(trial["repetition"], 2);
+    assert_eq!(trial["proposed_first"]["model_id"], "first");
+    assert_eq!(trial["proposed_candidates"].as_array().unwrap().len(), 2);
+    assert_eq!(trial["run_consumption"]["input_tokens"]["sum"], 100.0);
+    // Jev の分類費用は task の最初の run に直接帰属、CoS は共有オーバーヘッドで別欄。
+    assert_eq!(
+        trial["task_level_consumption"]["list_cost_usd"]["sum"],
+        0.01
+    );
+    let summary: Value =
+        serde_json::from_str(&std::fs::read_to_string(out.join("summary.json")).unwrap()).unwrap();
+    assert_eq!(summary["shared_overhead"]["list_cost_usd"]["sum"], 0.25);
+    assert_eq!(summary["total"]["list_cost_usd"]["sum"], 0.51);
+    assert_eq!(
+        summary["by_attribution_rule"]["cos_turn_shared_overhead"],
+        1
+    );
+    assert!(summary["run_wall_sum_ms"]["sum"].is_number());
+    assert!(summary["total"]["cash_cost_usd"]["sum"].is_null());
+}
+
+#[test]
+fn empty_campaign_fails_the_connection_check() {
+    let (dir, db) = db_with(None);
+    let r = verify(&db, CAMPAIGN, &dir.path().join("o"));
+    assert!(!r.status.success());
+    assert!(String::from_utf8_lossy(&r.stderr).contains("export is empty"));
+    // 存在しない campaign も同じ。
+    let (dir, db) = db_with(Some(Gap::default()));
+    assert!(!verify(&db, "other", &dir.path().join("o")).status.success());
+}
+
+#[test]
+fn missing_required_fields_or_unmetered_consumption_fail() {
+    for (gap, needle) in [
+        (
+            Gap {
+                no_case: true,
+                ..Gap::default()
+            },
+            "case_id is missing",
+        ),
+        (
+            Gap {
+                no_grader: true,
+                ..Gap::default()
+            },
+            "grader_verdict is missing",
+        ),
+        (
+            Gap {
+                no_usage: true,
+                ..Gap::default()
+            },
+            "no consumption was recorded",
+        ),
+    ] {
+        let (dir, db) = db_with(Some(gap));
+        let r = verify(&db, CAMPAIGN, &dir.path().join("o"));
+        assert!(!r.status.success(), "{needle}");
+        let err = String::from_utf8_lossy(&r.stderr);
+        assert!(err.contains(needle), "{needle}: {err}");
+    }
+}

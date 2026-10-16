@@ -2,7 +2,6 @@
 title: "InboxKind::ALL に Unintegrated を加える"
 tasks: [01M51DPWFC4WQJSJ6Y0KV89VEM]
 status: done
-updated: 2026-10-16
 completed: 2026-10-16
 updated: 2026-10-16
 ---

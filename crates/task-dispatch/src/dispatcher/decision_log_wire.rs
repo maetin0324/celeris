@@ -392,6 +392,11 @@ pub(super) fn write_decision_log(
             let o = &old.proposal;
             proposal.campaign_id = proposal.campaign_id.or_else(|| o.campaign_id.clone());
             proposal.arm = proposal.arm.or_else(|| o.arm.clone());
+            // 提案の先頭・候補は routing 記録を書いた側の値。routing event の無い再投影で消さない。
+            proposal.proposed_first = proposal.proposed_first.or_else(|| o.proposed_first.clone());
+            if proposal.proposed_candidates.is_empty() {
+                proposal.proposed_candidates = o.proposed_candidates.clone();
+            }
             proposal.request_class = proposal.request_class.or_else(|| o.request_class.clone());
             proposal.routing_mode = proposal.routing_mode.or_else(|| o.routing_mode.clone());
             proposal.classifier = proposal.classifier.or_else(|| o.classifier.clone());
@@ -435,26 +440,37 @@ pub(super) fn write_decision_log(
     Ok(())
 }
 
+/// task の events を決定ログへ書く（run・消費・人の介入）と、CoS の実 turn を共有オーバーヘッドへ投影する。
+/// 冪等（何度呼んでも行・消費は増えない）。dispatcher の run 完了後と、通し試験が同じ経路を通る。
+pub fn record_task_decision_log(
+    store: &dyn TaskStore,
+    task_id: TaskId,
+    now: OffsetDateTime,
+) -> Result<(), DispatchError> {
+    let Some(task) = store.get(task_id)? else {
+        return Ok(());
+    };
+    let events: Vec<Event> = store
+        .events_for(task_id)?
+        .into_iter()
+        .map(|(_, e)| e)
+        .collect();
+    let project = task.project_id.as_ref().map(ToString::to_string);
+    let logs = project_decision_log(&events, &task_id.to_string(), project.as_deref());
+    write_decision_log(store, logs, now)?;
+    // 人の介入と CoS の実 turn（共有オーバーヘッド）。どちらも events・chat_runs からの冪等な投影。
+    store.decision_log_project_interventions(&task_id.to_string())?;
+    store.decision_log_project_cos_turns(now)?;
+    Ok(())
+}
+
 impl Dispatcher {
     /// run の完了（終了・WU 検査・review・統合・中断）の後で、その task の run を決定ログへ書く。
     /// 冪等なので同じ events から何度呼んでもよい。失敗しても dispatch は止めない。
     pub(super) fn record_decision_log(&self, task_id: TaskId) {
-        let result = (|| -> Result<(), DispatchError> {
-            let Some(task) = self.store.get(task_id)? else {
-                return Ok(());
-            };
-            let events: Vec<Event> = self
-                .store
-                .events_for(task_id)?
-                .into_iter()
-                .map(|(_, e)| e)
-                .collect();
-            let project = task.project_id.as_ref().map(ToString::to_string);
-            let logs = project_decision_log(&events, &task_id.to_string(), project.as_deref());
-            write_decision_log(self.store.as_ref(), logs, OffsetDateTime::now_utc())?;
-            Ok(())
-        })();
-        if let Err(e) = result {
+        if let Err(e) =
+            record_task_decision_log(self.store.as_ref(), task_id, OffsetDateTime::now_utc())
+        {
             tracing::warn!(%task_id, error = %e, "failed to record the decision log");
         }
     }

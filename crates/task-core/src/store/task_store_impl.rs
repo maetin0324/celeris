@@ -122,6 +122,12 @@ impl TaskStore for SqliteStore {
     ) -> Result<(), StoreError> {
         SqliteStore::decision_log_record_usage(self, usage, now)
     }
+    fn decision_log_project_interventions(&self, task_id: &str) -> Result<usize, StoreError> {
+        SqliteStore::decision_log_project_interventions(self, task_id)
+    }
+    fn decision_log_project_cos_turns(&self, now: OffsetDateTime) -> Result<usize, StoreError> {
+        SqliteStore::decision_log_project_cos_turns(self, now)
+    }
     fn decision_log_run_get(
         &self,
         run_id: &str,

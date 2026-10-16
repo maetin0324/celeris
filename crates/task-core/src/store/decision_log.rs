@@ -818,3 +818,139 @@ impl SqliteStore {
         Ok(None)
     }
 }
+
+// ---- CoS の実 turn・人の介入の記録（ADR 2026-10-16-campaign-identity-propagation 付記）----
+
+/// 帰属しない CoS turn の再評価を続ける期間（campaign の窓が後から延びて当たる場合の保険）。
+const COS_REATTRIBUTE_WINDOW_SECS: i64 = 24 * 3600;
+
+fn parse_ts(s: &str) -> Option<OffsetDateTime> {
+    OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339).ok()
+}
+
+/// 人の event を介入の区分へ写す。区分が分からないものは `Unclassified`（推測で 3 区分へ入れない）。
+/// 人でない event（system の遷移など）は `None`。
+fn intervention_kind_of(event: &crate::Event) -> Option<InterventionKind> {
+    use crate::Event;
+    match event {
+        // decisions・blocked への回答は研究の方針の選択。
+        Event::Answered { .. } => Some(InterventionKind::ResearchJudgment),
+        // 失敗した task を人が再実行した。
+        Event::Retried { .. } => Some(InterventionKind::Recovery),
+        Event::ApprovalDecided { .. } => Some(InterventionKind::Unclassified),
+        Event::Edited { by, .. } if by == "human" => Some(InterventionKind::Unclassified),
+        _ => None,
+    }
+}
+
+impl SqliteStore {
+    /// task の events から人の介入を投影する（`intervention_id = <task_id>:<seq>` で冪等）。
+    /// campaign 識別（自身か祖先）のある task だけ書く。人の所要時間は取れないので `wall_ms` は欠測。
+    /// 書いた件数（upsert した数）を返す。
+    pub fn decision_log_project_interventions(&self, task_id: &str) -> Result<usize, StoreError> {
+        let Some(identity) = self.task_campaign_resolve(task_id)? else {
+            return Ok(0);
+        };
+        let rows: Vec<(i64, String, String)> = {
+            let conn = self.lock()?;
+            let mut stmt = conn
+                .prepare("SELECT seq, ts, json FROM events WHERE task_id = ?1 ORDER BY seq ASC")?;
+            stmt.query_map([task_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+                .collect::<Result<_, _>>()?
+        };
+        let mut n = 0;
+        for (seq, ts, json) in rows {
+            let event: crate::Event = serde_json::from_str(&json)?;
+            let Some(kind) = intervention_kind_of(&event) else {
+                continue;
+            };
+            self.decision_log_record_intervention(&DecisionLogIntervention {
+                intervention_id: format!("{task_id}:{seq}"),
+                kind,
+                task_id: Some(task_id.to_string()),
+                campaign_id: Some(identity.campaign_id.clone()),
+                at: ts,
+                wall_ms: None,
+                source_event: Some(format!("event:{task_id}:{seq}")),
+            })?;
+            n += 1;
+        }
+        Ok(n)
+    }
+
+    /// 時刻 `at` に活動中（最初の識別付与〜最後の活動）の campaign がちょうど 1 つならその id。
+    /// 0 個・2 個以上は `None`（帰属を推測しない）。
+    fn campaign_active_at(&self, at: OffsetDateTime) -> Result<Option<String>, StoreError> {
+        let windows: Vec<(String, String, Option<String>)> = {
+            let conn = self.lock()?;
+            let mut stmt = conn.prepare(
+                "SELECT t.campaign_id, MIN(t.created_at), a.last_activity_at FROM task_campaigns t \
+                 LEFT JOIN decision_log_campaign_activity a ON a.campaign_id = t.campaign_id \
+                 GROUP BY t.campaign_id",
+            )?;
+            stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+                .collect::<Result<_, _>>()?
+        };
+        let mut hit = windows.into_iter().filter(|(_, start, end)| {
+            let (Some(s), Some(e)) = (parse_ts(start), end.as_deref().and_then(parse_ts)) else {
+                return false;
+            };
+            s <= at && at <= e
+        });
+        let first = hit.next().map(|(c, _, _)| c);
+        Ok(if hit.next().is_some() { None } else { first })
+    }
+
+    /// CoS chat の終端 run（`usage_json` あり）を、CoS の実 turn として消費行へ投影する。
+    /// 常に共有オーバーヘッド。campaign は活動窓から一意に決まるときだけ付ける。観測できなかった欄は欠測のまま
+    /// （0 にしない）。費用は定価換算の欄だけで、実支出には書かない。冪等（`decision:cos:<run_id>:1`）。
+    pub fn decision_log_project_cos_turns(&self, now: OffsetDateTime) -> Result<usize, StoreError> {
+        let cutoff = format_rfc3339(now - time::Duration::seconds(COS_REATTRIBUTE_WINDOW_SECS))?;
+        let rows: Vec<(String, Option<String>, Option<String>, String)> = {
+            let conn = self.lock()?;
+            let mut stmt = conn.prepare(
+                "SELECT c.run_id, c.started_at, c.finished_at, c.usage_json FROM chat_runs c \
+                 WHERE c.usage_json IS NOT NULL AND c.finished_at IS NOT NULL \
+                 AND c.state IN ('completed','stopped','failed','interrupted') \
+                 AND NOT EXISTS (SELECT 1 FROM decision_log_usage d \
+                     WHERE d.dedup_key = 'decision:cos:' || c.run_id || ':1' \
+                     AND (d.campaign_id IS NOT NULL OR c.finished_at < ?1)) \
+                 ORDER BY c.run_id",
+            )?;
+            stmt.query_map([cutoff], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+            })?
+            .collect::<Result<_, _>>()?
+        };
+        let mut n = 0;
+        for (run_id, started, finished, usage_json) in rows {
+            let Ok(usage) = serde_json::from_str::<crate::Usage>(&usage_json) else {
+                continue;
+            };
+            let at = started
+                .as_deref()
+                .and_then(parse_ts)
+                .or_else(|| finished.as_deref().and_then(parse_ts));
+            let campaign = match at {
+                Some(at) => self.campaign_active_at(at)?,
+                None => None,
+            };
+            let mut row = DecisionLogUsage::cos_turn(&run_id, 1, campaign.as_deref());
+            row.input_tokens = usage.input_tokens;
+            row.output_tokens = usage.output_tokens;
+            row.cache_read_tokens = usage.cache_read_tokens;
+            row.cache_creation_tokens = usage.cache_creation_tokens;
+            row.list_cost_usd = usage.cost_usd;
+            row.wall_ms = match (
+                started.as_deref().and_then(parse_ts),
+                finished.as_deref().and_then(parse_ts),
+            ) {
+                (Some(a), Some(b)) => u64::try_from((b - a).whole_milliseconds()).ok(),
+                _ => None,
+            };
+            self.decision_log_record_usage(&row, now)?;
+            n += 1;
+        }
+        Ok(n)
+    }
+}

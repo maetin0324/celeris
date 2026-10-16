@@ -99,6 +99,7 @@ mod credential_gate;
 mod lane_assist;
 pub use cluster_job_wait::{ClusterJobPollRequest, ClusterJobPoller, ssh_cluster_job_poller};
 pub use credential_gate::{CredentialGate, CredentialGates};
+pub use decision_log_wire::record_task_decision_log;
 mod auto_leaf;
 /// ADR-0130 D4: review 前 sync の前後で target からの behind を記録する。
 mod behind_target;

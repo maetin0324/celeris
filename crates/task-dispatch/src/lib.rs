@@ -43,6 +43,8 @@ pub use accounts::{
     cooldown_for_failure, evaluate, scan_accounts, select_account, select_account_least_loaded,
     valid_account_id,
 };
+/// 通し試験が dispatcher と同じ経路で決定ログへ投影する。
+pub use dispatcher::record_task_decision_log;
 pub use dispatcher::{
     AccountsRuntimeConfig, ClusterSpec, ContainerDecision, ContainerRun, ContainersRuntimeConfig,
     DEFAULT_MAX_RUNS_PER_ACCOUNT, DispatchConfig, DispatchError, DispatchRoutingSettings,

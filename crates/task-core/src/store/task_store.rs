@@ -121,6 +121,10 @@ pub trait TaskStore:
         campaign_id: &str,
         at: OffsetDateTime,
     ) -> Result<(), StoreError>;
+    /// task の events から人の介入を投影する（冪等。識別のある task だけ）。
+    fn decision_log_project_interventions(&self, task_id: &str) -> Result<usize, StoreError>;
+    /// CoS chat の終端 run を CoS turn（共有オーバーヘッド）の消費行へ投影する（冪等）。
+    fn decision_log_project_cos_turns(&self, now: OffsetDateTime) -> Result<usize, StoreError>;
     /// campaign 識別（自身または最も近い祖先のもの。無ければ `None`）。
     fn task_campaign_resolve(
         &self,

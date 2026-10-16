@@ -447,3 +447,64 @@ async fn task_pause_and_resume_cover_the_subtree() {
     .await;
     assert_eq!(resp.status.as_u16(), 404, "{}", resp.text());
 }
+
+/// ADR 2026-10-16-mlsys-measure-task-routing: `POST /tasks` の `routing_override` は `task_routing_overrides` と `routing_override_pinned` event に固定される。
+/// 未知の mode・欄・下段版は 4xx（黙って config へ倒さない）。
+#[tokio::test]
+async fn create_accepts_and_pins_routing_override() {
+    let env = env_with_token();
+    let app = env.router();
+    let resp = send(
+        &app,
+        p(
+            "/api/v1/tasks",
+            &json!({
+                "title": "trial", "objective": "o",
+                "acceptance": [{"type": "artifact_exists", "name": "result.md"}],
+                "routing_override": {"mode": "fixed", "lower_policy": "mlsys-min-1",
+                                     "evidence_table_id": "ev-1", "online_update": false},
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status.as_u16(), 201, "{}", resp.text());
+    let id = resp.json()["id"].as_str().expect("id").to_string();
+    let task = env
+        .store
+        .get(id.parse().expect("task id"))
+        .expect("get")
+        .expect("some");
+    let o = env
+        .store
+        .task_routing_override(task.id)
+        .expect("read")
+        .expect("routing_override");
+    // 解決の入力（固定）は追記専用の event にも残る。
+    assert!(env.store.events_for(task.id).expect("events").iter().any(|(_, e)| matches!(
+        e,
+        task_core::Event::RoutingOverridePinned { routing_override } if routing_override == &o
+    )));
+    assert_eq!(o.mode, task_core::route_select::RoutingMode::Fixed);
+    assert_eq!(o.evidence_table_id.as_deref(), Some("ev-1"));
+    assert!(!o.online_update);
+
+    for bad in [
+        json!({"mode": "auto"}),
+        json!({"mode": "fixed", "extra": 1}),
+        json!({"mode": "fixed", "lower_policy": "mlsys-min-0"}),
+    ] {
+        let resp = send(
+            &app,
+            p(
+                "/api/v1/tasks",
+                &json!({
+                    "title": "t", "objective": "o",
+                    "acceptance": [{"type": "artifact_exists", "name": "result.md"}],
+                    "routing_override": bad,
+                }),
+            ),
+        )
+        .await;
+        assert!(resp.status.is_client_error(), "{bad}: {}", resp.status);
+    }
+}

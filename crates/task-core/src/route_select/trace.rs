@@ -178,6 +178,9 @@ pub struct RouteDecision {
     /// decision-assisted の lane 層の記録（ADR 2026-10-15-mlsys-min-routing-policy。`fixed` では書かない）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lane_assist: Option<super::assist::LaneAssistRecord>,
+    /// task 欄（`routing_override`）で固定した routing の解決結果。task 欄の無い task には書かない（従来と同一）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub routing_resolved: Option<super::task_override::ResolvedRouting>,
 }
 
 impl RouteDecision {
@@ -419,6 +422,7 @@ pub fn build_route_decision(input: &RouteDecisionInput<'_>) -> RouteDecision {
         options_hash: None,
         judge: RouteJudge::default(),
         lane_assist: None,
+        routing_resolved: None,
     };
     decision.options_hash = Some(options_hash(&decision.route_options()));
     decision

@@ -99,6 +99,11 @@ pub struct NewTaskBody {
     /// another thread) is 422 `invalid_attachment` and creates nothing.
     #[serde(default)]
     pub attachment_ids: Vec<String>,
+    /// ADR 2026-10-16-mlsys-measure-task-routing: 試行ごとの routing 設定（mode・下段・根拠表・
+    /// オンライン更新）を task に固定する。`task_routing_overrides` に作成と同じ transaction で 1 行書き、dispatcher は config の
+    /// `[routing] mode` より優先する。省略時は従来（config に従う）。未知の値は 400。
+    #[serde(default)]
+    pub routing_override: Option<task_core::route_select::RoutingOverride>,
 }
 
 fn created_task(task: &Task) -> Response {
@@ -338,6 +343,7 @@ pub(crate) fn create_task_op(
         mut task,
         expected_write_paths,
         attachment_ids,
+        routing_override,
     } = body;
     let reject = |problem: ApiProblem| match audit {
         Some(audit) => audit.reject(store, "task", "new", problem),
@@ -365,9 +371,20 @@ pub(crate) fn create_task_op(
     // `default_role` の既定 → 全体の既定で埋める。API は常に完全な設定を持つので、`genres` が設定されて
     // いれば知らない `genre` / `genre` と `role` の不整合は常に検証する（celerisctl の「`--config` 無し」の
     // 緩さはここには無い）。
+    if let Some(o) = &routing_override {
+        o.validate()
+            .map_err(|e| reject(ApiProblem::bad_request(e.to_string())))?;
+    }
     let built =
         task_ops::add::build_task_with_roles(store, task, roles, genres, OffsetDateTime::now_utc())
             .map_err(|e| reject(ops_problem(store, e, None)))?;
+    // ADR 2026-10-16-mlsys-measure-task-routing D2: 固定は task と同じ transaction で 1 行 + 1 event。
+    let pinned_events: Vec<task_core::Event> = routing_override
+        .iter()
+        .map(|o| task_core::Event::RoutingOverridePinned {
+            routing_override: o.clone(),
+        })
+        .collect();
     // ADR 2026-10-09-cos-task-repository-required D1: CoS の起票は、リポジトリを使う task に案件・
     // リポジトリが無ければ 422（worker の workspace が空のまま走らせない）。
     if audit.is_some()
@@ -385,6 +402,14 @@ pub(crate) fn create_task_op(
     // one transaction, so the dispatcher never picks the task up before its pins exist.
     let mut failure = None;
     let mut write = |tx: &rusqlite::Transaction<'_>| -> Result<(), StoreError> {
+        if let Some(o) = &routing_override {
+            task_core::store::SqliteStore::set_task_routing_override_tx(
+                tx,
+                built.id,
+                o,
+                &OffsetDateTime::now_utc().to_string(),
+            )?;
+        }
         if paths.is_some() {
             task_core::store::SqliteStore::set_task_expected_write_paths_tx(
                 tx,
@@ -401,7 +426,7 @@ pub(crate) fn create_task_op(
         Ok(())
     };
     let Some(audit) = audit else {
-        let outcome = store.create_task_with(&built, vec![], write);
+        let outcome = store.create_task_with(&built, pinned_events.clone(), write);
         if let Some(problem) = failure {
             return Err(problem);
         }
@@ -410,7 +435,7 @@ pub(crate) fn create_task_op(
     };
     let target_id = built.id.to_string();
     let outcome = audit.apply(store, "task", &target_id, "task.create", |tx| {
-        task_core::store::SqliteStore::create_task_tx(tx, &built, None, vec![])?;
+        task_core::store::SqliteStore::create_task_tx(tx, &built, None, pinned_events.clone())?;
         write(tx).map_err(|e| task_core::chat::ChatError::Invalid(e.to_string()))?;
         Ok(serde_json::json!({
             "task_id": built.id.to_string(),

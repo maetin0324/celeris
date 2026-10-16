@@ -12,7 +12,7 @@ use task_core::model::Tier;
 use task_core::model_policy::{Level, TaskFeatures};
 use task_core::route_select::{
     AssistInput, ClassificationEntry, ClassifierStatus, Fact, LaneAssistRecord, LaneFacts,
-    LaneLimits, RoutingMode, WorkClass, assist_lane,
+    LaneLimits, ResolvedRouting, RoutingMode, WorkClass, assist_lane, resolve_routing,
 };
 use task_core::{LaneDecision, WorkUnitRow};
 
@@ -75,6 +75,20 @@ pub fn lane_facts(f: &TaskFeatures) -> LaneFacts {
     }
 }
 
+/// task 欄の routing 固定（無ければ `None` = 従来どおり config に従う）。読めなければ warn して `None`
+/// （dispatch は止めない。解決結果の record に `source: config` が残るので後から分かる）。
+pub fn task_routing_override(
+    store: &dyn TaskStore,
+    task_id: task_core::TaskId,
+) -> Option<task_core::route_select::RoutingOverride> {
+    store
+        .task_routing_override(task_id)
+        .unwrap_or_else(|error| {
+            tracing::warn!(%task_id, %error, "failed to read the task routing override");
+            None
+        })
+}
+
 fn is_credential_failure(status: &ClassifierStatus) -> bool {
     matches!(status, ClassifierStatus::FellBackToFixed { reason } if reason == "key_missing" || reason == "auth")
 }
@@ -87,6 +101,13 @@ impl Dispatcher {
 
     pub fn routing_mode(&self) -> RoutingMode {
         self.routing_mode
+    }
+
+    /// task 単位の routing の解決（ADR 2026-10-16-mlsys-measure-task-routing）:
+    /// task 欄 `routing_override` があれば config の `routing.mode` より優先、無ければ従来。
+    pub fn routing_for(&self, task: &Task) -> ResolvedRouting {
+        let routing_override = task_routing_override(self.store.as_ref(), task.id);
+        resolve_routing(self.routing_mode, routing_override.as_ref())
     }
 
     /// 分類段が書き込む board（dispatcher 側は読むだけ）。
@@ -116,7 +137,8 @@ impl Dispatcher {
         wu: Option<&WorkUnitRow>,
         decision: &mut LaneDecision,
     ) -> Result<(Option<LaneAssistRecord>, bool), DispatchError> {
-        if self.routing_mode == RoutingMode::Fixed {
+        let mode = self.routing_for(task).mode;
+        if mode == RoutingMode::Fixed {
             return Ok((None, false));
         }
         let subject = wu.map_or_else(|| task.id.to_string(), |w| w.id.clone());
@@ -136,7 +158,7 @@ impl Dispatcher {
         }
         let outcome = assist_lane(
             &AssistInput {
-                mode: self.routing_mode,
+                mode,
                 explicit: !decision.source.policy_decides(),
                 base: decision.lane,
                 facts: lane_facts(&decision.features),

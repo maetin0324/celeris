@@ -1453,6 +1453,12 @@ pub enum Event {
         #[serde(flatten)]
         outcome: Box<crate::model_router::feedback::RoutingOutcome>,
     },
+    /// ADR 2026-10-16-mlsys-measure-task-routing D2: 作成時に task 欄で固定した routing 設定（mode・下段・
+    /// 根拠表・オンライン更新）。`task_routing_overrides` の行と同じ transaction で 1 回だけ追記する。
+    /// 状態は変えない。`online_update = false` なら `routing_outcome_recorded` を追記しない。
+    RoutingOverridePinned {
+        routing_override: crate::route_select::RoutingOverride,
+    },
     /// 同 §7.1・Phase 4: shadow（decision / execution）1 件の結果。primary の選択・成功/失敗・attempts とは
     /// 別欄で、それらを変えない。本文・prompt・credential は持たない（出力は SHA-256 と tokens だけ）。
     /// 状態は変えない（`replay` は無視する）。

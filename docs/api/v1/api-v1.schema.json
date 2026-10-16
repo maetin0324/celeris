@@ -11057,6 +11057,23 @@
           "type": "object"
         },
         {
+          "description": "ADR 2026-10-16-mlsys-measure-task-routing D2: 作成時に task 欄で固定した routing 設定（mode・下段・\n根拠表・オンライン更新）。`task_routing_overrides` の行と同じ transaction で 1 回だけ追記する。\n状態は変えない。`online_update = false` なら `routing_outcome_recorded` を追記しない。",
+          "properties": {
+            "routing_override": {
+              "$ref": "#/$defs/RoutingOverride"
+            },
+            "type": {
+              "const": "routing_override_pinned",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "routing_override"
+          ],
+          "type": "object"
+        },
+        {
           "description": "同 §7.1・Phase 4: shadow（decision / execution）1 件の結果。primary の選択・成功/失敗・attempts とは\n別欄で、それらを変えない。本文・prompt・credential は持たない（出力は SHA-256 と tokens だけ）。\n状態は変えない（`replay` は無視する）。",
           "properties": {
             "candidate_model": {
@@ -17713,6 +17730,14 @@
       ],
       "type": "object"
     },
+    "ModeSource": {
+      "description": "解決の出自。",
+      "enum": [
+        "task",
+        "config"
+      ],
+      "type": "string"
+    },
     "ModelCatalogItem": {
       "properties": {
         "available": {
@@ -18255,6 +18280,18 @@
             "string",
             "null"
           ]
+        },
+        "routing_override": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RoutingOverride"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "ADR 2026-10-16-mlsys-measure-task-routing: 試行ごとの routing 設定（mode・下段・根拠表・\nオンライン更新）を task に固定する。`task_routing_overrides` に作成と同じ transaction で 1 行書き、dispatcher は config の\n`[routing] mode` より優先する。省略時は従来（config に従う）。未知の値は 400。"
         },
         "skills": {
           "default": [],
@@ -23105,6 +23142,37 @@
       ],
       "type": "object"
     },
+    "ResolvedRouting": {
+      "description": "解決結果（`celeris.route-decision/1` の `routing_resolved` に載る）。",
+      "properties": {
+        "evidence_table_id": {
+          "description": "`None` は「最新版を読む」（従来）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lower_policy": {
+          "type": "string"
+        },
+        "mode": {
+          "$ref": "#/$defs/RoutingMode"
+        },
+        "online_update": {
+          "type": "boolean"
+        },
+        "source": {
+          "$ref": "#/$defs/ModeSource"
+        }
+      },
+      "required": [
+        "mode",
+        "source",
+        "lower_policy",
+        "online_update"
+      ],
+      "type": "object"
+    },
     "RetryBody": {
       "additionalProperties": false,
       "description": "`POST /tasks/{id}/retry`（Phase 31）の本文。`accept: true` なら新しいタスクは `draft` を経ず `ready` で始まる。\nADR-0062 Phase 108 追記: `workspace`（省略可）を与えると、複製先の作業場所をそれに差し替える\n（検証は `PATCH /tasks/{id}` の `workspace` と同じ）。省略時は従来どおり元のタスクの `workspace` を複製する。",
@@ -23678,6 +23746,17 @@
           "description": "Remaining quota per source at the decision point (absolute units; `0` = exhausted).",
           "type": "object"
         },
+        "routing_resolved": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ResolvedRouting"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "task 欄（`routing_override`）で固定した routing の解決結果。task 欄の無い task には書かない（従来と同一）。"
+        },
         "rule": {
           "$ref": "#/$defs/RouteRule"
         },
@@ -24055,6 +24134,13 @@
       ],
       "type": "object"
     },
+    "RoutingMode": {
+      "enum": [
+        "fixed",
+        "decision_assisted"
+      ],
+      "type": "string"
+    },
     "RoutingOutcome": {
       "description": "`Event::RoutingOutcomeRecorded` の中身（wire では event の欄に平たく並ぶ）。生の outcome vector が正本で、\n`reward` は offline 比較用の派生値。",
       "properties": {
@@ -24177,6 +24263,39 @@
           "type": "string"
         }
       ]
+    },
+    "RoutingOverride": {
+      "additionalProperties": false,
+      "description": "`task_routing_overrides` の 1 行（作成時に固定・以後不変。`POST /tasks` の `routing_override`）。",
+      "properties": {
+        "evidence_table_id": {
+          "description": "根拠表 `routing_evidence` の版（`evidence_version`）。指定すると最新版ではなくこの版だけを読む。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lower_policy": {
+          "description": "下段（fixed 方策・lane→model 対応表）の版。省略時は `DEFAULT_POLICY_VERSION`。現行の版以外は受理しない。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mode": {
+          "$ref": "#/$defs/RoutingMode",
+          "description": "この task の lane 層の mode（config の `[routing] mode` より優先）。"
+        },
+        "online_update": {
+          "default": true,
+          "description": "run の結果を `routing_outcome_recorded`（オンライン更新の根拠）へ追記するか。既定 true（従来）。",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "mode"
+      ],
+      "type": "object"
     },
     "RoutingRecord": {
       "description": "ADR-0069 D5: `Event::RoutingDecided` の中身。",

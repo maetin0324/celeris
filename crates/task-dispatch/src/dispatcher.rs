@@ -163,7 +163,7 @@ pub use route_select::{
 pub struct DispatchRoutingSettings {
     pub escalation: task_core::EscalationThresholds,
 }
-pub use lane_assist::{BoardItem, ClassificationBoard, lane_facts};
+pub use lane_assist::{BoardItem, ClassificationBoard, lane_facts, task_routing_override};
 pub use snapshot::SnapshotPublisher;
 
 #[cfg(test)]

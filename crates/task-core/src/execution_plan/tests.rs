@@ -1541,7 +1541,7 @@ fn rejects_leaf_check_running_operator_scripts() {
     for cmd in [
         "test -f scripts/selfdeploy/release.sh",
         "git diff --quiet HEAD -- scripts/selfdeploy/release.sh",
-        "grep -q release.sh docs/ops/x.md",
+        "grep -q release.sh docs/SPEC.md",
     ] {
         let mut p = v3_fixture();
         p.units[1].checks[0].cmd = cmd.to_string();

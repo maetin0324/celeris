@@ -25,6 +25,12 @@ pub struct Totals {
     pub cancelled: u64,
     pub blocked: u64,
     pub missing: u64,
+    /// 成功（論文用）: 実行器が passed を返し、かつ有効な独立採点が final_pass の cell。分母は n のまま。
+    pub final_passed: u64,
+    /// 実行器は passed だが有効な採点が無い cell（未採点・結合検査で拒否）。成功にも分母除外にもしない。
+    pub ungraded: u64,
+    /// 実行器は passed だが独立採点が不合格の cell（成果物が誤り）。
+    pub grader_failed: u64,
     /// 実行した全試行（再試行を含む）の token。欠測の試行は sum に入れず `*_missing_trials` に数える。
     pub tokens_sum: u64,
     pub tokens_missing_trials: u64,
@@ -65,6 +71,9 @@ pub struct Recomputed {
 pub struct CheckReport {
     pub ok: bool,
     pub violations: Vec<String>,
+    /// 全 cell に記録があり、実行器 passed の cell すべてに有効な採点がある。false の集計は最終版にしない。
+    pub complete: bool,
+    pub incomplete_reasons: Vec<String>,
     pub records: usize,
     pub recomputed: Option<Recomputed>,
 }
@@ -387,11 +396,15 @@ pub fn check(m: &CampaignManifest, out: &Path) -> CheckReport {
         return CheckReport {
             ok: false,
             violations: v,
+            complete: false,
+            incomplete_reasons: vec!["records could not be verified".into()],
             records: recs.len(),
             recomputed: None,
         };
     }
-    let rc = recompute(m, &recs);
+    let binding = crate::grades::bind(m, &recs, out);
+    v.extend(binding.violations.iter().cloned());
+    let rc = recompute_graded(m, &recs, &binding.valid);
     // runner の summary.json との突き合わせ（記録の欠落・数値の食い違いを検出する）。
     match read_json(&out.join(SUMMARY_FILE)) {
         Ok(s) => {
@@ -436,8 +449,22 @@ pub fn check(m: &CampaignManifest, out: &Path) -> CheckReport {
         }
         Err(e) => v.push(format!("summary: {e}")),
     }
+    let mut reasons = Vec::new();
+    for (c, t) in &rc.totals {
+        if t.missing > 0 {
+            reasons.push(format!("{c:?}: {} trials have no record", t.missing));
+        }
+        if t.ungraded > 0 {
+            reasons.push(format!(
+                "{c:?}: {} executor-passed trials have no valid independent grade",
+                t.ungraded
+            ));
+        }
+    }
     CheckReport {
         ok: v.is_empty(),
+        complete: reasons.is_empty(),
+        incomplete_reasons: reasons,
         violations: v,
         records: recs.len(),
         recomputed: Some(rc),
@@ -447,6 +474,15 @@ pub fn check(m: &CampaignManifest, out: &Path) -> CheckReport {
 /// 生記録から再計算する。各 (config, 問題) は trial_no 最小の記録で判定し、無ければ missing。
 /// 分母は期待された問題数で、failed/error/timeout/cancelled/missing のどれも除かない。
 pub fn recompute(m: &CampaignManifest, recs: &[TrialRecord]) -> Recomputed {
+    recompute_graded(m, recs, &BTreeMap::new())
+}
+
+/// `grades`: 結合検査を通った独立採点（試行 → final_pass）。無い試行は未採点で、成功に数えない。
+pub fn recompute_graded(
+    m: &CampaignManifest,
+    recs: &[TrialRecord],
+    grades: &BTreeMap<crate::grades::TrialKey, bool>,
+) -> Recomputed {
     let exp = expected(m);
     let mut totals: BTreeMap<ConfigId, Totals> = BTreeMap::new();
     let mut first: BTreeMap<(ConfigId, &str, u32), &TrialRecord> = BTreeMap::new();
@@ -466,10 +502,18 @@ pub fn recompute(m: &CampaignManifest, recs: &[TrialRecord]) -> Recomputed {
             .iter()
             .flat_map(|p| (1..=m.repeats).map(move |k| (p, k)))
         {
-            match first.get(&(*c, p.as_str(), rep)).map(|r| r.outcome) {
+            let cell = first.get(&(*c, p.as_str(), rep));
+            match cell.map(|r| r.outcome) {
                 None => t.missing += 1,
                 Some(o) => match o {
-                    crate::aggregate::Outcome::Passed => t.passed += 1,
+                    crate::aggregate::Outcome::Passed => {
+                        t.passed += 1;
+                        match cell.and_then(|r| grades.get(&crate::grades::key_of(r))) {
+                            Some(true) => t.final_passed += 1,
+                            Some(false) => t.grader_failed += 1,
+                            None => t.ungraded += 1,
+                        }
+                    }
                     crate::aggregate::Outcome::Failed => t.failed += 1,
                     crate::aggregate::Outcome::Error => t.error += 1,
                     crate::aggregate::Outcome::Timeout => t.timeout += 1,
@@ -505,9 +549,10 @@ pub fn recompute(m: &CampaignManifest, recs: &[TrialRecord]) -> Recomputed {
         }
     }
     let pass = |c: ConfigId, p: &str, rep: u32| {
-        first
-            .get(&(c, p, rep))
-            .is_some_and(|r| r.outcome == crate::aggregate::Outcome::Passed)
+        first.get(&(c, p, rep)).is_some_and(|r| {
+            r.outcome == crate::aggregate::Outcome::Passed
+                && grades.get(&crate::grades::key_of(r)) == Some(&true)
+        })
     };
     let mut pairs = Vec::new();
     for (name, a, b) in [

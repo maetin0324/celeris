@@ -12,6 +12,7 @@ pub mod export;
 pub mod grade_out;
 pub mod grade_runner;
 pub mod grader;
+pub mod grades;
 pub mod harness_exec;
 pub mod isolation;
 pub mod jev_smoke;

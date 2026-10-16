@@ -108,6 +108,12 @@ pub trait TaskStore:
         &self,
         run_id: &str,
     ) -> Result<Option<crate::decision_log::DecisionLogRun>, StoreError>;
+    /// campaign の最後の活動時刻を進める（elapsed の終端。MAX で畳む）。
+    fn decision_log_campaign_touch(
+        &self,
+        campaign_id: &str,
+        at: OffsetDateTime,
+    ) -> Result<(), StoreError>;
     /// campaign 識別（自身または最も近い祖先のもの。無ければ `None`）。
     fn task_campaign_resolve(
         &self,

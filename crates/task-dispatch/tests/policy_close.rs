@@ -37,6 +37,7 @@ fn jev_ok(s: SpecificityHint, confidence: f64) -> ClassificationEntry {
             confidence: Some(confidence),
         }),
         model_snapshot: None,
+        cost_usd: None,
     }
 }
 

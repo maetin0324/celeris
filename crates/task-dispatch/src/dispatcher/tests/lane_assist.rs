@@ -84,6 +84,7 @@ fn jev_ok(s: SpecificityHint) -> BoardItem {
                 confidence: Some(0.95),
             }),
             model_snapshot: None,
+            cost_usd: None,
         },
         credential: None,
     }
@@ -272,4 +273,46 @@ fn dispatcher_and_store_never_reference_the_jev_classifier() {
     let manifests = ["task-dispatch", "task-core"]
         .map(|c| std::fs::read_to_string(root.join(c).join("Cargo.toml")).unwrap());
     assert!(manifests.iter().all(|m| !m.contains("jev-classifier")));
+}
+
+/// Jev の分類費用は campaign の消費行（role=jev）に入る。費用が返らなければ欠測、再処理で増えない。
+#[tokio::test]
+async fn jev_classification_cost_is_metered_once_per_campaign() {
+    for (cost, expect) in [(Some(0.0004), Some(0.0004)), (None, None)] {
+        let ws = tempfile::tempdir().unwrap();
+        let sqlite = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let store: Arc<dyn TaskStore> = sqlite.clone();
+        let task = hinted_task(ws.path(), task_core::TierSource::Hint);
+        store.insert(&task).unwrap();
+        sqlite
+            .task_campaign_set(
+                &task.id.to_string(),
+                &task_core::decision_log::CampaignIdentity {
+                    campaign_id: "camp-j".into(),
+                    case_id: None,
+                    arm: None,
+                    repetition: None,
+                    manifest_hash: None,
+                    routing_setting: None,
+                },
+                OffsetDateTime::now_utc(),
+            )
+            .unwrap();
+        let mut item = jev_ok(SpecificityHint::InsufficientInfo);
+        item.entry.cost_usd = cost;
+        let mut d = dispatcher(store.clone(), question_adapter(), 1);
+        d.set_routing_mode(RoutingMode::DecisionAssisted);
+        d.classification_board().put(&task.id.to_string(), item);
+        d.tick().unwrap();
+        d.tick().unwrap();
+        let rows: Vec<_> = sqlite
+            .decision_log_usage_list(Some("camp-j"))
+            .unwrap()
+            .into_iter()
+            .filter(|u| u.role == task_core::decision_log::UsageRole::Jev)
+            .collect();
+        assert_eq!(rows.len(), 1, "同じ分類を 2 tick 読んでも 1 行");
+        assert_eq!(rows[0].list_cost_usd, expect);
+        assert!(!rows[0].shared_overhead);
+    }
 }

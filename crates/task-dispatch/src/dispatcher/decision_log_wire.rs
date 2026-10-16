@@ -424,8 +424,11 @@ pub(super) fn write_decision_log(
             store.decision_log_record_outcome(&outcome, now)?;
         }
         if let Some(mut usage) = log.usage {
-            usage.campaign_id = campaign_id;
+            usage.campaign_id = campaign_id.clone();
             store.decision_log_record_usage(&usage, now)?;
+        }
+        if let Some(campaign_id) = &campaign_id {
+            store.decision_log_campaign_touch(campaign_id, now)?;
         }
     }
     Ok(())
@@ -786,5 +789,226 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    // ---- 全消費量の計測（ADR 2026-10-16-metering-attribution）----
+
+    fn role_started(run: &str, role: RunRole) -> Event {
+        Event::WorkerStarted {
+            run_id: run.into(),
+            adapter: "claude-code".into(),
+            model: "m".into(),
+            provider: Some("s".into()),
+            account: None,
+            role: Some(role),
+            task_role: None,
+        }
+    }
+
+    fn at(secs: i64) -> OffsetDateTime {
+        OffsetDateTime::from_unix_timestamp(1_800_000_000 + secs).unwrap()
+    }
+
+    fn campaign_root(store: &SqliteStore) -> TaskId {
+        let root = store_task(store, None);
+        store
+            .task_campaign_set(&root.to_string(), &identity(), at(0))
+            .unwrap();
+        root
+    }
+
+    fn all_kinds_events() -> Vec<Event> {
+        vec![
+            role_started("plan-1", RunRole::Planner),
+            finished("plan-1", RunEnd::Completed, 1_000, 0, 10),
+            started("w-1", "s", "m"),
+            finished("w-1", RunEnd::Failed { retryable: true }, 2_000, 0, 20),
+            // 再試行（同じ役割・WU の 2 回目）
+            started("w-2", "s", "m"),
+            finished("w-2", RunEnd::Completed, 3_000, 1, 30),
+            role_started("rev-1", RunRole::Reviewer),
+            finished("rev-1", RunEnd::Completed, 4_000, 0, 40),
+        ]
+    }
+
+    /// worker・planner・reviewer・再試行・CoS・Jev の行が、直接帰属と共有オーバーヘッドを分けて入る。
+    #[test]
+    fn every_run_kind_has_a_usage_row_and_shared_overhead_is_separate() {
+        use task_core::decision_log::{ATTRIBUTION_COS_SHARED, ATTRIBUTION_JEV_SUBJECT, UsageRole};
+        let store = SqliteStore::open_in_memory().unwrap();
+        let root = campaign_root(&store);
+        write_for(&store, root, &all_kinds_events());
+        store
+            .decision_log_record_usage(
+                &DecisionLogUsage::jev_call(
+                    "wu-1",
+                    1,
+                    &root.to_string(),
+                    Some("camp-1"),
+                    Some(0.001),
+                ),
+                at(5),
+            )
+            .unwrap();
+        let mut cos = DecisionLogUsage::cos_turn("cos-sess", 1, Some("camp-1"));
+        cos.list_cost_usd = Some(0.25);
+        store.decision_log_record_usage(&cos, at(6)).unwrap();
+
+        let usage = store.decision_log_usage_list(Some("camp-1")).unwrap();
+        let roles: Vec<UsageRole> = usage.iter().map(|u| u.role).collect();
+        for r in [
+            UsageRole::Cos,
+            UsageRole::Planner,
+            UsageRole::Worker,
+            UsageRole::Reviewer,
+            UsageRole::Jev,
+        ] {
+            assert!(roles.contains(&r), "{r:?} の行が無い");
+        }
+        assert!(
+            usage
+                .iter()
+                .any(|u| u.is_retry && u.role == UsageRole::Worker)
+        );
+        let m = store.decision_log_campaign_metering("camp-1").unwrap();
+        // 4 run + Jev は直接帰属、CoS は共有オーバーヘッド（run 単位の合計に混ざらない）。
+        assert_eq!(m.direct.n_rows, 5);
+        assert_eq!(m.shared_overhead.n_rows, 1);
+        assert_eq!(m.shared_overhead.list_cost_usd.sum, Some(0.25));
+        assert!((m.direct.list_cost_usd.sum.unwrap() - 2.001).abs() < 1e-9);
+        assert_eq!(m.by_attribution_rule.get(ATTRIBUTION_COS_SHARED), Some(&1));
+        assert_eq!(m.by_attribution_rule.get(ATTRIBUTION_JEV_SUBJECT), Some(&1));
+        assert_eq!(m.by_attribution_rule.get("none"), Some(&4));
+        // 区分は混ざらない: 実支出は 1 件も観測していない（定価換算で埋めない）。
+        assert_eq!(m.direct.cash_cost_usd.sum, None);
+        assert_eq!(m.direct.cash_cost_usd.n_missing, 5);
+    }
+
+    /// 同じ event・同じ呼び出しを何度処理しても行数も合計も変わらない。
+    #[test]
+    fn reprocessing_the_same_events_does_not_double_count() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        let root = campaign_root(&store);
+        let jev =
+            DecisionLogUsage::jev_call("wu-1", 1, &root.to_string(), Some("camp-1"), Some(0.002));
+        let once = {
+            write_for(&store, root, &all_kinds_events());
+            store.decision_log_record_usage(&jev, at(1)).unwrap();
+            store.decision_log_campaign_metering("camp-1").unwrap()
+        };
+        for _ in 0..3 {
+            write_for(&store, root, &all_kinds_events());
+            store.decision_log_record_usage(&jev, at(1)).unwrap();
+        }
+        let again = store.decision_log_campaign_metering("camp-1").unwrap();
+        assert_eq!(once.direct, again.direct);
+        assert_eq!(once.run_wall_sum_ms, again.run_wall_sum_ms);
+        assert_eq!(again.direct.n_rows, 5);
+        assert_eq!(
+            store.decision_log_usage_list(Some("camp-1")).unwrap().len(),
+            5
+        );
+    }
+
+    /// 欠測（NULL）と 0 は区別される。usage の無い run を 0 にしない。
+    #[test]
+    fn missing_usage_stays_null_and_is_distinct_from_zero() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        let root = campaign_root(&store);
+        let zero = Event::WorkerFinished {
+            run_id: "zero".into(),
+            outcome: "x".into(),
+            usage: Some(Usage {
+                input_tokens: Some(0),
+                output_tokens: Some(0),
+                cache_read_tokens: None,
+                cache_creation_tokens: None,
+                cost_usd: Some(0.0),
+                duplicate_reads: None,
+                session_resumed: None,
+                context_tokens: None,
+            }),
+            role: None,
+            metrics: Some(RunMetrics {
+                wall_ms: 0,
+                retries: 0,
+                peak_context_tokens: None,
+                turns: None,
+            }),
+            end: Some(RunEnd::Completed),
+        };
+        let none = Event::WorkerFinished {
+            run_id: "none".into(),
+            outcome: "x".into(),
+            usage: None,
+            role: None,
+            metrics: None,
+            end: Some(RunEnd::Completed),
+        };
+        let events = vec![
+            started("zero", "s", "m"),
+            zero,
+            started("none", "s", "m"),
+            none,
+        ];
+        write_for(&store, root, &events);
+        // Jev は費用が返らなかった呼び出し（欠測）。
+        store
+            .decision_log_record_usage(
+                &DecisionLogUsage::jev_call("wu-1", 1, &root.to_string(), Some("camp-1"), None),
+                at(1),
+            )
+            .unwrap();
+        let usage = store.decision_log_usage_list(Some("camp-1")).unwrap();
+        let get = |k: &str| usage.iter().find(|u| u.key.dedup_key() == k).unwrap();
+        let z = get("run:zero:worker_finished");
+        assert_eq!(z.input_tokens, Some(0));
+        assert_eq!(z.list_cost_usd, Some(0.0));
+        assert_eq!(z.wall_ms, Some(0));
+        let n = get("run:none:worker_finished");
+        assert_eq!(n.input_tokens, None);
+        assert_eq!(n.list_cost_usd, None);
+        assert_eq!(n.wall_ms, None);
+        assert_eq!(get("decision:jev:wu-1:1").list_cost_usd, None);
+        let m = store.decision_log_campaign_metering("camp-1").unwrap();
+        // 合計は観測した 0 だけ。欠測 2 件（none run と Jev）は n_missing に出て 0 として足されない。
+        assert_eq!(m.direct.list_cost_usd.sum, Some(0.0));
+        assert_eq!(m.direct.list_cost_usd.n_observed, 1);
+        assert_eq!(m.direct.list_cost_usd.n_missing, 2);
+        assert_eq!(m.run_wall_sum_ms.n_missing, 1);
+    }
+
+    /// elapsed（壁時計）と run 時間の総和は別欄。並列 run では総和が elapsed を超える。
+    #[test]
+    fn elapsed_and_run_time_sum_are_separate_fields() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        let root = campaign_root(&store);
+        // 60 秒の run 2 本が並列に走った。campaign は 90 秒で終わった（注入した時計）。
+        let events = vec![
+            started("a", "s", "m"),
+            finished("a", RunEnd::Completed, 60_000, 0, 1),
+            started("b", "s", "m"),
+            finished("b", RunEnd::Completed, 60_000, 0, 1),
+        ];
+        write_decision_log(
+            &store,
+            project_decision_log(&events, &root.to_string(), None),
+            at(90),
+        )
+        .unwrap();
+        // 古い時刻での再処理は elapsed を縮めない。
+        write_decision_log(
+            &store,
+            project_decision_log(&events, &root.to_string(), None),
+            at(10),
+        )
+        .unwrap();
+        let m = store.decision_log_campaign_metering("camp-1").unwrap();
+        assert_eq!(m.elapsed_ms, Some(90_000));
+        assert_eq!(m.run_wall_sum_ms.sum, Some(120_000.0));
+        // 識別の無い campaign は elapsed を出せない（0 にしない）。
+        let none = store.decision_log_campaign_metering("camp-none").unwrap();
+        assert_eq!(none.elapsed_ms, None);
+        assert_eq!(none.run_wall_sum_ms.sum, None);
     }
 }

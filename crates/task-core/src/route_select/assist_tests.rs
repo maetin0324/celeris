@@ -20,6 +20,7 @@ fn ok_entry(s: SpecificityHint, conf: f64) -> ClassificationEntry {
             confidence: Some(conf),
         }),
         model_snapshot: None,
+        cost_usd: None,
     }
 }
 

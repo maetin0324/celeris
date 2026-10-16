@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build a standalone web gateway bundle with an offline pnpm store.
+# Build a standalone web gateway bundle with a private offline pnpm store (prod deps only).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -24,9 +24,9 @@ pkg.release = process.argv[3];
 fs.writeFileSync(process.argv[2], `${JSON.stringify(pkg, null, 2)}\n`);
 NODE
 
-STORE="$(corepack pnpm@12.6.0 store path)"
-mkdir -p "$STAGE/.pnpm-store"
-cp -a "$STORE" "$STAGE/.pnpm-store/"
+# 共有 store（`pnpm store path`）は host の他の pnpm が同時に書き換える。丸ごと写すと壊れた写しが入るので、
+# 配布物専用の空 store に lockfile の prod 依存だけを fetch する（ADR 2026-10-16-web-bundle-private-store）。
+corepack pnpm@12.6.0 -C "$STAGE" fetch --prod
 corepack pnpm@12.6.0 -C "$STAGE" install --prod --offline --frozen-lockfile
 rm -rf "$STAGE/node_modules"
 

@@ -42,7 +42,7 @@ impl<A: Executor, BC: Executor> Executor for ArmDispatch<A, BC> {
     fn is_async(&self) -> bool {
         true
     }
-    fn routing(&self, r: &TrialRequest) -> Value {
+    fn routing(&self, r: &TrialRequest) -> Result<Value, String> {
         self.by_req(r).routing(r)
     }
     fn lookup(&self, key: &str) -> Result<Option<TaskRef>, String> {

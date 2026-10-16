@@ -62,8 +62,9 @@ pub trait Executor {
     }
 
     /// 試行ごとに task 単位で固定する routing 設定（台帳に投入前に記録する）。
-    fn routing(&self, _req: &TrialRequest) -> Value {
-        Value::Null
+    /// Err は投入前の拒否（B/C の routing 欠落・C の根拠表 id 無し）で、その試行は executor_error になる。
+    fn routing(&self, _req: &TrialRequest) -> Result<Value, String> {
+        Ok(Value::Null)
     }
 
     /// 冪等キーで既に投入済みの task を照会する。応答喪失・再起動後の再開手順の第 1 段。
@@ -268,8 +269,8 @@ impl Executor for MockAsyncExecutor {
         true
     }
 
-    fn routing(&self, req: &TrialRequest) -> Value {
-        serde_json::json!({"mode": "mock", "arm": format!("{:?}", req.config.id)})
+    fn routing(&self, req: &TrialRequest) -> Result<Value, String> {
+        Ok(serde_json::json!({"mode": "mock", "arm": format!("{:?}", req.config.id)}))
     }
 
     fn lookup(&self, key: &str) -> Result<Option<TaskRef>, String> {

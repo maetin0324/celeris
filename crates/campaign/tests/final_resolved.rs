@@ -11,7 +11,9 @@ fn root() -> PathBuf {
 }
 
 fn committed() -> CampaignManifest {
-    let p = root().join("../../agent-docs/progress/2026-10-16-mlsys-final/final.json");
+    let p = root()
+        .join("../../agent-docs")
+        .join("progress/2026-10-16-mlsys-final/final.json");
     CampaignManifest::load(&p).expect("final.json")
 }
 

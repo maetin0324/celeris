@@ -173,6 +173,8 @@ impl H {
     }
     fn req(&self, timeout_secs: u64) -> TrialRequest<'_> {
         TrialRequest {
+            campaign_id: "c1",
+            manifest_sha256: "m1",
             config: &self.cfg,
             problem_id: "p0",
             prompt: "fix it",

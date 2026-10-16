@@ -256,6 +256,8 @@ fn claude_code_a_is_started_with_a_permission_mode_and_cache_usage_is_parsed() {
     let m = campaign(&i, 1, 1, TokenBasis::All);
     let d = tempfile::tempdir().expect("dir");
     let req = TrialRequest {
+        campaign_id: "c1",
+        manifest_sha256: "m1",
         config: &m.configs[0],
         problem_id: "p0",
         prompt: "do it",

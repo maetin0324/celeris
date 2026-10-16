@@ -248,6 +248,8 @@ fn exec(f: &Fake, dir: &Path, timeout: u64) -> CelerisExecutor<Fake> {
 
 fn req<'a>(c: &'a Config, dir: &'a Path) -> TrialRequest<'a> {
     TrialRequest {
+        campaign_id: "c1",
+        manifest_sha256: "m1",
         config: c,
         problem_id: "p0",
         prompt: "fix the bug",
@@ -678,4 +680,29 @@ fn runner_waits_keeps_workspace_and_resumes_same_celeris_tasks() {
     let lg = Ledger::open(&opts.out).expect("ledger");
     assert_eq!(lg.get(&key(ConfigId::B)).expect("b").task_id, rb.task_id);
     assert!(lg.referenced_workspaces().is_empty());
+}
+
+// ---- 識別を通常の作成 API（POST /tasks）に載せる ----
+
+#[test]
+fn body_carries_campaign_identity_and_idempotency_key() {
+    let dir = tempfile::tempdir().expect("dir");
+    let f = Fake::new();
+    let e = exec(&f, dir.path(), 1800);
+    let c = cfg(ConfigId::C, Some(c_routing()));
+    let mut r = req(&c, dir.path());
+    r.rep = 2;
+    let b = e.body(&r, KEY).expect("body");
+    assert_eq!(
+        b["campaign"],
+        json!({"campaign_id": "c1", "case_id": "p0", "arm": "C", "repetition": 2,
+               "manifest_hash": "m1", "routing_setting": "decision_assisted"})
+    );
+    assert_eq!(b["campaign_idempotency_key"], json!(idempotency_label(KEY)));
+    assert!(
+        b["labels"]
+            .as_array()
+            .expect("labels")
+            .contains(&json!(idempotency_label(KEY)))
+    );
 }

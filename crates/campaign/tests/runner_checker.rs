@@ -32,6 +32,7 @@ fn campaign(i: &Input, split: Split, n: usize, max_tokens: u64, attempts: u32) -
         model: "m".into(),
         model_version: "1".into(),
         policy_version: "p1".into(),
+        routing: None,
     };
     CampaignManifest {
         schema: celeris_campaign::CAMPAIGN_SCHEMA.into(),
@@ -422,11 +423,17 @@ fn run_refuses_split_mix_and_unknown_executor_path_has_no_network_code() {
     for f in fs::read_dir(src).expect("src") {
         let p = f.expect("e").path();
         let t = fs::read_to_string(&p).expect("r");
+        // 子 process は A arm の harness_exec.rs だけが起動する（command は注入、実 LLM は呼ばない）。
+        let spawns = p.file_name().is_some_and(|n| n == "harness_exec.rs");
         for bad in [
             "reqwest",
             "std::net",
             "TcpStream",
-            "process::Command",
+            if spawns {
+                "reqwest"
+            } else {
+                "process::Command"
+            },
             "tokio::net",
             "api.anthropic",
             "api.openai",

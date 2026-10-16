@@ -8,7 +8,9 @@ use std::collections::BTreeMap;
 pub const DEFAULT_POLICY_VERSION: &str = "mlsys-min-1";
 pub const DEFAULT_MIN_CONFIDENCE: f64 = 0.6;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum RoutingMode {
     #[default]

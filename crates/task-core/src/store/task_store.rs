@@ -61,6 +61,13 @@ pub trait TaskStore:
         genre: &str,
         harness_id: &str,
     ) -> Result<Vec<crate::routing_evidence::EvidenceRow>, StoreError>;
+    /// 指定版（`evidence_version`）の根拠表。task 欄 `routing_override.evidence_table_id` の固定読み。
+    fn routing_evidence_at(
+        &self,
+        genre: &str,
+        harness_id: &str,
+        version: &str,
+    ) -> Result<Vec<crate::routing_evidence::EvidenceRow>, StoreError>;
     fn routing_stage(
         &self,
         genre: &str,
@@ -152,6 +159,11 @@ pub trait TaskStore:
         &self,
         work_unit_id: &str,
     ) -> Result<Option<Vec<String>>, StoreError>;
+    /// ADR 2026-10-16-mlsys-measure-task-routing: task 欄の routing 固定（無ければ `None` = config に従う）。
+    fn task_routing_override(
+        &self,
+        task_id: TaskId,
+    ) -> Result<Option<crate::route_select::RoutingOverride>, StoreError>;
     fn insert(&self, task: &Task) -> Result<(), StoreError>;
     fn get(&self, id: TaskId) -> Result<Option<Task>, StoreError>;
     fn list(&self, filter: Option<Status>) -> Result<Vec<Task>, StoreError>;

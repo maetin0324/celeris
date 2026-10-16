@@ -2277,6 +2277,9 @@ export type Event = {
   "type": "routing_outcome_recorded";
   "wall_ms"?: number | null;
 } | {
+  "routing_override": RoutingOverride;
+  "type": "routing_override_pinned";
+} | {
   "candidate_model"?: string | null;
   "candidate_source"?: string | null;
   "cash_usd"?: number | null;
@@ -3592,6 +3595,8 @@ export type MilestoneView = {
   "updated_at": string;
 };
 
+export type ModeSource = "task" | "config";
+
 export type ModelCatalogItem = {
   "available": boolean;
   "capabilities": unknown;
@@ -3678,6 +3683,7 @@ export type NewTaskBody = {
   "repos"?: Array<string>;
   "requirements"?: TaskRequirements;
   "role"?: string | null;
+  "routing_override"?: RoutingOverride | null;
   "skills"?: Array<string>;
   "stages_hint"?: Array<StageHint>;
   "status"?: Status | null;
@@ -4644,6 +4650,14 @@ export type ResolveResponse = {
   "operation": OperationView;
 };
 
+export type ResolvedRouting = {
+  "evidence_table_id"?: string | null;
+  "lower_policy": string;
+  "mode": RoutingMode;
+  "online_update": boolean;
+  "source": ModeSource;
+};
+
 export type RetryBody = {
   "accept"?: boolean;
   "execution"?: ExecutionMode | null;
@@ -4757,6 +4771,7 @@ export type RouteDecision2 = {
   "quota_remaining": {
   [key: string]: number;
 };
+  "routing_resolved"?: ResolvedRouting | null;
   "rule": RouteRule;
   "run_id"?: string | null;
   "schema": string;
@@ -4840,6 +4855,8 @@ export type RoutingFeaturesRecord = {
   "stage"?: FeatureStage | null;
 };
 
+export type RoutingMode = "fixed" | "decision_assisted";
+
 export type RoutingOutcome = {
   "acceptance_passed"?: boolean | null;
   "cash_usd"?: number | null;
@@ -4859,6 +4876,13 @@ export type RoutingOutcome = {
 };
 
 export type RoutingOutcomeState = "not_recorded" | "unreviewed" | "judged";
+
+export type RoutingOverride = {
+  "evidence_table_id"?: string | null;
+  "lower_policy"?: string | null;
+  "mode": RoutingMode;
+  "online_update"?: boolean;
+};
 
 export type RoutingRecord = {
   "decision": LaneDecision;

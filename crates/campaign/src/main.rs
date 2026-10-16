@@ -1,11 +1,20 @@
 use std::{path::PathBuf, process::ExitCode};
 
 use celeris_campaign::{
-    checker, executor::MockExecutor, export, manifest::CampaignManifest, runner,
+    celeris_exec::CelerisExecutor,
+    checker,
+    curl_transport::CurlTransport,
+    dispatch::ArmDispatch,
+    executor::MockExecutor,
+    export,
+    harness_exec::{ClaudeCodeBuilder, HarnessExecutor},
+    ledger::Ledger,
+    manifest::CampaignManifest,
+    runner,
 };
 
 const USAGE: &str = "usage: celeris-campaign <dry-run|validate|run|check|check-report|export> --manifest <path> \
-[--input-manifest <path>] [--out <dir>] [--executor mock] [--dest <dir>] \
+[--input-manifest <path>] [--out <dir>] [--executor mock|harness|celeris] [--api-url <url> --token-env <ENV_NAME> [--task-template <json>]] [--dest <dir>] \
 [--report <file>] [--repo-src <dir>] [--materials-src <dir>] [--kb-src <dir>]";
 
 fn arg(args: &[String], name: &str) -> Option<PathBuf> {
@@ -31,30 +40,87 @@ fn run(args: Vec<String>) -> Result<String, String> {
             Ok(m.compute_sha256()?)
         }
         "run" => {
-            // 実 LLM・外部 network を呼ぶ実行器はこの crate にない。mock のみ。
-            let which = arg(&args, "--executor").ok_or("--executor mock is required")?;
-            if which.to_string_lossy() != "mock" {
-                return Err(format!(
-                    "unknown executor {which:?}: only `mock` is available"
-                ));
-            }
+            let which =
+                arg(&args, "--executor").ok_or("--executor mock|harness|celeris is required")?;
+            let which = which.to_string_lossy().into_owned();
             let input = m.load_input(&manifest_path, arg(&args, "--input-manifest").as_deref())?;
+            let out_dir = out()?;
             let opts = runner::RunOptions {
-                out: out()?,
+                out: out_dir.clone(),
                 repo_src: arg(&args, "--repo-src"),
                 materials_src: arg(&args, "--materials-src"),
                 kb_src: arg(&args, "--kb-src"),
             };
-            let rep = runner::run(&m, &input, &MockExecutor::seeded(), &opts)?;
+            let rep = match which.as_str() {
+                "mock" => runner::run(&m, &input, &MockExecutor::seeded(), &opts)?,
+                "harness" => runner::run(
+                    &m,
+                    &input,
+                    &HarnessExecutor::new(
+                        out_dir.join("harness-state"),
+                        Box::new(ClaudeCodeBuilder::default()),
+                    ),
+                    &opts,
+                )?,
+                "celeris" => {
+                    // 秘密の値は受け取らない: token は環境変数の「名前」だけ。
+                    let url = arg(&args, "--api-url").ok_or("--api-url is required for celeris")?;
+                    let tok = arg(&args, "--token-env")
+                        .ok_or("--token-env <ENV_NAME> is required for celeris")?;
+                    let template = match arg(&args, "--task-template") {
+                        Some(p) => {
+                            let v: serde_json::Value = serde_json::from_slice(
+                                &std::fs::read(&p).map_err(|e| format!("{}: {e}", p.display()))?,
+                            )
+                            .map_err(|e| format!("{}: {e}", p.display()))?;
+                            v.as_object()
+                                .cloned()
+                                .ok_or("--task-template must be a JSON object")?
+                        }
+                        None => serde_json::Map::new(),
+                    };
+                    let transport =
+                        CurlTransport::new(&url.to_string_lossy(), &tok.to_string_lossy())?;
+                    let bc = CelerisExecutor::new(
+                        transport,
+                        template,
+                        m.termination.trial_timeout_secs,
+                        out_dir.join("cluster-cancel.jsonl"),
+                    );
+                    // A 腕を含む manifest でも同じ入口で走る。A は既存ハーネス（後付け制限なし）。
+                    let a = HarnessExecutor::new(
+                        out_dir.join("harness-state"),
+                        Box::new(ClaudeCodeBuilder::default()),
+                    );
+                    runner::run(&m, &input, &ArmDispatch { a, bc }, &opts)?
+                }
+                other => {
+                    return Err(format!(
+                        "unknown executor {other:?}: expected mock|harness|celeris"
+                    ));
+                }
+            };
+            let mut by_state = std::collections::BTreeMap::<String, u64>::new();
+            let mut rows = 0u64;
+            for r in Ledger::open(&out_dir)?.rows() {
+                rows += 1;
+                let st = serde_json::to_value(r.state)
+                    .ok()
+                    .and_then(|v| v.as_str().map(String::from))
+                    .unwrap_or_default();
+                *by_state.entry(st).or_default() += 1;
+            }
             Ok(format!(
-                "{{\"executed\":{},\"resumed_skipped\":{},\"budget_cancelled\":{},\"blocked\":{},\"waiting\":{},\"tokens_total\":{},\"budget_stopped\":{}}}",
+                "{{\"executed\":{},\"resumed_skipped\":{},\"budget_cancelled\":{},\"blocked\":{},\"waiting\":{},\"tokens_total\":{},\"budget_stopped\":{},\"ledger\":{{\"rows\":{},\"by_state\":{}}}}}",
                 rep.executed,
                 rep.resumed_skipped,
                 rep.budget_cancelled,
                 rep.blocked,
                 rep.waiting,
                 rep.tokens_total,
-                rep.budget_stopped
+                rep.budget_stopped,
+                rows,
+                serde_json::to_string(&by_state).map_err(|e| e.to_string())?
             ))
         }
         "check" => {

@@ -50,18 +50,6 @@ fn ping_body(model: &str) -> serde_json::Value {
     })
 }
 
-#[cfg(test)]
-mod ping_body_tests {
-    #[test]
-    fn noul_ping_has_no_string_criteria() {
-        let b = super::ping_body("typesafe/jev-1.14");
-        let q = &b["questions"]["ok"];
-        assert_eq!(q["type"], "noul");
-        assert!(q.get("criteria").is_none());
-        assert!(q["instructions"].is_string());
-    }
-}
-
 impl CredentialVerifier for JevVerifier {
     fn verify(&self, _secret_id: &str, value: &str) -> VerifyOutcome {
         std::thread::scope(|s| {
@@ -77,5 +65,17 @@ impl CredentialVerifier for JevVerifier {
             .join()
             .unwrap_or(VerifyOutcome::Transient)
         })
+    }
+}
+
+#[cfg(test)]
+mod ping_body_tests {
+    #[test]
+    fn noul_ping_has_no_string_criteria() {
+        let b = super::ping_body("typesafe/jev-1.14");
+        let q = &b["questions"]["ok"];
+        assert_eq!(q["type"], "noul");
+        assert!(q.get("criteria").is_none());
+        assert!(q["instructions"].is_string());
     }
 }

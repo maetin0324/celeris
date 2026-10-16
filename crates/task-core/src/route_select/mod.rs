@@ -6,6 +6,7 @@ pub mod evidence;
 pub mod lane;
 pub mod policy;
 pub mod stage;
+pub mod task_override;
 pub mod trace;
 
 pub use assist::{
@@ -30,6 +31,9 @@ pub use policy::{NoRoute, PolicyInput, PolicyOutput, SelectionSource, select};
 pub use stage::{
     GuardrailInput, GuardrailReason, GuardrailResult, RoutingStage, RoutingStageChange,
     evaluate_guardrail,
+};
+pub use task_override::{
+    ModeSource, ResolvedRouting, RoutingOverride, RoutingOverrideError, resolve_routing,
 };
 pub use trace::{
     EvidenceSnapshot, RouteAction, RouteCandidate, RouteDecision, RouteDecisionInput,

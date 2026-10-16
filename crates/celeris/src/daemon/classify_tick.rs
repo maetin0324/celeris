@@ -58,10 +58,10 @@ impl ClassifyTick {
     }
 
     /// 分類した件数を返す。store の読み取り失敗は warn して続ける（dispatch は止めない）。
+    /// mode は task ごとに解決する（task 欄 `routing_override` が config の `mode` より優先。ADR 2026-10-16-mlsys-measure-task-routing）:
+    /// config が fixed でも decision_assisted に固定した task は分類し、config が decision_assisted でも fixed に
+    /// 固定した task は分類しない。
     pub(crate) async fn run(&self, store: &dyn TaskStore, mode: RoutingMode) -> usize {
-        if mode == RoutingMode::Fixed {
-            return 0;
-        }
         let mut tasks = match store.ready_tasks(WINDOW) {
             Ok(t) => t,
             Err(error) => {
@@ -75,6 +75,12 @@ impl ClassifyTick {
         }
         let mut done = 0;
         for task in tasks {
+            let routing_override = task_dispatch::task_routing_override(store, task.id);
+            let mode =
+                task_core::route_select::resolve_routing(mode, routing_override.as_ref()).mode;
+            if mode == RoutingMode::Fixed {
+                continue;
+            }
             let units = store.work_units_for(task.id).unwrap_or_default();
             let subjects = if units.is_empty() {
                 vec![(task.id.to_string(), task_input(&task))]
@@ -204,15 +210,23 @@ mod tests {
         }
     }
 
-    fn fixture(
-        script: Vec<Result<ClassifyOutcome, JevError>>,
-    ) -> (
+    type Fixture = (
         ClassifyTick,
         Arc<Fake>,
         ClassificationBoard,
         SqliteStore,
         Task,
-    ) {
+    );
+
+    fn fixture(script: Vec<Result<ClassifyOutcome, JevError>>) -> Fixture {
+        fixture_with(script, None)
+    }
+
+    /// `routing_override` は `POST /tasks` と同じ JSON（task 欄の routing 固定）。
+    fn fixture_with(
+        script: Vec<Result<ClassifyOutcome, JevError>>,
+        routing_override: Option<serde_json::Value>,
+    ) -> Fixture {
         let store = SqliteStore::open_in_memory().expect("store");
         let spec: task_ops::add::NewTaskSpec = serde_json::from_value(serde_json::json!({
             "title": "t", "objective": "fix the typo", "status": "ready", "acceptance": [{"type": "command", "cmd": "true"}]
@@ -220,6 +234,12 @@ mod tests {
         .expect("spec");
         let task = task_ops::add::create_task(&store, spec, time::OffsetDateTime::now_utc())
             .expect("task");
+        if let Some(o) = routing_override {
+            let o = serde_json::from_value(o).expect("routing_override");
+            store
+                .set_task_routing_override(task.id, &o, "2026-10-16")
+                .expect("pin routing_override");
+        }
         let fake = Arc::new(Fake {
             calls: AtomicUsize::new(0),
             script: Mutex::new(script),
@@ -303,6 +323,25 @@ mod tests {
         assert_eq!(tick.run(&store, RoutingMode::Fixed).await, 0);
         assert!(board.get(&task.id.to_string()).is_none());
         assert_eq!(fake.calls.load(Ordering::SeqCst), 0);
+    }
+
+    /// ADR 2026-10-16-mlsys-measure-task-routing: task 欄の mode が config の mode より優先する（分類段も task ごとに解決する）。
+    #[tokio::test]
+    async fn task_routing_override_beats_the_config_mode() {
+        // config は decision_assisted、task は fixed に固定 → 分類器を呼ばず board も空。
+        let (tick, fake, board, store, task) =
+            fixture_with(vec![], Some(serde_json::json!({"mode": "fixed"})));
+        assert_eq!(tick.run(&store, RoutingMode::DecisionAssisted).await, 0);
+        assert!(board.get(&task.id.to_string()).is_none());
+        assert_eq!(fake.calls.load(Ordering::SeqCst), 0);
+        // config は fixed、task は decision_assisted に固定 → 分類する。
+        let (tick, fake, board, store, task) = fixture_with(
+            vec![],
+            Some(serde_json::json!({"mode": "decision_assisted"})),
+        );
+        assert_eq!(tick.run(&store, RoutingMode::Fixed).await, 1);
+        assert!(board.get(&task.id.to_string()).is_some());
+        assert_eq!(fake.calls.load(Ordering::SeqCst), 1);
     }
 
     #[test]

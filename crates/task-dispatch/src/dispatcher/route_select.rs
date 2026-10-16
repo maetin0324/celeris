@@ -74,6 +74,8 @@ pub struct RouteContext {
     pub run_id: Option<String>,
     pub features: Option<RouteFeaturesRef>,
     pub work_unit_id: Option<String>,
+    /// task 欄 `routing_override.evidence_table_id`: 最新版ではなくこの版の根拠表だけを読む（無ければ従来の最新版）。
+    pub evidence_version: Option<String>,
 }
 
 /// The admitted route.
@@ -788,20 +790,31 @@ impl Dispatcher {
         state.run_seed = context.run_id.clone();
         state.features = context.features.clone();
         state.work_unit_id = context.work_unit_id.clone();
-        self.fill_route_stage(input, &mut state);
+        self.fill_route_stage(input, context.evidence_version.as_deref(), &mut state);
         route_select(input, &self.llm_route_registry, &state)
     }
 
     /// Read the genre×harness stage and the latest evidence rows of every harness this request can
     /// select. A store error leaves the harness without a row, which means `shadow` and no evidence:
     /// the declared `route_defaults` column decides (fail closed, never an undeclared source).
-    fn fill_route_stage(&self, input: &RouteInput, state: &mut RouteState) {
+    fn fill_route_stage(
+        &self,
+        input: &RouteInput,
+        evidence_version: Option<&str>,
+        state: &mut RouteState,
+    ) {
         let genre = input.harness.genre.as_deref().unwrap_or_default();
         let Ok(harnesses) = harness_candidates(&input.harness, &self.llm_route_registry) else {
             return;
         };
         for harness in harnesses {
-            match self.store.latest_routing_evidence(genre, harness.as_ref()) {
+            let rows = match evidence_version {
+                Some(version) => self
+                    .store
+                    .routing_evidence_at(genre, harness.as_ref(), version),
+                None => self.store.latest_routing_evidence(genre, harness.as_ref()),
+            };
+            match rows {
                 Ok(rows) => {
                     state.evidence.insert(harness.clone(), rows);
                 }

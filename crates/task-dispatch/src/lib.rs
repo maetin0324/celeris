@@ -51,7 +51,9 @@ pub use dispatcher::{
     route_select,
 };
 /// wire-mode: 分類段（daemon）が書き、dispatcher の lane 層が読む board。
-pub use dispatcher::{BoardItem, ClassificationBoard, CredentialGate, lane_facts};
+pub use dispatcher::{
+    BoardItem, ClassificationBoard, CredentialGate, lane_facts, task_routing_override,
+};
 /// policy-close: 失敗の分類・限定エスカレーションの行動・利用可否による起動の可否（統合試験が公開 API から使う）。
 pub use dispatcher::{
     FailureAction, FailureOrigin, LaunchAdmission, admit_by_availability, classify_failure,

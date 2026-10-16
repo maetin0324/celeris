@@ -561,17 +561,31 @@ impl Dispatcher {
                 }
             }
         });
+        // task 欄の routing 固定（ADR 2026-10-16-mlsys-measure-task-routing）。無ければ従来（config）。
+        let routing_override = lane_assist::task_routing_override(self.store.as_ref(), task.id);
         let (route_outcome, mut route_trace) = self.select_route_with(
             &route_input,
             &route_select::RouteContext {
                 run_id: Some(run_id.clone()),
                 features: route_features.clone(),
                 work_unit_id: current_wu.as_ref().map(|wu| wu.id.clone()),
+                evidence_version: routing_override
+                    .as_ref()
+                    .and_then(|o| o.evidence_table_id.clone()),
             },
         );
         if let (Some(record), Some(decision)) = (lane_assist_record, route_trace.decision.as_mut())
         {
             decision.lane_assist = Some(record);
+        }
+        // task 欄で routing を固定した task だけ、解決結果（mode・出自・下段・根拠表・online 更新）を判断 record に残す。
+        if routing_override.is_some()
+            && let Some(decision) = route_trace.decision.as_mut()
+        {
+            decision.routing_resolved = Some(task_core::route_select::resolve_routing(
+                self.routing_mode,
+                routing_override.as_ref(),
+            ));
         }
         let launch = match &route_outcome {
             Ok(pick) => self

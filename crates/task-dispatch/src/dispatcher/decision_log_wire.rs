@@ -87,6 +87,12 @@ fn fill_proposal(p: &mut DecisionLogProposal, record: &task_core::RoutingRecord)
     let Some(d) = record.features.as_ref().and_then(|f| f.decision.as_deref()) else {
         return;
     };
+    // task 欄で固定した routing の mode（ADR 2026-10-16-mlsys-measure-task-routing）。固定の無い task は他の writer の値を残す。
+    if let Some(resolved) = &d.routing_resolved {
+        p.routing_mode = serde_json::to_value(resolved.mode)
+            .ok()
+            .and_then(|v| v.as_str().map(str::to_string));
+    }
     p.proposed_candidates = d
         .candidates
         .iter()

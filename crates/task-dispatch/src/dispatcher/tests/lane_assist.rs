@@ -281,18 +281,21 @@ fn dispatch_with_override(
     board: Option<BoardItem>,
 ) -> (task_core::RoutingRecord, Task) {
     let ws = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
-    let mut task = hinted_task(ws.path(), task_core::TierSource::Hint);
-    if let Some(mode) = task_mode {
-        task.routing.as_mut().expect("routing").routing_override =
-            Some(task_core::route_select::RoutingOverride {
-                mode,
-                lower_policy: None,
-                evidence_table_id: Some("ev-2026-10-16".into()),
-                online_update: false,
-            });
-    }
+    let sqlite = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<dyn TaskStore> = sqlite.clone();
+    let task = hinted_task(ws.path(), task_core::TierSource::Hint);
     store.insert(&task).unwrap();
+    if let Some(mode) = task_mode {
+        let o = task_core::route_select::RoutingOverride {
+            mode,
+            lower_policy: None,
+            evidence_table_id: Some("ev-2026-10-16".into()),
+            online_update: false,
+        };
+        sqlite
+            .set_task_routing_override(task.id, &o, "2026-10-16")
+            .unwrap();
+    }
     let mut d = dispatcher(store.clone(), question_adapter(), 1);
     d.set_routing_mode(config);
     if let Some(item) = board {

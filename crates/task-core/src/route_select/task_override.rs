@@ -7,7 +7,7 @@ use super::lane::{DEFAULT_POLICY_VERSION, RoutingMode};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// `Task.routing.routing_override`（作成時に固定。`POST /tasks` の `routing_override`）。
+/// `task_routing_overrides` の 1 行（作成時に固定・以後不変。`POST /tasks` の `routing_override`）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RoutingOverride {

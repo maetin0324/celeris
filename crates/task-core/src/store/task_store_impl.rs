@@ -48,6 +48,12 @@ impl TaskStore for SqliteStore {
     ) -> Result<Vec<crate::routing_evidence::EvidenceRow>, StoreError> {
         self.routing_evidence_at_impl(genre, harness_id, version)
     }
+    fn task_routing_override(
+        &self,
+        task_id: TaskId,
+    ) -> Result<Option<crate::route_select::RoutingOverride>, StoreError> {
+        self.task_routing_override_impl(task_id)
+    }
     fn routing_stage(
         &self,
         genre: &str,

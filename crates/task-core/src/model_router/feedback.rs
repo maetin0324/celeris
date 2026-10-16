@@ -378,7 +378,15 @@ pub fn project_run_outcomes(events: &[Event], norm: &RewardNormalization) -> Vec
 }
 
 /// まだ追記されていない outcome（投影のうち、events に同じ `outcome_id` が無いもの）。冪等に追記する入口。
+/// task 欄 `routing_override.online_update = false` で作られた task（`RoutingOverridePinned` で判定）は常に空:
+/// その試行は根拠（オンライン更新）を動かさない（ADR 2026-10-16-mlsys-measure-task-routing）。
 pub fn pending_run_outcomes(events: &[Event], norm: &RewardNormalization) -> Vec<RoutingOutcome> {
+    let frozen = events.iter().any(|e| {
+        matches!(e, Event::RoutingOverridePinned { routing_override } if !routing_override.online_update)
+    });
+    if frozen {
+        return Vec::new();
+    }
     let known: BTreeSet<&str> = events
         .iter()
         .filter_map(|e| match e {

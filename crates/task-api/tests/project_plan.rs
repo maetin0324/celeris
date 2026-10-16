@@ -448,7 +448,7 @@ async fn task_pause_and_resume_cover_the_subtree() {
     assert_eq!(resp.status.as_u16(), 404, "{}", resp.text());
 }
 
-/// ADR 2026-10-16-mlsys-measure-task-routing: `POST /tasks` の `routing_override` は `Task.routing.routing_override` に固定される。
+/// ADR 2026-10-16-mlsys-measure-task-routing: `POST /tasks` の `routing_override` は `task_routing_overrides` と `routing_override_pinned` event に固定される。
 /// 未知の mode・欄・下段版は 4xx（黙って config へ倒さない）。
 #[tokio::test]
 async fn create_accepts_and_pins_routing_override() {
@@ -474,10 +474,16 @@ async fn create_accepts_and_pins_routing_override() {
         .get(id.parse().expect("task id"))
         .expect("get")
         .expect("some");
-    let o = task
-        .routing
-        .and_then(|r| r.routing_override)
+    let o = env
+        .store
+        .task_routing_override(task.id)
+        .expect("read")
         .expect("routing_override");
+    // 解決の入力（固定）は追記専用の event にも残る。
+    assert!(env.store.events_for(task.id).expect("events").iter().any(|(_, e)| matches!(
+        e,
+        task_core::Event::RoutingOverridePinned { routing_override } if routing_override == &o
+    )));
     assert_eq!(o.mode, task_core::route_select::RoutingMode::Fixed);
     assert_eq!(o.evidence_table_id.as_deref(), Some("ev-1"));
     assert!(!o.online_update);

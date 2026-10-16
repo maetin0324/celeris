@@ -159,6 +159,11 @@ pub trait TaskStore:
         &self,
         work_unit_id: &str,
     ) -> Result<Option<Vec<String>>, StoreError>;
+    /// ADR 2026-10-16-mlsys-measure-task-routing: task 欄の routing 固定（無ければ `None` = config に従う）。
+    fn task_routing_override(
+        &self,
+        task_id: TaskId,
+    ) -> Result<Option<crate::route_select::RoutingOverride>, StoreError>;
     fn insert(&self, task: &Task) -> Result<(), StoreError>;
     fn get(&self, id: TaskId) -> Result<Option<Task>, StoreError>;
     fn list(&self, filter: Option<Status>) -> Result<Vec<Task>, StoreError>;

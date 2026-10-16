@@ -18,20 +18,11 @@ use task_core::{Event, TaskId, TaskStore, estimate_cost_usd};
 use crate::error::OpsError;
 
 /// task の run の outcome のうち、まだ追記されていないものを `routing_outcome_recorded` として追記する。
-/// 戻り値は今回追記した件数。task 欄 `routing_override.online_update = false` の task は追記しない（0）:
-/// その試行は根拠（オンライン更新）を動かさない（ADR 2026-10-16-mlsys-measure-task-routing）。
+/// 戻り値は今回追記した件数。
 pub fn record_routing_outcomes<S: TaskStore + ?Sized>(
     store: &S,
     task_id: TaskId,
 ) -> Result<usize, OpsError> {
-    let frozen = store.get(task_id)?.is_some_and(|task| {
-        task.routing
-            .and_then(|r| r.routing_override)
-            .is_some_and(|o| !o.online_update)
-    });
-    if frozen {
-        return Ok(0);
-    }
     let events: Vec<Event> = store
         .events_for(task_id)?
         .into_iter()

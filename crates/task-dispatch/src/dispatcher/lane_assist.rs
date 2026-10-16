@@ -75,9 +75,18 @@ pub fn lane_facts(f: &TaskFeatures) -> LaneFacts {
     }
 }
 
-/// task 欄の routing 固定（無ければ `None` = 従来どおり config に従う）。
-pub fn task_routing_override(task: &Task) -> Option<&task_core::route_select::RoutingOverride> {
-    task.routing.as_ref()?.routing_override.as_ref()
+/// task 欄の routing 固定（無ければ `None` = 従来どおり config に従う）。読めなければ warn して `None`
+/// （dispatch は止めない。解決結果の record に `source: config` が残るので後から分かる）。
+pub fn task_routing_override(
+    store: &dyn TaskStore,
+    task_id: task_core::TaskId,
+) -> Option<task_core::route_select::RoutingOverride> {
+    store
+        .task_routing_override(task_id)
+        .unwrap_or_else(|error| {
+            tracing::warn!(%task_id, %error, "failed to read the task routing override");
+            None
+        })
 }
 
 fn is_credential_failure(status: &ClassifierStatus) -> bool {
@@ -97,7 +106,8 @@ impl Dispatcher {
     /// task 単位の routing の解決（ADR 2026-10-16-mlsys-measure-task-routing）:
     /// task 欄 `routing_override` があれば config の `routing.mode` より優先、無ければ従来。
     pub fn routing_for(&self, task: &Task) -> ResolvedRouting {
-        resolve_routing(self.routing_mode, task_routing_override(task))
+        let routing_override = task_routing_override(self.store.as_ref(), task.id);
+        resolve_routing(self.routing_mode, routing_override.as_ref())
     }
 
     /// 分類段が書き込む board（dispatcher 側は読むだけ）。

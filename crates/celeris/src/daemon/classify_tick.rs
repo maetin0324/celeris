@@ -75,11 +75,9 @@ impl ClassifyTick {
         }
         let mut done = 0;
         for task in tasks {
-            let mode = task_core::route_select::resolve_routing(
-                mode,
-                task_dispatch::task_routing_override(&task),
-            )
-            .mode;
+            let routing_override = task_dispatch::task_routing_override(store, task.id);
+            let mode =
+                task_core::route_select::resolve_routing(mode, routing_override.as_ref()).mode;
             if mode == RoutingMode::Fixed {
                 continue;
             }
@@ -230,15 +228,18 @@ mod tests {
         routing_override: Option<serde_json::Value>,
     ) -> Fixture {
         let store = SqliteStore::open_in_memory().expect("store");
-        let mut body = serde_json::json!({
+        let spec: task_ops::add::NewTaskSpec = serde_json::from_value(serde_json::json!({
             "title": "t", "objective": "fix the typo", "status": "ready", "acceptance": [{"type": "command", "cmd": "true"}]
-        });
-        if let Some(o) = routing_override {
-            body["routing_override"] = o;
-        }
-        let spec: task_ops::add::NewTaskSpec = serde_json::from_value(body).expect("spec");
+        }))
+        .expect("spec");
         let task = task_ops::add::create_task(&store, spec, time::OffsetDateTime::now_utc())
             .expect("task");
+        if let Some(o) = routing_override {
+            let o = serde_json::from_value(o).expect("routing_override");
+            store
+                .set_task_routing_override(task.id, &o, "2026-10-16")
+                .expect("pin routing_override");
+        }
         let fake = Arc::new(Fake {
             calls: AtomicUsize::new(0),
             script: Mutex::new(script),

@@ -184,11 +184,6 @@ pub struct NewTaskSpec {
     /// CoS（`create_task.stages_hint`）が書ける。省略時は空。
     #[serde(default)]
     pub stages_hint: Vec<task_core::StageHint>,
-    /// ADR 2026-10-16-mlsys-measure-task-routing: 試行ごとの routing 設定（mode・下段・根拠表・
-    /// オンライン更新）を task に固定する。`Task.routing.routing_override` に写り、dispatcher は config の
-    /// `[routing] mode` より優先する。省略時は従来（config に従う）。
-    #[serde(default)]
-    pub routing_override: Option<task_core::route_select::RoutingOverride>,
     /// ADR-0069 D1: この spec の出自。**API の JSON からは入らない**（`serde(skip)`。偽装できない）。
     /// 既定は人（`POST /tasks` / `celerisctl add`）。LLM の経路（CoS の actions）はコードが `Agent` を立てる。
     #[serde(skip)]
@@ -581,10 +576,6 @@ fn build_task(
     now: OffsetDateTime,
 ) -> Result<Task, OpsError> {
     validate_stages_hint(&spec.stages_hint)?;
-    if let Some(o) = &spec.routing_override {
-        o.validate()
-            .map_err(|e| OpsError::Validation(e.to_string()))?;
-    }
     let role = spec.role.as_deref().and_then(|r| RoleSpec::find(roles, r));
     if !genres.is_empty()
         && let Some(g) = &spec.genre
@@ -824,7 +815,6 @@ fn build_task(
         // root の planner だけが読む（R2b）。空なら出力しない。
         stages_hint: spec.stages_hint.clone(),
         route: None,
-        routing_override: spec.routing_override.clone(),
     };
     let task = Task {
         harness_id: browser_adapter

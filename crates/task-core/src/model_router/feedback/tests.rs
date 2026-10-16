@@ -299,3 +299,33 @@ fn routing_feedback_events_use_adr_wire_names_and_tolerate_missing_fields() {
     assert_eq!(record.parent_decision_id, None);
     assert!(record.attempts.is_empty());
 }
+
+/// ADR 2026-10-16-mlsys-measure-task-routing: task 欄 `online_update = false` で作られた task は、run が
+/// 終わっても根拠（`routing_outcome_recorded`）を追記しない。`true`（既定）・欄なしなら従来どおり。
+#[test]
+fn online_update_false_leaves_the_evidence_untouched() {
+    let norm = RewardNormalization::default();
+    for (online_update, expected) in [(Some(false), 0), (Some(true), 1), (None, 1)] {
+        let mut events = Vec::new();
+        if let Some(online_update) = online_update {
+            events.push(Event::RoutingOverridePinned {
+                routing_override: crate::route_select::RoutingOverride {
+                    mode: crate::route_select::RoutingMode::Fixed,
+                    lower_policy: None,
+                    evidence_table_id: Some("ev-frozen".into()),
+                    online_update,
+                },
+            });
+        }
+        events.extend([
+            started("r1"),
+            routing_decided("r1"),
+            finished("r1", Some(0.5), RunEnd::Completed),
+        ]);
+        assert_eq!(
+            pending_run_outcomes(&events, &norm).len(),
+            expected,
+            "{online_update:?}"
+        );
+    }
+}

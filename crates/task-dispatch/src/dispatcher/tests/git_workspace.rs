@@ -801,7 +801,6 @@ async fn a_compaction_task_does_not_get_a_worktree_even_when_its_project_has_a_p
         execution: None,
         pause_after: None,
         stages_hint: Vec::new(),
-        routing_override: None,
         provenance: Default::default(),
         status: None,
     };

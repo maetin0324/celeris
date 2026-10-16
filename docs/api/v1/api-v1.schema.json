@@ -11057,6 +11057,23 @@
           "type": "object"
         },
         {
+          "description": "ADR 2026-10-16-mlsys-measure-task-routing D2: 作成時に task 欄で固定した routing 設定（mode・下段・\n根拠表・オンライン更新）。`task_routing_overrides` の行と同じ transaction で 1 回だけ追記する。\n状態は変えない。`online_update = false` なら `routing_outcome_recorded` を追記しない。",
+          "properties": {
+            "routing_override": {
+              "$ref": "#/$defs/RoutingOverride"
+            },
+            "type": {
+              "const": "routing_override_pinned",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "routing_override"
+          ],
+          "type": "object"
+        },
+        {
           "description": "同 §7.1・Phase 4: shadow（decision / execution）1 件の結果。primary の選択・成功/失敗・attempts とは\n別欄で、それらを変えない。本文・prompt・credential は持たない（出力は SHA-256 と tokens だけ）。\n状態は変えない（`replay` は無視する）。",
           "properties": {
             "candidate_model": {
@@ -18274,7 +18291,7 @@
             }
           ],
           "default": null,
-          "description": "ADR 2026-10-16-mlsys-measure-task-routing: 試行ごとの routing 設定（mode・下段・根拠表・\nオンライン更新）を task に固定する。`Task.routing.routing_override` に写り、dispatcher は config の\n`[routing] mode` より優先する。省略時は従来（config に従う）。"
+          "description": "ADR 2026-10-16-mlsys-measure-task-routing: 試行ごとの routing 設定（mode・下段・根拠表・\nオンライン更新）を task に固定する。`task_routing_overrides` に作成と同じ transaction で 1 行書き、dispatcher は config の\n`[routing] mode` より優先する。省略時は従来（config に従う）。未知の値は 400。"
         },
         "skills": {
           "default": [],
@@ -24249,7 +24266,7 @@
     },
     "RoutingOverride": {
       "additionalProperties": false,
-      "description": "`Task.routing.routing_override`（作成時に固定。`POST /tasks` の `routing_override`）。",
+      "description": "`task_routing_overrides` の 1 行（作成時に固定・以後不変。`POST /tasks` の `routing_override`）。",
       "properties": {
         "evidence_table_id": {
           "description": "根拠表 `routing_evidence` の版（`evidence_version`）。指定すると最新版ではなくこの版だけを読む。",
@@ -28043,17 +28060,6 @@
             }
           ],
           "description": "ADR-0124: planner を省く直行経路か、既存の経路を維持するかの判定。"
-        },
-        "routing_override": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/RoutingOverride"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "ADR 2026-10-16-mlsys-measure-task-routing: 試行ごとの routing 設定（mode・下段・根拠表・\nオンライン更新）の task 単位の固定。あれば config の `[routing] mode` より優先、無ければ従来。\n`pause_after` と同じ理由でここに置く（tasks.json の中なので migration は要らない）。"
         },
         "stages_hint": {
           "description": "ADR-0079 D12（Phase R2b）: 人が名指しした段階（`[{\"title\": \"Phase 1\", \"scope\": \"…\"}]`）。/3 の planner\nrun の入力（構造の強制ではない）。`pause_after` と同じ理由でここに置く。書く入口（CoS の\n`create_task.stages_hint`）は R5a。空なら出力しない（既存の JSON は 1 バイトも変わらない）。",

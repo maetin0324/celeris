@@ -46,7 +46,6 @@ fn spec() -> NewTaskSpec {
         execution: None,
         pause_after: None,
         stages_hint: Vec::new(),
-        routing_override: None,
         provenance: SpecProvenance::default(),
     }
 }
@@ -357,38 +356,4 @@ fn route_windows_falls_back_to_the_task_harness() {
         (1, 0, 1)
     );
     assert!((windows[0].wall_median_s - 0.5).abs() < 1e-9);
-}
-
-/// ADR 2026-10-16-mlsys-measure-task-routing: task 欄 `online_update = false` の task は、run が
-/// 終わっても根拠（`routing_outcome_recorded`）を追記しない。`true`（既定）なら従来どおり追記する。
-#[test]
-fn online_update_false_leaves_the_evidence_untouched() {
-    for (online_update, expected) in [(false, 0), (true, 1)] {
-        let store = SqliteStore::open_in_memory().expect("open store");
-        let mut s = spec();
-        s.routing_override = Some(task_core::route_select::RoutingOverride {
-            mode: task_core::route_select::RoutingMode::Fixed,
-            lower_policy: None,
-            evidence_table_id: Some("ev-frozen".into()),
-            online_update,
-        });
-        let task = create_task(&store, s, OffsetDateTime::now_utc()).expect("create task");
-        append_all(&store, task.id, &run_events(&task));
-        assert_eq!(record_routing_outcomes(&store, task.id).unwrap(), expected);
-        assert_eq!(outcomes(&store, task.id).len(), expected);
-    }
-}
-
-/// 未知の下段版は作成時に拒否する（黙って既定へ倒さない）。
-#[test]
-fn unknown_lower_policy_is_rejected_at_create() {
-    let store = SqliteStore::open_in_memory().expect("open store");
-    let mut s = spec();
-    s.routing_override = Some(task_core::route_select::RoutingOverride {
-        mode: task_core::route_select::RoutingMode::DecisionAssisted,
-        lower_policy: Some("mlsys-min-0".into()),
-        evidence_table_id: None,
-        online_update: true,
-    });
-    assert!(create_task(&store, s, OffsetDateTime::now_utc()).is_err());
 }

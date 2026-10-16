@@ -2277,6 +2277,9 @@ export type Event = {
   "type": "routing_outcome_recorded";
   "wall_ms"?: number | null;
 } | {
+  "routing_override": RoutingOverride;
+  "type": "routing_override_pinned";
+} | {
   "candidate_model"?: string | null;
   "candidate_source"?: string | null;
   "cash_usd"?: number | null;
@@ -5580,7 +5583,6 @@ export type TaskRouting = {
   "pause_after"?: PausePolicy;
   "pause_after_source"?: PauseSource;
   "route"?: RouteDecision | null;
-  "routing_override"?: RoutingOverride | null;
   "stages_hint"?: Array<StageHint>;
   "tier_source"?: TierSource;
 };

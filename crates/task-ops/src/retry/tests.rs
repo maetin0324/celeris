@@ -54,7 +54,6 @@ fn base_spec(title: &str) -> crate::add::NewTaskSpec {
         execution: None,
         pause_after: None,
         stages_hint: Vec::new(),
-        routing_override: None,
         provenance: crate::add::SpecProvenance::default(),
     }
 }

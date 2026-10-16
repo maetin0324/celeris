@@ -137,7 +137,7 @@ pub(crate) fn parse_snake<T: DeserializeOwned>(what: &str, value: &str) -> Resul
 }
 
 /// `Event` の serde の `type` 名（`types` クエリの語彙）。
-pub(crate) const EVENT_TYPES: [&str; 83] = [
+pub(crate) const EVENT_TYPES: [&str; 84] = [
     "browser_updated",
     // ADR 2026-10-07-worker-no-subagents-no-llm-cli D5: subagent 道具・別 LLM CLI/API の起動の検出。
     "worker_policy_violation",
@@ -186,6 +186,8 @@ pub(crate) const EVENT_TYPES: [&str; 83] = [
     "routing_features_recorded",
     "routing_request_decided",
     "routing_outcome_recorded",
+    // ADR 2026-10-16-mlsys-measure-task-routing: 作成時の task 欄 routing 固定。
+    "routing_override_pinned",
     "routing_shadow_recorded",
     // ADR-0072 D5（Phase E1）: run 終了時に確定させた checkpoint。
     "checkpoint_saved",
@@ -306,6 +308,7 @@ pub(crate) fn event_type_name(event: &Event) -> &'static str {
         Event::RoutingFeaturesRecorded { .. } => "routing_features_recorded",
         Event::RoutingRequestDecided { .. } => "routing_request_decided",
         Event::RoutingOutcomeRecorded { .. } => "routing_outcome_recorded",
+        Event::RoutingOverridePinned { .. } => "routing_override_pinned",
         Event::RoutingShadowRecorded { .. } => "routing_shadow_recorded",
         Event::CheckpointSaved { .. } => "checkpoint_saved",
         Event::ExecutionPlanned { .. } => "execution_planned",

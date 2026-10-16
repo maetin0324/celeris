@@ -362,16 +362,18 @@ echo '{\"usage\":{\"input_tokens\":5,\"output_tokens\":5}}'
         ..RunOptions::default()
     };
     let mk = || HarnessExecutor::new(d.path().join("state"), Box::new(Stub(stub.clone())));
-    // 1 周目は完了を待たずに戻りうる（Wait）。完了するまで再実行する = resume。
-    let mut executed = 0;
-    for _ in 0..200 {
-        executed = run(&m, &i, &mk(), &opts).expect("run").executed;
-        if executed == 3 {
+    // 1 周目は完了を待たずに戻りうる（Wait）。max_parallel=1 なので 1 回の run は 1 試行ずつ投入する。
+    // 全試行が記録されるまで再実行する = resume（記録済みは resumed_skipped に数えられる）。
+    let mut recorded = 0;
+    for _ in 0..400 {
+        let rep = run(&m, &i, &mk(), &opts).expect("run");
+        recorded = rep.executed + rep.resumed_skipped;
+        if recorded == 3 {
             break;
         }
         sleep(Duration::from_millis(50));
     }
-    assert_eq!(executed, 3);
+    assert_eq!(recorded, 3);
     let lg = Ledger::open(&out).expect("ledger");
     let mh = m.compute_sha256().expect("hash");
     for c in [ConfigId::A, ConfigId::B, ConfigId::C] {

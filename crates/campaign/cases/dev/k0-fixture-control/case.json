@@ -1,0 +1,32 @@
+{
+  "budget": {
+    "max_disk_bytes": 1048576,
+    "max_parallel": 1,
+    "max_tokens": 1000,
+    "max_wall_secs": 600
+  },
+  "evidence": [
+    "log"
+  ],
+  "id": "k0-fixture-control",
+  "kind": "control",
+  "private_ref": {
+    "path": "dev/k0-fixture-control/private.json",
+    "sha256": "8e314f5d258f991c73ebaa738f7819a0450dd1e3cdc094ba914f3f961848384c"
+  },
+  "schema": "celeris.campaign-case/1",
+  "snapshot": {
+    "kb_snapshot": "880e8282f0b89a720fadd6cbb7776f706dcc8697aa7e4e1939fffff716a362d8",
+    "materials_sha256": "b6c9cefc85b185c302f4b125d22e459fe1e842e435e43702e0342b4175ff348a",
+    "repo_commit": "none (control or input-only case)"
+  },
+  "split": "dev",
+  "stages": [
+    "implementation",
+    "experiment",
+    "analysis",
+    "review"
+  ],
+  "title": "fixture/mock 制御試験（本測定に使わない）",
+  "visible_command": "cargo test -p celeris-campaign --test pilot_fixtures"
+}

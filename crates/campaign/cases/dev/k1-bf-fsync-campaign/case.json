@@ -1,0 +1,82 @@
+{
+  "budget": {
+    "max_disk_bytes": 4294967296,
+    "max_parallel": 1,
+    "max_tokens": 80000,
+    "max_wall_secs": 7200
+  },
+  "evidence": [
+    "job_id",
+    "log",
+    "raw_data"
+  ],
+  "experiment": {
+    "cluster": "sirius",
+    "nodes": 3,
+    "params": {
+      "hosts": {
+        "reader": 1,
+        "server": 1,
+        "writer": 1
+      },
+      "ior_flags": [
+        "-e",
+        "-R"
+      ],
+      "phases": [
+        "write",
+        "cross_node_read",
+        "server_sigkill_restart",
+        "restart_read"
+      ],
+      "storage": [
+        "io_uring",
+        "posix"
+      ],
+      "transport": [
+        "ucx",
+        "locusta"
+      ],
+      "xfer_bytes": 4194304
+    },
+    "walltime_secs": 7200
+  },
+  "id": "k1-bf-fsync-campaign",
+  "initial": {
+    "archive_sha256": "5269db3d0639d6f5ec685a3fe4b0beee1ed916457b3b5459388f295c01e7dc8f",
+    "commit": "4115dbd8912d42f4509654e8b06d329760e07e77",
+    "fetch": [
+      "campaign asset store から k1-initial.tar を取得する（provenance は grader 側。試行には tar だけを渡す）",
+      "sha256sum で archive_sha256 と一致を確かめる",
+      "mkdir src && tar -xf k1-initial.tar -C src",
+      "submodule（lib/pluvio・lib/locusta・ior_integration/ior）は別途固定した snapshot を同じ手順で取得する（未固定、progress 参照）"
+    ],
+    "repo": "benchfs",
+    "submodules": [
+      "lib/pluvio@9ecd51ee",
+      "lib/locusta@68f8b210",
+      "ior_integration/ior@7054224d"
+    ],
+    "tree": "5bda9947c168e81275758f3c40aacc094f14c2fd"
+  },
+  "kind": "real",
+  "private_ref": {
+    "path": "dev/k1-bf-fsync-campaign/private.json",
+    "sha256": "080386f5f0f2c79cd8f6e93ee29b3cf991b323b83b2de855fde939aacf4d8b3e"
+  },
+  "schema": "celeris.campaign-case/1",
+  "snapshot": {
+    "kb_snapshot": "741f24146f5c02f44acf5291e23806416b9956809e55a1474488ecbcc9fe0702",
+    "materials_sha256": "3effbc3d0e8c81088a974269579d913a7712c1ae6dcecc3566797d1820493f2d",
+    "repo_commit": "4115dbd8912d42f4509654e8b06d329760e07e77"
+  },
+  "split": "dev",
+  "stages": [
+    "implementation",
+    "experiment",
+    "analysis",
+    "review"
+  ],
+  "title": "BenchFS fsync 経路: 実装→短い実験→報告→レビュー",
+  "visible_command": "cargo test --release --lib"
+}

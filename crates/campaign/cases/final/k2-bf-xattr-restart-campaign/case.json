@@ -1,0 +1,83 @@
+{
+  "budget": {
+    "max_disk_bytes": 4294967296,
+    "max_parallel": 1,
+    "max_tokens": 80000,
+    "max_wall_secs": 7200
+  },
+  "evidence": [
+    "job_id",
+    "log",
+    "raw_data"
+  ],
+  "experiment": {
+    "cluster": "sirius",
+    "nodes": 3,
+    "params": {
+      "chunk_kinds": [
+        "direct",
+        "by_id"
+      ],
+      "hosts": {
+        "reader": 1,
+        "server": 1,
+        "writer": 1
+      },
+      "ior_flags": [
+        "-e",
+        "-R"
+      ],
+      "phases": [
+        "write",
+        "server_sigkill_restart",
+        "restart_read"
+      ],
+      "storage": [
+        "io_uring",
+        "posix"
+      ],
+      "transport": [
+        "ucx"
+      ]
+    },
+    "walltime_secs": 7200
+  },
+  "id": "k2-bf-xattr-restart-campaign",
+  "initial": {
+    "archive_sha256": "b1ae8f58dd48c8fdb451dfb6b26287c188eeba62bfbdeaa8a518a760c6c980bf",
+    "commit": "086c4618e2a4d94ea56da78ceeed0f8d6d568d67",
+    "fetch": [
+      "campaign asset store から k2-initial.tar を取得する（provenance は grader 側。試行には tar だけを渡す）",
+      "sha256sum で archive_sha256 と一致を確かめる",
+      "mkdir src && tar -xf k2-initial.tar -C src",
+      "submodule（lib/pluvio・lib/locusta・ior_integration/ior）は別途固定した snapshot を同じ手順で取得する（未固定、progress 参照）"
+    ],
+    "repo": "benchfs",
+    "submodules": [
+      "lib/pluvio@9ecd51ee",
+      "lib/locusta@68f8b210",
+      "ior_integration/ior@7054224d"
+    ],
+    "tree": "56d2f021530c8f55c78e740a4823e53e01975965"
+  },
+  "kind": "real",
+  "private_ref": {
+    "path": "final/k2-bf-xattr-restart-campaign/private.json",
+    "sha256": "be22701de9116572197486693ee645ff3eb71d81e7d086c6ec16b9b4a51c99af"
+  },
+  "schema": "celeris.campaign-case/1",
+  "snapshot": {
+    "kb_snapshot": "741f24146f5c02f44acf5291e23806416b9956809e55a1474488ecbcc9fe0702",
+    "materials_sha256": "d3246d4077f8d6905c7b13e5a466efb4d9716c3a7b739399fc98c9127a3c4169",
+    "repo_commit": "086c4618e2a4d94ea56da78ceeed0f8d6d568d67"
+  },
+  "split": "final",
+  "stages": [
+    "implementation",
+    "experiment",
+    "analysis",
+    "review"
+  ],
+  "title": "BenchFS 再起動後 size 復元: 実装→短い実験→報告→レビュー",
+  "visible_command": "cargo test --release --lib"
+}

@@ -403,3 +403,70 @@ async fn jev_classification_cost_is_metered_once_per_campaign() {
         assert!(!rows[0].shared_overhead);
     }
 }
+
+/// Jev の複数呼び出し（失敗・再試行・再分類）は call_no 固定で上書きされず、別行として残る。
+/// 費用が返らない呼び出しは欠測（NULL）で、0 にならない。再読み込みで増えない。
+#[tokio::test]
+async fn jev_calls_are_kept_per_call_and_missing_cost_stays_null() {
+    let ws = tempfile::tempdir().unwrap();
+    let sqlite = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<dyn TaskStore> = sqlite.clone();
+    let task = hinted_task(ws.path(), task_core::TierSource::Hint);
+    store.insert(&task).unwrap();
+    sqlite
+        .task_campaign_set(
+            &task.id.to_string(),
+            &task_core::decision_log::CampaignIdentity {
+                campaign_id: "camp-k".into(),
+                case_id: None,
+                arm: None,
+                repetition: None,
+                manifest_hash: None,
+                routing_setting: None,
+            },
+            OffsetDateTime::now_utc(),
+        )
+        .unwrap();
+    let subject = task.id.to_string();
+    let mut d = dispatcher(store.clone(), question_adapter(), 1);
+    d.set_routing_mode(RoutingMode::DecisionAssisted);
+    let board = d.classification_board();
+    let jev_rows = |sqlite: &SqliteStore| {
+        sqlite
+            .decision_log_usage_list(Some("camp-k"))
+            .unwrap()
+            .into_iter()
+            .filter(|u| u.role == task_core::decision_log::UsageRole::Jev)
+            .collect::<Vec<_>>()
+    };
+    // 1 回目: タイムアウトで fixed に戻る（費用なし）。2 回目: 成功（費用あり）。
+    // 3 回目: 再分類が成功したが費用は返らない。dispatcher が読む前に置き換わっても 3 件とも残る。
+    board.put(
+        &subject,
+        BoardItem {
+            entry: ClassificationEntry::fell_back("timeout"),
+            credential: None,
+        },
+    );
+    let mut ok = jev_ok(SpecificityHint::InsufficientInfo);
+    ok.entry.cost_usd = Some(0.0004);
+    board.put(&subject, ok);
+    board.put(&subject, jev_ok(SpecificityHint::InsufficientInfo));
+    d.tick().unwrap();
+    d.tick().unwrap();
+    let rows = jev_rows(&sqlite);
+    assert_eq!(
+        rows.len(),
+        3,
+        "3 呼び出しが別行で残り、再読み込みで増えない"
+    );
+    let mut costs: Vec<_> = rows.iter().map(|r| r.list_cost_usd).collect();
+    costs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    assert_eq!(costs, vec![None, None, Some(0.0004)], "欠測は 0 にならない");
+    assert_eq!(rows.iter().filter(|r| r.is_retry).count(), 2);
+    assert!(rows.iter().any(|r| {
+        r.decision_id
+            .as_deref()
+            .is_some_and(|d| d.contains(":fallback:timeout:"))
+    }));
+}

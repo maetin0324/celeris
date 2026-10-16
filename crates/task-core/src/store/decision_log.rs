@@ -354,7 +354,8 @@ impl SqliteStore {
              campaign_id=excluded.campaign_id, task_id=excluded.task_id, role=excluded.role, is_retry=excluded.is_retry, \
              input_tokens=excluded.input_tokens, output_tokens=excluded.output_tokens, \
              cache_read_tokens=excluded.cache_read_tokens, cache_creation_tokens=excluded.cache_creation_tokens, \
-             list_cost_usd=excluded.list_cost_usd, cash_cost_usd=excluded.cash_cost_usd, wall_ms=excluded.wall_ms, \
+             list_cost_usd=COALESCE(excluded.list_cost_usd, list_cost_usd), \
+             cash_cost_usd=COALESCE(excluded.cash_cost_usd, cash_cost_usd), wall_ms=excluded.wall_ms, \
              cluster_wait_ms=excluded.cluster_wait_ms, cluster_run_ms=excluded.cluster_run_ms, \
              cluster_node_hours=excluded.cluster_node_hours, cluster_queue_ms=excluded.cluster_queue_ms, \
              updated_at=excluded.updated_at, attribution_rule=excluded.attribution_rule, \

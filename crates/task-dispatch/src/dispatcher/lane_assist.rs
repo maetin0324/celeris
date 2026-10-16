@@ -27,26 +27,82 @@ pub struct BoardItem {
     pub credential: Option<CredentialGate>,
 }
 
+/// board に置かれた 1 回の Jev 呼び出し。`call_id` は呼び出しごとに一意（再起動をまたいでも重ならない）で、
+/// 決定ログの消費行の鍵になる。`call_no` は同じ subject の何回目か（2 以上は再分類・再試行）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct BoardCall {
+    pub call_id: String,
+    pub call_no: u32,
+    pub item: BoardItem,
+}
+
+#[derive(Debug, Default)]
+struct BoardState {
+    current: HashMap<String, BoardCall>,
+    /// subject ごとの呼び出し回数（`remove` しても減らさない）。
+    calls: HashMap<String, u32>,
+    /// まだ決定ログへ書いていない呼び出し（dispatcher が読む前に置き換わった分を落とさない）。
+    unrecorded: HashMap<String, Vec<BoardCall>>,
+}
+
 /// 分類段 → dispatcher の受け渡し（subject = work unit id、無ければ task id）。dispatcher は読むだけ。
 #[derive(Debug, Clone, Default)]
 pub struct ClassificationBoard {
-    inner: Arc<Mutex<HashMap<String, BoardItem>>>,
+    inner: Arc<Mutex<BoardState>>,
+}
+
+fn next_call_id() -> String {
+    use std::sync::OnceLock;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static START: OnceLock<u128> = OnceLock::new();
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let start = *START.get_or_init(|| {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos())
+    });
+    format!("{start:x}-{}", SEQ.fetch_add(1, Ordering::Relaxed))
 }
 
 impl ClassificationBoard {
+    /// 呼び出し 1 回分を置く。置くたびに新しい `call_id` が付く（前の呼び出しは決定ログに残る）。
     pub fn put(&self, subject: &str, item: BoardItem) {
-        if let Ok(mut m) = self.inner.lock() {
-            m.insert(subject.to_owned(), item);
+        if let Ok(mut s) = self.inner.lock() {
+            let n = s.calls.entry(subject.to_owned()).or_insert(0);
+            *n += 1;
+            let call = BoardCall {
+                call_id: next_call_id(),
+                call_no: *n,
+                item,
+            };
+            s.unrecorded
+                .entry(subject.to_owned())
+                .or_default()
+                .push(call.clone());
+            s.current.insert(subject.to_owned(), call);
         }
     }
 
     pub fn get(&self, subject: &str) -> Option<BoardItem> {
-        self.inner.lock().ok()?.get(subject).cloned()
+        self.get_call(subject).map(|c| c.item)
+    }
+
+    pub fn get_call(&self, subject: &str) -> Option<BoardCall> {
+        self.inner.lock().ok()?.current.get(subject).cloned()
+    }
+
+    /// 決定ログへ未記録の呼び出しを古い順に取り出す（取り出したら空になる）。
+    pub fn take_unrecorded(&self, subject: &str) -> Vec<BoardCall> {
+        self.inner
+            .lock()
+            .ok()
+            .and_then(|mut s| s.unrecorded.remove(subject))
+            .unwrap_or_default()
     }
 
     pub fn remove(&self, subject: &str) {
-        if let Ok(mut m) = self.inner.lock() {
-            m.remove(subject);
+        if let Ok(mut s) = self.inner.lock() {
+            s.current.remove(subject);
         }
     }
 }
@@ -129,26 +185,36 @@ impl Dispatcher {
         })
     }
 
-    /// Jev の分類 1 回の消費を決定ログへ書く（`decision:jev:<subject>:1` の置換なので、同じ分類を何度
-    /// 読んでも二重計上しない）。分類が返った（`JevOk`）ときだけ。費用が返らなければ欠測のまま。
+    /// Jev の呼び出し 1 回の消費を決定ログへ書く。呼び出しごとに一意の鍵（`call_id`）なので、成功・失敗・
+    /// 再試行・再分類が上書きされず残り、同じ呼び出しを何度読んでも二重計上しない。返った費用は失敗時も
+    /// 保持し、返らなければ欠測（NULL）のまま 0 にしない。分類を試みていない（`NotAttempted`）ときは書かない。
     /// 記録の失敗で dispatch は止めない。
-    fn record_jev_usage(&self, task: &Task, subject: &str, entry: &ClassificationEntry) {
-        if entry.status != ClassifierStatus::JevOk {
-            return;
-        }
+    fn record_jev_usage(&self, task: &Task, subject: &str, call: &BoardCall) {
+        let entry = &call.item.entry;
+        let outcome = match &entry.status {
+            ClassifierStatus::NotAttempted => return,
+            ClassifierStatus::JevOk => "ok".to_string(),
+            ClassifierStatus::FellBackToFixed { reason } => {
+                format!(
+                    "fallback:{}",
+                    reason.split([' ', ':']).next().unwrap_or("unknown")
+                )
+            }
+        };
         let task_id = task.id.to_string();
         let result = (|| -> Result<(), task_core::StoreError> {
             let campaign = self
                 .store
                 .task_campaign_resolve(&task_id)?
                 .map(|c| c.campaign_id);
-            let usage = task_core::decision_log::DecisionLogUsage::jev_call(
-                subject,
-                1,
+            let mut usage = task_core::decision_log::DecisionLogUsage::jev_call(
+                &format!("{subject}:{outcome}:{}", call.call_id),
+                call.call_no,
                 &task_id,
                 campaign.as_deref(),
                 entry.cost_usd,
             );
+            usage.is_retry = call.call_no > 1;
             self.store.decision_log_record_usage(&usage, self.now_utc())
         })();
         if let Err(e) = result {
@@ -169,10 +235,10 @@ impl Dispatcher {
             return Ok((None, false));
         }
         let subject = wu.map_or_else(|| task.id.to_string(), |w| w.id.clone());
-        let item = self.classification_board.get(&subject);
-        if let Some(item) = &item {
-            self.record_jev_usage(task, &subject, &item.entry);
+        for call in self.classification_board.take_unrecorded(&subject) {
+            self.record_jev_usage(task, &subject, &call);
         }
+        let item = self.classification_board.get(&subject);
         let limits = self.lane_limits_for(task)?;
         // 利用可否はコード側（route_select の admission）。引き上げ先の lane だけ事前に調べる。
         let mut open = HashMap::new();

@@ -22,8 +22,10 @@ D=$P/data                                # 出力置き場（final-out / final-e
 
 ## 1. 置換（H1 後に 1 回だけ。置換したら hash が変わるので 2 で控え直す）
 `$P/final.json` の次を編集する（それ以外は変えない）:
-- B・C の `harness_version` の `<release sha12 at H1>` → 昇格した sha12。
-- C に `routing.evidence_table_id` を足す場合は `$CT routing evidence` の版（pilot と同じ版）。`lower_policy`/`online_update` は変えない。
+- B・C の `harness_version` の `<release sha12 at H1>` → 昇格した sha12（12 桁 hex）。
+- A の `harness_version` の `claude-code@<claude-code version at H1>` → 実際の版（`installed` 等の alias は不可）。
+- C の `routing.evidence_table_id` の `<routing evidence table id at H1>` → `$CT routing evidence` の版（pilot と同じ版）。`lower_policy`/`online_update` は変えない。
+- 未解決の `<…>`・alias・routing 欠落があると `validate`（final split）が失敗し、起動前に止まる。
 - `$P/task-template.json` の `project_id` `<案件 id>` → 案件 id。acceptance は API の形 `{"type": "reviewer", "text": …}`（入れ子の `check` は起動時に拒否）。
 - `final.json` の `budget.token_basis` は人の決定（2026-10-16）で `all` に固定済み。**既定は無い**ので、別 campaign で変えるときも明示する。埋めないと manifest が読めず run は始まらない。試行記録・summary・export には基準に関係なく input / output / cache_read / cache_creation が全部残る。
 `harness_version` の置換後の `final.json` の sha256 が実条件。以後 manifest・入力・snapshot を変えない（変えるなら新 campaign_id）。

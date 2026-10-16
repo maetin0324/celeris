@@ -1,0 +1,83 @@
+{
+  "schema": "celeris.campaign-manifest/1",
+  "campaign_id": "mlsys-final-1",
+  "version": "1",
+  "split": "final",
+  "input": {
+    "path": "final-input-manifest.json",
+    "sha256": "6fa8f0ecf197d731a36ea7c7152b088be99a18c0cf229cdf01340aec28b06e4b"
+  },
+  "problems": [
+    "k2-bf-xattr-restart-campaign",
+    "k4-cmp4-validity-analysis"
+  ],
+  "configs": [
+    {
+      "id": "A",
+      "harness": "claude-code",
+      "harness_version": "claude-code@installed",
+      "model": "claude-sonnet-5-5",
+      "model_version": "claude-sonnet-5-5",
+      "policy_version": "ops-baseline"
+    },
+    {
+      "id": "B",
+      "harness": "celeris",
+      "harness_version": "<release sha12 at H1>",
+      "model": "claude-sonnet-5-5",
+      "model_version": "claude-sonnet-5-5",
+      "policy_version": "fixed",
+      "routing": {
+        "lower_policy": "mlsys-min-1",
+        "online_update": false
+      }
+    },
+    {
+      "id": "C",
+      "harness": "celeris",
+      "harness_version": "<release sha12 at H1>",
+      "model": "claude-sonnet-5-5",
+      "model_version": "claude-sonnet-5-5",
+      "policy_version": "jev-1"
+    }
+  ],
+  "primary": [
+    "A",
+    "B"
+  ],
+  "secondary": {
+    "pair": [
+      "B",
+      "C"
+    ],
+    "subset": [
+      "k2-bf-xattr-restart-campaign",
+      "k4-cmp4-validity-analysis"
+    ]
+  },
+  "budget": {
+    "max_tokens": 1000000,
+    "max_wall_secs": 36000,
+    "max_disk_bytes": 137438953472,
+    "max_parallel": 1,
+    "per_case": {
+      "max_tokens": 120000,
+      "max_wall_secs": 1800
+    },
+    "per_arm": {
+      "max_tokens": 360000,
+      "max_wall_secs": 20000
+    }
+  },
+  "termination": {
+    "trial_timeout_secs": 1800,
+    "max_attempts_per_trial": 1,
+    "stop_on_budget": true
+  },
+  "snapshot": {
+    "repo_commit": "final-cases-1: k2=086c4618e2a4d94ea56da78ceeed0f8d6d568d67, k4=none",
+    "materials_sha256": "dab3ca05d01adf1da268c8ec35e24f33249ca3cc02083e0a2e6b487d0c5a800d",
+    "kb_snapshot": "741f24146f5c02f44acf5291e23806416b9956809e55a1474488ecbcc9fe0702"
+  },
+  "repeats": 1
+}

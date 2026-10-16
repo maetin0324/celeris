@@ -1,0 +1,45 @@
+{
+  "schema": "celeris.routing-eval-manifest/1",
+  "version": "final-1",
+  "cutoff": "2026-10-16",
+  "seed": 1,
+  "problems": [
+    {
+      "id": "k2-bf-xattr-restart-campaign",
+      "task_id": "final",
+      "work_unit_id": "k2-bf-xattr-restart-campaign",
+      "created_at": "2026-10-16T00:00:00Z",
+      "genre": "coding",
+      "kind": "leaf",
+      "command": "cargo test --release --lib",
+      "prompt": "materials/k2-bf-xattr-restart-campaign/task.md の課題を実施せよ。公開 case 定義は crates/campaign/cases/final/k2-bf-xattr-restart-campaign/case.json。",
+      "split": "held-out",
+      "stratum": "implementation",
+      "subset_12": false,
+      "head_commit": null,
+      "base_commit": null,
+      "features_sha256": "",
+      "features": {},
+      "sha256": ""
+    },
+    {
+      "id": "k4-cmp4-validity-analysis",
+      "task_id": "final",
+      "work_unit_id": "k4-cmp4-validity-analysis",
+      "created_at": "2026-10-16T00:00:00Z",
+      "genre": "analysis",
+      "kind": "leaf",
+      "command": "test -s report.md && test -s results/cells.csv",
+      "prompt": "materials/k4-cmp4-validity-analysis/task.md の課題を実施せよ。公開 case 定義は crates/campaign/cases/final/k4-cmp4-validity-analysis/case.json。",
+      "split": "held-out",
+      "stratum": "analysis",
+      "subset_12": false,
+      "head_commit": null,
+      "base_commit": null,
+      "features_sha256": "",
+      "features": {},
+      "sha256": ""
+    }
+  ],
+  "sha256": "6fa8f0ecf197d731a36ea7c7152b088be99a18c0cf229cdf01340aec28b06e4b"
+}

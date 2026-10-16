@@ -114,6 +114,12 @@ impl TaskStore for SqliteStore {
     ) -> Result<Option<crate::decision_log::DecisionLogRun>, StoreError> {
         SqliteStore::decision_log_run_get(self, run_id)
     }
+    fn task_campaign_resolve(
+        &self,
+        task_id: &str,
+    ) -> Result<Option<crate::decision_log::CampaignIdentity>, StoreError> {
+        SqliteStore::task_campaign_resolve(self, task_id)
+    }
 
     fn task_integration_upsert(
         &self,

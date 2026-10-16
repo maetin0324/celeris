@@ -625,6 +625,8 @@ pub fn run(
             rec.kb = format!("{rel}/kb");
             let timeout = m.termination.trial_timeout_secs;
             let req = TrialRequest {
+                campaign_id: &m.campaign_id,
+                manifest_sha256: &hash,
                 config: cfg,
                 problem_id: &pid,
                 prompt: prompts.get(pid.as_str()).copied().unwrap_or(""),

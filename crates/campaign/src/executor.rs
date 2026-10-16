@@ -13,6 +13,9 @@ use serde_json::Value;
 use std::sync::Mutex;
 
 pub struct TrialRequest<'a> {
+    /// manifest の campaign_id と hash。task 作成 API の識別（campaign / manifest_hash）に載せる。
+    pub campaign_id: &'a str,
+    pub manifest_sha256: &'a str,
     pub config: &'a Config,
     pub problem_id: &'a str,
     pub prompt: &'a str,

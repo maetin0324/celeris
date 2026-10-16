@@ -123,3 +123,83 @@ async fn create_stores_campaign_identity_and_resend_is_idempotent() {
     let resp = send(&app, p(&task(json!({"campaign": bad})))).await;
     assert_eq!(resp.status.as_u16(), 400, "{}", resp.text());
 }
+
+/// runner が使う `CelerisExecutor::body` をそのまま実 task-api に POST し、識別が DB に残ることを確かめる
+/// （識別の直挿入はしない）。再送は同じ task、別 repetition は別 task。
+#[tokio::test]
+async fn executor_body_is_accepted_and_identity_is_stored() {
+    use celeris_campaign::{
+        celeris_exec::{CelerisExecutor, HttpResponse, Transport},
+        executor::TrialRequest,
+        manifest::{Cap, Config, ConfigId},
+    };
+    struct Unused;
+    impl Transport for Unused {
+        fn request(&self, _: &str, _: &str, _: Option<&Value>) -> Result<HttpResponse, String> {
+            Err("not used".into())
+        }
+    }
+    let dir = tempfile::tempdir().expect("dir");
+    let exec = CelerisExecutor::new(
+        Unused,
+        json!({"acceptance": [{"type": "artifact_exists", "name": "result.md"}]})
+            .as_object()
+            .cloned()
+            .expect("object"),
+        1800,
+        dir.path().join("cancel.jsonl"),
+    );
+    let cfg = Config {
+        id: ConfigId::B,
+        harness: "celeris".into(),
+        harness_version: "1".into(),
+        model: "m".into(),
+        model_version: "1".into(),
+        policy_version: "p1".into(),
+        routing: Some(Default::default()),
+    };
+    let body = |rep: u32, key: &str| {
+        let r = TrialRequest {
+            campaign_id: "camp-1",
+            manifest_sha256: "mh-1",
+            config: &cfg,
+            problem_id: "case-x",
+            prompt: "fix it",
+            trial_no: 1,
+            rep,
+            workspace: dir.path(),
+            kb: dir.path(),
+            timeout_secs: 600,
+            budget: Cap {
+                max_tokens: u64::MAX,
+                max_wall_secs: 600,
+            },
+        };
+        exec.body(&r, key).expect("body")
+    };
+    let env = TestEnv::with(EnvOptions {
+        token: Some(TOKEN.into()),
+        ..Default::default()
+    });
+    let app = env.router();
+    let first = send(&app, p(&body(1, "campaign-r1"))).await;
+    assert_eq!(first.status.as_u16(), 201, "{}", first.text());
+    let id = first.json()["id"].as_str().expect("id").to_string();
+    let own = env
+        .store
+        .task_campaign_own(&id)
+        .expect("read")
+        .expect("identity saved");
+    assert_eq!(own.campaign_id, "camp-1");
+    assert_eq!(own.case_id.as_deref(), Some("case-x"));
+    assert_eq!(own.arm.as_deref(), Some("B"));
+    assert_eq!(own.repetition, Some(1));
+    assert_eq!(own.manifest_hash.as_deref(), Some("mh-1"));
+    assert_eq!(own.routing_setting.as_deref(), Some("fixed"));
+    let again = send(&app, p(&body(1, "campaign-r1"))).await;
+    assert_eq!(again.status.as_u16(), 200, "{}", again.text());
+    assert_eq!(again.json()["id"], json!(id));
+    let other = send(&app, p(&body(2, "campaign-r2"))).await;
+    assert_eq!(other.status.as_u16(), 201, "{}", other.text());
+    assert_ne!(other.json()["id"], json!(id));
+}

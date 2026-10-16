@@ -244,7 +244,8 @@ impl<T: Transport> CelerisExecutor<T> {
         Ok(ids)
     }
 
-    fn body(&self, req: &TrialRequest, key: &str) -> Result<Value, String> {
+    /// POST /tasks の body。識別（`campaign`）と冪等キーを含む。
+    pub fn body(&self, req: &TrialRequest, key: &str) -> Result<Value, String> {
         let mut b = self.template.clone();
         let mut labels: Vec<Value> = b
             .get("labels")
@@ -272,7 +273,22 @@ impl<T: Transport> CelerisExecutor<T> {
             "max_wall_secs".into(),
             json!(req.timeout_secs.min(req.budget.max_wall_secs)),
         );
-        b.insert("routing_override".into(), routing_override(req.config)?);
+        let ro = routing_override(req.config)?;
+        // 採点結果と同じ試行へ export できるよう、通常の作成 API に識別を載せる（task-api NewTaskBody）。
+        // 冪等キーは label と同じ文字列。arm は A/B/C、case は問題 ID。
+        let mut campaign = Map::new();
+        campaign.insert("campaign_id".into(), json!(req.campaign_id));
+        campaign.insert("case_id".into(), json!(req.problem_id));
+        campaign.insert("arm".into(), json!(format!("{:?}", req.config.id)));
+        campaign.insert("repetition".into(), json!(req.rep));
+        campaign.insert("manifest_hash".into(), json!(req.manifest_sha256));
+        campaign.insert("routing_setting".into(), ro["mode"].clone());
+        b.insert("campaign".into(), Value::Object(campaign));
+        b.insert(
+            "campaign_idempotency_key".into(),
+            json!(idempotency_label(key)),
+        );
+        b.insert("routing_override".into(), ro);
         Ok(Value::Object(b))
     }
 

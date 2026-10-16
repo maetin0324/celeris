@@ -18,6 +18,7 @@ pub mod isolation;
 pub mod jev_smoke;
 pub mod ledger;
 pub mod manifest;
+pub mod preflight;
 pub mod record;
 pub mod report;
 pub mod runner;

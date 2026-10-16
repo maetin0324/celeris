@@ -11,19 +11,39 @@ use celeris_campaign::{
     harness_exec::{ClaudeCodeBuilder, HarnessExecutor},
     ledger::Ledger,
     manifest::CampaignManifest,
+    preflight::{self, Inputs, RealHost},
     runner,
 };
 
-const USAGE: &str = "usage: celeris-campaign <dry-run|validate|run|check|check-report|export|grade-out> --manifest <path> \
+const USAGE: &str = "usage: celeris-campaign <dry-run|validate|preflight|run|check|check-report|export|grade-out> --manifest <path> \
 [--cases <grade-case dir>] \
 [--input-manifest <path>] [--out <dir>] [--executor mock|harness|celeris] [--api-url <url> --token-env <ENV_NAME> [--task-template <json>]] [--dest <dir>] \
-[--report <file>] [--repo-src <dir>] [--materials-src <dir>] [--kb-src <dir>]";
+[--cases-root <dir>] [--grader-root <dir>] [--grade-case-root <dir>] [--a-program <path>] [--report <file>] [--repo-src <dir>] [--materials-src <dir>] [--kb-src <dir>]";
 
 fn arg(args: &[String], name: &str) -> Option<PathBuf> {
     args.iter()
         .position(|a| a == name)
         .and_then(|i| args.get(i + 1))
         .map(PathBuf::from)
+}
+
+fn preflight_inputs(args: &[String], manifest_path: &std::path::Path) -> Inputs {
+    let text = |n: &str| arg(args, n).map(|p| p.to_string_lossy().into_owned());
+    let or = |n: &str, d: &str| arg(args, n).unwrap_or_else(|| PathBuf::from(d));
+    Inputs {
+        manifest_path: manifest_path.to_path_buf(),
+        input_override: arg(args, "--input-manifest"),
+        cases_root: or("--cases-root", "crates/campaign/cases"),
+        grader_root: or("--grader-root", "crates/campaign/fixtures/grader-private"),
+        grade_cases_root: or("--grade-case-root", "crates/campaign/fixtures/grade-cases"),
+        a_program: or("--a-program", "claude"),
+        api_url: text("--api-url"),
+        token_env: text("--token-env"),
+        task_template: arg(args, "--task-template"),
+        repo_src: arg(args, "--repo-src"),
+        materials_src: arg(args, "--materials-src"),
+        kb_src: arg(args, "--kb-src"),
+    }
 }
 
 fn run(args: Vec<String>) -> Result<String, String> {
@@ -48,10 +68,19 @@ fn run(args: Vec<String>) -> Result<String, String> {
             m.validate()?;
             Ok(m.compute_sha256()?)
         }
+        "preflight" => {
+            let rep = preflight::check(&preflight_inputs(&args, &manifest_path), &RealHost);
+            let s = serde_json::to_string_pretty(&rep).map_err(|e| e.to_string())?;
+            if rep.ok { Ok(s) } else { Err(s) }
+        }
         "run" => {
             let which =
                 arg(&args, "--executor").ok_or("--executor mock|harness|celeris is required")?;
             let which = which.to_string_lossy().into_owned();
+            // 実行（有料）経路は preflight を通ってからだけ始める。mock は無課金なので対象外。
+            if matches!(which.as_str(), "harness" | "celeris") {
+                preflight::gate(&preflight_inputs(&args, &manifest_path), &RealHost)?;
+            }
             let input = m.load_input(&manifest_path, arg(&args, "--input-manifest").as_deref())?;
             let out_dir = out()?;
             let opts = runner::RunOptions {

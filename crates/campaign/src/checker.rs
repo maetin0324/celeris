@@ -138,6 +138,7 @@ pub fn check(m: &CampaignManifest, out: &Path) -> CheckReport {
         let mut ws_dirs: BTreeSet<String> = BTreeSet::new();
         let mut cum_tokens = 0u64;
         let mut cum_wall = 0u64;
+        let mut arm_use: BTreeMap<ConfigId, (u64, u64)> = BTreeMap::new();
         let cfg_by_id: BTreeMap<ConfigId, &crate::manifest::Config> =
             m.configs.iter().map(|c| (c.id, c)).collect();
         for (idx, r) in recs.iter().enumerate() {
@@ -253,12 +254,51 @@ pub fn check(m: &CampaignManifest, out: &Path) -> CheckReport {
                         "{tag}: executed after the budget was already exhausted"
                     ));
                 }
-                cum_tokens += r.tokens.unwrap_or(0);
+                let arm = arm_use.get(&r.config).copied().unwrap_or_default();
+                let case = m.budget.per_case;
+                let over_case = r.tokens.is_some_and(|t| t > case.max_tokens)
+                    || r.wall_secs > case.max_wall_secs;
+                if over_case
+                    && r.outcome != crate::aggregate::Outcome::Timeout
+                    && r.reason.as_deref() != Some(REASON_CASE_BUDGET)
+                {
+                    v.push(format!(
+                        "{tag}: exceeded the per-case budget but was not cancelled as case_budget"
+                    ));
+                }
+                if matches!(
+                    r.reason.as_deref(),
+                    Some(REASON_CASE_BUDGET | REASON_ARM_BUDGET)
+                ) && r.outcome != crate::aggregate::Outcome::Cancelled
+                {
+                    v.push(format!("{tag}: budget reason requires outcome cancelled"));
+                }
+                if r.reason.as_deref() == Some(REASON_CASE_BUDGET) && !over_case {
+                    v.push(format!(
+                        "{tag}: case_budget although within the per-case cap"
+                    ));
+                }
+                if arm.0 >= m.budget.per_arm.max_tokens || arm.1 >= m.budget.per_arm.max_wall_secs {
+                    v.push(format!(
+                        "{tag}: executed after its arm budget was already exhausted"
+                    ));
+                }
+                let e = arm_use.entry(r.config).or_default();
+                e.0 += m.budget.charged_tokens(r.tokens);
+                e.1 += r.wall_secs;
+                cum_tokens += m.budget.charged_tokens(r.tokens);
                 cum_wall += r.wall_secs;
             } else if r.outcome != crate::aggregate::Outcome::Cancelled || r.tokens.is_some() {
                 v.push(format!(
                     "{tag}: budget-stopped trial must be cancelled with no usage"
                 ));
+            } else if r.reason.as_deref() == Some(REASON_ARM_BUDGET) {
+                let (t, w) = arm_use.get(&r.config).copied().unwrap_or_default();
+                if t < m.budget.per_arm.max_tokens && w < m.budget.per_arm.max_wall_secs {
+                    v.push(format!(
+                        "{tag}: cancelled for arm budget although the arm budget remained"
+                    ));
+                }
             } else if !(cum_tokens >= m.budget.max_tokens || cum_wall >= m.budget.max_wall_secs) {
                 v.push(format!(
                     "{tag}: cancelled for budget although budget remained"

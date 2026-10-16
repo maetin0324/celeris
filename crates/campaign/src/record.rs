@@ -15,6 +15,10 @@ pub const INPUT_FILE: &str = "input-manifest.json";
 pub const SNAPSHOT_FILE: &str = "snapshot/snapshot.json";
 /// 予算停止で実行しなかった試行の reason。分母には残す（outcome = cancelled）。
 pub const REASON_BUDGET_STOP: &str = "budget_stop";
+/// 1 試行の上限（per_case）を超えたため止めた（実行中の cancel、または完了後の判定）。outcome = cancelled。
+pub const REASON_CASE_BUDGET: &str = "case_budget";
+/// arm の累積上限（per_arm）が尽きたため止めた／実行しなかった。他 arm は止めない。outcome = cancelled。
+pub const REASON_ARM_BUDGET: &str = "arm_budget";
 /// 前提 problem が passed にならなかったため実行しなかった試行の reason。分母には残す（outcome = blocked）。
 pub const REASON_BLOCKED: &str = "dependency_blocked";
 
@@ -51,9 +55,11 @@ pub struct TrialRecord {
 
 impl TrialRecord {
     pub fn ran(&self) -> bool {
-        !matches!(
-            self.reason.as_deref(),
-            Some(REASON_BUDGET_STOP | REASON_BLOCKED)
-        )
+        match self.reason.as_deref() {
+            Some(REASON_BUDGET_STOP | REASON_BLOCKED) => false,
+            // arm の残りが無く実行しなかった試行は workspace が空（実行中に尽きた試行は workspace がある）。
+            Some(REASON_ARM_BUDGET) => !self.workspace.is_empty(),
+            _ => true,
+        }
     }
 }

@@ -216,7 +216,10 @@ impl<T: Transport> CelerisExecutor<T> {
             "workspace".into(),
             json!(req.workspace.to_string_lossy().into_owned()),
         );
-        b.insert("max_wall_secs".into(), json!(req.timeout_secs));
+        b.insert(
+            "max_wall_secs".into(),
+            json!(req.timeout_secs.min(req.budget.max_wall_secs)),
+        );
         b.insert("routing_override".into(), routing_override(req.config)?);
         Ok(Value::Object(b))
     }

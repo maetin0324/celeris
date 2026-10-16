@@ -114,13 +114,18 @@ fn run(args: Vec<String>) -> Result<String, String> {
                 *by_state.entry(st).or_default() += 1;
             }
             Ok(format!(
-                "{{\"executed\":{},\"resumed_skipped\":{},\"budget_cancelled\":{},\"blocked\":{},\"waiting\":{},\"tokens_total\":{},\"budget_stopped\":{},\"ledger\":{{\"rows\":{},\"by_state\":{}}}}}",
+                "{{\"executed\":{},\"resumed_skipped\":{},\"budget_cancelled\":{},\"blocked\":{},\"waiting\":{},\"tokens_total\":{},\"tokens_missing\":{},\"case_budget_cancelled\":{},\"arm_budget_cancelled\":{},\"max_overshoot_tokens\":{},\"max_overshoot_wall_secs\":{},\"budget_stopped\":{},\"ledger\":{{\"rows\":{},\"by_state\":{}}}}}",
                 rep.executed,
                 rep.resumed_skipped,
                 rep.budget_cancelled,
                 rep.blocked,
                 rep.waiting,
                 rep.tokens_total,
+                rep.tokens_missing,
+                rep.case_budget_cancelled,
+                rep.arm_budget_cancelled,
+                rep.max_overshoot_tokens,
+                rep.max_overshoot_wall_secs,
                 rep.budget_stopped,
                 rows,
                 serde_json::to_string(&by_state).map_err(|e| e.to_string())?

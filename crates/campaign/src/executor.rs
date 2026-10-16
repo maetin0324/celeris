@@ -7,7 +7,7 @@ use sha2::{Digest, Sha256};
 pub use crate::ledger::TaskRef;
 use crate::{
     aggregate::Outcome,
-    manifest::{Config, ConfigId},
+    manifest::{Cap, Config, ConfigId},
 };
 use serde_json::Value;
 use std::sync::Mutex;
@@ -22,6 +22,16 @@ pub struct TrialRequest<'a> {
     /// この試行専用の KB（初期 KB snapshot の複製）。
     pub kb: &'a Path,
     pub timeout_secs: u64,
+    /// この試行の実効上限（`min(per_case, per_arm の残り)`）。同期 executor は自分で止めてよい。
+    /// 止めずに超えた分は runner が結果の受け取り時に case_budget として cancelled に直す。
+    pub budget: Cap,
+}
+
+/// 実行中の試行（子 task・job を含む）の累積使用量。tokens が None なら欠測（0 ではない）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Usage {
+    pub tokens: Option<u64>,
+    pub wall_secs: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -76,6 +86,11 @@ pub trait Executor {
     /// 子 task・クラスタ job を含む最新の参照を返す（台帳へ追記される）。
     fn track(&self, t: &TaskRef) -> Result<TaskRef, String> {
         Ok(t.clone())
+    }
+
+    /// 実行中の累積使用量。観測できない executor は None（runner は上限の実行中判定をせず、完了後に判定する）。
+    fn usage(&self, _t: &TaskRef) -> Result<Option<Usage>, String> {
+        Ok(None)
     }
 
     fn poll(&self, _t: &TaskRef) -> Result<ExecStatus, String> {

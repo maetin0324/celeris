@@ -83,10 +83,28 @@ pub struct SnapshotRef {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Budget {
+    /// campaign 全体（全 arm の総量）の上限。
     pub max_tokens: u64,
     pub max_wall_secs: u64,
     pub max_disk_bytes: u64,
     pub max_parallel: u32,
+    /// 1 試行の上限。実行中に適用する（ADR 2026-10-16-campaign-budget-cap）。
+    pub per_case: Cap,
+    /// 1 arm の累積上限。超えた arm の残りの試行だけを止める（他 arm は止めない）。
+    pub per_arm: Cap,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Cap {
+    pub max_tokens: u64,
+    pub max_wall_secs: u64,
+}
+
+impl Budget {
+    /// 欠測 tokens を保守的に「1 試行の上限を使い切った」とみなした課金値。
+    pub fn charged_tokens(&self, tokens: Option<u64>) -> u64 {
+        tokens.unwrap_or(self.per_case.max_tokens)
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -264,6 +282,13 @@ impl CampaignManifest {
         {
             return Err("budget fields must all be > 0".into());
         }
+        let (c, a) = (b.per_case, b.per_arm);
+        if c.max_tokens == 0 || c.max_wall_secs == 0 || a.max_tokens == 0 || a.max_wall_secs == 0 {
+            return Err("budget per_case/per_arm fields must all be > 0".into());
+        }
+        if a.max_tokens < c.max_tokens || a.max_wall_secs < c.max_wall_secs {
+            return Err("budget per_arm must be >= per_case".into());
+        }
         let t = &self.termination;
         if t.trial_timeout_secs == 0 || t.max_attempts_per_trial == 0 {
             return Err("termination fields must be > 0".into());
@@ -387,6 +412,14 @@ pub(crate) mod fixtures {
                 max_wall_secs: 86_400,
                 max_disk_bytes: 1 << 40,
                 max_parallel: 4,
+                per_case: Cap {
+                    max_tokens: 1_000_000,
+                    max_wall_secs: 3_600,
+                },
+                per_arm: Cap {
+                    max_tokens: 5_000_000,
+                    max_wall_secs: 43_200,
+                },
             },
             termination: Termination {
                 trial_timeout_secs: 1800,

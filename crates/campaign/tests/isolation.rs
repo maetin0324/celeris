@@ -29,6 +29,14 @@ fn sources(root: &std::path::Path) -> InitialSources {
             max_wall_secs: 60,
             max_disk_bytes: 1 << 20,
             max_parallel: 2,
+            per_case: celeris_campaign::manifest::Cap {
+                max_tokens: 100_000,
+                max_wall_secs: 1_000_000,
+            },
+            per_arm: celeris_campaign::manifest::Cap {
+                max_tokens: 10_000_000_000,
+                max_wall_secs: 1_000_000,
+            },
         },
         withheld_names: vec![
             "grader".into(),

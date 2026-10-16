@@ -1107,7 +1107,11 @@ pub fn runs(rows: &[EventRow]) -> Vec<RunSummary> {
             } => {
                 if let Some(r) = by_run.get_mut(run_id) {
                     r.finished_at = Some(row.ts.clone());
-                    r.usage = *usage;
+                    // 同じ run の複数の終了は決定ログと同じ規則で合算する（置換すると食い違う）。
+                    r.usage = match (r.usage, *usage) {
+                        (Some(a), Some(b)) => Some(a.accumulate(&b)),
+                        (a, b) => b.or(a),
+                    };
                     r.end = *end;
                     let (kind, text) = classify_outcome(outcome, end.as_ref());
                     r.outcome = Some(kind);

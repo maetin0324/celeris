@@ -83,12 +83,15 @@ enum Dep {
 }
 
 /// `recs`（それ以前の記録）から problem の前提の成否を再計算する。runner の判定コードは使わない。
-fn dep_state(m: &CampaignManifest, recs: &[TrialRecord], problem: &str) -> Dep {
+fn dep_state(m: &CampaignManifest, recs: &[TrialRecord], problem: &str, rep: u32) -> Dep {
     let mut waiting = false;
     for q in m.dependencies.get(problem).into_iter().flatten() {
         for c in m.planned_configs(q) {
             let mut best: Option<&TrialRecord> = None;
-            for r in recs.iter().filter(|r| r.config == c && r.problem_id == *q) {
+            for r in recs
+                .iter()
+                .filter(|r| r.config == c && r.problem_id == *q && r.rep == rep)
+            {
                 if best.is_none_or(|b| r.trial_no < b.trial_no) {
                     best = Some(r);
                 }
@@ -134,7 +137,7 @@ pub fn check(m: &CampaignManifest, out: &Path) -> CheckReport {
             }
         }
         let exp = expected(m);
-        let mut seen: BTreeSet<(ConfigId, String, u32)> = BTreeSet::new();
+        let mut seen: BTreeSet<(ConfigId, String, u32, u32)> = BTreeSet::new();
         let mut ws_dirs: BTreeSet<String> = BTreeSet::new();
         let mut cum_tokens = 0u64;
         let mut cum_wall = 0u64;
@@ -143,7 +146,10 @@ pub fn check(m: &CampaignManifest, out: &Path) -> CheckReport {
             m.configs.iter().map(|c| (c.id, c)).collect();
         for (idx, r) in recs.iter().enumerate() {
             let earlier = &recs[..idx];
-            let tag = format!("{:?}/{}#{}", r.config, r.problem_id, r.trial_no);
+            let tag = format!(
+                "{:?}/{}/rep{}#{}",
+                r.config, r.problem_id, r.rep, r.trial_no
+            );
             if r.schema != TRIAL_SCHEMA {
                 v.push(format!("{tag}: unknown schema {}", r.schema));
             }
@@ -169,7 +175,10 @@ pub fn check(m: &CampaignManifest, out: &Path) -> CheckReport {
                     m.termination.max_attempts_per_trial
                 ));
             }
-            if !seen.insert((r.config, r.problem_id.clone(), r.trial_no)) {
+            if r.rep == 0 || r.rep > m.repeats {
+                v.push(format!("{tag}: rep outside 1..={}", m.repeats));
+            }
+            if !seen.insert((r.config, r.problem_id.clone(), r.rep, r.trial_no)) {
                 v.push(format!("{tag}: duplicate record"));
             }
             if r.passed != (r.outcome == crate::aggregate::Outcome::Passed) {
@@ -220,13 +229,13 @@ pub fn check(m: &CampaignManifest, out: &Path) -> CheckReport {
                         "{tag}: blocked trial must be outcome blocked with no usage or workspace"
                     ));
                 }
-                if !matches!(dep_state(m, earlier, &r.problem_id), Dep::Failed(_)) {
+                if !matches!(dep_state(m, earlier, &r.problem_id, r.rep), Dep::Failed(_)) {
                     v.push(format!(
                         "{tag}: blocked although no prerequisite had failed"
                     ));
                 }
             } else if r.ran() {
-                match dep_state(m, earlier, &r.problem_id) {
+                match dep_state(m, earlier, &r.problem_id, r.rep) {
                     Dep::Met => {}
                     Dep::Failed(q) => v.push(format!(
                         "{tag}: executed although prerequisite {q} did not pass (should be blocked)"
@@ -374,18 +383,24 @@ pub fn check(m: &CampaignManifest, out: &Path) -> CheckReport {
 pub fn recompute(m: &CampaignManifest, recs: &[TrialRecord]) -> Recomputed {
     let exp = expected(m);
     let mut totals: BTreeMap<ConfigId, Totals> = BTreeMap::new();
-    let mut first: BTreeMap<(ConfigId, &str), &TrialRecord> = BTreeMap::new();
+    let mut first: BTreeMap<(ConfigId, &str, u32), &TrialRecord> = BTreeMap::new();
     for r in recs {
-        let e = first.entry((r.config, r.problem_id.as_str())).or_insert(r);
+        let e = first
+            .entry((r.config, r.problem_id.as_str(), r.rep))
+            .or_insert(r);
         if r.trial_no < e.trial_no {
             *e = r;
         }
     }
     for (c, probs) in &exp {
         let t = totals.entry(*c).or_default();
-        t.n = probs.len() as u64;
-        for p in probs {
-            match first.get(&(*c, p.as_str())).map(|r| r.outcome) {
+        // 分母 = 計画された試行総数（問題数 × repeats）。
+        t.n = (probs.len() as u64) * u64::from(m.repeats);
+        for (p, rep) in probs
+            .iter()
+            .flat_map(|p| (1..=m.repeats).map(move |k| (p, k)))
+        {
+            match first.get(&(*c, p.as_str(), rep)).map(|r| r.outcome) {
                 None => t.missing += 1,
                 Some(o) => match o {
                     crate::aggregate::Outcome::Passed => t.passed += 1,
@@ -412,9 +427,9 @@ pub fn recompute(m: &CampaignManifest, recs: &[TrialRecord]) -> Recomputed {
             }
         }
     }
-    let pass = |c: ConfigId, p: &str| {
+    let pass = |c: ConfigId, p: &str, rep: u32| {
         first
-            .get(&(c, p))
+            .get(&(c, p, rep))
             .is_some_and(|r| r.outcome == crate::aggregate::Outcome::Passed)
     };
     let mut pairs = Vec::new();
@@ -432,9 +447,12 @@ pub fn recompute(m: &CampaignManifest, recs: &[TrialRecord]) -> Recomputed {
             only_second: 0,
             neither: 0,
         };
-        for p in exp[&a].intersection(&exp[&b]) {
+        for (p, rep) in exp[&a]
+            .intersection(&exp[&b])
+            .flat_map(|p| (1..=m.repeats).map(move |k| (p, k)))
+        {
             pr.problems += 1;
-            match (pass(a, p), pass(b, p)) {
+            match (pass(a, p, rep), pass(b, p, rep)) {
                 (true, true) => pr.both_pass += 1,
                 (true, false) => pr.only_first += 1,
                 (false, true) => pr.only_second += 1,

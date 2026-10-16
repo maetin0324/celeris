@@ -153,6 +153,10 @@ pub struct CampaignManifest {
     /// `seeded_shuffle` の種。`abc_rotation` では使わないが記録する。
     #[serde(default, skip_serializing_if = "is_zero")]
     pub seed: u64,
+    /// 独立反復の回数（別 ID・別 out の `rep` 1..=repeats）。内部再試行（attempt）とは別。
+    /// 1 は直列化しない（既存 manifest の hash を変えない）。ADR 2026-10-16-campaign-repeats-denominator。
+    #[serde(default = "one", skip_serializing_if = "is_one")]
+    pub repeats: u32,
     pub snapshot: SnapshotRef,
     /// problem id -> 前提 problem id の配列。前提の全 config の trial が passed になるまで依存先は実行しない。
     /// 空なら直列化しない（依存の無い manifest の hash を変えない）。
@@ -164,6 +168,14 @@ pub struct CampaignManifest {
 
 fn is_default_order(o: &ArmOrder) -> bool {
     *o == ArmOrder::default()
+}
+
+fn one() -> u32 {
+    1
+}
+
+fn is_one(n: &u32) -> bool {
+    *n == 1
 }
 
 fn is_zero(n: &u64) -> bool {
@@ -348,6 +360,15 @@ impl CampaignManifest {
         if t.trial_timeout_secs == 0 || t.max_attempts_per_trial == 0 {
             return Err("termination fields must be > 0".into());
         }
+        if t.max_attempts_per_trial != 1 {
+            return Err(
+                "termination.max_attempts_per_trial must be 1 (use repeats for independent repetitions)"
+                    .into(),
+            );
+        }
+        if self.repeats == 0 {
+            return Err("repeats must be >= 1".into());
+        }
         if self.problems.is_empty() {
             return Err("problems is empty".into());
         }
@@ -488,6 +509,7 @@ pub(crate) mod fixtures {
             },
             order: Default::default(),
             seed: 0,
+            repeats: 1,
             dependencies: BTreeMap::new(),
             sha256: String::new(),
         }

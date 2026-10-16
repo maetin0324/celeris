@@ -17,6 +17,7 @@ pub struct TrialRequest<'a> {
     pub problem_id: &'a str,
     pub prompt: &'a str,
     pub trial_no: u32,
+    pub rep: u32,
     /// この試行専用の作業ツリー（初期 repo の複製）。
     pub workspace: &'a Path,
     /// この試行専用の KB（初期 KB snapshot の複製）。
@@ -173,7 +174,10 @@ impl Executor for MockExecutor {
         // 試行専用の作業ツリーと KB を実際に書き換える（隔離の検証用）。
         fs::write(
             req.workspace.join("mock-result.txt"),
-            format!("{:?}/{}/{}", req.config.id, req.problem_id, req.trial_no),
+            format!(
+                "{:?}/{}/rep{}/{}",
+                req.config.id, req.problem_id, req.rep, req.trial_no
+            ),
         )
         .map_err(|e| e.to_string())?;
         fs::write(req.kb.join("mock-note.md"), req.problem_id).map_err(|e| e.to_string())?;

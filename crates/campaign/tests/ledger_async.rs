@@ -82,6 +82,7 @@ fn campaign(i: &Input) -> CampaignManifest {
         },
         order: Default::default(),
         seed: 0,
+        repeats: 1,
         dependencies: BTreeMap::new(),
         sha256: String::new(),
     }
@@ -112,6 +113,7 @@ fn key(e: &Env, arm: ConfigId) -> TrialKey {
         problem_id: "p0".into(),
         arm,
         trial_no: 1,
+        rep: 1,
     }
 }
 

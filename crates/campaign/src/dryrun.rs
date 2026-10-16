@@ -43,7 +43,7 @@ pub fn estimate(m: &CampaignManifest, input: &InputManifest) -> Result<Value, St
             .find(|p| p.id == id)
             .map_or(0, |p| p.prompt.chars().count() as u64)
     };
-    let attempts = u64::from(m.termination.max_attempts_per_trial);
+    let attempts = u64::from(m.repeats);
     let mut per_config = Vec::new();
     for c in [ConfigId::A, ConfigId::B, ConfigId::C] {
         let ids: Vec<&String> = if c == ConfigId::C {

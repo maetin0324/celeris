@@ -24,12 +24,19 @@ pub struct TrialResult {
     pub config: ConfigId,
     pub problem_id: String,
     pub trial_no: u32,
+    /// 独立反復の番号（1 始まり）。trial_no（内部再試行）とは別 ID。
+    #[serde(default = "one")]
+    pub rep: u32,
     pub outcome: Outcome,
+}
+
+fn one() -> u32 {
+    1
 }
 
 #[derive(Clone, Debug, Default, Serialize, PartialEq, Eq)]
 pub struct Cell {
-    /// 分母 = manifest が宣言した問題数。実行されなかった問題も失敗側に数える。
+    /// 分母 = 計画された試行総数（manifest が宣言した問題数 × repeats）。実行されなかった問題も失敗側に数える。
     pub n: u64,
     pub passed: u64,
     pub failed: u64,
@@ -40,14 +47,14 @@ pub struct Cell {
     pub missing: u64,
 }
 
-/// 各問題の最初の試行（trial_no 最小）で判定する。manifest の campaign_sha256 / split が違う結果は拒否する。
+/// 各 (問題, rep) の最初の試行（trial_no 最小）で判定する。manifest の campaign_sha256 / split が違う結果は拒否する。
 pub fn aggregate(
     manifest: &CampaignManifest,
     results: &[TrialResult],
 ) -> Result<BTreeMap<ConfigId, Cell>, String> {
     let hash = manifest.compute_sha256()?;
     let declared: BTreeSet<&str> = manifest.problems.iter().map(String::as_str).collect();
-    let mut first: BTreeMap<(ConfigId, &str), &TrialResult> = BTreeMap::new();
+    let mut first: BTreeMap<(ConfigId, &str, u32), &TrialResult> = BTreeMap::new();
     for r in results {
         if r.campaign_sha256 != hash {
             return Err(format!(
@@ -64,7 +71,15 @@ pub fn aggregate(
         if !declared.contains(r.problem_id.as_str()) {
             return Err(format!("trial for undeclared problem {}", r.problem_id));
         }
-        let slot = first.entry((r.config, r.problem_id.as_str())).or_insert(r);
+        if r.rep == 0 || r.rep > manifest.repeats {
+            return Err(format!(
+                "trial for {} has rep {}, expected 1..={}",
+                r.problem_id, r.rep, manifest.repeats
+            ));
+        }
+        let slot = first
+            .entry((r.config, r.problem_id.as_str(), r.rep))
+            .or_insert(r);
         if r.trial_no < slot.trial_no {
             *slot = r;
         }
@@ -72,11 +87,14 @@ pub fn aggregate(
     let mut out = BTreeMap::new();
     for c in &manifest.configs {
         let mut cell = Cell {
-            n: declared.len() as u64,
+            n: (declared.len() as u64) * u64::from(manifest.repeats),
             ..Cell::default()
         };
-        for id in &declared {
-            match first.get(&(c.id, *id)).map(|r| r.outcome) {
+        for (id, rep) in declared
+            .iter()
+            .flat_map(|id| (1..=manifest.repeats).map(move |k| (id, k)))
+        {
+            match first.get(&(c.id, *id, rep)).map(|r| r.outcome) {
                 Some(Outcome::Passed) => cell.passed += 1,
                 Some(Outcome::Failed) => cell.failed += 1,
                 Some(Outcome::Error) => cell.error += 1,
@@ -121,6 +139,7 @@ mod tests {
             config: cfg,
             problem_id: p.into(),
             trial_no: n,
+            rep: 1,
             outcome: o,
         }
     }

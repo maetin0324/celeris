@@ -33,6 +33,9 @@ pub struct TrialRecord {
     pub config: ConfigId,
     pub problem_id: String,
     pub trial_no: u32,
+    /// 独立反復の番号（1 始まり）。trial_no（内部再試行）とは別 ID。
+    #[serde(default = "one")]
+    pub rep: u32,
     /// problem 内の arm 実行位置（1 始まり）。順序交絡の監査用。
     #[serde(default)]
     pub arm_rank: u32,
@@ -56,6 +59,10 @@ pub struct TrialRecord {
     pub kb_sha256_initial: String,
     pub workspace_sha256_final: String,
     pub kb_sha256_final: String,
+}
+
+fn one() -> u32 {
+    1
 }
 
 impl TrialRecord {

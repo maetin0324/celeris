@@ -123,7 +123,7 @@ mock の出力は `run-meta.json` / `summary.json` / export に `evidence_kind: 
 H1. **昇格**（本番切替）: GUI の「リリース」画面で対象 release の gate 結果を確認して昇格する。昇格前の確認（読み取りのみ）:
 ```sh
 CT=$CARGO_TARGET_DIR/debug/celerisctl    # 本番では ~/.local/celeris/current/bin/celerisctl
-$CT release preview --help              # 昇格の要約（current → 対象）の出し方
+$CT release preview --releases-dir ~/.local/celeris/releases <SHA12>   # 昇格の要約（current → 対象。読み取りのみ）
 ```
 `systemctl --user` の再起動、`~/.local/celeris/releases` の差し替えは GUI/`scripts/selfdeploy/promote.sh` に任せ、手で触らない。
 H2. **secret の確認と登録**（値は人が入力。ログ・チャットに貼らない）: 確認 `GET /api/v1/secrets`（`fingerprint` の有無だけが見える）。登録は GUI `/accounts`、または `PUT /api/v1/secrets/jev_api_key` に `{"value": "..."}`。
@@ -177,5 +177,6 @@ H6. **cluster job**: cancel された試行の job は自動では消えない�
 2026-10-16、この worktree の build で次を実行して確認した。
 - 実際に走らせた（exit 0）: `celeris-campaign validate` / `dry-run` / `run --executor mock`（executed 12、再実行で resumed_skipped 12）/ `check` / `export`。
 - `--executor celeris` を `--api-url` 無しで起動 → `error: --api-url is required for celeris`（引数の存在を確認。実 API は呼んでいない）。`grade` は `--case`/`--artifact` を要求することを確認。
+- `celerisctl release preview` は `--releases-dir` と `<SHA12>` を要し、`db backup` は `--src` を持つことを `--help` で確認。
 - `celerisctl --help` に `campaign` / `release` / `routing` / `db` / `api-request` が存在、`celerisctl campaign export --help` に `--out`・`--manifest-hash`・`--verify-connected`・`--db` が存在。
 - `GET/PUT /api/v1/secrets` は `crates/task-api/src/handlers.rs` のルートとして存在（実呼び出しはしていない）。

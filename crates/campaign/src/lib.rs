@@ -12,6 +12,7 @@ pub mod export;
 pub mod grader;
 pub mod harness_exec;
 pub mod isolation;
+pub mod jev_smoke;
 pub mod ledger;
 pub mod manifest;
 pub mod record;

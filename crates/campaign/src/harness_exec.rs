@@ -24,7 +24,9 @@ use serde_json::Value;
 
 use crate::{
     aggregate::Outcome,
-    executor::{ExecResult, ExecStatus, Executor, ObservedRun, TaskRef, TokenUsage, TrialRequest},
+    executor::{
+        ExecError, ExecResult, ExecStatus, Executor, ObservedRun, TaskRef, TokenUsage, TrialRequest,
+    },
 };
 
 /// 起動する command（注入点）。
@@ -247,21 +249,21 @@ impl Executor for HarnessExecutor {
         }))
     }
 
-    fn lookup(&self, key: &str) -> Result<Option<TaskRef>, String> {
+    fn lookup(&self, key: &str) -> Result<Option<TaskRef>, ExecError> {
         if let Some(m) = self.meta(key)? {
             return Ok(Some(Self::task_ref(key, &m)));
         }
         // 起動中の目印だけが残っている: spawn 済みか分からないので二重起動を避けて止める。
         if self.dir(key)?.join("starting").exists() {
-            return Err(format!(
+            return Err(ExecError::unknown(format!(
                 "{key}: start marker without meta (crash during spawn); inspect {} and remove it by hand",
                 self.dir(key)?.display()
-            ));
+            )));
         }
         Ok(None)
     }
 
-    fn submit(&self, req: &TrialRequest, key: &str) -> Result<TaskRef, String> {
+    fn submit(&self, req: &TrialRequest, key: &str) -> Result<TaskRef, ExecError> {
         if let Some(t) = self.lookup(key)? {
             return Ok(t);
         }
@@ -331,7 +333,7 @@ impl Executor for HarnessExecutor {
         Ok(Self::task_ref(key, &m))
     }
 
-    fn poll(&self, t: &TaskRef) -> Result<ExecStatus, String> {
+    fn poll(&self, t: &TaskRef) -> Result<ExecStatus, ExecError> {
         let key = &t.task_id;
         let m = self
             .meta(key)?
@@ -388,7 +390,7 @@ impl Executor for HarnessExecutor {
         }
     }
 
-    fn cancel(&self, t: &TaskRef, reason: &str) -> Result<(), String> {
+    fn cancel(&self, t: &TaskRef, reason: &str) -> Result<(), ExecError> {
         let key = &t.task_id;
         let Some(m) = self.meta(key)? else {
             return Ok(());

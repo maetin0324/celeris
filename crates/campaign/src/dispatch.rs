@@ -3,7 +3,7 @@
 use serde_json::Value;
 
 use crate::{
-    executor::{ExecStatus, Executor, TaskRef, TrialRequest},
+    executor::{ExecError, ExecStatus, Executor, TaskRef, TrialRequest, Usage},
     manifest::ConfigId,
 };
 
@@ -48,29 +48,35 @@ impl<A: Executor, BC: Executor> Executor for ArmDispatch<A, BC> {
     fn routing(&self, r: &TrialRequest) -> Result<Value, String> {
         self.by_req(r).routing(r)
     }
-    fn lookup(&self, key: &str) -> Result<Option<TaskRef>, String> {
+    fn lookup(&self, key: &str) -> Result<Option<TaskRef>, ExecError> {
         // 腕は key だけでは分からないので両方を引く（A は局所 file、B/C は task-api）。
         match self.a.lookup(key)? {
             Some(t) => Ok(Some(t)),
             None => self.bc.lookup(key),
         }
     }
-    fn submit(&self, r: &TrialRequest, key: &str) -> Result<TaskRef, String> {
+    fn submit(&self, r: &TrialRequest, key: &str) -> Result<TaskRef, ExecError> {
         self.by_req(r).submit(r, key)
     }
-    fn resolve(&self, r: &TrialRequest, key: &str) -> Result<TaskRef, String> {
+    fn resolve(&self, r: &TrialRequest, key: &str) -> Result<TaskRef, ExecError> {
         self.by_req(r).resolve(r, key)
     }
-    fn track(&self, t: &TaskRef) -> Result<TaskRef, String> {
+    fn track(&self, t: &TaskRef) -> Result<TaskRef, ExecError> {
         self.by_task(t).track(t)
     }
     fn observed(&self, t: &TaskRef) -> Result<Vec<crate::record::ObservedRun>, String> {
         self.by_task(t).observed(t)
     }
-    fn poll(&self, t: &TaskRef) -> Result<ExecStatus, String> {
+    fn poll(&self, t: &TaskRef) -> Result<ExecStatus, ExecError> {
         self.by_task(t).poll(t)
     }
-    fn cancel(&self, t: &TaskRef, reason: &str) -> Result<(), String> {
+    fn cancel(&self, t: &TaskRef, reason: &str) -> Result<(), ExecError> {
         self.by_task(t).cancel(t, reason)
+    }
+    fn usage(&self, t: &TaskRef) -> Result<Option<Usage>, ExecError> {
+        self.by_task(t).usage(t)
+    }
+    fn stopped(&self, t: &TaskRef) -> Result<bool, ExecError> {
+        self.by_task(t).stopped(t)
     }
 }

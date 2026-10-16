@@ -5,7 +5,9 @@ use std::{collections::BTreeMap, fs, path::Path, sync::Mutex};
 use celeris_campaign::{
     aggregate::Outcome,
     checker::check,
-    executor::{ExecResult, ExecStatus, Executor, TaskRef, TokenUsage, TrialRequest, Usage},
+    executor::{
+        ExecError, ExecResult, ExecStatus, Executor, TaskRef, TokenUsage, TrialRequest, Usage,
+    },
     ledger::Ledger,
     manifest::{
         Budget, CampaignManifest, Cap, Config, ConfigId, InputRef, Secondary, SnapshotRef, Split,
@@ -168,7 +170,7 @@ impl Executor for Scripted {
             self.script(req.config.id, req.problem_id).done,
         ))
     }
-    fn submit(&self, req: &TrialRequest, key: &str) -> Result<TaskRef, String> {
+    fn submit(&self, req: &TrialRequest, key: &str) -> Result<TaskRef, ExecError> {
         self.seen_caps.lock().map_err(|e| e.to_string())?.push((
             req.config.id,
             req.problem_id.to_string(),
@@ -183,7 +185,7 @@ impl Executor for Scripted {
             cluster_job_ids: vec![format!("j-{key}")],
         })
     }
-    fn lookup(&self, key: &str) -> Result<Option<TaskRef>, String> {
+    fn lookup(&self, key: &str) -> Result<Option<TaskRef>, ExecError> {
         let known = self
             .keys
             .lock()
@@ -196,7 +198,7 @@ impl Executor for Scripted {
             cluster_job_ids: vec![format!("j-{key}")],
         }))
     }
-    fn poll(&self, t: &TaskRef) -> Result<ExecStatus, String> {
+    fn poll(&self, t: &TaskRef) -> Result<ExecStatus, ExecError> {
         let key = t.task_id.trim_start_matches("t-").to_string();
         let (c, p) = self
             .keys
@@ -215,7 +217,7 @@ impl Executor for Scripted {
             Ok(ExecStatus::Done(s.done))
         }
     }
-    fn usage(&self, t: &TaskRef) -> Result<Option<Usage>, String> {
+    fn usage(&self, t: &TaskRef) -> Result<Option<Usage>, ExecError> {
         let key = t.task_id.trim_start_matches("t-").to_string();
         let (c, p) = self
             .keys
@@ -232,7 +234,7 @@ impl Executor for Scripted {
             .unwrap_or(&0);
         Ok(self.script(c, &p).running.get(n.saturating_sub(1)).copied())
     }
-    fn cancel(&self, t: &TaskRef, reason: &str) -> Result<(), String> {
+    fn cancel(&self, t: &TaskRef, reason: &str) -> Result<(), ExecError> {
         self.cancelled
             .lock()
             .map_err(|e| e.to_string())?

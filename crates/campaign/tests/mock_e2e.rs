@@ -237,9 +237,9 @@ fn resume_after_lost_response_and_restart_never_duplicates_tasks() {
     let o = opts(d.path());
     let x = MockAsyncExecutor::new(1);
     x.lose_next_submit_responses(1);
-    // 1 回目: 応答喪失は A の 1 試行だけを error にし、他は Wait のまま止まる（外部待ち）。
+    // 1 回目: 応答喪失は『投入結果不明』で error にならず、A の 1 試行は冪等キーの照会に回る。他は Wait。
     let first = run(&m, &i, &x, &o).expect("first run");
-    assert_eq!(first.executor_errors, 1);
+    assert_eq!(first.executor_errors, 0);
     assert!(first.waiting > 0);
     // 2 回目以降（同じ out・同じ外部）: 同じ試行を再投入しない。
     run(&m, &i, &x, &o).expect("resume");

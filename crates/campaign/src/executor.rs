@@ -57,6 +57,65 @@ pub enum ExecStatus {
     Wait,
 }
 
+/// 非同期 executor の失敗の分類。runner はこの分類で台帳の扱いを変える（一律 error にしない）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ErrKind {
+    /// 確実に未投入で、再試行しても害が無い（接続前の失敗など）。行は planned のまま次回また試す。
+    NotSent,
+    /// 確実に未投入で、再試行しても通らない（400 の拒否・設定不備）。その試行だけ error にする。
+    Refused,
+    /// 投入の結果が不明（POST の応答喪失など）。再 submit せず、冪等キーの照会で追跡を続ける。
+    Unknown,
+    /// 投入済みの試行との通信が切れた（track/poll/usage/cancel）。台帳の task を保ち、次回また追う。
+    Interrupted,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExecError {
+    pub kind: ErrKind,
+    pub msg: String,
+}
+
+impl ExecError {
+    pub fn new(kind: ErrKind, msg: impl Into<String>) -> Self {
+        Self {
+            kind,
+            msg: msg.into(),
+        }
+    }
+    pub fn not_sent(msg: impl Into<String>) -> Self {
+        Self::new(ErrKind::NotSent, msg)
+    }
+    pub fn refused(msg: impl Into<String>) -> Self {
+        Self::new(ErrKind::Refused, msg)
+    }
+    pub fn unknown(msg: impl Into<String>) -> Self {
+        Self::new(ErrKind::Unknown, msg)
+    }
+    pub fn interrupted(msg: impl Into<String>) -> Self {
+        Self::new(ErrKind::Interrupted, msg)
+    }
+}
+
+impl std::fmt::Display for ExecError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}: {}", self.kind, self.msg)
+    }
+}
+
+/// 分類が付いていない失敗は保守的に `Unknown`（結果不明）として扱う。
+impl From<String> for ExecError {
+    fn from(msg: String) -> Self {
+        Self::unknown(msg)
+    }
+}
+
+impl From<&str> for ExecError {
+    fn from(msg: &str) -> Self {
+        Self::unknown(msg)
+    }
+}
+
 pub trait Executor {
     fn name(&self) -> &'static str;
     /// true なら結果は模擬（mock）で、実性能・実費用として扱えない。出力（run-meta・summary・export）に印として残る。
@@ -78,17 +137,20 @@ pub trait Executor {
     }
 
     /// 冪等キーで既に投入済みの task を照会する。応答喪失・再起動後の再開手順の第 1 段。
-    fn lookup(&self, _key: &str) -> Result<Option<TaskRef>, String> {
+    fn lookup(&self, _key: &str) -> Result<Option<TaskRef>, ExecError> {
         Ok(None)
     }
 
     /// 冪等キー付きで task を投入する。同じ key の再投入は新しい task を作ってはならない。
-    fn submit(&self, _req: &TrialRequest, _key: &str) -> Result<TaskRef, String> {
-        Err(format!("executor {} does not support submit", self.name()))
+    fn submit(&self, _req: &TrialRequest, _key: &str) -> Result<TaskRef, ExecError> {
+        Err(ExecError::refused(format!(
+            "executor {} does not support submit",
+            self.name()
+        )))
     }
 
     /// 再開手順: 同一冪等キーで照会し、無ければ投入する（planned のまま task_id 無しのとき）。
-    fn resolve(&self, req: &TrialRequest, key: &str) -> Result<TaskRef, String> {
+    fn resolve(&self, req: &TrialRequest, key: &str) -> Result<TaskRef, ExecError> {
         match self.lookup(key)? {
             Some(t) => Ok(t),
             None => self.submit(req, key),
@@ -96,17 +158,20 @@ pub trait Executor {
     }
 
     /// 子 task・クラスタ job を含む最新の参照を返す（台帳へ追記される）。
-    fn track(&self, t: &TaskRef) -> Result<TaskRef, String> {
+    fn track(&self, t: &TaskRef) -> Result<TaskRef, ExecError> {
         Ok(t.clone())
     }
 
     /// 実行中の累積使用量。観測できない executor は None（runner は上限の実行中判定をせず、完了後に判定する）。
-    fn usage(&self, _t: &TaskRef) -> Result<Option<Usage>, String> {
+    fn usage(&self, _t: &TaskRef) -> Result<Option<Usage>, ExecError> {
         Ok(None)
     }
 
-    fn poll(&self, _t: &TaskRef) -> Result<ExecStatus, String> {
-        Err(format!("executor {} does not support poll", self.name()))
+    fn poll(&self, _t: &TaskRef) -> Result<ExecStatus, ExecError> {
+        Err(ExecError::interrupted(format!(
+            "executor {} does not support poll",
+            self.name()
+        )))
     }
 
     /// 試行で実際に走った全 run（子・孫・再試行を含む）の実測。観測できない executor は空。
@@ -116,8 +181,14 @@ pub trait Executor {
     }
 
     /// 打ち切り時のキャンセル。task 本体・子 task・クラスタ job のすべてを対象にする。
-    fn cancel(&self, _t: &TaskRef, _reason: &str) -> Result<(), String> {
+    fn cancel(&self, _t: &TaskRef, _reason: &str) -> Result<(), ExecError> {
         Ok(())
+    }
+
+    /// 外部の task（子 task・クラスタ job を含む）がすべて終端か。cancel 要求が通っただけでは停止とみなさない。
+    /// false なら台帳は cancel_pending のまま残り、予約も解除されない。
+    fn stopped(&self, _t: &TaskRef) -> Result<bool, ExecError> {
+        Ok(true)
     }
 }
 
@@ -243,6 +314,15 @@ struct MockRemote {
     /// 投入は成功させるが応答だけ失う回数（残り）。
     lose_responses: u32,
     cancelled: Vec<(TaskRef, String)>,
+    /// 次の poll / usage / cancel を通信断（Interrupted）にする回数（残り）。
+    fail_polls: u32,
+    fail_usages: u32,
+    fail_cancels: u32,
+    /// cancel 要求は通るが、外部がまだ終端でない（stopped が false）回数（残り）。
+    unconfirmed_stops: u32,
+    /// 実行中に報告する累積使用量（None なら観測不能）。
+    usage: Option<Usage>,
+    poll_calls: u32,
 }
 
 impl MockAsyncExecutor {
@@ -271,6 +351,34 @@ impl MockAsyncExecutor {
         self.remote().submit_calls
     }
 
+    pub fn poll_calls(&self) -> u32 {
+        self.remote().poll_calls
+    }
+
+    /// 次の `n` 回の poll を通信断にする（投入済みの試行との接続断）。
+    pub fn fail_next_polls(&self, n: u32) {
+        self.remote().fail_polls = n;
+    }
+
+    pub fn fail_next_usages(&self, n: u32) {
+        self.remote().fail_usages = n;
+    }
+
+    /// 次の `n` 回の cancel を通信断にする（外部は止まらない）。
+    pub fn fail_next_cancels(&self, n: u32) {
+        self.remote().fail_cancels = n;
+    }
+
+    /// 次の `n` 回の停止確認で「まだ終端でない」を返す。
+    pub fn unconfirmed_stops(&self, n: u32) {
+        self.remote().unconfirmed_stops = n;
+    }
+
+    /// 実行中の累積使用量として報告する値。
+    pub fn set_usage(&self, tokens: Option<TokenUsage>, wall_secs: u64) {
+        self.remote().usage = Some(Usage { tokens, wall_secs });
+    }
+
     pub fn cancelled(&self) -> Vec<(TaskRef, String)> {
         self.remote().cancelled.clone()
     }
@@ -297,11 +405,11 @@ impl Executor for MockAsyncExecutor {
         Ok(serde_json::json!({"mode": "mock", "arm": format!("{:?}", req.config.id)}))
     }
 
-    fn lookup(&self, key: &str) -> Result<Option<TaskRef>, String> {
+    fn lookup(&self, key: &str) -> Result<Option<TaskRef>, ExecError> {
         Ok(self.remote().tasks.get(key).map(|(t, _)| t.clone()))
     }
 
-    fn submit(&self, _req: &TrialRequest, key: &str) -> Result<TaskRef, String> {
+    fn submit(&self, _req: &TrialRequest, key: &str) -> Result<TaskRef, ExecError> {
         let mut r = self.remote();
         r.submit_calls += 1;
         // 外部側の冪等性: 同じ key は新しい task を作らない。
@@ -324,13 +432,27 @@ impl Executor for MockAsyncExecutor {
             .clone();
         if r.lose_responses > 0 {
             r.lose_responses -= 1;
-            return Err("response lost".into());
+            return Err(ExecError::unknown("response lost"));
         }
         Ok(t)
     }
 
-    fn poll(&self, t: &TaskRef) -> Result<ExecStatus, String> {
+    fn usage(&self, _t: &TaskRef) -> Result<Option<Usage>, ExecError> {
         let mut r = self.remote();
+        if r.fail_usages > 0 {
+            r.fail_usages -= 1;
+            return Err(ExecError::interrupted("usage: connection lost"));
+        }
+        Ok(r.usage)
+    }
+
+    fn poll(&self, t: &TaskRef) -> Result<ExecStatus, ExecError> {
+        let mut r = self.remote();
+        r.poll_calls += 1;
+        if r.fail_polls > 0 {
+            r.fail_polls -= 1;
+            return Err(ExecError::interrupted("poll: connection lost"));
+        }
         let polls = r
             .tasks
             .values_mut()
@@ -339,7 +461,7 @@ impl Executor for MockAsyncExecutor {
                 *n += 1;
                 *n
             })
-            .ok_or_else(|| format!("unknown task {}", t.task_id))?;
+            .ok_or_else(|| ExecError::interrupted(format!("unknown task {}", t.task_id)))?;
         if polls <= self.wait_polls {
             return Ok(ExecStatus::Wait);
         }
@@ -351,8 +473,22 @@ impl Executor for MockAsyncExecutor {
         }))
     }
 
-    fn cancel(&self, t: &TaskRef, reason: &str) -> Result<(), String> {
-        self.remote().cancelled.push((t.clone(), reason.into()));
+    fn cancel(&self, t: &TaskRef, reason: &str) -> Result<(), ExecError> {
+        let mut r = self.remote();
+        if r.fail_cancels > 0 {
+            r.fail_cancels -= 1;
+            return Err(ExecError::interrupted("cancel: connection lost"));
+        }
+        r.cancelled.push((t.clone(), reason.into()));
         Ok(())
+    }
+
+    fn stopped(&self, t: &TaskRef) -> Result<bool, ExecError> {
+        let mut r = self.remote();
+        if r.unconfirmed_stops > 0 {
+            r.unconfirmed_stops -= 1;
+            return Ok(false);
+        }
+        Ok(r.cancelled.iter().any(|(c, _)| c.task_id == t.task_id))
     }
 }

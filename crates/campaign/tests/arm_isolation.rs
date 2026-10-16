@@ -5,7 +5,9 @@ use std::{collections::BTreeMap, fs, path::Path};
 use celeris_campaign::{
     aggregate::Outcome,
     checker::check,
-    executor::{ExecResult, ExecStatus, Executor, MockExecutor, MockStep, TaskRef, TrialRequest},
+    executor::{
+        ExecError, ExecResult, ExecStatus, Executor, MockExecutor, MockStep, TaskRef, TrialRequest,
+    },
     manifest::{
         ArmOrder, Budget, CampaignManifest, Cap, Config, ConfigId, InputRef, Secondary,
         SnapshotRef, Split, Termination, manifest_hash,
@@ -289,19 +291,19 @@ impl Executor for AsyncAErr {
     fn execute(&self, _r: &TrialRequest) -> Result<ExecStatus, String> {
         Err("async only".into())
     }
-    fn submit(&self, req: &TrialRequest, key: &str) -> Result<TaskRef, String> {
+    fn submit(&self, req: &TrialRequest, key: &str) -> Result<TaskRef, ExecError> {
         if req.config.id == ConfigId::A {
-            return Err("submit refused".into());
+            return Err(ExecError::refused("submit refused"));
         }
         self.inner.submit(req, key)
     }
-    fn lookup(&self, key: &str) -> Result<Option<TaskRef>, String> {
+    fn lookup(&self, key: &str) -> Result<Option<TaskRef>, ExecError> {
         self.inner.lookup(key)
     }
-    fn poll(&self, t: &TaskRef) -> Result<ExecStatus, String> {
+    fn poll(&self, t: &TaskRef) -> Result<ExecStatus, ExecError> {
         self.inner.poll(t)
     }
-    fn cancel(&self, t: &TaskRef, why: &str) -> Result<(), String> {
+    fn cancel(&self, t: &TaskRef, why: &str) -> Result<(), ExecError> {
         self.inner.cancel(t, why)
     }
 }

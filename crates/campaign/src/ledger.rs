@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-use crate::manifest::ConfigId;
+use crate::manifest::{Cap, ConfigId, TokenUsage};
 
 pub const LEDGER_FILE: &str = "ledger.jsonl";
 pub const LEDGER_SCHEMA: &str = "celeris.campaign-ledger/1";
@@ -24,6 +24,10 @@ pub enum LedgerState {
     Planned,
     Submitted,
     Waiting,
+    /// 投入の結果が不明（POST 応答喪失など）。再 submit せず、冪等キーの照会で追跡を続ける。
+    SubmitUnknown,
+    /// cancel を要求した（または失敗した）が、外部の終端をまだ確認していない。terminal でも予約解除でもない。
+    CancelPending,
     Done,
     Cancelled,
 }
@@ -80,6 +84,16 @@ pub struct TaskRef {
     pub cluster_job_ids: Vec<String>,
 }
 
+/// 実行中に最後に観測した累積使用量。tokens が None は欠測（0 ではない）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ObservedUsage {
+    pub tokens: Option<TokenUsage>,
+    pub wall_secs: u64,
+}
+
+/// 投入前に確保した予約額（この試行の実効上限）。外部の終端を確認するまで解除しない。
+pub type Reserved = Cap;
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct LedgerRow {
     pub schema: String,
@@ -104,6 +118,20 @@ pub struct LedgerRow {
     pub submitted_at: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// 投入を試みた時刻（planned にした時）。投入結果が不明でも壁時計はここから数える。旧行は None。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<u64>,
+    /// 最後に観測した累積使用量。通信断の間もここに残る。旧行は None。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_usage: Option<ObservedUsage>,
+    /// 予約額。旧行は None。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reserved: Option<Reserved>,
+    /// 連続した通信失敗の回数（成功で 0 に戻る）と、最後の失敗の本文。
+    #[serde(default)]
+    pub comm_failures: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
 }
 
 impl LedgerRow {
@@ -225,6 +253,11 @@ impl Ledger {
                 workspace: workspace.into(),
                 submitted_at: None,
                 reason: None,
+                started_at: Some(now_secs()),
+                observed_usage: None,
+                reserved: None,
+                comm_failures: 0,
+                last_error: None,
             })?;
         }
         self.rows
@@ -270,10 +303,78 @@ impl Ledger {
         self.update(key, |r| r.state = LedgerState::Done)
     }
 
+    /// 予約額を確保する（既にあれば何もしない）。投入の前に呼ぶ。
+    pub fn reserve(&mut self, key: &TrialKey, cap: Reserved) -> Result<(), String> {
+        if self.rows.get(key).is_some_and(|r| r.reserved.is_some()) {
+            return Ok(());
+        }
+        self.update(key, |r| r.reserved = Some(cap))
+    }
+
+    /// 投入結果が不明。task_id は無いまま、冪等キーでの照会を続ける。
+    pub fn mark_submit_unknown(&mut self, key: &TrialKey, err: &str) -> Result<(), String> {
+        self.update(key, |r| {
+            r.state = LedgerState::SubmitUnknown;
+            r.comm_failures += 1;
+            r.last_error = Some(err.into());
+        })
+    }
+
+    /// 通信失敗の記録（state・task・usage・予約は変えない）。
+    pub fn note_comm_failure(&mut self, key: &TrialKey, err: &str) -> Result<(), String> {
+        self.update(key, |r| {
+            r.comm_failures += 1;
+            r.last_error = Some(err.into());
+        })
+    }
+
+    /// 通信が回復した（失敗の連続を 0 に戻す）。
+    pub fn note_comm_ok(&mut self, key: &TrialKey) -> Result<(), String> {
+        if self.rows.get(key).is_some_and(|r| r.comm_failures == 0) {
+            return Ok(());
+        }
+        self.update(key, |r| {
+            r.comm_failures = 0;
+            r.last_error = None;
+        })
+    }
+
+    /// 観測した累積使用量を残す（変化があるときだけ追記）。
+    pub fn record_usage(&mut self, key: &TrialKey, u: ObservedUsage) -> Result<(), String> {
+        if self
+            .rows
+            .get(key)
+            .is_some_and(|r| r.observed_usage == Some(u))
+        {
+            return Ok(());
+        }
+        self.update(key, |r| r.observed_usage = Some(u))
+    }
+
+    /// cancel を要求した。外部の終端を確認する（`mark_cancelled`）まで terminal にしない。
+    pub fn mark_cancel_pending(
+        &mut self,
+        key: &TrialKey,
+        reason: &str,
+        err: Option<&str>,
+    ) -> Result<(), String> {
+        self.update(key, |r| {
+            r.state = LedgerState::CancelPending;
+            r.reason = Some(reason.into());
+            if let Some(e) = err {
+                r.comm_failures += 1;
+                r.last_error = Some(e.into());
+            }
+        })
+    }
+
+    /// 外部の停止を確認した後だけ呼ぶ。
     pub fn mark_cancelled(&mut self, key: &TrialKey, reason: &str) -> Result<(), String> {
         self.update(key, |r| {
             r.state = LedgerState::Cancelled;
             r.reason = Some(reason.into());
+            r.comm_failures = 0;
+            r.last_error = None;
         })
     }
 }

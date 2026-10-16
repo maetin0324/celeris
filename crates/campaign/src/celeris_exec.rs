@@ -20,7 +20,8 @@ use serde_json::{Map, Value, json};
 use crate::{
     aggregate::Outcome,
     executor::{
-        ExecResult, ExecStatus, Executor, ObservedRun, TaskRef, TokenUsage, TrialRequest, Usage,
+        ExecError, ExecResult, ExecStatus, Executor, ObservedRun, TaskRef, TokenUsage, TrialRequest,
+        Usage,
     },
     manifest::{Config, ConfigId},
 };
@@ -477,9 +478,10 @@ impl<T: Transport> Executor for CelerisExecutor<T> {
         routing_override(req.config)
     }
 
-    fn lookup(&self, key: &str) -> Result<Option<TaskRef>, String> {
+    fn lookup(&self, key: &str) -> Result<Option<TaskRef>, ExecError> {
         Ok(self
-            .tasks_with_label(key)?
+            .tasks_with_label(key)
+            .map_err(ExecError::interrupted)?
             .into_iter()
             .next()
             .map(|id| TaskRef {
@@ -488,27 +490,44 @@ impl<T: Transport> Executor for CelerisExecutor<T> {
             }))
     }
 
-    fn submit(&self, req: &TrialRequest, key: &str) -> Result<TaskRef, String> {
-        let body = self.body(req, key)?;
-        // 二重起動の防止: 投入直前にも照会する。
-        if let Some(t) = self.lookup(key)? {
-            return Ok(t);
+    fn submit(&self, req: &TrialRequest, key: &str) -> Result<TaskRef, ExecError> {
+        // body を作れない（template・設定の不備）のは何も送る前の拒否。
+        let body = self.body(req, key).map_err(ExecError::refused)?;
+        // 二重起動の防止: 投入直前にも照会する。照会が失敗しても POST はまだ送っていない。
+        match self.tasks_with_label(key) {
+            Ok(ids) => {
+                if let Some(id) = ids.into_iter().next() {
+                    return Ok(TaskRef {
+                        task_id: id,
+                        ..TaskRef::default()
+                    });
+                }
+            }
+            Err(e) => return Err(ExecError::not_sent(e)),
         }
+        // POST の失敗（応答なし）は、要求が届いたか不明。
         let r = self
             .transport
-            .request("POST", "/api/v1/tasks", Some(&body))?;
+            .request("POST", "/api/v1/tasks", Some(&body))
+            .map_err(ExecError::unknown)?;
         if !ok(&r) {
-            return Err(format!("POST /api/v1/tasks: HTTP {} {}", r.status, r.body));
+            let msg = format!("POST /api/v1/tasks: HTTP {} {}", r.status, r.body);
+            // 4xx は server が受理しなかった確定。5xx は処理後に落ちた可能性がある。
+            return Err(if (400..500).contains(&r.status) {
+                ExecError::refused(msg)
+            } else {
+                ExecError::unknown(msg)
+            });
         }
         let created = r.body["id"]
             .as_str()
-            .ok_or("POST /api/v1/tasks: id missing")?
+            .ok_or_else(|| ExecError::unknown("POST /api/v1/tasks: id missing"))?
             .to_string();
         // 照会と投入の間に別の起動が投入していたら、古い方を正とし、新しい方を閉じる。
-        let ids = self.tasks_with_label(key)?;
+        let ids = self.tasks_with_label(key).map_err(ExecError::unknown)?;
         let first = ids.first().cloned().unwrap_or_else(|| created.clone());
         if first != created {
-            self.cancel_task(&created)?;
+            self.cancel_task(&created).map_err(ExecError::unknown)?;
         }
         Ok(TaskRef {
             task_id: first,
@@ -516,15 +535,17 @@ impl<T: Transport> Executor for CelerisExecutor<T> {
         })
     }
 
-    fn track(&self, t: &TaskRef) -> Result<TaskRef, String> {
-        let tree = self.walk(&t.task_id)?;
+    fn track(&self, t: &TaskRef) -> Result<TaskRef, ExecError> {
+        let tree = self.walk(&t.task_id).map_err(ExecError::interrupted)?;
         Ok(Self::task_ref(t, &tree))
     }
 
     /// 実行中の累積（子 task を含む全 run の usage の内訳と、task 作成からの server 時計の経過）。
-    fn usage(&self, t: &TaskRef) -> Result<Option<Usage>, String> {
-        let tree = self.walk(&t.task_id)?;
-        let root = tree.first().ok_or("empty task tree")?;
+    fn usage(&self, t: &TaskRef) -> Result<Option<Usage>, ExecError> {
+        let tree = self.walk(&t.task_id).map_err(ExecError::interrupted)?;
+        let root = tree
+            .first()
+            .ok_or_else(|| ExecError::interrupted("empty task tree"))?;
         let elapsed = secs_between(
             parse_ts(&root.detail["task"]["created_at"]),
             parse_ts(&root.detail["timers"]["now"]),
@@ -539,9 +560,11 @@ impl<T: Transport> Executor for CelerisExecutor<T> {
         Ok(Self::observed_runs(&self.walk(&t.task_id)?))
     }
 
-    fn poll(&self, t: &TaskRef) -> Result<ExecStatus, String> {
-        let tree = self.walk(&t.task_id)?;
-        let root = tree.first().ok_or("empty task tree")?;
+    fn poll(&self, t: &TaskRef) -> Result<ExecStatus, ExecError> {
+        let tree = self.walk(&t.task_id).map_err(ExecError::interrupted)?;
+        let root = tree
+            .first()
+            .ok_or_else(|| ExecError::interrupted("empty task tree"))?;
         let created = parse_ts(&root.detail["task"]["created_at"]);
         let elapsed = secs_between(created, parse_ts(&root.detail["timers"]["now"]));
         let pending = tree.iter().any(|n| !is_terminal(&n.status))
@@ -581,7 +604,7 @@ impl<T: Transport> Executor for CelerisExecutor<T> {
 
     /// 子孫（深い順）→ 根の順に終端でない task を cancel API で閉じ、cluster job は人手手順を記録する。
     /// 失敗があっても全対象を試してから Err を返す。
-    fn cancel(&self, t: &TaskRef, reason: &str) -> Result<(), String> {
+    fn cancel(&self, t: &TaskRef, reason: &str) -> Result<(), ExecError> {
         let mut errors = Vec::new();
         let (tree, mut jobs) = match self.walk(&t.task_id) {
             Ok(tree) => {
@@ -627,7 +650,7 @@ impl<T: Transport> Executor for CelerisExecutor<T> {
         if errors.is_empty() {
             Ok(())
         } else {
-            Err(errors.join("; "))
+            Err(ExecError::interrupted(errors.join("; ")))
         }
     }
 }

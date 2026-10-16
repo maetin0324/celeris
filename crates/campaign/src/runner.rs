@@ -12,8 +12,8 @@ use serde_json::{Value, json};
 
 use crate::{
     aggregate::Outcome,
-    executor::{ExecResult, ExecStatus, Executor, TrialRequest, Usage},
-    ledger::{Ledger, LedgerRow, LedgerState, TrialKey},
+    executor::{ErrKind, ExecError, ExecResult, ExecStatus, Executor, TrialRequest, Usage},
+    ledger::{Ledger, LedgerRow, LedgerState, ObservedUsage, TrialKey},
     manifest::{Budget, CampaignManifest, Cap, ConfigId},
     record::*,
     snapshot::{copy_tree, hash_tree},
@@ -102,6 +102,10 @@ fn arm_exhausted(b: &Budget, arm: (u64, u64)) -> bool {
 /// drive_async の結果。
 enum Driven {
     Done(ExecResult, Vec<ObservedRun>),
+    /// 外部の結果がまだ無い（待ち・通信断・投入結果不明）。台帳が追跡を続ける。
+    Deferred,
+    /// 確実な未投入の拒否（その試行だけ error）。
+    Refused(String),
     /// 実行中に上限を超えたので cancel した（観測した使用量と reason）。
     Cancelled(ExecResult, &'static str, Vec<ObservedRun>),
 }
@@ -334,22 +338,59 @@ fn new_record(
     }
 }
 
-/// 未完了の台帳行を cancel（外部の task・子 task・クラスタ job ごと）して台帳を閉じる。
-/// task_id がまだ無い planned 行は冪等キーで照会し、投入済みなら同様に cancel する。
+/// cancel の結果。`Pending` は停止を確認できていない（台帳は cancel_pending のまま・予約も解除しない）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CancelOutcome {
+    Stopped,
+    Pending,
+}
+
+/// 未完了の台帳行を cancel（外部の task・子 task・クラスタ job ごと）する。
+/// 先に cancel_pending を永続化し、cancel の成功と外部の終端の確認（`Executor::stopped`）が揃って初めて
+/// cancelled（terminal）にする。cancel・照会・確認の失敗は隠さず台帳に残し、次回の run が続ける。
+/// task_id がまだ無い行は冪等キーで照会し、投入済みなら同様に cancel する。
 fn cancel_row(
     exec: &dyn Executor,
     ledger: &mut Ledger,
     row: &LedgerRow,
     reason: &str,
-) -> Result<(), String> {
+) -> Result<CancelOutcome, String> {
+    let reason = match (row.state, row.reason.as_deref()) {
+        (LedgerState::CancelPending, Some(first)) => first,
+        _ => reason,
+    };
+    if row.state != LedgerState::CancelPending {
+        ledger.mark_cancel_pending(&row.key, reason, None)?;
+    }
     let t = match row.task_ref() {
         Some(t) => Some(t),
-        None => exec.lookup(&row.idempotency_key)?,
+        None => match exec.lookup(&row.idempotency_key) {
+            Ok(t) => t,
+            Err(e) => {
+                ledger.note_comm_failure(&row.key, &e.to_string())?;
+                return Ok(CancelOutcome::Pending);
+            }
+        },
     };
     if let Some(t) = t {
-        exec.cancel(&t, reason)?;
+        if let Err(e) = exec.cancel(&t, reason) {
+            ledger.note_comm_failure(&row.key, &format!("cancel: {e}"))?;
+            return Ok(CancelOutcome::Pending);
+        }
+        match exec.stopped(&t) {
+            Ok(true) => {}
+            Ok(false) => {
+                ledger.note_comm_failure(&row.key, "cancel: external task not yet terminal")?;
+                return Ok(CancelOutcome::Pending);
+            }
+            Err(e) => {
+                ledger.note_comm_failure(&row.key, &format!("stopped: {e}"))?;
+                return Ok(CancelOutcome::Pending);
+            }
+        }
     }
-    ledger.mark_cancelled(&row.key, reason)
+    ledger.mark_cancelled(&row.key, reason)?;
+    Ok(CancelOutcome::Stopped)
 }
 
 /// 非同期 executor の in-flight（この campaign の未完了の台帳行のうち自分以外）が `max_parallel` に達しているか。
@@ -366,19 +407,8 @@ fn at_parallel_cap(ledger: &Ledger, key: &TrialKey, hash: &str, max_parallel: u3
     in_flight >= max_parallel as usize
 }
 
-/// drive_async の失敗。executor の Err はその試行だけ error にし、台帳・fs の失敗は run の失敗にする。
-enum DriveErr {
-    Exec(String),
-    Fatal(String),
-}
-
-impl From<String> for DriveErr {
-    fn from(e: String) -> Self {
-        DriveErr::Fatal(e)
-    }
-}
-
-/// 非同期実行器の 1 試行を台帳経由で進める。Wait なら None（workspace は消さない）。
+/// 非同期実行器の 1 試行を台帳経由で進める。外部の結果が出ていない（Wait・通信断・結果不明）なら `Deferred`
+/// （workspace は消さず、再実行で同じ task を追う）。executor の失敗は `ErrKind` で扱いを分ける。
 #[allow(clippy::too_many_arguments)]
 fn drive_async(
     exec: &dyn Executor,
@@ -390,18 +420,42 @@ fn drive_async(
     repo: &Path,
     budget: &Budget,
     arm: (u64, u64),
-) -> Result<Option<Driven>, DriveErr> {
+) -> Result<Driven, String> {
     let ws_rel = format!("{rel}/workspace");
     let idem = key.idempotency_key();
     let known = ledger.get(key).cloned();
+    if known
+        .as_ref()
+        .is_some_and(|r| r.state == LedgerState::CancelPending)
+    {
+        // 停止の確認待ち。新しい仕事として扱わない（cancel の再試行は run の先頭で行う）。
+        return Ok(Driven::Deferred);
+    }
     let mut task = known.as_ref().and_then(LedgerRow::task_ref);
     if known.is_none() {
         // 投入『前』に planned を fsync する。ここで落ちても冪等キーで再開できる。
-        ledger.plan(key, &ws_rel, exec.routing(req).map_err(DriveErr::Exec)?)?;
+        ledger.plan(key, &ws_rel, exec.routing(req)?)?;
     }
+    // 予約額（この試行の実効上限）も投入前に台帳へ残す。外部の終端を確認するまで解除しない。
+    ledger.reserve(key, req.budget)?;
     if task.is_none() {
+        let unknown = known
+            .as_ref()
+            .is_some_and(|r| r.state == LedgerState::SubmitUnknown);
         // planned のまま（task_id 無し）: 同一冪等キーで照会し、無ければ投入する。
-        let existing = exec.lookup(&idem).map_err(DriveErr::Exec)?;
+        let existing = match exec.lookup(&idem) {
+            Ok(t) => t,
+            Err(e) if e.kind == ErrKind::Refused => return refuse(ledger, key, e),
+            Err(e) => {
+                ledger.note_comm_failure(key, &format!("lookup: {e}"))?;
+                return Ok(Driven::Deferred);
+            }
+        };
+        if existing.is_none() && unknown {
+            // 投入結果が不明のまま照会しても見つからない: 再 submit せず、次回の照会に回す。
+            ledger.note_comm_failure(key, "lookup: submit outcome still unknown")?;
+            return Ok(Driven::Deferred);
+        }
         if existing.is_none() {
             // 外部に何も無いので、workspace は初期 snapshot から作り直してよい。
             let _ = fs::remove_dir_all(out.join(rel));
@@ -411,52 +465,97 @@ fn drive_async(
         }
         let t = match existing {
             Some(t) => t,
-            None => exec.submit(req, &idem).map_err(DriveErr::Exec)?,
+            None => match exec.submit(req, &idem) {
+                Ok(t) => t,
+                Err(e) => match e.kind {
+                    ErrKind::Refused => return refuse(ledger, key, e),
+                    ErrKind::NotSent => {
+                        ledger.note_comm_failure(key, &format!("submit: {e}"))?;
+                        return Ok(Driven::Deferred);
+                    }
+                    ErrKind::Unknown | ErrKind::Interrupted => {
+                        ledger.mark_submit_unknown(key, &format!("submit: {e}"))?;
+                        return Ok(Driven::Deferred);
+                    }
+                },
+            },
         };
         ledger.mark_submitted(key, &t)?;
         task = Some(t);
     }
     let t = task.ok_or_else(|| String::from("task ref missing"))?;
-    let fresh = exec.track(&t).map_err(DriveErr::Exec)?;
+    // 投入済み: 以降の失敗は通信断。台帳の task・冪等キー・既観測 usage・開始時刻・予約を保ち、次回また追う。
+    let fresh = match exec.track(&t) {
+        Ok(f) => f,
+        Err(e) => return interrupted(ledger, key, "track", e),
+    };
     if fresh != t {
         ledger.mark_waiting(key, &fresh)?;
     }
-    match exec.poll(&fresh).map_err(DriveErr::Exec)? {
-        ExecStatus::Done(r) => {
-            let seen = exec.observed(&fresh).map_err(DriveErr::Exec)?;
-            Ok(Some(Driven::Done(r, seen)))
+    match exec.poll(&fresh) {
+        Err(e) => interrupted(ledger, key, "poll", e),
+        Ok(ExecStatus::Done(r)) => {
+            let seen = match exec.observed(&fresh) {
+                Ok(seen) => seen,
+                Err(e) => return interrupted(ledger, key, "observed", ExecError::interrupted(e)),
+            };
+            ledger.note_comm_ok(key)?;
+            Ok(Driven::Done(r, seen))
         }
-        ExecStatus::Wait => {
+        Ok(ExecStatus::Wait) => {
             // poll ごとに子 task・job を含む累積使用量を見て、上限超過なら cancel する。
-            if let Some(Usage { tokens, wall_secs }) = exec.usage(&fresh).map_err(DriveErr::Exec)?
-                && let Some(reason) = breach_reason(
+            let usage = match exec.usage(&fresh) {
+                Ok(u) => u,
+                Err(e) => return interrupted(ledger, key, "usage", e),
+            };
+            ledger.note_comm_ok(key)?;
+            if let Some(Usage { tokens, wall_secs }) = usage {
+                ledger.record_usage(key, ObservedUsage { tokens, wall_secs })?;
+                if let Some(reason) = breach_reason(
                     budget,
                     arm,
                     tokens.and_then(|u| u.count(budget.token_basis)),
                     wall_secs,
-                )
-            {
-                if let Some(row) = ledger.get(key).cloned() {
-                    cancel_row(exec, ledger, &row, reason)?;
+                ) {
+                    if let Some(row) = ledger.get(key).cloned() {
+                        cancel_row(exec, ledger, &row, reason)?;
+                    }
+                    let seen = exec.observed(&fresh).unwrap_or_default();
+                    return Ok(Driven::Cancelled(
+                        ExecResult {
+                            outcome: Outcome::Cancelled,
+                            tokens,
+                            cost_micro_usd: None,
+                            wall_secs,
+                        },
+                        reason,
+                        seen,
+                    ));
                 }
-                let seen = exec.observed(&fresh).unwrap_or_default();
-                return Ok(Some(Driven::Cancelled(
-                    ExecResult {
-                        outcome: Outcome::Cancelled,
-                        tokens,
-                        cost_micro_usd: None,
-                        wall_secs,
-                    },
-                    reason,
-                    seen,
-                )));
             }
             if ledger.get(key).map(|r| r.state) != Some(LedgerState::Waiting) {
                 ledger.mark_waiting(key, &fresh)?;
             }
-            Ok(None)
+            Ok(Driven::Deferred)
         }
     }
+}
+
+/// 確実な未投入で再試行しても通らない拒否: 外部に何も無いので台帳を閉じ、その試行だけ error にする。
+fn refuse(ledger: &mut Ledger, key: &TrialKey, e: ExecError) -> Result<Driven, String> {
+    ledger.mark_cancelled(key, REASON_EXECUTOR_ERROR)?;
+    Ok(Driven::Refused(e.msg))
+}
+
+/// 投入済みの試行との通信断: 失敗を台帳に残し、結果は出さずに次回へ回す（消費 0 にも完了にもしない）。
+fn interrupted(
+    ledger: &mut Ledger,
+    key: &TrialKey,
+    what: &str,
+    e: ExecError,
+) -> Result<Driven, String> {
+    ledger.note_comm_failure(key, &format!("{what}: {e}"))?;
+    Ok(Driven::Deferred)
 }
 
 pub fn run(
@@ -523,12 +622,22 @@ pub fn run(
     let stale: Vec<TrialKey> = ledger
         .unfinished()
         .into_iter()
-        .filter(|r| r.key.manifest_sha256 == hash)
+        .filter(|r| r.key.manifest_sha256 == hash && r.state != LedgerState::CancelPending)
         .filter(|r| done.contains(&(r.key.arm, r.key.problem_id.clone(), r.key.rep)))
         .map(|r| r.key.clone())
         .collect();
     for k in stale {
         ledger.mark_done(&k)?;
+    }
+    // 前回までに cancel を要求して停止を確認できていない行は、新しい仕事より先に続きを試す。
+    for row in ledger
+        .unfinished()
+        .into_iter()
+        .filter(|r| r.key.manifest_sha256 == hash && r.state == LedgerState::CancelPending)
+        .cloned()
+        .collect::<Vec<_>>()
+    {
+        cancel_row(exec, &mut ledger, &row, REASON_BUDGET_STOP)?;
     }
     let mut rep = RunReport {
         resumed_skipped: records.len() as u64,
@@ -686,29 +795,22 @@ pub fn run(
                     &repo,
                     &m.budget,
                     arm,
-                ) {
-                    Err(DriveErr::Fatal(e)) => return Err(e),
-                    Err(DriveErr::Exec(e)) => {
-                        // 外部 task があれば best-effort で cancel して台帳を閉じる。run は続行する。
-                        if let Some(row) =
-                            ledger.get(&key).filter(|r| !r.state.is_terminal()).cloned()
-                        {
-                            let _ = cancel_row(exec, &mut ledger, &row, REASON_EXECUTOR_ERROR);
-                        }
+                )? {
+                    Driven::Refused(e) => {
                         errored = Some(e);
                         failed_result()
                     }
-                    Ok(Some(Driven::Done(r, seen))) => {
+                    Driven::Done(r, seen) => {
                         rec.observed = seen;
                         r
                     }
-                    Ok(Some(Driven::Cancelled(r, why, seen))) => {
+                    Driven::Cancelled(r, why, seen) => {
                         cancelled_by = Some(why);
                         rec.observed = seen;
                         r
                     }
-                    Ok(None) => {
-                        // 外部待ち: 台帳が参照中なので workspace は消さず、再実行で同じ task を追う。
+                    Driven::Deferred => {
+                        // 外部待ち・通信断: 台帳が参照中なので workspace は消さず、再実行で同じ task を追う。
                         rep.waiting += 1;
                         continue;
                     }
@@ -797,7 +899,11 @@ pub fn run(
             rep.budget_stopped = over(&rep);
         }
         append(&trials_path, &rec)?;
-        if ledger.get(&key).is_some_and(|r| !r.state.is_terminal()) {
+        // cancel の停止確認待ち（cancel_pending）は done にしない。terminal にできるのは確認後だけ。
+        if ledger
+            .get(&key)
+            .is_some_and(|r| !r.state.is_terminal() && r.state != LedgerState::CancelPending)
+        {
             ledger.mark_done(&key)?;
         }
         records.push(rec);
@@ -805,7 +911,12 @@ pub fn run(
     // 打ち切り後に残った未完了の台帳行（前提待ちで今回の走査に来なかったもの）も cancel する。
     if rep.budget_stopped {
         for row in ledger.unfinished().into_iter().cloned().collect::<Vec<_>>() {
-            if row.key.manifest_sha256 != hash {
+            if row.key.manifest_sha256 != hash
+                || records.iter().any(|r| {
+                    (r.config, &r.problem_id, r.rep)
+                        == (row.key.arm, &row.key.problem_id, row.key.rep)
+                })
+            {
                 continue;
             }
             cancel_row(exec, &mut ledger, &row, REASON_BUDGET_STOP)?;

@@ -16,8 +16,8 @@ use celeris_campaign::{
     celeris_exec::check_template,
     checker::check,
     executor::{
-        ExecResult, ExecStatus, Executor, MockAsyncExecutor, MockExecutor, TaskRef, TokenUsage,
-        TrialRequest,
+        ExecError, ExecResult, ExecStatus, Executor, MockAsyncExecutor, MockExecutor, TaskRef,
+        TokenUsage, TrialRequest,
     },
     export::export,
     grade_out::{GRADES_FILE, grade_out},
@@ -413,11 +413,10 @@ impl Executor for Http400 {
     fn is_async(&self) -> bool {
         true
     }
-    fn lookup(&self, _key: &str) -> Result<Option<TaskRef>, String> {
-        Err(
-            r#"POST /api/v1/tasks: HTTP 400 {"error":"acceptance[0]: missing field `type`"}"#
-                .into(),
-        )
+    fn lookup(&self, _key: &str) -> Result<Option<TaskRef>, ExecError> {
+        Err(ExecError::refused(
+            r#"POST /api/v1/tasks: HTTP 400 {"error":"acceptance[0]: missing field `type`"}"#,
+        ))
     }
 }
 

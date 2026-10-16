@@ -12,7 +12,7 @@ use celeris_campaign::{
         CLUSTER_CANCEL_FILE, CelerisExecutor, HttpResponse, Transport, idempotency_label,
         routing_override,
     },
-    executor::{ExecStatus, Executor, MockAsyncExecutor, TaskRef, TrialRequest},
+    executor::{ExecError, ExecStatus, Executor, MockAsyncExecutor, TaskRef, TrialRequest},
     ledger::{Ledger, LedgerState, TrialKey},
     manifest::{
         ArmRouting, Budget, CampaignManifest, Config, ConfigId, InputRef, Secondary, SnapshotRef,
@@ -286,7 +286,8 @@ fn submit_poll_and_requery_after_lost_response() {
     // 投入は届いたが応答を失う。
     f.st().lose_next_post = true;
     let err = x.submit(&req(&b, d.path()), KEY).expect_err("lost");
-    assert!(err.contains("response lost"), "{err}");
+    assert!(err.msg.contains("response lost"), "{err}");
+    assert_eq!(err.kind, celeris_campaign::executor::ErrKind::Unknown);
     assert_eq!(f.posts(), 1);
 
     // アダプタ再起動（新しい実行器）: 冪等キーで照会し、既存 task を拾う（再投入しない）。
@@ -537,22 +538,22 @@ impl Executor for ByArm<'_> {
     fn routing(&self, r: &TrialRequest) -> Result<Value, String> {
         self.by_req(r).routing(r)
     }
-    fn lookup(&self, key: &str) -> Result<Option<TaskRef>, String> {
+    fn lookup(&self, key: &str) -> Result<Option<TaskRef>, ExecError> {
         Ok(match self.bc.lookup(key)? {
             Some(t) => Some(t),
             None => self.a.lookup(key)?,
         })
     }
-    fn submit(&self, r: &TrialRequest, key: &str) -> Result<TaskRef, String> {
+    fn submit(&self, r: &TrialRequest, key: &str) -> Result<TaskRef, ExecError> {
         self.by_req(r).submit(r, key)
     }
-    fn track(&self, t: &TaskRef) -> Result<TaskRef, String> {
+    fn track(&self, t: &TaskRef) -> Result<TaskRef, ExecError> {
         self.by_task(t).track(t)
     }
-    fn poll(&self, t: &TaskRef) -> Result<ExecStatus, String> {
+    fn poll(&self, t: &TaskRef) -> Result<ExecStatus, ExecError> {
         self.by_task(t).poll(t)
     }
-    fn cancel(&self, t: &TaskRef, reason: &str) -> Result<(), String> {
+    fn cancel(&self, t: &TaskRef, reason: &str) -> Result<(), ExecError> {
         self.by_task(t).cancel(t, reason)
     }
 }

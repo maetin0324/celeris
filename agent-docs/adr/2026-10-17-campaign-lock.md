@@ -1,7 +1,7 @@
 # ADR 2026-10-17: campaign lock — 測定の入力・grader・試験・実行構成を版付きで固定する共通契約
 
 - 日付: 2026-10-17
-- 状態: 採用・実装済み（lock.rs の型・hash・検証、lock_tree.rs の内容証明、K2 の hash 固定、契約試験 campaign_lock.rs。実行系への配線は未着手: D7）
+- 状態: 採用・実装済み（lock.rs の型・hash・検証、lock_tree.rs の内容証明、K2 の hash 固定、契約試験 campaign_lock.rs。実行・再開・grade-out・bind・export への配線は D8〜D9、正式 task-api 経路の無課金受入は D10）
 - 関連: 2026-10-17-mlsys-pilot2-fixes（外部入力 D1）、2026-10-15-mlsys-min-campaign、2026-10-11-breaking-changes-by-default
 
 ## 背景
@@ -66,3 +66,12 @@ submodule 実体、外部入力、grader 定義、公開/隠しテストの実�
 - 初期木は「宣言する case が共有する 1 つ」だけ。異なる初期木の case は同じ `--repo-src` で配れず拒否。初期木を宣言しない case（K4 等）には repo を含まない別 seed（`workspace-seed-empty`）を配る。
 - 公開テストは、初期木を持つ case では initial の内容 hash が固定するので個別に要求しない（K2 の grade-case は隠しテストのみ）。初期木の無い実装 case は従来どおり両方必須。
 - 有料経路（harness/celeris、`run_gated`）は常に lock を付ける。`RunOptions.lock = None` は mock など無課金の制御用だけ。
+
+### D10 正式 task-api 経路の無課金受入と検証区分（connected-verify）
+- `crates/celeris/tests/campaign_lock_e2e.rs`: 一時 daemon の task-api（実 HTTP・一時 DB・router/DTO そのまま）に、`CelerisExecutor` が通常の `POST /tasks` で投入する。
+  期待 lock は CLI と同じ `preflight::gate` → `expected_lock` → `watch`。境界の手書き JSON も campaign 情報の DB 直挿入も無い。mock は実行内部（dispatcher の遷移・worker の run/成果物・A harness・grader の評価 command）だけ。
+- 正例（実 final の case 定義・grade-case・grader 一式 + 試験用の小さな K2 初期木）: lock 保存 → B/C 4 root の通常 POST と追跡 → 再開は再投入 0 → 成果物 hash → `grade_out_expected` → bind → `export_expected`（`lock_verified=true`）。
+- 拒否: 誤初期 repo・余分な file・別 submodule path・別 repo・資料・KB・外部入力は POST・A 投入・task 作成 0・out 未作成。同一 id/split の grader・隠しテスト・split・隠しテスト削除は command 0 回で grade 拒否、grade 行の grader/test/lock/artifact 差替えは bind 違反と export 拒否（旧最終版を残さない）。
+  lock 改変・再封印・欠落・隠しテスト差替え・測定 ID 違い・repo 変更は既存測定の再開を拒否し、再投入 0・lock 不変。
+- CLI 引数配線: `crates/campaign/tests/lock_cli.rs`（実 binary）。`--measurement-id` 違いの check/export 拒否、`--grade-case-root`/`--cases` の差替え拒否、誤 `--repo-src` の run は out を作らない。
+- 検証区分: 実装済み／mock 検証済み（上記、無課金）／実経路検証済み（実 LLM・実 worker・実 dispatcher・実 K2 submodule 付き BenchFS の build はいずれも**未実施**）。

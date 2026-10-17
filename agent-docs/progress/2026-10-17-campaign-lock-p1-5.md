@@ -93,3 +93,39 @@ ADR: `agent-docs/adr/2026-10-17-campaign-lock.md`。外部 LLM・有料ジョブ
 - legacy: lock.json が無く run-meta も `locked` でない out（lock 導入前・無課金 mock）は従来の結合検査のみ。表は `lock_verified=false`・`real_performance=false`。`locked` と記録された out や期待 lock を渡された経路で lock が無ければ拒否。
 - 試験 `tests/lock_grading.rs` 5 件: 正常な採点・結合・export／別 grader・隠しテスト実体差替え・公開テスト追加・隠しテスト削除で command 0 回／grader・test・lock・重複・古い成果物の bind 拒否と export の旧最終版削除／lock 欠落・改変・再封印／legacy。
 - 証拠: `cargo test -p celeris-campaign --test lock_grading` 5 passed、`bash scripts/dev/test-parallel.sh` exit 0（5652 passed, 0 failed）、clippy/fmt は下の最終実行。
+
+## WU connected-verify（正式 task-api 経路の無課金受入。実 LLM・実経路は未検証）
+外部 LLM・別 LLM CLI・有料 job・本番変更・userns なし。ADR D10。
+
+### 追加した試験
+- `crates/celeris/tests/campaign_lock_e2e.rs`（4 件）: 実 HTTP の task-api・一時 DB・`CelerisExecutor` の通常 `POST /tasks`、期待 lock は `preflight::gate`→`expected_lock`→`watch`（CLI と同じ）。
+  1. `locked_measurement_runs_through_task_api_to_the_final_export`: 正例。lock 保存＝期待 lock、B/C 4 root、再開は再投入 0・lock 不変、grade-out→bind 違反 0→export `lock_verified=true`。
+  2. `wrong_initial_repo_submodule_materials_kb_or_inputs_cause_no_post_or_external_run`: 誤 repo/余分 file/別 submodule/別 repo/資料/KB/外部入力で POST 0・A 投入 0・task 0・out 未作成。元の入力なら通る対照付き。
+  3. `swapped_grader_or_tests_are_rejected_at_grade_bind_and_export`: grader 定義・隠しテスト実体・split・隠しテスト削除は grader command 0 回で拒否。grade 行の grader/test/lock/artifact hash 差替えは bind 違反、export 拒否（旧 table.json を残さない）。
+  4. `changed_lock_or_inputs_refuse_to_resume_an_existing_measurement`: lock 改変・再封印・欠落・隠しテスト差替え・測定 ID 違い・repo 変更で再開拒否（再投入 0）、元の定義なら同じ task を追って完了。
+- `crates/campaign/tests/lock_cli.rs`（3 件、実 binary）: CLI 引数（`--measurement-id`/`--cases-root`/`--grader-root`/`--grade-case-root`/`--cases`/`--repo-src`）が期待 lock に配線されていること。
+- 既存不備の修正: `lock_execution.rs` が doc link 検査に掛かる相対 path を書いていた（`check-doc-links.sh` 2 件）ため、`lock_grading.rs` と同じ組み立てに直した。
+
+### 証拠（このコミット時点）
+- `cargo test -p celeris --test campaign_lock_e2e --test campaign_acceptance_e2e` exit 0（lock_e2e 4 passed、acceptance_e2e 7 passed）。
+- `cargo test -p celeris-campaign --test lock_cli` 3 passed。
+- `bash scripts/dev/test-parallel.sh` exit 0（5659 passed, 0 failed, 15 ignored）／`cargo clippy --workspace -- -D warnings` exit 0／`cargo fmt --all -- --check` exit 0。
+- `sh scripts/dev/check-doc-links.sh`・`check-adr-numbers.sh`・`progress-index.sh --check` はいずれも exit 0（最終コミット後に再実行）。
+
+### 検証区分
+| 区分 | 内容 |
+|---|---|
+| 実装済み | lock 型・内容証明・K2 固定、実行/再開/watch/grade-out/bind/export/CLI への配線 |
+| mock 検証済み（無課金） | 上記 `campaign_lock_e2e`・`lock_execution`・`lock_grading`・`lock_cli`・`campaign_lock`。task-api は実物、実行内部と grader command は stub |
+| 実経路検証済み | **なし**。実 LLM・実 worker・実 dispatcher・実 grader command（cargo test）を通した測定は未実施 |
+| 未検証 | 実 LLM を伴う本測定、実 K2 submodule 入りの BenchFS の実 build と K2 隠しテストの実行、K4 の実 raw 入力（`main-v3-n2-43706.tgz`）での recompute |
+
+### K2 資産の照合結果
+- `/local/celeris/data/campaign-assets/k2/` で `sha256sum -c SHA256SUMS` 全 OK（bundle `benchfs-086c4618.bundle`、`ior-7054224d`・`locusta-68f8b210`・`pluvio-9ecd51ee` の tar）。
+- `cargo test -p celeris-campaign --test k2_pin --test campaign_lock`: k2_pin 3 passed、campaign_lock 6 passed（資産から組んだ木の `verify_archive` を実行、skip 合格なし）。固定値は `initial.lock.json`（本体 `2862119f…`）。
+- 未検証: 組んだ BenchFS 木の実 build（cargo build）は行っていない（時間・負荷と範囲外のため）。e2e の K2 初期木は試験用の小さな git repo で、本番資産ではない。
+
+### 未解決・提案
+- 実 LLM を伴う実測定の前に、人が preflight（`celeris-campaign preflight`）と BenchFS 実 build を確認する。
+- 提案: `RunOptions.lock = None` を許す無課金制御用の経路が runner に残る。mock 以外の executor で lock 無しを runner 自身が拒否する変更は別 task で検討。
+

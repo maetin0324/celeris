@@ -255,6 +255,8 @@ fn bwrap_usable() -> bool {
             "--ro-bind",
             "/",
             "/",
+            "--proc",
+            "/proc",
             "--dev",
             "/dev",
             "--unshare-pid",

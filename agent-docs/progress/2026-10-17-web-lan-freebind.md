@@ -24,3 +24,7 @@ systemctl --user daemon-reload
 systemctl --user cat celeris-web-lan.socket | grep -c '^FreeBind=yes'   # 1 であること
 systemctl --user restart celeris-web-lan.socket
 ```
+
+## 検査（attempt 2）
+- 前回の test-parallel 失敗は `a_arm_hardening real_bwrap_hides_everything_outside_the_workspace`。sandbox で `bwrap --proc /proc` が EPERM のため、`bwrap_usable()` の探査に `--proc /proc` を足して skip させた（FreeBind とは無関係）。
+- `bash scripts/dev/test-parallel.sh` exit 0（5717 pass / 0 fail）、clippy exit 0、fmt exit 0、`bash scripts/selfdeploy/tests/install_units_hot_dir.sh` ok。

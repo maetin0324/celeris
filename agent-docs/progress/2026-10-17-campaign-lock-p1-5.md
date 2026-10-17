@@ -4,7 +4,7 @@ tasks: [01M54HYGQT7WW6V8K3446X3FK8]
 status: running
 updated: 2026-10-17
 ---
-# P1-5 campaign lock
+# P1-5 campaign lock（campaign-lock-p1-5）
 
 ADR: `agent-docs/adr/2026-10-17-campaign-lock.md`。外部 LLM・有料ジョブ・本番変更はしていない。
 
@@ -23,3 +23,7 @@ ADR: `agent-docs/adr/2026-10-17-campaign-lock.md`。外部 LLM・有料ジョブ
 
 ## 未解決・提案
 - なし。lock のファイル配置（`<out>/snapshot/lock.json` 等）は統合 WU で決める。
+
+## check の不整合（再実行）
+- package 名は `celeris-campaign`。計画の check `cargo test -p campaign lock` / `cargo clippy -p campaign` は「did not match any packages」で成果に依らず落ちる。
+- 正しい形 `cargo test -p celeris-campaign lock`・`cargo clippy -p celeris-campaign -- -D warnings`・`cargo fmt --all -- --check` は exit 0。

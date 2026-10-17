@@ -748,3 +748,137 @@ fn class_candidates_survive_the_harness_loop() {
             .all(|x| x.candidate.key() == key("claude_oauth", "opus"))
     );
 }
+
+// evidence_mode（none / pinned / latest）: none は根拠表を 1 回も読まず、途中で最新版を差し替えても判断が変わらない。
+mod evidence_mode {
+    use super::*;
+    use crate::dispatcher::route_select::RouteContext;
+    use task_core::route_select::EvidenceMode;
+    use task_core::routing_evidence::{EvidenceKey, EvidenceRow};
+
+    fn row(source: &str, model: &str, pass_lower: f64) -> EvidenceRow {
+        EvidenceRow {
+            key: EvidenceKey {
+                genre: "light".into(),
+                harness_id: "opencode".into(),
+                harness_version: "1.0.0".into(),
+                source_id: source.into(),
+                model_id: model.into(),
+            },
+            evidence_version: String::new(),
+            n: 30,
+            pass: 30,
+            pass_lower,
+            pass_upper: pass_lower + 0.01,
+            pass_boot_lower: pass_lower,
+            pass_boot_upper: 0.99,
+            wall_median_s: Some(10.0),
+            usd_list_median: Some(0.1),
+            quota_per_run: BTreeMap::new(),
+            timeout_rate: 0.0,
+            low_confidence: false,
+        }
+    }
+
+    fn pick(d: &mut Dispatcher, mode: EvidenceMode, version: Option<&str>) -> (String, String) {
+        let (out, trace) = d.select_route_with(
+            &input("light"),
+            &RouteContext {
+                evidence_mode: mode,
+                evidence_version: version.map(str::to_owned),
+                ..Default::default()
+            },
+        );
+        let p = out.expect("route");
+        let decision = trace.decision.expect("decision");
+        (
+            p.candidate.model.to_string(),
+            decision.evidence_version.unwrap_or_default(),
+        )
+    }
+
+    #[test]
+    fn none_never_reads_the_table_and_ignores_later_updates() {
+        let sqlite = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let store: Arc<dyn TaskStore> = sqlite.clone();
+        let mut task = new_task(std::path::Path::new("/tmp"), Check::Reviewer, 0);
+        task.genre = Some("light".into());
+        store.insert(&task).unwrap();
+        // v1: qwen4 が最良。enforce にして最新版が選択を動かす状態にする。
+        store
+            .replace_routing_evidence(
+                "v1",
+                &[row("qwen", "qwen4", 0.9), row("qwen", "qwen3", 0.5)],
+            )
+            .unwrap();
+        store
+            .set_routing_stage(
+                task.id,
+                &task_core::route_select::RoutingStageChange {
+                    genre: "light".into(),
+                    harness_id: "opencode".into(),
+                    stage: task_core::route_select::RoutingStage::Enforce,
+                    since: "2026-10-17".into(),
+                    evidence_version: Some("v1".into()),
+                    reason: "test".into(),
+                    window: serde_json::json!({}),
+                    actor: "human".into(),
+                },
+            )
+            .unwrap();
+        let mut d = dispatcher(store.clone(), done_adapter(), 1);
+        let mut reg = registry();
+        reg.sources
+            .get_mut(&SourceId::from("qwen"))
+            .unwrap()
+            .models
+            .push("qwen4".into());
+        reg.route_defaults.insert(
+            "opencode".into(),
+            vec![key("qwen", "qwen3"), key("qwen", "qwen4")],
+        );
+        d.set_llm_route_registry(reg);
+
+        let (latest_model, latest_version) = pick(&mut d, EvidenceMode::Latest, None);
+        assert_eq!(
+            (latest_model.as_str(), latest_version.as_str()),
+            ("qwen4", "v1")
+        );
+        // 根拠表の lookup は store の接続を 1 回取る。none の取得回数を latest と比べて 0 回を示す。
+        let locks = || {
+            let c = sqlite.lock_counts();
+            c.writer + c.reader
+        };
+        let before_latest = locks();
+        pick(&mut d, EvidenceMode::Latest, None);
+        let latest_cost = locks() - before_latest;
+        let before_none = locks();
+        let (none_model, none_version) = pick(&mut d, EvidenceMode::None, None);
+        let none_cost = locks() - before_none;
+        assert!(
+            latest_cost > none_cost,
+            "latest は根拠表 lookup の分だけ接続を多く取る（latest={latest_cost}, none={none_cost}）"
+        );
+        assert_eq!(none_model, "qwen3", "none は固定の候補順");
+        assert_eq!(none_version, "", "none は table 版なし");
+
+        // 最新根拠表を途中で差し替えても none の判断は同じ（latest は動く）。
+        store
+            .replace_routing_evidence(
+                "v2",
+                &[row("qwen", "qwen4", 0.5), row("qwen", "qwen3", 0.95)],
+            )
+            .unwrap();
+        let before = locks();
+        assert_eq!(
+            pick(&mut d, EvidenceMode::None, None),
+            (none_model, none_version)
+        );
+        assert_eq!(locks() - before, none_cost, "none は更新後も lookup 0 回");
+        assert_eq!(pick(&mut d, EvidenceMode::Latest, None).1, "v2");
+
+        // pinned は指定版だけ（最新の v2 ではなく v1）。
+        let (m, v) = pick(&mut d, EvidenceMode::Pinned, Some("v1"));
+        assert_eq!((m.as_str(), v.as_str()), ("qwen4", "v1"));
+    }
+}

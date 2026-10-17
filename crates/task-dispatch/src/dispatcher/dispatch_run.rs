@@ -569,6 +569,10 @@ impl Dispatcher {
                 run_id: Some(run_id.clone()),
                 features: route_features.clone(),
                 work_unit_id: current_wu.as_ref().map(|wu| wu.id.clone()),
+                evidence_mode: routing_override
+                    .as_ref()
+                    .map(|o| o.evidence_mode)
+                    .unwrap_or_default(),
                 evidence_version: routing_override
                     .as_ref()
                     .and_then(|o| o.evidence_table_id.clone()),

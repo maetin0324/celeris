@@ -521,3 +521,31 @@ async fn root_routing_pin_is_inherited_by_child_grandchild_and_retry_whatever_th
         assert_eq!(r.source, task_core::route_select::ModeSource::Config);
     }
 }
+
+#[tokio::test]
+async fn task_override_evidence_mode_none_is_recorded_without_a_table_version() {
+    let ws = tempfile::tempdir().unwrap();
+    let sqlite = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<dyn TaskStore> = sqlite.clone();
+    let task = hinted_task(ws.path(), task_core::TierSource::Hint);
+    store.insert(&task).unwrap();
+    let o = task_core::route_select::RoutingOverride {
+        mode: RoutingMode::Fixed,
+        lower_policy: None,
+        evidence_mode: task_core::route_select::EvidenceMode::None,
+        evidence_table_id: None,
+        online_update: false,
+    };
+    sqlite
+        .set_task_routing_override(task.id, &o, "2026-10-17")
+        .unwrap();
+    let mut d = dispatcher(store.clone(), question_adapter(), 1);
+    d.tick().unwrap();
+    let rec = routing_decided(&store, &task);
+    let resolved = resolved_of(&rec).expect("解決結果が判断 record に残る");
+    assert_eq!(
+        resolved.evidence_mode,
+        task_core::route_select::EvidenceMode::None
+    );
+    assert_eq!(resolved.evidence_table_id, None);
+}

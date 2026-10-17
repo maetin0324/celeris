@@ -154,11 +154,18 @@ fn fill_proposal(p: &mut DecisionLogProposal, record: &task_core::RoutingRecord)
             })
         });
     p.proposed_first = top;
+    let evidence = match &d.routing_resolved {
+        Some(r) if r.evidence_mode == task_core::route_select::EvidenceMode::None => {
+            "none(mode=none)".to_owned()
+        }
+        _ => d
+            .evidence_version
+            .clone()
+            .unwrap_or_else(|| "none".to_owned()),
+    };
     p.policy_version = Some(format!(
         "lane={};route={};evidence={}",
-        record.decision.policy_version,
-        d.judge.version,
-        d.evidence_version.as_deref().unwrap_or("none"),
+        record.decision.policy_version, d.judge.version, evidence,
     ));
 }
 

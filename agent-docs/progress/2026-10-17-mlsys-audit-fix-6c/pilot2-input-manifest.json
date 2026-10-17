@@ -1,0 +1,27 @@
+{
+  "schema": "celeris.routing-eval-manifest/1",
+  "version": "pilot-2",
+  "cutoff": "2026-10-17",
+  "seed": 1,
+  "problems": [
+    {
+      "id": "k3-locusta-ab-analysis",
+      "task_id": "pilot",
+      "work_unit_id": "k3-locusta-ab-analysis",
+      "created_at": "2026-10-17T00:00:00Z",
+      "genre": "analysis",
+      "kind": "leaf",
+      "command": "test -s report.md && test -s results/table.csv",
+      "prompt": "materials/k3-locusta-ab-analysis/task.md の課題を実施せよ。公開 case 定義は crates/campaign/cases/dev/k3-locusta-ab-analysis/case.json。",
+      "split": "dev",
+      "stratum": "analysis",
+      "subset_12": false,
+      "head_commit": null,
+      "base_commit": null,
+      "features_sha256": "",
+      "features": {},
+      "sha256": ""
+    }
+  ],
+  "sha256": "7eff17ec9acdc47da7d4982a7e967ec1c09dfeb9dfd22c1c5ada9ef8e736a1f5"
+}

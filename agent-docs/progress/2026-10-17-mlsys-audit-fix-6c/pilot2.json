@@ -1,0 +1,87 @@
+{
+  "schema": "celeris.campaign-manifest/1",
+  "campaign_id": "mlsys-pilot-2",
+  "version": "1",
+  "split": "dev",
+  "input": {
+    "path": "pilot2-input-manifest.json",
+    "sha256": "7eff17ec9acdc47da7d4982a7e967ec1c09dfeb9dfd22c1c5ada9ef8e736a1f5"
+  },
+  "problems": [
+    "k3-locusta-ab-analysis"
+  ],
+  "configs": [
+    {
+      "id": "A",
+      "harness": "claude-code",
+      "harness_version": "claude-code@<claude-code version at H1>",
+      "model": "claude-sonnet-5-5",
+      "model_version": "claude-sonnet-5-5",
+      "policy_version": "ops-baseline"
+    },
+    {
+      "id": "B",
+      "harness": "celeris",
+      "harness_version": "<release sha12 at H1>",
+      "model": "claude-sonnet-5-5",
+      "model_version": "claude-sonnet-5-5",
+      "policy_version": "fixed",
+      "routing": {
+        "lower_policy": "mlsys-min-1",
+        "online_update": false
+      }
+    },
+    {
+      "id": "C",
+      "harness": "celeris",
+      "harness_version": "<release sha12 at H1>",
+      "model": "claude-sonnet-5-5",
+      "model_version": "claude-sonnet-5-5",
+      "policy_version": "jev-1",
+      "routing": {
+        "lower_policy": "mlsys-min-1",
+        "evidence_table_id": "<routing evidence table id at H1>",
+        "online_update": false
+      }
+    }
+  ],
+  "primary": [
+    "A",
+    "B"
+  ],
+  "secondary": {
+    "pair": [
+      "B",
+      "C"
+    ],
+    "subset": [
+      "k3-locusta-ab-analysis"
+    ]
+  },
+  "budget": {
+    "token_basis": "all",
+    "max_tokens": 900000,
+    "max_wall_secs": 10800,
+    "max_disk_bytes": 137438953472,
+    "max_parallel": 1,
+    "per_case": {
+      "max_tokens": 300000,
+      "max_wall_secs": 3600
+    },
+    "per_arm": {
+      "max_tokens": 300000,
+      "max_wall_secs": 3600
+    }
+  },
+  "termination": {
+    "trial_timeout_secs": 3600,
+    "max_attempts_per_trial": 1,
+    "stop_on_budget": true
+  },
+  "snapshot": {
+    "kb_snapshot": "741f24146f5c02f44acf5291e23806416b9956809e55a1474488ecbcc9fe0702",
+    "materials_sha256": "231623d021b57c7c2d43298a3b9b1a0e95d42b99191beedf7a5e0cec543ef1c6",
+    "repo_commit": "none (input-only case k3-locusta-ab-analysis)"
+  },
+  "repeats": 1
+}

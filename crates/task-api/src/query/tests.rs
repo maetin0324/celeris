@@ -410,6 +410,7 @@ fn routing_feedback_event_types_match_their_serde_names() {
             routing_override: task_core::route_select::RoutingOverride {
                 mode: task_core::route_select::RoutingMode::Fixed,
                 lower_policy: None,
+                evidence_mode: task_core::route_select::EvidenceMode::Latest,
                 evidence_table_id: None,
                 online_update: false,
             },

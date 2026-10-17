@@ -8,7 +8,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// `task_routing_overrides` の 1 行（作成時に固定・以後不変。`POST /tasks` の `routing_override`）。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RoutingOverride {
     /// この task の lane 層の mode（config の `[routing] mode` より優先）。
@@ -16,7 +16,11 @@ pub struct RoutingOverride {
     /// 下段（fixed 方策・lane→model 対応表）の版。省略時は `DEFAULT_POLICY_VERSION`。現行の版以外は受理しない。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lower_policy: Option<String>,
-    /// 根拠表 `routing_evidence` の版（`evidence_version`）。指定すると最新版ではなくこの版だけを読む。
+    /// 根拠表の扱い（ADR 2026-10-17-evidence-mode-none-pinned-latest）。欄なしの旧 JSON は
+    /// `evidence_table_id` あり→`pinned`、なし→`latest` と読む。
+    #[serde(default)]
+    pub evidence_mode: EvidenceMode,
+    /// 根拠表 `routing_evidence` の版（`evidence_version`）。`pinned` のとき必須で、この版だけを読む。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evidence_table_id: Option<String>,
     /// run の結果を `routing_outcome_recorded`（オンライン更新の根拠）へ追記するか。既定 true（従来）。
@@ -28,6 +32,59 @@ fn default_true() -> bool {
     true
 }
 
+/// 根拠表の扱い。`none` は参照しない・`pinned` は指定版のみ・`latest` は通常運用の最新版。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum EvidenceMode {
+    None,
+    Pinned,
+    #[default]
+    Latest,
+}
+
+impl EvidenceMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Pinned => "pinned",
+            Self::Latest => "latest",
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawRoutingOverride {
+    mode: RoutingMode,
+    #[serde(default)]
+    lower_policy: Option<String>,
+    #[serde(default)]
+    evidence_mode: Option<EvidenceMode>,
+    #[serde(default)]
+    evidence_table_id: Option<String>,
+    #[serde(default = "default_true")]
+    online_update: bool,
+}
+
+impl<'de> Deserialize<'de> for RoutingOverride {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let r = RawRoutingOverride::deserialize(d)?;
+        // 旧データ・旧設定: 欄なしは id の有無で決める（id あり→pinned、なし→latest）。
+        let evidence_mode = r.evidence_mode.unwrap_or(if r.evidence_table_id.is_some() {
+            EvidenceMode::Pinned
+        } else {
+            EvidenceMode::Latest
+        });
+        Ok(Self {
+            mode: r.mode,
+            lower_policy: r.lower_policy,
+            evidence_mode,
+            evidence_table_id: r.evidence_table_id,
+            online_update: r.online_update,
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum RoutingOverrideError {
     #[error(
@@ -36,6 +93,12 @@ pub enum RoutingOverrideError {
     UnknownLowerPolicy(String),
     #[error("routing_override.evidence_table_id must not be empty")]
     EmptyEvidenceTable,
+    #[error("routing_override.evidence_mode=none must not set evidence_table_id")]
+    NoneWithEvidenceTable,
+    #[error("routing_override.evidence_mode=pinned requires a non-empty evidence_table_id")]
+    PinnedWithoutEvidenceTable,
+    #[error("routing_override.evidence_mode=latest must not set evidence_table_id")]
+    LatestWithEvidenceTable,
 }
 
 impl RoutingOverride {
@@ -46,14 +109,19 @@ impl RoutingOverride {
         {
             return Err(RoutingOverrideError::UnknownLowerPolicy(p.clone()));
         }
-        if self
-            .evidence_table_id
-            .as_deref()
-            .is_some_and(|id| id.trim().is_empty())
-        {
+        let id = self.evidence_table_id.as_deref();
+        if id.is_some_and(|id| id.trim().is_empty()) && self.evidence_mode != EvidenceMode::Pinned {
             return Err(RoutingOverrideError::EmptyEvidenceTable);
         }
-        Ok(())
+        match (self.evidence_mode, id) {
+            (EvidenceMode::None, Some(_)) => Err(RoutingOverrideError::NoneWithEvidenceTable),
+            (EvidenceMode::Latest, Some(_)) => Err(RoutingOverrideError::LatestWithEvidenceTable),
+            (EvidenceMode::Pinned, None) => Err(RoutingOverrideError::PinnedWithoutEvidenceTable),
+            (EvidenceMode::Pinned, Some(i)) if i.trim().is_empty() => {
+                Err(RoutingOverrideError::PinnedWithoutEvidenceTable)
+            }
+            _ => Ok(()),
+        }
     }
 }
 
@@ -71,7 +139,8 @@ pub struct ResolvedRouting {
     pub mode: RoutingMode,
     pub source: ModeSource,
     pub lower_policy: String,
-    /// `None` は「最新版を読む」（従来）。
+    pub evidence_mode: EvidenceMode,
+    /// `pinned` のときだけ Some。`None` かつ `evidence_mode=latest` は「最新版を読む」（従来）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evidence_table_id: Option<String>,
     pub online_update: bool,
@@ -90,6 +159,7 @@ pub fn resolve_routing(
                 .lower_policy
                 .clone()
                 .unwrap_or_else(|| DEFAULT_POLICY_VERSION.to_string()),
+            evidence_mode: o.evidence_mode,
             evidence_table_id: o.evidence_table_id.clone(),
             online_update: o.online_update,
         },
@@ -97,6 +167,7 @@ pub fn resolve_routing(
             mode: config_mode,
             source: ModeSource::Config,
             lower_policy: DEFAULT_POLICY_VERSION.to_string(),
+            evidence_mode: EvidenceMode::Latest,
             evidence_table_id: None,
             online_update: true,
         },
@@ -111,6 +182,7 @@ mod tests {
         RoutingOverride {
             mode,
             lower_policy: None,
+            evidence_mode: EvidenceMode::Latest,
             evidence_table_id: None,
             online_update: true,
         }
@@ -151,5 +223,57 @@ mod tests {
             bad.validate(),
             Err(RoutingOverrideError::EmptyEvidenceTable)
         );
+    }
+
+    #[test]
+    fn legacy_json_infers_mode_and_round_trips() {
+        let o: RoutingOverride = serde_json::from_str(r#"{"mode":"fixed"}"#).unwrap();
+        assert_eq!(o.evidence_mode, EvidenceMode::Latest);
+        let o: RoutingOverride =
+            serde_json::from_str(r#"{"mode":"fixed","evidence_table_id":"ev-1"}"#).unwrap();
+        assert_eq!(o.evidence_mode, EvidenceMode::Pinned);
+        assert!(o.validate().is_ok());
+        let n: RoutingOverride =
+            serde_json::from_str(r#"{"mode":"fixed","evidence_mode":"none"}"#).unwrap();
+        assert_eq!(n.evidence_mode, EvidenceMode::None);
+        let back: RoutingOverride =
+            serde_json::from_str(&serde_json::to_string(&n).unwrap()).unwrap();
+        assert_eq!(back, n);
+        assert_eq!(
+            resolve_routing(RoutingMode::Fixed, Some(&n)).evidence_mode,
+            EvidenceMode::None
+        );
+        assert_eq!(
+            resolve_routing(RoutingMode::Fixed, None).evidence_mode,
+            EvidenceMode::Latest
+        );
+    }
+
+    #[test]
+    fn contradictions_are_rejected() {
+        let mk = |m, id: Option<&str>| RoutingOverride {
+            evidence_mode: m,
+            evidence_table_id: id.map(String::from),
+            ..ov(RoutingMode::Fixed)
+        };
+        assert_eq!(
+            mk(EvidenceMode::None, Some("e")).validate(),
+            Err(RoutingOverrideError::NoneWithEvidenceTable)
+        );
+        assert_eq!(
+            mk(EvidenceMode::Latest, Some("e")).validate(),
+            Err(RoutingOverrideError::LatestWithEvidenceTable)
+        );
+        assert_eq!(
+            mk(EvidenceMode::Pinned, None).validate(),
+            Err(RoutingOverrideError::PinnedWithoutEvidenceTable)
+        );
+        assert_eq!(
+            mk(EvidenceMode::Pinned, Some("")).validate(),
+            Err(RoutingOverrideError::PinnedWithoutEvidenceTable)
+        );
+        assert!(mk(EvidenceMode::None, None).validate().is_ok());
+        assert!(mk(EvidenceMode::Pinned, Some("e")).validate().is_ok());
+        assert!(mk(EvidenceMode::Latest, None).validate().is_ok());
     }
 }

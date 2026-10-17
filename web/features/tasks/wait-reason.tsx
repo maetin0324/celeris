@@ -56,6 +56,12 @@ export function waitReason(wait: TaskWait): string {
       return `委譲した子 ${wait.task_ids.length} 件待ち`;
     case "review_awaiting_human":
       return "人の承認待ち";
+    case "depends_on_integration":
+      return wait.cause === "delivery_skipped"
+        ? `依存先 ${wait.task_id} の取り込みが見送られた: ${wait.detail}`
+        : wait.cause === "unmerged"
+          ? `依存先 ${wait.task_id} の成果が main に未取り込み`
+          : `依存先 ${wait.task_id} は取り込まれない（${wait.cause === "held" ? "保留" : "破棄"}）`;
   }
 }
 
@@ -65,6 +71,8 @@ export function waitTargets(wait: TaskWait): string[] {
     case "delegated_children":
     case "depends_on":
       return wait.task_ids;
+    case "depends_on_integration":
+      return [wait.task_id];
     case "approval_parent":
       return [wait.task_id];
     case "ancestor_project_halted":

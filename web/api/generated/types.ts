@@ -3160,6 +3160,8 @@ export type IntegrationView = {
   "state": TaskRepoIntegrationStatus;
 };
 
+export type IntegrationWaitCause = "unmerged" | "delivery_skipped" | "held" | "discarded";
+
 export type KnowledgeAcceptBody = {
   "overwrite"?: boolean;
   "path"?: string | null;
@@ -5751,6 +5753,11 @@ export type TaskWait = {
   "task_ids": Array<TaskId>;
 } | {
   "kind": "review_awaiting_human";
+} | {
+  "cause": IntegrationWaitCause;
+  "detail": string;
+  "kind": "depends_on_integration";
+  "task_id": TaskId;
 };
 
 export type Tier = "frontier" | "standard" | "cheap";

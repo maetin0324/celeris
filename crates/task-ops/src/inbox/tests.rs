@@ -1646,3 +1646,48 @@ fn browser_policy_missing_inbox_item_carries_message_and_disappears_after_resume
             .any(|i| i.id.starts_with("browser_prerequisite-"))
     );
 }
+
+/// ADR 2026-10-17-root-dependency-waits-for-integration D4: 取り込みを見送った root の受信箱項目に、
+/// 取り込みを待つ依存元の task id が載る（木の子と終端の依存元は載らない）。
+#[test]
+fn delivery_skip_attention_names_waiting_dependents() {
+    let store = SqliteStore::open_in_memory().expect("store");
+    let mut dep = sample_task(TaskKind::Execute, Status::Done);
+    dep.project_id = Some(task_core::ProjectId::new());
+    store.insert(&dep).expect("insert dep");
+    let mut waiting = sample_task(TaskKind::Execute, Status::Ready);
+    waiting.depends_on = vec![dep.id];
+    store.insert(&waiting).expect("insert waiting");
+    let mut finished = sample_task(TaskKind::Execute, Status::Done);
+    finished.depends_on = vec![dep.id];
+    store.insert(&finished).expect("insert finished");
+    store
+        .append_event(
+            dep.id,
+            &Event::DeliverySkipped {
+                reason: task_core::DeliverySkipReason::DepartmentUnresolved,
+                detail: "d".into(),
+                head: Some("abc123".into()),
+            },
+        )
+        .expect("event");
+    let all = store.list(None).expect("list");
+    let by_id: HashMap<TaskId, Task> = all.iter().map(|t| (t.id, t.clone())).collect();
+    let summary = build_attention(
+        &store,
+        &all,
+        &by_id,
+        None,
+        &view_ctx(),
+        OffsetDateTime::now_utc(),
+    )
+    .expect("attention")
+    .into_iter()
+    .find_map(|item| match item {
+        AttentionItem::DeliverySkipped { task, summary, .. } if task.id == dep.id => Some(summary),
+        _ => None,
+    })
+    .expect("delivery skipped item");
+    assert!(summary.contains(&waiting.id.to_string()), "{summary}");
+    assert!(!summary.contains(&finished.id.to_string()), "{summary}");
+}

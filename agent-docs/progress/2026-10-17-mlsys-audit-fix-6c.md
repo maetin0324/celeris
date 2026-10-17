@@ -1,15 +1,19 @@
 ---
-title: "[監査修正6c] 既存承認の残予算内で最小 pilot を実経路で確認（承認待ち・待機）"
+title: "[監査修正6c] 既存承認の残予算内で最小 pilot を実経路で確認（部分実行・no-go）"
 tasks: [01M542RGFR4WHVCFBPRMKWTD79]
-status: blocked
+status: done
 updated: 2026-10-17
+completed: 2026-10-17
 ---
 
-# 監査修正 6c: 最小 pilot の実経路確認 — 準備完了、人の昇格と実行を待つ
+# 監査修正 6c: 最小 pilot の実経路確認 — 部分実行（A 腕のみ）、本測定は no-go
 
-**結論: 有料実行は 0 件。実経路の pilot はまだ走っていない（未検証）。** 実行に要る 2 つの前提が worker の権限の外にあり、
-人の作業（新 release の昇格と運用 shell からの実行）を待って待機する。pilot 条件の固定・無課金の検査（validate / dry-run /
-preflight / mock の run→check→grade-out→export）までは済ませた。大規模本測定の開始・再実行・予算増額はしていない。
+**結論: 実経路で確かめられたのは A 腕の実行だけ。B/C・grader 結合・`--verify-connected`・Jev は未検証。本測定は開始しない（no-go）。**
+人が release `05a398f1efc9` を昇格し（H1。celeris/web/credentiald とも 05a398f1efc9）、運用 shell で §5 の手順 2〜9 を実行した（mlsys-pilot-2、2026-10-17 05:20Z〜）。
+消費は 487,628 tokens（cache 込み all）。pilot 上限 900,000 の内側で、人の決定により本測定の承認枠（3M・12 試行）の内側に数える（残り 2,512,372・9 試行）。
+ただし A の 1 試行は per_case 300,000 を 187,628 超えた（事後に cancelled）。B/C は POST /tasks の 422 で 0 tokens・未作成。
+見つかった欠け 6 件は修正 task 01M5456VVZR2VC5FC6P5J0V12Q で直し、その完了後に pilot をやり直す（§6・§8）。
+大規模本測定の開始・再実行・予算増額はしていない。この branch のコード変更はない（文書と pilot 条件だけ）。
 
 ## 1. 着手時の再確認
 - 着手時の branch base は 173988bb。origin/main は 05a398f1（6b: 通し受け入れ試験）まで進んでいたので fast-forward で取り込んだ
@@ -25,7 +29,7 @@ preflight / mock の run→check→grade-out→export）までは済ませた。
   input+output 基準・grade 未実施。summary: A 2/2 passed、B 1 passed + 1 cancelled（tokens 欠測 1）、C 1 passed、`tokens_charged_total` 107,649（欠測 1 件を per_case 100k で計上）、
   cache 込みでは約 563k。**修正前の出力なので最終結果にも 6c の証拠にも使わない**（較正の参考のみ）。
 
-## 2. 実行しなかった理由（worker の権限の外）
+## 2. worker が実行しなかった理由（worker の権限の外。実行は人が §5 で行った）
 1. **release**: 修正（上記）を含む release が本番に無い。昇格は人の作業（指示どおり手順だけ書く。§5 H1）。
 2. **A 腕は campaign CLI が `claude` を直接起動する**（`crates/campaign/src/main.rs` の `HarnessExecutor` + `ClaudeCodeBuilder`、`--a-program` 既定 `claude`）。
    worker の中から実行すると worker が LLM CLI を起こす形になり禁止（ADR 2026-10-07-worker-no-subagents-no-llm-cli）。B/C の POST /tasks も
@@ -84,30 +88,70 @@ preflight / mock の run→check→grade-out→export）までは済ませた。
    `$CT db backup $O/db.sqlite3 --src <本番 DB path>` → `$CT --db $O/db.sqlite3 campaign export mlsys-pilot-2 --out $O/exp-db --verify-connected --manifest-hash <4 の sha256>` → exit 0。
 8. **Jev と usage**: C の task 詳細 `GET /api/v1/tasks/<id>` の `routing_decided.lane_assist` が `jev_ok` か fallback か、Jev の消費行に費用（欠測は NULL）と版（model_snapshot）があるか、
    `routing_override`（B: mlsys-min-1・online_update false、C: jev-1）が子孫まで残るか。終了時の 7 日使用率 − `U0` を控える。
-9. 結果（stdout JSON、`check`・`grade-out`・`export`・`--verify-connected` の exit と要点、tokens 合計）をこのファイル §6 に書き戻す。合計が 900,000 を超えることはない（gate と stop_on_budget）。
+9. 結果（stdout JSON、`check`・`grade-out`・`export`・`--verify-connected` の exit と要点、tokens 合計）をこのファイル §6 に書き戻す。合計は 900,000 を超えない想定（gate と stop_on_budget）。実際は合計 487,628 で上限内、ただし A の 1 試行が per_case を事後に超えた（§6）。
 
-## 6. 区分（項目ごと）
-| 項目 | 実装済み | mock 検証済み | 実経路検証済み | 承認待ち |
+## 6. pilot-2 の実行結果（人の運用 shell。2026-10-17）
+詳細は運用者の記録 `/local/celeris/data/scratch/mlsys-pilot-2/RESULTS.md`、出力は同 dir の `out/`・`*.json`（本番 DB は読み取り専用の写しのみ）。
+worker はこれらの file を読んで要点を確かめた（`watch-stdout.json`・`check.json`・`grade-out.json`・`export.json`・`verify-connected.err`）。
+
+| 手順 | exit | 要点 |
+|---|---|---|
+| H1 昇格 | — | 本番 `celeris@05a398f1efc9`（`GET /api/v1/health` の release も 05a398f1efc9） |
+| 置換 | — | A `claude-code@2.1.300`、B/C `05a398f1efc9`、C `evidence_table_id` `118b413e…-2026-10-14`（DB 写しの唯一の根拠表）。task-template の `project_id` は BenchFS 案件 `01M35WRV77A2JPYGERQGXF6V7K`（auto_integrate=false）にし `repos` を外した |
+| validate | 0 | sha256 `dabca7f88d80f9106850315eec3cdfd2144b78ab666e55a6f129f7763af65dcf`（§4 の候補写しと同じ） |
+| dry-run | 0 | within_budget true、total_trials 3、推定 151,590 |
+| preflight | **0** | ok true、missing []、paid_calls_made 0 |
+| watch `--executor celeris` | — | executed 3、tokens_total **487,628**、tokens_missing 0、case_budget_cancelled 1、executor_errors 2、max_overshoot_tokens 187,628、ledger cancelled 2 / done 1 |
+| check | 0 | ok true、violations []、complete true、records 3 |
+| grade-out | 0 | graded 3、missing_cases []、**final_pass 0**（全腕 recompute 不合格: 原票が `<workspace>/inputs/` に無い） |
+| export | 0 | success_definition = executor passed AND grade final_pass。primary A/B・secondary B/C とも neither 1。complete true・real_performance true（2 試行が未実行なのに、§8 B3） |
+| `campaign export --verify-connected` | **1** | `not connected: export is empty: no runs for this campaign`（B/C の task が無く、A は設計上 DB に載らない） |
+
+- **A**: claude-code 2.1.300 / claude-sonnet-5-5 を campaign CLI が直接起動。14 turn・117 秒・0.275 USD。input 28・output 7,637・cache_read 441,342・cache_creation 38,621。
+  report.md と results/table.csv を出したが合計が per_case を超え、事後に `cancelled(case_budget)`。
+- **B/C**: `POST /api/v1/tasks` が HTTP 422（local workspace と remote repo `benchfs` の組合せ）。有料呼び出し 0、task 未作成。
+  原因は運用者が auto-integrate on の agent-platform 案件を避けて BenchFS 案件に替えたこと。preflight はこの組合せを検査しない（§8 B2）。
+- **Jev・routing_override 継承**: C が作られなかったので未観測。Jev の鍵は登録済み（fingerprint のみ確認）。
+- **7 日使用率**: 開始 claude 0.39 / 0.37・codex 0.00、終了も同じ（差 0）。A は Celeris のアカウント外（運用者の `~/.claude`）で走るため、この差は A の消費を表さない。
+- **B/C を再実行しなかった理由**: 残り 412,372 に対し B/C の予約は 600,000 で、A は予約を 187k 超えた。pilot 上限 900,000 を破りうるので止めた（人の判断）。
+
+### 本測定の判定: no-go
+k3 では原票が届かず全腕の grader が落ちる。A 腕は FS 隔離が無く、private grader の所在や過去の分析結果に届く。per_case 予算は A 腕を事前に縛らない。
+これらが残ったまま本測定（6 試行・3M）を走らせても有効な比較にならないので、本測定は開始しない。修正 task 01M5456VVZR2VC5FC6P5J0V12Q の完了後に pilot をやり直す。
+
+## 7. 区分（項目ごと）
+| 項目 | 実装済み | mock 検証済み | 実経路検証済み | 承認待ち・次 |
 |---|---|---|---|---|
-| 通常経路 POST /tasks → 子 task → 成果物（B/C） | 75caf0b2・b430d0cb ほか（main） | 6b 通し 7 件（実 HTTP + mock 実行内部） | **未検証**（修正後 release での実行なし） | H1 昇格と §5 の実行 |
-| A 腕（claude-code 直接） | main | pilot-2 の mock run | **未検証**（修正後。mlsys-pilot-1 は修正前） | §5（運用 shell） |
-| 独立 grader の成功判定への結合 | 9576eb45（fix 1） | 6b `wrong_artifact_…`・`ungraded_…`、本 task の mock grade-out→export | **未検証** | §5 の 6・7 |
-| export `--verify-connected` | celerisctl campaign export | 6b `normal_path_…`・`campaign_connected.rs` | **未検証** | §5 の 7 |
-| preflight gate（不足時 0 件で停止） | 32d7db7f | 本 task で pilot-2 に対し確認（不足 = token のみ） | 該当なし（無課金の検査） | — |
-| 予算 gate（予約・停止） | 9bb5a4a8・6b の checker 修正 | 6b `budget_stop_…` | **未検証** | — |
-| Jev の判断反映・usage・版 | b4552084（call_id・費用 NULL 保持）、jev_smoke 判定器 | `lane_assist` 単体試験 | **未検証**。mlsys-pilot-1 の jev_ok 観測は修正前 release で、`real_api_verified=false`・費用と版の欠測・route decision shadow の所見あり（`2026-10-16-mlsys-pilot-wiring-fixes.md`）。作り直さず §5 の 8 で再観測する | §5 の 8 |
-| pilot-2 の消費（≦ 900,000、本測定 3M 枠の内側） | — | dry-run 151,590（仮置き） | **0（未実行）** | pilot-2 を本測定枠に数える扱いの確認（§3） |
+| preflight gate（不足時 0 件で停止） | 32d7db7f | 本 task で pilot-2 の不足を検出（§4） | **検証済み**（実 API で exit 0・有料 0 件）。ただし project/workspace の組合せは見ない（B2） | B2 は 01M5456VVZR2VC5FC6P5J0V12Q |
+| A 腕（claude-code 直接） | main | pilot-2 の mock run | **検証済み（実行のみ）**: 実 claude で成果物と usage（cache 込み・費用）を台帳に記録 | 隔離（G2）・事前の per_case 制限（B1）・使用量の可視化は修正 task |
+| 予算 gate（予約・停止） | 9bb5a4a8・6b の checker 修正 | 6b `budget_stop_…` | **部分**: 事後の case_budget cancel と合計の上限内は実経路で動いた。A の事前制限は無い（超過 187,628） | 修正 task（B1） |
+| 通常経路 POST /tasks → 子 task → 成果物（B/C） | 75caf0b2・b430d0cb ほか | 6b 通し 7 件 | **未検証**（422 で task 未作成） | 専用案件を作って pilot やり直し（修正 task 後） |
+| 独立 grader の成功判定への結合 | 9576eb45（fix 1） | 6b・本 task の mock grade-out→export | **未検証**: grade-out→export の結合は実出力で動いたが、原票未配送（G1）で全腕不合格のため合格側の結合を確かめていない | 修正 task（G1）後の pilot |
+| export `--verify-connected` | celerisctl campaign export | 6b `normal_path_…`・`campaign_connected.rs` | **未検証**（exit 1: B/C の run 無し） | 同上 |
+| 未実行試行の complete 判定 | — | — | 実出力で欠けを発見（complete true・real_performance true を 2 試行未実行で出す、B3） | 修正 task |
+| Jev の判断反映・usage・版 | b4552084、jev_smoke 判定器 | `lane_assist` 単体試験 | **未検証**（C 未作成）。作り直さず次の pilot で再観測 | 次の pilot |
+| routing_override の子孫継承 | b430d0cb | 6b | **未検証**（B/C 未作成） | 次の pilot |
+| pilot-2 の消費 | — | dry-run 151,590 | **実測 487,628**（≦ 900,000、本測定 3M 枠の内側に数える。人の決定） | 本測定枠の残り 2,512,372・9 試行 |
 
-## 7. 未解決・提案
-- 実経路の確認はすべて人の H1 昇格と運用 shell の実行待ち。終わるまで本 task は待機（done にしない）。
-- 提案: A 腕を worker から走らせない現構成では、実経路の確認は毎回人の shell が要る。A も daemon 経由（run・quota の記録内）で起動する executor にすれば、
-  承認済みの小規模確認を Celeris 自身が実行できる（別 task。本 task では作らない）。
+## 8. 未解決・提案
+修正 task 01M5456VVZR2VC5FC6P5J0V12Q で直す 6 件（証拠は RESULTS.md §8）:
+- G1 外部入力の配送: `case.json inputs[].fetch` の asset store も `--inputs-src` も無く、原票が workspace の `inputs/` に届かない（k3、たぶん本測定の k2/k4 も）。
+- G2 A 腕の FS 隔離: A が `find /` で原票・case.json・`fixtures/grader-private` のある tree・過去の分析成果物に届き、`/tmp` に書いた。
+- B1 A 腕の per_case 事前制限: 300k の予約に対し 487,628（事後 cancel のみ）。
+- B2 preflight の task-template 検査と専用案件: project の repos と local workspace の組合せを preflight で検査する。auto_integrate=false の campaign 専用案件を用意する。
+- B3 未実行試行の complete 判定: executor_error で run 0 の試行があるのに complete true・real_performance true。
+- 使用量: A 腕の消費が `GET /llm/accounts` の 7 日使用率に出ない。
+
+その他:
+- 本測定の `final.json` の `max_tokens` を pilot-2 の実消費（487,628）分下げるかは本測定の前に人が決める（今は変えていない）。
 - identity 側の未適用 patch の取り込み／破棄は本 task の範囲で確認していない（6b と同じく要確認）。
-- 本測定の `final.json` の `max_tokens` を pilot-2 の実消費分下げるかは本測定の前に人が決める。
+- 提案（§2 から継続）: A 腕も daemon 経由（run・quota の記録内、sandbox 付き）で起動する executor にすれば、G2・使用量・worker からの実行の問題がまとめて解ける。
 
 ## 証拠コマンド
 - `git merge --ff-only origin/main` → 173988bb..05a398f1。
 - `git diff --name-only 289d220c1555 HEAD -- crates/task-core/migrations` → 空。
 - validate / dry-run / preflight / mock の run・check・grade-out・export → §4 のとおり。
-- `bash scripts/dev/test-parallel.sh` → exit 0（nextest passed 5595, failed 0, ignored 15）。`cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
+- `bash scripts/dev/test-parallel.sh` → exit 0（nextest passed 5595, failed 0, ignored 15。§6 記入後に再実行しても同じ）。`cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
 - `sh scripts/dev/check-doc-links.sh && sh scripts/dev/check-adr-numbers.sh && sh scripts/dev/progress-index.sh --check` → ok。
+- pilot-2（人の運用 shell）: validate 0・dry-run 0・preflight 0・watch tokens_total 487,628・check 0・grade-out 0（final_pass 0）・export 0・`--verify-connected` 1（§6）。
+  worker は `/local/celeris/data/scratch/mlsys-pilot-2/` の `watch-stdout.json`・`check.json`・`grade-out.json`・`export.json`・`verify-connected.err` を読んで値を照合した。

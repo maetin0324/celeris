@@ -219,3 +219,56 @@ fn missing_required_fields_or_unmetered_consumption_fail() {
         assert!(err.contains(needle), "{needle}: {err}");
     }
 }
+
+fn export_records(gap: Gap) -> (Vec<Value>, Value) {
+    let (dir, db) = db_with(Some(gap));
+    let out = dir.path().join("o");
+    let _ = verify(&db, CAMPAIGN, &out);
+    let rows = std::fs::read_to_string(out.join("records.jsonl")).unwrap();
+    let recs = rows
+        .lines()
+        .map(|l| serde_json::from_str::<Value>(l).unwrap())
+        .collect();
+    let summary =
+        serde_json::from_str(&std::fs::read_to_string(out.join("summary.json")).unwrap()).unwrap();
+    (recs, summary)
+}
+
+#[test]
+fn export_keeps_raw_run_and_call_keys_and_states() {
+    let (recs, summary) = export_records(Gap::default());
+    let usage = |k: &str| {
+        recs.iter()
+            .find(|v| v["record_type"] == "usage" && v["dedup_key"] == k)
+            .unwrap_or_else(|| panic!("usage {k}"))
+    };
+    let run = usage("run:r1:proxy");
+    assert_eq!(run["run_id"], "r1");
+    assert_eq!(run["usage_state"], "observed");
+    assert_eq!(run["manifest_hash"], "mh-abc");
+    assert_eq!(usage("decision:jev:wu-1:1")["usage_key"]["kind"], "call");
+    assert_eq!(
+        usage("decision:cos:sess:1")["usage_state"],
+        "shared_unattributable"
+    );
+    let trial = recs.iter().find(|v| v["record_type"] == "trial").unwrap();
+    assert_eq!(trial["consumption_state"], "observed");
+    assert_eq!(
+        summary["integrity"]["conflicts"].as_array().unwrap().len(),
+        0
+    );
+    assert_eq!(summary["integrity"]["usage_without_run"], 0);
+}
+
+#[test]
+fn unobserved_usage_row_is_missing_not_zero() {
+    let (recs, _) = export_records(Gap {
+        no_usage: true,
+        ..Gap::default()
+    });
+    let trial = recs.iter().find(|v| v["record_type"] == "trial").unwrap();
+    assert_eq!(trial["consumption_state"], "missing");
+    let u = recs.iter().find(|v| v["record_type"] == "usage").unwrap();
+    assert_eq!(u["usage_state"], "missing");
+    assert!(u["input_tokens"].is_null());
+}

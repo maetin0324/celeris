@@ -124,6 +124,19 @@ pub struct InterventionStats {
     pub wall_ms: Stat,
 }
 
+/// 入力の整合（重複・別 hash・遅延観測）。0 でない値は黙って潰さず、ここに数えて見せる。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct IntegrityStats {
+    /// 同じ `run_id` / `dedup_key` で内容が一致した重複（1 件に潰した数）。
+    pub duplicates_identical: u64,
+    /// 同じ `run_id` / `dedup_key` で内容が食い違った重複の鍵（先に来た行を残し、後の行は採らない）。
+    pub conflicts: Vec<String>,
+    /// export の manifest hash と違う hash を持つため採らなかった run 数（その run の消費行も採らない）。
+    pub excluded_manifest_mismatch: u64,
+    /// run 行が（まだ）無い run 由来の消費行数。遅れて来た観測として record には残し、試行には結合しない。
+    pub usage_without_run: u64,
+}
+
 /// 集計 JSON（`summary.json`）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct CampaignSummary {
@@ -164,6 +177,7 @@ pub struct CampaignSummary {
     pub quota: Option<Value>,
     /// この campaign に属さず除外した入力行数。
     pub excluded_rows: u64,
+    pub integrity: IntegrityStats,
 }
 
 /// export の結果。
@@ -230,6 +244,37 @@ fn merge(into: &mut Value, from: Value) {
     }
 }
 
+/// 消費行の状態。`shared_unattributable`（run・case に割れない共有）、`missing`（行はあるが全欄が欠測）、
+/// `observed`（1 欄以上を観測）。
+fn usage_state(u: &DecisionLogUsage) -> &'static str {
+    let mut s = ConsumptionStats::default();
+    s.add(u);
+    if u.shared_overhead {
+        "shared_unattributable"
+    } else if s.fields().iter().any(|(_, st)| st.n_observed > 0) {
+        "observed"
+    } else {
+        "missing"
+    }
+}
+
+/// 同じ鍵の行を 1 件に潰す。一致は数え、食い違いは鍵を記録して先の行を残す。
+fn insert_first<'a, K: Ord, V: PartialEq>(
+    map: &mut BTreeMap<K, &'a V>,
+    key: K,
+    v: &'a V,
+    label: impl FnOnce() -> String,
+    integrity: &mut IntegrityStats,
+) {
+    match map.get(&key) {
+        None => {
+            map.insert(key, v);
+        }
+        Some(prev) if **prev == *v => integrity.duplicates_identical += 1,
+        Some(_) => integrity.conflicts.push(label()),
+    }
+}
+
 /// campaign 単位の集計と record 列を作る。
 pub fn build_campaign_export(
     params: &ExportParams,
@@ -239,14 +284,22 @@ pub fn build_campaign_export(
 ) -> CampaignExport {
     let campaign = params.campaign_id.as_str();
     let mut excluded: u64 = 0;
+    let mut integrity = IntegrityStats::default();
 
-    // run: campaign 一致のみ、run_id で 1 件に（再処理で増えない）。
+    // run: campaign 一致のみ、run_id で 1 件に（再処理で増えない）。別 hash の run は採らない。
     let mut run_map: BTreeMap<&str, &DecisionLogRun> = BTreeMap::new();
+    let mut mismatched_runs: BTreeSet<&str> = BTreeSet::new();
     for r in runs {
-        if r.proposal.campaign_id.as_deref() == Some(campaign) {
-            run_map.insert(r.proposal.run_id.as_str(), r);
-        } else {
+        if r.proposal.campaign_id.as_deref() != Some(campaign) {
             excluded += 1;
+        } else if let (Some(want), Some(got)) = (&params.manifest_hash, &r.proposal.manifest_hash)
+            && want != got
+        {
+            integrity.excluded_manifest_mismatch += 1;
+            mismatched_runs.insert(r.proposal.run_id.as_str());
+        } else {
+            let id = r.proposal.run_id.as_str();
+            insert_first(&mut run_map, id, r, || format!("run:{id}"), &mut integrity);
         }
     }
     let decision_ids: BTreeSet<&str> = run_map
@@ -261,6 +314,13 @@ pub fn build_campaign_export(
     // 消費: dedup_key で 1 件に。別 campaign の行は採らない。
     let mut usage_map: BTreeMap<String, &DecisionLogUsage> = BTreeMap::new();
     for u in usage {
+        if u.run_id
+            .as_deref()
+            .is_some_and(|r| mismatched_runs.contains(r))
+        {
+            integrity.excluded_manifest_mismatch += 1;
+            continue;
+        }
         let belongs = match u.campaign_id.as_deref() {
             Some(c) => c == campaign,
             None => {
@@ -271,7 +331,8 @@ pub fn build_campaign_export(
             }
         };
         if belongs {
-            usage_map.insert(u.key.dedup_key(), u);
+            let k = u.key.dedup_key();
+            insert_first(&mut usage_map, k.clone(), u, || k, &mut integrity);
         } else {
             excluded += 1;
         }
@@ -353,11 +414,21 @@ pub fn build_campaign_export(
             by_arm.entry(arm_of(u)).or_default().add(u);
             total.add(u);
         }
+        let run_known = match &u.key {
+            UsageKey::Run { run_id, .. } => run_map.contains_key(run_id.as_str()),
+            UsageKey::Call { .. } => true,
+        };
+        if !run_known {
+            integrity.usage_without_run += 1;
+        }
         let ident = identity_fields(proposal_of(u));
         let mut rec = json!({
             "record_type": "usage",
             "schema": RECORD_SCHEMA,
             "dedup_key": key,
+            "usage_key": serde_json::to_value(&u.key).unwrap_or(Value::Null),
+            "usage_state": usage_state(u),
+            "run_known": run_known,
             "campaign_id": campaign,
             "attribution_rule": ov(&u.attribution_rule),
             "shared_overhead": u.shared_overhead,
@@ -577,6 +648,7 @@ pub fn build_campaign_export(
         incomplete,
         quota: None,
         excluded_rows: excluded,
+        integrity,
     };
     CampaignExport {
         records,
@@ -619,6 +691,17 @@ fn trial_record(
     let c = p.classifier.as_ref();
     let e = &r.execution;
     let o = &r.outcome;
+    // 取得済み / 行はあるが欠測 / 未実行（実行も終了も記録なし）/ 未計上（走ったのに行が無い）を区別する。
+    let observed = |s: &ConsumptionStats| s.fields().iter().any(|(_, st)| st.n_observed > 0);
+    let consumption_state = if observed(&own) || observed(&task_level) {
+        "observed"
+    } else if own.n_rows + task_level.n_rows > 0 {
+        "missing"
+    } else if e.exec_model.is_none() && o.run_end.is_none() {
+        "not_executed"
+    } else {
+        "unmetered"
+    };
     let mut rec = json!({
         "record_type": "trial",
         "schema": RECORD_SCHEMA,
@@ -651,6 +734,7 @@ fn trial_record(
         "run_end": o.run_end.map(|x| x.as_str()),
         "wu_verdict": o.wu_verdict.map(|x| x.as_str()),
         "grader_verdict": o.campaign_verdict.map(|x| x.as_str()),
+        "consumption_state": consumption_state,
         "run_consumption": own,
         "task_level_consumption": task_level,
     });
@@ -703,6 +787,9 @@ pub fn verify_connected(export: &CampaignExport) -> Vec<String> {
     }
     if export.summary.total.n_rows == 0 {
         problems.push("campaign has no direct usage rows".to_string());
+    }
+    for c in &export.summary.integrity.conflicts {
+        problems.push(format!("conflicting duplicate rows for {c}"));
     }
     problems
 }

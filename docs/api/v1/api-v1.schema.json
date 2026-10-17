@@ -12778,6 +12778,15 @@
       ],
       "type": "object"
     },
+    "EvidenceMode": {
+      "description": "根拠表の扱い。`none` は参照しない・`pinned` は指定版のみ・`latest` は通常運用の最新版。",
+      "enum": [
+        "none",
+        "pinned",
+        "latest"
+      ],
+      "type": "string"
+    },
     "EvidenceSnapshot": {
       "description": "The evidence row values a candidate was judged on (ADR D5 `candidates[].evidence`).",
       "properties": {
@@ -23211,8 +23220,11 @@
     "ResolvedRouting": {
       "description": "解決結果（`celeris.route-decision/1` の `routing_resolved` に載る）。",
       "properties": {
+        "evidence_mode": {
+          "$ref": "#/$defs/EvidenceMode"
+        },
         "evidence_table_id": {
-          "description": "`None` は「最新版を読む」（従来）。",
+          "description": "`pinned` のときだけ Some。`None` かつ `evidence_mode=latest` は「最新版を読む」（従来）。",
           "type": [
             "string",
             "null"
@@ -23235,6 +23247,7 @@
         "mode",
         "source",
         "lower_policy",
+        "evidence_mode",
         "online_update"
       ],
       "type": "object"
@@ -24334,8 +24347,13 @@
       "additionalProperties": false,
       "description": "`task_routing_overrides` の 1 行（作成時に固定・以後不変。`POST /tasks` の `routing_override`）。",
       "properties": {
+        "evidence_mode": {
+          "$ref": "#/$defs/EvidenceMode",
+          "default": "latest",
+          "description": "根拠表の扱い（ADR 2026-10-17-evidence-mode-none-pinned-latest）。欄なしの旧 JSON は\n`evidence_table_id` あり→`pinned`、なし→`latest` と読む。"
+        },
         "evidence_table_id": {
-          "description": "根拠表 `routing_evidence` の版（`evidence_version`）。指定すると最新版ではなくこの版だけを読む。",
+          "description": "根拠表 `routing_evidence` の版（`evidence_version`）。`pinned` のとき必須で、この版だけを読む。",
           "type": [
             "string",
             "null"

@@ -72,7 +72,7 @@ mock の出力は `run-meta.json` / `summary.json` / export に `evidence_kind: 
 4. 実行（token は環境変数の**名前**だけ渡す。値は argv に出さない）:
    ```sh
    export CELERIS_CAMPAIGN_TOKEN=...   # 人が自分の shell で設定（admin/API token）
-   $B run --executor celeris --manifest $O/pilot.json --out $O/pilot-out \
+   $B watch --executor celeris --manifest $O/pilot.json --out $O/pilot-out --interval-secs 60 \
       --api-url http://127.0.0.1:<port> --token-env CELERIS_CAMPAIGN_TOKEN \
       --task-template $O/task-template.json \
       --repo-src <repo の checkout> --materials-src <materials> --kb-src <kb snapshot>
@@ -80,7 +80,7 @@ mock の出力は `run-meta.json` / `summary.json` / export に `evidence_kind: 
    `--api-url` は origin だけ（`/api/v1` は実行器が足す。付けると起動時に拒否）。`--out` は起動時に絶対 path にする。
    materials は各試行の workspace の `materials/` に配られる（repo に `materials/` があると拒否）。A は `claude -p … --permission-mode bypassPermissions` で試行の workspace（複製）の中で動き、exit 0 でも workspace が無変更なら `failed`（`reason: no_artifact`）。
    stdout の JSON（`executed / waiting / parallel_deferred / no_artifact / executor_errors / blocked / budget_cancelled / tokens_total / tokens_missing / max_overshoot_*`）を控える。
-   `max_parallel` は in-flight の上限: 1 回の run は上限まで投入して戻る。**`waiting=0` になるまで同じコマンドを繰り返す**（前の試行を回収して予算・使用量を記録してから次を出す）。`executor_errors>0` なら `trials.jsonl` の `error` 欄（HTTP status と本文、2 KiB まで）を見る。
+   `max_parallel` は in-flight の上限: 1 回の run は上限まで投入して戻る。標準起動は `watch`（台帳が閉じるまで自分で走査を繰り返す。`run` は単発の 1 回走査）。止まったら同じ `watch` を再実行する。`executor_errors>0` なら `trials.jsonl` の `error` 欄（HTTP status と本文、2 KiB まで）を見る。
 5. 採点と検査:
    ```sh
    $B check  --manifest $O/pilot.json --out $O/pilot-out
@@ -118,8 +118,8 @@ mock の出力は `run-meta.json` / `summary.json` / export に `evidence_kind: 
 
 1. 条件固定: 本測定用 manifest（`split: final`、新 `campaign_id`、model 実名・版、`routing` 固定、pilot の係数で決めた budget）を `$O/final.json` に書き、`$B validate` の sha256 を進捗に記録。以後 manifest・入力・snapshot は変更しない（変えるなら新 campaign_id）。dev の問題を final に入れない（`validate`/`check` が拒否する）。
 2. `$B dry-run --manifest $O/final.json` で `within_budget true`。
-3. 本測定: Part P-4 と同じ `run --executor celeris`、`--out $O/final-out`。
-4. **再開**: 中断・待機・daemon 再起動の後は**同じコマンドをそのまま再実行**する（台帳が (manifest hash, case, arm, repetition)→task/run を持つので、投入済みは再投入されず、`resumed_skipped` に数えられる）。別 hash で同じ `--out` を再利用すると拒否される。
+3. 本測定: Part P-4 と同じ `watch --executor celeris`、`--out $O/final-out`。
+4. **再開**: 中断・待機・daemon 再起動・watch の停止の後は**同じ `watch` コマンドをそのまま再実行**する（台帳が (manifest hash, case, arm, repetition)→task/run を持つので、投入済みは再投入されず、`resumed_skipped` に数えられる）。別 hash で同じ `--out` を再利用すると拒否される。
 5. 検査: `$B check --manifest $O/final.json --out $O/final-out`（ok true、violations 空）。報告があれば `$B check-report --manifest … --out … --report <file>`。
 6. 独立採点: 試行ごとに `$B grade --case <grade-case.json> --artifact <成果物 dir> [--work <dir>]`（exit 0 = final_pass、非 0 = 判定 JSON を stderr）。未接続 1・2 が解消するまで本測定の採点は完了と言わない。
 7. export（campaign 側）: `$B export --manifest $O/final.json --out $O/final-out --dest $O/final-export`。
@@ -129,10 +129,10 @@ mock の出力は `run-meta.json` / `summary.json` / export に `evidence_kind: 
 ## API キー未登録時の経路（受信箱通知 → 登録 → 自動再開）
 
 1. B/C の work unit が Jev 鍵（secret id `jev_api_key`）を要る時点で未登録なら、その WU だけが `Blocked`（`waiting_for_auth`）になり、**受信箱に `credential_wait` の item が 1 件**出て Discord 通知が 1 件出る（CoS の run は起こさない。ADR 2026-10-15-credential-wait-skip-triage）。同じ鍵を待つ複数 task は 1 通知にまとまる。本文に値は出ない。
-2. `campaign run` は `waiting>0` で戻る（待機中の試行は台帳に残る。他の arm・試行は止まらない）。
+2. `campaign watch` は台帳が閉じるまで走査を続ける（`run` なら `waiting>0` で戻る）（待機中の試行は台帳に残る。他の arm・試行は止まらない）。
 3. 人が GUI の `/accounts`（または H2 の API）で鍵を登録する。登録は secret の `PUT /api/v1/secrets/{id}` で、event `secret_stored` が追記される。
 4. daemon が最小 1 呼び出しで認証を確認し、成功すれば**同じ WU を一度だけ自動で再キュー**（401/403 は待ちを維持して通知を更新、429/5xx は通常 backoff）。cancelled の task は再開しない。
-5. 人は `campaign run` を同じ引数で再実行して追跡を再開する（Part M-4）。
+5. 人は `campaign watch` を同じ引数で再実行して追跡を再開する（Part M-4）。
 登録 ≠ 測定予算の承認。登録で本測定を始めない。
 
 ## Part H. 人が本番 host で実行する手順（worker・agent は実行しない）
@@ -204,3 +204,5 @@ acceptance は task-api の形（`{"type", "text"}`）だけ。入れ子の `{"t
 - `celerisctl release preview` は `--releases-dir` と `<SHA12>` を要し、`db backup` は `--src` を持つことを `--help` で確認。
 - `celerisctl --help` に `campaign` / `release` / `routing` / `db` / `api-request` が存在、`celerisctl campaign export --help` に `--out`・`--manifest-hash`・`--verify-connected`・`--db` が存在。
 - `GET/PUT /api/v1/secrets` は `crates/task-api/src/handlers.rs` のルートとして存在（実呼び出しはしていない）。
+
+> 2026-10-17（P1-4）: 実測の標準起動は `watch`、A の実行ファイルは preflight が解決した物をそのまま起動。監視・超過の限界は `../2026-10-16-mlsys-final/run-final.md` §4.1。

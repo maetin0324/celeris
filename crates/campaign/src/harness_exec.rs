@@ -48,6 +48,11 @@ pub struct HarnessCommand {
 pub trait CommandBuilder: Send + Sync {
     fn build(&self, req: &TrialRequest) -> HarnessCommand;
 
+    /// preflight が解決した実行ファイルの版。実起動の記録（`launch.json`）に残す。
+    fn program_version(&self) -> Option<String> {
+        None
+    }
+
     /// stdout から (tokens の内訳, cost_micro_usd) を取る。取れなければ None（欠測。推定で埋めない）。
     fn parse_usage(&self, stdout: &str) -> (Option<TokenUsage>, Option<u64>) {
         parse_claude_json_usage(stdout)
@@ -65,17 +70,24 @@ pub trait CommandBuilder: Send + Sync {
 /// （pilot 2026-10-16）。試行は専用の複製 workspace の中で走る。許可リスト・turn の後付け制限は足さない。
 pub struct ClaudeCodeBuilder {
     pub program: PathBuf,
+    pub version: Option<String>,
 }
 
-impl Default for ClaudeCodeBuilder {
-    fn default() -> Self {
+impl ClaudeCodeBuilder {
+    /// preflight が解決した実行ファイル（絶対 path）と版で作る。PATH を引き直さない。
+    pub fn from_resolved(p: &crate::preflight::ResolvedProgram) -> Self {
         Self {
-            program: "claude".into(),
+            program: p.path.clone(),
+            version: Some(p.version.clone()),
         }
     }
 }
 
 impl CommandBuilder for ClaudeCodeBuilder {
+    fn program_version(&self) -> Option<String> {
+        self.version.clone()
+    }
+
     fn build(&self, req: &TrialRequest) -> HarnessCommand {
         HarnessCommand {
             program: self.program.clone(),
@@ -168,20 +180,9 @@ pub struct Sandbox {
     pub config_dir: PathBuf,
 }
 
-/// PATH を引いた実体（symlink 解決済み）。絶対 path / 相対 path はそのまま解決する。
+/// 実体の解決は preflight と同じ関数（検査対象と実起動をずらさない）。
 fn resolve_program(p: &Path) -> Result<PathBuf, String> {
-    let cand = if p.components().count() > 1 || p.is_absolute() {
-        p.to_path_buf()
-    } else {
-        std::env::var_os("PATH")
-            .and_then(|paths| {
-                std::env::split_paths(&paths)
-                    .map(|d| d.join(p))
-                    .find(|c| c.is_file())
-            })
-            .ok_or_else(|| format!("{} not found in PATH", p.display()))?
-    };
-    fs::canonicalize(&cand).map_err(|e| format!("{}: {e}", cand.display()))
+    crate::preflight::resolve_executable(p, std::env::var_os("PATH").as_deref())
 }
 
 impl Sandbox {
@@ -530,6 +531,21 @@ impl Executor for HarnessExecutor {
         };
         let b = serde_json::to_vec(&seen).map_err(|e| e.to_string())?;
         write_synced(&dir.join("observed.json"), &b)?;
+        // 実起動の記録: 起動する実行ファイル・版・argv（prompt は長さだけ）。検査した物と照合できる。
+        let launch = serde_json::json!({
+            "program": c.program,
+            "version": self.builder.program_version(),
+            "argv": c.args.iter().map(|a| if a == req.prompt {
+                format!("<prompt {} bytes>", a.len())
+            } else {
+                a.clone()
+            }).collect::<Vec<_>>(),
+            "sandboxed": self.sandbox.is_some(),
+        });
+        write_synced(
+            &dir.join("launch.json"),
+            &serde_json::to_vec(&launch).map_err(|e| e.to_string())?,
+        )?;
         let c = match &self.sandbox {
             Some(sb) => sb.wrap(&c, req.workspace)?,
             None => c,

@@ -11,18 +11,14 @@ use celeris_campaign::{
     celeris_exec::{CelerisExecutor, HttpResponse, Transport},
     executor::MockExecutor,
     manifest::{CampaignManifest, ConfigId},
-    preflight::{Host, Inputs, check, run_gated},
+    preflight::{Host, Inputs, ResolvedProgram, check, run_gated},
     runner::RunOptions,
 };
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 
-const K4_INPUT: &str = "main-v3-n2-43706.tgz";
+mod preflight_setup;
+use preflight_setup::*;
 const SECRET: &str = "s3cret-token-value-xyz";
-
-fn root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).to_path_buf()
-}
 
 struct FakeHost {
     env: Vec<&'static str>,
@@ -37,8 +33,15 @@ impl Host for FakeHost {
         self.env.contains(&name)
     }
 
-    fn program_available(&self, p: &Path) -> bool {
-        self.programs.iter().any(|x| Path::new(x) == p)
+    fn resolve_program(&self, p: &Path) -> Result<ResolvedProgram, String> {
+        if self.programs.iter().any(|x| Path::new(x) == p) {
+            Ok(ResolvedProgram {
+                path: p.to_path_buf(),
+                version: "fake 1.0".into(),
+            })
+        } else {
+            Err("not available".into())
+        }
     }
 
     fn api_get(&self, _: &str, _: &str, path: &str) -> Result<Value, String> {
@@ -63,7 +66,7 @@ fn api(acct_dir: &Path) -> Vec<(&'static str, Value)> {
     vec![
         (
             "/api/v1/projects/01ABC",
-            json!({"id":"01ABC","auto_integrate":false}),
+            json!({"project":{"id":"01ABC","auto_integrate":false},"repos":[]}),
         ),
         (
             "/api/v1/projects/01ABC/repos",
@@ -92,104 +95,6 @@ impl Transport for &CountingTransport {
         self.0.fetch_add(1, Ordering::SeqCst);
         Err("must not be called".into())
     }
-}
-
-/// 解決済みの final 一式（manifest・入力・材料・template）を一時 dir に作る。
-struct Setup {
-    dir: tempfile::TempDir,
-    inp: Inputs,
-}
-
-fn copy(from: &Path, to: &Path) {
-    fs::create_dir_all(to).unwrap();
-    for e in fs::read_dir(from).unwrap() {
-        let p = e.unwrap().path();
-        let t = to.join(p.file_name().unwrap());
-        if p.is_dir() {
-            copy(&p, &t);
-        } else {
-            fs::copy(&p, &t).unwrap();
-        }
-    }
-}
-
-fn resolved_manifest() -> Value {
-    let p = root()
-        .join("../../agent-docs")
-        .join("progress/2026-10-16-mlsys-final/final.json");
-    let mut v: Value = serde_json::from_slice(&fs::read(p).unwrap()).unwrap();
-    for c in v["configs"].as_array_mut().unwrap() {
-        match c["id"].as_str().unwrap() {
-            "A" => c["harness_version"] = json!("claude-code@2.1.0"),
-            _ => c["harness_version"] = json!("0123456789ab"),
-        }
-        if c["routing"]["evidence_table_id"].is_string() {
-            c["routing"]["evidence_table_id"] = json!("evidence-v7");
-        }
-    }
-    v
-}
-
-fn setup() -> Setup {
-    let dir = tempfile::tempdir().unwrap();
-    let d = dir.path();
-    let pd = root()
-        .join("../../agent-docs")
-        .join("progress/2026-10-16-mlsys-final");
-    fs::copy(
-        pd.join("final-input-manifest.json"),
-        d.join("final-input-manifest.json"),
-    )
-    .unwrap();
-    fs::write(d.join("final.json"), resolved_manifest().to_string()).unwrap();
-    let (m, k) = (d.join("materials"), d.join("kb"));
-    // 外部入力: 実物（本番の asset）は無いので、case を写して k4 の宣言 sha256 を試験用の中身に合わせる。
-    let (cases, ins) = (d.join("cases"), d.join("inputs-src"));
-    copy(&root().join("cases"), &cases);
-    fs::create_dir_all(&ins).unwrap();
-    let repo = d.join("repo");
-    fs::create_dir_all(&repo).unwrap();
-    fs::write(repo.join("README"), "k2 initial tree").unwrap();
-    fs::write(ins.join(K4_INPUT), b"fake archive for the test").unwrap();
-    let cj = cases.join("final/k4-cmp4-validity-analysis/case.json");
-    let mut c: Value = serde_json::from_slice(&fs::read(&cj).unwrap()).unwrap();
-    c["inputs"][0]["sha256"] = json!(format!(
-        "{:x}",
-        Sha256::digest(b"fake archive for the test")
-    ));
-    fs::write(&cj, c.to_string()).unwrap();
-    for c in ["k2-bf-xattr-restart-campaign", "k4-cmp4-validity-analysis"] {
-        copy(
-            &root().join("cases/final").join(c).join("materials"),
-            &m.join(c),
-        );
-    }
-    copy(
-        &root().join("cases/final/k2-bf-xattr-restart-campaign/kb"),
-        &k,
-    );
-    fs::write(
-        d.join("task-template.json"),
-        json!({"project_id":"01ABC","acceptance":[{"type":"reviewer","text":"x"}]}).to_string(),
-    )
-    .unwrap();
-    let inp = Inputs {
-        manifest_path: d.join("final.json"),
-        input_override: None,
-        cases_root: cases,
-        grader_root: root().join("fixtures/grader-private"),
-        grade_cases_root: root().join("fixtures/grade-cases"),
-        a_program: "claude".into(),
-        api_url: Some("http://127.0.0.1:8080".into()),
-        token_env: Some("CELERIS_CAMPAIGN_TOKEN".into()),
-        task_template: Some(d.join("task-template.json")),
-        repo_src: Some(repo),
-        materials_src: Some(m),
-        kb_src: Some(k),
-        inputs_src: Some(ins),
-        a_account: Some("lab".into()),
-    };
-    Setup { dir, inp }
 }
 
 fn missing_checks(inp: &Inputs, h: &FakeHost) -> Vec<String> {
@@ -394,6 +299,21 @@ fn fake_api(routes: Vec<(&'static str, Value)>) -> String {
 }
 
 fn bin(args: &[&str], s: &Setup, env: &[(&str, &str)]) -> std::process::Output {
+    // A の実行ファイルは `--version` に答える stub（/bin/sh は版を返さず、preflight が拒否する）。
+    let stub = s.dir.path().join("a-stub");
+    if !stub.exists() {
+        let tmp = s.dir.path().join("a-stub.tmp");
+        fs::write(&tmp, "#!/bin/sh\necho 'stub 1.0'\n").unwrap();
+        let ok = Command::new("sh")
+            .arg("-c")
+            .arg(r#"chmod 755 "$1" && mv "$1" "$2""#)
+            .arg("sh")
+            .arg(&tmp)
+            .arg(&stub)
+            .status()
+            .unwrap();
+        assert!(ok.success());
+    }
     let mut c = Command::new(std::env::var("CARGO_BIN_EXE_celeris-campaign").expect("bin"));
     c.args(args)
         .arg("--manifest")
@@ -405,7 +325,7 @@ fn bin(args: &[&str], s: &Setup, env: &[(&str, &str)]) -> std::process::Output {
         .arg("--grade-case-root")
         .arg(&s.inp.grade_cases_root)
         .arg("--a-program")
-        .arg("/bin/sh")
+        .arg(&stub)
         .arg("--materials-src")
         .arg(s.inp.materials_src.as_ref().unwrap())
         .arg("--kb-src")
@@ -598,7 +518,7 @@ fn auto_integrate_project_is_rejected() {
     let s = setup();
     let h = with_api(vec![(
         "/api/v1/projects/01ABC",
-        json!({"id":"01ABC","auto_integrate":true}),
+        json!({"project":{"id":"01ABC","auto_integrate":true},"repos":[]}),
     )]);
     let r = check(&s.inp, &h);
     assert!(

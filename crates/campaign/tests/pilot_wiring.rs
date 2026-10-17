@@ -268,7 +268,11 @@ fn claude_code_a_is_started_with_a_permission_mode_and_cache_usage_is_parsed() {
         timeout_secs: 10,
         budget: m.budget.per_case,
     };
-    let c = ClaudeCodeBuilder::default().build(&req);
+    let c = ClaudeCodeBuilder {
+        program: "claude".into(),
+        version: None,
+    }
+    .build(&req);
     let pos = c
         .args
         .iter()

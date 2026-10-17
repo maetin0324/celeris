@@ -110,6 +110,7 @@ fn a_executor(
     args: &[String],
     m: &CampaignManifest,
     out_dir: &std::path::Path,
+    program: &preflight::ResolvedProgram,
 ) -> Result<HarnessExecutor, String> {
     let id = arg(args, "--a-account")
         .ok_or("--a-account <account_id> is required (A runs under a Celeris-managed account)")?
@@ -118,7 +119,7 @@ fn a_executor(
     let dir = preflight::find_a_account(&get_accounts(args)?, &id)?;
     Ok(HarnessExecutor::new(
         out_dir.join("harness-state"),
-        Box::new(ClaudeCodeBuilder::default()),
+        Box::new(ClaudeCodeBuilder::from_resolved(program)),
     )
     .with_sandbox(Sandbox {
         account_id: id,
@@ -162,9 +163,17 @@ fn run(args: Vec<String>) -> Result<String, String> {
                 arg(&args, "--executor").ok_or("--executor mock|harness|celeris is required")?;
             let which = which.to_string_lossy().into_owned();
             // 実行（有料）経路は preflight を通ってからだけ始める。mock は無課金なので対象外。
-            if matches!(which.as_str(), "harness" | "celeris") {
-                preflight::gate(&preflight_inputs(&args, &manifest_path), &RealHost)?;
-            }
+            // A はここで検査した実行ファイル・版をそのまま起動する（PATH を引き直さない）。
+            let a_program = if matches!(which.as_str(), "harness" | "celeris") {
+                preflight::gate(&preflight_inputs(&args, &manifest_path), &RealHost)?.a_program
+            } else {
+                None
+            };
+            let a_program = || {
+                a_program
+                    .as_ref()
+                    .ok_or_else(|| "internal: preflight did not resolve the A program".to_string())
+            };
             let input = m.load_input(&manifest_path, arg(&args, "--input-manifest").as_deref())?;
             let out_dir = out()?;
             // 外部入力は case.json の宣言から引く（実行経路だけ。mock は case を読まない）。
@@ -215,7 +224,7 @@ fn run(args: Vec<String>) -> Result<String, String> {
             };
             let rep = match which.as_str() {
                 "mock" => drive(&MockExecutor::seeded())?,
-                "harness" => drive(&a_executor(&args, &m, &out_dir)?)?,
+                "harness" => drive(&a_executor(&args, &m, &out_dir, a_program()?)?)?,
                 "celeris" => {
                     // 秘密の値は受け取らない: token は環境変数の「名前」だけ。
                     let url = arg(&args, "--api-url").ok_or("--api-url is required for celeris")?;
@@ -245,7 +254,7 @@ fn run(args: Vec<String>) -> Result<String, String> {
                         out_dir.join("cluster-cancel.jsonl"),
                     );
                     // A 腕を含む manifest でも同じ入口で走る。A は既存ハーネス（後付け制限なし）。
-                    let a = a_executor(&args, &m, &out_dir)?;
+                    let a = a_executor(&args, &m, &out_dir, a_program()?)?;
                     drive(&ArmDispatch { a, bc })?
                 }
                 other => {

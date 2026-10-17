@@ -61,3 +61,8 @@ ADR: `agent-docs/adr/2026-10-17-campaign-lock.md`。外部 LLM・有料ジョブ
 - 証拠: `cargo test -p celeris-campaign --test campaign_lock` 6 passed／`cargo clippy -p celeris-campaign --all-targets -- -D warnings` exit 0／`cargo fmt --all -- --check` exit 0／`check-doc-links.sh` exit 0。
 - 未解決: 実行・再開・grade-out・bind・export への配線と lock ファイル配置は後続（本 task では未着手）。
 - 提案: 後続で `<out>/snapshot/lock.json` に封印済み lock を置き、bind / grade-out / export が `verify_lock` と `bind_to_manifest` を呼ぶ。
+
+## 最終確認（WU final-verify）
+- コードは変更なし。`cargo test -p celeris-campaign --test campaign_lock --test k2_pin` exit 0（campaign_lock 6 passed、k2_pin 3 passed。K2 資産 `/local/celeris/data/campaign-assets/k2/` ありで実体照合まで実行、skip 合格なし）。
+- 記録検査: `check-adr-numbers.sh` exit 0／`check-doc-links.sh` exit 0／`cargo fmt --all -- --check` exit 0。
+- status: done を維持。未解決は前節のとおり（実行・再開・grade-out・bind・export への配線は後続）。

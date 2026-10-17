@@ -39,3 +39,16 @@ ADR: `agent-docs/adr/2026-10-17-campaign-lock.md`。外部 LLM・有料ジョブ
   別 commit・偽 tree・偽 gitlink の lock 拒否／metadata（root `.git`、submodule `.git` file、実 clone）の有無は拒否理由にならない／exec bit。
 - 制約: submodule の入れ子は `Unsupported`。symlink は link 先を内容として数える。
 - k2-pin への引き継ぎ: K2 の `submodule_repo` に承認済み資産の repo を渡して `derive_initial`。取得不能なら `Unavailable` を未完了として報告する。
+
+## WU k2-pin（未完了: K2 submodule 実体は取得不能）
+- 結論: K2 の submodule 内容 hash は**固定していない**。固定済みとは書かない。承認待ちの取得・ネットワーク取得・外部 LLM・本番変更はしていない。
+- 確認した既存資産: `crates/campaign/cases/final/k2-bf-xattr-restart-campaign/case.json` の `initial`（repo=benchfs、commit `086c4618…`、tree `56d2f021…`、archive_sha256 `b1ae8f58…`、submodule 3 件の 40 桁 commit）。case.json 自身が「submodule snapshot の配置は承認待ち／未実施」と記す。
+- 探索: `/home/rmaeda`・`/local/celeris/data` 配下の git repo（深さ 6）に benchfs commit `086c4618…` も pluvio commit `9ecd51ee…` も存在しない。`k2-initial.tar` も無い。`/work`（HPC 作業領域）はこの host に無い。リポジトリ内 fixture は K2 実体を含まない。
+- 必要資産（人が承認・配置）:
+  - benchfs @ `086c4618e2a4d94ea56da78ceeed0f8d6d568d67`（または `k2-initial.tar`、sha256 `b1ae8f58dd48c8fdb451dfb6b26287c188eeba62bfbdeaa8a518a760c6c980bf`）
+  - `lib/pluvio` @ `9ecd51ee9b5fe62831f8e46c3d98a371359664c0`
+  - `lib/locusta` @ `68f8b2104d33a98fe047e7e24f2394cebaee1c9c`
+  - `ior_integration/ior` @ `7054224dd8abe64bc466d8a12391710c7d86132e`
+  - 配置後は `lock_tree::derive_initial(benchfs_repo, "086c4618…", &|path| submodule_repo_for(path))` の結果を `LockedSubmodule` に固定する。
+- 試験（skip 合格にしない）: `crates/campaign/tests/k2_pin.rs` — case.json の 3 gitlink を持つ repo を作り、実体 repo なしで `derive_initial` が `TreeProofError::Unavailable` を返すことを確認（1 件 pass）。
+- 提案: 上記 4 資産の配置承認を人の判断に上げる（result.json の question）。

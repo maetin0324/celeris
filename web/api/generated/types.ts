@@ -2597,6 +2597,8 @@ export type EventsPage = {
   "items": Array<EventRow>;
 };
 
+export type EvidenceMode = "none" | "pinned" | "latest";
+
 export type EvidenceSnapshot = {
   "evidence_version": string;
   "n": number;
@@ -4662,6 +4664,7 @@ export type ResolveResponse = {
 };
 
 export type ResolvedRouting = {
+  "evidence_mode": EvidenceMode;
   "evidence_table_id"?: string | null;
   "lower_policy": string;
   "mode": RoutingMode;
@@ -4889,6 +4892,7 @@ export type RoutingOutcome = {
 export type RoutingOutcomeState = "not_recorded" | "unreviewed" | "judged";
 
 export type RoutingOverride = {
+  "evidence_mode"?: EvidenceMode;
   "evidence_table_id"?: string | null;
   "lower_policy"?: string | null;
   "mode": RoutingMode;
@@ -5451,6 +5455,7 @@ export type TaskDetail = {
   "priority_label": string;
   "promotion"?: PromotionView | null;
   "role"?: string | null;
+  "routing_override"?: RoutingOverride | null;
   "runnable": boolean;
   "runs": Array<RunSummary>;
   "task": Task;

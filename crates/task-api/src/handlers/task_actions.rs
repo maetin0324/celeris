@@ -314,20 +314,38 @@ pub(crate) fn retry_op(
         .transpose()
         .map_err(reject)?;
     let now = OffsetDateTime::now_utc();
-    let Some(audit) = audit else {
-        return task_ops::retry::retry_task_with_execution(
-            store, id, accept, workspace, execution, "human", now,
-        )
-        .map(Applied::Direct)
-        .map_err(|e| ops_problem(store, e, Some("retry")));
-    };
+    // 複製先へ元の routing_override（evidence_mode を含む）を写す。写さないと root の retry は
+    // none/pinned が config の latest に落ちる。task-core の store は変えず、API 層で写す。
+    let inherited = task_core::store::TaskStore::task_routing_override(store, id)
+        .map_err(|e| reject(ops_problem(store, e.into(), Some("retry"))))?;
     let new_task =
         task_ops::retry::plan_retry(store, id, accept, workspace, execution.is_some(), now)
             .map_err(|e| reject(ops_problem(store, e, Some("retry"))))?;
+    let Some(audit) = audit else {
+        let new_id = new_task.id;
+        let rewired = task_core::store::TaskStore::retry_task(store, id, &new_task)
+            .map_err(|e| ops_problem(store, e.into(), Some("retry")))?;
+        if let Some(ov) = &inherited {
+            store
+                .set_task_routing_override(new_id, ov, &super::rfc3339(now))
+                .map_err(|e| ops_problem(store, e.into(), Some("retry")))?;
+        }
+        return task_ops::retry::finish_retry(store, new_id, rewired, execution, "human", now)
+            .map(Applied::Direct)
+            .map_err(|e| ops_problem(store, e, Some("retry")));
+    };
     let new_id = new_task.id;
     let mut rewired = Vec::new();
     let operation = audit.apply(store, "task", &target_id, "task.retry", |tx| {
         rewired = task_core::store::SqliteStore::retry_task_tx(tx, id, &new_task)?;
+        if let Some(ov) = &inherited {
+            task_core::store::SqliteStore::set_task_routing_override_tx(
+                tx,
+                new_id,
+                ov,
+                &super::rfc3339(now),
+            )?;
+        }
         Ok(serde_json::json!({
             "task_id": target_id,
             "new_task_id": new_id.to_string(),

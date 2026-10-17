@@ -199,6 +199,10 @@ pub struct TaskDetail {
     pub children: Vec<TaskRef>,
     pub actions: Vec<Action>,
     pub worker_run_hint: Option<String>,
+    /// ADR 2026-10-17-evidence-mode-none-pinned-latest: 実効の `routing_override`（祖先からの継承を含む）。
+    /// `evidence_mode` が none/pinned/latest のどれで解決されるかを GET で確かめられる。固定が無ければ省略。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub routing_override: Option<task_core::route_select::RoutingOverride>,
     /// ADR-0019 D2: `sync = "worktree"` のクラスタで動くタスクの worktree。人はここを見て diff / commit する。
     pub worktree: Option<WorktreeView>,
     /// ADR-0070 D1（Phase 116）: `task.status == Failed` のときだけ `Some`（分類・理由・配送済みの release）。
@@ -1558,7 +1562,9 @@ pub fn task_detail(
     }
     let behind_target = crate::behind_target::behind_target_of(store, id, now)?;
 
+    let routing_override = store.task_routing_override(id)?;
     Ok(TaskDetail {
+        routing_override,
         integrations: None,
         promotion: None,
         expected_write_paths,

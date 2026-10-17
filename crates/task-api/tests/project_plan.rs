@@ -508,3 +508,113 @@ async fn create_accepts_and_pins_routing_override() {
         assert!(resp.status.is_client_error(), "{bad}: {}", resp.status);
     }
 }
+
+/// ADR 2026-10-17-evidence-mode-none-pinned-latest: 通常の router で `evidence_mode` が保存され、GET の詳細に戻り、
+/// 子・孫・retry（root の複製）にも同じ値で届く。矛盾指定は 4xx で何も作らない。
+#[tokio::test]
+async fn evidence_mode_round_trips_through_post_get_child_and_retry() {
+    let env = env_with_token();
+    let app = env.router();
+    let create = |ov: Value| {
+        p(
+            "/api/v1/tasks",
+            &json!({
+                "title": "trial", "objective": "o",
+                "acceptance": [{"type": "artifact_exists", "name": "result.md"}],
+                "routing_override": ov,
+            }),
+        )
+    };
+    let mode_of = |v: &Value| {
+        v["routing_override"]["evidence_mode"]
+            .as_str()
+            .map(String::from)
+    };
+
+    for (ov, want) in [
+        (json!({"mode": "fixed", "evidence_mode": "none"}), "none"),
+        (
+            json!({"mode": "fixed", "evidence_mode": "pinned", "evidence_table_id": "ev-1"}),
+            "pinned",
+        ),
+        (
+            json!({"mode": "fixed", "evidence_mode": "latest"}),
+            "latest",
+        ),
+        (
+            json!({"mode": "fixed", "evidence_table_id": "ev-1"}),
+            "pinned",
+        ),
+        (json!({"mode": "fixed"}), "latest"),
+    ] {
+        let resp = send(&app, create(ov.clone())).await;
+        assert_eq!(resp.status.as_u16(), 201, "{ov}: {}", resp.text());
+        let id = resp.json()["id"].as_str().expect("id").to_string();
+        let got = send(&app, g(&format!("/api/v1/tasks/{id}"))).await;
+        assert_eq!(got.status.as_u16(), 200, "{}", got.text());
+        assert_eq!(mode_of(&got.json()).as_deref(), Some(want), "{ov}");
+    }
+
+    for bad in [
+        json!({"mode": "fixed", "evidence_mode": "none", "evidence_table_id": "ev-1"}),
+        json!({"mode": "fixed", "evidence_mode": "pinned"}),
+        json!({"mode": "fixed", "evidence_mode": "latest", "evidence_table_id": "ev-1"}),
+        json!({"mode": "fixed", "evidence_mode": "bogus"}),
+    ] {
+        let resp = send(&app, create(bad.clone())).await;
+        assert!(resp.status.is_client_error(), "{bad}: {}", resp.status);
+    }
+
+    // none の root → 子 → 孫 → root の retry。いずれも GET で none。
+    let resp = send(
+        &app,
+        create(
+            json!({"mode": "decision_assisted", "evidence_mode": "none", "online_update": false}),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status.as_u16(), 201, "{}", resp.text());
+    let root_id: task_core::TaskId = resp.json()["id"].as_str().expect("id").parse().expect("id");
+    let mut child = new_task(TaskKind::Execute, Status::Ready);
+    child.parent_id = Some(root_id);
+    env.seed(&child);
+    let mut grand = new_task(TaskKind::Execute, Status::Ready);
+    grand.parent_id = Some(child.id);
+    env.seed(&grand);
+    for id in [child.id, grand.id] {
+        let got = send(&app, g(&format!("/api/v1/tasks/{id}"))).await;
+        assert_eq!(mode_of(&got.json()).as_deref(), Some("none"), "{id}");
+    }
+
+    // 取り消した root は retry できる（複製は新しい id の root になる）。
+    let resp = send(
+        &app,
+        p(&format!("/api/v1/tasks/{root_id}/cancel"), &json!({})),
+    )
+    .await;
+    assert!(resp.status.is_success(), "{}", resp.text());
+    let resp = send(
+        &app,
+        p(
+            &format!("/api/v1/tasks/{root_id}/retry"),
+            &json!({"accept": false}),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status.as_u16(), 201, "{}", resp.text());
+    let new_id = resp.json()["task_id"]
+        .as_str()
+        .expect("task_id")
+        .to_string();
+    let got = send(&app, g(&format!("/api/v1/tasks/{new_id}"))).await;
+    assert_eq!(
+        mode_of(&got.json()).as_deref(),
+        Some("none"),
+        "{}",
+        got.text()
+    );
+    assert_eq!(
+        got.json()["routing_override"]["online_update"],
+        json!(false)
+    );
+}

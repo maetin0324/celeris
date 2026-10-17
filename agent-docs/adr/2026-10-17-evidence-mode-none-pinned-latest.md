@@ -26,3 +26,9 @@ campaign manifest の `no_evidence_table=true` は「根拠表を使わない」
 - D4 継承: 子・孫・retry は最も近い祖先の行を丸ごと継ぐ（`task_routing_override`）ため mode も保たれる。
   `ResolvedRouting` にも `evidence_mode` を載せ、`none` を `latest` に落とさない。
   API・dispatcher・campaign への接続は同じ task の後続 unit が行う。
+
+## 付記（api unit）
+- `POST /tasks` の `routing_override` は `evidence_mode` を受け、`validate()` の矛盾（D3）を 400 で拒否する（task 作成前）。
+- `GET /tasks/{id}` の `TaskDetail.routing_override` に実効の固定（祖先継承を含む）を出す。
+- root の `retry` は複製先の新 id に自身の `task_routing_overrides` 行を写す（`retry_task_tx`）。写さないと none/pinned が config の latest に落ちた。
+- 試験: `crates/task-api/tests/project_plan.rs::evidence_mode_round_trips_through_post_get_child_and_retry`（実 router）。

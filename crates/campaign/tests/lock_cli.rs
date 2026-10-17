@@ -17,11 +17,13 @@ use celeris_campaign::{
     lock_exec::LOCK_FILE,
     lock_tree,
     manifest::CampaignManifest,
-    preflight::{self, Host, Inputs, run_gated},
+    preflight::{self, Host, Inputs, ResolvedProgram, run_gated},
     runner::{self, RunOptions},
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+
+mod preflight_setup;
 
 const K2: &str = "k2-bf-xattr-restart-campaign";
 const K4: &str = "k4-cmp4-validity-analysis";
@@ -80,23 +82,34 @@ impl Host for OkHost {
     fn env_nonempty(&self, _: &str) -> bool {
         true
     }
-    fn program_available(&self, _: &Path) -> bool {
-        true
+    fn resolve_program(&self, p: &Path) -> Result<ResolvedProgram, String> {
+        Ok(ResolvedProgram {
+            path: p.to_path_buf(),
+            version: "fake 1.0".into(),
+        })
     }
     fn api_get(&self, _: &str, _: &str, path: &str) -> Result<Value, String> {
         Ok(match path {
-            "/api/v1/projects/01ABC" => json!({"id":"01ABC","auto_integrate":false}),
+            "/api/v1/projects/01ABC" => {
+                json!({"project":{"id":"01ABC","auto_integrate":false},"repos":[]})
+            }
             "/api/v1/projects/01ABC/repos" => {
                 json!({"items":[{"name":"scratch","is_primary":true,"location":{"kind":"local","path":"/x"}}]})
             }
             _ => {
-                json!({"items":[{"source_id":"claude_oauth","account_id":"lab","dir":"/tmp","logged_in":true}]})
+                json!({"items":[{"source_id":"claude_oauth","account_id":"lab","dir":account_dir(),"logged_in":true}]})
             }
         })
     }
     fn sandbox_usable(&self) -> Result<(), String> {
         Ok(())
     }
+}
+
+/// 空の測定専用アカウント dir（process 内で共有）。
+fn account_dir() -> &'static Path {
+    static D: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
+    D.get_or_init(|| tempfile::tempdir().unwrap()).path()
 }
 
 struct Fx {
@@ -192,6 +205,12 @@ fn fx() -> Fx {
         );
     }
     copy(&root().join("cases/final").join(K2).join("kb"), &k);
+    preflight_setup::pin_trial_kb(&d.join("final.json"), &cases, &k);
+    let measure = preflight_setup::write_configs(
+        d,
+        &preflight_setup::measure_config(d, "measure"),
+        &preflight_setup::normal_config(d),
+    );
     fs::write(
         d.join("task-template.json"),
         json!({"project_id":"01ABC","acceptance":[{"type":"reviewer","text":"x"}]}).to_string(),
@@ -212,6 +231,7 @@ fn fx() -> Fx {
         kb_src: Some(k),
         inputs_src: Some(ins),
         a_account: Some("lab".into()),
+        measure: Some(measure),
         measurement_id: None,
     };
     Fx { dir, inp }

@@ -588,13 +588,6 @@ impl SqliteStore {
         Self::append_event_tx(tx, new_task.id, &Event::Retried { from: original })?;
         // ADR 2026-10-08-browser-prod-enablement D4: 元の task の保存 policy を引き継ぐ（無ければ自動付与のまま）。
         Self::inherit_browser_policy_tx(tx, original, new_task.id)?;
-        // 自身の routing_override の行は新しい id に写す（parent_id が同じ祖先の行は鎖で継承される）。
-        // 写さないと root の retry は none/pinned が config の latest に落ちる。
-        tx.execute(
-            "INSERT INTO task_routing_overrides (task_id, override_json, created_at) \
-             SELECT ?2, override_json, created_at FROM task_routing_overrides WHERE task_id = ?1",
-            rusqlite::params![original.to_string(), new_task.id.to_string()],
-        )?;
 
         let mut rewired = Vec::new();
         for dep_id in Self::dependents_of_tx(tx, original)? {

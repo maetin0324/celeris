@@ -33,7 +33,8 @@ pub use stage::{
     evaluate_guardrail,
 };
 pub use task_override::{
-    ModeSource, ResolvedRouting, RoutingOverride, RoutingOverrideError, resolve_routing,
+    EvidenceMode, ModeSource, ResolvedRouting, RoutingOverride, RoutingOverrideError,
+    resolve_routing,
 };
 pub use trace::{
     EvidenceSnapshot, RouteAction, RouteCandidate, RouteDecision, RouteDecisionInput,

@@ -92,6 +92,7 @@ mod tests {
         let o = RoutingOverride {
             mode: RoutingMode::Fixed,
             lower_policy: None,
+            evidence_mode: crate::route_select::EvidenceMode::Pinned,
             evidence_table_id: Some("ev-1".into()),
             online_update: false,
         };
@@ -121,6 +122,7 @@ mod tests {
         let o = RoutingOverride {
             mode: RoutingMode::Fixed,
             lower_policy: None,
+            evidence_mode: crate::route_select::EvidenceMode::Latest,
             evidence_table_id: None,
             online_update: false,
         };
@@ -140,5 +142,37 @@ mod tests {
             .unwrap();
         assert_eq!(store.task_routing_override(grand.id).unwrap(), Some(nearer));
         assert_eq!(store.task_routing_override(root.id).unwrap(), Some(o));
+    }
+
+    #[test]
+    fn evidence_mode_none_survives_child_grandchild_and_retry_resolution() {
+        use crate::route_select::{EvidenceMode, resolve_routing};
+        let store = SqliteStore::open_in_memory().unwrap();
+        let root = crate::store::tests::sample_task(crate::model::Status::Ready);
+        store.insert(&root).unwrap();
+        let mut child = crate::store::tests::sample_task(crate::model::Status::Ready);
+        child.parent_id = Some(root.id);
+        store.insert(&child).unwrap();
+        let mut grand = crate::store::tests::sample_task(crate::model::Status::Ready);
+        grand.parent_id = Some(child.id);
+        store.insert(&grand).unwrap();
+        let o = RoutingOverride {
+            mode: RoutingMode::DecisionAssisted,
+            lower_policy: None,
+            evidence_mode: EvidenceMode::None,
+            evidence_table_id: None,
+            online_update: false,
+        };
+        store
+            .set_task_routing_override(root.id, &o, "2026-10-17")
+            .unwrap();
+        // retry は同じ task id を再実行するので同じ解決を通る。
+        for id in [root.id, child.id, grand.id, grand.id] {
+            let got = store.task_routing_override(id).unwrap();
+            assert_eq!(got.as_ref(), Some(&o));
+            let r = resolve_routing(RoutingMode::Fixed, got.as_ref());
+            assert_eq!(r.evidence_mode, EvidenceMode::None);
+            assert_eq!(r.evidence_table_id, None);
+        }
     }
 }

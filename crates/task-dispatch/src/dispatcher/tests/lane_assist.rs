@@ -290,6 +290,7 @@ fn dispatch_with_override(
         let o = task_core::route_select::RoutingOverride {
             mode,
             lower_policy: None,
+            evidence_mode: task_core::route_select::EvidenceMode::Pinned,
             evidence_table_id: Some("ev-2026-10-16".into()),
             online_update: false,
         };
@@ -498,6 +499,7 @@ async fn root_routing_pin_is_inherited_by_child_grandchild_and_retry_whatever_th
         let o = task_core::route_select::RoutingOverride {
             mode: pinned,
             lower_policy: None,
+            evidence_mode: task_core::route_select::EvidenceMode::Pinned,
             evidence_table_id: Some("ev-arm".into()),
             online_update: false,
         };

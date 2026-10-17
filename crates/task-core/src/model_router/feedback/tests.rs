@@ -312,6 +312,7 @@ fn online_update_false_leaves_the_evidence_untouched() {
                 routing_override: crate::route_select::RoutingOverride {
                     mode: crate::route_select::RoutingMode::Fixed,
                     lower_policy: None,
+                    evidence_mode: crate::route_select::EvidenceMode::Pinned,
                     evidence_table_id: Some("ev-frozen".into()),
                     online_update,
                 },

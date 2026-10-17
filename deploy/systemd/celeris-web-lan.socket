@@ -9,6 +9,9 @@ Description=Celeris web LAN forwarding socket
 ListenStream=192.168.1.103:7721
 Accept=no
 TriggerLimitIntervalSec=0
+# 起動時に LAN の address がまだ割り当てられていなくても bind できるようにする
+# （2026-10-17 の再起動で 'Cannot assign requested address' により failed になった）。
+FreeBind=yes
 
 [Install]
 WantedBy=sockets.target

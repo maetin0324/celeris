@@ -54,6 +54,13 @@ for u in celeris-sccache.service celeris-scratch-cache.service; do
 done
 if grep -q "daemon-reload" "$WORK/default/systemctl.log"; then ok "default: daemon-reload via the stub"; else ng "default: no daemon-reload"; fi
 
+# LAN socket の雛形は FreeBind=yes を持つ（起動時に address 未割り当てでも落ちない）。
+if grep -qx 'FreeBind=yes' "$SRC/celeris-web-lan.socket" && grep -qx 'FreeBind=yes' "$WORK/default/units/celeris-web-lan.socket"; then
+  ok "celeris-web-lan.socket has FreeBind=yes"
+else
+  ng "celeris-web-lan.socket lacks FreeBind=yes"
+fi
+
 # 根が従来の場所そのものなら、指定なしと同じ。
 if run_install same CELERIS_STATE_DIR="$WORK/same/home/.local/celeris"; then :; else ng "same: exit non-zero"; fi
 for u in $TEMPLATED; do

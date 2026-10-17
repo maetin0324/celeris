@@ -135,7 +135,10 @@ fn git(repo: &Path, args: &[&str]) {
 }
 
 fn resolved_manifest() -> Value {
-    let p = root().join("../../agent-docs/progress/2026-10-16-mlsys-final/final.json");
+    let p = root()
+        .join("..")
+        .join("..")
+        .join("agent-docs/progress/2026-10-16-mlsys-final/final.json");
     let mut v: Value = serde_json::from_slice(&fs::read(p).unwrap()).unwrap();
     for c in v["configs"].as_array_mut().unwrap() {
         match c["id"].as_str().unwrap() {
@@ -153,7 +156,10 @@ fn resolved_manifest() -> Value {
 fn fx() -> Fx {
     let dir = tempfile::tempdir().unwrap();
     let d = dir.path();
-    let pd = root().join("../../agent-docs/progress/2026-10-16-mlsys-final");
+    let pd = root()
+        .join("..")
+        .join("..")
+        .join("agent-docs/progress/2026-10-16-mlsys-final");
     fs::copy(
         pd.join("final-input-manifest.json"),
         d.join("final-input-manifest.json"),

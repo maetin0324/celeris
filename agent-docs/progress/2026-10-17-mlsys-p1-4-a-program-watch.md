@@ -23,3 +23,7 @@ completed: 2026-10-17
 
 ## 未解決・提案
 - preflight は版が manifest の `harness_version` と一致するかは見ない（人が確認）。
+
+## 再試行 (attempt 2) の修正
+- 前回は `crates/campaign/tests/preflight_contract.rs` の `RouterHost` が旧 `Host::program_available` のままで test-parallel の compile が落ちた。`resolve_program` に直した。
+- 証拠: `bash scripts/dev/test-parallel.sh` exit 0（5625 passed, 0 failed）、`cargo clippy --workspace -- -D warnings` exit 0（`--all-targets` も 0）、`cargo fmt --all -- --check` exit 0、`cargo nextest run -p celeris-campaign a_program` 2 passed。

@@ -15,7 +15,7 @@ use api_common::{TestEnv, admin_env, get_admin, patch_admin, post_admin, send};
 use celeris_campaign::{
     celeris_exec::{CelerisExecutor, HttpResponse, Transport},
     manifest::CampaignManifest,
-    preflight::{Host, Inputs, check, check_project_rules, run_gated},
+    preflight::{Host, Inputs, ResolvedProgram, check, check_project_rules, run_gated},
     runner::RunOptions,
 };
 use preflight_setup::*;
@@ -138,8 +138,15 @@ impl Host for RouterHost {
     fn env_nonempty(&self, name: &str) -> bool {
         name == "CELERIS_CAMPAIGN_TOKEN"
     }
-    fn program_available(&self, p: &Path) -> bool {
-        p == Path::new("claude")
+    fn resolve_program(&self, p: &Path) -> Result<ResolvedProgram, String> {
+        if p == Path::new("claude") {
+            Ok(ResolvedProgram {
+                path: p.to_path_buf(),
+                version: "fake 1.0".into(),
+            })
+        } else {
+            Err("not available".into())
+        }
     }
     fn api_get(&self, _: &str, _: &str, path: &str) -> Result<Value, String> {
         if path == "/api/v1/llm/accounts" {

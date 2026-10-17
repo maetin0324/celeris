@@ -48,9 +48,9 @@ pub use dispatcher::record_task_decision_log;
 pub use dispatcher::{
     AccountsRuntimeConfig, ClusterSpec, ContainerDecision, ContainerRun, ContainersRuntimeConfig,
     DEFAULT_MAX_RUNS_PER_ACCOUNT, DispatchConfig, DispatchError, DispatchRoutingSettings,
-    Dispatcher, ExecutionConfig, KnowledgeRuntimeConfig, RouteContext, RouteFailure, RouteInput,
-    RoutePick, RouteState, RouteTrace, SnapshotPublisher, TaskFilter, TickReport,
-    harness_request_for, route_select,
+    Dispatcher, ExecutionConfig, KnowledgeRuntimeConfig, RouteFailure, RouteInput, RoutePick,
+    RouteState, RouteTrace, SnapshotPublisher, TaskFilter, TickReport, harness_request_for,
+    route_select,
 };
 /// wire-mode: 分類段（daemon）が書き、dispatcher の lane 層が読む board。
 pub use dispatcher::{

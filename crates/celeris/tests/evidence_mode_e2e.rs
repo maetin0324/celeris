@@ -229,19 +229,30 @@ fn publish_evidence(store: &SqliteStore, version: &str, best: &str, other: &str)
 /// task の判断（実 dispatcher が読む override → `select_route_with`）。(model, 記録された evidence_version)。
 fn decide(d: &mut Dispatcher, store: &SqliteStore, task: TaskId) -> (String, Option<String>) {
     let ov = store.task_routing_override(task).expect("override");
-    let (out, trace) = d.select_route_with(
-        &task_dispatch::RouteInput {
-            task_id: task.to_string(),
-            harness: task_core::llm_route::HarnessRequest {
-                genre: Some(GENRE.into()),
-                ..Default::default()
-            },
-            ..Default::default()
+    // RouteContext は dispatcher の公開面に無いので、型は select_route_with の引数から推論する
+    // （f を先に書くと C が確定し、set の欄代入が型検査を通る）。
+    fn with_ctx<C: Default, R>(f: impl FnOnce(&C) -> R, set: impl FnOnce(&mut C)) -> R {
+        let mut c = C::default();
+        set(&mut c);
+        f(&c)
+    }
+    let (out, trace) = with_ctx(
+        |ctx| {
+            d.select_route_with(
+                &task_dispatch::RouteInput {
+                    task_id: task.to_string(),
+                    harness: task_core::llm_route::HarnessRequest {
+                        genre: Some(GENRE.into()),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                ctx,
+            )
         },
-        &task_dispatch::RouteContext {
-            evidence_mode: ov.as_ref().map(|o| o.evidence_mode).unwrap_or_default(),
-            evidence_version: ov.as_ref().and_then(|o| o.evidence_table_id.clone()),
-            ..Default::default()
+        |ctx| {
+            ctx.evidence_mode = ov.as_ref().map(|o| o.evidence_mode).unwrap_or_default();
+            ctx.evidence_version = ov.as_ref().and_then(|o| o.evidence_table_id.clone());
         },
     );
     let pick = out.expect("route");

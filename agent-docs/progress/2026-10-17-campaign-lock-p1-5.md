@@ -27,3 +27,15 @@ ADR: `agent-docs/adr/2026-10-17-campaign-lock.md`。外部 LLM・有料ジョブ
 ## check の不整合（再実行）
 - package 名は `celeris-campaign`。計画の check `cargo test -p campaign lock` / `cargo clippy -p campaign` は「did not match any packages」で成果に依らず落ちる。
 - 正しい形 `cargo test -p celeris-campaign lock`・`cargo clippy -p celeris-campaign -- -D warnings`・`cargo fmt --all -- --check` は exit 0。
+
+## WU tree-proof（完了）
+- `crates/campaign/src/lock_tree.rs` 新設（`lib.rs` に登録）。外部 LLM・ネットワーク・本番変更なし。
+- 内容 hash = path 昇順 × mode（100644/100755/120000）× blob 内容 sha256 の正規化列の sha256。空 dir・root の `.git`・owner/mtime は数えない（`snapshot::hash_tree` は mode を見ないため、git 由来と照合できる別 hash にした。ADR に追記要）。
+- API: `derive_initial(repo, rev, submodule_repo)`（commit/tree/gitlink → `LockedInitial`。submodule 実体 repo が無ければ `Unavailable`、成功扱いにしない）、
+  `verify_repo(expected, repo)`（渡された repo を期待値にせず lock と照合）、`verify_archive(expected, dir)`（`.git` の有無を問わず本体＋各 submodule を照合）、
+  `archive_content_sha256` / `git_content_sha256`、`TreeProofError`。
+- 試験（`cargo test -p celeris-campaign --lib lock_tree` 5 件 pass、crate 全体 pass、clippy `-D warnings`・fmt exit 0）:
+  git 由来と metadata 無し archive の同一 hash（`git archive` 展開）／submodule 欠落・空 dir・差替え・1byte 修正・追加・本体修正の拒否／
+  別 commit・偽 tree・偽 gitlink の lock 拒否／metadata（root `.git`、submodule `.git` file、実 clone）の有無は拒否理由にならない／exec bit。
+- 制約: submodule の入れ子は `Unsupported`。symlink は link 先を内容として数える。
+- k2-pin への引き継ぎ: K2 の `submodule_repo` に承認済み資産の repo を渡して `derive_initial`。取得不能なら `Unavailable` を未完了として報告する。

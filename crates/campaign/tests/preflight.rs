@@ -493,6 +493,13 @@ fn passing_preflight_lets_run_start() {
             out: out.clone(),
             materials_src: s.inp.materials_src.clone(),
             kb_src: s.inp.kb_src.clone(),
+            repo_src: s.inp.repo_src.clone(),
+            inputs_src: s.inp.inputs_src.clone(),
+            case_inputs: celeris_campaign::inputs::for_problems(
+                &celeris_campaign::cases::CaseSet::load(&s.inp.cases_root, &s.inp.grader_root)
+                    .unwrap(),
+                &m.problems,
+            ),
             ..Default::default()
         },
     )

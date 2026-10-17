@@ -155,8 +155,11 @@ fn duplicates_unpinned_versions_and_empty_tests_are_rejected() {
             Box::new(|v| v["cases"][0]["initial"]["submodules"][0]["path"] = json!("../x")),
         ),
         (
-            "no public test",
-            Box::new(|v| v["cases"][0]["tests"] = json!([lock_json()["cases"][0]["tests"][1]])),
+            "no public test without an initial tree",
+            Box::new(|v| {
+                v["cases"][0]["initial"] = Value::Null;
+                v["cases"][0]["tests"] = json!([lock_json()["cases"][0]["tests"][1]]);
+            }),
         ),
         (
             "no hidden test",

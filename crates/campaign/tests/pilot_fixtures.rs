@@ -134,6 +134,7 @@ fn run_opts(out: &Path) -> RunOptions {
         kb_src: Some(fx().join("kb")),
         inputs_src: None,
         case_inputs: Default::default(),
+        lock: None,
     }
 }
 

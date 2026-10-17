@@ -69,6 +69,7 @@ impl Env {
                     sha256: sha(BODY),
                 }],
             )]),
+            lock: None,
         }
     }
     fn records(&self) -> Vec<Value> {

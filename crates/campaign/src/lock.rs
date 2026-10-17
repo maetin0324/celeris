@@ -330,10 +330,15 @@ impl LockedCase {
             self.tests.iter().map(|t| t.path.as_str()),
         )?;
         if self.implementation {
+            // 公開テストは初期木の一部（initial の内容 hash が固定する）。初期木が無い case だけ個別に固定させる。
+            let public_in_initial = self.initial.is_some();
             for (vis, name) in [
                 (TestVisibility::Public, "public"),
                 (TestVisibility::Hidden, "hidden"),
             ] {
+                if vis == TestVisibility::Public && public_in_initial {
+                    continue;
+                }
                 if !self.tests.iter().any(|t| t.visibility == vis) {
                     return Err(LockError::MissingTests(format!(
                         "{id}: implementation case has no pinned {name} test"
@@ -750,11 +755,23 @@ mod tests {
     #[test]
     fn implementation_case_must_pin_public_and_hidden_tests() {
         let (_, l) = lock();
+        // 初期木が無い case は公開テストも個別に固定する。初期木がある case は公開テストを initial の内容 hash が固定する。
         for vis in [TestVisibility::Public, TestVisibility::Hidden] {
             let mut d = l.clone();
+            d.cases[0].initial = None;
             d.cases[0].tests.retain(|t| t.visibility != vis);
             assert!(matches!(d.validate(), Err(LockError::MissingTests(_))));
         }
+        let mut with_initial = l.clone();
+        with_initial.cases[0]
+            .tests
+            .retain(|t| t.visibility != TestVisibility::Public);
+        assert!(with_initial.validate().is_ok());
+        with_initial.cases[0].tests.clear();
+        assert!(matches!(
+            with_initial.validate(),
+            Err(LockError::MissingTests(_))
+        ));
         let mut d = l.clone();
         d.cases[0].tests.clear();
         assert!(matches!(d.validate(), Err(LockError::MissingTests(_))));

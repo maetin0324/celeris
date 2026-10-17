@@ -146,6 +146,9 @@ pub fn deliver(stage: &Path, ws: &Path, specs: &[DeliveredInput]) -> Result<(), 
 /// 試行 workspace の作り方（初期木の複製 + 入力の配送）。runner が workspace を作るたびにこれを通る。
 pub struct Seeder<'a> {
     pub repo: &'a Path,
+    /// 初期木を持たない case の seed（repo を含まない）。`repo_free` の case だけがこれを使う。
+    pub empty: Option<&'a Path>,
+    pub repo_free: &'a std::collections::BTreeSet<String>,
     pub stage: PathBuf,
     pub inputs: &'a BTreeMap<String, Vec<DeliveredInput>>,
 }
@@ -155,8 +158,18 @@ impl Seeder<'_> {
         self.inputs.get(problem).map(Vec::as_slice).unwrap_or(&[])
     }
 
+    /// その問題の初期木（seed）の置き場。
+    pub fn seed_for(&self, problem: &str) -> Result<&Path, String> {
+        if self.repo_free.contains(problem) {
+            self.empty
+                .ok_or_else(|| format!("{problem}: no repo-free seed was prepared"))
+        } else {
+            Ok(self.repo)
+        }
+    }
+
     pub fn make(&self, problem: &str, ws: &Path) -> Result<(), String> {
-        crate::snapshot::copy_tree(self.repo, ws)?;
+        crate::snapshot::copy_tree(self.seed_for(problem)?, ws)?;
         deliver(&self.stage, ws, self.specs(problem))
     }
 }

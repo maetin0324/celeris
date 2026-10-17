@@ -23,6 +23,8 @@ use crate::{
     grader::GradeCase,
     inputs,
     isolation::{self, InitialSources},
+    lock::CampaignLock,
+    lock_exec,
     manifest::{CampaignManifest, ConfigId, TokenBasis},
     measure_env,
     runner::{self, RunOptions, RunReport},
@@ -181,6 +183,8 @@ pub struct Inputs {
     pub a_account: Option<String>,
     /// 測定専用の daemon 構成と canary（P0-3）。測定では必須。
     pub measure: Option<MeasureEnv>,
+    /// 測定 ID の明示（省略時は campaign hash から決まる）。
+    pub measurement_id: Option<String>,
 }
 
 /// 測定環境の汚染検査の入力。
@@ -194,6 +198,30 @@ pub struct MeasureEnv {
     pub canaries: PathBuf,
     /// 再開時の既存 out dir。在れば中の全 file を禁止 canary で走査する。
     pub out: Option<PathBuf>,
+}
+
+impl Inputs {
+    pub fn lock_sources(&self) -> lock_exec::Sources<'_> {
+        lock_exec::Sources {
+            repo: self.repo_src.as_deref(),
+            materials: self.materials_src.as_deref(),
+            kb: self.kb_src.as_deref(),
+            inputs: self.inputs_src.as_deref(),
+        }
+    }
+}
+
+/// 通常起動（CLI）とライブラリ経路が共有する期待 lock。宣言と grader 実体の不一致はここで Err。
+pub fn expected_lock(inp: &Inputs, m: &CampaignManifest) -> Result<CampaignLock, String> {
+    lock_exec::expected_lock(
+        &lock_exec::LockSpec {
+            cases_root: &inp.cases_root,
+            grader_root: &inp.grader_root,
+            grade_cases_root: &inp.grade_cases_root,
+            measurement_id: inp.measurement_id.as_deref(),
+        },
+        m,
+    )
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -377,6 +405,15 @@ fn run_checks(a: &mut Acc, m: &CampaignManifest, inp: &Inputs, host: &dyn Host) 
     check_candidates(a, m, inp, host);
     check_snapshot_src(a, m, inp);
     check_measure_env(a, m, inp);
+
+    // 初期 tree・submodule・外部入力・資料・KB・grader/test を campaign lock の期待値に照合する。
+    a.checked.push("lock");
+    if let Some(l) = a.res("lock", expected_lock(inp, m)) {
+        let _ = a.res(
+            "lock",
+            lock_exec::verify_sources(&l, inp.lock_sources(), true),
+        );
+    }
 
     // 7. 予算・時間（manifest 側）。
     a.checked.push("budget");
@@ -900,7 +937,9 @@ pub fn run_gated(
     opts: &RunOptions,
 ) -> Result<RunReport, String> {
     gate(inp, host)?;
-    runner::run(m, input, exec, opts)
+    let mut o = opts.clone();
+    o.lock = Some(expected_lock(inp, m)?);
+    runner::run(m, input, exec, &o)
 }
 
 /// 通らなければ Err（不足一覧の JSON）。executor・transport を作る前にこれを呼ぶ。

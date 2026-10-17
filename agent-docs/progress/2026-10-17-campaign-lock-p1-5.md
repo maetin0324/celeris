@@ -66,3 +66,17 @@ ADR: `agent-docs/adr/2026-10-17-campaign-lock.md`。外部 LLM・有料ジョブ
 - コードは変更なし。`cargo test -p celeris-campaign --test campaign_lock --test k2_pin` exit 0（campaign_lock 6 passed、k2_pin 3 passed。K2 資産 `/local/celeris/data/campaign-assets/k2/` ありで実体照合まで実行、skip 合格なし）。
 - 記録検査: `check-adr-numbers.sh` exit 0／`check-doc-links.sh` exit 0／`cargo fmt --all -- --check` exit 0。
 - status: done を維持。未解決は前節のとおり（実行・再開・grade-out・bind・export への配線は後続）。
+
+## WU run-resume（実装済み・無課金試験で検証済み。実経路 = 実 LLM/実 task-api は未検証）
+- 新規 `crates/campaign/src/lock_exec.rs`（ADR D8）。`preflight::expected_lock` が CLI（`run|watch --executor harness|celeris`）とライブラリ（`run_gated`）で共通の期待 lock を作り、
+  `preflight`（check `lock`）→ `runner::run`（`RunOptions.lock`）→ `watch`（毎走査で runner が再照合）に接続。`--measurement-id` を追加。
+- 副作用前の拒否: 誤 repo・余分/欠落 file・違う submodule path・資料・KB・外部入力は executor 呼び出し 0・out 未作成。lock 欠落・改変・再封印・grader/テスト/grade-case 差替え・測定 ID 違いは resume 拒否で lock を書き換えない。
+- コピー後検査: snapshot/repo と workspace-seed を lock の期待値で照合（失敗時 snapshot 削除）。再開時は snapshot.json の hash が整合していても lock と違えば拒否。
+- 複数 case の初期木: 異なる初期木は拒否、初期木なしの case（K4）は repo なしの seed を使う（従来は全 case に K2 repo が配られていた）。
+- 既存 out（lock なし）は新 lock に移行せず拒否。
+- `lock.rs` の変更: 初期木を持つ implementation case は公開テスト一覧が空でも可（K2 の grade-case は隠しテストのみで、公開テストは初期木の内容 hash に含まれる）。対応する試験を更新。
+- 範囲外の最小変更: `RunOptions` に `lock` 欄を足したため `crates/celeris/tests/campaign_acceptance_e2e.rs` に `lock: None`（制御 fixture）を明示。
+- 試験 `crates/campaign/tests/lock_execution.rs` 7 件（cargo test -p celeris-campaign --test lock_execution）: 正しい初回/resume/watch、誤実体の副作用 0、異初期木/repo-free、lock・定義差替え、lock なし既存データ、snapshot 再照合、測定 ID 規則。
+  K2 初期木は試験用の小さな git repo（本番資産に依存しない）。
+- 証拠: `bash scripts/dev/test-parallel.sh` exit 0（5647 passed, 0 failed）／`cargo clippy --workspace -- -D warnings` exit 0／`cargo fmt --all -- --check` exit 0。
+- 未解決（後続 WU）: grade-out・bind・export の lock 照合（grade-export）、正式 task-api 経路での受入（connected-verify）。runner は mock 以外の stub executor が lock なしで走るのを強制していない（CLI と run_gated が強制）。

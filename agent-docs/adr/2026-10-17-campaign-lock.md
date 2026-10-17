@@ -56,3 +56,13 @@ submodule 実体、外部入力、grader 定義、公開/隠しテストの実�
 - 契約試験: `crates/campaign/tests/campaign_lock.rs`（公開 API のみ）。
 - **未着手**: 実行・再開・grade-out・bind・export から lock を読んで照合する配線、lock ファイルの配置（例 `<out>/snapshot/lock.json`）、
   全 case の LockedCase を実体から組む CLI。いずれも後続の WorkUnit で行う。この ADR 時点では型・hash・照合 API と試験までが済んでいる。
+
+### D8 実行・再開・監視への接続（run-resume）
+- `crates/campaign/src/lock_exec.rs`。期待 lock は case.json・`initial.lock.json`・grade-case の宣言から `preflight::expected_lock` が作る（CLI の run/watch と `run_gated` が同じ関数）。
+  grade-case と公開/隠しテストの実体が宣言 hash と違えばこの段で拒否。測定 ID の既定は `<campaign_id>-<campaign hash 先頭 12 桁>`、`--measurement-id` で明示。
+- `runner::run` は out の作成・snapshot・台帳・executor より前に `lock_exec::begin`: 期待 lock の campaign 結合、保存 `<out>/lock.json` の再照合（封印・版・測定 ID・内容）、
+  現在指定の repo/資料/KB/外部入力の実体照合。初回は全部必須、再開は指定された分だけ。lock が無いのに out にデータがあれば拒否し、新しい lock へ暗黙移行しない。
+- 取り込み後（コピーした snapshot/repo と workspace-seed）にも同じ期待 hash を当て、失敗すれば snapshot を消して止まる。再開時は保存 snapshot も lock と再照合する。
+- 初期木は「宣言する case が共有する 1 つ」だけ。異なる初期木の case は同じ `--repo-src` で配れず拒否。初期木を宣言しない case（K4 等）には repo を含まない別 seed（`workspace-seed-empty`）を配る。
+- 公開テストは、初期木を持つ case では initial の内容 hash が固定するので個別に要求しない（K2 の grade-case は隠しテストのみ）。初期木の無い実装 case は従来どおり両方必須。
+- 有料経路（harness/celeris、`run_gated`）は常に lock を付ける。`RunOptions.lock = None` は mock など無課金の制御用だけ。

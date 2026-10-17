@@ -3,9 +3,14 @@
 use std::{
     fs,
     path::{Path, PathBuf},
+    process::Command,
 };
 
-use celeris_campaign::preflight::{Inputs, MeasureEnv};
+use celeris_campaign::{
+    lock_tree,
+    preflight::{Inputs, MeasureEnv},
+    snapshot::hash_tree,
+};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
@@ -51,6 +56,57 @@ pub fn resolved_manifest() -> Value {
     v
 }
 
+/// 本番資産の無い host でも通るよう、試験用の小さな git repo を K2 の初期木として case と initial.lock.json に固定する。
+pub fn pin_synthetic_initial(cases: &Path, repo: &Path) {
+    let git = |args: &[&str]| {
+        let o = Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+            .args(["-c", "commit.gpgsign=false"])
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(o.status.success(), "{args:?}");
+    };
+    git(&["init", "-q"]);
+    git(&["add", "-A"]);
+    git(&["commit", "-q", "-m", "c"]);
+    let li = lock_tree::derive_initial(repo, "HEAD", &|_| None).unwrap();
+    let dir = cases.join("final/k2-bf-xattr-restart-campaign");
+    fs::write(
+        dir.join("initial.lock.json"),
+        serde_json::to_string(&li).unwrap(),
+    )
+    .unwrap();
+    let cj = dir.join("case.json");
+    let mut c: Value = serde_json::from_slice(&fs::read(&cj).unwrap()).unwrap();
+    c["initial"]["commit"] = json!(li.commit);
+    c["initial"]["tree"] = json!(li.tree);
+    c["initial"]["submodules"] = json!([]);
+    c["snapshot"]["repo_commit"] = json!(li.commit);
+    fs::write(&cj, c.to_string()).unwrap();
+}
+
+/// 試行用 KB の目印（required canary）は固定 KB の一部: `kb` と各 final case の `kb/` に置き、
+/// manifest と case.json の `kb_snapshot` をその内容の hash に固定し直す（campaign lock が `--kb-src` を照合する）。
+pub fn pin_trial_kb(manifest: &Path, cases: &Path, kb: &Path) {
+    let canary = format!("trial kb {CANARY_TRIAL}\n");
+    fs::write(kb.join("CANARY.md"), &canary).unwrap();
+    let h = hash_tree(kb).unwrap();
+    for e in fs::read_dir(cases.join("final")).unwrap() {
+        let dir = e.unwrap().path();
+        fs::write(dir.join("kb/CANARY.md"), &canary).unwrap();
+        let cj = dir.join("case.json");
+        let mut c: Value = serde_json::from_slice(&fs::read(&cj).unwrap()).unwrap();
+        c["snapshot"]["kb_snapshot"] = json!(h);
+        fs::write(&cj, c.to_string()).unwrap();
+    }
+    let mut v: Value = serde_json::from_slice(&fs::read(manifest).unwrap()).unwrap();
+    v["snapshot"]["kb_snapshot"] = json!(h);
+    fs::write(manifest, v.to_string()).unwrap();
+}
+
 pub fn setup() -> Setup {
     let dir = tempfile::tempdir().unwrap();
     let d = dir.path();
@@ -71,6 +127,7 @@ pub fn setup() -> Setup {
     let repo = d.join("repo");
     fs::create_dir_all(&repo).unwrap();
     fs::write(repo.join("README"), "k2 initial tree").unwrap();
+    pin_synthetic_initial(&cases, &repo);
     fs::write(ins.join(K4_INPUT), b"fake archive for the test").unwrap();
     let cj = cases.join("final/k4-cmp4-validity-analysis/case.json");
     let mut c: Value = serde_json::from_slice(&fs::read(&cj).unwrap()).unwrap();
@@ -89,7 +146,7 @@ pub fn setup() -> Setup {
         &root().join("cases/final/k2-bf-xattr-restart-campaign/kb"),
         &k,
     );
-    fs::write(k.join("CANARY.md"), format!("trial kb {CANARY_TRIAL}\n")).unwrap();
+    pin_trial_kb(&d.join("final.json"), &cases, &k);
     let measure = write_configs(d, &measure_config(d, "measure"), &normal_config(d));
     fs::write(
         d.join("task-template.json"),
@@ -112,6 +169,7 @@ pub fn setup() -> Setup {
         inputs_src: Some(ins),
         a_account: Some("lab".into()),
         measure: Some(measure),
+        measurement_id: None,
     };
     Setup { dir, inp }
 }

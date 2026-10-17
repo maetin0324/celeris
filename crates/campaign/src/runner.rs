@@ -16,6 +16,8 @@ use crate::{
     executor::{ErrKind, ExecError, ExecResult, ExecStatus, Executor, TrialRequest, Usage},
     inputs::{self, INPUTS_DIR, Seeder},
     ledger::{Ledger, LedgerRow, LedgerState, ObservedUsage, TrialKey},
+    lock::CampaignLock,
+    lock_exec,
     manifest::{Budget, CampaignManifest, ConfigId},
     record::*,
     snapshot::{copy_tree, hash_tree, hash_tree_excluding},
@@ -32,6 +34,9 @@ pub struct RunOptions {
     pub inputs_src: Option<PathBuf>,
     /// 問題ごとの宣言入力（case.json の `inputs[]`）。各試行の workspace の `inputs/` に配る。
     pub case_inputs: BTreeMap<String, Vec<DeliveredInput>>,
+    /// 期待 campaign lock（`lock_exec::expected_lock`）。実行（有料）経路は必須。None は mock など無課金の制御用。
+    /// 渡すと、executor 投入・台帳更新より前に実体を照合し、`<out>/lock.json` に保存・再照合する。
+    pub lock: Option<CampaignLock>,
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -136,15 +141,26 @@ fn build_seed(repo: &Path, mat: &Path, kb: &Path, seed: &Path) -> Result<(), Str
     copy_tree(kb, &seed.join("kb"))
 }
 
+/// 保存した snapshot。`empty` は初期木を持たない case 用の seed（lock が初期木ありの case と無い case を混ぜるときだけ）。
+struct Snap {
+    seed: PathBuf,
+    seed_sha: String,
+    kb_sha: String,
+    empty: Option<(PathBuf, String)>,
+}
+
 /// 初回は snapshot を保存し、再開時は保存済み snapshot が壊れていないことを確かめる。
 /// 戻り値は (試行の初期木（repo + materials/ + kb/）, kb_dir, 初期木の sha256, kb_sha256)。
 fn prepare_snapshot(
     m: &CampaignManifest,
     opts: &RunOptions,
-) -> Result<(PathBuf, PathBuf, String, String), String> {
+    lock: Option<&CampaignLock>,
+) -> Result<Snap, String> {
     let snap = opts.out.join("snapshot");
     let (repo, mat, kb) = (snap.join("repo"), snap.join("materials"), snap.join("kb"));
     let seed = snap.join("workspace-seed");
+    let empty = snap.join(lock_exec::EMPTY_SEED_DIR);
+    let need_empty = lock.is_some_and(|l| !lock_exec::repo_free_cases(l).is_empty());
     let staged = snap.join(INPUTS_DIR);
     let meta_path = opts.out.join(SNAPSHOT_FILE);
     if meta_path.exists() {
@@ -154,17 +170,37 @@ fn prepare_snapshot(
         .map_err(|e| format!("snapshot.json: {e}"))?;
         let ks = hash_tree(&kb)?;
         let ss = hash_tree(&seed)?;
+        let empty_sha = if need_empty {
+            Some(hash_tree(&empty)?)
+        } else {
+            None
+        };
         if v["repo_sha256"] != hash_tree(&repo)?
             || v["kb_sha256"] != ks
             || v["materials_sha256"] != hash_tree(&mat)?
             || v["workspace_seed_sha256"] != ss
+            || empty_sha
+                .as_ref()
+                .is_some_and(|h| v["workspace_seed_empty_sha256"] != h.as_str())
         {
             return Err("saved snapshot no longer matches its recorded hash".into());
         }
         if !opts.case_inputs.is_empty() {
             inputs::verify_stage(&staged, &opts.case_inputs)?;
         }
-        return Ok((seed, kb, ss, ks));
+        if let Some(l) = lock {
+            lock_exec::verify_snapshot(l, &snap)?;
+        }
+        return Ok(Snap {
+            seed,
+            seed_sha: ss,
+            kb_sha: ks,
+            empty: empty_sha.map(|h| (empty, h)),
+        });
+    }
+    if lock.is_some() {
+        // snapshot.json の無い snapshot は途中で止まった残り。混ぜずに作り直す。
+        let _ = fs::remove_dir_all(&snap);
     }
     if !opts.case_inputs.is_empty() {
         let src = opts.inputs_src.as_deref().ok_or(
@@ -183,8 +219,28 @@ fn prepare_snapshot(
         }
     }
     build_seed(&repo, &mat, &kb, &seed)?;
+    if need_empty {
+        // 初期木を宣言しない case には repo を配らない（共通の --repo-src を誤配布しない）。
+        let none = snap.join("repo-none");
+        fs::create_dir_all(&none).map_err(|e| e.to_string())?;
+        let r = build_seed(&none, &mat, &kb, &empty);
+        let _ = fs::remove_dir_all(&none);
+        r?;
+    }
+    if let Some(l) = lock {
+        // 検査後にコピーした実体にも同じ期待値を当てる（検査後の差替えを見逃さない）。
+        if let Err(e) = lock_exec::verify_snapshot(l, &snap) {
+            let _ = fs::remove_dir_all(&snap);
+            return Err(format!("copied snapshot fails the campaign lock: {e}"));
+        }
+    }
     let (rs, ms, ks) = (hash_tree(&repo)?, hash_tree(&mat)?, hash_tree(&kb)?);
     let ss = hash_tree(&seed)?;
+    let empty_sha = if need_empty {
+        Some(hash_tree(&empty)?)
+    } else {
+        None
+    };
     let verified = opts.materials_src.is_some();
     if verified && ms != m.snapshot.materials_sha256 {
         return Err(format!(
@@ -201,6 +257,7 @@ fn prepare_snapshot(
             "materials_sha256": ms,
             "kb_sha256": ks,
             "workspace_seed_sha256": ss,
+            "workspace_seed_empty_sha256": empty_sha,
             "materials_pin_verified": verified,
             "inputs_sha256": inputs::unique(&opts.case_inputs)?
                 .into_iter()
@@ -208,7 +265,12 @@ fn prepare_snapshot(
                 .collect::<BTreeMap<_, _>>(),
         }),
     )?;
-    Ok((seed, kb, ss, ks))
+    Ok(Snap {
+        seed,
+        seed_sha: ss,
+        kb_sha: ks,
+        empty: empty_sha.map(|h| (empty, h)),
+    })
 }
 
 /// 既存の trials.jsonl を読む。crash による末尾の不完全な行は切り落とす。
@@ -576,6 +638,21 @@ pub fn run(
     m.check_against_input(input)?;
     let hash = m.compute_sha256()?;
     let out = &opts.out;
+    // 副作用（out の作成・snapshot・台帳・executor）より前に、lock と現在の実体を照合する。
+    let lock = opts.lock.as_ref();
+    let start = match lock {
+        Some(l) => {
+            lock_exec::check_delivery(l, &opts.case_inputs)?;
+            let sources = lock_exec::Sources {
+                repo: opts.repo_src.as_deref(),
+                materials: opts.materials_src.as_deref(),
+                kb: opts.kb_src.as_deref(),
+                inputs: opts.inputs_src.as_deref(),
+            };
+            Some((l, lock_exec::begin(m, l, out, sources)?))
+        }
+        None => None,
+    };
     fs::create_dir_all(out).map_err(|e| format!("{}: {e}", out.display()))?;
     let meta_path = out.join(META_FILE);
     if meta_path.exists() {
@@ -585,9 +662,17 @@ pub fn run(
             return Err("out dir belongs to a different campaign hash; use an empty dir".into());
         }
     }
-    let (repo, _kb, repo_sha, kb_sha) = prepare_snapshot(m, opts)?;
+    if let Some((l, lock_exec::Start::Fresh)) = start {
+        lock_exec::save(out, l)?;
+    }
+    let snapshot = prepare_snapshot(m, opts, lock)?;
+    let (repo, repo_sha, kb_sha) = (snapshot.seed, snapshot.seed_sha, snapshot.kb_sha);
+    let repo_free = lock.map(lock_exec::repo_free_cases).unwrap_or_default();
+    let empty_sha = snapshot.empty.as_ref().map(|(_, h)| h.clone());
     let seeder = Seeder {
         repo: &repo,
+        empty: snapshot.empty.as_ref().map(|(p, _)| p.as_path()),
+        repo_free: &repo_free,
         stage: out.join("snapshot").join(INPUTS_DIR),
         inputs: &opts.case_inputs,
     };
@@ -761,6 +846,11 @@ pub fn run(
             let ws = out.join(&rel).join("workspace");
             // 試行の KB は workspace の中（初期 snapshot の複製）。別 dir に置くと実行器が参照できない。
             let kbd = ws.join("kb");
+            let seed_sha = if repo_free.contains(&pid) {
+                empty_sha.clone().unwrap_or_default()
+            } else {
+                repo_sha.clone()
+            };
             let is_async = exec.is_async();
             if !is_async {
                 // 中断した試行の残骸があれば捨て、必ず初期 snapshot から作り直す。
@@ -768,14 +858,14 @@ pub fn run(
                 seeder.make(&pid, &ws)?;
                 rec.workspace_sha256_initial = hash_tree_excluding(&ws, &[INPUTS_DIR])?;
                 rec.kb_sha256_initial = hash_tree(&kbd)?;
-                if rec.workspace_sha256_initial != repo_sha || rec.kb_sha256_initial != kb_sha {
+                if rec.workspace_sha256_initial != seed_sha || rec.kb_sha256_initial != kb_sha {
                     return Err(format!(
                         "trial dir {rel} does not start from the saved snapshot"
                     ));
                 }
             } else {
                 // 非同期: 作成・再利用は drive_async が台帳を見て決める（参照中は消さない）。
-                rec.workspace_sha256_initial = repo_sha.clone();
+                rec.workspace_sha256_initial = seed_sha.clone();
                 rec.kb_sha256_initial = kb_sha.clone();
             }
             rec.inputs = seeder.specs(&pid).to_vec();
@@ -889,7 +979,7 @@ pub fn run(
             // 配った入力（と、その展開）は成果物に数えない。
             if cid == ConfigId::A
                 && res.outcome == Outcome::Passed
-                && hash_tree_excluding(&ws, &[INPUTS_DIR])? == repo_sha
+                && hash_tree_excluding(&ws, &[INPUTS_DIR])? == seed_sha
             {
                 res.outcome = Outcome::Failed;
                 rec.reason = Some(REASON_NO_ARTIFACT.into());

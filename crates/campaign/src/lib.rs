@@ -22,6 +22,7 @@ pub mod isolation;
 pub mod jev_smoke;
 pub mod ledger;
 pub mod lock;
+pub mod lock_exec;
 pub mod lock_tree;
 pub mod manifest;
 pub mod measure_env;

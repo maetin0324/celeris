@@ -20,7 +20,7 @@ use celeris_campaign::{
 const USAGE: &str = "usage: celeris-campaign <dry-run|validate|preflight|run|watch|check|check-report|export|final-accounting|grade-out|usage> --manifest <path> \
 [--interval-secs N] [--max-iterations M] [--cases <grade-case dir>] \
 [--input-manifest <path>] [--out <dir>] [--executor mock|harness|celeris] [--api-url <url> --token-env <ENV_NAME> [--task-template <json>]] [--dest <dir>] \
-[--cases-root <dir>] [--grader-root <dir>] [--grade-case-root <dir>] [--a-program <path>] [--report <file>] [--repo-src <dir>] [--materials-src <dir>] [--kb-src <dir>] [--inputs-src <dir>] [--records <records.jsonl>] [--cos-not-called <basis>] [--quota <usage.json>] [--a-account <account_id>] [--measure-config <toml> --normal-config <toml> --canaries <json>] [--max-7d <ratio>] [--max-7d-codex <ratio>]";
+[--cases-root <dir>] [--grader-root <dir>] [--grade-case-root <dir>] [--a-program <path>] [--report <file>] [--measurement-id <id>] [--repo-src <dir>] [--materials-src <dir>] [--kb-src <dir>] [--inputs-src <dir>] [--records <records.jsonl>] [--cos-not-called <basis>] [--quota <usage.json>] [--a-account <account_id>] [--measure-config <toml> --normal-config <toml> --canaries <json>] [--max-7d <ratio>] [--max-7d-codex <ratio>]";
 
 fn arg(args: &[String], name: &str) -> Option<PathBuf> {
     args.iter()
@@ -56,6 +56,7 @@ fn preflight_inputs(args: &[String], manifest_path: &std::path::Path) -> Inputs 
             canaries: or("--canaries", "canaries.json"),
             out: arg(args, "--out"),
         }),
+        measurement_id: text("--measurement-id"),
     }
 }
 
@@ -200,6 +201,15 @@ fn run(args: Vec<String>) -> Result<String, String> {
                 kb_src: arg(&args, "--kb-src"),
                 inputs_src: arg(&args, "--inputs-src"),
                 case_inputs,
+                // 実行（有料）経路は、preflight・runner・再開で同じ期待 lock を使う。
+                lock: if matches!(which.as_str(), "harness" | "celeris") {
+                    Some(preflight::expected_lock(
+                        &preflight_inputs(&args, &manifest_path),
+                        &m,
+                    )?)
+                } else {
+                    None
+                },
             };
             // watch は同じ走査を台帳が閉じるまで繰り返す（再起動しても台帳から再開する）。
             let wopts = (cmd == "watch")

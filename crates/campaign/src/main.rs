@@ -17,10 +17,10 @@ use celeris_campaign::{
     watch::{self, SystemClock, WatchOptions},
 };
 
-const USAGE: &str = "usage: celeris-campaign <dry-run|validate|preflight|run|watch|check|check-report|export|grade-out|usage> --manifest <path> \
+const USAGE: &str = "usage: celeris-campaign <dry-run|validate|preflight|run|watch|check|check-report|export|final-accounting|grade-out|usage> --manifest <path> \
 [--interval-secs N] [--max-iterations M] [--cases <grade-case dir>] \
 [--input-manifest <path>] [--out <dir>] [--executor mock|harness|celeris] [--api-url <url> --token-env <ENV_NAME> [--task-template <json>]] [--dest <dir>] \
-[--cases-root <dir>] [--grader-root <dir>] [--grade-case-root <dir>] [--a-program <path>] [--report <file>] [--repo-src <dir>] [--materials-src <dir>] [--kb-src <dir>] [--inputs-src <dir>] [--a-account <account_id>] [--max-7d <ratio>] [--max-7d-codex <ratio>]";
+[--cases-root <dir>] [--grader-root <dir>] [--grade-case-root <dir>] [--a-program <path>] [--report <file>] [--measurement-id <id>] [--repo-src <dir>] [--materials-src <dir>] [--kb-src <dir>] [--inputs-src <dir>] [--records <records.jsonl>] [--cos-not-called <basis>] [--quota <usage.json>] [--a-account <account_id>] [--measure-config <toml> --normal-config <toml> --canaries <json>] [--max-7d <ratio>] [--max-7d-codex <ratio>]";
 
 fn arg(args: &[String], name: &str) -> Option<PathBuf> {
     args.iter()
@@ -47,7 +47,69 @@ fn preflight_inputs(args: &[String], manifest_path: &std::path::Path) -> Inputs 
         kb_src: arg(args, "--kb-src"),
         inputs_src: arg(args, "--inputs-src"),
         a_account: text("--a-account"),
+        measure: arg(args, "--measure-config").map(|config| preflight::MeasureEnv {
+            config,
+            normal_config: arg(args, "--normal-config").unwrap_or_else(|| {
+                PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
+                    .join(".config/celeris/config.toml")
+            }),
+            canaries: or("--canaries", "canaries.json"),
+            out: arg(args, "--out"),
+        }),
+        measurement_id: text("--measurement-id"),
     }
+}
+
+/// `--records` があれば最終集計を作り、整合を検査する（不整合は Err）。無ければ None。
+fn accounting(
+    args: &[String],
+    m: &CampaignManifest,
+    out: &std::path::Path,
+) -> Result<Option<serde_json::Value>, String> {
+    let Some(rp) = arg(args, "--records") else {
+        return Ok(None);
+    };
+    let records = std::fs::read_to_string(&rp).map_err(|e| format!("{}: {e}", rp.display()))?;
+    let quota = match arg(args, "--quota") {
+        Some(p) => Some(
+            serde_json::from_slice(
+                &std::fs::read(&p).map_err(|e| format!("{}: {e}", p.display()))?,
+            )
+            .map_err(|e| format!("{}: {e}", p.display()))?,
+        ),
+        None => None,
+    };
+    let cos = arg(args, "--cos-not-called").map(|p| p.to_string_lossy().into_owned());
+    let a = celeris_campaign::final_accounting::compute(
+        m,
+        out,
+        &celeris_campaign::final_accounting::FinalInputs {
+            records_jsonl: &records,
+            cos_not_called_basis: cos.as_deref(),
+            quota,
+        },
+    )?;
+    let v = celeris_campaign::final_accounting::recheck(&a);
+    if v.is_empty() {
+        Ok(Some(a))
+    } else {
+        Err(v.join("\n"))
+    }
+}
+
+/// locked な out（`lock.json` あり）では、cases root から作り直した期待 lock を返す。
+/// check / grade-out / export が保存 lock と突き合わせる（保存 lock の丸ごと差替えを見逃さない）。
+/// lock の無い legacy out は None（従来どおり。本測定の根拠にならない）。
+fn cli_expected_lock(
+    args: &[String],
+    manifest_path: &std::path::Path,
+    m: &CampaignManifest,
+    out: &std::path::Path,
+) -> Result<Option<celeris_campaign::lock::CampaignLock>, String> {
+    if !out.join(celeris_campaign::lock_exec::LOCK_FILE).exists() {
+        return Ok(None);
+    }
+    preflight::expected_lock(&preflight_inputs(args, manifest_path), m).map(Some)
 }
 
 fn transport(args: &[String]) -> Result<CurlTransport, String> {
@@ -73,6 +135,7 @@ fn a_executor(
     args: &[String],
     m: &CampaignManifest,
     out_dir: &std::path::Path,
+    program: &preflight::ResolvedProgram,
 ) -> Result<HarnessExecutor, String> {
     let id = arg(args, "--a-account")
         .ok_or("--a-account <account_id> is required (A runs under a Celeris-managed account)")?
@@ -81,7 +144,7 @@ fn a_executor(
     let dir = preflight::find_a_account(&get_accounts(args)?, &id)?;
     Ok(HarnessExecutor::new(
         out_dir.join("harness-state"),
-        Box::new(ClaudeCodeBuilder::default()),
+        Box::new(ClaudeCodeBuilder::from_resolved(program)),
     )
     .with_sandbox(Sandbox {
         account_id: id,
@@ -125,9 +188,17 @@ fn run(args: Vec<String>) -> Result<String, String> {
                 arg(&args, "--executor").ok_or("--executor mock|harness|celeris is required")?;
             let which = which.to_string_lossy().into_owned();
             // 実行（有料）経路は preflight を通ってからだけ始める。mock は無課金なので対象外。
-            if matches!(which.as_str(), "harness" | "celeris") {
-                preflight::gate(&preflight_inputs(&args, &manifest_path), &RealHost)?;
-            }
+            // A はここで検査した実行ファイル・版をそのまま起動する（PATH を引き直さない）。
+            let a_program = if matches!(which.as_str(), "harness" | "celeris") {
+                preflight::gate(&preflight_inputs(&args, &manifest_path), &RealHost)?.a_program
+            } else {
+                None
+            };
+            let a_program = || {
+                a_program
+                    .as_ref()
+                    .ok_or_else(|| "internal: preflight did not resolve the A program".to_string())
+            };
             let input = m.load_input(&manifest_path, arg(&args, "--input-manifest").as_deref())?;
             let out_dir = out()?;
             // 外部入力は case.json の宣言から引く（実行経路だけ。mock は case を読まない）。
@@ -145,6 +216,15 @@ fn run(args: Vec<String>) -> Result<String, String> {
                 kb_src: arg(&args, "--kb-src"),
                 inputs_src: arg(&args, "--inputs-src"),
                 case_inputs,
+                // 実行（有料）経路は、preflight・runner・再開で同じ期待 lock を使う。
+                lock: if matches!(which.as_str(), "harness" | "celeris") {
+                    Some(preflight::expected_lock(
+                        &preflight_inputs(&args, &manifest_path),
+                        &m,
+                    )?)
+                } else {
+                    None
+                },
             };
             // watch は同じ走査を台帳が閉じるまで繰り返す（再起動しても台帳から再開する）。
             let wopts = (cmd == "watch")
@@ -178,7 +258,7 @@ fn run(args: Vec<String>) -> Result<String, String> {
             };
             let rep = match which.as_str() {
                 "mock" => drive(&MockExecutor::seeded())?,
-                "harness" => drive(&a_executor(&args, &m, &out_dir)?)?,
+                "harness" => drive(&a_executor(&args, &m, &out_dir, a_program()?)?)?,
                 "celeris" => {
                     // 秘密の値は受け取らない: token は環境変数の「名前」だけ。
                     let url = arg(&args, "--api-url").ok_or("--api-url is required for celeris")?;
@@ -208,7 +288,7 @@ fn run(args: Vec<String>) -> Result<String, String> {
                         out_dir.join("cluster-cancel.jsonl"),
                     );
                     // A 腕を含む manifest でも同じ入口で走る。A は既存ハーネス（後付け制限なし）。
-                    let a = a_executor(&args, &m, &out_dir)?;
+                    let a = a_executor(&args, &m, &out_dir, a_program()?)?;
                     drive(&ArmDispatch { a, bc })?
                 }
                 other => {
@@ -256,7 +336,8 @@ fn run(args: Vec<String>) -> Result<String, String> {
             ))
         }
         "check" => {
-            let rep = checker::check(&m, &out()?);
+            let expected = cli_expected_lock(&args, &manifest_path, &m, &out()?)?;
+            let rep = checker::check_expected(&m, &out()?, expected.as_ref());
             let s = serde_json::to_string_pretty(&rep).map_err(|e| e.to_string())?;
             if rep.ok { Ok(s) } else { Err(s) }
         }
@@ -264,7 +345,15 @@ fn run(args: Vec<String>) -> Result<String, String> {
             let rp = arg(&args, "--report").ok_or("--report <file> is required")?;
             let text =
                 std::fs::read_to_string(&rp).map_err(|e| format!("{}: {e}", rp.display()))?;
-            let v = celeris_campaign::report::check_report(&m, &out()?, &text);
+            let out = out()?;
+            let mut v = celeris_campaign::report::check_report(&m, &out, &text);
+            match accounting(&args, &m, &out) {
+                Ok(Some(a)) => v.extend(celeris_campaign::report::check_consumption_claims(
+                    &a, &text,
+                )),
+                Ok(None) => {}
+                Err(e) => v.push(e),
+            }
             if v.is_empty() {
                 Ok("{\"ok\":true}".into())
             } else {
@@ -273,11 +362,13 @@ fn run(args: Vec<String>) -> Result<String, String> {
         }
         "grade-out" => {
             let cases = arg(&args, "--cases").ok_or("--cases <grade-case dir> is required")?;
-            let v = celeris_campaign::grade_out::grade_out(
+            let expected = cli_expected_lock(&args, &manifest_path, &m, &out()?)?;
+            let v = celeris_campaign::grade_out::grade_out_expected(
                 &m,
                 &out()?,
                 &cases,
                 &ProcessRunner::default(),
+                expected.as_ref(),
             )?;
             let s = serde_json::to_string_pretty(&v).map_err(|e| e.to_string())?;
             if v["ok"] == true { Ok(s) } else { Err(s) }
@@ -314,10 +405,17 @@ fn run(args: Vec<String>) -> Result<String, String> {
             let s = serde_json::to_string_pretty(&rep).map_err(|e| e.to_string())?;
             if violations.is_empty() { Ok(s) } else { Err(s) }
         }
+        "final-accounting" => {
+            let out = out()?;
+            let a = accounting(&args, &m, &out)?.ok_or("--records <records.jsonl> is required")?;
+            serde_json::to_string_pretty(&a).map_err(|e| e.to_string())
+        }
         "export" => {
             let out = out()?;
             let dest = arg(&args, "--dest").unwrap_or_else(|| out.join("export"));
-            let t = export::export(&m, &out, &dest)?;
+            let expected = cli_expected_lock(&args, &manifest_path, &m, &out)?;
+            let acct = accounting(&args, &m, &out)?;
+            let t = export::export_full(&m, &out, &dest, expected.as_ref(), acct.as_ref())?;
             serde_json::to_string_pretty(&t).map_err(|e| e.to_string())
         }
         _ => Err(USAGE.into()),

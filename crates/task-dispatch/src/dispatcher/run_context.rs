@@ -2,6 +2,19 @@
 
 use super::*;
 
+/// 試行の作業場所の中の試行用 KB（campaign runner の `build_seed` が置く `kb/`）。
+const TRIAL_KB_DIR: &str = "kb";
+/// worker の `celerisctl knowledge` が最優先で読む根の env（ADR-0047 D3。`--root` の次）。
+pub(super) const TRIAL_KB_ENV: &str = "CELERIS_KNOWLEDGE_ROOT";
+/// 試行の根 task を探す `parent_id` の鎖の上限（循環の保険。木の深さの上限より十分大きい）。
+const TRIAL_ROOT_DEPTH_LIMIT: usize = 64;
+
+/// campaign 試行に属する task の文脈の範囲（ADR 2026-10-17-mlsys-trial-context-isolation）。
+pub(super) struct TrialScope {
+    /// 試行用 KB（試行の根 task の作業場所の `kb/`）。根がローカルでなければ `None`。
+    pub(super) kb: Option<PathBuf>,
+}
+
 impl Dispatcher {
     /// ADR-0016 D1 / D3, ADR-0027 D1: run 開始時にワーカーへ渡す役割の指示文、委譲できる run なら使える
     /// 分野の一覧、集約 run なら子の要約。
@@ -61,23 +74,27 @@ impl Dispatcher {
         // ADR-0033 D5（Phase 26）: 担当がいる run にだけ、その担当宛て + 全員向けの永続の認可を注入する
         // （担当がいない run に、たまたま同じ id を持つ他ノード宛ての規則を混ぜないため。memory/conversation
         // と同じ条件）。
+        // ADR 2026-10-17-mlsys-trial-context-isolation D1: campaign 試行に属する task（自身か祖先が
+        // campaign 識別を持つ。ADR 2026-10-16-campaign-identity-propagation の解決をそのまま使う）。
+        let trial = self.trial_scope(task)?;
         let standing_rules = match assigned {
-            Some(n) => self
+            Some(n) if trial.is_none() => self
                 .store
                 .standing_rule_list(Some(&n.id))?
                 .into_iter()
                 .map(|r| r.rule)
                 .collect(),
-            None => Vec::new(),
+            _ => Vec::new(),
         };
+        // 試行 task には担当の記憶・会話履歴を載せない（D2。他 arm・他反復・通常運用の痕跡を混ぜない）。
         let memory = match (&self.config.memory_dir, assigned) {
-            (Some(dir), Some(n)) => Some(
+            (Some(dir), Some(n)) if trial.is_none() => Some(
                 MemoryDir::new(dir).load(&n.id, task.project_id.map(|p| p.to_string()).as_deref()),
             ),
             _ => None,
         };
         let conversation = match assigned {
-            Some(n) => {
+            Some(n) if trial.is_none() => {
                 let mut turns: Vec<ConversationTurn> = self
                     .store
                     .message_list(
@@ -100,7 +117,7 @@ impl Dispatcher {
                 }
                 turns
             }
-            None => Vec::new(),
+            _ => Vec::new(),
         };
         // ADR-0033 D4 / Phase 28: 対話 run にだけ、相手が秘書（ADR-0046 D6 の CoS）かそれ以外かを渡す
         // （`preamble` が「作業を始めるな、返事だけ書け」の指示文を出し分けるためだけの印。担当が組織に
@@ -150,7 +167,12 @@ impl Dispatcher {
         // ADR-0046 D1（Phase 59）: 担当ノードの実効 profile（根→葉の merge ＋ タスクの上書き）。
         // profile を 1 つも書いていない組織では `None`（前置きは Phase 58 までとバイト単位で同じ）。
         let profile = assigned.and_then(|n| {
-            let effective = task_core::resolve_profile(&org, &n.id);
+            let mut effective = task_core::resolve_profile(&org, &n.id);
+            // 試行 task: 組織が継がせる知識・skills の mount は使わない（D1/D3）ので前置きにも出さない。
+            if trial.is_some() {
+                effective.knowledge.clear();
+                effective.skills_mounts.clear();
+            }
             if effective.is_trivial() {
                 None
             } else {
@@ -305,12 +327,25 @@ impl Dispatcher {
         let profile_knowledge: Vec<task_core::KnowledgeMount> = assigned
             .map(|n| task_core::resolve_profile(&org, &n.id).knowledge)
             .unwrap_or_default();
-        let knowledge =
-            self.knowledge_context(task, assigned.map(|n| n.id.as_str()), &profile_knowledge);
+        // 試行 task は試行の `kb/` だけ（D1）。通常の根・default_mounts・profile・案件・memory の mount は使わない。
+        let knowledge = match &trial {
+            Some(t) => self.mounted_knowledge(
+                task,
+                None,
+                t.kb.iter()
+                    .map(|kb| task_core::KnowledgeMount::dir(kb.clone()))
+                    .collect(),
+            ),
+            None => {
+                self.knowledge_context(task, assigned.map(|n| n.id.as_str()), &profile_knowledge)
+            }
+        };
         // ADR-0056 D3（Phase 79）: 担当ノードの実効 profile が継いだ skills mount を KB から解決する。
         // 決定的（ファイルを読むだけ。LLM は関与しない）。見つからない名前は run を落とさず、呼び出し元
         // （`dispatch_ready`）が `status` の進行イベントを 1 行出す。
+        // 試行 task には skills を渡さない（D3。根は通常の KB で、A arm は skills を受けない）。
         let profile_skills_mounts: Vec<String> = assigned
+            .filter(|_| trial.is_none())
             .map(|n| task_core::resolve_profile(&org, &n.id).skills_mounts)
             .unwrap_or_default();
         let (skills, missing_skills) =
@@ -378,6 +413,10 @@ impl Dispatcher {
             cargo_target_work_unit: None,
             cargo_target_fallback: None,
             work_unit_env: None,
+            // D4: 試行 task の worker の `celerisctl knowledge` の根を試行の `kb/` に固定する。
+            trial_env: trial
+                .and_then(|t| t.kb)
+                .map(|kb| vec![(TRIAL_KB_ENV.to_string(), kb.display().to_string())]),
             // ADR-0079 D7（Phase R3a）: 木の節点の worker の run だけ `dispatch_ready` が上書きする。
             decision_requests: false,
             direct_route: None,
@@ -389,6 +428,38 @@ impl Dispatcher {
             input_attachment_source: None,
             llm_route: None,
         })
+    }
+
+    /// ADR 2026-10-17-mlsys-trial-context-isolation D1: campaign 試行に属する task なら `Some`。
+    /// 判定は campaign 識別の解決（自身か最も近い祖先。ADR 2026-10-16-campaign-identity-propagation D2）
+    /// だけを使う。試行の KB は木の根 task（runner が `POST /tasks` で作った試行の task）の作業場所の
+    /// `kb/`（runner の `build_seed` が置く）。根がローカルの作業場所でなければ `kb: None`（試行用 KB も
+    /// 通常の KB も載せない側に倒す）。
+    pub(super) fn trial_scope(&self, task: &Task) -> Result<Option<TrialScope>, DispatchError> {
+        if self
+            .store
+            .task_campaign_resolve(&task.id.to_string())?
+            .is_none()
+        {
+            return Ok(None);
+        }
+        let mut root = task.clone();
+        for _ in 0..TRIAL_ROOT_DEPTH_LIMIT {
+            let Some(parent) = root.parent_id else {
+                break;
+            };
+            match self.store.get(parent)? {
+                Some(p) => root = p,
+                None => break,
+            }
+        }
+        let kb = match &root.workspace {
+            task_core::WorkspaceSpec::Local { path, .. } => Some(
+                task_core::expand_home(path, task_core::home_dir().as_deref()).join(TRIAL_KB_DIR),
+            ),
+            task_core::WorkspaceSpec::Remote { .. } => None,
+        };
+        Ok(Some(TrialScope { kb }))
     }
 
     /// ADR-0059 D6（Phase 99）: `[[clusters]]` の id（決定的な順、昇順）と、接続状態・実効
@@ -629,7 +700,6 @@ impl Dispatcher {
         node_id: Option<&str>,
         profile_knowledge: &[task_core::KnowledgeMount],
     ) -> Option<task_worker::protocol::KnowledgeContext> {
-        let root = &self.config.knowledge.root;
         // 案件は自動で `projects/<slug>` をマウントする（ADR-0047 D2）。
         let project = task
             .project_id
@@ -646,10 +716,24 @@ impl Dispatcher {
             &self.config.knowledge.default_mounts,
             &project_mounts,
         ]);
+        self.mounted_knowledge(task, node_id, mounts)
+    }
+
+    /// 実効マウントの索引を組む。`kb` の mount が無ければ通常の KB の根（`index.json`）には触れない
+    /// （ADR 2026-10-17-mlsys-trial-context-isolation D1: 試行 task の `dir:<ws>/kb` だけの文脈）。
+    pub(super) fn mounted_knowledge(
+        &self,
+        task: &Task,
+        node_id: Option<&str>,
+        mounts: Vec<task_core::KnowledgeMount>,
+    ) -> Option<task_worker::protocol::KnowledgeContext> {
         if mounts.is_empty() {
             return None;
         }
-        let index = if task_ops::knowledge::exists(root) {
+        let root = &self.config.knowledge.root;
+        let index = if mounts.iter().any(|m| m.kind == task_core::MountKind::Kb)
+            && task_ops::knowledge::exists(root)
+        {
             task_ops::knowledge::ensure_index(root).items
         } else {
             Vec::new()

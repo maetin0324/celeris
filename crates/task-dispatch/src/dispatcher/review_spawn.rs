@@ -1053,9 +1053,13 @@ impl Dispatcher {
             .as_deref()
             .map(|id| task_core::profile::resolve(&org, id));
         // Review follows the subject's department rules, not the lead reviewer's profile.
+        // ADR 2026-10-17-mlsys-trial-context-isolation D3: campaign 試行の review には skills を渡さない
+        // （通常の KB の根から読むため。判定に失敗したら渡さない側に倒す）。
+        let trial = !matches!(self.trial_scope(task), Ok(None));
         let review_mounts = task
             .assignee
             .as_deref()
+            .filter(|_| !trial)
             .map(|id| task_core::profile::resolve(&org, id).skills_mounts)
             .unwrap_or_default();
         let (skills, _) =

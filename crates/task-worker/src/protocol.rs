@@ -1096,14 +1096,24 @@ impl RunRequest {
         self.work_dir.as_deref().unwrap_or(&self.workspace)
     }
 
+    /// Direct conversations may finish with a message instead of a result file.
+    /// Do not search their cwd (which can be a home directory) for stray reports.
+    pub fn requires_result_file(&self) -> bool {
+        self.context.work_unit.is_some()
+            || (self.context.cos_chat.is_none()
+                && !(self.task.kind == task_core::TaskKind::Execute
+                    && self.task.conversation.is_some()))
+    }
+
     /// `artifacts_dir` の**ワーカーから見た**表記。
     ///
     /// - 従来（cwd == workspace）: workspace 相対（`artifacts` / `.taskd/artifacts/<task_id>`）。
     ///   単独タスクのプロンプトは Phase 48 までと 1 バイトも変わらない（ADR-0036 D3）。
+    /// - WU は共有 cwd の場合も絶対パス（ADR 2026-10-17-wu-result-location）。
     /// - worktree（cwd != workspace。ADR-0041 D1）: 成果物は作業ツリーの**外**にあるので絶対パス。
     ///   `..` を書かせない（`artifact.path` の規則 ADR-0003 D5 と衝突させない）。
     pub fn artifacts_rel(&self) -> String {
-        if self.work_dir.is_some() {
+        if self.work_dir.is_some() || self.context.work_unit.is_some() {
             return self.artifacts_dir.to_string_lossy().into_owned();
         }
         task_core::artifacts::rel_from(&self.workspace, &self.artifacts_dir)

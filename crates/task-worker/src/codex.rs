@@ -27,8 +27,8 @@ use crate::progress;
 use crate::protocol::{Evidence, ProviderFailure, RunRequest};
 use crate::provider::classify_provider_failure;
 use crate::subprocess::{
-    LineOutcome, MAX_LINE_BYTES, adopt_result_json_written_under_work_dir, kill_now,
-    read_line_limited, read_tail, reap_after_terminal, write_result_json,
+    LineOutcome, MAX_LINE_BYTES, kill_now, read_line_limited, read_tail, reap_after_terminal,
+    write_result_json,
 };
 
 /// `[adapters.codex] resume_mode`（ADR-0054 D1。Phase 67）: このインストールの `codex` が
@@ -791,13 +791,6 @@ async fn run_codex(
     let result_path = req.artifact_path("result.json");
     let _ = tokio::fs::remove_file(&result_path).await;
     clear_delegate_file(&req.artifacts_dir).await;
-    // ADR-0006 Phase 115 D2: 同じ理由で、work_dir 側の名残候補も消す（`work_dir != workspace` の
-    // ときだけ意味がある。無ければ何もしない）。
-    if let Some(work_dir) = req.work_dir.as_deref()
-        && work_dir != req.workspace
-    {
-        let _ = tokio::fs::remove_file(work_dir.join("artifacts").join("result.json")).await;
-    }
 
     let cos_parts =
         crate::claude_code::build_cos_chat_parts(&req.task, &req.context, run_id, &artifacts_rel);
@@ -1021,20 +1014,14 @@ async fn run_codex(
             }
         }
         (None, Some(TurnSignal::Completed { usage })) => {
-            // ADR-0006 Phase 115 D2: 結果ファイルを読む（`result_path` の有無を見る）前に、work_dir 側の
-            // 名残を採用する。Phase 112 D3 の「最終メッセージから回収」より必ず先（`result_path` の
-            // `NotFound` 判定がこの後にあるため、先に採用しておかないと本物の結果を無視して最終メッセージ
-            // から再構成してしまう）。
-            adopt_result_json_written_under_work_dir(
-                &req.artifacts_dir,
-                req.work_dir.as_deref(),
-                &req.workspace,
-                run_id,
-            )
-            .await;
             // A conversation can answer directly; work orders still require their artifacts.
             // A CoS chat run (transient task without `conversation`) also replies in the chat.
-            let terminal = if exit_status.success()
+            let terminal = if req.requires_result_file()
+                && let Some(error) =
+                    crate::result_location::misplaced_result(&req.artifacts_dir, req.cwd()).await
+            {
+                error
+            } else if exit_status.success()
                 && (req.task.conversation.is_some() || cos_chat.is_some())
                 && req.task.kind == task_core::TaskKind::Execute
                 && matches!(tokio::fs::metadata(&result_path).await,

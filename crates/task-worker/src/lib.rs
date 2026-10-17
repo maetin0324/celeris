@@ -54,6 +54,7 @@ mod progress;
 pub mod protocol;
 pub mod provider;
 pub mod research_targets;
+pub mod result_location;
 pub mod result_report;
 pub mod route;
 mod routing_context_transport;

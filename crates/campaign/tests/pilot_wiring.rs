@@ -268,7 +268,11 @@ fn claude_code_a_is_started_with_a_permission_mode_and_cache_usage_is_parsed() {
         timeout_secs: 10,
         budget: m.budget.per_case,
     };
-    let c = ClaudeCodeBuilder::default().build(&req);
+    let c = ClaudeCodeBuilder {
+        program: "claude".into(),
+        version: None,
+    }
+    .build(&req);
     let pos = c
         .args
         .iter()
@@ -513,6 +517,7 @@ fn materials_are_distributed_into_every_trial_workspace() {
         kb_src: None,
         inputs_src: None,
         case_inputs: Default::default(),
+        lock: None,
     };
     run(&m, &i, &MockExecutor::scripted(BTreeMap::new()), &o).expect("run");
     let recs = records(&out);
@@ -661,6 +666,7 @@ fn grade_out_grades_every_run_trial_and_reports_missing_cases() {
         kb_src: Some(fx().join("kb")),
         inputs_src: None,
         case_inputs: Default::default(),
+        lock: None,
     };
     run(&m, &i, &MockExecutor::seeded(), &o).expect("run");
     let runner = AllOk(Mutex::new(0));

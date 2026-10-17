@@ -958,10 +958,13 @@ async fn work_dir_note_appears_in_the_prompt_when_work_dir_differs_from_workspac
     std::fs::create_dir_all(&work_dir).unwrap();
     let config = stub_claude(
         dir.path(),
-        r#"mkdir -p artifacts
-printf '%s' '{"summary":"ok","evidence":[]}' > artifacts/result.json
-echo '{"type":"result","subtype":"success","is_error":false}'
+        &format!(
+            r#"mkdir -p '{0}'
+printf '%s' '{{"summary":"ok","evidence":[]}}' > '{0}/result.json'
+echo '{{"type":"result","subtype":"success","is_error":false}}'
 "#,
+            dir.path().join("artifacts").display()
+        ),
     );
     let mut req = sample_req(dir.path().to_path_buf());
     req.work_dir = Some(work_dir.clone());
@@ -992,14 +995,17 @@ echo '{"type":"result","subtype":"success","is_error":false}'
         prompt.contains("相対 `artifacts/` はリポジトリの中を指すので使わない"),
         "{prompt}"
     );
+    assert!(prompt.contains(&format!(
+        "result.json は必ず `{}/result.json`",
+        dir.path().join("artifacts").display()
+    )));
+    assert!(prompt.contains("親ディレクトリを推測した相対パスも使わない"));
+    assert!(!prompt.contains("残したい物は `artifacts/` に置く"));
 }
 
-/// ADR-0006 Phase 115 D2（本番障害 01M3915FARENW8M0JM11XVF6W0 / 01M38T8N17MEWPTJQXGX1TNYJD）:
-/// 偽 claude スタブが（指示を読み違えて）cwd 相対の `artifacts/result.json`（=
-/// `<work_dir>/artifacts/result.json`）に書いても、正しい置き場（`<artifacts_dir>/result.json`）へ
-/// 移して採用し `Done` になる。worktree 側には残らない（D4(b)）。
+/// Misplaced reports remain untouched and cannot turn into successful work.
 #[tokio::test]
-async fn a_result_json_written_under_work_dir_is_adopted_and_not_left_behind() {
+async fn a_misplaced_result_is_rejected_without_adoption() {
     let dir = tempfile::tempdir().unwrap();
     let work_dir = dir.path().join("repos/agent-platform");
     std::fs::create_dir_all(&work_dir).unwrap();
@@ -1019,18 +1025,67 @@ echo '{"type":"result","subtype":"success","is_error":false}'
         .await
         .unwrap();
     match outcome.terminal {
-        Terminal::Done { summary, .. } => {
-            assert_eq!(summary, "wrote to the worktree by mistake")
+        Terminal::Error {
+            message,
+            retryable: false,
+        } => {
+            assert!(message.contains("result.json misplaced"), "{message}");
+            assert!(
+                message.contains(&work_dir.join("artifacts/result.json").display().to_string())
+            );
         }
-        other => panic!("expected done, got {other:?}"),
+        other => panic!("expected permanent failure, got {other:?}"),
     }
-    assert_eq!(
-        std::fs::read_to_string(dir.path().join("artifacts/result.json")).unwrap(),
-        r#"{"summary":"wrote to the worktree by mistake","evidence":[]}"#
+    assert!(!dir.path().join("artifacts/result.json").exists());
+    assert!(work_dir.join("artifacts/result.json").exists());
+}
+
+#[tokio::test]
+async fn a_parent_relative_result_is_rejected_without_adoption() {
+    let dir = tempfile::tempdir().unwrap();
+    let work_dir = dir.path().join("repos/agent-platform");
+    std::fs::create_dir_all(&work_dir).unwrap();
+    let config = stub_claude(
+        dir.path(),
+        r#"mkdir -p ../artifacts
+printf '%s' '{"summary":"wrote to the worktree by mistake","evidence":[]}' > ../artifacts/result.json
+echo '{"type":"result","subtype":"success","is_error":false}'
+"#,
     );
+    let mut req = sample_req(dir.path().to_path_buf());
+    req.work_dir = Some(work_dir.clone());
+    let sink = RecordingSink::default();
+    let adapter = ClaudeCodeAdapter::new(config);
+    let outcome = adapter
+        .run(req, "run-wd-2", default_limits(), &sink)
+        .await
+        .unwrap();
+    match outcome.terminal {
+        Terminal::Error {
+            message,
+            retryable: false,
+        } => {
+            assert!(message.contains("result.json misplaced"), "{message}");
+            assert!(
+                message.contains(
+                    &work_dir
+                        .parent()
+                        .unwrap()
+                        .join("artifacts/result.json")
+                        .display()
+                        .to_string()
+                )
+            );
+        }
+        other => panic!("expected permanent failure, got {other:?}"),
+    }
+    assert!(!dir.path().join("artifacts/result.json").exists());
     assert!(
-        !work_dir.join("artifacts").exists(),
-        "the stray artifacts/ dir under work_dir should be gone"
+        work_dir
+            .parent()
+            .unwrap()
+            .join("artifacts/result.json")
+            .exists()
     );
 }
 
@@ -4230,4 +4285,34 @@ fn context_tokens_unknown_without_assistant_usage() {
     let lines = vec![result_line()];
     let usage = duplicate_reads_after(Path::new("/w"), false, &lines).expect("usage");
     assert_eq!(usage.context_tokens, None);
+}
+
+#[test]
+fn work_unit_result_instructions_use_absolute_paths_even_without_a_worktree() {
+    let mut req = sample_req(std::path::PathBuf::from("/workspace/wu/e2e"));
+    req.context.work_unit = Some(crate::protocol::WorkUnitPromptContext::default());
+    for work_dir in [
+        None,
+        Some(std::path::PathBuf::from(
+            "/workspace/wu/e2e/repos/agent-platform",
+        )),
+    ] {
+        req.work_dir = work_dir;
+        let artifacts = req.artifacts_rel();
+        assert_eq!(artifacts, "/workspace/wu/e2e/artifacts");
+        let prompt = build_prompt(&req.task, &req.context, "run", &artifacts);
+        assert!(prompt.contains("`/workspace/wu/e2e/artifacts/result.json`"));
+        assert!(!prompt.contains("`artifacts/result.json`"));
+        assert!(!prompt.contains("`../artifacts/result.json`"));
+    }
+}
+
+#[test]
+fn misplaced_result_detection_is_only_required_for_work_reports() {
+    let mut req = sample_req(std::path::PathBuf::from("/workspace"));
+    assert!(req.requires_result_file());
+    req.task.conversation = Some(task_core::MessageId::new());
+    assert!(!req.requires_result_file());
+    req.context.work_unit = Some(crate::protocol::WorkUnitPromptContext::default());
+    assert!(req.requires_result_file());
 }

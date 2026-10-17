@@ -22,6 +22,20 @@ pub fn grade_out(
     cases: &Path,
     runner: &dyn CommandRunner,
 ) -> Result<Value, String> {
+    grade_out_expected(m, out, cases, runner, None)
+}
+
+/// 保存 lock があれば（`expected` で cases root から作り直した期待 lock とも照合し）、`cases` の grade-case と
+/// 公開/隠しテスト全実体を lock の固定値に照合する。不一致は grader command を走らせる前に拒否する。
+/// lock が無い legacy out（lock 導入前・mock）は従来どおり。locked と記録された out の lock 欠落は Err。
+pub fn grade_out_expected(
+    m: &CampaignManifest,
+    out: &Path,
+    cases: &Path,
+    runner: &dyn CommandRunner,
+    expected: Option<&crate::lock::CampaignLock>,
+) -> Result<Value, String> {
+    let lock = crate::lock_exec::load_saved(m, out, expected)?;
     let hash = m.compute_sha256()?;
     let text = fs::read_to_string(out.join(TRIALS_FILE))
         .map_err(|e| format!("{}: {e}", out.join(TRIALS_FILE).display()))?;
@@ -47,13 +61,44 @@ pub fn grade_out(
             lines.push(json!({"trial": key, "graded": false, "why": "not run"}));
             continue;
         }
-        let case_path = cases.join(format!("{}.json", r.problem_id));
+        let mut case_path = cases.join(format!("{}.json", r.problem_id));
+        if lock.is_some() && !case_path.is_file() {
+            // 本番の配置 `<root>/<split>/<problem>/<problem>.json`（lock は split を固定している）。
+            let split = if m.split == crate::manifest::Split::Final {
+                "final"
+            } else {
+                "dev"
+            };
+            case_path = cases
+                .join(split)
+                .join(&r.problem_id)
+                .join(format!("{}.json", r.problem_id));
+        }
         if !case_path.is_file() {
             missing_cases.push(r.problem_id.clone());
             lines.push(json!({"trial": key, "graded": false, "why": format!("no grade-case {}", case_path.display())}));
             continue;
         }
-        let case = GradeCase::load(&case_path)?;
+        let case = match &lock {
+            Some(l) => {
+                let verified = match l.case(&r.problem_id) {
+                    None => Err(format!(
+                        "{}: case is not in the campaign lock",
+                        r.problem_id
+                    )),
+                    Some(c) => crate::lock_exec::verify_grade_case(c, &case_path),
+                };
+                match verified {
+                    Ok(g) => g,
+                    Err(e) => {
+                        rejected.push(format!("{tag}: {e}"));
+                        lines.push(json!({"trial": key, "graded": false, "why": "grader or tests differ from the campaign lock"}));
+                        continue;
+                    }
+                }
+            }
+            None => GradeCase::load(&case_path)?,
+        };
         if case.id != r.problem_id {
             rejected.push(format!(
                 "{tag}: grade-case id {} differs from the problem id",
@@ -98,6 +143,12 @@ pub fn grade_out(
             "trial": key,
             "case_id": case.id,
             "grader_sha256": grader_sha,
+            "lock_sha256": lock.as_ref().map(|l| l.sha256.clone()).unwrap_or_default(),
+            "tests_sha256": lock
+                .as_ref()
+                .and_then(|l| l.case(&r.problem_id))
+                .map(|c| c.tests_sha256())
+                .unwrap_or_default(),
             "artifact_sha256": artifact_sha,
             "graded": true,
             "grade": rep,

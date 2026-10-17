@@ -120,6 +120,7 @@ fn seeded_src(dir: &Path) -> RunOptions {
         kb_src: Some(k),
         inputs_src: None,
         case_inputs: Default::default(),
+        lock: None,
     }
 }
 

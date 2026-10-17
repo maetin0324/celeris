@@ -3436,3 +3436,93 @@ async fn a_clean_integration_closes_the_open_request_of_its_origin_as_integrated
                 && answer == task_core::integration_request::INTEGRATED_ANSWER
                 && note.as_deref().is_some_and(|n| n.contains("integrate-build")))));
 }
+
+/// The original WU failure: cwd is wu/e2e/repos/<repo>, but the mock writes
+/// ../artifacts/result.json. Record both paths and stop after one invocation.
+#[tokio::test]
+async fn misplaced_wu_result_records_failure_without_infra_requeue() {
+    struct MissingReportAdapter(Arc<ParallelWuAdapter>);
+    #[async_trait]
+    impl WorkerAdapter for MissingReportAdapter {
+        fn id(&self) -> &str {
+            "instant"
+        }
+        async fn run(
+            &self,
+            req: RunRequest,
+            run_id: &str,
+            limits: RunLimits,
+            sink: &dyn EventSink,
+        ) -> Result<RunOutcome, AdapterError> {
+            let expected = req.artifact_path("result.json");
+            self.0.run(req, run_id, limits, sink).await?;
+            Err(AdapterError::Other(format!(
+                "claude exited without {}",
+                expected.display()
+            )))
+        }
+    }
+    let repo = tempfile::tempdir().unwrap();
+    init_test_repo(repo.path());
+    let root = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let task = parallel_task(repo.path(), "true");
+    store.insert(&task).unwrap();
+    adopt_v2_plan(
+        &store,
+        task.id,
+        &["build"],
+        vec![v2_wu("e2e", "build", &[])],
+    );
+    let adapter = Arc::new(
+        ParallelWuAdapter::new(Duration::ZERO).with_action("e2e", |cwd| {
+            let misplaced = cwd.parent().unwrap().join("artifacts");
+            std::fs::create_dir_all(&misplaced).unwrap();
+            std::fs::write(misplaced.join("result.json"), r#"{"summary":"done"}"#).unwrap();
+        }),
+    );
+    let mut d = parallel_dispatcher(
+        store.clone(),
+        Arc::new(MissingReportAdapter(adapter.clone())),
+        root.path(),
+        3,
+        3,
+        3,
+    );
+    let s = store.clone();
+    let id = task.id;
+    assert!(
+        run_until(&mut d, 200, || {
+            wu_status(&s, id, "e2e") == Some(task_core::WorkUnitStatus::Failed)
+        })
+        .await
+    );
+    for _ in 0..8 {
+        d.tick().unwrap();
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(adapter.keys_seen(), vec!["e2e"]);
+    assert_eq!(store.get(id).unwrap().unwrap().status, Status::Failed);
+    let seen = adapter.seen.lock().unwrap();
+    let (_, cwd, artifacts) = &seen[0];
+    let stray = cwd.parent().unwrap().join("artifacts/result.json");
+    let events = events_of(&store, id);
+    let outcomes: Vec<_> = events
+        .iter()
+        .filter_map(|e| match e {
+            Event::WorkerFinished { outcome, .. } => Some(outcome.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        outcomes.iter().any(|o| o.contains("result.json misplaced")
+            && o.contains(&stray.display().to_string())
+            && o.contains(&artifacts.join("result.json").display().to_string())
+            && o.contains("retryable=false")),
+        "{outcomes:?}"
+    );
+    assert!(outcomes.iter().all(|o| !o.contains("infra_requeue")));
+    assert!(transitioned_index(&events, "infra_requeue").is_none());
+    assert!(stray.exists());
+    assert!(!artifacts.join("result.json").exists());
+}

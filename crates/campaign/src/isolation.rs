@@ -249,3 +249,74 @@ pub fn verify_isolation(trials: &[TrialView]) -> Result<Vec<Leak>, String> {
     }
     Ok(leaks)
 }
+
+/// canary 検査の結果。`present_forbidden`: 試行の木に在った禁止 canary（file 付き）、`missing_required`: 試行用 KB に無かった必須 canary。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CanaryReport {
+    pub present_forbidden: Vec<(String, String)>,
+    pub missing_required: Vec<String>,
+}
+
+/// 試行の木（`kb/`・`materials/`・`output` を含む root）を走査する。禁止 canary（通常 KB・他試行・grader 私有領域に置いた
+/// 目印）が 1 つでも在れば汚染、`kb_required` は `<root>/kb` の中に全て在ること（試行用 KB が実際に配られている証拠）。
+pub fn scan_canaries(
+    root: &Path,
+    forbidden: &[String],
+    required: &[String],
+) -> Result<CanaryReport, String> {
+    let mut all = Vec::new();
+    files(root, &mut all)?;
+    let mut rep = CanaryReport::default();
+    let mut seen_required = vec![false; required.len()];
+    for f in all {
+        let text = String::from_utf8_lossy(&fs::read(&f).map_err(|e| e.to_string())?).into_owned();
+        let rel = f.strip_prefix(root).unwrap_or(&f);
+        for c in forbidden.iter().filter(|c| text.contains(c.as_str())) {
+            rep.present_forbidden
+                .push((rel.to_string_lossy().into_owned(), c.clone()));
+        }
+        if rel.starts_with("kb") {
+            for (i, c) in required.iter().enumerate() {
+                seen_required[i] |= text.contains(c.as_str());
+            }
+        }
+    }
+    rep.missing_required = required
+        .iter()
+        .zip(seen_required)
+        .filter(|(_, s)| !s)
+        .map(|(c, _)| c.clone())
+        .collect();
+    Ok(rep)
+}
+
+/// A/B/C の試行木を初期 snapshot から作り（`scratch` の下。呼び出し側が消す）、(2) kb/ が同一 hash、
+/// (3) canary が禁止側に無く必須側に在ることを確かめる。不足の一覧を返す。
+pub fn check_trial_context(
+    src: &InitialSources,
+    scratch: &Path,
+    forbidden: &[String],
+    required: &[String],
+) -> Result<Vec<String>, String> {
+    let mut miss = Vec::new();
+    let mut records = Vec::new();
+    for config in [ConfigId::A, ConfigId::B, ConfigId::C] {
+        let t = prepare_trial(src, scratch, config, "preflight", 1)?;
+        let rep = scan_canaries(&t.root, forbidden, required)?;
+        for (file, c) in rep.present_forbidden {
+            miss.push(format!(
+                "{config:?}: forbidden canary {c:?} is in the trial tree ({file})"
+            ));
+        }
+        for c in rep.missing_required {
+            miss.push(format!(
+                "{config:?}: required canary {c:?} is not in the trial KB (kb/)"
+            ));
+        }
+        records.push(t.record);
+    }
+    if let Err(e) = check_same_inputs(&records) {
+        miss.push(format!("trial kb/ is not identical across A/B/C: {e}"));
+    }
+    Ok(miss)
+}

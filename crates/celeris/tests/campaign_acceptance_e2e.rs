@@ -29,7 +29,8 @@ use celeris_campaign::{
         ExecError, ExecResult, ExecStatus, Executor, ObservedRun, TaskRef, TokenUsage,
         TrialRequest, Usage,
     },
-    export::export,
+    export::{export, export_with},
+    final_accounting::{FinalInputs, compute, recheck},
     grade_out::grade_out,
     grader::{CommandOutput, CommandRunner},
     ledger::{Ledger, LedgerState},
@@ -47,7 +48,8 @@ use task_core::{
     DaemonMode, Event, InstanceRole, RunEnd, RunMetrics, RunRole, SharedRole, SqliteStore, Status,
     TaskId, TaskStore, Trigger, Usage as RunUsage,
     decision_log::{
-        CampaignVerdict, CandidateRef, DecisionLogOutcome, DecisionLogProposal, UsageRole,
+        CampaignVerdict, CandidateRef, DecisionLogOutcome, DecisionLogProposal, DecisionLogUsage,
+        UsageRole,
     },
     decision_log_export::{ExportParams, verify_connected},
 };
@@ -755,6 +757,8 @@ impl World {
             kb_src: Some(self.work.path().join("kb")),
             inputs_src: None,
             case_inputs: Default::default(),
+            // 制御 fixture（実 case を持たない）。実 case の lock 経路は campaign の lock_execution 試験。
+            lock: None,
         }
     }
 
@@ -848,6 +852,52 @@ fn ledger_states(w: &World) -> Vec<LedgerState> {
 }
 
 // ---------------------------------------------------------------- 場面
+
+/// routing 側・採点側の writer が書く値（試験用）を積み、dispatcher と同じ投影経路で決定ログへ書く。識別は書かない。
+/// 同じ記録の再投影は冪等（`dedup_key` の置換）。
+fn project_decision_log(store: &SqliteStore, now: OffsetDateTime) {
+    let all: Vec<TaskId> = store
+        .list(None)
+        .expect("list")
+        .into_iter()
+        .map(|t| t.id)
+        .collect();
+    for t in &all {
+        for (_, e) in store.events_for(*t).expect("events") {
+            if let Event::WorkerStarted { run_id, .. } = e {
+                store
+                    .decision_log_record_proposal(
+                        &DecisionLogProposal {
+                            run_id: run_id.clone(),
+                            task_id: Some(t.to_string()),
+                            proposed_first: Some(CandidateRef {
+                                source_id: "src".into(),
+                                model_id: "m-exec".into(),
+                                harness_id: "claude-code".into(),
+                            }),
+                            ..Default::default()
+                        },
+                        now,
+                    )
+                    .expect("proposal");
+                store
+                    .decision_log_record_outcome(
+                        &DecisionLogOutcome {
+                            run_id,
+                            campaign_verdict: Some(CampaignVerdict::Pass),
+                            ..Default::default()
+                        },
+                        now,
+                    )
+                    .expect("outcome");
+            }
+        }
+    }
+    for t in &all {
+        task_dispatch::record_task_decision_log(store, *t, now + time::Duration::seconds(5))
+            .expect("project");
+    }
+}
 
 /// 正常: POST /tasks（実 HTTP）→ 子 task・run → 成果物 → 独立 grader → 最終 export。接続は decision log 側でも確かめる。
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -953,48 +1003,7 @@ async fn normal_path_post_tasks_to_independent_grade_to_final_export() {
         .expect("B task id");
     assert!(!b_task.starts_with("A-"));
     let now = OffsetDateTime::now_utc();
-    let all: Vec<TaskId> = store
-        .list(None)
-        .expect("list")
-        .into_iter()
-        .map(|t| t.id)
-        .collect();
-    // routing 側・採点側の writer が書く値（試験用）。識別は書かない。
-    for t in &all {
-        for (_, e) in store.events_for(*t).expect("events") {
-            if let Event::WorkerStarted { run_id, .. } = e {
-                store
-                    .decision_log_record_proposal(
-                        &DecisionLogProposal {
-                            run_id: run_id.clone(),
-                            task_id: Some(t.to_string()),
-                            proposed_first: Some(CandidateRef {
-                                source_id: "src".into(),
-                                model_id: "m-exec".into(),
-                                harness_id: "claude-code".into(),
-                            }),
-                            ..Default::default()
-                        },
-                        now,
-                    )
-                    .expect("proposal");
-                store
-                    .decision_log_record_outcome(
-                        &DecisionLogOutcome {
-                            run_id,
-                            campaign_verdict: Some(CampaignVerdict::Pass),
-                            ..Default::default()
-                        },
-                        now,
-                    )
-                    .expect("outcome");
-            }
-        }
-    }
-    for t in &all {
-        task_dispatch::record_task_decision_log(store, *t, now + time::Duration::seconds(5))
-            .expect("project");
-    }
+    project_decision_log(store, now);
     let usage = store
         .decision_log_usage_list(Some("acceptance"))
         .expect("usage");
@@ -1289,5 +1298,252 @@ async fn arm_pin_is_set_on_the_task_through_the_api_not_by_the_global_config() {
         assert_eq!(r.routing["mode"], want);
         assert_eq!(r.routing["online_update"], false);
     }
+    w.finish().await;
+}
+
+// ---------------------------------------------------------------- 最終集計（final-accounting）
+
+/// 正式 export（`decision_log_export_campaign`）から最終集計を作る。CLI の `final-accounting` / `export --records` と
+/// 同じ関数（`compute` → `recheck`）で、records.jsonl を経由する。
+fn final_accounting(w: &World, cos_basis: Option<&str>) -> (Value, String) {
+    let export = w
+        .interior
+        .store
+        .decision_log_export_campaign(&ExportParams {
+            campaign_id: "acceptance".into(),
+            manifest_hash: Some(w.m.compute_sha256().expect("hash")),
+            export_cursor: None,
+        })
+        .expect("decision-log export");
+    let jsonl = export.records_jsonl();
+    let a = compute(
+        &w.m,
+        &w.out,
+        &FinalInputs {
+            records_jsonl: &jsonl,
+            cos_not_called_basis: cos_basis,
+            quota: None,
+        },
+    )
+    .expect("compute");
+    let problems = recheck(&a);
+    assert!(problems.is_empty(), "{problems:?}");
+    (a, jsonl)
+}
+
+fn n(v: &Value) -> u64 {
+    v.as_u64().unwrap_or_else(|| panic!("not a number: {v}"))
+}
+
+fn gap_codes(a: &Value) -> Vec<String> {
+    a["gaps"]
+        .as_array()
+        .expect("gaps")
+        .iter()
+        .map(|g| {
+            format!(
+                "{}:{}",
+                g["metric"].as_str().unwrap_or(""),
+                g["code"].as_str().unwrap_or("")
+            )
+        })
+        .collect()
+}
+
+/// C arm の root task（Jev で分類される側）。
+fn c_root(w: &World) -> String {
+    w.roots()
+        .iter()
+        .find(|t| w.arm_of(t) == "C")
+        .expect("C root")
+        .id
+        .to_string()
+}
+
+/// 実 router で作った tree の run を既存 writer で決定ログへ投影し、Jev・CoS を欠測/観測で変えて最終集計を再生成する。
+/// 実 dispatcher・実 LLM・実 CoS は通っていない（run イベントと Jev/CoS 行は試験が既存 writer API で積む）。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn final_accounting_is_regenerated_from_the_router_tree_with_jev_cos_gaps() {
+    let w = World::new(
+        &["p0"],
+        Limits {
+            max_tokens: 3_000_000,
+            per_case: 300_000,
+        },
+        all_correct(),
+    )
+    .await;
+    let r = w.watch(30);
+    assert_eq!(r.end, WatchEnd::Settled, "{r:?}");
+    w.grade(&["p0"]);
+    let store = &w.interior.store;
+    let now = OffsetDateTime::now_utc();
+    project_decision_log(store, now);
+
+    // 外側 trial: A=15（harness 試行。run 内訳なし）、B=C=574（input 570 + output 4）。
+    // B/C の木は planner 50 + 子 300 + worker 200 + reviewer 20（input）+ 各 run output 1 ×4。
+    const OUTER: u64 = 15 + 574 + 574;
+
+    // 1. Jev/CoS の行が一切無い: CoS は呼ばれなかった根拠が無く欠測、C の Jev も未取得 → 総費用削減は未確定。
+    let (gap, _) = final_accounting(&w, None);
+    assert_eq!(n(&gap["observed_sum"]["tokens"]), OUTER);
+    assert_eq!(gap["total"]["tokens"], Value::Null);
+    assert_eq!(gap["reduction_confirmable"]["tokens"], false);
+    let codes = gap_codes(&gap);
+    assert!(
+        codes.contains(&"all:cos_not_retrieved".to_string()),
+        "{codes:?}"
+    );
+    assert!(codes.contains(&"all:jev_unknown".to_string()), "{codes:?}");
+    // 最終 cutoff と実行中の見え方の差: 台帳の最後の行は全て done なので予約は残らず、差は 0。
+    assert_eq!(n(&gap["budget"]["runtime_view"]["charged_tokens"]), OUTER);
+    assert_eq!(
+        n(&gap["budget"]["final_cutoff"]["observed_trial_tokens"]),
+        OUTER
+    );
+    assert_eq!(
+        n(&gap["budget"]["final_cutoff"]["unreleased_reservations"]),
+        0
+    );
+    assert_eq!(
+        n(&gap["budget"]["difference"]["reservation_tokens_not_in_final"]),
+        0
+    );
+    assert_eq!(
+        gap["budget"]["difference"]["runtime_charged_minus_observed_tokens"],
+        0
+    );
+    assert!(
+        !codes.contains(&"all:ledger_unfinished".to_string()),
+        "{codes:?}"
+    );
+
+    // 2. Jev の行はあるが tokens が取れていない（欠測）+ CoS 根拠あり: Jev の tokens 欠測が残り、削減は未確定。
+    let cid = c_root(&w);
+    let mut jev = DecisionLogUsage::jev_call(&cid, 1, &cid, Some("acceptance"), Some(0.002));
+    store
+        .decision_log_record_usage(&jev, now)
+        .expect("jev usage (tokens missing)");
+    let (jev_missing, _) =
+        final_accounting(&w, Some("CoS session log for the campaign window is empty"));
+    assert_eq!(jev_missing["total"]["tokens"], Value::Null);
+    assert_eq!(jev_missing["reduction_confirmable"]["tokens"], false);
+    assert_eq!(n(&jev_missing["observed_sum"]["tokens"]), OUTER);
+    assert_eq!(
+        jev_missing["shared_unattributable"]["cos"]["state"],
+        "not_called"
+    );
+    assert!(
+        gap_codes(&jev_missing).contains(&"tokens:metric_missing".to_string()),
+        "{:?}",
+        gap_codes(&jev_missing)
+    );
+
+    // 3. Jev の tokens（2+3）が観測され、CoS の根拠もある: tokens の総量は確定し、削減が確かめられる。
+    jev.input_tokens = Some(2);
+    jev.output_tokens = Some(3);
+    jev.cache_read_tokens = Some(0);
+    jev.cache_creation_tokens = Some(0);
+    store
+        .decision_log_record_usage(&jev, now)
+        .expect("jev usage (observed)");
+    let (done, jsonl) =
+        final_accounting(&w, Some("CoS session log for the campaign window is empty"));
+    assert_eq!(n(&done["total"]["tokens"]), OUTER + 5);
+    assert_eq!(done["total"]["complete"]["tokens"], true);
+    assert_eq!(done["reduction_confirmable"]["tokens"], true);
+    // A は Celeris の外で走り run 内訳が無いので、費用の総額は確定しない（0 にしない）。
+    assert_eq!(done["total"]["complete"]["list_cost_usd"], false);
+    assert_eq!(done["total"]["list_cost_micro_usd"], Value::Null);
+    // 外側と decision-log の run は照合だけで加算しない（B/C 一致、A は内訳なし）。
+    assert_eq!(
+        done["trials"]["reconcile"],
+        json!({"match": 2, "no_breakdown": 1})
+    );
+    assert_eq!(
+        n(&done["by_role"]["worker"]["basis_tokens"]["sum"]),
+        2 * (200 + 300 + 2)
+    );
+    assert_eq!(
+        n(&done["by_role"]["planner"]["basis_tokens"]["sum"]),
+        2 * 51
+    );
+    assert_eq!(
+        n(&done["by_role"]["reviewer"]["basis_tokens"]["sum"]),
+        2 * 21
+    );
+    assert_eq!(done["by_retry"]["additive"], false);
+    assert_eq!(n(&done["jev"]["rows"]["basis_tokens"]["sum"]), 5);
+
+    // 4. 同じ記録の再投影・再 export・再集計で同じ合計（二重加算しない）。CLI の export（--records）も同じ値を表に写す。
+    project_decision_log(store, now);
+    let (again, jsonl2) =
+        final_accounting(&w, Some("CoS session log for the campaign window is empty"));
+    assert_eq!(again, done);
+    assert_eq!(jsonl2, jsonl);
+    let doubled = format!("{jsonl}{jsonl}");
+    let dup = compute(
+        &w.m,
+        &w.out,
+        &FinalInputs {
+            records_jsonl: &doubled,
+            cos_not_called_basis: Some("CoS session log for the campaign window is empty"),
+            quota: None,
+        },
+    )
+    .expect("compute doubled");
+    assert_eq!(dup["total"], done["total"]);
+    let t = export_with(&w.m, &w.out, &w.out.join("ex-final"), Some(&done)).expect("export");
+    assert_eq!(t["complete"], true);
+    assert!(
+        w.out
+            .join("ex-final")
+            .join("final-accounting.json")
+            .exists()
+    );
+    let t2 = export_with(&w.m, &w.out, &w.out.join("ex-final2"), Some(&again)).expect("export");
+    assert_eq!(t["consumption"], t2["consumption"]);
+    w.finish().await;
+}
+
+/// 予算停止: 実行中の予算の見え方（停止した試行を cap まで確保）と最終集計の対象（観測できた token だけ）の差が数値で出る。
+/// 欠測の試行を cap で置き換えて総量にしない。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn final_accounting_shows_budget_view_versus_final_cutoff_after_a_budget_stop() {
+    let w = World::new(
+        &["p0", "p1"],
+        Limits {
+            max_tokens: 100_000,
+            per_case: 50_000,
+        },
+        Box::new(|arm, case| {
+            if arm == "B" && case == "p0" {
+                Behave::Stall(80_000)
+            } else {
+                Behave::Correct
+            }
+        }),
+    )
+    .await;
+    let r = w.watch(60);
+    assert_eq!(r.end, WatchEnd::Settled, "{r:?}");
+    w.grade(&["p0", "p1"]);
+    project_decision_log(&w.interior.store, OffsetDateTime::now_utc());
+    let (a, _) = final_accounting(&w, None);
+    let b = &a["budget"];
+    let charged = n(&b["runtime_view"]["charged_tokens"]);
+    let observed = n(&b["final_cutoff"]["observed_trial_tokens"]);
+    // 停止した B/p0 は 80_000 を消費して観測され、cap（50_000）で置き換えない。残りの 3 試行は 67 token。
+    assert_eq!((charged, observed), (80_067, 80_067));
+    assert_eq!(n(&b["max_tokens"]), 100_000);
+    assert_eq!(n(&b["runtime_view"]["snapshot_tokens"]), 80_067);
+    assert_eq!(n(&b["runtime_view"]["reserved_in_flight_tokens"]), 0);
+    assert_eq!(n(&b["final_cutoff"]["missing_trials"]), 0);
+    assert_eq!(b["difference"]["runtime_charged_minus_observed_tokens"], 0);
+    assert_eq!(n(&b["runtime_view"]["missing_substituted_tokens"]), 0);
+    // Jev（C）と CoS は未取得なので、観測できた合計は総費用ではなく、削減も未確定。
+    assert_eq!(n(&a["observed_sum"]["tokens"]), 80_067);
+    assert_eq!(a["total"]["tokens"], Value::Null);
+    assert_eq!(a["reduction_confirmable"]["tokens"], false);
     w.finish().await;
 }

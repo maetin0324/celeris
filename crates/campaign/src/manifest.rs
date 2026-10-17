@@ -275,7 +275,7 @@ fn is_zero(n: &u64) -> bool {
     *n == 0
 }
 
-fn canonical(v: &Value) -> Value {
+pub(crate) fn canonical(v: &Value) -> Value {
     match v {
         Value::Object(m) => Value::Object(
             m.iter()

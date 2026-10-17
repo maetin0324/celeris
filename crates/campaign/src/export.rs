@@ -5,10 +5,11 @@ use std::{fs, path::Path};
 use serde_json::{Value, json};
 
 use crate::{
-    checker::{Totals, check},
+    checker::{Totals, check_expected},
     manifest::CampaignManifest,
 };
 
+pub const FINAL_ACCOUNTING_FILE: &str = "final-accounting.json";
 pub const MISSING_LABEL: &str = "欠測";
 
 fn status(sum_missing: u64, ran: u64) -> &'static str {
@@ -122,11 +123,51 @@ fn cell(v: &Value, col: &str) -> String {
 /// 成功 = 実行器 passed かつ独立採点 final_pass。未完了（記録欠落・未採点）の集計は `table.incomplete.*` に
 /// `complete: false` を付けて書き、最終版の `table.json` / `table.csv` は書かない（古い最終版も消す）。
 pub fn export(m: &CampaignManifest, out: &Path, dest: &Path) -> Result<Value, String> {
-    let rep = check(m, out);
+    export_full(m, out, dest, None, None)
+}
+
+/// `export` に最終集計（`final_accounting::compute` の出力）を添える。表の `consumption` に範囲と削減の可否だけを写し、
+/// 全文は `final-accounting.json` に書く。欠測があれば範囲は `observed_partial`（完全な総費用ではない）。
+pub fn export_with(
+    m: &CampaignManifest,
+    out: &Path,
+    dest: &Path,
+    accounting: Option<&Value>,
+) -> Result<Value, String> {
+    export_full(m, out, dest, None, accounting)
+}
+
+/// 最終版を有効なまま残さない: checker が拒否したら dest の既存 `table.*` も消してから Err を返す。
+pub fn export_expected(
+    m: &CampaignManifest,
+    out: &Path,
+    dest: &Path,
+    expected: Option<&crate::lock::CampaignLock>,
+) -> Result<Value, String> {
+    export_full(m, out, dest, expected, None)
+}
+
+/// 期待 lock との照合（`export_expected`）と最終集計の添付（`export_with`）を両方行う。CLI の export はこれを使う。
+pub fn export_full(
+    m: &CampaignManifest,
+    out: &Path,
+    dest: &Path,
+    expected: Option<&crate::lock::CampaignLock>,
+    accounting: Option<&Value>,
+) -> Result<Value, String> {
+    let rep = check_expected(m, out, expected);
     let (complete, reasons) = (rep.complete, rep.incomplete_reasons.clone());
     let rc = match (rep.ok, rep.recomputed) {
         (true, Some(rc)) => rc,
         _ => {
+            for stem in ["table", "table.incomplete"] {
+                for ext in ["json", "csv"] {
+                    let p = dest.join(format!("{stem}.{ext}"));
+                    if p.exists() {
+                        fs::remove_file(&p).map_err(|e| format!("{}: {e}", p.display()))?;
+                    }
+                }
+            }
             return Err(format!(
                 "checker rejected the records: {}",
                 rep.violations.join("; ")
@@ -140,22 +181,44 @@ pub fn export(m: &CampaignManifest, out: &Path, dest: &Path) -> Result<Value, St
         .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
         .and_then(|v| v["evidence_kind"].as_str().map(String::from))
         .unwrap_or_else(|| "unknown".into());
-    let real = kind == "real";
-    let table = json!({
+    let locked = crate::lock_exec::load_saved(m, out, expected)?.is_some();
+    let real = kind == "real" && locked;
+    let mut table = json!({
         "schema": "celeris.campaign-table/1",
         "campaign_sha256": m.compute_sha256()?,
         "split": m.split,
         "evidence_kind": kind,
+        "lock_verified": locked,
         "complete": complete,
         "incomplete_reasons": reasons,
         "success_definition": "executor outcome passed AND independent grade final_pass (bound by campaign hash, case id, split, grader hash, artifact hash)",
         "real_performance": real && complete,
         "notice": if real { Value::Null } else {
-            json!("mock/unknown evidence: these numbers are not real performance and must not be reported as measurements") },
+            json!("mock/unknown/lock-less evidence: these numbers are not real performance and must not be reported as measurements") },
         "configs": rows,
         "comparisons": rc.pairs,
     });
+    if let Some(a) = accounting {
+        let scope = |m: &str| {
+            if a["total"]["complete"][m] == true {
+                "complete"
+            } else {
+                "observed_partial"
+            }
+        };
+        table["consumption"] = json!({
+            "file": FINAL_ACCOUNTING_FILE,
+            "scope": {"tokens": scope("tokens"), "list_cost_usd": scope("list_cost_usd"), "cash_cost_usd": scope("cash_cost_usd")},
+            "reduction_confirmable": a["reduction_confirmable"],
+            "gaps": a["gaps"].as_array().map_or(0, Vec::len),
+        });
+    }
     fs::create_dir_all(dest).map_err(|e| e.to_string())?;
+    if let Some(a) = accounting {
+        let mut s = serde_json::to_string_pretty(a).map_err(|e| e.to_string())?;
+        s.push('\n');
+        fs::write(dest.join(FINAL_ACCOUNTING_FILE), s).map_err(|e| e.to_string())?;
+    }
     let stem = if complete {
         "table"
     } else {

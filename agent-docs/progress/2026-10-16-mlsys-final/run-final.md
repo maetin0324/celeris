@@ -59,7 +59,7 @@ $B preflight --manifest $P/final.json --api-url http://127.0.0.1:<task-api port>
 echo $?       # 0 = 全件 OK。非 0 = stderr の JSON の `missing`（check 名 + 不足の内容）を直してやり直す
 ```
 検査: 外部入力（`--inputs-src` に case の宣言した file が全て在り sha256 が一致。k4 の `main-v3-n2-43706.tgz`。k2 は初期 repo の `--repo-src`）／task template が 422 になる組合せ・自動取り込み案件でないか（task-api への GET のみ）／A の隔離（bwrap）とアカウント／manifest／版（placeholder・alias・routing）／入力 manifest／全 case 入力（control・split・材料 hash）／grade-case/1 全件（固定 hash・公開／隠しテストの実体）／候補構成／認証・環境（A の実行ファイル、API origin、token 環境変数の有無）／予算・時間（承認枠 300 万・30 万・130 万・並列 1・token_basis all、K2/K4 の時間 ≦ trial timeout ≦ per_case、dry-run 見積り）。
-一件でも不足なら A を含め有料実行・task 作成・台帳作成を 0 件で非 0 終了する。preflight 自体は有料実行をしない（`paid_calls_made` 0）。**本番昇格（H1）と実測は人が行う。** preflight が見られないもの: claude-code の実際の版が manifest の値と一致するか、token が API に受理されるか（実経路は本測定の初回で確認）。
+一件でも不足なら A を含め有料実行・task 作成・台帳作成を 0 件で非 0 終了する。preflight 自体は有料実行をしない（`paid_calls_made` 0）。**本番昇格（H1）と実測は人が行う。** preflight は A の実行ファイルを解決して `--version` を取り（出力 JSON の `a_program`）、`run`/`watch` は同じ物を起動する。見られないもの: その版が manifest の `harness_version` と一致するか（人が `a_program.version` を見て確認する）、token が API に受理されるか（実経路は本測定の初回で確認）。
 
 ## 3. 入力の配送（試行へ渡す公開部だけ。grader-private は渡さない）
 ```sh
@@ -78,16 +78,18 @@ cp <main-v3-n2-43706.tgz の実物> $I/main-v3-n2-43706.tgz   # sha256 は case.
 
 ## 4. 本測定（Part M-3。A/B 主・B/C 副）
 ```sh
-$B run --executor celeris --manifest $P/final.json --out $D/final-out \
+$B watch --executor celeris --manifest $P/final.json --out $D/final-out --interval-secs 60 \
    --api-url http://127.0.0.1:<task-api port> --token-env CELERIS_CAMPAIGN_TOKEN \
    --task-template $P/task-template.json \
-   --repo-src $R --materials-src $M --kb-src $K --inputs-src $I --a-account <account_id>
+   --repo-src $R --materials-src $M --kb-src $K --inputs-src $I --a-account <account_id> \
+   [--a-program <claude の path>]   # 省略時は PATH の claude。preflight が解決した同じ実行ファイル・版が A の実起動に使われる
 ```
+**標準起動は `watch`**（`run` と同じ引数 + `--interval-secs`（既定 60）`--max-iterations`（既定 1440））。`watch` は `run` の 1 回走査を台帳が閉じるまで繰り返す（出力 JSON の `watch.end` が `settled` なら終端、`max_iterations` なら未完了が残る）。`run` は単発の 1 回走査で、動作確認・手動の再走査用。
 `$B run --executor harness` は A だけを走らせる確認用（同じ `--a-account`・`--api-url`・`--token-env` が要る）。A の実行中の token は上限（実効上限 `min(per_case, per_arm の残り)`）を超えると約 1 秒の周期で止められ、`cancelled`（`case_budget`）になる。最大超過は `summary.json` の `overshoot_granularity`。
 `--api-url` は server の origin だけ（`/api/v1` を付けると拒否。実行器が足す）。`--out` は相対でもよい（起動時に絶対 path にする）。`$D` は NFS 外。
 stdout の JSON（`executed / waiting / parallel_deferred / no_artifact / executor_errors / blocked / budget_cancelled / tokens_total / tokens_missing / max_overshoot_*`）を `$D/final-run-N.json` に保存する（N は実行回数）。
-`budget.max_parallel`（1）は in-flight の上限: 1 回の run は 1 試行だけを投入して `waiting`（`parallel_deferred`）で戻る。**`waiting=0` になるまで同じコマンドを繰り返す**（前の試行の結果・使用量を記録してから次を出す）。`executor_errors>0` なら `trials.jsonl` の `error` 欄（HTTP status と本文）を見る。
-**再開（Part M-4）**: 中断・`waiting>0`・daemon 再起動の後は上と**同じコマンドをそのまま**再実行する（`resumed_skipped` に数えられる）。別 hash で同じ `--out` は拒否される。cancel された試行の cluster job は `$D/final-out/*/cluster-cancel.jsonl` の `scancel`/`qdel` を人が実行（H6）。
+`budget.max_parallel`（1）は in-flight の上限: 1 回の走査は 1 試行だけを投入して `waiting`（`parallel_deferred`）で戻る。`watch` は `waiting=0` かつ台帳に未完了が無くなるまで自分で繰り返す（前の試行の結果・使用量を記録してから次を出す）。`executor_errors>0` なら `trials.jsonl` の `error` 欄（HTTP status と本文）を見る。
+**再開（Part M-4）**: watch の停止（Ctrl-C・host 再起動・`max_iterations` 到達）・`waiting>0`・daemon 再起動の後は上と**同じ `watch` コマンドをそのまま**再実行する（同じ out に watch を同時に 2 つ走らせない）。台帳から同じ試行に再接続し、A の process は `harness-state/<key>/meta.json`（pid・start ticks・上限）から同じ物を追う。二重投入はせず、観測済みの usage は消えない（`resumed_skipped` に数えられる）。別 hash で同じ `--out` は拒否される。cancel された試行の cluster job は `$D/final-out/*/cluster-cancel.jsonl` の `scancel`/`qdel` を人が実行（H6）。
 
 ## 4.5 7 日使用率と A の消費（run のたびに）
 ```sh
@@ -119,3 +121,12 @@ echo $?            # 0 = 接続 OK。非 0 は stderr の `not connected:` 行
 ## 7. 注意
 - 本番 host 操作（昇格・systemctl・config 変更）はここに含めない。H1 は GUI/`promote.sh`。
 - pilot の結果は較正専用で、本測定の主張に混ぜない。dev の case・入力・設定を final に持ち込まない。
+
+## 4.1 監視・予算超過の限界（`watch` を標準にした上での正直な範囲）
+- A の 1 秒周期の監視 thread は **CLI プロセスの中**にあり、`celeris-campaign` が終われば止まる。thread が生き続けることは前提にしない。
+  プロセスが止まっている間は A の process（独立した process group）は上限なしで走り続ける。**再起動後の最初の走査（`poll`）が同じ上限で判定して kill する**（試験: `a_program_pin_and_watch::watch_stop_and_restart_*`）。
+  よって停止中の最大超過は「停止していた時間 × 消費速度」。実行側の上限は `trial_timeout_secs`（超過で kill・`timeout`）と `per_case.max_wall_secs`。watch が止まったまま放置されれば、これが唯一の歯止め。
+- token 上限は「観測した stream-json の累積が上限を超えたら止める」で、**上限を絶対に超えない保証ではない**。usage は assistant message の出力後にしか分からず、実行中の 1 リクエストの分は超過しうる
+  （pilot 2 では A の 1 試行が per_case を 187,628 超えた）。B/C は poll 間隔（`--interval-secs`）ごとの usage 通知で判定し、同様に間隔分の超過がありうる。想定最大超過は `summary.json` の `max_overshoot_*`。
+- 停止は確認してから閉じる: kill 後に process が消えたこと、B/C は task 木と cluster job の終端を確認するまで台帳を閉じず予約も解除しない。確認できない間 `watch` は終わらない。
+- A の実起動の記録: 各試行 `harness-state/<key>/launch.json` に実行ファイル（解決済み絶対 path）・`--version`・argv（prompt は長さのみ）・隔離の有無を残す。preflight 出力の `a_program` と一致する。

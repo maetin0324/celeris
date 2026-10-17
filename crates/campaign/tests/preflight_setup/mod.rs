@@ -1,0 +1,214 @@
+//! preflight 試験の共有部品: 解決済みの final 一式を一時 dir に作る（`preflight.rs` と `preflight_contract.rs`）。
+#![allow(dead_code)]
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    process::Command,
+};
+
+use celeris_campaign::{
+    lock_tree,
+    preflight::{Inputs, MeasureEnv},
+    snapshot::hash_tree,
+};
+use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
+
+pub const K4_INPUT: &str = "main-v3-n2-43706.tgz";
+
+pub fn root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).to_path_buf()
+}
+
+/// 解決済みの final 一式（manifest・入力・材料・template）を一時 dir に作る。
+pub struct Setup {
+    pub dir: tempfile::TempDir,
+    pub inp: Inputs,
+}
+
+pub fn copy(from: &Path, to: &Path) {
+    fs::create_dir_all(to).unwrap();
+    for e in fs::read_dir(from).unwrap() {
+        let p = e.unwrap().path();
+        let t = to.join(p.file_name().unwrap());
+        if p.is_dir() {
+            copy(&p, &t);
+        } else {
+            fs::copy(&p, &t).unwrap();
+        }
+    }
+}
+
+pub fn resolved_manifest() -> Value {
+    let p = root()
+        .join("../../agent-docs")
+        .join("progress/2026-10-16-mlsys-final/final.json");
+    let mut v: Value = serde_json::from_slice(&fs::read(p).unwrap()).unwrap();
+    for c in v["configs"].as_array_mut().unwrap() {
+        match c["id"].as_str().unwrap() {
+            "A" => c["harness_version"] = json!("claude-code@2.1.0"),
+            _ => c["harness_version"] = json!("0123456789ab"),
+        }
+        if c["routing"]["evidence_table_id"].is_string() {
+            c["routing"]["evidence_table_id"] = json!("evidence-v7");
+        }
+    }
+    v
+}
+
+/// 本番資産の無い host でも通るよう、試験用の小さな git repo を K2 の初期木として case と initial.lock.json に固定する。
+pub fn pin_synthetic_initial(cases: &Path, repo: &Path) {
+    let git = |args: &[&str]| {
+        let o = Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+            .args(["-c", "commit.gpgsign=false"])
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(o.status.success(), "{args:?}");
+    };
+    git(&["init", "-q"]);
+    git(&["add", "-A"]);
+    git(&["commit", "-q", "-m", "c"]);
+    let li = lock_tree::derive_initial(repo, "HEAD", &|_| None).unwrap();
+    let dir = cases.join("final/k2-bf-xattr-restart-campaign");
+    fs::write(
+        dir.join("initial.lock.json"),
+        serde_json::to_string(&li).unwrap(),
+    )
+    .unwrap();
+    let cj = dir.join("case.json");
+    let mut c: Value = serde_json::from_slice(&fs::read(&cj).unwrap()).unwrap();
+    c["initial"]["commit"] = json!(li.commit);
+    c["initial"]["tree"] = json!(li.tree);
+    c["initial"]["submodules"] = json!([]);
+    c["snapshot"]["repo_commit"] = json!(li.commit);
+    fs::write(&cj, c.to_string()).unwrap();
+}
+
+/// 試行用 KB の目印（required canary）は固定 KB の一部: `kb` と各 final case の `kb/` に置き、
+/// manifest と case.json の `kb_snapshot` をその内容の hash に固定し直す（campaign lock が `--kb-src` を照合する）。
+pub fn pin_trial_kb(manifest: &Path, cases: &Path, kb: &Path) {
+    let canary = format!("trial kb {CANARY_TRIAL}\n");
+    fs::write(kb.join("CANARY.md"), &canary).unwrap();
+    let h = hash_tree(kb).unwrap();
+    for e in fs::read_dir(cases.join("final")).unwrap() {
+        let dir = e.unwrap().path();
+        fs::write(dir.join("kb/CANARY.md"), &canary).unwrap();
+        let cj = dir.join("case.json");
+        let mut c: Value = serde_json::from_slice(&fs::read(&cj).unwrap()).unwrap();
+        c["snapshot"]["kb_snapshot"] = json!(h);
+        fs::write(&cj, c.to_string()).unwrap();
+    }
+    let mut v: Value = serde_json::from_slice(&fs::read(manifest).unwrap()).unwrap();
+    v["snapshot"]["kb_snapshot"] = json!(h);
+    fs::write(manifest, v.to_string()).unwrap();
+}
+
+pub fn setup() -> Setup {
+    let dir = tempfile::tempdir().unwrap();
+    let d = dir.path();
+    let pd = root()
+        .join("../../agent-docs")
+        .join("progress/2026-10-16-mlsys-final");
+    fs::copy(
+        pd.join("final-input-manifest.json"),
+        d.join("final-input-manifest.json"),
+    )
+    .unwrap();
+    fs::write(d.join("final.json"), resolved_manifest().to_string()).unwrap();
+    let (m, k) = (d.join("materials"), d.join("kb"));
+    // 外部入力: 実物（本番の asset）は無いので、case を写して k4 の宣言 sha256 を試験用の中身に合わせる。
+    let (cases, ins) = (d.join("cases"), d.join("inputs-src"));
+    copy(&root().join("cases"), &cases);
+    fs::create_dir_all(&ins).unwrap();
+    let repo = d.join("repo");
+    fs::create_dir_all(&repo).unwrap();
+    fs::write(repo.join("README"), "k2 initial tree").unwrap();
+    pin_synthetic_initial(&cases, &repo);
+    fs::write(ins.join(K4_INPUT), b"fake archive for the test").unwrap();
+    let cj = cases.join("final/k4-cmp4-validity-analysis/case.json");
+    let mut c: Value = serde_json::from_slice(&fs::read(&cj).unwrap()).unwrap();
+    c["inputs"][0]["sha256"] = json!(format!(
+        "{:x}",
+        Sha256::digest(b"fake archive for the test")
+    ));
+    fs::write(&cj, c.to_string()).unwrap();
+    for c in ["k2-bf-xattr-restart-campaign", "k4-cmp4-validity-analysis"] {
+        copy(
+            &root().join("cases/final").join(c).join("materials"),
+            &m.join(c),
+        );
+    }
+    copy(
+        &root().join("cases/final/k2-bf-xattr-restart-campaign/kb"),
+        &k,
+    );
+    pin_trial_kb(&d.join("final.json"), &cases, &k);
+    let measure = write_configs(d, &measure_config(d, "measure"), &normal_config(d));
+    fs::write(
+        d.join("task-template.json"),
+        json!({"project_id":"01ABC","acceptance":[{"type":"reviewer","text":"x"}]}).to_string(),
+    )
+    .unwrap();
+    let inp = Inputs {
+        manifest_path: d.join("final.json"),
+        input_override: None,
+        cases_root: cases,
+        grader_root: root().join("fixtures/grader-private"),
+        grade_cases_root: root().join("fixtures/grade-cases"),
+        a_program: "claude".into(),
+        api_url: Some("http://127.0.0.1:8080".into()),
+        token_env: Some("CELERIS_CAMPAIGN_TOKEN".into()),
+        task_template: Some(d.join("task-template.json")),
+        repo_src: Some(repo),
+        materials_src: Some(m),
+        kb_src: Some(k),
+        inputs_src: Some(ins),
+        a_account: Some("lab".into()),
+        measure: Some(measure),
+        measurement_id: None,
+    };
+    Setup { dir, inp }
+}
+
+pub const CANARY_TRIAL: &str = "CANARY-TRIAL-KB-7f3a";
+pub const CANARY_NORMAL: &str = "CANARY-NORMAL-KB-91c2";
+pub const CANARY_GRADER: &str = "CANARY-GRADER-PRIVATE-c0de";
+
+pub fn normal_config(d: &Path) -> String {
+    format!(
+        "db = \"{n}/celeris.db\"\nworkspace_root = \"{n}/ws\"\n[knowledge]\nroot = \"{n}/kb\"\n[memory]\ndir = \"{n}/memory\"\n\
+         [api]\nlisten = \"127.0.0.1:7700\"\ntoken_file = \"{n}/token\"\n\
+         [[clusters]]\nid = \"pegasus\"\nhost = \"pegasus\"\n",
+        n = d.join("normal").display()
+    )
+}
+
+/// 正しい測定専用 config（`tag` の dir に KB・DB・作業場所を分け、`[memory]` 無し、mount は kb: のみ）。
+pub fn measure_config(d: &Path, tag: &str) -> String {
+    format!(
+        "db = \"{n}/celeris.db\"\nworkspace_root = \"{n}/ws\"\n[knowledge]\nroot = \"{n}/kb\"\ndefault_mounts = [\"kb:trial\"]\n\
+         [api]\nlisten = \"127.0.0.1:7701\"\ntoken_file = \"{n}/token\"\n\
+         [[clusters]]\nid = \"pegasus\"\nhost = \"pegasus\"\n",
+        n = d.join(tag).display()
+    )
+}
+
+pub fn write_configs(d: &Path, measure: &str, normal: &str) -> MeasureEnv {
+    fs::write(d.join("measure.toml"), measure).unwrap();
+    fs::write(d.join("normal.toml"), normal).unwrap();
+    fs::write(
+        d.join("canaries.json"),
+        json!({"forbidden":[CANARY_NORMAL, CANARY_GRADER, "CANARY-OTHER-TRIAL-55aa"],"required":[CANARY_TRIAL]}).to_string(),
+    )
+    .unwrap();
+    MeasureEnv {
+        config: d.join("measure.toml"),
+        normal_config: d.join("normal.toml"),
+        canaries: d.join("canaries.json"),
+        out: Some(d.join("out")),
+    }
+}

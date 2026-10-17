@@ -7,6 +7,7 @@ use serde_json::Value;
 
 use crate::{
     grader::CaseSplit,
+    lock::CampaignLock,
     manifest::{CampaignManifest, ConfigId, Split},
     record::TrialRecord,
 };
@@ -29,7 +30,16 @@ pub struct GradeBinding {
 }
 
 /// grades.jsonl が無ければ空（全て未採点）。1 行でも壊れていれば違反にする（黙って捨てない）。
-pub fn bind(m: &CampaignManifest, recs: &[TrialRecord], out: &Path) -> GradeBinding {
+///
+/// `lock` は保存 lock（封印・manifest 結合は検証済み）。Some なら、各 grade 行を lock の固定値
+/// （lock 封印・case の grade-case hash・公開/隠しテスト digest・case split）と照合する。非空検査では済ませない。
+/// None は lock 導入前の legacy 記録（無課金の mock 実行など）で、従来の結合検査だけを行う（本測定の根拠にならない）。
+pub fn bind(
+    m: &CampaignManifest,
+    recs: &[TrialRecord],
+    out: &Path,
+    lock: Option<&CampaignLock>,
+) -> GradeBinding {
     let mut b = GradeBinding::default();
     let path = out.join(GRADES_FILE);
     if !path.exists() {
@@ -104,6 +114,28 @@ pub fn bind(m: &CampaignManifest, recs: &[TrialRecord], out: &Path) -> GradeBind
         }
         if v["grader_sha256"].as_str().is_none_or(str::is_empty) {
             bad.push("grader definition hash is missing".into());
+        }
+        if let Some(l) = lock {
+            if v["lock_sha256"] != l.sha256.as_str() {
+                bad.push("grade was not produced under this campaign lock".into());
+            }
+            match l.case(pid) {
+                None => bad.push("case is not in the campaign lock".into()),
+                Some(c) => {
+                    if v["grader_sha256"] != c.grader.grade_case_sha256.as_str() {
+                        bad.push("grader definition hash differs from the locked grader".into());
+                    }
+                    if v["tests_sha256"] != c.tests_sha256().as_str() {
+                        bad.push("public/hidden test hash differs from the locked tests".into());
+                    }
+                    if serde_json::from_value::<Split>(v["grade"]["split"].clone()).ok()
+                        != Some(c.split)
+                        && case_split != Some(CaseSplit::Control)
+                    {
+                        bad.push("grade split differs from the locked case split".into());
+                    }
+                }
+            }
         }
         match by_key.get(&key) {
             None => bad.push("no such trial record".into()),

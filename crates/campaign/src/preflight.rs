@@ -22,7 +22,11 @@ use crate::{
     executor::Executor,
     grader::GradeCase,
     inputs,
+    isolation::{self, InitialSources},
+    lock::CampaignLock,
+    lock_exec,
     manifest::{CampaignManifest, ConfigId, TokenBasis},
+    measure_env,
     runner::{self, RunOptions, RunReport},
     snapshot::hash_tree,
 };
@@ -39,11 +43,75 @@ pub const APPROVED_PARALLEL: u32 = 1;
 /// 環境の問い合わせ。値は返さない（漏れようが無い）。
 pub trait Host {
     fn env_nonempty(&self, name: &str) -> bool;
-    fn program_available(&self, program: &Path) -> bool;
+    /// A の実行ファイルを解決する（絶対 path・symlink 解決済み・実行可）と、その `--version`。
+    /// preflight の検査と A の実起動は、ここで返した同じ path・版を使う。
+    fn resolve_program(&self, program: &Path) -> Result<ResolvedProgram, String>;
     /// task-api への GET（`path` は `/api/v1/...`）。2xx の本文を返す。token は環境変数名で渡し、値は返さない。
     fn api_get(&self, api_url: &str, token_env: &str, path: &str) -> Result<Value, String>;
     /// A の隔離（bwrap）がこの host で実際に動くか。
     fn sandbox_usable(&self) -> Result<(), String>;
+}
+
+/// 解決済みの A の実行ファイル。実起動 argv の program と版の記録（`launch.json`）の元。
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct ResolvedProgram {
+    pub path: PathBuf,
+    pub version: String,
+}
+
+/// `program` を絶対 path（symlink 解決済み）にする。1 要素の名前は `path_var`（PATH の値）を引き、
+/// 実行可能な file だけを採る。preflight と A の起動で同じ関数を通す（検査対象と実起動をずらさない）。
+pub fn resolve_executable(
+    program: &Path,
+    path_var: Option<&std::ffi::OsStr>,
+) -> Result<PathBuf, String> {
+    use std::os::unix::fs::PermissionsExt;
+    let exec = |p: &Path| {
+        fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+    };
+    let cand = if program.components().count() > 1 || program.is_absolute() {
+        Some(program.to_path_buf()).filter(|p| exec(p))
+    } else {
+        path_var.and_then(|paths| {
+            std::env::split_paths(paths)
+                .map(|d| d.join(program))
+                .find(|c| exec(c))
+        })
+    }
+    .ok_or_else(|| {
+        format!(
+            "{} is not an executable file (or not in PATH)",
+            program.display()
+        )
+    })?;
+    fs::canonicalize(&cand).map_err(|e| format!("{}: {e}", cand.display()))
+}
+
+/// 解決（`resolve_executable`）と `--version` の取得。`RealHost` は PATH を渡す（試験は任意の PATH を渡す）。
+pub fn resolve_program_in(
+    program: &Path,
+    path_var: Option<&std::ffi::OsStr>,
+) -> Result<ResolvedProgram, String> {
+    let path = resolve_executable(program, path_var)?;
+    let out = Command::new(&path)
+        .arg("--version")
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .map_err(|e| format!("{} --version: {e}", path.display()))?;
+    let version = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if !out.status.success() || version.is_empty() {
+        return Err(format!(
+            "{} --version did not report a version",
+            path.display()
+        ));
+    }
+    Ok(ResolvedProgram { path, version })
 }
 
 pub struct RealHost;
@@ -53,16 +121,8 @@ impl Host for RealHost {
         std::env::var_os(name).is_some_and(|v| !v.is_empty())
     }
 
-    fn program_available(&self, program: &Path) -> bool {
-        use std::os::unix::fs::PermissionsExt;
-        let exec = |p: &Path| {
-            fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
-        };
-        if program.components().count() > 1 || program.is_absolute() {
-            return exec(program);
-        }
-        std::env::var_os("PATH")
-            .is_some_and(|paths| std::env::split_paths(&paths).any(|d| exec(&d.join(program))))
+    fn resolve_program(&self, program: &Path) -> Result<ResolvedProgram, String> {
+        resolve_program_in(program, std::env::var_os("PATH").as_deref())
     }
 
     fn api_get(&self, api_url: &str, token_env: &str, path: &str) -> Result<Value, String> {
@@ -121,6 +181,47 @@ pub struct Inputs {
     pub inputs_src: Option<PathBuf>,
     /// A が使う Celeris 管理アカウント（claude_oauth の account_id）。
     pub a_account: Option<String>,
+    /// 測定専用の daemon 構成と canary（P0-3）。測定では必須。
+    pub measure: Option<MeasureEnv>,
+    /// 測定 ID の明示（省略時は campaign hash から決まる）。
+    pub measurement_id: Option<String>,
+}
+
+/// 測定環境の汚染検査の入力。
+#[derive(Clone, Debug)]
+pub struct MeasureEnv {
+    /// 測定専用 daemon の config.toml。
+    pub config: PathBuf,
+    /// 通常運用の config.toml（突き合わせ用。読むだけ）。
+    pub normal_config: PathBuf,
+    /// canary 識別文字列の JSON（`{"forbidden":[…],"required":[…]}`）。
+    pub canaries: PathBuf,
+    /// 再開時の既存 out dir。在れば中の全 file を禁止 canary で走査する。
+    pub out: Option<PathBuf>,
+}
+
+impl Inputs {
+    pub fn lock_sources(&self) -> lock_exec::Sources<'_> {
+        lock_exec::Sources {
+            repo: self.repo_src.as_deref(),
+            materials: self.materials_src.as_deref(),
+            kb: self.kb_src.as_deref(),
+            inputs: self.inputs_src.as_deref(),
+        }
+    }
+}
+
+/// 通常起動（CLI）とライブラリ経路が共有する期待 lock。宣言と grader 実体の不一致はここで Err。
+pub fn expected_lock(inp: &Inputs, m: &CampaignManifest) -> Result<CampaignLock, String> {
+    lock_exec::expected_lock(
+        &lock_exec::LockSpec {
+            cases_root: &inp.cases_root,
+            grader_root: &inp.grader_root,
+            grade_cases_root: &inp.grade_cases_root,
+            measurement_id: inp.measurement_id.as_deref(),
+        },
+        m,
+    )
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -138,11 +239,14 @@ pub struct Report {
     pub campaign_sha256: Option<String>,
     pub checked: Vec<&'static str>,
     pub missing: Vec<Missing>,
+    /// 検査した A の実行ファイルと版。`run` はこれと同じものを起動する。
+    pub a_program: Option<ResolvedProgram>,
 }
 
 struct Acc {
     checked: Vec<&'static str>,
     missing: Vec<Missing>,
+    a_program: Option<ResolvedProgram>,
 }
 
 impl Acc {
@@ -197,6 +301,7 @@ pub fn check(inp: &Inputs, host: &dyn Host) -> Report {
     let mut a = Acc {
         checked: Vec::new(),
         missing: Vec::new(),
+        a_program: None,
     };
     let mut sha = None;
     if let Some(m) = a.res("manifest", CampaignManifest::load(&inp.manifest_path)) {
@@ -210,6 +315,7 @@ pub fn check(inp: &Inputs, host: &dyn Host) -> Report {
         campaign_sha256: sha,
         checked: a.checked,
         missing: a.missing,
+        a_program: a.a_program,
     }
 }
 
@@ -298,6 +404,16 @@ fn run_checks(a: &mut Acc, m: &CampaignManifest, inp: &Inputs, host: &dyn Host) 
     // 5/6. 候補構成・認証/環境。
     check_candidates(a, m, inp, host);
     check_snapshot_src(a, m, inp);
+    check_measure_env(a, m, inp);
+
+    // 初期 tree・submodule・外部入力・資料・KB・grader/test を campaign lock の期待値に照合する。
+    a.checked.push("lock");
+    if let Some(l) = a.res("lock", expected_lock(inp, m)) {
+        let _ = a.res(
+            "lock",
+            lock_exec::verify_sources(&l, inp.lock_sources(), true),
+        );
+    }
 
     // 7. 予算・時間（manifest 側）。
     a.checked.push("budget");
@@ -310,6 +426,70 @@ fn run_checks(a: &mut Acc, m: &CampaignManifest, inp: &Inputs, host: &dyn Host) 
             "budget",
             format!("dry-run estimate: {}", v["acceptance"]["reasons"]),
         );
+    }
+}
+
+/// P0-3: 測定専用構成・A/B/C の試行用 KB の同一性・canary。
+fn check_measure_env(a: &mut Acc, m: &CampaignManifest, inp: &Inputs) {
+    a.checked.push("measure-env");
+    let Some(me) = &inp.measure else {
+        a.miss(
+            "measure-env",
+            "--measure-config, --normal-config and --canaries are required (measurement daemon isolation)",
+        );
+        return;
+    };
+    for e in measure_env::check_config(&me.config, &me.normal_config, inp.kb_src.as_deref()) {
+        a.miss("measure-env", e);
+    }
+    let Some(can) = a.res("measure-env", measure_env::Canaries::load(&me.canaries)) else {
+        return;
+    };
+    // 試行 workspace の木と同じ作り方（A/B/C）で作って検査する。repo 無しの case は空の repo にする。
+    if let (Some(mat), Some(kb)) = (&inp.materials_src, &inp.kb_src) {
+        let r = tempfile::tempdir()
+            .map_err(|e| e.to_string())
+            .and_then(|t| {
+                let repo = match &inp.repo_src {
+                    Some(r) => r.clone(),
+                    None => {
+                        let e = t.path().join("empty-repo");
+                        fs::create_dir_all(&e).map_err(|e| e.to_string())?;
+                        e
+                    }
+                };
+                let src = InitialSources {
+                    repo,
+                    materials: mat.clone(),
+                    kb: kb.clone(),
+                    budget: m.budget.clone(),
+                    withheld_names: Vec::new(),
+                };
+                isolation::check_trial_context(
+                    &src,
+                    &t.path().join("trials"),
+                    &can.forbidden,
+                    &can.required,
+                )
+            });
+        match r {
+            Ok(v) => v.into_iter().for_each(|e| a.miss("measure-env", e)),
+            Err(e) => a.miss("measure-env", e),
+        }
+    }
+    // 再開: 既存 out dir の試行木に禁止 canary が無い。
+    if let Some(out) = me.out.as_ref().filter(|o| o.is_dir()) {
+        match isolation::scan_canaries(out, &can.forbidden, &[]) {
+            Ok(r) => {
+                for (f, c) in r.present_forbidden {
+                    a.miss(
+                        "measure-env",
+                        format!("existing out dir: forbidden canary {c:?} in {f}"),
+                    );
+                }
+            }
+            Err(e) => a.miss("measure-env", e),
+        }
     }
 }
 
@@ -373,14 +553,12 @@ fn check_candidates(a: &mut Acc, m: &CampaignManifest, inp: &Inputs, host: &dyn 
     }
     // A: 既存ハーネスの実行ファイル。
     a.checked.push("auth-env");
-    if !host.program_available(&inp.a_program) {
-        a.miss(
+    match host.resolve_program(&inp.a_program) {
+        Ok(p) => a.a_program = Some(p),
+        Err(e) => a.miss(
             "auth-env",
-            format!(
-                "A harness program {} is not available",
-                inp.a_program.display()
-            ),
-        );
+            format!("A harness program {}: {e}", inp.a_program.display()),
+        ),
     }
     // B/C: task-api の origin と token の環境変数（名前だけ）。
     match (&inp.api_url, &inp.token_env) {
@@ -469,16 +647,21 @@ fn check_inputs(a: &mut Acc, m: &CampaignManifest, set: &CaseSet, inp: &Inputs) 
     }
 }
 
-/// `POST /tasks` が 422 になる組合せと、自動取り込みされる案件を、案件・repo の JSON から判定する。
+/// `POST /tasks` が 422 になる組合せと、自動取り込みされる案件を、案件（`ProjectDetail`）・repo 一覧の JSON から判定する。
 /// executor は常に local の `workspace` を渡すので、選ばれる repo（template の `repos`、無ければ primary）に
 /// リモートが 1 つでもあれば task-ops `create` が拒否する。
 pub fn check_project_rules(
     template: &Map<String, Value>,
-    project: &Value,
+    detail: &Value,
     repos: &Value,
 ) -> Vec<String> {
     let mut v = Vec::new();
-    if project["auto_integrate"].as_bool().unwrap_or(true) {
+    // 実 `GET /projects/{id}` は `ProjectDetail`（`{"project":{"auto_integrate":..},"repos":[..],..}`）。
+    // 欠落・bool でない・project が無い場合も on 扱い（安全側）。
+    if detail["project"]["auto_integrate"]
+        .as_bool()
+        .unwrap_or(true)
+    {
         v.push(
             "the project has auto_integrate on (or unknown); trial tasks could be merged into the repo's main. Use a dedicated campaign project with auto_integrate=false"
                 .into(),
@@ -548,6 +731,25 @@ pub fn find_a_account(accounts: &Value, id: &str) -> Result<PathBuf, String> {
     Ok(p)
 }
 
+/// 測定専用アカウント dir に過去の transcript・`CLAUDE.md`・自動記憶が残っていないこと（A/B/C が同じ dir を使う）。
+pub fn account_dir_residue(dir: &Path) -> Vec<String> {
+    let mut v = Vec::new();
+    if dir.join("CLAUDE.md").exists() {
+        v.push(format!(
+            "{}/CLAUDE.md exists in the measurement account dir",
+            dir.display()
+        ));
+    }
+    let projects = dir.join("projects");
+    if projects.exists() && fs::read_dir(&projects).is_ok_and(|mut d| d.next().is_some()) {
+        v.push(format!(
+            "{} is not empty (past transcripts / auto memory); use a dedicated measurement account",
+            projects.display()
+        ));
+    }
+    v
+}
+
 fn check_api_dependent(a: &mut Acc, inp: &Inputs, host: &dyn Host, template: Option<&Value>) {
     let (Some(url), Some(tok)) = (&inp.api_url, &inp.token_env) else {
         return;
@@ -582,8 +784,13 @@ fn check_api_dependent(a: &mut Acc, inp: &Inputs, host: &dyn Host, template: Opt
         ),
         Some(id) => match host.api_get(url, tok, "/api/v1/llm/accounts") {
             Ok(v) => {
-                if let Err(e) = find_a_account(&v, id) {
-                    a.miss("a-arm", e);
+                match find_a_account(&v, id) {
+                    Err(e) => a.miss("a-arm", e),
+                    Ok(dir) => {
+                        for e in account_dir_residue(&dir) {
+                            a.miss("measure-env", e);
+                        }
+                    }
                 }
             }
             Err(e) => a.miss("a-arm", format!("GET /llm/accounts: {e}")),
@@ -730,14 +937,16 @@ pub fn run_gated(
     opts: &RunOptions,
 ) -> Result<RunReport, String> {
     gate(inp, host)?;
-    runner::run(m, input, exec, opts)
+    let mut o = opts.clone();
+    o.lock = Some(expected_lock(inp, m)?);
+    runner::run(m, input, exec, &o)
 }
 
 /// 通らなければ Err（不足一覧の JSON）。executor・transport を作る前にこれを呼ぶ。
-pub fn gate(inp: &Inputs, host: &dyn Host) -> Result<(), String> {
+pub fn gate(inp: &Inputs, host: &dyn Host) -> Result<Report, String> {
     let rep = check(inp, host);
     if rep.ok {
-        return Ok(());
+        return Ok(rep);
     }
     Err(format!(
         "preflight failed; no paid execution or task was started\n{}",

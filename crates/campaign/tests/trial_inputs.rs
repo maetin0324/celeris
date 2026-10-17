@@ -57,6 +57,7 @@ fn every_arm_sees_the_same_trial_kb_and_nothing_else() {
         kb_src: Some(kb_src.clone()),
         inputs_src: None,
         case_inputs: Default::default(),
+        lock: None,
     };
     run(&m, &i, &MockExecutor::seeded(), &o).expect("run");
 
@@ -129,6 +130,7 @@ fn repo_that_already_has_kb_dir_collides_with_the_trial_kb() {
         kb_src: Some(fx().join("kb")),
         inputs_src: None,
         case_inputs: Default::default(),
+        lock: None,
     };
     let e = run(&m, &i, &MockExecutor::seeded(), &o).expect_err("collision");
     assert!(e.contains("kb/"), "{e}");

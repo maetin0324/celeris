@@ -3,6 +3,7 @@
 実行・計画・木・決定の要求のエンドポイントは §3.125 にある。
 
 - 状態: **Accepted**（人間の決定 H1 / H5〜H7。celeris 側の ADR-0013、GUI 側の ADR-GUI-0001）。改訂日 2026-09-14
+- 改訂: 2026-10-17（ADR 2026-10-17-root-dependency-waits-for-integration D3）— **追加。v1 のまま**。`TaskWait` に kind `depends_on_integration`（`task_id`・`cause`〈`unmerged`/`delivery_skipped`/`held`/`discarded`〉・`detail`）を足した。
 - 改訂: 2026-10-11（ADR 2026-10-11-task-wait-reasons D4・D6）— **破壊的。v1 のまま**。`DaemonSnapshot.awaiting_human[]`・`awaiting_children[]`・`unroutable[]` を消し、`DaemonSnapshot.task_waits[]` の kind（`review_awaiting_human`・`delegated_children`・`unroutable`）へ寄せた（§3.20）。
 - 改訂: 2026-10-08（ADR 2026-10-08-account-concurrency-limits）— **追加と deprecate。v1 のまま**。エンドポイント 216:
   `PATCH /llm/sources/{source_id}/accounts/{account_id}`（アカウントごとの上限 `max_runs`。§3.29a）。`AccountView` に `max_runs` /

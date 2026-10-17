@@ -279,6 +279,28 @@ impl SuppressRule {
 }
 
 /// Task 木の現在状態だけから表示可否を決める。欠けた親や巡回は判定不能として残す。
+/// ADR 2026-10-17-root-dependency-waits-for-integration D4: 取り込まれない task を待つ root の依存元（受信箱の文面に足す）。
+fn waiting_dependents_note(all_tasks: &[Task], dep: TaskId) -> String {
+    let mut ids: Vec<String> = all_tasks
+        .iter()
+        .filter(|t| {
+            !t.status.is_terminal()
+                && t.depends_on.contains(&dep)
+                && !task_core::tree::is_tree_child(t)
+        })
+        .map(|t| t.id.to_string())
+        .collect();
+    ids.sort();
+    if ids.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "。取り込まれるまで依存する task が待っています: {}",
+            ids.join(", ")
+        )
+    }
+}
+
 pub fn attention_suppression(task: &Task, by_id: &HashMap<TaskId, Task>) -> Option<SuppressRule> {
     if matches!(task.status, Status::Done | Status::Cancelled) {
         return Some(SuppressRule::TerminalTask);
@@ -1053,8 +1075,9 @@ fn build_attention(
             task: task_ref,
             reason,
             summary: format!(
-                "完了しましたが main への取り込みを開始できませんでした: {}",
-                reason.label()
+                "完了しましたが main への取り込みを開始できませんでした: {}{}",
+                reason.label(),
+                waiting_dependents_note(all_tasks, t.id)
             ),
             detail,
             head,

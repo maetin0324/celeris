@@ -61,6 +61,20 @@ pub enum BackoffCause {
     Infra,
 }
 
+/// M10: root 間の依存先が既定 branch に入っていない理由（ADR 2026-10-17-root-dependency-waits-for-integration D3）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum IntegrationWaitCause {
+    /// 取り込み待ち（delivery の進行中を含む）。
+    Unmerged,
+    /// delivery が取り込みを見送った（`detail` に理由）。
+    DeliverySkipped,
+    /// 人が保留にした。
+    Held,
+    /// 人が取り込まないと決めた。
+    Discarded,
+}
+
 /// 待っている WorkUnit 1 件（D8/D9）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct UnitWait {
@@ -140,6 +154,12 @@ pub enum TaskWait {
     DelegatedChildren { task_ids: Vec<TaskId> },
     /// M8。
     ReviewAwaitingHuman,
+    /// M10: root 間の依存先は done だが、その成果が既定 branch に入っていない。
+    DependsOnIntegration {
+        task_id: TaskId,
+        cause: IntegrationWaitCause,
+        detail: String,
+    },
 }
 
 /// 祖先を辿る上限（循環と深すぎる鎖で dispatch 全体を止めない）。

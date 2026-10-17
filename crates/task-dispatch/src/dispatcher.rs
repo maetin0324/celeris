@@ -1277,6 +1277,8 @@ pub struct Dispatcher {
     /// ADR-0018 D2（監査 4-1）: この tick でクラスタの多重接続が無い／cooldown 中のため待っている ready タスク。「人のログイン待ち」で
     /// 経路なし（`unroutable`）とは別物。`is_idle` の待ち対象から外すだけで、スナップショットには出さない（受信箱の (d) が知らせる）。
     cluster_waiting: std::collections::HashSet<TaskId>,
+    /// ADR 2026-10-17-root-dependency-waits-for-integration D2: 既定 branch の祖先と分かった root の依存先（再起動で忘れてよい）。
+    integrated_deps: std::collections::BTreeSet<TaskId>,
     /// 人間の承認待ちで延期中の reviewing タスク（`is_idle` 判定用。ADR-0010 D8）。
     awaiting_human: std::collections::HashSet<TaskId>,
     /// ADR-0130 D5: review 前 sync を待つ reviewing task（待機開始順と、選ばれなかった連続 tick 数）。
@@ -1602,6 +1604,7 @@ impl Dispatcher {
             unroutable: std::collections::HashSet::new(),
             dispatch_waits: HashMap::new(),
             cluster_waiting: std::collections::HashSet::new(),
+            integrated_deps: std::collections::BTreeSet::new(),
             awaiting_human: std::collections::HashSet::new(),
             review_sync_queue: HashMap::new(),
             review_sync_seq: 0,
@@ -2605,6 +2608,15 @@ impl Dispatcher {
                 // 全部の枠が尽きたら残りは照合しない（理由だけ付ける）。
                 continue;
             }
+            // ADR 2026-10-17-root-dependency-waits-for-integration: root 間の依存先の成果が既定 branch に入るまで待つ。
+            if let Some(wait) = task_ops::dep_integration::integration_wait(
+                self.store.as_ref(),
+                &task,
+                &mut self.integrated_deps,
+            )? {
+                self.note_dispatch_wait(task.id, wait);
+                continue;
+            }
             // ADR 2026-10-07-build-tmp-hygiene D1.4: 手動実行・queued から作られた保守 task も worker に渡さない。
             if self.run_maintenance_task(&task)? {
                 continue;
@@ -2660,6 +2672,10 @@ impl Dispatcher {
             !self.is_eligible(t)
                 || self.unroutable.contains(&t.id)
                 || self.cluster_waiting.contains(&t.id)
+                || matches!(
+                    self.dispatch_waits.get(&t.id),
+                    Some(task_core::TaskWait::DependsOnIntegration { .. })
+                )
         }))
     }
 }

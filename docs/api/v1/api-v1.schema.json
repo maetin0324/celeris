@@ -15572,6 +15572,31 @@
       ],
       "type": "object"
     },
+    "IntegrationWaitCause": {
+      "description": "M10: root 間の依存先が既定 branch に入っていない理由（ADR 2026-10-17-root-dependency-waits-for-integration D3）。",
+      "oneOf": [
+        {
+          "const": "unmerged",
+          "description": "取り込み待ち（delivery の進行中を含む）。",
+          "type": "string"
+        },
+        {
+          "const": "delivery_skipped",
+          "description": "delivery が取り込みを見送った（`detail` に理由）。",
+          "type": "string"
+        },
+        {
+          "const": "held",
+          "description": "人が保留にした。",
+          "type": "string"
+        },
+        {
+          "const": "discarded",
+          "description": "人が取り込まないと決めた。",
+          "type": "string"
+        }
+      ]
+    },
     "KnowledgeAcceptBody": {
       "additionalProperties": false,
       "description": "`POST /knowledge/inbox/{id}/accept` の本文（省略してよい）。",
@@ -29002,6 +29027,31 @@
           },
           "required": [
             "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "M10: root 間の依存先は done だが、その成果が既定 branch に入っていない。",
+          "properties": {
+            "cause": {
+              "$ref": "#/$defs/IntegrationWaitCause"
+            },
+            "detail": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "depends_on_integration",
+              "type": "string"
+            },
+            "task_id": {
+              "$ref": "#/$defs/TaskId"
+            }
+          },
+          "required": [
+            "kind",
+            "task_id",
+            "cause",
+            "detail"
           ],
           "type": "object"
         }

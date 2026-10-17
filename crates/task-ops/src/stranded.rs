@@ -480,7 +480,7 @@ pub struct BranchRecord {
     pub not_applicable: bool,
 }
 
-fn ancestor(repo: &Path, head: &str, default_branch: &str) -> bool {
+pub(crate) fn ancestor(repo: &Path, head: &str, default_branch: &str) -> bool {
     Command::new("git")
         .args(["-C"])
         .arg(repo)

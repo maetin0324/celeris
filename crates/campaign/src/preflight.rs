@@ -39,11 +39,75 @@ pub const APPROVED_PARALLEL: u32 = 1;
 /// 環境の問い合わせ。値は返さない（漏れようが無い）。
 pub trait Host {
     fn env_nonempty(&self, name: &str) -> bool;
-    fn program_available(&self, program: &Path) -> bool;
+    /// A の実行ファイルを解決する（絶対 path・symlink 解決済み・実行可）と、その `--version`。
+    /// preflight の検査と A の実起動は、ここで返した同じ path・版を使う。
+    fn resolve_program(&self, program: &Path) -> Result<ResolvedProgram, String>;
     /// task-api への GET（`path` は `/api/v1/...`）。2xx の本文を返す。token は環境変数名で渡し、値は返さない。
     fn api_get(&self, api_url: &str, token_env: &str, path: &str) -> Result<Value, String>;
     /// A の隔離（bwrap）がこの host で実際に動くか。
     fn sandbox_usable(&self) -> Result<(), String>;
+}
+
+/// 解決済みの A の実行ファイル。実起動 argv の program と版の記録（`launch.json`）の元。
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct ResolvedProgram {
+    pub path: PathBuf,
+    pub version: String,
+}
+
+/// `program` を絶対 path（symlink 解決済み）にする。1 要素の名前は `path_var`（PATH の値）を引き、
+/// 実行可能な file だけを採る。preflight と A の起動で同じ関数を通す（検査対象と実起動をずらさない）。
+pub fn resolve_executable(
+    program: &Path,
+    path_var: Option<&std::ffi::OsStr>,
+) -> Result<PathBuf, String> {
+    use std::os::unix::fs::PermissionsExt;
+    let exec = |p: &Path| {
+        fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+    };
+    let cand = if program.components().count() > 1 || program.is_absolute() {
+        Some(program.to_path_buf()).filter(|p| exec(p))
+    } else {
+        path_var.and_then(|paths| {
+            std::env::split_paths(paths)
+                .map(|d| d.join(program))
+                .find(|c| exec(c))
+        })
+    }
+    .ok_or_else(|| {
+        format!(
+            "{} is not an executable file (or not in PATH)",
+            program.display()
+        )
+    })?;
+    fs::canonicalize(&cand).map_err(|e| format!("{}: {e}", cand.display()))
+}
+
+/// 解決（`resolve_executable`）と `--version` の取得。`RealHost` は PATH を渡す（試験は任意の PATH を渡す）。
+pub fn resolve_program_in(
+    program: &Path,
+    path_var: Option<&std::ffi::OsStr>,
+) -> Result<ResolvedProgram, String> {
+    let path = resolve_executable(program, path_var)?;
+    let out = Command::new(&path)
+        .arg("--version")
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .map_err(|e| format!("{} --version: {e}", path.display()))?;
+    let version = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if !out.status.success() || version.is_empty() {
+        return Err(format!(
+            "{} --version did not report a version",
+            path.display()
+        ));
+    }
+    Ok(ResolvedProgram { path, version })
 }
 
 pub struct RealHost;
@@ -53,16 +117,8 @@ impl Host for RealHost {
         std::env::var_os(name).is_some_and(|v| !v.is_empty())
     }
 
-    fn program_available(&self, program: &Path) -> bool {
-        use std::os::unix::fs::PermissionsExt;
-        let exec = |p: &Path| {
-            fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
-        };
-        if program.components().count() > 1 || program.is_absolute() {
-            return exec(program);
-        }
-        std::env::var_os("PATH")
-            .is_some_and(|paths| std::env::split_paths(&paths).any(|d| exec(&d.join(program))))
+    fn resolve_program(&self, program: &Path) -> Result<ResolvedProgram, String> {
+        resolve_program_in(program, std::env::var_os("PATH").as_deref())
     }
 
     fn api_get(&self, api_url: &str, token_env: &str, path: &str) -> Result<Value, String> {
@@ -138,11 +194,14 @@ pub struct Report {
     pub campaign_sha256: Option<String>,
     pub checked: Vec<&'static str>,
     pub missing: Vec<Missing>,
+    /// 検査した A の実行ファイルと版。`run` はこれと同じものを起動する。
+    pub a_program: Option<ResolvedProgram>,
 }
 
 struct Acc {
     checked: Vec<&'static str>,
     missing: Vec<Missing>,
+    a_program: Option<ResolvedProgram>,
 }
 
 impl Acc {
@@ -197,6 +256,7 @@ pub fn check(inp: &Inputs, host: &dyn Host) -> Report {
     let mut a = Acc {
         checked: Vec::new(),
         missing: Vec::new(),
+        a_program: None,
     };
     let mut sha = None;
     if let Some(m) = a.res("manifest", CampaignManifest::load(&inp.manifest_path)) {
@@ -210,6 +270,7 @@ pub fn check(inp: &Inputs, host: &dyn Host) -> Report {
         campaign_sha256: sha,
         checked: a.checked,
         missing: a.missing,
+        a_program: a.a_program,
     }
 }
 
@@ -373,14 +434,12 @@ fn check_candidates(a: &mut Acc, m: &CampaignManifest, inp: &Inputs, host: &dyn 
     }
     // A: 既存ハーネスの実行ファイル。
     a.checked.push("auth-env");
-    if !host.program_available(&inp.a_program) {
-        a.miss(
+    match host.resolve_program(&inp.a_program) {
+        Ok(p) => a.a_program = Some(p),
+        Err(e) => a.miss(
             "auth-env",
-            format!(
-                "A harness program {} is not available",
-                inp.a_program.display()
-            ),
-        );
+            format!("A harness program {}: {e}", inp.a_program.display()),
+        ),
     }
     // B/C: task-api の origin と token の環境変数（名前だけ）。
     match (&inp.api_url, &inp.token_env) {
@@ -739,10 +798,10 @@ pub fn run_gated(
 }
 
 /// 通らなければ Err（不足一覧の JSON）。executor・transport を作る前にこれを呼ぶ。
-pub fn gate(inp: &Inputs, host: &dyn Host) -> Result<(), String> {
+pub fn gate(inp: &Inputs, host: &dyn Host) -> Result<Report, String> {
     let rep = check(inp, host);
     if rep.ok {
-        return Ok(());
+        return Ok(rep);
     }
     Err(format!(
         "preflight failed; no paid execution or task was started\n{}",

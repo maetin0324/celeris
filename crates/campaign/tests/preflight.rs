@@ -11,7 +11,7 @@ use celeris_campaign::{
     celeris_exec::{CelerisExecutor, HttpResponse, Transport},
     executor::MockExecutor,
     manifest::{CampaignManifest, ConfigId},
-    preflight::{Host, Inputs, check, run_gated},
+    preflight::{Host, Inputs, ResolvedProgram, check, run_gated},
     runner::RunOptions,
 };
 use serde_json::{Value, json};
@@ -33,8 +33,15 @@ impl Host for FakeHost {
         self.env.contains(&name)
     }
 
-    fn program_available(&self, p: &Path) -> bool {
-        self.programs.iter().any(|x| Path::new(x) == p)
+    fn resolve_program(&self, p: &Path) -> Result<ResolvedProgram, String> {
+        if self.programs.iter().any(|x| Path::new(x) == p) {
+            Ok(ResolvedProgram {
+                path: p.to_path_buf(),
+                version: "fake 1.0".into(),
+            })
+        } else {
+            Err("not available".into())
+        }
     }
 
     fn api_get(&self, _: &str, _: &str, path: &str) -> Result<Value, String> {
@@ -292,6 +299,21 @@ fn fake_api(routes: Vec<(&'static str, Value)>) -> String {
 }
 
 fn bin(args: &[&str], s: &Setup, env: &[(&str, &str)]) -> std::process::Output {
+    // A の実行ファイルは `--version` に答える stub（/bin/sh は版を返さず、preflight が拒否する）。
+    let stub = s.dir.path().join("a-stub");
+    if !stub.exists() {
+        let tmp = s.dir.path().join("a-stub.tmp");
+        fs::write(&tmp, "#!/bin/sh\necho 'stub 1.0'\n").unwrap();
+        let ok = Command::new("sh")
+            .arg("-c")
+            .arg(r#"chmod 755 "$1" && mv "$1" "$2""#)
+            .arg("sh")
+            .arg(&tmp)
+            .arg(&stub)
+            .status()
+            .unwrap();
+        assert!(ok.success());
+    }
     let mut c = Command::new(std::env::var("CARGO_BIN_EXE_celeris-campaign").expect("bin"));
     c.args(args)
         .arg("--manifest")
@@ -303,7 +325,7 @@ fn bin(args: &[&str], s: &Setup, env: &[(&str, &str)]) -> std::process::Output {
         .arg("--grade-case-root")
         .arg(&s.inp.grade_cases_root)
         .arg("--a-program")
-        .arg("/bin/sh")
+        .arg(&stub)
         .arg("--materials-src")
         .arg(s.inp.materials_src.as_ref().unwrap())
         .arg("--kb-src")

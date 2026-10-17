@@ -288,7 +288,9 @@ def get(path):
     req = urllib.request.Request(base + path)
     if token:
         req.add_header("Authorization", "Bearer " + token)
-    with urllib.request.urlopen(req, timeout=30) as resp:  # loopback only
+    # 2026-10-17: tasks の 500 件 page は大きい staging DB と host の負荷で 30 秒を超え、
+    # 新旧 release とも検査 2・5 が timeout で落ちた（e5acfb83 の verify）。上限は保険なので長く取る。
+    with urllib.request.urlopen(req, timeout=120) as resp:  # loopback only
         return json.loads(resp.read().decode("utf-8"))
 
 

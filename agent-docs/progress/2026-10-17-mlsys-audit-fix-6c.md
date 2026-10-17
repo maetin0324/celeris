@@ -155,3 +155,12 @@ k3 では原票が届かず全腕の grader が落ちる。A 腕は FS 隔離が
 - `sh scripts/dev/check-doc-links.sh && sh scripts/dev/check-adr-numbers.sh && sh scripts/dev/progress-index.sh --check` → ok。
 - pilot-2（人の運用 shell）: validate 0・dry-run 0・preflight 0・watch tokens_total 487,628・check 0・grade-out 0（final_pass 0）・export 0・`--verify-connected` 1（§6）。
   worker は `/local/celeris/data/scratch/mlsys-pilot-2/` の `watch-stdout.json`・`check.json`・`grade-out.json`・`export.json`・`verify-connected.err` を読んで値を照合した。
+
+## 9. delivery-repair（2026-10-17、release 検証の差し戻し）
+- 原因: e5acfb83 の release 準備は build・test・clippy・fmt・web とも exit 0 だったが、verify の検査 2（counts-match）と 5（N-1）が
+  `GET /api/v1/tasks?limit=500&archived=true: timed out`（1 要求 30 秒）で落ちた。新 release（e5acfb83）と現行本番（05a398f1）の
+  両方で同じ timeout なので、本 task の差分（文書と pilot 条件 JSON のみ）ではなく、staging DB（856M）と host の負荷による
+  検査の時間上限の不足。直前の 05a398f1 の verify でも検査 2 は 18.9 秒かかっていた。
+- 修正: `scripts/selfdeploy/verify.sh` の件数収集（`collect`）の 1 要求の上限を 30 → 120 秒（保険の上限。ADR-0125 の「長い保険」）。
+  煙試験の POST の上限は変えていない。あわせて main（cc53473c）を merge。
+- 区分: 実装済み。release 検証での実経路確認は次の配送の prepare/verify で行われる（worker は verify.sh を本番 state に対して実行しない）。

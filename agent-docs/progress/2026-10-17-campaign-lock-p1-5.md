@@ -40,15 +40,11 @@ ADR: `agent-docs/adr/2026-10-17-campaign-lock.md`。外部 LLM・有料ジョブ
 - 制約: submodule の入れ子は `Unsupported`。symlink は link 先を内容として数える。
 - k2-pin への引き継ぎ: K2 の `submodule_repo` に承認済み資産の repo を渡して `derive_initial`。取得不能なら `Unavailable` を未完了として報告する。
 
-## WU k2-pin（未完了: K2 submodule 実体は取得不能）
-- 結論: K2 の submodule 内容 hash は**固定していない**。固定済みとは書かない。承認待ちの取得・ネットワーク取得・外部 LLM・本番変更はしていない。
-- 確認した既存資産: `crates/campaign/cases/final/k2-bf-xattr-restart-campaign/case.json` の `initial`（repo=benchfs、commit `086c4618…`、tree `56d2f021…`、archive_sha256 `b1ae8f58…`、submodule 3 件の 40 桁 commit）。case.json 自身が「submodule snapshot の配置は承認待ち／未実施」と記す。
-- 探索: `/home/rmaeda`・`/local/celeris/data` 配下の git repo（深さ 6）に benchfs commit `086c4618…` も pluvio commit `9ecd51ee…` も存在しない。`k2-initial.tar` も無い。`/work`（HPC 作業領域）はこの host に無い。リポジトリ内 fixture は K2 実体を含まない。
-- 必要資産（人が承認・配置）:
-  - benchfs @ `086c4618e2a4d94ea56da78ceeed0f8d6d568d67`（または `k2-initial.tar`、sha256 `b1ae8f58dd48c8fdb451dfb6b26287c188eeba62bfbdeaa8a518a760c6c980bf`）
-  - `lib/pluvio` @ `9ecd51ee9b5fe62831f8e46c3d98a371359664c0`
-  - `lib/locusta` @ `68f8b2104d33a98fe047e7e24f2394cebaee1c9c`
-  - `ior_integration/ior` @ `7054224dd8abe64bc466d8a12391710c7d86132e`
-  - 配置後は `lock_tree::derive_initial(benchfs_repo, "086c4618…", &|path| submodule_repo_for(path))` の結果を `LockedSubmodule` に固定する。
-- 試験（skip 合格にしない）: `crates/campaign/tests/k2_pin.rs` — case.json の 3 gitlink を持つ repo を作り、実体 repo なしで `derive_initial` が `TreeProofError::Unavailable` を返すことを確認（1 件 pass）。
-- 提案: 上記 4 資産の配置承認を人の判断に上げる（result.json の question）。
+## WU k2-pin（完了: K2 初期 tree の内容 hash を固定）
+- 人の承認により運用者が `/local/celeris/data/campaign-assets/k2/`（ローカル・読み取り専用）に配置した資産だけを使用。ネットワーク取得・外部 LLM・本番変更なし。`sha256sum -c SHA256SUMS` 全 OK。
+- 組み方: bundle を clone → `086c4618…` checkout → 各 submodule path に tar 展開。`git get-tar-commit-id` で tar の commit が gitlink と 3 件とも一致。tree は case.json と同じ `56d2f021…`。
+- 固定値: `crates/campaign/cases/final/k2-bf-xattr-restart-campaign/initial.lock.json`（`LockedInitial`。本体 `2862119f…`、pluvio `a81aeba9…`、locusta `dbc3d1e6…`、ior `fc37ce04…`）。本体は `verify_repo`、組んだ木全体は `verify_archive` で通る。
+- 試験 `crates/campaign/tests/k2_pin.rs`: 固定値と case.json gitlink の一致／資産から組んだ木の照合（資産が無ければ失敗、skip 合格にしない。資産の無い host では落ちる）／submodule 1 byte 修正の拒否／実体なしは `Unavailable`。3 件 pass。
+- 差: 旧 `k2-initial.tar` の sha256 `b1ae8f58…` は再現できない（その tar は無く、tar の sha256 は pack 方法に依存する）。今回の内容 hash を正とする。本測定の出力はまだ無いので後付けではない。
+- io500 submodule は tree の gitlink に無い（`.gitmodules` のみ）ため含めない。
+- 注意: submodule 内容 hash は tar 展開（git archive、`.git` 無し）由来。`derive_initial` は submodule の git repo を要するため使わず、同じ正規化の `archive_content_sha256` を使った（git 由来と同一になることは tree-proof の試験で確認済み）。

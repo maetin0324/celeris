@@ -1,7 +1,7 @@
 # ADR 2026-10-17: campaign lock — 測定の入力・grader・試験・実行構成を版付きで固定する共通契約
 
 - 日付: 2026-10-17
-- 状態: 採用・実装済み（`crates/campaign/src/lock.rs` の型・正規化・hash・検証。tree/submodule の実体照合と K2 の hash 固定は別 WorkUnit）
+- 状態: 採用・実装済み（lock.rs の型・hash・検証、lock_tree.rs の内容証明、K2 の hash 固定、契約試験 campaign_lock.rs。実行系への配線は未着手: D7）
 - 関連: 2026-10-17-mlsys-pilot2-fixes（外部入力 D1）、2026-10-15-mlsys-min-campaign、2026-10-11-breaking-changes-by-default
 
 ## 背景
@@ -34,3 +34,25 @@ submodule 実体、外部入力、grader 定義、公開/隠しテストの実�
 ### D4 内容変更は新しい測定 ID と版を要求する
 同じ `measurement_id` と `version` で内容が違う lock は `ContentChanged` で拒否する。旧 lock・旧 grader 条件を自動更新する API は置かない。
 `check_successor(old, new)` は、新 lock が別の測定 ID であること（かつ内容が同一でないこと）だけを許す。
+
+### D5 初期 tree / submodule の内容証明（`lock_tree.rs`）
+- 内容 hash = file 一覧（path 昇順）× mode（100644 / 100755 / 120000）× blob 内容 sha256 の正規化列の sha256。`snapshot::hash_tree` は mode を見ず
+  git 由来と照合できないため、この用途だけ別の正規化にした（`snapshot::hash_tree` の挙動は変えない）。空 dir・owner/mtime・root の `.git` は数えない。
+- 期待値は commit/tree/gitlink からだけ導く: `derive_initial(repo, rev, submodule_repo)`。submodule 実体の repo が無ければ `TreeProofError::Unavailable`
+  で、成功扱いにも skip 合格にもしない。入れ子の submodule は `Unsupported`。
+- 照合: `verify_repo(expected, repo)`（commit・tree・内容・gitlink）、`verify_archive(expected, dir)`（`.git` の有無を問わず本体と各 submodule を別に照合）。
+  submodule の欠落・差替え・追加・1 byte 修正、本体の修正・余分な file は拒否する。metadata の有無自体は拒否理由にしない。
+
+### D6 K2（k2-bf-xattr-restart-campaign）の固定
+- 人が承認し運用者が配置した資産 `/local/celeris/data/campaign-assets/k2/`（ローカル・読み取り専用、`SHA256SUMS` 検証済み）から初期 tree を組み、
+  `crates/campaign/cases/final/k2-bf-xattr-restart-campaign/initial.lock.json`（`LockedInitial`）に固定した。tree は case.json の `56d2f021…` と一致。
+- 旧 `k2-initial.tar` の sha256 は再現できない（tar の sha256 は pack 方法に依存）。今回の内容 hash を正とする（本測定の出力はまだ無い）。
+- 資産が無い host: `tests/k2_pin.rs` は失敗する（skip 合格にしない）。`tests/campaign_lock.rs` の K2 archive 照合は資産が無ければ失敗にせず
+  k2_pin.rs に任せる（その旨を stderr に出す）。lock 構造としての検証（`LockedInitial` を case に入れて封印・照合）は資産なしでも常に走る。
+
+### D7 後続への API と未着手の配線
+- 後続が使う API: `CampaignLock::{new, validate, normalized, lock_hash, seal, bind_to_manifest}`、`LockedCase::from_declared`、
+  `verify_lock(expected, actual)`、`check_successor(old, new)`、`lock_tree::{derive_initial, verify_repo, verify_archive, archive_content_sha256}`。
+- 契約試験: `crates/campaign/tests/campaign_lock.rs`（公開 API のみ）。
+- **未着手**: 実行・再開・grade-out・bind・export から lock を読んで照合する配線、lock ファイルの配置（例 `<out>/snapshot/lock.json`）、
+  全 case の LockedCase を実体から組む CLI。いずれも後続の WorkUnit で行う。この ADR 時点では型・hash・照合 API と試験までが済んでいる。

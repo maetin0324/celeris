@@ -74,7 +74,10 @@ pub struct RouteContext {
     pub run_id: Option<String>,
     pub features: Option<RouteFeaturesRef>,
     pub work_unit_id: Option<String>,
-    /// task 欄 `routing_override.evidence_table_id`: 最新版ではなくこの版の根拠表だけを読む（無ければ従来の最新版）。
+    /// task 欄 `routing_override.evidence_mode`: `none` は根拠表を一切読まず、`pinned` は
+    /// `evidence_version` の版だけ、`latest`（既定）は最新版を読む。
+    pub evidence_mode: task_core::route_select::EvidenceMode,
+    /// `pinned` のときだけ Some（`routing_override.evidence_table_id`）。
     pub evidence_version: Option<String>,
 }
 
@@ -168,6 +171,9 @@ impl RouteTrace {
                 "equivalent": d.equivalent,
                 // task 欄で固定した routing の解決結果（無ければ null）。campaign の照合が読む。
                 "routing_resolved": d.routing_resolved,
+                // 根拠表の扱い。none は table 版なし（evidence_version=null）と明示する。
+                "evidence_mode": d.routing_resolved.as_ref().map_or("latest", |r| r.evidence_mode.as_str()),
+                "evidence_table": d.routing_resolved.as_ref().and_then(|r| (r.evidence_mode == task_core::route_select::EvidenceMode::None).then_some("none")),
             })),
             "candidates": self.candidates,
             "rejections": self.rejections.iter().map(|r| serde_json::json!({
@@ -792,7 +798,12 @@ impl Dispatcher {
         state.run_seed = context.run_id.clone();
         state.features = context.features.clone();
         state.work_unit_id = context.work_unit_id.clone();
-        self.fill_route_stage(input, context.evidence_version.as_deref(), &mut state);
+        self.fill_route_stage(
+            input,
+            context.evidence_mode,
+            context.evidence_version.as_deref(),
+            &mut state,
+        );
         route_select(input, &self.llm_route_registry, &state)
     }
 
@@ -802,6 +813,7 @@ impl Dispatcher {
     fn fill_route_stage(
         &self,
         input: &RouteInput,
+        evidence_mode: task_core::route_select::EvidenceMode,
         evidence_version: Option<&str>,
         state: &mut RouteState,
     ) {
@@ -810,19 +822,29 @@ impl Dispatcher {
             return;
         };
         for harness in harnesses {
-            let rows = match evidence_version {
-                Some(version) => self
-                    .store
-                    .routing_evidence_at(genre, harness.as_ref(), version),
-                None => self.store.latest_routing_evidence(genre, harness.as_ref()),
+            use task_core::route_select::EvidenceMode;
+            // none は根拠表を読まない（固定候補順・割当規則と利用可否だけで決める）。
+            let rows = match (evidence_mode, evidence_version) {
+                (EvidenceMode::None, _) => None,
+                (EvidenceMode::Pinned, Some(version)) => Some(self.store.routing_evidence_at(
+                    genre,
+                    harness.as_ref(),
+                    version,
+                )),
+                // pinned なのに版が無い組合せは検証で弾かれる。来たら最新版へ落とさず読まない。
+                (EvidenceMode::Pinned, None) => None,
+                (EvidenceMode::Latest, _) => {
+                    Some(self.store.latest_routing_evidence(genre, harness.as_ref()))
+                }
             };
             match rows {
-                Ok(rows) => {
+                Some(Ok(rows)) => {
                     state.evidence.insert(harness.clone(), rows);
                 }
-                Err(error) => {
+                Some(Err(error)) => {
                     tracing::warn!(%genre, harness = %harness, %error, "routing evidence unavailable; selecting without evidence")
                 }
+                None => {}
             }
             match self.store.routing_stage(genre, harness.as_ref()) {
                 Ok(stage) => {

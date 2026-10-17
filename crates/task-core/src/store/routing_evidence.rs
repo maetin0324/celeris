@@ -103,6 +103,9 @@ impl SqliteStore {
         genre: &str,
         harness_id: &str,
     ) -> Result<Vec<EvidenceRow>, StoreError> {
+        self.counters
+            .evidence_lookups
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let conn = self.lock()?;
         let version: Option<String> = conn.query_row(
             "SELECT MAX(evidence_version) FROM routing_evidence WHERE genre=?1 AND harness_id=?2",
@@ -121,6 +124,9 @@ impl SqliteStore {
         harness_id: &str,
         version: &str,
     ) -> Result<Vec<EvidenceRow>, StoreError> {
+        self.counters
+            .evidence_lookups
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let conn = self.lock()?;
         evidence_rows_at(&conn, genre, harness_id, version)
     }

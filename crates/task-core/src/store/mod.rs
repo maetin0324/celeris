@@ -503,6 +503,8 @@ pub struct SqliteStore {
 struct LockCounters {
     writer: std::sync::atomic::AtomicU64,
     reader: std::sync::atomic::AtomicU64,
+    /// 根拠表（latest / 指定版）を読んだ回数。evidence_mode=none が lookup 0 回であることを試験で固定する。
+    evidence_lookups: std::sync::atomic::AtomicU64,
 }
 
 /// `SqliteStore::lock_counts` の値。`writer` は書き込み接続（`Mutex`）を取った回数、
@@ -820,6 +822,13 @@ impl SqliteStore {
             read_pool,
             counters: LockCounters::default(),
         })
+    }
+
+    /// これまでに根拠表（最新版・指定版）を読んだ回数（試験用の観測値）。
+    pub fn evidence_lookup_count(&self) -> u64 {
+        self.counters
+            .evidence_lookups
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// 現在の DB のスキーマ版数（`schema_migrations` の最大 `version`。行が無ければ 0）。

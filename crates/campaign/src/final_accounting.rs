@@ -224,14 +224,21 @@ fn read_trials(out: &Path) -> Result<Vec<TrialRecord>, String> {
 }
 
 /// 台帳の未完了行（予約）。読むだけで、末尾の不完全な行も直さない。
+/// 台帳は状態遷移ごとに行を追記するので、鍵ごとに最後の行だけを見る（途中の状態を予約として数えない）。
 fn unfinished_rows(out: &Path, hash: &str) -> Vec<LedgerRow> {
     let Ok(t) = fs::read_to_string(out.join(crate::ledger::LEDGER_FILE)) else {
         return Vec::new();
     };
     let keep = t.rfind('\n').map_or(0, |i| i + 1);
-    t[..keep]
+    let mut latest = BTreeMap::new();
+    for r in t[..keep]
         .lines()
         .filter_map(|l| serde_json::from_str::<LedgerRow>(l).ok())
+    {
+        latest.insert(r.key.clone(), r);
+    }
+    latest
+        .into_values()
         .filter(|r| r.key.manifest_sha256 == hash && !r.state.is_terminal())
         .collect()
 }

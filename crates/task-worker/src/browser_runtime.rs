@@ -48,8 +48,8 @@ pub enum RuntimeError {
     NotRunning,
     #[error("runtime relay did not become ready: {0}")]
     RelayNotReady(String),
-    #[error("bubblewrap pid namespace init did not become ready")]
-    InitNotReady,
+    #[error("bubblewrap pid namespace init did not become ready: {0}")]
+    InitNotReady(String),
 }
 
 /// ADR-0108 D1: sandbox の proxy listener から来た接続ごとに起動する celeris-browser-egress。
@@ -739,7 +739,7 @@ impl IsolatedRuntime {
             if rt.is_running() {
                 rt.kill();
             }
-            return Err(RuntimeError::InitNotReady);
+            return Err(RuntimeError::InitNotReady(rt.failed_stderr()));
         }
         if let (Some(cfg), Some((ctrl, sandbox_end))) = (spec.egress.clone(), channel) {
             drop(sandbox_end);

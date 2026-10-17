@@ -872,6 +872,14 @@ impl Dispatcher {
             }
             extras.work_unit_env = (!env.is_empty()).then_some(env);
         }
+        // ADR 2026-10-17-mlsys-trial-context-isolation D4: 試行 task の run（WU・planner・子 task を含む）は
+        // worker の `celerisctl knowledge` の根を試行の `kb/` にする（通常の設定の根に落ちない）。
+        if let Some(env) = extras.trial_env.take() {
+            extras
+                .work_unit_env
+                .get_or_insert_with(Vec::new)
+                .extend(env);
+        }
         if let Some(w) = &wu_workspace {
             extras.artifacts_dir_override = Some(w.artifacts_dir.clone());
             // ADR-0074 F5-fix（不具合 1）: WU ごとの `CARGO_TARGET_DIR`。

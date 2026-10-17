@@ -1110,6 +1110,9 @@ struct RunExtras {
     /// ADR-0074 付記 2026-10-05 D3: WU の run だけ `Some`（`CELERIS_WU_BASE` / `CELERIS_WU_TARGET`）。
     /// `run_worker` が adapter の env に重ねる（checks の env と同じ値）。
     work_unit_env: Option<Vec<(String, String)>>,
+    /// ADR 2026-10-17-mlsys-trial-context-isolation D4: campaign 試行の task の run だけ `Some`
+    /// （`CELERIS_KNOWLEDGE_ROOT=<試行の作業場所>/kb`）。`dispatch_ready` が `work_unit_env` に重ねる。
+    trial_env: Option<Vec<(String, String)>>,
     /// ADR-0079 D7（Phase R3a）: 木の節点の worker の run（planner でない）だけ `true`（`result.json` の
     /// `decisions` で人への決定の要求を出せることを前置きで伝える）。
     decision_requests: bool,

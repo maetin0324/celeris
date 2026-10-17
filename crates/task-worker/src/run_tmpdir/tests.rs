@@ -82,7 +82,7 @@ fn run_tmpdir_preamble_forbids_tmp_copies() {
         "ビルド出力",
         "`/tmp` に置かず",
         "`$TMPDIR`",
-        "`artifacts/`",
+        "冒頭で指定された成果物ディレクトリ",
     ] {
         assert!(out.contains(needle), "missing {needle}: {out}");
     }

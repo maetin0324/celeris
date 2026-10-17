@@ -24,8 +24,8 @@ use crate::progress;
 use crate::protocol::{Answer, Evidence, ProviderFailure, RunContext, RunRequest};
 use crate::provider::classify_provider_failure;
 use crate::subprocess::{
-    LineOutcome, MAX_LINE_BYTES, adopt_result_json_written_under_work_dir, kill_now,
-    read_line_limited, read_tail, reap_after_terminal, write_result_json,
+    LineOutcome, MAX_LINE_BYTES, kill_now, read_line_limited, read_tail, reap_after_terminal,
+    write_result_json,
 };
 
 /// `[adapters.claude_code]`（config.toml, ADR-0006 D6）。
@@ -465,13 +465,6 @@ async fn run_claude_code(
     let result_path = req.artifact_path("result.json");
     let _ = tokio::fs::remove_file(&result_path).await;
     clear_delegate_file(&req.artifacts_dir).await;
-    // ADR-0006 Phase 115 D2: 同じ理由（前回の run の名残と誤読しない）で、work_dir 側の名残候補も消す
-    // （`work_dir != workspace` のときだけ意味がある。無ければ何もしない）。
-    if let Some(work_dir) = req.work_dir.as_deref()
-        && work_dir != req.workspace
-    {
-        let _ = tokio::fs::remove_file(work_dir.join("artifacts").join("result.json")).await;
-    }
 
     // ADR 2026-10-08-cos-chat-prompt-cache D6: a CoS chat run puts its fixed Core in the system
     // prompt (after HEADLESS_RUN_NOTE, one argument) and only the run specific part on stdin.
@@ -802,22 +795,20 @@ async fn run_claude_code(
             )
         }
         (None, Some(meta)) => {
-            // ADR-0006 Phase 115 D2: `result.json` を読む前に、work_dir 側の名残を採用する
-            // （Phase 112 D3 相当の「回収」はこのアダプタには無いが、同じ原則で最優先に判定する）。
-            adopt_result_json_written_under_work_dir(
-                &req.artifacts_dir,
-                req.work_dir.as_deref(),
-                &req.workspace,
-                run_id,
-            )
-            .await;
-            let mut outcome = terminal_from_result(
-                &req.artifacts_dir,
-                &artifacts_rel,
-                meta,
-                config.model.as_deref(),
-            )
-            .await;
+            let mut outcome = if req.requires_result_file()
+                && let Some(error) =
+                    crate::result_location::misplaced_result(&req.artifacts_dir, req.cwd()).await
+            {
+                (error, None)
+            } else {
+                terminal_from_result(
+                    &req.artifacts_dir,
+                    &artifacts_rel,
+                    meta,
+                    config.model.as_deref(),
+                )
+                .await
+            };
             // F5-fix5: `result` は success（`stop_reason: end_turn`）なのに `result.json` が無く、
             // その `result` の時点で background task がまだ走っていた＝headless の run が「通知を
             // 待つ」と言って turn を終え、CLI がその task を殺した（本番 run 01M3KF2HFMHPJR7YEB5HMT38MQ）。

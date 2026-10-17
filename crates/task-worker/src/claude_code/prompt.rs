@@ -38,8 +38,10 @@ pub(crate) fn work_dir_note(
     match work_dir {
         Some(wd) if wd != workspace => format!(
             "cwd は `{}`（リポジトリの worktree）。成果物ディレクトリは `{}`。\
-             相対 `artifacts/` はリポジトリの中を指すので使わない。\n\n",
+             相対 `artifacts/` はリポジトリの中を指すので使わない。\
+             result.json は必ず `{}/result.json` に書く。親ディレクトリを推測した相対パスも使わない。\n\n",
             wd.display(),
+            artifacts_dir.display(),
             artifacts_dir.display()
         ),
         _ => String::new(),

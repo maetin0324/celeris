@@ -1011,8 +1011,8 @@ fn role_section(context: &RunContext) -> String {
 /// （BenchFS 案件のタスクが判断材料をリポジトリの `docs/` に書き、GUI から見えなかった）の再発防止。
 pub(crate) fn deliverables_placement_note() -> String {
     "## 成果物の置き場所 (where human deliverables live)\n\
-     調査報告・framing 案・比較表・提案書など**人が読んで判断する材料**は、成果物ディレクトリ\
-     （`artifacts/`）か知識ベース（`projects/<project>/…` のページ）に置いてください。対象リポジトリの\
+     調査報告・framing 案・比較表・提案書など**人が読んで判断する材料**は、冒頭で指定された成果物ディレクトリ\
+     か知識ベース（`projects/<project>/…` のページ）に置いてください。対象リポジトリの\
      追跡ファイル（`docs/` を含む）には Celeris 自身の判断過程・候補案・決定パケットを置かないこと\
      （そのリポジトリに書いてよいのはそのリポジトリ自身の成果 — コード・テスト・決定後の本文など）。\n\n"
         .to_string()
@@ -1047,7 +1047,7 @@ pub(crate) fn tool_launch_policy_note() -> String {
 pub(crate) fn run_tmpdir_note() -> String {
     "## 一時 file の置き場所 (no copies under /tmp)\n\
      リポジトリの写し・pnpm store の写し・ビルド出力・大きな一時 file は `/tmp` に置かず、`$TMPDIR`\
-     （run 終了で消える）か作業場所の下に置く。残したい物は `artifacts/` に置く。\n\n"
+     （run 終了で消える）か作業場所の下に置く。残したい物は冒頭で指定された成果物ディレクトリに置く。\n\n"
         .to_string()
 }
 

@@ -693,6 +693,9 @@ pub(super) async fn run_worker(
             &task_core::ProgressFields::of(task_core::ProgressKind::Status),
         );
     }
+    let requires_result_file = req.requires_result_file();
+    let result_cwd = req.cwd().to_path_buf();
+    let result_artifacts = req.artifacts_dir.clone();
     let outcome = if task_core::browser::requests_browser(&req.task.skills)
         && (remote.is_some() || container_plan.is_some())
     {
@@ -748,6 +751,26 @@ pub(super) async fn run_worker(
         } else {
             run.await
         }
+    };
+    // A misplaced report is a worker contract failure, not an infrastructure retry.
+    let outcome = if requires_result_file
+        && matches!(
+            &outcome,
+            Err(AdapterError::Other(_))
+                | Ok(RunOutcome {
+                    terminal: Terminal::Done { .. } | Terminal::Error { .. },
+                    ..
+                })
+        )
+        && let Some(terminal) =
+            task_worker::result_location::misplaced_result(&result_artifacts, &result_cwd).await
+    {
+        Ok(RunOutcome {
+            terminal,
+            exit_code: outcome.as_ref().ok().and_then(|o| o.exit_code),
+        })
+    } else {
+        outcome
     };
     // ADR-0079 R5b-fix2: remote workspace は run が終わるたびに（成否に関わらず）手元の写しをクラスタへ
     // push する（review と次の run の prepare〈`--delete` 付きの pull〉の前）。push が落ちたら印が残り、

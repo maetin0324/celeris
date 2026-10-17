@@ -355,6 +355,9 @@ impl Dispatcher {
         // `adapter_error_text` は `Err(AdapterError)`（アダプタ／供給側の失敗）の表示文字列。
         // どちらも「報告するかどうか」は後で `outcome.next` を見て決める（run の終端ではなくタスクの終端状態）。
         let terminal_report = crate::reports::terminal_report(&result);
+        let misplaced_result = matches!(&result, Ok(RunOutcome {
+            terminal: Terminal::Error { message, retryable: false }, ..
+        }) if message.starts_with(task_worker::result_location::MISPLACED_RESULT_MARKER));
         let adapter_error_text = result.as_ref().err().map(|e| e.to_string());
         // ADR-0033 D6（Phase 24）: 結果ファイルの `memory` を、この run の担当の記憶に追記する
         // （run の終わり方に依らず。ファイル I/O だけで、覚える中身を決めるのはワーカー側）。
@@ -877,7 +880,9 @@ impl Dispatcher {
                                 wu.key
                             )
                         };
-                    } else if matches!(decision.reason, "failed" | "limit" | "plan_issue") {
+                    } else if !misplaced_result
+                        && matches!(decision.reason, "failed" | "limit" | "plan_issue")
+                    {
                         let replans_so_far = self.counted_replans(task_id)?;
                         if replans_so_far < self.effective_max_replans(task_id)? {
                             let why = match decision.reason {

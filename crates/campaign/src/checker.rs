@@ -206,6 +206,14 @@ fn reconcile_observed(
                 "{who}: lower_policy {got} differs from the manifest {want}"
             ));
         }
+        if o.routing_mode.is_some() {
+            match (&o.evidence_mode, rt.effective_evidence_mode(r.config)) {
+                (Some(got), Ok(want)) if got == want => {}
+                (got, want) => v.push(format!(
+                    "{who}: evidence_mode {got:?} differs from the manifest {want:?}"
+                )),
+            }
+        }
         if o.routing_mode.is_some() && o.evidence_table_id != rt.evidence_table_id {
             v.push(format!(
                 "{who}: evidence_table_id {:?} differs from the manifest {:?}",

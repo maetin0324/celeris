@@ -488,12 +488,12 @@ fn b_and_c_pin_different_routing_overrides() {
     );
     assert_eq!(
         ob,
-        json!({"mode": "fixed", "lower_policy": "mlsys-min-1", "online_update": false})
+        json!({"mode": "fixed", "lower_policy": "mlsys-min-1", "evidence_mode": "none", "online_update": false})
     );
     assert_eq!(
         oc,
         json!({"mode": "decision_assisted", "lower_policy": "mlsys-min-1",
-               "evidence_table_id": "ev-2026-10-15", "online_update": true})
+               "evidence_mode": "pinned", "evidence_table_id": "ev-2026-10-15", "online_update": true})
     );
     assert_ne!(ob, oc);
     // 台帳に投入前に記録する値と、投入する値は同じ。
@@ -800,4 +800,30 @@ fn objective_and_cancel_log_carry_cluster_walltime() {
     x.cancel(&t, "trial_timeout").expect("cancel");
     let log = fs::read_to_string(d.path().join(CLUSTER_CANCEL_FILE)).expect("log");
     assert!(log.contains("\"walltime_secs\":900"), "{log}");
+}
+
+/// no_evidence_table=true は POST 本文に evidence_mode=none として載り、table id は載らない。
+/// C が id も no_evidence_table も無い（暗黙の latest）構成は投入前に拒否する。
+#[test]
+fn no_evidence_table_posts_evidence_mode_none_and_implicit_latest_is_rejected() {
+    let d = tempfile::tempdir().expect("dir");
+    let f = Fake::new();
+    let x = exec(&f, d.path(), 1800);
+    let mut r = c_routing();
+    r.evidence_table_id = None;
+    r.no_evidence_table = Some(true);
+    let c = cfg(ConfigId::C, Some(r.clone()));
+    let t = x.submit(&req(&c, d.path()), KEY).expect("c none");
+    let o = f.body(&t.task_id)["routing_override"].clone();
+    assert_eq!(o["evidence_mode"], "none");
+    assert!(o.get("evidence_table_id").is_none());
+    // 矛盾（none + id）は起動前に拒否。
+    r.evidence_table_id = Some("ev".into());
+    let err = routing_override(&cfg(ConfigId::C, Some(r.clone()))).unwrap_err();
+    assert!(err.contains("contradicts"), "{err}");
+    // 暗黙 latest。
+    r.evidence_table_id = None;
+    r.no_evidence_table = None;
+    let err = routing_override(&cfg(ConfigId::C, Some(r))).unwrap_err();
+    assert!(err.contains("implicit latest"), "{err}");
 }

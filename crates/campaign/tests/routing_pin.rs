@@ -115,6 +115,7 @@ impl Transport for Fake {
                     "mode": if global { json!("fixed") } else { pin["mode"].clone() },
                     "source": if global { "config" } else { "task" },
                     "lower_policy": pin["lower_policy"],
+                    "evidence_mode": if dv == Some("evidence_mode") { json!("latest") } else { pin["evidence_mode"].clone() },
                     "evidence_table_id": pin["evidence_table_id"],
                     "online_update": if dv == Some("online_update") { json!(true) } else { pin["online_update"].clone() },
                 });
@@ -297,11 +298,11 @@ fn each_task_carries_its_arm_routing_and_the_record_matches_the_manifest() {
     let want_c = routing_override(&m.configs[2]).expect("c");
     assert_eq!(
         want_b,
-        json!({"mode":"fixed","lower_policy":"lp-b-7","online_update":false})
+        json!({"mode":"fixed","lower_policy":"lp-b-7","evidence_mode":"none","online_update":false})
     );
     assert_eq!(
         want_c,
-        json!({"mode":"decision_assisted","lower_policy":"lp-c-9","evidence_table_id":"ev-2026-10-15","online_update":true})
+        json!({"mode":"decision_assisted","lower_policy":"lp-c-9","evidence_mode":"pinned","evidence_table_id":"ev-2026-10-15","online_update":true})
     );
     // 投入した task の本文: B は B の、C は C の routing_override（同じ executor・同じ run の中で）。
     let posts = f.posts();
@@ -567,6 +568,7 @@ fn reconciliation_flags_forbidden_deviations_and_export_refuses() {
         ("harness", "outside the arm's run_harnesses set"),
         ("online_update", "online_update true differs"),
         ("global", "not the pinned task field"),
+        ("evidence_mode", "evidence_mode"),
     ] {
         let (m, out, d) = run_with(Some(dev));
         let rep = check(&m, &out);
@@ -614,6 +616,16 @@ fn b_and_c_must_share_models_and_c_may_declare_no_evidence_table() {
             .get("evidence_table_id")
             .is_none()
     );
+    assert_eq!(
+        routing_override(&m.configs[2]).expect("override")["evidence_mode"],
+        "none"
+    );
+    // C が id も no_evidence_table も無い（暗黙 latest）構成は preflight（check_resolved）で拒否。
+    let mut implicit = m.clone();
+    if let Some(r) = &mut implicit.configs[2].routing {
+        r.no_evidence_table = None;
+    }
+    assert!(implicit.check_resolved().is_err());
     // C だけ別のモデル集合へ逸れる構成は起動前に拒否する。
     if let Some(r) = &mut m.configs[2].routing {
         r.models = Some(vec!["m-y".into()]);

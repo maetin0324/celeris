@@ -27269,6 +27269,17 @@
             "null"
           ]
         },
+        "routing_override": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RoutingOverride"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR 2026-10-17-evidence-mode-none-pinned-latest: 実効の `routing_override`（祖先からの継承を含む）。\n`evidence_mode` が none/pinned/latest のどれで解決されるかを GET で確かめられる。固定が無ければ省略。"
+        },
         "runnable": {
           "description": "D5: `status == ready && waits が空`。",
           "type": "boolean"

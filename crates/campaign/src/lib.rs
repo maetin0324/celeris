@@ -22,6 +22,7 @@ pub mod isolation;
 pub mod jev_smoke;
 pub mod ledger;
 pub mod manifest;
+pub mod measure_env;
 pub mod preflight;
 pub mod record;
 pub mod report;

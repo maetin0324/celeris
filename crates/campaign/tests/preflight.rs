@@ -79,11 +79,45 @@ fn api(acct_dir: &Path) -> Vec<(&'static str, Value)> {
     ]
 }
 
+/// 空の測定専用アカウント dir（process 内で共有）。
+fn account_dir() -> &'static Path {
+    static D: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
+    D.get_or_init(|| tempfile::tempdir().unwrap()).path()
+}
+
+#[test]
+fn preflight_rejects_an_account_dir_with_past_transcripts_or_claude_md() {
+    let t = tempfile::tempdir().unwrap();
+    assert!(celeris_campaign::preflight::account_dir_residue(t.path()).is_empty());
+    fs::create_dir_all(t.path().join("projects/-x")).unwrap();
+    assert_eq!(
+        celeris_campaign::preflight::account_dir_residue(t.path()).len(),
+        1
+    );
+    fs::write(t.path().join("CLAUDE.md"), "memo").unwrap();
+    assert_eq!(
+        celeris_campaign::preflight::account_dir_residue(t.path()).len(),
+        2
+    );
+    // preflight 全体でも measure-env で落ちる
+    let s = setup();
+    let h = FakeHost {
+        api: api(t.path()),
+        ..host()
+    };
+    let r = check(&s.inp, &h);
+    assert!(
+        r.missing
+            .iter()
+            .any(|m| m.check == "measure-env" && m.detail.contains("CLAUDE.md"))
+    );
+}
+
 fn host() -> FakeHost {
     FakeHost {
         env: vec!["CELERIS_CAMPAIGN_TOKEN"],
         programs: vec!["claude"],
-        api: api(Path::new("/tmp")),
+        api: api(account_dir()),
         sandbox: true,
     }
 }
@@ -95,6 +129,200 @@ impl Transport for &CountingTransport {
         self.0.fetch_add(1, Ordering::SeqCst);
         Err("must not be called".into())
     }
+}
+
+fn measure_misses(inp: &Inputs) -> Vec<String> {
+    check(inp, &host())
+        .missing
+        .into_iter()
+        .filter(|m| m.check == "measure-env")
+        .map(|m| m.detail)
+        .collect()
+}
+
+#[test]
+fn preflight_accepts_the_isolated_measurement_environment() {
+    let s = setup();
+    assert!(
+        measure_misses(&s.inp).is_empty(),
+        "{:?}",
+        measure_misses(&s.inp)
+    );
+}
+
+#[test]
+fn preflight_rejects_a_measurement_config_that_reaches_normal_operation() {
+    let n = |s: &Setup| s.dir.path().join("normal");
+    // 通常 KB root を共有 / 既定 root に落ちる / mount が memory・dir / 記憶が通常と同じ / DB 共有 / 作業場所共有
+    type Edit = Box<dyn Fn(&Path, &str) -> String>;
+    let cases: Vec<(&str, Edit)> = vec![
+        (
+            "overlaps",
+            Box::new(|d, c| {
+                c.replacen(
+                    &format!("{}/measure/kb", d.display()),
+                    &format!("{}/normal/kb", d.display()),
+                    1,
+                )
+            }),
+        ),
+        (
+            "explicitly",
+            Box::new(|_, c| c.replacen("\nroot = ", "\n#root = ", 1)),
+        ),
+        (
+            "kb:<scope>",
+            Box::new(|_, c| c.replacen("[\"kb:trial\"]", "[\"kb:trial\", \"memory\"]", 1)),
+        ),
+        (
+            "default_mounts explicitly",
+            Box::new(|_, c| c.replacen("default_mounts =", "#default_mounts =", 1)),
+        ),
+        (
+            "[memory] dir",
+            Box::new(|d, c| format!("{c}[memory]\ndir = \"{}/normal/memory\"\n", d.display())),
+        ),
+        (
+            "normal operation's db",
+            Box::new(|d, c| {
+                c.replacen(
+                    &format!("{}/measure/celeris.db", d.display()),
+                    &format!("{}/normal/celeris.db", d.display()),
+                    1,
+                )
+            }),
+        ),
+        (
+            "workspace_root",
+            Box::new(|d, c| {
+                c.replacen(
+                    &format!("{}/measure/ws", d.display()),
+                    &format!("{}/normal/ws", d.display()),
+                    1,
+                )
+            }),
+        ),
+        (
+            "langmem",
+            Box::new(|_, c| format!("{c}[knowledge.langmem]\nenabled = true\n")),
+        ),
+    ];
+    for (needle, edit) in cases {
+        let s = setup();
+        let d = s.dir.path();
+        let bad = edit(d, &measure_config(d, "measure"));
+        fs::write(d.join("measure.toml"), bad).unwrap();
+        let m = measure_misses(&s.inp);
+        assert!(m.iter().any(|x| x.contains(needle)), "{needle}: {m:?}");
+        let _ = n(&s);
+    }
+}
+
+#[test]
+fn preflight_rejects_a_measurement_kb_root_with_unknown_content_and_accepts_the_fixed_kb() {
+    let s = setup();
+    let d = s.dir.path();
+    let root = d.join("measure/kb");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("stray.md"), "left over").unwrap();
+    assert!(
+        measure_misses(&s.inp)
+            .iter()
+            .any(|x| x.contains("neither empty"))
+    );
+    // 固定初期 KB と同一内容なら通る。
+    fs::remove_dir_all(&root).unwrap();
+    copy(s.inp.kb_src.as_ref().unwrap(), &root);
+    assert!(
+        measure_misses(&s.inp).is_empty(),
+        "{:?}",
+        measure_misses(&s.inp)
+    );
+}
+
+#[test]
+fn preflight_keeps_cluster_and_api_connections() {
+    let s = setup();
+    let d = s.dir.path();
+    let cfg = measure_config(d, "measure").replace("host = \"pegasus\"", "host = \"elsewhere\"");
+    fs::write(d.join("measure.toml"), cfg).unwrap();
+    assert!(
+        measure_misses(&s.inp)
+            .iter()
+            .any(|x| x.contains("clusters"))
+    );
+    let cfg = measure_config(d, "measure").replace("token_file", "#token_file");
+    fs::write(d.join("measure.toml"), cfg).unwrap();
+    assert!(
+        measure_misses(&s.inp)
+            .iter()
+            .any(|x| x.contains("token_file"))
+    );
+}
+
+#[test]
+fn preflight_rejects_canaries_in_the_trial_tree_and_a_trial_kb_without_its_canary() {
+    // 通常 KB の目印が試行用 KB / materials に混ざる
+    for sub in ["kb", "materials"] {
+        let s = setup();
+        let dir = if sub == "kb" {
+            s.inp.kb_src.clone()
+        } else {
+            s.inp.materials_src.clone()
+        }
+        .unwrap();
+        let f = dir.join("leak.txt");
+        fs::write(&f, CANARY_NORMAL).unwrap();
+        let m = measure_misses(&s.inp);
+        if sub == "kb" {
+            assert!(
+                m.iter()
+                    .any(|x| x.contains("forbidden canary") && x.contains("kb/leak.txt")),
+                "{m:?}"
+            );
+        } else {
+            // materials は hash pin に当たるので case-inputs でも落ちる。canary 側も報告される。
+            assert!(m.iter().any(|x| x.contains("forbidden canary")), "{m:?}");
+        }
+    }
+    // grader 私有の目印が repo に
+    let s = setup();
+    fs::write(
+        s.inp.repo_src.as_ref().unwrap().join("g.txt"),
+        CANARY_GRADER,
+    )
+    .unwrap();
+    assert!(
+        measure_misses(&s.inp)
+            .iter()
+            .any(|x| x.contains(CANARY_GRADER))
+    );
+    // 試行用 KB に自分の目印が無い（配られていない）
+    let s = setup();
+    fs::remove_file(s.inp.kb_src.as_ref().unwrap().join("CANARY.md")).unwrap();
+    assert!(
+        measure_misses(&s.inp)
+            .iter()
+            .any(|x| x.contains("required canary"))
+    );
+    // 再開: 既存 out の試行木に禁止 canary
+    let s = setup();
+    let out = s.dir.path().join("out/B/p/1/output");
+    fs::create_dir_all(&out).unwrap();
+    fs::write(out.join("answer.md"), "see CANARY-OTHER-TRIAL-55aa").unwrap();
+    assert!(
+        measure_misses(&s.inp)
+            .iter()
+            .any(|x| x.contains("existing out dir"))
+    );
+}
+
+#[test]
+fn preflight_requires_the_measurement_environment_inputs() {
+    let s = setup();
+    let mut inp = s.inp.clone();
+    inp.measure = None;
+    assert!(missing_checks(&inp, &host()).contains(&"measure-env".into()));
 }
 
 fn missing_checks(inp: &Inputs, h: &FakeHost) -> Vec<String> {
@@ -341,7 +569,13 @@ fn bin(args: &[&str], s: &Setup, env: &[(&str, &str)]) -> std::process::Output {
         .arg("--token-env")
         .arg("CELERIS_PREFLIGHT_TEST_TOKEN")
         .arg("--task-template")
-        .arg(s.dir.path().join("task-template.json"));
+        .arg(s.dir.path().join("task-template.json"))
+        .arg("--measure-config")
+        .arg(s.dir.path().join("measure.toml"))
+        .arg("--normal-config")
+        .arg(s.dir.path().join("normal.toml"))
+        .arg("--canaries")
+        .arg(s.dir.path().join("canaries.json"));
     for (k, v) in env {
         c.env(k, v);
     }

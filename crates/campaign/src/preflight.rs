@@ -22,7 +22,9 @@ use crate::{
     executor::Executor,
     grader::GradeCase,
     inputs,
+    isolation::{self, InitialSources},
     manifest::{CampaignManifest, ConfigId, TokenBasis},
+    measure_env,
     runner::{self, RunOptions, RunReport},
     snapshot::hash_tree,
 };
@@ -177,6 +179,21 @@ pub struct Inputs {
     pub inputs_src: Option<PathBuf>,
     /// A が使う Celeris 管理アカウント（claude_oauth の account_id）。
     pub a_account: Option<String>,
+    /// 測定専用の daemon 構成と canary（P0-3）。測定では必須。
+    pub measure: Option<MeasureEnv>,
+}
+
+/// 測定環境の汚染検査の入力。
+#[derive(Clone, Debug)]
+pub struct MeasureEnv {
+    /// 測定専用 daemon の config.toml。
+    pub config: PathBuf,
+    /// 通常運用の config.toml（突き合わせ用。読むだけ）。
+    pub normal_config: PathBuf,
+    /// canary 識別文字列の JSON（`{"forbidden":[…],"required":[…]}`）。
+    pub canaries: PathBuf,
+    /// 再開時の既存 out dir。在れば中の全 file を禁止 canary で走査する。
+    pub out: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -359,6 +376,7 @@ fn run_checks(a: &mut Acc, m: &CampaignManifest, inp: &Inputs, host: &dyn Host) 
     // 5/6. 候補構成・認証/環境。
     check_candidates(a, m, inp, host);
     check_snapshot_src(a, m, inp);
+    check_measure_env(a, m, inp);
 
     // 7. 予算・時間（manifest 側）。
     a.checked.push("budget");
@@ -371,6 +389,70 @@ fn run_checks(a: &mut Acc, m: &CampaignManifest, inp: &Inputs, host: &dyn Host) 
             "budget",
             format!("dry-run estimate: {}", v["acceptance"]["reasons"]),
         );
+    }
+}
+
+/// P0-3: 測定専用構成・A/B/C の試行用 KB の同一性・canary。
+fn check_measure_env(a: &mut Acc, m: &CampaignManifest, inp: &Inputs) {
+    a.checked.push("measure-env");
+    let Some(me) = &inp.measure else {
+        a.miss(
+            "measure-env",
+            "--measure-config, --normal-config and --canaries are required (measurement daemon isolation)",
+        );
+        return;
+    };
+    for e in measure_env::check_config(&me.config, &me.normal_config, inp.kb_src.as_deref()) {
+        a.miss("measure-env", e);
+    }
+    let Some(can) = a.res("measure-env", measure_env::Canaries::load(&me.canaries)) else {
+        return;
+    };
+    // 試行 workspace の木と同じ作り方（A/B/C）で作って検査する。repo 無しの case は空の repo にする。
+    if let (Some(mat), Some(kb)) = (&inp.materials_src, &inp.kb_src) {
+        let r = tempfile::tempdir()
+            .map_err(|e| e.to_string())
+            .and_then(|t| {
+                let repo = match &inp.repo_src {
+                    Some(r) => r.clone(),
+                    None => {
+                        let e = t.path().join("empty-repo");
+                        fs::create_dir_all(&e).map_err(|e| e.to_string())?;
+                        e
+                    }
+                };
+                let src = InitialSources {
+                    repo,
+                    materials: mat.clone(),
+                    kb: kb.clone(),
+                    budget: m.budget.clone(),
+                    withheld_names: Vec::new(),
+                };
+                isolation::check_trial_context(
+                    &src,
+                    &t.path().join("trials"),
+                    &can.forbidden,
+                    &can.required,
+                )
+            });
+        match r {
+            Ok(v) => v.into_iter().for_each(|e| a.miss("measure-env", e)),
+            Err(e) => a.miss("measure-env", e),
+        }
+    }
+    // 再開: 既存 out dir の試行木に禁止 canary が無い。
+    if let Some(out) = me.out.as_ref().filter(|o| o.is_dir()) {
+        match isolation::scan_canaries(out, &can.forbidden, &[]) {
+            Ok(r) => {
+                for (f, c) in r.present_forbidden {
+                    a.miss(
+                        "measure-env",
+                        format!("existing out dir: forbidden canary {c:?} in {f}"),
+                    );
+                }
+            }
+            Err(e) => a.miss("measure-env", e),
+        }
     }
 }
 
@@ -612,6 +694,25 @@ pub fn find_a_account(accounts: &Value, id: &str) -> Result<PathBuf, String> {
     Ok(p)
 }
 
+/// 測定専用アカウント dir に過去の transcript・`CLAUDE.md`・自動記憶が残っていないこと（A/B/C が同じ dir を使う）。
+pub fn account_dir_residue(dir: &Path) -> Vec<String> {
+    let mut v = Vec::new();
+    if dir.join("CLAUDE.md").exists() {
+        v.push(format!(
+            "{}/CLAUDE.md exists in the measurement account dir",
+            dir.display()
+        ));
+    }
+    let projects = dir.join("projects");
+    if projects.exists() && fs::read_dir(&projects).is_ok_and(|mut d| d.next().is_some()) {
+        v.push(format!(
+            "{} is not empty (past transcripts / auto memory); use a dedicated measurement account",
+            projects.display()
+        ));
+    }
+    v
+}
+
 fn check_api_dependent(a: &mut Acc, inp: &Inputs, host: &dyn Host, template: Option<&Value>) {
     let (Some(url), Some(tok)) = (&inp.api_url, &inp.token_env) else {
         return;
@@ -646,8 +747,13 @@ fn check_api_dependent(a: &mut Acc, inp: &Inputs, host: &dyn Host, template: Opt
         ),
         Some(id) => match host.api_get(url, tok, "/api/v1/llm/accounts") {
             Ok(v) => {
-                if let Err(e) = find_a_account(&v, id) {
-                    a.miss("a-arm", e);
+                match find_a_account(&v, id) {
+                    Err(e) => a.miss("a-arm", e),
+                    Ok(dir) => {
+                        for e in account_dir_residue(&dir) {
+                            a.miss("measure-env", e);
+                        }
+                    }
                 }
             }
             Err(e) => a.miss("a-arm", format!("GET /llm/accounts: {e}")),

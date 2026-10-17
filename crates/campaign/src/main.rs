@@ -20,7 +20,7 @@ use celeris_campaign::{
 const USAGE: &str = "usage: celeris-campaign <dry-run|validate|preflight|run|watch|check|check-report|export|final-accounting|grade-out|usage> --manifest <path> \
 [--interval-secs N] [--max-iterations M] [--cases <grade-case dir>] \
 [--input-manifest <path>] [--out <dir>] [--executor mock|harness|celeris] [--api-url <url> --token-env <ENV_NAME> [--task-template <json>]] [--dest <dir>] \
-[--cases-root <dir>] [--grader-root <dir>] [--grade-case-root <dir>] [--a-program <path>] [--report <file>] [--repo-src <dir>] [--materials-src <dir>] [--kb-src <dir>] [--inputs-src <dir>] [--records <records.jsonl>] [--cos-not-called <basis>] [--quota <usage.json>] [--a-account <account_id>] [--max-7d <ratio>] [--max-7d-codex <ratio>]";
+[--cases-root <dir>] [--grader-root <dir>] [--grade-case-root <dir>] [--a-program <path>] [--report <file>] [--repo-src <dir>] [--materials-src <dir>] [--kb-src <dir>] [--inputs-src <dir>] [--records <records.jsonl>] [--cos-not-called <basis>] [--quota <usage.json>] [--a-account <account_id>] [--measure-config <toml> --normal-config <toml> --canaries <json>] [--max-7d <ratio>] [--max-7d-codex <ratio>]";
 
 fn arg(args: &[String], name: &str) -> Option<PathBuf> {
     args.iter()
@@ -47,6 +47,15 @@ fn preflight_inputs(args: &[String], manifest_path: &std::path::Path) -> Inputs 
         kb_src: arg(args, "--kb-src"),
         inputs_src: arg(args, "--inputs-src"),
         a_account: text("--a-account"),
+        measure: arg(args, "--measure-config").map(|config| preflight::MeasureEnv {
+            config,
+            normal_config: arg(args, "--normal-config").unwrap_or_else(|| {
+                PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
+                    .join(".config/celeris/config.toml")
+            }),
+            canaries: or("--canaries", "canaries.json"),
+            out: arg(args, "--out"),
+        }),
     }
 }
 

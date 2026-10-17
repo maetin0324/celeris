@@ -5,7 +5,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use celeris_campaign::preflight::Inputs;
+use celeris_campaign::preflight::{Inputs, MeasureEnv};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
@@ -89,6 +89,8 @@ pub fn setup() -> Setup {
         &root().join("cases/final/k2-bf-xattr-restart-campaign/kb"),
         &k,
     );
+    fs::write(k.join("CANARY.md"), format!("trial kb {CANARY_TRIAL}\n")).unwrap();
+    let measure = write_configs(d, &measure_config(d, "measure"), &normal_config(d));
     fs::write(
         d.join("task-template.json"),
         json!({"project_id":"01ABC","acceptance":[{"type":"reviewer","text":"x"}]}).to_string(),
@@ -109,6 +111,46 @@ pub fn setup() -> Setup {
         kb_src: Some(k),
         inputs_src: Some(ins),
         a_account: Some("lab".into()),
+        measure: Some(measure),
     };
     Setup { dir, inp }
+}
+
+pub const CANARY_TRIAL: &str = "CANARY-TRIAL-KB-7f3a";
+pub const CANARY_NORMAL: &str = "CANARY-NORMAL-KB-91c2";
+pub const CANARY_GRADER: &str = "CANARY-GRADER-PRIVATE-c0de";
+
+pub fn normal_config(d: &Path) -> String {
+    format!(
+        "db = \"{n}/celeris.db\"\nworkspace_root = \"{n}/ws\"\n[knowledge]\nroot = \"{n}/kb\"\n[memory]\ndir = \"{n}/memory\"\n\
+         [api]\nlisten = \"127.0.0.1:7700\"\ntoken_file = \"{n}/token\"\n\
+         [[clusters]]\nid = \"pegasus\"\nhost = \"pegasus\"\n",
+        n = d.join("normal").display()
+    )
+}
+
+/// 正しい測定専用 config（`tag` の dir に KB・DB・作業場所を分け、`[memory]` 無し、mount は kb: のみ）。
+pub fn measure_config(d: &Path, tag: &str) -> String {
+    format!(
+        "db = \"{n}/celeris.db\"\nworkspace_root = \"{n}/ws\"\n[knowledge]\nroot = \"{n}/kb\"\ndefault_mounts = [\"kb:trial\"]\n\
+         [api]\nlisten = \"127.0.0.1:7701\"\ntoken_file = \"{n}/token\"\n\
+         [[clusters]]\nid = \"pegasus\"\nhost = \"pegasus\"\n",
+        n = d.join(tag).display()
+    )
+}
+
+pub fn write_configs(d: &Path, measure: &str, normal: &str) -> MeasureEnv {
+    fs::write(d.join("measure.toml"), measure).unwrap();
+    fs::write(d.join("normal.toml"), normal).unwrap();
+    fs::write(
+        d.join("canaries.json"),
+        json!({"forbidden":[CANARY_NORMAL, CANARY_GRADER, "CANARY-OTHER-TRIAL-55aa"],"required":[CANARY_TRIAL]}).to_string(),
+    )
+    .unwrap();
+    MeasureEnv {
+        config: d.join("measure.toml"),
+        normal_config: d.join("normal.toml"),
+        canaries: d.join("canaries.json"),
+        out: Some(d.join("out")),
+    }
 }

@@ -131,3 +131,52 @@ work_units だけ。`planner_flow.rs:711-723`）が足されること、子 task
 
 - 試行 task の判定（campaign label）を dispatcher に 1 か所だけ置き、knowledge/memory/conversation/env をまとめて切り替える。
   汎用の権限・来歴基盤にはしない。
+
+## 最終記録（canary-e2e）
+
+### 修正 commit と追加試験
+- 修正 commit: `02c9b1f6`（fix-context: 試行 task の run 文脈を試行用 `kb/` に固定。`run_context.rs` の `trial_scope`、memory・会話・認可・skills を外し
+  `CELERIS_KNOWLEDGE_ROOT=<ws>/kb` を env に重ねる）、`ef121e56`（preflight-kb: 測定専用構成・試行 KB 同一性・canary の preflight 検査と runbook
+  `2026-10-17-mlsys-p0-3-trial-context/preflight-kb.md`）。棚卸しは `e185e7f8`。
+- 追加試験（この WU）: `crates/celeris/tests/trial_context_canary_e2e.rs`。実 task-api router（`POST /api/v1/tasks` の正式 DTO、`campaign` 付き）で
+  A/B/C 相当の試行 task（親＋reviewer、子、planner）を作り、本番の組み立て経路 `build_dispatcher` の実 Dispatcher を tick して、
+  捕捉するだけの stub adapter が受けた `RunContext`・env を検査する。外部 LLM なし。手書き fake JSON・DB 直挿入なし（task は HTTP、org・通常運用の記憶・会話は store API）。
+  - `trial_tasks_through_the_real_router_see_only_the_trial_kb`: 通常 KB・skill・記憶・会話・永続認可・grader 私有・他 arm の成果の識別文字列が
+    worker・子 task・planner・reviewer の RunContext/env に出ず、試行用 `kb/` の識別文字列は knowledge index に出て env が `<ws>/kb` を指す。
+    `knowledge search`（`task_ops::knowledge::search`、根は env の値）で禁止文字列は 0 件・試行用 KB は得られ、`read_page` で読める。workspace（`kb/`・`materials/`・`output/`）の読取にも禁止文字列は無い。
+    対照として通常 KB を根にすれば NORMAL canary は検索で見つかる（試験の空振り防止）。
+  - `resumed_daemon_gives_the_same_canary_result`（再開）: dispatcher を作り直して同じ DB に 2 反復目（A/B/C）を投入しても同じ結果。1 反復目の成果は 2 反復目の文脈・検索・workspace に出ず、再開後に既実行 task を再実行しない。
+  - `reset_environment_gives_the_same_canary_result`（リセット）: 環境を捨てて作り直しても、run の種別の内訳と「文脈に試行用 KB が出た run 数」が同じ。
+  - 通常運用に近い構成（通常 KB・`[memory]`・会話・認可・skill 付きの担当）で立てている。隔離が構成の良さではなく文脈生成で成立することを見るため。
+  - 変異確認: 試行 workspace に通常 KB canary を混ぜる、`trial_scope` を無効化する、のどちらでも fail することを確認して戻した。
+
+### 4 区分の検証状態
+- **実装済み**: 試行 task（campaign 識別の自身か祖先）の文脈を試行用 `kb/` に固定（knowledge 前置き・memory・conversation・standing_rules・skills・`CELERIS_KNOWLEDGE_ROOT`）。
+  preflight の測定構成検査・試行 KB 同一性・canary 検査・runbook。
+- **mock 検証済み**（stub adapter、無課金）: 上記 3 試験。実 router（正式 DTO）＋実 Dispatcher（`build_dispatcher`）＋実 SQLite を通る。LLM と harness は stub。
+  既存: `task-dispatch` の `trial_context`（2 件）、`crates/campaign/tests/preflight.rs`、`trial_inputs.rs`、`a_arm_hardening.rs`。
+- **実経路検証済み**: 実 task-api router・実 Dispatcher の文脈生成・実 DB・実 `task_ops::knowledge` の検索/読取まで（上の 3 試験のうち LLM を除く全部）。
+  実 bwrap の A arm 隔離は bwrap のある host でだけ（`a_arm_hardening.rs`）。
+- **未検証**:
+  - 実 harness（Claude Code / codex）が `kb/` の索引と `CELERIS_KNOWLEDGE_ROOT` をどう使うか、実 LLM の挙動。
+  - worker の filesystem 直読み（棚卸し R8）: B/C worker は同 uid で host を読める。この試験は「文脈・検索・workspace に出ない」ことまで。bwrap 相当で縛るかは人の決定 D2。
+  - Claude アカウント dir の `CLAUDE.md`・自動記憶・transcript（R10/R11）: preflight の `account_dir_residue` で検査するだけで、実アカウントでは未実行。D1。
+  - `celerisctl knowledge search/get` の実バイナリ: 試行 `kb/` は `.git` が無く `search` は「KB が無い」で止まる（fail closed。通常 KB へは行かない）。この試験は同じ根解決での library 呼び出し（`task_ops::knowledge`）で確認した。
+  - 実 daemon を測定 config で起動しての接続確認（runbook の手順）。
+  - `cargo clippy --workspace --all-targets` は既存の `crates/task-dispatch/src/dispatcher/tests/trial_context.rs` の `type_complexity`（fix-context WU 由来）で落ちる。release gate の `cargo clippy --workspace -- -D warnings` は通る。
+
+### 本番移行（人が実行する手順のみ。この WU は本番 host を変えていない）
+コードの変更は本 WU に無く、fix-context の挙動は campaign 識別を持つ task にだけ効く（通常 task は変わらない）。測定を始める前に人が行う:
+1. fix-context・preflight-kb を含む release を通常手順で verify・promote する（`agent-docs/progress/2026-10-17-mlsys-p0-3-trial-context/preflight-kb.md` の runbook §2〜§4）。
+2. 測定専用 dir（例 `/local/celeris/measure/<campaign>/`）に別 config・別 DB・別 KB root・別 workspace_root を作り、測定 daemon を `CELERIS_CONFIG=<測定 config>` で起動する（通常運用の `~/.config/celeris`・`~/.local/celeris` は触らない）。
+3. `celeris-campaign preflight --measure-config <測定 config> --normal-config ~/.config/celeris/config.toml --canaries <canaries.json> ...` が全項目 pass になることを確認する。
+4. リセット（DB・KB・memory・out を捨てて作り直す）と再開（out と ledger だけ再利用）の後に 3 を再実行する。接続（`[[clusters]]`・`[api]`）は preflight の「接続の保全」で確認する。
+5. 人の決定 D1（Claude アカウント dir を測定専用にするか）と D2（B/C worker の filesystem を bwrap で縛るか、path 分離＋canary 検査で受け入れるか）に答える。
+
+### 未解決事項
+- 上の「未検証」。特に D1・D2 が未決。
+- grader root の位置検査（R9）は preflight 未実装（runbook の人の手順）。
+
+### 提案
+- 実 LLM を伴う確認は認証が使える環境で 1 試行だけ、試行 `kb/` の canary を読ませて前置きの索引が効くことを確認する（人が依頼）。
+- `trial_context.rs` の `type_complexity` を直し、`--all-targets` の clippy も通す。

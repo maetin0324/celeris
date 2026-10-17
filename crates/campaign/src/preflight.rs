@@ -469,16 +469,21 @@ fn check_inputs(a: &mut Acc, m: &CampaignManifest, set: &CaseSet, inp: &Inputs) 
     }
 }
 
-/// `POST /tasks` が 422 になる組合せと、自動取り込みされる案件を、案件・repo の JSON から判定する。
+/// `POST /tasks` が 422 になる組合せと、自動取り込みされる案件を、案件（`ProjectDetail`）・repo 一覧の JSON から判定する。
 /// executor は常に local の `workspace` を渡すので、選ばれる repo（template の `repos`、無ければ primary）に
 /// リモートが 1 つでもあれば task-ops `create` が拒否する。
 pub fn check_project_rules(
     template: &Map<String, Value>,
-    project: &Value,
+    detail: &Value,
     repos: &Value,
 ) -> Vec<String> {
     let mut v = Vec::new();
-    if project["auto_integrate"].as_bool().unwrap_or(true) {
+    // 実 `GET /projects/{id}` は `ProjectDetail`（`{"project":{"auto_integrate":..},"repos":[..],..}`）。
+    // 欠落・bool でない・project が無い場合も on 扱い（安全側）。
+    if detail["project"]["auto_integrate"]
+        .as_bool()
+        .unwrap_or(true)
+    {
         v.push(
             "the project has auto_integrate on (or unknown); trial tasks could be merged into the repo's main. Use a dedicated campaign project with auto_integrate=false"
                 .into(),

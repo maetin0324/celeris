@@ -17,10 +17,10 @@ use celeris_campaign::{
     watch::{self, SystemClock, WatchOptions},
 };
 
-const USAGE: &str = "usage: celeris-campaign <dry-run|validate|preflight|run|watch|check|check-report|export|grade-out|usage> --manifest <path> \
+const USAGE: &str = "usage: celeris-campaign <dry-run|validate|preflight|run|watch|check|check-report|export|final-accounting|grade-out|usage> --manifest <path> \
 [--interval-secs N] [--max-iterations M] [--cases <grade-case dir>] \
 [--input-manifest <path>] [--out <dir>] [--executor mock|harness|celeris] [--api-url <url> --token-env <ENV_NAME> [--task-template <json>]] [--dest <dir>] \
-[--cases-root <dir>] [--grader-root <dir>] [--grade-case-root <dir>] [--a-program <path>] [--report <file>] [--repo-src <dir>] [--materials-src <dir>] [--kb-src <dir>] [--inputs-src <dir>] [--a-account <account_id>] [--max-7d <ratio>] [--max-7d-codex <ratio>]";
+[--cases-root <dir>] [--grader-root <dir>] [--grade-case-root <dir>] [--a-program <path>] [--report <file>] [--repo-src <dir>] [--materials-src <dir>] [--kb-src <dir>] [--inputs-src <dir>] [--records <records.jsonl>] [--cos-not-called <basis>] [--quota <usage.json>] [--a-account <account_id>] [--max-7d <ratio>] [--max-7d-codex <ratio>]";
 
 fn arg(args: &[String], name: &str) -> Option<PathBuf> {
     args.iter()
@@ -47,6 +47,43 @@ fn preflight_inputs(args: &[String], manifest_path: &std::path::Path) -> Inputs 
         kb_src: arg(args, "--kb-src"),
         inputs_src: arg(args, "--inputs-src"),
         a_account: text("--a-account"),
+    }
+}
+
+/// `--records` があれば最終集計を作り、整合を検査する（不整合は Err）。無ければ None。
+fn accounting(
+    args: &[String],
+    m: &CampaignManifest,
+    out: &std::path::Path,
+) -> Result<Option<serde_json::Value>, String> {
+    let Some(rp) = arg(args, "--records") else {
+        return Ok(None);
+    };
+    let records = std::fs::read_to_string(&rp).map_err(|e| format!("{}: {e}", rp.display()))?;
+    let quota = match arg(args, "--quota") {
+        Some(p) => Some(
+            serde_json::from_slice(
+                &std::fs::read(&p).map_err(|e| format!("{}: {e}", p.display()))?,
+            )
+            .map_err(|e| format!("{}: {e}", p.display()))?,
+        ),
+        None => None,
+    };
+    let cos = arg(args, "--cos-not-called").map(|p| p.to_string_lossy().into_owned());
+    let a = celeris_campaign::final_accounting::compute(
+        m,
+        out,
+        &celeris_campaign::final_accounting::FinalInputs {
+            records_jsonl: &records,
+            cos_not_called_basis: cos.as_deref(),
+            quota,
+        },
+    )?;
+    let v = celeris_campaign::final_accounting::recheck(&a);
+    if v.is_empty() {
+        Ok(Some(a))
+    } else {
+        Err(v.join("\n"))
     }
 }
 
@@ -264,7 +301,15 @@ fn run(args: Vec<String>) -> Result<String, String> {
             let rp = arg(&args, "--report").ok_or("--report <file> is required")?;
             let text =
                 std::fs::read_to_string(&rp).map_err(|e| format!("{}: {e}", rp.display()))?;
-            let v = celeris_campaign::report::check_report(&m, &out()?, &text);
+            let out = out()?;
+            let mut v = celeris_campaign::report::check_report(&m, &out, &text);
+            match accounting(&args, &m, &out) {
+                Ok(Some(a)) => v.extend(celeris_campaign::report::check_consumption_claims(
+                    &a, &text,
+                )),
+                Ok(None) => {}
+                Err(e) => v.push(e),
+            }
             if v.is_empty() {
                 Ok("{\"ok\":true}".into())
             } else {
@@ -314,10 +359,16 @@ fn run(args: Vec<String>) -> Result<String, String> {
             let s = serde_json::to_string_pretty(&rep).map_err(|e| e.to_string())?;
             if violations.is_empty() { Ok(s) } else { Err(s) }
         }
+        "final-accounting" => {
+            let out = out()?;
+            let a = accounting(&args, &m, &out)?.ok_or("--records <records.jsonl> is required")?;
+            serde_json::to_string_pretty(&a).map_err(|e| e.to_string())
+        }
         "export" => {
             let out = out()?;
             let dest = arg(&args, "--dest").unwrap_or_else(|| out.join("export"));
-            let t = export::export(&m, &out, &dest)?;
+            let acct = accounting(&args, &m, &out)?;
+            let t = export::export_with(&m, &out, &dest, acct.as_ref())?;
             serde_json::to_string_pretty(&t).map_err(|e| e.to_string())
         }
         _ => Err(USAGE.into()),

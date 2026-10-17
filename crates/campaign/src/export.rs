@@ -9,6 +9,7 @@ use crate::{
     manifest::CampaignManifest,
 };
 
+pub const FINAL_ACCOUNTING_FILE: &str = "final-accounting.json";
 pub const MISSING_LABEL: &str = "欠測";
 
 fn status(sum_missing: u64, ran: u64) -> &'static str {
@@ -122,6 +123,17 @@ fn cell(v: &Value, col: &str) -> String {
 /// 成功 = 実行器 passed かつ独立採点 final_pass。未完了（記録欠落・未採点）の集計は `table.incomplete.*` に
 /// `complete: false` を付けて書き、最終版の `table.json` / `table.csv` は書かない（古い最終版も消す）。
 pub fn export(m: &CampaignManifest, out: &Path, dest: &Path) -> Result<Value, String> {
+    export_with(m, out, dest, None)
+}
+
+/// `export` に最終集計（`final_accounting::compute` の出力）を添える。表の `consumption` に範囲と削減の可否だけを写し、
+/// 全文は `final-accounting.json` に書く。欠測があれば範囲は `observed_partial`（完全な総費用ではない）。
+pub fn export_with(
+    m: &CampaignManifest,
+    out: &Path,
+    dest: &Path,
+    accounting: Option<&Value>,
+) -> Result<Value, String> {
     let rep = check(m, out);
     let (complete, reasons) = (rep.complete, rep.incomplete_reasons.clone());
     let rc = match (rep.ok, rep.recomputed) {
@@ -141,7 +153,7 @@ pub fn export(m: &CampaignManifest, out: &Path, dest: &Path) -> Result<Value, St
         .and_then(|v| v["evidence_kind"].as_str().map(String::from))
         .unwrap_or_else(|| "unknown".into());
     let real = kind == "real";
-    let table = json!({
+    let mut table = json!({
         "schema": "celeris.campaign-table/1",
         "campaign_sha256": m.compute_sha256()?,
         "split": m.split,
@@ -155,7 +167,27 @@ pub fn export(m: &CampaignManifest, out: &Path, dest: &Path) -> Result<Value, St
         "configs": rows,
         "comparisons": rc.pairs,
     });
+    if let Some(a) = accounting {
+        let scope = |m: &str| {
+            if a["total"]["complete"][m] == true {
+                "complete"
+            } else {
+                "observed_partial"
+            }
+        };
+        table["consumption"] = json!({
+            "file": FINAL_ACCOUNTING_FILE,
+            "scope": {"tokens": scope("tokens"), "list_cost_usd": scope("list_cost_usd"), "cash_cost_usd": scope("cash_cost_usd")},
+            "reduction_confirmable": a["reduction_confirmable"],
+            "gaps": a["gaps"].as_array().map_or(0, Vec::len),
+        });
+    }
     fs::create_dir_all(dest).map_err(|e| e.to_string())?;
+    if let Some(a) = accounting {
+        let mut s = serde_json::to_string_pretty(a).map_err(|e| e.to_string())?;
+        s.push('\n');
+        fs::write(dest.join(FINAL_ACCOUNTING_FILE), s).map_err(|e| e.to_string())?;
+    }
     let stem = if complete {
         "table"
     } else {

@@ -86,3 +86,58 @@ pub fn compare(m: &CampaignManifest, rc: &Recomputed, text: &str) -> Vec<String>
     }
     v
 }
+
+/// 報告の消費の主張を最終集計（`final_accounting::compute` の出力）と突き合わせる。
+/// - `consumption metric=<m> total=<n> scope=<complete|observed_partial>`: 値は観測和と一致し、
+///   欠測のある指標を `complete`（完全な総費用）と呼ばない。
+/// - `reduction metric=<m> confirmed=<true|false>`: 欠測のある指標の削減を確定にしない。
+pub fn check_consumption_claims(acct: &serde_json::Value, text: &str) -> Vec<String> {
+    let key = |m: &str| match m {
+        "tokens" => Some("tokens"),
+        "list_cost_usd" => Some("list_cost_micro_usd"),
+        "cash_cost_usd" => Some("cash_cost_micro_usd"),
+        _ => None,
+    };
+    let mut v = Vec::new();
+    for line in text.lines() {
+        let mut it = line.split_whitespace();
+        let head = it.next();
+        if !matches!(head, Some("consumption" | "reduction")) {
+            continue;
+        }
+        let kv: BTreeMap<&str, &str> = it.filter_map(|t| t.split_once('=')).collect();
+        let Some(metric) = kv.get("metric").copied().filter(|m| key(m).is_some()) else {
+            v.push(format!("report: missing or unknown metric in `{line}`"));
+            continue;
+        };
+        let complete = acct["total"]["complete"][metric] == true;
+        if head == Some("reduction") {
+            if kv.get("confirmed") == Some(&"true")
+                && !acct["reduction_confirmable"][metric]
+                    .as_bool()
+                    .unwrap_or(false)
+            {
+                v.push(format!(
+                    "report: reduction on {metric} is confirmed but the accounting has missing data; it cannot be confirmed"
+                ));
+            }
+            continue;
+        }
+        let k = key(metric).unwrap_or_default();
+        match kv.get("scope").copied() {
+            Some("complete") if !complete => v.push(format!(
+                "report: {metric} total is called complete but only an observed partial sum exists (missing data)"
+            )),
+            Some("complete" | "observed_partial") => {}
+            _ => v.push(format!("report: scope must be complete or observed_partial in `{line}`")),
+        }
+        let stated = kv.get("total").and_then(|x| x.parse::<u64>().ok());
+        if stated != acct["observed_sum"][k].as_u64() {
+            v.push(format!(
+                "report: {metric} total {stated:?} differs from the observed sum {}",
+                acct["observed_sum"][k]
+            ));
+        }
+    }
+    v
+}

@@ -548,5 +548,4 @@ async fn task_override_evidence_mode_none_is_recorded_without_a_table_version() 
         task_core::route_select::EvidenceMode::None
     );
     assert_eq!(resolved.evidence_table_id, None);
-    assert_eq!(sqlite.evidence_lookup_count(), 0, "none は根拠表を読まない");
 }

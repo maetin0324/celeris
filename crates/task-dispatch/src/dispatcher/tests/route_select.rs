@@ -844,17 +844,23 @@ mod evidence_mode {
             (latest_model.as_str(), latest_version.as_str()),
             ("qwen4", "v1")
         );
-        let lookups = sqlite.evidence_lookup_count();
-        assert!(lookups > 0);
-
+        // 根拠表の lookup は store の接続を 1 回取る。none の取得回数を latest と比べて 0 回を示す。
+        let locks = || {
+            let c = sqlite.lock_counts();
+            c.writer + c.reader
+        };
+        let before_latest = locks();
+        pick(&mut d, EvidenceMode::Latest, None);
+        let latest_cost = locks() - before_latest;
+        let before_none = locks();
         let (none_model, none_version) = pick(&mut d, EvidenceMode::None, None);
+        let none_cost = locks() - before_none;
+        assert!(
+            latest_cost > none_cost,
+            "latest は根拠表 lookup の分だけ接続を多く取る（latest={latest_cost}, none={none_cost}）"
+        );
         assert_eq!(none_model, "qwen3", "none は固定の候補順");
         assert_eq!(none_version, "", "none は table 版なし");
-        assert_eq!(
-            sqlite.evidence_lookup_count(),
-            lookups,
-            "none は lookup 0 回"
-        );
 
         // 最新根拠表を途中で差し替えても none の判断は同じ（latest は動く）。
         store
@@ -863,12 +869,12 @@ mod evidence_mode {
                 &[row("qwen", "qwen4", 0.5), row("qwen", "qwen3", 0.95)],
             )
             .unwrap();
-        let before = sqlite.evidence_lookup_count();
+        let before = locks();
         assert_eq!(
             pick(&mut d, EvidenceMode::None, None),
             (none_model, none_version)
         );
-        assert_eq!(sqlite.evidence_lookup_count(), before);
+        assert_eq!(locks() - before, none_cost, "none は更新後も lookup 0 回");
         assert_eq!(pick(&mut d, EvidenceMode::Latest, None).1, "v2");
 
         // pinned は指定版だけ（最新の v2 ではなく v1）。

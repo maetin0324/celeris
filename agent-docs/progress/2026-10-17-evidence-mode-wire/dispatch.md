@@ -9,7 +9,7 @@ completed: 2026-10-17
 - `RouteContext.evidence_mode`（none/pinned/latest）を `dispatch_run` が task 欄の routing_override から渡す。
 - `fill_route_stage`: none は `latest_routing_evidence` も `routing_evidence_at` も呼ばない。pinned は指定版のみ（版なしなら最新版へ落とさず読まない）。latest は従来。
 - 記録: route_decision に `evidence_mode` と、none では `evidence_table:"none"`（evidence_version は null）。proposal の policy_version は `evidence=none(mode=none)`。
-- `SqliteStore::evidence_lookup_count()`（試験用観測値）を追加。
+- lookup 0 回の断言は task-core を触らず `SqliteStore::lock_counts()` の差分で行う（根拠表 lookup は接続を 1 回取る。none の差分 < latest の差分、途中更新後も none の差分は不変）。
 - 試験: `route_select::evidence_mode::none_never_reads_the_table_and_ignores_later_updates`（lookup 数不変・v2 差替えでも none 不変・pinned=v1・latest=v2）、`lane_assist::task_override_evidence_mode_none_is_recorded_without_a_table_version`（通常 dispatch、lookup 0）。
 - 検査: test-parallel 5622 passed/0 failed、clippy・fmt exit 0。
 

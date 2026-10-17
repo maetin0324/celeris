@@ -1,6 +1,8 @@
 ---
-task: 01M54HYGQNYDP2MGXXS7AY7164
+title: evidence_mode（none / pinned / latest）の一貫化
+tasks: [01M54HYGQNYDP2MGXXS7AY7164]
 status: done
+updated: 2026-10-17
 completed: 2026-10-17
 ---
 # evidence_mode（none / pinned / latest）の一貫化 — 全体の状態

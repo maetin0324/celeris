@@ -159,7 +159,8 @@ pub use route_launch::{
 };
 pub use route_select::account_adapter_for_source_kind;
 pub use route_select::{
-    RouteFailure, RouteInput, RoutePick, RouteState, RouteTrace, harness_request_for, route_select,
+    RouteContext, RouteFailure, RouteInput, RoutePick, RouteState, RouteTrace, harness_request_for,
+    route_select,
 };
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct DispatchRoutingSettings {

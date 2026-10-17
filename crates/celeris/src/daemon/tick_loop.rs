@@ -175,7 +175,10 @@ pub(crate) async fn tick_loop(
             {
                 dispatcher.set_account_login_pending(task_core::AccountAdapter::Codex, &id, false);
             }
-            for (id, _ok) in accounts_admin::poll_codex_logins(&codex_login_sessions).await {
+            for (id, ok) in accounts_admin::poll_codex_logins(&codex_login_sessions).await {
+                if ok {
+                    dispatcher.record_account_login(task_core::AccountAdapter::Codex, &id);
+                }
                 dispatcher.set_account_login_pending(task_core::AccountAdapter::Codex, &id, false);
             }
             // ADR-0032 D4 / B1: 放置されたクラスタ接続のセッションも同じ規約で畳む（チャネルを使わない）。
@@ -625,6 +628,9 @@ pub(crate) async fn tick_loop(
                     accounts_admin::AccountAdminEvent::Checked { adapter, id, result, detail, observation } => {
                         tracing::info!(who = "admin", op = "account_check", account_id = %id, %adapter, result = %result, "account check recorded");
                         dispatcher.record_account_check(adapter, &id, &result, detail, observation);
+                    }
+                    accounts_admin::AccountAdminEvent::LoggedIn { adapter, id } => {
+                        dispatcher.record_account_login(adapter, &id);
                     }
                     accounts_admin::AccountAdminEvent::LoginPending { adapter, id, pending } => {
                         dispatcher.set_account_login_pending(adapter, &id, pending);

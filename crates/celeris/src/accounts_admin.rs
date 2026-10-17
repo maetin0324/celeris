@@ -62,6 +62,8 @@ pub enum AccountAdminEvent {
         detail: Option<String>,
         observation: Option<RateLimitObservation>,
     },
+    /// 再ログインの成功（ADR 2026-10-17）: 認証失敗で外していたアカウントを routing に戻す。
+    LoggedIn { adapter: AccountAdapter, id: String },
     /// D7: 進行中のログインの有無（開始・コード送信・打ち切りのたびに送る）。
     LoginPending {
         adapter: AccountAdapter,
@@ -575,10 +577,18 @@ pub fn spawn_login_code(
         let _ = events
             .send(AccountAdminEvent::LoginPending {
                 adapter: AccountAdapter::ClaudeCode,
-                id,
+                id: id.clone(),
                 pending: false,
             })
             .await;
+        if result.result == LoginOutcome::Ok {
+            let _ = events
+                .send(AccountAdminEvent::LoggedIn {
+                    adapter: AccountAdapter::ClaudeCode,
+                    id: id.clone(),
+                })
+                .await;
+        }
         let _ = reply.send(Ok(AccountLoginCodeOutcome {
             ok: result.result == LoginOutcome::Ok,
             detail: result.detail,

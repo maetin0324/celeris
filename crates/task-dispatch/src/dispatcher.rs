@@ -88,7 +88,8 @@ use tokio::task::JoinHandle;
 
 use crate::accounts::{
     AccountBook, AccountCandidate, AccountCheckRecord, AccountCooldownReason, AccountDir,
-    ExcludedReason, ObservationSource, cooldown_for_failure, evaluate, scan_accounts,
+    ExcludedReason, ObservationSource, account_cooldown_for_failure, cooldown_for_failure,
+    evaluate, scan_accounts,
 };
 use crate::policy::{ProviderId, ProviderOutcome};
 
@@ -2163,7 +2164,10 @@ impl Dispatcher {
                 } else {
                     AccountCooldownReason::Throttled
                 };
-                let cooldown = cooldown_for_failure(
+                if reason == AccountCooldownReason::AuthFailed && !book.auth_failed_held(id, now) {
+                    self.notify_account_auth_failed(adapter, id);
+                }
+                let cooldown = account_cooldown_for_failure(
                     book.state(id),
                     reason,
                     now,
@@ -2186,6 +2190,21 @@ impl Dispatcher {
         );
         if let Err(e) = book.save() {
             tracing::warn!(account_id = %id, %adapter, error = %e, "failed to save account book after check");
+        }
+    }
+
+    /// 再ログインの成功: 認証失敗の保持を解く（ADR 2026-10-17）。他の理由の cooldown は残す。
+    pub fn record_account_login(&mut self, adapter: AccountAdapter, id: &str) {
+        let now = (self.now_unix_fn)();
+        let Some(book) = self.account_book(adapter) else {
+            return;
+        };
+        let Ok(mut book) = book.lock() else { return };
+        if book.auth_failed_held(id, now) {
+            book.clear_cooldown(id);
+            if let Err(e) = book.save() {
+                tracing::warn!(account_id = %id, %adapter, error = %e, "failed to save account book after login");
+            }
         }
     }
 

@@ -186,7 +186,8 @@ async fn account_items(state: &ApiState) -> Result<Vec<AccountView>, ApiProblem>
             source_id: pool_source_id(*adapter).to_string(),
             account_id: d.id.clone(),
             dir: Some(d.dir.display().to_string()),
-            logged_in: d.logged_in,
+            // 認証失敗で外されたアカウントはログイン済みに見せない（snapshot 側が marker と照合済み）。
+            logged_in: live.map_or(d.logged_in, |l| l.logged_in),
             in_use: live.map(|l| l.in_use).unwrap_or(0),
             usage: live
                 .and_then(|l| l.usage.as_ref())

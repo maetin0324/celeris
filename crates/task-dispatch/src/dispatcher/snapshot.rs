@@ -264,7 +264,7 @@ impl Dispatcher {
                 items.push(AccountLive {
                     adapter: adapter.as_str().to_string(),
                     id: d.id.clone(),
-                    logged_in: d.logged_in,
+                    logged_in: d.logged_in && !book.auth_failed_held(&d.id, now),
                     in_use: in_use as u32,
                     usage: state
                         .and_then(|s| s.usage.as_ref())

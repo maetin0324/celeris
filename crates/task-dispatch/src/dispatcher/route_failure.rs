@@ -136,13 +136,46 @@ impl Dispatcher {
             return;
         };
         let Ok(mut book) = book.lock() else { return };
+        if cooldown_reason == AccountCooldownReason::AuthFailed
+            && !book.auth_failed_held(account_id, now)
+        {
+            self.notify_account_auth_failed(adapter, account_id);
+        }
         let cooldown = {
             let state = book.state(account_id);
-            cooldown_for_failure(state, cooldown_reason, now, fallback_secs)
+            account_cooldown_for_failure(state, cooldown_reason, now, fallback_secs)
         };
         book.set_cooldown(account_id, cooldown, now);
         if let Err(e) = book.save() {
             tracing::warn!(%account_id, %adapter, error = %e, "failed to save account book after cooldown");
+        }
+    }
+
+    /// ADR 2026-10-17: アカウントが認証失敗（OAuth 切れ等）で routing から外れたことを人へ知らせる（bad_news。
+    /// inbox / Discord の通知経路）。外れた遷移ごとに 1 回（保持中の再失敗では呼ばない）。
+    pub(super) fn notify_account_auth_failed(&self, adapter: AccountAdapter, account_id: &str) {
+        let now = OffsetDateTime::now_utc();
+        let title =
+            format!("アカウント {account_id} ({adapter}) の認証が切れました。再ログインが必要です");
+        let summary = format!(
+            "{title}。このアカウントは選択から外れ、再ログインか手動確認（check）の成功まで戻りません。実行中の task は失敗にせず、別のアカウントか再ログインを待ちます。"
+        );
+        if let Err(error) = self.store.notice_record(&task_core::feed::NoticeEvent {
+            source_key: format!(
+                "account:auth-failed:{adapter}:{account_id}:{}",
+                ulid::Ulid::new()
+            ),
+            kind: task_core::feed::NoticeKind::BadNews,
+            group_key: format!("bad_news:account:{adapter}:{account_id}"),
+            title,
+            summary,
+            project_id: None,
+            task_id: None,
+            target: None,
+            links: Vec::new(),
+            at: now,
+        }) {
+            tracing::error!(%error, %account_id, %adapter, "failed to record the account auth failure notice");
         }
     }
 

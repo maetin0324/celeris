@@ -525,9 +525,11 @@ impl Dispatcher {
             }
             Err(e) => match provider_failure_outcome(&e) {
                 // ADR-0010 D5（P-21）: 供給側失敗は attempts を消費せず requeue し、プロバイダを cooldown にする。
+                // ADR 2026-10-17: 認証失敗は上限に数えない（アカウントは routing から外れ、再ログインか別アカウントを待つ）。
                 Some(po)
-                    if consecutive_requeues(&self.store.events_for(task_id)?)
-                        < self.config.max_requeues =>
+                    if matches!(po, ProviderOutcome::AuthFailed)
+                        || consecutive_requeues(&self.store.events_for(task_id)?)
+                            < self.config.max_requeues =>
                 {
                     (Trigger::Requeue, format!("requeue: adapter: {e}"), None, po)
                 }

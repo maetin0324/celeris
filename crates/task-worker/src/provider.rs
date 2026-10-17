@@ -15,6 +15,12 @@ const AUTH_FAILED_PATTERNS: &[&str] = &[
     "authentication",
     "not logged in",
     "/login",
+    // claude の OAuth 切れ: "Failed to authenticate: OAuth session expired and could not be refreshed"
+    // （2026-10-16 の実機。"authentication" には当たらず未分類のまま選ばれ続けた）。
+    "failed to authenticate",
+    "oauth session expired",
+    "oauth token has expired",
+    "could not be refreshed",
 ];
 const AUTH_FAILED_CODES: &[&str] = &["401"];
 

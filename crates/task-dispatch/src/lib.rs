@@ -40,8 +40,8 @@ pub use accounts::{
     AccountBook, AccountCandidate, AccountCheckRecord, AccountCooldown, AccountCooldownReason,
     AccountDir, AccountEvaluation, AccountState, EXHAUSTED_UTILIZATION, ExcludedReason,
     FIVE_HOUR_SECS, IN_USE_PENALTY, MIN_WEEK_FRACTION, ObservationSource, SEVEN_DAY_SECS,
-    cooldown_for_failure, evaluate, scan_accounts, select_account, select_account_least_loaded,
-    valid_account_id,
+    account_cooldown_for_failure, cooldown_for_failure, evaluate, scan_accounts, select_account,
+    select_account_least_loaded, valid_account_id,
 };
 /// 通し試験が dispatcher と同じ経路で決定ログへ投影する。
 pub use dispatcher::record_task_decision_log;

@@ -2148,3 +2148,57 @@ fn delegated_children_waits(s: &task_ops::daemon::DaemonSnapshot) -> Vec<TaskId>
         .map(|w| w.task_id)
         .collect()
 }
+
+/// ADR 2026-10-17: reviewer run の認証失敗は `max_requeues` にも reviewer の失敗回数にも数えない
+/// （再ログインか別アカウントを待つ）。上限 2 を超えて失敗しても Reviewer 条件は fail にならず、
+/// 直った後の判定で通る。
+#[tokio::test]
+async fn reviewer_auth_failure_does_not_consume_the_requeue_limit() {
+    struct AuthFailingReviewer {
+        review_calls: AtomicUsize,
+    }
+    #[async_trait]
+    impl WorkerAdapter for AuthFailingReviewer {
+        fn id(&self) -> &str {
+            "instant"
+        }
+        async fn run(
+            &self,
+            req: RunRequest,
+            _run_id: &str,
+            _limits: RunLimits,
+            _sink: &dyn EventSink,
+        ) -> Result<RunOutcome, AdapterError> {
+            if req.task.kind == TaskKind::Review {
+                if self.review_calls.fetch_add(1, Ordering::SeqCst) < 4 {
+                    return Err(AdapterError::AuthFailed(
+                        "Failed to authenticate: OAuth session expired and could not be refreshed"
+                            .into(),
+                    ));
+                }
+                std::fs::create_dir_all(&req.artifacts_dir).unwrap();
+                std::fs::write(
+                    req.artifacts_dir.join("review.json"),
+                    r#"{"verdicts":[{"criterion":0,"pass":true,"reason":"fine"}]}"#,
+                )
+                .unwrap();
+            }
+            Ok(done_outcome())
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let task = new_task(dir.path(), Check::Reviewer, 0);
+    store.insert(&task).unwrap();
+    let adapter = Arc::new(AuthFailingReviewer {
+        review_calls: AtomicUsize::new(0),
+    });
+    let mut d = dispatcher(store.clone(), adapter.clone(), 2);
+    d.config.max_requeues = 2;
+    d.config.max_reviewer_retries = 2;
+    let report = run_until_idle(&mut d, 800).await;
+    assert!(report.idle);
+    let t = store.get(task.id).unwrap().unwrap();
+    assert_eq!((t.status, t.attempts), (Status::Done, 0));
+    assert_eq!(adapter.review_calls.load(Ordering::SeqCst), 5);
+}

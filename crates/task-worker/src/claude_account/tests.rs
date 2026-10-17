@@ -59,6 +59,27 @@ async fn check_account_auth_failure_path() {
     assert!(check.detail.unwrap().contains("login"));
 }
 
+/// 2026-10-16: OAuth 切れの結果文は `result = "ok"` ではなく `AuthFailed` として返る。
+#[tokio::test]
+async fn check_account_oauth_session_expired_is_auth_failed() {
+    let dir = tempfile::tempdir().unwrap();
+    let command = stub(
+        dir.path(),
+        r#"echo '{"type":"result","subtype":"success","is_error":true,"result":"Failed to authenticate: OAuth session expired and could not be refreshed"}'"#,
+    );
+    let acct = account_dir(dir.path(), "a");
+    let check = check_account(
+        command.to_str().unwrap(),
+        &acct,
+        "haiku",
+        Duration::from_secs(5),
+        &[],
+    )
+    .await;
+    assert_eq!(check.result, AccountCheckResult::AuthFailed);
+    assert!(check.detail.unwrap().contains("OAuth session expired"));
+}
+
 #[tokio::test]
 async fn check_account_spawn_failure_for_nonexistent_command() {
     let dir = tempfile::tempdir().unwrap();

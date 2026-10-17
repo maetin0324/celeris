@@ -2889,6 +2889,7 @@ fn parent_sccache_family() -> String {
     family.iter().map(|kv| format!("{kv} ")).collect()
 }
 
+mod account_auth_failure;
 mod build_cache;
 mod class_route;
 mod cleanup_and_disk;

@@ -244,3 +244,19 @@ fn cos_source_fallback_session_limit_is_exhausted() {
         Some(ProviderFailure::Exhausted)
     );
 }
+
+/// 2026-10-16 の実機: claude の OAuth 切れの文面は「authentication」を含まず、未分類のまま選ばれ続けた。
+#[test]
+fn claude_oauth_session_expired_is_auth_failed() {
+    for text in [
+        "Failed to authenticate: OAuth session expired and could not be refreshed",
+        "OAuth session expired",
+        "OAuth token has expired. Please run /login",
+    ] {
+        assert_eq!(
+            classify_provider_failure(text),
+            Some(ProviderFailure::AuthFailed),
+            "{text}"
+        );
+    }
+}

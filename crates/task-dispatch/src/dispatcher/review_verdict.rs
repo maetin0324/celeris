@@ -215,7 +215,10 @@ impl Dispatcher {
                     REVIEWER_REQUEUED_PREFIX,
                 )
             };
-            if deferrals < limit {
+            // ADR 2026-10-17: 認証失敗は reviewer の失敗回数を消費しない（アカウントは routing から外れており、
+            // 再ログインか別アカウントを待つ）。
+            let auth_failed = matches!(pf.outcome, Some(ProviderOutcome::AuthFailed));
+            if auth_failed || deferrals < limit {
                 // ADR-0010 D5（P-29）/ ADR-0054 D2: Reviewer run の供給側・インフラ失敗は判定しない。
                 // reviewing のまま次 tick に回す（attempts を消費しない）。
                 self.store.append_event(

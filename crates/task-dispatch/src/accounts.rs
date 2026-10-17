@@ -212,6 +212,13 @@ impl AccountBook {
     }
 
     /// 認証の再確認が成功したときの解除。新しい観測値による枯渇判定は evaluate が行う。
+    pub fn auth_failed_held(&self, id: &str, now: i64) -> bool {
+        self.states.get(id).is_some_and(|s| {
+            s.cooldown
+                .is_some_and(|c| c.reason == AccountCooldownReason::AuthFailed && c.until > now)
+        })
+    }
+
     pub fn clear_cooldown(&mut self, id: &str) {
         if let Some(state) = self.states.get_mut(id) {
             state.cooldown = None;
@@ -263,6 +270,27 @@ fn effective_utilization(w: RateWindow, now: i64) -> f64 {
     } else {
         0.0
     }
+}
+
+/// 認証失敗（OAuth 切れ等）のアカウントを選択から外し続ける期間（ADR 2026-10-17）。再ログインか手動確認の
+/// 成功（`clear_cooldown`）が戻す唯一の経路なので、実質無期限（10 年）にする。
+pub const AUTH_FAILED_HOLD_SECS: i64 = 10 * 365 * 24 * 3600;
+
+/// アカウントの供給側失敗の cooldown。`AuthFailed` だけは [`AUTH_FAILED_HOLD_SECS`] 保持し、
+/// それ以外は [`cooldown_for_failure`] と同じ。
+pub fn account_cooldown_for_failure(
+    state: Option<&AccountState>,
+    reason: AccountCooldownReason,
+    now: i64,
+    fallback_secs: u64,
+) -> AccountCooldown {
+    if reason == AccountCooldownReason::AuthFailed {
+        return AccountCooldown {
+            until: now + AUTH_FAILED_HOLD_SECS,
+            reason,
+        };
+    }
+    cooldown_for_failure(state, reason, now, fallback_secs)
 }
 
 /// 供給側失敗の cooldown 期限を決める（ADR-0024 D4）。

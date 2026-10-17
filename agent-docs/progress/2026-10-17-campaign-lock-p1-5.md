@@ -80,3 +80,16 @@ ADR: `agent-docs/adr/2026-10-17-campaign-lock.md`。外部 LLM・有料ジョブ
   K2 初期木は試験用の小さな git repo（本番資産に依存しない）。
 - 証拠: `bash scripts/dev/test-parallel.sh` exit 0（5647 passed, 0 failed）／`cargo clippy --workspace -- -D warnings` exit 0／`cargo fmt --all -- --check` exit 0。
 - 未解決（後続 WU）: grade-out・bind・export の lock 照合（grade-export）、正式 task-api 経路での受入（connected-verify）。runner は mock 以外の stub executor が lock なしで走るのを強制していない（CLI と run_gated が強制）。
+
+## WU grade-export（実装済み・無課金試験で検証済み。実経路 = 実 LLM/実 task-api は未検証）
+- `lock_exec::{load_saved, verify_grade_case}`、`LockedCase::tests_sha256`、`CampaignLock::{check_seal, case}` を追加。run-meta に `locked`（lock 付き実行か）を記録。
+- grade-out（`grade_out_expected`）: 保存 lock（封印・manifest 結合・CLI では cases root から作り直した期待 lock とも照合）を読み、case id/split だけで信用せず、grade-case の hash と
+  公開/隠しテストのディスク上の実体 hash を lock に照合。不一致は grader command 実行前に拒否（`rejected`、command 0 回）。grade 行に `lock_sha256`・`tests_sha256` を追加。
+  `--cases` は `<dir>/<problem>.json`、無ければ `<dir>/<split>/<problem>/<problem>.json`。
+- bind: grader hash 非空検査を、lock 封印・case の grade-case hash・テスト digest・case split の照合に置換。重複・古い成果物（`workspace_sha256_final` 照合）は従来どおり拒否。
+- checker/export/check-report: 同じ保存 lock（CLI は期待 lock も）を使う。lock が信用できなければ grade を 1 件も有効にせず違反。export は checker 拒否時に dest の既存 `table.*` を削除（旧最終版を有効なまま残さない）。表に `lock_verified`、`real_performance` は lock 検証済みのときだけ。
+- 既存不備の修正: checker が初期木なし case（K4 等）の初期 workspace hash を通常 seed と比べて違反にしていた（repo なし seed と比較するよう修正）。
+- 新測定 ID なしの判定条件更新は拒否（既存 `verify_lock`/`check_successor`、resume・採点とも保存 lock と期待 lock の完全一致が要る）。
+- legacy: lock.json が無く run-meta も `locked` でない out（lock 導入前・無課金 mock）は従来の結合検査のみ。表は `lock_verified=false`・`real_performance=false`。`locked` と記録された out や期待 lock を渡された経路で lock が無ければ拒否。
+- 試験 `tests/lock_grading.rs` 5 件: 正常な採点・結合・export／別 grader・隠しテスト実体差替え・公開テスト追加・隠しテスト削除で command 0 回／grader・test・lock・重複・古い成果物の bind 拒否と export の旧最終版削除／lock 欠落・改変・再封印／legacy。
+- 証拠: `cargo test -p celeris-campaign --test lock_grading` 5 passed、`bash scripts/dev/test-parallel.sh` exit 0（5652 passed, 0 failed）、clippy/fmt は下の最終実行。

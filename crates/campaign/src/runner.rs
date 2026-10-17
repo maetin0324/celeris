@@ -695,6 +695,7 @@ pub fn run(
             "executor": exec.name(),
             "evidence_kind": evidence_kind(exec.simulated()),
             "real_performance": !exec.simulated(),
+            "locked": lock.is_some() || out.join(lock_exec::LOCK_FILE).exists(),
             "configs": m.normalized().configs,
             "budget": m.budget,
             "termination": m.termination,

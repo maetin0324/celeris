@@ -349,6 +349,17 @@ impl LockedCase {
         Ok(())
     }
 
+    /// 公開/隠しテスト全件（path・可視性・内容 hash）の整列済み digest。grade 行に写して bind で照合する。
+    pub fn tests_sha256(&self) -> String {
+        let mut t = self.tests.clone();
+        t.sort();
+        let mut s = String::new();
+        for x in &t {
+            s += &format!("{:?}\t{}\t{}\n", x.visibility, x.path, x.sha256);
+        }
+        format!("{:x}", Sha256::digest(s.as_bytes()))
+    }
+
     fn normalized(&self) -> Self {
         let mut c = self.clone();
         c.inputs.sort_by(|a, b| a.name.cmp(&b.name));
@@ -426,6 +437,21 @@ impl CampaignLock {
         let bytes =
             serde_json::to_vec(&canonical(&v)).map_err(|e| LockError::Schema(e.to_string()))?;
         Ok(format!("{:x}", Sha256::digest(bytes)))
+    }
+
+    /// 封印が自身の内容と一致するか（保存 lock の改変検出）。
+    pub fn check_seal(&self) -> Result<(), LockError> {
+        self.validate()?;
+        if self.sha256.is_empty() || self.sha256 != self.lock_hash()? {
+            return Err(LockError::Schema(
+                "lock seal does not match its content".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn case(&self, id: &str) -> Option<&LockedCase> {
+        self.cases.iter().find(|c| c.id == id)
     }
 
     /// 検査してから `sha256` を埋める。

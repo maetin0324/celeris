@@ -239,11 +239,26 @@ fn budget_gate_closed(b: &crate::manifest::Budget, tokens: u64, wall_secs: u64) 
 }
 
 pub fn check(m: &CampaignManifest, out: &Path) -> CheckReport {
+    check_expected(m, out, None)
+}
+
+/// `expected` は cases root から作り直した期待 lock（CLI）。保存 lock と食い違えば違反。
+pub fn check_expected(
+    m: &CampaignManifest,
+    out: &Path,
+    want_lock: Option<&crate::lock::CampaignLock>,
+) -> CheckReport {
     let mut v: Vec<String> = Vec::new();
     let mut recs: Vec<TrialRecord> = Vec::new();
     let result = (|| -> Result<(), String> {
         m.validate()?;
         let hash = m.compute_sha256()?;
+        // 初期木を宣言しない case は repo なしの seed で始まる（lock が固定。信用できない lock なら空集合 = 通常 seed と比べて失敗）。
+        let repo_free = crate::lock_exec::load_saved(m, out, want_lock)
+            .ok()
+            .flatten()
+            .map(|l| crate::lock_exec::repo_free_cases(&l))
+            .unwrap_or_default();
         let meta = read_json(&out.join(META_FILE))?;
         if meta["campaign_sha256"] != hash {
             v.push("run-meta campaign_sha256 differs from the manifest hash".into());
@@ -439,7 +454,12 @@ pub fn check(m: &CampaignManifest, out: &Path) -> CheckReport {
                         "{tag}: workspace is missing or shared with another trial"
                     ));
                 }
-                if r.workspace_sha256_initial != snap["workspace_seed_sha256"]
+                let seed_key = if repo_free.contains(&r.problem_id) {
+                    "workspace_seed_empty_sha256"
+                } else {
+                    "workspace_seed_sha256"
+                };
+                if r.workspace_sha256_initial != snap[seed_key]
                     || r.kb_sha256_initial != snap["kb_sha256"]
                 {
                     v.push(format!(
@@ -517,7 +537,23 @@ pub fn check(m: &CampaignManifest, out: &Path) -> CheckReport {
             recomputed: None,
         };
     }
-    let binding = crate::grades::bind(m, &recs, out);
+    let saved_lock = match crate::lock_exec::load_saved(m, out, want_lock) {
+        Ok(l) => l,
+        Err(e) => {
+            v.push(format!("lock: {e}"));
+            None
+        }
+    };
+    let mut binding = crate::grades::bind(m, &recs, out, saved_lock.as_ref());
+    if v.iter().any(|x| x.starts_with("lock: ")) {
+        // lock を信用できないときは grade を 1 件も有効にしない（未採点として分母に残る）。
+        binding.valid.clear();
+        if out.join(crate::grades::GRADES_FILE).exists() {
+            v.push(
+                "lock: grades.jsonl is not bound because the campaign lock is not trusted".into(),
+            );
+        }
+    }
     v.extend(binding.violations.iter().cloned());
     let rc = recompute_graded(m, &recs, &binding.valid);
     // runner の summary.json との突き合わせ（記録の欠落・数値の食い違いを検出する）。

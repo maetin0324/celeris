@@ -411,3 +411,86 @@ pub fn save(out: &Path, expected: &CampaignLock) -> Result<(), String> {
     f.write_all(text.as_bytes()).map_err(|e| e.to_string())?;
     f.sync_all().map_err(|e| e.to_string())
 }
+
+/// 保存 lock を読む。無ければ `None`（legacy: lock 導入前、または無課金の mock 実行）。
+/// あるが読めない・封印が合わない・manifest に結び付かない・`expected`（cases root から作った期待 lock）と違う場合は Err。
+pub fn load_saved(
+    m: &CampaignManifest,
+    out: &Path,
+    expected: Option<&CampaignLock>,
+) -> Result<Option<CampaignLock>, String> {
+    let path = out.join(LOCK_FILE);
+    let locked_run = fs::read(out.join(crate::record::META_FILE))
+        .ok()
+        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+        .is_some_and(|v| v["locked"] == true);
+    if !path.exists() {
+        if locked_run || expected.is_some() {
+            return Err(format!(
+                "{} is missing although this measurement is locked; grades and tables cannot be trusted",
+                path.display()
+            ));
+        }
+        return Ok(None);
+    }
+    let l: CampaignLock =
+        serde_json::from_slice(&fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?)
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+    l.check_seal().map_err(|e| format!("saved lock: {e}"))?;
+    l.bind_to_manifest(m)
+        .map_err(|e| format!("saved lock: {e}"))?;
+    if let Some(x) = expected {
+        verify_lock(x, &l)
+            .map_err(|e| format!("saved lock differs from the expected lock: {e}"))?;
+    }
+    Ok(Some(l))
+}
+
+/// grade-case 実体（grade-case file と公開/隠しテスト全件）を lock の固定値と照合する。grader command を走らせる前に呼ぶ。
+/// 戻り値は読み込んだ grade-case。case id/split の一致だけでは信用しない。
+pub fn verify_grade_case(c: &LockedCase, path: &Path) -> Result<GradeCase, String> {
+    let got = sha256_file(path)?;
+    if got != c.grader.grade_case_sha256 {
+        return Err(format!(
+            "{}: grade-case hash {got} differs from the locked {}",
+            c.id, c.grader.grade_case_sha256
+        ));
+    }
+    let g = GradeCase::load(path)?;
+    if g.id != c.id {
+        return Err(format!("{}: grade-case id is {}", c.id, g.id));
+    }
+    let mut actual: Vec<crate::lock::LockedTest> = Vec::new();
+    if let Some(i) = &g.implementation {
+        use crate::lock::{LockedTest, TestVisibility};
+        let dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
+        for (vis, sub, tests) in [
+            (TestVisibility::Public, &i.pristine_dir, &i.tests),
+            (
+                TestVisibility::Hidden,
+                i.hidden_dir.as_ref().unwrap_or(&i.pristine_dir),
+                &i.hidden_tests,
+            ),
+        ] {
+            for t in tests {
+                let f = rel_join(&rel_join(&dir, sub)?, &t.path)?;
+                // 宣言 hash ではなく、ディスク上の実体の hash。
+                actual.push(LockedTest {
+                    path: t.path.clone(),
+                    visibility: vis,
+                    sha256: sha256_file(&f)?,
+                });
+            }
+        }
+    }
+    let mut want = c.tests.clone();
+    want.sort();
+    actual.sort();
+    if want != actual {
+        return Err(format!(
+            "{}: public/hidden tests differ from the locked set (path, visibility or content)",
+            c.id
+        ));
+    }
+    Ok(g)
+}

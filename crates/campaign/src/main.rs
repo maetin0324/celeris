@@ -97,6 +97,21 @@ fn accounting(
     }
 }
 
+/// locked な out（`lock.json` あり）では、cases root から作り直した期待 lock を返す。
+/// check / grade-out / export が保存 lock と突き合わせる（保存 lock の丸ごと差替えを見逃さない）。
+/// lock の無い legacy out は None（従来どおり。本測定の根拠にならない）。
+fn cli_expected_lock(
+    args: &[String],
+    manifest_path: &std::path::Path,
+    m: &CampaignManifest,
+    out: &std::path::Path,
+) -> Result<Option<celeris_campaign::lock::CampaignLock>, String> {
+    if !out.join(celeris_campaign::lock_exec::LOCK_FILE).exists() {
+        return Ok(None);
+    }
+    preflight::expected_lock(&preflight_inputs(args, manifest_path), m).map(Some)
+}
+
 fn transport(args: &[String]) -> Result<CurlTransport, String> {
     let url = arg(args, "--api-url").ok_or("--api-url is required")?;
     let tok = arg(args, "--token-env").ok_or("--token-env <ENV_NAME> is required")?;
@@ -321,7 +336,8 @@ fn run(args: Vec<String>) -> Result<String, String> {
             ))
         }
         "check" => {
-            let rep = checker::check(&m, &out()?);
+            let expected = cli_expected_lock(&args, &manifest_path, &m, &out()?)?;
+            let rep = checker::check_expected(&m, &out()?, expected.as_ref());
             let s = serde_json::to_string_pretty(&rep).map_err(|e| e.to_string())?;
             if rep.ok { Ok(s) } else { Err(s) }
         }
@@ -346,11 +362,13 @@ fn run(args: Vec<String>) -> Result<String, String> {
         }
         "grade-out" => {
             let cases = arg(&args, "--cases").ok_or("--cases <grade-case dir> is required")?;
-            let v = celeris_campaign::grade_out::grade_out(
+            let expected = cli_expected_lock(&args, &manifest_path, &m, &out()?)?;
+            let v = celeris_campaign::grade_out::grade_out_expected(
                 &m,
                 &out()?,
                 &cases,
                 &ProcessRunner::default(),
+                expected.as_ref(),
             )?;
             let s = serde_json::to_string_pretty(&v).map_err(|e| e.to_string())?;
             if v["ok"] == true { Ok(s) } else { Err(s) }
@@ -395,8 +413,9 @@ fn run(args: Vec<String>) -> Result<String, String> {
         "export" => {
             let out = out()?;
             let dest = arg(&args, "--dest").unwrap_or_else(|| out.join("export"));
+            let expected = cli_expected_lock(&args, &manifest_path, &m, &out)?;
             let acct = accounting(&args, &m, &out)?;
-            let t = export::export_with(&m, &out, &dest, acct.as_ref())?;
+            let t = export::export_full(&m, &out, &dest, expected.as_ref(), acct.as_ref())?;
             serde_json::to_string_pretty(&t).map_err(|e| e.to_string())
         }
         _ => Err(USAGE.into()),

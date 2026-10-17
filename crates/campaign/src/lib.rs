@@ -21,6 +21,7 @@ pub mod inputs;
 pub mod isolation;
 pub mod jev_smoke;
 pub mod ledger;
+pub mod lock;
 pub mod manifest;
 pub mod measure_env;
 pub mod preflight;

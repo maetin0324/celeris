@@ -14,10 +14,11 @@ use crate::{
     aggregate::Outcome,
     budget::{self, Gate, effective_cap},
     executor::{ErrKind, ExecError, ExecResult, ExecStatus, Executor, TrialRequest, Usage},
+    inputs::{self, INPUTS_DIR, Seeder},
     ledger::{Ledger, LedgerRow, LedgerState, ObservedUsage, TrialKey},
     manifest::{Budget, CampaignManifest, ConfigId},
     record::*,
-    snapshot::{copy_tree, hash_tree},
+    snapshot::{copy_tree, hash_tree, hash_tree_excluding},
 };
 
 #[derive(Clone, Debug, Default)]
@@ -27,6 +28,10 @@ pub struct RunOptions {
     pub repo_src: Option<PathBuf>,
     pub materials_src: Option<PathBuf>,
     pub kb_src: Option<PathBuf>,
+    /// 外部入力の取り込み元（`<dir>/<name>`）。`case_inputs` が空でなければ必須。
+    pub inputs_src: Option<PathBuf>,
+    /// 問題ごとの宣言入力（case.json の `inputs[]`）。各試行の workspace の `inputs/` に配る。
+    pub case_inputs: BTreeMap<String, Vec<DeliveredInput>>,
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -140,6 +145,7 @@ fn prepare_snapshot(
     let snap = opts.out.join("snapshot");
     let (repo, mat, kb) = (snap.join("repo"), snap.join("materials"), snap.join("kb"));
     let seed = snap.join("workspace-seed");
+    let staged = snap.join(INPUTS_DIR);
     let meta_path = opts.out.join(SNAPSHOT_FILE);
     if meta_path.exists() {
         let v: Value = serde_json::from_slice(
@@ -155,7 +161,16 @@ fn prepare_snapshot(
         {
             return Err("saved snapshot no longer matches its recorded hash".into());
         }
+        if !opts.case_inputs.is_empty() {
+            inputs::verify_stage(&staged, &opts.case_inputs)?;
+        }
         return Ok((seed, kb, ss, ks));
+    }
+    if !opts.case_inputs.is_empty() {
+        let src = opts.inputs_src.as_deref().ok_or(
+            "selected cases declare external inputs; --inputs-src <dir> is required (ADR 2026-10-17-mlsys-pilot2-fixes D1)",
+        )?;
+        inputs::stage(src, &staged, &opts.case_inputs)?;
     }
     for (src, dst) in [
         (&opts.repo_src, &repo),
@@ -187,6 +202,10 @@ fn prepare_snapshot(
             "kb_sha256": ks,
             "workspace_seed_sha256": ss,
             "materials_pin_verified": verified,
+            "inputs_sha256": inputs::unique(&opts.case_inputs)?
+                .into_iter()
+                .map(|x| (x.name, x.sha256))
+                .collect::<BTreeMap<_, _>>(),
         }),
     )?;
     Ok((seed, kb, ss, ks))
@@ -320,6 +339,7 @@ fn new_record(
         policy_version: cfg.policy_version.clone(),
         workspace: String::new(),
         kb: String::new(),
+        inputs: Vec::new(),
         workspace_sha256_initial: String::new(),
         kb_sha256_initial: String::new(),
         workspace_sha256_final: String::new(),
@@ -406,7 +426,7 @@ fn drive_async(
     req: &TrialRequest,
     out: &Path,
     rel: &str,
-    repo: &Path,
+    seeder: &Seeder,
     budget: &Budget,
     arm: (u64, u64),
 ) -> Result<Driven, String> {
@@ -448,9 +468,9 @@ fn drive_async(
         if existing.is_none() {
             // 外部に何も無いので、workspace は初期 snapshot から作り直してよい。
             let _ = fs::remove_dir_all(out.join(rel));
-            copy_tree(repo, req.workspace)?;
+            seeder.make(req.problem_id, req.workspace)?;
         } else if !req.workspace.exists() {
-            copy_tree(repo, req.workspace)?;
+            seeder.make(req.problem_id, req.workspace)?;
         }
         let t = match existing {
             Some(t) => t,
@@ -566,6 +586,11 @@ pub fn run(
         }
     }
     let (repo, _kb, repo_sha, kb_sha) = prepare_snapshot(m, opts)?;
+    let seeder = Seeder {
+        repo: &repo,
+        stage: out.join("snapshot").join(INPUTS_DIR),
+        inputs: &opts.case_inputs,
+    };
     write_json(
         &out.join(CAMPAIGN_FILE),
         &serde_json::to_value(m.normalized()).map_err(|e| e.to_string())?,
@@ -740,8 +765,8 @@ pub fn run(
             if !is_async {
                 // 中断した試行の残骸があれば捨て、必ず初期 snapshot から作り直す。
                 let _ = fs::remove_dir_all(out.join(&rel));
-                copy_tree(&repo, &ws)?;
-                rec.workspace_sha256_initial = hash_tree(&ws)?;
+                seeder.make(&pid, &ws)?;
+                rec.workspace_sha256_initial = hash_tree_excluding(&ws, &[INPUTS_DIR])?;
                 rec.kb_sha256_initial = hash_tree(&kbd)?;
                 if rec.workspace_sha256_initial != repo_sha || rec.kb_sha256_initial != kb_sha {
                     return Err(format!(
@@ -753,6 +778,7 @@ pub fn run(
                 rec.workspace_sha256_initial = repo_sha.clone();
                 rec.kb_sha256_initial = kb_sha.clone();
             }
+            rec.inputs = seeder.specs(&pid).to_vec();
             rec.workspace = format!("{rel}/workspace");
             rec.kb = format!("{rel}/workspace/kb");
             let timeout = m.termination.trial_timeout_secs;
@@ -788,7 +814,7 @@ pub fn run(
             let mut res = if let Err(e) = pinned {
                 // 投入しない。記録の hash 検査のため、初期 snapshot のままの作業場所だけ用意する。
                 if is_async {
-                    copy_tree(&repo, &ws)?;
+                    seeder.make(&pid, &ws)?;
                 }
                 errored = Some(e);
                 failed_result()
@@ -806,7 +832,7 @@ pub fn run(
                     &req,
                     out,
                     &rel,
-                    &repo,
+                    &seeder,
                     &m.budget,
                     arm,
                 )? {
@@ -850,7 +876,7 @@ pub fn run(
                 rep.executor_errors += 1;
                 // 投入前に失敗して作業場所が無いときも初期 snapshot から作る（hash の失敗で本当の原因を隠さない）。
                 if !ws.exists() {
-                    copy_tree(&repo, &ws)?;
+                    seeder.make(&pid, &ws)?;
                 }
             }
             if res.wall_secs > timeout && res.outcome != Outcome::Timeout {
@@ -860,7 +886,11 @@ pub fn run(
             res.wall_secs = res.wall_secs.min(timeout);
             let ws_final = hash_tree(&ws)?;
             // A の成果物は試行の workspace にしか出ない。exit 0 でも何も変わっていなければ合格にしない（fail-closed）。
-            if cid == ConfigId::A && res.outcome == Outcome::Passed && ws_final == repo_sha {
+            // 配った入力（と、その展開）は成果物に数えない。
+            if cid == ConfigId::A
+                && res.outcome == Outcome::Passed
+                && hash_tree_excluding(&ws, &[INPUTS_DIR])? == repo_sha
+            {
                 res.outcome = Outcome::Failed;
                 rec.reason = Some(REASON_NO_ARTIFACT.into());
                 rep.no_artifact += 1;

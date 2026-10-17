@@ -753,6 +753,8 @@ impl World {
             repo_src: Some(self.work.path().join("repo-src")),
             materials_src: Some(self.work.path().join("mat")),
             kb_src: Some(self.work.path().join("kb")),
+            inputs_src: None,
+            case_inputs: Default::default(),
         }
     }
 

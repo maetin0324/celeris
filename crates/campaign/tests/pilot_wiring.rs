@@ -511,6 +511,8 @@ fn materials_are_distributed_into_every_trial_workspace() {
         repo_src: Some(repo.clone()),
         materials_src: Some(mat.clone()),
         kb_src: None,
+        inputs_src: None,
+        case_inputs: Default::default(),
     };
     run(&m, &i, &MockExecutor::scripted(BTreeMap::new()), &o).expect("run");
     let recs = records(&out);
@@ -657,6 +659,8 @@ fn grade_out_grades_every_run_trial_and_reports_missing_cases() {
         repo_src: Some(fx().join("repo")),
         materials_src: Some(fx().join("materials")),
         kb_src: Some(fx().join("kb")),
+        inputs_src: None,
+        case_inputs: Default::default(),
     };
     run(&m, &i, &MockExecutor::seeded(), &o).expect("run");
     let runner = AllOk(Mutex::new(0));

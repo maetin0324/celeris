@@ -26,9 +26,9 @@
   "inputs": [
     {
       "fetch": [
-        "campaign asset store から main-v3-n2-43706.tgz を取得する",
-        "sha256sum で sha256 と一致を確かめる",
-        "tar -xzf main-v3-n2-43706.tgz -C inputs/（final-v*/ の集計・報告は含まれない）"
+        "main-v3-n2-43706.tgz は run が --inputs-src から sha256 を照合して inputs/main-v3-n2-43706.tgz に置く（取得は不要）",
+        "sha256sum inputs/main-v3-n2-43706.tgz で sha256 と一致を確かめる",
+        "cd inputs && tar -xzf main-v3-n2-43706.tgz（final-v*/ の集計・報告は含まれない）"
       ],
       "name": "main-v3-n2-43706.tgz",
       "sha256": "128057cf4016535941963fc4142ba424c05c65889905ca2bbcc190f6161077a1"

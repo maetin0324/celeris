@@ -30,6 +30,8 @@ fn pilot_out(dir: &Path) -> (CampaignManifest, PathBuf) {
         repo_src: Some(fx().join("repo")),
         materials_src: Some(fx().join("materials")),
         kb_src: Some(fx().join("kb")),
+        inputs_src: None,
+        case_inputs: Default::default(),
     };
     run(&m, &i, &MockExecutor::seeded(), &o).expect("run");
     (m, out)

@@ -118,6 +118,8 @@ fn seeded_src(dir: &Path) -> RunOptions {
         repo_src: Some(r),
         materials_src: None,
         kb_src: Some(k),
+        inputs_src: None,
+        case_inputs: Default::default(),
     }
 }
 

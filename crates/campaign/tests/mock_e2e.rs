@@ -157,9 +157,21 @@ fn mock_run_flows_through_check_and_export_with_a_mock_mark() {
     // 未採点の間は、数値が合っていても最終報告にならない。
     assert!(!check_report(&m, &o.out, ok).is_empty());
     common::write_grades(&m, &o.out, |_| true);
-    assert!(check_report(&m, &o.out, ok).is_empty());
+    // 採点が揃っても、実行されなかった試行（B/p0 は executor Err）がある間は最終報告にならない。
+    let r = check_report(&m, &o.out, ok);
+    assert!(r.iter().any(|x| x.contains("never executed")), "{r:?}");
+    // 同じ台本で B/p0 が実行されて失敗に終わった campaign は、数値が合えば最終報告になる。
+    let d2 = tempfile::tempdir().expect("dir");
+    let o2 = opts(d2.path());
+    let mut s = BTreeMap::new();
+    s.insert((ConfigId::A, "p1".to_string()), MockStep::Fail);
+    s.insert((ConfigId::B, "p0".to_string()), MockStep::Fail);
+    s.insert((ConfigId::C, "p0".to_string()), MockStep::Spend(50_000));
+    run(&m, &i, &MockExecutor::scripted(s), &o2).expect("run");
+    common::write_grades(&m, &o2.out, |_| true);
+    assert!(check_report(&m, &o2.out, ok).is_empty());
     let forged = ok.replace("A passed=1", "A passed=2");
-    assert!(!check_report(&m, &o.out, &forged).is_empty());
+    assert!(!check_report(&m, &o2.out, &forged).is_empty());
 }
 
 #[test]

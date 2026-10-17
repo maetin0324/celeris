@@ -26,9 +26,9 @@
   "inputs": [
     {
       "fetch": [
-        "campaign asset store から main-43223.tgz を取得する",
-        "sha256sum で sha256 と一致を確かめる",
-        "tar -xzf main-43223.tgz -C inputs/（集計済み analysis-*/ は含まれない）"
+        "main-43223.tgz は run が --inputs-src から sha256 を照合して inputs/main-43223.tgz に置く（取得は不要）",
+        "sha256sum inputs/main-43223.tgz で sha256 と一致を確かめる",
+        "cd inputs && tar -xzf main-43223.tgz（集計済み analysis-*/ は含まれない）"
       ],
       "name": "main-43223.tgz",
       "sha256": "bdb155d4c1690ae5743621d129c270fcc53c919751d62c56d0c4395b74d2e90f"

@@ -1,6 +1,7 @@
 use std::{path::PathBuf, process::ExitCode};
 
 use celeris_campaign::{
+    celeris_exec::Transport,
     celeris_exec::{CelerisExecutor, check_template},
     checker,
     curl_transport::CurlTransport,
@@ -8,7 +9,7 @@ use celeris_campaign::{
     executor::{Executor, MockExecutor},
     export,
     grade_runner::ProcessRunner,
-    harness_exec::{ClaudeCodeBuilder, HarnessExecutor},
+    harness_exec::{BudgetGuard, ClaudeCodeBuilder, HarnessExecutor, Sandbox},
     ledger::Ledger,
     manifest::CampaignManifest,
     preflight::{self, Inputs, RealHost},
@@ -16,10 +17,10 @@ use celeris_campaign::{
     watch::{self, SystemClock, WatchOptions},
 };
 
-const USAGE: &str = "usage: celeris-campaign <dry-run|validate|preflight|run|watch|check|check-report|export|grade-out> --manifest <path> \
+const USAGE: &str = "usage: celeris-campaign <dry-run|validate|preflight|run|watch|check|check-report|export|grade-out|usage> --manifest <path> \
 [--interval-secs N] [--max-iterations M] [--cases <grade-case dir>] \
 [--input-manifest <path>] [--out <dir>] [--executor mock|harness|celeris] [--api-url <url> --token-env <ENV_NAME> [--task-template <json>]] [--dest <dir>] \
-[--cases-root <dir>] [--grader-root <dir>] [--grade-case-root <dir>] [--a-program <path>] [--report <file>] [--repo-src <dir>] [--materials-src <dir>] [--kb-src <dir>]";
+[--cases-root <dir>] [--grader-root <dir>] [--grade-case-root <dir>] [--a-program <path>] [--report <file>] [--repo-src <dir>] [--materials-src <dir>] [--kb-src <dir>] [--inputs-src <dir>] [--a-account <account_id>] [--max-7d <ratio>] [--max-7d-codex <ratio>]";
 
 fn arg(args: &[String], name: &str) -> Option<PathBuf> {
     args.iter()
@@ -44,7 +45,52 @@ fn preflight_inputs(args: &[String], manifest_path: &std::path::Path) -> Inputs 
         repo_src: arg(args, "--repo-src"),
         materials_src: arg(args, "--materials-src"),
         kb_src: arg(args, "--kb-src"),
+        inputs_src: arg(args, "--inputs-src"),
+        a_account: text("--a-account"),
     }
+}
+
+fn transport(args: &[String]) -> Result<CurlTransport, String> {
+    let url = arg(args, "--api-url").ok_or("--api-url is required")?;
+    let tok = arg(args, "--token-env").ok_or("--token-env <ENV_NAME> is required")?;
+    CurlTransport::new(&url.to_string_lossy(), &tok.to_string_lossy())
+}
+
+fn get_accounts(args: &[String]) -> Result<serde_json::Value, String> {
+    let r = transport(args)?.request("GET", "/api/v1/llm/accounts", None)?;
+    if (200..300).contains(&r.status) {
+        Ok(r.body)
+    } else {
+        Err(format!(
+            "GET /api/v1/llm/accounts: HTTP {} {}",
+            r.status, r.body
+        ))
+    }
+}
+
+/// A の実行器: Celeris 管理アカウントで動き、bwrap で隔離され、token 予算を実行中に強制される。
+fn a_executor(
+    args: &[String],
+    m: &CampaignManifest,
+    out_dir: &std::path::Path,
+) -> Result<HarnessExecutor, String> {
+    let id = arg(args, "--a-account")
+        .ok_or("--a-account <account_id> is required (A runs under a Celeris-managed account)")?
+        .to_string_lossy()
+        .into_owned();
+    let dir = preflight::find_a_account(&get_accounts(args)?, &id)?;
+    Ok(HarnessExecutor::new(
+        out_dir.join("harness-state"),
+        Box::new(ClaudeCodeBuilder::default()),
+    )
+    .with_sandbox(Sandbox {
+        account_id: id,
+        config_dir: dir,
+    })
+    .with_budget_guard(BudgetGuard {
+        basis: m.budget.token_basis,
+        interval: std::time::Duration::from_secs(1),
+    }))
 }
 
 fn run(args: Vec<String>) -> Result<String, String> {
@@ -84,11 +130,21 @@ fn run(args: Vec<String>) -> Result<String, String> {
             }
             let input = m.load_input(&manifest_path, arg(&args, "--input-manifest").as_deref())?;
             let out_dir = out()?;
+            // 外部入力は case.json の宣言から引く（実行経路だけ。mock は case を読まない）。
+            let case_inputs = if matches!(which.as_str(), "harness" | "celeris") {
+                let pi = preflight_inputs(&args, &manifest_path);
+                let set = celeris_campaign::cases::CaseSet::load(&pi.cases_root, &pi.grader_root)?;
+                celeris_campaign::inputs::for_problems(&set, &m.problems)
+            } else {
+                Default::default()
+            };
             let opts = runner::RunOptions {
                 out: out_dir.clone(),
                 repo_src: arg(&args, "--repo-src"),
                 materials_src: arg(&args, "--materials-src"),
                 kb_src: arg(&args, "--kb-src"),
+                inputs_src: arg(&args, "--inputs-src"),
+                case_inputs,
             };
             // watch は同じ走査を台帳が閉じるまで繰り返す（再起動しても台帳から再開する）。
             let wopts = (cmd == "watch")
@@ -122,10 +178,7 @@ fn run(args: Vec<String>) -> Result<String, String> {
             };
             let rep = match which.as_str() {
                 "mock" => drive(&MockExecutor::seeded())?,
-                "harness" => drive(&HarnessExecutor::new(
-                    out_dir.join("harness-state"),
-                    Box::new(ClaudeCodeBuilder::default()),
-                ))?,
+                "harness" => drive(&a_executor(&args, &m, &out_dir)?)?,
                 "celeris" => {
                     // 秘密の値は受け取らない: token は環境変数の「名前」だけ。
                     let url = arg(&args, "--api-url").ok_or("--api-url is required for celeris")?;
@@ -155,10 +208,7 @@ fn run(args: Vec<String>) -> Result<String, String> {
                         out_dir.join("cluster-cancel.jsonl"),
                     );
                     // A 腕を含む manifest でも同じ入口で走る。A は既存ハーネス（後付け制限なし）。
-                    let a = HarnessExecutor::new(
-                        out_dir.join("harness-state"),
-                        Box::new(ClaudeCodeBuilder::default()),
-                    );
+                    let a = a_executor(&args, &m, &out_dir)?;
                     drive(&ArmDispatch { a, bc })?
                 }
                 other => {
@@ -231,6 +281,38 @@ fn run(args: Vec<String>) -> Result<String, String> {
             )?;
             let s = serde_json::to_string_pretty(&v).map_err(|e| e.to_string())?;
             if v["ok"] == true { Ok(s) } else { Err(s) }
+        }
+        "usage" => {
+            let acct = arg(&args, "--a-account")
+                .ok_or("--a-account <account_id> is required")?
+                .to_string_lossy()
+                .into_owned();
+            let ratio = |n: &str, d: f64| -> Result<f64, String> {
+                match arg(&args, n) {
+                    None => Ok(d),
+                    Some(v) => v
+                        .to_string_lossy()
+                        .parse::<f64>()
+                        .map_err(|e| format!("{n}: {e}")),
+                }
+            };
+            let summary: serde_json::Value = serde_json::from_slice(
+                &std::fs::read(out()?.join(celeris_campaign::record::SUMMARY_FILE))
+                    .map_err(|e| format!("summary.json: {e}"))?,
+            )
+            .map_err(|e| format!("summary.json: {e}"))?;
+            let (rep, violations) = celeris_campaign::usage::report(
+                &get_accounts(&args)?,
+                &summary,
+                &acct,
+                ratio("--max-7d", celeris_campaign::usage::DEFAULT_MAX_7D_CLAUDE)?,
+                ratio(
+                    "--max-7d-codex",
+                    celeris_campaign::usage::DEFAULT_MAX_7D_CODEX,
+                )?,
+            );
+            let s = serde_json::to_string_pretty(&rep).map_err(|e| e.to_string())?;
+            if violations.is_empty() { Ok(s) } else { Err(s) }
         }
         "export" => {
             let out = out()?;

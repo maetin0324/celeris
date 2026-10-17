@@ -24,7 +24,7 @@ grade が評価 command を走らせない）。本測定はこれが入るま�
   見てから次を出す。runner は 1 回の走査で戻る（待ち続けない）点は変えない。
 - D4 A（`claude -p`）は `--permission-mode bypassPermissions` で起動する（試行専用の複製 workspace の中だけで動く。
   対話の承認が無い headless で書き込み・Bash が拒否されるのは「制限」ではなく起動の誤り）。turn・許可リストの
-  後付け制限を足さない方針は変えない。A の試行が exit 0 でも workspace が初期 snapshot から変わっていなければ
+  後付け制限を足さない方針は変えない（2026-10-17: ファイルシステムの隔離だけは ADR 2026-10-17-mlsys-pilot2-fixes D2 で足した）。A の試行が exit 0 でも workspace が初期 snapshot から変わっていなければ
   `outcome=failed`・`reason=no_artifact`（fail-closed）。worker からは起動せず、運用セッションが run を実行する前提は変えない。
 - D5 `--materials-src` の資料は各試行の workspace の `materials/` に配る（repo + `materials/` を `snapshot/workspace-seed`
   に作り、これを試行の初期木にする。repo に `materials/` があれば衝突として拒否）。

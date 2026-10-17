@@ -15,8 +15,14 @@ fn entries(dir: &Path) -> Result<Vec<PathBuf>, String> {
     Ok(v)
 }
 
-fn walk(root: &Path, dir: &Path, h: &mut Sha256) -> Result<(), String> {
+fn walk(root: &Path, dir: &Path, skip: &[&str], h: &mut Sha256) -> Result<(), String> {
     for p in entries(dir)? {
+        if dir == root
+            && p.file_name()
+                .is_some_and(|n| skip.iter().any(|s| n == std::ffi::OsStr::new(s)))
+        {
+            continue;
+        }
         let meta = fs::symlink_metadata(&p).map_err(|e| format!("{}: {e}", p.display()))?;
         let rel = p
             .strip_prefix(root)
@@ -30,7 +36,7 @@ fn walk(root: &Path, dir: &Path, h: &mut Sha256) -> Result<(), String> {
             h.update(b"D");
             h.update((rel.len() as u64).to_le_bytes());
             h.update(rel.as_bytes());
-            walk(root, &p, h)?;
+            walk(root, &p, skip, h)?;
         } else {
             let bytes = fs::read(&p).map_err(|e| format!("{}: {e}", p.display()))?;
             h.update(b"F");
@@ -45,8 +51,13 @@ fn walk(root: &Path, dir: &Path, h: &mut Sha256) -> Result<(), String> {
 
 /// 相対 path・内容・空 dir を含む木の sha256。symlink は拒否する。
 pub fn hash_tree(root: &Path) -> Result<String, String> {
+    hash_tree_excluding(root, &[])
+}
+
+/// `hash_tree` から、直下の `skip` の名前の file / dir を除いたもの（配った入力を成果物に数えないため）。
+pub fn hash_tree_excluding(root: &Path, skip: &[&str]) -> Result<String, String> {
     let mut h = Sha256::new();
-    walk(root, root, &mut h)?;
+    walk(root, root, skip, &mut h)?;
     Ok(format!("{:x}", h.finalize()))
 }
 

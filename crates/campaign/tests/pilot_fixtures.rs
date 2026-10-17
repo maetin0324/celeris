@@ -132,6 +132,8 @@ fn run_opts(out: &Path) -> RunOptions {
         repo_src: Some(fx().join("repo")),
         materials_src: Some(fx().join("materials")),
         kb_src: Some(fx().join("kb")),
+        inputs_src: None,
+        case_inputs: Default::default(),
     }
 }
 

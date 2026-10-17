@@ -15,7 +15,9 @@ use celeris_campaign::{
     runner::RunOptions,
 };
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 
+const K4_INPUT: &str = "main-v3-n2-43706.tgz";
 const SECRET: &str = "s3cret-token-value-xyz";
 
 fn root() -> PathBuf {
@@ -25,6 +27,9 @@ fn root() -> PathBuf {
 struct FakeHost {
     env: Vec<&'static str>,
     programs: Vec<&'static str>,
+    /// path → GET の本文（task-api の偽）。
+    api: Vec<(&'static str, Value)>,
+    sandbox: bool,
 }
 
 impl Host for FakeHost {
@@ -35,12 +40,48 @@ impl Host for FakeHost {
     fn program_available(&self, p: &Path) -> bool {
         self.programs.iter().any(|x| Path::new(x) == p)
     }
+
+    fn api_get(&self, _: &str, _: &str, path: &str) -> Result<Value, String> {
+        self.api
+            .iter()
+            .find(|(p, _)| *p == path)
+            .map(|(_, v)| v.clone())
+            .ok_or_else(|| format!("GET {path}: HTTP 404"))
+    }
+
+    fn sandbox_usable(&self) -> Result<(), String> {
+        if self.sandbox {
+            Ok(())
+        } else {
+            Err("bwrap unavailable".into())
+        }
+    }
+}
+
+/// 専用の campaign 案件（auto_integrate off・ローカル repo）と A のアカウントを返す偽 API。
+fn api(acct_dir: &Path) -> Vec<(&'static str, Value)> {
+    vec![
+        (
+            "/api/v1/projects/01ABC",
+            json!({"id":"01ABC","auto_integrate":false}),
+        ),
+        (
+            "/api/v1/projects/01ABC/repos",
+            json!({"items":[{"name":"scratch","is_primary":true,"location":{"kind":"local","path":"/x"}}]}),
+        ),
+        (
+            "/api/v1/llm/accounts",
+            json!({"items":[{"source_id":"claude_oauth","account_id":"lab","dir":acct_dir,"logged_in":true}]}),
+        ),
+    ]
 }
 
 fn host() -> FakeHost {
     FakeHost {
         env: vec!["CELERIS_CAMPAIGN_TOKEN"],
         programs: vec!["claude"],
+        api: api(Path::new("/tmp")),
+        sandbox: true,
     }
 }
 
@@ -102,6 +143,21 @@ fn setup() -> Setup {
     .unwrap();
     fs::write(d.join("final.json"), resolved_manifest().to_string()).unwrap();
     let (m, k) = (d.join("materials"), d.join("kb"));
+    // 外部入力: 実物（本番の asset）は無いので、case を写して k4 の宣言 sha256 を試験用の中身に合わせる。
+    let (cases, ins) = (d.join("cases"), d.join("inputs-src"));
+    copy(&root().join("cases"), &cases);
+    fs::create_dir_all(&ins).unwrap();
+    let repo = d.join("repo");
+    fs::create_dir_all(&repo).unwrap();
+    fs::write(repo.join("README"), "k2 initial tree").unwrap();
+    fs::write(ins.join(K4_INPUT), b"fake archive for the test").unwrap();
+    let cj = cases.join("final/k4-cmp4-validity-analysis/case.json");
+    let mut c: Value = serde_json::from_slice(&fs::read(&cj).unwrap()).unwrap();
+    c["inputs"][0]["sha256"] = json!(format!(
+        "{:x}",
+        Sha256::digest(b"fake archive for the test")
+    ));
+    fs::write(&cj, c.to_string()).unwrap();
     for c in ["k2-bf-xattr-restart-campaign", "k4-cmp4-validity-analysis"] {
         copy(
             &root().join("cases/final").join(c).join("materials"),
@@ -120,16 +176,18 @@ fn setup() -> Setup {
     let inp = Inputs {
         manifest_path: d.join("final.json"),
         input_override: None,
-        cases_root: root().join("cases"),
+        cases_root: cases,
         grader_root: root().join("fixtures/grader-private"),
         grade_cases_root: root().join("fixtures/grade-cases"),
         a_program: "claude".into(),
         api_url: Some("http://127.0.0.1:8080".into()),
         token_env: Some("CELERIS_CAMPAIGN_TOKEN".into()),
         task_template: Some(d.join("task-template.json")),
-        repo_src: None,
+        repo_src: Some(repo),
         materials_src: Some(m),
         kb_src: Some(k),
+        inputs_src: Some(ins),
+        a_account: Some("lab".into()),
     };
     Setup { dir, inp }
 }
@@ -195,6 +253,8 @@ fn every_kind_of_gap_is_reported() {
     let h = FakeHost {
         env: vec![],
         programs: vec![],
+        api: vec![],
+        sandbox: true,
     };
     let m = missing_checks(&s.inp, &h);
     assert_eq!(m.iter().filter(|c| *c == "auth-env").count(), 2, "{m:?}");
@@ -307,6 +367,32 @@ fn passing_preflight_lets_run_start() {
     assert!(rep.executed > 0);
 }
 
+/// task-api の偽（GET だけ。path ごとの JSON を返す）。thread は process 終了で消える。
+fn fake_api(routes: Vec<(&'static str, Value)>) -> String {
+    use std::io::{Read, Write};
+    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", l.local_addr().unwrap());
+    std::thread::spawn(move || {
+        for st in l.incoming() {
+            let Ok(mut st) = st else { continue };
+            let mut buf = [0u8; 4096];
+            let n = st.read(&mut buf).unwrap_or(0);
+            let req = String::from_utf8_lossy(&buf[..n]).into_owned();
+            let path = req.split_whitespace().nth(1).unwrap_or("").to_string();
+            let (code, body) = match routes.iter().find(|(p, _)| *p == path) {
+                Some((_, v)) => (200, v.to_string()),
+                None => (404, "{}".to_string()),
+            };
+            let _ = write!(
+                st,
+                "HTTP/1.1 {code} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+        }
+    });
+    url
+}
+
 fn bin(args: &[&str], s: &Setup, env: &[(&str, &str)]) -> std::process::Output {
     let mut c = Command::new(std::env::var("CARGO_BIN_EXE_celeris-campaign").expect("bin"));
     c.args(args)
@@ -324,8 +410,14 @@ fn bin(args: &[&str], s: &Setup, env: &[(&str, &str)]) -> std::process::Output {
         .arg(s.inp.materials_src.as_ref().unwrap())
         .arg("--kb-src")
         .arg(s.inp.kb_src.as_ref().unwrap())
+        .arg("--inputs-src")
+        .arg(s.inp.inputs_src.as_ref().unwrap())
+        .arg("--repo-src")
+        .arg(s.inp.repo_src.as_ref().unwrap())
+        .arg("--a-account")
+        .arg("lab")
         .arg("--api-url")
-        .arg("http://127.0.0.1:1")
+        .arg(fake_api(api(&s.dir.path().join("inputs-src"))))
         .arg("--token-env")
         .arg("CELERIS_PREFLIGHT_TEST_TOKEN")
         .arg("--task-template")
@@ -344,16 +436,40 @@ fn cli_preflight_exit_codes_and_secret_never_printed() {
         &s,
         &[("CELERIS_PREFLIGHT_TEST_TOKEN", SECRET)],
     );
-    assert!(
-        ok.status.success(),
-        "{}",
-        String::from_utf8_lossy(&ok.stderr)
-    );
-    let v: Value = serde_json::from_slice(&ok.stdout).unwrap();
-    assert_eq!(
-        (v["ok"].clone(), v["paid_calls_made"].clone()),
-        (json!(true), json!(0))
-    );
+    // 実 bwrap の可否は host 依存（userns の無い sandbox では使えない）。使えるときだけ全件 OK を求め、
+    // 使えないときは不足が隔離の 1 件だけであることを確かめる。
+    let userns = Command::new("bwrap")
+        .args([
+            "--ro-bind",
+            "/",
+            "/",
+            "--dev",
+            "/dev",
+            "--unshare-pid",
+            "--",
+            "true",
+        ])
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if userns {
+        assert!(
+            ok.status.success(),
+            "{}",
+            String::from_utf8_lossy(&ok.stderr)
+        );
+        let v: Value = serde_json::from_slice(&ok.stdout).unwrap();
+        assert_eq!(
+            (v["ok"].clone(), v["paid_calls_made"].clone()),
+            (json!(true), json!(0))
+        );
+    } else {
+        let v: Value = serde_json::from_slice(&ok.stderr_json()).unwrap();
+        let miss = v["missing"].as_array().unwrap();
+        assert!(
+            miss.len() == 1 && miss[0]["detail"].as_str().unwrap().contains("bwrap"),
+            "{v}"
+        );
+    }
     // 環境変数が無い → 非 0。run も始まらない（out を作らない）。
     let out = s.dir.path().join("o");
     let o = bin(&["preflight"], &s, &[]);
@@ -375,5 +491,153 @@ fn cli_preflight_exit_codes_and_secret_never_printed() {
         for b in [&o.stdout, &o.stderr] {
             assert!(!String::from_utf8_lossy(b).contains(SECRET));
         }
+    }
+}
+
+fn with_api(extra: Vec<(&'static str, Value)>) -> FakeHost {
+    let mut h = host();
+    for (p, v) in extra {
+        h.api.retain(|(q, _)| *q != p);
+        h.api.push((p, v));
+    }
+    h
+}
+
+/// 外部入力: 取り込み元が無い・ファイルが欠ける・sha256 が違う、のどれも `inputs` で止まる。
+#[test]
+fn missing_or_wrong_external_inputs_are_detected() {
+    let s = setup();
+    let mut inp = s.inp.clone();
+    inp.inputs_src = None;
+    let r = check(&inp, &host());
+    assert!(
+        r.missing
+            .iter()
+            .any(|m| m.check == "inputs" && m.detail.contains(K4_INPUT)),
+        "{:?}",
+        r.missing
+    );
+    let src = s.inp.inputs_src.clone().unwrap();
+    fs::write(src.join(K4_INPUT), b"tampered").unwrap();
+    let r = check(&s.inp, &host());
+    assert!(
+        r.missing
+            .iter()
+            .any(|m| m.check == "inputs" && m.detail.contains("sha256")),
+        "{:?}",
+        r.missing
+    );
+    fs::remove_file(src.join(K4_INPUT)).unwrap();
+    assert!(missing_checks(&s.inp, &host()).contains(&"inputs".into()));
+}
+
+/// k2 は初期 repo（`initial`）を持つ: `--repo-src` が無ければ止める。
+#[test]
+fn initial_repo_needs_repo_src() {
+    let s = setup();
+    let mut inp = s.inp.clone();
+    inp.repo_src = None;
+    let r = check(&inp, &host());
+    assert!(
+        r.missing
+            .iter()
+            .any(|m| m.check == "inputs" && m.detail.contains("--repo-src")),
+        "{:?}",
+        r.missing
+    );
+}
+
+/// pilot-2 の 422: local workspace とリモート repo の組合せ（案件の primary がリモート）を投入前に拒否する。
+#[test]
+fn template_that_would_422_is_rejected() {
+    let s = setup();
+    let remote = with_api(vec![(
+        "/api/v1/projects/01ABC/repos",
+        json!({"items":[{"name":"benchfs","is_primary":true,"location":{"kind":"remote","cluster":"pegasus","path":"/w"}}]}),
+    )]);
+    let r = check(&s.inp, &remote);
+    assert!(!r.ok);
+    assert!(
+        r.missing
+            .iter()
+            .any(|m| m.check == "task-template" && m.detail.contains("remote repo")),
+        "{:?}",
+        r.missing
+    );
+    // template が repos で明示したリモート repo も同じ。
+    let mixed = with_api(vec![(
+        "/api/v1/projects/01ABC/repos",
+        json!({"items":[
+            {"name":"scratch","is_primary":true,"location":{"kind":"local","path":"/x"}},
+            {"name":"benchfs","is_primary":false,"location":{"kind":"remote","cluster":"pegasus","path":"/w"}}]}),
+    )]);
+    fs::write(
+        s.dir.path().join("task-template.json"),
+        json!({"project_id":"01ABC","repos":["benchfs"],"acceptance":[{"type":"reviewer","text":"x"}]}).to_string(),
+    )
+    .unwrap();
+    assert!(
+        check(&s.inp, &mixed)
+            .missing
+            .iter()
+            .any(|m| m.check == "task-template")
+    );
+    // 明示した local repo は通る。
+    fs::write(
+        s.dir.path().join("task-template.json"),
+        json!({"project_id":"01ABC","repos":["scratch"],"acceptance":[{"type":"reviewer","text":"x"}]}).to_string(),
+    )
+    .unwrap();
+    let r = check(&s.inp, &mixed);
+    assert!(r.ok, "{:?}", r.missing);
+}
+
+/// 自動取り込みが有効な案件は、試行 task が自己改善の main に入り得るので拒否する。
+#[test]
+fn auto_integrate_project_is_rejected() {
+    let s = setup();
+    let h = with_api(vec![(
+        "/api/v1/projects/01ABC",
+        json!({"id":"01ABC","auto_integrate":true}),
+    )]);
+    let r = check(&s.inp, &h);
+    assert!(
+        r.missing
+            .iter()
+            .any(|m| m.check == "task-template" && m.detail.contains("auto_integrate")),
+        "{:?}",
+        r.missing
+    );
+}
+
+/// A は Celeris 管理のアカウントで動く: 指定が無い・未ログイン・未知なら止める。bwrap が使えない host も止める。
+#[test]
+fn a_arm_needs_a_managed_account_and_a_working_sandbox() {
+    let s = setup();
+    let mut inp = s.inp.clone();
+    inp.a_account = None;
+    assert!(missing_checks(&inp, &host()).contains(&"a-arm".into()));
+    let mut inp = s.inp.clone();
+    inp.a_account = Some("nobody".into());
+    assert!(missing_checks(&inp, &host()).contains(&"a-arm".into()));
+    let logged_out = with_api(vec![(
+        "/api/v1/llm/accounts",
+        json!({"items":[{"source_id":"claude_oauth","account_id":"lab","dir":"/tmp","logged_in":false}]}),
+    )]);
+    assert!(missing_checks(&s.inp, &logged_out).contains(&"a-arm".into()));
+    let mut no_sandbox = host();
+    no_sandbox.sandbox = false;
+    assert!(missing_checks(&s.inp, &no_sandbox).contains(&"a-arm".into()));
+}
+
+trait StderrJson {
+    fn stderr_json(&self) -> Vec<u8>;
+}
+
+impl StderrJson for std::process::Output {
+    /// stderr の `error: ` 以降（preflight が不足一覧の JSON を書く）。
+    fn stderr_json(&self) -> Vec<u8> {
+        let t = String::from_utf8_lossy(&self.stderr).into_owned();
+        t.strip_prefix("error: ").unwrap_or(&t).as_bytes().to_vec()
     }
 }

@@ -25,6 +25,10 @@ pub struct Totals {
     pub cancelled: u64,
     pub blocked: u64,
     pub missing: u64,
+    /// 記録はあるが実行されなかった cell（task 作成失敗 `executor_error`、予算打ち切りで未投入）。
+    /// 1 つでもあれば `complete=false`（依存で blocked の cell は分母に残る結果で、ここには数えない）。
+    #[serde(default)]
+    pub unexecuted: u64,
     /// 成功（論文用）: 実行器が passed を返し、かつ有効な独立採点が final_pass の cell。分母は n のまま。
     pub final_passed: u64,
     /// 実行器は passed だが有効な採点が無い cell（未採点・結合検査で拒否）。成功にも分母除外にもしない。
@@ -565,6 +569,12 @@ pub fn check(m: &CampaignManifest, out: &Path) -> CheckReport {
         if t.missing > 0 {
             reasons.push(format!("{c:?}: {} trials have no record", t.missing));
         }
+        if t.unexecuted > 0 {
+            reasons.push(format!(
+                "{c:?}: {} trials were never executed (task creation failed or budget stop)",
+                t.unexecuted
+            ));
+        }
         if t.ungraded > 0 {
             reasons.push(format!(
                 "{c:?}: {} executor-passed trials have no valid independent grade",
@@ -614,6 +624,12 @@ pub fn recompute_graded(
             .flat_map(|p| (1..=m.repeats).map(move |k| (p, k)))
         {
             let cell = first.get(&(*c, p.as_str(), rep));
+            if cell.is_some_and(|r| {
+                r.reason.as_deref() == Some(REASON_EXECUTOR_ERROR)
+                    || (!r.ran() && r.reason.as_deref() != Some(REASON_BLOCKED))
+            }) {
+                t.unexecuted += 1;
+            }
             match cell.map(|r| r.outcome) {
                 None => t.missing += 1,
                 Some(o) => match o {

@@ -292,7 +292,12 @@ impl Case {
             }
         }
         for x in &self.inputs {
-            if !is_hex(&x.sha256, 64) || x.fetch.is_empty() || x.name.is_empty() {
+            if !is_hex(&x.sha256, 64)
+                || x.fetch.is_empty()
+                || x.name.is_empty()
+                || x.name.starts_with('.')
+                || x.name.contains(['/', '\\', '\0'])
+            {
                 return Err(format!("{id}: external input {:?} malformed", x.name));
             }
         }

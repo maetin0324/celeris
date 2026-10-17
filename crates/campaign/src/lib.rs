@@ -16,6 +16,7 @@ pub mod grade_runner;
 pub mod grader;
 pub mod grades;
 pub mod harness_exec;
+pub mod inputs;
 pub mod isolation;
 pub mod jev_smoke;
 pub mod ledger;
@@ -25,6 +26,7 @@ pub mod record;
 pub mod report;
 pub mod runner;
 pub mod snapshot;
+pub mod usage;
 pub mod watch;
 
 pub const CAMPAIGN_SCHEMA: &str = "celeris.campaign-manifest/1";

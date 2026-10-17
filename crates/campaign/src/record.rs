@@ -46,6 +46,13 @@ pub struct ObservedRun {
     pub online_update: Option<bool>,
 }
 
+/// 試行の workspace の `inputs/` に配った外部入力（case.json の宣言と同じ name・sha256）。
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeliveredInput {
+    pub name: String,
+    pub sha256: String,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct TrialRecord {
     pub schema: String,
@@ -88,6 +95,9 @@ pub struct TrialRecord {
     /// out からの相対 path。実行しなかった試行は空。
     pub workspace: String,
     pub kb: String,
+    /// 配った外部入力（`workspace/inputs/`）。宣言の無い問題は空。同じ問題なら A/B/C で一致する。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inputs: Vec<DeliveredInput>,
     pub workspace_sha256_initial: String,
     pub kb_sha256_initial: String,
     pub workspace_sha256_final: String,

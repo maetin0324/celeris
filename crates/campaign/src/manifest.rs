@@ -78,6 +78,30 @@ pub struct ArmRouting {
     pub no_evidence_table: Option<bool>,
 }
 
+impl ArmRouting {
+    /// この arm の実効 evidence_mode（`none` / `pinned` / `latest`）。`POST /tasks` の `routing_override` へ載せ、
+    /// checker が観測値と照合する。`no_evidence_table=true`→none、`evidence_table_id`→pinned、
+    /// どちらも無い B は根拠表を読まない方策なので none。C で両方無い（= latest の暗黙選択）は Err。
+    pub fn effective_evidence_mode(&self, id: ConfigId) -> Result<&'static str, String> {
+        let ev = self.evidence_table_id.as_deref().unwrap_or("").trim();
+        if self.no_evidence_table == Some(true) {
+            if !ev.is_empty() {
+                return Err(format!(
+                    "config {id:?}: routing.no_evidence_table contradicts evidence_table_id"
+                ));
+            }
+            return Ok("none");
+        }
+        if !ev.is_empty() {
+            return Ok("pinned");
+        }
+        if id == ConfigId::C {
+            return Err("config C: evidence_mode would be an implicit latest; pin routing.evidence_table_id or set no_evidence_table=true".into());
+        }
+        Ok("none")
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct InputRef {
     /// campaign manifest からの相対 path（dry-run の `--input-manifest` で上書き可）。
@@ -527,6 +551,7 @@ impl CampaignManifest {
                     c.id
                 ));
             }
+            r.effective_evidence_mode(c.id)?;
             if c.id == ConfigId::C && r.no_evidence_table != Some(true) {
                 if ev.is_empty() {
                     return Err("config C: routing.evidence_table_id must be pinned".into());

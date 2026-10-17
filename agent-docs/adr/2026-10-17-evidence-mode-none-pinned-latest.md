@@ -32,3 +32,11 @@ campaign manifest の `no_evidence_table=true` は「根拠表を使わない」
 - `GET /tasks/{id}` の `TaskDetail.routing_override` に実効の固定（祖先継承を含む）を出す。
 - root の `retry` は複製先の新 id に自身の `task_routing_overrides` 行を写す（`retry_task_tx`）。写さないと none/pinned が config の latest に落ちた。
 - 試験: `crates/task-api/tests/project_plan.rs::evidence_mode_round_trips_through_post_get_child_and_retry`（実 router）。
+
+## 付記（campaign unit）
+- manifest の `routing.no_evidence_table` は**維持**する（置換しない）。実効 mode は `ArmRouting::effective_evidence_mode`:
+  `no_evidence_table=true`→`none`、`evidence_table_id`→`pinned`、どちらも無い B→`none`（B は根拠表を読まない）、C で両方無い→Err（暗黙 latest）。
+  `no_evidence_table=true` と `evidence_table_id` の併記は起動前（`check_resolved`）に拒否。manifest に `latest` を書く手段は無い。
+- `POST /tasks` の `routing_override` に `evidence_mode` を常に載せる。旧 manifest（`no_evidence_table` / `evidence_table_id` のみ）はそのまま読める。
+- `ObservedRun.evidence_mode`（`routing_resolved.evidence_mode` 由来）を record に残し、checker が manifest の実効 mode と照合する（欠測・不一致は違反）。
+- 試験: `tests/celeris_exec.rs::no_evidence_table_posts_evidence_mode_none_and_implicit_latest_is_rejected`、`tests/routing_pin.rs`（preflight 拒否・checker の evidence_mode 逸脱）。

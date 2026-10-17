@@ -42,6 +42,9 @@ pub struct ObservedRun {
     pub routing_mode: Option<String>,
     pub routing_source: Option<String>,
     pub lower_policy: Option<String>,
+    /// 実効の evidence_mode（none / pinned / latest）。checker が manifest と照合する。
+    #[serde(default)]
+    pub evidence_mode: Option<String>,
     pub evidence_table_id: Option<String>,
     pub online_update: Option<bool>,
 }

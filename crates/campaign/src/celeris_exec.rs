@@ -73,12 +73,11 @@ pub fn routing_override(cfg: &Config) -> Result<Value, String> {
             cfg.id
         )
     })?;
-    if cfg.id == ConfigId::C && r.evidence_table_id.is_none() && r.no_evidence_table != Some(true) {
-        return Err("config C: routing.evidence_table_id must be pinned".into());
-    }
+    let evidence_mode = r.effective_evidence_mode(cfg.id)?;
     let mut o = json!({
         "mode": mode,
         "lower_policy": r.lower_policy.unwrap_or_else(|| DEFAULT_LOWER_POLICY.into()),
+        "evidence_mode": evidence_mode,
         "online_update": r.online_update.unwrap_or(false),
     });
     if let Some(e) = r.evidence_table_id {
@@ -472,6 +471,7 @@ impl<T: Transport> CelerisExecutor<T> {
                 routing_mode: text(&rr["mode"]),
                 routing_source: text(&rr["source"]),
                 lower_policy: text(&rr["lower_policy"]),
+                evidence_mode: text(&rr["evidence_mode"]),
                 evidence_table_id: text(&rr["evidence_table_id"]),
                 online_update: rr["online_update"].as_bool(),
             });

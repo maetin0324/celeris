@@ -29,6 +29,10 @@ struct FakeHost {
 }
 
 impl Host for FakeHost {
+    fn probe_runner(&self) -> Box<dyn celeris_campaign::cap_probe::ProbeRunner> {
+        Box::new(preflight_setup::OkRunner)
+    }
+
     fn env_nonempty(&self, name: &str) -> bool {
         self.env.contains(&name)
     }
@@ -612,25 +616,34 @@ fn cli_preflight_exit_codes_and_secret_never_printed() {
         ])
         .output()
         .is_ok_and(|o| o.status.success());
-    if userns {
-        assert!(
-            ok.status.success(),
-            "{}",
-            String::from_utf8_lossy(&ok.stderr)
-        );
-        let v: Value = serde_json::from_slice(&ok.stdout).unwrap();
-        assert_eq!(
-            (v["ok"].clone(), v["paid_calls_made"].clone()),
-            (json!(true), json!(0))
-        );
+    // 実 host の能力（ucx・sirius 接続 socket 等）は host 依存。不足は `capability` の env_failure として別に数え、
+    // それ以外の不足がこの host 条件だけであることを確かめる。
+    let v: Value = if ok.status.success() {
+        serde_json::from_slice(&ok.stdout).unwrap()
     } else {
-        let v: Value = serde_json::from_slice(&ok.stderr_json()).unwrap();
-        let miss = v["missing"].as_array().unwrap();
+        serde_json::from_slice(&ok.stderr_json()).unwrap()
+    };
+    let others: Vec<&Value> = v["missing"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|m| m["check"] != "capability")
+        .collect();
+    assert_eq!(v["paid_calls_made"], json!(0));
+    if userns {
+        assert!(others.is_empty(), "{v}");
+    } else {
         assert!(
-            miss.len() == 1 && miss[0]["detail"].as_str().unwrap().contains("bwrap"),
+            others.len() == 1 && others[0]["detail"].as_str().unwrap().contains("bwrap"),
             "{v}"
         );
     }
+    let cap_missing = v["missing"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|m| m["check"] == "capability");
+    assert_eq!(v["failure_class"] == json!("env_failure"), cap_missing);
     // 環境変数が無い → 非 0。run も始まらない（out を作らない）。
     let out = s.dir.path().join("o");
     let o = bin(&["preflight"], &s, &[]);

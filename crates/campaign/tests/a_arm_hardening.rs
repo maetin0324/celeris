@@ -201,6 +201,7 @@ fn sandbox_exposes_only_the_workspace_account_and_the_binary() {
     let sb = Sandbox {
         account_id: "lab".into(),
         config_dir: "/acct/lab".into(),
+        toolchain: Default::default(),
     };
     let ws = Path::new("/out/trials/A/k3/rep1/workspace");
     let real = Path::new("/home/op/.local/share/claude/versions/2.1");
@@ -305,6 +306,7 @@ echo done >> probe.txt
     let x = t.exec().with_sandbox(Sandbox {
         account_id: "lab".into(),
         config_dir: acct,
+        toolchain: Default::default(),
     });
     let r = x.submit(&t.req(u64::MAX), "campaign-sbx1").expect("submit");
     let res = wait_done(&x, &r);

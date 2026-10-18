@@ -178,6 +178,59 @@ pub struct Sandbox {
     /// A が使う Celeris 管理アカウント（claude_oauth）の id と、その `CLAUDE_CONFIG_DIR`。
     pub account_id: String,
     pub config_dir: PathBuf,
+    /// 固定 toolchain の読み取り専用 mount・管理接続 socket・環境変数（既定は空 = 追加なし）。
+    pub toolchain: Toolchain,
+}
+
+/// sandbox を無効にせず、必要な道具だけを足す固定の追加分。HOME 全公開や `/` の bind は `validate` が拒む。
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct Toolchain {
+    /// 読み取り専用で足す絶対 path（例: UCX の prefix）。
+    #[serde(default)]
+    pub ro_mounts: Vec<PathBuf>,
+    /// 管理された接続経路の unix socket（そのファイルだけを bind。鍵や ~/.ssh は入れない）。
+    #[serde(default)]
+    pub sockets: Vec<PathBuf>,
+    #[serde(default)]
+    pub env: Vec<(String, String)>,
+}
+
+impl Toolchain {
+    pub fn validate(&self, home: Option<&Path>) -> Result<(), String> {
+        const DENIED: [&str; 8] = [
+            "/", "/home", "/root", "/proc", "/dev", "/sys", "/run", "/tmp",
+        ];
+        for p in self.ro_mounts.iter().chain(&self.sockets) {
+            let ok_shape = p.is_absolute()
+                && p.components().all(|c| {
+                    !matches!(
+                        c,
+                        std::path::Component::ParentDir | std::path::Component::CurDir
+                    )
+                });
+            if !ok_shape {
+                return Err(format!(
+                    "toolchain path must be absolute and normal: {}",
+                    p.display()
+                ));
+            }
+            if DENIED.iter().any(|d| p == Path::new(d)) {
+                return Err(format!("toolchain must not expose {}", p.display()));
+            }
+            if let Some(h) = home.filter(|h| !h.as_os_str().is_empty() && *h != Path::new("/"))
+                && h.starts_with(p)
+            {
+                return Err(format!("toolchain {} covers HOME", p.display()));
+            }
+        }
+        if let Some((k, _)) = self.env.iter().find(|(k, _)| {
+            matches!(k.as_str(), "HOME" | "CLAUDE_CONFIG_DIR") || k.is_empty() || k.contains('=')
+        }) {
+            return Err(format!("toolchain env must not set {k:?}"));
+        }
+        Ok(())
+    }
 }
 
 /// 実体の解決は preflight と同じ関数（検査対象と実起動をずらさない）。
@@ -225,6 +278,14 @@ impl Sandbox {
         );
         add(&["--ro-bind", &real_s, &real_s]);
         add(&["--bind", &ws, &ws, "--bind", &cfg, &cfg, "--chdir", &ws]);
+        for m in &self.toolchain.ro_mounts {
+            let m = m.to_string_lossy();
+            add(&["--ro-bind", &m, &m]);
+        }
+        for m in &self.toolchain.sockets {
+            let m = m.to_string_lossy();
+            add(&["--bind", &m, &m]);
+        }
         add(&["--setenv", "PATH", "/usr/local/bin:/usr/bin:/bin"]);
         add(&[
             "--setenv",
@@ -242,7 +303,7 @@ impl Sandbox {
             "CLAUDE_CONFIG_DIR",
             &cfg,
         ]);
-        for (k, v) in env {
+        for (k, v) in self.toolchain.env.iter().chain(env) {
             add(&["--setenv", k, v]);
         }
         a
@@ -250,6 +311,17 @@ impl Sandbox {
 
     pub fn wrap(&self, c: &HarnessCommand, workspace: &Path) -> Result<HarnessCommand, String> {
         let real = resolve_program(&c.program)?;
+        self.wrap_resolved(c, workspace, &real)
+    }
+
+    /// `wrap` の本体（実行ファイルを解決済みで渡す）。A の起動と cap-probe が同じ組立を通る。
+    pub fn wrap_resolved(
+        &self,
+        c: &HarnessCommand,
+        workspace: &Path,
+        real: &Path,
+    ) -> Result<HarnessCommand, String> {
+        let real = real.to_path_buf();
         let mut args = self.args(workspace, &real, &c.env);
         args.push("--".into());
         args.push(real.to_string_lossy().into_owned());

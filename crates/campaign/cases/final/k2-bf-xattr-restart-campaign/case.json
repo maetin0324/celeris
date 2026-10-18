@@ -77,6 +77,81 @@
     "path": "final/k2-bf-xattr-restart-campaign/private.json",
     "sha256": "be22701de9116572197486693ee645ff3eb71d81e7d086c6ec16b9b4a51c99af"
   },
+  "required_capabilities": [
+    {
+      "id": "cc",
+      "kind": "compiler",
+      "argv": [
+        "cc",
+        "--version"
+      ]
+    },
+    {
+      "id": "c++",
+      "kind": "compiler",
+      "argv": [
+        "c++",
+        "--version"
+      ]
+    },
+    {
+      "id": "cmake",
+      "kind": "build",
+      "argv": [
+        "cmake",
+        "--version"
+      ],
+      "expect_stdout": "cmake version"
+    },
+    {
+      "id": "git",
+      "kind": "build",
+      "argv": [
+        "git",
+        "--version"
+      ],
+      "expect_stdout": "git version"
+    },
+    {
+      "id": "ucx-pkg",
+      "kind": "library",
+      "argv": [
+        "pkg-config",
+        "--modversion",
+        "ucx"
+      ]
+    },
+    {
+      "id": "min-build-ucx",
+      "kind": "build",
+      "argv": [
+        "sh",
+        "-c",
+        "cd /tmp && printf '#include <ucp/api/ucp.h>\\nint main(void){ucp_config_t *c = 0; (void)c; return 0;}\\n' > t.c && cc t.c $(pkg-config --cflags --libs ucx) -o t && ./t"
+      ]
+    },
+    {
+      "id": "min-build-cmake",
+      "kind": "build",
+      "argv": [
+        "sh",
+        "-c",
+        "mkdir -p /tmp/cm && cd /tmp/cm && printf 'cmake_minimum_required(VERSION 3.10)\\nproject(t C CXX)\\nadd_executable(t t.cc)\\n' > CMakeLists.txt && printf 'int main(){return 0;}\\n' > t.cc && cmake -S . -B b >/dev/null && cmake --build b && ./b/t"
+      ]
+    },
+    {
+      "id": "sirius-link",
+      "kind": "connection",
+      "argv": [
+        "ssh",
+        "-S",
+        "/run/celeris-cap/sirius-ssh.sock",
+        "-O",
+        "check",
+        "sirius"
+      ]
+    }
+  ],
   "schema": "celeris.campaign-case/1",
   "snapshot": {
     "kb_snapshot": "741f24146f5c02f44acf5291e23806416b9956809e55a1474488ecbcc9fe0702",

@@ -17,7 +17,7 @@ use celeris_campaign::{
     watch::{self, SystemClock, WatchOptions},
 };
 
-const USAGE: &str = "usage: celeris-campaign <dry-run|validate|preflight|run|watch|check|check-report|export|final-accounting|grade-out|usage> --manifest <path> \
+const USAGE: &str = "usage: celeris-campaign <dry-run|validate|preflight|cap-probe|run|watch|check|check-report|export|final-accounting|grade-out|usage> --manifest <path> \
 [--interval-secs N] [--max-iterations M] [--cases <grade-case dir>] \
 [--input-manifest <path>] [--out <dir>] [--executor mock|harness|celeris] [--api-url <url> --token-env <ENV_NAME> [--task-template <json>]] [--dest <dir>] \
 [--cases-root <dir>] [--grader-root <dir>] [--grade-case-root <dir>] [--a-program <path>] [--report <file>] [--measurement-id <id>] [--repo-src <dir>] [--materials-src <dir>] [--kb-src <dir>] [--inputs-src <dir>] [--records <records.jsonl>] [--cos-not-called <basis>] [--quota <usage.json>] [--a-account <account_id>] [--measure-config <toml> --normal-config <toml> --canaries <json>] [--max-7d <ratio>] [--max-7d-codex <ratio>]";
@@ -57,6 +57,7 @@ fn preflight_inputs(args: &[String], manifest_path: &std::path::Path) -> Inputs 
             out: arg(args, "--out"),
         }),
         measurement_id: text("--measurement-id"),
+        cap_env: arg(args, "--cap-env"),
     }
 }
 
@@ -149,6 +150,7 @@ fn a_executor(
     .with_sandbox(Sandbox {
         account_id: id,
         config_dir: dir,
+        toolchain: celeris_campaign::cap_probe::load_toolchain(args)?,
     })
     .with_budget_guard(BudgetGuard {
         basis: m.budget.token_basis,
@@ -156,10 +158,69 @@ fn a_executor(
     }))
 }
 
+/// `cap-probe --case <id> --arm a|b|c --cap-env <json> [--dry-argv]`。LLM も job も使わない。
+fn cap_probe_cli(args: &[String]) -> Result<String, String> {
+    use celeris_campaign::{cap_probe, cases::CaseSet, manifest::ConfigId};
+    let text = |n: &str| arg(args, n).map(|p| p.to_string_lossy().into_owned());
+    let id = text("--case").ok_or("--case <id> is required")?;
+    let arm = match text("--arm").as_deref() {
+        Some("a") => ConfigId::A,
+        Some("b") => ConfigId::B,
+        Some("c") => ConfigId::C,
+        _ => return Err("--arm a|b|c is required".into()),
+    };
+    let env =
+        cap_probe::CapEnv::load(&arg(args, "--cap-env").ok_or("--cap-env <json> is required")?)?;
+    let set = CaseSet::load(
+        &arg(args, "--cases-root").unwrap_or_else(|| PathBuf::from("crates/campaign/cases")),
+        &arg(args, "--grader-root")
+            .unwrap_or_else(|| PathBuf::from("crates/campaign/fixtures/grader-private")),
+    )?;
+    let case = &set
+        .get(&id)
+        .ok_or_else(|| format!("{id}: no such case"))?
+        .case;
+    let tmp = tempfile::tempdir().map_err(|e| e.to_string())?;
+    let ws = arg(args, "--workspace").unwrap_or_else(|| tmp.path().join("ws"));
+    let cfg = arg(args, "--config-dir").unwrap_or_else(|| tmp.path().join("cfg"));
+    let _ = std::fs::create_dir_all(&ws);
+    let _ = std::fs::create_dir_all(&cfg);
+    let sb = cap_probe::sandbox_for(
+        &env,
+        arm,
+        text("--a-account").as_deref().unwrap_or("probe"),
+        &cfg,
+    );
+    if args.iter().any(|a| a == "--dry-argv") {
+        let v: Vec<_> = cap_probe::dry_argv(&sb, &ws, case)
+            .into_iter()
+            .map(|(id, r)| match r {
+                Ok(a) => serde_json::json!({"id": id, "argv": a}),
+                Err(e) => serde_json::json!({"id": id, "error": e}),
+            })
+            .collect();
+        return serde_json::to_string_pretty(&v).map_err(|e| e.to_string());
+    }
+    let rep = cap_probe::probe(
+        &sb,
+        arm,
+        &ws,
+        case,
+        &cap_probe::ProcessProbeRunner {
+            timeout: std::time::Duration::from_secs(300),
+        },
+    );
+    let s = serde_json::to_string_pretty(&rep).map_err(|e| e.to_string())?;
+    if rep.ok { Ok(s) } else { Err(s) }
+}
+
 fn run(args: Vec<String>) -> Result<String, String> {
     let cmd = args.first().map(String::as_str).unwrap_or("");
     if cmd == "grade" {
         return celeris_campaign::grader::cli(&args, &ProcessRunner::default());
+    }
+    if cmd == "cap-probe" {
+        return cap_probe_cli(&args);
     }
     let manifest_path = arg(&args, "--manifest").ok_or("--manifest <path> is required")?;
     let m = CampaignManifest::load(&manifest_path)?;

@@ -17,7 +17,7 @@ use celeris_campaign::{
     watch::{self, SystemClock, WatchOptions},
 };
 
-const USAGE: &str = "usage: celeris-campaign <dry-run|validate|env-lock|env-check|preflight|run|watch|check|check-report|export|final-accounting|grade-out|usage> --manifest <path> \
+const USAGE: &str = "usage: celeris-campaign <dry-run|validate|env-lock|config-check|env-check|preflight|run|watch|check|check-report|export|final-accounting|grade-out|usage> --manifest <path> \
 [--interval-secs N] [--max-iterations M] [--cases <grade-case dir>] \
 [--input-manifest <path>] [--out <dir>] [--executor mock|harness|celeris] [--api-url <url> --token-env <ENV_NAME> [--task-template <json>]] [--dest <dir>] \
 [--cases-root <dir>] [--grader-root <dir>] [--grade-case-root <dir>] [--a-program <path>] [--report <file>] [--measurement-id <id>] [--repo-src <dir>] [--materials-src <dir>] [--kb-src <dir>] [--inputs-src <dir>] [--records <records.jsonl>] [--cos-not-called <basis>] [--quota <usage.json>] [--a-account <account_id>] [--measure-config <toml> --normal-config <toml> --canaries <json>] [--max-7d <ratio>] [--max-7d-codex <ratio>]";
@@ -213,6 +213,30 @@ fn run(args: Vec<String>) -> Result<String, String> {
             let verify = args.iter().any(|a| a == "--verify");
             let o = env_lock::establish(&m, &obs, &out()?, verify)?;
             Ok(format!("{{\"env_lock\":\"{o:?}\"}}").to_lowercase())
+        }
+        "config-check" => {
+            // 起動前の検査（daemon に接続しない・token を読まない）: 測定 config と通常運用の分離・canary 定義。
+            let pi = preflight_inputs(&args, &manifest_path);
+            let me = pi
+                .measure
+                .as_ref()
+                .ok_or("--measure-config <toml> (and --normal-config, --canaries) is required")?;
+            let mut missing = celeris_campaign::measure_env::check_config(
+                &me.config,
+                &me.normal_config,
+                pi.kb_src.as_deref(),
+            );
+            if let Err(e) = celeris_campaign::measure_env::Canaries::load(&me.canaries) {
+                missing.push(e);
+            }
+            let s = serde_json::to_string_pretty(&serde_json::json!({
+                "schema": "celeris.campaign-config-check/1",
+                "ok": missing.is_empty(),
+                "paid_calls_made": 0,
+                "missing": missing,
+            }))
+            .map_err(|e| e.to_string())?;
+            if missing.is_empty() { Ok(s) } else { Err(s) }
         }
         "env-check" => {
             let pi = preflight_inputs(&args, &manifest_path);

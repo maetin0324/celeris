@@ -23366,7 +23366,6 @@
       "type": "object"
     },
     "ResolvedRouting": {
-      "description": "解決結果（`celeris.route-decision/1` の `routing_resolved` に載る）。",
       "properties": {
         "evidence_mode": {
           "$ref": "#/$defs/EvidenceMode"

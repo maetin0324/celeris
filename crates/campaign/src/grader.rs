@@ -33,6 +33,10 @@ pub mod case {
         pub recompute: Option<RecomputeSpec>,
         #[serde(default)]
         pub review: Option<ReviewSpec>,
+        /// 判定する工程（implementation / experiment / analysis / review）。省略時は持つ検査すべて。
+        /// 持つとき analysis ⇔ recompute、review ⇔ review が一致せねばならない（ADR 2026-10-18-k2-judged-scope）。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub judged_scope: Option<Vec<String>>,
     }
 
     #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -180,6 +184,25 @@ pub mod case {
             }
             if self.id.is_empty() {
                 return Err("case id is empty".into());
+            }
+            if let Some(js) = &self.judged_scope {
+                for (stage, has) in [
+                    ("implementation", self.implementation.is_some()),
+                    ("experiment", self.experiment.is_some()),
+                    ("analysis", self.recompute.is_some()),
+                    ("review", self.review.is_some()),
+                ] {
+                    if js.iter().any(|x| x == stage) != has {
+                        return Err(format!(
+                            "judged_scope and the {stage} check disagree (recompute/review may be null only for a not-judged stage)"
+                        ));
+                    }
+                }
+                if let Some(x) = js.iter().find(|x| {
+                    !["implementation", "experiment", "analysis", "review"].contains(&x.as_str())
+                }) {
+                    return Err(format!("judged_scope has unknown stage {x}"));
+                }
             }
             if let Some(i) = &self.implementation {
                 if (i.tests.is_empty() && i.hidden_tests.is_empty()) || i.command.is_empty() {
@@ -1198,6 +1221,10 @@ pub struct GradeReport {
     /// 不合格のときだけ。いずれかの検査が環境不良なら env_failure（成果物の評価になっていない）。
     pub failure_class: Option<FailureClass>,
     pub checks: Checks,
+    /// 判定した工程。pass はこの範囲についてだけ言える。
+    pub judged_scope: Vec<String>,
+    /// 判定しなかった工程（pass でも検証済みと主張しない）。
+    pub not_judged: Vec<String>,
 }
 
 pub struct GradeOptions<'a> {
@@ -1209,6 +1236,8 @@ pub struct GradeOptions<'a> {
     /// 評価側が取得した job 記録（`celeris.observed-jobs/1`）。experiment を持つ非 control case では必須。
     pub observed_jobs: Option<PathBuf>,
 }
+
+const STAGES: [&str; 4] = ["implementation", "experiment", "analysis", "review"];
 
 pub fn grade(case: &GradeCase, artifact: &Path, opts: &GradeOptions) -> GradeReport {
     let control = case.split == CaseSplit::Control;
@@ -1230,6 +1259,19 @@ pub fn grade(case: &GradeCase, artifact: &Path, opts: &GradeOptions) -> GradeRep
             None => CheckResult::not_applicable(),
         },
     };
+    let judged: Vec<&str> = STAGES
+        .iter()
+        .copied()
+        .filter(|s| match case.judged_scope.as_ref() {
+            Some(js) => js.iter().any(|x| x == s),
+            None => match *s {
+                "implementation" => case.implementation.is_some(),
+                "experiment" => case.experiment.is_some(),
+                "analysis" => case.recompute.is_some(),
+                _ => case.review.is_some(),
+            },
+        })
+        .collect();
     let all = [
         &checks.implementation,
         &checks.evidence,
@@ -1260,6 +1302,12 @@ pub fn grade(case: &GradeCase, artifact: &Path, opts: &GradeOptions) -> GradeRep
         verdict,
         final_pass: verdict == Verdict::Pass,
         failure_class,
+        judged_scope: judged.iter().map(|s| (*s).to_string()).collect(),
+        not_judged: STAGES
+            .iter()
+            .filter(|s| !judged.contains(s))
+            .map(|s| (*s).to_string())
+            .collect(),
         checks,
     }
 }

@@ -171,6 +171,7 @@ pub fn generate(
         experiment,
         recompute: None,
         review: None,
+        judged_scope: case.judged_scope.clone(),
     };
     g.validate()?;
     let body = serde_json::to_string_pretty(&g).map_err(|e| e.to_string())?;

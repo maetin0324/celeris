@@ -108,6 +108,10 @@ pub struct Case {
     pub title: String,
     /// 含む工程: implementation / experiment / analysis / review。
     pub stages: Vec<String>,
+    /// 採点器が判定する工程（stages の部分集合。省略時は stages 全部）。差が `not_judged`
+    /// （今回は採点せず、報告で検証済みと主張しない）。ADR 2026-10-18-k2-judged-scope。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub judged_scope: Option<Vec<String>>,
     #[serde(default)]
     pub initial: Option<Initial>,
     #[serde(default)]
@@ -128,6 +132,23 @@ pub struct Case {
     /// 本測定の前に LLM なしで確かめる必要能力（compiler・依存 lib・最小 build・接続・再計算 toolchain）。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub required_capabilities: Vec<Capability>,
+}
+
+impl Case {
+    pub fn judged_scope(&self) -> Vec<String> {
+        self.judged_scope
+            .clone()
+            .unwrap_or_else(|| self.stages.clone())
+    }
+
+    pub fn not_judged(&self) -> Vec<String> {
+        let j = self.judged_scope();
+        self.stages
+            .iter()
+            .filter(|s| !j.contains(s))
+            .cloned()
+            .collect()
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -254,6 +275,13 @@ impl Case {
         }
         if self.stages.is_empty() {
             return Err(format!("{id}: stages is empty"));
+        }
+        if let Some(js) = &self.judged_scope
+            && (js.is_empty() || js.iter().any(|x| !self.stages.contains(x)))
+        {
+            return Err(format!(
+                "{id}: judged_scope must be a non-empty subset of stages"
+            ));
         }
         let mut seen = BTreeSet::new();
         for c in &self.required_capabilities {

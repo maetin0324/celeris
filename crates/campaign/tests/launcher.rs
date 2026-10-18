@@ -261,7 +261,7 @@ const CAP_STUB: &str = "#!/bin/sh\necho 'cmake version git version Python 3 rust
 /// （PATH の先頭に置かれるので、他の script が呼ぶ `sh` を壊さない）。
 const CAP_SH_STUB: &str = r#"#!/bin/sh
 case "$2" in
-  *min-build*|*printf*|*autoreconf*|*libclang*|*verbs.h*) echo 'cmake version git version Python 3'; exit 0 ;;
+  *min-build*|*printf*|*autoreconf*|*libclang*|*verbs.h*) echo 'cmake version git version Python 3 rustc-min ok'; exit 0 ;;
 esac
 exec /bin/sh "$@"
 "#;

@@ -285,7 +285,7 @@ pub fn fake_worker_daemon() -> celeris_campaign::cap_probe::WorkerDaemonEnv {
             c.stdin
                 .take()
                 .unwrap()
-                .write_all(b"#!/bin/sh\necho cmake version git version Python 3\n")
+                .write_all(b"#!/bin/sh\necho cmake version git version Python 3 rustc-min ok\n")
                 .unwrap();
             assert!(c.wait().unwrap().success());
         }

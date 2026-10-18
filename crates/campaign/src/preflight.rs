@@ -486,7 +486,9 @@ fn run_checks(a: &mut Acc, m: &CampaignManifest, inp: &Inputs, host: &dyn Host) 
     }
 
     // 測定専用 daemon に検査 task を作る B/C の能力 probe は、他の検査が全て通った後（最後）に走らせる。
-    if let Some(set) = &set {
+    if a.missing.is_empty()
+        && let Some(set) = &set
+    {
         check_bc_capabilities(a, m, set, inp, host);
     }
 }
@@ -780,6 +782,36 @@ fn check_bc_capabilities(
     let (Some(url), Some(tok)) = (inp.api_url.as_deref(), inp.token_env.as_deref()) else {
         return;
     };
+    // 投入の前に、検査分野が無 LLM の検査 harness に結ばれていることを測定 config の宣言から確かめる。
+    let Some(measure) = inp.measure.as_ref() else {
+        return;
+    };
+    let config = match measure_env::load_toml(&measure.config) {
+        Ok(c) => c,
+        Err(e) => {
+            a.miss(
+                "capability",
+                format!("B/C probe: measurement config unreadable: {e}"),
+            );
+            return;
+        }
+    };
+    let mut declared = true;
+    for h in m
+        .configs
+        .iter()
+        .filter(|x| x.id != ConfigId::A)
+        .flat_map(|x| x.worker_harnesses())
+        .collect::<std::collections::BTreeSet<_>>()
+    {
+        for e in crate::cap_probe::declaration_problems(&config, &h) {
+            declared = false;
+            a.miss("capability", format!("B/C probe not submitted: {e}"));
+        }
+    }
+    if !declared {
+        return;
+    }
     for c in cases {
         for cfg_id in m.configs.iter().map(|x| x.id).filter(|x| *x != ConfigId::A) {
             let harnesses = m

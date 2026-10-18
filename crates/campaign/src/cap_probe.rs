@@ -486,6 +486,50 @@ pub fn probe_genre(harness: &str) -> String {
     format!("{PROBE_GENRE_PREFIX}{harness}")
 }
 
+/// 測定 config で、分野 `cap-probe-<h>` の検査 task が必ず無 LLM の検査 harness（kind=fake・`env_of = "<h>"`）に結ばれることを
+/// 宣言から確かめる（ADR D5: 宣言が無い・別の harness に一致する config では task を投入しない。検査 JSON が実 harness に渡らない）。
+/// `harness_selection.rules` を先頭から見て、この分野に当たり得る最初の規則（分野なし or 同じ分野）が検査 harness を指していなければ不合格。
+pub fn declaration_problems(config: &toml::Value, harness: &str) -> Vec<String> {
+    let genre = probe_genre(harness);
+    let at = |m: &str| format!("{genre}: {m}");
+    let rule = config
+        .get("harness_selection")
+        .and_then(|h| h.get("rules"))
+        .and_then(|r| r.as_array())
+        .and_then(|rules| {
+            rules
+                .iter()
+                .find(|r| match r.get("genre").and_then(|g| g.as_str()) {
+                    None => true,
+                    Some(g) => g == genre,
+                })
+        });
+    let Some(rule) = rule else {
+        return vec![at(
+            "measurement config has no harness_selection rule for this genre",
+        )];
+    };
+    if rule.get("genre").and_then(|g| g.as_str()) != Some(genre.as_str()) {
+        return vec![at(
+            "the first matching harness_selection rule has no genre; the probe task could reach a real harness",
+        )];
+    }
+    let target = rule.get("harness").and_then(|h| h.as_str()).unwrap_or("");
+    let Some(h) = config.get("harnesses").and_then(|h| h.get(target)) else {
+        return vec![at(&format!("rule harness {target:?} is not declared"))];
+    };
+    let mut out = Vec::new();
+    if h.get("kind").and_then(|k| k.as_str()) != Some("fake") {
+        out.push(at(&format!("harness {target:?} is not kind = \"fake\"")));
+    }
+    if h.get("env_of").and_then(|k| k.as_str()) != Some(harness) {
+        out.push(at(&format!(
+            "harness {target:?} does not declare env_of = {harness:?}"
+        )));
+    }
+    out
+}
+
 /// worker の中で走らせる検査 1 件。
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WorkerCheck {

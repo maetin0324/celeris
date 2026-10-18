@@ -1,7 +1,7 @@
 //! 必要能力 probe: case 固定・A の sandbox argv・不足は env_failure で最初の LLM 呼出し前に停止・B/C は同じ能力を
 //! 測定専用 daemon の worker で検査する。userns が要る実走は worker sandbox で出来ないので、A は argv 組立・判定・
 //! 停止順序を stub runner で、B/C は結果の判定を stub で確かめる（daemon の worker 起動経路は別 file の実 process 試験）。
-use std::{cell::RefCell, path::Path};
+use std::{cell::RefCell, fs, path::Path};
 
 use celeris_campaign::{
     cap_probe::{self, CapEnv, ProbeRunner, Ran},
@@ -238,7 +238,13 @@ fn missing_capability_is_env_failure_and_counts_no_paid_call() {
     );
 }
 
-struct StubHost(bool);
+/// `.0`: worker の検査が通るか、`.1`: A の probe が通るか。`.2`: 測定 daemon へ投入された検査 task の数。
+struct StubHost(bool, bool, std::cell::Cell<usize>);
+impl StubHost {
+    fn new(worker_ok: bool, a_ok: bool) -> Self {
+        Self(worker_ok, a_ok, std::cell::Cell::new(0))
+    }
+}
 impl Host for StubHost {
     fn env_nonempty(&self, _: &str) -> bool {
         true
@@ -252,6 +258,20 @@ impl Host for StubHost {
     fn api_get(&self, _: &str, _: &str, path: &str) -> Result<Value, String> {
         match path {
             "/api/v1/config" => Ok(daemon_identity::matching_daemon_body()),
+            // 他の検査（task-template・A のアカウント）を通すための偽 API。
+            "/api/v1/projects/01ABC" => {
+                Ok(json!({"project":{"id":"01ABC","auto_integrate":false},"repos":[]}))
+            }
+            "/api/v1/projects/01ABC/repos" => Ok(
+                json!({"items":[{"name":"scratch","is_primary":true,"location":{"kind":"local","path":"/x"}}]}),
+            ),
+            "/api/v1/llm/accounts" => {
+                static D: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
+                let d = D.get_or_init(|| tempfile::tempdir().unwrap()).path();
+                Ok(
+                    json!({"items":[{"source_id":"claude_oauth","account_id":"lab","dir":d,"logged_in":true}]}),
+                )
+            }
             _ => Err(format!("GET {path}: no api in this test")),
         }
     }
@@ -265,6 +285,7 @@ impl Host for StubHost {
         _: &str,
         spec: &cap_probe::WorkerProbeSpec,
     ) -> Result<cap_probe::WorkerProbeRun, String> {
+        self.2.set(self.2.get() + 1);
         let mut run = ok_worker_run(spec);
         if !self.0 {
             // 道具（sirius-link）が worker の PATH に無い。
@@ -276,7 +297,7 @@ impl Host for StubHost {
         Ok(run)
     }
     fn probe_runner(&self) -> Box<dyn ProbeRunner> {
-        if self.0 {
+        if self.1 {
             Box::new(OkRunner)
         } else {
             Box::new(FailRunner)
@@ -288,7 +309,7 @@ fn capability_missing(
     inp: &celeris_campaign::preflight::Inputs,
     ok: bool,
 ) -> (Vec<String>, Option<&'static str>) {
-    let r = check(inp, &StubHost(ok));
+    let r = check(inp, &StubHost::new(ok, true));
     let m = r
         .missing
         .iter()
@@ -313,8 +334,17 @@ fn preflight_stops_before_any_llm_call_on_missing_capability() {
     );
     assert!(miss.iter().any(|m| m.contains("arm B")) && miss.iter().any(|m| m.contains("arm C")));
     assert_eq!(class, Some("env_failure"));
-    let err = gate(&s.inp, &StubHost(false)).unwrap_err();
+    let err = gate(&s.inp, &StubHost::new(false, true)).unwrap_err();
     assert!(err.contains("no paid execution or task was started") && err.contains("env_failure"));
+    // 他の検査（A の probe）が落ちている preflight は、B/C の検査 task を測定 daemon に 1 件も投入しない。
+    let host = StubHost::new(true, false);
+    let r = check(&s.inp, &host);
+    assert!(r.missing.iter().any(|m| m.check == "capability"));
+    assert_eq!(host.2.get(), 0, "no probe task may be submitted");
+    // 対照: A が通れば投入される。
+    let host = StubHost::new(true, true);
+    assert!(check(&s.inp, &host).missing.is_empty());
+    assert!(host.2.get() > 0);
     // cap env が無いのも不足（fail-closed）。
     let mut inp = s.inp.clone();
     inp.cap_env = None;
@@ -593,4 +623,60 @@ fn probe_worker_runs_one_task_per_arm_harness_and_names_the_failing_one() {
         Ok(ok_worker_run(spec))
     });
     assert!(rep.results.iter().any(|r| r.id == "harness" && !r.ok));
+}
+
+/// 測定 config の宣言漏れ・別 harness への一致では、検査 task を投入せず env_failure（検査 JSON が実 harness に渡らない）。
+#[test]
+fn undeclared_or_misdeclared_probe_harness_submits_nothing_and_is_env_failure() {
+    let s = setup();
+    let good = fs::read_to_string(&s.inp.measure.as_ref().unwrap().config).unwrap();
+    let decl = probe_declarations("celeris");
+    assert!(good.contains(&decl));
+    let base = good.replace(&decl, "");
+    let cases: Vec<(&str, String, &str)> = vec![
+        ("no declaration", base.clone(), "no harness_selection rule"),
+        (
+            "rule without genre (real harness could match)",
+            format!(
+                "{base}[harnesses.celeris]\nkind = \"fake\"\n[harness_selection]\nrules = [{{ harness = \"celeris\", required_capabilities = [] }}]\n"
+            ),
+            "no genre",
+        ),
+        (
+            "genre bound to a real harness",
+            format!(
+                "{base}[harnesses.celeris]\nkind = \"claude_code\"\n[harness_selection]\nrules = [{{ genre = \"cap-probe-celeris\", harness = \"celeris\", required_capabilities = [] }}]\n"
+            ),
+            "not kind",
+        ),
+        (
+            "env_of missing",
+            decl.replace("env_of = \"celeris\"\n", ""),
+            "env_of",
+        ),
+    ];
+    for (label, text, want) in cases {
+        let text = if label == "env_of missing" {
+            format!("{base}{text}")
+        } else {
+            text
+        };
+        fs::write(&s.inp.measure.as_ref().unwrap().config, &text).unwrap();
+        let host = StubHost::new(true, true);
+        let r = check(&s.inp, &host);
+        let miss: Vec<_> = r
+            .missing
+            .iter()
+            .filter(|m| m.check == "capability")
+            .map(|m| m.detail.clone())
+            .collect();
+        assert!(
+            miss.iter()
+                .any(|m| m.contains("not submitted") && m.contains(want)),
+            "{label}: {miss:?} / {:?}",
+            r.missing
+        );
+        assert_eq!(r.failure_class, Some("env_failure"), "{label}");
+        assert_eq!(host.2.get(), 0, "{label}: nothing submitted");
+    }
 }

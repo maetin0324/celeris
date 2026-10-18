@@ -34,7 +34,9 @@ daemon に無くても通り、逆に daemon にあって CLI に無ければ落
   preflight の最後（他の検査の後）に走る。
 - D5. 測定 daemon の config に、run_harnesses の各 `<h>` について harness `cap-probe-<h>`（`kind = "fake"`, `command`/`args` =
   cap-worker, `env_of = "<h>"`）と、分野 `cap-probe-<h>` → その harness の `[harness_selection]` 規則を足す（cap-runbook §1）。
-  無ければ検査 task は走らず、待ち時間の後に `<h>/worker-run` の `env_failure`（モデル失敗ではない）。`env_of` は
+  投入の前に preflight が測定 config の宣言を確かめる（`harness_selection` で分野 `cap-probe-<h>` に当たる最初の規則が同じ分野を持ち、
+  その harness が kind=fake・`env_of = "<h>"`。分野なしの規則が先に当たり得る config も不可）。満たさなければ投入せず `env_failure`
+  （検査 JSON が実 harness に渡り課金されない）。また他の検査が 1 つでも落ちている preflight は B/C の検査 task を投入しない。`env_of` は
   `kind = "fake"` だけに書け、宣言済みの harness を指す（config 検証）。
 - D6. 検査 task が通らない文脈: 試行の task-template（文脈）・permission_mode・harness の command 自体。B と C は同じ
   run_harnesses なので同じ環境を検査し、arm 差は報告ラベルだけ（manifest が B/C の run_harnesses の一致を要求する）。

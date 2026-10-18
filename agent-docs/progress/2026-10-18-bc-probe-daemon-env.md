@@ -39,3 +39,8 @@ ADR: `agent-docs/adr/2026-10-18-bc-probe-daemon-env.md`。
   落とす→daemon の process 環境が正しくても env_failure。
 - 通らないもの（ADR D6）: harness 自体の command・permission_mode・container 化、試行の task-template 文脈。
 - 本番移行: 測定 config に cap-runbook §1 の harness 宣言を足す（本番 config の変更なし）。
+
+## 追補2（差し戻し: 投入条件）
+- `run_checks` は他の検査が落ちている（`a.missing` 非空）とき `check_bc_capabilities` を呼ばない（投入 0 件）。試験 `preflight_stops_before_any_llm_call_on_missing_capability`（A が落ちると `probe_daemon_worker` 呼出し 0 件、対照は通る）。
+- 投入前に `cap_probe::declaration_problems`（測定 config の宣言検証）。宣言なし・分野なし規則・実 harness 指し・`env_of` 欠落は投入 0 件・`env_failure`。試験 `undeclared_or_misdeclared_probe_harness_submits_nothing_and_is_env_failure`。
+- `trial_state_cli_e2e` の worker 欠落試験は A も落ちる構成なので「A の失敗のみ・B/C は投入されない」に変更。B/C 側の欠落は実 daemon 試験が担う。

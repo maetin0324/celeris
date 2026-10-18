@@ -662,8 +662,7 @@ async fn contaminated_new_trial_state_is_refused_before_any_launch() {
     assert!(!out.join("harness-state").exists());
 }
 
-/// worker 側（B/C）の socket / toolchain が欠けると、fake program の PATH でも該当 arm の env_failure で
-/// 最初の投入前に止まる（台帳も作らない）。B/C の probe は worker の実起動関数で、daemon 設定の PATH の子 process に走る。
+/// socket / toolchain が欠けると env_failure で最初の投入前に止まる（台帳も作らない）。A が落ちている間は B/C の検査 task を投入しない。
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn missing_worker_socket_or_toolchain_stops_b_and_c_as_env_failure_before_launch() {
     let e = env().await;
@@ -687,10 +686,13 @@ async fn missing_worker_socket_or_toolchain_stops_b_and_c_as_env_failure_before_
         let err = lossy(&o.stderr);
         assert_eq!(o.status.code(), Some(1), "{label}: {err}");
         assert!(err.contains("env_failure"), "{label}: {err}");
+        // cap env は A と worker が同じ toolchain を要る。A の検査が落ちている preflight は B/C の検査 task を投入しない
+        // （B/C 側の欠落が env_failure になる経路は crates/celeris/tests/cap_probe_real_daemon.rs が実 daemon で確かめる）。
+        assert!(err.contains("arm A"), "{label}: {err}");
         for arm in ["arm B", "arm C"] {
             assert!(
-                err.contains(arm) && err.contains(&format!("{label}:")),
-                "{label} {arm}: {err}"
+                !err.contains(arm),
+                "{label} {arm} must not be probed: {err}"
             );
         }
         assert!(!e.out().join("ledger.jsonl").exists(), "{label}");

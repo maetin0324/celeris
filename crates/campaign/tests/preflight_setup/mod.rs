@@ -215,8 +215,17 @@ pub fn measure_config(d: &Path, tag: &str) -> String {
     format!(
         "db = \"{n}/celeris.db\"\nworkspace_root = \"{n}/ws\"\n[knowledge]\nroot = \"{n}/kb\"\ndefault_mounts = [\"kb:trial\"]\n\
          [api]\nlisten = \"127.0.0.1:7701\"\ntoken_file = \"{n}/token\"\n\
-         [[clusters]]\nid = \"pegasus\"\nhost = \"pegasus\"\n",
-        n = d.join(tag).display()
+         [[clusters]]\nid = \"pegasus\"\nhost = \"pegasus\"\n{probe}",
+        n = d.join(tag).display(),
+        probe = probe_declarations("celeris"),
+    )
+}
+
+/// 測定 config の検査 harness 宣言（cap-runbook §1）: 分野 `cap-probe-<h>` を kind=fake・env_of=<h> の harness へ結ぶ。
+pub fn probe_declarations(h: &str) -> String {
+    format!(
+        "[harnesses.{h}]\nkind = \"fake\"\n[harnesses.cap-probe-{h}]\nkind = \"fake\"\nenv_of = \"{h}\"\n\
+         [harness_selection]\nexecution_class_defaults = {{}}\nrules = [{{ genre = \"cap-probe-{h}\", harness = \"cap-probe-{h}\", required_capabilities = [] }}]\n"
     )
 }
 

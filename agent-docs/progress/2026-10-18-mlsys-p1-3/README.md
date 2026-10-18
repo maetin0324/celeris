@@ -1,7 +1,7 @@
 ---
 task: 01M56HCNTPN0H2VGP4JE0JYRM9
 title: 本測定移行 P1-3 の進捗（K2/K4 実資産・能力 probe）
-status: 無 LLM 検証まで完了・実経路確認済みの項目は無し（人の証拠未提供）
+status: 実経路確認済みは K4 再計算・K2 組立・cap-probe 7/8 能力。K2 実 build の正負例と sirius-link は未成立（real-evidence.md）
 updated: 2026-10-18
 ---
 # P1-3 進捗
@@ -52,3 +52,18 @@ K2 の成功は「実装と実験の判定を通った」ことだけを意味�
 - 決定 h1 の回答は「人が runbook を実行し、結果を添える」方針の選択のみで、cap-probe（A/B/C）・`verify-real-assets.sh --build`・Sirius 接続確認の exit code と出力要点は回答にも thread 添付にも無かった。
 - よって実経路確認済みに上げた項目は 0 件。上表の該当行は理由付きで 未検証 / 承認待ち のまま。証拠は作らない。
 - 人が実行したら、各手順の exit と要点（鍵・socket 実値は除く）を渡し、該当行のみ更新する。
+
+## 実資産・host 実走の記録（record-real, 決定 h-real 後）
+人の host 実走結果を反映した（詳細は real-evidence.md）。区分:
+
+| 項目 | 区分 | 根拠 |
+|---|---|---|
+| 実 asset 組立・SHA256SUMS・lock 照合（async-ucx 入れ子を含む） | 実経路確認済み | verify-real-assets.sh（build なし）exit 0 |
+| K4 実 raw の再計算と grader 照合 | 実経路確認済み | 同上 `real_k4_raw_recompute_matches_the_grader` ok |
+| cap-probe K4 A（python3・stdlib） | 実経路確認済み | exit 0、paid_calls_made 0 |
+| cap-probe K2 A/B/C: cc・c++・cmake・git・ucx-pkg・min-build-ucx・min-build-cmake | 実経路確認済み | 3 arm とも ok（libucx-dev 1.18.1、ro_mounts 追加なし） |
+| cap-probe K2 sirius-link | 未検証（修正済み・再実走待ち） | 初回 exit 255（sandbox 内 ssh_config 所有者拒否）。`-F /dev/null` に修正、host で直接は Master running |
+| cap-probe K2 autotools・libclang | 未検証（能力を追加。実走なし） | worker host には無い |
+| K2 実 build の known-bad fail / known-good pass | 未検証（env_failure で止まる） | autoreconf・libclang 不足、ucx snapshot が asset store に未配置 |
+| ucx（ucx1-sys/ucx 938ffcd1）snapshot の asset store 配置 | 承認待ち | artifacts/ucx-938ffcd1.tar を人が配置 |
+| K2 の input（lock）変更 | 実装済み | 新しい測定 ID で測定 lock を作り直す（旧と混ぜない） |

@@ -591,6 +591,8 @@ pub mod implementation {
         "failed to get `",
         "failed to load source for dependency",
         "Unable to update registry",
+        "offline mode (via `--offline`)",
+        "Unable to find libclang",
         "spurious network error",
         "No space left on device",
         "error: no such command",
@@ -601,8 +603,11 @@ pub mod implementation {
     /// 出ていれば、環境の印があっても成果物の失敗として扱う（環境のせいにして不合格を隠さない）。
     pub fn output_is_env_failure(out: &CommandOutput) -> bool {
         let text = format!("{}\n{}", out.stdout, out.stderr);
-        let model_signal =
-            text.contains("... FAILED") || text.contains("error[E") || text.contains("panicked at");
+        // build script（依存 crate の custom build）の panic は test の panic ではない。test が走る前の環境側の失敗。
+        let build_script_failed = text.contains("failed to run custom build command");
+        let model_signal = text.contains("... FAILED")
+            || text.contains("error[E")
+            || (text.contains("panicked at") && !build_script_failed);
         if model_signal {
             return false;
         }

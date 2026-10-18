@@ -43,6 +43,8 @@ fn k2_and_k4_fix_their_required_capabilities_as_case_data() {
         "ucx-pkg",
         "min-build-ucx",
         "min-build-cmake",
+        "autotools",
+        "libclang",
         "sirius-link",
     ] {
         assert!(ids.contains(&want), "k2 lacks {want}: {ids:?}");

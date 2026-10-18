@@ -5,6 +5,8 @@
   "submodules": [
     {"path": "ior_integration/ior", "commit": "7054224dd8abe64bc466d8a12391710c7d86132e", "content_sha256": "fc37ce044088f1b2ba71d4755ef8b8c85438a2ee6b20256145c8fcd474f185e7"},
     {"path": "lib/locusta", "commit": "68f8b2104d33a98fe047e7e24f2394cebaee1c9c", "content_sha256": "dbc3d1e676853078f64b4128659793e3f68ea764684fa5150247400309e1100c"},
-    {"path": "lib/pluvio", "commit": "9ecd51ee9b5fe62831f8e46c3d98a371359664c0", "content_sha256": "a81aeba97294cef5676917ab485eebf59b35d439364d8cba3d3a1d16aefccbd0"}
+    {"path": "lib/pluvio", "commit": "9ecd51ee9b5fe62831f8e46c3d98a371359664c0", "content_sha256": "a81aeba97294cef5676917ab485eebf59b35d439364d8cba3d3a1d16aefccbd0"},
+    {"path": "lib/pluvio/pluvio_ucx/lib/async-ucx", "commit": "cffa01eec85fa34e970721e735794a21c77c0be3", "content_sha256": "5ec1d55813d67689e03b0f438f8bef2258e86246f8d4e4c7368a526409d01ce7"},
+    {"path": "lib/pluvio/pluvio_ucx/lib/async-ucx/ucx1-sys/ucx", "commit": "938ffcd10122742d0f46a4f609e7395d1648c969", "content_sha256": "33e5c9c1f232e712f131dced2e08c5bf7cf633ed9a4a3e59d57bab76db6f1799"}
   ]
 }

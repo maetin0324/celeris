@@ -25,12 +25,25 @@ use serde_json::{Map, Value, json};
 
 /// 実 router の `GET /api/v1/config` の本文（`view` を config_view にした daemon が返すもの）。
 async fn served(view: task_api::ConfigView) -> Value {
-    let env = TestEnv::with(EnvOptions {
-        token: Some(TOKEN.to_string()),
-        config_view: Some(view),
-        ..EnvOptions::default()
-    });
-    let r = send(&env.router(), get_admin("/api/v1/config")).await;
+    let dir = tempfile::tempdir().expect("dir");
+    let db = dir.path().join("celeris.db");
+    let ws = dir.path().join("ws");
+    std::fs::create_dir_all(&ws).expect("ws");
+    task_core::SqliteStore::open(&db).expect("store");
+    let mut settings = settings(
+        &db,
+        &ws,
+        &dir.path().join("docs"),
+        &dir.path().join("kb"),
+        EnvOptions {
+            token: Some(TOKEN.to_string()),
+            ..EnvOptions::default()
+        },
+    );
+    settings.config_view = view;
+    let (_tx, rx) = tokio::sync::watch::channel(None);
+    let state = task_api::ApiState::new(settings, rx).expect("api state");
+    let r = send(&task_api::router(state), get_admin("/api/v1/config")).await;
     assert_eq!(r.status.as_u16(), 200, "{}", r.text());
     r.json()
 }

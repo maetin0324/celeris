@@ -457,52 +457,16 @@ fn k2_lock() -> celeris_campaign::lock::LockedInitial {
     .expect("lock json")
 }
 
-/// 実 asset から K2 の初期 tree を組む（bundle → 固定 commit → submodule tar）。lock と 1 byte でも違えば失敗。
+/// 実 asset から K2 の初期 tree を組む。snapshot 欠落・未登録・改変は env_failure（build の前に止まる）。
 fn assemble_k2(assets: &Path, dest: &Path) {
     let l = k2_lock();
-    let bundle = assets.join("benchfs-086c4618.bundle");
-    assert!(bundle.is_file(), "asset missing: {}", bundle.display());
-    sh(
-        dest.parent().expect("p"),
-        "git",
-        &[
-            "clone",
-            "-q",
-            bundle.to_str().expect("u8"),
-            dest.to_str().expect("u8"),
-        ],
-    );
-    sh(dest, "git", &["checkout", "-q", &l.commit]);
-    celeris_campaign::lock_tree::verify_repo(&l, dest).expect("body matches the lock");
-    for s in &l.submodules {
-        let stem = Path::new(&s.path)
-            .file_name()
-            .expect("name")
-            .to_string_lossy();
-        let tar = fs::read_dir(assets.join("submodules"))
-            .expect("submodules dir")
-            .filter_map(Result::ok)
-            .map(|e| e.path())
-            .find(|p| {
-                p.extension().is_some_and(|x| x == "tar")
-                    && p.file_name()
-                        .is_some_and(|n| n.to_string_lossy().starts_with(&*stem))
-            })
-            .unwrap_or_else(|| panic!("submodule tar for {} missing", s.path));
-        let d = dest.join(&s.path);
-        fs::create_dir_all(&d).expect("mkdir");
-        sh(
-            dest,
-            "tar",
-            &[
-                "-xf",
-                tar.to_str().expect("u8"),
-                "-C",
-                d.to_str().expect("u8"),
-            ],
-        );
-    }
-    celeris_campaign::lock_tree::verify_archive(&l, dest).expect("assembled tree matches the lock");
+    celeris_campaign::asset_assembly::assemble_initial(
+        &l,
+        assets,
+        &assets.join("benchfs-086c4618.bundle"),
+        dest,
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
 }
 
 fn real_grade(tree: &Path, runner: &dyn CommandRunner) -> GradeReport {
@@ -522,6 +486,18 @@ fn real_grade(tree: &Path, runner: &dyn CommandRunner) -> GradeReport {
             observed_jobs: None,
         },
     )
+}
+
+/// 実 asset の submodule snapshot（入れ子を含む）が lock の全 submodule 分あり、SHA256SUMS に載り hash が合う。
+/// build の前に走らせ、不足は env_failure（モデル失敗ではない）として止める。
+#[test]
+fn real_k2_snapshots_complete_before_build() {
+    let Ok(dir) = std::env::var("CAMPAIGN_ASSET_DIR") else {
+        eprintln!("SKIPPED(実物検証): CAMPAIGN_ASSET_DIR 未設定");
+        return;
+    };
+    celeris_campaign::asset_assembly::check_snapshots(&k2_lock(), Path::new(&dir))
+        .unwrap_or_else(|e| panic!("{e}"));
 }
 
 /// `CAMPAIGN_ASSET_DIR`（asset store の k2 dir）で、実 BenchFS の初期 tree（既知の不正成果）と

@@ -598,6 +598,7 @@ fn pilot_review_grade_case_detects_the_known_defects() {
         work_root: d.path().to_path_buf(),
         runner: &ProcessRunner::default(),
         observed_jobs: None,
+        initial_tree: None,
     };
     let rep = grade(&case, &art, &opts);
     assert!(rep.final_pass, "{}", serde_json::to_string(&rep).unwrap());
@@ -615,6 +616,7 @@ fn pilot_impl_grade_case_really_runs_cargo_test_in_the_grade_work_dir() {
         work_root: d.path().to_path_buf(),
         runner: &ProcessRunner::default(),
         observed_jobs: None,
+        initial_tree: None,
     };
     // 未実装（todo!）の初期 repo は不合格。
     let unsolved = d.path().join("unsolved");

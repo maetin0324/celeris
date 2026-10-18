@@ -65,9 +65,30 @@ fn copy_dir(from: &Path, to: &Path) {
 
 struct Canned(Result<CommandOutput, String>);
 
+/// 初期 tree の baseline build（`--no-run`）は通る。評価 command には固定出力を返す。
 impl CommandRunner for Canned {
-    fn run(&self, _argv: &[String], _cwd: &Path) -> Result<CommandOutput, String> {
+    fn run(&self, argv: &[String], _cwd: &Path) -> Result<CommandOutput, String> {
+        if argv.iter().any(|a| a == "--no-run") {
+            return Ok(CommandOutput {
+                exit: Some(0),
+                stdout: String::new(),
+                stderr: String::new(),
+            });
+        }
         self.0.clone()
+    }
+}
+
+/// 初期 tree 自体が compile できない（baseline も同じ rustc error で落ちる）実行器。呼ばれた argv を記録する。
+struct BrokenInitial {
+    err: CommandOutput,
+    calls: std::cell::RefCell<Vec<Vec<String>>>,
+}
+
+impl CommandRunner for BrokenInitial {
+    fn run(&self, argv: &[String], _cwd: &Path) -> Result<CommandOutput, String> {
+        self.calls.borrow_mut().push(argv.to_vec());
+        Ok(self.err.clone())
     }
 }
 
@@ -87,6 +108,17 @@ fn k2_artifact(root: &Path) -> PathBuf {
 
 fn grade_k2(case_dir: &Path, runner: &dyn CommandRunner) -> GradeReport {
     let t = tempfile::tempdir().expect("tmp");
+    let init = t.path().join("initial");
+    w(&init.join("src/lib.rs"), "// initial\n");
+    grade_k2_with(case_dir, runner, Some(init))
+}
+
+fn grade_k2_with(
+    case_dir: &Path,
+    runner: &dyn CommandRunner,
+    initial_tree: Option<PathBuf>,
+) -> GradeReport {
+    let t = tempfile::tempdir().expect("tmp");
     let a = k2_artifact(t.path());
     let g = GradeCase::load(&case_dir.join(format!("{K2}.json"))).expect("load");
     let scratch = t.path().join("scratch");
@@ -99,6 +131,7 @@ fn grade_k2(case_dir: &Path, runner: &dyn CommandRunner) -> GradeReport {
             work_root: scratch,
             runner,
             observed_jobs: None,
+            initial_tree,
         },
     )
 }
@@ -158,6 +191,128 @@ fn build_environment_defects_are_env_failure_not_model_failure() {
         assert!(r.checks.implementation.env_failure, "{name}");
         assert!(!r.final_pass);
     }
+}
+
+/// host-build2（2026-10-18）の実出力の形: 初期 tree が `--features transport-locusta` 無しでは compile できない。
+fn k2_initial_tree_compile_error() -> CommandOutput {
+    CommandOutput {
+        exit: Some(101),
+        stdout: String::new(),
+        stderr: "error[E0433]: failed to resolve: use of unresolved module or unlinked crate `rrrpc`\n  --> src/ffi/io_buffer.rs:13:5\nerror[E0599]: no method named `locusta_transport_ref` found for reference `&std::rc::Rc<ConnectionPool>` in the current scope\n  --> src/ffi/io_buffer.rs:45:36\nerror: could not compile `benchfs` (lib test) due to 8 previous errors; 5 warnings emitted\n".into(),
+    }
+}
+
+#[test]
+fn initial_tree_compile_error_is_env_failure_not_model_failure() {
+    let cd = case_dir(K2);
+    let g = load(K2);
+    let baseline = g
+        .implementation
+        .as_ref()
+        .and_then(|i| i.baseline_command.clone())
+        .expect("K2 は初期 tree の baseline build を持つ");
+    let r = BrokenInitial {
+        err: k2_initial_tree_compile_error(),
+        calls: Default::default(),
+    };
+    let t = tempfile::tempdir().expect("tmp");
+    let init = t.path().join("initial");
+    w(&init.join("src/lib.rs"), "// initial\n");
+    let rep = grade_k2_with(&cd, &r, Some(init));
+    assert_eq!(rep.verdict, Verdict::Fail);
+    assert_eq!(
+        class(&rep),
+        Some(FailureClass::EnvFailure),
+        "初期 tree 由来の compile error をモデル失敗に数えない"
+    );
+    assert!(rep.checks.implementation.env_failure);
+    assert!(
+        rep.checks
+            .implementation
+            .reasons
+            .iter()
+            .any(|x| x.contains("initial tree does not build")),
+        "{:?}",
+        rep.checks.implementation.reasons
+    );
+    assert_eq!(
+        rep.checks.implementation.details["baseline"]["initial_tree_builds"],
+        json!(false)
+    );
+    let calls = r.calls.borrow();
+    assert_eq!(calls.len(), 2, "評価と baseline の 2 回: {calls:?}");
+    assert_eq!(calls[1], baseline, "baseline は隠しテスト挿入なしの build");
+    // 初期 tree を渡されていない grader は出どころを決められない: モデル失敗に数えず採点し直させる。
+    let rep = grade_k2_with(
+        &cd,
+        &out(
+            101,
+            "",
+            "error[E0425]: cannot find function `lookup_metadata`\n",
+        ),
+        None,
+    );
+    assert_eq!(class(&rep), Some(FailureClass::EnvFailure));
+    assert!(
+        rep.checks
+            .implementation
+            .reasons
+            .iter()
+            .any(|x| x.contains("cannot be attributed")),
+        "{:?}",
+        rep.checks.implementation.reasons
+    );
+}
+
+#[test]
+fn k2_build_command_enables_the_transport_feature_the_initial_tree_needs() {
+    // 初期 commit 086c4618 の src/ffi/io_buffer.rs 等は rrrpc（optional, transport-locusta）を cfg なしで使う。
+    // feature 無しの `cargo test --release --lib` は初期 tree 自体が compile できない（host-build2）。
+    let g = load(K2);
+    let imp = g.implementation.as_ref().expect("implementation");
+    for (what, argv) in [
+        ("command", &imp.command),
+        ("baseline", imp.baseline_command.as_ref().expect("baseline")),
+    ] {
+        let i = argv.iter().position(|a| a == "--features").expect(what);
+        assert_eq!(argv[i + 1], "transport-locusta", "{what}: {argv:?}");
+        assert!(
+            argv.iter().any(|a| a == "--release") && argv.iter().any(|a| a == "--lib"),
+            "{what}"
+        );
+    }
+    assert!(
+        imp.baseline_command
+            .as_ref()
+            .expect("b")
+            .iter()
+            .any(|a| a == "--no-run")
+    );
+    assert!(
+        !imp.baseline_command
+            .as_ref()
+            .expect("b")
+            .iter()
+            .any(|a| a.contains(".grader")),
+        "baseline は隠しテストを挿入しない"
+    );
+    let cj: Value = serde_json::from_str(
+        &fs::read_to_string(root().join("cases/final").join(K2).join("case.json")).expect("case"),
+    )
+    .expect("json");
+    assert_eq!(
+        cj["visible_command"],
+        json!("cargo test --release --features transport-locusta --lib"),
+        "試行に見せる command も同じ build 設定"
+    );
+    assert!(
+        cj["required_capabilities"]
+            .as_array()
+            .expect("caps")
+            .iter()
+            .any(|c| c["id"] == "rdma-verbs"),
+        "transport-locusta の mlx5/ibverbs header と library を能力として固定する"
+    );
 }
 
 #[test]
@@ -255,6 +410,7 @@ fn missing_or_altered_grader_side_assets_are_env_failure() {
             work_root: t2.path().to_path_buf(),
             runner: &out(0, "", ""),
             observed_jobs: None,
+            initial_tree: None,
         },
     );
     assert_eq!(class(&r), Some(FailureClass::ModelFailure));
@@ -319,6 +475,7 @@ fn grade_recompute(g: &GradeCase, artifact: &Path) -> Status {
             work_root: t.path().to_path_buf(),
             runner: &celeris_campaign::grader::NoRunner,
             observed_jobs: None,
+            initial_tree: None,
         },
     );
     r.checks.recompute.status
@@ -485,7 +642,7 @@ fn assemble_k2(assets: &Path, dest: &Path) {
     .unwrap_or_else(|e| panic!("{e}"));
 }
 
-fn real_grade(tree: &Path, runner: &dyn CommandRunner) -> GradeReport {
+fn real_grade(tree: &Path, initial: &Path, runner: &dyn CommandRunner) -> GradeReport {
     let t = tempfile::tempdir().expect("tmp");
     let art = t.path().join("artifact");
     copy_dir(tree, &art.join("src"));
@@ -500,6 +657,7 @@ fn real_grade(tree: &Path, runner: &dyn CommandRunner) -> GradeReport {
             work_root: scratch,
             runner,
             observed_jobs: None,
+            initial_tree: Some(initial.to_path_buf()),
         },
     )
 }
@@ -548,9 +706,47 @@ fn real_k2_assets_build_and_grade_known_bad_and_known_good() {
             .contains("fn lookup_metadata")
     };
     assert!(!mark(&bad) && mark(&good), "正負 tree の印が逆");
+    // 初期 tree は optional な rrrpc を cfg なしで使う → 評価 command が transport-locusta を有効にしていること。
+    let cargo = fs::read_to_string(bad.join("Cargo.toml")).expect("Cargo.toml");
+    assert!(
+        cargo.contains("transport-locusta = [\"dep:rrrpc\""),
+        "初期 tree の feature 定義が想定と違う"
+    );
+    assert!(
+        fs::read_to_string(bad.join("src/ffi/io_buffer.rs"))
+            .expect("io_buffer.rs")
+            .contains("use rrrpc::"),
+        "初期 tree の rrrpc 依存が想定と違う"
+    );
+    let imp = load(K2).implementation.expect("implementation");
+    assert!(
+        imp.command
+            .windows(2)
+            .any(|w| w[0] == "--features" && w[1] == "transport-locusta"),
+        "評価 command が transport-locusta を有効にしない: {:?}",
+        imp.command
+    );
     if std::env::var("CAMPAIGN_REAL_BUILD").as_deref() == Ok("1") {
-        let r_bad = real_grade(&bad, &ProcessRunner::default());
-        let r_good = real_grade(&good, &ProcessRunner::default());
+        // 初期 tree（= 既知の不正成果）自体が評価と同じ build 設定で compile できること。落ちれば case/asset の不良。
+        let baseline = imp.baseline_command.as_ref().expect("baseline");
+        let b = ProcessRunner::default()
+            .run(baseline, &bad)
+            .unwrap_or_else(|e| panic!("env_failure: baseline could not run: {e}"));
+        assert_eq!(
+            b.exit,
+            Some(0),
+            "env_failure: 初期 tree が build できない（モデル失敗ではない）: {}",
+            b.stderr
+                .chars()
+                .rev()
+                .take(4000)
+                .collect::<String>()
+                .chars()
+                .rev()
+                .collect::<String>()
+        );
+        let r_bad = real_grade(&bad, &bad, &ProcessRunner::default());
+        let r_good = real_grade(&good, &bad, &ProcessRunner::default());
         let diag =
             |r: &GradeReport| serde_json::to_string(&r.checks.implementation).unwrap_or_default();
         assert_ne!(

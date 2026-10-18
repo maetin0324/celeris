@@ -52,7 +52,7 @@
   },
   "grade_case_ref": {
     "path": "final/k2-bf-xattr-restart-campaign/k2-bf-xattr-restart-campaign.json",
-    "sha256": "d944a6c11978a19d2b64a8d0cee62d464c8c4e09efcf9411ce49c697012dad92"
+    "sha256": "f84089bcf161edab75bfc619574c112de446b75622f893323f43405190aca593"
   },
   "id": "k2-bf-xattr-restart-campaign",
   "initial": {
@@ -81,7 +81,7 @@
   "kind": "real",
   "private_ref": {
     "path": "final/k2-bf-xattr-restart-campaign/private.json",
-    "sha256": "be22701de9116572197486693ee645ff3eb71d81e7d086c6ec16b9b4a51c99af"
+    "sha256": "2264fec53a44002fcee25080f58a23d2997b83b08babbc921d564994bb199e45"
   },
   "required_capabilities": [
     {
@@ -164,6 +164,15 @@
       ]
     },
     {
+      "id": "rdma-verbs",
+      "kind": "library",
+      "argv": [
+        "sh",
+        "-c",
+        "test -r /usr/include/infiniband/verbs.h && test -r /usr/include/infiniband/mlx5dv.h && ls /usr/lib/x86_64-linux-gnu/libibverbs.so /usr/lib/x86_64-linux-gnu/libmlx5.so"
+      ]
+    },
+    {
       "id": "sirius-link",
       "kind": "connection",
       "argv": [
@@ -192,5 +201,5 @@
     "review"
   ],
   "title": "BenchFS 再起動後 size 復元: 実装→短い実験→報告→レビュー",
-  "visible_command": "cargo test --release --lib"
+  "visible_command": "cargo test --release --features transport-locusta --lib"
 }

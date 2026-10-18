@@ -131,6 +131,12 @@ pub fn generate(
             "hidden",
         )?;
         let must_pass = must_pass_names(&command);
+        let baseline_command = private
+            .baseline_command
+            .as_deref()
+            .map(split_command)
+            .transpose()
+            .map_err(|e| format!("{id}: baseline: {e}"))?;
         let command = match &src.wrapper {
             Some(w) => ["sh".to_string(), w.clone()]
                 .into_iter()
@@ -146,6 +152,7 @@ pub fn generate(
             hidden_tests,
             must_pass,
             command,
+            baseline_command,
         })
     } else {
         None

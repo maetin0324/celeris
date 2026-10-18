@@ -173,6 +173,10 @@ pub struct CasePrivate {
     pub case_id: String,
     pub split: Split,
     pub hidden_command: String,
+    /// 初期 tree（隠しテストなし）が評価と同じ build 設定で compile できるかを見る command（grade-case の
+    /// `baseline_command`）。compile error を初期 tree 由来（env_failure）とモデル由来に分ける。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub baseline_command: Option<String>,
     pub known_defects: Vec<KnownDefect>,
     pub false_claim_traps: Vec<FalseClaimTrap>,
     /// 参照値・再計算の仕様。grader だけが読む。

@@ -18,7 +18,7 @@ use celeris_campaign::{
 };
 
 const USAGE: &str = "usage: celeris-campaign <dry-run|validate|preflight|cap-probe|run|watch|check|check-report|export|final-accounting|grade-out|usage> --manifest <path> \
-[--interval-secs N] [--max-iterations M] [--cases <grade-case dir>] \
+[--interval-secs N] [--max-iterations M] [--cases <grade-case dir> [--initial-trees <dir>]] \
 [--input-manifest <path>] [--out <dir>] [--executor mock|harness|celeris] [--api-url <url> --token-env <ENV_NAME> [--task-template <json>]] [--dest <dir>] \
 [--cases-root <dir>] [--grader-root <dir>] [--grade-case-root <dir>] [--a-program <path>] [--report <file>] [--measurement-id <id>] [--repo-src <dir>] [--materials-src <dir>] [--kb-src <dir>] [--inputs-src <dir>] [--records <records.jsonl>] [--cos-not-called <basis>] [--quota <usage.json>] [--a-account <account_id>] [--measure-config <toml> --normal-config <toml> --canaries <json>] [--max-7d <ratio>] [--max-7d-codex <ratio>]";
 
@@ -433,12 +433,14 @@ fn run(args: Vec<String>) -> Result<String, String> {
         "grade-out" => {
             let cases = arg(&args, "--cases").ok_or("--cases <grade-case dir> is required")?;
             let expected = cli_expected_lock(&args, &manifest_path, &m, &out()?)?;
-            let v = celeris_campaign::grade_out::grade_out_expected(
+            let initial_trees = arg(&args, "--initial-trees");
+            let v = celeris_campaign::grade_out::grade_out_with(
                 &m,
                 &out()?,
                 &cases,
                 &ProcessRunner::default(),
                 expected.as_ref(),
+                initial_trees.as_deref(),
             )?;
             let s = serde_json::to_string_pretty(&v).map_err(|e| e.to_string())?;
             if v["ok"] == true { Ok(s) } else { Err(s) }

@@ -179,6 +179,7 @@ fn run(fx: &Fx, gc: &GradeCase) -> GradeReport {
             work_root: fx.work.clone(),
             runner: &Stub,
             observed_jobs: Some(fx.observed.clone()),
+            initial_tree: None,
         },
     )
 }

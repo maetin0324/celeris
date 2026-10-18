@@ -35,6 +35,18 @@ pub fn grade_out_expected(
     runner: &dyn CommandRunner,
     expected: Option<&crate::lock::CampaignLock>,
 ) -> Result<Value, String> {
+    grade_out_with(m, out, cases, runner, expected, None)
+}
+
+/// `grade_out_expected` に、grader 側で組んだ初期 tree の置き場（`<dir>/<problem_id>`）を足したもの。
+pub fn grade_out_with(
+    m: &CampaignManifest,
+    out: &Path,
+    cases: &Path,
+    runner: &dyn CommandRunner,
+    expected: Option<&crate::lock::CampaignLock>,
+    initial_trees: Option<&Path>,
+) -> Result<Value, String> {
     let lock = crate::lock_exec::load_saved(m, out, expected)?;
     let hash = m.compute_sha256()?;
     let text = fs::read_to_string(out.join(TRIALS_FILE))
@@ -132,6 +144,8 @@ pub fn grade_out_expected(
                     .join(format!("{:?}-rep{}.json", r.config, r.rep)),
             )
             .filter(|p| p.is_file()),
+            // grader 側で組んだ初期 tree は <initial_trees>/<problem_id>（compile error の出どころの判定に使う）。
+            initial_tree: initial_trees.map(|d| d.join(&r.problem_id)),
         };
         let rep = grade(&case, &artifact, &opts);
         graded += 1;

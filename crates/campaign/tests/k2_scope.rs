@@ -89,6 +89,7 @@ fn grade_report_carries_the_scope_even_when_failing() {
         work_root: t.path().to_path_buf(),
         runner: &NoRunner,
         observed_jobs: None,
+        initial_tree: None,
     };
     let rep = grade(&g, t.path(), &opts);
     assert_eq!(rep.judged_scope, s(&["implementation", "experiment"]));

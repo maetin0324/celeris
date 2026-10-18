@@ -78,7 +78,7 @@ submodule 実体、外部入力、grader 定義、公開/隠しテストの実�
 
 ## 付記（2026-10-18）: CAP_ENV と toolchain の実体を env-lock に固定する
 
-- `env-lock.json` は schema `celeris-env-lock/2`。`cap_env`（`CapEnv::pin()`: 配列順を整えた toolchain＋`ro_mounts` ごとの実 path と直下の名前一覧の sha256）を持つ。CAP_ENV を使わない測定は `null` で、後から足す・外すも不一致。取得は `cap_probe.rs` の `pin` 1 か所（probe と同じ `CapEnv` を使う）。
+- `env-lock.json` は schema `celeris-env-lock/3`。`cap_env`（`CapEnv::pin()`: 配列順を整えた toolchain＋`ro_mounts` ごとの実 path と mount 配下の内容 snapshot の sha256。相対 path 昇順に通常 file は内容、directory は名前、symlink は link 文字列（辿らず、先が通常 file ならその内容も）を畳む。上限 5 万 entry / 1 GiB を超える mount、読取不能、通常 file/dir 以外の mount は検証不能で停止し、空一覧や成功にしない。未検査: mount 外、directory を指す symlink の先、mode/owner/mtime、mount 内の特殊 file の中身。socket は path の識別だけで内容・到達性は固定せず probe が毎回確かめる。旧 `/2`（名前一覧 pin）の lock は黙って読み替えず `refusing to resume`: trial data が無い間だけ消して env-lock を取り直す）を持つ。CAP_ENV を使わない測定は `null` で、後から足す・外すも不一致。取得は `cap_probe.rs` の `pin` 1 か所（probe と同じ `CapEnv` を使う）。
 - 照合は launcher の `cmd_env_lock`（`--cap-env "$CAP_ENV"`）経由で preflight 後・watch の実行前・再開時に毎回行い、不一致は外部実行 0 件で拒否する（key 名 `cap_env.toolchain.*` / `cap_env.mounts`）。配列順だけの変更は正規化で通る。
 - socket は経路の識別（path）だけを固定する。内容は読まず hash もしない。到達性は固定せず probe が毎回確かめる。secret らしい env 名（KEY/TOKEN/SECRET/PASSWORD/CREDENTIAL）は CAP_ENV で拒否し、既存の secret 管理を使う。
 - 旧記録（schema `/1`・`cap_env` 欄なし）は拒否する（読み替えない）。明示移行: 試行 data が無い測定に限り、人が `env-lock.json` を消して `env-lock` を再実行する。data がある測定は同じ測定 ID では再開できない。

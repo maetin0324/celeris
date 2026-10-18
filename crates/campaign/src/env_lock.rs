@@ -19,7 +19,7 @@ use crate::{
 };
 
 pub const ENV_LOCK_FILE: &str = "env-lock.json";
-pub const ENV_LOCK_SCHEMA: &str = "celeris-env-lock/2";
+pub const ENV_LOCK_SCHEMA: &str = "celeris-env-lock/3";
 
 /// 実行ファイルの実体。同じ path でも binary が変われば `sha256` が変わる。
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -316,12 +316,12 @@ pub fn load(out: &Path) -> Result<Option<EnvLock>, String> {
     let p = out.join(ENV_LOCK_FILE);
     match fs::read(&p) {
         Ok(b) => {
-            // 旧記録（cap_env の欄が無い /1 など）は拒否する。黙って新形式に読み替えない（ADR campaign-lock 付記）。
+            // 旧記録（名前一覧 pin の /2、cap_env の無い /1 など）は拒否する。黙って新形式に読み替えない（ADR campaign-lock 付記）。
             let v: Value =
                 serde_json::from_slice(&b).map_err(|e| format!("{}: {e}", p.display()))?;
             if v["schema"] != ENV_LOCK_SCHEMA {
                 return Err(format!(
-                    "{}: env-lock schema {} is not {ENV_LOCK_SCHEMA} (no cap_env pin); refusing to resume. \
+                    "{}: env-lock schema {} is not {ENV_LOCK_SCHEMA} (cap_env content pin); refusing to resume. \
                      Migrate explicitly: only before any trial data exists, remove it and re-run env-lock",
                     p.display(),
                     v["schema"]

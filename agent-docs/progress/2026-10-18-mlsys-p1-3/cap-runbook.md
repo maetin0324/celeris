@@ -57,5 +57,5 @@ ssh -F /dev/null -S /run/celeris-cap/sirius-ssh.sock -O check sirius
 ## 4. 結果の記録
 各手順の exit code と出力要点（鍵・値は除く）を `README.md` の区分表の該当行に追記する（実経路確認済みに上げるのはここ）。
 
-## CAP_ENV の固定（env-lock/2）
+## CAP_ENV の固定（env-lock/3（mount 配下の内容 hash。名前一覧ではない））
 CAP_ENV は env-lock に正規化して固定される。変更すると同じ測定の watch は外部実行前に `env-lock mismatch` で止まる。旧 `/1` の lock は拒否され、試行 data が無い場合のみ `env-lock.json` を消して再作成する。詳細は ADR 2026-10-17-campaign-lock 付記。

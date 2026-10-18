@@ -209,7 +209,7 @@ fn creates_then_verifies_on_resume_with_no_secret() {
     assert!(o.status.success(), "{}", err(&o));
     let body = e.lock();
     let v: Value = serde_json::from_str(&body).expect("json");
-    assert_eq!(v["schema"], "celeris-env-lock/2");
+    assert_eq!(v["schema"], "celeris-env-lock/3");
     assert_eq!(v["bc"]["release"], REL);
     assert_eq!(v["a"]["program"]["version"], "claude-stub 2.0.1");
     assert_eq!(v["a"]["program"]["sha256"].as_str().map(str::len), Some(64));
@@ -483,11 +483,71 @@ fn cap_env_is_pinned_order_is_normalized_and_changes_are_refused() {
 }
 
 #[test]
+fn same_names_but_changed_nested_content_is_refused_and_unreadable_stops() {
+    let e = Env::new();
+    let m = e.p("tc");
+    fs::create_dir_all(m.join("lib")).expect("lib");
+    fs::create_dir_all(m.join("bin")).expect("bin");
+    fs::write(m.join("lib/libucp.so"), "v1").expect("f");
+    fs::write(m.join("bin/cc"), "cc1").expect("f");
+    std::os::unix::fs::symlink("libucp.so", m.join("lib/libucp.so.0")).expect("ln");
+    let cap = write_cap(&e, "cap.json", &[&m], json!([["LANG", "C"]]));
+    let s = cap.to_string_lossy().into_owned();
+    assert!(e.run(&["--cap-env", &s]).status.success());
+    let lock: Value = serde_json::from_str(&e.lock()).expect("json");
+    assert!(lock["cap_env"]["mounts"][0]["content_sha256"].is_string());
+    assert!(e.run(&["--cap-env", &s, "--verify"]).status.success());
+    // 名前・path・長さを変えず内容だけ差し替える。
+    fs::write(m.join("lib/libucp.so"), "v2").expect("f");
+    let o = e.run(&["--cap-env", &s, "--verify"]);
+    assert!(
+        !o.status.success() && err(&o).contains("cap_env.mounts"),
+        "{}",
+        err(&o)
+    );
+    fs::write(m.join("lib/libucp.so"), "v1").expect("f");
+    assert!(e.run(&["--cap-env", &s, "--verify"]).status.success());
+    // symlink の向き先の付け替えも拒否。
+    fs::remove_file(m.join("lib/libucp.so.0")).expect("rm");
+    std::os::unix::fs::symlink("cc", m.join("lib/libucp.so.0")).expect("ln");
+    assert!(!e.run(&["--cap-env", &s, "--verify"]).status.success());
+    fs::remove_file(m.join("lib/libucp.so.0")).expect("rm");
+    std::os::unix::fs::symlink("libucp.so", m.join("lib/libucp.so.0")).expect("ln");
+    assert!(e.run(&["--cap-env", &s, "--verify"]).status.success());
+    // 読取不能は検証不能（空一覧・成功にしない）。
+    fs::remove_dir_all(&m).expect("rm");
+    let o = e.run(&["--cap-env", &s, "--verify"]);
+    assert!(!o.status.success(), "{}", err(&o));
+}
+
+#[test]
+fn unreadable_file_in_mount_stops_pin() {
+    use std::os::unix::fs::PermissionsExt;
+    let d = tempfile::tempdir().expect("tmp");
+    let f = d.path().join("lib");
+    fs::write(&f, "x").expect("f");
+    fs::set_permissions(&f, fs::Permissions::from_mode(0)).expect("chmod");
+    if fs::File::open(&f).is_ok() {
+        return; // root 等では 000 でも読める
+    }
+    let t = celeris_campaign::harness_exec::Toolchain {
+        ro_mounts: vec![d.path().to_path_buf()],
+        ..Default::default()
+    };
+    let env = celeris_campaign::cap_probe::CapEnv {
+        schema: celeris_campaign::cap_probe::CAP_ENV_SCHEMA.into(),
+        a: t.clone(),
+        worker: t,
+    };
+    assert!(env.pin().is_err());
+}
+
+#[test]
 fn old_env_lock_without_cap_env_pin_is_refused() {
     let e = Env::new();
     assert!(e.run(&[]).status.success());
     let mut v: Value = serde_json::from_str(&e.lock()).expect("json");
-    v["schema"] = json!("celeris-env-lock/1");
+    v["schema"] = json!("celeris-env-lock/2");
     v.as_object_mut().expect("obj").remove("cap_env");
     fs::write(
         e.out().join("env-lock.json"),

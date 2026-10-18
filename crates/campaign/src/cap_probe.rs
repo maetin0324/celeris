@@ -79,13 +79,141 @@ impl CapEnv {
     }
 }
 
-/// 固定する mount の実体。path と実 path（symlink 解決後）と直下の名前一覧の sha256（内容・版の差し替えを拾う）。
+/// 固定する mount の実体。path と実 path（symlink 解決後）と、mount 配下の内容 snapshot の sha256。
+///
+/// 固定範囲は `ro_mounts` に挙げた各 mount の配下だけ（`/usr` 全体のような親は走査しない。広すぎる mount は
+/// 上限超過で検証不能にする）。snapshot は相対 path の昇順に、通常 file は内容、directory は名前、
+/// symbolic link は link の文字列（辿らない。辿った先が通常 file ならその内容も）を畳む。
+/// 未検査: mount 外、directory を指す symlink の先、file の mode/owner/mtime、特殊 file（socket 等）の中身。
 /// socket は経路の識別（path）だけを固定する。接続先の内容・到達性は固定せず、probe が毎回確かめる。
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MountPin {
     pub path: String,
     pub real: String,
-    pub entries_sha256: String,
+    pub content_sha256: String,
+    pub entries: u64,
+    pub bytes: u64,
+}
+
+/// 1 mount あたりの走査上限。超えたら空や成功にせず検証不能（mount を絞る）。
+const PIN_MAX_ENTRIES: u64 = 50_000;
+const PIN_MAX_BYTES: u64 = 1 << 30;
+
+struct Walk {
+    h: sha2::Sha256,
+    entries: u64,
+    bytes: u64,
+}
+
+impl Walk {
+    fn put(&mut self, tag: &str, rel: &str, extra: &[u8]) {
+        use sha2::Digest;
+        self.h.update(tag.as_bytes());
+        self.h.update((rel.len() as u64).to_le_bytes());
+        self.h.update(rel.as_bytes());
+        self.h.update((extra.len() as u64).to_le_bytes());
+        self.h.update(extra);
+    }
+
+    fn file(&mut self, tag: &str, rel: &str, p: &Path) -> Result<(), String> {
+        use sha2::Digest;
+        use std::io::Read;
+        let mut f =
+            std::fs::File::open(p).map_err(|e| format!("cap env pin {}: {e}", p.display()))?;
+        let mut inner = sha2::Sha256::new();
+        let mut buf = vec![0u8; 1 << 16];
+        loop {
+            let n = f
+                .read(&mut buf)
+                .map_err(|e| format!("cap env pin {}: {e}", p.display()))?;
+            if n == 0 {
+                break;
+            }
+            self.bytes += n as u64;
+            if self.bytes > PIN_MAX_BYTES {
+                return Err(format!(
+                    "cap env pin: mount exceeds {PIN_MAX_BYTES} bytes; narrow ro_mounts"
+                ));
+            }
+            inner.update(&buf[..n]);
+        }
+        self.put(tag, rel, &inner.finalize());
+        Ok(())
+    }
+
+    fn visit(&mut self, dir: &Path, rel: &str) -> Result<(), String> {
+        let rd =
+            std::fs::read_dir(dir).map_err(|e| format!("cap env pin {}: {e}", dir.display()))?;
+        let mut names = Vec::new();
+        for e in rd {
+            let e = e.map_err(|e| format!("cap env pin {}: {e}", dir.display()))?;
+            names.push(e.file_name());
+        }
+        names.sort();
+        for n in names {
+            let path = dir.join(&n);
+            let r = format!("{rel}/{}", n.to_string_lossy());
+            self.entries += 1;
+            if self.entries > PIN_MAX_ENTRIES {
+                return Err(format!(
+                    "cap env pin: mount exceeds {PIN_MAX_ENTRIES} entries; narrow ro_mounts"
+                ));
+            }
+            let md = std::fs::symlink_metadata(&path)
+                .map_err(|e| format!("cap env pin {}: {e}", path.display()))?;
+            let ft = md.file_type();
+            if ft.is_symlink() {
+                let t = std::fs::read_link(&path)
+                    .map_err(|e| format!("cap env pin {}: {e}", path.display()))?;
+                self.put("L", &r, t.to_string_lossy().as_bytes());
+                // 辿った先が通常 file ならその内容も畳む。directory・dangling は link 文字列だけ（未検査）。
+                if let Ok(m) = std::fs::metadata(&path)
+                    && m.is_file()
+                {
+                    self.file("T", &r, &path)?;
+                }
+            } else if ft.is_dir() {
+                self.put("D", &r, b"");
+                self.visit(&path, &r)?;
+            } else if ft.is_file() {
+                self.file("F", &r, &path)?;
+            } else {
+                self.put("S", &r, b"");
+            }
+        }
+        Ok(())
+    }
+}
+
+fn pin_mount(p: &Path) -> Result<MountPin, String> {
+    use sha2::Digest;
+    let real =
+        std::fs::canonicalize(p).map_err(|e| format!("cap env ro_mount {}: {e}", p.display()))?;
+    let md =
+        std::fs::metadata(&real).map_err(|e| format!("cap env ro_mount {}: {e}", p.display()))?;
+    let mut w = Walk {
+        h: sha2::Sha256::new(),
+        entries: 0,
+        bytes: 0,
+    };
+    if md.is_dir() {
+        w.visit(&real, "")?;
+    } else if md.is_file() {
+        w.entries = 1;
+        w.file("F", "", &real)?;
+    } else {
+        return Err(format!(
+            "cap env ro_mount {}: neither a file nor a directory",
+            p.display()
+        ));
+    }
+    Ok(MountPin {
+        path: p.to_string_lossy().into_owned(),
+        real: real.to_string_lossy().into_owned(),
+        content_sha256: format!("{:x}", w.h.finalize()),
+        entries: w.entries,
+        bytes: w.bytes,
+    })
 }
 
 /// env-lock に結び付ける正規化済み CAP_ENV（配列順を整えた toolchain）と mount の実体。秘密値・socket の内容は持たない。
@@ -109,24 +237,7 @@ impl CapEnv {
         let t = canon(&self.a);
         let mut mounts = Vec::new();
         for p in &t.ro_mounts {
-            let real = std::fs::canonicalize(p)
-                .map_err(|e| format!("cap env ro_mount {}: {e}", p.display()))?;
-            let mut names: Vec<String> = match std::fs::read_dir(&real) {
-                Ok(d) => d
-                    .filter_map(|e| e.ok())
-                    .map(|e| e.file_name().to_string_lossy().into_owned())
-                    .collect(),
-                Err(_) => Vec::new(),
-            };
-            names.sort();
-            mounts.push(MountPin {
-                path: p.to_string_lossy().into_owned(),
-                real: real.to_string_lossy().into_owned(),
-                entries_sha256: format!(
-                    "{:x}",
-                    <sha2::Sha256 as sha2::Digest>::digest(names.join("\n").as_bytes())
-                ),
-            });
+            mounts.push(pin_mount(p)?);
         }
         Ok(CapEnvPin {
             schema: self.schema.clone(),

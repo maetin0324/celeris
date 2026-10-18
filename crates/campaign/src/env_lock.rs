@@ -12,13 +12,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
+    cap_probe::CapEnvPin,
     grader::sha256_file,
     manifest::{CampaignManifest, ConfigId},
     preflight::{Host, resolve_program_in},
 };
 
 pub const ENV_LOCK_FILE: &str = "env-lock.json";
-pub const ENV_LOCK_SCHEMA: &str = "celeris-env-lock/1";
+pub const ENV_LOCK_SCHEMA: &str = "celeris-env-lock/2";
 
 /// 実行ファイルの実体。同じ path でも binary が変われば `sha256` が変わる。
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -77,6 +78,8 @@ pub struct EnvLock {
     pub campaign_sha256: String,
     pub a: ALock,
     pub bc: BcLock,
+    /// 正規化した CAP_ENV と mount の実体。CAP_ENV を使わない測定は `null`（後から足す・外すも不一致）。
+    pub cap_env: Option<CapEnvPin>,
 }
 
 /// 現物の観測。`a_program` は preflight と同じ解決（`resolve_program_in`）の結果から作る。
@@ -84,6 +87,7 @@ pub struct Observed {
     pub a_program: ProgramPin,
     pub worker_programs: Vec<WorkerProgram>,
     pub catalog: Vec<CatalogRow>,
+    pub cap_env: Option<CapEnvPin>,
 }
 
 /// `GET /api/v1/llm/models` の本文から候補集合・階層を取り出す（順序を整えて返す）。空は Err（空固定の禁止）。
@@ -245,6 +249,7 @@ pub fn expected(m: &CampaignManifest, obs: &Observed) -> Result<EnvLock, Vec<Str
             worker_programs: workers,
             arms,
         },
+        cap_env: obs.cap_env.clone(),
     })
 }
 
@@ -310,9 +315,22 @@ pub fn diff(stored: &EnvLock, want: &EnvLock) -> Vec<String> {
 pub fn load(out: &Path) -> Result<Option<EnvLock>, String> {
     let p = out.join(ENV_LOCK_FILE);
     match fs::read(&p) {
-        Ok(b) => serde_json::from_slice(&b)
-            .map(Some)
-            .map_err(|e| format!("{}: {e}", p.display())),
+        Ok(b) => {
+            // 旧記録（cap_env の欄が無い /1 など）は拒否する。黙って新形式に読み替えない（ADR campaign-lock 付記）。
+            let v: Value =
+                serde_json::from_slice(&b).map_err(|e| format!("{}: {e}", p.display()))?;
+            if v["schema"] != ENV_LOCK_SCHEMA {
+                return Err(format!(
+                    "{}: env-lock schema {} is not {ENV_LOCK_SCHEMA} (no cap_env pin); refusing to resume. \
+                     Migrate explicitly: only before any trial data exists, remove it and re-run env-lock",
+                    p.display(),
+                    v["schema"]
+                ));
+            }
+            serde_json::from_value(v)
+                .map(Some)
+                .map_err(|e| format!("{}: {e}", p.display()))
+        }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(format!("{}: {e}", p.display())),
     }

@@ -75,3 +75,11 @@ submodule 実体、外部入力、grader 定義、公開/隠しテストの実�
   lock 改変・再封印・欠落・隠しテスト差替え・測定 ID 違い・repo 変更は既存測定の再開を拒否し、再投入 0・lock 不変。
 - CLI 引数配線: `crates/campaign/tests/lock_cli.rs`（実 binary）。`--measurement-id` 違いの check/export 拒否、`--grade-case-root`/`--cases` の差替え拒否、誤 `--repo-src` の run は out を作らない。
 - 検証区分: 実装済み／mock 検証済み（上記、無課金）／実経路検証済み（実 LLM・実 worker・実 dispatcher・実 K2 submodule 付き BenchFS の build はいずれも**未実施**）。
+
+## 付記（2026-10-18）: CAP_ENV と toolchain の実体を env-lock に固定する
+
+- `env-lock.json` は schema `celeris-env-lock/2`。`cap_env`（`CapEnv::pin()`: 配列順を整えた toolchain＋`ro_mounts` ごとの実 path と直下の名前一覧の sha256）を持つ。CAP_ENV を使わない測定は `null` で、後から足す・外すも不一致。取得は `cap_probe.rs` の `pin` 1 か所（probe と同じ `CapEnv` を使う）。
+- 照合は launcher の `cmd_env_lock`（`--cap-env "$CAP_ENV"`）経由で preflight 後・watch の実行前・再開時に毎回行い、不一致は外部実行 0 件で拒否する（key 名 `cap_env.toolchain.*` / `cap_env.mounts`）。配列順だけの変更は正規化で通る。
+- socket は経路の識別（path）だけを固定する。内容は読まず hash もしない。到達性は固定せず probe が毎回確かめる。secret らしい env 名（KEY/TOKEN/SECRET/PASSWORD/CREDENTIAL）は CAP_ENV で拒否し、既存の secret 管理を使う。
+- 旧記録（schema `/1`・`cap_env` 欄なし）は拒否する（読み替えない）。明示移行: 試行 data が無い測定に限り、人が `env-lock.json` を消して `env-lock` を再実行する。data がある測定は同じ測定 ID では再開できない。
+- 検証: `tests/env_lock.rs`（無変更・順序のみ・PATH 変更・mount 追加/実体変更・脱落・secret・旧記録）。状態: 無 LLM 検証済み。対象環境での確認は未。

@@ -54,6 +54,11 @@ impl CapEnv {
         }
         self.a.validate(home)?;
         self.worker.validate(home)?;
+        if let Some((k, _)) = self.a.env.iter().find(|(k, _)| secret_like(k)) {
+            return Err(format!(
+                "cap env must not carry secrets ({k:?}); use the existing secret management"
+            ));
+        }
         if canon(&self.a) != canon(&self.worker) {
             return Err(
                 "cap env: worker toolchain must equal A toolchain (B/C need the same capabilities)"
@@ -69,6 +74,63 @@ impl CapEnv {
         } else {
             &self.worker
         }
+    }
+}
+
+/// 固定する mount の実体。path と実 path（symlink 解決後）と直下の名前一覧の sha256（内容・版の差し替えを拾う）。
+/// socket は経路の識別（path）だけを固定する。接続先の内容・到達性は固定せず、probe が毎回確かめる。
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MountPin {
+    pub path: String,
+    pub real: String,
+    pub entries_sha256: String,
+}
+
+/// env-lock に結び付ける正規化済み CAP_ENV（配列順を整えた toolchain）と mount の実体。秘密値・socket の内容は持たない。
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CapEnvPin {
+    pub schema: String,
+    pub toolchain: Toolchain,
+    pub mounts: Vec<MountPin>,
+}
+
+fn secret_like(k: &str) -> bool {
+    let u = k.to_ascii_uppercase();
+    ["KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL"]
+        .iter()
+        .any(|w| u.contains(w))
+}
+
+impl CapEnv {
+    /// 正規化した固定値。toolchain 版/実体の取得はここ 1 か所（作業 1 の probe も同じ `CapEnv` を使う）。
+    pub fn pin(&self) -> Result<CapEnvPin, String> {
+        let t = canon(&self.a);
+        let mut mounts = Vec::new();
+        for p in &t.ro_mounts {
+            let real = std::fs::canonicalize(p)
+                .map_err(|e| format!("cap env ro_mount {}: {e}", p.display()))?;
+            let mut names: Vec<String> = match std::fs::read_dir(&real) {
+                Ok(d) => d
+                    .filter_map(|e| e.ok())
+                    .map(|e| e.file_name().to_string_lossy().into_owned())
+                    .collect(),
+                Err(_) => Vec::new(),
+            };
+            names.sort();
+            mounts.push(MountPin {
+                path: p.to_string_lossy().into_owned(),
+                real: real.to_string_lossy().into_owned(),
+                entries_sha256: format!(
+                    "{:x}",
+                    <sha2::Sha256 as sha2::Digest>::digest(names.join("\n").as_bytes())
+                ),
+            });
+        }
+        Ok(CapEnvPin {
+            schema: self.schema.clone(),
+            toolchain: t,
+            mounts,
+        })
     }
 }
 

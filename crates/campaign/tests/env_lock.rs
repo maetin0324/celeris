@@ -209,7 +209,7 @@ fn creates_then_verifies_on_resume_with_no_secret() {
     assert!(o.status.success(), "{}", err(&o));
     let body = e.lock();
     let v: Value = serde_json::from_str(&body).expect("json");
-    assert_eq!(v["schema"], "celeris-env-lock/1");
+    assert_eq!(v["schema"], "celeris-env-lock/2");
     assert_eq!(v["bc"]["release"], REL);
     assert_eq!(v["a"]["program"]["version"], "claude-stub 2.0.1");
     assert_eq!(v["a"]["program"]["sha256"].as_str().map(str::len), Some(64));
@@ -396,4 +396,108 @@ fn candidate_added_removed_or_moved_tier_is_refused_on_resume() {
         .tier("opencode-go", "kimi", Some(Tier::Standard), false);
     assert!(e.run(&["--verify"]).status.success());
     assert_eq!(before, e.lock(), "lock must not be rewritten");
+}
+
+fn write_cap(e: &Env, name: &str, mounts: &[&std::path::Path], env: Value) -> PathBuf {
+    let t = json!({"ro_mounts": mounts, "env": env});
+    let p = e.p(name);
+    fs::write(
+        &p,
+        json!({"schema":"celeris.campaign-cap-env/1","a":t,"worker":t}).to_string(),
+    )
+    .expect("cap env");
+    p
+}
+
+#[test]
+fn cap_env_is_pinned_order_is_normalized_and_changes_are_refused() {
+    let e = Env::new();
+    let (m1, m2) = (e.p("m1"), e.p("m2"));
+    fs::create_dir_all(&m1).expect("m1");
+    fs::create_dir_all(&m2).expect("m2");
+    fs::write(m1.join("bin"), "x").expect("f");
+    let base = write_cap(
+        &e,
+        "cap.json",
+        &[&m1, &m2],
+        json!([["PATH", "/opt/a"], ["LANG", "C"]]),
+    );
+    let s = base.to_string_lossy().into_owned();
+    let o = e.run(&["--cap-env", &s]);
+    assert!(o.status.success(), "{}", err(&o));
+    let v: Value = serde_json::from_str(&e.lock()).expect("json");
+    assert_eq!(v["cap_env"]["mounts"].as_array().map(Vec::len), Some(2));
+    // 無変更・配列順のみの変更は通る（正規化）。
+    assert!(e.run(&["--cap-env", &s, "--verify"]).status.success());
+    let reordered = write_cap(
+        &e,
+        "cap2.json",
+        &[&m2, &m1],
+        json!([["LANG", "C"], ["PATH", "/opt/a"]]),
+    );
+    let r = reordered.to_string_lossy().into_owned();
+    assert!(e.run(&["--cap-env", &r, "--verify"]).status.success());
+    // PATH の意味のある変更・mount の追加・mount 内の実体変更・CAP_ENV の脱落は拒否（key 名つき）。
+    let path_changed = write_cap(
+        &e,
+        "cap3.json",
+        &[&m1, &m2],
+        json!([["PATH", "/opt/b"], ["LANG", "C"]]),
+    );
+    let o = e.run(&["--cap-env", &path_changed.to_string_lossy(), "--verify"]);
+    assert!(
+        !o.status.success() && err(&o).contains("cap_env.toolchain.env"),
+        "{}",
+        err(&o)
+    );
+    let m3 = e.p("m3");
+    fs::create_dir_all(&m3).expect("m3");
+    let more = write_cap(
+        &e,
+        "cap4.json",
+        &[&m1, &m2, &m3],
+        json!([["PATH", "/opt/a"], ["LANG", "C"]]),
+    );
+    assert!(
+        !e.run(&["--cap-env", &more.to_string_lossy(), "--verify"])
+            .status
+            .success()
+    );
+    fs::write(m1.join("lib"), "y").expect("f");
+    let o = e.run(&["--cap-env", &s, "--verify"]);
+    assert!(
+        !o.status.success() && err(&o).contains("cap_env.mounts"),
+        "{}",
+        err(&o)
+    );
+    fs::remove_file(m1.join("lib")).expect("rm");
+    assert!(!e.run(&["--verify"]).status.success());
+    // 秘密らしい env は CAP_ENV に入れられない。
+    let sec = write_cap(&e, "cap5.json", &[&m1], json!([["API_TOKEN", "zzz"]]));
+    assert!(
+        !e.run(&["--cap-env", &sec.to_string_lossy(), "--verify"])
+            .status
+            .success()
+    );
+    assert!(!e.lock().contains("zzz"));
+}
+
+#[test]
+fn old_env_lock_without_cap_env_pin_is_refused() {
+    let e = Env::new();
+    assert!(e.run(&[]).status.success());
+    let mut v: Value = serde_json::from_str(&e.lock()).expect("json");
+    v["schema"] = json!("celeris-env-lock/1");
+    v.as_object_mut().expect("obj").remove("cap_env");
+    fs::write(
+        e.out().join("env-lock.json"),
+        serde_json::to_vec(&v).expect("json"),
+    )
+    .expect("w");
+    let o = e.run(&[]);
+    assert!(
+        !o.status.success() && err(&o).contains("refusing to resume"),
+        "{}",
+        err(&o)
+    );
 }

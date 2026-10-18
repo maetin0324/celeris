@@ -266,10 +266,15 @@ fn run(args: Vec<String>) -> Result<String, String> {
             let tok = arg(&args, "--token-env").ok_or("--token-env is required")?;
             let catalog =
                 env_lock::fetch_catalog(&RealHost, &url.to_string_lossy(), &tok.to_string_lossy())?;
+            let cap_env = match arg(&args, "--cap-env") {
+                Some(p) => Some(celeris_campaign::cap_probe::CapEnv::load(&p)?.pin()?),
+                None => None,
+            };
             let obs = env_lock::Observed {
                 a_program,
                 worker_programs,
                 catalog,
+                cap_env,
             };
             let verify = args.iter().any(|a| a == "--verify");
             let o = env_lock::establish(&m, &obs, &out()?, verify)?;

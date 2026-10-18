@@ -348,6 +348,7 @@ cmd_env_lock() { # 作る（初回）か照合する（再開）。不一致は�
     # shellcheck disable=SC2046
     set -- env-lock --manifest "$MANIFEST" --out "$OUT" --api-url "$API_URL" --token-env CELERIS_MEASURE_TOKEN --a-program "$A_PROGRAM" $(worker_args)
     IFS=$oldifs
+    [ -z "$CAP_ENV" ] || set -- "$@" --cap-env "$CAP_ENV"
     "$CAMPAIGN_BIN" "$@"
 }
 

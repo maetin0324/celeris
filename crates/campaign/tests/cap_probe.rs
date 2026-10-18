@@ -510,3 +510,45 @@ fn missing_or_old_rust_stops_before_any_llm_call() {
         assert_eq!(bad, ["rustc-min", "min-build-locusta"], "{arm:?}");
     }
 }
+
+/// 古い rustc は `sort -V` の最小版比較で落ちる。case の実 argv を fake rustc 付き PATH で実行する。
+#[test]
+fn old_rustc_fails_the_min_version_comparison() {
+    use std::os::unix::fs::PermissionsExt;
+    let set = cases();
+    let case = &set.get("k2-bf-xattr-restart-campaign").expect("k2").case;
+    let argv = &case
+        .required_capabilities
+        .iter()
+        .find(|c| c.id == "rustc-min")
+        .expect("rustc-min")
+        .argv;
+    let run = |version: &str| {
+        let dir = tempfile::tempdir().expect("tmp");
+        for (name, body) in [
+            (
+                "rustc",
+                format!("#!/bin/sh\necho 'rustc {version} (fake)'\n"),
+            ),
+            ("cargo", "#!/bin/sh\necho 'cargo fake'\n".to_string()),
+        ] {
+            let bin = dir.path().join(name);
+            std::fs::write(&bin, body).expect("write");
+            std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        }
+        let path = format!("{}:/usr/bin:/bin", dir.path().display());
+        std::process::Command::new(&argv[0])
+            .args(&argv[1..])
+            .env("PATH", path)
+            .output()
+            .expect("run")
+    };
+    assert!(!run("1.2.0").status.success(), "old rustc must fail");
+    let ok = run("1.85.0");
+    assert!(
+        ok.status.success(),
+        "{}",
+        String::from_utf8_lossy(&ok.stderr)
+    );
+    assert!(String::from_utf8_lossy(&ok.stdout).contains("rustc-min ok"));
+}

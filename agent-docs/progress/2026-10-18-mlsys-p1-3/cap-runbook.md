@@ -10,7 +10,8 @@ worker sandbox は userns が使えないため、実 A sandbox 内の実走と�
 **起動してよいのは無 LLM の確認だけ**。有料ジョブ・本測定・LLM 呼出し・Sirius への job 投入はしない。
 本番 host（systemd・本番 config・release・本番 DB/knowledge）は変更しない。鍵・認証材料の値は出力・記録に貼らない。
 **ビルド場所**: cargo build/test と min-build は operator host のローカル（A と同じ sandbox）で行う。クラスタ（sirius）は `sirius-link` の接続確認（`ssh -O check`）だけで、ビルドも job 投入もしない（case.json の `experiment.params.build_location` と同じ）。
-`rustc-min` は rustc の版を最小版 1.85.0（edition 2024）と `sort -V` で比較し（部分一致 `rustc 1.` ではない）、`min-build-locusta` は `--features transport-locusta` 付きの最小 cargo build を通す。Rust が無い/古い host は最初の LLM 呼出し前に env_failure で止まる。
+`rustc-min` は rustc の版を最小版 1.85.0（edition 2024）と `sort -V` で比較し（部分一致 `rustc 1.` ではない）、`min-build-locusta` は `--features transport-locusta` 付きの最小 cargo build を通す。Rust が無い/古い host は最初の LLM 呼出し前に env_failure で止まる（試験: 不在は `missing_or_old_rust_stops_before_any_llm_call`、古い版は `old_rustc_fails_the_min_version_comparison`）。
+**限界（未検証）**: 1.85.0 は edition 2024 の下限であり、`lib/locusta@68f8b210` 自身の要求版は未確認（この host に submodule が無い）。`min-build-locusta` は feature 名の解決を見る合成 crate で、実 locusta の build ではない。実 crate での build は submodule snapshot が揃ってから別途確かめる（人の判断待ち: inventory.md の R2）。
 前提: 最新の本ブランチを build 済み（`CARGO_TARGET_DIR` はローカル scratch。NFS に target を作らない）。
 
 ## 0. cap env の用意（承認が要る値）

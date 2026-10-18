@@ -23,12 +23,23 @@
       "cargo",
       "test",
       "--release",
+      "--features",
+      "transport-locusta",
       "--lib",
       "--",
       "lookup_recovers_xattr_after_restart_for_direct_and_by_id_chunks"
     ],
     "must_pass": [
       "lookup_recovers_xattr_after_restart_for_direct_and_by_id_chunks"
+    ],
+    "baseline_command": [
+      "cargo",
+      "test",
+      "--release",
+      "--features",
+      "transport-locusta",
+      "--lib",
+      "--no-run"
     ]
   },
   "experiment": {

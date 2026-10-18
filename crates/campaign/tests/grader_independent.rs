@@ -219,6 +219,7 @@ fn run(fx: &Fx, case: &GradeCase, stub: &Stub) -> GradeReport {
         work_root: fx.work.clone(),
         runner: stub,
         observed_jobs: Some(fx.observed.clone()),
+        initial_tree: None,
     };
     grade(case, &fx.art, &opts)
 }
@@ -275,6 +276,7 @@ fn success_claim_only_fails() {
         work_root: fx.work.clone(),
         runner: &stub,
         observed_jobs: None,
+        initial_tree: None,
     };
     let r = grade(&case, &art, &opts);
     assert_eq!(r.verdict, Verdict::Fail);
@@ -675,6 +677,7 @@ fn run_with(fx: &Fx, case: &GradeCase, observed: Option<PathBuf>) -> GradeReport
             work_root: fx.work.clone(),
             runner: &stub,
             observed_jobs: observed,
+            initial_tree: None,
         },
     )
 }

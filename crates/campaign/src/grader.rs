@@ -67,6 +67,11 @@ pub mod case {
         /// 出力に `test <name> ... ok` が現れねばならない試験名。
         #[serde(default)]
         pub must_pass: Vec<String>,
+        /// 初期 tree（隠しテストなし）が評価と同じ build 設定で compile できるかを見る command。
+        /// 評価が compile error で落ちたとき、grader 側の初期 tree でこれが落ちれば case/asset の不良
+        /// （env_failure）であってモデルの失敗ではない。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub baseline_command: Option<Vec<String>>,
     }
 
     #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -615,6 +620,52 @@ pub mod implementation {
         ENV_MARKERS.iter().any(|m| text.contains(m))
     }
 
+    /// rustc が compile error を出した（test は走っていない）。
+    pub fn output_is_compile_error(out: &CommandOutput) -> bool {
+        let text = format!("{}\n{}", out.stdout, out.stderr);
+        text.contains("error[E") || text.contains("error: could not compile")
+    }
+
+    /// 初期 tree が `baseline` で build できないなら、その理由（env_failure）を返す。初期 tree が渡されて
+    /// いなければ compile error の出どころを決められないので、モデルの失敗に数えず env_failure にする
+    /// （初期 tree を渡して採点し直す）。
+    fn initial_tree_defect(baseline: &[String], opts: &GradeOptions) -> (Option<String>, Value) {
+        let Some(init) = opts.initial_tree.as_deref().filter(|p| p.is_dir()) else {
+            return (
+                Some(
+                    "compile error cannot be attributed: the grader has no initial tree to run the baseline build on (re-grade with the initial tree; not counted as a model failure)"
+                        .into(),
+                ),
+                json!({"ran": false}),
+            );
+        };
+        let wd = work_dir(&opts.work_root).with_extension("baseline");
+        let r = copy_tree(init, &wd).and_then(|()| opts.runner.run(baseline, &wd));
+        let _ = fs::remove_dir_all(&wd);
+        match r {
+            Ok(o) if o.exit == Some(0) => (
+                None,
+                json!({"ran": true, "exit": o.exit, "initial_tree_builds": true}),
+            ),
+            Ok(o) => (
+                Some(format!(
+                    "initial tree does not build with the case's build settings (baseline exited with {:?}): case/asset defect, not a model failure",
+                    o.exit
+                )),
+                json!({
+                    "ran": true,
+                    "exit": o.exit,
+                    "initial_tree_builds": false,
+                    "stderr_tail": tail(&o.stderr, 2048),
+                }),
+            ),
+            Err(e) => (
+                Some(format!("baseline build could not run: {e}")),
+                json!({"ran": false, "error": e}),
+            ),
+        }
+    }
+
     pub fn check(spec: &ImplementationSpec, artifact: &Path, opts: &GradeOptions) -> CheckResult {
         let mut reasons = Vec::new();
         // grader 側の asset（pristine/隠しテスト）の欠落・改変。成果物の出来ではなく環境の不良。
@@ -780,9 +831,24 @@ pub mod implementation {
         }
         // 評価 command の失敗が build/test 環境の不良（toolchain・system library・依存取得・asset 欠落）なら
         // 成果物の失敗に数えない。test が走って FAILED/rustc の型・構文エラーを出したものは成果物の失敗。
-        let env_failed = out.exit != Some(0) && output_is_env_failure(&out);
+        let mut env_failed = out.exit != Some(0) && output_is_env_failure(&out);
         if env_failed {
             reasons.push("evaluation environment failure (not a model failure)".into());
+        }
+        // compile error は初期 tree 自体が build できない（case の build 設定・asset の不整合）こともある。
+        // baseline を持つ case は、初期 tree で同じ build が通ることを確かめてからモデルの失敗に数える。
+        let mut baseline = Value::Null;
+        if out.exit != Some(0)
+            && !env_failed
+            && output_is_compile_error(&out)
+            && let Some(cmd) = &spec.baseline_command
+        {
+            let (defect, detail) = initial_tree_defect(cmd, opts);
+            baseline = detail;
+            if let Some(why) = defect {
+                reasons.push(why);
+                env_failed = true;
+            }
         }
         let build = |reasons, details| {
             if env_failed {
@@ -800,6 +866,7 @@ pub mod implementation {
                 "hidden_inserted": hidden.iter().map(|(p, _)| p).collect::<Vec<_>>(),
                 "exit": out.exit,
                 "missing_ok": missing,
+                "baseline": baseline,
                 "stdout_tail": tail(&out.stdout, 2048),
                 "stderr_tail": tail(&out.stderr, 2048),
             }),
@@ -1240,6 +1307,8 @@ pub struct GradeOptions<'a> {
     pub runner: &'a dyn CommandRunner,
     /// 評価側が取得した job 記録（`celeris.observed-jobs/1`）。experiment を持つ非 control case では必須。
     pub observed_jobs: Option<PathBuf>,
+    /// grader 側で lock どおりに組んだ初期 tree（`baseline_command` を走らせる先）。
+    pub initial_tree: Option<PathBuf>,
 }
 
 const STAGES: [&str; 4] = ["implementation", "experiment", "analysis", "review"];
@@ -1317,7 +1386,7 @@ pub fn grade(case: &GradeCase, artifact: &Path, opts: &GradeOptions) -> GradeRep
     }
 }
 
-/// `celeris-campaign grade --case <file> --artifact <dir> [--work <dir>] [--observed <file>]`。合格で Ok、不合格で Err（どちらも判定 JSON）。
+/// `celeris-campaign grade --case <file> --artifact <dir> [--work <dir>] [--observed <file>] [--initial-tree <dir>]`。合格で Ok、不合格で Err（どちらも判定 JSON）。
 /// 評価 command は `runner`（CLI では `grade_runner::ProcessRunner`）が grade の作業 dir の中で実際に走らせる。
 pub fn cli(args: &[String], runner: &dyn CommandRunner) -> Result<String, String> {
     let arg = |name: &str| {
@@ -1337,6 +1406,7 @@ pub fn cli(args: &[String], runner: &dyn CommandRunner) -> Result<String, String
         work_root: arg("--work").unwrap_or_else(std::env::temp_dir),
         runner,
         observed_jobs: arg("--observed"),
+        initial_tree: arg("--initial-tree"),
     };
     let rep = grade(&case, &artifact, &opts);
     let s = serde_json::to_string_pretty(&rep).map_err(|e| e.to_string())?;

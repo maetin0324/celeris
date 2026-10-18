@@ -141,3 +141,87 @@ pub fn check_consumption_claims(acct: &serde_json::Value, text: &str) -> Vec<Str
     }
     v
 }
+
+/// 判定範囲の宣言行。報告はこの行を持たねばならない（`not_judged` がある campaign）。
+pub fn scope_line(judged: &[String], not_judged: &[String]) -> String {
+    format!(
+        "judged_scope stages={} not_judged={}",
+        judged.join(","),
+        not_judged.join(",")
+    )
+}
+
+/// `case.json` から campaign の判定範囲を引く（問題 id に対応する case が `cases_root/<split>/<id>/case.json` に有るものの和）。
+pub fn campaign_scope(
+    m: &CampaignManifest,
+    cases_root: &Path,
+) -> Result<(Vec<String>, Vec<String>), String> {
+    let split = match m.split {
+        crate::manifest::Split::Dev => "dev",
+        crate::manifest::Split::Final => "final",
+    };
+    let (mut judged, mut not_judged) = (Vec::new(), Vec::new());
+    for id in &m.problems {
+        let p = cases_root.join(split).join(id).join("case.json");
+        if !p.exists() {
+            continue;
+        }
+        let c: crate::cases::Case = serde_json::from_slice(
+            &std::fs::read(&p).map_err(|e| format!("{}: {e}", p.display()))?,
+        )
+        .map_err(|e| format!("{}: {e}", p.display()))?;
+        for s in c.judged_scope() {
+            if !judged.contains(&s) {
+                judged.push(s);
+            }
+        }
+        for s in c.not_judged() {
+            if !not_judged.contains(&s) {
+                not_judged.push(s);
+            }
+        }
+    }
+    // 工程は case ごとに違い得る。ある case が判定する工程でも、別の case が判定しないなら campaign 全体では not_judged に残す。
+    judged.retain(|s| !not_judged.contains(s));
+    Ok((judged, not_judged))
+}
+
+const OVERCLAIM_PHRASES: [&str; 3] = [
+    "分析・レビューまで検証済み",
+    "analysis and review verified",
+    "analysis/review verified",
+];
+
+/// 判定しなかった工程を検証済みと主張する経路を塞ぐ。
+/// - `judged_scope stages=.. not_judged=..` 行が `scope_line` と一致する（無い・食い違いは違反）。
+/// - `verified stage=<s>` で not_judged の工程を主張する行、および定型の過大主張句は違反。
+pub fn check_scope_claims(judged: &[String], not_judged: &[String], text: &str) -> Vec<String> {
+    let mut v = Vec::new();
+    if not_judged.is_empty() {
+        return v;
+    }
+    let want = scope_line(judged, not_judged);
+    if !text.lines().any(|l| l.trim() == want) {
+        v.push(format!("report: missing scope declaration `{want}`"));
+    }
+    for line in text.lines() {
+        let mut it = line.split_whitespace();
+        if it.next() == Some("verified") {
+            let kv: BTreeMap<&str, &str> = it.filter_map(|t| t.split_once('=')).collect();
+            if let Some(s) = kv.get("stage")
+                && not_judged.iter().any(|n| n == s)
+            {
+                v.push(format!(
+                    "report: stage {s} is not judged in this campaign and cannot be claimed verified"
+                ));
+            }
+        }
+        if let Some(p) = OVERCLAIM_PHRASES.iter().find(|p| line.contains(**p)) {
+            v.push(format!(
+                "report: `{p}` overclaims; not judged: {}",
+                not_judged.join(",")
+            ));
+        }
+    }
+    v
+}

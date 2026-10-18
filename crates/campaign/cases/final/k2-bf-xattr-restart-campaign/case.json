@@ -52,7 +52,7 @@
   },
   "grade_case_ref": {
     "path": "final/k2-bf-xattr-restart-campaign/k2-bf-xattr-restart-campaign.json",
-    "sha256": "bbaca17a0b6aa8b7fbc9934da498b85b9d0f95ab434ede1e25b8ca21b1f0fb54"
+    "sha256": "d944a6c11978a19d2b64a8d0cee62d464c8c4e09efcf9411ce49c697012dad92"
   },
   "id": "k2-bf-xattr-restart-campaign",
   "initial": {
@@ -72,6 +72,10 @@
     ],
     "tree": "56d2f021530c8f55c78e740a4823e53e01975965"
   },
+  "judged_scope": [
+    "implementation",
+    "experiment"
+  ],
   "kind": "real",
   "private_ref": {
     "path": "final/k2-bf-xattr-restart-campaign/private.json",

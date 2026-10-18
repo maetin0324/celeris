@@ -408,6 +408,14 @@ fn run(args: Vec<String>) -> Result<String, String> {
                 std::fs::read_to_string(&rp).map_err(|e| format!("{}: {e}", rp.display()))?;
             let out = out()?;
             let mut v = celeris_campaign::report::check_report(&m, &out, &text);
+            if let Some(root) = arg(&args, "--cases-root") {
+                match celeris_campaign::report::campaign_scope(&m, &root) {
+                    Ok((j, n)) => {
+                        v.extend(celeris_campaign::report::check_scope_claims(&j, &n, &text))
+                    }
+                    Err(e) => v.push(e),
+                }
+            }
             match accounting(&args, &m, &out) {
                 Ok(Some(a)) => v.extend(celeris_campaign::report::check_consumption_claims(
                     &a, &text,

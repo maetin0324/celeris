@@ -3479,6 +3479,8 @@ async fn misplaced_wu_result_records_failure_without_infra_requeue() {
             let misplaced = cwd.parent().unwrap().join("artifacts");
             std::fs::create_dir_all(&misplaced).unwrap();
             std::fs::write(misplaced.join("result.json"), r#"{"summary":"done"}"#).unwrap();
+            // Two strays are ambiguous, so they are not recovered (ADR 2026-10-18).
+            std::fs::write(cwd.join("result.json"), r#"{"summary":"done"}"#).unwrap();
         }),
     );
     let mut d = parallel_dispatcher(

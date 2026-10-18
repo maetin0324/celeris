@@ -1013,6 +1013,7 @@ async fn a_misplaced_result_is_rejected_without_adoption() {
         dir.path(),
         r#"mkdir -p artifacts
 printf '%s' '{"summary":"wrote to the worktree by mistake","evidence":[]}' > artifacts/result.json
+printf '%s' '{}' > result.json
 echo '{"type":"result","subtype":"success","is_error":false}'
 "#,
     );
@@ -1049,6 +1050,7 @@ async fn a_parent_relative_result_is_rejected_without_adoption() {
         dir.path(),
         r#"mkdir -p ../artifacts
 printf '%s' '{"summary":"wrote to the worktree by mistake","evidence":[]}' > ../artifacts/result.json
+printf '%s' '{}' > result.json
 echo '{"type":"result","subtype":"success","is_error":false}'
 "#,
     );
@@ -4323,4 +4325,33 @@ fn misplaced_result_detection_is_only_required_for_work_reports() {
     assert!(!req.requires_result_file());
     req.context.work_unit = Some(crate::protocol::WorkUnitPromptContext::default());
     assert!(req.requires_result_file());
+}
+
+/// ADR 2026-10-18-result-location-recovery: a reviewer run that writes its only `result.json`
+/// under the repository's `artifacts/` is recovered instead of failing with "reports were not adopted".
+#[tokio::test]
+async fn a_reviewer_result_written_in_the_repo_is_recovered() {
+    let dir = tempfile::tempdir().unwrap();
+    let work_dir = dir.path().join("repos/agent-platform");
+    std::fs::create_dir_all(&work_dir).unwrap();
+    let config = stub_claude(
+        dir.path(),
+        r#"mkdir -p artifacts
+printf '%s' '{"summary":"all criteria pass","evidence":[]}' > artifacts/result.json
+echo '{"type":"result","subtype":"success","is_error":false}'
+"#,
+    );
+    let mut req = sample_req(dir.path().to_path_buf());
+    req.task.kind = task_core::TaskKind::Review;
+    req.work_dir = Some(work_dir.clone());
+    let outcome = ClaudeCodeAdapter::new(config)
+        .run(req, "run-rv-1", default_limits(), &RecordingSink::default())
+        .await
+        .unwrap();
+    match outcome.terminal {
+        Terminal::Done { summary, .. } => assert_eq!(summary, "all criteria pass"),
+        other => panic!("expected recovery, got {other:?}"),
+    }
+    assert!(dir.path().join("artifacts/result.json").exists());
+    assert!(work_dir.join("artifacts/result.json").exists());
 }

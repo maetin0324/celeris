@@ -191,6 +191,8 @@ pub fn plan_delegation(
 
     // 3. ID 依存の検証（ストアを見る）。
     let ancestor_ids = ancestors(store, parent)?;
+    // ADR 2026-10-18: 親が既に持つ子（失敗・取消を除く）。同じ範囲の再起票は拒否する。
+    let existing_children = live_children(store, parent)?;
     let mut per_item: Vec<Result<(), String>> = Vec::with_capacity(proposals.len());
     for (i, result) in each.into_iter().enumerate() {
         if let Err(e) = result {
@@ -230,6 +232,9 @@ pub fn plan_delegation(
                     Some(_) => {}
                 }
             }
+        }
+        if item_err.is_none() {
+            item_err = duplicate_of_existing_child(&existing_children, &proposals[i]);
         }
         per_item.push(match item_err {
             Some(e) => Err(e),
@@ -291,6 +296,52 @@ pub fn plan_delegation(
         accepted,
         rejected,
         workspace_downgrades,
+    })
+}
+
+/// 親の子のうち、まだ範囲を担っているもの（failed / cancelled 以外。done・running・ready・draft・blocked）。
+pub fn live_children(store: &dyn TaskStore, parent: &Task) -> Result<Vec<Task>, OpsError> {
+    Ok(store
+        .children(parent.id)?
+        .into_iter()
+        .filter(|c| !matches!(c.status, Status::Failed | Status::Cancelled))
+        .collect())
+}
+
+fn norm_title(t: &str) -> String {
+    t.to_lowercase()
+        .chars()
+        .filter(|c| c.is_alphanumeric())
+        .collect()
+}
+
+fn tokens(t: &str) -> std::collections::BTreeSet<String> {
+    t.to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// ADR 2026-10-18: 既存の子と title 正規化一致、または objective の token Jaccard >= 0.9 なら拒否理由を返す。
+pub fn duplicate_of_existing_child(existing: &[Task], proposal: &DelegateTask) -> Option<String> {
+    let pt = norm_title(&proposal.title);
+    let po = tokens(&proposal.objective);
+    existing.iter().find_map(|c| {
+        let same_title = !pt.is_empty() && norm_title(&c.title) == pt;
+        let co = tokens(&c.objective);
+        let union = po.union(&co).count();
+        let sim = if union == 0 {
+            1.0
+        } else {
+            po.intersection(&co).count() as f64 / union as f64
+        };
+        (same_title || sim >= 0.9).then(|| {
+            format!(
+                "duplicates existing child {} ({:?}, status {:?}): 既存の子に寄せる（再起票しない）",
+                c.id, c.title, c.status
+            )
+        })
     })
 }
 

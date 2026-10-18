@@ -2431,7 +2431,8 @@ fn build_review_prompt_states_the_artifact_convention_only_for_harness_genres() 
 /// 無ければ節自体が出ない。
 #[test]
 fn build_prompt_includes_children_section_only_when_present() {
-    let task = crate::protocol::tests::sample_task();
+    let mut task = crate::protocol::tests::sample_task();
+    task.aggregate = true;
     let context = RunContext {
         children: vec![crate::protocol::ChildSummary {
             id: task_core::TaskId::new(),
@@ -2453,6 +2454,13 @@ fn build_prompt_includes_children_section_only_when_present() {
     let no_children_prompt = build_prompt(&task, &RunContext::default(), "run-agg-2", "artifacts");
     assert!(!no_children_prompt.contains("Delegated child tasks"));
     assert!(!no_children_prompt.contains("artifacts/summary.md"));
+
+    // ADR 2026-10-18: 集約でない親には「既存の子（重複起票しない）」節を出し、summary.md は求めない。
+    task.aggregate = false;
+    let existing = build_prompt(&task, &context, "run-agg-3", "artifacts");
+    assert!(existing.contains("## Existing child tasks (do not duplicate)"));
+    assert!(existing.contains("implement parser"));
+    assert!(!existing.contains("artifacts/summary.md"));
 }
 
 /// ADR-0016 M8: run の終わりに `artifacts/delegate.json` があれば、`sink.delegate` が 1 回呼ばれる。

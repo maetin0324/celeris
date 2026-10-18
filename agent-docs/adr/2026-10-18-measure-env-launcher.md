@@ -219,3 +219,12 @@
   再開で env-lock 一致。daemon 試験は userns 不要（ADR-0126）だが、試験は worker sandbox の外で走る前提を確認する。
 - runbook: `run-final.md` を `measure.sh` の実在 subcommand と `measure-env.toml` に書き換え、旧
   `--api-url/--token-env` の手順を消す。
+
+## 付記（daemon-identity-api の実装突き合わせ）
+- D2 の `identity.effective` から `api_token_file` を**除いた**。既存の不変条件（`tests/e2e/tests/api_scenarios.rs`
+  `api_enforces_token_host_and_workspace_boundaries_without_leaking_env_values`: 「token_file の場所は応答に出ない」、
+  `docs/api/v1/api.md`）を保つため。token_file の同一性は `config_path` と `config_sha256`（config ファイルの bytes）
+  で縛られるので、env-check は token_file の path を比べなくてよい（`daemon_config` の `[api] token_file` を campaign が
+  読んで token を得る。D1）。`overrides` に `token_file` が出るので CLI で差し替えた daemon は拒否される。
+- `identity` は `ConfigView.identity`（`DaemonIdentityView`/`EffectiveConfigView`、`crates/task-api/src/types.rs`）。
+  `llm_proxy_listen` は `effective_enabled()` のときだけ値、memory は `[memory]` が無ければ `null`。

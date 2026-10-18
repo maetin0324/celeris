@@ -192,7 +192,7 @@ roles = ["lead", "implementer"]
 "#;
     let cfg: Config = toml::from_str(text).unwrap();
     cfg.validate().unwrap();
-    let view = config_view(&cfg, "127.0.0.1:7710".parse().unwrap());
+    let view = config_view(&cfg, "127.0.0.1:7710".parse().unwrap(), "i", "dev", "t");
     assert_eq!(
         view.genres,
         vec![GenreConfigView {
@@ -227,7 +227,7 @@ roles = ["literature-reader"]
 "#;
     let cfg: Config = toml::from_str(text).unwrap();
     cfg.validate().unwrap();
-    let view = config_view(&cfg, "127.0.0.1:7710".parse().unwrap());
+    let view = config_view(&cfg, "127.0.0.1:7710".parse().unwrap(), "i", "dev", "t");
     assert_eq!(
         view.genres[0].capabilities,
         vec![

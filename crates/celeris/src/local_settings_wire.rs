@@ -363,3 +363,44 @@ pub(crate) fn cluster_id_local_is_reserved_config_error() {
     assert_eq!(config.clusters.len(), 1);
     assert_eq!(config.clusters[0].id, "local2");
 }
+
+/// daemon-identity-api: 実 `Config::load`（＋CLI 上書き）→ `api_settings` → 実 router の `GET /config` が
+/// `identity` に config ファイルの sha256・適用した上書き・実効値を返し、token の値は応答のどこにも出ない。
+pub(crate) async fn config_identity_reports_effective_values_without_secrets() {
+    use sha2::{Digest, Sha256};
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("tempdir: {e}"));
+    let config_path = write_home(dir.path(), 2);
+    let mut config = Config::load(&config_path).unwrap_or_else(|e| panic!("load: {e}"));
+    let other_db = dir.path().join("other.sqlite3");
+    config.apply_overrides(&Overrides {
+        db: Some(other_db.clone()),
+        ..Default::default()
+    });
+    let api = Api::start(&config, None).await;
+    let (status, body) = api.get("/api/v1/config").await;
+    assert_eq!(status, 200, "{body}");
+    let text = body.to_string();
+    assert!(!text.contains(TOKEN), "token value leaked: {text}");
+
+    let id = &body["identity"];
+    let bytes = std::fs::read(&config_path).unwrap_or_else(|e| panic!("read: {e}"));
+    let expected: String = Sha256::digest(&bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    assert_eq!(id["config_sha256"], json!(expected), "{body}");
+    assert_eq!(id["overrides"], json!(["db"]), "{body}");
+    assert_eq!(id["instance_id"], json!("01J00000000000000000000000"));
+    assert_eq!(id["release"], json!("dev"));
+    assert_eq!(id["pid"], json!(std::process::id()));
+    let eff = &id["effective"];
+    assert_eq!(eff["db"], json!(other_db.display().to_string()), "{body}");
+    assert_eq!(eff["selfdeploy_push"], json!(true), "{body}");
+    assert!(
+        !text.contains("api.token"),
+        "token_file location leaked: {text}"
+    );
+    assert_eq!(eff["llm_proxy_listen"], Value::Null, "{body}");
+    assert_eq!(eff["memory_dir"], Value::Null, "{body}");
+    api.stop().await;
+}

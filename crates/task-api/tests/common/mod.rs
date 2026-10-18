@@ -274,6 +274,29 @@ pub fn config_view() -> ConfigView {
             auth_required: false,
             allowed_hosts: vec![],
         },
+        identity: task_api::types::DaemonIdentityView {
+            instance_id: "01J00000000000000000000000".into(),
+            release: "dev".into(),
+            pid: 1,
+            started_at: "2026-09-14T00:00:00Z".into(),
+            config_sha256: None,
+            overrides: vec![],
+            effective: task_api::types::EffectiveConfigView {
+                db: String::new(),
+                workspace_root: String::new(),
+                knowledge_root: String::new(),
+                knowledge_default_mounts: vec![],
+                memory_dir: None,
+                langmem_enabled: false,
+                knowledge_gc_enabled: false,
+                cron_seed_count: 0,
+                selfdeploy_releases_dir: String::new(),
+                selfdeploy_repo: String::new(),
+                selfdeploy_push: false,
+                api_listen: "127.0.0.1:7710".into(),
+                llm_proxy_listen: None,
+            },
+        },
     }
 }
 

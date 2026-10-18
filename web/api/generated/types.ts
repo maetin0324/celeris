@@ -1121,6 +1121,7 @@ export type ConfigView = {
   "delegation"?: DelegationLimits;
   "error_cooldown_secs": number;
   "genres"?: Array<GenreConfigView>;
+  "identity": DaemonIdentityView;
   "idle_timeout_secs": number;
   "kill_grace_secs": number;
   "lease_grace_secs": number;
@@ -1501,6 +1502,16 @@ export type CronTaskTemplate = {
 
 export type CronTrigger = "schedule" | "catch_up" | "manual";
 
+export type DaemonIdentityView = {
+  "config_sha256"?: string | null;
+  "effective": EffectiveConfigView;
+  "instance_id": string;
+  "overrides": Array<string>;
+  "pid": number;
+  "release": string;
+  "started_at": string;
+};
+
 export type DaemonInstance = {
   "drained_at"?: string | null;
   "handoff_requested_at"?: string | null;
@@ -1860,6 +1871,22 @@ export type DraftGroup = {
 export type EditResult = {
   "fields": Array<string>;
   "task": Task;
+};
+
+export type EffectiveConfigView = {
+  "api_listen": string;
+  "cron_seed_count": number;
+  "db": string;
+  "knowledge_default_mounts": Array<string>;
+  "knowledge_gc_enabled": boolean;
+  "knowledge_root": string;
+  "langmem_enabled": boolean;
+  "llm_proxy_listen"?: string | null;
+  "memory_dir"?: string | null;
+  "selfdeploy_push": boolean;
+  "selfdeploy_releases_dir": string;
+  "selfdeploy_repo": string;
+  "workspace_root": string;
 };
 
 export type EffectiveProfile = {

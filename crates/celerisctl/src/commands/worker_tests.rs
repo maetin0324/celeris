@@ -145,6 +145,8 @@ fn cluster_config(clusters: Vec<celeris::config::ClusterConfig>) -> Config {
         mcp: Default::default(),
         source_path: None,
         workspace_root_cli: None,
+        source_sha256: None,
+        applied_overrides: Vec::new(),
         execution: Default::default(),
         routing_eval: Default::default(),
         jev: Default::default(),

@@ -282,6 +282,12 @@ pub struct Config {
     /// （ADR 2026-10-14-local-machine-settings D5）。
     #[serde(skip)]
     pub workspace_root_cli: Option<PathBuf>,
+    /// `Config::load` が読んだファイルの bytes の sha256（16 進。`GET /config` の `identity.config_sha256`）。
+    #[serde(skip)]
+    pub source_sha256: Option<String>,
+    /// `apply_overrides` が適用した CLI 上書きの名前（`identity.overrides`）。
+    #[serde(skip)]
+    pub applied_overrides: Vec<String>,
 }
 
 /// ADR-0116 D5: `[browser]`。`runtime` で isolated browser の runtime を誰が持つかを切り替える。
@@ -483,6 +489,11 @@ impl Config {
             .unwrap_or_else(|| PathBuf::from("."));
         let base = base.canonicalize().unwrap_or(base);
         cfg.source_path = Some(path.canonicalize().unwrap_or_else(|_| path.to_path_buf()));
+        {
+            use sha2::{Digest, Sha256};
+            let digest = Sha256::digest(text.as_bytes());
+            cfg.source_sha256 = Some(digest.iter().map(|b| format!("{b:02x}")).collect());
+        }
 
         // 1. 相対パスの解決と外部ファイルの取り込み（subsystem ごと。順序に意味があるのは
         //    `[llm_proxy]` だけで、絶対化済みの `[accounts]` を写すので `[accounts]` の後に置く）。
@@ -674,15 +685,19 @@ impl Config {
             }
         };
         if let Some(db) = &overrides.db {
+            self.applied_overrides.push("db".into());
             self.db.path = resolve(db);
         }
         if let Some(listen) = overrides.listen {
+            self.applied_overrides.push("listen".into());
             self.api.listen = Some(listen);
         }
         if let Some(root) = &overrides.workspace_root {
+            self.applied_overrides.push("workspace_root".into());
             self.workspace_root_cli = Some(resolve(root));
         }
         if let Some(token_file) = &overrides.token_file {
+            self.applied_overrides.push("token_file".into());
             self.api.token_file = Some(resolve(token_file));
         }
     }

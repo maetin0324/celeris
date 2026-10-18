@@ -359,6 +359,46 @@ pub struct ConfigView {
     #[serde(default)]
     pub delegation: task_core::DelegationLimits,
     pub api: ApiConfigView,
+    /// ADR 2026-10-18-measure-env-launcher D2: この daemon 自身の同一性と実効構成（秘密を含まない）。
+    pub identity: DaemonIdentityView,
+}
+
+/// `GET /config` の `identity`: 接続先 daemon が「その config で起動した、その instance」であることを
+/// 呼び出し側が照合するための値。起動時に 1 回作る静的な値で、token・鍵の値は含まない
+/// （token_file の場所も出さない）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct DaemonIdentityView {
+    pub instance_id: String,
+    /// `--release` の自己申告（未指定は `dev`）。
+    pub release: String,
+    pub pid: u32,
+    /// RFC 3339。
+    pub started_at: String,
+    /// 起動時に読んだ config ファイルの bytes の sha256（16 進）。ファイルから読んでいなければ `null`。
+    pub config_sha256: Option<String>,
+    /// 適用した CLI 上書きの名前（`db` / `listen` / `workspace_root` / `token_file`）。
+    pub overrides: Vec<String>,
+    pub effective: EffectiveConfigView,
+}
+
+/// 秘密を含まない実効値。path は絶対・`~` 展開済み。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct EffectiveConfigView {
+    pub db: String,
+    pub workspace_root: String,
+    pub knowledge_root: String,
+    pub knowledge_default_mounts: Vec<String>,
+    /// `[memory]` が無ければ `null`。
+    pub memory_dir: Option<String>,
+    pub langmem_enabled: bool,
+    pub knowledge_gc_enabled: bool,
+    pub cron_seed_count: usize,
+    pub selfdeploy_releases_dir: String,
+    pub selfdeploy_repo: String,
+    pub selfdeploy_push: bool,
+    pub api_listen: String,
+    /// llm-proxy が有効なときの listen。無効なら `null`。
+    pub llm_proxy_listen: Option<String>,
 }
 
 /// `[[roles]]` 1 行の要約（ADR-0016 D1）。`instructions` は**本文を出さない**（プロンプトの中身は設定ファイルにだけ置く）。

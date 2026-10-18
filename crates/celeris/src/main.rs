@@ -273,6 +273,12 @@ async fn cli_workspace_root_ignores_store_and_pins() {
 }
 
 #[cfg(test)]
+#[tokio::test]
+async fn config_identity_reports_effective_values_without_secrets() {
+    local_settings_wire::config_identity_reports_effective_values_without_secrets().await;
+}
+
+#[cfg(test)]
 #[test]
 fn cluster_id_local_is_reserved_config_error() {
     local_settings_wire::cluster_id_local_is_reserved_config_error();

@@ -5286,6 +5286,10 @@
           },
           "type": "array"
         },
+        "identity": {
+          "$ref": "#/$defs/DaemonIdentityView",
+          "description": "ADR 2026-10-18-measure-env-launcher D2: この daemon 自身の同一性と実効構成（秘密を含まない）。"
+        },
         "idle_timeout_secs": {
           "format": "uint64",
           "minimum": 0,
@@ -5365,7 +5369,8 @@
         "max_requeues",
         "plan_auto_accept",
         "reviewer",
-        "api"
+        "api",
+        "identity"
       ],
       "type": "object"
     },
@@ -7112,6 +7117,53 @@
         "manual"
       ],
       "type": "string"
+    },
+    "DaemonIdentityView": {
+      "description": "`GET /config` の `identity`: 接続先 daemon が「その config で起動した、その instance」であることを\n呼び出し側が照合するための値。起動時に 1 回作る静的な値で、token・鍵の値は含まない\n（token_file の場所も出さない）。",
+      "properties": {
+        "config_sha256": {
+          "description": "起動時に読んだ config ファイルの bytes の sha256（16 進）。ファイルから読んでいなければ `null`。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "effective": {
+          "$ref": "#/$defs/EffectiveConfigView"
+        },
+        "instance_id": {
+          "type": "string"
+        },
+        "overrides": {
+          "description": "適用した CLI 上書きの名前（`db` / `listen` / `workspace_root` / `token_file`）。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "pid": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "release": {
+          "description": "`--release` の自己申告（未指定は `dev`）。",
+          "type": "string"
+        },
+        "started_at": {
+          "description": "RFC 3339。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "instance_id",
+        "release",
+        "pid",
+        "started_at",
+        "overrides",
+        "effective"
+      ],
+      "type": "object"
     },
     "DaemonInstance": {
       "description": "`daemon_instances` の 1 行。",
@@ -8880,6 +8932,77 @@
       "required": [
         "task",
         "fields"
+      ],
+      "type": "object"
+    },
+    "EffectiveConfigView": {
+      "description": "秘密を含まない実効値。path は絶対・`~` 展開済み。",
+      "properties": {
+        "api_listen": {
+          "type": "string"
+        },
+        "cron_seed_count": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "db": {
+          "type": "string"
+        },
+        "knowledge_default_mounts": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "knowledge_gc_enabled": {
+          "type": "boolean"
+        },
+        "knowledge_root": {
+          "type": "string"
+        },
+        "langmem_enabled": {
+          "type": "boolean"
+        },
+        "llm_proxy_listen": {
+          "description": "llm-proxy が有効なときの listen。無効なら `null`。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "memory_dir": {
+          "description": "`[memory]` が無ければ `null`。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "selfdeploy_push": {
+          "type": "boolean"
+        },
+        "selfdeploy_releases_dir": {
+          "type": "string"
+        },
+        "selfdeploy_repo": {
+          "type": "string"
+        },
+        "workspace_root": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "db",
+        "workspace_root",
+        "knowledge_root",
+        "knowledge_default_mounts",
+        "langmem_enabled",
+        "knowledge_gc_enabled",
+        "cron_seed_count",
+        "selfdeploy_releases_dir",
+        "selfdeploy_repo",
+        "selfdeploy_push",
+        "api_listen"
       ],
       "type": "object"
     },

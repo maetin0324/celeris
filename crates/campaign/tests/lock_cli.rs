@@ -83,6 +83,12 @@ impl Host for OkHost {
     fn probe_runner(&self) -> Box<dyn celeris_campaign::cap_probe::ProbeRunner> {
         Box::new(preflight_setup::OkRunner)
     }
+    fn worker_daemon_env(
+        &self,
+        _: &celeris_campaign::harness_exec::Toolchain,
+    ) -> celeris_campaign::cap_probe::WorkerDaemonEnv {
+        preflight_setup::fake_worker_daemon()
+    }
 
     fn env_nonempty(&self, _: &str) -> bool {
         true

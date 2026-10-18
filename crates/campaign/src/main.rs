@@ -203,15 +203,21 @@ fn cap_probe_cli(args: &[String]) -> Result<String, String> {
             .collect();
         return serde_json::to_string_pretty(&v).map_err(|e| e.to_string());
     }
-    let rep = cap_probe::probe(
-        &sb,
-        arm,
-        &ws,
-        case,
-        &cap_probe::ProcessProbeRunner {
-            timeout: std::time::Duration::from_secs(300),
-        },
-    );
+    let rep = if arm == ConfigId::A {
+        cap_probe::probe(
+            &sb,
+            arm,
+            &ws,
+            case,
+            &cap_probe::ProcessProbeRunner {
+                timeout: std::time::Duration::from_secs(300),
+            },
+        )
+    } else {
+        // B/C は worker の実起動関数で、daemon 設定（この process の環境）の PATH・env の子 process に走らせる。
+        let daemon = cap_probe::WorkerDaemonEnv::from_process(&env.worker);
+        cap_probe::probe_worker(&env, &daemon, arm, &ws, case)
+    };
     let s = serde_json::to_string_pretty(&rep).map_err(|e| e.to_string())?;
     if rep.ok { Ok(s) } else { Err(s) }
 }

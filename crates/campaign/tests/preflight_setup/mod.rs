@@ -254,3 +254,45 @@ pub fn current_config() -> PathBuf {
         .with(|c| c.borrow().clone())
         .expect("write_configs first")
 }
+
+/// worker 子 process 用の fake program 一式（全 stub が全 case の期待文字列を出す）。daemon 設定の PATH として返す。
+/// 実行可能 file は別 process で書く（ETXTBSY 回避）。dir は process の間残す。
+pub fn fake_worker_daemon() -> celeris_campaign::cap_probe::WorkerDaemonEnv {
+    use std::io::Write;
+    use std::process::Stdio;
+    use std::sync::OnceLock;
+    static DIR: OnceLock<PathBuf> = OnceLock::new();
+    let dir = DIR.get_or_init(|| {
+        let d = tempfile::tempdir().unwrap().keep();
+        for n in [
+            "cc",
+            "c++",
+            "cmake",
+            "git",
+            "pkg-config",
+            "sh",
+            "python3",
+            "ssh",
+        ] {
+            let mut c = Command::new("/bin/sh")
+                .arg("-c")
+                .arg(r#"cat > "$1" && chmod 755 "$1""#)
+                .arg("sh")
+                .arg(d.join(n))
+                .stdin(Stdio::piped())
+                .spawn()
+                .unwrap();
+            c.stdin
+                .take()
+                .unwrap()
+                .write_all(b"#!/bin/sh\necho cmake version git version Python 3\n")
+                .unwrap();
+            assert!(c.wait().unwrap().success());
+        }
+        d
+    });
+    celeris_campaign::cap_probe::WorkerDaemonEnv {
+        path: Some(format!("{}:/usr/bin:/bin", dir.display())),
+        env: vec![],
+    }
+}

@@ -1,7 +1,9 @@
 //! 必要能力の LLM なし probe（本測定移行 P1-3）。
 //!
 //! case の `required_capabilities` を、A が実際に使う sandbox（`Sandbox::wrap_resolved`）で包んで走らせる。
-//! B/C は Celeris worker 側の環境（`CapEnv.worker`）が A と同じ能力を持つことを同じ組立で確かめる。
+//! B/C は Celeris worker の実起動関数（`task_worker::FakeAdapter` → `run_subprocess`）に「LLM を呼ばない
+//! 能力 probe run」を通し、daemon 設定の `[worker]` env・PATH で起こした子 process の中で確かめる
+//! （`probe_worker`）。`CapEnv.worker` は daemon 設定と照合する期待値で、配送ではない。
 //! 不足は環境不良（`env_failure`）で、モデル失敗とは別に扱う。有料呼び出しは 0 件。
 use std::{
     path::{Path, PathBuf},
@@ -348,4 +350,233 @@ pub fn probe(
         paid_calls_made: 0,
         results,
     }
+}
+
+/// daemon 設定の `[worker]` が worker 子 process に渡す PATH と env。`CapEnv.worker` の期待値と照合する
+/// 対象で、probe は同じ値で子 process を起こす（campaign はこれを worker に配送しない）。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct WorkerDaemonEnv {
+    pub path: Option<String>,
+    pub env: Vec<(String, String)>,
+}
+
+impl WorkerDaemonEnv {
+    /// この process の環境から、期待 `worker` toolchain が名指す変数だけを写す。daemon と同じ
+    /// `EnvironmentFile` で起動した前提（変数が無ければ `env` に入らず、照合で食い違いになる）。
+    pub fn from_process(expected: &Toolchain) -> Self {
+        let env = expected
+            .env
+            .iter()
+            .filter(|(k, _)| k != "PATH")
+            .filter_map(|(k, _)| std::env::var(k).ok().map(|v| (k.clone(), v)))
+            .collect();
+        Self {
+            path: std::env::var("PATH").ok(),
+            env,
+        }
+    }
+}
+
+fn sh_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+/// 期待 env と daemon 設定の食い違い（PATH は期待の各要素が daemon の PATH に含まれること）。
+fn env_mismatch(expected: &Toolchain, daemon: &WorkerDaemonEnv) -> Vec<String> {
+    let mut out = Vec::new();
+    for (k, want) in &expected.env {
+        if k == "PATH" {
+            let have: Vec<_> = daemon
+                .path
+                .as_deref()
+                .map(|p| std::env::split_paths(p).collect())
+                .unwrap_or_default();
+            for dir in std::env::split_paths(want) {
+                if !have.contains(&dir) {
+                    out.push(format!("daemon PATH lacks {}", dir.display()));
+                }
+            }
+        } else {
+            match daemon.env.iter().find(|(dk, _)| dk == k) {
+                Some((_, v)) if v == want => {}
+                Some((_, v)) => out.push(format!("daemon env {k}={v:?}, expected {want:?}")),
+                None => out.push(format!("daemon env lacks {k}")),
+            }
+        }
+    }
+    out
+}
+
+/// worker 子 process の中で走らせる検査（id・shell 片）。必要能力は `case.required_capabilities` そのまま、
+/// それに toolchain の mount（`test -d`）と socket（`test -S`）の存在確認を足す。
+fn worker_checks(expected: &Toolchain, case: &Case) -> Vec<(String, String, Option<String>)> {
+    let mut v = Vec::new();
+    for m in &expected.ro_mounts {
+        let p = m.to_string_lossy();
+        v.push((
+            format!("toolchain:{p}"),
+            format!("test -d {}", sh_quote(&p)),
+            None,
+        ));
+    }
+    for s in &expected.sockets {
+        let p = s.to_string_lossy();
+        v.push((
+            format!("socket:{p}"),
+            format!("test -S {}", sh_quote(&p)),
+            None,
+        ));
+    }
+    for c in &case.required_capabilities {
+        let argv: Vec<_> = c.argv.iter().map(|a| sh_quote(a)).collect();
+        v.push((c.id.clone(), argv.join(" "), c.expect_stdout.clone()));
+    }
+    v
+}
+
+struct NoSink;
+impl task_worker::EventSink for NoSink {
+    fn progress(&self, _: &str) {}
+    fn artifact(&self, _: &task_core::ArtifactRef) {}
+}
+
+/// B/C の能力 probe。LLM を呼ばず、worker の実起動関数（`FakeAdapter` → `run_subprocess`）で、daemon 設定の
+/// PATH・env・cwd（`workspace`）の子 process に検査 script を走らせ、結果を file で受け取る。
+/// `CapEnv.worker` と daemon 設定の食い違い・mount/socket/道具の欠落は arm 別の `env_failure`。
+pub fn probe_worker(
+    env: &CapEnv,
+    daemon: &WorkerDaemonEnv,
+    arm: ConfigId,
+    workspace: &Path,
+    case: &Case,
+) -> ProbeReport {
+    let expected = &env.worker;
+    let mut results = Vec::new();
+    if case.required_capabilities.is_empty() {
+        results.push(fail(
+            "required_capabilities",
+            "the case fixes no required_capabilities",
+        ));
+    }
+    for m in env_mismatch(expected, daemon) {
+        results.push(fail("worker-env", &m));
+    }
+    let checks = worker_checks(expected, case);
+    match run_worker_script(daemon, workspace, &checks) {
+        Err(e) => results.push(fail(
+            "worker-run",
+            &format!("probe run did not complete: {e}"),
+        )),
+        Ok(outs) => {
+            for ((id, _, want), out) in checks.iter().zip(outs) {
+                results.push(match out {
+                    None => fail(id, "no result written by the probe script"),
+                    Some((code, _)) if code != 0 => fail(id, &format!("exit {code}")),
+                    Some((_, stdout)) => match want {
+                        Some(x) if !stdout.contains(x.as_str()) => {
+                            fail(id, &format!("stdout lacks {x:?}"))
+                        }
+                        _ => CapResult {
+                            id: id.clone(),
+                            ok: true,
+                            detail: "ok".into(),
+                            argv: Vec::new(),
+                        },
+                    },
+                });
+            }
+        }
+    }
+    let ok = results.iter().all(|r| r.ok);
+    ProbeReport {
+        schema: CAP_REPORT_SCHEMA,
+        case: case.id.clone(),
+        arm,
+        ok,
+        failure_class: (!ok).then_some(ENV_FAILURE),
+        paid_calls_made: 0,
+        results,
+    }
+}
+
+fn fail(id: &str, detail: &str) -> CapResult {
+    CapResult {
+        id: id.to_string(),
+        ok: false,
+        detail: detail.to_string(),
+        argv: Vec::new(),
+    }
+}
+
+type ScriptOut = Vec<Option<(i32, String)>>;
+
+/// `FakeAdapter` に検査 script を通す。async の実起動関数を、呼び出し側の runtime とは別 thread の
+/// current-thread runtime で駆動する（preflight は同期 API で、tokio の中から呼ばれることもある）。
+fn run_worker_script(
+    daemon: &WorkerDaemonEnv,
+    workspace: &Path,
+    checks: &[(String, String, Option<String>)],
+) -> Result<ScriptOut, String> {
+    use task_worker::{FakeAdapter, RunContext, RunLimits, RunRequest, WorkerAdapter};
+    let results_dir = workspace.join("artifacts").join("cap-probe");
+    let _ = std::fs::remove_dir_all(&results_dir);
+    std::fs::create_dir_all(&results_dir).map_err(|e| format!("{}: {e}", results_dir.display()))?;
+    let mut script = String::from("cat >/dev/null\nd=\"$1\"\n");
+    for (i, (_, cmd, _)) in checks.iter().enumerate() {
+        script.push_str(&format!(
+            "( {cmd} ) >\"$d/{i}.out\" 2>/dev/null </dev/null; echo $? >\"$d/{i}.code\"\n"
+        ));
+    }
+    script.push_str("echo '{\"type\":\"done\",\"summary\":\"cap-probe\",\"evidence\":[]}'\n");
+    let mut adapter = FakeAdapter::new(vec![
+        "/bin/sh".into(),
+        "-c".into(),
+        script,
+        "cap-probe".into(),
+        results_dir.to_string_lossy().into_owned(),
+    ]);
+    let mut env = daemon.env.clone();
+    if let Some(p) = &daemon.path {
+        env.push(("PATH".into(), p.clone()));
+    }
+    adapter.set_env(env);
+    // `RunRequest` の Task は試験用の最小値を公開している関数で組む（この run は task として保存されない）。
+    let req = RunRequest {
+        protocol: task_worker::PROTOCOL_VERSION,
+        task: task_worker::protocol::sample_task_for_tests(),
+        workspace: workspace.to_path_buf(),
+        work_dir: None,
+        artifacts_dir: workspace.join("artifacts"),
+        context: RunContext::default(),
+        llm_route: None,
+        cargo_target_dir: None,
+    };
+    let limits = RunLimits {
+        wall_clock: Duration::from_secs(300),
+        idle_timeout: Duration::from_secs(300),
+        kill_grace: Duration::from_secs(5),
+    };
+    let outcome = std::thread::scope(|s| {
+        s.spawn(|| {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| e.to_string())?;
+            rt.block_on(adapter.run(req, "cap-probe", limits, &NoSink))
+                .map_err(|e| e.to_string())
+        })
+        .join()
+        .map_err(|_| "probe thread panicked".to_string())?
+    })?;
+    if !matches!(outcome.terminal, task_worker::Terminal::Done { .. }) {
+        return Err(format!("unexpected terminal {:?}", outcome.terminal));
+    }
+    Ok((0..checks.len())
+        .map(|i| {
+            let code = std::fs::read_to_string(results_dir.join(format!("{i}.code"))).ok()?;
+            let stdout =
+                std::fs::read_to_string(results_dir.join(format!("{i}.out"))).unwrap_or_default();
+            Some((code.trim().parse().ok()?, stdout))
+        })
+        .collect())
 }

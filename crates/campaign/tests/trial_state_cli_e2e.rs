@@ -76,6 +76,15 @@ echo '{"type":"assistant","message":{"id":"m1","usage":{"input_tokens":10,"outpu
 /// 必要能力 probe 用の道具の stub（どの expect_stdout も満たす）。
 const CAP_STUB: &str = "#!/bin/sh\necho 'cmake version git version Python 3'\n";
 
+/// worker の PATH に足す `sh`。能力 probe の複合 command（`sh -c`）だけ成功で返し、他は実 sh に渡す
+/// （PATH の先頭に置かれるので、他の script が呼ぶ `sh` を壊さない）。
+const CAP_SH_STUB: &str = r#"#!/bin/sh
+case "$2" in
+  *min-build*|*printf*|*autoreconf*|*libclang*|*verbs.h*) echo 'cmake version git version Python 3'; exit 0 ;;
+esac
+exec /bin/sh "$@"
+"#;
+
 async fn env() -> Env {
     let s = setup();
     let acct = tempfile::tempdir().unwrap();
@@ -153,7 +162,10 @@ async fn env() -> Env {
         "ssh",
         "python3",
     ] {
-        write_executable(&tools.join(t), CAP_STUB);
+        write_executable(
+            &tools.join(t),
+            if t == "sh" { CAP_SH_STUB } else { CAP_STUB },
+        );
     }
     let tc = json!({
         "ro_mounts": [tools],
@@ -181,6 +193,13 @@ async fn env() -> Env {
 impl Env {
     fn out(&self) -> PathBuf {
         self.s.inp.measure.as_ref().unwrap().out.clone().unwrap()
+    }
+
+    fn worker_path(&self) -> String {
+        format!(
+            "{}:/usr/local/bin:/usr/bin:/bin",
+            self.s.dir.path().join("cap-tools").display()
+        )
     }
 
     fn state_root(&self) -> PathBuf {
@@ -225,7 +244,9 @@ impl Env {
             .arg(d.join("normal.toml"))
             .arg("--canaries")
             .arg(d.join("canaries.json"))
-            .env("CELERIS_E2E_TOKEN", TOKEN);
+            .env("CELERIS_E2E_TOKEN", TOKEN)
+            // B/C の probe は daemon 設定の PATH を見る。cap env の worker PATH と同じ値で起動する。
+            .env("PATH", self.worker_path());
         c
     }
 
@@ -515,4 +536,39 @@ async fn contaminated_new_trial_state_is_refused_before_any_launch() {
     assert_eq!(o.status.code(), Some(1), "{}", lossy(&o.stderr));
     assert!(lossy(&o.stderr).contains("trial-state"));
     assert!(!out.join("harness-state").exists());
+}
+
+/// worker 側（B/C）の socket / toolchain が欠けると、fake program の PATH でも該当 arm の env_failure で
+/// 最初の投入前に止まる（台帳も作らない）。B/C の probe は worker の実起動関数で、daemon 設定の PATH の子 process に走る。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn missing_worker_socket_or_toolchain_stops_b_and_c_as_env_failure_before_launch() {
+    let e = env().await;
+    let tools = e.s.dir.path().join("cap-tools");
+    let cap_env = e.s.inp.cap_env.as_ref().unwrap();
+    let base: Value = serde_json::from_str(&fs::read_to_string(cap_env).unwrap()).unwrap();
+    let absent_sock = e.s.dir.path().join("absent-link.sock");
+    let absent_mount = e.s.dir.path().join("absent-prefix");
+    for (label, extra) in [
+        ("socket", json!({"sockets": [absent_sock]})),
+        ("toolchain", json!({"ro_mounts": [tools, absent_mount]})),
+    ] {
+        let mut v = base.clone();
+        for side in ["a", "worker"] {
+            for (k, x) in extra.as_object().unwrap() {
+                v[side][k] = x.clone();
+            }
+        }
+        fs::write(cap_env, v.to_string()).unwrap();
+        let o = e.cmd().output().unwrap();
+        let err = lossy(&o.stderr);
+        assert_eq!(o.status.code(), Some(1), "{label}: {err}");
+        assert!(err.contains("env_failure"), "{label}: {err}");
+        for arm in ["arm B", "arm C"] {
+            assert!(
+                err.contains(arm) && err.contains(&format!("{label}:")),
+                "{label} {arm}: {err}"
+            );
+        }
+        assert!(!e.out().join("ledger.jsonl").exists(), "{label}");
+    }
 }

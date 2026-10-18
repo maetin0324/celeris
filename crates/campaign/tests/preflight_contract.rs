@@ -138,6 +138,12 @@ impl Host for RouterHost {
     fn probe_runner(&self) -> Box<dyn celeris_campaign::cap_probe::ProbeRunner> {
         Box::new(preflight_setup::OkRunner)
     }
+    fn worker_daemon_env(
+        &self,
+        _: &celeris_campaign::harness_exec::Toolchain,
+    ) -> celeris_campaign::cap_probe::WorkerDaemonEnv {
+        preflight_setup::fake_worker_daemon()
+    }
 
     fn env_nonempty(&self, name: &str) -> bool {
         name == "CELERIS_CAMPAIGN_TOKEN"

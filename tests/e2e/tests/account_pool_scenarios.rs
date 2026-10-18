@@ -627,14 +627,21 @@ fn http_login_flow_ends_with_logged_in_true_and_management_requires_a_token() {
     assert_eq!(coded.status, 200, "{}", coded.body);
     assert_eq!(coded.json()["result"], "ok", "{}", coded.body);
 
-    let listed = env.get("/llm/accounts").json();
-    let c = listed["items"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|it| it["account_id"] == "c")
-        .unwrap();
-    assert_eq!(c["logged_in"], json!(true));
+    // GET /llm/accounts は dispatcher の tick ごとの snapshot を読む。login 直後の読みは古いことがあるので出来事を待つ。
+    let logged_in = wait_until(SETTLE_WAIT, || {
+        env.get("/llm/accounts").json()["items"]
+            .as_array()
+            .is_some_and(|items| {
+                items
+                    .iter()
+                    .any(|it| it["account_id"] == "c" && it["logged_in"] == json!(true))
+            })
+    });
+    assert!(
+        logged_in,
+        "account c never became logged_in: {}",
+        env.get("/llm/accounts").body
+    );
 
     // ログもコードも URL も出ない（D5）。
     let log = daemon.log_text();

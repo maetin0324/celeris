@@ -1,7 +1,7 @@
 ---
 title: P1-3 cap-runbook（人が host で実行する能力 probe・実資産検証・接続到達確認）
 tasks: [01M56HCNTPN0H2VGP4JE0JYRM9]
-status: 人手順待ち
+status: 人手順待ち（2026-10-18 時点で実行証拠の提供なし。実経路確認済みの項目は無い）
 updated: 2026-10-18
 ---
 # cap-runbook

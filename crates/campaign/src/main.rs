@@ -148,7 +148,8 @@ fn a_executor(
     )
     .with_sandbox(Sandbox {
         account_id: id,
-        config_dir: dir,
+        auth_dir: dir,
+        state_root: out_dir.join("trial-state"),
     })
     .with_budget_guard(BudgetGuard {
         basis: m.budget.token_basis,

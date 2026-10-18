@@ -15,7 +15,7 @@ use celeris_campaign::{
     aggregate::Outcome,
     executor::{ExecResult, ExecStatus, Executor, TaskRef, TrialRequest},
     harness_exec::{
-        BudgetGuard, CommandBuilder, HarnessCommand, HarnessExecutor, Sandbox,
+        BudgetGuard, CommandBuilder, HarnessCommand, HarnessExecutor, Sandbox, TRIAL_MARKER,
         parse_claude_stream_usage,
     },
     manifest::{Cap, Config, ConfigId, TokenBasis},
@@ -195,22 +195,30 @@ fn a_arm_under_the_cap_runs_to_the_end() {
     assert!(x.usage(&r).expect("usage").is_some());
 }
 
+fn sb_for(root: &str) -> Sandbox {
+    Sandbox {
+        account_id: "lab".into(),
+        auth_dir: "/acct/lab".into(),
+        state_root: format!("{root}/trial-state").into(),
+    }
+}
+
 /// 隔離の構成: 見える path は固定で、運用者の file・他試行・環境変数は入らない。
 #[test]
-fn sandbox_exposes_only_the_workspace_account_and_the_binary() {
-    let sb = Sandbox {
-        account_id: "lab".into(),
-        config_dir: "/acct/lab".into(),
-    };
+fn sandbox_exposes_only_the_workspace_trial_state_and_the_binary() {
+    let sb = sb_for("/out");
     let ws = Path::new("/out/trials/A/k3/rep1/workspace");
+    let st = Path::new("/out/trial-state/c/A/p0/rep1");
     let real = Path::new("/home/op/.local/share/claude/versions/2.1");
-    let a = sb.args(ws, real, &[]);
+    let a = sb.args(ws, st, real, &[]);
     let mut binds = BTreeSet::new();
     let mut envs = BTreeSet::new();
     for w in a.windows(3) {
         if w[0] == "--bind" || w[0] == "--ro-bind" {
             binds.insert(w[1].clone());
-            assert_eq!(w[1], w[2], "same path inside");
+            if w[1] != "/acct/lab/.credentials.json" {
+                assert_eq!(w[1], w[2], "same path inside");
+            }
         }
         if w[0] == "--setenv" {
             envs.insert(w[1].clone());
@@ -221,11 +229,24 @@ fn sandbox_exposes_only_the_workspace_account_and_the_binary() {
         assert!(
             allowed_system.contains(&b.as_str())
                 || b == "/out/trials/A/k3/rep1/workspace"
-                || b == "/acct/lab"
+                || b == "/out/trial-state/c/A/p0/rep1"
+                || b == "/acct/lab/.credentials.json"
                 || b == "/home/op/.local/share/claude/versions/2.1",
             "unexpected mount {b}"
         );
     }
+    // アカウント dir 全体は bind しない。認証材料は read-only で state dir の中に重ねる。
+    assert!(!binds.contains("/acct/lab"));
+    assert!(a.windows(3).any(|w| w
+        == [
+            "--ro-bind",
+            "/acct/lab/.credentials.json",
+            "/out/trial-state/c/A/p0/rep1/.credentials.json"
+        ]));
+    assert!(
+        a.windows(2)
+            .any(|w| w == ["CLAUDE_CONFIG_DIR", "/out/trial-state/c/A/p0/rep1"])
+    );
     assert!(a.contains(&"--clearenv".to_string()));
     assert!(a.windows(2).any(|w| w == ["--tmpfs", "/tmp"]));
     assert_eq!(
@@ -235,7 +256,6 @@ fn sandbox_exposes_only_the_workspace_account_and_the_binary() {
             .into_iter()
             .collect::<BTreeSet<_>>()
     );
-    // 運用者の home・/local・/work・他試行を丸ごと見せる bind は無い。
     for bad in [
         "/",
         "/home",
@@ -243,10 +263,104 @@ fn sandbox_exposes_only_the_workspace_account_and_the_binary() {
         "/work",
         "/out",
         "/out/trials",
+        "/out/trial-state",
         "/tmp",
     ] {
         assert!(!binds.contains(bad), "{bad} must not be mounted");
     }
+}
+
+/// state dir は campaign / arm / case / repetition で決まり、同一試行では同じ path、別試行では互いに素。
+#[test]
+fn trial_state_dirs_are_stable_per_trial_and_disjoint_across_trials() {
+    let t = h("#!/bin/sh\n");
+    let sb = sb_for("/out");
+    let base = t.req(1);
+    let same = t.req(1);
+    assert_eq!(sb.state_dir(&base), sb.state_dir(&same));
+    let mut dirs = BTreeSet::new();
+    dirs.insert(sb.state_dir(&base));
+    let mut rep2 = t.req(1);
+    rep2.rep = 2;
+    dirs.insert(sb.state_dir(&rep2));
+    let mut case2 = t.req(1);
+    case2.problem_id = "p1";
+    dirs.insert(sb.state_dir(&case2));
+    let mut tricky = t.req(1);
+    tricky.problem_id = "../p0";
+    dirs.insert(sb.state_dir(&tricky));
+    let mut b_cfg = t.cfg.clone();
+    b_cfg.id = ConfigId::B;
+    let mut arm_b = t.req(1);
+    arm_b.config = &b_cfg;
+    dirs.insert(sb.state_dir(&arm_b));
+    assert_eq!(dirs.len(), 5);
+    for d in &dirs {
+        assert!(d.starts_with("/out/trial-state"), "{d:?}");
+        assert!(!d.components().any(|c| c.as_os_str() == ".."), "{d:?}");
+        // 別試行の bwrap 引数に、この試行以外の state dir は現れない。
+        let a = sb.args(Path::new("/w"), d, Path::new("/bin/claude"), &[]);
+        for other in dirs.iter().filter(|o| *o != d) {
+            let o = other.to_string_lossy();
+            assert!(
+                !a.iter().any(|x| x.starts_with(o.as_ref())),
+                "{o} visible in {d:?}"
+            );
+        }
+    }
+}
+
+/// prepare は marker を書き、同一試行の再開では dir を保ち、他試行の marker・出所不明の状態は拒否する。
+#[test]
+fn prepare_writes_identity_marker_and_refuses_foreign_state() {
+    let t = h("#!/bin/sh\n");
+    let acct = t.root.join("acct");
+    fs::create_dir_all(&acct).expect("acct");
+    fs::write(acct.join(".credentials.json"), "{}").expect("cred");
+    fs::write(acct.join("history.jsonl"), "old-session-id").expect("hist");
+    let sb = Sandbox {
+        account_id: "lab".into(),
+        auth_dir: acct.clone(),
+        state_root: t.root.join("trial-state"),
+    };
+    let req = t.req(1);
+    let d = sb.prepare(&req).expect("first prepare");
+    let m: serde_json::Value =
+        serde_json::from_slice(&fs::read(d.join(TRIAL_MARKER)).expect("marker")).expect("json");
+    assert_eq!(m["case"], "p0");
+    assert_eq!(m["rep"], 1);
+    assert_eq!(m["arm"], "A");
+    // 再開: 試行が書いた状態は保たれ、同じ dir が返る。
+    fs::write(d.join("projects.txt"), "my-session").expect("write");
+    assert_eq!(sb.prepare(&req).expect("resume"), d);
+    assert_eq!(
+        fs::read_to_string(d.join("projects.txt")).expect("kept"),
+        "my-session"
+    );
+    // アカウント dir の履歴は state dir に現れない。
+    assert!(!d.join("history.jsonl").exists());
+    // 他試行の marker が居る dir は拒否する。
+    let mut other = t.req(1);
+    other.campaign_id = "other";
+    let od = sb.state_dir(&other);
+    fs::create_dir_all(&od).expect("od");
+    fs::copy(d.join(TRIAL_MARKER), od.join(TRIAL_MARKER)).expect("plant");
+    assert!(
+        sb.prepare(&other)
+            .expect_err("foreign")
+            .contains("another trial")
+    );
+    // marker の無い既存状態（混入）も引き継がない。
+    let mut dirty = t.req(1);
+    dirty.rep = 9;
+    let dd = sb.state_dir(&dirty);
+    fs::create_dir_all(&dd).expect("dd");
+    fs::write(dd.join("leftover"), "x").expect("leftover");
+    assert!(
+        sb.prepare(&dirty)
+            .expect_err("dirty")
+            .contains("no identity marker")
+    );
 }
 
 fn bwrap_usable() -> bool {
@@ -302,9 +416,11 @@ echo done >> probe.txt
         std::env::set_var("SECRET_FILE", &secret);
         std::env::set_var("GRADER_DIR", &grader);
     }
+    fs::write(acct.join(".credentials.json"), "{}").expect("cred");
     let x = t.exec().with_sandbox(Sandbox {
         account_id: "lab".into(),
-        config_dir: acct,
+        auth_dir: acct,
+        state_root: t.root.join("trial-state"),
     });
     let r = x.submit(&t.req(u64::MAX), "campaign-sbx1").expect("submit");
     let res = wait_done(&x, &r);

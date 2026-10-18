@@ -162,7 +162,7 @@
       "argv": [
         "sh",
         "-c",
-        "d=$(mktemp -d) && cd $d && mkdir -p src && printf '[package]\\nname=\"t\"\\nversion=\"0.0.0\"\\nedition=\"2024\"\\n[features]\\ntransport-locusta=[]\\n' > Cargo.toml && printf '#[cfg(feature=\"transport-locusta\")]\\nfn main(){}\\n#[cfg(not(feature=\"transport-locusta\"))]\\ncompile_error!(\"feature transport-locusta not enabled\");\\n' > src/main.rs && cargo build --release --features transport-locusta --offline && ./target/release/t"
+        "d=$(mktemp -d) && trap 'rm -rf \"$d\"' EXIT && cd \"$d\" && mkdir -p src && printf '[package]\\nname=\"t\"\\nversion=\"0.0.0\"\\nedition=\"2024\"\\n[features]\\ntransport-locusta=[]\\n' > Cargo.toml && printf '#[cfg(feature=\"transport-locusta\")]\\nfn main(){}\\n#[cfg(not(feature=\"transport-locusta\"))]\\ncompile_error!(\"feature transport-locusta not enabled\");\\n' > src/main.rs && cargo build --release --features transport-locusta --offline --target-dir \"$d/target\" && \"$d/target/release/t\""
       ]
     },
     {

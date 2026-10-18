@@ -552,3 +552,58 @@ fn old_rustc_fails_the_min_version_comparison() {
     );
     assert!(String::from_utf8_lossy(&ok.stdout).contains("rustc-min ok"));
 }
+
+/// min-build-locusta は継承された CARGO_TARGET_DIR に左右されない（probe 専用 dir に出力し、そこを実行する）。
+/// 実際の cargo で、未設定と別の絶対 path の両方が成功する。
+#[test]
+fn min_build_locusta_ignores_inherited_cargo_target_dir() {
+    let set = cases();
+    let case = &set.get("k2-bf-xattr-restart-campaign").expect("k2").case;
+    let argv = &case
+        .required_capabilities
+        .iter()
+        .find(|c| c.id == "min-build-locusta")
+        .expect("min-build-locusta")
+        .argv;
+    let run = |target: Option<&Path>, path: Option<&str>| {
+        let mut cmd = std::process::Command::new(&argv[0]);
+        cmd.args(&argv[1..]).env_remove("CARGO_TARGET_DIR");
+        if let Some(t) = target {
+            cmd.env("CARGO_TARGET_DIR", t);
+        }
+        if let Some(p) = path {
+            cmd.env("PATH", p);
+        }
+        cmd.output().expect("run")
+    };
+    let unset = run(None, None);
+    assert!(
+        unset.status.success(),
+        "{}",
+        String::from_utf8_lossy(&unset.stderr)
+    );
+    let shared = tempfile::tempdir().expect("tmp");
+    let set_abs = run(Some(shared.path()), None);
+    assert!(
+        set_abs.status.success(),
+        "{}",
+        String::from_utf8_lossy(&set_abs.stderr)
+    );
+    // probe は共有 target を使わず、書き込みもしない。
+    assert_eq!(std::fs::read_dir(shared.path()).expect("ls").count(), 0);
+
+    // 既存成果物を偶然実行して合格しない: build が何も出力しない cargo と、継承 target の古い t。
+    use std::os::unix::fs::PermissionsExt;
+    let stale = tempfile::tempdir().expect("tmp");
+    std::fs::create_dir_all(stale.path().join("release")).expect("mkdir");
+    let old = stale.path().join("release/t");
+    std::fs::write(&old, "#!/bin/sh\nexit 0\n").expect("write");
+    std::fs::set_permissions(&old, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    let bin = tempfile::tempdir().expect("tmp");
+    let cargo = bin.path().join("cargo");
+    std::fs::write(&cargo, "#!/bin/sh\nexit 0\n").expect("write");
+    std::fs::set_permissions(&cargo, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    let path = format!("{}:/usr/bin:/bin", bin.path().display());
+    let fake = run(Some(stale.path()), Some(&path));
+    assert!(!fake.status.success(), "stale t must not pass the probe");
+}

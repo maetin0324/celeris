@@ -17,7 +17,7 @@ use celeris_campaign::{
     watch::{self, SystemClock, WatchOptions},
 };
 
-const USAGE: &str = "usage: celeris-campaign <dry-run|validate|preflight|run|watch|check|check-report|export|final-accounting|grade-out|usage> --manifest <path> \
+const USAGE: &str = "usage: celeris-campaign <dry-run|validate|env-lock|preflight|run|watch|check|check-report|export|final-accounting|grade-out|usage> --manifest <path> \
 [--interval-secs N] [--max-iterations M] [--cases <grade-case dir>] \
 [--input-manifest <path>] [--out <dir>] [--executor mock|harness|celeris] [--api-url <url> --token-env <ENV_NAME> [--task-template <json>]] [--dest <dir>] \
 [--cases-root <dir>] [--grader-root <dir>] [--grade-case-root <dir>] [--a-program <path>] [--report <file>] [--measurement-id <id>] [--repo-src <dir>] [--materials-src <dir>] [--kb-src <dir>] [--inputs-src <dir>] [--records <records.jsonl>] [--cos-not-called <basis>] [--quota <usage.json>] [--a-account <account_id>] [--measure-config <toml> --normal-config <toml> --canaries <json>] [--max-7d <ratio>] [--max-7d-codex <ratio>]";
@@ -178,6 +178,35 @@ fn run(args: Vec<String>) -> Result<String, String> {
         "validate" => {
             m.validate()?;
             Ok(m.compute_sha256()?)
+        }
+        "env-lock" => {
+            use celeris_campaign::env_lock;
+            let path_var = std::env::var_os("PATH");
+            let a_program = arg(&args, "--a-program").unwrap_or_else(|| PathBuf::from("claude"));
+            let a_program = env_lock::pin_program(&a_program, path_var.as_deref())?;
+            let mut worker_programs = Vec::new();
+            for w in args
+                .iter()
+                .enumerate()
+                .filter(|(_, a)| *a == "--worker-program")
+                .filter_map(|(i, _)| args.get(i + 1))
+            {
+                let (name, p) = w
+                    .split_once('=')
+                    .ok_or("--worker-program expects <name>=<program>")?;
+                worker_programs.push(env_lock::WorkerProgram {
+                    name: name.into(),
+                    pin: env_lock::pin_program(std::path::Path::new(p), path_var.as_deref())?,
+                });
+            }
+            let obs = env_lock::Observed {
+                a_program,
+                worker_programs,
+                catalog: Vec::new(),
+            };
+            let verify = args.iter().any(|a| a == "--verify");
+            let o = env_lock::establish(&m, &obs, &out()?, verify)?;
+            Ok(format!("{{\"env_lock\":\"{o:?}\"}}").to_lowercase())
         }
         "preflight" => {
             let rep = preflight::check(&preflight_inputs(&args, &manifest_path), &RealHost);

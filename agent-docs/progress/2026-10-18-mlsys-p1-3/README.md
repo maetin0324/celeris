@@ -1,24 +1,24 @@
 ---
 task: 01M56HCNTPN0H2VGP4JE0JYRM9
 title: 本測定移行 P1-3 の進捗（K2/K4 実資産・能力 probe）
-status: 無 LLM 検証まで完了・実経路は人手順待ち
+status: 無 LLM 検証まで完了・実経路確認済みの項目は無し（人の証拠未提供）
 updated: 2026-10-18
 ---
 # P1-3 進捗
 
-区分: 実装済み / 無 LLM 検証済み / 実経路確認済み(人手順待ち) / 承認待ち / 未検証。
+区分: 実装済み / 無 LLM 検証済み / 実経路確認済み / 承認待ち / 未検証。
 
 | WU | 内容 | 区分 | 根拠 |
 |---|---|---|---|
 | cap-probe | 必要能力の固定（case.json）、A と同一経路の probe、B/C 同等、不足は env_failure で preflight 停止 | 実装済み・無 LLM 検証済み（fixture/stub runner で `cap_probe` 6 件） | 2026-10-18-mlsys-cap-probe/cap-probe.md |
-| 〃 実 A sandbox 実走 | userns 要。人が host で | 実経路確認済み(人手順待ち) | cap-runbook §1 |
-| 〃 cap env 実値（UCX prefix・sirius 管理 socket） | host 側の承認が要る | 承認待ち | cap-runbook §0 |
+| 〃 実 A sandbox 実走 | userns 要。人が host で | 未検証（人の実行証拠が未提供。exit・出力要点なし） | cap-runbook §1 |
+| 〃 cap env 実値（UCX prefix・sirius 管理 socket） | host 側の承認が要る | 承認待ち（実値の承認・提供なし。値は記録しない） | cap-runbook §0 |
 | grader-real | env/model 失敗の分離、K2 正負例・K4 再計算の script と試験 | 実装済み・無 LLM 検証済み（fixture 9 件。実 asset で組立・lock・patch・K4 再計算 ok） | 2026-10-18-p1-3-real-asset-grade/grader-real.md |
-| 〃 K2 実 build の正負例 | async-ucx 入れ子 submodule 欠落で env_failure 停止 | 未検証（asset 追加が先） | cap-runbook §2 |
-| 〃 known-good patch（p0-final.patch）の asset store 配置 | 無い | 承認待ち | cap-runbook §2 |
+| 〃 K2 実 build の正負例 | async-ucx 入れ子 submodule 欠落で env_failure 停止 | 未検証（asset 追加と `--build` の人の実行証拠が未提供） | cap-runbook §2 |
+| 〃 known-good patch（p0-final.patch）の asset store 配置 | 無い | 承認待ち（配置の承認・証拠なし） | cap-runbook §2 |
 | k2-scope | K2 の judged_scope、報告の主張制限 | 実装済み・無 LLM 検証済み（`k2_scope` 6 件） | 2026-10-18-p1-3-real-asset-grade/k2-scope.md |
 | close | cap-runbook・本記録・全体検査 | 実装済み | 本 dir |
-| Sirius 接続到達確認 | `ssh -O check` のみ | 実経路確認済み(人手順待ち) | cap-runbook §3 |
+| Sirius 接続到達確認 | `ssh -O check` のみ | 未検証（人の実行証拠が未提供。exit・出力要点なし） | cap-runbook §3 |
 
 有料ジョブ・本測定・LLM 呼出しは起動していない。
 
@@ -47,3 +47,8 @@ K2 の成功は「実装と実験の判定を通った」ことだけを意味�
 ## close 再実行（check 不合格の修正）
 - 原因: `progress-index.sh --check` が `2026-10-17-root-dependency-waits-for-integration.md` の front matter の title・updated 欠落で exit 1。同ファイルに title/updated を足して解消。
 - 全体検査: test-parallel 5739 passed / 0 failed（exit 0。初回は `a_program_pin_and_watch` の watch 再接続試験が高負荷で 1 件失敗、単独 3 回と再実行全体で合格＝時間依存の flaky）、clippy exit 0、fmt exit 0。
+
+## host 実走証拠の記録（record-host, 決定 h1 後）
+- 決定 h1 の回答は「人が runbook を実行し、結果を添える」方針の選択のみで、cap-probe（A/B/C）・`verify-real-assets.sh --build`・Sirius 接続確認の exit code と出力要点は回答にも thread 添付にも無かった。
+- よって実経路確認済みに上げた項目は 0 件。上表の該当行は理由付きで 未検証 / 承認待ち のまま。証拠は作らない。
+- 人が実行したら、各手順の exit と要点（鍵・socket 実値は除く）を渡し、該当行のみ更新する。

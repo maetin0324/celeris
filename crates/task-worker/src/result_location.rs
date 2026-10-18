@@ -14,7 +14,11 @@ pub const MISPLACED_RESULT_MARKER: &str = "result.json misplaced:";
 ///
 /// ADR 2026-10-18-result-location-recovery: when exactly one stray was written during this run
 /// (`mtime >= since`, with 2 s slack for coarse mtimes), copy it to the expected path and return `None` so the normal validation
-/// reads it. The stray itself is left in place. Zero or several candidates, or a stale one, stay errors.
+/// reads it. The stray itself is left in place.
+///
+/// ADR 2026-10-18-result-location-scope: the task root's `wu/` (other WUs' canonical reports) is
+/// not searched and files older than `since` are not candidates. Zero candidates is "no result"
+/// (`None`, the normal retryable missing-report path); only several fresh candidates are misplaced.
 pub async fn misplaced_result(
     artifacts_dir: &Path,
     cwd: &Path,
@@ -106,6 +110,27 @@ pub async fn misplaced_result(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// MLSys P1-3 integration-repair-2: a task-root run (cwd = repos/<repo>, artifacts = task
+    /// artifacts/) ends on max_turns without a report while finished WUs' canonical reports sit
+    /// under wu/<key>/artifacts/. That is "no result", never misplacement.
+    #[tokio::test]
+    async fn other_wus_canonical_reports_are_not_this_runs_strays() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let cwd = root.join("repos/agent-platform");
+        let artifacts = root.join("artifacts");
+        std::fs::create_dir_all(&cwd).unwrap();
+        std::fs::create_dir_all(&artifacts).unwrap();
+        for i in 0..14 {
+            let wu = root.join(format!("wu/wu-{i}/artifacts"));
+            std::fs::create_dir_all(&wu).unwrap();
+            std::fs::write(wu.join("result.json"), "{}").unwrap();
+        }
+        let since = std::time::SystemTime::UNIX_EPOCH;
+        assert!(misplaced_result(&artifacts, &cwd, since).await.is_none());
+        assert!(!artifacts.join("result.json").exists());
+    }
 
     #[tokio::test]
     async fn misplaced_result_search_is_scoped_and_expected_report_wins() {

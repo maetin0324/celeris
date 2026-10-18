@@ -31,6 +31,9 @@ pub async fn misplaced_result(
     if !cwd.starts_with(root) {
         pending.push(cwd.to_path_buf());
     }
+    // ADR 2026-10-18-result-location-scope: other WUs' own `wu/<key>/artifacts/result.json` live
+    // under a task root's `wu/`; they are never this run's stray.
+    let wu_root = root.join("wu");
     let mut found = Vec::new();
     while let Some(dir) = pending.pop() {
         let Ok(meta) = tokio::fs::symlink_metadata(&dir).await else {
@@ -48,10 +51,12 @@ pub async fn misplaced_result(
             };
             let name = entry.file_name();
             if kind.is_dir() {
-                if !matches!(
-                    name.to_str(),
-                    Some("runs" | ".git" | "target" | "node_modules")
-                ) {
+                if entry.path() != wu_root
+                    && !matches!(
+                        name.to_str(),
+                        Some("runs" | ".git" | "target" | "node_modules")
+                    )
+                {
                     pending.push(entry.path());
                 }
             } else if kind.is_file() && name == "result.json" {
@@ -59,15 +64,26 @@ pub async fn misplaced_result(
             }
         }
     }
+    // File mtimes are coarse (kernel tick), so allow slack before the run start.
+    let since = since - std::time::Duration::from_secs(2);
+    let mut found = {
+        let mut fresh = Vec::new();
+        for path in found {
+            if tokio::fs::metadata(&path)
+                .await
+                .is_ok_and(|m| m.modified().is_ok_and(|t| t >= since))
+            {
+                fresh.push(path);
+            }
+        }
+        fresh
+    };
+    // No file written during this run: "no result" (e.g. max_turns), not misplacement.
     if found.is_empty() {
         return None;
     }
     found.sort();
-    // File mtimes are coarse (kernel tick), so allow slack before the run start.
-    let since = since - std::time::Duration::from_secs(2);
     if let [only] = found.as_slice()
-        && let Ok(meta) = tokio::fs::metadata(only).await
-        && meta.modified().is_ok_and(|m| m >= since)
         && tokio::fs::create_dir_all(artifacts_dir).await.is_ok()
         && tokio::fs::copy(only, &expected).await.is_ok()
     {
@@ -110,22 +126,31 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(&sibling, cwd.join("linked")).unwrap();
         let stale = std::time::SystemTime::now() + std::time::Duration::from_secs(7200);
+        let fresh = std::time::SystemTime::UNIX_EPOCH;
         assert!(misplaced_result(&artifacts, &cwd, stale).await.is_none());
+        // Other WUs' canonical reports under the task root's wu/ are never candidates.
+        let other_wu = root.join("wu/other-wu/artifacts");
+        std::fs::create_dir_all(&other_wu).unwrap();
+        std::fs::write(other_wu.join("result.json"), "{}").unwrap();
+        assert!(misplaced_result(&artifacts, &cwd, fresh).await.is_none());
         let stray = root.join("repos/artifacts");
         std::fs::create_dir_all(&stray).unwrap();
         std::fs::write(stray.join("result.json"), "not even JSON").unwrap();
+        // Older than the run start: not this run's, so no result rather than misplaced.
+        assert!(misplaced_result(&artifacts, &cwd, stale).await.is_none());
+        std::fs::write(root.join("repos/result.json"), "{}").unwrap();
         let Some(Terminal::Error {
             message,
             retryable: false,
-        }) = misplaced_result(&artifacts, &cwd, stale).await
+        }) = misplaced_result(&artifacts, &cwd, fresh).await
         else {
             panic!("misplacement must be permanent");
         };
+        std::fs::remove_file(root.join("repos/result.json")).unwrap();
         assert!(message.contains(&stray.join("result.json").display().to_string()));
         assert!(message.contains(&artifacts.join("result.json").display().to_string()));
         // A second stray is ambiguous: never guess.
         std::fs::write(root.join("repos/result.json"), "{}").unwrap();
-        let fresh = std::time::SystemTime::UNIX_EPOCH;
         assert!(misplaced_result(&artifacts, &cwd, fresh).await.is_some());
         std::fs::remove_file(root.join("repos/result.json")).unwrap();
         // A single stray written during the run is copied to the expected path (reviewer or worker).

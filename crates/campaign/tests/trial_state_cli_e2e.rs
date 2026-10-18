@@ -74,7 +74,7 @@ echo '{"type":"assistant","message":{"id":"m1","usage":{"input_tokens":10,"outpu
 "#;
 
 /// 必要能力 probe 用の道具の stub（どの expect_stdout も満たす）。
-const CAP_STUB: &str = "#!/bin/sh\necho 'cmake version git version Python 3'\n";
+const CAP_STUB: &str = "#!/bin/sh\necho 'cmake version git version Python 3 rustc-min ok'\n";
 
 /// worker の PATH に足す `sh`。能力 probe の複合 command（`sh -c`）だけ成功で返し、他は実 sh に渡す
 /// （PATH の先頭に置かれるので、他の script が呼ぶ `sh` を壊さない）。

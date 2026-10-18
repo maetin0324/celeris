@@ -255,7 +255,7 @@ done
 exec "$@"
 "#;
 
-const CAP_STUB: &str = "#!/bin/sh\necho 'cmake version git version Python 3'\n";
+const CAP_STUB: &str = "#!/bin/sh\necho 'cmake version git version Python 3 rustc-min ok'\n";
 
 /// worker の PATH に足す `sh`。能力 probe の複合 command（`sh -c`）だけ成功で返し、他は実 sh に渡す
 /// （PATH の先頭に置かれるので、他の script が呼ぶ `sh` を壊さない）。

@@ -114,7 +114,7 @@ impl celeris_campaign::cap_probe::ProbeRunner for OkRunner {
     fn run(&self, _: &str, _: &[String]) -> celeris_campaign::cap_probe::Ran {
         celeris_campaign::cap_probe::Ran::Exit {
             code: 0,
-            stdout: "cmake version git version Python 3".into(),
+            stdout: "cmake version git version Python 3 rustc-min ok".into(),
         }
     }
 }

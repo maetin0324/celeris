@@ -23,6 +23,7 @@
     "cluster": "sirius",
     "nodes": 3,
     "params": {
+      "build_location": "local-host (operator host の A と同じ sandbox)。cluster(sirius) は sirius-link の接続確認のみで、build も job 投入もしない",
       "chunk_kinds": [
         "direct",
         "by_id"
@@ -143,6 +144,25 @@
         "sh",
         "-c",
         "mkdir -p /tmp/cm && cd /tmp/cm && printf 'cmake_minimum_required(VERSION 3.10)\\nproject(t C CXX)\\nadd_executable(t t.cc)\\n' > CMakeLists.txt && printf 'int main(){return 0;}\\n' > t.cc && cmake -S . -B b >/dev/null && cmake --build b && ./b/t"
+      ]
+    },
+    {
+      "id": "rustc-min",
+      "kind": "compiler",
+      "argv": [
+        "sh",
+        "-c",
+        "v=$(rustc --version | cut -d' ' -f2) && [ \"$(printf '%s\\n1.85.0\\n' \"$v\" | sort -V | head -n1)\" = 1.85.0 ] && cargo --version >/dev/null && echo \"rustc-min ok: $v >= 1.85.0\""
+      ],
+      "expect_stdout": "rustc-min ok"
+    },
+    {
+      "id": "min-build-locusta",
+      "kind": "build",
+      "argv": [
+        "sh",
+        "-c",
+        "d=$(mktemp -d) && cd $d && mkdir -p src && printf '[package]\\nname=\"t\"\\nversion=\"0.0.0\"\\nedition=\"2024\"\\n[features]\\ntransport-locusta=[]\\n' > Cargo.toml && printf '#[cfg(feature=\"transport-locusta\")]\\nfn main(){}\\n#[cfg(not(feature=\"transport-locusta\"))]\\ncompile_error!(\"feature transport-locusta not enabled\");\\n' > src/main.rs && cargo build --release --features transport-locusta --offline && ./target/release/t"
       ]
     },
     {

@@ -43,6 +43,8 @@ fn k2_and_k4_fix_their_required_capabilities_as_case_data() {
         "ucx-pkg",
         "min-build-ucx",
         "min-build-cmake",
+        "rustc-min",
+        "min-build-locusta",
         "autotools",
         "libclang",
         "sirius-link",
@@ -83,7 +85,7 @@ impl ProbeRunner for Rec {
         self.0.borrow_mut().push(args.to_vec());
         Ran::Exit {
             code: 0,
-            stdout: "cmake version git version Python 3".into(),
+            stdout: "cmake version git version Python 3 rustc-min ok".into(),
         }
     }
 }
@@ -453,4 +455,58 @@ fn worker_probe_daemon_config_mismatch_is_env_failure() {
             .iter()
             .any(|r| r.detail.contains("daemon env lacks CAP_MARK"))
     );
+}
+
+/// Rust が無い/古い host は最初の LLM 呼出し前に env_failure で止まる。検査は部分一致 `rustc 1.` ではなく最小版の比較で、
+/// min-build は transport-locusta feature を含む。ビルド場所は case に明示（cluster は接続確認のみ）。
+#[test]
+fn missing_or_old_rust_stops_before_any_llm_call() {
+    let set = cases();
+    let case = &set.get("k2-bf-xattr-restart-campaign").expect("k2").case;
+    let cap = |id: &str| {
+        case.required_capabilities
+            .iter()
+            .find(|c| c.id == id)
+            .unwrap_or_else(|| panic!("k2 lacks {id}"))
+    };
+    let min = cap("rustc-min");
+    let script = min.argv.join(" ");
+    assert!(
+        script.contains("sort -V") && script.contains("1.85.0"),
+        "{script}"
+    );
+    assert!(!script.contains("rustc 1."), "no substring match");
+    let build = cap("min-build-locusta").argv.join(" ");
+    assert!(build.contains("--features transport-locusta"), "{build}");
+    assert!(
+        case.experiment.as_ref().expect("experiment").params["build_location"]
+            .as_str()
+            .is_some_and(|s| s.contains("local-host") && s.contains("接続確認のみ")),
+    );
+    // rustc 系の能力だけ不在の host（他は ok）。
+    struct NoRust;
+    impl ProbeRunner for NoRust {
+        fn run(&self, _: &str, args: &[String]) -> Ran {
+            let joined = args.join(" ");
+            let rust = joined.contains("rustc --version") || joined.contains("cargo build");
+            Ran::Exit {
+                code: if rust { 127 } else { 0 },
+                stdout: "cmake version git version rustc-min ok".into(),
+            }
+        }
+    }
+    let env = env_json(json!({}));
+    for arm in [ConfigId::A, ConfigId::B, ConfigId::C] {
+        let rep = cap_probe::probe(&sb(&env, arm), arm, Path::new("/w"), case, &NoRust);
+        assert!(!rep.ok);
+        assert_eq!(rep.failure_class, Some("env_failure"));
+        assert_eq!(rep.paid_calls_made, 0);
+        let bad: Vec<_> = rep
+            .results
+            .iter()
+            .filter(|r| !r.ok)
+            .map(|r| r.id.as_str())
+            .collect();
+        assert_eq!(bad, ["rustc-min", "min-build-locusta"], "{arm:?}");
+    }
 }

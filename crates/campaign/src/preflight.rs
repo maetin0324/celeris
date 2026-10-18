@@ -21,7 +21,7 @@ use crate::{
     dryrun,
     executor::Executor,
     grader::GradeCase,
-    inputs,
+    harness_exec, inputs,
     isolation::{self, InitialSources},
     lock::CampaignLock,
     lock_exec,
@@ -405,6 +405,9 @@ fn run_checks(a: &mut Acc, m: &CampaignManifest, inp: &Inputs, host: &dyn Host) 
     check_candidates(a, m, inp, host);
     check_snapshot_src(a, m, inp);
     check_measure_env(a, m, inp);
+    if let Some(out) = inp.measure.as_ref().and_then(|me| me.out.as_deref()) {
+        check_trial_state(a, m, inp, out);
+    }
 
     // 初期 tree・submodule・外部入力・資料・KB・grader/test を campaign lock の期待値に照合する。
     a.checked.push("lock");
@@ -731,21 +734,185 @@ pub fn find_a_account(accounts: &Value, id: &str) -> Result<PathBuf, String> {
     Ok(p)
 }
 
-/// 測定専用アカウント dir に過去の transcript・`CLAUDE.md`・自動記憶が残っていないこと（A/B/C が同じ dir を使う）。
-pub fn account_dir_residue(dir: &Path) -> Vec<String> {
-    let mut v = Vec::new();
-    if dir.join("CLAUDE.md").exists() {
-        v.push(format!(
-            "{}/CLAUDE.md exists in the measurement account dir",
-            dir.display()
-        ));
+/// 試行 state（A の `CLAUDE_CONFIG_DIR`）の検査。試行ごとに「開始済みか」を台帳（`<out>/ledger.jsonl`）で決める。
+/// - 開始済み（台帳に行がある）→ 再開検査: state dir の marker が当該 campaign/manifest/arm/case/rep/account と
+///   保存 lock に一致すること。marker 欠落・不一致・state dir 不在は拒否。
+/// - 未開始 → 新規検査: state dir は不在か空（認証 mount 先の空 file と自分の marker だけは可）。
+///   CLAUDE.md・projects・他試行の marker があれば混入として拒否。
+///
+/// 何も消さず、memory も無効にしない。アカウント dir は認証材料 1 件しか試行に渡らないので、その残渣は試行へ届かない。
+fn check_trial_state(a: &mut Acc, m: &CampaignManifest, inp: &Inputs, out: &Path) {
+    a.checked.push("trial-state");
+    let Some(account) = inp.a_account.as_deref() else {
+        return; // a-arm で報告済み
+    };
+    let Ok(sha) = m.compute_sha256() else {
+        return;
+    };
+    // 保存 lock が別 campaign のものなら、この out の state は再開できない。
+    let lock_path = out.join(crate::lock_exec::LOCK_FILE);
+    if lock_path.is_file() {
+        match fs::read(&lock_path)
+            .map_err(|e| e.to_string())
+            .and_then(|b| {
+                serde_json::from_slice::<crate::lock::CampaignLock>(&b).map_err(|e| e.to_string())
+            }) {
+            Ok(l) if l.campaign_sha256 != sha => {
+                a.miss(
+                    "trial-state",
+                    format!(
+                        "{}: saved lock belongs to campaign {}, not {sha}",
+                        lock_path.display(),
+                        l.campaign_sha256
+                    ),
+                );
+                return;
+            }
+            Ok(_) => {}
+            Err(e) => {
+                a.miss(
+                    "trial-state",
+                    format!("{}: unreadable lock: {e}", lock_path.display()),
+                );
+                return;
+            }
+        }
     }
-    let projects = dir.join("projects");
-    if projects.exists() && fs::read_dir(&projects).is_ok_and(|mut d| d.next().is_some()) {
-        v.push(format!(
-            "{} is not empty (past transcripts / auto memory); use a dedicated measurement account",
-            projects.display()
-        ));
+    let started = match started_a_trials(out) {
+        Ok(v) => v,
+        Err(e) => {
+            a.miss("trial-state", e);
+            return;
+        }
+    };
+    let root = out.join("trial-state");
+    let arm = format!("{:?}", ConfigId::A);
+    let want = |case: &str, rep: u32| harness_exec::TrialMarker {
+        campaign_id: m.campaign_id.clone(),
+        manifest_sha256: sha.clone(),
+        arm: arm.clone(),
+        case: case.to_string(),
+        rep,
+        account_id: account.to_string(),
+    };
+    // 再開: 開始済みの試行は保存 state が自分のものであること。
+    for (case, rep) in &started {
+        let dir = harness_exec::trial_state_dir(&root, &m.campaign_id, &arm, case, *rep);
+        let label = format!("{case}/rep{rep}");
+        match read_marker(&dir) {
+            Ok(Some(have)) if have == want(case, *rep) => {}
+            Ok(Some(have)) => a.miss(
+                "trial-state",
+                format!(
+                    "{label}: resume refused, identity marker in {} belongs to another trial/lock ({}/{}/{}/rep{})",
+                    dir.display(),
+                    have.campaign_id,
+                    have.arm,
+                    have.case,
+                    have.rep
+                ),
+            ),
+            // 台帳に行があっても state が無い（投入直後の crash）か空なら、引き継ぐ状態は無い。
+            Ok(None) if fresh_state_residue(&root, &dir).is_empty() => {}
+            Ok(None) => a.miss(
+                "trial-state",
+                format!(
+                    "{label}: resume refused, started trial has state without an identity marker in {}",
+                    dir.display()
+                ),
+            ),
+            Err(e) => a.miss("trial-state", format!("{label}: {e}")),
+        }
+    }
+    // 新規: 開始していない試行の state dir は空でなければならない。
+    let arm_dir = harness_exec::trial_state_dir(&root, &m.campaign_id, &arm, "x", 0)
+        .ancestors()
+        .nth(2)
+        .map(Path::to_path_buf)
+        .unwrap_or_default();
+    let Ok(cases) = fs::read_dir(arm_dir) else {
+        return;
+    };
+    for case_dir in cases.filter_map(Result::ok) {
+        let Ok(reps) = fs::read_dir(case_dir.path()) else {
+            continue;
+        };
+        for rep_dir in reps.filter_map(Result::ok) {
+            let dir = rep_dir.path();
+            let is_started = started.iter().any(|(c, r)| {
+                harness_exec::trial_state_dir(&root, &m.campaign_id, &arm, c, *r) == dir
+            });
+            if is_started {
+                continue;
+            }
+            for e in fresh_state_residue(&root, &dir) {
+                a.miss("trial-state", e);
+            }
+        }
+    }
+}
+
+fn read_marker(dir: &Path) -> Result<Option<harness_exec::TrialMarker>, String> {
+    let p = dir.join(harness_exec::TRIAL_MARKER);
+    match fs::read(&p) {
+        Ok(b) => serde_json::from_slice(&b)
+            .map(Some)
+            .map_err(|e| format!("{}: unreadable identity marker: {e}", p.display())),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(format!("{}: {e}", p.display())),
+    }
+}
+
+/// 台帳（読むだけ。crash で切れた末尾行は無視）で開始済みの A 試行 `(case, rep)`。
+fn started_a_trials(out: &Path) -> Result<Vec<(String, u32)>, String> {
+    let p = out.join(crate::ledger::LEDGER_FILE);
+    let text = match fs::read_to_string(&p) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(format!("{}: {e}", p.display())),
+    };
+    let keep = text.rfind('\n').map_or(0, |i| i + 1);
+    let mut v = Vec::new();
+    for (i, l) in text[..keep].lines().enumerate() {
+        let r: crate::ledger::LedgerRow =
+            serde_json::from_str(l).map_err(|e| format!("{} line {}: {e}", p.display(), i + 1))?;
+        if r.key.arm == ConfigId::A {
+            let k = (r.key.problem_id, r.key.rep);
+            if !v.contains(&k) {
+                v.push(k);
+            }
+        }
+    }
+    Ok(v)
+}
+
+/// 未開始の試行の state dir の残渣（認証 mount 先の空 file と自分の marker は可）。
+fn fresh_state_residue(root: &Path, dir: &Path) -> Vec<String> {
+    let mut v = Vec::new();
+    let Ok(rd) = fs::read_dir(dir) else {
+        return v;
+    };
+    for e in rd.filter_map(Result::ok) {
+        let name = e.file_name().to_string_lossy().into_owned();
+        let path = e.path();
+        match name.as_str() {
+            ".credentials.json" => {}
+            n if n == harness_exec::TRIAL_MARKER => {
+                // 自分の dir の marker は path の識別と一致するときだけ可。
+                let ok = matches!(read_marker(dir), Ok(Some(h))
+                    if harness_exec::trial_state_dir(root, &h.campaign_id, &h.arm, &h.case, h.rep) == dir);
+                if !ok {
+                    v.push(format!(
+                        "{}: new trial state holds another trial's identity marker",
+                        path.display()
+                    ));
+                }
+            }
+            n => v.push(format!(
+                "{}: new trial state is not empty ({n}); transcripts/memory/CLAUDE.md of another run would leak in",
+                dir.display()
+            )),
+        }
     }
     v
 }
@@ -784,13 +951,8 @@ fn check_api_dependent(a: &mut Acc, inp: &Inputs, host: &dyn Host, template: Opt
         ),
         Some(id) => match host.api_get(url, tok, "/api/v1/llm/accounts") {
             Ok(v) => {
-                match find_a_account(&v, id) {
-                    Err(e) => a.miss("a-arm", e),
-                    Ok(dir) => {
-                        for e in account_dir_residue(&dir) {
-                            a.miss("measure-env", e);
-                        }
-                    }
+                if let Err(e) = find_a_account(&v, id) {
+                    a.miss("a-arm", e);
                 }
             }
             Err(e) => a.miss("a-arm", format!("GET /llm/accounts: {e}")),

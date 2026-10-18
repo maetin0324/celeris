@@ -1,0 +1,470 @@
+//! A の試行 state 分離と CLI 停止・再起動の e2e（実 CLI 入口 → preflight → executor）。無 LLM・無 network。
+//! - 実 `celeris-campaign watch --executor harness` を子 process として起動する。task-api は実 router（正式 DTO）を
+//!   loopback の TCP で serve し、案件・アカウントは実 router の `POST /projects` と `[accounts] claude_dir` で作る。
+//! - A の実行ファイルは履歴（transcript・memory）に試行固有の文字列を書く stub。bwrap の中で動く実 process。
+//! - CLI は SIGSTOP → SIGKILL で止め、同じ引数で再起動する。時間は gate file（state dir 内）と出来事待ちで進める。
+#[path = "../../task-api/tests/common/mod.rs"]
+mod api_common;
+mod preflight_setup;
+
+use std::{
+    collections::BTreeSet,
+    fs,
+    path::{Path, PathBuf},
+    process::{Child, Command, Stdio},
+    thread::sleep,
+    time::{Duration, Instant},
+};
+
+use api_common::{EnvOptions, TOKEN, TestEnv, post_admin, send};
+use celeris_campaign::{
+    ledger::{Ledger, LedgerRow, LedgerState},
+    manifest::CampaignManifest,
+};
+use preflight_setup::*;
+use serde_json::{Value, json};
+
+const CRED: &str = "FAKE-CREDENTIAL-VALUE-MUST-NOT-LEAK";
+const WAIT: Duration = Duration::from_secs(120);
+
+/// 実 router を loopback で serve する環境（案件・A のアカウントは実 API／実 scan で作る）。
+struct Env {
+    s: Setup,
+    _api: TestEnv,
+    _acct: tempfile::TempDir,
+    url: String,
+    project_id: String,
+    stub: PathBuf,
+    campaign_id: String,
+}
+
+fn write_executable(path: &Path, contents: &str) {
+    let tmp = path.with_extension("tmp");
+    fs::write(&tmp, contents).unwrap();
+    let ok = Command::new("sh")
+        .arg("-c")
+        .arg(r#"chmod 755 "$1" && mv "$1" "$2""#)
+        .arg("sh")
+        .arg(&tmp)
+        .arg(path)
+        .status()
+        .unwrap();
+    assert!(ok.success());
+}
+
+/// 履歴に試行固有の文字列（`HIST-<arm>-<case>-<rep>`）を書き、他試行の履歴が見えるか探して記録し、
+/// gate が開くまで待ってから終わる。起動のたびに `launches` へ 1 行足す（二重投入の検出）。
+const STUB: &str = r#"#!/bin/sh
+if [ "$1" = --version ]; then echo 'stub 1.0'; exit 0; fi
+d="$CLAUDE_CONFIG_DIR"
+tag="HIST-$(echo "$d" | awk -F/ '{print $(NF-2)"-"$(NF-1)"-"$NF}')"
+mkdir -p "$d/projects/p" "$d/memory"
+echo "$tag" >> "$d/projects/p/transcript.jsonl"
+echo "$tag" >> "$d/memory/MEMORY.md"
+root="$(dirname "$(dirname "$(dirname "$(dirname "$d")")")")"
+grep -rl 'HIST-' "$root" 2>/dev/null | grep -v "^$d/" > "$d/foreign.txt"
+ls "$root" > "$d/root-listing.txt" 2>&1
+echo x >> "$d/launches"
+echo '{"type":"assistant","message":{"id":"m0","usage":{"input_tokens":100,"output_tokens":5}}}'
+echo ready > "$d/probe-done"
+while [ ! -e "$d/GATE" ]; do sleep 0.05; done
+echo '{"type":"assistant","message":{"id":"m1","usage":{"input_tokens":10,"output_tokens":5}}}'
+"#;
+
+async fn env() -> Env {
+    let s = setup();
+    let acct = tempfile::tempdir().unwrap();
+    let lab = acct.path().join("lab");
+    fs::create_dir_all(&lab).unwrap();
+    fs::write(lab.join(".credentials.json"), CRED).unwrap();
+    // 他の試行から見えてはならない、アカウント dir 側の履歴。
+    fs::create_dir_all(lab.join("projects/old")).unwrap();
+    fs::write(lab.join("projects/old/t.jsonl"), "HIST-ACCOUNT-DIR-OLD\n").unwrap();
+    let api = TestEnv::with(EnvOptions {
+        token: Some(TOKEN.into()),
+        accounts_root: Some(acct.path().to_path_buf()),
+        max_runs_per_account: 2,
+        ..Default::default()
+    });
+    let created = send(
+        &api.router(),
+        post_admin(
+            "/api/v1/projects",
+            &json!({"title": "campaign", "request": "trial"}),
+        ),
+    )
+    .await;
+    assert_eq!(created.status.as_u16(), 201, "{}", created.text());
+    let project_id = created.json()["id"].as_str().unwrap().to_string();
+    let repo = send(
+        &api.router(),
+        post_admin(
+            &format!("/api/v1/projects/{project_id}/repos"),
+            &json!({"name": "scratch", "location": {"kind": "local", "path": "/x"}}),
+        ),
+    )
+    .await;
+    assert_eq!(repo.status.as_u16(), 201, "{}", repo.text());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let state = api.state.clone();
+    tokio::spawn(async move {
+        let _ = task_api::serve_with_listener(listener, state, std::future::pending()).await;
+    });
+    fs::write(
+        s.dir.path().join("task-template.json"),
+        json!({"project_id": project_id, "acceptance": [{"type": "reviewer", "text": "x"}]})
+            .to_string(),
+    )
+    .unwrap();
+    let stub = s.dir.path().join("a-stub");
+    write_executable(&stub, STUB);
+    let campaign_id = CampaignManifest::load(&s.inp.manifest_path)
+        .unwrap()
+        .campaign_id;
+    Env {
+        s,
+        _api: api,
+        _acct: acct,
+        url,
+        project_id,
+        stub,
+        campaign_id,
+    }
+}
+
+impl Env {
+    fn out(&self) -> PathBuf {
+        self.s.inp.measure.as_ref().unwrap().out.clone().unwrap()
+    }
+
+    fn state_root(&self) -> PathBuf {
+        self.out().join("trial-state")
+    }
+
+    fn cmd(&self) -> Command {
+        let d = self.s.dir.path();
+        let i = &self.s.inp;
+        let mut c = Command::new(std::env::var("CARGO_BIN_EXE_celeris-campaign").unwrap());
+        c.args(["watch", "--executor", "harness", "--interval-secs", "1"])
+            .args(["--max-iterations", "600", "--manifest"])
+            .arg(&i.manifest_path)
+            .arg("--out")
+            .arg(self.out())
+            .arg("--cases-root")
+            .arg(&i.cases_root)
+            .arg("--grader-root")
+            .arg(&i.grader_root)
+            .arg("--grade-case-root")
+            .arg(&i.grade_cases_root)
+            .arg("--a-program")
+            .arg(&self.stub)
+            .arg("--materials-src")
+            .arg(i.materials_src.as_ref().unwrap())
+            .arg("--kb-src")
+            .arg(i.kb_src.as_ref().unwrap())
+            .arg("--inputs-src")
+            .arg(i.inputs_src.as_ref().unwrap())
+            .arg("--repo-src")
+            .arg(i.repo_src.as_ref().unwrap())
+            .args(["--a-account", "lab", "--api-url", &self.url])
+            .args(["--token-env", "CELERIS_E2E_TOKEN"])
+            .arg("--task-template")
+            .arg(d.join("task-template.json"))
+            .arg("--measure-config")
+            .arg(d.join("measure.toml"))
+            .arg("--normal-config")
+            .arg(d.join("normal.toml"))
+            .arg("--canaries")
+            .arg(d.join("canaries.json"))
+            .env("CELERIS_E2E_TOKEN", TOKEN);
+        c
+    }
+
+    /// 背景で走らせ、stdout/stderr は file へ（pipe を詰まらせない）。
+    fn spawn(&self, tag: &str) -> (Child, PathBuf, PathBuf) {
+        let (o, e) = (
+            self.s.dir.path().join(format!("{tag}.stdout")),
+            self.s.dir.path().join(format!("{tag}.stderr")),
+        );
+        let child = self
+            .cmd()
+            .stdin(Stdio::null())
+            .stdout(fs::File::create(&o).unwrap())
+            .stderr(fs::File::create(&e).unwrap())
+            .spawn()
+            .unwrap();
+        (child, o, e)
+    }
+
+    /// `trial-state/<campaign>/<arm>/<case>/rep<N>` のうち、identity marker がある dir。
+    fn state_dirs(&self) -> Vec<PathBuf> {
+        let mut v = Vec::new();
+        let base = self.state_root().join(&self.campaign_id);
+        for arm in ls(&base) {
+            for case in ls(&arm) {
+                for rep in ls(&case) {
+                    if rep.join("trial-identity.json").is_file() {
+                        v.push(rep);
+                    }
+                }
+            }
+        }
+        v
+    }
+
+    fn a_state(&self, case: &str) -> PathBuf {
+        self.state_root()
+            .join(&self.campaign_id)
+            .join("A")
+            .join(case)
+            .join("rep1")
+    }
+}
+
+fn ls(p: &Path) -> Vec<PathBuf> {
+    let mut v: Vec<PathBuf> = fs::read_dir(p)
+        .map(|r| r.filter_map(|e| e.ok().map(|e| e.path())).collect())
+        .unwrap_or_default();
+    v.sort();
+    v
+}
+
+fn wait_for(what: &str, mut ok: impl FnMut() -> bool) {
+    let t = Instant::now();
+    while !ok() {
+        assert!(t.elapsed() < WAIT, "timed out: {what}");
+        sleep(Duration::from_millis(25));
+    }
+}
+
+fn kill(sig: &str, pid: u32) {
+    assert!(
+        Command::new("kill")
+            .arg(format!("-{sig}"))
+            .arg(pid.to_string())
+            .status()
+            .unwrap()
+            .success()
+    );
+}
+
+fn proc_state(pid: u32) -> char {
+    let s = fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
+    s[s.rfind(')').map_or(0, |i| i + 1)..]
+        .trim_start()
+        .chars()
+        .next()
+        .unwrap_or('?')
+}
+
+fn rows(out: &Path) -> Vec<LedgerRow> {
+    Ledger::open(out).unwrap().rows().cloned().collect()
+}
+
+fn lines(p: &Path) -> usize {
+    fs::read_to_string(p).map_or(0, |s| s.lines().count())
+}
+
+fn text(p: &Path) -> String {
+    fs::read_to_string(p).unwrap_or_default()
+}
+
+fn no_secret(files: &[&Path]) {
+    for f in files {
+        assert!(!text(f).contains(CRED), "credential leaked into {f:?}");
+        assert!(!text(f).contains(TOKEN), "api token leaked into {f:?}");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn killed_cli_restarts_and_reattaches_to_the_same_trial_without_resubmit() {
+    let e = env().await;
+    let out = e.out();
+    let first_case = "k2-bf-xattr-restart-campaign";
+
+    // 1 回目の CLI: A（k2）の stub が履歴を書いて gate 待ちになるまで進める。
+    let (mut c1, o1, e1) = e.spawn("cli1");
+    let a_dir = e.a_state(first_case);
+    wait_for("first stub wrote history", || {
+        a_dir.join("probe-done").exists()
+    });
+    assert_eq!(lines(&a_dir.join("launches")), 1);
+    let before: Vec<LedgerRow> = rows(&out);
+    let a_row = before
+        .iter()
+        .find(|r| format!("{:?}", r.key.arm) == "A" && r.key.problem_id == first_case)
+        .expect("A row")
+        .clone();
+    assert!(!a_row.state.is_terminal());
+    assert!(a_row.reserved.is_some(), "tokens are reserved at submit");
+
+    // CLI を SIGSTOP（固まった CLI）→ 動かないことを確かめ、その間に stub は先へ進む → SIGKILL（落ちた CLI）。
+    kill("STOP", c1.id());
+    wait_for("cli stopped", || proc_state(c1.id()) == 'T');
+    fs::write(a_dir.join("GATE"), b"1").unwrap();
+    wait_for("stub consumed more while the CLI was stopped", || {
+        stub_exited(&out)
+    });
+    kill("KILL", c1.id());
+    let _ = c1.wait();
+    let ledger_after_kill = rows(&out);
+    assert_eq!(
+        ledger_after_kill.len(),
+        before.len(),
+        "a dead CLI plans nothing"
+    );
+    assert_eq!(
+        ledger_after_kill
+            .iter()
+            .find(|r| r.key == a_row.key)
+            .unwrap()
+            .reserved,
+        a_row.reserved,
+        "reservation is untouched by the crash"
+    );
+
+    // 再開検査: marker が別試行の識別に書き換わっていれば、起動前に拒否される（投入 0・launch 増なし）。
+    let marker = a_dir.join("trial-identity.json");
+    let good = fs::read(&marker).unwrap();
+    let mut bad: Value = serde_json::from_slice(&good).unwrap();
+    bad["rep"] = json!(9);
+    fs::write(&marker, bad.to_string()).unwrap();
+    let rej = e.cmd().output().unwrap();
+    assert_eq!(rej.status.code(), Some(1), "{}", lossy(&rej.stderr));
+    assert!(
+        lossy(&rej.stderr).contains("trial-state"),
+        "{}",
+        lossy(&rej.stderr)
+    );
+    assert_eq!(
+        lines(&a_dir.join("launches")),
+        1,
+        "no relaunch on rejection"
+    );
+    fs::write(&marker, &good).unwrap();
+
+    // 再起動: 同じ引数。台帳から再開し、gate は出来事（新しい state dir の出現）に合わせて開ける。
+    let (mut c2, o2, e2) = e.spawn("cli2");
+    let mut opened: BTreeSet<PathBuf> = BTreeSet::from([a_dir.clone()]);
+    let t = Instant::now();
+    let status = loop {
+        for d in e.state_dirs() {
+            if d.join("probe-done").exists() && opened.insert(d.clone()) {
+                fs::write(d.join("GATE"), b"1").unwrap();
+            }
+        }
+        if let Some(s) = c2.try_wait().unwrap() {
+            break s;
+        }
+        assert!(t.elapsed() < WAIT, "restarted CLI did not settle");
+        sleep(Duration::from_millis(25));
+    };
+    assert!(status.success(), "{}", text(&e2));
+    let report: Value = serde_json::from_str(&text(&o2)).unwrap();
+    assert_eq!(report["watch"]["end"], "settled", "{report}");
+
+    // 同じ実行へ再接続: 全試行で process は 1 回しか起動していない。台帳の行は増えず、全て終端。
+    let dirs = e.state_dirs();
+    assert_eq!(dirs.len(), 6, "A/B/C × 2 cases");
+    for d in &dirs {
+        assert_eq!(lines(&d.join("launches")), 1, "double launch in {d:?}");
+    }
+    let after = rows(&out);
+    // max_parallel=1 なので残りの試行は再起動後に順に plan される。同じ試行の行は 1 つだけ（再 plan・再投入なし）。
+    assert_eq!(after.len(), 6);
+    assert_eq!(
+        after
+            .iter()
+            .map(|r| r.key.clone())
+            .collect::<BTreeSet<_>>()
+            .len(),
+        6
+    );
+    assert!(after.iter().all(|r| r.state == LedgerState::Done));
+    let kept = after.iter().find(|r| r.key == a_row.key).unwrap();
+    assert_eq!(kept.idempotency_key, a_row.idempotency_key);
+    assert_eq!(kept.reserved, a_row.reserved, "reservation kept to the end");
+    // 消費は 0 に戻らず、再起動をまたいで合算される（m0: 105 + m1: 15）。
+    let recs: Vec<Value> = text(&out.join("trials.jsonl"))
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(recs.len(), 6);
+    assert!(recs.iter().all(|r| r["tokens"] == 120), "{recs:?}");
+
+    // 試行間の分離: 各 stub は自分の識別文字列だけを持ち、他試行の履歴（と account dir の履歴）を読めない。
+    let mut tags = BTreeSet::new();
+    for d in &dirs {
+        let tag = text(&d.join("projects/p/transcript.jsonl"));
+        assert_eq!(tag, text(&d.join("memory/MEMORY.md")));
+        assert_eq!(tag.lines().count(), 1, "history of exactly one launch");
+        assert!(tag.starts_with("HIST-"), "{tag}");
+        tags.insert(tag.trim().to_string());
+        assert_eq!(
+            text(&d.join("foreign.txt")),
+            "",
+            "foreign history visible from {d:?}"
+        );
+        assert!(
+            !text(&d.join("root-listing.txt")).contains("rep"),
+            "{}",
+            text(&d.join("root-listing.txt"))
+        );
+        assert!(
+            !d.join("projects/old").exists(),
+            "account dir history reached the trial"
+        );
+        // 認証材料は read-only mount の mount 先（空 file）だけ。state dir に複製されない。
+        assert_eq!(fs::metadata(d.join(".credentials.json")).unwrap().len(), 0);
+    }
+    assert_eq!(tags.len(), 6, "{tags:?}");
+    no_secret(&[&o1, &e1, &o2, &e2]);
+    assert!(!text(&e.state_root()).contains(CRED));
+    assert!(e.project_id.len() > 4);
+}
+
+fn lossy(b: &[u8]) -> String {
+    String::from_utf8_lossy(b).into_owned()
+}
+
+/// gate を開けた A の stub が終了した（`exit.code` が出た）か。
+fn stub_exited(out: &Path) -> bool {
+    ls(&out.join("harness-state"))
+        .iter()
+        .any(|d| d.join("exit.code").exists())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn contaminated_new_trial_state_is_refused_before_any_launch() {
+    let e = env().await;
+    let out = e.out();
+    let leak = e.a_state("k2-bf-xattr-restart-campaign");
+    fs::create_dir_all(leak.join("projects/other")).unwrap();
+    fs::write(leak.join("projects/other/t.jsonl"), "HIST-OTHER-TRIAL\n").unwrap();
+    let o = e.cmd().output().unwrap();
+    assert_eq!(o.status.code(), Some(1), "{}", lossy(&o.stderr));
+    let err = lossy(&o.stderr);
+    assert!(
+        err.contains("trial-state") && err.contains("not empty"),
+        "{err}"
+    );
+    assert!(!err.contains(CRED) && !lossy(&o.stdout).contains(CRED));
+    // 起動前: 台帳も harness-state も作られず、混入は消されずそのまま残る（削除して回避しない）。
+    assert!(!out.join("ledger.jsonl").exists());
+    assert!(!out.join("harness-state").exists());
+    assert!(leak.join("projects/other/t.jsonl").is_file());
+
+    // 別の試行の identity marker を持ち込んだ state も同じく拒否される。
+    fs::remove_dir_all(leak.join("projects")).unwrap();
+    fs::write(
+        leak.join("trial-identity.json"),
+        json!({"campaign_id":"other","manifest_sha256":"x","arm":"A","case":"c","rep":1,"account_id":"lab"})
+            .to_string(),
+    )
+    .unwrap();
+    let o = e.cmd().output().unwrap();
+    assert_eq!(o.status.code(), Some(1), "{}", lossy(&o.stderr));
+    assert!(lossy(&o.stderr).contains("trial-state"));
+    assert!(!out.join("harness-state").exists());
+}

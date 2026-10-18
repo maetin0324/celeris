@@ -530,6 +530,18 @@ pub fn declaration_problems(config: &toml::Value, harness: &str) -> Vec<String> 
     out
 }
 
+/// 測定 config のファイルを読み、`harnesses` すべての検査宣言を確かめる（単独の `cap-probe --arm b|c` が投入の前に使う）。
+pub fn declaration_problems_of_file(config: &Path, harnesses: &[String]) -> Vec<String> {
+    let c = match crate::measure_env::load_toml(config) {
+        Ok(c) => c,
+        Err(e) => return vec![format!("measurement config unreadable: {e}")],
+    };
+    harnesses
+        .iter()
+        .flat_map(|h| declaration_problems(&c, h))
+        .collect()
+}
+
 /// worker の中で走らせる検査 1 件。
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WorkerCheck {

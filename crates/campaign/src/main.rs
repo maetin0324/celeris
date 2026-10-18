@@ -229,15 +229,23 @@ fn cap_probe_cli(args: &[String]) -> Result<String, String> {
                 );
             }
         };
-        let target = celeris_campaign::env_check::verify(me, &m, url, tok, &RealHost)
-            .map_err(|es| format!("not the measurement daemon: {}", es.join("; ")))?;
-        let t = celeris_campaign::curl_transport::CurlTransport::new(url, tok)?;
         let harnesses = m
             .configs
             .iter()
             .find(|x| x.id == arm)
             .map(|x| x.worker_harnesses())
             .ok_or("the manifest has no such arm")?;
+        // 投入の前に、検査分野が無 LLM の検査 harness に結ばれていることを宣言から確かめる（宣言が無ければ何も投入しない）。
+        let problems = cap_probe::declaration_problems_of_file(&me.config, &harnesses);
+        if !problems.is_empty() {
+            return Err(format!(
+                "env_failure: B/C probe not submitted: {}",
+                problems.join("; ")
+            ));
+        }
+        let target = celeris_campaign::env_check::verify(me, &m, url, tok, &RealHost)
+            .map_err(|es| format!("not the measurement daemon: {}", es.join("; ")))?;
+        let t = celeris_campaign::curl_transport::CurlTransport::new(url, tok)?;
         cap_probe::probe_worker(&env, &target, arm, case, &harnesses, &|spec| {
             cap_probe::run_in_daemon(
                 &t,

@@ -44,3 +44,9 @@ ADR: `agent-docs/adr/2026-10-18-bc-probe-daemon-env.md`。
 - `run_checks` は他の検査が落ちている（`a.missing` 非空）とき `check_bc_capabilities` を呼ばない（投入 0 件）。試験 `preflight_stops_before_any_llm_call_on_missing_capability`（A が落ちると `probe_daemon_worker` 呼出し 0 件、対照は通る）。
 - 投入前に `cap_probe::declaration_problems`（測定 config の宣言検証）。宣言なし・分野なし規則・実 harness 指し・`env_of` 欠落は投入 0 件・`env_failure`。試験 `undeclared_or_misdeclared_probe_harness_submits_nothing_and_is_env_failure`。
 - `trial_state_cli_e2e` の worker 欠落試験は A も落ちる構成なので「A の失敗のみ・B/C は投入されない」に変更。B/C 側の欠落は実 daemon 試験が担う。
+
+## 追補: 単独 cap-probe の宣言検証（phase bc-probe-cli-declaration-guard）
+
+- 指摘: `cap-probe --arm b|c`（cap-runbook §1 で人が実行する経路）は preflight と違い宣言を確かめず投入していた。
+- 修正: `cap_probe::declaration_problems_of_file` を追加し、`cap_probe_cli` の B/C 分岐が identity 照合・投入の前に arm の全 worker harness を確かめる。問題があれば投入 0 件で `env_failure: B/C probe not submitted: …`。
+- 試験: `crates/campaign/tests/cli_dryrun.rs::cap_probe_cli_refuses_undeclared_probe_harness_before_any_submission`（b・c とも）。

@@ -63,3 +63,48 @@ fn dry_run_rejects_split_mix() {
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("must not be mixed"));
 }
+
+/// 単独の `cap-probe --arm b|c` も、投入の前に測定 config の検査宣言を確かめる。宣言漏れでは env_failure で、
+/// 接続先 daemon に一切触れない（api-url は届かない port。届けば別の error になる）。
+#[test]
+fn cap_probe_cli_refuses_undeclared_probe_harness_before_any_submission() {
+    let dir = tempfile::tempdir().expect("dir");
+    let p = write_fixture(dir.path(), "dev");
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    std::fs::write(
+        dir.path().join("cap.json"),
+        json!({"schema":"celeris.campaign-cap-env/1","a":{},"worker":{}}).to_string(),
+    )
+    .expect("cap");
+    // 宣言の無い測定 config（genre なしの規則が実 harness に当たり得る）。
+    std::fs::write(
+        dir.path().join("measure.toml"),
+        "[harness_selection]\nrules = [{ harness = \"h\", required_capabilities = [] }]\n[harnesses.h]\nkind = \"claude_code\"\n",
+    )
+    .expect("cfg");
+    for arm in ["b", "c"] {
+        let out =
+            Command::new(std::env::var("CARGO_BIN_EXE_celeris-campaign").expect("binary path"))
+                .args(["cap-probe", "--case", "k0-fixture-control", "--arm", arm])
+                .arg("--cap-env")
+                .arg(dir.path().join("cap.json"))
+                .arg("--cases-root")
+                .arg(root.join("cases"))
+                .arg("--grader-root")
+                .arg(root.join("fixtures/grader-private"))
+                .arg("--manifest")
+                .arg(&p)
+                .arg("--measure-config")
+                .arg(dir.path().join("measure.toml"))
+                .args(["--daemon-pid", "1", "--api-url", "http://127.0.0.1:1"])
+                .args(["--token-env", "NO_SUCH_TOKEN_ENV"])
+                .output()
+                .expect("run");
+        assert!(!out.status.success(), "{arm}");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            err.contains("env_failure") && err.contains("B/C probe not submitted"),
+            "{arm}: {err}"
+        );
+    }
+}

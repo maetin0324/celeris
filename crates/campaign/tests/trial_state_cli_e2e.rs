@@ -3,8 +3,7 @@
 //!   loopback の TCP で serve し、案件・アカウントは実 router の `POST /projects` と `[accounts] claude_dir` で作る。
 //! - A の実行ファイルは履歴（transcript・memory）に試行固有の文字列を書く stub。bwrap の中で動く実 process。
 //! - CLI は SIGSTOP → SIGKILL で止め、同じ引数で再起動する。時間は gate file（state dir 内）と出来事待ちで進める。
-#[path = "../../task-api/tests/common/mod.rs"]
-mod api_common;
+mod daemon_identity;
 mod preflight_setup;
 
 use std::{
@@ -16,10 +15,13 @@ use std::{
     time::{Duration, Instant},
 };
 
-use api_common::{EnvOptions, TOKEN, TestEnv, post_admin, send};
 use celeris_campaign::{
     ledger::{Ledger, LedgerRow, LedgerState},
     manifest::CampaignManifest,
+};
+use daemon_identity::{
+    api_common::{EnvOptions, TOKEN, TestEnv, post_admin, send, settings},
+    daemon_config_view,
 };
 use preflight_setup::*;
 use serde_json::{Value, json};
@@ -80,12 +82,29 @@ async fn env() -> Env {
     // 他の試行から見えてはならない、アカウント dir 側の履歴。
     fs::create_dir_all(lab.join("projects/old")).unwrap();
     fs::write(lab.join("projects/old/t.jsonl"), "HIST-ACCOUNT-DIR-OLD\n").unwrap();
-    let api = TestEnv::with(EnvOptions {
+    let options = || EnvOptions {
         token: Some(TOKEN.into()),
         accounts_root: Some(acct.path().to_path_buf()),
         max_runs_per_account: 2,
         ..Default::default()
-    });
+    };
+    let mut api = TestEnv::with(options());
+    // 測定 config で起動した daemon として `GET /config` に答える（env-check の接続先照合）。
+    let mut st = settings(
+        &api.db_path,
+        &api.workspace_root,
+        &api.docs_repo_root,
+        &api.knowledge_root,
+        options(),
+    );
+    // 測定 config の `[api] listen` を実際に serve する loopback の port に合わせる。
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let measure = current_config();
+    let text = fs::read_to_string(&measure).unwrap();
+    fs::write(&measure, text.replace("127.0.0.1:7701", &addr)).unwrap();
+    st.config_view = daemon_config_view(&measure, MEASURE_RELEASE);
+    api.state = task_api::ApiState::new(st, api.daemon_tx.subscribe()).unwrap();
     let created = send(
         &api.router(),
         post_admin(
@@ -105,8 +124,7 @@ async fn env() -> Env {
     )
     .await;
     assert_eq!(repo.status.as_u16(), 201, "{}", repo.text());
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let url = format!("http://{}", listener.local_addr().unwrap());
+    let url = format!("http://{addr}");
     let state = api.state.clone();
     tokio::spawn(async move {
         let _ = task_api::serve_with_listener(listener, state, std::future::pending()).await;

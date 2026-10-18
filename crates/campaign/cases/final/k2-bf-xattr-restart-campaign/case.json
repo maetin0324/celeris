@@ -119,6 +119,33 @@
       "expect_stdout": "git version"
     },
     {
+      "id": "rustc",
+      "kind": "compiler",
+      "argv": [
+        "rustc",
+        "--version"
+      ],
+      "expect_stdout": "rustc 1."
+    },
+    {
+      "id": "cargo",
+      "kind": "build",
+      "argv": [
+        "cargo",
+        "--version"
+      ],
+      "expect_stdout": "cargo 1."
+    },
+    {
+      "id": "min-build-cargo",
+      "kind": "build",
+      "argv": [
+        "sh",
+        "-c",
+        "rm -rf /tmp/cg && mkdir -p /tmp/cg/src && cd /tmp/cg && printf '[package]\\nname = \"t\"\\nversion = \"0.1.0\"\\nedition = \"2021\"\\n' > Cargo.toml && printf 'fn main(){}\\n' > src/main.rs && cargo build --release --offline && ./target/release/t"
+      ]
+    },
+    {
       "id": "ucx-pkg",
       "kind": "library",
       "argv": [

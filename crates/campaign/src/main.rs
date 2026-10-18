@@ -203,15 +203,28 @@ fn cap_probe_cli(args: &[String]) -> Result<String, String> {
             .collect();
         return serde_json::to_string_pretty(&v).map_err(|e| e.to_string());
     }
-    let rep = cap_probe::probe(
-        &sb,
-        arm,
-        &ws,
-        case,
-        &cap_probe::ProcessProbeRunner {
-            timeout: std::time::Duration::from_secs(300),
-        },
-    );
+    let rep = if arm == ConfigId::A {
+        cap_probe::probe(
+            &sb,
+            arm,
+            &ws,
+            case,
+            &cap_probe::ProcessProbeRunner {
+                timeout: std::time::Duration::from_secs(300),
+            },
+        )
+    } else {
+        // B/C は A の sandbox ではなく、worker 環境（CapEnv.worker）そのものを確かめる。
+        cap_probe::probe_worker(
+            &env,
+            arm,
+            &ws,
+            case,
+            &cap_probe::ProcessWorkerHost {
+                timeout: std::time::Duration::from_secs(300),
+            },
+        )
+    };
     let s = serde_json::to_string_pretty(&rep).map_err(|e| e.to_string())?;
     if rep.ok { Ok(s) } else { Err(s) }
 }

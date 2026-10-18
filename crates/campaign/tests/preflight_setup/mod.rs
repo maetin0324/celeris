@@ -114,7 +114,30 @@ impl celeris_campaign::cap_probe::ProbeRunner for OkRunner {
     fn run(&self, _: &str, _: &[String]) -> celeris_campaign::cap_probe::Ran {
         celeris_campaign::cap_probe::Ran::Exit {
             code: 0,
-            stdout: "cmake version git version Python 3".into(),
+            stdout: "cmake version git version Python 3 rustc 1.80 cargo 1.80".into(),
+        }
+    }
+}
+
+/// worker 環境の全能力が通る stub（実 worker 環境の実走は cap-runbook）。
+pub struct OkWorker;
+
+impl celeris_campaign::cap_probe::WorkerHost for OkWorker {
+    fn socket_present(&self, _: &Path) -> bool {
+        true
+    }
+    fn dir_present(&self, _: &Path) -> bool {
+        true
+    }
+    fn run(
+        &self,
+        _: &[(String, String)],
+        _: &[String],
+        _: &Path,
+    ) -> celeris_campaign::cap_probe::Ran {
+        celeris_campaign::cap_probe::Ran::Exit {
+            code: 0,
+            stdout: "cmake version git version Python 3 rustc 1.80 cargo 1.80".into(),
         }
     }
 }

@@ -164,8 +164,16 @@ pub struct ProcessProbeRunner {
 
 impl ProbeRunner for ProcessProbeRunner {
     fn run(&self, program: &str, args: &[String]) -> Ran {
-        let mut child = match Command::new(program)
-            .args(args)
+        let mut c = Command::new(program);
+        c.args(args);
+        self.run_command(c)
+    }
+}
+
+impl ProcessProbeRunner {
+    pub fn run_command(&self, mut c: Command) -> Ran {
+        let program = c.get_program().to_string_lossy().into_owned();
+        let mut child = match c
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -318,16 +326,7 @@ pub fn probe(
                 argv: Vec::new(),
             },
             Ok((prog, args)) => {
-                let (ok, detail) = match runner.run(&prog, &args) {
-                    Ran::Unrunnable(e) => (false, format!("sandbox did not run: {e}")),
-                    Ran::Exit { code, .. } if code != 0 => (false, format!("exit {code}")),
-                    Ran::Exit { stdout, .. } => match &cap.expect_stdout {
-                        Some(x) if !stdout.contains(x.as_str()) => {
-                            (false, format!("stdout lacks {x:?}"))
-                        }
-                        _ => (true, "ok".into()),
-                    },
-                };
+                let (ok, detail) = judge(cap, runner.run(&prog, &args));
                 CapResult {
                     id: cap.id.clone(),
                     ok,
@@ -337,6 +336,136 @@ pub fn probe(
             }
         };
         results.push(r);
+    }
+    let ok = results.iter().all(|r| r.ok);
+    ProbeReport {
+        schema: CAP_REPORT_SCHEMA,
+        case: case.id.clone(),
+        arm,
+        ok,
+        failure_class: (!ok).then_some(ENV_FAILURE),
+        paid_calls_made: 0,
+        results,
+    }
+}
+
+/// 1 件の実行結果を能力の期待（exit 0・`expect_stdout`）に照らして判定する（A の sandbox 経路と worker 経路で共通）。
+fn judge(cap: &Capability, ran: Ran) -> (bool, String) {
+    match ran {
+        Ran::Unrunnable(e) => (false, format!("did not run: {e}")),
+        Ran::Exit { code, .. } if code != 0 => (false, format!("exit {code}")),
+        Ran::Exit { stdout, .. } => match &cap.expect_stdout {
+            Some(x) if !stdout.contains(x.as_str()) => (false, format!("stdout lacks {x:?}")),
+            _ => (true, "ok".into()),
+        },
+    }
+}
+
+/// B/C を実行する worker 環境そのもの（測定専用 daemon が起動する worker process の環境）。A の sandbox は通さない。
+pub trait WorkerHost {
+    /// worker 環境から見える承認済み接続 socket か。
+    fn socket_present(&self, path: &Path) -> bool;
+    /// worker 環境から見える toolchain / library の固定 path か。
+    fn dir_present(&self, path: &Path) -> bool;
+    /// worker が起動する環境（`env` だけを持つ空環境）で `argv` を走らせる。
+    fn run(&self, env: &[(String, String)], argv: &[String], workspace: &Path) -> Ran;
+}
+
+/// 実 host 上の worker 環境。`env_clear` した process に worker 設定の env だけを渡す。
+pub struct ProcessWorkerHost {
+    pub timeout: Duration,
+}
+
+impl WorkerHost for ProcessWorkerHost {
+    fn socket_present(&self, path: &Path) -> bool {
+        use std::os::unix::fs::FileTypeExt;
+        std::fs::metadata(path).is_ok_and(|m| m.file_type().is_socket())
+    }
+    fn dir_present(&self, path: &Path) -> bool {
+        path.is_dir()
+    }
+    fn run(&self, env: &[(String, String)], argv: &[String], workspace: &Path) -> Ran {
+        let Some((prog, rest)) = argv.split_first() else {
+            return Ran::Unrunnable("empty argv".into());
+        };
+        let path = env
+            .iter()
+            .rfind(|(k, _)| k == "PATH")
+            .map(|(_, v)| std::ffi::OsString::from(v));
+        let real = match crate::preflight::resolve_executable(Path::new(prog), path.as_deref()) {
+            Ok(r) => r,
+            Err(e) => return Ran::Unrunnable(e),
+        };
+        let mut c = Command::new(real);
+        c.args(rest).env_clear().current_dir(workspace);
+        c.envs(env.iter().map(|(k, v)| (k, v)));
+        ProcessProbeRunner {
+            timeout: self.timeout,
+        }
+        .run_command(c)
+    }
+}
+
+/// B/C: 実 worker 環境（`CapEnv.worker`）で必要能力を確かめる。A の probe 結果の arm 付け替えではなく、
+/// worker が持つべき socket・固定 path を worker 側で確認し、能力 command を worker の環境で走らせる。
+pub fn probe_worker(
+    env: &CapEnv,
+    arm: ConfigId,
+    workspace: &Path,
+    case: &Case,
+    host: &dyn WorkerHost,
+) -> ProbeReport {
+    let mut results = Vec::new();
+    if case.required_capabilities.is_empty() {
+        results.push(CapResult {
+            id: "required_capabilities".into(),
+            ok: false,
+            detail: "the case fixes no required_capabilities".into(),
+            argv: Vec::new(),
+        });
+    }
+    let t = &env.worker;
+    for s in &t.sockets {
+        let ok = host.socket_present(s);
+        results.push(CapResult {
+            id: format!("worker-socket:{}", s.display()),
+            ok,
+            detail: if ok {
+                "ok"
+            } else {
+                "approved socket is not present in the worker environment"
+            }
+            .into(),
+            argv: Vec::new(),
+        });
+    }
+    for m in &t.ro_mounts {
+        let ok = host.dir_present(m);
+        results.push(CapResult {
+            id: format!("worker-path:{}", m.display()),
+            ok,
+            detail: if ok {
+                "ok"
+            } else {
+                "toolchain path is not present in the worker environment"
+            }
+            .into(),
+            argv: Vec::new(),
+        });
+    }
+    let mut wenv: Vec<(String, String)> = vec![
+        ("PATH".into(), "/usr/local/bin:/usr/bin:/bin".into()),
+        ("HOME".into(), "/tmp/home".into()),
+    ];
+    wenv.extend(t.env.iter().cloned());
+    for cap in &case.required_capabilities {
+        let (ok, detail) = judge(cap, host.run(&wenv, &cap.argv, workspace));
+        results.push(CapResult {
+            id: cap.id.clone(),
+            ok,
+            detail,
+            argv: cap.argv.clone(),
+        });
     }
     let ok = results.iter().all(|r| r.ok);
     ProbeReport {

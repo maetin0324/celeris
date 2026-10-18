@@ -255,7 +255,8 @@ done
 exec "$@"
 "#;
 
-const CAP_STUB: &str = "#!/bin/sh\necho 'cmake version git version Python 3'\n";
+const CAP_STUB: &str =
+    "#!/bin/sh\necho 'cmake version git version Python 3 rustc 1.80 cargo 1.80'\n";
 
 struct Fx {
     s: Setup,
@@ -467,6 +468,8 @@ fn fixture() -> Fx {
         "sh",
         "ssh",
         "python3",
+        "rustc",
+        "cargo",
     ] {
         write_exec(&tools.join(t), CAP_STUB);
     }

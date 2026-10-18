@@ -30,8 +30,9 @@ done
 cargo run -p celeris-campaign -- cap-probe --case k4-cmp4-validity-analysis --arm a --cap-env $WORK/cap-env.json
 # argv だけ確認（実行しない）: --dry-argv
 ```
-期待: 各 arm exit 0、JSON `ok: true`、K2 の 10 能力（cc, c++, cmake, git, ucx-pkg, min-build-ucx, min-build-cmake, autotools, libclang, sirius-link）が全て ok。K4（python3 と stdlib）も ok。
-A と B/C の probe argv（`--dry-argv`）が同一であること（B/C は A と同じ能力を与える設計）。
+期待: 各 arm exit 0、JSON `ok: true`、K2 の能力（cc, c++, cmake, git, rustc, cargo, min-build-cargo, ucx-pkg, min-build-ucx, min-build-cmake, autotools, libclang, sirius-link）が全て ok。K4（python3 と stdlib）も ok。
+A は sandbox（`Sandbox::wrap_resolved`）、B/C は worker 環境（`CapEnv.worker`: 空環境＋worker の env、承認済み socket・固定 path の存在確認）で同じ必要能力を走らせる。B/C は A の結果の arm 付け替えではない。`--dry-argv` は A の sandbox argv のみ。
+**K2 のビルド場所**: `visible_command`（`cargo test --release --features transport-locusta --lib`）は**ローカル host**（A は sandbox 内、B/C は worker 環境）でビルドする。クラスタ（sirius）へは管理接続 socket 経由の接続確認のみで、ビルドしない。そのため `rustc`（`rustc 1.` 版）・`cargo`（`cargo 1.` 版）・`min-build-cargo`（最小 crate の `cargo build --release --offline` と実行）を必要能力に含める。Rust 不在/不適合は env_failure で、最初の測定用 LLM 呼出しの前（preflight）に止まる。
 不足時: exit 非 0、`failure_class: env_failure`。この場合は LLM 呼出し前に停止（preflight の `capability` check）。ro_mounts / 接続 socket を足して再実行し、sandbox を緩めて通さない。
 
 ## 2. K2 実 asset の組立・ビルド・正負例（verify-real-assets.sh）

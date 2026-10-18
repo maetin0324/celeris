@@ -74,7 +74,8 @@ echo '{"type":"assistant","message":{"id":"m1","usage":{"input_tokens":10,"outpu
 "#;
 
 /// 必要能力 probe 用の道具の stub（どの expect_stdout も満たす）。
-const CAP_STUB: &str = "#!/bin/sh\necho 'cmake version git version Python 3'\n";
+const CAP_STUB: &str =
+    "#!/bin/sh\necho 'cmake version git version Python 3 rustc 1.80 cargo 1.80'\n";
 
 async fn env() -> Env {
     let s = setup();
@@ -152,6 +153,8 @@ async fn env() -> Env {
         "sh",
         "ssh",
         "python3",
+        "rustc",
+        "cargo",
     ] {
         write_executable(&tools.join(t), CAP_STUB);
     }

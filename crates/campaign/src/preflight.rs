@@ -51,6 +51,13 @@ pub trait Host {
     /// A の隔離（bwrap）がこの host で実際に動くか。
     fn sandbox_usable(&self) -> Result<(), String>;
     /// cap-probe の実行器。既定は実 bwrap（試験は stub を返す）。
+    /// B/C を実行する worker 環境（A の sandbox ではない）。試験は stub を返す。
+    fn worker_host(&self) -> Box<dyn crate::cap_probe::WorkerHost> {
+        Box::new(crate::cap_probe::ProcessWorkerHost {
+            timeout: std::time::Duration::from_secs(120),
+        })
+    }
+
     fn probe_runner(&self) -> Box<dyn crate::cap_probe::ProbeRunner> {
         Box::new(crate::cap_probe::ProcessProbeRunner {
             timeout: std::time::Duration::from_secs(300),
@@ -692,8 +699,20 @@ fn check_capabilities(
         return a.miss("capability", e);
     }
     let runner = host.probe_runner();
+    let worker = host.worker_host();
     for c in cases {
         for cfg_id in m.configs.iter().map(|x| x.id) {
+            if cfg_id != ConfigId::A {
+                let rep =
+                    crate::cap_probe::probe_worker(&env, cfg_id, &ws, &c.case, worker.as_ref());
+                for r in rep.results.iter().filter(|r| !r.ok) {
+                    a.miss(
+                        "capability",
+                        format!("{} arm {:?}: {}: {}", c.case.id, cfg_id, r.id, r.detail),
+                    );
+                }
+                continue;
+            }
             let sb = crate::cap_probe::sandbox_for(
                 &env,
                 cfg_id,

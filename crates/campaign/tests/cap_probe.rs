@@ -258,6 +258,12 @@ impl Host for StubHost {
             Box::new(FailRunner)
         }
     }
+    fn worker_host(&self) -> Box<dyn celeris_campaign::cap_probe::WorkerHost> {
+        Box::new(WorkerStub {
+            sockets: self.0,
+            rust: self.0,
+        })
+    }
 }
 
 fn capability_missing(
@@ -297,4 +303,126 @@ fn preflight_stops_before_any_llm_call_on_missing_capability() {
     let (miss, class) = capability_missing(&inp, true);
     assert!(miss.iter().any(|m| m.contains("--cap-env is required")));
     assert_eq!(class, Some("env_failure"));
+}
+
+/// B/C は A の sandbox ではなく worker 環境で確かめる。A が正常でも worker から socket / Rust を外すと、
+/// その arm だけが preflight（最初の LLM 呼出しの前）で env_failure になる。
+struct WorkerStub {
+    sockets: bool,
+    rust: bool,
+}
+impl celeris_campaign::cap_probe::WorkerHost for WorkerStub {
+    fn socket_present(&self, _: &Path) -> bool {
+        self.sockets
+    }
+    fn dir_present(&self, _: &Path) -> bool {
+        true
+    }
+    fn run(&self, env: &[(String, String)], argv: &[String], _: &Path) -> Ran {
+        assert!(
+            env.iter().any(|(k, _)| k == "PATH"),
+            "worker env is built explicitly"
+        );
+        if !self.rust && argv.join(" ").contains("cargo") || !self.rust && argv[0] == "rustc" {
+            return Ran::Exit {
+                code: 127,
+                stdout: String::new(),
+            };
+        }
+        Ran::Exit {
+            code: 0,
+            stdout: "cmake version git version Python 3 rustc 1.80 cargo 1.80".into(),
+        }
+    }
+}
+struct WorkerHostStub(StubHost, std::sync::Arc<WorkerStub>);
+struct Shared(std::sync::Arc<WorkerStub>);
+impl celeris_campaign::cap_probe::WorkerHost for Shared {
+    fn socket_present(&self, p: &Path) -> bool {
+        self.0.socket_present(p)
+    }
+    fn dir_present(&self, p: &Path) -> bool {
+        self.0.dir_present(p)
+    }
+    fn run(&self, e: &[(String, String)], a: &[String], w: &Path) -> Ran {
+        self.0.run(e, a, w)
+    }
+}
+impl Host for WorkerHostStub {
+    fn env_nonempty(&self, n: &str) -> bool {
+        self.0.env_nonempty(n)
+    }
+    fn resolve_program(&self, p: &Path) -> Result<ResolvedProgram, String> {
+        self.0.resolve_program(p)
+    }
+    fn api_get(&self, a: &str, t: &str, p: &str) -> Result<Value, String> {
+        self.0.api_get(a, t, p)
+    }
+    fn sandbox_usable(&self) -> Result<(), String> {
+        Ok(())
+    }
+    fn probe_runner(&self) -> Box<dyn ProbeRunner> {
+        Box::new(OkRunner) // A は正常
+    }
+    fn worker_host(&self) -> Box<dyn celeris_campaign::cap_probe::WorkerHost> {
+        Box::new(Shared(self.1.clone()))
+    }
+}
+
+#[test]
+fn worker_missing_socket_or_rust_is_env_failure_for_that_arm_only() {
+    use std::sync::Arc;
+    let s = setup();
+    // 承認済み socket を worker 環境に宣言する（B/C が確認すべき接続）
+    let tc = json!({"ro_mounts":[],"sockets":["/run/approved/mgmt.sock"],"env":[]});
+    std::fs::write(
+        s.inp.cap_env.as_ref().unwrap(),
+        json!({"schema":"celeris.campaign-cap-env/1","a":tc,"worker":tc}).to_string(),
+    )
+    .unwrap();
+    let run = |sockets, rust| {
+        let h = WorkerHostStub(StubHost(true), Arc::new(WorkerStub { sockets, rust }));
+        let r = check(&s.inp, &h);
+        let m: Vec<String> = r
+            .missing
+            .iter()
+            .filter(|m| m.check == "capability")
+            .map(|m| m.detail.clone())
+            .collect();
+        (m, r.failure_class)
+    };
+    let (m, class) = run(true, true);
+    assert!(m.is_empty(), "{m:?}");
+    assert_eq!(class, None);
+    let (m, class) = run(false, true);
+    assert_eq!(class, Some("env_failure"));
+    assert!(
+        m.iter()
+            .any(|x| x.contains("arm B") && x.contains("worker-socket")),
+        "{m:?}"
+    );
+    assert!(
+        m.iter().all(|x| !x.contains("arm A")),
+        "A stays healthy: {m:?}"
+    );
+    let (m, class) = run(true, false);
+    assert_eq!(class, Some("env_failure"));
+    for id in ["rustc", "cargo", "min-build-cargo"] {
+        assert!(
+            m.iter().any(|x| x.contains("arm C") && x.contains(id)),
+            "{id}: {m:?}"
+        );
+    }
+    let err = gate(
+        &s.inp,
+        &WorkerHostStub(
+            StubHost(true),
+            Arc::new(WorkerStub {
+                sockets: true,
+                rust: false,
+            }),
+        ),
+    )
+    .unwrap_err();
+    assert!(err.contains("no paid execution or task was started"));
 }

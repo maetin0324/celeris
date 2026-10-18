@@ -74,7 +74,11 @@ fn spawn_standin_dispatcher(
         let store = SqliteStore::open(&db).unwrap();
         while !stop.load(Ordering::SeqCst) {
             for t in store.list(Some(Status::Ready)).unwrap() {
-                if t.genre.as_deref() != Some(celeris_campaign::cap_probe::PROBE_GENRE) {
+                if !t
+                    .genre
+                    .as_deref()
+                    .is_some_and(|g| g.starts_with(celeris_campaign::cap_probe::PROBE_GENRE_PREFIX))
+                {
                     continue;
                 }
                 store

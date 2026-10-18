@@ -571,6 +571,18 @@ impl Config {
                     )));
                 }
             }
+            if let Some(base) = &harness.env_of {
+                if harness.kind != "fake" {
+                    return Err(ConfigError::Invalid(format!(
+                        "[harnesses.{id}] env_of is only supported for kind = \"fake\""
+                    )));
+                }
+                if !self.harness_declarations.contains_key(base) {
+                    return Err(ConfigError::Invalid(format!(
+                        "[harnesses.{id}] env_of {base:?} is not a declared harness"
+                    )));
+                }
+            }
             if harness.kind.replace('_', "-") == task_worker::PiAdapter::ID {
                 if harness.extensions.is_empty() || harness.tools.is_empty() {
                     return Err(ConfigError::Invalid(format!(

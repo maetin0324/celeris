@@ -477,9 +477,14 @@ pub struct DaemonRef {
 }
 
 pub const WORKER_PROBE_SCHEMA: &str = "celeris.campaign-cap-worker-probe/1";
-/// 検査 task の分野。測定専用 daemon の config に、この分野を無 LLM の検査 worker（`celeris-campaign cap-worker`）へ
-/// 結ぶ harness の宣言が要る（cap-runbook §1）。
-pub const PROBE_GENRE: &str = "cap-probe";
+/// 検査 task の分野の接頭辞。検査する harness `<h>` の task は分野 `cap-probe-<h>`。測定専用 daemon の config に、
+/// この分野を `env_of = "<h>"` つきの fake harness（無 LLM の検査 worker `celeris-campaign cap-worker`）へ結ぶ宣言が要る
+/// （cap-runbook §1）。worker は `<h>` の adapter 環境で起動する。
+pub const PROBE_GENRE_PREFIX: &str = "cap-probe-";
+
+pub fn probe_genre(harness: &str) -> String {
+    format!("{PROBE_GENRE_PREFIX}{harness}")
+}
 
 /// worker の中で走らせる検査 1 件。
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -495,6 +500,8 @@ pub struct WorkerCheck {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WorkerProbeSpec {
     pub schema: String,
+    /// 検査する arm の worker harness（`run_harnesses` の 1 つ）。検査 task はこの harness の adapter 環境で起動する。
+    pub harness: String,
     pub checks: Vec<WorkerCheck>,
     pub expect_env: Vec<(String, String)>,
 }
@@ -520,7 +527,7 @@ fn sh_quote(s: &str) -> String {
 
 /// worker 子 process の中で走らせる検査。必要能力は `case.required_capabilities` そのまま、
 /// それに toolchain の mount（`test -d`）と socket（`test -S`）の存在確認を足す。
-pub fn worker_spec(expected: &Toolchain, case: &Case) -> WorkerProbeSpec {
+pub fn worker_spec(expected: &Toolchain, case: &Case, harness: &str) -> WorkerProbeSpec {
     let mut checks = Vec::new();
     for m in &expected.ro_mounts {
         let p = m.to_string_lossy();
@@ -548,6 +555,7 @@ pub fn worker_spec(expected: &Toolchain, case: &Case) -> WorkerProbeSpec {
     }
     WorkerProbeSpec {
         schema: WORKER_PROBE_SCHEMA.into(),
+        harness: harness.to_string(),
         checks,
         expect_env: expected.env.clone(),
     }
@@ -565,14 +573,16 @@ fn fail(id: &str, detail: &str) -> CapResult {
 /// 検査 task を測定専用 daemon に走らせる関数（実体は `Host::probe_daemon_worker`。通常の task 投入経路）。
 pub type RunInDaemon<'a> = dyn Fn(&WorkerProbeSpec) -> Result<WorkerProbeRun, String> + 'a;
 
-/// B/C の能力 probe。検査は測定専用 daemon の dispatcher が通常どおり worker を起こす経路（adapter env・run ごとの env・
-/// 権限・cwd の組立を含む）で走る。この CLI の環境も `/proc/<pid>/environ` も使わない。`CapEnv.worker` は worker の
-/// 環境と照合する期待値で、配送ではない。不足は arm 別の `env_failure`（LLM 呼出し前）。
+/// B/C の能力 probe。検査は測定専用 daemon の dispatcher が通常どおり worker を起こす経路で走る。arm の worker が使う
+/// harness（`harnesses` = `run_harnesses`）ごとに 1 task を投入し、その harness の adapter 環境（`env_of`）・run ごとの env・
+/// cwd の組立のもとで検査する。この CLI の環境も `/proc/<pid>/environ` も使わない。`CapEnv.worker` は worker の
+/// 環境と照合する期待値で、配送ではない。不足は arm 別の `env_failure`（LLM 呼出し前）。結果 id は `<harness>/<check>`。
 pub fn probe_worker(
     env: &CapEnv,
     target: &DaemonRef,
     arm: ConfigId,
     case: &Case,
+    harnesses: &[String],
     run: &RunInDaemon,
 ) -> ProbeReport {
     let mut results = Vec::new();
@@ -582,38 +592,48 @@ pub fn probe_worker(
             "the case fixes no required_capabilities",
         ));
     }
-    let spec = worker_spec(&env.worker, case);
+    if harnesses.is_empty() {
+        results.push(fail("harness", "the arm fixes no worker harness"));
+    }
     let mut daemon = target.clone();
-    match run(&spec) {
-        Err(e) => results.push(fail(
-            "worker-run",
-            &format!("probe run did not complete: {e}"),
-        )),
-        Ok(done) => {
-            daemon.probe_task_id = Some(done.task_id);
-            let want: Vec<&str> = std::iter::once("worker-env")
-                .chain(spec.checks.iter().map(|c| c.id.as_str()))
-                .collect();
-            for r in &done.results {
-                if !want.contains(&r.id.as_str()) {
-                    results.push(fail(&r.id, "unexpected result id from the worker"));
-                } else if !r.ok {
-                    results.push(fail(&r.id, &r.detail));
-                } else {
-                    results.push(CapResult {
-                        id: r.id.clone(),
-                        ok: true,
-                        detail: r.detail.clone(),
-                        argv: Vec::new(),
-                    });
+    let mut task_ids = Vec::new();
+    for h in harnesses {
+        let spec = worker_spec(&env.worker, case, h);
+        let at = |id: &str| format!("{h}/{id}");
+        match run(&spec) {
+            Err(e) => results.push(fail(
+                &at("worker-run"),
+                &format!("probe run did not complete: {e}"),
+            )),
+            Ok(done) => {
+                task_ids.push(done.task_id);
+                let want: Vec<&str> = std::iter::once("worker-env")
+                    .chain(spec.checks.iter().map(|c| c.id.as_str()))
+                    .collect();
+                for r in &done.results {
+                    if !want.contains(&r.id.as_str()) {
+                        results.push(fail(&at(&r.id), "unexpected result id from the worker"));
+                    } else if !r.ok {
+                        results.push(fail(&at(&r.id), &r.detail));
+                    } else {
+                        results.push(CapResult {
+                            id: at(&r.id),
+                            ok: true,
+                            detail: r.detail.clone(),
+                            argv: Vec::new(),
+                        });
+                    }
                 }
-            }
-            for c in &spec.checks {
-                if !done.results.iter().any(|r| r.id == c.id) {
-                    results.push(fail(&c.id, "no result returned by the worker"));
+                for c in &spec.checks {
+                    if !done.results.iter().any(|r| r.id == c.id) {
+                        results.push(fail(&at(&c.id), "no result returned by the worker"));
+                    }
                 }
             }
         }
+    }
+    if !task_ids.is_empty() {
+        daemon.probe_task_id = Some(task_ids.join(","));
     }
     let ok = results.iter().all(|r| r.ok);
     ProbeReport {
@@ -703,8 +723,8 @@ pub fn run_spec(spec: &WorkerProbeSpec, cwd: &Path) -> Vec<WorkerCheckResult> {
     out
 }
 
-/// `celeris-campaign cap-worker`: 測定専用 daemon の `[adapters.fake] command` として起動される無 LLM の検査 worker。
-/// stdin の `run` メッセージの task objective から検査を読み、daemon が組んだ環境のまま走らせ、結果を `done` の
+/// `celeris-campaign cap-worker`: 測定専用 daemon の probe 用 fake harness（`command`・`env_of`）として起動される無 LLM の検査 worker。
+/// stdin の `run` メッセージの task objective から検査を読み、daemon が（検査対象 harness の adapter 環境で）組んだ環境のまま走らせ、結果を `done` の
 /// summary に 1 行で返す。環境変数は読み出さず（期待値との照合だけ）、返さない。
 pub fn cap_worker_main() -> Result<(), String> {
     let mut line = String::new();
@@ -743,7 +763,7 @@ pub fn run_in_daemon(
     let body = json!({
         "title": "B/C capability probe (no LLM)",
         "objective": objective,
-        "genre": PROBE_GENRE,
+        "genre": probe_genre(&spec.harness),
         "acceptance": [{"type": "command", "cmd": "true"}],
         "max_retries": 0,
         "max_wall_secs": wait.as_secs().max(10),

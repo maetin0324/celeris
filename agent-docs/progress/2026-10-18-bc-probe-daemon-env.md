@@ -28,3 +28,14 @@ ADR: `agent-docs/adr/2026-10-18-bc-probe-daemon-env.md`。
 
 ## 未解決・提案
 - 実の測定専用 daemon（launcher 起動）での再実走は人の手順（cap-runbook §1）。測定 config に `cap-probe` harness の宣言が要る（本番の config 書き換えは無い）。
+
+## 追補（差し戻し: 実 B/C harness の adapter 環境を通す）
+差し戻し理由: 検査が fake harness の adapter env で走り、B/C の実 harness（claude_code/codex/pi）の adapter env を通らなかった。
+- `[harnesses.<id>] env_of = "<実 harness>"`（kind=fake のみ）を追加。`daemon/adapters.rs::declared_env` が実 adapter と検査 harness の
+  環境を同じ関数で組む。config 検証（宣言済み harness・kind=fake）。
+- 検査 task は arm の `run_harnesses`（`Config::worker_harnesses`）ごとに分野 `cap-probe-<h>` で投入。結果 id は `<h>/<check>`、
+  `probe_task_id` は task id のカンマ区切り。
+- 試験 `probe_runs_under_each_real_harness_adapter_env`（実 celeris binary）: adapter env が toolchain を足す→その harness だけ通る、
+  落とす→daemon の process 環境が正しくても env_failure。
+- 通らないもの（ADR D6）: harness 自体の command・permission_mode・container 化、試行の task-template 文脈。
+- 本番移行: 測定 config に cap-runbook §1 の harness 宣言を足す（本番 config の変更なし）。

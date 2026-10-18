@@ -27,25 +27,27 @@ worker sandbox は userns が使えないため、実 A sandbox 内の実走と�
 ## 1. cap-probe: A は実 A sandbox、B/C は測定専用 daemon の環境（ADR 2026-10-18-bc-probe-daemon-env）
 A と B/C は**別の経路**を検査する。B/C は A と同じ sandbox / 同じ argv ではない。
 - A: A が実際に使う sandbox（`Sandbox::wrap_resolved`）に probe argv を包んで走らせる。
-- B/C: identity 照合に通った測定専用 daemon に、無 LLM の検査 task（genre `cap-probe`）を通常の `POST /api/v1/tasks` で投入する。daemon の dispatcher が通常どおり worker process（`celeris-campaign cap-worker`）を起こし、その環境（daemon の環境 + adapter env + run ごとの env・権限・cwd）の中で検査が走る。この CLI の環境も `/proc/<pid>/environ` も使わない。worker は検査の定義（task の objective）を読み、能力の有無と識別だけを `worker_finished` の outcome に返す（環境変数の値・stdout は返さない・記録しない）。daemon 側の PATH・変数・ro_mounts（`test -d`）・socket（`test -S`）・必要能力の欠落は、該当 arm の `env_failure`（LLM 呼出し前）。報告の `daemon`（pid・instance_id・release・`probe_task_id`）が検査先の識別。検査 task は測定 daemon の task 一覧に残る（試行 task ではない）。他の検査が落ちている preflight では投入しない。
+- B/C: identity 照合に通った測定専用 daemon に、無 LLM の検査 task を arm の worker harness（manifest の `routing.run_harnesses`）ごとに分野 `cap-probe-<harness>` で通常の `POST /api/v1/tasks` へ投入する。daemon の dispatcher が通常どおり worker process（`celeris-campaign cap-worker`）を起こし、その環境（daemon の環境 + **その harness の adapter env**（`env_of`）+ run ごとの env・権限・cwd）の中で検査が走る。この CLI の環境も `/proc/<pid>/environ` も使わない。worker は検査の定義（task の objective）を読み、能力の有無と識別だけを `worker_finished` の outcome に返す（環境変数の値・stdout は返さない・記録しない）。daemon 側の PATH・変数・ro_mounts（`test -d`）・socket（`test -S`）・必要能力の欠落は、該当 arm の `env_failure`（LLM 呼出し前）。報告の `daemon`（pid・instance_id・release・`probe_task_id`）が検査先の識別。検査 task は測定 daemon の task 一覧に残る（試行 task ではない）。他の検査が落ちている preflight では投入しない。
 - 測定専用 daemon の config に次を足す（検査 worker を無 LLM の fake harness に結ぶ。本番の config ではなく測定 config）:
   ```toml
-  [adapters.fake]
-  command = ["<celeris-campaign の絶対 path>", "cap-worker"]
-  [llm_sources.cap-probe]
+  # run_harnesses の各 harness <h>（例 claude-code, codex）について繰り返す
+  [harnesses.cap-probe-<h>]
+  kind = "fake"
+  command = "<celeris-campaign の絶対 path>"
+  args = ["cap-worker"]
+  env_of = "<h>"            # 実 harness <h> の adapter 環境で検査 worker を起こす
+  api_formats = ["fake"]
+  source_kinds = ["fake"]
+  [llm_sources.cap-probe]   # 1 回だけ
   kind = "fake"
   accounts = ["probe"]
   models = ["fake"]
-  [harnesses.cap-probe]
-  kind = "fake"
-  api_formats = ["fake"]
-  source_kinds = ["fake"]
-  [route_defaults.cap-probe]
+  [route_defaults.cap-probe-<h>]
   candidates = [{ source = "cap-probe", model = "fake" }]
-  [harness_selection]
-  rules = [{ genre = "cap-probe", harness = "cap-probe", required_capabilities = [] }]   # 既存の規則に足す
+  [harness_selection]       # 既存の規則に足す
+  rules = [{ genre = "cap-probe-<h>", harness = "cap-probe-<h>", required_capabilities = [] }]
   ```
-  無ければ検査 task は走らず、待ち時間（300 秒）の後に `worker-run` の `env_failure`（モデル失敗ではない）。
+  無ければ検査 task は走らず、待ち時間（300 秒）の後に `<harness>/worker-run` の `env_failure`（モデル失敗ではない）。
 
 前提: 上の config で測定専用 daemon を launcher により起動済み（`--daemon-pid` は launcher 所有の pid）。
 ```sh

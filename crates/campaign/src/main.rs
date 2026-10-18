@@ -232,7 +232,13 @@ fn cap_probe_cli(args: &[String]) -> Result<String, String> {
         let target = celeris_campaign::env_check::verify(me, &m, url, tok, &RealHost)
             .map_err(|es| format!("not the measurement daemon: {}", es.join("; ")))?;
         let t = celeris_campaign::curl_transport::CurlTransport::new(url, tok)?;
-        cap_probe::probe_worker(&env, &target, arm, case, &|spec| {
+        let harnesses = m
+            .configs
+            .iter()
+            .find(|x| x.id == arm)
+            .map(|x| x.worker_harnesses())
+            .ok_or("the manifest has no such arm")?;
+        cap_probe::probe_worker(&env, &target, arm, case, &harnesses, &|spec| {
             cap_probe::run_in_daemon(
                 &t,
                 spec,

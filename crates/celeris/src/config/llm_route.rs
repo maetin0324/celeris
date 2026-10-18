@@ -53,6 +53,10 @@ pub struct HarnessDeclarationConfig {
     pub env: HashMap<String, String>,
     #[serde(default)]
     pub env_from_secrets: HashMap<String, String>,
+    /// `kind = "fake"` only: run the fake command under the adapter environment of this declared harness
+    /// (a B/C capability probe stands in for a real harness's worker without calling a model).
+    #[serde(default)]
+    pub env_of: Option<String>,
 }
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]

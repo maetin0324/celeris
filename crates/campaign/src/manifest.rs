@@ -52,6 +52,17 @@ pub struct Config {
     pub routing: Option<ArmRouting>,
 }
 
+impl Config {
+    /// この arm の worker が実際に使う harness の集合（`routing.run_harnesses`。無ければ `harness`）。B/C の能力 probe は
+    /// この各 harness の adapter 環境で検査する。
+    pub fn worker_harnesses(&self) -> Vec<String> {
+        match self.routing.as_ref().and_then(|r| r.run_harnesses.clone()) {
+            Some(h) if !h.is_empty() => h,
+            _ => vec![self.harness.clone()],
+        }
+    }
+}
+
 /// 試行ごとに task へ固定する routing 設定（`POST /tasks` の `routing_override` の mode 以外）。
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]

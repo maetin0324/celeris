@@ -333,6 +333,10 @@ fn k4() -> celeris_campaign::cases::Case {
         .clone()
 }
 
+fn hs() -> Vec<String> {
+    vec!["claude-code".into()]
+}
+
 fn target() -> cap_probe::DaemonRef {
     cap_probe::DaemonRef {
         pid: 4242,
@@ -346,8 +350,14 @@ fn target() -> cap_probe::DaemonRef {
 fn probe_worker_reports_identity_and_task_of_the_daemon_that_ran_it() {
     let env = env_json(json!({}));
     for arm in [ConfigId::B, ConfigId::C] {
-        let rep =
-            cap_probe::probe_worker(&env, &target(), arm, &k4(), &|spec| Ok(ok_worker_run(spec)));
+        let rep = cap_probe::probe_worker(
+            &env,
+            &target(),
+            arm,
+            &k4(),
+            &["claude-code".into()],
+            &|spec| Ok(ok_worker_run(spec)),
+        );
         assert!(rep.ok, "{:?}", rep.results);
         assert_eq!(rep.paid_calls_made, 0);
         let d = rep.daemon.expect("identity");
@@ -360,7 +370,7 @@ fn probe_worker_reports_identity_and_task_of_the_daemon_that_ran_it() {
 fn probe_worker_failed_check_missing_result_or_no_run_is_env_failure() {
     let env = env_json(json!({}));
     // worker が 1 件落とした。
-    let rep = cap_probe::probe_worker(&env, &target(), ConfigId::B, &k4(), &|spec| {
+    let rep = cap_probe::probe_worker(&env, &target(), ConfigId::B, &k4(), &hs(), &|spec| {
         let mut run = ok_worker_run(spec);
         run.results[1].ok = false;
         run.results[1].detail = "exit 127".into();
@@ -369,7 +379,7 @@ fn probe_worker_failed_check_missing_result_or_no_run_is_env_failure() {
     assert_eq!(rep.failure_class, Some("env_failure"));
     assert_eq!(rep.arm, ConfigId::B);
     // 返さなかった検査は不合格（黙って通さない）。
-    let rep = cap_probe::probe_worker(&env, &target(), ConfigId::C, &k4(), &|spec| {
+    let rep = cap_probe::probe_worker(&env, &target(), ConfigId::C, &k4(), &hs(), &|spec| {
         let mut run = ok_worker_run(spec);
         run.results.truncate(1);
         Ok(run)
@@ -383,11 +393,15 @@ fn probe_worker_failed_check_missing_result_or_no_run_is_env_failure() {
         rep.results
     );
     // daemon が検査 task を走らせなかった（harness 未宣言など）。
-    let rep = cap_probe::probe_worker(&env, &target(), ConfigId::C, &k4(), &|_| {
+    let rep = cap_probe::probe_worker(&env, &target(), ConfigId::C, &k4(), &hs(), &|_| {
         Err("task did not run".into())
     });
     assert_eq!(rep.failure_class, Some("env_failure"));
-    assert!(rep.results.iter().any(|r| r.id == "worker-run" && !r.ok));
+    assert!(
+        rep.results
+            .iter()
+            .any(|r| r.id == "claude-code/worker-run" && !r.ok)
+    );
     assert_eq!(rep.daemon.expect("identity").pid, 4242);
 }
 
@@ -540,4 +554,43 @@ fn min_build_locusta_ignores_inherited_cargo_target_dir() {
     let path = format!("{}:/usr/bin:/bin", bin.path().display());
     let fake = run(Some(stale.path()), Some(&path));
     assert!(!fake.status.success(), "stale t must not pass the probe");
+}
+
+/// arm の worker harness ごとに検査 task を投入し、不足は harness 名つきで報告する（B/C の harness 差を畳まない）。
+#[test]
+fn probe_worker_runs_one_task_per_arm_harness_and_names_the_failing_one() {
+    let env = env_json(json!({}));
+    let seen = std::cell::RefCell::new(Vec::new());
+    let rep = cap_probe::probe_worker(
+        &env,
+        &target(),
+        ConfigId::B,
+        &k4(),
+        &["claude-code".into(), "codex".into()],
+        &|spec| {
+            seen.borrow_mut().push(spec.harness.clone());
+            let mut run = ok_worker_run(spec);
+            if spec.harness == "codex" {
+                run.results[1].ok = false;
+                run.results[1].detail = "exit 127".into();
+            }
+            Ok(run)
+        },
+    );
+    assert_eq!(*seen.borrow(), ["claude-code", "codex"]);
+    assert_eq!(rep.failure_class, Some("env_failure"));
+    let bad: Vec<_> = rep
+        .results
+        .iter()
+        .filter(|r| !r.ok)
+        .map(|r| r.id.clone())
+        .collect();
+    assert_eq!(bad.len(), 1);
+    assert!(bad[0].starts_with("codex/"), "{bad:?}");
+    assert_eq!(cap_probe::probe_genre("codex"), "cap-probe-codex");
+    // harness の無い arm は検査できない。
+    let rep = cap_probe::probe_worker(&env, &target(), ConfigId::C, &k4(), &[], &|spec| {
+        Ok(ok_worker_run(spec))
+    });
+    assert!(rep.results.iter().any(|r| r.id == "harness" && !r.ok));
 }

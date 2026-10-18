@@ -191,9 +191,9 @@ fn stub_executor(db: &Path, config: &Path, ws: &Path) {
                     Some(Event::WorkerFinished {
                         run_id,
                         // 検査 task は実 `cap-worker` を、この daemon process の環境のまま起こして走らせる。
-                        outcome: if t.genre.as_deref()
-                            == Some(celeris_campaign::cap_probe::PROBE_GENRE)
-                        {
+                        outcome: if t.genre.as_deref().is_some_and(|g| {
+                            g.starts_with(celeris_campaign::cap_probe::PROBE_GENRE_PREFIX)
+                        }) {
                             format!("done: {}", run_cap_worker(&t, ws))
                         } else {
                             "done: stub".into()
@@ -327,9 +327,10 @@ impl Fx {
             return 0;
         }
         let (_, v) = self.api("GET", "/api/v1/tasks?archived=1&limit=200", None);
-        v["items"].as_array().or(v.as_array()).map_or(0, |a| {
-            a.iter().filter(|t| t["genre"] != "cap-probe").count()
-        })
+        v["items"]
+            .as_array()
+            .or(v.as_array())
+            .map_or(0, |a| a.iter().filter(|t| !is_probe(t)).count())
     }
     fn owned_pid(&self) -> Option<u32> {
         fs::read_to_string(self.state().join("launcher.pid"))
@@ -599,10 +600,7 @@ fn matching_environment_runs_task_api_watch_grade_export_and_resumes_with_the_fi
     let (_, probes) = f.api("GET", "/api/v1/tasks?limit=50", None);
     let probes = probes["items"].as_array().or(probes.as_array()).unwrap();
     assert_eq!(probes.len(), 4, "{probes:?}");
-    assert!(
-        probes.iter().all(|t| t["genre"] == "cap-probe"),
-        "{probes:?}"
-    );
+    assert!(probes.iter().all(|t| is_probe(t)), "{probes:?}");
 
     // 通常 API による task 投入 → watch が台帳を閉じるまで。
     let w = ok(&f, "watch");
@@ -622,7 +620,7 @@ fn matching_environment_runs_task_api_watch_grade_export_and_resumes_with_the_fi
         .or(tasks.as_array())
         .unwrap()
         .iter()
-        .filter(|t| t["genre"] != "cap-probe")
+        .filter(|t| !is_probe(t))
         .cloned()
         .collect();
     assert_eq!(items.len(), 4, "{tasks}");
@@ -966,4 +964,11 @@ fn running_as_root() -> bool {
                 .any(|l| l.starts_with("Uid:") && l.split_whitespace().nth(2) == Some("0"))
         })
         .unwrap_or(false)
+}
+
+/// 能力検査 task（分野 `cap-probe-<harness>`）か。
+fn is_probe(t: &serde_json::Value) -> bool {
+    t["genre"]
+        .as_str()
+        .is_some_and(|g| g.starts_with(celeris_campaign::cap_probe::PROBE_GENRE_PREFIX))
 }

@@ -241,6 +241,7 @@ impl Config {
                 tools: Vec::new(),
                 env: Default::default(),
                 env_from_secrets: Default::default(),
+                env_of: None,
             },
         );
         // 上書きした `smoke` の source・harness を指す本番の宣言は、上書き後の形と合わないので外す。

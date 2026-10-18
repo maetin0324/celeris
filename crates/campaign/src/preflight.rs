@@ -782,9 +782,20 @@ fn check_bc_capabilities(
     };
     for c in cases {
         for cfg_id in m.configs.iter().map(|x| x.id).filter(|x| *x != ConfigId::A) {
-            let rep = crate::cap_probe::probe_worker(&env, &target, cfg_id, &c.case, &|spec| {
-                host.probe_daemon_worker(url, tok, spec)
-            });
+            let harnesses = m
+                .configs
+                .iter()
+                .find(|x| x.id == cfg_id)
+                .map(|x| x.worker_harnesses())
+                .unwrap_or_default();
+            let rep = crate::cap_probe::probe_worker(
+                &env,
+                &target,
+                cfg_id,
+                &c.case,
+                &harnesses,
+                &|spec| host.probe_daemon_worker(url, tok, spec),
+            );
             if let Some(d) = &rep.daemon {
                 a.probe_targets.push(ProbeTarget {
                     case: c.case.id.clone(),

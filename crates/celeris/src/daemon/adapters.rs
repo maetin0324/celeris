@@ -45,7 +45,7 @@ pub fn build_harness_adapters(
                     extra_args: args(&base.extra_args),
                     permission_mode: base.permission_mode.clone(),
                     model: None,
-                    env: env(&base.env, &base.env_from_secrets),
+                    env: declared_env(config, h).unwrap_or_default(),
                     container: None,
                     subagents: base.resolved_subagents(),
                 }))
@@ -56,7 +56,7 @@ pub fn build_harness_adapters(
                     command: command(&base.command),
                     extra_args: args(&base.extra_args),
                     model: None,
-                    env: env(&base.env, &base.env_from_secrets),
+                    env: declared_env(config, h).unwrap_or_default(),
                     container: None,
                     resume_mode: base.resolved_resume_mode(),
                     resume_bypass: base.resolved_resume_bypass(),
@@ -69,7 +69,7 @@ pub fn build_harness_adapters(
                     command: command(&base.command),
                     extra_args: args(&base.extra_args),
                     model: None,
-                    env: env(&base.env, &base.env_from_secrets),
+                    env: declared_env(config, h).unwrap_or_default(),
                     container: None,
                 }))
             }
@@ -79,7 +79,7 @@ pub fn build_harness_adapters(
                 let inner: Arc<dyn WorkerAdapter> = Arc::new(AcpAdapter::new(AcpConfig {
                     command: command(&base.command),
                     args: args(&base.args),
-                    env: env(&base.env, &base.env_from_secrets),
+                    env: declared_env(config, h).unwrap_or_default(),
                     permission: base.permission,
                     model: None,
                     model_namespace: if id == "opencode" {
@@ -158,10 +158,29 @@ pub fn build_harness_adapters(
                     None => config.adapters.fake.command.clone(),
                 };
                 let mut fake = FakeAdapter::new(argv);
-                fake.set_env(env(
-                    &config.adapters.fake.env,
-                    &config.adapters.fake.env_from_secrets,
-                ));
+                // `env_of`: a capability probe that runs under the environment of the real harness it stands for.
+                let probe_env = match &h.env_of {
+                    None => None,
+                    Some(base) => {
+                        let declared = config.harness_declarations.get(base).ok_or_else(|| {
+                            config::ConfigError::Invalid(format!(
+                                "harnesses.{id}: env_of {base:?} is not a declared harness"
+                            ))
+                        })?;
+                        Some(declared_env(config, declared).ok_or_else(|| {
+                            config::ConfigError::Invalid(format!(
+                                "harnesses.{id}: env_of {base:?} (kind {:?}) has no adapter environment",
+                                declared.kind
+                            ))
+                        })?)
+                    }
+                };
+                fake.set_env(probe_env.unwrap_or_else(|| {
+                    env(
+                        &config.adapters.fake.env,
+                        &config.adapters.fake.env_from_secrets,
+                    )
+                }));
                 Arc::new(fake)
             }
             _ => {
@@ -175,6 +194,31 @@ pub fn build_harness_adapters(
         out.insert(id.as_str().into(), adapter);
     }
     Ok(out)
+}
+
+/// The environment a real harness's adapter gives its worker (`[adapters.<kind>].env` plus its secrets, or the Pi
+/// declaration's own env). One function for both the real adapter and a capability probe that must see the same
+/// environment (`env_of`), so the two cannot drift. `None` for kinds a B/C run does not use as a coding harness.
+fn declared_env(
+    config: &Config,
+    h: &config::HarnessDeclarationConfig,
+) -> Option<Vec<(String, String)>> {
+    let secrets_dir = config.secrets.as_ref().map(|s| s.dir.as_path());
+    let none = HashMap::new();
+    let env = |base_env: &HashMap<String, String>, base_secrets: &HashMap<String, String>| {
+        merged_env_with_secrets(base_env, base_secrets, &none, &none, secrets_dir)
+    };
+    let a = &config.adapters;
+    match h.kind.replace('_', "-").as_str() {
+        ClaudeCodeAdapter::ID => Some(env(&a.claude_code.env, &a.claude_code.env_from_secrets)),
+        CodexAdapter::ID => Some(env(&a.codex.env, &a.codex.env_from_secrets)),
+        AiderAdapter::ID => Some(env(&a.aider.env, &a.aider.env_from_secrets)),
+        PiAdapter::ID => Some(env(&h.env, &h.env_from_secrets)),
+        AcpAdapter::ID | BrowserSpecialistAdapter::ID => {
+            Some(env(&a.acp.env, &a.acp.env_from_secrets))
+        }
+        _ => None,
+    }
 }
 
 fn pi_config(config: &Config, harness: &config::HarnessDeclarationConfig) -> PiConfig {

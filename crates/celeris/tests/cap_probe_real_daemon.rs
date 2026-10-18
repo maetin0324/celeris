@@ -119,6 +119,11 @@ impl Drop for Daemon {
 
 /// 実 `celeris` を `env_clear` + `env` だけの環境で起動する。worker（検査 process）は dispatcher がこの daemon の環境から起こす。
 fn start_daemon(env: &[(&str, &str)]) -> Daemon {
+    start_daemon_with(env, &[])
+}
+
+/// `claude_env` は `[adapters.claude_code].env`（実 B/C harness の adapter 環境）。codex は adapter env なし。
+fn start_daemon_with(env: &[(&str, &str)], claude_env: &[(&str, &str)]) -> Daemon {
     cli_tools();
     let dir = tempfile::tempdir().expect("daemon dir");
     let h = dir.path();
@@ -144,24 +149,57 @@ token_file = "api.token"
 [adapters.fake]
 command = ["{bin}", "cap-worker"]
 
+[adapters.claude_code.env]
+{claude_env}
+
 [llm_sources.cap-probe]
 kind = "fake"
 accounts = ["probe"]
 models = ["fake"]
 
-[harnesses.cap-probe]
-kind = "fake"
+# 実 B/C harness（起動はしない。adapter env の持ち主）。
+[harnesses.claude-code]
+kind = "claude_code"
 api_formats = ["fake"]
 source_kinds = ["fake"]
 
-[route_defaults.cap-probe]
+[harnesses.codex]
+kind = "codex"
+api_formats = ["fake"]
+source_kinds = ["fake"]
+
+# 検査 harness: 無 LLM の cap-worker を、対応する実 harness の adapter 環境で起動する。
+[harnesses.cap-probe-claude-code]
+kind = "fake"
+env_of = "claude-code"
+api_formats = ["fake"]
+source_kinds = ["fake"]
+
+[harnesses.cap-probe-codex]
+kind = "fake"
+env_of = "codex"
+api_formats = ["fake"]
+source_kinds = ["fake"]
+
+[route_defaults.cap-probe-claude-code]
+candidates = [{{ source = "cap-probe", model = "fake" }}]
+
+[route_defaults.cap-probe-codex]
 candidates = [{{ source = "cap-probe", model = "fake" }}]
 
 [harness_selection]
 execution_class_defaults = {{}}
-rules = [{{ genre = "cap-probe", harness = "cap-probe", required_capabilities = [] }}]
+rules = [
+  {{ genre = "cap-probe-claude-code", harness = "cap-probe-claude-code", required_capabilities = [] }},
+  {{ genre = "cap-probe-codex", harness = "cap-probe-codex", required_capabilities = [] }},
+]
 "#,
-            bin = campaign_bin().display()
+            bin = campaign_bin().display(),
+            claude_env = claude_env
+                .iter()
+                .map(|(k, v)| format!("{k} = \"{v}\""))
+                .collect::<Vec<_>>()
+                .join("\n")
         ),
     )
     .expect("config");
@@ -232,8 +270,13 @@ fn identity(d: &Daemon) -> DaemonRef {
 }
 
 fn probe(d: &Daemon, env: &CapEnv, arm: ConfigId) -> ProbeReport {
+    probe_harnesses(d, env, arm, &["claude-code"])
+}
+
+fn probe_harnesses(d: &Daemon, env: &CapEnv, arm: ConfigId, hs: &[&str]) -> ProbeReport {
+    let hs: Vec<String> = hs.iter().map(|h| h.to_string()).collect();
     let t = CurlTransport::new(&d.url, TOKEN_ENV).expect("transport");
-    cap_probe::probe_worker(env, &identity(d), arm, &k4(), &|spec| {
+    cap_probe::probe_worker(env, &identity(d), arm, &k4(), &hs, &|spec| {
         cap_probe::run_in_daemon(
             &t,
             spec,
@@ -323,10 +366,14 @@ fn daemon_missing_toolchain_or_variable_is_env_failure_even_if_cli_has_it() {
         assert_eq!(rep.arm, arm);
         assert_eq!(rep.paid_calls_made, 0);
         let f = failing(&rep);
-        assert!(f.contains(&"worker-env".to_string()), "{f:?}");
+        assert!(f.contains(&"claude-code/worker-env".to_string()), "{f:?}");
         // 期待 PATH 要素と CAP_MARK の 2 件（worker の python3 は host の /usr/bin のものが見えるので、道具の有無でなく
         // 環境の食い違いで落ちる）。値は報告に出ない。
-        assert_eq!(f, vec!["worker-env", "worker-env"], "{f:?}");
+        assert_eq!(
+            f,
+            vec!["claude-code/worker-env", "claude-code/worker-env"],
+            "{f:?}"
+        );
         let json = serde_json::to_string(&rep).expect("json");
         assert!(!json.contains("cli-mark"), "{json}");
         assert!(
@@ -370,8 +417,8 @@ fn daemon_socket_and_mount_are_checked_from_the_worker() {
         assert_eq!(
             failing(&rep),
             vec![
-                format!("toolchain:{}", gone.display()),
-                format!("socket:{}", absent.display())
+                format!("claude-code/toolchain:{}", gone.display()),
+                format!("claude-code/socket:{}", absent.display())
             ]
         );
     }
@@ -388,13 +435,64 @@ fn unreachable_daemon_is_env_failure_not_a_pass() {
         pid: 1,
         ..DaemonRef::default()
     };
-    let rep = cap_probe::probe_worker(&env, &target, ConfigId::B, &k4(), &|spec| {
-        cap_probe::run_in_daemon(&t, spec, Duration::from_secs(2), Duration::from_millis(50))
-    });
+    let rep = cap_probe::probe_worker(
+        &env,
+        &target,
+        ConfigId::B,
+        &k4(),
+        &["claude-code".into()],
+        &|spec| {
+            cap_probe::run_in_daemon(&t, spec, Duration::from_secs(2), Duration::from_millis(50))
+        },
+    );
     assert_eq!(rep.failure_class, Some("env_failure"));
     assert!(
-        rep.results.iter().any(|r| r.id == "worker-run" && !r.ok),
+        rep.results
+            .iter()
+            .any(|r| r.id == "claude-code/worker-run" && !r.ok),
         "{:?}",
         rep.results
     );
+}
+
+/// 検査は arm の実 harness の adapter 環境で走る。daemon の process 環境が同じでも、harness の adapter env が toolchain を
+/// 足す（その harness だけ通る）・壊す（その harness だけ env_failure）。fake harness の環境では代用できない。
+#[test]
+fn probe_runs_under_each_real_harness_adapter_env() {
+    let daemon_tools = tools("daemon");
+    let adapter_tools = tools("adapter");
+    let env = cap_env(json!({"env": [["PATH", adapter_tools.display().to_string()]]}));
+    // 足す: process の PATH には無く、claude-code の adapter env だけが道具 dir を足す。
+    let d = start_daemon_with(
+        &[("PATH", "/usr/bin:/bin")],
+        &[(
+            "PATH",
+            &format!("{}:/usr/bin:/bin", adapter_tools.display()),
+        )],
+    );
+    let ok = probe_harnesses(&d, &env, ConfigId::B, &["claude-code"]);
+    assert!(ok.ok, "{:?}", ok.results);
+    let rep = probe_harnesses(&d, &env, ConfigId::B, &["claude-code", "codex"]);
+    assert_eq!(rep.failure_class, Some("env_failure"));
+    let f = failing(&rep);
+    assert!(
+        !f.is_empty() && f.iter().all(|id| id.starts_with("codex/")),
+        "only codex (no adapter env) fails: {f:?}"
+    );
+    let id = rep.daemon.expect("identity");
+    assert_eq!(id.pid, d.child.id());
+    assert_eq!(
+        id.probe_task_id.as_deref().map(|s| s.split(',').count()),
+        Some(2)
+    );
+    // 壊す: process の PATH は正しいが、claude-code の adapter env が道具 dir を落とす。
+    let env = cap_env(json!({"env": [["PATH", daemon_tools.display().to_string()]]}));
+    let d = start_daemon_with(
+        &[("PATH", &base_path(&daemon_tools))],
+        &[("PATH", "/usr/bin:/bin")],
+    );
+    let bad = probe_harnesses(&d, &env, ConfigId::C, &["claude-code"]);
+    assert_eq!(bad.failure_class, Some("env_failure"));
+    assert_eq!(failing(&bad), vec!["claude-code/worker-env"]);
+    assert_eq!(bad.paid_calls_made, 0);
 }

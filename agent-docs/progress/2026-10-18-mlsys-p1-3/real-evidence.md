@@ -23,9 +23,8 @@ host の初回（人の実走）: exit 101、`lib/pluvio/pluvio_ucx/lib/async-uc
   `lib/pluvio/pluvio_ucx/lib/async-ucx@cffa01eec85fa34e970721e735794a21c77c0be3`、
   `lib/pluvio/pluvio_ucx/lib/async-ucx/ucx1-sys/ucx@938ffcd10122742d0f46a4f609e7395d1648c969`。後者は async-ucx の `ucx1-sys/build.rs` が UCX を source から build するために要る
   （`ucx` が空だと `autogen.sh: No such file`）。組立は両方を展開し lock の内容 hash と照合する。
-- 依存は network が使える環境では crates.io から解決でき（`Updating crates.io index` は build の正常動作。offline では `no matching package named async-backtrace`）、
-  offline 化（vendor）は asset store に vendor 一式を置いて grader が source replacement を使う設計の追加になる。新機構を足さず、network が使える host で build する前提にした。
-  offline のまま解決できない失敗は env_failure に分類する（下記）。
+- 依存は crates.io から network で解決する前提で確定した。operator が 2026-10-18 のコメントで「A sandbox は網を切っていないので network 前提の build を受け入れる（h-real の注記より優先）」と決めた。
+  vendor/offline は要件ではない（grader の source replacement は足さない）。offline のまま解決できない失敗は env_failure に分類する（下記）。
 - 組立後の build（この worker host、network あり）: 入れ子の欠落は解消し、`ucx1-sys` の build script まで進んだ。止まった理由は host の道具不足:
   `autoreconf: command not found`（autoconf/automake/libtool）と `Unable to find libclang`（bindgen）。
   known-bad・known-good ともに `env_failure: true`（モデル失敗に数えない）。**known-bad が fail・known-good が pass の実 build は未実証**。
@@ -34,6 +33,13 @@ host の初回（人の実走）: exit 101、`lib/pluvio/pluvio_ucx/lib/async-uc
   試験は `real_asset_grade` の `build_environment_defects_are_env_failure_not_model_failure` に 2 例追加。
 - 能力 probe に `autotools`（autoreconf/automake/libtoolize）と `libclang` を追加した。これらが無いと K2 の build は通らないのに、従来の 8 能力は全部 ok になり得た
   （LLM 呼出しの前に止められなかった）。
+
+### host-build2 の原因と修正（2026-10-18）
+- operator の host 再実走（ad80c920、`--build`）は exit 101。`benchfs (lib test)` が 8 errors（`E0599 locusta_transport_ref`（src/ffi/io_buffer.rs:45）、`E0433 rrrpc` ほか）で build できず、K2 正負例は FAILED。
+  全文は artifacts/host-build2.log。
+- 原因: ad80c920 時点の評価 command に `--features transport-locusta` が無かった。known-bad・known-good の両 tree で同形に落ちた（片方の tree だけの失敗ではない）。
+- 修正済み: 0111c06c（評価 command に transport-locusta を追加、初期 tree の baseline build で compile error を env_failure に分離、lock 更新）。**修正後の `--build` は operator の再実走待ちで未実走**。
+- `rdma-verbs` は 0111c06c の修正後に足した能力で、host-cap2-*（ad80c920 の cap-probe 実走）には記録が無い。host 未確認。
 
 ## 3. cap-probe（人の実走。scratch の cap-{a,b,c,k4}.{json,err}）
 cap env: ro_mounts なし、sockets=[/run/celeris-cap/sirius-ssh.sock]、PKG_CONFIG_PATH=/usr/lib/x86_64-linux-gnu/pkgconfig（libucx-dev 1.18.1 は /usr に apt で導入）。

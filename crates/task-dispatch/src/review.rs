@@ -1,7 +1,7 @@
 //! Reviewer（DESIGN §5.7, ADR-0005 D5, ADR-0007 D4/D5）。
 //!
 //! - `Command` はワーカーの自己申告を信じず、ワークスペースで実際に再実行する。
-//! - `ArtifactExists` はファイル存在と sha256。
+//! - `ArtifactExists` はファイル存在と sha256（ディレクトリは通常ファイル 1 件以上で合格、件数と合成ハッシュ）。
 //! - `Plan` kind は追加で `artifacts/plan.json` を `PlanOutput` として決定的に検証する（暗黙の条件、
 //!   `criterion_idx = acceptance.len()`）。
 //! - `Reviewer` は、決定的条件が全て pass のときだけ、ワーカーアダプタ経由の **別 run**（合成した `Review` kind
@@ -635,6 +635,22 @@ pub async fn review_task(
                         Ok(sha) => (true, format!("path={rel} sha256={sha}")),
                         Err(e) => (false, format!("path={rel} unreadable: {e}")),
                     }
+                } else if full.is_dir() {
+                    // ADR 2026-10-18-artifact-exists-directory: 通常ファイルが 1 件以上あれば合格。
+                    match dir_artifact_digest(&full) {
+                        Ok((0, _, _)) => (
+                            false,
+                            format!("artifact {name:?} at {rel} is an empty directory"),
+                        ),
+                        Ok((n, files, sha)) => (
+                            true,
+                            format!(
+                                "path={rel} dir files={n} sha256={sha} [{}]",
+                                files.join(", ")
+                            ),
+                        ),
+                        Err(e) => (false, format!("path={rel} unreadable: {e}")),
+                    }
                 } else {
                     (false, format!("artifact {name:?} not found at {rel}"))
                 }
@@ -1182,6 +1198,46 @@ async fn run_reviewer_inner(
             },
         )
         .collect())
+}
+
+/// ADR 2026-10-18-artifact-exists-directory: ディレクトリの成果物の要約。`dir` 以下の通常ファイル
+/// （symlink は辿らず数えない）を再帰で集め、相対 path の辞書順に並べて
+/// `"<path>\0<sha256>\n"` を連結したものの sha256 を合成ハッシュとする。戻り値は
+/// （件数、並べた相対 path、合成ハッシュ）。
+fn dir_artifact_digest(dir: &Path) -> std::io::Result<(usize, Vec<String>, String)> {
+    use sha2::{Digest, Sha256};
+    fn walk(root: &Path, dir: &Path, out: &mut Vec<(String, String)>) -> std::io::Result<()> {
+        for entry in std::fs::read_dir(dir)? {
+            let entry = entry?;
+            let ty = entry.file_type()?;
+            let path = entry.path();
+            if ty.is_dir() {
+                walk(root, &path, out)?;
+            } else if ty.is_file() {
+                let rel = path
+                    .strip_prefix(root)
+                    .unwrap_or(&path)
+                    .to_string_lossy()
+                    .into_owned();
+                let sha = sha256_file(&path).map_err(std::io::Error::other)?;
+                out.push((rel, sha));
+            }
+        }
+        Ok(())
+    }
+    let mut files = Vec::new();
+    walk(dir, dir, &mut files)?;
+    files.sort();
+    let mut hasher = Sha256::new();
+    for (rel, sha) in &files {
+        hasher.update(rel.as_bytes());
+        hasher.update(b"\0");
+        hasher.update(sha.as_bytes());
+        hasher.update(b"\n");
+    }
+    let digest = format!("{:x}", hasher.finalize());
+    let n = files.len();
+    Ok((n, files.into_iter().map(|(rel, _)| rel).collect(), digest))
 }
 
 #[cfg(test)]

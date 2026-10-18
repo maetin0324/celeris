@@ -629,6 +629,56 @@ async fn artifact_exists_uses_produced_path_then_fallback_and_unsupported_kinds_
     );
 }
 
+/// ADR 2026-10-18-artifact-exists-directory: 中身のあるディレクトリは合格（件数・並べた path・合成
+/// ハッシュを reason に出す）。空のディレクトリ（空の子ディレクトリだけのものを含む）と存在しない名前は不合格。
+#[tokio::test]
+async fn artifact_exists_directory_passes_with_files_and_fails_when_empty() {
+    let dir = tempfile::tempdir().unwrap();
+    let shots = dir.path().join("artifacts/screenshots");
+    std::fs::create_dir_all(shots.join("after")).unwrap();
+    std::fs::write(shots.join("before.png"), "b").unwrap();
+    std::fs::write(shots.join("after/a.png"), "a").unwrap();
+    std::fs::create_dir_all(dir.path().join("artifacts/empty/sub")).unwrap();
+    let ws = LocalWorkspace::new(dir.path());
+    let task = task_with(
+        vec![
+            Check::ArtifactExists {
+                name: "screenshots".into(),
+            },
+            Check::ArtifactExists {
+                name: "screenshots/".into(),
+            },
+            Check::ArtifactExists {
+                name: "empty".into(),
+            },
+            Check::ArtifactExists {
+                name: "nothing".into(),
+            },
+        ],
+        dir.path(),
+    );
+    let v = plain_review(&task, &ws, dir.path(), &[], Duration::from_secs(5)).await;
+    assert_eq!(
+        v.iter().map(|x| x.pass).collect::<Vec<_>>(),
+        vec![true, true, false, false],
+        "{v:?}"
+    );
+    assert!(v[0].reason.contains("files=2"), "{}", v[0].reason);
+    assert!(
+        v[0].reason.contains("[after/a.png, before.png]"),
+        "{}",
+        v[0].reason
+    );
+    let sha = |s: &str| s.split("sha256=").nth(1).unwrap()[..64].to_string();
+    assert_eq!(sha(&v[0].reason), sha(&v[1].reason));
+    assert!(v[2].reason.contains("empty directory"), "{}", v[2].reason);
+    assert!(v[3].reason.contains("not found"), "{}", v[3].reason);
+    // 中身が変われば合成ハッシュも変わる。
+    std::fs::write(shots.join("before.png"), "B").unwrap();
+    let v2 = plain_review(&task, &ws, dir.path(), &[], Duration::from_secs(5)).await;
+    assert_ne!(sha(&v[0].reason), sha(&v2[0].reason));
+}
+
 /// ADR-0008 D2: `extras.human` に解決済みの `(pass, reason)` があれば、その内容がそのまま検証結果になる。
 #[tokio::test]
 async fn human_check_uses_resolved_verdict_from_extras() {

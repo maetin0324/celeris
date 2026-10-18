@@ -201,6 +201,14 @@ pub struct TrialMarker {
     pub account_id: String,
 }
 
+/// 試行 state dir の path（`Sandbox::state_dir` と preflight が同じ規則を使う）。
+pub fn trial_state_dir(root: &Path, campaign_id: &str, arm: &str, case: &str, rep: u32) -> PathBuf {
+    root.join(path_component(campaign_id))
+        .join(path_component(arm))
+        .join(path_component(case))
+        .join(format!("rep{rep}"))
+}
+
 /// path の 1 要素に使える形へ（英数・`-_.` 以外は `%xx`）。`.` 始まりも `%2e` にして `..` を作らせない。
 fn path_component(s: &str) -> String {
     let mut o = String::new();
@@ -298,11 +306,13 @@ impl Sandbox {
 
     /// 試行の state dir（campaign / arm / case / repetition から決まる安定した path）。
     pub fn state_dir(&self, req: &TrialRequest) -> PathBuf {
-        self.state_root
-            .join(path_component(req.campaign_id))
-            .join(path_component(&format!("{:?}", req.config.id)))
-            .join(path_component(req.problem_id))
-            .join(format!("rep{}", req.rep))
+        trial_state_dir(
+            &self.state_root,
+            req.campaign_id,
+            &format!("{:?}", req.config.id),
+            req.problem_id,
+            req.rep,
+        )
     }
 
     /// state dir を用意し、identity marker を書く（既にあれば一致を確かめる）。認証材料の mount 先も空 file で置く。

@@ -85,31 +85,197 @@ fn account_dir() -> &'static Path {
     D.get_or_init(|| tempfile::tempdir().unwrap()).path()
 }
 
-#[test]
-fn preflight_rejects_an_account_dir_with_past_transcripts_or_claude_md() {
-    let t = tempfile::tempdir().unwrap();
-    assert!(celeris_campaign::preflight::account_dir_residue(t.path()).is_empty());
-    fs::create_dir_all(t.path().join("projects/-x")).unwrap();
-    assert_eq!(
-        celeris_campaign::preflight::account_dir_residue(t.path()).len(),
-        1
-    );
-    fs::write(t.path().join("CLAUDE.md"), "memo").unwrap();
-    assert_eq!(
-        celeris_campaign::preflight::account_dir_residue(t.path()).len(),
-        2
-    );
-    // preflight 全体でも measure-env で落ちる
-    let s = setup();
+/// 試行 state（A の CLAUDE_CONFIG_DIR）の検査に使う部品。
+struct Trial {
+    out: PathBuf,
+    sha: String,
+    cid: String,
+}
+
+fn trial_env(s: &Setup) -> Trial {
+    let m = CampaignManifest::load(&s.inp.manifest_path).unwrap();
+    let out = s.inp.measure.as_ref().unwrap().out.clone().unwrap();
+    fs::create_dir_all(&out).unwrap();
+    Trial {
+        out,
+        sha: m.compute_sha256().unwrap(),
+        cid: m.campaign_id.clone(),
+    }
+}
+
+impl Trial {
+    fn dir(&self, case: &str, rep: u32) -> PathBuf {
+        celeris_campaign::harness_exec::trial_state_dir(
+            &self.out.join("trial-state"),
+            &self.cid,
+            "A",
+            case,
+            rep,
+        )
+    }
+
+    fn marker(&self, case: &str, rep: u32) -> celeris_campaign::harness_exec::TrialMarker {
+        celeris_campaign::harness_exec::TrialMarker {
+            campaign_id: self.cid.clone(),
+            manifest_sha256: self.sha.clone(),
+            arm: "A".into(),
+            case: case.into(),
+            rep,
+            account_id: "lab".into(),
+        }
+    }
+
+    fn write_marker(&self, dir: &Path, mk: &celeris_campaign::harness_exec::TrialMarker) {
+        fs::create_dir_all(dir).unwrap();
+        fs::write(
+            dir.join(celeris_campaign::harness_exec::TRIAL_MARKER),
+            serde_json::to_vec(mk).unwrap(),
+        )
+        .unwrap();
+    }
+
+    /// 台帳に A の試行を 1 行足す（開始済みにする。正式の Ledger API）。
+    fn start(&self, case: &str, rep: u32) {
+        let key = celeris_campaign::ledger::TrialKey {
+            manifest_sha256: self.sha.clone(),
+            problem_id: case.into(),
+            arm: ConfigId::A,
+            trial_no: 1,
+            rep,
+        };
+        celeris_campaign::ledger::Ledger::open(&self.out)
+            .unwrap()
+            .plan(&key, "ws", json!({}))
+            .unwrap();
+    }
+}
+
+fn state_misses(s: &Setup) -> Vec<String> {
     let h = FakeHost {
-        api: api(t.path()),
+        api: api(account_dir()),
         ..host()
     };
-    let r = check(&s.inp, &h);
+    check(&s.inp, &h)
+        .missing
+        .into_iter()
+        .filter(|m| m.check == "trial-state")
+        .map(|m| m.detail)
+        .collect()
+}
+
+#[test]
+fn fresh_trial_accepts_missing_or_empty_state_and_ignores_account_dir_history() {
+    let s = setup();
+    let t = trial_env(&s);
+    assert!(state_misses(&s).is_empty());
+    // 空の state dir（認証 mount 先の空 file と自分の marker だけ）は可。
+    let d = t.dir("k1", 1);
+    t.write_marker(&d, &t.marker("k1", 1));
+    fs::write(d.join(".credentials.json"), "").unwrap();
+    assert!(state_misses(&s).is_empty());
+    // アカウント dir の過去の transcript や CLAUDE.md は試行に渡らないので拒否理由にしない（旧一律拒否の廃止）。
+    let acct = tempfile::tempdir().unwrap();
+    fs::create_dir_all(acct.path().join("projects/-x")).unwrap();
+    fs::write(acct.path().join("CLAUDE.md"), "memo").unwrap();
+    let h = FakeHost {
+        api: api(acct.path()),
+        ..host()
+    };
     assert!(
-        r.missing
+        check(&s.inp, &h)
+            .missing
             .iter()
-            .any(|m| m.check == "measure-env" && m.detail.contains("CLAUDE.md"))
+            .all(|m| m.check != "measure-env" || !m.detail.contains("CLAUDE.md"))
+    );
+}
+
+#[test]
+fn fresh_trial_rejects_contaminated_state_before_start() {
+    let s = setup();
+    let t = trial_env(&s);
+    // CLAUDE.md
+    let d = t.dir("k1", 1);
+    fs::create_dir_all(&d).unwrap();
+    fs::write(d.join("CLAUDE.md"), "memo").unwrap();
+    let m = state_misses(&s);
+    assert!(
+        m.iter()
+            .any(|e| e.contains("not empty") && e.contains("CLAUDE.md")),
+        "{m:?}"
+    );
+    fs::remove_file(d.join("CLAUDE.md")).unwrap();
+    // projects 非空（前試行の transcript）
+    fs::create_dir_all(d.join("projects/-w")).unwrap();
+    assert!(state_misses(&s).iter().any(|e| e.contains("projects")));
+    fs::remove_dir_all(d.join("projects")).unwrap();
+    // 他試行の marker
+    t.write_marker(&d, &t.marker("k2", 3));
+    assert!(
+        state_misses(&s)
+            .iter()
+            .any(|e| e.contains("another trial's identity marker"))
+    );
+}
+
+#[test]
+fn resume_accepts_a_started_trial_whose_marker_matches() {
+    let s = setup();
+    let t = trial_env(&s);
+    t.start("k1", 1);
+    let d = t.dir("k1", 1);
+    t.write_marker(&d, &t.marker("k1", 1));
+    // 再開側では transcript・memory が残っていてよい（消さない）。
+    fs::create_dir_all(d.join("projects/-w")).unwrap();
+    fs::write(d.join("projects/-w/t.jsonl"), "x").unwrap();
+    fs::write(d.join("CLAUDE.md"), "memory").unwrap();
+    assert!(state_misses(&s).is_empty(), "{:?}", state_misses(&s));
+}
+
+#[test]
+fn resume_rejects_mismatched_foreign_or_missing_marker() {
+    let s = setup();
+    let t = trial_env(&s);
+    t.start("k1", 1);
+    // state 不在は引き継ぐ物が無いので可。内容があるのに marker が無ければ拒否。
+    assert!(state_misses(&s).is_empty());
+    let d = t.dir("k1", 1);
+    fs::create_dir_all(d.join("projects/-w")).unwrap();
+    assert!(
+        state_misses(&s)
+            .iter()
+            .any(|e| e.contains("without an identity marker"))
+    );
+    fs::remove_dir_all(d.join("projects")).unwrap();
+    for mutate in [
+        (|m: &mut celeris_campaign::harness_exec::TrialMarker| m.rep = 2) as fn(&mut _),
+        |m| m.case = "k2".into(),
+        |m| m.arm = "B".into(),
+        |m| m.campaign_id = "other".into(),
+        |m| m.manifest_sha256 = "0".repeat(64),
+        |m| m.account_id = "other".into(),
+    ] {
+        let mut mk = t.marker("k1", 1);
+        mutate(&mut mk);
+        t.write_marker(&d, &mk);
+        assert!(
+            state_misses(&s)
+                .iter()
+                .any(|e| e.contains("belongs to another trial")),
+            "{mk:?}"
+        );
+    }
+    // 保存 lock が別 campaign
+    t.write_marker(&d, &t.marker("k1", 1));
+    assert!(state_misses(&s).is_empty());
+    let m0 = CampaignManifest::load(&s.inp.manifest_path).unwrap();
+    let mut lock = celeris_campaign::preflight::expected_lock(&s.inp, &m0).unwrap();
+    lock.campaign_sha256 = "f".repeat(64);
+    fs::write(t.out.join("lock.json"), serde_json::to_vec(&lock).unwrap()).unwrap();
+    let m = state_misses(&s);
+    assert!(
+        m.iter()
+            .any(|e| e.contains("saved lock belongs to campaign")),
+        "{m:?}"
     );
 }
 
@@ -801,4 +967,21 @@ impl StderrJson for std::process::Output {
         let t = String::from_utf8_lossy(&self.stderr).into_owned();
         t.strip_prefix("error: ").unwrap_or(&t).as_bytes().to_vec()
     }
+}
+
+#[test]
+fn gate_refuses_a_contaminated_new_trial_before_any_ledger_or_executor_work() {
+    let s = setup();
+    let t = trial_env(&s);
+    let d = t.dir("k1", 1);
+    fs::create_dir_all(d.join("projects/-prev")).unwrap();
+    let h = FakeHost {
+        api: api(account_dir()),
+        ..host()
+    };
+    let e = celeris_campaign::preflight::gate(&s.inp, &h).unwrap_err();
+    assert!(e.contains("trial-state") && e.contains("projects"), "{e}");
+    assert!(!t.out.join("ledger.jsonl").exists());
+    // 検査は何も消さない。
+    assert!(d.join("projects/-prev").is_dir());
 }

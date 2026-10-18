@@ -23,7 +23,7 @@ ADR: `agent-docs/adr/2026-10-16-mlsys-pilot-wiring-fixes.md`（D1〜D9）。実 
 | 8 | `db backup` が稼働中の本番 DB で終わらない | `task_core::backup_database` を読み取り専用接続の `VACUUM INTO`（`<dest>.partial-<pid>` → rename）に | `store::tests::backup_database_finishes_while_another_connection_is_writing`（別接続が書き込み transaction を保持したまま完了・未 commit は含まない・partial を残さない） |
 | 9 | grade が NoRunner、grade-case が無い | `NoRunner` を消し `grade_runner::ProcessRunner`（作業 dir で実行・timeout で process group kill）を CLI に注入。`grade-out` で out の全試行を採点し `grades.jsonl`。pilot の grade-case 2 件を `crates/campaign/fixtures/grade-cases/pilot/` に。fixture repo を単独の cargo package に | `pilot_wiring::pilot_impl_grade_case_really_runs_cargo_test_in_the_grade_work_dir`（実 `cargo test --offline`）、`…pilot_review_grade_case_detects_the_known_defects`、`…grade_out_grades_every_run_trial_and_reports_missing_cases`、`grade_runner::tests::*`、`grader_independent::cli_grade_outputs_json_and_exit_code` |
 
-runbook（`../2026-10-16-mlsys-final-connect/runbook.md`）・`../2026-10-16-mlsys-final/run-final.md`・`final.json`・`task-template.json` を実際の CLI に合わせた
+runbook（`../2026-10-16-mlsys-final-connect/runbook.md`）・`docs/ops/measure-run-final.md`・`final.json`・`task-template.json` を実際の CLI に合わせた
 （origin だけの `--api-url`、`{"type","text"}` の acceptance、`token_basis` の欄、`waiting=0` までの再実行、`grade --artifact …/rep1/workspace`、`grade-out`、VACUUM INTO の `db backup`）。
 
 ## Jev smoke の所見（直さない）
@@ -46,12 +46,12 @@ tested_sha: 64784351f13e（以降の差分は agent-docs/progress/ のこのフ�
 ## 本番への移行（人が行う）
 - 新しい release を昇格するまで、運用セッションは旧い `celeris-campaign` を使わない（manifest に `budget.token_basis` が要り、`--api-url` は origin だけ）。
 - `budget.token_basis` の値は人の決定（decision で運用セッションが答える）。決まるまで `final.json` の `<人の決定: …>` が残り、manifest は読めない（fail-closed）。
-- `final.json` の sha256 は変わった（`freeze-final.md` の置換前 hash は旧い）。run-final.md 手順 2 で取り直す。
+- `final.json` の sha256 は変わった（`freeze-final.md` の置換前 hash は旧い）。docs/ops/measure-run-final.md §3 で取り直す。
 - pilot はこの release で新しい `--out` に回し直す（旧い trials.jsonl は新しい欄を持たない）。旧い pilot manifest（`../2026-10-16-mlsys-pilot/pilot-live.json`）は `token_basis` が無いので、そのままでは読めない。
 
 ## 未解決事項
 - `budget.token_basis` の人の決定（予算の判定にどの量を使うか）。
-- K1〜K4（本測定の case）の grade-case は未作成（run-final.md 手順 5 の `$P/grade-case/`）。
+- K1〜K4（本測定の case）の grade-case は未作成（docs/ops/measure-run-final.md §8 の `$P/grade-case/`）。
 
 ## 提案
 - Jev の route decision に `real_api_verified`・費用・Jev の版を記録する別 task（Jev wire 側）。

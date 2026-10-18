@@ -1,7 +1,7 @@
 # 測定環境の launcher: 単一の設定源・接続先 daemon の同一性照合・固定記録 env-lock
 
 - 日付: 2026-10-18
-- 状態: 決定（実装は後続 WU: daemon-identity-api / env-lock / env-check / launcher / runbook）
+- 状態: 決定。実装は下の「付記（実装突き合わせ）」の範囲まで済み。運用手順は `docs/ops/measure-run-final.md`
 - tasks: [01M56HCNS9SYAS7TAEA7Z3E4CZ]
 - 関連: ADR 2026-10-17-mlsys-pilot2-fixes、ADR-0040（release・instance・昇格の認可）、ADR-0139（SO_REUSEPORT 相乗り）、
   `crates/campaign/src/{measure_env,preflight,main,lock,lock_exec,curl_transport}.rs`
@@ -204,22 +204,6 @@
   （汚染検査の前提が崩れる。pilot までの運用で、本測定では廃止）。launcher が systemd unit を作る（本番 host の
   変更になる）。
 
-## 各 WU への入力
-- daemon-identity-api: D2 の `identity` を `ConfigView` に追加（`crates/task-api/src/types.rs`、
-  `crates/celeris/src/daemon/api.rs` `config_view` に config bytes の sha256・適用した overrides・pid・
-  instance_id・release・started_at を渡す）。秘密が出ない試験（token_file の中身が応答に無い）。
-  schema 再生成（`UPDATE_SCHEMA=1`、gui `pnpm gen:types`、web へ写し）。`/health` は変えない。
-- env-lock: D3 の型・作成・照合・`instances_seen` の追記・試行ごとの A 実体照合（`ResolvedProgram` に
-  `sha256` を足し、harness_exec の起動直前に取り直す）。
-- env-check: D1 の `--env` と導出、旧 CLI 欄の削除、`CurlTransport` の token 源を file に、D1 末尾の
-  `check_config` 追加検査、D2 の照合 1〜6 を preflight に結合（`Host` trait に `/proc` 読みを足し、試験は差し替え）。
-- launcher: D4 の `scripts/campaign/measure.sh` と、実 `celeris` 測定 daemon（一時 dir・一時 port・stub
-  harness）を使う無 LLM e2e: 別 daemon の URL（同 port 相乗りを含む）・実効 config 相違・同一 path の
-  binary 差し替え・版不一致・必須入力欠落がいずれも外部実行 0 件で拒否、一致時は API → watch → 採点 → export、
-  再開で env-lock 一致。daemon 試験は userns 不要（ADR-0126）だが、試験は worker sandbox の外で走る前提を確認する。
-- runbook: `run-final.md` を `measure.sh` の実在 subcommand と `measure-env.toml` に書き換え、旧
-  `--api-url/--token-env` の手順を消す。
-
 ## 付記（daemon-identity-api の実装突き合わせ）
 - D2 の `identity.effective` から `api_token_file` を**除いた**。既存の不変条件（`tests/e2e/tests/api_scenarios.rs`
   `api_enforces_token_host_and_workspace_boundaries_without_leaking_env_values`: 「token_file の場所は応答に出ない」、
@@ -228,3 +212,13 @@
   読んで token を得る。D1）。`overrides` に `token_file` が出るので CLI で差し替えた daemon は拒否される。
 - `identity` は `ConfigView.identity`（`DaemonIdentityView`/`EffectiveConfigView`、`crates/task-api/src/types.rs`）。
   `llm_proxy_listen` は `effective_enabled()` のときだけ値、memory は `[memory]` が無ければ `null`。
+
+## 付記（launcher 一式の実装突き合わせ）
+決定本文のうち、実装が違う形・未実装のもの（本文を読むときはこちらを優先する）:
+- D1 の `measure-env.toml` と `--env` 一本化・旧 CLI 欄の削除は**採らなかった**。実装の入口は `scripts/campaign/measure-launcher.sh <prepare|start|preflight|watch|grade|export|stop> --env <file>` で、env ファイルは `KEY=VALUE` の sh 形式。launcher が接続先（`[api] listen`）・token（`[api] token_file` を環境変数 `CELERIS_MEASURE_TOKEN` に載せて名前だけ渡す）・`--measure-config` 等の引数を 1 回だけ生成して `celeris-campaign` の既存 CLI 欄へ渡す。`celeris-campaign` の CLI 欄は残っている。
+- D1 の `check_config` 追加検査は `config-check` subcommand として `prepare` と `start`（daemon 起動前）で走る。
+- D2 の照合 1〜4 は `env-check`（`crates/campaign/src/env_check.rs`）。5 は `identity.pid` と launcher 所有 PID（`--daemon-pid`）の一致と、launcher 側の実行像（`/proc/<pid>/exe` の path・sha256 と起動時記録）・`CELERIS_BIN` の sha256（prepare で固定）の照合に置き換えた（start 新規・再接続・preflight・watch の全経路）。6（`/proc/net` の port 所有）は未実装。
+- D3 の env-lock は A の program・B/C の release・arm ごとの方策と catalog（`GET /api/v1/llm/models`）・worker 実行ファイルを固定する。`release_bin_sha256`・`instances_seen`・試行ごとの A 実体 sha256 の取り直しは未実装。
+- D4 の入口名は `measure-launcher.sh`（`measure.sh` ではない）。release 写しの作成・`status`・`finalize` は無い。daemon は `CELERIS_BIN` を `--config <daemon_config> --release <sha12> --mode normal` だけで直接起動する。
+- 作業 1（試行 identity 別 account 状態）は統合済み: `<out>/trial-state/<campaign>/<arm>/<case>/rep<N>/` の `trial-identity.json` と preflight の `trial-state` 検査。launcher は account に触れない。
+

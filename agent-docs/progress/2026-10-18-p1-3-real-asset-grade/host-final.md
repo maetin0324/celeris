@@ -16,7 +16,7 @@ completed: 2026-10-18
 - 4 件すべて exit 0。出力は operator の artifacts/host-cap3-{a,b,c,k4}.json。
 - K2 arm a: ok=true。cc・c++・cmake・git・ucx-pkg・min-build-ucx・min-build-cmake・autotools・libclang・**rdma-verbs**・sirius-link の 11 能力すべて ok。
 - **rdma-verbs: ok**（不足なし）。前回審査が指摘した「82d15134 で追加された rdma-verbs の実走記録が無い」は、この実走で解消。
-- 注意: この実走時点の B/C は A と同じローカル sandbox を probe が走らせた記録で、worker 環境の確認ではなかった。現在の B/C probe は測定専用 daemon の process から環境を取る別経路（ADR 2026-10-18-bc-probe-daemon-env）。この記録を B/C の実経路証拠に使わない。
+- 注意: この実走時点の B/C は A と同じローカル sandbox を probe が走らせた記録で、worker 環境の確認ではなかった。現在の B/C probe は測定専用 daemon の通常の worker 起動経路に検査 task を通す別経路（ADR 2026-10-18-bc-probe-daemon-env）。この記録を B/C の実経路証拠に使わない。
 
 ## 2. verify-real-assets.sh --build
 - exit **101**（FAILED）。全文は operator の artifacts/host-build3.log。

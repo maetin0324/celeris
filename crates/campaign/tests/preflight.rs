@@ -33,12 +33,13 @@ impl Host for FakeHost {
     fn probe_runner(&self) -> Box<dyn celeris_campaign::cap_probe::ProbeRunner> {
         Box::new(preflight_setup::OkRunner)
     }
-    fn worker_daemon_env(
+    fn probe_daemon_worker(
         &self,
-        _: &celeris_campaign::harness_exec::Toolchain,
-        _: u32,
-    ) -> Result<celeris_campaign::cap_probe::WorkerDaemonEnv, String> {
-        Ok(preflight_setup::fake_worker_daemon())
+        _: &str,
+        _: &str,
+        spec: &celeris_campaign::cap_probe::WorkerProbeSpec,
+    ) -> Result<celeris_campaign::cap_probe::WorkerProbeRun, String> {
+        Ok(preflight_setup::ok_worker_run(spec))
     }
 
     fn env_nonempty(&self, name: &str) -> bool {

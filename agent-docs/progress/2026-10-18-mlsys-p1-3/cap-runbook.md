@@ -27,9 +27,27 @@ worker sandbox は userns が使えないため、実 A sandbox 内の実走と�
 ## 1. cap-probe: A は実 A sandbox、B/C は測定専用 daemon の環境（ADR 2026-10-18-bc-probe-daemon-env）
 A と B/C は**別の経路**を検査する。B/C は A と同じ sandbox / 同じ argv ではない。
 - A: A が実際に使う sandbox（`Sandbox::wrap_resolved`）に probe argv を包んで走らせる。
-- B/C: identity 照合に通った測定専用 daemon の process（`--daemon-pid`）から、PATH・cap env の `worker.env` が名指す変数・非秘密の `HOME/LANG/LC_ALL/TERM/USER/LOGNAME` だけを取り（環境全体は取らない・記録しない）、worker の実起動関数（`FakeAdapter` → `run_subprocess`）で `env -i <その環境>` の子 process に検査を走らせる。この CLI の環境は使わない。daemon の PATH・変数・ro_mounts（`test -d`）・socket（`test -S`）・必要能力の欠落は、該当 arm の `env_failure`（LLM 呼出し前）。報告の `daemon`（pid・starttime・instance_id・release）が検査先の識別。
+- B/C: identity 照合に通った測定専用 daemon に、無 LLM の検査 task（genre `cap-probe`）を通常の `POST /api/v1/tasks` で投入する。daemon の dispatcher が通常どおり worker process（`celeris-campaign cap-worker`）を起こし、その環境（daemon の環境 + adapter env + run ごとの env・権限・cwd）の中で検査が走る。この CLI の環境も `/proc/<pid>/environ` も使わない。worker は検査の定義（task の objective）を読み、能力の有無と識別だけを `worker_finished` の outcome に返す（環境変数の値・stdout は返さない・記録しない）。daemon 側の PATH・変数・ro_mounts（`test -d`）・socket（`test -S`）・必要能力の欠落は、該当 arm の `env_failure`（LLM 呼出し前）。報告の `daemon`（pid・instance_id・release・`probe_task_id`）が検査先の識別。検査 task は測定 daemon の task 一覧に残る（試行 task ではない）。他の検査が落ちている preflight では投入しない。
+- 測定専用 daemon の config に次を足す（検査 worker を無 LLM の fake harness に結ぶ。本番の config ではなく測定 config）:
+  ```toml
+  [adapters.fake]
+  command = ["<celeris-campaign の絶対 path>", "cap-worker"]
+  [llm_sources.cap-probe]
+  kind = "fake"
+  accounts = ["probe"]
+  models = ["fake"]
+  [harnesses.cap-probe]
+  kind = "fake"
+  api_formats = ["fake"]
+  source_kinds = ["fake"]
+  [route_defaults.cap-probe]
+  candidates = [{ source = "cap-probe", model = "fake" }]
+  [harness_selection]
+  rules = [{ genre = "cap-probe", harness = "cap-probe", required_capabilities = [] }]   # 既存の規則に足す
+  ```
+  無ければ検査 task は走らず、待ち時間（300 秒）の後に `worker-run` の `env_failure`（モデル失敗ではない）。
 
-前提: 測定専用 daemon を launcher で起動済み（`--daemon-pid` は launcher 所有の pid）。
+前提: 上の config で測定専用 daemon を launcher により起動済み（`--daemon-pid` は launcher 所有の pid）。
 ```sh
 cd <worktree>
 # A（実 sandbox）
@@ -43,7 +61,7 @@ for arm in b c; do
     --daemon-pid <launcher の pid> --api-url <測定 daemon の origin> --token-env <ENV名> > $WORK/cap-$arm.json; echo "arm=$arm exit=$?"
 done
 ```
-期待: 各 arm exit 0、JSON `ok: true`、K2 の 13 能力（cc, c++, cmake, git, ucx-pkg, min-build-ucx, min-build-cmake, rustc-min, min-build-locusta, autotools, libclang, rdma-verbs, sirius-link）が全て ok。K4（python3 と stdlib）も ok。B/C は JSON の `daemon.pid` が launcher の pid と一致すること。
+期待: 各 arm exit 0、JSON `ok: true`、K2 の 13 能力（cc, c++, cmake, git, ucx-pkg, min-build-ucx, min-build-cmake, rustc-min, min-build-locusta, autotools, libclang, rdma-verbs, sirius-link）が全て ok。K4（python3 と stdlib）も ok。B/C は JSON の `daemon.pid` が launcher の pid と一致し、`daemon.probe_task_id` が測定 daemon の task であること。
 B/C の daemon 側に toolchain / socket が無ければ exit 非 0、`failure_class: env_failure`（`worker-env` / `toolchain:` / `socket:` / 能力 id）。その場合は daemon の起動環境（PATH・EnvironmentFile）か cap env を直し、daemon を起こし直して再実行する。sandbox を緩めて通さない。測定専用 daemon でない pid（identity 照合に通らない）は検査せず拒否される。
 
 ## 2. K2 実 asset の組立・ビルド・正負例（verify-real-assets.sh）

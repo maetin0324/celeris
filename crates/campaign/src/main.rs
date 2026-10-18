@@ -17,7 +17,7 @@ use celeris_campaign::{
     watch::{self, SystemClock, WatchOptions},
 };
 
-const USAGE: &str = "usage: celeris-campaign <dry-run|validate|env-lock|config-check|env-check|preflight|cap-probe|run|watch|check|check-report|export|final-accounting|grade-out|usage> --manifest <path> \
+const USAGE: &str = "usage: celeris-campaign <dry-run|validate|env-lock|config-check|env-check|preflight|cap-probe|cap-worker|run|watch|check|check-report|export|final-accounting|grade-out|usage> --manifest <path> \
 [--interval-secs N] [--max-iterations M] [--cases <grade-case dir> [--initial-trees <dir>]] \
 [--input-manifest <path>] [--out <dir>] [--executor mock|harness|celeris] [--api-url <url> --token-env <ENV_NAME> [--task-template <json>]] [--dest <dir>] \
 [--cases-root <dir>] [--grader-root <dir>] [--grade-case-root <dir>] [--a-program <path>] [--report <file>] [--measurement-id <id>] [--repo-src <dir>] [--materials-src <dir>] [--kb-src <dir>] [--inputs-src <dir>] [--records <records.jsonl>] [--cos-not-called <basis>] [--quota <usage.json>] [--a-account <account_id>] [--measure-config <toml> --normal-config <toml> --canaries <json>] [--max-7d <ratio>] [--max-7d-codex <ratio>]";
@@ -231,12 +231,15 @@ fn cap_probe_cli(args: &[String]) -> Result<String, String> {
         };
         let target = celeris_campaign::env_check::verify(me, &m, url, tok, &RealHost)
             .map_err(|es| format!("not the measurement daemon: {}", es.join("; ")))?;
-        let mut daemon = preflight::Host::worker_daemon_env(&RealHost, &env.worker, target.pid)?;
-        daemon.source = Some(celeris_campaign::cap_probe::DaemonRef {
-            starttime: daemon.source.as_ref().map_or(0, |s| s.starttime),
-            ..target
-        });
-        cap_probe::probe_worker(&env, &daemon, arm, &ws, case)
+        let t = celeris_campaign::curl_transport::CurlTransport::new(url, tok)?;
+        cap_probe::probe_worker(&env, &target, arm, case, &|spec| {
+            cap_probe::run_in_daemon(
+                &t,
+                spec,
+                std::time::Duration::from_secs(300),
+                std::time::Duration::from_millis(500),
+            )
+        })
     };
     let s = serde_json::to_string_pretty(&rep).map_err(|e| e.to_string())?;
     if rep.ok { Ok(s) } else { Err(s) }
@@ -598,6 +601,16 @@ fn run(args: Vec<String>) -> Result<String, String> {
 }
 
 fn main() -> ExitCode {
+    // 測定専用 daemon が `[adapters.fake] command` として起こす無 LLM の検査 worker（stdin の run → stdout の done 1 行）。
+    if std::env::args().nth(1).as_deref() == Some("cap-worker") {
+        return match celeris_campaign::cap_probe::cap_worker_main() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("error: {e}");
+                ExitCode::from(1)
+            }
+        };
+    }
     match run(std::env::args().skip(1).collect()) {
         Ok(out) => {
             println!("{out}");

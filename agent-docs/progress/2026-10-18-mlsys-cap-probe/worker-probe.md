@@ -6,7 +6,7 @@ updated: 2026-10-18
 ---
 # worker-probe
 
-> 2026-10-18 追補（task 01M57MB8PWVW50KD127M30HEFT）: 下の「daemon 設定の `[worker]` / この process の環境」は旧方式。現行は測定専用 daemon の process から環境を取る（ADR 2026-10-18-bc-probe-daemon-env、progress `2026-10-18-bc-probe-daemon-env.md`）。
+> 2026-10-18 追補（task 01M57MB8PWVW50KD127M30HEFT）: 下の「daemon 設定の `[worker]` / この process の環境」「FakeAdapter 経由」は旧方式の記録。現行は測定専用 daemon に検査 task を投入し、daemon の dispatcher が起こす worker process の中で検査する（ADR 2026-10-18-bc-probe-daemon-env、progress `2026-10-18-bc-probe-daemon-env.md`）。
 
 ## 実装（旧方式の記録）
 - `cap_probe::probe_worker`: B/C の probe を `task_worker::FakeAdapter`（`run_subprocess`）に通す。LLM は呼ばない。検査 script を daemon 設定の PATH・env・cwd（workspace）の子 process で走らせ、`artifacts/cap-probe/<i>.{code,out}` で結果を受ける。campaign が task-worker に依存する。

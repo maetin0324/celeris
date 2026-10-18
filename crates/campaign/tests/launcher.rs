@@ -29,9 +29,6 @@ use serde_json::{Value, json};
 const WAIT: Duration = Duration::from_secs(120);
 /// daemon 役の試験名（wrapper が `--exact` で指す）。
 const ROLE: &str = "launcher_daemon_role";
-/// daemon 役が数える `POST /api/v1/tasks`（測定 dir の中。1 行 = 1 回）。
-const POSTS_LOG: &str = "task-posts.log";
-
 // ---- daemon 役（launcher が起動する process の中身） ----
 
 /// 通常の試験実行では何もしない。launcher が wrapper 経由で `-- --config <toml> --release <sha12>` を付けて
@@ -119,24 +116,7 @@ async fn serve_role(config: PathBuf, release: String) {
     s.config_view = view;
     let (tx, rx) = tokio::sync::watch::channel(None);
     let state = task_api::ApiState::new(s, rx).unwrap();
-    let posts = base.join(POSTS_LOG);
-    let app = task_api::router(state).layer(axum::middleware::from_fn(
-        move |req: axum::extract::Request, next: axum::middleware::Next| {
-            let posts = posts.clone();
-            async move {
-                if req.method() == axum::http::Method::POST && req.uri().path() == "/api/v1/tasks" {
-                    use std::io::Write;
-                    let mut f = fs::OpenOptions::new()
-                        .create(true)
-                        .append(true)
-                        .open(&posts)
-                        .unwrap();
-                    writeln!(f, "POST /api/v1/tasks").unwrap();
-                }
-                next.run(req).await
-            }
-        },
-    ));
+    let app = task_api::router(state);
     let listener = match tokio::net::TcpListener::bind(&listen).await {
         Ok(l) => l,
         Err(e) => {
@@ -145,12 +125,43 @@ async fn serve_role(config: PathBuf, release: String) {
         }
     };
     // 実行器の stub: 投入された task を store の通常の遷移（dispatch → worker done → review pass）で終える。
-    std::thread::spawn(move || stub_executor(&db, &config));
+    std::thread::spawn(move || stub_executor(&db, &config, &ws));
     axum::serve(listener, app).await.unwrap();
     drop(tx);
 }
 
-fn stub_executor(db: &Path, config: &Path) {
+/// 検査 task の worker（実 `celeris-campaign cap-worker`）。環境は daemon（この process）のまま継ぐ。
+fn run_cap_worker(t: &task_core::Task, ws: &Path) -> String {
+    use std::io::Write;
+    let work = ws.join(t.id.to_string());
+    fs::create_dir_all(work.join("artifacts")).unwrap();
+    let req = task_worker::RunRequest {
+        protocol: task_worker::PROTOCOL_VERSION,
+        task: t.clone(),
+        workspace: work.clone(),
+        work_dir: None,
+        artifacts_dir: work.join("artifacts"),
+        context: task_worker::RunContext::default(),
+        llm_route: None,
+        cargo_target_dir: None,
+    };
+    // daemon 役の環境は launcher が絞っているので CARGO_BIN_EXE_* は無い。wrapper が渡した path を使う。
+    let mut c = Command::new(std::env::var("CAP_WORKER_BIN").expect("CAP_WORKER_BIN"))
+        .arg("cap-worker")
+        .current_dir(&work)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = c.stdin.take().unwrap();
+    writeln!(stdin, "{}", serde_json::to_string(&req).unwrap()).unwrap();
+    drop(stdin);
+    let out = c.wait_with_output().unwrap();
+    let done: Value = serde_json::from_str(String::from_utf8_lossy(&out.stdout).trim()).unwrap();
+    done["summary"].as_str().unwrap().to_string()
+}
+
+fn stub_executor(db: &Path, config: &Path, ws: &Path) {
     use task_core::{Event, Status, TaskStore, Trigger};
     let store = task_core::SqliteStore::open(db).unwrap();
     loop {
@@ -179,7 +190,14 @@ fn stub_executor(db: &Path, config: &Path) {
                     Trigger::WorkerDone,
                     Some(Event::WorkerFinished {
                         run_id,
-                        outcome: "done: stub".into(),
+                        // 検査 task は実 `cap-worker` を、この daemon process の環境のまま起こして走らせる。
+                        outcome: if t.genre.as_deref()
+                            == Some(celeris_campaign::cap_probe::PROBE_GENRE)
+                        {
+                            format!("done: {}", run_cap_worker(&t, ws))
+                        } else {
+                            "done: stub".into()
+                        },
                         usage: serde_json::from_value(
                             json!({"input_tokens": 1000, "output_tokens": 50, "cost_usd": 0.01}),
                         )
@@ -303,9 +321,15 @@ impl Fx {
     fn ledger(&self) -> Vec<u8> {
         fs::read(self.out().join("ledger.jsonl")).unwrap_or_default()
     }
+    /// 測定 daemon に作られた試行 task の数（無 LLM の能力検査 task `cap-probe` は数えない。daemon が無ければ 0）。
     fn task_posts(&self) -> usize {
-        fs::read_to_string(self.d().join("measure").join(POSTS_LOG))
-            .map_or(0, |s| s.lines().count())
+        if !self.healthy() {
+            return 0;
+        }
+        let (_, v) = self.api("GET", "/api/v1/tasks?archived=1&limit=200", None);
+        v["items"].as_array().or(v.as_array()).map_or(0, |a| {
+            a.iter().filter(|t| t["genre"] != "cap-probe").count()
+        })
     }
     fn owned_pid(&self) -> Option<u32> {
         fs::read_to_string(self.state().join("launcher.pid"))
@@ -318,7 +342,8 @@ impl Fx {
         write_exec(
             &self.d().join("bin/celeris"),
             &format!(
-                "#!/bin/sh\n{extra}exec '{}' --exact {ROLE} --nocapture --test-threads=1 -- \"$@\"\n",
+                "#!/bin/sh\nexport CAP_WORKER_BIN='{}'\n{extra}exec '{}' --exact {ROLE} --nocapture --test-threads=1 -- \"$@\"\n",
+                campaign_bin(),
                 real.display()
             ),
         );
@@ -530,7 +555,7 @@ fn assert_rejected(f: &Fx, sub: &str, needle: &str) {
     assert!(!o.status.success(), "{sub} must be rejected: {t}");
     assert!(t.contains(needle), "expected {needle:?} in: {t}");
     assert_eq!(f.a_launches(), a, "A was launched: {}", f.claude_log());
-    assert_eq!(f.task_posts(), posts, "a task was POSTed");
+    assert_eq!(f.task_posts(), posts, "a task was POSTed ({sub}: {needle})");
     assert_eq!(f.ledger(), ledger, "ledger changed");
     assert!(!t.contains(TOKEN), "token leaked");
 }
@@ -569,7 +594,15 @@ fn matching_environment_runs_task_api_watch_grade_export_and_resumes_with_the_fi
     assert_eq!(cfg["identity"]["release"], json!(MEASURE_RELEASE));
     f.create_project();
     ok(&f, "preflight");
-    assert_eq!(f.task_posts(), 0, "preflight must not create tasks");
+    // preflight が測定 daemon に作るのは無 LLM の能力検査 task（case × B/C = 4 件）だけで、試行 task は作らない。
+    assert_eq!(f.task_posts(), 0, "preflight must not create trial tasks");
+    let (_, probes) = f.api("GET", "/api/v1/tasks?limit=50", None);
+    let probes = probes["items"].as_array().or(probes.as_array()).unwrap();
+    assert_eq!(probes.len(), 4, "{probes:?}");
+    assert!(
+        probes.iter().all(|t| t["genre"] == "cap-probe"),
+        "{probes:?}"
+    );
 
     // 通常 API による task 投入 → watch が台帳を閉じるまで。
     let w = ok(&f, "watch");
@@ -578,12 +611,20 @@ fn matching_environment_runs_task_api_watch_grade_export_and_resumes_with_the_fi
     assert_eq!(rep["watch"]["end"], json!("settled"), "{w}");
     assert_eq!(rep["ledger"]["by_state"], json!({"done": 6}), "{w}");
     assert_eq!(rep["executor_errors"], json!(0), "{w}");
-    // B/C × 2 問題 = 4 件が正式 API（POST /api/v1/tasks）で投入され、A × 2 問題が stub harness で走った。
+    // B/C × 2 問題 = 4 件が正式 API（POST /api/v1/tasks）で投入され、A × 2 問題が stub harness で走った
+    // （無 LLM の能力検査 task は数えない）。
     assert_eq!(f.task_posts(), 4, "{w}");
     assert_eq!(f.a_launches(), 2, "{}", f.claude_log());
     let (st, tasks) = f.api("GET", "/api/v1/tasks?limit=50", None);
     assert_eq!(st, 200);
-    let items = tasks["items"].as_array().or(tasks.as_array()).unwrap();
+    let items: Vec<_> = tasks["items"]
+        .as_array()
+        .or(tasks.as_array())
+        .unwrap()
+        .iter()
+        .filter(|t| t["genre"] != "cap-probe")
+        .cloned()
+        .collect();
     assert_eq!(items.len(), 4, "{tasks}");
     assert!(items.iter().all(|t| t["status"] == "done"), "{tasks}");
     // 各 task は通常の run（usage 付き）で終わっている。
@@ -619,10 +660,12 @@ fn matching_environment_runs_task_api_watch_grade_export_and_resumes_with_the_fi
         Some(pid),
         "start must reconnect, not restart"
     );
+    let posts_before = f.task_posts();
     ok(&f, "watch");
     assert_eq!(fs::read(f.out().join("env-lock.json")).unwrap(), lock);
     assert_eq!(f.ledger(), before);
-    assert_eq!(f.task_posts(), 4);
+    // 再開は試行 task を再投入しない（能力検査 task は数えない）。
+    assert_eq!(f.task_posts(), posts_before);
     assert_eq!(f.a_launches(), a_before);
     // 秘密値は固定記録にもログにも無い。
     for p in [

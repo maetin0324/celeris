@@ -1,6 +1,7 @@
 //! A の試行 state 分離と CLI 停止・再起動の e2e（実 CLI 入口 → preflight → executor）。無 LLM・無 network。
 //! - 実 `celeris-campaign watch --executor harness` を子 process として起動する。task-api は実 router（正式 DTO）を
 //!   loopback の TCP で serve し、案件・アカウントは実 router の `POST /projects` と `[accounts] claude_dir` で作る。
+//! - B/C の能力検査 task は、daemon の dispatcher の代役が daemon の環境（CLI の環境ではない）で実 `cap-worker` を起こして走らせる。
 //! - A の実行ファイルは履歴（transcript・memory）に試行固有の文字列を書く stub。bwrap の中で動く実 process。
 //! - CLI は SIGSTOP → SIGKILL で止め、同じ引数で再起動する。時間は gate file（state dir 内）と出来事待ちで進める。
 mod daemon_identity;
@@ -38,15 +39,109 @@ struct Env {
     project_id: String,
     stub: PathBuf,
     campaign_id: String,
-    /// 測定 daemon の代役の実 process。worker 環境（PATH）はこの process から取られる。CLI の PATH とは別。
+    /// 測定 daemon の代役の実 process（identity が答える pid）。CLI の PATH とは別の環境を持つ。
     daemon: Child,
+    /// daemon の dispatcher の代役（検査 task を、daemon の環境で実 `cap-worker` process に走らせる）。
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    standin: Option<std::thread::JoinHandle<()>>,
 }
 
 impl Drop for Env {
     fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        if let Some(h) = self.standin.take() {
+            let _ = h.join();
+        }
         let _ = self.daemon.kill();
         let _ = self.daemon.wait();
     }
+}
+
+/// 測定 daemon の dispatcher 相当（この試験の関心は A の試行 state と CLI の停止・再開。daemon の worker 起動経路そのものは
+/// `crates/celeris/tests/cap_probe_real_daemon.rs` が実 `celeris` で確かめる）。cap-probe の検査 task を、daemon の環境
+/// （`env_clear` + `worker_path`。CLI の環境ではない）で実 `celeris-campaign cap-worker` process に走らせ、worker の
+/// outcome を通常の event（`worker_finished`）で残して完了させる。
+fn spawn_standin_dispatcher(
+    db: PathBuf,
+    ws: PathBuf,
+    worker_path: String,
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) -> std::thread::JoinHandle<()> {
+    use std::io::Write;
+    use std::sync::atomic::Ordering;
+    use task_core::{Event, RunEnd, SqliteStore, Status, TaskStore, Trigger};
+    std::thread::spawn(move || {
+        let store = SqliteStore::open(&db).unwrap();
+        while !stop.load(Ordering::SeqCst) {
+            for t in store.list(Some(Status::Ready)).unwrap() {
+                if t.genre.as_deref() != Some(celeris_campaign::cap_probe::PROBE_GENRE) {
+                    continue;
+                }
+                store
+                    .apply_transition(t.id, Trigger::Dispatch, None)
+                    .unwrap();
+                let work = ws.join(t.id.to_string());
+                fs::create_dir_all(work.join("artifacts")).unwrap();
+                let req = task_worker::RunRequest {
+                    protocol: task_worker::PROTOCOL_VERSION,
+                    task: t.clone(),
+                    workspace: work.clone(),
+                    work_dir: None,
+                    artifacts_dir: work.join("artifacts"),
+                    context: task_worker::RunContext::default(),
+                    llm_route: None,
+                    cargo_target_dir: None,
+                };
+                let mut c = Command::new(std::env::var("CARGO_BIN_EXE_celeris-campaign").unwrap())
+                    .arg("cap-worker")
+                    .env_clear()
+                    .env("PATH", &worker_path)
+                    .current_dir(&work)
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::piped())
+                    .spawn()
+                    .unwrap();
+                let mut stdin = c.stdin.take().unwrap();
+                stdin
+                    .write_all(format!("{}\n", serde_json::to_string(&req).unwrap()).as_bytes())
+                    .unwrap();
+                drop(stdin);
+                let out = c.wait_with_output().unwrap();
+                let done: Value =
+                    serde_json::from_str(String::from_utf8_lossy(&out.stdout).trim()).unwrap();
+                let run = format!("standin-{}", t.id);
+                store
+                    .apply_transition_with_events(
+                        t.id,
+                        Trigger::WorkerDone,
+                        vec![
+                            Event::WorkerStarted {
+                                run_id: run.clone(),
+                                adapter: "fake".into(),
+                                model: "fake".into(),
+                                provider: Some("cap-probe".into()),
+                                account: None,
+                                role: None,
+                                task_role: None,
+                            },
+                            Event::WorkerFinished {
+                                run_id: run,
+                                outcome: format!("done: {}", done["summary"].as_str().unwrap()),
+                                usage: None,
+                                role: None,
+                                metrics: None,
+                                end: Some(RunEnd::Completed),
+                            },
+                        ],
+                    )
+                    .unwrap();
+                store
+                    .apply_transition(t.id, Trigger::ReviewPass, None)
+                    .unwrap();
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    })
 }
 
 fn write_executable(path: &Path, contents: &str) {
@@ -109,14 +204,6 @@ async fn env() -> Env {
         .stderr(Stdio::null())
         .spawn()
         .unwrap();
-    // exec 直後は /proc/<pid>/environ がまだ空のことがある。出来事を待つ。
-    for _ in 0..2000 {
-        let b = fs::read(format!("/proc/{}/environ", daemon.id())).unwrap_or_default();
-        if String::from_utf8_lossy(&b).contains("PATH=") {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(5));
-    }
     let acct = tempfile::tempdir().unwrap();
     let lab = acct.path().join("lab");
     fs::create_dir_all(&lab).unwrap();
@@ -148,6 +235,13 @@ async fn env() -> Env {
     st.config_view = daemon_config_view(&measure, MEASURE_RELEASE);
     st.config_view.identity.pid = daemon.id();
     api.state = task_api::ApiState::new(st, api.daemon_tx.subscribe()).unwrap();
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let standin = spawn_standin_dispatcher(
+        api.db_path.clone(),
+        api.workspace_root.clone(),
+        worker_path.clone(),
+        stop.clone(),
+    );
     let created = send(
         &api.router(),
         post_admin(
@@ -219,6 +313,8 @@ async fn env() -> Env {
         stub,
         campaign_id,
         daemon,
+        stop,
+        standin: Some(standin),
     }
 }
 

@@ -1,5 +1,6 @@
-//! 必要能力 probe: case 固定・A と同じ sandbox argv・不足は env_failure で最初の LLM 呼出し前に停止・B/C 同等。
-//! userns が要る実走は worker sandbox で出来ないので、argv 組立・判定・停止順序を stub runner で確かめる。
+//! 必要能力 probe: case 固定・A の sandbox argv・不足は env_failure で最初の LLM 呼出し前に停止・B/C は同じ能力を
+//! 測定専用 daemon の worker で検査する。userns が要る実走は worker sandbox で出来ないので、A は argv 組立・判定・
+//! 停止順序を stub runner で、B/C は結果の判定を stub で確かめる（daemon の worker 起動経路は別 file の実 process 試験）。
 use std::{cell::RefCell, path::Path};
 
 use celeris_campaign::{
@@ -257,21 +258,22 @@ impl Host for StubHost {
     fn sandbox_usable(&self) -> Result<(), String> {
         Ok(())
     }
-    fn worker_daemon_env(
+    /// daemon の worker が返す結果の代役（経路そのものは cap_probe_daemon.rs / cap_probe_real_daemon.rs）。
+    fn probe_daemon_worker(
         &self,
-        _: &Toolchain,
-        _: u32,
-    ) -> Result<cap_probe::WorkerDaemonEnv, String> {
-        Ok(if self.0 {
-            fake_worker_daemon()
-        } else {
-            // 何も解決できない PATH（socket も道具も無い worker）。
-            cap_probe::WorkerDaemonEnv {
-                path: Some("/nonexistent-cap-probe".into()),
-                env: vec![],
-                source: None,
+        _: &str,
+        _: &str,
+        spec: &cap_probe::WorkerProbeSpec,
+    ) -> Result<cap_probe::WorkerProbeRun, String> {
+        let mut run = ok_worker_run(spec);
+        if !self.0 {
+            // 道具（sirius-link）が worker の PATH に無い。
+            for r in run.results.iter_mut().filter(|r| r.id == "sirius-link") {
+                r.ok = false;
+                r.detail = "exit 127".into();
             }
-        })
+        }
+        Ok(run)
     }
     fn probe_runner(&self) -> Box<dyn ProbeRunner> {
         if self.0 {
@@ -321,7 +323,7 @@ fn preflight_stops_before_any_llm_call_on_missing_capability() {
     assert_eq!(class, Some("env_failure"));
 }
 
-// ---- B/C: task-worker の実起動関数（FakeAdapter → run_subprocess）経由の能力 probe ----
+// ---- B/C: probe_worker の判定（worker の結果 → 報告）。daemon の worker 起動経路は cap_probe_daemon.rs ----
 
 fn k4() -> celeris_campaign::cases::Case {
     cases()
@@ -331,141 +333,62 @@ fn k4() -> celeris_campaign::cases::Case {
         .clone()
 }
 
-fn fake_dir(names: &[&str], body: &str) -> std::path::PathBuf {
-    let d = tempfile::tempdir().expect("dir").keep();
-    for n in names {
-        let mut c = std::process::Command::new("/bin/sh")
-            .arg("-c")
-            .arg(r#"cat > "$1" && chmod 755 "$1""#)
-            .arg("sh")
-            .arg(d.join(n))
-            .stdin(std::process::Stdio::piped())
-            .spawn()
-            .expect("spawn");
-        std::io::Write::write_all(&mut c.stdin.take().expect("stdin"), body.as_bytes())
-            .expect("write");
-        assert!(c.wait().expect("wait").success());
-    }
-    d
-}
-
-fn daemon(dir: &Path, env: Vec<(String, String)>) -> cap_probe::WorkerDaemonEnv {
-    cap_probe::WorkerDaemonEnv {
-        path: Some(format!("{}:/usr/bin:/bin", dir.display())),
-        env,
-        source: None,
+fn target() -> cap_probe::DaemonRef {
+    cap_probe::DaemonRef {
+        pid: 4242,
+        instance_id: Some("inst-1".into()),
+        release: Some("0123456789ab".into()),
+        probe_task_id: None,
     }
 }
 
-const PY_STUB: &str = "#!/bin/sh\necho \"Python 3 pwd=$PWD mark=$CAP_MARK\"\n";
-
-/// 子 process は daemon 設定の PATH・env と worker の cwd で走り、実起動関数の run（request.json）が残る。
 #[test]
-fn worker_probe_runs_through_run_subprocess_with_daemon_path_env_and_cwd() {
-    let tools = fake_dir(&["python3"], PY_STUB);
-    let env = env_json(json!({
-        "env": [["CAP_MARK", "m1"], ["PATH", tools.display().to_string()]]
-    }));
-    let ws = tempfile::tempdir().expect("ws");
-    let d = daemon(&tools, vec![("CAP_MARK".into(), "m1".into())]);
+fn probe_worker_reports_identity_and_task_of_the_daemon_that_ran_it() {
+    let env = env_json(json!({}));
     for arm in [ConfigId::B, ConfigId::C] {
-        let rep = cap_probe::probe_worker(&env, &d, arm, ws.path(), &k4());
+        let rep =
+            cap_probe::probe_worker(&env, &target(), arm, &k4(), &|spec| Ok(ok_worker_run(spec)));
         assert!(rep.ok, "{:?}", rep.results);
         assert_eq!(rep.paid_calls_made, 0);
-        let out =
-            std::fs::read_to_string(ws.path().join("artifacts/cap-probe/0.out")).expect("out");
-        let cwd = std::fs::canonicalize(ws.path()).expect("canon");
-        assert!(out.contains("mark=m1"), "{out}");
-        assert!(out.contains(&format!("pwd={}", cwd.display())), "{out}");
-        assert!(ws.path().join("runs/cap-probe/request.json").exists());
-        assert!(ws.path().join("runs/cap-probe/stdout.jsonl").exists());
-    }
-}
-
-fn failing(rep: &cap_probe::ProbeReport) -> Vec<&str> {
-    rep.results
-        .iter()
-        .filter(|r| !r.ok)
-        .map(|r| r.id.as_str())
-        .collect()
-}
-
-#[test]
-fn worker_probe_missing_socket_is_env_failure_per_arm() {
-    let tools = fake_dir(&["python3"], PY_STUB);
-    let sock = tempfile::tempdir().expect("s").keep().join("absent.sock");
-    let env = env_json(json!({"sockets":[sock]}));
-    let d = daemon(&tools, vec![]);
-    let ws = tempfile::tempdir().expect("ws");
-    for arm in [ConfigId::B, ConfigId::C] {
-        let rep = cap_probe::probe_worker(&env, &d, arm, ws.path(), &k4());
-        assert!(!rep.ok);
-        assert_eq!(rep.arm, arm);
-        assert_eq!(rep.failure_class, Some("env_failure"));
-        assert_eq!(failing(&rep), vec![format!("socket:{}", sock.display())]);
+        let d = rep.daemon.expect("identity");
+        assert_eq!((d.pid, d.instance_id.as_deref()), (4242, Some("inst-1")));
+        assert_eq!(d.probe_task_id.as_deref(), Some("01TESTPROBETASK"));
     }
 }
 
 #[test]
-fn worker_probe_missing_toolchain_is_env_failure_per_arm() {
-    let tools = fake_dir(&["python3"], PY_STUB);
-    let mount = tempfile::tempdir().expect("m").keep().join("absent-prefix");
-    let env = env_json(json!({"ro_mounts":[mount]}));
-    let d = daemon(&tools, vec![]);
-    let ws = tempfile::tempdir().expect("ws");
-    for arm in [ConfigId::B, ConfigId::C] {
-        let rep = cap_probe::probe_worker(&env, &d, arm, ws.path(), &k4());
-        assert_eq!(rep.failure_class, Some("env_failure"));
-        assert_eq!(
-            failing(&rep),
-            vec![format!("toolchain:{}", mount.display())]
-        );
-    }
-    // 道具（python3）そのものが daemon の PATH に無い場合。
-    let empty = fake_dir(&[], "");
-    let rep = cap_probe::probe_worker(
-        &env_json(json!({})),
-        &cap_probe::WorkerDaemonEnv {
-            path: Some(empty.display().to_string()),
-            env: vec![],
-            source: None,
-        },
-        ConfigId::C,
-        ws.path(),
-        &k4(),
-    );
+fn probe_worker_failed_check_missing_result_or_no_run_is_env_failure() {
+    let env = env_json(json!({}));
+    // worker が 1 件落とした。
+    let rep = cap_probe::probe_worker(&env, &target(), ConfigId::B, &k4(), &|spec| {
+        let mut run = ok_worker_run(spec);
+        run.results[1].ok = false;
+        run.results[1].detail = "exit 127".into();
+        Ok(run)
+    });
     assert_eq!(rep.failure_class, Some("env_failure"));
-    assert!(failing(&rep).contains(&"python3"), "{:?}", rep.results);
-}
-
-#[test]
-fn worker_probe_daemon_config_mismatch_is_env_failure() {
-    let tools = fake_dir(&["python3"], PY_STUB);
-    let other = fake_dir(&[], "");
-    let env = env_json(json!({
-        "env": [["CAP_MARK", "m1"], ["PATH", other.display().to_string()]]
-    }));
-    let ws = tempfile::tempdir().expect("ws");
-    // env 値の違い・欠落、期待 PATH 要素が daemon の PATH に無い。
-    let d = daemon(&tools, vec![("CAP_MARK".into(), "other".into())]);
-    let rep = cap_probe::probe_worker(&env, &d, ConfigId::B, ws.path(), &k4());
+    assert_eq!(rep.arm, ConfigId::B);
+    // 返さなかった検査は不合格（黙って通さない）。
+    let rep = cap_probe::probe_worker(&env, &target(), ConfigId::C, &k4(), &|spec| {
+        let mut run = ok_worker_run(spec);
+        run.results.truncate(1);
+        Ok(run)
+    });
     assert_eq!(rep.failure_class, Some("env_failure"));
-    let details: Vec<_> = rep
-        .results
-        .iter()
-        .filter(|r| r.id == "worker-env")
-        .map(|r| r.detail.clone())
-        .collect();
-    assert_eq!(details.len(), 2, "{details:?}");
-    assert!(details.iter().any(|x| x.contains("CAP_MARK")));
-    assert!(details.iter().any(|x| x.contains("PATH lacks")));
-    let none = daemon(&tools, vec![]);
-    let rep = cap_probe::probe_worker(&env, &none, ConfigId::C, ws.path(), &k4());
     assert!(
         rep.results
             .iter()
-            .any(|r| r.detail.contains("daemon env lacks CAP_MARK"))
+            .any(|r| !r.ok && r.detail.contains("no result returned")),
+        "{:?}",
+        rep.results
     );
+    // daemon が検査 task を走らせなかった（harness 未宣言など）。
+    let rep = cap_probe::probe_worker(&env, &target(), ConfigId::C, &k4(), &|_| {
+        Err("task did not run".into())
+    });
+    assert_eq!(rep.failure_class, Some("env_failure"));
+    assert!(rep.results.iter().any(|r| r.id == "worker-run" && !r.ok));
+    assert_eq!(rep.daemon.expect("identity").pid, 4242);
 }
 
 /// Rust が無い/古い host は最初の LLM 呼出し前に env_failure で止まる。検査は部分一致 `rustc 1.` ではなく最小版の比較で、

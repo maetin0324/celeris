@@ -1,11 +1,10 @@
 //! 必要能力の LLM なし probe（本測定移行 P1-3）。
 //!
-//! case の `required_capabilities` を、A が実際に使う sandbox（`Sandbox::wrap_resolved`）で包んで走らせる。
-//! B/C は Celeris worker の実起動関数（`task_worker::FakeAdapter` → `run_subprocess`）に「LLM を呼ばない
-//! 能力 probe run」を通し、測定専用 daemon の PATH・env で起こした子 process の中で確かめる
-//! （`probe_worker`）。環境は検査先の測定専用 daemon process から（`WorkerDaemonEnv::from_daemon_pid`）取り、
-//! この CLI の環境は使わない。`CapEnv.worker` は daemon の環境と照合する期待値で、配送ではない。
-//! 不足は環境不良（`env_failure`）で、モデル失敗とは別に扱う。有料呼び出しは 0 件。
+//! case の `required_capabilities` を、A は実際に使う sandbox（`Sandbox::wrap_resolved`）で包んで走らせる。
+//! B/C は測定専用 daemon の通常の worker 起動経路（`POST /tasks` → dispatcher の adapter env・run 環境・権限・cwd 組立
+//! → worker process）に「LLM を呼ばない能力 probe task」を通し、daemon が起こした worker process の中で確かめる
+//! （`probe_worker` / `run_in_daemon` / `cap_worker_main`）。この CLI の環境は使わない。`CapEnv.worker` は worker の
+//! 環境と照合する期待値で、配送ではない。不足は環境不良（`env_failure`）で、モデル失敗とは別に扱う。有料呼び出しは 0 件。
 use std::{
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -467,210 +466,90 @@ pub fn probe(
     }
 }
 
-/// 測定専用 daemon の worker 環境（daemon process が持つ PATH と、期待 toolchain が名指す変数）。probe は
-/// 同じ値だけで子 process を起こす（CLI 自身の環境は使わない）。campaign はこれを worker に配送しない。
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct WorkerDaemonEnv {
-    pub path: Option<String>,
-    pub env: Vec<(String, String)>,
-    /// 検査先の daemon（`from_daemon_pid` が埋める。報告に残す識別）。
-    pub source: Option<DaemonRef>,
-}
-
-/// 検査先 daemon の識別。秘密を含まない（pid・開始時刻・identity が答えた instance/release）。
+/// 検査先 daemon の識別。秘密を含まない（pid・identity が答えた instance/release・検査 task の id）。
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct DaemonRef {
     pub pid: u32,
-    /// `/proc/<pid>/stat` の starttime（pid 再利用の区別）。
-    pub starttime: u64,
     pub instance_id: Option<String>,
     pub release: Option<String>,
+    /// 検査を走らせた task（測定専用 daemon の dispatcher が worker を起こした run の持ち主）。
+    pub probe_task_id: Option<String>,
 }
 
-/// 子 process の環境に持ち込んでよい、daemon の非秘密変数（ホーム・言語・端末）。期待 toolchain が名指す
-/// 変数と PATH に加えて、daemon の値をそのまま写す。それ以外（token・credential 等）は一切写さない。
-const DAEMON_ENV_ALLOW: &[&str] = &["HOME", "LANG", "LC_ALL", "TERM", "USER", "LOGNAME"];
+pub const WORKER_PROBE_SCHEMA: &str = "celeris.campaign-cap-worker-probe/1";
+/// 検査 task の分野。測定専用 daemon の config に、この分野を無 LLM の検査 worker（`celeris-campaign cap-worker`）へ
+/// 結ぶ harness の宣言が要る（cap-runbook §1）。
+pub const PROBE_GENRE: &str = "cap-probe";
 
-impl WorkerDaemonEnv {
-    /// 測定専用 daemon の process（`/proc/<pid>/environ`）から、PATH・期待 toolchain が名指す変数・
-    /// `DAEMON_ENV_ALLOW` だけを取り出す。環境全体は保持も記録もしない（他の変数は読んだ buffer ごと捨てる）。
-    /// CLI 自身の環境は見ない。pid が測定 daemon のものであることは呼び出し側が identity 照合で保証する。
-    pub fn from_daemon_pid(pid: u32, expected: &Toolchain) -> Result<Self, String> {
-        let environ = std::fs::read(format!("/proc/{pid}/environ"))
-            .map_err(|e| format!("daemon pid {pid}: cannot read its worker environment: {e}"))?;
-        let starttime = proc_starttime(pid)?;
-        let want = |k: &str| {
-            k == "PATH"
-                || DAEMON_ENV_ALLOW.contains(&k)
-                || expected.env.iter().any(|(ek, _)| ek == k)
-        };
-        let (mut path, mut env) = (None, Vec::new());
-        for kv in environ.split(|b| *b == 0).filter(|x| !x.is_empty()) {
-            let Some(eq) = kv.iter().position(|b| *b == b'=') else {
-                continue;
-            };
-            let (Ok(k), Ok(v)) = (
-                std::str::from_utf8(&kv[..eq]),
-                std::str::from_utf8(&kv[eq + 1..]),
-            ) else {
-                continue;
-            };
-            if !want(k) {
-                continue;
-            }
-            if k == "PATH" {
-                path = Some(v.to_string());
-            } else {
-                env.push((k.to_string(), v.to_string()));
-            }
-        }
-        Ok(Self {
-            path,
-            env,
-            source: Some(DaemonRef {
-                pid,
-                starttime,
-                instance_id: None,
-                release: None,
-            }),
-        })
-    }
+/// worker の中で走らせる検査 1 件。
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorkerCheck {
+    pub id: String,
+    /// `/bin/sh -c` に渡す。必要能力の argv そのまま、または mount・socket の存在確認。
+    pub cmd: String,
+    pub expect_stdout: Option<String>,
 }
 
-/// `/proc/<pid>/stat` の starttime（22 番目の欄。comm に空白・括弧が入るので最後の `)` の後を数える）。
-fn proc_starttime(pid: u32) -> Result<u64, String> {
-    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat"))
-        .map_err(|e| format!("daemon pid {pid}: {e}"))?;
-    let rest = stat
-        .rsplit_once(')')
-        .map(|(_, r)| r)
-        .ok_or_else(|| format!("daemon pid {pid}: unreadable /proc stat"))?;
-    rest.split_whitespace()
-        .nth(19)
-        .and_then(|x| x.parse().ok())
-        .ok_or_else(|| format!("daemon pid {pid}: no starttime in /proc stat"))
+/// 検査 task の中身（task の objective にそのまま入る）。検査の定義だけで、環境変数の値は持たない
+/// （`expect_env` は `CapEnv.worker` が固定する非秘密の期待値）。
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorkerProbeSpec {
+    pub schema: String,
+    pub checks: Vec<WorkerCheck>,
+    pub expect_env: Vec<(String, String)>,
+}
+
+/// worker が返す検査結果 1 件。stdout・環境変数の値は含めない（能力の有無と識別だけ）。
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorkerCheckResult {
+    pub id: String,
+    pub ok: bool,
+    pub detail: String,
+}
+
+/// 検査 task 1 件の結果。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WorkerProbeRun {
+    pub task_id: String,
+    pub results: Vec<WorkerCheckResult>,
 }
 
 fn sh_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
-/// 期待 env と daemon 設定の食い違い（PATH は期待の各要素が daemon の PATH に含まれること）。
-fn env_mismatch(expected: &Toolchain, daemon: &WorkerDaemonEnv) -> Vec<String> {
-    let mut out = Vec::new();
-    for (k, want) in &expected.env {
-        if k == "PATH" {
-            let have: Vec<_> = daemon
-                .path
-                .as_deref()
-                .map(|p| std::env::split_paths(p).collect())
-                .unwrap_or_default();
-            for dir in std::env::split_paths(want) {
-                if !have.contains(&dir) {
-                    out.push(format!("daemon PATH lacks {}", dir.display()));
-                }
-            }
-        } else {
-            match daemon.env.iter().find(|(dk, _)| dk == k) {
-                Some((_, v)) if v == want => {}
-                Some((_, v)) => out.push(format!("daemon env {k}={v:?}, expected {want:?}")),
-                None => out.push(format!("daemon env lacks {k}")),
-            }
-        }
-    }
-    out
-}
-
-/// worker 子 process の中で走らせる検査（id・shell 片）。必要能力は `case.required_capabilities` そのまま、
+/// worker 子 process の中で走らせる検査。必要能力は `case.required_capabilities` そのまま、
 /// それに toolchain の mount（`test -d`）と socket（`test -S`）の存在確認を足す。
-fn worker_checks(expected: &Toolchain, case: &Case) -> Vec<(String, String, Option<String>)> {
-    let mut v = Vec::new();
+pub fn worker_spec(expected: &Toolchain, case: &Case) -> WorkerProbeSpec {
+    let mut checks = Vec::new();
     for m in &expected.ro_mounts {
         let p = m.to_string_lossy();
-        v.push((
-            format!("toolchain:{p}"),
-            format!("test -d {}", sh_quote(&p)),
-            None,
-        ));
+        checks.push(WorkerCheck {
+            id: format!("toolchain:{p}"),
+            cmd: format!("test -d {}", sh_quote(&p)),
+            expect_stdout: None,
+        });
     }
     for s in &expected.sockets {
         let p = s.to_string_lossy();
-        v.push((
-            format!("socket:{p}"),
-            format!("test -S {}", sh_quote(&p)),
-            None,
-        ));
+        checks.push(WorkerCheck {
+            id: format!("socket:{p}"),
+            cmd: format!("test -S {}", sh_quote(&p)),
+            expect_stdout: None,
+        });
     }
     for c in &case.required_capabilities {
         let argv: Vec<_> = c.argv.iter().map(|a| sh_quote(a)).collect();
-        v.push((c.id.clone(), argv.join(" "), c.expect_stdout.clone()));
+        checks.push(WorkerCheck {
+            id: c.id.clone(),
+            cmd: argv.join(" "),
+            expect_stdout: c.expect_stdout.clone(),
+        });
     }
-    v
-}
-
-struct NoSink;
-impl task_worker::EventSink for NoSink {
-    fn progress(&self, _: &str) {}
-    fn artifact(&self, _: &task_core::ArtifactRef) {}
-}
-
-/// B/C の能力 probe。LLM を呼ばず、worker の実起動関数（`FakeAdapter` → `run_subprocess`）で、daemon 設定の
-/// PATH・env・cwd（`workspace`）の子 process に検査 script を走らせ、結果を file で受け取る。
-/// `CapEnv.worker` と daemon 設定の食い違い・mount/socket/道具の欠落は arm 別の `env_failure`。
-pub fn probe_worker(
-    env: &CapEnv,
-    daemon: &WorkerDaemonEnv,
-    arm: ConfigId,
-    workspace: &Path,
-    case: &Case,
-) -> ProbeReport {
-    let expected = &env.worker;
-    let mut results = Vec::new();
-    if case.required_capabilities.is_empty() {
-        results.push(fail(
-            "required_capabilities",
-            "the case fixes no required_capabilities",
-        ));
-    }
-    for m in env_mismatch(expected, daemon) {
-        results.push(fail("worker-env", &m));
-    }
-    let checks = worker_checks(expected, case);
-    match run_worker_script(daemon, workspace, &checks) {
-        Err(e) => results.push(fail(
-            "worker-run",
-            &format!("probe run did not complete: {e}"),
-        )),
-        Ok(outs) => {
-            for ((id, _, want), out) in checks.iter().zip(outs) {
-                results.push(match out {
-                    None => fail(id, "no result written by the probe script"),
-                    Some((code, _)) if code != 0 => fail(id, &format!("exit {code}")),
-                    Some((_, stdout)) => match want {
-                        Some(x) if !stdout.contains(x.as_str()) => {
-                            fail(id, &format!("stdout lacks {x:?}"))
-                        }
-                        _ => CapResult {
-                            id: id.clone(),
-                            ok: true,
-                            detail: "ok".into(),
-                            argv: Vec::new(),
-                        },
-                    },
-                });
-            }
-        }
-    }
-    let ok = results.iter().all(|r| r.ok);
-    ProbeReport {
-        schema: CAP_REPORT_SCHEMA,
-        case: case.id.clone(),
-        arm,
-        ok,
-        failure_class: (!ok).then_some(ENV_FAILURE),
-        paid_calls_made: 0,
-        daemon: daemon.source.clone(),
-        results,
+    WorkerProbeSpec {
+        schema: WORKER_PROBE_SCHEMA.into(),
+        checks,
+        expect_env: expected.env.clone(),
     }
 }
 
@@ -683,87 +562,247 @@ fn fail(id: &str, detail: &str) -> CapResult {
     }
 }
 
-type ScriptOut = Vec<Option<(i32, String)>>;
+/// 検査 task を測定専用 daemon に走らせる関数（実体は `Host::probe_daemon_worker`。通常の task 投入経路）。
+pub type RunInDaemon<'a> = dyn Fn(&WorkerProbeSpec) -> Result<WorkerProbeRun, String> + 'a;
 
-/// `FakeAdapter` に検査 script を通す。async の実起動関数を、呼び出し側の runtime とは別 thread の
-/// current-thread runtime で駆動する（preflight は同期 API で、tokio の中から呼ばれることもある）。
-fn run_worker_script(
-    daemon: &WorkerDaemonEnv,
-    workspace: &Path,
-    checks: &[(String, String, Option<String>)],
-) -> Result<ScriptOut, String> {
-    use task_worker::{FakeAdapter, RunContext, RunLimits, RunRequest, WorkerAdapter};
-    let results_dir = workspace.join("artifacts").join("cap-probe");
-    let _ = std::fs::remove_dir_all(&results_dir);
-    std::fs::create_dir_all(&results_dir).map_err(|e| format!("{}: {e}", results_dir.display()))?;
-    // 各検査は `env -i` で daemon の環境だけにする（この CLI process の環境が子に残って、daemon に無い変数・
-    // PATH の道具を「ある」ことにしない）。
-    let mut denv: Vec<String> = daemon
-        .env
-        .iter()
-        .map(|(k, v)| sh_quote(&format!("{k}={v}")))
-        .collect();
-    if let Some(p) = &daemon.path {
-        denv.push(sh_quote(&format!("PATH={p}")));
-    }
-    let denv = denv.join(" ");
-    let mut script = String::from("cat >/dev/null\nd=\"$1\"\n");
-    for (i, (_, cmd, _)) in checks.iter().enumerate() {
-        script.push_str(&format!(
-            "( /usr/bin/env -i {denv} /bin/sh -c {} ) >\"$d/{i}.out\" 2>/dev/null </dev/null; echo $? >\"$d/{i}.code\"\n",
-            sh_quote(cmd)
+/// B/C の能力 probe。検査は測定専用 daemon の dispatcher が通常どおり worker を起こす経路（adapter env・run ごとの env・
+/// 権限・cwd の組立を含む）で走る。この CLI の環境も `/proc/<pid>/environ` も使わない。`CapEnv.worker` は worker の
+/// 環境と照合する期待値で、配送ではない。不足は arm 別の `env_failure`（LLM 呼出し前）。
+pub fn probe_worker(
+    env: &CapEnv,
+    target: &DaemonRef,
+    arm: ConfigId,
+    case: &Case,
+    run: &RunInDaemon,
+) -> ProbeReport {
+    let mut results = Vec::new();
+    if case.required_capabilities.is_empty() {
+        results.push(fail(
+            "required_capabilities",
+            "the case fixes no required_capabilities",
         ));
     }
-    script.push_str("echo '{\"type\":\"done\",\"summary\":\"cap-probe\",\"evidence\":[]}'\n");
-    let mut adapter = FakeAdapter::new(vec![
-        "/bin/sh".into(),
-        "-c".into(),
-        script,
-        "cap-probe".into(),
-        results_dir.to_string_lossy().into_owned(),
-    ]);
-    let mut env = daemon.env.clone();
-    if let Some(p) = &daemon.path {
-        env.push(("PATH".into(), p.clone()));
+    let spec = worker_spec(&env.worker, case);
+    let mut daemon = target.clone();
+    match run(&spec) {
+        Err(e) => results.push(fail(
+            "worker-run",
+            &format!("probe run did not complete: {e}"),
+        )),
+        Ok(done) => {
+            daemon.probe_task_id = Some(done.task_id);
+            let want: Vec<&str> = std::iter::once("worker-env")
+                .chain(spec.checks.iter().map(|c| c.id.as_str()))
+                .collect();
+            for r in &done.results {
+                if !want.contains(&r.id.as_str()) {
+                    results.push(fail(&r.id, "unexpected result id from the worker"));
+                } else if !r.ok {
+                    results.push(fail(&r.id, &r.detail));
+                } else {
+                    results.push(CapResult {
+                        id: r.id.clone(),
+                        ok: true,
+                        detail: r.detail.clone(),
+                        argv: Vec::new(),
+                    });
+                }
+            }
+            for c in &spec.checks {
+                if !done.results.iter().any(|r| r.id == c.id) {
+                    results.push(fail(&c.id, "no result returned by the worker"));
+                }
+            }
+        }
     }
-    adapter.set_env(env);
-    // `RunRequest` の Task は試験用の最小値を公開している関数で組む（この run は task として保存されない）。
-    let req = RunRequest {
-        protocol: task_worker::PROTOCOL_VERSION,
-        task: task_worker::protocol::sample_task_for_tests(),
-        workspace: workspace.to_path_buf(),
-        work_dir: None,
-        artifacts_dir: workspace.join("artifacts"),
-        context: RunContext::default(),
-        llm_route: None,
-        cargo_target_dir: None,
-    };
-    let limits = RunLimits {
-        wall_clock: Duration::from_secs(300),
-        idle_timeout: Duration::from_secs(300),
-        kill_grace: Duration::from_secs(5),
-    };
-    let outcome = std::thread::scope(|s| {
-        s.spawn(|| {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .map_err(|e| e.to_string())?;
-            rt.block_on(adapter.run(req, "cap-probe", limits, &NoSink))
-                .map_err(|e| e.to_string())
-        })
-        .join()
-        .map_err(|_| "probe thread panicked".to_string())?
-    })?;
-    if !matches!(outcome.terminal, task_worker::Terminal::Done { .. }) {
-        return Err(format!("unexpected terminal {:?}", outcome.terminal));
+    let ok = results.iter().all(|r| r.ok);
+    ProbeReport {
+        schema: CAP_REPORT_SCHEMA,
+        case: case.id.clone(),
+        arm,
+        ok,
+        failure_class: (!ok).then_some(ENV_FAILURE),
+        paid_calls_made: 0,
+        daemon: Some(daemon),
+        results,
     }
-    Ok((0..checks.len())
-        .map(|i| {
-            let code = std::fs::read_to_string(results_dir.join(format!("{i}.code"))).ok()?;
-            let stdout =
-                std::fs::read_to_string(results_dir.join(format!("{i}.out"))).unwrap_or_default();
-            Some((code.trim().parse().ok()?, stdout))
-        })
-        .collect())
+}
+
+// ---------------------------------------------------------------- worker 側（daemon が起こす process の中）
+
+/// 期待 env と、この worker process の環境の食い違い（PATH は期待の各要素が含まれること）。実際の値は出さない。
+fn env_mismatch(expected: &[(String, String)]) -> Vec<String> {
+    let mut out = Vec::new();
+    for (k, want) in expected {
+        if k == "PATH" {
+            let have: Vec<PathBuf> = std::env::var_os("PATH")
+                .map(|p| std::env::split_paths(&p).collect())
+                .unwrap_or_default();
+            for dir in std::env::split_paths(want) {
+                if !have.contains(&dir) {
+                    out.push(format!("worker PATH lacks {}", dir.display()));
+                }
+            }
+        } else {
+            match std::env::var(k) {
+                Ok(v) if &v == want => {}
+                Ok(_) => out.push(format!("worker env {k} differs from the expected value")),
+                Err(_) => out.push(format!("worker env lacks {k}")),
+            }
+        }
+    }
+    out
+}
+
+/// 検査を worker process の環境（daemon が組んだもの）のまま走らせる。結果は能力の有無だけ（stdout・環境は返さない）。
+pub fn run_spec(spec: &WorkerProbeSpec, cwd: &Path) -> Vec<WorkerCheckResult> {
+    let mut out = Vec::new();
+    let mismatch = env_mismatch(&spec.expect_env);
+    if mismatch.is_empty() {
+        out.push(WorkerCheckResult {
+            id: "worker-env".into(),
+            ok: true,
+            detail: "ok".into(),
+        });
+    } else {
+        for m in mismatch {
+            out.push(WorkerCheckResult {
+                id: "worker-env".into(),
+                ok: false,
+                detail: m,
+            });
+        }
+    }
+    for c in &spec.checks {
+        let (ok, detail) = match Command::new("/bin/sh")
+            .arg("-c")
+            .arg(&c.cmd)
+            .current_dir(cwd)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .output()
+        {
+            Err(e) => (false, format!("sh: {e}")),
+            Ok(o) if !o.status.success() => {
+                (false, format!("exit {}", o.status.code().unwrap_or(-1)))
+            }
+            Ok(o) => match &c.expect_stdout {
+                Some(x) if !String::from_utf8_lossy(&o.stdout).contains(x.as_str()) => {
+                    (false, format!("stdout lacks {x:?}"))
+                }
+                _ => (true, "ok".into()),
+            },
+        };
+        out.push(WorkerCheckResult {
+            id: c.id.clone(),
+            ok,
+            detail,
+        });
+    }
+    out
+}
+
+/// `celeris-campaign cap-worker`: 測定専用 daemon の `[adapters.fake] command` として起動される無 LLM の検査 worker。
+/// stdin の `run` メッセージの task objective から検査を読み、daemon が組んだ環境のまま走らせ、結果を `done` の
+/// summary に 1 行で返す。環境変数は読み出さず（期待値との照合だけ）、返さない。
+pub fn cap_worker_main() -> Result<(), String> {
+    let mut line = String::new();
+    std::io::stdin()
+        .read_line(&mut line)
+        .map_err(|e| format!("stdin: {e}"))?;
+    let req: task_worker::RunRequest =
+        serde_json::from_str(line.trim()).map_err(|e| format!("run request: {e}"))?;
+    let spec: WorkerProbeSpec = serde_json::from_str(&req.task.objective)
+        .map_err(|e| format!("cap-probe objective: {e}"))?;
+    if spec.schema != WORKER_PROBE_SCHEMA {
+        return Err(format!("cap-probe schema must be {WORKER_PROBE_SCHEMA}"));
+    }
+    let results = run_spec(&spec, req.cwd());
+    let summary = serde_json::to_string(&results).map_err(|e| e.to_string())?;
+    println!(
+        "{}",
+        serde_json::json!({"type": "done", "summary": summary, "evidence": []})
+    );
+    Ok(())
+}
+
+// ---------------------------------------------------------------- 測定専用 daemon への投入（通常の task 投入経路）
+
+/// 検査 task を task-api（`POST /tasks`）で投入し、終端まで待ち、worker が返した結果を読む。
+/// 新しい API は使わない。`sleep` は poll の間隔（試験は短くする）。
+pub fn run_in_daemon(
+    t: &dyn crate::celeris_exec::Transport,
+    spec: &WorkerProbeSpec,
+    wait: Duration,
+    poll: Duration,
+) -> Result<WorkerProbeRun, String> {
+    use serde_json::json;
+    let ok = |r: &crate::celeris_exec::HttpResponse| (200..300).contains(&r.status);
+    let objective = serde_json::to_string(spec).map_err(|e| e.to_string())?;
+    let body = json!({
+        "title": "B/C capability probe (no LLM)",
+        "objective": objective,
+        "genre": PROBE_GENRE,
+        "acceptance": [{"type": "command", "cmd": "true"}],
+        "max_retries": 0,
+        "max_wall_secs": wait.as_secs().max(10),
+    });
+    let r = t.request("POST", "/api/v1/tasks", Some(&body))?;
+    if !ok(&r) {
+        return Err(format!("POST /api/v1/tasks: HTTP {} {}", r.status, r.body));
+    }
+    let id = r.body["id"]
+        .as_str()
+        .ok_or("POST /api/v1/tasks: id missing")?
+        .to_string();
+    let start = Instant::now();
+    let path = format!("/api/v1/tasks/{id}");
+    loop {
+        let r = t.request("GET", &path, None)?;
+        if !ok(&r) {
+            return Err(format!("GET {path}: HTTP {} {}", r.status, r.body));
+        }
+        let status = r.body["task"]["status"].as_str().unwrap_or("");
+        if matches!(status, "done" | "failed" | "cancelled") {
+            break;
+        }
+        if start.elapsed() > wait {
+            let _ = t.request(
+                "POST",
+                &format!("/api/v1/tasks/{id}/cancel"),
+                Some(&json!({})),
+            );
+            return Err(format!(
+                "task {id} did not run within {wait:?} (status {status:?}); is the cap-probe harness declared in the measurement daemon's config?"
+            ));
+        }
+        std::thread::sleep(poll);
+    }
+    let path = format!("/api/v1/tasks/{id}/events");
+    let r = t.request("GET", &path, None)?;
+    if !ok(&r) {
+        return Err(format!("GET {path}: HTTP {} {}", r.status, r.body));
+    }
+    let results = r.body["items"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(find_results)
+        .next_back()
+        .ok_or_else(|| format!("task {id}: the worker returned no probe result"))?;
+    Ok(WorkerProbeRun {
+        task_id: id,
+        results,
+    })
+}
+
+/// `worker_finished` event の outcome（`done: <summary>`）から、`cap_worker_main` が書いた結果の JSON 配列を読む。
+fn find_results(e: &serde_json::Value) -> Option<Vec<WorkerCheckResult>> {
+    let ev = &e["event"];
+    if ev["type"].as_str() != Some("worker_finished") {
+        return None;
+    }
+    let summary = ev["outcome"].as_str()?.strip_prefix("done: ")?;
+    serde_json::from_str(summary).ok()
 }

@@ -50,14 +50,21 @@ pub trait Host {
     fn api_get(&self, api_url: &str, token_env: &str, path: &str) -> Result<Value, String>;
     /// A の隔離（bwrap）がこの host で実際に動くか。
     fn sandbox_usable(&self) -> Result<(), String>;
-    /// B/C の probe が子 process を起こす、測定専用 daemon（identity 照合済みの `pid`）の worker 環境。
-    /// 既定はその process の PATH・期待 toolchain の変数だけ（この CLI の環境は使わない）。
-    fn worker_daemon_env(
+    /// B/C の能力検査 task を測定専用 daemon（identity 照合済みの接続先）に通常の task 投入経路で走らせ、daemon が
+    /// 起こした worker process の検査結果を返す。この CLI の環境は検査に使わない。
+    fn probe_daemon_worker(
         &self,
-        expected: &crate::harness_exec::Toolchain,
-        pid: u32,
-    ) -> Result<crate::cap_probe::WorkerDaemonEnv, String> {
-        crate::cap_probe::WorkerDaemonEnv::from_daemon_pid(pid, expected)
+        api_url: &str,
+        token_env: &str,
+        spec: &crate::cap_probe::WorkerProbeSpec,
+    ) -> Result<crate::cap_probe::WorkerProbeRun, String> {
+        let t = CurlTransport::new(api_url, token_env)?;
+        crate::cap_probe::run_in_daemon(
+            &t,
+            spec,
+            std::time::Duration::from_secs(300),
+            std::time::Duration::from_millis(500),
+        )
     }
     /// A の cap-probe の実行器。既定は実 bwrap（試験は stub を返す）。
     fn probe_runner(&self) -> Box<dyn crate::cap_probe::ProbeRunner> {
@@ -477,6 +484,11 @@ fn run_checks(a: &mut Acc, m: &CampaignManifest, inp: &Inputs, host: &dyn Host) 
             format!("dry-run estimate: {}", v["acceptance"]["reasons"]),
         );
     }
+
+    // 測定専用 daemon に検査 task を作る B/C の能力 probe は、他の検査が全て通った後（最後）に走らせる。
+    if let Some(set) = &set {
+        check_bc_capabilities(a, m, set, inp, host);
+    }
 }
 
 /// P0-3: 測定専用構成・A/B/C の試行用 KB の同一性・canary。
@@ -670,7 +682,7 @@ fn check_candidates(a: &mut Acc, m: &CampaignManifest, inp: &Inputs, host: &dyn 
     check_api_dependent(a, inp, host, tv.as_ref());
 }
 
-/// 選んだ問題の必要能力を、manifest の各 arm について A と同じ sandbox 組立で LLM なしに確かめる。
+/// 選んだ問題の必要能力を LLM なしに確かめる（A は A の sandbox 組立。B/C は `check_bc_capabilities` が測定専用 daemon の worker で）。
 fn check_capabilities(
     a: &mut Acc,
     m: &CampaignManifest,
@@ -710,45 +722,69 @@ fn check_capabilities(
         return a.miss("capability", e);
     }
     let runner = host.probe_runner();
-    // B/C の検査先は、identity 照合に通した測定専用 daemon だけ。通らなければ B/C は検査せず env_failure にする。
-    let needs_bc = m.configs.iter().any(|x| x.id != ConfigId::A);
-    let bc_target = if needs_bc {
-        bc_probe_target(a, m, inp, host)
-    } else {
-        None
+    for c in cases {
+        let sb = crate::cap_probe::sandbox_for(
+            &env,
+            ConfigId::A,
+            inp.a_account.as_deref().unwrap_or("probe"),
+            &cfg,
+        );
+        if !m.configs.iter().any(|x| x.id == ConfigId::A) {
+            continue;
+        }
+        let rep = crate::cap_probe::probe(&sb, ConfigId::A, &ws, &c.case, runner.as_ref());
+        for r in rep.results.iter().filter(|r| !r.ok) {
+            a.miss(
+                "capability",
+                format!(
+                    "{} arm {:?}: {}: {}",
+                    c.case.id,
+                    ConfigId::A,
+                    r.id,
+                    r.detail
+                ),
+            );
+        }
+    }
+}
+
+/// B/C の能力 probe。検査先は identity 照合に通した測定専用 daemon だけで、検査 task はその daemon の通常の worker 起動経路
+/// （dispatcher の env 組立・権限・cwd）で走る。測定専用 daemon に実際に（無 LLM の）task を作るので、他の検査の後（最後）に走らせる。通らなければ B/C は env_failure。
+fn check_bc_capabilities(
+    a: &mut Acc,
+    m: &CampaignManifest,
+    set: &CaseSet,
+    inp: &Inputs,
+    host: &dyn Host,
+) {
+    let cases: Vec<_> = m
+        .problems
+        .iter()
+        .filter_map(|id| set.get(id))
+        .filter(|c| !c.case.required_capabilities.is_empty())
+        .collect();
+    if cases.is_empty() || !m.configs.iter().any(|x| x.id != ConfigId::A) {
+        return;
+    }
+    // 能力不足・cap env の不備は `check_capabilities` が報告済み（env を読めなければここでは何もしない）。
+    let Some(env) = inp
+        .cap_env
+        .as_deref()
+        .and_then(|p| crate::cap_probe::CapEnv::load(p).ok())
+    else {
+        return;
+    };
+    let Some(target) = bc_probe_target(a, m, inp, host) else {
+        return;
+    };
+    let (Some(url), Some(tok)) = (inp.api_url.as_deref(), inp.token_env.as_deref()) else {
+        return;
     };
     for c in cases {
-        for cfg_id in m.configs.iter().map(|x| x.id) {
-            let rep = if cfg_id == ConfigId::A {
-                let sb = crate::cap_probe::sandbox_for(
-                    &env,
-                    cfg_id,
-                    inp.a_account.as_deref().unwrap_or("probe"),
-                    &cfg,
-                );
-                crate::cap_probe::probe(&sb, cfg_id, &ws, &c.case, runner.as_ref())
-            } else {
-                let Some(target) = bc_target.as_ref() else {
-                    continue;
-                };
-                let daemon = match host.worker_daemon_env(&env.worker, target.pid) {
-                    Ok(mut d) => {
-                        d.source = Some(crate::cap_probe::DaemonRef {
-                            starttime: d.source.as_ref().map_or(0, |s| s.starttime),
-                            ..target.clone()
-                        });
-                        d
-                    }
-                    Err(e) => {
-                        a.miss(
-                            "capability",
-                            format!("{} arm {:?}: worker-env: {e}", c.case.id, cfg_id),
-                        );
-                        continue;
-                    }
-                };
-                crate::cap_probe::probe_worker(&env, &daemon, cfg_id, &ws, &c.case)
-            };
+        for cfg_id in m.configs.iter().map(|x| x.id).filter(|x| *x != ConfigId::A) {
+            let rep = crate::cap_probe::probe_worker(&env, &target, cfg_id, &c.case, &|spec| {
+                host.probe_daemon_worker(url, tok, spec)
+            });
             if let Some(d) = &rep.daemon {
                 a.probe_targets.push(ProbeTarget {
                     case: c.case.id.clone(),

@@ -176,7 +176,7 @@ pub fn check_identity(
 }
 
 /// 同一性照合に通った接続先 daemon の識別（pid・instance・release）。照合は 1 回の GET で行う。
-/// B/C の能力 probe はこの pid の process から worker 環境を取る（pid は identity が答えたもの = launcher 所有）。
+/// B/C の能力 probe は、この接続先 daemon の worker 起動経路で検査する（検査先 identity として報告に残す）。
 pub fn verify(
     me: &MeasureEnv,
     m: &CampaignManifest,
@@ -205,7 +205,7 @@ pub fn verify(
     }
     Ok(crate::cap_probe::DaemonRef {
         pid: cfg.identity.pid,
-        starttime: 0,
+        probe_task_id: None,
         instance_id: Some(cfg.identity.instance_id.clone()),
         release: Some(cfg.identity.release.clone()),
     })

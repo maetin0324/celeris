@@ -5,7 +5,11 @@
 #
 #   measure-launcher.sh <prepare|start|preflight|watch|grade|export|stop> --env <file>
 #
-# 各 subcommand は再実行できる。watch は台帳から再開し、毎回 preflight（env-check を含む）と env-lock の照合を通ってから始まる。
+# 各 subcommand は再実行できる。watch は台帳から再開し、毎回 daemon 実体の照合・preflight（env-check を含む）・
+# env-lock の照合を通ってから始まる。
+# start は daemon を起こす前に測定 config を検査し（config-check）、不適切なら起動しない。
+# daemon 実体（prepare で固定した CELERIS_BIN の sha256 と、起動した process の実行像 /proc/<pid>/exe）は
+# start（新規・既存 process への再接続）・preflight・watch の全経路で照合する。
 set -eu
 
 usage() {
@@ -156,7 +160,61 @@ owned_alive() {
 }
 
 sha256_of() {
-    sha256sum "$1" | awk '{ print $1 }'
+    sha256sum "$1" 2>/dev/null | awk '{ print $1 }'
+}
+
+meta_get() { # <key>
+    sed -n "s/^$1=//p" "$LAUNCHER_META" 2>/dev/null
+}
+
+# 起動した process の実行像（/proc/<pid>/exe の指す path）。差し替えで消えた path は " (deleted)" が付く。
+proc_exe() {
+    readlink "/proc/$1/exe" 2>/dev/null || true
+}
+
+# 所有 process の起動 identity（starttime・cmdline・実行像）が起動時の記録と同じこと。stop・失敗時の片付けの前に必ず通す。
+owned_identity() {
+    owned_alive || return 1
+    pid=$(cat "$LAUNCHER_PID")
+    want_exe=$(meta_get exe)
+    # 実行像の file が差し替えで消えても（" (deleted)"）、同じ process であることは変わらない。
+    got_exe=$(proc_exe "$pid")
+    [ -z "$want_exe" ] || [ "${got_exe% (deleted)}" = "$want_exe" ] || return 1
+    return 0
+}
+
+# daemon 実体の照合（全経路）。成り立たなければ die（外部実行・task 投入の前）。
+#  1. CELERIS_BIN の現物が prepare で固定した sha256 と同じ（同一 path の差替えを弾く）
+#  2. launcher 所有の process が生きていて、その実行像（/proc/<pid>/exe）が起動時に記録した path・sha256 と同じで、
+#     その path の現物も同じ（動いている binary の同一 path 差替えを弾く）
+# 接続先がこの process であることは env-check が identity.pid と launcher 所有 PID の一致で確かめる。
+verify_daemon() {
+    [ -n "$CELERIS_BIN" ] || die "CELERIS_BIN is required (the measurement daemon binary is pinned and verified on every path)"
+    [ -f "$STATE_DIR/celeris.sha256" ] || die "run prepare first (no pinned daemon binary)"
+    pinned=$(cat "$STATE_DIR/celeris.sha256")
+    [ "$(sha256_of "$CELERIS_BIN")" = "$pinned" ] ||
+        die "daemon binary $CELERIS_BIN differs from the one pinned at prepare (sha256 $pinned): refusing"
+    owned_alive || die "the launcher-owned daemon is not running (run start): refusing"
+    pid=$(cat "$LAUNCHER_PID")
+    want_exe=$(meta_get exe)
+    want_sha=$(meta_get exe_sha256)
+    [ -n "$want_exe" ] && [ -n "$want_sha" ] ||
+        die "launcher.meta has no recorded daemon image (stop and start again): refusing"
+    got_exe=$(proc_exe "$pid")
+    [ "$got_exe" = "$want_exe" ] ||
+        die "daemon binary image of pid $pid is '$got_exe', not '$want_exe' recorded at start (replaced or deleted): refusing"
+    [ "$(sha256_of "/proc/$pid/exe")" = "$want_sha" ] ||
+        die "daemon binary image of pid $pid differs from the one recorded at start: refusing"
+    [ "$(sha256_of "$want_exe")" = "$want_sha" ] ||
+        die "daemon binary $want_exe was replaced on disk after the daemon started: refusing"
+}
+
+# 起動前の検査（daemon に接続しない）。測定 config が通常運用の DB・作業場所・KB・記憶に重なる、自動整理が有効、等は拒否。
+config_check() {
+    set -- config-check --manifest "$MANIFEST" \
+        --measure-config "$DAEMON_CONFIG" --normal-config "$NORMAL_CONFIG" --canaries "$CANARIES" \
+        --kb-src "$KB_SRC"
+    "$CAMPAIGN_BIN" "$@"
 }
 
 cmd_prepare() {
@@ -170,6 +228,10 @@ cmd_prepare() {
     done
     [ -z "$miss" ] || die "required input missing:$miss"
     "$CAMPAIGN_BIN" validate --manifest "$MANIFEST" >/dev/null || die "manifest validate failed"
+    config_check >/dev/null || {
+        config_check >&2 || true
+        die "config-check failed: the measurement config is not isolated from normal operation"
+    }
     # 測定専用の token（本番の token には触れない）。無いときだけ 0600 で作る。
     if [ ! -s "$TOKEN_FILE" ]; then
         mkdir -p "$(dirname "$TOKEN_FILE")"
@@ -190,20 +252,35 @@ cmd_prepare() {
     echo "prepared: api_url=$API_URL state_dir=$STATE_DIR"
 }
 
+# 起動に失敗したとき、この呼び出しで起動した process だけを（起動 identity を確かめてから）止める。
+cleanup_started() {
+    [ "${STARTED_NOW:-0}" = 1 ] || return 0
+    stop_owned >&2 || true
+}
+
 cmd_start() {
     [ -n "$CELERIS_BIN" ] || die "CELERIS_BIN is required to start the measurement daemon"
     need RELEASE
     mkdir -p "$STATE_DIR"
+    # daemon を起こす前に config を検査する（不適切な DB・workspace・自動処理の設定では副作用を出さない）。
+    config_check >/dev/null || {
+        config_check >&2 || true
+        die "config-check failed: the measurement daemon was not started"
+    }
+    STARTED_NOW=0
     if owned_alive; then
+        # 既存 process への再接続も、新規起動と同じ daemon 実体の照合を通す。
+        verify_daemon
         echo "daemon already running (pid $(cat "$LAUNCHER_PID")); connecting"
     else
         [ -f "$STATE_DIR/celeris.sha256" ] || die "run prepare first"
         [ "$(sha256_of "$CELERIS_BIN")" = "$(cat "$STATE_DIR/celeris.sha256")" ] ||
-            die "celeris binary differs from the one fixed at prepare: refusing to start"
+            die "daemon binary $CELERIS_BIN differs from the one pinned at prepare: refusing to start"
         # 測定 daemon は --config だけで起動する（--db/--listen 等の CLI 上書きを使わない）。
         nohup "$CELERIS_BIN" --config "$DAEMON_CONFIG" --release "$RELEASE" --mode normal \
             >>"$STATE_DIR/daemon.log" 2>&1 </dev/null &
         pid=$!
+        STARTED_NOW=1
         printf '%s\n' "$pid" >"$LAUNCHER_PID"
         {
             echo "starttime=$(proc_starttime "$pid")"
@@ -214,20 +291,42 @@ cmd_start() {
     # 出来事待ち（health が答えるまで）。上限は保険。
     i=0
     until curl -fsS -o /dev/null "$API_URL/api/v1/health" 2>/dev/null; do
-        owned_alive || die "daemon exited before becoming healthy (see $STATE_DIR/daemon.log)"
+        owned_alive || {
+            cleanup_started
+            die "daemon exited before becoming healthy (see $STATE_DIR/daemon.log)"
+        }
         i=$((i + 1))
-        [ "$i" -lt $((HEALTH_WAIT_SECS * 10)) ] || die "daemon did not become healthy within ${HEALTH_WAIT_SECS}s"
+        [ "$i" -lt $((HEALTH_WAIT_SECS * 10)) ] || {
+            cleanup_started
+            die "daemon did not become healthy within ${HEALTH_WAIT_SECS}s"
+        }
         sleep 0.1
     done
+    if [ "$STARTED_NOW" = 1 ]; then
+        # 起動した process の実行像を記録する（以後の全経路はこれと照合する）。
+        if ! owned_alive; then
+            cleanup_started
+            die "daemon exited before becoming healthy (see $STATE_DIR/daemon.log)"
+        fi
+        pid=$(cat "$LAUNCHER_PID")
+        exe=$(proc_exe "$pid")
+        {
+            echo "exe=$exe"
+            echo "exe_sha256=$(sha256_of "/proc/$pid/exe")"
+        } >>"$LAUNCHER_META"
+        verify_daemon
+    fi
     load_token
     campaign env-check >/dev/null || {
         campaign env-check >&2 || true
+        cleanup_started
         die "env-check failed: the daemon answering $API_URL is not the measurement daemon"
     }
     echo "started: pid=$(cat "$LAUNCHER_PID") api_url=$API_URL"
 }
 
 cmd_preflight() {
+    verify_daemon
     load_token
     campaign preflight
 }
@@ -250,6 +349,7 @@ cmd_env_lock() { # 作る（初回）か照合する（再開）。不一致は�
 }
 
 cmd_watch() {
+    verify_daemon
     load_token
     campaign preflight >/dev/null || {
         campaign preflight >&2 || true
@@ -259,6 +359,8 @@ cmd_watch() {
         cmd_env_lock >&2 || true
         die "env-lock mismatch: nothing was executed"
     }
+    # 照合と実行の間に daemon が差し替わっていないことを、実行の直前にもう一度確かめる。
+    verify_daemon
     campaign watch --executor "$EXECUTOR" --interval-secs "$INTERVAL_SECS" --max-iterations "$MAX_ITERATIONS"
 }
 
@@ -276,13 +378,15 @@ cmd_export() {
     campaign export --dest "$OUT/export" "$@"
 }
 
-cmd_stop() {
+# launcher 所有の process（起動 identity が記録と一致するもの）だけに signal を送る。
+stop_owned() {
     [ -f "$LAUNCHER_PID" ] || { echo "nothing to stop (no launcher pidfile)"; return 0; }
     pid=$(cat "$LAUNCHER_PID")
-    if ! owned_alive; then
+    if ! owned_identity; then
         # 死んでいるなら pidfile だけ片付ける。生きている別 process は触らない。
-        if [ -d "/proc/$pid" ] && [ -n "$pid" ]; then
-            die "pid $pid is not the daemon this launcher started (starttime/cmdline differ): not signalling"
+        if [ -n "$pid" ] && [ -d "/proc/$pid" ]; then
+            echo "measure-launcher: pid $pid is not the daemon this launcher started (starttime/cmdline/image differ): not signalling" >&2
+            return 1
         fi
         rm -f "$LAUNCHER_PID" "$LAUNCHER_META"
         echo "daemon already gone; pidfile removed"
@@ -293,13 +397,17 @@ cmd_stop() {
     while [ -d "/proc/$pid" ] && owned_alive; do
         i=$((i + 1))
         if [ "$i" -ge 300 ]; then
-            owned_alive && kill -KILL "$pid"
+            ! owned_identity || kill -KILL "$pid"
             break
         fi
         sleep 0.1
     done
     rm -f "$LAUNCHER_PID" "$LAUNCHER_META"
     echo "stopped pid $pid"
+}
+
+cmd_stop() {
+    stop_owned || exit 1
 }
 
 case $SUB in

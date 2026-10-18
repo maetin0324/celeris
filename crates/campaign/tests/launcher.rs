@@ -879,3 +879,48 @@ fn a_swapped_daemon_binary_is_rejected_on_every_path_and_stop_only_touches_the_l
     prod.kill().unwrap();
     let _ = prod.wait();
 }
+
+/// 固定 toolchain（cap-env の ro_mounts）の同名 file の内容だけを変える。path・file 名・mount 構成は同じで、
+/// 必要能力 probe（stub は何でも合格）は通るが、同じ測定の再開（watch / start）は env-lock で外部実行 0 件のまま拒否される。
+/// 内容を戻せば再開でき、読取不能は検証不能として同じく止まる（root では chmod が効かないので skip）。
+#[test]
+fn a_toolchain_content_change_under_the_same_names_is_rejected_on_resume() {
+    let f = fixture();
+    ok(&f, "prepare");
+    ok(&f, "start");
+    f.create_project();
+    ok(&f, "preflight");
+    ok(&f, "watch");
+    let lock = fs::read(f.out().join("env-lock.json")).unwrap();
+    let cc = f.d().join("cap-tools/cc");
+    let saved = fs::read_to_string(&cc).unwrap();
+
+    // 同名のまま内容だけ変える（probe の stub は合格のまま）。
+    write_exec(&cc, &format!("{saved}# different compiler\n"));
+    assert_rejected(&f, "watch", "env-lock");
+    // 固定記録は黙って書き換わらない。
+    assert_eq!(fs::read(f.out().join("env-lock.json")).unwrap(), lock);
+
+    // 内容を戻せば同じ測定を再開できる。
+    write_exec(&cc, &saved);
+    ok(&f, "watch");
+
+    // 読取不能は検証不能として止まる（空一覧・成功として扱わない）。
+    if !running_as_root() {
+        let git = f.d().join("cap-tools/git");
+        fs::set_permissions(&git, fs::Permissions::from_mode(0o000)).unwrap();
+        assert_rejected(&f, "watch", "env-lock");
+        fs::set_permissions(&git, fs::Permissions::from_mode(0o755)).unwrap();
+        ok(&f, "watch");
+    }
+    stop(&f);
+}
+
+fn running_as_root() -> bool {
+    fs::read_to_string("/proc/self/status")
+        .map(|s| {
+            s.lines()
+                .any(|l| l.starts_with("Uid:") && l.split_whitespace().nth(2) == Some("0"))
+        })
+        .unwrap_or(false)
+}

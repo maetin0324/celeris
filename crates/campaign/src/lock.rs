@@ -961,4 +961,35 @@ mod tests {
         assert!(check_successor(&l, &reseal(same.clone())).is_ok());
         assert!(check_successor(&l, &l.clone()).is_err());
     }
+
+    #[test]
+    fn adding_a_nested_submodule_is_new_content_needing_a_new_measurement_id() {
+        // 入れ子 submodule の snapshot を足すのは asset の変更。旧測定の lock には混ぜず、新しい測定 ID にだけ載る。
+        let (_, l) = lock();
+        let mut n = l.clone();
+        let parent = n.cases[0].initial.as_ref().expect("i").submodules[0]
+            .path
+            .clone();
+        n.cases[0]
+            .initial
+            .as_mut()
+            .expect("i")
+            .submodules
+            .push(LockedSubmodule {
+                path: format!("{parent}/inner/nested"),
+                commit: g('7'),
+                content_sha256: h('7'),
+            });
+        let same_id = reseal(n.clone());
+        assert!(matches!(
+            check_successor(&l, &same_id),
+            Err(LockError::NotSuccessor(_))
+        ));
+        assert!(verify_lock(&l, &same_id).is_err());
+        n.measurement_id = "m-2".into();
+        let new = reseal(n);
+        assert!(check_successor(&l, &new).is_ok());
+        assert!(verify_lock(&l, &new).is_err());
+        assert!(verify_lock(&l, &l.clone()).is_ok());
+    }
 }

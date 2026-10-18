@@ -274,11 +274,16 @@ fn verify_seed(i: Option<&LockedInitial>, seed: &Path) -> Result<(), String> {
         Some(i) => {
             for s in &i.submodules {
                 let dir = seed.join(&s.path);
-                let got = lock_tree::archive_content_sha256(&dir, &[])
-                    .map_err(|e| format!("seed {}: {e}", s.path))?;
+                let got = lock_tree::archive_content_sha256(
+                    &dir,
+                    &lock_tree::nested_paths(&i.submodules, &s.path),
+                )
+                .map_err(|e| format!("seed {}: {e}", s.path))?;
                 if got != s.content_sha256 {
                     return Err(format!("seed submodule {} differs from the lock", s.path));
                 }
+            }
+            for s in lock_tree::top_level_submodules(&i.submodules) {
                 ex.push(s.path.clone());
             }
             let got =

@@ -271,25 +271,7 @@ pub fn derive_initial(
     let (files, links) = read_git_tree(repo, &commit)?;
     let mut submodules = Vec::new();
     for (path, sub_commit) in links {
-        let sub = submodule_repo(&path).ok_or_else(|| {
-            TreeProofError::Unavailable(format!(
-                "submodule {path}: no repo for commit {sub_commit}"
-            ))
-        })?;
-        let (resolved, _) = resolve(&sub, &sub_commit).map_err(|e| {
-            TreeProofError::Unavailable(format!("submodule {path}: commit {sub_commit}: {e}"))
-        })?;
-        let (sub_files, nested) = read_git_tree(&sub, &resolved)?;
-        if !nested.is_empty() {
-            return Err(TreeProofError::Unsupported(format!(
-                "nested submodule under {path}"
-            )));
-        }
-        submodules.push(LockedSubmodule {
-            path,
-            commit: resolved,
-            content_sha256: digest(&sub_files),
-        });
+        derive_submodule(&path, &sub_commit, submodule_repo, &mut submodules)?;
     }
     Ok(LockedInitial {
         commit,
@@ -297,6 +279,52 @@ pub fn derive_initial(
         content_sha256: digest(&files),
         submodules,
     })
+}
+
+/// submodule `path`（root 相対）の内容を導き、その中の入れ子 submodule も同じ lock に平らに足す。
+/// 入れ子の path は root 相対の全 path（例 `lib/pluvio/pluvio_ucx/lib/async-ucx`）。親の内容 hash は入れ子を含まない。
+fn derive_submodule(
+    path: &str,
+    sub_commit: &str,
+    submodule_repo: &dyn Fn(&str) -> Option<PathBuf>,
+    out: &mut Vec<LockedSubmodule>,
+) -> Result<(), TreeProofError> {
+    let sub = submodule_repo(path).ok_or_else(|| {
+        TreeProofError::Unavailable(format!("submodule {path}: no repo for commit {sub_commit}"))
+    })?;
+    let (resolved, _) = resolve(&sub, sub_commit).map_err(|e| {
+        TreeProofError::Unavailable(format!("submodule {path}: commit {sub_commit}: {e}"))
+    })?;
+    let (sub_files, nested) = read_git_tree(&sub, &resolved)?;
+    out.push(LockedSubmodule {
+        path: path.to_string(),
+        commit: resolved,
+        content_sha256: digest(&sub_files),
+    });
+    for (rel, c) in nested {
+        derive_submodule(&format!("{path}/{rel}"), &c, submodule_repo, out)?;
+    }
+    Ok(())
+}
+
+fn is_under(path: &str, ancestor: &str) -> bool {
+    path.strip_prefix(ancestor)
+        .is_some_and(|r| r.starts_with('/'))
+}
+
+/// 他の submodule の中に入っていない（本体の gitlink になる）submodule の path。
+pub fn top_level_submodules(subs: &[LockedSubmodule]) -> Vec<&LockedSubmodule> {
+    subs.iter()
+        .filter(|s| !subs.iter().any(|o| is_under(&s.path, &o.path)))
+        .collect()
+}
+
+/// `parent` の中にある入れ子 submodule の、`parent` 相対 path。
+pub fn nested_paths(subs: &[LockedSubmodule], parent: &str) -> Vec<String> {
+    subs.iter()
+        .filter_map(|s| s.path.strip_prefix(parent)?.strip_prefix('/'))
+        .map(str::to_string)
+        .collect()
 }
 
 /// 渡された repo が lock の期待値と同じ commit / tree / 内容を持つか（repo 側の値は採用しない）。
@@ -323,9 +351,8 @@ pub fn verify_repo(expected: &LockedInitial, repo: &Path) -> Result<(), TreeProo
         .iter()
         .map(|(p, c)| (p.as_str(), c.as_str()))
         .collect();
-    let want: Vec<(&str, &str)> = expected
-        .submodules
-        .iter()
+    let want: Vec<(&str, &str)> = top_level_submodules(&expected.submodules)
+        .into_iter()
         .map(|s| (s.path.as_str(), s.commit.as_str()))
         .collect();
     let mut want_sorted = want.clone();
@@ -341,7 +368,10 @@ pub fn verify_repo(expected: &LockedInitial, repo: &Path) -> Result<(), TreeProo
 /// 展開済みディレクトリ（`.git` の有無は問わない）が lock の期待内容と一致するか。
 /// 本体は submodule path を除いて、各 submodule は path 配下を別に照合する。欠落・差替え・追加・修正は拒否。
 pub fn verify_archive(expected: &LockedInitial, root: &Path) -> Result<(), TreeProofError> {
-    let paths: Vec<String> = expected.submodules.iter().map(|s| s.path.clone()).collect();
+    let paths: Vec<String> = top_level_submodules(&expected.submodules)
+        .into_iter()
+        .map(|s| s.path.clone())
+        .collect();
     for s in &expected.submodules {
         let dir = root.join(&s.path);
         if !dir.is_dir() {
@@ -350,7 +380,7 @@ pub fn verify_archive(expected: &LockedInitial, root: &Path) -> Result<(), TreeP
                 s.path
             )));
         }
-        let got = archive_content_sha256(&dir, &[])?;
+        let got = archive_content_sha256(&dir, &nested_paths(&expected.submodules, &s.path))?;
         if got != s.content_sha256 {
             return Err(TreeProofError::SubmoduleMismatch(format!(
                 "{}: content differs (commit {})",

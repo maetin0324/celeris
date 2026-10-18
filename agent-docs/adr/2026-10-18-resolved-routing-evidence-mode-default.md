@@ -21,3 +21,7 @@ tasks: [01M57DXA25E8KB5FC75FN0TXY7]
   エラー文（problem detail）に含める。
 - D3: 回帰試験: 旧 shape の `llm_route_selected`・`routing_decided`・`worker_finished`・`worker_progress` を
   含む DB で `GET /llm/accounts` が 200 と usage を返す。
+- D4: 一覧 API が 1 件の読めない event で 500 になる作りは変えない（読めない event を黙って飛ばすと
+  stats が静かに欠ける）。原因の event id・task id を problem detail に出して特定できるようにする。
+  `routing_resolved` を持つ型は `ResolvedRouting`（`RouteDecision.routing_resolved`）だけで、
+  `worker_finished`・`worker_progress` は型に当該欄が無く（未知の欄は読み飛ばす）旧 shape でも読める。

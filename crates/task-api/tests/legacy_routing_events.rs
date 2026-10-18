@@ -33,11 +33,47 @@ async fn accounts_list_survives_legacy_routing_events_without_evidence_mode() {
     );
     let resolved =
         json!({"mode":"fixed","source":"task","lower_policy":"lane-policy/1","online_update":true});
+    // 本番の routing_decided: record.features.decision.routing_resolved に evidence_mode が無い。
+    let quota = std::collections::BTreeMap::new();
+    let decision = task_core::route_select::build_route_decision(
+        &task_core::route_select::RouteDecisionInput {
+            decision_id: "run:r1",
+            run_id: Some("r1"),
+            subject_kind: "task",
+            subject_id: "t1",
+            features: None,
+            genre: "coding",
+            harness_id: "claude_code",
+            harness_version: "2.1.0",
+            stage: task_core::route_select::RoutingStage::Enforce,
+            lane: Some("standard"),
+            model_pin: None,
+            quota_remaining: &quota,
+            considered: &[],
+            exclusions: &[],
+            evidence: &[],
+            route_defaults: &[],
+            output: None,
+        },
+    );
+    let mut decision = serde_json::to_value(&decision).unwrap();
+    decision["routing_resolved"] = resolved.clone();
     let legacy = [
+        json!({"type":"routing_decided","run_id":"r1","record":{
+            "org_node":"software-engineering","harness":"coding",
+            "features":{"schema":"s","template":"t","hash":"h","decision":decision},
+            "decision":{"lane":"standard","proposed":"standard","source":"default",
+                "rule_id":"standard/default","policy_version":"v1",
+                "features":{"judgment":"low","ambiguity":"low","verifiability":"high",
+                    "reversibility":"high","consequence":"low","context_size":"medium",
+                    "tool_intensity":"medium","expected_length":"medium","cross_cutting":"low"},
+                "reasons":["no rule above matched"]},
+            "resolution":{"lane":"standard","adapter":"claude-code","provider":"pool",
+                "model_id":"m","reasoning_effort":"medium"}}}),
         json!({"type":"llm_route_selected","source_id":"claude_oauth","model_id":"m","account_id":"b",
                "metadata":{"routing_resolved":resolved}}),
-        json!({"type":"worker_progress","run_id":"r1","msg":"working"}),
-        json!({"type":"worker_finished","run_id":"r1","outcome":"done: ok",
+        json!({"type":"worker_progress","run_id":"r1","msg":"working","routing_resolved":resolved}),
+        json!({"type":"worker_finished","run_id":"r1","outcome":"done: ok","routing_resolved":resolved,
                "usage":{"input_tokens":10,"output_tokens":4}}),
     ];
     let conn = rusqlite::Connection::open(&env.db_path).expect("open db");
@@ -69,4 +105,24 @@ async fn accounts_list_survives_legacy_routing_events_without_evidence_mode() {
         .expect("account b");
     assert_eq!(b["stats"]["runs"], json!(1));
     assert_eq!(b["stats"]["input_tokens"], json!(10));
+
+    // 同じ DB で /routing も読める（routing_decided の旧 shape）。
+    let resp = send(
+        &app,
+        get_with(
+            &format!("/api/v1/tasks/{}/routing", task.id),
+            &[("authorization", &format!("Bearer {TOKEN}"))],
+        ),
+    )
+    .await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    let t = send(
+        &app,
+        get_with(
+            &format!("/api/v1/tasks/{}", task.id),
+            &[("authorization", &format!("Bearer {TOKEN}"))],
+        ),
+    )
+    .await;
+    assert_eq!(t.status, 200, "{}", t.text());
 }

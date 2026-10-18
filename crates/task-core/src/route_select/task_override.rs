@@ -133,8 +133,7 @@ pub enum ModeSource {
     Config,
 }
 
-/// 解決結果（`celeris.route-decision/1` の `routing_resolved` に載る）。
-
+// 解決結果（`celeris.route-decision/1` の `routing_resolved` に載る）。
 //
 // `evidence_mode` の無い旧 event（9c4af7f9 より前に追記された `routing_resolved`）は、
 // `RoutingOverride` と同じ規則で `evidence_table_id` あり→`pinned`、なし→`latest` と読む

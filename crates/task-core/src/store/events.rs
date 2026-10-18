@@ -668,7 +668,10 @@ impl SqliteStore {
             for row in rows {
                 let (id, task_id, seq, ts, json) = row?;
                 let task_id = Self::parse_id(&task_id)?;
-                let event: Event = serde_json::from_str(&json)?;
+                // 読めない event 1 件で一覧全体が失敗するときに、原因の行を特定できるよう id を残す。
+                let event: Event = serde_json::from_str(&json).map_err(|e| {
+                    StoreError::Invalid(format!("event {id} (task {task_id}) is unreadable: {e}"))
+                })?;
                 out.push(EventRow {
                     id: id as u64,
                     task_id,

@@ -133,8 +133,12 @@ pub enum ModeSource {
     Config,
 }
 
-/// 解決結果（`celeris.route-decision/1` の `routing_resolved` に載る）。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+// 解決結果（`celeris.route-decision/1` の `routing_resolved` に載る）。
+//
+// `evidence_mode` の無い旧 event（9c4af7f9 より前に追記された `routing_resolved`）は、
+// `RoutingOverride` と同じ規則で `evidence_table_id` あり→`pinned`、なし→`latest` と読む
+// （ADR 2026-10-18-resolved-routing-evidence-mode-default）。events は書き換えない。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct ResolvedRouting {
     pub mode: RoutingMode,
     pub source: ModeSource,
@@ -144,6 +148,37 @@ pub struct ResolvedRouting {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evidence_table_id: Option<String>,
     pub online_update: bool,
+}
+
+#[derive(Deserialize)]
+struct RawResolvedRouting {
+    mode: RoutingMode,
+    source: ModeSource,
+    lower_policy: String,
+    #[serde(default)]
+    evidence_mode: Option<EvidenceMode>,
+    #[serde(default)]
+    evidence_table_id: Option<String>,
+    online_update: bool,
+}
+
+impl<'de> Deserialize<'de> for ResolvedRouting {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let r = RawResolvedRouting::deserialize(d)?;
+        let evidence_mode = r.evidence_mode.unwrap_or(if r.evidence_table_id.is_some() {
+            EvidenceMode::Pinned
+        } else {
+            EvidenceMode::Latest
+        });
+        Ok(Self {
+            mode: r.mode,
+            source: r.source,
+            lower_policy: r.lower_policy,
+            evidence_mode,
+            evidence_table_id: r.evidence_table_id,
+            online_update: r.online_update,
+        })
+    }
 }
 
 /// task 欄があれば config より優先、無ければ従来（config の mode・既定の下段・最新の根拠表・オンライン更新あり）。
@@ -275,5 +310,22 @@ mod tests {
         assert!(mk(EvidenceMode::None, None).validate().is_ok());
         assert!(mk(EvidenceMode::Pinned, Some("e")).validate().is_ok());
         assert!(mk(EvidenceMode::Latest, None).validate().is_ok());
+    }
+
+    #[test]
+    fn resolved_routing_without_evidence_mode_follows_the_override_rule() {
+        let base = serde_json::json!({
+            "mode": "fixed", "source": "task", "lower_policy": "lane-policy/1", "online_update": true
+        });
+        let latest: ResolvedRouting = serde_json::from_value(base.clone()).unwrap();
+        assert_eq!(latest.evidence_mode, EvidenceMode::Latest);
+        let mut pinned = base.clone();
+        pinned["evidence_table_id"] = "ev-1".into();
+        let pinned: ResolvedRouting = serde_json::from_value(pinned).unwrap();
+        assert_eq!(pinned.evidence_mode, EvidenceMode::Pinned);
+        let mut none = base;
+        none["evidence_mode"] = "none".into();
+        let none: ResolvedRouting = serde_json::from_value(none).unwrap();
+        assert_eq!(none.evidence_mode, EvidenceMode::None);
     }
 }

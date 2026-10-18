@@ -2,7 +2,8 @@
 //!
 //! A は「既存の強い運用 baseline」であり、Celeris の routing・turn 制限・許可範囲を通さない（後付けの
 //! `--max-turns`・許可リスト・tool 制限は足さない）。足すのは次の 3 つだけ（ADR 2026-10-17-mlsys-pilot2-fixes）:
-//! - D2 ファイルシステム隔離: `Sandbox` が command を bubblewrap で包み、試行の workspace・A のアカウント dir・
+//! - D2 ファイルシステム隔離: `Sandbox` が command を bubblewrap で包み、試行の workspace・試行ごとの state dir
+//!   （`CLAUDE_CONFIG_DIR`。認証材料 `.credentials.json` だけを read-only で重ねる。ADR 2026-10-18-a-trial-scoped-state）・
 //!   claude の実行ファイル以外の運用者の file（grader-private・他試行・過去 workspace・環境変数の token）を見せない。
 //! - D3 token 予算の実行中強制: stdout の stream-json から累積 tokens を逐次読み、`TrialRequest.budget.max_tokens` を
 //!   超えたら process group を kill する（監視 thread と `poll` の両方。再開後は `poll` が判定する）。
@@ -172,12 +173,45 @@ pub fn parse_claude_stream_usage(stdout: &str) -> Option<TokenUsage> {
     Some(TokenUsage::full(t[0], t[1], t[2], t[3]))
 }
 
-/// A のファイルシステム隔離（bubblewrap）。ADR 2026-10-17-mlsys-pilot2-fixes D2。
+/// A のファイルシステム隔離（bubblewrap）。ADR 2026-10-17-mlsys-pilot2-fixes D2、
+/// ADR 2026-10-18-a-trial-scoped-state（認証と可変状態の分離）。
 #[derive(Clone, Debug)]
 pub struct Sandbox {
-    /// A が使う Celeris 管理アカウント（claude_oauth）の id と、その `CLAUDE_CONFIG_DIR`。
+    /// A が使う Celeris 管理アカウント（claude_oauth）の id。
     pub account_id: String,
-    pub config_dir: PathBuf,
+    /// そのアカウント dir。ここからは `.credentials.json` だけを read-only で渡す（dir 全体は bind しない）。
+    pub auth_dir: PathBuf,
+    /// 試行 state dir の親（campaign の出力領域の下）。試行ごとの `CLAUDE_CONFIG_DIR` はこの下に決定的に置く。
+    pub state_root: PathBuf,
+}
+
+/// 試行 identity marker の file 名（試行 state dir の直下）。
+pub const TRIAL_MARKER: &str = "trial-identity.json";
+/// 認証材料の file 名。
+const CREDENTIALS: &str = ".credentials.json";
+
+/// 試行 state dir に置く identity marker（lock を兼ねる: 別の識別の試行が同じ dir を使うのを拒む）。
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
+pub struct TrialMarker {
+    pub campaign_id: String,
+    pub manifest_sha256: String,
+    pub arm: String,
+    pub case: String,
+    pub rep: u32,
+    pub account_id: String,
+}
+
+/// path の 1 要素に使える形へ（英数・`-_.` 以外は `%xx`）。`.` 始まりも `%2e` にして `..` を作らせない。
+fn path_component(s: &str) -> String {
+    let mut o = String::new();
+    for (i, b) in s.bytes().enumerate() {
+        if b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || (b == b'.' && i > 0) {
+            o.push(b as char);
+        } else {
+            o.push_str(&format!("%{b:02x}"));
+        }
+    }
+    if o.is_empty() { "%".into() } else { o }
 }
 
 /// 実体の解決は preflight と同じ関数（検査対象と実起動をずらさない）。
@@ -188,8 +222,15 @@ fn resolve_program(p: &Path) -> Result<PathBuf, String> {
 impl Sandbox {
     /// bwrap に渡す引数（`bwrap` 自身は含まない）。`real` は解決済みの実行ファイル。
     /// 見える物は固定: 読み取り専用の `/usr` と `/etc`・`/bin` 等、`/proc` `/dev`、空の `/tmp`、
-    /// workspace と A のアカウント dir（書き込み可）、実行ファイル本体。それ以外の host の path は存在しない。
-    pub fn args(&self, workspace: &Path, real: &Path, env: &[(String, String)]) -> Vec<String> {
+    /// workspace と試行 state dir（書き込み可）、state dir 内に重ねた認証材料（read-only）、実行ファイル本体。
+    /// アカウント dir 全体・他試行の state dir・それ以外の host の path は存在しない。
+    pub fn args(
+        &self,
+        workspace: &Path,
+        state: &Path,
+        real: &Path,
+        env: &[(String, String)],
+    ) -> Vec<String> {
         let mut a: Vec<String> = Vec::new();
         let mut add = |xs: &[&str]| a.extend(xs.iter().map(|x| x.to_string()));
         add(&[
@@ -220,11 +261,18 @@ impl Sandbox {
         add(&["--tmpfs", "/tmp", "--dir", "/tmp/home"]);
         let (ws, cfg, real_s) = (
             workspace.to_string_lossy().into_owned(),
-            self.config_dir.to_string_lossy().into_owned(),
+            state.to_string_lossy().into_owned(),
             real.to_string_lossy().into_owned(),
         );
+        let cred_src = self
+            .auth_dir
+            .join(CREDENTIALS)
+            .to_string_lossy()
+            .into_owned();
+        let cred_dst = state.join(CREDENTIALS).to_string_lossy().into_owned();
         add(&["--ro-bind", &real_s, &real_s]);
-        add(&["--bind", &ws, &ws, "--bind", &cfg, &cfg, "--chdir", &ws]);
+        add(&["--bind", &ws, &ws, "--bind", &cfg, &cfg]);
+        add(&["--ro-bind", &cred_src, &cred_dst, "--chdir", &ws]);
         add(&["--setenv", "PATH", "/usr/local/bin:/usr/bin:/bin"]);
         add(&[
             "--setenv",
@@ -248,9 +296,81 @@ impl Sandbox {
         a
     }
 
-    pub fn wrap(&self, c: &HarnessCommand, workspace: &Path) -> Result<HarnessCommand, String> {
+    /// 試行の state dir（campaign / arm / case / repetition から決まる安定した path）。
+    pub fn state_dir(&self, req: &TrialRequest) -> PathBuf {
+        self.state_root
+            .join(path_component(req.campaign_id))
+            .join(path_component(&format!("{:?}", req.config.id)))
+            .join(path_component(req.problem_id))
+            .join(format!("rep{}", req.rep))
+    }
+
+    /// state dir を用意し、identity marker を書く（既にあれば一致を確かめる）。認証材料の mount 先も空 file で置く。
+    /// 同じ試行の再開は dir を保ち、別の識別の marker が居れば拒否する（他試行の状態は使わない）。
+    pub fn prepare(&self, req: &TrialRequest) -> Result<PathBuf, String> {
+        let dir = self.state_dir(req);
+        let want = TrialMarker {
+            campaign_id: req.campaign_id.into(),
+            manifest_sha256: req.manifest_sha256.into(),
+            arm: format!("{:?}", req.config.id),
+            case: req.problem_id.into(),
+            rep: req.rep,
+            account_id: self.account_id.clone(),
+        };
+        fs::create_dir_all(&dir).map_err(|e| format!("trial state dir {}: {e}", dir.display()))?;
+        let mp = dir.join(TRIAL_MARKER);
+        match fs::read(&mp) {
+            Ok(b) => {
+                let have: TrialMarker = serde_json::from_slice(&b)
+                    .map_err(|e| format!("{}: unreadable identity marker: {e}", mp.display()))?;
+                if have != want {
+                    return Err(format!(
+                        "{}: identity marker belongs to another trial ({:?}); refusing to reuse",
+                        mp.display(),
+                        have
+                    ));
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                // 新規 dir は空でなければならない（marker 無しの既存状態を引き継がない）。
+                let stray = fs::read_dir(&dir)
+                    .map_err(|e| e.to_string())?
+                    .filter_map(Result::ok)
+                    .any(|e| e.file_name() != CREDENTIALS);
+                if stray {
+                    return Err(format!(
+                        "{}: state dir has content but no identity marker; refusing to adopt it",
+                        dir.display()
+                    ));
+                }
+                let b = serde_json::to_vec(&want).map_err(|e| e.to_string())?;
+                write_synced(&mp, &b)?;
+            }
+            Err(e) => return Err(format!("{}: {e}", mp.display())),
+        }
+        let src = self.auth_dir.join(CREDENTIALS);
+        if !src.is_file() {
+            return Err(format!(
+                "account {}: {} is not a file (no credentials to pass)",
+                self.account_id,
+                src.display()
+            ));
+        }
+        let dst = dir.join(CREDENTIALS);
+        if !dst.exists() {
+            File::create(&dst).map_err(|e| format!("{}: {e}", dst.display()))?;
+        }
+        Ok(dir)
+    }
+
+    pub fn wrap(
+        &self,
+        c: &HarnessCommand,
+        workspace: &Path,
+        state: &Path,
+    ) -> Result<HarnessCommand, String> {
         let real = resolve_program(&c.program)?;
-        let mut args = self.args(workspace, &real, &c.env);
+        let mut args = self.args(workspace, state, &real, &c.env);
         args.push("--".into());
         args.push(real.to_string_lossy().into_owned());
         args.extend(c.args.iter().cloned());
@@ -547,7 +667,10 @@ impl Executor for HarnessExecutor {
             &serde_json::to_vec(&launch).map_err(|e| e.to_string())?,
         )?;
         let c = match &self.sandbox {
-            Some(sb) => sb.wrap(&c, req.workspace)?,
+            Some(sb) => {
+                let state = sb.prepare(req)?;
+                sb.wrap(&c, req.workspace, &state)?
+            }
             None => c,
         };
         let open = |n: &str| File::create(dir.join(n)).map_err(|e| e.to_string());

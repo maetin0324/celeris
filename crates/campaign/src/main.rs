@@ -214,16 +214,9 @@ fn cap_probe_cli(args: &[String]) -> Result<String, String> {
             },
         )
     } else {
-        // B/C は A の sandbox ではなく、worker 環境（CapEnv.worker）そのものを確かめる。
-        cap_probe::probe_worker(
-            &env,
-            arm,
-            &ws,
-            case,
-            &cap_probe::ProcessWorkerHost {
-                timeout: std::time::Duration::from_secs(300),
-            },
-        )
+        // B/C は worker の実起動関数で、daemon 設定（この process の環境）の PATH・env の子 process に走らせる。
+        let daemon = cap_probe::WorkerDaemonEnv::from_process(&env.worker);
+        cap_probe::probe_worker(&env, &daemon, arm, &ws, case)
     };
     let s = serde_json::to_string_pretty(&rep).map_err(|e| e.to_string())?;
     if rep.ok { Ok(s) } else { Err(s) }

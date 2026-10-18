@@ -9,6 +9,9 @@ updated: 2026-10-18
 worker sandbox は userns が使えないため、実 A sandbox 内の実走と実 build は人が host で行う。
 **起動してよいのは無 LLM の確認だけ**。有料ジョブ・本測定・LLM 呼出し・Sirius への job 投入はしない。
 本番 host（systemd・本番 config・release・本番 DB/knowledge）は変更しない。鍵・認証材料の値は出力・記録に貼らない。
+**ビルド場所**: cargo build/test と min-build は operator host のローカル（A と同じ sandbox）で行う。クラスタ（sirius）は `sirius-link` の接続確認（`ssh -O check`）だけで、ビルドも job 投入もしない（case.json の `experiment.params.build_location` と同じ）。
+`rustc-min` は rustc の版を最小版 1.85.0（edition 2024）と `sort -V` で比較し（部分一致 `rustc 1.` ではない）、`min-build-locusta` は `--features transport-locusta` 付きの最小 cargo build を通す。Rust が無い/古い host は最初の LLM 呼出し前に env_failure で止まる（試験: 不在は `missing_or_old_rust_stops_before_any_llm_call`、古い版は `old_rustc_fails_the_min_version_comparison`）。
+**限界（未検証）**: 1.85.0 は edition 2024 の下限であり、`lib/locusta@68f8b210` 自身の要求版は未確認（この host に submodule が無い）。`min-build-locusta` は feature 名の解決を見る合成 crate で、実 locusta の build ではない。実 crate での build は submodule snapshot が揃ってから別途確かめる（人の判断待ち: inventory.md の R2）。
 前提: 最新の本ブランチを build 済み（`CARGO_TARGET_DIR` はローカル scratch。NFS に target を作らない）。
 
 ## 0. cap env の用意（承認が要る値）
@@ -30,9 +33,8 @@ done
 cargo run -p celeris-campaign -- cap-probe --case k4-cmp4-validity-analysis --arm a --cap-env $WORK/cap-env.json
 # argv だけ確認（実行しない）: --dry-argv
 ```
-期待: 各 arm exit 0、JSON `ok: true`、K2 の能力（cc, c++, cmake, git, rustc, cargo, min-build-cargo, ucx-pkg, min-build-ucx, min-build-cmake, autotools, libclang, sirius-link）が全て ok。K4（python3 と stdlib）も ok。
-A は sandbox（`Sandbox::wrap_resolved`）、B/C は worker 環境（`CapEnv.worker`: 空環境＋worker の env、承認済み socket・固定 path の存在確認）で同じ必要能力を走らせる。B/C は A の結果の arm 付け替えではない。`--dry-argv` は A の sandbox argv のみ。
-**K2 のビルド場所**: `visible_command`（`cargo test --release --features transport-locusta --lib`）は**ローカル host**（A は sandbox 内、B/C は worker 環境）でビルドする。クラスタ（sirius）へは管理接続 socket 経由の接続確認のみで、ビルドしない。そのため `rustc`（`rustc 1.` 版）・`cargo`（`cargo 1.` 版）・`min-build-cargo`（最小 crate の `cargo build --release --offline` と実行）を必要能力に含める。Rust 不在/不適合は env_failure で、最初の測定用 LLM 呼出しの前（preflight）に止まる。
+期待: 各 arm exit 0、JSON `ok: true`、K2 の 13 能力（cc, c++, cmake, git, ucx-pkg, min-build-ucx, min-build-cmake, rustc-min, min-build-locusta, autotools, libclang, rdma-verbs, sirius-link）が全て ok。K4（python3 と stdlib）も ok。
+A と B/C の probe argv（`--dry-argv`）が同一であること（B/C は A と同じ能力を与える設計）。
 不足時: exit 非 0、`failure_class: env_failure`。この場合は LLM 呼出し前に停止（preflight の `capability` check）。ro_mounts / 接続 socket を足して再実行し、sandbox を緩めて通さない。
 
 ## 2. K2 実 asset の組立・ビルド・正負例（verify-real-assets.sh）

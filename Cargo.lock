@@ -302,6 +302,7 @@ dependencies = [
  "task-api",
  "task-core",
  "task-ops",
+ "task-worker",
  "tempfile",
  "time",
  "tokio",

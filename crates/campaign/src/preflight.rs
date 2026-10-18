@@ -50,14 +50,15 @@ pub trait Host {
     fn api_get(&self, api_url: &str, token_env: &str, path: &str) -> Result<Value, String>;
     /// A の隔離（bwrap）がこの host で実際に動くか。
     fn sandbox_usable(&self) -> Result<(), String>;
-    /// cap-probe の実行器。既定は実 bwrap（試験は stub を返す）。
-    /// B/C を実行する worker 環境（A の sandbox ではない）。試験は stub を返す。
-    fn worker_host(&self) -> Box<dyn crate::cap_probe::WorkerHost> {
-        Box::new(crate::cap_probe::ProcessWorkerHost {
-            timeout: std::time::Duration::from_secs(120),
-        })
+    /// B/C の probe が子 process を起こす daemon 設定の `[worker]` PATH・env。既定はこの process の環境
+    /// （daemon と同じ EnvironmentFile で起動した前提）。試験は fake program の PATH を返す。
+    fn worker_daemon_env(
+        &self,
+        expected: &crate::harness_exec::Toolchain,
+    ) -> crate::cap_probe::WorkerDaemonEnv {
+        crate::cap_probe::WorkerDaemonEnv::from_process(expected)
     }
-
+    /// A の cap-probe の実行器。既定は実 bwrap（試験は stub を返す）。
     fn probe_runner(&self) -> Box<dyn crate::cap_probe::ProbeRunner> {
         Box::new(crate::cap_probe::ProcessProbeRunner {
             timeout: std::time::Duration::from_secs(300),
@@ -699,27 +700,20 @@ fn check_capabilities(
         return a.miss("capability", e);
     }
     let runner = host.probe_runner();
-    let worker = host.worker_host();
     for c in cases {
         for cfg_id in m.configs.iter().map(|x| x.id) {
-            if cfg_id != ConfigId::A {
-                let rep =
-                    crate::cap_probe::probe_worker(&env, cfg_id, &ws, &c.case, worker.as_ref());
-                for r in rep.results.iter().filter(|r| !r.ok) {
-                    a.miss(
-                        "capability",
-                        format!("{} arm {:?}: {}: {}", c.case.id, cfg_id, r.id, r.detail),
-                    );
-                }
-                continue;
-            }
-            let sb = crate::cap_probe::sandbox_for(
-                &env,
-                cfg_id,
-                inp.a_account.as_deref().unwrap_or("probe"),
-                &cfg,
-            );
-            let rep = crate::cap_probe::probe(&sb, cfg_id, &ws, &c.case, runner.as_ref());
+            let rep = if cfg_id == ConfigId::A {
+                let sb = crate::cap_probe::sandbox_for(
+                    &env,
+                    cfg_id,
+                    inp.a_account.as_deref().unwrap_or("probe"),
+                    &cfg,
+                );
+                crate::cap_probe::probe(&sb, cfg_id, &ws, &c.case, runner.as_ref())
+            } else {
+                let daemon = host.worker_daemon_env(&env.worker);
+                crate::cap_probe::probe_worker(&env, &daemon, cfg_id, &ws, &c.case)
+            };
             for r in rep.results.iter().filter(|r| !r.ok) {
                 a.miss(
                     "capability",

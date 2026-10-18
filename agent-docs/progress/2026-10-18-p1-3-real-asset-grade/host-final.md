@@ -32,7 +32,7 @@ completed: 2026-10-18
 ## 3. 区分
 | 項目 | 区分 |
 |---|---|
-| 必要能力 11 種（rdma-verbs 含む）の cap-probe、A sandbox 同一経路（K2 a/b/c、K4 a） | **実経路確認済み**（B/C は A と同じローカル sandbox 上の probe。task-api worker 環境そのものは未検証） |
+| 必要能力 11 種（rdma-verbs 含む）の cap-probe、A sandbox 同一経路（K2 a/b/c、K4 a） | **実経路確認済み**（B/C は A と同じローカル sandbox 上の probe。task-api worker 環境そのものは未検証）。Rust の最小版比較（rustc-min）と transport-locusta 最小ビルド（min-build-locusta）は case に追加済みで、host 実走は未実施。ビルド場所はローカル host、sirius は接続確認のみ |
 | 初期 tree の build（transport-locusta）、asset snapshot 完全性、K4 実 raw 再計算 | **実経路確認済み**（host 実走 ok） |
 | K2 known-good が Pass、known-bad が model_failure | **未成立 / 未検証**。known-good が FAILED（env_failure=false）。known-bad の failure_class は回答に無く未確認 |
 | known-good tree の同一性（086c4618 + p0-final.patch か、Sirius で ok だった e4c8e77d か） | **未検証**（要確認） |

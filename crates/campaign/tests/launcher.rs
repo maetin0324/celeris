@@ -255,8 +255,16 @@ done
 exec "$@"
 "#;
 
-const CAP_STUB: &str =
-    "#!/bin/sh\necho 'cmake version git version Python 3 rustc 1.80 cargo 1.80'\n";
+const CAP_STUB: &str = "#!/bin/sh\necho 'cmake version git version Python 3 rustc-min ok'\n";
+
+/// worker の PATH に足す `sh`。能力 probe の複合 command（`sh -c`）だけ成功で返し、他は実 sh に渡す
+/// （PATH の先頭に置かれるので、他の script が呼ぶ `sh` を壊さない）。
+const CAP_SH_STUB: &str = r#"#!/bin/sh
+case "$2" in
+  *min-build*|*printf*|*autoreconf*|*libclang*|*verbs.h*) echo 'cmake version git version Python 3 rustc-min ok'; exit 0 ;;
+esac
+exec /bin/sh "$@"
+"#;
 
 struct Fx {
     s: Setup,
@@ -325,7 +333,7 @@ impl Fx {
             format!(
                 "MANIFEST={m}\nDAEMON_CONFIG={d}/measure.toml\nNORMAL_CONFIG={d}/normal.toml\nCANARIES={d}/canaries.json\n\
                  TASK_TEMPLATE={d}/task-template.json\nOUT={d}/out\nSTATE_DIR={d}/state\nRELEASE={rel}\n\
-                 CELERIS_BIN={d}/bin/celeris\nRUN_PATH={d}/bin\nA_PROGRAM=claude\nA_ACCOUNT=lab\nWORKER_PROGRAMS=\"claude=claude\"\n\
+                 CELERIS_BIN={d}/bin/celeris\nRUN_PATH={d}/cap-tools:{d}/bin\nA_PROGRAM=claude\nA_ACCOUNT=lab\nWORKER_PROGRAMS=\"claude=claude\"\n\
                  MATERIALS_SRC={mat}\nKB_SRC={kb}\nREPO_SRC={repo}\nINPUTS_SRC={ins}\n\
                  CASES_ROOT={cases}\nGRADER_ROOT={gr}\nGRADE_CASES_ROOT={gc}\nCAMPAIGN_BIN={cb}\nCAP_ENV={ce}\n\
                  EXECUTOR=celeris\nINTERVAL_SECS=1\nMAX_ITERATIONS=600\nHEALTH_WAIT_SECS=60\n{extra}",
@@ -468,10 +476,11 @@ fn fixture() -> Fx {
         "sh",
         "ssh",
         "python3",
-        "rustc",
-        "cargo",
     ] {
-        write_exec(&tools.join(t), CAP_STUB);
+        write_exec(
+            &tools.join(t),
+            if t == "sh" { CAP_SH_STUB } else { CAP_STUB },
+        );
     }
     let tc = json!({
         "ro_mounts": [tools],

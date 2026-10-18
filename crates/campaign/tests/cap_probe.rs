@@ -43,6 +43,8 @@ fn k2_and_k4_fix_their_required_capabilities_as_case_data() {
         "ucx-pkg",
         "min-build-ucx",
         "min-build-cmake",
+        "rustc-min",
+        "min-build-locusta",
         "autotools",
         "libclang",
         "sirius-link",
@@ -83,7 +85,7 @@ impl ProbeRunner for Rec {
         self.0.borrow_mut().push(args.to_vec());
         Ran::Exit {
             code: 0,
-            stdout: "cmake version git version Python 3".into(),
+            stdout: "cmake version git version Python 3 rustc-min ok".into(),
         }
     }
 }
@@ -251,18 +253,23 @@ impl Host for StubHost {
     fn sandbox_usable(&self) -> Result<(), String> {
         Ok(())
     }
+    fn worker_daemon_env(&self, _: &Toolchain) -> cap_probe::WorkerDaemonEnv {
+        if self.0 {
+            fake_worker_daemon()
+        } else {
+            // 何も解決できない PATH（socket も道具も無い worker）。
+            cap_probe::WorkerDaemonEnv {
+                path: Some("/nonexistent-cap-probe".into()),
+                env: vec![],
+            }
+        }
+    }
     fn probe_runner(&self) -> Box<dyn ProbeRunner> {
         if self.0 {
             Box::new(OkRunner)
         } else {
             Box::new(FailRunner)
         }
-    }
-    fn worker_host(&self) -> Box<dyn celeris_campaign::cap_probe::WorkerHost> {
-        Box::new(WorkerStub {
-            sockets: self.0,
-            rust: self.0,
-        })
     }
 }
 
@@ -305,124 +312,243 @@ fn preflight_stops_before_any_llm_call_on_missing_capability() {
     assert_eq!(class, Some("env_failure"));
 }
 
-/// B/C は A の sandbox ではなく worker 環境で確かめる。A が正常でも worker から socket / Rust を外すと、
-/// その arm だけが preflight（最初の LLM 呼出しの前）で env_failure になる。
-struct WorkerStub {
-    sockets: bool,
-    rust: bool,
+// ---- B/C: task-worker の実起動関数（FakeAdapter → run_subprocess）経由の能力 probe ----
+
+fn k4() -> celeris_campaign::cases::Case {
+    cases()
+        .get("k4-cmp4-validity-analysis")
+        .expect("k4")
+        .case
+        .clone()
 }
-impl celeris_campaign::cap_probe::WorkerHost for WorkerStub {
-    fn socket_present(&self, _: &Path) -> bool {
-        self.sockets
+
+fn fake_dir(names: &[&str], body: &str) -> std::path::PathBuf {
+    let d = tempfile::tempdir().expect("dir").keep();
+    for n in names {
+        let mut c = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(r#"cat > "$1" && chmod 755 "$1""#)
+            .arg("sh")
+            .arg(d.join(n))
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn");
+        std::io::Write::write_all(&mut c.stdin.take().expect("stdin"), body.as_bytes())
+            .expect("write");
+        assert!(c.wait().expect("wait").success());
     }
-    fn dir_present(&self, _: &Path) -> bool {
-        true
-    }
-    fn run(&self, env: &[(String, String)], argv: &[String], _: &Path) -> Ran {
-        assert!(
-            env.iter().any(|(k, _)| k == "PATH"),
-            "worker env is built explicitly"
-        );
-        if !self.rust && argv.join(" ").contains("cargo") || !self.rust && argv[0] == "rustc" {
-            return Ran::Exit {
-                code: 127,
-                stdout: String::new(),
-            };
-        }
-        Ran::Exit {
-            code: 0,
-            stdout: "cmake version git version Python 3 rustc 1.80 cargo 1.80".into(),
-        }
-    }
+    d
 }
-struct WorkerHostStub(StubHost, std::sync::Arc<WorkerStub>);
-struct Shared(std::sync::Arc<WorkerStub>);
-impl celeris_campaign::cap_probe::WorkerHost for Shared {
-    fn socket_present(&self, p: &Path) -> bool {
-        self.0.socket_present(p)
-    }
-    fn dir_present(&self, p: &Path) -> bool {
-        self.0.dir_present(p)
-    }
-    fn run(&self, e: &[(String, String)], a: &[String], w: &Path) -> Ran {
-        self.0.run(e, a, w)
+
+fn daemon(dir: &Path, env: Vec<(String, String)>) -> cap_probe::WorkerDaemonEnv {
+    cap_probe::WorkerDaemonEnv {
+        path: Some(format!("{}:/usr/bin:/bin", dir.display())),
+        env,
     }
 }
-impl Host for WorkerHostStub {
-    fn env_nonempty(&self, n: &str) -> bool {
-        self.0.env_nonempty(n)
+
+const PY_STUB: &str = "#!/bin/sh\necho \"Python 3 pwd=$PWD mark=$CAP_MARK\"\n";
+
+/// 子 process は daemon 設定の PATH・env と worker の cwd で走り、実起動関数の run（request.json）が残る。
+#[test]
+fn worker_probe_runs_through_run_subprocess_with_daemon_path_env_and_cwd() {
+    let tools = fake_dir(&["python3"], PY_STUB);
+    let env = env_json(json!({
+        "env": [["CAP_MARK", "m1"], ["PATH", tools.display().to_string()]]
+    }));
+    let ws = tempfile::tempdir().expect("ws");
+    let d = daemon(&tools, vec![("CAP_MARK".into(), "m1".into())]);
+    for arm in [ConfigId::B, ConfigId::C] {
+        let rep = cap_probe::probe_worker(&env, &d, arm, ws.path(), &k4());
+        assert!(rep.ok, "{:?}", rep.results);
+        assert_eq!(rep.paid_calls_made, 0);
+        let out =
+            std::fs::read_to_string(ws.path().join("artifacts/cap-probe/0.out")).expect("out");
+        let cwd = std::fs::canonicalize(ws.path()).expect("canon");
+        assert!(out.contains("mark=m1"), "{out}");
+        assert!(out.contains(&format!("pwd={}", cwd.display())), "{out}");
+        assert!(ws.path().join("runs/cap-probe/request.json").exists());
+        assert!(ws.path().join("runs/cap-probe/stdout.jsonl").exists());
     }
-    fn resolve_program(&self, p: &Path) -> Result<ResolvedProgram, String> {
-        self.0.resolve_program(p)
-    }
-    fn api_get(&self, a: &str, t: &str, p: &str) -> Result<Value, String> {
-        self.0.api_get(a, t, p)
-    }
-    fn sandbox_usable(&self) -> Result<(), String> {
-        Ok(())
-    }
-    fn probe_runner(&self) -> Box<dyn ProbeRunner> {
-        Box::new(OkRunner) // A は正常
-    }
-    fn worker_host(&self) -> Box<dyn celeris_campaign::cap_probe::WorkerHost> {
-        Box::new(Shared(self.1.clone()))
+}
+
+fn failing(rep: &cap_probe::ProbeReport) -> Vec<&str> {
+    rep.results
+        .iter()
+        .filter(|r| !r.ok)
+        .map(|r| r.id.as_str())
+        .collect()
+}
+
+#[test]
+fn worker_probe_missing_socket_is_env_failure_per_arm() {
+    let tools = fake_dir(&["python3"], PY_STUB);
+    let sock = tempfile::tempdir().expect("s").keep().join("absent.sock");
+    let env = env_json(json!({"sockets":[sock]}));
+    let d = daemon(&tools, vec![]);
+    let ws = tempfile::tempdir().expect("ws");
+    for arm in [ConfigId::B, ConfigId::C] {
+        let rep = cap_probe::probe_worker(&env, &d, arm, ws.path(), &k4());
+        assert!(!rep.ok);
+        assert_eq!(rep.arm, arm);
+        assert_eq!(rep.failure_class, Some("env_failure"));
+        assert_eq!(failing(&rep), vec![format!("socket:{}", sock.display())]);
     }
 }
 
 #[test]
-fn worker_missing_socket_or_rust_is_env_failure_for_that_arm_only() {
-    use std::sync::Arc;
-    let s = setup();
-    // 承認済み socket を worker 環境に宣言する（B/C が確認すべき接続）
-    let tc = json!({"ro_mounts":[],"sockets":["/run/approved/mgmt.sock"],"env":[]});
-    std::fs::write(
-        s.inp.cap_env.as_ref().unwrap(),
-        json!({"schema":"celeris.campaign-cap-env/1","a":tc,"worker":tc}).to_string(),
-    )
-    .unwrap();
-    let run = |sockets, rust| {
-        let h = WorkerHostStub(StubHost(true), Arc::new(WorkerStub { sockets, rust }));
-        let r = check(&s.inp, &h);
-        let m: Vec<String> = r
-            .missing
-            .iter()
-            .filter(|m| m.check == "capability")
-            .map(|m| m.detail.clone())
-            .collect();
-        (m, r.failure_class)
-    };
-    let (m, class) = run(true, true);
-    assert!(m.is_empty(), "{m:?}");
-    assert_eq!(class, None);
-    let (m, class) = run(false, true);
-    assert_eq!(class, Some("env_failure"));
-    assert!(
-        m.iter()
-            .any(|x| x.contains("arm B") && x.contains("worker-socket")),
-        "{m:?}"
-    );
-    assert!(
-        m.iter().all(|x| !x.contains("arm A")),
-        "A stays healthy: {m:?}"
-    );
-    let (m, class) = run(true, false);
-    assert_eq!(class, Some("env_failure"));
-    for id in ["rustc", "cargo", "min-build-cargo"] {
-        assert!(
-            m.iter().any(|x| x.contains("arm C") && x.contains(id)),
-            "{id}: {m:?}"
+fn worker_probe_missing_toolchain_is_env_failure_per_arm() {
+    let tools = fake_dir(&["python3"], PY_STUB);
+    let mount = tempfile::tempdir().expect("m").keep().join("absent-prefix");
+    let env = env_json(json!({"ro_mounts":[mount]}));
+    let d = daemon(&tools, vec![]);
+    let ws = tempfile::tempdir().expect("ws");
+    for arm in [ConfigId::B, ConfigId::C] {
+        let rep = cap_probe::probe_worker(&env, &d, arm, ws.path(), &k4());
+        assert_eq!(rep.failure_class, Some("env_failure"));
+        assert_eq!(
+            failing(&rep),
+            vec![format!("toolchain:{}", mount.display())]
         );
     }
-    let err = gate(
-        &s.inp,
-        &WorkerHostStub(
-            StubHost(true),
-            Arc::new(WorkerStub {
-                sockets: true,
-                rust: false,
-            }),
-        ),
-    )
-    .unwrap_err();
-    assert!(err.contains("no paid execution or task was started"));
+    // 道具（python3）そのものが daemon の PATH に無い場合。
+    let empty = fake_dir(&[], "");
+    let rep = cap_probe::probe_worker(
+        &env_json(json!({})),
+        &cap_probe::WorkerDaemonEnv {
+            path: Some(empty.display().to_string()),
+            env: vec![],
+        },
+        ConfigId::C,
+        ws.path(),
+        &k4(),
+    );
+    assert_eq!(rep.failure_class, Some("env_failure"));
+    assert!(failing(&rep).contains(&"python3"), "{:?}", rep.results);
+}
+
+#[test]
+fn worker_probe_daemon_config_mismatch_is_env_failure() {
+    let tools = fake_dir(&["python3"], PY_STUB);
+    let other = fake_dir(&[], "");
+    let env = env_json(json!({
+        "env": [["CAP_MARK", "m1"], ["PATH", other.display().to_string()]]
+    }));
+    let ws = tempfile::tempdir().expect("ws");
+    // env 値の違い・欠落、期待 PATH 要素が daemon の PATH に無い。
+    let d = daemon(&tools, vec![("CAP_MARK".into(), "other".into())]);
+    let rep = cap_probe::probe_worker(&env, &d, ConfigId::B, ws.path(), &k4());
+    assert_eq!(rep.failure_class, Some("env_failure"));
+    let details: Vec<_> = rep
+        .results
+        .iter()
+        .filter(|r| r.id == "worker-env")
+        .map(|r| r.detail.clone())
+        .collect();
+    assert_eq!(details.len(), 2, "{details:?}");
+    assert!(details.iter().any(|x| x.contains("CAP_MARK")));
+    assert!(details.iter().any(|x| x.contains("PATH lacks")));
+    let none = daemon(&tools, vec![]);
+    let rep = cap_probe::probe_worker(&env, &none, ConfigId::C, ws.path(), &k4());
+    assert!(
+        rep.results
+            .iter()
+            .any(|r| r.detail.contains("daemon env lacks CAP_MARK"))
+    );
+}
+
+/// Rust が無い/古い host は最初の LLM 呼出し前に env_failure で止まる。検査は部分一致 `rustc 1.` ではなく最小版の比較で、
+/// min-build は transport-locusta feature を含む。ビルド場所は case に明示（cluster は接続確認のみ）。
+#[test]
+fn missing_or_old_rust_stops_before_any_llm_call() {
+    let set = cases();
+    let case = &set.get("k2-bf-xattr-restart-campaign").expect("k2").case;
+    let cap = |id: &str| {
+        case.required_capabilities
+            .iter()
+            .find(|c| c.id == id)
+            .unwrap_or_else(|| panic!("k2 lacks {id}"))
+    };
+    let min = cap("rustc-min");
+    let script = min.argv.join(" ");
+    assert!(
+        script.contains("sort -V") && script.contains("1.85.0"),
+        "{script}"
+    );
+    assert!(!script.contains("rustc 1."), "no substring match");
+    let build = cap("min-build-locusta").argv.join(" ");
+    assert!(build.contains("--features transport-locusta"), "{build}");
+    assert!(
+        case.experiment.as_ref().expect("experiment").params["build_location"]
+            .as_str()
+            .is_some_and(|s| s.contains("local-host") && s.contains("接続確認のみ")),
+    );
+    // rustc 系の能力だけ不在の host（他は ok）。
+    struct NoRust;
+    impl ProbeRunner for NoRust {
+        fn run(&self, _: &str, args: &[String]) -> Ran {
+            let joined = args.join(" ");
+            let rust = joined.contains("rustc --version") || joined.contains("cargo build");
+            Ran::Exit {
+                code: if rust { 127 } else { 0 },
+                stdout: "cmake version git version rustc-min ok".into(),
+            }
+        }
+    }
+    let env = env_json(json!({}));
+    for arm in [ConfigId::A, ConfigId::B, ConfigId::C] {
+        let rep = cap_probe::probe(&sb(&env, arm), arm, Path::new("/w"), case, &NoRust);
+        assert!(!rep.ok);
+        assert_eq!(rep.failure_class, Some("env_failure"));
+        assert_eq!(rep.paid_calls_made, 0);
+        let bad: Vec<_> = rep
+            .results
+            .iter()
+            .filter(|r| !r.ok)
+            .map(|r| r.id.as_str())
+            .collect();
+        assert_eq!(bad, ["rustc-min", "min-build-locusta"], "{arm:?}");
+    }
+}
+
+/// 古い rustc は `sort -V` の最小版比較で落ちる。case の実 argv を fake rustc 付き PATH で実行する。
+#[test]
+fn old_rustc_fails_the_min_version_comparison() {
+    use std::os::unix::fs::PermissionsExt;
+    let set = cases();
+    let case = &set.get("k2-bf-xattr-restart-campaign").expect("k2").case;
+    let argv = &case
+        .required_capabilities
+        .iter()
+        .find(|c| c.id == "rustc-min")
+        .expect("rustc-min")
+        .argv;
+    let run = |version: &str| {
+        let dir = tempfile::tempdir().expect("tmp");
+        for (name, body) in [
+            (
+                "rustc",
+                format!("#!/bin/sh\necho 'rustc {version} (fake)'\n"),
+            ),
+            ("cargo", "#!/bin/sh\necho 'cargo fake'\n".to_string()),
+        ] {
+            let bin = dir.path().join(name);
+            std::fs::write(&bin, body).expect("write");
+            std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        }
+        let path = format!("{}:/usr/bin:/bin", dir.path().display());
+        std::process::Command::new(&argv[0])
+            .args(&argv[1..])
+            .env("PATH", path)
+            .output()
+            .expect("run")
+    };
+    assert!(!run("1.2.0").status.success(), "old rustc must fail");
+    let ok = run("1.85.0");
+    assert!(
+        ok.status.success(),
+        "{}",
+        String::from_utf8_lossy(&ok.stderr)
+    );
+    assert!(String::from_utf8_lossy(&ok.stdout).contains("rustc-min ok"));
 }

@@ -189,6 +189,7 @@ impl Env {
             .args(["--token-env", "CELERIS_E2E_TOKEN"])
             .arg("--task-template")
             .arg(d.join("task-template.json"))
+            .args(["--daemon-pid", &preflight_setup::DAEMON_PID.to_string()])
             .arg("--measure-config")
             .arg(d.join("measure.toml"))
             .arg("--normal-config")

@@ -9,6 +9,83 @@ use std::{
 };
 
 use serde_json::{Value, json};
+use task_core::{
+    ModelCatalogStore, Tier,
+    model_catalog::{CatalogOverride, CatalogSource, DiscoveredModel},
+};
+
+#[path = "../../task-api/tests/common/mod.rs"]
+mod api_common;
+use api_common::{EnvOptions, TOKEN, TestEnv};
+
+/// 実 task-api router（正式 `GET /api/v1/llm/models`）を loopback で serve する測定 daemon 役。
+/// catalog は実 store（別接続）へ実 API と同じ操作（apply・set_override）で入れる。
+struct Daemon {
+    env: TestEnv,
+    url: String,
+}
+
+impl Daemon {
+    fn start() -> Self {
+        let env = TestEnv::with(EnvOptions {
+            token: Some(TOKEN.to_string()),
+            ..EnvOptions::default()
+        });
+        let state = env.state.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("rt");
+            rt.block_on(async {
+                let l = tokio::net::TcpListener::bind("127.0.0.1:0")
+                    .await
+                    .expect("bind");
+                tx.send(l.local_addr().expect("addr")).expect("send");
+                let _ = task_api::serve_with_listener(l, state, std::future::pending()).await;
+            });
+        });
+        let addr = rx.recv().expect("addr");
+        let d = Daemon {
+            env,
+            url: format!("http://{addr}"),
+        };
+        d.add("opencode-go", "glm-5");
+        d.add("opencode-go", "kimi");
+        d.add("claude-oauth", "claude-haiku");
+        d.tier("opencode-go", "glm-5", Some(Tier::Cheap), false);
+        d.tier("opencode-go", "kimi", Some(Tier::Standard), false);
+        d.tier("claude-oauth", "claude-haiku", Some(Tier::Frontier), false);
+        d
+    }
+    fn add(&self, source: &str, model: &str) {
+        self.env
+            .store
+            .model_catalog_apply(
+                &CatalogSource::new(source),
+                &[DiscoveredModel::new(model)],
+                1_700_000_000,
+            )
+            .expect("apply");
+    }
+    fn tier(&self, source: &str, model: &str, tier: Option<Tier>, disabled: bool) {
+        self.env
+            .store
+            .model_catalog_set_override(
+                &CatalogSource::new(source),
+                model,
+                &CatalogOverride {
+                    disabled,
+                    tier,
+                    alias: None,
+                    note: None,
+                },
+                1_700_000_001,
+            )
+            .expect("override");
+    }
+}
 
 fn write_executable(path: &Path, contents: &str) {
     let mut child = Command::new("sh")
@@ -33,12 +110,14 @@ const REL: &str = "0123456789ab";
 
 struct Env {
     dir: tempfile::TempDir,
+    daemon: Daemon,
 }
 
 impl Env {
     fn new() -> Self {
         let e = Env {
             dir: tempfile::tempdir().expect("tmp"),
+            daemon: Daemon::start(),
         };
         write_executable(&e.a(), "#!/bin/sh\necho 'claude-stub 2.0.1'\n");
         write_executable(&e.worker(), "#!/bin/sh\necho 'codex-stub 0.9'\n");
@@ -87,6 +166,9 @@ impl Env {
         .expect("manifest");
     }
     fn run(&self, extra: &[&str]) -> Output {
+        self.run_at(&self.daemon.url, extra)
+    }
+    fn run_at(&self, url: &str, extra: &[&str]) -> Output {
         Command::new(std::env::var("CARGO_BIN_EXE_celeris-campaign").expect("bin"))
             .arg("env-lock")
             .arg("--manifest")
@@ -97,7 +179,10 @@ impl Env {
             .arg(self.a())
             .arg("--worker-program")
             .arg(format!("codex={}", self.worker().display()))
+            .args(["--api-url", url])
+            .args(["--token-env", "CELERIS_ENVLOCK_TOKEN"])
             .args(extra)
+            .env("CELERIS_ENVLOCK_TOKEN", TOKEN)
             // 秘密に見える環境変数があっても固定記録には入らない。
             .env("ANTHROPIC_API_KEY", SECRET)
             .output()
@@ -231,4 +316,84 @@ fn missing_required_input_is_refused() {
     let o = e.run(&[]);
     assert!(!o.status.success());
     assert!(!e.out().join("env-lock.json").exists());
+}
+
+fn catalog_of(e: &Env, arm: usize) -> Value {
+    serde_json::from_str::<Value>(&e.lock()).expect("json")["bc"]["arms"][arm]["catalog"].clone()
+}
+
+#[test]
+fn catalog_is_fixed_from_the_daemon_without_secrets() {
+    let e = Env::new();
+    let o = e.run(&[]);
+    assert!(o.status.success(), "{}", err(&o));
+    for arm in [0, 1] {
+        assert_eq!(
+            catalog_of(&e, arm),
+            json!([
+                {"model_id": "claude-haiku", "tier": "frontier", "source_id": "claude-oauth"},
+                {"model_id": "glm-5", "tier": "cheap", "source_id": "opencode-go"},
+                {"model_id": "kimi", "tier": "standard", "source_id": "opencode-go"},
+            ])
+        );
+    }
+    let body = e.lock();
+    assert!(!body.contains(TOKEN) && !body.contains(SECRET), "{body}");
+    assert!(!body.contains("capabilities"), "{body}");
+    assert!(e.run(&["--verify"]).status.success());
+}
+
+#[test]
+fn empty_catalog_is_refused_and_nothing_is_written() {
+    let e = Env::new();
+    for m in ["glm-5", "kimi"] {
+        e.daemon.tier("opencode-go", m, None, true);
+    }
+    e.daemon.tier("claude-oauth", "claude-haiku", None, true);
+    let o = e.run(&[]);
+    assert!(!o.status.success());
+    assert!(err(&o).contains("empty catalog"), "{}", err(&o));
+    assert!(!e.out().join("env-lock.json").exists());
+}
+
+#[test]
+fn unreachable_daemon_is_refused_and_nothing_is_written() {
+    let e = Env::new();
+    let o = e.run_at("http://127.0.0.1:9", &[]);
+    assert!(!o.status.success());
+    assert!(!e.out().join("env-lock.json").exists());
+}
+
+#[test]
+fn candidate_added_removed_or_moved_tier_is_refused_on_resume() {
+    let e = Env::new();
+    assert!(e.run(&[]).status.success());
+    let before = e.lock();
+    // 追加。
+    e.daemon.add("opencode-go", "newcomer");
+    let o = e.run(&[]);
+    assert!(!o.status.success());
+    assert!(err(&o).contains("opencode-go/newcomer"), "{}", err(&o));
+    assert!(err(&o).contains("bc.arms.B.catalog"), "{}", err(&o));
+    // 除外（削除相当）。
+    e.daemon.tier("opencode-go", "newcomer", None, true);
+    assert!(
+        e.run(&[]).status.success(),
+        "disabled candidate is not in the set"
+    );
+    e.daemon
+        .tier("opencode-go", "kimi", Some(Tier::Standard), true);
+    let o = e.run(&["--verify"]);
+    assert!(!o.status.success());
+    assert!(err(&o).contains("opencode-go/kimi"), "{}", err(&o));
+    // 階層移動。
+    e.daemon
+        .tier("opencode-go", "kimi", Some(Tier::Cheap), false);
+    let o = e.run(&["--verify"]);
+    assert!(!o.status.success());
+    assert!(err(&o).contains("opencode-go/kimi"), "{}", err(&o));
+    e.daemon
+        .tier("opencode-go", "kimi", Some(Tier::Standard), false);
+    assert!(e.run(&["--verify"]).status.success());
+    assert_eq!(before, e.lock(), "lock must not be rewritten");
 }

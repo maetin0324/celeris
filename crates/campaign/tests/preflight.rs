@@ -763,6 +763,7 @@ fn bin(args: &[&str], s: &Setup, env: &[(&str, &str)]) -> std::process::Output {
         .arg("CELERIS_PREFLIGHT_TEST_TOKEN")
         .arg("--task-template")
         .arg(s.dir.path().join("task-template.json"))
+        .args(["--daemon-pid", &preflight_setup::DAEMON_PID.to_string()])
         .arg("--measure-config")
         .arg(s.dir.path().join("measure.toml"))
         .arg("--normal-config")

@@ -31,6 +31,7 @@ struct ConfigBody {
 #[derive(Debug, Deserialize)]
 struct Identity {
     instance_id: String,
+    pid: u32,
     release: String,
     config_sha256: Option<String>,
     overrides: Vec<String>,
@@ -195,6 +196,15 @@ pub fn check_identity(
     let id = &cfg.identity;
     if id.instance_id.is_empty() {
         v.push("identity.instance_id is empty".into());
+    }
+    // launcher が起動した process（その PID）が答えていること。別 daemon が同じ port で答えるのを弾く。
+    match me.daemon_pid {
+        None => v.push("--daemon-pid (the launcher-owned daemon pid) is required".into()),
+        Some(p) if p != id.pid => v.push(format!(
+            "identity.pid {} != launcher-owned daemon pid {p} (another process answers the api)",
+            id.pid
+        )),
+        Some(_) => {}
     }
     // 起動後の config 書き換え・別 file の config で起動した daemon。
     let abs = |p: &Path| -> PathBuf {

@@ -109,6 +109,8 @@ common_args() {
         --measure-config "$DAEMON_CONFIG" --normal-config "$NORMAL_CONFIG" --canaries "$CANARIES" \
         --materials-src "$MATERIALS_SRC" --kb-src "$KB_SRC" --repo-src "$REPO_SRC" --inputs-src "$INPUTS_SRC" \
         --a-account "$A_ACCOUNT" --a-program "$A_PROGRAM"
+    # 接続先が launcher 所有の daemon であることの照合（identity.pid）。生きていなければ付けず、検査側が拒否する。
+    ! owned_alive || set -- "$@" --daemon-pid "$(cat "$LAUNCHER_PID")"
     [ -z "$CASES_ROOT" ] || set -- "$@" --cases-root "$CASES_ROOT"
     [ -z "$GRADER_ROOT" ] || set -- "$@" --grader-root "$GRADER_ROOT"
     [ -z "$GRADE_CASES_ROOT" ] || set -- "$@" --grade-case-root "$GRADE_CASES_ROOT"
@@ -236,12 +238,13 @@ worker_args() {
     done
 }
 
-cmd_env_lock() { # 作る（初回）か照合する（再開）。不一致は非 0（外部実行の前）。
+cmd_env_lock() { # 作る（初回）か照合する（再開）。不一致は非 0（外部実行の前）。B/C の候補集合・階層は接続先 daemon から取る。
+    load_token
     oldifs=$IFS
     IFS='
 '
     # shellcheck disable=SC2046
-    set -- env-lock --manifest "$MANIFEST" --out "$OUT" --a-program "$A_PROGRAM" $(worker_args)
+    set -- env-lock --manifest "$MANIFEST" --out "$OUT" --api-url "$API_URL" --token-env CELERIS_MEASURE_TOKEN --a-program "$A_PROGRAM" $(worker_args)
     IFS=$oldifs
     "$CAMPAIGN_BIN" "$@"
 }

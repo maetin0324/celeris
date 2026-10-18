@@ -14,7 +14,7 @@ use serde_json::Value;
 use crate::{
     grader::sha256_file,
     manifest::{CampaignManifest, ConfigId},
-    preflight::resolve_program_in,
+    preflight::{Host, resolve_program_in},
 };
 
 pub const ENV_LOCK_FILE: &str = "env-lock.json";
@@ -35,7 +35,8 @@ pub struct WorkerProgram {
     pub pin: ProgramPin,
 }
 
-/// daemon の `GET /llm/models` の該当行（env-check が渡す。CLI 単体では空）。
+/// daemon の `GET /api/v1/llm/models`（正式 DTO `ModelCatalogView`）の 1 行。除外（`override.disabled`）でない候補だけ。
+/// `tier` は人の上書き（`override.tier`）で、無ければ `unset`。source・model_id・tier 以外（capabilities 等）は取らない。
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CatalogRow {
     pub model_id: String,
@@ -83,6 +84,57 @@ pub struct Observed {
     pub a_program: ProgramPin,
     pub worker_programs: Vec<WorkerProgram>,
     pub catalog: Vec<CatalogRow>,
+}
+
+/// `GET /api/v1/llm/models` の本文から候補集合・階層を取り出す（順序を整えて返す）。空は Err（空固定の禁止）。
+pub fn catalog_from_models(body: &Value) -> Result<Vec<CatalogRow>, String> {
+    #[derive(Deserialize)]
+    struct Over {
+        #[serde(default)]
+        disabled: bool,
+        tier: Option<String>,
+    }
+    #[derive(Deserialize)]
+    struct Item {
+        source: String,
+        model_id: String,
+        #[serde(rename = "override")]
+        over: Option<Over>,
+    }
+    #[derive(Deserialize)]
+    struct View {
+        items: Vec<Item>,
+    }
+    let v: View = serde_json::from_value(body.clone())
+        .map_err(|e| format!("GET /api/v1/llm/models: unexpected body: {e}"))?;
+    let mut rows: Vec<CatalogRow> = v
+        .items
+        .into_iter()
+        .filter(|i| !i.over.as_ref().is_some_and(|o| o.disabled))
+        .map(|i| CatalogRow {
+            tier: i
+                .over
+                .and_then(|o| o.tier)
+                .unwrap_or_else(|| "unset".into()),
+            model_id: i.model_id,
+            source_id: i.source,
+        })
+        .collect();
+    rows.sort_by(|a, b| (&a.source_id, &a.model_id).cmp(&(&b.source_id, &b.model_id)));
+    rows.dedup_by(|a, b| a.source_id == b.source_id && a.model_id == b.model_id);
+    if rows.is_empty() {
+        return Err("GET /api/v1/llm/models: the daemon's model catalog has no enabled candidate (refusing to lock an empty catalog)".into());
+    }
+    Ok(rows)
+}
+
+/// 実 daemon の読取 API から catalog を取る（GET 1 回。token は環境変数名で渡す）。
+pub fn fetch_catalog(
+    host: &dyn Host,
+    api_url: &str,
+    token_env: &str,
+) -> Result<Vec<CatalogRow>, String> {
+    catalog_from_models(&host.api_get(api_url, token_env, "/api/v1/llm/models")?)
 }
 
 /// 実行ファイルを解決し、sha256 と `--version` を取る。
@@ -165,6 +217,9 @@ pub fn expected(m: &CampaignManifest, obs: &Observed) -> Result<EnvLock, Vec<Str
             catalog: obs.catalog.clone(),
         });
     }
+    if obs.catalog.is_empty() {
+        errs.push("bc.arms.catalog: candidate set is empty (must come from the daemon)".into());
+    }
     let mut workers = obs.worker_programs.clone();
     workers.sort_by(|a, b| a.name.cmp(&b.name));
     for w in &workers {
@@ -217,11 +272,38 @@ pub fn diff(stored: &EnvLock, want: &EnvLock) -> Vec<String> {
             _ => {}
         }
     }
+    // arms は id、catalog は `source/model_id` を key にした object へ直し、追加・削除・階層移動を key 名で挙げる。
+    fn keyed(mut v: Value) -> Value {
+        let Some(arms) = v.pointer_mut("/bc/arms").and_then(Value::as_array_mut) else {
+            return v;
+        };
+        let mut by_id = serde_json::Map::new();
+        for mut arm in std::mem::take(arms) {
+            if let Some(rows) = arm.get_mut("catalog").and_then(Value::as_array_mut) {
+                let m: serde_json::Map<String, Value> = std::mem::take(rows)
+                    .into_iter()
+                    .map(|r| {
+                        let k = format!(
+                            "{}/{}",
+                            r["source_id"].as_str().unwrap_or_default(),
+                            r["model_id"].as_str().unwrap_or_default()
+                        );
+                        (k, r["tier"].clone())
+                    })
+                    .collect();
+                arm["catalog"] = Value::Object(m);
+            }
+            let id = arm["id"].as_str().unwrap_or_default().to_string();
+            by_id.insert(id, arm);
+        }
+        v["bc"]["arms"] = Value::Object(by_id);
+        v
+    }
     let mut out = Vec::new();
     let (Ok(a), Ok(b)) = (serde_json::to_value(stored), serde_json::to_value(want)) else {
         return vec!["serialize".into()];
     };
-    walk("", &a, &b, &mut out);
+    walk("", &keyed(a), &keyed(b), &mut out);
     out
 }
 

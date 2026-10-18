@@ -397,3 +397,24 @@ async fn cli_env_check_rejects_wrong_api_url_before_connecting() {
     assert!(err.contains("\"paid_calls_made\": 0"), "{err}");
     assert!(!err.contains("s3cret-token-value-xyz"));
 }
+
+#[tokio::test]
+async fn pid_that_is_not_the_launcher_owned_daemon_is_rejected_without_paid_calls() {
+    let f = fixture().await;
+    // 同じ URL・同じ config・同じ release で別 process（別 pid）が答える。
+    let mut v = f.view();
+    v.identity.pid = preflight_setup::DAEMON_PID + 1;
+    let h = f.host(served(v).await);
+    assert_gated(&f, &h, "identity.pid");
+    // 一致すれば通る。
+    let h = f.host(served(f.view()).await);
+    assert!(check(&f.inp, &h).ok);
+}
+
+#[tokio::test]
+async fn missing_daemon_pid_argument_is_rejected() {
+    let mut f = fixture().await;
+    f.inp.measure.as_mut().expect("measure").daemon_pid = None;
+    let h = f.host(served(f.view()).await);
+    assert_gated(&f, &h, "--daemon-pid");
+}

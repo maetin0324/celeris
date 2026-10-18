@@ -27,6 +27,7 @@ pub fn daemon_config_view(config: &Path, release: &str) -> task_api::ConfigView 
     let mut v = api_common::config_view();
     v.config_path = config.display().to_string();
     v.identity.release = release.into();
+    v.identity.pid = super::preflight_setup::DAEMON_PID;
     v.identity.config_sha256 = Some(format!("{:x}", Sha256::digest(fs::read(config).unwrap())));
     v.identity.instance_id = "01MEASUREDAEMON00000000000".into();
     let e = &mut v.identity.effective;

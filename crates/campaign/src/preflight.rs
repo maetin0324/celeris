@@ -198,6 +198,8 @@ pub struct MeasureEnv {
     pub canaries: PathBuf,
     /// 再開時の既存 out dir。在れば中の全 file を禁止 canary で走査する。
     pub out: Option<PathBuf>,
+    /// launcher が起動した測定 daemon の PID。`GET /config` の `identity.pid` と一致しなければ拒否する。
+    pub daemon_pid: Option<u32>,
 }
 
 impl Inputs {

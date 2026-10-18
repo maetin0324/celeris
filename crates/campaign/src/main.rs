@@ -55,6 +55,7 @@ fn preflight_inputs(args: &[String], manifest_path: &std::path::Path) -> Inputs 
             }),
             canaries: or("--canaries", "canaries.json"),
             out: arg(args, "--out"),
+            daemon_pid: text("--daemon-pid").and_then(|p| p.parse().ok()),
         }),
         measurement_id: text("--measurement-id"),
     }
@@ -199,10 +200,15 @@ fn run(args: Vec<String>) -> Result<String, String> {
                     pin: env_lock::pin_program(std::path::Path::new(p), path_var.as_deref())?,
                 });
             }
+            // B/C の候補集合・階層は実 daemon の `GET /api/v1/llm/models`（正式 DTO）から取る。空は固定しない。
+            let url = arg(&args, "--api-url").ok_or("--api-url is required")?;
+            let tok = arg(&args, "--token-env").ok_or("--token-env is required")?;
+            let catalog =
+                env_lock::fetch_catalog(&RealHost, &url.to_string_lossy(), &tok.to_string_lossy())?;
             let obs = env_lock::Observed {
                 a_program,
                 worker_programs,
-                catalog: Vec::new(),
+                catalog,
             };
             let verify = args.iter().any(|a| a == "--verify");
             let o = env_lock::establish(&m, &obs, &out()?, verify)?;

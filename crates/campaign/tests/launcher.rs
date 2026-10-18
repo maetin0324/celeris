@@ -21,7 +21,7 @@ use std::{
 
 use daemon_identity::{api_common::*, daemon_config_view};
 use preflight_setup::{MEASURE_RELEASE, Setup, measure_config, setup};
-use serde_json::json;
+use serde_json::{Value, json};
 
 fn script() -> PathBuf {
     preflight_setup::root().join("../../scripts/campaign/measure-launcher.sh")
@@ -44,6 +44,7 @@ impl Server {
         listener: tokio::net::TcpListener,
         served_config: &Path,
         accounts: &Path,
+        pidfile: PathBuf,
     ) -> (Self, String) {
         let port = listener.local_addr().unwrap().port();
         let dir = tempfile::tempdir().unwrap().keep();
@@ -64,6 +65,25 @@ impl Server {
             },
         );
         s.config_view = daemon_config_view(served_config, MEASURE_RELEASE);
+        // B/C の候補集合・階層（実 store に正式 API と同じ操作で入れ、`GET /llm/models` が返す）。
+        {
+            use task_core::{
+                ModelCatalogStore,
+                model_catalog::{CatalogOverride, CatalogSource, DiscoveredModel},
+            };
+            let store = task_core::SqliteStore::open(&db).unwrap();
+            let src = CatalogSource::new("opencode-go");
+            store
+                .model_catalog_apply(&src, &[DiscoveredModel::new("glm-5")], 1_700_000_000)
+                .unwrap();
+            let tier = CatalogOverride {
+                tier: Some(task_core::Tier::Cheap),
+                ..Default::default()
+            };
+            store
+                .model_catalog_set_override(&src, "glm-5", &tier, 1_700_000_001)
+                .unwrap();
+        }
         let (tx, rx) = tokio::sync::watch::channel(None);
         std::mem::forget(tx);
         let state = task_api::ApiState::new(s, rx).unwrap();
@@ -91,11 +111,34 @@ impl Server {
         let counted = task_api::router(state.clone()).layer(axum::middleware::from_fn(
             move |req: axum::extract::Request, next: axum::middleware::Next| {
                 let counter = counter.clone();
+                let pidfile = pidfile.clone();
                 async move {
                     if req.method() == axum::http::Method::POST {
                         counter.fetch_add(1, Ordering::SeqCst);
                     }
-                    next.run(req).await
+                    let is_config = req.uri().path() == "/api/v1/config";
+                    let resp = next.run(req).await;
+                    if !is_config {
+                        return resp;
+                    }
+                    // 常駐 stub の process が daemon 役: 実 router の本文のうち、自分の pid だけを launcher 所有 pid にする。
+                    let (parts, body) = resp.into_parts();
+                    let bytes = axum::body::to_bytes(body, 1 << 20)
+                        .await
+                        .unwrap_or_default();
+                    let mut v: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+                    if let Some(pid) = fs::read_to_string(&pidfile)
+                        .ok()
+                        .and_then(|t| t.trim().parse::<u32>().ok())
+                    {
+                        v["identity"]["pid"] = json!(pid);
+                    }
+                    let mut r = axum::response::Response::from_parts(
+                        parts,
+                        axum::body::Body::from(v.to_string()),
+                    );
+                    r.headers_mut().remove(axum::http::header::CONTENT_LENGTH);
+                    r
                 }
             },
         ));
@@ -223,7 +266,13 @@ impl Fx {
 
     async fn serve(&mut self, served_config: &Path) -> Server {
         let l = self.listener.take().unwrap();
-        let (srv, project) = Server::start(l, served_config, &self.d().join("accounts")).await;
+        let (srv, project) = Server::start(
+            l,
+            served_config,
+            &self.d().join("accounts"),
+            self.d().join("state/launcher.pid"),
+        )
+        .await;
         self.project = Some(project.clone());
         fs::write(
             self.d().join("task-template.json"),
@@ -389,6 +438,7 @@ async fn a_version_mismatch_and_missing_inputs_are_rejected_with_zero_execution(
     let measure = f.d().join("measure.toml");
     let srv = f.serve(&measure).await;
     ok(&f, "prepare");
+    ok(&f, "start");
     // 版不一致: A の実際の版が manifest の harness_version と違う。
     let claude = f.d().join("bin/claude");
     let saved = fs::read_to_string(&claude).unwrap();
@@ -416,6 +466,7 @@ async fn a_version_mismatch_and_missing_inputs_are_rejected_with_zero_execution(
     f.write_env("A_ACCOUNT=\n");
     assert_rejected(&f, &srv, "watch", b"", "A_ACCOUNT is required");
     assert!(!f.out().exists());
+    kill_daemon(&f);
     srv.shutdown().await;
 }
 

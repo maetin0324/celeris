@@ -528,13 +528,15 @@ impl Host for OkHost {
                 let cfg_path = preflight_setup::current_config();
                 let cfg = Config::load(&cfg_path).map_err(|e| e.to_string())?;
                 let listen = cfg.api.listen.ok_or("no [api] listen")?;
-                let view = celeris::config_view(
+                let mut view = celeris::config_view(
                     &cfg,
                     listen,
                     "01MEASUREDAEMON00000000000",
                     preflight_setup::MEASURE_RELEASE,
                     "2026-10-18T00:00:00Z",
                 );
+                // launcher 所有の daemon の pid として答える。
+                view.identity.pid = preflight_setup::DAEMON_PID;
                 serde_json::to_value(view).map_err(|e| e.to_string())?
             }
             "/api/v1/projects/01ABC" => {

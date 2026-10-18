@@ -1,4 +1,5 @@
 ---
+tasks: [01M56VTX9ASMFQVZFDRMYT45AJ]
 status: done
 completed: 2026-10-18
 title: 親の continuation で子が重複起票される問題

@@ -1,7 +1,9 @@
 ---
-task: pilot-test-fix
+tasks: [01M56HCNTPN0H2VGP4JE0JYRM9]
 status: done
 completed: 2026-10-18
+title: P1-3 pilot-test-fix: pilot_wiring a_exit_zero_without_any_artifact の修正
+updated: 2026-10-18
 ---
 # pilot_wiring a_exit_zero_without_any_artifact の不安定の原因と修正
 

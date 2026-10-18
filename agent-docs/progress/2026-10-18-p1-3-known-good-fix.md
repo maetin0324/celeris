@@ -1,8 +1,10 @@
 ---
-task: 01M56HCNTPN0H2VGP4JE0JYRM9
+tasks: [01M56HCNTPN0H2VGP4JE0JYRM9]
 wu: known-good-fix
 status: done
 completed: 2026-10-18
+title: P1-3 known-good-fix: K2 known-good を Sirius で ok だった tree にする
+updated: 2026-10-18
 ---
 # known-good-fix: K2 known-good を Sirius で ok だった tree と同一内容にする
 

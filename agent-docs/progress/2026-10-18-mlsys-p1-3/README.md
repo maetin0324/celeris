@@ -43,3 +43,7 @@ K2 の成功は「実装と実験の判定を通った」ことだけを意味�
 
 ## 未解決
 - 実 build の asset 不足（上記）。実 A sandbox 実走の結果。
+
+## close 再実行（check 不合格の修正）
+- 原因: `progress-index.sh --check` が `2026-10-17-root-dependency-waits-for-integration.md` の front matter の title・updated 欠落で exit 1。同ファイルに title/updated を足して解消。
+- 全体検査: test-parallel 5739 passed / 0 failed（exit 0。初回は `a_program_pin_and_watch` の watch 再接続試験が高負荷で 1 件失敗、単独 3 回と再実行全体で合格＝時間依存の flaky）、clippy exit 0、fmt exit 0。

@@ -441,6 +441,7 @@ async fn run_claude_code(
     limits: &RunLimits,
     sink: &dyn EventSink,
 ) -> Result<RunOutcome, AdapterError> {
+    let run_started = std::time::SystemTime::now();
     let run_dir = req.workspace.join("runs").join(run_id);
     tokio::fs::create_dir_all(&run_dir).await?;
     crate::routing_context_transport::record(&run_dir, req, false).await;
@@ -796,8 +797,12 @@ async fn run_claude_code(
         }
         (None, Some(meta)) => {
             let mut outcome = if req.requires_result_file()
-                && let Some(error) =
-                    crate::result_location::misplaced_result(&req.artifacts_dir, req.cwd()).await
+                && let Some(error) = crate::result_location::misplaced_result(
+                    &req.artifacts_dir,
+                    req.cwd(),
+                    run_started,
+                )
+                .await
             {
                 (error, None)
             } else {

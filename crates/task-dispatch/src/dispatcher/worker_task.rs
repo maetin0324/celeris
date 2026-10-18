@@ -693,6 +693,7 @@ pub(super) async fn run_worker(
             &task_core::ProgressFields::of(task_core::ProgressKind::Status),
         );
     }
+    let run_started = std::time::SystemTime::now();
     let requires_result_file = req.requires_result_file();
     let result_cwd = req.cwd().to_path_buf();
     let result_artifacts = req.artifacts_dir.clone();
@@ -762,8 +763,12 @@ pub(super) async fn run_worker(
                     ..
                 })
         )
-        && let Some(terminal) =
-            task_worker::result_location::misplaced_result(&result_artifacts, &result_cwd).await
+        && let Some(terminal) = task_worker::result_location::misplaced_result(
+            &result_artifacts,
+            &result_cwd,
+            run_started,
+        )
+        .await
     {
         Ok(RunOutcome {
             terminal,

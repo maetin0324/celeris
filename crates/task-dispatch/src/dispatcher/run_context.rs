@@ -255,6 +255,8 @@ impl Dispatcher {
         // 集約 run（ADR-0016 D3）と、子の失敗によるやり直し run（ADR-0021 D1）は、子の結果を見て判断する。
         let children = if (task.aggregate && has_aggregate_transition(&events))
             || has_child_failed_transition(&events)
+            // ADR 2026-10-18: 子を起票できる run には既存の子（done・running・ready…）を示し、重複起票を避けさせる。
+            || !available_genres.is_empty()
         {
             let mut out = Vec::new();
             for child in self.store.children(task.id)? {

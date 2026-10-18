@@ -1,7 +1,7 @@
 ---
 title: P1-3 cap-runbook（人が host で実行する能力 probe・実資産検証・接続到達確認）
 tasks: [01M56HCNTPN0H2VGP4JE0JYRM9]
-status: 人手順待ち（2026-10-18 時点で実行証拠の提供なし。実経路確認済みの項目は無い）
+status: 一部実走済み（real-evidence.md）。残りは §2 の再実走
 updated: 2026-10-18
 ---
 # cap-runbook
@@ -30,7 +30,7 @@ done
 cargo run -p celeris-campaign -- cap-probe --case k4-cmp4-validity-analysis --arm a --cap-env $WORK/cap-env.json
 # argv だけ確認（実行しない）: --dry-argv
 ```
-期待: 各 arm exit 0、JSON `ok: true`、K2 の 8 能力（cc, c++, cmake, git, ucx-pkg, min-build-ucx, min-build-cmake, sirius-link）が全て ok。K4（python3 と stdlib）も ok。
+期待: 各 arm exit 0、JSON `ok: true`、K2 の 10 能力（cc, c++, cmake, git, ucx-pkg, min-build-ucx, min-build-cmake, autotools, libclang, sirius-link）が全て ok。K4（python3 と stdlib）も ok。
 A と B/C の probe argv（`--dry-argv`）が同一であること（B/C は A と同じ能力を与える設計）。
 不足時: exit 非 0、`failure_class: env_failure`。この場合は LLM 呼出し前に停止（preflight の `capability` check）。ro_mounts / 接続 socket を足して再実行し、sandbox を緩めて通さない。
 
@@ -43,12 +43,11 @@ sh crates/campaign/scripts/verify-real-assets.sh <asset_dir> --build  # 実 carg
 ```
 期待（build なし）: SHA256SUMS ok、lock 一致、known-good patch 適用、正負の印、K4 raw の hash と再計算が ok、exit 0。
 期待（`--build`）: known-bad は公開/隠しテストで落ち、known-good は通る。いずれも exit 0。
-既知の不足: pluvio の入れ子 submodule `lib/pluvio/pluvio_ucx/lib/async-ucx` が asset に無く、grader-real WU では `--build` が **env_failure**（モデル失敗ではない）で止まった。
-asset store に入れ子 submodule の snapshot と vendor 済み依存を足して lock に固定してから再実行する。asset/grader を変えたら新しい測定 ID で lock を作り直し、旧 pilot の試行と混ぜない。
+既知の不足（real-evidence.md）: 入れ子 snapshot は async-ucx と `ucx1-sys/ucx`（`submodules/ucx-938ffcd1.tar`）の 2 つが lock にある。ucx 側を asset store に置く。host に autoconf・automake・libtool・libclang-dev が要る（無いと env_failure）。asset/grader を変えたら新しい測定 ID で lock を作り直し、旧 pilot の試行と混ぜない。
 
 ## 3. Sirius 接続の到達確認のみ
 ```sh
-ssh -S /run/celeris-cap/sirius-ssh.sock -O check sirius
+ssh -F /dev/null -S /run/celeris-cap/sirius-ssh.sock -O check sirius
 ```
 期待: `Master running (pid=...)`、exit 0。確認のみで、sbatch/qsub・job・コマンド実行はしない（cap-probe の `sirius-link` と同じ経路）。TOTP が要る場合は人が通常手順で master を確立する。
 

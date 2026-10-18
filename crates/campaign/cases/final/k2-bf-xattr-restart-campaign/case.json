@@ -62,13 +62,15 @@
       "campaign asset store から k2-initial.tar を取得する（provenance は grader 側。試行には tar だけを渡す）",
       "sha256sum で archive_sha256 と一致を確かめる",
       "mkdir src && tar -xf k2-initial.tar -C src",
-      "submodule 3 件は initial.submodules の 40 桁 commit に固定済み（gitlink は初期 commit の tree が持つ）。実体は campaign asset store の submodule snapshot から同じ手順で取得する（snapshot の配置は承認待ち／未実施）"
+      "submodule 5 件（pluvio の入れ子 async-ucx と、その入れ子 ucx1-sys/ucx を含む）は initial.submodules の 40 桁 commit に固定済み（gitlink は初期 commit の tree が持つ）。実体は campaign asset store の submodules/<末尾名>-<commit 先頭 8 桁>.tar から同じ手順で取得する"
     ],
     "repo": "benchfs",
     "submodules": [
       "lib/pluvio@9ecd51ee9b5fe62831f8e46c3d98a371359664c0",
       "lib/locusta@68f8b2104d33a98fe047e7e24f2394cebaee1c9c",
-      "ior_integration/ior@7054224dd8abe64bc466d8a12391710c7d86132e"
+      "ior_integration/ior@7054224dd8abe64bc466d8a12391710c7d86132e",
+      "lib/pluvio/pluvio_ucx/lib/async-ucx@cffa01eec85fa34e970721e735794a21c77c0be3",
+      "lib/pluvio/pluvio_ucx/lib/async-ucx/ucx1-sys/ucx@938ffcd10122742d0f46a4f609e7395d1648c969"
     ],
     "tree": "56d2f021530c8f55c78e740a4823e53e01975965"
   },
@@ -144,10 +146,30 @@
       ]
     },
     {
+      "id": "autotools",
+      "kind": "build",
+      "argv": [
+        "sh",
+        "-c",
+        "autoreconf --version && automake --version && libtoolize --version"
+      ]
+    },
+    {
+      "id": "libclang",
+      "kind": "library",
+      "argv": [
+        "sh",
+        "-c",
+        "ls /usr/lib/llvm-*/lib/libclang*.so* /usr/lib/x86_64-linux-gnu/libclang*.so* 2>/dev/null | grep ."
+      ]
+    },
+    {
       "id": "sirius-link",
       "kind": "connection",
       "argv": [
         "ssh",
+        "-F",
+        "/dev/null",
         "-S",
         "/run/celeris-cap/sirius-ssh.sock",
         "-O",

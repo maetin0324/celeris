@@ -132,6 +132,22 @@ fn build_environment_defects_are_env_failure_not_model_failure() {
             ),
         ),
         (
+            "offline dependency resolution",
+            out(
+                101,
+                "",
+                "error: no matching package named `async-backtrace` found\nnote: offline mode (via `--offline`) can sometimes cause surprising resolution failures\n",
+            ),
+        ),
+        (
+            "dependency build script cannot find libclang",
+            out(
+                101,
+                "",
+                "error: failed to run custom build command for `ucx1-sys v0.1.0`\n  thread 'main' panicked at bindgen-0.66.1/lib.rs:604:31:\n  Unable to find libclang\n",
+            ),
+        ),
+        (
             "runner cannot spawn",
             Canned(Err("spawn sh: not found".into())),
         ),

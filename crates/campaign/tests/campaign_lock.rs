@@ -478,7 +478,7 @@ fn k2_initial_lock_is_a_valid_locked_initial_inside_a_lock() {
         .join("initial.lock.json");
     let init: LockedInitial =
         serde_json::from_str(&fs::read_to_string(p).expect("read")).expect("json");
-    assert_eq!(init.submodules.len(), 3);
+    assert_eq!(init.submodules.len(), 5);
     let mut v = lock_json();
     v["cases"] = json!([{
         "id": "k2-bf-xattr-restart", "split": "final", "implementation": true,
@@ -525,19 +525,16 @@ fn k2_archive_verifies_when_approved_assets_exist() {
         .expect("git");
     assert!(st.success());
     git(&repo, &["checkout", "-q", &init.commit]);
-    for s in &init.submodules {
-        let name = s.path.rsplit('/').next().expect("name");
-        let tar = fs::read_dir(a.join("submodules"))
-            .expect("dir")
-            .filter_map(Result::ok)
-            .map(|e| e.path())
-            .find(|p| {
-                p.file_name().is_some_and(|f| {
-                    let f = f.to_string_lossy();
-                    f.starts_with(&format!("{name}-")) && f.ends_with(".tar")
-                })
-            })
-            .expect("tar");
+    let mut subs: Vec<_> = init.submodules.iter().collect();
+    subs.sort_by_key(|s| s.path.matches('/').count());
+    for s in subs {
+        let tar = a
+            .join("submodules")
+            .join(celeris_campaign::asset_assembly::snapshot_name(s));
+        if !tar.is_file() {
+            eprintln!("SKIPPED(asset 未配置): {}", tar.display());
+            return;
+        }
         let dest = repo.join(&s.path);
         fs::create_dir_all(&dest).expect("mkdir");
         assert!(

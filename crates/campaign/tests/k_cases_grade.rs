@@ -445,6 +445,13 @@ fn real_benchfs_trees_from_the_bundle_follow_the_pinned_hashes_and_markers() {
     for i in [i1, i2] {
         for m in &i.submodules {
             let (path, c) = m.split_once('@').unwrap();
+            // 入れ子 submodule の gitlink は本体の木ではなく親 submodule の木にある。
+            if i.submodules.iter().any(|o| {
+                path.strip_prefix(o.split('@').next().unwrap())
+                    .is_some_and(|r| r.starts_with('/'))
+            }) {
+                continue;
+            }
             let ls = String::from_utf8(git(&repo, &["ls-tree", &i.commit, path])).unwrap();
             assert!(
                 ls.contains(c) && ls.starts_with("160000 commit"),

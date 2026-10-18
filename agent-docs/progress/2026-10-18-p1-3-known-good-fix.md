@@ -56,3 +56,15 @@ d=$(mktemp -d) && git clone -q /local/celeris/data/campaign-assets/k2/benchfs-08
 cd $d/b && git checkout -q 086c4618 && git apply $P/p0-xattr-path.patch --include=src/rpc/handlers.rs && git apply $P/p0-final.patch
 git diff -- src/rpc/handlers.rs src/rpc/metadata_ops.rs > k2-fix.patch && sha256sum k2-fix.patch   # 6fc5d09a… と一致
 ```
+
+## 6. host 再実走（operator、無 LLM・job 投入なし）
+区別: **実経路確認済み** = host 実走で exit 0 を確認。**未成立** = 未実走または失敗。認証材料の値は書かない。
+
+| # | commit | cap-probe（K2 a/b/c・K4 a） | `verify-real-assets.sh --build` | 区別 |
+|---|---|---|---|---|
+| 1 | ad80c920 | すべて exit 0（sirius-link・autotools・libclang を含む全能力 ok）。host-cap2-*.json | exit 101。snapshot 完全性 ok・K4 再計算 ok。K2 は初期 tree が compile error（`locusta_transport_ref` ほか 8 errors、host-build2.log） | cap-probe は実経路確認済み。--build は未成立（build-diag-fix で解消） |
+| 2 | 82d15134 | すべて exit 0。K2 arm a は 11 能力（rdma-verbs 含む）すべて ok。host-cap3-*.json | exit 101。snapshot 完全性 ok・K4 再計算 ok。初期 tree は transport-locusta で build 成功（Finished release 28.81s）。`real_asset_grade.rs:770` で known-good が Pass にならず（left Fail / right Pass、env_failure=false）。`lookup_recovers_xattr_after_restart_for_direct_and_by_id_chunks` が known-good の 2 試験（hidden と tree 自身）で `recovered.is_file()` 失敗。host-build3.log | cap-probe は実経路確認済み。--build は未成立（原因は tree の欠落 = §1、known-good-fix で k2-fix.patch に置換） |
+
+- 失敗した tree は known-good（086c4618 + p0-final.patch）。known-bad 側は期待どおり Fail。env_failure は 2 回とも false で、環境不良ではなく tree 側の原因だった。
+- **known-good-fix（§2・§3）後の operator 再実走（k2-fix.patch 配置 + `--build`）の出力は、この WU の時点でまだ回答に届いていない。** よって K2 known-good Pass / known-bad model_failure を host で確認した、とは記録しない。K2 実 build 正負例の host 判定は **未成立（未実走）**。本 run の worktree 検証（§3、84.7 秒 ok）は host の `--build` 実走の代わりにならない。
+- 次の手順: §4 の手順で operator が `--build` を再実走し、exit・known-bad/known-good の結果（落ちたら failure_class と tree）をこの節の表の行 3 に追記する。exit 0 なら実経路確認済みに格上げする。

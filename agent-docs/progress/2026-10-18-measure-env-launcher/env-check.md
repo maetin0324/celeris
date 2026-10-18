@@ -37,3 +37,8 @@ updated: 2026-10-18
 - `llm_proxy_listen` は照合していない（config に無いと daemon の既定で起動し得る）。`check_config` への ADR D1 末尾の追加検査
   （llm_proxy・selfdeploy・push・notify）も未。selfdeploy は既定値（本番 releases_dir・push=true）と比べるだけで拒否はしない。
 - 実装済み / 無 LLM 検証済み。実 daemon を使った実経路確認は launcher WU の e2e。
+
+## 追記（再実行）
+- task-api/tests/common への変更は戻し、campaign 試験側で ApiSettings.config_view を差し替える形にした。
+- crates/celeris/tests/campaign_lock_e2e.rs の mock Host に /api/v1/config（正式 DTO）と測定 config listen に合わせた port を追加済み。4 試験 ok。
+- 検査: fmt exit 0 / clippy exit 0 / test-parallel: 5734 passed, 0 failed。

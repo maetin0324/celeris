@@ -2,6 +2,7 @@
 //! 既存の routing-eval manifest/hash/split を再利用し、別のオーケストレータは持たない。
 pub mod aggregate;
 pub mod budget;
+pub mod cap_probe;
 pub mod cases;
 pub mod celeris_exec;
 pub mod checker;

@@ -79,6 +79,10 @@ impl Executor for Counting {
 
 struct OkHost;
 impl Host for OkHost {
+    fn probe_runner(&self) -> Box<dyn celeris_campaign::cap_probe::ProbeRunner> {
+        Box::new(preflight_setup::OkRunner)
+    }
+
     fn env_nonempty(&self, _: &str) -> bool {
         true
     }
@@ -233,6 +237,7 @@ fn fx() -> Fx {
         a_account: Some("lab".into()),
         measure: Some(measure),
         measurement_id: None,
+        cap_env: Some(preflight_setup::write_cap_env(d)),
     };
     Fx { dir, inp }
 }

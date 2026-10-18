@@ -74,6 +74,30 @@ pub struct Experiment {
     pub params: BTreeMap<String, Value>,
 }
 
+/// 試行が実際に使う能力の 1 件（cap-probe が A の sandbox argv で包んで走らせる）。
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Capability {
+    pub id: String,
+    pub kind: CapKind,
+    /// sandbox 内で走らせる command（shell を介さない。複合は `sh -c`）。job 投入は書かない。
+    pub argv: Vec<String>,
+    /// 標準出力に含まれるべき文字列（無ければ exit 0 だけ見る）。
+    #[serde(default)]
+    pub expect_stdout: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CapKind {
+    Compiler,
+    Library,
+    Build,
+    Interpreter,
+    /// 承認済みクラスタ接続経路の到達確認（接続のみ。job は投入しない）。
+    Connection,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Case {
@@ -101,6 +125,9 @@ pub struct Case {
     /// `campaign-case-private/1`（期待値・欠陥 list）とは別物で、評価 command・テスト hash・実験/再計算の条件を持つ。
     #[serde(default)]
     pub grade_case_ref: Option<InputRef>,
+    /// 本測定の前に LLM なしで確かめる必要能力（compiler・依存 lib・最小 build・接続・再計算 toolchain）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub required_capabilities: Vec<Capability>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -227,6 +254,15 @@ impl Case {
         }
         if self.stages.is_empty() {
             return Err(format!("{id}: stages is empty"));
+        }
+        let mut seen = BTreeSet::new();
+        for c in &self.required_capabilities {
+            if c.id.is_empty() || c.argv.is_empty() || !seen.insert(c.id.as_str()) {
+                return Err(format!(
+                    "{id}: required_capabilities needs unique non-empty id and argv ({:?})",
+                    c.id
+                ));
+            }
         }
         if self.evidence.is_empty() {
             return Err(format!("{id}: evidence kinds are required"));

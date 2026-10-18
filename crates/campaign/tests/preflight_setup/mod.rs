@@ -107,6 +107,28 @@ pub fn pin_trial_kb(manifest: &Path, cases: &Path, kb: &Path) {
     fs::write(manifest, v.to_string()).unwrap();
 }
 
+/// 全能力が通る stub（userns の要る実走は worker sandbox で出来ない。実 sandbox 実走は cap-runbook）。
+pub struct OkRunner;
+
+impl celeris_campaign::cap_probe::ProbeRunner for OkRunner {
+    fn run(&self, _: &str, _: &[String]) -> celeris_campaign::cap_probe::Ran {
+        celeris_campaign::cap_probe::Ran::Exit {
+            code: 0,
+            stdout: "cmake version git version Python 3".into(),
+        }
+    }
+}
+
+pub fn write_cap_env(d: &Path) -> PathBuf {
+    let p = d.join("cap-env.json");
+    fs::write(
+        &p,
+        json!({"schema":"celeris.campaign-cap-env/1","a":{},"worker":{}}).to_string(),
+    )
+    .unwrap();
+    p
+}
+
 pub fn setup() -> Setup {
     let dir = tempfile::tempdir().unwrap();
     let d = dir.path();
@@ -170,6 +192,7 @@ pub fn setup() -> Setup {
         a_account: Some("lab".into()),
         measure: Some(measure),
         measurement_id: None,
+        cap_env: Some(write_cap_env(d)),
     };
     Setup { dir, inp }
 }

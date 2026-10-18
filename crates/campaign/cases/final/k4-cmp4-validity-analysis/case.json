@@ -39,6 +39,26 @@
     "path": "final/k4-cmp4-validity-analysis/private.json",
     "sha256": "f090be147379ef5fa5337b31a699fc700170718a5075cbdbeb20cb1ec76a91d8"
   },
+  "required_capabilities": [
+    {
+      "id": "python3",
+      "kind": "interpreter",
+      "argv": [
+        "python3",
+        "--version"
+      ],
+      "expect_stdout": "Python 3"
+    },
+    {
+      "id": "python3-stdlib",
+      "kind": "interpreter",
+      "argv": [
+        "python3",
+        "-c",
+        "import json, csv, statistics, hashlib"
+      ]
+    }
+  ],
   "schema": "celeris.campaign-case/1",
   "snapshot": {
     "kb_snapshot": "741f24146f5c02f44acf5291e23806416b9956809e55a1474488ecbcc9fe0702",

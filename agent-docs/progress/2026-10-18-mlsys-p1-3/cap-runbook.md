@@ -37,7 +37,7 @@ A と B/C の probe argv（`--dry-argv`）が同一であること（B/C は A �
 ## 2. K2 実 asset の組立・ビルド・正負例（verify-real-assets.sh）
 asset store の k2 dir（`SHA256SUMS`・`benchfs-*.bundle`・`submodules/*.tar`）と、known-good 用 `k2-fix.patch`（k2-known-good-v2、sha256=6fc5d09a880ce405f4f81cbbf559df2b2bcf191946e14040c05705de63d22773。p0-final.patch 単独は古く known-good が落ちる。最新結論は 2026-10-18-p1-3-known-good-fix.md）、K4 原票 `main-v3-n2-43706.tgz` を用意する。
 ```sh
-export CAMPAIGN_K2_FIX_PATCH=/local/celeris/data/campaign-assets/k2/k2-fix.patch> CAMPAIGN_K4_TGZ=<main-v3-n2-43706.tgz>
+export CAMPAIGN_K2_FIX_PATCH=/local/celeris/data/campaign-assets/k2/k2-fix.patch CAMPAIGN_K4_TGZ=<main-v3-n2-43706.tgz>
 sh crates/campaign/scripts/verify-real-assets.sh <asset_dir>          # 組立・lock・patch・K4 再計算（build なし）
 sh crates/campaign/scripts/verify-real-assets.sh <asset_dir> --build  # 実 cargo build/test（UCX 等が要る）
 ```

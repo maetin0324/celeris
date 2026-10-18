@@ -101,6 +101,8 @@ pub enum ContinueWhy {
     WorkUnitRetry,
     Planned,
     Replan,
+    /// 委譲した子が未完了の間の親の待機（ADR 2026-10-18-parent-waits-for-children）。数えず、dispatch もしない。
+    ChildrenWait,
 }
 
 impl ContinueWhy {
@@ -112,6 +114,7 @@ impl ContinueWhy {
             ContinueWhy::WorkUnitRetry => "work_unit_retry",
             ContinueWhy::Planned => "planned",
             ContinueWhy::Replan => "replan",
+            ContinueWhy::ChildrenWait => "children_wait",
         }
     }
 }

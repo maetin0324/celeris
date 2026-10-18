@@ -1033,9 +1033,18 @@ impl Dispatcher {
                         .as_deref()
                         .and_then(crate::checkpoint::read_worker_checkpoint)
                 });
-            let checkpoint_end = end
-                .as_checkpoint_end()
-                .unwrap_or(task_core::CheckpointEnd::BudgetExhausted);
+            // ADR 2026-10-18-parent-waits-for-children: 委譲した子が未完了なら、親の続きの run は進むものが無い。
+            // 子待ちとして止め（continuation・進捗なしに数えない）、子が終わってから dispatch する。
+            let children_pending = end != task_core::RunEnd::Waiting
+                && task_ops::delegate::pending_children(self.store.as_ref(), task_id)
+                    .map_err(ops_to_store)?
+                    > 0;
+            let checkpoint_end = if children_pending {
+                task_core::CheckpointEnd::Waiting
+            } else {
+                end.as_checkpoint_end()
+                    .unwrap_or(task_core::CheckpointEnd::BudgetExhausted)
+            };
             let ctx = task_core::CheckpointContext {
                 task_id: task_id.to_string(),
                 work_unit: None,
@@ -1046,15 +1055,25 @@ impl Dispatcher {
             };
             let checkpoint = task_core::merge_checkpoint(worker_checkpoint, mechanical, ctx);
 
-            if end == task_core::RunEnd::Waiting {
+            if end == task_core::RunEnd::Waiting || children_pending {
                 // ADR-0090 D1: クラスタ job の wait。checkpoint は残すが continuation の上限・進捗なしには数えない
-                // （trigger は `ClusterJobWait` のまま）。
+                // （trigger は `ClusterJobWait` のまま）。子待ち（children_pending）も同じ扱いで、trigger だけ
+                // `ChildrenWait` に替える。
                 checkpoint_for_index = Some(checkpoint.clone());
                 checkpoint_event = Some(Event::CheckpointSaved {
                     run_id: run_id.clone(),
                     work_unit_id: None,
                     checkpoint: Box::new(checkpoint),
                 });
+                if children_pending {
+                    trigger = Trigger::Continue {
+                        why: task_core::ContinueWhy::ChildrenWait,
+                    };
+                    outcome_str = format!(
+                        "continue: 委譲した子の完了を待ちます（{} の続き）",
+                        describe_run_end(end)
+                    );
+                }
             } else if self.config.execution.continuation {
                 let continuations_so_far = consecutive_continuations(&events_so_far);
                 let prev_checkpoint =

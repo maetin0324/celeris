@@ -135,6 +135,10 @@ struct RouterHost {
 }
 
 impl Host for RouterHost {
+    fn probe_runner(&self) -> Box<dyn celeris_campaign::cap_probe::ProbeRunner> {
+        Box::new(preflight_setup::OkRunner)
+    }
+
     fn env_nonempty(&self, name: &str) -> bool {
         name == "CELERIS_CAMPAIGN_TOKEN"
     }

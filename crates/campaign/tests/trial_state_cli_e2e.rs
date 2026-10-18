@@ -71,6 +71,9 @@ while [ ! -e "$d/GATE" ]; do sleep 0.05; done
 echo '{"type":"assistant","message":{"id":"m1","usage":{"input_tokens":10,"output_tokens":5}}}'
 "#;
 
+/// 必要能力 probe 用の道具の stub（どの expect_stdout も満たす）。
+const CAP_STUB: &str = "#!/bin/sh\necho 'cmake version git version Python 3'\n";
+
 async fn env() -> Env {
     let s = setup();
     let acct = tempfile::tempdir().unwrap();
@@ -119,6 +122,30 @@ async fn env() -> Env {
     .unwrap();
     let stub = s.dir.path().join("a-stub");
     write_executable(&stub, STUB);
+    // 必要能力 probe は実 bwrap で走る。この host に無い道具（UCX 等）は stub を限定 mount で足す。
+    let tools = s.dir.path().join("cap-tools");
+    fs::create_dir_all(&tools).unwrap();
+    for t in [
+        "cc",
+        "c++",
+        "cmake",
+        "git",
+        "pkg-config",
+        "sh",
+        "ssh",
+        "python3",
+    ] {
+        write_executable(&tools.join(t), CAP_STUB);
+    }
+    let tc = json!({
+        "ro_mounts": [tools],
+        "env": [["PATH", format!("{}:/usr/local/bin:/usr/bin:/bin", tools.display())]],
+    });
+    fs::write(
+        s.inp.cap_env.as_ref().unwrap(),
+        json!({"schema": "celeris.campaign-cap-env/1", "a": tc, "worker": tc}).to_string(),
+    )
+    .unwrap();
     let campaign_id = CampaignManifest::load(&s.inp.manifest_path)
         .unwrap()
         .campaign_id;
@@ -167,6 +194,8 @@ impl Env {
             .arg(i.inputs_src.as_ref().unwrap())
             .arg("--repo-src")
             .arg(i.repo_src.as_ref().unwrap())
+            .arg("--cap-env")
+            .arg(i.cap_env.as_ref().unwrap())
             .args(["--a-account", "lab", "--api-url", &self.url])
             .args(["--token-env", "CELERIS_E2E_TOKEN"])
             .arg("--task-template")

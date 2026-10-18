@@ -200,6 +200,7 @@ fn sb_for(root: &str) -> Sandbox {
         account_id: "lab".into(),
         auth_dir: "/acct/lab".into(),
         state_root: format!("{root}/trial-state").into(),
+        toolchain: Default::default(),
     }
 }
 
@@ -322,6 +323,7 @@ fn prepare_writes_identity_marker_and_refuses_foreign_state() {
         account_id: "lab".into(),
         auth_dir: acct.clone(),
         state_root: t.root.join("trial-state"),
+        toolchain: Default::default(),
     };
     let req = t.req(1);
     let d = sb.prepare(&req).expect("first prepare");
@@ -421,6 +423,7 @@ echo done >> probe.txt
         account_id: "lab".into(),
         auth_dir: acct,
         state_root: t.root.join("trial-state"),
+        toolchain: Default::default(),
     });
     let r = x.submit(&t.req(u64::MAX), "campaign-sbx1").expect("submit");
     let res = wait_done(&x, &r);

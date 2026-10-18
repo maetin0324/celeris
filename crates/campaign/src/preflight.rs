@@ -50,6 +50,12 @@ pub trait Host {
     fn api_get(&self, api_url: &str, token_env: &str, path: &str) -> Result<Value, String>;
     /// A の隔離（bwrap）がこの host で実際に動くか。
     fn sandbox_usable(&self) -> Result<(), String>;
+    /// cap-probe の実行器。既定は実 bwrap（試験は stub を返す）。
+    fn probe_runner(&self) -> Box<dyn crate::cap_probe::ProbeRunner> {
+        Box::new(crate::cap_probe::ProcessProbeRunner {
+            timeout: std::time::Duration::from_secs(300),
+        })
+    }
 }
 
 /// 解決済みの A の実行ファイル。実起動 argv の program と版の記録（`launch.json`）の元。
@@ -185,6 +191,8 @@ pub struct Inputs {
     pub measure: Option<MeasureEnv>,
     /// 測定 ID の明示（省略時は campaign hash から決まる）。
     pub measurement_id: Option<String>,
+    /// 必要能力 probe の環境設定（`celeris.campaign-cap-env/1`）。case が required_capabilities を持てば必須。
+    pub cap_env: Option<PathBuf>,
 }
 
 /// 測定環境の汚染検査の入力。
@@ -239,6 +247,8 @@ pub struct Report {
     pub campaign_sha256: Option<String>,
     pub checked: Vec<&'static str>,
     pub missing: Vec<Missing>,
+    /// 能力不足（check `capability`）があるとき `env_failure`。モデル失敗とは別分類。
+    pub failure_class: Option<&'static str>,
     /// 検査した A の実行ファイルと版。`run` はこれと同じものを起動する。
     pub a_program: Option<ResolvedProgram>,
 }
@@ -314,6 +324,11 @@ pub fn check(inp: &Inputs, host: &dyn Host) -> Report {
         paid_calls_made: 0,
         campaign_sha256: sha,
         checked: a.checked,
+        failure_class: a
+            .missing
+            .iter()
+            .any(|x| x.check == "capability")
+            .then_some(crate::cap_probe::ENV_FAILURE),
         missing: a.missing,
         a_program: a.a_program,
     }
@@ -399,6 +414,11 @@ fn run_checks(a: &mut Acc, m: &CampaignManifest, inp: &Inputs, host: &dyn Host) 
     a.checked.push("inputs");
     if let Some(set) = &set {
         check_inputs(a, m, set, inp);
+    }
+
+    // 能力 probe は最初の LLM 呼出しより前（preflight は常に先）。
+    if let Some(set) = &set {
+        check_capabilities(a, m, set, inp, host);
     }
 
     // 5/6. 候補構成・認証/環境。
@@ -613,6 +633,65 @@ fn check_candidates(a: &mut Acc, m: &CampaignManifest, inp: &Inputs, host: &dyn 
         }
     }
     check_api_dependent(a, inp, host, tv.as_ref());
+}
+
+/// 選んだ問題の必要能力を、manifest の各 arm について A と同じ sandbox 組立で LLM なしに確かめる。
+fn check_capabilities(
+    a: &mut Acc,
+    m: &CampaignManifest,
+    set: &CaseSet,
+    inp: &Inputs,
+    host: &dyn Host,
+) {
+    let cases: Vec<_> = m
+        .problems
+        .iter()
+        .filter_map(|id| set.get(id))
+        .filter(|c| !c.case.required_capabilities.is_empty())
+        .collect();
+    if cases.is_empty() {
+        return;
+    }
+    a.checked.push("capability");
+    let Some(path) = &inp.cap_env else {
+        a.miss(
+            "capability",
+            "--cap-env is required: the selected cases fix required_capabilities",
+        );
+        return;
+    };
+    let Some(env) = a.res("capability", crate::cap_probe::CapEnv::load(path)) else {
+        return;
+    };
+    let tmp = match tempfile::tempdir() {
+        Ok(t) => t,
+        Err(e) => return a.miss("capability", e.to_string()),
+    };
+    let (ws, cfg) = (tmp.path().join("ws"), tmp.path().join("cfg"));
+    if let Err(e) = fs::create_dir_all(&ws) {
+        return a.miss("capability", e.to_string());
+    }
+    if let Err(e) = crate::cap_probe::prepare_state_dir(&cfg) {
+        return a.miss("capability", e);
+    }
+    let runner = host.probe_runner();
+    for c in cases {
+        for cfg_id in m.configs.iter().map(|x| x.id) {
+            let sb = crate::cap_probe::sandbox_for(
+                &env,
+                cfg_id,
+                inp.a_account.as_deref().unwrap_or("probe"),
+                &cfg,
+            );
+            let rep = crate::cap_probe::probe(&sb, cfg_id, &ws, &c.case, runner.as_ref());
+            for r in rep.results.iter().filter(|r| !r.ok) {
+                a.miss(
+                    "capability",
+                    format!("{} arm {:?}: {}: {}", c.case.id, cfg_id, r.id, r.detail),
+                );
+            }
+        }
+    }
 }
 
 /// 選んだ問題の外部入力が `--inputs-src` に揃い sha256 が宣言と一致するか、初期 repo の取り込み元があるか。

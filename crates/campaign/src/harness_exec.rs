@@ -854,6 +854,11 @@ impl Executor for HarnessExecutor {
             }));
         }
         if !alive(&m) {
+            // 上の exit.code 確認の後〜ここまでの間に終了した process は exit.code を書き終えている。
+            // 先に確認した結果で「消えた」と決めず、次の poll で exit.code を読ませる。
+            if dir.join("exit.code").exists() || dir.join("final.json").exists() {
+                return Ok(ExecStatus::Wait);
+            }
             // exit.code が無いまま消えた（SIGKILL・host 再起動など）。
             self.finalize(key, Outcome::Error, elapsed, "process_vanished")?;
             return done(Outcome::Error, elapsed);

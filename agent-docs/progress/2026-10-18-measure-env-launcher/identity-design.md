@@ -38,6 +38,10 @@ updated: 2026-10-18
 
 ## 証拠コマンドと結果
 - 調査のみ。`git diff --stat $CELERIS_WU_BASE` で変更は ADR と本ファイルの 2 件だけ（範囲 check を下に記録）。
+- 前回 run の文書 check（`check-adr-numbers && check-doc-links && progress-index --check`）は base（main cae27fc0）に既にあった
+  `agent-docs/progress/2026-10-17-root-dependency-waits-for-integration.md` の front matter 欠落（`title`・`updated` なし）で exit 1。
+  同ファイルの front matter に `title`（本文の見出し）と `updated: 2026-10-17`（completed と同日）を足し、再実行で exit 0
+  （`check-adr-numbers: ok (244 files)` / `check-doc-links: ok` / `progress-index --check: ok`）。
 - 試験・clippy・fmt は Rust コードを変えていないため、この WU では走らせていない（Phase 完了時の検査は後続 WU と統合段で行う）。
 
 ## 未解決事項

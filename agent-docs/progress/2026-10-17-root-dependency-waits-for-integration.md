@@ -4,6 +4,7 @@ tasks: [01M54YWKAZMZYQTHQRMT14RSBY]
 status: done
 updated: 2026-10-17
 completed: 2026-10-17
+updated: 2026-10-17
 ---
 # root 間 depends_on は依存先の取り込みまで待つ
 

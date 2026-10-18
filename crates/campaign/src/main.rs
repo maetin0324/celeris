@@ -17,7 +17,7 @@ use celeris_campaign::{
     watch::{self, SystemClock, WatchOptions},
 };
 
-const USAGE: &str = "usage: celeris-campaign <dry-run|validate|env-lock|preflight|run|watch|check|check-report|export|final-accounting|grade-out|usage> --manifest <path> \
+const USAGE: &str = "usage: celeris-campaign <dry-run|validate|env-lock|env-check|preflight|run|watch|check|check-report|export|final-accounting|grade-out|usage> --manifest <path> \
 [--interval-secs N] [--max-iterations M] [--cases <grade-case dir>] \
 [--input-manifest <path>] [--out <dir>] [--executor mock|harness|celeris] [--api-url <url> --token-env <ENV_NAME> [--task-template <json>]] [--dest <dir>] \
 [--cases-root <dir>] [--grader-root <dir>] [--grade-case-root <dir>] [--a-program <path>] [--report <file>] [--measurement-id <id>] [--repo-src <dir>] [--materials-src <dir>] [--kb-src <dir>] [--inputs-src <dir>] [--records <records.jsonl>] [--cos-not-called <basis>] [--quota <usage.json>] [--a-account <account_id>] [--measure-config <toml> --normal-config <toml> --canaries <json>] [--max-7d <ratio>] [--max-7d-codex <ratio>]";
@@ -207,6 +207,19 @@ fn run(args: Vec<String>) -> Result<String, String> {
             let verify = args.iter().any(|a| a == "--verify");
             let o = env_lock::establish(&m, &obs, &out()?, verify)?;
             Ok(format!("{{\"env_lock\":\"{o:?}\"}}").to_lowercase())
+        }
+        "env-check" => {
+            let pi = preflight_inputs(&args, &manifest_path);
+            let me = pi
+                .measure
+                .as_ref()
+                .ok_or("--measure-config <toml> (and --normal-config, --canaries) is required")?;
+            let url = pi.api_url.as_deref().ok_or("--api-url is required")?;
+            let tok = pi.token_env.as_deref().ok_or("--token-env is required")?;
+            let rep =
+                celeris_campaign::env_check::run(me, &m, pi.kb_src.as_deref(), url, tok, &RealHost);
+            let s = serde_json::to_string_pretty(&rep).map_err(|e| e.to_string())?;
+            if rep.ok { Ok(s) } else { Err(s) }
         }
         "preflight" => {
             let rep = preflight::check(&preflight_inputs(&args, &manifest_path), &RealHost);

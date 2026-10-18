@@ -523,6 +523,20 @@ impl Host for OkHost {
     }
     fn api_get(&self, _: &str, _: &str, path: &str) -> Result<Value, String> {
         Ok(match path {
+            // 測定 config で起動した daemon の応答: daemon 自身の `config_view`（実コード）を測定 config から作る。
+            "/api/v1/config" => {
+                let cfg_path = preflight_setup::current_config();
+                let cfg = Config::load(&cfg_path).map_err(|e| e.to_string())?;
+                let listen = cfg.api.listen.ok_or("no [api] listen")?;
+                let view = celeris::config_view(
+                    &cfg,
+                    listen,
+                    "01MEASUREDAEMON00000000000",
+                    preflight_setup::MEASURE_RELEASE,
+                    "2026-10-18T00:00:00Z",
+                );
+                serde_json::to_value(view).map_err(|e| e.to_string())?
+            }
             "/api/v1/projects/01ABC" => {
                 json!({"project":{"id":"01ABC","auto_integrate":false},"repos":[]})
             }
@@ -679,9 +693,13 @@ impl World {
         }
         copy(&c.join("cases/final").join(K2).join("kb"), &k);
         preflight_setup::pin_trial_kb(&d.join("final.json"), &cases, &k);
+        // 測定 daemon の `[api] token_file`（`Config::load` が読めること。値は試験用）。
+        fs::create_dir_all(d.join("measure")).expect("measure dir");
+        fs::write(d.join("measure/token"), "t\n").expect("token");
         let measure = preflight_setup::write_configs(
             d,
-            &preflight_setup::measure_config(d, "measure"),
+            &preflight_setup::measure_config(d, "measure")
+                .replace("127.0.0.1:7701", &format!("127.0.0.1:{}", server.port)),
             &preflight_setup::normal_config(d),
         );
         fs::write(

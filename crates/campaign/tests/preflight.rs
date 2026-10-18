@@ -16,6 +16,7 @@ use celeris_campaign::{
 };
 use serde_json::{Value, json};
 
+mod daemon_identity;
 mod preflight_setup;
 use preflight_setup::*;
 const SECRET: &str = "s3cret-token-value-xyz";
@@ -45,6 +46,9 @@ impl Host for FakeHost {
     }
 
     fn api_get(&self, _: &str, _: &str, path: &str) -> Result<Value, String> {
+        if path == "/api/v1/config" && !self.api.iter().any(|(p, _)| *p == path) {
+            return Ok(daemon_identity::matching_daemon_body());
+        }
         self.api
             .iter()
             .find(|(p, _)| *p == path)
@@ -674,9 +678,8 @@ fn passing_preflight_lets_run_start() {
 }
 
 /// task-api の偽（GET だけ。path ごとの JSON を返す）。thread は process 終了で消える。
-fn fake_api(routes: Vec<(&'static str, Value)>) -> String {
+fn fake_api_on(l: std::net::TcpListener, routes: Vec<(&'static str, Value)>) -> String {
     use std::io::{Read, Write};
-    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", l.local_addr().unwrap());
     std::thread::spawn(move || {
         for st in l.incoming() {
@@ -715,6 +718,23 @@ fn bin(args: &[&str], s: &Setup, env: &[(&str, &str)]) -> std::process::Output {
             .unwrap();
         assert!(ok.success());
     }
+    // 偽 API は測定 config の `[api] listen` と同じ origin で答える（api-url は config から導いた値と一致必須）。
+    // 先に port を取り、測定 config の listen をそれに書き換えてから、その config で起動した daemon の応答を返す。
+    let mut routes = api(&s.dir.path().join("inputs-src"));
+    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = l.local_addr().unwrap().port();
+    let cfg = s.dir.path().join("measure.toml");
+    let text = fs::read_to_string(&cfg).unwrap();
+    fs::write(
+        &cfg,
+        text.replace("127.0.0.1:7701", &format!("127.0.0.1:{port}")),
+    )
+    .unwrap();
+    routes.push((
+        "/api/v1/config",
+        daemon_identity::daemon_config_body(&cfg, MEASURE_RELEASE),
+    ));
+    let api_url = fake_api_on(l, routes);
     let mut c = Command::new(std::env::var("CARGO_BIN_EXE_celeris-campaign").expect("bin"));
     c.args(args)
         .arg("--manifest")
@@ -738,7 +758,7 @@ fn bin(args: &[&str], s: &Setup, env: &[(&str, &str)]) -> std::process::Output {
         .arg("--a-account")
         .arg("lab")
         .arg("--api-url")
-        .arg(fake_api(api(&s.dir.path().join("inputs-src"))))
+        .arg(api_url)
         .arg("--token-env")
         .arg("CELERIS_PREFLIGHT_TEST_TOKEN")
         .arg("--task-template")

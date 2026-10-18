@@ -44,6 +44,8 @@ pub struct EnvOptions {
     /// Phase 30（ADR-0033 D4 追記）: 対話は常にこの分野で走る。既定は `Default` impl で
     /// `task_core::CONVERSATION_GENRE`。
     pub conversation_genre: String,
+    /// `GET /config` の本文を差し替える（既定は `config_view()`）。
+    pub config_view: Option<ConfigView>,
     /// ADR-0017 M2: `reload`/`check` を受け取るチャネルの送信側。`None` なら使えない。
     pub admin_tx: Option<mpsc::Sender<AdminRequest>>,
     /// ADR-0024 D1: `[accounts] claude_dir`。`None` なら claude-code のプールは無し。
@@ -95,6 +97,7 @@ impl Default for EnvOptions {
             genres: Vec::new(),
             // Phase 30: 既定の対話用分野は他の既定値と同じく `task_core::CONVERSATION_GENRE`。
             conversation_genre: task_core::CONVERSATION_GENRE.to_string(),
+            config_view: None,
             admin_tx: None,
             accounts_root: None,
             codex_accounts_root: None,
@@ -315,7 +318,7 @@ pub fn settings(
         busy_timeout: Duration::from_millis(5000),
         background_checkpoint: false,
         view: view_context(workspace_root),
-        config_view: config_view(),
+        config_view: options.config_view.clone().unwrap_or_else(config_view),
         roles: options.roles,
         genres: options.genres,
         conversation_genre: options.conversation_genre,

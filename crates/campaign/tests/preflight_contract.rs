@@ -1,9 +1,9 @@
 //! preflight の案件契約: 実 task-api の router（正式 `ProjectDetail` / `RepoList` DTO）の応答 body をそのまま
 //! `check_project_rules` と preflight（`gate` / `run_gated`）に通す。手書きの JSON は使わない（案件は
 //! `POST /projects`・`POST /projects/{id}/repos`・`PATCH /projects/{id}` で作る）。外部ネットワーク・LLM は使わない。
-#[path = "../../task-api/tests/common/mod.rs"]
-mod api_common;
+mod daemon_identity;
 mod preflight_setup;
+use daemon_identity::api_common;
 
 use std::{
     fs,
@@ -149,6 +149,9 @@ impl Host for RouterHost {
         }
     }
     fn api_get(&self, _: &str, _: &str, path: &str) -> Result<Value, String> {
+        if path == "/api/v1/config" {
+            return Ok(daemon_identity::matching_daemon_body());
+        }
         if path == "/api/v1/llm/accounts" {
             return Ok(
                 json!({"items":[{"source_id":"claude_oauth","account_id":"lab","dir":self.acct_dir,"logged_in":true}]}),

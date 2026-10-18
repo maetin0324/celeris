@@ -8,6 +8,7 @@ pub mod checker;
 pub mod curl_transport;
 pub mod dispatch;
 pub mod dryrun;
+pub mod env_check;
 pub mod env_lock;
 pub mod executor;
 pub mod export;

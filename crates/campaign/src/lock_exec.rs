@@ -341,9 +341,12 @@ pub enum Start {
     Resume,
 }
 
+/// 試行の data があるか。測定開始時の固定記録（`env-lock.json`。launcher が初回実行の直前に作る）は data に数えない。
 fn out_has_data(out: &Path) -> Result<bool, String> {
     match fs::read_dir(out) {
-        Ok(mut d) => Ok(d.next().is_some()),
+        Ok(d) => Ok(d
+            .filter_map(Result::ok)
+            .any(|e| e.file_name() != crate::env_lock::ENV_LOCK_FILE)),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
         Err(e) => Err(format!("{}: {e}", out.display())),
     }

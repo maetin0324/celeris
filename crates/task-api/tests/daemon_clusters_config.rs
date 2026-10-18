@@ -130,6 +130,34 @@ async fn clusters_endpoint_rejects_query_parameters() {
     assert_problem(&resp, 400, "bad_request");
 }
 
+/// daemon-identity-api: `identity` は認証付き `GET /config` だけに載り、無認証の `/health` には出ない。
+/// 応答のどこにも token の値は出ない。
+#[tokio::test]
+async fn config_identity_is_authenticated_only_and_has_no_secret() {
+    let env = TestEnv::with(EnvOptions {
+        token: Some(TOKEN.into()),
+        ..Default::default()
+    });
+    let app = env.router();
+    let anon = send(&app, get("/api/v1/config")).await;
+    assert_eq!(anon.status, 401, "{}", anon.text());
+    let auth = format!("Bearer {TOKEN}");
+    let resp = send(
+        &app,
+        get_with("/api/v1/config", &[("authorization", &auth)]),
+    )
+    .await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    let id = resp.json()["identity"].clone();
+    assert_eq!(id["instance_id"], "01J00000000000000000000000");
+    assert!(id["effective"]["api_listen"].is_string());
+    assert!(!resp.text().contains(TOKEN), "{}", resp.text());
+    let health = send(&app, get("/api/v1/health")).await;
+    assert_eq!(health.status, 200);
+    assert!(health.json().get("identity").is_none());
+    assert!(!health.text().contains("selfdeploy"), "{}", health.text());
+}
+
 #[tokio::test]
 async fn config_is_returned_as_given_and_secrets_never_appear() {
     let env = TestEnv::with(EnvOptions {

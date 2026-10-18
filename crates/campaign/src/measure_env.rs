@@ -10,7 +10,7 @@ use crate::snapshot::hash_tree;
 
 /// 通常運用の既定値（`crates/celeris/src/config` の `default_*`）。測定 config がこれに落ちるのを拒否する。
 const DEFAULT_KNOWLEDGE_ROOT: &str = "~/.local/share/celeris/knowledge";
-const DEFAULT_MEMORY_DIR: &str = "~/.local/celeris/memory";
+pub(crate) const DEFAULT_MEMORY_DIR: &str = "~/.local/celeris/memory";
 const DEFAULT_WORKSPACE_ROOT: &str = "~/.local/celeris/workspaces";
 
 /// canary 識別文字列（秘密ではない目印）。`forbidden` は通常 KB・他試行・grader 私有領域にだけ置いたもの、
@@ -40,7 +40,7 @@ impl Canaries {
     }
 }
 
-fn load_toml(p: &Path) -> Result<toml::Value, String> {
+pub(crate) fn load_toml(p: &Path) -> Result<toml::Value, String> {
     let t = std::fs::read_to_string(p).map_err(|e| format!("{}: {e}", p.display()))?;
     toml::from_str::<toml::Value>(&t).map_err(|e| format!("{}: {e}", p.display()))
 }
@@ -60,7 +60,7 @@ fn lexical(p: &Path) -> PathBuf {
 }
 
 /// `~` 展開、相対は config 基準。存在すれば symlink を解いた実 path。
-fn resolve(raw: &str, cfg: &Path) -> PathBuf {
+pub(crate) fn resolve(raw: &str, cfg: &Path) -> PathBuf {
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_default();
@@ -89,7 +89,7 @@ fn get_path(v: &toml::Value, keys: &[&str], cfg: &Path, default: Option<&str>) -
     cur.as_str().map(|s| resolve(s, cfg))
 }
 
-fn tget<'a>(v: &'a toml::Value, keys: &[&str]) -> Option<&'a toml::Value> {
+pub(crate) fn tget<'a>(v: &'a toml::Value, keys: &[&str]) -> Option<&'a toml::Value> {
     keys.iter().try_fold(v, |c, k| c.get(k))
 }
 

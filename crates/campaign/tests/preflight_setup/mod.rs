@@ -182,7 +182,7 @@ pub fn setup() -> Setup {
         grader_root: root().join("fixtures/grader-private"),
         grade_cases_root: root().join("fixtures/grade-cases"),
         a_program: "claude".into(),
-        api_url: Some("http://127.0.0.1:8080".into()),
+        api_url: Some(MEASURE_API_URL.into()),
         token_env: Some("CELERIS_CAMPAIGN_TOKEN".into()),
         task_template: Some(d.join("task-template.json")),
         repo_src: Some(repo),
@@ -221,6 +221,7 @@ pub fn measure_config(d: &Path, tag: &str) -> String {
 }
 
 pub fn write_configs(d: &Path, measure: &str, normal: &str) -> MeasureEnv {
+    CURRENT_CONFIG.with(|c| *c.borrow_mut() = Some(d.join("measure.toml")));
     fs::write(d.join("measure.toml"), measure).unwrap();
     fs::write(d.join("normal.toml"), normal).unwrap();
     fs::write(
@@ -233,5 +234,23 @@ pub fn write_configs(d: &Path, measure: &str, normal: &str) -> MeasureEnv {
         normal_config: d.join("normal.toml"),
         canaries: d.join("canaries.json"),
         out: Some(d.join("out")),
+        daemon_pid: Some(DAEMON_PID),
     }
+}
+
+/// `measure_config` の `[api] listen` から導かれる origin。
+pub const MEASURE_API_URL: &str = "http://127.0.0.1:7701";
+/// 試験の daemon DTO（`api_common::config_view`）の `identity.pid`。
+pub const DAEMON_PID: u32 = 1234;
+pub const MEASURE_RELEASE: &str = "0123456789ab";
+
+thread_local! {
+    /// この試験 thread が最後に書いた測定 config。偽 Host の `GET /config` はその config で起動した daemon の応答を返す。
+    static CURRENT_CONFIG: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
+}
+
+pub fn current_config() -> PathBuf {
+    CURRENT_CONFIG
+        .with(|c| c.borrow().clone())
+        .expect("write_configs first")
 }

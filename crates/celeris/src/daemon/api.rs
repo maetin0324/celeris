@@ -6,8 +6,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use task_api::types::{
-    ApiConfigView, ClusterConfigView, ConfigView, GenreConfigView, ReviewerConfigView,
-    RoleConfigView,
+    ApiConfigView, ClusterConfigView, ConfigView, DaemonIdentityView, EffectiveConfigView,
+    GenreConfigView, ReviewerConfigView, RoleConfigView,
 };
 use task_api::{ApiError, ApiSettings, ApiState};
 use task_core::{DaemonMode, SharedRole};
@@ -21,7 +21,13 @@ use super::bootstrap::hostname;
 use crate::{Config, DaemonError, InstanceIdentity};
 
 /// ADR-0013 / `docs/api/v1/api.md` §3.21: `GET /api/v1/config` に出す設定の要約。env は**キー名だけ**、トークンとその場所は出さない。
-pub fn config_view(config: &Config, listen: SocketAddr) -> ConfigView {
+pub fn config_view(
+    config: &Config,
+    listen: SocketAddr,
+    instance_id: &str,
+    release: &str,
+    started_at: &str,
+) -> ConfigView {
     ConfigView {
         config_path: config
             .source_path
@@ -120,6 +126,50 @@ pub fn config_view(config: &Config, listen: SocketAddr) -> ConfigView {
             bind: listen.to_string(),
             auth_required: config.api.token_file.is_some(),
             allowed_hosts: config.api.allowed_hosts.clone(),
+        },
+        identity: identity_view(config, listen, instance_id, release, started_at),
+    }
+}
+
+/// ADR 2026-10-18-measure-env-launcher D2: 同一性照合用の実効値。token・鍵の値は読まない（path だけ）。
+fn identity_view(
+    config: &Config,
+    listen: SocketAddr,
+    instance_id: &str,
+    release: &str,
+    started_at: &str,
+) -> DaemonIdentityView {
+    let home = task_core::home_dir();
+    let expand = |p: &std::path::Path| task_core::expand_home(p, home.as_deref());
+    let show = |p: &std::path::Path| expand(p).display().to_string();
+    DaemonIdentityView {
+        instance_id: instance_id.to_string(),
+        release: release.to_string(),
+        pid: std::process::id(),
+        started_at: started_at.to_string(),
+        config_sha256: config.source_sha256.clone(),
+        overrides: config.applied_overrides.clone(),
+        effective: EffectiveConfigView {
+            db: config.db.path.display().to_string(),
+            workspace_root: config
+                .workspace_roots()
+                .unpinned_root()
+                .display()
+                .to_string(),
+            knowledge_root: show(&config.knowledge.root),
+            knowledge_default_mounts: config.knowledge.default_mounts.clone(),
+            memory_dir: config.memory.as_ref().map(|m| show(&m.dir)),
+            langmem_enabled: config.knowledge.langmem.enabled,
+            knowledge_gc_enabled: config.knowledge.gc.enabled,
+            cron_seed_count: config.cron.seed.len(),
+            selfdeploy_releases_dir: show(&config.selfdeploy.releases_dir),
+            selfdeploy_repo: show(&config.selfdeploy.repo),
+            selfdeploy_push: config.selfdeploy.push,
+            api_listen: listen.to_string(),
+            llm_proxy_listen: config
+                .llm_proxy
+                .effective_enabled()
+                .then(|| config.llm_proxy.listen.to_string()),
         },
     }
 }
@@ -270,7 +320,7 @@ pub fn api_settings(
             max_requeues: config.max_requeues,
             clusters: config.cluster_view_infos(),
         },
-        config_view: config_view(config, listen),
+        config_view: config_view(config, listen, &instance_id, &release, &started_at),
         roles: config.role_specs(),
         genres: config.genre_specs(),
         conversation_genre: config.conversation_genre_id().to_string(),

@@ -394,10 +394,21 @@ pub fn check_expected(
             if r.token_usage.is_none() && r.tokens.is_some() {
                 v.push(format!("{tag}: tokens recorded without token_usage"));
             }
+            // 「変わっていない」は runner と同じ規則: 配った入力（`inputs/`）は成果物に数えない。初期 hash は入力を除いた値、
+            // 最終 hash は入力込みの値なので、入力のある試行は workspace の現物を入力抜きで数え直して比べる。
+            let unchanged = || {
+                if r.inputs.is_empty() {
+                    return r.workspace_sha256_final == r.workspace_sha256_initial;
+                }
+                let ws = out.join(&r.workspace);
+                crate::snapshot::hash_tree(&ws).ok().as_ref() == Some(&r.workspace_sha256_final)
+                    && crate::snapshot::hash_tree_excluding(&ws, &[crate::inputs::INPUTS_DIR])
+                        .ok()
+                        .as_ref()
+                        == Some(&r.workspace_sha256_initial)
+            };
             if r.reason.as_deref() == Some(REASON_NO_ARTIFACT)
-                && (r.config != ConfigId::A
-                    || r.outcome != Outcome::Failed
-                    || r.workspace_sha256_final != r.workspace_sha256_initial)
+                && (r.config != ConfigId::A || r.outcome != Outcome::Failed || !unchanged())
             {
                 v.push(format!(
                     "{tag}: no_artifact must be an A trial, outcome failed, with an unchanged workspace"

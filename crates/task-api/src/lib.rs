@@ -121,8 +121,9 @@ pub use tree::MAX_TEXT_BYTES;
 pub use types::{
     AnswerBody, ApiConfigView, ArtifactList, ArtifactView, CancelBody, ClusterConfigView,
     ClusterConnectCodeBody, ClusterConnectResult, ClusterConnectStart, ClusterForwardView,
-    ClusterSettingsPutBody, ClusterSettingsView, ClusterView, Clusters, ConfigView, DaemonView,
-    DbInfo, DecisionBody, DeliveryHead, DeliveryList, EventsPage, GenreConfigView, Health, Problem,
+    ClusterSettingsPutBody, ClusterSettingsView, ClusterView, Clusters, ConfigView,
+    DaemonIdentityView, DaemonView, DbInfo, DecisionBody, DeliveryHead, DeliveryList,
+    EffectiveConfigView, EventsPage, GenreConfigView, Health, Problem,
     RELEASE_NOTES_FIRST_PARENT_LIMIT, ReleaseChanges, ReleaseCommit, ReleaseItem, ReleaseNoteChild,
     ReleaseNoteCommit, ReleaseNoteConfig, ReleaseNoteFile, ReleaseNoteGateSkip, ReleaseNoteSchema,
     ReleaseNoteTask, ReleaseNotes, ReleasePromoteAccepted, ReleasePromotionPreview,

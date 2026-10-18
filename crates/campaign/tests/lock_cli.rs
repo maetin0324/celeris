@@ -23,6 +23,7 @@ use celeris_campaign::{
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
+mod daemon_identity;
 mod preflight_setup;
 
 const K2: &str = "k2-bf-xattr-restart-campaign";
@@ -94,6 +95,7 @@ impl Host for OkHost {
     }
     fn api_get(&self, _: &str, _: &str, path: &str) -> Result<Value, String> {
         Ok(match path {
+            "/api/v1/config" => daemon_identity::matching_daemon_body(),
             "/api/v1/projects/01ABC" => {
                 json!({"project":{"id":"01ABC","auto_integrate":false},"repos":[]})
             }
@@ -227,7 +229,7 @@ fn fx() -> Fx {
         grader_root: root().join("fixtures/grader-private"),
         grade_cases_root: grade,
         a_program: "claude".into(),
-        api_url: Some("http://127.0.0.1:8080".into()),
+        api_url: Some("http://127.0.0.1:7701".into()),
         token_env: Some("CELERIS_CAMPAIGN_TOKEN".into()),
         task_template: Some(d.join("task-template.json")),
         repo_src: Some(repo),

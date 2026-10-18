@@ -18,7 +18,7 @@ use crate::{
     cases::{CaseKind, CaseSet},
     celeris_exec::{Transport, check_template},
     curl_transport::{CurlTransport, validate_target},
-    dryrun,
+    dryrun, env_check,
     executor::Executor,
     grader::GradeCase,
     harness_exec, inputs,
@@ -206,6 +206,8 @@ pub struct MeasureEnv {
     pub canaries: PathBuf,
     /// 再開時の既存 out dir。在れば中の全 file を禁止 canary で走査する。
     pub out: Option<PathBuf>,
+    /// launcher が起動した測定 daemon の PID。`GET /config` の `identity.pid` と一致しなければ拒否する。
+    pub daemon_pid: Option<u32>,
 }
 
 impl Inputs {
@@ -424,7 +426,7 @@ fn run_checks(a: &mut Acc, m: &CampaignManifest, inp: &Inputs, host: &dyn Host) 
     // 5/6. 候補構成・認証/環境。
     check_candidates(a, m, inp, host);
     check_snapshot_src(a, m, inp);
-    check_measure_env(a, m, inp);
+    check_measure_env(a, m, inp, host);
     if let Some(out) = inp.measure.as_ref().and_then(|me| me.out.as_deref()) {
         check_trial_state(a, m, inp, out);
     }
@@ -453,7 +455,7 @@ fn run_checks(a: &mut Acc, m: &CampaignManifest, inp: &Inputs, host: &dyn Host) 
 }
 
 /// P0-3: 測定専用構成・A/B/C の試行用 KB の同一性・canary。
-fn check_measure_env(a: &mut Acc, m: &CampaignManifest, inp: &Inputs) {
+fn check_measure_env(a: &mut Acc, m: &CampaignManifest, inp: &Inputs, host: &dyn Host) {
     a.checked.push("measure-env");
     let Some(me) = &inp.measure else {
         a.miss(
@@ -464,6 +466,21 @@ fn check_measure_env(a: &mut Acc, m: &CampaignManifest, inp: &Inputs) {
     };
     for e in measure_env::check_config(&me.config, &me.normal_config, inp.kb_src.as_deref()) {
         a.miss("measure-env", e);
+    }
+    // 接続先 daemon が測定 config で起動したその daemon か（api-url は config から導いた値と一致必須）。
+    a.checked.push("env-check");
+    match (&inp.api_url, &inp.token_env) {
+        (Some(url), Some(tok))
+            if !url.contains('@')
+                && validate_target(url, tok).is_ok()
+                && host.env_nonempty(tok) =>
+        {
+            for e in env_check::check_identity(me, m, url, tok, host) {
+                a.miss("env-check", e);
+            }
+        }
+        // 欠落・不正形式は auth-env が報告済み。
+        _ => {}
     }
     let Some(can) = a.res("measure-env", measure_env::Canaries::load(&me.canaries)) else {
         return;

@@ -38,13 +38,26 @@
     "provenance": {
       "source_bundle": "p0-fix.bundle",
       "bundle_sha256": "f8b67ddb437a165b3fbb0577863aade76c669f6b39db65c50fcb95c0e3cba111",
-      "fetch": "git clone <bundle> bf && git -C bf archive --format=tar <initial_commit> > k2-initial.tar"
+      "fetch": "git clone <bundle> bf && git -C bf archive --format=tar <initial_commit> > k2-initial.tar",
+      "portability_unverified": "隠し試験は 60d19a1 上で書かれた。初期 commit 086c4618 へ k2-fix.patch（known_good）を当てた tree で host 実走 ok（無 LLM、2026-10-18）。086c4618 のみ（by-ID 経路なし）では落ちる = 既知欠陥 k2-byid-xattr-missing"
     },
     "pass_values": {
       "checkRead": 1,
       "rc": 0,
       "size_after_restart_equals_written": true
     },
-    "portability_unverified": "隠し試験は 60d19a1 上で書かれた。初期 commit へ移植して pre-fix で落ち fix で通るかは Sirius で未確認。移植できなければ restart_read 実験だけで判定する"
+    "portability_unverified": "隠し試験は 60d19a1 上で書かれた。初期 commit へ移植して pre-fix で落ち fix で通るかは Sirius で未確認。移植できなければ restart_read 実験だけで判定する",
+    "known_good": {
+      "measurement_id": "k2-known-good-v2",
+      "supersedes": "k2-known-good-v1（086c4618 + p0-final.patch のみ。by-ID 経路 handlers.rs が欠け host で Fail）",
+      "base_commit": "086c4618e2a4d94ea56da78ceeed0f8d6d568d67",
+      "asset_file": "k2-fix.patch",
+      "asset_sha256": "6fc5d09a880ce405f4f81cbbf559df2b2bcf191946e14040c05705de63d22773",
+      "series": [
+        "p0-xattr-path.patch (535f72d2, src/rpc/handlers.rs の by-ID synthetic path 経路。sha256 9f2c996b…)",
+        "p0-final.patch (54f2ad2b, src/rpc/metadata_ops.rs。sha256 7226b7fb…)"
+      ],
+      "sirius_equivalent": "metadata_ops.rs は e4c8e77d と同一 blob（前像 f833fe3 → 後像 18cf7ee）。handlers.rs の by-ID 経路を足して Sirius の lookup 回帰試験と同じ挙動"
+    }
   }
 }

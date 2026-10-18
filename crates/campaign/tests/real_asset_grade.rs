@@ -693,6 +693,12 @@ fn real_k2_assets_build_and_grade_known_bad_and_known_good() {
         "known-good patch missing: {}",
         patch.display()
     );
+    // known-good は測定 ID k2-known-good-v2 の定義（private.json の known_good）に固定する。
+    assert_eq!(
+        sha(&patch),
+        "6fc5d09a880ce405f4f81cbbf559df2b2bcf191946e14040c05705de63d22773",
+        "known-good patch が private.json の known_good（k2-known-good-v2）と違う"
+    );
     let t = tempfile::tempdir().expect("tmp");
     let bad = t.path().join("bad");
     assemble_k2(Path::new(&dir), &bad);
@@ -706,6 +712,13 @@ fn real_k2_assets_build_and_grade_known_bad_and_known_good() {
             .contains("fn lookup_metadata")
     };
     assert!(!mark(&bad) && mark(&good), "正負 tree の印が逆");
+    // by-ID synthetic path の xattr 経路（handlers.rs）は known-good だけにある（Sirius で ok の tree と同じ内容）。
+    let byid = |p: &Path| {
+        fs::read_to_string(p.join("src/rpc/handlers.rs"))
+            .expect("handlers.rs")
+            .contains("FileId::compute_path_hash(path)")
+    };
+    assert!(!byid(&bad) && byid(&good), "by-ID 経路の印が逆");
     // 初期 tree は optional な rrrpc を cfg なしで使う → 評価 command が transport-locusta を有効にしていること。
     let cargo = fs::read_to_string(bad.join("Cargo.toml")).expect("Cargo.toml");
     assert!(

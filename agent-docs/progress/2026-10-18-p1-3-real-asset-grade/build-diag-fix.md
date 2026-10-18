@@ -6,6 +6,8 @@ completed: 2026-10-18
 ---
 # build-diag-fix: benchfs lib test の compile error（host-build2）の原因と修正
 
+> 注（履歴）: 本書の実走は旧 known-good（p0-final.patch 単独）で、原因は by-ID 経路の欠落（tree 側）だった。最新結論は `../2026-10-18-p1-3-known-good-fix.md`（k2-fix.patch, k2-known-good-v2）。
+
 ## 原因
 - **K2 の評価 command（`cargo test --release --lib -- <隠しテスト>`）が `--features transport-locusta` を有効にしていなかった。**
   初期 commit 086c4618 の benchfs は、optional な依存 `rrrpc`（`lib/locusta/rrrpc`、`transport-locusta = ["dep:rrrpc", "dep:mlx5"]`）を

@@ -68,3 +68,10 @@ git diff -- src/rpc/handlers.rs src/rpc/metadata_ops.rs > k2-fix.patch && sha256
 - 失敗した tree は known-good（086c4618 + p0-final.patch）。known-bad 側は期待どおり Fail。env_failure は 2 回とも false で、環境不良ではなく tree 側の原因だった。
 - **known-good-fix（§2・§3）後の operator 再実走（k2-fix.patch 配置 + `--build`）の出力は、この WU の時点でまだ回答に届いていない。** よって K2 known-good Pass / known-bad model_failure を host で確認した、とは記録しない。K2 実 build 正負例の host 判定は **未成立（未実走）**。本 run の worktree 検証（§3、84.7 秒 ok）は host の `--build` 実走の代わりにならない。
 - 次の手順: §4 の手順で operator が `--build` を再実走し、exit・known-bad/known-good の結果（落ちたら failure_class と tree）をこの節の表の行 3 に追記する。exit 0 なら実経路確認済みに格上げする。
+
+## 7. 対象環境（host, 作業 3 の task 01M57B1FTG…）での再確認
+- 配置済み `/local/celeris/data/campaign-assets/k2/k2-fix.patch` の sha256 = `6fc5d09a…2773`（期待と一致）。`SHA256SUMS` にも同 hash の行があり `sha256sum -c` 相当の snapshot 完全性は全 6 件 OK。
+- 実行 commit: aaee85d8（main）上の本 branch。コマンド: `CAMPAIGN_K2_FIX_PATCH=$A/k2-fix.patch CAMPAIGN_K4_TGZ=…/cmp4/raw/main-v3-n2-43706.tgz sh crates/campaign/scripts/verify-real-assets.sh $A --build` → **exit 0**。
+  - real_k2_snapshots_complete_before_build ok、real_k4_raw_recompute_matches_the_grader ok（K4 実 raw 再計算）、real_k2_assets_build_and_grade_known_bad_and_known_good ok（known-bad Fail / known-good Pass、207 秒）。
+- 区別: 実経路確認済み（host 実走 exit 0）。grader は緩めていない（コード変更なし）。実 LLM 未使用。
+- 正解 patch は asset store（grader 私有）にあり、試行への公開入力へは配送されない（変更なし）。

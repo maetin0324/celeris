@@ -6,6 +6,8 @@ completed: 2026-10-18
 ---
 # host-final-record: 修正後 commit の operator host 実走結果（cap-probe・--build）
 
+> 注（履歴）: 本書の実走は旧 known-good（p0-final.patch 単独）で、原因は by-ID 経路の欠落（tree 側）だった。最新結論は `../2026-10-18-p1-3-known-good-fix.md`（k2-fix.patch, k2-known-good-v2）。
+
 決定 host-rerun の回答（operator、commit 82d15134 = 0111c06c 以降、無 LLM・job 投入なし）をそのまま記録する。
 コード・grader は変えていない。キー・認証材料は記録していない。**K2 の正負例は成立していない**（下記）。
 

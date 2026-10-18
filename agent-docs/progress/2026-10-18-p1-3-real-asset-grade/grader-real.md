@@ -6,6 +6,8 @@ completed: 2026-10-18
 ---
 # grader-real: K2 実資産の正負例 grader 検証と K4 実 raw 再計算
 
+> 注（履歴）: 本書の実走は旧 known-good（p0-final.patch 単独）で、原因は by-ID 経路の欠落（tree 側）だった。最新結論は `../2026-10-18-p1-3-known-good-fix.md`（k2-fix.patch, k2-known-good-v2）。
+
 ## 変更
 - `crates/campaign/src/grader.rs`: `CheckResult.env_failure` と `GradeReport.failure_class`（`model_failure` / `env_failure`、不合格時のみ）。
   env_failure = grader 側 asset（pristine/隠しテスト）の欠落・改変、評価 command が起動不能、出力に build 環境不良の印

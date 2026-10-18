@@ -15,7 +15,7 @@ updated: 2026-10-18
 | 〃 cap env 実値（UCX prefix・sirius 管理 socket） | host 側の承認が要る | 承認待ち（実値の承認・提供なし。値は記録しない） | cap-runbook §0 |
 | grader-real | env/model 失敗の分離、K2 正負例・K4 再計算の script と試験 | 実装済み・無 LLM 検証済み（fixture 9 件。実 asset で組立・lock・patch・K4 再計算 ok） | 2026-10-18-p1-3-real-asset-grade/grader-real.md |
 | 〃 K2 実 build の正負例 | async-ucx 入れ子 submodule 欠落で env_failure 停止 | 未検証（asset 追加と `--build` の人の実行証拠が未提供） | cap-runbook §2 |
-| 〃 known-good patch（p0-final.patch）の asset store 配置 | 無い | 承認待ち（配置の承認・証拠なし） | cap-runbook §2 |
+| 〃 known-good patch（k2-fix.patch, k2-known-good-v2）の asset store 配置 | 配置済み・hash 一致（2026-10-18） | 確認済み | cap-runbook §2 |
 | k2-scope | K2 の judged_scope、報告の主張制限 | 実装済み・無 LLM 検証済み（`k2_scope` 6 件） | 2026-10-18-p1-3-real-asset-grade/k2-scope.md |
 | close | cap-runbook・本記録・全体検査 | 実装済み | 本 dir |
 | Sirius 接続到達確認 | `ssh -O check` のみ | 未検証（人の実行証拠が未提供。exit・出力要点なし） | cap-runbook §3 |
@@ -33,7 +33,7 @@ K2 の成功は「実装と実験の判定を通った」ことだけを意味�
 
 ## 本番への移行
 - 本 task は本番 host・config・release・DB を変更していない。
-- 人が行うこと: cap-runbook §0〜§3（cap env の承認と作成、実 A sandbox での cap-probe、asset store への入れ子 submodule と p0-final.patch の追加と lock 固定、`verify-real-assets.sh --build`、Sirius 接続確認）。
+- 人が行うこと: cap-runbook §0〜§3（cap env の承認と作成、実 A sandbox での cap-probe、asset store への入れ子 submodule と k2-fix.patch の追加（配置済み）と lock 固定、`verify-real-assets.sh --build`、Sirius 接続確認）。
 - 本測定の開始は別途の承認（新しい測定 ID で campaign lock を作り直す）。
 
 ## 全体検査

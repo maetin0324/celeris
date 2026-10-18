@@ -11,7 +11,7 @@ updated: 2026-10-18
 有料ジョブ・本測定・LLM 呼出しは起動していない。旧 pilot の結果は使っていない。
 
 ## 1. verify-real-assets.sh（build なし）
-- 実行: `CAMPAIGN_K2_FIX_PATCH=<p0-final.patch> CAMPAIGN_K4_TGZ=<main-v3-n2-43706.tgz> sh crates/campaign/scripts/verify-real-assets.sh /local/celeris/data/campaign-assets/k2`
+- 実行: `CAMPAIGN_K2_FIX_PATCH=/local/celeris/data/campaign-assets/k2/k2-fix.patch> CAMPAIGN_K4_TGZ=<main-v3-n2-43706.tgz> sh crates/campaign/scripts/verify-real-assets.sh /local/celeris/data/campaign-assets/k2`
 - 結果: exit 0。SHA256SUMS 5 件 OK（bundle・ior・locusta・pluvio・async-ucx）、`real_k2_snapshots_complete_before_build` ok、
   `real_k2_assets_build_and_grade_known_bad_and_known_good`（build なし: 正負 tree の印と patch 適用）ok、`real_k4_raw_recompute_matches_the_grader` ok。
 - 本 WU の修正後（lock 5 件）に同じ command を再実行して exit 0（上と同じ 3 test ok）。

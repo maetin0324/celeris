@@ -2,8 +2,9 @@
 //!
 //! case の `required_capabilities` を、A が実際に使う sandbox（`Sandbox::wrap_resolved`）で包んで走らせる。
 //! B/C は Celeris worker の実起動関数（`task_worker::FakeAdapter` → `run_subprocess`）に「LLM を呼ばない
-//! 能力 probe run」を通し、daemon 設定の `[worker]` env・PATH で起こした子 process の中で確かめる
-//! （`probe_worker`）。`CapEnv.worker` は daemon 設定と照合する期待値で、配送ではない。
+//! 能力 probe run」を通し、測定専用 daemon の PATH・env で起こした子 process の中で確かめる
+//! （`probe_worker`）。環境は検査先の測定専用 daemon process から（`WorkerDaemonEnv::from_daemon_pid`）取り、
+//! この CLI の環境は使わない。`CapEnv.worker` は daemon の環境と照合する期待値で、配送ではない。
 //! 不足は環境不良（`env_failure`）で、モデル失敗とは別に扱う。有料呼び出しは 0 件。
 use std::{
     path::{Path, PathBuf},
@@ -329,6 +330,8 @@ pub struct ProbeReport {
     pub failure_class: Option<&'static str>,
     /// 常に 0（LLM も job 投入もしない）。
     pub paid_calls_made: u32,
+    /// B/C: 検査先の測定専用 daemon の識別（A は None）。
+    pub daemon: Option<DaemonRef>,
     pub results: Vec<CapResult>,
 }
 
@@ -459,33 +462,93 @@ pub fn probe(
         ok,
         failure_class: (!ok).then_some(ENV_FAILURE),
         paid_calls_made: 0,
+        daemon: None,
         results,
     }
 }
 
-/// daemon 設定の `[worker]` が worker 子 process に渡す PATH と env。`CapEnv.worker` の期待値と照合する
-/// 対象で、probe は同じ値で子 process を起こす（campaign はこれを worker に配送しない）。
+/// 測定専用 daemon の worker 環境（daemon process が持つ PATH と、期待 toolchain が名指す変数）。probe は
+/// 同じ値だけで子 process を起こす（CLI 自身の環境は使わない）。campaign はこれを worker に配送しない。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct WorkerDaemonEnv {
     pub path: Option<String>,
     pub env: Vec<(String, String)>,
+    /// 検査先の daemon（`from_daemon_pid` が埋める。報告に残す識別）。
+    pub source: Option<DaemonRef>,
 }
 
+/// 検査先 daemon の識別。秘密を含まない（pid・開始時刻・identity が答えた instance/release）。
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct DaemonRef {
+    pub pid: u32,
+    /// `/proc/<pid>/stat` の starttime（pid 再利用の区別）。
+    pub starttime: u64,
+    pub instance_id: Option<String>,
+    pub release: Option<String>,
+}
+
+/// 子 process の環境に持ち込んでよい、daemon の非秘密変数（ホーム・言語・端末）。期待 toolchain が名指す
+/// 変数と PATH に加えて、daemon の値をそのまま写す。それ以外（token・credential 等）は一切写さない。
+const DAEMON_ENV_ALLOW: &[&str] = &["HOME", "LANG", "LC_ALL", "TERM", "USER", "LOGNAME"];
+
 impl WorkerDaemonEnv {
-    /// この process の環境から、期待 `worker` toolchain が名指す変数だけを写す。daemon と同じ
-    /// `EnvironmentFile` で起動した前提（変数が無ければ `env` に入らず、照合で食い違いになる）。
-    pub fn from_process(expected: &Toolchain) -> Self {
-        let env = expected
-            .env
-            .iter()
-            .filter(|(k, _)| k != "PATH")
-            .filter_map(|(k, _)| std::env::var(k).ok().map(|v| (k.clone(), v)))
-            .collect();
-        Self {
-            path: std::env::var("PATH").ok(),
-            env,
+    /// 測定専用 daemon の process（`/proc/<pid>/environ`）から、PATH・期待 toolchain が名指す変数・
+    /// `DAEMON_ENV_ALLOW` だけを取り出す。環境全体は保持も記録もしない（他の変数は読んだ buffer ごと捨てる）。
+    /// CLI 自身の環境は見ない。pid が測定 daemon のものであることは呼び出し側が identity 照合で保証する。
+    pub fn from_daemon_pid(pid: u32, expected: &Toolchain) -> Result<Self, String> {
+        let environ = std::fs::read(format!("/proc/{pid}/environ"))
+            .map_err(|e| format!("daemon pid {pid}: cannot read its worker environment: {e}"))?;
+        let starttime = proc_starttime(pid)?;
+        let want = |k: &str| {
+            k == "PATH"
+                || DAEMON_ENV_ALLOW.contains(&k)
+                || expected.env.iter().any(|(ek, _)| ek == k)
+        };
+        let (mut path, mut env) = (None, Vec::new());
+        for kv in environ.split(|b| *b == 0).filter(|x| !x.is_empty()) {
+            let Some(eq) = kv.iter().position(|b| *b == b'=') else {
+                continue;
+            };
+            let (Ok(k), Ok(v)) = (
+                std::str::from_utf8(&kv[..eq]),
+                std::str::from_utf8(&kv[eq + 1..]),
+            ) else {
+                continue;
+            };
+            if !want(k) {
+                continue;
+            }
+            if k == "PATH" {
+                path = Some(v.to_string());
+            } else {
+                env.push((k.to_string(), v.to_string()));
+            }
         }
+        Ok(Self {
+            path,
+            env,
+            source: Some(DaemonRef {
+                pid,
+                starttime,
+                instance_id: None,
+                release: None,
+            }),
+        })
     }
+}
+
+/// `/proc/<pid>/stat` の starttime（22 番目の欄。comm に空白・括弧が入るので最後の `)` の後を数える）。
+fn proc_starttime(pid: u32) -> Result<u64, String> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat"))
+        .map_err(|e| format!("daemon pid {pid}: {e}"))?;
+    let rest = stat
+        .rsplit_once(')')
+        .map(|(_, r)| r)
+        .ok_or_else(|| format!("daemon pid {pid}: unreadable /proc stat"))?;
+    rest.split_whitespace()
+        .nth(19)
+        .and_then(|x| x.parse().ok())
+        .ok_or_else(|| format!("daemon pid {pid}: no starttime in /proc stat"))
 }
 
 fn sh_quote(s: &str) -> String {
@@ -606,6 +669,7 @@ pub fn probe_worker(
         ok,
         failure_class: (!ok).then_some(ENV_FAILURE),
         paid_calls_made: 0,
+        daemon: daemon.source.clone(),
         results,
     }
 }
@@ -632,10 +696,22 @@ fn run_worker_script(
     let results_dir = workspace.join("artifacts").join("cap-probe");
     let _ = std::fs::remove_dir_all(&results_dir);
     std::fs::create_dir_all(&results_dir).map_err(|e| format!("{}: {e}", results_dir.display()))?;
+    // 各検査は `env -i` で daemon の環境だけにする（この CLI process の環境が子に残って、daemon に無い変数・
+    // PATH の道具を「ある」ことにしない）。
+    let mut denv: Vec<String> = daemon
+        .env
+        .iter()
+        .map(|(k, v)| sh_quote(&format!("{k}={v}")))
+        .collect();
+    if let Some(p) = &daemon.path {
+        denv.push(sh_quote(&format!("PATH={p}")));
+    }
+    let denv = denv.join(" ");
     let mut script = String::from("cat >/dev/null\nd=\"$1\"\n");
     for (i, (_, cmd, _)) in checks.iter().enumerate() {
         script.push_str(&format!(
-            "( {cmd} ) >\"$d/{i}.out\" 2>/dev/null </dev/null; echo $? >\"$d/{i}.code\"\n"
+            "( /usr/bin/env -i {denv} /bin/sh -c {} ) >\"$d/{i}.out\" 2>/dev/null </dev/null; echo $? >\"$d/{i}.code\"\n",
+            sh_quote(cmd)
         ));
     }
     script.push_str("echo '{\"type\":\"done\",\"summary\":\"cap-probe\",\"evidence\":[]}'\n");

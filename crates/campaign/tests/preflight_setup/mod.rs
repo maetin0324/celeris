@@ -294,5 +294,6 @@ pub fn fake_worker_daemon() -> celeris_campaign::cap_probe::WorkerDaemonEnv {
     celeris_campaign::cap_probe::WorkerDaemonEnv {
         path: Some(format!("{}:/usr/bin:/bin", dir.display())),
         env: vec![],
+        source: None,
     }
 }

@@ -11,6 +11,7 @@ use celeris_campaign::{
 };
 use serde_json::{Value, json};
 
+mod daemon_identity;
 mod preflight_setup;
 use preflight_setup::*;
 
@@ -248,21 +249,29 @@ impl Host for StubHost {
         })
     }
     fn api_get(&self, _: &str, _: &str, path: &str) -> Result<Value, String> {
-        Err(format!("GET {path}: no api in this test"))
+        match path {
+            "/api/v1/config" => Ok(daemon_identity::matching_daemon_body()),
+            _ => Err(format!("GET {path}: no api in this test")),
+        }
     }
     fn sandbox_usable(&self) -> Result<(), String> {
         Ok(())
     }
-    fn worker_daemon_env(&self, _: &Toolchain) -> cap_probe::WorkerDaemonEnv {
-        if self.0 {
+    fn worker_daemon_env(
+        &self,
+        _: &Toolchain,
+        _: u32,
+    ) -> Result<cap_probe::WorkerDaemonEnv, String> {
+        Ok(if self.0 {
             fake_worker_daemon()
         } else {
             // 何も解決できない PATH（socket も道具も無い worker）。
             cap_probe::WorkerDaemonEnv {
                 path: Some("/nonexistent-cap-probe".into()),
                 env: vec![],
+                source: None,
             }
-        }
+        })
     }
     fn probe_runner(&self) -> Box<dyn ProbeRunner> {
         if self.0 {
@@ -344,6 +353,7 @@ fn daemon(dir: &Path, env: Vec<(String, String)>) -> cap_probe::WorkerDaemonEnv 
     cap_probe::WorkerDaemonEnv {
         path: Some(format!("{}:/usr/bin:/bin", dir.display())),
         env,
+        source: None,
     }
 }
 
@@ -418,6 +428,7 @@ fn worker_probe_missing_toolchain_is_env_failure_per_arm() {
         &cap_probe::WorkerDaemonEnv {
             path: Some(empty.display().to_string()),
             env: vec![],
+            source: None,
         },
         ConfigId::C,
         ws.path(),

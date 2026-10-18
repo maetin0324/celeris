@@ -16,7 +16,7 @@ completed: 2026-10-18
 - 4 件すべて exit 0。出力は operator の artifacts/host-cap3-{a,b,c,k4}.json。
 - K2 arm a: ok=true。cc・c++・cmake・git・ucx-pkg・min-build-ucx・min-build-cmake・autotools・libclang・**rdma-verbs**・sirius-link の 11 能力すべて ok。
 - **rdma-verbs: ok**（不足なし）。前回審査が指摘した「82d15134 で追加された rdma-verbs の実走記録が無い」は、この実走で解消。
-- 注意: B/C は A と同じローカル sandbox を probe が走らせた記録であり、実 task-api worker 環境への toolchain/socket 伝搬の確認ではない（前回審査の指摘は本実走でも未解消）。
+- 注意: この実走時点の B/C は A と同じローカル sandbox を probe が走らせた記録で、worker 環境の確認ではなかった。現在の B/C probe は測定専用 daemon の process から環境を取る別経路（ADR 2026-10-18-bc-probe-daemon-env）。この記録を B/C の実経路証拠に使わない。
 
 ## 2. verify-real-assets.sh --build
 - exit **101**（FAILED）。全文は operator の artifacts/host-build3.log。
@@ -32,7 +32,7 @@ completed: 2026-10-18
 ## 3. 区分
 | 項目 | 区分 |
 |---|---|
-| 必要能力 11 種（rdma-verbs 含む）の cap-probe、A sandbox 同一経路（K2 a/b/c、K4 a） | **実経路確認済み**（B/C は A と同じローカル sandbox 上の probe。task-api worker 環境そのものは未検証）。Rust の最小版比較（rustc-min）と transport-locusta 最小ビルド（min-build-locusta）は case に追加済みで、host 実走は未実施。ビルド場所はローカル host、sirius は接続確認のみ |
+| 必要能力 11 種（rdma-verbs 含む）の cap-probe、A sandbox 同一経路（K2 a/b/c、K4 a） | **実経路確認済み**（A のみ。B/C の worker 環境 probe は ADR 2026-10-18-bc-probe-daemon-env の経路で、測定専用 daemon が起動した host での再実走が要る）。Rust の最小版比較（rustc-min）と transport-locusta 最小ビルド（min-build-locusta）は case に追加済みで、host 実走は未実施。ビルド場所はローカル host、sirius は接続確認のみ |
 | 初期 tree の build（transport-locusta）、asset snapshot 完全性、K4 実 raw 再計算 | **実経路確認済み**（host 実走 ok） |
 | K2 known-good が Pass、known-bad が model_failure | **未成立 / 未検証**。known-good が FAILED（env_failure=false）。known-bad の failure_class は回答に無く未確認 |
 | known-good tree の同一性（086c4618 + p0-final.patch か、Sirius で ok だった e4c8e77d か） | **未検証**（要確認） |

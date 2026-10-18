@@ -38,6 +38,15 @@ struct Env {
     project_id: String,
     stub: PathBuf,
     campaign_id: String,
+    /// 測定 daemon の代役の実 process。worker 環境（PATH）はこの process から取られる。CLI の PATH とは別。
+    daemon: Child,
+}
+
+impl Drop for Env {
+    fn drop(&mut self) {
+        let _ = self.daemon.kill();
+        let _ = self.daemon.wait();
+    }
 }
 
 fn write_executable(path: &Path, contents: &str) {
@@ -87,6 +96,27 @@ exec /bin/sh "$@"
 
 async fn env() -> Env {
     let s = setup();
+    let worker_path = format!(
+        "{}:/usr/local/bin:/usr/bin:/bin",
+        s.dir.path().join("cap-tools").display()
+    );
+    let daemon = Command::new("/bin/sleep")
+        .arg("600")
+        .env_clear()
+        .env("PATH", &worker_path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    // exec 直後は /proc/<pid>/environ がまだ空のことがある。出来事を待つ。
+    for _ in 0..2000 {
+        let b = fs::read(format!("/proc/{}/environ", daemon.id())).unwrap_or_default();
+        if String::from_utf8_lossy(&b).contains("PATH=") {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
     let acct = tempfile::tempdir().unwrap();
     let lab = acct.path().join("lab");
     fs::create_dir_all(&lab).unwrap();
@@ -116,6 +146,7 @@ async fn env() -> Env {
     let text = fs::read_to_string(&measure).unwrap();
     fs::write(&measure, text.replace("127.0.0.1:7701", &addr)).unwrap();
     st.config_view = daemon_config_view(&measure, MEASURE_RELEASE);
+    st.config_view.identity.pid = daemon.id();
     api.state = task_api::ApiState::new(st, api.daemon_tx.subscribe()).unwrap();
     let created = send(
         &api.router(),
@@ -187,19 +218,13 @@ async fn env() -> Env {
         project_id,
         stub,
         campaign_id,
+        daemon,
     }
 }
 
 impl Env {
     fn out(&self) -> PathBuf {
         self.s.inp.measure.as_ref().unwrap().out.clone().unwrap()
-    }
-
-    fn worker_path(&self) -> String {
-        format!(
-            "{}:/usr/local/bin:/usr/bin:/bin",
-            self.s.dir.path().join("cap-tools").display()
-        )
     }
 
     fn state_root(&self) -> PathBuf {
@@ -237,16 +262,15 @@ impl Env {
             .args(["--token-env", "CELERIS_E2E_TOKEN"])
             .arg("--task-template")
             .arg(d.join("task-template.json"))
-            .args(["--daemon-pid", &preflight_setup::DAEMON_PID.to_string()])
+            .args(["--daemon-pid", &self.daemon.id().to_string()])
             .arg("--measure-config")
             .arg(d.join("measure.toml"))
             .arg("--normal-config")
             .arg(d.join("normal.toml"))
             .arg("--canaries")
             .arg(d.join("canaries.json"))
-            .env("CELERIS_E2E_TOKEN", TOKEN)
-            // B/C の probe は daemon 設定の PATH を見る。cap env の worker PATH と同じ値で起動する。
-            .env("PATH", self.worker_path());
+            // CLI の PATH は worker の PATH と別（B/C の probe は daemon process の環境を見る）。
+            .env("CELERIS_E2E_TOKEN", TOKEN);
         c
     }
 

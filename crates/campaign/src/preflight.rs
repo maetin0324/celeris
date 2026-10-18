@@ -50,13 +50,14 @@ pub trait Host {
     fn api_get(&self, api_url: &str, token_env: &str, path: &str) -> Result<Value, String>;
     /// A の隔離（bwrap）がこの host で実際に動くか。
     fn sandbox_usable(&self) -> Result<(), String>;
-    /// B/C の probe が子 process を起こす daemon 設定の `[worker]` PATH・env。既定はこの process の環境
-    /// （daemon と同じ EnvironmentFile で起動した前提）。試験は fake program の PATH を返す。
+    /// B/C の probe が子 process を起こす、測定専用 daemon（identity 照合済みの `pid`）の worker 環境。
+    /// 既定はその process の PATH・期待 toolchain の変数だけ（この CLI の環境は使わない）。
     fn worker_daemon_env(
         &self,
         expected: &crate::harness_exec::Toolchain,
-    ) -> crate::cap_probe::WorkerDaemonEnv {
-        crate::cap_probe::WorkerDaemonEnv::from_process(expected)
+        pid: u32,
+    ) -> Result<crate::cap_probe::WorkerDaemonEnv, String> {
+        crate::cap_probe::WorkerDaemonEnv::from_daemon_pid(pid, expected)
     }
     /// A の cap-probe の実行器。既定は実 bwrap（試験は stub を返す）。
     fn probe_runner(&self) -> Box<dyn crate::cap_probe::ProbeRunner> {
@@ -261,12 +262,25 @@ pub struct Report {
     pub failure_class: Option<&'static str>,
     /// 検査した A の実行ファイルと版。`run` はこれと同じものを起動する。
     pub a_program: Option<ResolvedProgram>,
+    /// B/C の能力 probe の検査先 daemon（case・arm ごと）。
+    pub probe_targets: Vec<ProbeTarget>,
 }
 
 struct Acc {
     checked: Vec<&'static str>,
     missing: Vec<Missing>,
     a_program: Option<ResolvedProgram>,
+    probe_targets: Vec<ProbeTarget>,
+    /// 接続先 daemon の同一性照合の結果（preflight 中 1 回だけ GET して、env-check と B/C probe で共有する）。
+    identity: Option<Result<crate::cap_probe::DaemonRef, Vec<String>>>,
+}
+
+/// B/C の能力 probe を実際に走らせた検査先 daemon の識別（case・arm ごと。秘密を含まない）。
+#[derive(Clone, Debug, Serialize)]
+pub struct ProbeTarget {
+    pub case: String,
+    pub arm: ConfigId,
+    pub daemon: crate::cap_probe::DaemonRef,
 }
 
 impl Acc {
@@ -322,6 +336,8 @@ pub fn check(inp: &Inputs, host: &dyn Host) -> Report {
         checked: Vec::new(),
         missing: Vec::new(),
         a_program: None,
+        probe_targets: Vec::new(),
+        identity: None,
     };
     let mut sha = None;
     if let Some(m) = a.res("manifest", CampaignManifest::load(&inp.manifest_path)) {
@@ -341,6 +357,7 @@ pub fn check(inp: &Inputs, host: &dyn Host) -> Report {
             .then_some(crate::cap_probe::ENV_FAILURE),
         missing: a.missing,
         a_program: a.a_program,
+        probe_targets: a.probe_targets,
     }
 }
 
@@ -477,18 +494,11 @@ fn check_measure_env(a: &mut Acc, m: &CampaignManifest, inp: &Inputs, host: &dyn
     }
     // 接続先 daemon が測定 config で起動したその daemon か（api-url は config から導いた値と一致必須）。
     a.checked.push("env-check");
-    match (&inp.api_url, &inp.token_env) {
-        (Some(url), Some(tok))
-            if !url.contains('@')
-                && validate_target(url, tok).is_ok()
-                && host.env_nonempty(tok) =>
-        {
-            for e in env_check::check_identity(me, m, url, tok, host) {
-                a.miss("env-check", e);
-            }
+    // 欠落・不正形式は auth-env が報告済み（verified_identity は None）。
+    if let Some(Err(es)) = verified_identity(a, m, inp, host) {
+        for e in es {
+            a.miss("env-check", e);
         }
-        // 欠落・不正形式は auth-env が報告済み。
-        _ => {}
     }
     let Some(can) = a.res("measure-env", measure_env::Canaries::load(&me.canaries)) else {
         return;
@@ -700,6 +710,13 @@ fn check_capabilities(
         return a.miss("capability", e);
     }
     let runner = host.probe_runner();
+    // B/C の検査先は、identity 照合に通した測定専用 daemon だけ。通らなければ B/C は検査せず env_failure にする。
+    let needs_bc = m.configs.iter().any(|x| x.id != ConfigId::A);
+    let bc_target = if needs_bc {
+        bc_probe_target(a, m, inp, host)
+    } else {
+        None
+    };
     for c in cases {
         for cfg_id in m.configs.iter().map(|x| x.id) {
             let rep = if cfg_id == ConfigId::A {
@@ -711,9 +728,34 @@ fn check_capabilities(
                 );
                 crate::cap_probe::probe(&sb, cfg_id, &ws, &c.case, runner.as_ref())
             } else {
-                let daemon = host.worker_daemon_env(&env.worker);
+                let Some(target) = bc_target.as_ref() else {
+                    continue;
+                };
+                let daemon = match host.worker_daemon_env(&env.worker, target.pid) {
+                    Ok(mut d) => {
+                        d.source = Some(crate::cap_probe::DaemonRef {
+                            starttime: d.source.as_ref().map_or(0, |s| s.starttime),
+                            ..target.clone()
+                        });
+                        d
+                    }
+                    Err(e) => {
+                        a.miss(
+                            "capability",
+                            format!("{} arm {:?}: worker-env: {e}", c.case.id, cfg_id),
+                        );
+                        continue;
+                    }
+                };
                 crate::cap_probe::probe_worker(&env, &daemon, cfg_id, &ws, &c.case)
             };
+            if let Some(d) = &rep.daemon {
+                a.probe_targets.push(ProbeTarget {
+                    case: c.case.id.clone(),
+                    arm: cfg_id,
+                    daemon: d.clone(),
+                });
+            }
             for r in rep.results.iter().filter(|r| !r.ok) {
                 a.miss(
                     "capability",
@@ -722,6 +764,53 @@ fn check_capabilities(
             }
         }
     }
+}
+
+fn bc_probe_target(
+    a: &mut Acc,
+    m: &CampaignManifest,
+    inp: &Inputs,
+    host: &dyn Host,
+) -> Option<crate::cap_probe::DaemonRef> {
+    if inp.measure.is_none() || inp.api_url.is_none() || inp.token_env.is_none() {
+        a.miss(
+            "capability",
+            "B/C worker probe needs the measurement daemon (--measure-config, --daemon-pid, --api-url, --token-env); the CLI's own environment is not a stand-in",
+        );
+        return None;
+    }
+    // 欠落・不正形式は auth-env が報告済み（None）。
+    match verified_identity(a, m, inp, host)? {
+        Ok(d) => Some(d),
+        Err(es) => {
+            for e in es {
+                a.miss(
+                    "capability",
+                    format!("B/C probe target is not the measurement daemon: {e}"),
+                );
+            }
+            None
+        }
+    }
+}
+
+/// 接続先 daemon の同一性照合（1 回だけ実行して保持する）。測定 config / api 指定が無ければ None。
+fn verified_identity(
+    a: &mut Acc,
+    m: &CampaignManifest,
+    inp: &Inputs,
+    host: &dyn Host,
+) -> Option<Result<crate::cap_probe::DaemonRef, Vec<String>>> {
+    let (Some(me), Some(url), Some(tok)) = (&inp.measure, &inp.api_url, &inp.token_env) else {
+        return None;
+    };
+    if url.contains('@') || validate_target(url, tok).is_err() || !host.env_nonempty(tok) {
+        return None;
+    }
+    if a.identity.is_none() {
+        a.identity = Some(env_check::verify(me, m, url, tok, host));
+    }
+    a.identity.clone()
 }
 
 /// 選んだ問題の外部入力が `--inputs-src` に揃い sha256 が宣言と一致するか、初期 repo の取り込み元があるか。

@@ -6,7 +6,9 @@ updated: 2026-10-18
 ---
 # worker-probe
 
-## 実装
+> 2026-10-18 追補（task 01M57MB8PWVW50KD127M30HEFT）: 下の「daemon 設定の `[worker]` / この process の環境」は旧方式。現行は測定専用 daemon の process から環境を取る（ADR 2026-10-18-bc-probe-daemon-env、progress `2026-10-18-bc-probe-daemon-env.md`）。
+
+## 実装（旧方式の記録）
 - `cap_probe::probe_worker`: B/C の probe を `task_worker::FakeAdapter`（`run_subprocess`）に通す。LLM は呼ばない。検査 script を daemon 設定の PATH・env・cwd（workspace）の子 process で走らせ、`artifacts/cap-probe/<i>.{code,out}` で結果を受ける。campaign が task-worker に依存する。
 - `CapEnv.worker` は配送ではなく daemon 設定（`WorkerDaemonEnv` = `[worker]` の PATH・env）と照合する期待値。env 値の違い・欠落、期待 PATH 要素の欠落は `worker-env` として arm 別 `env_failure`。mount（`test -d`）・socket（`test -S`）・必要能力の欠落も同様。新しい配送 API は無い。
 - A の sandbox probe（`probe`）は変更なし。arm の付け替えはしない。`Host::worker_daemon_env`（既定 = この process の環境。daemon と同じ EnvironmentFile で起動する前提）を追加し、`ProbeRunner` は A 専用になった。

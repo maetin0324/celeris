@@ -160,7 +160,7 @@ fn a_executor(
     }))
 }
 
-/// `cap-probe --case <id> --arm a|b|c --cap-env <json> [--dry-argv]`。LLM も job も使わない。
+/// `cap-probe --case <id> --arm a|b|c --cap-env <json> [--dry-argv]`（b/c は `--manifest --measure-config --daemon-pid --api-url --token-env` も要る）。LLM も job も使わない。
 fn cap_probe_cli(args: &[String]) -> Result<String, String> {
     use celeris_campaign::{cap_probe, cases::CaseSet, manifest::ConfigId};
     let text = |n: &str| arg(args, n).map(|p| p.to_string_lossy().into_owned());
@@ -214,8 +214,28 @@ fn cap_probe_cli(args: &[String]) -> Result<String, String> {
             },
         )
     } else {
-        // B/C は worker の実起動関数で、daemon 設定（この process の環境）の PATH・env の子 process に走らせる。
-        let daemon = cap_probe::WorkerDaemonEnv::from_process(&env.worker);
+        // B/C は測定専用 daemon の process から worker 環境を取り（この CLI の環境は使わない）、
+        // worker の実起動関数でその環境の子 process に走らせる。検査先は identity 照合に通った daemon だけ。
+        let manifest_path =
+            arg(args, "--manifest").ok_or("--manifest <path> is required for b/c")?;
+        let m = CampaignManifest::load(&manifest_path)?;
+        let pi = preflight_inputs(args, &manifest_path);
+        let (me, url, tok) = match (&pi.measure, &pi.api_url, &pi.token_env) {
+            (Some(me), Some(u), Some(t)) => (me, u, t),
+            _ => {
+                return Err(
+                    "b/c need --measure-config, --daemon-pid, --api-url and --token-env: the probe target is the measurement daemon, not this CLI"
+                        .into(),
+                );
+            }
+        };
+        let target = celeris_campaign::env_check::verify(me, &m, url, tok, &RealHost)
+            .map_err(|es| format!("not the measurement daemon: {}", es.join("; ")))?;
+        let mut daemon = preflight::Host::worker_daemon_env(&RealHost, &env.worker, target.pid)?;
+        daemon.source = Some(celeris_campaign::cap_probe::DaemonRef {
+            starttime: daemon.source.as_ref().map_or(0, |s| s.starttime),
+            ..target
+        });
         cap_probe::probe_worker(&env, &daemon, arm, &ws, case)
     };
     let s = serde_json::to_string_pretty(&rep).map_err(|e| e.to_string())?;

@@ -170,28 +170,48 @@ pub fn check_identity(
     token_env: &str,
     host: &dyn Host,
 ) -> Vec<String> {
-    let derived = match derive_api_url(&me.config) {
-        Ok(u) => u,
-        Err(e) => return vec![e],
-    };
+    verify(me, m, api_url, token_env, host)
+        .err()
+        .unwrap_or_default()
+}
+
+/// 同一性照合に通った接続先 daemon の識別（pid・instance・release）。照合は 1 回の GET で行う。
+/// B/C の能力 probe はこの pid の process から worker 環境を取る（pid は identity が答えたもの = launcher 所有）。
+pub fn verify(
+    me: &MeasureEnv,
+    m: &CampaignManifest,
+    api_url: &str,
+    token_env: &str,
+    host: &dyn Host,
+) -> Result<crate::cap_probe::DaemonRef, Vec<String>> {
+    let derived = derive_api_url(&me.config).map_err(|e| vec![e])?;
     if norm_url(api_url) != derived {
-        return vec![format!(
+        return Err(vec![format!(
             "--api-url {api_url} is not the measurement daemon's api origin {derived} (derived from [api] listen of {})",
             me.config.display()
-        )];
+        )]);
     }
-    let body = match host.api_get(api_url, token_env, "/api/v1/config") {
-        Ok(b) => b,
-        Err(e) => return vec![format!("GET /api/v1/config: {e}")],
-    };
-    let cfg: ConfigBody = match serde_json::from_value(body) {
-        Ok(c) => c,
-        Err(e) => {
-            return vec![format!(
-                "GET /api/v1/config has no daemon identity (a daemon without ADR 2026-10-18 D2?): {e}"
-            )];
-        }
-    };
+    let body = host
+        .api_get(api_url, token_env, "/api/v1/config")
+        .map_err(|e| vec![format!("GET /api/v1/config: {e}")])?;
+    let cfg: ConfigBody = serde_json::from_value(body).map_err(|e| {
+        vec![format!(
+            "GET /api/v1/config has no daemon identity (a daemon without ADR 2026-10-18 D2?): {e}"
+        )]
+    })?;
+    let missing = check_body(me, m, &cfg);
+    if !missing.is_empty() {
+        return Err(missing);
+    }
+    Ok(crate::cap_probe::DaemonRef {
+        pid: cfg.identity.pid,
+        starttime: 0,
+        instance_id: Some(cfg.identity.instance_id.clone()),
+        release: Some(cfg.identity.release.clone()),
+    })
+}
+
+fn check_body(me: &MeasureEnv, m: &CampaignManifest, cfg: &ConfigBody) -> Vec<String> {
     let mut v = Vec::new();
     let id = &cfg.identity;
     if id.instance_id.is_empty() {

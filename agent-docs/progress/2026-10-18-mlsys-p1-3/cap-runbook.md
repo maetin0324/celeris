@@ -24,18 +24,27 @@ worker sandbox は userns が使えないため、実 A sandbox 内の実走と�
 - `/`・`/home`・HOME を覆う path・HOME の上書きは拒否される（ホーム全公開・sandbox 無効化の経路は無い）。
 - `/run/celeris-cap/sirius-ssh.sock` は**承認済みの管理接続**（ControlMaster の socket）。人が事前に確立する。鍵・`~/.ssh` は mount しない。UCX prefix・socket path の実値は承認が要る。
 
-## 1. cap-probe を実 A sandbox で実走（A/B/C）
+## 1. cap-probe: A は実 A sandbox、B/C は測定専用 daemon の環境（ADR 2026-10-18-bc-probe-daemon-env）
+A と B/C は**別の経路**を検査する。B/C は A と同じ sandbox / 同じ argv ではない。
+- A: A が実際に使う sandbox（`Sandbox::wrap_resolved`）に probe argv を包んで走らせる。
+- B/C: identity 照合に通った測定専用 daemon の process（`--daemon-pid`）から、PATH・cap env の `worker.env` が名指す変数・非秘密の `HOME/LANG/LC_ALL/TERM/USER/LOGNAME` だけを取り（環境全体は取らない・記録しない）、worker の実起動関数（`FakeAdapter` → `run_subprocess`）で `env -i <その環境>` の子 process に検査を走らせる。この CLI の環境は使わない。daemon の PATH・変数・ro_mounts（`test -d`）・socket（`test -S`）・必要能力の欠落は、該当 arm の `env_failure`（LLM 呼出し前）。報告の `daemon`（pid・starttime・instance_id・release）が検査先の識別。
+
+前提: 測定専用 daemon を launcher で起動済み（`--daemon-pid` は launcher 所有の pid）。
 ```sh
 cd <worktree>
-for arm in a b c; do
-  cargo run -p celeris-campaign -- cap-probe --case k2-bf-xattr-restart-campaign --arm $arm --cap-env $WORK/cap-env.json > $WORK/cap-$arm.json; echo "arm=$arm exit=$?"
-done
+# A（実 sandbox）
+cargo run -p celeris-campaign -- cap-probe --case k2-bf-xattr-restart-campaign --arm a --cap-env $WORK/cap-env.json > $WORK/cap-a.json; echo "arm=a exit=$?"
 cargo run -p celeris-campaign -- cap-probe --case k4-cmp4-validity-analysis --arm a --cap-env $WORK/cap-env.json
-# argv だけ確認（実行しない）: --dry-argv
+# argv だけ確認（A の sandbox argv。実行しない）: --dry-argv
+# B/C（測定専用 daemon の環境。identity 照合つき）
+for arm in b c; do
+  cargo run -p celeris-campaign -- cap-probe --case k2-bf-xattr-restart-campaign --arm $arm --cap-env $WORK/cap-env.json \
+    --manifest <manifest> --measure-config <測定 daemon の config.toml> --normal-config <通常 config> --canaries <canaries.json> \
+    --daemon-pid <launcher の pid> --api-url <測定 daemon の origin> --token-env <ENV名> > $WORK/cap-$arm.json; echo "arm=$arm exit=$?"
+done
 ```
-期待: 各 arm exit 0、JSON `ok: true`、K2 の 13 能力（cc, c++, cmake, git, ucx-pkg, min-build-ucx, min-build-cmake, rustc-min, min-build-locusta, autotools, libclang, rdma-verbs, sirius-link）が全て ok。K4（python3 と stdlib）も ok。
-A と B/C の probe argv（`--dry-argv`）が同一であること（B/C は A と同じ能力を与える設計）。
-不足時: exit 非 0、`failure_class: env_failure`。この場合は LLM 呼出し前に停止（preflight の `capability` check）。ro_mounts / 接続 socket を足して再実行し、sandbox を緩めて通さない。
+期待: 各 arm exit 0、JSON `ok: true`、K2 の 13 能力（cc, c++, cmake, git, ucx-pkg, min-build-ucx, min-build-cmake, rustc-min, min-build-locusta, autotools, libclang, rdma-verbs, sirius-link）が全て ok。K4（python3 と stdlib）も ok。B/C は JSON の `daemon.pid` が launcher の pid と一致すること。
+B/C の daemon 側に toolchain / socket が無ければ exit 非 0、`failure_class: env_failure`（`worker-env` / `toolchain:` / `socket:` / 能力 id）。その場合は daemon の起動環境（PATH・EnvironmentFile）か cap env を直し、daemon を起こし直して再実行する。sandbox を緩めて通さない。測定専用 daemon でない pid（identity 照合に通らない）は検査せず拒否される。
 
 ## 2. K2 実 asset の組立・ビルド・正負例（verify-real-assets.sh）
 asset store の k2 dir（`SHA256SUMS`・`benchfs-*.bundle`・`submodules/*.tar`）と、known-good 用 `k2-fix.patch`（k2-known-good-v2、sha256=6fc5d09a880ce405f4f81cbbf559df2b2bcf191946e14040c05705de63d22773。p0-final.patch 単独は古く known-good が落ちる。最新結論は 2026-10-18-p1-3-known-good-fix.md）、K4 原票 `main-v3-n2-43706.tgz` を用意する。

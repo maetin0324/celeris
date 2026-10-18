@@ -2,7 +2,7 @@
 # 実資産（asset store）で K2/K4 を無 LLM のまま採点できるか確かめる（本測定の前に人が実行する）。
 # 使い方: sh crates/campaign/scripts/verify-real-assets.sh <asset_dir> [--build]
 #   <asset_dir>   承認済み asset store の k2 dir（SHA256SUMS・benchfs-*.bundle・submodules/*.tar）。
-#                 known-good 用に k2-fix.patch（P0 の最終 patch）を置くか CAMPAIGN_K2_FIX_PATCH で指す。
+#                 known-good 用に k2-fix.patch（測定 ID k2-known-good-v2。p0-xattr-path.patch + p0-final.patch の合成、sha256 は private.json の known_good）を置くか CAMPAIGN_K2_FIX_PATCH で指す。
 #   CAMPAIGN_K4_TGZ  K4 の原票 tgz（既定: asset_dir/../k4/main-v3-n2-43706.tgz があればそれ）。
 #   --build       実 cargo で build/test まで通す（UCX 等の build 環境が要る。不良は env_failure と分かる）。
 # 欠落・hash 不一致・build 環境不良は exit 非 0（snapshot 不備は 5）。LLM・有料 job は使わない。

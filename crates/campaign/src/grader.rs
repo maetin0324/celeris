@@ -553,8 +553,44 @@ pub mod implementation {
         root.join(format!("celeris-grade-{}-{nanos}", std::process::id()))
     }
 
+    /// 環境不良の印（build 環境側の固定の文言）。
+    const ENV_MARKERS: &[&str] = &[
+        "could not find system library",
+        "failed to run custom build command",
+        "linker `",
+        "unable to find library",
+        "cannot find -l",
+        "library not found for",
+        "pkg-config",
+        "command not found",
+        "No such file or directory (os error 2)",
+        "failed to download",
+        "failed to get `",
+        "failed to load source for dependency",
+        "Unable to update registry",
+        "spurious network error",
+        "No space left on device",
+        "error: no such command",
+        "toolchain '",
+    ];
+
+    /// 評価 command の出力が build/test 環境の不良か。成果物の失敗（test の FAILED・rustc の `error[E`）が
+    /// 出ていれば、環境の印があっても成果物の失敗として扱う（環境のせいにして不合格を隠さない）。
+    pub fn output_is_env_failure(out: &CommandOutput) -> bool {
+        let text = format!("{}\n{}", out.stdout, out.stderr);
+        let model_signal =
+            text.contains("... FAILED") || text.contains("error[E") || text.contains("panicked at");
+        if model_signal {
+            return false;
+        }
+        // timeout（exit なし）は成果物の暴走もあり得るので環境不良にしない。
+        ENV_MARKERS.iter().any(|m| text.contains(m))
+    }
+
     pub fn check(spec: &ImplementationSpec, artifact: &Path, opts: &GradeOptions) -> CheckResult {
         let mut reasons = Vec::new();
+        // grader 側の asset（pristine/隠しテスト）の欠落・改変。成果物の出来ではなく環境の不良。
+        let mut env: Vec<String> = Vec::new();
         let mut files = Vec::new();
         let repo = match safe_join(artifact, &spec.repo) {
             Ok(p) if p.is_dir() => p,
@@ -573,12 +609,12 @@ pub mod implementation {
             let psha = match sha256_file(&pp) {
                 Ok(s) => s,
                 Err(e) => {
-                    reasons.push(format!("grader pristine test unreadable: {e}"));
+                    env.push(format!("grader pristine test unreadable: {e}"));
                     continue;
                 }
             };
             if psha != t.sha256 {
-                reasons.push(format!(
+                env.push(format!(
                     "grader pristine test {} does not match the case sha256 (grader-side copy altered)",
                     t.path
                 ));
@@ -654,13 +690,17 @@ pub mod implementation {
                 };
                 match sha256_file(&hp) {
                     Ok(s) if s == t.sha256 => hidden.push((t.path.clone(), hp)),
-                    Ok(_) => reasons.push(format!(
+                    Ok(_) => env.push(format!(
                         "grader hidden test {} does not match the case sha256 (grader-side copy altered)",
                         t.path
                     )),
-                    Err(e) => reasons.push(format!("grader hidden test unreadable: {e}")),
+                    Err(e) => env.push(format!("grader hidden test unreadable: {e}")),
                 }
             }
+        }
+        if !env.is_empty() {
+            reasons.extend(env);
+            return CheckResult::env_failure(reasons, json!({"tests": files, "ran": false}));
         }
         if !reasons.is_empty() {
             // 改変・削除があれば失格。評価 command は走らせない。
@@ -682,7 +722,7 @@ pub mod implementation {
         let out = match result {
             Ok(o) => o,
             Err(e) => {
-                return CheckResult::from_reasons(
+                return CheckResult::env_failure(
                     vec![format!("evaluation command could not run: {e}")],
                     json!({"tests": files, "ran": false}),
                 );
@@ -710,11 +750,25 @@ pub mod implementation {
                 missing.join(", ")
             ));
         }
-        CheckResult::from_reasons(
+        // 評価 command の失敗が build/test 環境の不良（toolchain・system library・依存取得・asset 欠落）なら
+        // 成果物の失敗に数えない。test が走って FAILED/rustc の型・構文エラーを出したものは成果物の失敗。
+        let env_failed = out.exit != Some(0) && output_is_env_failure(&out);
+        if env_failed {
+            reasons.push("evaluation environment failure (not a model failure)".into());
+        }
+        let build = |reasons, details| {
+            if env_failed {
+                CheckResult::env_failure(reasons, details)
+            } else {
+                CheckResult::from_reasons(reasons, details)
+            }
+        };
+        build(
             reasons,
             json!({
                 "tests": files,
                 "ran": true,
+                "env_failure": env_failed,
                 "hidden_inserted": hidden.iter().map(|(p, _)| p).collect::<Vec<_>>(),
                 "exit": out.exit,
                 "missing_ok": missing,
@@ -1072,6 +1126,8 @@ pub struct CheckResult {
     pub status: Status,
     pub reasons: Vec<String>,
     pub details: Value,
+    /// 不合格の原因が評価環境（ビルド/テスト環境の不良・grader 側 asset 欠落）で、成果物の出来ではない。
+    pub env_failure: bool,
 }
 
 impl CheckResult {
@@ -1080,6 +1136,7 @@ impl CheckResult {
             status: Status::NotApplicable,
             reasons: vec!["case does not define this check".into()],
             details: Value::Null,
+            env_failure: false,
         }
     }
 
@@ -1093,8 +1150,25 @@ impl CheckResult {
             },
             reasons,
             details,
+            env_failure: false,
         }
     }
+
+    /// 評価環境の不良による不合格（`reasons` は空でないこと）。
+    pub fn env_failure(reasons: Vec<String>, details: Value) -> Self {
+        CheckResult {
+            env_failure: !reasons.is_empty(),
+            ..Self::from_reasons(reasons, details)
+        }
+    }
+}
+
+/// 不合格の原因の分類。env_failure は成果物（model）の失敗に数えず、環境を直して採点し直す。
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FailureClass {
+    ModelFailure,
+    EnvFailure,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
@@ -1121,6 +1195,8 @@ pub struct GradeReport {
     pub split: CaseSplit,
     pub verdict: Verdict,
     pub final_pass: bool,
+    /// 不合格のときだけ。いずれかの検査が環境不良なら env_failure（成果物の評価になっていない）。
+    pub failure_class: Option<FailureClass>,
     pub checks: Checks,
 }
 
@@ -1170,12 +1246,20 @@ pub fn grade(case: &GradeCase, artifact: &Path, opts: &GradeOptions) -> GradeRep
         (true, true) => Verdict::ControlOnly,
         (true, false) => Verdict::Pass,
     };
+    let failure_class = (verdict == Verdict::Fail).then(|| {
+        if all.iter().any(|c| c.env_failure) {
+            FailureClass::EnvFailure
+        } else {
+            FailureClass::ModelFailure
+        }
+    });
     GradeReport {
         schema: GRADE_SCHEMA,
         case_id: case.id.clone(),
         split: case.split,
         verdict,
         final_pass: verdict == Verdict::Pass,
+        failure_class,
         checks,
     }
 }

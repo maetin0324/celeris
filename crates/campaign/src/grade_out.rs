@@ -151,6 +151,7 @@ pub fn grade_out_expected(
                 .unwrap_or_default(),
             "artifact_sha256": artifact_sha,
             "graded": true,
+            "failure_class": rep.failure_class,
             "grade": rep,
         }));
     }

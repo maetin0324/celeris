@@ -843,6 +843,61 @@ async fn a_failing_setup_blocks_the_task_with_a_question_instead_of_starting_the
     assert!(question.contains("workspace.toml"), "{question}");
 }
 
+/// ADR 2026-10-18-parent-waits-for-children: 委譲した子が未完了の間は親を dispatch せず、continuation・
+/// 進捗なしの質問も出ない。子が終わると親が再開する。
+#[tokio::test]
+async fn parent_waits_for_unfinished_children_without_counting_continuations() {
+    let dir = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let check = || Check::Command {
+        cmd: "true".into(),
+        expect_exit: 0,
+    };
+    let parent = new_task(dir.path(), check(), 2);
+    let parent_id = parent.id;
+    store.insert(&parent).unwrap();
+    let mut child = new_task(dir.path(), check(), 2);
+    child.parent_id = Some(parent_id);
+    child.status = Status::Blocked;
+    let child_id = child.id;
+    store.insert(&child).unwrap();
+    let mut d = dispatcher(store.clone(), Arc::new(AlwaysBudgetExhaustedAdapter), 1);
+
+    let finished = |store: &Arc<dyn TaskStore>| {
+        store
+            .events_for(parent_id)
+            .unwrap()
+            .iter()
+            .filter(|(_, e)| matches!(e, Event::WorkerFinished { role: None, .. }))
+            .count()
+    };
+    for _ in 0..60 {
+        d.tick().unwrap();
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(
+        finished(&store),
+        1,
+        "子待ちの間は 2 回目の run を起こさない"
+    );
+    let stored = store.get(parent_id).unwrap().unwrap();
+    assert_eq!(stored.status, Status::Ready, "{stored:?}");
+
+    // 子が終わると親が再開する。
+    store
+        .apply_transition(child_id, Trigger::Cancel, None)
+        .unwrap();
+    assert!(store.get(child_id).unwrap().unwrap().status.is_terminal());
+    for _ in 0..60 {
+        d.tick().unwrap();
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        if finished(&store) >= 2 {
+            break;
+        }
+    }
+    assert!(finished(&store) >= 2, "子の完了で親が dispatch される");
+}
+
 /// ADR-0072 (a)(b)(e)(g): 予算切れは `Trigger::Continue` で `Ready` に戻り attempts を消費しない。
 /// 進捗のない checkpoint が連続 2 回続くと `blocked`（`QuestionRaised` + `Approval`）。人の回答
 /// （`Trigger::Answer`）で窓が戻り、また continuation が進む。

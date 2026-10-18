@@ -1,7 +1,7 @@
 ---
 title: artifact_exists がディレクトリの成果物で必ず落ちる
 tasks: [01M56DYJFG15PWKAYK2PN977G3]
-status: blocked
+status: done
 updated: 2026-10-18
 ---
 # artifact_exists のディレクトリ対応
@@ -23,9 +23,15 @@ updated: 2026-10-18
   release.sh の `CELERIS_ISOLATION_TESTS=require` で試験は skip せず落ちる。
   2026-10-17 のホスト再起動（freebind の件）と時期が一致する。
 
+## 人の決定と再配送（attempt 2、2026-10-18）
+- 人の決定で (a) 相当を host 側で実施: home-dev に proc-unmask-for-userns.service（sysinit で lxcfs の /proc overmount 等を外す）。
+  gate は弱めず、コードも変えない。
+- 確認: `bwrap --unshare-user --unshare-pid --ro-bind / / --proc /proc true` → exit 0。
+- 確認: `CELERIS_ISOLATION_TESTS=require CELERIS_USERNS_TESTS=1 cargo nextest run -p task-worker --test browser_runtime_supervisor` → 4 passed, exit 0。
+- コード差分は attempt 1（316745bc）のまま。配送（release prepare）は celeris がやり直す。
+
 ## 未解決事項
-- host（LXC）の設定で入れ子の proc mount を許す（例: Proxmox の `features: nesting=1`。/dev/.lxc/proc が現れる）か、
-  人が `CELERIS_ISOLATION_TESTS` を変えて release するかは人の判断。コードでは直さない（gate を弱めることになる）。
+- なし（host 側の対処が再起動後も効くかは proc-unmask-for-userns.service の運用に依る）。
 
 ## 提案
 - test-parallel.sh の preflight を `unshare -Ur` だけでなく `bwrap ... --proc /proc --unshare-pid` まで測り、

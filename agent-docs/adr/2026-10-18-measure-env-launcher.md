@@ -76,6 +76,13 @@
   `[selfdeploy] releases_dir` を明示し通常運用の releases_dir と重ならない、`[selfdeploy] repo` が通常運用の
   作業 checkout でない、`push = false`、`[notify] discord_webhook_secret` が空（Discord へ送らない）。
   `[accounts]` の dir は A の account（作業 1）と共有し得るので重なりを拒否しない（D4-3）。
+- 却下:
+  - `--api-url` 等を残し、`--measure-config` との一致を検査するだけ: 同じ値を 2 か所に書かせる構造が残り、
+    手順書と launcher の両方で食い違いの余地がある。導出すれば食い違いがそもそも起きない。
+  - 測定 daemon の celeris config.toml に `[campaign]` 節を足して設定源にする: celeris の config は
+    `deny_unknown_fields` で、daemon が使わない欄を本体の config に持ち込むことになる。
+  - token を従来どおり環境変数名で渡す: launcher が token_file を読んで env に移す手間が増えるだけで、
+    「接続先の daemon の token_file と同じ token」であることを保証しない。
 
 ### D2. 同一性照合: 既存 API ＋ プロセス／ポート所有確認 ＋ `GET /api/v1/config` に `identity` を 1 つ追加
 - **task-api への追加は要る**（最小 1 項目）。既存の `/health`・`/config`・`/releases` だけでは

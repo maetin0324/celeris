@@ -37,7 +37,7 @@ completed: 2026-10-16
 
 **未接続（この手順書を書いた時点の欠け。後続 WU か人が埋める）**
 1. ~~`grade` CLI は評価 command を実行しない~~ → 解消（2026-10-16）: `grade` / `grade-out` は評価 command を grade の作業 dir で実際に走らせる（`grade_runner::ProcessRunner`、既定 1800 秒で打ち切り）。
-2. `cases/` の `case.json`（公開部）と `grade --case` が読む `celeris.grade-case/1` は別 schema。pilot の 2 case の grade-case は `crates/campaign/fixtures/grade-cases/pilot/` にある。K1〜K4 用の grade-case は未作成（本測定の grade-case は run-final.md 手順 5 の `$P/grade-case/`）。
+2. `cases/` の `case.json`（公開部）と `grade --case` が読む `celeris.grade-case/1` は別 schema。pilot の 2 case の grade-case は `crates/campaign/fixtures/grade-cases/pilot/` にある。K1〜K4 用の grade-case は未作成（本測定の grade-case は docs/ops/measure-run-final.md §8 の `$P/grade-case/`）。
 3. 実 case を `run` に載せる manifest（`problems` が入力 manifest の problem を指す）の生成 CLI は無い。Part P の manifest は手で書き、`validate` で hash を得る。
 4. 実 Celeris 実行器も `usage`（子 task を含む全 run の usage の内訳と server 時計の経過）を返すので、poll のたびに per_case/per_arm を判定する。粒度は 1 回の `run`（poll 間隔）。`max_overshoot_*` に出る。
 5. `run` の arm 選択（C だけ除外）の option は無い。
@@ -205,4 +205,4 @@ acceptance は task-api の形（`{"type", "text"}`）だけ。入れ子の `{"t
 - `celerisctl --help` に `campaign` / `release` / `routing` / `db` / `api-request` が存在、`celerisctl campaign export --help` に `--out`・`--manifest-hash`・`--verify-connected`・`--db` が存在。
 - `GET/PUT /api/v1/secrets` は `crates/task-api/src/handlers.rs` のルートとして存在（実呼び出しはしていない）。
 
-> 2026-10-17（P1-4）: 実測の標準起動は `watch`、A の実行ファイルは preflight が解決した物をそのまま起動。監視・超過の限界は `../2026-10-16-mlsys-final/run-final.md` §4.1。
+> 2026-10-17（P1-4）: 実測の標準起動は `watch`、A の実行ファイルは preflight が解決した物をそのまま起動。監視・超過の限界は `../../../docs/ops/measure-run-final.md` §7。

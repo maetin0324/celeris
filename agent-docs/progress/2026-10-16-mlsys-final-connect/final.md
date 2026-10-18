@@ -50,7 +50,7 @@ completed: 2026-10-16
 
 ## 4. 本番への移行（人が実行する手順。agent は実行しない）
 - config の書き換えは無い（消した config 欄なし）。DB は migration 0084〜0086（SCHEMA_VERSION=86）が起動時に適用される。events は追記専用のまま。
-- 昇格: 人が GUI の「リリース」画面で行い、sha12 を控える（H1）。以降の順は `runbook.md` Part H → Part P（pilot）→ 係数から上限確定 → `../2026-10-16-mlsys-final/run-final.md`（本測定）→ check / grade / export と `--verify-connected`。
+- 昇格: 人が GUI の「リリース」画面で行い、sha12 を控える（H1）。以降の順は `runbook.md` Part H → Part P（pilot）→ 係数から上限確定 → `../../../docs/ops/measure-run-final.md`（本測定）→ check / grade / export と `--verify-connected`。
 - `final.json` の `<release sha12 at H1>` は昇格後の sha12 に置換し、validate の sha256 を控え直す。`CELERIS_CAMPAIGN_TOKEN` は運用セッションが自分の shell で設定する（argv・file に残さない）。
 - 中断・`waiting>0` は同じ引数で再実行して再開する。
 

@@ -655,3 +655,52 @@ fn pending_children_does_not_count_terminal_children() {
 
     assert_eq!(pending_children(&store, parent.id).expect("pending"), 1);
 }
+
+/// ADR 2026-10-18: 既存の子（done・running・ready）と同じ範囲の提案は拒否し、failed の子と同じ範囲は再起票できる。
+#[test]
+fn rejects_reproposing_the_scope_of_an_existing_child() {
+    let store = SqliteStore::open_in_memory().expect("open");
+    let parent = make_task(None, Status::Running);
+    insert(&store, &parent);
+    for (title, status) in [
+        ("31a endpoint", Status::Done),
+        ("31b tests", Status::Running),
+        ("31c docs", Status::Ready),
+        ("31d retry", Status::Failed),
+    ] {
+        let mut c = make_task(Some(parent.id), status);
+        c.title = title.into();
+        c.objective = format!("implement {title} fully");
+        insert(&store, &c);
+    }
+    let proposals = vec![
+        dt("31a endpoint", vec![]),
+        {
+            let mut t = dt("other name", vec![]);
+            t.objective = "implement 31b tests fully".into();
+            t
+        },
+        dt("31c docs", vec![]),
+        dt("31d retry", vec![]),
+        dt("31e new scope", vec![]),
+    ];
+    let out = plan_delegation(
+        &store,
+        &parent,
+        &proposals,
+        0,
+        &[],
+        &[],
+        &DelegationLimits::default(),
+        now(),
+    )
+    .expect("plan_delegation");
+    assert_eq!(out.rejected.len(), 3, "{:?}", out.rejected);
+    assert!(
+        out.rejected
+            .iter()
+            .all(|r| r.contains("duplicates existing child"))
+    );
+    let titles: Vec<&str> = out.accepted.iter().map(|t| t.title.as_str()).collect();
+    assert_eq!(titles, vec!["31d retry", "31e new scope"]);
+}

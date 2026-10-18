@@ -368,12 +368,16 @@ fn organization_section(context: &RunContext) -> String {
 }
 
 /// `context.children` があれば「集約 run」節を足す（ADR-0016 D3 / M4）。
-fn children_section(context: &RunContext, artifacts: &str) -> String {
+fn children_section(task: &Task, context: &RunContext, artifacts: &str) -> String {
     let mut out = String::new();
     if context.children.is_empty() {
         return out;
     }
-    out.push_str("## Delegated child tasks (this is the aggregate run)\n");
+    if task.aggregate {
+        out.push_str("## Delegated child tasks (this is the aggregate run)\n");
+    } else {
+        out.push_str("## Existing child tasks (do not duplicate)\n");
+    }
     for c in &context.children {
         let role = c.role.as_deref().unwrap_or("-");
         let status = serde_json::to_string(&c.status).unwrap_or_default();
@@ -402,6 +406,14 @@ fn children_section(context: &RunContext, artifacts: &str) -> String {
             "- {} [{role}] status={status} outcome={outcome} workspace={workspace}{branch} artifacts={artifacts}\n",
             c.title
         ));
+    }
+    if !task.aggregate {
+        out.push_str(
+            "\nこれらは既に起票済みの子（done の成果は main / 子のブランチにある）。同じ範囲の子を再び起票してはならず、\
+             同じ範囲を自分の branch に実装し直してもならない。足りない範囲だけを新しい子にするか、既存の子の成果を使え。\
+             重複した起票は celeris が拒否する（ADR 2026-10-18-no-duplicate-child-delegation）。\n\n",
+        );
+        return out;
     }
     out.push_str(&format!(
         "\nSummarize the results of the delegated child tasks in `{artifacts}/summary.md`. \
@@ -642,7 +654,7 @@ fn build_execute_prompt(
     out.push_str(&direct_route_section(context));
     out.push_str(&prior_review_section(context));
     out.push_str(&answers_section(context));
-    out.push_str(&children_section(context, artifacts));
+    out.push_str(&children_section(task, context, artifacts));
     out.push_str(&organization_section(context));
     out.push_str(&available_genres_section(context, artifacts));
     out.push_str(&assignee_instructions_for_delegation(context));

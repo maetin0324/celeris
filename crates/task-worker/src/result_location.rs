@@ -11,7 +11,15 @@ pub const MISPLACED_RESULT_MARKER: &str = "result.json misplaced:";
 /// Only the expected report is authoritative. Search the current artifact root and
 /// cwd, never follow symlinks or inspect adapter run records / dependency trees.
 /// A stray may be old: report its location, but never claim or consume its contents.
-pub async fn misplaced_result(artifacts_dir: &Path, cwd: &Path) -> Option<Terminal> {
+///
+/// ADR 2026-10-18-result-location-recovery: when exactly one stray was written during this run
+/// (`mtime >= since`, with 2 s slack for coarse mtimes), copy it to the expected path and return `None` so the normal validation
+/// reads it. The stray itself is left in place. Zero or several candidates, or a stale one, stay errors.
+pub async fn misplaced_result(
+    artifacts_dir: &Path,
+    cwd: &Path,
+    since: std::time::SystemTime,
+) -> Option<Terminal> {
     let expected = artifacts_dir.join("result.json");
     if !matches!(tokio::fs::symlink_metadata(&expected).await,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound)
@@ -55,6 +63,16 @@ pub async fn misplaced_result(artifacts_dir: &Path, cwd: &Path) -> Option<Termin
         return None;
     }
     found.sort();
+    // File mtimes are coarse (kernel tick), so allow slack before the run start.
+    let since = since - std::time::Duration::from_secs(2);
+    if let [only] = found.as_slice()
+        && let Ok(meta) = tokio::fs::metadata(only).await
+        && meta.modified().is_ok_and(|m| m >= since)
+        && tokio::fs::create_dir_all(artifacts_dir).await.is_ok()
+        && tokio::fs::copy(only, &expected).await.is_ok()
+    {
+        return None;
+    }
     Some(Terminal::Error {
         message: format!(
             "{MISPLACED_RESULT_MARKER} expected {}; found {}; reports were not adopted",
@@ -91,21 +109,32 @@ mod tests {
         std::fs::write(sibling.join("result.json"), "{}").unwrap();
         #[cfg(unix)]
         std::os::unix::fs::symlink(&sibling, cwd.join("linked")).unwrap();
-        assert!(misplaced_result(&artifacts, &cwd).await.is_none());
+        let stale = std::time::SystemTime::now() + std::time::Duration::from_secs(7200);
+        assert!(misplaced_result(&artifacts, &cwd, stale).await.is_none());
         let stray = root.join("repos/artifacts");
         std::fs::create_dir_all(&stray).unwrap();
         std::fs::write(stray.join("result.json"), "not even JSON").unwrap();
         let Some(Terminal::Error {
             message,
             retryable: false,
-        }) = misplaced_result(&artifacts, &cwd).await
+        }) = misplaced_result(&artifacts, &cwd, stale).await
         else {
             panic!("misplacement must be permanent");
         };
         assert!(message.contains(&stray.join("result.json").display().to_string()));
         assert!(message.contains(&artifacts.join("result.json").display().to_string()));
-        std::fs::write(artifacts.join("result.json"), "{}").unwrap();
-        assert!(misplaced_result(&artifacts, &cwd).await.is_none());
+        // A second stray is ambiguous: never guess.
+        std::fs::write(root.join("repos/result.json"), "{}").unwrap();
+        let fresh = std::time::SystemTime::UNIX_EPOCH;
+        assert!(misplaced_result(&artifacts, &cwd, fresh).await.is_some());
+        std::fs::remove_file(root.join("repos/result.json")).unwrap();
+        // A single stray written during the run is copied to the expected path (reviewer or worker).
+        std::fs::write(stray.join("result.json"), r#"{"summary":"ok"}"#).unwrap();
+        assert!(misplaced_result(&artifacts, &cwd, fresh).await.is_none());
+        assert_eq!(
+            std::fs::read_to_string(artifacts.join("result.json")).unwrap(),
+            r#"{"summary":"ok"}"#
+        );
         assert!(stray.join("result.json").exists());
     }
 }

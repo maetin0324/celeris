@@ -1110,10 +1110,14 @@ impl RunRequest {
     /// - 従来（cwd == workspace）: workspace 相対（`artifacts` / `.taskd/artifacts/<task_id>`）。
     ///   単独タスクのプロンプトは Phase 48 までと 1 バイトも変わらない（ADR-0036 D3）。
     /// - WU は共有 cwd の場合も絶対パス（ADR 2026-10-17-wu-result-location）。
+    /// - 成果物が workspace の外（reviewer run 等）: 相対 `artifacts/` は cwd 直下を指して誤配置になるので絶対パス。
     /// - worktree（cwd != workspace。ADR-0041 D1）: 成果物は作業ツリーの**外**にあるので絶対パス。
     ///   `..` を書かせない（`artifact.path` の規則 ADR-0003 D5 と衝突させない）。
     pub fn artifacts_rel(&self) -> String {
-        if self.work_dir.is_some() || self.context.work_unit.is_some() {
+        if self.work_dir.is_some()
+            || self.context.work_unit.is_some()
+            || !self.artifacts_dir.starts_with(&self.workspace)
+        {
             return self.artifacts_dir.to_string_lossy().into_owned();
         }
         task_core::artifacts::rel_from(&self.workspace, &self.artifacts_dir)

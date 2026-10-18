@@ -513,6 +513,7 @@ async fn a_misplaced_result_is_rejected_without_adoption() {
         dir.path(),
         r#"mkdir -p artifacts
 printf '%s' '{"summary":"wrote to the worktree by mistake","evidence":[]}' > artifacts/result.json
+printf '%s' '{}' > result.json
 echo '{"type":"turn.completed"}'
 "#,
     );
@@ -547,6 +548,7 @@ async fn a_parent_relative_result_is_rejected_without_adoption() {
         dir.path(),
         r#"mkdir -p ../artifacts
 printf '%s' '{"summary":"wrote to the worktree by mistake","evidence":[]}' > ../artifacts/result.json
+printf '%s' '{}' > result.json
 echo '{"type":"turn.completed"}'
 "#,
     );

@@ -4,7 +4,8 @@
 //! - 各欄は `{"value": ..., "source": "event" | "evaluator" | "missing"}`。Celeris 側から取れる区間は再記録せず導出する。
 //! - どちらにも無い項目は `missing`（value は null）。0 に変換しない。`missing_fields` に欄名を並べる。
 //! - 再開・重複: events は `dedup_key` / `run_id` / 台帳の鍵で、評価者記録は `record_id` で 1 件に潰す。行は identity ごとに 1 つ。
-//! - `--events` は export の出力 dir（`records.jsonl`）か、campaign の out dir（`trials.jsonl`・`ledger.jsonl`）か、その file。
+//! - `--events` は繰り返せる。runner の out dir（`trials.jsonl`・`ledger.jsonl`）と、`celerisctl campaign export` の出力 dir（decision-log の `records.jsonl`）を両方渡す。file 単独も可。
+//!   `celeris-campaign export` は table/final-accounting だけを書き、この 3 file は出さない。
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
@@ -91,31 +92,39 @@ struct Events {
 }
 
 impl Events {
-    fn load(path: &Path) -> Result<Vec<(String, Vec<Value>)>, String> {
+    /// `--events` は繰り返せる。各入力は dir（既知の 3 file のうちあるもの）か file。
+    /// 全入力を通して 1 つも読めなければエラー。
+    fn load(paths: &[&Path]) -> Result<Vec<(String, Vec<Value>)>, String> {
         let mut out = Vec::new();
-        let files: Vec<(String, std::path::PathBuf)> = if path.is_dir() {
-            ["records.jsonl", "trials.jsonl", "ledger.jsonl"]
-                .iter()
-                .map(|n| (n.to_string(), path.join(n)))
-                .filter(|(_, p)| p.is_file())
-                .collect()
-        } else if path.is_file() {
-            let n = path
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            vec![(n, path.to_path_buf())]
-        } else {
-            return Err(format!("{}: events の入力が無い", path.display()));
-        };
-        if files.is_empty() {
+        for path in paths {
+            let files: Vec<(String, std::path::PathBuf)> = if path.is_dir() {
+                ["records.jsonl", "trials.jsonl", "ledger.jsonl"]
+                    .iter()
+                    .map(|n| (n.to_string(), path.join(n)))
+                    .filter(|(_, p)| p.is_file())
+                    .collect()
+            } else if path.is_file() {
+                let n = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                vec![(n, path.to_path_buf())]
+            } else {
+                return Err(format!("{}: events の入力が無い", path.display()));
+            };
+            for (n, p) in files {
+                out.push((n, read_jsonl(&p)?));
+            }
+        }
+        if out.is_empty() {
             return Err(format!(
                 "{}: records.jsonl / trials.jsonl / ledger.jsonl のどれも無い",
-                path.display()
+                paths
+                    .iter()
+                    .map(|p| p.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
             ));
-        }
-        for (n, p) in files {
-            out.push((n, read_jsonl(&p)?));
         }
         Ok(out)
     }
@@ -407,7 +416,7 @@ fn event_fields(side: Option<&EventSide>, row: &mut Map<String, Value>) {
 }
 
 /// 結合して JSONL（末尾改行つき）を返す。
-pub fn join(human_ops_file: &Path, events: &Path) -> Result<String, String> {
+pub fn join(human_ops_file: &Path, events: &[&Path]) -> Result<String, String> {
     let recs = resolve(&read_records(human_ops_file).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())?;
     let mut campaign_sha: BTreeMap<String, String> = BTreeMap::new();
@@ -497,6 +506,13 @@ pub fn join(human_ops_file: &Path, events: &Path) -> Result<String, String> {
 pub fn join_cli(args: &[String]) -> Result<String, String> {
     let opt = |name: &str| args.windows(2).find(|w| w[0] == name).map(|w| w[1].clone());
     let file = opt("--file").ok_or("--file is required")?;
-    let events = opt("--events").ok_or("--events is required")?;
-    join(Path::new(&file), Path::new(&events))
+    let events: Vec<&Path> = args
+        .windows(2)
+        .filter(|w| w[0] == "--events")
+        .map(|w| Path::new(w[1].as_str()))
+        .collect();
+    if events.is_empty() {
+        return Err("--events is required".into());
+    }
+    join(Path::new(&file), &events)
 }

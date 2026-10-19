@@ -329,3 +329,138 @@ fn rejects_missing_events_input() {
     assert_ne!(c, 0);
     assert!(e.contains("records.jsonl"), "{e}");
 }
+
+fn join_multi(file: &Path, events: &[&Path]) -> (i32, String, String) {
+    let mut a = vec!["join", "--file", file.to_str().expect("p")];
+    for e in events {
+        a.extend(["--events", e.to_str().expect("p")]);
+    }
+    cli(&a)
+}
+
+/// 通常経路: runner（MockExecutor）→ `export_full`（table/final-accounting だけを書く）→ 一時 store の decision-log export
+/// （`celerisctl campaign export` と同じ `decision_log_export_campaign`）→ join。records.jsonl は手作りしない。
+#[test]
+fn joins_runner_out_and_decision_log_export_from_normal_paths() {
+    use task_core::{
+        SqliteStore,
+        decision_log::{
+            DecisionLogIntervention, DecisionLogOutcome, DecisionLogProposal, InterventionKind,
+        },
+        decision_log_export::ExportParams,
+    };
+    let d = tempfile::tempdir().expect("dir");
+    let i = input(2);
+    let m = campaign(&i, 2);
+    let out = d.path().join("out");
+    run(
+        &m,
+        &i,
+        &MockExecutor::seeded(),
+        &RunOptions {
+            out: out.clone(),
+            ..RunOptions::default()
+        },
+    )
+    .expect("run");
+    let hash = m.compute_sha256().expect("hash");
+
+    // 通常 export は table / final-accounting だけで、join の入力 3 file は出ない。
+    let dest = d.path().join("export");
+    celeris_campaign::export::export_full(&m, &out, &dest, None, None).expect("export");
+    for n in ["records.jsonl", "trials.jsonl", "ledger.jsonl"] {
+        assert!(!dest.join(n).exists(), "{n}");
+    }
+    let ops = d.path().join("human-ops.jsonl");
+    record_ops(&ops, &hash, "A0", "p0", None);
+    record_ops(&ops, &hash, "B0", "p0", Some("t-b-p0"));
+    let (c, _, e) = join_multi(&ops, &[&dest]);
+    assert_ne!(c, 0);
+    assert!(e.contains("records.jsonl"), "{e}");
+
+    // decision-log: 隔離した一時 store に通常の記録 API で書き、通常の export 関数で取り出す。
+    let store = SqliteStore::open(&d.path().join("fixture.db")).expect("store");
+    let now = time::OffsetDateTime::UNIX_EPOCH;
+    store
+        .decision_log_record_proposal(
+            &DecisionLogProposal {
+                run_id: "r1".into(),
+                campaign_id: Some("e2e".into()),
+                arm: Some("B".into()),
+                case_id: Some("p0".into()),
+                repetition: Some(1),
+                manifest_hash: Some(hash.clone()),
+                task_id: Some("t-b-p0".into()),
+                ..Default::default()
+            },
+            now,
+        )
+        .expect("proposal");
+    store
+        .decision_log_record_outcome(
+            &DecisionLogOutcome {
+                run_id: "r1".into(),
+                wall_ms: Some(90_000),
+                ..Default::default()
+            },
+            now,
+        )
+        .expect("outcome");
+    store
+        .decision_log_record_intervention(&DecisionLogIntervention {
+            intervention_id: "i1".into(),
+            kind: InterventionKind::ResearchJudgment,
+            task_id: Some("t-b-p0".into()),
+            campaign_id: Some("e2e".into()),
+            at: "2026-10-19T00:11:00Z".into(),
+            wall_ms: None,
+            source_event: None,
+        })
+        .expect("intervention");
+    let exp = store
+        .decision_log_export_campaign(&ExportParams {
+            campaign_id: "e2e".into(),
+            manifest_hash: Some(hash.clone()),
+            export_cursor: None,
+        })
+        .expect("decision-log export");
+    let dl = d.path().join("decision-log");
+    fs::create_dir_all(&dl).expect("mkdir");
+    fs::write(dl.join("records.jsonl"), exp.records_jsonl()).expect("write");
+
+    let (c, first, e) = join_multi(&ops, &[&out, &dl]);
+    assert_eq!(c, 0, "{e}");
+    let rows: Vec<Value> = first
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| serde_json::from_str(l).expect("jsonl"))
+        .collect();
+    let (a, b) = (row(&rows, "A", "p0"), row(&rows, "B", "p0"));
+    assert_eq!(rows.iter().filter(|r| r["row_type"] == "trial").count(), 5);
+    // runner の trials（wall_secs）と decision-log（run/outcome/intervention）が同じ identity の 1 行に出る。
+    assert_eq!(src(b, "wall_secs"), "event");
+    assert_eq!(b["run_ids"]["value"], json!(["r1"]));
+    assert_eq!(b["run_wall_ms"]["value"]["observed_sum"], 90_000);
+    assert_eq!(
+        b["event_interventions"]["value"],
+        json!({"research_judgment": 1})
+    );
+    assert_eq!(src(b, "human_ops"), "evaluator");
+    assert_eq!(
+        b["human_op_secs"]["value"],
+        json!({"observed_sum": 120, "observed": 1, "missing": 1})
+    );
+    // A 腕は decision-log が無い: 欠測は null のまま。
+    assert_eq!(src(a, "run_wall_ms"), "missing");
+    assert_eq!(a["run_wall_ms"]["value"], Value::Null);
+    assert!(
+        a["missing_fields"]
+            .as_array()
+            .expect("a")
+            .contains(&json!("event_interventions"))
+    );
+    // 出所の分かる入力の重複（同じ入力を二度渡す）・順序で結果は変わらない。
+    let (c, again, e) = join_multi(&ops, &[&dl, &out, &dl, &out]);
+    assert_eq!(c, 0, "{e}");
+    assert_eq!(again, first);
+}

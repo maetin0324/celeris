@@ -2,8 +2,8 @@
 task: 01M5A3JD7TWJB3BK01MBTDHR2W
 tasks: [01M5A3JD7TWJB3BK01MBTDHR2W]
 title: 契約段の統合失敗を診断し最小修復（integration-fix）
-work_unit: diagnose
-status: blocked
+work_unit: verify-record
+status: done
 updated: 2026-10-19
 ---
 # 契約段の統合失敗の診断（integration-fix / diagnose）
@@ -85,3 +85,17 @@ test-parallel: cargo nextest run failed (exit 143)
 - `git diff --quiet a0186c4a c8a9dfb7` → exit 0
 - `bash scripts/dev/test-parallel.sh` → exit 0（5849 passed / 0 failed / 15 ignored）
 - `git ls-remote origin refs/heads/main` → `160f1736…`
+
+## 修復後の統合 HEAD の全検査（verify-record）
+
+コード修復は無い（上記のとおり原因はコードに無い）。統合 HEAD `1d16d5dc5d9d278dad0446307f9578afbd40df97` に変更を加えず、元の失敗コマンドと既定 3 検査を弱めずに回した。`integrate-contract` の失敗コマンドは `bash scripts/dev/test-parallel.sh` で、これが元コマンドそのもの。
+
+| cmd | exit | 要点 | ログ |
+|---|---|---|---|
+| `bash scripts/dev/test-parallel.sh` | 0 | nextest 5846 passed / 0 failed / 14 skipped、doctest exit 0、`nextest_exit: 0`、`test-parallel: ok`（2026-10-19T14:37Z〜14:50Z、nextest 772.5 s）。summary 行の `passed: 3` は doctest 側の件数の取り違えで、nextest の `Summary` 行が正 | `/local/celeris/data/workspaces/01M5A3JD7TWJB3BK01MBTDHR2W/wu/verify-record/artifacts/logs/test-parallel.log` |
+| `cargo clippy --workspace -- -D warnings` | 0 | 警告なし | 同 `clippy.log` |
+| `cargo fmt --all -- --check` | 0 | 差分なし | 同 `fmt.log` |
+
+- 元の exit 143 は 2 回目（診断 run）に続き、3 回目も再現せず。外部 SIGTERM の送り元は未確定のまま（kernel ログは権限が無く未検証）。再発したら人の check で host の kernel/system journal を調べる。
+- 既存 ADR `specialization-variant.md` への付記は不要: 契約・実装・試験に変更が無く、付記すべき原因・修復箇所が無い。契約（拒否試験・既存 lock 契約）は統合 HEAD で全件通過。実適用（propagation の実走）の証明は本葉の範囲外で、完了扱いにしない。
+- 最新 origin/main: 診断時 `160f1736` は無関係な 13 files の差分で、統合阻害は見つかっていない（読取のみ。merge していない）。DB 状態は診断時の read-only 読取のとおり（既存 3 task: ready / cancelled / cancelled）。

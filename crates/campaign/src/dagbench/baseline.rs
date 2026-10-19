@@ -24,7 +24,7 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use super::ext::{ExtSim, JobState, Lookup, SubmitError};
+use super::ext::{ExtBackend, JobState, Lookup, SubmitError};
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ScenarioFile {
@@ -372,8 +372,8 @@ impl Baseline {
     }
 
     /// 完了まで（または停止点まで）進める。外部側の事実は `ext`（独立 ledger）が持つ。
-    pub fn run(&mut self, ext: &mut ExtSim) -> Result<Outcome, Error> {
-        self.state.now = self.state.now.max(ext.now());
+    pub fn run(&mut self, ext: &mut dyn ExtBackend) -> Result<Outcome, Error> {
+        self.state.now = self.state.now.max(ext.now()?);
         // 再開時の再照合: 応答不明の投入と待機中の job を論理 ID で確かめる。
         let ids: Vec<String> = self.scenario.nodes.iter().map(|n| n.id.clone()).collect();
         for id in &ids {
@@ -382,7 +382,7 @@ impl Baseline {
                 continue;
             }
             let logical = self.logical_id(id);
-            match ext.lookup(&logical) {
+            match ext.lookup(&logical)? {
                 Lookup::Known { physical_id, state } => {
                     ext.wait_started(&logical)?;
                     let n = self.state.nodes.get_mut(id).expect("node");
@@ -531,7 +531,7 @@ impl Baseline {
                     if self.state.nodes[id].status == Status::Waiting {
                         let l = self.logical_id(id);
                         if matches!(
-                            ext.lookup(&l),
+                            ext.lookup(&l)?,
                             Lookup::Known {
                                 state: JobState::Completed,
                                 ..
@@ -595,13 +595,13 @@ impl Baseline {
     }
 
     /// 外部 job を論理 ID（冪等キー）で投入する。意図を先に保存し、結果を保存する。
-    fn submit(&mut self, ext: &mut ExtSim, id: &str) -> Result<bool, Error> {
+    fn submit(&mut self, ext: &mut dyn ExtBackend, id: &str) -> Result<bool, Error> {
         let logical = self.logical_id(id);
         self.state.nodes.get_mut(id).expect("node").status = Status::Submitted;
         if self.save()? {
             return Ok(true);
         }
-        let reply = ext.submit(&logical, self.cfg.ext_job_secs);
+        let reply = ext.submit(&logical, self.cfg.ext_job_secs)?;
         if reply.is_ok() {
             ext.wait_started(&logical)?;
         }
@@ -628,9 +628,9 @@ impl Baseline {
     }
 
     /// 応答不明の投入を照会で解く。見つからなければ再投入に戻す。
-    fn reconcile(&mut self, ext: &mut ExtSim, id: &str) -> Result<bool, Error> {
+    fn reconcile(&mut self, ext: &mut dyn ExtBackend, id: &str) -> Result<bool, Error> {
         let logical = self.logical_id(id);
-        let found = ext.lookup(&logical);
+        let found = ext.lookup(&logical)?;
         if matches!(found, Lookup::Known { .. }) {
             ext.wait_started(&logical)?;
         }
@@ -646,7 +646,7 @@ impl Baseline {
     }
 
     /// 完了した外部 job の結果を消費し、post 作業の ready にする。ledger への消費記録は 1 件。
-    fn complete_wait(&mut self, ext: &mut ExtSim, id: &str) -> Result<bool, Error> {
+    fn complete_wait(&mut self, ext: &mut dyn ExtBackend, id: &str) -> Result<bool, Error> {
         let logical = self.logical_id(id);
         ext.record_consumed(&logical)?;
         self.log("consumed", id);

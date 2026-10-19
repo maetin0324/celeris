@@ -45,7 +45,7 @@ impl FaultSpec {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExtConfig {
     pub poll_secs: u64,
     pub job_slots: usize,
@@ -74,7 +74,7 @@ pub enum JobState {
     Completed,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SubmitError {
     /// 受理・起動は済んだが応答は届かなかった（再照合で解く）。
     ResponseLost,
@@ -82,14 +82,14 @@ pub enum SubmitError {
     NoSlot,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SubmitReply {
     pub physical_id: String,
     /// 同じ論理 ID の既存の物理起動に寄せた。
     pub deduped: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Lookup {
     Unknown,
     Known {
@@ -98,7 +98,7 @@ pub enum Lookup {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Notice {
     pub logical_job_id: String,
     pub physical_id: String,
@@ -113,6 +113,51 @@ struct Job {
     due_secs: u64,
     state: JobState,
     consumed: bool,
+}
+
+/// ExtSim の操作面。baseline / CelerisSide はこの trait 越しに外部 stub を使うので、同じ process の
+/// [`ExtSim`]（in-process 既定）でも、別 process の ExtSim を持つ IPC 実装（`dagbench::ipc::IpcExt`）でも動く。
+/// IPC では切断・期限超過が起こり得るので、全操作が `io::Result`（有界に Err を返す）。
+pub trait ExtBackend {
+    fn submit(
+        &mut self,
+        logical: &str,
+        job_secs: u64,
+    ) -> std::io::Result<Result<SubmitReply, SubmitError>>;
+    fn wait_started(&mut self, logical: &str) -> std::io::Result<()>;
+    fn lookup(&mut self, logical: &str) -> std::io::Result<Lookup>;
+    fn advance(&mut self, now_secs: u64) -> std::io::Result<Vec<Notice>>;
+    fn record_consumed(&mut self, logical: &str) -> std::io::Result<bool>;
+    fn now(&mut self) -> std::io::Result<u64>;
+    fn due_secs(&mut self, logical: &str) -> std::io::Result<Option<u64>>;
+}
+
+impl ExtBackend for ExtSim {
+    fn submit(
+        &mut self,
+        logical: &str,
+        job_secs: u64,
+    ) -> std::io::Result<Result<SubmitReply, SubmitError>> {
+        Ok(ExtSim::submit(self, logical, job_secs))
+    }
+    fn wait_started(&mut self, logical: &str) -> std::io::Result<()> {
+        ExtSim::wait_started(self, logical)
+    }
+    fn lookup(&mut self, logical: &str) -> std::io::Result<Lookup> {
+        Ok(ExtSim::lookup(self, logical))
+    }
+    fn advance(&mut self, now_secs: u64) -> std::io::Result<Vec<Notice>> {
+        ExtSim::advance(self, now_secs)
+    }
+    fn record_consumed(&mut self, logical: &str) -> std::io::Result<bool> {
+        ExtSim::record_consumed(self, logical)
+    }
+    fn now(&mut self) -> std::io::Result<u64> {
+        Ok(ExtSim::now(self))
+    }
+    fn due_secs(&mut self, logical: &str) -> std::io::Result<Option<u64>> {
+        Ok(ExtSim::due_secs(self, logical))
+    }
 }
 
 /// fault 発火時に制御 process 側で呼ぶ停止 hook（[`FaultKind::StopControl`]）。

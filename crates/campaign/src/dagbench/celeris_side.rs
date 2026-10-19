@@ -44,7 +44,8 @@ use task_worker::{
 };
 
 use super::ext::{
-    DATASET, ExtConfig, ExtSim, FaultSpec, JobState, Lookup, StopHook, SubmitError, read_ledger,
+    DATASET, ExtBackend, ExtConfig, ExtSim, FaultSpec, JobState, Lookup, StopHook, SubmitError,
+    read_ledger,
 };
 use crate::celeris_exec::{Transport, idempotency_label};
 
@@ -401,7 +402,7 @@ pub fn read_worker_ledger(path: &Path) -> std::io::Result<Vec<WorkerEntry>> {
 struct Shared {
     spec: RunSpec,
     clock: LogicalClock,
-    ext: Mutex<ExtSim>,
+    ext: Mutex<Box<dyn ExtBackend + Send>>,
     ledger: Mutex<WorkerLedger>,
     /// root task id → campaign id。
     campaigns: Mutex<HashMap<TaskId, String>>,
@@ -418,7 +419,7 @@ impl Shared {
             .append(now, event, campaign, node, detail);
     }
 
-    fn ext(&self) -> std::sync::MutexGuard<'_, ExtSim> {
+    fn ext(&self) -> std::sync::MutexGuard<'_, Box<dyn ExtBackend + Send>> {
         self.ext.lock().unwrap_or_else(|e| e.into_inner())
     }
 
@@ -526,7 +527,10 @@ impl WorkerAdapter for StubWorker {
                 let job_secs = sh.spec.ext_job_secs;
                 // 枠が空くまで poll_secs ごとに投入し直す（何も起こしていない拒否だけ）。
                 let reply = loop {
-                    let r = sh.ext().submit(&logical, job_secs);
+                    let r = sh
+                        .ext()
+                        .submit(&logical, job_secs)
+                        .map_err(AdapterError::Io)?;
                     match r {
                         Ok(r) => break Ok(r),
                         Err(SubmitError::NoSlot) => sh.work(sh.spec.poll_secs).await,
@@ -537,7 +541,7 @@ impl WorkerAdapter for StubWorker {
                     Ok(r) => r.physical_id,
                     // 応答喪失: 受理されたかは冪等キー（論理 job ID）の照会で確かめる（baseline と同じ再照合）。
                     Err(SubmitError::ResponseLost) => {
-                        match sh.ext().lookup(&logical) {
+                        match sh.ext().lookup(&logical).map_err(AdapterError::Io)? {
                             Lookup::Known { physical_id, .. } => {
                                 sh.record(
                                 "submit_reconciled",
@@ -565,6 +569,7 @@ impl WorkerAdapter for StubWorker {
                 let due = sh
                     .ext()
                     .due_secs(&logical)
+                    .map_err(AdapterError::Io)?
                     .unwrap_or(sh.clock.now() + job_secs);
                 sh.jobs
                     .lock()
@@ -632,7 +637,11 @@ fn ext_poller(shared: Arc<Shared>) -> task_dispatch::dispatcher::ClusterJobPolle
                 continue;
             };
             sh.clock.sleep_until(due, SleeperKind::Poll);
-            let state = match sh.ext().lookup(&logical) {
+            // IPC 切断・期限超過は poll の対象を落とす（次の poll で再試行される）。
+            let Ok(found) = sh.ext().lookup(&logical) else {
+                continue;
+            };
+            let state = match found {
                 Lookup::Known {
                     state: JobState::Completed,
                     ..
@@ -739,6 +748,19 @@ impl CelerisSide {
         if let Some(h) = stop_hook {
             ext.set_stop_hook(h);
         }
+        Self::with_backend(spec, paths, store, Box::new(ext))
+    }
+
+    /// 外部 stub の操作面を差し込んで組む。`backend` は in-process の [`ExtSim`] でも、別 process の ExtSim を
+    /// 持つ IPC 実装（`dagbench::ipc::IpcExt`）でもよい。`paths.ext_ledger` は backend が書く ledger と同じ path
+    /// （同一 host の file。再開時に読み直す）。
+    pub fn with_backend(
+        spec: RunSpec,
+        paths: Paths,
+        store: Arc<dyn TaskStore>,
+        mut ext: Box<dyn ExtBackend + Send>,
+    ) -> Result<Self, String> {
+        std::fs::create_dir_all(&paths.workspaces).map_err(|e| e.to_string())?;
         super::ext::drop_torn_tail(&paths.worker_ledger).map_err(|e| e.to_string())?;
         let prior = if paths.worker_ledger.exists() {
             read_worker_ledger(&paths.worker_ledger).map_err(|e| e.to_string())?
@@ -751,7 +773,8 @@ impl CelerisSide {
             .append(true)
             .open(&paths.worker_ledger)
             .map_err(|e| e.to_string())?;
-        let resume = Resume::from_ledgers(&prior, &ext_entries, ext.now())?;
+        let resume =
+            Resume::from_ledgers(&prior, &ext_entries, ext.now().map_err(|e| e.to_string())?)?;
         let clock = LogicalClock::default();
         clock.advance_to(resume.now);
         let shared = Arc::new(Shared {

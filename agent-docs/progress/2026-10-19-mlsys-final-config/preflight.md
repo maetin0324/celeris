@@ -39,3 +39,6 @@ runbook §0（H1〜H6）→ §3（値の置換と `validate`/`dry-run`）→ §3
 
 ## 検査（commit 前）
 test-parallel exit 0（nextest 5813 passed, 0 failed, 15 ignored）、clippy -D warnings exit 0、fmt --check exit 0。
+
+## 未解決事項（範囲外）
+- `sh scripts/dev/check-doc-links.sh` が `crates/campaign/tests/measure_daemon_example.rs:10` の `../../agent-docs/progress/2026-10-16-mlsys-final` を壊れた参照として 1 件報告する（daemon-decl 由来、exit は 0 だが警告）。この WU の範囲（docs/ops/measure-run-final.md・agent-docs/progress・adr）外のため直していない。一度 path 連結へ書き換えたが範囲 check に落ちたため戻した。integrate 段か別 WU で直す。

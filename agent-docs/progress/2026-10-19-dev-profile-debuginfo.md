@@ -21,3 +21,8 @@ host load 約 65 のため workspace 全体は 600 秒で完走しない。`-p t
 
 ## 未実施
 - 完走した前後の測定、test-parallel.sh / clippy / fmt の実行、commit。
+
+## 検査（run #3）
+- `cargo fmt --all -- --check`: exit 0
+- `cargo clippy --workspace -- -D warnings`: exit 0（2m54s）
+- `bash scripts/dev/test-parallel.sh`: 300 秒の壁時計で打ち切り（exit 124、test profile の build 中）。target は温まったので次 run で再実行する。

@@ -197,7 +197,10 @@ fn async_a_arm_gets_inputs_and_unpacking_them_is_not_an_artifact() {
         e.m.load_input(&fx().join("pilot.json"), None)
             .expect("input");
     let exec = ArmDispatch {
-        a: HarnessExecutor::new(e.d.path().join("hs"), Box::new(Stub(stub))),
+        a: Some(HarnessExecutor::new(
+            e.d.path().join("hs"),
+            Box::new(Stub(stub)),
+        )),
         bc: MockExecutor::seeded(),
     };
     let o = e.opts(Some(e.inputs_src.clone()));

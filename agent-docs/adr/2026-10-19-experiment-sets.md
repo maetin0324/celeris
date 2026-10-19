@@ -64,3 +64,12 @@ runner/checker/export/dry-run/preflight/lock の有効計画への統一は後�
   run-meta の `plan_identity` は追加欄で、無い旧 out の再開は従来の hash 照合のみ。
 - 再利用: manifest の有効計画（arm-set-core, 3be21634）、既存の `ledger.rs`/`budget.rs`/`final_accounting`/`checker` を拡張。
   試験は `tests/experiment_sets_exec.rs`（A/B のみ・B/C のみ・resume 拒否・B0 不一致・全体台帳の横断）。
+- 通常入口の集計試験: `tests/arm_set_cli_normal.rs` に、実バイナリ `--executor celeris` → 通常 POST stub で repeats=2・case 2 件・
+  task 内 retry run・task failed・採点不合格・未採点（grade-out 前の export）を通す試験を足した。分母は試行（case × repetition）で、
+  task 内の retry run は分母に入らず費用だけが同じ試行に加わる（失敗した試行の費用も残る）。同じ out の run/watch 再開は trial identity
+  （config, problem, rep, trial_no=1）・POST 数・A の起動数が不変。選択集合・固定条件を変えた manifest は同じ out では saved lock の gate で拒否される。
+- 未使用 arm の要求ゼロ（試験）: `tests/arm_set_cli_normal.rs` の `unused_arm_requests` は偽 Host の要求カウンタ（env 名・A の resolve・API GET・
+  sandbox 確認・A の sandbox probe・B/C の daemon worker probe）で、A/B では A の probe/resolve/account と B の worker probe が起き（対照）
+  C/Jev の API・根拠表・credential は 0、B/C では B/C の worker probe（case×arm）が起き A の program/version/account/準備/probe が 0 を示す。
+  必要能力を宣言する case を使うので probe は実際に発生し、userns・実 daemon・LLM は要らない。通常 POST stub は planner/reviewer/CoS/子 run を
+  独立に観測値として返し（B0 は全 role Sonnet、B1/C1 は Sonnet/Opus 候補の選択結果）、試行記録の `observed` がそれを宣言から補完せず保持することを確かめる。

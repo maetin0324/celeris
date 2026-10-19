@@ -477,9 +477,13 @@ fn run(args: Vec<String>) -> Result<String, String> {
                         m.termination.trial_timeout_secs,
                         out_dir.join("cluster-cancel.jsonl"),
                     );
-                    // A 腕を含む manifest でも同じ入口で走る。A は既存ハーネス（後付け制限なし）。
-                    let a = a_executor(&args, &m, &out_dir, a_program()?)?;
-                    drive(&ArmDispatch { a, bc })?
+                    // A が有効なときだけ A の実行器を作る（B/C のみの測定は A の program・account を要求しない）。
+                    let a = if m.is_active(celeris_campaign::manifest::ConfigId::A) {
+                        Some(a_executor(&args, &m, &out_dir, a_program()?)?)
+                    } else {
+                        None
+                    };
+                    drive(&ArmDispatch::new(a, bc))?
                 }
                 other => {
                     return Err(format!(

@@ -2,8 +2,8 @@
 task: 01M5AC7DNXVSZE0B214Z2GZ75N
 tasks: [01M5AC7DNXVSZE0B214Z2GZ75N]
 title: 通常API・永続化・dispatcherへのvariant伝播（normal-propagation）
-work_unit: pin-boundary
-status: running
+work_unit: verify-record
+status: done
 updated: 2026-10-19
 ---
 # 通常 API・永続化・dispatcher への variant 伝播（propagation）
@@ -222,3 +222,33 @@ daemon が値を読む path は既存のものだけ: store の `org_list()` と
 - P1（campaign-bridge・後段の campaign 葉）: §8.2 の `variant-b0.json` を、承認済み sha256 を明示して読む形にする。所有は `variant_pin.rs`・`preflight::check_variant`。
 - P2（本 task 外）: reload の発生を daemon が event に残す（`identity` は起動時の静的値のため）。それまでは専用環境の runbook で reload を禁止し、L2 は reload の前後の run を区別できない前提で扱う。
 - audit の旧提案（core-wire の範囲 check に task-dispatch 試験・schema・web 生成型を許可する）は、subtree ごとに別葉へ分けた計画（§0）で不要になったので取り下げた。
+
+## 9. 統合検証（verify-record, 2026-10-19）
+
+検証対象 HEAD = `2039b012`（normal-e2e 統合後）。コードは変えていない（本 WU の変更はこの節と `verify-record.md` のみ）。
+
+**最新 main・既存 3 task（再確認）**: `git fetch origin` 後の `origin/main` = `cb0cd7b8`（HEAD より先、`git diff --stat HEAD...origin/main` = 235 files）。main は未取り込み（取り込みは統合側の判断）。既存 task は `sqlite3 "file:$CELERIS_RUN_DB?mode=ro"` の読取で `01M58VFRBA6HG0SSF3CG5BKM91` = done（2026-10-19T17:06:28Z、main に統合済み）、`01M58VG5C4XGK4E70M6WJ6MEX0`・`01M58VGDNQ8GWGJPB8SJ73XSPF` = cancelled。重複実装なし。
+
+**実測**
+| 検査 | 結果 |
+|---|---|
+| `cargo fmt --all -- --check` | exit 0 |
+| `cargo clippy --workspace -- -D warnings` | exit 0 |
+| `bash scripts/dev/test-parallel.sh` | exit 0。`CELERIS_TEST_SUMMARY` passed 5916 / failed 0 / ignored 15（nextest 244 binaries + doctest 13、nextest 295.4s） |
+| `cargo test -p celeris --test variant_propagation` | 5 passed（通常 POST・冪等・pin・子孫・fail closed。spec-on/off） |
+| `cargo test -p task-dispatch variant_pin` | 17 passed（0 件一致ではない） |
+| 生成物の差分ゼロ | `UPDATE_SCHEMA=1 cargo test -p task-api` / `-p task-worker` 後に `git status --short` が空（`docs/api/v1`・`docs/protocol`・`web/api/generated` に差分なし） |
+| 文書検査 | `check-adr-numbers.sh` 0、`check-doc-links.sh` 0、`check-doc-layout.sh scripts/dev/docs-layout.tsv` 0、`check-architecture-map.py` 0 |
+
+注: 素の `cargo test -p task-api` / `-p task-worker` は browser live 系（`browser_live_cross`・`launcher_run::live_frame_tests`）が sandbox の userns 不可で失敗する（変更と無関係。ADR-0126。`test-parallel.sh` では全通過）。
+
+**型・callsite 順**: §7 のとおり（core-wire → core-store → core-callsite-fix → core-api-schema → core-web-types → … → worker-pin → dispatch-worker-pin → api/celeris-worker-callsite → protocol-schema）。celerisctl は default 展開で変更不要（ctl-worker-callsite は superseded）。`cargo clippy --workspace`（celerisctl 含む）が通ることで統合後の build 成立を確認。
+
+**封印証拠・非対象不変性**: campaign-proof（`variant_proof.rs`、lib 47 passed）が全 task・全 run・org 全 node digest・env 固定を照合し、normal-e2e が共有 org 不変・pin 外 assignee/org drift/観測なしでの run 起動拒否を実測済み。
+
+**未解決（要後続）**
+- **daemon 本体が `Dispatcher::set_variant_observation` を呼ばない**ため、実 daemon では variant 付き task の run は常に blocked（fail closed）。daemon 起動時に instance id・config sha256 を渡す配線が別途必要（`crates/celeris/src`、別 subtree の葉）。
+- `FixedEnv`・env-lock catalog・B0 を `prove_variant` の caller へ渡す配線は未実施。
+- 実 LLM を使う適用証明は未実施（本 task は無 LLM のみ）。
+
+**人の運用手順（本番操作はしていない）**: 専用環境は本番と別の db・port・workspace の測定 daemon（`measure-daemon.example.toml`）で起動し、reload しない。本番 org・config は変更しない。

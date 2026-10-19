@@ -892,8 +892,7 @@ impl SqliteStore {
 
     /// task 自身に付いた識別（継承しない）。
     pub fn task_campaign_own(&self, task_id: &str) -> Result<Option<CampaignIdentity>, StoreError> {
-        let conn = self.lock()?;
-        Self::task_campaign_own_tx(&conn, task_id)
+        self.with_read_conn(|conn| Self::task_campaign_own_tx(conn, task_id))
     }
 
     /// 自身から root まで鎖を辿り、最も近い識別とその持ち主を返す。鎖の上の識別は全て一致
@@ -947,8 +946,9 @@ impl SqliteStore {
         &self,
         task_id: &str,
     ) -> Result<Option<CampaignIdentity>, StoreError> {
-        let conn = self.lock()?;
-        Ok(Self::task_campaign_resolve_holder_tx(&conn, task_id)?.map(|(_, id)| id))
+        self.with_read_conn(|conn| {
+            Ok(Self::task_campaign_resolve_holder_tx(conn, task_id)?.map(|(_, id)| id))
+        })
     }
 }
 

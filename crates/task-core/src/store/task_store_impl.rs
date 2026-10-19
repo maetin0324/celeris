@@ -905,7 +905,16 @@ impl TaskStore for SqliteStore {
         updated: WorkUnitRow,
         event: Event,
     ) -> Result<(), StoreError> {
-        self.work_unit_transition_impl(task_id, updated, event)
+        self.work_unit_transition_impl(task_id, updated, vec![event])
+    }
+
+    fn work_unit_transition_with_events(
+        &self,
+        task_id: TaskId,
+        updated: WorkUnitRow,
+        events: Vec<Event>,
+    ) -> Result<(), StoreError> {
+        self.work_unit_transition_impl(task_id, updated, events)
     }
 
     fn recover_work_unit(

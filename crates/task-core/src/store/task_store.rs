@@ -803,6 +803,15 @@ pub trait TaskStore:
         event: Event,
     ) -> Result<(), StoreError>;
 
+    /// `work_unit_transition` と同じだが、続く event（`ClusterJobWaitStarted` など、行を書く event）も同じ
+    /// トランザクションで追記する。`blocked(cluster_jobs)` の WU と wait 行を crash で分離させないために使う。
+    fn work_unit_transition_with_events(
+        &self,
+        task_id: TaskId,
+        updated: WorkUnitRow,
+        events: Vec<Event>,
+    ) -> Result<(), StoreError>;
+
     /// ADR-0070/0074 付記（2026-10-06）: 持ち主の無い Running WU を checkpoint の有無で
     /// Ready / NeedsContinuation に戻す。生死は呼び出し側が確認する。writer transaction 内で
     /// expected の status・plan・run・更新時刻と非終端 task を再確認し、古い回収で新 run を戻さない。

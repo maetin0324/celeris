@@ -1227,19 +1227,34 @@ impl Dispatcher {
                 .as_ref()
                 .map(|w| w.status)
                 .unwrap_or(updated_wu.status);
-            if let Err(e) = self.store.work_unit_transition(
+            let mut transition_events = vec![Event::WorkUnitTransitioned {
+                work_unit_id: updated_wu.id.clone(),
+                key: updated_wu.key.clone(),
+                from,
+                to: updated_wu.status,
+                reason: reason.to_string(),
+                run_id: Some(run_id.clone()),
+            }];
+            // ADR-0090 D2: `blocked(cluster_jobs)` への遷移と wait 行の作成は同じトランザクションにする
+            // （間で止まると、wait 行の無い blocked(cluster_jobs) の WU が永久に再開しない）。
+            if current_wu.is_some()
+                && wu_parked_on_cluster_jobs
+                && let Some(wait) = cluster_wait.take()
+            {
+                transition_events.push(Event::ClusterJobWaitStarted {
+                    wait: Box::new(wait),
+                });
+            }
+            if let Err(e) = self.store.work_unit_transition_with_events(
                 task_id,
                 updated_wu.clone(),
-                Event::WorkUnitTransitioned {
-                    work_unit_id: updated_wu.id.clone(),
-                    key: updated_wu.key.clone(),
-                    from,
-                    to: updated_wu.status,
-                    reason: reason.to_string(),
-                    run_id: Some(run_id.clone()),
-                },
+                transition_events,
             ) {
                 tracing::warn!(%task_id, %run_id, error = %e, "failed to record the work unit transition");
+            }
+            #[cfg(test)]
+            if self.test_halt_after_wu_transition {
+                return Ok(());
             }
             for row in side_effect_rows {
                 // D15: `newly_ready`/`dependents_to_block` の対象は、必ず未着手（`pending`）の

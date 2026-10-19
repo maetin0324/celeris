@@ -1180,6 +1180,9 @@ pub struct Dispatcher {
     target_sweep_scope: crate::target_sweep::SweepScope,
     #[cfg(test)]
     test_now: Option<Arc<StdMutex<OffsetDateTime>>>,
+    /// 試験専用: WU の遷移を書いた直後に run の終了処理を打ち切る（その後の event が書かれる前の kill を再現）。
+    #[cfg(test)]
+    test_halt_after_wu_transition: bool,
     #[cfg(test)]
     test_policy_clock: Option<Arc<StdMutex<Instant>>>,
     /// 試験だけの切替: review 前の target 同期（ADR-0118）を飛ばし、旧経路（未同期の HEAD を review）を再現する
@@ -1563,6 +1566,8 @@ impl Dispatcher {
             target_sweep_scope: crate::target_sweep::SweepScope::default(),
             #[cfg(test)]
             test_now: None,
+            #[cfg(test)]
+            test_halt_after_wu_transition: false,
             #[cfg(test)]
             test_policy_clock: None,
             #[cfg(test)]

@@ -225,12 +225,14 @@ impl SqliteStore {
         &self,
         task_id: TaskId,
         updated: WorkUnitRow,
-        event: Event,
+        events: Vec<Event>,
     ) -> Result<(), StoreError> {
         let mut conn = self.lock()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         Self::update_work_unit_tx(&tx, &updated)?;
-        Self::append_event_tx(&tx, task_id, &event)?;
+        for event in &events {
+            Self::append_event_tx(&tx, task_id, event)?;
+        }
         tx.commit()?;
         Ok(())
     }

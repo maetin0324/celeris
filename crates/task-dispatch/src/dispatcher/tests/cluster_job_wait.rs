@@ -735,6 +735,45 @@ async fn a_leaf_unit_waits_alone_and_liveness_names_the_wait() {
     assert_replay_is_clean(&store);
 }
 
+/// ADR-0090 D2: WU の run が wait で終わった直後（`blocked(cluster_jobs)` の遷移を書いた後、他の event を書く前）に
+/// 止められても、`blocked(cluster_jobs)` の WU には必ず `cluster_job_waits` の行がある（遷移と同じトランザクション）。
+#[tokio::test]
+async fn a_leaf_unit_blocked_on_cluster_jobs_always_has_its_wait_row_after_a_halt() {
+    let dir = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let root = compound_task(dir.path());
+    let root_id = root.id;
+    store.create_task(&root, vec![]).unwrap();
+    let plan = v3_plan(vec![stage("s1", false)], vec![leaf("a", "s1", &[])]);
+    let adapter = Arc::new(TreeWaitAdapter {
+        plan: StdMutex::new(Some(plan)),
+        waited: std::sync::atomic::AtomicBool::new(false),
+        seen: Arc::new(StdMutex::new(Vec::new())),
+    });
+    let mut d = tree_dispatcher(&store, adapter);
+    d.test_halt_after_wu_transition = true;
+    d.config.clusters.insert(
+        "sirius".into(),
+        cluster(task_core::cluster_job::ClusterJobWaitLimits {
+            poll_secs: 30,
+            max_wait_secs: 7200,
+        }),
+    );
+    tick_until(&mut d, |_| {
+        store.work_units_for(root_id).unwrap().iter().any(|u| {
+            u.key == "a" && u.blocked_reason == Some(task_core::WorkUnitBlockedReason::ClusterJobs)
+        })
+    })
+    .await;
+    let a_id = unit(&store.work_units_for(root_id).unwrap(), "a")
+        .id
+        .clone();
+    let waits = store.cluster_job_waits_for_task(root_id).unwrap();
+    assert_eq!(waits.len(), 1, "{waits:?}");
+    assert_eq!(waits[0].work_unit_id.as_deref(), Some(a_id.as_str()));
+    assert_eq!(waits[0].state, ClusterJobWaitState::Waiting);
+}
+
 // ---- 通知接点（notice_wait_*）: 通知が poll と同じ完了判定・finish・continuation を通る ----
 
 use crate::dispatcher::{ClusterJobNotice, ClusterJobNoticeOutcome as Notice};

@@ -474,7 +474,12 @@ fn run_refuses_split_mix_and_unknown_executor_path_has_no_network_code() {
     }
     files.extend(dagbench_files.iter().cloned());
     for p in files {
-        let t = fs::read_to_string(&p).expect("r");
+        let mut t = fs::read_to_string(&p).expect("r");
+        // dagbench の ipc は所有 process 間の Unix domain socket で、閉じるのに std::net::Shutdown（enum）だけを使う。
+        // この語だけを除き、socket を作る TcpListener・UdpSocket・ToSocketAddrs は下で禁止する。
+        if dagbench_files.contains(&p) {
+            t = t.replace("std::net::Shutdown", "");
+        }
         // 子 process は A arm の harness_exec.rs、grade の評価 command の grade_runner.rs、
         // asset 組立の git/tar の asset_assembly.rs、評価側の read-only `ssh qstat -x -f` の ssh_qstat.rs だけが起動する
         // （command は注入・固定、実 LLM は呼ばない）。
@@ -489,6 +494,9 @@ fn run_refuses_split_mix_and_unknown_executor_path_has_no_network_code() {
             "reqwest",
             "std::net",
             "TcpStream",
+            "TcpListener",
+            "UdpSocket",
+            "ToSocketAddrs",
             if spawns {
                 "reqwest"
             } else {

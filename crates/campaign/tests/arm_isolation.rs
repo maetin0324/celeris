@@ -88,6 +88,7 @@ fn campaign(i: &Input, n: usize, order: ArmOrder, seed: u64) -> CampaignManifest
         seed,
         repeats: 1,
         dependencies: Default::default(),
+        variant: None,
         sha256: String::new(),
     }
 }

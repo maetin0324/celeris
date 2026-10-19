@@ -46,6 +46,7 @@ pub mod snapshot;
 pub mod ssh_qstat;
 pub mod usage;
 pub mod variant;
+pub mod variant_pin;
 pub mod watch;
 
 pub const CAMPAIGN_SCHEMA: &str = "celeris.campaign-manifest/1";

@@ -482,6 +482,10 @@ pub struct CampaignManifest {
     /// 空なら直列化しない（依存の無い manifest の hash を変えない）。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub dependencies: BTreeMap<String, Vec<String>>,
+    /// 専門分担 variant（M1-specialization）の参照。省略時は直列化しない（従来 manifest の hash を変えない）。
+    /// ADR 2026-10-19-specialization-variant。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub variant: Option<crate::variant::VariantRef>,
     #[serde(default)]
     pub sha256: String,
 }
@@ -853,6 +857,9 @@ impl CampaignManifest {
             if v.trim().is_empty() {
                 return Err(format!("{name} is empty"));
             }
+        }
+        if let Some(v) = &self.variant {
+            v.check_fixed().map_err(|e| e.to_string())?;
         }
         let ids: Vec<ConfigId> = self.normalized().configs.iter().map(|c| c.id).collect();
         if self.experiment_sets.is_empty() && side {
@@ -1339,6 +1346,7 @@ pub(crate) mod fixtures {
             seed: 0,
             repeats: 1,
             dependencies: BTreeMap::new(),
+            variant: None,
             sha256: String::new(),
         }
     }

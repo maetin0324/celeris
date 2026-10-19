@@ -88,6 +88,7 @@ fn campaign(i: &Input, n: usize, repeats: u32) -> CampaignManifest {
         seed: 0,
         repeats,
         dependencies: Default::default(),
+        variant: None,
         sha256: String::new(),
     }
 }

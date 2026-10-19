@@ -110,6 +110,7 @@ fn campaign(i: &Input) -> CampaignManifest {
         seed: 0,
         repeats: 2,
         dependencies: Default::default(),
+        variant: None,
         sha256: String::new(),
     }
 }

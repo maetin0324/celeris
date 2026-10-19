@@ -19,3 +19,9 @@
 ## Consequences
 
 次段は task-core/API（`CampaignIdentity.variant`、409 比較）、`CelerisExecutor` の POST/GET 照合、`ablation_contract.rs` の拒否試験を足す。旧い仕組みの置換はなく、削除対象はない。
+
+## 付記（campaign-pin: manifest/lock/preflight への固定）
+
+- `CampaignManifest.variant` と `ExecutionPin.variant`（lock）は `Option<VariantRef>`、省略時は直列化しない（従来の manifest/lock hash は不変）。manifest の `validate` は参照の selection hash を同梱 `selection.sha256` と照合する。`bind_to_manifest` は `ExecutionPin` の等値比較で参照の食い違いを拒否し、`check_successor` は variant 参照の差し替え・脱落を後継として認めない。
+- 基準は `variant_pin::baseline_pin`（B0 の manifest・lock・`GET /api/v1/org` 応答 + 全役割モデル）から VariantSpec と独立に組む。`OrgSnapshot::from_get_org` は `items` と `effective_profiles` が揃って一致しなければ拒否する（新 endpoint なし）。
+- preflight（`preflight::check_variant`）は manifest に参照があるときだけ `variant-spec.json`・`variant-b0.json`（manifest と同じ dir）と稼働 daemon の `GET /api/v1/org` を `variant_pin::check_pin` に通す。欠落は拒否。参照が無ければ従来どおり。POST/GET Transport は次の葉。

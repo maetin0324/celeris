@@ -663,6 +663,7 @@ fn campaign(i: &Input, problems: &[&str], lim: &Limits) -> CampaignManifest {
         seed: 0,
         repeats: 1,
         dependencies: BTreeMap::new(),
+        variant: None,
         sha256: String::new(),
     }
 }

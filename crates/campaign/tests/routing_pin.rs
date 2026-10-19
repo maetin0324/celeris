@@ -257,6 +257,7 @@ fn campaign(i: &Input, n: usize, b: Option<ArmRouting>, c: Option<ArmRouting>) -
         seed: 0,
         repeats: 1,
         dependencies: BTreeMap::new(),
+        variant: None,
         sha256: String::new(),
     }
 }

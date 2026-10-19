@@ -96,6 +96,7 @@ fn campaign(i: &Input, split: Split, n: usize, max_tokens: u64, repeats: u32) ->
         seed: 0,
         repeats,
         dependencies: Default::default(),
+        variant: None,
         sha256: String::new(),
     }
 }

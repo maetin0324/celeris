@@ -268,6 +268,7 @@ fn campaign(i: &Input, per_case: u64) -> CampaignManifest {
             kb_snapshot: "k".into(),
         },
         dependencies: BTreeMap::new(),
+        variant: None,
         sha256: String::new(),
     }
 }

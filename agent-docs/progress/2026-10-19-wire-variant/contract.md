@@ -68,3 +68,11 @@ completed: 2026-10-19
 - 試験: `crates/campaign/tests/ablation_contract.rs` 8 件（hash 安定、改変、selection 改変、再 seal 後の非対象 9 欄差分、欠落/unknown、org 形状/profile 同値）。
 - 検査: `cargo nextest run -p celeris-campaign` 397 passed（初回 1 回は別試験が落ち、再実行で全通過。timing 依存と見るが原因は未調査）、`cargo clippy --workspace -- -D warnings` 0、`cargo fmt --all -- --check` 0。`test-parallel.sh` の全体は統合時に実行。
 - 次段へ: `VariantSpec::to_ref()` が manifest / lock / POST が運ぶ `VariantRef` を返す。`BaselinePin` は preflight が B0 の manifest・lock・`GET /api/v1/org` から組み立てる。
+
+## campaign-pin の実装結果（2026-10-19）
+- 再確認: 本 WU の base `af751f22`（variant-contract・progress-metadata 統合済み）で既存 3 task の実装（manifest/lock/env-lock/preflight/runner/CelerisExecutor）を読み直し、再利用した。作り直していない。DB の task 状態は本 WU では再読せず、上の節の 2026-10-19 の読取を引く（未確認は上記のまま）。
+- manifest: `CampaignManifest.variant: Option<VariantRef>`（skip 規則つき）。`validate` が selection hash・comparison_id・content hash 形式を検査。lock: `ExecutionPin.variant`（`from_manifest` が写す）。`bind_to_manifest` は等値で拒否、`check_successor` は variant 参照の差異を拒否。
+- 新 `crates/campaign/src/variant_pin.rs`: `OrgSnapshot::from_get_org`（継承解決済み profile と node 集合。情報不足は拒否）、`B0Inputs`、`baseline_pin`（VariantSpec を見ない）、`check_live_org`、`check_pin`（manifest 参照 = spec、lock 参照 = manifest、B0 基準で `verify`、稼働 org 照合）。
+- preflight: `check_variant`（manifest に参照があるときだけ。`variant-spec.json`・`variant-b0.json`（manifest の隣）と `GET /api/v1/org`）。参照なしは従来どおり。
+- 試験: `variant_pin.rs` 内 7 件（hash 不変、lock 不一致、後継差し替え、再 seal 非対象差分（manifest/lock が追従しても拒否）、改変・別 variant spec、B0 情報不足、稼働 org drift）、`tests/variant_preflight.rs` 2 件（fake Host で全 preflight）。既存 manifest リテラル（`variant: None`）の更新のみで旧試験は無変更。
+- 次段（campaign-submit）へ: `CelerisExecutor::body`/`lookup` と task-core `CampaignIdentity.variant`、409 比較。`B0Inputs` の JSON 形は `{coding_node, role_models, org}`。

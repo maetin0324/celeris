@@ -79,6 +79,9 @@ pub struct ExecutionPin {
     pub order: ArmOrder,
     pub seed: u64,
     pub repeats: u32,
+    /// manifest の variant 参照の写し。省略時は直列化しない（従来 lock の hash を変えない）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub variant: Option<crate::variant::VariantRef>,
 }
 
 impl ExecutionPin {
@@ -102,6 +105,7 @@ impl ExecutionPin {
             order: n.order,
             seed: n.seed,
             repeats: n.repeats,
+            variant: n.variant,
         }
     }
 }
@@ -670,6 +674,12 @@ pub fn check_successor(old: &CampaignLock, new: &CampaignLock) -> Result<(), Loc
     if old.sha256 == new.sha256 {
         return Err(LockError::NotSuccessor(
             "content is identical; nothing to supersede".into(),
+        ));
+    }
+    // variant は後継では差し替えられない（再 seal で別 variant・別内容に付け替えて通さない）。
+    if old.execution.variant != new.execution.variant {
+        return Err(LockError::NotSuccessor(
+            "the variant reference differs; a variant cannot be swapped by a successor lock".into(),
         ));
     }
     Ok(())

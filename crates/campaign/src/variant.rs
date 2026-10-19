@@ -52,6 +52,8 @@ pub enum VariantError {
     Org(String),
     /// 非対象の差分（欄名つき）。
     NonTargetDiff(String),
+    /// B0 の実体（manifest / lock / org 応答）から基準を組めない・互いに矛盾する。
+    Baseline(String),
 }
 
 impl std::fmt::Display for VariantError {
@@ -63,6 +65,7 @@ impl std::fmt::Display for VariantError {
             VariantError::ContentHash(m) => ("content_hash", m),
             VariantError::Org(m) => ("org", m),
             VariantError::NonTargetDiff(m) => ("non_target_diff", m),
+            VariantError::Baseline(m) => ("baseline", m),
         };
         write!(f, "variant {k}: {m}")
     }
@@ -295,6 +298,36 @@ pub struct VariantRef {
     pub id: VariantId,
     pub content_sha256: String,
     pub selection_sha256: String,
+}
+
+impl VariantRef {
+    /// 固定 selection と一致するか（同梱 selection.json の再計算も確かめる）。manifest の構造検査から呼ぶ。
+    pub fn check_fixed(&self) -> Result<(), VariantError> {
+        if self.comparison_id != COMPARISON_ID {
+            return Err(VariantError::Schema(format!(
+                "variant.comparison_id must be {COMPARISON_ID}"
+            )));
+        }
+        let fixed = selection_sha256();
+        if selection_json_sha256() != fixed {
+            return Err(VariantError::SelectionMismatch(
+                "bundled selection.json != selection.sha256".into(),
+            ));
+        }
+        if self.selection_sha256 != fixed {
+            return Err(VariantError::SelectionMismatch(format!(
+                "variant.selection_sha256 {} != {fixed}",
+                self.selection_sha256
+            )));
+        }
+        let h = &self.content_sha256;
+        if h.len() != 64 || !h.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err(VariantError::ContentHash(
+                "variant.content_sha256 is not a sha256".into(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]

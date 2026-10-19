@@ -90,6 +90,7 @@ fn campaign(i: &Input, n: usize, split: Split, max_tokens: u64) -> CampaignManif
         seed: 0,
         repeats: 1,
         dependencies: BTreeMap::new(),
+        variant: None,
         sha256: String::new(),
     }
 }

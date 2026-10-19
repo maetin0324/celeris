@@ -508,6 +508,9 @@ fn run_checks(a: &mut Acc, m: &CampaignManifest, inp: &Inputs, host: &dyn Host) 
         );
     }
 
+    // 専門分担 variant（manifest が参照を持つときだけ。無ければ従来の検査のまま）。
+    check_variant(a, m, inp, host);
+
     // 7. 予算・時間（manifest 側）。
     a.checked.push("budget");
     check_budget(a, m);
@@ -526,6 +529,56 @@ fn run_checks(a: &mut Acc, m: &CampaignManifest, inp: &Inputs, host: &dyn Host) 
         && let Some(set) = &set
     {
         check_bc_capabilities(a, m, set, inp, host);
+    }
+}
+
+/// manifest の variant 参照を、`variant-spec.json`・`variant-b0.json`（manifest と同じ dir）と稼働 daemon の
+/// `GET /api/v1/org` に照合する（GET のみ・有料実行なし）。情報が足りなければ拒否する。ADR 2026-10-19-specialization-variant。
+fn check_variant(a: &mut Acc, m: &CampaignManifest, inp: &Inputs, host: &dyn Host) {
+    if m.variant.is_none() {
+        return;
+    }
+    a.checked.push("variant");
+    let dir = inp.manifest_path.parent().unwrap_or_else(|| Path::new("."));
+    let load = |name: &str| -> Result<String, String> {
+        fs::read_to_string(dir.join(name)).map_err(|e| format!("{name}: {e}"))
+    };
+    let spec = a.res("variant", {
+        load("variant-spec.json").and_then(|t| {
+            serde_json::from_str::<crate::variant::VariantSpec>(&t)
+                .map_err(|e| format!("variant-spec.json: {e}"))
+        })
+    });
+    let b0 = a.res("variant", {
+        load("variant-b0.json").and_then(|t| {
+            serde_json::from_str::<crate::variant_pin::B0Inputs>(&t)
+                .map_err(|e| format!("variant-b0.json: {e}"))
+        })
+    });
+    let lock = a.res("variant", expected_lock(inp, m));
+    let (Some(url), Some(tok)) = (&inp.api_url, &inp.token_env) else {
+        a.miss(
+            "variant",
+            "--api-url and --token-env are required to read GET /api/v1/org",
+        );
+        return;
+    };
+    if url.contains('@') || validate_target(url, tok).is_err() || !host.env_nonempty(tok) {
+        return; // 既に auth-env で報告済み
+    }
+    let live = a.res(
+        "variant",
+        host.api_get(url, tok, "/api/v1/org")
+            .map_err(|e| format!("GET /api/v1/org: {e}"))
+            .and_then(|v| {
+                crate::variant_pin::OrgSnapshot::from_get_org(&v).map_err(|e| e.to_string())
+            }),
+    );
+    if let (Some(spec), Some(b0), Some(lock), Some(live)) = (spec, b0, lock, live) {
+        let _ = a.res(
+            "variant",
+            crate::variant_pin::check_pin(m, &lock, &spec, &b0, &live).map_err(|e| e.to_string()),
+        );
     }
 }
 

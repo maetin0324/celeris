@@ -88,6 +88,7 @@ fn campaign(i: &Input) -> CampaignManifest {
         seed: 0,
         repeats: 1,
         dependencies: BTreeMap::new(),
+        variant: None,
         sha256: String::new(),
     }
 }

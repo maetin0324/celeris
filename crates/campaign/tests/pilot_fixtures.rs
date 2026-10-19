@@ -116,6 +116,7 @@ fn build_pilot(input: &Input) -> CampaignManifest {
         seed: 0,
         repeats: 1,
         dependencies: Default::default(),
+        variant: None,
         sha256: String::new(),
     };
     m.sha256 = m.compute_sha256().expect("sha");

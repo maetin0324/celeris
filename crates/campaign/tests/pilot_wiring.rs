@@ -107,6 +107,7 @@ fn campaign(i: &Input, n: usize, max_parallel: u32, basis: TokenBasis) -> Campai
             kb_snapshot: "k".into(),
         },
         dependencies: BTreeMap::new(),
+        variant: None,
         sha256: String::new(),
     }
 }

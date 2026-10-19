@@ -8,11 +8,13 @@ completed: 2026-10-19
 
 ## 結果
 - 選択: 専門分担（`specialization`、比較 ID `M1-specialization`: `M1-spec-on` / `M1-spec-off`）。延期: 内部レビュー・KB 共有。
-- 正本: `crates/campaign/fixtures/ablation/selection.json`、canonical JSON（キー整列・compact・UTF-8）の sha256 は同名 `.sha256`（`d73b6e82…1247`）。
+- 正本: `crates/campaign/fixtures/ablation/selection.json`、`mechanism` は文字列 id（`specialization`、詳細は `mechanism_detail`）、延期は `internal-review` / `shared-kb`。canonical JSON（キー整列・compact・UTF-8）の sha256 は同名 `selection.sha256`（16 進のみ、`b6132a44…64bc`）。
+- attempt 2 の修正: 前回は `mechanism` が object、hash file が `selection.json.sha256`（`Path.with_suffix('.sha256')` が見る `selection.sha256` と違う）で計画の check が不合格だった。内容（選択・理由・不変条件・比較 ID）は変えず、形だけ直した。旧 `selection.json.sha256` は削除。
 - 内部レビューは既存設定で off にできない（ReviewPrefs に off 欄なし、done_when/空 acceptance → `Check::Reviewer` の構造的注入、最終レビューは無条件）ため、実 reviewer run 0 を保証できず延期。
 - 専門分担は既存の org（DB、seed は org.toml / `/api/v1/org`）だけで off にでき、`task_ops::matching::decide` が子孫を決定的に同じ node へ、retry は assignee を保持する。
 
 ## 証拠
+- 計画の check（selection.json の形と canonical sha256 の一致）→ exit 0
 - `cargo nextest run -p task-ops -E 'test(/matching::tests/)'` → exit 0、13 passed
 - `cargo nextest run -p task-core -E 'test(/reviewer/)'` → exit 0、7 passed
 - `celerisctl show` で既存 3 task（設定確定 Running・無LLM統合 Ready・主比較 pilot Ready）を確認。依存は作っていない。

@@ -23,13 +23,16 @@ pub enum FaultKind {
     DropResponse,
     /// (c) 完了通知を `extra` 回余分に送る（2 回目以降は +poll_secs ずつ遅れる）。
     DuplicateNotice { extra: u32 },
+    /// (a) 制御 process の停止点。`fault_fired` を ledger に確定させてから停止 hook（[`ExtSim::set_stop_hook`]）を
+    /// 呼ぶ。hook は制御 process 側が差し、観測側（`dagbench::fault`）が SIGKILL するまで戻らない。
+    StopControl,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FaultSpec {
     pub fault_id: String,
     pub kind: FaultKind,
-    /// 数える event 名（`external_submit_accepted` / `external_job_completed`）。
+    /// 数える event 名（`external_submit_accepted` / `external_wait_started` / `external_job_completed`）。
     pub event: String,
     pub seed: u64,
     /// event の出現回数 occurrences から `nth = 1 + seed % occurrences` で決める。
@@ -112,8 +115,14 @@ struct Job {
     consumed: bool,
 }
 
+/// fault 発火時に制御 process 側で呼ぶ停止 hook（[`FaultKind::StopControl`]）。
+pub type StopHook = Box<dyn FnMut(&FaultSpec) + Send>;
+
 pub struct ExtSim {
     path: PathBuf,
+    stop_hook: Option<StopHook>,
+    /// `external_wait_started` を記録済みの論理 job（論理 job ごとに 1 回だけ数える）。
+    wait_started: std::collections::BTreeSet<String>,
     file: File,
     cfg: ExtConfig,
     now: u64,
@@ -127,10 +136,13 @@ pub struct ExtSim {
 impl ExtSim {
     /// ledger を開く（無ければ作る）。既存なら全行を再生して状態を復元する。
     pub fn open(path: &Path, cfg: ExtConfig) -> std::io::Result<Self> {
+        drop_torn_tail(path)?;
         let entries = read_ledger(path)?;
         let file = OpenOptions::new().create(true).append(true).open(path)?;
         let mut sim = ExtSim {
             path: path.to_path_buf(),
+            stop_hook: None,
+            wait_started: Default::default(),
             file,
             cfg,
             now: 0,
@@ -148,6 +160,11 @@ impl ExtSim {
 
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// [`FaultKind::StopControl`] の発火時に呼ぶ hook を差す（制御 process の中だけで使う）。
+    pub fn set_stop_hook(&mut self, hook: StopHook) {
+        self.stop_hook = Some(hook);
     }
 
     fn replay(&mut self, e: &Entry) {
@@ -183,6 +200,9 @@ impl ExtSim {
                 if let Some(j) = self.jobs.get_mut(&l) {
                     j.state = JobState::Completed;
                 }
+            }
+            "external_wait_started" => {
+                self.wait_started.insert(l);
             }
             "consumed" => {
                 if let Some(j) = self.jobs.get_mut(&l) {
@@ -245,6 +265,11 @@ impl ExtSim {
                     "logical_secs": self.now,
                 })),
             )?;
+            if f.kind == FaultKind::StopControl
+                && let Some(hook) = self.stop_hook.as_mut()
+            {
+                hook(f);
+            }
         }
         Ok(hit)
     }
@@ -308,6 +333,22 @@ impl ExtSim {
             physical_id,
             deduped: false,
         })
+    }
+
+    /// 制御側が外部 job の待機に入った（論理 job ごとに 1 回だけ記録・計数する。再開後の再追跡は数えない）。
+    pub fn wait_started(&mut self, logical: &str) -> std::io::Result<()> {
+        if !self.wait_started.insert(logical.to_string()) {
+            return Ok(());
+        }
+        let phys = self.jobs.get(logical).map(|j| j.physical_id.clone());
+        self.append(
+            "external_wait_started",
+            Some(logical),
+            phys.as_deref(),
+            None,
+        )?;
+        self.reach("external_wait_started", logical)?;
+        Ok(())
     }
 
     /// 冪等キーによる再照合（アクセスも ledger に残す）。
@@ -413,6 +454,28 @@ impl ExtSim {
     pub fn now(&self) -> u64 {
         self.now
     }
+
+    /// 論理 job の物理起動の期限（論理秒）。照会と違い ledger には残さない（driver 内部の時計合わせ用）。
+    pub fn due_secs(&self, logical: &str) -> Option<u64> {
+        self.jobs.get(logical).map(|j| j.due_secs)
+    }
+}
+
+/// SIGKILL で書きかけのまま残った末尾行（改行で終わっていない行）を捨てる。書き終わっていない追記は
+/// 起きなかったものとして扱う（追記の続きが壊れた行に連結しないように、開き直す前に呼ぶ）。
+pub fn drop_torn_tail(path: &Path) -> std::io::Result<()> {
+    if !path.exists() {
+        return Ok(());
+    }
+    let raw = std::fs::read(path)?;
+    if raw.is_empty() || raw.ends_with(b"\n") {
+        return Ok(());
+    }
+    let keep = raw.iter().rposition(|b| *b == b'\n').map_or(0, |i| i + 1);
+    OpenOptions::new()
+        .write(true)
+        .open(path)?
+        .set_len(keep as u64)
 }
 
 pub fn read_ledger(path: &Path) -> std::io::Result<Vec<Entry>> {

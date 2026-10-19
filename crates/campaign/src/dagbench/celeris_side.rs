@@ -43,7 +43,9 @@ use task_worker::{
     AdapterError, EventSink, RunLimits, RunOutcome, RunRequest, Terminal, WorkerAdapter,
 };
 
-use super::ext::{DATASET, ExtConfig, ExtSim, JobState, Lookup, SubmitError};
+use super::ext::{
+    DATASET, ExtConfig, ExtSim, FaultSpec, JobState, Lookup, StopHook, SubmitError, read_ledger,
+};
 use crate::celeris_exec::{Transport, idempotency_label};
 
 pub const SYSTEM: &str = "celeris";
@@ -533,6 +535,25 @@ impl WorkerAdapter for StubWorker {
                 };
                 let physical = match reply {
                     Ok(r) => r.physical_id,
+                    // 応答喪失: 受理されたかは冪等キー（論理 job ID）の照会で確かめる（baseline と同じ再照合）。
+                    Err(SubmitError::ResponseLost) => {
+                        match sh.ext().lookup(&logical) {
+                            Lookup::Known { physical_id, .. } => {
+                                sh.record(
+                                "submit_reconciled",
+                                &campaign,
+                                &key,
+                                Some(json!({"logical_job_id": logical, "physical_id": physical_id})),
+                            );
+                                physical_id
+                            }
+                            Lookup::Unknown => {
+                                return Err(AdapterError::Io(std::io::Error::other(format!(
+                                    "submit {logical}: response lost and unknown to the lookup"
+                                ))));
+                            }
+                        }
+                    }
                     Err(e) => {
                         return Err(AdapterError::Io(std::io::Error::other(format!(
                             "submit {logical}: {e:?}"
@@ -540,17 +561,23 @@ impl WorkerAdapter for StubWorker {
                     }
                 };
                 let job = physical.trim_start_matches("phys-").to_string();
-                let due = sh.clock.now() + job_secs;
+                // 再起動後の再投入は既存の物理起動に寄るので、期限は ext-sim の物理起動のものを使う。
+                let due = sh
+                    .ext()
+                    .due_secs(&logical)
+                    .unwrap_or(sh.clock.now() + job_secs);
                 sh.jobs
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
                     .insert(job.clone(), (logical.clone(), due));
+                // worker ledger に待機開始を先に確定させる（再起動時に poller の表を復元する元）。
                 sh.record(
                     "external_wait_started",
                     &campaign,
                     &key,
                     Some(json!({"logical_job_id": logical, "physical_id": physical, "job": job})),
                 );
+                sh.ext().wait_started(&logical).map_err(AdapterError::Io)?;
                 RunOutcome {
                     terminal: Terminal::Waiting {
                         request: task_core::cluster_job::ClusterJobWaitRequest {
@@ -684,36 +711,68 @@ pub struct CelerisSide {
 impl CelerisSide {
     /// `store` は `paths.db` を開いた SQLite（task-api の router と同じ file）。
     pub fn new(spec: RunSpec, paths: Paths, store: Arc<dyn TaskStore>) -> Result<Self, String> {
+        Self::with_faults(spec, paths, store, vec![], None)
+    }
+
+    /// ext-sim に障害を仕込んで組む（`dagbench::fault` の制御 process が使う）。`paths` の ledger が既にあれば
+    /// 制御 process の再起動とみなし、ledger から続きを復元する: 論理時計・worker ledger の seq・投入済みの
+    /// campaign（root task id）・待機中の外部 job（poller の表）。DB 側（run・WorkUnit・durable wait）は
+    /// SQLite が真実で、前の制御 process が残した `running` の run は既存の孤児回収（R4、
+    /// `Dispatcher::set_orphan_takeover`）が lease の失効を待たずに拾う。
+    pub fn with_faults(
+        spec: RunSpec,
+        paths: Paths,
+        store: Arc<dyn TaskStore>,
+        faults: Vec<FaultSpec>,
+        stop_hook: Option<StopHook>,
+    ) -> Result<Self, String> {
         std::fs::create_dir_all(&paths.workspaces).map_err(|e| e.to_string())?;
-        let ext = ExtSim::open(
+        let mut ext = ExtSim::open(
             &paths.ext_ledger,
             ExtConfig {
                 poll_secs: spec.poll_secs,
                 job_slots: spec.scenario.resources.external_job_slots,
-                faults: vec![],
+                faults,
             },
         )
         .map_err(|e| e.to_string())?;
+        if let Some(h) = stop_hook {
+            ext.set_stop_hook(h);
+        }
+        super::ext::drop_torn_tail(&paths.worker_ledger).map_err(|e| e.to_string())?;
+        let prior = if paths.worker_ledger.exists() {
+            read_worker_ledger(&paths.worker_ledger).map_err(|e| e.to_string())?
+        } else {
+            Vec::new()
+        };
+        let ext_entries = read_ledger(&paths.ext_ledger).map_err(|e| e.to_string())?;
         let file = OpenOptions::new()
             .create(true)
             .append(true)
             .open(&paths.worker_ledger)
             .map_err(|e| e.to_string())?;
+        let resume = Resume::from_ledgers(&prior, &ext_entries, ext.now())?;
+        let clock = LogicalClock::default();
+        clock.advance_to(resume.now);
         let shared = Arc::new(Shared {
             spec,
-            clock: LogicalClock::default(),
+            clock,
             ext: Mutex::new(ext),
-            ledger: Mutex::new(WorkerLedger { file, seq: 0 }),
-            campaigns: Mutex::new(HashMap::new()),
-            jobs: Mutex::new(HashMap::new()),
+            ledger: Mutex::new(WorkerLedger {
+                file,
+                seq: resume.seq,
+            }),
+            campaigns: Mutex::new(resume.campaigns),
+            jobs: Mutex::new(resume.jobs),
         });
-        let dispatcher = build_dispatcher(&shared, &paths, store.clone());
+        let mut dispatcher = build_dispatcher(&shared, &paths, store.clone());
+        register_instance(&mut dispatcher, &store)?;
         Ok(CelerisSide {
             shared,
             paths,
             store,
             dispatcher,
-            submitted: Vec::new(),
+            submitted: resume.submitted,
         })
     }
 
@@ -879,6 +938,99 @@ impl CelerisSide {
     pub fn paths(&self) -> &Paths {
         &self.paths
     }
+}
+
+/// 制御 process の再起動で ledger から復元する driver 側の状態（DB 側の状態は SQLite が持つ）。
+struct Resume {
+    now: u64,
+    seq: u64,
+    campaigns: HashMap<TaskId, String>,
+    submitted: Vec<CampaignResult>,
+    jobs: HashMap<String, (String, u64)>,
+}
+
+impl Resume {
+    fn from_ledgers(
+        prior: &[WorkerEntry],
+        ext: &[super::ext::Entry],
+        ext_now: u64,
+    ) -> Result<Self, String> {
+        let due: HashMap<&str, u64> = ext
+            .iter()
+            .filter(|e| e.event == "physical_launch")
+            .filter_map(|e| {
+                Some((
+                    e.logical_job_id.as_deref()?,
+                    e.detail.as_ref()?["due_secs"].as_u64()?,
+                ))
+            })
+            .collect();
+        let mut r = Resume {
+            now: ext_now,
+            seq: 0,
+            campaigns: HashMap::new(),
+            submitted: Vec::new(),
+            jobs: HashMap::new(),
+        };
+        for e in prior {
+            r.seq = r.seq.max(e.seq);
+            r.now = r.now.max(e.logical_secs);
+            let d = e.detail.as_ref();
+            match e.event.as_str() {
+                "campaign_submitted" => {
+                    let id = d
+                        .and_then(|d| d["task_id"].as_str())
+                        .ok_or("campaign_submitted without task_id")?;
+                    let tid: TaskId = id.parse().map_err(|e| format!("task id {id}: {e:?}"))?;
+                    r.campaigns.insert(tid, e.campaign.clone());
+                    r.submitted.push(CampaignResult {
+                        campaign: e.campaign.clone(),
+                        task_id: id.to_string(),
+                        status: "submitted".into(),
+                        submitted_at: e.logical_secs,
+                    });
+                }
+                "external_wait_started" => {
+                    let (Some(job), Some(logical)) = (
+                        d.and_then(|d| d["job"].as_str()),
+                        d.and_then(|d| d["logical_job_id"].as_str()),
+                    ) else {
+                        continue;
+                    };
+                    let due = due.get(logical).copied().unwrap_or(e.logical_secs);
+                    r.jobs.insert(job.to_string(), (logical.to_string(), due));
+                }
+                _ => {}
+            }
+        }
+        Ok(r)
+    }
+}
+
+/// この制御 process を `daemon_instances` に active として載せ、既存の孤児回収（R4）を有効にする。
+/// SIGKILL された前の制御 process の行は pid が死んでいるので「持ち主の居ない run」と判定される。
+fn register_instance(d: &mut Dispatcher, store: &Arc<dyn TaskStore>) -> Result<(), String> {
+    let pid = std::process::id();
+    let now = time::OffsetDateTime::now_utc();
+    let instance_id = format!("dagbench-{pid}-{}", now.unix_timestamp_nanos());
+    store
+        .instance_register(&task_core::DaemonInstance {
+            instance_id: instance_id.clone(),
+            release: "dagbench".into(),
+            pid,
+            role: task_core::InstanceRole::Active,
+            started_at: now,
+            heartbeat_at: now,
+            handoff_requested_at: None,
+            drained_at: None,
+        })
+        .map_err(|e| e.to_string())?;
+    d.set_orphan_takeover(task_dispatch::orphan::OrphanTakeover {
+        instance_id,
+        freshness: Duration::from_secs(60),
+        pid_alive: Arc::new(task_dispatch::orphan::proc_pid_alive),
+    });
+    Ok(())
 }
 
 /// campaign の作業場所を一時 dir の git リポジトリにする。Celeris は git の作業場所でだけ WorkUnit を並列に

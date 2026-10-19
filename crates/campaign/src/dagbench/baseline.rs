@@ -160,6 +160,7 @@ pub struct Baseline {
     state: State,
     saves: u64,
     stop_after_saves: Option<u64>,
+    progress: Option<(File, u64)>,
 }
 
 impl Baseline {
@@ -213,6 +214,7 @@ impl Baseline {
             state,
             saves: 0,
             stop_after_saves: None,
+            progress: None,
         };
         // 実行中だった作業は止まった時点で失われているので、最初からやり直す。
         for n in b.state.nodes.values_mut() {
@@ -227,6 +229,42 @@ impl Baseline {
     /// この run で `n` 回目の state 保存の直後に止める（制御 process の停止を模す）。
     pub fn stop_after_saves(&mut self, n: u64) {
         self.stop_after_saves = Some(n);
+    }
+
+    /// worker 作業の開始・終了を追記する進捗 log（celeris 側の worker ledger と同じ形、campaign は `c0`）。
+    /// 再実行（失われた進捗）を ledger から数えるために使う。既存の file には追記する。
+    pub fn set_progress_log(&mut self, path: &Path) -> Result<(), Error> {
+        super::ext::drop_torn_tail(path)?;
+        let seq = if path.exists() {
+            fs::read_to_string(path)?
+                .lines()
+                .filter(|l| !l.trim().is_empty())
+                .count() as u64
+        } else {
+            0
+        };
+        let f = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)?;
+        self.progress = Some((f, seq));
+        Ok(())
+    }
+
+    fn log_progress(&mut self, event: &str, node: &str, phase: Phase) -> Result<(), Error> {
+        let now = self.state.now;
+        let Some((f, seq)) = self.progress.as_mut() else {
+            return Ok(());
+        };
+        *seq += 1;
+        let line = serde_json::json!({
+            "seq": *seq, "logical_secs": now, "event": event,
+            "dataset": super::ext::DATASET, "campaign": "c0", "node": node,
+            "detail": {"phase": phase},
+        });
+        f.write_all(format!("{line}\n").as_bytes())?;
+        f.sync_data()?;
+        Ok(())
     }
 
     /// この run で行った state 保存の回数。
@@ -293,6 +331,7 @@ impl Baseline {
             let logical = self.logical_id(id);
             match ext.lookup(&logical) {
                 Lookup::Known { physical_id, state } => {
+                    ext.wait_started(&logical)?;
                     let n = self.state.nodes.get_mut(id).expect("node");
                     n.physical_id = Some(physical_id);
                     n.status = Status::Waiting;
@@ -306,6 +345,7 @@ impl Baseline {
             }
         }
         let mut retry_submit = true;
+        let mut started: Vec<(String, Phase)> = Vec::new();
         loop {
             let mut changed = false;
             // 依存解決
@@ -358,10 +398,16 @@ impl Baseline {
                 n.status = Status::Running;
                 n.started_at.get_or_insert(now);
                 n.phase_end = Some(now + secs);
+                let phase = n.phase;
+                started.push((id.clone(), phase));
                 changed = true;
             }
             if changed {
-                if self.save()? {
+                let stop = self.save()?;
+                for (id, phase) in started.drain(..) {
+                    self.log_progress("node_started", &id, phase)?;
+                }
+                if stop {
                     return Ok(Outcome::Interrupted);
                 }
                 continue;
@@ -429,6 +475,7 @@ impl Baseline {
             }
             // 作業の終了
             let now = self.state.now;
+            let mut finished: Vec<(String, Phase)> = Vec::new();
             for id in &ids {
                 let n = &self.state.nodes[id];
                 if n.status != Status::Running || n.phase_end.is_none_or(|e| e > now) {
@@ -447,6 +494,7 @@ impl Baseline {
                     n.status = Status::Done;
                     n.done_at = Some(now);
                     n.phase_end = None;
+                    finished.push((id.clone(), phase));
                 }
             }
             if !self
@@ -465,7 +513,11 @@ impl Baseline {
                     self.state.next_poll = None;
                 }
             }
-            if self.save()? {
+            let stop = self.save()?;
+            for (id, phase) in finished {
+                self.log_progress("node_finished", &id, phase)?;
+            }
+            if stop {
                 return Ok(Outcome::Interrupted);
             }
         }
@@ -479,6 +531,9 @@ impl Baseline {
             return Ok(true);
         }
         let reply = ext.submit(&logical, self.cfg.ext_job_secs);
+        if reply.is_ok() {
+            ext.wait_started(&logical)?;
+        }
         let n = self.state.nodes.get_mut(id).expect("node");
         match reply {
             Ok(r) => {
@@ -503,8 +558,12 @@ impl Baseline {
     /// 応答不明の投入を照会で解く。見つからなければ再投入に戻す。
     fn reconcile(&mut self, ext: &mut ExtSim, id: &str) -> Result<bool, Error> {
         let logical = self.logical_id(id);
+        let found = ext.lookup(&logical);
+        if matches!(found, Lookup::Known { .. }) {
+            ext.wait_started(&logical)?;
+        }
         let n = self.state.nodes.get_mut(id).expect("node");
-        match ext.lookup(&logical) {
+        match found {
             Lookup::Known { physical_id, .. } => {
                 n.physical_id = Some(physical_id);
                 n.status = Status::Waiting;

@@ -5484,6 +5484,7 @@ export type TaskDetail = {
   "answers": Array<AnswerNote>;
   "approvals": Array<ApprovalLink>;
   "behind_target": BehindTarget;
+  "campaign"?: CampaignIdentity | null;
   "children": Array<TaskRef>;
   "cluster"?: string | null;
   "cluster_job_wait"?: ClusterJobWaitView | null;

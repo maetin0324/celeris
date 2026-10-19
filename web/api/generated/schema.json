@@ -27365,6 +27365,17 @@
           "$ref": "#/$defs/BehindTarget",
           "description": "Last observed target snapshot; reading the detail does not run Git."
         },
+        "campaign": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CampaignIdentity"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR 2026-10-16-campaign-identity-propagation: 祖先の鎖を辿って解決した campaign 識別\n（variant・構成 pin を含む）。campaign に属さない task は省略。鎖の矛盾・循環・保存値の不正は\nnull に丸めず `task_detail` がエラーを返す。`Task` 本体には欄を足さない。"
+        },
         "children": {
           "items": {
             "$ref": "#/$defs/TaskRef"

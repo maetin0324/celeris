@@ -91,7 +91,7 @@ fn grade_case_is_a_normal_experiment_plus_recompute_pinned_to_train_csv() {
     let e = gc.experiment.as_ref().unwrap();
     assert_eq!(e.min_jobs, 1);
     assert_eq!(e.conditions["queue"], "debug");
-    assert_eq!(e.conditions["ncpus"], 1);
+    assert_eq!(e.conditions["ncpus"], 24);
     let r = gc.recompute.as_ref().unwrap();
     assert_eq!(
         r.pinned_raw["inputs/train.csv"],

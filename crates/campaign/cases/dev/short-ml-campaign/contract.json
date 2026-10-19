@@ -48,14 +48,14 @@
     "tolerance_relative_n_train_rows": 0.0
   },
   "pins": {
-    "case_json": "558704373c81242cd18ddfe1f6c871addeecdb244bae89c746d37727dc9355cb",
-    "materials_sha256": "945d07d1ee6e1aadd3dbd66d5b6a3d939bdebf8d823f9e63599cac90f455e0df",
+    "case_json": "5676c78ddb1badfbb1467d0eaca64b9f24eb3b28bffc67fd65833ceb494f90c6",
+    "materials_sha256": "f8256e154d2a9dba2f09fe134bb71c8bb70b3563316518243bee580296226b9d",
     "kb_snapshot": "5b84e3b50c68df468c8ad02ce463a834bac74d8d5baa7e0544acc04726fdd618",
     "inputs": {
       "train.csv": "123c9b3f6d8850a8beb3d33f20f529245cac5fee5254e880c4424b6fac530b77",
       "eval-features.csv": "aafea4de8d3ac184d98b0699509d53e1bbc2e8fd4880aece8124c44783733ac0"
     },
-    "grade_case": "b6f1908998267a61d06c9899aff01bfa08a418a748a1f0251e1e400b86ac85f0",
+    "grade_case": "c4dadc446e47475df679074fa16596790e47a5c53ef3f4e43b1a212f764c5207",
     "private": "18f512bd05b4345881f0bcf50093b8508e566d5d5ecbb229122246652e5a1ae8",
     "env_lock": "12327619637a556e902f60b3fe0923b79eaa9113a88b23f9e136ab0d3ec63c79"
   },
@@ -63,8 +63,9 @@
     "llm_tokens": 0,
     "main_comparison_trials": 0,
     "gpu": false,
-    "cpu_cores": 1,
-    "memory_gib": 2,
+    "cpu_cores": 24,
+    "memory_gib": 124,
+    "gpus_allocated": 1,
     "disk_bytes": 104857600,
     "job_walltime_secs": 600,
     "case_wall_secs": 1800,

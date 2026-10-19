@@ -92,7 +92,7 @@ fn artifact(job: &str) -> Fx {
     let doc = json!({"jobs": [{
         "job_id": job, "evidence_kind": "real",
         "scheduler_record": format!("evidence/{job}.qstat"), "log": format!("evidence/{job}.log"),
-        "raw": raw, "conditions": {"queue": "debug", "ncpus": 1}}]});
+        "raw": raw, "conditions": {"queue": "debug", "ncpus": 24}}]});
     fs::write(art.join("evidence/jobs.json"), doc.to_string()).unwrap();
     Fx { _t: t, out, art }
 }
@@ -129,7 +129,7 @@ fn grade(fx: &Fx, gc: &GradeCase, observed: Option<&Path>) -> (Status, String) {
 fn ok_reply() -> Fixed {
     Fixed {
         cluster: "sirius".into(),
-        raw: qstat(JOB, "F", Some(0), "debug", 1),
+        raw: qstat(JOB, "F", Some(0), "debug", 24),
     }
 }
 
@@ -147,7 +147,7 @@ fn success_is_collected_by_the_evaluator_and_passes_the_normal_grader() {
     assert_eq!(v["jobs"][0]["exit_status"], 0);
     assert_eq!(
         v["jobs"][0]["conditions"],
-        json!({"queue": "debug", "ncpus": 1})
+        json!({"queue": "debug", "ncpus": 24})
     );
     assert_eq!(grade(&fx, &gc, Some(&p)), (Status::Pass, String::new()));
 }
@@ -157,7 +157,7 @@ fn nonzero_exit_is_recorded_and_rejected_by_the_grader() {
     let (gc, fx) = (grade_case(), artifact(JOB));
     let t = Fixed {
         cluster: "sirius".into(),
-        raw: qstat(JOB, "F", Some(1), "debug", 1),
+        raw: qstat(JOB, "F", Some(1), "debug", 24),
     };
     let p = run(&fx, &t, &refs(JOB), &expect(&gc)).unwrap();
     let (s, why) = grade(&fx, &gc, Some(&p));
@@ -198,7 +198,7 @@ fn self_reported_job_id_alone_is_not_accepted() {
     let other = "4243.sirius";
     let t = Fixed {
         cluster: "sirius".into(),
-        raw: qstat(other, "F", Some(0), "debug", 1),
+        raw: qstat(other, "F", Some(0), "debug", 24),
     };
     let p = run(&fx, &t, &refs(other), &expect(&gc)).unwrap();
     let (s, why) = grade(&fx, &gc, Some(&p));
@@ -224,7 +224,7 @@ fn collection_refuses_unexecuted_unfinished_mismatched_and_missing() {
     refuse(
         &Fixed {
             cluster: "sirius".into(),
-            raw: qstat(JOB, "R", None, "debug", 1),
+            raw: qstat(JOB, "R", None, "debug", 24),
         },
         &refs(JOB),
         &e,
@@ -233,7 +233,7 @@ fn collection_refuses_unexecuted_unfinished_mismatched_and_missing() {
     refuse(
         &Fixed {
             cluster: "sirius".into(),
-            raw: qstat(JOB, "F", None, "debug", 1),
+            raw: qstat(JOB, "F", None, "debug", 24),
         },
         &refs(JOB),
         &e,
@@ -242,7 +242,7 @@ fn collection_refuses_unexecuted_unfinished_mismatched_and_missing() {
     refuse(
         &Fixed {
             cluster: "sirius".into(),
-            raw: qstat("9.sirius", "F", Some(0), "debug", 1),
+            raw: qstat("9.sirius", "F", Some(0), "debug", 24),
         },
         &refs(JOB),
         &e,
@@ -252,7 +252,7 @@ fn collection_refuses_unexecuted_unfinished_mismatched_and_missing() {
     refuse(
         &Fixed {
             cluster: "pegasus".into(),
-            raw: qstat(JOB, "F", Some(0), "debug", 1),
+            raw: qstat(JOB, "F", Some(0), "debug", 24),
         },
         &refs(JOB),
         &e,

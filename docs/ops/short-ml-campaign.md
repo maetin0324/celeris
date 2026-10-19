@@ -50,7 +50,7 @@ python3 crates/campaign/scripts/verify-short-ml-case.py --acceptance --evidence 
 
 ## 固定した条件（実行前契約）
 
-- LLM 0 token、主比較の試行 0、GPU なし、sirius の debug queue で 1 core・2 GiB・walltime 600 s の CPU job 1 本（硬い上限 2）、disk 100 MiB、case wall 1800 s。
+- LLM 0 token、主比較の試行 0、sirius の debug queue で queue 下限の 1 vnode（select=1:ncpus=24:mem=124gb:ngpus=1、-A NBBG）・walltime 600 s の job 1 本（硬い上限 2）。job.py は単一スレッドのままで GPU は使わない（2026-10-19 人の決定 sirius-full-vnode-case = approve-full-vnode）、disk 100 MiB、case wall 1800 s。
 - 失敗しても再投入せず、失敗を報告して止まる。
 - 入力の隔離: eval の目的変数は評価側だけが持つ。trial は `train.csv` と `eval-features.csv` だけを受ける。
 - 終了条件: `qstat -x -f` の `Exit_status=0` と `results/` の raw 3 file。
@@ -60,7 +60,7 @@ python3 crates/campaign/scripts/verify-short-ml-case.py --acceptance --evidence 
 
 実 job を投入する前に次を満たす。満たさなければ投入しない。
 
-1. 人が sirius の CPU job 1 本の投入を承認している。
+1. 人が sirius の 1 vnode job 1 本（-A NBBG）の投入を承認している。
 2. token 枠の**現在の残り**を、調査時点の数字ではなく現在の出典（台帳）で再確認する。本 case の消費は 0 token・0 試行。
 3. 環境を評価側が測定し、lock と一致する:
    `ssh sirius python3 -c 'import sys,numpy;print(sys.version_info[:3],numpy.__version__)'`
@@ -69,7 +69,7 @@ python3 crates/campaign/scripts/verify-short-ml-case.py --acceptance --evidence 
 
 編集は手元の worktree で行い、sirius では実行と検証だけを行う。
 
-1. **提出**: case の materials（`job.py`・`job.pbs`）と `inputs/` を sirius の作業 dir に置き（`/work/NBB/rmaeda` 配下）、`qsub job.pbs` を 1 本だけ投入する。返る数値[.host] を job id として Celeris 台帳の `cluster_job_ids`（`scheduler:cluster:job_id`）に記録する。PID は job id にしない。
+1. **提出**: case の materials（`job.py`・`job.pbs`）と `inputs/` を sirius の作業 dir に置き（`/work/NBB/rmaeda` 配下）、`qsub -A NBBG job.pbs` を 1 本だけ投入する。返る数値[.host] を job id として Celeris 台帳の `cluster_job_ids`（`scheduler:cluster:job_id`）に記録する。PID は job id にしない。
 2. **終了観測**: ADR-0090 の `cluster_job` wait で終了を待つ。一般の日時待ちは未対応で、`sleep` や偽 job で待たない。
 3. **収集（評価側）**: `qstat -x -f <job id>` の出力を `evidence/qstat-<job id>.txt` に保存し、`observe::collect_for_trial` で `<out>/observed/<problem>/<Config>-rep<N>.json`（`celeris.observed-jobs/1`、origin=live）を作る。refs は台帳の job id、条件（queue・ncpus）は case の固定値を使う。未実行・未終了・Exit_status 欠落・raw 欠落・投入先違いは記録されない。
 4. **grade**:

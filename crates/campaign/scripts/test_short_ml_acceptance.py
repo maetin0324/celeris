@@ -158,10 +158,10 @@ def build_artifact(root, job="4242.sirius"):
     (art / f"evidence/{job}.log").write_text("done\n")
     (art / "evidence/jobs.json").write_text(json.dumps({"jobs": [{
         "job_id": job, "evidence_kind": "real", "scheduler_record": f"evidence/{job}.qstat",
-        "log": f"evidence/{job}.log", "raw": raw, "conditions": {"queue": "debug", "ncpus": 1}}]}))
+        "log": f"evidence/{job}.log", "raw": raw, "conditions": {"queue": "debug", "ncpus": 24}}]}))
     obs = {"schema": "celeris.observed-jobs/1", "origin": "synthetic", "jobs": [{
         "job_id": job, "scheduler": "pbs", "cluster": "sirius", "source": "sirius", "exit_status": 0,
-        "conditions": {"queue": "debug", "ncpus": 1}, "raw": raw, "scheduler_record_sha256": sha(b"qstat")}]}
+        "conditions": {"queue": "debug", "ncpus": 24}, "raw": raw, "scheduler_record_sha256": sha(b"qstat")}]}
     (root / "observed.json").write_text(json.dumps(obs))
     return art, root / "observed.json"
 

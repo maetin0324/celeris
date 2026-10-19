@@ -4,7 +4,7 @@
 train と eval は分離されており、eval の y は評価側だけが持つ。eval の指標をあなたが計算することはできないし、してはならない。
 
 手順:
-1. `job.py`（numpy のみ使うリッジ回帰、λ=1.0、切片は罰則なし）を `job.pbs` で sirius の debug queue に 1 本投入する（1 core、10 分以内）。
+1. `job.py`（numpy のみ使うリッジ回帰、λ=1.0、切片は罰則なし）を `job.pbs` で sirius の debug queue に 1 本投入する（sirius の queue 下限の 1 vnode = 24 core・124 GB・GPU 1 を確保するが、job.py は単一スレッドで GPU は使わない。10 分以内）。
    job は `results/coefficients.csv`（列 name,value）・`results/metrics.csv`（列 name,value）・`results/predictions.csv`（列 id,pred）を書く。
 2. `qstat -x -f <job id>` の出力を `evidence/qstat-<job id>.txt` に保存し、`evidence/jobs.json` に job_id・scheduler_record・conditions・raw（path と sha256）を書く。
    job id の無い数値や、実行していない job の結果は証拠にならない。

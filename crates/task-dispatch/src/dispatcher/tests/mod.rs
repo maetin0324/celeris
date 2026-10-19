@@ -3028,3 +3028,4 @@ mod stale_priority;
 mod write_set_gate;
 
 mod orphan_work_units;
+mod variant_pin;

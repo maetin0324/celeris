@@ -137,6 +137,7 @@ mod snapshot;
 /// ADR-0130 D5: review 前 sync の待ち行列の stale 優先。
 mod stale_priority;
 mod tree_units;
+mod variant_pin;
 use sinks::{ReviewerSink, StoreSink};
 mod work_units;
 mod wu_base;

@@ -1397,7 +1397,32 @@ impl Dispatcher {
     pub(super) fn assign_if_needed(&mut self, task: Task) -> Result<Option<Task>, DispatchError> {
         use task_ops::matching::Assignment;
         let org = self.store.org_list()?;
-        match task_ops::matching::decide(&org, &task) {
+        // variant 付き試行（campaign 識別に variant_org を持つ task とその子孫）は、matching の前に
+        // 共有 org が pin と一致するかを確かめる。解決・照合の失敗は blocked＋理由 event（適用済みと扱わない）。
+        // org は読むだけで書き換えない。
+        let pin = match self.variant_org_pin(&task) {
+            Ok(pin) => pin,
+            Err(reason) => return self.block_variant_task(&task, reason),
+        };
+        if let Some(pin) = &pin
+            && let Err(reason) = pin.check_org(&org)
+        {
+            return self.block_variant_task(&task, reason);
+        }
+        let decision = task_ops::matching::decide(&org, &task);
+        if let Some(pin) = &pin {
+            let assignee = match &decision {
+                Assignment::Assigned { node, .. } => Some(node.as_str()),
+                Assignment::NotApplicable => task.assignee.as_deref(),
+                Assignment::Unroutable { .. } => None,
+            };
+            if let Some(a) = assignee
+                && let Err(reason) = variant_pin::check_assignee(pin, a)
+            {
+                return self.block_variant_task(&task, reason);
+            }
+        }
+        match decision {
             Assignment::NotApplicable => Ok(Some(task)),
             Assignment::Assigned {
                 node,

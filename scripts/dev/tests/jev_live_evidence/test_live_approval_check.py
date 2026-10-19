@@ -1,4 +1,4 @@
-"""jev-live-approval-check.py: 証跡未取得は非 0 + 不足一覧、揃えば 0（live の判定はしない）。"""
+"""jev-live-evidence.py --check-approval-run-dir: 証跡未取得は非 0 + 不足一覧、揃えば 0（live の判定はしない）。"""
 import json
 import os
 import subprocess
@@ -7,7 +7,7 @@ import tempfile
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-SCRIPT = os.path.join(HERE, "..", "..", "jev-live-approval-check.py")
+SCRIPT = os.path.join(HERE, "..", "..", "jev-live-evidence.py")
 SHA = "a" * 64
 MID = "jev-b1c1-m1"
 
@@ -30,7 +30,7 @@ def full(d, approval=None):
 
 
 def run(d):
-    p = subprocess.run([sys.executable, SCRIPT, "--run-dir", d, "--measurement-id", MID], capture_output=True, text=True)
+    p = subprocess.run([sys.executable, SCRIPT, "--check-approval-run-dir", d, "--measurement-id", MID], capture_output=True, text=True)
     return p.returncode, json.loads(p.stdout), p.stderr
 
 

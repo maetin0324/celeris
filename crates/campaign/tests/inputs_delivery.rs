@@ -70,7 +70,6 @@ impl Env {
                 }],
             )]),
             lock: None,
-            series: None,
         }
     }
     fn records(&self) -> Vec<Value> {

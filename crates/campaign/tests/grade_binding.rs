@@ -33,7 +33,6 @@ fn pilot_out(dir: &Path) -> (CampaignManifest, PathBuf) {
         inputs_src: None,
         case_inputs: Default::default(),
         lock: None,
-        series: None,
     };
     run(&m, &i, &MockExecutor::seeded(), &o).expect("run");
     (m, out)

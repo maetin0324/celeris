@@ -38,8 +38,6 @@ pub struct RunOptions {
     /// 期待 campaign lock（`lock_exec::expected_lock`）。実行（有料）経路は必須。None は mock など無課金の制御用。
     /// 渡すと、executor 投入・台帳更新より前に実体を照合し、`<out>/lock.json` に保存・再照合する。
     pub lock: Option<CampaignLock>,
-    /// 副比較（B1/C1）の系列台帳の固定位置。副比較は必須（無ければ副作用の前に拒否）。主比較は使わない。
-    pub series: Option<crate::series::SeriesPin>,
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -633,28 +631,44 @@ fn interrupted(
     Ok(Driven::Deferred)
 }
 
+/// 系列台帳の固定位置は期待 lock の `series` 欄から取る（lock が無い副比較は拒否される）。
 pub fn run(
     m: &CampaignManifest,
     input: &InputManifest,
     exec: &dyn Executor,
     opts: &RunOptions,
 ) -> Result<RunReport, String> {
+    let pin = opts.lock.as_ref().and_then(|l| l.series.clone());
+    run_with_series(m, input, exec, opts, pin.as_ref())
+}
+
+/// 副比較（B1/C1）は系列台帳の固定位置 `series` が必須（無ければ副作用の前に拒否）。主比較は使わない。
+pub fn run_with_series(
+    m: &CampaignManifest,
+    input: &InputManifest,
+    exec: &dyn Executor,
+    opts: &RunOptions,
+    series: Option<&crate::series::SeriesPin>,
+) -> Result<RunReport, String> {
     m.check_against_input(input)?;
     // 副比較: 出力先が許可 root の中であること・系列台帳が読めること・同じ系列の他 run が動いていないことを、
     // 副作用（out の作成・executor・台帳）より前に確かめる。
     if m.is_side()
         && let Some(l) = &opts.lock
-        && l.series != opts.series
+        && l.series.as_ref() != series
     {
         return Err(
             "campaign lock series pin differs from the run's series ledger; refusing".into(),
         );
     }
-    let mut series = series::begin(m, opts.series.as_ref(), &opts.out)?;
-    let prior = series.as_ref().map(|s| s.2.clone()).unwrap_or_default();
+    let mut ledger_guard = self::series::begin(m, series, &opts.out)?;
+    let prior = ledger_guard
+        .as_ref()
+        .map(|s| s.2.clone())
+        .unwrap_or_default();
     let r = run_inner(m, input, exec, opts, &prior);
     // 成否にかかわらず、この out の消費（確定 + 予約）を固定の系列台帳へ追記する（out の実体があるときだけ）。
-    if let Some((s, real, _)) = &mut series {
+    if let Some((s, real, _)) = &mut ledger_guard {
         let rec = s.record(real, &m.budget);
         return match (r, rec) {
             (Ok(r), Ok(())) => Ok(r),

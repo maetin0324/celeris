@@ -25,6 +25,8 @@
 （docs/ops/jev-c1-live-check.md の §7: launcher.meta・daemon identity・実行像 sha256・STATE_DIR の DB path・
 その run の export を run/ に保存した証跡）で判定する。
 
+証跡の実在確認: --check-approval-run-dir <STATE_DIR>/run --measurement-id <ID>（run/ の構成は上記 docs §7。欠ければ非 0）。
+
 終了コード: 0 整合 OK（live は未判定）/ 1 検証不合格 / 2 証拠 dir なし（dir・必須 file なし）または信頼元なし・到達不能 /
 3 読取元の schema 不明・必要欄なし・campaign 不在（整合検査不可）。
 """
@@ -585,14 +587,116 @@ def verify(evidence_dir, data, require_live, environ=None):
     return errs, report
 
 
+# ---- live 承認の証跡の実在確認（live の判定はしない。docs/ops/jev-c1-live-check.md §7）----
+APPROVAL_EXPORT_FILES = ["records.jsonl", "summary.json", "provenance.json", "routing_events.jsonl"]
+APPROVAL_SHA = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _read_text(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return f.read()
+    except OSError:
+        return None
+
+
+def approval_missing(run_dir, measurement_id):
+    missing = []
+
+    def need(name, why):
+        p = os.path.join(run_dir, name)
+        text = _read_text(p) if not name.endswith("/") else None
+        if name.endswith("/"):
+            if not os.path.isdir(p) or not os.listdir(p):
+                missing.append(f"{name}: {why}（無い・空）")
+            return None
+        if text is None or not text.strip():
+            missing.append(f"{name}: {why}（無い・空）")
+            return None
+        return text
+
+    if not os.path.isdir(run_dir):
+        return [f"run dir {run_dir} が無い（証跡が 1 つも取得されていない）"]
+    meta = need("launcher.meta", "launcher の起動記録")
+    if meta is not None:
+        kv = dict(l.split("=", 1) for l in meta.splitlines() if "=" in l)
+        for k in ("starttime", "config", "release", "exe", "exe_sha256"):
+            if not kv.get(k):
+                missing.append(f"launcher.meta: {k} が無い")
+        meta_sha = kv.get("exe_sha256", "")
+    else:
+        meta_sha = ""
+    ident = need("config-identity.json", "GET /api/v1/config の identity")
+    if ident is not None:
+        try:
+            j = json.loads(ident)
+            j = j.get("identity", j)
+            for k in ("pid", "release"):
+                if j.get(k) in (None, ""):
+                    missing.append(f"config-identity.json: {k} が無い")
+        except (ValueError, AttributeError):
+            missing.append("config-identity.json: JSON として読めない")
+    img = need("daemon-image.sha256", "実行像（/proc/<pid>/exe）の sha256")
+    if img is not None:
+        h = img.split()[0]
+        if not APPROVAL_SHA.match(h):
+            missing.append("daemon-image.sha256: 64 桁の sha256 ではない")
+        elif meta_sha and h != meta_sha:
+            missing.append("daemon-image.sha256: launcher.meta の exe_sha256 と一致しない")
+    db = need("state-dir-db.txt", "STATE_DIR の DB の絶対 path")
+    if db is not None and not db.strip().startswith("/"):
+        missing.append("state-dir-db.txt: 絶対 path ではない")
+    exp = os.path.join(run_dir, "export")
+    if not os.path.isdir(exp):
+        missing.append("export/: その run の export が無い")
+    else:
+        for f in APPROVAL_EXPORT_FILES:
+            t = _read_text(os.path.join(exp, f))
+            if t is None or not t.strip():
+                missing.append(f"export/{f}: 無い・空")
+    ap = need("operator-approval.md", "operator の承認記録")
+    if ap is not None:
+        kv = {}
+        for l in ap.splitlines():
+            m = re.match(r"^(measurement_id|approved_by|approved_at|decision):\s*(\S.*)$", l.strip())
+            if m:
+                kv[m.group(1)] = m.group(2).strip()
+        for k in ("measurement_id", "approved_by", "approved_at"):
+            if not kv.get(k):
+                missing.append(f"operator-approval.md: {k}: の行が無い")
+        if kv.get("decision") != "live-approved":
+            missing.append("operator-approval.md: decision: live-approved の行が無い（未承認）")
+        if kv.get("measurement_id") and kv["measurement_id"] != measurement_id:
+            missing.append(f"operator-approval.md: measurement_id が {measurement_id} と一致しない")
+    return missing
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Jev B1/C1 の実 campaign export を独立読取元の原記録と照合する検証器")
-    ap.add_argument("--evidence-dir", required=True)
+    ap.add_argument("--evidence-dir")
+    ap.add_argument("--check-approval-run-dir", metavar="RUN_DIR",
+                    help="live 承認の証跡（<STATE_DIR>/run）の実在確認だけを行う（--measurement-id 必須）。欠ければ非 0。"
+                         "live かどうかは判定しない（operator の承認記録の内容で決まる）")
+    ap.add_argument("--measurement-id")
     ap.add_argument("--require-live", action="store_true",
                     help="厳密な被覆検査: 実 task_id 形式・C1 の Jev 成功の記録（同じ run の原記録で整合）・root/子/孫/retry の被覆を必須にする。"
                          "原記録との整合だけを確かめる。live かどうかは判定しない（operator 承認項目）")
     ap.add_argument("--quiet", action="store_true", help="段階別 report を stdout に出さない")
     a = ap.parse_args(argv)
+    if a.check_approval_run_dir:
+        if not a.measurement_id:
+            ap.error("--check-approval-run-dir には --measurement-id が要る")
+        missing = approval_missing(a.check_approval_run_dir, a.measurement_id)
+        print(json.dumps({"run_dir": a.check_approval_run_dir, "measurement_id": a.measurement_id, "missing": missing,
+                          "scope": "証跡の実在・内部整合の確認のみ。live かどうかは operator の承認記録で決まる"},
+                         ensure_ascii=False, indent=2))
+        if missing:
+            print(f"証跡不足: {len(missing)} 件（live 未確認）", file=sys.stderr)
+            return 1
+        print("証跡は揃っている（live の承認は operator の記録の内容で判断する）", file=sys.stderr)
+        return 0
+    if not a.evidence_dir:
+        ap.error("--evidence-dir が要る")
     try:
         data = load(a.evidence_dir)
         errs, report = verify(a.evidence_dir, data, a.require_live)

@@ -16,7 +16,7 @@ tasks: [01M59KY5FPEWVNW0DT07HZRA3Q, 01M59W8DFMVT3M8WRM4XP8ZEWE]
 |---|---|---|
 | 実装済み | Jev 分類段（dispatcher の外）、lane 層（引き上げのみ。明示・許可/天井・利用可否が勝つ）、task 単位 routing 固定と祖先継承、Jev 消費記録、decision log への run 投影、campaign export、`jev_smoke` 判定器、段階別集計 `jev-stages`（`crates/campaign/src/jev_stages.rs`） | inventory.md (1)、stage-agg.md |
 | 無 LLM 検証済み | 分類→lane 提案→制約適用後 lane→実行 model が通常の tick で届き、段階別件数が合うこと（合成 case、mock 分類）。B1/C1 variant の hash 固定・差は方策のみ・根拠表不使用・子/孫/retry 継承（in-memory store） | `jev_synth_e2e.rs`（1 passed）、`variant_pin_b1c1.rs`（7 試験）、`jev_stages.rs`（5 passed）。合成の結果は効果ではない |
-| operator 実証未取得 | **live の承認**（§7: 測定 daemon の launcher.meta・identity・実行像 sha256・DB path・その run の export・承認記録。未取得なら `jev-live-approval-check.py` は非 0）、実 Jev API の分類**成功**（観測は client_error / not_attempted のみ）、Jev の版が記録に残ること、実 daemon の子/孫 run で routing pin と `lane_assist` が維持されること、**実 export の整合 OK**（`jev-live-evidence.py` は用意済みだが、実 daemon の DB・実 export での実行は 1 度も行っていない＝未検証。整合 OK は live ではない）、実費用（cash）の記録 | live-smoke.md 再実行 6〜7、inventory 不足 1・2・7・8 |
+| operator 実証未取得 | **live の承認**（§7: 測定 daemon の launcher.meta・identity・実行像 sha256・DB path・その run の export・承認記録。未取得なら `jev-live-evidence.py --check-approval-run-dir` は非 0）、実 Jev API の分類**成功**（観測は client_error / not_attempted のみ）、Jev の版が記録に残ること、実 daemon の子/孫 run で routing pin と `lane_assist` が維持されること、**実 export の整合 OK**（`jev-live-evidence.py` は用意済みだが、実 daemon の DB・実 export での実行は 1 度も行っていない＝未検証。整合 OK は live ではない）、実費用（cash）の記録 | live-smoke.md 再実行 6〜7、inventory 不足 1・2・7・8 |
 | 任意・延期 | ceiling/availability 抑止の合成 case、候補集合 2 モデル以上の検査の本番 preflight 化、B1/C1 を A なしの別 manifest として宣言する形、lane 変更と exec model 変更の連結集計、Jev token 数・CoS usage の記録 | synth-e2e.md 未実施、variant-pin.md 不備、inventory 不足 4・5・6・10・11 |
 | 承認待ち | 実 LLM を伴う本検査の実行（残予算の確認と人の実行許可）、予算の増額、大規模再測定、論文投稿・外部送信 | 起票は自動開始の承認ではない |
 
@@ -155,7 +155,7 @@ decision: live-approved
 ### 7.2 実在確認（証跡が揃っているかだけ。live は判定しない）
 
 ```sh
-python3 scripts/dev/jev-live-approval-check.py --run-dir "$STATE_DIR/run" --measurement-id "$MEASUREMENT_ID"
+python3 scripts/dev/jev-live-evidence.py --check-approval-run-dir "$STATE_DIR/run" --measurement-id "$MEASUREMENT_ID"
 ```
 証跡が 1 つでも欠ける・食い違う・承認が `live-approved` でない場合は **非 0** で `missing`（不足一覧）を出す。0 は証跡が揃ったことだけを意味し、live の判断は承認記録の内容による。
 

@@ -252,7 +252,6 @@ fn fx() -> Fx {
         a_account: Some("lab".into()),
         measure: Some(measure),
         measurement_id: None,
-        series_root: None,
         cap_env: Some(preflight_setup::write_cap_env(d)),
     };
     Fx { dir, inp }
@@ -279,7 +278,6 @@ impl Fx {
             inputs_src: self.inp.inputs_src.clone(),
             case_inputs: inputs::for_problems(&set, &self.manifest().problems),
             lock: None,
-            series: None,
         }
     }
     fn gated(&self, e: &Counting, o: &RunOptions) -> Result<runner::RunReport, String> {

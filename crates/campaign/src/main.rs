@@ -58,7 +58,6 @@ fn preflight_inputs(args: &[String], manifest_path: &std::path::Path) -> Inputs 
             daemon_pid: text("--daemon-pid").and_then(|p| p.parse().ok()),
         }),
         measurement_id: text("--measurement-id"),
-        series_root: arg(args, "--series-root"),
         cap_env: arg(args, "--cap-env"),
     }
 }
@@ -112,7 +111,36 @@ fn cli_expected_lock(
     if !out.join(celeris_campaign::lock_exec::LOCK_FILE).exists() {
         return Ok(None);
     }
-    preflight::expected_lock(&preflight_inputs(args, manifest_path), m).map(Some)
+    cli_lock(args, manifest_path, m).map(Some)
+}
+
+/// 期待 lock。副比較は系列台帳の固定位置（--series-root + --measurement-id）も封印する。
+fn cli_lock(
+    args: &[String],
+    manifest_path: &std::path::Path,
+    m: &CampaignManifest,
+) -> Result<celeris_campaign::lock::CampaignLock, String> {
+    let lock = preflight::expected_lock(&preflight_inputs(args, manifest_path), m)?;
+    let pin = cli_series_pin(args, manifest_path, m)?;
+    preflight::with_series(lock, m, pin.as_ref())
+}
+
+/// 副比較の系列台帳の固定位置。主比較は None。
+fn cli_series_pin(
+    args: &[String],
+    manifest_path: &std::path::Path,
+    m: &CampaignManifest,
+) -> Result<Option<celeris_campaign::series::SeriesPin>, String> {
+    if !m.is_side() {
+        return Ok(None);
+    }
+    let pi = preflight_inputs(args, manifest_path);
+    preflight::series_pin(
+        arg(args, "--series-root").as_deref(),
+        pi.measurement_id.as_deref(),
+        m,
+    )
+    .map(Some)
 }
 
 fn transport(args: &[String]) -> Result<CurlTransport, String> {
@@ -295,7 +323,9 @@ fn run(args: Vec<String>) -> Result<String, String> {
         }
         "series-init" => {
             // 副比較の系列台帳を作る（冪等）。--import-out は引継ぎ元の既存 out（消費を台帳へ追記する）。
-            let pin = preflight::series_pin(&preflight_inputs(&args, &manifest_path), &m)?;
+            let Some(pin) = cli_series_pin(&args, &manifest_path, &m)? else {
+                return Ok("not a side comparison manifest; no series ledger is used".into());
+            };
             let imports: Vec<PathBuf> = args
                 .iter()
                 .enumerate()
@@ -434,6 +464,8 @@ fn run(args: Vec<String>) -> Result<String, String> {
             } else {
                 Default::default()
             };
+            // 副比較は固定の系列台帳（測定 ID ごと）を必ず使う。主比較は None。
+            let pin = cli_series_pin(&args, &manifest_path, &m)?;
             let opts = runner::RunOptions {
                 out: out_dir.clone(),
                 repo_src: arg(&args, "--repo-src"),
@@ -443,18 +475,10 @@ fn run(args: Vec<String>) -> Result<String, String> {
                 case_inputs,
                 // 実行（有料）経路は、preflight・runner・再開で同じ期待 lock を使う。
                 lock: if matches!(which.as_str(), "harness" | "celeris") {
-                    Some(preflight::expected_lock(
-                        &preflight_inputs(&args, &manifest_path),
-                        &m,
-                    )?)
+                    Some(cli_lock(&args, &manifest_path, &m)?)
                 } else {
                     None
                 },
-                // 副比較は固定の系列台帳（測定 ID ごと）を必ず使う。主比較は None。
-                series: m
-                    .is_side()
-                    .then(|| preflight::series_pin(&preflight_inputs(&args, &manifest_path), &m))
-                    .transpose()?,
             };
             // watch は同じ走査を台帳が閉じるまで繰り返す（再起動しても台帳から再開する）。
             let wopts = (cmd == "watch")
@@ -478,9 +502,17 @@ fn run(args: Vec<String>) -> Result<String, String> {
             let watched = std::cell::Cell::new(None);
             let drive = |e: &dyn Executor| -> Result<runner::RunReport, String> {
                 match wopts {
-                    None => runner::run(&m, &input, e, &opts),
+                    None => runner::run_with_series(&m, &input, e, &opts, pin.as_ref()),
                     Some(w) => {
-                        let r = watch::watch(&m, &input, e, &opts, w, &SystemClock)?;
+                        let r = watch::watch_with_series(
+                            &m,
+                            &input,
+                            e,
+                            &opts,
+                            pin.as_ref(),
+                            w,
+                            &SystemClock,
+                        )?;
                         watched.set(Some((r.iterations, r.end)));
                         Ok(r.last)
                     }

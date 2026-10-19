@@ -78,12 +78,26 @@ pub fn watch(
     w: WatchOptions,
     clock: &dyn Clock,
 ) -> Result<WatchReport, String> {
+    let pin = opts.lock.as_ref().and_then(|l| l.series.clone());
+    watch_with_series(m, input, exec, opts, pin.as_ref(), w, clock)
+}
+
+/// 副比較（B1/C1）の系列台帳の固定位置を明示して回す `watch`。
+pub fn watch_with_series(
+    m: &CampaignManifest,
+    input: &InputManifest,
+    exec: &dyn Executor,
+    opts: &RunOptions,
+    series: Option<&crate::series::SeriesPin>,
+    w: WatchOptions,
+    clock: &dyn Clock,
+) -> Result<WatchReport, String> {
     if w.interval_secs == 0 || w.max_iterations == 0 {
         return Err("--interval-secs and --max-iterations must be >= 1".into());
     }
     let mut iterations = 0;
     loop {
-        let last = runner::run(m, input, exec, opts)?;
+        let last = runner::run_with_series(m, input, exec, opts, series)?;
         iterations += 1;
         let left = unfinished(m, &opts.out)?;
         // 実行待ち（waiting）が 0 で、台帳にも未完了が無ければ終端。予算切れで打ち切った試行も、

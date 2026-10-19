@@ -10,7 +10,7 @@ use celeris_campaign::{
         ArmRouting, Budget, CampaignManifest, Cap, Config, ConfigId, InputRef, Secondary,
         SnapshotRef, Split, Termination, TokenBasis, manifest_hash,
     },
-    runner::{RunOptions, run},
+    runner::{RunOptions, run, run_with_series},
     series::{self, SeriesPin},
 };
 use routing_eval::manifest::Manifest as Input;
@@ -110,12 +110,22 @@ fn init(root: &Path, i: &Input) -> SeriesPin {
     p
 }
 
-fn opts(out: &Path, p: &SeriesPin) -> RunOptions {
+fn opts(out: &Path) -> RunOptions {
     RunOptions {
         out: out.to_path_buf(),
-        series: Some(p.clone()),
         ..RunOptions::default()
     }
+}
+
+/// 副比較の run（系列台帳の固定位置を明示する）。
+fn go(
+    m: &CampaignManifest,
+    i: &Input,
+    x: &MockAsyncExecutor,
+    out: &Path,
+    p: &SeriesPin,
+) -> Result<celeris_campaign::runner::RunReport, String> {
+    run_with_series(m, i, x, &opts(out), Some(p))
 }
 
 fn out_in(p: &SeriesPin, name: &str) -> std::path::PathBuf {
@@ -138,7 +148,7 @@ fn consumed_v1() -> Fx {
     let m1 = side(&i, "v1", 10_000_000);
     let x = MockAsyncExecutor::new(0);
     for _ in 0..4 {
-        run(&m1, &i, &x, &opts(&out_in(&p, "out-v1"), &p)).expect("v1");
+        go(&m1, &i, &x, &out_in(&p, "out-v1"), &p).expect("v1");
     }
     let text =
         std::fs::read_to_string(Path::new(&p.dir).join(series::LEDGER_FILE)).expect("ledger");
@@ -160,7 +170,7 @@ fn hash_change_still_counts_prior_spend_of_the_same_series() {
     );
     let out2 = out_in(&f.p, "out-v2");
     let x = MockAsyncExecutor::new(0);
-    let err = run(&m2, &f.i, &x, &opts(&out2, &f.p)).expect_err("over the approved total");
+    let err = go(&m2, &f.i, &x, &out2, &f.p).expect_err("over the approved total");
     assert!(err.contains("approved total"), "{err}");
     assert_eq!(x.submit_calls(), 0);
     assert!(!out2.exists(), "refused before creating the out dir");
@@ -173,7 +183,7 @@ fn changing_the_out_inside_the_allowed_root_still_sums_even_with_the_same_hash()
     let m1 = side(&f.i, "v1", f.tokens);
     let x = MockAsyncExecutor::new(0);
     let other = out_in(&f.p, "nested").join("out-again");
-    let err = run(&m1, &f.i, &x, &opts(&other, &f.p)).expect_err("over the approved total");
+    let err = go(&m1, &f.i, &x, &other, &f.p).expect_err("over the approved total");
     assert!(err.contains("approved total"), "{err}");
     assert_eq!(x.submit_calls(), 0);
 }
@@ -184,7 +194,7 @@ fn remaining_total_below_one_reservation_submits_nothing() {
     // 残り < 1 試行の予約: 既消費を合算しなければ（新 hash だけを見れば）投入されてしまう量。
     let m2 = side(&f.i, "v2", f.tokens + CASE / 2);
     let x = MockAsyncExecutor::new(0);
-    let rep = run(&m2, &f.i, &x, &opts(&out_in(&f.p, "out-v2"), &f.p)).expect("run");
+    let rep = go(&m2, &f.i, &x, &out_in(&f.p, "out-v2"), &f.p).expect("run");
     assert!(rep.budget_stopped);
     assert_eq!(x.submit_calls(), 0);
 }
@@ -195,11 +205,11 @@ fn resume_and_repeat_do_not_double_count() {
     let m1 = side(&f.i, "v1", 10_000_000);
     let x = MockAsyncExecutor::new(0);
     for _ in 0..3 {
-        run(&m1, &f.i, &x, &opts(&out_in(&f.p, "out-v1"), &f.p)).expect("resume");
+        go(&m1, &f.i, &x, &out_in(&f.p, "out-v1"), &f.p).expect("resume");
     }
     // 総枠 = 既消費 + 1 試行分: v1 を数え直して 2 倍にしていれば、v2 は拒否される。
     let m2 = side(&f.i, "v2", f.tokens + CASE * 4);
-    let rep = run(&m2, &f.i, &x, &opts(&out_in(&f.p, "out-v2"), &f.p)).expect("v2");
+    let rep = go(&m2, &f.i, &x, &out_in(&f.p, "out-v2"), &f.p).expect("v2");
     assert!(
         rep.executed > 0,
         "prior counted once, so a reservation still fits"
@@ -225,7 +235,7 @@ fn out_outside_the_allowed_root_is_refused_before_any_effect() {
         via_link.clone(),
         root_itself,
     ] {
-        let err = run(&m2, &f.i, &x, &opts(&out, &f.p)).expect_err("outside the allowed root");
+        let err = go(&m2, &f.i, &x, &out, &f.p).expect_err("outside the allowed root");
         assert!(
             err.contains("outside the allowed output root") || err.contains("'..'"),
             "{out:?}: {err}"
@@ -260,22 +270,22 @@ fn missing_or_broken_series_ledger_is_refused_not_zero() {
     // 台帳が無い（series-init していない）。
     let p = pin(d.path());
     std::fs::create_dir_all(&p.out_root).expect("dir");
-    let e = run(&m, &i, &x, &opts(&out_in(&p, "o"), &p)).expect_err("no ledger");
+    let e = go(&m, &i, &x, &out_in(&p, "o"), &p).expect_err("no ledger");
     assert!(e.contains("missing"), "{e}");
     // 初期化後に壊す: 行の破損・台帳 file の欠損・series.json の別測定 ID。
     series::init(&p, SERIES, &[], &m.budget).expect("init");
     let ledger = Path::new(&p.dir).join(series::LEDGER_FILE);
     std::fs::write(&ledger, "not json\n").expect("corrupt");
-    assert!(run(&m, &i, &x, &opts(&out_in(&p, "o"), &p)).is_err());
+    assert!(go(&m, &i, &x, &out_in(&p, "o"), &p).is_err());
     std::fs::write(&ledger, "").expect("reset");
     std::fs::remove_file(&ledger).expect("rm");
-    assert!(run(&m, &i, &x, &opts(&out_in(&p, "o"), &p)).is_err());
+    assert!(go(&m, &i, &x, &out_in(&p, "o"), &p).is_err());
     std::fs::write(&ledger, "").expect("restore");
     let other = SeriesPin::new(d.path(), "another-id").expect("pin");
     let meta = std::fs::read_to_string(Path::new(&p.dir).join(series::SERIES_FILE)).expect("meta");
     std::fs::create_dir_all(&other.out_root).expect("dir");
     std::fs::write(Path::new(&other.dir).join(series::SERIES_FILE), meta).expect("copy");
-    assert!(run(&m, &i, &x, &opts(&out_in(&other, "o"), &other)).is_err());
+    assert!(go(&m, &i, &x, &out_in(&other, "o"), &other).is_err());
     assert_eq!(x.submit_calls(), 0);
     assert!(!out_in(&p, "o").exists());
 }
@@ -287,23 +297,11 @@ fn a_second_concurrent_run_of_the_series_is_refused() {
     let p = init(d.path(), &i);
     let held = series::open(&p, SERIES).expect("first holder");
     let x = MockAsyncExecutor::new(0);
-    let e = run(
-        &side(&i, "v1", 10_000_000),
-        &i,
-        &x,
-        &opts(&out_in(&p, "o"), &p),
-    )
-    .expect_err("busy");
+    let e = go(&side(&i, "v1", 10_000_000), &i, &x, &out_in(&p, "o"), &p).expect_err("busy");
     assert!(e.contains("another run"), "{e}");
     assert_eq!(x.submit_calls(), 0);
     drop(held);
-    run(
-        &side(&i, "v1", 10_000_000),
-        &i,
-        &x,
-        &opts(&out_in(&p, "o"), &p),
-    )
-    .expect("free again");
+    go(&side(&i, "v1", 10_000_000), &i, &x, &out_in(&p, "o"), &p).expect("free again");
 }
 
 #[test]
@@ -315,7 +313,7 @@ fn carry_over_from_an_existing_out_is_explicit() {
     let m2 = side(&f.i, "v2", f.tokens);
     series::init(&p2, SERIES, &[out_in(&f.p, "out-v1")], &m2.budget).expect("import");
     let x = MockAsyncExecutor::new(0);
-    let e = run(&m2, &f.i, &x, &opts(&out_in(&p2, "out-v2"), &p2)).expect_err("carried over");
+    let e = go(&m2, &f.i, &x, &out_in(&p2, "out-v2"), &p2).expect_err("carried over");
     assert!(e.contains("approved total"), "{e}");
 }
 

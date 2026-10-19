@@ -38,7 +38,7 @@ R=/local/celeris/data/workspaces/01M58VFRBA6HG0SSF3CG5BKM91/artifacts   # 主比
 雛形: `$P/measure-launcher.example.env`（複製して `<operator 入力待ち: …>` を実値にする。残っていると `prepare`/`preflight` が拒否する）。
 必須（欠けると `prepare` が `<KEY> is required` で非 0）: `MANIFEST` `DAEMON_CONFIG` `NORMAL_CONFIG` `CANARIES` `OUT` `STATE_DIR` `TASK_TEMPLATE` `A_ACCOUNT` `MATERIALS_SRC` `KB_SRC` `REPO_SRC` `INPUTS_SRC`。
 `start` が加えて要る: `CELERIS_BIN`（測定 daemon の実行ファイル。`prepare` が sha256 を固定）`RELEASE`（B/C の sha12）。`CAP_ENV` は本測定では事実上必須（無いと preflight の cap-probe が拒否）。
-任意: `CAMPAIGN_BIN`（既定 `celeris-campaign`。`DAEMON_CONFIG` の `cap-probe-*` の command と同じ実体にする）`A_PROGRAM`（既定 `claude`）`RUN_PATH` `WORKER_PROGRAMS`（`name=path` を空白区切り。env-lock に固定）`MEASUREMENT_ID` `SERIES_ROOT`（副比較 B1/C1 のみ必須: 測定 ID ごとの系列台帳の root。`prepare` が作り、`OUT` はその `<SERIES_ROOT>/<MEASUREMENT_ID>/runs/` の下。`SERIES_IMPORT_OUTS` で既存 out の消費を引き継ぐ。docs/ops/jev-c1-live-check.md §4.1）`CASES_ROOT` `GRADER_ROOT` `GRADE_CASES_ROOT`（`grade` に必須）`RECORDS`（export で final_accounting）`EXECUTOR`（既定 `celeris`）`INTERVAL_SECS`（60）`MAX_ITERATIONS`（1440）`HEALTH_WAIT_SECS`（60）。
+任意: `CAMPAIGN_BIN`（既定 `celeris-campaign`。`DAEMON_CONFIG` の `cap-probe-*` の command と同じ実体にする）`A_PROGRAM`（既定 `claude`）`RUN_PATH` `WORKER_PROGRAMS`（`name=path` を空白区切り。env-lock に固定）`MEASUREMENT_ID` `CASES_ROOT` `GRADER_ROOT` `GRADE_CASES_ROOT`（`grade` に必須）`RECORDS`（export で final_accounting）`EXECUTOR`（既定 `celeris`）`INTERVAL_SECS`（60）`MAX_ITERATIONS`（1440）`HEALTH_WAIT_SECS`（60）。
 ```sh
 MANIFEST=final.json                # §3 の確定済み manifest（$P/final.json の複製でなく、$P を env ファイルの dir にするなら相対でよい）
 DAEMON_CONFIG=/abs/measure/daemon.toml        # $P/measure-daemon.example.toml の複製（§3b）

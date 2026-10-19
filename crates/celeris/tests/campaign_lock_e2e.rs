@@ -738,7 +738,6 @@ impl World {
             a_account: Some("lab".into()),
             measure: Some(measure),
             measurement_id: None,
-            series_root: None,
             cap_env: Some(preflight_setup::write_cap_env(d)),
         };
         Self {
@@ -784,7 +783,6 @@ impl World {
             inputs_src: inp.inputs_src.clone(),
             case_inputs: inputs::for_problems(&set, &m.problems),
             lock: Some(preflight::expected_lock(inp, &m)?),
-            series: None,
         };
         let template = json!({"acceptance": [{"type": "artifact_exists", "name": "result.txt"}]})
             .as_object()

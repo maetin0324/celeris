@@ -580,23 +580,28 @@ fn exe_of(pid: u32) -> PathBuf {
 
 // ---- 試験 ----
 
-/// launcher.env の SERIES_ROOT / MEASUREMENT_ID が、prepare で測定 ID ごとの固定系列台帳（許可 out root 付き）を作る。
-/// 副比較の run が台帳の外の OUT・台帳欠損を副作用前に拒否する試験は side_budget.rs（同じ CLI 引数）。
+/// launcher.env の SERIES_ROOT は `prepare` が `series-init` へ渡す。主比較の manifest（この fixture）では台帳を使わず成功し、
+/// MEASUREMENT_ID なしの SERIES_ROOT は拒否される。副比較の台帳作成・OUT 拒否・欠損/破損の拒否は side_budget.rs（同じ CLI 引数）。
 #[test]
-fn prepare_creates_the_pinned_series_ledger_from_launcher_env() {
+fn series_root_in_launcher_env_is_passed_to_series_init() {
     let f = fixture();
     let d = f.d().display().to_string();
+    f.write_env(&format!("SERIES_ROOT={d}/series\n"));
+    let o = launch(&f, "prepare");
+    assert!(!o.status.success(), "{}", text(&o));
+    assert!(
+        text(&o).contains("MEASUREMENT_ID is required with SERIES_ROOT"),
+        "{}",
+        text(&o)
+    );
     f.write_env(&format!(
         "MEASUREMENT_ID=m-series\nSERIES_ROOT={d}/series\n"
     ));
     ok(&f, "prepare");
-    let dir = f.d().join("series/m-series");
-    assert!(dir.join("series.json").is_file() && dir.join("series-ledger.jsonl").is_file());
-    assert!(dir.join("runs").is_dir());
-    let meta: Value = serde_json::from_slice(&fs::read(dir.join("series.json")).unwrap()).unwrap();
-    assert_eq!(meta["measurement_id"], "m-series");
-    // 再 prepare は冪等（台帳を作り直さない）。
-    ok(&f, "prepare");
+    assert!(
+        !f.d().join("series").exists(),
+        "a primary manifest uses no series ledger"
+    );
 }
 
 #[test]

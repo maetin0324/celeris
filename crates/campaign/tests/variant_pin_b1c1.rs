@@ -113,11 +113,11 @@ fn manifest() -> CampaignManifest {
     m
 }
 
-fn arm<'a>(m: &'a CampaignManifest, id: ConfigId) -> &'a Config {
+fn arm(m: &CampaignManifest, id: ConfigId) -> &Config {
     m.configs.iter().find(|c| c.id == id).expect("arm")
 }
 
-fn arm_mut<'a>(m: &'a mut CampaignManifest, id: ConfigId) -> &'a mut Config {
+fn arm_mut(m: &mut CampaignManifest, id: ConfigId) -> &mut Config {
     m.configs.iter_mut().find(|c| c.id == id).expect("arm")
 }
 

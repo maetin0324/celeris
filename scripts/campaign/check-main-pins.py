@@ -24,6 +24,8 @@ INPUT_MANIFEST_SHA = "6fa8f0ecf197d731a36ea7c7152b088be99a18c0cf229cdf01340aec28
 MATERIALS_SHA = "dab3ca05d01adf1da268c8ec35e24f33249ca3cc02083e0a2e6b487d0c5a800d"
 KB_SHA = "741f24146f5c02f44acf5291e23806416b9956809e55a1474488ecbcc9fe0702"
 CAMPAIGN_SHA = "8ca0e1984bdaf1140f4a849c53c1f01522099a1ec555816bb2472f5c039ea999"
+CAMPAIGN_BIN_SHA = "de339f1c4af25bcb2b3ec8d53222ca05c010a11fb7343f16f69d514559161394"
+CAMPAIGN_BIN_REL = os.path.join("pinned", "evidence", "main-k2", "bin", "celeris-campaign-fixed")
 K2_COMMIT = "086c4618e2a4d94ea56da78ceeed0f8d6d568d67"
 PROBLEMS = ["k2-bf-xattr-restart-campaign", "k4-cmp4-validity-analysis"]
 PREFLIGHT_STAGES = {"manifest", "case-inputs", "graders", "capability", "env-check", "lock"}
@@ -88,9 +90,11 @@ def check_env(layout, env, problems):
         problems.append(f"launcher.env: RELEASE must be {RELEASE}")
     if not env.get("CELERIS_BIN", "").endswith(f"/{RELEASE}/bin/celeris"):
         problems.append(f"launcher.env: CELERIS_BIN must be the approved release {RELEASE}/bin/celeris")
-    want_cmp = os.path.join(layout["pinned"], "bin", "celeris-campaign")
+    want_cmp = os.path.join(layout["root"], CAMPAIGN_BIN_REL)
     if env.get("CAMPAIGN_BIN") != want_cmp:
         problems.append(f"launcher.env: CAMPAIGN_BIN must be {want_cmp}")
+    elif os.path.isfile(want_cmp) and sha256_file(want_cmp) != CAMPAIGN_BIN_SHA:
+        problems.append(f"launcher.env: CAMPAIGN_BIN sha256 differs from the approved fixed binary {CAMPAIGN_BIN_SHA}")
     want_cap = os.path.join(layout["pinned"], "cap-env.json")
     if env.get("CAP_ENV") != want_cap:
         problems.append(f"launcher.env: CAP_ENV must be {want_cap}")
@@ -396,6 +400,21 @@ def check_evidence(layout, problems):
                             "approved campaign_sha256 and cover " + ",".join(sorted(PREFLIGHT_STAGES)))
 
 
+def check_preflight_argv(layout, env, problems):
+    """実 K2 preflight が launcher.env の CAMPAIGN_BIN（承認済み修正後 binary）で走ったこと。"""
+    path = os.path.join(layout["evidence"], "main-k2", "run", "argv.txt")
+    try:
+        with open(path, encoding="utf-8") as f:
+            lines = [ln for ln in f.read().splitlines() if not ln.startswith("#")]
+    except OSError:
+        problems.append(f"real K2 preflight argv: missing: {path}")
+        return
+    if len(lines) < 2 or lines[1] != "preflight":
+        problems.append("real K2 preflight argv: must be a `preflight` invocation")
+    elif env and lines[0] != env.get("CAMPAIGN_BIN"):
+        problems.append("real K2 preflight argv: binary differs from launcher.env CAMPAIGN_BIN")
+
+
 def run_checks(root, lock_dir=None):
     root = os.path.abspath(root)
     pinned = os.path.join(root, "pinned")
@@ -433,6 +452,7 @@ def run_checks(root, lock_dir=None):
             problems.append(f"stale reference to an ephemeral work tree: {os.path.relpath(f, root)}")
     check_lock(layout, lock_dir or main_dir, env, problems)
     check_evidence(layout, problems)
+    check_preflight_argv(layout, env, problems)
     return problems
 
 

@@ -28,7 +28,7 @@ launcher がやらないこと: systemd / `systemctl` / `pkill` / 本番 config�
 cd <この repo の checkout>
 export CARGO_TARGET_DIR=...                # 渡された値のまま
 L=scripts/campaign/measure-launcher.sh
-B=$CARGO_TARGET_DIR/debug/celeris-campaign # env の CAMPAIGN_BIN にも同じ path を書く
+B=$CARGO_TARGET_DIR/debug/celeris-campaign # env の CAMPAIGN_BIN にも同じ path を書く（主比較は §3a の固定 binary を使い、`B=$R/pinned/evidence/main-k2/bin/celeris-campaign-fixed`）
 P=agent-docs/progress/2026-10-16-mlsys-final   # final.json・task-template.json・daemon/env 雛形の置き場
 ENVF=<measure-launcher.env>                # §2。主比較は $R/pinned/main/launcher.env（相対 path は env ファイルの dir 基準）
 R=/local/celeris/data/workspaces/01M58VFRBA6HG0SSF3CG5BKM91/artifacts   # 主比較の成果物 root（絶対）。B は主比較では $R/pinned/evidence/main-k2/bin/celeris-campaign-fixed（§3a）
@@ -74,7 +74,7 @@ CAP_ENV=…/cap-env.json             # celeris.campaign-cap-env/1（cap-runbook 
 | CAP_ENV | `$R/pinned/cap-env.json`（A と worker が同一 toolchain）。launcher env の `RUN_PATH` は Rust toolchain の `bin` |
 | campaign_sha256 | `8ca0e1984bdaf1140f4a849c53c1f01522099a1ec555816bb2472f5c039ea999`（`env-lock.json` と `lock.json` で一致） |
 | 固定入力 hash | final-input-manifest 内部 `6fa8f0ec…06e4b`、`snapshot.materials_sha256` `dab3ca05…800d`、`snapshot.kb_snapshot` `741f2414…9fe0702`。K2 初期 commit `086c4618e2a4d94ea56da78ceeed0f8d6d568d67` |
-| 実 binary | `celeris-campaign` 修正後 `$R/pinned/evidence/main-k2/bin/celeris-campaign-fixed` sha256 `de339f1c4af25bcb2b3ec8d53222ca05c010a11fb7343f16f69d514559161394`（K2 tree 内 symlink を許す ADR 2026-10-19-campaign-inner-symlink）。修正前の `$R/pinned/bin/celeris-campaign`（`e8a596e9…`）は区別して残し置換しない |
+| 実 binary | `celeris-campaign` 修正後 `$R/pinned/evidence/main-k2/bin/celeris-campaign-fixed` sha256 `de339f1c4af25bcb2b3ec8d53222ca05c010a11fb7343f16f69d514559161394`（K2 tree 内 symlink を許す ADR 2026-10-19-campaign-inner-symlink）。`$R/pinned/main/launcher.env` の `CAMPAIGN_BIN`・`daemon.toml` の `cap-probe-claude-code` command・実 K2 preflight の argv はすべてこの 1 本（`check-main-pins.py` が path・実在・sha256 を照合する） |
 | 試行数・予算 | 主比較は A・B × K2・K4 × 1 rep = 4 試行。承認枠（§冒頭）は **主副で共有する 1 本**で、副比較（B vs C）の枠を別に足さない。`per_arm` 1,300,000 は A・B 各腕の上限で、全体 3,000,000 を超える分の二重計上はしない |
 | K2 / K4 | K2 `judged_scope=[implementation, experiment]`（analysis / review は `not_judged`）、K4 は analysis。維持する |
 
@@ -94,6 +94,7 @@ $B offline-lock --verify --manifest $R/pinned/main/final.json --out <生成時�
 ### 実 K2 無課金 preflight の証跡（取得済み）
 operator が測定専用 daemon（release `c9654bff5633`、pid 3909077）を起動し、修正後 binary で実 K2 tree・正解資産に対し `preflight` を実行した（2026-10-19）: exit 0、`ok true`、`missing` 空、`paid_calls_made 0`、`campaign_sha256` 承認値、`checked` に manifest・case-inputs・graders・capability・env-check・trial-state・lock・budget を含む。B/C × K2/K4 の 4 probe が通った。証跡: `$R/pinned/evidence/main-k2/run/{argv.txt,exit.txt,stdout.json,stderr.txt,hashes.txt}`、検証後の正本 `$R/pinned/main/evidence/k2-preflight.json`、手順 `$R/pinned/evidence/main-k2/operator-check.md`。`check-main-pins.py` がこの内容を検証する。
 **これは本タスクの無試行検証であり、運用手順としての試行開始（§5 の `watch`）ではない。** `watch`・実 LLM・試行投入は人の決定（本測定の開始）があるまで行わない。選択機構（01M59KXY8345HZEE06FVZ3FWVP）が main に統合されたら、セット別の最終 preflight だけを task 01M58VG5C4XGK4E70M6WJ6MEX0 が取り直す。
+修正後 preflight の実行経路は `sh $L preflight --env $R/pinned/main/launcher.env` で再現できる（`measure-k2.env` は証跡取得用で、CAMPAIGN_BIN だけ argv 記録 shim 経由。それ以外は launcher.env と同値）。
 JSON の確認に `jq` は使わない（この host に無い）。`python3 -c 'import json,sys; …'` を使う（例: `python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["ok"])' stdout.json`）。
 
 置換後の確認（launcher を経ず直接。API を使わない）:

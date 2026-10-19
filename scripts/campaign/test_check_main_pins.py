@@ -117,10 +117,13 @@ def build(root):
     pinned = os.path.join(root, "pinned")
     main = os.path.join(pinned, "main")
     fixed = os.path.join(main, "fixed")
-    campaign_bin = os.path.join(pinned, "bin", "celeris-campaign")
+    campaign_bin = os.path.join(root, cmp_.CAMPAIGN_BIN_REL)
     celeris_bin = os.path.join(root, "releases", cmp_.RELEASE, "bin", "celeris")
     for p in (campaign_bin, celeris_bin):
         write(p, "#!/bin/sh\n")
+    cmp_.CAMPAIGN_BIN_SHA = cmp_.sha256_file(campaign_bin)  # fixture の偽 binary を承認済みとみなす
+    write(os.path.join(pinned, "evidence", "main-k2", "run", "argv.txt"),
+          f"# 2026-10-19T00:00:00Z pid=1\n{campaign_bin}\npreflight\n--manifest\nx\n# end\n")
     normal = os.path.join(root, "normal-config.toml")
     write(normal, "# normal\n")
     src = {k: os.path.join(root, "measure-src", "main", k) for k in ("materials", "kb", "repo", "inputs")}
@@ -189,7 +192,8 @@ class CheckMainPins(unittest.TestCase):
 
     def test_cli_exit_codes(self):
         cmd = [sys.executable, "-I", SCRIPT, "--root", self.root]
-        self.assertEqual(subprocess.run(cmd, capture_output=True).returncode, 0)
+        # 承認済み binary の hash は定数なので、成功は同 process（fixture 用に定数を差し替え済み）で見る
+        self.assertEqual(cmp_.main(["--root", self.root]), 0)
         os.remove(os.path.join(self.main, "lock.json"))
         r = subprocess.run(cmd, capture_output=True, text=True)
         self.assertEqual(r.returncode, 1)
@@ -210,8 +214,25 @@ class CheckMainPins(unittest.TestCase):
                     "missing": [{"check": "measure-env"}], "campaign_sha256": cmp_.CAMPAIGN_SHA, "checked": []})
         self.assertFlags("must be ok")
 
+    def test_campaign_bin_must_be_approved_binary(self):
+        path = os.path.join(self.root, cmp_.CAMPAIGN_BIN_REL)
+        write(path, "#!/bin/sh\n# swapped\n")
+        self.assertFlags("CAMPAIGN_BIN sha256 differs")
+
+    def test_campaign_bin_pointing_elsewhere(self):
+        path = os.path.join(self.main, "launcher.env")
+        with open(path) as f:
+            text = f.read()
+        write(path, text.replace(os.path.join(self.root, cmp_.CAMPAIGN_BIN_REL), "/old/bin/celeris-campaign"))
+        self.assertFlags("CAMPAIGN_BIN must be")
+
+    def test_preflight_argv_binary_mismatch(self):
+        write(os.path.join(self.root, "pinned", "evidence", "main-k2", "run", "argv.txt"),
+              "# t\n/old/bin/celeris-campaign\npreflight\n# end\n")
+        self.assertFlags("argv: binary differs")
+
     def test_missing_paths(self):
-        os.remove(os.path.join(self.root, "pinned", "bin", "celeris-campaign"))
+        os.remove(os.path.join(self.root, cmp_.CAMPAIGN_BIN_REL))
         self.assertFlags("CAMPAIGN_BIN does not exist")
         shutil.rmtree(os.path.join(self.main, "fixed", "grade-cases"))
         self.assertFlags("GRADE_CASES_ROOT does not exist")

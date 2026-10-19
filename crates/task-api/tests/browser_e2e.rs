@@ -245,6 +245,7 @@ fn run_request(w: &World) -> RunRequest {
                 ..Default::default()
             }),
             browser_policy: w.env.store.browser_task_policy_get(w.task.id).unwrap(),
+            campaign: None,
             ..Default::default()
         },
         cargo_target_dir: None,

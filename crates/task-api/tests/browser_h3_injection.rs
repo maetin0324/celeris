@@ -239,6 +239,7 @@ fn run_request(w: &World) -> RunRequest {
                 .store
                 .browser_task_policy_get(w.task.id)
                 .expect("test fixture"),
+            campaign: None,
             ..Default::default()
         },
         cargo_target_dir: None,

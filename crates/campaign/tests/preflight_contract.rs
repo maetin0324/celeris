@@ -261,6 +261,7 @@ async fn preflight_over_real_router_bodies_gates_external_execution() {
             &input,
             &exec,
             &RunOptions {
+                global_ledger: None,
                 out: out.clone(),
                 ..Default::default()
             },

@@ -291,6 +291,7 @@ fn each_task_carries_its_arm_routing_and_the_record_matches_the_manifest() {
     let m = campaign(&i, 2, Some(b_routing()), Some(c_routing()));
     m.validate().expect("valid");
     let opts = RunOptions {
+        global_ledger: None,
         out: d.path().join("out"),
         ..RunOptions::default()
     };
@@ -364,6 +365,7 @@ fn missing_routing_is_rejected_before_any_submission() {
     let (i, f) = (input(2), Fake::default());
     let m = campaign(&i, 2, None, Some(no_evidence));
     let opts = RunOptions {
+        global_ledger: None,
         out: d.path().join("out"),
         ..RunOptions::default()
     };
@@ -404,6 +406,7 @@ fn checker_flags_routing_that_differs_from_the_manifest() {
     let (i, f) = (input(2), Fake::default());
     let m = campaign(&i, 2, Some(b_routing()), Some(c_routing()));
     let opts = RunOptions {
+        global_ledger: None,
         out: d.path().join("out"),
         ..RunOptions::default()
     };
@@ -452,6 +455,7 @@ fn e2e_budget_isolation_order_repeats_and_routing_hold_together() {
     m.repeats = 2;
     m.validate().expect("valid");
     let opts = RunOptions {
+        global_ledger: None,
         out: d.path().join("out"),
         ..RunOptions::default()
     };
@@ -527,6 +531,7 @@ fn run_with(
     c.online_update = Some(false);
     let m = campaign(&i, 2, Some(b), Some(c));
     let opts = RunOptions {
+        global_ledger: None,
         out: d.path().join("out"),
         ..RunOptions::default()
     };

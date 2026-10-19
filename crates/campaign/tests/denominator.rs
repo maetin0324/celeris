@@ -94,6 +94,7 @@ fn campaign(i: &Input, n: usize, repeats: u32) -> CampaignManifest {
 
 fn opts(dir: &Path) -> RunOptions {
     RunOptions {
+        global_ledger: None,
         out: dir.join("out"),
         ..RunOptions::default()
     }

@@ -116,6 +116,7 @@ fn seeded_src(dir: &Path) -> RunOptions {
     fs::write(r.join("a.rs"), "fn main(){}").expect("w");
     fs::write(k.join("kb.md"), "seed").expect("w");
     RunOptions {
+        global_ledger: None,
         out: dir.join("out"),
         repo_src: Some(r),
         materials_src: None,

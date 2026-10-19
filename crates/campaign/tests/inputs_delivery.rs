@@ -57,6 +57,7 @@ fn env() -> Env {
 impl Env {
     fn opts(&self, src: Option<PathBuf>) -> RunOptions {
         RunOptions {
+            global_ledger: None,
             out: self.d.path().join("out"),
             repo_src: Some(fx().join("repo")),
             materials_src: Some(fx().join("materials")),

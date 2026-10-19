@@ -104,6 +104,7 @@ fn env() -> Env {
     let i = input(3);
     let m = campaign(&i);
     let opts = RunOptions {
+        global_ledger: None,
         out: d.path().join("out"),
         ..RunOptions::default()
     };

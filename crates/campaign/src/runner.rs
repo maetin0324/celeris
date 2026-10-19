@@ -37,6 +37,8 @@ pub struct RunOptions {
     /// 期待 campaign lock（`lock_exec::expected_lock`）。実行（有料）経路は必須。None は mock など無課金の制御用。
     /// 渡すと、executor 投入・台帳更新より前に実体を照合し、`<out>/lock.json` に保存・再照合する。
     pub lock: Option<CampaignLock>,
+    /// 全体台帳の置き場（測定 ID を跨ぐ既消費・予約・provider 枠）。None は単独測定（従来どおり）。
+    pub global_ledger: Option<PathBuf>,
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -315,15 +317,12 @@ fn append(path: &Path, r: &TrialRecord) -> Result<(), String> {
 /// 3 番目は独立反復 rep（1..=repeats）。内部再試行は無い（trial_no は常に 1）。
 pub fn plan(m: &CampaignManifest) -> Vec<(ConfigId, String, u32)> {
     let n = m.normalized();
-    let subset: BTreeSet<&str> = n.secondary.subset.iter().map(String::as_str).collect();
     // 前提が先。依存が無ければ id 昇順（validate 済みの manifest では Err にならない）。
     let order = n.problem_order().unwrap_or_else(|_| n.problems.clone());
     let mut v = Vec::new();
     for (pos, p) in order.iter().enumerate() {
-        let arms: Vec<ConfigId> = [ConfigId::A, ConfigId::B, ConfigId::C]
-            .into_iter()
-            .filter(|c| *c != ConfigId::C || subset.contains(p.as_str()))
-            .collect();
+        // 有効 arm だけ（未使用 arm は試行にも分母にも入れない）。C・B/C のみのときの B は subset のみ。
+        let arms: Vec<ConfigId> = n.planned_configs(p);
         for c in n.arm_sequence(p, pos, arms) {
             for rep in 1..=m.repeats {
                 v.push((c, p.clone(), rep));
@@ -638,6 +637,16 @@ pub fn run(
     m.check_against_input(input)?;
     let hash = m.compute_sha256()?;
     let out = &opts.out;
+    // 全体台帳: 他の測定 ID の既消費・予約・provider 枠を持ち越し、横断上限を超える投入は何かする前に拒否する。
+    let global = opts
+        .global_ledger
+        .as_deref()
+        .map(crate::global_ledger::GlobalLedger::open)
+        .transpose()?;
+    let others = match &global {
+        Some(g) => g.admit_start(m)?,
+        None => Default::default(),
+    };
     // 副作用（out の作成・snapshot・台帳・executor）より前に、lock と現在の実体を照合する。
     let lock = opts.lock.as_ref();
     let start = match lock {
@@ -658,6 +667,13 @@ pub fn run(
     if meta_path.exists() {
         let v: Value = serde_json::from_slice(&fs::read(&meta_path).map_err(|e| e.to_string())?)
             .map_err(|e| format!("run-meta.json: {e}"))?;
+        // 同じ測定 ID で有効 arm・比較組・set 宣言・有効設定を変えた再開は、変えた欄を名指しして拒否する。
+        if let Some(prior) = v.get("plan_identity")
+            && let Ok(prior) =
+                serde_json::from_value::<crate::manifest::PlanIdentity>(prior.clone())
+        {
+            m.plan_identity()?.check_resume(&prior)?;
+        }
         if v["campaign_sha256"] != hash {
             return Err("out dir belongs to a different campaign hash; use an empty dir".into());
         }
@@ -690,6 +706,7 @@ pub fn run(
             "schema": "celeris.campaign-run-meta/1",
             "campaign_id": m.campaign_id,
             "campaign_sha256": hash,
+            "plan_identity": m.plan_identity()?,
             "input_sha256": input.sha256,
             "split": m.split,
             "executor": exec.name(),
@@ -718,6 +735,7 @@ pub fn run(
         .map(|r| (r.config, r.problem_id.clone(), r.rep))
         .collect();
     let mut ledger = Ledger::open(out)?;
+    publish_global(global.as_ref(), m, &hash, &records, &ledger)?;
     // trials.jsonl に記録済みなのに台帳が未完了のまま（記録直後の crash）は done に直す。
     let stale: Vec<TrialKey> = ledger
         .unfinished()
@@ -812,7 +830,10 @@ pub fn run(
             && !rep.budget_stopped
             && ledger.get(&key).is_none_or(|r| r.reserved.is_none())
         {
-            let s = budget::spend(&records, &ledger, &m.budget, &hash, Some(&key));
+            let mut s = budget::spend(&records, &ledger, &m.budget, &hash, Some(&key));
+            // 他の測定 ID の既消費・予約も global の残りから引く（セットを跨いでリセットしない）。
+            s.tokens = s.tokens.saturating_add(others.tokens);
+            s.wall_secs = s.wall_secs.saturating_add(others.wall_secs);
             Some(budget::admit(&m.budget, &s, cid))
         } else {
             None
@@ -1047,6 +1068,7 @@ pub fn run(
             ledger.mark_done(&key)?;
         }
         records.push(rec);
+        publish_global(global.as_ref(), m, &hash, &records, &ledger)?;
     }
     // 打ち切り後に残った未完了の台帳行（前提待ちで今回の走査に来なかったもの）も cancel する。
     if rep.budget_stopped {
@@ -1085,6 +1107,26 @@ pub fn run(
     Ok(rep)
 }
 
+/// 自分の現在値（確定消費 + 予約。上書き）を全体台帳へ書く。再集計しても加算されない。
+fn publish_global(
+    g: Option<&crate::global_ledger::GlobalLedger>,
+    m: &CampaignManifest,
+    hash: &str,
+    records: &[TrialRecord],
+    ledger: &Ledger,
+) -> Result<(), String> {
+    let Some(g) = g else { return Ok(()) };
+    let s = budget::spend(records, ledger, &m.budget, hash, None);
+    let trials = records.iter().filter(|r| r.ran()).count() as u64;
+    g.record(&crate::global_ledger::GlobalLedger::row(
+        m,
+        hash,
+        s.tokens,
+        s.wall_secs,
+        trials,
+    ))
+}
+
 /// runner 自身の集計（checker は別実装で再計算して突き合わせる）。
 fn write_summary(
     m: &CampaignManifest,
@@ -1097,8 +1139,8 @@ fn write_summary(
 ) -> Result<(), String> {
     let held = budget::spend(records, ledger, &m.budget, hash, None);
     let mut cells = serde_json::Map::new();
-    for c in [ConfigId::A, ConfigId::B, ConfigId::C] {
-        // 分母 = 計画された試行総数（problems × repeats、C は subset × repeats）。
+    for c in m.active_arms() {
+        // 分母 = 有効 arm の計画された試行総数（problems × repeats、C は subset × repeats）。
         let n = plan(m).iter().filter(|(k, _, _)| *k == c).count();
         let mut counts = [0u64; 6]; // passed failed error timeout cancelled blocked
         let mut seen = 0u64;

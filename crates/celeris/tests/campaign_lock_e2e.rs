@@ -776,6 +776,7 @@ impl World {
         let input = m.load_input(&inp.manifest_path, None)?;
         let set = CaseSet::load(&inp.cases_root, &inp.grader_root)?;
         let opts = RunOptions {
+            global_ledger: None,
             out: self.out(),
             repo_src: inp.repo_src.clone(),
             materials_src: inp.materials_src.clone(),

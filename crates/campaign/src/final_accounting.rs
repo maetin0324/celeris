@@ -419,7 +419,7 @@ pub fn compute(m: &CampaignManifest, out: &Path, inp: &FinalInputs) -> Result<Va
     }
 
     // run → 結合する cell。手がかり（arm/case/rep）が計画に無い run は計画外として別枠。
-    let planned_arms: BTreeSet<String> = m.configs.iter().map(|c| format!("{:?}", c.id)).collect();
+    let planned_arms: BTreeSet<String> = m.active_arms().iter().map(|c| format!("{c:?}")).collect();
     let mut info: BTreeMap<String, RunInfo> = BTreeMap::new();
     let mut outside_plan: Vec<String> = Vec::new();
     for (id, r) in &runs {

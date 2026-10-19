@@ -19,6 +19,8 @@ pub fn report(
     let mut violations = Vec::new();
     let mut rows = Vec::new();
     let mut a_seen = false;
+    // A が有効計画に無い（B/C のみ）なら A のアカウントは要求も検査もしない。
+    let a_active = summary["cells"].get("A").is_some();
     for x in accounts["items"].as_array().into_iter().flatten() {
         let (src, id) = (
             x["source_id"].as_str().unwrap_or(""),
@@ -30,7 +32,7 @@ pub fn report(
             "codex_oauth" => Some(max_codex),
             _ => None,
         };
-        let is_a = src == "claude_oauth" && id == a_account;
+        let is_a = a_active && src == "claude_oauth" && id == a_account;
         a_seen |= is_a;
         if let (Some(u), Some(l)) = (util, limit)
             && u > l
@@ -47,7 +49,7 @@ pub fn report(
             "observed_at": x["usage"]["observed_at"], "limit": limit, "a_arm": is_a,
         }));
     }
-    if !a_seen {
+    if a_active && !a_seen {
         violations.push(format!(
             "claude_oauth/{a_account}: not in GET /llm/accounts"
         ));

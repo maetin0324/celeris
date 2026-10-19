@@ -25,13 +25,16 @@ struct ConfigEstimate {
     label: &'static str,
 }
 
+/// 問題ごとの有効計画（`planned_configs`）で数える。runner・checker と同じ計画。
+fn problems_for(m: &CampaignManifest, c: ConfigId) -> Vec<&String> {
+    m.problems
+        .iter()
+        .filter(|p| m.planned_configs(p).contains(&c))
+        .collect()
+}
+
 fn trials_for(m: &CampaignManifest, c: ConfigId) -> u64 {
-    let n = m.problems.len() as u64;
-    match c {
-        // B は主比較（A/B）の全問題。C は事前登録の subset だけ。
-        ConfigId::A | ConfigId::B => n,
-        ConfigId::C => m.secondary.subset.len() as u64,
-    }
+    problems_for(m, c).len() as u64
 }
 
 pub fn estimate(m: &CampaignManifest, input: &InputManifest) -> Result<Value, String> {
@@ -45,12 +48,8 @@ pub fn estimate(m: &CampaignManifest, input: &InputManifest) -> Result<Value, St
     };
     let attempts = u64::from(m.repeats);
     let mut per_config = Vec::new();
-    for c in [ConfigId::A, ConfigId::B, ConfigId::C] {
-        let ids: Vec<&String> = if c == ConfigId::C {
-            m.secondary.subset.iter().collect()
-        } else {
-            m.problems.iter().collect()
-        };
+    for c in m.active_arms() {
+        let ids = problems_for(m, c);
         let base_in: u64 = ids
             .iter()
             .map(|id| prompt_chars(id) / CHARS_PER_TOKEN + CONTEXT_OVERHEAD_TOKENS)

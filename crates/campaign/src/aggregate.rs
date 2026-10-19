@@ -71,6 +71,12 @@ pub fn aggregate(
         if !declared.contains(r.problem_id.as_str()) {
             return Err(format!("trial for undeclared problem {}", r.problem_id));
         }
+        if !manifest.is_active(r.config) {
+            return Err(format!(
+                "trial for {:?} but that arm is not in the effective plan",
+                r.config
+            ));
+        }
         if r.rep == 0 || r.rep > manifest.repeats {
             return Err(format!(
                 "trial for {} has rep {}, expected 1..={}",
@@ -85,16 +91,22 @@ pub fn aggregate(
         }
     }
     let mut out = BTreeMap::new();
-    for c in &manifest.configs {
+    for cid in manifest.active_arms() {
+        // 分母は有効 arm の計画試行だけ（未使用 arm・計画外の問題を missing として数えない）。
+        let planned: Vec<&str> = declared
+            .iter()
+            .copied()
+            .filter(|p| manifest.planned_configs(p).contains(&cid))
+            .collect();
         let mut cell = Cell {
-            n: (declared.len() as u64) * u64::from(manifest.repeats),
+            n: (planned.len() as u64) * u64::from(manifest.repeats),
             ..Cell::default()
         };
-        for (id, rep) in declared
+        for (id, rep) in planned
             .iter()
             .flat_map(|id| (1..=manifest.repeats).map(move |k| (id, k)))
         {
-            match first.get(&(c.id, *id, rep)).map(|r| r.outcome) {
+            match first.get(&(cid, *id, rep)).map(|r| r.outcome) {
                 Some(Outcome::Passed) => cell.passed += 1,
                 Some(Outcome::Failed) => cell.failed += 1,
                 Some(Outcome::Error) => cell.error += 1,
@@ -104,7 +116,7 @@ pub fn aggregate(
                 None => cell.missing += 1,
             }
         }
-        out.insert(c.id, cell);
+        out.insert(cid, cell);
     }
     Ok(out)
 }

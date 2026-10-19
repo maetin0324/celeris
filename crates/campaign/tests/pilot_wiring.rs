@@ -113,6 +113,7 @@ fn campaign(i: &Input, n: usize, max_parallel: u32, basis: TokenBasis) -> Campai
 
 fn opts(out: &Path) -> RunOptions {
     RunOptions {
+        global_ledger: None,
         out: out.to_path_buf(),
         ..RunOptions::default()
     }
@@ -513,6 +514,7 @@ fn materials_are_distributed_into_every_trial_workspace() {
     m.snapshot.materials_sha256 = celeris_campaign::snapshot::hash_tree(&mat).unwrap();
     let out = d.path().join("out");
     let o = RunOptions {
+        global_ledger: None,
         out: out.clone(),
         repo_src: Some(repo.clone()),
         materials_src: Some(mat.clone()),
@@ -537,6 +539,7 @@ fn materials_are_distributed_into_every_trial_workspace() {
     // repo 自身に materials/ があると衝突として拒否する。
     fs::create_dir_all(repo.join("materials")).unwrap();
     let o2 = RunOptions {
+        global_ledger: None,
         out: d.path().join("out2"),
         ..o
     };
@@ -664,6 +667,7 @@ fn grade_out_grades_every_run_trial_and_reports_missing_cases() {
     let i = m.load_input(&mp, None).expect("input");
     let out = d.path().join("out");
     let o = RunOptions {
+        global_ledger: None,
         out: out.clone(),
         repo_src: Some(fx().join("repo")),
         materials_src: Some(fx().join("materials")),

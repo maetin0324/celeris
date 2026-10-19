@@ -183,6 +183,7 @@ fn fixture(outer: Outer) -> Fixture {
         &i,
         &Table(outer),
         &RunOptions {
+            global_ledger: None,
             out: out.clone(),
             ..RunOptions::default()
         },

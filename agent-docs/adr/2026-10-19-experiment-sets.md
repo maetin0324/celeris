@@ -34,3 +34,24 @@ arm ID A/B/C と実行器は保持したまま、A0/B0（主比較）と B1/C1�
 
 ## 範囲外
 runner/checker/export/dry-run/preflight/lock の有効計画への統一は後続 WorkUnit（arm-set-exec / arm-set-prep）。
+
+## 付記（arm-set-exec: 実行系の統一と全体台帳の接続）
+実装突き合わせ（`crates/campaign/`）:
+- D7 実行・照合・表は同じ計画: `runner::plan`・`checker::expected`・`aggregate`・`dryrun`・`final_accounting` の計画 arm・
+  `runner` の summary は `active_arms()` / `planned_configs()` だけを使う。未使用 arm は期待試行・分母・費用・表・report の行に出ない
+  （`aggregate` と `report` は有効計画に無い arm の記録・result 行を拒否）。`export` の `comparisons` は `compare_pairs()` のみ
+  （名前は従来どおり (A,B)=`primary`、(B,C)=`secondary`）。`usage` は A が有効計画（summary の cells に A）のときだけ A アカウントを要求。
+- D8 実 run の照合（宣言があるときだけ）: `checker::reconcile_sets`。(A,B) 比較のセットでは B の全 run（worker/reviewer/planner/cos）が
+  実測で Sonnet でなければ失敗（model 未観測も失敗）。(B,C) 比較のセットでは B/C の実測 model・harness が共通候補・共通 run_harnesses の
+  内側か別に検査する。B0 と B1/C1 は別メッセージ。case/repetition/retry は `(config, problem, rep, trial_no)` で区別（従来どおり）。
+- D9 resume: run-meta に `plan_identity` を保存し、同じ測定 ID で有効 arm・比較組・set 宣言・有効設定が変わった再開は
+  `check_resume` が変えた欄を名指しして拒否する（hash 不一致の汎用拒否より先）。
+- D10 全体台帳: `global_ledger.rs`（`--global-ledger <dir>` / `RunOptions.global_ledger`、追記専用 `global-ledger.jsonl`）。
+  測定 ID ごとに最後の行が現在値（確定消費+予約・wall・実行試行数・provider 枠）で、再実行・retry の再集計は上書きなので二重加算しない。
+  run 開始時に `admit_start` が他の測定 ID の既消費を manifest の `budget.max_tokens` から引き、`check_shares`（セット `allocation`）と
+  provider 枠を検査して、超過なら out の作成・投入より前に拒否する。投入ゲート（`budget::admit`）にも他測定 ID の既消費を加える。
+  試行数の全体上限は manifest に無いので trials は記録のみ（上限なし）。単独測定（global_ledger なし）は従来と同じ。
+- 互換: `experiment_sets` が無い manifest は従来の A/B/C 全計画。export の JSON/CSV の列・名前は不変（行が有効 arm だけになる）。
+  run-meta の `plan_identity` は追加欄で、無い旧 out の再開は従来の hash 照合のみ。
+- 再利用: manifest の有効計画（arm-set-core, 3be21634）、既存の `ledger.rs`/`budget.rs`/`final_accounting`/`checker` を拡張。
+  試験は `tests/experiment_sets_exec.rs`（A/B のみ・B/C のみ・resume 拒否・B0 不一致・全体台帳の横断）。

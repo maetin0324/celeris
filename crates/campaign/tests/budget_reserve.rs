@@ -107,6 +107,7 @@ fn env(global: u64, parallel: u32) -> Env {
     m.budget.max_tokens = global;
     m.budget.max_parallel = parallel;
     let opts = RunOptions {
+        global_ledger: None,
         out: d.path().join("out"),
         ..RunOptions::default()
     };

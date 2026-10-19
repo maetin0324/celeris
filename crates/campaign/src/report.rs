@@ -60,6 +60,11 @@ pub fn compare(m: &CampaignManifest, rc: &Recomputed, text: &str) -> Vec<String>
         crate::manifest::Split::Dev => "dev",
         crate::manifest::Split::Final => "final",
     };
+    for c in seen.keys().filter(|c| !rc.totals.contains_key(c)) {
+        v.push(format!(
+            "report: result row for {c:?}, which is not in the effective plan (unused arms are not reported)"
+        ));
+    }
     for (c, t) in &rc.totals {
         match seen.get(c) {
             None => v.push(format!("report: no result row for config {c:?}")),

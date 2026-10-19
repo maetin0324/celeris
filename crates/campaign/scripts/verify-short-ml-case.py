@@ -1,23 +1,49 @@
 #!/usr/bin/env python3
 """短い ML 研究キャンペーン case の状態検査（標準ライブラリのみ・LLM なし）。
 
-使い方: python3 crates/campaign/scripts/verify-short-ml-case.py --check
+使い方:
+  python3 crates/campaign/scripts/verify-short-ml-case.py --check
+  python3 crates/campaign/scripts/verify-short-ml-case.py --placement-check
 
-status.json が deferred のとき、延期記録の整合だけを検査する（採用合格ではない）:
-  - task ID・inventory 証拠・再開条件・主比較影響なしの記録、必須欄・dev ラベル・final 汎化/実 pilot 確認を主張していないこと
-  - 延期の前提（grader.rs の sha256、既存 case 集合、local に numpy が無いこと）が今も成立すること
-  - 理由と未検証項目が空でなく、証拠パスが存在すること
-adopted の記録は、通常 grader での正負例を実行する検査が未実装のためここでは受理しない。
+--check は status.json の状態整合検査で、採用合格ではない（pending / deferred / adopted のどれでも
+構造と外部参照の整合だけを見る）。成功しても case が成立した証明にはならない。
+  - 外部判断資料（external_refs）が実在し、旧判断が撤回履歴として保存済みであること
+  - 不在・不正な外部ファイルは失敗にする（握り潰さない）
+--placement-check は status.json の許可 key と、判断材料が repo に残っていないことを検査する。
+exit: 0 = 整合 / 1 = 不整合 / 2 = 使い方の誤り。
 """
-import hashlib
 import json
+import re
 import sys
 from pathlib import Path
 
 CAMPAIGN = Path(__file__).resolve().parent.parent
-REPO = CAMPAIGN.parent.parent
-STATUS_DIR = CAMPAIGN / "optional" / "short-ml-campaign"
-STRAY = CAMPAIGN / "cases" / "dev" / "short-ml-campaign"
+STATUS_PATH = CAMPAIGN / "optional" / "short-ml-campaign" / "status.json"
+STRAY_DIRS = (
+    CAMPAIGN / "cases" / "dev" / "short-ml-campaign",
+    CAMPAIGN / "cases" / "final" / "short-ml-campaign",
+)
+
+SCHEMA = "celeris.short-ml-case-status/2"
+TASK_ID = "01M59KY5FTRJTJ80PACNW3K533"
+STATUSES = ("pending", "deferred", "adopted")
+CLAIM_KEYS = ("final_generalization", "real_pilot_confirmed", "adopted")
+COMMON_KEYS = {"schema", "task_id", "status", "label", "claims", "external_refs"}
+EXTRA_KEYS = {
+    "pending": {"confirm_at"},
+    "deferred": {"decided_at"},
+    "adopted": {"decided_at", "case_dir"},
+}
+REF_KEYS = {"reassessment", "review"}
+# 判断材料の欄。status.json のどの深さにも置かない（外部資料へ移した）。
+JUDGMENT_KEYS = {
+    "reasons", "unverified", "inventory_evidence", "resume_conditions", "pins",
+    "impact", "evidence_paths", "no_main_comparison_impact", "base_commit",
+    "deadline", "selection", "candidates",
+}
+TS = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+SAVED_KEYS = ("reasons", "unverified", "inventory_evidence", "resume_conditions", "pins")
 
 
 def fail(errors):
@@ -26,82 +52,128 @@ def fail(errors):
     return 1
 
 
-def check():
-    errors = []
-    p = STATUS_DIR / "status.json"
+def load_status(path):
     try:
-        s = json.loads(p.read_text())
+        s = json.loads(Path(path).read_text())
     except (OSError, ValueError) as e:
-        return fail([f"{p}: {e}"])
-    if s.get("schema") != "celeris.short-ml-case-status/1":
-        errors.append("schema must be celeris.short-ml-case-status/1")
+        return None, [f"{path}: {e}"]
+    if not isinstance(s, dict):
+        return None, [f"{path}: top level must be an object"]
+    return s, []
+
+
+def walk_keys(v):
+    if isinstance(v, dict):
+        for k, x in v.items():
+            yield k
+            yield from walk_keys(x)
+    elif isinstance(v, list):
+        for x in v:
+            yield from walk_keys(x)
+
+
+def check_external(refs):
+    errors = []
+    if not isinstance(refs, dict) or set(refs) != REF_KEYS:
+        return [f"external_refs must have exactly {sorted(REF_KEYS)}"]
+    for k in sorted(REF_KEYS):
+        if not isinstance(refs[k], str) or not Path(refs[k]).is_absolute():
+            errors.append(f"external_refs.{k} must be an absolute path")
+    if errors:
+        return errors
+    rp, vp = Path(refs["reassessment"]), Path(refs["review"])
+    try:
+        d = json.loads(rp.read_text())
+    except (OSError, ValueError) as e:
+        return [f"external reassessment unreadable: {rp}: {e}"]
+    try:
+        review = vp.read_text()
+    except OSError as e:
+        errors.append(f"external review unreadable: {vp}: {e}")
+        review = ""
+    if review and "撤回した判断" not in review:
+        errors.append("external review lacks the withdrawn-decision history")
+    try:
+        saved = d["withdrawn_decisions"][0]["saved"]["status_json"]
+    except (KeyError, IndexError, TypeError):
+        return errors + ["reassessment lacks withdrawn_decisions[0].saved.status_json"]
+    for k in SAVED_KEYS:
+        if not saved.get(k):
+            errors.append(f"withdrawn status_json lacks {k} (old judgment not preserved)")
+    return errors
+
+
+def check_state(status_path=STATUS_PATH, campaign=CAMPAIGN):
+    s, errors = load_status(status_path)
+    if s is None:
+        return errors
+    if s.get("schema") != SCHEMA:
+        errors.append(f"schema must be {SCHEMA}")
+    if s.get("task_id") != TASK_ID:
+        errors.append(f"task_id must be {TASK_ID}")
     if s.get("label") != "dev":
         errors.append("label must be dev")
-    claims = s.get("claims", {})
-    for k in ("final_generalization", "real_pilot_confirmed", "adopted"):
+    st = s.get("status")
+    if st not in STATUSES:
+        errors.append(f"status {st!r} must be one of {list(STATUSES)}")
+        return errors
+    claims = s.get("claims")
+    if not isinstance(claims, dict) or set(claims) != set(CLAIM_KEYS):
+        errors.append(f"claims must have exactly {list(CLAIM_KEYS)}")
+        claims = {}
+    for k in ("final_generalization", "real_pilot_confirmed"):
         if claims.get(k) is not False:
             errors.append(f"claims.{k} must be false")
-    if s.get("status") != "deferred":
-        errors.append(
-            f"status {s.get('status')!r}: only a deferred record can be checked here; "
-            "adoption needs the normal-grader positive/negative run, which is not implemented"
-        )
-        return fail(errors)
-    for k in ("reasons", "unverified", "evidence_paths"):
-        if not s.get(k):
-            errors.append(f"{k} must be non-empty")
-    for r in s.get("reasons", []):
-        if not (r.get("id") and r.get("text")):
-            errors.append("each reason needs id and text")
-    if s.get("task_id") != "01M59KY5FTRJTJ80PACNW3K533":
-        errors.append("task_id must be 01M59KY5FTRJTJ80PACNW3K533")
-    if s.get("no_main_comparison_impact") is not True:
-        errors.append("no_main_comparison_impact must be true")
-    inv = s.get("inventory_evidence", {})
-    if not (inv.get("commit") and inv.get("wu") == "inventory"):
-        errors.append("inventory_evidence needs wu=inventory and commit")
-    if not s.get("resume_conditions"):
-        errors.append("resume_conditions must be non-empty")
-    for k in ("decided_at", "deadline", "base_commit", "impact"):
-        if not s.get(k):
-            errors.append(f"{k} is required")
-    for e in s.get("evidence_paths", []):
-        if not (REPO / e).is_file():
-            errors.append(f"evidence path missing: {e}")
-    pins = s.get("pins", {})
-    g = pins.get("grader_source", {})
-    gp = REPO / g.get("path", "")
-    if not gp.is_file() or hashlib.sha256(gp.read_bytes()).hexdigest() != g.get("sha256"):
-        errors.append("grader.rs changed since the deferral (R2 premise must be re-examined)")
-    for split, want in pins.get("existing_case_dirs", {}).items():
-        d = CAMPAIGN / "cases" / split
-        have = sorted(x.name for x in d.iterdir() if x.is_dir())
-        if have != sorted(want):
-            errors.append(f"{split} case set changed: {have} != {sorted(want)}")
-    fd = CAMPAIGN / "cases" / "final"
-    names = sorted(x.name for x in fd.iterdir() if x.is_dir())
-    if hashlib.sha256("\n".join(names).encode()).hexdigest() != pins.get("final_case_dirs_sha256"):
-        errors.append("final case set changed")
-    if STRAY.exists():
-        errors.append("cases/dev must not hold a deferral-only directory (short-ml-campaign)")
-    if (STATUS_DIR / "case.json").exists():
-        errors.append("a deferred record must not ship a case.json")
-    if (CAMPAIGN / "cases" / "final" / "short-ml-campaign").exists():
-        errors.append("cases/final must not hold a deferral-only directory")
-    for m in pins.get("local_env", {}).get("missing_modules", []):
-        try:
-            __import__(m)
-            errors.append(f"module {m} is now importable (R1 premise must be re-examined)")
-        except ImportError:
-            pass
+    # 構造上 adopted と書けても、成立の受入は --acceptance が別に見る。
+    if claims.get("adopted") is not (st == "adopted"):
+        errors.append("claims.adopted must be true only when status is adopted")
+    if st == "pending":
+        if not TS.match(str(s.get("confirm_at", ""))):
+            errors.append("pending needs confirm_at as YYYY-MM-DDTHH:MM:SSZ")
+    else:
+        if not DATE.match(str(s.get("decided_at", ""))):
+            errors.append(f"{st} needs decided_at as YYYY-MM-DD")
+    if st == "adopted":
+        cd = s.get("case_dir")
+        if not isinstance(cd, str) or not (campaign / "cases" / "dev" / cd / "case.json").is_file():
+            errors.append("adopted needs case_dir with cases/dev/<case_dir>/case.json")
+    else:
+        if (campaign / "optional" / "short-ml-campaign" / "case.json").exists():
+            errors.append(f"a {st} record must not ship a case.json")
+        for d in STRAY_DIRS:
+            sd = campaign / d.relative_to(CAMPAIGN)
+            if sd.exists():
+                errors.append(f"{sd.relative_to(campaign)} must not exist unless adopted")
+    errors += check_external(s.get("external_refs"))
+    return errors
+
+
+def check_placement(status_path=STATUS_PATH):
+    s, errors = load_status(status_path)
+    if s is None:
+        return errors
+    st = s.get("status")
+    allowed = COMMON_KEYS | EXTRA_KEYS.get(st, set())
+    for k in sorted(set(s) - allowed):
+        errors.append(f"status.json key not allowed for status {st!r}: {k}")
+    for k in sorted(set(walk_keys(s)) & JUDGMENT_KEYS):
+        errors.append(f"judgment field remains in the repo: {k}")
+    return errors
+
+
+def main(argv):
+    if argv == ["--check"]:
+        errors, ok = check_state(), "ok: status record is consistent (not an adoption pass)"
+    elif argv == ["--placement-check"]:
+        errors, ok = check_placement(), "ok: status.json holds only allowed keys"
+    else:
+        print("usage: verify-short-ml-case.py --check | --placement-check", file=sys.stderr)
+        return 2
     if errors:
         return fail(errors)
-    print("ok: deferred record is consistent (not an adoption pass)")
+    print(ok)
     return 0
 
 
 if __name__ == "__main__":
-    if sys.argv[1:] != ["--check"]:
-        print("usage: verify-short-ml-case.py --check", file=sys.stderr)
-        sys.exit(2)
-    sys.exit(check())
+    sys.exit(main(sys.argv[1:]))

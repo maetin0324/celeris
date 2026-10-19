@@ -451,8 +451,19 @@ fn run_refuses_split_mix_and_unknown_executor_path_has_no_network_code() {
     assert!(err.contains("must not be mixed"), "{err}");
     // 実 LLM・network・子 process を使う語が src に無い。
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    for f in fs::read_dir(src).expect("src") {
-        let p = f.expect("e").path();
+    let mut files = Vec::new();
+    let mut dirs = vec![src];
+    while let Some(d) = dirs.pop() {
+        for f in fs::read_dir(d).expect("src") {
+            let p = f.expect("e").path();
+            if p.is_dir() {
+                dirs.push(p);
+            } else {
+                files.push(p);
+            }
+        }
+    }
+    for p in files {
         let t = fs::read_to_string(&p).expect("r");
         // 子 process は A arm の harness_exec.rs、grade の評価 command の grade_runner.rs、
         // asset 組立の git/tar の asset_assembly.rs、評価側の read-only `ssh qstat -x -f` の ssh_qstat.rs だけが起動する

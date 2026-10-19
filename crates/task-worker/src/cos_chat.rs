@@ -177,8 +177,11 @@ pub fn core(chat: &CosChatContext) -> String {
 /// production host, tool launch, `/tmp`), shortened to keep the Core small. Keep the two in step.
 const WORK_RULES: &str = "## 作業の規則\n\
      - 人が判断する材料（報告・比較・提案）は成果物ディレクトリか KB に置く。対象リポジトリの追跡ファイル（`docs/` を含む）に判断過程を置かない。\n\
-     - 本番 host を変えない（`systemctl --user`・`systemd-run`・`~/.config/{systemd,celeris}`・`~/.local/celeris/releases`・\
-     `/local/celeris/state`、daemon の再起動、本番 DB への書き込み）。人が実行する手順（コマンドと確認方法）として書く。\n\
+     - 「本番 host を変えない」は **Celeris 自身の本番**に限る（`systemctl --user`・`systemd-run`・`~/.config/{systemd,celeris}`・\
+     `~/.local/celeris/releases`・`/local/celeris/state`、daemon の再起動、Celeris の SQLite・knowledge への直接書き込み）。\
+     人が実行する手順（コマンドと確認方法）として書く。登録 project のアプリの配備（例: PRA の docker compose）は別で、\
+     人が依頼し、その project が定めた配備手順（KB の手順書。cos-operator skill の deploy.md）があるなら、手順に従って実行してよい。\
+     手順が無い project は手順書を書いて人に渡す。config（`.env` など）の変更を含む配備と DB の破壊的 migration は、実行前に人へ一言確認する。\n\
      - subagent・別の LLM の CLI（`claude`・`codex`・`opencode` など）や LLM の API を起動しない（検出・記録される）。分担は task の起票か人への質問で。\n\
      - 写し・ビルド出力・大きな一時 file は `/tmp` に置かず、`$TMPDIR`（run 終了で消える）か作業場所の下に置く。\n\n";
 

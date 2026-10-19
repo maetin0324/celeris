@@ -60,6 +60,8 @@ fn campaign(i: &Input, split: Split, n: usize, max_tokens: u64, repeats: u32) ->
             cfg(ConfigId::B, "celeris"),
             cfg(ConfigId::C, "celeris"),
         ],
+        experiment_sets: Default::default(),
+        selected_sets: Vec::new(),
         primary: (ConfigId::A, ConfigId::B),
         secondary: Secondary {
             pair: (ConfigId::B, ConfigId::C),

@@ -71,6 +71,8 @@ fn campaign(i: &Input, n: usize, max_parallel: u32, basis: TokenBasis) -> Campai
             cfg(ConfigId::B, "celeris"),
             cfg(ConfigId::C, "celeris"),
         ],
+        experiment_sets: Default::default(),
+        selected_sets: Vec::new(),
         primary: (ConfigId::A, ConfigId::B),
         secondary: Secondary {
             pair: (ConfigId::B, ConfigId::C),

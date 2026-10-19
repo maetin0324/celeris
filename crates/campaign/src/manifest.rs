@@ -236,6 +236,208 @@ pub struct Secondary {
     pub subset: Vec<String>,
 }
 
+/// 実験セットの配分（全体台帳の取り分。全体を増やさない）。ADR 2026-10-19-experiment-sets D4。
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Share {
+    pub tokens: u64,
+    pub trials: u64,
+    pub provider_slots: u32,
+}
+
+/// セットごとの固定欄。全部省略可（宣言した欄だけ検査する）。
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct SetFixed {
+    /// 方策（B1/C1 の共通 tier 対応表 `lower_policy` など）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy: Option<String>,
+    /// モデル候補集合。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub models: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harnesses: Option<Vec<String>>,
+    /// 初期情報（materials 等）の識別子・hash。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initial_info: Option<String>,
+    /// 成功条件（grader / 基準の版）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub success: Option<String>,
+    /// 役割 → モデル（B0 は planner/reviewer/cos/worker の全役割を宣言する）。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub role_models: BTreeMap<String, String>,
+    /// 全体台帳の取り分。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allocation: Option<Share>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ExperimentSet {
+    pub arms: Vec<ConfigId>,
+    pub compare: Vec<(ConfigId, ConfigId)>,
+    #[serde(default, skip_serializing_if = "is_default_fixed")]
+    pub fixed: SetFixed,
+}
+
+fn is_default_fixed(f: &SetFixed) -> bool {
+    *f == SetFixed::default()
+}
+
+/// B0 の全役割（別の強いモデルを黙って使わない）。
+pub const B0_ROLES: [&str; 4] = ["planner", "reviewer", "cos", "worker"];
+
+/// resume 照合用の計画識別。同じ測定 ID（campaign_id）で有効 arm・比較組・set 宣言・有効設定が変わったら別物。
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PlanIdentity {
+    pub measurement_id: String,
+    pub active_arms: Vec<ConfigId>,
+    pub compare: Vec<(ConfigId, ConfigId)>,
+    pub sets_sha256: String,
+    pub configs_sha256: String,
+}
+
+impl PlanIdentity {
+    /// 再開時に前回の識別と一致するか。違えば変えた欄を名指しで拒否する。
+    pub fn check_resume(&self, prior: &PlanIdentity) -> Result<(), String> {
+        if self.measurement_id != prior.measurement_id {
+            return Ok(());
+        }
+        for (name, same) in [
+            ("active arms", self.active_arms == prior.active_arms),
+            ("compare pairs", self.compare == prior.compare),
+            (
+                "experiment set declaration",
+                self.sets_sha256 == prior.sets_sha256,
+            ),
+            (
+                "active arm configs",
+                self.configs_sha256 == prior.configs_sha256,
+            ),
+        ] {
+            if !same {
+                return Err(format!(
+                    "resume rejected: {name} changed under measurement id {}; use a new measurement id",
+                    self.measurement_id
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// 全体台帳の上限と既消費。セットごとの `Share` はこの残りの内側にだけ置ける。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GlobalCap {
+    pub total: Share,
+    /// 台帳に既に確定している消費（全セット合計。リセットしない）。
+    pub consumed: Share,
+}
+
+/// セットの配分が全体台帳を増やさず、二重に数えていないか。`shares` は測定 ID → 残りの取り分。
+pub fn check_shares(g: &GlobalCap, shares: &BTreeMap<String, Share>) -> Result<(), String> {
+    let (mut t, mut n, mut s) = (
+        g.consumed.tokens,
+        g.consumed.trials,
+        g.consumed.provider_slots,
+    );
+    for sh in shares.values() {
+        t = t.saturating_add(sh.tokens);
+        n = n.saturating_add(sh.trials);
+        s = s.max(sh.provider_slots);
+    }
+    // provider 枠は同時実行の上限なので合算せず、各セットの要求が全体枠以内であることを見る。
+    if t > g.total.tokens {
+        return Err(format!(
+            "allocation: tokens {t} (consumed + shares) exceed global {}",
+            g.total.tokens
+        ));
+    }
+    if n > g.total.trials {
+        return Err(format!(
+            "allocation: trials {n} (consumed + shares) exceed global {}",
+            g.total.trials
+        ));
+    }
+    if s > g.total.provider_slots {
+        return Err(format!(
+            "allocation: provider_slots {s} exceed global {}",
+            g.total.provider_slots
+        ));
+    }
+    Ok(())
+}
+
+fn is_sonnet(model: &str) -> bool {
+    model.to_ascii_lowercase().contains("sonnet")
+}
+
+/// B0: 全役割が Sonnet で宣言されているか（宣言の検査）。
+pub fn check_b0_all_sonnet(role_models: &BTreeMap<String, String>) -> Result<(), String> {
+    for r in B0_ROLES {
+        match role_models.get(r) {
+            None => {
+                return Err(format!(
+                    "B0: role {r} has no declared model (all roles must be Sonnet)"
+                ));
+            }
+            Some(m) if !is_sonnet(m) => {
+                return Err(format!("B0: role {r} uses non-Sonnet model {m}"));
+            }
+            _ => {}
+        }
+    }
+    if let Some(r) = role_models.keys().find(|r| !B0_ROLES.contains(&r.as_str())) {
+        return Err(format!(
+            "B0: undeclared role {r} (add it to B0_ROLES or remove)"
+        ));
+    }
+    Ok(())
+}
+
+/// B0: 実測した (role, model_id) が全て Sonnet か（実際に動いた run の照合）。
+pub fn check_b0_observed(observed: &[(String, String)]) -> Result<(), String> {
+    match observed.iter().find(|(_, m)| !is_sonnet(m)) {
+        Some((r, m)) => Err(format!("B0: observed role {r} ran non-Sonnet model {m}")),
+        None => Ok(()),
+    }
+}
+
+/// B1/C1: 共通の候補集合・harness・tier 対応表で方策だけを変える。C1 を単一モデルへ pin して効果を消さない。
+/// 根拠表は使わない（C は `no_evidence_table`、B は表を持たない）。B0 の検査とは別。
+pub fn check_b1_c1_common(b: &Config, c: &Config) -> Result<(), String> {
+    let (Some(rb), Some(rc)) = (&b.routing, &c.routing) else {
+        return Err("B1/C1: both arms need routing".into());
+    };
+    let set = |v: &Option<Vec<String>>| {
+        v.as_ref()
+            .map(|v| v.iter().cloned().collect::<BTreeSet<String>>())
+    };
+    let Some(models) = set(&rb.models) else {
+        return Err("B1/C1: routing.models (common candidate set) must be declared".into());
+    };
+    if models.len() < 2 {
+        return Err(
+            "B1/C1: candidate set must have 2+ models (C1 must not be pinned to one model)".into(),
+        );
+    }
+    if set(&rc.models).as_ref() != Some(&models) {
+        return Err("B1/C1: B and C must share the same candidate models".into());
+    }
+    if set(&rb.run_harnesses) != set(&rc.run_harnesses) {
+        return Err("B1/C1: B and C must share the same run_harnesses".into());
+    }
+    if rb.lower_policy != rc.lower_policy {
+        return Err("B1/C1: B and C must share the same lower_policy (tier mapping)".into());
+    }
+    if rc.no_evidence_table != Some(true)
+        || rb.evidence_table_id.is_some()
+        || rc.evidence_table_id.is_some()
+    {
+        return Err("B1/C1: evidence table must not be used".into());
+    }
+    Ok(())
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct CampaignManifest {
     pub schema: String,
@@ -248,6 +450,13 @@ pub struct CampaignManifest {
     /// 主比較。常に (A, B)。
     pub primary: (ConfigId, ConfigId),
     pub secondary: Secondary,
+    /// 実験セット宣言（セット名 → 宣言）。空なら従来どおり A/B/C 全部（ADR 2026-10-19-experiment-sets）。
+    /// 宣言があるとき `primary`/`secondary.pair` は読まず、有効 arm・比較組は選択セットから決める。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub experiment_sets: BTreeMap<String, ExperimentSet>,
+    /// 今回の測定で使うセット名。空なら宣言した全セット。宣言が無ければ無視（従来互換）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub selected_sets: Vec<String>,
     pub budget: Budget,
     pub termination: Termination,
     /// problem 内の arm 順。依存順 `problem_order` は常に守る。
@@ -387,13 +596,166 @@ impl CampaignManifest {
         Ok(order)
     }
 
-    /// problem を実行する config（A/B は全問題、C は事前登録 subset のみ）。
-    pub fn planned_configs(&self, problem: &str) -> Vec<ConfigId> {
-        let mut v = vec![ConfigId::A, ConfigId::B];
-        if self.secondary.subset.iter().any(|s| s == problem) {
-            v.push(ConfigId::C);
+    /// 選択されたセット（宣言なしは None = 従来の A/B/C 全部）。
+    fn selected(&self) -> Result<Option<Vec<&ExperimentSet>>, String> {
+        if self.experiment_sets.is_empty() {
+            if !self.selected_sets.is_empty() {
+                return Err("selected_sets without experiment_sets".into());
+            }
+            return Ok(None);
         }
-        v
+        let names: Vec<&String> = if self.selected_sets.is_empty() {
+            self.experiment_sets.keys().collect()
+        } else {
+            self.selected_sets.iter().collect()
+        };
+        let mut out = Vec::new();
+        for n in names {
+            out.push(
+                self.experiment_sets
+                    .get(n)
+                    .ok_or_else(|| format!("selected_sets: unknown set {n}"))?,
+            );
+        }
+        Ok(Some(out))
+    }
+
+    /// 有効 arm（選択セットの和集合。宣言なしは A/B/C）。昇順。
+    pub fn active_arms(&self) -> Vec<ConfigId> {
+        match self.selected() {
+            Ok(Some(sets)) => sets
+                .iter()
+                .flat_map(|s| s.arms.iter().copied())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect(),
+            _ => vec![ConfigId::A, ConfigId::B, ConfigId::C],
+        }
+    }
+
+    pub fn is_active(&self, id: ConfigId) -> bool {
+        self.active_arms().contains(&id)
+    }
+
+    /// 有効比較組（選択セット内の組だけ。宣言なしは primary と secondary.pair）。
+    pub fn compare_pairs(&self) -> Vec<(ConfigId, ConfigId)> {
+        match self.selected() {
+            Ok(Some(sets)) => sets
+                .iter()
+                .flat_map(|s| s.compare.iter().copied())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect(),
+            _ => vec![self.primary, self.secondary.pair],
+        }
+    }
+
+    /// problem を実行する有効 config。C は事前登録 subset のみ。A が有効なら A/B は全問題、
+    /// A が無効（B/C のみ）なら B も subset のみ（ペアの分母を揃える）。
+    pub fn planned_configs(&self, problem: &str) -> Vec<ConfigId> {
+        let in_subset = self.secondary.subset.iter().any(|s| s == problem);
+        let a_active = self.is_active(ConfigId::A);
+        self.active_arms()
+            .into_iter()
+            .filter(|id| match id {
+                ConfigId::A => true,
+                ConfigId::B => a_active || in_subset,
+                ConfigId::C => in_subset,
+            })
+            .collect()
+    }
+
+    /// 全 problem・repeats を通した期待試行数（有効 arm のみ）。
+    pub fn expected_trials(&self) -> u64 {
+        let n: usize = self
+            .problems
+            .iter()
+            .map(|p| self.planned_configs(p).len())
+            .sum();
+        n as u64 * u64::from(self.repeats)
+    }
+
+    /// set 宣言（選択を含む）の hash。計画識別に入れる。
+    pub fn sets_sha256(&self) -> Result<String, String> {
+        let v = canonical(&serde_json::json!({
+            "sets": self.experiment_sets,
+            "selected": self.selected_sets.iter().collect::<BTreeSet<_>>(),
+        }));
+        let bytes = serde_json::to_vec(&v).map_err(|e| e.to_string())?;
+        Ok(format!("{:x}", Sha256::digest(bytes)))
+    }
+
+    /// resume 照合用の計画識別。
+    pub fn plan_identity(&self) -> Result<PlanIdentity, String> {
+        let active = self.active_arms();
+        let mut cfgs: Vec<&Config> = self
+            .configs
+            .iter()
+            .filter(|c| active.contains(&c.id))
+            .collect();
+        cfgs.sort_by_key(|c| c.id);
+        let bytes = serde_json::to_vec(&canonical(
+            &serde_json::to_value(&cfgs).map_err(|e| e.to_string())?,
+        ))
+        .map_err(|e| e.to_string())?;
+        Ok(PlanIdentity {
+            measurement_id: self.campaign_id.clone(),
+            active_arms: active,
+            compare: self.compare_pairs(),
+            sets_sha256: self.sets_sha256()?,
+            configs_sha256: format!("{:x}", Sha256::digest(bytes)),
+        })
+    }
+
+    /// セット宣言の検査（宣言なしは何もしない）。
+    fn validate_sets(&self) -> Result<(), String> {
+        let Some(sel) = self.selected()? else {
+            return Ok(());
+        };
+        for (name, s) in &self.experiment_sets {
+            let arms: BTreeSet<ConfigId> = s.arms.iter().copied().collect();
+            if arms.is_empty() || arms.len() != s.arms.len() {
+                return Err(format!("set {name}: arms must be non-empty and unique"));
+            }
+            if s.compare.is_empty() {
+                return Err(format!("set {name}: compare must be non-empty"));
+            }
+            for p in &s.compare {
+                if ![(ConfigId::A, ConfigId::B), (ConfigId::B, ConfigId::C)].contains(p) {
+                    return Err(format!(
+                        "set {name}: compare pair {p:?} must be (A,B) or (B,C)"
+                    ));
+                }
+                if !arms.contains(&p.0) || !arms.contains(&p.1) {
+                    return Err(format!(
+                        "set {name}: compare pair {p:?} uses an arm outside the set"
+                    ));
+                }
+            }
+        }
+        let uniq: BTreeSet<&String> = self.selected_sets.iter().collect();
+        if uniq.len() != self.selected_sets.len() {
+            return Err("selected_sets contain duplicates".into());
+        }
+        let _ = sel;
+        let mut shares = BTreeMap::new();
+        for (name, s) in &self.experiment_sets {
+            if let Some(sh) = s.fixed.allocation {
+                shares.insert(name.clone(), sh);
+            }
+        }
+        let b = &self.budget;
+        check_shares(
+            &GlobalCap {
+                total: Share {
+                    tokens: b.max_tokens,
+                    trials: self.expected_trials(),
+                    provider_slots: b.max_parallel,
+                },
+                consumed: Share::default(),
+            },
+            &shares,
+        )
     }
 
     /// 正規化後の canonical JSON（キー順固定）の sha256。`sha256` 欄は空として数える。
@@ -423,8 +785,14 @@ impl CampaignManifest {
             }
         }
         let ids: Vec<ConfigId> = self.normalized().configs.iter().map(|c| c.id).collect();
-        if ids != [ConfigId::A, ConfigId::B, ConfigId::C] {
-            return Err("configs must contain exactly A, B and C once each".into());
+        self.selected()?;
+        let active = self.active_arms();
+        if ids != active {
+            return Err(if self.experiment_sets.is_empty() {
+                "configs must contain exactly A, B and C once each".into()
+            } else {
+                format!("configs must contain exactly the active arms {active:?} once each")
+            });
         }
         for c in &self.configs {
             for (n, v) in [
@@ -442,11 +810,13 @@ impl CampaignManifest {
                 return Err("config A: routing is for Celeris arms (B/C) only".into());
             }
         }
-        if self.primary != (ConfigId::A, ConfigId::B) {
-            return Err("primary comparison must be (A, B)".into());
-        }
-        if self.secondary.pair != (ConfigId::B, ConfigId::C) {
-            return Err("secondary comparison must be (B, C)".into());
+        if self.experiment_sets.is_empty() {
+            if self.primary != (ConfigId::A, ConfigId::B) {
+                return Err("primary comparison must be (A, B)".into());
+            }
+            if self.secondary.pair != (ConfigId::B, ConfigId::C) {
+                return Err("secondary comparison must be (B, C)".into());
+            }
         }
         let b = &self.budget;
         if b.max_tokens == 0 || b.max_wall_secs == 0 || b.max_disk_bytes == 0 || b.max_parallel == 0
@@ -480,14 +850,22 @@ impl CampaignManifest {
         if set.len() != self.problems.len() {
             return Err("problems contain duplicates".into());
         }
-        if self.secondary.subset.is_empty() {
-            return Err("secondary.subset must be declared (pre-registered)".into());
+        if self.is_active(ConfigId::C) {
+            if self.secondary.subset.is_empty() {
+                return Err("secondary.subset must be declared (pre-registered)".into());
+            }
+        } else if !self.secondary.subset.is_empty() {
+            return Err("secondary.subset must be empty when C is not active".into());
         }
         let sub: BTreeSet<&str> = self.secondary.subset.iter().map(String::as_str).collect();
         if sub.len() != self.secondary.subset.len() || !sub.is_subset(&set) {
             return Err("secondary.subset must be unique and contained in problems".into());
         }
+        if !self.is_active(ConfigId::A) && sub != set {
+            return Err("without A, problems must equal secondary.subset (no idle problems in the denominator)".into());
+        }
         self.problem_order()?;
+        self.validate_sets()?;
         if self.split == Split::Final {
             self.check_resolved()?;
         }
@@ -574,7 +952,28 @@ impl CampaignManifest {
                 }
             }
         }
-        self.check_comparison_conditions()
+        self.check_comparison_conditions()?;
+        self.check_set_fixed()
+    }
+
+    /// セットの固定構成の検査: B0（A/B のセット）は全役割 Sonnet、B1/C1（B/C のセット）は共通候補。
+    /// 別々の検査関数を、セットが宣言した比較組に応じて呼ぶ。
+    fn check_set_fixed(&self) -> Result<(), String> {
+        let Some(sel) = self.selected()? else {
+            return Ok(());
+        };
+        let cfg = |id| self.configs.iter().find(|c| c.id == id);
+        for s in sel {
+            if s.compare.contains(&(ConfigId::A, ConfigId::B)) {
+                check_b0_all_sonnet(&s.fixed.role_models)?;
+            }
+            if s.compare.contains(&(ConfigId::B, ConfigId::C))
+                && let (Some(b), Some(c)) = (cfg(ConfigId::B), cfg(ConfigId::C))
+            {
+                check_b1_c1_common(b, c)?;
+            }
+        }
+        Ok(())
     }
 
     /// 比較条件の整合: B/C は同じ利用可能モデル集合・harness 集合・tier 対応表で方策だけを変える。
@@ -768,6 +1167,8 @@ pub(crate) mod fixtures {
                 materials_sha256: "def".into(),
                 kb_snapshot: "kb@1".into(),
             },
+            experiment_sets: BTreeMap::new(),
+            selected_sets: Vec::new(),
             order: Default::default(),
             seed: 0,
             repeats: 1,
@@ -944,5 +1345,311 @@ mod tests {
         assert!(m.validate().is_err());
         m.secondary.subset = vec!["nope".into()];
         assert!(m.validate().is_err());
+    }
+
+    fn set(arms: &[ConfigId], compare: &[(ConfigId, ConfigId)]) -> ExperimentSet {
+        ExperimentSet {
+            arms: arms.to_vec(),
+            compare: compare.to_vec(),
+            fixed: SetFixed::default(),
+        }
+    }
+
+    /// 選択セットだけの manifest（未使用 arm の config は持たない）。
+    fn with_sets(sets: &[(&str, ExperimentSet)], sel: &[&str]) -> CampaignManifest {
+        let i = input(4, "dev");
+        let mut m = campaign(&i, Split::Dev, 4);
+        m.experiment_sets = sets
+            .iter()
+            .map(|(n, s)| (n.to_string(), s.clone()))
+            .collect();
+        m.selected_sets = sel.iter().map(|s| s.to_string()).collect();
+        let active = m.active_arms();
+        m.configs.retain(|c| active.contains(&c.id));
+        m
+    }
+
+    #[test]
+    fn legacy_manifest_is_all_abc() {
+        let i = input(4, "dev");
+        let m = campaign(&i, Split::Dev, 4);
+        assert_eq!(m.active_arms(), [ConfigId::A, ConfigId::B, ConfigId::C]);
+        assert_eq!(
+            m.planned_configs("p0"),
+            [ConfigId::A, ConfigId::B, ConfigId::C]
+        );
+        assert_eq!(m.planned_configs("p3"), [ConfigId::A, ConfigId::B]);
+        let v = serde_json::to_value(&m).unwrap();
+        assert!(v.get("experiment_sets").is_none() && v.get("selected_sets").is_none());
+    }
+
+    #[test]
+    fn ab_only_set_validates_without_c() {
+        let mut m = with_sets(
+            &[(
+                "main",
+                set(&[ConfigId::A, ConfigId::B], &[(ConfigId::A, ConfigId::B)]),
+            )],
+            &["main"],
+        );
+        m.secondary.subset.clear();
+        assert!(m.validate().is_ok(), "{:?}", m.validate());
+        assert_eq!(m.compare_pairs(), [(ConfigId::A, ConfigId::B)]);
+        for p in &m.problems {
+            assert_eq!(m.planned_configs(p), [ConfigId::A, ConfigId::B]);
+        }
+        assert_eq!(m.expected_trials(), 8);
+        // C の config を残すと拒否（未使用 arm を黙って持たない）。
+        let i = input(4, "dev");
+        m.configs = campaign(&i, Split::Dev, 4).configs;
+        assert!(m.validate().unwrap_err().contains("active arms"));
+    }
+
+    #[test]
+    fn bc_only_set_validates_without_a() {
+        let mut m = with_sets(
+            &[(
+                "jev",
+                set(&[ConfigId::B, ConfigId::C], &[(ConfigId::B, ConfigId::C)]),
+            )],
+            &["jev"],
+        );
+        m.problems = m.secondary.subset.clone();
+        assert!(m.validate().is_ok(), "{:?}", m.validate());
+        assert_eq!(m.compare_pairs(), [(ConfigId::B, ConfigId::C)]);
+        for p in &m.problems {
+            assert_eq!(m.planned_configs(p), [ConfigId::B, ConfigId::C]);
+        }
+        // 比較しない問題が分母に残るなら拒否。
+        m.problems.push("p3".into());
+        assert!(m.validate().unwrap_err().contains("denominator"));
+    }
+
+    #[test]
+    fn both_sets_selected_is_union_and_unselected_set_is_ignored() {
+        let main = (
+            "main",
+            set(&[ConfigId::A, ConfigId::B], &[(ConfigId::A, ConfigId::B)]),
+        );
+        let jev = (
+            "jev",
+            set(&[ConfigId::B, ConfigId::C], &[(ConfigId::B, ConfigId::C)]),
+        );
+        let all = with_sets(&[main.clone(), jev.clone()], &[]);
+        assert_eq!(all.active_arms(), [ConfigId::A, ConfigId::B, ConfigId::C]);
+        assert!(all.validate().is_ok());
+        let only = with_sets(&[main, jev], &["main"]);
+        assert!(!only.is_active(ConfigId::C));
+        assert_eq!(only.compare_pairs(), [(ConfigId::A, ConfigId::B)]);
+        let mut bad = only.clone();
+        bad.selected_sets = vec!["nope".into()];
+        assert!(bad.validate().unwrap_err().contains("unknown set"));
+    }
+
+    #[test]
+    fn resume_with_changed_active_arms_or_declaration_is_rejected() {
+        let ab = (
+            "main",
+            set(&[ConfigId::A, ConfigId::B], &[(ConfigId::A, ConfigId::B)]),
+        );
+        let bc = (
+            "jev",
+            set(&[ConfigId::B, ConfigId::C], &[(ConfigId::B, ConfigId::C)]),
+        );
+        let prior = with_sets(&[ab.clone(), bc.clone()], &["main"])
+            .plan_identity()
+            .unwrap();
+        // 同じ宣言・同じ選択は再開できる。
+        assert!(
+            with_sets(&[ab.clone(), bc.clone()], &["main"])
+                .plan_identity()
+                .unwrap()
+                .check_resume(&prior)
+                .is_ok()
+        );
+        // 同じ測定 ID で有効 arm を変える。
+        let swapped = with_sets(&[ab.clone(), bc.clone()], &["jev"])
+            .plan_identity()
+            .unwrap();
+        assert!(
+            swapped
+                .check_resume(&prior)
+                .unwrap_err()
+                .contains("active arms changed")
+        );
+        // arm は同じでも set 宣言（固定欄）を変える。
+        let mut ab2 = ab.clone();
+        ab2.1.fixed.policy = Some("other".into());
+        let changed = with_sets(&[ab2, bc.clone()], &["main"])
+            .plan_identity()
+            .unwrap();
+        assert!(
+            changed
+                .check_resume(&prior)
+                .unwrap_err()
+                .contains("declaration changed")
+        );
+        // 有効 arm の設定を変える。
+        let mut m = with_sets(&[ab, bc], &["main"]);
+        m.configs[0].model_version = "2".into();
+        assert!(
+            m.plan_identity()
+                .unwrap()
+                .check_resume(&prior)
+                .unwrap_err()
+                .contains("configs changed")
+        );
+        // 別の測定 ID は別計画。
+        let mut other = prior.clone();
+        other.measurement_id = "other".into();
+        assert!(other.active_arms == prior.active_arms && prior.check_resume(&other).is_ok());
+    }
+
+    #[test]
+    fn set_declaration_changes_manifest_sha() {
+        let ab = (
+            "main",
+            set(&[ConfigId::A, ConfigId::B], &[(ConfigId::A, ConfigId::B)]),
+        );
+        let m1 = with_sets(std::slice::from_ref(&ab), &["main"]);
+        let mut m2 = m1.clone();
+        m2.experiment_sets.get_mut("main").unwrap().fixed.success = Some("g2".into());
+        assert_ne!(m1.compute_sha256().unwrap(), m2.compute_sha256().unwrap());
+        assert_ne!(m1.sets_sha256().unwrap(), m2.sets_sha256().unwrap());
+    }
+
+    #[test]
+    fn allocation_shares_the_global_ledger_without_growth_or_double_count() {
+        let sh = |tokens, trials| Share {
+            tokens,
+            trials,
+            provider_slots: 2,
+        };
+        let g = GlobalCap {
+            total: Share {
+                tokens: 100,
+                trials: 10,
+                provider_slots: 4,
+            },
+            consumed: sh(30, 3),
+        };
+        let mut shares = BTreeMap::new();
+        shares.insert("main".to_string(), sh(40, 4));
+        shares.insert("jev".to_string(), sh(30, 3));
+        // 既消費 30 + 70 = 100: ちょうど全体。
+        assert!(check_shares(&g, &shares).is_ok());
+        // 分割で全体を超える（既消費を無かったことにしない）。
+        shares.insert("jev".to_string(), sh(31, 3));
+        assert!(check_shares(&g, &shares).unwrap_err().contains("tokens"));
+        shares.insert("jev".to_string(), sh(30, 4));
+        assert!(check_shares(&g, &shares).unwrap_err().contains("trials"));
+        shares.insert(
+            "jev".to_string(),
+            Share {
+                provider_slots: 5,
+                ..sh(30, 3)
+            },
+        );
+        assert!(
+            check_shares(&g, &shares)
+                .unwrap_err()
+                .contains("provider_slots")
+        );
+
+        // manifest 内: セット配分の合計が全体予算・期待試行数を超えたら拒否。共有 arm B は 1 回だけ数える。
+        let ab = (
+            "main",
+            set(&[ConfigId::A, ConfigId::B], &[(ConfigId::A, ConfigId::B)]),
+        );
+        let bc = (
+            "jev",
+            set(&[ConfigId::B, ConfigId::C], &[(ConfigId::B, ConfigId::C)]),
+        );
+        let mut m = with_sets(&[ab, bc], &[]);
+        let trials = m.expected_trials();
+        assert_eq!(trials, 4 * 2 + 2); // A,B 全 4 問 + C は subset 2 問
+        let half = Share {
+            tokens: m.budget.max_tokens / 2,
+            trials: trials / 2,
+            provider_slots: 2,
+        };
+        for n in ["main", "jev"] {
+            m.experiment_sets.get_mut(n).unwrap().fixed.allocation = Some(half);
+        }
+        assert!(m.validate().is_ok(), "{:?}", m.validate());
+        m.experiment_sets.get_mut("jev").unwrap().fixed.allocation = Some(Share { trials, ..half });
+        assert!(m.validate().unwrap_err().contains("trials"));
+    }
+
+    fn routed(id: ConfigId, models: &[&str], ev: bool) -> Config {
+        Config {
+            id,
+            harness: "celeris".into(),
+            harness_version: "1".into(),
+            model: "m".into(),
+            model_version: "1".into(),
+            policy_version: "p".into(),
+            routing: Some(ArmRouting {
+                lower_policy: Some("tiers-v1".into()),
+                models: Some(models.iter().map(|s| s.to_string()).collect()),
+                no_evidence_table: (id == ConfigId::C && !ev).then_some(true),
+                evidence_table_id: ev.then(|| "t1".to_string()),
+                ..Default::default()
+            }),
+        }
+    }
+
+    #[test]
+    fn b0_and_b1_c1_checks_are_separate() {
+        let ok: BTreeMap<String, String> = B0_ROLES
+            .iter()
+            .map(|r| (r.to_string(), "claude-sonnet-4-5".to_string()))
+            .collect();
+        assert!(check_b0_all_sonnet(&ok).is_ok());
+        let mut opus = ok.clone();
+        opus.insert("reviewer".into(), "claude-opus-4".into());
+        assert!(check_b0_all_sonnet(&opus).unwrap_err().contains("reviewer"));
+        let mut missing = ok.clone();
+        missing.remove("cos");
+        assert!(check_b0_all_sonnet(&missing).unwrap_err().contains("cos"));
+        assert!(check_b0_observed(&[("worker".into(), "claude-sonnet-4-5".into())]).is_ok());
+        assert!(check_b0_observed(&[("planner".into(), "claude-opus-4".into())]).is_err());
+
+        let m = ["claude-sonnet-4-5", "claude-opus-4"];
+        assert!(
+            check_b1_c1_common(
+                &routed(ConfigId::B, &m, false),
+                &routed(ConfigId::C, &m, false)
+            )
+            .is_ok()
+        );
+        // C1 を単一モデルに pin すると拒否。
+        let one = ["claude-sonnet-4-5"];
+        assert!(
+            check_b1_c1_common(
+                &routed(ConfigId::B, &one, false),
+                &routed(ConfigId::C, &one, false)
+            )
+            .unwrap_err()
+            .contains("2+")
+        );
+        // 候補集合が違う。
+        assert!(
+            check_b1_c1_common(
+                &routed(ConfigId::B, &m, false),
+                &routed(ConfigId::C, &one, false)
+            )
+            .unwrap_err()
+            .contains("same")
+        );
+        // 根拠表を使う。
+        assert!(
+            check_b1_c1_common(
+                &routed(ConfigId::B, &m, false),
+                &routed(ConfigId::C, &m, true)
+            )
+            .unwrap_err()
+            .contains("evidence")
+        );
     }
 }

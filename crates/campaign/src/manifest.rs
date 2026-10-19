@@ -268,6 +268,9 @@ pub struct SetFixed {
     /// 全体台帳の取り分。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allocation: Option<Share>,
+    /// 承認単位の試行数上限（全セット共通。宣言した最小値が全体台帳の上限になり、別測定 ID で増やせない）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approved_trials: Option<u64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

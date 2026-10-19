@@ -26,6 +26,21 @@ pub struct GlobalRow {
     /// 実際に動いた試行数（case × repetition。retry は 1 試行）。
     pub trials: u64,
     pub provider_slots: u32,
+    /// この測定 ID が投入時に採った上限（全体の最小を取り、別測定 ID で増やせない）。旧行は無制限。
+    #[serde(default = "unlimited_u64")]
+    pub cap_tokens: u64,
+    #[serde(default = "unlimited_u64")]
+    pub cap_trials: u64,
+    #[serde(default = "unlimited_u32")]
+    pub cap_provider_slots: u32,
+}
+
+fn unlimited_u64() -> u64 {
+    u64::MAX
+}
+
+fn unlimited_u32() -> u32 {
+    u32::MAX
 }
 
 #[derive(Clone, Debug)]
@@ -55,6 +70,15 @@ fn own_allocation(m: &CampaignManifest) -> Share {
         }
     }
     t
+}
+
+/// 承認単位の試行数上限。宣言が無ければ無制限。
+fn approved_trials(m: &CampaignManifest) -> u64 {
+    m.experiment_sets
+        .values()
+        .filter_map(|s| s.fixed.approved_trials)
+        .min()
+        .unwrap_or(u64::MAX)
 }
 
 impl GlobalLedger {
@@ -96,9 +120,34 @@ impl GlobalLedger {
         Ok(o)
     }
 
-    /// 自分の現在値を記録する。前回と同じなら書かない。
+    /// 台帳全体の排他（flock。process が落ちても残らない）。
+    fn lock(&self) -> Result<fs::File, String> {
+        let p = self.path.with_extension("lock");
+        let f = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&p)
+            .map_err(|e| format!("{}: {e}", p.display()))?;
+        f.lock().map_err(|e| format!("{}: {e}", p.display()))?;
+        Ok(f)
+    }
+
+    /// 自分の現在値を記録する。前回と同じなら書かない。上限は既存行より増やさない。
     pub fn record(&self, row: &GlobalRow) -> Result<(), String> {
-        if self.current()?.get(&row.measurement_id) == Some(row) {
+        let _g = self.lock()?;
+        self.record_locked(row)
+    }
+
+    fn record_locked(&self, row: &GlobalRow) -> Result<(), String> {
+        let cur = self.current()?;
+        let mut row = row.clone();
+        if let Some(prev) = cur.get(&row.measurement_id) {
+            row.cap_tokens = row.cap_tokens.min(prev.cap_tokens);
+            row.cap_trials = row.cap_trials.min(prev.cap_trials);
+            row.cap_provider_slots = row.cap_provider_slots.min(prev.cap_provider_slots);
+        }
+        if cur.get(&row.measurement_id) == Some(&row) {
             return Ok(());
         }
         let mut f = OpenOptions::new()
@@ -106,7 +155,7 @@ impl GlobalLedger {
             .append(true)
             .open(&self.path)
             .map_err(|e| format!("{}: {e}", self.path.display()))?;
-        let mut line = serde_json::to_string(row).map_err(|e| e.to_string())?;
+        let mut line = serde_json::to_string(&row).map_err(|e| e.to_string())?;
         line.push('\n');
         f.write_all(line.as_bytes()).map_err(|e| e.to_string())?;
         f.sync_all().map_err(|e| e.to_string())
@@ -121,19 +170,34 @@ impl GlobalLedger {
             wall_secs: wall,
             trials,
             provider_slots: m.budget.max_parallel,
+            cap_tokens: m.budget.max_tokens,
+            cap_trials: approved_trials(m),
+            cap_provider_slots: m.budget.max_parallel,
         }
     }
 
-    /// 投入前の拒否。全体上限（manifest の budget）に対し、他の測定 ID の既消費 + 予約と自分の取り分
-    /// （セットの `allocation`。宣言が無ければ 0）が収まらない・provider 枠が全体を超える場合は Err。
+    /// 投入前の拒否と予約。全体上限は manifest の budget と台帳に既にある上限の最小（別測定 ID の manifest で
+    /// 増やせない）。他の測定 ID の既消費 + 予約と自分の取り分（セットの `allocation`。宣言が無ければ tokens 0、
+    /// trials は期待試行数）が収まらない・provider 枠が全体を超える場合は Err。
+    /// 判定と予約の記録は排他の中で行う（同時投入で両方通らない）。
     pub fn admit_start(&self, m: &CampaignManifest) -> Result<Others, String> {
+        let _g = self.lock()?;
+        let cur = self.current()?;
+        let (mut cap_t, mut cap_n, mut cap_s) = (
+            m.budget.max_tokens,
+            approved_trials(m),
+            m.budget.max_parallel,
+        );
+        for r in cur.values() {
+            cap_t = cap_t.min(r.cap_tokens);
+            cap_n = cap_n.min(r.cap_trials);
+            cap_s = cap_s.min(r.cap_provider_slots);
+        }
         let o = self.others(&m.campaign_id)?;
-        let own = own_allocation(m);
-        let total = Share {
-            tokens: m.budget.max_tokens,
-            trials: u64::MAX,
-            provider_slots: m.budget.max_parallel,
-        };
+        let mut own = own_allocation(m);
+        if own.trials == 0 {
+            own.trials = m.expected_trials();
+        }
         let consumed = Share {
             tokens: o.tokens,
             trials: o.trials,
@@ -146,14 +210,30 @@ impl GlobalLedger {
                 ..own
             },
         )]);
+        let total = Share {
+            tokens: cap_t,
+            trials: cap_n,
+            provider_slots: cap_s,
+        };
         check_shares(&GlobalCap { total, consumed }, &shares)
             .map_err(|e| format!("global ledger rejects {}: {e}", m.campaign_id))?;
-        if o.tokens >= m.budget.max_tokens {
+        if o.tokens >= cap_t {
             return Err(format!(
                 "global ledger rejects {}: other measurements already used {} of {} tokens",
-                m.campaign_id, o.tokens, m.budget.max_tokens
+                m.campaign_id, o.tokens, cap_t
             ));
         }
+        // 予約: 自分の現在値を取り分まで引き上げる（確定消費は下げない。次の記録で実測値に置き換わる）。
+        let mut row = cur
+            .get(&m.campaign_id)
+            .cloned()
+            .unwrap_or_else(|| Self::row(m, &m.compute_sha256().unwrap_or_default(), 0, 0, 0));
+        row.cap_tokens = cap_t;
+        row.cap_trials = cap_n;
+        row.cap_provider_slots = cap_s;
+        row.tokens = row.tokens.max(own.tokens);
+        row.trials = row.trials.max(own.trials);
+        self.record_locked(&row)?;
         Ok(o)
     }
 }

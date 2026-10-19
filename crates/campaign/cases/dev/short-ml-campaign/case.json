@@ -77,7 +77,7 @@
   "schema": "celeris.campaign-case/1",
   "snapshot": {
     "kb_snapshot": "5b84e3b50c68df468c8ad02ce463a834bac74d8d5baa7e0544acc04726fdd618",
-    "materials_sha256": "f8256e154d2a9dba2f09fe134bb71c8bb70b3563316518243bee580296226b9d",
+    "materials_sha256": "efa7308cab04368814c292ca5ac3e8001d88b69d1312732c183f2c97b0ddf1cb",
     "repo_commit": "none (control or input-only case)"
   },
   "split": "dev",

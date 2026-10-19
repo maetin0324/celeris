@@ -173,7 +173,8 @@ class Adopted(Base):
         self.write_status("adopted")
         self.art, self.obs = build_artifact(self.dir)
         self.ap = {"approved": True, "remaining": {"tokens": 2512372, "as_of": "2026-10-22T00:00:00Z", "source": "ledger"}}
-        self.em = {"command": "ssh sirius python3 -c ...", "exit": 0, "python": "3.9.25", "numpy": "1.23.5"}
+        req = json.loads((self.campaign / "cases/dev" / CASE / "env.lock.json").read_text())["requested"]
+        self.em = {"command": "job.pbs stdout (python/numpy)", "exit": 0, "python": req["python"], "numpy": req["numpy"]}
 
     def ev(self, **ad):
         a = {"artifact": str(self.art), "observed_jobs": str(self.obs), "env_measured": self.em, "approval": self.ap}

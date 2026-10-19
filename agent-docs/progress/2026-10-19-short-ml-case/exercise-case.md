@@ -1,10 +1,10 @@
 ---
 task: 01M5AFX5TQKG3WAEYD1E0XQNMS
 wu: exercise-case
-status: blocked
+status: running
 completed: null
 ---
-# exercise-case: 46039.pbs は回収したが正例不成立。2 本目は compute の python 版が未測定のため人の決定待ち（状態は pending のまま）
+# exercise-case: 2 本目 46040.pbs を投入し cluster_job wait 中（状態は pending のまま）
 
 ## 事実
 - 2026-10-19T16:34Z に実行直前の再確認をした。sirius の環境（python 3.9.25・numpy 1.23.5）は env.lock と一致した。
@@ -46,10 +46,20 @@ completed: null
 - node への ssh は不可で、過去の job log にも compute の python 版は無い。承認文は「login の値は使わない」なので、lock の python を投入前に実測で埋められない。
 - 最後の 1 本を推測値で賭けず、python の固定方法を人の決定 sirius-compute-python-lock に上げた。repo の case・lock・pin・job.pbs は変えていない。投入は 1/2 のまま。記録は外部資料の `exercise.attempts[3]` にある。
 
+## 2 本目の投入（2026-10-19T17:33Z、run 01M5AKGJB8DX5DBRHFC29Q7S1J）
+- 人の決定 sirius-compute-python-lock は measure-in-job。env.lock の requested を numpy 2.0.2（a02 の job 46039 が記録）・python null（job が記録）に改訂し、`measure_in_job` 欄を足した。login node の値は使っていない。
+- job.pbs は hostname・python 完全版・numpy を stdout に出し、numpy が 2.0.2 でなければ exit 1。job.py の後に完了行を出す。job.py は不変。
+- pin を更新した（materials efa7308c…、case.json 2c18e541…、env_lock 2ca5663b…）。試験は short_ml_assets.rs の lock 期待値、test_short_ml_acceptance.py の env_measured を lock から読む形に直した。
+- 実行直前の再確認: debug Que 0 Run 0、自分の job なし。staging の sha256 は repo と一致。
+- `qsub -A NBBG job.pbs` → exit 0、46040.pbs（投入 2/2、上限到達）。17:35:17Z の `qstat -x` は F。
+- result.json に wait(cluster_job, sirius, 46040.pbs) を書いて終えた。回収・lock の python 完全版への書き直し・pin 更新・grader は再開 run で行う。記録は外部資料の `exercise.attempts[4]`。
+
 ## 証拠コマンド
 - `python3 crates/campaign/scripts/verify-short-ml-case.py --check` → exit 0（状態整合のみ）
 - `python3 crates/campaign/scripts/verify-short-ml-case.py --acceptance --evidence <上記 json>` → exit 1（pending なので非 0 が正しい）
 - `python3 crates/campaign/scripts/verify-short-ml-case.py --placement-check` → exit 0
+- `cargo test -p celeris-campaign --test short_ml_assets` → 11 passed
 
 ## 未解決事項
-- 人の決定 sirius-compute-python-lock: compute node の python 版が未測定のまま、lock の python をどう固定して最後の 1 本を出すか。
+- 46040.pbs の回収と正例 1・負例 3（再開 run）。lock の python は null のままなので、回収までは test_short_ml_acceptance.py の Adopted 試験は env_measured の python 欠けで落ちる（release gate の nextest 範囲外）。
+- 投入は 2/2。これが失敗したら 3 本目は出さず止めて報告する。

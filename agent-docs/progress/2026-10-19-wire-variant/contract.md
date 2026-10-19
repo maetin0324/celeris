@@ -59,3 +59,12 @@ completed: 2026-10-19
 
 ## 提案
 - なし（契約は上記の範囲。ADR は実装で決定が確定した時点で `agent-docs/adr/2026-10-19-specialization-variant.md` に書く）。
+
+## variant-contract の実装結果（2026-10-19）
+- `crates/campaign/src/variant.rs`（新規、`lib.rs` に `pub mod variant`）。manifest / lock の struct は変更していない（`CampaignManifest` のリテラルが多数の試験にあり、必須欄追加で壊れるため。`variant: Option<VariantRef>` の配線は campaign-submit）。
+- 公開: `VariantId` `VariantSpec` `VariantRef` `OrgPin` `NonTargetPin`（`ReviewPin` `SafetyPin`）`BaselinePin` `VariantError`、`effective_profile_sha256` `selection_sha256` `selection_json_sha256`。
+- `selection.sha256` は JSON の生バイトではなく、正規化 JSON（キー整列・compact）の sha256。`selection_json_sha256()` が同方式で再計算し、同梱値と不一致なら `SelectionMismatch`。selection.json / selection.sha256 は無変更。
+- `VariantSpec::verify(&BaselinePin)`: schema・comparison_id・selection hash・封印・欠落/unknown（全役割モデル `REQUIRED_ROLES`・review・lane/試行/承認/deny/browser・資料・KB・予算・終了条件・grader）を検査してから、B0 から作った基準と欄ごとに比較する。基準は呼び出し側が B0 の実体から渡すので、自己 hash の再 seal では差を正当化できない。
+- 試験: `crates/campaign/tests/ablation_contract.rs` 8 件（hash 安定、改変、selection 改変、再 seal 後の非対象 9 欄差分、欠落/unknown、org 形状/profile 同値）。
+- 検査: `cargo nextest run -p celeris-campaign` 397 passed（初回 1 回は別試験が落ち、再実行で全通過。timing 依存と見るが原因は未調査）、`cargo clippy --workspace -- -D warnings` 0、`cargo fmt --all -- --check` 0。`test-parallel.sh` の全体は統合時に実行。
+- 次段へ: `VariantSpec::to_ref()` が manifest / lock / POST が運ぶ `VariantRef` を返す。`BaselinePin` は preflight が B0 の manifest・lock・`GET /api/v1/org` から組み立てる。

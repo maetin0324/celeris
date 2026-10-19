@@ -8,6 +8,7 @@ Jev の段階別の実検査（鍵登録・分類呼び出し）はここでは�
 import argparse
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -15,6 +16,12 @@ import tomllib
 from pathlib import Path
 
 SONNET, OPUS = "claude-sonnet-5-5", "claude-opus-5-5"
+CAMPAIGN_BIN_REL = "pinned/evidence/main-k2/bin/celeris-campaign-fixed"
+CAMPAIGN_BIN_SHA = "de339f1c4af25bcb2b3ec8d53222ca05c010a11fb7343f16f69d514559161394"
+OLD_SUB_PROJECT_ID = "01M2WTS3DKNZBSZ2JMVB4CZMBW"  # 旧 pin（案件 project の id。測定 DB のものではない）
+FIXED_DIRS = {"CASES_ROOT": "cases", "GRADER_ROOT": "grader-private", "GRADE_CASES_ROOT": "grade-cases"}
+# 引き渡し先（機械可読ログ用）
+HANDOVER = {"owner": "01M58VG5C4XGK4E70M6WJ6MEX0", "operator": "runbook §3c"}
 ARM_COMMON_KEYS = ("harness", "harness_version", "model", "model_version")
 
 
@@ -25,11 +32,19 @@ def sha256(p: Path) -> str:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", required=True, type=Path)
-    root = ap.parse_args().root
+    ap.add_argument("--report-json", type=Path, help="不足・不一致を機械可読で書き出す（exit code は変えない）")
+    args = ap.parse_args()
+    root = args.root
     errs: list[str] = []
+    gaps: list[dict] = []
 
     def bad(msg: str) -> None:
         errs.append(msg)
+
+    def gap(key: str, msg: str, owner: str, recheck: str) -> None:
+        """この task では成功扱いにしない不足（非0）。担当と再検査コマンドを残す。"""
+        gaps.append({"key": key, "what": msg, "owner": owner, "recheck": recheck})
+        errs.append(f"GAP[{key}]: {msg} (owner: {owner})")
 
     sub, main_dir = root / "pinned" / "sub", root / "pinned" / "main"
     names = ["final.json", "daemon.toml", "launcher.env", "canaries.json", "task-template.json",
@@ -40,7 +55,7 @@ def main() -> int:
         if not (main_dir / n).is_file():
             bad(f"missing file: pinned/main/{n}")
     if errs:
-        return finish(errs)
+        return finish(errs, gaps, args.report_json, root)
 
     final = json.loads((sub / "final.json").read_text())
     mfinal = json.loads((main_dir / "final.json").read_text())
@@ -58,7 +73,7 @@ def main() -> int:
     b, c = arms.get("B"), arms.get("C")
     if not b or not c:
         bad("final.json lacks arm B or C")
-        return finish(errs)
+        return finish(errs, gaps, args.report_json, root)
     for k in ARM_COMMON_KEYS:
         if b.get(k) != c.get(k):
             bad(f"B and C differ in {k}")
@@ -164,9 +179,27 @@ def main() -> int:
         bad(f"cap-probe command does not exist: {cp['command']}")
     if cp.get("command") != env.get("CAMPAIGN_BIN"):
         bad("cap-probe command must be the same binary as CAMPAIGN_BIN")
-    for f in ("final-input-manifest.json", "canaries.json", "task-template.json"):
+    # 共通修正後 binary（path・実在・sha256）。main の launcher.env とも一致させる
+    want_bin = str(root / CAMPAIGN_BIN_REL)
+    if env.get("CAMPAIGN_BIN") != want_bin:
+        bad(f"launcher.env CAMPAIGN_BIN must be the common fixed binary {want_bin}")
+    elif not Path(want_bin).is_file():
+        bad(f"common fixed binary missing: {want_bin}")
+    elif sha256(Path(want_bin)) != CAMPAIGN_BIN_SHA:
+        bad(f"common fixed binary sha256 != {CAMPAIGN_BIN_SHA}")
+    check_fixed(root, env, bad)
+    for f in ("final-input-manifest.json", "canaries.json"):
         if sha256(sub / f) != sha256(main_dir / f):
             bad(f"pinned/sub/{f} differs from main")
+    # task-template: project_id は daemon ごとの DB の id なので共通比較から除く
+    tt, mtt = json.loads((sub / "task-template.json").read_text()), json.loads((main_dir / "task-template.json").read_text())
+    if {k: v for k, v in tt.items() if k != "project_id"} != {k: v for k, v in mtt.items() if k != "project_id"}:
+        bad("pinned/sub/task-template.json differs from main in fields other than project_id")
+    pid = tt.get("project_id")
+    if pid in (None, "") or pid == OLD_SUB_PROJECT_ID or pid == mtt.get("project_id"):
+        why = "unset" if pid in (None, "") else "is the stale/main id (not a sub-DB project)"
+        gap("sub-project-id", f"pinned/sub/task-template.json project_id {why}; operator creates the project in the sub measurement DB after start (runbook §3c)",
+            HANDOVER["operator"], "python3 scripts/campaign/check-sub-pins.py --root <artifacts>")
 
     # --- env-lock/3 と campaign sha ---
     lock = json.loads((sub / "env-lock.rehearsal.json").read_text())
@@ -207,14 +240,26 @@ def main() -> int:
             bad(f"env-lock arm {aid} catalog lacks sonnet/opus")
     if larms.get("B", {}).get("catalog") != larms.get("C", {}).get("catalog"):
         bad("env-lock B/C catalog (candidates/tiers) differ")
-    # campaign lock（lock.json）は preflight ok 後に watch の初回が作る。ここでは「あれば照合」だけ。
-    lj = sub / "lock.json"
-    if lj.exists():
+    # 副比較の preflight 証跡と campaign lock は必須。無ければ非0の不足（選択機構が未統合なので統合 task が取る）
+    ev, lj = sub / "evidence" / "k2-preflight.json", sub / "lock.json"
+    recheck = "python3 scripts/campaign/check-sub-pins.py --root <artifacts>"
+    if not ev.is_file():
+        gap("sub-preflight", "pinned/sub/evidence/k2-preflight.json missing (no ok:true preflight for mlsys-sub-1)", HANDOVER["owner"], recheck)
+    else:
         try:
-            if json.loads(lj.read_text()).get("campaign_id") not in (None, "mlsys-sub-1"):
+            e = json.loads(ev.read_text())
+            if e.get("ok") is not True or e.get("paid_calls_made") != 0:
+                bad("sub k2-preflight.json must be ok:true with paid_calls_made 0")
+        except ValueError as x:
+            bad(f"sub k2-preflight.json unreadable: {x}")
+    if not lj.is_file():
+        gap("sub-campaign-lock", "pinned/sub/lock.json missing (campaign lock for mlsys-sub-1 not generated)", HANDOVER["owner"], recheck)
+    else:
+        try:
+            if json.loads(lj.read_text()).get("campaign_id") != "mlsys-sub-1":
                 bad("lock.json campaign_id is not mlsys-sub-1")
-        except ValueError as e:
-            bad(f"lock.json unreadable: {e}")
+        except ValueError as x:
+            bad(f"lock.json unreadable: {x}")
 
     # --- 固定 hash 一覧（報告書の表と実体） ---
     rep = (root / "measure-pinned-sub-report.md").read_text()
@@ -228,7 +273,49 @@ def main() -> int:
     m = re.search(r"campaign sha256（mlsys-sub-1）\s*\|\s*([0-9a-f]{64})", rep)
     if not m or (want and m.group(1) != want):
         bad("report campaign sha256 (mlsys-sub-1) is missing or stale")
-    return finish(errs)
+    return finish(errs, gaps, args.report_json, root)
+
+
+def tree_hashes(d: Path) -> dict:
+    out = {}
+    for f in sorted(d.rglob("*")):
+        if f.is_symlink():
+            out[str(f.relative_to(d))] = "symlink:" + os.readlink(f)
+        elif f.is_file():
+            out[str(f.relative_to(d))] = sha256(f)
+    return out
+
+
+def check_fixed(root: Path, env: dict, bad) -> None:
+    """sub/fixed の実在・main/fixed と内容同一・private grader の隔離。"""
+    fx = root / "pinned" / "sub" / "fixed"
+    mfx = root / "pinned" / "main" / "fixed"
+    for k, d in FIXED_DIRS.items():
+        want = str(fx / d)
+        if env.get(k) != want:
+            bad(f"launcher.env {k} must be {want} (got {env.get(k)!r})")
+            continue
+        if not (fx / d).is_dir():
+            bad(f"fixed dir missing: {want}")
+        elif not (mfx / d).is_dir() or tree_hashes(fx / d) != tree_hashes(mfx / d):
+            bad(f"pinned/sub/fixed/{d} content differs from pinned/main/fixed/{d}")
+    priv = [(fx / d).resolve() for d in ("grader-private", "grade-cases")]
+    public = [(fx / "cases").resolve()] + [Path(env[k]).resolve() for k in ("MATERIALS_SRC", "KB_SRC", "REPO_SRC", "INPUTS_SRC") if env.get(k)]
+    for pr in priv:
+        for pu in public:
+            if pr == pu or pr in pu.parents or pu in pr.parents:
+                bad(f"isolation: private root overlaps public root: {pr} vs {pu}")
+    hashes = {sha256(f) for pr in priv if pr.is_dir() for f in pr.rglob("*") if f.is_file() and f.stat().st_size >= 16}
+    for pu in public:
+        if not pu.is_dir():
+            continue
+        for f in pu.rglob("*"):
+            if f.is_symlink():
+                tgt = f.resolve()
+                if any(tgt == p or p in tgt.parents for p in priv):
+                    bad(f"isolation: public symlink resolves into private grader: {f}")
+            elif f.is_file() and (f.name in ("private.json",) or (f.stat().st_size >= 16 and sha256(f) in hashes)):
+                bad(f"isolation: private grader file leaked into public tree: {f}")
 
 
 def parse_env(p: Path) -> dict:
@@ -240,7 +327,14 @@ def parse_env(p: Path) -> dict:
     return out
 
 
-def finish(errs: list[str]) -> int:
+def finish(errs: list[str], gaps: list[dict], report: Path | None, root: Path) -> int:
+    if report:
+        report.write_text(json.dumps({
+            "check": "check-sub-pins", "root": str(root), "ok": not errs,
+            "problems": [e for e in errs if not e.startswith("GAP[")],
+            "gaps": gaps, "main_comparison_depends_on_this": False,
+            "note": "non-zero exit is NOT a sub-comparison success; gaps are handed over, not closed",
+        }, ensure_ascii=False, indent=1) + "\n")
     if errs:
         for e in errs:
             print(f"FAIL: {e}", file=sys.stderr)

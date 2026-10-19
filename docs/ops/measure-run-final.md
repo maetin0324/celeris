@@ -112,6 +112,7 @@ $B dry-run  --manifest $R/pinned/main/final.json      # within_budget true、tot
 - `[accounts] claude_dir`（通常運用と同じ pool）と `[adapters.claude_code] command` / `env = { PKG_CONFIG_PATH = … }`。B/C の cap-probe は `env_of=claude-code` のこの adapter env を worker に渡し、CAP_ENV の `PKG_CONFIG_PATH` が無いと `claude-code/worker-env: worker env lacks PKG_CONFIG_PATH`。
 - CAP_ENV は K2 の `rustc-min` / `min-build-locusta` のため Rust toolchain を `ro_mounts` に、その `bin` を `PATH`（`:/usr/local/bin:/usr/bin:/bin` を後ろに足す。置換されるため）に入れる。launcher env に同じ `bin` を `RUN_PATH` として書く（daemon の PATH にも要る）。
 - 測定 DB は新規なので task-template の `project_id` の案件は存在しない。`start` 後に `POST /api/v1/projects`（title・request）→ `POST /api/v1/projects/{id}/repos`（`{"name":"scratch","kind":"dir","location":{"kind":"local","path":"<STATE_DIR>/scratch-repo"},"is_primary":true}`）で作り、返った id を task-template の `project_id` に書いて `preflight` を再実行する（token は `$STATE_DIR/token`、値は表示しない）。
+- 副比較（`pinned/sub/`、測定 ID mlsys-sub-1）の `project_id` は sub の STATE_DIR の DB に属するので、主比較の id とは別に上の手順で sub の案件を作って `pinned/sub/task-template.json` に入れる（未設定の間 `check-sub-pins.py` は非0。旧 id は無効）。sub の preflight 証跡 `pinned/sub/evidence/k2-preflight.json` と campaign lock `pinned/sub/lock.json` も同様に必須で、取得は統合 01M58VG5C4XGK4E70M6WJ6MEX0。
 - 通常 config の `[[clusters]]` を複写すると測定 daemon も pegasus の forward（127.0.0.1:18000）の tunnel を張ろうとする。通常 daemon と重なる点に注意（人が判断）。
 
 ## 4. 入力・sandbox 資産の配送（試行へ渡す公開部だけ。grader-private は渡さない）

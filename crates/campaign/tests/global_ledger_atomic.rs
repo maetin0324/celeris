@@ -1,4 +1,4 @@
-//! 全体台帳の原子的な予約・精算と承認上限（ADR 2026-10-19-experiment-sets 付記 ledger-state）。
+//! 全体台帳の原子的な予約・精算と承認上限（ADR 2026-10-19-experiment-sets D5/D7。契約は global_ledger.rs の module doc）。
 //!
 //! 構成: 先頭に共通の道具（台帳・要求・子 process の起動）、その後に節ごとの試験。
 //! process を跨ぐ試験は `child` で同じ試験 binary を子 process として起動し、子は環境変数

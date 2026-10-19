@@ -1,4 +1,4 @@
-//! 全体台帳（測定 ID を跨ぐ消費・予約・provider 枠）。ADR 2026-10-19-experiment-sets D5/D7・付記 ledger-state。
+//! 全体台帳（測定 ID を跨ぐ消費・予約・provider 枠）。ADR 2026-10-19-experiment-sets D5/D7。
 //! 別測定 ID（A/B のセットと B/C のセット）を順に動かしても、既消費・予約・provider 枠を持ち越す。
 //!
 //! 追記専用 JSONL（`schema` = `celeris.campaign-global-ledger/2`）。1 行は次のどちらか（`kind`）:

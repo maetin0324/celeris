@@ -22,6 +22,7 @@ pub mod grader;
 pub mod grades;
 pub mod harness_exec;
 pub mod human_ops;
+pub mod human_ops_cli;
 pub mod inputs;
 pub mod isolation;
 pub mod jev_smoke;

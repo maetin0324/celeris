@@ -576,3 +576,48 @@ fn k2_archive_verifies_when_approved_assets_exist() {
     );
     verify_archive(&init, &bare).expect("without .git");
 }
+
+#[test]
+fn execution_pin_fixes_active_arms_only_and_carries_the_set_hash() {
+    use celeris_campaign::{lock::ExecutionPin, manifest::CampaignManifest};
+    let mut m: Value = json!({
+        "schema": "celeris.campaign-manifest/1", "campaign_id": "c1", "version": "v1", "split": "final",
+        "input": {"path": "input.json", "sha256": "00"}, "problems": ["p0"],
+        "configs": [cfg("A", "claude-code"), cfg("B", "celeris")],
+        "primary": ["A", "B"], "secondary": {"pair": ["B", "C"], "subset": []},
+        "experiment_sets": {"main": {"arms": ["A", "B"], "compare": [["A", "B"]]}},
+        "budget": {"token_basis": "input_output", "max_tokens": 1000, "max_wall_secs": 10, "max_disk_bytes": 1,
+            "max_parallel": 1, "per_case": {"max_tokens": 1, "max_wall_secs": 1},
+            "per_arm": {"max_tokens": 1, "max_wall_secs": 1}},
+        "termination": {"trial_timeout_secs": 1, "max_attempts_per_trial": 1, "stop_on_budget": true},
+        "snapshot": {"repo_commit": "a", "materials_sha256": h('e'), "kb_snapshot": "k"},
+    });
+    let ab: CampaignManifest = serde_json::from_value(m.clone()).expect("manifest");
+    let pin = ExecutionPin::from_manifest(&ab);
+    assert_eq!(pin.configs.len(), 2);
+    assert_eq!(pin.sets_sha256, ab.sets_sha256().expect("sets hash"));
+    // 宣言を替えると（B/C のみ）有効 arm も set hash も変わる。
+    m["configs"] = json!([cfg("B", "celeris"), cfg("C", "celeris")]);
+    m["experiment_sets"] = json!({"main": {"arms": ["B", "C"], "compare": [["B", "C"]]}});
+    m["secondary"]["subset"] = json!(["p0"]);
+    let bc: CampaignManifest = serde_json::from_value(m).expect("manifest");
+    let pin_bc = ExecutionPin::from_manifest(&bc);
+    assert_eq!(pin_bc.configs.len(), 2);
+    assert_ne!(pin_bc.sets_sha256, pin.sets_sha256);
+    assert_ne!(pin_bc, pin);
+    // 宣言なし（従来）は set hash 欄を持たず、直列化にも出ない（既存 lock の hash は変わらない）。
+    let legacy = ExecutionPin::from_manifest(&{
+        let mut x = bc.clone();
+        x.experiment_sets.clear();
+        x.selected_sets.clear();
+        x.configs = vec![];
+        x
+    });
+    assert!(legacy.sets_sha256.is_empty());
+    assert!(
+        serde_json::to_value(&legacy)
+            .expect("v")
+            .get("sets_sha256")
+            .is_none()
+    );
+}

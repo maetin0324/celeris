@@ -1029,3 +1029,93 @@ fn gate_refuses_a_contaminated_new_trial_before_any_ledger_or_executor_work() {
     // 検査は何も消さない。
     assert!(d.join("projects/-prev").is_dir());
 }
+
+/// 実験セット宣言つきの manifest にする。未使用 arm の config は置かない（有効 arm ちょうど）。
+fn declare_set(s: &Setup, arms: &[&str], compare: (&str, &str)) {
+    let mut v: Value = serde_json::from_slice(&fs::read(&s.inp.manifest_path).unwrap()).unwrap();
+    v["configs"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|c| arms.contains(&c["id"].as_str().unwrap()));
+    // 固定構成の宣言: A/B は B0（全役割 Sonnet）、B/C は B1/C1（共通候補・根拠表なし）。
+    let fixed = if compare == ("A", "B") {
+        let roles = ["planner", "reviewer", "cos", "worker"];
+        json!({"role_models": roles.iter().map(|r| (r.to_string(), json!("claude-sonnet-5-5"))).collect::<serde_json::Map<_, _>>()})
+    } else {
+        for c in v["configs"].as_array_mut().unwrap() {
+            let is_c = c["id"] == "C";
+            let r = &mut c["routing"];
+            r["models"] = json!(["claude-sonnet-5-5", "claude-opus-5-5"]);
+            r.as_object_mut().unwrap().remove("evidence_table_id");
+            if is_c {
+                r["no_evidence_table"] = json!(true);
+            }
+        }
+        json!({})
+    };
+    v["experiment_sets"] =
+        json!({"s": {"arms": arms, "compare": [[compare.0, compare.1]], "fixed": fixed}});
+    if !arms.contains(&"C") {
+        v["secondary"]["subset"] = json!([]);
+    }
+    if !arms.contains(&"A") {
+        v["problems"] = v["secondary"]["subset"].clone();
+    }
+    fs::write(&s.inp.manifest_path, v.to_string()).unwrap();
+}
+
+/// A/B のみ: C の credential・probe・環境は要らず、C への呼出しは 0。A/B は C の config 無しで通る。
+#[test]
+fn a_b_only_set_passes_without_c_and_probes_no_c() {
+    let s = setup();
+    declare_set(&s, &["A", "B"], ("A", "B"));
+    let r = check(&s.inp, &host());
+    assert!(r.ok, "{:?}", r.missing);
+    assert_eq!(r.paid_calls_made, 0);
+    assert!(r.probe_targets.iter().all(|t| t.arm != ConfigId::C));
+    assert!(r.probe_targets.iter().any(|t| t.arm == ConfigId::B));
+    // A/B の A 側の要求（実行ファイル）は残る。
+    let h = FakeHost {
+        programs: vec![],
+        ..host()
+    };
+    assert!(missing_checks(&s.inp, &h).contains(&"auth-env".into()));
+}
+
+/// B/C のみ: A の実行ファイル・bwrap・account・A の能力 probe は要らず、A への呼出しは 0。
+#[test]
+fn b_c_only_set_passes_without_a_program_sandbox_or_account() {
+    let s = setup();
+    declare_set(&s, &["B", "C"], ("B", "C"));
+    let mut inp = s.inp.clone();
+    inp.a_account = None;
+    let h = FakeHost {
+        programs: vec![],
+        // A の account は GET /llm/accounts にも無い（A を使わないので引かれない）。
+        api: api(account_dir())
+            .into_iter()
+            .filter(|(p, _)| *p != "/api/v1/llm/accounts")
+            .collect(),
+        sandbox: false,
+        ..host()
+    };
+    let r = check(&inp, &h);
+    assert!(r.ok, "{:?}", r.missing);
+    assert!(r.a_program.is_none());
+    assert!(r.probe_targets.iter().all(|t| t.arm != ConfigId::A));
+    assert!(r.probe_targets.iter().any(|t| t.arm == ConfigId::C));
+}
+
+/// 有効 arm の欠落は失敗のまま（B/C のみで B の config が無い）。
+#[test]
+fn active_arm_gap_still_fails_in_a_declared_set() {
+    let s = setup();
+    declare_set(&s, &["B", "C"], ("B", "C"));
+    let mut v: Value = serde_json::from_slice(&fs::read(&s.inp.manifest_path).unwrap()).unwrap();
+    v["configs"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|c| c["id"] != "B");
+    fs::write(&s.inp.manifest_path, v.to_string()).unwrap();
+    assert!(!check(&s.inp, &host()).ok);
+}

@@ -459,7 +459,9 @@ fn run_checks(a: &mut Acc, m: &CampaignManifest, inp: &Inputs, host: &dyn Host) 
     check_candidates(a, m, inp, host);
     check_snapshot_src(a, m, inp);
     check_measure_env(a, m, inp, host);
-    if let Some(out) = inp.measure.as_ref().and_then(|me| me.out.as_deref()) {
+    if m.is_active(ConfigId::A)
+        && let Some(out) = inp.measure.as_ref().and_then(|me| me.out.as_deref())
+    {
         check_trial_state(a, m, inp, out);
     }
 
@@ -615,7 +617,9 @@ fn check_budget(a: &mut Acc, m: &CampaignManifest) {
 
 fn check_candidates(a: &mut Acc, m: &CampaignManifest, inp: &Inputs, host: &dyn Host) {
     a.checked.push("candidates");
-    for id in [ConfigId::A, ConfigId::B, ConfigId::C] {
+    // 有効 arm（実験セットの和集合）の config だけを要求する。未使用 arm は要らない。
+    let a_active = m.is_active(ConfigId::A);
+    for id in m.active_arms() {
         if !m.configs.iter().any(|c| c.id == id) {
             a.miss(
                 "candidates",
@@ -623,14 +627,16 @@ fn check_candidates(a: &mut Acc, m: &CampaignManifest, inp: &Inputs, host: &dyn 
             );
         }
     }
-    // A: 既存ハーネスの実行ファイル。
+    // A: 既存ハーネスの実行ファイル（A が有効なときだけ）。
     a.checked.push("auth-env");
-    match host.resolve_program(&inp.a_program) {
-        Ok(p) => a.a_program = Some(p),
-        Err(e) => a.miss(
-            "auth-env",
-            format!("A harness program {}: {e}", inp.a_program.display()),
-        ),
+    if a_active {
+        match host.resolve_program(&inp.a_program) {
+            Ok(p) => a.a_program = Some(p),
+            Err(e) => a.miss(
+                "auth-env",
+                format!("A harness program {}: {e}", inp.a_program.display()),
+            ),
+        }
     }
     // B/C: task-api の origin と token の環境変数（名前だけ）。
     match (&inp.api_url, &inp.token_env) {
@@ -649,7 +655,7 @@ fn check_candidates(a: &mut Acc, m: &CampaignManifest, inp: &Inputs, host: &dyn 
         }
         _ => a.miss("auth-env", "B/C need --api-url and --token-env <ENV_NAME>"),
     }
-    if let Err(e) = host.sandbox_usable() {
+    if a_active && let Err(e) = host.sandbox_usable() {
         a.miss("a-arm", format!("A isolation (bwrap) is not usable: {e}"));
     }
     let mut tv: Option<Value> = None;
@@ -681,7 +687,7 @@ fn check_candidates(a: &mut Acc, m: &CampaignManifest, inp: &Inputs, host: &dyn 
             }
         }
     }
-    check_api_dependent(a, inp, host, tv.as_ref());
+    check_api_dependent(a, m, inp, host, tv.as_ref());
 }
 
 /// 選んだ問題の必要能力を LLM なしに確かめる（A は A の sandbox 組立。B/C は `check_bc_capabilities` が測定専用 daemon の worker で）。
@@ -722,6 +728,9 @@ fn check_capabilities(
     }
     if let Err(e) = crate::cap_probe::prepare_state_dir(&cfg) {
         return a.miss("capability", e);
+    }
+    if !m.is_active(ConfigId::A) {
+        return;
     }
     let runner = host.probe_runner();
     for c in cases {
@@ -1194,7 +1203,13 @@ fn fresh_state_residue(root: &Path, dir: &Path) -> Vec<String> {
     v
 }
 
-fn check_api_dependent(a: &mut Acc, inp: &Inputs, host: &dyn Host, template: Option<&Value>) {
+fn check_api_dependent(
+    a: &mut Acc,
+    m: &CampaignManifest,
+    inp: &Inputs,
+    host: &dyn Host,
+    template: Option<&Value>,
+) {
     let (Some(url), Some(tok)) = (&inp.api_url, &inp.token_env) else {
         return;
     };
@@ -1220,7 +1235,10 @@ fn check_api_dependent(a: &mut Acc, inp: &Inputs, host: &dyn Host, template: Opt
             }
         }
     }
-    // A: Celeris 管理アカウント。
+    // A: Celeris 管理アカウント（A が有効なときだけ。B/C のみの比較は A の account を要求しない）。
+    if !m.is_active(ConfigId::A) {
+        return;
+    }
     match &inp.a_account {
         None => a.miss(
             "a-arm",

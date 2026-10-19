@@ -287,8 +287,13 @@ fn run(args: Vec<String>) -> Result<String, String> {
         "env-lock" => {
             use celeris_campaign::env_lock;
             let path_var = std::env::var_os("PATH");
-            let a_program = arg(&args, "--a-program").unwrap_or_else(|| PathBuf::from("claude"));
-            let a_program = env_lock::pin_program(&a_program, path_var.as_deref())?;
+            // A が有効なときだけ A の実行ファイルを固定する（B/C のみの測定は A を探さない）。
+            let a_program = if m.is_active(celeris_campaign::manifest::ConfigId::A) {
+                let p = arg(&args, "--a-program").unwrap_or_else(|| PathBuf::from("claude"));
+                Some(env_lock::pin_program(&p, path_var.as_deref())?)
+            } else {
+                None
+            };
             let mut worker_programs = Vec::new();
             for w in args
                 .iter()

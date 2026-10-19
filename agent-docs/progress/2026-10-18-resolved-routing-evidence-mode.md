@@ -1,9 +1,7 @@
 ---
-title: "ResolvedRouting.evidence_mode 欠落の読み込み"
-tasks: [01M57DXA25E8KB5FC75FN0TXY7]
+task: 01M57DXA25E8KB5FC75FN0TXY7
 status: done
 completed: 2026-10-18
-updated: 2026-10-18
 ---
 # ResolvedRouting.evidence_mode 欠落の読み込み
 

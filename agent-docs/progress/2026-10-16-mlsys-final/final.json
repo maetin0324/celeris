@@ -29,7 +29,13 @@
       "policy_version": "fixed",
       "routing": {
         "lower_policy": "mlsys-min-1",
-        "online_update": false
+        "online_update": false,
+        "models": [
+          "claude-sonnet-5-5"
+        ],
+        "run_harnesses": [
+          "claude-code"
+        ]
       }
     },
     {
@@ -41,8 +47,14 @@
       "policy_version": "jev-1",
       "routing": {
         "lower_policy": "mlsys-min-1",
-        "evidence_table_id": "<routing evidence table id at H1>",
-        "online_update": false
+        "online_update": false,
+        "models": [
+          "claude-sonnet-5-5"
+        ],
+        "run_harnesses": [
+          "claude-code"
+        ],
+        "no_evidence_table": true
       }
     }
   ],

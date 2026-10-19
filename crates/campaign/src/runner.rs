@@ -24,6 +24,7 @@ use crate::{
     lock_exec,
     manifest::{Budget, CampaignManifest, ConfigId},
     record::*,
+    series,
     snapshot::{copy_tree, hash_tree, hash_tree_excluding},
 };
 
@@ -636,11 +637,24 @@ fn interrupted(
     Ok(Driven::Deferred)
 }
 
+/// 系列台帳の固定位置は期待 lock の `series` 欄から取る（lock が無い副比較は拒否される）。
 pub fn run(
     m: &CampaignManifest,
     input: &InputManifest,
     exec: &dyn Executor,
     opts: &RunOptions,
+) -> Result<RunReport, String> {
+    let pin = opts.lock.as_ref().and_then(|l| l.series.clone());
+    run_with_series(m, input, exec, opts, pin.as_ref())
+}
+
+/// 副比較（B1/C1）は系列台帳の固定位置 `series` が必須（無ければ副作用の前に拒否）。主比較は使わない。
+pub fn run_with_series(
+    m: &CampaignManifest,
+    input: &InputManifest,
+    exec: &dyn Executor,
+    opts: &RunOptions,
+    series: Option<&crate::series::SeriesPin>,
 ) -> Result<RunReport, String> {
     m.check_against_input(input)?;
     // 共有承認の manifest は宣言した台帳でしか走らない（省略・別 path・結び付き不明の lock は台帳に触れる前に拒否）。
@@ -648,6 +662,40 @@ pub fn run(
     if let Some(l) = &opts.lock {
         l.check_shared_ledger(m)?;
     }
+    // 副比較: 出力先が許可 root の中であること・系列台帳が読めること・同じ系列の他 run が動いていないことを、
+    // 副作用（out の作成・executor・台帳）より前に確かめる。
+    if m.is_side()
+        && let Some(l) = &opts.lock
+        && l.series.as_ref() != series
+    {
+        return Err(
+            "campaign lock series pin differs from the run's series ledger; refusing".into(),
+        );
+    }
+    let mut ledger_guard = self::series::begin(m, series, &opts.out)?;
+    let prior = ledger_guard
+        .as_ref()
+        .map(|s| s.2.clone())
+        .unwrap_or_default();
+    let r = run_inner(m, input, exec, opts, &prior);
+    // 成否にかかわらず、この out の消費（確定 + 予約）を固定の系列台帳へ追記する（out の実体があるときだけ）。
+    if let Some((s, real, _)) = &mut ledger_guard {
+        let rec = s.record(real, &m.budget);
+        return match (r, rec) {
+            (Ok(r), Ok(())) => Ok(r),
+            (Err(e), _) | (Ok(_), Err(e)) => Err(e),
+        };
+    }
+    r
+}
+
+fn run_inner(
+    m: &CampaignManifest,
+    input: &InputManifest,
+    exec: &dyn Executor,
+    opts: &RunOptions,
+    prior: &budget::Spend,
+) -> Result<RunReport, String> {
     let hash = m.compute_sha256()?;
     let out = &opts.out;
     // 全体台帳: 開始の登録と検証（取り分を記録し、横断上限に収まらない測定は何かする前に拒否する）。
@@ -675,6 +723,17 @@ pub fn run(
         }
         None => None,
     };
+    // B1/C1 は固定の系列台帳の既消費（他の out・hash の分）を総枠へ合算する。超過なら何も実行しない。
+    if prior.tokens >= m.budget.max_tokens || prior.wall_secs >= m.budget.max_wall_secs {
+        return Err(format!(
+            "series {} already consumed {} tokens / {}s of the approved total {} tokens / {}s in the pinned series ledger (other outs/hashes); refusing to run",
+            m.campaign_id,
+            prior.tokens,
+            prior.wall_secs,
+            m.budget.max_tokens,
+            m.budget.max_wall_secs
+        ));
+    }
     fs::create_dir_all(out).map_err(|e| format!("{}: {e}", out.display()))?;
     let meta_path = out.join(META_FILE);
     if meta_path.exists() {
@@ -847,7 +906,8 @@ pub fn run(
             && !rep.budget_stopped
             && ledger.get(&key).is_none_or(|r| r.reserved.is_none())
         {
-            let s = budget::spend(&records, &ledger, &m.budget, &hash, Some(&key));
+            let s =
+                budget::spend(&records, &ledger, &m.budget, &hash, Some(&key)).plus_prior(prior);
             Some(budget::admit(&m.budget, &s, cid))
         } else {
             None

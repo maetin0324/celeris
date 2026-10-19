@@ -25,7 +25,8 @@ pub use evidence::{WilsonInterval, wilson_interval};
 pub use lane::{
     ClassificationHint, DEFAULT_MIN_CONFIDENCE, DEFAULT_POLICY_VERSION, Fact, LaneBasis,
     LaneChoice, LaneDecision, LaneFacts, LaneLimits, LanePolicyTable, LaneRecord, RoutingMode,
-    SpecificityHint, WorkClass, clamp_to_limits, decide_lane, fixed_lane, lane_record,
+    SpecificityHint, WorkClass, clamp_to_limits, classification_lane, decide_lane, fixed_lane,
+    lane_record,
 };
 pub use policy::{NoRoute, PolicyInput, PolicyOutput, SelectionSource, select};
 pub use stage::{

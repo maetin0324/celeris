@@ -181,6 +181,22 @@ impl Ledger {
         Ok(Self { path, rows })
     }
 
+    /// 読み取り専用で開く（他の out の台帳を数えるだけ。末尾の欠けた行も直さない）。
+    pub fn open_readonly(out: &Path) -> Result<Self, String> {
+        let path = out.join(LEDGER_FILE);
+        let mut rows = BTreeMap::new();
+        if path.exists() {
+            let text = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+            let keep = text.rfind('\n').map_or(0, |i| i + 1);
+            for (i, l) in text[..keep].lines().enumerate() {
+                let r: LedgerRow = serde_json::from_str(l)
+                    .map_err(|e| format!("{}: line {}: {e}", path.display(), i + 1))?;
+                rows.insert(r.key.clone(), r);
+            }
+        }
+        Ok(Self { path, rows })
+    }
+
     pub fn get(&self, key: &TrialKey) -> Option<&LedgerRow> {
         self.rows.get(key)
     }

@@ -250,6 +250,40 @@ pub fn expected_lock(inp: &Inputs, m: &CampaignManifest) -> Result<CampaignLock,
     )
 }
 
+/// 副比較（B1/C1）の lock に系列台帳の固定位置を封印する（再封印）。主比較は何もしない。
+pub fn with_series(
+    lock: CampaignLock,
+    m: &CampaignManifest,
+    pin: Option<&crate::series::SeriesPin>,
+) -> Result<CampaignLock, String> {
+    if !m.is_side() {
+        return Ok(lock);
+    }
+    let pin = pin.ok_or_else(|| series_missing(m))?;
+    let mut lock = lock;
+    lock.series = Some(pin.clone());
+    lock.seal().map_err(|e| e.to_string())
+}
+
+fn series_missing(m: &CampaignManifest) -> String {
+    format!(
+        "side comparison {} needs --series-root and --measurement-id (SERIES_ROOT / MEASUREMENT_ID in launcher.env): the series ledger is pinned per measurement id",
+        m.campaign_id
+    )
+}
+
+/// 副比較の系列台帳の固定位置。測定 ID（明示）と系列 root が無ければ Err（既消費 0 にしない）。
+pub fn series_pin(
+    root: Option<&std::path::Path>,
+    measurement_id: Option<&str>,
+    m: &CampaignManifest,
+) -> Result<crate::series::SeriesPin, String> {
+    let (Some(root), Some(id)) = (root, measurement_id) else {
+        return Err(series_missing(m));
+    };
+    crate::series::SeriesPin::new(root, id)
+}
+
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct Missing {
     pub check: &'static str,

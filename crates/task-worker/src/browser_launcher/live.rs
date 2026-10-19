@@ -202,6 +202,11 @@ impl LiveTap {
         lock(&self.state).frames_seen
     }
 
+    #[cfg(test)]
+    pub(crate) fn mark_screencast_session_for_test(&self, session: &str) {
+        lock(&self.state).known.insert(session.to_owned());
+    }
+
     fn begin_attach(&self, target: &str) {
         let mut st = lock(&self.state);
         st.pending = Some(target.to_owned());
@@ -276,6 +281,9 @@ impl LiveTap {
 
     fn demux(&self, mut chrome: File, mut ctrl: File) {
         let mut buffered: Vec<u8> = Vec::new();
+        // Bytes of `buffered` already known to hold no NUL: a large frame arrives in many chunks
+        // and rescanning from the start made reading it quadratic.
+        let mut scanned = 0usize;
         let mut pending: Vec<u8> = Vec::new();
         let mut written = 0usize;
         let mut chunk = [0u8; 16 * 1024];
@@ -346,7 +354,12 @@ impl LiveTap {
                 };
                 buffered.extend_from_slice(&chunk[..n]);
                 chunk[..n].zeroize();
-                while let Some(end) = buffered.iter().position(|b| *b == 0) {
+                while let Some(end) = buffered[scanned..]
+                    .iter()
+                    .position(|b| *b == 0)
+                    .map(|i| i + scanned)
+                {
+                    scanned = 0;
                     let mut msg: Vec<u8> = buffered.drain(..=end).collect();
                     let route = {
                         let mut st = lock(&self.state);
@@ -362,6 +375,7 @@ impl LiveTap {
                     }
                     msg.zeroize();
                 }
+                scanned = buffered.len();
                 if buffered.len() >= MAX_CDP_MESSAGE {
                     break;
                 }

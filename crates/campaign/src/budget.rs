@@ -9,7 +9,7 @@ use crate::{
 };
 
 /// 確定消費と in-flight の予約を合わせた使用済み枠。
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Spend {
     /// campaign 全体（確定消費 + 予約）。
     pub tokens: u64,
@@ -80,6 +80,30 @@ pub fn spend(
     }
     s.in_flight = open.len();
     s
+}
+
+/// 他の out の trials.jsonl を読み取り専用で読む（末尾の欠けた行は無視し、直さない）。
+pub(crate) fn read_records(path: &std::path::Path) -> Result<Vec<TrialRecord>, String> {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Ok(Vec::new());
+    };
+    let keep = text.rfind('\n').map_or(0, |i| i + 1);
+    text[..keep]
+        .lines()
+        .map(|l| serde_json::from_str(l).map_err(|e| format!("{}: {e}", path.display())))
+        .collect()
+}
+
+impl Spend {
+    /// 同一系列の既消費を加えた使用済み枠（総枠 `Budget::max_*` との比較用）。
+    pub fn plus_prior(mut self, prior: &Spend) -> Spend {
+        self.tokens += prior.tokens;
+        self.wall_secs += prior.wall_secs;
+        self.held_tokens += prior.held_tokens;
+        self.held_wall_secs += prior.held_wall_secs;
+        self.in_flight += prior.in_flight;
+        self
+    }
 }
 
 /// 試行の実効上限 = min(per_case, per_arm の残り)。

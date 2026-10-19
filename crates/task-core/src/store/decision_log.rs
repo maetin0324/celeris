@@ -37,7 +37,8 @@ const RUN_COLUMNS: &str = "run_id, decision_id, campaign_id, arm, project_id, ta
     provider_model_version, features_hash, options_hash, exec_source_id, exec_model, exec_account, \
     exec_harness, exec_adapter, fallback_reason, classifier_fallback, attempts_json, run_end, \
     run_end_raw, run_retryable, wu_verdict, wu_failure_class, campaign_verdict, wall_ms, \
-    case_id, repetition, manifest_hash, routing_setting";
+    case_id, repetition, manifest_hash, routing_setting, classifier_status, classifier_call_id, \
+    fixed_lane, jev_lane, constrained_lane, lane_basis";
 
 fn parse_json<T: serde::de::DeserializeOwned>(s: Option<String>) -> Result<Option<T>, StoreError> {
     match s {
@@ -98,6 +99,12 @@ fn read_run(row: &Row<'_>) -> Result<DecisionLogRun, StoreError> {
             request_class: row.get(9)?,
             routing_mode: row.get(10)?,
             classifier,
+            classifier_status: row.get(49)?,
+            classifier_call_id: row.get(50)?,
+            fixed_lane: row.get(51)?,
+            jev_lane: row.get(52)?,
+            constrained_lane: row.get(53)?,
+            lane_basis: row.get(54)?,
             propensity: row.get(16)?,
             proposed_lane: row.get(17)?,
             decided_lane: row.get(18)?,
@@ -167,8 +174,9 @@ impl SqliteStore {
              classifier_fallback, propensity, proposed_lane, decided_lane, proposed_candidates_json, \
              proposed_first_source_id, proposed_first_model, proposed_first_harness, exclusions_json, \
              policy_version, prompt_version, question_schema_version, provider_model_version, \
-             features_hash, options_hash, updated_at, case_id, repetition, manifest_hash, routing_setting) \
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25,?26,?27,?28,?29,?30,?31,?32,?33,?34,?35,?36) \
+             features_hash, options_hash, updated_at, case_id, repetition, manifest_hash, routing_setting, \
+             classifier_status, classifier_call_id, fixed_lane, jev_lane, constrained_lane, lane_basis) \
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25,?26,?27,?28,?29,?30,?31,?32,?33,?34,?35,?36,?37,?38,?39,?40,?41,?42) \
              ON CONFLICT(run_id) DO UPDATE SET decision_id=excluded.decision_id, campaign_id=excluded.campaign_id, \
              arm=excluded.arm, project_id=excluded.project_id, task_id=excluded.task_id, \
              work_unit_id=excluded.work_unit_id, parent_run_id=excluded.parent_run_id, \
@@ -186,7 +194,10 @@ impl SqliteStore {
              provider_model_version=excluded.provider_model_version, features_hash=excluded.features_hash, \
              options_hash=excluded.options_hash, updated_at=excluded.updated_at, \
              case_id=excluded.case_id, repetition=excluded.repetition, manifest_hash=excluded.manifest_hash, \
-             routing_setting=excluded.routing_setting",
+             routing_setting=excluded.routing_setting, classifier_status=excluded.classifier_status, \
+             classifier_call_id=excluded.classifier_call_id, fixed_lane=excluded.fixed_lane, \
+             jev_lane=excluded.jev_lane, constrained_lane=excluded.constrained_lane, \
+             lane_basis=excluded.lane_basis",
             params![
                 p.run_id,
                 p.decision_id,
@@ -224,6 +235,12 @@ impl SqliteStore {
                 p.repetition.map(i64::from),
                 p.manifest_hash,
                 p.routing_setting,
+                p.classifier_status,
+                p.classifier_call_id,
+                p.fixed_lane,
+                p.jev_lane,
+                p.constrained_lane,
+                p.lane_basis,
             ],
         )?;
         Ok(())

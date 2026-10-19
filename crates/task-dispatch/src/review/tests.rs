@@ -1375,3 +1375,44 @@ fn deterministic_check_results_cover_implicit_checks_and_truncate_reasons() {
     assert_eq!(out[0].reason.chars().count(), 1000);
     assert!(out[0].reason.ends_with("END"));
 }
+
+/// reviewer の process は run 専用の `TMPDIR` を受け取り、drop で消える。
+#[test]
+fn reviewer_run_gets_a_run_tmpdir_that_is_removed_on_drop() {
+    struct EnvAdapter(Vec<(String, String)>);
+    #[async_trait]
+    impl WorkerAdapter for EnvAdapter {
+        fn id(&self) -> &str {
+            "env-adapter"
+        }
+        async fn run(
+            &self,
+            _req: RunRequest,
+            _run_id: &str,
+            _limits: RunLimits,
+            _sink: &dyn EventSink,
+        ) -> Result<RunOutcome, AdapterError> {
+            Err(AdapterError::Other("unused".into()))
+        }
+        fn with_env(&self, extra: &[(String, String)]) -> Option<Arc<dyn WorkerAdapter>> {
+            Some(Arc::new(EnvAdapter(extra.to_vec())))
+        }
+    }
+    let ws = tempfile::tempdir().unwrap();
+    let base: Arc<dyn WorkerAdapter> = Arc::new(EnvAdapter(Vec::new()));
+    let (adapter, tmp) = with_run_tmpdir(&base, ws.path(), "rev1");
+    let tmp = tmp.expect("run tmpdir");
+    let dir = tmp.path().to_path_buf();
+    assert!(dir.is_dir());
+    // 包んだ adapter は TMPDIR・TMP・TEMP を持つ（元の adapter とは別物）。
+    assert_eq!(adapter.id(), "env-adapter");
+    let env = tmp.env();
+    for key in ["TMPDIR", "TMP", "TEMP"] {
+        assert!(
+            env.iter()
+                .any(|(k, v)| k == key && v == &dir.display().to_string())
+        );
+    }
+    drop(tmp);
+    assert!(!dir.exists());
+}

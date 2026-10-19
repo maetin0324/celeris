@@ -50,8 +50,8 @@ pub struct Verdict {
     pub cost_recorded: bool,
     pub version_recorded: bool,
     pub attribution: Attribution,
-    /// jev_ok かつ費用・版が揃い、lane が許可内で、帰属が矛盾しない。
-    pub live_proven: bool,
+    /// jev_ok かつ費用・版が揃い、lane が許可内で、帰属が矛盾しない（記録の整合。live の証明ではない）。
+    pub chain_ok: bool,
     pub violations: Vec<String>,
 }
 
@@ -156,7 +156,7 @@ pub fn judge(o: &Observation) -> Verdict {
             violations.push("Jev の版（model_snapshot）が欠測".into());
         }
     }
-    let live_proven = classifier == ClassifierKind::JevOk
+    let chain_ok = classifier == ClassifierKind::JevOk
         && cost_recorded
         && version_recorded
         && lane_in_limits
@@ -168,7 +168,7 @@ pub fn judge(o: &Observation) -> Verdict {
         cost_recorded,
         version_recorded,
         attribution: attr,
-        live_proven,
+        chain_ok,
         violations,
     }
 }
@@ -180,7 +180,7 @@ pub fn check_smoke(obs: &[Observation]) -> (Vec<Verdict>, Result<(), Vec<String>
         .iter()
         .flat_map(|v| v.violations.iter().map(|m| format!("{}: {m}", v.task_id)))
         .collect();
-    if !verdicts.iter().any(|v| v.live_proven) {
+    if !verdicts.iter().any(|v| v.chain_ok) {
         errs.push("jev_ok・費用・版が揃った観測が 1 件も無い（実経路は未確認）".into());
     }
     (verdicts, if errs.is_empty() { Ok(()) } else { Err(errs) })

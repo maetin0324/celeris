@@ -5,7 +5,7 @@
 //! 明示 lane・許可と天井・利用可否は分類に勝つ。
 use super::lane::{
     ClassificationHint, DEFAULT_MIN_CONFIDENCE, LaneBasis, LaneChoice, LaneFacts, LaneLimits,
-    RoutingMode, clamp_to_limits, decide_lane, tier_rank,
+    RoutingMode, clamp_to_limits, classification_lane, decide_lane, fixed_lane, tier_rank,
 };
 use crate::model::Tier;
 use schemars::JsonSchema;
@@ -28,6 +28,8 @@ pub enum ClassifierStatus {
 pub struct ClassificationEntry {
     pub status: ClassifierStatus,
     pub hint: Option<ClassificationHint>,
+    /// Jev 応答の `model` 欄の値そのまま（応答が名乗る model 名）。設定した model 名ではなく、
+    /// 応答と独立に観測した snapshot でもない（後者は `LaneAssistRecord::observed_snapshot`）。
     pub model_snapshot: Option<String>,
     /// Jev の応答が返した費用（USD）。返らなければ `None`（0 扱いしない）。
     pub cost_usd: Option<f64>,
@@ -58,7 +60,25 @@ pub struct LaneAssistRecord {
     /// 分類・fixed 規則が提案した lane（`replan` を含む）。無ければ None。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proposed_lane: Option<String>,
-    /// 実際に使う lane。
+    /// fixed 規則だけの lane（`replan` を含む）。規則が既存方策へ委ねるとき None。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fixed_lane: Option<String>,
+    /// Jev 単独の提案 lane（fixed 規則と合成する前。使える提案が無ければ None）。confidence は成功確率ではない。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub jev_lane: Option<String>,
+    /// Jev 応答が名乗った model（`ClassificationEntry::model_snapshot`）。応答が無い・欠測は None。
+    /// 設定の model 名では埋めない。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_model: Option<String>,
+    /// 応答 model 名とは独立に観測した版（response header 等）。観測経路が無ければ None
+    /// （`response_model` から複製しない）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_snapshot: Option<String>,
+    /// この分類の呼び出し ID（`decision_log::jev_call_id`）。キャッシュ再利用で複数 run が同じ分類を使うと
+    /// 同じ値を共有する（消費行の鍵と同一）。分類を呼ばなかった・未採番は None。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub call_id: Option<String>,
+    /// 実際に使う lane（許可・天井・利用可否で制約した後。制約後 lane）。
     pub final_lane: String,
     /// `fixed_rule` | `classification_raise` | `fixed_fallback`。
     pub basis: String,
@@ -112,6 +132,17 @@ pub fn assist_lane(input: &AssistInput<'_>, available: impl Fn(Tier) -> bool) ->
     let status = input
         .entry
         .map_or(ClassifierStatus::NotAttempted, |e| e.status.clone());
+    let lane_name = |c: LaneChoice| match c {
+        LaneChoice::Lane(t) => name(t).to_owned(),
+        LaneChoice::Replan => "replan".to_owned(),
+    };
+    let fixed = fixed_lane(&input.facts).map(lane_name);
+    let jev = classification_lane(
+        input.entry.and_then(|e| e.hint.as_ref()),
+        DEFAULT_MIN_CONFIDENCE,
+    )
+    .map(lane_name);
+    let response_model = input.entry.and_then(|e| e.model_snapshot.clone());
     let make = |lane: Tier,
                 proposed: Option<LaneChoice>,
                 basis: LaneBasis,
@@ -122,10 +153,12 @@ pub fn assist_lane(input: &AssistInput<'_>, available: impl Fn(Tier) -> bool) ->
             classifier_status: status.clone(),
             real_api_verified: REAL_API_VERIFIED,
             base_lane: name(input.base).into(),
-            proposed_lane: proposed.map(|p| match p {
-                LaneChoice::Lane(t) => name(t).to_owned(),
-                LaneChoice::Replan => "replan".to_owned(),
-            }),
+            proposed_lane: proposed.map(lane_name),
+            fixed_lane: fixed.clone(),
+            jev_lane: jev.clone(),
+            response_model: response_model.clone(),
+            observed_snapshot: None,
+            call_id: None,
             final_lane: name(lane).into(),
             basis: basis_name(basis).into(),
             overridden_by: overridden_by.map(str::to_owned),

@@ -622,7 +622,7 @@ fn cos_chat_core_is_byte_identical_across_runs_and_free_of_run_values() {
         a.core
     );
     assert!(
-        a.core.len() <= 7000,
+        a.core.len() <= 7500,
         "Core is {} bytes\n{}",
         a.core.len(),
         a.core
@@ -736,4 +736,35 @@ fn cos_chat_core_carries_the_minimal_cos_operator_rules() {
     ] {
         assert!(core.contains(needle), "Core lacks {needle}\n{core}");
     }
+}
+
+/// ADR 2026-10-19-cos-registered-project-deploy D1: the Core limits "do not change the production
+/// host" to Celeris itself and lets CoS deploy a registered project's app by its procedure.
+#[test]
+fn cos_chat_core_scopes_the_production_rule_to_celeris_and_allows_project_deploys() {
+    let core = super::core(&chat());
+    assert!(core.contains("Celeris 自身の本番"), "{core}");
+    assert!(core.contains("登録 project のアプリの配備"), "{core}");
+    assert!(core.contains("配備手順"), "{core}");
+    assert!(core.contains("人へ一言確認"), "{core}");
+}
+
+/// Same scope in the cos-operator skill files the Core points at.
+#[test]
+fn cos_operator_skill_documents_the_registered_project_deploy_scope() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../config/skills/cos-operator");
+    let read = |f: &str| std::fs::read_to_string(dir.join(f)).expect(f);
+    let deploy = read("deploy.md");
+    for needle in [
+        "Celeris 自身の本番",
+        // ADR 2026-10-19-cos-registered-project-deploy D3: 手順の正本は KB。skill は入口の表だけを持つ。
+        "projects/pairs-ai-reply-assistant-web-ui/deploy.md",
+        "celerisctl knowledge get",
+        ".env",
+        "破壊的",
+    ] {
+        assert!(deploy.contains(needle), "deploy.md lacks {needle}");
+    }
+    assert!(read("SKILL.md").contains("deploy.md"));
+    assert!(read("production.md").contains("Celeris 自身の本番"));
 }

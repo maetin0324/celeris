@@ -243,6 +243,30 @@ impl Workspace for LocalWorkspace {
         // ADR-0019 D1 6. / ADR-0041 D1: 判定コマンドは worktree の中で実行する。
         command.current_dir(self.work_dir());
         command.envs(self.env.iter().cloned());
+        // ADR 2026-10-19-cos-registered-project-deploy D5: 判定コマンドにも exec ごとの専用 `TMPDIR` を与える
+        // （daemon の環境に `TMPDIR` は無い）。終了（成功・失敗・timeout・中断）で `Drop` が消す。
+        // `with_env` が `TMPDIR` を渡していればそれが勝つ。
+        let exec_tmp = if self.env.iter().any(|(k, _)| k == "TMPDIR") {
+            None
+        } else {
+            match tempfile::Builder::new()
+                .prefix("exec-tmp-")
+                .tempdir_in(self.dir.join("runs"))
+                .or_else(|_| tempfile::tempdir())
+            {
+                Ok(dir) => {
+                    for key in crate::run_tmpdir::RUN_TMPDIR_VARS {
+                        command.env(key, dir.path());
+                    }
+                    Some(dir)
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "exec tmpdir: could not create; TMPDIR is left unchanged");
+                    None
+                }
+            }
+        };
+        let _exec_tmp = exec_tmp;
         // ★ ADR-0043 D3 の差し込み点（コンテナ実行）。`None` ならそのまま（ホスト実行は変わらない）。
         let mut command = crate::db_guard::launch(command, self.container.as_deref());
         command.stdin(Stdio::null());

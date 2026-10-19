@@ -1584,7 +1584,10 @@ mod unused_arm_requests {
                 .any(|g| g == "/api/v1/llm/accounts")
         );
         // B の worker probe だけ（case 2 件 × B 1 arm）。C の分は無い。
-        assert_eq!(*h.worker_probe_harnesses.borrow(), ["celeris", "celeris"]);
+        assert_eq!(
+            *h.worker_probe_harnesses.borrow(),
+            ["claude-code", "claude-code"]
+        );
         // C / Jev: 根拠表・Jev の API・Jev の credential の要求は 0。
         let gets = h.api_gets.borrow();
         assert!(

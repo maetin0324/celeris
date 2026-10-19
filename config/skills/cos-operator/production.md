@@ -11,6 +11,8 @@
 
 ## 本番運用（release → verify → promote）
 
+- ここでの「本番」は **Celeris 自身の本番**。登録 project のアプリの配備は別で、[deploy.md](deploy.md) に従う。
+
 - 手順の正本は [docs/ops/selfdeploy.md](../../../docs/ops/selfdeploy.md)。台本は `scripts/selfdeploy/`
   （[release.sh](../../../scripts/selfdeploy/release.sh)、[verify.sh](../../../scripts/selfdeploy/verify.sh)、
   [status.sh](../../../scripts/selfdeploy/status.sh)、[promote.sh](../../../scripts/selfdeploy/promote.sh)、

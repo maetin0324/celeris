@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-use crate::CAMPAIGN_SCHEMA;
+use crate::{CAMPAIGN_SCHEMA, SIDE_CAMPAIGN_SCHEMA};
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "lowercase")]
@@ -636,6 +636,8 @@ impl CampaignManifest {
                 .collect::<BTreeSet<_>>()
                 .into_iter()
                 .collect(),
+            // B1/C1 の別測定 manifest（宣言なし）は B/C のみ。
+            _ if self.is_side() => vec![ConfigId::B, ConfigId::C],
             _ => vec![ConfigId::A, ConfigId::B, ConfigId::C],
         }
     }
@@ -653,6 +655,7 @@ impl CampaignManifest {
                 .collect::<BTreeSet<_>>()
                 .into_iter()
                 .collect(),
+            _ if self.is_side() => vec![(ConfigId::B, ConfigId::C)],
             _ => vec![self.primary, self.secondary.pair],
         }
     }
@@ -662,11 +665,13 @@ impl CampaignManifest {
     pub fn planned_configs(&self, problem: &str) -> Vec<ConfigId> {
         let in_subset = self.secondary.subset.iter().any(|s| s == problem);
         let a_active = self.is_active(ConfigId::A);
+        // B1/C1 の別測定 manifest（宣言なし）は B を全問題、C を subset で走らせる。
+        let b_all = a_active || (self.is_side() && self.experiment_sets.is_empty());
         self.active_arms()
             .into_iter()
             .filter(|id| match id {
                 ConfigId::A => true,
-                ConfigId::B => a_active || in_subset,
+                ConfigId::B => b_all || in_subset,
                 ConfigId::C => in_subset,
             })
             .collect()
@@ -815,6 +820,11 @@ impl CampaignManifest {
         Ok(())
     }
 
+    /// Jev 副比較（B1/C1、A なし）の別測定 manifest か。
+    pub fn is_side(&self) -> bool {
+        self.schema == SIDE_CAMPAIGN_SCHEMA
+    }
+
     /// 正規化後の canonical JSON（キー順固定）の sha256。`sha256` 欄は空として数える。
     pub fn compute_sha256(&self) -> Result<String, String> {
         let mut m = self.normalized();
@@ -826,9 +836,12 @@ impl CampaignManifest {
 
     /// 構造検査（入力 manifest なし）。
     pub fn validate(&self) -> Result<(), String> {
-        if self.schema != CAMPAIGN_SCHEMA {
-            return Err(format!("schema must be {CAMPAIGN_SCHEMA}"));
+        if self.schema != CAMPAIGN_SCHEMA && self.schema != SIDE_CAMPAIGN_SCHEMA {
+            return Err(format!(
+                "schema must be {CAMPAIGN_SCHEMA} or {SIDE_CAMPAIGN_SCHEMA}"
+            ));
         }
+        let side = self.is_side();
         for (name, v) in [
             ("campaign_id", &self.campaign_id),
             ("version", &self.version),
@@ -842,14 +855,20 @@ impl CampaignManifest {
             }
         }
         let ids: Vec<ConfigId> = self.normalized().configs.iter().map(|c| c.id).collect();
-        self.selected()?;
-        let active = self.active_arms();
-        if ids != active {
-            return Err(if self.experiment_sets.is_empty() {
-                "configs must contain exactly A, B and C once each".into()
-            } else {
-                format!("configs must contain exactly the active arms {active:?} once each")
-            });
+        if self.experiment_sets.is_empty() && side {
+            if ids != [ConfigId::B, ConfigId::C] {
+                return Err("side manifest configs must contain exactly B and C once each".into());
+            }
+        } else {
+            self.selected()?;
+            let active = self.active_arms();
+            if ids != active {
+                return Err(if self.experiment_sets.is_empty() {
+                    "configs must contain exactly A, B and C once each".into()
+                } else {
+                    format!("configs must contain exactly the active arms {active:?} once each")
+                });
+            }
         }
         for c in &self.configs {
             for (n, v) in [
@@ -868,8 +887,13 @@ impl CampaignManifest {
             }
         }
         if self.experiment_sets.is_empty() {
-            if self.primary != (ConfigId::A, ConfigId::B) {
-                return Err("primary comparison must be (A, B)".into());
+            let primary = if side {
+                (ConfigId::B, ConfigId::C)
+            } else {
+                (ConfigId::A, ConfigId::B)
+            };
+            if self.primary != primary {
+                return Err(format!("primary comparison must be {primary:?}"));
             }
             if self.secondary.pair != (ConfigId::B, ConfigId::C) {
                 return Err("secondary comparison must be (B, C)".into());
@@ -925,6 +949,9 @@ impl CampaignManifest {
         self.validate_sets()?;
         if self.split == Split::Final {
             self.check_resolved()?;
+        }
+        if side {
+            self.check_side_variant()?;
         }
         if !self.sha256.is_empty() && self.sha256 != self.compute_sha256()? {
             return Err("sha256 does not match manifest content".into());
@@ -1075,6 +1102,88 @@ impl CampaignManifest {
                     a.harness
                 ));
             }
+        }
+        Ok(())
+    }
+
+    /// B1/C1 の共通部分: arm 固有（id・policy_version・根拠表の扱い）を除いた設定。
+    fn side_common(c: &Config) -> Value {
+        let mut v = serde_json::to_value(c).unwrap_or(Value::Null);
+        if let Some(o) = v.as_object_mut() {
+            o.remove("id");
+            o.remove("policy_version");
+            if let Some(r) = o.get_mut("routing").and_then(Value::as_object_mut) {
+                r.remove("no_evidence_table");
+                r.remove("evidence_table_id");
+            }
+        }
+        v
+    }
+
+    /// B1/C1 variant の hash。共通条件（候補集合・階層・harness・model・予算・input・snapshot・problem）と
+    /// 方策差（policy_version・根拠表の扱い）を固定する。主比較の manifest hash とは別（A を含めない）。
+    pub fn side_variant_hash(&self) -> Result<String, String> {
+        let arm = |id: ConfigId| {
+            self.configs
+                .iter()
+                .find(|c| c.id == id)
+                .ok_or_else(|| format!("config {id:?} is missing"))
+        };
+        let (b, c) = (arm(ConfigId::B)?, arm(ConfigId::C)?);
+        let policy = |c: &Config| {
+            let r = c.routing.as_ref();
+            serde_json::json!({
+                "id": c.id, "policy_version": c.policy_version,
+                "no_evidence_table": r.and_then(|r| r.no_evidence_table),
+                "evidence_table_id": r.and_then(|r| r.evidence_table_id.clone()),
+            })
+        };
+        let n = self.normalized();
+        let v = serde_json::json!({
+            "common_b": Self::side_common(b), "common_c": Self::side_common(c),
+            "policy_b": policy(b), "policy_c": policy(c),
+            "budget": n.budget, "termination": n.termination, "input": n.input,
+            "snapshot": n.snapshot, "problems": n.problems, "subset": n.secondary.subset,
+        });
+        let bytes = serde_json::to_vec(&canonical(&v)).map_err(|e| e.to_string())?;
+        Ok(format!("{:x}", Sha256::digest(bytes)))
+    }
+
+    /// B1/C1 の条件検査: mode（policy）以外の差・根拠表・単一モデル pin を拒否する。
+    /// 候補集合は Sonnet と Opus の両方を含む（宣言必須）。階層・harness・model・予算・input は B/C 同一。
+    pub fn check_side_variant(&self) -> Result<(), String> {
+        self.side_variant_hash()?;
+        let find = |id: ConfigId| self.configs.iter().find(|c| c.id == id);
+        let (Some(b), Some(c)) = (find(ConfigId::B), find(ConfigId::C)) else {
+            return Err("side manifest needs B and C".into());
+        };
+        if Self::side_common(b) != Self::side_common(c) {
+            return Err("B1 and C1 differ in more than the policy".into());
+        }
+        for x in [b, c] {
+            let r = x
+                .routing
+                .as_ref()
+                .ok_or_else(|| format!("config {:?}: routing must be pinned", x.id))?;
+            if r.evidence_table_id.is_some() || r.effective_evidence_mode(x.id)? != "none" {
+                return Err(format!(
+                    "config {:?}: B1/C1 must not use an evidence table",
+                    x.id
+                ));
+            }
+        }
+        let models = c
+            .routing
+            .as_ref()
+            .and_then(|r| r.models.clone())
+            .unwrap_or_default();
+        if models.len() < 2
+            || !models.iter().any(|m| m.contains("sonnet"))
+            || !models.iter().any(|m| m.contains("opus"))
+        {
+            return Err(format!(
+                "C1 is pinned to a single model/lane: candidate set must include both Sonnet and Opus, got {models:?}"
+            ));
         }
         Ok(())
     }

@@ -42,6 +42,7 @@ CELERIS_BIN=
 MANIFEST= DAEMON_CONFIG= NORMAL_CONFIG= CANARIES= TASK_TEMPLATE= OUT= STATE_DIR=
 RELEASE= RUN_PATH= A_PROGRAM=claude A_ACCOUNT= WORKER_PROGRAMS= MEASUREMENT_ID=
 MATERIALS_SRC= KB_SRC= REPO_SRC= INPUTS_SRC= CASES_ROOT= GRADER_ROOT= GRADE_CASES_ROOT=
+SERIES_ROOT= SERIES_IMPORT_OUTS=
 RECORDS= CAP_ENV= EXECUTOR=celeris INTERVAL_SECS=60 MAX_ITERATIONS=1440 HEALTH_WAIT_SECS=60
 # shellcheck disable=SC1090
 . "$ENV_FILE"
@@ -70,6 +71,7 @@ MATERIALS_SRC=$(abs "$MATERIALS_SRC") KB_SRC=$(abs "$KB_SRC") REPO_SRC=$(abs "$R
 [ -z "$CASES_ROOT" ] || CASES_ROOT=$(abs "$CASES_ROOT")
 [ -z "$GRADER_ROOT" ] || GRADER_ROOT=$(abs "$GRADER_ROOT")
 [ -z "$GRADE_CASES_ROOT" ] || GRADE_CASES_ROOT=$(abs "$GRADE_CASES_ROOT")
+[ -z "$SERIES_ROOT" ] || SERIES_ROOT=$(abs "$SERIES_ROOT")
 [ -z "$RECORDS" ] || RECORDS=$(abs "$RECORDS")
 [ -z "$CAP_ENV" ] || CAP_ENV=$(abs "$CAP_ENV")
 case $CAMPAIGN_BIN in */*) CAMPAIGN_BIN=$(abs "$CAMPAIGN_BIN") ;; esac
@@ -120,6 +122,9 @@ common_args() {
     [ -z "$GRADER_ROOT" ] || set -- "$@" --grader-root "$GRADER_ROOT"
     [ -z "$GRADE_CASES_ROOT" ] || set -- "$@" --grade-case-root "$GRADE_CASES_ROOT"
     [ -z "$MEASUREMENT_ID" ] || set -- "$@" --measurement-id "$MEASUREMENT_ID"
+    # 副比較（B1/C1）の系列台帳の root。測定 ID ごとに <root>/<id>/ へ固定され、OUT はその runs/ の下だけ許される。
+    # 副比較で未設定なら CLI が拒否する（既消費 0 として扱わない）。
+    [ -z "$SERIES_ROOT" ] || set -- "$@" --series-root "$SERIES_ROOT"
     # 必要能力 probe と A の sandbox に足す toolchain（celeris.campaign-cap-env/1）。無ければ preflight が拒否する。
     [ -z "$CAP_ENV" ] || set -- "$@" --cap-env "$CAP_ENV"
     printf '%s\n' "$@"
@@ -251,6 +256,13 @@ cmd_prepare() {
             die "celeris binary changed since the first prepare (sha256 $h): refusing"
         fi
         printf '%s\n' "$h" >"$STATE_DIR/celeris.sha256"
+    fi
+    # 副比較の系列台帳（冪等）。SERIES_IMPORT_OUTS は引継ぎ元の既存 out（空白区切り。消費を台帳へ追記する）。
+    if [ -n "$SERIES_ROOT" ]; then
+        [ -n "$MEASUREMENT_ID" ] || die "MEASUREMENT_ID is required with SERIES_ROOT"
+        set -- series-init --manifest "$MANIFEST" --measurement-id "$MEASUREMENT_ID" --series-root "$SERIES_ROOT"
+        for o in $SERIES_IMPORT_OUTS; do set -- "$@" --import-out "$(abs "$o")"; done
+        "$CAMPAIGN_BIN" "$@" >/dev/null || die "series-init failed: the series ledger is not ready"
     fi
     echo "prepared: api_url=$API_URL state_dir=$STATE_DIR"
 }

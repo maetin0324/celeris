@@ -1,0 +1,90 @@
+{
+  "budget": {
+    "max_disk_bytes": 104857600,
+    "max_parallel": 1,
+    "max_tokens": 60000,
+    "max_wall_secs": 1800,
+    "per_arm": {
+      "max_tokens": 60000,
+      "max_wall_secs": 1800
+    },
+    "per_case": {
+      "max_tokens": 60000,
+      "max_wall_secs": 1800
+    },
+    "token_basis": "all"
+  },
+  "evidence": [
+    "job_id",
+    "log",
+    "raw_data"
+  ],
+  "experiment": {
+    "cluster": "sirius",
+    "nodes": 1,
+    "params": {
+      "columns": [
+        "x1",
+        "x2",
+        "x3",
+        "x4",
+        "y"
+      ],
+      "eval_rows": 400,
+      "job_count_max": 1,
+      "lambda": 1.0,
+      "mem_gb": 124,
+      "ncpus": 24,
+      "ngpus": 1,
+      "queue": "debug",
+      "seed": 20261019,
+      "train_rows": 1600
+    },
+    "walltime_secs": 600
+  },
+  "grade_case_ref": {
+    "path": "dev/short-ml-campaign/short-ml-campaign.json",
+    "sha256": "c4dadc446e47475df679074fa16596790e47a5c53ef3f4e43b1a212f764c5207"
+  },
+  "id": "short-ml-campaign",
+  "inputs": [
+    {
+      "fetch": [
+        "train.csv は run が --inputs-src から sha256 を照合して inputs/train.csv に置く（取得は不要。置き場は crates/campaign/fixtures/inputs/short-ml-campaign/）",
+        "sha256sum inputs/train.csv で sha256 と一致を確かめる"
+      ],
+      "name": "train.csv",
+      "sha256": "123c9b3f6d8850a8beb3d33f20f529245cac5fee5254e880c4424b6fac530b77"
+    },
+    {
+      "fetch": [
+        "eval-features.csv は run が --inputs-src から sha256 を照合して inputs/eval-features.csv に置く（取得は不要。置き場は crates/campaign/fixtures/inputs/short-ml-campaign/）",
+        "sha256sum inputs/eval-features.csv で sha256 と一致を確かめる"
+      ],
+      "name": "eval-features.csv",
+      "sha256": "aafea4de8d3ac184d98b0699509d53e1bbc2e8fd4880aece8124c44783733ac0"
+    }
+  ],
+  "judged_scope": [
+    "experiment",
+    "analysis"
+  ],
+  "kind": "real",
+  "private_ref": {
+    "path": "dev/short-ml-campaign/private.json",
+    "sha256": "18f512bd05b4345881f0bcf50093b8508e566d5d5ecbb229122246652e5a1ae8"
+  },
+  "schema": "celeris.campaign-case/1",
+  "snapshot": {
+    "kb_snapshot": "5b84e3b50c68df468c8ad02ce463a834bac74d8d5baa7e0544acc04726fdd618",
+    "materials_sha256": "efa7308cab04368814c292ca5ac3e8001d88b69d1312732c183f2c97b0ddf1cb",
+    "repo_commit": "none (control or input-only case)"
+  },
+  "split": "dev",
+  "stages": [
+    "experiment",
+    "analysis"
+  ],
+  "title": "小さな CSV のリッジ回帰（CPU job 1 本）→ raw 分析 → 報告（dev 専用）",
+  "visible_command": "test -s report.md && test -s results/coefficients.csv && test -s evidence/jobs.json"
+}

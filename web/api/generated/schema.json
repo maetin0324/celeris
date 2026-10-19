@@ -16381,15 +16381,43 @@
           "description": "`fixed_rule` | `classification_raise` | `fixed_fallback`。",
           "type": "string"
         },
+        "call_id": {
+          "description": "この分類の呼び出し ID（`decision_log::jev_call_id`）。キャッシュ再利用で複数 run が同じ分類を使うと\n同じ値を共有する（消費行の鍵と同一）。分類を呼ばなかった・未採番は None。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "classifier_status": {
           "$ref": "#/$defs/ClassifierStatus"
         },
         "final_lane": {
-          "description": "実際に使う lane。",
+          "description": "実際に使う lane（許可・天井・利用可否で制約した後。制約後 lane）。",
           "type": "string"
+        },
+        "fixed_lane": {
+          "description": "fixed 規則だけの lane（`replan` を含む）。規則が既存方策へ委ねるとき None。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "jev_lane": {
+          "description": "Jev 単独の提案 lane（fixed 規則と合成する前。使える提案が無ければ None）。confidence は成功確率ではない。",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "mode": {
           "type": "string"
+        },
+        "observed_snapshot": {
+          "description": "応答 model 名とは独立に観測した版（response header 等）。観測経路が無ければ None\n（`response_model` から複製しない）。",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "overridden_by": {
           "description": "提案を採らなかった理由: `explicit`（人・System の lane）| `ceiling` | `availability`。",
@@ -16408,6 +16436,13 @@
         "real_api_verified": {
           "description": "Jev 実 API 統合の検証済みフラグ。`classifier_status` とは独立（既定 false）。",
           "type": "boolean"
+        },
+        "response_model": {
+          "description": "Jev 応答が名乗った model（`ClassificationEntry::model_snapshot`）。応答が無い・欠測は None。\n設定の model 名では埋めない。",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [

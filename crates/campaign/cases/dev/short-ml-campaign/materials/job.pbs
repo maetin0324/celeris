@@ -1,0 +1,19 @@
+#!/bin/sh
+#PBS -N short-ml-ridge
+#PBS -q debug
+#PBS -l select=1:ncpus=24:mem=124gb:ngpus=1
+#PBS -l walltime=00:10:00
+cd "$PBS_O_WORKDIR" || exit 1
+export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
+LOCK_NUMPY=2.0.2
+echo "host $(hostname)"
+PY=$(python3 -c 'import platform;print(platform.python_version())') || exit 1
+NP=$(python3 -c 'import numpy;print(numpy.__version__)') || exit 1
+echo "python $PY"
+echo "numpy $NP"
+if [ "$NP" != "$LOCK_NUMPY" ]; then
+  echo "env mismatch: numpy $NP != lock $LOCK_NUMPY"
+  exit 1
+fi
+python3 job.py || exit 1
+echo "done job.py exit 0"

@@ -40,7 +40,11 @@ pub const COS_API_URL_ENV: &str = "CELERIS_API_URL";
 /// base (only when `[api] listen` is set) and a `PATH` that finds the daemon's own
 /// release of `celerisctl` first. Without these the worker's `celerisctl` would read the
 /// default `~/.config/celeris` and talk to a different daemon.
-pub(crate) fn cos_run_env(api_base_url: &str, token: &str) -> Vec<(String, String)> {
+pub(crate) fn cos_run_env(
+    api_base_url: &str,
+    token: &str,
+    run_tmp: Option<&task_worker::run_tmpdir::RunTmpDir>,
+) -> Vec<(String, String)> {
     let mut env = vec![(COS_RUN_CREDENTIAL_ENV.to_owned(), token.to_owned())];
     if !api_base_url.is_empty() {
         env.push((COS_API_URL_ENV.to_owned(), api_base_url.to_owned()));
@@ -50,6 +54,9 @@ pub(crate) fn cos_run_env(api_base_url: &str, token: &str) -> Vec<(String, Strin
         .and_then(|exe| exe.parent().map(std::path::Path::to_path_buf));
     if let Some(path) = path_with_first(exe_dir.as_deref(), std::env::var_os("PATH")) {
         env.push(("PATH".to_owned(), path));
+    }
+    if let Some(tmp) = run_tmp {
+        env.extend(tmp.env());
     }
     env
 }
@@ -534,7 +541,17 @@ impl CosChatLaunch {
             .cos_run_credential_issue_at(thread_id, run_id, time::Duration::seconds(ttl_secs), now)
             .map_err(|e| format!("CoS credential unavailable: {e}"))?;
         let token = format!("{COS_RUN_BEARER_PREFIX}{secret}");
-        let Some(adapter) = adapter.with_env(&cos_run_env(&cfg.api_base_url, &token)) else {
+        // `$TMPDIR` for the CoS run (WORK_RULES tell it to use `$TMPDIR`). Without it a relative
+        // `$TMPDIR/x` resolves to `/x`. Removed when the run's task ends (`Drop`).
+        let run_tmp = match task_worker::run_tmpdir::RunTmpDir::create(&req.workspace, run_id) {
+            Ok(tmp) => Some(tmp),
+            Err(e) => {
+                tracing::warn!(%run_id, error = %e, "CoS run tmpdir: could not create; TMPDIR is left unchanged");
+                None
+            }
+        };
+        let run_env = cos_run_env(&cfg.api_base_url, &token, run_tmp.as_ref());
+        let Some(adapter) = adapter.with_env(&run_env) else {
             if let Err(error) = self.store.cos_run_credential_revoke(run_id, now) {
                 tracing::warn!(%error, %run_id, "CoS credential revoke after launch failure failed");
             }
@@ -594,6 +611,7 @@ impl CosChatLaunch {
         self.running.insert(
             thread.clone(),
             tokio::spawn(async move {
+                let _run_tmp = run_tmp;
                 run_claimed(
                     store,
                     adapter,

@@ -1,0 +1,93 @@
+{
+  "schema": "celeris.short-ml-contract/1",
+  "case_id": "short-ml-campaign",
+  "split": "dev",
+  "label": "dev",
+  "scope": "固定資料→条件→実行→raw 分析→報告。dev 専用。final/K2/K4/主比較/汎化は主張しない",
+  "data": {
+    "seed": 20261019,
+    "train": {
+      "file": "train.csv",
+      "rows": 1600,
+      "columns": [
+        "x1",
+        "x2",
+        "x3",
+        "x4",
+        "y"
+      ]
+    },
+    "eval": {
+      "file": "eval-features.csv",
+      "rows": 400,
+      "columns": [
+        "id",
+        "x1",
+        "x2",
+        "x3",
+        "x4"
+      ],
+      "target_withheld": true
+    },
+    "separation": "train と eval は別 file。eval の y は grader-private にだけ置き trial に渡さない"
+  },
+  "metrics": {
+    "report_lines": "metric <name> = <value>",
+    "names": [
+      "n_train_rows",
+      "train_y_mean",
+      "coef_x1",
+      "coef_x2",
+      "coef_x3",
+      "coef_x4",
+      "intercept",
+      "train_rmse"
+    ],
+    "tolerance_relative": 0.001,
+    "tolerance_relative_coef_x4": 0.01,
+    "tolerance_relative_n_train_rows": 0.0
+  },
+  "pins": {
+    "case_json": "2c18e541f1f45bfb6faaac491968be319dc3226a0903ccba96361fcffd312d06",
+    "materials_sha256": "efa7308cab04368814c292ca5ac3e8001d88b69d1312732c183f2c97b0ddf1cb",
+    "kb_snapshot": "5b84e3b50c68df468c8ad02ce463a834bac74d8d5baa7e0544acc04726fdd618",
+    "inputs": {
+      "train.csv": "123c9b3f6d8850a8beb3d33f20f529245cac5fee5254e880c4424b6fac530b77",
+      "eval-features.csv": "aafea4de8d3ac184d98b0699509d53e1bbc2e8fd4880aece8124c44783733ac0"
+    },
+    "grade_case": "c4dadc446e47475df679074fa16596790e47a5c53ef3f4e43b1a212f764c5207",
+    "private": "18f512bd05b4345881f0bcf50093b8508e566d5d5ecbb229122246652e5a1ae8",
+    "env_lock": "6f18113200bebbfd2f7fc315d6ff123fbfed27eb1a8694686c1f766ca91bf53d"
+  },
+  "limits": {
+    "llm_tokens": 0,
+    "main_comparison_trials": 0,
+    "gpu": false,
+    "cpu_cores": 24,
+    "memory_gib": 124,
+    "gpus_allocated": 1,
+    "disk_bytes": 104857600,
+    "job_walltime_secs": 600,
+    "case_wall_secs": 1800,
+    "jobs_max": 1,
+    "jobs_hard_cap": 2,
+    "queue": "debug"
+  },
+  "termination": {
+    "success": "qstat -x -f の Exit_status = 0 かつ results/ の raw が揃う",
+    "states": [
+      "finished_ok",
+      "finished_nonzero",
+      "walltime_exceeded",
+      "not_submitted"
+    ],
+    "collection": "評価側が qstat -x -f から celeris.observed-jobs/1 を作り（job_id・exit_status・conditions・raw の sha256）、trial の自己申告と照合する。PID を scheduler id にしない",
+    "raw": [
+      "results/coefficients.csv",
+      "results/metrics.csv",
+      "results/predictions.csv"
+    ]
+  },
+  "on_failure": "再投入しない。失敗状態を報告して停止する（jobs_hard_cap を超える投入、条件違い、環境測定の不一致はすべて停止）",
+  "no_real_job_in_preparation": true
+}

@@ -455,9 +455,13 @@ fn run_refuses_split_mix_and_unknown_executor_path_has_no_network_code() {
         let p = f.expect("e").path();
         let t = fs::read_to_string(&p).expect("r");
         // 子 process は A arm の harness_exec.rs、grade の評価 command の grade_runner.rs、
-        // asset 組立の git/tar の asset_assembly.rs だけが起動する（command は注入・固定、実 LLM は呼ばない）。
+        // asset 組立の git/tar の asset_assembly.rs、評価側の read-only `ssh qstat -x -f` の ssh_qstat.rs だけが起動する
+        // （command は注入・固定、実 LLM は呼ばない）。
         let spawns = p.file_name().is_some_and(|n| {
-            n == "harness_exec.rs" || n == "grade_runner.rs" || n == "asset_assembly.rs"
+            n == "harness_exec.rs"
+                || n == "grade_runner.rs"
+                || n == "asset_assembly.rs"
+                || n == "ssh_qstat.rs"
         });
         for bad in [
             "reqwest",

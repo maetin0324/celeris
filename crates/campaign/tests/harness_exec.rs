@@ -60,7 +60,9 @@ fn campaign(i: &Input) -> CampaignManifest {
         budget: Budget {
             token_basis: celeris_campaign::manifest::TokenBasis::InputOutput,
             max_tokens: 10_000_000,
-            max_wall_secs: 1_000_000,
+            // 全体の wall 上限は 1 試行の上限より大きくする。同値だと実時間が 1 秒進んだだけで残りが
+            // 予約額を割り、後続 arm が budget_stop で打ち切られる（時計依存の不安定）。
+            max_wall_secs: 10_000_000,
             max_disk_bytes: 1 << 40,
             max_parallel: 1,
             per_case: celeris_campaign::manifest::Cap {

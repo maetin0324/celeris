@@ -1240,6 +1240,204 @@ fn seed_skipped_when_pool_cannot_share() {
     assert!(!seeds_dir(&pool).exists());
 }
 
+/// seed は最終 path（確定後の `gen-*/target`）で build する。cargo が試験 binary や dep-info に焼く絶対 path
+/// （`CARGO_TARGET_DIR`）が、seed の確定後も存在しなければならない。
+#[test]
+fn seed_is_built_at_its_final_path() {
+    let tmp = tempfile::tempdir().unwrap();
+    let pool = Pool::new(tmp.path());
+    let key = seed_key();
+    let recorded: std::sync::Arc<std::sync::Mutex<Vec<PathBuf>>> = Default::default();
+    let inner = fake_build(false);
+    let sink = recorded.clone();
+    let build = move |checkout: &Path, env: &[(String, String)]| {
+        let target = env
+            .iter()
+            .find(|(k, _)| k == CARGO_TARGET_DIR_VAR)
+            .map(|(_, v)| PathBuf::from(v))
+            .unwrap();
+        sink.lock().unwrap().push(target);
+        inner(checkout, env)
+    };
+    let ops = SeedBuildOps {
+        prepare_checkout: &no_checkout,
+        build: &build,
+        rustc: &fixed_rustc,
+        share_probe: &|_| Ok(()),
+        probe_results: std::sync::Mutex::new(std::collections::HashMap::new()),
+    };
+    let SeedRefreshOutcome::Refreshed { generation, .. } = refresh_seed(
+        &pool,
+        Path::new(SEED_REPO),
+        "1111111111111111",
+        &CargoTuning::default(),
+        &ops,
+        at(T0),
+    ) else {
+        panic!("refresh should create a seed");
+    };
+    let recorded = recorded.lock().unwrap();
+    assert_eq!(recorded.len(), 1);
+    let final_target = seed_repo_dir(&pool, &key)
+        .join(&generation)
+        .join(TARGET_SUBDIR);
+    assert_eq!(recorded[0], final_target);
+    assert!(recorded[0].join("debug/deps/libbig.rlib").is_file());
+}
+
+fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
+    !needle.is_empty() && haystack.windows(needle.len()).any(|w| w == needle)
+}
+
+/// deps の下の試験・bin の binary（拡張子なしの実行ファイル）で `needle` の path を焼いているものの数と、全体の数。
+fn count_binaries_with(target: &Path, needle: &str) -> (usize, usize) {
+    let (mut with, mut all) = (0, 0);
+    for e in std::fs::read_dir(target.join("debug/deps"))
+        .unwrap()
+        .flatten()
+    {
+        let m = e.metadata().unwrap();
+        if m.is_file() && e.path().extension().is_none() && m.mode() & 0o111 != 0 {
+            all += 1;
+            let bytes = std::fs::read(e.path()).unwrap();
+            if contains_bytes(&bytes, needle.as_bytes()) {
+                with += 1;
+            }
+        }
+    }
+    (with, all)
+}
+
+/// seed から写した owner の target には workspace member の成果物が残らない: seed の checkout の絶対 path
+/// （`CARGO_MANIFEST_DIR`）を焼いた試験 binary・dep-info・fingerprint が owner で再利用されると、試験は owner の
+/// worktree でなく seed（main）の file を黙って読む。workspace 外の依存の成果物は写す。実 cargo で build する。
+#[test]
+fn seed_copy_drops_workspace_member_artifacts_and_keeps_registry_ones() {
+    let tmp = tempfile::tempdir().unwrap();
+    let pool = Pool::new(tmp.path().join("scratch"));
+    let key = seed_key();
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(project.join("src")).unwrap();
+    std::fs::create_dir_all(project.join("tests")).unwrap();
+    std::fs::write(
+        project.join("Cargo.toml"),
+        "[package]\nname = \"seedfx\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[workspace]\n",
+    )
+    .unwrap();
+    std::fs::write(project.join("src/lib.rs"), "pub fn f() -> u8 { 1 }\n").unwrap();
+    std::fs::write(
+        project.join("tests/it.rs"),
+        "const D: &str = env!(\"CARGO_MANIFEST_DIR\");\n#[test]\nfn t() { println!(\"{D}\"); }\n",
+    )
+    .unwrap();
+    let copy_project = {
+        let project = project.clone();
+        move |_: &Path, checkout: &Path, _: &str| -> io::Result<()> {
+            let st = std::process::Command::new("cp")
+                .arg("-a")
+                .arg("-T")
+                .arg(&project)
+                .arg(checkout)
+                .status()?;
+            st.success()
+                .then_some(())
+                .ok_or_else(|| io::Error::other("cp failed"))
+        }
+    };
+    let ops = SeedBuildOps {
+        prepare_checkout: &copy_project,
+        build: &cargo_build_all_targets,
+        rustc: &fixed_rustc,
+        share_probe: &|_| Ok(()),
+        probe_results: std::sync::Mutex::new(std::collections::HashMap::new()),
+    };
+    let SeedRefreshOutcome::Refreshed { generation, .. } = refresh_seed(
+        &pool,
+        Path::new(SEED_REPO),
+        "1111111111111111",
+        &CargoTuning::default(),
+        &ops,
+        at(T0),
+    ) else {
+        panic!("seed build should succeed");
+    };
+    let repo_dir = seed_repo_dir(&pool, &key);
+    let checkout = repo_dir.join(SEED_CHECKOUT_DIR);
+    let seed_target_dir = repo_dir.join(&generation).join(TARGET_SUBDIR);
+    // 前提: seed の試験 binary は seed の checkout の path を焼いている。
+    let checkout_str = checkout.display().to_string();
+    let (with, all) = count_binaries_with(&seed_target_dir, &checkout_str);
+    assert!(all > 0 && with > 0, "seed binaries: {with}/{all}");
+    // workspace 外の依存の成果物（registry の絶対 path だけを指す dep-info）。
+    let debug = seed_target_dir.join("debug");
+    std::fs::create_dir_all(debug.join(".fingerprint/serde-abc123")).unwrap();
+    std::fs::write(debug.join(".fingerprint/serde-abc123/lib-serde"), b"x").unwrap();
+    std::fs::write(
+        debug.join("deps/serde-abc123.d"),
+        "/h/.cargo/registry/src/serde/src/lib.rs: /h/.cargo/registry/src/serde/src/lib.rs\n",
+    )
+    .unwrap();
+    std::fs::write(debug.join("deps/libserde-abc123.rlib"), b"x").unwrap();
+
+    let owner_dir = tmp.path().join("owner");
+    std::fs::create_dir_all(&owner_dir).unwrap();
+    let shared = |_: &Path| Ok(true);
+    let copy_ops = SeedCopyOps {
+        copy: &cp_reflink_auto,
+        is_shared: &shared,
+    };
+    let origin = seed_target(&pool, &owner_dir, &key, &SeedPolicy::unchecked(), &copy_ops);
+    assert!(matches!(origin, TargetOrigin::Seed { .. }), "{origin:?}");
+    let owner_target = owner_dir.join(TARGET_SUBDIR);
+    assert!(
+        owner_target
+            .join("debug/deps/libserde-abc123.rlib")
+            .is_file()
+    );
+    assert!(
+        owner_target
+            .join("debug/.fingerprint/serde-abc123")
+            .is_dir()
+    );
+    let (with, _) = count_binaries_with(&owner_target, &checkout_str);
+    assert_eq!(with, 0, "no member binary may be copied");
+    let leftover: Vec<String> = std::fs::read_dir(owner_target.join("debug/deps"))
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.contains("seedfx"))
+        .collect();
+    assert!(leftover.is_empty(), "{leftover:?}");
+
+    // owner の worktree で build し直すと、試験 binary は owner の path を見る。seed の path は残らない。
+    let worktree = tmp.path().join("worktree");
+    copy_project(Path::new(""), &worktree, "").unwrap();
+    let env = vec![
+        (
+            CARGO_TARGET_DIR_VAR.to_string(),
+            owner_target.display().to_string(),
+        ),
+        ("CARGO_INCREMENTAL".to_string(), "0".to_string()),
+    ];
+    cargo_build_all_targets(&worktree, &env).unwrap();
+    let (with_seed, all) = count_binaries_with(&owner_target, &checkout_str);
+    let (with_owner, _) = count_binaries_with(&owner_target, &worktree.display().to_string());
+    assert!(all > 0);
+    assert_eq!(
+        with_seed, 0,
+        "owner binaries must not embed the seed checkout path"
+    );
+    assert!(
+        with_owner > 0,
+        "owner binaries must embed the owner worktree path"
+    );
+    assert!(
+        owner_target
+            .join("debug/deps/libserde-abc123.rlib")
+            .is_file()
+    );
+}
+
 /// main が進むと新しい世代を別名で build してから `current` を rename で差し替え、旧世代を退避して消す。
 /// 既に seed から作った owner の target は影響を受けない。
 #[test]
@@ -1312,7 +1510,7 @@ fn seed_refresh_switches_current_atomically_and_retires_the_old_generation() {
     assert!(
         !left
             .iter()
-            .any(|n| n.starts_with(SEED_BUILDING_PREFIX) || n.starts_with(".current.tmp")),
+            .any(|n| n.starts_with(".current.tmp") || n.starts_with(".manifest")),
         "{left:?}"
     );
     assert!(
@@ -1374,7 +1572,10 @@ fn seed_refresh_failure_keeps_the_old_seed() {
     );
     let left = names(&seed_repo_dir(&pool, &key));
     assert!(
-        !left.iter().any(|n| n.starts_with(SEED_BUILDING_PREFIX)),
+        left.iter().all(|n| n == SEED_CURRENT
+            || n == SEED_CHECKOUT_DIR
+            || n == SEED_REFRESH_LOCK
+            || n == &g1),
         "{left:?}"
     );
     // 失敗した checkout も旧 seed を残す。
@@ -1489,7 +1690,12 @@ fn seed_gc_keeps_current_and_removes_stale_generations_and_abandoned_builds() {
     let repo_dir = seed_repo_dir(&pool, &key);
     // 切り替えの直後に落ちた残骸（current でない世代）と、中断した build。
     std::fs::create_dir_all(repo_dir.join("gen-000000000000-1/target")).unwrap();
-    std::fs::create_dir_all(repo_dir.join(".building-gen-x/target")).unwrap();
+    std::fs::write(
+        repo_dir.join("gen-000000000000-1").join(SEED_MANIFEST),
+        b"{}",
+    )
+    .unwrap();
+    std::fs::create_dir_all(repo_dir.join("gen-000000000000-2/target")).unwrap();
     let registered: BTreeSet<String> = [key.clone()].into();
     // build 中（`claim_seed` を他が持つ）なら build も旧世代も触らない。
     let held = claim_seed(&repo_dir).unwrap().unwrap();
@@ -1498,13 +1704,13 @@ fn seed_gc_keeps_current_and_removes_stale_generations_and_abandoned_builds() {
         r.retired.is_empty() && r.abandoned_builds.is_empty(),
         "{r:?}"
     );
-    assert!(repo_dir.join(".building-gen-x").is_dir());
+    assert!(repo_dir.join("gen-000000000000-2").is_dir());
     drop(held);
     let r = seed_gc(&pool, &registered, at(T0 + 120));
     assert_eq!(r.retired.len(), 1, "{r:?}");
     assert_eq!(r.abandoned_builds.len(), 1);
     assert!(!repo_dir.join("gen-000000000000-1").exists());
-    assert!(!repo_dir.join(".building-gen-x").exists());
+    assert!(!repo_dir.join("gen-000000000000-2").exists());
     assert_eq!(
         current_generation(&pool, &key).as_deref(),
         Some(g1.as_str())

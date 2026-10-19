@@ -1,15 +1,16 @@
 //! ADR-0129 (4)(5): repo の seed の更新と、seed の GC。
 //!
 //! 置き場は `<scratch>/seeds/<repo-key>/`:
-//! - `gen-<commit12>-<nanos>/{target/,manifest.json}` … 世代（build に成功したものだけ）
+//! - `gen-<commit12>-<nanos>/{target/,manifest.json}` … 世代。最終 path で build し、`manifest.json` の書き込みが
+//!   完了印（manifest の無い `gen-*` は build 中か中断の残骸で、`current` に向けない）。cargo が試験 binary や
+//!   dep-info に焼く絶対 path（`CARGO_TARGET_DIR`）が確定後も存在するよう、build 後に rename しない
 //! - `current` … 世代への相対 symlink。一時 symlink の rename で原子的に切り替える
-//! - `.building-<gen>/` … build 中の世代（成功すれば `gen-*` へ rename、失敗すれば消す）
 //! - `checkout/` … main の固定 commit を build する専用の安定した checkout（`git worktree --detach`）
 //! - `.refresh.lock` … 同じ repo の更新・GC を排他する POSIX record lock（`claim_seed`。GC は取れたときだけ触る）
 //! - `.unregistered-since` … repo が登録から外れたのを最初に見た時刻（mtime）。猶予を過ぎたら seed 全体を消す
 //!
 //! seed は lease 付きの owner ではない（`targets/` の外）ので、ADR-0075 D2 の semantic GC（P0〜P3・warm seed）
-//! の対象にならない。ここの GC は「current 以外の世代」「放棄された `.building-*`」「猶予を過ぎた登録外の repo」
+//! の対象にならない。ここの GC は「current 以外の世代」「放棄された未完の世代（manifest の無い `gen-*`）」「猶予を過ぎた登録外の repo」
 //! だけを消す。消す・切り替えるは pool の `.lock` の下で行う（owner への写しも `.lock` の下なので、写している
 //! 最中の世代は消えない）。**LLM は呼ばない**（seed の build は cargo を走らせるだけ）。
 
@@ -28,8 +29,6 @@ use super::{
 
 /// 世代ディレクトリの接頭辞。
 pub const SEED_GEN_PREFIX: &str = "gen-";
-/// build 中の世代の接頭辞（`.building-gen-*`）。
-pub const SEED_BUILDING_PREFIX: &str = ".building-";
 /// seed を build する専用の checkout。
 pub const SEED_CHECKOUT_DIR: &str = "checkout";
 pub const SEED_REFRESH_LOCK: &str = ".refresh.lock";
@@ -302,21 +301,21 @@ pub fn refresh_seed(
         Err(e) => return failed(format!("cannot take the refresh lock: {e}")),
     };
     // 前回の中断の残骸（lock を取れた＝誰も build していない）。
-    remove_building(&repo_dir);
+    remove_incomplete_generations(pool, &repo_dir, &repo_key);
     let short: String = commit.chars().take(12).collect();
     let nanos = now
         .duration_since(SystemTime::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     let generation = format!("{SEED_GEN_PREFIX}{short}-{nanos}");
-    let building = repo_dir.join(format!("{SEED_BUILDING_PREFIX}{generation}"));
+    let gen_dir = repo_dir.join(&generation);
     let checkout = repo_dir.join(SEED_CHECKOUT_DIR);
     let result = (|| -> Result<SeedManifest, String> {
         (ops.prepare_checkout)(repo_path, &checkout, commit)
             .map_err(|e| format!("checkout of {commit} failed: {e}"))?;
         let rustc = (ops.rustc)(&checkout);
-        std::fs::create_dir_all(&building).map_err(|e| e.to_string())?;
-        let target = building.join(TARGET_SUBDIR);
+        std::fs::create_dir_all(&gen_dir).map_err(|e| e.to_string())?;
+        let target = gen_dir.join(TARGET_SUBDIR);
         let mut env = vec![(
             CARGO_TARGET_DIR_VAR.to_string(),
             target.display().to_string(),
@@ -336,26 +335,26 @@ pub fn refresh_seed(
             size_bytes: measure_tree(&target).ok().map(|(b, _)| b),
         };
         let body = serde_json::to_vec_pretty(&manifest).map_err(|e| e.to_string())?;
-        std::fs::write(building.join(SEED_MANIFEST), body).map_err(|e| e.to_string())?;
+        // manifest の出現が完了印なので、書きかけを見せないよう一時 file からの rename で置く。
+        let tmp = gen_dir.join(format!(".{SEED_MANIFEST}.tmp"));
+        std::fs::write(&tmp, body).map_err(|e| e.to_string())?;
+        std::fs::rename(&tmp, gen_dir.join(SEED_MANIFEST)).map_err(|e| e.to_string())?;
         Ok(manifest)
     })();
     if let Err(reason) = result {
-        let _ = remove_any(&building);
+        let _ = remove_any(&gen_dir);
         return failed(reason);
     }
     let lock = match pool.lock() {
         Ok(l) => l,
         Err(e) => {
-            let _ = remove_any(&building);
+            let _ = remove_any(&gen_dir);
             return failed(format!("cannot take the pool lock: {e}"));
         }
     };
     let replaced = current_generation(pool, &repo_key);
-    let switched = std::fs::rename(&building, repo_dir.join(&generation))
-        .and_then(|()| switch_current(&repo_dir, &generation, now));
-    if let Err(e) = switched {
-        let _ = remove_any(&building);
-        let _ = remove_any(&repo_dir.join(&generation));
+    if let Err(e) = switch_current(&repo_dir, &generation, now) {
+        let _ = remove_any(&gen_dir);
         return failed(format!("cannot switch the seed: {e}"));
     }
     // 旧世代は lock の下で `.deleting-*` へ退避する（写している最中の owner は lock を持つので、ここで消えない）。
@@ -371,17 +370,25 @@ pub fn refresh_seed(
     }
 }
 
-fn remove_building(repo_dir: &Path) {
+/// 未完の世代（manifest の無い `gen-*`。`current` が指す世代は完了済みとして除く）。`claim_seed` を持って呼ぶ＝誰も build していない残骸。
+fn incomplete_generations(repo_dir: &Path, current: Option<&str>) -> Vec<PathBuf> {
     let Ok(rd) = std::fs::read_dir(repo_dir) else {
-        return;
+        return Vec::new();
     };
-    for e in rd.flatten() {
-        if e.file_name()
-            .to_string_lossy()
-            .starts_with(SEED_BUILDING_PREFIX)
-        {
-            let _ = remove_any(&e.path());
-        }
+    rd.flatten()
+        .filter(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            name.starts_with(SEED_GEN_PREFIX) && current != Some(name.as_str())
+        })
+        .map(|e| e.path())
+        .filter(|p| !p.join(SEED_MANIFEST).is_file())
+        .collect()
+}
+
+fn remove_incomplete_generations(pool: &Pool, repo_dir: &Path, repo_key: &str) {
+    let current = current_generation(pool, repo_key);
+    for p in incomplete_generations(repo_dir, current.as_deref()) {
+        let _ = remove_any(&p);
     }
 }
 
@@ -425,7 +432,7 @@ fn retire_stale_generations(pool: &Pool, repo_dir: &Path, now: SystemTime) -> Ve
 pub struct SeedGcResult {
     /// 退避した（`seeds/.deleting-*` へ rename した）パス。中身の削除は削除スレッド。
     pub retired: Vec<PathBuf>,
-    /// 消した放棄 `.building-*`。
+    /// 消した放棄された未完の世代（manifest の無い `gen-*`）。
     pub abandoned_builds: Vec<PathBuf>,
     /// 今回 `.unregistered-since` を書いた repo key。
     pub marked_unregistered: Vec<String>,
@@ -436,7 +443,7 @@ pub struct SeedGcResult {
 /// ADR-0129 (5): seed の GC（tick から呼ぶ。木は辿らず rename だけ）。`registered` は登録されている repo の key。
 /// - `current` が指す世代は消さない（容量の圧迫でも黙って失わせない）
 /// - `current` 以外の世代は消す（旧 commit の永久保存はしない）
-/// - `.building-*` と旧世代は `claim_seed` が取れる（誰も build していない）ときだけ消す
+/// - 未完の世代（manifest の無い `gen-*`）と旧世代は `claim_seed` が取れる（誰も build していない）ときだけ消す
 /// - 登録外の repo は `.unregistered-since` を書き、`SEED_UNREGISTERED_GRACE_SECS` を過ぎたら seed 全体を消す
 ///   （登録に戻れば印を消す）
 pub fn seed_gc(pool: &Pool, registered: &BTreeSet<String>, now: SystemTime) -> SeedGcResult {
@@ -498,16 +505,9 @@ pub fn seed_gc(pool: &Pool, registered: &BTreeSet<String>, now: SystemTime) -> S
             }
         }
         if refresh.is_some() {
-            let Ok(rd) = std::fs::read_dir(&repo_dir) else {
-                continue;
-            };
-            for e in rd.flatten() {
-                if e.file_name()
-                    .to_string_lossy()
-                    .starts_with(SEED_BUILDING_PREFIX)
-                    && remove_any(&e.path()).is_ok()
-                {
-                    out.abandoned_builds.push(e.path());
+            for p in incomplete_generations(&repo_dir, current_generation(pool, &key).as_deref()) {
+                if remove_any(&p).is_ok() {
+                    out.abandoned_builds.push(p);
                 }
             }
             out.retired

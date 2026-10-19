@@ -1,0 +1,70 @@
+# 測定専用 daemon の config 雛形（秘密なし。operator が複製して <...> を実値にし DAEMON_CONFIG に置く）。
+# 本番 config (~/.config/celeris/config.toml) ではない。本番と別の port・db・workspace・KB・記憶・llm_proxy・releases_dir・通知先にする。
+# 検査: `celeris-campaign config-check`（measure-launcher prepare/start が実行）と cap_probe::declaration_problems_of_file。
+# 認証値は書かない。アカウントは既存の account id 参照のみ（A_ACCOUNT と同じ claude_oauth の login 済み account）。
+
+db = "<abs local path>/measure-state/celeris.db"          # 本番 db と別
+workspace_root = "<abs local path>/measure-state/ws"      # 本番と別・NFS 外
+tick_ms = 2000
+max_concurrency = 1
+
+[api]
+listen = "127.0.0.1:<measure port>"                        # 本番と別 port
+token_file = "<abs local path>/measure-state/token"        # prepare が 0600 で作る測定専用 token
+
+[knowledge]
+root = "<abs local path>/measure-state/kb"                 # 空、または固定初期 KB（KB_SRC）と同一
+default_mounts = ["kb:trial"]                              # kb:<scope> のみ
+[knowledge.langmem]
+enabled = false
+[knowledge.gc]
+enabled = false
+# [[cron.seed]] は置かない（自動整理なし）。[memory] も置かない。
+
+# ---- 実 harness（manifest B/C の routing.run_harnesses = ["claude-code"] と同一。ここに無い harness は使わない）
+[adapters.claude_code]
+
+[llm_sources.claude_oauth]
+kind = "claude_oauth"
+api_format = "anthropic"
+models = ["claude-sonnet-5-5"]
+
+[harnesses.claude-code]
+kind = "claude_code"
+api_formats = ["anthropic"]
+source_kinds = ["claude_oauth"]
+capabilities = ["tools", "repo", "skills"]
+
+[route_defaults.claude-code]
+candidates = [{ source = "claude_oauth", model = "claude-sonnet-5-5" }]
+
+# ---- 必要能力 probe の宣言（run_harnesses の harness <h> ごとに 1 組。cap-runbook §1）
+# 未宣言の harness を暗黙には使わない。検査 task は分野 cap-probe-<h> で fake harness（無 LLM の cap-worker）へ結ばれ、
+# env_of = "<h>" により実 harness <h> の adapter 環境で起動する。実試行の候補には入らない（genre が cap-probe-* の task だけ）。
+[llm_sources.cap-probe]                                    # 1 回だけ
+kind = "fake"
+accounts = ["probe"]
+models = ["fake"]
+
+[harnesses.cap-probe-claude-code]
+kind = "fake"
+command = "<abs path of celeris-campaign>"                 # CAMPAIGN_BIN と同じ実体
+args = ["cap-worker"]
+env_of = "claude-code"
+api_formats = ["fake"]
+source_kinds = ["fake"]
+
+[route_defaults.cap-probe-claude-code]
+candidates = [{ source = "cap-probe", model = "fake" }]
+
+[harness_selection]
+execution_class_defaults = {}
+# cap-probe 規則を先頭に置く（最初に当たる規則が分野 cap-probe-<h> でなければ宣言検証が不合格）。
+rules = [
+  { genre = "cap-probe-claude-code", harness = "cap-probe-claude-code", required_capabilities = [] },
+  { harness = "claude-code", required_capabilities = [] },
+]
+
+# 通常運用と同じ [[clusters]] を NORMAL_CONFIG から複写する（接続設定は壊さない。config-check が一致を見る）。
+# [[clusters]]
+# ...

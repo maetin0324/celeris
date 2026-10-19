@@ -166,7 +166,7 @@ pub struct DispatchRoutingSettings {
     pub escalation: task_core::EscalationThresholds,
 }
 pub use lane_assist::{
-    BoardCall, BoardItem, ClassificationBoard, lane_facts, task_routing_override,
+    BoardCall, BoardItem, CallProvenance, ClassificationBoard, lane_facts, task_routing_override,
 };
 pub use snapshot::SnapshotPublisher;
 

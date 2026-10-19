@@ -56,7 +56,11 @@ fn alias_and_missing_routing_are_rejected() {
     m.configs[2].routing = None;
     assert!(m.validate().expect_err("c routing").contains("routing"));
     let mut m = resolved();
-    m.configs[2].routing.as_mut().unwrap().evidence_table_id = None;
+    {
+        let r = m.configs[2].routing.as_mut().unwrap();
+        r.evidence_table_id = None;
+        r.no_evidence_table = None;
+    }
     assert!(
         m.validate()
             .expect_err("c evidence")

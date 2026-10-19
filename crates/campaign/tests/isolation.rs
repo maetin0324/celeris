@@ -138,3 +138,16 @@ fn verify_isolation_detects_intentional_leaks() {
     assert!(has(&t2.id, "b.txt", "hash of trial"));
     assert!(has(&t1.id, "c.txt", "final value"));
 }
+
+#[test]
+fn prepare_trial_keeps_inner_symlink_and_refuses_escaping_one() {
+    let d = tempfile::tempdir().unwrap();
+    let src = sources(d.path());
+    std::os::unix::fs::symlink("lib.rs", src.repo.join("alias.rs")).unwrap();
+    let t = prepare_trial(&src, &d.path().join("out"), ConfigId::A, "p1", 1).unwrap();
+    let ln = t.workspace.join("alias.rs");
+    assert!(fs::symlink_metadata(&ln).unwrap().file_type().is_symlink());
+    assert_eq!(fs::read_link(&ln).unwrap(), std::path::Path::new("lib.rs"));
+    std::os::unix::fs::symlink("../../../x", src.repo.join("esc")).unwrap();
+    assert!(prepare_trial(&src, &d.path().join("out2"), ConfigId::A, "p1", 1).is_err());
+}

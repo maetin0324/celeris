@@ -17,10 +17,10 @@ use celeris_campaign::{
     watch::{self, SystemClock, WatchOptions},
 };
 
-const USAGE: &str = "usage: celeris-campaign <dry-run|validate|env-lock|config-check|env-check|preflight|cap-probe|cap-worker|run|watch|check|check-report|export|final-accounting|grade-out|usage> --manifest <path> \
+const USAGE: &str = "usage: celeris-campaign <human-op|jev-stages|dry-run|validate|collect-observed|series-init|env-lock|offline-lock|config-check|env-check|preflight|cap-probe|cap-worker|run|watch|check|check-report|export|final-accounting|grade-out|usage> --manifest <path> \
 [--interval-secs N] [--max-iterations M] [--cases <grade-case dir> [--initial-trees <dir>]] \
 [--input-manifest <path>] [--out <dir>] [--executor mock|harness|celeris] [--api-url <url> --token-env <ENV_NAME> [--task-template <json>]] [--dest <dir>] \
-[--cases-root <dir>] [--grader-root <dir>] [--grade-case-root <dir>] [--a-program <path>] [--report <file>] [--measurement-id <id>] [--repo-src <dir>] [--materials-src <dir>] [--kb-src <dir>] [--inputs-src <dir>] [--records <records.jsonl>] [--cos-not-called <basis>] [--quota <usage.json>] [--a-account <account_id>] [--measure-config <toml> --normal-config <toml> --canaries <json>] [--max-7d <ratio>] [--max-7d-codex <ratio>]";
+[--cases-root <dir>] [--grader-root <dir>] [--grade-case-root <dir>] [--a-program <path>] [--report <file>] [--measurement-id <id>] [--repo-src <dir>] [--materials-src <dir>] [--kb-src <dir>] [--inputs-src <dir>] [--records <records.jsonl>] [--cos-not-called <basis>] [--quota <usage.json>] [--a-account <account_id>] [--measure-config <toml> --normal-config <toml> --canaries <json>] [--models-evidence <json> --models-evidence-sha256 <hex>] [--verify] [--max-7d <ratio>] [--max-7d-codex <ratio>]";
 
 fn arg(args: &[String], name: &str) -> Option<PathBuf> {
     args.iter()
@@ -111,7 +111,36 @@ fn cli_expected_lock(
     if !out.join(celeris_campaign::lock_exec::LOCK_FILE).exists() {
         return Ok(None);
     }
-    preflight::expected_lock(&preflight_inputs(args, manifest_path), m).map(Some)
+    cli_lock(args, manifest_path, m).map(Some)
+}
+
+/// 期待 lock。副比較は系列台帳の固定位置（--series-root + --measurement-id）も封印する。
+fn cli_lock(
+    args: &[String],
+    manifest_path: &std::path::Path,
+    m: &CampaignManifest,
+) -> Result<celeris_campaign::lock::CampaignLock, String> {
+    let lock = preflight::expected_lock(&preflight_inputs(args, manifest_path), m)?;
+    let pin = cli_series_pin(args, manifest_path, m)?;
+    preflight::with_series(lock, m, pin.as_ref())
+}
+
+/// 副比較の系列台帳の固定位置。主比較は None。
+fn cli_series_pin(
+    args: &[String],
+    manifest_path: &std::path::Path,
+    m: &CampaignManifest,
+) -> Result<Option<celeris_campaign::series::SeriesPin>, String> {
+    if !m.is_side() {
+        return Ok(None);
+    }
+    let pi = preflight_inputs(args, manifest_path);
+    preflight::series_pin(
+        arg(args, "--series-root").as_deref(),
+        pi.measurement_id.as_deref(),
+        m,
+    )
+    .map(Some)
 }
 
 fn transport(args: &[String]) -> Result<CurlTransport, String> {
@@ -264,8 +293,23 @@ fn run(args: Vec<String>) -> Result<String, String> {
     if cmd == "grade" {
         return celeris_campaign::grader::cli(&args, &ProcessRunner::default());
     }
+    if cmd == "human-op" {
+        return celeris_campaign::human_ops::cli::cli(&args);
+    }
+    if cmd == "jev-stages" {
+        let path = arg(&args, "--records").ok_or("--records <json> is required")?;
+        let v: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?,
+        )
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+        let rep = celeris_campaign::jev_stages::run_json(&v)?;
+        return serde_json::to_string_pretty(&rep).map_err(|e| e.to_string());
+    }
     if cmd == "cap-probe" {
         return cap_probe_cli(&args);
+    }
+    if cmd == "collect-observed" {
+        return celeris_campaign::observe::cli(&args, &celeris_campaign::ssh_qstat::SshQstat);
     }
     let manifest_path = arg(&args, "--manifest").ok_or("--manifest <path> is required")?;
     let m = CampaignManifest::load(&manifest_path)?;
@@ -280,11 +324,25 @@ fn run(args: Vec<String>) -> Result<String, String> {
             let v = celeris_campaign::dryrun::estimate(&m, &input)?;
             serde_json::to_string_pretty(&v).map_err(|e| e.to_string())
         }
+        "series-init" => {
+            // 副比較の系列台帳を作る（冪等）。--import-out は引継ぎ元の既存 out（消費を台帳へ追記する）。
+            let Some(pin) = cli_series_pin(&args, &manifest_path, &m)? else {
+                return Ok("not a side comparison manifest; no series ledger is used".into());
+            };
+            let imports: Vec<PathBuf> = args
+                .iter()
+                .enumerate()
+                .filter(|(_, a)| *a == "--import-out")
+                .filter_map(|(i, _)| args.get(i + 1).map(PathBuf::from))
+                .collect();
+            celeris_campaign::series::init(&pin, &m.campaign_id, &imports, &m.budget)?;
+            Ok(format!("series ledger ready: {}", pin.dir))
+        }
         "validate" => {
             m.validate()?;
             Ok(m.compute_sha256()?)
         }
-        "env-lock" => {
+        "env-lock" | "offline-lock" => {
             use celeris_campaign::env_lock;
             let path_var = std::env::var_os("PATH");
             // A が有効なときだけ A の実行ファイルを固定する（B/C のみの測定は A を探さない）。
@@ -309,11 +367,19 @@ fn run(args: Vec<String>) -> Result<String, String> {
                     pin: env_lock::pin_program(std::path::Path::new(p), path_var.as_deref())?,
                 });
             }
+            let offline = cmd == "offline-lock";
             // B/C の候補集合・階層は実 daemon の `GET /api/v1/llm/models`（正式 DTO）から取る。空は固定しない。
-            let url = arg(&args, "--api-url").ok_or("--api-url is required")?;
-            let tok = arg(&args, "--token-env").ok_or("--token-env is required")?;
-            let catalog =
-                env_lock::fetch_catalog(&RealHost, &url.to_string_lossy(), &tok.to_string_lossy())?;
+            // offline-lock は daemon に接続せず、承認済み実証跡 file（sha256 明示）から同じ関数で取る。
+            let catalog = if offline {
+                let ev = arg(&args, "--models-evidence").ok_or("--models-evidence is required")?;
+                let sha = arg(&args, "--models-evidence-sha256")
+                    .ok_or("--models-evidence-sha256 is required")?;
+                celeris_campaign::offline_lock::catalog_from_evidence(&ev, &sha.to_string_lossy())?
+            } else {
+                let url = arg(&args, "--api-url").ok_or("--api-url is required")?;
+                let tok = arg(&args, "--token-env").ok_or("--token-env is required")?;
+                env_lock::fetch_catalog(&RealHost, &url.to_string_lossy(), &tok.to_string_lossy())?
+            };
             let cap_env = match arg(&args, "--cap-env") {
                 Some(p) => Some(celeris_campaign::cap_probe::CapEnv::load(&p)?.pin()?),
                 None => None,
@@ -325,6 +391,16 @@ fn run(args: Vec<String>) -> Result<String, String> {
                 cap_env,
             };
             let verify = args.iter().any(|a| a == "--verify");
+            if offline {
+                let v = celeris_campaign::offline_lock::establish(
+                    &preflight_inputs(&args, &manifest_path),
+                    &m,
+                    &obs,
+                    &out()?,
+                    verify,
+                )?;
+                return serde_json::to_string_pretty(&v).map_err(|e| e.to_string());
+            }
             let o = env_lock::establish(&m, &obs, &out()?, verify)?;
             Ok(format!("{{\"env_lock\":\"{o:?}\"}}").to_lowercase())
         }
@@ -398,6 +474,8 @@ fn run(args: Vec<String>) -> Result<String, String> {
             } else {
                 Default::default()
             };
+            // 副比較は固定の系列台帳（測定 ID ごと）を必ず使う。主比較は None。
+            let pin = cli_series_pin(&args, &manifest_path, &m)?;
             let opts = runner::RunOptions {
                 out: out_dir.clone(),
                 repo_src: arg(&args, "--repo-src"),
@@ -408,10 +486,7 @@ fn run(args: Vec<String>) -> Result<String, String> {
                 global_ledger: arg(&args, "--global-ledger"),
                 // 実行（有料）経路は、preflight・runner・再開で同じ期待 lock を使う。
                 lock: if matches!(which.as_str(), "harness" | "celeris") {
-                    Some(preflight::expected_lock(
-                        &preflight_inputs(&args, &manifest_path),
-                        &m,
-                    )?)
+                    Some(cli_lock(&args, &manifest_path, &m)?)
                 } else {
                     None
                 },
@@ -438,9 +513,17 @@ fn run(args: Vec<String>) -> Result<String, String> {
             let watched = std::cell::Cell::new(None);
             let drive = |e: &dyn Executor| -> Result<runner::RunReport, String> {
                 match wopts {
-                    None => runner::run(&m, &input, e, &opts),
+                    None => runner::run_with_series(&m, &input, e, &opts, pin.as_ref()),
                     Some(w) => {
-                        let r = watch::watch(&m, &input, e, &opts, w, &SystemClock)?;
+                        let r = watch::watch_with_series(
+                            &m,
+                            &input,
+                            e,
+                            &opts,
+                            pin.as_ref(),
+                            w,
+                            &SystemClock,
+                        )?;
                         watched.set(Some((r.iterations, r.end)));
                         Ok(r.last)
                     }

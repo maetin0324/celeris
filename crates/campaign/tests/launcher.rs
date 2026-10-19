@@ -580,6 +580,30 @@ fn exe_of(pid: u32) -> PathBuf {
 
 // ---- 試験 ----
 
+/// launcher.env の SERIES_ROOT は `prepare` が `series-init` へ渡す。主比較の manifest（この fixture）では台帳を使わず成功し、
+/// MEASUREMENT_ID なしの SERIES_ROOT は拒否される。副比較の台帳作成・OUT 拒否・欠損/破損の拒否は side_budget.rs（同じ CLI 引数）。
+#[test]
+fn series_root_in_launcher_env_is_passed_to_series_init() {
+    let f = fixture();
+    let d = f.d().display().to_string();
+    f.write_env(&format!("SERIES_ROOT={d}/series\n"));
+    let o = launch(&f, "prepare");
+    assert!(!o.status.success(), "{}", text(&o));
+    assert!(
+        text(&o).contains("MEASUREMENT_ID is required with SERIES_ROOT"),
+        "{}",
+        text(&o)
+    );
+    f.write_env(&format!(
+        "MEASUREMENT_ID=m-series\nSERIES_ROOT={d}/series\n"
+    ));
+    ok(&f, "prepare");
+    assert!(
+        !f.d().join("series").exists(),
+        "a primary manifest uses no series ledger"
+    );
+}
+
 #[test]
 fn matching_environment_runs_task_api_watch_grade_export_and_resumes_with_the_fixed_record() {
     let f = fixture();

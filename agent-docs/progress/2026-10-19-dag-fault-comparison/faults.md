@@ -23,7 +23,7 @@ completed: 2026-10-19
 - 原因: runner の監視 loop が「子の終了確認 → ledger 走査」の順で、(b)(c) は制御 process が止まらないため、
   fault 発火から完走までが刻み（10ms）より短いと終了を先に見て、`fault_fired` を読まずに抜けていた。
 - 修正: 終了を見てから ledger を末尾まで読み、その後で終了を判定する（読み切り→判定）。終了済みの子には SIGKILL を送らない。
-- 証拠: `cargo test -p celeris-campaign --test dagbench_fault` 8 回連続 6 passed、
+- 証拠: `cargo test -p celeris-campaign --test dagbench_fault` 8 回連続 6 passed、`bash scripts/dev/test-parallel.sh` → exit 0（5831 passed, 14 skipped）、
   `cargo clippy --workspace -- -D warnings` → 0、`cargo fmt --all -- --check` → 0。
 
 ## 未解決事項

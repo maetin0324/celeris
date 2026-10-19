@@ -150,34 +150,86 @@ fn query_param(path: &str, key: &str) -> Option<String> {
         .map(String::from)
 }
 
+/// 費用・採点の集計を確かめる試験（campaign_id が `-acct` 終わり）だけが使う、試行ごとの結末。
+/// それ以外の試験は常に `Pass`。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Fate {
+    Pass,
+    /// 成功。同じ task 内に retry の run がもう 1 つある。
+    PassWithRetry,
+    /// task が failed（成果物なし）。
+    Fail,
+    /// task は done だが成果物が空で、独立採点が通らない。
+    EmptyArtifact,
+}
+
+fn fate_of(campaign: &Value) -> Fate {
+    if !campaign["campaign_id"]
+        .as_str()
+        .is_some_and(|c| c.ends_with("-acct"))
+    {
+        return Fate::Pass;
+    }
+    match (
+        campaign["arm"].as_str(),
+        campaign["case_id"].as_str(),
+        campaign["repetition"].as_u64(),
+    ) {
+        (Some("B"), Some("fx-alpha"), Some(1)) => Fate::PassWithRetry,
+        (Some("B"), Some("fx-beta"), Some(2)) => Fate::Fail,
+        (Some("C"), Some("fx-alpha"), Some(2)) => Fate::EmptyArtifact,
+        (Some("C"), Some("fx-beta"), Some(1)) => Fate::Fail,
+        _ => Fate::Pass,
+    }
+}
+
 /// POST 本文から、B/C の worker が作る成果物（`src/answer.txt`）を試行 workspace に置き、完了した task の詳細を作る。
 fn finish_task(id: &str, body: &Value) -> Value {
     let ws = PathBuf::from(body["workspace"].as_str().expect("workspace"));
+    let fate = fate_of(&body["campaign"]);
     fs::create_dir_all(ws.join("src")).expect("src");
-    fs::write(ws.join("src/answer.txt"), "b-c-fixture-answer\n").expect("artifact");
+    match fate {
+        // 失敗した task は成果物を残さない。
+        Fate::Fail => {}
+        // 実行器は done だが、独立採点の hidden test（`test -s answer.txt`）は通らない。
+        Fate::EmptyArtifact => fs::write(ws.join("src/answer.txt"), "").expect("artifact"),
+        _ => fs::write(ws.join("src/answer.txt"), "b-c-fixture-answer\n").expect("artifact"),
+    }
     fs::write(ws.join("src/public_check.sh"), PUBLIC_TEST).expect("public test");
     let ro = &body["routing_override"];
     let labels = body["labels"].clone();
+    let selection = json!({
+        "status": "selected", "harness_id": "claude_code",
+        "source_id": "claude_oauth", "model_id": ROUTING_MODEL,
+        "basis": {"route_decision": {"routing_resolved": {
+            "mode": ro["mode"], "source": "task",
+            "lower_policy": ro["lower_policy"], "evidence_mode": ro["evidence_mode"],
+            "evidence_table_id": ro["evidence_table_id"], "online_update": ro["online_update"]
+        }}}
+    });
+    let mut runs = vec![json!({
+        "run_id": format!("R{id}"), "role": "worker", "is_retry": false,
+        "finished_at": "2026-10-19T00:00:05Z",
+        "usage": {"input_tokens": 400, "output_tokens": 60,
+                  "cache_read_tokens": 0, "cache_creation_tokens": 0, "cost_usd": 0.004},
+        "selection": selection.clone()
+    })];
+    if fate == Fate::PassWithRetry {
+        // 同じ task 内の再実行 run（retry）。費用は捨てず同じ試行に加える。
+        runs.push(json!({
+            "run_id": format!("R{id}r"), "role": "worker", "is_retry": true,
+            "finished_at": "2026-10-19T00:00:09Z",
+            "usage": {"input_tokens": 300, "output_tokens": 40,
+                      "cache_read_tokens": 0, "cache_creation_tokens": 0, "cost_usd": 0.003},
+            "selection": selection
+        }));
+    }
+    let status = if fate == Fate::Fail { "failed" } else { "done" };
     json!({
-        "task": {"id": id, "status": "done", "labels": labels, "created_at": "2026-10-19T00:00:00Z"},
+        "task": {"id": id, "status": status, "labels": labels, "created_at": "2026-10-19T00:00:00Z"},
         "children": [],
-        "runs": [{
-            "run_id": format!("R{id}"),
-            "role": "worker",
-            "finished_at": "2026-10-19T00:00:05Z",
-            "usage": {"input_tokens": 400, "output_tokens": 60,
-                      "cache_read_tokens": 0, "cache_creation_tokens": 0, "cost_usd": 0.004},
-            "selection": {
-                "status": "selected", "harness_id": "claude_code",
-                "source_id": "claude_oauth", "model_id": ROUTING_MODEL,
-                "basis": {"route_decision": {"routing_resolved": {
-                    "mode": ro["mode"], "source": "task",
-                    "lower_policy": ro["lower_policy"], "evidence_mode": ro["evidence_mode"],
-                    "evidence_table_id": ro["evidence_table_id"], "online_update": ro["online_update"]
-                }}}
-            }
-        }],
-        "timers": {"now": "2026-10-19T00:00:05Z"}
+        "runs": runs,
+        "timers": {"now": "2026-10-19T00:00:10Z"}
     })
 }
 
@@ -441,9 +493,19 @@ fn cfg_of(
     }
 }
 
+/// repeats > 1 の集計試験は `-acct` 終わりの別 ID（stub が結末を割り当てる印）。
+fn campaign_id_of(which: &str, repeats: u32) -> String {
+    if repeats > 1 {
+        format!("armset-{which}-acct")
+    } else {
+        format!("armset-{which}")
+    }
+}
+
 fn manifest(
     d: &Path,
     which: &str,
+    repeats: u32,
     a_version: &str,
     kb_hash: &str,
     mat_hash: &str,
@@ -495,7 +557,7 @@ fn manifest(
     fs::write(d.join("input.json"), serde_json::to_vec(&i).expect("ser")).expect("input");
     let mut m = CampaignManifest {
         schema: celeris_campaign::CAMPAIGN_SCHEMA.into(),
-        campaign_id: format!("armset-{which}"),
+        campaign_id: campaign_id_of(which, repeats),
         version: "v1".into(),
         split: Split::Dev,
         input: InputRef {
@@ -554,7 +616,7 @@ fn manifest(
         },
         order: Default::default(),
         seed: 0,
-        repeats: 1,
+        repeats,
         dependencies: BTreeMap::new(),
         sha256: String::new(),
     };
@@ -562,7 +624,7 @@ fn manifest(
     m
 }
 
-fn fixture(which: &'static str) -> Fx {
+fn fixture(which: &'static str, repeats: u32) -> Fx {
     let dir = tempfile::tempdir().expect("dir");
     let d = dir.path();
     write_cases(d);
@@ -581,7 +643,7 @@ fn fixture(which: &'static str) -> Fx {
     );
     let kb_hash = hash_tree(&d.join("kb-src")).expect("kb");
     let mat_hash = hash_tree(&d.join("materials-src")).expect("mat");
-    let m = manifest(d, which, A_VERSION, &kb_hash, &mat_hash);
+    let m = manifest(d, which, repeats, A_VERSION, &kb_hash, &mat_hash);
     let manifest_path = d.join("campaign.json");
     fs::write(&manifest_path, serde_json::to_vec_pretty(&m).expect("ser")).expect("manifest");
     // 測定専用 daemon の config。`[api] listen` は所有 stub の動的 port。
@@ -627,12 +689,16 @@ impl Fx {
 
     /// 全 subcommand が共有する引数（run と同じ値から preflight・期待 lock を作る）。
     fn common(&self) -> Vec<String> {
+        self.common_with(&self.manifest)
+    }
+
+    fn common_with(&self, manifest: &Path) -> Vec<String> {
         let mut v: Vec<String> = Vec::new();
         let mut add = |k: &str, p: &Path| {
             v.push(k.into());
             v.push(p.to_string_lossy().into_owned());
         };
-        add("--manifest", &self.manifest);
+        add("--manifest", manifest);
         add("--cases-root", &self.p("cases"));
         add("--grader-root", &self.p("grader-private"));
         add("--grade-case-root", &self.p("grade-cases"));
@@ -666,8 +732,12 @@ impl Fx {
     }
 
     fn bin(&self, sub: &str, extra: &[&str]) -> Output {
+        self.bin_with(&self.manifest, sub, extra)
+    }
+
+    fn bin_with(&self, manifest: &Path, sub: &str, extra: &[&str]) -> Output {
         let mut c = Command::new(std::env::var("CARGO_BIN_EXE_celeris-campaign").expect("bin"));
-        c.arg(sub).args(self.common()).args(extra);
+        c.arg(sub).args(self.common_with(manifest)).args(extra);
         // token は子の環境にだけ渡す。Jev のキー・他の認証は渡さない。
         c.env(TOKEN_ENV, TOKEN_VALUE)
             .env_remove("ANTHROPIC_API_KEY")
@@ -711,7 +781,7 @@ fn files_named(root: &Path, name: &str) -> usize {
 
 /// `which` = "ab"（A/B のみ）か "bc"（B/C のみ）。両セットで全 CLI 成功経路を通す。
 fn flow(which: &'static str) {
-    let mut f = fixture(which);
+    let mut f = fixture(which, 1);
     let (trials_total, a_calls, post_arms): (u64, usize, &[&str]) = if which == "ab" {
         (4, 2, &["B"])
     } else {
@@ -912,4 +982,381 @@ fn ab_only_runs_through_the_real_cli_and_normal_post_stub() {
 #[test]
 fn bc_only_runs_through_the_real_cli_and_normal_post_stub() {
     flow("bc");
+}
+
+// ---- 複数 case × repetition・retry・採点・費用・再開（同じ planned_configs を入口から export まで）----
+
+const REPEATS: u32 = 2;
+
+/// 台帳が閉じるまで同じ out を再開する（出来事 = 台帳の waiting/parallel_deferred が 0。上限付き）。
+fn run_until_closed(f: &Fx) -> Value {
+    let mut run = ok_json(&f.bin("run", &["--executor", "celeris"]));
+    for _ in 0..300 {
+        if run["waiting"] == 0 && run["parallel_deferred"] == 0 {
+            break;
+        }
+        thread::sleep(Duration::from_millis(100));
+        run = ok_json(&f.bin("run", &["--executor", "celeris"]));
+    }
+    assert_eq!(run["waiting"], 0, "ledger did not close: {run}");
+    run
+}
+
+fn config_row<'a>(t: &'a Value, cfg: &str) -> &'a Value {
+    t["configs"]
+        .as_array()
+        .expect("configs")
+        .iter()
+        .find(|c| c["config"] == cfg)
+        .unwrap_or_else(|| panic!("config {cfg} in export: {t}"))
+}
+
+/// 選択集合を別の集合へ替えた manifest（同じ campaign_id・同じ out）。
+fn with_other_set(f: &Fx, to: &str) -> PathBuf {
+    let mut m: CampaignManifest =
+        serde_json::from_slice(&fs::read(&f.manifest).expect("read")).expect("manifest");
+    // 有効 arm が変わる、それ以外は妥当な manifest（preflight の別の検査で落ちない）にする。
+    let b = m
+        .configs
+        .iter()
+        .find(|c| c.id == ConfigId::B)
+        .expect("B")
+        .clone();
+    let (arms, pair, other_cfg) = if to == "bc" {
+        let mut routing = b.routing.clone().expect("B routing");
+        routing.no_evidence_table = Some(true);
+        (
+            vec![ConfigId::B, ConfigId::C],
+            (ConfigId::B, ConfigId::C),
+            cfg_of(
+                ConfigId::C,
+                "celeris",
+                MEASURE_RELEASE,
+                "jev-1",
+                Some(routing),
+            ),
+        )
+    } else {
+        (
+            vec![ConfigId::A, ConfigId::B],
+            (ConfigId::A, ConfigId::B),
+            cfg_of(ConfigId::A, "claude-code", A_VERSION, "ops-baseline", None),
+        )
+    };
+    m.configs = vec![b, other_cfg];
+    m.configs.sort_by_key(|c| c.id);
+    // B/C のみは事前登録 subset が要り、A/B のみは空でなければならない。
+    m.secondary.subset = if to == "bc" {
+        CASES.map(String::from).to_vec()
+    } else {
+        Vec::new()
+    };
+    m.experiment_sets.insert(
+        to.to_string(),
+        ExperimentSet {
+            arms,
+            compare: vec![pair],
+            fixed: SetFixed {
+                // B0 は全役割の model を宣言する（A/B のとき）。
+                role_models: if to == "ab" {
+                    ["planner", "reviewer", "cos", "worker"]
+                        .map(|r| (r.to_string(), ROUTING_MODEL.to_string()))
+                        .into()
+                } else {
+                    Default::default()
+                },
+                ..Default::default()
+            },
+        },
+    );
+    m.selected_sets = vec![to.to_string()];
+    m.sha256 = m.compute_sha256().expect("hash");
+    let path = f.p("campaign-other-set.json");
+    fs::write(&path, serde_json::to_vec_pretty(&m).expect("ser")).expect("write");
+    path
+}
+
+/// 選択集合は同じで、固定条件（role の model）だけを変えた manifest。
+fn with_changed_fixed(f: &Fx) -> PathBuf {
+    let mut m: CampaignManifest =
+        serde_json::from_slice(&fs::read(&f.manifest).expect("read")).expect("manifest");
+    for s in m.experiment_sets.values_mut() {
+        s.fixed.success = Some("grader-v2".into());
+    }
+    m.sha256 = m.compute_sha256().expect("hash");
+    let path = f.p("campaign-fixed-changed.json");
+    fs::write(&path, serde_json::to_vec_pretty(&m).expect("ser")).expect("write");
+    path
+}
+
+fn trial_keys(out: &Path) -> Vec<(String, String, u64, u64)> {
+    let mut v: Vec<_> = fs::read_to_string(out.join("trials.jsonl"))
+        .expect("trials")
+        .lines()
+        .map(|l| {
+            let r: Value = serde_json::from_str(l).expect("json");
+            (
+                r["config"].as_str().expect("config").to_string(),
+                r["problem_id"].as_str().expect("problem").to_string(),
+                r["rep"].as_u64().expect("rep"),
+                r["trial_no"].as_u64().expect("trial_no"),
+            )
+        })
+        .collect();
+    v.sort();
+    v
+}
+
+/// 全 case × 有効 arm × 複数 repetition を通し、retry run・失敗・未採点・採点不合格を含めて
+/// 分母（試行 = case × repetition。retry run は数えない）・費用・選択比較を実 CLI 出力から確かめる。
+fn accounting(which: &'static str) {
+    let mut f = fixture(which, REPEATS);
+    let (arms, other): (&[&str], &str) = if which == "ab" {
+        (&["A", "B"], "bc")
+    } else {
+        (&["B", "C"], "ab")
+    };
+    let absent = if which == "ab" { "C" } else { "A" };
+    let posts_per_set = (CASES.len() as u32 * REPEATS) as usize;
+    let b_posts = if which == "ab" { 1 } else { 2 };
+
+    let dr = ok_json(&f.bin("dry-run", &[]));
+    // 計画 = 有効 arm 数 × case × repetition（retry や未使用 arm は入らない）。
+    assert_eq!(dr["resources"]["total_trials"], arms.len() * posts_per_set);
+    let pf = ok_json(&f.bin("preflight", &[]));
+    assert_eq!(pf["ok"], true, "{pf}");
+    assert!(f.bin("env-lock", &[]).status.success());
+
+    let run = run_until_closed(&f);
+    assert_eq!(run["executor_errors"], 0, "{run}");
+    assert_eq!(run["blocked"], 0, "{run}");
+    assert_eq!(run["budget_cancelled"], 0, "{run}");
+    let rows = (arms.len() * posts_per_set) as u64;
+    assert_eq!(run["ledger"]["rows"], rows, "{run}");
+
+    // trial identity: (config, problem, rep, trial_no=1) が計画どおり 1 回ずつ。
+    let mut want: Vec<(String, String, u64, u64)> = Vec::new();
+    for a in arms {
+        for c in CASES {
+            for rep in 1..=u64::from(REPEATS) {
+                want.push((a.to_string(), c.to_string(), rep, 1));
+            }
+        }
+    }
+    want.sort();
+    assert_eq!(trial_keys(&f.out()), want);
+
+    // 採点前の export: 実行器 passed は未採点として分母に残り、成功に数えない。
+    let pre = f.p("export-pre");
+    let t = ok_json(&f.bin("export", &["--dest", pre.to_str().expect("p")]));
+    assert_eq!(t["complete"], false, "{t}");
+    let b = config_row(&t, "B");
+    assert_eq!((b["n"].as_u64(), b["passed"].as_u64()), (Some(4), Some(3)));
+    assert_eq!(b["ungraded"], 3, "{b}");
+    assert_eq!(b["final_passed"], 0, "{b}");
+
+    let g = ok_json(&f.bin(
+        "grade-out",
+        &["--cases", f.p("grade-cases").to_str().expect("p")],
+    ));
+    assert_eq!(g["ok"], true, "{g}");
+    let c = ok_json(&f.bin("check", &[]));
+    assert_eq!(c["ok"], true, "{c}");
+    let dest = f.p("export");
+    let t = ok_json(&f.bin("export", &["--dest", dest.to_str().expect("p")]));
+    assert_eq!(t["lock_verified"], true, "{t}");
+    assert_eq!(t["complete"], true, "{t}");
+
+    // 選択した arm の行だけ。選択比較は 1 組で、その 2 arm だけ。
+    let names: Vec<&str> = t["configs"]
+        .as_array()
+        .expect("configs")
+        .iter()
+        .map(|c| c["config"].as_str().expect("config"))
+        .collect();
+    assert_eq!(names, arms, "{t}");
+    let cmps = t["comparisons"].as_array().expect("cmp");
+    assert_eq!(cmps.len(), 1, "{t}");
+    let cmp = cmps[0].to_string();
+    assert!(
+        cmp.contains(&format!("\"{}\"", arms[0])) && cmp.contains(&format!("\"{}\"", arms[1])),
+        "{cmp}"
+    );
+    assert!(!cmp.contains(&format!("\"{absent}\"")), "{cmp}");
+
+    // B: alpha rep1 は retry run 付きで成功、beta rep2 は task failed。分母は 4（retry run を数えない）。
+    // 費用は retry run も失敗した試行の run も落とさない。
+    let b = config_row(&t, "B");
+    assert_eq!(b["n"], 4, "{b}");
+    assert_eq!(b["passed"], 3, "{b}");
+    assert_eq!(b["failed"], 1, "{b}");
+    assert_eq!(b["final_passed"], 3, "{b}");
+    assert_eq!(b["failures"], 1, "{b}");
+    assert_eq!(b["ungraded"], 0, "{b}");
+    assert_eq!(b["grader_failed"], 0, "{b}");
+    assert_eq!(b["input_tokens_sum"], 400 * 3 + 700, "{b}");
+    assert_eq!(b["output_tokens_sum"], 60 * 3 + 100, "{b}");
+    assert_eq!(b["tokens_sum"], 460 * 3 + 800, "{b}");
+    assert_eq!(b["cost_micro_usd_sum"], 4_000 * 3 + 7_000, "{b}");
+    if which == "ab" {
+        // A は fixture 実行器 4 試行（case × repetition）。LLM は起動しない。
+        let a = config_row(&t, "A");
+        assert_eq!(a["n"], 4, "{a}");
+        assert_eq!(a["final_passed"], 4, "{a}");
+        assert_eq!(a["failures"], 0, "{a}");
+        assert_eq!(a["tokens_sum"], 155 * 4, "{a}");
+        assert_eq!(a["cost_micro_usd_sum"], 2_000 * 4, "{a}");
+        assert_eq!(files_named(&f.out(), "fxa-called"), 4);
+    } else {
+        // C: alpha rep2 は done だが採点不合格、beta rep1 は task failed。
+        let c = config_row(&t, "C");
+        assert_eq!(c["n"], 4, "{c}");
+        assert_eq!(c["passed"], 3, "{c}");
+        assert_eq!(c["failed"], 1, "{c}");
+        assert_eq!(c["grader_failed"], 1, "{c}");
+        assert_eq!(c["final_passed"], 2, "{c}");
+        assert_eq!(c["failures"], 2, "{c}");
+        assert_eq!(c["tokens_sum"], 460 * 4, "{c}");
+        assert_eq!(c["cost_micro_usd_sum"], 4_000 * 4, "{c}");
+        assert_eq!(files_named(&f.out(), "fxa-called"), 0);
+    }
+
+    // ---- 同じ out の再開: 同じ trial identity のまま、再投入も A の再起動も起きない ----
+    let trials_before = fs::read(f.out().join("trials.jsonl")).expect("trials");
+    let posts_before = f
+        .stub
+        .as_ref()
+        .expect("stub")
+        .state
+        .lock()
+        .expect("s")
+        .posts
+        .len();
+    assert_eq!(posts_before, b_posts * posts_per_set);
+    let again = ok_json(&f.bin("run", &["--executor", "celeris"]));
+    assert_eq!(again["executed"], 0, "{again}");
+    assert_eq!(again["resumed_skipped"], rows, "{again}");
+    let w = ok_json(&f.bin(
+        "watch",
+        &[
+            "--executor",
+            "celeris",
+            "--interval-secs",
+            "1",
+            "--max-iterations",
+            "3",
+        ],
+    ));
+    assert_eq!(w["watch"]["end"], "settled", "{w}");
+    assert_eq!(w["executed"], 0, "{w}");
+    assert_eq!(w["resumed_skipped"], rows, "{w}");
+    assert_eq!(
+        fs::read(f.out().join("trials.jsonl")).expect("trials"),
+        trials_before,
+        "resume must not touch the recorded trials"
+    );
+    assert_eq!(trial_keys(&f.out()), want);
+    assert_eq!(
+        f.stub
+            .as_ref()
+            .expect("stub")
+            .state
+            .lock()
+            .expect("s")
+            .posts
+            .len(),
+        posts_before,
+        "resume must not POST again"
+    );
+    assert_eq!(
+        files_named(&f.out(), "fxa-called"),
+        if which == "ab" { 4 } else { 0 },
+        "A must not be restarted"
+    );
+
+    // ---- 選択集合・固定条件を変えた再開は、同じ out では拒否（POST も記録の変更も無し）----
+    // 未使用 arm（B/C のみの A・A/B のみの Jev）の要求は、正しい入口の間は 0。
+    // 拒否される試し（A を使う別 manifest）の要求とは分けて数える。
+    let gets_valid = f
+        .stub
+        .as_ref()
+        .expect("stub")
+        .state
+        .lock()
+        .expect("s")
+        .gets
+        .clone();
+    assert!(!gets_valid.iter().any(|g| g.contains("jev")));
+    if which == "bc" {
+        assert!(
+            !gets_valid
+                .iter()
+                .any(|g| g.starts_with("/api/v1/llm/accounts")),
+            "{gets_valid:?}"
+        );
+    }
+    for (what, m) in [
+        ("selected set", with_other_set(&f, other)),
+        ("fixed condition", with_changed_fixed(&f)),
+    ] {
+        // B/C のみから A/B へ替える入力には、A を使う引数も付ける（引数不足で落ちた拒否にしない）。
+        let a_program = f.a_program.to_string_lossy().into_owned();
+        let mut extra = vec!["--executor", "celeris"];
+        if which == "bc" {
+            extra.extend(["--a-program", &a_program, "--a-account", "lab"]);
+        }
+        let o = f.bin_with(&m, "run", &extra);
+        assert!(
+            !o.status.success(),
+            "{what} change must be rejected: {}",
+            text(&o)
+        );
+        assert!(!text(&o).contains(TOKEN_VALUE));
+        assert!(
+            text(&o).contains("saved lock"),
+            "{what}: rejected by the saved-lock gate, not by an unrelated error: {}",
+            text(&o)
+        );
+    }
+    assert_eq!(
+        fs::read(f.out().join("trials.jsonl")).expect("trials"),
+        trials_before
+    );
+
+    let s = f.stub.take().expect("stub").finish();
+    assert_eq!(s.bad_auth, 0);
+    assert!(s.other.is_empty(), "{:?}", s.other);
+    assert_eq!(
+        s.posts.len(),
+        posts_before,
+        "rejected resumes must not POST"
+    );
+    let mut keys: Vec<String> = s
+        .posts
+        .iter()
+        .map(|p| {
+            p["campaign_idempotency_key"]
+                .as_str()
+                .expect("key")
+                .to_string()
+        })
+        .collect();
+    keys.sort();
+    keys.dedup();
+    assert_eq!(keys.len(), s.posts.len(), "one POST per trial identity");
+    for p in &s.posts {
+        let arm = p["campaign"]["arm"].as_str().expect("arm");
+        assert_ne!(arm, absent);
+        assert_eq!(p["campaign"]["campaign_id"], campaign_id_of(which, REPEATS));
+    }
+}
+
+#[test]
+fn ab_only_counts_repetitions_retries_grading_and_cost_and_resumes_without_reposting() {
+    accounting("ab");
+}
+
+#[test]
+fn bc_only_counts_repetitions_retries_grading_and_cost_and_resumes_without_reposting() {
+    accounting("bc");
 }

@@ -25,6 +25,24 @@ pub(super) fn check_assignee(pin: &CampaignOrgPin, assignee: &str) -> Result<(),
 }
 
 impl Dispatcher {
+    /// run 起動直前の再検査（割当前の検査から時間が空くため、org drift・assignee の逸脱を改めて見る）。
+    /// retry・continuation・repair・並列 WU の 2 本目など、`dispatch_one` を通る全ての起動が対象。
+    /// 解決は祖先連鎖の全体で行うので、子孫は最寄りの識別でなく連鎖の整合した値で検査される。
+    pub(super) fn variant_start_check(&self, task: &Task) -> Result<(), String> {
+        let Some(pin) = self.variant_org_pin(task)? else {
+            return Ok(());
+        };
+        let org = self
+            .store
+            .org_list()
+            .map_err(|e| format!("org could not be read: {e}"))?;
+        pin.check_org(&org)?;
+        match task.assignee.as_deref() {
+            Some(a) => check_assignee(&pin, a),
+            None => Err("no assignee at run start".to_string()),
+        }
+    }
+
     /// task の解決済み campaign 識別の `variant_org`。識別なし・variant なしは `Ok(None)`。
     /// 祖先との矛盾・循環など解決できないときは `Err`（黙って通常 task 扱いにしない）。
     pub(super) fn variant_org_pin(&self, task: &Task) -> Result<Option<CampaignOrgPin>, String> {

@@ -630,6 +630,11 @@ impl Dispatcher {
         // The pool account of an OAuth source (other sources book `(source, account)` on the route only).
         let account = account_adapter.map(|_| pick.account.to_string());
 
+        // variant 付き試行は、lease と run 記録の前にもう一度 pin を確かめる（割当後に org が変わっていたら起動しない）。
+        if let Err(reason) = self.variant_start_check(&task) {
+            self.block_variant_task(&task, reason)?;
+            return Ok(false);
+        }
         let wall = Duration::from_secs(task.budget.max_wall_secs);
         let ttl = wall + self.config.lease_grace;
         let lease_started = Instant::now();

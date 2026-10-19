@@ -206,3 +206,92 @@ fn task_without_variant_is_matched_as_before() {
     let got = f.assign(t).expect("assigned");
     assert!(got.assignee.is_some());
 }
+
+fn checker(f: &Fx) -> Dispatcher {
+    dispatcher(
+        f.store.clone(),
+        Arc::new(InstantAdapter {
+            terminal: Terminal::Question { text: "x".into() },
+            delay: Duration::ZERO,
+        }),
+        1,
+    )
+}
+
+#[test]
+fn start_check_passes_for_child_retry_and_grandchild_while_org_matches() {
+    let f = fx();
+    seed(f.store.as_ref(), &["sw-b"]);
+    let root = f.task(None, Some("sw-b"));
+    f.mark(&root, pin_for(f.store.as_ref(), &["cos", "sw-b"], "sw-b"));
+    let child = f.task(Some(root.id), Some("sw-b"));
+    let grand = f.task(Some(child.id), Some("sw-b"));
+    let d = checker(&f);
+    for t in [&root, &child, &grand] {
+        assert_eq!(d.variant_start_check(t), Ok(()));
+    }
+}
+
+#[test]
+fn start_check_catches_org_drift_after_assignment_for_every_generation() {
+    let f = fx();
+    seed(f.store.as_ref(), &["sw-b"]);
+    let root = f.task(None, Some("sw-b"));
+    f.mark(&root, pin_for(f.store.as_ref(), &["cos", "sw-b"], "sw-b"));
+    let child = f.task(Some(root.id), Some("sw-b"));
+    let grand = f.task(Some(child.id), Some("sw-b"));
+    let d = checker(&f);
+    // 割当後（run 起動前）に共有 org が変わった。
+    let mut n = f.store.org_get("sw-b").unwrap().unwrap();
+    n.profile.skills = vec!["drifted".into()];
+    f.store.org_upsert(&n).unwrap();
+    for t in [&root, &child, &grand] {
+        assert!(d.variant_start_check(t).is_err());
+    }
+}
+
+#[test]
+fn start_check_rejects_an_assignee_outside_the_pin_and_a_missing_assignee() {
+    let f = fx();
+    seed(f.store.as_ref(), &["sw-b"]);
+    let root = f.task(None, Some("cos"));
+    f.mark(&root, pin_for(f.store.as_ref(), &["cos", "sw-b"], "sw-b"));
+    let none = f.task(Some(root.id), None);
+    let d = checker(&f);
+    assert!(d.variant_start_check(&root).is_err());
+    assert!(d.variant_start_check(&none).is_err());
+}
+
+#[test]
+fn start_check_is_a_noop_without_variant() {
+    let f = fx();
+    seed(f.store.as_ref(), &["sw-a", "sw-b"]);
+    let t = f.task(None, None);
+    assert_eq!(checker(&f).variant_start_check(&t), Ok(()));
+}
+
+#[test]
+fn contradicting_child_pin_is_rejected_at_save_and_root_pin_wins() {
+    let f = fx();
+    seed(f.store.as_ref(), &["sw-a", "sw-b"]);
+    let root = f.task(None, None);
+    f.mark(
+        &root,
+        pin_for(f.store.as_ref(), &["cos", "sw-a", "sw-b"], "sw-a"),
+    );
+    let child = f.task(Some(root.id), None);
+    let other = pin_for(f.store.as_ref(), &["cos", "sw-a", "sw-b"], "sw-b");
+    // 保存側が祖先と矛盾する識別を拒否するので、子は root の pin のまま解決される。
+    assert!(
+        f.sqlite
+            .task_campaign_set(
+                &child.id.to_string(),
+                &identity(other),
+                OffsetDateTime::now_utc(),
+            )
+            .is_err()
+    );
+    let d = checker(&f);
+    let got = d.variant_org_pin(&child).unwrap().expect("root pin");
+    assert_eq!(got.coding_node, "sw-a");
+}

@@ -2027,3 +2027,104 @@ fn task_wait_api_stage_review_falls_back_to_phase_checkpoint() {
         checkpoint
     );
 }
+
+// ---- TaskDetail.campaign: 祖先解決の結果を出し、エラーを null に丸めない ----
+
+const CAMPAIGN_H1: &str = "b6132a44b6132a44b6132a44b6132a44b6132a44b6132a44b6132a44b6132a44";
+const CAMPAIGN_H2: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+fn campaign_identity(variant_id: &str) -> task_core::decision_log::CampaignIdentity {
+    use task_core::decision_log::{CampaignIdentity, CampaignOrgPin, CampaignVariantRef};
+    CampaignIdentity {
+        campaign_id: "camp".into(),
+        case_id: Some("case-1".into()),
+        arm: Some("spec-on".into()),
+        repetition: Some(1),
+        manifest_hash: Some(CAMPAIGN_H1.into()),
+        routing_setting: Some("fixed".into()),
+        variant: Some(CampaignVariantRef {
+            comparison_id: "M1".into(),
+            id: variant_id.into(),
+            content_sha256: CAMPAIGN_H1.into(),
+            selection_sha256: CAMPAIGN_H1.into(),
+        }),
+        variant_org: Some(CampaignOrgPin {
+            nodes: vec!["cos".into(), "coding".into()],
+            coding_node: "coding".into(),
+            effective_profile_sha256: CAMPAIGN_H2.into(),
+        }),
+    }
+}
+
+fn detail_of(store: &SqliteStore, id: TaskId) -> Result<TaskDetail, OpsError> {
+    task_detail(
+        store,
+        id,
+        &view_ctx(),
+        &crate::wait::MemoryWaits::default(),
+        OffsetDateTime::now_utc(),
+    )
+}
+
+#[test]
+fn task_detail_campaign_is_resolved_from_root_for_descendants_and_absent_for_plain() {
+    let store = SqliteStore::open_in_memory().expect("open");
+    let root = sample_task(TaskKind::Execute, Status::Ready);
+    store.insert(&root).expect("insert");
+    let mut child = sample_task(TaskKind::Execute, Status::Ready);
+    child.parent_id = Some(root.id);
+    store.insert(&child).expect("insert");
+    let plain = sample_task(TaskKind::Execute, Status::Ready);
+    store.insert(&plain).expect("insert");
+    let v = campaign_identity("M1-spec-on");
+    store
+        .task_campaign_set(&root.id.to_string(), &v, OffsetDateTime::now_utc())
+        .expect("set");
+
+    assert_eq!(
+        detail_of(&store, root.id).unwrap().campaign,
+        Some(v.clone())
+    );
+    // 行を持たない子は祖先の識別（variant・構成 pin 込み）をそのまま見せる。
+    assert_eq!(detail_of(&store, child.id).unwrap().campaign, Some(v));
+    // campaign に属さない task は欄が無い（JSON にも出ない）。
+    let d = detail_of(&store, plain.id).unwrap();
+    assert_eq!(d.campaign, None);
+    assert!(serde_json::to_value(&d).unwrap().get("campaign").is_none());
+}
+
+#[test]
+fn task_detail_rejects_ancestor_mismatch_instead_of_nulling_it() {
+    let dir = tempfile::tempdir().expect("dir");
+    let path = dir.path().join("d.sqlite3");
+    let store = SqliteStore::open(&path).expect("open");
+    let root = sample_task(TaskKind::Execute, Status::Ready);
+    store.insert(&root).expect("insert");
+    let mut child = sample_task(TaskKind::Execute, Status::Ready);
+    child.parent_id = Some(root.id);
+    store.insert(&child).expect("insert");
+    store
+        .task_campaign_set(
+            &root.id.to_string(),
+            &campaign_identity("M1-spec-on"),
+            OffsetDateTime::now_utc(),
+        )
+        .expect("set");
+    // 検査を通らずに入った矛盾（旧 binary・手書き）を別 connection で直接作る。
+    rusqlite::Connection::open(&path)
+        .expect("raw")
+        .execute(
+            "INSERT INTO task_campaigns (task_id, campaign_id, created_at) VALUES (?1, 'other', 'x')",
+            [child.id.to_string()],
+        )
+        .expect("insert mismatch");
+
+    match detail_of(&store, child.id) {
+        Err(OpsError::Store(task_core::StoreError::Invalid(m))) => {
+            assert!(m.contains(&root.id.to_string()), "{m}");
+        }
+        other => panic!("expected Store(Invalid), got {other:?}"),
+    }
+    // root 自身は鎖の上に矛盾が無いので読める。
+    assert!(detail_of(&store, root.id).unwrap().campaign.is_some());
+}

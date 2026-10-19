@@ -232,6 +232,11 @@ pub struct TaskDetail {
     /// 解消する試みであり、`exhausted` でも task を直接 `failed` にはしない（従来経路へ落ちるだけ）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub integration_repair: Option<IntegrationRepairView>,
+    /// ADR 2026-10-16-campaign-identity-propagation: 祖先の鎖を辿って解決した campaign 識別
+    /// （variant・構成 pin を含む）。campaign に属さない task は省略。鎖の矛盾・循環・保存値の不正は
+    /// null に丸めず `task_detail` がエラーを返す。`Task` 本体には欄を足さない。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub campaign: Option<task_core::decision_log::CampaignIdentity>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
@@ -1563,7 +1568,10 @@ pub fn task_detail(
     let behind_target = crate::behind_target::behind_target_of(store, id, now)?;
 
     let routing_override = store.task_routing_override(id)?;
+    // 全祖先を検査する既存の解決。食い違い・循環・不正は `StoreError::Invalid` のまま返す（None に丸めない）。
+    let campaign = store.task_campaign_resolve(&id.to_string())?;
     Ok(TaskDetail {
+        campaign,
         routing_override,
         integrations: None,
         promotion: None,

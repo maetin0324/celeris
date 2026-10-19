@@ -64,3 +64,20 @@ runner/checker/export/dry-run/preflight/lock の有効計画への統一は後�
   run-meta の `plan_identity` は追加欄で、無い旧 out の再開は従来の hash 照合のみ。
 - 再利用: manifest の有効計画（arm-set-core, 3be21634）、既存の `ledger.rs`/`budget.rs`/`final_accounting`/`checker` を拡張。
   試験は `tests/experiment_sets_exec.rs`（A/B のみ・B/C のみ・resume 拒否・B0 不一致・全体台帳の横断）。
+
+## 付記（ledger-state: 全体台帳の確定消費・未精算予約・承認上限）
+- 形式 `celeris.campaign-global-ledger/2`（`crates/campaign/src/global_ledger.rs`）。追記専用 JSONL の 1 行は `kind` =
+  `measurement`（測定 ID の確定消費・取り分 `allocation`・上限 `caps`・旧枠 `legacy_slots`）か `attempt`（試行 identity
+  = 測定 ID・trial・attempt 番号ごとの `state` Reserved/Submitted/Settled、予約 tokens・provider 枠、精算 usage）。
+- 確定消費は単調（`record` は下げない）。占有 = max(取り分, max(公開した確定消費, 精算済み attempt の合計) + 未精算予約)。
+  試行数は異なる trial の数（retry は 1 試行）。provider 枠は全 ID の未精算 attempt の合計 + 旧枠（宣言 max_parallel の
+  max 集計は廃止）。
+- 承認上限は全行（置換された行を含む）と manifest の最小。`reserve` は全行読取 → 上限最小化 → tokens・試行数・
+  provider 枠の検査 → Reserved 行の追記と fsync を 1 つの flock で行い、拒否時は何も書かない。
+- 遷移 `reserve` → 投入 → `mark_submitted` → 終了確認 → `settle`。Reserved は投入済みかもしれないとみなし、
+  `Terminal::NotSubmitted` の解放は Reserved のときだけ。同じ identity の再予約は `Existing`、再精算は各欄の大きい方で
+  置換、精算済み identity の再予約は拒否（retry は attempt 番号を変える）。
+- 旧 `/1` 行: tokens/trials は全部を確定消費として持ち、cap 欠落は上限を与えず、`provider_slots` は持ち主が
+  `confirm_legacy_idle` を呼ぶまで占有。読めない行・不明 schema/kind は拒否、改行で終わらない末尾には追記しない。
+- runner の `publish_global` は in-flight の予約を除いた確定消費だけを公開する。毎投入の `reserve` / `settle` への配線は
+  runner-admission で行う。

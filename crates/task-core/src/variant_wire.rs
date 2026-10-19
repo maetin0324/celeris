@@ -2,7 +2,7 @@
 //!
 //! campaign の `VariantRef` / `OrgPin` と JSON 形が同一（`id` は文字列）。task-core は意味を知らず、
 //! 形（非空・64 桁小文字 hex・node 集合）だけを検証する。hash は再計算せず、保存した値の完全一致で比べる。
-//! 既存の [`crate::decision_log::CampaignIdentity`] にはまだ欄を足さない（加算的な公開のみ）。
+//! [`crate::decision_log::CampaignIdentity`] の `variant` / `variant_org` 欄の型。
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -166,11 +166,15 @@ mod tests {
 
     #[test]
     fn profile_hash_ignores_node_and_chain() {
-        let mut a = EffectiveProfile::default();
-        a.node_id = "x".into();
-        a.chain = vec!["cos".into(), "x".into()];
-        let mut b = EffectiveProfile::default();
-        b.node_id = "y".into();
+        let a = EffectiveProfile {
+            node_id: "x".into(),
+            chain: vec!["cos".into(), "x".into()],
+            ..Default::default()
+        };
+        let mut b = EffectiveProfile {
+            node_id: "y".into(),
+            ..Default::default()
+        };
         assert_eq!(
             effective_profile_sha256(&a).unwrap(),
             effective_profile_sha256(&b).unwrap()

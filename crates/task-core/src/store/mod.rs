@@ -1010,6 +1010,8 @@ impl SqliteStore {
 }
 
 #[cfg(test)]
+mod campaign_variant_tests;
+#[cfg(test)]
 mod client_open_tests;
 #[cfg(test)]
 mod decision_log_tests;

@@ -38,7 +38,8 @@ const RUN_COLUMNS: &str = "run_id, decision_id, campaign_id, arm, project_id, ta
     exec_harness, exec_adapter, fallback_reason, classifier_fallback, attempts_json, run_end, \
     run_end_raw, run_retryable, wu_verdict, wu_failure_class, campaign_verdict, wall_ms, \
     case_id, repetition, manifest_hash, routing_setting, classifier_status, classifier_call_id, \
-    fixed_lane, jev_lane, constrained_lane, lane_basis";
+    fixed_lane, jev_lane, constrained_lane, lane_basis, \
+    variant_id, variant_content_sha256";
 
 fn parse_json<T: serde::de::DeserializeOwned>(s: Option<String>) -> Result<Option<T>, StoreError> {
     match s {
@@ -91,6 +92,8 @@ fn read_run(row: &Row<'_>) -> Result<DecisionLogRun, StoreError> {
                 .and_then(|n| u32::try_from(n).ok()),
             manifest_hash: row.get(47)?,
             routing_setting: row.get(48)?,
+            variant_id: row.get(55)?,
+            variant_content_sha256: row.get(56)?,
             project_id: row.get(4)?,
             task_id: row.get(5)?,
             work_unit_id: row.get(6)?,
@@ -175,8 +178,9 @@ impl SqliteStore {
              proposed_first_source_id, proposed_first_model, proposed_first_harness, exclusions_json, \
              policy_version, prompt_version, question_schema_version, provider_model_version, \
              features_hash, options_hash, updated_at, case_id, repetition, manifest_hash, routing_setting, \
-             classifier_status, classifier_call_id, fixed_lane, jev_lane, constrained_lane, lane_basis) \
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25,?26,?27,?28,?29,?30,?31,?32,?33,?34,?35,?36,?37,?38,?39,?40,?41,?42) \
+             classifier_status, classifier_call_id, fixed_lane, jev_lane, constrained_lane, lane_basis, \
+             variant_id, variant_content_sha256) \
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25,?26,?27,?28,?29,?30,?31,?32,?33,?34,?35,?36,?37,?38,?39,?40,?41,?42,?43,?44) \
              ON CONFLICT(run_id) DO UPDATE SET decision_id=excluded.decision_id, campaign_id=excluded.campaign_id, \
              arm=excluded.arm, project_id=excluded.project_id, task_id=excluded.task_id, \
              work_unit_id=excluded.work_unit_id, parent_run_id=excluded.parent_run_id, \
@@ -197,7 +201,8 @@ impl SqliteStore {
              routing_setting=excluded.routing_setting, classifier_status=excluded.classifier_status, \
              classifier_call_id=excluded.classifier_call_id, fixed_lane=excluded.fixed_lane, \
              jev_lane=excluded.jev_lane, constrained_lane=excluded.constrained_lane, \
-             lane_basis=excluded.lane_basis",
+             lane_basis=excluded.lane_basis, variant_id=excluded.variant_id, \
+             variant_content_sha256=excluded.variant_content_sha256",
             params![
                 p.run_id,
                 p.decision_id,
@@ -241,6 +246,8 @@ impl SqliteStore {
                 p.jev_lane,
                 p.constrained_lane,
                 p.lane_basis,
+                p.variant_id,
+                p.variant_content_sha256,
             ],
         )?;
         Ok(())
@@ -637,7 +644,7 @@ impl SqliteStore {
 // ---- campaign 識別（ADR 2026-10-16-campaign-identity-propagation）----
 
 /// 祖先を辿る上限（task 木の最大深さ 3 より十分大きい。循環の保険）。
-const CAMPAIGN_ANCESTOR_LIMIT: usize = 32;
+pub(crate) const CAMPAIGN_ANCESTOR_LIMIT: usize = 32;
 
 /// `task_campaign_resend` の結果。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -647,19 +654,66 @@ pub enum CampaignResend {
     Conflict(String),
 }
 
+/// `task_campaigns` の読み出し列（`own_row` の順）。
+const CAMPAIGN_COLUMNS: &str = "campaign_id, case_id, arm, repetition, manifest_hash, routing_setting, variant_json, variant_org_json";
+
+/// 保存値を識別へ戻す。壊れた JSON・片欠け・形の不正は `Invalid`（黙って variant 無しにしない）。
+fn campaign_from_row(task_id: &str, r: &Row<'_>) -> Result<CampaignIdentity, StoreError> {
+    let bad = |what: String| {
+        StoreError::Invalid(format!(
+            "task {task_id}: stored campaign identity is invalid: {what}"
+        ))
+    };
+    let repetition = match r.get::<_, Option<i64>>(3)? {
+        Some(n) => Some(u32::try_from(n).map_err(|_| bad(format!("repetition {n}")))?),
+        None => None,
+    };
+    let variant_json: Option<String> = r.get(6)?;
+    let variant_org_json: Option<String> = r.get(7)?;
+    let id = CampaignIdentity {
+        campaign_id: r.get(0)?,
+        case_id: r.get(1)?,
+        arm: r.get(2)?,
+        repetition,
+        manifest_hash: r.get(4)?,
+        routing_setting: r.get(5)?,
+        variant: variant_json
+            .map(|s| serde_json::from_str(&s))
+            .transpose()
+            .map_err(|e| bad(format!("variant_json: {e}")))?,
+        variant_org: variant_org_json
+            .map(|s| serde_json::from_str(&s))
+            .transpose()
+            .map_err(|e| bad(format!("variant_org_json: {e}")))?,
+    };
+    id.validate().map_err(bad)?;
+    Ok(id)
+}
+
+fn campaign_mismatch(task_id: &str, other: &str) -> StoreError {
+    StoreError::Invalid(format!(
+        "campaign identity of task {task_id} differs from task {other} in its ancestor chain"
+    ))
+}
+
 impl SqliteStore {
-    /// campaign の root task に識別を付ける（同じ task への再設定は置換）。
+    /// campaign の root task に識別を付ける（同じ識別の再設定は何もしない）。
     pub fn task_campaign_set(
         &self,
         task_id: &str,
         id: &CampaignIdentity,
         now: OffsetDateTime,
     ) -> Result<(), StoreError> {
-        let conn = self.lock()?;
-        Self::task_campaign_set_tx(&conn, task_id, id, now)
+        let mut conn = self.lock()?;
+        let tx = conn.transaction()?;
+        Self::task_campaign_set_tx(&tx, task_id, id, now)?;
+        tx.commit()?;
+        Ok(())
     }
 
     /// 呼び出し側の transaction の中で付ける（task 作成と同じ transaction に入れるため）。
+    /// 既に違う識別を持つ task・祖先や子孫の識別と食い違う task には付けない（`Invalid`。
+    /// 呼び出し側の transaction ごと捨てれば task・識別のどちらも残らない）。
     pub fn task_campaign_set_tx(
         conn: &rusqlite::Connection,
         task_id: &str,
@@ -667,12 +721,58 @@ impl SqliteStore {
         now: OffsetDateTime,
     ) -> Result<(), StoreError> {
         id.validate().map_err(StoreError::Invalid)?;
+        if let Some(own) = Self::task_campaign_own_tx(conn, task_id)? {
+            if &own == id {
+                return Ok(());
+            }
+            return Err(StoreError::Invalid(format!(
+                "task {task_id} already has a different campaign identity"
+            )));
+        }
+        // 祖先（root まで全部）が持つ識別と 1 欄でも違えば拒否。
+        let parent: Option<String> = conn
+            .query_row(
+                "SELECT parent_id FROM tasks WHERE id = ?1",
+                [task_id],
+                |r| r.get(0),
+            )
+            .optional()?
+            .flatten();
+        if let Some(parent) = parent
+            && let Some((holder, inherited)) = Self::task_campaign_resolve_holder_tx(conn, &parent)?
+            && &inherited != id
+        {
+            return Err(campaign_mismatch(task_id, &holder));
+        }
+        // 子孫が既に持つ識別とも食い違わせない（root と子孫の不一致を作らない）。
+        let descendants: Vec<String> = {
+            let mut stmt = conn.prepare(
+                "WITH RECURSIVE d(id, depth) AS ( \
+                   SELECT id, 1 FROM tasks WHERE parent_id = ?1 \
+                   UNION SELECT t.id, d.depth + 1 FROM tasks t JOIN d ON t.parent_id = d.id \
+                   WHERE d.depth < ?2) \
+                 SELECT c.task_id FROM d JOIN task_campaigns c ON c.task_id = d.id ORDER BY c.task_id",
+            )?;
+            stmt.query_map(params![task_id, CAMPAIGN_ANCESTOR_LIMIT as i64], |r| {
+                r.get(0)
+            })?
+            .collect::<Result<_, _>>()?
+        };
+        for d in descendants {
+            if Self::task_campaign_own_tx(conn, &d)?.as_ref() != Some(id) {
+                return Err(campaign_mismatch(&d, task_id));
+            }
+        }
+        let variant = id.variant.as_ref().map(serde_json::to_string).transpose()?;
+        let variant_org = id
+            .variant_org
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()?;
         conn.execute(
             "INSERT INTO task_campaigns (task_id, campaign_id, case_id, arm, repetition, manifest_hash, \
-             routing_setting, created_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8) \
-             ON CONFLICT(task_id) DO UPDATE SET campaign_id=excluded.campaign_id, case_id=excluded.case_id, \
-             arm=excluded.arm, repetition=excluded.repetition, manifest_hash=excluded.manifest_hash, \
-             routing_setting=excluded.routing_setting",
+             routing_setting, variant_json, variant_org_json, created_at) \
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
             params![
                 task_id,
                 id.campaign_id,
@@ -681,6 +781,8 @@ impl SqliteStore {
                 id.repetition.map(i64::from),
                 id.manifest_hash,
                 id.routing_setting,
+                variant,
+                variant_org,
                 format_rfc3339(now)?,
             ],
         )?;
@@ -688,7 +790,8 @@ impl SqliteStore {
     }
 
     /// 再送の判定。同じ冪等キー、または同じ試行（campaign / case / arm / repetition）の task が
-    /// 既にあれば、識別が全欄一致なら `Same`、違えば `Conflict`（別の試行を黙って上書きしない）。
+    /// 既にあれば、識別が全欄一致（variant と構成 pin を含む）なら `Same`、違えば `Conflict`
+    /// （variant の変更・脱落・追加も別の試行として黙って上書きしない）。
     pub fn task_campaign_resend_tx(
         conn: &rusqlite::Connection,
         id: &CampaignIdentity,
@@ -755,84 +858,80 @@ impl SqliteStore {
             .optional()?)
     }
 
-    /// 呼び出し側の transaction の中で、task 自身に付いた識別を読む。
+    /// 呼び出し側の transaction の中で、task 自身に付いた識別を読む。保存値が壊れていれば `Invalid`。
     pub fn task_campaign_own_tx(
         conn: &rusqlite::Connection,
         task_id: &str,
     ) -> Result<Option<CampaignIdentity>, StoreError> {
-        Ok(conn
-            .query_row(
-                "SELECT campaign_id, case_id, arm, repetition, manifest_hash, routing_setting \
-                 FROM task_campaigns WHERE task_id = ?1",
-                [task_id],
-                |r| {
-                    Ok(CampaignIdentity {
-                        campaign_id: r.get(0)?,
-                        case_id: r.get(1)?,
-                        arm: r.get(2)?,
-                        repetition: r
-                            .get::<_, Option<i64>>(3)?
-                            .and_then(|n| u32::try_from(n).ok()),
-                        manifest_hash: r.get(4)?,
-                        routing_setting: r.get(5)?,
-                    })
-                },
-            )
-            .optional()?)
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {CAMPAIGN_COLUMNS} FROM task_campaigns WHERE task_id = ?1"
+        ))?;
+        let mut rows = stmt.query([task_id])?;
+        match rows.next()? {
+            Some(r) => Ok(Some(campaign_from_row(task_id, r)?)),
+            None => Ok(None),
+        }
     }
 
     /// task 自身に付いた識別（継承しない）。
     pub fn task_campaign_own(&self, task_id: &str) -> Result<Option<CampaignIdentity>, StoreError> {
         let conn = self.lock()?;
-        let row = conn
-            .query_row(
-                "SELECT campaign_id, case_id, arm, repetition, manifest_hash, routing_setting \
-                 FROM task_campaigns WHERE task_id = ?1",
-                [task_id],
-                |r| {
-                    Ok(CampaignIdentity {
-                        campaign_id: r.get(0)?,
-                        case_id: r.get(1)?,
-                        arm: r.get(2)?,
-                        repetition: r
-                            .get::<_, Option<i64>>(3)?
-                            .and_then(|n| u32::try_from(n).ok()),
-                        manifest_hash: r.get(4)?,
-                        routing_setting: r.get(5)?,
-                    })
-                },
-            )
-            .optional()?;
-        Ok(row)
+        Self::task_campaign_own_tx(&conn, task_id)
     }
 
-    /// task の識別。自身に無ければ `parent_id` の鎖を辿って最も近い祖先のものを返す。
-    /// campaign に属さない task は `None`（従来どおり識別 NULL）。
-    pub fn task_campaign_resolve(
-        &self,
+    /// 自身から root まで鎖を辿り、最も近い識別とその持ち主を返す。鎖の上の識別は全て一致
+    /// しなければならない（最寄りで矛盾を隠さない）。循環・上限超えも `Invalid`。
+    fn task_campaign_resolve_holder_tx(
+        conn: &rusqlite::Connection,
         task_id: &str,
-    ) -> Result<Option<CampaignIdentity>, StoreError> {
+    ) -> Result<Option<(String, CampaignIdentity)>, StoreError> {
+        let mut nearest: Option<(String, CampaignIdentity)> = None;
+        let mut seen = std::collections::HashSet::new();
         let mut current = task_id.to_string();
-        for _ in 0..CAMPAIGN_ANCESTOR_LIMIT {
-            if let Some(id) = self.task_campaign_own(&current)? {
-                return Ok(Some(id));
+        loop {
+            if !seen.insert(current.clone()) {
+                return Err(StoreError::Invalid(format!(
+                    "task {task_id}: parent chain has a cycle at task {current}"
+                )));
             }
-            let parent: Option<String> = {
-                let conn = self.lock()?;
-                conn.query_row(
+            if seen.len() > CAMPAIGN_ANCESTOR_LIMIT {
+                return Err(StoreError::Invalid(format!(
+                    "task {task_id}: parent chain exceeds {CAMPAIGN_ANCESTOR_LIMIT} tasks"
+                )));
+            }
+            if let Some(id) = Self::task_campaign_own_tx(conn, &current)? {
+                match &nearest {
+                    None => nearest = Some((current.clone(), id)),
+                    Some((holder, near)) if near != &id => {
+                        return Err(campaign_mismatch(holder, &current));
+                    }
+                    Some(_) => {}
+                }
+            }
+            let parent: Option<String> = conn
+                .query_row(
                     "SELECT parent_id FROM tasks WHERE id = ?1",
                     [&current],
                     |r| r.get(0),
                 )
                 .optional()?
-                .flatten()
-            };
+                .flatten();
             match parent {
                 Some(p) => current = p,
-                None => return Ok(None),
+                None => return Ok(nearest),
             }
         }
-        Ok(None)
+    }
+
+    /// task の識別。自身に無ければ `parent_id` の鎖を辿って最も近い祖先のものを返す。
+    /// 鎖の上（root まで）の識別が食い違う・循環・上限超え・保存値の不正は `Invalid`。
+    /// campaign に属さない task は `None`（従来どおり識別 NULL）。
+    pub fn task_campaign_resolve(
+        &self,
+        task_id: &str,
+    ) -> Result<Option<CampaignIdentity>, StoreError> {
+        let conn = self.lock()?;
+        Ok(Self::task_campaign_resolve_holder_tx(&conn, task_id)?.map(|(_, id)| id))
     }
 }
 

@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::execution::{BudgetKind, RunEnd};
 use crate::model_policy::RoutingRecord;
 use crate::route_select::{ClassifierStatus, LaneAssistRecord};
+pub use crate::variant_wire::{CampaignOrgPin, CampaignVariantRef};
 
 /// 候補 1 つ（source × model × harness）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -64,6 +65,13 @@ pub struct CampaignIdentity {
     /// `fixed` | `decision_assisted`。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub routing_setting: Option<String>,
+    /// 比較 variant の参照（campaign `VariantRef` と同じ JSON 形）。`variant_org` と対で付く。
+    /// 無い識別（従来の行）は variant 無しの試行のまま。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub variant: Option<CampaignVariantRef>,
+    /// variant が前提とする検証済みの構成 pin（campaign `OrgPin` と同じ JSON 形）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub variant_org: Option<CampaignOrgPin>,
 }
 
 impl CampaignIdentity {
@@ -75,6 +83,18 @@ impl CampaignIdentity {
             && !matches!(m.as_str(), "fixed" | "decision_assisted")
         {
             return Err("campaign.routing_setting must be `fixed` or `decision_assisted`".into());
+        }
+        match (&self.variant, &self.variant_org) {
+            (None, None) => {}
+            (Some(v), Some(org)) => {
+                v.validate().map_err(|e| format!("campaign.{e}"))?;
+                org.validate().map_err(|e| format!("campaign.{e}"))?;
+            }
+            _ => {
+                return Err(
+                    "campaign.variant and campaign.variant_org must be given together".into(),
+                );
+            }
         }
         Ok(())
     }
@@ -99,6 +119,11 @@ pub struct DecisionLogProposal {
     pub manifest_hash: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub routing_setting: Option<String>,
+    /// campaign 識別の variant（arm の分割用。id と内容 hash だけ写す）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub variant_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub variant_content_sha256: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -177,6 +202,8 @@ impl DecisionLogProposal {
         self.repetition = id.repetition;
         self.manifest_hash = id.manifest_hash.clone();
         self.routing_setting = id.routing_setting.clone();
+        self.variant_id = id.variant.as_ref().map(|v| v.id.clone());
+        self.variant_content_sha256 = id.variant.as_ref().map(|v| v.content_sha256.clone());
     }
 
     /// 旧い `routing_decided` event（新欄なし）からも作れる。無い欄は `None` のまま。

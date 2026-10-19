@@ -55,45 +55,76 @@ fn walk(root: &Path, dir: &Path, skip: &[&str], h: &mut Sha256) -> Result<(), St
     Ok(())
 }
 
+/// symlink を展開する回数の上限（連鎖・入れ子の合計）。超えたら循環とみなして拒否する。
+const MAX_SYMLINK_HOPS: usize = 40;
+
 /// tree 内に閉じた相対 symlink だけを許す（ADR 2026-10-19-campaign-inner-symlink）。link 先の文字列を返す。
-/// 絶対 path、`..` で root の外へ出るもの、解決先（連鎖の最後まで）が root 外のもの、dangling、循環は拒否する。
+/// link 先を component ごとに辿り、出会った symlink はその場で（連鎖・入れ子を含め）展開する。`..` は展開後の実体に
+/// 適用し、全ての中間段階で root の内側に留まることを確かめる。絶対 path、途中でも root 外に出るもの、
+/// dangling、循環（展開回数が `MAX_SYMLINK_HOPS` 超）は拒否する。
 pub(crate) fn check_inner_symlink(root: &Path, link: &Path) -> Result<String, String> {
-    use std::path::Component;
+    use std::{collections::VecDeque, ffi::OsString, path::Component};
     let shown = link
         .strip_prefix(root)
         .unwrap_or(link)
         .display()
         .to_string();
-    let target = fs::read_link(link).map_err(|e| format!("{}: {e}", link.display()))?;
-    if target.is_absolute() {
-        return Err(format!("absolute symlink is not allowed: {shown}"));
-    }
-    // 字面上、link の置かれた dir から root の外へ出ないこと。
-    let parent = link.parent().unwrap_or(root);
-    let mut depth = parent
+    let raw = fs::read_link(link).map_err(|e| format!("{}: {e}", link.display()))?;
+    // root からの実体 path（symlink を含まない component の列）。link の親 dir は walk が実 dir だけを辿るので実体。
+    let mut stack: Vec<OsString> = link
+        .parent()
+        .unwrap_or(root)
         .strip_prefix(root)
         .map_err(|e| e.to_string())?
         .components()
-        .count() as i64;
-    for c in target.components() {
-        match c {
-            Component::ParentDir => depth -= 1,
-            Component::Normal(_) => depth += 1,
-            Component::CurDir => {}
-            _ => return Err(format!("symlink is not allowed: {shown}")),
+        .map(|c| c.as_os_str().to_owned())
+        .collect();
+    let mut queue: VecDeque<OsString> = VecDeque::new();
+    let push_target = |queue: &mut VecDeque<OsString>, t: &Path| -> Result<(), String> {
+        let mut comps = Vec::new();
+        for c in t.components() {
+            match c {
+                Component::Normal(n) => comps.push(n.to_owned()),
+                Component::ParentDir => comps.push(OsString::from("..")),
+                Component::CurDir => {}
+                _ => return Err(format!("absolute symlink is not allowed: {shown}")),
+            }
         }
-        if depth < 0 {
-            return Err(format!("symlink escapes the tree root: {shown}"));
+        for c in comps.into_iter().rev() {
+            queue.push_front(c);
+        }
+        Ok(())
+    };
+    push_target(&mut queue, &raw)?;
+    let mut hops = 0usize;
+    while let Some(c) = queue.pop_front() {
+        if c == ".." {
+            if stack.pop().is_none() {
+                return Err(format!("symlink escapes the tree root: {shown}"));
+            }
+            continue;
+        }
+        stack.push(c);
+        let cur: PathBuf = stack.iter().fold(root.to_path_buf(), |p, n| p.join(n));
+        let meta = fs::symlink_metadata(&cur)
+            .map_err(|e| format!("symlink is dangling or cyclic: {shown}: {e}"))?;
+        if meta.file_type().is_symlink() {
+            hops += 1;
+            if hops > MAX_SYMLINK_HOPS {
+                return Err(format!(
+                    "symlink is dangling or cyclic: {shown}: too many links"
+                ));
+            }
+            let t = fs::read_link(&cur).map_err(|e| format!("{}: {e}", cur.display()))?;
+            stack.pop();
+            push_target(&mut queue, &t)?;
+        } else if !queue.is_empty() && !meta.is_dir() {
+            return Err(format!(
+                "symlink is dangling or cyclic: {shown}: not a directory"
+            ));
         }
     }
-    // 連鎖を最後まで辿った実体が root 内にあること（dangling・循環は canonicalize が失敗する）。
-    let real = fs::canonicalize(link)
-        .map_err(|e| format!("symlink is dangling or cyclic: {shown}: {e}"))?;
-    let root_real = fs::canonicalize(root).map_err(|e| format!("{}: {e}", root.display()))?;
-    if !real.starts_with(&root_real) {
-        return Err(format!("symlink resolves outside the tree root: {shown}"));
-    }
-    Ok(target.to_string_lossy().into_owned())
+    Ok(raw.to_string_lossy().into_owned())
 }
 
 /// 相対 path・内容・空 dir を含む木の sha256。symlink は tree 内に閉じた相対のものだけ許し、link 先の文字列ごと数える。

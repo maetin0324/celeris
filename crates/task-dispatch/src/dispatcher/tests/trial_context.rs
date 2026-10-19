@@ -13,7 +13,8 @@ const TRIAL_KB: &str = "TRIAL_KB_CANARY_e19f";
 const NODE: &str = "software-engineering";
 
 /// (run の task id, kind, RunContext の JSON, adapter に重ねた env)。
-type Captured = Vec<(TaskId, TaskKind, String, Vec<(String, String)>)>;
+type CapturedRun = (TaskId, TaskKind, String, Vec<(String, String)>);
+type Captured = Vec<CapturedRun>;
 
 #[derive(Clone)]
 struct ContextCaptureAdapter {
@@ -214,11 +215,7 @@ fn run_with_canaries(trial: bool) -> Fixture {
     })
 }
 
-fn runs_of(
-    f: &Fixture,
-    id: TaskId,
-    kind: TaskKind,
-) -> Vec<&(TaskId, TaskKind, String, Vec<(String, String)>)> {
+fn runs_of(f: &Fixture, id: TaskId, kind: TaskKind) -> Vec<&CapturedRun> {
     f.captured
         .iter()
         .filter(|(t, k, _, _)| *t == id && *k == kind)
@@ -226,7 +223,7 @@ fn runs_of(
 }
 
 /// reviewer run は対象 task の子の Review task として走る（試行の識別は親の鎖で解決される）。
-fn reviews_of(f: &Fixture) -> Vec<&(TaskId, TaskKind, String, Vec<(String, String)>)> {
+fn reviews_of(f: &Fixture) -> Vec<&CapturedRun> {
     f.captured
         .iter()
         .filter(|(_, k, _, _)| *k == TaskKind::Review)

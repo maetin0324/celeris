@@ -3,6 +3,8 @@
 //! `--harness`・`--account` による route の選択・running タスクの `--workspace` 要求を確認する。
 //! DB への書き込みが一切無いこと（`events_for` の件数・タスクの status が変わらない）も検証する。
 
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -117,7 +119,7 @@ candidates = [{{ source = "fake", model = "fake" }}]
 }
 
 fn run_celerisctl(db: &Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_celerisctl"))
+    Command::new(common::celerisctl_path())
         .arg("--db")
         .arg(db)
         .args(args)

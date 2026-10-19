@@ -1,5 +1,7 @@
 //! `campaign export --verify-connected`: mock 実行の campaign を一時 DB に作り、結合済み export が
 //! 全欄を持てば成功、空・必須欄の欠測・消費未計上なら非 0 で失敗することを確かめる（実 API・実クラスタなし）。
+mod common;
+
 use serde_json::Value;
 use std::process::{Command, Output};
 use task_core::SqliteStore;
@@ -20,7 +22,7 @@ fn cand(m: &str) -> CandidateRef {
 }
 
 fn verify(db: &std::path::Path, campaign: &str, out: &std::path::Path) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_celerisctl"))
+    Command::new(common::celerisctl_path())
         .args(["--db", db.to_str().unwrap(), "campaign", "export", campaign])
         .args(["--out", out.to_str().unwrap(), "--verify-connected"])
         .env_remove("CELERIS_DB")

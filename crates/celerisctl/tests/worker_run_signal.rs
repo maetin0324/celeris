@@ -1,6 +1,8 @@
 //! `celerisctl worker run` の中断（ADR-0012 D4、監査の指摘）: SIGTERM を受けたらワーカーのプロセスを kill し、exit 130 で終わる。
 //! fake ワーカー（`sh` スクリプト）とローカル SQLite だけで動き、ネットワークに出ない。
 
+mod common;
+
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -140,7 +142,7 @@ fn sigterm_kills_the_worker_process_and_exits_130() {
     .unwrap();
     let config = write_config(&root, &script);
 
-    let mut child = Command::new(env!("CARGO_BIN_EXE_celerisctl"))
+    let mut child = Command::new(common::celerisctl_path())
         .arg("--db")
         .arg(&db)
         .args(["worker", "run", "--config"])

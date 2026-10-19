@@ -1,11 +1,13 @@
 //! ADR-0122 D1: `celerisctl skills import <dir>` が repo の `config/skills/` を KB に取り込む
 //! （DB を開かない。mount はしない）。
 
+mod common;
+
 use std::path::Path;
 use std::process::Command;
 
 fn celerisctl(args: &[&str]) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_celerisctl"))
+    Command::new(common::celerisctl_path())
         .args(args)
         .env_remove("CELERIS_KNOWLEDGE_ROOT")
         .env_remove("CELERIS_CONFIG")

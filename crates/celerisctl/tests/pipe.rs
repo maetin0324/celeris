@@ -5,6 +5,8 @@
 //! からパイプを閉じ、プロセスが panic せず正常終了する（exit 0、stderr に "panicked" を
 //! 含まない）ことを確認する。
 
+mod common;
+
 use std::io::Read;
 use std::process::{Command, Stdio};
 
@@ -87,7 +89,7 @@ fn ls_on_a_closed_pipe_exits_cleanly_without_panicking() {
         }
     }
 
-    let mut child = Command::new(env!("CARGO_BIN_EXE_celerisctl"))
+    let mut child = Command::new(common::celerisctl_path())
         .arg("--db")
         .arg(&db_path)
         .arg("ls")

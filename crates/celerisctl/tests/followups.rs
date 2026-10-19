@@ -2,13 +2,15 @@
 //! DB を開かず、その run の `followups.json`（`CELERIS_FOLLOWUPS_FILE`）に追記する。別の DB（試験の一時 DB）に
 //! 向けた `add` と、run の外（env 無し）の `add` は従来どおり DB に書く。
 
+mod common;
+
 use std::path::Path;
 use std::process::{Command, Output};
 
 use task_core::{SqliteStore, TaskStore};
 
 fn ctl(args: &[&str], env: &[(&str, &Path)]) -> Output {
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_celerisctl"));
+    let mut cmd = Command::new(common::celerisctl_path());
     cmd.args(args)
         .env_remove("CELERIS_DB")
         .env_remove("CELERIS_CONFIG")

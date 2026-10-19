@@ -1,10 +1,12 @@
 //! CLI coverage for the versioned routing training JSONL export.
+mod common;
+
 use rusqlite::Connection;
 use serde_json::Value;
 use std::process::{Command, Output};
 
 fn ctl(args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_celerisctl"))
+    Command::new(common::celerisctl_path())
         .args(args)
         .env_remove("CELERIS_DB")
         .env_remove("CELERIS_CONFIG")

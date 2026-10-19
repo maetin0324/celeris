@@ -1,5 +1,7 @@
 //! CLI coverage for `campaign export`: 一時 DB の fixture から出力し、行数・欠測 null・二重計上なし・
 //! 別 campaign の除外・決定的出力・秘密を含まないことを確かめる。
+mod common;
+
 use serde_json::Value;
 use std::process::{Command, Output};
 use task_core::SqliteStore;
@@ -12,7 +14,7 @@ use time::OffsetDateTime;
 const SECRET: &str = "sk-SECRETSECRETSECRET1234";
 
 fn ctl(args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_celerisctl"))
+    Command::new(common::celerisctl_path())
         .args(args)
         .env_remove("CELERIS_DB")
         .env_remove("CELERIS_CONFIG")

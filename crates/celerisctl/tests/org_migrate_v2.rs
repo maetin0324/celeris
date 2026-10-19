@@ -3,6 +3,8 @@
 //! 外部ネットワークには出ない。DB も記憶も tempdir の中だけ（CLAUDE.md の禁止事項）。
 //! `celerisctl` はバイナリなので、ここではサブプロセスとして実行する（本物の CLI の経路を通す）。
 
+mod common;
+
 use std::path::Path;
 use std::process::Command;
 
@@ -194,7 +196,7 @@ fn seed(env: &Env) -> (Vec<OrgNode>, TaskId) {
 }
 
 fn celerisctl(env: &Env, args: &[&str]) -> String {
-    let out = Command::new(env!("CARGO_BIN_EXE_celerisctl"))
+    let out = Command::new(common::celerisctl_path())
         .arg("--db")
         .arg(&env.db)
         .args(args)
@@ -374,7 +376,7 @@ roles = ["secretary"]
 "#,
     )
     .unwrap_or_else(|e| panic!("config: {e}"));
-    let out = Command::new(env!("CARGO_BIN_EXE_celerisctl"))
+    let out = Command::new(common::celerisctl_path())
         .args(["config", "to-harnesses", "--config"])
         .arg(&config)
         .output()

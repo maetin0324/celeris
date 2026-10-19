@@ -1,4 +1,6 @@
 //! Release の台帳検査 CLI。実 browser・ネットワーク・本番 path は使わない。
+mod common;
+
 use std::path::Path;
 use std::process::{Command, Output};
 
@@ -27,7 +29,7 @@ fn write_ledger(dir: &Path, value: &Value) -> std::path::PathBuf {
 }
 
 fn check(file: &Path, extra: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_celerisctl"))
+    Command::new(common::celerisctl_path())
         .args(["browser", "ledger", "check", "--file"])
         .arg(file)
         .args(extra)

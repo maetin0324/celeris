@@ -1,3 +1,5 @@
+mod common;
+
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::process::Command;
@@ -41,7 +43,7 @@ fn capture_one() -> (String, thread::JoinHandle<(String, Value)>) {
 #[test]
 fn cos_chat_ops_ctl_add_uses_audited_http_without_opening_database() {
     let (url, server) = capture_one();
-    let out = Command::new(env!("CARGO_BIN_EXE_celerisctl"))
+    let out = Command::new(common::celerisctl_path())
         .args([
             "--db",
             "/a/nonexistent/celeris.sqlite3",
@@ -83,7 +85,7 @@ fn cos_chat_ops_ctl_add_uses_audited_http_without_opening_database() {
 #[test]
 fn cos_chat_ops_ctl_api_request_can_send_registered_comment_shape() {
     let (url, server) = capture_one();
-    let out = Command::new(env!("CARGO_BIN_EXE_celerisctl"))
+    let out = Command::new(common::celerisctl_path())
         .args([
             "--api-url",
             &url,
@@ -117,7 +119,7 @@ fn cos_chat_ops_ctl_api_request_can_send_registered_comment_shape() {
 #[test]
 fn cos_chat_ops_ctl_reason_and_policy_can_come_from_environment() {
     let (url, server) = capture_one();
-    let out = Command::new(env!("CARGO_BIN_EXE_celerisctl"))
+    let out = Command::new(common::celerisctl_path())
         .args([
             "--api-url",
             &url,
@@ -148,7 +150,7 @@ fn cos_chat_ops_ctl_reason_and_policy_can_come_from_environment() {
 
 #[test]
 fn cos_chat_ops_ctl_unsupported_db_mutation_is_rejected_before_db_open() {
-    let out = Command::new(env!("CARGO_BIN_EXE_celerisctl"))
+    let out = Command::new(common::celerisctl_path())
         .args([
             "--db",
             "/a/nonexistent/celeris.sqlite3",
@@ -170,7 +172,7 @@ fn cos_chat_ops_ctl_unsupported_db_mutation_is_rejected_before_db_open() {
 
 #[test]
 fn cos_chat_ops_ctl_api_request_without_run_credential_does_not_send() {
-    let out = Command::new(env!("CARGO_BIN_EXE_celerisctl"))
+    let out = Command::new(common::celerisctl_path())
         .args([
             "--api-url",
             "http://127.0.0.1:1/api/v1",
@@ -193,7 +195,7 @@ fn cos_chat_ops_ctl_api_request_without_run_credential_does_not_send() {
 fn cos_chat_ops_ctl_prefers_api_url_env_over_config() {
     // CELERIS_CONFIG points at nothing: reading it would fail, so success proves the env won.
     let (url, server) = capture_one();
-    let out = Command::new(env!("CARGO_BIN_EXE_celerisctl"))
+    let out = Command::new(common::celerisctl_path())
         .args([
             "--reason",
             "from env",
@@ -220,7 +222,7 @@ fn cos_chat_ops_ctl_prefers_api_url_env_over_config() {
 
     // --api-url still wins over the environment.
     let (url, server) = capture_one();
-    let out = Command::new(env!("CARGO_BIN_EXE_celerisctl"))
+    let out = Command::new(common::celerisctl_path())
         .args([
             "--api-url",
             &url,
@@ -244,7 +246,7 @@ fn cos_chat_ops_ctl_prefers_api_url_env_over_config() {
     assert!(head.starts_with("POST /api/v1/cos/operations HTTP/1.1"));
 
     // The env value gets the same /api/v1 check as the flag, before any connection.
-    let out = Command::new(env!("CARGO_BIN_EXE_celerisctl"))
+    let out = Command::new(common::celerisctl_path())
         .args([
             "--reason",
             "bad env",

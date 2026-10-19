@@ -1,4 +1,6 @@
 //! Doctor reads a fake daemon in a temporary configuration, never a production DB/socket.
+mod common;
+
 use serde_json::{Value, json};
 use std::io::{Read, Write};
 use std::net::TcpListener;
@@ -37,7 +39,7 @@ fn serve(dir: &std::path::Path, items: Value) -> (std::path::PathBuf, std::threa
 }
 
 fn doctor(config: &std::path::Path, extra: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_celerisctl"))
+    Command::new(common::celerisctl_path())
         .env_remove("CELERIS_COS_RUN_CREDENTIAL")
         .env_remove("CELERIS_API_URL")
         .env_remove("CELERIS_API_TOKEN_FILE")
@@ -89,7 +91,7 @@ fn browser_doctor_json_ok_warn_and_skip_exit_zero_with_env_config() {
         {"status":"SKIP","check":"bwrap","detail":"runtime=launcher"}
     ]);
     let (config, server) = serve(dir.path(), items.clone());
-    let out = Command::new(env!("CARGO_BIN_EXE_celerisctl"))
+    let out = Command::new(common::celerisctl_path())
         .env_remove("CELERIS_COS_RUN_CREDENTIAL")
         .env_remove("CELERIS_API_URL")
         .env_remove("CELERIS_API_TOKEN_FILE")
@@ -136,7 +138,7 @@ fn browser_doctor_api_url_and_token_file_overrides_config() {
                 .and_then(|s| s.strip_suffix('\''))
         })
         .unwrap();
-    let out = Command::new(env!("CARGO_BIN_EXE_celerisctl"))
+    let out = Command::new(common::celerisctl_path())
         .env_remove("CELERIS_COS_RUN_CREDENTIAL")
         .env_remove("CELERIS_API_URL")
         .args([

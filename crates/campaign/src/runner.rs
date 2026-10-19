@@ -1107,7 +1107,7 @@ pub fn run(
     Ok(rep)
 }
 
-/// 自分の現在値（確定消費 + 予約。上書き）を全体台帳へ書く。再集計しても加算されない。
+/// 自分の確定消費（in-flight の予約を除く）を全体台帳へ公開する。台帳は単調に持つので再集計で加算も減少もしない。
 fn publish_global(
     g: Option<&crate::global_ledger::GlobalLedger>,
     m: &CampaignManifest,
@@ -1118,12 +1118,14 @@ fn publish_global(
     let Some(g) = g else { return Ok(()) };
     let s = budget::spend(records, ledger, &m.budget, hash, None);
     let trials = records.iter().filter(|r| r.ran()).count() as u64;
-    g.record(&crate::global_ledger::GlobalLedger::row(
+    g.record(&crate::global_ledger::GlobalLedger::published(
         m,
         hash,
-        s.tokens,
-        s.wall_secs,
-        trials,
+        crate::global_ledger::Consumed {
+            tokens: s.tokens.saturating_sub(s.held_tokens),
+            wall_secs: s.wall_secs.saturating_sub(s.held_wall_secs),
+            trials,
+        },
     ))
 }
 

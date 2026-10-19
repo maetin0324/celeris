@@ -14,7 +14,7 @@ use celeris_campaign::{
     celeris_exec::{CLUSTER_CANCEL_FILE, CelerisExecutor, HttpResponse, Transport},
     checker::check,
     executor::{ExecStatus, Executor, MockExecutor, MockStep, TaskRef, TrialRequest},
-    global_ledger::{GLOBAL_LEDGER_SCHEMA, GlobalLedger, GlobalRow},
+    global_ledger::{GLOBAL_LEDGER_SCHEMA_V1, GlobalLedger, LegacyRow},
     manifest::{
         ArmRouting, Budget, CampaignManifest, Cap, Config, ConfigId, ExperimentSet, InputRef,
         Secondary, SetFixed, Share, SnapshotRef, Split, Termination, manifest_hash,
@@ -546,6 +546,27 @@ fn concurrent_admits_reserve_atomically_and_only_one_fits() {
 }
 
 #[test]
+fn admit_allocation_survives_an_empty_publish_before_the_first_submit() {
+    let d = tempfile::tempdir().expect("dir");
+    let g = GlobalLedger::open(d.path()).expect("open");
+    let i = input(2);
+    let m1 = ledger_manifest(&i, "m1", 400_000, 2, Some(6));
+    g.admit_start(&m1).expect("m1");
+    // runner が最初の投入前に出す空の再集計。取り分（試行 4）は消えない。
+    g.record(&GlobalLedger::published(&m1, "h", Default::default()))
+        .expect("empty publish");
+    assert_eq!(g.current().expect("c")["m1"].trials, 4);
+    let e = g
+        .admit_start(&ledger_manifest(&i, "m2", 400_000, 2, Some(6)))
+        .expect_err("4 held + 4 > 6");
+    assert!(e.contains("trials"), "{e}");
+    // 測定の終わりに取り分を戻すと、確定消費（0）だけが残る。
+    g.release_allocation("m1").expect("release");
+    g.admit_start(&ledger_manifest(&i, "m2", 400_000, 2, Some(6)))
+        .expect("m2 fits after m1 released its allocation");
+}
+
+#[test]
 fn retry_and_resume_do_not_double_count_and_old_rows_stay_readable() {
     let d = tempfile::tempdir().expect("dir");
     let g = GlobalLedger::open(d.path()).expect("open");
@@ -556,9 +577,9 @@ fn retry_and_resume_do_not_double_count_and_old_rows_stay_readable() {
     let r1 = g.current().expect("c")["m1"].clone();
     assert_eq!(r1.trials, 4, "予約は上書き。二重に積まない");
     // 旧形式（cap 欄なし）の行は読めて、無制限として扱う。
-    let old = json!({"schema": GLOBAL_LEDGER_SCHEMA, "measurement_id": "old", "manifest_sha256": "x",
+    let old = json!({"schema": GLOBAL_LEDGER_SCHEMA_V1, "measurement_id": "old", "manifest_sha256": "x",
         "tokens": 10, "wall_secs": 1, "trials": 1, "provider_slots": 1});
-    let _: GlobalRow = serde_json::from_value(old.clone()).expect("old row");
+    let _: LegacyRow = serde_json::from_value(old.clone()).expect("old row");
     fs::write(
         d.path()
             .join(celeris_campaign::global_ledger::GLOBAL_LEDGER_FILE),
@@ -566,7 +587,7 @@ fn retry_and_resume_do_not_double_count_and_old_rows_stay_readable() {
     )
     .expect("w");
     let cur = g.current().expect("c");
-    assert_eq!(cur["old"].cap_trials, u64::MAX);
+    assert_eq!(cur["old"].caps.trials, u64::MAX);
     let _ = Share::default();
     let _ = (
         SetFixed::default(),

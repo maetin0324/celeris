@@ -64,3 +64,7 @@ runner/checker/export/dry-run/preflight/lock の有効計画への統一は後�
   run-meta の `plan_identity` は追加欄で、無い旧 out の再開は従来の hash 照合のみ。
 - 再利用: manifest の有効計画（arm-set-core, 3be21634）、既存の `ledger.rs`/`budget.rs`/`final_accounting`/`checker` を拡張。
   試験は `tests/experiment_sets_exec.rs`（A/B のみ・B/C のみ・resume 拒否・B0 不一致・全体台帳の横断）。
+- 通常入口の集計試験: `tests/arm_set_cli_normal.rs` に、実バイナリ `--executor celeris` → 通常 POST stub で repeats=2・case 2 件・
+  task 内 retry run・task failed・採点不合格・未採点（grade-out 前の export）を通す試験を足した。分母は試行（case × repetition）で、
+  task 内の retry run は分母に入らず費用だけが同じ試行に加わる（失敗した試行の費用も残る）。同じ out の run/watch 再開は trial identity
+  （config, problem, rep, trial_no=1）・POST 数・A の起動数が不変。選択集合・固定条件を変えた manifest は同じ out では saved lock の gate で拒否される。

@@ -4,7 +4,7 @@ wu: exercise-case
 status: blocked
 completed: null
 ---
-# exercise-case: qsub が -A 必須で拒否、課金の確認待ち（approval_missing）、状態は pending のまま
+# exercise-case: sirius の queue 下限（24 core・GPU 1）で拒否、1 vnode case への改訂の判断待ち（approval_missing）、状態は pending のまま
 
 ## 事実
 - 2026-10-19T16:34Z に実行直前の再確認をした。sirius の環境（python 3.9.25・numpy 1.23.5）は env.lock と一致した。
@@ -19,11 +19,17 @@ completed: null
 - 既存の人の決定（2026-09-30）は `-A NBBG`。一方、今回の承認は「課金属性なし」を前提にしているため、NBBG への課金を人の決定として確認する。
 - 記録は外部資料の `exercise.attempts[0]` にある。
 
+## 2 回目の投入試行（2026-10-19T16:47Z、run 01M5AGXYW1ZM5ZV17SHMB560DY）
+- `-A NBBG` の承認を受けて `qsub -A NBBG job.pbs` を実行したが、exit 32 で拒否された: `Specify chunks as multiples of 'ncpus=24:mem=124gb:ngpus=1'`。job は作られず、投入数は 0/2。
+- `qstat -Qf` を読んだ。debug と gen の下限はどちらも ncpus=24・mem=124gb・ngpus=1。1 core・GPU なしの job は sirius では投入できない。
+- 承認範囲（GPU 不可）の外なので止めた。case の固定条件（ncpus=1）も、観測される ncpus=24 と食い違う。
+- 記録は外部資料の `exercise.attempts[1]` にある。
+
 ## 証拠コマンド
 - `python3 crates/campaign/scripts/verify-short-ml-case.py --check` → exit 0（状態整合のみ）
 - `python3 crates/campaign/scripts/verify-short-ml-case.py --acceptance --evidence <上記 json>` → exit 1（pending なので非 0 が正しい）
 - `python3 crates/campaign/scripts/verify-short-ml-case.py --placement-check` → exit 0
 
 ## 未解決事項
-- 人の決定: sirius の debug queue の job に `-A NBBG` を付けて NBBG 予算に課金してよいか（最大 2 本 × 1 core × ≤600 s）。
+- 人の決定 sirius-full-vnode-case: 1 vnode（24 core・124 GB・GPU 1、walltime 600 s、-A NBBG、1 本、予備 1）で投入してよいか。あわせて、case の固定条件を ncpus=24 に改訂し pin を更新してよいか。
 - 評価側の本番 collect 経路（`observe::SchedulerTransport` の ssh `qstat -x -f` 実装と CLI からの呼び出し）が未実装。承認後に限定配線が要る。

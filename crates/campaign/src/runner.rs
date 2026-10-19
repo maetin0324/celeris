@@ -654,6 +654,18 @@ pub fn run(
         }
         None => None,
     };
+    // B1/C1 は hash が違っても同一系列（campaign_id）の既消費を総枠へ合算する。超過なら何も実行しない。
+    let prior = budget::series_prior_spend(m, &hash, out)?;
+    if prior.tokens >= m.budget.max_tokens || prior.wall_secs >= m.budget.max_wall_secs {
+        return Err(format!(
+            "series {} already consumed {} tokens / {}s of the approved total {} tokens / {}s under other manifest hashes; refusing to run",
+            m.campaign_id,
+            prior.tokens,
+            prior.wall_secs,
+            m.budget.max_tokens,
+            m.budget.max_wall_secs
+        ));
+    }
     fs::create_dir_all(out).map_err(|e| format!("{}: {e}", out.display()))?;
     let meta_path = out.join(META_FILE);
     if meta_path.exists() {
@@ -813,7 +825,8 @@ pub fn run(
             && !rep.budget_stopped
             && ledger.get(&key).is_none_or(|r| r.reserved.is_none())
         {
-            let s = budget::spend(&records, &ledger, &m.budget, &hash, Some(&key));
+            let s =
+                budget::spend(&records, &ledger, &m.budget, &hash, Some(&key)).plus_prior(&prior);
             Some(budget::admit(&m.budget, &s, cid))
         } else {
             None

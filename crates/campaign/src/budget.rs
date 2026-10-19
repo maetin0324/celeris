@@ -82,6 +82,82 @@ pub fn spend(
     s
 }
 
+/// B1/C1（同一測定系列 = 同じ `campaign_id` の side manifest）で、hash の違う兄弟 out dir の既消費。
+/// 台帳 key に manifest hash が入るため、hash を変えた再 manifest では自分の台帳から既消費が見えない。
+/// `out` の親 dir の兄弟のうち、run-meta の campaign_id が同じで hash が違うものの確定消費 + 予約を合算する。
+/// 主比較（side でない manifest）は常に 0（既存の計上は不変）。
+pub fn series_prior_spend(
+    m: &crate::manifest::CampaignManifest,
+    hash: &str,
+    out: &std::path::Path,
+) -> Result<Spend, String> {
+    let mut total = Spend::default();
+    if !m.is_side() {
+        return Ok(total);
+    }
+    let Some(parent) = out.parent() else {
+        return Ok(total);
+    };
+    let Ok(rd) = std::fs::read_dir(parent) else {
+        return Ok(total);
+    };
+    let mut dirs: Vec<_> = rd.filter_map(Result::ok).map(|e| e.path()).collect();
+    dirs.sort();
+    for dir in dirs {
+        if dir == out || !dir.is_dir() {
+            continue;
+        }
+        let Ok(text) = std::fs::read(dir.join(crate::record::META_FILE)) else {
+            continue;
+        };
+        let Ok(meta) = serde_json::from_slice::<serde_json::Value>(&text) else {
+            continue;
+        };
+        let other = meta["campaign_sha256"].as_str().unwrap_or_default();
+        if meta["campaign_id"].as_str() != Some(m.campaign_id.as_str()) || other == hash {
+            continue;
+        }
+        let records = read_records(&dir.join(crate::record::TRIALS_FILE))?;
+        let ledger = Ledger::open_readonly(&dir)?;
+        let s = spend(&records, &ledger, &m.budget, other, None);
+        total.tokens += s.tokens;
+        total.wall_secs += s.wall_secs;
+        total.held_tokens += s.held_tokens;
+        total.held_wall_secs += s.held_wall_secs;
+        total.in_flight += s.in_flight;
+        for (k, (t, w)) in s.arm {
+            let e = total.arm.entry(k).or_default();
+            e.0 += t;
+            e.1 += w;
+        }
+    }
+    Ok(total)
+}
+
+/// 他の out の trials.jsonl を読み取り専用で読む（末尾の欠けた行は無視し、直さない）。
+fn read_records(path: &std::path::Path) -> Result<Vec<TrialRecord>, String> {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Ok(Vec::new());
+    };
+    let keep = text.rfind('\n').map_or(0, |i| i + 1);
+    text[..keep]
+        .lines()
+        .map(|l| serde_json::from_str(l).map_err(|e| format!("{}: {e}", path.display())))
+        .collect()
+}
+
+impl Spend {
+    /// 同一系列の既消費を加えた使用済み枠（総枠 `Budget::max_*` との比較用）。
+    pub fn plus_prior(mut self, prior: &Spend) -> Spend {
+        self.tokens += prior.tokens;
+        self.wall_secs += prior.wall_secs;
+        self.held_tokens += prior.held_tokens;
+        self.held_wall_secs += prior.held_wall_secs;
+        self.in_flight += prior.in_flight;
+        self
+    }
+}
+
 /// 試行の実効上限 = min(per_case, per_arm の残り)。
 pub fn effective_cap(b: &Budget, arm_tokens: u64, arm_wall: u64) -> Cap {
     Cap {

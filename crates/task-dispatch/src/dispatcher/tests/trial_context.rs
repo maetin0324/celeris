@@ -82,6 +82,8 @@ fn identity(arm: &str) -> task_core::decision_log::CampaignIdentity {
         repetition: Some(1),
         manifest_hash: None,
         routing_setting: None,
+        variant: None,
+        variant_org: None,
     }
 }
 

@@ -383,6 +383,8 @@ async fn jev_classification_cost_is_metered_once_per_campaign() {
                     repetition: None,
                     manifest_hash: None,
                     routing_setting: None,
+                    variant: None,
+                    variant_org: None,
                 },
                 OffsetDateTime::now_utc(),
             )
@@ -425,6 +427,8 @@ async fn jev_calls_are_kept_per_call_and_missing_cost_stays_null() {
                 repetition: None,
                 manifest_hash: None,
                 routing_setting: None,
+                variant: None,
+                variant_org: None,
             },
             OffsetDateTime::now_utc(),
         )

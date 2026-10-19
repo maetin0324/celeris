@@ -722,6 +722,8 @@ mod tests {
             repetition: Some(2),
             manifest_hash: Some("sha256:abc".into()),
             routing_setting: Some("decision_assisted".into()),
+            variant: None,
+            variant_org: None,
         }
     }
 

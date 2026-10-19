@@ -452,28 +452,39 @@ fn run_refuses_split_mix_and_unknown_executor_path_has_no_network_code() {
     // 実 LLM・network・子 process を使う語が src に無い。
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut files = Vec::new();
-    let mut dirs = vec![src];
-    while let Some(d) = dirs.pop() {
-        for f in fs::read_dir(d).expect("src") {
-            let p = f.expect("e").path();
-            if p.is_dir() {
-                dirs.push(p);
-            } else {
-                files.push(p);
+    let mut dagbench_files = Vec::new();
+    for f in fs::read_dir(&src).expect("src") {
+        let p = f.expect("e").path();
+        if p.is_dir() {
+            // 走査対象外にしてよいディレクトリは dagbench だけ（未知のディレクトリは失敗させる）。
+            // dagbench は測定専用の所有 stub 子 process を起こす module で、実 LLM・外部 network は呼ばない
+            // （network の語は下で同じく禁止し、子 process だけを許す）。
+            assert_eq!(
+                p.file_name().and_then(|n| n.to_str()),
+                Some("dagbench"),
+                "unknown directory under src: {}",
+                p.display()
+            );
+            for g in fs::read_dir(&p).expect("dagbench") {
+                dagbench_files.push(g.expect("e").path());
             }
+        } else {
+            files.push(p);
         }
     }
+    files.extend(dagbench_files.iter().cloned());
     for p in files {
         let t = fs::read_to_string(&p).expect("r");
         // 子 process は A arm の harness_exec.rs、grade の評価 command の grade_runner.rs、
         // asset 組立の git/tar の asset_assembly.rs、評価側の read-only `ssh qstat -x -f` の ssh_qstat.rs だけが起動する
         // （command は注入・固定、実 LLM は呼ばない）。
-        let spawns = p.file_name().is_some_and(|n| {
-            n == "harness_exec.rs"
-                || n == "grade_runner.rs"
-                || n == "asset_assembly.rs"
-                || n == "ssh_qstat.rs"
-        });
+        let spawns = dagbench_files.contains(&p)
+            || p.file_name().is_some_and(|n| {
+                n == "harness_exec.rs"
+                    || n == "grade_runner.rs"
+                    || n == "asset_assembly.rs"
+                    || n == "ssh_qstat.rs"
+            });
         for bad in [
             "reqwest",
             "std::net",

@@ -90,6 +90,28 @@ releases_dir = "/local/celeris/state/releases"
 """
 
 
+def good_env_lock(side):
+    arm = lambda i: {"id": i, "harness_version": cmp_.RELEASE, "lower_policy": "mlsys-min-1",
+                     "evidence_table_id": None, "no_evidence_table": i == "C", "online_update": False,
+                     "models": [cmp_.MODEL], "run_harnesses": ["claude-code"],
+                     "catalog": [{"model_id": cmp_.MODEL, "tier": "unset", "source_id": "claude-oauth"}]}
+    return {"schema": "celeris-env-lock/3", "campaign_id": cmp_.CAMPAIGN_ID,
+            "campaign_sha256": cmp_.CAMPAIGN_SHA,
+            "a": {"program": {"path": cmp_.A_PROGRAM, "sha256": cmp_.A_PROGRAM_SHA, "version": "2.1.303 (Claude Code)"}},
+            "bc": {"release": cmp_.RELEASE, "worker_programs": [], "arms": [arm("B"), arm("C")]},
+            "cap_env": {"schema": "celeris.campaign-cap-env/1", "toolchain": side, "mounts": []}}
+
+
+def good_lock():
+    cfg = lambda i, pol: {"id": i, "model": cmp_.MODEL, "model_version": cmp_.MODEL, "policy_version": pol}
+    return {"schema": "celeris.campaign-lock/1", "version": "1", "measurement_id": cmp_.CAMPAIGN_ID,
+            "campaign_sha256": cmp_.CAMPAIGN_SHA, "materials_sha256": cmp_.MATERIALS_SHA,
+            "kb_snapshot": cmp_.KB_SHA,
+            "cases": [{"id": K2, "initial": {"commit": cmp_.K2_COMMIT}}, {"id": K4}],
+            "execution": {"configs": [cfg("A", "ops-baseline"), cfg("B", "fixed"), cfg("C", "jev-1")]},
+            "sha256": "a" * 64}
+
+
 def build(root):
     """全部の検査に通る最小の artifacts root を作る。"""
     pinned = os.path.join(root, "pinned")
@@ -134,10 +156,8 @@ def build(root):
         write_json(os.path.join(pinned, "evidence", name),
                    {"schema": "celeris.campaign-cap-probe/1", "ok": True, "case": case, "arm": arm,
                     "paid_calls_made": 0})
-    write_json(os.path.join(main, "lock", "env-lock.json"),
-               {"schema": "celeris-env-lock/3", "campaign_id": cmp_.CAMPAIGN_ID,
-                "campaign_sha256": cmp_.CAMPAIGN_SHA, "bc": {"release": cmp_.RELEASE}})
-    write_json(os.path.join(main, "lock", "lock.json"), {"campaign_sha256": cmp_.CAMPAIGN_SHA})
+    write_json(os.path.join(main, "env-lock.json"), good_env_lock(side))
+    write_json(os.path.join(main, "lock.json"), good_lock())
     write_json(os.path.join(main, "evidence", "k2-preflight.json"),
                {"schema": "celeris.campaign-preflight/1", "ok": True, "paid_calls_made": 0, "missing": [],
                 "campaign_sha256": cmp_.CAMPAIGN_SHA, "checked": sorted(cmp_.PREFLIGHT_STAGES)})
@@ -170,13 +190,14 @@ class CheckMainPins(unittest.TestCase):
     def test_cli_exit_codes(self):
         cmd = [sys.executable, "-I", SCRIPT, "--root", self.root]
         self.assertEqual(subprocess.run(cmd, capture_output=True).returncode, 0)
-        os.remove(os.path.join(self.main, "lock", "lock.json"))
+        os.remove(os.path.join(self.main, "lock.json"))
         r = subprocess.run(cmd, capture_output=True, text=True)
         self.assertEqual(r.returncode, 1)
         self.assertIn("lock.json: missing", r.stderr)
 
     def test_missing_lock_and_evidence(self):
-        shutil.rmtree(os.path.join(self.main, "lock"))
+        os.remove(os.path.join(self.main, "env-lock.json"))
+        os.remove(os.path.join(self.main, "lock.json"))
         os.remove(os.path.join(self.main, "evidence", "k2-preflight.json"))
         got = self.problems()
         self.assertEqual(len(got), 3, got)
@@ -216,11 +237,74 @@ class CheckMainPins(unittest.TestCase):
         self.assertFlags("input.sha256")
         self.assertFlags("kb_snapshot")
 
+    def edit_lock(self, name, fn):
+        path = os.path.join(self.main, name)
+        with open(path) as f:
+            d = json.load(f)
+        fn(d)
+        write_json(path, d)
+
     def test_tampered_lock_hash(self):
-        write_json(os.path.join(self.main, "lock", "env-lock.json"),
-                   {"schema": "celeris-env-lock/3", "campaign_id": cmp_.CAMPAIGN_ID,
-                    "campaign_sha256": "f" * 64, "bc": {"release": cmp_.RELEASE}})
-        self.assertFlags("campaign_sha256 differs")
+        self.edit_lock("env-lock.json", lambda d: d.update(campaign_sha256="f" * 64))
+        self.assertFlags("env-lock.json: campaign_sha256 differs")
+        self.assertFlags("campaign_sha256 disagree")
+
+    def test_lock_json_pin_tampered(self):
+        for k in ("campaign_sha256", "materials_sha256", "kb_snapshot", "measurement_id"):
+            self.setUp()
+            self.edit_lock("lock.json", lambda d: d.update({k: "x" * 64}))
+            self.assertFlags(f"lock.json: {k} differs")
+        self.edit_lock("lock.json", lambda d: d.update(sha256="short"))
+        self.assertFlags("seal sha256 missing")
+
+    def test_lock_k2_commit_changed(self):
+        self.edit_lock("lock.json", lambda d: d["cases"][0]["initial"].update(commit="deadbeef"))
+        self.assertFlags("K2 initial commit")
+
+    def test_lock_non_sonnet_or_jev_outside_c(self):
+        self.edit_lock("lock.json", lambda d: d["execution"]["configs"][1].update(model="claude-opus-5-5"))
+        self.assertFlags("not Sonnet only")
+        self.edit_lock("lock.json", lambda d: d["execution"]["configs"][1].update(policy_version="jev-1"))
+        self.assertFlags("Jev policy outside")
+
+    def test_env_lock_binary_path_and_hash_mismatch(self):
+        self.edit_lock("env-lock.json", lambda d: d["a"]["program"].update(path="/tmp/other-claude"))
+        self.assertFlags("a.program path/sha256 differs")
+        self.setUp()
+        self.edit_lock("env-lock.json", lambda d: d["a"]["program"].update(sha256="0" * 64))
+        self.assertFlags("a.program path/sha256 differs")
+
+    def test_env_lock_binary_content_changed_on_disk(self):
+        binary = os.path.join(self.root, "claude-bin")
+        write(binary, "binary v1")
+        old = (cmp_.A_PROGRAM, cmp_.A_PROGRAM_SHA)
+        cmp_.A_PROGRAM, cmp_.A_PROGRAM_SHA = binary, "0" * 64
+        self.addCleanup(lambda: setattr(cmp_, "A_PROGRAM", old[0]) or setattr(cmp_, "A_PROGRAM_SHA", old[1]))
+        self.edit_lock("env-lock.json", lambda d: d["a"]["program"].update(path=binary, sha256="0" * 64))
+        self.assertFlags("differs from the binary on disk")
+
+    def test_env_lock_worker_program_hash_mismatch(self):
+        w = os.path.join(self.root, "worker-bin")
+        write(w, "worker")
+        self.edit_lock("env-lock.json", lambda d: d["bc"].update(worker_programs=[{"path": w, "sha256": "1" * 64}]))
+        self.assertFlags("worker program")
+
+    def test_env_lock_arm_equivalence(self):
+        self.edit_lock("env-lock.json", lambda d: d["bc"]["arms"][0].update(models=["claude-opus-5-5"]))
+        self.assertFlags("arm B must be Sonnet-only")
+        self.setUp()
+        self.edit_lock("env-lock.json", lambda d: d["bc"]["arms"][1].update(no_evidence_table=False))
+        self.assertFlags("arm C must declare no_evidence_table")
+        self.setUp()
+        self.edit_lock("env-lock.json", lambda d: d["bc"]["arms"][0].update(evidence_table_id="t1"))
+        self.assertFlags("no evidence table")
+
+    def test_env_lock_cap_env_and_release_mismatch(self):
+        self.edit_lock("env-lock.json", lambda d: d["cap_env"]["toolchain"].update(ro_mounts=["/other"]))
+        self.assertFlags("cap_env toolchain differs")
+        self.setUp()
+        self.edit_lock("env-lock.json", lambda d: d["bc"].update(release="aaaaaaaaaaaa"))
+        self.assertFlags("bc.release must be")
 
     def test_k2_tree_changed(self):
         write_json(os.path.join(self.main, "fixed", "cases", "final", K2, "initial.lock.json"),

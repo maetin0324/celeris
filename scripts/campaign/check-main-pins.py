@@ -302,7 +302,13 @@ def check_fixed(layout, canaries, problems):
                 problems.append(f"leak: canary (forbidden) string in public input: {pu}/{rel}")
 
 
-def check_lock(lock_dir, problems):
+A_PROGRAM = "/home/rmaeda/.local/share/claude/versions/2.1.303"
+A_PROGRAM_SHA = "375988f457756524234695cf2d8f64ace99c5f68682e47ea24862a843c191450"
+HEX64 = re.compile(r"^[0-9a-f]{64}$")
+
+
+def check_lock(layout, lock_dir, env, problems):
+    """生成済み lock の内容を、承認 pin・実 file の hash・launcher.env・cap-env と突き合わせる。"""
     el = load_json(os.path.join(lock_dir, "env-lock.json"), problems, "env-lock.json")
     lk = load_json(os.path.join(lock_dir, "lock.json"), problems, "lock.json")
     if el is not None:
@@ -312,12 +318,62 @@ def check_lock(lock_dir, problems):
             problems.append(f"env-lock.json: campaign_id must be {CAMPAIGN_ID}")
         if el.get("campaign_sha256") != CAMPAIGN_SHA:
             problems.append("env-lock.json: campaign_sha256 differs from the approved pin")
-        if (el.get("bc") or {}).get("release") != RELEASE:
+        bc = el.get("bc") or {}
+        if bc.get("release") != RELEASE:
             problems.append(f"env-lock.json: bc.release must be {RELEASE}")
+        prog = (el.get("a") or {}).get("program") or {}
+        if prog.get("path") != A_PROGRAM or prog.get("sha256") != A_PROGRAM_SHA:
+            problems.append("env-lock.json: a.program path/sha256 differs from the approved A binary pin")
+        elif os.path.isfile(prog["path"]) and sha256_file(prog["path"]) != prog["sha256"]:
+            problems.append("env-lock.json: a.program sha256 differs from the binary on disk")
+        if "worker_programs" in bc and bc["worker_programs"] not in ([],):
+            for w in bc["worker_programs"]:
+                path, sha = (w or {}).get("path"), (w or {}).get("sha256")
+                if not path or not sha or (os.path.isfile(path) and sha256_file(path) != sha):
+                    problems.append("env-lock.json: worker program path/sha256 does not match the binary on disk")
+        arms = {a.get("id"): a for a in bc.get("arms", [])}
+        if set(arms) != {"B", "C"}:
+            problems.append("env-lock.json: bc.arms must be exactly B and C")
+        for aid, a in arms.items():
+            if a.get("models") != [MODEL] or a.get("run_harnesses") != [HARNESS] or a.get("online_update"):
+                problems.append(f"env-lock.json: arm {aid} must be Sonnet-only, claude-code, online_update false")
+            if a.get("harness_version") != RELEASE:
+                problems.append(f"env-lock.json: arm {aid} harness_version must be {RELEASE}")
+            if a.get("evidence_table_id"):
+                problems.append(f"env-lock.json: arm {aid} must have no evidence table")
+            if aid == "C" and not a.get("no_evidence_table"):
+                problems.append("env-lock.json: arm C must declare no_evidence_table (Jev disabled, C calls 0)")
+            if not any(r.get("model_id") == MODEL for r in a.get("catalog", [])):
+                problems.append(f"env-lock.json: arm {aid} catalog lacks {MODEL}")
+        capenv = load_json(os.path.join(layout["pinned"], "cap-env.json"), [], "cap-env")
+        if capenv is not None and el.get("cap_env") is not None:
+            tc = el["cap_env"].get("toolchain") or {}
+            if any(tc.get(k) != capenv.get("a", {}).get(k) for k in ("ro_mounts", "sockets", "env")):
+                problems.append("env-lock.json: cap_env toolchain differs from pinned/cap-env.json")
+        elif el.get("cap_env") is None:
+            problems.append("env-lock.json: cap_env missing")
+        if env and env.get("CELERIS_BIN") and RELEASE not in env["CELERIS_BIN"]:
+            problems.append("launcher.env: CELERIS_BIN is not the release pinned in env-lock.json")
     if lk is not None:
-        for k, want in (("campaign_sha256", CAMPAIGN_SHA), ("campaign_id", CAMPAIGN_ID)):
-            if k in lk and lk[k] != want:
+        for k, want in (("campaign_sha256", CAMPAIGN_SHA), ("measurement_id", CAMPAIGN_ID),
+                        ("materials_sha256", MATERIALS_SHA), ("kb_snapshot", KB_SHA)):
+            if lk.get(k) != want:
                 problems.append(f"lock.json: {k} differs from the approved pin")
+        if not HEX64.match(str(lk.get("sha256", ""))):
+            problems.append("lock.json: seal sha256 missing or malformed")
+        cases = {c.get("id"): c for c in lk.get("cases", [])}
+        if set(cases) < set(PROBLEMS):
+            problems.append("lock.json: cases must include K2 and K4")
+        init = (cases.get(PROBLEMS[0]) or {}).get("initial") or {}
+        if cases.get(PROBLEMS[0]) is not None and init.get("commit") != K2_COMMIT:
+            problems.append("lock.json: K2 initial commit differs from the approved K2 tree")
+        for c in lk.get("configs", (lk.get("execution") or {}).get("configs", [])):
+            if c.get("model") != MODEL or c.get("model_version") != MODEL:
+                problems.append(f"lock.json: config {c.get('id')} is not Sonnet only")
+            if str(c.get("policy_version", "")).startswith("jev") and c.get("id") != "C":
+                problems.append("lock.json: Jev policy outside the secondary arm C")
+        if el is not None and el.get("campaign_sha256") != lk.get("campaign_sha256"):
+            problems.append("env-lock.json / lock.json: campaign_sha256 disagree")
 
 
 def check_evidence(layout, problems):
@@ -375,7 +431,7 @@ def run_checks(root, lock_dir=None):
             continue
         if EPHEMERAL.search(text):
             problems.append(f"stale reference to an ephemeral work tree: {os.path.relpath(f, root)}")
-    check_lock(lock_dir or os.path.join(main_dir, "lock"), problems)
+    check_lock(layout, lock_dir or main_dir, env, problems)
     check_evidence(layout, problems)
     return problems
 
@@ -383,7 +439,7 @@ def run_checks(root, lock_dir=None):
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--root", required=True, help="成果物 root（pinned/ と measure-src/ を持つ dir）")
-    ap.add_argument("--lock-dir", help="env-lock.json / lock.json の dir（既定 <root>/pinned/main/lock）")
+    ap.add_argument("--lock-dir", help="env-lock.json / lock.json の dir（既定 <root>/pinned/main）")
     args = ap.parse_args(argv)
     problems = run_checks(args.root, args.lock_dir)
     if problems:

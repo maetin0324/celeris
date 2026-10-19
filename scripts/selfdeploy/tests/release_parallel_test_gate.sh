@@ -35,6 +35,7 @@ case "$1" in
     [ "${FAKE_NO_NEXTEST:-0}" = 1 ] && { echo "error: no such command: \`nextest\`" >&2; exit 101; }
     case "$2" in
       --version) echo 'cargo-nextest 0.9.146 (fake)' ;;
+      list) echo '{"rust-build-meta":{"target-directory":"/nonexistent","non-test-binaries":{}},"rust-binaries":{"x":{"binary-path":"/nonexistent/x"}}}' ;;
       run)
         [ "${FAKE_NEXTEST_NOSUMMARY:-0}" = 1 ] && exit 0
         printf '    Starting 7 tests across 2 binaries (2 tests skipped)\n'

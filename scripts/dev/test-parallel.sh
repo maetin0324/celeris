@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # scripts/dev/test-parallel.sh [extra nextest args...] — テストバイナリを並列に回す（Phase SD-2、ADR-0041 §8）。
 #
+#   0. `cargo nextest list --workspace --list-type binaries-only`（準備: 試験 binary と試験が起動する実 bin を build し、
+#      mapping の実 bin が実行できることを確かめる。落ちたら nextest run は走らせず非 0。回帰検査は
+#      scripts/dev/test-cli-binary-preparation.sh）
 #   1. `cargo nextest run --workspace`（バイナリをまたいで、テストごとに別プロセスで並列。直列が要るテストは
 #      `.config/nextest.toml` の test-group で縛る）
 #   2. `cargo test --doc --workspace`（nextest は doc-test を回さないので、別に回す）
@@ -10,7 +13,7 @@
 #
 # 最後に 1 行 `CELERIS_TEST_SUMMARY {json}` を出す（release.sh が gate.json の `cargo_test` に写す）:
 #   runner / nextest_version / jobs / binaries（nextest のバイナリ数 + doc-test の crate 数）/ nextest_binaries /
-#   doc_binaries / passed / failed / ignored / nextest_secs / doctest_secs
+#   doc_binaries / passed / failed / ignored / prepare_exit / nextest_exit / doctest_exit / nextest_secs / doctest_secs
 # どちらかが失敗する・集計が読めない（＝全部走った証拠が無い）なら exit 非 0。
 #
 # env:
@@ -84,11 +87,76 @@ trap cleanup_logdir EXIT
 mkdir -p "$logdir/tmp"
 export TMPDIR="$logdir/tmp"
 
-echo "test-parallel: cargo nextest run --workspace (nextest $have_ver, $jobs jobs of $ncpu cpus)" >&2
+# 準備（build）: nextest run と同じ workspace の試験 binary と、試験が起動する実 bin（celerisctl など）を先に build し、
+# nextest の binary mapping（list --list-type binaries-only）を読む。build が落ちる・mapping が読めない・実 bin が無いか
+# 実行できないなら nextest は走らせず、doc-test と summary の後で準備の exit code（mapping の不備は 4）で終わる。
+# 準備は追加引数に関わらず workspace 全体（追加引数は nextest run だけに渡す）。
+# 再利用 target（seed の写し）では cargo が作り直さない試験 binary に、build 時の CARGO_BIN_EXE_<bin>（seed を作った
+# 別 dir の絶対 path）が残ることがある（integrate-external の celerisctl NotFound）。その数を診断行に出す（exit は変えない）。
+echo "test-parallel: prepare: cargo nextest list --workspace --list-type binaries-only" >&2
+prc=0
+cargo nextest list --workspace --list-type binaries-only --message-format json --color never \
+  >"$logdir/prepare.json" || prc=$?
+if [ "$prc" -eq 0 ]; then
+  python3 - "$logdir/prepare.json" <<'PY' || prc=$?
+import json, os, re, sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as fh:
+        meta = json.load(fh)
+    build = meta["rust-build-meta"]
+    target = build["target-directory"]
+    suites = meta["rust-binaries"]
+    non_test = build.get("non-test-binaries") or {}
+except (OSError, ValueError, KeyError, TypeError) as e:
+    print(f"test-parallel: prepare: cannot read the nextest binary mapping: {e}", file=sys.stderr)
+    sys.exit(4)
+if not suites:
+    print("test-parallel: prepare: the nextest binary mapping lists no test binaries", file=sys.stderr)
+    sys.exit(4)
+bins = {}
+missing = []
+for entries in non_test.values():
+    for b in entries:
+        if b.get("kind") != "bin-exe":
+            continue
+        path = os.path.join(target, b["path"])
+        bins[b["name"]] = path
+        if not (os.path.isfile(path) and os.access(path, os.X_OK)):
+            missing.append(f"{b['name']} ({path})")
+for m in missing:
+    print(f"test-parallel: prepare: CLI binary missing or not executable: {m}", file=sys.stderr)
+if missing:
+    sys.exit(4)
+stale = []
+for name, suite in sorted(suites.items()):
+    try:
+        with open(suite["binary-path"] + ".d", encoding="utf-8", errors="replace") as fh:
+            deps = fh.read()
+    except OSError:
+        continue
+    for bin_name, embedded in re.findall(r"^# env-dep:CARGO_BIN_EXE_([^=\s]+)=(.*)$", deps, re.M):
+        if bin_name in bins and embedded != bins[bin_name]:
+            stale.append((name, bin_name, embedded))
+if stale:
+    name, bin_name, embedded = stale[0]
+    print(f"test-parallel: prepare: warning: {len(stale)} test binaries were built with CARGO_BIN_EXE_* outside this "
+          f"target (e.g. {name}: CARGO_BIN_EXE_{bin_name}={embedded}); env!() in those tests still names that path",
+          file=sys.stderr)
+print(f"test-parallel: prepare: ok ({len(suites)} test binaries; CLI {', '.join(sorted(bins)) or '-'} in {target})",
+      file=sys.stderr)
+PY
+fi
+[ "$prc" -eq 0 ] || echo "test-parallel: prepare failed (exit $prc); cargo nextest run was not started" >&2
+
 t0="$(date +%s.%N)"
 nrc=0
-cargo nextest run --workspace --no-fail-fast --color never --hide-progress-bar \
-  --test-threads "$jobs" "$@" 2>&1 | tee "$logdir/nextest.log" || nrc=$?
+if [ "$prc" -eq 0 ]; then
+  echo "test-parallel: cargo nextest run --workspace (nextest $have_ver, $jobs jobs of $ncpu cpus)" >&2
+  cargo nextest run --workspace --no-fail-fast --color never --hide-progress-bar \
+    --test-threads "$jobs" "$@" 2>&1 | tee "$logdir/nextest.log" || nrc=$?
+else
+  : >"$logdir/nextest.log"
+fi
 t1="$(date +%s.%N)"
 
 drc=0
@@ -106,9 +174,9 @@ if [ "$tmp_leftovers" -ne 0 ]; then
   echo "test-parallel: warning: tests left $tmp_leftovers entries in TMPDIR (removed on exit)" >&2
 fi
 
-python3 - "$logdir/nextest.log" "$logdir/doc.log" "$have_ver" "$jobs" "$nrc" "$drc" "$t0" "$t1" "$t2" "$tmp_leftovers" "$userns_ok" <<'PY'
+python3 - "$logdir/nextest.log" "$logdir/doc.log" "$have_ver" "$jobs" "$nrc" "$drc" "$t0" "$t1" "$t2" "$tmp_leftovers" "$userns_ok" "$prc" <<'PY'
 import json, re, sys
-nlog, dlog, ver, jobs, nrc, drc, t0, t1, t2, tmp_left, userns_ok = sys.argv[1:]
+nlog, dlog, ver, jobs, nrc, drc, t0, t1, t2, tmp_left, userns_ok, prc = sys.argv[1:]
 nbin = total = None
 npass = nfail = nskip = 0
 summary_seen = False
@@ -150,6 +218,7 @@ out = {
     "passed": npass + dpass,
     "failed": nfail + dfail,
     "ignored": nskip + dign,
+    "prepare_exit": int(prc),
     "nextest_exit": int(nrc),
     "doctest_exit": None if drc == "skipped" else int(drc),
     "nextest_secs": round(float(t1) - float(t0), 1),
@@ -163,6 +232,7 @@ print("CELERIS_TEST_SUMMARY " + json.dumps(out, ensure_ascii=False))
 open(nlog + ".ok", "w").write("true" if ok else "false")
 PY
 
+if [ "$prc" -ne 0 ]; then echo "test-parallel: prepare failed (exit $prc)" >&2; exit "$prc"; fi
 if [ "$nrc" -ne 0 ]; then
   # 落ちた test 名を最終行より前に出す（nextest の結果行 FAIL / TIMEOUT / SIG* [時間] 名前。重複を除き最大 30 行）
   grep -E '^[[:space:]]*(FAIL|TIMEOUT|SIG[A-Z]+)[[:space:]]+\[' "$logdir/nextest.log" 2>/dev/null \

@@ -911,19 +911,33 @@ impl CelerisSide {
                 let next_sleeper = self.shared.clock.lock().sleepers.values().min().copied();
                 let next_arrival = (self.submitted.len() < n)
                     .then(|| self.shared.spec.arrival(self.submitted.len()));
-                let Some(next) = [next_sleeper, next_arrival].into_iter().flatten().min() else {
-                    return Err(format!(
-                        "stuck: nothing sleeping and campaigns not terminal at logical {} ({statuses:?}); recent events: {}",
-                        self.shared.clock.now(),
-                        self.recent_events()
-                    ));
-                };
-                if next > cap_logical {
-                    return Err(format!("logical cap {cap_logical} exceeded"));
+                match [next_sleeper, next_arrival].into_iter().flatten().min() {
+                    Some(next) => {
+                        if next > cap_logical {
+                            return Err(format!("logical cap {cap_logical} exceeded"));
+                        }
+                        // ext-sim の時計も同じ時刻へ（期限の来た job を完了させる。通知は Celeris 側では使わず poll で知る）。
+                        self.shared.ext().advance(next).map_err(|e| e.to_string())?;
+                        self.shared.clock.advance_to(next);
+                    }
+                    // `waiting` の cluster job wait があるのに poll が走っていない: 止まっているのではなく、dispatcher の
+                    // 次の poll を待っている。前の制御 process が起こして結果を返さないまま SIGKILL された poll は
+                    // `last_polled_at` を残すので、再起動した dispatcher は壁時計で `poll_secs` 経つまで同じ wait を
+                    // poll し直さない（`Dispatcher::poll_cluster_job_waits`）。論理時計は進めずに tick を続け、poll
+                    // （poller の呼び出し）が来るのを待つ。上限は壁時計の観測上限（`cap_wall`）。
+                    None if !self
+                        .store
+                        .cluster_job_waits_waiting()
+                        .map_err(|e| e.to_string())?
+                        .is_empty() => {}
+                    None => {
+                        return Err(format!(
+                            "stuck: nothing sleeping and campaigns not terminal at logical {} ({statuses:?}); recent events: {}",
+                            self.shared.clock.now(),
+                            self.recent_events()
+                        ));
+                    }
                 }
-                // ext-sim の時計も同じ時刻へ（期限の来た job を完了させる。通知は Celeris 側では使わず poll で知る）。
-                self.shared.ext().advance(next).map_err(|e| e.to_string())?;
-                self.shared.clock.advance_to(next);
                 stable = 0;
             }
             tokio::time::sleep(TICK_GAP).await;

@@ -280,10 +280,24 @@ fn ext_cfg(s: &RunSpec) -> ExtConfig {
 }
 
 /// `nth` 件目（異なる論理 job）の `wait_started` が ack された直後に出来事を知らせて止まる backend 包み。
+/// `park_on_poll` なら代わりに最初の `lookup`（Celeris 側では poller の照会 = dispatcher が wait の
+/// `last_polled_at` を書いた後）で止まる。
 struct Tripwire<B> {
     inner: B,
     park_at: Option<usize>,
+    park_on_poll: bool,
     seen: BTreeSet<String>,
+}
+
+/// 出来事を stdout に知らせ、observer が SIGKILL するまで進まない。
+fn park(line: &str) -> ! {
+    use std::io::Write;
+    let mut o = std::io::stdout();
+    let _ = writeln!(o, "{line}");
+    let _ = o.flush();
+    loop {
+        std::thread::park();
+    }
 }
 
 impl<B: ExtBackend> ExtBackend for Tripwire<B> {
@@ -294,18 +308,14 @@ impl<B: ExtBackend> ExtBackend for Tripwire<B> {
         self.inner.wait_started(l)?;
         self.seen.insert(l.to_string());
         if self.park_at == Some(self.seen.len()) {
-            use std::io::Write;
-            let mut o = std::io::stdout();
-            let _ = writeln!(o, "CONTROL_ACKED {:?}", self.seen);
-            let _ = o.flush();
-            // observer が SIGKILL するまで進まない。
-            loop {
-                std::thread::park();
-            }
+            park(&format!("CONTROL_ACKED {:?}", self.seen));
         }
         Ok(())
     }
     fn lookup(&mut self, l: &str) -> std::io::Result<Lookup> {
+        if self.park_on_poll {
+            park(&format!("CONTROL_ACKED poll {l} after {:?}", self.seen));
+        }
         self.inner.lookup(l)
     }
     fn advance(&mut self, n: u64) -> std::io::Result<Vec<Notice>> {
@@ -401,6 +411,7 @@ fn control_role() {
     let tripwire = Tripwire {
         inner: ipc,
         park_at: cfg["nth"].as_u64().map(|n| n as usize),
+        park_on_poll: cfg["park"] == "poll",
         seen: BTreeSet::new(),
     };
     match cfg["arm"].as_str().expect("arm") {
@@ -468,7 +479,7 @@ fn wait_line(p: &OwnedProc, marker: &str) -> String {
 
 /// raw 保存先: `DAGBENCH_PROCESS_RAW_DIR`（絶対）の下の run 用 dir。未指定のときは何も残さない作業用 dir
 /// （試験後に消え、raw としては記録しない。相対 path は拒否する）。
-fn run_dir(arm: &str) -> (PathBuf, Option<tempfile::TempDir>) {
+fn run_dir(arm: String) -> (PathBuf, Option<tempfile::TempDir>) {
     match std::env::var_os(RAW_DIR_ENV) {
         Some(base) => {
             let base = PathBuf::from(base);
@@ -487,7 +498,16 @@ fn run_dir(arm: &str) -> (PathBuf, Option<tempfile::TempDir>) {
     }
 }
 
-fn survive(arm: &'static str) {
+/// incarnation 1 の control を止める場所。
+#[derive(Clone, Copy, PartialEq)]
+enum Park {
+    /// `nth` 件目の `wait_started` の ack 直後。
+    WaitAck,
+    /// 最初の poll の照会（Celeris 側のみ。dispatcher が wait の `last_polled_at` を書き、poll が走っている最中）。
+    Poll,
+}
+
+fn survive(arm: &'static str, at: Park) {
     let file = load_scenarios(&scenarios()).expect("scenarios");
     let seed = file.seed;
     let s = spec(seed);
@@ -501,7 +521,10 @@ fn survive(arm: &'static str) {
     let occurrences = externals as u64;
     let nth = 1 + seed % occurrences;
     let limits = cfg_limits();
-    let (d, _scratch) = run_dir(arm);
+    let (d, _scratch) = run_dir(match at {
+        Park::WaitAck => arm.to_string(),
+        Park::Poll => format!("{arm}-poll"),
+    });
     // unix socket の path は 107 byte までなので、socket だけ短い dir に置く（記録ではない短命の endpoint）。
     let sd = tempfile::Builder::new()
         .prefix("pr")
@@ -537,7 +560,8 @@ fn survive(arm: &'static str) {
             .env(
                 CTL_ENV,
                 json!({"arm": arm, "dir": d, "sock": sock, "seed": seed,
-                       "nth": nth, "incarnation": inc})
+                       "nth": nth, "incarnation": inc,
+                       "park": if inc == 1 && at == Park::Poll { "poll" } else { "ack" }})
                 .to_string(),
             );
         c
@@ -554,7 +578,7 @@ fn survive(arm: &'static str) {
 
     // 1. control: submit / 待機 ack が nth 件目に達するまで走る。
     let mut c1 = sup
-        .spawn(Role::Control, ctl(1, Some(nth)))
+        .spawn(Role::Control, ctl(1, (at == Park::WaitAck).then_some(nth)))
         .expect("spawn control");
     let acked_line = wait_line(&c1, "CONTROL_ACKED");
     log.barrier(
@@ -690,8 +714,17 @@ fn survive(arm: &'static str) {
 
 #[test]
 fn ipc_external_survives_control_exit() {
-    survive("baseline");
-    survive("celeris");
+    survive("baseline", Park::WaitAck);
+    survive("celeris", Park::WaitAck);
+}
+
+/// 前の control が起こした poll が結果を返さないまま SIGKILL されると、wait は `last_polled_at` を残した
+/// `waiting` のまま残り、再起動した dispatcher は壁時計で `poll_secs` 経つまで poll し直さない。その間 sleeper も
+/// in-flight も無い状態を「stuck」と誤判定せず、次の poll を待って走り切る（負荷下で `Park::WaitAck` の
+/// control 1 が待機 ack より先に 1 件目の wait の poll まで進んだときに起きた競合を、止める場所で決定的に作る）。
+#[test]
+fn ipc_external_survives_control_exit_mid_poll() {
+    survive("celeris", Park::Poll);
 }
 
 // ---- 版付き raw と barrier 順序の回帰 ----

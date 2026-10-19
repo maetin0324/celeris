@@ -18,6 +18,14 @@ completed: 2026-10-19
 - `cargo clippy -p celeris-campaign --lib --bins --test dagbench_fault --test dagbench_ext --test dagbench_baseline --test dagbench_celeris -- -D warnings` → 0
 - `cargo fmt --all -- --check` → 0
 
+## attempt 2: (c) の trigger_observed 取りこぼし（check 不合格）の修正
+- 症状: `c_duplicate_completion_notice_is_counted_once` が `trigger observed` で panic（5 回中 0 回・初回 check で 1 回の間欠）。
+- 原因: runner の監視 loop が「子の終了確認 → ledger 走査」の順で、(b)(c) は制御 process が止まらないため、
+  fault 発火から完走までが刻み（10ms）より短いと終了を先に見て、`fault_fired` を読まずに抜けていた。
+- 修正: 終了を見てから ledger を末尾まで読み、その後で終了を判定する（読み切り→判定）。終了済みの子には SIGKILL を送らない。
+- 証拠: `cargo test -p celeris-campaign --test dagbench_fault` 8 回連続 6 passed、
+  `cargo clippy --workspace -- -D warnings` → 0、`cargo fmt --all -- --check` → 0。
+
 ## 未解決事項
 - 修正前に一度だけ a2 が全体実行中に失敗した（runner のエラー。ログ収集を入れる前で原因は未特定）。最も有力な原因は、
   別 thread が書いていた worker ledger の行が SIGKILL で途中で切れ、再起動時の読み込みが壊れたこと。

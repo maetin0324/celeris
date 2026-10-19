@@ -277,9 +277,9 @@ impl FaultRunner {
             }
             let mut killed = false;
             let status = loop {
-                if let Some(st) = child.try_wait().map_err(io)? {
-                    break st;
-                }
+                // 終了を先に見てから ledger を末尾まで読む（読み切り→判定）。逆順だと発火直後に完走した
+                // 制御 process の fault_fired を読まずに抜ける。
+                let exited = child.try_wait().map_err(io)?;
                 for e in read_jsonl::<Entry>(&self.ext_ledger).map_err(io)? {
                     if e.event != "fault_fired" || observed.contains(&e.seq) {
                         continue;
@@ -299,7 +299,7 @@ impl FaultRunner {
                         }),
                     )
                     .map_err(io)?;
-                    if fault.kind == FaultKind::StopControl && !killed {
+                    if fault.kind == FaultKind::StopControl && !killed && exited.is_none() {
                         // 握っている Child にだけ SIGKILL（std の kill は unix で SIGKILL）。
                         child.kill().map_err(io)?;
                         killed = true;
@@ -312,6 +312,9 @@ impl FaultRunner {
                         )
                         .map_err(io)?;
                     }
+                }
+                if let Some(st) = exited {
+                    break st;
                 }
                 if started.elapsed() > self.wall_cap {
                     let _ = child.kill();

@@ -7,7 +7,7 @@ completed: 2026-10-19
 # celeris-drv: 既存 Celeris 通常経路で同一 scenario を流す薄い driver
 
 - 実装: `crates/campaign/src/dagbench/celeris_side.rs`（`RunSpec`・`CelerisSide::drive`・台本 worker `StubWorker`・ext-sim poller）。
-  設計判断は `agent-docs/adr/2026-10-19-dagbench-celeris-driver.md`（C1〜C4）。再利用先は module 先頭のコメントに R 番号で明記。
+  設計判断は `agent-docs/adr/2026-10-19-dag-fault-comparison-celeris-driver.md`（C1〜C4）。再利用先は module 先頭のコメントに R 番号で明記。
 - 依存追加: `celeris-campaign` に `task-dispatch`・`async-trait`（本体 crate は無変更）。
 - 試験 `cargo test -p celeris-campaign --test dagbench_celeris`: 2 passed（k2-mini camp-1 makespan 1980 = 理論値、center 2 campaign）。
   三者（worker ledger・ext-sim ledger・SQLite）の整合、物理起動 = 論理 job = 消費、DAG 順序、worker 同時数 ≤ 2。

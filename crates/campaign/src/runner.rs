@@ -643,6 +643,11 @@ pub fn run(
     opts: &RunOptions,
 ) -> Result<RunReport, String> {
     m.check_against_input(input)?;
+    // 共有承認の manifest は宣言した台帳でしか走らない（省略・別 path・結び付き不明の lock は台帳に触れる前に拒否）。
+    m.check_shared_ledger(opts.global_ledger.as_deref())?;
+    if let Some(l) = &opts.lock {
+        l.check_shared_ledger(m)?;
+    }
     let hash = m.compute_sha256()?;
     let out = &opts.out;
     // 全体台帳: 開始の登録と検証（取り分を記録し、横断上限に収まらない測定は何かする前に拒否する）。

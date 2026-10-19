@@ -271,6 +271,10 @@ pub struct SetFixed {
     /// 承認単位の試行数上限（全セット共通。宣言した最小値が全体台帳の上限になり、別測定 ID で増やせない）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approved_trials: Option<u64>,
+    /// 共有承認の全体台帳 dir（絶対 path）。`allocation`/`approved_trials` を宣言したセットがあれば全セットで必須・同じ値。
+    /// set 宣言の hash（lock の `sets_sha256`）に入るので、承認・lock と台帳の場所が結び付く。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shared_ledger: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -741,6 +745,7 @@ impl CampaignManifest {
             return Err("selected_sets contain duplicates".into());
         }
         let _ = sel;
+        self.shared_ledger_decl()?;
         let mut shares = BTreeMap::new();
         for (name, s) in &self.experiment_sets {
             if let Some(sh) = s.fixed.allocation {
@@ -759,6 +764,55 @@ impl CampaignManifest {
             },
             &shares,
         )
+    }
+
+    /// 共有承認の台帳宣言。セットが `allocation`/`approved_trials`/`shared_ledger` のどれかを持てば共有承認で、
+    /// 全セットが同じ絶対 path の `shared_ledger` を宣言していること（無い・食い違いは Err）。どれも無ければ None
+    /// （旧形式の非共有測定。`--global-ledger` は任意の opt-in で、台帳を省略した単独測定も従来どおり）。
+    pub fn shared_ledger_decl(&self) -> Result<Option<&Path>, String> {
+        let sets = self.experiment_sets.values();
+        let shared = sets.clone().any(|s| {
+            s.fixed.allocation.is_some()
+                || s.fixed.approved_trials.is_some()
+                || s.fixed.shared_ledger.is_some()
+        });
+        if !shared {
+            return Ok(None);
+        }
+        let decl: BTreeSet<Option<&str>> = sets.map(|s| s.fixed.shared_ledger.as_deref()).collect();
+        match decl.into_iter().collect::<Vec<_>>().as_slice() {
+            [Some(p)] if Path::new(p).is_absolute() => Ok(Some(Path::new(*p))),
+            [Some(p)] => Err(format!("shared_ledger {p:?} must be an absolute path")),
+            _ => Err(
+                "shared approval (allocation/approved_trials) requires the same shared_ledger in every set"
+                    .into(),
+            ),
+        }
+    }
+
+    /// 共有承認を宣言した測定が、宣言した台帳 dir で走るか（投入前に呼ぶ）。台帳の省略・別 path は拒否し、
+    /// 非共有 fallback を許さない。測定 ID を変えた manifest も同じ宣言を持つ限り同じ台帳に数えられる。
+    pub fn check_shared_ledger(&self, given: Option<&Path>) -> Result<(), String> {
+        let Some(decl) = self.shared_ledger_decl()? else {
+            return Ok(());
+        };
+        let Some(given) = given else {
+            return Err(format!(
+                "{}: shared approval requires --global-ledger {} (running without the shared ledger is refused)",
+                self.campaign_id,
+                decl.display()
+            ));
+        };
+        let abs = std::path::absolute(given).map_err(|e| format!("{}: {e}", given.display()))?;
+        if abs != decl {
+            return Err(format!(
+                "{}: --global-ledger {} is not the declared shared ledger {}",
+                self.campaign_id,
+                abs.display(),
+                decl.display()
+            ));
+        }
+        Ok(())
     }
 
     /// 正規化後の canonical JSON（キー順固定）の sha256。`sha256` 欄は空として数える。
@@ -1579,7 +1633,37 @@ mod tests {
         for n in ["main", "jev"] {
             m.experiment_sets.get_mut(n).unwrap().fixed.allocation = Some(half);
         }
+        // 共有承認は全セットで同じ絶対 path の台帳宣言を要る（無い・片方だけ・食い違い・相対 path は拒否）。
+        let decl = |m: &mut CampaignManifest, n: &str, p: Option<&str>| {
+            m.experiment_sets.get_mut(n).unwrap().fixed.shared_ledger = p.map(str::to_string);
+        };
+        assert!(m.validate().unwrap_err().contains("shared_ledger"));
+        decl(&mut m, "main", Some("/approved/ledger"));
+        assert!(m.validate().unwrap_err().contains("shared_ledger"));
+        decl(&mut m, "jev", Some("/other/ledger"));
+        assert!(m.validate().unwrap_err().contains("shared_ledger"));
+        decl(&mut m, "jev", Some("approved/ledger"));
+        decl(&mut m, "main", Some("approved/ledger"));
+        assert!(m.validate().unwrap_err().contains("absolute"));
+        decl(&mut m, "jev", Some("/approved/ledger"));
+        decl(&mut m, "main", Some("/approved/ledger"));
         assert!(m.validate().is_ok(), "{:?}", m.validate());
+        // 宣言した台帳でだけ走る: 省略・別 path は拒否、同じ dir（末尾 / の違いは同じ）は通る。
+        assert!(m.check_shared_ledger(None).is_err());
+        assert!(
+            m.check_shared_ledger(Some(Path::new("/tmp/fresh")))
+                .unwrap_err()
+                .contains("not the declared shared ledger")
+        );
+        assert!(
+            m.check_shared_ledger(Some(Path::new("/approved/ledger/")))
+                .is_ok()
+        );
+        // 旧形式（共有承認の宣言なし）は台帳を省略しても、任意の台帳を渡しても従来どおり。
+        let legacy = with_sets(&[], &[]);
+        assert_eq!(legacy.shared_ledger_decl(), Ok(None));
+        assert!(legacy.check_shared_ledger(None).is_ok());
+        assert!(legacy.check_shared_ledger(Some(Path::new("/any"))).is_ok());
         m.experiment_sets.get_mut("jev").unwrap().fixed.allocation = Some(Share { trials, ..half });
         assert!(m.validate().unwrap_err().contains("trials"));
     }

@@ -549,3 +549,47 @@ async fn task_override_evidence_mode_none_is_recorded_without_a_table_version() 
     );
     assert_eq!(resolved.evidence_table_id, None);
 }
+
+/// board-meta: 版メタデータは call_id に結び付く。従来 put は欠測（None）、置換・remove・複数未記録 call でも取り違えない。
+#[test]
+fn board_call_provenance_is_bound_to_call_id_and_missing_is_none() {
+    let board = ClassificationBoard::default();
+    let item = || BoardItem {
+        entry: ClassificationEntry::fell_back("x"),
+        credential: None,
+    };
+    board.put("s", item());
+    board.put_with_provenance(
+        "s",
+        item(),
+        CallProvenance {
+            response_model: Some("jev-resp".into()),
+            observed_snapshot: Some("snap-1".into()),
+        },
+    );
+    board.put_with_provenance(
+        "s",
+        item(),
+        CallProvenance {
+            response_model: Some("jev-resp".into()),
+            observed_snapshot: None,
+        },
+    );
+    let cur = board.get_call("s").unwrap();
+    assert_eq!(cur.call_no, 3);
+    assert_eq!(cur.provenance.observed_snapshot, None);
+    // remove 後も未記録 call は残り、各 call は自分の版を持つ。
+    board.remove("s");
+    assert!(board.get_call("s").is_none());
+    let calls = board.take_unrecorded("s");
+    assert_eq!(calls.len(), 3);
+    assert_eq!(calls[0].provenance, CallProvenance::default());
+    assert_eq!(
+        calls[1].provenance.observed_snapshot.as_deref(),
+        Some("snap-1")
+    );
+    assert_eq!(calls[2].provenance.observed_snapshot, None);
+    assert_eq!(calls[2].call_id, cur.call_id);
+    assert_ne!(calls[1].call_id, calls[2].call_id);
+    assert!(board.take_unrecorded("s").is_empty());
+}

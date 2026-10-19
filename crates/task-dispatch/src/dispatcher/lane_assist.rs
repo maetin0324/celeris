@@ -34,6 +34,18 @@ pub struct BoardCall {
     pub call_id: String,
     pub call_no: u32,
     pub item: BoardItem,
+    /// この呼び出しに結び付いた版メタデータ。従来の `put` は全欄 `None`（欠測）。
+    pub provenance: CallProvenance,
+}
+
+/// 1 回の Jev 呼び出しの版メタデータ。`call_id` と同じ `BoardCall` に載り、subject だけで引く別 call の値と混ざらない。
+/// 欠測は `None`（設定の model 名で埋めない・片方から他方を複製しない）。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CallProvenance {
+    /// 応答が名乗った model 名。
+    pub response_model: Option<String>,
+    /// 応答と独立に観測した版。
+    pub observed_snapshot: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -67,6 +79,11 @@ fn next_call_id() -> String {
 impl ClassificationBoard {
     /// 呼び出し 1 回分を置く。置くたびに新しい `call_id` が付く（前の呼び出しは決定ログに残る）。
     pub fn put(&self, subject: &str, item: BoardItem) {
+        self.put_with_provenance(subject, item, CallProvenance::default());
+    }
+
+    /// `put` と同じ採番（`call_id`・`call_no`）で、版メタデータを同じ呼び出しに原子的に結び付けて置く。
+    pub fn put_with_provenance(&self, subject: &str, item: BoardItem, provenance: CallProvenance) {
         if let Ok(mut s) = self.inner.lock() {
             let n = s.calls.entry(subject.to_owned()).or_insert(0);
             *n += 1;
@@ -74,6 +91,7 @@ impl ClassificationBoard {
                 call_id: next_call_id(),
                 call_no: *n,
                 item,
+                provenance,
             };
             s.unrecorded
                 .entry(subject.to_owned())

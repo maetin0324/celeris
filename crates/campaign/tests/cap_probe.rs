@@ -680,3 +680,139 @@ fn undeclared_or_misdeclared_probe_harness_submits_nothing_and_is_env_failure() 
         assert_eq!(host.2.get(), 0, "{label}: nothing submitted");
     }
 }
+
+fn kind_spec_cmd(tc: &Toolchain, path: &Path, declared: cap_probe::MountKind) -> String {
+    let kinds = vec![(path.to_path_buf(), declared)];
+    let spec = cap_probe::worker_spec(tc, &kinds, &k4(), "claude-code");
+    spec.checks
+        .iter()
+        .find(|c| c.id.starts_with("toolchain:"))
+        .expect("toolchain check")
+        .cmd
+        .clone()
+}
+
+fn sh_ok(cmd: &str) -> bool {
+    std::process::Command::new("/bin/sh")
+        .arg("-c")
+        .arg(cmd)
+        .status()
+        .expect("sh")
+        .success()
+}
+
+fn tc_for(p: &Path) -> Toolchain {
+    Toolchain {
+        ro_mounts: vec![p.into()],
+        ..Toolchain::default()
+    }
+}
+
+#[test]
+fn ro_mount_kind_regular_file_passes_with_test_f() {
+    let d = tempfile::tempdir().expect("tmp");
+    let f = d.path().join("tool.cfg");
+    fs::write(&f, "x").expect("w");
+    let tc = tc_for(&f);
+    let kinds = cap_probe::ro_mount_kinds(&tc);
+    assert_eq!(kinds, vec![(f.clone(), cap_probe::MountKind::File)]);
+    let cmd = kind_spec_cmd(&tc, &f, kinds[0].1);
+    assert!(
+        cmd.starts_with("test -f ") && cmd.contains("test -r "),
+        "{cmd}"
+    );
+    assert!(!cmd.contains("test -d"), "{cmd}");
+    assert!(sh_ok(&cmd), "{cmd}");
+}
+
+#[test]
+fn ro_mount_kind_directory_passes_with_test_d() {
+    let d = tempfile::tempdir().expect("tmp");
+    let tc = tc_for(d.path());
+    let kinds = cap_probe::ro_mount_kinds(&tc);
+    assert_eq!(kinds[0].1, cap_probe::MountKind::Dir);
+    let cmd = kind_spec_cmd(&tc, d.path(), kinds[0].1);
+    assert!(cmd.contains("test -d ") && cmd.contains("test -r ") && cmd.contains("test -x "));
+    assert!(sh_ok(&cmd), "{cmd}");
+}
+
+#[test]
+fn ro_mount_kind_symlink_to_file_is_a_file_not_relaxed() {
+    let d = tempfile::tempdir().expect("tmp");
+    let f = d.path().join("real");
+    fs::write(&f, "x").expect("w");
+    let l = d.path().join("link");
+    std::os::unix::fs::symlink(&f, &l).expect("ln");
+    let tc = tc_for(&l);
+    let kinds = cap_probe::ro_mount_kinds(&tc);
+    assert_eq!(kinds[0].1, cap_probe::MountKind::File);
+    let cmd = kind_spec_cmd(&tc, &l, kinds[0].1);
+    assert!(sh_ok(&cmd) && cmd.starts_with("test -f "), "{cmd}");
+    let dangling = d.path().join("dangling");
+    std::os::unix::fs::symlink(d.path().join("nope"), &dangling).expect("ln");
+    assert!(cap_probe::ro_mount_kinds(&tc_for(&dangling)).is_empty());
+    assert!(!sh_ok(&cap_probe::ro_mount_check(
+        &dangling.to_string_lossy(),
+        cap_probe::MountKind::File
+    )));
+}
+
+#[test]
+fn ro_mount_kind_missing_mount_is_rejected_by_both_kinds() {
+    let d = tempfile::tempdir().expect("tmp");
+    let gone = d.path().join("gone");
+    let tc = tc_for(&gone);
+    assert!(cap_probe::ro_mount_kinds(&tc).is_empty());
+    // 種別が分からない mount は directory 検査で落ちる
+    let spec = cap_probe::worker_spec(&tc, &[], &k4(), "claude-code");
+    let cmd = &spec.checks[0].cmd;
+    assert!(cmd.starts_with("test -d "));
+    assert!(!sh_ok(cmd));
+    for k in [cap_probe::MountKind::File, cap_probe::MountKind::Dir] {
+        assert!(!sh_ok(&cap_probe::ro_mount_check(
+            &gone.to_string_lossy(),
+            k
+        )));
+    }
+}
+
+#[test]
+fn ro_mount_kind_mismatch_file_as_dir_and_dir_as_file_fail() {
+    let d = tempfile::tempdir().expect("tmp");
+    let f = d.path().join("f");
+    fs::write(&f, "x").expect("w");
+    assert!(!sh_ok(&cap_probe::ro_mount_check(
+        &f.to_string_lossy(),
+        cap_probe::MountKind::Dir
+    )));
+    assert!(!sh_ok(&cap_probe::ro_mount_check(
+        &d.path().to_string_lossy(),
+        cap_probe::MountKind::File
+    )));
+}
+
+#[test]
+fn ro_mount_kind_unreadable_file_fails_the_readability_check() {
+    use std::os::unix::fs::PermissionsExt;
+    let d = tempfile::tempdir().expect("tmp");
+    let f = d.path().join("secret");
+    fs::write(&f, "x").expect("w");
+    fs::set_permissions(&f, fs::Permissions::from_mode(0o000)).expect("chmod");
+    let cmd = cap_probe::ro_mount_check(&f.to_string_lossy(), cap_probe::MountKind::File);
+    assert!(cmd.contains("test -r "), "{cmd}");
+    // root は mode 000 でも読めるので、sh 自身の `test -r` を基準に判定する（skip しない）
+    let readable = sh_ok(&format!("test -r '{}'", f.display()));
+    assert_eq!(sh_ok(&cmd), readable, "{cmd}");
+    // directory は走査可否も見る
+    let sub = d.path().join("sub");
+    fs::create_dir(&sub).expect("mkdir");
+    fs::set_permissions(&sub, fs::Permissions::from_mode(0o000)).expect("chmod");
+    let dcmd = cap_probe::ro_mount_check(&sub.to_string_lossy(), cap_probe::MountKind::Dir);
+    assert!(dcmd.contains("test -x "), "{dcmd}");
+    let ok = sh_ok(&format!(
+        "test -r '{p}' && test -x '{p}'",
+        p = sub.display()
+    ));
+    assert_eq!(sh_ok(&dcmd), ok, "{dcmd}");
+    fs::set_permissions(&sub, fs::Permissions::from_mode(0o755)).expect("chmod");
+}

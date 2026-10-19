@@ -577,19 +577,64 @@ pub struct WorkerProbeRun {
     pub results: Vec<WorkerCheckResult>,
 }
 
+/// 固定した mount の種別（`pin_mount` と同じく symlink は実体まで辿った先の種別）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MountKind {
+    File,
+    Dir,
+}
+
+/// `ro_mounts` の各 mount の種別を host で調べる。解決できない mount（欠落・特殊 file）は載せない。
+pub fn ro_mount_kinds(t: &Toolchain) -> Vec<(PathBuf, MountKind)> {
+    t.ro_mounts
+        .iter()
+        .filter_map(|p| {
+            let md = std::fs::metadata(std::fs::canonicalize(p).ok()?).ok()?;
+            let kind = if md.is_dir() {
+                MountKind::Dir
+            } else if md.is_file() {
+                MountKind::File
+            } else {
+                return None;
+            };
+            Some((p.clone(), kind))
+        })
+        .collect()
+}
+
+/// mount 1 件の worker 側検査式。file は `test -f` + 可読、directory は `test -d` + 可読 + 走査可。
+pub fn ro_mount_check(path: &str, kind: MountKind) -> String {
+    let q = sh_quote(path);
+    match kind {
+        MountKind::File => format!("test -f {q} && test -r {q}"),
+        MountKind::Dir => format!("test -d {q} && test -r {q} && test -x {q}"),
+    }
+}
+
 fn sh_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
 /// worker 子 process の中で走らせる検査。必要能力は `case.required_capabilities` そのまま、
-/// それに toolchain の mount（`test -d`）と socket（`test -S`）の存在確認を足す。
-pub fn worker_spec(expected: &Toolchain, case: &Case, harness: &str) -> WorkerProbeSpec {
+/// それに toolchain の mount（pin 時の種別に応じた `test -f`/`test -d` と可読性）と socket（`test -S`）の確認を足す。
+/// `kinds` は host で pin 時に分かった mount の種別（`ro_mount_kinds`）。載っていない mount は directory として検査する
+/// （host で解決できない mount は worker でも落ちる）。
+pub fn worker_spec(
+    expected: &Toolchain,
+    kinds: &[(PathBuf, MountKind)],
+    case: &Case,
+    harness: &str,
+) -> WorkerProbeSpec {
     let mut checks = Vec::new();
     for m in &expected.ro_mounts {
         let p = m.to_string_lossy();
+        let kind = kinds
+            .iter()
+            .find(|(k, _)| k == m)
+            .map_or(MountKind::Dir, |(_, k)| *k);
         checks.push(WorkerCheck {
             id: format!("toolchain:{p}"),
-            cmd: format!("test -d {}", sh_quote(&p)),
+            cmd: ro_mount_check(&p, kind),
             expect_stdout: None,
         });
     }
@@ -653,8 +698,9 @@ pub fn probe_worker(
     }
     let mut daemon = target.clone();
     let mut task_ids = Vec::new();
+    let kinds = ro_mount_kinds(&env.worker);
     for h in harnesses {
-        let spec = worker_spec(&env.worker, case, h);
+        let spec = worker_spec(&env.worker, &kinds, case, h);
         let at = |id: &str| format!("{h}/{id}");
         match run(&spec) {
             Err(e) => results.push(fail(

@@ -22,7 +22,7 @@ WU ごとの記録は `2026-10-19-dag-fault-comparison/<wu>.md`。ここは acce
 - `cargo test -p celeris-campaign --test dagbench_accept` → 6 passed（4 回連続）。
 - `cargo clippy -p celeris-campaign --lib --bins --test dagbench_accept --test dagbench_fault --test dagbench_metrics -- -D warnings` → 0。
 - `cargo fmt --all -- --check` → 0。
-- workspace 全体の `bash scripts/dev/test-parallel.sh` と `cargo clippy --workspace -- -D warnings` は統合段（integrate-verify）の結果を参照。
+- `bash scripts/dev/test-parallel.sh` → exit 0（5846 passed, 0 failed, 15 ignored）。`cargo clippy --workspace -- -D warnings` → 0。
 
 ## 効果・有意性について
 未測定の効果・有意性は主張しない。この試験は断言（二重計上 0、実起動数 = 外部記録、再開）が成り立つことを 1 seed・1 点で示すだけで、

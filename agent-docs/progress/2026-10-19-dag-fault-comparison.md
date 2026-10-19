@@ -1,8 +1,10 @@
 ---
-task: 01M59KY5FNM0K4XGPPS61D0CA2
+title: DAG・外部待機・障害復旧の比較ドライバ: 通し受入
+tasks: [01M59KY5FNM0K4XGPPS61D0CA2]
 wu: accept
 status: done
 completed: 2026-10-19
+updated: 2026-10-19
 ---
 # DAG・外部待機・障害復旧の比較ドライバ: 通し受入
 

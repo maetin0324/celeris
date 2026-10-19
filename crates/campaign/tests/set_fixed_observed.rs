@@ -616,3 +616,152 @@ fn b1_c1_name_only_match_is_not_enough() {
         "{v:?}"
     );
 }
+
+// ---- 網羅: ObservedRun 全欄の改変・None、役割漏れ、旧形式の読み込み ----
+
+#[test]
+fn b1_c1_every_remaining_observed_field_mutation_is_a_violation() {
+    type Mutator = fn(&mut Value);
+    let cases: [(&str, Mutator, &str); 4] = [
+        (
+            "online_update",
+            |r| r["online_update"] = json!(true),
+            "online_update true differs",
+        ),
+        (
+            "evidence_mode none",
+            |r| r["evidence_mode"] = Value::Null,
+            "evidence_mode None differs",
+        ),
+        (
+            "evidence_mode",
+            |r| r["evidence_mode"] = json!("latest"),
+            "evidence_mode",
+        ),
+        (
+            "evidence_table_id",
+            |r| r["evidence_table_id"] = json!("t9"),
+            "evidence_table_id",
+        ),
+    ];
+    for (name, f, needle) in cases {
+        for arm in ["B", "C"] {
+            let v = bc_checked(
+                |_| {},
+                |a, n, o| {
+                    if a == arm && n == 0 {
+                        f(&mut o[0]);
+                    }
+                },
+            );
+            assert!(has(&v, needle), "{arm}/{name}: {v:?}");
+        }
+    }
+}
+
+#[test]
+fn b1_c1_unchanged_extra_fields_stay_positive() {
+    // source / online_update=false は宣言（既定 false）と一致すれば違反でない。
+    let v = bc_checked(
+        |_| {},
+        |_, _, o| {
+            for r in o.iter_mut() {
+                r["source"] = json!("anthropic");
+                r["online_update"] = json!(false);
+            }
+        },
+    );
+    assert!(v.is_empty(), "{v:?}");
+}
+
+#[test]
+fn b0_planner_or_reviewer_with_none_or_wrong_values_is_a_violation() {
+    // 全役割 × 全欄の None（役割ごとに別 run で検出される）。
+    for role_idx in 0..3 {
+        for (field, needle) in [
+            ("model", "model not observed"),
+            ("harness", "harness not observed"),
+            ("lower_policy", "lower_policy not observed"),
+        ] {
+            let v = checked(full_fixed(), |n, o| {
+                if n == 1 {
+                    o[role_idx][field] = Value::Null;
+                }
+            });
+            assert!(has(&v, needle), "role#{role_idx}/{field}: {v:?}");
+        }
+    }
+    // cos run が宣言どおりでも他 model なら違反、宣言どおりなら正例。
+    let ok = checked(full_fixed(), |n, o| {
+        if n == 0 {
+            o.push(json!({"run_id":"t0-cos","role":"cos","model":SONNET,
+                          "harness":"claude-code","lower_policy":"tier-v1"}));
+        }
+    });
+    assert!(ok.is_empty(), "{ok:?}");
+    let v = checked(full_fixed(), |n, o| {
+        if n == 0 {
+            o.push(json!({"run_id":"t0-cos","role":"cos","model":OPUS,
+                          "harness":"claude-code","lower_policy":"tier-v1"}));
+        }
+    });
+    assert!(
+        has(&v, "t0-cos") && has(&v, "role_models declares"),
+        "{v:?}"
+    );
+}
+
+#[test]
+fn role_models_none_model_with_only_role_models_declared_is_a_violation() {
+    let only_roles = || SetFixed {
+        role_models: full_fixed().role_models,
+        ..SetFixed::default()
+    };
+    let v = checked(only_roles(), |n, o| {
+        if n == 0 {
+            o[1]["model"] = Value::Null;
+        }
+    });
+    assert!(has(&v, "model not observed"), "{v:?}");
+    assert!(checked(only_roles(), |_, _| {}).is_empty());
+}
+
+#[test]
+fn old_format_records_deserialize_with_missing_observed_fields_as_none() {
+    // 旧形式: observed 欄が丸ごと無い。新形式でも run の任意欄が欠けた場合は None（宣言で補わない）。
+    let o: ObservedRun = serde_json::from_value(json!({
+        "run_id":"r","role":"worker","harness":null,"source":null,"model":null,
+        "routing_mode":null,"routing_source":null,"lower_policy":null,"evidence_table_id":null,
+        "online_update":null
+    }))
+    .expect("old observed");
+    assert_eq!(o.evidence_mode, None);
+    assert_eq!(o.model, None);
+    let d = tempfile::tempdir().expect("dir");
+    let i = input(2);
+    let m = campaign(&i, "ab", 2, 10_000_000);
+    let out = d.path().join("out");
+    run(
+        &m,
+        &i,
+        &MockExecutor::scripted(BTreeMap::new()),
+        &RunOptions {
+            out: out.clone(),
+            ..RunOptions::default()
+        },
+    )
+    .expect("run");
+    let trials = out.join(TRIALS_FILE);
+    let stripped: Vec<String> = fs::read_to_string(&trials)
+        .expect("t")
+        .lines()
+        .map(|l| {
+            let mut v: Value = serde_json::from_str(l).expect("j");
+            v.as_object_mut().expect("obj").remove("observed");
+            v.to_string()
+        })
+        .collect();
+    fs::write(&trials, stripped.join("\n") + "\n").expect("w");
+    let v = check(&m, &out).violations;
+    assert!(v.is_empty(), "{v:?}");
+}

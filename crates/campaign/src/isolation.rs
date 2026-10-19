@@ -11,7 +11,7 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     manifest::{Budget, ConfigId},
-    snapshot::hash_tree,
+    snapshot::{copy_inner_symlink, hash_tree},
 };
 
 /// 初期情報の取り込み元と、workspace へ入れてはならない名前。
@@ -79,7 +79,7 @@ fn budget_hash(b: &Budget) -> Result<String, String> {
     Ok(format!("{:x}", Sha256::digest(v)))
 }
 
-fn copy_filtered(src: &Path, dst: &Path, withheld: &[String]) -> Result<(), String> {
+fn copy_filtered(root: &Path, src: &Path, dst: &Path, withheld: &[String]) -> Result<(), String> {
     fs::create_dir_all(dst).map_err(|e| format!("{}: {e}", dst.display()))?;
     let mut es: Vec<PathBuf> = fs::read_dir(src)
         .map_err(|e| format!("{}: {e}", src.display()))?
@@ -96,12 +96,11 @@ fn copy_filtered(src: &Path, dst: &Path, withheld: &[String]) -> Result<(), Stri
             continue;
         }
         let meta = fs::symlink_metadata(&p).map_err(|e| format!("{}: {e}", p.display()))?;
-        if meta.file_type().is_symlink() {
-            return Err(format!("symlink is not allowed: {}", p.display()));
-        }
         let to = dst.join(&name);
-        if meta.is_dir() {
-            copy_filtered(&p, &to, withheld)?;
+        if meta.file_type().is_symlink() {
+            copy_inner_symlink(root, &p, &to)?;
+        } else if meta.is_dir() {
+            copy_filtered(root, &p, &to, withheld)?;
         } else {
             fs::copy(&p, &to).map_err(|e| format!("{}: {e}", p.display()))?;
         }
@@ -137,7 +136,7 @@ pub fn prepare_trial(
         (&src.materials, &materials),
         (&src.kb, &kb),
     ] {
-        copy_filtered(s, d, &src.withheld_names)?;
+        copy_filtered(s, s, d, &src.withheld_names)?;
     }
     let record = InputRecord {
         config,

@@ -94,8 +94,9 @@ cp -r crates/campaign/cases/final/k2-bf-xattr-restart-campaign/kb/. $K/
 cp <main-v3-n2-43706.tgz の実物> $I/main-v3-n2-43706.tgz
 # R（K2 初期 tree）の組立: bundle を clone → commit 086c4618 を checkout → submodule 5 件を lock の path へ snapshot tar 展開 → .git を消す
 # （手順の実例: pinned/build-srcs.sh。asset_assembly::assemble_initial と同じ）
-# 既知の阻害: 組立後の tree に symlink が 3 件ある（lib/locusta/CLAUDE.md・ior_integration/ior/testing/docker/centos6/run-test.sh・…/ucx1-sys/ucx/README）。
-# lock の content_sha256 は symlink を含むが、preflight の measure-env（isolation）は symlink を拒否する。両立せず、preflight は exit 1（未解決。進捗の「不足一覧」参照）   # sha256 が case.json の値と一致しなければ preflight/watch が拒否
+# 組立後の tree には symlink が 3 件ある（lib/locusta/CLAUDE.md・ior_integration/ior/testing/docker/centos6/run-test.sh・…/ucx1-sys/ucx/README）。
+# いずれも tree 内に閉じた相対 symlink で、lock・snapshot・isolation とも symlink のまま（link 先文字列ごと）扱い preflight を阻害しない（ADR 2026-10-19-campaign-inner-symlink）。
+# 絶対・root 外・dangling・循環の symlink は拒否される。asset の hash は変えない   # sha256 が case.json の値と一致しなければ preflight/watch が拒否
 ```
 `$M` の hash は `final.json` の `snapshot.materials_sha256` と一致しなければ拒否される。env の `MATERIALS_SRC/KB_SRC/REPO_SRC/INPUTS_SRC` にこの 4 つを書く。
 A は bubblewrap の中で動く（`bwrap` 必須。preflight が実際に起動して確かめる）。A は `A_ACCOUNT` の `CLAUDE_CONFIG_DIR` で動き、既定の `~/.claude` は使わない。

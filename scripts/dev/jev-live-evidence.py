@@ -49,6 +49,14 @@ ULID = re.compile(r"^[0-9A-HJKMNP-TV-Z]{26}$")
 FILES = ["records.jsonl", "summary.json", "provenance.json", "routing_events.jsonl"]
 PROVENANCE_KEYS = {"source", "campaign_id", "manifest_hash", "generated_at", "export_command", "files_sha256", "tasks"}
 ARM_MODE = {"B": "fixed", "C": "decision_assisted"}
+# 凍結 manifest（celeris.campaign-manifest-side-b1c1/1）の B1/C1 共通候補: Sonnet と Opus の 2 件（source/model/harness）。
+# 読取元 DB は manifest の hash だけを持つので、本文の契約値は此処に固定し、全 B/C 試行をこれと照合する。
+FROZEN_CANDIDATES = frozenset({
+    ("anthropic", "claude-sonnet-5-5", "claude_code"),
+    ("anthropic", "claude-opus-5-5", "claude_code"),
+})
+# 実効 pin のうち B/C で一致すべき欄（mode だけが違ってよい）と、固定値で要求する欄。
+PIN_COMMON_KEYS = ("source", "lower_policy", "evidence_mode", "evidence_table_id", "online_update")
 
 
 class NoEvidence(Exception):
@@ -443,6 +451,19 @@ def verify(evidence_dir, data, require_live, environ=None):
         if t.get("routing_mode") != ARM_MODE[arm]:
             fail("mixed-arm", f"{label}: routing_mode={t.get('routing_mode')!r}（期待 {ARM_MODE[arm]}）: B1 と C1 の混入")
         cand_models[arm] |= models_of(t)
+        cands = t.get("proposed_candidates")
+        if not isinstance(cands, list) or not cands:
+            fail("candidates", f"{label}: proposed_candidates が空または欠測（凍結候補を確かめられない）")
+        else:
+            keys = []
+            for c in cands:
+                keys.append((c.get("source_id"), c.get("model_id"), c.get("harness_id")) if isinstance(c, dict) else None)
+            if len(set(keys)) != len(keys) or set(keys) != FROZEN_CANDIDATES:
+                fail("candidates", f"{label}: 候補 {keys} が凍結 manifest の Sonnet/Opus 共通候補 {sorted(FROZEN_CANDIDATES)} と"
+                     "一致しない（source_id/model_id/harness_id・重複・未知 ID・単一モデル pin を含む）")
+        pf = t.get("proposed_first")
+        if isinstance(pf, dict) and (pf.get("source_id"), pf.get("model_id"), pf.get("harness_id")) not in FROZEN_CANDIDATES:
+            fail("candidates", f"{label}: proposed_first {pf} が凍結候補に無い")
         if require_live and not ULID.match(j["task_id"] or ""):
             fail("not-live", f"{label}: task_id が実 task の ULID 形式ではない")
         if not j["exec_model"]:
@@ -461,6 +482,8 @@ def verify(evidence_dir, data, require_live, environ=None):
                 fail("pin", f"{label}: routing_resolved.mode={r.get('mode')!r} が arm の方策 {ARM_MODE[arm]!r} と違う")
             if r.get("evidence_mode") != "none" or r.get("evidence_table_id"):
                 fail("pin", f"{label}: 根拠表を使っている（evidence_mode={r.get('evidence_mode')!r}）。B1/C1 は none")
+            if r.get("online_update") is not False:
+                fail("pin", f"{label}: online_update={r.get('online_update')!r}（B1/C1 は false 固定）")
             if r.get("source") != "task":
                 fail("pin", f"{label}: routing_resolved.source={r.get('source')!r}（task 欄の pin ではない）")
         la = j["la"]
@@ -482,7 +505,19 @@ def verify(evidence_dir, data, require_live, environ=None):
 
     def pin_of(j):
         r = j["resolved"] or {}
-        return (r.get("mode"), r.get("lower_policy"), r.get("evidence_mode"))
+        return tuple(r.get(k) for k in ("mode",) + PIN_COMMON_KEYS)
+
+    def common_of(j):
+        r = j["resolved"] or {}
+        return tuple(r.get(k) for k in PIN_COMMON_KEYS)
+
+    common = {}
+    for j in joined:
+        if j["has_event"] and j["arm"] in ARM_MODE:
+            common.setdefault(common_of(j), []).append(j["run_id"])
+    if len(common) > 1:
+        fail("condition-mismatch", f"B/C 全試行の共通条件（{PIN_COMMON_KEYS}）が mode 以外で割れている: "
+             + "; ".join(f"{k}: {v}" for k, v in sorted(common.items(), key=str)))
 
     roots = {}
     for j in joined:
@@ -499,11 +534,6 @@ def verify(evidence_dir, data, require_live, environ=None):
             fail("mixed-arm", f"task {j['task_id']} の arm {j['arm']} が root {rt} の arm {rj['arm']} と違う")
         elif pin_of(j) != pin_of(rj):
             fail("pin", f"task {j['task_id']}（run {j['run_id']}）の pin {pin_of(j)} が root {rt} の pin {pin_of(rj)} と不一致")
-    if cand_models["C"]:
-        has = lambda sub: any(sub in m for m in cand_models["C"])
-        if not (has("sonnet") and has("opus")):
-            fail("single-model", f"C1 の候補集合が Sonnet と Opus の両方を含まない（単一モデル pin）: {sorted(cand_models['C'])}")
-
     stages = {"total": new_stages(), "by_arm": {}}
     for j in joined:
         add_stage(stages["total"], j)

@@ -630,7 +630,7 @@ fn probe_worker_runs_one_task_per_arm_harness_and_names_the_failing_one() {
 fn undeclared_or_misdeclared_probe_harness_submits_nothing_and_is_env_failure() {
     let s = setup();
     let good = fs::read_to_string(&s.inp.measure.as_ref().unwrap().config).unwrap();
-    let decl = probe_declarations("celeris");
+    let decl = probe_declarations("claude-code");
     assert!(good.contains(&decl));
     let base = good.replace(&decl, "");
     let cases: Vec<(&str, String, &str)> = vec![
@@ -638,20 +638,20 @@ fn undeclared_or_misdeclared_probe_harness_submits_nothing_and_is_env_failure() 
         (
             "rule without genre (real harness could match)",
             format!(
-                "{base}[harnesses.celeris]\nkind = \"fake\"\n[harness_selection]\nrules = [{{ harness = \"celeris\", required_capabilities = [] }}]\n"
+                "{base}[harnesses.claude-code]\nkind = \"fake\"\n[harness_selection]\nrules = [{{ harness = \"claude-code\", required_capabilities = [] }}]\n"
             ),
             "no genre",
         ),
         (
             "genre bound to a real harness",
             format!(
-                "{base}[harnesses.celeris]\nkind = \"claude_code\"\n[harness_selection]\nrules = [{{ genre = \"cap-probe-celeris\", harness = \"celeris\", required_capabilities = [] }}]\n"
+                "{base}[harnesses.claude-code]\nkind = \"claude_code\"\n[harness_selection]\nrules = [{{ genre = \"cap-probe-claude-code\", harness = \"claude-code\", required_capabilities = [] }}]\n"
             ),
             "not kind",
         ),
         (
             "env_of missing",
-            decl.replace("env_of = \"celeris\"\n", ""),
+            decl.replace("env_of = \"claude-code\"\n", ""),
             "env_of",
         ),
     ];

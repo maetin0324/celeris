@@ -217,7 +217,7 @@ pub fn measure_config(d: &Path, tag: &str) -> String {
          [api]\nlisten = \"127.0.0.1:7701\"\ntoken_file = \"{n}/token\"\n\
          [[clusters]]\nid = \"pegasus\"\nhost = \"pegasus\"\n{probe}",
         n = d.join(tag).display(),
-        probe = probe_declarations("celeris"),
+        probe = probe_declarations("claude-code"),
     )
 }
 

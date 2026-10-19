@@ -37,3 +37,4 @@ updated: 2026-10-19
 5. 置換後に `validate` を再実行し、campaign sha256 を本表へ追記してから `lock`。
 
 旧 placeholder 手順（`evidence_table_id` を `celerisctl routing evidence` の版へ置換する手順）は不要になった。`docs/ops/measure-run-final.md` の該当記述は runbook unit が直す。
+- テスト fixture を claude-code 宣言へ追随（preflight_setup・cap_probe・final_resolved）。

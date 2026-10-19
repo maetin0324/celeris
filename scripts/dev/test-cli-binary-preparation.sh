@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # scripts/dev/test-cli-binary-preparation.sh — scripts/dev/test-parallel.sh の準備段（試験 binary と実 CLI の build と
-# nextest の binary mapping の確認）の回帰検査。引数なしで `bash scripts/dev/test-cli-binary-preparation.sh`。
+# `cargo metadata` で決めた実 CLI の確認、nextest の binary mapping からの診断）の回帰検査。引数なしで `bash scripts/dev/test-cli-binary-preparation.sh`。
 #
 # cargo は偽物（PATH の先頭）に置き換え、呼ばれた順を記録する。cargo も実 CLI も走らせない（決定的・数秒）。
 # 偽の CLI は「準備が nextest run より前に終わっているか」を見るための印で、CLI の試験の代わりではない
@@ -9,7 +9,8 @@
 # 確かめること:
 #   (a) 準備が成功すると `nextest list` が `nextest run` より前に呼ばれ、run の時点で mapping の CLI が実行可能、exit 0
 #   (b) 準備の build 失敗（list の exit 101）は nextest run を走らせず exit 101 で伝わる。summary の prepare_exit も 101
-#   (c) mapping の CLI が無い・実行できない・mapping が読めないなら nextest run を走らせず exit 4
+#   (c) 実 CLI（integration test を持つ package の bin）が無い・実行できない・metadata が読めないなら nextest run を
+#       走らせず exit 4。nextest の mapping が読めないだけなら診断の注記を出して続ける
 #   (d) 試験 binary が target の外の CARGO_BIN_EXE_*（seed を作った dir）で build されていれば診断行を出す（exit は 0 のまま）
 #   (e) 準備の後の nextest 失敗は従来どおり exit 100、追加引数は nextest run だけに渡る
 set -euo pipefail
@@ -19,7 +20,8 @@ work="$(mktemp -d "${TMPDIR:-/tmp}/test-cli-binary-preparation.XXXXXX")"
 trap 'chmod -R u+w "$work" 2>/dev/null || true; rm -rf "$work"' EXIT
 mkdir -p "$work/bin"
 
-# 偽の cargo。FAKE_LIST: ok（CLI を作って mapping を出す）/ build-fail / missing / noexec / garbage / stale
+# 偽の cargo。FAKE_LIST: ok（CLI を作って mapping を出す）/ build-fail / missing / noexec / garbage（metadata が壊れる）/
+# list-garbage（mapping だけ壊れる）/ stale
 cat >"$work/bin/cargo" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"$FAKE_CALLS"
@@ -29,7 +31,6 @@ case "$1 $2" in
   "nextest list")
     case "$FAKE_LIST" in
       build-fail) echo "error: could not compile \`celerisctl\`" >&2; exit 101 ;;
-      garbage) echo "not json"; exit 0 ;;
     esac
     mkdir -p "$tgt/debug/deps"
     if [ "$FAKE_LIST" != missing ]; then
@@ -40,7 +41,12 @@ case "$1 $2" in
     embedded="$tgt/debug/celerisctl"
     [ "$FAKE_LIST" = stale ] && embedded="/seeds/.building-gen-x/target/debug/celerisctl"
     printf '# env-dep:CARGO_BIN_EXE_celerisctl=%s\n' "$embedded" >"$tgt/debug/deps/bin_smoke-1.d"
+    [ "$FAKE_LIST" = list-garbage ] && { echo "not json"; exit 0; }
     printf '{"rust-build-meta":{"target-directory":"%s","non-test-binaries":{"celerisctl 0.1.0":[{"name":"celerisctl","kind":"bin-exe","path":"debug/celerisctl"}]}},"rust-binaries":{"celerisctl::bin_smoke":{"binary-path":"%s/debug/deps/bin_smoke-1"}}}\n' "$tgt" "$tgt"
+    ;;
+  "metadata --no-deps")
+    [ "$FAKE_LIST" = garbage ] && { echo "not json"; exit 0; }
+    printf '{"target_directory":"%s","packages":[{"name":"celerisctl","targets":[{"name":"celerisctl","kind":["bin"]},{"name":"bin_smoke","kind":["test"]}]},{"name":"lib-only","targets":[{"name":"tool","kind":["bin"]}]}]}\n' "$tgt"
     ;;
   "nextest run")
     if [ -x "$tgt/debug/celerisctl" ]; then echo "run saw-cli=yes" >>"$FAKE_CALLS"; else echo "run saw-cli=no" >>"$FAKE_CALLS"; fi
@@ -124,8 +130,12 @@ grep -q '^test-parallel: prepare: CLI binary missing or not executable: celerisc
 assert_not_run 4
 run_case garbage garbage
 [ "$rc" -eq 4 ] || fail "exit $rc (expected 4)"
-grep -q '^test-parallel: prepare: cannot read the nextest binary mapping' "$err" || fail "unreadable mapping not reported"
+grep -q '^test-parallel: prepare: cannot read cargo metadata' "$err" || fail "unreadable metadata not reported"
 assert_not_run 4
+run_case list-garbage list-garbage
+[ "$rc" -eq 0 ] || fail "exit $rc (expected 0)"
+grep -q '^test-parallel: prepare: note: no nextest binary mapping' "$err" || fail "unreadable mapping not noted"
+grep -qx 'run saw-cli=yes' "$calls" || fail "the CLI was not executable when nextest run started"
 
 # (d) target の外の CARGO_BIN_EXE_* は診断行（exit は変えない）
 run_case stale stale

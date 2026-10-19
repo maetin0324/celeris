@@ -2,7 +2,7 @@
 # scripts/dev/test-parallel.sh [extra nextest args...] — テストバイナリを並列に回す（Phase SD-2、ADR-0041 §8）。
 #
 #   0. `cargo nextest list --workspace --list-type binaries-only`（準備: 試験 binary と試験が起動する実 bin を build し、
-#      mapping の実 bin が実行できることを確かめる。落ちたら nextest run は走らせず非 0。回帰検査は
+#      `cargo metadata` で決めた実 bin が実行できることを確かめる。落ちたら nextest run は走らせず非 0。回帰検査は
 #      scripts/dev/test-cli-binary-preparation.sh）
 #   1. `cargo nextest run --workspace`（バイナリをまたいで、テストごとに別プロセスで並列。直列が要るテストは
 #      `.config/nextest.toml` の test-group で縛る）
@@ -87,52 +87,56 @@ trap cleanup_logdir EXIT
 mkdir -p "$logdir/tmp"
 export TMPDIR="$logdir/tmp"
 
-# 準備（build）: nextest run と同じ workspace の試験 binary と、試験が起動する実 bin（celerisctl など）を先に build し、
-# nextest の binary mapping（list --list-type binaries-only）を読む。build が落ちる・mapping が読めない・実 bin が無いか
-# 実行できないなら nextest は走らせず、doc-test と summary の後で準備の exit code（mapping の不備は 4）で終わる。
+# 準備（build）: nextest run と同じ workspace の試験 binary と、試験が起動する実 bin（celerisctl など）を先に build する
+# （`cargo nextest list` は試験 binary とその package の bin を build する）。試験が起動する実 bin は cargo の規則どおり
+# 「integration test を持つ workspace package の bin」＝ `cargo metadata` の target から決め、`<target_directory>/debug/<bin>`
+# が実行できることを確かめる。build が落ちる・metadata が読めない・実 bin が無いか実行できないなら nextest は走らせず、
+# doc-test と summary の後で準備の exit code（metadata・実 bin の不備は 4）で終わる。
 # 準備は追加引数に関わらず workspace 全体（追加引数は nextest run だけに渡す）。
 # 再利用 target（seed の写し）では cargo が作り直さない試験 binary に、build 時の CARGO_BIN_EXE_<bin>（seed を作った
-# 別 dir の絶対 path）が残ることがある（integrate-external の celerisctl NotFound）。その数を診断行に出す（exit は変えない）。
+# 別 dir の絶対 path）が残ることがある（integrate-external の celerisctl NotFound）。nextest の binary mapping
+# （list --message-format json）の試験 binary の dep-info からその数を診断行に出す（exit は変えない）。
 echo "test-parallel: prepare: cargo nextest list --workspace --list-type binaries-only" >&2
 prc=0
 cargo nextest list --workspace --list-type binaries-only --message-format json --color never \
   >"$logdir/prepare.json" || prc=$?
 if [ "$prc" -eq 0 ]; then
-  python3 - "$logdir/prepare.json" <<'PY' || prc=$?
+  cargo metadata --no-deps --format-version 1 >"$logdir/metadata.json" || prc=$?
+fi
+if [ "$prc" -eq 0 ]; then
+  python3 - "$logdir/metadata.json" "$logdir/prepare.json" <<'PY' || prc=$?
 import json, os, re, sys
 try:
     with open(sys.argv[1], encoding="utf-8") as fh:
         meta = json.load(fh)
-    build = meta["rust-build-meta"]
-    target = build["target-directory"]
-    suites = meta["rust-binaries"]
-    non_test = build.get("non-test-binaries") or {}
+    required = sorted({t["name"] for p in meta["packages"]
+                       if any("test" in t["kind"] for t in p.get("targets", []))
+                       for t in p.get("targets", []) if "bin" in t["kind"]})
+    target = meta.get("target_directory")
+    if required and not target:
+        raise KeyError("target_directory")
 except (OSError, ValueError, KeyError, TypeError) as e:
-    print(f"test-parallel: prepare: cannot read the nextest binary mapping: {e}", file=sys.stderr)
+    print(f"test-parallel: prepare: cannot read cargo metadata: {e}", file=sys.stderr)
     sys.exit(4)
-if not suites:
-    print("test-parallel: prepare: the nextest binary mapping lists no test binaries", file=sys.stderr)
-    sys.exit(4)
-bins = {}
-missing = []
-for entries in non_test.values():
-    for b in entries:
-        if b.get("kind") != "bin-exe":
-            continue
-        path = os.path.join(target, b["path"])
-        bins[b["name"]] = path
-        if not (os.path.isfile(path) and os.access(path, os.X_OK)):
-            missing.append(f"{b['name']} ({path})")
+bins = {name: os.path.join(target, "debug", name) for name in required}
+missing = [f"{n} ({p})" for n, p in bins.items() if not (os.path.isfile(p) and os.access(p, os.X_OK))]
 for m in missing:
     print(f"test-parallel: prepare: CLI binary missing or not executable: {m}", file=sys.stderr)
 if missing:
     sys.exit(4)
+# 診断だけ（mapping が読めなくても exit は変えない）
+suites = {}
+try:
+    with open(sys.argv[2], encoding="utf-8") as fh:
+        suites = json.load(fh)["rust-binaries"]
+except (OSError, ValueError, KeyError, TypeError):
+    print("test-parallel: prepare: note: no nextest binary mapping to check for stale CARGO_BIN_EXE_*", file=sys.stderr)
 stale = []
 for name, suite in sorted(suites.items()):
     try:
         with open(suite["binary-path"] + ".d", encoding="utf-8", errors="replace") as fh:
             deps = fh.read()
-    except OSError:
+    except (OSError, KeyError, TypeError):
         continue
     for bin_name, embedded in re.findall(r"^# env-dep:CARGO_BIN_EXE_([^=\s]+)=(.*)$", deps, re.M):
         if bin_name in bins and embedded != bins[bin_name]:
@@ -142,7 +146,7 @@ if stale:
     print(f"test-parallel: prepare: warning: {len(stale)} test binaries were built with CARGO_BIN_EXE_* outside this "
           f"target (e.g. {name}: CARGO_BIN_EXE_{bin_name}={embedded}); env!() in those tests still names that path",
           file=sys.stderr)
-print(f"test-parallel: prepare: ok ({len(suites)} test binaries; CLI {', '.join(sorted(bins)) or '-'} in {target})",
+print(f"test-parallel: prepare: ok ({len(suites)} test binaries; CLI {', '.join(required) or '-'} in {target or '-'})",
       file=sys.stderr)
 PY
 fi

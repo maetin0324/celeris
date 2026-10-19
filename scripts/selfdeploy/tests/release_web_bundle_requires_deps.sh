@@ -22,7 +22,6 @@ case "$1" in
   nextest)
     case "$2" in
       --version) echo 'cargo-nextest 0.9.146 (fake)' ;;
-      list) echo '{"rust-build-meta":{"target-directory":"/nonexistent","non-test-binaries":{}},"rust-binaries":{"x":{"binary-path":"/nonexistent/x"}}}' ;;
       run)
         printf '    Starting 3 tests across 1 binary (1 test skipped)\n'
         printf '     Summary [   0.010s] 3 tests run: 3 passed, 1 skipped\n'

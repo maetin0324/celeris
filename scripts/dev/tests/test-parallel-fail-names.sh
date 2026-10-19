@@ -26,7 +26,8 @@ cat >"$fakebin/cargo" <<EOF
 #!/bin/sh
 case "\$1 \$2" in
   "nextest --version") echo "cargo-nextest 0.9.146" ;;
-  "nextest list") echo '{"rust-build-meta":{"target-directory":"/nonexistent","non-test-binaries":{}},"rust-binaries":{"x":{"binary-path":"/nonexistent/x"}}}' ;;
+  "nextest list") echo '{"rust-build-meta":{"target-directory":"/nonexistent","non-test-binaries":{}},"rust-binaries":{}}' ;;
+  "metadata --no-deps") echo '{"target_directory":"/nonexistent","packages":[]}' ;;
   "nextest run") cat "$work/nextest.log"; exit 100 ;;
   "test --doc") exit 0 ;;
   *) echo "fake cargo: unexpected args: \$*" >&2; exit 99 ;;

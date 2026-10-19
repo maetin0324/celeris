@@ -259,6 +259,53 @@ fn browser_launcher_live_frame_cdp_screencast_start_ack_stop_on_fake_cdp() {
     assert!(cdp.tap.frames_seen() >= 2);
 }
 
+/// A frame larger than the limit that Chrome writes in small pieces is dropped by the tap, and the
+/// reply queued behind it still reaches the controller in order (the demux must not rescan the
+/// bytes it already searched for the NUL, which made the barrier reply wait for seconds on a busy
+/// host). The frame's session is known to the tap, so nothing of it reaches the controller.
+#[test]
+fn browser_launcher_live_frame_tap_forwards_reply_behind_huge_frame_in_pieces() {
+    let (chrome_out_r, mut chrome_out_w) = pipe();
+    let (chrome_in_r, chrome_in_w) = pipe();
+    let (ctrl_read, tap) = LiveTap::interpose(chrome_out_r).expect("interpose");
+    let controller = Arc::new(Mutex::new(CdpController::new(chrome_in_w, ctrl_read)));
+    // Chrome answers the controller's command only after the whole frame was written.
+    let (frame_done_tx, frame_done_rx) = mpsc::channel::<()>();
+    let (reply_w, mut cmd_r) = (chrome_out_w.try_clone().expect("clone"), chrome_in_r);
+    let reader = std::thread::spawn(move || {
+        let mut chunk = [0u8; 4096];
+        let n = cmd_r.read(&mut chunk).expect("read cmd");
+        let v: Value = serde_json::from_slice(&chunk[..n - 1]).expect("json");
+        frame_done_rx.recv().expect("frame written");
+        let mut w = reply_w;
+        send(&mut w, json!({"id":v["id"],"result":{}}));
+    });
+    // The tap treats "LIVE" as its own screencast session only once it attached; make it known.
+    tap.mark_screencast_session_for_test("LIVE");
+    let frame = serde_json::to_vec(&json!({"method":"Page.screencastFrame","sessionId":"LIVE","params":{"data":huge_frame(),"sessionId":1,"metadata":{}}})).expect("json");
+    let ctl = controller.clone();
+    let caller = std::thread::spawn(move || {
+        ctl.lock()
+            .expect("controller")
+            .controller_command("Browser.getVersion", json!({}), None)
+            .is_ok()
+    });
+    for piece in frame.chunks(1024) {
+        chrome_out_w.write_all(piece).expect("piece");
+    }
+    chrome_out_w.write_all(&[0]).expect("nul");
+    frame_done_tx.send(()).expect("signal");
+    assert!(caller.join().expect("caller"), "reply behind the frame");
+    reader.join().expect("reader");
+    assert!(
+        controller
+            .lock()
+            .expect("controller")
+            .take_agent_events()
+            .is_empty()
+    );
+}
+
 /// D3: the owner's view follows the auth section's login target (the preferred target).
 #[test]
 fn browser_launcher_live_frame_follows_preferred_target() {

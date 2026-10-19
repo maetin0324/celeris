@@ -464,7 +464,8 @@ impl<T: Transport> CelerisExecutor<T> {
             let rr = &sel["basis"]["route_decision"]["routing_resolved"];
             out.push(ObservedRun {
                 run_id: text(&r["run_id"]).unwrap_or_default(),
-                role: text(&r["role"]).unwrap_or_else(|| "worker".into()),
+                // role 欠測は空のまま（worker で補わない）。新形式の checker が違反にする。
+                role: text(&r["role"]).unwrap_or_default(),
                 harness: chosen.then(|| text(&sel["harness_id"])).flatten(),
                 source: chosen.then(|| text(&sel["source_id"])).flatten(),
                 model: chosen.then(|| text(&sel["model_id"])).flatten(),

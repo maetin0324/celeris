@@ -224,6 +224,26 @@ fn finish_task(id: &str, body: &Value) -> Value {
             "selection": selection
         }));
     }
+    // 独立に観測された他 role の run（planner / reviewer / CoS / 子 run）。B0（ab）は全 role Sonnet、
+    // B1/C1（bc）は Sonnet/Opus 候補のうち planner だけ Opus を選んだ。reviewer の 2 件目は選択前（model 等は欠測のまま）。
+    // 使用量は 0 を観測した値として置く（既存の token・費用集計を動かさない）。
+    let other_model = |role: &str| {
+        if body["campaign"]["campaign_id"] == "armset-bc" && role == "planner" {
+            "claude-opus-5-5"
+        } else {
+            ROUTING_MODEL
+        }
+    };
+    let zero = json!({"input_tokens": 0, "output_tokens": 0,
+        "cache_read_tokens": 0, "cache_creation_tokens": 0, "cost_usd": 0.0});
+    for role in ["planner", "reviewer", "cos", "child-worker"] {
+        let mut sel = selection.clone();
+        sel["model_id"] = json!(other_model(role));
+        runs.push(json!({
+            "run_id": format!("R{id}-{role}"), "role": role, "is_retry": false,
+            "finished_at": "2026-10-19T00:00:06Z", "usage": zero.clone(), "selection": sel
+        }));
+    }
     let status = if fate == Fate::Fail { "failed" } else { "done" };
     json!({
         "task": {"id": id, "status": status, "labels": labels, "created_at": "2026-10-19T00:00:00Z"},
@@ -903,6 +923,33 @@ fn flow(which: &'static str) {
     assert_eq!(trials.lines().count() as u64, trials_total);
     assert!(!trials.contains(&format!("\"config\":\"{absent}\"")));
 
+    // 観測 fixture: 各試行記録の observed は、stub が返した run の role・model・harness そのまま。
+    // 宣言（manifest の role_models / 候補）から補完した値ではない。
+    for line in trials.lines() {
+        let rec: Value = serde_json::from_str(line).expect("trial");
+        if rec["config"] == "A" {
+            continue;
+        }
+        let obs = rec["observed"].as_array().expect("observed");
+        let roles: Vec<&str> = obs
+            .iter()
+            .map(|o| o["role"].as_str().expect("role"))
+            .collect();
+        for r in ["worker", "planner", "reviewer", "cos", "child-worker"] {
+            assert!(roles.contains(&r), "role {r} observed: {roles:?}");
+        }
+        for o in obs {
+            let role = o["role"].as_str().expect("role");
+            let want = if which == "bc" && role == "planner" {
+                "claude-opus-5-5"
+            } else {
+                ROUTING_MODEL
+            };
+            assert_eq!(o["model"], want, "{o}");
+            assert_eq!(o["harness"], "claude_code", "{o}");
+        }
+    }
+
     // A の fixture 実行器の呼出し数（試行の state dir に残る印）。B/C のみは state dir 自体が無い。
     assert_eq!(files_named(&f.out(), "fxa-called"), a_calls);
     if which == "bc" {
@@ -1359,4 +1406,191 @@ fn ab_only_counts_repetitions_retries_grading_and_cost_and_resumes_without_repos
 #[test]
 fn bc_only_counts_repetitions_retries_grading_and_cost_and_resumes_without_reposting() {
     accounting("bc");
+}
+
+// ---- 有効 arm の要求が発生する対照ケースで、無効 arm の probe / credential / 準備 / 実行が 0 件 ----
+// 所有 fixture（偽 Host）だけで、userns・実 daemon・LLM は要らない。case は必要能力を宣言し、
+// A の sandbox probe と B/C の daemon worker probe が有効 arm には実際に発生する（対照）。
+
+mod unused_arm_requests {
+    use std::cell::RefCell;
+
+    use celeris_campaign::{
+        cap_probe::{ProbeRunner, WorkerProbeRun, WorkerProbeSpec},
+        preflight::{Host, ResolvedProgram, check},
+    };
+
+    use super::*;
+    use crate::preflight_setup::{OkRunner, ok_worker_run, setup};
+
+    /// Host への要求を全部数える。秘密値は持たず、名前・path・harness だけを記録する。
+    #[derive(Default)]
+    struct CountingHost {
+        env_names: RefCell<Vec<String>>,
+        resolves: RefCell<Vec<String>>,
+        api_gets: RefCell<Vec<String>>,
+        sandbox_checks: RefCell<u32>,
+        a_probe_runners: RefCell<u32>,
+        worker_probe_harnesses: RefCell<Vec<String>>,
+    }
+
+    impl Host for CountingHost {
+        fn env_nonempty(&self, name: &str) -> bool {
+            self.env_names.borrow_mut().push(name.to_string());
+            true
+        }
+        fn resolve_program(&self, p: &Path) -> Result<ResolvedProgram, String> {
+            self.resolves.borrow_mut().push(p.display().to_string());
+            Ok(ResolvedProgram {
+                path: p.into(),
+                version: A_VERSION.into(),
+            })
+        }
+        fn api_get(&self, _: &str, _: &str, path: &str) -> Result<Value, String> {
+            self.api_gets.borrow_mut().push(path.to_string());
+            match path {
+                "/api/v1/config" => Ok(crate::daemon_identity::matching_daemon_body()),
+                "/api/v1/projects/01ABC" => {
+                    Ok(json!({"project":{"id":"01ABC","auto_integrate":false},"repos":[]}))
+                }
+                "/api/v1/projects/01ABC/repos" => Ok(json!({"items":[
+                    {"name":"scratch","is_primary":true,"location":{"kind":"local","path":"/x"}}]})),
+                "/api/v1/llm/accounts" => {
+                    static D: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
+                    let d = D.get_or_init(|| tempfile::tempdir().expect("dir")).path();
+                    Ok(json!({"items":[
+                        {"source_id":"claude_oauth","account_id":"lab","dir":d,"logged_in":true}]}))
+                }
+                _ => Err(format!("GET {path}: not served by this fixture")),
+            }
+        }
+        fn sandbox_usable(&self) -> Result<(), String> {
+            *self.sandbox_checks.borrow_mut() += 1;
+            Ok(())
+        }
+        fn probe_daemon_worker(
+            &self,
+            _: &str,
+            _: &str,
+            spec: &WorkerProbeSpec,
+        ) -> Result<WorkerProbeRun, String> {
+            self.worker_probe_harnesses
+                .borrow_mut()
+                .push(spec.harness.clone());
+            Ok(ok_worker_run(spec))
+        }
+        fn probe_runner(&self) -> Box<dyn ProbeRunner> {
+            *self.a_probe_runners.borrow_mut() += 1;
+            Box::new(OkRunner)
+        }
+    }
+
+    /// 全 arm の final を、`arms` だけを持つ実験セット 1 つ（`compare` を比較組）に直す。未使用 arm の config は持たない。
+    fn select(inp: &mut celeris_campaign::preflight::Inputs, arms: &[&str], compare: (&str, &str)) {
+        let mut v: Value =
+            serde_json::from_slice(&fs::read(&inp.manifest_path).expect("final")).expect("json");
+        v["configs"]
+            .as_array_mut()
+            .expect("configs")
+            .retain(|c| arms.contains(&c["id"].as_str().expect("id")));
+        // B1/C1: 共通の候補集合・harness。C は根拠表を使わない。B0（A/B）は全 role が Sonnet。
+        for c in v["configs"].as_array_mut().expect("configs") {
+            let is_c = c["id"] == "C";
+            if let Some(r) = c.get_mut("routing") {
+                r["models"] = json!([ROUTING_MODEL, "claude-opus-5-5"]);
+                if is_c {
+                    r.as_object_mut()
+                        .expect("routing")
+                        .remove("evidence_table_id");
+                    r["no_evidence_table"] = json!(true);
+                }
+            }
+        }
+        let role_models = if arms.contains(&"A") {
+            json!({"planner": ROUTING_MODEL, "reviewer": ROUTING_MODEL, "cos": ROUTING_MODEL, "worker": ROUTING_MODEL})
+        } else {
+            json!({})
+        };
+        if arms.contains(&"A") {
+            v["secondary"]["subset"] = json!([]);
+        }
+        v["experiment_sets"] = json!({"sel": {"arms": arms, "compare": [[compare.0, compare.1]], "fixed": {"role_models": role_models}}});
+        v["selected_sets"] = json!(["sel"]);
+        fs::write(&inp.manifest_path, v.to_string()).expect("write");
+    }
+
+    fn run_check(arms: &[&str], compare: (&str, &str)) -> (CountingHost, Vec<String>) {
+        let mut s = setup();
+        select(&mut s.inp, arms, compare);
+        let host = CountingHost::default();
+        let r = check(&s.inp, &host);
+        let miss = r
+            .missing
+            .iter()
+            .map(|m| format!("{}: {}", m.check, m.detail))
+            .collect();
+        (host, miss)
+    }
+
+    /// 秘密値でなく名前だけを数える。token の環境変数名以外は、どの arm の credential も問い合わせない。
+    fn only_token_env(h: &CountingHost) {
+        assert!(
+            h.env_names
+                .borrow()
+                .iter()
+                .all(|n| n == "CELERIS_CAMPAIGN_TOKEN"),
+            "{:?}",
+            h.env_names.borrow()
+        );
+    }
+
+    /// A/B のみ: A の sandbox probe と B の daemon worker probe は発生する（対照）。C（Jev）は probe も credential も 0。
+    #[test]
+    fn ab_only_probes_a_and_b_and_never_touches_jev() {
+        let (h, miss) = run_check(&["A", "B"], ("A", "B"));
+        assert!(miss.is_empty(), "{miss:?}");
+        // 対照: 有効 arm の要求は実際に発生した。
+        assert_eq!(*h.sandbox_checks.borrow(), 1);
+        assert_eq!(*h.a_probe_runners.borrow(), 1, "A sandbox probe ran");
+        assert_eq!(h.resolves.borrow().len(), 1, "A program resolved once");
+        assert!(
+            h.api_gets
+                .borrow()
+                .iter()
+                .any(|g| g == "/api/v1/llm/accounts")
+        );
+        // B の worker probe だけ（case 2 件 × B 1 arm）。C の分は無い。
+        assert_eq!(*h.worker_probe_harnesses.borrow(), ["celeris", "celeris"]);
+        // C / Jev: 根拠表・Jev の API・Jev の credential の要求は 0。
+        let gets = h.api_gets.borrow();
+        assert!(
+            gets.iter()
+                .all(|g| !g.contains("jev") && !g.contains("evidence")),
+            "{gets:?}"
+        );
+        only_token_env(&h);
+    }
+
+    /// B/C のみ: B/C の daemon worker probe は発生する（対照）。A の program/account/準備/sandbox probe は 0。
+    #[test]
+    fn bc_only_probes_b_and_c_and_never_prepares_a() {
+        let (h, miss) = run_check(&["B", "C"], ("B", "C"));
+        assert!(miss.is_empty(), "{miss:?}");
+        // 対照: case 2 件 × B/C 2 arm の worker probe が daemon へ出た。
+        assert_eq!(h.worker_probe_harnesses.borrow().len(), 4);
+        assert!(h.api_gets.borrow().iter().any(|g| g == "/api/v1/config"));
+        // A: resolve / version / account / 準備（sandbox）/ sandbox probe の全てが 0。
+        assert!(h.resolves.borrow().is_empty(), "{:?}", h.resolves.borrow());
+        assert_eq!(*h.sandbox_checks.borrow(), 0);
+        assert_eq!(*h.a_probe_runners.borrow(), 0);
+        assert!(
+            h.api_gets
+                .borrow()
+                .iter()
+                .all(|g| !g.starts_with("/api/v1/llm/accounts")),
+            "{:?}",
+            h.api_gets.borrow()
+        );
+        only_token_env(&h);
+    }
 }

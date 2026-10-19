@@ -32,6 +32,7 @@ pub mod lock_exec;
 pub mod lock_tree;
 pub mod manifest;
 pub mod measure_env;
+pub mod offline_lock;
 pub mod preflight;
 pub mod record;
 pub mod report;

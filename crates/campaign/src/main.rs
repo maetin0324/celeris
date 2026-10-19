@@ -17,10 +17,10 @@ use celeris_campaign::{
     watch::{self, SystemClock, WatchOptions},
 };
 
-const USAGE: &str = "usage: celeris-campaign <human-op|dry-run|validate|env-lock|config-check|env-check|preflight|cap-probe|cap-worker|run|watch|check|check-report|export|final-accounting|grade-out|usage> --manifest <path> \
+const USAGE: &str = "usage: celeris-campaign <human-op|dry-run|validate|env-lock|offline-lock|config-check|env-check|preflight|cap-probe|cap-worker|run|watch|check|check-report|export|final-accounting|grade-out|usage> --manifest <path> \
 [--interval-secs N] [--max-iterations M] [--cases <grade-case dir> [--initial-trees <dir>]] \
 [--input-manifest <path>] [--out <dir>] [--executor mock|harness|celeris] [--api-url <url> --token-env <ENV_NAME> [--task-template <json>]] [--dest <dir>] \
-[--cases-root <dir>] [--grader-root <dir>] [--grade-case-root <dir>] [--a-program <path>] [--report <file>] [--measurement-id <id>] [--repo-src <dir>] [--materials-src <dir>] [--kb-src <dir>] [--inputs-src <dir>] [--records <records.jsonl>] [--cos-not-called <basis>] [--quota <usage.json>] [--a-account <account_id>] [--measure-config <toml> --normal-config <toml> --canaries <json>] [--max-7d <ratio>] [--max-7d-codex <ratio>]";
+[--cases-root <dir>] [--grader-root <dir>] [--grade-case-root <dir>] [--a-program <path>] [--report <file>] [--measurement-id <id>] [--repo-src <dir>] [--materials-src <dir>] [--kb-src <dir>] [--inputs-src <dir>] [--records <records.jsonl>] [--cos-not-called <basis>] [--quota <usage.json>] [--a-account <account_id>] [--measure-config <toml> --normal-config <toml> --canaries <json>] [--models-evidence <json> --models-evidence-sha256 <hex>] [--verify] [--max-7d <ratio>] [--max-7d-codex <ratio>]";
 
 fn arg(args: &[String], name: &str) -> Option<PathBuf> {
     args.iter()
@@ -287,7 +287,7 @@ fn run(args: Vec<String>) -> Result<String, String> {
             m.validate()?;
             Ok(m.compute_sha256()?)
         }
-        "env-lock" => {
+        "env-lock" | "offline-lock" => {
             use celeris_campaign::env_lock;
             let path_var = std::env::var_os("PATH");
             let a_program = arg(&args, "--a-program").unwrap_or_else(|| PathBuf::from("claude"));
@@ -307,11 +307,19 @@ fn run(args: Vec<String>) -> Result<String, String> {
                     pin: env_lock::pin_program(std::path::Path::new(p), path_var.as_deref())?,
                 });
             }
+            let offline = cmd == "offline-lock";
             // B/C の候補集合・階層は実 daemon の `GET /api/v1/llm/models`（正式 DTO）から取る。空は固定しない。
-            let url = arg(&args, "--api-url").ok_or("--api-url is required")?;
-            let tok = arg(&args, "--token-env").ok_or("--token-env is required")?;
-            let catalog =
-                env_lock::fetch_catalog(&RealHost, &url.to_string_lossy(), &tok.to_string_lossy())?;
+            // offline-lock は daemon に接続せず、承認済み実証跡 file（sha256 明示）から同じ関数で取る。
+            let catalog = if offline {
+                let ev = arg(&args, "--models-evidence").ok_or("--models-evidence is required")?;
+                let sha = arg(&args, "--models-evidence-sha256")
+                    .ok_or("--models-evidence-sha256 is required")?;
+                celeris_campaign::offline_lock::catalog_from_evidence(&ev, &sha.to_string_lossy())?
+            } else {
+                let url = arg(&args, "--api-url").ok_or("--api-url is required")?;
+                let tok = arg(&args, "--token-env").ok_or("--token-env is required")?;
+                env_lock::fetch_catalog(&RealHost, &url.to_string_lossy(), &tok.to_string_lossy())?
+            };
             let cap_env = match arg(&args, "--cap-env") {
                 Some(p) => Some(celeris_campaign::cap_probe::CapEnv::load(&p)?.pin()?),
                 None => None,
@@ -323,6 +331,16 @@ fn run(args: Vec<String>) -> Result<String, String> {
                 cap_env,
             };
             let verify = args.iter().any(|a| a == "--verify");
+            if offline {
+                let v = celeris_campaign::offline_lock::establish(
+                    &preflight_inputs(&args, &manifest_path),
+                    &m,
+                    &obs,
+                    &out()?,
+                    verify,
+                )?;
+                return serde_json::to_string_pretty(&v).map_err(|e| e.to_string());
+            }
             let o = env_lock::establish(&m, &obs, &out()?, verify)?;
             Ok(format!("{{\"env_lock\":\"{o:?}\"}}").to_lowercase())
         }

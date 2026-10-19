@@ -14,7 +14,7 @@ use celeris_campaign::{
     executor::{ExecStatus, Executor, MockExecutor, TrialRequest},
     inputs,
     lock::CampaignLock,
-    lock_exec::LOCK_FILE,
+    lock_exec::{self, LOCK_FILE},
     lock_tree,
     manifest::CampaignManifest,
     preflight::{self, Host, Inputs, ResolvedProgram, run_gated},
@@ -421,4 +421,243 @@ fn cli_run_with_a_wrong_repo_src_creates_nothing() {
     );
     assert!(!o.status.success(), "{}", text(&o));
     assert!(!f.out().exists(), "out を作らない: {}", text(&o));
+}
+
+// ---- offline-lock: 無試行の lock 入口（通常の expected_lock / begin / save / env_lock::establish だけを使う） ----
+
+struct Off {
+    f: Fx,
+    a: PathBuf,
+    worker: PathBuf,
+    evidence: PathBuf,
+}
+
+fn stub(path: &Path, body: &str) {
+    use std::io::Write;
+    let mut c = Command::new("sh")
+        .arg("-c")
+        .arg(r#"cat > "$1" && chmod 755 "$1""#)
+        .arg("sh")
+        .arg(path)
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    c.stdin.take().unwrap().write_all(body.as_bytes()).unwrap();
+    assert!(c.wait().unwrap().success());
+}
+
+fn models_body() -> Value {
+    json!({"items": [
+        {"source": "claude_oauth", "model_id": "m-big", "override": {"tier": "frontier"}},
+        {"source": "claude_oauth", "model_id": "m-small"},
+        {"source": "claude_oauth", "model_id": "m-off", "override": {"disabled": true}},
+    ]})
+}
+
+fn off() -> Off {
+    let f = fx();
+    let d = f.dir.path();
+    let (a, worker, evidence) = (d.join("claude"), d.join("codex"), d.join("models.json"));
+    stub(&a, "#!/bin/sh\necho 'claude-code@2.1.0'\n");
+    stub(&worker, "#!/bin/sh\necho 'codex-stub 0.9'\n");
+    fs::write(&evidence, models_body().to_string()).unwrap();
+    Off {
+        f,
+        a,
+        worker,
+        evidence,
+    }
+}
+
+impl Off {
+    fn sha(&self) -> String {
+        format!("{:x}", Sha256::digest(fs::read(&self.evidence).unwrap()))
+    }
+    fn run(&self, extra: &[&str]) -> Output {
+        let w = format!("codex={}", self.worker.display());
+        let (a, ev, sha) = (
+            self.a.display().to_string(),
+            self.evidence.display().to_string(),
+            self.sha(),
+        );
+        let mut args = vec![
+            "--a-program",
+            &a,
+            "--worker-program",
+            &w,
+            "--models-evidence",
+            &ev,
+            "--models-evidence-sha256",
+            &sha,
+        ];
+        args.extend_from_slice(extra);
+        bin("offline-lock", &self.f, &args)
+    }
+    fn files(&self) -> Vec<String> {
+        let mut v: Vec<String> = fs::read_dir(self.f.out())
+            .map(|d| {
+                d.map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+                    .collect()
+            })
+            .unwrap_or_default();
+        v.sort();
+        v
+    }
+}
+
+#[test]
+fn offline_lock_creates_and_reverifies_without_any_trial_path() {
+    let o = off();
+    let r = o.run(&["--verify"]);
+    assert!(!r.status.success(), "verify without a lock must fail");
+    assert!(o.files().is_empty(), "verify must not create out");
+    let r = o.run(&[]);
+    assert!(r.status.success(), "{}", text(&r));
+    let v: Value = serde_json::from_slice(&r.stdout).unwrap();
+    assert_eq!(v["paid_calls_made"], 0);
+    assert_eq!(v["env_lock"], "created");
+    assert_eq!(v["campaign_lock"], "created");
+    // 試行開始経路（runner・台帳・meta・harness 状態）が作る物は無い。
+    assert_eq!(o.files(), ["env-lock.json", "lock.json"]);
+    let env: Value =
+        serde_json::from_slice(&fs::read(o.f.out().join("env-lock.json")).unwrap()).unwrap();
+    assert_eq!(env["schema"], "celeris-env-lock/3");
+    let cat = &env["bc"]["arms"][0]["catalog"];
+    assert_eq!(cat.as_array().unwrap().len(), 2, "disabled row is excluded");
+    assert_eq!(cat[0]["tier"], "frontier");
+    // 保存 lock は通常経路の期待 lock と同一（封印込み）。
+    let saved = lock_exec::load_saved(&o.f.manifest(), &o.f.out(), Some(&o.f.lock()))
+        .unwrap()
+        .unwrap();
+    assert_eq!(saved.sha256, v["lock_sha256"]);
+    let r = o.run(&[]);
+    assert!(r.status.success(), "{}", text(&r));
+    assert!(text(&r).contains("\"verified\""));
+    assert!(o.run(&["--verify"]).status.success());
+    assert_eq!(o.files(), ["env-lock.json", "lock.json"]);
+}
+
+#[test]
+fn offline_lock_rejects_forged_or_missing_evidence_and_writes_nothing() {
+    let o = off();
+    // 実証跡の差替え（hash 不一致）。
+    // 本文を書き換える（承認時の hash のまま）。
+    fs::write(
+        &o.evidence,
+        json!({"items":[{"source":"claude_oauth","model_id":"made-up"}]}).to_string(),
+    )
+    .unwrap();
+    let sha_before = o.sha();
+    let ev = o.evidence.display().to_string();
+    let w = format!("codex={}", o.worker.display());
+    let a = o.a.display().to_string();
+    let r = bin(
+        "offline-lock",
+        &o.f,
+        &[
+            "--a-program",
+            &a,
+            "--worker-program",
+            &w,
+            "--models-evidence",
+            &ev,
+            "--models-evidence-sha256",
+            &"1".repeat(64),
+        ],
+    );
+    assert!(!r.status.success());
+    assert!(
+        text(&r).contains("differs from the approved"),
+        "{}",
+        text(&r)
+    );
+    assert!(sha_before.len() == 64 && o.files().is_empty());
+    // 実証跡の欠落・hash 未指定・空 catalog。
+    let r = bin("offline-lock", &o.f, &["--a-program", &a]);
+    assert!(
+        text(&r).contains("--models-evidence is required"),
+        "{}",
+        text(&r)
+    );
+    fs::write(&o.evidence, json!({"items": []}).to_string()).unwrap();
+    let r = o.run(&[]);
+    assert!(!r.status.success());
+    assert!(text(&r).contains("no enabled candidate"), "{}", text(&r));
+    assert!(o.files().is_empty());
+}
+
+#[test]
+fn offline_lock_rejects_tampering_and_path_mismatch() {
+    let mut o = off();
+    assert!(o.run(&[]).status.success());
+    let (env_before, lock_before) = (
+        fs::read(o.f.out().join("env-lock.json")).unwrap(),
+        fs::read(o.f.out().join(LOCK_FILE)).unwrap(),
+    );
+    // 実証跡の差替え（hash も合わせて作り直した偽の catalog）は env-lock と食い違う。
+    let good = fs::read(&o.evidence).unwrap();
+    fs::write(
+        &o.evidence,
+        json!({"items":[{"source":"claude_oauth","model_id":"made-up"}]}).to_string(),
+    )
+    .unwrap();
+    let r = o.run(&[]);
+    assert!(!r.status.success());
+    assert!(text(&r).contains("catalog"), "{}", text(&r));
+    fs::write(&o.evidence, good).unwrap();
+    // A の実体差替え。
+    stub(&o.a, "#!/bin/sh\n# tampered\necho 'claude-code@2.1.0'\n");
+    let r = o.run(&[]);
+    assert!(!r.status.success());
+    assert!(text(&r).contains("a.program.sha256"), "{}", text(&r));
+    stub(&o.a, "#!/bin/sh\necho 'claude-code@2.1.0'\n");
+    assert!(o.run(&[]).status.success());
+    // 取り込み元の path 不一致（別の repo / cases root）。
+    let other = o.f.dir.path().join("other-repo");
+    copy(o.f.inp.repo_src.as_ref().unwrap(), &other);
+    fs::write(other.join("README"), "different").unwrap();
+    git(&other, &["commit", "-q", "-am", "diverged"]);
+    let (repo, cases) = (
+        o.f.inp.repo_src.clone().unwrap(),
+        o.f.inp.cases_root.clone(),
+    );
+    o.f.inp.repo_src = Some(other);
+    let r = o.run(&[]);
+    assert!(!r.status.success(), "{}", text(&r));
+    assert!(text(&r).contains("--repo-src"), "{}", text(&r));
+    o.f.inp.repo_src = Some(repo);
+    o.f.inp.cases_root = o.f.dir.path().join("nope");
+    let r = o.run(&[]);
+    assert!(!r.status.success(), "{}", text(&r));
+    o.f.inp.cases_root = cases;
+    assert!(o.run(&["--verify"]).status.success());
+    // 保存 lock の変造（封印が合わない）は再照合で拒否。
+    let mut lock: Value = serde_json::from_slice(&lock_before).unwrap();
+    lock["kb_snapshot"] = json!("forged");
+    fs::write(o.f.out().join(LOCK_FILE), lock.to_string()).unwrap();
+    let r = o.run(&["--verify"]);
+    assert!(!r.status.success(), "{}", text(&r));
+    fs::write(o.f.out().join(LOCK_FILE), &lock_before).unwrap();
+    // 保存 env-lock の変造。
+    let mut env: Value = serde_json::from_slice(&env_before).unwrap();
+    env["bc"]["release"] = json!("ffffffffffff");
+    fs::write(o.f.out().join("env-lock.json"), env.to_string()).unwrap();
+    let r = o.run(&["--verify"]);
+    assert!(!r.status.success());
+    assert!(text(&r).contains("bc.release"), "{}", text(&r));
+}
+
+#[test]
+fn offline_lock_refuses_an_out_that_already_has_trial_data() {
+    let o = off();
+    fs::create_dir_all(o.f.out()).unwrap();
+    fs::write(o.f.out().join("records.jsonl"), "{}\n").unwrap();
+    let r = o.run(&[]);
+    assert!(!r.status.success());
+    assert!(
+        text(&r).contains("has data but no lock.json"),
+        "{}",
+        text(&r)
+    );
+    assert_eq!(o.files(), ["records.jsonl"]);
 }

@@ -608,6 +608,11 @@ pub struct RunContext {
     /// （前置きと `request.json` は従来とバイト単位で同じ）。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub input_attachments: Vec<InputAttachment>,
+    /// propagation §8.5: variant 付き task の run だけ `Some`。dispatcher が run 開始直前に照合した
+    /// 固定値（identity・org digest・selected・daemon instance・config hash）。plain な run は `None` で
+    /// `request.json` もプロンプトも従来と同じ。保存と再開検査は `campaign_pin`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub campaign: Option<CampaignRunPin>,
 }
 
 /// `context.input_attachments` の 1 件（ADR 2026-10-05 cos-chat-home D4 の添付 manifest）。
@@ -1314,6 +1319,8 @@ pub fn schema_value() -> serde_json::Value {
     serde_json::to_value(schema).unwrap_or(serde_json::Value::Null)
 }
 
+mod campaign;
+pub use campaign::{CampaignRunPin, CampaignSelected};
 mod cos_chat;
 pub use cos_chat::{
     COS_CHAT_IMAGE_MEDIA_TYPES, COS_RUN_CREDENTIAL_ENV, CosChatAttachment, CosChatContext,

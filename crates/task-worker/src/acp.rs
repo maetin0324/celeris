@@ -937,6 +937,7 @@ async fn run_acp(
     if let Err(e) = crate::skills::deliver_agent_skills(req.cwd(), &req.context.skills).await {
         warn!("run {run_id}: failed to deliver skills to .agents/skills: {e}");
     }
+    crate::campaign_pin::enforce(&run_dir, req).await?;
     crate::subprocess::write_run_request(&run_dir, req, run_id).await;
     crate::subprocess::write_run_prompt(&run_dir, &prompt, run_id).await;
 

@@ -225,6 +225,7 @@ async fn run_pi(
         None => build_prompt_with_skill_list(&req.task, &req.context, run_id, &artifacts_rel),
     };
     crate::skills::deliver_agent_skills(req.cwd(), &req.context.skills).await?;
+    crate::campaign_pin::enforce(&run_dir, req).await?;
     crate::subprocess::write_run_request(&run_dir, req, run_id).await;
     let recorded = match &cos_parts {
         Some(parts) => {

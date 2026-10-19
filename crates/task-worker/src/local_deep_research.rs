@@ -426,6 +426,7 @@ async fn run_ldr(
 
     let query = build_query(&req.task, &req.context, prior_report.as_deref());
     // ADR-0023 D2 / M1: この run で何を渡したかを残す。
+    crate::campaign_pin::enforce(&run_dir, req).await?;
     crate::subprocess::write_run_request(&run_dir, req, run_id).await;
     crate::subprocess::write_run_prompt(&run_dir, &query, run_id).await;
     let mode = if is_retry {

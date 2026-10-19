@@ -804,6 +804,7 @@ async fn run_codex(
         ),
     };
     // ADR-0023 D2 / M1: この run で何を渡したかを残す（`request.json` は構造、`prompt.txt` は実際の文面）。
+    crate::campaign_pin::enforce(&run_dir, req).await?;
     crate::subprocess::write_run_request(&run_dir, req, run_id).await;
     let recorded = match &cos_parts {
         Some(parts) => {

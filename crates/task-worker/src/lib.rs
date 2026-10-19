@@ -22,6 +22,7 @@ pub mod browser_specialist;
 pub mod browser_supervisor;
 /// ADR-0066 D1（Phase 110b）: 同一リポジトリの worktree 間で cargo のビルドキャッシュを共有する。
 pub mod build_cache;
+pub mod campaign_pin;
 pub mod claude_account;
 pub mod claude_code;
 pub mod cluster_login;

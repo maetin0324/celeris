@@ -133,6 +133,7 @@ pub async fn run_subprocess(
     let stdout_log_path = run_dir.join("stdout.jsonl");
     let stderr_log_path = run_dir.join("stderr.log");
     let result_log_path = run_dir.join("result.json");
+    crate::campaign_pin::enforce(&run_dir, req).await?;
     write_run_request(&run_dir, req, run_id).await;
 
     let mut command = Command::new(&spec.program);

@@ -155,6 +155,7 @@ async fn run_aider(
     tokio::fs::create_dir_all(&req.artifacts_dir).await?;
 
     let prompt = build_prompt(&req.task, &req.context, run_id, &artifacts_rel);
+    crate::campaign_pin::enforce(&run_dir, req).await?;
     crate::subprocess::write_run_request(&run_dir, req, run_id).await;
     crate::subprocess::write_run_prompt(&run_dir, &prompt, run_id).await;
 

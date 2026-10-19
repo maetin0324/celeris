@@ -231,6 +231,7 @@ async fn run_langmem(
     // そのまま渡す（`local-deep-research` の `build_query` と同じ考え方）。
     let objective = req.task.objective.clone();
     // ADR-0023 D2 / M1: この run で何を渡したかを残す。
+    crate::campaign_pin::enforce(&run_dir, req).await?;
     crate::subprocess::write_run_request(&run_dir, req, run_id).await;
     crate::subprocess::write_run_prompt(&run_dir, &objective, run_id).await;
 

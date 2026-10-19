@@ -1,9 +1,7 @@
 ---
-title: cap-probe: ro_mounts を種別別に検査（WU kind-aware-check）
 tasks: [01M58VFR9ZS5RG7QNB558DT4XK]
 status: done
 completed: 2026-10-19
-updated: 2026-10-19
 ---
 # cap-probe: ro_mounts を種別別に検査（WU kind-aware-check）
 

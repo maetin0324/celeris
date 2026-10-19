@@ -1,9 +1,6 @@
 ---
-title: CAP_ENV toolchain pin を内容 hash へ
-tasks: [main-direct]
 status: done
 completed: 2026-10-18
-updated: 2026-10-18
 ---
 # CAP_ENV toolchain pin を内容 hash へ
 

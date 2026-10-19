@@ -757,10 +757,9 @@ fn cos_operator_skill_documents_the_registered_project_deploy_scope() {
     let deploy = read("deploy.md");
     for needle in [
         "Celeris 自身の本番",
-        "pg_dump",
-        "/local/celeris/data/scratch",
-        "migrate",
-        "healthy",
+        // ADR 2026-10-19-cos-registered-project-deploy D3: 手順の正本は KB。skill は入口の表だけを持つ。
+        "projects/pairs-ai-reply-assistant-web-ui/deploy.md",
+        "celerisctl knowledge get",
         ".env",
         "破壊的",
     ] {

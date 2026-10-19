@@ -24,19 +24,4 @@ project ごとの手順は KB の `projects/<project>/deploy.md`（`celerisctl k
 
 | project | 作業 dir | 手順 |
 |---|---|---|
-| PRA（pairs-reply-assistant） | `/home/rmaeda/workspace/pra-deploy` | 下の「PRA」 |
-
-## PRA
-
-1. 同期中でないことを確かめる（取込・同期のジョブが走っている間は配備しない。走っていれば待つか人に報告）。
-2. 対象 commit を取ってきて checkout する（人が指定した ref。指定が無ければ人に聞く）:
-   `git fetch /home/rmaeda/workspace/pairs-reply-assistant refs/heads/main` → `git checkout --detach <sha>`。
-3. 事前に DB をバックアップする: `docker compose -f compose.yaml -f compose.prod.yaml exec -T postgres pg_dump -U pra pra | gzip`
-   の出力を `/local/celeris/data/scratch/pra-db-backup-<YYYYMMDD>-pre-<sha7>.sql.gz` に置く（`/tmp` や repo 内に置かない）。
-   取れなければ配備しない。
-4. 変更に config（`.env` など）の変更・破壊的 migration が含まれるなら、ここで人に確認する。
-5. 本番の override を必ず重ねる: `docker compose -f compose.yaml -f compose.prod.yaml up -d --build`（作業 dir で）。
-   `-f compose.prod.yaml` を省いた `docker compose up` や `compose.dev.yaml` は本番で使わない。
-6. 健全性を確かめる: migrate service が exit 0、全 service が healthy。満たさなければ失敗として報告し、バックアップの場所を添える
-   （自動で戻さない）。
-7. 報告に commit・バックアップ file・各 service の状態を書く。
+| PRA（pairs-reply-assistant） | `/home/rmaeda/workspace/pra-deploy` | `celerisctl knowledge get projects/pairs-ai-reply-assistant-web-ui/deploy.md` |

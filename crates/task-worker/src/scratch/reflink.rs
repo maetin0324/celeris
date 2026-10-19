@@ -6,6 +6,10 @@
 //! container の `/local` では `FICLONE` が EPERM でも `copy_file_range(2)` が extent を共有するので、
 //! `--reflink=always` の成否は判定に使わない。共有を確かめられない（通常コピーに落ちた・EXDEV・cp の失敗・
 //! FIEMAP 非対応）なら一時ディレクトリを消し、空の target から始める（従来の方式）。
+//! 写すのは workspace 外の依存（registry・git の crate）の成果物だけ。workspace member の成果物（deps の lib*・
+//! 試験 binary・bin・fingerprint・build・dep-info・incremental）は、seed の checkout の絶対 path
+//! （`CARGO_MANIFEST_DIR`・`env!(CARGO_BIN_EXE_*)`）を焼いているので写した後に消し、owner 側で build し直させる
+//! （`prune_workspace_artifacts`）。残すと owner の試験が owner の worktree でなく seed（main）の file を黙って読む。
 //! どちらで作ったかは `<owner>/target-origin.json` とログに残す。**LLM は呼ばない**。
 
 use std::io;
@@ -343,6 +347,19 @@ pub fn seed_target(
         Err(e) => return empty(format!("reflink probe failed: {e}")),
     }
     let rel = probe_src.strip_prefix(&seed).map(Path::to_path_buf);
+    // seed の checkout（`seeds/<key>/checkout`）。dep-info に載る member の source の絶対 path の印。
+    let checkout_marks: Vec<String> = [
+        seed.parent()
+            .and_then(Path::parent)
+            .map(|d| d.join(super::SEED_CHECKOUT_DIR)),
+        seed_current_dir(pool, repo_key)
+            .parent()
+            .map(|d| d.join(super::SEED_CHECKOUT_DIR)),
+    ]
+    .into_iter()
+    .flatten()
+    .map(|p| p.display().to_string())
+    .collect();
     let result = (ops.copy)(&seed, &tmp).and_then(|()| {
         // 写した target でも共有を確かめる（途中で通常コピーへ落ちていないか）。
         let copied = rel
@@ -352,6 +369,7 @@ pub fn seed_target(
         if !(ops.is_shared)(&copied)? {
             return Err(io::Error::other("copied target did not share extents"));
         }
+        prune_workspace_artifacts(&tmp, &checkout_marks)?;
         std::fs::rename(&tmp, owner_dir.join(TARGET_SUBDIR))
     });
     match result {
@@ -528,4 +546,133 @@ pub fn fiemap_extents(path: &Path) -> io::Result<Vec<(u64, u64, u32)>> {
         }
     }
     Ok(result)
+}
+
+/// dep-info（Makefile 形式の `.d`）が workspace member のものか。member の source は seed の checkout の下の絶対
+/// path か、cwd 相対の path で載る（registry・git の crate は `~/.cargo` 等の絶対 path）。
+fn dep_info_is_workspace_member(text: &str, checkout_marks: &[String]) -> bool {
+    if checkout_marks.iter().any(|m| text.contains(m.as_str())) {
+        return true;
+    }
+    text.lines()
+        .filter(|l| !l.starts_with('#'))
+        .flat_map(str::split_whitespace)
+        .any(|tok| !tok.ends_with(':') && !tok.starts_with('/'))
+}
+
+/// `name-<hash>` の `<hash>`（最後の `-` の後ろ。拡張子は含まない）。
+fn unit_hash(stem: &str) -> Option<&str> {
+    stem.rsplit_once('-').map(|(_, h)| h)
+}
+
+/// 写した target から workspace member の成果物を消す（seed の checkout の path を焼いているため）。
+/// `target/` の下の profile dir（`.fingerprint` を持つ dir。`<triple>/<profile>` も）ごとに、dep-info が member を
+/// 指す unit の `deps/<unit>.*`・`.fingerprint/*-<hash>`・`build/<pkg>-*` と、`incremental/`・`examples/`・profile
+/// 直下の bin を消す。
+pub fn prune_workspace_artifacts(target: &Path, checkout_marks: &[String]) -> io::Result<()> {
+    let mut profiles = Vec::new();
+    let mut stack = vec![(target.to_path_buf(), 0u8)];
+    while let Some((dir, depth)) = stack.pop() {
+        if dir.join(".fingerprint").is_dir() {
+            profiles.push(dir);
+            continue;
+        }
+        if depth >= 3 {
+            continue;
+        }
+        for e in std::fs::read_dir(&dir)?.flatten() {
+            if e.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                stack.push((e.path(), depth + 1));
+            }
+        }
+    }
+    for profile in profiles {
+        prune_profile(&profile, checkout_marks)?;
+    }
+    Ok(())
+}
+
+fn prune_profile(profile: &Path, checkout_marks: &[String]) -> io::Result<()> {
+    let mut hashes = std::collections::BTreeSet::new();
+    let mut stems = std::collections::BTreeSet::new();
+    let deps = profile.join("deps");
+    if deps.is_dir() {
+        for e in std::fs::read_dir(&deps)?.flatten() {
+            let name = e.file_name().to_string_lossy().into_owned();
+            let Some(stem) = name.strip_suffix(".d") else {
+                continue;
+            };
+            let text = String::from_utf8_lossy(&std::fs::read(e.path())?).into_owned();
+            if dep_info_is_workspace_member(&text, checkout_marks) {
+                if let Some(h) = unit_hash(stem) {
+                    hashes.insert(h.to_string());
+                }
+                stems.insert(stem.to_string());
+            }
+        }
+        for e in std::fs::read_dir(&deps)?.flatten() {
+            let name = e.file_name().to_string_lossy().into_owned();
+            let base = name.split('.').next().unwrap_or(&name);
+            if stems.contains(base) || base.strip_prefix("lib").is_some_and(|b| stems.contains(b)) {
+                remove_any(&e.path())?;
+            }
+        }
+    }
+    // build script の dep-info は `build/<pkg>-<hash>/`。member の build 出力（実行結果も）は pkg 単位で消す。
+    let build = profile.join("build");
+    if build.is_dir() {
+        let entries: Vec<_> = std::fs::read_dir(&build)?.flatten().collect();
+        let mut member_pkgs = std::collections::BTreeSet::new();
+        for e in &entries {
+            let Ok(inner) = std::fs::read_dir(e.path()) else {
+                continue;
+            };
+            let is_member = inner.flatten().any(|f| {
+                f.file_name().to_string_lossy().ends_with(".d")
+                    && std::fs::read(f.path())
+                        .map(|b| {
+                            dep_info_is_workspace_member(
+                                &String::from_utf8_lossy(&b),
+                                checkout_marks,
+                            )
+                        })
+                        .unwrap_or(false)
+            });
+            if is_member {
+                let name = e.file_name().to_string_lossy().into_owned();
+                if let Some((pkg, h)) = name.rsplit_once('-') {
+                    member_pkgs.insert(pkg.to_string());
+                    hashes.insert(h.to_string());
+                }
+            }
+        }
+        for e in entries {
+            let name = e.file_name().to_string_lossy().into_owned();
+            if let Some((pkg, _)) = name.rsplit_once('-')
+                && member_pkgs.contains(pkg)
+            {
+                remove_any(&e.path())?;
+            }
+        }
+    }
+    let fingerprints = profile.join(".fingerprint");
+    for e in std::fs::read_dir(&fingerprints)?.flatten() {
+        let name = e.file_name().to_string_lossy().into_owned();
+        if unit_hash(&name).is_some_and(|h| hashes.contains(h)) {
+            remove_any(&e.path())?;
+        }
+    }
+    remove_any(&profile.join("incremental"))?;
+    remove_any(&profile.join("examples"))?;
+    // profile 直下の bin（deps の実体への hard link / copy）。dotfile と CACHEDIR.TAG は残す。
+    for e in std::fs::read_dir(profile)?.flatten() {
+        let name = e.file_name().to_string_lossy().into_owned();
+        if e.file_type().map(|t| t.is_file()).unwrap_or(false)
+            && !name.starts_with('.')
+            && name != "CACHEDIR.TAG"
+        {
+            remove_any(&e.path())?;
+        }
+    }
+    Ok(())
 }

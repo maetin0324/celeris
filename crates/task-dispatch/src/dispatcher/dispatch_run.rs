@@ -631,10 +631,13 @@ impl Dispatcher {
         let account = account_adapter.map(|_| pick.account.to_string());
 
         // variant 付き試行は、lease と run 記録の前にもう一度 pin を確かめる（割当後に org が変わっていたら起動しない）。
-        if let Err(reason) = self.variant_start_check(&task) {
-            self.block_variant_task(&task, reason)?;
-            return Ok(false);
-        }
+        let campaign_pin = match self.variant_run_pin(&task, Some(&llm_route)) {
+            Ok(pin) => pin,
+            Err(reason) => {
+                self.block_variant_task(&task, reason)?;
+                return Ok(false);
+            }
+        };
         let wall = Duration::from_secs(task.budget.max_wall_secs);
         let ttl = wall + self.config.lease_grace;
         let lease_started = Instant::now();
@@ -998,6 +1001,7 @@ impl Dispatcher {
             tracing::warn!(task_id = %task.id, %run_id, error = %e, "failed to record the llm route selection");
         }
         extras.llm_route = Some(llm_route);
+        extras.campaign = campaign_pin;
         // ADR-0052 D2: フォールバックの前置き（LangMem に渡しているのと同じ抽出の指示 + 出力契約）を
         // 役割の指示文として載せる。依頼文（`maintenance_objective`）は `task.objective` のまま。
         if let Some(fallback) = &knowledge_fallback {

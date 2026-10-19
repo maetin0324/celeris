@@ -5,7 +5,15 @@
 //! 不変であることの証明にはしない（それは campaign 側の封印期待値との照合 = campaign-proof が行う）。
 
 use super::*;
-use task_core::variant_wire::CampaignOrgPin;
+use task_core::variant_wire::{CampaignOrgPin, org_effective_digest};
+use task_worker::protocol::{CampaignRunPin, CampaignSelected};
+
+/// variant 付き run の観測値（専用 daemon の `identity`）。起動時に一度だけ渡す。
+#[derive(Debug, Clone)]
+pub struct VariantObservation {
+    pub instance_id: String,
+    pub config_sha256: String,
+}
 
 /// 割当先（matching の結果、または retry で既存の assignee）が pin の範囲か。
 /// node 集合が根＋単一作業課（spec-off）なら `coding_node` 以外は拒否する。
@@ -25,22 +33,58 @@ pub(super) fn check_assignee(pin: &CampaignOrgPin, assignee: &str) -> Result<(),
 }
 
 impl Dispatcher {
-    /// run 起動直前の再検査（割当前の検査から時間が空くため、org drift・assignee の逸脱を改めて見る）。
+    /// run 起動直前の再検査（org drift・assignee の逸脱）と、worker に渡す run pin の組み立て。
     /// retry・continuation・repair・並列 WU の 2 本目など、`dispatch_one` を通る全ての起動が対象。
     /// 解決は祖先連鎖の全体で行うので、子孫は最寄りの識別でなく連鎖の整合した値で検査される。
-    pub(super) fn variant_start_check(&self, task: &Task) -> Result<(), String> {
-        let Some(pin) = self.variant_org_pin(task)? else {
-            return Ok(());
+    ///（`selected` は run が実際に使う route）。
+    /// variant なしの task は `Ok(None)`（RunContext.campaign も `None`）。variant 付きで観測値（daemon の
+    /// instance id・config hash、全 node digest、selected）のどれかが作れなければ `Err`（run を始めない）。
+    /// `selected = None` は検査だけを行い pin は作らない。
+    pub(super) fn variant_run_pin(
+        &self,
+        task: &Task,
+        selected: Option<&task_worker::protocol::SelectedLlmRoute>,
+    ) -> Result<Option<CampaignRunPin>, String> {
+        let id = self
+            .store
+            .task_campaign_resolve(&task.id.to_string())
+            .map_err(|e| format!("campaign identity could not be resolved: {e}"))?;
+        let Some(identity) = id.filter(|i| i.variant_org.is_some()) else {
+            return Ok(None);
         };
+        let pin = identity
+            .variant_org
+            .clone()
+            .ok_or_else(|| "variant_org missing".to_string())?;
         let org = self
             .store
             .org_list()
             .map_err(|e| format!("org could not be read: {e}"))?;
         pin.check_org(&org)?;
         match task.assignee.as_deref() {
-            Some(a) => check_assignee(&pin, a),
-            None => Err("no assignee at run start".to_string()),
+            Some(a) => check_assignee(&pin, a)?,
+            None => return Err("no assignee at run start".to_string()),
         }
+        let Some(selected) = selected else {
+            return Ok(None);
+        };
+        let obs = self
+            .variant_observation
+            .as_ref()
+            .ok_or_else(|| "daemon instance id / config sha256 are not available".to_string())?;
+        let run_pin = CampaignRunPin {
+            identity,
+            org_nodes_sha256: org_effective_digest(&org)?,
+            selected: CampaignSelected {
+                harness_id: selected.harness_id.clone(),
+                source_id: selected.source_id.clone(),
+                model_id: selected.model_id.clone(),
+            },
+            daemon_instance_id: obs.instance_id.clone(),
+            config_sha256: obs.config_sha256.clone(),
+        };
+        run_pin.validate()?;
+        Ok(Some(run_pin))
     }
 
     /// task の解決済み campaign 識別の `variant_org`。識別なし・variant なしは `Ok(None)`。

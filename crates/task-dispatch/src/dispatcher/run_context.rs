@@ -429,6 +429,7 @@ impl Dispatcher {
             // ADR 2026-10-05 cos-chat-home D4: `spawn_worker` が planner でない run にだけ入れる。
             input_attachment_source: None,
             llm_route: None,
+            campaign: None,
         })
     }
 

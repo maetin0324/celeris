@@ -228,7 +228,7 @@ fn start_check_passes_for_child_retry_and_grandchild_while_org_matches() {
     let grand = f.task(Some(child.id), Some("sw-b"));
     let d = checker(&f);
     for t in [&root, &child, &grand] {
-        assert_eq!(d.variant_start_check(t), Ok(()));
+        assert_eq!(d.variant_run_pin(t, None).map(|_| ()), Ok(()));
     }
 }
 
@@ -246,7 +246,7 @@ fn start_check_catches_org_drift_after_assignment_for_every_generation() {
     n.profile.skills = vec!["drifted".into()];
     f.store.org_upsert(&n).unwrap();
     for t in [&root, &child, &grand] {
-        assert!(d.variant_start_check(t).is_err());
+        assert!(d.variant_run_pin(t, None).map(|_| ()).is_err());
     }
 }
 
@@ -258,8 +258,8 @@ fn start_check_rejects_an_assignee_outside_the_pin_and_a_missing_assignee() {
     f.mark(&root, pin_for(f.store.as_ref(), &["cos", "sw-b"], "sw-b"));
     let none = f.task(Some(root.id), None);
     let d = checker(&f);
-    assert!(d.variant_start_check(&root).is_err());
-    assert!(d.variant_start_check(&none).is_err());
+    assert!(d.variant_run_pin(&root, None).map(|_| ()).is_err());
+    assert!(d.variant_run_pin(&none, None).map(|_| ()).is_err());
 }
 
 #[test]
@@ -267,7 +267,7 @@ fn start_check_is_a_noop_without_variant() {
     let f = fx();
     seed(f.store.as_ref(), &["sw-a", "sw-b"]);
     let t = f.task(None, None);
-    assert_eq!(checker(&f).variant_start_check(&t), Ok(()));
+    assert_eq!(checker(&f).variant_run_pin(&t, None).map(|_| ()), Ok(()));
 }
 
 #[test]
@@ -294,4 +294,126 @@ fn contradicting_child_pin_is_rejected_at_save_and_root_pin_wins() {
     let d = checker(&f);
     let got = d.variant_org_pin(&child).unwrap().expect("root pin");
     assert_eq!(got.coding_node, "sw-a");
+}
+
+// ---- run 起動点: RunContext.campaign が worker（adapter）へ届く ----
+
+type Seen = Arc<StdMutex<Vec<Option<task_worker::protocol::CampaignRunPin>>>>;
+
+/// `req.context.campaign` と run の有無を記録するだけの stub（LLM・外部通信なし）。
+struct CampaignCapture {
+    seen: Seen,
+}
+
+#[async_trait::async_trait]
+impl WorkerAdapter for CampaignCapture {
+    fn id(&self) -> &str {
+        "instant"
+    }
+    async fn run(
+        &self,
+        req: RunRequest,
+        _run_id: &str,
+        _limits: RunLimits,
+        _sink: &dyn EventSink,
+    ) -> Result<RunOutcome, AdapterError> {
+        self.seen.lock().unwrap().push(req.context.campaign.clone());
+        Ok(RunOutcome {
+            terminal: Terminal::Question { text: "x".into() },
+            exit_code: Some(0),
+        })
+    }
+}
+
+fn capturing(f: &Fx, observe: bool) -> (Dispatcher, Seen) {
+    let seen: Seen = Arc::default();
+    let mut d = dispatcher(
+        f.store.clone(),
+        Arc::new(CampaignCapture { seen: seen.clone() }),
+        1,
+    );
+    if observe {
+        d.set_variant_observation("inst-1".into(), H.into());
+    }
+    (d, seen)
+}
+
+async fn start_one(d: &mut Dispatcher, id: TaskId) {
+    d.tick().unwrap();
+    if d.running.contains_key(&RunKey {
+        task: id,
+        work_unit: None,
+    }) {
+        await_worker_completion(d, id).await;
+    }
+}
+
+#[tokio::test]
+async fn variant_pin_reaches_the_worker_for_root_and_child() {
+    let f = fx();
+    seed(f.store.as_ref(), &["sw-b"]);
+    let pin = pin_for(f.store.as_ref(), &["cos", "sw-b"], "sw-b");
+    let root = f.task(None, Some("sw-b"));
+    f.mark(&root, pin.clone());
+    let (mut d, seen) = capturing(&f, true);
+    start_one(&mut d, root.id).await;
+    let got = seen.lock().unwrap().clone();
+    assert_eq!(got.len(), 1, "root run started");
+    let c = got[0].as_ref().expect("campaign pin in RunContext");
+    assert_eq!(c.identity.variant_org.as_ref(), Some(&pin));
+    assert_eq!(c.daemon_instance_id, "inst-1");
+    assert_eq!(c.config_sha256, H);
+    assert_eq!(
+        c.org_nodes_sha256,
+        task_core::variant_wire::org_effective_digest(&f.store.org_list().unwrap()).unwrap()
+    );
+    assert!(!c.selected.harness_id.is_empty() && !c.selected.model_id.is_empty());
+    c.validate().unwrap();
+
+    // 子は祖先の pin を連鎖解決で継ぎ、同じ identity が届く。
+    let child = f.task(Some(root.id), Some("sw-b"));
+    let (mut d2, seen2) = capturing(&f, true);
+    start_one(&mut d2, child.id).await;
+    let got2 = seen2.lock().unwrap().clone();
+    assert_eq!(got2.len(), 1, "child run started");
+    assert_eq!(got2[0].as_ref().unwrap().identity, c.identity);
+}
+
+#[tokio::test]
+async fn variant_plain_task_gets_no_campaign_pin() {
+    let f = fx();
+    seed(f.store.as_ref(), &["sw-b"]);
+    let t = f.task(None, Some("sw-b"));
+    let (mut d, seen) = capturing(&f, true);
+    start_one(&mut d, t.id).await;
+    let got = seen.lock().unwrap().clone();
+    assert_eq!(got.len(), 1);
+    assert!(got[0].is_none());
+}
+
+#[tokio::test]
+async fn variant_task_without_daemon_observation_is_blocked_before_the_run() {
+    let f = fx();
+    seed(f.store.as_ref(), &["sw-b"]);
+    let root = f.task(None, Some("sw-b"));
+    f.mark(&root, pin_for(f.store.as_ref(), &["cos", "sw-b"], "sw-b"));
+    let (mut d, seen) = capturing(&f, false);
+    start_one(&mut d, root.id).await;
+    assert!(seen.lock().unwrap().is_empty(), "no run was started");
+    assert!(f.blocked_with_reason(root.id));
+}
+
+#[tokio::test]
+async fn variant_org_drift_at_start_blocks_the_run_and_delivers_nothing() {
+    let f = fx();
+    seed(f.store.as_ref(), &["sw-b"]);
+    let root = f.task(None, Some("sw-b"));
+    f.mark(&root, pin_for(f.store.as_ref(), &["cos", "sw-b"], "sw-b"));
+    let mut n = org_node_of("sw-b", Some("cos"), OrgKind::Section, None);
+    n.profile.harnesses.allowed = vec!["coding".into(), "other".into()];
+    f.store.org_upsert(&n).unwrap();
+    let (mut d, seen) = capturing(&f, true);
+    start_one(&mut d, root.id).await;
+    assert!(seen.lock().unwrap().is_empty());
+    assert!(f.blocked_with_reason(root.id));
 }

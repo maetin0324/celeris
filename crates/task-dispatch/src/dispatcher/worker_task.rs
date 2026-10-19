@@ -495,6 +495,8 @@ pub(super) async fn run_worker(
             routing_context_ref: extras.routing_context_ref.clone(),
             // ADR 2026-10-05 cos-chat-home D4: task に pin された添付の入力 manifest。
             input_attachments,
+            // variant 付き run だけ `Some`（dispatcher が起動直前に再検査して組んだ pin）。
+            campaign: extras.campaign.clone(),
         },
         llm_route: extras.llm_route,
     };

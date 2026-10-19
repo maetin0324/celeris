@@ -1134,6 +1134,8 @@ struct RunExtras {
     input_attachment_source: Option<input_attachments::InputAttachmentSource>,
     /// ADR 2026-10-11 llm-source-harness-selection: the admitted route (`RunRequest.llm_route`).
     llm_route: Option<task_worker::protocol::SelectedLlmRoute>,
+    /// variant 付き run の照合済み pin（`RunContext.campaign`）。plain な run は `None`。
+    campaign: Option<task_worker::protocol::CampaignRunPin>,
 }
 
 struct ReviewEntry {
@@ -1305,6 +1307,8 @@ pub struct Dispatcher {
     checking: HashMap<String, CheckingEntry>,
     /// Phase F5-fix6: 居なくなったデーモンの run（孤児）を lease 失効を待たずに回収する（`None` = 無効）。
     orphan_takeover: Option<crate::orphan::OrphanTakeover>,
+    /// variant 付き run の観測値（`set_variant_observation`）。無ければ variant 付き task は起動しない。
+    variant_observation: Option<variant_pin::VariantObservation>,
     tx: mpsc::UnboundedSender<Completion>,
     rx: mpsc::UnboundedReceiver<Completion>,
     /// ADR-0018 D2: 多重接続が無いクラスタの cooldown（この時刻まで dispatch しない）。
@@ -1623,6 +1627,7 @@ impl Dispatcher {
             before_integration_start: None,
             checking: HashMap::new(),
             orphan_takeover: None,
+            variant_observation: None,
             tx,
             rx,
             cluster_cooldown: HashMap::new(),
@@ -1760,6 +1765,14 @@ impl Dispatcher {
 
     /// Phase F5-fix6: 孤児の回収を有効にする（celeris が `daemon_instances` の自分の行を持つときに
     /// 渡す。判定の定義は `crate::orphan`）。
+    /// 専用 daemon の `identity`（instance id・config sha256）。variant 付き run の pin に記録される。
+    pub fn set_variant_observation(&mut self, instance_id: String, config_sha256: String) {
+        self.variant_observation = Some(variant_pin::VariantObservation {
+            instance_id,
+            config_sha256,
+        });
+    }
+
     pub fn set_orphan_takeover(&mut self, takeover: crate::orphan::OrphanTakeover) {
         self.orphan_takeover = Some(takeover);
     }

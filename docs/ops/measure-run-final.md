@@ -64,7 +64,7 @@ CAP_ENV=…/cap-env.json             # celeris.campaign-cap-env/1（cap-runbook 
 
 H1 後に operator が置換する値（`validate` が placeholder を拒否する。秘密値は書かない）:
 1. B・C の `harness_version` の release sha12（12 桁 hex。final.json の B・C 欄）。
-2. A の `harness_version` = `claude-code@<実際の版>`（alias 不可）。
+2. A の `harness_version` = `claude --version` の出力に**部分一致する版の文字列**（例 `claude --version` が `2.1.303 (Claude Code)` なら `2.1.303`。alias 不可）。`claude-code@2.1.303` のように接頭辞を付けると env-lock が `a.program.version … does not match manifest A harness_version` で拒否する（2026-10-19 実機で確認）。
 3. env の `A_ACCOUNT`・`RELEASE`・`CELERIS_BIN`・`CAP_ENV`・各 path。
 
 置換後（launcher を経ず直接。API を使わない）:
@@ -77,6 +77,13 @@ $B dry-run  --manifest $P/final.json      # within_budget true、total_trials 6
 ## 3b. 測定専用 daemon の宣言（人が配置。本番 config・release は触らない）
 `$P/measure-daemon.example.toml` を複製し `<...>` を実値にする（db・workspace・KB・memory・token_file・port は本番と別、NFS 外）。内容: 実 harness は `claude-code` だけ、`cap-probe-claude-code`（kind=fake・`env_of="claude-code"`・command=`CAMPAIGN_BIN`・args `cap-worker`）、`[llm_sources.cap-probe]`、`[route_defaults.cap-probe-claude-code]`、`harness_selection.rules` 先頭に分野 `cap-probe-claude-code` の規則。probe は分野 `cap-probe-*` の task にだけ結ばれ、実試行の候補に入らない。宣言を欠くと preflight の B/C cap-probe が投入前に `env_failure` で拒否する。`NORMAL_CONFIG` の `[[clusters]]` を複写する。
 
+## 3c. 実値で測定専用 daemon を立てるときの追加（2026-10-19 実機リハーサルで判明。値は pin-values の成果物 `pinned/main/` に実例）
+- `[selfdeploy] releases_dir = "/local/celeris/state/releases"`（読むだけ）。無いと daemon が既定の `~/.local/celeris/releases` を見て `release … is not promoted` で exit 4 する。
+- `[accounts] claude_dir`（通常運用と同じ pool）と `[adapters.claude_code] command` / `env = { PKG_CONFIG_PATH = … }`。B/C の cap-probe は `env_of=claude-code` のこの adapter env を worker に渡し、CAP_ENV の `PKG_CONFIG_PATH` が無いと `claude-code/worker-env: worker env lacks PKG_CONFIG_PATH`。
+- CAP_ENV は K2 の `rustc-min` / `min-build-locusta` のため Rust toolchain を `ro_mounts` に、その `bin` を `PATH`（`:/usr/local/bin:/usr/bin:/bin` を後ろに足す。置換されるため）に入れる。launcher env に同じ `bin` を `RUN_PATH` として書く（daemon の PATH にも要る）。
+- 測定 DB は新規なので task-template の `project_id` の案件は存在しない。`start` 後に `POST /api/v1/projects`（title・request）→ `POST /api/v1/projects/{id}/repos`（`{"name":"scratch","kind":"dir","location":{"kind":"local","path":"<STATE_DIR>/scratch-repo"},"is_primary":true}`）で作り、返った id を task-template の `project_id` に書いて `preflight` を再実行する（token は `$STATE_DIR/token`、値は表示しない）。
+- 通常 config の `[[clusters]]` を複写すると測定 daemon も pegasus の forward（127.0.0.1:18000）の tunnel を張ろうとする。通常 daemon と重なる点に注意（人が判断）。
+
 ## 4. 入力・sandbox 資産の配送（試行へ渡す公開部だけ。grader-private は渡さない）
 ```sh
 M=$TMPDIR/final-materials; K=$TMPDIR/final-kb; R=$TMPDIR/final-repo; I=$TMPDIR/final-inputs   # NFS 外
@@ -84,7 +91,11 @@ mkdir -p $M $K $R $I
 for c in k2-bf-xattr-restart-campaign k4-cmp4-validity-analysis; do cp -r crates/campaign/cases/final/$c/materials $M/$c; done
 cp -r crates/campaign/cases/final/k2-bf-xattr-restart-campaign/kb/. $K/
 # R: k2 の初期 tree（BenchFS 086c4618。case.json の initial.fetch の手順）。k4 は repo 不要
-cp <main-v3-n2-43706.tgz の実物> $I/main-v3-n2-43706.tgz   # sha256 が case.json の値と一致しなければ preflight/watch が拒否
+cp <main-v3-n2-43706.tgz の実物> $I/main-v3-n2-43706.tgz
+# R（K2 初期 tree）の組立: bundle を clone → commit 086c4618 を checkout → submodule 5 件を lock の path へ snapshot tar 展開 → .git を消す
+# （手順の実例: pinned/build-srcs.sh。asset_assembly::assemble_initial と同じ）
+# 既知の阻害: 組立後の tree に symlink が 3 件ある（lib/locusta/CLAUDE.md・ior_integration/ior/testing/docker/centos6/run-test.sh・…/ucx1-sys/ucx/README）。
+# lock の content_sha256 は symlink を含むが、preflight の measure-env（isolation）は symlink を拒否する。両立せず、preflight は exit 1（未解決。進捗の「不足一覧」参照）   # sha256 が case.json の値と一致しなければ preflight/watch が拒否
 ```
 `$M` の hash は `final.json` の `snapshot.materials_sha256` と一致しなければ拒否される。env の `MATERIALS_SRC/KB_SRC/REPO_SRC/INPUTS_SRC` にこの 4 つを書く。
 A は bubblewrap の中で動く（`bwrap` 必須。preflight が実際に起動して確かめる）。A は `A_ACCOUNT` の `CLAUDE_CONFIG_DIR` で動き、既定の `~/.claude` は使わない。

@@ -1,4 +1,6 @@
 ---
+title: result.json 回収の候補範囲
+updated: 2026-10-18
 tasks: [01M576C2STNWSMHANHY43H6NJN]
 status: done
 completed: 2026-10-18

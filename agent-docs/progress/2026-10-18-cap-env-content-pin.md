@@ -1,4 +1,7 @@
 ---
+title: CAP_ENV toolchain pin を内容 hash へ
+tasks: [01M57MBMKWCDA66S3RTDZX35ZB]
+updated: 2026-10-18
 status: done
 completed: 2026-10-18
 ---

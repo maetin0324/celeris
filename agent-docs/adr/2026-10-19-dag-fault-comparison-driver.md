@@ -87,7 +87,7 @@ MLSys 多軸評価（2026-10-19 依頼）の主題は「異種の依存する研
 正常系（固定点の掃引）と障害系（D4）は、同じ研究問題「DAG・外部待機・復旧の機構は人の調整とやり直しを減らすか」の条件違いである。研究問題・仮説の数を水増ししない（障害 3 種や固定点ごとに別 RQ を立てない）。
 
 ## 結果
-- `scenarios.json` は版（`schema_version: 1`）・seed（3 個）・固定点（各軸 3 点）・障害定義を持つ。duration はすべて `poll_secs`（30）の倍数で、派生値（arrival interval・ext_job_secs）も file に書いた。
+- `scenarios.json` は版（`schema_version: 1`）・seed（基点 `seed: 20261019` と反復用 `seeds` 3 個。先頭は基点と同じ）・固定点（各軸 3 点）・障害定義を持つ。duration はすべて `poll_secs`（30）の倍数で、派生値（arrival interval・ext_job_secs）も file に書いた。
 - 後続 WorkUnit は scenarios.json を変えるときは `schema_version` を上げ、本 ADR に付記する。
 
 ## 却下した案

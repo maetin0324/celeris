@@ -562,7 +562,8 @@ fn run(args: Vec<String>) -> Result<String, String> {
                         template,
                         m.termination.trial_timeout_secs,
                         out_dir.join("cluster-cancel.jsonl"),
-                    );
+                    )
+                    .with_variant(m.variant.clone());
                     // A が有効なときだけ A の実行器を作る（B/C のみの測定は A の program・account を要求しない）。
                     let a = if m.is_active(celeris_campaign::manifest::ConfigId::A) {
                         Some(a_executor(&args, &m, &out_dir, a_program()?)?)

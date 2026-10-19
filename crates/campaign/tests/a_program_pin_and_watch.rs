@@ -114,6 +114,7 @@ fn run_once(p: &Pin, builder: ClaudeCodeBuilder, key: &str) -> Value {
             max_tokens: 1_000_000,
             max_wall_secs: u64::MAX,
         },
+        variant: None,
     };
     let x = HarnessExecutor::new(p.state.clone(), Box::new(builder));
     let t = x.submit(&req, key).expect("submit");

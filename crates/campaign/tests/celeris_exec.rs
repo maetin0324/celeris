@@ -264,6 +264,7 @@ fn req<'a>(c: &'a Config, dir: &'a Path) -> TrialRequest<'a> {
             max_tokens: u64::MAX,
             max_wall_secs: u64::MAX,
         },
+        variant: None,
     }
 }
 

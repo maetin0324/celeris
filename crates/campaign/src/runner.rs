@@ -1025,6 +1025,7 @@ fn run_inner(
                 kb: &kbd,
                 timeout_secs: timeout,
                 budget: cap,
+                variant: m.variant.as_ref(),
             };
             let mut cancelled_by: Option<&'static str> = None;
             let mut errored: Option<String> = None;

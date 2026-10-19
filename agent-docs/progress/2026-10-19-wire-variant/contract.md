@@ -76,3 +76,11 @@ completed: 2026-10-19
 - preflight: `check_variant`（manifest に参照があるときだけ。`variant-spec.json`・`variant-b0.json`（manifest の隣）と `GET /api/v1/org`）。参照なしは従来どおり。
 - 試験: `variant_pin.rs` 内 7 件（hash 不変、lock 不一致、後継差し替え、再 seal 非対象差分（manifest/lock が追従しても拒否）、改変・別 variant spec、B0 情報不足、稼働 org drift）、`tests/variant_preflight.rs` 2 件（fake Host で全 preflight）。既存 manifest リテラル（`variant: None`）の更新のみで旧試験は無変更。
 - 次段（campaign-submit）へ: `CelerisExecutor::body`/`lookup` と task-core `CampaignIdentity.variant`、409 比較。`B0Inputs` の JSON 形は `{coding_node, role_models, org}`。
+
+## campaign-submit の実装結果（2026-10-19）
+- `TrialRequest.variant: Option<&VariantRef>`（runner が `m.variant` から設定）。`CelerisExecutor::with_variant(Option<VariantRef>)`（main の `--executor celeris` が `m.variant` を渡す）。省略時は従来と同じ body・同じ HTTP 列。
+- POST 契約: `campaign.variant = {comparison_id, id, content_sha256, selection_sha256}`（`body` が投入前に請求と executor の参照の一致、`check_fixed`＝固定 selection を検査。不一致は `Refused`、HTTP 0 件）。task-core `CampaignIdentity` は `deny_unknown_fields` のため現 API は 4xx で拒否 → `Refused`（fail-closed）。task-core/API 側の欄追加は次段（本葉は触らない）。
+- GET 契約: 既存 task を採用する 3 箇所（`lookup`・submit 直前の照会・POST 直後の照会）で `GET /tasks/{id}` の `task.campaign.variant` が期待と完全一致するときだけ採用。欠落・内容違い・別 variant は `Refused`（POST・cancel を増やさない）。POST 直後に応答が variant を欠く／違う場合は適用済み扱いにせず、自分が作った task を cancel して `Refused`。
+- `check_template` は `campaign` / `campaign_idempotency_key` の上書きも拒否。org の変更・新 scheduler/router なし。
+- 試験: `tests/variant_submit.rs` 7 件。既存試験は `TrialRequest` リテラルに `variant: None` を足しただけ。
+- 検査: `cargo nextest run -p celeris-campaign` 413 件中 412 通過、`launcher::a_swapped_daemon_binary…` が 1 回落ち（daemon 起動の timing。単独再実行で 15/15 通過）。`cargo clippy --workspace -- -D warnings` 0、`cargo fmt --all -- --check` 0。`clippy --tests` の既存 2 件（launcher.rs / env_lock.rs）は本変更外で未修正。`test-parallel.sh` 全体は統合時。

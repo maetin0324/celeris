@@ -30,6 +30,8 @@ pub struct TrialRequest<'a> {
     /// この試行の実効上限（`min(per_case, per_arm の残り)`）。同期 executor は自分で止めてよい。
     /// 止めずに超えた分は runner が結果の受け取り時に case_budget として cancelled に直す。
     pub budget: Cap,
+    /// manifest の専門分担 variant 参照（省略なら従来どおり）。POST・GET 照合が同じ値を使う。
+    pub variant: Option<&'a crate::variant::VariantRef>,
 }
 
 pub use crate::manifest::TokenUsage;

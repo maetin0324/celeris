@@ -192,6 +192,7 @@ impl H {
                 max_tokens: u64::MAX,
                 max_wall_secs: u64::MAX,
             },
+            variant: None,
         }
     }
     fn started_lines(&self) -> usize {

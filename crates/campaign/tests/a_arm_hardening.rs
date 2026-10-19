@@ -106,6 +106,7 @@ impl H {
                 max_tokens,
                 max_wall_secs: u64::MAX,
             },
+            variant: None,
         }
     }
     fn exec(&self) -> HarnessExecutor {

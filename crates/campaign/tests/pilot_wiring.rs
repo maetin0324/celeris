@@ -271,6 +271,7 @@ fn claude_code_a_is_started_with_a_permission_mode_and_cache_usage_is_parsed() {
         kb: d.path(),
         timeout_secs: 10,
         budget: m.budget.per_case,
+        variant: None,
     };
     let c = ClaudeCodeBuilder {
         program: "claude".into(),

@@ -534,6 +534,21 @@ export type CampaignIdentity = {
   "manifest_hash"?: string | null;
   "repetition"?: number | null;
   "routing_setting"?: string | null;
+  "variant"?: CampaignVariantRef | null;
+  "variant_org"?: CampaignOrgPin | null;
+};
+
+export type CampaignOrgPin = {
+  "coding_node": string;
+  "effective_profile_sha256": string;
+  "nodes": Array<string>;
+};
+
+export type CampaignVariantRef = {
+  "comparison_id": string;
+  "content_sha256": string;
+  "id": string;
+  "selection_sha256": string;
 };
 
 export type CancelBody = {

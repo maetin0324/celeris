@@ -2619,10 +2619,81 @@
             "string",
             "null"
           ]
+        },
+        "variant": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CampaignVariantRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "比較 variant の参照（campaign `VariantRef` と同じ JSON 形）。`variant_org` と対で付く。\n無い識別（従来の行）は variant 無しの試行のまま。"
+        },
+        "variant_org": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CampaignOrgPin"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "variant が前提とする検証済みの構成 pin（campaign `OrgPin` と同じ JSON 形）。"
         }
       },
       "required": [
         "campaign_id"
+      ],
+      "type": "object"
+    },
+    "CampaignOrgPin": {
+      "additionalProperties": false,
+      "description": "検証済みの構成 pin（campaign `OrgPin` と同じ JSON 名）。",
+      "properties": {
+        "coding_node": {
+          "type": "string"
+        },
+        "effective_profile_sha256": {
+          "type": "string"
+        },
+        "nodes": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "nodes",
+        "coding_node",
+        "effective_profile_sha256"
+      ],
+      "type": "object"
+    },
+    "CampaignVariantRef": {
+      "additionalProperties": false,
+      "description": "variant への短い参照（campaign `VariantRef` と同じ JSON 名・省略なし）。",
+      "properties": {
+        "comparison_id": {
+          "type": "string"
+        },
+        "content_sha256": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "selection_sha256": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "comparison_id",
+        "id",
+        "content_sha256",
+        "selection_sha256"
       ],
       "type": "object"
     },

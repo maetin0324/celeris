@@ -174,9 +174,9 @@ fn env_lock_keeps_python_and_numpy_as_unverified_requests() {
     let e = json(&case_dir().join("env.lock.json"));
     assert_eq!(e["state"], "requested_unverified");
     assert!(e["measured"].is_null());
-    // numpy は compute node の job が記録した値。python は job が記録するまで空け、記録後は完全版で固定する。
+    // python・numpy は compute node a02 の job 46040.pbs が記録した実測。
     assert_eq!(e["requested"]["numpy"], "2.0.2");
-    assert!(e["requested"]["python"].is_null() || e["requested"]["python"].is_string());
+    assert_eq!(e["requested"]["python"], "3.9.25");
     assert_eq!(e["stop_on_mismatch"], true);
     assert!(!e["measure_in_job"].as_str().unwrap().is_empty());
 }

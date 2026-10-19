@@ -1,10 +1,10 @@
 ---
 task: 01M5AFX5TQKG3WAEYD1E0XQNMS
 wu: exercise-case
-status: running
-completed: null
+status: done
+completed: 2026-10-19
 ---
-# exercise-case: 2 本目 46040.pbs を投入し cluster_job wait 中（状態は pending のまま）
+# exercise-case: 46040.pbs で正例 1・独立負例 3 が成立し adopted（dev 専用）
 
 ## 事実
 - 2026-10-19T16:34Z に実行直前の再確認をした。sirius の環境（python 3.9.25・numpy 1.23.5）は env.lock と一致した。
@@ -54,12 +54,26 @@ completed: null
 - `qsub -A NBBG job.pbs` → exit 0、46040.pbs（投入 2/2、上限到達）。17:35:17Z の `qstat -x` は F。
 - result.json に wait(cluster_job, sirius, 46040.pbs) を書いて終えた。回収・lock の python 完全版への書き直し・pin 更新・grader は再開 run で行う。記録は外部資料の `exercise.attempts[4]`。
 
+## 回収・grader・採用（2026-10-19T17:40–17:55Z、run 01M5AM6665YYYESWWSFTZBCFB5）
+- `qstat -x -f 46040`: F、Exit_status 0、exec_host a02/2*24、queue debug、select 1:ncpus=24:mem=124gb:ngpus=1、walltime 1 s。
+- job の stdout（`.o46040`）: `host a02` / `python 3.9.25` / `numpy 2.0.2` / `done job.py exit 0`。raw 3 file は sirius 側と sha256 一致（coefficients ce9fd626…、metrics d2f612aa…、predictions 23578cb2…。46039 と同値）。
+- env.lock を job の実測（python 3.9.25・numpy 2.0.2、`measured_in_job` に job id・host・log hash）に書き直し、contract の env_lock pin を 6f181132… に更新。short_ml_assets.rs の期待値も合わせた。
+- 残枠の再確認: main b67bab68 の mlsys 進捗（2026-10-18〜19）に本測定・LLM 呼出しの消費なし → 残り 2,512,372 token。本 case は 0 token、job 2/2（NBBG、計 21 vnode 秒）。
+- `collect-observed --job pbs:sirius:46040.pbs` → exit 0、origin live、条件 queue debug・ncpus 24。
+- 通常 grader: 正例 exit 0（final_pass、evidence・recompute pass）。miscalc exit 1（recompute fail: metric coef_x1）、wrong-condition exit 1（evidence fail: condition）、unexecuted exit 1（evidence fail: not recorded by the evaluator）。各負例は他方の check が pass。出力は外部 `ml-case-run-46040/trials/`。
+- status.json を adopted（decided_at 2026-10-19、case_dir short-ml-campaign、claims.adopted true のみ）。外部 evidence に `adoption` 節を追加。docs/ops/short-ml-campaign.md と test_short_ml_state.py を adopted に合わせた。K2/K4・arm・grader・loader・manifest は不変。
+
 ## 証拠コマンド
 - `python3 crates/campaign/scripts/verify-short-ml-case.py --check` → exit 0（状態整合のみ）
-- `python3 crates/campaign/scripts/verify-short-ml-case.py --acceptance --evidence <上記 json>` → exit 1（pending なので非 0 が正しい）
+- `python3 crates/campaign/scripts/verify-short-ml-case.py --acceptance --evidence <上記 json>` → exit 0（`ok: acceptance passed (4 grader runs re-executed)`）
+- `python3 -m unittest crates/campaign/scripts/test_short_ml_acceptance.py crates/campaign/scripts/test_short_ml_state.py` → 46 OK
+- `cargo fmt --all -- --check` → exit 0、`cargo clippy --workspace -- -D warnings` → exit 0
 - `python3 crates/campaign/scripts/verify-short-ml-case.py --placement-check` → exit 0
 - `cargo test -p celeris-campaign --test short_ml_assets` → 11 passed
 
 ## 未解決事項
-- 46040.pbs の回収と正例 1・負例 3（再開 run）。lock の python は null のままなので、回収までは test_short_ml_acceptance.py の Adopted 試験は env_measured の python 欠けで落ちる（release gate の nextest 範囲外）。
-- 投入は 2/2。これが失敗したら 3 本目は出さず止めて報告する。
+- env.lock の `state` は schema 上 `requested_unverified` のまま（試験と verify script がこの値を前提にする）。値は job 内実測で、評価側が `.o` と照合済み。state 名の変更は提案に回す。
+- 承認上限 2 本を使い切った。再実行には新しい承認が要る。
+
+## 提案
+- env.lock に `state: measured_in_job` を正式な状態として足し、verify script の env 照合を `.o` の版行から直接読む形にする（今は adoption.env_measured を人手で写す）。

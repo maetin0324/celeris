@@ -158,11 +158,11 @@ class Cli(unittest.TestCase):
             self.assertEqual(r.returncode, 2, args)
             self.assertIn("usage", r.stderr)
 
-    def test_repo_status_is_pending_without_judgment(self):
+    def test_repo_status_is_adopted_dev_only_without_judgment(self):
         s = json.loads(vsmc.STATUS_PATH.read_text())
-        self.assertEqual(s["status"], "pending")
-        self.assertEqual(s["confirm_at"], "2026-10-22T00:00:00Z")
-        self.assertFalse(any(s["claims"].values()))
+        self.assertEqual(s["status"], "adopted")
+        self.assertEqual(s["case_dir"], "short-ml-campaign")
+        self.assertEqual(s["claims"], {"final_generalization": False, "real_pilot_confirmed": False, "adopted": True})
         self.assertFalse(set(vsmc.walk_keys(s)) & vsmc.JUDGMENT_KEYS)
 
 

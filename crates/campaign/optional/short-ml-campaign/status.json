@@ -1,16 +1,17 @@
 {
   "schema": "celeris.short-ml-case-status/2",
   "task_id": "01M59KY5FTRJTJ80PACNW3K533",
-  "status": "pending",
+  "status": "adopted",
   "label": "dev",
-  "confirm_at": "2026-10-22T00:00:00Z",
   "claims": {
     "final_generalization": false,
     "real_pilot_confirmed": false,
-    "adopted": false
+    "adopted": true
   },
   "external_refs": {
     "reassessment": "/local/celeris/data/workspaces/01M59KY5FTRJTJ80PACNW3K533/artifacts/ml-case-reassessment.json",
     "review": "/local/celeris/data/workspaces/01M59KY5FTRJTJ80PACNW3K533/artifacts/ml-case-review.md"
-  }
+  },
+  "decided_at": "2026-10-19",
+  "case_dir": "short-ml-campaign"
 }

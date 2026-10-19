@@ -1,10 +1,10 @@
-# 短い ML 研究キャンペーン case: 運用手順（状態 pending）
+# 短い ML 研究キャンペーン case: 運用手順（状態 adopted・dev 専用）
 
 ---
 tasks: [01M59XY99GX1R6HCPS1H06N2KZ, 01M59KY5FTRJTJ80PACNW3K533]
 ---
 
-状態: **pending**（採用でも延期でもない）。ラベル dev、確認点 **2026-10-22T00:00:00Z**。
+状態: **adopted**（dev 専用、2026-10-19 決定）。final・K2/K4・主比較・汎化は主張しない。
 判断材料・比較・旧判断の撤回履歴は repo に置かない。外部資料を参照する:
 
 - `/local/celeris/data/workspaces/01M59KY5FTRJTJ80PACNW3K533/artifacts/ml-case-reassessment.json`（機械向け正本）
@@ -12,14 +12,14 @@ tasks: [01M59XY99GX1R6HCPS1H06N2KZ, 01M59KY5FTRJTJ80PACNW3K533]
 
 この文書は決定後の操作だけを書く。効果・final 汎化・実 pilot は主張しない（status.json の `claims` は全て false）。
 
-## 実装済・検査済・実観測未実施・承認待ち
+## 実装済・検査済・実観測済
 
 | 区分 | 内容 |
 |---|---|
-| 実装済 | status.json（pending）と状態整合検査 `--check`、受入検査 `--acceptance`、dev case `cases/dev/short-ml-campaign/`、固定入力、環境 lock、grader pin（contract.json）、評価側観測 `observe::collect_for_trial` |
+| 実装済 | status.json（adopted、dev 専用）と状態整合検査 `--check`、受入検査 `--acceptance`、dev case `cases/dev/short-ml-campaign/`、固定入力、環境 lock、grader pin（contract.json）、評価側観測 `observe::collect_for_trial` |
 | 検査済 | 決定的な試験のみ（資産・pin・入力隔離・観測の拒否・受入 CLI の期限境界／tamper／未実行拒否）。時計を注入した試験は synthetic 証拠で、本番の延期証拠ではない |
-| 実観測未実施 | sirius の実 job、実 PBS 終了記録、環境の実測（python 3.9.25 / numpy 1.23.5 は `requested_unverified`）、正例 1・独立負例 3 の実 job に対する通常 grader 実行 |
-| 承認待ち | 実行前の人の承認（下記）。承認と現在残枠の再確認が済むまで実 job を投入しない |
+| 実観測済 | sirius 46040.pbs（debug、-A NBBG、1 vnode、Exit_status 0、compute a02）。環境は job が stdout に記録した python 3.9.25 / numpy 2.0.2 を env.lock に固定。正例 1 が合格、独立負例 3（誤計算・比較条件違い・未実行）が意図した check で不合格（2026-10-19、通常 grader） |
+| 再実行の条件 | 実 job の再投入は人の承認が要る（承認済み上限 2 本は使い切った）。lock と完全一致しなければ停止する |
 | 実装済（評価側 collect） | read-only `ssh_qstat::SshQstat`（`ssh -o BatchMode=yes <cluster> qstat -x -f <id>`）と `celeris-campaign collect-observed`（cluster は case.json、条件は grade case から取る） |
 
 ## 所在
@@ -45,7 +45,7 @@ python3 crates/campaign/scripts/verify-short-ml-case.py --acceptance --evidence 
 - `--acceptance --evidence <file>`: **受入の検査**。evidence の status で分岐する。
   - `adopted`: case・入力・環境 lock・grader の pin を実ファイルと照合し、評価側が実観測した job 記録（origin=live）と raw hash を確かめ、通常の grader CLI を新しい workdir で正例 1 と独立な負例 3（誤計算／比較条件違い／未実行）について再実行する。
   - `deferred`: 実時計が確認点以後で、期限後の再確認（実日時・実コマンド・exit・出力 hash）が外部ファイルと一致し、なお不成立であること。
-  - `pending`・承認不足・未検証・未知の status は **非 0**（現在の pending 証拠は非 0 が正しい）。
+  - `pending`・承認不足・未検証・未知の status は **非 0**（pending の証拠は非 0 が正しい）。
   - 実時計は上書きできない。時計注入は test 専用で synthetic 証拠にしか使えない。
 
 ## 固定した条件（実行前契約）
@@ -62,10 +62,9 @@ python3 crates/campaign/scripts/verify-short-ml-case.py --acceptance --evidence 
 
 1. 人が sirius の 1 vnode job 1 本（-A NBBG）の投入を承認している。
 2. token 枠の**現在の残り**を、調査時点の数字ではなく現在の出典（台帳）で再確認する。本 case の消費は 0 token・0 試行。
-3. 環境を評価側が測定し、lock と一致する:
-   `ssh sirius python3 -c 'import sys,numpy;print(sys.version_info[:3],numpy.__version__)'`
+3. 環境は compute node で job が測る（login node の python・numpy は compute と違うので使わない。node への ssh は不可）。`job.pbs` が hostname・python 完全版・numpy を stdout（PBS の `.o`）に出し、numpy が lock と違えば exit 1 で止まる。評価側は回収した `.o` の python・numpy を env.lock（python 3.9.25 / numpy 2.0.2）と照合し、違えば採用しない。
 
-## 実 job の標準手順（ここでは実行しない）
+## 実 job の標準手順
 
 編集は手元の worktree で行い、sirius では実行と検証だけを行う。
 
@@ -82,7 +81,7 @@ python3 crates/campaign/scripts/verify-short-ml-case.py --acceptance --evidence 
 
 ## 確認点 2026-10-22T00:00Z 以降
 
-- 正例と独立負例が実 job で成立していれば、上記の受入で採用にする。
+- 2026-10-19 に実 job 46040.pbs で正例と独立負例が成立し、受入（`--acceptance`）を通して採用にした。以下は再実行で不成立になった場合の手順。
 - 成立していなければ、確認点以後に実コマンドで再確認し、その実日時・コマンド・exit・出力 hash を evidence に記録して deferred とする。確認点より前に延期を断定しない。
 - 早期に不成立となり確認点まで待つ必要が出た場合は、一般の日時待ちが未対応なので plan_issue を出す。
 

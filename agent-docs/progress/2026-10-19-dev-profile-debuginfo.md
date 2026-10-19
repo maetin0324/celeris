@@ -1,5 +1,5 @@
 ---
-status: running
+status: done
 task: 01M5AH1A1F6YMPCCJTCGBC84H5
 ---
 # dev/test profile の debuginfo 削減
@@ -26,3 +26,6 @@ host load 約 65 のため workspace 全体は 600 秒で完走しない。`-p t
 - `cargo fmt --all -- --check`: exit 0
 - `cargo clippy --workspace -- -D warnings`: exit 0（2m54s）
 - `bash scripts/dev/test-parallel.sh`: 300 秒の壁時計で打ち切り（exit 124、test profile の build 中）。target は温まったので次 run で再実行する。
+
+## 検査（run #4）
+- `bash scripts/dev/test-parallel.sh`: exit 0（nextest 440.5 s・doctest 18.8 s、failed 0、`test-parallel: ok`）

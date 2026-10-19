@@ -1,0 +1,114 @@
+{
+  "schema": "celeris-ablation-selection/1",
+  "task": "01M59KY5FRH6P13NZEH9QMCPBA",
+  "status": "selected_before_measurement",
+  "selected_at": "2026-10-19",
+  "mechanism": {
+    "id": "specialization",
+    "label": "専門分担（組織の課への決定的 matching）",
+    "variant_off": "spec-off: 組織を 1 つの作業課（根 cos の下の単一の非根 node）に畳み、B0 で coding 系 genre を受ける課の profile（harnesses・model・review・budget・permissions・tools・knowledge mounts）をそのまま持たせる。matching（task_ops::matching::decide）は全ての子・孫を同じ node に割り当てる",
+    "variant_on": "spec-on: B0 と同じ組織（本番 org の測定用 seed）",
+    "switch_point": "org（DB が正、seed は org.toml / POST・PATCH /api/v1/org）。task-template・固定計画・profile の新欄は使わない"
+  },
+  "selection_reason": "内部レビュー（第一候補）は既存設定で off にできない: ReviewPrefs は harness/tier/escalate_on_fail だけで、WorkUnit の done_when・空の acceptance・不一致 artifact check は構造的に Check::Reviewer に変換され（task-core tree/gate.rs, plan.rs）、最終レビューは start_final_review_from_ready で無条件に起動する。実 reviewer run 0 を子孫/retry まで保証するには新しい配線が要り、短い無 LLM 検証では成立しない。次点の専門分担は既存の org 設定だけで off にでき、担当は dispatcher の assign_if_needed→task_ops::matching::decide が DB の org から LLM なしで決定的に選ぶため、単一 node の org なら子・孫は同じ node に、retry は既存 assignee を保持（decide は assignee 有りを NotApplicable）して伝播する。planner/reviewer/conversation 等の組み込み harness は org の対象外なので全役割のモデルは変わらない。KB は campaign が試行ごとの kb snapshot を lock で固定しているが、試行内に閉じた KB 共有 off の検証は専門分担より手間が大きく三番手。効果を見ての選び直しはしない。",
+  "deferred": [
+    {
+      "id": "internal_review",
+      "reason": "既存設定に off の切替が無く、reviewer check の構造的注入と無条件の最終レビューのため実 reviewer run 0 を保証できない（実装が要る）"
+    },
+    {
+      "id": "kb_sharing",
+      "reason": "専門分担が既存設定で成立したため選ばない。campaign の kb snapshot（lock.kb_snapshot）は再利用可能だが試行内 KB への閉じ込め検証は未実施"
+    }
+  ],
+  "development_evidence": [
+    {
+      "kind": "static",
+      "claim": "review off の設定欄が無い",
+      "where": [
+        "crates/task-core/src/profile.rs ReviewPrefs",
+        "crates/task-core/src/tree/gate.rs done_when→Check::Reviewer / 空 acceptance→Check::Reviewer",
+        "crates/task-core/src/plan.rs fix_harness_artifacts の Reviewer 化",
+        "crates/task-dispatch/src/dispatcher/review_spawn.rs start_final_review_from_ready"
+      ]
+    },
+    {
+      "kind": "test",
+      "command": "cargo nextest run -p task-core -E 'test(/reviewer/)'",
+      "exit": 0,
+      "result": "7 passed（reviewer 条件への変換が既定挙動であることを確認）"
+    },
+    {
+      "kind": "static",
+      "claim": "担当は org から決定的に選ばれ、assignee 有りの task（retry）は matching しない。組み込み harness は org の対象外",
+      "where": [
+        "crates/task-dispatch/src/dispatcher/dispatch_run.rs assign_if_needed",
+        "crates/task-ops/src/matching.rs decide"
+      ]
+    },
+    {
+      "kind": "test",
+      "command": "cargo nextest run -p task-ops -E 'test(/matching::tests/)'",
+      "exit": 0,
+      "result": "13 passed（the_root_is_never_a_candidate, a_task_with_an_assignee_or_without_a_harness_is_not_applicable, builtin_support_harnesses_are_never_routed_through_the_org ほか）"
+    },
+    {
+      "kind": "existing_tasks",
+      "command": "celerisctl show 01M58VFRBA6HG0SSF3CG5BKM91 / 01M58VG5C4XGK4E70M6WJ6MEX0 / 01M58VGDNQ8GWGJPB8SJ73XSPF",
+      "result": "設定確定=Running、無LLM統合=Ready、主比較 pilot/最終報告=Ready。本選択はいずれにも依存を足さず、いずれの依存先にもならない"
+    },
+    {
+      "kind": "kb_candidate",
+      "command": "celerisctl knowledge record --scope project:agent-platform --source task:01M59KY5FRH6P13NZEH9QMCPBA",
+      "exit": 0,
+      "result": "_inbox/20261019T083119Z-celeris-kb.md（測定前・正本は未編集）"
+    }
+  ],
+  "invariants": {
+    "arms_executors": "既存の arm ID A/B/C と実行器を保持（pilot.json の arms を変えない）",
+    "materials": "同じ前工程成果物・input-manifest.json・materials・kb snapshot を両 variant に渡す",
+    "models_all_roles": "planner/reviewer/CoS/worker を含む全役割のモデルと lane 天井を spec-on と同一にする。単一 node の EffectiveProfile の model/review/budget は spec-on の coding 課と同値",
+    "budget_caps": "試行・per_case・per_arm・全体の予算上限と max_turns/max_attempts を変えない",
+    "grader": "独立 grader（grader-private・grade-cases）と final_accounting を変えない",
+    "safety": "permissions・deny_tools・sandbox・CAP_ENV/env-lock・browser capability の許可/安全上限を緩めない",
+    "pass_condition": "spec-off の全子孫・retry の Assigned event の node が指定の単一 node で、他 node への割当 0。support harness（builtin）は org 外のまま",
+    "no_reselection": "本測定の効果を見て機構を選び直さない"
+  },
+  "comparison_set": {
+    "id": "M1-specialization",
+    "variants": [
+      "M1-spec-on",
+      "M1-spec-off"
+    ],
+    "kind": "mechanism_comparison_mostly_no_llm",
+    "separate_from": [
+      "A0/B0",
+      "B1/C1"
+    ],
+    "base_arm": "B",
+    "depends_on_main_comparison": false,
+    "main_comparison_depends_on_this": false
+  },
+  "metrics": [
+    "assignment_distribution（Assigned event の node 別件数）",
+    "human_interventions（人の調整・復旧回数）",
+    "rework_runs（retry・repair・review_fail の回数）",
+    "verified_outcome（独立 grader の合否）",
+    "wall_secs（TrialRecord.wall_secs）",
+    "tokens_and_cost（final_accounting）"
+  ],
+  "source_versions": {
+    "repo_head": "c9654bff56332c160523d904b2248ae527d9b820",
+    "git_blobs": {
+      "crates/task-ops/src/matching.rs": "bd41e4deecb92d6d584cfc5961cba2abe3ad5026",
+      "crates/task-dispatch/src/dispatcher/dispatch_run.rs": "a292e2631df4e51eb2d3d085b8b3137e5646c38d",
+      "crates/task-core/src/tree/gate.rs": "171d9719b2973d1dc38cedbdeb1ef839d0b264b3",
+      "crates/task-core/src/profile.rs": "34651639876d4a90ccf32bcf43c86ad86175396f",
+      "crates/task-core/src/plan.rs": "98fd085682588bdc99da51699c0d996536e71053",
+      "crates/task-dispatch/src/dispatcher/review_spawn.rs": "dae05ab39dad70289ca6de34ac939a7be9b77e21",
+      "crates/campaign/fixtures/kb/README.md": "8b9d0a8e2aee619af11a28428336535c5a26ae25",
+      "crates/campaign/fixtures/pilot.json": "cc87964ba7e1f515a3f201b3339ddb016b8872a5",
+      "crates/campaign/fixtures/input-manifest.json": "ddfe45390d056251050fb0cd0695ed7764328acb"
+    }
+  }
+}

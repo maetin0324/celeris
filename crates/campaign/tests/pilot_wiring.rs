@@ -518,6 +518,7 @@ fn materials_are_distributed_into_every_trial_workspace() {
         inputs_src: None,
         case_inputs: Default::default(),
         lock: None,
+        series: None,
     };
     run(&m, &i, &MockExecutor::scripted(BTreeMap::new()), &o).expect("run");
     let recs = records(&out);
@@ -669,6 +670,7 @@ fn grade_out_grades_every_run_trial_and_reports_missing_cases() {
         inputs_src: None,
         case_inputs: Default::default(),
         lock: None,
+        series: None,
     };
     run(&m, &i, &MockExecutor::seeded(), &o).expect("run");
     let runner = AllOk(Mutex::new(0));

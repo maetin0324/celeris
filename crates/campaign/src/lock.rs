@@ -101,6 +101,9 @@ pub struct CampaignLock {
     pub kb_snapshot: String,
     pub cases: Vec<LockedCase>,
     pub execution: ExecutionPin,
+    /// 副比較（B1/C1）の系列台帳の固定位置（測定 ID ごとに 1 か所）。主比較は None。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub series: Option<crate::series::SeriesPin>,
     /// `lock_hash()`。空なら未封印。
     #[serde(default)]
     pub sha256: String,
@@ -391,6 +394,7 @@ impl CampaignLock {
             kb_snapshot: manifest.snapshot.kb_snapshot.clone(),
             cases,
             execution: ExecutionPin::from_manifest(manifest),
+            series: None,
             sha256: String::new(),
         })
     }

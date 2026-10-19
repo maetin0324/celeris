@@ -62,7 +62,7 @@ class ConversionPositive(Base):
         self.assertEqual(code, 0, err)
         self.assertTrue(rep["reconciled"])
         c = rep["stages"]["by_arm"]["C"]
-        self.assertEqual((c["trials"], c["jev_ok"], c["live_proven"], c["final_lane_changed"], c["retries"]), (4, 4, 4, 4, 1))
+        self.assertEqual((c["trials"], c["jev_ok"], c["chain_ok"], c["final_lane_changed"], c["retries"]), (4, 4, 4, 4, 1))
         self.assertEqual(rep["stages"]["by_arm"]["B"]["jev_calls"], 0)
         # 全役割・retry・共有オーバーヘッドの費用は原記録の投影から（共有は by_role に入れない）。
         self.assertAlmostEqual(rep["costs"]["worker"]["sum"], 2.5)
@@ -105,7 +105,7 @@ class ConversionPositive(Base):
         code, rep, err = self.report()
         self.assertEqual(code, 0, err)
         self.assertEqual(rep["suppressed"]["classifier_fallback"], 1)
-        self.assertEqual(rep["stages"]["by_arm"]["C"]["live_proven"], 3)
+        self.assertEqual(rep["stages"]["by_arm"]["C"]["chain_ok"], 3)
 
     def test_redaction_is_projected_like_celerisctl(self):
         s = self.source()
@@ -161,7 +161,7 @@ class TrustBoundary(Base):
     def test_missing_dir_or_file_is_no_evidence(self):
         code, _, err = self.run_cli()
         self.assertEqual(code, 2)
-        self.assertIn("live 証拠なし", err)
+        self.assertIn("証拠 dir なし", err)
         self.source().close()
         b.write(b.export_of(self.db), self.ev)
         os.remove(os.path.join(self.ev, "provenance.json"))
@@ -185,7 +185,7 @@ class ExportReconcile(Base):
         text = "".join(json.dumps(r, separators=(",", ":")) + "\n" for r in self.ex["records"])
         first = text.splitlines(True)[0]
         err = self.check(1, "duplicate", "同一内容", raw_records=text + first)
-        self.assertNotIn("live_proven", err)
+        self.assertNotIn("chain_ok", err)
 
     def test_missing_record(self):
         self.ex["records"].remove(self.recs("usage", R["r4"])[0])
@@ -235,7 +235,7 @@ class ExportReconcile(Base):
 
 
 class SourceBinding(Base):
-    """原記録の側に欠けや食い違いがあり、export は原記録どおり（全件一致）でも live にしない。"""
+    """原記録の側に欠けや食い違いがあり、export は原記録どおり（全件一致）でも 整合 OK にしない。"""
 
     def edit(self, sql, *args):
         s = self.source()
@@ -260,13 +260,13 @@ class SourceBinding(Base):
         self.check(1, "[retry]", "task")
 
     def test_task_only_jev_usage_is_unverified_not_live(self):
-        """本番の dispatcher の形（Jev 消費行に run_id なし）は run に結べず、live 合格にしない。"""
+        """本番の dispatcher の形（Jev 消費行に run_id なし）は run に結べず、整合検査合格にしない。"""
         self.source(jev_bound=False).close()
         code, rep, err = self.report()
         self.assertEqual(code, 1, err)
         self.assertIn("[auth]", err)
         self.assertIn("Jev の消費行が無い", err)
-        self.assertEqual(rep["stages"]["by_arm"]["C"]["live_proven"], 0)
+        self.assertEqual(rep["stages"]["by_arm"]["C"]["chain_ok"], 0)
         self.assertEqual(sum("task 単位の fallback はしない" in u for u in rep["unverified"]), 4)
 
     def test_jev_cost_of_another_run_is_not_reused(self):

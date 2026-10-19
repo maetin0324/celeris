@@ -225,7 +225,7 @@ fn missing_cost_and_models_stay_missing() {
         ),
         (1, 1, 1, 1, 1)
     );
-    assert_eq!(c.live_proven, 0);
+    assert_eq!(c.chain_ok, 0);
 }
 
 #[test]

@@ -135,6 +135,7 @@ fn run_opts(out: &Path) -> RunOptions {
         inputs_src: None,
         case_inputs: Default::default(),
         lock: None,
+        series: None,
     }
 }
 

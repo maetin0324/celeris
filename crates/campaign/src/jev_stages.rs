@@ -120,7 +120,7 @@ pub struct Stages {
     pub jev_fallback: u64,
     pub jev_calls: u64,
     /// jev_ok・費用・版が揃い許可内・帰属が矛盾しない件数。
-    pub live_proven: u64,
+    pub chain_ok: u64,
     pub jev_cost_missing: u64,
     pub jev_cost_usd: f64,
     pub version_missing: u64,
@@ -193,8 +193,8 @@ fn add(s: &mut Stages, r: &Record) {
     if let Some(c) = r.obs.cost_usd {
         s.jev_cost_usd += c;
     }
-    if v.live_proven {
-        s.live_proven += 1;
+    if v.chain_ok {
+        s.chain_ok += 1;
     }
     if la.is_some() {
         if !v.lane_in_limits {

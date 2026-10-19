@@ -29,7 +29,7 @@ fn ok() -> Value {
 fn distinguishes_jev_ok_fallback_and_missing() {
     let a = judge(&obs(event(ok(), "standard", "standard", "fixed_rule")));
     assert_eq!(a.classifier, ClassifierKind::JevOk);
-    assert!(a.live_proven);
+    assert!(a.chain_ok);
     let f = judge(&obs(event(
         json!({"status":"fell_back_to_fixed","reason":"timeout"}),
         "standard",
@@ -42,7 +42,7 @@ fn distinguishes_jev_ok_fallback_and_missing() {
             reason: Some("timeout".into())
         }
     );
-    assert!(!f.live_proven);
+    assert!(!f.chain_ok);
     let m = judge(&obs(json!({"type":"routing_decided","record":{}})));
     assert_eq!(m.classifier, ClassifierKind::Missing);
     assert!(!m.violations.is_empty());

@@ -207,6 +207,8 @@ pub struct Inputs {
     pub measure: Option<MeasureEnv>,
     /// 測定 ID の明示（省略時は campaign hash から決まる）。
     pub measurement_id: Option<String>,
+    /// 副比較（B1/C1）の系列台帳の root（launcher.env の SERIES_ROOT）。副比較は必須で、測定 ID の下に固定する。
+    pub series_root: Option<PathBuf>,
     /// 必要能力 probe の環境設定（`celeris.campaign-cap-env/1`）。case が required_capabilities を持てば必須。
     pub cap_env: Option<PathBuf>,
 }
@@ -239,7 +241,7 @@ impl Inputs {
 
 /// 通常起動（CLI）とライブラリ経路が共有する期待 lock。宣言と grader 実体の不一致はここで Err。
 pub fn expected_lock(inp: &Inputs, m: &CampaignManifest) -> Result<CampaignLock, String> {
-    lock_exec::expected_lock(
+    let lock = lock_exec::expected_lock(
         &lock_exec::LockSpec {
             cases_root: &inp.cases_root,
             grader_root: &inp.grader_root,
@@ -247,7 +249,25 @@ pub fn expected_lock(inp: &Inputs, m: &CampaignManifest) -> Result<CampaignLock,
             measurement_id: inp.measurement_id.as_deref(),
         },
         m,
-    )
+    )?;
+    if !m.is_side() {
+        return Ok(lock);
+    }
+    // 副比較: 系列台帳の位置を測定 ID ごとに固定して lock に封印する（hash を変えても同じ位置）。
+    let mut lock = lock;
+    lock.series = Some(series_pin(inp, m)?);
+    lock.seal().map_err(|e| e.to_string())
+}
+
+/// 副比較の系列台帳の固定位置。測定 ID（明示）と系列 root が無ければ Err（既消費 0 にしない）。
+pub fn series_pin(inp: &Inputs, m: &CampaignManifest) -> Result<crate::series::SeriesPin, String> {
+    let (Some(root), Some(id)) = (inp.series_root.as_deref(), inp.measurement_id.as_deref()) else {
+        return Err(format!(
+            "side comparison {} needs --series-root and --measurement-id (SERIES_ROOT / MEASUREMENT_ID in launcher.env): the series ledger is pinned per measurement id",
+            m.campaign_id
+        ));
+    };
+    crate::series::SeriesPin::new(root, id)
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]

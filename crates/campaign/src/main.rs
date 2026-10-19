@@ -17,7 +17,7 @@ use celeris_campaign::{
     watch::{self, SystemClock, WatchOptions},
 };
 
-const USAGE: &str = "usage: celeris-campaign <human-op|jev-stages|dry-run|validate|env-lock|offline-lock|config-check|env-check|preflight|cap-probe|cap-worker|run|watch|check|check-report|export|final-accounting|grade-out|usage> --manifest <path> \
+const USAGE: &str = "usage: celeris-campaign <human-op|jev-stages|dry-run|validate|series-init|env-lock|offline-lock|config-check|env-check|preflight|cap-probe|cap-worker|run|watch|check|check-report|export|final-accounting|grade-out|usage> --manifest <path> \
 [--interval-secs N] [--max-iterations M] [--cases <grade-case dir> [--initial-trees <dir>]] \
 [--input-manifest <path>] [--out <dir>] [--executor mock|harness|celeris] [--api-url <url> --token-env <ENV_NAME> [--task-template <json>]] [--dest <dir>] \
 [--cases-root <dir>] [--grader-root <dir>] [--grade-case-root <dir>] [--a-program <path>] [--report <file>] [--measurement-id <id>] [--repo-src <dir>] [--materials-src <dir>] [--kb-src <dir>] [--inputs-src <dir>] [--records <records.jsonl>] [--cos-not-called <basis>] [--quota <usage.json>] [--a-account <account_id>] [--measure-config <toml> --normal-config <toml> --canaries <json>] [--models-evidence <json> --models-evidence-sha256 <hex>] [--verify] [--max-7d <ratio>] [--max-7d-codex <ratio>]";
@@ -58,6 +58,7 @@ fn preflight_inputs(args: &[String], manifest_path: &std::path::Path) -> Inputs 
             daemon_pid: text("--daemon-pid").and_then(|p| p.parse().ok()),
         }),
         measurement_id: text("--measurement-id"),
+        series_root: arg(args, "--series-root"),
         cap_env: arg(args, "--cap-env"),
     }
 }
@@ -292,6 +293,18 @@ fn run(args: Vec<String>) -> Result<String, String> {
             let v = celeris_campaign::dryrun::estimate(&m, &input)?;
             serde_json::to_string_pretty(&v).map_err(|e| e.to_string())
         }
+        "series-init" => {
+            // 副比較の系列台帳を作る（冪等）。--import-out は引継ぎ元の既存 out（消費を台帳へ追記する）。
+            let pin = preflight::series_pin(&preflight_inputs(&args, &manifest_path), &m)?;
+            let imports: Vec<PathBuf> = args
+                .iter()
+                .enumerate()
+                .filter(|(_, a)| *a == "--import-out")
+                .filter_map(|(i, _)| args.get(i + 1).map(PathBuf::from))
+                .collect();
+            celeris_campaign::series::init(&pin, &m.campaign_id, &imports, &m.budget)?;
+            Ok(format!("series ledger ready: {}", pin.dir))
+        }
         "validate" => {
             m.validate()?;
             Ok(m.compute_sha256()?)
@@ -437,6 +450,11 @@ fn run(args: Vec<String>) -> Result<String, String> {
                 } else {
                     None
                 },
+                // 副比較は固定の系列台帳（測定 ID ごと）を必ず使う。主比較は None。
+                series: m
+                    .is_side()
+                    .then(|| preflight::series_pin(&preflight_inputs(&args, &manifest_path), &m))
+                    .transpose()?,
             };
             // watch は同じ走査を台帳が閉じるまで繰り返す（再起動しても台帳から再開する）。
             let wopts = (cmd == "watch")

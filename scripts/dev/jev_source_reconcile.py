@@ -35,7 +35,7 @@ U32_MAX = 0xFFFFFFFF
 
 
 class ProjectionError(Exception):
-    """読取元の行から export を作れない（store が export に失敗する入力、または必要欄なし）。live 不可。"""
+    """読取元の行から export を作れない（store が export に失敗する入力、または必要欄なし）。整合検査不可。"""
 
 
 # ---------------------------------------------------------------- 秘密除去（celerisctl campaign.rs と同じ）

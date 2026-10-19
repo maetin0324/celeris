@@ -7,11 +7,11 @@
   - 開き方は SQLite URI `mode=ro` + `PRAGMA query_only=ON`。読み取りは 1 本の読取 transaction の中で
     行い、全ての表を同じ snapshot から読む。元 DB の内容・schema は変えない。
   - schema は task-core の SCHEMA_VERSION（schema_migrations の最大 version）と必要な表・欄を照合する。
-    未知の版・欠けた表/欄は診断を返し、live 合格の材料にしない（推測で埋めない）。
+    未知の版・欠けた表/欄は診断を返し、整合検査合格の材料にしない（推測で埋めない）。
 
 CLI: `python3 scripts/dev/jev_source_reader.py --campaign <id> [--evidence-dir <dir>] [--out <file>]`
 終了コード: 0 読取成功 / 2 信頼元なし・到達不能・evidence 内の自称 source / 3 未知 schema・必要欄なし・
-campaign 不在（live 不可）。
+campaign 不在（整合検査不可）。
 """
 import argparse
 import json
@@ -51,7 +51,7 @@ EXIT_OK, EXIT_NO_SOURCE, EXIT_NOT_LIVE = 0, 2, 3
 
 
 class SourceError(Exception):
-    """信頼元が使えない（exit 2）か live 不可（exit 3）。diagnostics は機械向けの診断の列。"""
+    """信頼元が使えない（exit 2）か 整合検査不可（exit 3）。diagnostics は機械向けの診断の列。"""
 
     def __init__(self, exit_code, diagnostics):
         self.exit_code = exit_code

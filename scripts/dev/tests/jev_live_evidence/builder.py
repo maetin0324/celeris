@@ -5,7 +5,7 @@
 - evidence の records.jsonl / summary.json は jev_source_reconcile の投影（Rust の build_campaign_export の
   移植）で作る。celerisctl が書いた実物ではない（実物との一致は手で確かめる。progress の記録を参照）。
 - Jev 消費行の run_id: 本番の dispatcher（lane_assist.rs::record_jev_usage）は run_id を書かない。正例では
-  run_id を入れた「run に結べる原記録」を合成し、本番の形（run_id なし）は負例で live 不可になることを見る。
+  run_id を入れた「run に結べる原記録」を合成し、本番の形（run_id なし）は負例で 整合検査不可になることを見る。
 """
 import copy
 import glob

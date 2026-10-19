@@ -6,8 +6,8 @@
 source / export_command / files_sha256 / manifest_hash、同梱 DB）はどれも証明にならず、照合されない限り非 0。
 
 test double の明記: 読取元は builder が crates/task-core/migrations から作る一時 SQLite（運用者設定を模擬した独立
-DB）で、中身は合成。ここで exit 0 になる正例は「変換・照合アルゴリズムの正例」であり、実 daemon の原記録の
-証明ではない。実データでの検証は実コマンド（--evidence-dir <実 dir> --require-live）の結果だけが示す。
+DB）で、中身は合成。ここで exit 0 になるのは「原記録との整合 OK」であって live ではない（script は合成 SQLite と
+実 daemon の原記録を区別できない）。live かどうかは operator の承認項目（docs/ops/jev-c1-live-check.md の §7）。
 """
 import hashlib
 import json
@@ -55,7 +55,7 @@ class Base(unittest.TestCase):
 
     def assert_nonzero(self, code, err, *needles):
         self.assertNotEqual(code, 0, err)
-        self.assertNotIn("OK:", err)
+        self.assertNotIn("整合 OK", err)
         for n in needles:
             self.assertIn(n, err)
 
@@ -83,7 +83,7 @@ class AlgorithmPositive(Base):
         self.write(b.export_of(self.db))
         code, err = self.cli(self.trusted())
         self.assertEqual(code, 0, err)
-        self.assertIn("OK:", err)
+        self.assertIn("整合 OK（live かどうかは未判定）", err)
 
 
 class NoTrustedSource(Base):
@@ -317,7 +317,7 @@ class ProjectionMismatch(Base):
 
 
 class MissingVersionOrAuth(Base):
-    """原記録に応答版・認証（Jev 呼出成功）記録が欠けたら live にしない（export が原記録どおりでも）。"""
+    """原記録に応答版・認証（Jev 呼出成功）記録が欠けたら 整合 OK にしない（export が原記録どおりでも）。"""
 
     def check(self, *stmts_needles):
         stmts, needles = stmts_needles[0], stmts_needles[1:]
@@ -342,3 +342,38 @@ class MissingVersionOrAuth(Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ConsistentIsNotLive(unittest.TestCase):
+    """builder だけで作った evidence 外の SQLite を CELERIS_JEV_SOURCE_DB に与えると整合 exit 0 になる。
+    それは live の証明ではないので、出力のどこにも live 合格を主張させない（reviewer 01M5AH3PZV の再現）。"""
+
+    def test_synthetic_source_is_consistent_exit0_but_live_is_undetermined(self):
+        import tempfile
+
+        import builder as b
+
+        with tempfile.TemporaryDirectory() as tmp:
+            os.makedirs(os.path.join(tmp, "synthetic"))
+            db = os.path.join(tmp, "synthetic", "celeris.db")
+            b.default_source(db).close()
+            ev = os.path.join(tmp, "ev")
+            b.write(b.export_of(db), ev)
+            env = {k: v for k, v in os.environ.items() if k not in (b.reader.ENV_SOURCE, "CELERIS_DB", "CELERIS_RUN_DB")}
+            env[b.reader.ENV_SOURCE] = db
+            for flags in ([], ["--require-live"]):
+                p = subprocess.run([sys.executable, SCRIPT, "--evidence-dir", ev] + flags,
+                                   capture_output=True, text=True, env=env)
+                self.assertEqual(p.returncode, 0, p.stderr)
+                self.assertIn("整合 OK（live かどうかは未判定）", p.stderr)
+                for text in (p.stdout, p.stderr):
+                    self.assertNotIn("live_proven", text)
+                    self.assertNotIn("live 合格", text)
+                    self.assertNotIn("live 証拠の検証に合格", text)
+                rep = json.loads(p.stdout)
+                self.assertTrue(rep["reconciled"])
+                self.assertIn("未判定", rep["scope"])
+                self.assertFalse([k for k in rep["stages"]["total"] if "live" in k])
+        h = subprocess.run([sys.executable, SCRIPT, "--help"], capture_output=True, text=True)
+        self.assertIn("live かどうかは判定しない", " ".join(h.stdout.split()))
+        self.assertNotIn("live 合格", h.stdout)

@@ -38,6 +38,7 @@ pub mod preflight;
 pub mod record;
 pub mod report;
 pub mod runner;
+pub mod series;
 pub mod snapshot;
 pub mod usage;
 pub mod watch;

@@ -20,6 +20,7 @@ use crate::{
     lock_exec,
     manifest::{Budget, CampaignManifest, ConfigId},
     record::*,
+    series,
     snapshot::{copy_tree, hash_tree, hash_tree_excluding},
 };
 
@@ -37,6 +38,8 @@ pub struct RunOptions {
     /// 期待 campaign lock（`lock_exec::expected_lock`）。実行（有料）経路は必須。None は mock など無課金の制御用。
     /// 渡すと、executor 投入・台帳更新より前に実体を照合し、`<out>/lock.json` に保存・再照合する。
     pub lock: Option<CampaignLock>,
+    /// 副比較（B1/C1）の系列台帳の固定位置。副比較は必須（無ければ副作用の前に拒否）。主比較は使わない。
+    pub series: Option<crate::series::SeriesPin>,
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -637,6 +640,37 @@ pub fn run(
     opts: &RunOptions,
 ) -> Result<RunReport, String> {
     m.check_against_input(input)?;
+    // 副比較: 出力先が許可 root の中であること・系列台帳が読めること・同じ系列の他 run が動いていないことを、
+    // 副作用（out の作成・executor・台帳）より前に確かめる。
+    if m.is_side()
+        && let Some(l) = &opts.lock
+        && l.series != opts.series
+    {
+        return Err(
+            "campaign lock series pin differs from the run's series ledger; refusing".into(),
+        );
+    }
+    let mut series = series::begin(m, opts.series.as_ref(), &opts.out)?;
+    let prior = series.as_ref().map(|s| s.2.clone()).unwrap_or_default();
+    let r = run_inner(m, input, exec, opts, &prior);
+    // 成否にかかわらず、この out の消費（確定 + 予約）を固定の系列台帳へ追記する（out の実体があるときだけ）。
+    if let Some((s, real, _)) = &mut series {
+        let rec = s.record(real, &m.budget);
+        return match (r, rec) {
+            (Ok(r), Ok(())) => Ok(r),
+            (Err(e), _) | (Ok(_), Err(e)) => Err(e),
+        };
+    }
+    r
+}
+
+fn run_inner(
+    m: &CampaignManifest,
+    input: &InputManifest,
+    exec: &dyn Executor,
+    opts: &RunOptions,
+    prior: &budget::Spend,
+) -> Result<RunReport, String> {
     let hash = m.compute_sha256()?;
     let out = &opts.out;
     // 副作用（out の作成・snapshot・台帳・executor）より前に、lock と現在の実体を照合する。
@@ -654,11 +688,10 @@ pub fn run(
         }
         None => None,
     };
-    // B1/C1 は hash が違っても同一系列（campaign_id）の既消費を総枠へ合算する。超過なら何も実行しない。
-    let prior = budget::series_prior_spend(m, &hash, out)?;
+    // B1/C1 は固定の系列台帳の既消費（他の out・hash の分）を総枠へ合算する。超過なら何も実行しない。
     if prior.tokens >= m.budget.max_tokens || prior.wall_secs >= m.budget.max_wall_secs {
         return Err(format!(
-            "series {} already consumed {} tokens / {}s of the approved total {} tokens / {}s under other manifest hashes; refusing to run",
+            "series {} already consumed {} tokens / {}s of the approved total {} tokens / {}s in the pinned series ledger (other outs/hashes); refusing to run",
             m.campaign_id,
             prior.tokens,
             prior.wall_secs,
@@ -826,7 +859,7 @@ pub fn run(
             && ledger.get(&key).is_none_or(|r| r.reserved.is_none())
         {
             let s =
-                budget::spend(&records, &ledger, &m.budget, &hash, Some(&key)).plus_prior(&prior);
+                budget::spend(&records, &ledger, &m.budget, &hash, Some(&key)).plus_prior(prior);
             Some(budget::admit(&m.budget, &s, cid))
         } else {
             None

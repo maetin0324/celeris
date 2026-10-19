@@ -580,6 +580,25 @@ fn exe_of(pid: u32) -> PathBuf {
 
 // ---- 試験 ----
 
+/// launcher.env の SERIES_ROOT / MEASUREMENT_ID が、prepare で測定 ID ごとの固定系列台帳（許可 out root 付き）を作る。
+/// 副比較の run が台帳の外の OUT・台帳欠損を副作用前に拒否する試験は side_budget.rs（同じ CLI 引数）。
+#[test]
+fn prepare_creates_the_pinned_series_ledger_from_launcher_env() {
+    let f = fixture();
+    let d = f.d().display().to_string();
+    f.write_env(&format!(
+        "MEASUREMENT_ID=m-series\nSERIES_ROOT={d}/series\n"
+    ));
+    ok(&f, "prepare");
+    let dir = f.d().join("series/m-series");
+    assert!(dir.join("series.json").is_file() && dir.join("series-ledger.jsonl").is_file());
+    assert!(dir.join("runs").is_dir());
+    let meta: Value = serde_json::from_slice(&fs::read(dir.join("series.json")).unwrap()).unwrap();
+    assert_eq!(meta["measurement_id"], "m-series");
+    // 再 prepare は冪等（台帳を作り直さない）。
+    ok(&f, "prepare");
+}
+
 #[test]
 fn matching_environment_runs_task_api_watch_grade_export_and_resumes_with_the_fixed_record() {
     let f = fixture();

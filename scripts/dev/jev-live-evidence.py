@@ -19,8 +19,14 @@
   provenance.json                {campaign_id, tasks{task_id:{parent}}, ...}（tasks は原記録と全件照合）
   routing_events.jsonl           1 行 {task_id, run_id, event}（原記録の routing_decided と全件照合）
 
-終了コード: 0 合格 / 1 検証不合格 / 2 live 証拠なし（dir・必須 file なし）または信頼元なし・到達不能 /
-3 読取元の schema 不明・必要欄なし・campaign 不在（live 不可）。
+本 script が確かめるのは「export 一式が、指定された原記録（CELERIS_JEV_SOURCE_DB）と整合すること」だけ。
+その原記録が測定専用の実 daemon のものか、合成 SQLite かは区別できず、live かどうかは判定しない。
+合格の文言は「整合 OK（live かどうかは未判定）」。live であることは operator の承認項目
+（docs/ops/jev-c1-live-check.md の §7: launcher.meta・daemon identity・実行像 sha256・STATE_DIR の DB path・
+その run の export を run/ に保存した証跡）で判定する。
+
+終了コード: 0 整合 OK（live は未判定）/ 1 検証不合格 / 2 証拠 dir なし（dir・必須 file なし）または信頼元なし・到達不能 /
+3 読取元の schema 不明・必要欄なし・campaign 不在（整合検査不可）。
 """
 import argparse
 import importlib.util
@@ -83,10 +89,10 @@ def read_jsonl(path):
 
 def load(evidence_dir):
     if not os.path.isdir(evidence_dir) or not os.listdir(evidence_dir):
-        raise NoEvidence(f"live 証拠なし: {evidence_dir} が無い、または空")
+        raise NoEvidence(f"証拠 dir なし: {evidence_dir} が無い、または空")
     missing = [f for f in FILES if not os.path.isfile(os.path.join(evidence_dir, f))]
     if missing:
-        raise NoEvidence(f"live 証拠なし: {evidence_dir} に必須 file が無い: {', '.join(missing)}")
+        raise NoEvidence(f"証拠 dir なし: {evidence_dir} に必須 file が無い: {', '.join(missing)}")
     p = lambda n: os.path.join(evidence_dir, n)
     return {
         "records": read_jsonl(p("records.jsonl")),
@@ -151,7 +157,7 @@ def attribution_wrong(la, kind, fixed_lane):
 
 
 def judge(ev_line, usage_present, cost, version):
-    """jev_smoke::judge 相当。live_proven は jev_ok・費用・版・許可内・帰属矛盾なし。"""
+    """jev_smoke::judge 相当。chain_ok は jev_ok・費用・版・許可内・帰属矛盾なし。"""
     ev = ev_line.get("event") or {}
     la = lane_assist(ev)
     kind, reason = classifier(la)
@@ -185,14 +191,14 @@ def judge(ev_line, usage_present, cost, version):
         if not version_ok:
             viol.append("Jev の応答版（model snapshot）が欠測")
     proven = kind == "jev_ok" and cost_ok and version_ok and in_limits and wrong is None
-    return {"kind": kind, "reason": reason, "live_proven": proven, "violations": viol,
+    return {"kind": kind, "reason": reason, "chain_ok": proven, "violations": viol,
             "cost_ok": cost_ok, "version_ok": version_ok}
 
 
 def new_stages():
     return {
         "trials": 0, "classification_attempted": 0, "not_attempted": 0, "missing": 0,
-        "jev_ok": 0, "jev_fallback": 0, "jev_calls": 0, "live_proven": 0,
+        "jev_ok": 0, "jev_fallback": 0, "jev_calls": 0, "chain_ok": 0,
         "jev_cost_missing": 0, "jev_cost_usd": 0.0, "version_missing": 0,
         "lane_proposal_changed": 0, "lane_proposal_absent": 0, "final_lane_changed": 0,
         "final_lane_counts": {}, "lane_out_of_limits": 0,
@@ -230,8 +236,8 @@ def add_stage(s, t):
         s["missing"] += 1
     if t["jev_cost"] is not None:
         s["jev_cost_usd"] += t["jev_cost"]
-    if v["live_proven"]:
-        s["live_proven"] += 1
+    if v["chain_ok"]:
+        s["chain_ok"] += 1
     g = (la or {}).get
     if la is not None:
         if v["violations"] and any("許可範囲" in x for x in v["violations"]):
@@ -413,10 +419,11 @@ def verify(evidence_dir, data, require_live, environ=None):
     try:
         proj = rec.project(src)
     except rec.ProjectionError as e:
-        return [f"[source] 原記録から export を投影できない（live 不可）: {e}"], {"campaign_id": campaign}
+        return [f"[source] 原記録から export を投影できない（整合検査不可）: {e}"], {"campaign_id": campaign}
     errs = [f"[{c}] {m}" for c, m in reconcile(data, proj)]
     report = {"campaign_id": campaign, "manifest_hash_source": proj["manifest_hash"],
-              "source": src["source"], "reconciled": not errs}
+              "source": src["source"], "reconciled": not errs,
+              "scope": "原記録との整合のみ。live かどうかは未判定（operator 承認項目）"}
     if errs:
         # 全件照合が通らなければ段階判定へ渡さない（照合されていない値で集計しない）。
         return errs, report
@@ -465,7 +472,7 @@ def verify(evidence_dir, data, require_live, environ=None):
         if isinstance(pf, dict) and (pf.get("source_id"), pf.get("model_id"), pf.get("harness_id")) not in FROZEN_CANDIDATES:
             fail("candidates", f"{label}: proposed_first {pf} が凍結候補に無い")
         if require_live and not ULID.match(j["task_id"] or ""):
-            fail("not-live", f"{label}: task_id が実 task の ULID 形式ではない")
+            fail("task-id-form", f"{label}: task_id が実 task の ULID 形式ではない")
         if not j["exec_model"]:
             fail("exec-model", f"{label}: exec_model が欠測")
         else:
@@ -542,7 +549,7 @@ def verify(evidence_dir, data, require_live, environ=None):
     if require_live:
         if not cj:
             fail("coverage", "C1 の run が無い")
-        if not any(j["verdict"]["live_proven"] for j in cj):
+        if not any(j["verdict"]["chain_ok"] for j in cj):
             fail("auth", "同じ run の原記録で jev_ok・Jev 呼出記録（run_id 結合）・費用・応答版（classifier_snapshot）が"
                  "揃った C1 観測が 1 件も無い（認証成功/実経路は未検証。fallback・欠測・task 単位の消費は成功に数えない）")
         for need, pred in (
@@ -582,7 +589,8 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description="Jev B1/C1 の実 campaign export を独立読取元の原記録と照合する検証器")
     ap.add_argument("--evidence-dir", required=True)
     ap.add_argument("--require-live", action="store_true",
-                    help="実 task_id・C1 の認証成功（同じ run の原記録で）・root/子/孫/retry の被覆を必須にする")
+                    help="厳密な被覆検査: 実 task_id 形式・C1 の Jev 成功の記録（同じ run の原記録で整合）・root/子/孫/retry の被覆を必須にする。"
+                         "原記録との整合だけを確かめる。live かどうかは判定しない（operator 承認項目）")
     ap.add_argument("--quiet", action="store_true", help="段階別 report を stdout に出さない")
     a = ap.parse_args(argv)
     try:
@@ -592,7 +600,7 @@ def main(argv=None):
         print(str(e), file=sys.stderr)
         return 2
     except reader.SourceError as e:
-        print(f"原記録の読取元が使えない（live 不可）: {e}", file=sys.stderr)
+        print(f"原記録の読取元が使えない（整合検査不可）: {e}", file=sys.stderr)
         return e.exit_code
     except (ValueError, OSError) as e:
         print(f"検証不合格: 入力を読めない: {e}", file=sys.stderr)
@@ -604,8 +612,8 @@ def main(argv=None):
             print(f"FAIL {e}", file=sys.stderr)
         print(f"検証不合格: {len(errs)} 件", file=sys.stderr)
         return 1
-    print("OK: 原記録と全件一致し live 証拠の検証に合格" if a.require_live
-          else "OK: 原記録と全件一致（--require-live なし）", file=sys.stderr)
+    print("整合 OK（live かどうかは未判定）: 原記録と全件一致"
+          + (" + 被覆検査（--require-live）" if a.require_live else "（被覆検査なし）"), file=sys.stderr)
     return 0
 
 

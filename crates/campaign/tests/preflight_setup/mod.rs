@@ -192,6 +192,7 @@ pub fn setup() -> Setup {
         a_account: Some("lab".into()),
         measure: Some(measure),
         measurement_id: None,
+        series_root: None,
         cap_env: Some(write_cap_env(d)),
     };
     Setup { dir, inp }

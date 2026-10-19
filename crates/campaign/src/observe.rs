@@ -96,7 +96,7 @@ fn typed(v: &str) -> Value {
 }
 
 /// PBS の job id は `<数字>.<server>`。host を欠く数字だけ（PID に見えるもの）は scheduler id とみなさない。
-fn is_scheduler_job_id(id: &str) -> bool {
+pub(crate) fn is_scheduler_job_id(id: &str) -> bool {
     id.split_once('.').is_some_and(|(n, h)| {
         !n.is_empty()
             && n.bytes().all(|b| b.is_ascii_digit())
@@ -245,4 +245,78 @@ pub fn collect_for_trial(
     let path = dir.join(format!("{stem}.json"));
     fs::write(&path, doc.to_string()).map_err(|e| vec![e.to_string()])?;
     Ok(path)
+}
+
+/// `celeris-campaign collect-observed --case <case.json> --grade-case <grade-case.json> --artifact <dir> --out <dir>
+/// --problem <id> --config a|b|c [--rep N] --job <scheduler:cluster:job_id>... --raw <artifact 内 path>...`。
+/// cluster は case.json の `experiment.cluster`、条件は grade case の `experiment.conditions` から取り、引数では変えない。
+pub fn cli(args: &[String], t: &dyn SchedulerTransport) -> Result<String, String> {
+    let one = |n: &str| {
+        args.iter()
+            .position(|a| a == n)
+            .and_then(|i| args.get(i + 1))
+            .cloned()
+            .ok_or(format!("{n} is required"))
+    };
+    let many = |n: &str| -> Vec<String> {
+        args.iter()
+            .enumerate()
+            .filter(|(_, a)| *a == n)
+            .filter_map(|(i, _)| args.get(i + 1).cloned())
+            .collect()
+    };
+    let read = |p: &str| -> Result<Value, String> {
+        serde_json::from_str(&fs::read_to_string(p).map_err(|e| format!("{p}: {e}"))?)
+            .map_err(|e| format!("{p}: {e}"))
+    };
+    let case = read(&one("--case")?)?;
+    let gcase = read(&one("--grade-case")?)?;
+    let cluster = case["experiment"]["cluster"]
+        .as_str()
+        .ok_or("case.json has no experiment.cluster")?
+        .to_string();
+    let conditions: BTreeMap<String, Value> = gcase["experiment"]["conditions"]
+        .as_object()
+        .ok_or("grade case has no experiment.conditions")?
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    let config = match one("--config")?.as_str() {
+        "a" => ConfigId::A,
+        "b" => ConfigId::B,
+        "c" => ConfigId::C,
+        o => return Err(format!("--config {o}: expected a|b|c")),
+    };
+    let rep = match args.iter().position(|a| a == "--rep") {
+        Some(i) => args
+            .get(i + 1)
+            .and_then(|v| v.parse().ok())
+            .ok_or("--rep needs a number")?,
+        None => 1,
+    };
+    let refs = many("--job")
+        .iter()
+        .map(|s| JobRef::parse(s))
+        .collect::<Result<Vec<_>, _>>()?;
+    let problem = one("--problem")?;
+    let expect = Expect {
+        scheduler: "pbs".into(),
+        cluster,
+        conditions,
+    };
+    let path = collect_for_trial(
+        t,
+        Path::new(&one("--out")?),
+        TrialKey {
+            problem: &problem,
+            config,
+            rep,
+        },
+        &refs,
+        &expect,
+        Path::new(&one("--artifact")?),
+        &many("--raw"),
+    )
+    .map_err(|e| e.join("\n"))?;
+    Ok(path.display().to_string())
 }

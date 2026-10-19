@@ -1,10 +1,10 @@
 ---
 task: 01M5AFX5TQKG3WAEYD1E0XQNMS
 wu: exercise-case
-status: running
+status: blocked
 completed: null
 ---
-# exercise-case: 1 vnode に改訂して 46039.pbs を投入、cluster_job wait 中（状態は pending のまま）
+# exercise-case: 46039.pbs は回収したが、compute node の numpy 不一致と空の log で正例不成立、人の決定待ち（状態は pending のまま）
 
 ## 事実
 - 2026-10-19T16:34Z に実行直前の再確認をした。sirius の環境（python 3.9.25・numpy 1.23.5）は env.lock と一致した。
@@ -33,10 +33,17 @@ completed: null
 - result.json に wait(cluster_job, 46039.pbs) を書いて終えた。collect・grader は再開 run で行う。
 - 記録は外部資料の `exercise.attempts[2]` にある。
 
+## 回収と grader（2026-10-19T17:05–17:15Z、run 01M5AHZ9RMX4G9HPC9C17F6MRC）
+- `qstat -x -f 46039`: F、Exit_status 0、exec_host a02。raw 3 file・空の .o/.e・qstat 記録を外部の `ml-case-run-46039/artifact/` に回収した。
+- 評価側 collect の限定配線を追加した。`crates/campaign/src/ssh_qstat.rs`（`SshQstat`、`ssh -o BatchMode=yes <cluster> qstat -x -f <id>`。cluster 名と id は検査してから渡す）と `observe::cli`（`celeris-campaign collect-observed`）。live の observed は exit 0 で作れた。
+- 通常 grader の正例は exit 1: recompute は pass、evidence は fail（`log is empty`。job.py が stdout に何も書かない）。
+- job の numpy は 2.0.2（compute node a02）で、env.lock の 1.23.5（login node で測定）と違う。contract の stop_on_mismatch に従い、ここで止めた。負例は未実行。
+- 試験: 子 process 起動の許可リスト（runner_checker.rs）に ssh_qstat.rs を加え、SshQstat の拒否試験を追加した。
+
 ## 証拠コマンド
 - `python3 crates/campaign/scripts/verify-short-ml-case.py --check` → exit 0（状態整合のみ）
 - `python3 crates/campaign/scripts/verify-short-ml-case.py --acceptance --evidence <上記 json>` → exit 1（pending なので非 0 が正しい）
 - `python3 crates/campaign/scripts/verify-short-ml-case.py --placement-check` → exit 0
 
 ## 未解決事項
-- 評価側の本番 collect 経路（`observe::SchedulerTransport` の ssh `qstat -x -f` 実装と CLI からの呼び出し）が未実装。承認後に限定配線が要る。
+- 人の決定 sirius-env-lock-rerun: env.lock を compute node 実測に改訂し、job.pbs に版と完了の stdout 記録を足して 2 本目（上限 2 の最後）を投入するか、延期するか。

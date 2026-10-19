@@ -41,6 +41,7 @@ pub mod report;
 pub mod runner;
 pub mod series;
 pub mod snapshot;
+pub mod ssh_qstat;
 pub mod usage;
 pub mod watch;
 

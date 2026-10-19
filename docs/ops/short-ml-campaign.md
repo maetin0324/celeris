@@ -20,7 +20,7 @@ tasks: [01M59XY99GX1R6HCPS1H06N2KZ, 01M59KY5FTRJTJ80PACNW3K533]
 | 検査済 | 決定的な試験のみ（資産・pin・入力隔離・観測の拒否・受入 CLI の期限境界／tamper／未実行拒否）。時計を注入した試験は synthetic 証拠で、本番の延期証拠ではない |
 | 実観測未実施 | sirius の実 job、実 PBS 終了記録、環境の実測（python 3.9.25 / numpy 1.23.5 は `requested_unverified`）、正例 1・独立負例 3 の実 job に対する通常 grader 実行 |
 | 承認待ち | 実行前の人の承認（下記）。承認と現在残枠の再確認が済むまで実 job を投入しない |
-| 未実装 | 実 scheduler 用の read-only `SchedulerTransport`（ssh の `qstat -x -f`）。実行前に別途用意する |
+| 実装済（評価側 collect） | read-only `ssh_qstat::SshQstat`（`ssh -o BatchMode=yes <cluster> qstat -x -f <id>`）と `celeris-campaign collect-observed`（cluster は case.json、条件は grade case から取る） |
 
 ## 所在
 

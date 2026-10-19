@@ -271,3 +271,29 @@ fn collection_refuses_unexecuted_unfinished_mismatched_and_missing() {
     refuse(&ok_reply(), &refs(JOB), &e, "is missing");
     let _: BTreeMap<String, Value> = e.conditions;
 }
+
+#[test]
+fn ssh_qstat_refuses_non_pbs_pid_like_ids_and_option_like_clusters_without_running_ssh() {
+    use celeris_campaign::{observe::SchedulerTransport, ssh_qstat::SshQstat};
+    let t = SshQstat;
+    assert!(
+        t.qstat("slurm", "sirius", "1.pbs")
+            .unwrap_err()
+            .contains("pbs only")
+    );
+    assert!(
+        t.qstat("pbs", "sirius", "12345")
+            .unwrap_err()
+            .contains("refusing")
+    );
+    assert!(
+        t.qstat("pbs", "-oProxyCommand=x", "1.pbs")
+            .unwrap_err()
+            .contains("refusing")
+    );
+    assert!(
+        t.qstat("pbs", "sirius", "1.pbs;rm")
+            .unwrap_err()
+            .contains("refusing")
+    );
+}

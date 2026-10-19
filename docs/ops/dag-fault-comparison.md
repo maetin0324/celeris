@@ -43,3 +43,63 @@ ledger に残っているため再起動されない。
 `cargo test -p celeris-campaign --test dagbench_baseline`: `k2-mini` / `k2-wide` を完走して全 job が外部 ledger で
 1 回ずつ起動・消費されること、保存点ごとに中断→再開で完走すること（応答喪失の注入あり）、通知重複で二重消費しないことを確かめる。
 有料 LLM・実 job は 0。
+
+## 実行手順（通し受入・指標再生成・固定点掃引）
+
+有料 LLM・実クラスタ job は 0。外部 job は ext-sim の stub、worker は台本。本番 daemon・本番 DB・`~/.config/celeris`・
+`~/.local/celeris` には触れない（試験は一時 dir の SQLite と、測定側が起こした子 process だけを使う）。
+
+### 通し受入試験
+
+```
+cargo test -p celeris-campaign --test dagbench_accept
+```
+
+`k2-mini`（campaign 1 本）を baseline と Celeris 通常経路（task-api の実 router への POST）の両方で、正常と 3 障害
+（a1/a2 制御 process の SIGKILL・再起動、b 投入応答の喪失、c 完了通知の重複）で流す。各 run の生ログ（`ext.jsonl`・`worker.jsonl`・
+観測 ledger `fault.jsonl`）から `control.jsonl` と `run.json` を整え、`dagbench metrics` と同じ `compute` で指標を再生成して断言する:
+同一 DAG/資源の完了量、重複通知で二重計上なし、応答喪失で実起動数 = 外部記録の物理起動数、停止後に永続 state から再開。
+停止した制御 process への SIGKILL は runner が握る子 `Child` にだけ送る。
+
+### 1 点を流して指標を出す（baseline）
+
+```
+cargo run -p celeris-campaign -- dagbench run --scenario k2-mini --point center --arm baseline --out <raw dir>
+cargo run -p celeris-campaign -- dagbench metrics --raw <raw dir> --out <表の出力 dir>
+```
+
+`--seed` を省くと scenarios.json の `seed`。`--arm celeris` は CLI 未対応（task-api の router が dev-dependency のため）。
+Celeris 側は `tests/dagbench_metrics.rs` の `celeris_metrics_come_from_the_same_raw_format` と同じく試験内で `CelerisSide::drive` を使う。
+
+### 出力の見方
+
+`control_measured_metrics.json`（と 1 行の `.tsv`）。`dataset` は常に `control_measured`（実 LLM キャンペーンの
+`llm_campaign` とは別 file・別 schema。成功率の欄は無い）。`condition` は `normal` または `fault:<id>`。主な欄:
+
+- `makespan`: campaign ごとの投入受理→最後の node 完了（論理秒）。`completed`: 完了 node/campaign と仕事秒・外部 job 秒。
+- `ready_wait`: ready から開始までの待ち。枠待ち（`slot_wait_*`）と制御遅れ（`control_delay_*`）に分ける。
+- `control_overhead`: `/proc` 標本の CPU・ピーク RSS（in-process のため driver 全体の上限値。`scope` に明記）。
+- `duplicates`: `extra_physical_launches`（論理 job あたりの物理起動 − 1 の和）と `double_counted`。どちらも 0 が期待値。
+- `reconciliation` / `recovery` / `lost_progress`: 障害後の論理 ID 照会、再確定までの論理秒・実時間、やり直した作業。
+- `interventions`: 人の介入の件数（`control.jsonl` の `intervention`）。`raw_sha256`: どの生ログから作った表か。
+
+同じ raw からは byte 単位で同じ表になる。表の値を直接編集せず、常に raw から再生成する。
+
+### 固定点掃引（人が実行する）
+
+掃引は本 driver の試験では実行しない。一覧は `metrics::sweep_items(file, seeds)`（scenario × 7 固定点 × seed × 系、one-factor-at-a-time、
+総当たりでない。84 項）。各項を人が実行する:
+
+1. 一覧から `(scenario, point, seed, arm)` を取り、項ごとに空の raw dir を決める（既存 dir は使い回さない）。
+2. baseline は上の `dagbench run … --arm baseline`。Celeris は `RunHeader::from_spec` + `CelerisSide::drive` を呼ぶ試験 harness（上記参照）で流す。
+3. `dagbench metrics --raw … --out …` で表を作り、`measurement_id` と `dataset: control_measured` を確かめてから集める。
+4. 障害の点は scenarios.json の `faults.apply_at`（`k2-mini`/`center`）だが、baseline は 1 DAG instance の実行器なので、通し受入は両方式とも
+   campaign 1 本（`camp-1`）で同じ条件を与えている。center での障害掃引は別途 baseline の複数 campaign 対応が要る（未実施）。
+
+CPU を焼く負荷は掛けない。時間は論理時計と出来事待ちで進む。
+
+### 主比較 A0/B0 との関係
+
+A0（直接 Claude Code+Sonnet）と B0（Celeris+Sonnet）の実 LLM 主比較の実行・pilot・最終報告は、この driver に**依存しない**
+（別 task 01M58VGDNQ8GWGJPB8SJ73XSPF）。この driver は機構（DAG・外部待機・障害復旧）の無 LLM 比較で、結果を主比較の
+成功率・品質の主張に混ぜない（dataset が別）。この driver の完了・未完了は A0/B0 の着手条件ではない。

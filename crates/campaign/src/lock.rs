@@ -511,6 +511,23 @@ impl CampaignLock {
         Ok(())
     }
 
+    /// 共有承認を宣言した manifest で、この lock が同じ台帳宣言（set 宣言 hash）に結び付いているか。
+    /// 宣言の無い旧 lock（`sets_sha256` 空）や別の宣言の lock は、台帳との結び付きが不明なので投入前に拒否する。
+    /// 非共有の manifest は従来どおり（ここでは何も見ない）。
+    pub fn check_shared_ledger(&self, m: &CampaignManifest) -> Result<(), String> {
+        if matches!(m.shared_ledger_decl(), Ok(None)) {
+            return Ok(());
+        }
+        if self.execution.sets_sha256.is_empty() {
+            return Err(
+                "lock does not bind the shared ledger declaration (no set hash); re-lock the approved manifest"
+                    .into(),
+            );
+        }
+        self.bind_to_manifest(m)
+            .map_err(|e| format!("lock is not bound to this shared approval: {e}"))
+    }
+
     fn check_sealed(&self, which: &str) -> Result<(), LockError> {
         self.validate()?;
         let h = self.lock_hash()?;
@@ -725,6 +742,46 @@ mod tests {
         assert_eq!(r.lock_hash().expect("h"), l.sha256);
         assert!(verify_lock(&l, &reseal(r)).is_ok());
         assert!(l.bind_to_manifest(&m).is_ok());
+    }
+
+    #[test]
+    fn shared_approval_needs_a_lock_bound_to_the_ledger_declaration() {
+        use crate::manifest::{ConfigId, ExperimentSet, SetFixed};
+        let (m, legacy) = lock();
+        // 旧形式（共有承認の宣言なし）は従来どおり何も見ない。
+        assert!(legacy.check_shared_ledger(&m).is_ok());
+        let shared = |p: &str| {
+            let mut s = m.clone();
+            s.experiment_sets.insert(
+                "all".into(),
+                ExperimentSet {
+                    arms: vec![ConfigId::A, ConfigId::B, ConfigId::C],
+                    compare: vec![(ConfigId::A, ConfigId::B), (ConfigId::B, ConfigId::C)],
+                    fixed: SetFixed {
+                        approved_trials: Some(4),
+                        shared_ledger: Some(p.into()),
+                        ..Default::default()
+                    },
+                },
+            );
+            s
+        };
+        let s = shared("/approved/ledger");
+        let bound = |m: &CampaignManifest| {
+            CampaignLock::new("1", "m-1", m, vec![case("p1"), case("p0")])
+                .expect("new")
+                .seal()
+                .expect("seal")
+        };
+        assert!(bound(&s).check_shared_ledger(&s).is_ok());
+        // 宣言の無い旧 lock は結び付きが不明なので拒否。
+        let e = legacy.check_shared_ledger(&s).expect_err("legacy lock");
+        assert!(e.contains("does not bind the shared ledger"), "{e}");
+        // 別の台帳 path を宣言した manifest の lock は使えない（承認と lock の台帳が食い違う）。
+        let e = bound(&shared("/other/ledger"))
+            .check_shared_ledger(&s)
+            .expect_err("other ledger");
+        assert!(e.contains("not bound to this shared approval"), "{e}");
     }
 
     #[test]

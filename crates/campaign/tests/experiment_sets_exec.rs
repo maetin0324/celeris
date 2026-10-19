@@ -321,7 +321,8 @@ fn global_ledger_carries_consumption_across_measurement_ids_without_double_count
     .expect("bc");
     let cur = gl.current().expect("cur");
     assert_eq!(cur["ab"], row_ab);
-    assert!(cur["bc"].tokens >= 50_000 && cur["bc"].provider_slots == 4);
+    // provider 枠は未終了予約の合計（宣言 max_parallel の max 集計ではない）。終わった測定は枠を持たない。
+    assert!(cur["bc"].tokens >= 50_000 && cur["bc"].provider_slots == 0);
     assert_eq!(gl.others("bc").expect("o").tokens, row_ab.tokens);
     // 4) 横断上限を超える測定は、out の作成も投入もする前に拒否する。
     let tight = campaign(&i, "bc", 2, row_ab.tokens);

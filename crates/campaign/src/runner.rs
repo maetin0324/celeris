@@ -14,6 +14,10 @@ use crate::{
     aggregate::Outcome,
     budget::{self, Gate, effective_cap},
     executor::{ErrKind, ExecError, ExecResult, ExecStatus, Executor, TrialRequest, Usage},
+    global_ledger::{
+        Admission, AttemptId, AttemptRow, AttemptState, Caps, GlobalLedger, Terminal,
+        TrialAdmission,
+    },
     inputs::{self, INPUTS_DIR, Seeder},
     ledger::{Ledger, LedgerRow, LedgerState, ObservedUsage, TrialKey},
     lock::CampaignLock,
@@ -490,6 +494,7 @@ fn drive_async(
     seeder: &Seeder,
     budget: &Budget,
     arm: (u64, u64),
+    shared: Option<(&GlobalLedger, &AttemptId)>,
 ) -> Result<Driven, String> {
     let ws_rel = format!("{rel}/workspace");
     let idem = key.idempotency_key();
@@ -551,6 +556,9 @@ fn drive_async(
             },
         };
         ledger.mark_submitted(key, &t)?;
+        if let Some((g, id)) = shared {
+            g.mark_submitted(id)?;
+        }
         task = Some(t);
     }
     let t = task.ok_or_else(|| String::from("task ref missing"))?;
@@ -635,18 +643,23 @@ pub fn run(
     opts: &RunOptions,
 ) -> Result<RunReport, String> {
     m.check_against_input(input)?;
+    // 共有承認の manifest は宣言した台帳でしか走らない（省略・別 path・結び付き不明の lock は台帳に触れる前に拒否）。
+    m.check_shared_ledger(opts.global_ledger.as_deref())?;
+    if let Some(l) = &opts.lock {
+        l.check_shared_ledger(m)?;
+    }
     let hash = m.compute_sha256()?;
     let out = &opts.out;
-    // 全体台帳: 他の測定 ID の既消費・予約・provider 枠を持ち越し、横断上限を超える投入は何かする前に拒否する。
+    // 全体台帳: 開始の登録と検証（取り分を記録し、横断上限に収まらない測定は何かする前に拒否する）。
+    // 投入の可否は開始時の snapshot でなく、毎投入の `admit_shared`（最新の全行読取・検査・予約を 1 つの排他）で決める。
     let global = opts
         .global_ledger
         .as_deref()
-        .map(crate::global_ledger::GlobalLedger::open)
+        .map(GlobalLedger::open)
         .transpose()?;
-    let others = match &global {
-        Some(g) => g.admit_start(m)?,
-        None => Default::default(),
-    };
+    if let Some(g) = &global {
+        g.admit_start(m)?;
+    }
     // 副作用（out の作成・snapshot・台帳・executor）より前に、lock と現在の実体を照合する。
     let lock = opts.lock.as_ref();
     let start = match lock {
@@ -757,6 +770,10 @@ pub fn run(
     {
         cancel_row(exec, &mut ledger, &row, REASON_BUDGET_STOP)?;
     }
+    // 前回の停止で精算できなかった共有予約を、ローカルの記録・台帳と照合して精算する（証明が無ければ持ち続ける）。
+    if let Some(g) = &global {
+        reconcile_shared(g, exec, m, &hash, &records, &ledger)?;
+    }
     let mut rep = RunReport {
         resumed_skipped: records.len() as u64,
         tokens_total: records.iter().filter_map(|r| r.tokens).sum(),
@@ -830,13 +847,34 @@ pub fn run(
             && !rep.budget_stopped
             && ledger.get(&key).is_none_or(|r| r.reserved.is_none())
         {
-            let mut s = budget::spend(&records, &ledger, &m.budget, &hash, Some(&key));
-            // 他の測定 ID の既消費・予約も global の残りから引く（セットを跨いでリセットしない）。
-            s.tokens = s.tokens.saturating_add(others.tokens);
-            s.wall_secs = s.wall_secs.saturating_add(others.wall_secs);
+            let s = budget::spend(&records, &ledger, &m.budget, &hash, Some(&key));
             Some(budget::admit(&m.budget, &s, cid))
         } else {
             None
+        };
+        // 共有台帳の予約（毎投入。stop_on_budget・同期/非同期に関係なく、executor を呼ぶ前に fsync する）。
+        // 他の測定 ID の最新の消費・予約・provider 枠と、台帳に残る最小の承認上限はここで効く。
+        let arm_now = arm_use.get(&cid).copied().unwrap_or_default();
+        let local_cap = match gate {
+            Some(Gate::Admit(c)) => c,
+            _ => effective_cap(&m.budget, arm_now.0, arm_now.1),
+        };
+        let shared = if blocked_by.is_none()
+            && !rep.budget_stopped
+            && !arm_exhausted(&m.budget, arm_now)
+            && !matches!(gate, Some(Gate::Exhausted | Gate::Defer))
+            && !(exec.is_async() && at_parallel_cap(&ledger, &key, &hash, m.budget.max_parallel))
+        {
+            admit_shared(
+                global.as_ref(),
+                m,
+                &hash,
+                &key,
+                ledger.get(&key),
+                local_cap.max_tokens,
+            )?
+        } else {
+            SharedGate::Go(None)
         };
         if blocked_by.is_some() {
             rec.outcome = Outcome::Blocked;
@@ -858,16 +896,32 @@ pub fn run(
             rep.budget_stopped = true;
             rec.reason = Some(REASON_BUDGET_STOP.into());
             rep.budget_cancelled += 1;
+        } else if let SharedGate::Exhausted(why) = &shared {
+            // 共有の承認上限に収まらず、待っても空く予約が無い: 投入せず打ち切る（有料実行 0 件）。
+            rep.budget_stopped = true;
+            rec.reason = Some(REASON_BUDGET_STOP.into());
+            rec.error = Some(clip_error(why));
+            rep.budget_cancelled += 1;
+        } else if matches!(shared, SharedGate::Defer) {
+            // 共有の枠（tokens・試行数・provider 枠）が他の未精算予約で埋まっている: 解けるまで投入しない。
+            rep.waiting += 1;
+            rep.reserve_deferred += 1;
+            continue;
         } else if gate == Some(Gate::Defer) {
             // 先行の予約（in-flight・停止未確認）が解けるまで投入しない。次の run が回収してから再判定する。
             rep.waiting += 1;
             rep.reserve_deferred += 1;
             continue;
         } else {
-            let arm = arm_use.get(&cid).copied().unwrap_or_default();
-            let cap = match gate {
-                Some(Gate::Admit(c)) => c,
-                _ => effective_cap(&m.budget, arm.0, arm.1),
+            let arm = arm_now;
+            let mut cap = local_cap;
+            let shared_id = match &shared {
+                SharedGate::Go(Some((id, granted))) => {
+                    // 実投入の上限は共有台帳で押さえた額を超えない（再開時は前回の予約額）。
+                    cap.max_tokens = cap.max_tokens.min(*granted);
+                    Some(id.clone())
+                }
+                _ => None,
             };
             let rel = format!("trials/{cid:?}/{pid}/rep{rep_no}");
             let ws = out.join(&rel).join("workspace");
@@ -952,6 +1006,7 @@ pub fn run(
                     &seeder,
                     &m.budget,
                     arm,
+                    global.as_ref().zip(shared_id.as_ref()),
                 )? {
                     Driven::Refused(e) => {
                         errored = Some(e);
@@ -975,12 +1030,20 @@ pub fn run(
             } else {
                 match exec.execute(&req) {
                     Err(e) => {
+                        // 同期 executor の失敗は実行したかを証明しない: 共有予約は投入済みとして保守的に精算する。
+                        if let (Some(g), Some(id)) = (&global, &shared_id) {
+                            g.mark_submitted(id)?;
+                        }
                         errored = Some(e);
                         failed_result()
                     }
                     Ok(ExecStatus::Done(r)) => r,
                     Ok(ExecStatus::Wait) => {
                         // 外部待ち: 記録を残さず、残骸も消して、再実行（resume）で改めて実行する。
+                        // executor が実行しなかったと返したので、共有予約は消費 0 で解放する。
+                        if let (Some(g), Some(id)) = (&global, &shared_id) {
+                            g.settle(id, Terminal::NotSubmitted)?;
+                        }
                         let _ = fs::remove_dir_all(out.join(&rel));
                         rep.waiting += 1;
                         continue;
@@ -1068,6 +1131,9 @@ pub fn run(
             ledger.mark_done(&key)?;
         }
         records.push(rec);
+        if let Some(g) = &global {
+            settle_shared(g, m, &hash, &records, &ledger, &key)?;
+        }
         publish_global(global.as_ref(), m, &hash, &records, &ledger)?;
     }
     // 打ち切り後に残った未完了の台帳行（前提待ちで今回の走査に来なかったもの）も cancel する。
@@ -1101,13 +1167,193 @@ pub fn run(
             rep.budget_cancelled += 1;
             append(&trials_path, &rec)?;
             records.push(rec);
+            if let Some(g) = &global {
+                settle_shared(g, m, &hash, &records, &ledger, &row.key)?;
+            }
         }
     }
     write_summary(m, &hash, &records, &rep, &ledger, out, exec.simulated())?;
     Ok(rep)
 }
 
-/// 自分の現在値（確定消費 + 予約。上書き）を全体台帳へ書く。再集計しても加算されない。
+/// 共有台帳の投入許可の結果。
+enum SharedGate {
+    /// 投入してよい（共有台帳なしは None。ありは attempt と予約額）。
+    Go(Option<(AttemptId, u64)>),
+    /// 他の未精算予約が解けるまで投入しない。
+    Defer,
+    /// 承認上限に収まらず、待っても空かない。
+    Exhausted(String),
+}
+
+/// 毎投入の共有予約。最新の全行を読み、最小の承認上限で tokens・試行数・provider 枠（1 試行 1 枠）を検査して
+/// 予約を fsync する（1 つの排他）。同じ試行の未精算予約（同一冪等キー）があればそれを続ける。
+/// ローカル台帳が投入済みかもしれないと言う試行（task がある・結果不明・追跡中）は拒否で見捨てず載せる。
+fn admit_shared(
+    g: Option<&GlobalLedger>,
+    m: &CampaignManifest,
+    hash: &str,
+    key: &TrialKey,
+    local: Option<&LedgerRow>,
+    tokens: u64,
+) -> Result<SharedGate, String> {
+    let Some(g) = g else {
+        return Ok(SharedGate::Go(None));
+    };
+    let adopt = local.is_some_and(|r| r.task_id.is_some() || r.state != LedgerState::Planned);
+    let a = TrialAdmission {
+        measurement_id: m.campaign_id.clone(),
+        trial: key.idempotency_key(),
+        manifest_sha256: hash.to_string(),
+        caps: Caps::of(m),
+        tokens,
+        provider_slots: 1,
+        adopt,
+    };
+    Ok(match g.admit_trial(&a)? {
+        Admission::Granted { id, tokens, .. } => SharedGate::Go(Some((id, tokens))),
+        Admission::Rejected(r) if r.outstanding => SharedGate::Defer,
+        Admission::Rejected(r) => SharedGate::Exhausted(r.msg),
+    })
+}
+
+/// 試行の記録から精算する消費。tokens 欠測は 0 にせず予約額と既観測の大きい方（保守的）。
+fn shared_usage(
+    rec: &TrialRecord,
+    row: &AttemptRow,
+    local: Option<&LedgerRow>,
+    b: &Budget,
+) -> crate::global_ledger::Usage {
+    let seen = local.and_then(|r| r.observed_usage);
+    let seen_tokens = seen
+        .and_then(|o| o.tokens)
+        .and_then(|u| u.count(b.token_basis))
+        .unwrap_or(0);
+    let tokens = match rec.tokens {
+        Some(t) if rec.reason.as_deref() != Some(REASON_EXECUTOR_ERROR) => t.max(seen_tokens),
+        _ => row.reserved_tokens.max(seen_tokens),
+    };
+    crate::global_ledger::Usage {
+        tokens,
+        wall_secs: rec.wall_secs.max(seen.map_or(0, |o| o.wall_secs)),
+        ran: true,
+    }
+}
+
+/// 1 試行の共有予約の精算。ローカルが終端（記録あり・台帳が終端か無し）のときだけ精算する。
+/// - cancel の停止未確認（cancel_pending）・追跡中の行は精算しない（予約と枠を持ち続ける）。
+/// - 実行しなかった記録（executor_error・budget_stop）で共有行が Reserved のまま、かつローカル台帳が投入を
+///   示していない（行が無い・task 無しで閉じた）ときだけ消費 0 で解放する。
+/// - それ以外は記録の消費（欠測は保守的）で精算する。同じ attempt の再精算は置換なので二重加算しない。
+fn settle_shared(
+    g: &GlobalLedger,
+    m: &CampaignManifest,
+    hash: &str,
+    records: &[TrialRecord],
+    ledger: &Ledger,
+    key: &TrialKey,
+) -> Result<(), String> {
+    let idem = key.idempotency_key();
+    let Some(row) = g
+        .outstanding(&m.campaign_id)?
+        .into_iter()
+        .find(|r| r.id.trial == idem)
+    else {
+        return Ok(());
+    };
+    let Some(rec) = records.iter().rev().find(|r| {
+        r.campaign_sha256 == hash
+            && (r.config, &r.problem_id, r.rep) == (key.arm, &key.problem_id, key.rep)
+    }) else {
+        return Ok(());
+    };
+    let local = ledger.get(key);
+    if local.is_some_and(|r| !r.state.is_terminal()) {
+        return Ok(());
+    }
+    let not_run = rec.reason.as_deref() == Some(REASON_EXECUTOR_ERROR) || !rec.ran();
+    let unsent = row.state == AttemptState::Reserved
+        && local.is_none_or(|r| r.task_id.is_none() && r.state == LedgerState::Cancelled);
+    let t = if not_run && unsent {
+        Terminal::NotSubmitted
+    } else {
+        Terminal::Finished(shared_usage(rec, &row, local, &m.budget))
+    };
+    g.settle(&row.id, t)
+}
+
+/// 再開時の照合: この測定 ID の未精算の共有予約を、ローカルの記録・台帳と突き合わせる。
+/// - 記録がある: `settle_shared`（停止未確認なら持ち続ける）。
+/// - ローカル台帳に行がある: 次の走査が同じ冪等キーで続きを追う（ここでは触らない）。
+/// - どちらも無い: 非同期は冪等キーで照会し、投入が無いと確かめたときだけ解放する（照会失敗・投入ありは保持）。
+///   同期は実行中に止まった可能性を否定できないので、予約額を消費として保守的に精算する。
+fn reconcile_shared(
+    g: &GlobalLedger,
+    exec: &dyn Executor,
+    m: &CampaignManifest,
+    hash: &str,
+    records: &[TrialRecord],
+    ledger: &Ledger,
+) -> Result<(), String> {
+    let mut keys: BTreeMap<String, TrialKey> = BTreeMap::new();
+    for (arm, problem_id, rep) in plan(m) {
+        let k = TrialKey {
+            manifest_sha256: hash.to_string(),
+            problem_id,
+            arm,
+            trial_no: 1,
+            rep,
+        };
+        keys.insert(k.idempotency_key(), k);
+    }
+    for r in ledger.rows() {
+        keys.insert(r.key.idempotency_key(), r.key.clone());
+    }
+    for row in g.outstanding(&m.campaign_id)? {
+        if let Some(k) = keys.get(&row.id.trial) {
+            if ledger.get(k).is_some_and(|r| !r.state.is_terminal()) {
+                continue;
+            }
+            let recorded = records.iter().any(|r| {
+                r.campaign_sha256 == hash
+                    && (r.config, &r.problem_id, r.rep) == (k.arm, &k.problem_id, k.rep)
+            });
+            if recorded {
+                settle_shared(g, m, hash, records, ledger, k)?;
+                continue;
+            }
+            if ledger.get(k).is_some() {
+                continue;
+            }
+        }
+        if row.state != AttemptState::Reserved {
+            if !exec.is_async() {
+                g.settle(&row.id, Terminal::Finished(conservative(&row)))?;
+            }
+            continue;
+        }
+        if exec.is_async() {
+            // 共有予約 → ローカル予約 → 投入の順なので、ローカル行が無ければ投入していない。照会でも確かめる。
+            if let Ok(None) = exec.lookup(&row.id.trial) {
+                g.settle(&row.id, Terminal::NotSubmitted)?;
+            }
+        } else {
+            g.settle(&row.id, Terminal::Finished(conservative(&row)))?;
+        }
+    }
+    Ok(())
+}
+
+/// 消費を確かめられない attempt の保守的な精算（予約額を使い切り、試行として数える）。
+fn conservative(row: &AttemptRow) -> crate::global_ledger::Usage {
+    crate::global_ledger::Usage {
+        tokens: row.reserved_tokens,
+        wall_secs: 0,
+        ran: true,
+    }
+}
+
+/// 自分の確定消費（in-flight の予約を除く）を全体台帳へ公開する。台帳は単調に持つので再集計で加算も減少もしない。
 fn publish_global(
     g: Option<&crate::global_ledger::GlobalLedger>,
     m: &CampaignManifest,
@@ -1117,13 +1363,20 @@ fn publish_global(
 ) -> Result<(), String> {
     let Some(g) = g else { return Ok(()) };
     let s = budget::spend(records, ledger, &m.budget, hash, None);
-    let trials = records.iter().filter(|r| r.ran()).count() as u64;
-    g.record(&crate::global_ledger::GlobalLedger::row(
+    // 投入を拒否された試行（executor_error）は動いていない。同期 executor の Err は精算側が保守的に試行として
+    // 数える（台帳は確定値の大きい方を取る）ので、ここで数えなくても過小にならない。
+    let trials = records
+        .iter()
+        .filter(|r| r.ran() && r.reason.as_deref() != Some(REASON_EXECUTOR_ERROR))
+        .count() as u64;
+    g.record(&crate::global_ledger::GlobalLedger::published(
         m,
         hash,
-        s.tokens,
-        s.wall_secs,
-        trials,
+        crate::global_ledger::Consumed {
+            tokens: s.tokens.saturating_sub(s.held_tokens),
+            wall_secs: s.wall_secs.saturating_sub(s.held_wall_secs),
+            trials,
+        },
     ))
 }
 

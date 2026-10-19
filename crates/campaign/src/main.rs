@@ -374,6 +374,8 @@ fn run(args: Vec<String>) -> Result<String, String> {
             let which =
                 arg(&args, "--executor").ok_or("--executor mock|harness|celeris is required")?;
             let which = which.to_string_lossy().into_owned();
+            // 共有承認は宣言した台帳でだけ走る（省略・別 path は preflight・投入より前に拒否。runner も同じ検査をする）。
+            m.check_shared_ledger(arg(&args, "--global-ledger").as_deref())?;
             // 実行（有料）経路は preflight を通ってからだけ始める。mock は無課金なので対象外。
             // A はここで検査した実行ファイル・版をそのまま起動する（PATH を引き直さない）。
             let a_program = if matches!(which.as_str(), "harness" | "celeris") {

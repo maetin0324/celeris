@@ -14,7 +14,8 @@ use celeris_campaign::{
     celeris_exec::{CLUSTER_CANCEL_FILE, CelerisExecutor, HttpResponse, Transport},
     checker::check,
     executor::{ExecStatus, Executor, MockExecutor, MockStep, TaskRef, TrialRequest},
-    global_ledger::{GLOBAL_LEDGER_SCHEMA, GlobalLedger, GlobalRow},
+    global_ledger::{GLOBAL_LEDGER_SCHEMA_V1, GlobalLedger, LegacyRow},
+    lock::CampaignLock,
     manifest::{
         ArmRouting, Budget, CampaignManifest, Cap, Config, ConfigId, ExperimentSet, InputRef,
         Secondary, SetFixed, Share, SnapshotRef, Split, Termination, manifest_hash,
@@ -546,6 +547,27 @@ fn concurrent_admits_reserve_atomically_and_only_one_fits() {
 }
 
 #[test]
+fn admit_allocation_survives_an_empty_publish_before_the_first_submit() {
+    let d = tempfile::tempdir().expect("dir");
+    let g = GlobalLedger::open(d.path()).expect("open");
+    let i = input(2);
+    let m1 = ledger_manifest(&i, "m1", 400_000, 2, Some(6));
+    g.admit_start(&m1).expect("m1");
+    // runner が最初の投入前に出す空の再集計。取り分（試行 4）は消えない。
+    g.record(&GlobalLedger::published(&m1, "h", Default::default()))
+        .expect("empty publish");
+    assert_eq!(g.current().expect("c")["m1"].trials, 4);
+    let e = g
+        .admit_start(&ledger_manifest(&i, "m2", 400_000, 2, Some(6)))
+        .expect_err("4 held + 4 > 6");
+    assert!(e.contains("trials"), "{e}");
+    // 測定の終わりに取り分を戻すと、確定消費（0）だけが残る。
+    g.release_allocation("m1").expect("release");
+    g.admit_start(&ledger_manifest(&i, "m2", 400_000, 2, Some(6)))
+        .expect("m2 fits after m1 released its allocation");
+}
+
+#[test]
 fn retry_and_resume_do_not_double_count_and_old_rows_stay_readable() {
     let d = tempfile::tempdir().expect("dir");
     let g = GlobalLedger::open(d.path()).expect("open");
@@ -556,9 +578,9 @@ fn retry_and_resume_do_not_double_count_and_old_rows_stay_readable() {
     let r1 = g.current().expect("c")["m1"].clone();
     assert_eq!(r1.trials, 4, "予約は上書き。二重に積まない");
     // 旧形式（cap 欄なし）の行は読めて、無制限として扱う。
-    let old = json!({"schema": GLOBAL_LEDGER_SCHEMA, "measurement_id": "old", "manifest_sha256": "x",
+    let old = json!({"schema": GLOBAL_LEDGER_SCHEMA_V1, "measurement_id": "old", "manifest_sha256": "x",
         "tokens": 10, "wall_secs": 1, "trials": 1, "provider_slots": 1});
-    let _: GlobalRow = serde_json::from_value(old.clone()).expect("old row");
+    let _: LegacyRow = serde_json::from_value(old.clone()).expect("old row");
     fs::write(
         d.path()
             .join(celeris_campaign::global_ledger::GLOBAL_LEDGER_FILE),
@@ -566,7 +588,7 @@ fn retry_and_resume_do_not_double_count_and_old_rows_stay_readable() {
     )
     .expect("w");
     let cur = g.current().expect("c");
-    assert_eq!(cur["old"].cap_trials, u64::MAX);
+    assert_eq!(cur["old"].caps.trials, u64::MAX);
     let _ = Share::default();
     let _ = (
         SetFixed::default(),
@@ -576,4 +598,163 @@ fn retry_and_resume_do_not_double_count_and_old_rows_stay_readable() {
             fixed: Default::default(),
         },
     );
+}
+
+// ---- 共有承認の台帳の結び付け（省略・別 path・別測定 ID・結び付き不明の lock を投入前に拒否） ----
+
+/// 共有承認（`approved_trials` 6）を宣言し、台帳を `ledger` に結び付けた manifest。
+fn shared_manifest(i: &Input, id: &str, ledger: &Path, trials_cap: u64) -> CampaignManifest {
+    let mut m = ledger_manifest(i, id, 400_000, 2, Some(trials_cap));
+    m.experiment_sets
+        .get_mut("ab")
+        .expect("set")
+        .fixed
+        .shared_ledger = Some(ledger.to_string_lossy().into_owned());
+    m
+}
+
+fn counting() -> Counting {
+    Counting {
+        inner: MockExecutor::seeded(),
+        calls: Mutex::new(BTreeMap::new()),
+    }
+}
+
+fn calls(x: &Counting) -> u32 {
+    x.calls.lock().expect("l").values().sum()
+}
+
+#[test]
+fn run_api_refuses_shared_approval_bypass_before_any_submit() {
+    let d = tempfile::tempdir().expect("dir");
+    let (g, other) = (d.path().join("g"), d.path().join("other"));
+    let i = input(2);
+    let m = shared_manifest(&i, "m1", &g, 6);
+    m.validate().expect("valid shared manifest");
+    let x = counting();
+    let out = d.path().join("out");
+    // 台帳の省略・別 path（空の新しい台帳）・別測定 ID + 別 path は、台帳にも out にも触れずに拒否。
+    let e = run(&m, &i, &x, &opts(&out, None)).expect_err("omitted ledger");
+    assert!(
+        e.contains("shared approval requires --global-ledger"),
+        "{e}"
+    );
+    let e = run(&m, &i, &x, &opts(&out, Some(&other))).expect_err("other ledger");
+    assert!(e.contains("not the declared shared ledger"), "{e}");
+    let mut m2 = m.clone();
+    m2.campaign_id = "m2".into();
+    for p in [None, Some(other.as_path())] {
+        assert!(run(&m2, &i, &x, &opts(&out, p)).is_err());
+    }
+    // 結び付きの不明な lock（共有宣言の無い manifest の lock）も投入前に拒否。
+    let mut unbound = m.clone();
+    unbound.experiment_sets.get_mut("ab").expect("set").fixed = SetFixed::default();
+    let lock = CampaignLock::new("1", "m1", &unbound, vec![]).expect("lock");
+    let o = RunOptions {
+        lock: Some(lock),
+        ..opts(&out, Some(&g))
+    };
+    let e = run(&m, &i, &x, &o).expect_err("unbound lock");
+    assert!(
+        e.contains("lock is not bound to this shared approval"),
+        "{e}"
+    );
+    assert_eq!(calls(&x), 0, "拒否時の submit は 0 件");
+    assert!(!out.exists() && !other.exists() && !g.exists());
+    // 宣言した台帳でだけ走る（末尾 / の違いは同じ dir）。
+    let rep = run(&m, &i, &x, &opts(&out, Some(&d.path().join("g/")))).expect("run");
+    assert_eq!(rep.executed, 4);
+    assert_eq!(calls(&x), 4);
+    // 別測定 ID が同じ台帳で manifest の上限を増やしても、承認上限（試行 6 のうち 4 消費）を超える投入は拒否。
+    let big = shared_manifest(&i, "m3", &g, 100);
+    let e = run(&big, &i, &x, &opts(&d.path().join("out3"), Some(&g))).expect_err("over cap");
+    assert!(e.contains("global ledger rejects"), "{e}");
+    assert_eq!(calls(&x), 4);
+}
+
+#[test]
+fn run_api_keeps_the_legacy_non_shared_path() {
+    // 共有承認の宣言が無い manifest（旧形式・単独測定）は、台帳の省略も任意の台帳の opt-in も従来どおり。
+    let d = tempfile::tempdir().expect("dir");
+    let i = input(2);
+    let m = campaign(&i, "ab", 2, 10_000_000);
+    let x = counting();
+    run(&m, &i, &x, &opts(&d.path().join("a"), None)).expect("no ledger");
+    run(
+        &m,
+        &i,
+        &x,
+        &opts(&d.path().join("b"), Some(&d.path().join("g"))),
+    )
+    .expect("opt-in");
+    assert_eq!(calls(&x), 8);
+}
+
+fn cli_run(mp: &Path, out: &Path, ledger: Option<&Path>) -> Output {
+    let mut c = Command::new(std::env::var("CARGO_BIN_EXE_celeris-campaign").expect("bin"));
+    c.args(["run", "--executor", "mock", "--manifest"])
+        .arg(mp)
+        .arg("--out")
+        .arg(out)
+        .env("PATH", "/nonexistent");
+    if let Some(g) = ledger {
+        c.arg("--global-ledger").arg(g);
+    }
+    c.output().expect("run")
+}
+
+#[test]
+fn cli_refuses_shared_approval_bypass_before_any_submit() {
+    let d = tempfile::tempdir().expect("dir");
+    let (g, other, out) = (
+        d.path().join("g"),
+        d.path().join("other"),
+        d.path().join("out"),
+    );
+    let i = input(2);
+    // 共有承認を宣言して台帳を結び付けない manifest は validate で拒否（非共有 fallback を許さない）。
+    let mut loose = ledger_manifest(&i, "m1", 400_000, 2, Some(6));
+    let lp = write_manifest(d.path(), &i, &mut loose, "loose.json");
+    let o = bin("validate", &lp, &[], &[]);
+    assert!(
+        !o.status.success() && text(&o).contains("shared_ledger"),
+        "{}",
+        text(&o)
+    );
+    let mut m = shared_manifest(&i, "m1", &g, 6);
+    let mp = write_manifest(d.path(), &i, &mut m, "m1.json");
+    let mut m2 = shared_manifest(&i, "m2", &g, 6);
+    let mp2 = write_manifest(d.path(), &i, &mut m2, "m2.json");
+    for (p, ledger, why) in [
+        (&mp, None, "shared approval requires --global-ledger"),
+        (&mp, Some(other.as_path()), "not the declared shared ledger"),
+        (&mp2, None, "shared approval requires --global-ledger"),
+        (
+            &mp2,
+            Some(other.as_path()),
+            "not the declared shared ledger",
+        ),
+        (&lp, Some(g.as_path()), "shared_ledger"),
+    ] {
+        let o = cli_run(p, &out, ledger);
+        assert!(
+            !o.status.success() && text(&o).contains(why),
+            "{}",
+            text(&o)
+        );
+    }
+    // 拒否時は out（試行記録）も台帳も作らない = submit 0 件。
+    assert!(!out.exists() && !other.exists() && !g.exists());
+    let o = cli_run(&mp, &out, Some(&g));
+    assert!(o.status.success(), "{}", text(&o));
+    let rep: Value = serde_json::from_slice(&o.stdout).expect("json");
+    assert_eq!(rep["executed"], 4);
+    // 別測定 ID・別 out でも同じ台帳に数えられ、承認上限（試行 6）を超える投入は拒否。
+    let o = cli_run(&mp2, &d.path().join("out2"), Some(&g));
+    assert!(
+        !o.status.success() && text(&o).contains("global ledger rejects"),
+        "{}",
+        text(&o)
+    );
+    assert!(!d.path().join("out2").join(TRIALS_FILE).exists());
 }

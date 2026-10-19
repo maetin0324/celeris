@@ -32,7 +32,10 @@ fn case_dirs(base: &Path) -> Vec<PathBuf> {
     let mut v = vec![];
     for s in ["dev", "final"] {
         if let Ok(rd) = fs::read_dir(base.join("cases").join(s)) {
-            v.extend(rd.map(|e| e.unwrap().path()));
+            v.extend(
+                rd.map(|e| e.unwrap().path())
+                    .filter(|d| d.join("case.json").exists()),
+            );
         }
     }
     v
@@ -408,4 +411,23 @@ fn real_cases_pin_distinct_inputs_between_splits() {
             }
         }
     }
+}
+
+#[test]
+fn deferral_marker_dir_is_not_a_case() {
+    // status.json だけの dir（延期記録）は case として読まれず、空 dir は従来どおりエラー。
+    let root = std::env::temp_dir().join(format!("deferral-marker-{}", std::process::id()));
+    let (cases, grader) = (root.join("cases"), root.join("grader"));
+    std::fs::create_dir_all(cases.join("dev/short-ml-campaign")).unwrap();
+    std::fs::create_dir_all(&grader).unwrap();
+    std::fs::write(cases.join("dev/short-ml-campaign/status.json"), "{}").unwrap();
+    let e = celeris_campaign::cases::CaseSet::load(&cases, &grader).unwrap_err();
+    assert_eq!(
+        e, "no cases found",
+        "marker dir must be skipped, not parsed"
+    );
+    std::fs::create_dir_all(cases.join("dev/empty")).unwrap();
+    let e = celeris_campaign::cases::CaseSet::load(&cases, &grader).unwrap_err();
+    assert!(e.contains("case.json"), "{e}");
+    let _ = std::fs::remove_dir_all(&root);
 }

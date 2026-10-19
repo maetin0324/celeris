@@ -1,0 +1,57 @@
+{
+  "schema": "celeris.short-ml-case-status/1",
+  "status": "deferred",
+  "label": "dev",
+  "decided_at": "2026-10-19",
+  "deadline": "2026-10-21T00:00:00Z",
+  "base_commit": "c9654bff56332c160523d904b2248ae527d9b820",
+  "claims": {
+    "final_generalization": false,
+    "real_pilot_confirmed": false,
+    "adopted": false
+  },
+  "reasons": [
+    {
+      "id": "R1",
+      "text": "再利用できる小規模 ML 資産が無い。local の python3 3.13.3 に numpy/scipy/sklearn/torch/pandas が無く、導入は依存の追加なので禁止。pegasus-lm は LLM 配信基盤（GPU/LLM）で対象外。sirius の system numpy 1.23.5 はあるが、/work/NBB/rmaeda に ML repo・固定データは無く新規資料が要る。"
+    },
+    {
+      "id": "R2",
+      "text": "既存 grader の experiment 判定は scheduler 形の証拠（数字[.host] の job id、exit_status=0 の scheduler_record、評価側が集めた celeris.observed-jobs/1）だけを受理する。local process の実行を評価側が記録する収集器は無く、grader/harness の変更は禁止、PID を job id と偽るのは捏造になる。"
+    },
+    {
+      "id": "R3",
+      "text": "代替（固定 raw の recompute のみ／hidden test の実装のみ）は既存の分析 case・実装 case と重複し、固定資料→条件→実行→raw 分析→報告の ML campaign を判定しない。"
+    }
+  ],
+  "unverified": [
+    "sirius の batch job（scheduler 証拠あり）で動く標準ライブラリのみの ML case を作れるか。新規資料とクラスタ job が要り『既存資産』の範囲外のため未検討。",
+    "sirius の job 投入と qstat/sacct 記録の収集を ML case に使えるか（I/O 経路は別 case が扱うが ML は未試験）。",
+    "正例（正しい結果の受理）・負例（誤計算/条件違い/未実行の拒否）を通常 grader で動かす検査は未実施（case 不在のため）。"
+  ],
+  "pins": {
+    "grader_source": {
+      "path": "crates/campaign/src/grader.rs",
+      "sha256": "3fce244740a0f909c1662cf82b3a1b5cc25845f498cc707c3c52023fc4c749d0"
+    },
+    "existing_case_dirs": {
+      "dev": [
+        "k0-fixture-control",
+        "k1-bf-fsync-campaign",
+        "k3-locusta-ab-analysis"
+      ]
+    },
+    "local_env": {
+      "python": "3.13.3",
+      "missing_modules": [
+        "numpy"
+      ]
+    },
+    "final_case_dirs_sha256": "a4fe810610664311342c3c2608926ad327c2107c31a690c364aab278a4f6c27e"
+  },
+  "impact": "主比較（A0/B0）・Jev 副比較・論文の依存先に変更なし。既存 case/manifest/grader は不変。K2/K4 は置き換えない。",
+  "evidence_paths": [
+    "crates/campaign/scripts/verify-short-ml-case.py",
+    "agent-docs/progress/2026-10-19-short-ml-case/case-controls.md"
+  ]
+}

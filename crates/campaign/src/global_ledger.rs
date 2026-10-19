@@ -20,6 +20,18 @@
 //! 3. Submitted のまま停止: 予約と枠を持ち続ける。終了を確認してから `settle`（同じ identity の再精算は置換）。
 //! 4. `settle` の後に runner の再集計（`record`）が古い・空でも、確定消費は下がらない。
 //!
+//! ## runner の配線（`runner::run`）
+//! `admit_start` は開始の登録と検証（取り分の記録）だけで、投入の可否には使わない。毎投入（同期・非同期、
+//! `stop_on_budget` に関係なく）の前に `admit_trial` で最新の全行を読み、最小の承認上限で tokens・試行数・
+//! provider 枠（1 試行 1 枠）を検査して予約を fsync してから、ローカル台帳の予約 → lookup/submit に進む。
+//! 実投入の `TrialRequest.budget` は case/arm 上限と共有予約額の小さい方。拒否は、未精算の予約が残れば待機、
+//! 無ければ打ち切り（executor は呼ばない）。試行 identity は ローカル台帳の冪等キー、attempt 番号は台帳が決める
+//! （未精算があれば同じ attempt を続け、無ければ精算済みの次の番号。前の attempt の確定消費は残る）。
+//! 精算は記録の追記後で、cancel の停止未確認・追跡中は持ち続ける。未送信の解放は Reserved のまま
+//! ローカル台帳が投入を示さないとき（Refused・routing 失敗・同期の Wait）と、再開時に冪等キーの照会で
+//! 投入が無いと確かめたときだけ。同期 executor の Err と実行中の停止は予約額を消費として保守的に精算する。
+//! tokens 欠測は予約額と既観測の大きい方で精算する（0 にしない）。
+//!
 //! 旧 `/1` 行は保守的に読む: tokens/trials は確定消費と予約の混在なので全部を確定消費として持ち（下げない）、
 //! cap 欄が無い行は上限を与えない（manifest と他の行の最小が効くので承認は増えない）、`provider_slots` は
 //! 解放の記録が無いので枠を占有し続ける。同じ測定 ID の持ち主が自分の未完了試行が無いことを確かめて
@@ -216,6 +228,57 @@ pub enum Reserved {
     New,
     /// 同じ identity の未精算予約が既にある（冪等。資源を足さない）。再開側は状態に応じて続ける。
     Existing(AttemptState),
+}
+
+/// 予約を拒否した資源。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Resource {
+    Tokens,
+    Trials,
+    ProviderSlots,
+}
+
+impl Resource {
+    pub fn name(self) -> &'static str {
+        match self {
+            Resource::Tokens => "tokens",
+            Resource::Trials => "trials",
+            Resource::ProviderSlots => "provider_slots",
+        }
+    }
+}
+
+/// 予約の拒否。`outstanding` は台帳全体に未精算の予約（または旧行の枠）が残っているか（待てば空く可能性）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Rejection {
+    pub resource: Resource,
+    pub outstanding: bool,
+    pub msg: String,
+}
+
+/// runner の 1 試行の投入許可の要求（attempt 番号は台帳が決める）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TrialAdmission {
+    pub measurement_id: String,
+    pub trial: String,
+    pub manifest_sha256: String,
+    pub caps: Caps,
+    pub tokens: u64,
+    pub provider_slots: u32,
+    /// 投入済みかもしれない試行を検査なしで Submitted として載せる。
+    pub adopt: bool,
+}
+
+/// `admit_trial` の結果。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Admission {
+    /// 予約がある（`existing` は既にあった未精算 attempt の状態。None は今回の新規予約）。`tokens` は予約額。
+    Granted {
+        id: AttemptId,
+        existing: Option<AttemptState>,
+        tokens: u64,
+    },
+    Rejected(Rejection),
 }
 
 /// 実行器で確かめた終了。
@@ -602,28 +665,118 @@ impl GlobalLedger {
             usage: Usage::default(),
             caps,
         };
-        let o = s.others(&id.measurement_id);
-        let mine = s.view_with(&id.measurement_id, Some(&row), None);
-        let reject = |what: &str, used: u128, cap: u128| {
-            Err(format!(
-                "global ledger rejects {}/{}#{}: {what} {used} would exceed approved cap {cap}",
-                id.measurement_id, id.trial, id.attempt
-            ))
-        };
-        let tokens = o.tokens as u128 + mine.tokens as u128;
-        if tokens > caps.tokens as u128 {
-            return reject("tokens", tokens, caps.tokens as u128);
-        }
-        let trials = o.trials as u128 + mine.trials as u128;
-        if trials > caps.trials as u128 {
-            return reject("trials", trials, caps.trials as u128);
-        }
-        let slots = o.provider_slots as u128 + mine.provider_slots as u128;
-        if slots > caps.provider_slots as u128 {
-            return reject("provider_slots", slots, caps.provider_slots as u128);
+        if let Err(r) = Self::check(&s, &row) {
+            return Err(r.msg);
         }
         self.write_attempt(&s, &row)?;
         Ok(Reserved::New)
+    }
+
+    /// `row` を足したときの tokens・試行数・provider 枠の検査（排他の中で最新の全行に対して呼ぶ）。
+    fn check(s: &LedgerState, row: &AttemptRow) -> Result<(), Rejection> {
+        let id = &row.id;
+        let caps = row.caps;
+        let o = s.others(&id.measurement_id);
+        let mine = s.view_with(&id.measurement_id, Some(row), None);
+        let outstanding = s.attempts.values().any(|a| a.state.outstanding())
+            || s.measurements.values().any(|m| m.legacy_slots > 0);
+        let reject = |resource: Resource, used: u128, cap: u128| {
+            Err(Rejection {
+                resource,
+                outstanding,
+                msg: format!(
+                    "global ledger rejects {}/{}#{}: {} {used} would exceed approved cap {cap}",
+                    id.measurement_id,
+                    id.trial,
+                    id.attempt,
+                    resource.name()
+                ),
+            })
+        };
+        let tokens = o.tokens as u128 + mine.tokens as u128;
+        if tokens > caps.tokens as u128 {
+            return reject(Resource::Tokens, tokens, caps.tokens as u128);
+        }
+        let trials = o.trials as u128 + mine.trials as u128;
+        if trials > caps.trials as u128 {
+            return reject(Resource::Trials, trials, caps.trials as u128);
+        }
+        let slots = o.provider_slots as u128 + mine.provider_slots as u128;
+        if slots > caps.provider_slots as u128 {
+            return reject(Resource::ProviderSlots, slots, caps.provider_slots as u128);
+        }
+        Ok(())
+    }
+
+    /// runner の 1 試行の投入許可（毎投入の前に呼ぶ）。最新の全行読取 → attempt 番号の決定 → 上限の最小化 →
+    /// 検査 → 予約の追記と fsync を 1 つの排他で行う。
+    /// - 同じ試行の未精算 attempt があればそれを返す（冪等。資源を足さない。同一冪等キーの続き）。
+    /// - 無ければ精算済み attempt の次の番号で新しく予約する（retry。前の attempt の確定消費は残る）。
+    /// - `adopt` は投入済みかもしれない試行（ローカル台帳に task がある・投入結果不明）を、上限検査で落とさず
+    ///   Submitted として台帳に載せる（実在する消費を数えないより安全）。
+    ///
+    /// 拒否は `Admission::Rejected`（何も書かない）。I/O・破損は Err。
+    pub fn admit_trial(&self, a: &TrialAdmission) -> Result<Admission, String> {
+        let _g = self.lock()?;
+        let s = self.state()?;
+        let mine = s
+            .attempts
+            .values()
+            .filter(|r| r.id.measurement_id == a.measurement_id && r.id.trial == a.trial);
+        let mut next = 1u32;
+        for r in mine {
+            if r.state.outstanding() {
+                return Ok(Admission::Granted {
+                    id: r.id.clone(),
+                    existing: Some(r.state),
+                    tokens: r.reserved_tokens,
+                });
+            }
+            next = next.max(r.id.attempt.saturating_add(1));
+        }
+        let row = AttemptRow {
+            id: AttemptId {
+                measurement_id: a.measurement_id.clone(),
+                trial: a.trial.clone(),
+                attempt: next,
+            },
+            manifest_sha256: a.manifest_sha256.clone(),
+            state: if a.adopt {
+                AttemptState::Submitted
+            } else {
+                AttemptState::Reserved
+            },
+            reserved_tokens: a.tokens,
+            provider_slots: a.provider_slots,
+            usage: Usage::default(),
+            caps: s.caps.min(a.caps),
+        };
+        if !a.adopt
+            && let Err(r) = Self::check(&s, &row)
+        {
+            return Ok(Admission::Rejected(r));
+        }
+        self.write_attempt(&s, &row)?;
+        Ok(Admission::Granted {
+            id: row.id,
+            existing: None,
+            tokens: row.reserved_tokens,
+        })
+    }
+
+    /// attempt の現在の行（無ければ None）。
+    pub fn attempt(&self, id: &AttemptId) -> Result<Option<AttemptRow>, String> {
+        Ok(self.state()?.attempts.get(id).cloned())
+    }
+
+    /// 測定 ID の未精算 attempt（再開時の照合用）。
+    pub fn outstanding(&self, measurement_id: &str) -> Result<Vec<AttemptRow>, String> {
+        Ok(self
+            .state()?
+            .attempts
+            .into_values()
+            .filter(|r| r.id.measurement_id == measurement_id && r.state.outstanding())
+            .collect())
     }
 
     /// 実行器へ投入したことを記録する（Reserved → Submitted。Submitted なら何もしない）。

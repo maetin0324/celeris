@@ -29,6 +29,27 @@ fn arg(args: &[String], name: &str) -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
+/// manifest が variant を参照するとき、同じ dir の封印済み `variant-spec.json` から構成 pin を取る。
+/// 参照と spec が一致しない・未封印・無い場合は拒否する（pin 無しで投入しない）。
+fn variant_org_for(
+    m: &CampaignManifest,
+    manifest_path: &std::path::Path,
+) -> Result<Option<celeris_campaign::variant::OrgPin>, String> {
+    let Some(want) = &m.variant else {
+        return Ok(None);
+    };
+    let path = manifest_path.with_file_name("variant-spec.json");
+    let spec: celeris_campaign::variant::VariantSpec = serde_json::from_slice(
+        &std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?,
+    )
+    .map_err(|e| format!("{}: {e}", path.display()))?;
+    let got = spec.to_ref().map_err(|e| e.to_string())?;
+    if &got != want {
+        return Err("variant-spec.json does not match the manifest's variant reference".into());
+    }
+    Ok(Some(spec.org))
+}
+
 fn preflight_inputs(args: &[String], manifest_path: &std::path::Path) -> Inputs {
     let text = |n: &str| arg(args, n).map(|p| p.to_string_lossy().into_owned());
     let or = |n: &str, d: &str| arg(args, n).unwrap_or_else(|| PathBuf::from(d));
@@ -557,13 +578,15 @@ fn run(args: Vec<String>) -> Result<String, String> {
                     };
                     let transport =
                         CurlTransport::new(&url.to_string_lossy(), &tok.to_string_lossy())?;
+                    let variant_org = variant_org_for(&m, &manifest_path)?;
                     let bc = CelerisExecutor::new(
                         transport,
                         template,
                         m.termination.trial_timeout_secs,
                         out_dir.join("cluster-cancel.jsonl"),
                     )
-                    .with_variant(m.variant.clone());
+                    .with_variant(m.variant.clone())
+                    .with_variant_org(variant_org);
                     // A が有効なときだけ A の実行器を作る（B/C のみの測定は A の program・account を要求しない）。
                     let a = if m.is_active(celeris_campaign::manifest::ConfigId::A) {
                         Some(a_executor(&args, &m, &out_dir, a_program()?)?)

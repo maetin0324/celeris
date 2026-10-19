@@ -5,7 +5,10 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use task_core::profile::EffectiveProfile;
+use task_core::{
+    profile::EffectiveProfile,
+    variant_wire::{CampaignOrgPin, CampaignVariantRef},
+};
 
 use crate::{
     lock::GraderPin,
@@ -92,12 +95,9 @@ pub fn selection_json_sha256() -> String {
 }
 
 /// `node_id`・`chain` を除いた EffectiveProfile の canonical JSON sha256（spec-on の coding 課と spec-off の単一課の同値判定）。
+/// 計算は task-core（`variant_wire`）が持つ。ここは同じ値を返す委譲で、二重実装を持たない。
 pub fn effective_profile_sha256(p: &EffectiveProfile) -> Result<String, VariantError> {
-    let mut p = p.clone();
-    p.node_id = String::new();
-    p.chain = Vec::new();
-    let v = serde_json::to_value(&p).map_err(|e| VariantError::Missing(format!("profile: {e}")))?;
-    canonical_sha(&v)
+    task_core::variant_wire::effective_profile_sha256(p).map_err(VariantError::Missing)
 }
 
 fn canonical_sha<T: Serialize>(v: &T) -> Result<String, VariantError> {
@@ -298,6 +298,59 @@ pub struct VariantRef {
     pub id: VariantId,
     pub content_sha256: String,
     pub selection_sha256: String,
+}
+
+impl From<&VariantRef> for CampaignVariantRef {
+    fn from(v: &VariantRef) -> Self {
+        CampaignVariantRef {
+            comparison_id: v.comparison_id.clone(),
+            id: v.id.as_str().to_string(),
+            content_sha256: v.content_sha256.clone(),
+            selection_sha256: v.selection_sha256.clone(),
+        }
+    }
+}
+
+/// 未知の id は拒否する（既定値へ丸めない）。
+impl TryFrom<&CampaignVariantRef> for VariantRef {
+    type Error = VariantError;
+    fn try_from(v: &CampaignVariantRef) -> Result<Self, VariantError> {
+        let id = match v.id.as_str() {
+            "M1-spec-on" => VariantId::SpecOn,
+            "M1-spec-off" => VariantId::SpecOff,
+            other => {
+                return Err(VariantError::Schema(format!(
+                    "unknown variant id {other:?}"
+                )));
+            }
+        };
+        Ok(VariantRef {
+            comparison_id: v.comparison_id.clone(),
+            id,
+            content_sha256: v.content_sha256.clone(),
+            selection_sha256: v.selection_sha256.clone(),
+        })
+    }
+}
+
+impl From<&OrgPin> for CampaignOrgPin {
+    fn from(o: &OrgPin) -> Self {
+        CampaignOrgPin {
+            nodes: o.nodes.clone(),
+            coding_node: o.coding_node.clone(),
+            effective_profile_sha256: o.effective_profile_sha256.clone(),
+        }
+    }
+}
+
+impl From<&CampaignOrgPin> for OrgPin {
+    fn from(o: &CampaignOrgPin) -> Self {
+        OrgPin {
+            nodes: o.nodes.clone(),
+            coding_node: o.coding_node.clone(),
+            effective_profile_sha256: o.effective_profile_sha256.clone(),
+        }
+    }
 }
 
 impl VariantRef {

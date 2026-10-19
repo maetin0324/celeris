@@ -468,6 +468,10 @@ const KEY: &str = "campaign-0123456789abcdef0123456789abcdef0123456789abcdef0123
 struct State {
     posts: Vec<Value>,
     gets: u32,
+    /// 識別欄の基準（`exec` が executor の body から作る）。
+    base: Option<Value>,
+    /// GET 応答の campaign を試験が書き換える（欠落・変更の模擬）。
+    mutate_campaign: Option<fn(&mut Value)>,
     cancels: u32,
     existing: Option<Option<Value>>,
     stored_variant: Option<Option<Value>>,
@@ -518,13 +522,23 @@ impl Transport for Fake {
                         None => s.posts[0]["campaign"].get("variant").cloned(),
                     }
                 };
-                let mut campaign = json!({"campaign_id": "c1"});
+                let mut campaign = if s.posts.is_empty() {
+                    s.base.clone().unwrap_or(json!({}))
+                } else {
+                    s.posts[0]["campaign"].clone()
+                };
+                if let Some(m) = campaign.as_object_mut() {
+                    m.remove("variant");
+                }
                 if let Some(v) = v {
                     campaign["variant"] = v;
                 }
+                if let Some(f) = s.mutate_campaign {
+                    f(&mut campaign);
+                }
                 ok(
                     200,
-                    json!({"task": {"id": "01T1", "status": "running", "campaign": campaign}}),
+                    json!({"task": {"id": "01T1", "status": "running"}, "campaign": campaign}),
                 )
             }
             "POST" if p == "/api/v1/tasks" => {
@@ -554,7 +568,23 @@ fn exec(f: &Fake, dir: &Path, v: Option<VariantRef>) -> CelerisExecutor<Fake> {
         .as_object()
         .cloned()
         .unwrap_or_default();
-    CelerisExecutor::new(f.clone(), t, 1800, dir.join(CLUSTER_CANCEL_FILE)).with_variant(v)
+    let org = v.as_ref().map(|_| pin_org());
+    let x = CelerisExecutor::new(f.clone(), t, 1800, dir.join(CLUSTER_CANCEL_FILE))
+        .with_variant(v.clone())
+        .with_variant_org(org);
+    let c = trial_cfg();
+    if let Ok(b) = x.body(&req(&c, dir, v.as_ref()), KEY) {
+        f.st().base = b.get("campaign").cloned();
+    }
+    x
+}
+
+fn pin_org() -> OrgPin {
+    OrgPin {
+        nodes: vec!["cos".into(), "coding".into()],
+        coding_node: "coding".into(),
+        effective_profile_sha256: "e".repeat(64),
+    }
 }
 
 fn trial_cfg() -> Config {

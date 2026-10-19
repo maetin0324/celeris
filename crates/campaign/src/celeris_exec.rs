@@ -16,6 +16,7 @@ use std::{
 };
 
 use serde_json::{Map, Value, json};
+use task_core::variant_wire::{CampaignOrgPin, CampaignVariantRef};
 
 use crate::{
     aggregate::Outcome,
@@ -24,7 +25,7 @@ use crate::{
         TrialRequest, Usage,
     },
     manifest::{Config, ConfigId},
-    variant::VariantRef,
+    variant::{OrgPin, VariantRef},
 };
 
 /// cluster job の人手 cancel 手順の台帳（追記専用 JSONL、out 直下に置く）。
@@ -146,6 +147,8 @@ pub struct CelerisExecutor<T: Transport> {
     /// manifest の variant 参照。Some のとき POST は `campaign.variant` に載せ、既存 task の照会（lookup・
     /// submit 前後）は `GET /tasks/{id}` の `task.campaign.variant` が一致しない限り採用しない。
     variant: Option<VariantRef>,
+    /// variant が前提とする構成 pin（`VariantSpec.org`）。variant があるとき必須（POST の `campaign.variant_org`）。
+    variant_org: Option<OrgPin>,
 }
 
 /// 1 回の走査で見た task 木。
@@ -262,6 +265,7 @@ impl<T: Transport> CelerisExecutor<T> {
             trial_timeout_secs,
             cluster_cancel_log,
             variant: None,
+            variant_org: None,
         }
     }
 
@@ -271,27 +275,73 @@ impl<T: Transport> CelerisExecutor<T> {
         self
     }
 
+    /// variant の構成 pin を固定する（variant があるときは必須。無ければ投入前に拒否する）。
+    pub fn with_variant_org(mut self, org: Option<OrgPin>) -> Self {
+        self.variant_org = org;
+        self
+    }
+
     /// 既存 task を冪等照会の結果として採用してよいか。variant があるときは task の記録と一致する場合だけ。
     /// 欠落（API 未対応・応答欠落）・不一致は適用済み扱いにせず拒否する（副作用なし）。
-    fn check_existing(&self, id: &str) -> Result<(), ExecError> {
+    fn check_existing(&self, id: &str, req: Option<&TrialRequest>) -> Result<(), ExecError> {
         let Some(want) = &self.variant else {
             return Ok(());
+        };
+        let Some(org) = &self.variant_org else {
+            return Err(ExecError::refused("variant_org missing in the executor"));
         };
         let detail = self
             .get(&format!("/api/v1/tasks/{id}"))
             .map_err(ExecError::interrupted)?;
-        let got = &detail["task"]["campaign"]["variant"];
-        let want_v = serde_json::to_value(want).map_err(|e| ExecError::refused(e.to_string()))?;
-        if got.is_null() {
+        // 解決済みの識別は `TaskDetail.campaign`（祖先解決後）。無ければ適用・記録を確認できない。
+        let got = &detail["campaign"];
+        if !got.is_object() {
             return Err(ExecError::refused(format!(
-                "task {id}: campaign.variant missing in the response (variant {} not applied/recorded); not reused",
+                "task {id}: campaign missing in the response (variant {} not applied/recorded); not reused",
                 want.content_sha256
             )));
         }
-        if *got != want_v {
-            return Err(ExecError::refused(format!(
-                "task {id}: campaign.variant {got} != expected {want_v}; not reused"
-            )));
+        let want_v = serde_json::to_value(CampaignVariantRef::from(want))
+            .map_err(|e| ExecError::refused(e.to_string()))?;
+        let want_o = serde_json::to_value(CampaignOrgPin::from(org))
+            .map_err(|e| ExecError::refused(e.to_string()))?;
+        for (name, w) in [("variant", &want_v), ("variant_org", &want_o)] {
+            let g = &got[name];
+            if g.is_null() {
+                return Err(ExecError::refused(format!(
+                    "task {id}: campaign.{name} missing in the response; not reused"
+                )));
+            }
+            if g != w {
+                return Err(ExecError::refused(format!(
+                    "task {id}: campaign.{name} {g} != expected {w}; not reused"
+                )));
+            }
+        }
+        if let Some(req) = req {
+            // 識別の他の欄も POST した値と一致するときだけ採用する（欠落・変更は拒否）。
+            let sent = self
+                .body(req, "")
+                .map_err(ExecError::refused)?
+                .get("campaign")
+                .cloned()
+                .unwrap_or(Value::Null);
+            for k in [
+                "campaign_id",
+                "case_id",
+                "arm",
+                "repetition",
+                "manifest_hash",
+                "routing_setting",
+            ] {
+                if got.get(k) != sent.get(k) {
+                    return Err(ExecError::refused(format!(
+                        "task {id}: campaign.{k} {} != expected {}; not reused",
+                        got.get(k).unwrap_or(&Value::Null),
+                        sent.get(k).unwrap_or(&Value::Null)
+                    )));
+                }
+            }
         }
         Ok(())
     }
@@ -380,9 +430,17 @@ impl<T: Transport> CelerisExecutor<T> {
         campaign.insert("manifest_hash".into(), json!(req.manifest_sha256));
         campaign.insert("routing_setting".into(), ro["mode"].clone());
         if let Some(v) = &self.variant {
+            let org = self
+                .variant_org
+                .as_ref()
+                .ok_or("variant requires variant_org (the verified org pin)")?;
             campaign.insert(
                 "variant".into(),
-                serde_json::to_value(v).map_err(|e| e.to_string())?,
+                serde_json::to_value(CampaignVariantRef::from(v)).map_err(|e| e.to_string())?,
+            );
+            campaign.insert(
+                "variant_org".into(),
+                serde_json::to_value(CampaignOrgPin::from(org)).map_err(|e| e.to_string())?,
             );
         }
         b.insert("campaign".into(), Value::Object(campaign));
@@ -574,7 +632,7 @@ impl<T: Transport> Executor for CelerisExecutor<T> {
             .into_iter()
             .next();
         if let Some(id) = &first {
-            self.check_existing(id)?;
+            self.check_existing(id, None)?;
         }
         Ok(first.map(|id| TaskRef {
             task_id: id,
@@ -589,7 +647,7 @@ impl<T: Transport> Executor for CelerisExecutor<T> {
         match self.tasks_with_label(key) {
             Ok(ids) => {
                 if let Some(id) = ids.into_iter().next() {
-                    self.check_existing(&id)?;
+                    self.check_existing(&id, Some(req))?;
                     return Ok(TaskRef {
                         task_id: id,
                         ..TaskRef::default()
@@ -619,7 +677,7 @@ impl<T: Transport> Executor for CelerisExecutor<T> {
         // 照会と投入の間に別の起動が投入していたら、古い方を正とし、新しい方を閉じる。
         let ids = self.tasks_with_label(key).map_err(ExecError::unknown)?;
         let first = ids.first().cloned().unwrap_or_else(|| created.clone());
-        if let Err(e) = self.check_existing(&first) {
+        if let Err(e) = self.check_existing(&first, Some(req)) {
             // 応答に variant が無い／違う task は適用済みとみなさない。自分が作った task なら閉じる。
             if first == created {
                 let _ = self.cancel_task(&created);

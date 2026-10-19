@@ -16,3 +16,9 @@ tasks: [01M59XT2H8KMZZDBFZYC81WGNR]
 - `cargo clippy --workspace -- -D warnings` → exit 0
 - `cargo fmt --all -- --check` → exit 0
 - `cargo test -p celeris-campaign --test global_ledger_atomic` → 24 passed
+
+## 追補（再実行: 全体検査の 46 件失敗の原因）
+- 原因: target dir の seed 複製（reflink）由来で、celerisctl の test binary に古い `CARGO_BIN_EXE_celerisctl`（`scratch/seeds/.../.building-gen-*/target/debug/celerisctl`）が焼き込まれており、spawn が ENOENT。コードの不具合ではなく scratch target の汚染。
+- 対処: `cargo clean -p celerisctl` 後に `RUSTC_WRAPPER= cargo nextest run --workspace --no-run` で再ビルド（ソース変更なし）。
+- 証拠: `cargo fmt --all -- --check` 0 / `cargo clippy --workspace -- -D warnings` 0 / `bash scripts/dev/test-parallel.sh` 0（5880 passed, 0 failed, doctest 含め passed 5883）。
+- `git diff c0510a835040 -- crates/task-dispatch` は tests/tick_and_dispatch.rs のみ（前回 run の決定化）。

@@ -26,6 +26,7 @@ pub mod human_ops_join;
 pub mod inputs;
 pub mod isolation;
 pub mod jev_smoke;
+pub mod jev_stages;
 pub mod ledger;
 pub mod lock;
 pub mod lock_exec;

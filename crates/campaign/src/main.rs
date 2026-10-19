@@ -17,7 +17,7 @@ use celeris_campaign::{
     watch::{self, SystemClock, WatchOptions},
 };
 
-const USAGE: &str = "usage: celeris-campaign <dry-run|validate|env-lock|config-check|env-check|preflight|cap-probe|cap-worker|run|watch|check|check-report|export|final-accounting|grade-out|usage> --manifest <path> \
+const USAGE: &str = "usage: celeris-campaign <human-op|dry-run|validate|env-lock|config-check|env-check|preflight|cap-probe|cap-worker|run|watch|check|check-report|export|final-accounting|grade-out|usage> --manifest <path> \
 [--interval-secs N] [--max-iterations M] [--cases <grade-case dir> [--initial-trees <dir>]] \
 [--input-manifest <path>] [--out <dir>] [--executor mock|harness|celeris] [--api-url <url> --token-env <ENV_NAME> [--task-template <json>]] [--dest <dir>] \
 [--cases-root <dir>] [--grader-root <dir>] [--grade-case-root <dir>] [--a-program <path>] [--report <file>] [--measurement-id <id>] [--repo-src <dir>] [--materials-src <dir>] [--kb-src <dir>] [--inputs-src <dir>] [--records <records.jsonl>] [--cos-not-called <basis>] [--quota <usage.json>] [--a-account <account_id>] [--measure-config <toml> --normal-config <toml> --canaries <json>] [--max-7d <ratio>] [--max-7d-codex <ratio>]";
@@ -263,6 +263,9 @@ fn run(args: Vec<String>) -> Result<String, String> {
     let cmd = args.first().map(String::as_str).unwrap_or("");
     if cmd == "grade" {
         return celeris_campaign::grader::cli(&args, &ProcessRunner::default());
+    }
+    if cmd == "human-op" {
+        return celeris_campaign::human_ops::cli::cli(&args);
     }
     if cmd == "cap-probe" {
         return cap_probe_cli(&args);

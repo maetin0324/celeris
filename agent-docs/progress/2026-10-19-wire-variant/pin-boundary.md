@@ -24,5 +24,5 @@ updated: 2026-10-19
 - `test -s agent-docs/progress/2026-10-19-wire-variant/propagation.md` → exit 0
 - `sh scripts/dev/check-doc-links.sh && sh scripts/dev/check-adr-numbers.sh && sh scripts/dev/progress-index.sh --check` → ok / ok (254 files) / ok、exit 0
 - 範囲 check（`sh "$CELERIS_WU_SCOPE_PATHS"` → 本 dir の 2 file だけ）→ 範囲外 0 件
-- 正の grep: `0088` 4 件以上、`## 8. 固定証拠の境界` 1 件、§8.3 の表 11 行、`coding 課 1 node` 1 件以上。負の grep: §0 の訂正表を除く `resolve_checked` 0 件、`0087_task_campaign` 0 件
+- 正の grep: `0088` 6 件、`## 8. 固定証拠の境界` 1 件、§8.3 の表 11 行（§6 の表と合わせて `^| n |` 17 行）、`coding 課 1 node` 1 件。負の grep: §0 の訂正表を除く `resolve_checked` 0 件、`0087_task_campaign` 0 件
 - cargo は回していない（文書だけの葉）

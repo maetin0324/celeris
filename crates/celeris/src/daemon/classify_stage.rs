@@ -16,7 +16,7 @@ use jev_classifier::{
 use task_core::route_select::{
     ClassificationEntry, ClassificationHint, ClassifierStatus, RoutingMode, SpecificityHint,
 };
-use task_dispatch::{BoardItem, ClassificationBoard, CredentialGate};
+use task_dispatch::{BoardItem, CallProvenance, ClassificationBoard, CredentialGate};
 
 /// 分類器の差し込み口。本番は `JevClassifier`、試験は fake。
 #[async_trait]
@@ -119,19 +119,27 @@ impl ClassificationStage {
     /// `subject`（work unit id、無ければ task id）を分類して board に置き、置いた内容を返す。
     pub async fn classify_subject(&self, subject: &str, input: &ClassifyInput) -> BoardItem {
         let result = self.classifier.classify(input, self.keys.as_ref()).await;
+        // 応答由来の版は成功した call だけが持つ。fallback・credential 待ち・config は全欄 None（欠測）。
+        let mut provenance = CallProvenance::default();
         let item = match result {
-            Ok(ClassifyOutcome::Classified { classification, .. }) => BoardItem {
-                entry: ClassificationEntry {
-                    status: ClassifierStatus::JevOk,
-                    hint: Some(ClassificationHint {
-                        specificity: hint_of(classification.specificity.value),
-                        confidence: classification.specificity.classification_confidence,
-                    }),
-                    model_snapshot: classification.response_model.clone(),
-                    cost_usd: classification.cost_usd,
-                },
-                credential: None,
-            },
+            Ok(ClassifyOutcome::Classified { classification, .. }) => {
+                provenance = CallProvenance {
+                    response_model: classification.response_model.clone(),
+                    observed_snapshot: classification.model_snapshot.clone(),
+                };
+                BoardItem {
+                    entry: ClassificationEntry {
+                        status: ClassifierStatus::JevOk,
+                        hint: Some(ClassificationHint {
+                            specificity: hint_of(classification.specificity.value),
+                            confidence: classification.specificity.classification_confidence,
+                        }),
+                        model_snapshot: classification.response_model.clone(),
+                        cost_usd: classification.cost_usd,
+                    },
+                    credential: None,
+                }
+            }
             Ok(ClassifyOutcome::FallbackToFixed { reason }) => BoardItem {
                 entry: ClassificationEntry::fell_back(reason_name(&reason)),
                 credential: None,
@@ -150,7 +158,8 @@ impl ClassificationStage {
             }
             status => tracing::info!(subject, ?status, "jev: classification result"),
         }
-        self.board.put(subject, item.clone());
+        self.board
+            .put_with_provenance(subject, item.clone(), provenance);
         item
     }
 
@@ -469,5 +478,55 @@ mod tests {
             assert!(item.entry.hint.is_none());
             assert_eq!(item.credential.is_some(), wants_credential);
         }
+    }
+
+    #[tokio::test]
+    async fn board_call_carries_response_versions_and_fallback_has_none() {
+        // 設定 model（model_id）と応答 model が異なり、独立 snapshot がある成功。
+        let mut ok = classified(Specificity::Specified, 0.9);
+        if let ClassifyOutcome::Classified { classification, .. } = &mut ok {
+            classification.model_snapshot = Some("resp-snap-1".into());
+        }
+        let (s, board) = stage(vec![
+            Ok(ok),
+            Ok(classified(Specificity::Specified, 0.9)),
+            Ok(ClassifyOutcome::FallbackToFixed {
+                reason: FallbackReason::Timeout,
+            }),
+            Err(JevError::KeyMissing {
+                secret_id: "jev_api_key".into(),
+            }),
+            Ok(ClassifyOutcome::FallbackToFixed {
+                reason: FallbackReason::Timeout,
+            }),
+        ]);
+        s.classify_subject("wu-a", &input()).await;
+        let c = board.get_call("wu-a").expect("call");
+        assert_eq!(
+            c.provenance.response_model.as_deref(),
+            Some("typesafe/jev-1.14-2026")
+        );
+        assert_eq!(
+            c.provenance.observed_snapshot.as_deref(),
+            Some("resp-snap-1")
+        );
+        // 独立 snapshot が無い応答は None のまま（response_model で補完しない）。
+        s.classify_subject("wu-b", &input()).await;
+        let c = board.get_call("wu-b").expect("call");
+        assert!(c.provenance.response_model.is_some());
+        assert_eq!(c.provenance.observed_snapshot, None);
+        // fallback / credential 待ちは成功情報を持たない。
+        for subj in ["wu-c", "wu-d"] {
+            s.classify_subject(subj, &input()).await;
+            let c = board.get_call(subj).expect("call");
+            assert_eq!(c.provenance, CallProvenance::default());
+        }
+        // 再分類は新しい call_id・call_no になり、前の版を引き継がない。
+        let first = board.get_call("wu-a").expect("call");
+        s.classify_subject("wu-a", &input()).await;
+        let second = board.get_call("wu-a").expect("call");
+        assert_ne!(first.call_id, second.call_id);
+        assert_eq!(second.call_no, first.call_no + 1);
+        assert_eq!(second.provenance, CallProvenance::default());
     }
 }

@@ -456,7 +456,11 @@ impl Baseline {
                     let n = self.state.nodes.get_mut(id).expect("node");
                     n.physical_id = Some(physical_id);
                     n.status = Status::Waiting;
-                    if state == JobState::Completed && self.complete_wait(ext, id)? {
+                    // 通知主導では起動照会は物理 ID の確認だけ。完了は push の実受信で知る（照会で完了させない）。
+                    if state == JobState::Completed
+                        && self.notices.is_none()
+                        && self.complete_wait(ext, id)?
+                    {
                         return Ok(Outcome::Interrupted);
                     }
                 }

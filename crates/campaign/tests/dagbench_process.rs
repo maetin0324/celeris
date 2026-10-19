@@ -18,8 +18,11 @@ use celeris_campaign::{
     dagbench::{
         baseline::{Baseline, BaselineConfig, Outcome, load_scenario},
         celeris_side::{CelerisSide, Paths, RunSpec, load_scenarios, read_worker_ledger},
-        ext::{ExtBackend, ExtConfig, Lookup, Notice, SubmitError, SubmitReply, read_ledger},
-        ipc::IpcExt,
+        ext::{
+            ExtBackend, ExtConfig, FaultKind, FaultSpec, Lookup, Notice, NoticeLedger, SubmitError,
+            SubmitReply, count_notices, read_ledger, read_notice_ledger,
+        },
+        ipc::{IpcExt, NoticeChannel},
         metrics::{PROCESS_RAW_SCHEMA, RAW_SCHEMA, RunHeader, compute},
         process::*,
         run::BASELINE_SCOPE,
@@ -261,6 +264,8 @@ const CTL_ENV: &str = "DAGBENCH_TEST_CTL";
 const RAW_DIR_ENV: &str = "DAGBENCH_PROCESS_RAW_DIR";
 /// 出来事待ちの長い保険（これを超えたら試験を失敗させる）。
 const INSURANCE: Duration = Duration::from_secs(600);
+/// 通知が来ない再開 control を待つ上限（凍結した時計で失敗するはずなので短い）。超えたら kill して回収する。
+const PROBE_BOUND: Duration = Duration::from_secs(60);
 
 fn scenarios() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/dagbench/scenarios.json")
@@ -286,6 +291,13 @@ struct Tripwire<B> {
     inner: B,
     park_at: Option<usize>,
     park_on_poll: bool,
+    /// `nth` 件目（異なる論理 job）の投入が受理された直後（`wait_started` の前）で止まる。
+    park_accept: Option<usize>,
+    /// 応答喪失（`ResponseLost`）を受け取った直後で止まる（外部は受理・物理起動を ledger に確定済み）。
+    park_lost: bool,
+    /// 外部時計を進める要求を拒否する（通知が無ければ完了も再開も起きないことの確認用）。
+    frozen: bool,
+    accepted: BTreeSet<String>,
     seen: BTreeSet<String>,
 }
 
@@ -302,7 +314,20 @@ fn park(line: &str) -> ! {
 
 impl<B: ExtBackend> ExtBackend for Tripwire<B> {
     fn submit(&mut self, l: &str, s: u64) -> std::io::Result<Result<SubmitReply, SubmitError>> {
-        self.inner.submit(l, s)
+        let r = self.inner.submit(l, s)?;
+        match &r {
+            Ok(_) => {
+                self.accepted.insert(l.to_string());
+                if self.park_accept == Some(self.accepted.len()) {
+                    park(&format!("CONTROL_ACKED accepted {:?}", self.accepted));
+                }
+            }
+            Err(SubmitError::ResponseLost) if self.park_lost => {
+                park(&format!("CONTROL_ACKED lost {l}"));
+            }
+            Err(_) => {}
+        }
+        Ok(r)
     }
     fn wait_started(&mut self, l: &str) -> std::io::Result<()> {
         self.inner.wait_started(l)?;
@@ -319,6 +344,13 @@ impl<B: ExtBackend> ExtBackend for Tripwire<B> {
         self.inner.lookup(l)
     }
     fn advance(&mut self, n: u64) -> std::io::Result<Vec<Notice>> {
+        if self.frozen {
+            use std::io::Write;
+            let mut o = std::io::stdout();
+            let _ = writeln!(o, "CONTROL_FROZEN advance({n}) refused");
+            let _ = o.flush();
+            return Err(std::io::Error::other("external clock is frozen"));
+        }
         self.inner.advance(n)
     }
     fn record_consumed(&mut self, l: &str) -> std::io::Result<bool> {
@@ -393,7 +425,26 @@ fn control_role() {
     // 再起動した client の id は 1 から始まるので、incarnation ごとに client 名を変える。
     let mut ipc =
         IpcExt::connect_unix(&sock, &format!("control-{inc}"), cfg_limits().ipc_options());
-    if inc > 1 {
+    let notice = cfg["notice"] == true;
+    let arm = cfg["arm"].as_str().expect("arm").to_string();
+    // 通知主導: 完了は外部 push の有界 blocking receive だけで知る（poll・lookup では探さない）。
+    let channel = notice.then(|| {
+        NoticeChannel::new(
+            IpcExt::connect_unix(
+                &sock,
+                &format!("notice-rx-{inc}"),
+                cfg_limits().ipc_options(),
+            ),
+            NoticeLedger::open(&dir.join("notice.jsonl"), &arm).expect("notice ledger"),
+            50,
+        )
+    });
+    if notice && inc > 1 {
+        use std::io::Write;
+        let mut o = std::io::stdout();
+        let _ = writeln!(o, "CONTROL_RESUMED incarnation={inc}");
+        let _ = o.flush();
+    } else if inc > 1 {
         use std::io::{BufRead, Write};
         let got = ipc.advance(0).expect("resend");
         ipc.flush_ack().expect("ack");
@@ -412,6 +463,10 @@ fn control_role() {
         inner: ipc,
         park_at: cfg["nth"].as_u64().map(|n| n as usize),
         park_on_poll: cfg["park"] == "poll",
+        park_accept: cfg["accept"].as_u64().map(|n| n as usize),
+        park_lost: cfg["lost"] == true,
+        frozen: cfg["frozen"] == true,
+        accepted: BTreeSet::new(),
         seen: BTreeSet::new(),
     };
     match cfg["arm"].as_str().expect("arm") {
@@ -427,6 +482,9 @@ fn control_role() {
             )
             .expect("open");
             b.set_progress_log(&dir.join("worker.jsonl")).expect("log");
+            if let Some(ch) = channel {
+                b.set_notices(ch);
+            }
             assert_eq!(b.run(&mut tripwire).expect("run"), Outcome::Complete);
         }
         _ => {
@@ -443,9 +501,16 @@ fn control_role() {
                 let mut side =
                     CelerisSide::with_backend(s.clone(), paths, store, Box::new(tripwire))
                         .expect("side");
+                if let Some(ch) = channel {
+                    side.enable_notices(ch, true);
+                }
                 side.drive(&transport).await
             });
-            let report = report.unwrap_or_else(|e| panic!("drive failed: {e}"));
+            let report = report.unwrap_or_else(|e| {
+                // runtime の後始末を待たずに失敗で終わる（凍結した時計の probe など）。
+                eprintln!("drive failed: {e}");
+                std::process::exit(3)
+            });
             for c in &report.campaigns {
                 assert_eq!(c.status, "done", "{:?}", report.campaigns);
             }
@@ -725,6 +790,565 @@ fn ipc_external_survives_control_exit() {
 #[test]
 fn ipc_external_survives_control_exit_mid_poll() {
     survive("celeris", Park::Poll);
+}
+
+// ================= 通知主導の再開と応答喪失 =================
+//
+// 同じ fixed DAG / 資源枠 / seed / event / nth を baseline と Celeris の両方式に与える。完了は外部 push の実受信
+// （有界 blocking receive）だけで知り、poll・lookup では探さない（Celeris 側は poller を失敗させる）。
+// 順序は child の stdout 行・IPC 応答・SIGKILL/wait という出来事だけで決める。
+
+const NOTICE_RAW_SCHEMA: &str = "celeris.dagbench-notice-raw/1";
+const NOTICE_MARKER: &str = "notice-run.json";
+
+/// incarnation 1 の control を止める場所。
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Stop {
+    /// `nth` 件目の投入が受理された直後（待機に入る前）。
+    AfterAccept,
+    /// `nth` 件目の待機登録（`wait_started`）の ack 直後。
+    AfterWait,
+    /// 受理・物理起動を永続確定した後、応答だけ喪失した直後。
+    LostResponse,
+}
+
+impl Stop {
+    fn name(self) -> &'static str {
+        match self {
+            Stop::AfterAccept => "accept",
+            Stop::AfterWait => "wait",
+            Stop::LostResponse => "lost",
+        }
+    }
+}
+
+/// raw の種別: process/2 の障害時継続（旧版: 通知処理証跡なし）か、通知主導（新版）か。
+#[derive(Debug, PartialEq)]
+enum RawKind {
+    PollEraProcess,
+    NoticeDriven,
+}
+
+fn raw_kind(raw: &Path) -> Result<RawKind, String> {
+    let run =
+        std::fs::read_to_string(raw.join("run.json")).map_err(|e| format!("run.json: {e}"))?;
+    if !run.contains(PROCESS_RAW_SCHEMA) {
+        return Err(format!("not a {PROCESS_RAW_SCHEMA} raw"));
+    }
+    match std::fs::read_to_string(raw.join(NOTICE_MARKER)) {
+        Err(_) => Ok(RawKind::PollEraProcess),
+        Ok(m) => {
+            let m: Value = serde_json::from_str(&m).map_err(|e| e.to_string())?;
+            if m["schema"] != NOTICE_RAW_SCHEMA {
+                return Err(format!("unknown notice raw schema {}", m["schema"]));
+            }
+            Ok(RawKind::NoticeDriven)
+        }
+    }
+}
+
+/// 通知主導 raw を独立 ledger（外部側 ext.jsonl・制御側 notice.jsonl）から数え直す。旧版の raw は拒否する。
+#[derive(Debug)]
+struct NoticeSummary {
+    logical_jobs: usize,
+    physical_launches: usize,
+    consumed: usize,
+    notices_sent: usize,
+    received_distinct: usize,
+    processed: usize,
+    acked: usize,
+    continuations: usize,
+    suppressed: usize,
+    lookups: usize,
+}
+
+fn compute_notice(raw: &Path, arm: &str) -> Result<NoticeSummary, String> {
+    if raw_kind(raw)? != RawKind::NoticeDriven {
+        return Err("poll-era process raw has no notice processing evidence".into());
+    }
+    let ext = read_ledger(&raw.join("ext.jsonl")).map_err(|e| e.to_string())?;
+    let c = celeris_campaign::dagbench::ext::count(&ext);
+    let n = read_notice_ledger(&raw.join("notice.jsonl")).map_err(|e| e.to_string())?;
+    if n.iter()
+        .any(|e| e.role != "control_consume" || e.side != arm)
+    {
+        return Err("notice ledger row is not the control-side consumer of this arm".into());
+    }
+    let nc = count_notices(&n);
+    let received_distinct = n
+        .iter()
+        .filter(|e| e.event == "notice_received")
+        .filter_map(|e| e.notice_seq)
+        .collect::<BTreeSet<_>>()
+        .len();
+    Ok(NoticeSummary {
+        logical_jobs: c.logical_jobs,
+        physical_launches: c.physical_launches,
+        consumed: c.consumed,
+        notices_sent: c.notices_sent,
+        received_distinct,
+        processed: nc.processed,
+        acked: nc.acked,
+        continuations: nc.continuations,
+        suppressed: nc.suppressed,
+        lookups: c.lookups,
+    })
+}
+
+fn externals_of(s: &RunSpec) -> u64 {
+    (s.scenario
+        .nodes
+        .iter()
+        .filter(|n| n.external.is_some())
+        .count()
+        * s.point.concurrent_campaigns) as u64
+}
+
+fn notice_ctl(
+    arm: &str,
+    d: &Path,
+    sock: &Path,
+    seed: u64,
+    inc: u64,
+    stop: Option<(Stop, u64)>,
+    frozen: bool,
+) -> Command {
+    let mut c = Command::new(std::env::current_exe().expect("exe"));
+    c.args(["--exact", "role_entry", "--nocapture", "--test-threads=1"])
+        .env(TEST_ROLE_ENV, "control")
+        .env(
+            CTL_ENV,
+            json!({"arm": arm, "dir": d, "sock": sock, "seed": seed, "incarnation": inc,
+                   "notice": true, "frozen": frozen,
+                   "nth": stop.filter(|(s, _)| *s == Stop::AfterWait).map(|(_, n)| n),
+                   "accept": stop.filter(|(s, _)| *s == Stop::AfterAccept).map(|(_, n)| n),
+                   "lost": matches!(stop, Some((Stop::LostResponse, _)))})
+            .to_string(),
+        );
+    c
+}
+
+fn header_for(
+    arm: &str,
+    s: &RunSpec,
+    event: &str,
+    nth: u64,
+    occurrences: u64,
+    limits: &Limits,
+) -> ProcessRunHeader {
+    ProcessRunHeader {
+        schema: PROCESS_RAW_SCHEMA.into(),
+        dataset: celeris_campaign::dagbench::ext::DATASET.into(),
+        arm: arm.into(),
+        scenario: SCENARIO.into(),
+        point: POINT.into(),
+        seed: s.seed,
+        event: event.into(),
+        nth,
+        occurrences,
+        poll_secs: s.poll_secs,
+        ext_job_secs: s.ext_job_secs,
+        worker_slots: s.scenario.resources.worker_slots,
+        external_job_slots: s.scenario.resources.external_job_slots,
+        limits: limits.clone(),
+    }
+}
+
+fn short_sock_dir() -> tempfile::TempDir {
+    tempfile::Builder::new()
+        .prefix("pr")
+        .tempdir_in("/tmp")
+        .expect("sock dir")
+}
+
+/// 停止 → 外部完了 → 再開の 1 run。通知主導（poll なし）。
+fn notice_run(arm: &'static str, stop: Stop) {
+    let file = load_scenarios(&scenarios()).expect("scenarios");
+    let seed = file.seed;
+    let s = spec(seed);
+    let occurrences = externals_of(&s);
+    let externals = occurrences as usize;
+    let nth = 1 + seed % occurrences;
+    let limits = cfg_limits();
+    let (d, _scratch) = run_dir(format!("notice-{arm}-{}", stop.name()));
+    let sd = short_sock_dir();
+    let sock = sd.path().join("e.sock");
+    let ledger = d.join("ext.jsonl");
+    let (fault_event, kind) = match stop {
+        Stop::AfterAccept => (
+            "external_job_completed",
+            FaultKind::DuplicateNotice { extra: 1 },
+        ),
+        Stop::AfterWait => (
+            "external_job_completed",
+            FaultKind::DuplicateNotice { extra: 1 },
+        ),
+        Stop::LostResponse => ("external_submit_accepted", FaultKind::DropResponse),
+    };
+    let fault = FaultSpec {
+        fault_id: format!("{arm}-{}", stop.name()),
+        kind,
+        event: fault_event.into(),
+        seed,
+        occurrences,
+    };
+    let mut cfg = ext_cfg(&s);
+    cfg.faults = vec![fault.clone()];
+    let stop_event = match stop {
+        Stop::AfterAccept => "external_submit_accepted",
+        Stop::AfterWait => "external_wait_started",
+        Stop::LostResponse => "external_submit_accepted",
+    };
+    header_for(arm, &s, stop_event, nth, occurrences, &limits)
+        .write(&d)
+        .expect("header");
+    let log = EventLog::create(&d).expect("log");
+    let mut sup = Supervisor::new(log.clone(), limits.clone()).expect("sup");
+
+    let mut ext = sup
+        .spawn(
+            Role::External,
+            role_cmd_cfg("external", &sock, &ledger, &cfg),
+        )
+        .expect("spawn external");
+    wait_ready(&ext);
+
+    // 1. control: nth 件目（受理後 / 待機後 / 応答喪失後）まで走って止まる。
+    let mut c1 = sup
+        .spawn(
+            Role::Control,
+            notice_ctl(arm, &d, &sock, seed, 1, Some((stop, nth)), false),
+        )
+        .expect("spawn control");
+    let acked_line = wait_line(&c1, "CONTROL_ACKED");
+    log.barrier(
+        B_CONTROL_ACKED,
+        json!({"control_pid": c1.pid(), "external_pid": ext.pid(),
+               "external_incarnation": ext.incarnation(), "line": acked_line,
+               "stop": stop.name()}),
+    )
+    .expect("barrier");
+    let rep = c1.kill("fault_after_stop_point").expect("kill control");
+    assert_eq!(
+        (rep.reason.as_str(), rep.exit_signal),
+        ("killed", Some(9)),
+        "{rep:?}"
+    );
+    assert!(c1.try_exit().expect("wait").is_some(), "control reaped");
+    let gone = !Path::new(&format!("/proc/{}", c1.pid())).exists();
+    assert!(gone, "control pid {} still exists", c1.pid());
+    log.barrier(
+        B_CONTROL_EXIT_ACK,
+        json!({"pid": c1.pid(), "incarnation": 1, "exit_signal": rep.exit_signal,
+               "proc_gone": gone}),
+    )
+    .expect("barrier");
+
+    // 外部は受理・物理起動を永続確定済み。応答喪失の run では、その論理 job の応答だけが失われている。
+    let before = read_ledger(&ledger).expect("ledger");
+    let launched: Vec<String> = before
+        .iter()
+        .filter(|e| e.event == "physical_launch")
+        .filter_map(|e| e.logical_job_id.clone())
+        .collect();
+    assert!(launched.len() as u64 >= nth, "{launched:?}");
+    let lost = before
+        .iter()
+        .find(|e| e.event == "fault_fired" && stop == Stop::LostResponse);
+    let lost_ids = lost.map(|e| {
+        let l = e.logical_job_id.clone().expect("lost logical");
+        let p = before
+            .iter()
+            .find(|x| x.event == "physical_launch" && x.logical_job_id.as_deref() == Some(&l))
+            .and_then(|x| x.physical_id.clone())
+            .expect("physical launch is durable before the response is lost");
+        (l, p, e.seq)
+    });
+    if stop == Stop::LostResponse {
+        assert!(lost_ids.is_some(), "no fault_fired: {before:?}");
+    }
+    let launches_before = launched.len();
+
+    // 2. control 不在のまま、observer（別 client）が同じ External の外部時計を進める。通知は push 待ちに残る。
+    let mut observer = IpcExt::connect_unix(&sock, "observer", limits.ipc_options());
+    let out = observe_until_complete(&mut observer, &launched, &limits, sup.wall_deadline(), &log)
+        .expect("observe");
+    assert!(
+        ext.try_exit().expect("wait").is_none(),
+        "external must outlive the control exit"
+    );
+    assert!(out.unacked >= 1, "notices wait for control: {out:?}");
+    let entries = read_ledger(&ledger).expect("ledger");
+    let completed: Vec<String> = entries
+        .iter()
+        .filter(|e| e.event == "external_job_completed")
+        .filter_map(|e| e.logical_job_id.clone())
+        .collect();
+    for l in &launched {
+        assert!(completed.contains(l), "{l} not completed: {completed:?}");
+    }
+    let max_completed_seq = entries
+        .iter()
+        .filter(|e| e.event == "external_job_completed")
+        .map(|e| e.seq)
+        .max()
+        .expect("completed");
+    log.barrier(
+        B_LEDGER_SYNC_ACK,
+        json!({"external_pid": ext.pid(), "external_incarnation": ext.incarnation(),
+               "ledger": ledger, "ledger_seq": out.ledger_seq,
+               "ledger_file_seq": entries.last().map_or(0, |e| e.seq),
+               "max_completed_seq": max_completed_seq, "completed": completed,
+               "final_now": out.final_now, "high_seq": out.high_seq, "unacked": out.unacked}),
+    )
+    .expect("barrier");
+
+    // 3. 再開。通知が実際に受信・適用・ack されて継続する（完了の poll / lookup 探索はしない）。
+    log.barrier(B_CONTROL_RESUME, json!({"incarnation": 2}))
+        .expect("barrier");
+    let mut c2 = sup
+        .spawn(
+            Role::Control,
+            notice_ctl(arm, &d, &sock, seed, 2, None, false),
+        )
+        .expect("respawn control");
+    wait_line(&c2, "CONTROL_RESUMED");
+    let st = c2
+        .wait_exit(INSURANCE)
+        .expect("wait")
+        .unwrap_or_else(|| panic!("control did not finish within the insurance deadline"));
+    assert!(st.success(), "resumed control failed: {st:?}");
+    log.barrier(B_CONTROL_DONE, json!({"exit_code": st.code()}))
+        .expect("barrier");
+    assert!(
+        ext.try_exit().expect("wait").is_none(),
+        "the same external process stayed alive through the resume"
+    );
+    let (_, _, unacked, _) = observer.observe(out.final_now).expect("observe");
+    assert_eq!(
+        unacked, 0,
+        "every notice was acked after durable application"
+    );
+
+    let r = ext
+        .stop(Some(&mut || observer.shutdown_server()), "run_done")
+        .expect("stop external");
+    assert_eq!((r.reason.as_str(), r.killed), ("graceful", false), "{r:?}");
+    c2.stop(None, "run_done").expect("reap control");
+
+    // 4. 新版 raw: 通知処理証跡の marker を置き、独立 ledger（外部 / 制御側）から数え直す。
+    assert_eq!(
+        raw_kind(&d),
+        Ok(RawKind::PollEraProcess),
+        "before the marker the raw is the old poll-era kind"
+    );
+    std::fs::write(
+        d.join(NOTICE_MARKER),
+        json!({"schema": NOTICE_RAW_SCHEMA, "process_raw_schema": PROCESS_RAW_SCHEMA,
+               "arm": arm, "stop": stop.name(), "seed": seed, "nth": nth,
+               "ext_ledger": "ext.jsonl", "notice_ledger": "notice.jsonl",
+               "polling_for_completion": false})
+        .to_string(),
+    )
+    .expect("marker");
+    assert_eq!(raw_kind(&d), Ok(RawKind::NoticeDriven));
+    let summary = compute_process(&d).expect("compute_process");
+    assert_eq!(summary.proof.control_pid, c1.pid());
+    assert_eq!(summary.proof.external_pid, ext.pid());
+    assert_eq!(summary.proof.resumed_incarnation, 2);
+    assert_eq!((summary.seed, summary.nth), (seed, nth));
+    let ns = compute_notice(&d, arm).expect("compute_notice");
+    std::fs::write(d.join("notice-summary.json"), format!("{ns:#?}")).expect("summary");
+    // 論理 job ごとに物理起動 1 回・消費 1 回。再開後に増えない。
+    assert_eq!(ns.physical_launches, externals, "{ns:?}");
+    assert_eq!(ns.logical_jobs, externals, "{ns:?}");
+    assert_eq!(ns.consumed, externals, "{ns:?}");
+    assert!(ns.physical_launches >= launches_before);
+    // 再開時の起動照会は物理 ID の確認だけ（追跡中の job ごとに 1 回まで）。完了は通知で知る。
+    assert!(
+        ns.lookups <= launches_before,
+        "more lookups than tracked jobs: {ns:?}"
+    );
+    // 受信した通知は全て永続適用後に ack され、継続は論理 job ごとに 1 回。
+    assert_eq!(ns.received_distinct, ns.notices_sent, "{ns:?}");
+    assert_eq!(ns.processed, ns.acked, "{ns:?}");
+    assert_eq!(
+        ns.continuations, externals,
+        "one continuation per job: {ns:?}"
+    );
+    if matches!(fault.kind, FaultKind::DuplicateNotice { .. }) {
+        assert!(ns.suppressed >= 1, "duplicate suppressed: {ns:?}");
+        assert!(
+            ns.notices_sent > externals,
+            "duplicate was really sent: {ns:?}"
+        );
+    }
+    // 完了済みの作業をやり直さない。
+    let worker = read_worker_ledger(&d.join("worker.jsonl")).expect("worker");
+    for n in &s.scenario.nodes {
+        let c = worker
+            .iter()
+            .filter(|e| e.event == "node_finished" && e.node == n.id)
+            .count();
+        assert_eq!(c, 1, "{arm}/{}: {} finished {c} times", stop.name(), n.id);
+    }
+    // 応答喪失: 再開後の照会（lookup / 冪等キーの再投入）が同じ論理・物理 ID に一致し、起動は増えていない。
+    if let Some((l, p, fired_seq)) = lost_ids {
+        let all = read_ledger(&ledger).expect("ledger");
+        let launches: Vec<_> = all
+            .iter()
+            .filter(|e| e.event == "physical_launch" && e.logical_job_id.as_deref() == Some(&l))
+            .collect();
+        assert_eq!(launches.len(), 1, "lost job launched once: {all:?}");
+        assert_eq!(launches[0].physical_id.as_deref(), Some(p.as_str()));
+        let accepted = all
+            .iter()
+            .filter(|e| {
+                e.event == "external_submit_accepted" && e.logical_job_id.as_deref() == Some(&l)
+            })
+            .count();
+        assert_eq!(accepted, 1);
+        let recon: Vec<_> = all
+            .iter()
+            .filter(|e| {
+                e.seq > fired_seq
+                    && matches!(e.event.as_str(), "lookup" | "submit_deduped")
+                    && e.logical_job_id.as_deref() == Some(&l)
+            })
+            .collect();
+        assert!(
+            !recon.is_empty(),
+            "no reconciliation after the lost response"
+        );
+        assert!(
+            recon
+                .iter()
+                .filter_map(|e| e.physical_id.as_deref())
+                .all(|x| x == p),
+            "{recon:?}"
+        );
+        let notices = read_notice_ledger(&d.join("notice.jsonl")).expect("notice ledger");
+        let cont: Vec<_> = notices
+            .iter()
+            .filter(|e| e.event == "notice_continuation" && e.logical_job_id.as_deref() == Some(&l))
+            .collect();
+        assert_eq!(cont.len(), 1, "{notices:?}");
+        assert_eq!(cont[0].physical_id.as_deref(), Some(p.as_str()));
+        let consumed = all
+            .iter()
+            .filter(|e| e.event == "consumed" && e.logical_job_id.as_deref() == Some(&l))
+            .count();
+        assert_eq!(consumed, 1);
+    }
+}
+
+/// 通知が無ければ再開しない: 外部時計を進める要求を拒否した（= 完了も通知も無い）再開 control は、
+/// poll・lookup で完了を探さないので走り切れない。消費・継続は 1 件も起きない。
+fn no_notice_probe(arm: &'static str) {
+    let file = load_scenarios(&scenarios()).expect("scenarios");
+    let seed = file.seed;
+    let s = spec(seed);
+    let occurrences = externals_of(&s);
+    let nth = 1 + seed % occurrences;
+    let limits = cfg_limits();
+    let (d, _scratch) = run_dir(format!("notice-{arm}-probe"));
+    let sd = short_sock_dir();
+    let sock = sd.path().join("e.sock");
+    let ledger = d.join("ext.jsonl");
+    header_for(arm, &s, "external_wait_started", nth, occurrences, &limits)
+        .write(&d)
+        .expect("header");
+    let log = EventLog::create(&d).expect("log");
+    let mut sup = Supervisor::new(log.clone(), limits.clone()).expect("sup");
+    let mut ext = sup
+        .spawn(
+            Role::External,
+            role_cmd_cfg("external", &sock, &ledger, &ext_cfg(&s)),
+        )
+        .expect("spawn external");
+    wait_ready(&ext);
+    let mut c1 = sup
+        .spawn(
+            Role::Control,
+            notice_ctl(arm, &d, &sock, seed, 1, Some((Stop::AfterWait, nth)), false),
+        )
+        .expect("spawn control");
+    wait_line(&c1, "CONTROL_ACKED");
+    c1.kill("fault_after_wait_ack").expect("kill");
+    assert!(c1.try_exit().expect("wait").is_some());
+
+    let mut c2 = sup
+        .spawn(
+            Role::Control,
+            notice_ctl(arm, &d, &sock, seed, 2, None, true),
+        )
+        .expect("respawn control");
+    wait_line(&c2, "CONTROL_RESUMED");
+    // 通知が来ないので、時計を進める要求の拒否で止まる（来ない完了を待ち続けない）。
+    let st = c2.wait_exit(PROBE_BOUND).expect("wait");
+    match st {
+        Some(st) => assert!(!st.success(), "resumed without any notice: {st:?}"),
+        None => {
+            c2.kill("no_notice_bound").expect("bounded kill");
+        }
+    }
+    let entries = read_ledger(&ledger).expect("ledger");
+    assert!(
+        !entries.iter().any(|e| e.event == "external_job_completed"),
+        "nothing completed"
+    );
+    assert!(
+        !entries.iter().any(|e| e.event == "consumed"),
+        "nothing consumed"
+    );
+    // 起動照会は物理 ID の確認だけ: 完了済みとは返らない（完了していない）。
+    assert!(
+        entries
+            .iter()
+            .filter(|e| e.event == "lookup")
+            .all(|e| e.detail.as_ref().is_some_and(|d| d["result"] == "running")),
+        "no lookup saw a completion"
+    );
+    let n = read_notice_ledger(&d.join("notice.jsonl")).expect("notice ledger");
+    assert_eq!(count_notices(&n).continuations, 0, "{n:?}");
+    let mut obs = IpcExt::connect_unix(&sock, "observer", limits.ipc_options());
+    ext.stop(Some(&mut || obs.shutdown_server()), "run_done")
+        .expect("stop external");
+}
+
+#[test]
+fn recovery_notice_continuation() {
+    for arm in ["baseline", "celeris"] {
+        no_notice_probe(arm);
+        notice_run(arm, Stop::AfterAccept);
+        notice_run(arm, Stop::AfterWait);
+    }
+}
+
+#[test]
+fn recovery_lost_response() {
+    for arm in ["baseline", "celeris"] {
+        notice_run(arm, Stop::LostResponse);
+    }
+}
+
+#[test]
+fn notice_raw_is_distinguished_from_poll_era_process_raw() {
+    let d = tempfile::tempdir().expect("dir");
+    let s = spec(1);
+    header_for("baseline", &s, "external_wait_started", 1, 1, &cfg_limits())
+        .write(d.path())
+        .expect("header");
+    // 旧版（通知処理証跡なし）として扱われ、新版の再集計は明示的に拒否する。
+    assert_eq!(raw_kind(d.path()), Ok(RawKind::PollEraProcess));
+    let e = compute_notice(d.path(), "baseline").expect_err("old raw");
+    assert!(e.contains("no notice processing evidence"), "{e}");
+    // in-process の /1 raw は process raw ですらない。
+    let old = tempfile::tempdir().expect("old");
+    RunHeader::from_spec(&spec(1), "baseline", BASELINE_SCOPE)
+        .write(old.path())
+        .expect("old header");
+    assert!(raw_kind(old.path()).is_err());
 }
 
 // ---- 版付き raw と barrier 順序の回帰 ----

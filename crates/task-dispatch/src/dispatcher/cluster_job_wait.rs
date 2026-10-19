@@ -332,6 +332,17 @@ impl Dispatcher {
             tracing::warn!(task_id = %wait.task_id, wait_id = %wait.wait_id, cluster = %wait.cluster, exit = ?out.exit, stderr = %out.stderr.trim(), "cluster job poll returned no job states; retrying after poll_secs (ADR-0090)");
             return Ok(false);
         }
+        self.apply_cluster_job_statuses(wait, statuses, now)
+    }
+
+    /// 完了判定の共通部（poll の結果も通知も通る）。全 job が終わっていれば `finish_cluster_job_wait`（satisfied）、
+    /// 状態が変わっていれば `ClusterJobWaitPolled`、変わらなければ時刻だけ触る。wait を終わらせたら `true`。
+    fn apply_cluster_job_statuses(
+        &mut self,
+        wait: &ClusterJobWait,
+        statuses: Vec<ClusterJobStatus>,
+        now: OffsetDateTime,
+    ) -> Result<bool, DispatchError> {
         if cluster_job::all_finished(&wait.jobs, &statuses) {
             tracing::info!(task_id = %wait.task_id, wait_id = %wait.wait_id, cluster = %wait.cluster, jobs = %cluster_job::status_line(&statuses), "cluster jobs finished; resuming as a continuation run (ADR-0090)");
             self.finish_cluster_job_wait(
@@ -546,6 +557,71 @@ impl Dispatcher {
             .store
             .execution_plan_active(task.id)?
             .is_some_and(|p| !task_core::is_phased_schema(&p.spec.schema)))
+    }
+}
+
+/// 通知入力（wait ID・job ID・通知 ID を持つ。測定 adapter が外部 push の実受信から渡す）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClusterJobNotice {
+    pub wait_id: String,
+    pub job_id: String,
+    pub notice_id: String,
+    pub state: ClusterJobState,
+    pub exit_status: Option<i32>,
+}
+
+/// 通知の処理結果。`Held` 以外は永続の適用が済んでおり、ack してよい（`Held` は ack せず再送を待つ）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClusterJobNoticeOutcome {
+    /// wait がまだ登録されていない（登録前到着）。何も消費せず保留する。
+    Held,
+    /// 状態を適用した（wait は `waiting` のまま）。
+    Applied,
+    /// 全 job が終わり、wait を satisfied にして continuation へ戻した（一度だけ）。
+    Finished,
+    /// wait は既に閉じている、または状態が変わらない（再送・再開後重複）。何も消費しない。
+    Duplicate,
+    /// その wait の job ではない（別 job の通知）。何も消費しない。
+    UnknownJob,
+}
+
+impl Dispatcher {
+    /// 通知の最小接点。poll と同じ完了判定・`finish_cluster_job_wait`・continuation を通る。冪等性は永続の wait の
+    /// 状態と `last_status`（既存 event）だけを根拠にし、測定専用の状態は持たない。
+    #[doc(hidden)]
+    pub fn apply_cluster_job_notice(
+        &mut self,
+        notice: &ClusterJobNotice,
+    ) -> Result<ClusterJobNoticeOutcome, DispatchError> {
+        let Some(wait) = self.store.cluster_job_wait_get(&notice.wait_id)? else {
+            return Ok(ClusterJobNoticeOutcome::Held);
+        };
+        if wait.state != ClusterJobWaitState::Waiting {
+            return Ok(ClusterJobNoticeOutcome::Duplicate);
+        }
+        if !wait.jobs.contains(&notice.job_id) {
+            return Ok(ClusterJobNoticeOutcome::UnknownJob);
+        }
+        let mut statuses: Vec<ClusterJobStatus> = wait.last_status.clone();
+        let fresh = ClusterJobStatus {
+            job_id: notice.job_id.clone(),
+            state: notice.state,
+            exit_status: notice.exit_status,
+            raw_state: None,
+        };
+        match statuses.iter_mut().find(|s| s.job_id == notice.job_id) {
+            Some(s) => *s = fresh,
+            None => statuses.push(fresh),
+        }
+        if state_key(&statuses) == state_key(&wait.last_status) {
+            return Ok(ClusterJobNoticeOutcome::Duplicate);
+        }
+        let now = self.now_utc();
+        Ok(if self.apply_cluster_job_statuses(&wait, statuses, now)? {
+            ClusterJobNoticeOutcome::Finished
+        } else {
+            ClusterJobNoticeOutcome::Applied
+        })
     }
 }
 

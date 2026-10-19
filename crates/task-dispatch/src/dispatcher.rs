@@ -98,7 +98,10 @@ mod browser_prereq;
 mod cluster_job_wait;
 mod credential_gate;
 mod lane_assist;
-pub use cluster_job_wait::{ClusterJobPollRequest, ClusterJobPoller, ssh_cluster_job_poller};
+pub use cluster_job_wait::{
+    ClusterJobNotice, ClusterJobNoticeOutcome, ClusterJobPollRequest, ClusterJobPoller,
+    ssh_cluster_job_poller,
+};
 pub use credential_gate::{CredentialGate, CredentialGates};
 pub use decision_log_wire::record_task_decision_log;
 mod auto_leaf;

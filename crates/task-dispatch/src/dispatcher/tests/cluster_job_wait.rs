@@ -734,3 +734,177 @@ async fn a_leaf_unit_waits_alone_and_liveness_names_the_wait() {
     drop(seen);
     assert_replay_is_clean(&store);
 }
+
+// ---- 通知接点（notice_wait_*）: 通知が poll と同じ完了判定・finish・continuation を通る ----
+
+use crate::dispatcher::{ClusterJobNotice, ClusterJobNoticeOutcome as Notice};
+
+fn notice(
+    wait_id: &str,
+    job: &str,
+    id: &str,
+    state: ClusterJobState,
+    exit: Option<i32>,
+) -> ClusterJobNotice {
+    ClusterJobNotice {
+        wait_id: wait_id.into(),
+        job_id: job.into(),
+        notice_id: id.into(),
+        state,
+        exit_status: exit,
+    }
+}
+
+/// poll は呼ばれるたびに失敗する（完了状態の polling を無効化した試験フック）。呼ばれた回数を返す。
+fn failing_poller(d: &mut Dispatcher) -> Arc<StdMutex<usize>> {
+    let calls = Arc::new(StdMutex::new(0usize));
+    let c = calls.clone();
+    d.set_cluster_job_poller(Arc::new(move |_: &ClusterJobPollRequest| {
+        *c.lock().unwrap() += 1;
+        Err("polling disabled by the test".to_string())
+    }));
+    calls
+}
+
+async fn park(d: &mut Dispatcher, store: &Arc<dyn TaskStore>, id: TaskId) -> String {
+    tick_until(d, |_| {
+        store.get(id).unwrap().unwrap().status == Status::Blocked
+            && !store.cluster_job_waits_for_task(id).unwrap().is_empty()
+    })
+    .await;
+    store.cluster_job_waits_for_task(id).unwrap()[0]
+        .wait_id
+        .clone()
+}
+
+fn finished_count(store: &Arc<dyn TaskStore>, id: TaskId) -> usize {
+    store
+        .events_for(id)
+        .unwrap()
+        .iter()
+        .filter(|(_, e)| matches!(e, Event::ClusterJobWaitFinished { .. }))
+        .count()
+}
+
+/// polling が失敗し続ける間は何 tick・何秒進めても再開せず、通知で一度だけ再開する。
+#[tokio::test]
+async fn notice_wait_resumes_by_notice_only_and_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let (store, mut d, task, adapter, _) = setup(
+        dir.path(),
+        vec![wait_terminal(&["42634", "42635"], None)],
+        vec![],
+    );
+    let calls = failing_poller(&mut d);
+    let id = task.id;
+    let wait_id = park(&mut d, &store, id).await;
+
+    for _ in 0..3 {
+        advance(&d, 31);
+        tick_until(&mut d, |d| d.cluster_job_polls.is_empty()).await;
+    }
+    assert!(
+        *calls.lock().unwrap() >= 1,
+        "the failing poll was attempted"
+    );
+    assert_eq!(store.get(id).unwrap().unwrap().status, Status::Blocked);
+    assert_eq!(
+        adapter.seen.lock().unwrap().len(),
+        1,
+        "no resume without a notice"
+    );
+
+    let f0 = notice(&wait_id, "42634", "n1", ClusterJobState::Finished, Some(0));
+    let f1 = notice(&wait_id, "42635", "n2", ClusterJobState::Finished, Some(0));
+    assert_eq!(d.apply_cluster_job_notice(&f0).unwrap(), Notice::Applied);
+    assert_eq!(store.get(id).unwrap().unwrap().status, Status::Blocked);
+    assert_eq!(d.apply_cluster_job_notice(&f1).unwrap(), Notice::Finished);
+    // 再送・再開後の重複は消費しない。
+    assert_eq!(d.apply_cluster_job_notice(&f1).unwrap(), Notice::Duplicate);
+    assert_eq!(d.apply_cluster_job_notice(&f0).unwrap(), Notice::Duplicate);
+
+    tick_until(&mut d, |_| {
+        store.get(id).unwrap().unwrap().status == Status::Done
+    })
+    .await;
+    assert_eq!(d.apply_cluster_job_notice(&f1).unwrap(), Notice::Duplicate);
+    assert_eq!(finished_count(&store, id), 1);
+    let seen = adapter.seen.lock().unwrap();
+    assert_eq!(seen.len(), 2, "exactly one continuation run");
+    let jobs = seen[1].continuation.clone().unwrap().cluster_jobs.unwrap();
+    assert_eq!(jobs.state, "satisfied");
+    assert!(jobs.jobs[0].starts_with("42634: finished"), "{jobs:?}");
+    drop(seen);
+    assert_replay_is_clean(&store);
+}
+
+/// 登録前到着は保留（何も消費しない）、別 wait・別 job の通知は wait を進めない。
+#[tokio::test]
+async fn notice_wait_holds_early_and_ignores_foreign_notices() {
+    let dir = tempfile::tempdir().unwrap();
+    let (store, mut d, task, adapter, _) =
+        setup(dir.path(), vec![wait_terminal(&["42634"], None)], vec![]);
+    failing_poller(&mut d);
+    let id = task.id;
+    let before = notice(
+        "not-yet-registered",
+        "42634",
+        "n0",
+        ClusterJobState::Finished,
+        Some(0),
+    );
+    assert_eq!(d.apply_cluster_job_notice(&before).unwrap(), Notice::Held);
+    let wait_id = park(&mut d, &store, id).await;
+    let events_before = store.events_for(id).unwrap().len();
+
+    // 別 wait（未知の id）は保留のまま、別 job は拒否。どちらも event を増やさない。
+    assert_eq!(d.apply_cluster_job_notice(&before).unwrap(), Notice::Held);
+    let other_job = notice(&wait_id, "99999", "n1", ClusterJobState::Finished, Some(0));
+    assert_eq!(
+        d.apply_cluster_job_notice(&other_job).unwrap(),
+        Notice::UnknownJob
+    );
+    assert_eq!(store.events_for(id).unwrap().len(), events_before);
+    assert_eq!(store.get(id).unwrap().unwrap().status, Status::Blocked);
+
+    // 登録後に同じ通知（再送）が届けば一度だけ再開する。
+    let real = notice(&wait_id, "42634", "n0", ClusterJobState::Finished, Some(0));
+    assert_eq!(d.apply_cluster_job_notice(&real).unwrap(), Notice::Finished);
+    tick_until(&mut d, |_| {
+        store.get(id).unwrap().unwrap().status == Status::Done
+    })
+    .await;
+    assert_eq!(finished_count(&store, id), 1);
+    assert_eq!(adapter.seen.lock().unwrap().len(), 2);
+}
+
+/// 途中経過（Running）の通知は状態の変化だけ `ClusterJobWaitPolled` に残し、同じ通知の再送は何も足さない。
+#[tokio::test]
+async fn notice_wait_progress_notice_records_change_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let (store, mut d, task, _adapter, _) = setup(
+        dir.path(),
+        vec![wait_terminal(&["42634", "42635"], None)],
+        vec![],
+    );
+    failing_poller(&mut d);
+    let id = task.id;
+    let wait_id = park(&mut d, &store, id).await;
+    let running = notice(&wait_id, "42634", "n1", ClusterJobState::Running, None);
+    assert_eq!(
+        d.apply_cluster_job_notice(&running).unwrap(),
+        Notice::Applied
+    );
+    assert_eq!(
+        d.apply_cluster_job_notice(&running).unwrap(),
+        Notice::Duplicate
+    );
+    let polled = store
+        .events_for(id)
+        .unwrap()
+        .iter()
+        .filter(|(_, e)| matches!(e, Event::ClusterJobWaitPolled { .. }))
+        .count();
+    assert_eq!(polled, 1);
+    assert_eq!(finished_count(&store, id), 0);
+}

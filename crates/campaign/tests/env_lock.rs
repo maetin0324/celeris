@@ -526,7 +526,7 @@ fn unreadable_file_in_mount_stops_pin() {
     let d = tempfile::tempdir().expect("tmp");
     let f = d.path().join("lib");
     fs::write(&f, "x").expect("f");
-    fs::set_permissions(&f, fs::Permissions::from_mode(0)).expect("chmod");
+    fs::set_permissions(&f, fs::Permissions::from_mode(0o0)).expect("chmod");
     if fs::File::open(&f).is_ok() {
         return; // root 等では 000 でも読める
     }

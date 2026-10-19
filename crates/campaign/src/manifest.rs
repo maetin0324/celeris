@@ -1511,7 +1511,7 @@ mod tests {
             "main",
             set(&[ConfigId::A, ConfigId::B], &[(ConfigId::A, ConfigId::B)]),
         );
-        let m1 = with_sets(&[ab.clone()], &["main"]);
+        let m1 = with_sets(std::slice::from_ref(&ab), &["main"]);
         let mut m2 = m1.clone();
         m2.experiment_sets.get_mut("main").unwrap().fixed.success = Some("g2".into());
         assert_ne!(m1.compute_sha256().unwrap(), m2.compute_sha256().unwrap());
@@ -1577,10 +1577,7 @@ mod tests {
             m.experiment_sets.get_mut(n).unwrap().fixed.allocation = Some(half);
         }
         assert!(m.validate().is_ok(), "{:?}", m.validate());
-        m.experiment_sets.get_mut("jev").unwrap().fixed.allocation = Some(Share {
-            trials: trials,
-            ..half
-        });
+        m.experiment_sets.get_mut("jev").unwrap().fixed.allocation = Some(Share { trials, ..half });
         assert!(m.validate().unwrap_err().contains("trials"));
     }
 

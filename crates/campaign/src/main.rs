@@ -20,7 +20,7 @@ use celeris_campaign::{
 const USAGE: &str = "usage: celeris-campaign <human-op|jev-stages|dry-run|validate|collect-observed|series-init|env-lock|offline-lock|config-check|env-check|preflight|cap-probe|cap-worker|run|watch|check|check-report|export|final-accounting|grade-out|usage> --manifest <path> \
 [--interval-secs N] [--max-iterations M] [--cases <grade-case dir> [--initial-trees <dir>]] \
 [--input-manifest <path>] [--out <dir>] [--executor mock|harness|celeris] [--api-url <url> --token-env <ENV_NAME> [--task-template <json>]] [--dest <dir>] \
-[--cases-root <dir>] [--grader-root <dir>] [--grade-case-root <dir>] [--a-program <path>] [--report <file>] [--measurement-id <id>] [--repo-src <dir>] [--materials-src <dir>] [--kb-src <dir>] [--inputs-src <dir>] [--records <records.jsonl>] [--cos-not-called <basis>] [--quota <usage.json>] [--a-account <account_id>] [--measure-config <toml> --normal-config <toml> --canaries <json>] [--models-evidence <json> --models-evidence-sha256 <hex>] [--verify] [--max-7d <ratio>] [--max-7d-codex <ratio>]";
+[--cases-root <dir>] [--grader-root <dir>] [--grade-case-root <dir>] [--a-program <path>] [--report <file>] [--measurement-id <id>] [--repo-src <dir>] [--materials-src <dir>] [--kb-src <dir>] [--inputs-src <dir>] [--records <records.jsonl>] [--cos-not-called <basis>] [--quota <usage.json>] [--a-account <account_id>] [--measure-config <toml> --normal-config <toml> --canaries <json>] [--models-evidence <json> --models-evidence-sha256 <hex>] [--verify] [--variant-b0-sha256 <hex>] [--max-7d <ratio>] [--max-7d-codex <ratio>]";
 
 fn arg(args: &[String], name: &str) -> Option<PathBuf> {
     args.iter()
@@ -80,6 +80,7 @@ fn preflight_inputs(args: &[String], manifest_path: &std::path::Path) -> Inputs 
         }),
         measurement_id: text("--measurement-id"),
         cap_env: arg(args, "--cap-env"),
+        variant_b0_sha256: text("--variant-b0-sha256"),
     }
 }
 

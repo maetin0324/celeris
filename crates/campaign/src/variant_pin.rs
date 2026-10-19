@@ -5,13 +5,17 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Deserialize;
 use serde_json::Value;
-use task_core::profile::EffectiveProfile;
+use sha2::{Digest, Sha256};
+use task_core::{
+    org::OrgNode,
+    profile::{EffectiveProfile, resolve},
+};
 
 use crate::{
     lock::CampaignLock,
     manifest::CampaignManifest,
     variant::{
-        BaselinePin, NonTargetPin, OrgPin, ROOT_NODE, VariantError, VariantSpec,
+        BaselinePin, NonTargetPin, OrgPin, ROOT_NODE, VariantError, VariantId, VariantSpec,
         effective_profile_sha256,
     },
 };
@@ -19,6 +23,7 @@ use crate::{
 /// `GET /api/v1/org` の応答から読んだ組織。継承解決済みの EffectiveProfile を node ごとに持つ。
 #[derive(Clone, Debug)]
 pub struct OrgSnapshot {
+    nodes: Vec<OrgNode>,
     profiles: BTreeMap<String, EffectiveProfile>,
 }
 
@@ -38,15 +43,17 @@ impl OrgSnapshot {
             return Err(bad("items is empty"));
         }
         let mut ids = BTreeSet::new();
+        let mut nodes = Vec::new();
         for it in items {
-            let id = it
-                .get("id")
-                .and_then(Value::as_str)
-                .filter(|s| !s.is_empty())
-                .ok_or_else(|| bad("an item has no id"))?;
-            if !ids.insert(id.to_string()) {
-                return Err(bad(&format!("duplicate node {id}")));
+            let n: OrgNode = serde_json::from_value(it.clone())
+                .map_err(|e| bad(&format!("item is not an org node: {e}")))?;
+            if n.id.is_empty() {
+                return Err(bad("an item has no id"));
             }
+            if !ids.insert(n.id.clone()) {
+                return Err(bad(&format!("duplicate node {}", n.id)));
+            }
+            nodes.push(n);
         }
         let mut profiles = BTreeMap::new();
         for p in profs {
@@ -60,7 +67,21 @@ impl OrgSnapshot {
         if have != ids {
             return Err(bad("effective_profiles do not cover exactly the items"));
         }
-        Ok(OrgSnapshot { profiles })
+        // 応答の実効 profile が items から解いた値と同じこと（全 node digest の入力と食い違わせない）。
+        for n in &nodes {
+            if profiles.get(&n.id) != Some(&resolve(&nodes, &n.id)) {
+                return Err(bad(&format!(
+                    "effective profile of {} differs from the one resolved from items",
+                    n.id
+                )));
+            }
+        }
+        Ok(OrgSnapshot { nodes, profiles })
+    }
+
+    /// 全 node の実効 profile digest。計算は task-core の共有関数（dispatcher / API と同じ）。
+    pub fn digest(&self) -> Result<String, VariantError> {
+        task_core::variant_wire::org_effective_digest(&self.nodes).map_err(VariantError::Org)
     }
 
     pub fn nodes(&self) -> Vec<String> {
@@ -99,6 +120,30 @@ pub struct B0Inputs {
     pub role_models: BTreeMap<String, String>,
     /// B0 daemon の `GET /api/v1/org` 応答。
     pub org: Value,
+}
+
+impl B0Inputs {
+    /// 承認済み sha256（呼び出し側が明示。file の隣に置いた値は使わない）に一致する bytes だけを読む。
+    /// sha256 が不正・不一致なら、中身を解釈する前に拒否する（欠落・改変は preflight の失敗）。
+    pub fn from_sealed(bytes: &[u8], approved_sha256: &str) -> Result<Self, VariantError> {
+        let ok = approved_sha256.len() == 64
+            && approved_sha256
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+        if !ok {
+            return Err(VariantError::Missing(
+                "approved sha256 of variant-b0.json must be 64 lowercase hex".into(),
+            ));
+        }
+        let got = format!("{:x}", Sha256::digest(bytes));
+        if got != approved_sha256 {
+            return Err(VariantError::ContentHash(format!(
+                "variant-b0.json sha256 {got} != approved {approved_sha256}"
+            )));
+        }
+        serde_json::from_slice(bytes)
+            .map_err(|e| VariantError::Baseline(format!("variant-b0.json: {e}")))
+    }
 }
 
 /// B0 の manifest・lock・org から基準を組む。VariantSpec の値は一切使わない。
@@ -164,6 +209,46 @@ pub fn check_live_org(spec: &VariantSpec, live: &OrgSnapshot) -> Result<(), Vari
     Ok(())
 }
 
+/// B0 の全 node（根 cos を含む）と稼働 org の照合。非対象の node（coding 課以外・根 cos）が B0 から動いていないことを見る。
+/// spec-on は全 node の digest（共有関数）が一致、spec-off は B0 と共通の node（根 cos 必須）の profile が一致。
+pub fn check_b0_org(
+    spec: &VariantSpec,
+    b0: &OrgSnapshot,
+    live: &OrgSnapshot,
+) -> Result<(), VariantError> {
+    match spec.variant {
+        VariantId::SpecOn => {
+            if b0.digest()? != live.digest()? {
+                return Err(VariantError::Org(
+                    "live org differs from B0 in some node's effective profile".into(),
+                ));
+            }
+        }
+        VariantId::SpecOff => {
+            let mut seen_root = false;
+            for id in live.nodes() {
+                let (Some(l), Some(b)) = (live.profile(&id), b0.profile(&id)) else {
+                    continue;
+                };
+                if id == ROOT_NODE {
+                    seen_root = true;
+                }
+                if id != spec.org.coding_node
+                    && effective_profile_sha256(l)? != effective_profile_sha256(b)?
+                {
+                    return Err(VariantError::Org(format!("live node {id} differs from B0")));
+                }
+            }
+            if !seen_root {
+                return Err(VariantError::Org(
+                    "root cos is missing from B0 or live".into(),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// manifest・lock・spec・B0・稼働 org を全て照合する（preflight の入口）。
 /// manifest の参照が無い・spec の `VariantRef` と違う（差し替え・再 seal）・lock が結び付いていない・B0 基準と違う場合は拒否。
 pub fn check_pin(
@@ -190,7 +275,8 @@ pub fn check_pin(
     }
     let baseline = baseline_pin(manifest, lock, b0)?;
     spec.verify(&baseline)?;
-    check_live_org(spec, live)
+    check_live_org(spec, live)?;
+    check_b0_org(spec, &OrgSnapshot::from_get_org(&b0.org)?, live)
 }
 
 #[cfg(test)]
@@ -208,27 +294,55 @@ mod tests {
     use serde_json::json;
     use task_core::model::Tier;
 
-    fn profile(node: &str) -> EffectiveProfile {
-        EffectiveProfile {
-            node_id: node.into(),
-            chain: vec!["cos".into(), node.into()],
-            harnesses_allowed: vec!["claude_code".into()],
-            review_harness: Some("claude_code".into()),
-            review_tier: Some(Tier::Standard),
-            max_lane: Some(Tier::Standard),
-            max_attempts: Some(3),
-            deny_tools: vec!["rm".into()],
-            approvals: vec!["merge".into()],
-            ..Default::default()
+    fn org_node(id: &str, attempts: u32) -> OrgNode {
+        use task_core::{org::OrgKind, profile::Profile};
+        let mut profile = Profile::default();
+        profile.harnesses.allowed = vec!["claude_code".into()];
+        profile.review.harness = Some("claude_code".into());
+        profile.review.tier = Some(Tier::Standard);
+        profile.budget.max_lane = Some(Tier::Standard);
+        profile.budget.max_attempts = Some(attempts);
+        profile.deny_tools = vec!["rm".into()];
+        profile.permissions.approvals = vec!["merge".into()];
+        OrgNode {
+            id: id.into(),
+            parent_id: (id != "cos").then(|| "cos".to_string()),
+            name: id.into(),
+            kind: if id == "cos" {
+                OrgKind::Secretary
+            } else {
+                OrgKind::Department
+            },
+            genre: None,
+            brief: String::new(),
+            profile,
+            position: 0,
+            created_at: time::OffsetDateTime::UNIX_EPOCH,
+            updated_at: time::OffsetDateTime::UNIX_EPOCH,
         }
     }
 
-    fn org_json(nodes: &[&str]) -> Value {
+    fn profile(node: &str) -> EffectiveProfile {
+        resolve(&[org_node("cos", 3), org_node(node, 3)], node)
+    }
+
+    fn org_with(nodes: &[&str], tweak: Option<(&str, u32)>) -> Value {
+        let all: Vec<OrgNode> = nodes
+            .iter()
+            .map(|n| match tweak {
+                Some((t, v)) if t == *n => org_node(n, v),
+                _ => org_node(n, 3),
+            })
+            .collect();
         json!({
-            "items": nodes.iter().map(|n| json!({"id": n, "parent_id": null})).collect::<Vec<_>>(),
-            "effective_profiles": nodes.iter().map(|n| profile(n)).collect::<Vec<_>>(),
+            "items": all,
+            "effective_profiles": all.iter().map(|n| resolve(&all, &n.id)).collect::<Vec<_>>(),
             "lead_sessions": []
         })
+    }
+
+    fn org_json(nodes: &[&str]) -> Value {
+        org_with(nodes, None)
     }
 
     fn b0() -> B0Inputs {
@@ -445,12 +559,66 @@ mod tests {
             check_pin(&m, &l, &spec, &b0(), &extra).unwrap_err(),
             VariantError::Org(_)
         ));
-        let mut drift = org_json(&["cos", "coding", "research"]);
-        drift["effective_profiles"][1]["max_attempts"] = json!(9);
-        let drift = OrgSnapshot::from_get_org(&drift).unwrap();
+        let drift = OrgSnapshot::from_get_org(&org_with(
+            &["cos", "coding", "research"],
+            Some(("coding", 2)),
+        ))
+        .unwrap();
         assert!(matches!(
             check_pin(&m, &l, &spec, &b0(), &drift).unwrap_err(),
             VariantError::Org(_)
         ));
+    }
+
+    #[test]
+    fn b0_is_read_only_with_the_approved_sha256() {
+        let text = serde_json::to_vec(&json!({
+            "coding_node": "coding",
+            "role_models": b0().role_models,
+            "org": b0().org,
+        }))
+        .unwrap();
+        let sha = format!("{:x}", Sha256::digest(&text));
+        assert!(B0Inputs::from_sealed(&text, &sha).is_ok());
+        assert!(matches!(
+            B0Inputs::from_sealed(&text, &"0".repeat(64)),
+            Err(VariantError::ContentHash(_))
+        ));
+        for bad in ["", "abc", &sha.to_uppercase()] {
+            assert!(matches!(
+                B0Inputs::from_sealed(&text, bad),
+                Err(VariantError::Missing(_))
+            ));
+        }
+        let mut t = text.clone();
+        t.push(b' ');
+        assert!(B0Inputs::from_sealed(&t, &sha).is_err());
+    }
+
+    #[test]
+    fn all_nodes_and_the_shared_digest_pin_b0_for_both_variants() {
+        for id in [VariantId::SpecOn, VariantId::SpecOff] {
+            let (_, _, spec) = world(id);
+            let b0s = OrgSnapshot::from_get_org(&b0().org).unwrap();
+            let nodes: Vec<&str> = spec.org.nodes.iter().map(String::as_str).collect();
+            let live = OrgSnapshot::from_get_org(&org_json(&nodes)).unwrap();
+            check_b0_org(&spec, &b0s, &live).expect("same");
+            let cos = OrgSnapshot::from_get_org(&org_with(&nodes, Some(("cos", 2)))).unwrap();
+            assert!(check_b0_org(&spec, &b0s, &cos).is_err(), "{id:?} cos drift");
+        }
+        let b0s = OrgSnapshot::from_get_org(&b0().org).unwrap();
+        // 同じ digest を task-core の共有関数からも得る（二重実装なし）。
+        let nodes: Vec<OrgNode> = ["cos", "coding", "research"]
+            .iter()
+            .map(|n| org_node(n, 3))
+            .collect();
+        assert_eq!(
+            b0s.digest().unwrap(),
+            task_core::variant_wire::org_effective_digest(&nodes).unwrap()
+        );
+        // 応答の実効 profile が items と食い違えば拒否。
+        let mut bad = org_json(&["cos", "coding"]);
+        bad["effective_profiles"][1]["max_attempts"] = json!(1);
+        assert!(OrgSnapshot::from_get_org(&bad).is_err());
     }
 }

@@ -64,23 +64,53 @@ impl Host for OrgHost {
 }
 
 fn profile(node: &str) -> EffectiveProfile {
-    EffectiveProfile {
-        node_id: node.into(),
-        chain: vec!["cos".into(), node.into()],
-        harnesses_allowed: vec!["claude_code".into()],
-        review_harness: Some("claude_code".into()),
-        review_tier: Some(Tier::Standard),
-        max_lane: Some(Tier::Standard),
-        max_attempts: Some(3),
-        ..Default::default()
+    let all = [org_node("cos", 3), org_node(node, 3)];
+    task_core::profile::resolve(&all, node)
+}
+
+fn org_node(id: &str, attempts: u32) -> task_core::org::OrgNode {
+    use task_core::{org::OrgKind, profile::Profile};
+    let mut profile = Profile::default();
+    profile.harnesses.allowed = vec!["claude_code".into()];
+    profile.review.harness = Some("claude_code".into());
+    profile.review.tier = Some(Tier::Standard);
+    profile.budget.max_lane = Some(Tier::Standard);
+    profile.budget.max_attempts = Some(attempts);
+    task_core::org::OrgNode {
+        id: id.into(),
+        parent_id: (id != "cos").then(|| "cos".to_string()),
+        name: id.into(),
+        kind: if id == "cos" {
+            OrgKind::Secretary
+        } else {
+            OrgKind::Department
+        },
+        genre: None,
+        brief: String::new(),
+        profile,
+        position: 0,
+        created_at: time::OffsetDateTime::UNIX_EPOCH,
+        updated_at: time::OffsetDateTime::UNIX_EPOCH,
     }
 }
 
-fn org(nodes: &[&str]) -> Value {
+/// 実 API と同じ形（items = OrgNode、effective_profiles = 継承解決済み）。`tweak` の node だけ max_attempts を変える。
+fn org_with(nodes: &[&str], tweak: Option<(&str, u32)>) -> Value {
+    let all: Vec<_> = nodes
+        .iter()
+        .map(|n| match tweak {
+            Some((t, v)) if t == *n => org_node(n, v),
+            _ => org_node(n, 3),
+        })
+        .collect();
     json!({
-        "items": nodes.iter().map(|n| json!({"id": n, "parent_id": null})).collect::<Vec<_>>(),
-        "effective_profiles": nodes.iter().map(|n| profile(n)).collect::<Vec<_>>(),
+        "items": all,
+        "effective_profiles": all.iter().map(|n| task_core::profile::resolve(&all, &n.id)).collect::<Vec<_>>(),
     })
+}
+
+fn org(nodes: &[&str]) -> Value {
+    org_with(nodes, None)
 }
 
 fn b0() -> B0Inputs {
@@ -97,6 +127,11 @@ fn b0() -> B0Inputs {
 fn write_b0(dir: &Path, b: &B0Inputs) {
     let v = json!({"coding_node": b.coding_node, "role_models": b.role_models, "org": b.org});
     fs::write(dir.join("variant-b0.json"), v.to_string()).unwrap();
+}
+
+fn sha_of(p: &Path) -> String {
+    use sha2::{Digest, Sha256};
+    format!("{:x}", Sha256::digest(fs::read(p).unwrap()))
 }
 
 /// B0（variant なし）から spec を作り、manifest に参照を書き、spec・B0 を manifest の隣に置く。
@@ -125,7 +160,9 @@ fn wire(s: &Setup, id: VariantId) -> (VariantSpec, Inputs) {
     )
     .unwrap();
     write_b0(d, &b0());
-    (spec, s.inp.clone())
+    let mut inp = s.inp.clone();
+    inp.variant_b0_sha256 = Some(sha_of(&d.join("variant-b0.json")));
+    (spec, inp)
 }
 
 fn variant_missing(r: &celeris_campaign::preflight::Report) -> Vec<String> {
@@ -188,5 +225,58 @@ fn both_variants_pass_and_every_drift_or_gap_is_rejected() {
         let b = s.dir.path().join("variant-b0.json");
         fs::remove_file(&b).unwrap();
         assert!(!variant_missing(&check(&inp, &ok)).is_empty());
+    }
+}
+
+#[test]
+fn b0_input_must_match_the_approved_sha256() {
+    let s = setup();
+    let (_, inp) = wire(&s, VariantId::SpecOn);
+    let nodes = ["cos", "coding", "research"];
+    let ok = OrgHost { org: org(&nodes) };
+    assert!(check(&inp, &ok).ok);
+    // 承認済み sha256 の未指定・誤り。
+    let mut none = inp.clone();
+    none.variant_b0_sha256 = None;
+    assert!(!variant_missing(&check(&none, &ok)).is_empty());
+    let mut wrong = inp.clone();
+    wrong.variant_b0_sha256 = Some("0".repeat(64));
+    assert!(!variant_missing(&check(&wrong, &ok)).is_empty());
+    let mut upper = inp.clone();
+    upper.variant_b0_sha256 = inp.variant_b0_sha256.as_ref().map(|h| h.to_uppercase());
+    assert!(!variant_missing(&check(&upper, &ok)).is_empty());
+    // 内容の改変（根 cos の profile を書き換えて承認 sha256 と食い違わせる）。
+    let p = s.dir.path().join("variant-b0.json");
+    let mut v: Value = serde_json::from_slice(&fs::read(&p).unwrap()).unwrap();
+    v["org"] = org_with(&nodes, Some(("cos", 2)));
+    fs::write(&p, v.to_string()).unwrap();
+    assert!(!variant_missing(&check(&inp, &ok)).is_empty());
+}
+
+#[test]
+fn non_target_node_drift_from_b0_is_rejected_for_every_node_and_variant() {
+    for id in [VariantId::SpecOn, VariantId::SpecOff] {
+        let s = setup();
+        let (spec, inp) = wire(&s, id);
+        let nodes: Vec<&str> = spec.org.nodes.iter().map(String::as_str).collect();
+        assert!(check(&inp, &OrgHost { org: org(&nodes) }).ok);
+        // 根 cos の drift は両 variant で拒否。
+        let r = check(
+            &inp,
+            &OrgHost {
+                org: org_with(&nodes, Some(("cos", 2))),
+            },
+        );
+        assert!(!variant_missing(&r).is_empty(), "{id:?} cos");
+        // spec-on は coding 課以外（research）の drift も拒否。
+        if id == VariantId::SpecOn {
+            let r = check(
+                &inp,
+                &OrgHost {
+                    org: org_with(&nodes, Some(("research", 2))),
+                },
+            );
+            assert!(!variant_missing(&r).is_empty(), "research");
+        }
     }
 }

@@ -209,6 +209,8 @@ pub struct Inputs {
     pub measurement_id: Option<String>,
     /// 必要能力 probe の環境設定（`celeris.campaign-cap-env/1`）。case が required_capabilities を持てば必須。
     pub cap_env: Option<PathBuf>,
+    /// `variant-b0.json` の承認済み sha256（呼び出し側が明示）。manifest が variant を参照するとき必須。
+    pub variant_b0_sha256: Option<String>,
 }
 
 /// 測定環境の汚染検査の入力。
@@ -550,10 +552,16 @@ fn check_variant(a: &mut Acc, m: &CampaignManifest, inp: &Inputs, host: &dyn Hos
         })
     });
     let b0 = a.res("variant", {
-        load("variant-b0.json").and_then(|t| {
-            serde_json::from_str::<crate::variant_pin::B0Inputs>(&t)
+        match &inp.variant_b0_sha256 {
+            None => {
+                Err("--variant-b0-sha256 (approved sha256 of variant-b0.json) is required".into())
+            }
+            Some(sha) => fs::read(dir.join("variant-b0.json"))
                 .map_err(|e| format!("variant-b0.json: {e}"))
-        })
+                .and_then(|b| {
+                    crate::variant_pin::B0Inputs::from_sealed(&b, sha).map_err(|e| e.to_string())
+                }),
+        }
     });
     let lock = a.res("variant", expected_lock(inp, m));
     let (Some(url), Some(tok)) = (&inp.api_url, &inp.token_env) else {

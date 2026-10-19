@@ -193,6 +193,7 @@ pub fn setup() -> Setup {
         measure: Some(measure),
         measurement_id: None,
         cap_env: Some(write_cap_env(d)),
+        variant_b0_sha256: None,
     };
     Setup { dir, inp }
 }

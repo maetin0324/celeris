@@ -407,6 +407,19 @@ pub(super) fn write_decision_log(
             proposal.request_class = proposal.request_class.or_else(|| o.request_class.clone());
             proposal.routing_mode = proposal.routing_mode.or_else(|| o.routing_mode.clone());
             proposal.classifier = proposal.classifier.or_else(|| o.classifier.clone());
+            // lane 層の各段（分類 status・call ID・fixed / Jev / 制約後 lane）。routing event の無い再投影で消さない。
+            proposal.classifier_status = proposal
+                .classifier_status
+                .or_else(|| o.classifier_status.clone());
+            proposal.classifier_call_id = proposal
+                .classifier_call_id
+                .or_else(|| o.classifier_call_id.clone());
+            proposal.fixed_lane = proposal.fixed_lane.or_else(|| o.fixed_lane.clone());
+            proposal.jev_lane = proposal.jev_lane.or_else(|| o.jev_lane.clone());
+            proposal.constrained_lane = proposal
+                .constrained_lane
+                .or_else(|| o.constrained_lane.clone());
+            proposal.lane_basis = proposal.lane_basis.or_else(|| o.lane_basis.clone());
             proposal.prompt_version = proposal.prompt_version.or_else(|| o.prompt_version.clone());
             proposal.question_schema_version = proposal
                 .question_schema_version

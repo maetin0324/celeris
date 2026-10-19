@@ -167,6 +167,36 @@ fn is_credential_failure(status: &ClassifierStatus) -> bool {
     matches!(status, ClassifierStatus::FellBackToFixed { reason } if reason == "key_missing" || reason == "auth")
 }
 
+/// 分類 1 call の消費行。分類を試みていない（`NotAttempted`）call は None。RD・DL の `call_id` は
+/// この行の鍵（`UsageKey::dedup_key`）と同一で、`jev_call_id(subject, call_no)` とは別（outcome と board の call_id を含む）。
+fn jev_usage_row(
+    task_id: &str,
+    subject: &str,
+    call: &BoardCall,
+    campaign_id: Option<&str>,
+) -> Option<task_core::decision_log::DecisionLogUsage> {
+    let entry = &call.item.entry;
+    let outcome = match &entry.status {
+        ClassifierStatus::NotAttempted => return None,
+        ClassifierStatus::JevOk => "ok".to_string(),
+        ClassifierStatus::FellBackToFixed { reason } => {
+            format!(
+                "fallback:{}",
+                reason.split([' ', ':']).next().unwrap_or("unknown")
+            )
+        }
+    };
+    let mut usage = task_core::decision_log::DecisionLogUsage::jev_call(
+        &format!("{subject}:{outcome}:{}", call.call_id),
+        call.call_no,
+        task_id,
+        campaign_id,
+        entry.cost_usd,
+    );
+    usage.is_retry = call.call_no > 1;
+    Some(usage)
+}
+
 impl Dispatcher {
     /// daemon の配線（bootstrap・reload）。既定は `Fixed`。
     pub fn set_routing_mode(&mut self, mode: RoutingMode) {
@@ -208,31 +238,15 @@ impl Dispatcher {
     /// 保持し、返らなければ欠測（NULL）のまま 0 にしない。分類を試みていない（`NotAttempted`）ときは書かない。
     /// 記録の失敗で dispatch は止めない。
     fn record_jev_usage(&self, task: &Task, subject: &str, call: &BoardCall) {
-        let entry = &call.item.entry;
-        let outcome = match &entry.status {
-            ClassifierStatus::NotAttempted => return,
-            ClassifierStatus::JevOk => "ok".to_string(),
-            ClassifierStatus::FellBackToFixed { reason } => {
-                format!(
-                    "fallback:{}",
-                    reason.split([' ', ':']).next().unwrap_or("unknown")
-                )
-            }
-        };
         let task_id = task.id.to_string();
         let result = (|| -> Result<(), task_core::StoreError> {
             let campaign = self
                 .store
                 .task_campaign_resolve(&task_id)?
                 .map(|c| c.campaign_id);
-            let mut usage = task_core::decision_log::DecisionLogUsage::jev_call(
-                &format!("{subject}:{outcome}:{}", call.call_id),
-                call.call_no,
-                &task_id,
-                campaign.as_deref(),
-                entry.cost_usd,
-            );
-            usage.is_retry = call.call_no > 1;
+            let Some(usage) = jev_usage_row(&task_id, subject, call, campaign.as_deref()) else {
+                return Ok(());
+            };
             self.store.decision_log_record_usage(&usage, self.now_utc())
         })();
         if let Err(e) = result {
@@ -256,7 +270,8 @@ impl Dispatcher {
         for call in self.classification_board.take_unrecorded(&subject) {
             self.record_jev_usage(task, &subject, &call);
         }
-        let item = self.classification_board.get(&subject);
+        let call = self.classification_board.get_call(&subject);
+        let item = call.as_ref().map(|c| c.item.clone());
         let limits = self.lane_limits_for(task)?;
         // 利用可否はコード側（route_select の admission）。引き上げ先の lane だけ事前に調べる。
         let mut open = HashMap::new();
@@ -281,6 +296,17 @@ impl Dispatcher {
             },
             |t| open.get(&t).copied().unwrap_or(false),
         );
+        let mut record = outcome.record;
+        // 版・call ID は今回使った call（board の current）のもの。欠測は None のまま（設定値・response_model から複製しない）。
+        if let (Some(record), Some(call)) = (record.as_mut(), call.as_ref()) {
+            record.response_model = record
+                .response_model
+                .take()
+                .or_else(|| call.provenance.response_model.clone());
+            record.observed_snapshot = call.provenance.observed_snapshot.clone();
+            record.call_id = jev_usage_row(&task.id.to_string(), &subject, call, None)
+                .map(|u| u.key.dedup_key());
+        }
         if outcome.lane != decision.lane {
             decision.reasons.push(format!(
                 "lane assist (decision_assisted): {} -> {}",
@@ -296,8 +322,8 @@ impl Dispatcher {
             && !self.credential_gates.is_registered(&gate.secret_id)
         {
             self.enter_credential_wait(task, wu, gate)?;
-            return Ok((outcome.record, true));
+            return Ok((record, true));
         }
-        Ok((outcome.record, false))
+        Ok((record, false))
     }
 }

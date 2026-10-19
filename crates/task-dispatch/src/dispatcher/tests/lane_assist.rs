@@ -4,6 +4,7 @@
 use super::credential_gate::{SECRET, unit};
 use super::*;
 use crate::dispatcher::{BoardItem, ClassificationBoard, CredentialGate, CredentialGates};
+use serde_json::Value;
 use task_core::route_select::{
     ClassificationEntry, ClassificationHint, ClassifierStatus, LaneAssistRecord, RoutingMode,
     SpecificityHint,
@@ -592,4 +593,205 @@ fn board_call_provenance_is_bound_to_call_id_and_missing_is_none() {
     assert_eq!(calls[2].call_id, cur.call_id);
     assert_ne!(calls[1].call_id, calls[2].call_id);
     assert!(board.take_unrecorded("s").is_empty());
+}
+
+/// dispatch-wire: 通常 tick → routing_decided → 永続 DB 再 open → export → 再読込で、分類 status・応答版・各 lane・
+/// call ID・実行 model が同じ run に結び付いて残る。DL を手で埋めない（dispatcher の通常配線だけが書く）。
+/// 再分類 call（board の call_no）と実行 retry（run の attempt）は別。fake の分類結果であり実 API 成功ではない。
+#[tokio::test]
+async fn normal_tick_provenance_survives_reopen_export_and_reload() {
+    use task_core::decision_log::{CampaignIdentity, DecisionLogUsage, UsageRole};
+    let ws = tempfile::tempdir().unwrap();
+    let db = ws.path().join("tasks.db");
+    let mut run_ids = Vec::new();
+    let mut tasks = Vec::new();
+    {
+        let sqlite = Arc::new(SqliteStore::open(&db).unwrap());
+        let store: Arc<dyn TaskStore> = sqlite.clone();
+        let mut d = dispatcher(store.clone(), question_adapter(), 2);
+        d.set_routing_mode(RoutingMode::DecisionAssisted);
+        // task A: 1 回目 timeout fallback → 再分類が成功（応答 model あり・独立 snapshot なし）。
+        // task B: 分類 call なし（NotAttempted）。task C: 成功し独立 snapshot も観測。
+        for (name, calls) in [("a", 2u8), ("b", 0), ("c", 1)] {
+            let dir = ws.path().join(name);
+            std::fs::create_dir_all(&dir).unwrap();
+            let task = hinted_task(&dir, task_core::TierSource::Hint);
+            store.insert(&task).unwrap();
+            sqlite
+                .task_campaign_set(
+                    &task.id.to_string(),
+                    &CampaignIdentity {
+                        campaign_id: "camp-w".into(),
+                        case_id: Some(format!("case-{name}")),
+                        arm: None,
+                        repetition: None,
+                        manifest_hash: None,
+                        routing_setting: None,
+                    },
+                    OffsetDateTime::now_utc(),
+                )
+                .unwrap();
+            let subject = task.id.to_string();
+            let board = d.classification_board();
+            if calls == 2 {
+                board.put(
+                    &subject,
+                    BoardItem {
+                        entry: ClassificationEntry::fell_back("timeout"),
+                        credential: None,
+                    },
+                );
+            }
+            if calls >= 1 {
+                let mut item = jev_ok(SpecificityHint::NeedsInvestigationDesign);
+                item.entry.cost_usd = Some(0.0004);
+                item.entry.model_snapshot = Some("jev-resp".into());
+                board.put_with_provenance(
+                    &subject,
+                    item,
+                    crate::dispatcher::CallProvenance {
+                        response_model: Some("jev-resp".into()),
+                        observed_snapshot: (name == "c").then(|| "snap-7".to_string()),
+                    },
+                );
+            }
+            tasks.push((name, task));
+        }
+        for _ in 0..400 {
+            d.tick().unwrap();
+            let done = tasks.iter().all(|(_, t)| {
+                store
+                    .events_for(t.id)
+                    .unwrap()
+                    .iter()
+                    .any(|(_, e)| matches!(e, Event::WorkerFinished { .. }))
+            });
+            if done {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        // 再投影（もう一度 tick）しても二重計上しない。
+        d.tick().unwrap();
+        d.tick().unwrap();
+        for (_, t) in &tasks {
+            let run_id = store
+                .events_for(t.id)
+                .unwrap()
+                .iter()
+                .find_map(|(_, e)| match e {
+                    Event::WorkerStarted { run_id, .. } => Some(run_id.clone()),
+                    _ => None,
+                })
+                .expect("worker_started");
+            run_ids.push(run_id);
+        }
+    }
+    // 永続 DB を開き直す。
+    let sqlite = SqliteStore::open(&db).unwrap();
+    let params = task_core::decision_log_export::ExportParams {
+        campaign_id: "camp-w".into(),
+        manifest_hash: None,
+        export_cursor: None,
+    };
+    let jsonl = sqlite
+        .decision_log_export_campaign(&params)
+        .unwrap()
+        .records_jsonl();
+    let rows: Vec<Value> = jsonl
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    let trial = |run_id: &str| -> &Value {
+        rows.iter()
+            .find(|r| r["record_type"] == "trial" && r["run_id"] == run_id)
+            .unwrap_or_else(|| panic!("trial {run_id}"))
+    };
+    let usage: Vec<_> = sqlite
+        .decision_log_usage_list(Some("camp-w"))
+        .unwrap()
+        .into_iter()
+        .filter(|u| u.role == UsageRole::Jev)
+        .collect();
+    // A: 2 call（fallback + 成功）、C: 1 call、B: 0。再投影・再 open で増えない。
+    assert_eq!(usage.len(), 3);
+    let key_of = |t: &Task, status_part: &str| -> String {
+        let subject = t.id.to_string();
+        usage
+            .iter()
+            .find(|u| {
+                u.task_id.as_deref() == Some(subject.as_str())
+                    && u.key.dedup_key().contains(&format!(":{status_part}:"))
+            })
+            .unwrap_or_else(|| panic!("usage {status_part}"))
+            .key
+            .dedup_key()
+    };
+    let (a, b, c) = (&tasks[0].1, &tasks[1].1, &tasks[2].1);
+
+    // A: 再分類の成功 call（call_no 2）を使う。応答 model あり・独立 snapshot は欠測のまま。
+    let ta = trial(&run_ids[0]);
+    assert_eq!(ta["classifier_status"], "jev_ok");
+    assert_eq!(ta["classifier_model"], "jev-resp");
+    assert_eq!(ta["classifier_snapshot"], Value::Null);
+    assert_eq!(ta["fixed_lane"], Value::Null);
+    assert_eq!(ta["jev_lane"], "frontier");
+    assert_eq!(ta["constrained_lane"], "frontier");
+    assert_eq!(ta["lane_basis"], "classification_raise");
+    let call_a = key_of(a, "ok");
+    assert_eq!(ta["classifier_call_id"], call_a.as_str());
+    assert_ne!(
+        ta["classifier_call_id"],
+        key_of(a, "fallback:timeout").as_str()
+    );
+    assert_ne!(
+        ta["classifier_call_id"],
+        DecisionLogUsage::jev_call_id(&a.id.to_string(), 2).as_str(),
+        "RD の call_id は実際の消費行の鍵（jev_call_id の推定値ではない）"
+    );
+    assert_eq!(ta["task_id"], a.id.to_string());
+    assert_eq!(ta["attempt_no"], 0, "再分類は実行の attempt を進めない");
+    assert!(
+        ta["exec_model"].is_string(),
+        "実行 model は実行イベント由来"
+    );
+
+    // C: 独立 snapshot を観測した call だけが snapshot を持つ。
+    let tc = trial(&run_ids[2]);
+    assert_eq!(tc["classifier_snapshot"], "snap-7");
+    assert_eq!(tc["classifier_model"], "jev-resp");
+    assert_eq!(tc["classifier_call_id"], key_of(c, "ok").as_str());
+    assert_ne!(
+        tc["classifier_call_id"], ta["classifier_call_id"],
+        "別 task の call が混ざらない"
+    );
+
+    // B: 分類を試みていない。status だけ残り、model・snapshot・call は欠測（null）。
+    let tb = trial(&run_ids[1]);
+    assert_eq!(tb["classifier_status"], "not_attempted");
+    assert_eq!(tb["classifier_call_id"], Value::Null);
+    assert_eq!(tb["classifier_model"], Value::Null);
+    assert_eq!(tb["classifier_snapshot"], Value::Null);
+    assert_eq!(tb["task_id"], b.id.to_string());
+
+    // 再読込: routing_decided の RD と DL の call_id が一致し、export を再 export しても同じ。
+    let again = sqlite
+        .decision_log_export_campaign(&params)
+        .unwrap()
+        .records_jsonl();
+    assert_eq!(again, jsonl);
+    let la = |t: &Task| {
+        let evs = sqlite.events_for(t.id).unwrap();
+        evs.into_iter()
+            .find_map(|(_, e)| match e {
+                Event::RoutingDecided { record, .. } => lane_assist_of(&record),
+                _ => None,
+            })
+            .unwrap()
+    };
+    let rd_a = la(a);
+    assert_eq!(rd_a.call_id.as_deref(), Some(call_a.as_str()));
+    assert_eq!(rd_a.observed_snapshot, None);
+    assert_eq!(la(c).observed_snapshot.as_deref(), Some("snap-7"));
+    assert_eq!(la(b).call_id, None);
 }

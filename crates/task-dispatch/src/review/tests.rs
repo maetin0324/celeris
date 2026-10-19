@@ -1379,7 +1379,7 @@ fn deterministic_check_results_cover_implicit_checks_and_truncate_reasons() {
 /// reviewer の process は run 専用の `TMPDIR` を受け取り、drop で消える。
 #[test]
 fn reviewer_run_gets_a_run_tmpdir_that_is_removed_on_drop() {
-    struct EnvAdapter(Vec<(String, String)>);
+    struct EnvAdapter;
     #[async_trait]
     impl WorkerAdapter for EnvAdapter {
         fn id(&self) -> &str {
@@ -1394,12 +1394,12 @@ fn reviewer_run_gets_a_run_tmpdir_that_is_removed_on_drop() {
         ) -> Result<RunOutcome, AdapterError> {
             Err(AdapterError::Other("unused".into()))
         }
-        fn with_env(&self, extra: &[(String, String)]) -> Option<Arc<dyn WorkerAdapter>> {
-            Some(Arc::new(EnvAdapter(extra.to_vec())))
+        fn with_env(&self, _extra: &[(String, String)]) -> Option<Arc<dyn WorkerAdapter>> {
+            Some(Arc::new(EnvAdapter))
         }
     }
     let ws = tempfile::tempdir().unwrap();
-    let base: Arc<dyn WorkerAdapter> = Arc::new(EnvAdapter(Vec::new()));
+    let base: Arc<dyn WorkerAdapter> = Arc::new(EnvAdapter);
     let (adapter, tmp) = with_run_tmpdir(&base, ws.path(), "rev1");
     let tmp = tmp.expect("run tmpdir");
     let dir = tmp.path().to_path_buf();

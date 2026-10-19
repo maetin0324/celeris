@@ -39,8 +39,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::{
-    ext::{ExtBackend, ExtConfig, ExtSim},
+    ext::{DATASET, ExtBackend, ExtConfig, ExtSim, read_ledger},
     ipc::{self, IpcExt},
+    metrics::{PROCESS_RAW_SCHEMA, RAW_SCHEMA, raw_schema_of},
 };
 
 /// role 再起動の入口で見る環境変数（`external` / 試験が決めたその他の値）。
@@ -238,6 +239,17 @@ impl OwnedProc {
                 io::Error::new(io::ErrorKind::UnexpectedEof, "child closed stdout")
             }
         })
+    }
+
+    /// child の stdin へ 1 行送る（試験が child に「進んでよい」を伝える出来事。child は stdin の行を待つ）。
+    pub fn send_line(&mut self, line: &str) -> io::Result<()> {
+        let w = self
+            .stdin
+            .as_mut()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::BrokenPipe, "child stdin closed"))?;
+        w.write_all(line.as_bytes())?;
+        w.write_all(b"\n")?;
+        w.flush()
     }
 
     /// 自分で終わったか（回収はしない側の確認ではなく、回収込み）。
@@ -476,6 +488,8 @@ pub struct ObserverOutcome {
     pub final_now: u64,
     pub high_seq: u64,
     pub unacked: usize,
+    /// 最後の `observe` 応答時点で sync 済みの External ledger の最終 seq（完了 ledger の sync ack）。
+    pub ledger_seq: u64,
 }
 
 /// control 不在でも、`logicals` の各 job の期限まで外部時計を進めて完了させる（ledger は External が sync 追記する）。
@@ -493,6 +507,7 @@ pub fn observe_until_complete(
         final_now: 0,
         high_seq: 0,
         unacked: 0,
+        ledger_seq: 0,
     };
     for l in logicals {
         if Instant::now() >= wall_deadline {
@@ -525,14 +540,15 @@ pub fn observe_until_complete(
                 limits.logical_secs
             )));
         }
-        let (now, high_seq, unacked) = ipc.observe(due)?;
+        let (now, high_seq, unacked, ledger_seq) = ipc.observe(due)?;
         out.advances += 1;
-        (out.final_now, out.high_seq, out.unacked) = (now, high_seq, unacked);
+        (out.final_now, out.high_seq, out.unacked, out.ledger_seq) =
+            (now, high_seq, unacked, ledger_seq);
         log.barrier(
             "observer_advance",
             json!({
                 "logical": l, "target_secs": due, "now": now,
-                "high_seq": high_seq, "unacked": unacked,
+                "high_seq": high_seq, "unacked": unacked, "ledger_seq": ledger_seq,
             }),
         )?;
     }
@@ -563,4 +579,237 @@ pub fn run_external_role_from_env() -> io::Result<()> {
         Path::new(&var(LEDGER_ENV)?),
         cfg,
     )
+}
+
+// ---- process raw（版 /2）と barrier 順序の検証 ----
+
+/// barrier 名（[`verify_survival_barriers`] が順序を検証する）。
+pub const B_CONTROL_ACKED: &str = "control_acked";
+pub const B_CONTROL_EXIT_ACK: &str = "control_exit_ack";
+pub const B_OBSERVER_ADVANCE: &str = "observer_advance";
+pub const B_LEDGER_SYNC_ACK: &str = "ledger_sync_ack";
+pub const B_CONTROL_RESUME: &str = "control_resume";
+pub const B_CONTROL_DONE: &str = "control_done";
+
+/// process raw の `run.json`（版 [`PROCESS_RAW_SCHEMA`]）。旧 in-process の `RunHeader`（/1）とは欄も版も別。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProcessRunHeader {
+    pub schema: String,
+    pub dataset: String,
+    pub arm: String,
+    pub scenario: String,
+    pub point: String,
+    /// 障害（control kill）の位置の seed・event・nth（`nth = 1 + seed % occurrences`）。
+    pub seed: u64,
+    pub event: String,
+    pub nth: u64,
+    pub occurrences: u64,
+    pub poll_secs: u64,
+    pub ext_job_secs: u64,
+    pub worker_slots: usize,
+    pub external_job_slots: usize,
+    /// wall / logical / restart / IPC の上限。
+    pub limits: Limits,
+}
+
+impl ProcessRunHeader {
+    pub fn write(&self, raw: &Path) -> io::Result<()> {
+        std::fs::write(
+            raw.join("run.json"),
+            serde_json::to_string_pretty(self).map_err(io::Error::other)?,
+        )
+    }
+}
+
+/// barrier から読み取れる「制御不在での外部完了」の証明。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SurvivalProof {
+    pub control_pid: u32,
+    pub external_pid: u32,
+    pub external_incarnation: u64,
+    pub observer_advances: usize,
+    pub ledger_seq: u64,
+    pub completed: Vec<String>,
+    pub resumed_incarnation: u64,
+}
+
+fn u(v: &Value, k: &str) -> Result<u64, String> {
+    v[k].as_u64().ok_or_else(|| format!("missing {k} in {v}"))
+}
+
+/// 証跡 event の列から barrier 順序を検証する:
+/// `control_acked` → control の `process_stopped`（SIGKILL・回収済）→ `control_exit_ack` → `observer_advance`+ →
+/// `ledger_sync_ack` → `control_resume` → control 再起動（incarnation 2）→ `control_done`。
+/// 終了 ack から完了 ack の間に control の `process_started` が無く、同じ External（pid/incarnation）が
+/// `control_acked` と `ledger_sync_ack` の両方に載り、その間に停止していないこと。
+pub fn verify_survival_barriers(events: &[Value]) -> Result<SurvivalProof, String> {
+    let barrier = |name: &str| -> Result<&Value, String> {
+        events
+            .iter()
+            .find(|e| e["kind"] == "barrier" && e["name"] == name)
+            .ok_or_else(|| format!("barrier {name} missing"))
+    };
+    let seq = |v: &Value| u(v, "seq");
+    let acked = barrier(B_CONTROL_ACKED)?;
+    let exit = barrier(B_CONTROL_EXIT_ACK)?;
+    let sync = barrier(B_LEDGER_SYNC_ACK)?;
+    let resume = barrier(B_CONTROL_RESUME)?;
+    let done = barrier(B_CONTROL_DONE)?;
+    let ordered = [acked, exit, sync, resume, done]
+        .iter()
+        .map(|b| seq(b))
+        .collect::<Result<Vec<_>, _>>()?;
+    if !ordered.windows(2).all(|w| w[0] < w[1]) {
+        return Err(format!("barrier order violated: {ordered:?}"));
+    }
+    let advances: Vec<&Value> = events
+        .iter()
+        .filter(|e| e["kind"] == "barrier" && e["name"] == B_OBSERVER_ADVANCE)
+        .collect();
+    if advances.is_empty() {
+        return Err("no observer_advance barrier".into());
+    }
+    for a in &advances {
+        let s = seq(a)?;
+        if s <= seq(exit)? || s >= seq(sync)? {
+            return Err(format!(
+                "observer_advance seq {s} is outside (control_exit_ack, ledger_sync_ack)"
+            ));
+        }
+    }
+    let control_pid = u(exit, "pid")? as u32;
+    let stopped = events
+        .iter()
+        .find(|e| {
+            e["kind"] == "process_stopped"
+                && e["role"] == "control"
+                && e["incarnation"] == 1
+                && e["pid"] == control_pid
+        })
+        .ok_or("control incarnation 1 process_stopped missing")?;
+    if !(seq(acked)? < seq(stopped)? && seq(stopped)? < seq(exit)?) {
+        return Err(
+            "control exit must be reaped (process_stopped) between acked and exit ack".into(),
+        );
+    }
+    if stopped["exit_signal"] != 9 {
+        return Err(format!("control was not SIGKILLed: {stopped}"));
+    }
+    // 終了 ack〜再開の間に control は居ない。
+    let hi = seq(resume)?;
+    if events.iter().any(|e| {
+        e["kind"] == "process_started"
+            && e["role"] == "control"
+            && seq(e).is_ok_and(|s| s > seq(acked).unwrap_or(0) && s < hi)
+            && e["incarnation"] != 1
+    }) {
+        return Err("a control process started before control_resume".into());
+    }
+    // 同じ External が両 barrier に載り、その間に止まっていない。
+    let (xp, xi) = (u(acked, "external_pid")?, u(acked, "external_incarnation")?);
+    if (xp, xi) != (u(sync, "external_pid")?, u(sync, "external_incarnation")?) {
+        return Err("external identity changed between control_acked and ledger_sync_ack".into());
+    }
+    if events.iter().any(|e| {
+        e["kind"] == "process_stopped"
+            && e["pid"] == xp
+            && seq(e).is_ok_and(|s| s < seq(sync).unwrap_or(0))
+    }) {
+        return Err("external stopped before ledger_sync_ack".into());
+    }
+    if !events
+        .iter()
+        .any(|e| e["kind"] == "process_started" && e["role"] == "external" && e["pid"] == xp)
+    {
+        return Err("external process_started missing".into());
+    }
+    let completed: Vec<String> = sync["completed"]
+        .as_array()
+        .ok_or("ledger_sync_ack.completed missing")?
+        .iter()
+        .filter_map(|v| v.as_str().map(str::to_string))
+        .collect();
+    if completed.is_empty() {
+        return Err("ledger_sync_ack has no completed job".into());
+    }
+    let ledger_seq = u(sync, "ledger_seq")?;
+    if u(sync, "max_completed_seq")? > ledger_seq || u(sync, "ledger_file_seq")? < ledger_seq {
+        return Err("ledger_sync_ack: completion not covered by the synced ledger seq".into());
+    }
+    let restarted = events
+        .iter()
+        .find(|e| {
+            e["kind"] == "process_started"
+                && e["role"] == "control"
+                && e["incarnation"] != 1
+                && seq(e).is_ok_and(|s| s > hi)
+        })
+        .ok_or("control was not restarted after control_resume")?;
+    Ok(SurvivalProof {
+        control_pid,
+        external_pid: xp as u32,
+        external_incarnation: xi,
+        observer_advances: advances.len(),
+        ledger_seq,
+        completed,
+        resumed_incarnation: u(restarted, "incarnation")?,
+    })
+}
+
+/// process raw の集計結果。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ProcessSummary {
+    pub schema: String,
+    pub arm: String,
+    pub seed: u64,
+    pub event: String,
+    pub nth: u64,
+    pub proof: SurvivalProof,
+    pub physical_launches: usize,
+    pub logical_jobs: usize,
+    pub consumed: usize,
+    pub notices_sent: usize,
+}
+
+/// process raw dir（版 [`PROCESS_RAW_SCHEMA`]）だけを集計する入口。旧 in-process の `/1` raw は
+/// 新方式として読み替えず、明示的に拒否する（`dagbench::metrics::compute` は逆に /2 を拒否する）。
+pub fn compute_process(raw: &Path) -> Result<ProcessSummary, String> {
+    let run_json =
+        std::fs::read_to_string(raw.join("run.json")).map_err(|e| format!("run.json: {e}"))?;
+    let schema = raw_schema_of(&run_json)?;
+    if schema == RAW_SCHEMA {
+        return Err(format!(
+            "{RAW_SCHEMA} is an in-process raw; process aggregation reads only {PROCESS_RAW_SCHEMA} \
+             and does not reinterpret the old raw as the process method"
+        ));
+    }
+    if schema != PROCESS_RAW_SCHEMA {
+        return Err(format!(
+            "unknown raw schema {schema} (process aggregation reads only {PROCESS_RAW_SCHEMA})"
+        ));
+    }
+    let h: ProcessRunHeader =
+        serde_json::from_str(&run_json).map_err(|e| format!("run.json: {e}"))?;
+    if h.dataset != DATASET {
+        return Err(format!("raw dataset {} is not {DATASET}", h.dataset));
+    }
+    let events = read_events(&raw.join("process-events.jsonl")).map_err(|e| e.to_string())?;
+    let proof = verify_survival_barriers(&events)?;
+    let ledger = read_ledger(&raw.join("ext.jsonl")).map_err(|e| e.to_string())?;
+    if ledger.iter().any(|e| e.dataset != DATASET) {
+        return Err(format!("ext.jsonl has a record that is not {DATASET}"));
+    }
+    let c = super::ext::count(&ledger);
+    Ok(ProcessSummary {
+        schema,
+        arm: h.arm,
+        seed: h.seed,
+        event: h.event,
+        nth: h.nth,
+        proof,
+        physical_launches: c.physical_launches,
+        logical_jobs: c.logical_jobs,
+        consumed: c.consumed,
+        notices_sent: c.notices_sent,
+    })
 }

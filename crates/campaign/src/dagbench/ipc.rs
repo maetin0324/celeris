@@ -26,6 +26,10 @@
 //! - 独立観測 runner（observer）は `advance` ではなく `observe` op で時計を進める。通知は outbox に積まれるだけで
 //!   observer には渡らず、observer の要求は outbox を捨てない。control は後で自分の `advance`（同じ/古い時刻でよい）で
 //!   未 ack の通知を全て受け取る。control が居なくても observer だけで job 完了と ledger 追記が進む。
+//! - `Observed` の応答は ledger の sync 済み最終 seq（`ledger_seq`）を持つ。observer はこれを「外部完了が永続化された」
+//!   ack として barrier に残し、control を再開する（`dagbench::process`）。
+//! - 再起動した control は client 名を incarnation ごとに変える（`control-<n>`）。同じ名前で id が 1 から始まると、
+//!   server の直近応答の再送判定（同じ `(client, id)`）に当たり得るため。
 //! - outbox は server の 1 つで、通知は `advance` を呼んだ接続に渡る（消費者は 1 人を想定）。server が死ぬと outbox は
 //!   失われるが、完了の事実は ledger（`external_job_completed` / `notice_sent`）に残り、poll の `lookup` で拾える。
 //!   アプリ側の冪等性は論理 job ID（baseline の `duplicate_notices_ignored`）が持つ。
@@ -129,6 +133,8 @@ pub enum Body {
         now: u64,
         high_seq: u64,
         unacked: usize,
+        /// この応答の時点で ledger に sync 済みの最後の seq（= 完了 ledger の sync ack）。
+        ledger_seq: u64,
     },
     Now {
         secs: u64,
@@ -342,6 +348,7 @@ fn respond(st: &mut State, req: Request) -> Response {
                     now: st.sim.now(),
                     high_seq: st.next_seq,
                     unacked: st.outbox.len(),
+                    ledger_seq: st.sim.ledger_seq(),
                 }
             }
             Err(e) => io_err(e),
@@ -427,14 +434,15 @@ impl IpcExt {
     }
 
     /// 外部時計を進める（observer 用）。通知は受け取らず ack もしないので、control 向けの outbox は減らない。
-    /// 返すのは `(now, high_seq, unacked)`。
-    pub fn observe(&mut self, now_secs: u64) -> io::Result<(u64, u64, usize)> {
+    /// 返すのは `(now, high_seq, unacked, ledger_seq)`（`ledger_seq` は応答の時点で sync 済みの ledger の最後の seq）。
+    pub fn observe(&mut self, now_secs: u64) -> io::Result<(u64, u64, usize, u64)> {
         match self.call(Op::Observe { now_secs })? {
             Body::Observed {
                 now,
                 high_seq,
                 unacked,
-            } => Ok((now, high_seq, unacked)),
+                ledger_seq,
+            } => Ok((now, high_seq, unacked, ledger_seq)),
             b => Err(unexpected(b)),
         }
     }

@@ -138,6 +138,11 @@ pub fn cli(args: &[String]) -> Result<String, String> {
             write_tables(&out, &m).map_err(|e| e.to_string())?;
             serde_json::to_string_pretty(&m).map_err(|e| e.to_string())
         }
-        _ => Err("usage: celeris-campaign dagbench run --scenario <id> --point <p> --arm baseline|celeris --out <dir> | dagbench metrics --raw <dir> --out <dir>".into()),
+        "process-metrics" => {
+            let raw = flag(args, "--raw").ok_or("--raw <dir> is required")?;
+            let s = super::process::compute_process(&raw)?;
+            serde_json::to_string_pretty(&s).map_err(|e| e.to_string())
+        }
+        _ => Err("usage: celeris-campaign dagbench run --scenario <id> --point <p> --arm baseline|celeris --out <dir> | dagbench metrics --raw <dir> --out <dir> | dagbench process-metrics --raw <dir> --out <dir>".into()),
     }
 }

@@ -500,6 +500,11 @@ impl ExtSim {
         self.now
     }
 
+    /// ledger に sync 済みの最後の行の seq（追記は 1 行ごとに `sync_data` するので、返った時点で永続）。
+    pub fn ledger_seq(&self) -> u64 {
+        self.seq
+    }
+
     /// 論理 job の物理起動の期限（論理秒）。照会と違い ledger には残さない（driver 内部の時計合わせ用）。
     pub fn due_secs(&self, logical: &str) -> Option<u64> {
         self.jobs.get(logical).map(|j| j.due_secs)

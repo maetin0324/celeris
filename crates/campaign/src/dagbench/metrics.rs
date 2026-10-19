@@ -27,6 +27,10 @@ use super::{
 };
 
 pub const RAW_SCHEMA: &str = "celeris.dagbench-raw/1";
+/// 独立 process 版（制御 child を kill しても外部 process が完了する run）の raw 版。旧 in-process の
+/// [`RAW_SCHEMA`]（`/1`）とは別物で、`compute`（/1 専用）は /2 を、`dagbench::process::compute_process`（/2 専用）は /1 を
+/// 明示的に拒否する。
+pub const PROCESS_RAW_SCHEMA: &str = "celeris.dagbench-raw/2";
 pub const METRICS_SCHEMA: &str = "celeris.dagbench-metrics/1";
 pub const METRICS_FILE: &str = "control_measured_metrics.json";
 pub const METRICS_TSV: &str = "control_measured_metrics.tsv";
@@ -401,12 +405,28 @@ pub struct LostProgress {
     pub total_secs: u64,
 }
 
-/// raw dir の生ログだけから指標を計算する。
+/// `run.json` の本文から `schema` 欄だけを取り出す（無い・文字列でないは Err）。
+pub fn raw_schema_of(run_json: &str) -> Result<String, String> {
+    let v: Value = serde_json::from_str(run_json).map_err(|e| format!("run.json: {e}"))?;
+    v["schema"]
+        .as_str()
+        .map(str::to_string)
+        .ok_or_else(|| "run.json: no schema".to_string())
+}
+
+/// raw dir の生ログだけから指標を計算する（旧 in-process 版 /1 専用）。
 pub fn compute(raw: &Path) -> Result<Metrics, String> {
-    let h: RunHeader = serde_json::from_str(
-        &fs::read_to_string(raw.join("run.json")).map_err(|e| format!("run.json: {e}"))?,
-    )
-    .map_err(|e| format!("run.json: {e}"))?;
+    let run_json =
+        fs::read_to_string(raw.join("run.json")).map_err(|e| format!("run.json: {e}"))?;
+    // header の形を読む前に版を見る（別の版の欄で壊れた parse error に埋もれさせない）。
+    let schema = raw_schema_of(&run_json)?;
+    if schema == PROCESS_RAW_SCHEMA {
+        return Err(format!(
+            "{PROCESS_RAW_SCHEMA} is a process raw (separate external process); \
+             `compute` reads only {RAW_SCHEMA} (in-process) — use dagbench::process::compute_process"
+        ));
+    }
+    let h: RunHeader = serde_json::from_str(&run_json).map_err(|e| format!("run.json: {e}"))?;
     if h.schema != RAW_SCHEMA || h.dataset != DATASET {
         return Err(format!(
             "raw dir is not a {DATASET} dagbench record ({} / {})",

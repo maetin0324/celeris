@@ -363,9 +363,11 @@ fn campaign_resend(
     identity.validate().map_err(ApiProblem::bad_request)?;
     let internal = |e: StoreError| ApiProblem::internal(e.to_string());
     match store
-        .task_campaign_resend(identity, body.campaign_idempotency_key.as_deref())
-        .map_err(internal)?
-    {
+        .task_campaign_resend_org_checked(identity, body.campaign_idempotency_key.as_deref())
+        .map_err(|e| match e {
+            StoreError::Invalid(why) => org_drift(&why),
+            e => internal(e),
+        })? {
         task_core::store::CampaignResend::New => Ok(None),
         task_core::store::CampaignResend::Same(id) => {
             let id = id
@@ -379,6 +381,14 @@ fn campaign_resend(
         }
         task_core::store::CampaignResend::Conflict(id) => Err(campaign_conflict(&id)),
     }
+}
+
+fn org_drift(why: &str) -> ApiProblem {
+    ApiProblem::new(
+        StatusCode::CONFLICT,
+        "campaign_org_drift",
+        format!("campaign.variant_org does not match the current org: {why}"),
+    )
 }
 
 fn campaign_conflict(existing: &str) -> ApiProblem {
@@ -496,6 +506,13 @@ pub(crate) fn create_task_op(
             ) {
                 failure = Some(campaign_conflict("(concurrent)"));
                 return Err(StoreError::Invalid("campaign identity conflict".into()));
+            }
+            if let Some(pin) = &identity.variant_org
+                && let Err(e) = task_core::store::SqliteStore::campaign_org_check_tx(tx, pin)
+            {
+                let why = e.to_string();
+                failure = Some(org_drift(&why));
+                return Err(StoreError::Invalid(why));
             }
             task_core::store::SqliteStore::task_campaign_set_tx(
                 tx,

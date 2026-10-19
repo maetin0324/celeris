@@ -163,6 +163,16 @@ impl SqliteStore {
         Ok(out)
     }
 
+    /// 呼び出し側の transaction（= store lock）の中で、現在の org が campaign の構成 pin と
+    /// 一致することを確かめる。pin の照合と保存を同じ境界に置き、照合後の org 変更で通らないようにする。
+    pub fn campaign_org_check_tx(
+        conn: &Connection,
+        pin: &crate::variant_wire::CampaignOrgPin,
+    ) -> Result<(), StoreError> {
+        let nodes = Self::org_list_tx(conn)?;
+        pin.check_org(&nodes).map_err(StoreError::Invalid)
+    }
+
     pub(super) fn org_list_impl(&self) -> Result<Vec<OrgNode>, StoreError> {
         self.with_read_conn(Self::org_list_tx)
     }

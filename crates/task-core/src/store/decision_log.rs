@@ -813,6 +813,23 @@ impl SqliteStore {
         })
     }
 
+    /// `task_campaign_resend_tx` を、variant の構成 pin の org 照合と同じ lock で行う。
+    /// `Same` でも org が pin と食い違っていれば `Err(Invalid)`（drift を成功扱いしない）。
+    pub fn task_campaign_resend_org_checked(
+        &self,
+        id: &CampaignIdentity,
+        key: Option<&str>,
+    ) -> Result<CampaignResend, StoreError> {
+        let conn = self.lock()?;
+        let out = Self::task_campaign_resend_tx(&conn, id, key)?;
+        if matches!(out, CampaignResend::Same(_))
+            && let Some(pin) = &id.variant_org
+        {
+            Self::campaign_org_check_tx(&conn, pin)?;
+        }
+        Ok(out)
+    }
+
     pub fn task_campaign_resend(
         &self,
         id: &CampaignIdentity,

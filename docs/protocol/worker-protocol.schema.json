@@ -437,6 +437,175 @@
       ],
       "type": "string"
     },
+    "CampaignIdentity": {
+      "additionalProperties": false,
+      "description": "campaign 識別（ADR 2026-10-16-campaign-identity-propagation）。campaign の root task に 1 つ付き、\n子孫 task・全 run（再試行・continuation・repair・reviewer・planner）が祖先の鎖から継ぐ。\n`routing_setting` は試行単位で固定した routing 設定（全体 config の `[routing] mode` とは別）。",
+      "properties": {
+        "arm": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "campaign_id": {
+          "type": "string"
+        },
+        "case_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "manifest_hash": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "repetition": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "routing_setting": {
+          "description": "`fixed` | `decision_assisted`。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "variant": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CampaignVariantRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "比較 variant の参照（campaign `VariantRef` と同じ JSON 形）。`variant_org` と対で付く。\n無い識別（従来の行）は variant 無しの試行のまま。"
+        },
+        "variant_org": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CampaignOrgPin"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "variant が前提とする検証済みの構成 pin（campaign `OrgPin` と同じ JSON 形）。"
+        }
+      },
+      "required": [
+        "campaign_id"
+      ],
+      "type": "object"
+    },
+    "CampaignOrgPin": {
+      "additionalProperties": false,
+      "description": "検証済みの構成 pin（campaign `OrgPin` と同じ JSON 名）。",
+      "properties": {
+        "coding_node": {
+          "type": "string"
+        },
+        "effective_profile_sha256": {
+          "type": "string"
+        },
+        "nodes": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "nodes",
+        "coding_node",
+        "effective_profile_sha256"
+      ],
+      "type": "object"
+    },
+    "CampaignRunPin": {
+      "additionalProperties": false,
+      "description": "照合済みの run pin。run 証拠（`runs/<run_id>/campaign-pin.json`）と task の保存 pin\n（`<artifacts_dir>/campaign-pin.json`）に同じ形で残り、continuation・再開は保存 pin と全欄一致が条件。",
+      "properties": {
+        "config_sha256": {
+          "type": "string"
+        },
+        "daemon_instance_id": {
+          "type": "string"
+        },
+        "identity": {
+          "$ref": "#/$defs/CampaignIdentity",
+          "description": "解決した `CampaignIdentity`（variant・variant_org を含む）。"
+        },
+        "org_nodes_sha256": {
+          "description": "全 node の実効 profile digest（`task_core::variant_wire::org_effective_digest`）。",
+          "type": "string"
+        },
+        "selected": {
+          "$ref": "#/$defs/CampaignSelected"
+        }
+      },
+      "required": [
+        "identity",
+        "org_nodes_sha256",
+        "selected",
+        "daemon_instance_id",
+        "config_sha256"
+      ],
+      "type": "object"
+    },
+    "CampaignSelected": {
+      "additionalProperties": false,
+      "description": "run が実際に使う harness・source・model（`runs.selected_*` と同じ値）。",
+      "properties": {
+        "harness_id": {
+          "type": "string"
+        },
+        "model_id": {
+          "type": "string"
+        },
+        "source_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "harness_id",
+        "source_id",
+        "model_id"
+      ],
+      "type": "object"
+    },
+    "CampaignVariantRef": {
+      "additionalProperties": false,
+      "description": "variant への短い参照（campaign `VariantRef` と同じ JSON 名・省略なし）。",
+      "properties": {
+        "comparison_id": {
+          "type": "string"
+        },
+        "content_sha256": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "selection_sha256": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "comparison_id",
+        "id",
+        "content_sha256",
+        "selection_sha256"
+      ],
+      "type": "object"
+    },
     "Check": {
       "description": "DESIGN §5.3/§5.7 の `Check` 種別。",
       "oneOf": [
@@ -2943,6 +3112,17 @@
             }
           ],
           "description": "ADR-0080 D1: the task's browser restriction, supplied by dispatch from the task.\nBrowser-enabled runs without it are refused (`browser_policy_required`)."
+        },
+        "campaign": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CampaignRunPin"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "propagation §8.5: variant 付き task の run だけ `Some`。dispatcher が run 開始直前に照合した\n固定値（identity・org digest・selected・daemon instance・config hash）。plain な run は `None` で\n`request.json` もプロンプトも従来と同じ。保存と再開検査は `campaign_pin`。"
         },
         "children": {
           "description": "集約 run（`aggregate = true` の親の、子が全て終端になった後の run）でのみ非空（ADR-0016 D3）。",

@@ -3323,12 +3323,17 @@ export type KnowledgeTree = {
 export type LaneAssistRecord = {
   "base_lane": string;
   "basis": string;
+  "call_id"?: string | null;
   "classifier_status": ClassifierStatus;
   "final_lane": string;
+  "fixed_lane"?: string | null;
+  "jev_lane"?: string | null;
   "mode": string;
+  "observed_snapshot"?: string | null;
   "overridden_by"?: string | null;
   "proposed_lane"?: string | null;
   "real_api_verified": boolean;
+  "response_model"?: string | null;
 };
 
 export type LaneDecision = {

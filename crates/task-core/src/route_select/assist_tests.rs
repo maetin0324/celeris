@@ -280,3 +280,72 @@ fn classification_proposal_already_covered_by_base_lane_is_not_a_raise() {
     assert_eq!(lane, Tier::Standard);
     assert_eq!(basis, "fixed_rule");
 }
+
+fn assisted(entry: Option<&ClassificationEntry>, limits: &LaneLimits, f: Fact) -> LaneAssistRecord {
+    run(
+        RoutingMode::DecisionAssisted,
+        false,
+        Tier::Standard,
+        facts(f),
+        entry,
+        limits,
+        |_| true,
+    )
+    .record
+    .expect("decision_assisted writes a record")
+}
+
+#[test]
+fn record_keeps_fixed_jev_and_constrained_lanes_apart() {
+    // fixed 規則は Standard（事実が No）、Jev 単独は Frontier を提案、天井が Standard に抑える。
+    let mut e = ok_entry(SpecificityHint::NeedsInvestigationDesign, 0.9);
+    e.model_snapshot = Some("jev-resp-model".into());
+    let limits = LaneLimits {
+        allowed: vec![],
+        max_lane: Some(Tier::Standard),
+    };
+    let r = assisted(Some(&e), &limits, Fact::No);
+    assert_eq!(r.fixed_lane.as_deref(), Some("standard"));
+    assert_eq!(r.jev_lane.as_deref(), Some("frontier"));
+    assert_eq!(r.final_lane, "standard");
+    assert_eq!(r.overridden_by.as_deref(), Some("ceiling"));
+    assert_eq!(r.response_model.as_deref(), Some("jev-resp-model"));
+    // 独立の観測経路が無いので snapshot / call_id は欠測のまま（応答 model から複製しない）。
+    assert_eq!(r.observed_snapshot, None);
+    assert_eq!(r.call_id, None);
+}
+
+#[test]
+fn jev_lane_is_absent_without_a_usable_proposal_and_fixed_stays_visible() {
+    // 低 confidence・Specified・分類なしでは Jev 単独の提案は無いが、fixed 規則の lane は残る。
+    for entry in [
+        Some(ok_entry(SpecificityHint::NeedsInvestigationDesign, 0.1)),
+        Some(ok_entry(SpecificityHint::Specified, 0.99)),
+        None,
+    ] {
+        let r = assisted(entry.as_ref(), &LaneLimits::default(), Fact::No);
+        assert_eq!(r.jev_lane, None);
+        assert_eq!(r.fixed_lane.as_deref(), Some("standard"));
+        assert_eq!(r.response_model, None);
+    }
+}
+
+#[test]
+fn legacy_record_without_new_fields_parses_and_new_fields_are_omitted_when_missing() {
+    let old = serde_json::json!({
+        "mode": "decision_assisted",
+        "classifier_status": {"status": "jev_ok"},
+        "real_api_verified": false,
+        "base_lane": "standard",
+        "final_lane": "standard",
+        "basis": "fixed_rule"
+    });
+    let r: LaneAssistRecord = serde_json::from_value(old.clone()).unwrap();
+    assert_eq!(r.fixed_lane, None);
+    assert_eq!(r.jev_lane, None);
+    assert_eq!(r.response_model, None);
+    assert_eq!(r.observed_snapshot, None);
+    assert_eq!(r.call_id, None);
+    // 欠測は書き出さない（旧 event と同じ形のまま）。
+    assert_eq!(serde_json::to_value(&r).unwrap(), old);
+}

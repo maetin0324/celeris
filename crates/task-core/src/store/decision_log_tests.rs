@@ -4,6 +4,7 @@ use time::OffsetDateTime;
 
 use super::*;
 use crate::decision_log::*;
+use crate::decision_log_export::{ExportParams, build_campaign_export};
 use crate::execution::{BudgetKind, RunEnd};
 
 fn now() -> OffsetDateTime {
@@ -295,4 +296,166 @@ fn wu_verdict_is_derived_not_assumed() {
         WuVerdict::derive(Some(true), Some(false)),
         WuVerdict::Failed
     );
+}
+
+fn assist_record(
+    status: crate::route_select::ClassifierStatus,
+    jev: Option<&str>,
+    model: Option<&str>,
+    call_id: Option<&str>,
+) -> crate::route_select::LaneAssistRecord {
+    crate::route_select::LaneAssistRecord {
+        mode: "decision_assisted".into(),
+        classifier_status: status,
+        real_api_verified: false,
+        base_lane: "standard".into(),
+        proposed_lane: jev.map(str::to_owned),
+        fixed_lane: Some("standard".into()),
+        jev_lane: jev.map(str::to_owned),
+        response_model: model.map(str::to_owned),
+        observed_snapshot: None,
+        call_id: call_id.map(str::to_owned),
+        final_lane: "standard".into(),
+        basis: "classification_raise".into(),
+        overridden_by: Some("ceiling".into()),
+    }
+}
+
+#[test]
+fn lane_stages_status_version_and_call_id_survive_store_reload_and_export() {
+    use crate::route_select::ClassifierStatus;
+    let s = SqliteStore::open_in_memory().unwrap();
+    let call = DecisionLogUsage::jev_call_id("wu1", 2);
+    assert_eq!(call, "decision:jev:wu1:2");
+    // 同じ分類（同じ call_id）を 2 つの run（attempt_no は別）が使う。
+    let mut runs = vec![];
+    for (run, attempt) in [("r1", 0u32), ("r2", 1)] {
+        let mut p = proposal(run);
+        p.attempt_no = Some(attempt);
+        p.apply_lane_assist(&assist_record(
+            ClassifierStatus::JevOk,
+            Some("frontier"),
+            Some("jev-resp-model"),
+            Some(&call),
+        ));
+        s.decision_log_record_proposal(&p, now()).unwrap();
+        runs.push(s.decision_log_run_get(run).unwrap().unwrap());
+        assert_eq!(runs[runs.len() - 1].proposal, p);
+    }
+    let p = &runs[0].proposal;
+    assert_eq!(p.classifier_status.as_deref(), Some("jev_ok"));
+    assert_eq!(p.classifier_call_id.as_deref(), Some("decision:jev:wu1:2"));
+    assert_eq!(p.fixed_lane.as_deref(), Some("standard"));
+    assert_eq!(p.jev_lane.as_deref(), Some("frontier"));
+    assert_eq!(p.constrained_lane.as_deref(), Some("standard"));
+    assert_eq!(p.lane_basis.as_deref(), Some("classification_raise"));
+    let c = p.classifier.as_ref().unwrap();
+    assert_eq!(c.kind, "jev");
+    assert_eq!(c.model.as_deref(), Some("jev-resp-model"));
+    assert_eq!(c.snapshot, None); // 応答 model から snapshot を作らない
+    assert_eq!(c.confidence, None); // 記録に無い確信を作らない
+
+    // 消費行は呼び出し単位で 1 行（2 run が参照しても 1 回しか数えない）。call_id は消費行の鍵と同一。
+    let mut u = DecisionLogUsage::jev_call("wu1", 2, "t1", Some("camp1"), Some(0.5));
+    assert_eq!(u.key.dedup_key(), call);
+    u.list_cost_usd = Some(0.5);
+    let params = ExportParams {
+        campaign_id: "camp1".into(),
+        manifest_hash: None,
+        export_cursor: None,
+    };
+    let e = build_campaign_export(&params, &runs, &[u.clone(), u], &[]);
+    assert_eq!(e.trials.len(), 2);
+    for t in &e.trials {
+        assert_eq!(t["classifier_status"], "jev_ok");
+        assert_eq!(t["classifier_call_id"], "decision:jev:wu1:2");
+        assert_eq!(t["classifier_model"], "jev-resp-model");
+        assert_eq!(t["classifier_snapshot"], serde_json::Value::Null);
+        assert_eq!(t["fixed_lane"], "standard");
+        assert_eq!(t["jev_lane"], "frontier");
+        assert_eq!(t["constrained_lane"], "standard");
+    }
+    assert_eq!(e.trials[0]["attempt_no"], 0);
+    assert_eq!(e.trials[1]["attempt_no"], 1);
+    let jev_cost: f64 = e
+        .trials
+        .iter()
+        .map(|t| {
+            t["task_level_consumption"]["list_cost_usd"]["sum"]
+                .as_f64()
+                .unwrap_or(0.0)
+        })
+        .sum();
+    assert_eq!(jev_cost, 0.5); // 同じ使用行を重複させても 2 run に割って二重に出ない
+    // 決定行（decision_id 単位）も同じ欄を持つ。
+    let d = e
+        .records
+        .iter()
+        .find(|r| r["record_type"] == "decision")
+        .unwrap();
+    assert_eq!(d["classifier_call_id"], "decision:jev:wu1:2");
+}
+
+#[test]
+fn missing_stage_values_stay_null_and_not_attempted_makes_no_classifier() {
+    use crate::route_select::ClassifierStatus;
+    let s = SqliteStore::open_in_memory().unwrap();
+    let mut p = proposal("r1");
+    p.apply_lane_assist(&assist_record(
+        ClassifierStatus::NotAttempted,
+        None,
+        None,
+        None,
+    ));
+    s.decision_log_record_proposal(&p, now()).unwrap();
+    // 旧い形の run（lane 層の記録なし）。
+    s.decision_log_record_proposal(&proposal("r-old"), now())
+        .unwrap();
+    let mut f = proposal("r-fb");
+    f.apply_lane_assist(&assist_record(
+        ClassifierStatus::FellBackToFixed {
+            reason: "timeout".into(),
+        },
+        None,
+        None,
+        None,
+    ));
+    s.decision_log_record_proposal(&f, now()).unwrap();
+    let runs: Vec<_> = ["r1", "r-old", "r-fb"]
+        .iter()
+        .map(|r| s.decision_log_run_get(r).unwrap().unwrap())
+        .collect();
+    assert_eq!(runs[0].proposal.classifier, None);
+    assert_eq!(
+        runs[0].proposal.classifier_status.as_deref(),
+        Some("not_attempted")
+    );
+    assert_eq!(runs[1].proposal.classifier_status, None);
+    assert_eq!(runs[1].proposal.fixed_lane, None);
+    let fb = runs[2].proposal.classifier.as_ref().unwrap();
+    assert_eq!(fb.fallback.as_deref(), Some("timeout"));
+    assert_eq!(fb.model, None); // 設定 model で補わない
+    let params = ExportParams {
+        campaign_id: "camp1".into(),
+        manifest_hash: None,
+        export_cursor: None,
+    };
+    let e = build_campaign_export(&params, &runs, &[], &[]);
+    let by = |id: &str| e.trials.iter().find(|t| t["run_id"] == id).unwrap();
+    for k in [
+        "classifier_status",
+        "classifier_call_id",
+        "fixed_lane",
+        "jev_lane",
+        "constrained_lane",
+        "lane_basis",
+        "classifier_model",
+        "classifier_snapshot",
+    ] {
+        // 欠測は欄ごと落とさず null で出す（旧 run は全て null）。
+        assert!(by("r-old").get(k).is_some_and(|v| v.is_null()), "{k}");
+    }
+    assert_eq!(by("r-fb")["classifier_status"], "fell_back_to_fixed");
+    assert_eq!(by("r-fb")["classifier_fallback"], "timeout");
+    assert!(by("r1")["classifier_kind"].is_null());
 }

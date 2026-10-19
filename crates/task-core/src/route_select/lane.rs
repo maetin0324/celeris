@@ -130,6 +130,26 @@ pub struct LaneDecision {
     pub basis: LaneBasis,
 }
 
+/// 分類 hint 単独が示す lane（fixed 規則と無関係。`Specified` は提案なし）。
+fn hint_proposal(h: &ClassificationHint) -> Option<LaneChoice> {
+    match h.specificity {
+        SpecificityHint::Specified => None,
+        SpecificityHint::NeedsImplementation => Some(LaneChoice::Lane(Tier::Standard)),
+        SpecificityHint::NeedsInvestigationDesign => Some(LaneChoice::Lane(Tier::Frontier)),
+        SpecificityHint::InsufficientInfo => Some(LaneChoice::Replan),
+    }
+}
+
+/// Jev（分類）単独の提案 lane。confidence が `min_confidence` 未満・欠測の hint は使わない（`decide_lane` と同じ門）。
+/// fixed 規則との合成・clamp の前の値で、`None` は「使える提案が無い」。
+pub fn classification_lane(
+    hint: Option<&ClassificationHint>,
+    min_confidence: f64,
+) -> Option<LaneChoice> {
+    hint.filter(|h| h.confidence.is_some_and(|c| c >= min_confidence))
+        .and_then(hint_proposal)
+}
+
 pub fn decide_lane(
     mode: RoutingMode,
     facts: &LaneFacts,
@@ -150,12 +170,7 @@ pub fn decide_lane(
             basis: LaneBasis::FixedFallback,
         };
     };
-    let proposal = match h.specificity {
-        SpecificityHint::Specified => None,
-        SpecificityHint::NeedsImplementation => Some(LaneChoice::Lane(Tier::Standard)),
-        SpecificityHint::NeedsInvestigationDesign => Some(LaneChoice::Lane(Tier::Frontier)),
-        SpecificityHint::InsufficientInfo => Some(LaneChoice::Replan),
-    };
+    let proposal = hint_proposal(h);
     // 引き上げのみ。`NeedsImplementation` は fixed が不明（None）のとき何も作らない。
     match (base, proposal) {
         (Some(b), Some(p)) if p.rank() > b.rank() => LaneDecision {

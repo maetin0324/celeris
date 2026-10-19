@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::execution::{BudgetKind, RunEnd};
 use crate::model_policy::RoutingRecord;
+use crate::route_select::{ClassifierStatus, LaneAssistRecord};
 
 /// 候補 1 つ（source × model × harness）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -29,8 +30,10 @@ pub struct ExclusionRef {
 pub struct ClassifierRecord {
     /// `rule` | `jev` | `human_hint`。
     pub kind: String,
+    /// 分類の応答が名乗った model 名（`ClassificationEntry::model_snapshot` の値）。設定の model 名ではない。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// 応答 model 名とは独立に観測した版。観測していなければ None（`model` から複製しない）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub snapshot: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -115,6 +118,26 @@ pub struct DecisionLogProposal {
     pub routing_mode: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub classifier: Option<ClassifierRecord>,
+    /// 分類段の状態（`jev_ok` | `fell_back_to_fixed` | `not_attempted`）。`classifier`（kind 等）の有無とは別で、
+    /// 分類を試みなかった run も `not_attempted` として残る。lane 層の記録が無い run は None。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub classifier_status: Option<String>,
+    /// 分類の呼び出し ID（`jev_call_id`。消費行の鍵と同じ）。同じ分類を複数 run が使えば同じ値になる。
+    /// `attempt_no`（run の試行番号）や call_no とは別。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub classifier_call_id: Option<String>,
+    /// fixed 規則だけの lane（`replan` を含む）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fixed_lane: Option<String>,
+    /// Jev 単独の提案 lane（fixed と合成する前）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub jev_lane: Option<String>,
+    /// lane 層が許可・天井・利用可否で制約した後の lane（`decided_lane` は既存方策の lane で別欄）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub constrained_lane: Option<String>,
+    /// lane の帰属（`fixed_rule` | `classification_raise` | `fixed_fallback`）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lane_basis: Option<String>,
     /// 実行方策がその候補を選んだ確率（`RouteDecision.propensity`）。分類の確信では埋めない。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub propensity: Option<f64>,
@@ -164,7 +187,7 @@ impl DecisionLogProposal {
             crate::model::Tier::Frontier => "frontier",
         };
         let decision = record.features.as_ref().and_then(|f| f.decision.as_deref());
-        Self {
+        let mut p = Self {
             run_id: run_id.to_string(),
             decision_id: decision.map(|d| d.decision_id.clone()),
             task_id: Some(task_id.to_string()),
@@ -188,7 +211,37 @@ impl DecisionLogProposal {
                 })
                 .unwrap_or_default(),
             ..Self::default()
+        };
+        if let Some(a) = decision.and_then(|d| d.lane_assist.as_ref()) {
+            p.apply_lane_assist(a);
         }
+        p
+    }
+
+    /// lane 層の記録（`routing_decided` の `lane_assist`）を欄へ写す純粋な投影。記録に無い値は None のまま
+    /// （設定の model 名・0・空文字で補わない）。`NotAttempted` は分類器の記録（kind）を作らない。
+    pub fn apply_lane_assist(&mut self, a: &LaneAssistRecord) {
+        let (status, fallback) = match &a.classifier_status {
+            ClassifierStatus::JevOk => ("jev_ok", None),
+            ClassifierStatus::FellBackToFixed { reason } => {
+                ("fell_back_to_fixed", Some(reason.clone()))
+            }
+            ClassifierStatus::NotAttempted => ("not_attempted", None),
+        };
+        self.classifier_status = Some(status.into());
+        self.classifier = (status != "not_attempted").then(|| ClassifierRecord {
+            kind: "jev".into(),
+            model: a.response_model.clone(),
+            snapshot: a.observed_snapshot.clone(),
+            confidence: None,
+            probs: None,
+            fallback,
+        });
+        self.classifier_call_id = a.call_id.clone();
+        self.fixed_lane = a.fixed_lane.clone();
+        self.jev_lane = a.jev_lane.clone();
+        self.constrained_lane = Some(a.final_lane.clone());
+        self.lane_basis = Some(a.basis.clone());
     }
 }
 
@@ -542,6 +595,16 @@ impl DecisionLogUsage {
         u.attribution_rule = Some(ATTRIBUTION_COS_SHARED.to_string());
         u.shared_overhead = true;
         u
+    }
+
+    /// Jev の分類 1 回の呼び出し ID。消費行の鍵（`UsageKey::dedup_key`）と同一で、分類を使う run 側の
+    /// `classifier_call_id` と結合できる。`call_no` は同じ subject の呼び出し通し番号（run の `attempt_no` ではない）。
+    pub fn jev_call_id(subject: &str, call_no: u32) -> String {
+        UsageKey::Call {
+            decision_id: format!("jev:{subject}"),
+            call_attempt: call_no,
+        }
+        .dedup_key()
     }
 
     /// Jev の分類 1 回の消費（`subject` = work unit id、無ければ task id）。費用が返らなければ欠測のまま。

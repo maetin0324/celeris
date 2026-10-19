@@ -268,7 +268,12 @@ fn pid_gone(pid: &str) -> bool {
 fn watch_stop_and_restart_reattaches_without_resubmit_and_stops_at_the_cap() {
     let d = tempfile::tempdir().expect("dir");
     let r = d.path();
-    let (gate, launches, pids) = (r.join("GATE"), r.join("launches"), r.join("pids"));
+    let (gate, launches, pids, printed) = (
+        r.join("GATE"),
+        r.join("launches"),
+        r.join("pids"),
+        r.join("printed"),
+    );
     let line = |id: &str, n: u64| {
         format!(
             r#"{{"type":"assistant","message":{{"id":"{id}","usage":{{"input_tokens":{n},"output_tokens":5}}}}}}"#
@@ -279,9 +284,10 @@ fn watch_stop_and_restart_reattaches_without_resubmit_and_stops_at_the_cap() {
     write_executable(
         &stub,
         &format!(
-            "#!/bin/sh\necho $$ >> '{pids}'\necho x >> '{launches}'\necho '{l0}'\nwhile [ ! -e '{gate}' ]; do sleep 0.05; done\necho '{l1}'\nsleep 300 &\nwait\n",
+            "#!/bin/sh\necho $$ >> '{pids}'\necho x >> '{launches}'\necho '{l0}'\necho x >> '{printed}'\nwhile [ ! -e '{gate}' ]; do sleep 0.05; done\necho '{l1}'\nsleep 300 &\nwait\n",
             pids = pids.display(),
             launches = launches.display(),
+            printed = printed.display(),
             gate = gate.display(),
             l0 = line("m0", 100),
             l1 = line("m1", 5000),
@@ -309,6 +315,15 @@ fn watch_stop_and_restart_reattaches_without_resubmit_and_stops_at_the_cap() {
     let r1 = watch(&m, &i, &x1, &opts, w(2), &RealSleep).expect("watch 1");
     assert_eq!(r1.end, WatchEnd::MaxIterations);
     assert_eq!(count(&launches), 3, "one process per trial");
+    // 高負荷では起動が遅れ m0 の出力がまだ観測されていないことがある。
+    // 3 つとも m0 を出力するまで待ち（出来事待ち）、もう一度観測してから止める。
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    while count(&printed) < 3 {
+        assert!(std::time::Instant::now() < deadline, "m0 not printed");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let r1b = watch(&m, &i, &x1, &opts, w(2), &RealSleep).expect("watch 1b");
+    assert_eq!(r1b.end, WatchEnd::MaxIterations);
     let rows_before: Vec<_> = Ledger::open(&out)
         .expect("ledger")
         .rows()

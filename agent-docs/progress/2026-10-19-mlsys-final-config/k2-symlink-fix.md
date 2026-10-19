@@ -30,3 +30,9 @@ completed: 2026-10-19
 - 前回 check の不合格原因: 別 WU の `agent-docs/progress/2026-10-19-cap-probe-ro-mount-kind.md` の front matter に `title`/`updated` が無く `progress-index.sh --check` が exit 1。front matter を補って解消（本文は不変）。
 - `cargo test -p celeris-campaign`: exit 0（全 test result ok、0 failed。inner_symlink・isolation 追加分を含む）。再利用 commit: d4f51cca。
 - `test -s … && check-doc-links.sh && check-adr-numbers.sh && progress-index.sh --check`: exit 0。
+
+## 再検証 (attempt 3): check 不合格の原因と修正
+- 前回 check は `watch_stop_and_restart_reattaches_without_resubmit_and_stops_at_the_cap`（a_program_pin_and_watch、symlink 修正とは無関係）が高負荷で落ちた。1 回目の watch（2 tick）内に stub の m0 出力が観測されない場合があり、tokens が 5,110 にならない競合。
+- 修正: 3 つの stub が m0 を出力するまで出来事待ちし、もう一度 watch で観測してから止める（crates/campaign/tests/a_program_pin_and_watch.rs、試験のみ）。
+- 結果: `bash scripts/dev/test-parallel.sh` exit 0（5826 passed, 0 failed）、clippy / fmt exit 0、`cargo test -p celeris-campaign` 全 ok。
+- 未解決（統合 01M58VG5C4XGK4E70M6WJ6MEX0 へ）: 未統合の選択機構・セット別最終 preflight/lock。sandbox 内の nextest では launcher 試験（daemon 起動）が落ちるが check 経路（test-parallel）では通る。

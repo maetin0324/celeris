@@ -1,3 +1,6 @@
+---
+tasks: [01M59P79S6NTGRN3X7SQDV9C0G]
+---
 # ADR: 専門分担 variant の境界契約（M1-specialization）
 
 - Date: 2026-10-19
@@ -25,3 +28,8 @@
 - `CampaignManifest.variant` と `ExecutionPin.variant`（lock）は `Option<VariantRef>`、省略時は直列化しない（従来の manifest/lock hash は不変）。manifest の `validate` は参照の selection hash を同梱 `selection.sha256` と照合する。`bind_to_manifest` は `ExecutionPin` の等値比較で参照の食い違いを拒否し、`check_successor` は variant 参照の差し替え・脱落を後継として認めない。
 - 基準は `variant_pin::baseline_pin`（B0 の manifest・lock・`GET /api/v1/org` 応答 + 全役割モデル）から VariantSpec と独立に組む。`OrgSnapshot::from_get_org` は `items` と `effective_profiles` が揃って一致しなければ拒否する（新 endpoint なし）。
 - preflight（`preflight::check_variant`）は manifest に参照があるときだけ `variant-spec.json`・`variant-b0.json`（manifest と同じ dir）と稼働 daemon の `GET /api/v1/org` を `variant_pin::check_pin` に通す。欠落は拒否。参照が無ければ従来どおり。POST/GET Transport は次の葉。
+
+## 付記（verify-contract: 最終実装との突き合わせ）
+
+- 型・POST・GET の実際の名前と例は `agent-docs/progress/2026-10-19-wire-variant/contract.md` の verify-contract 節。実装は D1〜D5 と一致（`test-parallel.sh` 5846 passed、clippy/fmt 0）。
+- 未完: task-core `CampaignIdentity.variant`・API 409 比較・子孫/retry 継承・実 org 適用・Assigned 検査は次段。**適用証明は未実施**で、本契約の完了とは別。

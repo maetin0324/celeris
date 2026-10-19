@@ -1,6 +1,7 @@
 ---
 task: 01M59P79S6NTGRN3X7SQDV9C0G
-work_unit: baseline-contract
+tasks: [01M59P79S6NTGRN3X7SQDV9C0G]
+work_unit: verify-contract
 status: done
 completed: 2026-10-19
 ---
@@ -90,3 +91,47 @@ completed: 2026-10-19
 - 追加: キー順反転・pretty・ディスク再読込での hash 安定と unknown 欄拒否／単一欄改変の hash 変化と未再 seal 拒否／B0 org・単一 node・EffectiveProfile 欠落（基準側 5 + spec 側 6 + spec-on 形）／EffectiveProfile 各欄の hash 感度／初回・再開・同一 label 冪等照会の一致成功／請求の variant・selection hash 不正・欠落・不一致の副作用前拒否（POST・GET・cancel 0）／保存 task の variant 欠落・不一致の lookup/resolve/submit 拒否／応答欠落・書換での拒否と自作 task の cancel 1 回／legacy 非 variant 経路の維持。再 seal 後の非対象 9 欄差分拒否は既存の表で継続。
 - 不具合の発見なし（修復へ返す差分なし）。org 実適用・子孫 Assigned event の証明は次段で、この試験はその証拠ではない。延期の review-off / KB-off は未実装。
 - 検査: `cargo nextest run -p celeris-campaign --test ablation_contract` 17 passed、`cargo fmt --all -- --check` 0、clippy は下記。`test-parallel.sh` 全体は統合時。
+
+## verify-contract: 統合検証と最終実装との突き合わせ（2026-10-19）
+
+統合済 HEAD（`04c56af1`）で検証。**この契約の完了は「型・hash・投入/照合の配線とその決定的試験」までで、適用証明（実 org 適用・子孫 Assigned の実測）は未実施。契約完了を適用証明と読まないこと。**
+
+### 最新 main と既存 3 task
+- `git fetch origin` 後の `origin/main` = `c9654bff`（fix-pilot-wiring）。HEAD の祖先で、main に新しい commit は無い。baseline 節の照合から変更なし。3 task の DB 状態は本 WU では再読せず（baseline 節の 2026-10-19 の読取を引く。未確認）。manifest/lock/env-lock/preflight/runner/CelerisExecutor は再利用し、作り直していない。
+
+### 実装の公開型（`celeris_campaign::variant`、`#[serde(deny_unknown_fields)]`）
+- `VariantId`: `"M1-spec-on"`(`SpecOn`) / `"M1-spec-off"`(`SpecOff`)。`COMPARISON_ID = "M1-specialization"`、`VARIANT_SCHEMA = "celeris.campaign-variant/1"`、`REQUIRED_ROLES = [planner, reviewer, cos, worker]`、`ROOT_NODE = "cos"`。
+- `VariantRef { comparison_id, id, content_sha256, selection_sha256 }`（`check_fixed()`）。
+- `VariantSpec { schema, comparison_id, variant, selection_sha256, org: OrgPin{nodes, coding_node, effective_profile_sha256}, non_target: NonTargetPin{configs, role_models, review: ReviewPin, safety: SafetyPin, materials_sha256, kb_snapshot, budget, termination, graders}, sha256 }`。`new`/`content_sha256`/`seal`/`check_seal`/`to_ref`/`verify(&BaselinePin)`。
+- `VariantError`: `Missing` `Schema` `SelectionMismatch` `ContentHash` `Org` `NonTargetDiff` `Baseline`。
+- 組み込み: `CampaignManifest.variant` / `ExecutionPin.variant`（`Option<VariantRef>`、`skip_serializing_if`）、`TrialRequest.variant`、`CelerisExecutor::with_variant`、`variant_pin::{OrgSnapshot, B0Inputs, baseline_pin, check_live_org, check_pin}`、`preflight::check_variant`。
+
+### POST 本文と GET 応答の例
+`POST /tasks`（従来の body に `campaign.variant` を足すだけ。省略時は従来と同一）:
+```json
+{"campaign":{"campaign_id":"…","case_id":"…","arm":"…","repetition":1,"manifest_hash":"…","routing_setting":"…",
+  "variant":{"comparison_id":"M1-specialization","id":"M1-spec-off",
+             "content_sha256":"<64 hex>","selection_sha256":"b6132a4456d00be83fa03bf3a54deaaec5b9874fa7bc0397c0d8bdd8937964bc"}},
+ "campaign_idempotency_key":"…"}
+```
+`GET /tasks/{id}` の採用条件: `task.campaign.variant` が上と完全一致。応答例の該当部は `{"task":{"campaign":{…,"variant":{…同じ 4 欄…}}}}`。
+
+### hash 対象・正規化・検証順・互換性
+- 対象: `VariantSpec` 全体から `sha256` を空にしたもの。`manifest::canonical`（キー整列）→ compact JSON → sha256（`manifest::compute_sha256` と同じ作り）。`selection.sha256` は selection.json の正規化 JSON（生バイトではない）の sha256 で、`selection_json_sha256()` が再計算して照合（selection.json/.sha256 は無変更、値は上記）。`effective_profile_sha256` は `node_id`・`chain` を除く profile の canonical JSON の sha256。
+- 検証順: (1) manifest `validate` が `VariantRef::check_fixed`（comparison_id・selection hash・content hash 形式）、(2) preflight `check_pin`: manifest 参照 = spec、lock 参照 = manifest、B0 基準で `verify`（schema → comparison_id → selection → 封印 → 欠落/unknown → 基準との欄別比較）、稼働 org 照合、(3) 投入前: 請求と executor の参照一致・`check_fixed`、(4) POST 後・GET/再開/冪等照会: 保存 task の `campaign.variant` 一致。
+- 互換性: `variant` 省略の manifest/lock の hash・挙動は不変（既存 lock 契約維持）。
+- 欠落・不一致エラー: 上記 `VariantError`、executor は `Refused`（POST・cancel 0 件。POST 直後に欠落/不一致なら自作 task を cancel 1 回して `Refused`）。再 seal での非対象差分・variant 参照差し替えは `check_successor` / `verify` が拒否。
+
+### 次段（daemon/API/実 org）の責務と未検証点
+- task-core `CampaignIdentity` は `variant` を持たず `deny_unknown_fields` のため、現 API は variant 付き POST を 4xx で拒否する（fail-closed）。次段で `CampaignIdentity.variant: Option<VariantRef>` の保存・応答、`campaign_idempotency_key` 再送での variant 違い 409 を足す（DB 保存は migration か既存 JSON 欄の拡張かを次段で決める）。
+- 子孫生成・retry は祖先の鎖から variant を継ぐこと（ADR 2026-10-16-campaign-identity-propagation）。未実装・未検証。
+- 実 org 適用: 測定専用 daemon で `POST/PATCH /api/v1/org` により spec-off 形（根 `cos` + 単一作業課）を作る手順は人が実行（本番 host 操作はしない）。`GET /api/v1/org` の応答が `OrgSnapshot::from_get_org` に十分かは fake 応答でのみ確認。実 daemon では未確認。
+- Assigned 検査: 各 task の Assigned event が spec-on = B0 の課、spec-off = 単一作業課であることの検査は次段（現契約は org 形状の事前検査まで。**適用証明は未実施**）。
+- review-off / KB-off は延期（`selection.json` の `deferred`）。
+
+### 検査結果
+- `bash scripts/dev/test-parallel.sh`: exit 0。nextest 5846 passed / 14 skipped、doctest exit 0。`ablation_contract` 17 passed。
+- `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
+- `check-adr-numbers.sh` 0、`check-doc-links.sh` 0、`check-architecture-map.py` 0、`check-doc-layout.sh scripts/dev/docs-layout.tsv` ok。
+- selection.json / selection.sha256: 本 task の差分は select-mechanism の追加のみで以後無変更（`b6132a44…64bc`）。
+- userns 試験は有効化していない（`userns: null`）。環境失敗の置換なし。

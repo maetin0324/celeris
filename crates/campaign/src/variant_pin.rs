@@ -280,7 +280,7 @@ pub fn check_pin(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::{
         lock::{GraderPin, LockedCase, check_successor},
@@ -326,7 +326,7 @@ mod tests {
         resolve(&[org_node("cos", 3), org_node(node, 3)], node)
     }
 
-    fn org_with(nodes: &[&str], tweak: Option<(&str, u32)>) -> Value {
+    pub(crate) fn org_with(nodes: &[&str], tweak: Option<(&str, u32)>) -> Value {
         let all: Vec<OrgNode> = nodes
             .iter()
             .map(|n| match tweak {
@@ -341,11 +341,11 @@ mod tests {
         })
     }
 
-    fn org_json(nodes: &[&str]) -> Value {
+    pub(crate) fn org_json(nodes: &[&str]) -> Value {
         org_with(nodes, None)
     }
 
-    fn b0() -> B0Inputs {
+    pub(crate) fn b0() -> B0Inputs {
         B0Inputs {
             coding_node: "coding".into(),
             role_models: REQUIRED_ROLES
@@ -378,14 +378,14 @@ mod tests {
             .expect("seal")
     }
 
-    fn manifest() -> CampaignManifest {
+    pub(crate) fn manifest() -> CampaignManifest {
         let mut m = campaign(&input(2, "dev"), Split::Dev, 2);
         m.snapshot.materials_sha256 = "e".repeat(64);
         m
     }
 
     /// B0（variant なし）の manifest / lock から基準を組み、spec を作って manifest / lock に結ぶ。
-    fn world(id: VariantId) -> (CampaignManifest, CampaignLock, VariantSpec) {
+    pub(crate) fn world(id: VariantId) -> (CampaignManifest, CampaignLock, VariantSpec) {
         let m0 = manifest();
         let base = baseline_pin(&m0, &build(&m0, "m-0"), &b0()).expect("baseline");
         let org = match id {
@@ -405,7 +405,7 @@ mod tests {
         (m, l, spec)
     }
 
-    fn live(spec: &VariantSpec) -> OrgSnapshot {
+    pub(crate) fn live(spec: &VariantSpec) -> OrgSnapshot {
         let nodes: Vec<&str> = spec.org.nodes.iter().map(String::as_str).collect();
         OrgSnapshot::from_get_org(&org_json(&nodes)).expect("live")
     }

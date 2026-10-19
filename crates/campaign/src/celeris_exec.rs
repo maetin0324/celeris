@@ -346,6 +346,21 @@ impl<T: Transport> CelerisExecutor<T> {
         Ok(())
     }
 
+    /// 試行の木を既存の GET で読み、封印期待値（L2、propagation §8.6）に照合する。読み取りの失敗は中断
+    /// （再読できる）。欠落・null・不一致・再起動・非対象 drift は Refused で、その試行は集計しない。
+    pub fn prove_variant(
+        &self,
+        t: &TaskRef,
+        exp: &crate::variant_proof::RunProofExpectation<'_>,
+    ) -> Result<(), ExecError> {
+        let tree = self.walk(&t.task_id).map_err(ExecError::interrupted)?;
+        let org = self.get("/api/v1/org").map_err(ExecError::interrupted)?;
+        let config = self.get("/api/v1/config").map_err(ExecError::interrupted)?;
+        let details: Vec<Value> = tree.into_iter().map(|n| n.detail).collect();
+        crate::variant_proof::prove_runs(exp, &details, &org, &config)
+            .map_err(|e| ExecError::refused(format!("task {}: {e}", t.task_id)))
+    }
+
     /// 投入前の variant 整合（請求の参照と executor の参照が同一で、固定 selection と一致する）。
     fn check_request_variant(&self, req: &TrialRequest) -> Result<(), String> {
         if req.variant != self.variant.as_ref() {

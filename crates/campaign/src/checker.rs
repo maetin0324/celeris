@@ -342,7 +342,72 @@ fn reconcile_sets(m: &CampaignManifest, recs: &[TrialRecord], v: &mut Vec<String
                 (Some(x), Some(y)) => Some(x.intersection(&y).copied().collect::<BTreeSet<_>>()),
                 _ => None,
             };
+            // 宣言（共通候補集合・harness・tier 対応・根拠表不使用）を実測の前に検査する。
+            let cfg = |c: ConfigId| m.configs.iter().find(|x| x.id == c);
+            if let (Some(bc), Some(cc)) = (cfg(ConfigId::B), cfg(ConfigId::C))
+                && let Err(e) = crate::manifest::check_b1_c1_common(bc, cc)
+            {
+                seen.insert(e);
+            }
+            // 実測: fixed-core の照合を共通条件から作った SetFixed で再利用する（model/harness/lower_policy の
+            // None・集合外・worker 欠落・観測 run 欠落・run id の重複を違反にする）。
+            let common = crate::manifest::SetFixed {
+                policy: b.lower_policy.clone(),
+                models: common_models
+                    .as_ref()
+                    .map(|s| s.iter().map(|x| (*x).clone()).collect()),
+                harnesses: common_h
+                    .as_ref()
+                    .map(|s| s.iter().map(|x| (*x).clone()).collect()),
+                ..Default::default()
+            };
+            let trials = observed_by_trial(recs);
+            if common.models.is_none() || common.harnesses.is_none() || common.policy.is_none() {
+                seen.insert(
+                    "B1/C1: common candidate models/run_harnesses/lower_policy are not declared"
+                        .into(),
+                );
+            }
+            reconcile_set_fixed(&common, &[ConfigId::B, ConfigId::C], &trials, &mut seen);
+            // B と C は同じ (problem, rep) 集合を実行している（片側だけの試行は同条件の比較にならない）。
+            let keys = |c: ConfigId| {
+                trials
+                    .iter()
+                    .filter(|(a, _, _)| *a == c)
+                    .map(|(_, _, r)| (r.problem_id.clone(), r.rep))
+                    .collect::<BTreeSet<_>>()
+            };
+            let (kb, kc) = (keys(ConfigId::B), keys(ConfigId::C));
+            for (p, rep) in kb.symmetric_difference(&kc) {
+                seen.insert(format!(
+                    "B1/C1: {p}/rep{rep} was run by only one of B and C"
+                ));
+            }
             for arm in [ConfigId::B, ConfigId::C] {
+                for (tag, o) in observed(arm) {
+                    // 許す差は routing mode だけ（B=fixed / C=decision_assisted）。観測欠落は違反。
+                    match (&o.routing_mode, arm) {
+                        (None, _) => {
+                            seen.insert(format!(
+                                "{tag}: run {} ({}): B1/C1 routing mode not observed",
+                                o.run_id, o.role
+                            ));
+                        }
+                        (Some(g), ConfigId::B) if g != "fixed" => {
+                            seen.insert(format!("{tag}: B1/C1 B ran routing mode {g}"));
+                        }
+                        (Some(g), ConfigId::C) if g != "decision_assisted" => {
+                            seen.insert(format!("{tag}: B1/C1 C ran routing mode {g}"));
+                        }
+                        _ => {}
+                    }
+                    if o.evidence_table_id.is_some() || o.evidence_mode.as_deref() != Some("none") {
+                        seen.insert(format!(
+                            "{tag}: run {} ({}): B1/C1 used an evidence table (evidence_mode {:?}, table {:?})",
+                            o.run_id, o.role, o.evidence_mode, o.evidence_table_id
+                        ));
+                    }
+                }
                 for (tag, o) in observed(arm) {
                     let who = format!("{tag}: run {} ({})", o.run_id, o.role);
                     if let (Some(cm), Some(model)) = (&common_models, &o.model)

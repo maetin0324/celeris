@@ -604,7 +604,7 @@ impl CampaignManifest {
     }
 
     /// 選択されたセット（宣言なしは None = 従来の A/B/C 全部）。
-    fn selected(&self) -> Result<Option<Vec<&ExperimentSet>>, String> {
+    pub fn selected(&self) -> Result<Option<Vec<&ExperimentSet>>, String> {
         if self.experiment_sets.is_empty() {
             if !self.selected_sets.is_empty() {
                 return Err("selected_sets without experiment_sets".into());

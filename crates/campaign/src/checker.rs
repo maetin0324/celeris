@@ -141,6 +141,144 @@ fn dep_state(m: &CampaignManifest, recs: &[TrialRecord], problem: &str, rep: u32
     if waiting { Dep::Waiting } else { Dep::Met }
 }
 
+/// 試行ごとの観測 run（非 A arm の、実際に動いた試行だけ）。
+fn observed_by_trial(recs: &[TrialRecord]) -> Vec<(ConfigId, String, &TrialRecord)> {
+    recs.iter()
+        .filter(|r| {
+            r.config != ConfigId::A && r.ran() && r.reason.as_deref() != Some(REASON_EXECUTOR_ERROR)
+        })
+        .map(|r| {
+            (
+                r.config,
+                format!(
+                    "{:?}/{}/rep{}#{}",
+                    r.config, r.problem_id, r.rep, r.trial_no
+                ),
+                r,
+            )
+        })
+        .collect()
+}
+
+/// 1 つの set の固定欄のうち run の実測と比べられるもの。宣言から観測値を補わない（None は違反）。
+fn reconcile_set_fixed(
+    f: &crate::manifest::SetFixed,
+    arms: &[ConfigId],
+    trials: &[(ConfigId, String, &TrialRecord)],
+    out: &mut BTreeSet<String>,
+) {
+    let checks_runs = f.policy.is_some()
+        || f.models.is_some()
+        || f.harnesses.is_some()
+        || !f.role_models.is_empty();
+    if !checks_runs {
+        return;
+    }
+    let mut run_ids: BTreeMap<&str, &str> = BTreeMap::new();
+    for (arm, tag, r) in trials.iter().filter(|(a, _, _)| arms.contains(a)) {
+        let _ = arm;
+        if r.observed.is_empty() {
+            out.insert(format!("{tag}: set fixed declared but no run was observed"));
+            continue;
+        }
+        if !r.observed.iter().any(|o| o.role == "worker") {
+            out.insert(format!("{tag}: no worker run observed"));
+        }
+        for o in &r.observed {
+            let who = format!("{tag}: run {:?} ({:?})", o.run_id, o.role);
+            if o.run_id.is_empty() {
+                out.insert(format!("{who}: run id not observed"));
+            } else if let Some(prev) = run_ids.insert(&o.run_id, tag)
+                && prev != tag.as_str()
+            {
+                out.insert(format!("{who}: run id also claimed by trial {prev}"));
+            }
+            if o.role.is_empty() {
+                out.insert(format!("{who}: role not observed"));
+            }
+            if let Some(models) = &f.models {
+                match &o.model {
+                    None => out.insert(format!("{who}: model not observed")),
+                    Some(x) if !models.contains(x) => out.insert(format!(
+                        "{who}: model {x:?} is outside the set's fixed models"
+                    )),
+                    _ => false,
+                };
+            }
+            if let Some(hs) = &f.harnesses {
+                match &o.harness {
+                    None => out.insert(format!("{who}: harness not observed")),
+                    Some(x) if !hs.contains(x) => out.insert(format!(
+                        "{who}: harness {x:?} is outside the set's fixed harnesses"
+                    )),
+                    _ => false,
+                };
+            }
+            if let Some(p) = &f.policy {
+                match &o.lower_policy {
+                    None => out.insert(format!("{who}: lower_policy not observed")),
+                    Some(x) if x != p => out.insert(format!(
+                        "{who}: lower_policy {x:?} differs from the set's fixed policy {p:?}"
+                    )),
+                    _ => false,
+                };
+            }
+            if !f.role_models.is_empty() {
+                match (f.role_models.get(&o.role), &o.model) {
+                    (None, _) => out.insert(format!(
+                        "{who}: role has no declared model in the set's role_models"
+                    )),
+                    (Some(_), None) => out.insert(format!("{who}: model not observed")),
+                    (Some(want), Some(got)) if want != got => out.insert(format!(
+                        "{who}: ran model {got:?} but role_models declares {want:?}"
+                    )),
+                    _ => false,
+                };
+            }
+        }
+    }
+}
+
+/// SetFixed.initial_info / success を材料・grader の実 hash と照合する（宣言が無い欄は見ない）。
+/// 実 hash は snapshot.json（実際に hash した材料 tree）と封印済み lock（材料 hash・全 case の grader pin）から読み、
+/// 読めない証拠は違反（宣言で補わない）。
+pub fn reconcile_set_evidence(
+    m: &CampaignManifest,
+    snap: Option<&Value>,
+    lock: Option<&crate::lock::CampaignLock>,
+    v: &mut Vec<String>,
+) {
+    let Ok(Some(sets)) = m.selected() else { return };
+    for s in sets {
+        if let Some(want) = &s.fixed.initial_info {
+            match (snap.and_then(|x| x["materials_sha256"].as_str()), lock) {
+                (Some(got), Some(l)) if got == want && l.materials_sha256 == *want => {}
+                (None, _) | (_, None) => v.push(
+                    "set fixed initial_info: materials hash evidence (snapshot/lock) is missing"
+                        .into(),
+                ),
+                (Some(got), Some(l)) => v.push(format!(
+                    "set fixed initial_info {want} differs from observed materials (snapshot {got}, lock {})",
+                    l.materials_sha256
+                )),
+            }
+        }
+        if let Some(want) = &s.fixed.success {
+            match lock {
+                None => v.push("set fixed success: grader pin evidence (lock) is missing".into()),
+                Some(l) if l.cases.is_empty() => {
+                    v.push("set fixed success: lock pins no grader".into());
+                }
+                Some(l) if l.grader_set_sha256() != *want => v.push(format!(
+                    "set fixed success {want} differs from the locked grader hash {}",
+                    l.grader_set_sha256()
+                )),
+                _ => {}
+            }
+        }
+    }
+}
+
 /// 実験セット（宣言があるときだけ）の固定構成と、実際に動いた全 run の照合。B0 と B1/C1 は別々に検査する。
 /// 設定名が同じだけでは同条件とみなさない: run が実際に使った model/harness を見る。
 fn reconcile_sets(m: &CampaignManifest, recs: &[TrialRecord], v: &mut Vec<String>) {
@@ -175,6 +313,13 @@ fn reconcile_sets(m: &CampaignManifest, recs: &[TrialRecord], v: &mut Vec<String
                     }
                 }
             };
+        }
+    }
+    // SetFixed 宣言（policy/models/harnesses/role_models）と実測の照合。新形式（set 宣言あり）では
+    // 証拠の欠落（役割・run id・model/harness/lower_policy が None、実行した試行に worker run が無い）を違反にする。
+    if let Ok(Some(sets)) = m.selected() {
+        for s in sets {
+            reconcile_set_fixed(&s.fixed, &s.arms, &observed_by_trial(recs), &mut seen);
         }
     }
     // B1/C1（B/C 比較）: 実際に動いた run の model は共通候補集合の内側、harness は共通 run_harnesses の内側。
@@ -648,6 +793,12 @@ pub fn check_expected(
             None
         }
     };
+    reconcile_set_evidence(
+        m,
+        read_json(&out.join(SNAPSHOT_FILE)).ok().as_ref(),
+        saved_lock.as_ref(),
+        &mut v,
+    );
     let mut binding = crate::grades::bind(m, &recs, out, saved_lock.as_ref());
     if v.iter().any(|x| x.starts_with("lock: ")) {
         // lock を信用できないときは grade を 1 件も有効にしない（未採点として分母に残る）。

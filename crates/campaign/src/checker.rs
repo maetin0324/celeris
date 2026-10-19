@@ -100,11 +100,15 @@ fn read_json(path: &Path) -> Result<Value, String> {
 fn expected(m: &CampaignManifest) -> BTreeMap<ConfigId, BTreeSet<String>> {
     let all: BTreeSet<String> = m.problems.iter().cloned().collect();
     let sub: BTreeSet<String> = m.secondary.subset.iter().cloned().collect();
-    BTreeMap::from([
+    let mut e = BTreeMap::from([
         (ConfigId::A, all.clone()),
         (ConfigId::B, all),
         (ConfigId::C, sub),
-    ])
+    ]);
+    if m.is_side() {
+        e.remove(&ConfigId::A); // B1/C1 の別測定に A は無い
+    }
+    e
 }
 
 enum Dep {

@@ -7,7 +7,7 @@
 use std::collections::BTreeMap;
 
 use celeris_campaign::{
-    CAMPAIGN_SCHEMA,
+    CAMPAIGN_SCHEMA, SIDE_CAMPAIGN_SCHEMA,
     celeris_exec::{check_template, routing_override},
     manifest::{
         ArmRouting, Budget, CampaignManifest, Cap, Config, ConfigId, InputRef, Secondary,
@@ -423,4 +423,170 @@ fn pin_on_a_sibling_branch_does_not_cover_a_retry_elsewhere() {
             .is_none(),
         "pin must be set at the campaign root to cover retries"
     );
+}
+
+// ---- 別測定 ID の B/C のみ manifest（A なし）----
+
+/// A0/B0 の manifest（本ファイルの `manifest()`）の sha256。B1/C1 の拡張で変わってはならない。
+const PRIMARY_MANIFEST_SHA: &str =
+    "29decf25aba7a729371c9c36395c6c3f63829f830d06f700f0d5cb156fc508f8";
+/// B1/C1 別 manifest の variant hash（`CampaignManifest::side_variant_hash`）。
+const PINNED_SIDE_HASH: &str = "6bccea892f27f5289bda04259ae2beb19d55bbe868a8f8fd6becbe00b25a9c1e";
+
+fn side() -> CampaignManifest {
+    let mut m = manifest();
+    m.schema = SIDE_CAMPAIGN_SCHEMA.into();
+    m.campaign_id = "jev-b1c1-side".into();
+    m.configs.retain(|c| c.id != ConfigId::A);
+    m.primary = (ConfigId::B, ConfigId::C);
+    m.sha256 = m.compute_sha256().expect("hash");
+    m
+}
+
+fn reseal(m: &mut CampaignManifest) {
+    m.sha256 = m.compute_sha256().expect("hash");
+}
+
+#[test]
+fn side_manifest_validates_and_leaves_the_primary_manifest_untouched() {
+    let s = side();
+    s.validate().expect("B/C-only manifest validates");
+    assert!(s.is_side());
+    assert_eq!(
+        s.planned_configs("p0"),
+        vec![ConfigId::B, ConfigId::C],
+        "no A trial is planned"
+    );
+    assert_eq!(s.side_variant_hash().expect("hash"), PINNED_SIDE_HASH);
+    // 主比較の manifest は A/B/C のまま同じ hash で通る。
+    let p = manifest();
+    p.validate().expect("primary still valid");
+    assert!(!p.is_side());
+    assert_eq!(p.sha256, PRIMARY_MANIFEST_SHA);
+    assert_ne!(p.sha256, s.sha256);
+}
+
+#[test]
+fn side_manifest_rejects_a_and_primary_manifest_rejects_missing_a() {
+    let mut m = side();
+    m.configs.push(cfg(ConfigId::A, "ops-baseline"));
+    reseal(&mut m);
+    assert!(m.validate().is_err(), "A in a side manifest");
+    let mut m = manifest();
+    m.configs.retain(|c| c.id != ConfigId::A);
+    m.primary = (ConfigId::B, ConfigId::C);
+    reseal(&mut m);
+    assert!(m.validate().is_err(), "B/C without the side schema");
+}
+
+#[test]
+fn side_manifest_rejects_any_difference_other_than_the_policy() {
+    type Edit = (&'static str, fn(&mut CampaignManifest));
+    let edits: Vec<Edit> = vec![
+        ("C models", |m| {
+            arm_mut(m, ConfigId::C).routing.as_mut().expect("r").models =
+                Some(vec![SONNET.into(), "claude-haiku-5-5".into()])
+        }),
+        ("C lower_policy", |m| {
+            arm_mut(m, ConfigId::C)
+                .routing
+                .as_mut()
+                .expect("r")
+                .lower_policy = Some("mlsys-min-2".into())
+        }),
+        ("C run_harnesses", |m| {
+            arm_mut(m, ConfigId::C)
+                .routing
+                .as_mut()
+                .expect("r")
+                .run_harnesses = Some(vec!["codex".into()])
+        }),
+        ("C harness_version", |m| {
+            arm_mut(m, ConfigId::C).harness_version = "ba9876543210".into()
+        }),
+        ("C model", |m| arm_mut(m, ConfigId::C).model = OPUS.into()),
+        ("C model_version", |m| {
+            arm_mut(m, ConfigId::C).model_version = "other".into()
+        }),
+    ];
+    for (name, edit) in edits {
+        let mut m = side();
+        edit(&mut m);
+        reseal(&mut m);
+        assert!(m.validate().is_err(), "{name}: must be rejected");
+    }
+    // 共通の欄（予算・input・snapshot）は両 arm 共通なので hash が変わる。
+    let base = side().side_variant_hash().expect("h");
+    for edit in [
+        (|m: &mut CampaignManifest| m.budget.per_arm.max_tokens += 1) as fn(&mut CampaignManifest),
+        |m| m.input.sha256 = "2".repeat(64),
+        |m| m.snapshot.kb_snapshot = "kb@2".into(),
+    ] {
+        let mut m = side();
+        edit(&mut m);
+        assert_ne!(m.side_variant_hash().expect("h"), base);
+    }
+    // 方策の差（policy_version）は許される。
+    let mut m = side();
+    arm_mut(&mut m, ConfigId::C).policy_version = "jev-2".into();
+    reseal(&mut m);
+    m.validate().expect("policy-only change is allowed");
+    assert_ne!(m.side_variant_hash().expect("h"), base);
+}
+
+#[test]
+fn side_manifest_rejects_an_evidence_table() {
+    let mut m = side();
+    let r = arm_mut(&mut m, ConfigId::C).routing.as_mut().expect("r");
+    r.no_evidence_table = None;
+    r.evidence_table_id = Some("ev-1".into());
+    reseal(&mut m);
+    assert!(m.validate().is_err());
+    // 暗黙 latest も拒否。
+    let mut m = side();
+    arm_mut(&mut m, ConfigId::C)
+        .routing
+        .as_mut()
+        .expect("r")
+        .no_evidence_table = None;
+    reseal(&mut m);
+    assert!(m.validate().is_err());
+}
+
+#[test]
+fn side_manifest_rejects_a_candidate_set_without_both_sonnet_and_opus() {
+    let sets: Vec<Option<Vec<String>>> = vec![
+        None,
+        Some(vec![SONNET.into()]),
+        Some(vec![OPUS.into()]),
+        Some(vec![SONNET.into(), "claude-sonnet-5-4".into()]),
+        Some(vec![OPUS.into(), "claude-haiku-5-5".into()]),
+    ];
+    for models in sets {
+        let mut m = side();
+        for id in [ConfigId::B, ConfigId::C] {
+            arm_mut(&mut m, id).routing.as_mut().expect("r").models = models.clone();
+        }
+        reseal(&mut m);
+        let e = m.validate().expect_err(&format!("{models:?}"));
+        assert!(e.contains("single model"), "{e}");
+    }
+}
+
+#[test]
+fn side_manifest_cannot_pin_an_explicit_lane() {
+    // routing に lane/tier/model を書く欄は無く（deny_unknown_fields）、task template でも禁止。
+    let mut v = serde_json::to_value(side()).expect("json");
+    for k in ["lane", "tier", "model"] {
+        let mut x = v.clone();
+        x["configs"][1]["routing"][k] = json!("opus");
+        assert!(
+            serde_json::from_value::<CampaignManifest>(x).is_err(),
+            "{k}"
+        );
+    }
+    let _ = &mut v;
+    for k in ["tier", "assignee", "routing_override"] {
+        assert!(check_template(json!({ k: "x" }).as_object().expect("o")).is_err());
+    }
 }

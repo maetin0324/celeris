@@ -322,6 +322,7 @@ pub fn plan(m: &CampaignManifest) -> Vec<(ConfigId, String, u32)> {
     for (pos, p) in order.iter().enumerate() {
         let arms: Vec<ConfigId> = [ConfigId::A, ConfigId::B, ConfigId::C]
             .into_iter()
+            .filter(|c| !(m.is_side() && *c == ConfigId::A))
             .filter(|c| *c != ConfigId::C || subset.contains(p.as_str()))
             .collect();
         for c in n.arm_sequence(p, pos, arms) {

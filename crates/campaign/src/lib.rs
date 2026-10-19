@@ -43,3 +43,5 @@ pub mod usage;
 pub mod watch;
 
 pub const CAMPAIGN_SCHEMA: &str = "celeris.campaign-manifest/1";
+/// Jev 副比較（B1/C1）の別測定 manifest。A を含まず B/C のみ。主比較（A0/B0）の manifest・hash とは別の schema。
+pub const SIDE_CAMPAIGN_SCHEMA: &str = "celeris.campaign-manifest-side-b1c1/1";

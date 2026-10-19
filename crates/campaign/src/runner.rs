@@ -1363,7 +1363,12 @@ fn publish_global(
 ) -> Result<(), String> {
     let Some(g) = g else { return Ok(()) };
     let s = budget::spend(records, ledger, &m.budget, hash, None);
-    let trials = records.iter().filter(|r| r.ran()).count() as u64;
+    // 投入を拒否された試行（executor_error）は動いていない。同期 executor の Err は精算側が保守的に試行として
+    // 数える（台帳は確定値の大きい方を取る）ので、ここで数えなくても過小にならない。
+    let trials = records
+        .iter()
+        .filter(|r| r.ran() && r.reason.as_deref() != Some(REASON_EXECUTOR_ERROR))
+        .count() as u64;
     g.record(&crate::global_ledger::GlobalLedger::published(
         m,
         hash,

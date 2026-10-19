@@ -724,6 +724,7 @@ impl GlobalLedger {
             .values()
             .filter(|r| r.id.measurement_id == a.measurement_id && r.id.trial == a.trial);
         let mut next = 1u32;
+        let mut settled: Option<&AttemptRow> = None;
         for r in mine {
             if r.state.outstanding() {
                 return Ok(Admission::Granted {
@@ -733,6 +734,21 @@ impl GlobalLedger {
                 });
             }
             next = next.max(r.id.attempt.saturating_add(1));
+            if settled.is_none_or(|p| p.id.attempt < r.id.attempt) {
+                settled = Some(r);
+            }
+        }
+        // 投入済みの試行（adopt）を追っている最中に、その attempt だけが先に精算されていた（全体 → ローカルの順で
+        // 止まった）。新しい attempt を切ると同じ実行を二重に予約・計上するので、精算済みの attempt を続ける
+        // （確定消費は精算済みの値のまま。後の精算は置換で増えない）。
+        if a.adopt
+            && let Some(r) = settled
+        {
+            return Ok(Admission::Granted {
+                id: r.id.clone(),
+                existing: Some(r.state),
+                tokens: r.reserved_tokens,
+            });
         }
         let row = AttemptRow {
             id: AttemptId {

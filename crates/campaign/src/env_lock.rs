@@ -76,7 +76,12 @@ pub struct EnvLock {
     pub schema: String,
     pub campaign_id: String,
     pub campaign_sha256: String,
-    pub a: ALock,
+    /// A が有効なときだけ（B/C のみの測定は A の実行ファイルを固定しない）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub a: Option<ALock>,
+    /// 実験セット宣言（選択を含む）の hash。宣言の無い測定は空。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub sets_sha256: String,
     pub bc: BcLock,
     /// 正規化した CAP_ENV と mount の実体。CAP_ENV を使わない測定は `null`（後から足す・外すも不一致）。
     pub cap_env: Option<CapEnvPin>,
@@ -84,7 +89,8 @@ pub struct EnvLock {
 
 /// 現物の観測。`a_program` は preflight と同じ解決（`resolve_program_in`）の結果から作る。
 pub struct Observed {
-    pub a_program: ProgramPin,
+    /// A が有効なときだけ要る。
+    pub a_program: Option<ProgramPin>,
     pub worker_programs: Vec<WorkerProgram>,
     pub catalog: Vec<CatalogRow>,
     pub cap_env: Option<CapEnvPin>,
@@ -176,24 +182,41 @@ pub fn expected(m: &CampaignManifest, obs: &Observed) -> Result<EnvLock, Vec<Str
         }
     };
     let cfg = |id| m.configs.iter().find(|c| c.id == id);
-    match cfg(ConfigId::A) {
-        None => errs.push("manifest has no config A".into()),
-        Some(a) => {
-            if !a.harness_version.is_empty() && !obs.a_program.version.contains(&a.harness_version)
-            {
-                errs.push(format!(
-                    "a.program.version: {:?} does not match manifest A harness_version {:?}",
-                    obs.a_program.version, a.harness_version
-                ));
+    // 有効 arm だけを固定する。未使用 arm の config・実行ファイルは要求しない。
+    let a = if m.is_active(ConfigId::A) {
+        match (cfg(ConfigId::A), obs.a_program.as_ref()) {
+            (None, _) => {
+                errs.push("manifest has no config A".into());
+                None
+            }
+            (Some(_), None) => {
+                errs.push("a.program: path and sha256 are required".into());
+                None
+            }
+            (Some(a), Some(prog)) => {
+                if !a.harness_version.is_empty() && !prog.version.contains(&a.harness_version) {
+                    errs.push(format!(
+                        "a.program.version: {:?} does not match manifest A harness_version {:?}",
+                        prog.version, a.harness_version
+                    ));
+                }
+                if prog.sha256.is_empty() || prog.path.is_empty() {
+                    errs.push("a.program: path and sha256 are required".into());
+                }
+                Some(ALock {
+                    program: prog.clone(),
+                })
             }
         }
-    }
-    if obs.a_program.sha256.is_empty() || obs.a_program.path.is_empty() {
-        errs.push("a.program: path and sha256 are required".into());
-    }
+    } else {
+        None
+    };
     let mut release = String::new();
     let mut arms = Vec::new();
-    for id in [ConfigId::B, ConfigId::C] {
+    for id in [ConfigId::B, ConfigId::C]
+        .into_iter()
+        .filter(|id| m.is_active(*id))
+    {
         let Some(c) = cfg(id) else {
             errs.push(format!("manifest has no config {id:?}"));
             continue;
@@ -241,8 +264,11 @@ pub fn expected(m: &CampaignManifest, obs: &Observed) -> Result<EnvLock, Vec<Str
         schema: ENV_LOCK_SCHEMA.into(),
         campaign_id: m.campaign_id.clone(),
         campaign_sha256,
-        a: ALock {
-            program: obs.a_program.clone(),
+        a,
+        sets_sha256: if m.experiment_sets.is_empty() {
+            String::new()
+        } else {
+            m.sets_sha256().unwrap_or_default()
         },
         bc: BcLock {
             release,

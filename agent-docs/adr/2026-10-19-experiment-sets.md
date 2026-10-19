@@ -34,3 +34,12 @@ arm ID A/B/C と実行器は保持したまま、A0/B0（主比較）と B1/C1�
 
 ## 範囲外
 runner/checker/export/dry-run/preflight/lock の有効計画への統一は後続 WorkUnit（arm-set-exec / arm-set-prep）。
+
+## 付記: 準備系（preflight / lock / env-lock）の有効 arm 化（arm-set-prep）
+- preflight: 候補 config は有効 arm だけを要求する。A の実行ファイル・bwrap・`--a-account`・A の能力 probe・trial-state は
+  A が有効なときだけ。B/C のみの比較は A の account/環境を要求せず A を呼ばない。B/C の probe は `m.configs`（有効 arm ちょうど）
+  だけを回すので、A/B のみでは C の probe は 0 件（C の credential・Jev 鍵も要らない）。
+- campaign lock: `ExecutionPin` は有効 arm の config だけを固定し、`sets_sha256`（宣言＋選択の hash）を持つ。宣言なしは空で
+  直列化しない（既存 lock の hash は変わらない）。`bind_to_manifest` が set hash の食い違いも拒否する。
+- env-lock: `a` は A が有効なときだけ（`Option`、無ければ欄ごと出さない）、`bc.arms` は有効な B/C のみ、`sets_sha256` を持つ。
+  CLI `env-lock` は A 無効なら `--a-program` を解決しない。schema 版（celeris-env-lock/3）と CAP_ENV の固定値、arm ID は変えない。

@@ -69,7 +69,11 @@ pub struct LockedCase {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct ExecutionPin {
+    /// 有効 arm の config だけ（未使用 arm は固定しない）。
     pub configs: Vec<Config>,
+    /// 実験セット宣言（選択を含む）の hash。宣言の無い測定は空（直列化しない。既存 lock の hash は変わらない）。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub sets_sha256: String,
     pub budget: Budget,
     pub termination: Termination,
     pub order: ArmOrder,
@@ -80,8 +84,19 @@ pub struct ExecutionPin {
 impl ExecutionPin {
     pub fn from_manifest(m: &CampaignManifest) -> Self {
         let n = m.normalized();
+        let active = n.active_arms();
+        let sets_sha256 = if n.experiment_sets.is_empty() {
+            String::new()
+        } else {
+            n.sets_sha256().unwrap_or_default()
+        };
         ExecutionPin {
-            configs: n.configs,
+            configs: n
+                .configs
+                .into_iter()
+                .filter(|c| active.contains(&c.id))
+                .collect(),
+            sets_sha256,
             budget: n.budget,
             termination: n.termination,
             order: n.order,

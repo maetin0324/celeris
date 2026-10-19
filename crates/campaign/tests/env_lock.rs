@@ -561,3 +561,78 @@ fn old_env_lock_without_cap_env_pin_is_refused() {
         err(&o)
     );
 }
+
+impl Env {
+    /// 実験セット宣言つきにする（未使用 arm の config は置かない）。
+    fn declare(&self, arms: &[&str], compare: (&str, &str)) {
+        let mut m: Value =
+            serde_json::from_slice(&fs::read(self.p("manifest.json")).expect("read"))
+                .expect("json");
+        m["configs"]
+            .as_array_mut()
+            .expect("configs")
+            .retain(|c| arms.contains(&c["id"].as_str().expect("id")));
+        m["experiment_sets"] = json!({"s": {"arms": arms, "compare": [[compare.0, compare.1]]}});
+        if !arms.contains(&"C") {
+            m["secondary"]["subset"] = json!([]);
+        }
+        fs::write(
+            self.p("manifest.json"),
+            serde_json::to_vec(&m).expect("json"),
+        )
+        .expect("write");
+    }
+}
+
+#[test]
+fn a_b_only_set_locks_a_and_b_only_with_the_set_hash() {
+    let e = Env::new();
+    e.declare(&["A", "B"], ("A", "B"));
+    let o = e.run(&[]);
+    assert!(o.status.success(), "{}", err(&o));
+    let v: Value = serde_json::from_str(&e.lock()).expect("json");
+    assert_eq!(v["a"]["program"]["version"], "claude-stub 2.0.1");
+    assert_eq!(v["bc"]["arms"].as_array().map(Vec::len), Some(1));
+    assert_eq!(v["bc"]["arms"][0]["id"], "B");
+    assert_eq!(v["sets_sha256"].as_str().map(str::len), Some(64));
+    assert!(e.run(&["--verify"]).status.success());
+}
+
+#[test]
+fn b_c_only_set_does_not_need_or_lock_the_a_program() {
+    let e = Env::new();
+    e.declare(&["B", "C"], ("B", "C"));
+    // A の実行ファイルは存在しない path を渡しても、A を使わないので要求されない。
+    let gone = e.p("no-such-claude");
+    let o = e.run(&["--a-program", &gone.to_string_lossy()]);
+    assert!(o.status.success(), "{}", err(&o));
+    let body = e.lock();
+    let v: Value = serde_json::from_str(&body).expect("json");
+    assert!(v.get("a").is_none(), "{body}");
+    let ids: Vec<&str> = v["bc"]["arms"]
+        .as_array()
+        .expect("arms")
+        .iter()
+        .map(|a| a["id"].as_str().expect("id"))
+        .collect();
+    assert_eq!(ids, ["B", "C"]);
+    assert_eq!(v["sets_sha256"].as_str().map(str::len), Some(64));
+    assert!(
+        e.run(&["--verify", "--a-program", &gone.to_string_lossy()])
+            .status
+            .success()
+    );
+}
+
+#[test]
+fn changing_the_set_declaration_under_the_same_lock_is_refused() {
+    let e = Env::new();
+    e.declare(&["B", "C"], ("B", "C"));
+    assert!(e.run(&[]).status.success());
+    // A/B のみへ宣言を替える（有効 arm・set hash・manifest hash が変わる）。
+    e.manifest(REL, "2.0.1");
+    e.declare(&["A", "B"], ("A", "B"));
+    let o = e.run(&["--verify"]);
+    assert!(!o.status.success());
+    assert!(err(&o).contains("campaign_sha256"), "{}", err(&o));
+}

@@ -22,3 +22,7 @@ tasks: [01M59XT2H8KMZZDBFZYC81WGNR]
 - 対処: `cargo clean -p celerisctl` 後に `RUSTC_WRAPPER= cargo nextest run --workspace --no-run` で再ビルド（ソース変更なし）。
 - 証拠: `cargo fmt --all -- --check` 0 / `cargo clippy --workspace -- -D warnings` 0 / `bash scripts/dev/test-parallel.sh` 0（5880 passed, 0 failed, doctest 含め passed 5883）。
 - `git diff c0510a835040 -- crates/task-dispatch` は tests/tick_and_dispatch.rs のみ（前回 run の決定化）。
+
+## 追補2（再々実行）
+- check 再実行で再び celerisctl 46 件が ENOENT（scratch seed の古い `CARGO_BIN_EXE_celerisctl` が test binary に焼き込まれた）。`cargo clean -p celerisctl` 後に再実行: fmt 0 / clippy 0 / test-parallel 0（5883 passed, 0 failed）。コード変更なし。
+- 提案: seed 複製後に CARGO_BIN_EXE の絶対 path が現 target と食い違う場合の再ビルドを worktree-target-dir/seed 作成側で保証する。

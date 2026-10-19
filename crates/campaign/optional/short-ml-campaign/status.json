@@ -1,5 +1,6 @@
 {
   "schema": "celeris.short-ml-case-status/1",
+  "task_id": "01M59KY5FTRJTJ80PACNW3K533",
   "status": "deferred",
   "label": "dev",
   "decided_at": "2026-10-19",
@@ -49,9 +50,21 @@
     },
     "final_case_dirs_sha256": "a4fe810610664311342c3c2608926ad327c2107c31a690c364aab278a4f6c27e"
   },
-  "impact": "主比較（A0/B0）・Jev 副比較・論文の依存先に変更なし。既存 case/manifest/grader は不変。K2/K4 は置き換えない。",
+  "impact": "主比較（A0/B0）・Jev 副比較・論文の依存先に影響なし。loader/grader/既存 case/manifest は不変。K2/K4 は置き換えない。",
   "evidence_paths": [
     "crates/campaign/scripts/verify-short-ml-case.py",
     "agent-docs/progress/2026-10-19-short-ml-case/case-controls.md"
-  ]
+  ],
+  "inventory_evidence": {
+    "wu": "inventory",
+    "task_id": "01M59KY5FTRJTJ80PACNW3K533",
+    "commit": "c9654bff56332c160523d904b2248ae527d9b820",
+    "note": "inventory WU は独自 commit を持たず、base c9654bff 時点の資産確認（local に ML 資産/numpy 無し、grader は scheduler 証拠のみ）を結論 deferred として引き継ぐ"
+  },
+  "resume_conditions": [
+    "sirius 等 scheduler 証拠が得られる環境で、標準ライブラリのみまたは承認済み依存の ML 資料（固定データ・実行手順）が用意できること",
+    "既存 grader の種別を変えずに、正例（正しい結果）と負例（誤計算・条件違い・未実行）を LLM なしで通せること",
+    "人が依存追加/クラスタ job を承認すること"
+  ],
+  "no_main_comparison_impact": true
 }

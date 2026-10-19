@@ -474,10 +474,6 @@ impl CaseSet {
                 continue;
             }
             for dir in subdirs(&sdir)? {
-                // 延期記録（status.json だけで case.json が無い dir）は case ではない。
-                if !dir.join("case.json").exists() && dir.join("status.json").is_file() {
-                    continue;
-                }
                 let case: Case = read_json(&dir.join("case.json"))?;
                 case.validate()?;
                 let dirname = dir.file_name().and_then(|n| n.to_str()).unwrap_or_default();

@@ -6,7 +6,7 @@ completed: 2026-10-19
 # 多軸評価 2a/P0: 評価者用 CLI（WU cli）
 
 ## 実装
-- `celeris-campaign human-op <record|span|validate|list>`（`crates/campaign/src/human_ops_cli.rs`、`main.rs` は manifest 読み込み前に分岐）。
+- `celeris-campaign human-op <record|span|validate|list>`（`crates/campaign/src/human_ops.rs (mod cli)`、`main.rs` は manifest 読み込み前に分岐）。
 - `--arm A0|B0|B1|C1` から experiment_set と ConfigId を決める（A/B/C 同じ command 列）。`--manifest-sha256` か `--manifest` で manifest_sha256。`--trial-no` 既定 1（runner と同じ）。
 - `record`: op_start を書き、`--ended-at` か `--outcome` があるときだけ op_end を足す。終了が不明なら op_end を書かず missing のまま。
   `--started-at now` は時計の値＋`evaluator_live`、明示時刻は `evaluator_reported`（`--time-basis/--time-precision` で上書き）。

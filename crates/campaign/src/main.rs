@@ -265,7 +265,7 @@ fn run(args: Vec<String>) -> Result<String, String> {
         return celeris_campaign::grader::cli(&args, &ProcessRunner::default());
     }
     if cmd == "human-op" {
-        return celeris_campaign::human_ops_cli::cli(&args);
+        return celeris_campaign::human_ops::cli::cli(&args);
     }
     if cmd == "cap-probe" {
         return cap_probe_cli(&args);

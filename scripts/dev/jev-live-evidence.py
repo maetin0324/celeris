@@ -1,36 +1,54 @@
 #!/usr/bin/env python3
-"""Jev 副比較（B1/C1）の実 `celerisctl campaign export` 出力の検証器。
+"""Jev 副比較（B1/C1）の実 `celerisctl campaign export` 出力を、独立読取元の原記録と照合して検証する。
 
-外部ネットワーク・LLM は使わない（標準ライブラリのみ）。入力は evidence dir:
+信頼境界（本 script の契約）:
+  - 信頼の根は運用者が入力とは独立に設定する CELERIS_JEV_SOURCE_DB（測定 daemon の SQLite）だけ。
+    jev_source_reader が mode=ro + query_only・単一読取 transaction で開く。evidence dir の中の DB、
+    CELERIS_DB / CELERIS_RUN_DB と同じ DB、未設定・到達不能は拒否（照合を省く switch は無い）。
+  - evidence dir の records.jsonl / summary.json / provenance.json / routing_events.jsonl は「照合される側」。
+    原記録から決定的に投影した export（jev_source_reconcile.build_export）・task 木・routing_decided と
+    全件・全欄で照合し、重複（同一内容を含む）・欠落・余剰（孤立・別 campaign 混入）・改変・未知欄・順序違いを拒否。
+  - provenance の files_sha256 / export_command / manifest_hash（CLI 引数 --manifest-hash 由来）は証明にしない。
+    manifest hash は読取元の task_campaigns の値だけを使う。
+  - 段階判定（jev_smoke::judge / jev_stages 相当）へは全件照合が通った後にだけ渡す。入力は原記録から実 ID で組む:
+    routing_decided は event の run_id、Jev 消費は usage.run_id、応答版はその run の decision_log_runs の
+    classifier_snapshot。task だけで結ぶ fallback・他 run の版や費用での補完はしない（run 未結合は未検証）。
 
-  records.jsonl        celerisctl campaign export の records（usage/decision/run/outcome/intervention/trial）
-  summary.json         同 export の CampaignSummary
-  provenance.json      export の出自（source=celerisctl campaign export, campaign_id, manifest_hash,
-                       generated_at, export_command, files_sha256, tasks{task_id:{parent}}）
-  routing_events.jsonl routing_decided event の写し（1 行 {task_id, run_id?, event, allowed?, max_lane?, fixed_lane?}）
+入力 dir:
+  records.jsonl / summary.json   `celerisctl campaign export` の出力そのもの
+  provenance.json                {campaign_id, tasks{task_id:{parent}}, ...}（tasks は原記録と全件照合）
+  routing_events.jsonl           1 行 {task_id, run_id, event}（原記録の routing_decided と全件照合）
 
-判定は crates/campaign/src/jev_smoke.rs の judge と crates/campaign/src/jev_stages.rs の段定義に合わせる。
-`real_api_verified`（本体側の定数）は証拠にしない。欠測は欠測のまま数え、成功に数えない。
-
-終了コード: 0 合格 / 1 検証不合格 / 2 live 証拠なし（dir が無い・空・必須 file なし）。
+終了コード: 0 合格 / 1 検証不合格 / 2 live 証拠なし（dir・必須 file なし）または信頼元なし・到達不能 /
+3 読取元の schema 不明・必要欄なし・campaign 不在（live 不可）。
 """
 import argparse
-import datetime
-import hashlib
+import importlib.util
 import json
 import os
 import re
 import sys
 
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+
+def _load(name, file):
+    spec = importlib.util.spec_from_file_location(name, os.path.join(HERE, file))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+reader = _load("jev_source_reader", "jev_source_reader.py")
+rec = _load("jev_source_reconcile", "jev_source_reconcile.py")
+
 SCHEMA = "celeris.decision-log/1"
 ROLES = ["cos", "planner", "worker", "reviewer", "jev"]
 LANE_RANK = {"cheap": 0, "standard": 1, "frontier": 2}
 ULID = re.compile(r"^[0-9A-HJKMNP-TV-Z]{26}$")
-HEX64 = re.compile(r"^[0-9a-f]{64}$")
-EXPORT_SOURCE = "celerisctl campaign export"
 FILES = ["records.jsonl", "summary.json", "provenance.json", "routing_events.jsonl"]
+PROVENANCE_KEYS = {"source", "campaign_id", "manifest_hash", "generated_at", "export_command", "files_sha256", "tasks"}
 ARM_MODE = {"B": "fixed", "C": "decision_assisted"}
-TOL = 1e-6
 
 
 class NoEvidence(Exception):
@@ -46,12 +64,12 @@ def read_jsonl(path):
     out = []
     with open(path, encoding="utf-8") as f:
         for n, line in enumerate(f, 1):
-            line = line.strip()
-            if line:
-                try:
-                    out.append(json.loads(line))
-                except ValueError as e:
-                    raise ValueError(f"{os.path.basename(path)}:{n}: JSON として読めない: {e}")
+            if not line.strip():
+                raise ValueError(f"{os.path.basename(path)}:{n}: 空行（export は空行を出さない）")
+            try:
+                out.append(json.loads(line))
+            except ValueError as e:
+                raise ValueError(f"{os.path.basename(path)}:{n}: JSON として読めない: {e}")
     return out
 
 
@@ -70,25 +88,22 @@ def load(evidence_dir):
     }
 
 
-def sha256_file(path):
-    return hashlib.sha256(open(path, "rb").read()).hexdigest()
+def _decision_of(ev):
+    cur = ev
+    for k in ("record", "features", "decision"):
+        cur = cur.get(k) if isinstance(cur, dict) else None
+    return cur if isinstance(cur, dict) else None
 
 
 def lane_assist(ev):
-    for ptr in (("record", "lane_assist"), ("lane_assist",)):
-        cur = ev
-        for k in ptr:
-            cur = cur.get(k) if isinstance(cur, dict) else None
-        if isinstance(cur, dict):
-            return cur
-    return None
+    """routing_decided の record.features.decision.lane_assist（RouteDecision の実の位置）。"""
+    la = (_decision_of(ev) or {}).get("lane_assist")
+    return la if isinstance(la, dict) else None
 
 
 def resolved_of(ev):
-    cur = ev
-    for k in ("record", "features", "decision", "routing_resolved"):
-        cur = cur.get(k) if isinstance(cur, dict) else None
-    return cur if isinstance(cur, dict) else None
+    r = (_decision_of(ev) or {}).get("routing_resolved")
+    return r if isinstance(r, dict) else None
 
 
 def classifier(la):
@@ -247,162 +262,203 @@ def add_stage(s, t):
         s["retries"] += 1
 
 
-def is_timestamp(ts):
-    try:
-        datetime.datetime.fromisoformat(ts.replace("Z", "+00:00"))
-        return True
-    except (ValueError, AttributeError):
-        return False
-
-
 def models_of(trial):
     return {c.get("model_id") for c in (trial.get("proposed_candidates") or []) if c.get("model_id")}
 
 
-def verify(evidence_dir, data, require_live):
-    errs = []
+def _numbered(lines):
+    """routing_events の行に (task_id, run_id, event 全文, 出現回数) の鍵を付ける。同一行の重複も別鍵になる。"""
+    seen, out = {}, []
+    for r in lines:
+        if not isinstance(r, dict) or not set(r) <= {"task_id", "run_id", "event"}:
+            out.append({"_key": None})
+            continue
+        c = rec.canon([r.get("task_id"), r.get("run_id"), r.get("event")])
+        seen[c] = seen.get(c, 0) + 1
+        out.append({"_key": f"{c}#{seen[c]}"})
+    return out
+
+
+def reconcile(data, proj):
+    """evidence 全体を原記録の投影と照合する。(code, msg) の列（空なら全件一致）。"""
+    errs = list(proj["problems"])
+    c = proj["campaign_id"]
+    errs += rec.reconcile_lines("records.jsonl", proj["records"], data["records"], rec.record_key, campaign=c)
+    errs += [(code if code != "altered" else "summary", m)
+             for code, m in rec.reconcile_lines("summary.json", [proj["summary"]], [data["summary"]], lambda _: "summary")]
+    prov = data["prov"] if isinstance(data["prov"], dict) else {}
+    unknown = sorted(set(prov) - PROVENANCE_KEYS)
+    if unknown:
+        errs.append(("provenance", f"provenance.json に未知欄: {unknown}（fixture/synthetic 等の自己申告は受け付けない）"))
+    if prov.get("campaign_id") != c:
+        errs.append(("provenance", f"provenance.campaign_id {prov.get('campaign_id')!r} が読取元の campaign {c!r} と違う"))
+    if "manifest_hash" in prov and prov["manifest_hash"] != proj["manifest_hash"]:
+        errs.append(("provenance", "provenance.manifest_hash が読取元の task_campaigns.manifest_hash と違う"))
+    want_tasks = [{"task_id": k, "parent": v["parent"]} for k, v in sorted(proj["tasks"].items())]
+    got_tasks = prov.get("tasks")
+    if not isinstance(got_tasks, dict):
+        errs.append(("task-link", "provenance.tasks（task 木）が無い"))
+    else:
+        got = [dict({"task_id": k}, **v) if isinstance(v, dict) else {"task_id": k, "_": v} for k, v in sorted(got_tasks.items())]
+        errs += [("task-link", m) for _, m in rec.reconcile_lines("provenance.tasks", want_tasks, got, lambda r: r.get("task_id"))]
+    errs += [("routing-events", m) for _, m in rec.reconcile_lines(
+        "routing_events.jsonl", _numbered(proj["routing_events"]), _numbered(data["events"]), lambda r: r.get("_key"))]
+    return errs
+
+
+def bind(src, proj):
+    """原記録から run ごとの段階入力を実 ID で組む。(joined, errs, unverified, unbound)。"""
+    errs, unverified = [], []
+    run_map, usage_map = proj["run_map"], proj["usage_map"]
+    tree = {t: v["parent"] for t, v in proj["tasks"].items()}
+    runs_tbl = {}
+    for r in src["runs"]:
+        runs_tbl.setdefault(r["run_id"], []).append(r)
+    ev_by_run, ev_used = {}, {}
+    for e in src["routing_decided"]:
+        rid = (e["json"] or {}).get("run_id")
+        if not rid:
+            errs.append(("event-link", f"routing_decided event id={e['id']}（task {e['task_id']}）に run_id が無い（run へ結べない）"))
+            continue
+        ev_by_run.setdefault(rid, []).append(e)
+        if rid not in run_map:
+            errs.append(("run-not-exported", f"原記録の run {rid}（task {e['task_id']}）に routing_decided があるが export の run に無い（欠落）"))
+    unbound = [u for u in usage_map.values() if u["role"] == "jev" and not u["shared_overhead"] and u["run_id"] is None]
+    for u in unbound:
+        unverified.append(f"Jev 消費行 {u['dedup_key']} は run_id が無く task {u['task_id']} にしか結べない（task 単位の fallback はしない: どの run の費用・認証の証拠にもしない）")
+    joined = []
+    for rid in sorted(run_map):
+        r = run_map[rid]
+        p = r["p"]
+        tid = p["task_id"]
+        label = f"run {rid}（task {tid}）"
+        rows = runs_tbl.get(rid, [])
+        if len(rows) != 1 or rows[0]["task_id"] != tid:
+            errs.append(("run-link", f"{label}: runs 表に同じ run_id・task_id の実行記録が 1 件ない（{[x['task_id'] for x in rows]}）"))
+        if tid not in tree:
+            errs.append(("task-link", f"{label}: task が campaign 木に無い"))
+        evs = [e for e in ev_by_run.get(rid, [])]
+        e = None
+        if len(evs) != 1:
+            errs.append(("no-event" if not evs else "duplicate-event",
+                         f"{label}: run_id で結ばれた routing_decided が {len(evs)} 件（1 件ちょうどが要る。task 単位の fallback はしない）"))
+        else:
+            e = evs[0]
+            if e["task_id"] != tid:
+                errs.append(("event-link", f"{label}: routing_decided の task {e['task_id']} が run の task と違う"))
+            ev_used.setdefault(e["id"], []).append(rid)
+        parent = p["parent_run_id"]
+        if parent is not None:
+            pr = run_map.get(parent)
+            if pr is None:
+                errs.append(("retry", f"{label}: retry の親 run {parent} が campaign の run に無い"))
+            else:
+                if pr["p"]["task_id"] != tid:
+                    errs.append(("retry", f"{label}: retry の親 run {parent} の task {pr['p']['task_id']} が違う"))
+                a, b = p["attempt_no"], pr["p"]["attempt_no"]
+                if a is None or b is None or a != b + 1:
+                    errs.append(("retry", f"{label}: attempt_no {a} が親 {parent} の attempt_no {b} + 1 でない"))
+        seen, cur = set(), rid
+        while cur is not None and cur in run_map and cur not in seen:
+            seen.add(cur)
+            cur = run_map[cur]["p"]["parent_run_id"]
+        if cur is not None and cur in seen:
+            errs.append(("retry", f"{label}: retry の親の連鎖が循環"))
+        jev_rows = [u for u in usage_map.values() if u["role"] == "jev" and u["run_id"] == rid and not u["shared_overhead"]]
+        ev = (e or {}).get("json") or {}
+        la = lane_assist(ev)
+        kind, _ = classifier(la)
+        for u in jev_rows:
+            parts = u["source_dedup_key"].split(":")
+            status = "ok" if "ok" in parts else ("fallback" if "fallback" in parts else None)
+            if kind == "jev_ok" and status != "ok":
+                errs.append(("auth", f"{label}: event は jev_ok だが同じ run の Jev 呼出記録 {u['dedup_key']} は成功を示さない"))
+            if kind == "fallback" and status == "ok":
+                errs.append(("auth", f"{label}: event は fallback だが同じ run の Jev 呼出記録 {u['dedup_key']} は成功"))
+        vals = [u["cash_cost_usd"] if u["cash_cost_usd"] is not None else u["list_cost_usd"] for u in jev_rows]
+        jev_cost = None if (not jev_rows or any(v is None for v in vals)) else sum(vals)
+        cls = p["classifier"] or {}
+        version = cls.get("snapshot") if cls.get("kind") == "jev" else None
+        ev_line = {"event": ev}
+        verdict = judge(ev_line, bool(jev_rows), jev_cost, version)
+        trial = next(t for t in proj["records"] if t["record_type"] == "trial" and t["run_id"] == rid)
+        joined.append({
+            "trial": trial, "arm": p["arm"], "task_id": tid, "run_id": rid, "la": la, "verdict": verdict,
+            "resolved": resolved_of(ev), "jev_calls": len(jev_rows), "jev_cost": jev_cost,
+            "proposed_model": (p["proposed_first"] or {}).get("model_id"), "exec_model": r["e"]["exec_model"],
+            "fallback_reason": r["e"]["fallback_reason"], "budget_stopped": False,
+            "result": r["o"]["campaign_verdict"] or r["o"]["run_end"], "is_retry": parent is not None,
+            "has_event": e is not None,
+        })
+    for eid, rids in ev_used.items():
+        if len(rids) > 1:
+            errs.append(("duplicate-event", f"routing_decided id={eid} が複数 run {rids} に使われている"))
+    return joined, errs, unverified, unbound
+
+
+def verify(evidence_dir, data, require_live, environ=None):
+    """原記録と全件照合し、一致した場合だけ段階判定へ渡す。(errs, report)。SourceError は呼び出し側へ。"""
+    campaign = data["summary"].get("campaign_id") if isinstance(data["summary"], dict) else None
+    if not isinstance(campaign, str) or not campaign:
+        return ["[schema] summary.campaign_id が無い（どの campaign の原記録と照合するか決まらない）"], {}
+    src = reader.read_campaign(campaign, environ=environ, evidence_dir=evidence_dir)
+    try:
+        proj = rec.project(src)
+    except rec.ProjectionError as e:
+        return [f"[source] 原記録から export を投影できない（live 不可）: {e}"], {"campaign_id": campaign}
+    errs = [f"[{c}] {m}" for c, m in reconcile(data, proj)]
+    report = {"campaign_id": campaign, "manifest_hash_source": proj["manifest_hash"],
+              "source": src["source"], "reconciled": not errs}
+    if errs:
+        # 全件照合が通らなければ段階判定へ渡さない（照合されていない値で集計しない）。
+        return errs, report
     fail = lambda code, msg: errs.append(f"[{code}] {msg}")
-    records, summary, prov, events = data["records"], data["summary"], data["prov"], data["events"]
-    campaign = summary.get("campaign_id")
-    mhash = summary.get("manifest_hash")
-
-    # --- 出自（provenance）: 手組み fixture を live にしない ---
-    if prov.get("source") != EXPORT_SOURCE:
-        fail("provenance", f"provenance.source が {EXPORT_SOURCE!r} ではない: {prov.get('source')!r}（手組み fixture は live 証拠にならない）")
-    if prov.get("fixture") or prov.get("synthetic") or prov.get("hand_made"):
-        fail("provenance", "provenance が fixture/synthetic/hand_made を宣言している")
-    if not campaign or prov.get("campaign_id") != campaign:
-        fail("provenance", f"campaign_id が summary と provenance で一致しない: {campaign!r} / {prov.get('campaign_id')!r}")
-    if not (isinstance(mhash, str) and HEX64.match(mhash)) or prov.get("manifest_hash") != mhash:
-        fail("provenance", f"manifest_hash が 64 hex でない、または summary と provenance で不一致: {mhash!r} / {prov.get('manifest_hash')!r}")
-    if not is_timestamp(prov.get("generated_at")):
-        fail("provenance", f"generated_at が時刻として読めない: {prov.get('generated_at')!r}")
-    cmd = prov.get("export_command") or ""
-    if EXPORT_SOURCE not in cmd or (campaign and campaign not in cmd):
-        fail("provenance", f"export_command に実コマンドと campaign_id が無い: {cmd!r}")
-    for fn in ("records.jsonl", "summary.json"):
-        want = (prov.get("files_sha256") or {}).get(fn)
-        if want != sha256_file(os.path.join(evidence_dir, fn)):
-            fail("provenance", f"files_sha256[{fn}] が実 file と一致しない（export 後に改変、または記録なし）")
-    if summary.get("schema") != SCHEMA:
-        fail("schema", f"summary.schema が {SCHEMA} ではない: {summary.get('schema')!r}")
-    tasks_map = prov.get("tasks") if isinstance(prov.get("tasks"), dict) else {}
-    if not tasks_map:
-        fail("provenance", "provenance.tasks（task 木: task_id -> {parent}）が無い")
-
-    # --- fake 成功の定数 ---
-    # real_api_verified は証拠にしない: classifier_status・費用・版だけを見る（下の judge）。
-    # --- 混入 ---
-    by_type = {}
-    for r in records:
-        if r.get("schema") != SCHEMA:
-            fail("schema", f"record schema 不一致: {r.get('record_type')} {r.get('dedup_key')}")
-        if r.get("campaign_id") != campaign:
-            fail("mixed-campaign", f"別 campaign の行が混入: {r.get('dedup_key')} campaign_id={r.get('campaign_id')!r}（期待 {campaign!r}）")
-        by_type.setdefault(r.get("record_type"), []).append(r)
-    trials = by_type.get("trial", [])
-    usages = by_type.get("usage", [])
-    if not trials:
-        fail("no-trials", "trial record が 1 件も無い（実行の証拠なし）")
-    if summary.get("n_runs") != len(trials):
-        fail("count", f"summary.n_runs={summary.get('n_runs')} と trial 数 {len(trials)} が不一致")
-    run_ids = {t.get("run_id") for t in trials}
-    task_ids = {t.get("task_id") for t in trials}
-    for t in trials:
-        if t.get("manifest_hash") != mhash:
-            fail("mixed-manifest", f"trial {t.get('run_id')} の manifest_hash が export と違う（別 B1/C1 条件の混入）")
-        arm = t.get("arm")
-        if arm not in ARM_MODE:
-            fail("mixed-arm", f"trial {t.get('run_id')} の arm が B/C ではない: {arm!r}（主比較の A 等の混入）")
-        elif t.get("routing_mode") != ARM_MODE[arm]:
-            fail("mixed-arm", f"trial {t.get('run_id')} arm={arm} だが routing_mode={t.get('routing_mode')!r}（期待 {ARM_MODE[arm]}）: B1 と C1 の混入")
-    for u in usages:
-        if u.get("run_id") not in run_ids and u.get("task_id") not in task_ids:
-            fail("mixed-usage", f"どの trial にも属さない消費行: {u.get('dedup_key')}")
-        if u.get("run_id") and u["run_id"] not in run_ids:
-            fail("mixed-usage", f"消費行 {u.get('dedup_key')} の run_id が trial に無い")
-
-    # --- task 木・実 task_id 連結 ---
-    for tid in task_ids:
-        if tid not in tasks_map:
-            fail("task-link", f"trial の task_id {tid} が provenance.tasks に無い")
-        if require_live and not (isinstance(tid, str) and ULID.match(tid)):
-            fail("not-live", f"task_id {tid!r} が実 task の ULID 形式ではない（手組み fixture）")
+    joined, berrs, unverified, unbound = bind(src, proj)
+    for c, m in berrs:
+        fail(c, m)
     depth = {}
+    tree = {t: v["parent"] for t, v in proj["tasks"].items()}
 
-    def depth_of(tid, seen=()):
-        if tid in depth:
-            return depth[tid]
-        parent = (tasks_map.get(tid) or {}).get("parent")
-        if tid in seen:
-            fail("task-link", f"task 木に循環: {tid}")
-            return 0
-        d = 0 if parent is None else 1 + depth_of(parent, seen + (tid,))
-        if parent is not None and parent not in tasks_map:
-            fail("task-link", f"task {tid} の親 {parent} が provenance.tasks に無い")
-        depth[tid] = d
+    def depth_of(t):
+        d, seen = 0, set()
+        while tree.get(t) is not None and t not in seen:
+            seen.add(t)
+            t = tree[t]
+            d += 1
         return d
 
-    def root_of(tid):
-        seen = set()
-        while (tasks_map.get(tid) or {}).get("parent") and tid not in seen:
-            seen.add(tid)
-            tid = tasks_map[tid]["parent"]
-        return tid
-
-    for tid in tasks_map:
-        depth_of(tid)
-
-    # --- routing event の突き合わせ（pin / lane_assist / exec model） ---
-    ev_by_key = {}
-    for e in events:
-        ev_by_key[(e.get("task_id"), e.get("run_id"))] = e
-    joined = []
-    for t in trials:
-        tid, rid, arm = t.get("task_id"), t.get("run_id"), t.get("arm")
-        e = ev_by_key.get((tid, rid)) or ev_by_key.get((tid, None))
-        if e is None:
-            fail("no-event", f"trial {rid}（task {tid}）に対応する routing_decided event が routing_events に無い")
-            continue
-        ev = e.get("event") or {}
-        la = lane_assist(ev)
-        run_usages = [u for u in usages if u.get("role") == "jev" and (u.get("run_id") == rid or (u.get("run_id") is None and u.get("task_id") == tid))]
-        costs = [u.get("list_cost_usd") for u in run_usages]
-        cash = [u.get("cash_cost_usd") for u in run_usages]
-        cost_vals = [c if c is not None else k for c, k in zip(cash, costs)]
-        jev_cost = None if (not run_usages or any(c is None for c in cost_vals)) else sum(cost_vals)
-        version = t.get("classifier_snapshot") or t.get("provider_model_version")
-        verdict = judge(e, bool(run_usages), jev_cost, version)
-        resolved = resolved_of(ev)
-        joined.append({
-            "trial": t, "arm": arm, "task_id": tid, "run_id": rid, "la": la, "verdict": verdict,
-            "resolved": resolved, "jev_calls": len(run_usages), "jev_cost": jev_cost,
-            "proposed_model": ((t.get("proposed_first") or {}).get("model_id")),
-            "exec_model": t.get("exec_model"), "fallback_reason": t.get("fallback_reason"),
-            "budget_stopped": False, "result": t.get("grader_verdict") or t.get("run_end"),
-            "is_retry": bool(t.get("is_retry")), "ev_line": e,
-        })
-
+    for t in tree:
+        depth[t] = depth_of(t)
+    if not joined:
+        fail("no-trials", "原記録に campaign の run が 1 件も無い（実行の証拠なし）")
     cand_models = {"B": set(), "C": set()}
     for j in joined:
         t, arm = j["trial"], j["arm"]
         label = f"trial {j['run_id']}（arm {arm}, task {j['task_id']}）"
-        if arm in cand_models:
-            cand_models[arm] |= models_of(t)
-        # 同じ arm の root と pin が揃うか（子・孫・retry）
-        # exec model
+        if t.get("manifest_hash") != proj["manifest_hash"]:
+            fail("mixed-manifest", f"{label}: manifest_hash {t.get('manifest_hash')!r} が読取元の campaign の hash と違う")
+        if arm not in ARM_MODE:
+            fail("mixed-arm", f"{label}: arm が B/C ではない: {arm!r}（主比較の A 等の混入）")
+            continue
+        if t.get("routing_mode") != ARM_MODE[arm]:
+            fail("mixed-arm", f"{label}: routing_mode={t.get('routing_mode')!r}（期待 {ARM_MODE[arm]}）: B1 と C1 の混入")
+        cand_models[arm] |= models_of(t)
+        if require_live and not ULID.match(j["task_id"] or ""):
+            fail("not-live", f"{label}: task_id が実 task の ULID 形式ではない")
         if not j["exec_model"]:
             fail("exec-model", f"{label}: exec_model が欠測")
         else:
             ms = models_of(t)
             if ms and j["exec_model"] not in ms and not j["fallback_reason"]:
                 fail("exec-model", f"{label}: exec_model={j['exec_model']} が提案候補 {sorted(ms)} に無い（fallback 理由もなし）")
+        if not j["has_event"]:
+            continue
         r = j["resolved"]
         if r is None:
             fail("pin", f"{label}: routing_resolved（task 単位の pin）が event に無い")
         else:
-            if r.get("mode") != ARM_MODE.get(arm):
-                fail("pin", f"{label}: routing_resolved.mode={r.get('mode')!r} が arm の方策 {ARM_MODE.get(arm)!r} と違う")
+            if r.get("mode") != ARM_MODE[arm]:
+                fail("pin", f"{label}: routing_resolved.mode={r.get('mode')!r} が arm の方策 {ARM_MODE[arm]!r} と違う")
             if r.get("evidence_mode") != "none" or r.get("evidence_table_id"):
                 fail("pin", f"{label}: 根拠表を使っている（evidence_mode={r.get('evidence_mode')!r}）。B1/C1 は none")
             if r.get("source") != "task":
@@ -413,73 +469,41 @@ def verify(evidence_dir, data, require_live):
                 fail("lane-assist", f"{label}: C1 に lane_assist が無い")
             elif la.get("overridden_by") == "explicit":
                 fail("explicit-lane", f"{label}: 明示 lane が Jev の提案に勝った（C1 の明示 lane pin は不可）")
-            if la is not None and "real_api_verified" in la and la["real_api_verified"] and j["verdict"]["kind"] != "jev_ok":
+            if la is not None and la.get("real_api_verified") and j["verdict"]["kind"] != "jev_ok":
                 fail("fake-success", f"{label}: real_api_verified=true だが classifier_status が jev_ok ではない（定数は証拠にしない）")
-        elif arm == "B":
-            if j["verdict"]["kind"] in ("jev_ok", "fallback") or j["jev_calls"] > 0:
-                fail("mixed-arm", f"{label}: B1（fixed）なのに Jev の分類/消費がある")
-        if arm == "C":
             for v in j["verdict"]["violations"]:
                 fail("judge", f"{label}: {v}")
-    # 子/孫/retry の pin が root と同じ
+        elif j["verdict"]["kind"] in ("jev_ok", "fallback") or j["jev_calls"] > 0:
+            fail("mixed-arm", f"{label}: B1（fixed）なのに Jev の分類/消費がある")
+    for u in unbound:
+        p = next((rr["p"] for rr in proj["run_map"].values() if rr["p"]["task_id"] == u["task_id"]), None)
+        if p is not None and p["arm"] == "B":
+            fail("mixed-arm", f"B1 の task {u['task_id']} に Jev 消費行 {u['dedup_key']} がある")
+
     def pin_of(j):
         r = j["resolved"] or {}
         return (r.get("mode"), r.get("lower_policy"), r.get("evidence_mode"))
 
     roots = {}
     for j in joined:
-        if depth.get(j["task_id"]) == 0:
+        if depth.get(j["task_id"]) == 0 and not j["is_retry"]:
             roots.setdefault(j["task_id"], j)
     for j in joined:
-        rt = root_of(j["task_id"])
+        rt = j["task_id"]
+        while tree.get(rt) is not None:
+            rt = tree[rt]
         rj = roots.get(rt)
         if rj is None:
-            fail("pin", f"task {j['task_id']} の root {rt} の trial/event が無く pin を比べられない")
+            fail("pin", f"task {j['task_id']} の root {rt} の初回 run が無く pin を比べられない")
         elif j["arm"] != rj["arm"]:
             fail("mixed-arm", f"task {j['task_id']} の arm {j['arm']} が root {rt} の arm {rj['arm']} と違う")
         elif pin_of(j) != pin_of(rj):
-            fail("pin", f"task {j['task_id']} の pin {pin_of(j)} が root {rt} の pin {pin_of(rj)} と不一致（子/孫/retry で継承されていない）")
-    # retry の親 run
-    for j in joined:
-        t = j["trial"]
-        if j["is_retry"]:
-            pr = next((x for x in records if x.get("record_type") == "run" and x.get("run_id") == j["run_id"]), {}).get("parent_run_id")
-            if not pr or pr not in run_ids:
-                fail("retry", f"retry {j['run_id']} の parent_run_id {pr!r} が trial に無い")
-
-    # C1 候補集合
+            fail("pin", f"task {j['task_id']}（run {j['run_id']}）の pin {pin_of(j)} が root {rt} の pin {pin_of(rj)} と不一致")
     if cand_models["C"]:
         has = lambda sub: any(sub in m for m in cand_models["C"])
         if not (has("sonnet") and has("opus")):
             fail("single-model", f"C1 の候補集合が Sonnet と Opus の両方を含まない（単一モデル pin）: {sorted(cand_models['C'])}")
 
-    # --- 費用の突き合わせ（全役割・retry） ---
-    by_role = summary.get("by_role") or {}
-    for role in ROLES:
-        if role not in by_role:
-            fail("cost", f"summary.by_role に {role} が無い")
-            continue
-        rows = [u for u in usages if u.get("role") == role and not u.get("shared_overhead")]
-        s = by_role[role]
-        if s.get("n_rows") != len(rows):
-            fail("cost", f"role {role}: summary n_rows={s.get('n_rows')} と record の {len(rows)} が不一致")
-        for field in ("list_cost_usd", "cash_cost_usd"):
-            vals = [u.get(field) for u in rows if u.get(field) is not None]
-            got = (s.get(field) or {}).get("sum")
-            if (len(vals) == 0) != (got is None) or (vals and abs(sum(vals) - got) > TOL):
-                fail("cost", f"role {role}: {field} の和 summary={got} と record={sum(vals) if vals else None} が不一致")
-            if (s.get(field) or {}).get("n_observed") != len(vals):
-                fail("cost", f"role {role}: {field} の観測数が record と不一致")
-    retry_rows = [u for u in usages if u.get("is_retry") and not u.get("shared_overhead")]
-    sr = (summary.get("by_retry") or {}).get("retry") or {}
-    if sr.get("n_rows") != len(retry_rows):
-        fail("cost", f"retry 消費: summary n_rows={sr.get('n_rows')} と record の {len(retry_rows)} が不一致")
-    rv = [u.get("list_cost_usd") for u in retry_rows if u.get("list_cost_usd") is not None]
-    got_rv = (sr.get("list_cost_usd") or {}).get("sum")
-    if rv and (got_rv is None or abs(sum(rv) - got_rv) > TOL):
-        fail("cost", "retry 費用の和が summary と record で不一致")
-
-    # --- live に必要な範囲 ---
     stages = {"total": new_stages(), "by_arm": {}}
     for j in joined:
         add_stage(stages["total"], j)
@@ -487,9 +511,10 @@ def verify(evidence_dir, data, require_live):
     cj = [j for j in joined if j["arm"] == "C"]
     if require_live:
         if not cj:
-            fail("coverage", "C1 の trial が無い")
+            fail("coverage", "C1 の run が無い")
         if not any(j["verdict"]["live_proven"] for j in cj):
-            fail("auth", "jev_ok・費用・応答版が揃った C1 観測が 1 件も無い（認証成功/実経路は未確認。fallback・欠測は成功に数えない）")
+            fail("auth", "同じ run の原記録で jev_ok・Jev 呼出記録（run_id 結合）・費用・応答版（classifier_snapshot）が"
+                 "揃った C1 観測が 1 件も無い（認証成功/実経路は未検証。fallback・欠測・task 単位の消費は成功に数えない）")
         for need, pred in (
             ("root", lambda j: depth.get(j["task_id"]) == 0),
             ("子", lambda j: depth.get(j["task_id"]) == 1),
@@ -497,32 +522,37 @@ def verify(evidence_dir, data, require_live):
             ("retry", lambda j: j["is_retry"]),
         ):
             if not any(pred(j) for j in cj):
-                fail("coverage", f"C1 に {need} の trial が無い（pin/lane_assist/exec model を確かめられない）")
-        if not any(r.get("role") == "jev" for r in usages):
-            fail("coverage", "Jev の消費行が 1 件も無い")
-    report = {
-        "campaign_id": campaign, "manifest_hash": mhash,
-        "generated_at": prov.get("generated_at"), "trials": len(trials),
-        "stages": stages, "candidate_models": {k: sorted(v) for k, v in cand_models.items()},
+                fail("coverage", f"C1 に {need} の run が無い（pin/lane_assist/exec model を確かめられない）")
+    s = proj["summary"]
+    report.update({
+        "trials": len(joined), "stages": stages,
+        "candidate_models": {k: sorted(v) for k, v in cand_models.items()},
         "missing": {
             "jev_cost_missing": stages["total"]["jev_cost_missing"],
             "version_missing": stages["total"]["version_missing"],
             "model_unknown": stages["total"]["model_unknown"],
             "result_missing": stages["total"]["result_missing"],
-            "incomplete_fields": summary.get("incomplete"),
+            "incomplete_fields": s["incomplete"],
         },
+        "unverified": unverified + [
+            "許可 lane・天井（LaneLimits）は原記録に無い: 許可範囲の判定は lane_assist の記録内の整合だけ",
+            "budget による抑止は原記録の run 行に無い: suppressed.budget は常に 0（未計上）",
+        ],
         "suppressed": stages["total"]["suppressed"],
-        "costs": {r: (by_role.get(r) or {}).get("list_cost_usd") for r in ROLES},
-        "retry_cost": sr.get("list_cost_usd"),
-    }
+        "costs": {r: s["by_role"][r]["list_cost_usd"] for r in ROLES},
+        "costs_cash": {r: s["by_role"][r]["cash_cost_usd"] for r in ROLES},
+        "retry_cost": s["by_retry"]["retry"]["list_cost_usd"],
+        "shared_overhead": s["shared_overhead"]["list_cost_usd"],
+        "results": stages["total"]["results"],
+    })
     return errs, report
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description="Jev B1/C1 の実 campaign export 検証器")
+    ap = argparse.ArgumentParser(description="Jev B1/C1 の実 campaign export を独立読取元の原記録と照合する検証器")
     ap.add_argument("--evidence-dir", required=True)
     ap.add_argument("--require-live", action="store_true",
-                    help="provenance・実 task_id・C1 の認証成功・root/子/孫/retry の被覆を必須にする")
+                    help="実 task_id・C1 の認証成功（同じ run の原記録で）・root/子/孫/retry の被覆を必須にする")
     ap.add_argument("--quiet", action="store_true", help="段階別 report を stdout に出さない")
     a = ap.parse_args(argv)
     try:
@@ -531,6 +561,9 @@ def main(argv=None):
     except NoEvidence as e:
         print(str(e), file=sys.stderr)
         return 2
+    except reader.SourceError as e:
+        print(f"原記録の読取元が使えない（live 不可）: {e}", file=sys.stderr)
+        return e.exit_code
     except (ValueError, OSError) as e:
         print(f"検証不合格: 入力を読めない: {e}", file=sys.stderr)
         return 1
@@ -541,7 +574,8 @@ def main(argv=None):
             print(f"FAIL {e}", file=sys.stderr)
         print(f"検証不合格: {len(errs)} 件", file=sys.stderr)
         return 1
-    print("OK: live 証拠の検証に合格" if a.require_live else "OK: 検証に合格（--require-live なし）", file=sys.stderr)
+    print("OK: 原記録と全件一致し live 証拠の検証に合格" if a.require_live
+          else "OK: 原記録と全件一致（--require-live なし）", file=sys.stderr)
     return 0
 
 

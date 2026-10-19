@@ -41,6 +41,9 @@ REQUIRED = {
     "decision_log_usage": ["dedup_key", "run_id", "decision_id", "campaign_id", "task_id",
                            "role", "is_retry", "list_cost_usd", "cash_cost_usd",
                            "attribution_rule", "shared_overhead"],
+    "decision_log_interventions": ["intervention_id", "kind", "task_id", "campaign_id", "at", "wall_ms",
+                                   "source_event"],
+    "decision_log_campaign_activity": ["campaign_id", "last_activity_at"],
     "route_decisions": ["decision_id", "run_id", "input_json", "output_json", "judge_json",
                         "stage", "created_at"],
 }
@@ -223,6 +226,15 @@ class SourceSnapshot:
             rows.setdefault(r["dedup_key"], r)
         return [rows[k] for k in sorted(rows)]
 
+    def interventions(self, campaign_id):
+        return _rows(self.conn.execute(
+            "SELECT * FROM decision_log_interventions WHERE campaign_id = ? ORDER BY intervention_id", (campaign_id,)))
+
+    def campaign_activity(self, campaign_id):
+        row = self.conn.execute(
+            "SELECT last_activity_at FROM decision_log_campaign_activity WHERE campaign_id = ?", (campaign_id,)).fetchone()
+        return row[0] if row else None
+
     def responses(self, decision_ids):
         rows = self._by_ids(
             "SELECT decision_id, run_id, input_json, output_json, judge_json, stage, created_at "
@@ -291,6 +303,8 @@ class SourceSnapshot:
             "routing_decided": [e for e in events if e["type"] == "routing_decided"],
             "decision_runs": druns,
             "usage": self.usage(campaign_id, run_ids, decision_ids),
+            "interventions": self.interventions(campaign_id),
+            "last_activity_at": self.campaign_activity(campaign_id),
             "responses": self.responses(decision_ids),
             "diagnostics": diags,
         }

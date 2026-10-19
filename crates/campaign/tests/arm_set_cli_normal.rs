@@ -240,7 +240,9 @@ fn finish_task(id: &str, body: &Value) -> Value {
         let mut sel = selection.clone();
         sel["model_id"] = json!(other_model(role));
         runs.push(json!({
-            "run_id": format!("R{id}-{role}"), "role": role, "is_retry": false,
+            "run_id": format!("R{id}-{role}"),
+            // 子 run の role は API の RunRole（worker）。子であることは run_id で区別する。
+            "role": if role == "child-worker" { "worker" } else { role }, "is_retry": false,
             "finished_at": "2026-10-19T00:00:06Z", "usage": zero.clone(), "selection": sel
         }));
     }
@@ -935,7 +937,7 @@ fn flow(which: &'static str) {
             .iter()
             .map(|o| o["role"].as_str().expect("role"))
             .collect();
-        for r in ["worker", "planner", "reviewer", "cos", "child-worker"] {
+        for r in ["worker", "planner", "reviewer", "cos"] {
             assert!(roles.contains(&r), "role {r} observed: {roles:?}");
         }
         for o in obs {

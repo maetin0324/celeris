@@ -73,3 +73,14 @@ runner/checker/export/dry-run/preflight/lock の有効計画への統一は後�
   C/Jev の API・根拠表・credential は 0、B/C では B/C の worker probe（case×arm）が起き A の program/version/account/準備/probe が 0 を示す。
   必要能力を宣言する case を使うので probe は実際に発生し、userns・実 daemon・LLM は要らない。通常 POST stub は planner/reviewer/CoS/子 run を
   独立に観測値として返し（B0 は全 role Sonnet、B1/C1 は Sonnet/Opus 候補の選択結果）、試行記録の `observed` がそれを宣言から補完せず保持することを確かめる。
+- 固定欄と実 run の照合（`checker.rs` の `reconcile_set_fixed` / `reconcile_set_evidence`）: 選択した set の `fixed` が
+  `policy`/`models`/`harnesses`/`role_models` のどれかを宣言したら、その set の非 A arm の「実行した試行」（budget_stop・blocked・
+  executor_error を除く）の `observed`（根・子・孫・再試行の全 run）を照合する。`models`/`harnesses` は集合の内側、`policy` は
+  run の `lower_policy` と一致、`role_models` は role ごとに model 完全一致（宣言に無い role は違反）。`celeris_exec` は role 欠測を
+  `worker` で補わず空のまま記録し、空 role・空/重複 run_id・model/harness/lower_policy が None・observed が空・worker run が無い試行は
+  すべて違反（fail closed）。`initial_info` は 64 桁 hex の材料 hash で、実際に hash した `snapshot/snapshot.json` の `materials_sha256` と
+  封印済み lock の `materials_sha256` の両方に一致、`success` は lock の全 case の grader pin から作る `CampaignLock::grader_set_sha256()`
+  （case id 順の `id\tprivate_sha256\tgrade_case_sha256` 行の sha256）に一致する。snapshot・lock が無い／材料 hash が欠測なら宣言で補わず違反。
+  互換: `experiment_sets` の無い旧 manifest、および固定欄を宣言しない set は従来の照合範囲のまま（observed 空でも通る）。
+  未解決: B0 の `cos` は task API から観測できないため（chat run は task 木に紐付かない）run 照合の対象外で、`role_models` の宣言だけが残る。
+  試験は `tests/set_fixed_observed.rs`。

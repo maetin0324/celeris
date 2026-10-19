@@ -387,6 +387,20 @@ impl LockedCase {
 }
 
 impl CampaignLock {
+    /// 全 case の grader pin（case id・private・grade-case hash）の整列済み digest。`SetFixed.success` の実測側。
+    pub fn grader_set_sha256(&self) -> String {
+        let mut c: Vec<&LockedCase> = self.cases.iter().collect();
+        c.sort_by(|a, b| a.id.cmp(&b.id));
+        let mut s = String::new();
+        for x in c {
+            s += &format!(
+                "{}\t{}\t{}\n",
+                x.id, x.grader.private_sha256, x.grader.grade_case_sha256
+            );
+        }
+        format!("{:x}", Sha256::digest(s.as_bytes()))
+    }
+
     /// manifest と lock の本体（cases）から、封印前の lock を作る。
     pub fn new(
         version: &str,

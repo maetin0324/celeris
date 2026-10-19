@@ -16,6 +16,10 @@ completed: 2026-10-19
 - `celeris-campaign-fixed offline-lock --verify`（lock-gen）→ env_lock verified, paid_calls_made 0。lock の内容は CAMPAIGN_BIN に依存せず不変（lock.json sha256 8ddc8384…、env-lock 6c2275f3…）。
 - launcher.env の値で `config-check` → ok, paid_calls_made 0。launcher.env と measure-k2.env の差は CAMPAIGN_BIN（shim 経由か直接か）のみ。
 
+## 試験の不安定の修正（attempt 2）
+- `crates/campaign/tests/harness_exec.rs` の `runner_drives_three_arms_with_stub_and_resumes_without_restart` が稀に落ちた（3 並列負荷で約 3/180）。原因: manifest の全体 wall 上限（1_000_000）が 1 試行の上限と同値で、実時間が 1 秒進むと残りが予約額を割り、C が budget_stop で打ち切られる。全体 wall 上限を 10_000_000 に上げて決定的にした（製品コードは変更なし）。
+- 証拠: 修正後、3 並列 × 40 回の harness_exec 全体実行で失敗 0。`cargo test -p celeris-campaign` 全 ok、check-doc-links / check-adr-numbers / progress-index --check ok。
+
 ## 未解決
 - 取得後に launcher.env / daemon.toml を変えたため `verify-evidence.py` の入力 hash 照合は今の入力では失敗する（正本 k2-preflight.json は設置済み）。daemon 起動中の `/local/celeris/data/measure/main/daemon.toml`（host 側複製）は未変更で、次回 prepare/start 前に operator が揃える。
 

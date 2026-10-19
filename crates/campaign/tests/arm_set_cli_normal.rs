@@ -601,6 +601,14 @@ fn manifest(
                     } else {
                         Default::default()
                     },
+                    // 固定証拠（B/C は方策・候補・harness、両方とも初期情報）と共有台帳を有効にして通常経路を通す。
+                    policy: (which == "bc").then(|| "mlsys-min-1".to_string()),
+                    models: (which == "bc")
+                        .then(|| vec![ROUTING_MODEL.to_string(), "claude-opus-5-5".to_string()]),
+                    harnesses: (which == "bc").then(|| vec!["claude_code".to_string()]),
+                    initial_info: Some(mat_hash.to_string()),
+                    approved_trials: Some(APPROVED_TRIALS),
+                    shared_ledger: Some(ledger_dir(d).to_string_lossy().into_owned()),
                     ..Default::default()
                 },
             },
@@ -644,6 +652,14 @@ fn manifest(
     };
     m.sha256 = m.compute_sha256().expect("hash");
     m
+}
+
+/// 承認単位の試行数上限（fixture。全計画の試行数より大きい）。
+const APPROVED_TRIALS: u64 = 100;
+
+/// 共有承認の全体台帳 dir（絶対 path）。
+fn ledger_dir(d: &Path) -> PathBuf {
+    d.join("global-ledger")
 }
 
 fn fixture(which: &'static str, repeats: u32) -> Fx {
@@ -759,7 +775,11 @@ impl Fx {
 
     fn bin_with(&self, manifest: &Path, sub: &str, extra: &[&str]) -> Output {
         let mut c = Command::new(std::env::var("CARGO_BIN_EXE_celeris-campaign").expect("bin"));
-        c.arg(sub).args(self.common_with(manifest)).args(extra);
+        c.arg(sub)
+            .args(self.common_with(manifest))
+            .args(extra)
+            .arg("--global-ledger")
+            .arg(ledger_dir(self.dir.path()));
         // token は子の環境にだけ渡す。Jev のキー・他の認証は渡さない。
         c.env(TOKEN_ENV, TOKEN_VALUE)
             .env_remove("ANTHROPIC_API_KEY")
@@ -1114,6 +1134,8 @@ fn with_other_set(f: &Fx, to: &str) -> PathBuf {
                 } else {
                     Default::default()
                 },
+                // 共有承認の台帳は全セットで同じ宣言にする（違えば lock の gate より前に拒否される）。
+                shared_ledger: Some(ledger_dir(f.dir.path()).to_string_lossy().into_owned()),
                 ..Default::default()
             },
         },

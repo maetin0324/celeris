@@ -55,11 +55,15 @@ runner/checker/export/dry-run/preflight/lock の有効計画への統一は後�
   内側か別に検査する。B0 と B1/C1 は別メッセージ。case/repetition/retry は `(config, problem, rep, trial_no)` で区別（従来どおり）。
 - D9 resume: run-meta に `plan_identity` を保存し、同じ測定 ID で有効 arm・比較組・set 宣言・有効設定が変わった再開は
   `check_resume` が変えた欄を名指しして拒否する（hash 不一致の汎用拒否より先）。
-- D10 全体台帳: `global_ledger.rs`（`--global-ledger <dir>` / `RunOptions.global_ledger`、追記専用 `global-ledger.jsonl`）。
-  測定 ID ごとに最後の行が現在値（確定消費+予約・wall・実行試行数・provider 枠）で、再実行・retry の再集計は上書きなので二重加算しない。
-  run 開始時に `admit_start` が他の測定 ID の既消費を manifest の `budget.max_tokens` から引き、`check_shares`（セット `allocation`）と
-  provider 枠を検査して、超過なら out の作成・投入より前に拒否する。投入ゲート（`budget::admit`）にも他測定 ID の既消費を加える。
-  試行数の全体上限は manifest に無いので trials は記録のみ（上限なし）。単独測定（global_ledger なし）は従来と同じ。
+- D10 全体台帳（実装確定）: `global_ledger.rs`（`--global-ledger <dir>` / `RunOptions.global_ledger`、追記専用 `global-ledger.jsonl`、
+  schema `celeris.campaign-global-ledger/2`）。行は `measurement`（測定 ID の確定消費・取り分・上限。再集計は単調で下げない）と
+  `attempt`（試行 identity ごとの未精算予約と Reserved → Submitted → Settled の状態。同じ identity は置換、別 attempt の消費は合算）。
+  承認上限は tokens = `budget.max_tokens`、試行数 = セットの `approved_trials` の最小、provider 枠で、台帳の全行と manifest の最小を取り
+  別測定 ID・再開で増やせない。`allocation`/`approved_trials` を宣言したら全セットに同じ絶対 path の `shared_ledger` が必須で、
+  `run`/`watch` は `--global-ledger` の省略・別 path を投入前に拒否する。`admit_start` は他測定 ID の既消費 + 予約 + 自分の取り分を検査し
+  超過なら out の作成・投入より前に拒否、毎投入前に `admit_trial` が flock の中で検査して予約を fsync する。停止時の Reserved/Submitted は
+  黙って解放せず、再開で冪等鍵の照会により投入が無いと確かめた予約だけを解放する。旧 `/1` 行は全量を確定消費として読み、cap 欄なしは
+  上限を与えず、provider 枠は `confirm_legacy_idle` まで占有する。読めない行は破損として拒否。単独測定（共有承認なし・台帳なし）は従来と同じ。
 - 互換: `experiment_sets` が無い manifest は従来の A/B/C 全計画。export の JSON/CSV の列・名前は不変（行が有効 arm だけになる）。
   run-meta の `plan_identity` は追加欄で、無い旧 out の再開は従来の hash 照合のみ。
 - 再利用: manifest の有効計画（arm-set-core, 3be21634）、既存の `ledger.rs`/`budget.rs`/`final_accounting`/`checker` を拡張。

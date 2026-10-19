@@ -2903,6 +2903,7 @@ mod cron_jobs;
 mod git_workspace;
 mod integration_check_progress;
 mod integration_ready_race;
+mod jev_synth_e2e;
 mod mlsys_mock_e2e;
 mod planning_and_gate;
 mod review;

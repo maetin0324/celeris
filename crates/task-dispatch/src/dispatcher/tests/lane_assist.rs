@@ -9,7 +9,7 @@ use task_core::route_select::{
     SpecificityHint,
 };
 
-fn hinted_task(dir: &std::path::Path, source: task_core::TierSource) -> Task {
+pub(super) fn hinted_task(dir: &std::path::Path, source: task_core::TierSource) -> Task {
     let mut task = new_task(
         dir,
         Check::Command {
@@ -27,7 +27,7 @@ fn hinted_task(dir: &std::path::Path, source: task_core::TierSource) -> Task {
     task
 }
 
-fn routing_decided(store: &Arc<dyn TaskStore>, task: &Task) -> task_core::RoutingRecord {
+pub(super) fn routing_decided(store: &Arc<dyn TaskStore>, task: &Task) -> task_core::RoutingRecord {
     store
         .events_for(task.id)
         .unwrap()
@@ -46,7 +46,7 @@ fn lane_assist_of(rec: &task_core::RoutingRecord) -> Option<LaneAssistRecord> {
         .and_then(|d| d.lane_assist.clone())
 }
 
-fn question_adapter() -> Arc<dyn WorkerAdapter> {
+pub(super) fn question_adapter() -> Arc<dyn WorkerAdapter> {
     Arc::new(InstantAdapter {
         terminal: Terminal::Question {
             text: "not needed".into(),
@@ -75,7 +75,7 @@ fn dispatch_once(
     (routing_decided(&store, &task), task)
 }
 
-fn jev_ok(s: SpecificityHint) -> BoardItem {
+pub(super) fn jev_ok(s: SpecificityHint) -> BoardItem {
     BoardItem {
         entry: ClassificationEntry {
             status: ClassifierStatus::JevOk,

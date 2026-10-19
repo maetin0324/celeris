@@ -387,3 +387,232 @@ fn initial_info_and_success_are_matched_to_real_hashes() {
     // 宣言が無い欄は見ない（旧形式）。
     assert!(evidence(SetFixed::default(), None, None).is_empty());
 }
+
+// ---- B1/C1（B/C のみ）: 共通候補集合・harness・tier 対応・根拠表不使用を観測 run と照合する ----
+
+const OPUS: &str = "claude-opus-5-5";
+
+fn arm_routing(models: &[&str], policy: &str, c: bool) -> celeris_campaign::manifest::ArmRouting {
+    celeris_campaign::manifest::ArmRouting {
+        lower_policy: Some(policy.into()),
+        models: Some(models.iter().map(|s| s.to_string()).collect()),
+        run_harnesses: Some(vec!["claude-code".into()]),
+        no_evidence_table: c.then_some(true),
+        ..Default::default()
+    }
+}
+
+fn bc_runs(arm: &str, tag: &str) -> Vec<Value> {
+    let mode = if arm == "B" {
+        "fixed"
+    } else {
+        "decision_assisted"
+    };
+    [("worker", SONNET), ("reviewer", OPUS)]
+        .iter()
+        .map(|(role, model)| {
+            json!({"run_id": format!("{tag}-{role}"), "role": role, "model": model,
+                   "harness": "claude-code", "lower_policy": "tier-v1",
+                   "routing_mode": mode, "routing_source": "task",
+                   "evidence_mode": "none", "evidence_table_id": null})
+        })
+        .collect()
+}
+
+/// B/C のみの測定。`decl` で宣言（B, C の routing）を、`mutate(arm, n, runs)` で観測 run を差し替える。
+fn bc_checked(
+    decl: impl Fn(&mut CampaignManifest),
+    mutate: impl Fn(&str, usize, &mut Vec<Value>),
+) -> Vec<String> {
+    let d = tempfile::tempdir().expect("dir");
+    let i = input(2);
+    let mut m = campaign(&i, "bc", 2, 10_000_000);
+    for c in m.configs.iter_mut() {
+        c.routing = Some(arm_routing(&[SONNET, OPUS], "tier-v1", c.id == ConfigId::C));
+    }
+    decl(&mut m);
+    let out = d.path().join("out");
+    run(
+        &m,
+        &i,
+        &MockExecutor::scripted(BTreeMap::new()),
+        &RunOptions {
+            out: out.clone(),
+            ..RunOptions::default()
+        },
+    )
+    .expect("run");
+    let trials = out.join(TRIALS_FILE);
+    let (mut nb, mut nc) = (0, 0);
+    let lines: Vec<String> = fs::read_to_string(&trials)
+        .expect("t")
+        .lines()
+        .map(|l| {
+            let mut v: Value = serde_json::from_str(l).expect("j");
+            let arm = v["config"].as_str().unwrap_or("").to_string();
+            if arm == "B" || arm == "C" {
+                let n = if arm == "B" { &mut nb } else { &mut nc };
+                let mut obs = bc_runs(&arm, &format!("{arm}{n}"));
+                mutate(&arm, *n, &mut obs);
+                *n += 1;
+                v["observed"] = Value::Array(obs);
+            }
+            v.to_string()
+        })
+        .collect();
+    fs::write(&trials, lines.join("\n") + "\n").expect("w");
+    check(&m, &out).violations
+}
+
+#[test]
+fn b1_c1_positive_same_conditions_only_routing_mode_differs() {
+    let v = bc_checked(|_| {}, |_, _, _| {});
+    assert!(v.is_empty(), "{v:?}");
+}
+
+#[test]
+fn b1_c1_declaration_pin_and_evidence_table_are_violations() {
+    // C を単一 model に pin。
+    let v = bc_checked(
+        |m| {
+            for c in m.configs.iter_mut().filter(|c| c.id == ConfigId::C) {
+                c.routing.as_mut().expect("r").models = Some(vec![SONNET.into()]);
+            }
+        },
+        |_, _, _| {},
+    );
+    assert!(has(&v, "B1/C1"), "{v:?}");
+    // 根拠表を使う。
+    let v = bc_checked(
+        |m| {
+            for c in m.configs.iter_mut().filter(|c| c.id == ConfigId::C) {
+                let r = c.routing.as_mut().expect("r");
+                r.no_evidence_table = None;
+                r.evidence_table_id = Some("t1".into());
+            }
+        },
+        |_, _, _| {},
+    );
+    assert!(has(&v, "evidence table"), "{v:?}");
+}
+
+#[test]
+fn b1_c1_observed_evidence_table_and_single_pin_runs_are_violations() {
+    // 観測 run が根拠表を使った（名前は none と宣言していても実測で偽装を検出）。
+    let v = bc_checked(
+        |_| {},
+        |a, n, o| {
+            if a == "C" && n == 0 {
+                o[0]["evidence_mode"] = json!("pinned");
+                o[0]["evidence_table_id"] = json!("t1");
+            }
+        },
+    );
+    assert!(has(&v, "used an evidence table"), "{v:?}");
+    // C の実行が候補集合外の単一 model に落ちた。
+    let v = bc_checked(
+        |_| {},
+        |a, _, o| {
+            if a == "C" {
+                o[0]["model"] = json!("claude-haiku-5-5");
+            }
+        },
+    );
+    assert!(has(&v, "outside the set's fixed models"), "{v:?}");
+}
+
+#[test]
+fn b1_c1_none_fields_are_violations() {
+    for (field, needle) in [
+        ("model", "model not observed"),
+        ("harness", "harness not observed"),
+        ("lower_policy", "lower_policy not observed"),
+        ("routing_mode", "routing mode not observed"),
+    ] {
+        for arm in ["B", "C"] {
+            let v = bc_checked(
+                |_| {},
+                |a, n, o| {
+                    if a == arm && n == 0 {
+                        o[1][field] = Value::Null;
+                    }
+                },
+            );
+            assert!(has(&v, needle), "{arm}/{field}: {v:?}");
+        }
+    }
+}
+
+#[test]
+fn b1_c1_policy_harness_and_mode_mismatch_are_violations() {
+    let v = bc_checked(
+        |_| {},
+        |a, n, o| {
+            if a == "C" && n == 0 {
+                o[0]["lower_policy"] = json!("tier-v2");
+                o[1]["harness"] = json!("codex");
+            }
+            if a == "B" && n == 0 {
+                o[0]["routing_mode"] = json!("decision_assisted");
+            }
+        },
+    );
+    assert!(has(&v, "differs from the set's fixed policy"), "{v:?}");
+    assert!(has(&v, "outside the set's fixed harnesses"), "{v:?}");
+    assert!(has(&v, "B ran routing mode"), "{v:?}");
+}
+
+#[test]
+fn b1_c1_missing_and_extra_runs_are_violations() {
+    // 観測 run が無い。
+    let v = bc_checked(
+        |_| {},
+        |a, n, o| {
+            if a == "C" && n == 1 {
+                o.clear();
+            }
+        },
+    );
+    assert!(has(&v, "no run was observed"), "{v:?}");
+    // worker run が無い。
+    let v = bc_checked(
+        |_| {},
+        |a, n, o| {
+            if a == "B" && n == 0 {
+                o.remove(0);
+            }
+        },
+    );
+    assert!(has(&v, "no worker run observed"), "{v:?}");
+    // 別試行の run id を借りた追加 run。
+    let v = bc_checked(
+        |_| {},
+        |a, n, o| {
+            if a == "C" && n == 1 {
+                o[0]["run_id"] = json!("B0-worker");
+            }
+        },
+    );
+    assert!(has(&v, "also claimed by trial"), "{v:?}");
+}
+
+#[test]
+fn b1_c1_name_only_match_is_not_enough() {
+    // 宣言上は同じ候補集合だが、観測した C の run は設定名（routing_mode=decision_assisted）だけ合わせて
+    // 全体 config（harness/model 不明）へ落ちている。
+    let v = bc_checked(
+        |_| {},
+        |a, _, o| {
+            if a == "C" {
+                for r in o.iter_mut() {
+                    r["model"] = Value::Null;
+                    r["harness"] = Value::Null;
+                }
+            }
+        },
+    );
+    assert!(
+        has(&v, "model not observed") && has(&v, "harness not observed"),
+        "{v:?}"
+    );
+}

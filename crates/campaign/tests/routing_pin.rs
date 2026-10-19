@@ -221,6 +221,8 @@ fn campaign(i: &Input, n: usize, b: Option<ArmRouting>, c: Option<ArmRouting>) -
             cfg(ConfigId::B, b),
             cfg(ConfigId::C, c),
         ],
+        experiment_sets: Default::default(),
+        selected_sets: Vec::new(),
         primary: (ConfigId::A, ConfigId::B),
         secondary: Secondary {
             pair: (ConfigId::B, ConfigId::C),

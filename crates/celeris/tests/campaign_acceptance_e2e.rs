@@ -626,6 +626,8 @@ fn campaign(i: &Input, problems: &[&str], lim: &Limits) -> CampaignManifest {
             arm_cfg(ConfigId::B, Some(routing(false))),
             arm_cfg(ConfigId::C, Some(routing(true))),
         ],
+        experiment_sets: Default::default(),
+        selected_sets: Vec::new(),
         primary: (ConfigId::A, ConfigId::B),
         secondary: Secondary {
             pair: (ConfigId::B, ConfigId::C),

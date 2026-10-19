@@ -77,6 +77,8 @@ fn build_pilot(input: &Input) -> CampaignManifest {
             cfg(ConfigId::B, "celeris", "1", "fixed"),
             cfg(ConfigId::C, "celeris", "1", "jev-1"),
         ],
+        experiment_sets: Default::default(),
+        selected_sets: Vec::new(),
         primary: (ConfigId::A, ConfigId::B),
         secondary: Secondary {
             pair: (ConfigId::B, ConfigId::C),

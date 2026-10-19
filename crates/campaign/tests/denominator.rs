@@ -51,6 +51,8 @@ fn campaign(i: &Input, n: usize, repeats: u32) -> CampaignManifest {
             cfg(ConfigId::B, "celeris"),
             cfg(ConfigId::C, "celeris"),
         ],
+        experiment_sets: Default::default(),
+        selected_sets: Vec::new(),
         primary: (ConfigId::A, ConfigId::B),
         secondary: Secondary {
             pair: (ConfigId::B, ConfigId::C),

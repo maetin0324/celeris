@@ -7,7 +7,10 @@ use celeris_campaign::{cap_probe, manifest::CampaignManifest};
 
 fn final_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../agent-docs/progress/2026-10-16-mlsys-final")
+        .join("../..")
+        .join("agent-docs")
+        .join("progress")
+        .join("2026-10-16-mlsys-final")
 }
 
 fn run_harnesses() -> Vec<String> {

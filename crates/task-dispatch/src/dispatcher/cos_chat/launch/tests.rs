@@ -9,7 +9,7 @@ fn value<'a>(env: &'a [(String, String)], key: &str) -> Option<&'a str> {
 
 #[test]
 fn cos_chat_run_launch_sets_api_url_env_and_path() {
-    let env = cos_run_env("http://127.0.0.1:7700/api/v1", "celeris-cos-run.x");
+    let env = cos_run_env("http://127.0.0.1:7700/api/v1", "celeris-cos-run.x", None);
     assert_eq!(
         value(&env, COS_API_URL_ENV),
         Some("http://127.0.0.1:7700/api/v1")
@@ -37,7 +37,7 @@ fn cos_chat_run_launch_sets_api_url_env_and_path() {
     }
 
     // No `[api] listen`: no CELERIS_API_URL; the prompt's own explanation applies.
-    let env = cos_run_env("", "celeris-cos-run.x");
+    let env = cos_run_env("", "celeris-cos-run.x", None);
     assert!(value(&env, COS_API_URL_ENV).is_none());
     assert_eq!(
         value(&env, COS_RUN_CREDENTIAL_ENV),
@@ -175,4 +175,18 @@ mod resume_delta {
         );
         assert_eq!(cursor(&s, &t), 1);
     }
+}
+
+/// ADR 2026-10-19-cos-registered-project-deploy D5: the run's own tmp dir becomes `$TMPDIR`.
+#[test]
+fn cos_run_env_sets_tmpdir_to_the_run_tmp_dir() {
+    let ws = tempfile::tempdir().expect("ws");
+    let tmp = task_worker::run_tmpdir::RunTmpDir::create(ws.path(), "run1").expect("tmp");
+    let env = cos_run_env("", "celeris-cos-run.x", Some(&tmp));
+    let want = tmp.path().display().to_string();
+    for key in ["TMPDIR", "TMP", "TEMP"] {
+        assert_eq!(value(&env, key), Some(want.as_str()), "{key}");
+    }
+    assert!(tmp.path().is_dir());
+    assert!(value(&cos_run_env("", "t", None), "TMPDIR").is_none());
 }

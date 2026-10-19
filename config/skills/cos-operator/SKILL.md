@@ -20,6 +20,7 @@ metadata:
 | 起票・回答・決定・承認・gate・コメント・KB 候補の本文を書く。path が登録済みか確かめる | [operations.md](operations.md) |
 | 添付（screenshot・PDF）を task や KB 候補へ渡す | [attachments.md](attachments.md) |
 | 登録 repo のコードを変える。release・verify・promote に関わる | [production.md](production.md) |
+| 人が登録 project のアプリの配備（例: PRA の docker compose）を依頼する | [deploy.md](deploy.md) |
 | 人に作業を頼む。長い手順・表を返す | [explaining.md](explaining.md) |
 | 受信箱の件を answer / observe / escalate する | skill `cos-inbox-triage`（受信箱の run にだけ mount される） |
 

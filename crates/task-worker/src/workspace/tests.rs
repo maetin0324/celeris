@@ -303,3 +303,30 @@ async fn collect_returns_empty_when_no_artifacts_dir() {
     let refs = ws.collect(&task).await.expect("collect");
     assert!(refs.is_empty());
 }
+
+/// ADR 2026-10-19-cos-registered-project-deploy D5: 判定コマンドは exec ごとの専用 `TMPDIR` を受け取り、
+/// 終了後にその dir は消える。`with_env` が渡した `TMPDIR` はそのまま使う。
+#[tokio::test]
+async fn exec_gives_the_command_a_private_tmpdir_removed_afterwards() {
+    let dir = tempfile::tempdir().unwrap();
+    let ws = LocalWorkspace::new(dir.path());
+    let marker = dir.path().join("seen");
+    let cmd = format!(
+        "test -d \"$TMPDIR\" && test \"$TMP\" = \"$TMPDIR\" && echo \"$TMPDIR\" > {}",
+        marker.display()
+    );
+    let r = ws.exec(&cmd, Duration::from_secs(10)).await.unwrap();
+    assert_eq!(r.exit, Some(0), "{r:?}");
+    let seen = std::fs::read_to_string(&marker).unwrap();
+    assert!(!seen.trim().is_empty());
+    assert!(
+        !std::path::Path::new(seen.trim()).exists(),
+        "exec tmpdir must be removed"
+    );
+    let ws = LocalWorkspace::new(dir.path()).with_env(vec![("TMPDIR".into(), "/given".into())]);
+    let r = ws
+        .exec("test \"$TMPDIR\" = /given", Duration::from_secs(10))
+        .await
+        .unwrap();
+    assert_eq!(r.exit, Some(0));
+}

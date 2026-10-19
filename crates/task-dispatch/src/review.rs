@@ -983,6 +983,32 @@ async fn run_reviewer(
     (result, record)
 }
 
+/// ADR 2026-10-19-cos-registered-project-deploy D5: `runs/<run_id>/tmp` を作って adapter の env
+/// （`TMPDIR`・`TMP`・`TEMP`）に重ねる。返す `RunTmpDir` が生きている間だけ dir がある。作れない、
+/// または adapter が `with_env` を持たないときは元の adapter のまま（警告のみ）。
+pub(crate) fn with_run_tmpdir(
+    adapter: &Arc<dyn WorkerAdapter>,
+    workspace_dir: &Path,
+    run_id: &str,
+) -> (
+    Arc<dyn WorkerAdapter>,
+    Option<task_worker::run_tmpdir::RunTmpDir>,
+) {
+    match task_worker::run_tmpdir::RunTmpDir::create(workspace_dir, run_id) {
+        Ok(tmp) => match adapter.with_env(&tmp.env()) {
+            Some(wrapped) => (wrapped, Some(tmp)),
+            None => {
+                tracing::warn!(adapter = %adapter.id(), "adapter does not support with_env; the run TMPDIR was not applied");
+                (Arc::clone(adapter), None)
+            }
+        },
+        Err(e) => {
+            tracing::warn!(run_id, error = %e, "run tmpdir: could not create; TMPDIR is left unchanged");
+            (Arc::clone(adapter), None)
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run_reviewer_inner(
     task: &Task,
@@ -1063,10 +1089,11 @@ async fn run_reviewer_inner(
         },
     };
     let tag = format!("reviewer({})", run.run_id);
+    // reviewer の process にも run 専用の `TMPDIR` を与える（この関数を抜けると消える）。
+    let (adapter, _run_tmp) = with_run_tmpdir(&run.adapter, workspace_dir, &run.run_id);
     run.sink
-        .progress(&format!("started (adapter={})", run.adapter.id()));
-    let outcome = match run
-        .adapter
+        .progress(&format!("started (adapter={})", adapter.id()));
+    let outcome = match adapter
         .run(req, &run.run_id, run.limits, run.sink.as_ref())
         .await
     {

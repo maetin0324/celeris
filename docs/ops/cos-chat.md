@@ -54,7 +54,7 @@ CoS は特別 worker として shell・ファイル・git・登録済み MCP・c
 
 ## CoS skill の配置（導入時に必須）
 
-CoS の前置きは KB の skill を読む。`[knowledge] root` の `skills/` に、repo の `config/skills/cos-operator` と `config/skills/cos-inbox-triage` をディレクトリごと置く（cos-operator は入口の `SKILL.md` と参照 file `operations.md`・`attachments.md`・`production.md`・`explaining.md` の組。全部が要る）。無いと CoS run は `CoS unavailable: CoS skills unavailable` で起動せず、チャットは失敗する。本番の KB への配置は人が行う。
+CoS の前置きは KB の skill を読む。`[knowledge] root` の `skills/` に、repo の `config/skills/cos-operator` と `config/skills/cos-inbox-triage` をディレクトリごと置く（cos-operator は入口の `SKILL.md` と参照 file `operations.md`・`attachments.md`・`production.md`・`deploy.md`・`explaining.md` の組。全部が要る）。無いと CoS run は `CoS unavailable: CoS skills unavailable` で起動せず、チャットは失敗する。本番の KB への配置は人が行う。
 
 ```sh
 # <kb_root> は config の [knowledge] root。付属 file ごと取り込む（冪等）

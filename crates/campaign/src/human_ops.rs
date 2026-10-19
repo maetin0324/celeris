@@ -912,7 +912,8 @@ pub mod cli {
         manifest::{CampaignManifest, ConfigId},
     };
 
-    const USAGE: &str = "usage: celeris-campaign human-op <record|span|validate|list> --file <jsonl> ...\n\
+    const USAGE: &str = "usage: celeris-campaign human-op <record|span|validate|list|join> --file <jsonl> ...\n\
+join --file F --events <export dir|out dir|file> (event 由来/評価者記録/欠測の出所つき JSONL)\n\
 record --file F --campaign ID (--manifest-sha256 H | --manifest M) --case ID --arm A0|B0|B1|C1 --rep N --op-kind K --actor NAME --mode manual|automatic --intent I \
 [--actor-kind human|script] [--trigger T] [--logical-op ID] [--attempt N] [--started-at T|now] [--ended-at T|now] [--outcome ok|failed|abandoned] [--reason S] [--target kind:ref]... \
 [--task-id ID] [--run-id ID] [--celeris-event-ref R] [--trial-no N] [--missing-reason R] [--time-basis B] [--time-precision P] [--note S]\n\
@@ -1365,6 +1366,7 @@ clock: [--now T] [--clock-source system_utc|system_utc_ntp_synced|unknown] [--ho
             Some("span") => span(rest),
             Some("validate") => validate(rest),
             Some("list") => list(rest),
+            Some("join") => crate::human_ops_join::join_cli(rest),
             _ => Err(USAGE.into()),
         }
     }

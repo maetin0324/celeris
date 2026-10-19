@@ -69,7 +69,7 @@ pub struct RunReport {
     pub parallel_deferred: u64,
     /// 残予算が予約を下回り、先行の予約が解けるまで投入を見送った試行数（`waiting` にも数える）。
     pub reserve_deferred: u64,
-    /// A の試行で exit 0 だが成果物（workspace の変化）が無く failed にした数。
+    /// A の試行で exit 0 だが成果物（workspace の変化）が無く failed にした累計（再開をまたいで記録から数える）。
     pub no_artifact: u64,
 }
 
@@ -743,6 +743,11 @@ pub fn run(
         resumed_skipped: records.len() as u64,
         tokens_total: records.iter().filter_map(|r| r.tokens).sum(),
         wall_secs_total: records.iter().map(|r| r.wall_secs).sum(),
+        // 再開時も記録から数え直す（summary.json は run ごとに書き直すため、今回の run だけの件数にしない）。
+        no_artifact: records
+            .iter()
+            .filter(|r| r.reason.as_deref() == Some(REASON_NO_ARTIFACT))
+            .count() as u64,
         ..RunReport::default()
     };
     // arm ごとの累積（欠測 tokens は保守的に課金する）。再開時は記録から作り直す。

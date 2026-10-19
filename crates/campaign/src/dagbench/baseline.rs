@@ -50,6 +50,9 @@ pub struct NodeSpec {
     pub kind: String,
     pub deps: Vec<String>,
     pub work_secs: u64,
+    /// この論理秒より前には ready にならない（campaign の到着時刻。単一 DAG では 0）。
+    #[serde(default)]
+    pub release_at: u64,
     #[serde(default)]
     pub external: Option<ExternalSpec>,
 }
@@ -161,6 +164,35 @@ pub struct Baseline {
     saves: u64,
     stop_after_saves: Option<u64>,
     progress: Option<(File, u64)>,
+    worker_log: Option<WorkerLog>,
+}
+
+/// 作業の開始・終了の独立記録（metrics が生ログとして読む。`celeris_side` の worker ledger と同じ形）。
+/// node id は `<campaign>/<node>`（`/` が無ければ campaign は `c0`）。
+struct WorkerLog {
+    file: File,
+    seq: u64,
+}
+
+impl WorkerLog {
+    fn append(&mut self, now: u64, event: &str, id: &str) {
+        self.seq += 1;
+        let (campaign, node) = id.split_once('/').unwrap_or(("c0", id));
+        let e = super::celeris_side::WorkerEntry {
+            seq: self.seq,
+            logical_secs: now,
+            event: event.into(),
+            dataset: super::ext::DATASET.into(),
+            campaign: campaign.into(),
+            node: node.into(),
+            detail: None,
+        };
+        if let Ok(mut line) = serde_json::to_string(&e) {
+            line.push('\n');
+            let _ = self.file.write_all(line.as_bytes());
+            let _ = self.file.sync_data();
+        }
+    }
 }
 
 impl Baseline {
@@ -215,6 +247,7 @@ impl Baseline {
             saves: 0,
             stop_after_saves: None,
             progress: None,
+            worker_log: None,
         };
         // 実行中だった作業は止まった時点で失われているので、最初からやり直す。
         for n in b.state.nodes.values_mut() {
@@ -224,6 +257,26 @@ impl Baseline {
             }
         }
         Ok(b)
+    }
+
+    /// 作業の開始・終了を `path` に追記する（再開しても seq は続く）。
+    pub fn set_worker_log(&mut self, path: &Path) -> std::io::Result<()> {
+        let seq = fs::read_to_string(path)
+            .map(|t| t.lines().count() as u64)
+            .unwrap_or(0);
+        let file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)?;
+        self.worker_log = Some(WorkerLog { file, seq });
+        Ok(())
+    }
+
+    fn log(&mut self, event: &str, id: &str) {
+        let now = self.state.now;
+        if let Some(w) = &mut self.worker_log {
+            w.append(now, event, id);
+        }
     }
 
     /// この run で `n` 回目の state 保存の直後に止める（制御 process の停止を模す）。
@@ -353,11 +406,12 @@ impl Baseline {
                 if self.state.nodes[id].status != Status::Pending {
                     continue;
                 }
-                let ok = self
-                    .spec(id)
-                    .deps
-                    .iter()
-                    .all(|d| self.state.nodes[d].status == Status::Done);
+                let ok = self.state.now >= self.spec(id).release_at
+                    && self
+                        .spec(id)
+                        .deps
+                        .iter()
+                        .all(|d| self.state.nodes[d].status == Status::Done);
                 if ok {
                     let now = self.state.now;
                     let n = self.state.nodes.get_mut(id).expect("node");
@@ -400,6 +454,12 @@ impl Baseline {
                 n.phase_end = Some(now + secs);
                 let phase = n.phase;
                 started.push((id.clone(), phase));
+                let ev = if phase == Phase::Post {
+                    "post_wait_started"
+                } else {
+                    "node_started"
+                };
+                self.log(ev, id);
                 changed = true;
             }
             if changed {
@@ -433,7 +493,17 @@ impl Baseline {
                 .filter_map(|n| n.phase_end)
                 .min();
             let poll = if waiting { self.state.next_poll } else { None };
-            let Some(t) = [next_end, poll].into_iter().flatten().min() else {
+            let now0 = self.state.now;
+            let next_release = self
+                .scenario
+                .nodes
+                .iter()
+                .filter(|n| {
+                    self.state.nodes[&n.id].status == Status::Pending && n.release_at > now0
+                })
+                .map(|n| n.release_at)
+                .min();
+            let Some(t) = [next_end, poll, next_release].into_iter().flatten().min() else {
                 return Err(Error::Stuck(
                     "no runnable node and nothing to wait for".into(),
                 ));
@@ -495,6 +565,7 @@ impl Baseline {
                     n.done_at = Some(now);
                     n.phase_end = None;
                     finished.push((id.clone(), phase));
+                    self.log("node_finished", id);
                 }
             }
             if !self
@@ -539,6 +610,7 @@ impl Baseline {
             Ok(r) => {
                 n.physical_id = Some(r.physical_id);
                 n.status = Status::Waiting;
+                self.log("external_wait_started", id);
             }
             // 応答不明: 再開時（または次の poll）に論理 ID で照会して解く。
             Err(SubmitError::ResponseLost) => {
@@ -577,6 +649,7 @@ impl Baseline {
     fn complete_wait(&mut self, ext: &mut ExtSim, id: &str) -> Result<bool, Error> {
         let logical = self.logical_id(id);
         ext.record_consumed(&logical)?;
+        self.log("consumed", id);
         let now = self.state.now;
         let n = self.state.nodes.get_mut(id).expect("node");
         n.status = Status::Ready;

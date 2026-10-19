@@ -140,10 +140,13 @@ def check_state(status_path=STATUS_PATH, campaign=CAMPAIGN):
     else:
         if (campaign / "optional" / "short-ml-campaign" / "case.json").exists():
             errors.append(f"a {st} record must not ship a case.json")
+        # pending は準備中の dev case（cases/dev/short-ml-campaign）を持てる。deferred は何も置かない。final は常に置かない。
         for d in STRAY_DIRS:
+            if st == "pending" and d == STRAY_DIRS[0]:
+                continue
             sd = campaign / d.relative_to(CAMPAIGN)
             if sd.exists():
-                errors.append(f"{sd.relative_to(campaign)} must not exist unless adopted")
+                errors.append(f"{sd.relative_to(campaign)} must not exist for status {st}")
     errors += check_external(s.get("external_refs"))
     return errors
 

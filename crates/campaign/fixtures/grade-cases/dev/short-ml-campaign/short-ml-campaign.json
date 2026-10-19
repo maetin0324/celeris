@@ -1,0 +1,148 @@
+{
+  "schema": "celeris.grade-case/1",
+  "id": "short-ml-campaign",
+  "split": "dev",
+  "experiment": {
+    "jobs_file": "evidence/jobs.json",
+    "min_jobs": 1,
+    "conditions": {
+      "queue": "debug",
+      "ncpus": 1
+    }
+  },
+  "recompute": {
+    "report": "report.md",
+    "pinned_raw": {
+      "inputs/train.csv": "123c9b3f6d8850a8beb3d33f20f529245cac5fee5254e880c4424b6fac530b77"
+    },
+    "metrics": [
+      {
+        "name": "n_train_rows",
+        "source": {
+          "csv": {
+            "files": [
+              "inputs/train.csv"
+            ],
+            "column": "y"
+          }
+        },
+        "agg": "count",
+        "tolerance_rel": 0.0
+      },
+      {
+        "name": "train_y_mean",
+        "source": {
+          "csv": {
+            "files": [
+              "inputs/train.csv"
+            ],
+            "column": "y"
+          }
+        },
+        "agg": "mean",
+        "tolerance_rel": 0.001
+      },
+      {
+        "name": "coef_x1",
+        "source": {
+          "csv": {
+            "files": [
+              "results/coefficients.csv"
+            ],
+            "column": "value",
+            "filter": {
+              "name": "x1"
+            }
+          }
+        },
+        "agg": "mean",
+        "tolerance_rel": 0.001
+      },
+      {
+        "name": "coef_x2",
+        "source": {
+          "csv": {
+            "files": [
+              "results/coefficients.csv"
+            ],
+            "column": "value",
+            "filter": {
+              "name": "x2"
+            }
+          }
+        },
+        "agg": "mean",
+        "tolerance_rel": 0.001
+      },
+      {
+        "name": "coef_x3",
+        "source": {
+          "csv": {
+            "files": [
+              "results/coefficients.csv"
+            ],
+            "column": "value",
+            "filter": {
+              "name": "x3"
+            }
+          }
+        },
+        "agg": "mean",
+        "tolerance_rel": 0.001
+      },
+      {
+        "name": "coef_x4",
+        "source": {
+          "csv": {
+            "files": [
+              "results/coefficients.csv"
+            ],
+            "column": "value",
+            "filter": {
+              "name": "x4"
+            }
+          }
+        },
+        "agg": "mean",
+        "tolerance_rel": 0.01
+      },
+      {
+        "name": "intercept",
+        "source": {
+          "csv": {
+            "files": [
+              "results/coefficients.csv"
+            ],
+            "column": "value",
+            "filter": {
+              "name": "intercept"
+            }
+          }
+        },
+        "agg": "mean",
+        "tolerance_rel": 0.001
+      },
+      {
+        "name": "train_rmse",
+        "source": {
+          "csv": {
+            "files": [
+              "results/metrics.csv"
+            ],
+            "column": "value",
+            "filter": {
+              "name": "train_rmse"
+            }
+          }
+        },
+        "agg": "mean",
+        "tolerance_rel": 0.001
+      }
+    ]
+  },
+  "review": null,
+  "judged_scope": [
+    "experiment",
+    "analysis"
+  ]
+}

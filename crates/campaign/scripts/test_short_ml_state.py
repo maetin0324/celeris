@@ -113,9 +113,16 @@ class State(Base):
         self.status(external_refs={"reassessment": "re.json", "review": "rv.md"})
         self.assertTrue(self.errs())
 
-    def test_stray_dir_rejected_unless_adopted(self):
-        self.status()
+    def test_dev_dir_allowed_only_while_pending_or_adopted(self):
         (self.campaign / "cases" / "dev" / "short-ml-campaign").mkdir(parents=True)
+        self.status()
+        self.assertEqual(self.errs(), [])
+        self.status(status="deferred", confirm_at=None, decided_at="2026-10-22")
+        self.assertTrue(self.errs())
+
+    def test_final_dir_rejected_even_while_pending(self):
+        self.status()
+        (self.campaign / "cases" / "final" / "short-ml-campaign").mkdir(parents=True)
         self.assertTrue(self.errs())
 
 

@@ -84,3 +84,9 @@ completed: 2026-10-19
 - `check_template` は `campaign` / `campaign_idempotency_key` の上書きも拒否。org の変更・新 scheduler/router なし。
 - 試験: `tests/variant_submit.rs` 7 件。既存試験は `TrialRequest` リテラルに `variant: None` を足しただけ。
 - 検査: `cargo nextest run -p celeris-campaign` 413 件中 412 通過、`launcher::a_swapped_daemon_binary…` が 1 回落ち（daemon 起動の timing。単独再実行で 15/15 通過）。`cargo clippy --workspace -- -D warnings` 0、`cargo fmt --all -- --check` 0。`clippy --tests` の既存 2 件（launcher.rs / env_lock.rs）は本変更外で未修正。`test-parallel.sh` 全体は統合時。
+
+## adversarial-tests の結果（2026-10-19）
+- `crates/campaign/tests/ablation_contract.rs` を 8 → 17 件に拡張（試験のみ。実装・selection.json/.sha256 は無変更）。公開 API と fake Transport・一時 workspace だけを使い、実 LLM・本番 API は呼ばない。
+- 追加: キー順反転・pretty・ディスク再読込での hash 安定と unknown 欄拒否／単一欄改変の hash 変化と未再 seal 拒否／B0 org・単一 node・EffectiveProfile 欠落（基準側 5 + spec 側 6 + spec-on 形）／EffectiveProfile 各欄の hash 感度／初回・再開・同一 label 冪等照会の一致成功／請求の variant・selection hash 不正・欠落・不一致の副作用前拒否（POST・GET・cancel 0）／保存 task の variant 欠落・不一致の lookup/resolve/submit 拒否／応答欠落・書換での拒否と自作 task の cancel 1 回／legacy 非 variant 経路の維持。再 seal 後の非対象 9 欄差分拒否は既存の表で継続。
+- 不具合の発見なし（修復へ返す差分なし）。org 実適用・子孫 Assigned event の証明は次段で、この試験はその証拠ではない。延期の review-off / KB-off は未実装。
+- 検査: `cargo nextest run -p celeris-campaign --test ablation_contract` 17 passed、`cargo fmt --all -- --check` 0、clippy は下記。`test-parallel.sh` 全体は統合時。

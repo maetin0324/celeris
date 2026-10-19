@@ -6,4 +6,5 @@ pub mod ext;
 pub mod fault;
 pub mod ipc;
 pub mod metrics;
+pub mod process;
 pub mod run;

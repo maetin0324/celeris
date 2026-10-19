@@ -23,6 +23,9 @@
 //!   （同じ seq の再受信は捨てる = 冪等）。
 //! - ack は「`seq <= ack` を呼び出し側へ渡した」の意味で、全 request の `ack` 欄に載る（piggyback）。
 //!   server は `ack` 以下を outbox から捨てる。[`IpcExt::flush_ack`] は `ack` op を単独で送る。
+//! - 独立観測 runner（observer）は `advance` ではなく `observe` op で時計を進める。通知は outbox に積まれるだけで
+//!   observer には渡らず、observer の要求は outbox を捨てない。control は後で自分の `advance`（同じ/古い時刻でよい）で
+//!   未 ack の通知を全て受け取る。control が居なくても observer だけで job 完了と ledger 追記が進む。
 //! - outbox は server の 1 つで、通知は `advance` を呼んだ接続に渡る（消費者は 1 人を想定）。server が死ぬと outbox は
 //!   失われるが、完了の事実は ledger（`external_job_completed` / `notice_sent`）に残り、poll の `lookup` で拾える。
 //!   アプリ側の冪等性は論理 job ID（baseline の `duplicate_notices_ignored`）が持つ。
@@ -67,6 +70,11 @@ pub enum Op {
         logical: String,
     },
     Advance {
+        now_secs: u64,
+    },
+    /// 独立観測 runner 用の時計進行。ExtSim を進めて通知を outbox に積むが、通知の中身は返さず、
+    /// 要求の `ack` で outbox を捨てることもしない（control 向け通知を消費・ack しない）。
+    Observe {
         now_secs: u64,
     },
     RecordConsumed {
@@ -115,6 +123,12 @@ pub enum Body {
     },
     Consumed {
         first: bool,
+    },
+    /// `Observe` の応答。`high_seq` は採番済みの最大 seq、`unacked` は outbox に残る（control が未 ack の）通知数。
+    Observed {
+        now: u64,
+        high_seq: u64,
+        unacked: usize,
     },
     Now {
         secs: u64,
@@ -286,7 +300,10 @@ fn respond(st: &mut State, req: Request) -> Response {
     {
         return prev.clone();
     }
-    st.outbox.retain(|n| n.seq > req.ack);
+    // observer の要求は ack を持たない（持っていても outbox を捨てない）。
+    if !matches!(req.op, Op::Observe { .. }) {
+        st.outbox.retain(|n| n.seq > req.ack);
+    }
     let io_err = |e: io::Error| Body::Error {
         message: e.to_string(),
     };
@@ -310,6 +327,21 @@ fn respond(st: &mut State, req: Request) -> Response {
                 }
                 Body::Advance {
                     notices: st.outbox.clone(),
+                }
+            }
+            Err(e) => io_err(e),
+        },
+        Op::Observe { now_secs } => match st.sim.advance(now_secs) {
+            Ok(ready) => {
+                for notice in ready {
+                    st.next_seq += 1;
+                    let seq = st.next_seq;
+                    st.outbox.push(SeqNotice { seq, notice });
+                }
+                Body::Observed {
+                    now: st.sim.now(),
+                    high_seq: st.next_seq,
+                    unacked: st.outbox.len(),
                 }
             }
             Err(e) => io_err(e),
@@ -392,6 +424,19 @@ impl IpcExt {
     /// `ack` を単独で送る。
     pub fn flush_ack(&mut self) -> io::Result<()> {
         self.call(Op::Ack).map(|_| ())
+    }
+
+    /// 外部時計を進める（observer 用）。通知は受け取らず ack もしないので、control 向けの outbox は減らない。
+    /// 返すのは `(now, high_seq, unacked)`。
+    pub fn observe(&mut self, now_secs: u64) -> io::Result<(u64, u64, usize)> {
+        match self.call(Op::Observe { now_secs })? {
+            Body::Observed {
+                now,
+                high_seq,
+                unacked,
+            } => Ok((now, high_seq, unacked)),
+            b => Err(unexpected(b)),
+        }
     }
 
     /// server を止める（応答を待つ。切断済みなら Err）。

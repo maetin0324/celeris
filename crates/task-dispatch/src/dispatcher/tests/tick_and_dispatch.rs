@@ -618,7 +618,19 @@ async fn merge_base_check_merges_main_deterministically_when_there_is_no_conflic
         repo_dir: repo_dir.path().to_path_buf(),
     });
     let mut d = worktree_dispatcher(store.clone(), adapter, root.path(), None);
-    let report = run_until_idle(&mut d, 400).await;
+    // tick 回数ではなく状態到達（task が terminal かつ dispatcher が idle）で待つ。git subprocess が
+    // 負荷で遅れても回数上限で打ち切られない。保険の上限だけ長く取る。
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(300);
+    let mut report = d.tick().unwrap();
+    while !(report.idle && store.get(task_id).unwrap().unwrap().status.is_terminal()) {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "状態に到達しない: {report:?} {:?}",
+            store.events_for(task_id).unwrap()
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        report = d.tick().unwrap();
+    }
     let events = store.events_for(task_id).unwrap();
     assert!(report.idle, "{report:?}");
     assert_eq!(

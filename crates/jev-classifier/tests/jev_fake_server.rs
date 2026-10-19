@@ -532,3 +532,73 @@ async fn fake_server_rejects_array_criteria_with_400() {
     let body: serde_json::Value = resp.json().await.expect("json");
     assert_eq!(body["error"]["code"], "invalid_request");
 }
+
+const OK_WITH_SNAPSHOT: &str = r#"{"model":"resp-model","model_snapshot":"resp-model-20261002","answers":{"specificity":{"choice":"specified"},"work_nature":{"choice":"implementation"}}}"#;
+const OK_NO_MODEL: &str = r#"{"answers":{"specificity":{"choice":"specified"},"work_nature":{"choice":"implementation"}}}"#;
+
+async fn classified(f: &Fake, r: &Rig, text: &str) -> (Box<jev_classifier::Classification>, bool) {
+    let _ = f;
+    match r.c.classify(&input(text), &Key(Some(SECRET))).await {
+        Ok(ClassifyOutcome::Classified {
+            classification,
+            cached,
+        }) => (classification, cached),
+        _ => panic!("expected Classified"),
+    }
+}
+
+// fake HTTP による値の由来検査（実 API 成功ではない）。
+#[tokio::test]
+async fn response_model_and_snapshot_come_from_response_not_config() {
+    let f = serve(vec![json(200, OK_WITH_SNAPSHOT)]).await;
+    let r = rig(&f.url, |c| c.model_id = "requested/pinned-1".into());
+    let (c, cached) = classified(&f, &r, "a").await;
+    assert!(!cached);
+    assert_eq!(c.model_id, "requested/pinned-1");
+    assert_eq!(c.response_model.as_deref(), Some("resp-model"));
+    assert_eq!(c.model_snapshot.as_deref(), Some("resp-model-20261002"));
+}
+
+#[tokio::test]
+async fn model_only_response_has_no_independent_snapshot() {
+    let f = serve(vec![json(200, OK)]).await;
+    let r = rig(&f.url, |c| c.model_id = "requested/other".into());
+    let (c, _) = classified(&f, &r, "a").await;
+    assert_eq!(c.response_model.as_deref(), Some("typesafe/jev-1.14"));
+    assert_eq!(c.model_snapshot, None);
+    assert_eq!(c.model_id, "requested/other");
+}
+
+#[tokio::test]
+async fn response_without_model_is_none_never_filled_from_config() {
+    let f = serve(vec![json(200, OK_NO_MODEL)]).await;
+    let r = rig(&f.url, |c| c.model_id = "requested/pinned-1".into());
+    let (c, _) = classified(&f, &r, "a").await;
+    assert_eq!((c.response_model, c.model_snapshot), (None, None));
+    assert_eq!(c.model_id, "requested/pinned-1");
+}
+
+#[tokio::test]
+async fn fallback_after_invalid_response_carries_no_model_provenance_and_cache_roundtrips() {
+    let f = serve(vec![
+        json(200, SCHEMA_BAD),
+        json(200, SCHEMA_BAD),
+        json(200, SCHEMA_BAD),
+        json(200, OK_WITH_SNAPSHOT),
+    ])
+    .await;
+    let r = rig(&f.url, |_| {});
+    assert!(matches!(
+        r.c.classify(&input("fb"), &Key(Some(SECRET))).await,
+        Ok(ClassifyOutcome::FallbackToFixed { .. })
+    ));
+    let (first, cached1) = classified(&f, &r, "ok").await;
+    let (second, cached2) = classified(&f, &r, "ok").await;
+    assert!(!cached1 && cached2);
+    assert_eq!(first, second);
+    assert_eq!(second.response_model.as_deref(), Some("resp-model"));
+    assert_eq!(
+        second.model_snapshot.as_deref(),
+        Some("resp-model-20261002")
+    );
+}

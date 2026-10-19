@@ -200,6 +200,7 @@ mod tests {
                     classification_confidence: None,
                 },
                 failure_kind: None,
+                response_model: None,
                 model_snapshot: None,
                 cost_usd: None,
                 model_id: "m".into(),

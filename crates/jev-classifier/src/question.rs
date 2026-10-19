@@ -63,10 +63,14 @@ pub struct Classification {
     pub specificity: Answer<Specificity>,
     pub work_nature: Answer<WorkNature>,
     pub failure_kind: Option<Answer<FailureKind>>,
-    /// 応答が返した model（日付つき snapshot のことがある）。
+    /// 応答 body の `model`（応答が名乗った model。日付つき snapshot 名のことがある）。無ければ None。
+    pub response_model: Option<String>,
+    /// 応答が `model` とは別の欄 `model_snapshot` で返した snapshot。独立した欄が無ければ None
+    /// （`response_model` や設定の model で補完しない）。
     pub model_snapshot: Option<String>,
     /// `usage.cost`（USD）。無ければ None（0 扱いしない）。
     pub cost_usd: Option<f64>,
+    /// 設定 `JevConfig.model_id`（要求した model）。応答の版ではない。
     pub model_id: String,
     pub schema_version: String,
     pub prompt_version: String,
@@ -244,7 +248,11 @@ pub fn parse_response(
         specificity: typed(answers, Q_SPECIFICITY, Specificity::parse)?,
         work_nature: typed(answers, Q_WORK_NATURE, WorkNature::parse)?,
         failure_kind,
-        model_snapshot: v.get("model").and_then(Value::as_str).map(String::from),
+        response_model: v.get("model").and_then(Value::as_str).map(String::from),
+        model_snapshot: v
+            .get("model_snapshot")
+            .and_then(Value::as_str)
+            .map(String::from),
         cost_usd: v
             .get("usage")
             .and_then(|u| u.get("cost"))
@@ -279,9 +287,22 @@ mod tests {
         assert_eq!(c.work_nature.value, WorkNature::Design);
         assert_eq!(c.cost_usd, Some(0.0002));
         assert_eq!(
-            c.model_snapshot.as_deref(),
+            c.response_model.as_deref(),
             Some("typesafe/jev-1.14-20261001")
         );
+        assert_eq!(c.model_snapshot, None);
+        assert_eq!(c.model_id, "typesafe/jev-1.14");
+    }
+
+    #[test]
+    fn separate_snapshot_is_kept_losslessly_and_absent_stays_none() {
+        let b = r#"{"model":"resp-m","model_snapshot":"resp-m-20261002","answers":{"specificity":"specified","work_nature":"design"}}"#;
+        let c = parse_response(b, false, meta()).unwrap_or_else(|_| unreachable!());
+        assert_eq!(c.response_model.as_deref(), Some("resp-m"));
+        assert_eq!(c.model_snapshot.as_deref(), Some("resp-m-20261002"));
+        let b = r#"{"answers":{"specificity":"specified","work_nature":"design"}}"#;
+        let c = parse_response(b, false, meta()).unwrap_or_else(|_| unreachable!());
+        assert_eq!((c.response_model, c.model_snapshot), (None, None));
     }
 
     #[test]

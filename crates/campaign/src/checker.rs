@@ -96,15 +96,19 @@ fn read_json(path: &Path) -> Result<Value, String> {
     serde_json::from_slice(&b).map_err(|e| format!("{}: {e}", path.display()))
 }
 
-/// 期待する (config → 問題集合)。A/B は全問題、C は事前登録 subset。
+/// 期待する (config → 問題集合)。有効 arm だけ（`planned_configs`）。未使用 arm は含めない。
 fn expected(m: &CampaignManifest) -> BTreeMap<ConfigId, BTreeSet<String>> {
-    let all: BTreeSet<String> = m.problems.iter().cloned().collect();
-    let sub: BTreeSet<String> = m.secondary.subset.iter().cloned().collect();
-    BTreeMap::from([
-        (ConfigId::A, all.clone()),
-        (ConfigId::B, all),
-        (ConfigId::C, sub),
-    ])
+    let mut out: BTreeMap<ConfigId, BTreeSet<String>> = m
+        .active_arms()
+        .into_iter()
+        .map(|c| (c, BTreeSet::new()))
+        .collect();
+    for p in &m.problems {
+        for c in m.planned_configs(p) {
+            out.entry(c).or_default().insert(p.clone());
+        }
+    }
+    out
 }
 
 enum Dep {
@@ -135,6 +139,86 @@ fn dep_state(m: &CampaignManifest, recs: &[TrialRecord], problem: &str, rep: u32
         }
     }
     if waiting { Dep::Waiting } else { Dep::Met }
+}
+
+/// 実験セット（宣言があるときだけ）の固定構成と、実際に動いた全 run の照合。B0 と B1/C1 は別々に検査する。
+/// 設定名が同じだけでは同条件とみなさない: run が実際に使った model/harness を見る。
+fn reconcile_sets(m: &CampaignManifest, recs: &[TrialRecord], v: &mut Vec<String>) {
+    if m.experiment_sets.is_empty() {
+        return;
+    }
+    let observed = |c: ConfigId| {
+        recs.iter().filter(move |r| r.config == c).flat_map(|r| {
+            r.observed.iter().map(move |o| {
+                (
+                    format!(
+                        "{:?}/{}/rep{}#{}",
+                        r.config, r.problem_id, r.rep, r.trial_no
+                    ),
+                    o,
+                )
+            })
+        })
+    };
+    let pairs = m.compare_pairs();
+    let mut seen = BTreeSet::new();
+    // B0（A/B 比較）: B の全役割（worker・reviewer・planner・cos）が実際に Sonnet で動いた。
+    if pairs.contains(&(ConfigId::A, ConfigId::B)) {
+        for (tag, o) in observed(ConfigId::B) {
+            let who = format!("{tag}: run {} ({})", o.run_id, o.role);
+            match &o.model {
+                None => seen.insert(format!("{who}: B0 model not observed")),
+                Some(model) => {
+                    match crate::manifest::check_b0_observed(&[(o.role.clone(), model.clone())]) {
+                        Ok(()) => false,
+                        Err(e) => seen.insert(format!("{who}: {e}")),
+                    }
+                }
+            };
+        }
+    }
+    // B1/C1（B/C 比較）: 実際に動いた run の model は共通候補集合の内側、harness は共通 run_harnesses の内側。
+    if pairs.contains(&(ConfigId::B, ConfigId::C)) {
+        let rt = |c: ConfigId| {
+            m.configs
+                .iter()
+                .find(|x| x.id == c)
+                .and_then(|x| x.routing.as_ref())
+        };
+        if let (Some(b), Some(c)) = (rt(ConfigId::B), rt(ConfigId::C)) {
+            fn set(v: &Option<Vec<String>>) -> Option<BTreeSet<&String>> {
+                v.as_ref().map(|v| v.iter().collect())
+            }
+            let common_models = match (set(&b.models), set(&c.models)) {
+                (Some(x), Some(y)) => Some(x.intersection(&y).copied().collect::<BTreeSet<_>>()),
+                _ => None,
+            };
+            let common_h = match (set(&b.run_harnesses), set(&c.run_harnesses)) {
+                (Some(x), Some(y)) => Some(x.intersection(&y).copied().collect::<BTreeSet<_>>()),
+                _ => None,
+            };
+            for arm in [ConfigId::B, ConfigId::C] {
+                for (tag, o) in observed(arm) {
+                    let who = format!("{tag}: run {} ({})", o.run_id, o.role);
+                    if let (Some(cm), Some(model)) = (&common_models, &o.model)
+                        && !cm.contains(model)
+                    {
+                        seen.insert(format!(
+                            "{who}: B1/C1 ran model {model} outside the common candidate set"
+                        ));
+                    }
+                    if let (Some(ch), Some(h)) = (&common_h, &o.harness)
+                        && !ch.contains(h)
+                    {
+                        seen.insert(format!(
+                            "{who}: B1/C1 ran harness {h} outside the common run_harnesses"
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    v.extend(seen);
 }
 
 /// 宣言した構成（manifest）と、実際に走った全 run の実測（`TrialRecord.observed`）の照合。
@@ -543,6 +627,7 @@ pub fn check_expected(
                 ));
             }
         }
+        reconcile_sets(m, &recs, &mut v);
         Ok(())
     })();
     if let Err(e) = result {
@@ -752,10 +837,13 @@ pub fn recompute_graded(
         })
     };
     let mut pairs = Vec::new();
-    for (name, a, b) in [
-        ("primary", m.primary.0, m.primary.1),
-        ("secondary", m.secondary.pair.0, m.secondary.pair.1),
-    ] {
+    // 選択した比較組だけ（選んでいない比較表は出さない）。名前は従来の primary(A,B) / secondary(B,C)。
+    for (a, b) in m.compare_pairs() {
+        let name = if (a, b) == (ConfigId::B, ConfigId::C) {
+            "secondary"
+        } else {
+            "primary"
+        };
         let mut pr = Pair {
             name: name.into(),
             first: a,

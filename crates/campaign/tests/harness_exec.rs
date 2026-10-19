@@ -362,6 +362,7 @@ echo '{\"usage\":{\"input_tokens\":5,\"output_tokens\":5}}'
 ",
     );
     let opts = RunOptions {
+        global_ledger: None,
         out: out.clone(),
         ..RunOptions::default()
     };

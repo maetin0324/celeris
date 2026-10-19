@@ -753,6 +753,7 @@ impl World {
 
     fn opts(&self) -> RunOptions {
         RunOptions {
+            global_ledger: None,
             out: self.out.clone(),
             repo_src: Some(self.work.path().join("repo-src")),
             materials_src: Some(self.work.path().join("mat")),

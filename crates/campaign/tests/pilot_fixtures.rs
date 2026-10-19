@@ -130,6 +130,7 @@ fn pretty(v: &impl serde::Serialize) -> String {
 
 fn run_opts(out: &Path) -> RunOptions {
     RunOptions {
+        global_ledger: None,
         out: out.to_path_buf(),
         repo_src: Some(fx().join("repo")),
         materials_src: Some(fx().join("materials")),

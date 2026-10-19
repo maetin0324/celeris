@@ -48,6 +48,7 @@ fn setup(exec: &dyn Executor) -> (tempfile::TempDir, CampaignManifest, std::path
         &i,
         exec,
         &RunOptions {
+            global_ledger: None,
             out: out.clone(),
             repo_src: Some(fx().join("repo")),
             materials_src: Some(fx().join("materials")),

@@ -116,6 +116,7 @@ fn env(max_tokens: u64) -> Env {
     let mut m = campaign(&i);
     m.budget.max_tokens = max_tokens;
     let opts = RunOptions {
+        global_ledger: None,
         out: d.path().join("out"),
         ..RunOptions::default()
     };

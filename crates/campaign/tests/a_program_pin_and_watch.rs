@@ -293,6 +293,7 @@ fn watch_stop_and_restart_reattaches_without_resubmit_and_stops_at_the_cap() {
     let m = campaign(&i, 1_000);
     let out = r.join("out");
     let opts = RunOptions {
+        global_ledger: None,
         out: out.clone(),
         ..RunOptions::default()
     };

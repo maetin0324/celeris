@@ -639,6 +639,7 @@ fn runner_waits_keeps_workspace_and_resumes_same_celeris_tasks() {
     let m = campaign(&i);
     m.validate().expect("valid manifest");
     let opts = RunOptions {
+        global_ledger: None,
         out: d.path().join("out"),
         ..RunOptions::default()
     };

@@ -96,6 +96,7 @@ fn campaign(i: &Input, n: usize, split: Split, max_tokens: u64) -> CampaignManif
 
 fn opts(d: &Path) -> RunOptions {
     RunOptions {
+        global_ledger: None,
         out: d.join("out"),
         ..RunOptions::default()
     }

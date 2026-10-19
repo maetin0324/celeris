@@ -398,6 +398,7 @@ fn run(args: Vec<String>) -> Result<String, String> {
                 kb_src: arg(&args, "--kb-src"),
                 inputs_src: arg(&args, "--inputs-src"),
                 case_inputs,
+                global_ledger: arg(&args, "--global-ledger"),
                 // 実行（有料）経路は、preflight・runner・再開で同じ期待 lock を使う。
                 lock: if matches!(which.as_str(), "harness" | "celeris") {
                     Some(preflight::expected_lock(
@@ -566,10 +567,10 @@ fn run(args: Vec<String>) -> Result<String, String> {
             if v["ok"] == true { Ok(s) } else { Err(s) }
         }
         "usage" => {
+            // A が有効計画に無ければ要らない（report が summary の cells で判断する）。
             let acct = arg(&args, "--a-account")
-                .ok_or("--a-account <account_id> is required")?
-                .to_string_lossy()
-                .into_owned();
+                .map(|a| a.to_string_lossy().into_owned())
+                .unwrap_or_default();
             let ratio = |n: &str, d: f64| -> Result<f64, String> {
                 match arg(&args, n) {
                     None => Ok(d),

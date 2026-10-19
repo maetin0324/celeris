@@ -648,6 +648,7 @@ fn one_gap_means_zero_ledger_and_transport_calls() {
         &input,
         &exec,
         &RunOptions {
+            global_ledger: None,
             out: out.clone(),
             ..Default::default()
         },
@@ -672,6 +673,7 @@ fn passing_preflight_lets_run_start() {
         &input,
         &MockExecutor::seeded(),
         &RunOptions {
+            global_ledger: None,
             out: out.clone(),
             materials_src: s.inp.materials_src.clone(),
             kb_src: s.inp.kb_src.clone(),

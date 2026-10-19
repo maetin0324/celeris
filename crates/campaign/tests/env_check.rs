@@ -206,6 +206,7 @@ fn assert_gated(f: &Fixture, host: &DaemonHost, expect: &str) {
         &input,
         &exec,
         &RunOptions {
+            global_ledger: None,
             out: out.clone(),
             ..Default::default()
         },

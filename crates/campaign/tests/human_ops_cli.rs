@@ -291,3 +291,81 @@ fn record_rejects_invalid_input_and_conflicting_rewrite() {
     assert!(err.contains("食い違う"), "{err}");
     assert_eq!(lines(&f).len(), 1);
 }
+
+/// `--now` を差し替えて走らせる（env の NOW より優先）。
+fn run_now(args: &[&str], now: &str) -> (i32, String, String) {
+    let mut a = args.to_vec();
+    a.extend(["--now", now]);
+    run(&a)
+}
+
+/// live（`--started-at now`）で始め、明示時刻の `--ended-at` で終えられる。A0/B0 とも。再実行で行が増えず、duration は 120 秒。
+#[test]
+fn live_start_then_explicit_end_resumes_for_a0_and_b0() {
+    for arm in ["A0", "B0"] {
+        let d = tempfile::tempdir().unwrap();
+        let f = d.path().join("r.jsonl");
+        let fs_ = f.to_str().unwrap();
+        let id = [
+            "record",
+            "--file",
+            fs_,
+            "--campaign",
+            "camp",
+            "--manifest-sha256",
+            HASH,
+            "--case",
+            "c",
+            "--arm",
+            arm,
+            "--rep",
+            "1",
+            "--op-kind",
+            "research_direction",
+            "--actor",
+            "eval1",
+            "--mode",
+            "manual",
+            "--intent",
+            "research",
+            "--logical-op",
+            "o1",
+        ];
+        let with = |extra: &[&'static str]| -> Vec<&str> {
+            id.iter().copied().chain(extra.iter().copied()).collect()
+        };
+        let (c, _, e) = run_now(&with(&["--started-at", "now"]), "2026-10-19T01:00:00Z");
+        assert_eq!(c, 0, "{e}");
+        let first = lines(&f);
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0]["time_basis"], "evaluator_live");
+        let end_args = with(&[
+            "--started-at",
+            "2026-10-19T01:00:00Z",
+            "--ended-at",
+            "2026-10-19T01:02:00Z",
+        ]);
+        let (c, _, e) = run(&end_args);
+        assert_eq!(c, 0, "{e}");
+        let rows = lines(&f);
+        assert_eq!(rows.len(), 2, "開始 1 行・終了 1 行");
+        // 開始行の時計情報は書き換えない。
+        assert_eq!(rows[0], first[0]);
+        assert_eq!(rows[1]["record_type"], "op_end");
+        // 再実行で増えない。
+        let (c, _, e) = run(&end_args);
+        assert_eq!(c, 0, "{e}");
+        assert_eq!(lines(&f).len(), 2);
+        let (c, out, e) = run(&["list", "--file", fs_]);
+        assert_eq!(c, 0, "{e}");
+        assert!(out.contains("120"), "{out}");
+        // 実際の開始時刻が違う再送は conflict のまま。
+        let mut other = end_args.clone();
+        let i = other.iter().position(|a| *a == "--started-at").unwrap();
+        other[i + 1] = "2026-10-19T00:59:00Z";
+        let (c, _, e) = run(&other);
+        assert_ne!(c, 0);
+        assert!(e.contains("食い違う"), "{e}");
+        assert_eq!(lines(&f).len(), 2);
+    }
+}

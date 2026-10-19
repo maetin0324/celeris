@@ -253,7 +253,15 @@ fn parse_utc(s: &str) -> Result<OffsetDateTime, String> {
 }
 
 /// 材料に入らず、同一性の比較（本体の同一）からも外す欄。
-const BODY_EXCLUDED: [&str; 3] = ["recorded_at", "clock_source", "host"];
+/// time_basis/time_precision は時刻の出所の注記で、先に書いた行のものを保つ（live 開始→明示時刻の終了追記で開始行を再送しても拒否しない）。
+/// 実際の時刻値（start/end 等）や actor の相違は比べ続ける。
+const BODY_EXCLUDED: [&str; 5] = [
+    "recorded_at",
+    "clock_source",
+    "host",
+    "time_basis",
+    "time_precision",
+];
 
 impl HumanOpRecord {
     /// 材料欄から決定的に作る id。

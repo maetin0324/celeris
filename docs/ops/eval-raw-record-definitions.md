@@ -68,9 +68,9 @@ tasks: [01M59KXY854W5C65GTG9GVQVAC]
   `trial_no`, `logical_op_id`, `attempt`, `op_kind`, `wait_kind`, `job_ref`, `corrects`（無い欄は null として入れる）。
   `op_start`/`op_end` と `wait_start`/`wait_end` は `record_type` が違うので別 id。同じ論理作業・同じ attempt の同じ種別の
   開始は 1 件しか存在しない。
-- 材料に入れない: `recorded_at`, `clock_source`, `host`, `note`, 時刻の値そのもの。→ 同じ事実を再送・再開・二重実行で
+- 材料に入れない: `recorded_at`, `clock_source`, `host`, `time_basis`, `time_precision`, `note`, 時刻の値そのもの。→ 同じ事実を再送・再開・二重実行で
   書き直しても id は変わらない。
-- 追記時: 同じ id が既にあり、本体（材料外の欄で `recorded_at`/`clock_source`/`host` を除いたもの）が同じなら **no-op**
+- 追記時: 同じ id が既にあり、本体（材料外の欄で `recorded_at`/`clock_source`/`host`/`time_basis`/`time_precision` を除いたもの。先に書いた行の時計注記を保つ。live 開始 → 明示時刻の終了追記で開始行の再送が拒否されないため）が同じなら **no-op**
   （行を増やさない）。違えば **conflict で拒否**（黙って上書きしない）。直したいときは `correction` を書く。
 - 読み出し時: record_id で 1 件に潰し、`correction` は `corrects` の行の欄を置き換える（訂正の訂正は最後の行が勝つ。
   順序は file の行順）。並行追記は 1 行 1 write（O_APPEND）＋fsync とし、読み出し側の潰しで重複を吸収する。

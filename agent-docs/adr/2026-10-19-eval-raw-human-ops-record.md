@@ -7,22 +7,6 @@
   2026-10-16-campaign-comm-failure-tracking、ADR-0090（cluster job wait）
 - 定義書（フィールド表・操作種別表・event 由来/評価者記録の区分表・限定事項）: `docs/ops/eval-raw-record-definitions.md`
 
-## 背景
-MLSys 多軸評価（主比較 A0=直接 Claude Code+Sonnet / B0=Celeris+Sonnet、Jev 副比較 B1/C1）は、人の調整・復旧と
-やり直しが減るかを主張したい。既存の仕組みで取れるのは次の範囲だけで、**人の操作の所要時間と A（Celeris を通らない arm）の
-人の操作は何も取れない**。
-
-| 既存（main c9654bff で確認） | 取れるもの | 足りないもの |
-|---|---|---|
-| `crates/campaign/src/record.rs` `TrialRecord`（`trials.jsonl`） | 試行の identity（split/config/problem_id/trial_no/rep）、outcome、`wall_secs`、tokens、observed run | 人の操作。`wall_secs` は `u64` で、未実行（`ran()==false`）と `executor_error` は **0**、timeout 超過は timeout に丸める（`runner.rs`） |
-| `crates/campaign/src/ledger.rs` `LedgerRow`（`ledger.jsonl`） | `TrialKey`（manifest_sha256/problem_id/arm/trial_no/rep）と `idempotency_key()`=`campaign-<sha256>`、task_id/run_id/child_task_ids/cluster_job_ids、`started_at`/`submitted_at`（epoch 秒、旧行は None）、通信失敗 | 人の操作、外部待ちの内訳 |
-| `crates/campaign/src/manifest.rs` `CampaignManifest` | campaign_id、sha256、`ConfigId` A/B/C、`repeats` | 実験セット（A0/B0 と B1/C1 の区別）の欄は無い |
-| `crates/campaign/src/final_accounting.rs` | trials と decision-log export の campaign/case/arm/repetition/hash 結合、欠測を 0 にしない集計規約 | 時間・人の操作は対象外 |
-| `task-core` `decision_log_project_interventions`（`store/decision_log.rs`）・`decision_log_export.rs` | Celeris の人 event（Answered→research_judgment、Retried→recovery、ApprovalDecided/Edited(by=human)→unclassified）を `intervention_id=<task_id>:<seq>` で冪等に投影。**`wall_ms` は常に None** | 所要時間、A の介入、safety と system の区別 |
-| `task_campaigns` / `task_campaign_resolve`（ADR 2026-10-16-campaign-identity-propagation） | root task の campaign_id/case_id/arm/repetition/manifest_hash、子孫は祖先から解決 | — |
-| events（`Transitioned`・`WorkerStarted/Finished`・`ClusterJobWait*`・`QuestionRaised`/`Answered`・`ApprovalRequested`/`Decided`・`BrowserWait*`・`Retried`・`RepairScheduled`）と `runs`（started_at/finished_at/seq） | B/C の状態区間・run 区間・外部 job 待ち・人待ちの時刻点 | A は events/runs を持たない |
-| `crates/routing-eval` | routing 評価の集計 | 人の操作・時間の欄は無い（再利用先にしない） |
-
 ## 決定
 - D1（取り直さない）: events/runs/TrialRecord/ledger/intervention projection から導出できる量は生記録に**書かない**。
   生記録（評価者が書く JSONL）は、既存の仕組みが原理的に取れない事実だけを持つ:
@@ -62,8 +46,8 @@ MLSys 多軸評価（主比較 A0=直接 Claude Code+Sonnet / B0=Celeris+Sonnet�
 - D9（実装の置き場所）: 型・検証・冪等追記は `crates/campaign/src/human_ops.rs`、CLI（`celeris-campaign human-op` の record/list/validate）は
   同 `mod cli`、event/run との結合は `human_ops_join.rs`、評価者の手順は `docs/ops/eval-human-ops-runbook.md` が本 ADR に従う。
   形式を変えるときは `schema` の版を上げ、本 ADR に付記する。
+- D10（live 記録の再開）: 開始時の `time_basis` を記録に固定する。`--started-at now` で始めた区間を明示時刻の `--ended-at` で
+  終える追記（op_end）は、開始行の本体と比べず、`time_basis`・終了時刻は同一性の比較欄から外す。開始行は書き換えない。
+- D11（join の入力）: join は新しい出力形式を足さず既存の出力を再利用する。runner の out dir の `trials.jsonl`・`ledger.jsonl` と、
+  decision-log export の records を入力にする。`celeris-campaign export` の table/final-accounting は join の入力ではない。
 
-## 結果
-- 既存の記録を二重に持たない。人の操作の所要時間と A の人の操作が、初めて B と同じ定義で数えられる。
-- 主張の限定（記録できない指標）は定義書 §6 に固定し、報告はそこを引用する。
-- 評価者の手入力に依存するため、評価者が気付かない操作は抜ける（§6）。抜けを 0 として数えない。

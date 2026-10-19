@@ -1,0 +1,133 @@
+{
+  "schema": "celeris.dagbench-scenarios/1",
+  "schema_version": 1,
+  "adr": "agent-docs/adr/2026-10-19-dag-fault-comparison-driver.md",
+  "dataset_label": "control_measured",
+  "paid": {"llm_calls": 0, "cluster_jobs": 0, "note": "worker は台本 stub、外部 job は ext-sim stub。有料 LLM・実クラスタ job は 0"},
+  "time": {
+    "unit": "logical_secs",
+    "clock": "driver が進める仮想時計。両系とも同じ poll_secs で外部 job を照会する",
+    "poll_secs": 30,
+    "note": "poll_secs は task-core cluster_job::MIN_POLL_SECS (30) に揃える。duration はすべて 30 の倍数"
+  },
+  "seeds": [20261019, 1, 2],
+  "observation_caps": {
+    "max_logical_secs": 40000,
+    "max_events": 100000,
+    "max_wall_secs": 600,
+    "max_control_restarts": 3
+  },
+  "scenarios": [
+    {
+      "id": "k2-mini",
+      "description": "K2（BenchFS 再起動後 size 復元: 調査→実装→検証→2 セル実験→分析→報告→レビュー）の縮小 DAG",
+      "resources": {"worker_slots": 2, "external_job_slots": 2, "cluster_nodes": 6},
+      "nodes": [
+        {"id": "survey",      "kind": "worker",   "deps": [],                              "work_secs": 120, "resources": {"worker": 1}},
+        {"id": "impl",        "kind": "worker",   "deps": ["survey"],                      "work_secs": 270, "resources": {"worker": 1}},
+        {"id": "verify",      "kind": "worker",   "deps": ["impl"],                        "work_secs": 180, "resources": {"worker": 1}},
+        {"id": "exp-uring",   "kind": "external", "deps": ["verify"],                      "work_secs": 60,  "resources": {"worker": 1},
+         "external": {"logical_job_id": "exp-uring", "nodes": 3, "job_secs": "ext_job_secs", "post_wait_work_secs": 30}},
+        {"id": "exp-posix",   "kind": "external", "deps": ["verify"],                      "work_secs": 60,  "resources": {"worker": 1},
+         "external": {"logical_job_id": "exp-posix", "nodes": 3, "job_secs": "ext_job_secs", "post_wait_work_secs": 30}},
+        {"id": "analyze",     "kind": "worker",   "deps": ["exp-uring", "exp-posix"],      "work_secs": 120, "resources": {"worker": 1}},
+        {"id": "report",      "kind": "worker",   "deps": ["analyze"],                     "work_secs": 120, "resources": {"worker": 1}},
+        {"id": "review",      "kind": "worker",   "deps": ["report"],                      "work_secs": 90,  "resources": {"worker": 1}}
+      ],
+      "derived": {
+        "total_worker_secs": 1080,
+        "critical_path_worker_secs": 990,
+        "external_jobs_per_campaign": 2
+      }
+    },
+    {
+      "id": "k2-wide",
+      "description": "k2-mini の実験を 4 セル（UCX/TCP × io_uring/POSIX）に広げ、外部 job 枠（2）を取り合わせる",
+      "resources": {"worker_slots": 2, "external_job_slots": 2, "cluster_nodes": 6},
+      "nodes": [
+        {"id": "survey",         "kind": "worker",   "deps": [],          "work_secs": 120, "resources": {"worker": 1}},
+        {"id": "impl",           "kind": "worker",   "deps": ["survey"],  "work_secs": 270, "resources": {"worker": 1}},
+        {"id": "verify",         "kind": "worker",   "deps": ["impl"],    "work_secs": 180, "resources": {"worker": 1}},
+        {"id": "exp-ucx-uring",  "kind": "external", "deps": ["verify"],  "work_secs": 60,  "resources": {"worker": 1},
+         "external": {"logical_job_id": "exp-ucx-uring", "nodes": 3, "job_secs": "ext_job_secs", "post_wait_work_secs": 30}},
+        {"id": "exp-ucx-posix",  "kind": "external", "deps": ["verify"],  "work_secs": 60,  "resources": {"worker": 1},
+         "external": {"logical_job_id": "exp-ucx-posix", "nodes": 3, "job_secs": "ext_job_secs", "post_wait_work_secs": 30}},
+        {"id": "exp-tcp-uring",  "kind": "external", "deps": ["verify"],  "work_secs": 60,  "resources": {"worker": 1},
+         "external": {"logical_job_id": "exp-tcp-uring", "nodes": 3, "job_secs": "ext_job_secs", "post_wait_work_secs": 30}},
+        {"id": "exp-tcp-posix",  "kind": "external", "deps": ["verify"],  "work_secs": 60,  "resources": {"worker": 1},
+         "external": {"logical_job_id": "exp-tcp-posix", "nodes": 3, "job_secs": "ext_job_secs", "post_wait_work_secs": 30}},
+        {"id": "analyze",        "kind": "worker",   "deps": ["exp-ucx-uring", "exp-ucx-posix", "exp-tcp-uring", "exp-tcp-posix"], "work_secs": 120, "resources": {"worker": 1}},
+        {"id": "report",         "kind": "worker",   "deps": ["analyze"], "work_secs": 120, "resources": {"worker": 1}},
+        {"id": "review",         "kind": "worker",   "deps": ["report"],  "work_secs": 90,  "resources": {"worker": 1}}
+      ],
+      "derived": {
+        "total_worker_secs": 1260,
+        "critical_path_worker_secs": 990,
+        "external_jobs_per_campaign": 4
+      }
+    }
+  ],
+  "fixed_points": {
+    "design": "one_factor_at_a_time",
+    "note": "全軸の総当たりはしない。center と、各軸を 1 つずつ動かした点だけを流す（scenario ごとに 7 点）",
+    "axes": {
+      "concurrent_campaigns": {
+        "values": [1, 2, 4],
+        "center": 2,
+        "meaning": "外側: 同じ制御系へ投入する DAG（campaign）の数。内部の worker_slots とは別変数"
+      },
+      "load": {
+        "values": [0.5, 0.9, 1.5],
+        "center": 0.9,
+        "meaning": "worker 枠の提供負荷 rho。campaign の投入間隔 arrival_interval_secs = total_worker_secs / (worker_slots * rho)。concurrent_campaigns=1 では効かない",
+        "formula": "arrival_interval_secs = round_to_poll(total_worker_secs / (worker_slots * load))",
+        "derived_arrival_interval_secs": {
+          "k2-mini": {"0.5": 1080, "0.9": 600, "1.5": 360},
+          "k2-wide": {"0.5": 1260, "0.9": 690, "1.5": 420}
+        }
+      },
+      "external_wait_ratio": {
+        "values": [0.25, 0.5, 0.75],
+        "center": 0.5,
+        "meaning": "臨界経路上の外部 job 時間の割合 r。ext_job_secs = round_to_poll(critical_path_worker_secs * r / (1 - r))",
+        "derived_ext_job_secs": {
+          "k2-mini": {"0.25": 330, "0.5": 990, "0.75": 2970},
+          "k2-wide": {"0.25": 330, "0.5": 990, "0.75": 2970}
+        }
+      }
+    },
+    "points": [
+      {"id": "center",   "concurrent_campaigns": 2, "load": 0.9, "external_wait_ratio": 0.5},
+      {"id": "camp-1",   "concurrent_campaigns": 1, "load": 0.9, "external_wait_ratio": 0.5},
+      {"id": "camp-4",   "concurrent_campaigns": 4, "load": 0.9, "external_wait_ratio": 0.5},
+      {"id": "load-lo",  "concurrent_campaigns": 2, "load": 0.5, "external_wait_ratio": 0.5},
+      {"id": "load-hi",  "concurrent_campaigns": 2, "load": 1.5, "external_wait_ratio": 0.5},
+      {"id": "ext-lo",   "concurrent_campaigns": 2, "load": 0.9, "external_wait_ratio": 0.25},
+      {"id": "ext-hi",   "concurrent_campaigns": 2, "load": 0.9, "external_wait_ratio": 0.75}
+    ]
+  },
+  "faults": {
+    "apply_at": {"scenario": "k2-mini", "point": "center"},
+    "owned_resources_only": true,
+    "owned_resources": ["driver が起動した制御 process（pid を driver が保持）", "driver が起動した ext-sim instance", "$TMPDIR 下の試験専用 DB・出力 dir"],
+    "position_rule": "nth は seed から決定: nth = 1 + (seed mod occurrences)。occurrences は正常 run（同 scenario・同 point・同 seed）で trigger event が出た回数。発火時に fault_fired 記録（fault_id, seed, nth, event_seq, logical_secs, campaign, node, logical_job_id）を残す",
+    "list": [
+      {"id": "a1-restart-after-accept", "class": "control_restart",
+       "trigger": {"event": "external_submit_accepted", "nth": "seeded"},
+       "action": {"signal": "SIGKILL", "restart_after_logical_secs": 0, "same_state_store": true},
+       "expect": ["physical_launches == logical_jobs", "completed_counted_once", "resume_from_persisted_state"]},
+      {"id": "a2-restart-after-wait", "class": "control_restart",
+       "trigger": {"event": "external_wait_started", "nth": "seeded"},
+       "action": {"signal": "SIGKILL", "restart_after_logical_secs": 0, "same_state_store": true},
+       "expect": ["physical_launches == logical_jobs", "completed_counted_once", "resume_from_persisted_state"]},
+      {"id": "b-submit-response-lost", "class": "submit_response_lost",
+       "trigger": {"event": "external_submit_accepted", "nth": "seeded"},
+       "action": {"ext_sim": "受理・物理起動を記録した後、応答を返さず接続を切る"},
+       "expect": ["no_second_physical_launch_for_logical_job", "reconciled_by_logical_job_id", "completed_counted_once"]},
+      {"id": "c-completion-duplicate", "class": "completion_duplicate",
+       "trigger": {"event": "external_job_completed", "nth": "seeded"},
+       "action": {"ext_sim": "同じ完了を 2 回通知する（2 回目は +poll_secs 後）", "copies": 2},
+       "expect": ["node_completed_once", "consumption_counted_once", "no_extra_downstream_launch"]}
+    ]
+  }
+}

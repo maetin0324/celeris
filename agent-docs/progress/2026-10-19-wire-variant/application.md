@@ -65,8 +65,20 @@ wire-variant の前段で入った実装・試験（変更せず、重複もさ�
 - scenario: off/on を別の daemon・DB で、同じ B0 資料・非対象設定で回す。off は全子孫の `Assigned` が単一 node、他 node への割当は 0、retry の assignee/hash は維持。on は複数課への割当と、その差を見る。
 - negative: 投入・再開・冪等照会、改変・欠落の拒否は、既存の `CelerisExecutor` を実 daemon に向けて使う。K2 は not_judged のまま。
 
+## daemon観測配線（WU daemon-obs、2026-10-19）
+
+- 変更: `crates/celeris/src/daemon/bootstrap.rs` に `build_daemon_dispatcher(config, masters, identity)` を足し、`lib.rs` から公開した。中身は `build_dispatcher` の後に `Dispatcher::set_variant_observation(identity.instance_id, config.source_sha256)` を呼ぶだけで、新しい機構は作っていない。`crates/celeris/src/daemon/run.rs` の起動経路（旧 107 行目の `build_dispatcher`）はこれに置き換えた。instance id は `GET /health`、sha256 は `GET /config` の `identity.config_sha256` と同じ値（同じ `InstanceIdentity`・`Config.source_sha256` を使う）。
+- fail closed: `source_sha256` が `None`（設定がファイル由来でない）なら観測値は渡さず warn を出す。variant 付き run は従来どおり「daemon instance id / config sha256 are not available」で blocked になる。
+- reload: `reload_providers` は `source_sha256` を書き換えないので、観測値も `GET /config` も起動時の値のまま一致する。変えた設定の sha を run に記録したいなら再起動する（reload で観測値を差し替える仕組みは作らない）。
+- 試験（`crates/celeris/tests/variant_propagation.rs`、6 件）:
+  - 新 `daemon_build_path_pins_observed_identity`: 起動経路の `build_daemon_dispatcher` で tick を回す。`[harnesses.fake] command = "sh"` のスタブ（実 process）が stdin の `RunRequest` を一時 dir に書く。その `context.campaign.daemon_instance_id` が `GET /health` の instance id に、`config_sha256` が `GET /config` の値と設定ファイル bytes の sha256（試験側で別に計算）に一致することを確かめる。同期は `WorkerFinished` event 待ち＋期限 60 秒。
+  - `normal_path`（spec-off/on）・org drift・foreign assignee の各試験は、手で与えていた `set_variant_observation("inst-1", …)` と素の `build_dispatcher` をやめ、`build_daemon_dispatcher` を使う。API の instance id も固定値ではなく、同じ `InstanceIdentity` の値にした。
+  - `missing_daemon_observation_blocks_the_run`: sha256 の無い config で `build_daemon_dispatcher` を組み、`WorkerStarted` が無く「not available」の理由 event が出ることを確かめる（fail closed は残っている）。
+- 証拠: `cargo test -p celeris --test variant_propagation` → 6 passed / 0 failed。`cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。`cargo test -p celeris --no-run` → exit 0。
+- 実 `celeris` binary による確認は、葉 infra・scenario が `GET /health`・`/config` と run 証拠を突き合わせて行う。
+
 ## 未解決事項
-- daemon が `set_variant_observation` を呼んでいない（§4）。葉 daemon-obs が要る。
+- （解消: WU daemon-obs）daemon は起動経路の `build_daemon_dispatcher` で `set_variant_observation` を呼ぶ。
 - task branch が main（`cb0cd7b8`）に追従していない。merge では 16 file が衝突する（§0）。final review の前に main を取り込む必要がある（本 WU では merge しない）。
 - worker の PID は events/runs にない。証拠はスタブ側のログと daemon の `Child::id()` の突き合わせで作る（本体に pid 欄を足すかどうかは提案）。
 

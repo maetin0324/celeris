@@ -647,6 +647,27 @@ pub fn build_dispatcher(
     Ok(dispatcher)
 }
 
+/// daemon の起動経路が使う組み立て: `build_dispatcher` に、variant 付き run の pin に記録する観測値
+/// （propagation §8.5）を配線する。instance id は `GET /health`、config sha256 は `GET /config` の
+/// `identity.config_sha256`（`Config::load` が読んだ bytes の sha256）と同じ値。reload は
+/// `source_sha256` を書き換えないので、観測値も `GET /config` も起動時の値のまま一致する。
+/// 設定がファイル由来でなく sha256 が無い daemon には観測値を渡さない（variant 付き run は fail closed）。
+pub fn build_daemon_dispatcher(
+    config: &Config,
+    masters: ClusterMasters,
+    identity: &crate::InstanceIdentity,
+) -> Result<Dispatcher, DaemonError> {
+    let mut dispatcher = build_dispatcher(config, masters)?;
+    match &config.source_sha256 {
+        Some(sha) => dispatcher.set_variant_observation(identity.instance_id.clone(), sha.clone()),
+        None => tracing::warn!(
+            instance_id = %identity.instance_id,
+            "config sha256 is not available; variant-pinned tasks will not start"
+        ),
+    }
+    Ok(dispatcher)
+}
+
 /// ADR-0033 D1: 組織図の種を蒔く。**`org_nodes` が空のときだけ**書き、それ以外は何もしない
 /// （以後の編集は GUI → API → DB。設定は再読込しない）。蒔いた件数を返す。
 pub fn seed_org_if_empty(store: &dyn TaskStore, config: &Config) -> Result<usize, DaemonError> {

@@ -41,7 +41,9 @@ pub use config::{Config, ConfigError, Overrides};
 pub use daemon::adapters::{build_harness_adapters, secret_usage};
 pub use daemon::admin::{local_settings_changed, reload_providers};
 pub use daemon::api::{api_settings, bind_reuseport, config_view};
-pub use daemon::bootstrap::{build_dispatcher, seed_cron_if_empty, seed_org_if_empty};
+pub use daemon::bootstrap::{
+    build_daemon_dispatcher, build_dispatcher, seed_cron_if_empty, seed_org_if_empty,
+};
 pub use daemon::clusters::{ClusterMasters, wire_cluster_liveness_hooks};
 pub use daemon::run::run;
 pub use instance::InstanceIdentity;

@@ -3,14 +3,14 @@
 //! `campaign_wiring_e2e` と同じ一時 DB・loopback 専用 daemon・fake harness を使い、実 LLM は起動しない
 //! （config の harness / source はすべて `fake`。下の試験で assert する）。userns 不要。
 //! spec-on / spec-off は別の所有環境（別の一時 DB）で、org の準備はその一時 DB だけに行う。
-//! 通常の `POST /tasks` → `GET` → 冪等再送 → DB 再 open → 子孫 → dispatcher（本番と同じ `build_dispatcher`
-//! の tick）で、同じ hash / org pin / Assigned / 決定ログ / run 証拠を確かめる。
+//! 通常の `POST /tasks` → `GET` → 冪等再送 → DB 再 open → 子孫 → dispatcher（本番と同じ
+//! `build_daemon_dispatcher` の tick）で、同じ hash / org pin / Assigned / 決定ログ / run 証拠を確かめる。
 //! 非対象全体の封印照合は campaign-proof の fake 試験が担い、この試験は daemon 接続境界だけを見る。
 
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use celeris::{ClusterMasters, Config, build_dispatcher};
+use celeris::{ClusterMasters, Config, InstanceIdentity, build_daemon_dispatcher};
 use serde_json::{Value, json};
 use task_core::org::{OrgKind, OrgNode};
 use task_core::variant_wire::effective_profile_sha256;
@@ -27,6 +27,10 @@ struct Daemon {
     _dir: tempfile::TempDir,
     store: SqliteStore,
     config: Config,
+    /// 実 daemon（`celeris::run`）と同じく、API の instance id と dispatcher の観測値に同じ値を使う。
+    identity: InstanceIdentity,
+    /// スタブ worker process が受け取った `RunRequest` を 1 run 1 file で書く dir。
+    requests: std::path::PathBuf,
     base: String,
     _daemon_tx: tokio::sync::watch::Sender<Option<task_ops::daemon::DaemonSnapshot>>,
     stop: Option<tokio::sync::oneshot::Sender<()>>,
@@ -39,9 +43,12 @@ impl Daemon {
         let home = dir.path();
         std::fs::create_dir_all(home.join("ws")).expect("ws");
         std::fs::write(home.join("api.token"), format!("{TOKEN}\n")).expect("token");
+        let requests = home.join("requests");
+        std::fs::create_dir_all(&requests).expect("requests");
         std::fs::write(
             home.join("config.toml"),
-            r#"
+            format!(
+                r#"
 db = "celeris.sqlite3"
 workspace_root = "ws"
 tick_ms = 200
@@ -64,14 +71,18 @@ models = ["fake"]
 kind = "fake"
 api_formats = ["fake"]
 source_kinds = ["fake"]
+command = "sh"
+args = ["-c", "cat > \"$0/run-$$.json\"; echo '{{\"type\":\"done\",\"summary\":\"stub\",\"evidence\":[]}}'", "{requests}"]
 
 [route_defaults.fake]
-candidates = [{ source = "local", model = "fake" }]
+candidates = [{{ source = "local", model = "fake" }}]
 
 [harness_selection]
-execution_class_defaults = {}
-rules = [{ harness = "fake", required_capabilities = [] }]
+execution_class_defaults = {{}}
+rules = [{{ harness = "fake", required_capabilities = [] }}]
 "#,
+                requests = requests.display()
+            ),
         )
         .expect("config");
         let config = Config::load(&home.join("config.toml")).expect("load");
@@ -81,11 +92,12 @@ rules = [{ harness = "fake", required_capabilities = [] }]
             .await
             .expect("bind");
         let addr: SocketAddr = listener.local_addr().expect("addr");
+        let identity = InstanceIdentity::new(None);
         let settings = celeris::api_settings(
             &config,
             addr,
             Some(TOKEN.to_string()),
-            "01J00000000000000000000000".to_string(),
+            identity.instance_id.clone(),
             "2026-10-16T00:00:00Z".to_string(),
             None,
             "dev".to_string(),
@@ -103,6 +115,8 @@ rules = [{ harness = "fake", required_capabilities = [] }]
             _dir: dir,
             store,
             config,
+            identity,
+            requests,
             base: format!("http://{addr}"),
             _daemon_tx: daemon_tx,
             stop: Some(stop),
@@ -310,9 +324,8 @@ async fn normal_path(spec_on: bool) {
 
     // dispatcher（本番と同じ組み立て）: 既存 matching で Assigned、決定は共有 org を書き換えない。
     let org_before = d.store.org_list().expect("org");
-    let mut dispatcher =
-        build_dispatcher(&d.config, ClusterMasters::default()).expect("build_dispatcher");
-    dispatcher.set_variant_observation("inst-1".into(), H1.into());
+    let mut dispatcher = build_daemon_dispatcher(&d.config, ClusterMasters::default(), &d.identity)
+        .expect("build_daemon_dispatcher");
     dispatcher.tick().expect("tick");
     let t = d.store.get(root).expect("get").expect("task");
     assert_ne!(
@@ -367,8 +380,8 @@ async fn org_drift_after_post_blocks_before_any_run() {
     let root = tid(&a);
     // 専用環境の org が POST 後に変わった（別 skill）。
     d.store.replace_org_nodes(&org(false, "y")).expect("org");
-    let mut dispatcher =
-        build_dispatcher(&d.config, ClusterMasters::default()).expect("build_dispatcher");
+    let mut dispatcher = build_daemon_dispatcher(&d.config, ClusterMasters::default(), &d.identity)
+        .expect("build_daemon_dispatcher");
     dispatcher.tick().expect("tick");
     let t = d.store.get(root).expect("get").expect("task");
     let events = d.store.events_for(root).expect("events");
@@ -407,8 +420,8 @@ async fn foreign_assignee_is_not_accepted() {
             },
         )
         .expect("update");
-    let mut dispatcher =
-        build_dispatcher(&d.config, ClusterMasters::default()).expect("build_dispatcher");
+    let mut dispatcher = build_daemon_dispatcher(&d.config, ClusterMasters::default(), &d.identity)
+        .expect("build_daemon_dispatcher");
     dispatcher.tick().expect("tick");
     let events = d.store.events_for(root).expect("events");
     assert!(
@@ -421,7 +434,7 @@ async fn foreign_assignee_is_not_accepted() {
 }
 
 /// 負: daemon の観測値（instance id / config sha256）が無い dispatcher は variant 付き run を起動しない
-/// （適用済みと扱わない）。現状 daemon 本体はこの値を渡していない（progress の未解決事項）。
+/// （適用済みと扱わない）。起動経路の `build_daemon_dispatcher` も sha256 が無ければ観測値を渡さない。
 #[tokio::test]
 async fn missing_daemon_observation_blocks_the_run() {
     let nodes = org(false, "x");
@@ -431,8 +444,12 @@ async fn missing_daemon_observation_blocks_the_run() {
         .await;
     assert_eq!(s, 201, "{a}");
     let root = tid(&a);
-    let mut dispatcher =
-        build_dispatcher(&d.config, ClusterMasters::default()).expect("build_dispatcher");
+    // 観測値の無い daemon（設定がファイル由来でなく config sha256 が無い）。起動経路の組み立てでも
+    // 観測値は渡らない。
+    let mut config = d.config.clone();
+    config.source_sha256 = None;
+    let mut dispatcher = build_daemon_dispatcher(&config, ClusterMasters::default(), &d.identity)
+        .expect("build_daemon_dispatcher");
     dispatcher.tick().expect("tick");
     let events = d.store.events_for(root).expect("events");
     assert!(
@@ -445,5 +462,75 @@ async fn missing_daemon_observation_blocks_the_run() {
         e,
         Event::QuestionRaised { text, .. } if text.contains("not available")
     )));
+    d.shutdown().await;
+}
+
+/// daemon 起動経路の観測値配線: `build_daemon_dispatcher` が渡す instance id と config sha256 が、
+/// 実 process のスタブ worker が受け取った `RunRequest.context.campaign` に載り、`GET /health` の
+/// instance id・`GET /config` の `identity.config_sha256`（= 設定ファイルの bytes の sha256）と一致する。
+#[tokio::test(flavor = "multi_thread")]
+async fn daemon_build_path_pins_observed_identity() {
+    use sha2::{Digest, Sha256};
+
+    let nodes = org(false, "x");
+    let d = Daemon::start(&nodes).await;
+    all_fake(&d.config);
+    let (s, a) = d
+        .post("/api/v1/tasks", root_body(identity(H1, pin(&nodes))))
+        .await;
+    assert_eq!(s, 201, "{a}");
+    let root = tid(&a);
+
+    let (s, health) = d.get("/api/v1/health").await;
+    assert_eq!(s, 200, "{health}");
+    let (s, cfg) = d.get("/api/v1/config").await;
+    assert_eq!(s, 200, "{cfg}");
+    let file = std::fs::read(d.config.db.path.parent().expect("dir").join("config.toml"))
+        .expect("config bytes");
+    let file_sha: String = Sha256::digest(&file)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    assert_eq!(health["instance_id"], json!(d.identity.instance_id));
+    assert_eq!(cfg["identity"]["config_sha256"], json!(file_sha), "{cfg}");
+
+    let mut dispatcher = build_daemon_dispatcher(&d.config, ClusterMasters::default(), &d.identity)
+        .expect("build_daemon_dispatcher");
+    // 出来事待ち＋期限: スタブ process の終了（WorkerFinished）まで tick を回す。
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    loop {
+        dispatcher.tick().expect("tick");
+        let events = d.store.events_for(root).expect("events");
+        if events
+            .iter()
+            .any(|(_, e)| matches!(e, Event::WorkerFinished { .. }))
+        {
+            break;
+        }
+        assert!(
+            !events
+                .iter()
+                .any(|(_, e)| matches!(e, Event::QuestionRaised { .. })),
+            "run did not start: {events:?}"
+        );
+        assert!(
+            std::time::Instant::now() < deadline,
+            "no WorkerFinished: {events:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let requests: Vec<Value> = std::fs::read_dir(&d.requests)
+        .expect("requests")
+        .map(|e| {
+            let text = std::fs::read_to_string(e.expect("entry").path()).expect("request");
+            serde_json::from_str(text.lines().next().expect("line")).expect("json")
+        })
+        .collect();
+    assert_eq!(requests.len(), 1, "{requests:?}");
+    let pin = &requests[0]["context"]["campaign"];
+    assert_eq!(requests[0]["task"]["id"], json!(root.to_string()));
+    assert_eq!(pin["daemon_instance_id"], health["instance_id"], "{pin}");
+    assert_eq!(pin["config_sha256"], json!(file_sha), "{pin}");
+    assert_eq!(pin["identity"]["variant"]["content_sha256"], json!(H1));
     d.shutdown().await;
 }

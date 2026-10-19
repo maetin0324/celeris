@@ -190,10 +190,24 @@ fn unresolvable_or_versionless_program_is_refused() {
 
 // --- (b) watch の停止・再起動 ---------------------------------------------------------------------
 
-struct RealSleep;
-impl Clock for RealSleep {
-    fn sleep(&self, d: Duration) {
-        std::thread::sleep(d);
+/// 注入した時計。間隔 `d` を実際には待たず、短い譲り（1ms）だけで進める。回数でなく出来事（外部 process の
+/// 停止確認）で終わるよう、反復上限は大きく取り、保険の壁時計上限（panic）だけを置く。
+struct StepClock {
+    started: std::time::Instant,
+    limit: Duration,
+}
+impl StepClock {
+    fn new() -> Self {
+        Self {
+            started: std::time::Instant::now(),
+            limit: Duration::from_secs(300),
+        }
+    }
+}
+impl Clock for StepClock {
+    fn sleep(&self, _d: Duration) {
+        assert!(self.started.elapsed() < self.limit, "watch did not settle");
+        std::thread::sleep(Duration::from_millis(1));
     }
 }
 
@@ -309,7 +323,7 @@ fn watch_stop_and_restart_reattaches_without_resubmit_and_stops_at_the_cap() {
 
     // 1 回目の watch（監視 thread なし = CLI が落ちた後と同じ）: 3 試行を投入し、上限回数で戻る。
     let x1 = HarnessExecutor::new(out.join("harness-state"), Box::new(builder()));
-    let r1 = watch(&m, &i, &x1, &opts, w(2), &RealSleep).expect("watch 1");
+    let r1 = watch(&m, &i, &x1, &opts, w(2), &StepClock::new()).expect("watch 1");
     assert_eq!(r1.end, WatchEnd::MaxIterations);
     assert_eq!(count(&launches), 3, "one process per trial");
     let rows_before: Vec<_> = Ledger::open(&out)
@@ -330,7 +344,7 @@ fn watch_stop_and_restart_reattaches_without_resubmit_and_stops_at_the_cap() {
             basis: TokenBasis::All,
             interval: Duration::from_millis(20),
         });
-    let clock = RealSleep;
+    let clock = StepClock::new();
     let r2 = watch(
         &m,
         &i,
@@ -338,7 +352,7 @@ fn watch_stop_and_restart_reattaches_without_resubmit_and_stops_at_the_cap() {
         &opts,
         WatchOptions {
             interval_secs: 1,
-            max_iterations: 60,
+            max_iterations: u32::MAX,
         },
         &clock,
     )

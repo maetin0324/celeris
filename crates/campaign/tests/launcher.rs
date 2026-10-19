@@ -362,7 +362,7 @@ impl Fx {
                  CELERIS_BIN={d}/bin/celeris\nRUN_PATH={d}/cap-tools:{d}/bin\nA_PROGRAM=claude\nA_ACCOUNT=lab\nWORKER_PROGRAMS=\"claude=claude\"\n\
                  MATERIALS_SRC={mat}\nKB_SRC={kb}\nREPO_SRC={repo}\nINPUTS_SRC={ins}\n\
                  CASES_ROOT={cases}\nGRADER_ROOT={gr}\nGRADE_CASES_ROOT={gc}\nCAMPAIGN_BIN={cb}\nCAP_ENV={ce}\n\
-                 EXECUTOR=celeris\nINTERVAL_SECS=1\nMAX_ITERATIONS=600\nHEALTH_WAIT_SECS=60\n{extra}",
+                 EXECUTOR=celeris\nINTERVAL_SECS=1\nMAX_ITERATIONS=600\nHEALTH_WAIT_SECS=600\n{extra}",
                 m = i.manifest_path.display(),
                 d = d.display(),
                 rel = MEASURE_RELEASE,

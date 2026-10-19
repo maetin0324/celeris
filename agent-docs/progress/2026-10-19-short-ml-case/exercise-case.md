@@ -4,7 +4,7 @@ wu: exercise-case
 status: blocked
 completed: null
 ---
-# exercise-case: 46039.pbs は回収したが、compute node の numpy 不一致と空の log で正例不成立、人の決定待ち（状態は pending のまま）
+# exercise-case: 46039.pbs は回収したが正例不成立。2 本目は compute の python 版が未測定のため人の決定待ち（状態は pending のまま）
 
 ## 事実
 - 2026-10-19T16:34Z に実行直前の再確認をした。sirius の環境（python 3.9.25・numpy 1.23.5）は env.lock と一致した。
@@ -40,10 +40,16 @@ completed: null
 - job の numpy は 2.0.2（compute node a02）で、env.lock の 1.23.5（login node で測定）と違う。contract の stop_on_mismatch に従い、ここで止めた。負例は未実行。
 - 試験: 子 process 起動の許可リスト（runner_checker.rs）に ssh_qstat.rs を加え、SshQstat の拒否試験を追加した。
 
+## 2 本目投入前の再確認（2026-10-19T17:30Z、run 01M5AK2AF1A6FG41N0FN1A0PH6）
+- 決定 sirius-env-lock-rerun は承認された。投入前に compute node の環境を確かめたが、python 版は測れなかった。
+- login sirius02: `/usr/bin/python3 -> python3.9`（3.9.25、numpy 1.23.5 は RHEL rpm）、`python3.12`（3.12.14、numpy 2.1.3）。compute a02 の numpy 2.0.2 はどちらとも合わない。
+- node への ssh は不可で、過去の job log にも compute の python 版は無い。承認文は「login の値は使わない」なので、lock の python を投入前に実測で埋められない。
+- 最後の 1 本を推測値で賭けず、python の固定方法を人の決定 sirius-compute-python-lock に上げた。repo の case・lock・pin・job.pbs は変えていない。投入は 1/2 のまま。記録は外部資料の `exercise.attempts[3]` にある。
+
 ## 証拠コマンド
 - `python3 crates/campaign/scripts/verify-short-ml-case.py --check` → exit 0（状態整合のみ）
 - `python3 crates/campaign/scripts/verify-short-ml-case.py --acceptance --evidence <上記 json>` → exit 1（pending なので非 0 が正しい）
 - `python3 crates/campaign/scripts/verify-short-ml-case.py --placement-check` → exit 0
 
 ## 未解決事項
-- 人の決定 sirius-env-lock-rerun: env.lock を compute node 実測に改訂し、job.pbs に版と完了の stdout 記録を足して 2 本目（上限 2 の最後）を投入するか、延期するか。
+- 人の決定 sirius-compute-python-lock: compute node の python 版が未測定のまま、lock の python をどう固定して最後の 1 本を出すか。

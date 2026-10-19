@@ -40,7 +40,7 @@ completed: 2026-10-19
 配線（次段、すべて「省略時は従来どおり」）:
 1. manifest: `CampaignManifest.variant: Option<VariantRef>`（`#[serde(default, skip_serializing_if = "Option::is_none")]`）。省略した既存 manifest の `compute_sha256` は変わらない。`validate` が `selection_sha256` を同梱の `selection.sha256` と、`content_sha256` を `VariantSpec` の再計算と照合。
 2. lock: `ExecutionPin.variant: Option<VariantRef>`（同じ skip 規則）。`bind_to_manifest` の `ExecutionPin::from_manifest(m) != lock.execution` で自動的に不一致を拒否。`check_successor`（再 seal）は variant の差し替えを拒否する（非対象が同じでも variant 欄の変更は後継として認めない）。
-3. POST: `POST /tasks` の `campaign`（`task_core::decision_log::CampaignIdentity`）に `variant: Option<VariantRef>` を追加（`deny_unknown_fields` のため task-core の変更が要る。次段の task-core/API WU）。`CelerisExecutor::body` が manifest の `variant` から `campaign.variant` を載せる。`campaign_idempotency_key` の再送判定（既存 `campaign_identity_conflict`）に同じ欄を含め、同じ試行で variant が違えば 409。
+3. POST: `POST /tasks` の `campaign`（`task_core::decision_log::CampaignIdentity`）に `variant: Option<VariantRef>` を追加（`deny_unknown_fields` のため task-core の変更が要る。次段の task-core/API WU）。`CelerisExecutor::body` が manifest の `variant` から `campaign.variant` を載せる。`campaign_idempotency_key` の再送判定（既存 `task_campaign_resend`（`crates/task-api/src/handlers/tasks.rs` の `campaign_idempotency_key` 経路））に同じ欄を含め、同じ試行で variant が違えば 409。
 4. GET 照合: `CelerisExecutor::lookup`／`tasks_with_label` が返す task の `campaign.variant` を期待値と比較。欠落・不一致は既存 task として採用せず `ExecError::refused`（適用済み扱いしない）。再開（`resume`）も同じ照合を通る。
 5. preflight（GET のみ）: `GET /api/v1/org` の node 集合と `effective_profile_sha256` を `VariantSpec.org` と照合。不一致は有料実行 0 件で止める。org の書き換え（`POST/PATCH /api/v1/org`）は測定専用 daemon の運用手順で、本番 host 操作は人が行う。
 6. 子孫・retry: 識別は祖先の鎖から継ぐ既存規則（ADR 2026-10-16-campaign-identity-propagation）。variant も同じ経路で、子孫へ新規配線は不要。
